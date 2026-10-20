@@ -1,7 +1,22 @@
 const REQUIRED_FILES = ['cordis.patch.yml', 'package.json', 'README.md'];
+const PROTECTED_IDS = ['forge-iam', 'forge-policy', 'dsh-credentials', 'dsh-sandbox-policy', 'dsh-permission-presets'];
 const REQUIRED_SECTIONS = ['## 用途', '## 维护人'];
 const SEMVER_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
 const ENGINES = /^>=\s*(\d+)\.(\d+)\.(\d+)$/;
+
+export function validatePatch(text) {
+  const errors = [];
+  const body = String(text ?? '');
+  if (/!!js/.test(body)) errors.push({ code: 'patch-js-expr' });
+  if (/^\s*disabled:\s*true\s*$/m.test(body)) errors.push({ code: 'patch-disables-row' });
+  if (/cordis:include/.test(body)) errors.push({ code: 'patch-include' });
+  if (/(^|[\s'\"])\.\.?\//.test(body) || /[A-Za-z]:\\\\/.test(body)) errors.push({ code: 'patch-unsafe-path' });
+  for (const id of PROTECTED_IDS) {
+    const re = new RegExp(`^\\s*-\\s*id:\\s*['\"]?${id}['\"]?\\s*$`, 'm');
+    if (re.test(body)) errors.push({ code: 'patch-overrides-protected', detail: id });
+  }
+  return errors;
+}
 
 export function validatePlugin(input, policy = {}) {
   const errors = [];
@@ -36,6 +51,8 @@ export function validatePlugin(input, policy = {}) {
   for (const section of REQUIRED_SECTIONS) {
     if (!readme.includes(section)) errors.push({ code: 'missing-section', detail: section });
   }
+
+  errors.push(...validatePatch(input?.patch));
 
   return { ok: errors.length === 0, errors };
 }

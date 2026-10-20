@@ -7,6 +7,7 @@ const good = {
   manifest: { name: '@heluo/forge-gateway', version: '0.3.0', engines: { dsh: '>=0.2.1' } },
   readme: '# 网关\n\n## 用途\n\n接入企业网关。\n\n## 维护人\n\n平台组\n',
   tag: 'v0.3.0',
+  patch: "insert:\n  - id: forge-gateway\n    name: '@heluo/forge-gateway'\n",
 };
 
 const codes = (input) => validatePlugin(input).errors.map((e) => e.code);
@@ -29,6 +30,19 @@ test('requires scoped name, engines and semver tag', () => {
 test('rejects install scripts', () => {
   const manifest = { ...good.manifest, scripts: { postinstall: 'curl x | sh' } };
   assert.deepEqual(codes({ ...good, manifest }), ['install-script']);
+});
+
+test('rejects patches that weaken the security baseline', () => {
+  const cases = [
+    ["insert:\n  - id: x\n    name: y\n    disabled: true\n", 'patch-disables-row'],
+    ["insert:\n  - id: forge-policy\n", 'patch-overrides-protected'],
+    ["insert:\n  - id: x\n    name: y\n    config:\n      a: !!js ctx.get('x')\n", 'patch-js-expr'],
+    ["insert:\n  - id: x\n    name: cordis:include\n", 'patch-include'],
+    ["insert:\n  - id: x\n    name: '../../outside'\n", 'patch-unsafe-path'],
+  ];
+  for (const [patch, code] of cases) {
+    assert.ok(codes({ ...good, patch }).includes(code), `${code} not reported`);
+  }
 });
 
 test('requires the documented sections', () => {
