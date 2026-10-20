@@ -104,10 +104,11 @@ test('submit validates tag, host and reports the review state', async () => {
     },
   };
   const tools = buildMarketTools(submitClient, { allowedHosts: ['gitee.corp.example'] });
-  const payload = { repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', title: '网关' };
+  const payload = { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0' };
 
   assert.deepEqual(await call(tools, 'market_submit', payload), { ok: true, state: 'pending' });
   assert.equal(submitted.tag, 'v0.1.0');
+  assert.equal(submitted.name, '@heluo/a');
   assert.equal((await call(tools, 'market_submit', { ...payload, tag: '0.1.0' })).reason, 'bad-tag');
   assert.equal((await call(tools, 'market_submit', { ...payload, repo: 'https://evil.example/x' })).reason, 'host-not-allowed');
 });

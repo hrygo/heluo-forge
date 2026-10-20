@@ -82,16 +82,16 @@ export function buildMarketTools(client, options = {}) {
       {
         type: 'object',
         properties: {
+          name: { type: 'string', description: 'package name, e.g. @heluo/forge-gateway' },
           repo: { type: 'string', description: 'repository address inside the enterprise group' },
           tag: { type: 'string', description: 'release tag such as v0.1.0' },
-          title: { type: 'string' },
           summary: { type: 'string' },
           scenarios: { type: 'array', items: { type: 'string' } },
         },
-        required: ['repo', 'tag', 'title'],
+        required: ['name', 'repo', 'tag'],
         additionalProperties: false,
       },
-      async ({ repo, tag, title, summary = '', scenarios = [] }) => {
+      async ({ name, repo, tag, summary = '', scenarios = [] }) => {
         if (!/^v\d+\.\d+\.\d+$/.test(String(tag))) return { ok: false, reason: 'bad-tag' };
         if (!allowedHosts.length) return { ok: false, reason: 'no-allowed-host' };
         let host;
@@ -101,7 +101,7 @@ export function buildMarketTools(client, options = {}) {
           return { ok: false, reason: 'bad-repo' };
         }
         if (!allowedHosts.includes(host)) return { ok: false, reason: 'host-not-allowed' };
-        const result = await client.submit({ repo, tag, title, summary, scenarios });
+        const result = await client.submit({ name, repo, tag, summary, scenarios });
         return { ok: true, state: result?.state ?? 'pending' };
       },
     ),

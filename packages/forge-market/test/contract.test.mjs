@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createServiceClient } from '../src/client.mjs';
 
 // 端点集合来自 docs/design/services/market-index.md §5「端点（示意）」。
@@ -43,4 +46,24 @@ test('submit sends JSON with a content type', async () => {
   assert.equal(init.method, 'POST');
   assert.equal(init.headers['content-type'], 'application/json');
   assert.equal(JSON.parse(init.body).tag, 'v0.1.0');
+});
+
+test('submit sends only the fields DESIGN-012 declares', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const doc = await readFile(join(root, 'docs/design/services/market-index.md'), 'utf8');
+  const section = doc.slice(doc.indexOf('**提交请求体**'), doc.indexOf('**并发**'));
+  const documented = [...section.matchAll(/^\| `([a-z]+)` \|/gm)].map((match) => match[1]);
+  assert.ok(documented.length >= 3, 'expected a documented request body');
+
+  let sent;
+  const client = createServiceClient({
+    baseUrl: 'https://plugins.corp.example',
+    fetchImpl: (url, init) => {
+      sent = JSON.parse(init.body);
+      return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({}) });
+    },
+  });
+
+  await client.submit({ name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', summary: '', scenarios: [] });
+  assert.deepEqual(Object.keys(sent).sort(), documented.sort());
 });

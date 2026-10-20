@@ -92,8 +92,8 @@ test('installs a plugin end to end through a stub service', async () => {
     const submitted = JSON.parse(
       (await tools.find((t) => t.name === 'market_submit').execute({
         repo: `http://127.0.0.1:${server.address().port}/g/demo`,
+        name: '@heluo/demo',
         tag: 'v0.1.0',
-        title: '演示插件',
       })).content[0].text,
     );
     assert.deepEqual(submitted, { ok: true, state: 'pending' });
