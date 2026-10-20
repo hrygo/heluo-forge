@@ -1,0 +1,23 @@
+Heluo Forge logo concept v1
+
+生成方式：内置 imagegen
+设计状态：概念稿（代拟），未确认为正式品牌规范。
+交付文件：heluo-forge-logo-v1.png
+构思：河洛汇流、锻造成器；两股蓝绿流线组成 H，搭配中英文字标。
+
+Initial generation prompt
+
+Use case: logo-brand.
+Asset type: transparent master logo for 河洛 / Heluo Forge, an internal enterprise AI-assisted software engineering platform.
+Primary request: Design one refined, memorable identity around the idea of two rivers converging and being forged into a precise tool. A compact abstract capital H made of two broad, interlocking geometric river bands. One cobalt-blue band and one deep jade-teal band meet in a confident central bridge, with a small, clear negative-space opening that suggests a forge aperture. The silhouette should feel engineered, balanced, and distinctive; a subtle Chinese geometric sensibility without ornamental motifs.
+Style: crisp flat vector-like brand design, minimal shapes, optically balanced proportions, clean edges, no outlines. Solid cobalt #1F6FEB and jade teal #109C98; wordmark in dark ink #142D45.
+Composition: one centered vertical logo lockup on a square canvas. Large emblem above, Chinese brand name below, then a smaller English wordmark. Comfortable clear space; emblem remains recognizable at app-icon scale.
+Text (verbatim): "河洛" in confident contemporary Chinese sans-serif, and "HELUO FORGE" in carefully spaced uppercase sans-serif. Spell English H E L U O, space, F O R G E. No other text.
+Background: genuinely transparent with alpha.
+Constraints: a single finished logo, production-minded simplicity, strong monochrome-ready silhouette, no fine decorative details, no mockup, no texture, no shadows, no gradients, no 3D, no robot, no brain, no circuit traces, no sparkles, no watermark, no checkerboard painted into the image.
+
+Refinement prompt
+
+Use case: precise-object-edit / logo-brand.
+Refine the supplied Heluo Forge logo only by cleaning its rendering. Keep the exact H river emblem concept, shape proportions, vertical layout, cobalt-blue and jade-teal identity, and both wordmarks "河洛" and "HELUO FORGE".
+Replace the ragged, speckled thin slits around the overlapping blue and teal bands with clean, smooth, deliberate negative-space channels of consistent width. Remove stray edge pixels and fuzzy borders. Make all color surfaces flat solid fills, without shading or gradients. Keep generous clear space and crisply rendered dark-ink typography. Produce the same single finished logo on a genuinely transparent background with alpha. No shadow, no texture, no border, no mockup, no additional text or decorative shapes.

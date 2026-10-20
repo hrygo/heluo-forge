@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.8.0 |
+| 版本 | V0.9.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -128,7 +128,7 @@ packages/forge-market/
 | 详情 | `GET /api/plugins/{name}` | 上列字段 + `scenarios`、`maintainer`、`repo`、`versions[]` |
 | 提交 | `POST /api/plugins` | `repo`、`tag`、`title`、`summary`、`scenarios` |
 | 我的提交 | `GET /api/plugins?mine=1` | `state`、`reason` |
-| 诊断 | `GET /admin/unindexed` | `repo`、`errors[]` |
+| 诊断 | `GET /api/admin/unindexed` | `repo`、`errors[]` |
 
 ## 8. 安装链路
 

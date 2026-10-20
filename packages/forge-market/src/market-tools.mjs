@@ -110,6 +110,23 @@ export function buildMarketTools(client, options = {}) {
       },
     ),
     tool(
+      'market_diagnostics',
+      'List repositories the index refused, with the reason codes, so a maintainer can fix them.',
+      { type: 'object', properties: {}, additionalProperties: false },
+      async () => {
+        const raw = await client.unindexed();
+        const entries = Array.isArray(raw?.entries) ? raw.entries : [];
+        return {
+          total: entries.length,
+          entries: entries.map((item) => ({
+            repo: String(item?.repo ?? ''),
+            name: String(item?.name ?? ''),
+            errors: Array.isArray(item?.errors) ? item.errors.map(String) : [],
+          })),
+        };
+      },
+    ),
+    tool(
       'market_check_update',
       'Compare an installed version with the latest listed one; changes nothing.',
       {

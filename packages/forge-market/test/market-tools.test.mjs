@@ -65,6 +65,7 @@ test('exposes exactly the documented tools', () => {
     'market_search',
     'market_detail',
     'market_submit',
+    'market_diagnostics',
     'market_check_update',
     'market_registration',
     'market_install',
@@ -140,4 +141,20 @@ test('submit rejects a repository address it cannot parse', async () => {
   const tools = buildMarketTools(client, { allowedHosts: ['gitee.corp.example'] });
   const result = await call(tools, 'market_submit', { name: '@heluo/a', repo: 'not a url', tag: 'v0.1.0' });
   assert.equal(result.reason, 'bad-repo');
+});
+
+test('diagnostics lists refused repositories with their codes', async () => {
+  const diagClient = {
+    ...client,
+    unindexed: async () => ({ entries: [{ repo: 'https://gitee.corp.example/g/bad', name: '@heluo/bad', errors: ['missing-file', 'bad-tag'] }] }),
+  };
+  const tools = buildMarketTools(diagClient);
+  const result = await call(tools, 'market_diagnostics', {});
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.entries[0].errors, ['missing-file', 'bad-tag']);
+});
+
+test('diagnostics tolerates a service that returns nothing', async () => {
+  const tools = buildMarketTools({ ...client, unindexed: async () => ({}) });
+  assert.deepEqual(await call(tools, 'market_diagnostics', {}), { total: 0, entries: [] });
 });

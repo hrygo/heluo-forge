@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.9.0 |
+| 版本 | V0.10.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -84,6 +84,7 @@ POST /api/plugins                  提交或更新条目
 GET  /api/metrics?plugin=          下载量与 star
 POST /api/admin/review             上架、退回、撤回
 GET  /api/discover/gitee           扫描专门 group 的仓库
+GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 ```
 
 数据模型要点：

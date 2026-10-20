@@ -44,5 +44,6 @@ export function createServiceClient({ baseUrl, fetchImpl = globalThis.fetch, tim
     submit: (payload) => request('/api/plugins', { method: 'POST', body: JSON.stringify(payload) }),
     mine: () => request('/api/plugins?mine=1'),
     metrics: (name) => request(`/api/metrics?plugin=${encodeURIComponent(name)}`),
+    unindexed: () => request('/api/admin/unindexed'),
   };
 }
