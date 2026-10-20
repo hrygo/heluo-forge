@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.8 |
+| 版本 | V0.1.9 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -33,7 +33,7 @@
 | `@heluo/forge-devops` | MCP 接入 bundle | `plugins/forge-devops.md` | 待设计 | 只读工具面（清单待提供方澄清）、服务端授权、按请求取 token |
 | `@heluo/forge-gitee` | MCP 接入 bundle | `plugins/forge-gitee.md` | 待设计 | 上游复用、arm64 构建、凭据来源 |
 | `@heluo/forge-sdd` | Skill pack + CLI | `plugins/forge-sdd.md` | 待设计 | 产物契约、freeze 与指纹、路径规则 |
-| `@heluo/forge-market` | 配置 bundle | `plugins/forge-market.md` | 待设计 | 私有源配置、安装策略、兼容校验 |
+| `@heluo/forge-market` | 配置 bundle | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 制品库地址与令牌、索引字段、安装脚本策略、缓存 |
 
 设计文档路径相对本目录。详细设计落盘时才创建 `plugins/` 目录与对应文件，不预建空文件。
 
@@ -83,6 +83,7 @@ market-index 服务 → forge-market 的目录来源
 - 设计变更同步更新本表状态；实现与设计不一致时，先改设计再改代码。
 - 模块设计不复制网关、IAM 等外部契约字段，使用相对链接引用。
 - 模块设计编号复用对应域编号；无域编号的组合包使用 `DESIGN` 系列。
+- 设计优先复用企业既有资产（CLI、制品库、审批单、身份能力）；确需自建时写明既有资产为何不适用。
 - 设计实现前必须核验目标接口；无法核验的接口形状标注"待实测"。
 - 增益不明确、需用户确认的选项单列保留，不阻塞主链路实现。
 - 新增模块先在本表登记，再创建目录与设计文档。
