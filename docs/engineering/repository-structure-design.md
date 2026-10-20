@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.2.5 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | 工程整理已获准并完成；业务能力仍按 G0—G3 验证 |
 
 > 编制依据：V0.1 于 2026-10-20 核对的初始仓库基线为提交 `034764487cddc87e8e1a0a2439d39168a4f28d4f`、12 个受跟踪文件及当时方案。用户明确后续覆盖完整方案、逐插件详细设计、全部插件开发及私有插件市场建设。初始实施记录的工具链为 Node.js 24.21.0、pnpm 11.28.5，属于历史实测，不代表后续会话默认环境；官方资料核对见 §3.3。V0.1 只形成设计，V0.2 已按批准范围完成工程整理，结果见 §4.8；未创建业务源码、插件清单、发布凭据或部署实例。V0.2.2 于 2026-10-20 复核现有入口与工程配置，修正时间与状态表述，未重新验证企业接口或部署。
@@ -23,9 +23,9 @@
 
 建议采用 **pnpm workspace 单仓多包（monorepo）**：文档按职责分类，客户端插件包、独立运行服务、部署资产、工程脚本及跨模块测试分别管理。该组织方式覆盖从方案评审到开发、测试、发布和运维的完整迭代，但不把本次目录整理等同于插件或市场已经实现。
 
-本次建议交付可执行的工程检查与协作约定，并建立九个规划包、两个规划服务的明确入口。业务模块先提供职责与状态说明，完成详细设计后再启用真实的包清单、源码、构建和运行配置。私有市场必须区分客户端接入配置、市场目录与发布控制、私有 npm 制品仓库三个层次。
+工程整理已交付可执行检查、协作约定与九个包、两个服务的职责入口。其后 `forge-market` 已建立真实包清单、源码、面板与测试，`market-index` 已建立 HTTP 参考实现；其余模块仍为规划。市场须区分客户端插件、目录与发布控制、制品来源三个层次；当前取 Gitee tag 归档，registry 接入或镜像仍待确认。
 
-**本文件已由用户于 2026-10-20 批准实施，§4.7 的顺序已执行，实际结果见 §4.8。** 采用开源项目工程实践不改变内部保密、私有仓库、许可证和一期产品范围；业务插件、服务与市场仍未实现。
+**工程整理已由用户于 2026-10-20 批准实施，§4.7 的顺序已执行，整理时点结果见 §4.8。** 该记录不等于后续模块或生产准入获批。仓库公开可见不改变敏感信息、许可证和一期产品边界；当前模块状态以[根 README](../../README.md)与[设计索引](../design/README.md)为入口。
 
 ## 2. 范围与非目标
 
@@ -52,7 +52,7 @@
 
 ### 3.1 已核实事实
 
-迁移前（V0.1 基线）仓库只有方案、登记清单、七域询问函及 HTML 图解，没有工作区、检查器、测试或 CI；本次实施后已建立工程底座，仍无业务源码与包清单。九个规划包的名称和扩展形态已在[总体架构 §6](<../architecture/platform-architecture.md#6-软件包组合>)给出，不应另起一套命名。
+迁移前（V0.1 基线）仓库只有方案、登记清单、七域询问函及 HTML 图解，没有工作区、检查器、测试或 CI；工程整理阶段建立了底座。2026-10-21 核对工作区，已存在市场插件实现和目录参考服务；其余八包无业务清单/源码，DevOps MCP 暂不建设。九包命名仍见[总体架构 §6](<../architecture/platform-architecture.md#6-软件包组合>)，不应另起一套命名。
 
 迁移前的协作规范曾包含过时的模块及远端状态，工程整理时已同步纠正；当前 [AGENTS.md](../../AGENTS.md)负责 agent 的任务路由、授权与交付要求，[贡献指南](../../CONTRIBUTING.md)负责贡献流程，[文档总览](../README.md)负责文档导航与治理。现有文档编号和 REQ/A/M/CONF 标识均保持不变。
 
@@ -113,7 +113,7 @@ heluo-forge/
 
 不预建空的多层源码目录，不用 `.gitkeep` 批量制造结构。各分类由 README、模板或真实资产承载；尚无内容的类别先在索引中约定，首个真实文档出现时创建。
 
-### 4.2 九个规划包及对应设计
+### 4.2 九个包入口及对应设计
 
 | 包名 | 代码位置 | 形态与边界 | 后续详细设计位置 |
 |---|---|---|---|
@@ -121,13 +121,13 @@ heluo-forge/
 | `@heluo/forge-iam` | `packages/forge-iam/` | Host + Client；授权流程、令牌 broker 与账户 UI | `docs/design/plugins/forge-iam.md` |
 | `@heluo/forge-gateway` | `packages/forge-gateway/` | 网关接入配置；不是服务端 AI 网关实现 | `docs/design/plugins/forge-gateway.md` |
 | `@heluo/forge-policy` | `packages/forge-policy/` | Host 策略、执行前门禁与决策审计 | `docs/design/plugins/forge-policy.md` |
-| `@heluo/forge-devops` | `packages/forge-devops/` | MCP 接入 bundle；独立服务实现位于 services | `docs/design/plugins/forge-devops.md` |
-| `@heluo/forge-gitee` | `packages/forge-gitee/` | Gitee MCP 接入及发行适配；不无理由重写上游实现 | `docs/design/plugins/forge-gitee.md` |
+| `@heluo/forge-devops` | `packages/forge-devops/` | 复用现有 DevOps CLI，以受控命令白名单提供只读工具面；MCP 服务仅在另行决策后建设 | `docs/design/plugins/forge-devops.md` |
+| `@heluo/forge-gitee` | `packages/forge-gitee/` | 复用现有 `gh` 兼容 CLI，以受控命令白名单提供只读工具面 | `docs/design/plugins/forge-gitee.md` |
 | `@heluo/forge-sdd` | `packages/forge-sdd/` | Skill pack + CLI；流程产物与一致性 | `docs/design/plugins/forge-sdd.md` |
-| `@heluo/forge-market` | `packages/forge-market/` | 私有市场客户端配置、来源与兼容策略 | `docs/design/plugins/forge-market.md` |
+| `@heluo/forge-market` | `packages/forge-market/` | 已有 Host + Client 实现、十个工具、列表面板、配置 bundle 与测试；完整治理未闭环 | `docs/design/plugins/forge-market.md` |
 | `@heluo/forge-brand` | `packages/forge-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/forge-brand.md` |
 
-上表的设计路径均为规划位置。本次建立设计索引、模板和组件职责 README，不批量生成只有标题或虚构接口的九份详细设计。
+上表九份设计正文均已建立且仍为草案；设计路径不再是待创建项。只有市场插件已有真实包清单与实现，其余八包仍只保留职责 README。
 
 真实 Node 包启用时采用 `src/`、`test/`、`package.json` 等局部布局；配置 bundle 不强制建立空 `src/`。对外只能使用声明的导出，不跨包直接导入另一个包的 `src`。实际包之间采用显式 `workspace:` 依赖，并避免循环依赖。新的 Node 组件默认 TypeScript；上游复用组件保留其合理语言，不因 monorepo 强制改写。
 
@@ -135,11 +135,13 @@ heluo-forge/
 
 | 层次 | 位置 | 后续建设内容 | 本次交付 |
 |---|---|---|---|
-| DevOps MCP 服务 | `services/devops-mcp/` | HTTP 工具面、服务端授权、审批及审计；与客户端 bundle 通过协议协作 | 边界 README 与设计入口，不启动监听或模拟生产接口 |
-| 市场目录与发布控制 | `services/market-index/` | 目录生成/校验、白名单、兼容性、版本通道及发布状态；优先可审计静态目录，不预设常驻 Web 服务 | 边界 README；不伪造现行 DSH index schema |
+| DevOps MCP 服务 | `services/devops-mcp/` | 条件建设：仅当 DevOps CLI 无法满足已确认的结构化输出、用户授权或必要身份能力时，才评审 HTTP 工具面及服务端职责 | 当前不建设；保留边界 README 与条件设计，不启动监听或模拟生产接口 |
+| 市场目录与发布控制 | `services/market-index/` | 目标为 Gitee 发现、校验、权限与持久发布状态；当前 HTTP 参考服务已有提交、评审、撤回、计数与共享管理令牌 | 工程整理时交付 README；后续已建立 `server.mjs` 与测试，无生产部署或独立清单 |
 | 私有 npm 制品仓库 | `deploy/registry/` | 企业现有 registry 优先；部署参数、认证、备份、恢复、访问与保留策略 | 运维范围说明，不部署仓库或写入真实地址/令牌 |
-| 客户端市场接入 | `packages/forge-market/` | 配置企业 index 与 registry，执行来源和安装策略 | 与服务端和制品存储分开，不另建不必要的市场 UI |
+| 客户端市场接入 | `packages/forge-market/` | 当前经自有 JSON API 或本地目录取条目，从 Gitee 归档安装；角色与完整发布治理仍为目标 | 工程整理时交付 README；后续已有 Host/Client、bundle 与本地测试，见 DESIGN-007 |
 | 双端配置与分发 | `deploy/clients/` | Windows 与银河麒麟的配置、安装、更新及回退资产 | 规划说明，不提交 MSI/deb/凭据或自建新客户端 |
+
+以下为原 registry 分层方案的目标发布流程，不是当前参考实现的运行图；Gitee 归档与制品库镜像的最终关系仍待确认。
 
 ```mermaid
 flowchart LR
@@ -208,9 +210,9 @@ flowchart LR
 
 建议将检查工具、文档迁移、工程入口分成三个可审查提交。恢复通过针对相应提交的受控反向变更，不用 hard reset、清空目录或覆盖其他会话的改动。远端推送及任何部署按当次有效授权处理，不调整仓库可见性或发布权限。
 
-### 4.8 实施结果（2026-10-20）
+### 4.8 工程整理实施结果（2026-10-20）
 
-按 §4.7 执行后的实际状态如下；未实现的项目单独列出，不并入已完成范围。
+以下保留 §4.7 工程整理完成时的证据，不作为后续市场开发的当前清单。当前实现与验证入口见 §3.1 及设计索引。
 
 | 项 | 结果 |
 |---|---|
@@ -222,7 +224,7 @@ flowchart LR
 | 模块入口 | 九个包与两个服务各一份职责 README，状态均为“规划”，无包清单、源码或运行配置 |
 | 图解 | 两个 HTML 按新路径重新生成，保留面板与源稿，无外部脚本与本机绝对路径 |
 
-尚未实现：业务插件、独立服务、私有 registry 与市场目录、双端安装包、企业接口联调与实机验证。上述内容仍按 G0—G3 门禁逐项推进。
+在上述整理完成时，业务插件、独立服务、私有 registry 与市场目录、双端安装包、企业接口联调与实机验证均未实现；后续市场模块开发不改变该历史结果，也不替代 G0—G3 门禁。
 
 ## 5. 失败模式
 

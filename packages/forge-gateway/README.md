@@ -8,7 +8,7 @@
 | 职责 | 企业模型接入配置：端点、模型白名单、错误与重试策略 |
 | 不负责 | 不实现服务端 AI 网关，不做本地计量，不持有上游模型密钥 |
 | 衔接点 | `llm-pi-ai` |
-| 详细设计 | `docs/design/plugins/forge-gateway.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 详细设计 | [详细设计](../../docs/design/plugins/forge-gateway.md)（草案，已建立；状态见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立 `package.json`、源码与测试 |
 
 ## 边界

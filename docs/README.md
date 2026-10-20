@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.10.7 |
+| 版本 | V1.11.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -24,6 +24,8 @@
 [需求与场景基线](<requirements/requirements-baseline.md>)是范围与指标的唯一真源；[总体架构](<architecture/platform-architecture.md>)保留跨域决策与摘要；字段级契约维护在 `contracts/`。内容按职责归属维护，具体冲突处理见 §6.2，不能仅凭 L1/L2/L3 层级或文档详细程度覆盖已有决策。
 
 本总览负责文档导航、内容归属与治理规则；编号、路径、版本和状态的登记由[文档清单](DOCUMENT-REGISTER.md)维护。入口调整不改变业务范围、版本号或已有审批记录。
+
+当前仓库已从纯方案与工程底座推进到市场模块实现：插件与 HTTP 参考服务的实现、测试及限制见[根 README](../README.md#4-仓库如何组织)和[设计索引](design/README.md#22-实现与验证入口)。受控设计仍为草案，企业联调、生产市场治理和双端分发尚未完成；代码存在或本地检查通过不代表 G0–G3 获批。DevOps/Gitee 按现有 CLI 只读基线评审，MCP 服务与核心补丁为条件项。
 
 ## 2. 文档地图
 
@@ -63,8 +65,8 @@
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | IAM 团队 | G0 | 待启动 | `resource` 支持、claims、client 注册、TTL、撤销 |
 | CORP-DSH-GW-001 | AI 网关契约（V0.8.4） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0 | 草案 | 验签方式、consumer 生命周期、双维度额度、429 契约、C1/C4 与待批准保留期；方向回函不替代 G1/G2 冻结与验证 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 平台组 | G0 | 待启动 | 内核、沙箱、原生模块、浏览器 |
-| CORP-DSH-DEVOPS-001 | DevOps MCP | 待创建 | DevOps 团队 | G1 | 待启动 | 只读工具面与 scope、PRM、错误码、字段与版本兼容（工具清单待提供方澄清） |
-| CORP-DSH-GITEE-001 | Gitee 集成 | 待创建 | 平台组 | G1 | 待启动 | 版本、arm64 构建、IAM 身份映射或凭据方案、写操作开关 |
+| CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | DevOps 团队 | G1 | 待启动 | 只读命令、结构化输出、凭据注入、错误与版本兼容；MCP 服务仅在 CLI 不满足已确认前提时另行评估 |
+| CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | 平台组 | G1 | 待启动 | CLI 版本与双端产物、只读命令、JSON 稳定性、凭据方案 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | 安全 + 平台组 | G2 | 待启动 | 规则、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | 平台组 + IT | G2 | 待启动 | registry、index、通道、回滚 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | 平台组 + IT | G2 | 待启动 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
@@ -81,7 +83,7 @@
 | 逐模块设计 | [设计索引](<design/README.md>) | 九个安装包与两个独立服务的详细设计状态与路径 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
-辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档。
+辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。
 
 ## 5. 阅读顺序
 

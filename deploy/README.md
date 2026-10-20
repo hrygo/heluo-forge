@@ -4,6 +4,8 @@
 
 本目录存放私有市场、独立服务与双端分发的部署资产。当前只有职责说明，没有可执行部署配置、凭据或已构建制品。
 
+市场已有[插件实现](../packages/forge-market/README.md)与[HTTP 参考服务](../services/market-index/README.md)，可做本地开发验证；不表示本目录已有生产部署。当前安装走 Gitee tag 归档，registry 接入或镜像仍待确认。
+
 | 子目录 | 内容 | 状态 |
 |---|---|---|
 | [`registry/`](<registry/README.md>) | 私有 npm 制品仓库的接入与运维边界 | 待确认 |
