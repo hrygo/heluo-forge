@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.10.3 |
+| 版本 | V1.10.4 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -35,13 +35,14 @@
 | V1.10.1 | 2026-10-20 | DSH 平台组 | 同步架构 V1.3.4 与网关契约 V0.8.3：登记聚合与计量约定及稳定实例标识选项 |
 | V1.10.2 | 2026-10-20 | DSH 平台组 | 更新备选方案 ARCH-002 至 V0.2，登记控制台手工签发变体；主方案与契约不变 |
 | V1.10.3 | 2026-10-20 | DSH 平台组 | 登记网关凭据方案对比图解；主方案、备选结论与契约不变 |
+| V1.10.4 | 2026-10-20 | DSH 平台组 | 图解改为以静态 Key 为主体展开，同步资源名称与说明 |
 
 ## 1. 清单
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.3 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.2 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.4 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.3 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.1 | 生效 | 平台组 | — |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.3.4 | 评审稿 | 平台组 | G0 |
@@ -68,7 +69,7 @@
 |---|---|---|---|
 | 统一认证与模型访问图解 | [enterprise-authentication-flow.html](<assets/enterprise-authentication-flow.html>) | [总体架构设计](<architecture/platform-architecture.md>)§7.1—§7.2 | 可离线浏览的辅助说明，包含总体关系及5类详细流程；源稿嵌入页面，不替代受控方案、正式契约或企业实测 |
 | 工程仓库结构设计提案图解 | [repository-structure-proposal.html](<assets/repository-structure-proposal.html>) | [工程结构设计](<engineering/repository-structure-design.md>) | 目录、模块和迁移的视觉摘要；结构已落地，业务模块仍未实现 |
-| 网关凭据方案对比图解 | [gateway-credential-options.html](<assets/gateway-credential-options.html>) | [备选方案](<architecture/gateway-static-key-option.md>)、[网关契约](<contracts/gateway-contract.md>)§4 | 主方案与静态 Key 的逐项对比、加权评分、采用与退出条件；评分权重为分析判断，非团队结论 |
+| 静态 Key 备选方案设计 | [gateway-credential-options.html](<assets/gateway-credential-options.html>) | [备选方案](<architecture/gateway-static-key-option.md>)、[网关契约](<contracts/gateway-contract.md>)§4 | 以静态 Key 为主体的完整设计：签发、存储、轮换、撤销、错误处理、设备维度、运维与威胁模型；对比与限制仅作其中一节 |
 
 ## 2. 维护规则
 
