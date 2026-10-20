@@ -196,8 +196,9 @@ export function buildMarketTools(client, options = {}) {
                 expectedDigest = digest || info.digest || undefined;
               }
             }
-          } catch {
-            // 服务不提供下载信息时退回按仓库与标签推导。
+          } catch (error) {
+            // 撤回是明确结论，不能退回按仓库与标签推导；其余情况才降级。
+            if (error?.code === 'version-revoked') return { ok: false, reason: 'version-revoked' };
           }
         }
 

@@ -9,6 +9,7 @@ export function normalizeVersion(raw) {
     archiveUrl: raw?.archiveUrl ? String(raw.archiveUrl) : '',
     engines: String(raw?.engines ?? ''),
     submittedAt: raw?.submittedAt ? String(raw.submittedAt) : '',
+    revoked: raw?.revoked === true,
   };
 }
 

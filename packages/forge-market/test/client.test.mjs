@@ -9,7 +9,7 @@ test('requires a service url', () => {
 });
 
 test('maps status codes to error codes', async () => {
-  for (const [status, code] of [[401, 'unauthorized'], [403, 'forbidden'], [404, 'not-found'], [503, 'service-unavailable']]) {
+  for (const [status, code] of [[401, 'unauthorized'], [403, 'forbidden'], [404, 'not-found'], [409, 'version-revoked'], [503, 'service-unavailable']]) {
     const client = createServiceClient({ baseUrl: 'https://plugins.corp.example', fetchImpl: respond(status, {}) });
     await assert.rejects(() => client.list(), (error) => error instanceof MarketError && error.code === code);
   }

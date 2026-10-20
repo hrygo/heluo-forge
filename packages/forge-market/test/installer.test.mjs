@@ -26,3 +26,16 @@ test('rejects traversal, absolute and unexpected paths', () => {
   assert.equal(bad.reason, 'unsafe-path');
   assert.deepEqual(bad.detail, ['../evil', '/etc/passwd', 'docs/readme.md']);
 });
+
+test('skips revoked versions and refuses an explicitly revoked one', () => {
+  const entry = {
+    name: '@heluo/a',
+    repo: 'https://gitee.corp.example/g/a',
+    versions: [
+      { version: '0.1.0', tag: 'v0.1.0' },
+      { version: '0.2.0', tag: 'v0.2.0', revoked: true },
+    ],
+  };
+  assert.equal(planInstall(entry, undefined, ['gitee.corp.example']).plan.version, '0.1.0');
+  assert.equal(planInstall(entry, '0.2.0', ['gitee.corp.example']).reason, 'version-revoked');
+});

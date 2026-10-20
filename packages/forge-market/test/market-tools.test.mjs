@@ -190,3 +190,19 @@ test('install still works when the service has no download info', async () => {
   });
   assert.equal((await call(tools, 'market_install', { name: '@heluo/a' })).ok, true);
 });
+
+test('install reports a revoked version from the service as such', async () => {
+  const revoking = {
+    ...client,
+    downloadInfo: async () => { throw Object.assign(new Error('revoked'), { code: 'version-revoked' }); },
+  };
+  const tools = buildMarketTools(revoking, {
+    allowedHosts: ['gitee.corp.example'],
+    install: {
+      download: async () => ({ ok: true, bytes: Buffer.from('x') }),
+      extract: async () => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) }] }),
+    },
+  });
+  const result = await call(tools, 'market_install', { name: '@heluo/a' });
+  assert.equal(result.reason, 'version-revoked');
+});

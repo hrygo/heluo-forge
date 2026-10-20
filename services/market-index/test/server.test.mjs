@@ -138,3 +138,22 @@ test('an unknown version is refused and an anonymous hit counts once a day', asy
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('a revoked version refuses downloads while the entry stays listed', async () => {
+  const app = createMarketApp({ entries: structuredClone(entries) });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', body: JSON.stringify(body) });
+  try {
+    assert.equal((await post('/api/admin/review', { name: '@heluo/a', action: 'revoke', version: '0.1.0' })).status, 200);
+    const download = await fetch(`${base}/api/plugins/@heluo%2Fa/versions/0.1.0/download`);
+    assert.equal(download.status, 409);
+    assert.equal((await download.json()).error, 'version-revoked');
+    const listed = (await (await fetch(`${base}/api/plugins`)).json()).entries;
+    const revoked = listed.find((entry) => entry.name === '@heluo/a');
+    assert.equal(revoked.versions[0].revoked, true);
+    assert.equal((await post('/api/admin/review', { name: '@heluo/a', action: 'revoke', version: '9.9.9' })).status, 404);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

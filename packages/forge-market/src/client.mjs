@@ -26,6 +26,7 @@ export function createServiceClient({ baseUrl, fetchImpl = globalThis.fetch, tim
       if (response.status === 401) throw new MarketError('unauthorized', 401);
       if (response.status === 403) throw new MarketError('forbidden', 403);
       if (response.status === 404) throw new MarketError('not-found', 404);
+      if (response.status === 409) throw new MarketError('version-revoked', 409);
       if (response.status >= 500) throw new MarketError('service-unavailable', response.status);
       if (!response.ok) throw new MarketError('bad-response', response.status);
       return await response.json();

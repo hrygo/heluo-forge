@@ -8,12 +8,14 @@ export function digestOf(bytes) {
 
 export function planInstall(entry, version, allowedHosts = []) {
   const versions = entry?.versions ?? [];
+  const usable = versions.filter((item) => item?.revoked !== true && item !== undefined);
   const chosen = version
     ? versions.find((item) => item?.version === version || item === version)
-    : versions[versions.length - 1];
+    : usable[usable.length - 1];
   if (!chosen) return { ok: false, reason: 'no-version' };
   const resolved = typeof chosen === 'string' ? { version: chosen, tag: `v${chosen}` } : chosen;
   if (!resolved.version) return { ok: false, reason: 'no-version' };
+  if (resolved.revoked === true) return { ok: false, reason: 'version-revoked' };
   if (!entry?.repo && !resolved.archiveUrl) return { ok: false, reason: 'no-repo' };
   const target = resolved.archiveUrl || entry.repo;
   let url;

@@ -107,6 +107,7 @@ GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 | `archiveUrl` | string | 归档地址，由服务端填写 |
 | `engines` | string | 目标 `engines.dsh`，形如 `>=0.2.1` |
 | `submittedAt` | string | ISO 8601 提交时间 |
+| `revoked` | boolean | 版本已撤回；为真时不再发放归档地址，下载端点返回 409 |
 
 ### 5.1 格式校验（索引前置条件）
 

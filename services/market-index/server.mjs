@@ -101,6 +101,15 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
       const actions = { approve: 'listed', reject: 'rejected', revoke: 'revoked' };
       if (!actions[payload.action]) return send(400, { error: 'bad-action' });
 
+      if (payload.action === 'revoke' && payload.version) {
+        const target = entries.find((item) => item.name === payload.name);
+        const version = target?.versions?.find((item) => item.version === payload.version);
+        if (!version) return send(404, { error: 'no-version' });
+        version.revoked = true;
+        audit.push({ name: payload.name, action: 'revoke-version', version: payload.version, at: new Date().toISOString() });
+        return send(200, { name: payload.name, version: payload.version, state: 'revoked' });
+      }
+
       const review = reviews.find((item) => item.name === payload.name && item.state === 'pending');
       const entry = entries.find((item) => item.name === payload.name);
       if (!review && !entry) return send(404, { error: 'not-found' });
@@ -134,6 +143,7 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
       if (!entry) return send(404, { error: 'not-found' });
       const version = entry.versions?.find((item) => item.version === decodeURIComponent(download[2]));
       if (!version) return send(404, { error: 'no-version' });
+      if (version.revoked) return send(409, { error: 'version-revoked', version: version.version });
       const counted = countDownload(entry, String(req.headers['x-machine-hash'] ?? ''));
       const asset = version.archiveUrl || `${entry.repo}/archive/refs/tags/${version.tag}.tar.gz`;
       return send(200, { name: entry.name, version: version.version, tag: version.tag, url: asset, digest: version.digest ?? '', counted });
