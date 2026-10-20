@@ -1,5 +1,5 @@
 import { checkArchivePaths, digestOf, verifyDigest } from './installer.mjs';
-import { patchPluginNames } from './validate.mjs';
+import { patchPluginNames, patchRelativeTargets } from './validate.mjs';
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -89,9 +89,15 @@ export async function installPlugin(plan, deps = {}) {
   // 行名指向别的包时，装上去也挂不起来；这里比挂载失败早一步报出来。
   const patch = kept.find((file) => file.path === 'cordis.patch.yml');
   if (patch) {
-    const declared = patchPluginNames(patch.bytes.toString('utf8'));
+    const patchText = patch.bytes.toString('utf8');
+    const declared = patchPluginNames(patchText);
     if (declared.length && !declared.includes(pkg.name)) {
       return { ok: false, reason: 'patch-name-mismatch', detail: declared };
+    }
+    for (const target of patchRelativeTargets(patchText)) {
+      if (!kept.some((file) => file.path === target.slice(2))) {
+        return { ok: false, reason: 'patch-missing-target', detail: target };
+      }
     }
   }
 

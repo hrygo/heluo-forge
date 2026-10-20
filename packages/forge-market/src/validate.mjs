@@ -30,6 +30,12 @@ export function patchPluginNames(text) {
   return [...String(text ?? '').matchAll(/name\s*:\s*['"]?(@[\w.-]+\/[\w.-]+)['"]?/g)].map((match) => match[1]);
 }
 
+// loader 允许 insert 行用相对路径指向 patch 旁边的文件；既然要写进白名单，
+// 就得确认目标确实在归档里，否则挂载时会找不到模块。
+export function patchRelativeTargets(text) {
+  return [...String(text ?? '').matchAll(/name\s*:\s*['"]?(\.\/[^'"\s]+)['"]?/g)].map((match) => match[1]);
+}
+
 export function validatePlugin(input, policy = {}) {
   const errors = [];
   const files = new Set(input?.files ?? []);
@@ -77,6 +83,10 @@ export function validatePlugin(input, policy = {}) {
     const declared = patchPluginNames(input.patch);
     if (declared.length && !declared.includes(name)) {
       errors.push({ code: 'patch-name-mismatch', detail: declared });
+    }
+    for (const target of patchRelativeTargets(input.patch)) {
+      const path = target.slice(2);
+      if (!files.has(path)) errors.push({ code: 'patch-missing-target', detail: target });
     }
   }
 

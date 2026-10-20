@@ -178,6 +178,7 @@ packages/forge-market/
 | `missing-dependency` | 下载 | 未注入下载或解包实现 | 否 |
 | `missing-engines` | 条目 | 未声明 engines.dsh | 否 |
 | `missing-fields` | 条目 | 条目缺 name 或 version | 否 |
+| `patch-missing-target` | 清单 | insert 行用 `./x` 指向归档里不存在的文件 | 否 |
 | `patch-name-mismatch` | 清单 | `cordis.patch.yml` 的 insert 行名与 `package.json` 的 `name` 不一致 | 否 |
 | `missing-manifest` | 清单 | 归档里没有 package.json | 否 |
 | `name-mismatch` | 清单 | 清单包名与规划不一致 | 否 |
@@ -247,6 +248,8 @@ packages/forge-market/
 | `dsh-permission-presets` | 权限档位 |
 
 判定不依赖书写风格：块式、流式（`- {id: forge-iam}`）、键序不同都能命中，宁可误报不可漏报。代价是正文里出现形如 `id: forge-iam` 的字符串也会被判违规，属刻意取舍。
+
+insert 行允许相对路径名（loader 以 patch 文件为锚点），这类行不参与包名比对，但要求目标文件确实在归档白名单内，否则判 `patch-missing-target`。
 
 路径规则只覆盖 `../`、`./` 与盘符，两种分隔符都算；以 `/` 开头的**路由**不判违规，因此绝对文件路径（如 `/etc/passwd`）与 `~` 展开不在文本规则覆盖内。这类值是否危险取决于插件代码，不能靠 patch 文本兜底，最终仍由代码审查与摘要校验负责。行 id 的最终取值须在 M1 用真实 profile 的补丁核对；名单变更须同步 `validate.mjs` 与本表。
 
