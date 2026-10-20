@@ -167,8 +167,8 @@ export function checkRepo(root) {
     if (!/^permissions:\s*$/m.test(text) || !/^\s+contents:\s*read\s*$/m.test(text)) {
       errors.push(`repo: ${name} must declare permissions with contents: read`);
     }
-    for (const match of text.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)\s*$/gm)) {
-      const reference = match[1];
+    for (const match of text.matchAll(/^[ \t]*(?:-[ \t]*)?uses:[ \t]*([^\r\n]*)$/gm)) {
+      const reference = match[1].replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
       if (reference.startsWith('./')) continue;
       if (!/@[0-9a-f]{40}$/.test(reference)) errors.push(`repo: ${name} action ${reference} is not pinned to a full commit SHA`);
     }

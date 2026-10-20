@@ -123,6 +123,22 @@ test('unpinned workflow action is rejected', () => {
   }
 });
 
+for (const quote of ['', "'", '"']) {
+  test(`workflow SHA validation handles comments with ${quote || 'no'} quotes`, () => {
+    const root = fixture();
+    try {
+      const reference = 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262';
+      write(root, '.github/workflows/check.yml', WORKFLOW.replace(reference, `${quote}${reference}${quote} # v7.0.1`));
+      assert.deepEqual(checkRepo(root).errors, []);
+
+      write(root, '.github/workflows/check.yml', WORKFLOW.replace(reference, `${quote}actions/checkout@v7${quote} # unpinned`));
+      assert.ok(checkRepo(root).errors.some((error) => error.includes('not pinned')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test('pull_request_target is rejected', () => {
   const root = fixture();
   try {
