@@ -5,7 +5,7 @@
 | 项 | 内容 |
 |---|---|
 | 项目编号 | CORP-DSH |
-| 版本 | V1.3 |
+| 版本 | V1.4 |
 | 状态 | 方案评审 |
 | 最后更新 | 2026-10-20 |
 | 文档清单 | [DOCUMENT-REGISTER.md](docs/DOCUMENT-REGISTER.md) |
@@ -22,6 +22,7 @@
 | 文档 | 内容 | 主要读者 |
 |---|---|---|
 | [总体架构设计](<docs/platform-architecture.md>) | L1 架构（V1.3，评审稿）：系统责任与信任边界、领域设计、安全、ADR 与跨域取舍 | 架构评审、各团队负责人 |
+| [统一认证与模型访问图解（HTML）](<docs/assets/enterprise-authentication-flow.html>) | 总体架构的辅助图解：职责、总体关系及5类详细流程，可离线浏览；不替代正式契约 | IAM、网关与平台对接团队 |
 | [推广实施方案](<docs/rollout-plan.md>) | L2 计划（V1.2，评审稿）：关键路径、15 周条件基准、G0–G3 证据、验收 A1–A14、试点运行与退出 | PM、实施团队 |
 | [需求与场景基线](<docs/requirements-baseline.md>) | L2 基线（V1.2，评审稿）：范围唯一真源、7 类角色、8 条场景、23 条需求、M1–M6 与试点判定 | PM、业务方、安全、试点用户 |
 | [AI 网关契约](<docs/subdocs/gateway-contract.md>) | L3 草案（V0.8）：模型鉴权、双维度额度、错误与日志边界；字段及保留期待确认 | 网关、模型与安全团队 |
@@ -30,7 +31,7 @@
 | [协作规范](<AGENTS.md>) | 文档体系、变更流程、验证要求与禁止事项 | 全体协作者与 agent |
 | [子文档索引](<docs/subdocs/README.md>) | 十份技术交付物的责任、门禁与状态；跨团队问题按 CONF 域前缀跟踪 | 各团队负责人 |
 
-> 图示以 mermaid 代码块内嵌在文档中（架构设计 §3.1 能力四象限、§4 分层架构），不单独维护位图。
+> 主文档图示继续使用内嵌 mermaid（架构设计 §3.1 能力四象限、§4 分层架构）。HTML图解为可离线打开的辅助资源，已保留页面内可编辑源稿，不替代受控方案与契约。
 
 ## 3. 阅读顺序
 
@@ -78,6 +79,8 @@ corp-dsh/
     ├── platform-architecture.md
     ├── rollout-plan.md
     ├── requirements-baseline.md
+    ├── assets/
+    │   └── enterprise-authentication-flow.html
     └── subdocs/
         ├── README.md
         ├── _template.md
