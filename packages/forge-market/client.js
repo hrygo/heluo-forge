@@ -4,7 +4,8 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
-    function Panel() {
+    // 该 slot 会以 summary 与 page 两种视图各调用一次：摘要只渲染一行。
+    function Panel({ view } = {}) {
       const [state, setState] = React.useState({ status: 'loading', entries: [], source: '' });
 
       React.useEffect(() => {
@@ -25,6 +26,13 @@ window.__ModuleLoader__.load({
       }, []);
 
       const title = h('div', { style: { fontWeight: 600, marginBottom: 8 } }, '企业插件市场');
+
+      if (view === 'summary') {
+        const line = state.status === 'ready'
+          ? `企业插件市场 · ${state.entries.length} 个条目`
+          : state.status === 'error' ? '企业插件市场 · 服务不可达' : '企业插件市场 · 加载中';
+        return h('div', { style: { opacity: 0.75 } }, line);
+      }
 
       if (state.status === 'loading') return h('div', null, title, h('div', { style: { opacity: 0.7 } }, '正在加载…'));
       if (state.status === 'error') return h('div', null, title, h('div', { style: { opacity: 0.7 } }, '市场服务不可达，稍后重试。'));

@@ -47,3 +47,11 @@ test('the bundle row is named after the package and the client entry is declared
   await access(join(here, manifest.exports['./client']));
   await access(join(here, manifest.main));
 });
+
+test('the panel renders the summary view without the full list', async () => {
+  const client = await read('client.js');
+  assert.match(client, /function Panel\(\{ view \}/);
+  assert.match(client, /view === 'summary'/);
+  const summary = client.slice(client.indexOf("view === 'summary'"), client.indexOf("state.status === 'loading'"));
+  assert.doesNotMatch(summary, /<ul|h\('ul'/);
+});
