@@ -54,6 +54,35 @@ export function buildMarketTools(client, options = {}) {
       },
     ),
     tool(
+      'market_submit',
+      'Submit a plugin for review: the repository must belong to the enterprise group and carry a semver tag.',
+      {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'repository address inside the enterprise group' },
+          tag: { type: 'string', description: 'release tag such as v0.1.0' },
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          scenarios: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['repo', 'tag', 'title'],
+        additionalProperties: false,
+      },
+      async ({ repo, tag, title, summary = '', scenarios = [] }) => {
+        if (!/^v\d+\.\d+\.\d+$/.test(String(tag))) return { ok: false, reason: 'bad-tag' };
+        if (!allowedHosts.length) return { ok: false, reason: 'no-allowed-host' };
+        let host;
+        try {
+          host = new URL(repo).host;
+        } catch {
+          return { ok: false, reason: 'bad-repo' };
+        }
+        if (!allowedHosts.includes(host)) return { ok: false, reason: 'host-not-allowed' };
+        const result = await client.submit({ repo, tag, title, summary, scenarios });
+        return { ok: true, state: result?.state ?? 'pending' };
+      },
+    ),
+    tool(
       'market_plan_install',
       'Resolve the tag and repository for one entry and version, without downloading anything.',
       {

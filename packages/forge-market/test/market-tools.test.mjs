@@ -39,7 +39,30 @@ test('plan resolves the tag and enforces the host allowlist', async () => {
   assert.equal(blocked.reason, 'host-not-allowed');
 });
 
-test('unknown tools are absent rather than failing silently', () => {
+test('exposes exactly the documented tools', () => {
   const tools = buildMarketTools(client);
-  assert.deepEqual(tools.map((t) => t.name), ['market_search', 'market_detail', 'market_plan_install']);
+  assert.deepEqual(tools.map((t) => t.name), [
+    'market_search',
+    'market_detail',
+    'market_submit',
+    'market_plan_install',
+  ]);
+});
+
+test('submit validates tag, host and reports the review state', async () => {
+  let submitted;
+  const submitClient = {
+    ...client,
+    submit: async (payload) => {
+      submitted = payload;
+      return { state: 'pending' };
+    },
+  };
+  const tools = buildMarketTools(submitClient, { allowedHosts: ['gitee.corp.example'] });
+  const payload = { repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', title: '网关' };
+
+  assert.deepEqual(await call(tools, 'market_submit', payload), { ok: true, state: 'pending' });
+  assert.equal(submitted.tag, 'v0.1.0');
+  assert.equal((await call(tools, 'market_submit', { ...payload, tag: '0.1.0' })).reason, 'bad-tag');
+  assert.equal((await call(tools, 'market_submit', { ...payload, repo: 'https://evil.example/x' })).reason, 'host-not-allowed');
 });
