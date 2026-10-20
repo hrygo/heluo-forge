@@ -107,6 +107,13 @@ export function buildMarketTools(client, options = {}) {
           return { ok: false, reason: 'bad-repo' };
         }
         if (!allowedHosts.includes(host)) return { ok: false, reason: 'host-not-allowed' };
+
+        // 提交前先自检：不合格的包不该占一次评审。
+        if (options.preflight !== false) {
+          const verdict = await checkRemote({ repo, tag, allowedHosts, fetchImpl: options.fetchImpl });
+          if (!verdict.ok) return { ok: false, reason: 'verification-failed', steps: verdict.steps };
+        }
+
         const result = await client.submit({ name, repo, tag, summary, scenarios });
         return { ok: true, state: result?.state ?? 'pending' };
       },

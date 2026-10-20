@@ -8,13 +8,13 @@ import { buildMarketTools } from '../src/market-tools.mjs';
 import { makeTarball } from './support/tar.mjs';
 import { digestOf } from '../src/installer.mjs';
 
-const pkg = JSON.stringify({ name: '@heluo/demo', version: '0.1.0' });
+const pkg = JSON.stringify({ name: '@heluo/demo', version: '0.1.0', engines: { dsh: '>=0.2.1' } });
 
 function startService() {
   const archive = makeTarball([
     ['package.json', pkg],
     ['cordis.patch.yml', 'insert: []\n'],
-    ['README.md', '# demo\n'],
+    ['README.md', '# demo\n\n## 用途\n\nx\n\n## 维护人\n\ny\n'],
   ]);
 
   const server = createServer((req, res) => {

@@ -193,6 +193,7 @@ packages/forge-market/
 | `unsafe-path` | 解包 | 条目含越界或非白名单路径 | 否 |
 | `version-mismatch` | 清单 | 清单版本与规划不一致 | 否 |
 | `version-pinned` | 策略 | 版本与钉住的版本不符 | 否 |
+| `verification-failed` | 提交 | 提交前自检未通过，见返回的 `steps` | 修正后重试 |
 | `version-revoked` | 规划 | 该版本已撤回，不再发放归档地址 | 否 |
 | `write-failed` | 落盘 | 写缓存或文件失败 | 可重试 |
 

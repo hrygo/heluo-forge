@@ -101,6 +101,12 @@ test('install refuses a host outside the allowlist', async () => {
 });
 
 test('submit validates tag, host and reports the review state', async () => {
+  const { makeTarball } = await import('./support/tar.mjs');
+  const archive = makeTarball([
+    ['package.json', JSON.stringify({ name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=0.2.1' } })],
+    ['cordis.patch.yml', 'insert: []\n'],
+    ['README.md', '## 用途\n\nx\n\n## 维护人\n\ny\n'],
+  ]);
   let submitted;
   const submitClient = {
     ...client,
@@ -109,7 +115,10 @@ test('submit validates tag, host and reports the review state', async () => {
       return { state: 'pending' };
     },
   };
-  const tools = buildMarketTools(submitClient, { allowedHosts: ['gitee.corp.example'] });
+  const tools = buildMarketTools(submitClient, {
+    allowedHosts: ['gitee.corp.example'],
+    fetchImpl: () => Promise.resolve({ ok: true, status: 200, arrayBuffer: () => Promise.resolve(archive) }),
+  });
   const payload = { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0' };
 
   assert.deepEqual(await call(tools, 'market_submit', payload), { ok: true, state: 'pending' });
@@ -230,4 +239,18 @@ test('verify refuses a repository outside the allowlist without fetching', async
   const result = await call(tools, 'market_verify', { repo: 'https://evil.example/g/demo', tag: 'v0.1.0' });
   assert.equal(result.ok, false);
   assert.equal(called, false);
+});
+
+test('submit refuses a package that fails its own preflight', async () => {
+  const { makeTarball } = await import('./support/tar.mjs');
+  const thin = makeTarball([['package.json', JSON.stringify({ name: '@heluo/a', version: '0.1.0' })]]);
+  let submitted = false;
+  const submitClient = { ...client, submit: async () => { submitted = true; return { state: 'pending' }; } };
+  const tools = buildMarketTools(submitClient, {
+    allowedHosts: ['gitee.corp.example'],
+    fetchImpl: () => Promise.resolve({ ok: true, status: 200, arrayBuffer: () => Promise.resolve(thin) }),
+  });
+  const result = await call(tools, 'market_submit', { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0' });
+  assert.equal(result.reason, 'verification-failed');
+  assert.equal(submitted, false);
 });

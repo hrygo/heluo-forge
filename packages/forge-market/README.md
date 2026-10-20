@@ -47,7 +47,7 @@ insert:
 |---|---|---|
 | `market_search` | 按关键词检索，按 star、下载量排序 | 否 |
 | `market_detail` | 条目详情、版本、`engines.dsh`、仓库地址 | 否 |
-| `market_submit` | 提交插件，校验标签格式与仓库域名 | 是（提交待审） |
+| `market_submit` | 提交前先自检归档（拉取、解包、按格式规则判定），通过才提交 | 是（提交待审） |
 | `market_verify` | 拉取指定仓库归档，逐步报告能否通过格式校验 | 否 |
 | `market_diagnostics` | 列出被索引拒绝的仓库与原因码 | 否 |
 | `market_check_update` | 比较已装版本与最新版本，不做任何变更 | 否 |
