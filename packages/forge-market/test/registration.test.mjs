@@ -30,7 +30,8 @@ test('instructions name both supported registration paths', () => {
   const { row } = buildRegistrationRow({ name: '@heluo/forge-market' }, { serviceUrl: 'x' });
   const text = registrationInstructions(row).join('\n');
   assert.match(text, /install_bundle/);
-  assert.match(text, /dsh plugin --profile <profile> add file:/);
+  assert.match(text, /dsh plugin --profile <profile> add <插件目录绝对路径>/);
+  assert.doesNotMatch(text, /add file:/);
   assert.match(text, /heluo-forge-market/);
   assert.match(text, /不要手工改写 profile 的 package\.json/);
 });

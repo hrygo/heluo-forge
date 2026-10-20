@@ -47,7 +47,7 @@ export function registrationInstructions(row) {
   return [
     '在目标 profile 上登记该插件，二者择一：',
     '1) plugin_manager install_bundle，target 取插件目录的绝对路径；它会写入 profile 的包与补丁，无需手工编辑。',
-    '2) dsh plugin --profile <profile> add file:<插件目录绝对路径>；该命令把参数转发给 profile 目录里的 pnpm，--profile 必填。',
+    '2) dsh plugin --profile <profile> add <插件目录绝对路径>；参数写绝对路径即可，不要加 file: 前缀。',
     `两种方式完成后确认补丁里存在 ${row.id} 行，再重启或等待 HMR。`,
     '不要手工改写 profile 的 package.json 或 cordis.patch.yml。',
   ];

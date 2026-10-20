@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.38.0 |
+| 版本 | V0.39.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -255,6 +255,15 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `satisfiesRange` | **未接线** | 仅被 `checkInstall` 使用 |
 
 未接线不等于可删：宿主接入策略层时按此签名调用即可。文档与代码的一致性由 `test/policy-wiring.test.mjs` 守护——新增导出若既未接线、也没登记，测试会红。
+
+### 8.3 安装后的两条路径
+
+登记行生成后，`registration.steps` 给出两种落地方式，参数形式已对照 DSH 实现核验（2026-10-20，`app.asar` 内 `dsh plugin` 帮助文本）：
+
+| 方式 | 参数 | 说明 |
+|---|---|---|
+| `plugin_manager` `install_bundle` | `target` 取**插件目录绝对路径** | 由工具完成包安装与补丁选择 |
+| `dsh plugin --profile <name> add <路径>` | 绝对路径，**不加 `file:` 前缀** | DSH 接受包名、Git 地址、tarball 或绝对本地路径 |
 
 ### 8.3 登记行 id
 
