@@ -27,6 +27,8 @@ export function nextAction(reason) {
       return 'retry';
     case 'version-revoked':
       return 'choose-another-version';
+    case 'incompatible-dsh':
+      return 'upgrade-dsh';
     case 'verification-failed':
     case 'bad-tag':
     case 'bad-manifest':
@@ -327,8 +329,8 @@ export function buildMarketTools(client, options = {}) {
           }
         }
 
-        const result = await installPlugin(plan, { ...deps, expectedDigest });
-        if (!result.ok) return result;
+        const result = await installPlugin(plan, { ...deps, expectedDigest, dshVersion: options.dshVersion });
+        if (!result.ok) return { ...result, action: nextAction(result.reason) };
 
         const built = buildRegistrationRow(result.installed, options.registration ?? {});
         const directory = options.targetDir ? packageDirFor(options.targetDir, result.installed.name) : undefined;

@@ -1,4 +1,5 @@
 import { checkArchivePaths, digestOf, verifyDigest } from './installer.mjs';
+import { checkEngines } from './policy.mjs';
 import { patchPluginNames, patchRelativeTargets, validatePatch } from './validate.mjs';
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
@@ -38,7 +39,7 @@ export async function downloadArchive(url, { fetchImpl = globalThis.fetch, timeo
 }
 
 export async function installPlugin(plan, deps = {}) {
-  const { download, extract, expectedDigest, onInstalled } = deps;
+  const { download, extract, expectedDigest, onInstalled, dshVersion } = deps;
   if (!plan?.repo || !plan?.tag) return { ok: false, reason: 'bad-plan' };
   if (plan.revoked) return { ok: false, reason: 'version-revoked' };
   if (typeof download !== 'function' || typeof extract !== 'function') return { ok: false, reason: 'missing-dependency' };
@@ -84,6 +85,15 @@ export async function installPlugin(plan, deps = {}) {
   if (pkg.name !== plan.name) return { ok: false, reason: 'name-mismatch', detail: pkg.name };
   if (plan.version && pkg.version && pkg.version !== plan.version) {
     return { ok: false, reason: 'version-mismatch', detail: pkg.version };
+  }
+
+  // engines.dsh 是硬门槛：不兼容的版本装上去比起装不上更糟。
+  const engines = String(pkg.engines?.dsh ?? '');
+  if (dshVersion && engines) {
+    const verdict = checkEngines(engines, dshVersion);
+    if (!verdict.compatible) {
+      return { ok: false, reason: 'incompatible-dsh', detail: { requires: engines, running: dshVersion, why: verdict.reason } };
+    }
   }
 
   // 行名指向别的包时，装上去也挂不起来；这里比挂载失败早一步报出来。

@@ -474,3 +474,21 @@ test('market_mine returns my submissions with their state', async () => {
   assert.equal(result.total, 2);
   assert.equal(result.entries[1].reason, 'missing-engines');
 });
+
+test('install refuses a package that needs a newer DSH', async () => {
+  const install = {
+    download: async () => ({ ok: true, bytes: Buffer.from('x') }),
+    extract: async () => ({
+      ok: true,
+      files: [{
+        path: 'package.json',
+        bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=2.0.0' } })),
+      }],
+    }),
+  };
+  const tooOld = await call(buildMarketTools(client, { allowedHosts: ['gitee.corp.example'], dshVersion: '1.4.0', install }), 'market_install', { name: '@heluo/a' });
+  assert.equal(tooOld.reason, 'incompatible-dsh');
+  assert.equal(tooOld.action, 'upgrade-dsh');
+  const ok = await call(buildMarketTools(client, { allowedHosts: ['gitee.corp.example'], dshVersion: '2.1.0', install }), 'market_install', { name: '@heluo/a' });
+  assert.equal(ok.ok, true);
+});

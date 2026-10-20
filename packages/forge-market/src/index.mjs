@@ -33,6 +33,8 @@ export function apply(ctx, config = {}) {
     allowedHosts: config.allowedHosts ?? [],
     cachePath: config.cachePath,
     targetDir: config.targetDir,
+    // 宿主版本用于 engines.dsh 门槛；拿不到就不拦，文档已写明该降级。
+    dshVersion: ctx?.app?.version ?? ctx?.version ?? process.env.DSH_VERSION,
     registration: {
       serviceUrl: config.serviceUrl,
       allowedHosts: config.allowedHosts ?? [],

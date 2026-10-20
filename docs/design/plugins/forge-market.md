@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.34.0 |
+| 版本 | V0.35.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -152,6 +152,8 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 5. 返回可直接使用的 loader 行与登记步骤，并附 `version`、`tag`、`directory`，使登记对象与实装版本一一对应；插件不写 profile，由操作者或 `plugin_manager` 完成登记。
 6. 下载计数由服务端在发放归档地址时自增，插件不上报，也不因安装失败回退。
 
+安装时用宿主版本校验 `engines.dsh`，不符则拒绝并给出 `required` 与 `running`；宿主版本不可得时跳过该项校验（这是已记录的降级，不是静默通过）。
+
 结果里的 `mode` 区分两种结局：`installed` 表示文件已写入 `targetDir` 并附 `persisted`；`verify-only` 表示只下载校验、磁盘未写入（未配置 `targetDir`）。调用方不得把 `installed` 字段当成已安装。
 
 任何一步失败都回滚临时目录，不留半装状态。
@@ -175,6 +177,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `bad-id` | 登记 | 无法从包名推导 loader 行 id | 否 |
 | `bad-manifest` | 清单 | package.json 不是合法 JSON | 否 |
 | `bad-name` | 登记 | 包名不是 @scope/name | 否 |
+| `incompatible-dsh` | 安装 | 包的 `engines.dsh` 与当前 DSH 版本不符，拒绝安装并列出要求 | 升级 DSH |
 | `bad-version` | 规划 | 目录里的版本不是 `x.y.z` 或 `x.y.z-pre`，标签也会随之出错 | 否 |
 | `bad-plan` | 规划 | 安装计划缺仓库或标签 | 否 |
 | `bad-repo` | 规划 | 仓库地址不是合法 URL | 否 |
@@ -233,6 +236,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `request-access` | 有身份但无权限，申请范围或角色 |
 | `retry` | 服务不可达或超时，稍后重试 |
 | `choose-another-version` | 目标版本已撤回，选别的版本 |
+| `upgrade-dsh` | 包要求更高版本的 DSH，先升级宿主 |
 | `fix-the-package` | 包本身不合格，按 `steps` 修正 |
 | `check-the-name` | 检查包名拼写后重试 |
 | `contact-admin` | 未归类的失败，交平台组 |
