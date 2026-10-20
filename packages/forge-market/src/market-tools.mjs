@@ -1,5 +1,7 @@
 import { filterEntries, normalizeEntry, sortEntries } from './catalog.mjs';
+import { downloadArchive, installPlugin } from './install.mjs';
 import { planInstall } from './installer.mjs';
+import { extractTarball } from './tarball.mjs';
 
 const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
 
@@ -18,6 +20,11 @@ function tool(name, description, parameters, handler) {
 
 export function buildMarketTools(client, options = {}) {
   const allowedHosts = options.allowedHosts ?? [];
+  const deps = {
+    download: (repo, tag) => downloadArchive(`${repo.replace(/\/$/, '')}/archive/refs/tags/${tag}.tar.gz`),
+    extract: async (bytes) => extractTarball(bytes),
+    ...options.install,
+  };
 
   return [
     tool(
@@ -80,6 +87,28 @@ export function buildMarketTools(client, options = {}) {
         if (!allowedHosts.includes(host)) return { ok: false, reason: 'host-not-allowed' };
         const result = await client.submit({ repo, tag, title, summary, scenarios });
         return { ok: true, state: result?.state ?? 'pending' };
+      },
+    ),
+    tool(
+      'market_install',
+      'Download one entry from the enterprise group, verify its digest and unpack it. Returns the installed file list.',
+      {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'exact package name' },
+          version: { type: 'string', description: 'version to install, defaults to the latest listed' },
+          digest: { type: 'string', description: 'expected sha256 digest returned by the service' },
+        },
+        required: ['name'],
+        additionalProperties: false,
+      },
+      async ({ name, version, digest }) => {
+        const raw = await client.detail(name);
+        const normalized = normalizeEntry(raw?.entry ?? raw);
+        if (!normalized.ok) return normalized;
+        const planned = planInstall(normalized.entry, version, allowedHosts);
+        if (!planned.ok) return planned;
+        return installPlugin(planned.plan, { ...deps, expectedDigest: digest });
       },
     ),
     tool(

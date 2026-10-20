@@ -45,8 +45,32 @@ test('exposes exactly the documented tools', () => {
     'market_search',
     'market_detail',
     'market_submit',
+    'market_install',
     'market_plan_install',
   ]);
+});
+
+test('install runs the pipeline with injected download and extract', async () => {
+  const files = [
+    { path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) },
+    { path: 'cordis.patch.yml', bytes: Buffer.from('insert: []\n') },
+  ];
+  const tools = buildMarketTools(client, {
+    allowedHosts: ['gitee.corp.example'],
+    install: {
+      download: async () => ({ ok: true, bytes: Buffer.from('x') }),
+      extract: async () => ({ ok: true, files }),
+    },
+  });
+  const result = await call(tools, 'market_install', { name: '@heluo/a' });
+  assert.equal(result.ok, true);
+  assert.equal(result.installed.version, '0.1.0');
+});
+
+test('install refuses a host outside the allowlist', async () => {
+  const tools = buildMarketTools(client, { allowedHosts: ['other.example'] });
+  const result = await call(tools, 'market_install', { name: '@heluo/a' });
+  assert.equal(result.reason, 'host-not-allowed');
 });
 
 test('submit validates tag, host and reports the review state', async () => {
