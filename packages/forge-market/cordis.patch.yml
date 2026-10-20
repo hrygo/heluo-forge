@@ -8,3 +8,5 @@ insert:
       serviceUrl: https://plugins.corp.example
       allowedHosts: [gitee.corp.example]
       timeoutMs: 5000
+      cachePath: ~
+      targetDir: ~
