@@ -5,7 +5,7 @@
 | 项 | 内容 |
 |---|---|
 | 项目编号 | CORP-DSH |
-| 版本 | V1.4 |
+| 版本 | V1.5 |
 | 状态 | 方案评审 |
 | 最后更新 | 2026-10-20 |
 | 文档清单 | [DOCUMENT-REGISTER.md](docs/DOCUMENT-REGISTER.md) |
@@ -23,6 +23,7 @@
 |---|---|---|
 | [总体架构设计](<docs/platform-architecture.md>) | L1 架构（V1.3，评审稿）：系统责任与信任边界、领域设计、安全、ADR 与跨域取舍 | 架构评审、各团队负责人 |
 | [统一认证与模型访问图解（HTML）](<docs/assets/enterprise-authentication-flow.html>) | 总体架构的辅助图解：职责、总体关系及5类详细流程，可离线浏览；不替代正式契约 | IAM、网关与平台对接团队 |
+| [工程仓库结构设计](<docs/subdocs/repository-structure-design.md>) / [提案图解](<docs/assets/repository-structure-proposal.html>) | 工程治理草案（V0.1）：完整方案、九个规划包、独立服务与私有市场的目录和迭代约束；待用户确认，尚未迁移 | 工程负责人、开发与维护者 |
 | [推广实施方案](<docs/rollout-plan.md>) | L2 计划（V1.2，评审稿）：关键路径、15 周条件基准、G0–G3 证据、验收 A1–A14、试点运行与退出 | PM、实施团队 |
 | [需求与场景基线](<docs/requirements-baseline.md>) | L2 基线（V1.2，评审稿）：范围唯一真源、7 类角色、8 条场景、23 条需求、M1–M6 与试点判定 | PM、业务方、安全、试点用户 |
 | [AI 网关契约](<docs/subdocs/gateway-contract.md>) | L3 草案（V0.8）：模型鉴权、双维度额度、错误与日志边界；字段及保留期待确认 | 网关、模型与安全团队 |
@@ -80,12 +81,14 @@ corp-dsh/
     ├── rollout-plan.md
     ├── requirements-baseline.md
     ├── assets/
-    │   └── enterprise-authentication-flow.html
+    │   ├── enterprise-authentication-flow.html
+    │   └── repository-structure-proposal.html
     └── subdocs/
         ├── README.md
         ├── _template.md
         ├── gateway-contract.md
-        └── team-confirmation-letters.md
+        ├── team-confirmation-letters.md
+        └── repository-structure-design.md
 ```
 
 ## 7. 维护约定
