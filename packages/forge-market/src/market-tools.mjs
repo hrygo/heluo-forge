@@ -273,9 +273,17 @@ export function buildMarketTools(client, options = {}) {
         if (!result.ok) return result;
 
         const built = buildRegistrationRow(result.installed, options.registration ?? {});
-        const registration = built.ok
-          ? { row: built.row, patch: renderPatch(built.row), steps: registrationInstructions(built.row) }
-          : { error: built.reason };
+        const directory = options.targetDir ? packageDirFor(options.targetDir, result.installed.name) : undefined;
+        // 登记行与实装版本绑定：装 0.2.0 却按 0.1.0 排障是最难查的一类问题。
+        // 即使没有 serviceUrl 无法生成行，版本与目录仍要返回。
+        const registration = {
+          ...(built.ok
+            ? { row: built.row, patch: renderPatch(built.row), steps: registrationInstructions(built.row) }
+            : { error: built.reason }),
+          version: result.installed.version,
+          tag: result.installed.tag,
+          directory,
+        };
         if (!options.targetDir) return { ...result, registration };
 
         const persisted = await persistFiles(result.installed.files ?? [], packageDirFor(options.targetDir, result.installed.name));

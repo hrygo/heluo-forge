@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.18.0 |
+| 版本 | V0.19.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -138,7 +138,7 @@ packages/forge-market/
 2. 下载归档，计算摘要并与服务返回值比对；不一致即中止。
 3. 解包到临时目录，只接受白名单路径（`package.json`、`cordis.patch.yml`、`src/`、`ui/`、`README.md`）。
 4. 校验 `package.json` 的 `name` 与 `engines.dsh`，与详情页展示一致才继续。
-5. 返回可直接使用的 loader 行与登记步骤；插件不写 profile，由操作者或 `plugin_manager` 完成登记。
+5. 返回可直接使用的 loader 行与登记步骤，并附 `version`、`tag`、`directory`，使登记对象与实装版本一一对应；插件不写 profile，由操作者或 `plugin_manager` 完成登记。
 6. 下载计数由服务端在发放归档地址时自增，插件不上报，也不因安装失败回退。
 
 任何一步失败都回滚临时目录，不留半装状态。

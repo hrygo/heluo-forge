@@ -334,3 +334,17 @@ test('update check reads the version that was installed', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('the registration row reports the version that was installed', async () => {
+  const tools = buildMarketTools(client, {
+    allowedHosts: ['gitee.corp.example'],
+    install: {
+      download: async () => ({ ok: true, bytes: Buffer.from('x') }),
+      extract: async () => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) }] }),
+    },
+  });
+  const result = await call(tools, 'market_install', { name: '@heluo/a' });
+  assert.equal(result.ok, true);
+  assert.equal(result.registration.version, result.installed.version);
+  assert.equal(result.registration.tag, result.installed.tag);
+});
