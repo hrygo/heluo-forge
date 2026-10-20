@@ -150,7 +150,9 @@ packages/forge-market/
 
 落盘按包名分目录（`targetDir/<scope-name>/`），否则第二个插件会覆盖第一个的 `package.json`；同一目录下的 `package.json` 也是 `market_check_update` 省略 `installedVersion` 时的来源。
 
-包内 `cordis.patch.yml` 会被 loader 执行，因此第 3 步之后还要做内容校验：拒绝 `!!js` 表达式、`disabled: true`、`cordis:include`、包外相对路径，以及覆盖 IAM、策略、凭据、沙箱、权限预设等行 id。判定逻辑见 `packages/forge-market/src/validate.mjs`。
+包内 `cordis.patch.yml` 会被 loader 执行，因此第 3 步之后还要做内容校验：拒绝 `!!js` 表达式、`disabled: true`、`cordis:include`、越级的 `../`，以及覆盖 IAM、策略、凭据、沙箱、权限预设等行 id。判定逻辑见 `packages/forge-market/src/validate.mjs`。
+
+`disabled: true` 一律拒绝（含把插件自身默认禁用）：loader 支持该字段，但「装上却默认不生效」会让用户以为安装失败。确实需要默认禁用的插件，应改由 profile 侧补丁控制，不写进包内补丁。这是一项取舍，列入未决事项。
 
 ## 8.1 失败原因
 
@@ -324,6 +326,7 @@ insert 行允许相对路径名（loader 以 patch 文件为锚点），这类�
 | Gitee 归档能否直接安装 | 平台组（试装） | 是否需要镜像 | 代码支持 `archiveUrl` 直连，**未用真实仓库验证** |
 | 归档镜像到制品库 | IT、安全 | 可用性与审计 | 未定；当前回退到仓库地址 |
 | 计数去重口径 | 平台组 | 下载量含义 | 已按「下载请求」实现，去重为（条目, 机器哈希, 日） |
+| 包内补丁能否自带 `disabled: true` | 平台组 | 是否支持「安装即禁用」的插件 | 现一律拒绝，需 profile 侧控制 |
 
 ### 需用户确认的设计选项（增益不明确，暂不采用，保留待定）
 
