@@ -10,7 +10,17 @@
 | 客户端 | [@heluo/forge-market](../../packages/forge-market/README.md) |
 | 制品存储 | [deploy/registry](../../deploy/registry/README.md) |
 | 详细设计 | `docs/design/services/market-index.md`（待编写，见[设计索引](../../docs/design/README.md)） |
-| 实现状态 | 尚未建立服务清单、源码、测试或部署配置 |
+| 实现状态 | 只读参考实现已建立：`server.mjs` 与 3 个用例，覆盖目录查询、提交入队与 404；无 Gitee 扫描、鉴权、评审流与持久化，未部署核验 |
+
+## 参考实现的用法
+
+```sh
+node services/market-index/server.mjs --catalog ./catalog.json --port 8080
+```
+
+目录格式与 [@heluo/forge-market](../../packages/forge-market/README.md) 的离线目录一致：数组或 `{ "entries": [...] }`，条目字段按 DESIGN-012 的字段级约定。
+
+参考实现**不构成部署版本**：没有鉴权、限流、Gitee 扫描、评审流与持久化，只能用于联调、演示与契约验证。生产部署仍按 DESIGN-012 的容器与网关要求。
 
 ## 边界
 
