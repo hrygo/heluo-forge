@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.10.22 |
+| 版本 | V1.10.23 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -19,9 +19,9 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.22 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.23 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.5 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.17 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.18 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.1 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.1 | 草案 | 平台组（代拟） | G0 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V0.1 | 草案 | 平台组（代拟） | G2 |
@@ -29,12 +29,12 @@
 | CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V0.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V0.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1 | 草案 | 平台组（代拟） | G2 |
-| CORP-DSH-DESIGN-007 | 企业插件市场详细设计 | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V0.3.3 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-007 | 企业插件市场详细设计 | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V0.4.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-008 | 轻量 SDD 详细设计 | [design/plugins/forge-sdd.md](<design/plugins/forge-sdd.md>) | V0.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-009 | DevOps 接入详细设计 | [design/plugins/forge-devops.md](<design/plugins/forge-devops.md>) | V0.1 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.1 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-011 | DevOps MCP 服务详细设计 | [design/services/devops-mcp.md](<design/services/devops-mcp.md>) | V0.1 | 草案 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-012 | 插件市场服务详细设计 | [design/services/market-index.md](<design/services/market-index.md>) | V0.3.3 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-012 | 插件市场服务详细设计 | [design/services/market-index.md](<design/services/market-index.md>) | V0.4.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.5.1 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
 | CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V1.3 | 评审稿 | 平台组 | G0 |

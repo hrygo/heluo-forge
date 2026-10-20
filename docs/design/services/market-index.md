@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.3.3 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -95,6 +95,21 @@ GET  /api/discover/gitee           扫描专门 group 的仓库
 | review_task | 条目、状态、评审人、理由、时间 |
 | metric | 条目、下载次数、star 数、同步时间 |
 
+### 5.1 格式校验（索引前置条件）
+
+扫描与提交都先过同一套校验。**不合格的仓库不进入索引，检索不到**；管理视图给出原因，避免开发者无从下手。
+
+| 错误码 | 触发条件 | 处理 |
+|---|---|---|
+| `missing-file` | 缺 `cordis.patch.yml`、`package.json` 或 `README.md` | 不进索引 |
+| `scope-not-allowed` | 包名不在受信范围（默认 `@heluo`） | 不进索引 |
+| `bad-version` \| `bad-tag` \| `tag-mismatch` | 版本非 `x.y.z`、标签非 `vX.Y.Z`、两者不一致 | 不进索引 |
+| `missing-engines` \| `bad-engines` | 未声明或无法解析 `engines.dsh` | 不进索引 |
+| `install-script` | 声明了 `preinstall`、`install` 或 `postinstall` | 不进索引 |
+| `missing-section` | README 缺 `## 用途` 或 `## 维护人` | 不进索引 |
+
+判定逻辑由 `packages/forge-market/src/validate.mjs` 承担，规则变更需同步该文件与用例。
+
 ## 6. 权限、凭据与数据
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
@@ -106,6 +121,18 @@ GET  /api/discover/gitee           扫描专门 group 的仓库
 | 审计日志 | 主体、动作、对象、结果 | 180 天 | 不影响主流程 |
 
 ## 7. 流程
+
+### 7.1 发现与索引
+
+```mermaid
+flowchart LR
+  A[扫描 group] --> B{格式校验}
+  B -->|不合格| C[记录原因，不进索引]
+  B -->|合格| D[写入目录]
+  D --> E[可被检索]
+```
+
+### 7.2 提交与评审
 
 ```mermaid
 flowchart TD
@@ -132,7 +159,8 @@ flowchart TD
 | 非维护人提交 | 403 | 说明无权限 | 否 |
 | 仓库不属于该 group | 退回 | 指出应为组内仓库 | 建仓后重提 |
 | 仓库不可读 | 退回 | 指出需授权 | 授权后重提 |
-| 缺 `cordis.patch.yml` 或清单 | 退回 | 列出缺失项 | 修正后重提 |
+| 缺 `cordis.patch.yml` 或清单 | 退回且不进索引 | 列出缺失项 | 修正后重提 |
+| 扫描到不合格仓库 | 不进索引 | 管理视图给出错误码 | 修正后重扫 |
 | 版本已存在 | 拒绝 | 提示改用新版本号 | 否 |
 | Gitee 不可达 | 503 | 提示稍后重试 | 可重试 |
 | star 同步失败 | 保留上次值并标注 | 显示可能过期 | 可重试 |
@@ -167,6 +195,7 @@ flowchart TD
 |---|---|---|
 | Gitee 检索与 release 字段 | Gitee 团队 | 第 5 节适配 |
 | group 命名与管理员 | Gitee 团队、平台组 | `gitee.group` |
+| 格式规范的维护与升版 | 平台组 | 校验规则与存量插件 |
 | 建仓审批人及时限 | Gitee 组管理员 | 提交前置条件 |
 | 评审人与时效 | 平台组、PMO | 上架周期 |
 | star 同步频率 | 平台组 | `syncHours` |
