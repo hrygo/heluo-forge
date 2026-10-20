@@ -18,8 +18,33 @@ function matches(entry, query) {
   return [entry.name, entry.title, entry.summary, ...(entry.scenarios ?? [])].join(' ').toLowerCase().includes(needle);
 }
 
-export function createMarketApp({ entries = [], reviews = [] } = {}) {
+export function createMarketApp({ entries = [], reviews = [], audit = [] } = {}) {
   const byName = () => new Map(entries.map((entry) => [entry.name, entry]));
+
+  const publish = (review) => {
+    const version = String(review.tag ?? '').replace(/^v/, '');
+    const existing = entries.find((entry) => entry.name === review.name);
+    if (existing) {
+      existing.status = 'listed';
+      if (!existing.versions?.some((item) => item.version === version)) {
+        existing.versions = [...(existing.versions ?? []), { version, tag: review.tag }];
+      }
+      return;
+    }
+    entries.push({
+      name: review.name,
+      title: review.name,
+      summary: '',
+      scenarios: [],
+      maintainer: '',
+      repo: review.repo,
+      status: 'listed',
+      version,
+      versions: [{ version, tag: review.tag }],
+      stars: 0,
+      downloads: 0,
+    });
+  };
 
   return async function handle(req, res) {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -52,6 +77,35 @@ export function createMarketApp({ entries = [], reviews = [] } = {}) {
       if (!/^v\d+\.\d+\.\d+$/.test(payload.tag)) return send(400, { error: 'bad-tag' });
       reviews.push({ name: payload.name, repo: payload.repo, tag: payload.tag, state: 'pending' });
       return send(202, { state: 'pending' });
+    }
+
+    if (url.pathname === '/api/admin/review' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      let payload;
+      try {
+        payload = JSON.parse(body || '{}');
+      } catch {
+        return send(400, { error: 'bad-json' });
+      }
+      const actions = { approve: 'listed', reject: 'rejected', revoke: 'revoked' };
+      if (!actions[payload.action]) return send(400, { error: 'bad-action' });
+
+      const review = reviews.find((item) => item.name === payload.name && item.state === 'pending');
+      const entry = entries.find((item) => item.name === payload.name);
+      if (!review && !entry) return send(404, { error: 'not-found' });
+
+      const state = actions[payload.action];
+      if (review) review.state = state;
+      if (payload.action === 'approve') publish(review ?? { name: entry.name, repo: entry.repo, tag: entry.tag ?? `v${entry.version}` });
+      if (payload.action === 'revoke' && entry) {
+        entry.status = 'revoked';
+        const index = entries.indexOf(entry);
+        if (index >= 0) entries.splice(index, 1);
+      }
+      if (payload.action === 'reject' && entry) entry.status = 'rejected';
+      audit.push({ name: payload.name, action: payload.action, reason: payload.reason ?? '', at: new Date().toISOString() });
+      return send(200, { name: payload.name, state });
     }
 
     if (url.pathname === '/api/admin/unindexed' && req.method === 'GET') {
