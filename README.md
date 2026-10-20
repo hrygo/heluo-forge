@@ -5,7 +5,7 @@
 | 项 | 内容 |
 |---|---|
 | 项目编号 | CORP-DSH |
-| 版本 | V1.2 |
+| 版本 | V1.3 |
 | 状态 | 方案评审 |
 | 最后更新 | 2026-10-20 |
 | 文档清单 | [DOCUMENT-REGISTER.md](docs/DOCUMENT-REGISTER.md) |
@@ -25,6 +25,7 @@
 | [推广实施方案](<docs/rollout-plan.md>) | L2 计划（V1.2，评审稿）：关键路径、15 周条件基准、G0–G3 证据、验收 A1–A14、试点运行与退出 | PM、实施团队 |
 | [需求与场景基线](<docs/requirements-baseline.md>) | L2 基线（V1.2，评审稿）：范围唯一真源、7 类角色、8 条场景、23 条需求、M1–M6 与试点判定 | PM、业务方、安全、试点用户 |
 | [AI 网关契约](<docs/subdocs/gateway-contract.md>) | L3 草案（V0.8）：模型鉴权、双维度额度、错误与日志边界；字段及保留期待确认 | 网关、模型与安全团队 |
+| [跨团队确认询问函](<docs/subdocs/team-confirmation-letters.md>) | 协作草案（V0.2）：7封按收件团队职责撰写、可独立转发的正文，共47项问题；填写收件人、期限与署名后使用 | 发函人、对应接入团队及业务负责人 |
 | [文档清单](<docs/DOCUMENT-REGISTER.md>) | 全部文档的编号、版本、状态、负责团队与门禁 | 全体 |
 | [协作规范](<AGENTS.md>) | 文档体系、变更流程、验证要求与禁止事项 | 全体协作者与 agent |
 | [子文档索引](<docs/subdocs/README.md>) | 十份技术交付物的责任、门禁与状态；跨团队问题按 CONF 域前缀跟踪 | 各团队负责人 |
@@ -38,7 +39,8 @@
 3. [总体架构设计](docs/platform-architecture.md) §5–§7：插件形态、软件包组合、五个领域。
 4. [总体架构设计](docs/platform-architecture.md) §8–§12：契约、安全、部署、版本、交付组织与 G0–G3 门禁。
 5. [推广实施方案](<docs/rollout-plan.md>) §4：WBS、关键路径、门禁证据与试点运行；§7：验收 A1–A14；§8：风险；§9：回函归类。
-6. [子文档索引](<docs/subdocs/README.md>)：找到各团队技术契约和运行手册，已存在的[网关草案](<docs/subdocs/gateway-contract.md>)先核对差异；其余交付物按门禁补齐。
+6. [跨团队确认询问函](<docs/subdocs/team-confirmation-letters.md>) §4：选择对应收件团队的正文，填写联系人、期限与署名后转发；标为“平台内部”的说明不随函转发。
+7. [子文档索引](<docs/subdocs/README.md>)：找到各团队技术契约和运行手册，已存在的[网关草案](<docs/subdocs/gateway-contract.md>)先核对差异；其余交付物按门禁补齐。
 
 ## 4. 关键决策（方案基线 / 待验）
 
@@ -79,7 +81,8 @@ corp-dsh/
     └── subdocs/
         ├── README.md
         ├── _template.md
-        └── gateway-contract.md
+        ├── gateway-contract.md
+        └── team-confirmation-letters.md
 ```
 
 ## 7. 维护约定
