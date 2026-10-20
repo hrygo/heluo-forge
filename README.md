@@ -5,7 +5,7 @@
 | 项 | 内容 |
 |---|---|
 | 项目编号 | CORP-DSH |
-| 版本 | V1.0 |
+| 版本 | V1.2 |
 | 状态 | 方案评审 |
 | 最后更新 | 2026-10-20 |
 | 文档清单 | [DOCUMENT-REGISTER.md](docs/DOCUMENT-REGISTER.md) |
@@ -13,44 +13,57 @@
 
 ## 1. 结论
 
-方案可行，且不需要修改 DSH 核心：企业能力全部落在插件、bundle、MCP、skill 与配置上，唯一的核心修改是 MCP 按请求获取 token。一期按“每人一套 DSH”落地，不做多租户；Windows 使用桌面 App，银河麒麟使用本机 Web。当前不确定性集中在三处：企业 IAM 的 `resource` 支持、DevOps MCP 的 PRM 归属、银河麒麟 aarch64 实机验证。
+当前方案是**可继续评审的目标路线，非已实测可行的交付结论**。企业能力拟落在插件、bundle、MCP、skill 与配置上，唯一允许的核心补丁是 `dsh-mcp-client` 按请求获取 token 及 `stdio` 凭据重连；50–80 行只是规模粗估，不是已完成代码量或交付上限，仍须联调、回归并由内部源兜底。一期保持 3 部门 800 人、每人独立实例；Windows（50%）使用桌面 App，银河麒麟 aarch64（50%）使用仅绑定 `127.0.0.1` 的本机 Web。
+
+主要不确定性包括：Windows 与麒麟双端凭据/执行隔离、IAM/网关/DevOps/Gitee 接口契约、模型与网关容量、支持投入和分批观察窗口。800 人不等于 800 并发；15 周仅是依赖和资源满足时的条件基准，不是日期承诺。现有源码依据不等于企业部署验证，完整边界见[需求基线](<docs/requirements-baseline.md>)、[总体架构](<docs/platform-architecture.md>)及[实施计划](<docs/rollout-plan.md>)。
 
 ## 2. 文档地图
 
 | 文档 | 内容 | 主要读者 |
 |---|---|---|
-| [总体架构设计](docs/platform-architecture.md) | L1 架构：插件形态、软件包组合、领域设计、标准符合性、安全、ADR | 架构评审、各团队负责人 |
-| [推广实施方案](docs/rollout-plan.md) | L2 执行：WBS、Fork 选型、验收 A1–A14、风险、待确认事项 | PM、实施团队 |
-| [文档清单](docs/DOCUMENT-REGISTER.md) | 全部文档的编号、版本、状态、负责团队与门禁 | 全体 |
-| [协作规范](AGENTS.md) | 文档体系、变更流程、验证要求与禁止事项 | 全体协作者与 agent |
-| [子文档索引](docs/subdocs/README.md) | 十份团队交付物的入口、责任、门禁与状态 | 各团队负责人 |
-| [分层架构图](docs/assets/architecture-layers.png) | 客户端 / 运行时 / 插件 / 平台四层 | 汇报与评审 |
-| [能力价值矩阵](docs/assets/capability-value-matrix.png) | 哪些能力随模型与宿主增强而升值 | 决策沟通 |
+| [总体架构设计](<docs/platform-architecture.md>) | L1 架构（V1.3，评审稿）：系统责任与信任边界、领域设计、安全、ADR 与跨域取舍 | 架构评审、各团队负责人 |
+| [推广实施方案](<docs/rollout-plan.md>) | L2 计划（V1.2，评审稿）：关键路径、15 周条件基准、G0–G3 证据、验收 A1–A14、试点运行与退出 | PM、实施团队 |
+| [需求与场景基线](<docs/requirements-baseline.md>) | L2 基线（V1.2，评审稿）：范围唯一真源、7 类角色、8 条场景、23 条需求、M1–M6 与试点判定 | PM、业务方、安全、试点用户 |
+| [AI 网关契约](<docs/subdocs/gateway-contract.md>) | L3 草案（V0.8）：模型鉴权、双维度额度、错误与日志边界；字段及保留期待确认 | 网关、模型与安全团队 |
+| [文档清单](<docs/DOCUMENT-REGISTER.md>) | 全部文档的编号、版本、状态、负责团队与门禁 | 全体 |
+| [协作规范](<AGENTS.md>) | 文档体系、变更流程、验证要求与禁止事项 | 全体协作者与 agent |
+| [子文档索引](<docs/subdocs/README.md>) | 十份技术交付物的责任、门禁与状态；跨团队问题按 CONF 域前缀跟踪 | 各团队负责人 |
+
+> 图示以 mermaid 代码块内嵌在文档中（架构设计 §3.1 能力四象限、§4 分层架构），不单独维护位图。
 
 ## 3. 阅读顺序
 
-1. 架构设计 §1–§4：背景、原则、标准符合性、总体架构。
-2. 架构设计 §5–§7：插件形态、软件包组合、五个领域。
-3. 架构设计 §8–§11：契约、安全、部署、版本。
-4. 架构设计 §12：交付组织与子文档分工。
-5. 推广实施方案 §4：WBS；§7：验收；§8：风险；§9：待确认事项。
+1. [需求与场景基线](docs/requirements-baseline.md) §1–§6：范围、人群、场景、需求与指标，先定边界。
+2. [总体架构设计](docs/platform-architecture.md) §1–§4：背景、原则、标准符合性、总体架构。
+3. [总体架构设计](docs/platform-architecture.md) §5–§7：插件形态、软件包组合、五个领域。
+4. [总体架构设计](docs/platform-architecture.md) §8–§12：契约、安全、部署、版本、交付组织与 G0–G3 门禁。
+5. [推广实施方案](<docs/rollout-plan.md>) §4：WBS、关键路径、门禁证据与试点运行；§7：验收 A1–A14；§8：风险；§9：回函归类。
+6. [子文档索引](<docs/subdocs/README.md>)：找到各团队技术契约和运行手册，已存在的[网关草案](<docs/subdocs/gateway-contract.md>)先核对差异；其余交付物按门禁补齐。
 
-## 4. 关键决策
+## 4. 关键决策（方案基线 / 待验）
 
-- **每人一套 DSH**，不做多租户；多租户整块移出一期。
-- **令牌直通网关**，客户端不持有上游 Key；一个会话、按资源获取 token。
-- **额度由网关承担**，支持按人（`sub`）与 consumer 双维度；DSH 不自建账本。
-- **外部系统使用 MCP，策略使用原生插件**；门禁基于 `tools/pre-execute` 与 `guard`，不维护每宿主 hooks。
-- **SDD 只做 skill 包**，维护三条不变量（一致性、原子性、可追溯），不做五环产品。
-- **必装能力走组合 bundle，可选能力走私有大市场**；公网源不回落。
+以下概括既定目标路线，不表示接口、安全控制或部署已实现。用户确认的范围输入与未验方案能力分开记录，详细证据和准入条件以[需求基线](<docs/requirements-baseline.md>)、[架构设计](<docs/platform-architecture.md>)和[实施计划](<docs/rollout-plan.md>)为准。
+
+- **每人一套 DSH**，一期 3 部门 800 人，Windows 与麒麟各半；不做多租户、macOS 客户端或白标，调整非目标须范围变更并单独立项。
+- **模型经企业网关、机构内私有化部署**，客户与生产数据进入上下文须守住 C1–C4。会话正文默认不进安全事件平台，网关/模型正文日志默认关闭；采样和元数据保留数值均待安全及相关团队批准，不把草案建议当制度。
+- **按资源授权、客户端不持上游 Key**；凭据路径拒绝与执行隔离均为双端待验证目标，不能仅凭配置宣称安全硬隔离。本机管理员可改 preset/配置，企业权限仍由服务端鉴权与审批兜底。
+- **额度由网关承担**，拟按人（`sub`）与 consumer 双维度约束；DSH 不建第二套账，具体接口和错误语义待回函、联调。
+- **外部系统用 MCP，策略用原生插件**；DevOps 目标为 `streamable-http`，Gitee 用本地 `stdio`；门禁与 SDD 路径规则收敛到策略插件，不维护每宿主 hooks。
+- **生产写操作两层审批**：本机 `ask` 只代表当前操作者确认，不替代平台所需审批；`approval=never`、无 UI、取消/拒绝、超时或异常不得视为确认。生产操作遇到 401、超时或断流而结果未知时，先查单或使用服务端幂等，不盲目重放。
+- **可选能力独立停用，安全依赖失效则拒绝**：A12 不意味着关闭 IAM、policy 或必要审计后还可保持相关企业调用/生产写权限；无法分类的风险工具拒绝，工具自报标签不是授权依据。
+- **SDD 只做 skill 包**，守一致性、原子性、可追溯三条不变量，不做五环产品。
+- **必装走组合包、可选走私有市场**；全员禁公网源，开发者可装内部已审批源，只读/受限角色禁用 `plugin_manager`。安装、升级、回退与支持能力均须门禁验证。
 
 ## 5. 待确认事项
 
-1. 企业 IAM 是否支持 RFC 8707 `resource`；不支持时能否按 audience 预注册 client。
-2. DevOps MCP 的 canonical URI 与 Protected Resource Metadata 由谁实现与运维。
-3. 银河麒麟的版本、内核、沙箱与原生模块实机结果。
-4. 网关验签采用 JWKS 还是 introspection；双维度额度同时超限时的错误表达与查询端点。
-5. 是否白标；这决定 Windows 使用官方 App 还是自建 MSI。
+跨域问题按七个团队域与 G0/G1/G2 门禁闭环，并以稳定的 `CONF-<域>-*` 问题 ID 跟踪；以下仅作入口摘要，未回函不视同同意，方向确认不替代实测或门禁签署。
+
+1. IAM 协议、多资源刷新及 RFC 8707 `resource` 支持；替代 client 方案仍须一资源一 token。
+2. DevOps canonical URI / PRM、服务端授权、平台审批、幂等/查单及运行维护归属；Gitee 的用户身份和凭据映射。
+3. Windows 与银河麒麟的凭据/执行隔离，以及麒麟版本、内核、沙箱、原生模块和安装包实机结果。
+4. 网关鉴权、额度、首调用/日活统计与模型兼容性；P1 测量容量基线，G2 通过阈值由网关/PMO 等有权团队确认，不发明性能数字。
+5. 官方 App 的企业配置、签名/分发与范围变更批准链；白标默认不做，不能被开放问题或回函直接翻转，确需则单独立项。
+6. 800 人批次、观察起点/可比性、支持资源与事件归属；C3 外发规则、C2/C4 采样和元数据保留、退出与恢复。完整口径仍以[需求基线](<docs/requirements-baseline.md>)及[实施计划](<docs/rollout-plan.md>)为准。
 
 ## 6. 目录结构
 
@@ -62,13 +75,11 @@ corp-dsh/
     ├── DOCUMENT-REGISTER.md
     ├── platform-architecture.md
     ├── rollout-plan.md
-    ├── subdocs/
-    │   ├── README.md
-    │   ├── _template.md
-    │   └── gateway-contract.md
-    └── assets/
-        ├── architecture-layers.png
-        └── capability-value-matrix.png
+    ├── requirements-baseline.md
+    └── subdocs/
+        ├── README.md
+        ├── _template.md
+        └── gateway-contract.md
 ```
 
 ## 7. 维护约定

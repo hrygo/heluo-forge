@@ -6,21 +6,35 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.0 |
+| 版本 | V1.4 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
+| 审核 | DSH 平台组 |
+| 批准 | DSH 平台组 |
 | 最后更新 | 2026-10-20 |
+| 门禁 | — |
+
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+|---|---|---|---|
+| V1.0 | 2026-10-20 | DSH 平台组 | 建立全库受控文档清单 |
+| V1.1 | 2026-10-20 | DSH 平台组 | 纳管需求与场景基线（CORP-DSH-REQ-001），同步主文档与网关契约版本号 |
+| V1.2 | 2026-10-20 | DSH 平台组 | 对齐架构、实施计划、需求基线与网关契约当前版本；移除未纳入仓库的询问函条目 |
+| V1.3 | 2026-10-20 | DSH 平台组 | 询问函编号保留为待启动，不将未纳入本次推送的草稿作为仓库入口；同步受控文档的当前版本 |
+| V1.4 | 2026-10-20 | DSH 平台组 | 对齐子文档索引 V1.4，保留询问函待创建状态 |
 
 ## 1. 清单
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](DOCUMENT-REGISTER.md) | V1.0 | 生效 | 平台组 | — |
-| CORP-DSH-ARCH-001 | 总体架构设计 | [platform-architecture.md](platform-architecture.md) | V1.0 | 评审稿 | 平台组 | G0 |
-| CORP-DSH-PLAN-001 | 推广实施方案 | [rollout-plan.md](rollout-plan.md) | V1.0 | 评审稿 | 平台组 | G0 |
-| CORP-DSH-DOC-001 | 子文档索引 | [subdocs/README.md](subdocs/README.md) | V1.0 | 生效 | 平台组 | — |
-| CORP-DSH-GW-001 | AI 网关契约 | [subdocs/gateway-contract.md](subdocs/gateway-contract.md) | V0.2 | 草案 | 网关团队 | G0 |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.4 | 生效 | 平台组 | — |
+| CORP-DSH-ARCH-001 | 总体架构设计 | [platform-architecture.md](platform-architecture.md) | V1.3 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-PLAN-001 | 推广实施方案 | [rollout-plan.md](rollout-plan.md) | V1.2 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-REQ-001 | 需求与场景基线 | [requirements-baseline.md](requirements-baseline.md) | V1.2 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-DOC-001 | 子文档索引 | [subdocs/README.md](<subdocs/README.md>) | V1.4 | 生效 | 平台组 | — |
+| CORP-DSH-GW-001 | AI 网关契约 | [subdocs/gateway-contract.md](<subdocs/gateway-contract.md>) | V0.8 | 草案 | 网关团队 | G0 |
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | — | 待启动 | IAM 团队 | G0 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 |
 | CORP-DSH-DEVOPS-001 | DevOps MCP | 待创建 | — | 待启动 | DevOps 团队 | G1 |
@@ -30,6 +44,7 @@
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-SDD-001 | SDD 流程 | 待创建 | — | 待启动 | 平台组 | G2 |
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | — | 待启动 | PMO | G2 |
+| CORP-DSH-CONF-001 | 跨团队确认询问函 | 待创建 | — | 待启动 | 平台组统筹，各团队回函 | G0 分流与方向确认；G1/G2 关闭 |
 
 ## 2. 维护规则
 
