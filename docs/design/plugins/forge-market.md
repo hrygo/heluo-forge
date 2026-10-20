@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.26.0 |
+| 版本 | V0.27.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -80,7 +80,7 @@
 
 ```text
 packages/forge-market/
-├── cordis.patch.yml          挂载声明：serviceUrl、allowedHosts、cachePath
+├── cordis.patch.yml          挂载声明：只写 serviceUrl、allowedHosts、timeoutMs；可选项留空不写
 ├── client.js                 客户端面板：列表、加载与缓存状态
 ├── src/
 │   ├── index.mjs             插件入口：注册工具与 HTTP 路由

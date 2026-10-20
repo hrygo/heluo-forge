@@ -402,3 +402,10 @@ test('search clamps a nonsensical limit instead of returning nothing', async () 
   assert.equal((await call(tools, 'market_search', { limit: -3 })).returned, 1);
   assert.equal((await call(tools, 'market_search', { limit: Number.NaN })).total, 2);
 });
+
+test('search survives without a cache or a target directory', async () => {
+  const failing = { list: async () => { throw Object.assign(new Error('down'), { code: 'service-unavailable' }); } };
+  const result = await call(buildMarketTools(failing), 'market_search', {});
+  assert.equal(result.reason, 'service-unavailable');
+  assert.equal(result.action, 'retry');
+});

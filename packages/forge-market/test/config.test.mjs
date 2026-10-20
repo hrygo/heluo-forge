@@ -7,11 +7,13 @@ import { Config, apply } from '../src/index.mjs';
 
 const here = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-test('the patch config keys equal the declared Config keys', async () => {
+test('the patch only sets keys that Config declares', async () => {
   const patch = await readFile(join(here, 'cordis.patch.yml'), 'utf8');
   const block = patch.slice(patch.indexOf('    config:'));
   const keys = [...block.matchAll(/^ {6}([A-Za-z]+):/gm)].map((match) => match[1]);
-  assert.deepEqual(keys.sort(), Object.keys(Config).sort());
+  // 可选键留空不写：YAML 的 `~` 会变成 null，而 Config 声明的是 string。
+  assert.deepEqual(keys.filter((key) => !(key in Config)), []);
+  assert.ok(keys.includes('serviceUrl'));
 });
 
 test('apply registers the market route when a web server exists', () => {
