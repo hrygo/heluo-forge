@@ -168,6 +168,35 @@ flowchart TD
 | 是否需要同步官方目录做对比展示 | 平台组 | 展示形态 |
 | 关闭官方入口的触发条件 | 安全团队 | `officialEnabled` 例外 |
 
+## 13. 候选实现评估（2026-10-20 调研）
+
+结论：**可以 fork `bradeGithub/DSH-Plugins-Marketplace` 作为界面与安装外壳，替换其数据来源**。该仓库是 MIT、DSH 原生、仍在活跃维护，且已把"市场数据"抽成独立产物，正好是我们需要替换的那一层。
+
+| 候选 | 事实（核验日期 2026-10-20） | 与我们目标的差距 |
+|---|---|---|
+| [DSH-Plugins-Marketplace](https://github.com/bradeGithub/DSH-Plugins-Marketplace) | MIT；182★；10 fork；32 open issues；2026-10-20 仍在推送；JavaScript；`cordis.patch.yml` 以 `inject: [webServer]` 挂载；预生成 `registry.json`（18 MB）与 `skills.json`（47 MB）；带 `scripts/`、`install.sh`、`install.ps1` | 数据源是 GitHub `topic:dsh-plugin` 全量抓取，非企业精选；未接企业内部制品库；仓库体积约 2.4 GB（多为生成物） |
+| [plugin-registry](https://github.com/vlln/plugin-registry) | MIT；58★；**2026-10-03 已归档**；TypeScript；"薄控制台、0 patch" | 已停止维护；定位是管理官方 repository 插件，不含市场目录与安装流 |
+| [dsh-mcp-connector-registry](https://github.com/duhu2000/dsh-mcp-connector-registry) | 提供上架指南与市场注册文档 | 只覆盖 MCP 连接器一类，不是插件市场整体 |
+| [Open VSX](https://github.com/eclipse/openvsx) | 服务端 + Web + CLI 的完整市场实现，厂商中立 | 面向 VS Code 扩展，协议与安装链不兼容 DSH，移植成本高于收益 |
+| [Verdaccio](https://github.com/verdaccio/verdaccio) | 私有 npm 制品库，带浏览与搜索界面 | 只解决分发与包浏览，没有"精选说明、场景、维护人"这层 |
+
+### fork 的改造点
+
+1. **换数据源**：`registry.json` 由脚本从 GitHub 抓取生成，改为读取仓库内受评审的 `catalog.json`（名称、说明、场景、维护人、固定版本）叠加企业制品库的版本信息。
+2. **换下载源**：安装与更新指向企业制品库，不再走 GitHub 归档包。
+3. **保留界面与安装链**：市场卡片、一键安装、版本检测、更新提示复用上游，这部分与我们的目标一致。
+4. **裁剪生成物**：不把 18 MB 与 47 MB 的预生成 JSON 带进 fork，改为构建期生成，避免仓库体积失控。
+5. **保留官方市场**：本插件与上游市场插件并存，不接管官方源。
+
+### 待核验
+
+| 项 | 为什么重要 | 谁核验 |
+|---|---|---|
+| 运行时是否强制访问 GitHub 拉取目录 | 内网环境不可达，必须能改成本地或内网地址 | 平台组（读源码/实测） |
+| `registry.json` 的字段能否容纳场景与维护人 | 决定是扩展字段还是另建目录（DESIGN-012） | 平台组 |
+| 安装流程对包来源的假设（GitHub 归档 vs npm） | 决定改造量 | 平台组 |
+| 上游更新节奏与合并冲突成本 | 决定长期维护方式（fork 跟随或转为内部实现） | 平台组 |
+
 ### 需用户确认的设计选项（增益不明确，暂不采用，保留待定）
 
 | 选项 | 可能的增益 | 代价 | 当前处理 |
