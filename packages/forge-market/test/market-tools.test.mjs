@@ -45,6 +45,7 @@ test('exposes exactly the documented tools', () => {
     'market_search',
     'market_detail',
     'market_submit',
+    'market_registration',
     'market_install',
     'market_plan_install',
   ]);

@@ -2,6 +2,7 @@ import { filterEntries, normalizeEntry, sortEntries } from './catalog.mjs';
 import { downloadArchive, installPlugin } from './install.mjs';
 import { planInstall } from './installer.mjs';
 import { persistFiles } from './persist.mjs';
+import { buildRegistrationRow, registrationInstructions, renderPatch } from './registration.mjs';
 import { extractTarball } from './tarball.mjs';
 
 const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
@@ -88,6 +89,23 @@ export function buildMarketTools(client, options = {}) {
         if (!allowedHosts.includes(host)) return { ok: false, reason: 'host-not-allowed' };
         const result = await client.submit({ repo, tag, title, summary, scenarios });
         return { ok: true, state: result?.state ?? 'pending' };
+      },
+    ),
+    tool(
+      'market_registration',
+      'Return the loader row and instructions needed to register an installed plugin in a profile.',
+      {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'installed package name, e.g. @heluo/forge-market' },
+        },
+        required: ['name'],
+        additionalProperties: false,
+      },
+      async ({ name }) => {
+        const built = buildRegistrationRow({ name }, options.registration ?? {});
+        if (!built.ok) return built;
+        return { ok: true, row: built.row, patch: renderPatch(built.row), steps: registrationInstructions(built.row) };
       },
     ),
     tool(
