@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场详细设计 |
-| 版本 | V0.3.1 |
+| 版本 | V0.3.2 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -16,7 +16,7 @@
 | 门禁 | G2 |
 | 模块状态 | 规划 |
 
-> 编制依据：2026-10-20 与用户确认目标——市场要供企业开发者浏览、下载、安装、上传插件，并从企业私有 Gitee 仓库发现插件；评价只看下载量与 star。已核验 `dsh-plugin-market`、`dsh-plugin-manager`、`dsh-client-ui-plugin-market` 等上游包存在，以及开源实现 `bradeGithub/DSH-Plugins-Marketplace`（MIT，2026-10-20 仍活跃）。**未核验**：上游市场 UI 的扩展点、客户端面板注册方式、Gitee 仓库归档的安装可达性。
+> 编制依据：2026-10-20 与用户确认目标——市场要供企业开发者浏览、下载、安装、上传插件，并从企业私有 Gitee 仓库发现插件；评价只看下载量与 star。已核验 `dsh-plugin-market`、`dsh-plugin-manager`、`dsh-client-ui-plugin-market` 等上游包存在，以及开源实现 `bradeGithub/DSH-Plugins-Marketplace`（MIT，2026-10-20 仍活跃）。同日用户确认：企业 Gitee 建立专门的公开 group 集中存放 DSH 插件。**未核验**：上游市场 UI 的扩展点、客户端面板注册方式、Gitee 仓库归档的安装可达性。
 >
 > 关联文档：[市场服务](../services/market-index.md)、[Gitee 接入](forge-gitee.md)、[总体架构 §2 P5](../../architecture/platform-architecture.md)。
 
@@ -26,7 +26,7 @@
 
 1. **前端**：DSH 内的市场界面，负责浏览、详情、安装、提交与用量展示。
 2. **服务**：目录与版本、发布审核、下载量统计，以及 Gitee 适配（见 DESIGN-012）。
-3. **来源**：插件本体在企业 Gitee 仓库，按约定打标签即为发布；制品库可选做缓存。
+3. **来源**：插件本体集中在企业 Gitee 的专门公开 group，组内打标签即为发布；制品库可选做缓存。
 
 fork 开源实现只解决第 1 件里的浏览与安装。发现、上传、用量统计三块要自建，不能靠改数据源获得。
 
@@ -79,7 +79,7 @@ fork 开源实现只解决第 1 件里的浏览与安装。发现、上传、用
 |---|---|---|---|---|
 | `market.serviceUrl` | string | 空 | 是 | 市场服务地址，仅内网 |
 | `market.giteeHost` | string | 空 | 是 | 企业 Gitee 主机，禁止公网 |
-| `market.topic` | string | `dsh-plugin` | 是 | 发现用的仓库标签 |
+| `market.giteeGroup` | string | 空 | 是 | 专门存放 DSH 插件的 group |
 | `market.officialEnabled` | boolean | `true` | 否 | 是否保留官方市场入口 |
 | `market.allowSelfPublish` | boolean | `true` | 否 | 是否允许开发者提交 |
 | `market.mirrorToRegistry` | boolean | `false` | 否 | 是否把归档缓存到制品库 |
@@ -88,7 +88,7 @@ fork 开源实现只解决第 1 件里的浏览与安装。发现、上传、用
 market:
   serviceUrl: https://plugins.corp.example
   giteeHost: gitee.corp.example
-  topic: dsh-plugin
+  giteeGroup: dsh-plugins
   officialEnabled: true
   allowSelfPublish: true
 ```
@@ -98,7 +98,7 @@ market:
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
 | 用户身份 | OIDC 令牌，服务端校验主体 | 随会话 | 不可浏览、不可提交 |
-| Gitee 访问 | 用户级令牌或服务账号只读 | 随会话 | 私库不可见，标记为无权限 |
+| Gitee 访问 | group 公开可读；提交需组内成员身份 | 随会话 | 非成员只能浏览，不能提交 |
 | 提交内容 | 仓库地址、标签、说明、截图 | 随条目 | 校验失败即退回 |
 | 用量统计 | 下载次数、star 数、更新时间 | 长期 | 展示兜底为零 |
 | 下载记录 | 条目、版本、主体、时间 | 180 天 | 不影响安装 |
@@ -112,7 +112,7 @@ flowchart TD
   A[打开市场] --> B[拉取目录]
   B --> C{来源类型}
   C -->|上架条目| D[读市场服务]
-  C -->|Gitee 扫描| E[按标签列企业仓库]
+  C -->|Gitee group| E[列出专门 group 的仓库]
   D --> F[展示卡片与详情]
   E --> F
   F --> G[点击安装]
@@ -187,7 +187,7 @@ flowchart LR
 
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
-| 企业 Gitee 的组织范围与可见性 | Gitee 团队 | 发现范围 |
+| 专门 group 的命名与管理员 | Gitee 团队、平台组 | 发现范围与管理责任 |
 | 是否允许开发者自提交，还是仅平台组录入 | 平台组、安全 | `allowSelfPublish` |
 | 评审由谁做、几个工作日 | 平台组、PMO | 上架时效 |
 | star 同步频率与缓存 | 平台组 | 展示时效 |
@@ -199,7 +199,7 @@ flowchart LR
 | 选项 | 可能的增益 | 代价 | 当前处理 |
 |---|---|---|---|
 | 完全自研前端 | 交互自由 | 重写浏览与安装，周期长 | 不采用，fork 后改造 |
-| 只做 Gitee 扫描、不做市场服务 | 实现最轻 | 无法上传，无审核 | 不采用，与服务配套 |
+| 只扫 group、不做市场服务 | 实现最轻 | 无法上传，无审核 | 不采用，与服务配套 |
 | 上传即上架（无评审） | 快 | 质量与安全不可控 | 不采用 |
 | 文字评论与星级 | 反馈更丰富 | 需审核与治理成本 | 不采用，只看下载量与 star |
 | 市场内做在线构建 | 一条龙 | 与企业流水线重复 | 不采用 |
@@ -214,7 +214,7 @@ flowchart LR
 |---|---|---|
 | 浏览与详情 | 有 | 复用，换数据源为市场服务 |
 | 安装与更新 | 有 | 复用，下载源改 Gitee 归档 |
-| Gitee 私库发现 | 无（只抓 GitHub topic） | 新增适配器，按标签扫企业仓库 |
+| Gitee 私库发现 | 无（只抓 GitHub topic） | 新增适配器，扫专门 group 的仓库 |
 | 上传与发布 | 无 | 新增提交入口 + 服务端审核流 |
 | 用量统计 | 无 | 新增下载计数与 star 同步 |
 

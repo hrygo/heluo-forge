@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.3.1 |
+| 版本 | V0.3.2 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -33,7 +33,7 @@
 - 一条目一记录：名称、说明、场景、维护人、仓库地址、版本、状态。
 - 提交、评审、上架、下架、撤回全程留痕。
 - 下载次数与 Gitee star 数可查、可展示，不存评论。
-- Gitee 私库按约定标签自动发现，权限内可见。
+- 从专门 group 自动发现；组内公开可读，提交需组内成员。
 
 **非目标**
 
@@ -73,8 +73,7 @@
 | `service.listen` | string | `:8080` | 是 | 监听地址 |
 | `service.db` | string | 空 | 是 | 数据库连接 |
 | `gitee.host` | string | 空 | 是 | 企业 Gitee 主机 |
-| `gitee.topic` | string | `dsh-plugin` | 是 | 发现用标签 |
-| `gitee.orgs` | string[] | `[]` | 是 | 发现范围 |
+| `gitee.group` | string | 空 | 是 | 专门存放 DSH 插件的 group |
 | `review.required` | boolean | `true` | 否 | 是否必须人工评审 |
 | `metrics.syncHours` | number | `6` | 否 | star 同步间隔 |
 
@@ -84,7 +83,7 @@ GET  /api/plugins/{name}           详情、版本、聚合分
 POST /api/plugins                  提交或更新条目
 GET  /api/metrics?plugin=          下载量与 star
 POST /api/admin/review             上架、退回、撤回
-GET  /api/discover/gitee           按标签扫描企业仓库
+GET  /api/discover/gitee           扫描专门 group 的仓库
 ```
 
 数据模型要点：
@@ -166,7 +165,7 @@ flowchart TD
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
 | Gitee 检索与 release 字段 | Gitee 团队 | 第 5 节适配 |
-| 发现范围（全组织还是白名单） | Gitee 团队、安全 | `gitee.orgs` |
+| group 命名与管理员 | Gitee 团队、平台组 | `gitee.group` |
 | 评审人与时效 | 平台组、PMO | 上架周期 |
 | star 同步频率 | 平台组 | `syncHours` |
 | 是否镜像归档到制品库 | IT、安全 | 可用性与审计 |
