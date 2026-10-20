@@ -92,7 +92,7 @@ test('installs a plugin end to end through a stub service', async () => {
     assert.equal(installed.ok, true);
     assert.equal(installed.installed.version, '0.1.0');
     assert.match(installed.registration.patch, /id: heluo-demo/);
-    assert.equal(JSON.parse(await readFile(join(dir, 'plugin', 'package.json'), 'utf8')).name, '@heluo/demo');
+    assert.equal(JSON.parse(await readFile(join(dir, 'plugin', 'heluo-demo', 'package.json'), 'utf8')).name, '@heluo/demo');
 
     const submitted = JSON.parse(
       (await tools.find((t) => t.name === 'market_submit').execute({

@@ -1,6 +1,12 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
+// 每个包一个子目录：否则第二个插件会覆盖第一个的 package.json。
+export function packageDirFor(targetDir, name) {
+  const leaf = String(name).replace(/^@/, '').replace(/\//g, '-');
+  return join(targetDir, leaf);
+}
+
 export async function persistFiles(files, targetDir) {
   if (!targetDir) return { ok: false, reason: 'no-target' };
   const root = resolve(targetDir);

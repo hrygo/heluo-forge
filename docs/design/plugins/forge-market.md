@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.17.0 |
+| 版本 | V0.18.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -142,6 +142,8 @@ packages/forge-market/
 6. 下载计数由服务端在发放归档地址时自增，插件不上报，也不因安装失败回退。
 
 任何一步失败都回滚临时目录，不留半装状态。
+
+落盘按包名分目录（`targetDir/<scope-name>/`），否则第二个插件会覆盖第一个的 `package.json`；同一目录下的 `package.json` 也是 `market_check_update` 省略 `installedVersion` 时的来源。
 
 包内 `cordis.patch.yml` 会被 loader 执行，因此第 3 步之后还要做内容校验：拒绝 `!!js` 表达式、`disabled: true`、`cordis:include`、包外相对路径，以及覆盖 IAM、策略、凭据、沙箱、权限预设等行 id。判定逻辑见 `packages/forge-market/src/validate.mjs`。
 

@@ -282,3 +282,55 @@ test('each failure carries the next action, not just a code', async () => {
   assert.equal(result.action, 'choose-another-version');
   assert.ok(tools);
 });
+
+test('two packages land in separate directories', async () => {
+  const { mkdtemp, rm, readFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'forge-market-two-'));
+  try {
+    const two = {
+      ...client,
+      detail: async (name) => ({ name, version: '0.1.0', repo: 'https://gitee.corp.example/g/x' }),
+    };
+    const tools = buildMarketTools(two, {
+      allowedHosts: ['gitee.corp.example'],
+      targetDir: dir,
+      install: {
+        download: async () => ({ ok: true, bytes: Buffer.from('x') }),
+        extract: async ({}) => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) }] }),
+      },
+    });
+    assert.equal((await call(tools, 'market_install', { name: '@heluo/a' })).ok, true);
+    assert.equal(JSON.parse(await readFile(join(dir, 'heluo-a', 'package.json'), 'utf8')).name, '@heluo/a');
+
+    const second = buildMarketTools(two, {
+      allowedHosts: ['gitee.corp.example'],
+      targetDir: dir,
+      install: { download: async () => ({ ok: true, bytes: Buffer.from('x') }), extract: async () => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/b', version: '0.1.0' })) }] }) },
+    });
+    const b = await call(second, 'market_install', { name: '@heluo/b' });
+    assert.equal(b.ok, true, JSON.stringify(b));
+    assert.equal(JSON.parse(await readFile(join(dir, 'heluo-a', 'package.json'), 'utf8')).name, '@heluo/a');
+    assert.equal(JSON.parse(await readFile(join(dir, 'heluo-b', 'package.json'), 'utf8')).name, '@heluo/b');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('update check reads the version that was installed', async () => {
+  const { mkdtemp, rm, mkdir, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'forge-market-read-'));
+  try {
+    await mkdir(join(dir, 'heluo-a'), { recursive: true });
+    await writeFile(join(dir, 'heluo-a', 'package.json'), JSON.stringify({ name: '@heluo/a', version: '0.0.9' }));
+    const tools = buildMarketTools(client, { targetDir: dir });
+    const result = await call(tools, 'market_check_update', { name: '@heluo/a' });
+    assert.equal(result.installed, '0.0.9');
+    assert.equal(result.updateAvailable, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

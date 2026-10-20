@@ -2,8 +2,9 @@ import { readCache, writeCache } from './cache.mjs';
 import { filterEntries, normalizeEntry, pickUpdate, sortEntries } from './catalog.mjs';
 import { downloadArchive, installPlugin } from './install.mjs';
 import { planInstall } from './installer.mjs';
+import { readFile } from 'node:fs/promises';
 import { checkRemote } from './live-check.mjs';
-import { persistFiles } from './persist.mjs';
+import { packageDirFor, persistFiles } from './persist.mjs';
 import { buildRegistrationRow, registrationInstructions, renderPatch } from './registration.mjs';
 import { extractTarball } from './tarball.mjs';
 
@@ -197,10 +198,19 @@ export function buildMarketTools(client, options = {}) {
         additionalProperties: false,
       },
       async ({ name, installedVersion }) => {
+        let installed = installedVersion;
+        if (!installed && options.targetDir) {
+          try {
+            const manifest = JSON.parse(await readFile(`${packageDirFor(options.targetDir, name)}/package.json`, 'utf8'));
+            installed = manifest.version;
+          } catch {
+            installed = undefined;
+          }
+        }
         const raw = await client.detail(name);
         const normalized = normalizeEntry(raw?.entry ?? raw);
         if (!normalized.ok) return normalized;
-        return pickUpdate(normalized.entry, installedVersion);
+        return pickUpdate(normalized.entry, installed);
       },
     ),
     tool(
@@ -268,7 +278,7 @@ export function buildMarketTools(client, options = {}) {
           : { error: built.reason };
         if (!options.targetDir) return { ...result, registration };
 
-        const persisted = await persistFiles(result.installed.files ?? [], options.targetDir);
+        const persisted = await persistFiles(result.installed.files ?? [], packageDirFor(options.targetDir, result.installed.name));
         return persisted.ok
           ? { ...result, registration, persisted }
           : { ok: false, reason: persisted.reason, detail: persisted.detail };

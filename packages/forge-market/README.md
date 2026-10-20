@@ -50,7 +50,7 @@ insert:
 | `market_submit` | 提交前先自检归档（拉取、解包、按格式规则判定），通过才提交 | 是（提交待审） |
 | `market_verify` | 拉取指定仓库归档，逐步报告能否通过格式校验 | 否 |
 | `market_diagnostics` | 列出被索引拒绝的仓库与原因码 | 否 |
-| `market_check_update` | 比较已装版本与最近可用的未撤回版本，不做任何变更 | 否 |
+| `market_check_update` | 比较已装版本与最近可用的未撤回版本；省略 `installedVersion` 时读 `targetDir` 下的清单 | 否 |
 | `market_registration` | 给出登记到 profile 的 loader 行与两种登记路径 | 否 |
 | `market_plan_install` | 只解析标签与仓库，不下载 | 否 |
 | `market_install` | 下载归档、校验摘要、解包、必要时落盘，并返回可直接使用的登记行 | 是（仅落盘） |
