@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.10.15 |
+| 版本 | V1.10.16 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -19,9 +19,9 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.15 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.16 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.5 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.11 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.12 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.1 | 生效 | 平台组 | — |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.5 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
@@ -33,6 +33,8 @@
 | CORP-DSH-DESIGN-003 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V0.1 | 草案 | 平台组（代拟） | G2；待网关错误体确认 |
 | CORP-DSH-DESIGN-004 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1 | 草案 | 平台组（代拟） | G2；待 token 清单确认 |
 | CORP-DSH-DESIGN-005 | 私有市场接入详细设计 | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V0.1 | 草案 | 平台组（代拟） | G2；待制品库确认 |
+| CORP-DSH-DESIGN-007 | DevOps MCP 服务详细设计（条件建设） | [design/services/devops-mcp.md](<design/services/devops-mcp.md>) | V0.1 | 草案 | 平台组（代拟） | 条件建设；CLI 三项前提不成立时不建 |
+| CORP-DSH-DESIGN-008 | 市场目录服务详细设计（不建设） | [design/services/market-index.md](<design/services/market-index.md>) | V0.1 | 草案 | 平台组（代拟） | 不建设；复用既有制品库 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.2.3 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
 | CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.1.1 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.3 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |

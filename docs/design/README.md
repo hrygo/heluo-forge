@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.11 |
+| 版本 | V0.1.12 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -45,8 +45,8 @@
 
 | 服务 | 代码位置 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
-| DevOps MCP 服务 | `services/devops-mcp/` | `services/devops-mcp.md` | 待设计 | 传输协议、PRM 元数据、只读工具面（清单待提供方澄清）、字段与版本兼容 |
-| 市场目录与发布控制 | `services/market-index/` | `services/market-index.md` | 待设计 | 目录 schema、校验规则、发布状态与回退通道 |
+| DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设 | 取决于 CLI 三项前提；满足任一才启动 |
+| 市场目录与发布控制 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 不建设 | 企业已有制品库，判据不成立 |
 
 私有 npm 制品仓库不是自研服务，优先复用企业现有 registry，部署与运维边界见[部署说明](../../deploy/README.md)。
 
