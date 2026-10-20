@@ -10,7 +10,7 @@
 | 衔接点 | `plugin-market`、`plugin-manager` |
 | 服务实现 | 企业插件目录，见 [DESIGN-012](../../docs/design/services/market-index.md) |
 | 详细设计 | [DESIGN-007](../../docs/design/plugins/forge-market.md) |
-| 实现状态 | 宿主侧：策略、校验、目录、客户端、安装、缓存、路由与九个工具，均有测试；客户端面板已写但**未实机核验**（slot 归属与注入方式待装到 profile 后确认），因此「可用」指宿主侧与安装链路，不含面板视觉验收 |
+| 实现状态 | 宿主侧：策略、校验、目录、客户端、安装、缓存、路由与十个工具，均有测试；客户端面板已写但**未实机核验**（slot 归属与注入方式待装到 profile 后确认），因此「可用」指宿主侧与安装链路，不含面板视觉验收 |
 
 ## 用途
 
@@ -57,6 +57,7 @@ insert:
 | `market_detail` | 条目详情、版本、`engines.dsh`、仓库地址 | 否 |
 | `market_submit` | 提交前先自检归档（拉取、解包、按格式规则判定），通过才提交 | 是（提交待审） |
 | `market_verify` | 拉取指定仓库归档，逐步报告能否通过格式校验 | 否 |
+| `market_mine` | 列出当前身份提交过的条目与状态、退回理由 | 否 |
 | `market_diagnostics` | 列出被索引拒绝的仓库与原因码 | 否 |
 | `market_check_update` | 比较已装版本与最近可用的未撤回版本；省略 `installedVersion` 时读 `targetDir` 下的清单 | 否 |
 | `market_registration` | 给出登记到 profile 的 loader 行与两种登记路径 | 否 |

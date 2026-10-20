@@ -175,6 +175,16 @@ export function buildMarketTools(client, options = {}) {
       },
     ),
     tool(
+      'market_mine',
+      'List the submissions made by the current identity, with their review state and reason.',
+      { type: 'object', properties: {}, additionalProperties: false },
+      async () => {
+        const raw = await client.mine();
+        const entries = raw?.entries ?? raw ?? [];
+        return { total: Array.isArray(entries) ? entries.length : 0, entries };
+      },
+    ),
+    tool(
       'market_verify',
       'Fetch one repository archive and report, step by step, whether it would pass format validation. Reads only.',
       {

@@ -45,7 +45,7 @@ test('apply accepts a catalog file instead of a service url', async () => {
   await withCatalog({ entries: [{ name: '@heluo/a', title: 'a', version: '0.1.0' }] }, async (path) => {
     const registered = [];
     const dispose = apply({ tools: { register: (tool) => { registered.push(tool); return () => {}; } } }, { catalogFile: path });
-    assert.equal(registered.length, 9);
+    assert.equal(registered.length, 10);
     const search = registered.find((tool) => tool.name === 'market_search');
     const result = JSON.parse((await search.execute({})).content[0].text);
     assert.equal(result.total, 1);

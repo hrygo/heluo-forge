@@ -22,6 +22,7 @@ export function createLocalCatalog(path) {
       throw Object.assign(new Error('local catalog is read-only'), { code: 'read-only' });
     },
     metrics: async () => ({}),
+    mine: async () => ({ entries: [] }),
     unindexed: async () => ({ entries: [] }),
   };
 }

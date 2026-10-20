@@ -68,6 +68,7 @@ test('exposes exactly the documented tools', () => {
     'market_search',
     'market_detail',
     'market_submit',
+    'market_mine',
     'market_verify',
     'market_diagnostics',
     'market_check_update',
@@ -464,4 +465,12 @@ test('withdrawn and rejected entries stay out of the list', async () => {
   assert.equal(visible.total, 1);
   const all = await call(tools, 'market_search', { includeWithdrawn: true });
   assert.equal(all.total, 3);
+});
+
+test('market_mine returns my submissions with their state', async () => {
+  const mine = async () => ({ entries: [{ name: '@heluo/a', state: 'pending' }, { name: '@heluo/b', state: 'rejected', reason: 'missing-engines' }] });
+  const tools = buildMarketTools({ ...client, mine });
+  const result = await call(tools, 'market_mine', {});
+  assert.equal(result.total, 2);
+  assert.equal(result.entries[1].reason, 'missing-engines');
 });

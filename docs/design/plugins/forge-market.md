@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.31.0 |
+| 版本 | V0.32.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -140,7 +140,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | 列表 | `GET /api/plugins` | `name`、`title`、`summary`、`version`、`downloads`、`stars`、`engines` |
 | 详情 | `GET /api/plugins/{name}` | 上列字段 + `scenarios`、`maintainer`、`repo`、`versions[]` |
 | 提交 | `POST /api/plugins` | `name`、`repo`、`tag`、`summary`、`scenarios` |
-| 我的提交 | `GET /api/plugins?mine=1` | 按调用方身份过滤；`state`、`reason` |
+| 我的提交 | `GET /api/plugins?mine=1` | 按调用方身份过滤；`state`、`reason`；对应工具 `market_mine` |
 | 诊断 | `GET /api/admin/unindexed` | `repo`、`errors[]` |
 
 ## 8. 安装链路
