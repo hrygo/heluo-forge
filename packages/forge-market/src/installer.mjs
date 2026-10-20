@@ -7,17 +7,32 @@ export function digestOf(bytes) {
 }
 
 export function planInstall(entry, version, allowedHosts = []) {
-  const installed = version ?? entry?.versions?.[entry.versions.length - 1];
-  if (!installed) return { ok: false, reason: 'no-version' };
-  if (!entry?.repo) return { ok: false, reason: 'no-repo' };
+  const versions = entry?.versions ?? [];
+  const chosen = version
+    ? versions.find((item) => item?.version === version || item === version)
+    : versions[versions.length - 1];
+  if (!chosen) return { ok: false, reason: 'no-version' };
+  const resolved = typeof chosen === 'string' ? { version: chosen, tag: `v${chosen}` } : chosen;
+  if (!resolved.version) return { ok: false, reason: 'no-version' };
+  if (!entry?.repo && !resolved.archiveUrl) return { ok: false, reason: 'no-repo' };
+  const target = resolved.archiveUrl || entry.repo;
   let url;
   try {
-    url = new URL(entry.repo);
+    url = new URL(target);
   } catch {
     return { ok: false, reason: 'bad-repo' };
   }
   if (allowedHosts.length && !allowedHosts.includes(url.host)) return { ok: false, reason: 'host-not-allowed' };
-  return { ok: true, plan: { name: entry.name, version: installed, repo: entry.repo, tag: `v${installed}` } };
+  return {
+    ok: true,
+    plan: {
+      name: entry.name,
+      version: resolved.version,
+      repo: entry.repo,
+      tag: resolved.tag || `v${resolved.version}`,
+      archiveUrl: resolved.archiveUrl || '',
+    },
+  };
 }
 
 export function verifyDigest(bytes, expected) {

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.7.0 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -90,10 +90,22 @@ GET  /api/discover/gitee           扫描专门 group 的仓库
 
 | 实体 | 关键字段 |
 |---|---|
-| plugin | 名称、说明、场景、维护人、仓库地址、当前状态 |
-| version | 版本、标签、归档地址、`engines.dsh`、提交时间 |
+| plugin | `name`、`title`、`summary`、`scenarios`、`maintainer`、`repo`、`status` |
+| version | `version`、`tag`、`archiveUrl`、`engines`、`submittedAt` |
 | review_task | 条目、状态、评审人、理由、时间 |
-| metric | 条目、下载次数、star 数、同步时间 |
+| metric | 条目、`downloads`、`stars`、`syncedAt` |
+
+字段级约定（客户端与目录都按此命名）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 包名，条目唯一键 |
+| `title` | string | 展示名；缺省与 `name` 相同 |
+| `status` | string | `pending`、`listed`、`rejected`、`revoked` 之一 |
+| `tag` | string | 发布标签；缺失时按 `v<version>` 推导，不得由客户端伪造 |
+| `archiveUrl` | string | 归档地址，由服务端填写 |
+| `engines` | string | 目标 `engines.dsh`，形如 `>=0.2.1` |
+| `submittedAt` | string | ISO 8601 提交时间 |
 
 ### 5.1 格式校验（索引前置条件）
 

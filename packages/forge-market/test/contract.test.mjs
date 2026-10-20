@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServiceClient } from '../src/client.mjs';
+import { normalizeEntry } from '../src/catalog.mjs';
 
 // 端点集合来自 docs/design/services/market-index.md §5「端点（示意）」。
 // 客户端改了路径而文档没改，或文档改了客户端没跟，这里先红。
@@ -66,4 +67,32 @@ test('submit sends only the fields DESIGN-012 declares', async () => {
 
   await client.submit({ name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', summary: '', scenarios: [] });
   assert.deepEqual(Object.keys(sent).sort(), documented.sort());
+});
+
+test('every documented entry field survives normalization', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const doc = await readFile(join(root, 'docs/design/services/market-index.md'), 'utf8');
+  const section = doc.slice(doc.indexOf('字段级约定'), doc.indexOf('### 5.1'));
+  const documented = [...section.matchAll(/^\| `([a-zA-Z]+)` \|/gm)].map((match) => match[1]);
+  assert.ok(documented.length >= 5, 'expected a documented field table');
+
+  const normalized = normalizeEntry({
+    name: '@heluo/a',
+    title: '网关',
+    summary: '接入',
+    scenarios: ['日常问答'],
+    maintainer: '平台组',
+    repo: 'https://gitee.corp.example/g/a',
+    status: 'listed',
+    version: '0.1.0',
+    versions: [{ version: '0.1.0', tag: 'v0.1.0', archiveUrl: 'https://gitee.corp.example/g/a.tar.gz', engines: '>=0.2.1', submittedAt: '2026-10-20T00:00:00Z' }],
+    downloads: 1,
+    stars: 2,
+  });
+  assert.equal(normalized.ok, true);
+
+  const present = new Set(Object.keys(normalized.entry));
+  for (const version of normalized.entry.versions) for (const key of Object.keys(version)) present.add(key);
+  const missing = documented.filter((field) => !present.has(field));
+  assert.deepEqual(missing, [], `fields lost by normalization: ${missing.join(', ')}`);
 });

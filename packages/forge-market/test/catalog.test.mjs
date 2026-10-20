@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterEntries, normalizeEntry, sortEntries } from '../src/catalog.mjs';
+import { filterEntries, normalizeEntry, normalizeVersion, sortEntries } from '../src/catalog.mjs';
 
 const entry = (name, stars, downloads) => ({
   name,
@@ -35,4 +35,27 @@ test('filters on title, summary and scenarios', () => {
   const items = [entry('@heluo/a', 0, 0), { ...entry('@heluo/b', 0, 0), summary: '网关接入' }];
   assert.deepEqual(filterEntries(items, '网关').map((i) => i.name), ['@heluo/b']);
   assert.deepEqual(filterEntries(items, '日常').map((i) => i.name), ['@heluo/a', '@heluo/b']);
+});
+
+test('keeps an explicit tag and archive when the service supplies them', () => {
+  const result = normalizeEntry({
+    ...entry('@heluo/a', 0, 0),
+    versions: [
+      { version: '0.1.0', tag: 'release-0.1.0', archiveUrl: 'https://gitee.corp.example/a/archive/release-0.1.0.tar.gz', engines: '>=0.3.0' },
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.entry.version, '0.1.0');
+  assert.equal(result.entry.versions[0].tag, 'release-0.1.0');
+  assert.equal(result.entry.engines, '>=0.3.0');
+  assert.equal(result.entry.status, 'listed');
+});
+
+test('derives a tag only when the service omits one', () => {
+  assert.deepEqual(normalizeVersion('0.2.0'), { version: '0.2.0', tag: 'v0.2.0' });
+});
+
+test('defaults title to the package name', () => {
+  const result = normalizeEntry({ name: '@heluo/a', version: '0.1.0' });
+  assert.equal(result.entry.title, '@heluo/a');
 });
