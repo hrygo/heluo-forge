@@ -1,6 +1,7 @@
 import { filterEntries, normalizeEntry, sortEntries } from './catalog.mjs';
 import { downloadArchive, installPlugin } from './install.mjs';
 import { planInstall } from './installer.mjs';
+import { persistFiles } from './persist.mjs';
 import { extractTarball } from './tarball.mjs';
 
 const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
@@ -108,7 +109,10 @@ export function buildMarketTools(client, options = {}) {
         if (!normalized.ok) return normalized;
         const planned = planInstall(normalized.entry, version, allowedHosts);
         if (!planned.ok) return planned;
-        return installPlugin(planned.plan, { ...deps, expectedDigest: digest });
+        const result = await installPlugin(planned.plan, { ...deps, expectedDigest: digest });
+        if (!result.ok || !options.targetDir) return result;
+        const persisted = await persistFiles(result.installed.files ?? [], options.targetDir);
+        return persisted.ok ? { ...result, persisted } : { ok: false, reason: persisted.reason, detail: persisted.detail };
       },
     ),
     tool(
