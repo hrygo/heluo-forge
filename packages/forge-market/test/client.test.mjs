@@ -65,3 +65,30 @@ test('a non-JSON rejection still yields a code', async () => {
   });
   await assert.rejects(() => client.submit({}), (error) => error.code === 'bad-response');
 });
+
+test('sends the token when one is configured', async () => {
+  let seen;
+  const client = createServiceClient({
+    baseUrl: 'https://plugins.corp.example',
+    token: 'secret',
+    fetchImpl: async (url, init) => {
+      seen = init.headers;
+      return { ok: true, status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  await client.list();
+  assert.equal(seen.authorization, 'Bearer secret');
+});
+
+test('sends no authorization header without a token', async () => {
+  let seen;
+  const client = createServiceClient({
+    baseUrl: 'https://plugins.corp.example',
+    fetchImpl: async (url, init) => {
+      seen = init.headers;
+      return { ok: true, status: 200, json: async () => ({ entries: [] }) };
+    },
+  });
+  await client.list();
+  assert.equal(seen.authorization, undefined);
+});

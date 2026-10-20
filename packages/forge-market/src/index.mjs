@@ -23,7 +23,12 @@ export function apply(ctx, config = {}) {
 
   const client = config.catalogFile
     ? createLocalCatalog(config.catalogFile)
-    : createServiceClient({ baseUrl: config.serviceUrl, timeoutMs: config.timeoutMs ?? 5000 });
+    : createServiceClient({
+        baseUrl: config.serviceUrl,
+        timeoutMs: config.timeoutMs ?? 5000,
+        // 令牌只从环境读：不写配置文件，不落日志，也不进 patch。
+        token: process.env.HELUO_MARKET_TOKEN ?? '',
+      });
   const shared = {
     allowedHosts: config.allowedHosts ?? [],
     cachePath: config.cachePath,
