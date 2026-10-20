@@ -121,3 +121,22 @@ test('name order does not depend on the locale', () => {
   // 码位比较：大写 B (66) 排在小写 a (97) 前，与区域设置无关。
   assert.deepEqual(sortEntries([lower, upper]).map((entry) => entry.name), ['@heluo/B', '@heluo/a']);
 });
+
+test('a prerelease is older than its release', () => {
+  assert.equal(compareVersions('1.0.0-rc.1', '1.0.0'), -1);
+  assert.equal(compareVersions('1.0.0', '1.0.0-rc.1'), 1);
+  assert.equal(compareVersions('1.0.0-rc.2', '1.0.0-rc.1'), 1);
+  assert.equal(compareVersions('1.0.0-rc.10', '1.0.0-rc.9'), 1);
+  assert.equal(compareVersions('1.0.0', '1.0.0'), 0);
+});
+
+test('someone on a prerelease is offered the release', () => {
+  const entry = normalizeEntry({
+    name: '@heluo/a',
+    version: '1.0.0',
+    versions: [{ version: '1.0.0-rc.1' }, { version: '1.0.0' }],
+  }).entry;
+  const result = pickUpdate(entry, '1.0.0-rc.1');
+  assert.equal(result.updateAvailable, true);
+  assert.equal(result.latest, '1.0.0');
+});
