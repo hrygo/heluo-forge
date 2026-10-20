@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.10.1 |
+| 版本 | V1.10.2 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -33,6 +33,7 @@
 | V1.9.2 | 2026-10-20 | DSH 平台组 | 同步架构 V1.3.3 与网关契约 V0.8.2 的令牌校验加固；交付物清单与边界不变 |
 | V1.10 | 2026-10-20 | DSH 平台组（代拟） | 明确根入口及领域文档职责，承接 AGENTS 中的文档治理规则，补充证据冲突处理与官方实践依据 |
 | V1.10.1 | 2026-10-20 | DSH 平台组 | 同步架构 V1.3.4 与网关契约 V0.8.3：补入统计、限流与 FinOps 的聚合约定 |
+| V1.10.2 | 2026-10-20 | DSH 平台组 | 增加网关凭据方案对比图解入口；交付物与契约不变 |
 
 ## 1. 结论
 
@@ -100,7 +101,7 @@
 | 逐模块设计 | [设计索引](<design/README.md>) | 九个安装包与两个独立服务的详细设计状态与路径 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
-辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)。两者可离线打开并保留页面源稿，不替代受控文档。
+辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关凭据方案对比](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档。
 
 ## 5. 阅读顺序
 
