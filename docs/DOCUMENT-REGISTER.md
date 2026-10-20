@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.10.6 |
+| 版本 | V1.10.7 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -38,14 +38,15 @@
 | V1.10.4 | 2026-10-20 | DSH 平台组 | 图解改为以静态 Key 为主体展开，同步资源名称与说明 |
 | V1.10.5 | 2026-10-20 | DSH 平台组 | 图解改为完整描述静态 Key 形态，去掉采用与退出条件，改用中性的分工与共确认表述 |
 | V1.10.6 | 2026-10-20 | DSH 平台组 | 登记网关凭据双模式支持设计（DESIGN-001）与设计索引 V0.1.2；方案与契约不变 |
+| V1.10.7 | 2026-10-20 | DSH 平台组 | 登记 IAM 接入详细设计 V0.1（IAM-001）与设计索引 V0.1.3；接口核验仅到字符串级 |
 
 ## 1. 清单
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.6 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.7 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.4 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.2 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.3 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.1 | 生效 | 平台组 | — |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.3.4 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
@@ -56,7 +57,7 @@
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.2.2 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
 | CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.1.1 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.2.1 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
-| CORP-DSH-IAM-001 | IAM 接入 | 待创建 | — | 待启动 | IAM 团队 | G0 |
+| CORP-DSH-IAM-001 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V0.1 | 草案 | 平台组（代拟） | G0；待 IAM 团队评审 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 |
 | CORP-DSH-DEVOPS-001 | DevOps MCP | 待创建 | — | 待启动 | DevOps 团队 | G1 |
 | CORP-DSH-GITEE-001 | Gitee 集成 | 待创建 | — | 待启动 | 平台组 | G1 |

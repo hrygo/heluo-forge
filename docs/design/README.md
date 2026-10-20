@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.2 |
+| 版本 | V0.1.3 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -22,6 +22,7 @@
 | V0.1 | 2026-10-20 | DSH 平台组 | 建立九个安装包与两个独立服务的详细设计索引、依赖顺序与完成判据；详细设计尚未开始 |
 | V0.1.1 | 2026-10-20 | DSH 平台组（代拟） | 同步 @heluo/forge-* 包名、规划设计路径与模块依赖名称；设计状态不变 |
 | V0.1.2 | 2026-10-20 | DSH 平台组（代拟） | 增加跨模块设计小节，登记网关凭据双模式设计；包与服务的索引不变 |
+| V0.1.3 | 2026-10-20 | DSH 平台组（代拟） | 登记 IAM 接入详细设计 V0.1；补充分级编号与"增益不明确单列"约定 |
 
 ## 1. 结论
 
@@ -33,7 +34,7 @@
 
 | 包 | 形态 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
-| `@heluo/forge-iam` | Host + Client 插件 | `plugins/forge-iam.md` | 待设计 | 授权流程与 OIDC 能力、令牌 broker、凭据存储、账户 UI |
+| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案 | 提供者 API 实测、账户页 slot、IAM 的 `resource` 与轮换能力 |
 | `@heluo/forge-policy` | Host 插件 | `plugins/forge-policy.md` | 待设计 | 门禁挂点、`$DSH_HOME` 硬拒绝、外发确认、审计字段 |
 | `@heluo/forge-enterprise` | umbrella bundle | `plugins/forge-enterprise.md` | 待设计 | 组合顺序、依赖检查、角色 preset 与默认禁用项 |
 | `@heluo/forge-gateway` | 配置 bundle | `plugins/forge-gateway.md` | 待设计 | 模型白名单、错误与重试配置、流式行为 |
@@ -90,4 +91,7 @@ market-index 服务 → forge-market 的目录来源
 
 - 设计变更同步更新本表状态；实现与设计不一致时，先改设计再改代码。
 - 模块设计不复制网关、IAM 等外部契约字段，使用相对链接引用。
+- 模块设计编号复用对应域编号；无域编号的组合包使用 `DESIGN` 系列。
+- 设计实现前必须核验目标接口；无法核验的接口形状标注"待实测"。
+- 增益不明确、需用户确认的选项单列保留，不阻塞主链路实现。
 - 新增模块先在本表登记，再创建目录与设计文档。
