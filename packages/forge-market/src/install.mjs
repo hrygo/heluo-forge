@@ -1,5 +1,5 @@
 import { checkArchivePaths, digestOf, verifyDigest } from './installer.mjs';
-import { patchPluginNames, patchRelativeTargets } from './validate.mjs';
+import { patchPluginNames, patchRelativeTargets, validatePatch } from './validate.mjs';
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -90,6 +90,10 @@ export async function installPlugin(plan, deps = {}) {
   const patch = kept.find((file) => file.path === 'cordis.patch.yml');
   if (patch) {
     const patchText = patch.bytes.toString('utf8');
+    // 安装路径同样要过内容规则：不能只在提交自检时检查。
+    const patchErrors = validatePatch(patchText);
+    if (patchErrors.length) return { ok: false, reason: patchErrors[0].code, detail: patchErrors };
+
     const declared = patchPluginNames(patchText);
     if (declared.length && !declared.includes(pkg.name)) {
       return { ok: false, reason: 'patch-name-mismatch', detail: declared };

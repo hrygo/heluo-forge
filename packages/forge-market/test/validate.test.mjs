@@ -104,3 +104,9 @@ test('flags a patch that names a different package', () => {
   });
   assert.ok(result.errors.some((error) => error.code === 'patch-name-mismatch'));
 });
+
+test('flags a file name that forgot the ./ prefix', () => {
+  assert.deepEqual(validatePatch("insert:\n  - id: a\n    name: ui/panel.js\n"), [{ code: 'patch-unresolved-name', detail: 'ui/panel.js' }]);
+  assert.deepEqual(validatePatch("insert:\n  - id: a\n    name: './ui/panel.js'\n"), []);
+  assert.deepEqual(validatePatch("insert:\n  - id: g\n    group: true\n    name: cordis:group\n"), []);
+});

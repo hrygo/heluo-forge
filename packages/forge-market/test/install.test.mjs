@@ -134,3 +134,11 @@ test('accepts a relative row name that exists', async () => {
     : file);
   assert.equal((await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: withFile }) }))).ok, true);
 });
+
+test('install enforces the patch content rules too', async () => {
+  const dangerous = files.map((file) => file.path === 'cordis.patch.yml'
+    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: '@heluo/a'\n    config: !!js process.exit()\n") }
+    : file);
+  const result = await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: dangerous }) }));
+  assert.equal(result.reason, 'patch-js-expr');
+});

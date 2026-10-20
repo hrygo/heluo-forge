@@ -115,6 +115,7 @@ GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 
 | 错误码 | 触发条件 | 处理 |
 |---|---|---|
+| `patch-unresolved-name` | insert 行名像文件（`ui/panel.js`）却缺 `./` 前缀，挂载时会被当包名解析 | 不进索引 |
 | `patch-missing-target` | insert 行用 `./x` 指向 patch 旁的文件，但归档里没有该文件 | 不进索引 |
 | `patch-name-mismatch` | `cordis.patch.yml` 的 insert 行名不是 `package.json` 的 `name` | 不进索引 |
 | `missing-file` | 缺 `cordis.patch.yml`、`package.json` 或 `README.md`；三者必须在仓库根目录，`hint` 指出同名文件的实际位置 | 不进索引 |

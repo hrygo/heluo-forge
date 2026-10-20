@@ -16,9 +16,16 @@ export function validatePatch(text) {
   if (/!!js/.test(body)) errors.push({ code: 'patch-js-expr' });
   if (scalar('disabled', 'true').test(body)) errors.push({ code: 'patch-disables-row' });
   if (/cordis:include/.test(body)) errors.push({ code: 'patch-include' });
+  // 裸文件名（x.js、sub/x.js）多半是漏写 ./；装上去 loader 会当包名解析而失败。
+  for (const match of body.matchAll(/name\s*:\s*['"]?([^'"\s]+)['"]?/g)) {
+    const name = match[1];
+    if (name.startsWith('@') || name.startsWith('./') || name.startsWith('cordis:')) continue;
+    if (/\.(?:js|mjs|cjs|json|ya?ml)$/.test(name)) errors.push({ code: 'patch-unresolved-name', detail: name });
+  }
   // 同时接受 / 与 \\ 两种分隔符：Windows 风格写法不能成为绕过口。
   // 盘符必须在行首或空白之后：否则 "https:/" 里的 "s:/" 会被误判成 Windows 路径。
-  if (/(^|[\s'\"])\.\.?[/\\]/.test(body) || /(^|[\s'\"])[A-Za-z]:[/\\]/.test(body)) errors.push({ code: 'patch-unsafe-path' });
+  // `./x` 是 loader 支持的相对引用（锚定在 patch 旁），只有 `../` 才是越界；两种分隔符都算。
+  if (/(^|[\s'\"])\.\.[/\\]/.test(body) || /(^|[\s'\"])[A-Za-z]:[/\\]/.test(body)) errors.push({ code: 'patch-unsafe-path' });
   for (const id of PROTECTED_IDS) {
     if (scalar('id', id).test(body)) errors.push({ code: 'patch-overrides-protected', detail: id });
   }
