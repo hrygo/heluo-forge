@@ -1,9 +1,10 @@
 import { createServiceClient } from './client.mjs';
 import { buildMarketTools } from './market-tools.mjs';
+import { createMarketRoutes } from './routes.mjs';
 
 export const name = 'forge-market';
 
-export const inject = ['tools'];
+export const inject = { required: ['tools'], optional: ['webServer'] };
 
 export const Config = {
   serviceUrl: { type: 'string', description: '企业市场服务地址', required: true },
@@ -18,6 +19,16 @@ export function apply(ctx, config = {}) {
   const disposers = buildMarketTools(client, { allowedHosts: config.allowedHosts ?? [] }).map((definition) =>
     ctx.tools.register(definition),
   );
+
+  if (ctx.webServer) {
+    disposers.push(
+      ctx.webServer.register({
+        kind: 'prefix',
+        path: '/api/forge-market',
+        handler: createMarketRoutes({ client, cachePath: config.cachePath }),
+      }),
+    );
+  }
 
   return () => disposers.forEach((dispose) => dispose());
 }

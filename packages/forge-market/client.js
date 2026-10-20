@@ -1,0 +1,56 @@
+window.__ModuleLoader__.load({
+  id: '@heluo/forge-market',
+  factory(require) {
+    const React = require('react');
+    const h = React.createElement;
+
+    function Panel() {
+      const [state, setState] = React.useState({ status: 'loading', entries: [], source: '' });
+
+      React.useEffect(() => {
+        let live = true;
+        fetch('/api/forge-market/catalog')
+          .then((response) => response.json().then((body) => ({ ok: response.ok, body })))
+          .then(({ ok, body }) => {
+            if (!live) return;
+            if (!ok) return setState({ status: 'error', entries: [], source: '', error: body?.error ?? 'unavailable' });
+            setState({ status: 'ready', entries: body.entries ?? [], source: body.source ?? 'service', stale: body.stale === true });
+          })
+          .catch(() => {
+            if (live) setState({ status: 'error', entries: [], source: '', error: 'network' });
+          });
+        return () => {
+          live = false;
+        };
+      }, []);
+
+      const title = h('div', { style: { fontWeight: 600, marginBottom: 8 } }, '企业插件市场');
+
+      if (state.status === 'loading') return h('div', null, title, h('div', { style: { opacity: 0.7 } }, '正在加载…'));
+      if (state.status === 'error') return h('div', null, title, h('div', { style: { opacity: 0.7 } }, '市场服务不可达，稍后重试。'));
+
+      const rows = state.entries.map((entry) =>
+        h('li', { key: entry.name, style: { padding: '6px 0', borderBottom: '1px solid rgba(127,127,127,0.2)' } },
+          h('div', { style: { fontWeight: 500 } }, entry.title || entry.name),
+          h('div', { style: { opacity: 0.7, fontSize: '0.9em' } },
+            entry.name + ' · ' + entry.version + ' · ★ ' + entry.stars + ' · 下载 ' + entry.downloads),
+          entry.summary ? h('div', { style: { opacity: 0.8, fontSize: '0.9em' } }, entry.summary) : null,
+        ),
+      );
+
+      return h('div', null, title,
+        state.source === 'cache' ? h('div', { style: { opacity: 0.7, marginBottom: 6 } }, '服务不可达，显示缓存列表。') : null,
+        h('ul', { style: { listStyle: 'none', padding: 0, margin: 0 } }, rows),
+      );
+    }
+
+    return {
+      inject: ['slots'],
+      apply(ctx) {
+        ctx.slots.inject('plugins.bundle.config', () =>
+          ctx.slots.register({ name: 'plugins.bundle.config', key: '@heluo/forge-market' }, Panel),
+        );
+      },
+    };
+  },
+});

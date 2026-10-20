@@ -10,7 +10,7 @@
 | 衔接点 | `plugin-market`、`plugin-manager` |
 | 服务实现 | 企业插件目录，见 [DESIGN-012](../../docs/design/services/market-index.md) |
 | 详细设计 | [DESIGN-007](../../docs/design/plugins/forge-market.md) |
-| 实现状态 | 策略、格式校验、目录、服务客户端、安装规划与三个市场工具已实现并有测试；bundle 挂载待实机核验 |
+| 实现状态 | 宿主侧：策略、校验、目录、客户端、安装、缓存、路由与六个工具，均有测试；客户端面板已写但**未实机核验**（slot 归属与注入方式待装到 profile 后确认） |
 
 ## 用途
 
@@ -50,6 +50,8 @@ insert:
 | `market_registration` | 给出登记到 profile 的 loader 行与两种登记路径 | 否 |
 | `market_plan_install` | 只解析标签与仓库，不下载 | 否 |
 | `market_install` | 下载归档、校验摘要、解包、必要时落盘 | 是（仅落盘） |
+
+宿主侧同时注册 `/api/forge-market` 前缀路由（`catalog`、`detail/<name>`），客户端面板从该路由取数，避免把服务地址暴露到浏览器。
 
 `market_search` 在服务不可达时回退到本地缓存，并返回 `source: "cache"` 与 `stale` 标记；配置项 `cachePath` 指向缓存文件，未配置则不做缓存。
 
