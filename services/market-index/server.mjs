@@ -43,9 +43,9 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
     }
     entries.push({
       name: review.name,
-      title: review.name,
-      summary: '',
-      scenarios: [],
+      title: review.title || review.name,
+      summary: review.summary ?? '',
+      scenarios: review.scenarios ?? [],
       maintainer: '',
       repo: review.repo,
       status: 'listed',
@@ -85,7 +85,15 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
       const missing = ['name', 'repo', 'tag'].filter((key) => !payload[key]);
       if (missing.length) return send(400, { error: 'missing-fields', detail: missing });
       if (!/^v\d+\.\d+\.\d+$/.test(payload.tag)) return send(400, { error: 'bad-tag' });
-      reviews.push({ name: payload.name, repo: payload.repo, tag: payload.tag, state: 'pending' });
+      reviews.push({
+        name: payload.name,
+        repo: payload.repo,
+        tag: payload.tag,
+        title: payload.title ?? '',
+        summary: payload.summary ?? '',
+        scenarios: Array.isArray(payload.scenarios) ? payload.scenarios.map(String) : [],
+        state: 'pending',
+      });
       return send(202, { state: 'pending' });
     }
 
@@ -134,7 +142,7 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
     const detail = url.pathname.match(/^\/api\/plugins\/([^/]+)$/);
     if (detail && req.method === 'GET') {
       const entry = byName().get(decodeURIComponent(detail[1]));
-      return entry ? send(200, entry) : send(404, { error: 'not-found' });
+      return entry ? send(200, { entry }) : send(404, { error: 'not-found' });
     }
 
     const download = url.pathname.match(/^\/api\/plugins\/([^/]+)\/versions\/([^/]+)\/download$/);

@@ -25,7 +25,7 @@ test('serves the catalog sorted by stars and filters by keyword', async () => {
     const byDownloads = await (await fetch(`${base}/api/plugins?sort=downloads`)).json();
     assert.deepEqual(byDownloads.entries.map((e) => e.name), ['@heluo/a', '@heluo/b']);
     const detail = await (await fetch(`${base}/api/plugins/${encodeURIComponent('@heluo/a')}`)).json();
-    assert.equal(detail.title, '网关');
+    assert.equal(detail.entry.title, '网关');
     const metrics = await (await fetch(`${base}/api/metrics?plugin=${encodeURIComponent('@heluo/b')}`)).json();
     assert.deepEqual(metrics, { downloads: 1, stars: 7 });
   } finally {
@@ -153,6 +153,30 @@ test('a revoked version refuses downloads while the entry stays listed', async (
     const revoked = listed.find((entry) => entry.name === '@heluo/a');
     assert.equal(revoked.versions[0].revoked, true);
     assert.equal((await post('/api/admin/review', { name: '@heluo/a', action: 'revoke', version: '9.9.9' })).status, 404);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('approval keeps the submitted title, summary and scenarios', async () => {
+  const app = createMarketApp({ entries: [] });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', body: JSON.stringify(body) });
+  try {
+    await post('/api/plugins', {
+      name: '@heluo/d',
+      repo: 'https://gitee.corp.example/g/d',
+      tag: 'v0.1.0',
+      title: '数据同步',
+      summary: '把订单同步到仓库',
+      scenarios: ['夜间批处理'],
+    });
+    await post('/api/admin/review', { name: '@heluo/d', action: 'approve' });
+    const detail = await (await fetch(`${base}/api/plugins/${encodeURIComponent('@heluo/d')}`)).json();
+    assert.equal(detail.entry.title, '数据同步');
+    assert.equal(detail.entry.summary, '把订单同步到仓库');
+    assert.deepEqual(detail.entry.scenarios, ['夜间批处理']);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

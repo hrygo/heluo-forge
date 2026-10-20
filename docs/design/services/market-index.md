@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.16.0 |
+| 版本 | V0.17.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -79,7 +79,7 @@
 
 ```text title="端点（示意）"
 GET  /api/plugins                  条目列表与筛选；`mine=1` 按调用方身份过滤
-GET  /api/plugins/{name}           详情、版本、聚合分
+GET  /api/plugins/{name}           详情、版本、聚合分；响应为 `{ entry }`
 POST /api/plugins                  提交或更新条目
 GET  /api/metrics?plugin=          下载量与 star
 POST /api/admin/review             上架、退回、撤回
