@@ -39,7 +39,10 @@ export function normalizeEntry(raw) {
 
 export function sortEntries(entries, key = 'stars') {
   const rank = (entry) => (key === 'downloads' ? entry.downloads : key === 'updated' ? entry.updatedAt ?? 0 : entry.stars);
-  return [...entries].sort((a, b) => rank(b) - rank(a) || a.name.localeCompare(b.name));
+  // 同级用包名兜底，且按码位比较：localeCompare 依赖运行环境的区域设置，
+  // 不同机器可能给出不同顺序，排序就不再可复现。
+  const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return [...entries].sort((a, b) => rank(b) - rank(a) || byName(a, b));
 }
 
 export function filterEntries(entries, query) {

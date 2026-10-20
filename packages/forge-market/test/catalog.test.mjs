@@ -104,3 +104,20 @@ test('reports when every version is withdrawn', () => {
   const entry = normalizeEntry({ name: '@heluo/a', version: '0.1.0', versions: [{ version: '0.1.0', revoked: true }] }).entry;
   assert.equal(pickUpdate(entry, '0.1.0').reason, 'no-latest-version');
 });
+
+test('ties are broken by name, not by arrival order', () => {
+  const entries = [
+    normalizeEntry({ name: '@heluo/c', version: '0.1.0', stars: 1, downloads: 1 }).entry,
+    normalizeEntry({ name: '@heluo/a', version: '0.1.0', stars: 1, downloads: 1 }).entry,
+    normalizeEntry({ name: '@heluo/b', version: '0.1.0', stars: 1, downloads: 1 }).entry,
+  ];
+  assert.deepEqual(sortEntries(entries).map((entry) => entry.name), ['@heluo/a', '@heluo/b', '@heluo/c']);
+  assert.deepEqual(sortEntries([...entries].reverse()).map((entry) => entry.name), ['@heluo/a', '@heluo/b', '@heluo/c']);
+});
+
+test('name order does not depend on the locale', () => {
+  const upper = normalizeEntry({ name: '@heluo/B', version: '0.1.0', stars: 1 }).entry;
+  const lower = normalizeEntry({ name: '@heluo/a', version: '0.1.0', stars: 1 }).entry;
+  // 码位比较：大写 B (66) 排在小写 a (97) 前，与区域设置无关。
+  assert.deepEqual(sortEntries([lower, upper]).map((entry) => entry.name), ['@heluo/B', '@heluo/a']);
+});
