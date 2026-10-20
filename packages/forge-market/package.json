@@ -1,0 +1,13 @@
+{
+  "name": "@heluo/forge-market",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Point the DSH plugin market at the enterprise registry and enforce install policy",
+  "engines": {
+    "dsh": ">=0.2.1"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
