@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.7.0 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -92,12 +92,15 @@ packages/forge-market/
 │   ├── tarball.mjs           tar.gz 解包：体积上限、截断与路径校验
 │   ├── persist.mjs           落盘：目标目录约束
 │   ├── cache.mjs             离线缓存：时间戳与过期判定
+│   ├── local-catalog.mjs     离线目录：从 JSON 文件读取条目
 │   ├── routes.mjs            宿主路由：catalog、detail、缓存回退
 │   ├── registration.mjs      生成 profile 登记行与说明
 │   ├── validate.mjs          包格式与 patch 内容校验
 │   └── policy.mjs            安装策略与 engines 范围判定
 └── test/                     单元、契约、端到端与测试支撑
 ```
+
+离线目录模式（`catalogFile`）与服务模式二选一：前者从本地 JSON 读条目，供演示、隔离网与 CI 跑通全链路；该模式只读，提交返回 `read-only`。
 
 网络访问只出现在两处：`client.mjs` 调市场服务，`install.mjs` 的下载器取归档。其余模块是纯计算或纯文件操作，可单独测试。
 

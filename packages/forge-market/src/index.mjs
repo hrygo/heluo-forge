@@ -1,4 +1,5 @@
 import { createServiceClient } from './client.mjs';
+import { createLocalCatalog } from './local-catalog.mjs';
 import { buildMarketTools } from './market-tools.mjs';
 import { createMarketRoutes } from './routes.mjs';
 
@@ -7,7 +8,8 @@ export const name = 'forge-market';
 export const inject = { required: ['tools'], optional: ['webServer'] };
 
 export const Config = {
-  serviceUrl: { type: 'string', description: '企业市场服务地址', required: true },
+  serviceUrl: { type: 'string', description: '企业市场服务地址；与 catalogFile 二选一' },
+  catalogFile: { type: 'string', description: '离线目录 JSON；设置后不访问服务' },
   allowedHosts: { type: 'array', items: { type: 'string' }, default: [] },
   timeoutMs: { type: 'integer', default: 5000 },
   cachePath: { type: 'string', description: '离线缓存文件路径；缺省不缓存' },
@@ -15,9 +17,13 @@ export const Config = {
 };
 
 export function apply(ctx, config = {}) {
-  if (!config.serviceUrl) throw new Error('forge-market: serviceUrl is required');
+  if (!config.serviceUrl && !config.catalogFile) {
+    throw new Error('forge-market: serviceUrl or catalogFile is required');
+  }
 
-  const client = createServiceClient({ baseUrl: config.serviceUrl, timeoutMs: config.timeoutMs ?? 5000 });
+  const client = config.catalogFile
+    ? createLocalCatalog(config.catalogFile)
+    : createServiceClient({ baseUrl: config.serviceUrl, timeoutMs: config.timeoutMs ?? 5000 });
   const shared = {
     allowedHosts: config.allowedHosts ?? [],
     cachePath: config.cachePath,

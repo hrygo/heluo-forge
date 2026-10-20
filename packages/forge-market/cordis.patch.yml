@@ -6,6 +6,7 @@ insert:
     inject: [tools]
     config:
       serviceUrl: https://plugins.corp.example
+      catalogFile: ~
       allowedHosts: [gitee.corp.example]
       timeoutMs: 5000
       cachePath: ~
