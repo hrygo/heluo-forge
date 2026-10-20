@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.12 |
+| 版本 | V0.1.13 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -33,7 +33,7 @@
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | aarch64 产物、凭据注入、结构化输出、只读命令面 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案 | aarch64 产物、环境变量鉴权、JSON 稳定性、命令面 |
 | `@heluo/forge-sdd` | Skill pack + CLI | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案 | CI 触发方式、原子提交边界、产物与需求编号联动 |
-| `@heluo/forge-market` | 配置 bundle | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 制品库地址与令牌、索引字段、安装脚本策略、缓存 |
+| `@heluo/forge-market` | 配置 bundle | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 市场插件配置项、目录接入方式、上架审核标准 |
 
 设计文档路径相对本目录。详细设计落盘时才创建 `plugins/` 目录与对应文件，不预建空文件。
 
@@ -46,7 +46,7 @@
 | 服务 | 代码位置 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
 | DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设 | 取决于 CLI 三项前提；满足任一才启动 |
-| 市场目录与发布控制 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 不建设 | 企业已有制品库，判据不成立 |
+| 企业插件目录 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 规划 | 上游索引 schema、上架评审归属、部署方式 |
 
 私有 npm 制品仓库不是自研服务，优先复用企业现有 registry，部署与运维边界见[部署说明](../../deploy/README.md)。
 
