@@ -1,3 +1,4 @@
+import { readCache, writeCache } from './cache.mjs';
 import { filterEntries, normalizeEntry, sortEntries } from './catalog.mjs';
 import { downloadArchive, installPlugin } from './install.mjs';
 import { planInstall } from './installer.mjs';
@@ -42,10 +43,23 @@ export function buildMarketTools(client, options = {}) {
         additionalProperties: false,
       },
       async ({ query = '', sort = 'stars', limit = 20 }) => {
-        const raw = await client.list();
-        const entries = (raw?.entries ?? raw ?? []).map((item) => normalizeEntry(item)).filter((r) => r.ok).map((r) => r.entry);
+        const cachePath = options.cachePath;
+        let entries;
+        let source = 'service';
+        let stale = false;
+        try {
+          const raw = await client.list();
+          entries = (raw?.entries ?? raw ?? []).map((item) => normalizeEntry(item)).filter((r) => r.ok).map((r) => r.entry);
+          if (cachePath) await writeCache(cachePath, entries);
+        } catch (error) {
+          const cached = await readCache(cachePath);
+          if (!cached.ok) return { ok: false, reason: error?.code ?? 'service-unavailable' };
+          entries = cached.entries;
+          source = 'cache';
+          stale = cached.stale;
+        }
         const matched = sortEntries(filterEntries(entries, query), sort).slice(0, Math.max(1, limit));
-        return { total: matched.length, entries: matched };
+        return { total: matched.length, source, stale, entries: matched };
       },
     ),
     tool(

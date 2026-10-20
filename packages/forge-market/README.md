@@ -31,6 +31,7 @@ insert:
     config:
       serviceUrl: https://plugins.corp.example
       allowedHosts: [gitee.corp.example]
+      cachePath: ~/.dsh/cache/forge-market.json
 ```
 
 | 工具 | 作用 | 写入 |
@@ -39,6 +40,8 @@ insert:
 | `market_detail` | 条目详情、版本、`engines.dsh`、仓库地址 | 否 |
 | `market_submit` | 提交插件，校验标签格式与仓库域名 | 是（提交待审） |
 | `market_install` | 解析标签、下载归档、校验摘要、解包、必要时落盘 | 是（仅落盘） |
+
+`market_search` 在服务不可达时回退到本地缓存，并返回 `source: "cache"` 与 `stale` 标记；配置项 `cachePath` 指向缓存文件，未配置则不做缓存。
 
 `market_install` 只有在配置了 `targetDir` 时才会写文件；不配置则只做校验并返回文件清单，便于先验证再安装。
 

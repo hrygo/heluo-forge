@@ -26,6 +26,26 @@ test('search sorts by stars and filters by keyword', async () => {
   assert.deepEqual(filtered.entries.map((e) => e.name), ['@heluo/a']);
 });
 
+test('search falls back to the cache when the service fails', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { writeCache } = await import('../src/cache.mjs');
+
+  const dir = await mkdtemp(join(tmpdir(), 'forge-market-tools-'));
+  const cachePath = join(dir, 'catalog.json');
+  try {
+    await writeCache(cachePath, entries, { now: Date.now() });
+    const failing = { list: async () => { throw Object.assign(new Error('down'), { code: 'service-unavailable' }); } };
+    const tools = buildMarketTools(failing, { cachePath });
+    const result = await call(tools, 'market_search', {});
+    assert.equal(result.source, 'cache');
+    assert.equal(result.entries.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('detail normalizes the entry', async () => {
   const tools = buildMarketTools(client);
   const result = await call(tools, 'market_detail', { name: '@heluo/b' });
