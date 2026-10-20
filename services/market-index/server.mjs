@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { readFile } from 'node:fs/promises';
 
 // 只读参考实现：读目录 JSON，按 DESIGN-012 §5 的端点表应答。
 // 不做 Gitee 扫描、评审流与持久化；部署前须置于网关之后并补鉴权。
@@ -18,9 +18,14 @@ function matches(entry, query) {
   return [entry.name, entry.title, entry.summary, ...(entry.scenarios ?? [])].join(' ').toLowerCase().includes(needle);
 }
 
-export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), today = () => new Date().toISOString().slice(0, 10) } = {}) {
+export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), counts = {}, saveCounts, today = () => new Date().toISOString().slice(0, 10) } = {}) {
   // 目录文件可能不写这些字段；对外一律给出确定的形状。
-  entries = entries.map((entry) => ({ maintainer: '', scenarios: [], ...entry }));
+  entries = entries.map((entry) => ({
+    maintainer: '',
+    scenarios: [],
+    ...entry,
+    downloads: Number(counts[entry.name] ?? entry.downloads ?? 0) || 0,
+  }));
   const byName = () => new Map(entries.map((entry) => [entry.name, entry]));
 
   // 计数按（条目, 机器哈希, 日）去重：同一天重复安装不重复计数，
@@ -30,6 +35,9 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
     if (seen.has(key)) return false;
     seen.set(key, true);
     entry.downloads = (entry.downloads ?? 0) + 1;
+    counts[entry.name] = entry.downloads;
+    // 计数落盘：进程重启后数字不应倒退。
+    Promise.resolve(saveCounts?.(counts)).catch(() => {});
     return true;
   };
 
@@ -169,9 +177,25 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
   };
 }
 
-export function startMarketService({ catalogFile, port = 8080, host = '127.0.0.1' } = {}) {
-  return loadCatalog(catalogFile).then((entries) => {
-    const app = createMarketApp({ entries });
+export async function startMarketService({ catalogFile, countsFile, port = 8080, host = '127.0.0.1' } = {}) {
+  const entries = await loadCatalog(catalogFile);
+  let counts = {};
+  if (countsFile) {
+    try {
+      counts = JSON.parse(await readFile(countsFile, 'utf8'));
+    } catch {
+      counts = {};
+    }
+  }
+  {
+    const saveCounts = countsFile
+      ? async (next) => {
+          const temporary = `${countsFile}.tmp`;
+          await writeFile(temporary, JSON.stringify(next, null, 2));
+          await rename(temporary, countsFile);
+        }
+      : undefined;
+    const app = createMarketApp({ entries, counts, saveCounts });
     const server = createServer((req, res) => {
       app(req, res).catch(() => {
         if (!res.headersSent) {
@@ -181,7 +205,7 @@ export function startMarketService({ catalogFile, port = 8080, host = '127.0.0.1
       });
     });
     return new Promise((resolve) => server.listen(port, host, () => resolve(server)));
-  });
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -192,9 +216,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   };
   const port = Number(get('--port', process.env.PORT ?? 8080));
   const catalogFile = get('--catalog', process.env.CATALOG_FILE);
+  const countsFile = get('--counts', process.env.COUNTS_FILE);
   if (!catalogFile) {
-    console.error('usage: node server.mjs --catalog <file> [--port 8080]');
+    console.error('usage: node server.mjs --catalog <file> [--counts <file>] [--port 8080]');
     process.exit(1);
   }
-  startMarketService({ catalogFile, port }).then(() => console.log(`market-index listening on ${port}`));
+  startMarketService({ catalogFile, countsFile, port }).then(() => console.log(`market-index listening on ${port}`));
 }

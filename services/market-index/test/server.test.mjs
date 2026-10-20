@@ -193,3 +193,23 @@ test('maintainer is empty because the reference service cannot resolve members',
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('download counts are restored and saved', async () => {
+  const saved = [];
+  const app = createMarketApp({
+    entries: [{ name: '@heluo/a', version: '0.1.0', versions: [{ version: '0.1.0', tag: 'v0.1.0' }], stars: 0, downloads: 0 }],
+    counts: { '@heluo/a': 7 },
+    saveCounts: async (counts) => saved.push({ ...counts }),
+  });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const detail = await (await fetch(`${base}/api/plugins/${encodeURIComponent('@heluo/a')}`)).json();
+    assert.equal(detail.entry.downloads, 7);
+    await fetch(`${base}/api/plugins/${encodeURIComponent('@heluo/a')}/versions/0.1.0/download`, { headers: { 'x-machine-hash': 'm1' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(saved.at(-1)['@heluo/a'], 8);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

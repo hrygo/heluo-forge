@@ -17,8 +17,10 @@
 ## 参考实现的用法
 
 ```sh
-node services/market-index/server.mjs --catalog ./catalog.json --port 8080
+node services/market-index/server.mjs --catalog ./catalog.json --counts ./counts.json --port 8080
 ```
+
+`--counts` 指定计数文件：下载次数写入其中，重启后不会归零。不指定则只在内存里累加，重启即丢。
 
 目录格式与 [@heluo/forge-market](../../packages/forge-market/README.md) 的离线目录一致：数组或 `{ "entries": [...] }`，条目字段按 DESIGN-012 的字段级约定。
 
