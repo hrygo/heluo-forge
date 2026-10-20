@@ -50,7 +50,7 @@ export async function installPlugin(plan, deps = {}) {
     return { ok: false, reason: 'version-mismatch', detail: pkg.version };
   }
 
-  const installed = { name: pkg.name, version: pkg.version, tag: plan.tag, files: paths };
+  const installed = { name: pkg.name, version: pkg.version, tag: plan.tag, files: extracted.files, paths };
   if (typeof onInstalled === 'function') await onInstalled(installed);
   return { ok: true, installed };
 }
