@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.9.0 |
+| 版本 | V0.10.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -142,6 +142,59 @@ packages/forge-market/
 任何一步失败都回滚临时目录，不留半装状态。
 
 包内 `cordis.patch.yml` 会被 loader 执行，因此第 3 步之后还要做内容校验：拒绝 `!!js` 表达式、`disabled: true`、`cordis:include`、包外相对路径，以及覆盖 IAM、策略、凭据、沙箱、权限预设等行 id。判定逻辑见 `packages/forge-market/src/validate.mjs`。
+
+## 8.1 失败原因
+
+安装、校验与登记失败时返回 `reason`，取值如下；调用方据此决定是否重试与提示什么。
+
+| 原因 | 阶段 | 含义 | 是否可重试 |
+|---|---|---|---|
+| `archive-too-large` | 解包 | 解压后超过体积上限 | 否 |
+| `bad-archive` | 解包 | 不是可解压的 tar.gz | 否 |
+| `bad-cache` | 配置 | 缓存文件不是预期结构 | 可忽略 |
+| `bad-entries` | 配置 | 写缓存的内容不是数组 | 否 |
+| `bad-id` | 登记 | 无法从包名推导 loader 行 id | 否 |
+| `bad-manifest` | 清单 | package.json 不是合法 JSON | 否 |
+| `bad-name` | 登记 | 包名不是 @scope/name | 否 |
+| `bad-plan` | 规划 | 安装计划缺仓库或标签 | 否 |
+| `bad-repo` | 规划 | 仓库地址不是合法 URL | 否 |
+| `bad-tag` | 提交 | 标签不是 vX.Y.Z | 否 |
+| `digest-mismatch` | 下载 | 归档摘要与声明不一致 | 否 |
+| `download-failed` | 下载 | 下载归档失败，含连接中断 | 可重试 |
+| `empty-archive` | 解包 | 归档里没有文件 | 否 |
+| `extract-failed` | 解包 | 解包抛错 | 否 |
+| `host-not-allowed` | 规划 | 仓库域名不在 allowedHosts 内 | 否 |
+| `install-script-blocked` | 策略 | 包含安装脚本被策略禁止 | 否 |
+| `invalid-name` | 策略 | 包名不符合 @scope/name | 否 |
+| `missing-dependency` | 下载 | 未注入下载或解包实现 | 否 |
+| `missing-engines` | 条目 | 未声明 engines.dsh | 否 |
+| `missing-fields` | 条目 | 条目缺 name 或 version | 否 |
+| `missing-manifest` | 清单 | 归档里没有 package.json | 否 |
+| `name-mismatch` | 清单 | 清单包名与规划不一致 | 否 |
+| `no-allowed-host` | 提交 | 未配置 allowedHosts，拒绝提交 | 否 |
+| `no-digest` | 下载 | 服务未给出摘要，无法校验 | 否 |
+| `no-installed-version` | 更新 | 未提供已安装版本 | 否 |
+| `no-latest-version` | 更新 | 目录里没有可用版本 | 否 |
+| `no-path` | 配置 | 缓存或落盘未配置路径 | 否 |
+| `no-registry` | 策略 | 策略未配置制品源 | 否 |
+| `no-repo` | 规划 | 条目没有仓库地址也没有归档地址 | 否 |
+| `no-service-url` | 配置 | 既没有 serviceUrl 也没有 catalogFile | 否 |
+| `no-target` | 配置 | 落盘未配置目录 | 否 |
+| `no-version` | 规划 | 条目没有可用版本，或请求的版本不存在 | 否 |
+| `outside-range` | 条目 | 当前 DSH 超出声明范围 | 否 |
+| `outside-target` | 落盘 | 目标路径解析后跑出落盘目录 | 否 |
+| `prerelease-blocked` | 策略 | 预发布版本被策略禁止 | 否 |
+| `requires-newer-dsh` | 条目 | 当前 DSH 低于声明下限 | 升级后重试 |
+| `scope-not-allowed` | 策略 | 包名不在受信范围 | 否 |
+| `truncated-archive` | 解包 | 文件体短于头部声明长度 | 可重试 |
+| `unparsable` | 条目 | engines 或当前 DSH 版本无法解析 | 否 |
+| `unsafe-path` | 解包 | 条目含越界或非白名单路径 | 否 |
+| `version-mismatch` | 清单 | 清单版本与规划不一致 | 否 |
+| `version-pinned` | 策略 | 版本与钉住的版本不符 | 否 |
+| `version-revoked` | 规划 | 该版本已撤回，不再发放归档地址 | 否 |
+| `write-failed` | 落盘 | 写缓存或文件失败 | 可重试 |
+
+未知原因按不可重试处理；新增原因必须同步本表与 `test/reasons.test.mjs`。
 
 ## 9. 权限与安全
 
