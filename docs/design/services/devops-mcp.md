@@ -18,7 +18,7 @@
 
 > 编制依据：2026-10-20 依据 DevOps 平台已提供 CLI 与架构 P7（复用既有资产）。本设计给出服务的完整形态，同时给出**不建设**的判据；是否建设取决于 `forge-devops` 的三项前提是否成立。
 >
-> 关联文档：[DevOps 接入](plugins/forge-devops.md)、[总体架构 §7.3](../../architecture/platform-architecture.md)、[网关契约 §4](../../contracts/gateway-contract.md)。
+> 关联文档：[DevOps 接入](../plugins/forge-devops.md)、[总体架构 §7.3](../../architecture/platform-architecture.md)、[网关契约 §4](../../contracts/gateway-contract.md)。
 
 ## 1. 结论
 

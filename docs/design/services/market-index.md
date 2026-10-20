@@ -18,7 +18,7 @@
 
 > 编制依据：2026-10-20 依据架构 P7（复用既有资产）与市场接入设计。企业既有制品库可能已提供包元数据与目录能力；本设计给出服务形态与**不建设**的判据。
 >
-> 关联文档：[私有市场接入](plugins/forge-market.md)、[总体架构 §2 P5](../../architecture/platform-architecture.md)、[部署说明](../../../deploy/README.md)。
+> 关联文档：[私有市场接入](../plugins/forge-market.md)、[总体架构 §2 P5](../../architecture/platform-architecture.md)、[部署说明](../../../deploy/README.md)。
 
 ## 1. 结论
 
