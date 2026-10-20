@@ -348,3 +348,32 @@ test('the registration row reports the version that was installed', async () => 
   assert.equal(result.registration.version, result.installed.version);
   assert.equal(result.registration.tag, result.installed.tag);
 });
+
+test('registration confirms the version that is actually installed', async () => {
+  const { mkdtemp, rm, mkdir, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'forge-market-reg-'));
+  try {
+    await mkdir(join(dir, 'heluo-a'), { recursive: true });
+    await writeFile(join(dir, 'heluo-a', 'package.json'), JSON.stringify({ name: '@heluo/a', version: '0.1.0' }));
+    const tools = buildMarketTools(client, { targetDir: dir, registration: { serviceUrl: 'https://plugins.corp.example' } });
+
+    const good = await call(tools, 'market_registration', { name: '@heluo/a', version: '0.1.0' });
+    assert.equal(good.ok, true);
+    assert.deepEqual(good.verified, { checked: true, version: '0.1.0' });
+
+    const wrong = await call(tools, 'market_registration', { name: '@heluo/a', version: '0.9.9' });
+    assert.equal(wrong.reason, 'not-installed');
+    assert.equal(wrong.found, '0.1.0');
+
+    const missing = await call(tools, 'market_registration', { name: '@heluo/zzz', version: '0.1.0' });
+    assert.equal(missing.reason, 'not-installed');
+
+    const noTarget = buildMarketTools(client, { registration: { serviceUrl: 'https://plugins.corp.example' } });
+    const unchecked = await call(noTarget, 'market_registration', { name: '@heluo/a', version: '0.1.0' });
+    assert.deepEqual(unchecked.verified, { checked: false, reason: 'no-target' });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

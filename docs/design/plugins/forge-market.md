@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.19.0 |
+| 版本 | V0.20.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -185,6 +185,7 @@ packages/forge-market/
 | `no-repo` | 规划 | 条目没有仓库地址也没有归档地址 | 否 |
 | `no-service-url` | 配置 | 既没有 serviceUrl 也没有 catalogFile | 否 |
 | `no-target` | 配置 | 落盘未配置目录 | 否 |
+| `not-installed` | 登记 | 目标目录里没有该包，或版本与请求不符 | 先安装 |
 | `no-version` | 规划 | 条目没有可用版本，或请求的版本不存在 | 否 |
 | `outside-range` | 条目 | 当前 DSH 超出声明范围 | 否 |
 | `outside-target` | 落盘 | 目标路径解析后跑出落盘目录 | 否 |

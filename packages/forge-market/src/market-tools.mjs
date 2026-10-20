@@ -220,14 +220,40 @@ export function buildMarketTools(client, options = {}) {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'installed package name, e.g. @heluo/forge-market' },
+          version: { type: 'string', description: 'installed version to confirm against the target directory' },
         },
         required: ['name'],
         additionalProperties: false,
       },
-      async ({ name }) => {
+      async ({ name, version }) => {
         const built = buildRegistrationRow({ name }, options.registration ?? {});
         if (!built.ok) return built;
-        return { ok: true, row: built.row, patch: renderPatch(built.row), steps: registrationInstructions(built.row) };
+
+        // 给了版本就核对：登记一条指向未安装版本的行，比不登记更难查。
+        let verified;
+        if (version) {
+          if (!options.targetDir) {
+            verified = { checked: false, reason: 'no-target' };
+          } else {
+            let found;
+            try {
+              found = JSON.parse(await readFile(`${packageDirFor(options.targetDir, name)}/package.json`, 'utf8')).version;
+            } catch {
+              found = undefined;
+            }
+            if (found !== version) return { ok: false, reason: 'not-installed', expected: version, found };
+            verified = { checked: true, version };
+          }
+        }
+
+        return {
+          ok: true,
+          row: built.row,
+          patch: renderPatch(built.row),
+          steps: registrationInstructions(built.row),
+          version,
+          verified,
+        };
       },
     ),
     tool(
