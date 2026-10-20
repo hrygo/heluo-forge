@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.10 |
+| 版本 | V0.1.11 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -30,8 +30,8 @@
 | `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案 | 版本断言报错形态、`fiberPhase`、角色 preset 粒度、默认禁用清单 |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案 | 重试插件边界实测、流式取消、错误体一致性、设备标识上报 |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
-| `@heluo/forge-devops` | MCP 接入 bundle | `plugins/forge-devops.md` | 待设计 | 只读工具面（清单待提供方澄清）、服务端授权、按请求取 token |
-| `@heluo/forge-gitee` | MCP 接入 bundle | `plugins/forge-gitee.md` | 待设计 | 上游复用、arm64 构建、凭据来源 |
+| `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | aarch64 产物、凭据注入、结构化输出、只读命令面 |
+| `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案 | aarch64 产物、环境变量鉴权、JSON 稳定性、命令面 |
 | `@heluo/forge-sdd` | Skill pack + CLI | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案 | CI 触发方式、原子提交边界、产物与需求编号联动 |
 | `@heluo/forge-market` | 配置 bundle | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 制品库地址与令牌、索引字段、安装脚本策略、缓存 |
 

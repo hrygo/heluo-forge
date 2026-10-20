@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.10.14 |
+| 版本 | V1.10.15 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -19,9 +19,9 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.14 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.15 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.5 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.10 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.11 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.1 | 生效 | 平台组 | — |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.5 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
@@ -38,8 +38,8 @@
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.3 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
 | CORP-DSH-IAM-001 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V0.1 | 草案 | 平台组（代拟） | G0；待 IAM 团队评审 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 |
-| CORP-DSH-DEVOPS-001 | DevOps MCP | 待创建 | — | 待启动 | DevOps 团队 | G1 |
-| CORP-DSH-GITEE-001 | Gitee 集成 | 待创建 | — | 待启动 | 平台组 | G1 |
+| CORP-DSH-DEVOPS-001 | DevOps 接入详细设计 | [design/plugins/forge-devops.md](<design/plugins/forge-devops.md>) | V0.1 | 草案 | 平台组（代拟） | G1；待 CLI 前提确认 |
+| CORP-DSH-GITEE-001 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.1 | 草案 | 平台组（代拟） | G1；待 aarch64 产物确认 |
 | CORP-DSH-POLICY-001 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.1 | 草案 | 平台组（代拟） | G2；安全团队评审 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
