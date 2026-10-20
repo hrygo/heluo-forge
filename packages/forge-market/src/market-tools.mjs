@@ -80,10 +80,11 @@ export function buildMarketTools(client, options = {}) {
           query: { type: 'string', description: 'keyword matched against name, title, summary and scenarios' },
           sort: { type: 'string', enum: ['stars', 'downloads'], description: 'sort key, defaults to stars' },
           limit: { type: 'integer', description: 'maximum entries to return, defaults to 20' },
+          includeWithdrawn: { type: 'boolean', description: 'include revoked and rejected entries, for diagnosis' },
         },
         additionalProperties: false,
       },
-      async ({ query = '', sort = 'stars', limit = 20 }) => {
+      async ({ query = '', sort = 'stars', limit = 20, includeWithdrawn = false }) => {
         const cachePath = options.cachePath;
         let entries;
         // 如实标注来源：本地目录不是服务，缓存也不是。
@@ -99,11 +100,17 @@ export function buildMarketTools(client, options = {}) {
             const reason = typeof error?.code === 'string' ? error.code : 'internal';
             return { ok: false, reason, action: nextAction(reason) };
           }
-          entries = cached.entries;
+          // 缓存可能是旧格式或手写文件，读出来照样过一遍归一化。
+          entries = (cached.entries ?? [])
+            .map((item) => normalizeEntry(item))
+            .filter((result) => result.ok)
+            .map((result) => result.entry);
           source = 'cache';
           stale = cached.stale;
         }
-        const all = sortEntries(filterEntries(entries, query), sort);
+        // 已撤回与已退回的条目不在发现列表里；否则用户会看到一个装不上的包。
+        const visible = includeWithdrawn ? entries : entries.filter((entry) => entry.status === 'listed');
+        const all = sortEntries(filterEntries(visible, query), sort);
         const size = Math.min(200, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 20));
         const page = all.slice(0, size);
         // total 是命中总数，不是本页条数：否则调用方会把截断误当成全部。

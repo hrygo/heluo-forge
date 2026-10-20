@@ -447,3 +447,21 @@ test('install reports installed mode once files are written', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('withdrawn and rejected entries stay out of the list', async () => {
+  const mixed = {
+    list: async () => ({
+      entries: [
+        { name: '@heluo/a', version: '0.1.0', status: 'listed', repo: 'https://gitee.corp.example/g/a' },
+        { name: '@heluo/b', version: '0.1.0', status: 'revoked', repo: 'https://gitee.corp.example/g/b' },
+        { name: '@heluo/c', version: '0.1.0', status: 'rejected', repo: 'https://gitee.corp.example/g/c' },
+      ],
+    }),
+  };
+  const tools = buildMarketTools(mixed);
+  const visible = await call(tools, 'market_search', {});
+  assert.deepEqual(visible.entries.map((entry) => entry.name), ['@heluo/a']);
+  assert.equal(visible.total, 1);
+  const all = await call(tools, 'market_search', { includeWithdrawn: true });
+  assert.equal(all.total, 3);
+});
