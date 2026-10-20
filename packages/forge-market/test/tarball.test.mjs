@@ -93,3 +93,26 @@ test('strips the Gitee top level directory and reports skipped files', () => {
   assert.deepEqual(result.files.map((file) => file.path), ['package.json', 'src/index.mjs']);
   assert.deepEqual(result.skipped, ['LICENSE']);
 });
+
+test('ignores AppleDouble entries and still strips the top level directory', () => {
+  const archive = tar([
+    ['._demo-v0.1.0', 'junk'],
+    ['demo-v0.1.0/._package.json', 'junk'],
+    ['demo-v0.1.0/package.json', '{"name":"@heluo/demo"}'],
+    ['demo-v0.1.0/src/._index.mjs', 'junk'],
+    ['demo-v0.1.0/src/index.mjs', 'export {};'],
+  ]);
+  const result = extractTarball(archive);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.files.map((file) => file.path), ['package.json', 'src/index.mjs']);
+});
+
+test('reports an archive that holds only metadata as empty', () => {
+  const archive = tar([
+    ['._x', 'junk'],
+    ['.DS_Store', 'junk'],
+  ]);
+  const result = extractTarball(archive);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'empty-archive');
+});

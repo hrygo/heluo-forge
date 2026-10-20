@@ -32,7 +32,16 @@ export function buildRegistrationRow(installed, config = {}) {
   };
 }
 
-export function renderPatch(row) {
+// buildRegistrationRow 返回的是 { ok, row } 信封；直接把它递进来会让 id/name
+// 变成 undefined，生成一段装不上的补丁。这里两种都接受，其余情况早失败。
+function unwrap(row) {
+  const value = row && typeof row === 'object' && 'ok' in row && 'row' in row ? row.row : row;
+  if (!value?.id || !value?.name) throw new TypeError('registration row required: pass buildRegistrationRow(...).row');
+  return value;
+}
+
+export function renderPatch(input) {
+  const row = unwrap(input);
   // loader 的补丁层是顶层数组；生成映射会得到「必须为数组」的挂载错误。
   const lines = ['- insert:', `    - id: ${row.id}`, `      name: '${row.name}'`];
   if (row.inject?.length) lines.push(`      inject: [${row.inject.join(', ')}]`);
@@ -44,7 +53,8 @@ export function renderPatch(row) {
   return `${lines.join('\n')}\n`;
 }
 
-export function registrationInstructions(row) {
+export function registrationInstructions(input) {
+  const row = unwrap(input);
   return [
     '在目标 profile 上登记该插件，二者择一：',
     '1) plugin_manager install_bundle，target 取插件目录的绝对路径；它会写入 profile 的包与补丁，无需手工编辑。',

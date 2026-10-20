@@ -51,3 +51,17 @@ test('an upper case name still yields a usable row id', () => {
   assert.equal(built.ok, true);
   assert.match(built.row.id, /^heluo-foo-[0-9a-f]{6}$/);
 });
+
+test('renderers accept the buildRegistrationRow envelope', () => {
+  const built = buildRegistrationRow({ name: '@heluo/demo-a', version: '0.3.0' }, { serviceUrl: 'https://p.example' });
+  assert.equal(built.ok, true);
+  assert.match(renderPatch(built), /id: heluo-demo-a/);
+  assert.ok(registrationInstructions(built).some((line) => line.includes('heluo-demo-a')));
+});
+
+test('renderers refuse a failed registration result', () => {
+  const built = buildRegistrationRow({ name: '@heluo/demo-a' }, {});
+  assert.equal(built.ok, false);
+  assert.throws(() => renderPatch(built), /registration row required/);
+  assert.throws(() => registrationInstructions({}), /registration row required/);
+});

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.53.0 |
+| 版本 | V0.54.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -314,6 +314,17 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 | `Config` | `Config['~standard'].validate(config)` 的 standard-schema 对象 | 激活时报 `Cannot read properties of undefined (reading 'validate')` |
 
 可选服务还有一个陷阱：在 `apply` 里用 `ctx.get('webServer')` 取不到时不能就此跳过注册，因为激活顺序不保证服务已就绪；应使用 `ctx.inject(['webServer'], callback)` 等服务出现后再注册。本包曾因此静默不注册路由：进程起来了，`/api/forge-market/catalog` 却落到 SPA 回退返回 404。
+
+### 8.3.1 归档链路的实测与两处修正
+
+2026-10-20 用本地 HTTP 服务提供的真实 `.tar.gz`（顶层 `<repo>-<tag>/`）跑通 `downloadArchive → extractTarball → checkArchivePaths → installPlugin → buildRegistrationRow`，并补了根集成用例 `tests/integration/market-install-archive.test.mjs`。过程中发现两处会让真实归档装不上：
+
+| 缺陷 | 现象 | 处理 |
+|---|---|---|
+| macOS 生成的 tar 带 `._*`、`.DS_Store` | 顶层目录被判成不止一个 → 不剥离 → 整包被白名单过滤干净 → `missing-manifest` | 解包时忽略这些元数据文件，顶层目录按出现次数取多数 |
+| 运行时版本是 `0.2.1-rc.2` | `parseEngines` 只认 `x.y.z`，预发布被判 `unparsable` → 所有插件都装不上 | 允许 `-rc.N` 后缀，按基础版本比较（近似，非完整 semver 预发布序） |
+
+顺带修了登记行的易用性：`buildRegistrationRow` 返回 `{ ok, row }` 信封，而 `renderPatch`/`registrationInstructions` 要裸行；误把信封传进去会生成 `id: undefined` 的补丁。现在两者都接受信封，失败时抛错而不是产出坏补丁。
 
 ### 8.3 安装后的两条路径
 

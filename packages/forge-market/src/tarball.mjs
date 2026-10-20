@@ -15,11 +15,33 @@ function readOctal(block, offset, length) {
   return text ? Number.parseInt(text, 8) : 0;
 }
 
+// macOS 的 tar 会带 AppleDouble（._x）与 .DS_Store；它们既不是插件内容，也会把
+// 顶层目录判成有多个，导致整包被白名单过滤干净。
+const METADATA_FILE = /(?:^|\/)\._[^/]*$|(?:^|\/)\.DS_Store$/;
+
+function isMetadata(path) {
+  return METADATA_FILE.test(path);
+}
+
 function stripCommonRoot(files) {
   if (files.length < 2) return files;
-  const root = files[0].path.split('/')[0];
+  // 用出现最多的顶层目录判断，而不是第一条记录：混杂的元数据文件不该否掉剥离。
+  const tally = new Map();
+  for (const file of files) {
+    const root = file.path.split('/')[0];
+    if (!root || ALLOWED_PREFIXES.includes(root)) continue;
+    tally.set(root, (tally.get(root) ?? 0) + 1);
+  }
+  let root = '';
+  let best = 0;
+  for (const [candidate, count] of tally) {
+    if (count > best) {
+      root = candidate;
+      best = count;
+    }
+  }
   // 顶层本身就是白名单文件时说明归档已经是扁平的，不能再剥。
-  if (!root || ALLOWED_PREFIXES.includes(root)) return files;
+  if (!root) return files;
   const shared = files.every((file) => file.path.startsWith(`${root}/`));
   if (!shared) return files;
   return files.map((file) => ({ ...file, path: file.path.slice(root.length + 1) }));
@@ -59,10 +81,11 @@ export function extractTarball(bytes, { maxBytes = MAX_BYTES } = {}) {
     offset = start + Math.ceil(size / BLOCK) * BLOCK;
   }
 
-  if (!files.length) return { ok: false, reason: 'empty-archive' };
+  const content = files.filter((file) => !isMetadata(file.path));
+  if (!content.length) return { ok: false, reason: 'empty-archive' };
 
   // Gitee 归档带 `<repo>-<tag>/` 顶层目录；不去掉的话所有路径都不匹配白名单。
-  const stripped = stripCommonRoot(files);
+  const stripped = stripCommonRoot(content);
 
   const safe = checkArchivePaths(stripped.map((file) => file.path));
   if (!safe.ok) return { ok: false, reason: safe.reason, detail: safe.detail };

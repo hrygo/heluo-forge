@@ -23,7 +23,9 @@ export function checkInstall(request, policy) {
   return { allowed: true, reason: null };
 }
 
-const RANGE = /^(>=|>|\^|~|=)?\s*v?(\d+)\.(\d+)\.(\d+)$/;
+// 预发布后缀（-rc.2）按基础版本比较：运行时常在 rc 通道上，
+// 拒绝解析会让所有插件在 rc 运行时被判成不兼容。
+const RANGE = /^(>=|>|\^|~|=)?\s*v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 export function parseEngines(text) {
   const match = RANGE.exec(String(text ?? '').trim());
