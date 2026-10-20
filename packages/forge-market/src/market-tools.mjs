@@ -172,7 +172,7 @@ export function buildMarketTools(client, options = {}) {
           if (!verdict.ok) return { ok: false, reason: 'verification-failed', steps: verdict.steps };
         }
 
-        const result = await client.submit({ name, repo, tag, summary, scenarios });
+        const result = await client.submit({ name, repo, tag, summary, scenarios, submitter: options.registration?.submitter ?? '' });
         return { ok: true, state: result?.state ?? 'pending' };
       },
     ),
@@ -181,9 +181,26 @@ export function buildMarketTools(client, options = {}) {
       'List the submissions made by the current identity, with their review state and reason.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
-        const raw = await client.mine();
+        // 服务端没有账号体系，"我的提交"只能按调用方自报的身份过滤。
+        // 没有身份时必须说清楚，不能把整张目录当成"我的"。
+        const submitter = options.registration?.submitter ?? '';
+        if (!submitter) {
+          return {
+            ok: false,
+            reason: 'identity-unavailable',
+            action: 'contact-admin',
+            detail: 'set submitter in the plugin config or HELUO_MARKET_SUBMITTER to list your own submissions',
+          };
+        }
+        const raw = await client.mine(submitter);
         const entries = raw?.entries ?? raw ?? [];
-        return { total: Array.isArray(entries) ? entries.length : 0, entries };
+        const pending = raw?.pending ?? [];
+        return {
+          total: (Array.isArray(entries) ? entries.length : 0) + pending.length,
+          submitter,
+          entries,
+          pending,
+        };
       },
     ),
     tool(

@@ -36,6 +36,7 @@ export function apply(ctx, config = {}) {
       allowedHosts: config.allowedHosts ?? [],
       timeoutMs: config.timeoutMs ?? 5000,
       targetDir: config.targetDir,
+      submitter: config.submitter ?? process.env.HELUO_MARKET_SUBMITTER ?? '',
     },
   };
   const disposers = buildMarketTools(client, shared).map((definition) => ctx.tools.register(definition));

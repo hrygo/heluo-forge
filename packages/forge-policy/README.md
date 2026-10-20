@@ -8,7 +8,7 @@
 | 职责 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 |
 | 不负责 | 不替代服务端鉴权，不维护独立 hook 引擎 |
 | 衔接点 | `tools/pre-execute`、`tools.guard`、`otel` |
-| 详细设计 | `docs/design/plugins/forge-policy.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 详细设计 | [详细设计](../../docs/design/plugins/forge-policy.md)（草案，已建立；状态见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立 `package.json`、源码与测试 |
 
 ## 边界

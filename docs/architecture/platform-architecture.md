@@ -6,19 +6,21 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-001 |
 | 文档名称 | 河洛企业级智能研发平台总体架构设计 |
-| 版本 | V1.6.2 |
+| 版本 | V1.6.4 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | G0 |
 | 文档层级 | L1 总体架构；字段级契约与运行手册由子文档承担（见 §12） |
 
 > 编制依据：原方案记载的 DSH `0.2.1-rc.2` 源码与官方文档核验，核验日期 2026-10-20。本版增补仅核对本仓库需求、架构、计划与网关草案的一致性，未重跑历史源码验证；企业 IAM / Kong / DevOps / Gitee 接口、Windows 安全隔离与银河麒麟实机、容量及恢复演练均未实测。团队回函之前，协议能力、排期、保留期与验收阈值均不视为对方承诺。
 >
 > 关联文档：[河洛企业级智能研发平台推广实施方案](../plans/rollout-plan.md)（WBS、验收、风险与待确认事项）、[河洛企业级智能研发平台需求与场景基线](../requirements/requirements-baseline.md)（范围真源、人群画像、核心场景与成功指标）。
+
+2026-10-21 仓库实现复核：市场插件及目录 HTTP 参考服务已有源码与本地测试；完整企业身份、来源/角色治理、持久化发布及双端交付仍未闭环。当前能力与历史测试 profile 记录见[根 README](../../README.md)和[设计索引](../design/README.md)。本文的方案与验收均为目标，不因局部实现自动判定门禁通过；本次未新增企业联调、双端或部署证据。
 
 ## 1. 背景与目标
 
@@ -41,7 +43,7 @@
 | 内容类别 | 当前依据 | 评审时应如何使用 |
 |---|---|---|
 | 用户确认输入 | 3 部门 800 人、Windows / 麒麟各半、每人一套、网关与模型机构内私有化部署 | 作为范围输入；人数、设备与权限覆盖率尚未抽样 |
-| 方案既有决策 | 模型经网关、按资源授权、工具用 MCP、流程用 skill、分发走内部源 | 保持本期路线；不表示各团队接口已具备或已签署 |
+| 方案既有决策 | 模型经网关、DevOps/Gitee 优先复用既有 CLI，其他确需标准工具协议的接入才使用 MCP、流程用 skill、分发走内部源 | 保持本期路线；不表示各团队接口已具备或已签署 |
 | 本版增补提议 | 安全依赖故障拒绝、分域责任、容量验证方法与回函闭环 | 进入评审与负向验收，由相应负责人签署后冻结 |
 | 未验证输入 | IAM 多资源刷新、网关契约、DevOps/Gitee 授权、两端隔离、容量与支持能力 | 发函取得证据，完成联调/实机验证；缺失时按门禁阻断，不以推断补齐 |
 
@@ -59,8 +61,8 @@
 
 | # | 原则 | 理由 |
 |---|---|---|
-| P1 | **核心不改，能力全插件** | DSH 是 MIT，但 fork 核心会在每两周一个 rc 的节奏下持续失血；只有一处必须补丁（MCP 按请求取 token 及 `stdio` 凭据重连），其余全部走插件与配置 |
-| P2 | **一个会话，按资源取令牌** | 登录一次；模型网关用单一 `CredentialRef`，MCP 由 IAM broker 按 `resource` 取 token；轮换无需重启 |
+| P1 | **核心不改，能力全插件** | DSH 是 MIT，但 fork 核心会在每两周一个 rc 的节奏下持续失血；DevOps/Gitee CLI 接入不需核心补丁，其他 MCP 补丁须单独证明必要性并经范围评审 |
+| P2 | **一个会话，按资源取令牌** | 登录一次；模型网关用单一 `CredentialRef`；仅经批准的 MCP 集成按 `resource` 取 token；轮换无需重启 |
 | P3 | **策略下沉到工具管线** | 用 `tools/pre-execute` 与 `ctx.tools.guard()` 做硬门禁，不维护每宿主 hooks |
 | P4 | **流程只守不变量** | 产物、冻结、原子 PR 三条不变量；不规定“必须先调哪个 skill” |
 | P5 | **市场即治理，内部唯一来源** | 只从企业 Gitee 专门 group 安装；其它插件须由有权限人员上传至该 group 后方可安装。目录管"推荐什么"，白名单与 `engines.dsh` 管上架与安装校验，公网源不回落（对应 REQ-14）；插件侧的离线目录（`catalogFile`）是同一来源的本地副本，仅供服务不可达时读取，不构成第二个来源 |
@@ -121,8 +123,8 @@ quadrantChart
 | OAuth 2.1（draft-15） | PKCE 必须；无 implicit / ROPC；redirect 精确匹配 | Code + PKCE，public client | 无 |
 | RFC 8252 | 原生应用用 loopback；优先 IP 字面量 | `127.0.0.1` 回调 | 禁用 `localhost` |
 | RFC 8707 | `resource` 参数标识目标资源 | 改为按资源取 token | 依赖 IAM 支持 `resource` |
-| RFC 9728 | MCP server 暴露 Protected Resource Metadata | DevOps MCP（HTTP）实现 PRM | 新增约 1 人周 |
-| MCP 2026-07-28 | HTTP server 校验 `aud`；stdio 从环境取凭据 | DevOps HTTP + Gitee stdio | 与上一条同批实现 |
+| RFC 9728 | HTTP MCP server 暴露 Protected Resource Metadata | 仅对后续经决策启用的 HTTP MCP server 适用；DevOps MCP 当前不建设 | 不纳入本期 CLI 接入 |
+| MCP 2026-07-28 | HTTP server 校验 `aud`；stdio 从环境取凭据 | 按具体 MCP 集成形态适用；DevOps/Gitee 当前走 CLI | 不纳入本期 CLI 接入 |
 | MCP client 注册 | Client ID Metadata 优先，DCR 已弃用 | IAM 预注册 client | 无 |
 | Agent Skills | `SKILL.md` frontmatter、渐进披露、<500 行 | SDD skill pack | 用 `skills-ref` 校验 |
 | OTel GenAI | `gen_ai.*` 语义约定（仍为实验） | 决策审计 + 用量 | 只依赖稳定子集，内容默认不采 |
@@ -131,7 +133,7 @@ quadrantChart
 ### 3.3 复核结论与待确认项
 
 1. **网关额度（已确认）**：企业自研的 Kong AI 网关已具备详细额度管理，且后端模型为机构内私有化部署；DSH 不在客户端做计量。仍需对齐的是额度维度、窗口、超额行为与剩余额度查询方式；`ai-proxy` 的 OSS / Enterprise 分层不再影响本方案。
-2. **MCP OAuth 客户端缺失（待实施）**：DSH 的 `mcp-client` 没有 OAuth 客户端。由 IAM 插件充当 token broker，按 `resource` 取 token 并缓存；`dsh-mcp-client` 补丁支持 HTTP 传输按请求回调取 token，以及 `stdio` 传输在凭据更新时重连子进程，约 +1 周。
+2. **MCP OAuth 客户端能力（按需评估）**：DSH 的 `mcp-client` 没有 OAuth 客户端。DevOps/Gitee 已决策复用 CLI，因此不以 MCP broker 或 `dsh-mcp-client` 补丁作为其接入前提。若其他已批准的 MCP 集成需要按请求取令牌或凭据轮换，再由对应设计验证补丁必要性与范围。
 3. **单一令牌的边界（已决策）**：RFC 8707 要求 token 绑定目标资源。一个宽 audience 的 token 会让泄漏半径覆盖所有服务，因此改为“一个会话 + 按资源签发”，模型网关仍用单一引用。
 
 ## 4. 总体架构
@@ -166,7 +168,7 @@ flowchart TB
     direction LR
     IDP["IAM / IdP"]
     KONG["Kong AI 网关"]
-    DAPI["DevOps MCP / API"]
+    DAPI["DevOps CLI / API"]
     GAPI["Gitee API"]
     REG["Registry / 内部 Index"]
     OT["OTel Collector"]
@@ -182,7 +184,7 @@ flowchart TB
 
 1. **登录**：浏览器 → IAM（Code + PKCE）→ 本机回调 → Host 写令牌记录与镜像引用。
 2. **模型**：`llm-pi-ai` 解析 `ENTERPRISE_ACCESS_TOKEN` → Kong 验签、映射 consumer、限额 → 机构内私有化模型服务。
-3. **工具**：MCP client 向 IAM broker 取按资源 token → DevOps MCP（HTTP）或本地 Gitee MCP（stdio）→ 工程系统 API；每次工具调用先过企业策略插件。
+3. **工具**：受控命令调用 DevOps CLI 或 Gitee `gh` 兼容 CLI → 工程系统 API；服务端按用户现有权限鉴权，每次工具调用先过企业策略插件。
 
 ### 4.1 系统责任与信任边界
 
@@ -192,8 +194,8 @@ flowchart TB
 |---|---|---|---|
 | IAM | 身份、资源授权、令牌生命周期与角色来源 | 不负责模型额度，也不等于本机 DSH 入口准入 | 不能取到目标资源有效令牌则不调用该资源 |
 | AI 网关与模型服务 | 模型访问、person/consumer 计量、路由与正文日志边界 | 不让客户端维护第二份账本；不接收客户端自报身份作为授权依据 | 验签或额度依赖故障按冻结契约拒绝，不回落公网模型 |
-| DevOps 平台与 MCP | 服务端项目/环境只读授权与查询结果 | 不承担生产变更执行；不信任工具描述的只读标签 | 越权查询由服务端拒绝；工具面以提供方澄清为准 |
-| Gitee | 仓库权限与用户凭据授权 | 不因在本机启动 MCP 而扩大用户原有权限 | 独立凭据映射未确认时不开放相应工具 |
+| DevOps 平台 | 服务端项目/环境只读授权与查询结果 | 不承担生产变更执行；不信任工具描述的只读标签 | 越权查询由服务端拒绝；CLI 命令面与输出由提供方确认 |
+| Gitee | 仓库权限与用户凭据授权 | 不因本机 CLI 接入而扩大用户原有权限 | 凭据注入或授权映射未确认时不开放相应命令 |
 | DSH 与企业插件 | 本地交互、资源令牌引用、工具管线、沙箱、Agent 路径保护与决策事件 | 不是多租户服务，不是企业唯一授权点 | 安全依赖缺失时阻断相关能力，不静默降级 |
 | 内部分发与 IT | 可信包源、构建证据、两端安装/更新/回滚通道 | 禁用市场工具不等于可阻止管理员自行安装软件 | 校验/兼容失败不安装；安全基线不符不准入企业资源 |
 | 安全与观测平台 | 最小事件接收、访问控制、保留与异常响应 | 默认不接收会话、代码或模型正文；不做第二套成本计费 | 必要审计无法形成时拒绝相应企业调用；其他断链处置待安全确认 |
@@ -210,7 +212,7 @@ flowchart TB
 | 刷新失败 | 区分网络故障与授权失效；无有效令牌即停止相应调用 | 锁内 ≤5 秒是网络请求超时目标，不是已测出的跨进程锁等待上界 |
 | 切换账号或退出 | 清理令牌镜像、按资源缓存与身份相关连接；旧账号请求不延续到新会话 | 撤销接口、在途调用处置与本地会话保留规则需联调 |
 | 角色变更、账号禁用或离职 | 不依赖旧 preset 继续授权；下次操作由服务端复核权限 | JWT 不天然即时可撤销；明确内省/撤销列表或有效期带来的最大残余授权窗口 |
-| Gitee 独立凭据轮换 | 重新解析引用并重连所需子进程，禁止把凭据写入模型上下文 | IAM 映射或独立 OAuth/PAT 方案由 Gitee 团队确认，不能假设通用 IAM token 可直通 |
+| DevOps/Gitee CLI 凭据轮换 | 通过经确认的用户级凭据机制生效，禁止把凭据写入模型上下文 | 由各服务团队确认 CLI 支持的凭据注入、刷新与撤销方式；不能假设通用 IAM token 可直接使用 |
 
 ## 5. 插件形态映射
 
@@ -221,7 +223,8 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 | Host 服务插件 | 注册 Cordis 服务、Remote 方法、工具、策略 | 需要跨会话状态、原生能力或 UI 后端 | IAM、policy（含审计） |
 | Client UI 插件 | Slot 注册、登录态、设置卡 | 用户可见的交互 | IAM 的账户菜单与登录页 |
 | 配置 bundle | 只改组合与配置，无代码 | 已有插件能满足 | gateway、market、brand |
-| MCP bundle | 每 server 一行 `dsh-mcp-client` | 外部系统有 API/CLI | DevOps（HTTP）、Gitee（stdio） |
+| CLI 工具接入 | 现有 CLI + 受控命令白名单 | 企业平台已有 CLI，结构化输出和凭据注入可满足需求 | DevOps、Gitee |
+| MCP bundle | 每 server 一行 `dsh-mcp-client` | 提供方有 MCP 服务，或 CLI 不满足已确认前提 | 按具体集成决策启用；DevOps MCP 服务当前不建设 |
 | Skill pack | `SKILL.md` + 资源，按需加载 | 流程知识与模板 | SDD |
 | Agent preset | 角色化工具集与提示 | 不同角色的权限与工具不同 | 7 类角色 preset（开发 / 评审 / 发布 / 测试 / 运维 / PMO / 外包） |
 
@@ -232,11 +235,11 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 | 包 | 形态 | 职责 | 依赖的 seam |
 |---|---|---|---|
 | `@heluo/forge-enterprise` | umbrella bundle | 组合下列行，给两端共用 | `cordis.patch.yml` |
-| `@heluo/forge-iam` | Host + Client 插件 | OIDC/OAuth 登录、刷新、令牌镜像、MCP token broker、账户 UI | `credentials`、`authorization`、`webServer`、`llm` |
+| `@heluo/forge-iam` | Host + Client 插件 | OIDC/OAuth 登录、刷新、令牌镜像、账户 UI；MCP token broker 仅按后续获批集成需要评估 | `credentials`、`authorization`、`webServer`、`llm` |
 | `@heluo/forge-gateway` | 配置 bundle | 企业模型路由、白名单、重试策略 | `llm-pi-ai` |
 | `@heluo/forge-policy` | Host 插件 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 | `tools/pre-execute`、`tools.guard`、`otel` |
-| `@heluo/forge-devops` | MCP server（HTTP）+ bundle | 只读查询工具面（以用户故事/需求读取为主，待提供方澄清；P1 可先以本地 stdio 验证，P2 切换为 `streamable-http`） | `mcp-client` |
-| `@heluo/forge-gitee` | MCP bundle（stdio） | 复用 `mcp-gitee`，arm64 自编译 | `mcp-client` |
+| `@heluo/forge-devops` | CLI 接入（工具面） | 复用 DevOps CLI，经白名单开放已确认的只读命令；不建设 MCP 服务 | bash seam、策略门禁、凭据注入、审计 |
+| `@heluo/forge-gitee` | CLI 接入（工具面） | 复用 Gitee 的 `gh` 兼容 CLI，经白名单开放只读命令；不自建 MCP 或交叉编译 | bash seam、策略门禁、凭据注入、审计 |
 | `@heluo/forge-sdd` | Skill pack + CLI | 产物契约、freeze/指纹、归档与 PR | `skill-filesystem`；路径门禁由 policy 执行 |
 | `@heluo/forge-market` | 配置 bundle | 私有 index、私有 registry、版本门禁 | `plugin-market`、`plugin-manager` |
 | `@heluo/forge-brand` | 配置 bundle | 产品名、Logo、主题 token | `brand`、`client-ui-theme` |
@@ -249,9 +252,9 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 
 **流程**：Authorization Code + PKCE（S256）→ 系统浏览器 → IAM 登录页 → `http://127.0.0.1:<port>/oauth/callback` → 校验 `state` / `nonce` / `iss` / `aud` → 写令牌。
 
-**存储**：refresh token 与元数据存为 `CredentialKey` 记录；模型网关的 access token 镜像到 `CredentialRef: ENTERPRISE_ACCESS_TOKEN`，因为 `llm-pi-ai` 只解析引用。MCP 的 token 不落固定引用，由 IAM 插件的 token broker 按 `resource` 取用并缓存。
+**存储**：refresh token 与元数据存为 `CredentialKey` 记录；模型网关的 access token 镜像到 `CredentialRef: ENTERPRISE_ACCESS_TOKEN`，因为 `llm-pi-ai` 只解析引用。仅在后续 MCP 集成经批准且需要时，由 IAM 插件 token broker 按 `resource` 取用并缓存。
 
-**按资源取 token**：RFC 8707 要求 token 绑定目标资源，MCP 的 HTTP server 按自己的 canonical URI 校验 `aud`。broker 在授权与刷新时带 `resource`，缓存键为 `(resource, scope)`；stdio server（如 Gitee）按 MCP 规范从环境取凭据，若企业 Gitee 支持 IAM 令牌或 Token Exchange，则由 broker 注入并在轮换时重启 `stdio` 子进程，否则在 `CORP-DSH-GITEE-001` 中配置用户级 Gitee OAuth/PAT 引用。若 IAM 不支持 `resource`，退化为按 audience 预注册多个 client，仍保持一资源一 token。
+**按资源取 token**：RFC 8707 要求 token 绑定目标资源。对经批准的 HTTP MCP 集成，server 按自己的 canonical URI 校验 `aud`；broker 在授权与刷新时带 `resource`，缓存键为 `(resource, scope)`。DevOps/Gitee 当前复用 CLI，不经过 MCP server；各平台所需用户凭据及撤销方式由 `CORP-DSH-DEVOPS-001` 与 `CORP-DSH-GITEE-001` 分别确认。若 IAM 不支持 `resource`，仅在获批 MCP 接入中评估按 audience 预注册多个 client，仍保持一资源一 token。
 
 **刷新与并发**：把“判断有效期 → 刷新 → 写回”整体放进 `ctx.credentials.modifyRecord`（进程内辅以 single-flight）。该 API 的互斥跨进程生效，防止桌面与 web 两个进程同时轮换 refresh token；在锁内先复查有效期，后到者直接复用。为防止 IAM 响应缓慢导致文件锁长期阻塞本机其他凭据读取，锁内网络刷新请求必须设硬超时（≤5 秒），并在 P0-4 实测异步回调的锁超时与释放行为；刷新失败区分 `invalid_grant`（需重新登录）与网络错误（释放锁后退避重试）。
 
@@ -295,15 +298,15 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 
 ### 7.3 工程系统工具
 
-**DevOps MCP**（自研，目标形态为服务端 `streamable-http`；P1 概念验证可先用本地 `stdio` 验证工具面）：只提供只读查询，工具名 `mcp__devops__<verb>_<noun>`。主要用途是读取用户故事/需求作为 spec 生成输入，并提供其他提升效率的查询；具体工具面、字段与 scope 由 DevOps 提供方澄清后确定，本文不预设清单或数量。DSH 不接入生产写工具，生产环境变更由既有变更平台与人工流程承担（需求基线 N9）。
+**DevOps**：复用现有 CLI，经 `@heluo/forge-devops` 以受控命令白名单开放只读查询，优先支持读取用户故事/需求作为 spec 生成输入。具体命令、字段、权限与结构化输出由 DevOps 提供方澄清后确定；工具面经确认前不开放相关命令。DSH 不接入生产写工具，生产环境变更由既有变更平台与人工流程承担（需求基线 N9）。只有 CLI 无法满足已确认的稳定结构化输出、用户权限校验或必要身份能力时，才重新评估 MCP 服务；该评估需单独确认，不视为当前建设项。
 
 **只读面约束**：受控清单只登记经提供方确认的只读工具；工具描述中的 `mutating` 仅作提示，不能作为授权依据；不在清单内或无法判定读写的工具一律拒绝。服务端按用户、项目与环境独立授权，客户端标签不扩大权限。
 
-**Gitee**：复用 `oschina/mcp-gitee`（本地 `stdio`），arm64 自行交叉编译并校验 checksum；工具面默认只读，写操作（建分支、评论、提 PR）单独开关。
+**Gitee**：复用现有 `gh` 兼容 CLI，经 `@heluo/forge-gitee` 以受控命令白名单开放仓库、Issue 与合并请求只读查询。命令、JSON 字段稳定性、凭据注入与银河麒麟 aarch64 可用产物仍待 Gitee 团队/平台组核实；未核实前不开放工具。写操作不属于本期范围。
 
-**按请求取 token 与 `stdio` 重连**：原方案核验记录表明 `headers` 与 `env` 在加载时求值；拟议 auth provider 回调须按请求取得目标资源令牌，并在当前主体内按资源/scope隔离缓存，切换身份清理旧缓存。HTTP 的 401 刷新不等于可以无条件重放：仅在确认鉴权拒绝且未执行，或受控契约证明安全时，才允许按已冻结策略重试；无法确认未执行的请求不自动重放。`stdio`凭据更新时重新解析引用并重启子进程。该补丁是一期核心改动的目标例外，50–80行仅为初估；向上游提案，未合入时由内部源承载，具体接口、工作量和兼容性仍须P1/P2验证。
+**MCP 身份处理**：如其他获准集成确需 MCP，HTTP 按资源获取并校验目标资源令牌；`stdio` 凭据更新时重新解析引用并按已验证方案重连。任何刷新都不得导致结果未知的写请求自动重放。DevOps/Gitee 当前 CLI 形态不依赖 MCP token broker 或 MCP client 补丁；如补丁仍为其他范围所需，应由对应设计单独说明。
 
-**HTTP server 的 OAuth 义务**：按 MCP 2026-07-28，DevOps MCP（HTTP）需暴露 `/.well-known/oauth-protected-resource`（RFC 9728），校验 token 的 `aud` 等于自身 canonical URI，401 响应带 `WWW-Authenticate: Bearer resource_metadata=...`。Gitee 走 `stdio`，按规范从环境取凭据，不做 HTTP OAuth 流程。
+**MCP HTTP OAuth 义务**：任何经决策启用的 HTTP MCP server 均须按适用规范暴露 Protected Resource Metadata 并校验目标资源 audience。DevOps MCP 服务当前不建设，Gitee 也不使用 `stdio` MCP；其具体协议义务不再作为本期工具接入项。
 
 **上下文预算**：每个 server 的工具数上限 12；不用的 server 在 preset 里禁用；流程性知识放 skill，不放工具描述。
 
@@ -373,7 +376,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 |---|---|---|---|---|
 | Windows | 50%（约 400 人） | MSI（用户自助安装为主，MDM 推送可选） | DSH Desktop + `desktop` profile | 官方 feed 或内部 feed |
 | 银河麒麟 aarch64 | 50%（约 400 台） | deb + 内部 apt 源（自带 Node 24 与预构建 profile） | `systemd --user` 常驻（严格绑定 `127.0.0.1`）+ `.desktop` 调用 `dsh-web-open` 包装脚本读取本机 launch URL 打开浏览器 | apt + 版本门禁 |
-| 内部服务 | — | — | Registry、Index、Kong、DevOps MCP、IAM、OTel Collector | 各自发布 |
+| 内部服务 | — | — | Registry、Index、Kong、IAM、OTel Collector；DevOps MCP 为条件项，当前不建设 | 各自发布 |
 
 麒麟不在用户端编译：`node-pty` 等原生模块在 arm64 构建机预编译后打进 deb。沙箱按 P0 结论三选一（bwrap / Landlock / 自定义 runner），由于麒麟占试点终端的一半（约 400 台），P0 麒麟实机验证为试点准入硬门禁。
 
@@ -408,7 +411,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 - **内部包**：SemVer；`engines.dsh` 写区间；host 插件与 client 插件同版本发布。
 - **通道**：`internal`（默认）与 `canary`（灰度）；可选插件故障可单行回滚，身份/策略/审计相关回滚须同时检查依赖与服务端兼容，不能恢复到缺失强制控制的版本。
 - **发布单元**：记录 DSH、企业插件、策略、MCP、skill 与两端 profile 的版本组合、校验与兼容证据；不仅锁单个包。首次安装、升级失败、回滚和停用安全插件都纳入负向回归，演练通过后才声明可回滚。
-- **上游**：MCP 补丁提 PR；若上游暂未合入，由内部私有 registry 维护带补丁版本；identity seam 以 RFC 形式提案，避免长期维护大面积核心 fork。
+- **上游**：仅在未来 MCP 补丁经单独评审批准后才提 PR；若获批且上游暂未合入，再评估内部维护带补丁版本。当前 DevOps/Gitee CLI 接入不产生此补丁需求。
 
 ## 12. 交付组织与职责
 
@@ -419,9 +422,9 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 | IAM 协议、资源注册与撤权 | C | A/R | C | C | C | C | I | I |
 | IAM 客户端插件与凭据生命周期 | A/R | C | I | I | I | C | C | I |
 | 网关契约、容量与日志控制 | C | C | A/R | I | I | C | C | I |
-| DevOps MCP 与只读查询接口 | R | C | I | A/R | I | C | C | C |
+| DevOps CLI 只读命令与查询接口 | R | C | I | A/R | I | C | C | C |
 | Gitee 授权契约 | R | C | I | I | A/R | C | I | I |
-| 本地 Gitee MCP 与 SDD 包 | A/R | I | I | C | C | C | I | I |
+| Gitee CLI 只读命令与 SDD 包 | A/R | I | I | C | C | C | I | I |
 | 策略、安全基线与审计要求 | R | C | C | C | C | A | C | I |
 | 终端打包、内部源与支持通道 | R | I | I | I | I | C | A/R | C |
 | 批次、指标、投入与试点去留 | R | C | C | C | C | C | R | A |
@@ -435,8 +438,8 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 | IAM 接入 | IAM 团队 | 端点、claims、资源/client方案、TTL与撤销；按阶段冻结并留未验清单 | G0方向及P0联调；G1接入契约；G2生产运行流程 |
 | 网关契约 | 网关团队 | 验签、consumer、双维度额度、429与C1/C4；保留期、故障和容量单独签署 | G0方向及P0联调；G1接入契约；G2运行参数 |
 | 麒麟验证 | 平台组 | 实测输出、沙箱候选、runner方案与原生模块清单；工程化再验 | G0前置验证；G2安装与隔离 |
-| DevOps MCP | DevOps 团队 | 工具/scope/PRM 与只读契约；具体工具面由提供方澄清 | G1只读和资源契约；G2运行参数 |
-| Gitee 集成 | 平台组 | 版本、arm64构建、用户凭据/scope与只读隔离；写开关及审计 | G1只读契约；G2可选写入开放决定 |
+| DevOps CLI 接入 | DevOps 团队 | 只读命令、字段、结构化输出、凭据注入与版本兼容；CLI 不满足必要前提时另提 MCP 形态评审 | G1只读命令契约；G2运行参数 |
+| Gitee CLI 接入 | 平台组 + Gitee 团队 | CLI 版本、aarch64产物、用户凭据与只读命令隔离；写操作不在本期 | G1只读命令契约；后续写能力须单独走范围决策 |
 | 策略与审计 | 安全 + 平台组 | 7 类角色 preset、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 | G2 |
 | 分发与市场 | 平台组 + IT | registry 与 index、通道、兼容门禁、回滚步骤 | G2 |
 | 终端打包 | 平台组 + IT | MSI 自助安装/MDM、deb/apt/`systemd --user`（`127.0.0.1`）与 `dsh-web-open` 脚本、更新回滚 | G2 |
@@ -447,7 +450,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 
 **阶段门禁（全库统一口径）**：
 - **G0（方案评审与前置验证门禁，第 1 周末）**：冻结 L1/L2/需求基线，完成 P0 前置验证（麒麟实机、IAM 联调、网关契约草案）。
-- **G1（概念验证门禁，第 5 周末）**：完成 P1（4 周）核心插件、MCP 补丁与 DevOps/Gitee 只读闭环，通过 10 人内测。
+- **G1（概念验证门禁，第 5 周末）**：完成 P1（4 周）核心插件、DevOps/Gitee CLI 只读闭环与凭据/双端核验，通过 10 人内测；MCP 补丁不是该门禁前提。
 - **G2（试点准入门禁，第 9 周末）**：完成 P2 工程交付（4 周，含安装包、私有市场、7 类角色策略与 SDD），准入 3 部门 800 人试点。
 - **G3（推广门禁，第 15 周末）**：完成 6 周试点运行与指标（M1–M3、M5–M6）评估，达标后进入 P3 持续推广。
 
@@ -458,7 +461,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 | 门禁 | 必须具备的证据摘要 | 拟签署职责 | 未关闭时的动作 |
 |---|---|---|---|
 | G0 | P0 实机与联调证据、范围和需求基线、团队认领/替代路径/计划、G1/G2遗留项清单 | 平台牵头架构，相关能力团队确认输入，安全/IT/PMO确认各自前置项；实名待定 | 不把“已发函”或口头可行当作前置验证通过 |
-| G1 | 按锁定版本完成登录/刷新、MCP补丁与只读闭环，10人内测，DevOps/Gitee契约冻结及容量基线 | 平台与 IAM/网关/DevOps/Gitee 对本域证据负责，安全评审 | 有条件条目明确禁用范围、负责人和关闭门禁 |
+| G1 | 按锁定版本完成登录/刷新、DevOps/Gitee CLI 只读闭环及契约冻结、10人内测与容量基线 | 平台与 IAM/网关/DevOps/Gitee 对本域证据负责，安全评审 | 未核验 CLI 命令保持禁用；MCP 补丁仅在另行批准后验收 |
 | G2 | A1–A9/A14、两端隔离、服务端权限、最小必要审计、安装/支持、容量阈值与恢复证据；SDD按WBS交付 | 平台/IT确认交付，安全确认控制，PMO/业务批准批次准入，相关服务负责人确认承载 | 未验安全控制不得延期到G3；只冻结未通过能力不能自动缩减已批准范围 |
 | G3 | A10–A13与M1–M3、M5–M6完整观察窗口、故障/问卷证据及可追溯结论 | PMO/业务签署去留，平台/安全/IT与各服务团队提供本域证据 | 按需求基线§6.2停止扩量、延期复测或进入推广；“有条件通过”不是已通过G3 |
 
@@ -488,13 +491,14 @@ G0 先取得方向、负责人、可联调性与计划，但 P0 要求的验证�
 |---|---|---|---|
 | ADR-1 | 每人一套 DSH | 共享实例多租户 | 少 8–12 人周，但无法团队共享会话 |
 | ADR-2 | 令牌直通网关 | 客户端换发 API Key | 客户端无 Key；要求网关支持 JWKS 或 introspection |
-| ADR-3 | 外部系统用 MCP，策略用原生插件 | 全部原生 / 全部 MCP | 工具面解耦；DevOps 走 HTTP MCP，Gitee 走本地 stdio MCP |
+| ADR-3 | 外部系统用 MCP，策略用原生插件（历史决策，接入形态由 ADR-10 修订） | 全部原生 / 全部 MCP | 保留工具协议解耦原则；DevOps/Gitee 当前按 CLI 优先 |
 | ADR-4 | `tools/pre-execute` + `guard` 做门禁 | 每宿主 hooks.json | 一条策略路径；不维护独立 hook 引擎 |
 | ADR-5 | 必装走 umbrella bundle，可选走市场 | 全部走市场 | 首次可用不依赖网络；市场只治理增量 |
 | ADR-6 | SDD 做 skill 包，不做产品 | 五环七层产品 | 维护面小；流程强度靠 `@heluo/forge-policy` 路径规则补 |
 | ADR-7 | 一期默认官方 App，不白标 | 本期直接自建白标发行 | 与需求基线N3一致；G0确认现有路线，确需白标走范围变更与单独立项，不靠开放问题自动扩大范围 |
 | ADR-8 | 一个会话、按资源取 token | 单一宽 audience token | 泄漏半径小；优先resource，不支持时由IAM确认按audience/client替代，仍保持目标资源隔离 |
 | ADR-9 | 安全依赖不可绕过，确认不可用即拒绝（新增提议） | 禁用policy/审计后继续调用；approval=never视为自动确认 | 明确本机管线防Agent误用与服务端最终鉴权分工；G2增加安全插件关闭、无确认UI与绕过负向验收，可能增加跨端验证投入 |
+| ADR-10 | DevOps 与 Gitee 复用已有 CLI 作为工具面；仅在 CLI 无法满足已确认的必要能力时，另行评估 MCP | DevOps 自建 HTTP MCP、Gitee 复用 `mcp-gitee` 并交叉编译 | 减少自建服务、协议适配和麒麟端编译维护；依赖 CLI 的稳定结构化输出、凭据注入和双端可用性核验；细节不满足时先关闭相应命令，再提交形态变更评审 |
 
 ADR-9 为本版待评审提议，审核/批准未填写，不代表安全团队已承诺实现。原有工期与代码行数为估算，不构成接口完成或排期承诺。
 
@@ -509,7 +513,7 @@ ADR-9 为本版待评审提议，审核/批准未填写，不代表安全团队�
 | 凭据文件（含 `refresh_token`）被 agent 读取并经内网工具外传 | 高 | `@heluo/forge-policy` 对 `$DSH_HOME/**` 硬拒绝 + 沙箱遮蔽挂载 + 短 TTL 与可撤销令牌 | 平台组 + 安全 |
 | 白标与官方更新策略冲突 | 中 | 一期官方 App；白标单独立项 | 产品 |
 | 网关验签方式待确认（JWKS / introspection） | 中 | P0 用真实 token 联调；不支持 JWKS 则改 introspection | 网关 + 平台组 |
-| MCP OAuth broker 与 Gitee 身份映射复杂度 | 中 | HTTP 优先支持 `resource`（不支持则按 audience 预注册 client）；Gitee 明确 IAM 映射或独立凭据 | 平台组 |
+| DevOps/Gitee CLI 凭据注入与身份映射未确认 | 中 | G1 前分别核实 CLI 的认证、授权、刷新与撤销；未确认的命令保持禁用 | 平台组 |
 | 标准漂移（OAuth 2.1 / MCP） | 中 | 兼容性套件固定规范版本；升级先跑套件 | 平台组 |
 | 将preset或本机配置误当不可绕过企业授权 | 高 | 服务端独立验权限/环境；本机管线只作为Agent控制层；两端安全依赖关闭与绕过负向测试 | 各服务团队 + 安全 + 平台组 |
 | 容量、观察窗口或支持能力未经确认就承诺15周 | 高 | P1取得测量基线，G2前冻结阈值与批次支持，末批窗口不足则重排并停止扩量 | 网关/模型 + IT + PMO |
@@ -522,11 +526,11 @@ ADR-9 为本版待评审提议，审核/批准未填写，不代表安全团队�
 heluo-forge/
 ├─ packages/
 │  ├─ forge-enterprise/   # umbrella patch
-│  ├─ forge-iam/           # host + client (含 MCP token broker)
+│  ├─ forge-iam/           # host + client (模型令牌；MCP broker 按需评估)
 │  ├─ forge-gateway/      # bundle only
 │  ├─ forge-policy/        # host plugin (含门禁、$DSH_HOME 保护、SDD 路径规则与审计)
-│  ├─ forge-devops/        # streamable-http server & bundle
-│  ├─ forge-gitee/        # stdio mcp row + arm64 binary
+│  ├─ forge-devops/        # existing CLI + read-only command allowlist
+│  ├─ forge-gitee/        # gh-compatible CLI + read-only command allowlist
 │  ├─ forge-sdd/           # skills + CLI
 │  ├─ forge-market/       # index + registry
 │  └─ forge-brand/        # brand tokens

@@ -6,24 +6,26 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.1.2 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：2026-10-20 核对仓库结构、`package.json`、`pnpm-workspace.yaml`、`scripts/check-*.mjs` 与 `.github/workflows/check.yml` 的实际内容；工具链实测为 Node.js 24.21.0、pnpm 11.28.5。未执行远端 CI，也未发布任何包。
 >
 > 关联文档：[工程仓库结构设计](<repository-structure-design.md>)、[逐模块设计索引](../design/README.md)、[文档总览](../README.md)、[项目协作规范](../../AGENTS.md)。
 
+2026-10-21 复核根脚本、工作流、市场包与参考服务及其测试。当前默认工具链与声明不一致时，验证报告须写明实际版本；不将上述历史 Node 24 实测沿用为当前环境证明。
+
 ## 1. 结论
 
 仓库采用 pnpm workspace 单仓多包。`packages/` 放安装进 DSH 的扩展，`services/` 放独立运行的服务，`deploy/` 放部署资产。根工程不发布，子包只在设计完成、接口核验与测试具备后才建立清单。
 
-合入前必须通过 `pnpm check`：文档与仓库结构检查、检查器单元测试。CI 以只读权限执行同一组离线命令。
+合入前必须通过 `pnpm check`：文档与仓库结构检查，加上 `node --test` 自动发现的全部测试。当前已覆盖检查器、市场插件、目录参考服务与本地集成链路；CI 以只读权限执行同一定义。其余模块的测试矩阵仍为规划，不由市场测试代替。
 
 ## 2. 工作区与依赖
 
@@ -58,10 +60,10 @@
 | 层级 | 位置 | 负责验证 | 当前状态 |
 |---|---|---|---|
 | 工程工具测试 | `tests/` | 文档与仓库检查器本身的正反向行为 | 已建立 |
-| 包单元测试 | `<package>/test/` | 模块内部逻辑与配置解析 | 待模块实现 |
-| 契约测试 | 各包或 `tests/contracts/` | 与 IAM、网关、DevOps 的字段与错误语义 | 待联调 |
-| 集成测试 | `tests/integration/` | 多组件协作与失败传播 | 待环境 |
-| 端到端 | `tests/e2e/` | Windows 与银河麒麟实机路径 | 待实机 |
+| 模块单元测试 | `packages/forge-market/test/`、`services/market-index/test/` | 市场内部逻辑、配置、服务端点与失败行为 | 已建立；其余模块未实现 |
+| 契约测试 | 市场包 `test/` | 市场自有协议、错误码、配置与包形态 | 市场已有本地用例；IAM、网关、DevOps 等企业契约仍待联调 |
+| 集成测试 | `packages/forge-market/test/integration.test.mjs`、`tests/integration/` | 本地 HTTP 归档安装、目录模式一致性与失败传播 | 已建立；临时目录与仿服务，不访问企业系统 |
+| 宿主与终端验收 | DESIGN-007 历史记录；后续实机证据 | DSH 挂载、Windows 与银河麒麟业务路径 | 有测试 profile 挂载/面板记录，已恢复；双端企业路径未验，无 `tests/e2e/` 自动化入口 |
 
 - 没有真实用例时不建立会“零用例成功”的业务测试入口。
 - 安全负向用例（拒绝、超时、结果未知、权限不足）与正向用例同等对待。
@@ -69,10 +71,11 @@
 
 ## 6. 检查与 CI
 
-- 本地：`pnpm check` 依次执行 `check:docs`、`check:repo`、`test:unit`。
+- 本地：`pnpm check` 直接串行执行两个检查脚本与 `node --test`；`test:unit` 当前也是全量 Node 测试发现，不能按命名误解为仅工程单元测试。
+- 需要缩小范围定位时使用根 README 的市场包/参考服务命令；全量检查已覆盖的有效结果无需重复执行。真实仓库归档检查与 DSH/企业实机操作不进入离线 CI。
 - `check:docs` 校验元数据、登记一致性、链接与锚点、表格列数、禁写修订记录与询问函问题序列。
 - `check:repo` 校验必需文件、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径。
-- CI 使用 `.github/workflows/check.yml`，默认 `contents: read`，外部动作固定到完整提交 SHA，不使用 `pull_request_target`。
+- CI 使用 `.github/workflows/check.yml` 的单个 `verify` job，执行 `node --run check`；默认 `contents: read`，外部动作固定到完整提交 SHA，不使用 `pull_request_target`。触发与依赖策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
 - CI 只跑离线检查；不接触企业系统、不注入生产密钥、不自动发布。
 
 ## 7. 版本与发布

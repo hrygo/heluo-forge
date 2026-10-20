@@ -6,24 +6,24 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.22 |
+| 版本 | V0.2.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | — |
 
 ## 1. 结论
 
-本索引管九个安装进 DSH 的包与两个独立运行的服务。每个模块先完成详细设计，再建立包清单与源码；设计未完成或接口未核验时，`packages/` 与 `services/` 中对应目录只保留职责说明。
+本索引管九个 DSH 扩展入口与两个独立服务入口。各模块详细设计均已建立且仍为草案；`forge-market` 已有包清单、Host/Client 实现与测试，`market-index` 已有 HTTP 参考实现，其余模块只有职责 README。设计状态、代码实现与上线准入分别判断。
 
 详细设计使用[模块设计模板](../templates/design-template.md)，外部字段级契约仍以[契约目录](../contracts/gateway-contract.md)为唯一真源，设计只引用不复制。
 
 ## 2. 安装包设计
 
-| 包 | 形态 | 设计文档 | 状态 | 主要待确认 |
+| 包 | 形态 | 设计文档 | 设计状态 | 主要待确认 |
 |---|---|---|---|---|
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案 | 提供者 API 实测、账户页 slot、IAM 的 `resource` 与轮换能力 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案 | 拦截钩子实测、策略与沙箱叠加顺序、审批注册、`$DSH_HOME` 范围 |
@@ -33,22 +33,30 @@
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | aarch64 产物、凭据注入、结构化输出、只读命令面 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案 | aarch64 产物、环境变量鉴权、JSON 稳定性、命令面 |
 | `@heluo/forge-sdd` | Skill pack + CLI | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案 | CI 触发方式、原子提交边界、产物与需求编号联动 |
-| `@heluo/forge-market` | 客户端插件（借鉴上游、自研主体） | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 面板注册方式、卡片可复用范围、归档可直接安装、镜像策略 |
+| `@heluo/forge-market` | Host + Web Client，附配置 bundle | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 真实 Gitee 归档、group 归属、摘要/兼容性门禁、IAM/角色、镜像与完整页面 |
 
-设计文档路径相对本目录。详细设计落盘时才创建 `plugins/` 目录与对应文件，不预建空文件。
+设计文档路径相对本目录；九份正文均已落盘，不表示九个包均已实现。
 
 ### 2.1 跨模块设计
 
 网关凭据双模式横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V0.1 草案）。
 
+### 2.2 实现与验证入口
+
+| 模块 | 当前实现 | 验证边界 |
+|---|---|---|
+| [forge-market](../../packages/forge-market/README.md) | 十个工具、Host 路由、列表面板、本地目录/缓存与归档安装链路；包保持 `private: true` | 离线测试已有；2026-10-20 测试 profile 挂载与面板状态有历史记录，已恢复 profile；真实 Gitee 与双端企业闭环未验 |
+| [market-index](../../services/market-index/README.md) | HTTP 参考服务、共享管理令牌、内存态提交/评审/撤回、可选计数文件 | 服务与跨模块测试已有；无独立包清单、生产身份、Gitee 扫描或业务数据持久化 |
+| 其余八包与 DevOps MCP | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
+
 ## 3. 独立服务设计
 
 | 服务 | 代码位置 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
-| DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设 | 取决于 CLI 三项前提；满足任一才启动 |
-| 插件市场服务 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 规划 | Gitee 检索字段、发现范围、评审归属、部署方式 |
+| DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设，当前不建设 | CLI 前提不成立时先评审形态变更、范围与成本，批准后才启动 |
+| 插件市场服务 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 已有参考实现；生产仍规划 | Gitee 发现与校验、IAM/角色、持久化、部署与恢复 |
 
-私有 npm 制品仓库不是自研服务，优先复用企业现有 registry，部署与运维边界见[部署说明](../../deploy/README.md)。
+私有 npm 制品仓库不是自研服务；当前市场安装取 Gitee 归档，registry 接入或镜像仍待确认。部署与运维边界见[部署说明](../../deploy/README.md)。
 
 ## 4. 设计顺序
 
@@ -57,7 +65,7 @@
 ```text
 forge-iam → forge-policy → forge-enterprise
 forge-gateway → forge-brand → forge-market
-forge-devops → devops-mcp 服务
+forge-devops → CLI 前提核验 → 形态评审获准后才建设 devops-mcp
 forge-gitee → forge-sdd
 market-index 服务 → forge-market 的目录来源
 ```

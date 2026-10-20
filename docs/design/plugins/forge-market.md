@@ -6,17 +6,17 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.53.0 |
+| 版本 | V0.57.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | G2 |
-| 模块状态 | 规划 |
+| 模块状态 | 已实现开发验证版本；企业准入未完成 |
 
-> 编制依据：2026-10-20 核验 `dsh-plugin-market`、`dsh-plugin-manager`、`dsh-client-ui-plugin-market`、`dsh-host-plugin-inventory` 等上游包存在；核验开源实现 `bradeGithub/DSH-Plugins-Marketplace`（MIT，182★，2026-10-20 仍推送，`cordis.patch.yml` 以 `inject: [webServer]` 挂载）。用户已确认：fork 可用；开发者自助上传；插件来源限定企业 Gitee 专门 group（全员可浏览，建仓需管理员批准）。**未核验**：客户端面板注册方式、参考实现的可复用范围、Gitee 归档能否被安装器直接消费。用户裁定（2026-10-20）：仅允许从该 group 安装，其它插件须由有权限人员上传至该 group；实现上拷贝必要代码或借鉴，不做整仓 fork；参考实现为 `dsh-market/dsh-market`（MIT，7.7k★，301 fork，2026-10-20 活跃）。
+> 编制依据：2026-10-20 核验 `dsh-plugin-market`、`dsh-plugin-manager`、`dsh-client-ui-plugin-market`、`dsh-host-plugin-inventory` 等上游包存在；核验开源实现 `bradeGithub/DSH-Plugins-Marketplace`（MIT，182★，2026-10-20 仍推送，`cordis.patch.yml` 以 `inject: [webServer]` 挂载）。用户已确认：fork 可用；开发者自助上传；插件来源限定企业 Gitee 专门 group（全员可浏览，建仓需管理员批准）。**原核验缺口**：客户端面板注册、参考代码复用范围与真实 Gitee 归档；面板后续已有 §6.1 / §8.3 实机记录，本地 HTTP 归档已有自动化用例；参考代码逐文件比对与真实 Gitee 验收仍未完成。用户裁定（2026-10-20）：仅允许从该 group 安装，其它插件须由有权限人员上传至该 group；实现上拷贝必要代码或借鉴，不做整仓 fork；参考实现为 `dsh-market/dsh-market`（MIT，7.7k★，301 fork，2026-10-20 活跃）。
 >
 > 关联文档：[市场服务](<../services/market-index.md>)、[Gitee 接入](<forge-gitee.md>)、[总体架构 §2 P5](../../architecture/platform-architecture.md)。
 
@@ -29,6 +29,10 @@
 安装来源唯一：只从企业 Gitee 的专门 group 安装。其它插件须由有权限人员上传进该 group，再经上架评审后才能被安装。
 
 边界：不存插件源码，不做评审判定，不做构建。评审与目录在服务端（DESIGN-012）。
+
+2026-10-21 依据当前包清单、Host/Client、安装模块与测试复核：已有十个工具、宿主目录/详情路由、bundle 详情列表面板、服务/本地目录、缓存与可选落盘。下文页面、身份与治理描述中未注明已实现者仍为设计目标；不由代码存在推断设计批准或生产就绪。历史测试 profile 挂载与面板验证完成后已卸载并恢复，本次未重做实机。
+
+当前实现限制以[模块说明](../../../packages/forge-market/README.md#当前实现限制)为入口：专门 group 授权、必需摘要、IAM/角色、完整策略、落盘原子性与真实 Gitee 验收仍未闭环。
 
 ## 2. 目标与非目标
 
@@ -84,7 +88,7 @@ packages/forge-market/
 ├── client.js                 客户端面板：列表、加载与缓存状态
 ├── src/
 │   ├── index.mjs             插件入口：注册工具与 HTTP 路由
-│   ├── market-tools.mjs      六个工具的定义与执行
+│   ├── market-tools.mjs      十个工具的定义与执行
 │   ├── client.mjs            服务客户端：超时、错误码映射
 │   ├── catalog.mjs           条目与版本归一化、排序、过滤
 │   ├── installer.mjs         版本规划、域名白名单、摘要、路径白名单
@@ -105,7 +109,7 @@ packages/forge-market/
 
 离线目录模式（`catalogFile`）与服务模式二选一：前者从本地 JSON 读条目，供演示、隔离网与 CI 跑通全链路；该模式只读，提交返回 `read-only`。
 
-网络访问只出现在两处：`client.mjs` 调市场服务，`install.mjs` 的下载器取归档。其余模块是纯计算或纯文件操作，可单独测试。
+网络请求由 `client.mjs` 访问市场服务、`install.mjs` 的下载器获取归档；工具与 `live-check.mjs` 调用这些模块，浏览器面板另通过同源 `fetch` 访问宿主路由。其余逻辑可用仿服务或文件独立测试。
 
 `detail`、`submit`、`diagnostics` 三个页面尚未实现；当前客户端只有列表面板，提交与诊断走工具而非界面。
 
@@ -116,8 +120,10 @@ packages/forge-market/
 | 市场列表 | 卡片：名称、一句话说明、下载量、star、版本 | 搜索、按下载量或 star 排序 |
 | 插件详情 | 说明、适用场景、维护人、版本、`engines.dsh`、仓库链接 | 选版本、安装、更新 |
 | 提交 | 仓库地址、版本标签、说明、场景 | 提交后显示待审状态 |
-| 我的提交 | 条目与状态：待审、通过、退回（附理由） | 退回可改后重提 |
+| 我的提交 | 条目与状态：待审、通过、退回（附理由） | 退回可改后重提；需要 `submitter`，否则返回 `identity-unavailable` |
 | 未收录诊断 | 扫描到但未通过校验的仓库与错误码 | 仅管理员可见 |
+
+「我的提交」按 `submitter` 过滤：服务端没有账号体系，这个值是调用方自报的，所以它只用于分开展示，不构成权限。未配置时报 `identity-unavailable`，而不是把整张目录当成"我的"。
 
 上表是**信息架构**，不等于全部由面板承载。本包的面板只读：列出条目并显示缓存回退，不提供安装、提交或评审按钮——浏览器侧没有配置与工具通道，写操作一律走 agent 工具（`market_install`、`market_submit`、`market_mine`、`market_diagnostics`）。把上表读成"面板应有五个页面"会误判完成度，故在此写明。
 
@@ -170,23 +176,23 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 | 列表 | `GET /api/plugins` | `name`、`title`、`summary`、`version`、`downloads`、`stars`、`engines` |
 | 详情 | `GET /api/plugins/{name}` | 上列字段 + `scenarios`、`maintainer`、`repo`、`versions[]`、`latest`；每个版本带 `revoked` 与 `superseded`；`maintainer` 为空时界面显示「未知」，不得显示为空白或「无」 |
 | 提交 | `POST /api/plugins` | `name`、`repo`、`tag`、`summary`、`scenarios` |
-| 我的提交 | `GET /api/plugins?mine=1` | 按调用方身份过滤；`state`、`reason`；对应工具 `market_mine` |
+| 我的提交 | `GET /api/plugins?mine=1&submitter=` | 按自报标识过滤，非身份授权；缺标识返回 400；退回理由尚未完整暴露给该查询；对应 `market_mine` |
 | 诊断 | `GET /api/admin/unindexed` | `repo`、`errors[]` |
 
 ## 8. 安装链路
 
-1. 详情页选定版本，向服务请求解析结果（含归档地址与期望摘要）。
-2. 下载归档，计算摘要并与服务返回值比对；不一致即中止。
-3. 解包到临时目录，剥离归档顶层目录后按白名单写入（`package.json`、`cordis.patch.yml`、`src/`、`ui/`、`locale/`、`lib/`、`README.md`），其余文件跳过并上报。
-4. 校验 `package.json` 的 `name` 与 `engines.dsh`，与详情页展示一致才继续。
+1. 当前通过 `market_install` 工具选定版本，向服务请求解析结果；详情页安装按钮仍为目标。
+2. 下载归档，有期望摘要时比对，不一致即中止；当前允许缺少期望摘要时继续，尚不满足强制摘要目标。
+3. 在内存中解包，剥离归档顶层目录后按白名单筛选；配置 `targetDir` 时才落盘（`package.json`、`cordis.patch.yml`、`src/`、`ui/`、`locale/`、`lib/`、`README.md`），其余文件跳过并上报。
+4. 校验 `package.json` 包名和可得版本，拦截安装脚本与不安全 patch；宿主版本与 `engines.dsh` 都可得时才检查兼容性。
 5. 返回可直接使用的 loader 行与登记步骤，并附 `version`、`tag`、`directory`，使登记对象与实装版本一一对应；插件不写 profile，由操作者或 `plugin_manager` 完成登记。
 6. 下载计数由服务端在发放归档地址时自增，插件不上报，也不因安装失败回退。
 
-安装时用宿主版本校验 `engines.dsh`，不符则拒绝并给出 `required` 与 `running`；宿主版本不可得时跳过该项校验（这是已记录的降级，不是静默通过）。
+安装时若宿主版本与清单 `engines.dsh` 都可得，检查不符即返回 `incompatible-dsh`，`detail` 包含 `requires`、`running` 与 `why`；任一不可得时跳过，不能视作兼容性已验证。
 
 结果里的 `mode` 区分两种结局：`installed` 表示文件已写入 `targetDir` 并附 `persisted`；`verify-only` 表示只下载校验、磁盘未写入（未配置 `targetDir`）。调用方不得把 `installed` 字段当成已安装。
 
-任何一步失败都回滚临时目录，不留半装状态。
+校验在落盘前完成；`persistFiles` 当前逐文件写入目标目录，没有事务、自动回滚或原子替换。中途写入失败可能留下部分文件，同版本目录重装也不是已验证的恢复流程。
 
 落盘按包名分目录（`targetDir/<scope-name>/`），否则第二个插件会覆盖第一个的 `package.json`；同一目录下的 `package.json` 也是 `market_check_update` 省略 `installedVersion` 时的来源。
 
@@ -237,6 +243,7 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 | `not-found` | 条目 | 目录里没有这个包名 | 核对名称 |
 | `no-path` | 配置 | 缓存或落盘未配置路径 | 否 |
 | `no-registry` | 策略 | 策略未配置制品源 | 否 |
+| `identity-unavailable` | 我的提交 | 未配置 submitter，服务端无法判断“我的”范围 | 配置身份后重试 |
 | `no-repo` | 规划 | 条目没有仓库地址也没有归档地址 | 否 |
 | `no-service-url` | 配置 | 既没有 serviceUrl 也没有 catalogFile | 否 |
 | `no-target` | 配置 | 落盘未配置目录 | 否 |
@@ -283,7 +290,7 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 | `parseEngines` | 已接线 | 解析版本范围 |
 | `checkInstall` | **未接线** | 作用域、预发布、安装脚本、版本钉住四条策略；需要宿主提供 `registryUrl` 与策略对象，参考实现不自行编造 |
 | `parsePackageName` | **未接线** | 仅被 `checkInstall` 使用 |
-| `satisfiesRange` | **未接线** | 仅被 `checkInstall` 使用 |
+| `satisfiesRange` | **未接线** | 未被其他模块直接调用，但由已接线的 `checkEngines` 在 `policy.mjs` 内部调用；测试中的登记按跨模块引用口径统计 |
 
 未接线不等于可删：宿主接入策略层时按此签名调用即可。文档与代码的一致性由 `test/policy-wiring.test.mjs` 守护——新增导出若既未接线、也没登记，测试会红。
 
@@ -315,6 +322,17 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 
 可选服务还有一个陷阱：在 `apply` 里用 `ctx.get('webServer')` 取不到时不能就此跳过注册，因为激活顺序不保证服务已就绪；应使用 `ctx.inject(['webServer'], callback)` 等服务出现后再注册。本包曾因此静默不注册路由：进程起来了，`/api/forge-market/catalog` 却落到 SPA 回退返回 404。
 
+### 8.3.1 归档链路的实测与两处修正
+
+2026-10-20 用本地 HTTP 服务提供的真实 `.tar.gz`（顶层 `<repo>-<tag>/`）跑通 `downloadArchive → extractTarball → checkArchivePaths → installPlugin → buildRegistrationRow`，并补了根集成用例 `tests/integration/market-install-archive.test.mjs`。过程中发现两处会让真实归档装不上：
+
+| 缺陷 | 现象 | 处理 |
+|---|---|---|
+| macOS 生成的 tar 带 `._*`、`.DS_Store` | 顶层目录被判成不止一个 → 不剥离 → 整包被白名单过滤干净 → `missing-manifest` | 解包时忽略这些元数据文件，顶层目录按出现次数取多数 |
+| 运行时版本是 `0.2.1-rc.2` | `parseEngines` 只认 `x.y.z`，预发布被判 `unparsable` → 所有插件都装不上 | 允许 `-rc.N` 后缀，按基础版本比较（近似，非完整 semver 预发布序） |
+
+顺带修了登记行的易用性：`buildRegistrationRow` 返回 `{ ok, row }` 信封，而 `renderPatch`/`registrationInstructions` 要裸行；误把信封传进去会生成 `id: undefined` 的补丁。现在两者都接受信封，失败时抛错而不是产出坏补丁。
+
 ### 8.3 安装后的两条路径
 
 登记行生成后，`registration.steps` 给出两种落地方式，参数形式已对照 DSH 实现核验（2026-10-20，`app.asar` 内 `dsh plugin` 帮助文本）：
@@ -343,11 +361,11 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 
 | 项 | 处理 |
 |---|---|
-| 身份 | 复用 IAM 会话；未登录只读本地已装 |
+| 身份 | 目标为复用 IAM 会话；当前尚无 IAM/角色判断，共享管理令牌与自报 `submitter` 不构成用户授权 |
 | 令牌 | 只从环境变量 `HELUO_MARKET_TOKEN` 读取，不写配置文件、不进 patch、不落日志；缺失时以匿名身份请求，管理端点会返回 401/403 |
-| 归档来源 | 仅接受服务返回的 group 内地址；`allowedHosts` 为空时一律拒绝（配置缺失不等于放开），拒绝任意 URL |
+| 归档来源 | 目标仅允许专门 group；当前 `allowedHosts` 检查主机与端口，空白名单拒绝，尚不验证同主机内 group 归属 |
 | 解包 | 先剥离 Gitee 的 `<repo>-<tag>/` 顶层；白名单内文件写入，其余（`LICENSE`、`docs/` 等）跳过并列入 `skipped`；绝对路径与 `..` 一律拒绝 |
-| 供应链 | 摘要比对；声明 `preinstall`/`install`/`postinstall` 的包在评审与安装两处都被拒绝 |
+| 供应链 | 有期望摘要时比对；声明 `preinstall`/`install`/`postinstall` 的包在评审与安装两处都被拒绝 |
 | 体积 | 下载按 `content-length` 与流式读取双重限制 64 MB；解压用 `maxOutputLength` 限制，避免 gzip 炸弹 |
 | 路由注册 | `ctx.webServer.register({ kind: 'prefix', path: '/api/forge-market', handler })`，返回 disposer。宿主先查 exact 表，再在 prefix 表里取最长匹配，条件是 `pathname === prefix` 或 `pathname.startsWith(prefix + '/')`——因此 `/api/forge-marketx` 不会误入；处理器收到**原始 `req.url`**，路径前缀不会被剥掉。同一 `(kind, path)` 重复注册会抛错（已核验 Host `webserver` 实现，2026-10-20） |
 | 计数 | 插件不上报；服务端在发放归档地址时按（条目, 机器哈希, 日）去重，缺少机器哈希时按（条目, 日） |
@@ -420,7 +438,7 @@ insert 行允许相对路径名（loader 以 patch 文件为锚点），这类�
 
 跟随上游策略：每季度评估一次上游变更，只吸收影响浏览与安装链路的补丁；上游改动集中在已删除模块时不合入。
 
-回退：禁用本插件回到只有官方市场的状态，已装插件不受影响。
+开发验证回退：移除本插件的 profile 登记，已落盘的其他插件需分别管理。企业运行中停用本插件不能成为恢复公网安装的授权；官方入口与角色限制仍须按 REQ-14 由宿主/policy 独立治理。
 
 ## 15. 里程碑
 
@@ -435,7 +453,7 @@ insert 行允许相对路径名（loader 以 patch 文件为锚点），这类�
 
 | 问题 | 需要谁回答 | 影响 | 当前状态 |
 |---|---|---|---|
-| 客户端面板注册方式 | 平台组（实测） | 提交页能否独立成页 | 已按 `plugins.bundle.config` 实现，**未挂载核验** |
+| 客户端面板注册方式 | 平台组（实测） | 列表与完整页面边界 | 已有 §6.1 历史挂载/三状态记录；验证后恢复；独立详情/提交/诊断页未实现 |
 | 参考实现的可复用范围 | 平台组（读源码） | UI 改造量 | 仅借鉴安装与卡片思路，未逐文件比对 |
 | Gitee 归档能否直接安装 | 平台组（试装） | 是否需要镜像 | 代码支持 `archiveUrl` 直连，**未用真实仓库验证** |
 | 归档镜像到制品库 | IT、安全 | 可用性与审计 | 未定；当前回退到仓库地址 |

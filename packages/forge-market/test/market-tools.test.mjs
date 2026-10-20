@@ -468,11 +468,28 @@ test('withdrawn and rejected entries stay out of the list', async () => {
 });
 
 test('market_mine returns my submissions with their state', async () => {
-  const mine = async () => ({ entries: [{ name: '@heluo/a', state: 'pending' }, { name: '@heluo/b', state: 'rejected', reason: 'missing-engines' }] });
-  const tools = buildMarketTools({ ...client, mine });
+  const seen = [];
+  const mine = async (submitter) => {
+    seen.push(submitter);
+    return {
+      entries: [{ name: '@heluo/a', state: 'listed', submitter }],
+      pending: [{ name: '@heluo/b', state: 'pending' }],
+    };
+  };
+  const tools = buildMarketTools({ ...client, mine }, { registration: { submitter: 'alice' } });
   const result = await call(tools, 'market_mine', {});
+  assert.deepEqual(seen, ['alice']);
   assert.equal(result.total, 2);
-  assert.equal(result.entries[1].reason, 'missing-engines');
+  assert.equal(result.submitter, 'alice');
+  assert.equal(result.pending[0].name, '@heluo/b');
+});
+
+test('market_mine refuses to guess an identity', async () => {
+  const tools = buildMarketTools({ ...client, mine: async () => ({ entries: [] }) });
+  const result = await call(tools, 'market_mine', {});
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'identity-unavailable');
+  assert.equal(result.action, 'contact-admin');
 });
 
 test('install refuses a package that needs a newer DSH', async () => {

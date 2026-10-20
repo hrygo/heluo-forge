@@ -1,7 +1,7 @@
 // Cordis 用 standard-schema 校验插件配置：Config['~standard'].validate(config)
 // 必须同步返回 { value } 或 { issues }。写成普通对象字面量会在激活时报
 // "Cannot read properties of undefined (reading 'validate')"，插件永远起不来。
-export const CONFIG_FIELDS = ['serviceUrl', 'catalogFile', 'allowedHosts', 'timeoutMs', 'cachePath', 'targetDir'];
+export const CONFIG_FIELDS = ['serviceUrl', 'catalogFile', 'allowedHosts', 'timeoutMs', 'cachePath', 'targetDir', 'submitter'];
 
 const TYPE_OF = {
   serviceUrl: 'string',
@@ -10,6 +10,7 @@ const TYPE_OF = {
   timeoutMs: 'integer',
   cachePath: 'string',
   targetDir: 'string',
+  submitter: 'string',
 };
 
 function issue(path, message) {

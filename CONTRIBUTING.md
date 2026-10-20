@@ -2,7 +2,7 @@
 
 本指南负责环境准备、变更流程和评审提交。项目现状与目录见 [README](README.md)，agent 执行规则见 [AGENTS.md](AGENTS.md)，文档治理见[文档总览](docs/README.md#6-编写约定)，工程细则见[开发约定](docs/engineering/development-conventions.md)。
 
-仓库为企业内部私有工程；参与贡献不代表获得推送、发布或对外分发授权。
+本仓库用于企业方案与扩展工程，公开可见不代表授予开源许可；根工程与现有市场包均为 `private: true`。参与贡献不代表获得推送、发布或对外分发授权。
 
 ## 1. 环境
 
@@ -10,9 +10,9 @@
 |---|---|---|
 | Node.js | 见 [.node-version](.node-version) | 用现有版本管理工具切换，并核对 `node --version` |
 | pnpm | 见 [package.json](package.json) 的 `packageManager` | 核对 `pnpm --version`，同时满足 `engines` |
-| 依赖 | 无第三方运行时依赖 | 工程检查使用 Node 标准库 |
+| 依赖 | 离线检查与宿主/服务代码使用 Node 标准库 | 市场客户端的 React 由 DSH 提供，不作为独立 Web 应用运行 |
 
-首次检出后执行 `pnpm install --frozen-lockfile` 校验锁文件；日常检查不需要安装依赖。
+当前可直接执行 `pnpm check`，无需安装依赖；需要安装工作区依赖时使用 `pnpm install --frozen-lockfile`。先核对版本，环境不符时记录验证限制，不修改项目约束来消除告警。
 
 ## 2. 选择变更入口
 
@@ -28,7 +28,7 @@
 2. 确认范围及内容归属。新模块先设计，契约字段先改对应契约；重大未决选择保留待确认，不代替团队批准。
 3. 需要创建分支时从适当基线建立短分支，常规命名见[开发约定](docs/engineering/development-conventions.md)；agent 宿主明确规定前缀时遵循宿主要求，不擅自切换已有工作分支。
 4. 修改文件并同步受影响的登记与引用；移动文件使用 `git mv`，同一变更更新全部引用。
-5. 运行 `pnpm check` 与 `git diff --check`，审阅最终 diff；模块已有实现时另跑相应测试。失败须修复或明确阻塞，不能以跳过宣称通过。
+5. 运行 `pnpm check` 与 `git diff --check`，审阅最终 diff；前者已包含自动发现的市场包、参考服务和本地集成用例。变更需要企业接口或实机证据时另行验证，已有完整有效测试不重复运行。失败须修复或明确阻塞，不能以跳过宣称通过。
 6. 在相应授权范围内提交或发起 PR，一次提交只做一件事。按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)填写关联依据、验证结果、未验项与风险；本地编辑完成不自动触发推送、合并或发布。
 
 推送与发布分开：合并到 `main` 不自动发布任何包。
@@ -49,7 +49,7 @@
 
 1. 在[设计索引](docs/design/README.md)登记模块、形态与状态。
 2. 用[模块设计模板](docs/templates/design-template.md)编写详细设计，核验目标 DSH 接口。
-3. 设计通过后创建 `package.json`，声明 `engines.dsh`、`private` 与 `test` 脚本。
+3. 设计通过后创建 `package.json`，声明 `engines.dsh`、`private` 与 `test` 脚本。现有市场参考服务由根工程发现测试，尚无独立服务清单；正式服务打包前先明确清单规则并同步检查器。
 4. 完成实现与包内实际测试；兼容、契约或实机验证按设计准入要求取证。
 5. 达到可用判据后再更新对应 README 状态，写清能力边界与未验项；发布还须单独满足发布门禁。
 

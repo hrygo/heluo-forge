@@ -8,7 +8,7 @@
 | 职责 | 规范驱动开发的产物契约、freeze 与指纹、归档与 PR 描述 |
 | 不负责 | 不接管对话流程，不替代代码评审，不自行执行路径门禁 |
 | 衔接点 | `skill-filesystem`；路径规则由 [@heluo/forge-policy](../forge-policy/README.md) 执行 |
-| 详细设计 | `docs/design/plugins/forge-sdd.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 详细设计 | [详细设计](../../docs/design/plugins/forge-sdd.md)（草案，已建立；状态见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立 `package.json`、源码与测试 |
 
 ## 边界
