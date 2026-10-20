@@ -1,22 +1,39 @@
-# DSH 企业内推广方案：IAM、AI 网关与研发平台接入
+# 企业 DSH 研发平台推广实施方案
 
-> 文档类型：Plan（非 SSOT）
->
-> 状态：方案定稿（待 6 项开放问题确认），待评审；未开始实施
->
-> 范围：企业内 DSH 的 IAM 登录、Kong 模型网关、DevOps / Gitee 集成、插件分发与治理、研发流程（轻量 SDD）
->
-> 最后核验：2026-10-20（DSH `0.2.1-rc.2` 源码、npm registry、GitHub 仓库与发布资产）；麒麟实机、企业 IAM / Kong / DevOps 接口未验
->
-> 架构与插件组合见 [企业研发平台设计](2026-10-20-dsh-enterprise-platform-design.md)；本文件负责排期、WBS、fork 选型与验收。
+## 文档信息
 
-## Context：目标与问题
+| 项 | 内容 |
+|---|---|
+| 文档编号 | CORP-DSH-PLAN-001 |
+| 文档名称 | 企业 DSH 研发平台推广实施方案 |
+| 版本 | V1.0 |
+| 文档状态 | 评审稿 |
+| 密级 | 内部 |
+| 编制 | DSH 平台组 |
+| 审核 | 待定 |
+| 批准 | 待定 |
+| 最后更新 | 2026-10-20 |
+| 文档层级 | L2 实施计划；字段级契约由子文档承担（见架构设计 §12） |
+
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+|---|---|---|---|
+| V0.1 | 2026-10-20 | DSH 平台组 | 初稿 |
+| V0.2 | 2026-10-20 | DSH 平台组 | 补充双维度额度、标准符合性与子文档分工 |
+| V1.0 | 2026-10-20 | DSH 平台组 | 文档命名与内容正式化 |
+
+> 编制依据：DSH `0.2.1-rc.2` 源码、npm registry 与 GitHub 发布资产，核验日期 2026-10-20；企业 IAM / 网关 / DevOps 接口与银河麒麟实机尚未验证。
+>
+> 关联文档：[企业 DSH 研发平台总体架构设计](platform-architecture.md)。
+
+## 1. 背景与目标
 
 结论：方案可行，且大部分工作不需要从零开始。企业侧已具备标准 OAuth IAM、Kong 网关和带 API/CLI 的自研 DevOps 平台，DSH 的凭据 seam、LLM 路由和插件机制足以承接；真正的约束来自三处——**DSH 是单用户产品**、**官方桌面端不构建 Linux**、**银河麒麟 aarch64 的沙箱与原生模块需要实机验证**。
 
-因此一期按“每人一套 DSH”落地，不做多租户：Windows 用桌面 App，银河麒麟用 `dsh --profile web` + 浏览器（仅本机自用），macOS 不纳入一期。IAM 插件只承担两件事——**取得模型授权**与**提供可审计的用户身份**，不承担“打开 DSH 的准入”。
+因此一期按“每人一套 DSH”落地，不做多租户：Windows 用桌面 App，银河麒麟用 `dsh --profile web` + 浏览器（仅本机自用），macOS 不纳入一期。IAM 插件仅承担两项职责：**取得模型授权**与**提供可审计的用户身份**，不承担“打开 DSH 的准入”。
 
-### 已确认的决策输入
+### 1.1 已确认的决策输入
 
 | # | 决策 | 影响 |
 |---|---|---|
@@ -27,7 +44,7 @@
 | 5 | 终端以 Windows 为主，银河麒麟为 ARM，浏览器版本达标 | Windows 走 App；麒麟走本机 Web；无 Electron on Linux 需求 |
 | 6 | 本机 Web 不供他人使用 | 保留 launch token 门禁即可，不做入口 SSO |
 
-### 不在本期范围
+### 1.2 不在本期范围
 
 - 多人共享单实例的身份隔离、按用户分区 session / workspace。
 - macOS 客户端。
@@ -35,7 +52,7 @@
 - 自建模型推理服务；模型仍由企业 AI 网关统一承接。
 - 公网访问、跨网段暴露本机 Web。
 
-## 目标架构
+## 2. 目标架构
 
 ```text
 员工终端（每人一套 DSH）
@@ -58,7 +75,7 @@
   └─ Gitee MCP（本地 stdio）→ Gitee API
 ```
 
-### 单一令牌源
+### 2.1 令牌与身份传递
 
 IAM 插件在 fork 中增加一步：登录与刷新成功后，把模型网关的 access token 写入 `ENTERPRISE_ACCESS_TOKEN` 这个 CredentialRef（原插件只把会话保存在凭据记录里），并作为 MCP 的 token broker 按 `resource` 取 token。DSH 的凭据 seam 按操作重新解析引用，因此：
 
@@ -81,7 +98,7 @@ IAM 插件在 fork 中增加一步：登录与刷新成功后，把模型网关�
             contextWindow: 131072
 ```
 
-### 认证链路
+### 2.2 认证与调用链路
 
 | 链路 | 做法 | 备注 |
 |---|---|---|
@@ -91,7 +108,7 @@ IAM 插件在 fork 中增加一步：登录与刷新成功后，把模型网关�
 
 Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验签（Kong OSS 的 `jwt` 插件只支持按 consumer 配静态密钥，不适合多用户）；`key_claim_name` 设为 `sub`，把用户映射为 consumer；模型路由用 `ai-proxy`（或普通 `proxy`）指向 OpenAI 兼容上游；过期返回 401，DSH 下一次请求重新解析凭据即可恢复。
 
-## 关键技术事实与证据
+## 3. 关键技术事实与依据
 
 以下事实均于 2026-10-20 核对 DSH `0.2.1-rc.2` 源码与公开仓库；未标注者为源码或官方文档事实，工期为推断。
 
@@ -111,11 +128,11 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 | 12 | `sharp`、`koffi`、`node-addon-system` 均有 linux-arm64 预编译；`node-pty` 无预编译，安装时回退 `node-gyp rebuild` | npm registry 元数据、`packages/subprocess/subprocess-local/package.json` | 麒麟需在 arm64 构建机预构建 profile，避免用户端编译 |
 | 13 | `mcp-gitee` 最新发布资产含 `linux-amd64` / `linux-arm`，但没有 `linux-arm64` | GitHub Releases API（v1.0.0） | 麒麟上需自行交叉编译或改用 Node 实现 |
 
-## 工作分解
+## 4. 工作分解
 
-工期为推断，按 2–3 名 DSH 工程师计，不含企业 IAM / 网关 / DevOps 团队的排期等待。字段级契约与接口清单由各团队子文档承担（见设计稿 §11 子文档清单）。P1 的 4 周含 MCP token broker；若 Kong 为 OSS、需自研 JWKS 验签与配额插件，P1 再 +2 周。
+工期为推断，按 2–3 名 DSH 工程师计，不含企业 IAM / 网关 / DevOps 团队的排期等待。字段级契约与接口清单由各团队子文档承担（见架构设计 §12）。P1 的 4 周含 MCP token broker；若网关验签需自研插件，P1 再增加 2 周。
 
-### P0 前置验证（1 周）
+### 4.1 P0 前置验证（1 周）
 
 | 项 | 内容 | 完成判据 |
 |---|---|---|
@@ -125,7 +142,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 | P0-4 | 刷新并发验证：两个进程共用一份凭据文件 | 无 `invalid_grant` 互相踢出 |
 | P0-5 | 网关联调：JWKS / introspection 验签、consumer 生命周期、额度维度与 429 语义 | 一个真实 token 完成一次调用，并触发一次额度提示 |
 
-### P1 PoC（4 周）
+### 4.2 P1 概念验证（4 周）
 
 | 项 | 内容 | 交付物 |
 |---|---|---|
@@ -135,7 +152,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 | P1-4 | Gitee 只读 MCP：仓库 / Issue / PR 查询 | 一个可用的 MCP 包 |
 | P1-5 | DevOps 只读 MCP：3 个工具（流水线、构建日志、部署状态） | 最小闭环 |
 
-### P2 试点（4 周）
+### 4.3 P2 试点（4 周）
 
 | 项 | 内容 | 交付物 |
 |---|---|---|
@@ -147,11 +164,11 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 | P2-6 | 灰度 50–100 人，收集故障与登录成功率 | 试点报告 |
 | P2-7 | 轻量 SDD Skill 包（可选）：1 skill + 1 CLI + 1 份 hook 规则 + 1 个 CI job | 在 1–2 个团队试点 |
 
-### P3 推广（持续）
+### 4.4 P3 推广（持续）
 
 按部门灰度、培训材料、内部 Skill 库、插件开发脚手架；多人共享需求出现时再评估多租户。
 
-## 复用与 fork 清单
+## 5. 复用与 Fork 选型
 
 | 目标 | 项目 | 数据（2026-10-20） | 复用方式 | fork 深度 |
 |---|---|---|---|---|
@@ -168,11 +185,11 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 
 取舍：真正需要 fork 的只有 `dsh-oidc`、`dsh-mcp-client`（补丁）和 Gitee 的打包封装；其余用现成 MCP 或配置 bundle。
 
-## 研发流程层：轻量 SDD（吸收 oh-my-sdd）
+## 6. 研发流程层：轻量 SDD
 
-结论：oh-my-sdd 的工程细节值得借鉴，但产品形态不适合搬进 DSH。Harness 会吸收注入、委托、拦截、遥测与身份；SDD 只需守住 Harness 没有的三件事——**产物契约、门禁规则、归档与交付不变量**。
+结论：oh-my-sdd 的工程细节值得借鉴，但产品形态不适合引入 DSH。Harness 会吸收注入、委托、拦截、遥测与身份；SDD 仅需维护 Harness 未覆盖的三项内容：**产物契约、门禁规则、归档与交付不变量**。
 
-### 工具链：一条保留，五条改归属
+### 6.1 工具链归属
 
 | 边 | 文中做法 | DSH 归属 | 处置 |
 |---|---|---|---|
@@ -185,7 +202,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 
 文中大量“固定委托链”在补偿宿主缺少产物契约——必须经 brainstorming、必须传路径约束、必须纠正 commit 格式。这些约束在 DSH 里应由**一个 skill 的模板 + 一个校验器**承担，而不是靠调用顺序。
 
-### 洋葱：七层压成三层
+### 6.2 治理层次收敛
 
 | 原层 | 本质 | DSH 对应 | 结论 |
 |---|---|---|---|
@@ -199,7 +216,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 
 压成三层：**契约层**（产物与格式）、**门禁层**（运行时拦截）、**交付层**（归档与 PR）。前两层是 DSH 的强项，第三层才是 SDD 的真正价值。
 
-### 轻量形态
+### 6.3 轻量形态
 
 - 1 个 skill `sdd`：组合现有的 brainstorming / writing-plans / executing-plans / code-review-and-quality / test-driven-development / verification-before-completion，产出 proposal / spec / design / tasks。
 - 1 个 CLI `sdd`（约 300 行）：封装 `openspec` 的 new / validate / freeze / stale / archive / pr-body。
@@ -207,13 +224,13 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 - 1 个 CI job：validate + 指纹 + baseline lint。
 - 0 宿主适配、0 五级保护控制面、0 遥测、0 git hooks 四件套。
 
-### 保留与删除
+### 6.4 保留与删除
 
 保留（Harness 没有）：change-id 贯穿 branch / commit / PR / tracker；产物集与落点；freeze + SHA-256 指纹 + stale 传播；原子 PR（实现 + canonical spec + archive）；OVERRIDE 理由审计；按阶段限定的写保护。
 
 删除（Harness 已吸收或不属于流程）：HostAdapter 注册表与四个宿主适配；五级保护状态机；`/sdd-constitution` 8 步；DOP 埋点与 queue；双阶段 Constitution 扫描；与流程无关的参考 skill（按需另立知识包）。
 
-### 三条不变量
+### 6.5 三条不变量
 
 1. **一致性**：canonical spec 与代码不漂移（freeze / 指纹 / stale / archive）。
 2. **原子性**：一次交付的 PR 同时包含实现、spec、归档。
@@ -221,7 +238,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 
 环是过程，不变量是结果。Harness 可以随时优化过程，但不变量必须由契约守住。SDD 作为可选 Skill 包在 P2 并行推进，不进入 IAM / Kong / DevOps 关键路径。
 
-## 验收标准
+## 7. 验收标准
 
 | # | 验收项 | 判据 |
 |---|---|---|
@@ -238,7 +255,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 | A11 | 轻量 SDD | change-id 贯穿 branch/commit/PR；freeze 后改动标记 stale；PR 原子包含实现+spec+archive；无宿主适配与自研遥测 |
 | A14 | 标准符合性 | PKCE + loopback IP；MCP token 带 `resource` 且 `aud` 匹配；HTTP server 暴露 PRM；401 可触发刷新重试 |
 
-## 风险与处置
+## 8. 风险与应对
 
 | 风险 | 等级 | 处置 |
 |---|---|---|
@@ -252,7 +269,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 | 白标发行与官方更新策略冲突 | 中 | 一期用官方 App；确需白标时单独立项 |
 | MCP 工具过多挤占上下文 | 中 | 按角色裁剪、只读优先、Skill 承载流程 |
 
-## 开放问题
+## 9. 待确认事项
 
 1. 企业 IAM 是 OIDC 还是纯 OAuth2？是否提供 discovery、JWKS、userinfo / introspection？
 2. 是否允许 `http://127.0.0.1:<port>/oauth/callback` 这类 loopback 回调？端口是否必须固定？
@@ -264,7 +281,7 @@ Kong 侧建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验
 8. DevOps MCP 的 canonical URI 与 Protected Resource Metadata（RFC 9728）由谁实现与运维？
 9. 人与 consumer 两个维度同时生效时的优先级与响应头（是否同时返回两侧剩余）？是否提供额度查询端点？
 
-## 附录 A：麒麟兼容性验证脚本
+## 附录 A 银河麒麟兼容性验证脚本
 
 只读，不修改系统。在目标麒麟机器上执行并保留完整输出。
 
@@ -286,7 +303,7 @@ cat /sys/kernel/security/lsm 2>/dev/null || echo "lsm unavailable"
 - `bwrap-fail` 且 `lsm` 含 `landlock`：走 Landlock runner。
 - 两者都不可用：先定处置路径（装 bwrap / 开 userns / 自定义 runner），再进入 P1。
 
-## 附录 B：参考
+## 附录 B 参考资料
 
 - [DSH 凭据子系统](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/subsystems/credentials.md)
 - [公开部署与反向代理](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/guide/public-deployments.md)

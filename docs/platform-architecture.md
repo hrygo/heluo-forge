@@ -1,18 +1,33 @@
-# DSH 企业研发平台设计（插件体系实现）
+# 企业 DSH 研发平台总体架构设计
 
-> 文档类型：Design / ADR（非 SSOT）
->
-> 层级：L1 高层级架构；字段级契约、接口清单与运行手册由子文档承担（见 §11 子文档清单）
->
-> 状态：评审稿
->
-> 范围：用 DSH 与 DSH 插件体系承载企业研发体系——身份与授权、模型与成本、工程系统、研发流程、分发与治理
->
-> 最后核验：2026-10-20（DSH `0.2.1-rc.2` 源码与官方文档）；企业 IAM / Kong / DevOps 接口与麒麟实机未验
->
-> 关联：[企业内推广方案](2026-10-20-dsh-enterprise-rollout.md)（排期、WBS、fork 清单、风险与验收）
+## 文档信息
 
-## 1. 问题与目标
+| 项 | 内容 |
+|---|---|
+| 文档编号 | CORP-DSH-ARCH-001 |
+| 文档名称 | 企业 DSH 研发平台总体架构设计 |
+| 版本 | V1.0 |
+| 文档状态 | 评审稿 |
+| 密级 | 内部 |
+| 编制 | DSH 平台组 |
+| 审核 | 待定 |
+| 批准 | 待定 |
+| 最后更新 | 2026-10-20 |
+| 文档层级 | L1 总体架构；字段级契约与运行手册由子文档承担（见 §12） |
+
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+|---|---|---|---|
+| V0.1 | 2026-10-20 | DSH 平台组 | 初稿 |
+| V0.2 | 2026-10-20 | DSH 平台组 | 增加标准符合性与能力价值复核 |
+| V1.0 | 2026-10-20 | DSH 平台组 | 文档命名与内容正式化 |
+
+> 编制依据：DSH `0.2.1-rc.2` 源码与官方文档，核验日期 2026-10-20；企业 IAM / Kong / DevOps 接口与银河麒麟实机尚未验证。
+>
+> 关联文档：[企业 DSH 研发平台推广实施方案](rollout-plan.md)（WBS、验收、风险与待确认事项）。
+
+## 1. 背景与目标
 
 企业研发体系由五个域组成，本方案回答的是“每个域用什么插件形态承接、边界在哪、失败时怎么办”。
 
@@ -37,11 +52,11 @@
 | P5 | **市场即治理** | 私有 registry + 私有 index + `engines.dsh` 门禁，公网源不可回落 |
 | P6 | **每个能力可单独关闭** | 一个能力一个 bundle 行，出问题只禁用该行，不回滚整包 |
 
-## 复核：价值边界与标准对齐
+## 3. 复核与标准对齐
 
-本方案要经得起两件事：Harness 每两周一个 rc，模型每半年一代。判断标准不是“现在能跑”，而是**能力增强时方案价值是上升、持平还是衰减**。
+方案需同时适应两项变化：Harness 约每两周发布一个候选版本，模型约每半年更新一代。判断标准不是“当前可运行”，而是**能力增强时方案价值是上升、持平还是衰减**。
 
-### 价值半衰期
+### 3.1 能力价值的时效性
 
 | 能力 | 会衰减的部分 | 不衰减的核心 | 本方案的落点 |
 |---|---|---|---|
@@ -52,7 +67,7 @@
 | 分发 | 安装器、市场 UI | 供应链、版本、回滚 | npm + index 标准 |
 | 策略 | 规则清单本身 | 决策点、fail-closed、审计 | host seam + 可配置规则 |
 
-![能力价值四象限](assets/2026-10-20-dsh-value-quadrant.png)
+![能力价值四象限](assets/capability-value-matrix.png)
 
 > 图：能力放在哪个象限，决定它随模型/宿主增强而升值还是贬值；本方案把投入集中在右上与左上。
 
@@ -64,7 +79,7 @@
 
 结论：**把价值放在“组织事实”和“标准接口”上，不要放在“提示词脚手架”和“宿主适配”上。**
 
-### 标准对齐
+### 3.2 标准符合性
 
 | 标准 | 要求 | 本方案 | 差距 / 决策 |
 |---|---|---|---|
@@ -78,13 +93,13 @@
 | OTel GenAI | `gen_ai.*` 语义约定（仍为实验） | 决策审计 + 用量 | 只依赖稳定子集，内容默认不采 |
 | SLSA / npm provenance | 构建来源可验证 | 内部 CI 出 provenance | 一期目标 L2 + 白名单 |
 
-### 复核结论与待对齐项
+### 3.3 复核结论与待确认项
 
 1. **网关额度（已确认）**：企业自研的 Kong AI 网关已具备详细额度管理，DSH 不在客户端做计量。仍需对齐的是额度维度、窗口、超额行为与剩余额度查询方式；`ai-proxy` 的 OSS / Enterprise 分层不再影响本方案。
 2. **MCP OAuth 客户端缺失（待实施）**：DSH 的 `mcp-client` 没有 OAuth 客户端。由 IAM 插件充当 token broker，按 `resource` 取 token 并缓存；补丁从“塞 header”升级为“回调取 token”，约 +1 周。
 3. **单一令牌的边界（已决策）**：RFC 8707 要求 token 绑定目标资源。一个宽 audience 的 token 会让泄漏半径覆盖所有服务，因此改为“一个会话 + 按资源签发”，模型网关仍用单一引用。
 
-## 3. 总体架构
+## 4. 总体架构
 
 ```text
 ┌─ 终端 ────────────────────────────────────────────────┐
@@ -96,7 +111,7 @@
 │  session / agent / tools / llm / mcp / skills / hooks  │
 │  credentials / authorization / settings / webServer    │
 └───────────────────────┬───────────────────────────────┘
-                        │ 企业插件层（本文第 4–6 节）
+                        │ 企业插件层（本文第 5–7 节）
 ┌───────────────────────▼───────────────────────────────┐
 │ @corp/dsh-enterprise（umbrella bundle）                │
 │  iam · gateway · policy · devops · gitee · sdd · market │
@@ -108,7 +123,7 @@
 └───────────────────────────────────────────────────────┘
 ```
 
-![DSH 企业研发平台分层架构](assets/2026-10-20-dsh-enterprise-architecture.png)
+![DSH 企业研发平台分层架构](assets/architecture-layers.png)
 
 > 图：客户端 / DSH 运行时 / 企业插件 / 企业平台四层；插件层每格对应一个可独立开关的 bundle 行。
 
@@ -118,7 +133,7 @@
 2. **模型**：`llm-pi-ai` 解析 `ENTERPRISE_ACCESS_TOKEN` → Kong 验签、映射 consumer、限额 → 上游模型。
 3. **工具**：MCP client 向 IAM broker 取按资源 token → DevOps / Gitee API；每次工具调用先过企业策略插件。
 
-## 4. 插件形态映射
+## 5. 插件形态映射
 
 DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否则会制造不必要的维护面。
 
@@ -133,7 +148,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 
 原则：**能用配置 bundle 就不写代码；能用 MCP 就不写原生工具；只有策略与身份必须原生**，因为它们要在工具管线上做同步决策。
 
-## 5. 包组合
+## 6. 软件包组合
 
 | 包 | 形态 | 职责 | 依赖的 seam |
 |---|---|---|---|
@@ -149,9 +164,9 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 
 组合方式：umbrella bundle 只做 `insert`，每个能力一行；任何一行都能被 profile patch 单独 `disabled` 或覆盖配置，满足 P6。
 
-## 6. 领域设计
+## 7. 领域设计
 
-### 6.1 身份与令牌
+### 7.1 身份与令牌
 
 **流程**：Authorization Code + PKCE（S256）→ 系统浏览器 → IAM 登录页 → `http://127.0.0.1:<port>/oauth/callback` → 校验 `state` / `nonce` / `iss` / `aud` → 写令牌。
 
@@ -167,7 +182,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 
 **失败模式**：IAM 不可达时保留上次令牌直到过期，UI 显示“待重新登录”；网关返回 401 时由模型适配层刷新并重试一次，仍失败则向用户报 `AUTH_EXPIRED`，不静默降级到其他模型。
 
-### 6.2 模型与成本
+### 7.2 模型与成本
 
 纯配置，无代码：
 
@@ -197,7 +212,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 | consumer | consumer id | 成本归属、防滥用 | 团队共享服务、CI、外包 |
 
 - 个人使用：consumer 与 person 1:1，两个维度数值一致，可从“人”切到“consumer”查看。
-- 共享服务：workload consumer（如 `svc-ci`）承载团队预算，`sub` 仍是具体人，两个维度分别计，既防一人吃光团队额度，又能归因到人。
+- 共享服务：workload consumer（如 `svc-ci`）承载团队预算，`sub` 仍是具体人，两个维度分别计，既避免单人耗尽团队额度，又能归因到人。
 - 请求只带一个 token；网关从 JWT 派生 person、从凭证或注册信息派生 consumer，DSH 不传两个身份。
 
 **超额错误契约**：
@@ -231,7 +246,7 @@ Content-Type: application/problem+json
 
 **审计口径**：客户端只上报“谁、何时、哪个模型、成功/失败”，token 数由网关回传或网关日志归集，避免两套账。
 
-### 6.3 工程系统工具
+### 7.3 工程系统工具
 
 **DevOps MCP**（自研，stdio）：只暴露 8–12 个高频操作，工具名 `mcp__devops__<verb>_<noun>`；默认只读，写操作在工具描述中标注 `mutating: true`，由策略插件转成 `ask`。
 
@@ -245,7 +260,7 @@ Content-Type: application/problem+json
 
 **上下文预算**：每个 server 的工具数上限 12；不用的 server 在 preset 里禁用；流程性知识放 skill，不放工具描述。
 
-### 6.4 研发流程（SDD）
+### 7.4 研发流程（SDD）
 
 只保留三条不变量与一个状态字段：
 
@@ -257,21 +272,21 @@ Content-Type: application/problem+json
 
 **路径规则**（由 `@corp/dsh-policy` 执行）：`spec` 阶段只允许写 `openspec/changes/<id>/**`；`apply` 阶段 canonical `openspec/specs/**` 与 `proposal.md`/`design.md` 只读；`review` 阶段不再写源码。无 `.meta.json` 时只执行 HARD 规则，不阻塞普通开发。
 
-### 6.5 分发与治理
+### 7.5 分发与治理
 
 - **必装**：`@corp/dsh-enterprise` 由 MDM / deb 预置进 profile，不依赖用户手动安装。
 - **可选**：内部 index 列出经审批的插件；`plugin-market` 配上私有 index，`plugin-manager` 配 `registry` + `fallbackRegistries`，公网源不在列表内。
 - **门禁**：index 生成时校验 `engines.dsh` 与 `dsh.bundle.patch`；安装前校验包名白名单与 checksum。
 - **权限**：普通用户禁用 `plugin_manager` 工具；只有 Creator preset 可安装，且只能装内部源。
 
-### 6.6 审计与可观测
+### 7.6 审计与可观测
 
 - **决策审计**（`@corp/dsh-policy` 直接发 OTel event）：`sub`、`change_id`、`tool`、`decision`、`reason_code`、`latency`，不记参数正文，只记参数哈希。
 - **会话审计**：`session-log` 通道可导出完整事件，但含正文与代码，默认关闭；确需开启时先做脱敏与保留期评审。
 - **成本审计**：以网关的 consumer 计量为准；DSH 侧只记调用次数与失败率。
 - **保留期**：决策审计 180 天；会话内容默认不落 SIEM。
 
-## 7. 关键契约
+## 8. 关键契约
 
 | 契约 | 规则 |
 |---|---|
@@ -285,7 +300,7 @@ Content-Type: application/problem+json
 | bundle manifest | `dsh.bundle.patch` 必填；`engines.dsh` 声明兼容区间；peer 依赖精确到 rc |
 | 配置键 | 统一 `corp.*` 前缀；敏感值只放凭据引用，不进 YAML |
 
-## 8. 安全设计
+## 9. 安全设计
 
 **信任边界**：终端（用户）→ DSH Host（同 OS 用户，可信）→ 企业网关/平台（网络边界）。DSH 的凭据文件是 0600，但 agent 以同一用户运行，**能读到令牌**；因此安全不能依赖本地保密。
 
@@ -298,7 +313,7 @@ Content-Type: application/problem+json
 | 越权读仓库 | Gitee/DevOps 侧按 token scope 限制；DSH 不自行扩权 |
 | 审计缺失 | 决策与调用双路 OTel；缺 `sub` 视为失败并告警 |
 
-## 9. 部署拓扑
+## 10. 部署拓扑
 
 | 端 | 安装 | 运行 | 更新 |
 |---|---|---|---|
@@ -308,7 +323,7 @@ Content-Type: application/problem+json
 
 麒麟不在用户端编译：`node-pty` 等原生模块在 arm64 构建机预编译后打进 deb。沙箱按 P0 结论三选一（bwrap / Landlock / 自定义 runner）。
 
-## 10. 版本与兼容
+## 11. 版本与兼容性管理
 
 - **锁版本**：一期固定 DSH `0.2.1-rc.2`；升级前跑内部兼容性套件（登录、模型、工具、SDD、市场）。
 - **标准漂移**：OAuth 2.1 仍是 draft，MCP 规范按日期发版；兼容性套件里固定规范版本（PRM、`resource`、`aud`），规范升级时先跑套件再放行。
@@ -316,7 +331,7 @@ Content-Type: application/problem+json
 - **通道**：`internal`（默认）与 `canary`（试点）；canary 出问题只回滚该 bundle 行。
 - **上游**：MCP 补丁提 PR；identity seam 以 RFC 形式提案，避免长期维护核心 fork。
 
-## 11. 交付组织
+## 12. 交付组织与职责
 
 | 工作 | DSH 平台组 | IAM | 网关 | DevOps | 安全 | IT |
 |---|---|---|---|---|---|---|
@@ -331,7 +346,7 @@ Content-Type: application/problem+json
 
 A=负责，C=协作，I=知会。
 
-### 子文档清单与责任
+### 12.1 子文档清单与责任
 
 本文只保留跨域决策；下列子文档由对应团队补充，字段级契约与操作步骤以子文档为准。
 
@@ -352,7 +367,7 @@ A=负责，C=协作，I=知会。
 
 阶段门禁：G0 麒麟/IAM/网关冒烟（1 周）→ G1 PoC 10 人（3 周）→ G2 试点 50–100 人（4 周）→ G3 全量。
 
-## 12. 验收
+## 13. 验收标准
 
 沿用推广方案的 A1–A11，另加两项：
 
@@ -361,7 +376,7 @@ A=负责，C=协作，I=知会。
 | A12 | 插件隔离与回滚 | 任一企业插件可单独禁用，其余能力正常；bundle 回滚 ≤10 分钟 |
 | A13 | 审计完整性 | 每次模型调用与工具调用可按 `sub` + `change-id` 归因；缺字段为 0 |
 
-## 13. 决策记录
+## 14. 架构决策记录
 
 | # | 决策 | 被否方案 | 后果 |
 |---|---|---|---|
@@ -374,7 +389,7 @@ A=负责，C=协作，I=知会。
 | ADR-7 | 官方 App vs 白标 | — | 待 P0 决策；影响更新通道与签名成本 |
 | ADR-8 | 一个会话、按资源取 token | 单一宽 audience token | 泄漏半径小；依赖 IAM 支持 `resource` |
 
-## 14. 风险
+## 15. 风险登记
 
 | 风险 | 等级 | 处置 | 负责 |
 |---|---|---|---|
@@ -387,7 +402,7 @@ A=负责，C=协作，I=知会。
 | MCP OAuth broker 复杂度 | 中 | 先支持 `resource`；不支持则按 audience 预注册 client | 平台组 |
 | 标准漂移（OAuth 2.1 / MCP） | 中 | 兼容性套件固定规范版本；升级先跑套件 | 平台组 |
 
-## 附录 A：仓库结构
+## 附录 A 仓库结构
 
 ```text
 corp-dsh/
@@ -409,7 +424,7 @@ corp-dsh/
    └─ market-index.yml
 ```
 
-## 附录 B：umbrella bundle 样例
+## 附录 B 插件组合示例
 
 ```yaml
 # packages/enterprise-bundle/cordis.patch.yml
@@ -452,3 +467,18 @@ corp-dsh/
 ```
 
 > 本文件为 Design，解释“怎么搭、为什么这样搭”；排期与验收执行以关联 Plan 为准。
+
+## 附录 C 术语与缩略语
+
+| 术语 | 全称 / 说明 |
+|---|---|
+| DSH | DeepSeek Harness，本方案的宿主运行时 |
+| IAM | 企业统一身份认证系统 |
+| PKCE | Proof Key for Code Exchange（RFC 7636） |
+| MCP | Model Context Protocol |
+| PRM | OAuth 2.0 Protected Resource Metadata（RFC 9728） |
+| ADR | Architecture Decision Record，架构决策记录 |
+| SDD | Spec-Driven Development，规格驱动开发 |
+| WBS | Work Breakdown Structure，工作分解结构 |
+| SSO | Single Sign-On，单点登录 |
+| consumer | 网关侧的调用主体，可对应个人或工作负载 |
