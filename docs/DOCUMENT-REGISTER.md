@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.10.1 |
+| 版本 | V1.10.2 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -33,17 +33,18 @@
 | V1.9.2 | 2026-10-20 | DSH 平台组 | 同步架构 V1.3.3 与网关契约 V0.8.2 的令牌校验加固；编号、范围与门禁不变 |
 | V1.10 | 2026-10-20 | DSH 平台组（代拟） | 同步文档总览的职责与治理规则、工程结构设计的历史及现状纠正；根入口保持辅助说明，不新增受控编号或技术审批 |
 | V1.10.1 | 2026-10-20 | DSH 平台组 | 同步架构 V1.3.4 与网关契约 V0.8.3：登记聚合与计量约定及稳定实例标识选项 |
+| V1.10.2 | 2026-10-20 | DSH 平台组 | 更新备选方案 ARCH-002 至 V0.2，登记控制台手工签发变体；主方案与契约不变 |
 
 ## 1. 清单
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.2 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.1 | 生效 | 平台组 | — |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.3.4 | 评审稿 | 平台组 | G0 |
-| CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.1 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
+| CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
 | CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V1.2.2 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V1.2.2 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V0.8.3 | 草案 | 网关团队 | G0 |
