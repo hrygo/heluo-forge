@@ -6,9 +6,9 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.14.0 |
+| 版本 | V0.14.1 |
 | 文档状态 | 草案 |
-| 密级 | 内部 |
+| 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
@@ -115,6 +115,7 @@ GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 
 | 错误码 | 触发条件 | 处理 |
 |---|---|---|
+| `patch-name-mismatch` | `cordis.patch.yml` 的 insert 行名不是 `package.json` 的 `name` | 不进索引 |
 | `missing-file` | 缺 `cordis.patch.yml`、`package.json` 或 `README.md`；三者必须在仓库根目录，`hint` 指出同名文件的实际位置 | 不进索引 |
 | `scope-not-allowed` | 包名不在受信范围（默认 `@heluo`） | 不进索引 |
 | `bad-version` \| `bad-tag` \| `tag-mismatch` | 版本非 `x.y.z`、标签非 `vX.Y.Z`、两者不一致 | 不进索引 |

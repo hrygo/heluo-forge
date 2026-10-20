@@ -1,4 +1,5 @@
 import { checkArchivePaths, digestOf, verifyDigest } from './installer.mjs';
+import { patchPluginNames } from './validate.mjs';
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -70,7 +71,9 @@ export async function installPlugin(plan, deps = {}) {
   const safe = checkArchivePaths(paths);
   if (!safe.ok) return { ok: false, reason: safe.reason, detail: safe.detail };
 
-  const manifest = extracted.files.find((file) => file.path === 'package.json');
+  const allowed = new Set(safe.write ?? paths);
+  const kept = extracted.files.filter((file) => allowed.has(file.path));
+  const manifest = kept.find((file) => file.path === 'package.json');
   if (!manifest) return { ok: false, reason: 'missing-manifest' };
   let pkg;
   try {
@@ -83,7 +86,16 @@ export async function installPlugin(plan, deps = {}) {
     return { ok: false, reason: 'version-mismatch', detail: pkg.version };
   }
 
-  const installed = { name: pkg.name, version: pkg.version, tag: plan.tag, files: extracted.files, paths };
+  // 行名指向别的包时，装上去也挂不起来；这里比挂载失败早一步报出来。
+  const patch = kept.find((file) => file.path === 'cordis.patch.yml');
+  if (patch) {
+    const declared = patchPluginNames(patch.bytes.toString('utf8'));
+    if (declared.length && !declared.includes(pkg.name)) {
+      return { ok: false, reason: 'patch-name-mismatch', detail: declared };
+    }
+  }
+
+  const installed = { name: pkg.name, version: pkg.version, tag: plan.tag, files: kept, paths: kept.map((file) => file.path) };
   if (typeof onInstalled === 'function') await onInstalled(installed);
   return { ok: true, installed };
 }

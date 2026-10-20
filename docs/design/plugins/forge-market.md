@@ -6,9 +6,9 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.24.0 |
+| 版本 | V0.24.1 |
 | 文档状态 | 草案 |
-| 密级 | 内部 |
+| 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
@@ -178,6 +178,7 @@ packages/forge-market/
 | `missing-dependency` | 下载 | 未注入下载或解包实现 | 否 |
 | `missing-engines` | 条目 | 未声明 engines.dsh | 否 |
 | `missing-fields` | 条目 | 条目缺 name 或 version | 否 |
+| `patch-name-mismatch` | 清单 | `cordis.patch.yml` 的 insert 行名与 `package.json` 的 `name` 不一致 | 否 |
 | `missing-manifest` | 清单 | 归档里没有 package.json | 否 |
 | `name-mismatch` | 清单 | 清单包名与规划不一致 | 否 |
 | `no-allowed-host` | 提交 | 未配置 allowedHosts，拒绝提交 | 否 |

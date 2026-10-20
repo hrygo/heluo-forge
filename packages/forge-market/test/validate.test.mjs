@@ -93,3 +93,14 @@ test('traversal is caught whichever slash is used', () => {
   // https:// 里含有 "s:/"，不能被当成盘符。
   assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: https://plugins.corp.example\n'), []);
 });
+
+test('flags a patch that names a different package', () => {
+  const result = validatePlugin({
+    files: ['package.json', 'cordis.patch.yml', 'README.md'],
+    manifest: { name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=0.2.1' } },
+    readme: '## 用途\n\nx\n\n## 维护人\n\ny\n',
+    patch: "insert:\n  - id: a\n    name: '@heluo/other'\n",
+    tag: 'v0.1.0',
+  });
+  assert.ok(result.errors.some((error) => error.code === 'patch-name-mismatch'));
+});

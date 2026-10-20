@@ -25,6 +25,11 @@ export function validatePatch(text) {
   return errors;
 }
 
+// 只挑形如 @scope/name 的行名，避免把 config 里的普通 name 字段当插件名。
+export function patchPluginNames(text) {
+  return [...String(text ?? '').matchAll(/name\s*:\s*['"]?(@[\w.-]+\/[\w.-]+)['"]?/g)].map((match) => match[1]);
+}
+
 export function validatePlugin(input, policy = {}) {
   const errors = [];
   const files = new Set(input?.files ?? []);
@@ -66,6 +71,13 @@ export function validatePlugin(input, policy = {}) {
 
   for (const section of REQUIRED_SECTIONS) {
     if (!readme.includes(section)) errors.push({ code: 'missing-section', detail: section });
+  }
+
+  if (input?.patch && name) {
+    const declared = patchPluginNames(input.patch);
+    if (declared.length && !declared.includes(name)) {
+      errors.push({ code: 'patch-name-mismatch', detail: declared });
+    }
   }
 
   errors.push(...validatePatch(input?.patch));

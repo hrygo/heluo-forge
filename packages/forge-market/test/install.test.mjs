@@ -99,3 +99,19 @@ test('refuses a declared size above the cap before reading the body', async () =
   });
   assert.equal(result.reason, 'archive-too-large');
 });
+
+test('refuses a patch whose row names another package', async () => {
+  const wrong = files.map((file) => file.path === 'cordis.patch.yml'
+    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: '@heluo/other'\n") }
+    : file);
+  const result = await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: wrong }) }));
+  assert.equal(result.reason, 'patch-name-mismatch');
+  assert.deepEqual(result.detail, ['@heluo/other']);
+});
+
+test('accepts a patch that names the package itself', async () => {
+  const right = files.map((file) => file.path === 'cordis.patch.yml'
+    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: '@heluo/a'\n") }
+    : file);
+  assert.equal((await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: right }) }))).ok, true);
+});
