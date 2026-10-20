@@ -21,7 +21,7 @@ export async function installPlugin(plan, deps = {}) {
 
   let fetched;
   try {
-    fetched = await download(plan.repo, plan.tag);
+    fetched = await download(plan.repo, plan.tag, plan.archiveUrl);
   } catch (error) {
     return { ok: false, reason: 'download-failed', detail: String(error?.message ?? error) };
   }

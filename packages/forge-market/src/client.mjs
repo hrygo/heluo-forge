@@ -45,5 +45,7 @@ export function createServiceClient({ baseUrl, fetchImpl = globalThis.fetch, tim
     mine: () => request('/api/plugins?mine=1'),
     metrics: (name) => request(`/api/metrics?plugin=${encodeURIComponent(name)}`),
     unindexed: () => request('/api/admin/unindexed'),
+    downloadInfo: (name, version) =>
+      request(`/api/plugins/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}/download`),
   };
 }

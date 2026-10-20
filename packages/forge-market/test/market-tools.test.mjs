@@ -161,3 +161,32 @@ test('diagnostics tolerates a service that returns nothing', async () => {
   const tools = buildMarketTools({ ...client, unindexed: async () => ({}) });
   assert.deepEqual(await call(tools, 'market_diagnostics', {}), { total: 0, entries: [] });
 });
+
+test('install prefers the archive the service resolves', async () => {
+  let requested;
+  const serviceClient = {
+    ...client,
+    downloadInfo: async () => ({ url: 'https://gitee.corp.example/g/a/archive/refs/tags/v0.1.0.tar.gz', digest: '' }),
+  };
+  const tools = buildMarketTools(serviceClient, {
+    allowedHosts: ['gitee.corp.example'],
+    install: {
+      download: async (repo, tag, archiveUrl) => { requested = archiveUrl; return { ok: true, bytes: Buffer.from('x') }; },
+      extract: async () => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) }] }),
+    },
+  });
+  const result = await call(tools, 'market_install', { name: '@heluo/a' });
+  assert.equal(result.ok, true);
+  assert.match(requested, /archive\/refs\/tags\/v0\.1\.0\.tar\.gz$/);
+});
+
+test('install still works when the service has no download info', async () => {
+  const tools = buildMarketTools(client, {
+    allowedHosts: ['gitee.corp.example'],
+    install: {
+      download: async (repo, tag) => ({ ok: true, bytes: Buffer.from('x'), usedTag: tag }),
+      extract: async () => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) }] }),
+    },
+  });
+  assert.equal((await call(tools, 'market_install', { name: '@heluo/a' })).ok, true);
+});

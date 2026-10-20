@@ -18,8 +18,18 @@ function matches(entry, query) {
   return [entry.name, entry.title, entry.summary, ...(entry.scenarios ?? [])].join(' ').toLowerCase().includes(needle);
 }
 
-export function createMarketApp({ entries = [], reviews = [], audit = [] } = {}) {
+export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), today = () => new Date().toISOString().slice(0, 10) } = {}) {
   const byName = () => new Map(entries.map((entry) => [entry.name, entry]));
+
+  // 计数按（条目, 机器哈希, 日）去重：同一天重复安装不重复计数，
+  // 缺少机器哈希时按（条目, 日）计一次，避免匿名重复上报把数字刷高。
+  const countDownload = (entry, machine) => {
+    const key = `${entry.name}|${machine || 'anonymous'}|${today()}`;
+    if (seen.has(key)) return false;
+    seen.set(key, true);
+    entry.downloads = (entry.downloads ?? 0) + 1;
+    return true;
+  };
 
   const publish = (review) => {
     const version = String(review.tag ?? '').replace(/^v/, '');
@@ -112,10 +122,21 @@ export function createMarketApp({ entries = [], reviews = [], audit = [] } = {})
       return send(200, { entries: [] });
     }
 
-    const detail = url.pathname.match(/^\/api\/plugins\/(.+)$/);
+    const detail = url.pathname.match(/^\/api\/plugins\/([^/]+)$/);
     if (detail && req.method === 'GET') {
       const entry = byName().get(decodeURIComponent(detail[1]));
       return entry ? send(200, entry) : send(404, { error: 'not-found' });
+    }
+
+    const download = url.pathname.match(/^\/api\/plugins\/([^/]+)\/versions\/([^/]+)\/download$/);
+    if (download && req.method === 'GET') {
+      const entry = byName().get(decodeURIComponent(download[1]));
+      if (!entry) return send(404, { error: 'not-found' });
+      const version = entry.versions?.find((item) => item.version === decodeURIComponent(download[2]));
+      if (!version) return send(404, { error: 'no-version' });
+      const counted = countDownload(entry, String(req.headers['x-machine-hash'] ?? ''));
+      const asset = version.archiveUrl || `${entry.repo}/archive/refs/tags/${version.tag}.tar.gz`;
+      return send(200, { name: entry.name, version: version.version, tag: version.tag, url: asset, digest: version.digest ?? '', counted });
     }
 
     if (url.pathname === '/api/metrics' && req.method === 'GET') {

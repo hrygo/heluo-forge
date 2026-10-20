@@ -10,6 +10,7 @@
 | 客户端 | [@heluo/forge-market](../../packages/forge-market/README.md) |
 | 制品存储 | [deploy/registry](../../deploy/registry/README.md) |
 | 详细设计 | `docs/design/services/market-index.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 下载计数 | `GET /api/plugins/{name}/versions/{v}/download` 返回归档地址与摘要，并按（条目, 机器哈希, 日）去重计数 |
 | 评审 | `POST /api/admin/review`：`approve`、`reject`、`revoke`，内存态，重启丢失 |
 | 实现状态 | 只读参考实现已建立：`server.mjs` 与 3 个用例，覆盖目录查询、提交入队、评审（通过/退回/撤回）与 404；无 Gitee 扫描、鉴权、评审流与持久化，未部署核验 |
 

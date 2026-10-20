@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { createMarketApp } from '../server.mjs';
 
 const entries = [
-  { name: '@heluo/a', title: '网关', summary: '接入', version: '0.1.0', stars: 2, downloads: 9 },
+  { name: '@heluo/a', title: '网关', summary: '接入', version: '0.1.0', versions: [{ version: '0.1.0', tag: 'v0.1.0' }], stars: 2, downloads: 9 },
   { name: '@heluo/b', title: '品牌', version: '0.2.0', stars: 7, downloads: 1 },
 ];
 
@@ -100,6 +100,40 @@ test('review rejects unknown actions and unknown names', async () => {
   try {
     assert.equal((await post('/api/admin/review', { name: '@heluo/a', action: 'delete' })).status, 400);
     assert.equal((await post('/api/admin/review', { name: '@heluo/zzz', action: 'approve' })).status, 404);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('counts one download per machine and day', async () => {
+  const day = '2026-10-20';
+  const app = createMarketApp({ entries: structuredClone(entries), today: () => day });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const hit = (machine) => fetch(`${base}/api/plugins/@heluo%2Fa/versions/0.1.0/download`, { headers: { 'x-machine-hash': machine } }).then((r) => r.json());
+  try {
+    const first = await hit('m1');
+    assert.equal(first.counted, true);
+    assert.match(first.url, /archive\/refs\/tags\/v0\.1\.0\.tar\.gz$/);
+    assert.equal((await hit('m1')).counted, false);
+    assert.equal((await hit('m2')).counted, true);
+    const metrics = await (await fetch(`${base}/api/metrics?plugin=${encodeURIComponent('@heluo/a')}`)).json();
+    assert.equal(metrics.downloads, 11);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('an unknown version is refused and an anonymous hit counts once a day', async () => {
+  const app = createMarketApp({ entries: structuredClone(entries), today: () => '2026-10-21' });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal((await fetch(`${base}/api/plugins/@heluo%2Fa/versions/9.9.9/download`)).status, 404);
+    await fetch(`${base}/api/plugins/@heluo%2Fa/versions/0.1.0/download`);
+    await fetch(`${base}/api/plugins/@heluo%2Fa/versions/0.1.0/download`);
+    const metrics = await (await fetch(`${base}/api/metrics?plugin=${encodeURIComponent('@heluo/a')}`)).json();
+    assert.equal(metrics.downloads, 10);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

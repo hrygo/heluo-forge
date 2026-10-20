@@ -28,7 +28,8 @@ function tool(name, description, parameters, handler) {
 export function buildMarketTools(client, options = {}) {
   const allowedHosts = options.allowedHosts ?? [];
   const deps = {
-    download: (repo, tag) => downloadArchive(`${repo.replace(/\/$/, '')}/archive/refs/tags/${tag}.tar.gz`),
+    download: (repo, tag, archiveUrl) =>
+      downloadArchive(archiveUrl || `${repo.replace(/\/$/, '')}/archive/refs/tags/${tag}.tar.gz`),
     extract: async (bytes) => extractTarball(bytes),
     ...options.install,
   };
@@ -181,7 +182,26 @@ export function buildMarketTools(client, options = {}) {
         if (!normalized.ok) return normalized;
         const planned = planInstall(normalized.entry, version, allowedHosts);
         if (!planned.ok) return planned;
-        const result = await installPlugin(planned.plan, { ...deps, expectedDigest: digest });
+
+        // 服务知道归档地址与摘要，也只有在它这里才能把下载计到条目上。
+        let plan = planned.plan;
+        let expectedDigest = digest;
+        if (typeof client.downloadInfo === 'function') {
+          try {
+            const info = await client.downloadInfo(plan.name, plan.version);
+            if (info?.url) {
+              const host = new URL(info.url).host;
+              if (!allowedHosts.length || allowedHosts.includes(host)) {
+                plan = { ...plan, archiveUrl: info.url };
+                expectedDigest = digest || info.digest || undefined;
+              }
+            }
+          } catch {
+            // 服务不提供下载信息时退回按仓库与标签推导。
+          }
+        }
+
+        const result = await installPlugin(plan, { ...deps, expectedDigest });
         if (!result.ok) return result;
 
         const built = buildRegistrationRow(result.installed, options.registration ?? {});
