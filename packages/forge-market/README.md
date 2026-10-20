@@ -52,7 +52,7 @@ insert:
 | `market_check_update` | 比较已装版本与最新版本，不做任何变更 | 否 |
 | `market_registration` | 给出登记到 profile 的 loader 行与两种登记路径 | 否 |
 | `market_plan_install` | 只解析标签与仓库，不下载 | 否 |
-| `market_install` | 下载归档、校验摘要、解包、必要时落盘 | 是（仅落盘） |
+| `market_install` | 下载归档、校验摘要、解包、必要时落盘，并返回可直接使用的登记行 | 是（仅落盘） |
 
 宿主侧同时注册 `/api/forge-market` 前缀路由（`catalog`、`detail/<name>`），客户端面板从该路由取数，避免把服务地址暴露到浏览器。
 

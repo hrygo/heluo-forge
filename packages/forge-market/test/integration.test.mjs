@@ -75,7 +75,11 @@ test('installs a plugin end to end through a stub service', async () => {
     const origin = `http://127.0.0.1:${server.address().port}`;
     const tools = buildMarketTools(
       (await import('../src/client.mjs')).createServiceClient({ baseUrl: origin }),
-      { allowedHosts: [`127.0.0.1:${server.address().port}`], targetDir: join(dir, 'plugin') },
+      {
+        allowedHosts: [`127.0.0.1:${server.address().port}`],
+        targetDir: join(dir, 'plugin'),
+        registration: { serviceUrl: `http://127.0.0.1:${server.address().port}` },
+      },
     );
 
     const search = JSON.parse((await tools.find((t) => t.name === 'market_search').execute({})).content[0].text);
@@ -87,6 +91,7 @@ test('installs a plugin end to end through a stub service', async () => {
     );
     assert.equal(installed.ok, true);
     assert.equal(installed.installed.version, '0.1.0');
+    assert.match(installed.registration.patch, /id: heluo-demo/);
     assert.equal(JSON.parse(await readFile(join(dir, 'plugin', 'package.json'), 'utf8')).name, '@heluo/demo');
 
     const submitted = JSON.parse(

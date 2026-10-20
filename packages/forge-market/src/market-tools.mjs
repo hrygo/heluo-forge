@@ -164,7 +164,7 @@ export function buildMarketTools(client, options = {}) {
     ),
     tool(
       'market_install',
-      'Download one entry from the enterprise group, verify its digest and unpack it. Returns the installed file list.',
+      'Download one entry from the enterprise group, verify its digest, unpack it and return the loader row needed to register it.',
       {
         type: 'object',
         properties: {
@@ -182,9 +182,18 @@ export function buildMarketTools(client, options = {}) {
         const planned = planInstall(normalized.entry, version, allowedHosts);
         if (!planned.ok) return planned;
         const result = await installPlugin(planned.plan, { ...deps, expectedDigest: digest });
-        if (!result.ok || !options.targetDir) return result;
+        if (!result.ok) return result;
+
+        const built = buildRegistrationRow(result.installed, options.registration ?? {});
+        const registration = built.ok
+          ? { row: built.row, patch: renderPatch(built.row), steps: registrationInstructions(built.row) }
+          : { error: built.reason };
+        if (!options.targetDir) return { ...result, registration };
+
         const persisted = await persistFiles(result.installed.files ?? [], options.targetDir);
-        return persisted.ok ? { ...result, persisted } : { ok: false, reason: persisted.reason, detail: persisted.detail };
+        return persisted.ok
+          ? { ...result, registration, persisted }
+          : { ok: false, reason: persisted.reason, detail: persisted.detail };
       },
     ),
     tool(

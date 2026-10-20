@@ -80,6 +80,7 @@ test('install runs the pipeline with injected download and extract', async () =>
   ];
   const tools = buildMarketTools(client, {
     allowedHosts: ['gitee.corp.example'],
+    registration: { serviceUrl: 'https://plugins.corp.example' },
     install: {
       download: async () => ({ ok: true, bytes: Buffer.from('x') }),
       extract: async () => ({ ok: true, files }),
@@ -88,6 +89,8 @@ test('install runs the pipeline with injected download and extract', async () =>
   const result = await call(tools, 'market_install', { name: '@heluo/a' });
   assert.equal(result.ok, true);
   assert.equal(result.installed.version, '0.1.0');
+  assert.match(result.registration.patch, /id: heluo-a/);
+  assert.equal(result.registration.row.config.serviceUrl, 'https://plugins.corp.example');
 });
 
 test('install refuses a host outside the allowlist', async () => {
