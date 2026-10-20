@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.29.0 |
+| 版本 | V0.30.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -197,6 +197,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `no-installed-version` | 更新 | 未提供已安装版本 | 否 |
 | `no-latest-version` | 更新 | 目录里没有可用版本（含全部已撤回） | 否 |
 | `installed-revoked` | 更新 | 已安装的版本被撤回，建议换到可用版本 | 是（换版本） |
+| `not-found` | 条目 | 目录里没有这个包名 | 核对名称 |
 | `no-path` | 配置 | 缓存或落盘未配置路径 | 否 |
 | `no-registry` | 策略 | 策略未配置制品源 | 否 |
 | `no-repo` | 规划 | 条目没有仓库地址也没有归档地址 | 否 |
@@ -231,6 +232,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `retry` | 服务不可达或超时，稍后重试 |
 | `choose-another-version` | 目标版本已撤回，选别的版本 |
 | `fix-the-package` | 包本身不合格，按 `steps` 修正 |
+| `check-the-name` | 检查包名拼写后重试 |
 | `contact-admin` | 未归类的失败，交平台组 |
 
 ## 9. 权限与安全

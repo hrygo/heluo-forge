@@ -72,3 +72,20 @@ test('a local catalog reports itself as local', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a missing entry is reported as not-found, not an internal error', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'forge-market-nf-'));
+  try {
+    const file = join(dir, 'catalog.json');
+    await writeFile(file, JSON.stringify([{ name: '@heluo/a', version: '0.1.0', repo: 'https://gitee.corp.example/g/a' }]));
+    const tools = buildMarketTools(createLocalCatalog(file));
+    const result = JSON.parse((await tools.find((tool) => tool.name === 'market_detail').execute({ name: '@heluo/zzz' })).content[0].text);
+    assert.equal(result.reason, 'not-found');
+    assert.equal(result.action, 'check-the-name');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

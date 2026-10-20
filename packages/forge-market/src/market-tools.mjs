@@ -13,6 +13,8 @@ const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value,
 // 把错误翻译成下一步动作，避免让用户自己猜"搜索失败"是什么意思。
 export function nextAction(reason) {
   switch (reason) {
+    case 'not-found':
+      return 'check-the-name';
     case 'unauthorized':
       return 're-login';
     case 'forbidden':

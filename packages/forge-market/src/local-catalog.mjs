@@ -15,7 +15,7 @@ export function createLocalCatalog(path) {
     list: async () => ({ entries: await read() }),
     detail: async (name) => {
       const entry = (await read()).find((item) => item?.name === name);
-      if (!entry) throw Object.assign(new Error('not found'), { status: 404 });
+      if (!entry) throw Object.assign(new Error('not found'), { code: 'not-found', status: 404 });
       return entry;
     },
     submit: async () => {
