@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.28.0 |
+| 版本 | V0.29.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -149,6 +149,8 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 4. 校验 `package.json` 的 `name` 与 `engines.dsh`，与详情页展示一致才继续。
 5. 返回可直接使用的 loader 行与登记步骤，并附 `version`、`tag`、`directory`，使登记对象与实装版本一一对应；插件不写 profile，由操作者或 `plugin_manager` 完成登记。
 6. 下载计数由服务端在发放归档地址时自增，插件不上报，也不因安装失败回退。
+
+结果里的 `mode` 区分两种结局：`installed` 表示文件已写入 `targetDir` 并附 `persisted`；`verify-only` 表示只下载校验、磁盘未写入（未配置 `targetDir`）。调用方不得把 `installed` 字段当成已安装。
 
 任何一步失败都回滚临时目录，不留半装状态。
 

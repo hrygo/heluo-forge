@@ -323,11 +323,13 @@ export function buildMarketTools(client, options = {}) {
           tag: result.installed.tag,
           directory,
         };
-        if (!options.targetDir) return { ...result, registration };
+        // 没有 targetDir 时只下载并校验，磁盘上什么都没写；用 mode 说清楚，
+        // 免得调用方把 installed 当成「已安装」。
+        if (!options.targetDir) return { ...result, mode: 'verify-only', registration };
 
         const persisted = await persistFiles(result.installed.files ?? [], packageDirFor(options.targetDir, result.installed.name));
         return persisted.ok
-          ? { ...result, registration, persisted }
+          ? { ...result, mode: 'installed', registration, persisted }
           : { ok: false, reason: persisted.reason, detail: persisted.detail };
       },
     ),

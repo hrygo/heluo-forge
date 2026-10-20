@@ -412,3 +412,38 @@ test('search survives without a cache or a target directory', async () => {
   assert.equal(result.reason, 'service-unavailable');
   assert.equal(result.action, 'retry');
 });
+
+test('install says whether anything was written', async () => {
+  const verifyOnly = await call(buildMarketTools(client, {
+    allowedHosts: ['gitee.corp.example'],
+    install: {
+      download: async () => ({ ok: true, bytes: Buffer.from('x') }),
+      extract: async () => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) }] }),
+    },
+  }), 'market_install', { name: '@heluo/a' });
+  assert.equal(verifyOnly.ok, true);
+  assert.equal(verifyOnly.mode, 'verify-only');
+  assert.equal(verifyOnly.persisted, undefined);
+});
+
+test('install reports installed mode once files are written', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'forge-market-mode-'));
+  try {
+    const tools = buildMarketTools(client, {
+      allowedHosts: ['gitee.corp.example'],
+      targetDir: dir,
+      install: {
+        download: async () => ({ ok: true, bytes: Buffer.from('x') }),
+        extract: async () => ({ ok: true, files: [{ path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) }] }),
+      },
+    });
+    const result = await call(tools, 'market_install', { name: '@heluo/a' });
+    assert.equal(result.mode, 'installed');
+    assert.equal(result.persisted.ok, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
