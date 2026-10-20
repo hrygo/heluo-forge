@@ -16,6 +16,10 @@ export function planInstall(entry, version, allowedHosts = []) {
   const resolved = typeof chosen === 'string' ? { version: chosen, tag: `v${chosen}` } : chosen;
   if (!resolved.version) return { ok: false, reason: 'no-version' };
   if (resolved.revoked === true) return { ok: false, reason: 'version-revoked' };
+  // 版本号非法时标签也会错，直接报出来，不要让用户面对一个 404 下载失败。
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(String(resolved.version))) {
+    return { ok: false, reason: 'bad-version', detail: resolved.version };
+  }
   if (!entry?.repo && !resolved.archiveUrl) return { ok: false, reason: 'no-repo' };
   const target = resolved.archiveUrl || entry.repo;
   let url;

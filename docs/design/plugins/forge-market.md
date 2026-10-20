@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.24.1 |
+| 版本 | V0.25.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -171,6 +171,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `bad-id` | 登记 | 无法从包名推导 loader 行 id | 否 |
 | `bad-manifest` | 清单 | package.json 不是合法 JSON | 否 |
 | `bad-name` | 登记 | 包名不是 @scope/name | 否 |
+| `bad-version` | 规划 | 目录里的版本不是 `x.y.z` 或 `x.y.z-pre`，标签也会随之出错 | 否 |
 | `bad-plan` | 规划 | 安装计划缺仓库或标签 | 否 |
 | `bad-repo` | 规划 | 仓库地址不是合法 URL | 否 |
 | `bad-tag` | 提交 | 标签不是 vX.Y.Z | 否 |

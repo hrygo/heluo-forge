@@ -43,3 +43,10 @@ test('skips revoked versions and refuses an explicitly revoked one', () => {
   assert.equal(planInstall(entry, undefined, ['gitee.corp.example']).plan.version, '0.1.0');
   assert.equal(planInstall(entry, '0.2.0', ['gitee.corp.example']).reason, 'version-revoked');
 });
+
+test('refuses a version that is not a version', () => {
+  const entry = { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', versions: [{ version: 'abc' }] };
+  assert.deepEqual(planInstall(entry, undefined, ['gitee.corp.example']), { ok: false, reason: 'bad-version', detail: 'abc' });
+  const rc = { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', versions: [{ version: '1.0.0-rc.1' }] };
+  assert.equal(planInstall(rc, undefined, ['gitee.corp.example']).plan.version, '1.0.0-rc.1');
+});
