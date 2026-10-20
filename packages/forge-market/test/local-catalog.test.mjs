@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLocalCatalog } from '../src/local-catalog.mjs';
+import { buildMarketTools } from '../src/market-tools.mjs';
 import { apply } from '../src/index.mjs';
 
 const withCatalog = async (body, fn) => {
@@ -54,4 +55,20 @@ test('apply accepts a catalog file instead of a service url', async () => {
 
 test('apply refuses to start with neither source', () => {
   assert.throws(() => apply({ tools: { register: () => () => {} } }, {}), /serviceUrl or catalogFile/);
+});
+
+test('a local catalog reports itself as local', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'forge-market-src-'));
+  try {
+    const file = join(dir, 'catalog.json');
+    await writeFile(file, JSON.stringify({ entries: [{ name: '@heluo/a', version: '0.1.0', repo: 'https://gitee.corp.example/g/a' }] }));
+    const tools = buildMarketTools(createLocalCatalog(file));
+    const result = JSON.parse((await tools.find((tool) => tool.name === 'market_search').execute({})).content[0].text);
+    assert.equal(result.source, 'local');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

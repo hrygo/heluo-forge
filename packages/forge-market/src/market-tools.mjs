@@ -82,7 +82,8 @@ export function buildMarketTools(client, options = {}) {
       async ({ query = '', sort = 'stars', limit = 20 }) => {
         const cachePath = options.cachePath;
         let entries;
-        let source = 'service';
+        // 如实标注来源：本地目录不是服务，缓存也不是。
+        let source = client?.kind === 'local' ? 'local' : 'service';
         let stale = false;
         try {
           const raw = await client.list();

@@ -377,3 +377,9 @@ test('registration confirms the version that is actually installed', async () =>
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('search says where the entries came from', async () => {
+  const localTools = buildMarketTools({ kind: 'local', list: client.list });
+  assert.equal((await call(localTools, 'market_search', {})).source, 'local');
+  assert.equal((await call(buildMarketTools(client), 'market_search', {})).source, 'service');
+});
