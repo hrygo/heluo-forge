@@ -10,7 +10,7 @@
 | 英文名称 | Heluo Forge |
 | 工程标识 | `heluo-forge` |
 | 项目编号 | CORP-DSH |
-| 版本 | V1.6.1 |
+| 版本 | V1.6.2 |
 | 状态 | 方案评审；工程底座已建立，业务插件未实现 |
 | 最后更新 | 2026-10-20 |
 | 文档清单 | [docs/DOCUMENT-REGISTER.md](<docs/DOCUMENT-REGISTER.md>) |
@@ -62,9 +62,9 @@ heluo-forge/
 |---|---|---|
 | [文档总览](<docs/README.md>) | 分类目录、十份领域交付物、协作与工程入口 | 全体 |
 | [需求与场景基线](<docs/requirements/requirements-baseline.md>) | L2 基线（V1.2.2，评审稿）：范围唯一真源、7 类角色、8 条场景、23 条需求、M1–M6 | PM、业务方、安全、试点用户 |
-| [总体架构设计](<docs/architecture/platform-architecture.md>) | L1 架构（V1.3.2，评审稿）：责任与信任边界、领域设计、安全、ADR | 架构评审、各团队负责人 |
+| [总体架构设计](<docs/architecture/platform-architecture.md>) | L1 架构（V1.3.3，评审稿）：责任与信任边界、领域设计、安全、ADR | 架构评审、各团队负责人 |
 | [推广实施方案](<docs/plans/rollout-plan.md>) | L2 计划（V1.2.2，评审稿）：关键路径、条件排期、G0–G3 证据、验收 A1–A14 | PM、实施团队 |
-| [AI 网关契约](<docs/contracts/gateway-contract.md>) | L3 草案（V0.8.1）：模型鉴权、双维度额度、错误与日志边界 | 网关、模型与安全团队 |
+| [AI 网关契约](<docs/contracts/gateway-contract.md>) | L3 草案（V0.8.2）：模型鉴权、双维度额度、错误与日志边界 | 网关、模型与安全团队 |
 | [逐模块设计索引](<docs/design/README.md>) | 九个包与两个服务的设计状态、顺序与完成判据 | 插件与服务开发者 |
 | [工程开发与发布约定](<docs/engineering/development-conventions.md>) | 工作区、测试分层、版本、发布与 CI 规则 | 维护者 |
 | [工程仓库结构设计](<docs/engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层 | 工程负责人 |
