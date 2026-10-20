@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.43.0 |
+| 版本 | V0.45.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -128,12 +128,14 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 
 面板挂在 `plugins.bundle.config`（keyed slot）。页面以 `renderSlot(..., { entryKey: pkg.name })` 派发，**键必须与包名逐字一致**；官方实验 bundle 亦用完整带 scope 的包名（如 `@deepseek-ai/dsh-experimental-cot-translation-bundle`）。现场出现的 `dshmarket` 这类键与包名不同形，不会被派发，属于注册方自己的问题，不构成本包的先例。
 
-| 视图 | 何时 | 渲染 |
-|---|---|---|
-| `summary` | bundle 页的列表行 | 一行文字，带条目数或不可达提示 |
-| `page` | bundle 自己的配置页 | 完整列表 |
+slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在 bundle 详情里以 `view: 'page'` 派发；未见 `summary` 的调用点。
 
-不区分视图会让摘要行里塞进整张列表，撑破列表布局。`client.js` 因此按 `view` 分支，摘要分支不含列表元素。
+| 视图 | 当前是否会被调用 | 渲染 |
+|---|---|---|
+| `page` | 是（bundle 详情页） | 完整列表 |
+| `summary` | **未观察到调用点**（类型允许） | 一行文字，带条目数或不可达提示 |
+
+`client.js` 仍按 `view` 分支：若宿主将来以 `summary` 调用，摘要只出一行，不含列表元素；不分支的话，一次 `summary` 调用就会把整张列表塞进列表行。这是防御性代码，不是已在使用的路径。
 
 ## 7. 与服务端的契约
 
@@ -316,6 +318,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | 解包 | 先剥离 Gitee 的 `<repo>-<tag>/` 顶层；白名单内文件写入，其余（`LICENSE`、`docs/` 等）跳过并列入 `skipped`；绝对路径与 `..` 一律拒绝 |
 | 供应链 | 摘要比对；声明 `preinstall`/`install`/`postinstall` 的包在评审与安装两处都被拒绝 |
 | 体积 | 下载按 `content-length` 与流式读取双重限制 64 MB；解压用 `maxOutputLength` 限制，避免 gzip 炸弹 |
+| 路由注册 | `ctx.webServer.register({ kind: 'prefix', path: '/api/forge-market', handler })`；返回 disposer。宿主对同一 `(kind, path)` 重复注册会抛错，因此路径前缀不能与其它插件相同；前缀路由不会改写 `req.url`，处理器按完整路径匹配（已核验 Host `webServer` 契约，2026-10-20） |
 | 计数 | 插件不上报；服务端在发放归档地址时按（条目, 机器哈希, 日）去重，缺少机器哈希时按（条目, 日） |
 
 ### 9.1 受保护的行 id
