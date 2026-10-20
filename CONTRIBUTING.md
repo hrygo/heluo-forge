@@ -1,36 +1,36 @@
 # 贡献指南
 
-本仓库是河洛企业级智能研发平台的方案与工程底座，包含受控文档、九个规划包、两个独立服务与私有市场资产。仓库为内部私有，不对外发布。
+本指南负责环境准备、变更流程和评审提交。项目现状与目录见 [README](README.md)，agent 执行规则见 [AGENTS.md](AGENTS.md)，文档治理见[文档总览](docs/README.md#6-编写约定)，工程细则见[开发约定](docs/engineering/development-conventions.md)。
+
+仓库为企业内部私有工程；参与贡献不代表获得推送、发布或对外分发授权。
 
 ## 1. 环境
 
 | 项 | 版本 | 说明 |
 |---|---|---|
-| Node.js | 24.21.0 | 由 `.node-version` 固定；使用 fnm、nvm 或等价工具切换 |
-| pnpm | 11.28.5 | 由 `package.json` 的 `packageManager` 固定 |
+| Node.js | 见 [.node-version](.node-version) | 用现有版本管理工具切换，并核对 `node --version` |
+| pnpm | 见 [package.json](package.json) 的 `packageManager` | 核对 `pnpm --version`，同时满足 `engines` |
 | 依赖 | 无第三方运行时依赖 | 工程检查使用 Node 标准库 |
 
 首次检出后执行 `pnpm install --frozen-lockfile` 校验锁文件；日常检查不需要安装依赖。
 
-## 2. 目录
+## 2. 选择变更入口
 
-| 路径 | 内容 |
+| 任务 | 先确认 |
 |---|---|
-| `docs/` | 需求、架构、计划、设计、契约、运维、协作与工程文档 |
-| `packages/` | 安装进 DSH 的扩展包；当前只有职责说明 |
-| `services/` | 独立运行的服务；当前只有职责说明 |
-| `deploy/` | 私有市场、制品仓库与双端分发资产 |
-| `scripts/` | 文档与仓库检查器 |
-| `tests/` | 检查器单元测试 |
+| 文档、契约或方案 | 在[文档地图](docs/README.md#2-文档地图)定位职责文件，核对元数据与修订记录 |
+| 插件或独立服务 | 查[设计索引](docs/design/README.md)与对应模块 README，确认设计准入 |
+| 工程脚本、测试或 CI | 查[开发约定](docs/engineering/development-conventions.md)，定位实际检查规则和用例 |
+| 部署与运行手册 | 查[部署说明](deploy/README.md)及[运维索引](docs/operations/README.md)，确认授权与实测条件 |
 
 ## 3. 变更流程
 
-1. 确认改动属于已批准范围；新模块或契约变化先写设计，见[设计索引](docs/design/README.md)。
-2. 从 `main` 建短分支，命名 `feat/`、`fix/`、`docs/`、`chore/`。
-3. 修改文件；移动文件使用 `git mv`，并在同一变更内更新全部引用。
-4. 运行 `pnpm check`，处理全部错误。
-5. 提交，一次提交只做一件事。
-6. 发起 PR，填写模板中的检查项。
+1. 用 `git status --short` 和目标差异确认工作区；保留已有改动，发现同一处并行编辑时先协调。
+2. 确认范围及内容归属。新模块先设计，契约字段先改对应契约；重大未决选择保留待确认，不代替团队批准。
+3. 需要创建分支时从适当基线建立短分支，常规命名见[开发约定](docs/engineering/development-conventions.md)；agent 宿主明确规定前缀时遵循宿主要求，不擅自切换已有工作分支。
+4. 修改文件并同步受影响的登记与引用；移动文件使用 `git mv`，同一变更更新全部引用。
+5. 运行 `pnpm check` 与 `git diff --check`，审阅最终 diff；模块已有实现时另跑相应测试。失败须修复或明确阻塞，不能以跳过宣称通过。
+6. 在相应授权范围内提交或发起 PR，一次提交只做一件事。按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)填写关联依据、验证结果、未验项与风险；本地编辑完成不自动触发推送、合并或发布。
 
 推送与发布分开：合并到 `main` 不自动发布任何包。
 
@@ -42,30 +42,23 @@
 
 ## 5. 文档规则
 
-- 受控文档必须含文档信息、修订记录、编制依据与关联文档，并登记到[文档清单](docs/DOCUMENT-REGISTER.md)。
-- 不删除历史修订行，不合并版本；内容迁移只升修订号并说明原因。
-- 版本、状态与编号以文档清单为准，`pnpm check:docs` 会比对。
-- 链接使用相对路径，必须可在仓库内解析；锚点须指向存在的标题或有效行号。
-- 不写本机绝对路径、真实域名、内网地址或凭据。
+文档类型、元数据、状态、升版与历史保留统一按[文档治理规则](docs/README.md#6-编写约定)执行。正文元数据与[文档清单](docs/DOCUMENT-REGISTER.md)必须一致，出现差异时查明并修正，不让任一副本自动覆盖另一处。
+
+修改范围或决策时沿关联关系同步下游设计、契约、计划和验收；入口保留摘要与链接。文档检查验证结构及一致性，语义正确性仍需评审。
 
 ## 6. 新增模块
 
 1. 在[设计索引](docs/design/README.md)登记模块、形态与状态。
 2. 用[模块设计模板](docs/templates/design-template.md)编写详细设计，核验目标 DSH 接口。
 3. 设计通过后创建 `package.json`，声明 `engines.dsh`、`private` 与 `test` 脚本。
-4. 将对应 `README.md` 的状态从“规划”改为“可用”。
-5. 包内测试通过后，才进入发布准备。
+4. 完成实现与包内实际测试；兼容、契约或实机验证按设计准入要求取证。
+5. 达到可用判据后再更新对应 README 状态，写清能力边界与未验项；发布还须单独满足发布门禁。
 
 未建立清单前不要提前写 `src/`，避免出现无法运行的空壳。
 
 ## 7. 检查命令
 
-| 命令 | 内容 |
-|---|---|
-| `pnpm check` | 文档检查、仓库检查、单元测试 |
-| `pnpm check:docs` | 元数据、登记、链接、表格、问题序列 |
-| `pnpm check:repo` | 结构、工作区、模块状态、工作流权限、凭据扫描 |
-| `pnpm test:unit` | 检查器正反向用例 |
+常用命令与覆盖范围见 [README 的本地检查](README.md#3-本地检查)，可执行定义以 [package.json](package.json) 为准。包级、契约、集成与端到端测试按[测试分层约定](docs/engineering/development-conventions.md)分别执行。
 
 检查器本身也要改：新增规则时补充失败样例，避免“看起来通过”。
 
