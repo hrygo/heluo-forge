@@ -1,4 +1,4 @@
-# @corp/dsh-market
+# @heluo/forge-market
 
 状态：规划
 
@@ -9,7 +9,7 @@
 | 不负责 | 不实现目录服务，不自研 registry，不提供额外市场 UI |
 | 衔接点 | `plugin-market`、`plugin-manager` |
 | 服务实现 | [services/market-index](../../services/market-index/README.md) |
-| 详细设计 | `docs/design/plugins/dsh-market.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 详细设计 | `docs/design/plugins/forge-market.md`（待编写，见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立 `package.json`、源码与测试 |
 
 ## 边界

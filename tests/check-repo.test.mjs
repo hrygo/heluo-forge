@@ -28,7 +28,7 @@ function write(root, path, content) {
 
 const PACKAGE = `${JSON.stringify(
   {
-    name: 'corp-dsh',
+    name: 'heluo-forge',
     version: '0.0.0',
     private: true,
     packageManager: 'pnpm@11.28.5',
@@ -66,13 +66,13 @@ export function buildValidRepo(root) {
   write(root, '.gitattributes', '* text=auto eol=lf\n');
   write(root, '.gitignore', 'node_modules/\ncoverage/\n.DS_Store\n');
   write(root, '.github/workflows/check.yml', WORKFLOW);
-  write(root, 'packages/dsh-iam/README.md', '# dsh-iam\n\n状态：规划\n');
+  write(root, 'packages/forge-iam/README.md', '# forge-iam\n\n状态：规划\n');
   write(root, 'services/devops-mcp/README.md', '# devops-mcp\n\n状态：规划\n');
   mkdirSync(join(root, 'tests'), { recursive: true });
 }
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), 'corp-dsh-repo-'));
+  const root = mkdtempSync(join(tmpdir(), 'heluo-forge-repo-'));
   buildValidRepo(root);
   return root;
 }
@@ -148,7 +148,7 @@ test('workflow without read-only permissions is rejected', () => {
 test('package claimed usable without a manifest is rejected', () => {
   const root = fixture();
   try {
-    write(root, 'packages/dsh-iam/README.md', '# dsh-iam\n\n状态：可用\n');
+    write(root, 'packages/forge-iam/README.md', '# forge-iam\n\n状态：可用\n');
     const { errors } = checkRepo(root);
     assert.ok(errors.some((error) => error.includes('without package.json')), errors.join('\n'));
   } finally {
@@ -159,8 +159,8 @@ test('package claimed usable without a manifest is rejected', () => {
 test('manifest without engines.dsh or test script is rejected', () => {
   const root = fixture();
   try {
-    write(root, 'packages/dsh-iam/README.md', '# dsh-iam\n\n状态：可用\n');
-    write(root, 'packages/dsh-iam/package.json', '{"name":"@corp/dsh-iam","private":true}\n');
+    write(root, 'packages/forge-iam/README.md', '# forge-iam\n\n状态：可用\n');
+    write(root, 'packages/forge-iam/package.json', '{"name":"@heluo/forge-iam","private":true}\n');
     const { errors } = checkRepo(root);
     assert.ok(errors.some((error) => error.includes('engines.dsh')), errors.join('\n'));
     assert.ok(errors.some((error) => error.includes('test script')), errors.join('\n'));

@@ -1,4 +1,4 @@
-# @corp/dsh-devops
+# @heluo/forge-devops
 
 状态：规划
 
@@ -9,7 +9,7 @@
 | 不负责 | 不内置平台凭据，不实现服务端审批流，不替代平台权限 |
 | 衔接点 | `mcp-client` |
 | 服务实现 | [services/devops-mcp](../../services/devops-mcp/README.md) |
-| 详细设计 | `docs/design/plugins/dsh-devops.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 详细设计 | `docs/design/plugins/forge-devops.md`（待编写，见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立 `package.json`、源码与测试 |
 
 ## 边界

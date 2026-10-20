@@ -1,16 +1,23 @@
-# 企业 DSH 研发平台（corp-dsh）
+# 河洛 · Heluo Forge
+
+河洛企业级智能研发平台（Heluo Forge — Enterprise AI Engineering Platform）是基于 DeepSeek Harness（DSH）构建的企业级智能研发平台，连接模型、工具与研发流程，目标是为研发团队提供可信、可控的智能协作能力。
 
 ## 项目信息
 
 | 项 | 内容 |
 |---|---|
+| 中文名称 | 河洛企业级智能研发平台 |
+| 英文名称 | Heluo Forge |
+| 工程标识 | `heluo-forge` |
 | 项目编号 | CORP-DSH |
-| 版本 | V1.6 |
+| 版本 | V1.6.1 |
 | 状态 | 方案评审；工程底座已建立，业务插件未实现 |
 | 最后更新 | 2026-10-20 |
 | 文档清单 | [docs/DOCUMENT-REGISTER.md](<docs/DOCUMENT-REGISTER.md>) |
 | 文档总览 | [docs/README.md](<docs/README.md>) |
 | 范围 | 用 DSH 与 DSH 插件体系承载企业研发体系：身份与授权、模型与成本、工程系统、研发流程、分发与治理 |
+
+品牌名称统一为“河洛 / Heluo Forge”，包名统一为 `@heluo/forge-*`，包目录统一为 `packages/forge-*`。`CORP-DSH-*` 沿用为文档编号以保持历史可追溯，DSH 仍指上游 DeepSeek Harness。
 
 ## 1. 结论
 
@@ -23,7 +30,7 @@
 ## 2. 仓库结构
 
 ```text
-corp-dsh/
+heluo-forge/
 ├── README.md / AGENTS.md / CONTRIBUTING.md / SECURITY.md
 ├── package.json / pnpm-workspace.yaml / pnpm-lock.yaml
 ├── .github/                  # PR、Issue 模板与只读检查工作流
@@ -54,9 +61,9 @@ corp-dsh/
 | 文档 | 内容 | 主要读者 |
 |---|---|---|
 | [文档总览](<docs/README.md>) | 分类目录、十份领域交付物、协作与工程入口 | 全体 |
-| [需求与场景基线](<docs/requirements/requirements-baseline.md>) | L2 基线（V1.2.1，评审稿）：范围唯一真源、7 类角色、8 条场景、23 条需求、M1–M6 | PM、业务方、安全、试点用户 |
-| [总体架构设计](<docs/architecture/platform-architecture.md>) | L1 架构（V1.3.1，评审稿）：责任与信任边界、领域设计、安全、ADR | 架构评审、各团队负责人 |
-| [推广实施方案](<docs/plans/rollout-plan.md>) | L2 计划（V1.2.1，评审稿）：关键路径、条件排期、G0–G3 证据、验收 A1–A14 | PM、实施团队 |
+| [需求与场景基线](<docs/requirements/requirements-baseline.md>) | L2 基线（V1.2.2，评审稿）：范围唯一真源、7 类角色、8 条场景、23 条需求、M1–M6 | PM、业务方、安全、试点用户 |
+| [总体架构设计](<docs/architecture/platform-architecture.md>) | L1 架构（V1.3.2，评审稿）：责任与信任边界、领域设计、安全、ADR | 架构评审、各团队负责人 |
+| [推广实施方案](<docs/plans/rollout-plan.md>) | L2 计划（V1.2.2，评审稿）：关键路径、条件排期、G0–G3 证据、验收 A1–A14 | PM、实施团队 |
 | [AI 网关契约](<docs/contracts/gateway-contract.md>) | L3 草案（V0.8.1）：模型鉴权、双维度额度、错误与日志边界 | 网关、模型与安全团队 |
 | [逐模块设计索引](<docs/design/README.md>) | 九个包与两个服务的设计状态、顺序与完成判据 | 插件与服务开发者 |
 | [工程开发与发布约定](<docs/engineering/development-conventions.md>) | 工作区、测试分层、版本、发布与 CI 规则 | 维护者 |
@@ -112,3 +119,10 @@ corp-dsh/
 - 文档改名、升版或状态变化时，同步[文档清单](<docs/DOCUMENT-REGISTER.md>)，并运行 `pnpm check`。
 - 文件移动使用 `git mv`，同一变更内更新全部引用；不保留重复正文或旧路径导航桩。
 - 本目录独立于其他本地仓库，历史证据以各文档的核验日期为准。
+
+
+## 修订记录
+
+| 版本 | 日期 | 修订人 | 修订说明 |
+|---|---|---|---|
+| V1.6.1 | 2026-10-20 | DSH 平台组（代拟） | 统一河洛 Heluo Forge 品牌、工程标识、包名与目录，保留文档编号及上游 DSH 标识 |

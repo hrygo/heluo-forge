@@ -204,7 +204,7 @@ ${questions('PMO', 7)}
 }
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), 'corp-dsh-docs-'));
+  const root = mkdtempSync(join(tmpdir(), 'heluo-forge-docs-'));
   buildValidDocs(root);
   return root;
 }

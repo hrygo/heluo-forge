@@ -1,12 +1,12 @@
-# 企业 DSH 研发平台推广实施方案
+# 河洛企业级智能研发平台推广实施方案
 
 ## 文档信息
 
 | 项 | 内容 |
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-001 |
-| 文档名称 | 企业 DSH 研发平台推广实施方案 |
-| 版本 | V1.2.1 |
+| 文档名称 | 河洛企业级智能研发平台推广实施方案 |
+| 版本 | V1.2.2 |
 | 文档状态 | 评审稿 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟，责任人待确认） |
@@ -26,10 +26,11 @@
 | V1.1 | 2026-10-20 | DSH 平台组 | 同步需求基线（3 部门 800 人、50% 麒麟、7 类角色、自助安装）；统一 DevOps MCP 协议、P1/P2 补丁排期、SDD 策略插件口径与 A1–A14 完整验收表 |
 | V1.2 | 2026-10-20 | DSH 平台组（代拟） | 补充项目级关键路径、15 周条件基准、门禁证据与拟签署角色、分批试点计时建议和运行退出；强化 A1–A14 安全负向验收及跨团队确认引用，区分历史依据与本次文档核对 |
 | V1.2.1 | 2026-10-20 | DSH 平台组（代拟） | 仅迁移至 docs/plans/ 并重建相对链接；验收、门禁与条件排期不变 |
+| V1.2.2 | 2026-10-20 | DSH 平台组（代拟） | 统一河洛平台名称及 @heluo/forge-* 包名；排期、门禁与验收不变 |
 
 > 编制依据：原文历史依据为 DSH `0.2.1-rc.2` 源码、npm registry 与 GitHub 发布资产（原记载核验日期 2026-10-20），§3 保留该历史依据，不表示本次重新核验源码或发布状态。本次 V1.2 仅于 2026-10-20 对照项目协作规范、需求基线、总体架构、AI 网关契约及文档清单进行文档核对；未新增源码、网络接口或实机测试证据。企业 IAM / 网关 / DevOps / Gitee 接口、Windows 与银河麒麟实机、性能与恢复演练均未验，接口、保留期、编制责任人与签署人仍待团队确认。
 >
-> 关联文档：[企业 DSH 研发平台总体架构设计](../architecture/platform-architecture.md)、[企业 DSH 研发平台需求与场景基线](../requirements/requirements-baseline.md)、[AI 网关契约](../contracts/gateway-contract.md)、[文档清单](../DOCUMENT-REGISTER.md)。
+> 关联文档：[河洛企业级智能研发平台总体架构设计](../architecture/platform-architecture.md)、[河洛企业级智能研发平台需求与场景基线](../requirements/requirements-baseline.md)、[AI 网关契约](../contracts/gateway-contract.md)、[文档清单](../DOCUMENT-REGISTER.md)。
 
 ## 1. 背景与目标
 
@@ -65,7 +66,7 @@
   │    登录/刷新后写入 CredentialRef: ENTERPRISE_ACCESS_TOKEN
   │    充当 MCP token broker：按 resource 申请并缓存 token
   │
-  ├─ 策略插件（@corp/dsh-policy，tools/pre-execute + tools.guard）
+  ├─ 策略插件（@heluo/forge-policy，tools/pre-execute + tools.guard）
   │    ├─ $DSH_HOME/** 硬拒绝（防 Agent 读取 .credentials.yaml）
   │    ├─ 生产写操作与客户数据外发（C3）转本机 ask 二次确认
   │    ├─ SDD 阶段路径保护规则
@@ -134,7 +135,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | 6 | Linux 沙箱链为 `bwrap → Landlock → fail closed`，无可用后端时拒绝执行而非降级 | `packages/sandbox/sandbox-local/README.md` | 约 400 台麒麟的首要准入验证项；加固内核可能直接不可用 |
 | 7 | Web 前端构建目标为 `es2022` | `apps/web/vite.config.ts` | 浏览器版本已确认达标，不再作为风险 |
 | 8 | 插件市场为 format-1 index，私有 registry 优先且不回落公网，自带 index 生成器 | `packages/boot/plugin-market/README.md`、`packages/boot/plugin-manager/README.md`、`apps/plugin-market-generator/README.md` | 企业市场只差治理与流水线 |
-| 9 | 凭据文件为 0600 的 `$DSH_HOME/.credentials.yaml`，agent 以同一 OS 用户运行，可读取 | `packages/credentials/credentials-local/README.md` | 必须用 `@corp/dsh-policy` 硬拒绝访问 `$DSH_HOME/**` 并配合沙箱遮蔽挂载 + 短 TTL |
+| 9 | 凭据文件为 0600 的 `$DSH_HOME/.credentials.yaml`，agent 以同一 OS 用户运行，可读取 | `packages/credentials/credentials-local/README.md` | 必须用 `@heluo/forge-policy` 硬拒绝访问 `$DSH_HOME/**` 并配合沙箱遮蔽挂载 + 短 TTL |
 | 10 | 公开部署的 launch URL 即进程凭据，文档要求只分享给预期用户 | `docs/user/guide/public-deployments.md` | 麒麟本机 Web 强制绑定 `127.0.0.1`，由 `dsh-web-open` 脚本读取本机 launch URL 拉起 |
 | 11 | npm 上 `@deepseek-ai/dsh` 共 36 个版本，全部为预发布，最近 30 天 14 个版本，最新 `0.2.1-rc.2` | npm registry 实测 | 必须锁版本、内部镜像、兼容性门禁 |
 | 12 | `sharp`、`koffi`、`node-addon-system` 均有 linux-arm64 预编译；`node-pty` 无预编译，安装时回退 `node-gyp rebuild` | npm registry 元数据、`packages/subprocess/subprocess-local/package.json` | 麒麟需在 arm64 构建机预构建 profile，避免用户端编译 |
@@ -167,8 +168,8 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | P1-1 | fork `@eduwork/dsh-oidc`：接企业 IdP、模型令牌镜像、MCP token broker（按 `resource`）、品牌最小化 | 可安装的企业 IAM 插件包 |
 | P1-2 | Windows `desktopServices` 适配层 + `dsh-mcp-client` 基础补丁（按请求回调取 token 与 `stdio` 凭据重连） | 约 30 行 Host 插件 + 50–80 行 `mcp-client` 补丁（均为规模估算，接口与测试范围未定，不构成交付上限） |
 | P1-3 | 刷新串行化：把“检查有效期 + 刷新（≤5s 超时）+ 写回”放进 `modifyRecord` | 双进程不互相踢出 |
-| P1-4 | Gitee 只读 MCP（arm64 交叉编译）：仓库 / Issue / PR 查询与身份隔离验证 | 可用的 `@corp/dsh-gitee` 包（落入 `CORP-DSH-GITEE-001`） |
-| P1-5 | DevOps 只读 MCP：3 个工具（流水线、构建日志、部署状态）最小闭环与 10 人内测 | 可用的 `@corp/dsh-devops` 包（落入 `CORP-DSH-DEVOPS-001`） |
+| P1-4 | Gitee 只读 MCP（arm64 交叉编译）：仓库 / Issue / PR 查询与身份隔离验证 | 可用的 `@heluo/forge-gitee` 包（落入 `CORP-DSH-GITEE-001`） |
+| P1-5 | DevOps 只读 MCP：3 个工具（流水线、构建日志、部署状态）最小闭环与 10 人内测 | 可用的 `@heluo/forge-devops` 包（落入 `CORP-DSH-DEVOPS-001`） |
 
 ### 4.3 P2 试点工程准备（4 周，准入 G2）与试点运行（6 周，准入 G3）
 
@@ -178,9 +179,9 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | P2-2 | `dsh-mcp-client` 补丁完善：401 刷新与安全重试分类、兼容性回归套件及向上游提 PR（内部 registry 同步发包兜底） | 补丁包 + 上游 PR + 兼容性测试；生产写操作在 401 / 超时 / 断流后结果未知时不得盲目重放，依赖服务端幂等或查单 |
 | P2-3 | 终端打包：Windows MSI 自助安装（MDM 可选）+ 配置预置；麒麟 deb + 内部 apt 源 + `systemd --user`（绑定 `127.0.0.1`）+ `dsh-web-open` 启动脚本 | 两条自助安装通道与安装校验指引（落入 `CORP-DSH-PKG-001`） |
 | P2-4 | 企业插件市场：私有 registry + CI 生成 index + 兼容性门禁 + 按角色控制 `plugin_manager` | 可搜索、可安装的内部市场（落入 `CORP-DSH-DIST-001`） |
-| P2-5 | 策略与审计（`@corp/dsh-policy`）：7 类角色 preset、`$DSH_HOME/**` 硬拒绝、客户数据外发确认（C3）、OTel 决策审计 | 安全评审材料与策略包（落入 `CORP-DSH-POLICY-001`） |
+| P2-5 | 策略与审计（`@heluo/forge-policy`）：7 类角色 preset、`$DSH_HOME/**` 硬拒绝、客户数据外发确认（C3）、OTel 决策审计 | 安全评审材料与策略包（落入 `CORP-DSH-POLICY-001`） |
 | P2-6 | 3 部门 800 人试点运行（6 周）：建议按支持人力（1:300）分两批各 400 人进场，第 4 周中期检查、第 6 周判定 M1–M6 | 试点评估报告（落入 `CORP-DSH-PILOT-001`） |
-| P2-7 | 轻量 SDD Skill 包（推广前交付）：1 skill + 1 CLI + `@corp/dsh-policy` 阶段路径规则 + 1 个 CI job | SDD 软件包与试点验证（落入 `CORP-DSH-SDD-001`） |
+| P2-7 | 轻量 SDD Skill 包（推广前交付）：1 skill + 1 CLI + `@heluo/forge-policy` 阶段路径规则 + 1 个 CI job | SDD 软件包与试点验证（落入 `CORP-DSH-SDD-001`） |
 
 ### 4.4 P3 推广（持续）
 
@@ -266,7 +267,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | 环 → skill | 固定委托 brainstorming → writing-plans、executing-plans / subagent | 同名 skills + subagent | 保留为 skill 内部步骤，删 dispatcher |
 | 环 → 校验 | `openspec new/validate/archive` | 无对应能力 | **保留**，唯一不可替代 |
 | 环 → 平台 | `gh`、DOP、`iam auth status` | bash/MCP + IAM 插件 + OTel | 改为插件/MCP，SDD 不直连 |
-| 环 → git | commit-msg / pre-commit / pre-push / prepare 四件套 | `@corp/dsh-policy` + CI | 只留 commit-msg 或并入 CI |
+| 环 → git | commit-msg / pre-commit / pre-push / prepare 四件套 | `@heluo/forge-policy` + CI | 只留 commit-msg 或并入 CI |
 | 环 → 遥测 | DOP 全生命周期埋点 | OTel 决策审计与 session-log | 移出 SDD，归企业遥测 |
 
 文中大量“固定委托链”在补偿宿主缺少产物契约——必须经 brainstorming、必须传路径约束、必须纠正 commit 格式。这些约束在 DSH 里应由**一个 skill 的模板 + 一个校验器**承担，而不是靠调用顺序。
@@ -279,17 +280,17 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | L2 Injection | 分发 | 原生加载 | 删除 |
 | L3 Plan gate | 流程约束 | plan mode 是软约束（工具仍全开），需靠 skill + policy | 降为 skill 的一步 + 阶段路径规则 |
 | L4 Analyze | 审查 | review skill + subagent | 保留，简化 |
-| L5 Policy Gate | 强制 | `@corp/dsh-policy`（`tools/pre-execute` + `tools.guard`）+ sandbox | 规则并入原生策略插件，不维护每宿主 hooks（见 ADR-4） |
+| L5 Policy Gate | 强制 | `@heluo/forge-policy`（`tools/pre-execute` + `tools.guard`）+ sandbox | 规则并入原生策略插件，不维护每宿主 hooks（见 ADR-4） |
 | L6 Amendment | 变更控制 | PR + CI | 保留模板，删 8 步命令 |
 | L7 CI | 变更控制 | 仓库 CI | 保留 1 个 job |
 
-压成三层：**契约层**（产物与格式）、**门禁层**（`@corp/dsh-policy` 运行时拦截）、**交付层**（归档与 PR）。前两层是 DSH 的强项，第三层才是 SDD 的真正价值。
+压成三层：**契约层**（产物与格式）、**门禁层**（`@heluo/forge-policy` 运行时拦截）、**交付层**（归档与 PR）。前两层是 DSH 的强项，第三层才是 SDD 的真正价值。
 
 ### 6.3 轻量形态
 
 - 1 个 skill `sdd`：组合现有的 brainstorming / writing-plans / executing-plans / code-review-and-quality / test-driven-development / verification-before-completion，产出 proposal / spec / design / tasks。
 - 1 个 CLI `sdd`（约 300 行）：封装 `openspec` 的 new / validate / freeze / stale / archive / pr-body。
-- 1 组 `@corp/dsh-policy` 规则：HARD 规则（禁读 `$DSH_HOME/**`、禁密钥硬编码、禁 force push、禁 `rm -rf`、禁直编 `.env`）+ 阶段路径规则（`spec` 阶段只写 `openspec/changes/<id>/**`；`apply` 阶段 canonical spec 只读；`review` 阶段不写源码）。
+- 1 组 `@heluo/forge-policy` 规则：HARD 规则（禁读 `$DSH_HOME/**`、禁密钥硬编码、禁 force push、禁 `rm -rf`、禁直编 `.env`）+ 阶段路径规则（`spec` 阶段只写 `openspec/changes/<id>/**`；`apply` 阶段 canonical spec 只读；`review` 阶段不写源码）。
 - 1 个 CI job：validate + 指纹 + baseline lint。
 - 0 宿主适配、0 五级保护控制面、0 自研遥测、0 独立 hook 引擎。
 

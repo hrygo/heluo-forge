@@ -1,4 +1,4 @@
-# @corp/dsh-enterprise
+# @heluo/forge-enterprise
 
 状态：规划
 
@@ -7,7 +7,7 @@
 | 形态 | umbrella bundle（`cordis.patch.yml`） |
 | 职责 | 按行组装企业能力、角色 preset 与默认依赖检查 |
 | 不负责 | 不重复实现成员包逻辑，不承载业务接口 |
-| 详细设计 | `docs/design/plugins/dsh-enterprise.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 详细设计 | `docs/design/plugins/forge-enterprise.md`（待编写，见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立 `package.json`、源码与测试 |
 
 ## 边界

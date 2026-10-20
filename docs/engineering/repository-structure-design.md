@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.2 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -21,6 +21,7 @@
 |---|---|---|---|
 | V0.1 | 2026-10-20 | DSH 平台组（代拟） | 提出覆盖总体方案、逐插件设计、全部插件开发与私有市场的单仓工程结构，明确模块边界、现有文档迁移、工具链及验收；尚未执行迁移或业务脚手架建设 |
 | V0.2 | 2026-10-20 | DSH 平台组（代拟） | 用户批准实施；按本设计完成文档迁移、工程检查与模块入口，回写实施结果与实测工具链；不新增业务实现 |
+| V0.2.1 | 2026-10-20 | DSH 平台组（代拟） | 同步 heluo-forge 工程名、@heluo/forge-* 包名及 packages/forge-* 目录与设计路径；模块职责不变 |
 
 > 编制依据：2026-10-20 核对当前仓库提交 `034764487cddc87e8e1a0a2439d39168a4f28d4f`、12 个受跟踪文件及现有方案。用户明确后续覆盖完整方案、逐插件详细设计、全部插件开发及私有插件市场建设。本机托管工具链实测为 Node.js 24.21.0、pnpm 11.28.5；官方资料核对见 §3.3。此次只形成设计草案，不创建业务源码、插件清单、发布凭据或部署实例。
 >
@@ -91,7 +92,7 @@
 以下为**目标结构**，不是当前存在的文件清单。README 表示本次建立的模块职责入口；业务 `src/`、包清单和运行配置在对应设计确认后建立。
 
 ```text
-corp-dsh/
+heluo-forge/
 ├── README.md / AGENTS.md / CONTRIBUTING.md / SECURITY.md
 ├── package.json / pnpm-workspace.yaml / pnpm-lock.yaml
 ├── .node-version / .editorconfig / .gitattributes / .gitignore
@@ -124,15 +125,15 @@ corp-dsh/
 
 | 包名 | 代码位置 | 形态与边界 | 后续详细设计位置 |
 |---|---|---|---|
-| `@corp/dsh-enterprise` | `packages/dsh-enterprise/` | umbrella bundle；组合、角色 preset、默认依赖，不重复实现各插件 | `docs/design/plugins/dsh-enterprise.md` |
-| `@corp/dsh-iam` | `packages/dsh-iam/` | Host + Client；授权流程、令牌 broker 与账户 UI | `docs/design/plugins/dsh-iam.md` |
-| `@corp/dsh-gateway` | `packages/dsh-gateway/` | 网关接入配置；不是服务端 AI 网关实现 | `docs/design/plugins/dsh-gateway.md` |
-| `@corp/dsh-policy` | `packages/dsh-policy/` | Host 策略、执行前门禁与决策审计 | `docs/design/plugins/dsh-policy.md` |
-| `@corp/dsh-devops` | `packages/dsh-devops/` | MCP 接入 bundle；独立服务实现位于 services | `docs/design/plugins/dsh-devops.md` |
-| `@corp/dsh-gitee` | `packages/dsh-gitee/` | Gitee MCP 接入及发行适配；不无理由重写上游实现 | `docs/design/plugins/dsh-gitee.md` |
-| `@corp/dsh-sdd` | `packages/dsh-sdd/` | Skill pack + CLI；流程产物与一致性 | `docs/design/plugins/dsh-sdd.md` |
-| `@corp/dsh-market` | `packages/dsh-market/` | 私有市场客户端配置、来源与兼容策略 | `docs/design/plugins/dsh-market.md` |
-| `@corp/dsh-brand` | `packages/dsh-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/dsh-brand.md` |
+| `@heluo/forge-enterprise` | `packages/forge-enterprise/` | umbrella bundle；组合、角色 preset、默认依赖，不重复实现各插件 | `docs/design/plugins/forge-enterprise.md` |
+| `@heluo/forge-iam` | `packages/forge-iam/` | Host + Client；授权流程、令牌 broker 与账户 UI | `docs/design/plugins/forge-iam.md` |
+| `@heluo/forge-gateway` | `packages/forge-gateway/` | 网关接入配置；不是服务端 AI 网关实现 | `docs/design/plugins/forge-gateway.md` |
+| `@heluo/forge-policy` | `packages/forge-policy/` | Host 策略、执行前门禁与决策审计 | `docs/design/plugins/forge-policy.md` |
+| `@heluo/forge-devops` | `packages/forge-devops/` | MCP 接入 bundle；独立服务实现位于 services | `docs/design/plugins/forge-devops.md` |
+| `@heluo/forge-gitee` | `packages/forge-gitee/` | Gitee MCP 接入及发行适配；不无理由重写上游实现 | `docs/design/plugins/forge-gitee.md` |
+| `@heluo/forge-sdd` | `packages/forge-sdd/` | Skill pack + CLI；流程产物与一致性 | `docs/design/plugins/forge-sdd.md` |
+| `@heluo/forge-market` | `packages/forge-market/` | 私有市场客户端配置、来源与兼容策略 | `docs/design/plugins/forge-market.md` |
+| `@heluo/forge-brand` | `packages/forge-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/forge-brand.md` |
 
 上表的设计路径均为规划位置。本次建立设计索引、模板和组件职责 README，不批量生成只有标题或虚构接口的九份详细设计。
 
@@ -145,7 +146,7 @@ corp-dsh/
 | DevOps MCP 服务 | `services/devops-mcp/` | HTTP 工具面、服务端授权、审批及审计；与客户端 bundle 通过协议协作 | 边界 README 与设计入口，不启动监听或模拟生产接口 |
 | 市场目录与发布控制 | `services/market-index/` | 目录生成/校验、白名单、兼容性、版本通道及发布状态；优先可审计静态目录，不预设常驻 Web 服务 | 边界 README；不伪造现行 DSH index schema |
 | 私有 npm 制品仓库 | `deploy/registry/` | 企业现有 registry 优先；部署参数、认证、备份、恢复、访问与保留策略 | 运维范围说明，不部署仓库或写入真实地址/令牌 |
-| 客户端市场接入 | `packages/dsh-market/` | 配置企业 index 与 registry，执行来源和安装策略 | 与服务端和制品存储分开，不另建不必要的市场 UI |
+| 客户端市场接入 | `packages/forge-market/` | 配置企业 index 与 registry，执行来源和安装策略 | 与服务端和制品存储分开，不另建不必要的市场 UI |
 | 双端配置与分发 | `deploy/clients/` | Windows 与银河麒麟的配置、安装、更新及回退资产 | 规划说明，不提交 MSI/deb/凭据或自建新客户端 |
 
 ```mermaid

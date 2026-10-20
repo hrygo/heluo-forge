@@ -13,7 +13,7 @@
 |---|---|---|
 | Windows 安装包与静默安装参数 | 自助安装与 MDM 推送 | 待构建 |
 | 麒麟 deb/apt 包与 `systemd --user` 单元 | 安装、开机启动、`dsh-web-open` 启动脚本 | 待构建 |
-| 企业组合包与默认配置 | 预置 `@corp/dsh-enterprise` 与私有源 | 待构建 |
+| 企业组合包与默认配置 | 预置 `@heluo/forge-enterprise` 与私有源 | 待构建 |
 | 升级与回退脚本 | 版本切换与失败回退 | 待构建 |
 
 ## 边界

@@ -1,8 +1,8 @@
-# AGENTS.md — corp-dsh 项目协作规范
+# AGENTS.md — Heluo Forge 项目协作规范
 
 > 适用范围：本目录及其子目录下的全部文档、配置与代码。
 >
-> 版本：V1.2
+> 版本：V1.2.1
 >
 > 最后更新：2026-10-20
 >
@@ -10,7 +10,8 @@
 
 ## 1. 项目定位
 
-- 本项目是企业内 DSH 研发平台的方案与工程仓库，**不是 DSH 源码仓库**，也不分发 DSH 本体。
+- 本项目是河洛企业级智能研发平台（Heluo Forge）的方案与工程仓库，基于 DeepSeek Harness（DSH）构建，**不是 DSH 源码仓库**，也不分发 DSH 本体。
+- 品牌名称为“河洛 / Heluo Forge”，工程标识为 `heluo-forge`；DSH 保留为上游运行时名称，`CORP-DSH-*` 保留为文档编号。
 - 当前阶段：方案评审与工程底座。`packages/`、`services/` 只有职责说明，尚无业务实现；私有市场只定义了分层，未部署。
 - 目标：用 DSH 与 DSH 插件体系承载身份与授权、模型与成本、工程系统、研发流程、分发与治理。
 - 非目标：多人共享单实例（多租户）、自建推理服务、替换 DevOps 平台、macOS 客户端、白标发行与公网暴露（详见 `docs/requirements/requirements-baseline.md` §2）。
@@ -156,7 +157,7 @@
 工程阶段已启用，实现尚未开始：
 
 - 工作区为 pnpm workspace，成员来自 `packages/*` 与 `services/*`；根工程 `private`，不发布。
-- 包名统一为 `@corp/dsh-*`，与文档编号的域缩写对应；包之间用 `workspace:` 引用。
+- 包名统一为 `@heluo/forge-*`，包目录为 `packages/forge-*`，模块后缀与文档编号的域缩写对应；包之间用 `workspace:` 引用。
 - 不修改 DSH 核心；允许的补丁单独列出并向上游提案。
 - bundle 使用 `cordis.patch.yml`，每项能力一行，可单独禁用。
 - 每个包必须有 `engines.dsh` 兼容声明、`private` 标记与最小测试；未满足前不建立包清单。

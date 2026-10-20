@@ -7,7 +7,7 @@
 | 形态 | 独立 HTTP 服务（MCP，目标 `streamable-http`） |
 | 职责 | 暴露受控工具面、校验令牌与受众、执行平台权限与审批、提供幂等与查单 |
 | 不负责 | 不决定客户端策略，不保存用户长期凭据，不替代 DevOps 平台本身 |
-| 客户端 | [@corp/dsh-devops](../../packages/dsh-devops/README.md) |
+| 客户端 | [@heluo/forge-devops](../../packages/forge-devops/README.md) |
 | 详细设计 | `docs/design/services/devops-mcp.md`（待编写，见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立服务清单、源码、测试或部署配置 |
 

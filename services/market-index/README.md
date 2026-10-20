@@ -7,7 +7,7 @@
 | 形态 | 目录生成、校验与发布状态管理；优先产出可审计静态目录 |
 | 职责 | 校验包白名单、兼容性、checksum 与通道，生成市场目录并记录发布状态 |
 | 不负责 | 不存储制品、不自研 registry、不执行客户端安装 |
-| 客户端 | [@corp/dsh-market](../../packages/dsh-market/README.md) |
+| 客户端 | [@heluo/forge-market](../../packages/forge-market/README.md) |
 | 制品存储 | [deploy/registry](../../deploy/registry/README.md) |
 | 详细设计 | `docs/design/services/market-index.md`（待编写，见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立服务清单、源码、测试或部署配置 |

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1 |
+| 版本 | V0.1.1 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -20,6 +20,7 @@
 | 版本 | 日期 | 修订人 | 修订说明 |
 |---|---|---|---|
 | V0.1 | 2026-10-20 | DSH 平台组 | 建立九个安装包与两个独立服务的详细设计索引、依赖顺序与完成判据；详细设计尚未开始 |
+| V0.1.1 | 2026-10-20 | DSH 平台组（代拟） | 同步 @heluo/forge-* 包名、规划设计路径与模块依赖名称；设计状态不变 |
 
 ## 1. 结论
 
@@ -31,15 +32,15 @@
 
 | 包 | 形态 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
-| `@corp/dsh-iam` | Host + Client 插件 | `plugins/dsh-iam.md` | 待设计 | 授权流程与 OIDC 能力、令牌 broker、凭据存储、账户 UI |
-| `@corp/dsh-policy` | Host 插件 | `plugins/dsh-policy.md` | 待设计 | 门禁挂点、`$DSH_HOME` 硬拒绝、外发确认、审计字段 |
-| `@corp/dsh-enterprise` | umbrella bundle | `plugins/dsh-enterprise.md` | 待设计 | 组合顺序、依赖检查、角色 preset 与默认禁用项 |
-| `@corp/dsh-gateway` | 配置 bundle | `plugins/dsh-gateway.md` | 待设计 | 模型白名单、错误与重试配置、流式行为 |
-| `@corp/dsh-brand` | 配置 bundle | `plugins/dsh-brand.md` | 待设计 | 品牌 token 覆盖范围、白标边界 |
-| `@corp/dsh-devops` | MCP 接入 bundle | `plugins/dsh-devops.md` | 待设计 | 工具面、服务端授权、按请求取 token |
-| `@corp/dsh-gitee` | MCP 接入 bundle | `plugins/dsh-gitee.md` | 待设计 | 上游复用、arm64 构建、凭据来源 |
-| `@corp/dsh-sdd` | Skill pack + CLI | `plugins/dsh-sdd.md` | 待设计 | 产物契约、freeze 与指纹、路径规则 |
-| `@corp/dsh-market` | 配置 bundle | `plugins/dsh-market.md` | 待设计 | 私有源配置、安装策略、兼容校验 |
+| `@heluo/forge-iam` | Host + Client 插件 | `plugins/forge-iam.md` | 待设计 | 授权流程与 OIDC 能力、令牌 broker、凭据存储、账户 UI |
+| `@heluo/forge-policy` | Host 插件 | `plugins/forge-policy.md` | 待设计 | 门禁挂点、`$DSH_HOME` 硬拒绝、外发确认、审计字段 |
+| `@heluo/forge-enterprise` | umbrella bundle | `plugins/forge-enterprise.md` | 待设计 | 组合顺序、依赖检查、角色 preset 与默认禁用项 |
+| `@heluo/forge-gateway` | 配置 bundle | `plugins/forge-gateway.md` | 待设计 | 模型白名单、错误与重试配置、流式行为 |
+| `@heluo/forge-brand` | 配置 bundle | `plugins/forge-brand.md` | 待设计 | 品牌 token 覆盖范围、白标边界 |
+| `@heluo/forge-devops` | MCP 接入 bundle | `plugins/forge-devops.md` | 待设计 | 工具面、服务端授权、按请求取 token |
+| `@heluo/forge-gitee` | MCP 接入 bundle | `plugins/forge-gitee.md` | 待设计 | 上游复用、arm64 构建、凭据来源 |
+| `@heluo/forge-sdd` | Skill pack + CLI | `plugins/forge-sdd.md` | 待设计 | 产物契约、freeze 与指纹、路径规则 |
+| `@heluo/forge-market` | 配置 bundle | `plugins/forge-market.md` | 待设计 | 私有源配置、安装策略、兼容校验 |
 
 设计文档路径相对本目录。详细设计落盘时才创建 `plugins/` 目录与对应文件，不预建空文件。
 
@@ -57,11 +58,11 @@
 依赖方向决定顺序：身份与策略先定，组合包最后收敛。
 
 ```text
-dsh-iam → dsh-policy → dsh-enterprise
-dsh-gateway → dsh-brand → dsh-market
-dsh-devops → devops-mcp 服务
-dsh-gitee → dsh-sdd
-market-index 服务 → dsh-market 的目录来源
+forge-iam → forge-policy → forge-enterprise
+forge-gateway → forge-brand → forge-market
+forge-devops → devops-mcp 服务
+forge-gitee → forge-sdd
+market-index 服务 → forge-market 的目录来源
 ```
 
 - 身份与策略改变工具管线行为，先设计，避免其他包按错误假设返工。

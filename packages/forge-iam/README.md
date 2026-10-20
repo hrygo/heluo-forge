@@ -1,4 +1,4 @@
-# @corp/dsh-iam
+# @heluo/forge-iam
 
 状态：规划
 
@@ -8,7 +8,7 @@
 | 职责 | 授权流程、令牌 broker、按资源取用与刷新、账户状态 UI |
 | 不负责 | 不自建账号库，不签发企业令牌，不代理模型内容，不决定服务端最终权限 |
 | 衔接点 | `credentials`、`authorization`、`webServer`、`llm` |
-| 详细设计 | `docs/design/plugins/dsh-iam.md`（待编写，见[设计索引](../../docs/design/README.md)） |
+| 详细设计 | `docs/design/plugins/forge-iam.md`（待编写，见[设计索引](../../docs/design/README.md)） |
 | 实现状态 | 尚未建立 `package.json`、源码与测试 |
 
 ## 边界

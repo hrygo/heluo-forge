@@ -1,12 +1,12 @@
-# 企业 DSH 研发平台总体架构设计
+# 河洛企业级智能研发平台总体架构设计
 
 ## 文档信息
 
 | 项 | 内容 |
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-001 |
-| 文档名称 | 企业 DSH 研发平台总体架构设计 |
-| 版本 | V1.3.1 |
+| 文档名称 | 河洛企业级智能研发平台总体架构设计 |
+| 版本 | V1.3.2 |
 | 文档状态 | 评审稿 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -27,10 +27,11 @@
 | V1.2 | 2026-10-20 | DSH 平台组 | 同步需求基线（3 部门 800 人、50% 麒麟、7 类角色、C1–C4 合规约束）；统一 DevOps MCP 传输协议、两层生产审批、`$DSH_HOME` 硬拒绝保护、G0–G3 门禁与 A1–A14 验收 |
 | V1.3 | 2026-10-20 | DSH 平台组（代拟） | 补齐项目级取舍、系统责任与信任边界、身份和生产变更生命周期、容量验证、门禁证据与回函闭环；澄清安全插件停用、不可交互确认及结果未知时的拒绝/禁重放边界，新增 ADR-9/10；日志保留期恢复为待批准提议 |
 | V1.3.1 | 2026-10-20 | DSH 平台组（代拟） | 仅迁移至 docs/architecture/ 并重建全库相对链接；章节、ADR、决策与口径不变 |
+| V1.3.2 | 2026-10-20 | DSH 平台组（代拟） | 统一河洛 Heluo Forge 平台名称、包名与目录示例，补充品牌术语；技术决策与接口不变 |
 
 > 编制依据：原方案记载的 DSH `0.2.1-rc.2` 源码与官方文档核验，核验日期 2026-10-20。本版增补仅核对本仓库需求、架构、计划与网关草案的一致性，未重跑历史源码验证；企业 IAM / Kong / DevOps / Gitee 接口、Windows 安全隔离与银河麒麟实机、容量及恢复演练均未实测。团队回函之前，协议能力、排期、保留期与验收阈值均不视为对方承诺。
 >
-> 关联文档：[企业 DSH 研发平台推广实施方案](../plans/rollout-plan.md)（WBS、验收、风险与待确认事项）、[企业 DSH 研发平台需求与场景基线](../requirements/requirements-baseline.md)（范围真源、人群画像、核心场景与成功指标）。
+> 关联文档：[河洛企业级智能研发平台推广实施方案](../plans/rollout-plan.md)（WBS、验收、风险与待确认事项）、[河洛企业级智能研发平台需求与场景基线](../requirements/requirements-baseline.md)（范围真源、人群画像、核心场景与成功指标）。
 
 ## 1. 背景与目标
 
@@ -163,7 +164,7 @@ flowchart TB
     S["skills"]
     H["hooks / credentials"]
   end
-  subgraph P["企业插件层：@corp/dsh-enterprise"]
+  subgraph P["企业插件层：@heluo/forge-enterprise"]
     direction LR
     IAM["iam"]
     GW["gateway"]
@@ -270,15 +271,15 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 
 | 包 | 形态 | 职责 | 依赖的 seam |
 |---|---|---|---|
-| `@corp/dsh-enterprise` | umbrella bundle | 组合下列行，给两端共用 | `cordis.patch.yml` |
-| `@corp/dsh-iam` | Host + Client 插件 | OIDC/OAuth 登录、刷新、令牌镜像、MCP token broker、账户 UI | `credentials`、`authorization`、`webServer`、`llm` |
-| `@corp/dsh-gateway` | 配置 bundle | 企业模型路由、白名单、重试策略 | `llm-pi-ai` |
-| `@corp/dsh-policy` | Host 插件 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 | `tools/pre-execute`、`tools.guard`、`otel` |
-| `@corp/dsh-devops` | MCP server（HTTP）+ bundle | 8–12 个研发平台工具（P1 可先以本地 stdio 验证工具面，P2 切换为 `streamable-http`） | `mcp-client` |
-| `@corp/dsh-gitee` | MCP bundle（stdio） | 复用 `mcp-gitee`，arm64 自编译 | `mcp-client` |
-| `@corp/dsh-sdd` | Skill pack + CLI | 产物契约、freeze/指纹、归档与 PR | `skill-filesystem`；路径门禁由 policy 执行 |
-| `@corp/dsh-market` | 配置 bundle | 私有 index、私有 registry、版本门禁 | `plugin-market`、`plugin-manager` |
-| `@corp/dsh-brand` | 配置 bundle | 产品名、Logo、主题 token | `brand`、`client-ui-theme` |
+| `@heluo/forge-enterprise` | umbrella bundle | 组合下列行，给两端共用 | `cordis.patch.yml` |
+| `@heluo/forge-iam` | Host + Client 插件 | OIDC/OAuth 登录、刷新、令牌镜像、MCP token broker、账户 UI | `credentials`、`authorization`、`webServer`、`llm` |
+| `@heluo/forge-gateway` | 配置 bundle | 企业模型路由、白名单、重试策略 | `llm-pi-ai` |
+| `@heluo/forge-policy` | Host 插件 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 | `tools/pre-execute`、`tools.guard`、`otel` |
+| `@heluo/forge-devops` | MCP server（HTTP）+ bundle | 8–12 个研发平台工具（P1 可先以本地 stdio 验证工具面，P2 切换为 `streamable-http`） | `mcp-client` |
+| `@heluo/forge-gitee` | MCP bundle（stdio） | 复用 `mcp-gitee`，arm64 自编译 | `mcp-client` |
+| `@heluo/forge-sdd` | Skill pack + CLI | 产物契约、freeze/指纹、归档与 PR | `skill-filesystem`；路径门禁由 policy 执行 |
+| `@heluo/forge-market` | 配置 bundle | 私有 index、私有 registry、版本门禁 | `plugin-market`、`plugin-manager` |
+| `@heluo/forge-brand` | 配置 bundle | 产品名、Logo、主题 token | `brand`、`client-ui-theme` |
 
 组合方式：umbrella bundle 只做 `insert`，每个能力一行，配置上可独立 `disabled` 或覆盖；**可被关闭不等于关闭后仍保持依赖权限**。IAM、policy 和必要审计须在准入及每次相关操作时满足安全依赖检查，缺失则拒绝相应企业调用或生产写操作；安全检查的可执行性仍须在 G2 前通过负向验收。
 
@@ -329,7 +330,7 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 建议工具面：`pipeline_list`、`pipeline_get`、`pipeline_run`、`run_logs`、`deployment_list`、`deployment_status`、`deployment_rollback`、`issue_list`、`issue_get`、`issue_comment`。
 
 **写操作两层审批模型**：
-1. **本机操作确认（`@corp/dsh-policy`）**：按受控工具清单及可信目标归属判断读写/环境，描述中的 `mutating` 仅作提示，未知风险拒绝。测试环境也须满足角色和服务端权限；生产转本机 `ask`，展示本次目标与内容。`never`、无UI、拒绝、取消、超时或异常均不执行，不能靠客户端标签或工具描述放宽授权。
+1. **本机操作确认（`@heluo/forge-policy`）**：按受控工具清单及可信目标归属判断读写/环境，描述中的 `mutating` 仅作提示，未知风险拒绝。测试环境也须满足角色和服务端权限；生产转本机 `ask`，展示本次目标与内容。`never`、无UI、拒绝、取消、超时或异常均不执行，不能靠客户端标签或工具描述放宽授权。
 2. **平台多人审批（DevOps 平台）**：若生产变更需独立的发布负责人（Release Manager）异地审批，由 DevOps MCP 向 DevOps 平台提交变更/部署申请单并立即返回“待审批（pending_approval）”状态与审批单链接，审批流在 DevOps 平台内完成，不在 DSH 客户端同步挂起等待他人。
 
 **Gitee**：复用 `oschina/mcp-gitee`（本地 `stdio`），arm64 自行交叉编译并校验 checksum；工具面默认只读，写操作（建分支、评论、提 PR）单独开关。
@@ -348,24 +349,24 @@ DSH 提供六种扩展形态，企业能力必须落在正确的形态上，否�
 - **原子性**：一次交付的 PR 同时包含实现、spec、归档。
 - **可追溯**：`change-id` 贯穿分支、commit、PR、tracker。
 
-形态：1 个 skill（组合现有 `brainstorming` / `writing-plans` / `executing-plans` / `code-review-and-quality` / `test-driven-development` / `verification-before-completion`）+ 1 个约 300 行的 CLI（封装 openspec 的 new/validate/freeze/stale/archive/pr-body）+ `@corp/dsh-policy` 策略插件里的路径规则。阶段只写进 `.meta.json`，不驱动对话顺序。
+形态：1 个 skill（组合现有 `brainstorming` / `writing-plans` / `executing-plans` / `code-review-and-quality` / `test-driven-development` / `verification-before-completion`）+ 1 个约 300 行的 CLI（封装 openspec 的 new/validate/freeze/stale/archive/pr-body）+ `@heluo/forge-policy` 策略插件里的路径规则。阶段只写进 `.meta.json`，不驱动对话顺序。
 
-**路径规则**（由 `@corp/dsh-policy` 基于 `tools/pre-execute` 与 `tools.guard` 执行，不维护独立 hook 引擎）：`spec` 阶段只允许写 `openspec/changes/<id>/**`；`apply` 阶段 canonical `openspec/specs/**` 与 `proposal.md`/`design.md` 只读；`review` 阶段不再写源码。无 `.meta.json` 时只执行 HARD 规则，不阻塞普通开发。
+**路径规则**（由 `@heluo/forge-policy` 基于 `tools/pre-execute` 与 `tools.guard` 执行，不维护独立 hook 引擎）：`spec` 阶段只允许写 `openspec/changes/<id>/**`；`apply` 阶段 canonical `openspec/specs/**` 与 `proposal.md`/`design.md` 只读；`review` 阶段不再写源码。无 `.meta.json` 时只执行 HARD 规则，不阻塞普通开发。
 
 ### 7.5 分发与治理
 
-- **必装**：`@corp/dsh-enterprise` 由 MSI / deb 预置进 profile（支持用户自助安装与 MDM 推送），首次可用不依赖手动去市场安装。
+- **必装**：`@heluo/forge-enterprise` 由 MSI / deb 预置进 profile（支持用户自助安装与 MDM 推送），首次可用不依赖手动去市场安装。
 - **可选**：内部 index 列出经审批的插件；`plugin-market` 配上私有 index，`plugin-manager` 配 `registry` + `fallbackRegistries`，公网源不在列表内。
 - **门禁**：index 生成时校验 `engines.dsh` 与 `dsh.bundle.patch`；安装前校验包名白名单与 checksum。
 - **按角色分级权限**（对应[需求与场景基线](../requirements/requirements-baseline.md) §3.2 与 REQ-14）：全员禁止回落或安装公网源；`开发者` preset 允许从内部私有市场安装已审批插件；只读类角色（评审、运维、PMO）及受限角色（外包 / 实习生）禁用 `plugin_manager` 工具。
 
 ### 7.6 审计、可观测与数据合规
 
-- **决策审计**（`@corp/dsh-policy` 直接发 OTel event）：`sub`、`change_id`、`tool`、`decision`、`reason_code`、`latency`，不记参数正文，只记参数哈希。
+- **决策审计**（`@heluo/forge-policy` 直接发 OTel event）：`sub`、`change_id`、`tool`、`decision`、`reason_code`、`latency`，不记参数正文，只记参数哈希。
 - **会话审计（C2）**：`session-log` 通道含正文与代码，默认关闭，不落安全事件平台（SIEM）；确需开启时先做脱敏与保留期评审。
 - **客户与生产数据保护（C1 / C3 / C4）**：
   - **C1（机构边界）**：网关与模型均为机构内私有化部署，客户与生产数据不出机构边界。
-  - **C3（外发确认）**：`@corp/dsh-policy` 对涉及批量导出、归档外发或跨系统写入的操作强制转为 `ask` 人工确认。
+  - **C3（外发确认）**：`@heluo/forge-policy` 对涉及批量导出、归档外发或跨系统写入的操作强制转为 `ask` 人工确认。
   - **C4（服务端日志）**：网关与模型服务默认不留存请求/响应正文日志（详见 [AI 网关契约](../contracts/gateway-contract.md) §4.5）。
 - **成本审计**：以网关的 consumer 与 `sub` 计量为准；DSH 侧只记调用次数与失败率。
 - **保留期（待批准）**：180 天仅为决策审计与网关计量元数据的建议值，不是现行制度；安全与数据责任方须在 G2 前确认字段最小化、访问权限、具体期限及删除证据。批准前不开启正文采样，且不得按未批准期限启动正式试点。
@@ -525,7 +526,7 @@ G0 先取得方向、负责人、可联调性与计划，但 P0 要求的验证�
 | ADR-3 | 外部系统用 MCP，策略用原生插件 | 全部原生 / 全部 MCP | 工具面解耦；DevOps 走 HTTP MCP，Gitee 走本地 stdio MCP |
 | ADR-4 | `tools/pre-execute` + `guard` 做门禁 | 每宿主 hooks.json | 一条策略路径；不维护独立 hook 引擎 |
 | ADR-5 | 必装走 umbrella bundle，可选走市场 | 全部走市场 | 首次可用不依赖网络；市场只治理增量 |
-| ADR-6 | SDD 做 skill 包，不做产品 | 五环七层产品 | 维护面小；流程强度靠 `@corp/dsh-policy` 路径规则补 |
+| ADR-6 | SDD 做 skill 包，不做产品 | 五环七层产品 | 维护面小；流程强度靠 `@heluo/forge-policy` 路径规则补 |
 | ADR-7 | 一期默认官方 App，不白标 | 本期直接自建白标发行 | 与需求基线N3一致；G0确认现有路线，确需白标走范围变更与单独立项，不靠开放问题自动扩大范围 |
 | ADR-8 | 一个会话、按资源取 token | 单一宽 audience token | 泄漏半径小；优先resource，不支持时由IAM确认按audience/client替代，仍保持目标资源隔离 |
 | ADR-9 | 安全依赖不可绕过，确认不可用即拒绝（新增提议） | 禁用policy/审计后继续调用；approval=never视为自动确认 | 明确本机管线防Agent误用与服务端最终鉴权分工；G2增加安全插件关闭、无确认UI与绕过负向验收，可能增加跨端验证投入 |
@@ -541,7 +542,7 @@ ADR-9/10 为本版待评审提议，审核/批准未填写，不代表安全或D
 | 上游 rc 节奏导致插件失效 | 高 | 锁版本 + 兼容性套件 + 内部镜像 | 平台组 |
 | `node-pty` arm64 现场编译失败 | 高 | arm64 构建机预构建，deb 内带 `node_modules` | 平台组 + IT |
 | 800 人自助安装支持比过高（约 1:300） | 高 | G0 复核支持人力；必要时将 800 人拆为两批各 400 人进场，并内置安装自检与版本门禁 | PMO + 平台组 |
-| 凭据文件（含 `refresh_token`）被 agent 读取并经内网工具外传 | 高 | `@corp/dsh-policy` 对 `$DSH_HOME/**` 硬拒绝 + 沙箱遮蔽挂载 + 短 TTL 与可撤销令牌 | 平台组 + 安全 |
+| 凭据文件（含 `refresh_token`）被 agent 读取并经内网工具外传 | 高 | `@heluo/forge-policy` 对 `$DSH_HOME/**` 硬拒绝 + 沙箱遮蔽挂载 + 短 TTL 与可撤销令牌 | 平台组 + 安全 |
 | 白标与官方更新策略冲突 | 中 | 一期官方 App；白标单独立项 | 产品 |
 | 网关验签方式待确认（JWKS / introspection） | 中 | P0 用真实 token 联调；不支持 JWKS 则改 introspection | 网关 + 平台组 |
 | MCP OAuth broker 与 Gitee 身份映射复杂度 | 中 | HTTP 优先支持 `resource`（不支持则按 audience 预注册 client）；Gitee 明确 IAM 映射或独立凭据 | 平台组 |
@@ -555,17 +556,17 @@ ADR-9/10 为本版待评审提议，审核/批准未填写，不代表安全或D
 以下为实施后的目标布局，并非当前已存在的目录；本仓库仍为方案评审工作区，未创建实现包。
 
 ```text
-corp-dsh/
+heluo-forge/
 ├─ packages/
-│  ├─ enterprise-bundle/   # umbrella patch
-│  ├─ iam/                 # host + client (含 MCP token broker)
-│  ├─ gateway-config/      # bundle only
-│  ├─ policy/              # host plugin (含门禁、$DSH_HOME 保护、SDD 路径规则与审计)
-│  ├─ devops-mcp/          # streamable-http server & bundle
-│  ├─ gitee-bundle/        # stdio mcp row + arm64 binary
-│  ├─ sdd/                 # skills + CLI
-│  ├─ market-config/       # index + registry
-│  └─ brand-config/        # brand tokens
+│  ├─ forge-enterprise/   # umbrella patch
+│  ├─ forge-iam/           # host + client (含 MCP token broker)
+│  ├─ forge-gateway/      # bundle only
+│  ├─ forge-policy/        # host plugin (含门禁、$DSH_HOME 保护、SDD 路径规则与审计)
+│  ├─ forge-devops/        # streamable-http server & bundle
+│  ├─ forge-gitee/        # stdio mcp row + arm64 binary
+│  ├─ forge-sdd/           # skills + CLI
+│  ├─ forge-market/       # index + registry
+│  └─ forge-brand/        # brand tokens
 ├─ profiles/
 │  ├─ desktop/
 │  └─ web/
@@ -579,16 +580,16 @@ corp-dsh/
 以下为既有方案的概念组合示意，**不是已核验可直接安装的生产配置**。拟议企业包配置与 auth broker 扩展需在实施前对照锁定版本的真实 schema/接口验证；`maxRetries: 2` 不代表已实现“429不重试”或生产写安全重放。纯 OAuth 与 OIDC 的配置、Windows/麒麟插件可用性也须按回函调整，本文不据示例宣称这些能力已存在。
 
 ```yaml
-# packages/enterprise-bundle/cordis.patch.yml
+# packages/forge-enterprise/cordis.patch.yml
 - insert:
     - id: corp-iam
-      name: '@corp/dsh-iam'
+      name: '@heluo/forge-iam'
       config:
         issuer: https://iam.corp.example
         clientId: dsh-desktop
         scopes: [openid, profile, offline_access]
     - id: corp-policy
-      name: '@corp/dsh-policy'
+      name: '@heluo/forge-policy'
       config:
         failClosed: true
         rules: enterprise
@@ -627,6 +628,7 @@ corp-dsh/
 
 | 术语 | 全称 / 说明 |
 |---|---|
+| 河洛 / Heluo Forge | 河洛企业级智能研发平台；工程标识 `heluo-forge`，基于 DSH 与企业插件体系构建 |
 | DSH | DeepSeek Harness，本方案的宿主运行时 |
 | IAM | 企业统一身份认证系统 |
 | PKCE | Proof Key for Code Exchange（RFC 7636） |
