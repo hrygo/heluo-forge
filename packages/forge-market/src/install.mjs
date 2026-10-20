@@ -87,6 +87,11 @@ export async function installPlugin(plan, deps = {}) {
     return { ok: false, reason: 'version-mismatch', detail: pkg.version };
   }
 
+  // 安装脚本在评审时就被排除；装的时候再拦一次，避免绕过评审的目录条目。
+  for (const field of ['install', 'postinstall', 'preinstall']) {
+    if (pkg.scripts?.[field]) return { ok: false, reason: 'install-script', detail: field };
+  }
+
   // engines.dsh 是硬门槛：不兼容的版本装上去比起装不上更糟。
   const engines = String(pkg.engines?.dsh ?? '');
   if (dshVersion && engines) {

