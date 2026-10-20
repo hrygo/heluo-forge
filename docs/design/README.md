@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.9 |
+| 版本 | V0.1.10 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -32,7 +32,7 @@
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
 | `@heluo/forge-devops` | MCP 接入 bundle | `plugins/forge-devops.md` | 待设计 | 只读工具面（清单待提供方澄清）、服务端授权、按请求取 token |
 | `@heluo/forge-gitee` | MCP 接入 bundle | `plugins/forge-gitee.md` | 待设计 | 上游复用、arm64 构建、凭据来源 |
-| `@heluo/forge-sdd` | Skill pack + CLI | `plugins/forge-sdd.md` | 待设计 | 产物契约、freeze 与指纹、路径规则 |
+| `@heluo/forge-sdd` | Skill pack + CLI | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案 | CI 触发方式、原子提交边界、产物与需求编号联动 |
 | `@heluo/forge-market` | 配置 bundle | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 制品库地址与令牌、索引字段、安装脚本策略、缓存 |
 
 设计文档路径相对本目录。详细设计落盘时才创建 `plugins/` 目录与对应文件，不预建空文件。

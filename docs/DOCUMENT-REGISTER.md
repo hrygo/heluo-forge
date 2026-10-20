@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.10.13 |
+| 版本 | V1.10.14 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -19,9 +19,9 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.13 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.10.14 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.10.5 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.9 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.1.10 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.1 | 生效 | 平台组 | — |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.5 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
@@ -43,7 +43,7 @@
 | CORP-DSH-POLICY-001 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.1 | 草案 | 平台组（代拟） | G2；安全团队评审 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
-| CORP-DSH-SDD-001 | SDD 流程 | 待创建 | — | 待启动 | 平台组 | G2 |
+| CORP-DSH-SDD-001 | 轻量 SDD 详细设计 | [design/plugins/forge-sdd.md](<design/plugins/forge-sdd.md>) | V0.1 | 草案 | 平台组（代拟） | G2；待 CI 接入确认 |
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | — | 待启动 | PMO | G2 |
 
 ### 1.1 辅助图解资源（不另立技术契约）
