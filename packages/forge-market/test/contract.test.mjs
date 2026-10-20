@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createServiceClient } from '../src/client.mjs';
+
+// 端点集合来自 docs/design/services/market-index.md §5「端点（示意）」。
+// 客户端改了路径而文档没改，或文档改了客户端没跟，这里先红。
+const DOCUMENTED = [
+  ['list', 'GET', '/api/plugins'],
+  ['detail', 'GET', '/api/plugins/%40heluo%2Fa'],
+  ['submit', 'POST', '/api/plugins'],
+  ['metrics', 'GET', '/api/metrics?plugin=%40heluo%2Fa'],
+];
+
+test('the client speaks exactly the documented endpoints', async () => {
+  const seen = [];
+  const client = createServiceClient({
+    baseUrl: 'https://plugins.corp.example',
+    fetchImpl: (url, init) => {
+      seen.push([init.method ?? 'GET', new URL(url).pathname + new URL(url).search]);
+      return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({}) });
+    },
+  });
+
+  await client.list();
+  await client.detail('@heluo/a');
+  await client.submit({ repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', title: 'x' });
+  await client.metrics('@heluo/a');
+
+  assert.deepEqual(seen, DOCUMENTED.map(([, method, path]) => [method, path]));
+});
+
+test('submit sends JSON with a content type', async () => {
+  let init;
+  const client = createServiceClient({
+    baseUrl: 'https://plugins.corp.example',
+    fetchImpl: (url, request) => {
+      init = request;
+      return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({ state: 'pending' }) });
+    },
+  });
+
+  await client.submit({ repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', title: 'x' });
+  assert.equal(init.method, 'POST');
+  assert.equal(init.headers['content-type'], 'application/json');
+  assert.equal(JSON.parse(init.body).tag, 'v0.1.0');
+});

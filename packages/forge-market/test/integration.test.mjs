@@ -47,6 +47,16 @@ function startService() {
         repo: `http://127.0.0.1:${server.address().port}/g/demo`,
       });
     }
+    if (url.pathname === '/api/plugins' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        res.statusCode = 202;
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ state: 'pending', received: JSON.parse(body || '{}').tag }));
+      });
+      return;
+    }
     if (url.pathname === '/g/demo/archive/refs/tags/v0.1.0.tar.gz') {
       res.end(archive);
       return;
@@ -78,6 +88,15 @@ test('installs a plugin end to end through a stub service', async () => {
     assert.equal(installed.ok, true);
     assert.equal(installed.installed.version, '0.1.0');
     assert.equal(JSON.parse(await readFile(join(dir, 'plugin', 'package.json'), 'utf8')).name, '@heluo/demo');
+
+    const submitted = JSON.parse(
+      (await tools.find((t) => t.name === 'market_submit').execute({
+        repo: `http://127.0.0.1:${server.address().port}/g/demo`,
+        tag: 'v0.1.0',
+        title: '演示插件',
+      })).content[0].text,
+    );
+    assert.deepEqual(submitted, { ok: true, state: 'pending' });
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await rm(dir, { recursive: true, force: true });
