@@ -10,7 +10,7 @@
 | 衔接点 | `plugin-market`、`plugin-manager` |
 | 服务实现 | 企业插件目录，见 [DESIGN-012](../../docs/design/services/market-index.md) |
 | 详细设计 | [DESIGN-007](../../docs/design/plugins/forge-market.md) |
-| 实现状态 | 安装策略逻辑与单元测试已建立；bundle 接线待上游配置项核验 |
+| 实现状态 | 策略、格式校验、目录、服务客户端、安装规划与三个市场工具已实现并有测试；bundle 挂载待实机核验 |
 
 ## 边界
 

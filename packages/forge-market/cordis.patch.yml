@@ -1,0 +1,10 @@
+# forge-market：把企业插件市场挂进当前 profile。
+# 数据来自市场服务（DESIGN-012）；安装来源仅限企业 Gitee 的专门 group。
+insert:
+  - id: forge-market
+    name: '@heluo/forge-market'
+    inject: [tools]
+    config:
+      serviceUrl: https://plugins.corp.example
+      allowedHosts: [gitee.corp.example]
+      timeoutMs: 5000

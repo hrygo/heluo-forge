@@ -9,5 +9,14 @@
   },
   "scripts": {
     "test": "node --test"
-  }
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "README.md"
+  ]
 }
