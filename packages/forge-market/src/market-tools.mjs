@@ -297,7 +297,7 @@ export function buildMarketTools(client, options = {}) {
             const info = await client.downloadInfo(plan.name, plan.version);
             if (info?.url) {
               const host = new URL(info.url).host;
-              if (!allowedHosts.length || allowedHosts.includes(host)) {
+              if (allowedHosts.includes(host)) {
                 plan = { ...plan, archiveUrl: info.url };
                 expectedDigest = digest || info.digest || undefined;
               }

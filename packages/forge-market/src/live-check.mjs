@@ -21,7 +21,10 @@ export async function checkRemote({ repo, tag, digest, fetchImpl, allowedHosts =
   } catch {
     return { ok: false, steps: [{ step: 'repo', ok: false, detail: 'not a url' }] };
   }
-  if (allowedHosts.length && !allowedHosts.includes(host)) {
+  if (!allowedHosts.length) {
+    return { ok: false, steps: [{ step: 'repo', ok: false, detail: 'no allowed hosts configured' }] };
+  }
+  if (!allowedHosts.includes(host)) {
     return { ok: false, steps: [{ step: 'repo', ok: false, detail: `host ${host} is not allowed` }] };
   }
   record('repo', true, host);

@@ -28,7 +28,9 @@ export function planInstall(entry, version, allowedHosts = []) {
   } catch {
     return { ok: false, reason: 'bad-repo' };
   }
-  if (allowedHosts.length && !allowedHosts.includes(url.host)) return { ok: false, reason: 'host-not-allowed' };
+  // 空白名单按拒绝处理：配置漏填不应等于放开所有域名。
+  if (!allowedHosts.length) return { ok: false, reason: 'no-allowed-host' };
+  if (!allowedHosts.includes(url.host)) return { ok: false, reason: 'host-not-allowed' };
   return {
     ok: true,
     plan: {

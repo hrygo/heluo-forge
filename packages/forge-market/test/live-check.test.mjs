@@ -17,18 +17,18 @@ test('derives the tag archive address', () => {
 });
 
 test('passes a well formed archive and reports the digest', async () => {
-  const report = await checkRemote({ repo, tag: 'v0.1.0', fetchImpl: respond(archive) });
+  const report = await checkRemote({ repo, tag: 'v0.1.0', allowedHosts: ['gitee.corp.example'], fetchImpl: respond(archive) });
   assert.equal(report.ok, true);
   assert.equal(report.digest, digestOf(archive));
   assert.ok(report.steps.some((step) => step.step === 'validate' && step.ok));
 });
 
 test('stops on a download failure, a digest mismatch or a bad package', async () => {
-  assert.equal((await checkRemote({ repo, tag: 'v0.1.0', fetchImpl: respond(null, 404) })).ok, false);
-  const mismatch = await checkRemote({ repo, tag: 'v0.1.0', digest: digestOf(Buffer.from('other')), fetchImpl: respond(archive) });
+  assert.equal((await checkRemote({ repo, tag: 'v0.1.0', allowedHosts: ['gitee.corp.example'], fetchImpl: respond(null, 404) })).ok, false);
+  const mismatch = await checkRemote({ repo, tag: 'v0.1.0', digest: digestOf(Buffer.from('other')), allowedHosts: ['gitee.corp.example'], fetchImpl: respond(archive) });
   assert.equal(mismatch.ok, false);
   const bad = makeTarball([['package.json', '{"name":"@heluo/demo","version":"0.1.0"}']]);
-  assert.equal((await checkRemote({ repo, tag: 'v0.1.0', fetchImpl: respond(bad) })).ok, false);
+  assert.equal((await checkRemote({ repo, tag: 'v0.1.0', allowedHosts: ['gitee.corp.example'], fetchImpl: respond(bad) })).ok, false);
 });
 
 test('refuses a host outside the allowlist before downloading', async () => {

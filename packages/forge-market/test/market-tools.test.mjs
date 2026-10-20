@@ -53,10 +53,13 @@ test('detail normalizes the entry', async () => {
 });
 
 test('plan resolves the tag and enforces the host allowlist', async () => {
-  const ok = await call(buildMarketTools(client), 'market_plan_install', { name: '@heluo/a' });
+  const ok = await call(buildMarketTools(client, { allowedHosts: ['gitee.corp.example'] }), 'market_plan_install', { name: '@heluo/a' });
   assert.equal(ok.plan.tag, 'v0.1.0');
   const blocked = await call(buildMarketTools(client, { allowedHosts: ['other.example'] }), 'market_plan_install', { name: '@heluo/a' });
   assert.equal(blocked.reason, 'host-not-allowed');
+  // 空白名单是配置缺失，不是放开限制。
+  const unset = await call(buildMarketTools(client), 'market_plan_install', { name: '@heluo/a' });
+  assert.equal(unset.reason, 'no-allowed-host');
 });
 
 test('exposes exactly the documented tools', () => {

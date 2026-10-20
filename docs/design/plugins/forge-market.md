@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.27.0 |
+| 版本 | V0.28.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -190,7 +190,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `patch-name-mismatch` | 清单 | `cordis.patch.yml` 的 insert 行名与 `package.json` 的 `name` 不一致 | 否 |
 | `missing-manifest` | 清单 | 归档里没有 package.json | 否 |
 | `name-mismatch` | 清单 | 清单包名与规划不一致 | 否 |
-| `no-allowed-host` | 提交 | 未配置 allowedHosts，拒绝提交 | 否 |
+| `no-allowed-host` | 提交/规划/验收 | 未配置 `allowedHosts`；空列表按拒绝处理，不视为放开所有域名 | 否 |
 | `no-digest` | 下载 | 服务未给出摘要，无法校验 | 否 |
 | `no-installed-version` | 更新 | 未提供已安装版本 | 否 |
 | `no-latest-version` | 更新 | 目录里没有可用版本（含全部已撤回） | 否 |
@@ -237,7 +237,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 |---|---|
 | 身份 | 复用 IAM 会话；未登录只读本地已装 |
 | 令牌 | 只从环境变量 `HELUO_MARKET_TOKEN` 读取，不写配置文件、不进 patch、不落日志；缺失时以匿名身份请求，管理端点会返回 401/403 |
-| 归档来源 | 仅接受服务返回的 group 内地址，拒绝任意 URL |
+| 归档来源 | 仅接受服务返回的 group 内地址；`allowedHosts` 为空时一律拒绝（配置缺失不等于放开），拒绝任意 URL |
 | 解包 | 先剥离 Gitee 的 `<repo>-<tag>/` 顶层；白名单内文件写入，其余（`LICENSE`、`docs/` 等）跳过并列入 `skipped`；绝对路径与 `..` 一律拒绝 |
 | 供应链 | 摘要比对；声明安装脚本的包在校验阶段已被排除 |
 | 体积 | 下载按 `content-length` 与流式读取双重限制 64 MB；解压用 `maxOutputLength` 限制，避免 gzip 炸弹 |
