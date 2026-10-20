@@ -40,6 +40,7 @@ insert:
       serviceUrl: https://plugins.corp.example
       allowedHosts: [gitee.corp.example]
       cachePath: ~/.dsh/cache/forge-market.json
+      targetDir: ~/.dsh/plugins
 ```
 
 | 工具 | 作用 | 写入 |
@@ -56,6 +57,10 @@ insert:
 `market_search` 在服务不可达时回退到本地缓存，并返回 `source: "cache"` 与 `stale` 标记；配置项 `cachePath` 指向缓存文件，未配置则不做缓存。
 
 `market_install` 只有在配置了 `targetDir` 时才会写文件；不配置则只做校验并返回文件清单，便于先验证再安装。
+
+## 面板位置
+
+客户端面板注册在 `plugins.bundle.config`，也就是本插件在「插件」页面里的配置区，用于展示市场条目与服务连通状态。它不是完整的市场界面：详情、提交、诊断仍在工具里，尚未做界面。
 
 ## 目录结构
 
