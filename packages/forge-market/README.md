@@ -61,13 +61,13 @@ insert:
 | `market_check_update` | 比较已装版本与最近可用的未撤回版本；省略 `installedVersion` 时读 `targetDir` 下的清单 | 否 |
 | `market_registration` | 给出登记到 profile 的 loader 行与两种登记路径 | 否 |
 | `market_plan_install` | 只解析标签与仓库，不下载 | 否 |
-| `market_install` | 下载归档、校验摘要、解包、必要时落盘，并返回可直接使用的登记行 | 是（仅落盘） |
+| `market_install` | 下载归档、校验摘要、解包、必要时落盘，并返回登记行；`mode` 为 `installed` 或 `verify-only` | 是（仅落盘） |
 
 宿主侧同时注册 `/api/forge-market` 前缀路由（`catalog`、`detail/<name>`），客户端面板从该路由取数，避免把服务地址暴露到浏览器。
 
 `market_search` 在服务不可达时回退到本地缓存，并返回 `source: "cache"` 与 `stale` 标记；配置项 `cachePath` 指向缓存文件，未配置则不做缓存。
 
-`market_install` 只有在配置了 `targetDir` 时才会写文件；不配置则只做校验并返回文件清单，便于先验证再安装。
+`market_install` 只有在配置了 `targetDir` 时才会写文件，此时返回 `mode: installed` 与 `persisted`；不配置则返回 `mode: verify-only`，表示只校验未落盘。
 
 ## 离线目录
 
