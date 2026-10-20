@@ -17,6 +17,7 @@ export async function downloadArchive(url, { fetchImpl = globalThis.fetch, timeo
 export async function installPlugin(plan, deps = {}) {
   const { download, extract, expectedDigest, onInstalled } = deps;
   if (!plan?.repo || !plan?.tag) return { ok: false, reason: 'bad-plan' };
+  if (plan.revoked) return { ok: false, reason: 'version-revoked' };
   if (typeof download !== 'function' || typeof extract !== 'function') return { ok: false, reason: 'missing-dependency' };
 
   let fetched;

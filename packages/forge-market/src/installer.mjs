@@ -33,6 +33,7 @@ export function planInstall(entry, version, allowedHosts = []) {
       repo: entry.repo,
       tag: resolved.tag || `v${resolved.version}`,
       archiveUrl: resolved.archiveUrl || '',
+      revoked: resolved.revoked === true,
     },
   };
 }
