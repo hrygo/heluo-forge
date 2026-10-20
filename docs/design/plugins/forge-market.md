@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.51.0 |
+| 版本 | V0.52.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -134,6 +134,8 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 面板挂在 `plugins.bundle.config`（keyed slot）。页面以 `renderSlot(..., { entryKey: pkg.name })` 派发，**键必须与包名逐字一致**；官方实验 bundle 亦用完整带 scope 的包名（如 `@deepseek-ai/dsh-experimental-cot-translation-bundle`）。现场出现的 `dshmarket` 这类键与包名不同形，不会被派发，属于注册方自己的问题，不构成本包的先例。
 
 slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在 bundle 详情里以 `view: 'page'` 派发；未见 `summary` 的调用点。
+
+2026-10-20 实测：装进 `media` profile 后打开「插件 → @heluo/forge-market」，详情页出现「企业插件市场」区块与「市场服务不可达，稍后重试。」（服务地址仍是占位值），组件状态为「运行中」。面板渲染这一环已不再是推断。
 
 | 视图 | 当前是否会被调用 | 渲染 |
 |---|---|---|

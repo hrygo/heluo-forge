@@ -10,7 +10,7 @@
 | 衔接点 | `plugin-market`、`plugin-manager` |
 | 服务实现 | 企业插件目录，见 [DESIGN-012](../../docs/design/services/market-index.md) |
 | 详细设计 | [DESIGN-007](../../docs/design/plugins/forge-market.md) |
-| 实现状态 | 宿主侧：策略、校验、目录、客户端、安装、缓存、路由与十个工具，均有测试；已装进 `media` profile 实机启动：插件激活、注册 `/api/forge-market` 前缀路由并对请求给出应答（服务地址为占位值，返回 503）；客户端面板的视觉呈现仍未人工查验 |
+| 实现状态 | 宿主侧：策略、校验、目录、客户端、安装、缓存、路由与十个工具，均有测试；已装进 `media` profile 实机启动：插件激活、注册 `/api/forge-market` 前缀路由并对请求给出应答（服务地址为占位值，返回 503）；客户端面板在 bundle 详情页实际渲染，显示「市场服务不可达」——与占位地址一致 |
 
 ## 用途
 
