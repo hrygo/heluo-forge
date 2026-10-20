@@ -4,16 +4,21 @@ const REQUIRED_SECTIONS = ['## 用途', '## 维护人'];
 const SEMVER_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
 import { parseEngines } from './policy.mjs';
 
+// 匹配 `key: value` 的任意 YAML 书写风格：块式、流式、键序不同都命中。
+// 宁可对可疑写法误报，也不能让受保护行换个写法就绕过。
+function scalar(key, value) {
+  return new RegExp(`(?:^|[\\s,\\[{])${key}\\s*:\\s*['\"]?${value}['\"]?(?=\\s|$|[,}\\]])`, 'm');
+}
+
 export function validatePatch(text) {
   const errors = [];
   const body = String(text ?? '');
   if (/!!js/.test(body)) errors.push({ code: 'patch-js-expr' });
-  if (/^\s*disabled:\s*true\s*$/m.test(body)) errors.push({ code: 'patch-disables-row' });
+  if (scalar('disabled', 'true').test(body)) errors.push({ code: 'patch-disables-row' });
   if (/cordis:include/.test(body)) errors.push({ code: 'patch-include' });
   if (/(^|[\s'\"])\.\.?\//.test(body) || /[A-Za-z]:\\\\/.test(body)) errors.push({ code: 'patch-unsafe-path' });
   for (const id of PROTECTED_IDS) {
-    const re = new RegExp(`^\\s*-\\s*id:\\s*['\"]?${id}['\"]?\\s*$`, 'm');
-    if (re.test(body)) errors.push({ code: 'patch-overrides-protected', detail: id });
+    if (scalar('id', id).test(body)) errors.push({ code: 'patch-overrides-protected', detail: id });
   }
   return errors;
 }

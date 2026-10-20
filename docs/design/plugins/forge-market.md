@@ -245,7 +245,7 @@ packages/forge-market/
 | `dsh-sandbox-policy` | 沙箱策略 |
 | `dsh-permission-presets` | 权限档位 |
 
-这份列表是**前缀等价**的：只匹配整行 id 完全相同的覆盖，不做模糊匹配。行 id 的最终取值须在 M1 用真实 profile 的补丁核对；名单变更须同步 `validate.mjs` 与本表。
+判定不依赖书写风格：块式、流式（`- {id: forge-iam}`）、键序不同都能命中，宁可误报不可漏报。代价是正文里出现形如 `id: forge-iam` 的字符串也会被判违规，属刻意取舍。行 id 的最终取值须在 M1 用真实 profile 的补丁核对；名单变更须同步 `validate.mjs` 与本表。
 
 ## 10. 状态与回退
 

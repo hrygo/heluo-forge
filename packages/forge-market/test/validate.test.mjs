@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validatePlugin } from '../src/validate.mjs';
+import { validatePatch, validatePlugin } from '../src/validate.mjs';
 
 const good = {
   files: ['cordis.patch.yml', 'package.json', 'README.md'],
@@ -67,4 +67,19 @@ test('says where a missing file was found instead', () => {
   assert.equal(missing.detail, 'README.md');
   assert.match(missing.hint, /docs\/README\.md/);
   assert.match(missing.hint, /repository root/);
+});
+
+test('the protected id rule cannot be dodged by YAML style', () => {
+  const styles = {
+    block: 'insert:\n  - id: forge-iam\n    name: x\n',
+    flow: 'insert:\n  - {id: forge-iam, name: x}\n',
+    later: 'insert:\n  - name: x\n    id: forge-iam\n',
+    quoted: 'insert:\n  - id: "forge-iam"\n',
+  };
+  for (const [label, patch] of Object.entries(styles)) {
+    const codes = validatePatch(patch).map((error) => error.code);
+    assert.ok(codes.includes('patch-overrides-protected'), `${label} was not caught`);
+  }
+  assert.deepEqual(validatePatch('insert:\n  - {id: x, disabled: true}\n'), [{ code: 'patch-disables-row' }]);
+  assert.deepEqual(validatePatch('insert:\n  - id: heluo-a\n    name: "@heluo/a"\n'), []);
 });
