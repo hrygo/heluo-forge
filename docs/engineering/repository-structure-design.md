@@ -183,7 +183,7 @@ flowchart LR
 | [需求基线](<../requirements/requirements-baseline.md>) | `docs/requirements/requirements-baseline.md` | 保留 REQ-01—REQ-23、M1—M6 和范围唯一真源 |
 | [实施计划](<../plans/rollout-plan.md>) | `docs/plans/rollout-plan.md` | 保留 A1—A14、15 周条件基准及 G0—G3 |
 | [网关契约](<../contracts/gateway-contract.md>) | `docs/contracts/gateway-contract.md` | 字段和安全边界不变，仅重建引用 |
-| [询问函](<../collaboration/team-confirmation-letters.md>) | `docs/collaboration/team-confirmation-letters.md` | 保留七封、47 项问题及其编号，不更改发函/批准状态 |
+| [询问函](<../collaboration/team-confirmation-letters.md>) | `docs/collaboration/team-confirmation-letters.md` | 保留七封、45 项问题及其编号，不更改发函/批准状态 |
 | [子文档索引](<../README.md>) | `docs/README.md` | 升级为文档总入口，保留十份领域交付物及待启动状态 |
 | [文档模板](<../templates/_template.md>) | `docs/templates/_template.md` | 保留受控文档基本结构，新增单独的模块设计模板 |
 | 本设计 | `docs/engineering/repository-structure-design.md` | 保留本次评审历史和批准边界 |

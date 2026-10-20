@@ -75,7 +75,7 @@
 
 | 入口 | 文档 | 用途与边界 |
 |---|---|---|
-| 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 七封可独立转发的正文、47 项稳定问题；回函核验后写入技术契约，不自动构成准入 |
+| 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 七封可独立转发的正文、45 项问题；回函核验后写入技术契约，不自动构成准入 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 九个安装包与两个独立服务的详细设计状态与路径 |

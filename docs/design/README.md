@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.5 |
+| 版本 | V0.1.6 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -27,7 +27,7 @@
 |---|---|---|---|---|
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案 | 提供者 API 实测、账户页 slot、IAM 的 `resource` 与轮换能力 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案 | 拦截钩子实测、策略与沙箱叠加顺序、审批注册、`$DSH_HOME` 范围 |
-| `@heluo/forge-enterprise` | umbrella bundle | `plugins/forge-enterprise.md` | 待设计 | 组合顺序、依赖检查、角色 preset 与默认禁用项 |
+| `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案 | 版本断言报错形态、`fiberPhase`、角色 preset 粒度、默认禁用清单 |
 | `@heluo/forge-gateway` | 配置 bundle | `plugins/forge-gateway.md` | 待设计 | 模型白名单、错误与重试配置、流式行为 |
 | `@heluo/forge-brand` | 配置 bundle | `plugins/forge-brand.md` | 待设计 | 品牌 token 覆盖范围、白标边界 |
 | `@heluo/forge-devops` | MCP 接入 bundle | `plugins/forge-devops.md` | 待设计 | 只读工具面（清单待提供方澄清）、服务端授权、按请求取 token |
