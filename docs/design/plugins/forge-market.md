@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.6.0 |
+| 版本 | V0.7.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -79,20 +79,29 @@
 ## 5. 模块结构
 
 ```text
-plugin/
-├── cordis.patch.yml          挂载声明（保留）
+packages/forge-market/
+├── cordis.patch.yml          挂载声明：serviceUrl、allowedHosts、cachePath
+├── client.js                 客户端面板：列表、加载与缓存状态
 ├── src/
-│   ├── index.mjs             注册面板与路由
-│   ├── client.mjs            服务客户端：超时、重试、错误码
-│   ├── catalog.mjs           列表、筛选、排序
-│   ├── detail.mjs            详情与版本选择
-│   ├── installer.mjs         下载、校验、解包、挂载
-│   ├── submit.mjs            提交表单与校验前置
-│   └── diagnostics.mjs       未收录清单与原因
-└── ui/                       卡片、列表、详情、表单
+│   ├── index.mjs             插件入口：注册工具与 HTTP 路由
+│   ├── market-tools.mjs      六个工具的定义与执行
+│   ├── client.mjs            服务客户端：超时、错误码映射
+│   ├── catalog.mjs           条目与版本归一化、排序、过滤
+│   ├── installer.mjs         版本规划、域名白名单、摘要、路径白名单
+│   ├── install.mjs           安装流水线：下载、摘要、解包、清单比对
+│   ├── tarball.mjs           tar.gz 解包：体积上限、截断与路径校验
+│   ├── persist.mjs           落盘：目标目录约束
+│   ├── cache.mjs             离线缓存：时间戳与过期判定
+│   ├── routes.mjs            宿主路由：catalog、detail、缓存回退
+│   ├── registration.mjs      生成 profile 登记行与说明
+│   ├── validate.mjs          包格式与 patch 内容校验
+│   └── policy.mjs            安装策略与 engines 范围判定
+└── test/                     单元、契约、端到端与测试支撑
 ```
 
-`client.mjs` 是唯一访问网络的模块，其余模块只依赖它的返回结构。
+网络访问只出现在两处：`client.mjs` 调市场服务，`install.mjs` 的下载器取归档。其余模块是纯计算或纯文件操作，可单独测试。
+
+`detail`、`submit`、`diagnostics` 三个页面尚未实现；当前客户端只有列表面板，提交与诊断走工具而非界面。
 
 ## 6. 页面与交互
 
