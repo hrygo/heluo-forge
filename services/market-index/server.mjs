@@ -18,7 +18,7 @@ function matches(entry, query) {
   return [entry.name, entry.title, entry.summary, ...(entry.scenarios ?? [])].join(' ').toLowerCase().includes(needle);
 }
 
-export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), counts = {}, saveCounts, today = () => new Date().toISOString().slice(0, 10) } = {}) {
+export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), counts = {}, saveCounts, adminToken = '', today = () => new Date().toISOString().slice(0, 10) } = {}) {
   // 目录文件可能不写这些字段；对外一律给出确定的形状。
   entries = entries.map((entry) => ({
     maintainer: '',
@@ -57,6 +57,7 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
       summary: review.summary ?? '',
       scenarios: review.scenarios ?? [],
       maintainer: '',
+      submitter: review.submitter ?? '',
       repo: review.repo,
       status: 'listed',
       version,
@@ -75,6 +76,16 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
     };
 
     if (url.pathname === '/api/plugins' && req.method === 'GET') {
+      // 没有账号体系时，"我的提交"按提交方自报的身份过滤；未给身份不回退成全量。
+      const submitter = url.searchParams.get('submitter') ?? '';
+      if (url.searchParams.get('mine') === '1') {
+        if (!submitter) return send(400, { error: 'missing-submitter' });
+        const listed = entries.filter((entry) => entry.submitter === submitter);
+        const pending = reviews
+          .filter((review) => review.submitter === submitter && review.state === 'pending')
+          .map((review) => ({ name: review.name, tag: review.tag, title: review.title, summary: review.summary, state: 'pending' }));
+        return send(200, { entries: listed, pending });
+      }
       const query = url.searchParams.get('q') ?? '';
       const sort = url.searchParams.get('sort') === 'downloads' ? 'downloads' : 'stars';
       const matched = entries
@@ -102,9 +113,16 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
         title: payload.title ?? '',
         summary: payload.summary ?? '',
         scenarios: Array.isArray(payload.scenarios) ? payload.scenarios.map(String) : [],
+        submitter: String(payload.submitter ?? ''),
         state: 'pending',
       });
       return send(202, { state: 'pending' });
+    }
+
+    // 管理端点必须带令牌：评审能决定什么被发布，不能靠"内网"当授权。
+    if (url.pathname.startsWith('/api/admin/')) {
+      const offered = String(req.headers?.authorization ?? '');
+      if (!adminToken || offered !== `Bearer ${adminToken}`) return send(401, { error: 'unauthorized' });
     }
 
     if (url.pathname === '/api/admin/review' && req.method === 'POST') {
@@ -177,7 +195,7 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
   };
 }
 
-export async function startMarketService({ catalogFile, countsFile, port = 8080, host = '127.0.0.1' } = {}) {
+export async function startMarketService({ catalogFile, countsFile, port = 8080, host = '127.0.0.1', adminToken = process.env.HELUO_MARKET_TOKEN ?? '' } = {}) {
   const entries = await loadCatalog(catalogFile);
   let counts = {};
   if (countsFile) {
@@ -195,7 +213,7 @@ export async function startMarketService({ catalogFile, countsFile, port = 8080,
           await rename(temporary, countsFile);
         }
       : undefined;
-    const app = createMarketApp({ entries, counts, saveCounts });
+    const app = createMarketApp({ entries, counts, saveCounts, adminToken });
     const server = createServer((req, res) => {
       app(req, res).catch(() => {
         if (!res.headersSent) {

@@ -29,15 +29,17 @@
 
 ## 令牌
 
-管理端点（如 `/api/admin/unindexed`）需要令牌。只从环境变量读取，不写进配置或 patch：
+管理端点（`/api/admin/*`）一律要求令牌；服务端未配置令牌时全部拒绝，不回退成开放。令牌只从环境变量读取，不写进配置或 patch：
 
 ```sh
 export HELUO_MARKET_TOKEN=...
 ```
 
+「我的提交」需要 `submitter`（配置项或 `HELUO_MARKET_SUBMITTER`）。它由调用方自报，只用于过滤展示，不构成权限；未配置时 `market_mine` 返回 `identity-unavailable`。
+
 ## 用法
 
-挂载补丁声明服务地址与允许的仓库域名；插件向当前 agent 注册四个工具。
+挂载补丁声明服务地址与允许的仓库域名；插件向当前 agent 注册十个工具（搜索、详情、提交、我的提交、校验、诊断、检查更新、登记、安装、安装规划）。
 
 ```yaml
 insert:

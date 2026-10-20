@@ -71,7 +71,7 @@ test('submit sends only the fields DESIGN-012 declares', async () => {
     },
   });
 
-  await client.submit({ name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', summary: '', scenarios: [] });
+  await client.submit({ name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', summary: '', scenarios: [], submitter: 'alice' });
   assert.deepEqual(Object.keys(sent).sort(), documented.sort());
 });
 

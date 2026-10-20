@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createMarketApp } from '../server.mjs';
 
+const TOKEN = 'test-token';
+const AUTH = { authorization: `Bearer ${TOKEN}` };
+
 const entries = [
   { name: '@heluo/a', title: '网关', summary: '接入', version: '0.1.0', versions: [{ version: '0.1.0', tag: 'v0.1.0' }], stars: 2, downloads: 9 },
   { name: '@heluo/b', title: '品牌', version: '0.2.0', stars: 7, downloads: 1 },
@@ -14,7 +17,7 @@ function listen(app) {
 }
 
 test('serves the catalog sorted by stars and filters by keyword', async () => {
-  const app = createMarketApp({ entries });
+  const app = createMarketApp({ adminToken: TOKEN, entries });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -35,7 +38,7 @@ test('serves the catalog sorted by stars and filters by keyword', async () => {
 
 test('accepts a submission into the review queue and rejects a bad one', async () => {
   const reviews = [];
-  const app = createMarketApp({ entries, reviews });
+  const app = createMarketApp({ adminToken: TOKEN, entries, reviews });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -58,23 +61,27 @@ test('accepts a submission into the review queue and rejects a bad one', async (
 });
 
 test('answers 404 for unknown paths and details', async () => {
-  const app = createMarketApp({ entries });
+  const app = createMarketApp({ adminToken: TOKEN, entries });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     assert.equal((await fetch(`${base}/api/plugins/@heluo%2Fzzz`)).status, 404);
     assert.equal((await fetch(`${base}/api/nope`)).status, 404);
-    assert.equal((await fetch(`${base}/api/admin/unindexed`)).status, 200);
+    assert.equal((await fetch(`${base}/api/admin/unindexed`, { headers: AUTH })).status, 200);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
 test('submission, approval and revocation follow one path', async () => {
-  const app = createMarketApp({ entries: [] });
+  const app = createMarketApp({ adminToken: TOKEN, entries: [] });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
-  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', body: JSON.stringify(body) });
+  const post = (path, body) => fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...AUTH },
+    body: JSON.stringify(body),
+  });
   try {
     assert.equal((await post('/api/plugins', { name: '@heluo/c', repo: 'https://gitee.corp.example/g/c', tag: 'v0.1.0' })).status, 202);
     assert.deepEqual((await (await fetch(`${base}/api/plugins`)).json()).entries, []);
@@ -93,10 +100,14 @@ test('submission, approval and revocation follow one path', async () => {
 });
 
 test('review rejects unknown actions and unknown names', async () => {
-  const app = createMarketApp({ entries });
+  const app = createMarketApp({ adminToken: TOKEN, entries });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
-  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', body: JSON.stringify(body) });
+  const post = (path, body) => fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...AUTH },
+    body: JSON.stringify(body),
+  });
   try {
     assert.equal((await post('/api/admin/review', { name: '@heluo/a', action: 'delete' })).status, 400);
     assert.equal((await post('/api/admin/review', { name: '@heluo/zzz', action: 'approve' })).status, 404);
@@ -107,7 +118,7 @@ test('review rejects unknown actions and unknown names', async () => {
 
 test('counts one download per machine and day', async () => {
   const day = '2026-10-20';
-  const app = createMarketApp({ entries: structuredClone(entries), today: () => day });
+  const app = createMarketApp({ adminToken: TOKEN, entries: structuredClone(entries), today: () => day });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
   const hit = (machine) => fetch(`${base}/api/plugins/@heluo%2Fa/versions/0.1.0/download`, { headers: { 'x-machine-hash': machine } }).then((r) => r.json());
@@ -125,7 +136,7 @@ test('counts one download per machine and day', async () => {
 });
 
 test('an unknown version is refused and an anonymous hit counts once a day', async () => {
-  const app = createMarketApp({ entries: structuredClone(entries), today: () => '2026-10-21' });
+  const app = createMarketApp({ adminToken: TOKEN, entries: structuredClone(entries), today: () => '2026-10-21' });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -140,10 +151,14 @@ test('an unknown version is refused and an anonymous hit counts once a day', asy
 });
 
 test('a revoked version refuses downloads while the entry stays listed', async () => {
-  const app = createMarketApp({ entries: structuredClone(entries) });
+  const app = createMarketApp({ adminToken: TOKEN, entries: structuredClone(entries) });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
-  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', body: JSON.stringify(body) });
+  const post = (path, body) => fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...AUTH },
+    body: JSON.stringify(body),
+  });
   try {
     assert.equal((await post('/api/admin/review', { name: '@heluo/a', action: 'revoke', version: '0.1.0' })).status, 200);
     const download = await fetch(`${base}/api/plugins/@heluo%2Fa/versions/0.1.0/download`);
@@ -159,10 +174,14 @@ test('a revoked version refuses downloads while the entry stays listed', async (
 });
 
 test('approval keeps the submitted title, summary and scenarios', async () => {
-  const app = createMarketApp({ entries: [] });
+  const app = createMarketApp({ adminToken: TOKEN, entries: [] });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
-  const post = (path, body) => fetch(`${base}${path}`, { method: 'POST', body: JSON.stringify(body) });
+  const post = (path, body) => fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...AUTH },
+    body: JSON.stringify(body),
+  });
   try {
     await post('/api/plugins', {
       name: '@heluo/d',
@@ -183,7 +202,7 @@ test('approval keeps the submitted title, summary and scenarios', async () => {
 });
 
 test('maintainer is empty because the reference service cannot resolve members', async () => {
-  const app = createMarketApp({ entries });
+  const app = createMarketApp({ adminToken: TOKEN, entries });
   const server = await listen(app);
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -209,6 +228,80 @@ test('download counts are restored and saved', async () => {
     await fetch(`${base}/api/plugins/${encodeURIComponent('@heluo/a')}/versions/0.1.0/download`, { headers: { 'x-machine-hash': 'm1' } });
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(saved.at(-1)['@heluo/a'], 8);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('mine without an identity is refused rather than returning everything', async () => {
+  const app = createMarketApp({ adminToken: TOKEN, entries });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const refused = await fetch(`${base}/api/plugins?mine=1`);
+    assert.equal(refused.status, 400);
+    assert.deepEqual(await refused.json(), { error: 'missing-submitter' });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('mine lists only that submitter\'s entries and pending reviews', async () => {
+  const app = createMarketApp({ adminToken: TOKEN, entries });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const submit = (payload) => fetch(`${base}/api/plugins`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...AUTH },
+      body: JSON.stringify(payload),
+    });
+    await submit({ name: '@heluo/alice-plugin', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', submitter: 'alice' });
+    await submit({ name: '@heluo/bob-plugin', repo: 'https://gitee.corp.example/g/b', tag: 'v0.1.0', submitter: 'bob' });
+    await fetch(`${base}/api/admin/review`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...AUTH },
+      body: JSON.stringify({ name: '@heluo/alice-plugin', action: 'approve' }),
+    });
+
+    const alice = await (await fetch(`${base}/api/plugins?mine=1&submitter=alice`)).json();
+    assert.deepEqual(alice.entries.map((entry) => entry.name), ['@heluo/alice-plugin']);
+    assert.deepEqual(alice.pending, []);
+    assert.equal(alice.entries[0].submitter, 'alice');
+
+    const bob = await (await fetch(`${base}/api/plugins?mine=1&submitter=bob`)).json();
+    assert.deepEqual(bob.entries, []);
+    assert.deepEqual(bob.pending.map((item) => item.name), ['@heluo/bob-plugin']);
+    assert.equal(bob.pending[0].state, 'pending');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('admin endpoints demand the configured token', async () => {
+  const app = createMarketApp({ adminToken: TOKEN, entries: structuredClone(entries), adminToken: 'secret' });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const review = { name: '@heluo/a', action: 'revoke' };
+    const anonymous = await fetch(`${base}/api/admin/review`, {
+      method: 'POST', headers: { 'content-type': 'application/json', ...AUTH }, body: JSON.stringify(review),
+    });
+    assert.equal(anonymous.status, 401);
+    assert.deepEqual(await anonymous.json(), { error: 'unauthorized' });
+
+    const wrong = await fetch(`${base}/api/admin/review`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer nope' }, body: JSON.stringify(review),
+    });
+    assert.equal(wrong.status, 401);
+
+    const allowed = await fetch(`${base}/api/admin/review`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer secret' }, body: JSON.stringify(review),
+    });
+    assert.equal(allowed.status, 200);
+
+    const unindexed = await fetch(`${base}/api/admin/unindexed`, { headers: AUTH });
+    assert.equal(unindexed.status, 401);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

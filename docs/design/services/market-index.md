@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.19.0 |
+| 版本 | V0.21.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -78,12 +78,17 @@
 | `metrics.syncHours` | number | `6` | 否 | star 同步间隔 |
 
 ```text title="端点（示意）"
-GET  /api/plugins                  条目列表与筛选；`mine=1` 按调用方身份过滤
+GET  /api/plugins                  条目列表与筛选；`mine=1&submitter=` 只返回该提交方的条目与待审记录，缺 submitter 返回 400 `missing-submitter`
 GET  /api/plugins/{name}           详情、版本、聚合分；响应为 `{ entry }`
 POST /api/plugins                  提交或更新条目
 GET  /api/metrics?plugin=          下载量与 star
 POST /api/admin/review             上架、退回、撤回
 GET  /api/discover/gitee           扫描专门 group 的仓库
+```
+
+`/api/admin/*` 一律要求 `authorization: Bearer <令牌>`；服务端未配置 `adminToken`（`HELUO_MARKET_TOKEN`）时全部返回 401，不回退成开放。
+
+```text title="端点（其余）"
 GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 ```
 
@@ -195,8 +200,11 @@ flowchart TD
 | `tag` | string | 是 | 形如 `v0.1.0`，与清单版本一致 |
 | `summary` | string | 否 | 一句话说明，展示时按纯文本 |
 | `scenarios` | string[] | 否 | 适用场景 |
+| `submitter` | string | 否 | 提交方标识；仅用于「我的提交」过滤，**不是身份认证** |
 
 维护人由服务端按仓库成员判定，不接受调用方自报；归档地址与 `engines.dsh` 由服务端从仓库读取，避免客户端伪造。
+
+`submitter` 是当前实现里唯一的归属线索：服务端没有账号体系，它由调用方自报，因此**只能用于过滤展示，不能作为授权依据**。任何人仍可读到全量目录；「我的提交」在没有 `submitter` 时返回 400，而不是退回成全量。
 
 **并发**：同一条目发布加锁，避免版本覆盖；计数按（条目, 机器哈希, 日）去重。
 
