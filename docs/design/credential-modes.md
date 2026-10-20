@@ -15,12 +15,6 @@
 | 最后更新 | 2026-10-20 |
 | 门禁 | 待网关与 IAM 确认接口后进入评审 |
 
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| V0.1 | 2026-10-20 | DSH 平台组（代拟） | 提出双模式支持设计：统一凭据接口、两种提供者、镜像同步、状态机与切换策略；实现未开始 |
-
 > 编制依据：2026-10-20 核对[总体架构](../architecture/platform-architecture.md) §7.1—§7.2、[网关契约](../contracts/gateway-contract.md) §4、[静态 Key 方案](../architecture/gateway-static-key-option.md)与[设计索引](README.md)。已验：现有文档的 seam 与凭据引用约定。未验：目标 DSH 版本中 `llm-pi-ai` 解析引用的时机、`ctx.credentials` 的跨进程互斥行为；两者均需按 P0 实测。
 >
 > 关联文档：[总体架构设计](../architecture/platform-architecture.md)、[AI 网关契约](../contracts/gateway-contract.md)、[网关静态 Key 方案](../architecture/gateway-static-key-option.md)、[工程开发与发布约定](../engineering/development-conventions.md)。

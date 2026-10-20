@@ -18,7 +18,6 @@
 
 | 任务 | 先确认 |
 |---|---|
-| 文档、契约或方案 | 在[文档地图](docs/README.md#2-文档地图)定位职责文件，核对元数据与修订记录 |
 | 插件或独立服务 | 查[设计索引](docs/design/README.md)与对应模块 README，确认设计准入 |
 | 工程脚本、测试或 CI | 查[开发约定](docs/engineering/development-conventions.md)，定位实际检查规则和用例 |
 | 部署与运行手册 | 查[部署说明](deploy/README.md)及[运维索引](docs/operations/README.md)，确认授权与实测条件 |

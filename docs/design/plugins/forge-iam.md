@@ -16,12 +16,6 @@
 | 门禁 | G0 |
 | 模块状态 | 规划 |
 
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| V0.1 | 2026-10-20 | DSH 平台组（代拟） | 初稿：登录、令牌 broker、凭据存储与镜像、退出与撤销；含需用户确认的六项 |
-
 > 编制依据：2026-10-20 对目标环境已安装 DSH 包做**字符串级核验**（从打包产物提取包名与类型/方法标识）：`dsh-credentials`、`dsh-credentials-local`、`dsh-llm-pi-ai`、`dsh-llm-retry`、`dsh-settings`、`dsh-client-ui-settings-account`、`dsh-mcp-client`；`CredentialRef` 与 `CredentialKey` 品牌类型；`modifyRecord` / `deleteRecord` 及"提交后触发"的事件语义；模型命名空间键形如 `llm-pi-ai`。
 > **未核验**：提供者注册与事件订阅的准确 API 名、跨进程互斥的运行时语义、账户设置页的 slot 标识。以上均按字符串存在性推断，未做运行时实测，因此第 4、5 节出现的 API 形状标为"待实测"。
 >

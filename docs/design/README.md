@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.3 |
+| 版本 | V0.1.5 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -14,15 +14,6 @@
 | 批准 | DSH 平台组 |
 | 最后更新 | 2026-10-20 |
 | 门禁 | — |
-
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| V0.1 | 2026-10-20 | DSH 平台组 | 建立九个安装包与两个独立服务的详细设计索引、依赖顺序与完成判据；详细设计尚未开始 |
-| V0.1.1 | 2026-10-20 | DSH 平台组（代拟） | 同步 @heluo/forge-* 包名、规划设计路径与模块依赖名称；设计状态不变 |
-| V0.1.2 | 2026-10-20 | DSH 平台组（代拟） | 增加跨模块设计小节，登记网关凭据双模式设计；包与服务的索引不变 |
-| V0.1.3 | 2026-10-20 | DSH 平台组（代拟） | 登记 IAM 接入详细设计 V0.1；补充分级编号与"增益不明确单列"约定 |
 
 ## 1. 结论
 
@@ -35,11 +26,11 @@
 | 包 | 形态 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案 | 提供者 API 实测、账户页 slot、IAM 的 `resource` 与轮换能力 |
-| `@heluo/forge-policy` | Host 插件 | `plugins/forge-policy.md` | 待设计 | 门禁挂点、`$DSH_HOME` 硬拒绝、外发确认、审计字段 |
+| `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案 | 拦截钩子实测、策略与沙箱叠加顺序、审批注册、`$DSH_HOME` 范围 |
 | `@heluo/forge-enterprise` | umbrella bundle | `plugins/forge-enterprise.md` | 待设计 | 组合顺序、依赖检查、角色 preset 与默认禁用项 |
 | `@heluo/forge-gateway` | 配置 bundle | `plugins/forge-gateway.md` | 待设计 | 模型白名单、错误与重试配置、流式行为 |
 | `@heluo/forge-brand` | 配置 bundle | `plugins/forge-brand.md` | 待设计 | 品牌 token 覆盖范围、白标边界 |
-| `@heluo/forge-devops` | MCP 接入 bundle | `plugins/forge-devops.md` | 待设计 | 工具面、服务端授权、按请求取 token |
+| `@heluo/forge-devops` | MCP 接入 bundle | `plugins/forge-devops.md` | 待设计 | 只读工具面（清单待提供方澄清）、服务端授权、按请求取 token |
 | `@heluo/forge-gitee` | MCP 接入 bundle | `plugins/forge-gitee.md` | 待设计 | 上游复用、arm64 构建、凭据来源 |
 | `@heluo/forge-sdd` | Skill pack + CLI | `plugins/forge-sdd.md` | 待设计 | 产物契约、freeze 与指纹、路径规则 |
 | `@heluo/forge-market` | 配置 bundle | `plugins/forge-market.md` | 待设计 | 私有源配置、安装策略、兼容校验 |
@@ -54,7 +45,7 @@
 
 | 服务 | 代码位置 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
-| DevOps MCP 服务 | `services/devops-mcp/` | `services/devops-mcp.md` | 待设计 | 传输协议、PRM 元数据、平台审批单、幂等与查单 |
+| DevOps MCP 服务 | `services/devops-mcp/` | `services/devops-mcp.md` | 待设计 | 传输协议、PRM 元数据、只读工具面（清单待提供方澄清）、字段与版本兼容 |
 | 市场目录与发布控制 | `services/market-index/` | `services/market-index.md` | 待设计 | 目录 schema、校验规则、发布状态与回退通道 |
 
 私有 npm 制品仓库不是自研服务，优先复用企业现有 registry，部署与运维边界见[部署说明](../../deploy/README.md)。

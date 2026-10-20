@@ -15,12 +15,6 @@
 | 最后更新 | YYYY-MM-DD |
 | 门禁 | G0 / G1 / G2 |
 
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| V0.1 | YYYY-MM-DD | <团队> | 初稿 |
-
 > 编制依据：<核验基准版本、核验日期；明确哪些接口或环境已实测、哪些尚未验证>。
 >
 > 关联文档：[总体架构设计](../architecture/platform-architecture.md)、[推广实施方案](../plans/rollout-plan.md)、[需求与场景基线](../requirements/requirements-baseline.md)。

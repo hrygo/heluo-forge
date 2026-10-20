@@ -23,11 +23,6 @@ const META = (id, version = 'V0.1', status = '草案') => `# 测试文档
 | 最后更新 | 2026-10-20 |
 | 门禁 | G0 |
 
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| ${version} | 2026-10-20 | 平台组 | 初稿 |
 `;
 
 function write(root, path, content) {
@@ -35,11 +30,11 @@ function write(root, path, content) {
   writeFileSync(join(root, path), content);
 }
 
-function questions(domain, count) {
-  return Array.from(
-    { length: count },
-    (_, index) => `| CONF-${domain}-${String(index + 1).padStart(2, '0')} | 问题 ${index + 1} |`,
-  ).join('\n');
+function questions(domain, numbers) {
+  const list = Array.isArray(numbers) ? numbers : Array.from({ length: numbers }, (_, index) => index + 1);
+  return list
+    .map((number) => `| CONF-${domain}-${String(number).padStart(2, '0')} | 问题 ${number} |`)
+    .join('\n');
 }
 
 export function buildValidDocs(root) {
@@ -126,7 +121,7 @@ ${Array.from({ length: 23 }, (_, i) => `| REQ-${String(i + 1).padStart(2, '0')} 
 
 | 编号 | 指标 |
 |---|---|
-${Array.from({ length: 6 }, (_, i) => `| M${i + 1} | 指标 ${i + 1} |`).join('\n')}
+${[1, 2, 3, 5, 6].map((n) => `| M${n} | 指标 ${n} |`).join('\n')}
 `,
   );
   write(
@@ -160,7 +155,7 @@ ${questions('IAM', 7)}
 
 ${questions('GW', 8)}
 
-${questions('DEVOPS', 6)}
+${questions('DEVOPS', [1, 2, 3, 6])}
 
 ${questions('GITEE', 5)}
 
@@ -264,8 +259,12 @@ test('line fragment beyond the file length is reported', () => {
 test('ragged table is reported', () => {
   const root = fixture();
   try {
-    mutate(root, 'docs/contracts/gateway-contract.md', '| 版本 | 日期 | 修订人 | 修订说明 |', '| 版本 | 日期 | 修订人 |');
-    mutate(root, 'docs/contracts/gateway-contract.md', '|---|---|---|---|', '|---|---|---|');
+    mutate(
+      root,
+      'docs/contracts/gateway-contract.md',
+      '## 5. 失败模式',
+      '| 列一 | 列二 |\n|---|---|\n| 缺一列 |\n\n## 5. 失败模式',
+    );
     const { errors } = checkDocs(root);
     assert.ok(errors.some((error) => error.includes('columns')), errors.join('\n'));
   } finally {
@@ -299,17 +298,6 @@ test('controlled document without registration is reported', () => {
   }
 });
 
-test('missing revision row for the declared version is reported', () => {
-  const root = fixture();
-  try {
-    mutate(root, 'docs/contracts/gateway-contract.md', '| V0.1 | 2026-10-20 | 平台组 | 初稿 |', '| V0.0 | 2026-10-20 | 平台组 | 初稿 |');
-    const { errors } = checkDocs(root);
-    assert.ok(errors.some((error) => error.includes('no revision row')), errors.join('\n'));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test('stale subdocument path and host paths are reported', () => {
   const root = fixture();
   try {
@@ -333,12 +321,28 @@ test('internal identifier leaked into a letter is reported', () => {
   }
 });
 
+test('revision history tables are rejected', () => {
+  const root = fixture();
+  try {
+    mutate(
+      root,
+      'docs/architecture/platform-architecture.md',
+      '## 2. 软件包组合',
+      '## 修订记录\n\n| 版本 | 日期 | 修订人 | 修订说明 |\n|---|---|---|---|\n| V0.1 | 2026-10-20 | 平台组 | 初稿 |\n\n## 2. 软件包组合',
+    );
+    const { errors } = checkDocs(root);
+    assert.ok(errors.some((error) => error.includes('revision history is forbidden')), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('question count drift is reported', () => {
   const root = fixture();
   try {
     mutate(root, 'docs/collaboration/team-confirmation-letters.md', '| CONF-IAM-07 | 问题 7 |', '');
     const { errors } = checkDocs(root);
-    assert.ok(errors.some((error) => error.includes('47 unique question rows')), errors.join('\n'));
+    assert.ok(errors.some((error) => error.includes('45 unique question rows')), errors.join('\n'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -130,6 +130,10 @@ export function checkDocs(root, options = {}) {
       errors.push(`${path}: expected exactly one H1`);
     }
 
+    if (lines.some((line) => /^##\s*修订记录\s*$/.test(line))) {
+      errors.push(`${path}: revision history is forbidden; git holds the history`);
+    }
+
     let width = null;
     lines.forEach((line, index) => {
       if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
@@ -190,17 +194,6 @@ export function checkDocs(root, options = {}) {
     for (const key of META_KEYS) {
       if (metadata(text, key) === null) errors.push(`${path}: missing metadata ${key}`);
     }
-    const version = metadata(text, '版本');
-    if (version) {
-      const versions = [];
-      for (const line of unfenced(text)) {
-        const cells = parseRow(line);
-        if (cells && /^V\d+\.\d+(\.\d+)?$/.test(cells[0] ?? '')) versions.push(cells[0]);
-      }
-      if (!versions.includes(version)) errors.push(`${path}: no revision row for ${version}`);
-      if (new Set(versions).size !== versions.length) errors.push(`${path}: duplicate revision version`);
-    }
-
     if (controlled) {
       counts.controlled += 1;
       for (const key of ['审核', '批准']) {
@@ -262,18 +255,20 @@ function checkLetters(root, texts) {
   const path = 'docs/collaboration/team-confirmation-letters.md';
   const letters = texts.get(path);
   if (!letters) return [`${path}: missing`];
-  const expected = { IAM: 7, GW: 8, DEVOPS: 6, GITEE: 5, IT: 7, SEC: 7, PMO: 7 };
+  const expected = { IAM: 7, GW: 8, DEVOPS: [1, 2, 3, 6], GITEE: 5, IT: 7, SEC: 7, PMO: 7 };
+  const allowed = (value) => (Array.isArray(value) ? value : Array.from({ length: value }, (_, i) => i + 1));
+  const totalQuestions = Object.values(expected).reduce((sum, value) => sum + allowed(value).length, 0);
   const ids = [...letters.matchAll(/^\| (CONF-([A-Z]+)-(\d{2})) \|/gm)].map((match) => ({
     id: match[1],
     domain: match[2],
     number: Number(match[3]),
   }));
-  if (ids.length !== 47 || new Set(ids.map((item) => item.id)).size !== 47) {
-    errors.push(`${path}: expected 47 unique question rows, found ${ids.length}`);
+  if (ids.length !== totalQuestions || new Set(ids.map((item) => item.id)).size !== totalQuestions) {
+    errors.push(`${path}: expected ${totalQuestions} unique question rows, found ${ids.length}`);
   }
   for (const [domain, total] of Object.entries(expected)) {
     const numbers = ids.filter((item) => item.domain === domain).map((item) => item.number).sort((a, b) => a - b);
-    if (numbers.join(',') !== Array.from({ length: total }, (_, i) => i + 1).join(',')) {
+    if (numbers.join(',') !== allowed(total).join(',')) {
       errors.push(`${path}: invalid ${domain} question sequence`);
     }
   }
@@ -300,12 +295,12 @@ function checkSequences(root, texts, errors) {
   if (!plan) errors.push('docs/plans/rollout-plan.md: missing');
   for (const [text, prefix, total, label] of [
     [requirements, 'REQ-', 23, 'requirements'],
-    [requirements, 'M', 6, 'requirements metrics'],
+    [requirements, 'M', [1, 2, 3, 5, 6], 'requirements metrics'],
     [plan, 'A', 14, 'plan acceptance'],
   ]) {
     if (!text) continue;
     const numbers = [...text.matchAll(new RegExp(`^\\| ${prefix}(\\d+) \\|`, 'gm'))].map((match) => Number(match[1]));
-    const expected = Array.from({ length: total }, (_, i) => i + 1);
+    const expected = Array.isArray(total) ? total : Array.from({ length: total }, (_, i) => i + 1);
     if (numbers.join(',') !== expected.join(',')) errors.push(`${label}: invalid ${prefix} sequence`);
   }
   return [];

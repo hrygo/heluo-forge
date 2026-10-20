@@ -15,13 +15,6 @@
 | 最后更新 | 2026-10-20 |
 | 门禁 | 未采纳；启用须走 G0 决策变更 |
 
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| V0.1 | 2026-10-20 | DSH 平台组（代拟） | 记录静态密钥签发备选方案：密钥格式、接口面、生命周期、身份级联与切换成本；明确不改变主方案、契约与验收 |
-| V0.2 | 2026-10-20 | DSH 平台组（代拟） | 记录控制台手工签发变体：与 API 签发的差异、三个代价、缓解条件与采用建议；主方案不变 |
-
 > 编制依据：2026-10-20 核对[总体架构](<platform-architecture.md>) ADR-2 与 §7.1、[AI 网关契约](../contracts/gateway-contract.md) §4、[需求基线](../requirements/requirements-baseline.md)中 C1–C4 与撤销要求、DSH `llm-pi-ai` 按 provider 配置解析静态凭据的现状。已验：现有文档的决策与边界。未验：网关是否具备密钥服务、IAM 事件或 SCIM 推送能力、企业密钥管理规范；本文接口均为拟建建议，不是既有能力。
 >
 > 关联文档：[总体架构设计](<platform-architecture.md>)、[AI 网关契约](../contracts/gateway-contract.md)、[需求与场景基线](../requirements/requirements-baseline.md)、[推广实施方案](../plans/rollout-plan.md)、[工程开发与发布约定](../engineering/development-conventions.md)。

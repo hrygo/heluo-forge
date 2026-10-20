@@ -18,12 +18,6 @@
 | 门禁 | G0 / G1 / G2 |
 | 模块状态 | 规划 / 可用 / 已废止 |
 
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| V0.1 | YYYY-MM-DD | <团队> | 初稿 |
-
 > 编制依据：目标 DSH 版本与 SDK、接口核验方式与日期；明确哪些已核验、哪些仅依据文档。
 >
 > 关联文档：[总体架构](../architecture/platform-architecture.md)、[需求基线](../requirements/requirements-baseline.md)、[设计索引](../design/README.md)。

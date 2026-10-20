@@ -15,13 +15,6 @@
 | 最后更新 | 2026-10-20 |
 | 门禁 | 随首个可发布包复核 |
 
-## 修订记录
-
-| 版本 | 日期 | 修订人 | 修订说明 |
-|---|---|---|---|
-| V0.1 | 2026-10-20 | DSH 平台组（代拟） | 建立工作区、分支与提交、测试分层、版本与发布、CI 与安全的工程规则；发布流程待首个可发布包确认 |
-| V0.1.1 | 2026-10-20 | DSH 平台组（代拟） | 明确河洛 Heluo Forge 平台名称、工程标识、包名与目录规范；保留文档编号与 DSH 上游标识 |
-
 > 编制依据：2026-10-20 核对仓库结构、`package.json`、`pnpm-workspace.yaml`、`scripts/check-*.mjs` 与 `.github/workflows/check.yml` 的实际内容；工具链实测为 Node.js 24.21.0、pnpm 11.28.5。未执行远端 CI，也未发布任何包。
 >
 > 关联文档：[工程仓库结构设计](<repository-structure-design.md>)、[逐模块设计索引](../design/README.md)、[文档总览](../README.md)、[项目协作规范](../../AGENTS.md)。
@@ -77,7 +70,7 @@
 ## 6. 检查与 CI
 
 - 本地：`pnpm check` 依次执行 `check:docs`、`check:repo`、`test:unit`。
-- `check:docs` 校验元数据、登记一致性、链接与锚点、表格列数、历史修订与询问函问题序列。
+- `check:docs` 校验元数据、登记一致性、链接与锚点、表格列数、禁写修订记录与询问函问题序列。
 - `check:repo` 校验必需文件、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径。
 - CI 使用 `.github/workflows/check.yml`，默认 `contents: read`，外部动作固定到完整提交 SHA，不使用 `pull_request_target`。
 - CI 只跑离线检查；不接触企业系统、不注入生产密钥、不自动发布。

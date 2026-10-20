@@ -1,16 +1,24 @@
-# macOS
+# Operating System Artifacts (macOS, Windows, Kylin/Linux)
 .DS_Store
 .AppleDouble
 .LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.directory
+core
 
 # Editor and local workspace state
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 *.swp
 *.swo
 *~
 
-# Environment files and credentials
+# Environment files, certificates and credentials
 .env
 .env.*
 !.env.example
@@ -18,6 +26,10 @@
 *.key
 *.p12
 *.pfx
+*.cert
+*.crt
+*.der
+id_rsa*
 secrets/
 
 # Dependencies and build output
@@ -28,9 +40,44 @@ build/
 coverage/
 .turbo/
 *.tsbuildinfo
+output/
 
 # Temporary and generated files
 *.tmp
 *.temp
 *.log
 pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# AI Coding & Agent tools local cache/session/artifacts
+.gemini/
+.claude/
+.claude.json
+.cursor/
+.cursorrules.local
+.aider*
+.opencode/
+.omo/
+.continue/
+.copilot/
+.codeium/
+.windsurf/
+.codex/
+.cline/
+.roo/
+*.chat
+*.prompt.tmp
+agent-transcripts/
+
+# Knowledge graph and local indexes
+.codebase-memory/
+
+# Testing, profiling and patch files
+.nyc_output/
+test-results/
+playwright-report/
+*.patch
+*.diff
