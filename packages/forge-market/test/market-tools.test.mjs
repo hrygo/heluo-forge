@@ -265,3 +265,20 @@ test('a service rejection reaches the caller with its own code', async () => {
   assert.equal(result.reason, 'bad-tag');
   assert.deepEqual(result.server, { error: 'bad-tag' });
 });
+
+test('each failure carries the next action, not just a code', async () => {
+  const reasonOf = async (error) => {
+    const tools = buildMarketTools({ list: () => { throw error; }, detail: () => { throw error; } });
+    return (await call(tools, 'market_search', {})).action;
+  };
+  assert.equal(await reasonOf(Object.assign(new Error('x'), { code: 'unauthorized' })), 're-login');
+  assert.equal(await reasonOf(Object.assign(new Error('x'), { code: 'forbidden' })), 'request-access');
+  assert.equal(await reasonOf(Object.assign(new Error('x'), { code: 'service-unavailable' })), 'retry');
+  assert.equal(await reasonOf(new Error('boom')), 'contact-admin');
+
+  const tools = buildMarketTools(client, { preflight: false });
+  const revoked = await buildMarketTools({ ...client, submit: async () => { throw Object.assign(new Error('r'), { code: 'version-revoked' }); } }, { allowedHosts: ['gitee.corp.example'], preflight: false });
+  const result = await call(revoked, 'market_submit', { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0' });
+  assert.equal(result.action, 'choose-another-version');
+  assert.ok(tools);
+});

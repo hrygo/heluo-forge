@@ -9,6 +9,34 @@ import { extractTarball } from './tarball.mjs';
 
 const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
 
+// 把错误翻译成下一步动作，避免让用户自己猜"搜索失败"是什么意思。
+export function nextAction(reason) {
+  switch (reason) {
+    case 'unauthorized':
+      return 're-login';
+    case 'forbidden':
+    case 'scope-not-allowed':
+      return 'request-access';
+    case 'service-unavailable':
+    case 'timeout':
+    case 'network':
+    case 'download-failed':
+      return 'retry';
+    case 'version-revoked':
+      return 'choose-another-version';
+    case 'verification-failed':
+    case 'bad-tag':
+    case 'bad-manifest':
+    case 'missing-manifest':
+    case 'missing-engines':
+    case 'missing-section':
+    case 'install-script':
+      return 'fix-the-package';
+    default:
+      return 'contact-admin';
+  }
+}
+
 function tool(name, description, parameters, handler) {
   return {
     name,
@@ -20,7 +48,7 @@ function tool(name, description, parameters, handler) {
         return json(await handler(args ?? {}));
       } catch (error) {
         const reason = typeof error?.code === 'string' ? error.code : 'internal';
-        const payload = { ok: false, reason, detail: String(error?.message ?? error) };
+        const payload = { ok: false, reason, action: nextAction(reason), detail: String(error?.message ?? error) };
         if (error?.body) payload.server = error.body;
         return json(payload);
       }
@@ -61,7 +89,10 @@ export function buildMarketTools(client, options = {}) {
           if (cachePath) await writeCache(cachePath, entries);
         } catch (error) {
           const cached = await readCache(cachePath);
-          if (!cached.ok) return { ok: false, reason: error?.code ?? 'service-unavailable' };
+          if (!cached.ok) {
+            const reason = typeof error?.code === 'string' ? error.code : 'internal';
+            return { ok: false, reason, action: nextAction(reason) };
+          }
           entries = cached.entries;
           source = 'cache';
           stale = cached.stale;

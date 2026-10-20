@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.15.0 |
+| 版本 | V0.16.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -200,6 +200,17 @@ packages/forge-market/
 未知原因按不可重试处理；新增原因必须同步本表与 `test/reasons.test.mjs`。
 
 服务端拒绝时（4xx）透传其错误码作为 `reason`，并把原始响应体放在 `server` 字段；因此 `reason` 的取值可能来自 DESIGN-012 §5.1 的校验码，不以本表为限。
+
+失败结果同时给出 `action`，把错误翻译成下一步：
+
+| `action` | 含义 |
+|---|---|
+| `re-login` | 令牌失效，重新登录 |
+| `request-access` | 有身份但无权限，申请范围或角色 |
+| `retry` | 服务不可达或超时，稍后重试 |
+| `choose-another-version` | 目标版本已撤回，选别的版本 |
+| `fix-the-package` | 包本身不合格，按 `steps` 修正 |
+| `contact-admin` | 未归类的失败，交平台组 |
 
 ## 9. 权限与安全
 
