@@ -31,6 +31,18 @@ export async function loadDetail(client, name) {
 
 export function createMarketRoutes({ client, cachePath }) {
   return async function handle(req, res) {
+    try {
+      await route(req, res);
+    } catch {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader('content-type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ error: 'internal' }));
+      }
+    }
+  };
+
+  async function route(req, res) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const send = (status, body) => {
       const payload = JSON.stringify(body);
@@ -53,5 +65,5 @@ export function createMarketRoutes({ client, cachePath }) {
     }
 
     return send(404, { error: 'not-found' });
-  };
+  }
 }

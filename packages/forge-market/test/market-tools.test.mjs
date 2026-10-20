@@ -112,3 +112,12 @@ test('submit validates tag, host and reports the review state', async () => {
   assert.equal((await call(tools, 'market_submit', { ...payload, tag: '0.1.0' })).reason, 'bad-tag');
   assert.equal((await call(tools, 'market_submit', { ...payload, repo: 'https://evil.example/x' })).reason, 'host-not-allowed');
 });
+
+test('a throwing client becomes a structured failure, not a crash', async () => {
+  const exploding = { list: () => { throw new Error('boom'); }, detail: () => { throw new Error('boom'); } };
+  const tools = buildMarketTools(exploding);
+  const result = JSON.parse((await tools.find((t) => t.name === 'market_detail').execute({ name: '@heluo/a' })).content[0].text);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'internal');
+  assert.match(result.detail, /boom/);
+});

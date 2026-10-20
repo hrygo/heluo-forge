@@ -15,8 +15,12 @@ function tool(name, description, parameters, handler) {
     parameters,
     output: { schema: { type: 'object' }, render: (_args, value) => json(value).content },
     async execute(args) {
-      const value = await handler(args ?? {});
-      return json(value);
+      try {
+        return json(await handler(args ?? {}));
+      } catch (error) {
+        const reason = typeof error?.code === 'string' ? error.code : 'internal';
+        return json({ ok: false, reason, detail: String(error?.message ?? error) });
+      }
     },
   };
 }

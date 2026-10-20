@@ -19,7 +19,12 @@ export async function installPlugin(plan, deps = {}) {
   if (!plan?.repo || !plan?.tag) return { ok: false, reason: 'bad-plan' };
   if (typeof download !== 'function' || typeof extract !== 'function') return { ok: false, reason: 'missing-dependency' };
 
-  const fetched = await download(plan.repo, plan.tag);
+  let fetched;
+  try {
+    fetched = await download(plan.repo, plan.tag);
+  } catch (error) {
+    return { ok: false, reason: 'download-failed', detail: String(error?.message ?? error) };
+  }
   if (!fetched?.ok) return { ok: false, reason: fetched?.reason ?? 'download-failed' };
 
   const bytes = fetched.bytes;
@@ -30,7 +35,12 @@ export async function installPlugin(plan, deps = {}) {
     return { ok: false, reason: 'digest-mismatch' };
   }
 
-  const extracted = await extract(bytes);
+  let extracted;
+  try {
+    extracted = await extract(bytes);
+  } catch (error) {
+    return { ok: false, reason: 'extract-failed', detail: String(error?.message ?? error) };
+  }
   if (!extracted?.ok) return { ok: false, reason: extracted?.reason ?? 'extract-failed' };
 
   const paths = extracted.files.map((file) => file.path);

@@ -47,3 +47,10 @@ test('rejects traversal entries and garbage input', () => {
 test('refuses archives above the size limit', () => {
   assert.equal(extractTarball(tar([['package.json', '{}']]), { maxBytes: 1 }).reason, 'archive-too-large');
 });
+
+test('a truncated header stops with a reason instead of a RangeError', () => {
+  const archive = tar([['package.json', '{}']]);
+  const cut = archive.subarray(0, 20);
+  const result = extractTarball(cut);
+  assert.equal(result.ok, false);
+});

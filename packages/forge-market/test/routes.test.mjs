@@ -61,3 +61,11 @@ test('reports 503 without a cache', async () => {
   const result = await loadCatalog({ list: async () => { throw new Error('down'); } }, null);
   assert.equal(result.status, 503);
 });
+
+test('a request that breaks parsing still answers 500 instead of hanging', async () => {
+  const handle = createMarketRoutes({ client });
+  const { req, res } = fake('GET', 'http://[invalid');
+  await handle(req, res);
+  assert.equal(res.statusCode, 500);
+  assert.equal(JSON.parse(res.body).error, 'internal');
+});

@@ -60,3 +60,10 @@ test('times out a hanging download', async () => {
   });
   assert.equal(result.reason, 'timeout');
 });
+
+test('a throwing downloader or extractor is reported, not thrown', async () => {
+  const downloadBoom = await installPlugin(plan, { download: () => { throw new Error('dns'); }, extract: async () => ({ ok: true, files: [] }) });
+  assert.equal(downloadBoom.reason, 'download-failed');
+  const extractBoom = await installPlugin(plan, { download: async () => ({ ok: true, bytes: Buffer.from('x') }), extract: () => { throw new Error('eof'); } });
+  assert.equal(extractBoom.reason, 'extract-failed');
+});

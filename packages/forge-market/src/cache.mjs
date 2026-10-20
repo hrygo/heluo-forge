@@ -8,8 +8,9 @@ export async function readCache(path, { ttlMs = DEFAULT_TTL_MS, now = Date.now()
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8'));
     if (!Array.isArray(parsed?.entries)) return { ok: false, reason: 'bad-cache' };
-    const age = now - Number(parsed.savedAt ?? 0);
-    return { ok: true, entries: parsed.entries, savedAt: parsed.savedAt ?? 0, stale: age > ttlMs };
+    const savedAt = Number(parsed.savedAt);
+    if (!Number.isFinite(savedAt)) return { ok: true, entries: parsed.entries, savedAt: 0, stale: true };
+    return { ok: true, entries: parsed.entries, savedAt, stale: now - savedAt > ttlMs };
   } catch (error) {
     return { ok: false, reason: error?.code === 'ENOENT' ? 'missing' : 'bad-cache' };
   }

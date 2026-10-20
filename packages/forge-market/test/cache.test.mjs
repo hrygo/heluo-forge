@@ -38,3 +38,11 @@ test('reports missing and malformed caches separately', async () => {
     assert.equal((await readCache(path)).reason, 'bad-cache');
   });
 });
+
+test('an unreadable timestamp counts as stale rather than fresh', async () => {
+  await temp(async (path) => {
+    await writeFile(path, JSON.stringify({ savedAt: 'yesterday', entries: [] }));
+    const read = await readCache(path, { now: Date.now() });
+    assert.equal(read.stale, true);
+  });
+});
