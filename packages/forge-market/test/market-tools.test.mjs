@@ -65,6 +65,7 @@ test('exposes exactly the documented tools', () => {
     'market_search',
     'market_detail',
     'market_submit',
+    'market_verify',
     'market_diagnostics',
     'market_check_update',
     'market_registration',
@@ -205,4 +206,28 @@ test('install reports a revoked version from the service as such', async () => {
   });
   const result = await call(tools, 'market_install', { name: '@heluo/a' });
   assert.equal(result.reason, 'version-revoked');
+});
+
+test('verify reports the failing step instead of a bare refusal', async () => {
+  const { makeTarball } = await import('./support/tar.mjs');
+  const archive = makeTarball([
+    ['package.json', JSON.stringify({ name: '@heluo/demo', version: '0.1.0', engines: { dsh: '>=0.2.1' } })],
+    ['cordis.patch.yml', 'insert: []\n'],
+    ['README.md', '## 用途\n\nx\n\n## 维护人\n\ny\n'],
+  ]);
+  const tools = buildMarketTools(client, {
+    allowedHosts: ['gitee.corp.example'],
+    fetchImpl: () => Promise.resolve({ ok: true, status: 200, arrayBuffer: () => Promise.resolve(archive) }),
+  });
+  const result = await call(tools, 'market_verify', { repo: 'https://gitee.corp.example/g/demo', tag: 'v0.1.0' });
+  assert.equal(result.ok, true);
+  assert.ok(result.steps.some((step) => step.step === 'validate' && step.ok));
+});
+
+test('verify refuses a repository outside the allowlist without fetching', async () => {
+  let called = false;
+  const tools = buildMarketTools(client, { allowedHosts: ['gitee.corp.example'], fetchImpl: () => { called = true; } });
+  const result = await call(tools, 'market_verify', { repo: 'https://evil.example/g/demo', tag: 'v0.1.0' });
+  assert.equal(result.ok, false);
+  assert.equal(called, false);
 });

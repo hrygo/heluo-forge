@@ -2,6 +2,7 @@ import { readCache, writeCache } from './cache.mjs';
 import { filterEntries, normalizeEntry, pickUpdate, sortEntries } from './catalog.mjs';
 import { downloadArchive, installPlugin } from './install.mjs';
 import { planInstall } from './installer.mjs';
+import { checkRemote } from './live-check.mjs';
 import { persistFiles } from './persist.mjs';
 import { buildRegistrationRow, registrationInstructions, renderPatch } from './registration.mjs';
 import { extractTarball } from './tarball.mjs';
@@ -109,6 +110,22 @@ export function buildMarketTools(client, options = {}) {
         const result = await client.submit({ name, repo, tag, summary, scenarios });
         return { ok: true, state: result?.state ?? 'pending' };
       },
+    ),
+    tool(
+      'market_verify',
+      'Fetch one repository archive and report, step by step, whether it would pass format validation. Reads only.',
+      {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'repository address inside the enterprise group' },
+          tag: { type: 'string', description: 'release tag such as v0.1.0' },
+          digest: { type: 'string', description: 'expected sha256 digest, if the service provided one' },
+        },
+        required: ['repo', 'tag'],
+        additionalProperties: false,
+      },
+      async ({ repo, tag, digest }) =>
+        checkRemote({ repo, tag, digest, allowedHosts, fetchImpl: options.fetchImpl }),
     ),
     tool(
       'market_diagnostics',
