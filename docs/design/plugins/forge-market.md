@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.10.0 |
+| 版本 | V0.11.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -126,8 +126,8 @@ packages/forge-market/
 |---|---|---|
 | 列表 | `GET /api/plugins` | `name`、`title`、`summary`、`version`、`downloads`、`stars`、`engines` |
 | 详情 | `GET /api/plugins/{name}` | 上列字段 + `scenarios`、`maintainer`、`repo`、`versions[]` |
-| 提交 | `POST /api/plugins` | `repo`、`tag`、`title`、`summary`、`scenarios` |
-| 我的提交 | `GET /api/plugins?mine=1` | `state`、`reason` |
+| 提交 | `POST /api/plugins` | `name`、`repo`、`tag`、`summary`、`scenarios` |
+| 我的提交 | `GET /api/plugins?mine=1` | 按调用方身份过滤；`state`、`reason` |
 | 诊断 | `GET /api/admin/unindexed` | `repo`、`errors[]` |
 
 ## 8. 安装链路
@@ -136,8 +136,8 @@ packages/forge-market/
 2. 下载归档，计算摘要并与服务返回值比对；不一致即中止。
 3. 解包到临时目录，只接受白名单路径（`package.json`、`cordis.patch.yml`、`src/`、`ui/`、`README.md`）。
 4. 校验 `package.json` 的 `name` 与 `engines.dsh`，与详情页展示一致才继续。
-5. 写入 profile 的 bundle 列表并触发挂载。
-6. 成功后上报一次下载计数；失败不计数。
+5. 返回可直接使用的 loader 行与登记步骤；插件不写 profile，由操作者或 `plugin_manager` 完成登记。
+6. 下载计数由服务端在发放归档地址时自增，插件不上报，也不因安装失败回退。
 
 任何一步失败都回滚临时目录，不留半装状态。
 

@@ -14,6 +14,7 @@ const DOCUMENTED = [
   ['submit', 'POST', '/api/plugins'],
   ['metrics', 'GET', '/api/metrics?plugin=%40heluo%2Fa'],
   ['unindexed', 'GET', '/api/admin/unindexed'],
+  ['mine', 'GET', '/api/plugins?mine=1'],
   ['downloadInfo', 'GET', '/api/plugins/%40heluo%2Fa/versions/0.1.0/download'],
 ];
 
@@ -32,6 +33,7 @@ test('the client speaks exactly the documented endpoints', async () => {
   await client.submit({ repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0', title: 'x' });
   await client.metrics('@heluo/a');
   await client.unindexed();
+  await client.mine();
   await client.downloadInfo('@heluo/a', '0.1.0');
 
   assert.deepEqual(seen, DOCUMENTED.map(([, method, path]) => [method, path]));

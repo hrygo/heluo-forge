@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.11.0 |
+| 版本 | V0.12.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -78,7 +78,7 @@
 | `metrics.syncHours` | number | `6` | 否 | star 同步间隔 |
 
 ```text title="端点（示意）"
-GET  /api/plugins                  条目列表与筛选
+GET  /api/plugins                  条目列表与筛选；`mine=1` 按调用方身份过滤
 GET  /api/plugins/{name}           详情、版本、聚合分
 POST /api/plugins                  提交或更新条目
 GET  /api/metrics?plugin=          下载量与 star
