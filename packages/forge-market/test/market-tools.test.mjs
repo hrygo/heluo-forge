@@ -129,3 +129,15 @@ test('check_update answers without touching the service state', async () => {
   assert.equal(result.updateAvailable, true);
   assert.equal(result.latest, '0.2.0');
 });
+
+test('submit refuses to run without a host allowlist', async () => {
+  const tools = buildMarketTools(client);
+  const result = await call(tools, 'market_submit', { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0' });
+  assert.equal(result.reason, 'no-allowed-host');
+});
+
+test('submit rejects a repository address it cannot parse', async () => {
+  const tools = buildMarketTools(client, { allowedHosts: ['gitee.corp.example'] });
+  const result = await call(tools, 'market_submit', { name: '@heluo/a', repo: 'not a url', tag: 'v0.1.0' });
+  assert.equal(result.reason, 'bad-repo');
+});

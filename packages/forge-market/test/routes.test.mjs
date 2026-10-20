@@ -69,3 +69,16 @@ test('a request that breaks parsing still answers 500 instead of hanging', async
   assert.equal(res.statusCode, 500);
   assert.equal(JSON.parse(res.body).error, 'internal');
 });
+
+test('a failing detail becomes 503 and a missing one 404', async () => {
+  const failing = { list: async () => ({ entries }), detail: async () => { throw Object.assign(new Error('down'), { status: 0 }); } };
+  const handle = createMarketRoutes({ client: failing });
+  const first = fake('GET', '/api/forge-market/detail/@heluo%2Fa');
+  await handle(first.req, first.res);
+  assert.equal(first.res.statusCode, 503);
+
+  const missing = { ...failing, detail: async () => { throw Object.assign(new Error('gone'), { status: 404 }); } };
+  const second = fake('GET', '/api/forge-market/detail/@heluo%2Fa');
+  await createMarketRoutes({ client: missing })(second.req, second.res);
+  assert.equal(second.res.statusCode, 404);
+});

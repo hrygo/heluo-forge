@@ -67,3 +67,11 @@ test('a throwing downloader or extractor is reported, not thrown', async () => {
   const extractBoom = await installPlugin(plan, { download: async () => ({ ok: true, bytes: Buffer.from('x') }), extract: () => { throw new Error('eof'); } });
   assert.equal(extractBoom.reason, 'extract-failed');
 });
+
+test('rejects an unparsable manifest and a version that differs from the plan', async () => {
+  const broken = [{ ...files[0], bytes: Buffer.from('{not json') }, ...files.slice(1)];
+  assert.equal((await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: broken }) }))).reason, 'bad-manifest');
+
+  const other = [{ ...files[0], bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '9.9.9' })) }, ...files.slice(1)];
+  assert.equal((await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: other }) }))).reason, 'version-mismatch');
+});

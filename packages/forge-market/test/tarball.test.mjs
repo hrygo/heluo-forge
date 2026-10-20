@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { extractTarball } from '../src/tarball.mjs';
 
 function header(name, size, type = '0') {
@@ -53,4 +53,25 @@ test('a truncated header stops with a reason instead of a RangeError', () => {
   const cut = archive.subarray(0, 20);
   const result = extractTarball(cut);
   assert.equal(result.ok, false);
+});
+
+test('detects a body shorter than its header claims', () => {
+  const plain = gunzipSync(tar([['package.json', 'x'.repeat(700)]]));
+  const result = extractTarball(plain.subarray(0, 512 + 100));
+  assert.equal(result.reason, 'truncated-archive');
+});
+
+test('refuses bytes that claim gzip but cannot be inflated', () => {
+  assert.equal(extractTarball(Buffer.from([0x1f, 0x8b, 0x00, 0x00])).reason, 'bad-archive');
+});
+
+test('skips directory entries and pax headers', () => {
+  const plain = gunzipSync(tar([
+    ['pax_global_header', 'x'],
+    ['src/', ''],
+    ['package.json', '{}'],
+  ]));
+  const result = extractTarball(plain);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.files.map((f) => f.path), ['package.json']);
 });

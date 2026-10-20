@@ -14,6 +14,18 @@ test('the patch config keys equal the declared Config keys', async () => {
   assert.deepEqual(keys.sort(), Object.keys(Config).sort());
 });
 
+test('apply registers the market route when a web server exists', () => {
+  const routes = [];
+  const ctx = {
+    tools: { register: () => () => {} },
+    webServer: { register: (route) => { routes.push(route); return () => {}; } },
+  };
+  const dispose = apply(ctx, { serviceUrl: 'https://plugins.corp.example' });
+  assert.equal(routes.length, 1);
+  assert.deepEqual({ kind: routes[0].kind, path: routes[0].path }, { kind: 'prefix', path: '/api/forge-market' });
+  assert.equal(typeof dispose, 'function');
+});
+
 test('apply refuses an empty service url', () => {
   assert.throws(() => apply({ tools: { register: () => () => {} } }, {}), /serviceUrl/);
 });

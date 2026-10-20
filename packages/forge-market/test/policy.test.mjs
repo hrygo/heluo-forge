@@ -62,3 +62,16 @@ test('checkEngines separates too old from outside the range', () => {
   assert.equal(checkEngines('^0.2.1', '0.3.0').reason, 'outside-range');
   assert.equal(checkEngines('>=0.4.0', '0.2.1').reason, 'requires-newer-dsh');
 });
+
+test('strict greater and exact forms behave as written', () => {
+  const gt = parseEngines('>0.2.1');
+  assert.equal(satisfiesRange(gt, { major: 0, minor: 2, patch: 1 }), false);
+  assert.equal(satisfiesRange(gt, { major: 0, minor: 2, patch: 2 }), true);
+  const exact = parseEngines('=0.2.1');
+  assert.equal(satisfiesRange(exact, { major: 0, minor: 2, patch: 1 }), true);
+  assert.equal(satisfiesRange(exact, { major: 0, minor: 2, patch: 2 }), false);
+});
+
+test('an unknown operator never satisfies', () => {
+  assert.equal(satisfiesRange({ op: '<', major: 1, minor: 0, patch: 0 }, { major: 2, minor: 0, patch: 0 }), false);
+});

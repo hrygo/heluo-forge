@@ -46,3 +46,11 @@ test('an unreadable timestamp counts as stale rather than fresh', async () => {
     assert.equal(read.stale, true);
   });
 });
+
+test('reports a failed write instead of throwing', async () => {
+  await temp(async (path) => {
+    const { writeCache } = await import('../src/cache.mjs');
+    const result = await writeCache(join(path, '..'), []);
+    assert.equal(result.reason, 'write-failed');
+  });
+});
