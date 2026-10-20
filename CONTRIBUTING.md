@@ -61,6 +61,18 @@
 
 检查器本身也要改：新增规则时补充失败样例，避免“看起来通过”。
 
+### 7.1 GitHub Actions
+
+[检查工作流](.github/workflows/check.yml)保留 `check / verify` 门禁：`main` 推送、PR、合并队列的 `checks_requested` 和手动运行均执行全量检查。不使用路径过滤，文档与图片变更也会接受跨文件链接、登记和仓库规则检查，避免必需检查因跳过触发而一直等待。
+
+- 单个 `ubuntu-24.04` job，超时 5 分钟；相同工作流、事件与 PR/分支的新运行取消过期运行，手动运行与 PR/推送互不取消。
+- Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test` 自动发现工程、包与集成测试。
+- 当前检查无第三方依赖，不安装 pnpm 或依赖、不读写包缓存、不拆矩阵。引入第三方依赖时，须同步配置固定 pnpm、`pnpm install --frozen-lockfile` 和按锁文件索引的 pnpm store 缓存，再按实测耗时评估拆分；不缓存 `node_modules`。
+- 工作流只授予 `contents: read`，检出不保留凭据、深度为 1；Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
+- 仓库管理员可将 `verify` 设为必需检查；本地修改不代表已启用远端规则、合并队列或 Dependabot，也不代表远端 CI 已通过。
+
+依据核验日期为 2026-10-21：[GitHub 安全建议](https://docs.github.com/en/actions/reference/security/secure-use)、[事件与合并队列](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#merge_group)、[并发控制](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)、[Dependabot 配置](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)，以及 [checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 与 [setup-node v7.1.0](https://github.com/actions/setup-node/releases/tag/v7.1.0) 的发布说明与输入声明。官方 Actions 使用 Node 24 runtime；应用检查仍使用 `.node-version` 固定的版本。工作流依赖锁文件当前属于[公开预览](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)，本仓库继续采用已有的完整 SHA 固定策略。
+
 ## 8. 安全
 
 不提交令牌、私钥、证书、真实用户数据或生产配置。发现疑似泄露时停止提交，按[安全策略](SECURITY.md)处理，不在 issue 或聊天中扩散。
