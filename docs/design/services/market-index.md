@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.21.0 |
+| 版本 | V0.22.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -77,19 +77,21 @@
 | `review.required` | boolean | `true` | 否 | 是否必须人工评审 |
 | `metrics.syncHours` | number | `6` | 否 | star 同步间隔 |
 
-```text title="端点（示意）"
-GET  /api/plugins                  条目列表与筛选；`mine=1&submitter=` 只返回该提交方的条目与待审记录，缺 submitter 返回 400 `missing-submitter`
-GET  /api/plugins/{name}           详情、版本、聚合分；响应为 `{ entry }`
-POST /api/plugins                  提交或更新条目
-GET  /api/metrics?plugin=          下载量与 star
-POST /api/admin/review             上架、退回、撤回
-GET  /api/discover/gitee           扫描专门 group 的仓库
+实现状态一栏区分「已实现」与「规划」；规划端点当前返回 404，不要在集成时当成可用接口。
+
+```text title="端点"
+GET  /api/plugins                  已实现；条目列表与筛选；`mine=1&submitter=` 只返回该提交方的条目与待审记录，缺 submitter 返回 400 `missing-submitter`
+GET  /api/plugins/{name}           已实现；详情、版本、聚合分；响应为 `{ entry }`
+POST /api/plugins                  已实现；提交或更新条目
+GET  /api/metrics?plugin=          已实现；下载量与 star
+POST /api/admin/review             已实现；上架、退回、撤回
+GET  /api/discover/gitee           规划；扫描专门 group 的仓库尚未实现
 ```
 
 `/api/admin/*` 一律要求 `authorization: Bearer <令牌>`；服务端未配置 `adminToken`（`HELUO_MARKET_TOKEN`）时全部返回 401，不回退成开放。
 
 ```text title="端点（其余）"
-GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
+GET  /api/admin/unindexed          已实现（返回空列表）；未收录条目与原因，供诊断视图
 ```
 
 评审请求体：
