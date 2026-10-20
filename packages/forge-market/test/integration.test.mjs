@@ -13,7 +13,7 @@ const pkg = JSON.stringify({ name: '@heluo/demo', version: '0.1.0', engines: { d
 function startService() {
   const archive = makeTarball([
     ['package.json', pkg],
-    ['cordis.patch.yml', 'insert: []\n'],
+    ['cordis.patch.yml', '- insert: []\n'],
     ['README.md', '# demo\n\n## 用途\n\nx\n\n## 维护人\n\ny\n'],
   ]);
 

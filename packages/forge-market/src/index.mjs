@@ -5,16 +5,11 @@ import { createMarketRoutes } from './routes.mjs';
 
 export const name = 'forge-market';
 
-export const inject = { required: ['tools'], optional: ['webServer'] };
+// cordis 的 inject 对象是按服务名索引的映射，写 { required, optional } 会被当成
+// 两个叫 required/optional 的服务，插件永远 pending。可选依赖用 ctx.get。
+export const inject = ['tools'];
 
-export const Config = {
-  serviceUrl: { type: 'string', description: '企业市场服务地址；与 catalogFile 二选一' },
-  catalogFile: { type: 'string', description: '离线目录 JSON；设置后不访问服务' },
-  allowedHosts: { type: 'array', items: { type: 'string' }, default: [] },
-  timeoutMs: { type: 'integer', default: 5000 },
-  cachePath: { type: 'string', description: '离线缓存文件路径；缺省不缓存' },
-  targetDir: { type: 'string', description: '安装落盘目录；缺省只校验不落盘' },
-};
+export { Config } from './config.mjs';
 
 export function apply(ctx, config = {}) {
   if (!config.serviceUrl && !config.catalogFile) {
@@ -34,7 +29,8 @@ export function apply(ctx, config = {}) {
     cachePath: config.cachePath,
     targetDir: config.targetDir,
     // 宿主版本用于 engines.dsh 门槛；拿不到就不拦，文档已写明该降级。
-    dshVersion: ctx?.app?.version ?? ctx?.version ?? process.env.DSH_VERSION,
+    // cordis 禁止直接读未 inject 的属性（ctx.app 会抛错）；ctx.get 是安全读取。
+    dshVersion: ctx?.get?.('app')?.version ?? process.env.DSH_VERSION,
     registration: {
       serviceUrl: config.serviceUrl,
       allowedHosts: config.allowedHosts ?? [],
@@ -44,12 +40,17 @@ export function apply(ctx, config = {}) {
   };
   const disposers = buildMarketTools(client, shared).map((definition) => ctx.tools.register(definition));
 
-  if (ctx.webServer) {
+  // webServer 是可选的：激活顺序上它可能还没就绪。直接读 ctx.get 只会拿到
+  // undefined 并静默不注册路由，所以用 ctx.inject 等到它就绪再挂。
+  if (typeof ctx.inject === 'function') {
     disposers.push(
-      ctx.webServer.register({
-        kind: 'prefix',
-        path: '/api/forge-market',
-        handler: createMarketRoutes({ client, cachePath: config.cachePath }),
+      ctx.inject(['webServer'], (host) => {
+        const off = host.webServer.register({
+          kind: 'prefix',
+          path: '/api/forge-market',
+          handler: createMarketRoutes({ client, cachePath: config.cachePath }),
+        });
+        host.effect?.(() => off);
       }),
     );
   }

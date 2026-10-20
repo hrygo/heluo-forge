@@ -6,7 +6,7 @@ import { makeTarball } from './support/tar.mjs';
 
 const archive = makeTarball([
   ['package.json', JSON.stringify({ name: '@heluo/demo', version: '0.1.0', engines: { dsh: '>=0.2.1' } })],
-  ['cordis.patch.yml', 'insert: []\n'],
+  ['cordis.patch.yml', '- insert: []\n'],
   ['README.md', '# demo\n\n## 用途\n\nx\n\n## 维护人\n\ny\n'],
 ]);
 const repo = 'https://gitee.corp.example/g/demo';

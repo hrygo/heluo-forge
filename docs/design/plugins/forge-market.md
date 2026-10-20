@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.48.0 |
+| 版本 | V0.51.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -80,7 +80,7 @@
 
 ```text
 packages/forge-market/
-├── cordis.patch.yml          挂载声明：只写 serviceUrl、allowedHosts、timeoutMs；可选项留空不写
+├── cordis.patch.yml          挂载声明（顶层数组，- insert: …）：只写 serviceUrl、allowedHosts、timeoutMs；可选项留空不写
 ├── client.js                 客户端面板：列表、加载与缓存状态
 ├── src/
 │   ├── index.mjs             插件入口：注册工具与 HTTP 路由
@@ -96,6 +96,7 @@ packages/forge-market/
 │   ├── live-check.mjs        真实仓库验收：拉归档并按规则判定
 │   ├── routes.mjs            宿主路由：catalog、detail、缓存回退
 │   ├── registration.mjs      生成 profile 登记行与说明
+│   ├── config.mjs            Config 的 standard-schema 校验（cordis 的契约）
 │   ├── validate.mjs          包格式与 patch 内容校验
 │   └── policy.mjs            安装策略与 engines 范围判定
 ├── scripts/live-check.mjs    验收脚本入口（手动执行，不进 CI）
@@ -191,6 +192,7 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 | `bad-archive` | 解包 | 不是可解压的 tar.gz | 否 |
 | `bad-cache` | 配置 | 缓存文件不是预期结构 | 可忽略 |
 | `bad-entries` | 配置 | 写缓存的内容不是数组 | 否 |
+| `patch-not-array` | 清单 | `cordis.patch.yml` 顶层不是数组；loader 会拒绝挂载 | 否 |
 | `bad-id` | 登记 | 无法从包名推导 loader 行 id | 否 |
 | `bad-manifest` | 清单 | package.json 不是合法 JSON | 否 |
 | `bad-name` | 登记 | 包名不是 @scope/name | 否 |
@@ -287,6 +289,19 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 `dsh.client.inject` 只用于**决定激活顺序**，不声明依赖；空数组表示不要求排在谁之后，并不代表面板没有依赖。这一点容易误读，故在此写明。
 
 `test/package-shape.test.mjs` 守护上表：行名不等于包名、入口文件缺失、`inject` 不是数组，都会让测试红。
+
+### 8.2.2 挂载契约（实测）
+
+2026-10-20 在 `media` profile 实机安装并启动，记录四条会直接导致「装不上 / 装上了不出现」的约定：
+
+| 项 | 正确写法 | 违反时的现象 |
+|---|---|---|
+| `cordis.patch.yml` 顶层 | 数组：`- insert: …` | 安装即报 `must be a top-level YAML array` |
+| `engines.dsh` | 覆盖运行时版本；`0.2.1-rc.2` 小于 `0.2.1`，故写 `>=0.2.0` | 安装被拒，提示版本不兼容 |
+| `inject` | 数组：`['tools']`；可选服务用 `ctx.get(name)` | 写成 `{ required, optional }` 会被当作两个服务名，插件永远 pending |
+| `Config` | `Config['~standard'].validate(config)` 的 standard-schema 对象 | 激活时报 `Cannot read properties of undefined (reading 'validate')` |
+
+可选服务还有一个陷阱：在 `apply` 里用 `ctx.get('webServer')` 取不到时不能就此跳过注册，因为激活顺序不保证服务已就绪；应使用 `ctx.inject(['webServer'], callback)` 等服务出现后再注册。本包曾因此静默不注册路由：进程起来了，`/api/forge-market/catalog` 却落到 SPA 回退返回 404。
 
 ### 8.3 安装后的两条路径
 

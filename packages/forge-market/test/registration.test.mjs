@@ -20,7 +20,7 @@ test('renders a patch document that keeps the dialect shape', () => {
     allowedHosts: ['gitee.corp.example'],
   });
   const patch = renderPatch(row);
-  assert.match(patch, /^insert:\n  - id: heluo-forge-market\n/);
+  assert.match(patch, /^- insert:\n    - id: heluo-forge-market\n/);
   assert.match(patch, /inject: \[tools\]/);
   assert.match(patch, /serviceUrl: https:\/\/plugins\.corp\.example/);
   assert.doesNotMatch(patch, /targetDir/);

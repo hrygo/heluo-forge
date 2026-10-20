@@ -1,10 +1,11 @@
 # forge-market：把企业插件市场挂进当前 profile。
+# 补丁文件是 loader 的补丁层：顶层必须是数组，每项是一个补丁条目。
 # 数据来自市场服务（DESIGN-012）；安装来源仅限企业 Gitee 的专门 group。
-insert:
-  - id: forge-market
-    name: '@heluo/forge-market'
-    inject: [tools]
-    config:
-      serviceUrl: https://plugins.corp.example
-      allowedHosts: [gitee.corp.example]
-      timeoutMs: 5000
+- insert:
+    - id: forge-market
+      name: '@heluo/forge-market'
+      inject: [tools]
+      config:
+        serviceUrl: https://plugins.corp.example
+        allowedHosts: [gitee.corp.example]
+        timeoutMs: 5000

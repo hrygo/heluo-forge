@@ -81,7 +81,7 @@ test('exposes exactly the documented tools', () => {
 test('install runs the pipeline with injected download and extract', async () => {
   const files = [
     { path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) },
-    { path: 'cordis.patch.yml', bytes: Buffer.from('insert: []\n') },
+    { path: 'cordis.patch.yml', bytes: Buffer.from('- insert: []\n') },
   ];
   const tools = buildMarketTools(client, {
     allowedHosts: ['gitee.corp.example'],
@@ -108,7 +108,7 @@ test('submit validates tag, host and reports the review state', async () => {
   const { makeTarball } = await import('./support/tar.mjs');
   const archive = makeTarball([
     ['package.json', JSON.stringify({ name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=0.2.1' } })],
-    ['cordis.patch.yml', 'insert: []\n'],
+    ['cordis.patch.yml', '- insert: []\n'],
     ['README.md', '## 用途\n\nx\n\n## 维护人\n\ny\n'],
   ]);
   let submitted;
@@ -225,7 +225,7 @@ test('verify reports the failing step instead of a bare refusal', async () => {
   const { makeTarball } = await import('./support/tar.mjs');
   const archive = makeTarball([
     ['package.json', JSON.stringify({ name: '@heluo/demo', version: '0.1.0', engines: { dsh: '>=0.2.1' } })],
-    ['cordis.patch.yml', 'insert: []\n'],
+    ['cordis.patch.yml', '- insert: []\n'],
     ['README.md', '## 用途\n\nx\n\n## 维护人\n\ny\n'],
   ]);
   const tools = buildMarketTools(client, {

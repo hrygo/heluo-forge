@@ -7,7 +7,7 @@ const good = {
   manifest: { name: '@heluo/forge-gateway', version: '0.3.0', engines: { dsh: '>=0.2.1' } },
   readme: '# 网关\n\n## 用途\n\n接入企业网关。\n\n## 维护人\n\n平台组\n',
   tag: 'v0.3.0',
-  patch: "insert:\n  - id: forge-gateway\n    name: '@heluo/forge-gateway'\n",
+  patch: "- insert:\n  - id: forge-gateway\n    name: '@heluo/forge-gateway'\n",
 };
 
 const codes = (input) => validatePlugin(input).errors.map((e) => e.code);
@@ -40,11 +40,11 @@ test('accepts range forms and still rejects wildcards', () => {
 
 test('rejects patches that weaken the security baseline', () => {
   const cases = [
-    ["insert:\n  - id: x\n    name: y\n    disabled: true\n", 'patch-disables-row'],
-    ["insert:\n  - id: forge-policy\n", 'patch-overrides-protected'],
-    ["insert:\n  - id: x\n    name: y\n    config:\n      a: !!js ctx.get('x')\n", 'patch-js-expr'],
-    ["insert:\n  - id: x\n    name: cordis:include\n", 'patch-include'],
-    ["insert:\n  - id: x\n    name: '../../outside'\n", 'patch-unsafe-path'],
+    ["- insert:\n  - id: x\n    name: y\n    disabled: true\n", 'patch-disables-row'],
+    ["- insert:\n  - id: forge-policy\n", 'patch-overrides-protected'],
+    ["- insert:\n  - id: x\n    name: y\n    config:\n      a: !!js ctx.get('x')\n", 'patch-js-expr'],
+    ["- insert:\n  - id: x\n    name: cordis:include\n", 'patch-include'],
+    ["- insert:\n  - id: x\n    name: '../../outside'\n", 'patch-unsafe-path'],
   ];
   for (const [patch, code] of cases) {
     assert.ok(codes({ ...good, patch }).includes(code), `${code} not reported`);
@@ -60,7 +60,7 @@ test('says where a missing file was found instead', () => {
     files: ['package.json', 'cordis.patch.yml', 'docs/README.md'],
     manifest: { name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=0.2.1' } },
     readme: '## 用途\n\nx\n\n## 维护人\n\ny\n',
-    patch: 'insert: []\n',
+    patch: '- insert: []\n',
     tag: 'v0.1.0',
   });
   const missing = result.errors.find((error) => error.code === 'missing-file');
@@ -71,27 +71,27 @@ test('says where a missing file was found instead', () => {
 
 test('the protected id rule cannot be dodged by YAML style', () => {
   const styles = {
-    block: 'insert:\n  - id: forge-iam\n    name: x\n',
-    flow: 'insert:\n  - {id: forge-iam, name: x}\n',
-    later: 'insert:\n  - name: x\n    id: forge-iam\n',
-    quoted: 'insert:\n  - id: "forge-iam"\n',
+    block: '- insert:\n  - id: forge-iam\n    name: x\n',
+    flow: '- insert:\n  - {id: forge-iam, name: x}\n',
+    later: '- insert:\n  - name: x\n    id: forge-iam\n',
+    quoted: '- insert:\n  - id: "forge-iam"\n',
   };
   for (const [label, patch] of Object.entries(styles)) {
     const codes = validatePatch(patch).map((error) => error.code);
     assert.ok(codes.includes('patch-overrides-protected'), `${label} was not caught`);
   }
-  assert.deepEqual(validatePatch('insert:\n  - {id: x, disabled: true}\n'), [{ code: 'patch-disables-row' }]);
-  assert.deepEqual(validatePatch('insert:\n  - id: heluo-a\n    name: "@heluo/a"\n'), []);
+  assert.deepEqual(validatePatch('- insert:\n  - {id: x, disabled: true}\n'), [{ code: 'patch-disables-row' }]);
+  assert.deepEqual(validatePatch('- insert:\n  - id: heluo-a\n    name: "@heluo/a"\n'), []);
 });
 
 test('traversal is caught whichever slash is used', () => {
-  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: ../secret\n'), [{ code: 'patch-unsafe-path' }]);
-  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: ..\\secret\n'), [{ code: 'patch-unsafe-path' }]);
-  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: C:\\secret\n'), [{ code: 'patch-unsafe-path' }]);
+  assert.deepEqual(validatePatch('- insert:\n  - id: x\n    p: ../secret\n'), [{ code: 'patch-unsafe-path' }]);
+  assert.deepEqual(validatePatch('- insert:\n  - id: x\n    p: ..\\secret\n'), [{ code: 'patch-unsafe-path' }]);
+  assert.deepEqual(validatePatch('- insert:\n  - id: x\n    p: C:\\secret\n'), [{ code: 'patch-unsafe-path' }]);
   // 以 / 开头的路由不是文件路径，不能误伤。
-  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: /api/forge-market\n'), []);
+  assert.deepEqual(validatePatch('- insert:\n  - id: x\n    p: /api/forge-market\n'), []);
   // https:// 里含有 "s:/"，不能被当成盘符。
-  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: https://plugins.corp.example\n'), []);
+  assert.deepEqual(validatePatch('- insert:\n  - id: x\n    p: https://plugins.corp.example\n'), []);
 });
 
 test('flags a patch that names a different package', () => {
@@ -99,14 +99,14 @@ test('flags a patch that names a different package', () => {
     files: ['package.json', 'cordis.patch.yml', 'README.md'],
     manifest: { name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=0.2.1' } },
     readme: '## 用途\n\nx\n\n## 维护人\n\ny\n',
-    patch: "insert:\n  - id: a\n    name: '@heluo/other'\n",
+    patch: "- insert:\n  - id: a\n    name: '@heluo/other'\n",
     tag: 'v0.1.0',
   });
   assert.ok(result.errors.some((error) => error.code === 'patch-name-mismatch'));
 });
 
 test('flags a file name that forgot the ./ prefix', () => {
-  assert.deepEqual(validatePatch("insert:\n  - id: a\n    name: ui/panel.js\n"), [{ code: 'patch-unresolved-name', detail: 'ui/panel.js' }]);
-  assert.deepEqual(validatePatch("insert:\n  - id: a\n    name: './ui/panel.js'\n"), []);
-  assert.deepEqual(validatePatch("insert:\n  - id: g\n    group: true\n    name: cordis:group\n"), []);
+  assert.deepEqual(validatePatch("- insert:\n  - id: a\n    name: ui/panel.js\n"), [{ code: 'patch-unresolved-name', detail: 'ui/panel.js' }]);
+  assert.deepEqual(validatePatch("- insert:\n  - id: a\n    name: './ui/panel.js'\n"), []);
+  assert.deepEqual(validatePatch("- insert:\n  - id: g\n    group: true\n    name: cordis:group\n"), []);
 });

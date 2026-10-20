@@ -7,7 +7,7 @@ const plan = { name: '@heluo/a', version: '0.1.0', repo: 'https://gitee.corp.exa
 
 const files = [
   { path: 'package.json', bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '0.1.0' })) },
-  { path: 'cordis.patch.yml', bytes: Buffer.from('insert: []\n') },
+  { path: 'cordis.patch.yml', bytes: Buffer.from('- insert: []\n') },
   { path: 'README.md', bytes: Buffer.from('# a\n') },
 ];
 
@@ -102,7 +102,7 @@ test('refuses a declared size above the cap before reading the body', async () =
 
 test('refuses a patch whose row names another package', async () => {
   const wrong = files.map((file) => file.path === 'cordis.patch.yml'
-    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: '@heluo/other'\n") }
+    ? { ...file, bytes: Buffer.from("- insert:\n  - id: a\n    name: '@heluo/other'\n") }
     : file);
   const result = await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: wrong }) }));
   assert.equal(result.reason, 'patch-name-mismatch');
@@ -111,14 +111,14 @@ test('refuses a patch whose row names another package', async () => {
 
 test('accepts a patch that names the package itself', async () => {
   const right = files.map((file) => file.path === 'cordis.patch.yml'
-    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: '@heluo/a'\n") }
+    ? { ...file, bytes: Buffer.from("- insert:\n  - id: a\n    name: '@heluo/a'\n") }
     : file);
   assert.equal((await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: right }) }))).ok, true);
 });
 
 test('refuses a relative row name whose file is not in the archive', async () => {
   const wrong = files.map((file) => file.path === 'cordis.patch.yml'
-    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: './ui/panel.js'\n") }
+    ? { ...file, bytes: Buffer.from("- insert:\n  - id: a\n    name: './ui/panel.js'\n") }
     : file);
   const result = await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: wrong }) }));
   assert.equal(result.reason, 'patch-missing-target');
@@ -130,14 +130,14 @@ test('accepts a relative row name that exists', async () => {
     ...files,
     { path: 'ui/panel.js', bytes: Buffer.from('export {};') },
   ].map((file) => file.path === 'cordis.patch.yml'
-    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: './ui/panel.js'\n") }
+    ? { ...file, bytes: Buffer.from("- insert:\n  - id: a\n    name: './ui/panel.js'\n") }
     : file);
   assert.equal((await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: withFile }) }))).ok, true);
 });
 
 test('install enforces the patch content rules too', async () => {
   const dangerous = files.map((file) => file.path === 'cordis.patch.yml'
-    ? { ...file, bytes: Buffer.from("insert:\n  - id: a\n    name: '@heluo/a'\n    config: !!js process.exit()\n") }
+    ? { ...file, bytes: Buffer.from("- insert:\n  - id: a\n    name: '@heluo/a'\n    config: !!js process.exit()\n") }
     : file);
   const result = await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: dangerous }) }));
   assert.equal(result.reason, 'patch-js-expr');

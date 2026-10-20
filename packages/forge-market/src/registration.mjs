@@ -33,12 +33,13 @@ export function buildRegistrationRow(installed, config = {}) {
 }
 
 export function renderPatch(row) {
-  const lines = ['insert:', `  - id: ${row.id}`, `    name: '${row.name}'`];
-  if (row.inject?.length) lines.push(`    inject: [${row.inject.join(', ')}]`);
-  lines.push('    config:');
+  // loader 的补丁层是顶层数组；生成映射会得到「必须为数组」的挂载错误。
+  const lines = ['- insert:', `    - id: ${row.id}`, `      name: '${row.name}'`];
+  if (row.inject?.length) lines.push(`      inject: [${row.inject.join(', ')}]`);
+  lines.push('      config:');
   for (const [key, value] of Object.entries(row.config ?? {})) {
     if (value === null || value === undefined) continue;
-    lines.push(`      ${key}: ${Array.isArray(value) ? `[${value.join(', ')}]` : value}`);
+    lines.push(`        ${key}: ${Array.isArray(value) ? `[${value.join(', ')}]` : value}`);
   }
   return `${lines.join('\n')}\n`;
 }

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.18.0 |
+| 版本 | V0.19.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -136,6 +136,7 @@ GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 | `install-script` | 声明了 `preinstall`、`install` 或 `postinstall` | 不进索引 |
 | `missing-section` | README 缺 `## 用途` 或 `## 维护人` | 不进索引 |
 | `missing-name` | `package.json` 缺 `name` | 不进索引 |
+| `patch-not-array` | `cordis.patch.yml` 顶层不是数组（映射写法能过 YAML 解析，但挂载报「must be a top-level YAML array」） | 不进索引 |
 | `patch-js-expr` | `cordis.patch.yml` 含 `!!js` 表达式 | 不进索引 |
 | `patch-disables-row` | 补丁里出现 `disabled: true` | 不进索引 |
 | `patch-overrides-protected` | 覆盖 IAM、策略、凭据、沙箱或权限预设的行 id | 不进索引 |

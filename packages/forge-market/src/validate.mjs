@@ -13,6 +13,10 @@ function scalar(key, value) {
 export function validatePatch(text) {
   const errors = [];
   const body = String(text ?? '');
+  // loader 要求补丁层是顶层数组；映射写法能通过 YAML 解析，却会在挂载时报
+  // 「must be a top-level YAML array」，所以在这里就拦下。
+  const firstLine = body.split('\n').find((line) => line.trim() && !line.trim().startsWith('#'));
+  if (firstLine && !/^\s*(?:-|\[)/.test(firstLine)) errors.push({ code: 'patch-not-array' });
   if (/!!js/.test(body)) errors.push({ code: 'patch-js-expr' });
   if (scalar('disabled', 'true').test(body)) errors.push({ code: 'patch-disables-row' });
   if (/cordis:include/.test(body)) errors.push({ code: 'patch-include' });
