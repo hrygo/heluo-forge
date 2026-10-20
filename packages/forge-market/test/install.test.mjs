@@ -75,3 +75,27 @@ test('rejects an unparsable manifest and a version that differs from the plan', 
   const other = [{ ...files[0], bytes: Buffer.from(JSON.stringify({ name: '@heluo/a', version: '9.9.9' })) }, ...files.slice(1)];
   assert.equal((await installPlugin(plan, deps({ extract: async () => ({ ok: true, files: other }) }))).reason, 'version-mismatch');
 });
+
+test('stops reading a download that exceeds the cap', async () => {
+  let cancelled = false;
+  const body = {
+    getReader: () => ({
+      read: async () => ({ done: false, value: Buffer.alloc(1024) }),
+      cancel: async () => { cancelled = true; },
+    }),
+  };
+  const result = await downloadArchive('https://gitee.corp.example/g/a/archive.tar.gz', {
+    maxBytes: 2048,
+    fetchImpl: async () => ({ ok: true, headers: { get: () => null }, body }),
+  });
+  assert.equal(result.reason, 'archive-too-large');
+  assert.equal(cancelled, true);
+});
+
+test('refuses a declared size above the cap before reading the body', async () => {
+  const result = await downloadArchive('https://gitee.corp.example/g/a/archive.tar.gz', {
+    maxBytes: 1024,
+    fetchImpl: async () => ({ ok: true, headers: { get: () => '4096' }, body: { getReader: () => { throw new Error('should not read'); } } }),
+  });
+  assert.equal(result.reason, 'archive-too-large');
+});

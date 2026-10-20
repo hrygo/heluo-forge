@@ -61,7 +61,9 @@ export function buildMarketTools(client, options = {}) {
   const allowedHosts = options.allowedHosts ?? [];
   const deps = {
     download: (repo, tag, archiveUrl) =>
-      downloadArchive(archiveUrl || `${repo.replace(/\/$/, '')}/archive/refs/tags/${tag}.tar.gz`),
+      downloadArchive(archiveUrl || `${repo.replace(/\/$/, '')}/archive/refs/tags/${tag}.tar.gz`, {
+        timeoutMs: options.downloadTimeoutMs ?? 30000,
+      }),
     extract: async (bytes) => extractTarball(bytes),
     ...options.install,
   };

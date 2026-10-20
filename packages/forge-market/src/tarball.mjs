@@ -18,8 +18,10 @@ function readOctal(block, offset, length) {
 export function extractTarball(bytes, { maxBytes = MAX_BYTES } = {}) {
   let data;
   try {
-    data = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
-  } catch {
+    // maxOutputLength 让 zlib 在解压途中停下：否则一个几百字节的 gzip 可以撑爆内存。
+    data = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes, { maxOutputLength: maxBytes }) : bytes;
+  } catch (error) {
+    if (error?.code === 'ERR_BUFFER_TOO_LARGE' || error?.code === 'ERR_OUT_OF_RANGE') return { ok: false, reason: 'archive-too-large' };
     return { ok: false, reason: 'bad-archive' };
   }
   if (data.length > maxBytes) return { ok: false, reason: 'archive-too-large' };

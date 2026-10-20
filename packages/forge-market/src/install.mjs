@@ -1,12 +1,34 @@
 import { checkArchivePaths, digestOf, verifyDigest } from './installer.mjs';
 
-export async function downloadArchive(url, { fetchImpl = globalThis.fetch, timeoutMs = 15000 } = {}) {
+const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
+
+export async function downloadArchive(url, { fetchImpl = globalThis.fetch, timeoutMs = 30000, maxBytes = MAX_ARCHIVE_BYTES } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchImpl(url, { signal: controller.signal });
     if (!response.ok) return { ok: false, reason: 'download-failed', detail: response.status };
-    return { ok: true, bytes: Buffer.from(await response.arrayBuffer()) };
+
+    // 先看声明长度，避免为明显过大的归档分配内存。
+    const declared = Number(response.headers?.get?.('content-length') ?? 0);
+    if (declared > maxBytes) return { ok: false, reason: 'archive-too-large', detail: declared };
+
+    const reader = response.body?.getReader?.();
+    if (!reader) return { ok: true, bytes: Buffer.from(await response.arrayBuffer()) };
+
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel?.();
+        return { ok: false, reason: 'archive-too-large', detail: total };
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return { ok: true, bytes: Buffer.concat(chunks) };
   } catch (error) {
     return { ok: false, reason: error?.name === 'AbortError' ? 'timeout' : 'network' };
   } finally {

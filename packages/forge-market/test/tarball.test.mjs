@@ -75,3 +75,9 @@ test('skips directory entries and pax headers', () => {
   assert.equal(result.ok, true);
   assert.deepEqual(result.files.map((f) => f.path), ['package.json']);
 });
+
+test('refuses a gzip bomb without inflating it', () => {
+  const bomb = gzipSync(Buffer.alloc(4 * 1024 * 1024));
+  const result = extractTarball(bomb, { maxBytes: 1024 * 1024 });
+  assert.equal(result.reason, 'archive-too-large');
+});
