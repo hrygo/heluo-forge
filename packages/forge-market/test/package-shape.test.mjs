@@ -36,3 +36,14 @@ test('the panel registers into the slot it names', async () => {
   const registered = [...client.matchAll(/name: '([^']+)', key:/g)].map((match) => match[1]);
   assert.deepEqual(slots, registered);
 });
+
+test('the bundle row is named after the package and the client entry is declared', async () => {
+  const manifest = JSON.parse(await read('package.json'));
+  const patch = await read('cordis.patch.yml');
+  const names = [...patch.matchAll(/^\s+name:\s*'?([^'\n]+)'?\s*$/gm)].map((match) => match[1].trim());
+  assert.ok(names.includes(manifest.name), `patch rows ${names.join(',')} do not include ${manifest.name}`);
+  assert.ok(Array.isArray(manifest.dsh.client.inject), 'dsh.client.inject must be an array');
+  assert.equal(typeof manifest.exports['./client'], 'string');
+  await access(join(here, manifest.exports['./client']));
+  await access(join(here, manifest.main));
+});

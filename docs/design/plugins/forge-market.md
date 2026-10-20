@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.39.0 |
+| 版本 | V0.40.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -255,6 +255,21 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `satisfiesRange` | **未接线** | 仅被 `checkInstall` 使用 |
 
 未接线不等于可删：宿主接入策略层时按此签名调用即可。文档与代码的一致性由 `test/policy-wiring.test.mjs` 守护——新增导出若既未接线、也没登记，测试会红。
+
+### 8.2.1 可被选中的 bundle 清单
+
+`install_bundle` 装完还要能「选中」，这取决于包清单，而不仅是补丁：
+
+| 字段 | 本包取值 | 作用 |
+|---|---|---|
+| `dsh.bundle.patch` | `./cordis.patch.yml` | 指明 bundle 补丁文件 |
+| `dsh.client` | `{ platform: 'web', immediately: true, inject: [] }` | 声明浏览器侧入口 |
+| `exports['./client']` | `./client.js` | 客户端模块入口 |
+| 补丁 insert 行 `name` | 必须是包名 | 行名与包名不一致时选中即失败 |
+
+`dsh.client.inject` 只用于**决定激活顺序**，不声明依赖；空数组表示不要求排在谁之后，并不代表面板没有依赖。这一点容易误读，故在此写明。
+
+`test/package-shape.test.mjs` 守护上表：行名不等于包名、入口文件缺失、`inject` 不是数组，都会让测试红。
 
 ### 8.3 安装后的两条路径
 
