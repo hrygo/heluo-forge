@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.45.0 |
+| 版本 | V0.46.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -318,7 +318,7 @@ slot 的类型允许 `view: 'summary' | 'page'`，但当前插件管理页只在
 | 解包 | 先剥离 Gitee 的 `<repo>-<tag>/` 顶层；白名单内文件写入，其余（`LICENSE`、`docs/` 等）跳过并列入 `skipped`；绝对路径与 `..` 一律拒绝 |
 | 供应链 | 摘要比对；声明 `preinstall`/`install`/`postinstall` 的包在评审与安装两处都被拒绝 |
 | 体积 | 下载按 `content-length` 与流式读取双重限制 64 MB；解压用 `maxOutputLength` 限制，避免 gzip 炸弹 |
-| 路由注册 | `ctx.webServer.register({ kind: 'prefix', path: '/api/forge-market', handler })`；返回 disposer。宿主对同一 `(kind, path)` 重复注册会抛错，因此路径前缀不能与其它插件相同；前缀路由不会改写 `req.url`，处理器按完整路径匹配（已核验 Host `webServer` 契约，2026-10-20） |
+| 路由注册 | `ctx.webServer.register({ kind: 'prefix', path: '/api/forge-market', handler })`，返回 disposer。宿主先查 exact 表，再在 prefix 表里取最长匹配，条件是 `pathname === prefix` 或 `pathname.startsWith(prefix + '/')`——因此 `/api/forge-marketx` 不会误入；处理器收到**原始 `req.url`**，路径前缀不会被剥掉。同一 `(kind, path)` 重复注册会抛错（已核验 Host `webserver` 实现，2026-10-20） |
 | 计数 | 插件不上报；服务端在发放归档地址时按（条目, 机器哈希, 日）去重，缺少机器哈希时按（条目, 日） |
 
 ### 9.1 受保护的行 id
