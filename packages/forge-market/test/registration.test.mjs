@@ -34,3 +34,19 @@ test('instructions name both supported registration paths', () => {
   assert.match(text, /heluo-forge-market/);
   assert.match(text, /不要手工改写 profile 的 package\.json/);
 });
+
+test('names that normalise alike get different row ids', () => {
+  const id = (name) => buildRegistrationRow({ name, version: '1.0.0', tag: 'v1.0.0' }, { serviceUrl: 'https://p.example' });
+  const dash = id('@heluo/foo-bar').row.id;
+  const underscore = id('@heluo/foo_bar').row.id;
+  const dot = id('@heluo/foo.bar').row.id;
+  assert.equal(dash, 'heluo-foo-bar');
+  assert.equal(new Set([dash, underscore, dot]).size, 3);
+  for (const value of [underscore, dot]) assert.match(value, /^[a-z0-9][a-z0-9-]*$/);
+});
+
+test('an upper case name still yields a usable row id', () => {
+  const built = buildRegistrationRow({ name: '@heluo/Foo', version: '1.0.0', tag: 'v1.0.0' }, { serviceUrl: 'https://p.example' });
+  assert.equal(built.ok, true);
+  assert.match(built.row.id, /^heluo-foo-[0-9a-f]{6}$/);
+});

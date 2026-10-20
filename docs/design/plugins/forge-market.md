@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.37.0 |
+| 版本 | V0.38.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -255,6 +255,21 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `satisfiesRange` | **未接线** | 仅被 `checkInstall` 使用 |
 
 未接线不等于可删：宿主接入策略层时按此签名调用即可。文档与代码的一致性由 `test/policy-wiring.test.mjs` 守护——新增导出若既未接线、也没登记，测试会红。
+
+### 8.3 登记行 id
+
+`registration.row.id` 决定 profile 补丁里的行名，必须满足 `[a-z0-9][a-z0-9-]*` 且在同一 profile 内唯一。
+
+| 包名 | 行 id |
+|---|---|
+| `@heluo/foo` | `heluo-foo` |
+| `@heluo/foo-bar` | `heluo-foo-bar` |
+| `@heluo/foo_bar` | `heluo-foo-bar-2f99f4` |
+| `@heluo/foo.bar` | `heluo-foo-bar-72a50c` |
+
+规则：作用域与包名取小写、非字母数字折成 `-`；**若原名含有 `-` 以外需要改写的字符，追加包名 sha256 的前 6 位十六进制**。否则 `foo_bar`、`foo.bar` 与 `foo-bar` 会得到同一个 id，两个包谁后装谁覆盖，且现场只能看到一行。
+
+简单名保持可读、可手抄；需要改写时才带哈希，用户看到哈希即知该名字并非常规形式。
 
 ## 9. 权限与安全
 

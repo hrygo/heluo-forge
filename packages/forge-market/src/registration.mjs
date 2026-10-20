@@ -1,9 +1,18 @@
 const ID = /^[a-z][a-z0-9-]*$/;
 
+import { createHash } from 'node:crypto';
+
 export function buildRegistrationRow(installed, config = {}) {
   const name = String(installed?.name ?? '');
   if (!name.startsWith('@')) return { ok: false, reason: 'bad-name' };
-  const id = name.slice(1).replace('/', '-').replace(/[^a-z0-9-]/g, '-').toLowerCase();
+  // 简单名生成可读 id；含点、下划线或大写的名字再加短哈希后缀，
+  // 否则 @heluo/foo_bar 与 @heluo/foo-bar 会落到同一个行 id 上互相覆盖。
+  const body = name.replace(/^@[^/]+\//, '');
+  const readable = /^[a-z0-9][a-z0-9-]*$/.test(body);
+  const slug = body.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  const scope = name.startsWith('@') ? name.slice(1).split('/')[0].toLowerCase().replace(/[^a-z0-9-]+/g, '-') : '';
+  const suffix = readable ? '' : `-${createHash('sha256').update(name).digest('hex').slice(0, 6)}`;
+  const id = `${scope ? `${scope}-` : ''}${slug}${suffix}`;
   if (!ID.test(id)) return { ok: false, reason: 'bad-id', detail: id };
   if (!config.serviceUrl) return { ok: false, reason: 'no-service-url' };
 
