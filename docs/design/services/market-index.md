@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.15.0 |
+| 版本 | V0.16.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -86,6 +86,17 @@ POST /api/admin/review             上架、退回、撤回
 GET  /api/discover/gitee           扫描专门 group 的仓库
 GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 ```
+
+评审请求体：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `name` | string | 条目包名 |
+| `action` | string | `approve`、`reject`、`revoke` |
+| `version` | string | 可选；`revoke` 时给出则只撤回该版本，条目本身仍上架并可从其他版本安装 |
+| `reason` | string | 可选；退回与撤回的原因，写入审计 |
+
+`revoke` 不带 `version` 时整条下架；带 `version` 时只标记该版本（下载端点返回 409），条目仍可安装其余版本。响应返回 `{ name, version?, state }`。
 
 数据模型要点：
 
