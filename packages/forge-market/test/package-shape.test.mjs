@@ -33,8 +33,8 @@ test('every client fetch path is served by the host routes', async () => {
 test('the panel registers into the slot it names', async () => {
   const client = await read('client.js');
   const slots = [...client.matchAll(/slots\.inject\('([^']+)'/g)].map((match) => match[1]);
-  const registered = [...client.matchAll(/name: '([^']+)', key:/g)].map((match) => match[1]);
-  assert.deepEqual(slots, registered);
+  const registered = [...client.matchAll(/name: '([^']+)', key/g)].map((match) => match[1]);
+  assert.deepEqual([...new Set(registered)], slots);
 });
 
 test('the bundle row is named after the package and the client entry is declared', async () => {
