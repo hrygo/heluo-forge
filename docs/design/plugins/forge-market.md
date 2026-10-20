@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.42.0 |
+| 版本 | V0.43.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -126,7 +126,7 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 
 ### 6.1 面板的两种视图
 
-面板挂在 `plugins.bundle.config`（keyed slot）。文档说键为**包名**，但当前页面里 `dsh-market` 的 occupant key 是 `dshmarket`，与其包名形状不同，真实比对规则无法从文档确认。因此本包同时注册 `@heluo/forge-market` 与 `heluoforgemarket` 两个键：只有被页面派发的那个会渲染，另一个不产生界面。此对冲在首次真实挂载核验后应收敛为单一键。该 slot 由宿主以两种视图调用同一个组件：
+面板挂在 `plugins.bundle.config`（keyed slot）。页面以 `renderSlot(..., { entryKey: pkg.name })` 派发，**键必须与包名逐字一致**；官方实验 bundle 亦用完整带 scope 的包名（如 `@deepseek-ai/dsh-experimental-cot-translation-bundle`）。现场出现的 `dshmarket` 这类键与包名不同形，不会被派发，属于注册方自己的问题，不构成本包的先例。
 
 | 视图 | 何时 | 渲染 |
 |---|---|---|

@@ -55,14 +55,11 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
-        // 文档说按包名派发，但当前页面里 dsh-market 的 key 是 dshmarket（与其包名
-        // 不同形），无法确认真实比对规则。两种写法各注册一次，只有被派发的那次渲染。
-        const keys = ['@heluo/forge-market', 'heluoforgemarket'];
-        ctx.slots.inject('plugins.bundle.config', () => {
-          const offs = keys.map((key) => ctx.slots.register({ name: 'plugins.bundle.config', key }, Panel));
-          // 注入回调要返回单个清理函数；返回数组会让注册无法释放。
-          return () => offs.forEach((off) => (typeof off === 'function' ? off() : undefined));
-        });
+        // 页面按 entryKey = pkg.name 派发（见 ui-plugin-manager 的 renderSlot 调用），
+        // 键必须与包名逐字一致；官方 bundle 也用完整带 scope 的包名。
+        ctx.slots.inject('plugins.bundle.config', () =>
+          ctx.slots.register({ name: 'plugins.bundle.config', key: '@heluo/forge-market' }, Panel),
+        );
       },
     };
   },

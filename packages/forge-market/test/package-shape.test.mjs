@@ -30,11 +30,12 @@ test('every client fetch path is served by the host routes', async () => {
   }
 });
 
-test('the panel registers into the slot it names', async () => {
+test('the panel registers exactly one key, equal to the package name', async () => {
+  const manifest = JSON.parse(await read('package.json'));
   const client = await read('client.js');
   const slots = [...client.matchAll(/slots\.inject\('([^']+)'/g)].map((match) => match[1]);
-  const registered = [...client.matchAll(/name: '([^']+)', key/g)].map((match) => match[1]);
-  assert.deepEqual([...new Set(registered)], slots);
+  const registered = [...client.matchAll(/name: '([^']+)', key: '([^']+)'/g)].map((match) => [match[1], match[2]]);
+  assert.deepEqual(registered, slots.map((slot) => [slot, manifest.name]));
 });
 
 test('the bundle row is named after the package and the client entry is declared', async () => {
