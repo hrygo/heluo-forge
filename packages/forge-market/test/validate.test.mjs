@@ -32,6 +32,12 @@ test('rejects install scripts', () => {
   assert.deepEqual(codes({ ...good, manifest }), ['install-script']);
 });
 
+test('accepts range forms and still rejects wildcards', () => {
+  assert.ok(!codes({ ...good, manifest: { ...good.manifest, engines: { dsh: '^0.2.1' } } }).includes('bad-engines'));
+  assert.ok(codes({ ...good, manifest: { ...good.manifest, engines: { dsh: '~0.2.1' } } }).includes('bad-engines') === false);
+  assert.ok(codes({ ...good, manifest: { ...good.manifest, engines: { dsh: '*' } } }).includes('bad-engines'));
+});
+
 test('rejects patches that weaken the security baseline', () => {
   const cases = [
     ["insert:\n  - id: x\n    name: y\n    disabled: true\n", 'patch-disables-row'],

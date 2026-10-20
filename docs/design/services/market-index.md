@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.8.0 |
+| 版本 | V0.9.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -116,7 +116,7 @@ GET  /api/discover/gitee           扫描专门 group 的仓库
 | `missing-file` | 缺 `cordis.patch.yml`、`package.json` 或 `README.md` | 不进索引 |
 | `scope-not-allowed` | 包名不在受信范围（默认 `@heluo`） | 不进索引 |
 | `bad-version` \| `bad-tag` \| `tag-mismatch` | 版本非 `x.y.z`、标签非 `vX.Y.Z`、两者不一致 | 不进索引 |
-| `missing-engines` \| `bad-engines` | 未声明或无法解析 `engines.dsh` | 不进索引 |
+| `missing-engines` \| `bad-engines` | 未声明，或写法不在 `>=`、`^`、`~`、`=`、裸版本之内 | 不进索引 |
 | `install-script` | 声明了 `preinstall`、`install` 或 `postinstall` | 不进索引 |
 | `missing-section` | README 缺 `## 用途` 或 `## 维护人` | 不进索引 |
 | `missing-name` | `package.json` 缺 `name` | 不进索引 |
@@ -125,6 +125,8 @@ GET  /api/discover/gitee           扫描专门 group 的仓库
 | `patch-overrides-protected` | 覆盖 IAM、策略、凭据、沙箱或权限预设的行 id | 不进索引 |
 | `patch-include` | 使用 `cordis:include` 加载包外文件 | 不进索引 |
 | `patch-unsafe-path` | 引用包外相对路径或绝对路径 | 不进索引 |
+
+`engines.dsh` 只接受 `>=0.2.1`、`^0.2.1`、`~0.2.1`、`=0.2.1` 与裸 `0.2.1` 五种写法；`*`、`latest` 与复合区间（如 `>=0.2.0 <0.3.0`）判 `bad-engines`。`^` 与 `~` 对 `0.x` 按次版本收敛，超出范围的失败原因是 `outside-range`，低于下限是 `requires-newer-dsh`——两者对用户的含义不同。
 
 `cordis.patch.yml` 会被 loader 执行，按代码对待而非配置：格式校验通过后仍要过内容规则，两者同属索引前置条件。
 

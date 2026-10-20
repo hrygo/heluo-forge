@@ -2,7 +2,7 @@ const REQUIRED_FILES = ['cordis.patch.yml', 'package.json', 'README.md'];
 const PROTECTED_IDS = ['forge-iam', 'forge-policy', 'dsh-credentials', 'dsh-sandbox-policy', 'dsh-permission-presets'];
 const REQUIRED_SECTIONS = ['## 用途', '## 维护人'];
 const SEMVER_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
-const ENGINES = /^>=\s*(\d+)\.(\d+)\.(\d+)$/;
+import { parseEngines } from './policy.mjs';
 
 export function validatePatch(text) {
   const errors = [];
@@ -42,7 +42,7 @@ export function validatePlugin(input, policy = {}) {
 
   const engines = String(manifest.engines?.dsh ?? '');
   if (!engines) errors.push({ code: 'missing-engines' });
-  else if (!ENGINES.test(engines)) errors.push({ code: 'bad-engines', detail: engines });
+  else if (!parseEngines(engines)) errors.push({ code: 'bad-engines', detail: engines });
 
   for (const field of ['install', 'postinstall', 'preinstall']) {
     if (manifest.scripts?.[field]) errors.push({ code: 'install-script', detail: field });
