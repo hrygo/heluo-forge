@@ -17,7 +17,14 @@ export function normalizeEntry(raw) {
   const missing = REQUIRED.filter((key) => !raw?.[key]);
   if (missing.length) return { ok: false, reason: 'missing-fields', detail: missing };
   const versions = (Array.isArray(raw.versions) && raw.versions.length ? raw.versions : [raw.version]).map(normalizeVersion);
-  const latest = versions[versions.length - 1];
+
+  // 有更新的可用版本即视为「被替代」；撤回的版本不参与比较。
+  const usable = versions.filter((item) => !item.revoked);
+  const newest = usable[usable.length - 1] ?? versions[versions.length - 1];
+  for (const item of versions) {
+    item.superseded = usable.some((other) => compareVersions(other.version, item.version) > 0);
+  }
+  const latest = newest;
   return {
     ok: true,
     entry: {
@@ -30,6 +37,7 @@ export function normalizeEntry(raw) {
       status: String(raw.status ?? 'listed'),
       version: latest.version,
       versions,
+      latest: latest.version,
       engines: String(latest.engines || raw.engines?.dsh || ''),
       downloads: Number(raw.downloads ?? 0) || 0,
       stars: Number(raw.stars ?? 0) || 0,

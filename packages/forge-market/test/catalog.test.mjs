@@ -140,3 +140,25 @@ test('someone on a prerelease is offered the release', () => {
   assert.equal(result.updateAvailable, true);
   assert.equal(result.latest, '1.0.0');
 });
+
+test('marks versions that a newer release replaced', () => {
+  const { entry } = normalizeEntry({
+    name: '@heluo/a',
+    version: '0.3.0',
+    versions: [{ version: '0.1.0' }, { version: '0.2.0', revoked: true }, { version: '0.3.0' }],
+  });
+  assert.deepEqual(entry.versions.map((item) => item.superseded), [true, true, false]);
+  assert.equal(entry.latest, '0.3.0');
+});
+
+test('a withdrawn head does not hide the newest usable version', () => {
+  const { entry } = normalizeEntry({
+    name: '@heluo/a',
+    version: '0.3.0',
+    versions: [{ version: '0.2.0' }, { version: '0.3.0', revoked: true }],
+  });
+  assert.equal(entry.latest, '0.2.0');
+  assert.equal(entry.version, '0.2.0');
+  // 撤回的版本是「已撤回」，不与「被替代」叠加。
+  assert.deepEqual(entry.versions.map((item) => item.superseded), [false, false]);
+});
