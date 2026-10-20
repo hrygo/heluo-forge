@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-CONF-001 |
 | 文档名称 | 跨团队确认询问函 |
-| 版本 | V0.2 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -21,10 +21,11 @@
 |---|---|---|---|
 | V0.1 | 2026-10-20 | DSH 平台组（代拟） | 初稿：形成使用说明及 IAM、网关与模型、DevOps、Gitee、IT、安全、PMO 与业务七封独立询问函，按团队和门禁组织回函闭环 |
 | V0.2 | 2026-10-20 | DSH 平台组（代拟） | 按收件团队职责重写独立正文，精简无关背景与内部术语；保留七封及47个稳定问题ID，在原题内明确生产审计独立台账、漏记与零样本处理、分批观察起点及排期影响；内部门禁映射与转发正文分离 |
+| V0.2.1 | 2026-10-20 | DSH 平台组（代拟） | 仅迁移至 docs/collaboration/ 并重建相对链接；七封正文与47项问题ID不变 |
 
 > 编制依据：2026-10-20 文档核对所读版本为 CORP-DSH-ARCH-001 V1.3、CORP-DSH-PLAN-001 V1.2、CORP-DSH-REQ-001 V1.2、CORP-DSH-GW-001 V0.8；沿用已读项目协作规范及子文档模板。此次仅核对文档，不新增企业接口、终端隔离或容量实测；未收到团队回函、批准或资源承诺。
 >
-> 关联文档：[总体架构设计](<../platform-architecture.md>)、[推广实施方案](<../rollout-plan.md>)、[需求与场景基线](<../requirements-baseline.md>)、[AI 网关契约](<gateway-contract.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)、[子文档模板](<_template.md>)。
+> 关联文档：[总体架构设计](<../architecture/platform-architecture.md>)、[推广实施方案](<../plans/rollout-plan.md>)、[需求与场景基线](<../requirements/requirements-baseline.md>)、[AI 网关契约](<../contracts/gateway-contract.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)、[子文档模板](<../templates/_template.md>)。
 
 ## 1. 结论
 
@@ -59,13 +60,13 @@
 
 | 正文 | 问题域及数量 | 平台参考（不转发） |
 |---|---|---|
-| §4.2 身份团队 | CONF-IAM，7题 | [身份与令牌](<../platform-architecture.md>) |
-| §4.3 网关与模型团队 | CONF-GW，8题 | [网关契约](<gateway-contract.md>) |
-| §4.4 DevOps团队 | CONF-DEVOPS，6题 | [工程系统设计](<../platform-architecture.md#L324>) |
-| §4.5 Gitee团队 | CONF-GITEE，5题 | [工程系统设计](<../platform-architecture.md#L324>) |
-| §4.6 IT与分发团队 | CONF-IT，7题 | [终端与分发计划](<../rollout-plan.md>) |
-| §4.7 安全团队 | CONF-SEC，7题 | [合规约束](<../requirements-baseline.md>) |
-| §4.8 PMO与业务 | CONF-PMO，7题 | [指标与判定](<../requirements-baseline.md>)、[排期与运行](<../rollout-plan.md>) |
+| §4.2 身份团队 | CONF-IAM，7题 | [身份与令牌](<../architecture/platform-architecture.md>) |
+| §4.3 网关与模型团队 | CONF-GW，8题 | [网关契约](<../contracts/gateway-contract.md>) |
+| §4.4 DevOps团队 | CONF-DEVOPS，6题 | [工程系统设计](<../architecture/platform-architecture.md#73-工程系统工具>) |
+| §4.5 Gitee团队 | CONF-GITEE，5题 | [工程系统设计](<../architecture/platform-architecture.md#73-工程系统工具>) |
+| §4.6 IT与分发团队 | CONF-IT，7题 | [终端与分发计划](<../plans/rollout-plan.md>) |
+| §4.7 安全团队 | CONF-SEC，7题 | [合规约束](<../requirements/requirements-baseline.md>) |
+| §4.8 PMO与业务 | CONF-PMO，7题 | [指标与判定](<../requirements/requirements-baseline.md>)、[排期与运行](<../plans/rollout-plan.md>) |
 
 ### 4.2 IAM 团队询问函
 

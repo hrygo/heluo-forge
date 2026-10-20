@@ -1,0 +1,18 @@
+{
+  "name": "corp-dsh",
+  "version": "0.0.0",
+  "private": true,
+  "description": "企业 DSH 研发平台的方案、插件与私有市场工程仓库",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.28.5",
+  "engines": {
+    "node": ">=24.0.0 <25",
+    "pnpm": ">=11.0.0 <12"
+  },
+  "scripts": {
+    "check": "node scripts/check-docs.mjs && node scripts/check-repo.mjs && node --test",
+    "check:docs": "node scripts/check-docs.mjs",
+    "check:repo": "node scripts/check-repo.mjs",
+    "test:unit": "node --test"
+  }
+}

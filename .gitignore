@@ -20,7 +20,17 @@
 *.pfx
 secrets/
 
+# Dependencies and build output
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+.turbo/
+*.tsbuildinfo
+
 # Temporary and generated files
 *.tmp
 *.temp
 *.log
+pnpm-debug.log*
