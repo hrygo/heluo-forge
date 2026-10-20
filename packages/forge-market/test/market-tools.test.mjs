@@ -254,3 +254,14 @@ test('submit refuses a package that fails its own preflight', async () => {
   assert.equal(result.reason, 'verification-failed');
   assert.equal(submitted, false);
 });
+
+test('a service rejection reaches the caller with its own code', async () => {
+  const rejecting = { ...client, submit: async () => { throw Object.assign(new Error('bad-tag'), { code: 'bad-tag', body: { error: 'bad-tag' } }); } };
+  const tools = buildMarketTools(rejecting, {
+    allowedHosts: ['gitee.corp.example'],
+    preflight: false,
+  });
+  const result = await call(tools, 'market_submit', { name: '@heluo/a', repo: 'https://gitee.corp.example/g/a', tag: 'v0.1.0' });
+  assert.equal(result.reason, 'bad-tag');
+  assert.deepEqual(result.server, { error: 'bad-tag' });
+});

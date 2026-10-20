@@ -41,3 +41,27 @@ test('turns an abort into a timeout error', async () => {
   });
   await assert.rejects(() => client.list(), (error) => error.code === 'timeout');
 });
+
+test('a rejected request keeps the service explanation', async () => {
+  const client = createServiceClient({
+    baseUrl: 'https://plugins.corp.example',
+    fetchImpl: () => Promise.resolve({
+      status: 400,
+      ok: false,
+      json: () => Promise.resolve({ error: 'bad-tag', detail: ['tag must look like v1.2.3'] }),
+    }),
+  });
+  await assert.rejects(() => client.submit({}), (error) => {
+    assert.equal(error.code, 'bad-tag');
+    assert.deepEqual(error.body.detail, ['tag must look like v1.2.3']);
+    return true;
+  });
+});
+
+test('a non-JSON rejection still yields a code', async () => {
+  const client = createServiceClient({
+    baseUrl: 'https://plugins.corp.example',
+    fetchImpl: () => Promise.resolve({ status: 400, ok: false, json: () => Promise.reject(new Error('html')) }),
+  });
+  await assert.rejects(() => client.submit({}), (error) => error.code === 'bad-response');
+});

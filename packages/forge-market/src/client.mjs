@@ -1,8 +1,10 @@
 export class MarketError extends Error {
-  constructor(code, status, detail) {
+  constructor(code, status, detail, body) {
     super(`${code}${detail ? `: ${detail}` : ''}`);
     this.code = code;
     this.status = status;
+    this.detail = detail;
+    this.body = body;
   }
 }
 
@@ -28,7 +30,17 @@ export function createServiceClient({ baseUrl, fetchImpl = globalThis.fetch, tim
       if (response.status === 404) throw new MarketError('not-found', 404);
       if (response.status === 409) throw new MarketError('version-revoked', 409);
       if (response.status >= 500) throw new MarketError('service-unavailable', response.status);
-      if (!response.ok) throw new MarketError('bad-response', response.status);
+      if (!response.ok) {
+        // 服务端会说明原因，丢弃它等于让作者猜。
+        let body;
+        try {
+          body = await response.json();
+        } catch {
+          body = undefined;
+        }
+        const code = typeof body?.error === 'string' ? body.error : 'bad-response';
+        throw new MarketError(code, response.status, body ? JSON.stringify(body) : undefined, body);
+      }
       return await response.json();
     } catch (error) {
       if (error instanceof MarketError) throw error;

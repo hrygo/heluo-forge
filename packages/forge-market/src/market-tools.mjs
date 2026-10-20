@@ -20,7 +20,9 @@ function tool(name, description, parameters, handler) {
         return json(await handler(args ?? {}));
       } catch (error) {
         const reason = typeof error?.code === 'string' ? error.code : 'internal';
-        return json({ ok: false, reason, detail: String(error?.message ?? error) });
+        const payload = { ok: false, reason, detail: String(error?.message ?? error) };
+        if (error?.body) payload.server = error.body;
+        return json(payload);
       }
     },
   };
