@@ -63,13 +63,22 @@ export function compareVersions(a, b) {
 
 export function pickUpdate(entry, installedVersion) {
   if (!installedVersion) return { updateAvailable: false, reason: 'no-installed-version' };
-  const latest = entry?.versions?.[entry.versions.length - 1]?.version ?? entry?.version;
+
+  const versions = (entry?.versions ?? []).filter((item) => item?.version);
+  const usable = versions.filter((item) => item.revoked !== true);
+  const latest = usable[usable.length - 1]?.version;
   if (!latest) return { updateAvailable: false, reason: 'no-latest-version' };
+
+  const installed = versions.find((item) => item.version === installedVersion);
+  if (installed?.revoked === true) {
+    return { updateAvailable: true, installed: String(installedVersion), latest, reason: 'installed-revoked' };
+  }
+
   const order = compareVersions(latest, installedVersion);
   return {
     updateAvailable: order > 0,
     installed: String(installedVersion),
-    latest: String(latest),
+    latest,
     reason: order > 0 ? null : 'up-to-date',
   };
 }

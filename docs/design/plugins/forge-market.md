@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.16.0 |
+| 版本 | V0.17.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -176,7 +176,8 @@ packages/forge-market/
 | `no-allowed-host` | 提交 | 未配置 allowedHosts，拒绝提交 | 否 |
 | `no-digest` | 下载 | 服务未给出摘要，无法校验 | 否 |
 | `no-installed-version` | 更新 | 未提供已安装版本 | 否 |
-| `no-latest-version` | 更新 | 目录里没有可用版本 | 否 |
+| `no-latest-version` | 更新 | 目录里没有可用版本（含全部已撤回） | 否 |
+| `installed-revoked` | 更新 | 已安装的版本被撤回，建议换到可用版本 | 是（换版本） |
 | `no-path` | 配置 | 缓存或落盘未配置路径 | 否 |
 | `no-registry` | 策略 | 策略未配置制品源 | 否 |
 | `no-repo` | 规划 | 条目没有仓库地址也没有归档地址 | 否 |

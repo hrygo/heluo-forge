@@ -72,3 +72,35 @@ test('reports an update only when the listed version is newer', () => {
   assert.equal(pickUpdate(entry, '0.3.0').updateAvailable, false);
   assert.equal(pickUpdate(entry, '').reason, 'no-installed-version');
 });
+
+test('never suggests a withdrawn version', () => {
+  const entry = normalizeEntry({
+    name: '@heluo/a',
+    version: '0.3.0',
+    versions: [
+      { version: '0.2.0', tag: 'v0.2.0' },
+      { version: '0.3.0', tag: 'v0.3.0', revoked: true },
+    ],
+  }).entry;
+  assert.deepEqual(pickUpdate(entry, '0.2.0'), { updateAvailable: false, installed: '0.2.0', latest: '0.2.0', reason: 'up-to-date' });
+});
+
+test('asks an installed withdrawn version to move, even to an older one', () => {
+  const entry = normalizeEntry({
+    name: '@heluo/a',
+    version: '0.3.0',
+    versions: [
+      { version: '0.2.0', tag: 'v0.2.0' },
+      { version: '0.3.0', tag: 'v0.3.0', revoked: true },
+    ],
+  }).entry;
+  const result = pickUpdate(entry, '0.3.0');
+  assert.equal(result.updateAvailable, true);
+  assert.equal(result.reason, 'installed-revoked');
+  assert.equal(result.latest, '0.2.0');
+});
+
+test('reports when every version is withdrawn', () => {
+  const entry = normalizeEntry({ name: '@heluo/a', version: '0.1.0', versions: [{ version: '0.1.0', revoked: true }] }).entry;
+  assert.equal(pickUpdate(entry, '0.1.0').reason, 'no-latest-version');
+});
