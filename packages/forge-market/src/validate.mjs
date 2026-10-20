@@ -16,7 +16,9 @@ export function validatePatch(text) {
   if (/!!js/.test(body)) errors.push({ code: 'patch-js-expr' });
   if (scalar('disabled', 'true').test(body)) errors.push({ code: 'patch-disables-row' });
   if (/cordis:include/.test(body)) errors.push({ code: 'patch-include' });
-  if (/(^|[\s'\"])\.\.?\//.test(body) || /[A-Za-z]:\\\\/.test(body)) errors.push({ code: 'patch-unsafe-path' });
+  // 同时接受 / 与 \\ 两种分隔符：Windows 风格写法不能成为绕过口。
+  // 盘符必须在行首或空白之后：否则 "https:/" 里的 "s:/" 会被误判成 Windows 路径。
+  if (/(^|[\s'\"])\.\.?[/\\]/.test(body) || /(^|[\s'\"])[A-Za-z]:[/\\]/.test(body)) errors.push({ code: 'patch-unsafe-path' });
   for (const id of PROTECTED_IDS) {
     if (scalar('id', id).test(body)) errors.push({ code: 'patch-overrides-protected', detail: id });
   }

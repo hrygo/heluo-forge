@@ -83,3 +83,13 @@ test('the protected id rule cannot be dodged by YAML style', () => {
   assert.deepEqual(validatePatch('insert:\n  - {id: x, disabled: true}\n'), [{ code: 'patch-disables-row' }]);
   assert.deepEqual(validatePatch('insert:\n  - id: heluo-a\n    name: "@heluo/a"\n'), []);
 });
+
+test('traversal is caught whichever slash is used', () => {
+  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: ../secret\n'), [{ code: 'patch-unsafe-path' }]);
+  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: ..\\secret\n'), [{ code: 'patch-unsafe-path' }]);
+  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: C:\\secret\n'), [{ code: 'patch-unsafe-path' }]);
+  // 以 / 开头的路由不是文件路径，不能误伤。
+  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: /api/forge-market\n'), []);
+  // https:// 里含有 "s:/"，不能被当成盘符。
+  assert.deepEqual(validatePatch('insert:\n  - id: x\n    p: https://plugins.corp.example\n'), []);
+});
