@@ -1,4 +1,4 @@
-# DSH 企业研发平台
+# 企业 DSH 研发平台（corp-dsh）
 
 > 文档类型：项目入口（非 SSOT）
 >
@@ -49,7 +49,7 @@
 ## 目录
 
 ```text
-dsh-enterprise/
+corp-dsh/
 ├── README.md
 └── docs/
     ├── 2026-10-20-dsh-enterprise-platform-design.md
