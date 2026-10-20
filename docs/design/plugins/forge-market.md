@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.36.0 |
+| 版本 | V0.37.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -241,6 +241,20 @@ star 与下载量都相同时按包名码位排序，不使用 `localeCompare`�
 | `fix-the-package` | 包本身不合格，按 `steps` 修正 |
 | `check-the-name` | 检查包名拼写后重试 |
 | `contact-admin` | 未归类的失败，交平台组 |
+
+### 8.2 未接线的策略 API
+
+`policy.mjs` 里有两类函数，容易误以为全都在生效：
+
+| 函数 | 状态 | 说明 |
+|---|---|---|
+| `checkEngines` | 已接线 | 安装时校验 `engines.dsh` |
+| `parseEngines` | 已接线 | 解析版本范围 |
+| `checkInstall` | **未接线** | 作用域、预发布、安装脚本、版本钉住四条策略；需要宿主提供 `registryUrl` 与策略对象，参考实现不自行编造 |
+| `parsePackageName` | **未接线** | 仅被 `checkInstall` 使用 |
+| `satisfiesRange` | **未接线** | 仅被 `checkInstall` 使用 |
+
+未接线不等于可删：宿主接入策略层时按此签名调用即可。文档与代码的一致性由 `test/policy-wiring.test.mjs` 守护——新增导出若既未接线、也没登记，测试会红。
 
 ## 9. 权限与安全
 
