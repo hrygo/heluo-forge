@@ -10,7 +10,7 @@
 | 衔接点 | `plugin-market`、`plugin-manager` |
 | 服务实现 | 企业插件目录，见 [DESIGN-012](../../docs/design/services/market-index.md) |
 | 详细设计 | [DESIGN-007](../../docs/design/plugins/forge-market.md) |
-| 实现状态 | 宿主侧：策略、校验、目录、客户端、安装、缓存、路由与六个工具，均有测试；客户端面板已写但**未实机核验**（slot 归属与注入方式待装到 profile 后确认） |
+| 实现状态 | 宿主侧：策略、校验、目录、客户端、安装、缓存、路由与九个工具，均有测试；客户端面板已写但**未实机核验**（slot 归属与注入方式待装到 profile 后确认），因此「可用」指宿主侧与安装链路，不含面板视觉验收 |
 
 ## 用途
 
