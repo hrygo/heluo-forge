@@ -20,6 +20,7 @@
 | [推广方案](docs/2026-10-20-dsh-enterprise-rollout.md) | 执行：WBS、fork 选型、验收 A1–A14、风险、开放问题 | PM、实施团队 |
 | [分层架构图](docs/assets/2026-10-20-dsh-enterprise-architecture.png) | 客户端 / 运行时 / 插件 / 平台四层 | 汇报与评审 |
 | [价值四象限](docs/assets/2026-10-20-dsh-value-quadrant.png) | 哪些能力随模型/宿主增强而升值 | 决策沟通 |
+| [子文档索引](docs/subdocs/README.md) | 十份团队交付物的入口、责任、门禁与状态 | 各团队负责人 |
 
 ## 阅读顺序
 
@@ -54,6 +55,10 @@ corp-dsh/
 └── docs/
     ├── 2026-10-20-dsh-enterprise-platform-design.md
     ├── 2026-10-20-dsh-enterprise-rollout.md
+    ├── subdocs/
+    │   ├── README.md
+    │   ├── _TEMPLATE.md
+    │   └── 02-gateway.md
     └── assets/
         ├── 2026-10-20-dsh-enterprise-architecture.png
         └── 2026-10-20-dsh-value-quadrant.png
