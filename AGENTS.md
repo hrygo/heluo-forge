@@ -9,7 +9,7 @@
 - 河洛 / Heluo Forge 是基于 DeepSeek Harness（DSH）的企业方案与扩展工程，工程标识为 `heluo-forge`；本仓库不是 DSH 源码仓库，不分发 DSH 本体。
 - 当前有工程检查器与模块职责入口，业务插件、独立服务、私有市场和双端分发尚未实现。状态以对应文件、配置和实测为证，不能由目录名或规划推断。
 - 范围以[需求基线 §2](docs/requirements/requirements-baseline.md#2-范围边界唯一真源)为准。优先使用扩展体系；N7 仅列出 MCP 按请求取令牌及 `stdio` 凭据重连补丁例外，须独立记录、向上游提案并保留内部源兜底；该例外不授权在本仓库创建 DSH fork 或实施上游修改。
-- 材料密级为“内部”。示例使用 `corp.example`、`svc-ci` 等占位，不写凭据、真实用户数据、内网地址或本机绝对路径；HTML 自包含，不依赖外部脚本。安全问题按 [SECURITY.md](SECURITY.md)处理。
+- 示例使用 `corp.example`、`svc-ci` 等占位，不写凭据、真实用户数据、内网地址或本机绝对路径；HTML 自包含，不依赖外部脚本。安全问题按 [SECURITY.md](SECURITY.md)处理。
 
 ## 2. 按任务读取
 

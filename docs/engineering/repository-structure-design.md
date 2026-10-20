@@ -6,9 +6,9 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.2.3 |
+| 版本 | V0.2.5 |
 | 文档状态 | 草案 |
-| 密级 | 内部 |
+| 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
@@ -44,7 +44,7 @@
 - 不新增或猜测 DSH 服务方法、插件 Config、Slot、Tool 或企业 API；逐模块实现前须核对目标版本真实接口。
 - 不自研 npm registry，不选定或部署 Verdaccio、Artifactory、Nexus、Kubernetes 等基础设施。
 - 不接入真实 IAM、网关、Gitee 或 DevOps；不申请或保存生产凭据。
-- 不设置公开仓库、GitHub Pages 或开源许可证，不启动公网服务。
+- 仓库公开（public）可见；不设置 GitHub Pages 或开源许可证，不启动公网服务。
 - 不修改 DSH 核心，不建立新的 DSH 客户端 fork，不改变一期平台、人数和安全范围。
 - 不将 GitHub Actions、分支保护、CODEOWNERS 或人工审批描述为已在服务端强制生效。
 

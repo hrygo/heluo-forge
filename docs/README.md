@@ -6,9 +6,9 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.10.5 |
+| 版本 | V1.10.7 |
 | 文档状态 | 生效 |
-| 密级 | 内部 |
+| 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
@@ -61,7 +61,7 @@
 | 编号 | 交付物 | 文件 | 负责 | 门禁 | 状态 | 必须先回答 |
 |---|---|---|---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | IAM 团队 | G0 | 待启动 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V0.8.3） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0 | 草案 | 验签方式、consumer 生命周期、双维度额度、429 契约、C1/C4 与待批准保留期；方向回函不替代 G1/G2 冻结与验证 |
+| CORP-DSH-GW-001 | AI 网关契约（V0.8.4） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0 | 草案 | 验签方式、consumer 生命周期、双维度额度、429 契约、C1/C4 与待批准保留期；方向回函不替代 G1/G2 冻结与验证 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 平台组 | G0 | 待启动 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps MCP | 待创建 | DevOps 团队 | G1 | 待启动 | 只读工具面与 scope、PRM、错误码、字段与版本兼容（工具清单待提供方澄清） |
 | CORP-DSH-GITEE-001 | Gitee 集成 | 待创建 | 平台组 | G1 | 待启动 | 版本、arm64 构建、IAM 身份映射或凭据方案、写操作开关 |
@@ -127,7 +127,7 @@ L1 是总体架构，L2 是需求与实施计划，L3 是字段级契约、模�
 - 结论先行，分开事实、决策、推断和待确认；推断显式标注。契约写可核对的字段与示例，验收写可判定断言，不用规划文本证明实测。
 - 不写修订记录、变更日志或“本次更新”段落；版本变化只改文档信息、清单与受影响的索引摘要。
 - 表格列数一致；代码块标注语言；仓库内链接使用相对路径与有效锚点。图示优先 Mermaid，离线资源放 `docs/assets/`，HTML 自包含且不引用外部脚本。
-- 密级为“内部”；示例使用占位值，不写真实地址、凭据、用户数据或本机绝对路径。外部规范注明适用版本与核验日期，不把当前网页内容套用到未验证的旧版本。
+- 密级未指定时填“—”；示例使用占位值，不写真实地址、凭据、用户数据或本机绝对路径。外部规范注明适用版本与核验日期，不把当前网页内容套用到未验证的旧版本。
 
 ### 6.4 状态、版本与历史
 
@@ -160,6 +160,6 @@ L1 是总体架构，L2 是需求与实施计划，L3 是字段级契约、模�
 |---|---|
 | [OpenAI：Custom instructions with AGENTS.md](https://developers.openai.com/codex/guides/agents-md) | 项目指令分层、根规则与目录差异分开、审查规则简洁；不在仓库复制个人配置或扩大授权 |
 | [GitHub：About the repository README file](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-readmes) | README 说明项目用途、起步与参与入口，长文用链接组织；本项目保留受控文档目录，不迁到 Wiki |
-| [GitHub：Setting guidelines for repository contributors](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/setting-guidelines-for-repository-contributors) | CONTRIBUTING 负责贡献流程和评审准备；内部项目不因采用 GitHub 实践而公开或授予开源许可 |
+| [GitHub：Setting guidelines for repository contributors](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/setting-guidelines-for-repository-contributors) | CONTRIBUTING 负责贡献流程和评审准备；仓库公开可见不代表授予开源许可 |
 
 具体内容归属、文档层级与治理流程是结合本项目的维护选择；上述资料不构成团队审批，也不规定唯一的企业工程目录。
