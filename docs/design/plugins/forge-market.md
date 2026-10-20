@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场插件详细设计 |
-| 版本 | V0.13.0 |
+| 版本 | V0.14.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -93,10 +93,12 @@ packages/forge-market/
 │   ├── persist.mjs           落盘：目标目录约束
 │   ├── cache.mjs             离线缓存：时间戳与过期判定
 │   ├── local-catalog.mjs     离线目录：从 JSON 文件读取条目
+│   ├── live-check.mjs        真实仓库验收：拉归档并按规则判定
 │   ├── routes.mjs            宿主路由：catalog、detail、缓存回退
 │   ├── registration.mjs      生成 profile 登记行与说明
 │   ├── validate.mjs          包格式与 patch 内容校验
 │   └── policy.mjs            安装策略与 engines 范围判定
+├── scripts/live-check.mjs    验收脚本入口（手动执行，不进 CI）
 └── test/                     单元、契约、端到端与测试支撑
 ```
 

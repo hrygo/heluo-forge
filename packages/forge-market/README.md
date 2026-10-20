@@ -90,6 +90,16 @@ src/market-tools.mjs  四个工具的定义与执行
 src/index.mjs         插件入口：注册工具、读取配置
 ```
 
+## 真实仓库验收
+
+上线前对一个真实 Gitee 仓库跑一次只读检查：
+
+```sh
+node scripts/live-check.mjs --repo https://gitee.corp.example/g/demo --tag v0.1.0
+```
+
+它拉取 tag 归档，算摘要，解包并按包格式规则判定，逐步输出 `ok` / `FAIL`。不写仓库、不改 profile，**不进 CI**（需要网络与内网权限）。
+
 ## 测试
 
 ```sh
