@@ -22,6 +22,7 @@
 | [总体架构设计](docs/platform-architecture.md) | L1 架构：插件形态、软件包组合、领域设计、标准符合性、安全、ADR | 架构评审、各团队负责人 |
 | [推广实施方案](docs/rollout-plan.md) | L2 执行：WBS、Fork 选型、验收 A1–A14、风险、待确认事项 | PM、实施团队 |
 | [文档清单](docs/DOCUMENT-REGISTER.md) | 全部文档的编号、版本、状态、负责团队与门禁 | 全体 |
+| [协作规范](AGENTS.md) | 文档体系、变更流程、验证要求与禁止事项 | 全体协作者与 agent |
 | [子文档索引](docs/subdocs/README.md) | 十份团队交付物的入口、责任、门禁与状态 | 各团队负责人 |
 | [分层架构图](docs/assets/architecture-layers.png) | 客户端 / 运行时 / 插件 / 平台四层 | 汇报与评审 |
 | [能力价值矩阵](docs/assets/capability-value-matrix.png) | 哪些能力随模型与宿主增强而升值 | 决策沟通 |
@@ -55,6 +56,7 @@
 
 ```text
 corp-dsh/
+├── AGENTS.md
 ├── README.md
 └── docs/
     ├── DOCUMENT-REGISTER.md
