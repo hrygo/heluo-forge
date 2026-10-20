@@ -1,5 +1,5 @@
 import { readCache, writeCache } from './cache.mjs';
-import { filterEntries, normalizeEntry, sortEntries } from './catalog.mjs';
+import { filterEntries, normalizeEntry, pickUpdate, sortEntries } from './catalog.mjs';
 import { downloadArchive, installPlugin } from './install.mjs';
 import { planInstall } from './installer.mjs';
 import { persistFiles } from './persist.mjs';
@@ -107,6 +107,25 @@ export function buildMarketTools(client, options = {}) {
         if (!allowedHosts.includes(host)) return { ok: false, reason: 'host-not-allowed' };
         const result = await client.submit({ name, repo, tag, summary, scenarios });
         return { ok: true, state: result?.state ?? 'pending' };
+      },
+    ),
+    tool(
+      'market_check_update',
+      'Compare an installed version with the latest listed one; changes nothing.',
+      {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'exact package name' },
+          installedVersion: { type: 'string', description: 'version currently installed on this machine' },
+        },
+        required: ['name', 'installedVersion'],
+        additionalProperties: false,
+      },
+      async ({ name, installedVersion }) => {
+        const raw = await client.detail(name);
+        const normalized = normalizeEntry(raw?.entry ?? raw);
+        if (!normalized.ok) return normalized;
+        return pickUpdate(normalized.entry, installedVersion);
       },
     ),
     tool(

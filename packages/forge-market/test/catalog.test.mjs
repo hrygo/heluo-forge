@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterEntries, normalizeEntry, normalizeVersion, sortEntries } from '../src/catalog.mjs';
+import { compareVersions, filterEntries, normalizeEntry, normalizeVersion, pickUpdate, sortEntries } from '../src/catalog.mjs';
 
 const entry = (name, stars, downloads) => ({
   name,
@@ -58,4 +58,17 @@ test('derives a tag only when the service omits one', () => {
 test('defaults title to the package name', () => {
   const result = normalizeEntry({ name: '@heluo/a', version: '0.1.0' });
   assert.equal(result.entry.title, '@heluo/a');
+});
+
+test('compares versions numerically, not as strings', () => {
+  assert.equal(compareVersions('0.10.0', '0.9.9'), 1);
+  assert.equal(compareVersions('0.2.1', '0.2.1'), 0);
+  assert.equal(compareVersions('0.2.0', '0.2.1'), -1);
+});
+
+test('reports an update only when the listed version is newer', () => {
+  const entry = normalizeEntry({ name: '@heluo/a', version: '0.3.0', versions: ['0.2.0', '0.3.0'] }).entry;
+  assert.deepEqual(pickUpdate(entry, '0.2.0'), { updateAvailable: true, installed: '0.2.0', latest: '0.3.0', reason: null });
+  assert.equal(pickUpdate(entry, '0.3.0').updateAvailable, false);
+  assert.equal(pickUpdate(entry, '').reason, 'no-installed-version');
 });

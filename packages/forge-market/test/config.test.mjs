@@ -24,7 +24,7 @@ test('apply registers tools and passes cache and target through', () => {
     { tools: { register: (definition) => { registered.push(definition); return () => {}; } } },
     { serviceUrl: 'https://plugins.corp.example', cachePath: '/tmp/c.json', targetDir: '/tmp/plugins' },
   );
-  assert.equal(registered.length, 6);
+  assert.equal(registered.length, 7);
   assert.equal(typeof dispose, 'function');
 
   const registration = registered.find((tool) => tool.name === 'market_registration');

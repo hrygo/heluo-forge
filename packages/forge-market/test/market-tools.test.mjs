@@ -65,6 +65,7 @@ test('exposes exactly the documented tools', () => {
     'market_search',
     'market_detail',
     'market_submit',
+    'market_check_update',
     'market_registration',
     'market_install',
     'market_plan_install',
@@ -120,4 +121,11 @@ test('a throwing client becomes a structured failure, not a crash', async () => 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'internal');
   assert.match(result.detail, /boom/);
+});
+
+test('check_update answers without touching the service state', async () => {
+  const tools = buildMarketTools(client);
+  const result = await call(tools, 'market_check_update', { name: '@heluo/b', installedVersion: '0.1.0' });
+  assert.equal(result.updateAvailable, true);
+  assert.equal(result.latest, '0.2.0');
 });

@@ -48,3 +48,27 @@ export function filterEntries(entries, query) {
     [entry.name, entry.title, entry.summary, ...entry.scenarios].join(' ').toLowerCase().includes(needle),
   );
 }
+
+export function compareVersions(a, b) {
+  const parse = (value) => String(value ?? '').split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  for (let index = 0; index < 3; index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+export function pickUpdate(entry, installedVersion) {
+  if (!installedVersion) return { updateAvailable: false, reason: 'no-installed-version' };
+  const latest = entry?.versions?.[entry.versions.length - 1]?.version ?? entry?.version;
+  if (!latest) return { updateAvailable: false, reason: 'no-latest-version' };
+  const order = compareVersions(latest, installedVersion);
+  return {
+    updateAvailable: order > 0,
+    installed: String(installedVersion),
+    latest: String(latest),
+    reason: order > 0 ? null : 'up-to-date',
+  };
+}
