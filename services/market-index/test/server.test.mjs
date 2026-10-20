@@ -30,7 +30,13 @@ test('serves the catalog sorted by stars and filters by keyword', async () => {
     const detail = await (await fetch(`${base}/api/plugins/${encodeURIComponent('@heluo/a')}`)).json();
     assert.equal(detail.entry.title, '网关');
     const metrics = await (await fetch(`${base}/api/metrics?plugin=${encodeURIComponent('@heluo/b')}`)).json();
-    assert.deepEqual(metrics, { downloads: 1, stars: 7 });
+    assert.deepEqual(metrics, {
+      downloads: 1,
+      stars: 7,
+      countsPersisted: false,
+      starsSource: 'catalog',
+      starsSyncedAt: null,
+    });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

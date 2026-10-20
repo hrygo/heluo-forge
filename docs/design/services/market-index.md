@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.22.0 |
+| 版本 | V0.23.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -83,7 +83,7 @@
 GET  /api/plugins                  已实现；条目列表与筛选；`mine=1&submitter=` 只返回该提交方的条目与待审记录，缺 submitter 返回 400 `missing-submitter`
 GET  /api/plugins/{name}           已实现；详情、版本、聚合分；响应为 `{ entry }`
 POST /api/plugins                  已实现；提交或更新条目
-GET  /api/metrics?plugin=          已实现；下载量与 star
+GET  /api/metrics?plugin=          已实现；下载量与 star，并返回计数是否落盘、star 来源与同步时间
 POST /api/admin/review             已实现；上架、退回、撤回
 GET  /api/discover/gitee           规划；扫描专门 group 的仓库尚未实现
 ```
@@ -105,6 +105,31 @@ GET  /api/admin/unindexed          已实现（返回空列表）；未收录条
 
 `revoke` 不带 `version` 时整条下架；带 `version` 时只标记该版本（下载端点返回 409），条目仍可安装其余版本。响应返回 `{ name, version?, state }`。
 
+### 5.2 指标口径与可信度
+
+下载量与 star 是排序和展示的依据，**不标口径就会误导**。当前实现如下：
+
+| 指标 | 实际含义 | 参考实现的持久化 | 展示要求 |
+|---|---|---|---|
+| `downloads` | 发放归档地址的次数；**不是安装成功数**（客户端取到地址后可能失败） | 只有启动时给了 `--counts` 才写文件；去重集合在内存，重启后同机器同日可重复计数 | 必须写成「下载请求数」 |
+| `stars` | 目录文件里记录的值 | **不写入、不同步**；上架时写 0 | 必须标注来源与时间，不得称为「热度」 |
+
+因此 `/api/metrics` 除数值外返回三个口径字段：
+
+| 字段 | 含义 |
+|---|---|
+| `countsPersisted` | 计数是否写盘；`false` 表示重启即归零，数字只反映本次进程 |
+| `starsSource` | `catalog` 表示来自目录文件，不是 Gitee 实时值 |
+| `starsSyncedAt` | star 最近同步时间；参考实现恒为 `null` |
+
+消费方规则：
+
+- `starsSyncedAt` 为 `null` 时，排序只能称为「按目录记录值排序」，不得表述为热门排序
+- `countsPersisted` 为 `false` 时，不得展示累计下载量，只能展示本次进程内的次数
+- 面板与工具输出同一口径；不得一处显示「下载量」另一处显示「安装量」
+
+持久化与 star 同步分别由 #5、#9 跟踪；在两者落地前，上述字段是唯一诚实的表达方式。
+
 数据模型要点：
 
 | 实体 | 关键字段 |
@@ -112,7 +137,7 @@ GET  /api/admin/unindexed          已实现（返回空列表）；未收录条
 | plugin | `name`、`title`、`summary`、`scenarios`、`maintainer`、`repo`、`status`；`maintainer` 由服务端按 group 成员解析，解析不到时为空字符串，表示「未知」而非「无维护人」；参考实现不连接 Gitee 成员接口，故恒为空 |
 | version | `version`、`tag`、`archiveUrl`、`engines`、`submittedAt` |
 | review_task | 条目、状态、评审人、理由、时间 |
-| metric | 条目、`downloads`、`stars`、`syncedAt` |
+| metric | 条目、`downloads`、`stars`、`syncedAt`；参考实现返回 `countsPersisted`、`starsSource`、`starsSyncedAt` 作为口径说明 |
 
 字段级约定（客户端与目录都按此命名）：
 

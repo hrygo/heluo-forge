@@ -18,7 +18,7 @@ function matches(entry, query) {
   return [entry.name, entry.title, entry.summary, ...(entry.scenarios ?? [])].join(' ').toLowerCase().includes(needle);
 }
 
-export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), counts = {}, saveCounts, adminToken = '', today = () => new Date().toISOString().slice(0, 10) } = {}) {
+export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), counts = {}, saveCounts, adminToken = '', starsSyncedAt = null, today = () => new Date().toISOString().slice(0, 10) } = {}) {
   // 目录文件可能不写这些字段；对外一律给出确定的形状。
   entries = entries.map((entry) => ({
     maintainer: '',
@@ -188,7 +188,14 @@ export function createMarketApp({ entries = [], reviews = [], audit = [], seen =
     if (url.pathname === '/api/metrics' && req.method === 'GET') {
       const entry = byName().get(url.searchParams.get('plugin') ?? '');
       if (!entry) return send(404, { error: 'not-found' });
-      return send(200, { downloads: entry.downloads ?? 0, stars: entry.stars ?? 0 });
+      // 数字必须带出处：star 只来自目录文件、从不更新；下载量是否落盘取决于启动参数。
+      return send(200, {
+        downloads: entry.downloads ?? 0,
+        stars: entry.stars ?? 0,
+        countsPersisted: typeof saveCounts === 'function',
+        starsSource: 'catalog',
+        starsSyncedAt,
+      });
     }
 
     return send(404, { error: 'not-found' });
