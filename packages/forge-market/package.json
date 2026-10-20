@@ -1,6 +1,6 @@
 {
   "name": "@heluo/forge-market",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Point the DSH plugin market at the enterprise registry and enforce install policy",

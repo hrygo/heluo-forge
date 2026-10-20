@@ -12,6 +12,14 @@
 | 详细设计 | [DESIGN-007](../../docs/design/plugins/forge-market.md) |
 | 实现状态 | 策略、格式校验、目录、服务客户端、安装规划与三个市场工具已实现并有测试；bundle 挂载待实机核验 |
 
+## 用途
+
+让 DSH 里的 agent 与开发者从企业 Gitee 的专门 group 发现、校验并安装插件，并把未收录原因说清楚。
+
+## 维护人
+
+平台组。变更走仓库评审，包版本随设计文档同步。
+
 ## 边界
 
 - 企业市场与官方市场并存：内部渠道管精选与分发，官方入口默认保留。
@@ -39,7 +47,9 @@ insert:
 | `market_search` | 按关键词检索，按 star、下载量排序 | 否 |
 | `market_detail` | 条目详情、版本、`engines.dsh`、仓库地址 | 否 |
 | `market_submit` | 提交插件，校验标签格式与仓库域名 | 是（提交待审） |
-| `market_install` | 解析标签、下载归档、校验摘要、解包、必要时落盘 | 是（仅落盘） |
+| `market_registration` | 给出登记到 profile 的 loader 行与两种登记路径 | 否 |
+| `market_plan_install` | 只解析标签与仓库，不下载 | 否 |
+| `market_install` | 下载归档、校验摘要、解包、必要时落盘 | 是（仅落盘） |
 
 `market_search` 在服务不可达时回退到本地缓存，并返回 `source: "cache"` 与 `stale` 标记；配置项 `cachePath` 指向缓存文件，未配置则不做缓存。
 
