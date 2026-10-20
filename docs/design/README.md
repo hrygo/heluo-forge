@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.1.18 |
+| 版本 | V0.1.19 |
 | 文档状态 | 生效 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组 |
@@ -33,7 +33,7 @@
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | aarch64 产物、凭据注入、结构化输出、只读命令面 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案 | aarch64 产物、环境变量鉴权、JSON 稳定性、命令面 |
 | `@heluo/forge-sdd` | Skill pack + CLI | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案 | CI 触发方式、原子提交边界、产物与需求编号联动 |
-| `@heluo/forge-market` | 客户端插件（fork 改造） | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 上游 UI 扩展点、Gitee 归档可直接安装、评审时限 |
+| `@heluo/forge-market` | 客户端插件（fork 改造） | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 面板注册方式、卡片可复用范围、归档可直接安装、镜像策略 |
 
 设计文档路径相对本目录。详细设计落盘时才创建 `plugins/` 目录与对应文件，不预建空文件。
 
