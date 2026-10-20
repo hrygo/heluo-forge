@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.17.0 |
+| 版本 | V0.18.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -102,7 +102,7 @@ GET  /api/admin/unindexed          未收录条目与原因，供诊断视图
 
 | 实体 | 关键字段 |
 |---|---|
-| plugin | `name`、`title`、`summary`、`scenarios`、`maintainer`、`repo`、`status` |
+| plugin | `name`、`title`、`summary`、`scenarios`、`maintainer`、`repo`、`status`；`maintainer` 由服务端按 group 成员解析，解析不到时为空字符串，表示「未知」而非「无维护人」；参考实现不连接 Gitee 成员接口，故恒为空 |
 | version | `version`、`tag`、`archiveUrl`、`engines`、`submittedAt` |
 | review_task | 条目、状态、评审人、理由、时间 |
 | metric | 条目、`downloads`、`stars`、`syncedAt` |

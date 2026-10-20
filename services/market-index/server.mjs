@@ -19,6 +19,8 @@ function matches(entry, query) {
 }
 
 export function createMarketApp({ entries = [], reviews = [], audit = [], seen = new Map(), today = () => new Date().toISOString().slice(0, 10) } = {}) {
+  // 目录文件可能不写这些字段；对外一律给出确定的形状。
+  entries = entries.map((entry) => ({ maintainer: '', scenarios: [], ...entry }));
   const byName = () => new Map(entries.map((entry) => [entry.name, entry]));
 
   // 计数按（条目, 机器哈希, 日）去重：同一天重复安装不重复计数，

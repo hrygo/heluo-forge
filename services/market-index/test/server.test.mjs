@@ -181,3 +181,15 @@ test('approval keeps the submitted title, summary and scenarios', async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('maintainer is empty because the reference service cannot resolve members', async () => {
+  const app = createMarketApp({ entries });
+  const server = await listen(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const detail = await (await fetch(`${base}/api/plugins/${encodeURIComponent('@heluo/a')}`)).json();
+    assert.equal(detail.entry.maintainer, '');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
