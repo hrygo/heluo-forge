@@ -20,11 +20,15 @@ test('detects a digest mismatch', () => {
   assert.equal(verifyDigest(bytes, '').reason, 'no-digest');
 });
 
-test('rejects traversal, absolute and unexpected paths', () => {
-  assert.equal(checkArchivePaths(['package.json', 'src/index.mjs']).ok, true);
-  const bad = checkArchivePaths(['../evil', '/etc/passwd', 'docs/readme.md']);
+test('rejects traversal and absolute paths, skips harmless extras', () => {
+  const ok = checkArchivePaths(['package.json', 'src/index.mjs', 'docs/readme.md', 'LICENSE']);
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.write, ['package.json', 'src/index.mjs']);
+  assert.deepEqual(ok.skipped, ['docs/readme.md', 'LICENSE']);
+
+  const bad = checkArchivePaths(['../evil', '/etc/passwd', 'package.json']);
   assert.equal(bad.reason, 'unsafe-path');
-  assert.deepEqual(bad.detail, ['../evil', '/etc/passwd', 'docs/readme.md']);
+  assert.deepEqual(bad.detail, ['../evil', '/etc/passwd']);
 });
 
 test('skips revoked versions and refuses an explicitly revoked one', () => {

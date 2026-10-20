@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-const ALLOWED_PREFIXES = ['package.json', 'cordis.patch.yml', 'README.md', 'src/', 'ui/', 'locale/', 'lib/'];
+export const ALLOWED_PREFIXES = ['package.json', 'cordis.patch.yml', 'README.md', 'src/', 'ui/', 'locale/', 'lib/'];
 
 export function digestOf(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -45,13 +45,19 @@ export function verifyDigest(bytes, expected) {
 
 export function checkArchivePaths(paths) {
   const bad = [];
+  const write = [];
+  const skipped = [];
   for (const path of paths) {
     const normalized = String(path).replace(/\\/g, '/');
+    // 越界路径一律拒绝：这是安全问题，不是格式问题。
     if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.split('/').includes('..')) {
       bad.push(path);
       continue;
     }
-    if (!ALLOWED_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(prefix))) bad.push(path);
+    // 仓库里会有 LICENSE、docs/、测试等；只写白名单内的文件，其余跳过并如实上报。
+    if (ALLOWED_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(prefix))) write.push(path);
+    else skipped.push(path);
   }
-  return bad.length ? { ok: false, reason: 'unsafe-path', detail: bad } : { ok: true };
+  if (bad.length) return { ok: false, reason: 'unsafe-path', detail: bad };
+  return { ok: true, write, skipped };
 }

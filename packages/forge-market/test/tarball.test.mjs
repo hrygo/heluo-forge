@@ -81,3 +81,15 @@ test('refuses a gzip bomb without inflating it', () => {
   const result = extractTarball(bomb, { maxBytes: 1024 * 1024 });
   assert.equal(result.reason, 'archive-too-large');
 });
+
+test('strips the Gitee top level directory and reports skipped files', () => {
+  const archive = tar([
+    ['demo-v0.1.0/package.json', '{"name":"@heluo/demo"}'],
+    ['demo-v0.1.0/src/index.mjs', 'export {};'],
+    ['demo-v0.1.0/LICENSE', 'MIT'],
+  ]);
+  const result = extractTarball(archive);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.files.map((file) => file.path), ['package.json', 'src/index.mjs']);
+  assert.deepEqual(result.skipped, ['LICENSE']);
+});

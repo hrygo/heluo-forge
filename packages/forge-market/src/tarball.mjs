@@ -1,5 +1,5 @@
 import { gunzipSync } from 'node:zlib';
-import { checkArchivePaths } from './installer.mjs';
+import { ALLOWED_PREFIXES, checkArchivePaths } from './installer.mjs';
 
 const BLOCK = 512;
 const MAX_BYTES = 64 * 1024 * 1024;
@@ -13,6 +13,16 @@ function readString(block, offset, length) {
 function readOctal(block, offset, length) {
   const text = readString(block, offset, length).trim();
   return text ? Number.parseInt(text, 8) : 0;
+}
+
+function stripCommonRoot(files) {
+  if (files.length < 2) return files;
+  const root = files[0].path.split('/')[0];
+  // 顶层本身就是白名单文件时说明归档已经是扁平的，不能再剥。
+  if (!root || ALLOWED_PREFIXES.includes(root)) return files;
+  const shared = files.every((file) => file.path.startsWith(`${root}/`));
+  if (!shared) return files;
+  return files.map((file) => ({ ...file, path: file.path.slice(root.length + 1) }));
 }
 
 export function extractTarball(bytes, { maxBytes = MAX_BYTES } = {}) {
@@ -50,7 +60,16 @@ export function extractTarball(bytes, { maxBytes = MAX_BYTES } = {}) {
   }
 
   if (!files.length) return { ok: false, reason: 'empty-archive' };
-  const safe = checkArchivePaths(files.map((file) => file.path));
+
+  // Gitee 归档带 `<repo>-<tag>/` 顶层目录；不去掉的话所有路径都不匹配白名单。
+  const stripped = stripCommonRoot(files);
+
+  const safe = checkArchivePaths(stripped.map((file) => file.path));
   if (!safe.ok) return { ok: false, reason: safe.reason, detail: safe.detail };
-  return { ok: true, files };
+  const keep = new Set(safe.write);
+  return {
+    ok: true,
+    files: stripped.filter((file) => keep.has(file.path)),
+    skipped: stripped.filter((file) => !keep.has(file.path)).map((file) => file.path),
+  };
 }
