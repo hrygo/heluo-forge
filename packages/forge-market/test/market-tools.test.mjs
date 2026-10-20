@@ -383,3 +383,22 @@ test('search says where the entries came from', async () => {
   assert.equal((await call(localTools, 'market_search', {})).source, 'local');
   assert.equal((await call(buildMarketTools(client), 'market_search', {})).source, 'service');
 });
+
+test('search tells the caller when it truncated', async () => {
+  const many = { list: async () => ({ entries: Array.from({ length: 5 }, (_, i) => ({ name: `@heluo/p${i}`, version: '0.1.0', repo: 'https://gitee.corp.example/g/p' })) }) };
+  const tools = buildMarketTools(many);
+  const page = await call(tools, 'market_search', { limit: 2 });
+  assert.equal(page.total, 5);
+  assert.equal(page.returned, 2);
+  assert.equal(page.truncated, true);
+  const all = await call(tools, 'market_search', { limit: 50 });
+  assert.equal(all.truncated, false);
+  assert.equal(all.returned, 5);
+});
+
+test('search clamps a nonsensical limit instead of returning nothing', async () => {
+  const tools = buildMarketTools(client);
+  assert.equal((await call(tools, 'market_search', { limit: 0 })).returned, 1);
+  assert.equal((await call(tools, 'market_search', { limit: -3 })).returned, 1);
+  assert.equal((await call(tools, 'market_search', { limit: Number.NaN })).total, 2);
+});

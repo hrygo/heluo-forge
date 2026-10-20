@@ -99,8 +99,18 @@ export function buildMarketTools(client, options = {}) {
           source = 'cache';
           stale = cached.stale;
         }
-        const matched = sortEntries(filterEntries(entries, query), sort).slice(0, Math.max(1, limit));
-        return { total: matched.length, source, stale, entries: matched };
+        const all = sortEntries(filterEntries(entries, query), sort);
+        const size = Math.min(200, Math.max(1, Number.isFinite(limit) ? Math.trunc(limit) : 20));
+        const page = all.slice(0, size);
+        // total 是命中总数，不是本页条数：否则调用方会把截断误当成全部。
+        return {
+          total: all.length,
+          returned: page.length,
+          truncated: page.length < all.length,
+          source,
+          stale,
+          entries: page,
+        };
       },
     ),
     tool(
