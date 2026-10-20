@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.6.0 |
 | 文档状态 | 草案 |
 | 密级 | 内部 |
 | 编制 | DSH 平台组（代拟） |
@@ -107,8 +107,16 @@ GET  /api/discover/gitee           扫描专门 group 的仓库
 | `missing-engines` \| `bad-engines` | 未声明或无法解析 `engines.dsh` | 不进索引 |
 | `install-script` | 声明了 `preinstall`、`install` 或 `postinstall` | 不进索引 |
 | `missing-section` | README 缺 `## 用途` 或 `## 维护人` | 不进索引 |
+| `missing-name` | `package.json` 缺 `name` | 不进索引 |
+| `patch-js-expr` | `cordis.patch.yml` 含 `!!js` 表达式 | 不进索引 |
+| `patch-disables-row` | 补丁里出现 `disabled: true` | 不进索引 |
+| `patch-overrides-protected` | 覆盖 IAM、策略、凭据、沙箱或权限预设的行 id | 不进索引 |
+| `patch-include` | 使用 `cordis:include` 加载包外文件 | 不进索引 |
+| `patch-unsafe-path` | 引用包外相对路径或绝对路径 | 不进索引 |
 
-判定逻辑由 `packages/forge-market/src/validate.mjs` 承担，规则变更需同步该文件与用例。
+`cordis.patch.yml` 会被 loader 执行，按代码对待而非配置：格式校验通过后仍要过内容规则，两者同属索引前置条件。
+
+判定逻辑由 `packages/forge-market/src/validate.mjs` 承担，规则变更需同步该文件、本表与 `test/error-codes.test.mjs`。
 
 ## 6. 权限、凭据与数据
 
