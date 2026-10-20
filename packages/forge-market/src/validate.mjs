@@ -26,7 +26,16 @@ export function validatePlugin(input, policy = {}) {
   const tag = String(input?.tag ?? '');
 
   for (const file of REQUIRED_FILES) {
-    if (!files.has(file)) errors.push({ code: 'missing-file', detail: file });
+    if (files.has(file)) continue;
+    // "缺 README.md" 最常见的真实原因是它放在了 docs/ 下；直接指出来，别让人猜。
+    const misplaced = [...files].filter((path) => path.endsWith(`/${file}`));
+    errors.push({
+      code: 'missing-file',
+      detail: file,
+      hint: misplaced.length
+        ? `found ${misplaced.join(', ')}; ${file} must be at the repository root`
+        : `${file} must be at the repository root`,
+    });
   }
 
   const name = String(manifest.name ?? '');

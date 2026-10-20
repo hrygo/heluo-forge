@@ -54,3 +54,17 @@ test('rejects patches that weaken the security baseline', () => {
 test('requires the documented sections', () => {
   assert.ok(codes({ ...good, readme: '# 网关\n' }).includes('missing-section'));
 });
+
+test('says where a missing file was found instead', () => {
+  const result = validatePlugin({
+    files: ['package.json', 'cordis.patch.yml', 'docs/README.md'],
+    manifest: { name: '@heluo/a', version: '0.1.0', engines: { dsh: '>=0.2.1' } },
+    readme: '## 用途\n\nx\n\n## 维护人\n\ny\n',
+    patch: 'insert: []\n',
+    tag: 'v0.1.0',
+  });
+  const missing = result.errors.find((error) => error.code === 'missing-file');
+  assert.equal(missing.detail, 'README.md');
+  assert.match(missing.hint, /docs\/README\.md/);
+  assert.match(missing.hint, /repository root/);
+});
