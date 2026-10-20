@@ -34,7 +34,7 @@
 | CORP-DSH-DESIGN-009 | DevOps 接入详细设计 | [design/plugins/forge-devops.md](<design/plugins/forge-devops.md>) | V0.1 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.1 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-011 | DevOps MCP 服务详细设计 | [design/services/devops-mcp.md](<design/services/devops-mcp.md>) | V0.1 | 草案 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-012 | 插件市场服务详细设计 | [design/services/market-index.md](<design/services/market-index.md>) | V0.13.0 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-012 | 插件市场服务详细设计 | [design/services/market-index.md](<design/services/market-index.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V1.6 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
 | CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V1.3 | 评审稿 | 平台组 | G0 |
