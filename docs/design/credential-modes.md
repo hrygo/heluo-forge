@@ -6,16 +6,16 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-001 |
 | 文档名称 | 网关凭据双模式支持设计 |
-| 版本 | V0.1.1 |
+| 版本 | V0.1.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | 待网关与 IAM 确认接口后进入评审 |
 
-> 编制依据：2026-10-20 核对[总体架构](../architecture/platform-architecture.md) §7.1—§7.2、[网关契约](../contracts/gateway-contract.md) §4、[静态 Key 方案](../architecture/gateway-static-key-option.md)与[设计索引](README.md)。已验：现有文档的 seam 与凭据引用约定。未验：目标 DSH 版本中 `llm-pi-ai` 解析引用的时机、`ctx.credentials` 的跨进程互斥行为；两者均需按 P0 实测。
+> 编制依据：2026-10-20 核对[总体架构](../architecture/platform-architecture.md) §7.1—§7.2、[网关契约](../contracts/gateway-contract.md) §4、[静态 Key 方案](../architecture/gateway-static-key-option.md)与[设计索引](README.md)。2026-10-21 补充核对：`dsh-llm-pi-ai` 包文档说明 `apiKeyEnv` 按请求解析；`dsh-credentials-local` 默认把 `refs`/`records` 写入 `$DSH_HOME/.credentials.yaml`（0600、明文 YAML），OS keychain provider 未随 `0.2.1-rc.2` 提供。已验：现有文档的 seam 与凭据引用约定。未验：`ctx.credentials` 的跨进程互斥行为、双端 Agent 子进程对 `$DSH_HOME/**` 的实际拒绝覆盖；两者均需按 P0/A4 实测。
 >
 > 关联文档：[总体架构设计](../architecture/platform-architecture.md)、[AI 网关契约](../contracts/gateway-contract.md)、[网关静态 Key 方案](../architecture/gateway-static-key-option.md)、[工程开发与发布约定](../engineering/development-conventions.md)。
 
@@ -67,7 +67,7 @@ interface GatewayCredentialProvider {
 | 401 处置 | 刷新后至多重试一次 | 提示重新签发 |
 | 账号切换 | 清理镜像与按资源缓存 | 清理镜像，要求重新粘贴 |
 | 探测方式 | 令牌有效性与到期时间 | 一次最小调用 |
-| 存储位置 | `CredentialKey` 记录 | 系统凭据库，配置文件只存引用 |
+| 存储位置 | `CredentialKey` 记录 | 凭据记录；默认 `dsh-credentials-local` 的 0600 YAML，系统凭据库未随目标版本提供 |
 
 两者都不把值写进日志、配置明文或模型上下文。
 
@@ -121,7 +121,7 @@ interface GatewayCredentialProvider {
 
 ## 9. 安全边界
 
-- 凭据值只存在于系统凭据库与该引用，不落配置文件明文。
+- 凭据值只存在于凭据存储与该引用；默认 `dsh-credentials-local` 为 0600 明文 YAML，同 UID 的 Agent 可读，必须配合 A4 的文件/子进程拒绝；keychain provider 落地后再收紧。
 - 静态 Key 不参与刷新，避免"用长期凭据兑换短期凭据"的混合路径。
 - 退出时两种模式都清理镜像与缓存；令牌模式额外调用撤销，静态模式不代用户撤销（撤销在控制台）。
 - 切换模式必须留下审计事件：时间、旧模式、新模式、操作者。
@@ -147,7 +147,7 @@ interface GatewayCredentialProvider {
 
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
-| `llm-pi-ai` 解析引用的时机与缓存策略 | 平台组（实测） | 令牌刷新是否能让新值生效 |
+| 系统凭据库 provider 是否随目标版本提供 | 平台组 | 0600 明文的处置与是否另立 provider |
 | 网关是否支持 Key 与令牌并行 | 网关 | `auto` 是否可用 |
 | 静态 Key 的 TTL 与轮换提示 | 网关、安全 | 探测与提示节奏 |
 | 模式配置属于用户级还是设备级 | 平台、IT | 切换粒度与支持成本 |

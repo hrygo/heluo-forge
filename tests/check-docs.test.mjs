@@ -151,7 +151,7 @@ ${Array.from({ length: 14 }, (_, i) => `| A${i + 1} | 验收 ${i + 1} |`).join('
 
 ## 4. 契约
 
-${questions('IAM', 7)}
+${questions('IAM', 18)}
 
 ${questions('GW', 8)}
 
@@ -342,7 +342,7 @@ test('question count drift is reported', () => {
   try {
     mutate(root, 'docs/collaboration/team-confirmation-letters.md', '| CONF-IAM-07 | 问题 7 |', '');
     const { errors } = checkDocs(root);
-    assert.ok(errors.some((error) => error.includes('45 unique question rows')), errors.join('\n'));
+    assert.ok(errors.some((error) => error.includes('56 unique question rows')), errors.join('\n'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

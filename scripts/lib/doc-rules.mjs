@@ -255,7 +255,7 @@ function checkLetters(root, texts) {
   const path = 'docs/collaboration/team-confirmation-letters.md';
   const letters = texts.get(path);
   if (!letters) return [`${path}: missing`];
-  const expected = { IAM: 7, GW: 8, DEVOPS: [1, 2, 3, 6], GITEE: 5, IT: 7, SEC: 7, PMO: 7 };
+  const expected = { IAM: 18, GW: 8, DEVOPS: [1, 2, 3, 6], GITEE: 5, IT: 7, SEC: 7, PMO: 7 };
   const allowed = (value) => (Array.isArray(value) ? value : Array.from({ length: value }, (_, i) => i + 1));
   const totalQuestions = Object.values(expected).reduce((sum, value) => sum + allowed(value).length, 0);
   const ids = [...letters.matchAll(/^\| (CONF-([A-Z]+)-(\d{2})) \|/gm)].map((match) => ({

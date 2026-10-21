@@ -6,184 +6,376 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.1.1 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-20 |
+| 最后更新 | 2026-10-21 |
 | 门禁 | G0 |
 | 模块状态 | 规划 |
 
-> 编制依据：2026-10-20 对目标环境已安装 DSH 包做**字符串级核验**（从打包产物提取包名与类型/方法标识）：`dsh-credentials`、`dsh-credentials-local`、`dsh-llm-pi-ai`、`dsh-llm-retry`、`dsh-settings`、`dsh-client-ui-settings-account`、`dsh-mcp-client`；`CredentialRef` 与 `CredentialKey` 品牌类型；`modifyRecord` / `deleteRecord` 及"提交后触发"的事件语义；模型命名空间键形如 `llm-pi-ai`。
-> **未核验**：提供者注册与事件订阅的准确 API 名、跨进程互斥的运行时语义、账户设置页的 slot 标识。以上均按字符串存在性推断，未做运行时实测，因此第 4、5 节出现的 API 形状标为"待实测"。
+> 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/麒麟实机。以上未核验项不写成已实现。
 >
-> 关联文档：[总体架构 §7.1](../../architecture/platform-architecture.md)、[网关契约 §4](../../contracts/gateway-contract.md)、[双模式凭据设计](../credential-modes.md)、[设计索引](../README.md)。
+> 关联文档：[总体架构](../../architecture/platform-architecture.md)、[网关契约](../../contracts/gateway-contract.md)、[双模式凭据](../credential-modes.md)、[企业组合包](forge-enterprise.md)、[模型网关](forge-gateway.md)、[设计索引](../README.md)、[需求基线](../../requirements/requirements-baseline.md)、[IAM 独立问询函](../../collaboration/iam-confirmation-letter.md)。
 
 ## 1. 结论
 
-本模块解决一件事：让 DSH 在本机稳定地拿到企业身份与可用令牌，并且只把"可用凭据"交给调用方。
+本模块把企业 IAM 做成 DSH 在企业内网的**唯一登录**：未登录时企业模型与企业工具全部不可用，登录后 DSH 只持有企业网关可用的身份与令牌。官方 DeepSeek 登录、官方模型路由、官方 API Key 与官方账户 UI 由 `@heluo/forge-enterprise` 在组合层禁用，本模块不保留任何回落路径。
 
-边界：身份由 IAM 判定，本模块不评估权限；令牌按资源签发，本模块不解释业务含义；凭据落盘走 DSH 既有凭据服务，不自建存储。
+登录解决的是“企业能力授权”，不是“打开 DSH 的准入”：应用外壳可以打开，但任何企业模型/工具调用在未登录时 fail closed，并给出重新登录入口。
 
-还缺三件事才能进实现：提供者与事件 API 的运行时实测、账户页 slot 标识、IAM 侧 `resource` 参数与轮换能力的书面确认。
+还缺四件事才能进实现：IAM 侧 `resource`、轮换/重用检测与撤销的书面确认；禁用官方四行后 shell/onboarding 的实测；0600 文件存储风险的接受或 keychain provider 的立项；账户页与首启提示的最小 UI 范围确认。本版按 O3 独占设计，不实现附加登录（additive）模式。
 
 ## 2. 目标与非目标
 
 **目标**
 
-- 用授权码 + PKCE 在本机完成登录，回调只监听 loopback。
-- 按 `(resource, scope)` 提供令牌，调用方不接触 refresh token。
-- 令牌与刷新记录进入 DSH 凭据服务，受其生命周期管理。
-- 退出时清理本地状态并按 RFC 7009 撤销。
+- 企业 IAM 是唯一登录；官方登录入口、官方模型路由、官方 API Key 路由均不可用。
+- 授权码 + PKCE（S256），系统浏览器，loopback 回调；回调挂在现有 `webServer` 的独立路径。
+- OIDC discovery 或显式端点；校验 `state`、`nonce`、`iss`、`aud`、签名算法、`exp`/`nbf` 与时钟容差。
+- 令牌记录进入 DSH 凭据服务；刷新在锁内 single-flight；调用方只拿 access token，不接触 refresh token。
+- 登录成功后把 access token 镜像到 `ENTERPRISE_ACCESS_TOKEN`，供 `llm-pi-ai` 按请求解析。
+- 账户页展示主体、到期、状态与登录/取消/退出；首次启动给出登录入口。
+- 退出按 RFC 7009 撤销，并清理本地记录与镜像；撤销失败可归因，不谎报成功。
 
 **非目标**
 
-- 不做企业授权判定，不做角色映射的权威源。
-- 不实现静态 Key 签发（见备选方案与双模式设计）。
-- 不改 DSH 核心，不 fork。
+- 不接管“打开 DSH”的入口门禁；未登录时只是企业能力不可用。
+- 不保留官方登录、官方模型、官方 API Key 或其他公网回落路由。
+- 不做 additive 双登录、多账号并存、静态 Key、MCP token broker、CLI 登录。
+- 不修改 DSH 核心，不 fork；若禁用官方行导致 shell 不可用，另提最小补丁评审，不在本设计默认接受。
+- 首版不做完整品牌 onboarding、余额/充值/用量页；只做账户页与首启提示，完整流程另行评估。
 
 ## 3. 需求与依赖
 
 | 需求/验收 | 关系 | 说明 |
 |---|---|---|
-| REQ 登录与单点 | 支撑 | 授权码 + PKCE，loopback 回调 |
-| REQ 令牌最小化 | 支撑 | 按资源取令牌，客户端不持上游密钥 |
-| REQ 可撤销 | 支撑 | 退出即撤销，重登不残留 |
-| 验收 A6 身份链路 | 支撑 | 令牌来源可追溯到 IAM 会话 |
+| REQ-01 / A1、A14 | 支撑 | 授权码 + PKCE、loopback 回调、错误 `state`/身份校验拒绝；未登录无企业模型 |
+| REQ-02 / A2 | 支撑 | 刷新成功无需重启；双进程不互相触发 `invalid_grant`；锁内刷新超时目标 ≤5 秒 |
+| REQ-05 / A2、A3 | 支撑 | 登录过期刷新一次后提示重登；额度耗尽不自动重试；不静默换模型 |
+| REQ-17 / A12 | 支撑 | IAM/凭据/必要审计缺失时，企业调用拒绝而不是降级 |
+| C1、C4 | 约束 | 只走企业网关；不保留公网路由；日志不含正文与令牌 |
 
 | 依赖 | 类型 | 版本约束 | 缺失时的行为 |
 |---|---|---|---|
-| `dsh-credentials` | 包 | 随目标 DSH | 不启动 IAM 模块，明确报错 |
-| `dsh-settings` | 包 | 随目标 DSH | 配置只读，切换模式不可用 |
-| IAM 授权服务器 | 服务 | OIDC + PKCE | 未配置即"未就绪"，不阻断其他插件 |
-| 网关验签能力 | 服务 | 见 GW-001 | 影响令牌是否可直用，不影响登录 |
+| `dsh-credentials` + `dsh-credentials-local` | 包 | 随目标 DSH `0.2.1-rc.2` | 无法读写记录；不进入 ready，明确报错 |
+| `dsh-web-server`（`ctx.webServer`） | 包 | 随目标 DSH | 无法注册回调；登录不可用 |
+| `dsh-settings` | 包 | 随目标 DSH | 配置不可写；按只读配置启动或报错 |
+| `dsh-llm-pi-ai` | 包 | 随目标 DSH | 无模型路由；不影响登录本身 |
+| `dsh-agent-default-model` | 包 | 随目标 DSH | 不自动设默认模型；用户手动选择 |
+| IAM OIDC 授权服务器 | 服务 | OIDC + PKCE；`resource` 待确认 | 未配置即 `unconfigured`；不阻断其他插件 |
+| `@heluo/forge-enterprise` | 包 | 同批次 | 官方行可能仍在位；本模块 `requireExclusive` 报独占冲突 |
+| `@heluo/forge-gateway` | 包 | 同批次 | 无 `ENTERPRISE_ACCESS_TOKEN` 消费方；登录成功也无模型可用 |
 
 ## 4. 扩展形态与边界
 
 | 项 | 内容 |
 |---|---|
-| 形态 | Host 插件 + Client 插件（账户页与登录引导） |
-| 运行位置 | 本机 Host；客户端只做展示与触发 |
-| 目标 DSH 与 SDK | 随目标版本；接口以实测为准 |
-| 使用的 seam 或服务 | 凭据服务（`CredentialRef`/`CredentialKey`）、设置服务、账户设置页 slot、模型提供者命名空间 |
-| 不修改的核心 | 凭据服务实现、模型调用链、上游 `llm-pi-ai` |
+| 形态 | Host 服务插件 + Client UI 插件 |
+| 运行位置 | 本机 Host；Client 只做展示、触发与状态订阅 |
+| 目标 DSH 与 SDK | `0.2.1-rc.2`；接口核验日期 2026-10-21 |
+| 使用的 seam 或服务 | `credentials`、`webServer`、`settings`、`llm-pi-ai`（消费方）、`agentDefaultModel` |
+| 不修改的核心 | 凭据服务实现、模型调用链、`webServer` 实现、官方账号包（仅组合层禁用） |
+| 登录入口 | Host 服务 `ctx.iam` + Remote 方法（Client 命名空间 `iam`）+ `watch` 状态流 |
+| 回调 | `webServer` 上的 `/iam/callback`；不复用官方 `/oauth/callback` |
 
-设计取舍：不新建存储，复用 `dsh-credentials`。理由是它的记录已带生命周期与提交后事件，自建存储会与它争夺同一份凭据的真相来源。
+### 4.1 官方行禁用与独占断言
+
+| Row id（目标 profile） | 包 | 处理 | 原因 |
+|---|---|---|---|
+| `deepseek-account` | `@deepseek-ai/dsh-deepseek-account-platform` | `disabled: true` | 官方登录与账号状态；内网不可用 |
+| `llm-deepseek-account` | `@deepseek-ai/dsh-llm-deepseek-account` | `disabled: true` | 官方 `deepseek-account` 模型路由 |
+| `llm-deepseek` | `@deepseek-ai/dsh-llm-deepseek-api-key` | `disabled: true` | 官方 API Key 旁路 |
+| `ui-settings-account` | `@deepseek-ai/dsh-client-ui-settings-account` | `disabled: true` | 官方账户页、侧栏入口与 onboarding |
+
+禁用由 `@heluo/forge-enterprise` 的补丁完成；row id 以目标 profile 实际值为准。补丁目标不存在时 Loader 会警告并跳过，**跳过不等于已禁用**，G0 必须在 desktop 与 web 两个 profile 各核验一次。官方账号 provider 已占用 `/oauth/callback`，本模块使用 `/iam/callback`，不依赖“官方行一定已被禁用”来避免冲突。
+
+本模块启动时检查 `ctx.get('deepseekAccount')`：若仍存在，记录 `exclusive-violation` 审计事件，不把状态标为 `ready`，不写 `ENTERPRISE_ACCESS_TOKEN`；由企业包修正组合。这样组合层禁用失败时是显式失败，而不是静默保留官方身份。
+
+### 4.2 为什么不用 `authorization` flow
+
+`ctx.authorization` 的 flow 适合“任意界面发起一次凭据获取”，并提供单次尝试与 commit 确认；本模块还要覆盖浏览器回调、刷新轮换、撤销与账户生命周期，flow 的 commit 只覆盖第一次写入。V1 采用与官方账号包同构的 Host service + Remote + `watch`，避免同一插件维护两套 attempt 状态。
+
+若后续需要被通用凭据 UI 发现，再单独评估注册 `authorization` flow 作为适配层，不把 flow 作为本设计的写入前提。
+
+### 4.3 回调与浏览器
+
+- 回调 URI = Client 传入的 `callbackOrigin` + `iam.redirectPath`；Host 校验 origin 与 `webServer` 实际 origin 一致（loopback 或受支持的本地转发 origin），且必须是 IAM 预注册的精确 URI；不使用随机端口，不另起监听器。
+- 回调只接受 `GET`，校验 `state` 与 PKCE；按官方账号包行为，回调请求以 state/PKCE 校验而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行；同时校验 `Host`/`Origin`。
+- Desktop 由 Host 打开系统浏览器（Windows `start`、麒麟 `xdg-open`）；Web 由页面在点击手势中预开标签页，弹窗被拦截时展示可复制链接。
+- 回调页只返回最小 HTML，不加载外部资源，不把 code/token 写入页面或日志；完成后尝试关闭标签页。
 
 ## 5. 接口与配置
 
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
 |---|---|---|---|---|
-| `iam.issuer` | string | 空 | 是 | 授权服务器标识，用于 `iss` 校验 |
-| `iam.clientId` | string | 空 | 是 | 本机公共客户端标识 |
-| `iam.scopes` | string[] | `openid profile` | 是 | 基础 scope，不含资源 scope |
-| `iam.callbackPort` | number | 0 | 否 | 0 表示随机端口，仅监听 127.0.0.1 |
+| `iam.discoveryUrl` | string | 空 | 条件 | OIDC discovery；与显式端点二选一 |
+| `iam.authorizationEndpoint` | string | 空 | 条件 | 显式端点；与 discovery 同时配置时优先 |
+| `iam.tokenEndpoint` | string | 空 | 条件 | 换 token |
+| `iam.jwksUri` | string | 空 | 条件 | ID Token 验签 |
+| `iam.revocationEndpoint` | string | 空 | 否 | RFC 7009；空则只做本地退出 |
+| `iam.endSessionEndpoint` | string | 空 | 否 | RP 登出；`logoutMode=rp` 时必填 |
+| `iam.clientId` | string | 空 | 是 | 本机公共客户端标识，无 client secret |
+| `iam.scopes` | string[] | `openid profile offline_access` | 是 | 基础 scope；不含资源 scope |
+| `iam.redirectPath` | string | `/iam/callback` | 否 | 必须与 IAM 注册的 redirect URI 精确匹配 |
+| `iam.postLogoutRedirectUri` | string | 空 | 否 | `logoutMode=rp` 时使用 |
+| `iam.gatewayResource` | string | 空 | 是 | 网关资源标识；决定 `resource` 与镜像 |
+| `iam.defaultProvider` | string | `enterprise` | 否 | 登录后默认模型所属 provider |
+| `iam.defaultModel` | string | 空 | 否 | 登录后默认模型；空则不自动切换 |
 | `iam.refreshSkewSeconds` | number | 60 | 否 | 到期前预刷新阈值 |
-| `iam.gatewayResource` | string | 空 | 否 | 网关资源标识；空时不镜像到模型引用 |
-| `iam.logoutMode` | `local` \| `rp` | `local` | 否 | 是否发起 RP 登出 |
+| `iam.attemptTimeoutSeconds` | number | 300 | 否 | 登录 attempt 总时限 |
+| `iam.httpTimeoutMs` | number | 10000 | 否 | 换 token / 撤销单次请求上限 |
+| `iam.logoutMode` | `local` / `rp` | `local` | 否 | 是否发起 RP 登出 |
+| `iam.requireExclusive` | boolean | `true` | 否 | 官方账号仍存在时拒绝就绪 |
 
-```ts title="导出面（示意，API 名待实测）"
-export interface IamSession {
-  readonly state: 'unconfigured' | 'ready' | 'expired' | 'error';
-  login(): Promise<void>;
-  logout(): Promise<void>;
+**导出面（V1）**
+
+```ts
+export type IamState =
+  | 'unconfigured'
+  | 'signed-out'
+  | 'authenticating'
+  | 'ready'
+  | 'expired'
+  | 'unreachable'
+  | 'error';
+
+export interface IamClientMetadata {
+  readonly version: string;
+  readonly locale: string;
+  readonly utcOffsetSeconds: number;
+}
+
+export interface IamPrincipal {
+  readonly issuer: string;
+  readonly subject: string;
+  readonly displayName?: string;
+  readonly groups?: readonly string[];
+}
+
+export interface IamView {
+  readonly state: IamState;
+  readonly principal?: IamPrincipal;
+  readonly expiresAt?: number;
+  readonly authorizationUrl?: string;
+  readonly attemptId?: string;
+  readonly error?: { readonly code: string; readonly message: string };
+}
+
+export interface IamAccount {
+  startSignIn(
+    client: IamClientMetadata,
+    callbackOrigin: string,
+    loginSource: 'web' | 'desktop',
+  ): Promise<IamView>;
+  cancelSignIn(attemptId: string): Promise<IamView>;
+  signOut(client: IamClientMetadata): Promise<IamView>;
+  getView(): Promise<IamView>;
+  watch(signal: AbortSignal, includeIdentityChanges?: boolean): AsyncIterable<IamView>;
+  getPrincipal(): IamPrincipal | undefined;
+  /** Host-only；V1 只用于网关资源，后续 MCP 另行评审 */
   tokenFor(resource: string): Promise<{ token: string; expiresAt: number }>;
 }
 ```
 
-不复制 IAM 与网关的字段表：令牌字段、错误码见[网关契约 §4](../../contracts/gateway-contract.md)与 IAM 提供的接口文档。
+Client 通过 `iam` Remote 命名空间调用 `startSignIn` / `cancelSignIn` / `signOut` / `getView` 并订阅 `watch`；`tokenFor` 不暴露给浏览器，`getPrincipal` 供 Host 内部 policy/audit 使用，Client 从 `IamView.principal` 取展示所需的最小主体。断线重连后重新 `getView`，不依赖内存事件重放。
+
+### 5.1 凭据记录
+
+`GrantRecord.payload` 由本插件解释，存储为带版本的对象；`modifyRecord` 是唯一写入路径，`set` 只用于镜像 access token。
+
+**IamGrantV1（示意）**
+
+```ts
+interface IamGrantV1 {
+  version: 1;
+  issuer: string;
+  subject: string;
+  clientId: string;
+  refreshToken: string;
+  refreshExpiresAt?: number;
+  accessToken: string;
+  accessExpiresAt: number;
+  scope: string;
+  resource: string;
+  obtainedAt: number;
+  authTime?: number;
+  /** 仅 logoutMode=rp 时保存；含身份 claims，按敏感数据对待 */
+  idToken?: string;
+}
+```
+
+记录 key 为 `heluo-iam/session`；版本不匹配时拒绝读取并要求重新登录，不在字段缺失时猜测迁移。官方账号的旧记录不自动删除：官方路由已禁用，token 无法用于企业调用；账户页提供“清理官方登录记录”操作，删除前需用户确认。
 
 ## 6. 权限、凭据与数据
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
-| refresh token | `CredentialKey` 记录，存系统凭据库或受控文件 | 直到撤销或轮换 | 写入失败即回滚会话，不进入就绪 |
-| access token | 内存 + 镜像到 `CredentialRef` | ≤60 分钟 | 刷新失败按错误码分流 |
-| 授权码与 verifier | 仅内存 | 单次登录 | 校验失败即丢弃 |
-| 日志 | 主体、资源、结果、耗时；不含令牌 | 按 DSH 日志策略 | 写日志失败不影响主流程 |
+| refresh token | `GrantRecord.payload`；默认 `dsh-credentials-local` 0600 YAML | 直到撤销或轮换 | 写入失败不进入 ready |
+| access token | 记录 + 镜像到 `ENTERPRISE_ACCESS_TOKEN` | ≤60 分钟 | 刷新/写入失败按错误分类 |
+| 授权码与 verifier | 仅内存，单次 attempt | ≤5 分钟 | 校验失败即丢弃 |
+| ID Token | 仅 `logoutMode=rp` 保存；否则不落盘 | 到退出 | 缺失则不允许 RP 登出 |
+| 主体与 groups | 内存中的最小 principal | 会话 | 不注入模型上下文 |
+| 日志 | 主体、资源、结果、耗时、错误类别 | 90 天（认证）/30 天（配置错误） | 本地写失败不阻断；必要审计由 policy 执行 |
+| 官方旧 grant | 不读取、不刷新、不用于调用 | 直到用户清理 | 清理失败保留并提示 |
 
-镜像只由凭据镜像组件写入，其他模块只读；跨模式写入禁止，见[双模式设计 §5](../credential-modes.md)。
+**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。本模块不自建存储；在 keychain provider 落地前，账户页必须显示“未受系统保护”，并把 A4 的 `$DSH_HOME/**` 文件/子进程拒绝作为前置条件。若不能接受该风险，需另立 keychain provider（约 +5–10 人日）并重新评估本设计。
+
+镜像说明：`credentials.set('ENTERPRISE_ACCESS_TOKEN', token)` 写入的是上述文件的 `refs` 段，因此 access token 也会落盘；`llm-pi-ai` 每次请求重新解析该引用，刷新后无需重启。不要把“内存中的 access token”写成唯一副本。
 
 ## 7. 流程
 
+### 7.1 启动恢复
+
 ```mermaid
 flowchart TD
-  A[点击登录] --> B[生成 state 与 verifier]
-  B --> C[打开系统浏览器]
-  C --> D{回调校验}
-  D -->|通过| E[换令牌]
-  D -->|失败| F[丢弃并提示]
-  E --> G[写 refresh 记录]
-  G --> H[镜像 access 到引用]
-  H --> I[就绪]
+  A[启动] --> B{"issuer/clientId/回调配置完整?"}
+  B -->|否| C[unconfigured]
+  B -->|是| D{"存在 heluo-iam/session?"}
+  D -->|否| E[signed-out]
+  D -->|是| F{"access 未过期?"}
+  F -->|是| G[镜像 access 到引用并 ready]
+  F -->|否| H{"refresh 可用?"}
+  H -->|是| I[锁内刷新]
+  I -->|成功| G
+  I -->|invalid_grant| J[删除记录并 signed-out]
+  I -->|网络/5xx| K["保留旧授权至到期，expired/unreachable"]
+  H -->|否| K
 ```
 
-**并发**：刷新在凭据锁内 single-flight，锁内网络硬超时 5 秒；后到者复用结果，不允许并发轮换。
+启动不主动打 IAM：配置缺失即 `unconfigured`；已有 access token 未过期则直接 ready；过期才在首次需要或账户页打开时刷新。这样避免离线启动被网络等待拖住，也符合“IAM 不可达时保留仍有效的授权至原到期”。
 
-**超时**：换令牌 10 秒，刷新 5 秒，探测 3 秒；超时按"未执行"处理，不重放已执行调用。
+### 7.2 登录
 
-**取消与退出**：退出先停新请求，再清镜像与按资源缓存，再撤销，最后关连接。撤销失败只记录，不阻塞本地退出。
+```mermaid
+flowchart TD
+  A[用户点击登录] --> B[Host startSignIn]
+  B --> C["生成 state/nonce/verifier 与 attemptId"]
+  C --> D[返回 authorizationUrl]
+  D --> E[Desktop Host 打开系统浏览器；Web Client 预开标签页]
+  E --> F[IAM 登录页]
+  F --> G["/iam/callback"]
+  G --> H{state 与 PKCE 校验}
+  H -->|失败| I[拒绝并清理 attempt]
+  H -->|通过| J[换 token]
+  J --> K{"ID Token 验签/iss/aud/nonce/时钟"}
+  K -->|失败| I
+  K -->|通过| L[写 grant, 镜像 access, 设默认模型]
+  L --> M[ready]
+```
+
+- 每次登录一个 `attemptId`；同一账户同时只允许一个 attempt，第二次返回“已有登录进行中”，不并行打开两个浏览器流程。
+- attempt 总时限 300 秒；用户取消、关闭对话框或进程退出时清理 attempt，迟到的回调按无效处理。
+- 回调换 token 使用 `httpTimeoutMs`；授权码只兑换一次，失败不重放同一 code。
+- 登录成功后只在没有显式企业默认模型时设置 `iam.defaultModel`；不覆盖用户已选的企业模型。
+
+### 7.3 刷新
+
+- 触发：access token 距到期 ≤`refreshSkewSeconds`，或账户页/首个请求需要 token。
+- 把“读记录 → 判断有效期 → 刷新 → 写回 → 镜像”整体放进 `ctx.credentials.modifyRecord('heluo-iam/session')`；锁内先复查，后到者复用结果。
+- 锁内网络刷新硬超时 5 秒；超时/断网时释放锁，保留未过期 access token，按退避重试；已过期则 `expired` 并要求重登。
+- `invalid_grant`：删除记录、清镜像、`signed-out`；不重试。
+- refresh 轮换：若 IAM 返回新 refresh token，先写记录再使用；写失败或响应丢失导致旧 token 可能已失效时，按“会话不确定”处理，清空并要求重登，**不得**用旧 refresh token 再试。
+- 双进程：两个进程共用一份记录；后到者在锁内重新读取，不各刷新一次；任何一方都不得把旧 refresh token 写回。
+
+### 7.4 退出与撤销
+
+顺序：停止新请求 → 取消进行中的登录 → 清镜像与按资源缓存 → 撤销 refresh token（RFC 7009）→ 删除记录 → 发布 `signed-out` → 审计。
+
+- `logoutMode=local` 只做本地退出与尽力撤销；不保证 IAM 的浏览器 SSO 会话结束。
+- `logoutMode=rp` 需要 `endSessionEndpoint` 与保存的 ID Token；跳转参数按 IAM 文档，`post_logout_redirect_uri` 必须预注册。
+- 撤销失败不回滚本地退出，也不谎报“已撤销”；记录失败类别，账户页提示“本地已退出，服务端撤销未确认”，并保留支持入口。
+- 禁用/卸载插件时执行同样的撤销与清理；不删除用户工作区或会话数据。
 
 ## 8. 失败模式
 
 | 场景 | 行为 | 用户可见结果 | 是否可重试 |
 |---|---|---|---|
-| 用户在浏览器取消 | 不写任何状态 | 回到未登录 | 可重新发起 |
-| `state` 或 `nonce` 不符 | 丢弃回调 | 提示登录失败 | 可重新发起 |
-| 换令牌 `invalid_grant` | 清空会话 | 提示重新登录 | 否 |
-| 刷新网络错误 | 退避，不登出 | 保留会话并提示 | 是，有上限 |
-| refresh 被重用 | 视为失陷，清空 | 要求重新登录 | 否 |
-| 凭据服务不可用 | 不进入就绪 | 明确报错 | 待服务恢复 |
+| IAM 未配置 | `unconfigured`，不发起任何调用 | 提示联系 IT 配置 | 否，修配置后重启 |
+| 浏览器未拉起 | 保留 attempt 到超时或取消 | 提供“重新打开链接”和可复制链接 | 是 |
+| 回调路径不可达（webServer 未就绪） | attempt 失败，记录原因 | 提示检查本机 127.0.0.1 与防火墙 | 修环境后重试 |
+| 用户取消 | 清理 attempt，不写记录 | 回到 `signed-out` | 是 |
+| `state`/`nonce` 不符 | 丢弃回调，不换 token | 登录失败，提示重试 | 是 |
+| 授权码重放/已使用 | 不重放，清理 attempt | 提示重新登录 | 是 |
+| ID Token 验签/`iss`/`aud`/算法失败 | 拒绝登录，记录安全类别 | 配置或安全错误，不进入循环重登 | 修配置后重试 |
+| JWKS `kid` 未命中 | 视为密钥轮换，短退避后重取 JWKS | 暂时不可用，不冒充登录过期 | 是，有上限 |
+| 换 token 网络超时/5xx | 不重放同一 code；按未知结果处理 | 提示重试登录 | 是 |
+| 换 token `invalid_grant` | 清理会话 | 提示重新登录 | 否 |
+| 刷新网络错误/429 | 保留未过期 access token，退避 | 保留会话并提示 | 是，有上限 |
+| 刷新 `invalid_grant` | 删除记录与镜像 | 要求重新登录 | 否 |
+| 刷新轮换后写盘失败/响应丢失 | 视为会话不确定，清空 | 要求重新登录 | 否 |
+| 双进程并发刷新 | 锁内复查，后到者复用 | 无感 | — |
+| 账号禁用/403 | 停止企业调用，保留可归因错误 | 提示账号无权限或已禁用 | 否，联系管理员 |
+| 网关 401 | 由凭据层/网关包刷新一次；仍 401 则 `expired` | 提示重新登录 | 一次 |
+| 网关 403 | 不刷新，不重试 | 提示模型/资源权限不足 | 否 |
+| 网关 429 | 不自动重试 | 展示个人/团队额度与恢复时间 | 否 |
+| 官方账号仍存在（独占冲突） | 不写镜像、不 ready，记审计 | 提示企业组合未正确禁用官方登录 | 修组合后重启 |
+| 凭据文件不可写/损坏 | 不进入 ready，保留旧值 | 明确报错与支持入口 | 修权限/文件后重试 |
 
 ## 9. 可观测性
 
 | 事件 | 字段 | 去向 | 保留 |
 |---|---|---|---|
-| 登录成功/失败 | 主体、时间、失败原因类别 | 本机审计 | 按策略 |
-| 令牌刷新 | 资源、结果、耗时 | 本机审计 | 90 天 |
+| 登录开始/成功/失败/取消 | 主体（成功时）、issuer、来源端、耗时、错误类别 | 本机审计；必要时 OTel | 90 天 |
+| 刷新成功/失败 | 主体、resource、结果、耗时、错误类别 | 本机审计 | 90 天 |
 | 镜像更新 | 旧到期、新到期（不含值） | 本机审计 | 90 天 |
-| 退出与撤销 | 主体、撤销结果 | 本机审计 | 按策略 |
+| 退出/撤销 | 主体、撤销结果、是否 RP 登出 | 本机审计 | 90 天 |
+| 独占冲突/配置错误 | 缺失项、冲突 row id | 本机审计 | 30 天 |
 
-任何事件都不含令牌、verifier 与 Key 明文。
+任何事件都不含 access/refresh token、授权码、verifier、ID Token 原文或完整 claims。主体关联使用 `iss` + `sub`；不把姓名、邮箱、部门写进模型上下文。
+
+本地审计写失败不阻断登录；但部署要求的必要审计不可用时，由 `@heluo/forge-policy` 按 A12 拒绝企业调用，本模块不把“本地日志成功”当作审计通过。
 
 ## 10. 测试矩阵
 
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
-| 单元 | 回调校验、错误分类、镜像写入方向、预刷新阈值 | `node --test` |
-| 契约 | 请求参数与错误码映射与 IAM 文档一致 | 契约用例 |
-| 集成 | 并发刷新收敛、退出顺序、凭据服务缺失 | 本地仿 IAM |
-| 端到端 | 双端各完成一次登录、刷新、退出 | 手工 + 脚本 |
+| 单元 | 状态机、PKCE/URL 构造、ID Token 校验、错误分类、记录版本与迁移、默认模型选择 | `node --test` |
+| 契约 | discovery/端点、token/revocation 请求与错误码；`llm-pi-ai` 的 `MISSING_CREDENTIAL`；官方 row id 缺失告警 | 契约用例 |
+| 集成 | 仿 IAM：刷新轮换、重用检测、慢响应、断网、5xx、429、写盘失败、撤销失败、双进程并发 | 本地仿 IAM + 双进程夹具 |
+| 负向 | 错误 `state`/`nonce`/`aud`/`iss`、`alg=none`、过期 ID Token、授权码重放、PKCE 降级、时钟偏差 | 契约/集成 |
+| 端到端 | Windows 桌面与麒麟 Web 各完成登录、刷新、退出；未登录无模型；官方登录入口不可见；升级后官方行不回灌 | 手工 + 脚本 |
+| 组合 | 禁用四行后 shell/settings/onboarding/模型选择可用；`DEEPSEEK_API_KEY` 不构成旁路；禁用插件后企业调用拒绝 | 组合夹具 |
+
+端到端必须记录至少一个拒绝反例及其可观察结果；不在真实生产 IAM 上做破坏性用例。
 
 ## 11. 打包、升级与回退
 
-包名 `@heluo/forge-iam`，`private: true`，声明 `engines.dsh`。Host 与 Client 分别入口，Client 只依赖公开类型面。
+包名 `@heluo/forge-iam`，`private: true`，Host 与 Client 分别入口，声明 `engines.dsh`；`engines` 的具体断言形态待实测。产物不含 DSH 源码补丁。
 
-升级：配置项只增不删；新增 scope 需用户重新授权，界面提示。
+升级：配置项只增不删；记录 `version` 迁移；新增 scope 需要重新授权，界面明确提示；DSH 升级后重新应用官方行禁用补丁，并跑“官方行是否回灌”用例。
 
-回退：禁用插件即回到未登录状态；已写入的凭据记录保留，重新启用可直接复用，避免重复登录。
+回退：禁用 `@heluo/forge-iam` 时先执行 dispose：撤销、删除记录、清理 `ENTERPRISE_ACCESS_TOKEN`，使企业调用 fail closed；进程异常退出导致引用残留时，最多持续到 access token 到期，由 A12/policy 兜底。官方行仍由企业包禁用，官方登录在内网不可用，因此回退到官方登录不是可用路径。若整体回退企业包，需同时恢复官方行并确认内网是否可达；不可达时保留企业包而不是制造一个坏掉的登录入口。
+
+卸载：尽力撤销、删除 `heluo-iam/session`、清理 `ENTERPRISE_ACCESS_TOKEN`；官方旧 grant 由用户确认后清理；不删除工作区、会话或用户文件。
 
 ## 12. 未决事项
 
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
-| 提供者注册与事件订阅的准确 API | 平台组（实测） | 第 4、5 节接口形状 |
-| 跨进程互斥的运行时语义 | 平台组（实测） | 并发刷新是否正确 |
-| 账户设置页 slot 标识 | 平台组（实测） | Client 插件挂载点 |
-| IAM 是否支持 `resource` 参数 | IAM 团队 | 按资源取令牌是否成立 |
-| refresh 轮换策略与重用检测 | IAM 团队 | 第 8 节两条失败分支 |
+| IAM 是否支持 `resource`；不支持时如何按 audience/预注册 client 替代 | IAM 团队 | 是否一资源一 token；网关 `aud` 是否成立 |
+| refresh 轮换、重用检测、撤销与 RP 登出的实际能力 | IAM 团队 | 第 7.3/7.4 节失败分支与残余授权窗口 |
+| IAM 是否允许公共客户端 + loopback redirect URI；是否强制 client secret | IAM 团队 | 本机登录形态是否成立；必要时改为预注册多客户端 |
+| 回调路由与 launch token/RPC 认证的交互；SSH 转发/反向代理下 `callbackOrigin` 的支持 | 平台组（实测） | 回调是否可达、是否误暴露 |
+| 禁用四行后 shell/onboarding/模型选择是否完整 | 平台组（实测） | O3 是否可在不修改核心的前提下成立 |
+| 0600 文件存储风险接受，还是另立 keychain provider | 用户、平台组、安全 | 账户页提示、A4 前置、成本 +5–10 人日 |
+| `engines.dsh` 的断言形态与目标版本范围 | 平台组（实测） | 安装/升级门禁 |
+| `settings.section`、`sidebar.footer.action`、`conversation.input.dock` 的实际可用性；是否需要 `settings.models.sign-in` | 平台组（实测） | Client 挂载点与首启入口 |
+| 代理、内部 CA、Windows 防火墙下的 IAM/网关可达性 | 平台组、IT | 登录成功率与支持成本 |
+| 官方旧 grant 与旧默认模型的迁移/清理策略 | 平台组、安全 | 升级体验与残留身份 |
 
-### 需用户确认的设计选项（增益不明确，暂不采用，保留待定）
+### 需用户确认的设计选项（本版不采用，保留待定）
 
 | 选项 | 可能的增益 | 代价 | 当前处理 |
 |---|---|---|---|
-| 内置常驻 token broker 单例 | 减少重复换令牌 | 增加进程内状态与失效清理 | 不采用，先按"调用时取、锁内刷新" |
-| 同一用户多账号并存（个人 + 服务账号） | 免切换 | 凭据记录与界面都要扩 | 不采用，仅单账号 |
-| 静默 SSO（复用浏览器已有企业会话） | 少一次点击 | 依赖 IAM 与浏览器策略，失败路径变多 | 不采用，保留为后续选项 |
-| 界面常驻显示到期倒计时 | 提前感知失效 | 干扰界面，收益有限 | 不采用 |
-| 提供 CLI 登录（无 GUI 环境） | 覆盖服务器场景 | 与本期终端范围不符 | 不采用 |
-| 令牌缓存落盘（跨进程共享 access token） | 减少刷新 | 增加泄露面与一致性负担 | 不采用，仅落 refresh |
+| additive 附加登录（保留官方登录） | 兼顾个人版/演示 | 官方模型路由与 C1/A1 冲突；双登录支持成本 | 不采用；如后续有个人版，另立 profile 设计 |
+| 多账号并存（个人 + 服务账号） | 免切换 | 记录、缓存、UI 都要扩 | 不采用，仅单账号 |
+| 静态 Key 兜底 | 网关不支持验签时可用 | 长期凭据、撤销窗口变长 | 不采用；按网关契约另行评审 |
+| MCP token broker | 未来 MCP 按资源取 token | 范围扩大，需独立批准 | 不采用；`tokenFor` 仅 Host 预留 |
+| 静默 SSO | 少一次点击 | 依赖 IAM/浏览器策略，失败路径变多 | 不采用；`logoutMode=local` 下不承诺结束浏览器 SSO |
+| CLI 登录 | 无 GUI 环境 | 与本期终端范围不符 | 不采用 |
+| 完整品牌 onboarding | 首启体验更完整 | UI 工作量与品牌评审 | 首版不做，仅账户页 + 首启提示 |
 
-以上六项均不影响主链路实现；如后续确认增益成立，再单独评估并更新本设计。
+以上选项不影响 O3 主链路；如后续确认增益成立，再单独评估并更新本设计。
