@@ -49,7 +49,7 @@
 | `design/` | 逐模块详细设计的索引与状态 | [设计索引](<design/README.md>) | 插件与服务开发者 |
 | `contracts/` | 外部系统字段级契约 | [AI 网关契约](<contracts/gateway-contract.md>) | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
-| `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>)；[市场接入问询函](<collaboration/market-access-clarification.md>) | 发函人、各接入团队 |
+| `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 发函人、各接入团队 |
 | `engineering/` | 仓库结构、开发测试与发布约定 | [工程结构设计](<engineering/repository-structure-design.md>) | 工程负责人、维护者 |
 | `templates/` | 受控文档与模块设计模板 | [_template.md](<templates/_template.md>) | 全体撰写人 |
 | `assets/` | 可离线打开的 HTML 图解 | [认证流程图解](<assets/enterprise-authentication-flow.html>) | 评审与对接人员 |

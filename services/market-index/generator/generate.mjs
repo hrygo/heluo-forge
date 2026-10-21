@@ -61,15 +61,12 @@ export function generateSnapshot(input) {
   const urls = baseline.urls;
   if (!isRecord(urls)) throw new Error('baseline-urls-invalid');
 
-  const plugins = [];
+  const groups = new Map();
   const candidates = [];
-  const seenNames = new Set();
 
   for (const pkg of packages) {
     if (!isRecord(pkg) || !isRecord(pkg.manifest)) throw new Error('generate-package-invalid');
     const name = pkg.manifest.name;
-    if (seenNames.has(name)) throw new Error(`package-duplicate:${name}`);
-    seenNames.add(name);
     const allowed = normalized.packages.find((entry) => entry.name === name);
     if (!allowed) throw new Error(`package-not-allowlisted:${name}`);
     if (allowed.registryId !== registryId) throw new Error(`package-registry-mismatch:${name}`);
@@ -107,20 +104,20 @@ export function generateSnapshot(input) {
     }
 
     const decision = decide(checks, integrity);
-    plugins.push({
-      name,
-      title: pkg.display?.title ?? name,
-      ...(pkg.display?.description === undefined ? {} : { description: pkg.display.description }),
-      ...(pkg.display?.icon === undefined ? {} : { icon: pkg.display.icon }),
-      versions: [
-        {
-          version: pkg.manifest.version,
-          publishTimestamp: pkg.publishTimestamp,
-          source: { type: 'npm', registry: registry.url },
-          ...(text(pkg.manifest.engines?.dsh) ? { engines: { dsh: pkg.manifest.engines.dsh } } : {}),
-        },
-      ],
+    const group = groups.get(name) ?? { name, display: {}, versions: [] };
+    for (const key of ['title', 'description', 'icon']) {
+      if (group.display[key] === undefined && pkg.display?.[key] !== undefined) group.display[key] = pkg.display[key];
+    }
+    if (group.versions.some((entry) => entry.version === pkg.manifest.version)) {
+      throw new Error(`package-version-duplicate:${name}@${pkg.manifest.version}`);
+    }
+    group.versions.push({
+      version: pkg.manifest.version,
+      publishTimestamp: pkg.publishTimestamp,
+      allowed: decision.allow,
+      engines: text(pkg.manifest.engines?.dsh) ? { dsh: pkg.manifest.engines.dsh } : undefined,
     });
+    groups.set(name, group);
     candidates.push({
       name,
       version: pkg.manifest.version,
@@ -132,11 +129,30 @@ export function generateSnapshot(input) {
     });
   }
 
-  // 索引只放 allow 版本；与 policy 的 allow 集合必须一一对应。
-  const allowedNames = new Set(candidates.filter((entry) => decide(entry.checks, entry.integrity).allow).map((entry) => entry.name));
+  // 索引只放 allow 版本；同包多版本合并，历史仍合规的版本保留用于恢复。
+  const plugins = [...groups.values()]
+    .map((group) => {
+      const versions = group.versions
+        .filter((entry) => entry.allowed)
+        .map((entry) => ({
+          version: entry.version,
+          publishTimestamp: entry.publishTimestamp,
+          source: { type: 'npm', registry: registry.url },
+          ...(entry.engines === undefined ? {} : { engines: entry.engines }),
+        }));
+      if (versions.length === 0) return null;
+      return {
+        name: group.name,
+        title: group.display.title ?? group.name,
+        ...(group.display.description === undefined ? {} : { description: group.display.description }),
+        ...(group.display.icon === undefined ? {} : { icon: group.display.icon }),
+        versions,
+      };
+    })
+    .filter(Boolean);
   const index = buildMarketIndex({
     title: baseline.indexTitle ?? { en: 'Enterprise Plugin Market', zh: '企业插件市场' },
-    plugins: plugins.filter((entry) => allowedNames.has(entry.name)),
+    plugins,
     indexUrl: urls.indexUrl,
   });
   const indexBytes = Buffer.from(`${JSON.stringify(index, null, 2)}\n`);

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V1.1.3 |
+| 版本 | V1.1.4 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -66,6 +66,7 @@ flowchart LR
 **非目标**
 
 - 不新增常驻市场服务、容器、数据库、IAM 或下载代理。
+- 不承建外部“AI 开发者平台”的插件预创建、Gitee 指定 group 建仓、代码/安全审查、发布 npm 等全生命周期流程后台；这些均由企业“AI 开发者平台”负责，不在本项目范围。
 - 不在市场内构建包，不托管包体。
 - 不做逐版本人工审批或人工推荐位。
 - 不把旧 Gitee 提交/评审协议当作 npm 收录流程。
@@ -117,13 +118,13 @@ flowchart LR
 }
 ```
 
-例子只是无凭据占位清单，不证明该包已发布。管理员只维护 registry 地址与精确顶层包映射/来源分类，不填版本摘要、矩阵、逐版检查结果或 token。多个 registry 可列在总清单，但**环境/profile 发行基线只绑定唯一 `registryId`**；同 profile 的所有根包、锁文件与实际解析必须一致指向该入口，不通过 scope 配置或每包 override 混源。内部/公网聚合由企业私服完成，不由终端跨源拼装。
+例子只是无凭据占位清单，不证明该包已发布。管理员只维护 registry 地址与精确顶层包映射/来源分类，不填版本摘要、矩阵、逐版检查结果或 token。企业可用插件以 JSON 白名单形式由外部“AI 开发者平台”提供只读 URL 托管并在该平台维护；开发者新增插件的预创建、指定 Gitee group 建仓、审查、npm 发布等全流程均由 AI 开发者平台负责，不属于本项目范围。多个 registry 可列在总清单，但**环境/profile 发行基线只绑定唯一 `registryId`**；同 profile 的所有根包、锁文件与实际解析必须一致指向该入口，不通过 scope 配置或每包 override 混源。内部/公网聚合由企业私服完成，不由终端跨源拼装。
 
 ### 3.2 发行基线与目标矩阵
 
 平台发行基线固定环境/profile 的唯一 `registryId`、目标 `matrixId`、生成器规则版本和受控输入 revision。`matrixId` 对应精确 DSH、Node、pnpm、OS-CPU、SDK 与 Client 版本集合；任何一项变化生成新矩阵，不把 `>=` 范围或当前机器版本当作矩阵。
 
-目标包括 Windows 桌面与银河麒麟 aarch64；**Windows CPU 尚未核定，本文不补造架构值**。未核定/未通过的组合不得开放安装。`0.2.1-rc.2` 仅为接口核验版本；企业发行版本由平台基线核定，不由市场管理员逐版填表。
+企业目标开发机操作系统与运行环境基线已明确：Windows 10 专业版 (amd64) 与统信 UOS 64 位（v20，内核 4.19.0-amd64-desktop，amd64 架构）；开发者已预装 Node.js 22.13。企业私有 npm 为 JFrog Artifactory，统一聚合内网访问入口形如 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`。未核定/未通过的组合不得开放安装。`0.2.1-rc.2` 仅为接口核验版本；企业发行版本由平台基线核定，不由市场管理员逐版填表。
 
 ### 3.3 首版自包含与双端交集
 
@@ -364,9 +365,9 @@ Host 存活时以不超过5分钟的轻量检查、受管目录进入/刷新及�
 
 | 核验事项 | 责任方 | 截止与关闭证据 | 未验时边界 |
 |---|---|---|---|
-| 企业私服产品/规范 URL、企业 CA/认证注入、scope 权威路由、同步/同版不可变/保留与内网 tarball | 仓库维护方、IT、安全 | G1 接入记录；G2 缺包/重定向/同版换包/出口负向与恢复证据 | 不回退公网/Gitee，不自建 registry/proxy |
-| 清单维护位置/权限与 CI/静态 HTTPS 的整任务单写、取消、优先拒绝、原子 current、5分钟轻量续期/最长15分钟租约 | 平台组、仓库与 CI/分发维护方 | 实现遵循 §3；G2 注入 r1/r2、跨切换、中断/发布器停摆与过期拒写，核验撤回回执 | 无法满足时 browse-only；具体产品实现待核验，不重新选择安全行为 |
-| 企业发行 matrixId 的精确 DSH/Node/pnpm/OS-CPU/SDK/Client、profile 基线及可信时钟 | 平台组、IT | G2 全目标 smoke、manifest-lock/registry/peer/脚本/存量差异与时钟异常拒写核验 | Windows CPU 不补造，rc.2 只接口证据；未核定/时钟不可信不开放安装 |
+| 企业私服产品/规范 URL、企业 CA/认证注入、scope 权威路由、同步/同版不可变/保留与内网 tarball | 仓库维护方、IT、安全 | 已确认 Artifactory 入口 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`，免自签 CA/代理，无重定向，内部 scope 禁公网回源，支持 Scope 访问控制拦截与不可变发布；遗留 CI 认证（E-03）与发布互斥（E-06）待闭环 | 不回退公网/Gitee，不自建 registry/proxy |
+| 清单维护位置/权限与 CI/静态 HTTPS 的整任务单写、取消、优先拒绝、原子 current、5分钟轻量续期/最长15分钟租约 | 平台组、仓库与 CI/分发维护方 | 清单已确认由“AI 开发者平台”提供只读 JSON 白名单 URL 托管并在该平台维护，插件全流程由其负责；DESIGN-012 产物覆盖发布与租约待实施与验证 | 无法满足时 browse-only；具体产品实现待核验，不重新选择安全行为 |
+| 企业发行 matrixId 的精确 DSH/Node/pnpm/OS-CPU/SDK/Client、profile 基线及可信时钟 | 平台组、IT | 目标端已确认为 Windows 10 专业版 (amd64) 与统信 UOS 64 位 (v20, 内核 4.19.0-amd64-desktop, amd64)，预装 Node 22.13；DSH matrixId 待随发行版本核对 | 未核定/时钟不可信不开放安装 |
 | 内部定制 group/repo/commit/build 与公网镜像 upstream/扫描/许可、真实 pack/display | Gitee/流水线/仓库维护方、安全、平台组 | 对应包自动准入前分来源取证，真实发布包内容及资源校验 | 缺证拒收；公网不迁 Gitee，第三方 display 可标 fallback |
 | 受管 no-store/60 秒复判、原生/工具/CLI/path/Git/tarball/缓存/role、下载阻断及已装处置 | 平台组、仓库维护方、IT、安全 | G2 每通道负向证据、撤销时延/在途与独立已装处置记录 | 不等价即市场 browse-only；不承诺防本机管理员/远程自动卸载 |
 | 指标覆盖、保留/脱敏、可选结果回报和制品/目录恢复 | 仓库维护方、平台组、安全 | 相关展示/回报启用前冻结口径，G2 恢复证据 | 旧计数保留，不新批准 PG/IAM/账户去重；unknown 不改写 |

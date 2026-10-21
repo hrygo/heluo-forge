@@ -45,8 +45,11 @@ node services/market-index/server.mjs --catalog ./catalog.json --counts ./counts
 | policy/evidence/current 组装与校验：七类检查决定 allow/deny、摘要互指、公共头一致、租约窗口、来源证据、同源地址 | 发布与续期、撤回注入 |
 | 包内检查：结构/入口/patch、自包含运行依赖、生命周期脚本、peer 基线、显示资源（第三方可 fallback） | 真实 tarball 解包、matrix smoke、provenance 与 integrity（需外部环境补齐） |
 | 原生 format-1 索引：字段校验、版本降序、icon/本地化/metadata 引用、未知成员丢弃 | 索引落盘与签名、双端 smoke 证据 |
+| 离线生成流程：清单+包→索引+policy/evidence/current→落盘→读回复核（夹具，支持同包多版本） | 真实 tarball 解包、CI 单写与原子发布 |
+| 本地发布控制：不可变 `generations/g{generation}`、`current` 原子 rename、base/代次防陈旧、轻量续期、拒绝快照 | 企业 CI 单写/取消、真实 HTTPS 托管与 5 分钟调度；本地 rename 与无跨进程锁不证明企业设施具备原子/互斥能力 |
+| 更版状态机：预检→移除→再准入→精确安装、`old-removed/recovery-required`、失联对账、单飞 requestId | 真实 `removeBundle/installBundle`、HMR 与无 HMR 停机路径、恢复执行 |
 
-`generator/manifest.mjs` 导出 `validateManifest(input)`（返回 `{ ok, errors, manifest }`）与 `canonicalizeRegistryUrl(url)`（不合法返回 `null`）；`generator/artifacts.mjs` 导出 `buildSnapshot(input)`、`validateSnapshot(input)` 与 `CHECK_IDS`；`generator/package-check.mjs` 导出 `inspectPackage({ manifest, files, peerBaseline, origin })` 与 `tarballIntegrity(bytes)`。当前不读企业源、不写产物，只用清单与夹具验证契约。
+`generator/upgrade.mjs` 导出 `runUpgrade()`、`reconcileUpgrade()`、`planRecovery()`、`OperationGate`；`generator/publish.mjs` 导出 `publishSnapshot()`、`renewCurrent()`、`readCurrent()`、`readPublished()`、`buildRejection()`；`generator/generate.mjs` 导出 `generateSnapshot()`、`writeSnapshot()`、`readSnapshot()`；`generator/manifest.mjs` 导出 `validateManifest(input)`（返回 `{ ok, errors, manifest }`）与 `canonicalizeRegistryUrl(url)`（不合法返回 `null`）；`generator/artifacts.mjs` 导出 `buildSnapshot(input)`、`validateSnapshot(input)` 与 `CHECK_IDS`；`generator/package-check.mjs` 导出 `inspectPackage({ manifest, files, peerBaseline, origin })` 与 `tarballIntegrity(bytes)`。当前不读企业源、不写产物，只用清单与夹具验证契约。
 
 ```sh
 node --test services/market-index/test/manifest.test.mjs
