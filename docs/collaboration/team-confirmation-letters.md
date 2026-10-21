@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-CONF-001 |
 | 文档名称 | 跨团队确认询问函 |
-| 版本 | V0.6.0 |
+| 版本 | V0.7.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -18,6 +18,8 @@
 > 编制依据：2026-10-20 文档核对所读版本为 CORP-DSH-ARCH-001 V1.4、CORP-DSH-PLAN-001 V1.3、CORP-DSH-REQ-001 V1.3、CORP-DSH-GW-001 V0.8；沿用已读项目协作规范及子文档模板。来源与名单口径按 2026-10-21 用户确认：企业私有 npm 是唯一插件制品源并由仓库侧同步公网，用户 DSH 禁公网；registry 地址与插件包名双层白名单，入名单包自动收录 DSH 兼容稳定版本，不逐版本人工审批；Gitee 固定 group 维护内部定制源码。本函仅核对文档，产品/权限/索引接口仍待确认，不新增企业接口、终端隔离或容量实测；未发函、未收到团队回函、批准或资源承诺。
 >
 > 关联文档：[总体架构设计](<../architecture/platform-architecture.md>)、[推广实施方案](<../plans/rollout-plan.md>)、[需求与场景基线](<../requirements/requirements-baseline.md>)、[AI 网关契约](<../contracts/gateway-contract.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)、[子文档模板](<../templates/_template.md>)。
+>
+> 2026-10-21 更新：市场已改为轻量模式，索引与安装问题以 [issue #12](https://github.com/hrygo/heluo-forge/issues/12) 与 DESIGN-012 为准；本文件保留为历史询问模板，不再代表当前索引/授权方案。
 
 ## 1. 结论
 

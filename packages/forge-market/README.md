@@ -1,23 +1,23 @@
 # @heluo/forge-market
 
-状态：可用（仅开发验证）。企业市场未上线，G2 未通过。核对日期：2026-10-21。
+状态：可用（仅开发验证；历史参考，不属轻量模式目标）。代码可运行、测试保留，但目标链路改用 DSH 原生「索引源」+ AIHUB 托管 format-1 JSON；企业市场未上线，G2 未通过。核对日期：2026-10-21。
 
-一句话：一个 Host + Web Client 插件，向 agent 提供市场工具与一个只读列表面板；**当前只接自有 JSON 服务与 Gitee tag 归档**。
+一句话：旧的 Host + Web Client 市场插件，只接自有 JSON 服务与 Gitee tag 归档；**不再作为企业市场的目标实现**。
 
 ## 用途
 
-给 agent 一个可治理的插件入口：从受控来源发现、校验并安装插件。当前只覆盖 Gitee 归档参考链路，npm 目标是后续实现。
+保留为历史参考与旧契约测试；目标方案不使用自定义市场插件，用户直接在原生市场添加 AIHUB 索引 URL。
 
 ## 现在是什么，不是什么
 
 | | |
 |---|---|
-| 现在是 | Gitee 归档参考链路：搜索、详情、提交、自检、安装（下载→解包→可选落盘）、生成登记行 |
-| 不是 | npm 目标实现：不能从企业 registry 安装，没有在线准入、更版或撤回控制 |
-| 目标 | 管理员双层白名单 + 自动索引 + 写前授权 + 官方 manager；见 [DESIGN-007](../../docs/design/plugins/forge-market.md) |
-| 版本 | 私有包 `0.1.0`，`engines.dsh: >=0.2.0`；npm 目标未实现，企业准入未验 |
+| 现在是 | 历史参考：Gitee 归档链路（搜索、详情、提交、自检、安装、登记行） |
+| 不是 | 目标实现：不参与原生索引、AIHUB 托管或企业 npm 安装 |
+| 目标 | DSH 原生「索引源」+ AIHUB format-1 索引 + 官方 manager；见 [DESIGN-007](../../docs/design/plugins/forge-market.md) |
+| 版本 | 私有包 `0.1.0`，`engines.dsh: >=0.2.0`；仅历史参考，企业准入未验 |
 
-目标方案的字段、发布与授权契约不在本文件重复，统一见 [DESIGN-012](../../docs/design/services/market-index.md)；来源决策见 [ADR-11／12](../../docs/architecture/plugin-registry-source-decision.md)。
+目标方案的索引字段与验收不在本文件重复，统一见 [DESIGN-012](../../docs/design/services/market-index.md)；来源与轻量决策见 [ADR-11／13](../../docs/architecture/plugin-registry-source-decision.md)。
 
 ## 快速开始
 

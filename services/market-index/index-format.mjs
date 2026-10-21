@@ -1,4 +1,4 @@
-// 原生 format-1 索引的生成与校验（DESIGN-012 §3.4）。
+// 原生 format-1 索引的校验与构造（DESIGN-012 §3–§7）。
 // 依据 2026-10-21 对 DSH 随包 @deepseek-ai/dsh-plugin-market-index 的只读核对：
 // 官方解析器对未定义成员是"丢弃"而不是报错，因此企业产物只能写它真正定义的字段。
 
@@ -128,6 +128,19 @@ function httpsUrl(value, path) {
   return url.href;
 }
 
+function registryUrl(value, path) {
+  if (!text(value)) fail(path, 'must be a non-empty string');
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    fail(path, 'must be an absolute URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') fail(path, 'must use http: or https:');
+  if (url.username || url.password || url.search || url.hash) fail(path, 'must not carry credentials, query or fragment');
+  return url.href;
+}
+
 function packagePath(value, path) {
   const textValue = stringAt(value, path);
   if (textValue.split('/').some((segment) => segment === '.' || segment === '..' || !PATH_SEGMENT.test(segment))) {
@@ -146,7 +159,7 @@ function repository(value, path) {
 function source(value, path, { allowGit = false } = {}) {
   const object = objectAt(value, path);
   if (object.type === 'npm') {
-    const registry = optional(object, 'registry', path, (member, at) => httpsUrl(member, at));
+    const registry = optional(object, 'registry', path, (member, at) => registryUrl(member, at));
     return { type: 'npm', ...(registry === undefined ? {} : { registry }) };
   }
   if (object.type === 'git' && allowGit) {

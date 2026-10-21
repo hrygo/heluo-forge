@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { IndexFormatError, buildMarketIndex, installTarget, parseMarketIndex } from '../generator/index-format.mjs';
+import { IndexFormatError, buildMarketIndex, installTarget, parseMarketIndex } from '../index-format.mjs';
 
 const URL_BASE = 'https://market.corp.example/index.json';
 
@@ -71,14 +71,16 @@ test('拒绝非法包名、版本与时间戳', () => {
   }
 });
 
-test('source 只收 npm，registry 必须 HTTPS', () => {
+test('source 只收 npm，registry 接受内网 HTTP', () => {
   assert.match(
     errorOf(() => build({ plugins: [plugin({ versions: [version({ source: { type: 'git', url: 'https://git.corp/a/b', commit: 'a'.repeat(40) } })] })] })).reason,
     /must be npm/,
   );
+  const http = build({ plugins: [plugin({ versions: [version({ source: { type: 'npm', registry: 'http://npm.corp/' } })] })] });
+  assert.equal(http.plugins[0].versions[0].source.registry, 'http://npm.corp/');
   assert.match(
-    errorOf(() => build({ plugins: [plugin({ versions: [version({ source: { type: 'npm', registry: 'http://npm.corp/' } })] })] })).reason,
-    /https/,
+    errorOf(() => build({ plugins: [plugin({ versions: [version({ source: { type: 'npm', registry: 'ftp://npm.corp/' } })] })] })).reason,
+    /http/,
   );
 });
 

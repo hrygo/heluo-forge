@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-003 |
 | 文档名称 | 企业插件市场调研与落地建议 |
-| 版本 | V0.2.1 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -15,23 +15,23 @@
 | 最后更新 | 2026-10-21 |
 | 门禁 | G1 技术准入与契约评审；G2 市场开放前验证 |
 
-> **阅读提示**：本文是 2026-10-21 的调研取证与当时建议，保留证据价值；来源与控制面决策已由 [ADR-11／12](<plugin-registry-source-decision.md>) 取代，**不要**再按本文的逐版本审批、PG 控制面或 Gitee 统一制品源实施。只想了解当前方案，读 [DESIGN-007](<../design/plugins/forge-market.md>) 与 [DESIGN-012](<../design/services/market-index.md>)。
+> **阅读提示**：本文是 2026-10-21 的调研取证与当时建议，保留证据价值；来源与控制面决策已由 [ADR-11／13](<plugin-registry-source-decision.md>) 取代，**不要**再按本文的逐版本审批、PG 控制面或 Gitee 统一制品源实施。只想了解当前方案，读 [DESIGN-007](<../design/plugins/forge-market.md>) 与 [DESIGN-012](<../design/services/market-index.md>)。
 
 > 编制依据：2026-10-21 对四个社区市场、一个实际目录生产仓库及 DSH 官方接口的研究。Heluo Forge 源码取证基线为 `5b69ace6a96ae305a233103a300c636312a4f0e8`；本机官方市场、索引库与安装管理器核验版本为 `0.2.1-rc.2`，使用 Host Inspect、随包 README 与实现互证。社区源码提交及证据见 §16。两项内存仿真使用 Node 26.11.1，不等同于项目指定 Node 24.21.0 工具链或企业 E2E。
 >
 > 取证阶段未修改业务代码、远端 issue 或 profile，未连接企业 Gitee/IAM/数据库，未进行目标双端安装。本文按文档归档授权纳入仓库；建议仍待评审，不把归档视为架构、统计口径、制品出口或实施排期获批。
 >
-> 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[总体架构](<platform-architecture.md>)、[市场插件设计](<../design/plugins/forge-market.md>)、[市场服务设计](<../design/services/market-index.md>)、[私有化 Gitee 问询函](<../collaboration/gitee-market-clarification.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)。
+> 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[总体架构](<platform-architecture.md>)、[市场插件设计](<../design/plugins/forge-market.md>)、[索引契约](<../design/services/market-index.md>)、[私有化 Gitee 问询函](<../collaboration/gitee-market-clarification.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)。
 
 > 适用范围：原社区/官方取证保留，来源与最小市场方向已由用户确认的[ADR-11](<plugin-registry-source-decision.md>)替代。下文§6—§14保留原Gitee制品/复杂控制面假设下的分析，不作为当前新增实现或发函依据；PG、逐版本审批、授权下载代理和本地tarball源不是本期最小市场前置。
 
 ## 1. 当前决策与研究适用范围
 
-**当前路线为企业私有npm统一制品源，管理员维护registry地址与插件包名双层白名单；兼容稳定版本自动校验收录并生成原生DSH npm索引，用户DSH不连接公网，公网同步只由私服执行。内部定制源码在固定Gitee group下维护，公网镜像插件不必迁入该group。**
+**历史结论（截至 2026-10-20）：企业私有 npm 统一制品源、用户 DSH 不连接公网、内部定制源码在固定 Gitee group 维护。2026-10-21 已改走轻量模式：AIHUB 维护并托管 format-1 索引，DSH 原生「索引源」浏览、官方 manager 安装；不再建设自动索引生成器、写前授权或当前租约（见 ADR-13）。本调研的生成器/控制面建议仅作历史取证。**
 
 原生format-1 npm索引是目标分发目录，安装生命周期委托官方manager。索引没有通用integrity或强制包白名单字段；包体校验记录与registry不可变性、服务端/出口控制分别验收，不能仅靠索引声称全通道拒绝。
 
-管理员不逐版录摘要或批准版本，自动生成器负责稳定SemVer、真实bundle声明、目标DSH兼容、完整性与既有安全规则。优先复用企业npm、CI和内网静态托管，不为该名单新建数据库审批后台或自有下载代理。统计如需要优先取registry真实终端下载日志，不混上游同步或安装成功。
+历史建议（已不采用）：管理员不逐版录摘要或批准版本，由自动生成器负责稳定 SemVer、真实 bundle 声明、目标 DSH 兼容、完整性与既有安全规则。优先复用企业npm、CI和内网静态托管，不为该名单新建数据库审批后台或自有下载代理。统计如需要优先取registry真实终端下载日志，不混上游同步或安装成功。
 
 ### 1.1 范围与非目标
 
