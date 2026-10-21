@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>企业插件市场：轻量原生索引架构（V2.0.0）</title>
+<style>
+  :root {
+    --ink: #1f2328; --muted: #5f6b76; --line: #d8dee4; --panel: #fff;
+    --bg: #f6f8fa; --blue: #0b5cad; --blue-soft: #e8f1fb; --green: #1a6b45;
+    --green-soft: #e7f4ee; --amber: #8a5300; --amber-soft: #fff3dc; --red: #9b2c2c; --red-soft: #fdecec;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 44px 22px 64px; }
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 18px; margin-bottom: 26px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 10px; letter-spacing: -.02em; }
+  h2 { font-size: 20px; margin: 34px 0 12px; padding-top: 14px; border-top: 1px solid var(--line); }
+  h2 .no { color: var(--blue); font-size: 13px; margin-right: 10px; letter-spacing: .08em; }
+  p { margin: 8px 0; }
+  .lead { color: var(--muted); max-width: 820px; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); }
+  .badge.blue { background: var(--blue-soft); border-color: #bfd4ea; color: var(--blue); }
+  .badge.amber { background: var(--amber-soft); border-color: #ecd3a8; color: var(--amber); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h3 { font-size: 14px; margin: 0 0 6px; }
+  .card p { margin: 0; color: var(--muted); font-size: 13px; }
+  .flow { display: grid; gap: 10px; margin: 16px 0; }
+  .step { display: grid; grid-template-columns: 44px 1fr; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 8px; padding: 10px 14px; }
+  .step b { display: block; font-size: 14px; }
+  .step span { color: var(--muted); font-size: 13px; }
+  .n { width: 30px; height: 30px; border-radius: 50%; background: var(--blue-soft); color: var(--blue); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef2f6; font-weight: 600; }
+  code { background: #eef2f6; padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  .ok { color: var(--green); font-weight: 600; }
+  .no { color: var(--red); font-weight: 600; }
+  .note { border-radius: 8px; padding: 12px 14px; margin: 14px 0; font-size: 13.5px; }
+  .note.amber { background: var(--amber-soft); border: 1px solid #ecd3a8; }
+  .note.blue { background: var(--blue-soft); border: 1px solid #bfd4ea; }
+  footer { margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  @media print { body { background: #fff; } main { padding: 0; } .card, .step, table { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>企业插件市场：轻量原生索引架构</h1>
+  <p class="lead">不建市场服务、不建生成器、不做写前授权。AIHUB 给目录，DSH 原生市场给入口，Artifactory 给包体；本项目只定义索引契约、提供只读校验并做三目标验收。</p>
+  <div class="badges">
+    <span class="badge blue">DESIGN-007 V2.0.0 · DESIGN-012 V2.0.0</span>
+    <span class="badge">2026-10-21</span>
+    <span class="badge amber">目标未实现 · 三目标未验</span>
+    <span class="badge">接口基线 DSH 0.2.1-rc.2</span>
+  </div>
+</header>
+
+<h2><span class="no">01</span>它是什么</h2>
+<div class="grid">
+  <div class="card"><h3>目录</h3><p>AI 开发者平台（AIHUB）维护并托管一份 format-1 索引 JSON，提供稳定只读 URL。</p></div>
+  <div class="card"><h3>入口</h3><p>DSH 原生「插件市场 → 索引源」；用户添加 URL 后浏览插件与精确版本。</p></div>
+  <div class="card"><h3>安装</h3><p>官方 <code>pluginManager</code> + pnpm，从索引指定的企业 Artifactory 拉取 tarball。</p></div>
+  <div class="card"><h3>本项目</h3><p>索引契约、只读校验器、P0 取证与三目标验收；不生成、不托管、不代理。</p></div>
+</div>
+<div class="note blue">
+  <b>一句话：</b>索引只回答“有哪些包、哪些精确版本、从哪个 npm 源装”，不回答“现在是否允许装”。
+</div>
+
+<h2><span class="no">02</span>一条主链路</h2>
+<div class="flow">
+  <div class="step"><div class="n">1</div><div><b>AIHUB 产出索引</b><span>format-1 JSON：插件、精确稳定版本、npm source、图标与说明。</span></div></div>
+  <div class="step"><div class="n">2</div><div><b>用户添加索引源</b><span>原生市场 → 索引源 → 粘贴 AIHUB 只读 URL；原生提示第三方来源风险。</span></div></div>
+  <div class="step"><div class="n">3</div><div><b>浏览并选择版本</b><span>市场展示索引内容；只安装索引中列出的 <code>name@version</code>。</span></div></div>
+  <div class="step"><div class="n">4</div><div><b>官方 manager 安装</b><span>pnpm 从 <code>source.registry</code> 取包；企业 ACL、同版不可变由 Artifactory 执行。</span></div></div>
+  <div class="step"><div class="n">5</div><div><b>更新或撤回</b><span>AIHUB 更新 JSON；撤回删版本并在私服阻断。已装代码不自动卸载。</span></div></div>
+</div>
+
+<h2><span class="no">03</span>AIHUB 交付什么</h2>
+<table>
+  <tr><th>交付物</th><th>要求</th></tr>
+  <tr><td>索引 URL</td><td>稳定、只读、无凭据；优先 HTTPS，内网 HTTP 可接受；不重定向；<code>Content-Type: application/json</code>。</td></tr>
+  <tr><td>JSON</td><td><code>format: 1</code>；<code>title.en</code> 必填；版本精确、稳定、去重、降序；<code>source.type</code> 只允许 <code>npm</code>。</td></tr>
+  <tr><td>registry</td><td><code>source.registry</code> 指向企业 Artifactory；索引不含 token；终端通过 <code>.npmrc</code> 读包。</td></tr>
+  <tr><td>更新时限</td><td>新版本 ≤10 分钟；撤回 ≤5 分钟；生成失败保留上一份完整 JSON。</td></tr>
+  <tr><td>联调</td><td>三目标各装一次同一精确版本；删除版本后市场不再显示；错误 JSON 不被展示。</td></tr>
+  <tr><td>负责人</td><td>索引更新、撤回、值班联系人与故障升级路径。</td></tr>
+</table>
+<p>完整字段、示例与待确认问题见 <a href="https://github.com/hrygo/heluo-forge/issues/12">issue #12</a> 与 DESIGN-012。</p>
+
+<h2><span class="no">04</span>不能保证什么</h2>
+<div class="grid">
+  <div class="card"><h3 class="no">没有写前授权</h3><p>索引可读即可安装；没有 <code>installEnabled</code>、租约或每次写前复核。</p></div>
+  <div class="card"><h3 class="no">没有逐版本证据</h3><p>format-1 没有 integrity、OS/CPU、matrix 或 policyRevision；只能依赖 AIHUB 策展与私服不可变。</p></div>
+  <div class="card"><h3 class="no">不能覆盖全通道</h3><p>用户仍可添加其它索引、用 CLI 或任意 spec 安装；不宣称 REQ-14/G2 全通道通过。</p></div>
+  <div class="card"><h3 class="no">不能远程卸载</h3><p>删索引只停止新的目录安装；已装代码需终端运维独立处置。</p></div>
+</div>
+<div class="note amber">
+  <b>安全边界：</b>安装信任来自 AIHUB 策展、Artifactory ACL/同版不可变、原生市场提示与终端网络边界；不来自本仓库的生成器或授权服务。
+</div>
+
+<h2><span class="no">05</span>验收：能加、能看、能装、能撤</h2>
+<table>
+  <tr><th>项</th><th>通过标准</th></tr>
+  <tr><td>能加</td><td>三目标各一台，在原生「索引源」添加 AIHUB URL，无报错。</td></tr>
+  <tr><td>能看</td><td>市场显示索引中的插件、版本、说明与图标。</td></tr>
+  <tr><td>能装</td><td>三目标各安装同一精确版本成功，包来自企业 Artifactory。</td></tr>
+  <tr><td>能撤</td><td>删除版本后刷新不再显示，且无法再安装该版本。</td></tr>
+  <tr><td>错误输入</td><td>缺 <code>title.en</code>、版本重复、<code>source.type: git</code> 被拒绝或明确报错。</td></tr>
+  <tr><td>断网</td><td>索引不可达时市场不崩溃；恢复后可重新加载。</td></tr>
+</table>
+
+<footer>
+  CORP-DSH-DESIGN-007 V2.0.0 · CORP-DSH-DESIGN-012 V2.0.0 · 2026-10-21 · 评审稿，非企业批准或上线证据。<br>
+  历史参考（不属目标）：<code>packages/forge-market</code>、旧 <code>market-index</code> HTTP 服务；目标链路只用 DSH 原生市场 + AIHUB 索引 + Artifactory。
+</footer>
+</main>
+</body>
+</html>

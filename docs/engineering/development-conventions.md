@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.2.0 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -60,9 +60,9 @@
 | 层级 | 位置 | 负责验证 | 当前状态 |
 |---|---|---|---|
 | 工程工具测试 | `tests/` | 文档与仓库检查器本身的正反向行为 | 已建立 |
-| 模块单元测试 | `packages/forge-market/test/`、`services/market-index/test/` | 市场内部逻辑、配置、服务端点与失败行为 | 已建立；其余模块未实现 |
+| 模块单元测试 | `packages/forge-market/test/`、`services/market-index/test/` | 历史市场包契约与索引校验 | 已建立；市场服务/生成器不再建设 |
 | 契约测试 | 市场包 `test/` | 市场自有协议、错误码、配置与包形态 | 市场已有本地用例；IAM、网关、DevOps 等企业契约仍待联调 |
-| 集成测试 | `packages/forge-market/test/integration.test.mjs`、`tests/integration/` | 本地 HTTP 归档安装、目录模式一致性与失败传播 | 已建立；临时目录与仿服务，不访问企业系统 |
+| 集成测试 | `packages/forge-market/test/integration.test.mjs`、`tests/integration/` | 历史归档安装链路与失败传播 | 已建立；临时目录与仿服务，不访问企业系统 |
 | 宿主与终端验收 | DESIGN-007 历史记录；后续实机证据 | DSH 挂载、Windows 与银河麒麟业务路径 | 有测试 profile 挂载/面板记录，已恢复；双端企业路径未验，无 `tests/e2e/` 自动化入口 |
 
 - 没有真实用例时不建立会“零用例成功”的业务测试入口。
@@ -82,8 +82,10 @@
 
 - 包版本按语义化版本管理；`0.x` 阶段允许接口调整，`1.0.0` 起不兼容变更必须升主版本。
 - 版本更新与说明在准备发布时生成，不手工散改；具体工具在首个可发布包时确定并回写本文。
-- 发布前置条件：设计已评审、接口已核验、测试通过、`engines.dsh` 明确、包内容清单可审查。
-- 制品先进入私有 registry，再由市场目录引用；已发布版本不可变，撤回通过目录与通道切换实现。
+- 发布前置条件：设计已评审、接口已核验、测试通过、`engines.dsh` 明确；读取真实 npm tarball 核验 Host/Client/patch/资源与 exports/files 闭包，不以本地 link 代替实际包验收。自身和内部定制补 en/zh meta.title/description、授权图标及导出；第三方缺显示资源允许明确 fallback，不一刀切拒收。
+- [ADR-11/13](<../architecture/plugin-registry-source-decision.md>)确定企业私有 npm 为唯一制品源：公网包由仓库同步，内部定制包从固定 Gitee group 源码构建后发布。AIHUB 维护并托管 format-1 索引，只列发布前策展的精确稳定版；本项目只校验索引契约，不生成索引、不保存逐版本证据；内部 scope 不回落公网。
+- [ADR-12](<../architecture/plugin-registry-source-decision.md>)限定首版自包含双端稳定包，不允许终端另解运行时 npm 依赖、自动补 peer 或现场编译；devDependencies/普通build脚本属于上游CI，不据键名误拒。源码workspace依赖如需进入首版，须在构建产物内闭合，不能带workspace/runtime引用发布。统一索引取双端交集，同一profile只用一个规范企业registry；展示资源仅获准内网或省略。
+- 同名同版本不可变；上传/发布权限与包名准入分开，无逐版审批。原生索引只承载目录：索引可读即可安装，没有写前授权/租约/当前许可；不要把它描述成强门禁。更版按原生能力，没有通用 upgrade 时卸载后安装；不私改 profile、不承诺原子升级或自动回滚。实际通道与角色覆盖由 G1/G2 验证，不足只读且不算准入通过。
 - 根工程永不发布；未通过门禁的包不得出现在市场目录。
 
 ## 8. 安全

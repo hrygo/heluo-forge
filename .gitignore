@@ -22,6 +22,9 @@ core
 .env
 .env.*
 !.env.example
+.npmrc
+*.local.json
+*.local.env
 *.pem
 *.key
 *.p12

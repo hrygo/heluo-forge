@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.2.0 |
+| 版本 | V0.5.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -17,7 +17,7 @@
 
 ## 1. 结论
 
-本索引管九个 DSH 扩展入口与两个独立服务入口。各模块详细设计均已建立且仍为草案；`forge-market` 已有包清单、Host/Client 实现与测试，`market-index` 已有 HTTP 参考实现，其余模块只有职责 README。设计状态、代码实现与上线准入分别判断。
+本索引管八个 DSH 扩展包、原生插件市场与两个独立服务入口。市场已切换为轻量模式：DSH 原生索引源 + AIHUB 托管 format-1 JSON，不再要求自定义市场插件；`forge-market` 与旧 HTTP 服务为历史参考，`market-index` 只保留只读索引校验器。其余设计仍为草案；设计状态、代码实现与上线准入分别判断。
 
 详细设计使用[模块设计模板](../templates/design-template.md)，外部字段级契约仍以[契约目录](../contracts/gateway-contract.md)为唯一真源，设计只引用不复制。
 
@@ -33,20 +33,22 @@
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | aarch64 产物、凭据注入、结构化输出、只读命令面 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案 | aarch64 产物、环境变量鉴权、JSON 稳定性、命令面 |
 | `@heluo/forge-sdd` | Skill pack + CLI | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案 | CI 触发方式、原子提交边界、产物与需求编号联动 |
-| `@heluo/forge-market` | Host + Web Client，附配置 bundle | [plugins/forge-market.md](plugins/forge-market.md) | 草案 | 真实 Gitee 归档、group 归属、摘要/兼容性门禁、IAM/角色、镜像与完整页面 |
+| 原生插件市场 | DSH 内置 + AIHUB 索引 | [plugins/forge-market.md](plugins/forge-market.md) | 评审稿（轻量模式） | AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；三目标安装与索引交付待验；`@heluo/forge-market` 为历史参考 |
 
-设计文档路径相对本目录；九份正文均已落盘，不表示九个包均已实现。
+设计文档路径相对本目录；正文均已落盘，不表示对应包或市场已实现。
 
 ### 2.1 跨模块设计
 
 网关凭据双模式横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V0.1 草案）。
 
+市场的社区/官方源码调研与选型依据见[企业插件市场调研与落地建议](<../architecture/plugin-market-research.md>)；Gitee 侧能力澄清见[专题问询函](<../collaboration/gitee-market-clarification.md>)。原研究为历史证据，来源方向由 [ADR-11](<../architecture/plugin-registry-source-decision.md>)，轻量索引模式由 ADR-13 替代；契约与真实接入仍需分别验证。
+
 ### 2.2 实现与验证入口
 
 | 模块 | 当前实现 | 验证边界 |
 |---|---|---|
-| [forge-market](../../packages/forge-market/README.md) | 十个工具、Host 路由、列表面板、本地目录/缓存与归档安装链路；包保持 `private: true` | 离线测试已有；2026-10-20 测试 profile 挂载与面板状态有历史记录，已恢复 profile；真实 Gitee 与双端企业闭环未验 |
-| [market-index](../../services/market-index/README.md) | HTTP 参考服务、共享管理令牌、内存态提交/评审/撤回、可选计数文件 | 服务与跨模块测试已有；无独立包清单、生产身份、Gitee 扫描或业务数据持久化 |
+| [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
+| [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
 | 其余八包与 DevOps MCP | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
 
 ## 3. 独立服务设计
@@ -54,9 +56,9 @@
 | 服务 | 代码位置 | 设计文档 | 状态 | 主要待确认 |
 |---|---|---|---|---|
 | DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设，当前不建设 | CLI 前提不成立时先评审形态变更、范围与成本，批准后才启动 |
-| 插件市场服务 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 已有参考实现；生产仍规划 | Gitee 发现与校验、IAM/角色、持久化、部署与恢复 |
+| 索引契约与校验 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 评审稿；只读校验器可用 | AIHUB 索引 URL/JSON/更新 SLA、Artifactory 终端认证与三目标安装待验 |
 
-私有 npm 制品仓库不是自研服务；当前市场安装取 Gitee 归档，registry 接入或镜像仍待确认。部署与运维边界见[部署说明](../../deploy/README.md)。
+[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)已确认企业 npm 唯一源与 AIHUB 原生索引；007/012 为评审稿，企业审核/批准待定，不以文档定版代表准入。本项目不建生成器、服务、写前授权或全通道强制；旧插件/HTTP 服务仅历史参考。部署与运维边界见[部署说明](../../deploy/README.md)。
 
 ## 4. 设计顺序
 
@@ -67,12 +69,12 @@ forge-iam → forge-policy → forge-enterprise
 forge-gateway → forge-brand → forge-market
 forge-devops → CLI 前提核验 → 形态评审获准后才建设 devops-mcp
 forge-gitee → forge-sdd
-market-index 服务 → forge-market 的目录来源
+AIHUB 索引 JSON → DSH 原生市场的目录来源
 ```
 
 - 身份与策略改变工具管线行为，先设计，避免其他包按错误假设返工。
 - 组合包依赖各成员包的入口与禁用语义，最后设计。
-- 市场目录服务与市场接入包分别设计后再对接协议。
+- 市场不再自建目录服务或接入包；索引契约与 AIHUB 交付单独验收。
 
 ## 5. 完成判据
 

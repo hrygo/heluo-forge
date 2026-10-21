@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.3.0 |
+| 版本 | V0.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -23,7 +23,7 @@
 
 建议采用 **pnpm workspace 单仓多包（monorepo）**：文档按职责分类，客户端插件包、独立运行服务、部署资产、工程脚本及跨模块测试分别管理。该组织方式覆盖从方案评审到开发、测试、发布和运维的完整迭代，但不把本次目录整理等同于插件或市场已经实现。
 
-工程整理已交付可执行检查、协作约定与九个包、两个服务的职责入口。其后 `forge-market` 已建立真实包清单、源码、面板与测试，`market-index` 已建立 HTTP 参考实现；其余模块仍为规划。市场须区分客户端插件、目录与发布控制、制品来源三个层次；当前取 Gitee tag 归档，registry 接入或镜像仍待确认。
+工程整理已交付可执行检查、协作约定与九个包、两个服务的职责入口。其后 `forge-market` 建立过旧包清单与测试，`market-index` 曾建立 HTTP 参考实现；2026-10-21 市场改用轻量模式：DSH 原生「索引源」+ AIHUB 托管 format-1 JSON，`services/market-index` 只保留只读校验器，旧插件与 HTTP 服务转为历史参考。企业私有 npm 仍为唯一制品源（[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)），本仓库不建生成器、不写前授权、不承诺全通道；索引交付与三目标安装为评审目标。
 
 **工程整理已由用户于 2026-10-20 批准实施，§4.7 的顺序已执行，整理时点结果见 §4.8。** 该记录不等于后续模块或生产准入获批。仓库公开可见不改变敏感信息、许可证和一期产品边界；当前模块状态以[根 README](../../README.md)与[设计索引](../design/README.md)为入口。
 
@@ -124,37 +124,40 @@ heluo-forge/
 | `@heluo/forge-devops` | `packages/forge-devops/` | 复用现有 DevOps CLI，以受控命令白名单提供只读工具面；MCP 服务仅在另行决策后建设 | `docs/design/plugins/forge-devops.md` |
 | `@heluo/forge-gitee` | `packages/forge-gitee/` | 复用现有 `gh` 兼容 CLI，以受控命令白名单提供只读工具面 | `docs/design/plugins/forge-gitee.md` |
 | `@heluo/forge-sdd` | `packages/forge-sdd/` | Skill pack + CLI；流程产物与一致性 | `docs/design/plugins/forge-sdd.md` |
-| `@heluo/forge-market` | `packages/forge-market/` | 已有 Host + Client 实现、十个工具、列表面板、配置 bundle 与测试；完整治理未闭环 | `docs/design/plugins/forge-market.md` |
+| `@heluo/forge-market` | `packages/forge-market/` | 历史参考包：Host + Client、十个工具、面板、bundle 与测试；不属轻量模式目标 | `docs/design/plugins/forge-market.md` |
 | `@heluo/forge-brand` | `packages/forge-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/forge-brand.md` |
 
-上表九份设计正文均已建立且仍为草案；设计路径不再是待创建项。只有市场插件已有真实包清单与实现，其余八包仍只保留职责 README。
+上表九份设计正文均已建立；市场设计为正式评审稿，其余仍为草案，设计路径不是待创建项。只有市场插件已有真实包清单与实现，其余八包仍只保留职责 README。
 
-真实 Node 包启用时采用 `src/`、`test/`、`package.json` 等局部布局；配置 bundle 不强制建立空 `src/`。对外只能使用声明的导出，不跨包直接导入另一个包的 `src`。实际包之间采用显式 `workspace:` 依赖，并避免循环依赖。新的 Node 组件默认 TypeScript；上游复用组件保留其合理语言，不因 monorepo 强制改写。
+真实 Node 包启用时采用 `src/`、`test/`、`package.json` 等局部布局；配置 bundle 不强制建立空 `src/`。对外只能使用声明的导出，不跨包直接导入另一个包的 `src`。源码包之间采用显式 `workspace:` 依赖，并避免循环依赖；进入市场首版的实际发布包须将运行产物自包含，不携带需要终端解析的 workspace/外部 npm 运行依赖。新的 Node 组件默认 TypeScript；上游复用组件保留其合理语言，不因 monorepo 强制改写。
 
 ### 4.3 独立服务与私有市场分层
 
 | 层次 | 位置 | 后续建设内容 | 本次交付 |
 |---|---|---|---|
 | DevOps MCP 服务 | `services/devops-mcp/` | 条件建设：仅当 DevOps CLI 无法满足已确认的结构化输出、用户授权或必要身份能力时，才评审 HTTP 工具面及服务端职责 | 当前不建设；保留边界 README 与条件设计，不启动监听或模拟生产接口 |
-| 市场目录与发布控制 | `services/market-index/` | 目标为 Gitee 发现、校验、权限与持久发布状态；当前 HTTP 参考服务已有提交、评审、撤回、计数与共享管理令牌 | 工程整理时交付 README；后续已建立 `server.mjs` 与测试，无生产部署或独立清单 |
-| 私有 npm 制品仓库 | `deploy/registry/` | 企业现有 registry 优先；部署参数、认证、备份、恢复、访问与保留策略 | 运维范围说明，不部署仓库或写入真实地址/令牌 |
-| 客户端市场接入 | `packages/forge-market/` | 当前经自有 JSON API 或本地目录取条目，从 Gitee 归档安装；角色与完整发布治理仍为目标 | 工程整理时交付 README；后续已有 Host/Client、bundle 与本地测试，见 DESIGN-007 |
+| 索引契约与校验 | `services/market-index/` | 只保留 format-1 只读校验器与契约；不建市场服务、生成器、数据库或审批后台 | 校验器与 13 项测试；无服务、无生产部署 |
+| 私有 npm 制品仓库 | `deploy/registry/` | 企业私有npm承载公网同步和内部定制包；认证、内部scope、备份恢复、访问/撤回与保留策略 | 运维范围说明，不部署仓库或写入真实地址/令牌 |
+| 原生市场接入 | DSH 内置 + AIHUB 索引 | 用户添加 AIHUB 只读 URL；官方 manager 从企业 npm 安装 | 不建自定义市场插件；`packages/forge-market/` 为历史参考 |
 | 双端配置与分发 | `deploy/clients/` | Windows 与银河麒麟的配置、安装、更新及回退资产 | 规划说明，不提交 MSI/deb/凭据或自建新客户端 |
 
-以下为原 registry 分层方案的目标发布流程，不是当前参考实现的运行图；Gitee 归档与制品库镜像的最终关系仍待确认。
+以下为ADR-11下的目标发布流程，不是当前Gitee归档参考实现的运行图；固定group用于内部源码，所有获批插件的制品都从企业npm取得。
 
 ```mermaid
 flowchart LR
-  C[开发与评审] --> T[构建、测试和兼容核验]
-  T --> A[受控发布批准]
-  A --> R[私有 npm 制品仓库]
-  R --> I[市场目录候选版本校验]
-  I --> P[发布或切换已批准目录]
-  P --> D[DSH 市场客户端]
+  G[固定Gitee group内部源码] --> C[开发与评审]
+  C --> T[构建、测试和兼容核验]
+  T --> A[既有内部包发布流程]
+  A --> R[企业私有 npm 制品仓库]
+  U[公网npm] -->|企业仓库侧同步| R
+  R --> I[AIHUB 维护 format-1 索引]
+  W[管理员维护 registry 与包名名单] --> I
+  I --> P[只读 index.json URL]
+  P --> D[DSH 原生插件市场]
   D --> R
 ```
 
-该图描述后续发布设计要求，不代表本次启用自动发布。目录必须在制品可获取并通过校验后发布；已发布版本保持不可变，回退优先切换到已核验版本/通道。详细 schema、认证与可信度机制仍须核对目标 DSH 版本及企业平台能力，不预设签名协议。
+该图描述轻量模式的索引与安装链路，不代表 AIHUB 已交付或三目标已验。AIHUB 在发布前策展并整体替换索引；本项目只校验 JSON 契约，不设单写发布、current 切换或写前授权。已发布版本不可变；更版按原生能力，没有通用 upgrade 时卸载后安装，不承诺原子升级或自动回滚。字段、认证与托管要求见 DESIGN-012 与 issue #12。
 
 ### 4.4 逐插件详细设计模板
 

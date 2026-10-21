@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-001 |
 | 文档名称 | 河洛企业级智能研发平台推广实施方案 |
-| 版本 | V1.3.3 |
+| 版本 | V2.0.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟，责任人待确认） |
@@ -16,7 +16,7 @@
 | 门禁 | G0 |
 | 文档层级 | L2 实施计划；字段级契约由子文档承担（见架构设计 §12） |
 
-> 编制依据：原文历史依据为 DSH `0.2.1-rc.2` 源码、npm registry 与 GitHub 发布资产（原记载核验日期 2026-10-20），§3 保留该历史依据，不表示本次重新核验源码或发布状态。本次 V1.2 仅于 2026-10-20 对照项目协作规范、需求基线、总体架构、AI 网关契约及文档清单进行文档核对；未新增源码、网络接口或实机测试证据。企业 IAM / 网关 / DevOps / Gitee 接口、Windows 与银河麒麟实机、性能与恢复演练均未验，接口、保留期、编制责任人与签署人仍待团队确认。
+> 编制依据：原文历史依据为 DSH `0.2.1-rc.2` 源码、npm registry 与 GitHub 发布资产（原记载核验日期 2026-10-20），§3 保留该历史依据，不表示本次重新核验源码或发布状态。历史 V1.2 于 2026-10-20 对照项目协作规范、需求基线、总体架构、AI 网关契约及文档清单进行文档核对；本版来源、自包含三目标首版及原生索引轻量模式依据 2026-10-21 用户确认的 ADR-11/13 和正式市场设计同步，未新增企业网络接口或实机测试证据。企业 IAM / 网关 / DevOps / Gitee 接口、Windows/UOS/麒麟实机、性能与恢复演练均未验；统信 UOS 20 与银河麒麟 aarch64 并存，不作为替代，市场矩阵按三目标取证，接口、保留期、编制责任人与签署人仍待团队确认。
 >
 > 关联文档：[河洛企业级智能研发平台总体架构设计](../architecture/platform-architecture.md)、[河洛企业级智能研发平台需求与场景基线](../requirements/requirements-baseline.md)、[AI 网关契约](../contracts/gateway-contract.md)、[文档清单](../DOCUMENT-REGISTER.md)。
 
@@ -38,6 +38,7 @@
 | 4 | 自研 DevOps 平台，提供 API 与 CLI | 复用现有 CLI，通过受控命令白名单提供只读工具面；不自建 MCP 服务 |
 | 5 | 试点 3 部门 800 人，Windows 与银河麒麟（ARM）各占 50%，用户有本机管理员权限可自助安装 | Windows 走官方 App + MSI 自助安装（MDM 可选）；麒麟走本机 Web，麒麟实机验证前置为 P0 准入项 |
 | 6 | 本机 Web 不供他人使用 | 严格绑定 `127.0.0.1`，保留 launch token 门禁并由 `.desktop` 启动脚本自动读取拉起，不做入口 SSO |
+| 7 | 企业 npm 统一分发，内部定制源码固定 Gitee group；首版仅自包含、三目标通用稳定包（2026-10-21 用户决策） | 见[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)；AIHUB 维护托管索引，原生「索引源」+ 官方 manager 安装；不建生成器/在线授权/租约；npm 适配、索引交付与企业控制仍需验 |
 
 ### 1.2 不在本期范围
 
@@ -124,7 +125,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | 5 | 官方桌面端只构建 macOS 与 Windows，发布 feed 目标为 `mac-arm64`、`mac-x64`、`win-x64` | `apps/desktop/scripts/electron-builder-config.mjs`、`apps/desktop/publishing/README.md` | 银河麒麟没有官方 Electron 客户端，只能走本机 Web |
 | 6 | Linux 沙箱链为 `bwrap → Landlock → fail closed`，无可用后端时拒绝执行而非降级 | `packages/sandbox/sandbox-local/README.md` | 约 400 台麒麟的首要准入验证项；加固内核可能直接不可用 |
 | 7 | Web 前端构建目标为 `es2022` | `apps/web/vite.config.ts` | 浏览器版本已确认达标，不再作为风险 |
-| 8 | 插件市场为 format-1 index，私有 registry 优先且不回落公网，自带 index 生成器 | `packages/boot/plugin-market/README.md`、`packages/boot/plugin-manager/README.md`、`apps/plugin-market-generator/README.md` | 企业市场只差治理与流水线 |
+| 8 | 插件市场为 AIHUB 托管的 format-1 index，私有 registry 优先且不回落公网 | [DESIGN-012](../design/services/market-index.md)、[issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 仍需 AIHUB 索引、终端 npm 认证与三目标实机验证 |
 | 9 | 凭据文件为 0600 的 `$DSH_HOME/.credentials.yaml`，agent 以同一 OS 用户运行，可读取 | `packages/credentials/credentials-local/README.md` | 必须用 `@heluo/forge-policy` 硬拒绝访问 `$DSH_HOME/**` 并配合沙箱遮蔽挂载 + 短 TTL |
 | 10 | 公开部署的 launch URL 即进程凭据，文档要求只分享给预期用户 | `docs/user/guide/public-deployments.md` | 麒麟本机 Web 强制绑定 `127.0.0.1`，由 `dsh-web-open` 脚本读取本机 launch URL 拉起 |
 | 11 | npm 上 `@deepseek-ai/dsh` 共 36 个版本，全部为预发布，最近 30 天 14 个版本，最新 `0.2.1-rc.2` | npm registry 实测 | 必须锁版本、内部镜像、兼容性门禁 |
@@ -151,6 +152,8 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | P0-4 | 刷新并发与锁超时验证：两个进程共用一份凭据文件，`modifyRecord` 内的网络刷新设 ≤5 秒超时目标 | 注入 IAM 慢响应、断网与刷新失败，记录锁等待、持锁、释放和下一请求恢复；不互相触发 `invalid_grant`，不得把网络超时值直接当作已证实锁等待上界 |
 | P0-5 | 网关额度与日志契约联调：双维度额度、429 problem+json（含 `quotas`）、关闭正文日志（C4）、按人首调用/日活统计 | 一个真实 token 完成调用并触发一次 429 额度提示（落入 `CORP-DSH-GW-001`） |
 
+市场侧的前置取证不由本节关闭，逐项清单见 [插件市场 P0 接入取证单](<market-p0-verification.md>)；索引或安装关键项不成立时不把索引加入终端，不影响平台 G0 判定。
+
 ### 4.2 P1 概念验证（4 周，准入 G1）
 
 | 项 | 内容 | 交付物 |
@@ -168,7 +171,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | P2-1 | 按 P1 实测结果完善 DevOps CLI 只读命令与权限矩阵；若 CLI 不满足既定前提，单独提交 MCP 服务形态变更评审 | 已确认命令清单、字段、权限矩阵与异常处理；无形态变更批准时不建设 MCP |
 | P2-2 | 条件项：仅在其他获批 MCP 集成确认需要时，评审 `dsh-mcp-client` 的凭据更新、安全重试分类与兼容性补丁 | 未经单独范围批准不实施、不发包；若获准，补充独立测试与上游提案；任何结果未知的调用不自动重放 |
 | P2-3 | 终端打包：Windows MSI 自助安装（MDM 可选）+ 配置预置；麒麟 deb + 内部 apt 源 + `systemd --user`（绑定 `127.0.0.1`）+ `dsh-web-open` 启动脚本 | 两条自助安装通道与安装校验指引（落入 `CORP-DSH-PKG-001`） |
-| P2-4 | 企业插件市场：私有 registry + CI 生成 index + 兼容性门禁 + 按角色控制 `plugin_manager` | 可搜索、可安装的内部市场（落入 `CORP-DSH-DIST-001`） |
+| P2-4 | 自包含三目标市场：AIHUB 托管 format-1 索引、原生索引源浏览、官方 manager 精确安装；不建生成器、服务、PG、代理或自造安装器 | 以 DESIGN-007/012 与 issue #12 为契约；G1 锁定索引 URL、Artifactory 入口与终端认证；G2 做三目标安装、撤回、错误 JSON、断网与混源负向；未验不判 A9 通过 |
 | P2-5 | 策略与审计（`@heluo/forge-policy`）：7 类角色 preset、`$DSH_HOME/**` 硬拒绝、客户数据外发确认（C3）、OTel 决策审计 | 安全评审材料与策略包（落入 `CORP-DSH-POLICY-001`） |
 | P2-6 | 3 部门 800 人试点运行（6 周）：建议按支持人力（1:300）分两批各 400 人进场，第 4 周中期检查、第 6 周判定 M1–M3、M5–M6 | 试点评估报告（落入 `CORP-DSH-PILOT-001`） |
 | P2-7 | 轻量 SDD Skill 包（推广前交付）：1 skill + 1 CLI + `@heluo/forge-policy` 阶段路径规则 + 1 个 CI job | SDD 软件包与试点验证（落入 `CORP-DSH-SDD-001`） |
@@ -241,7 +244,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | ArgoCD（如有） | [argoproj-labs/mcp-for-argocd](https://github.com/argoproj-labs/mcp-for-argocd) | ★590；TS；Apache-2.0 | 现成 MCP | 浅 |
 | Kubernetes（如有） | [containers/kubernetes-mcp-server](https://github.com/containers/kubernetes-mcp-server) | ★2169；Go；Apache-2.0 | 现成 MCP | 浅 |
 | 网关 | [BerriAI/litellm](https://github.com/BerriAI/litellm) | ★61.6k | 仅作 Kong 的对照参考，不部署 | — |
-| 市场索引 | DSH 自带 `apps/plugin-market-generator` | 同版本 | 直接用于内部 index | — |
+| 市场索引 | AIHUB 托管 format-1 JSON | 外部平台交付 | 只校验契约；不自建生成器、不 fork 宿主 | 索引由 AIHUB 负责 |
 
 取舍：当前 DevOps/Gitee 接入优先使用企业已有 CLI，不新增 MCP server 或 Gitee arm64 交叉编译封装。`dsh-oidc` 与 `dsh-mcp-client` 的改动仅在各自设计仍有独立必要性并经核验后实施，不由上述 CLI 决策自动授权。
 
@@ -312,8 +315,8 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | A6 | 麒麟沙箱 | 在目标内核 / runner 实测允许与禁止路径、子进程、必要网络边界；结论为 bwrap / Landlock / 自定义 runner 经验证可用或未通过，组件存在不等于隔离成立；无可用隔离时 fail closed，不开放相应执行能力，所谓显式降级仅指经评审关闭能力，不是关闭沙箱继续执行；Windows 保护同按 A4 验证 |
 | A7 | DevOps 只读闭环 | 用户故事/需求查询返回真实正确结果并可用于生成 spec；工具面以提供方确认的只读清单为准，不在清单内或无法判定读写的工具拒绝；风险判断依据服务端权限与受控清单，不把工具自报 `mutating` 当可信授权源；错误 scope / 越权查询由服务端拒绝；401 / 超时 / 断流后无法确认未执行时不盲目重放；保留主体、工具与决定的最小审计 |
 | A8 | Gitee 工具闭环 | 仓库 / Issue / PR 查询可用；跨用户、错误 scope / 资源与撤销凭据的越权访问被服务端拒绝；写操作默认关闭、开关可独立控制，未启用时拒绝写；可选写能力不因验收而扩大一期必做范围 |
-| A9 | 内部市场与安装权限 | 公网 registry 不可达时开发者仍能从内部源搜索、安装已审批插件，无公网回落；只读与受限角色禁用 `plugin_manager`，未审批包、校验失败或不兼容包不得在受管通道安装；本机管理员能改 preset / 配置，不将其当不可绕过授权，须验证绕过客户端档位后服务端仍拒绝越权企业调用 |
-| A10 | 版本可控 | 客户端与插件版本固定；升级前执行登录 / 模型 / MCP / 策略 / 市场兼容性门禁，失败不得放量，按批准步骤可回滚并复测，不因回退丢弃用户工作区 |
+| A9 | 内部市场与安装 | AIHUB 索引只列自包含、三目标通用、稳定精确版本；原生市场可添加并展示；官方 manager 从企业 npm 安装成功。撤回后索引不再显示，混源/公网回落/错误 JSON 不安装。只读/受限角色禁装；原生索引源无法证明全通道硬隔离，因此不宣称 A9/REQ-14 全通道通过，不承诺防本机恶意管理员 |
+| A10 | 版本可控 | 索引只列精确稳定版本，包体来自企业 npm 且同版不可变；更版按原生能力，没有通用 upgrade 时卸载后安装；不承诺原子升级、自动回滚或恢复原排序。撤回从索引删除并在私服阻断，已装代码独立处置；不丢用户工作区 |
 | A11 | 轻量 SDD | change-id 贯穿 branch/commit/PR；freeze 后改动标记 stale；评审阶段写源码被拒绝；PR 原子包含实现+spec+archive；无宿主适配与自研遥测；无阶段元数据时仍执行 HARD 安全规则，不误阻塞普通开发 |
 | A12 | 可选插件隔离与安全回滚 | 无安全依赖的可选插件单独禁用时其余能力正常；IAM / policy / 必要审计等关键安全插件关闭或故障时，依赖它们的企业调用拒绝，不能保留原权限继续执行；bundle 回滚 ≤10 分钟为待演练目标，记录起止点及恢复后的身份、策略、审计验证，不以进程启动代替恢复 |
 | A13 | 审计完整性 | 按基线 REQ-16，模型事件按 `sub` + 调用关联标识归因，有研发变更时关联 `change-id`，普通问答不伪造；决策审计字段缺失为 0；C4 默认无正文日志，保留期经批准；G2 已具最小审计，G3 验证完整性 |
@@ -353,6 +356,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | 6 终端安全矩阵 | 麒麟版本 / 内核 / `uname -a`、runner 与原生模块；Windows 文件 / 命令 / 编码 / 符号链接 / 子进程保护；A4/A6 例外与禁用能力清单 | `CONF-IT-*`、`CONF-SEC-*` | G0 样机与候选结论；G2 双端隔离实测，无法兜底则相应能力不开放，不以关沙箱替代 |
 | 7 按资源令牌 | RFC 8707 `resource` 支持；若不支持，按 audience 预注册 client 的替代、缓存键、scope 与一资源一 token 的服务端校验 | `CONF-IAM-*`、`CONF-DEVOPS-*`、`CONF-GW-*` | G0 确认方案；G1/G2 验证资源隔离与 A14，不能用宽 audience 令牌掩盖依赖缺口 |
 | 8 批次、数据与人力 | 800 人一次进场或建议两批各 400 人、观察起点 / 可比性、指标分母、支持时段 / 资源；C3 外发确认与附加扫描规则；C2/C4 正文采样、元数据和证据保留期 | `CONF-PMO-*`、`CONF-IT-*`、`CONF-SEC-*`、`CONF-GW-*` | G0 批次和保留规则方向、编制 / 批准角色；G2 支持、采集与安全参数签署。网关草案中的 7 天 / 180 天仅为待确认值，不构成企业既定保留期 |
+| 企业 npm 接入 | 单 profile 规范 HTTPS 聚合入口、同步留存、scope防混淆、凭据/ACL/撤权；自包含双端交集和当前授权/恢复行为已定，不重问依赖冻结产品或来源方向 | `CONF-IT-*`、`CONF-SEC-*`；Gitee仅确认定制源码，构建发布方提供绑定证据 | G1 核验发行/profile基线、现有CI/静态托管及字段契约；G2按DESIGN-007/012验证自动准入、断网/旧缓存拒绝、混源/权限/公网资源、发布防回退及两步恢复；缺失仅浏览，不开放安装或自动缩减验收 |
 | 运行支持与去留 | 各服务事件负责人、跨域升级 / 安全指挥、退出时的授权撤销与数据保全、回退 / 恢复步骤和演练环境；G3 评估与复测签署角色 | `CONF-IAM-*`、`CONF-GW-*`、`CONF-DEVOPS-*`、`CONF-GITEE-*`、`CONF-IT-*`、`CONF-SEC-*`、`CONF-PMO-*` | G0 认领；G2 运行承接与基础演练；G3 按基线签署去留。无负责人、无可判定证据或观察不足不得自动过门禁 |
 
 ## 附录 A 银河麒麟兼容性验证脚本

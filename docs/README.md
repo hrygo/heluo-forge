@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.11.0 |
+| 版本 | V1.18.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -25,7 +25,7 @@
 
 本总览负责文档导航、内容归属与治理规则；编号、路径、版本和状态的登记由[文档清单](DOCUMENT-REGISTER.md)维护。入口调整不改变业务范围、版本号或已有审批记录。
 
-当前仓库已从纯方案与工程底座推进到市场模块实现：插件与 HTTP 参考服务的实现、测试及限制见[根 README](../README.md#4-仓库如何组织)和[设计索引](design/README.md#22-实现与验证入口)。受控设计仍为草案，企业联调、生产市场治理和双端分发尚未完成；代码存在或本地检查通过不代表 G0–G3 获批。DevOps/Gitee 按现有 CLI 只读基线评审，MCP 服务与核心补丁为条件项。
+当前仓库已从纯方案推进到轻量市场接入准备：市场改用 DSH 原生「索引源」+ AIHUB 托管 format-1 JSON，`services/market-index` 只保留只读校验器；旧插件与 HTTP 服务为历史参考。索引契约、P0 与 AIHUB issue #12 已建立，企业审核批准、AIHUB 索引、三目标安装与发行分发尚未完成；代码存在或本地检查通过不代表 G0–G3 获批。DevOps/Gitee 按现有 CLI 只读基线评审，MCP 服务与核心补丁为条件项。
 
 ## 2. 文档地图
 
@@ -45,7 +45,7 @@
 |---|---|---|---|
 | `requirements/` | 范围、画像、场景、需求与指标 | [需求与场景基线](<requirements/requirements-baseline.md>) | 业务方、PM、安全、试点用户 |
 | `architecture/` | 跨域决策、信任边界、领域设计、ADR | [总体架构设计](<architecture/platform-architecture.md>)；备选 [静态密钥方案](<architecture/gateway-static-key-option.md>)（未采纳） | 架构评审、各团队负责人 |
-| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>) | PM、实施团队 |
+| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>) | PM、实施团队 |
 | `design/` | 逐模块详细设计的索引与状态 | [设计索引](<design/README.md>) | 插件与服务开发者 |
 | `contracts/` | 外部系统字段级契约 | [AI 网关契约](<contracts/gateway-contract.md>) | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
@@ -78,12 +78,17 @@
 | 入口 | 文档 | 用途与边界 |
 |---|---|---|
 | 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 七封可独立转发的正文、45 项问题；回函核验后写入技术契约，不自动构成准入 |
+| 市场方案 | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>) | 评审稿；AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；不等企业批准或上线 |
+| AIHUB 索引交付 | [issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 外部交付 issue：URL、format-1、registry、更新/撤回时限、三目标联调；作为验收跟踪，不替代企业批准 |
+| 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；索引交付、三目标安装与全通道边界仍需验 |
+| 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
+| Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 九个安装包与两个独立服务的详细设计状态与路径 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
-辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。
+辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V2.0.0 评审稿示意，不替代正文契约或实现清单）。
 
 ## 5. 阅读顺序
 

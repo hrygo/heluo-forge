@@ -1,13 +1,13 @@
 # AGENTS.md — Heluo Forge agent 工作约定
 
-> 适用范围：仓库根目录及全部子目录。版本：V1.4；最后更新：2026-10-21。
+> 适用范围：仓库根目录及全部子目录。版本：V1.5；最后更新：2026-10-21。
 >
 > 本文件补充项目执行规则，不扩大用户授权。系统、开发者与当前用户指令优先；目录内的指令按宿主加载规则适用。新增局部规则时只写该目录的差异，不复制全局规则，不放宽授权、审批与数据边界。
 
 ## 1. 必须掌握的项目边界
 
 - 河洛 / Heluo Forge 是基于 DeepSeek Harness（DSH）的企业方案与扩展工程，工程标识为 `heluo-forge`；本仓库不是 DSH 源码仓库，不分发 DSH 本体。
-- 当前已有工程检查器、`@heluo/forge-market` 插件及 `market-index` HTTP 参考实现；其余八个包、DevOps MCP、生产市场治理与双端分发仍未实现。先查[根 README](README.md)、[设计索引](docs/design/README.md)与目标模块说明，不能把离线测试、历史实机记录或草案状态当作生产就绪证据。
+- 当前已有工程检查器与只读索引校验器；`@heluo/forge-market` 与旧 `market-index` HTTP 服务为历史参考，不属轻量市场目标。市场目标为 DSH 原生「索引源」+ AIHUB 托管 format-1 JSON；AIHUB 索引、三目标安装、其余八个包、DevOps MCP 与发行分发仍未实现。先查[根 README](README.md)、[设计索引](docs/design/README.md)与目标模块说明，不能把离线测试、历史实机记录或草案状态当作生产就绪证据。
 - 范围以[需求基线 §2](docs/requirements/requirements-baseline.md#2-范围边界唯一真源)为准。DevOps/Gitee 优先复用已有 CLI，只读命令、双端产物、凭据注入与结构化输出须核验；前提不成立时关闭对应能力并提交替代形态评审。REQ-12 与 N7 中的 MCP/核心补丁是条件项，不是当前实施授权，不在本仓库创建 DSH fork 或修改上游。
 - 示例使用 `corp.example`、`svc-ci` 等占位，不写凭据、真实用户数据、内网地址或本机绝对路径；HTML 自包含，不依赖外部脚本。安全问题按 [SECURITY.md](SECURITY.md)处理。
 
@@ -25,7 +25,7 @@
 | 新增或修改模块 | [设计索引](docs/design/README.md)、目标模块 README、[开发约定](docs/engineering/development-conventions.md) | 先满足设计准入，再建立清单、源码与测试 |
 | 修改部署或运行说明 | [部署说明](deploy/README.md)、[运维索引](docs/operations/README.md) | `deploy/` 存资产；`docs/operations/` 写经验证的运行步骤 |
 | 修改检查器或 CI | [开发约定](docs/engineering/development-conventions.md)、对应脚本/测试/工作流 | 更新相应正反向用例；保留离线、最小权限与固定动作版本边界 |
-| 修改市场插件或参考服务 | [插件说明](packages/forge-market/README.md)、[服务说明](services/market-index/README.md)、DESIGN-007/012 与实际用例 | 分清客户端工具、宿主路由、服务端点及制品来源；共享令牌和自报 `submitter` 不等于 IAM 授权；不把内存态评审写成持久化发布流程 |
+| 修改市场或索引契约 | [轻量市场设计](docs/design/plugins/forge-market.md)、[索引契约](docs/design/services/market-index.md)、[issue #12](https://github.com/hrygo/heluo-forge/issues/12) 与校验器用例 | 分清 AIHUB 索引、原生市场与 Artifactory 职责；不建生成器/服务/写前授权，不把索引可读写成强门禁；历史包与旧服务仅追溯 |
 | 编写或维护文档 | [治理规则](docs/README.md#6-编写约定)、[文档清单](docs/DOCUMENT-REGISTER.md)、目标元数据 | 更新版本号、登记与受影响引用；不写修订记录，历史由 Git 承担 |
 
 内容归属、版本和状态规则见[文档总览](docs/README.md)。按职责与证据处理冲突：范围看需求，字段看对应契约；草案、备选或详细程度不能自动覆盖已确认决策。发现冲突时报告差异并修订相关文档，不自行替团队裁定。
@@ -44,7 +44,7 @@
 - 默认简洁中文；命令、路径、接口字段和模型 ID 保留原文。事实、决策、推断与待确认分开；接口、版本与时效性结论写明来源、核验日期及未验范围。
 - 文档规则按[文档总览 §6](docs/README.md#6-编写约定)执行。新增设计用[模块模板](docs/templates/design-template.md)，其他受控文档用[通用模板](docs/templates/_template.md)；调整模板中的相对链接以适配实际落位。
 - `packages/` 放 `@heluo/forge-*` 扩展，`services/` 放独立服务，`deploy/` 放部署资产。根工程不发布；包间使用 `workspace:` 引用，不跨包导入源码路径。
-- 模块先完成设计、目标 DSH 接口核验与设计索引登记；准入满足后再创建包清单与源码。清单声明 `engines.dsh`、`private` 和实际测试入口，不预建虚构入口或零用例业务测试。现有市场参考服务尚无独立包清单，由根工程发现测试；正式服务打包前须明确运行时与清单规则，并同步检查器。
+- 模块先完成设计、目标 DSH 接口核验与设计索引登记；准入满足后再创建包清单与源码。清单声明 `engines.dsh`、`private` 和实际测试入口，不预建虚构入口或零用例业务测试。`services/market-index` 只保留只读校验器，不建服务或独立清单。
 - bundle 使用 `cordis.patch.yml`，各项能力独立配置、可单独禁用；安全依赖失效时的行为遵循设计与契约，不以“可禁用”绕过授权或安全门禁。
 
 ## 5. 验证与交付
@@ -56,7 +56,7 @@ pnpm check
 git diff --check
 ```
 
-- `pnpm check` 验证文档、仓库规则及 `node --test` 自动发现的检查器、市场包、参考服务和本地集成用例；`test:unit` 当前也指向这一全量发现入口。需要单独定位时用根 README 中的模块命令，已有完整有效结果不重复运行。企业契约、DSH 挂载与双端验证按风险补充，不能用本地仿服务测试替代。
+- `pnpm check` 验证文档、仓库规则及 `node --test` 自动发现的检查器、历史市场包契约、索引校验与归档安装用例；`test:unit` 当前也指向这一全量发现入口。需要单独定位时用根 README 中的模块命令，已有完整有效结果不重复运行。企业契约、AIHUB 索引与三目标安装按风险补充，不能用本地仿服务测试替代。
 - 执行前核对实际 Node/pnpm 与声明版本；有差异时记录环境与未验影响，不把不同版本的通过写成项目指定工具链已验证，不自动升级全局环境或修改版本约束。
 - 检查涉及路径或章节的全部引用、表格列数、登记路径及元数据一致性；核对版本号、登记与旧引用清理。检查器不覆盖的项目人工确认。
 - 工具或环境不具备时，报告具体命令、阻塞原因及未验影响；不以跳过、降低规则或零用例通过宣称完成。

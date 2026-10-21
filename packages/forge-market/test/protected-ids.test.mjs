@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-test('the protected row ids match DESIGN-007 §9.1', async () => {
+test('the protected row ids match DESIGN-007 附录 A.6', async () => {
   const source = await readFile(join(root, 'packages/forge-market/src/validate.mjs'), 'utf8');
   const listed = /const PROTECTED_IDS = \[([^\]]+)\]/.exec(source);
   assert.ok(listed, 'expected a PROTECTED_IDS list');
@@ -14,7 +14,7 @@ test('the protected row ids match DESIGN-007 §9.1', async () => {
   assert.ok(ids.length >= 3);
 
   const doc = await readFile(join(root, 'docs/design/plugins/forge-market.md'), 'utf8');
-  const section = doc.slice(doc.indexOf('### 9.1'), doc.indexOf('## 10. 状态与回退'));
+  const section = doc.slice(doc.indexOf('### A.6'), doc.indexOf('### A.7'));
   const missing = ids.filter((id) => !section.includes(`\`${id}\``));
   assert.deepEqual(missing, [], `undocumented protected ids: ${missing.join(', ')}`);
 });

@@ -20,9 +20,9 @@ test('every policy export is either wired or listed as unwired', async () => {
   const wired = new Set(exports.filter((name) => new RegExp(`\\b${name}\\b`).test(text)));
 
   const design = await readFile(join(here, '..', '..', 'docs', 'design', 'plugins', 'forge-market.md'), 'utf8');
-  const section = design.slice(design.indexOf('### 8.2'), design.indexOf('## 9. 权限与安全'));
+  const section = design.slice(design.indexOf('### A.3'), design.indexOf('### A.4'));
   const declared = new Set([...section.matchAll(/^\| `(\w+)` \| \*\*未接线\*\* \|/gm)].map((match) => match[1]));
 
   const unwired = exports.filter((name) => !wired.has(name));
-  assert.deepEqual([...unwired].sort(), [...declared].sort(), `unwired policy exports must be documented in DESIGN-007 §8.2`);
+  assert.deepEqual([...unwired].sort(), [...declared].sort(), `unwired policy exports must be documented in DESIGN-007 附录 A.3`);
 });
