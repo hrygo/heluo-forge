@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>企业插件市场：整体功能架构（V1.2.0）</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --panel: #ffffff;
+    --ink: #17212b;
+    --muted: #5c6b7a;
+    --line: #dbe3ec;
+    --blue: #1f5fa8;
+    --blue-soft: #e9f1fa;
+    --amber: #9a6208;
+    --amber-soft: #fdf3e2;
+    --red: #9c3131;
+    --red-soft: #fbeceb;
+    --grey: #66727e;
+    --grey-soft: #eef1f4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 36px 22px 60px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 25px; margin: 0 0 8px; letter-spacing: .2px; }
+  h2 { font-size: 17px; margin: 0; }
+  h2 .no { color: var(--blue); font-size: 12px; letter-spacing: .16em; display: block; margin-bottom: 2px; }
+  .lead { color: var(--muted); margin: 0; }
+  .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .badge { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); }
+  .badge.blue { background: var(--blue-soft); border-color: #bfd4ea; color: var(--blue); }
+  .badge.amber { background: var(--amber-soft); border-color: #ecd3a8; color: var(--amber); }
+
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; margin-top: 16px; }
+  .head { margin-bottom: 14px; }
+  .head p { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; }
+
+  .hero { font-size: 18px; line-height: 1.6; margin: 0 0 14px; }
+  .hero b { color: var(--blue); }
+  .note { color: var(--muted); font-size: 12.5px; }
+  .callout { margin-top: 14px; padding: 10px 14px; border-left: 3px solid var(--amber); background: var(--amber-soft); border-radius: 0 8px 8px 0; color: #6b4a0c; font-size: 12.5px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.8px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; background: #fafbfc; }
+  tr:last-child td { border-bottom: 0; }
+  td .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); white-space: nowrap; }
+  td .tag.grey { background: var(--grey-soft); color: var(--grey); }
+  td code, li code, p code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; background: #f1f4f8; padding: 0 4px; border-radius: 4px; color: #33475e; }
+
+  .chain { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 4px; }
+  .stage { position: relative; border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: #fcfdfe; }
+  .stage::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; border-radius: 12px 0 0 12px; background: var(--blue); }
+  .stage .who { font-size: 10.5px; letter-spacing: .08em; color: var(--blue); margin-bottom: 4px; }
+  .stage h3 { margin: 0 0 6px; font-size: 14px; }
+  .stage p { margin: 0; color: var(--muted); font-size: 12px; }
+  .stage:not(:last-child)::after {
+    content: "→"; position: absolute; right: -12px; top: 50%; transform: translateY(-50%);
+    color: #9db0c4; font-size: 14px; background: var(--panel); padding: 0 2px; z-index: 1;
+  }
+
+  .nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
+  .num { background: #f7f9fc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .num b { display: block; font-size: 19px; color: var(--blue); line-height: 1.2; }
+  .num span { font-size: 11.5px; color: var(--muted); }
+
+  .journey { display: grid; grid-template-columns: 1.15fr .85fr; gap: 18px; }
+  .steps { counter-reset: s; margin: 0; padding: 0; list-style: none; }
+  .steps li {
+    counter-increment: s; display: grid; grid-template-columns: 26px 1fr; gap: 10px;
+    padding: 7px 0; border-bottom: 1px dashed #e3e9f0; font-size: 12.8px; color: var(--muted);
+  }
+  .steps li:last-child { border-bottom: 0; }
+  .steps li::before {
+    content: counter(s); width: 22px; height: 22px; border-radius: 50%; background: var(--blue-soft);
+    color: var(--blue); font-size: 11px; display: flex; align-items: center; justify-content: center;
+  }
+  .steps strong { color: var(--ink); font-weight: 600; }
+
+  .sys { background: #f8fafc; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .sys h3 { margin: 0 0 8px; font-size: 13px; color: var(--ink); }
+  .sys ol { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12.3px; }
+  .sys li { margin: 4px 0; }
+  .sys .stop { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #dde5ee; color: var(--red); font-size: 12px; }
+
+  .phases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .phase { border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; background: #fcfdfe; }
+  .phase h3 { margin: 0 0 4px; font-size: 13.5px; display: flex; align-items: baseline; gap: 6px; }
+  .phase h3 span { font-size: 10.5px; color: var(--blue); background: var(--blue-soft); border-radius: 999px; padding: 1px 7px; }
+  .phase ul { margin: 8px 0 0; padding-left: 16px; color: var(--muted); font-size: 12.2px; }
+  .phase li { margin: 3px 0; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .box { border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; background: #fcfdfe; }
+  .box h3 { margin: 0 0 6px; font-size: 13.5px; }
+  .box p { margin: 0; color: var(--muted); font-size: 12.3px; }
+  .box.red { border-color: #eccdca; background: var(--red-soft); }
+  .box.red h3 { color: var(--red); }
+  .box.red p { color: #7a3a38; }
+  .box.amber { border-color: #ecd3a8; background: var(--amber-soft); }
+  .box.amber h3 { color: var(--amber); }
+  .box.amber p { color: #6b4a0c; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 11.8px; margin-top: 12px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+  footer { color: var(--muted); font-size: 11.5px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
+
+  @media (max-width: 980px) {
+    .chain { grid-template-columns: 1fr 1fr; }
+    .stage::after { display: none; }
+    .nums, .phases, .journey, .grid2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>企业插件市场：整体功能架构</h1>
+    <p class="lead">市场 = 一个 DSH 插件 + 一条自动流水线。用户看到的是插件，背后是“名单 → 检查 → 索引 → 官方安装”。</p>
+    <div class="badges">
+      <span class="badge blue">DESIGN-007 V1.2.0 · DESIGN-012 V1.1.1</span>
+      <span class="badge">2026-10-21</span>
+      <span class="badge amber">目标未实现 · 企业接入未验</span>
+      <span class="badge">接口基线 DSH 0.2.1-rc.2</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="head">
+      <h2><span class="no">01</span>它是什么</h2>
+      <p>四块组成，只有第一块是 DSH 插件</p>
+    </div>
+    <p class="hero">市场<b>不是一个新服务</b>，也不是单独一个插件：<br>它是“市场插件 + 静态索引 + 企业 npm + 官方安装器”的组合。</p>
+    <table>
+      <thead>
+        <tr><th style="width:23%">组成</th><th style="width:22%">是不是 DSH 插件</th><th>作用</th><th style="width:22%">谁提供</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>@heluo/forge-market</code></td>
+          <td><span class="tag">是：Host + Web Client</span></td>
+          <td>企业目录的唯一入口：市场页面、安装/更新操作、agent 工具</td>
+          <td>平台组，随企业 DSH 发行预装</td>
+        </tr>
+        <tr>
+          <td>原生索引 + policy/evidence + <code>current</code></td>
+          <td><span class="tag grey">否：静态文件</span></td>
+          <td>目录、检查证据、短时安装开关</td>
+          <td>CI 生成，内网 HTTPS 托管</td>
+        </tr>
+        <tr>
+          <td>企业私有 npm</td>
+          <td><span class="tag grey">否：企业服务</span></td>
+          <td>唯一包体来源，同名同版本不可变</td>
+          <td>企业仓库 / IT</td>
+        </tr>
+        <tr>
+          <td><code>pluginManager</code> + pnpm</td>
+          <td><span class="tag grey">否：DSH 内置</span></td>
+          <td>真正执行安装、写入 profile</td>
+          <td>DSH 本体</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="callout"><strong>一个前提：</strong>市场插件需随企业发行或由 IT 预置到 profile，<b>不能由市场自己安装自己</b>。profile 里没有它，就要走企业软件分发，而不是“先在市场里装市场”。</div>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2><span class="no">02</span>一条主链路</h2>
+      <p>从左到右：谁做、做什么、交给谁</p>
+    </div>
+    <div class="chain">
+      <div class="stage">
+        <div class="who">管理员 / 平台</div>
+        <h3>名单与基线</h3>
+        <p>源地址 + 精确包名；每 profile 一个 registry 与目标矩阵。</p>
+      </div>
+      <div class="stage">
+        <div class="who">CI 生成器</div>
+        <h3>自动检查</h3>
+        <p>自包含、双端交集、真实包与显示资源、完整性；不逐版审批。</p>
+      </div>
+      <div class="stage">
+        <div class="who">内网静态托管</div>
+        <h3>索引与开关</h3>
+        <p>不可变快照 + <code>current</code>；校验完整后原子切换。</p>
+      </div>
+      <div class="stage">
+        <div class="who">市场插件 + Host</div>
+        <h3>写前授权</h3>
+        <p><code>no-store</code> 读当前开关，核 revision/矩阵/单源/版本。</p>
+      </div>
+      <div class="stage">
+        <div class="who">官方 manager / DSH</div>
+        <h3>安装与运行</h3>
+        <p>精确版本安装；分阶段确认到 Host 激活、Client 可用。</p>
+      </div>
+    </div>
+    <div class="nums">
+      <div class="num"><b>60 秒</b><span>单次准入决定有效期</span></div>
+      <div class="num"><b>15 分钟</b><span>控制许可最长有效期</span></div>
+      <div class="num"><b>5 分钟</b><span>既有 CI 轻量续期</span></div>
+      <div class="num"><b>1 个源</b><span>每 profile 规范 registry</span></div>
+    </div>
+    <p class="note" style="margin-top:12px">60 秒／15 分钟／5 分钟是本方案约束，不是 DSH 原生字段。原生 format-1 索引只承载版本与入口信息，不含 integrity/OS/policy 字段；完整性、来源、检查结论在独立 sidecar。索引只筛目录，不是强制白名单。</p>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2><span class="no">03</span>开发者怎么装插件</h2>
+      <p>入口只有一个：插件页的市场面板，或对 agent 说“装 X”</p>
+    </div>
+    <div class="journey">
+      <ol class="steps">
+        <li><div><strong>进入</strong>：「插件」页 → 企业市场；或直接让 agent 安装。</div></li>
+        <li><div><strong>浏览</strong>：名称、来源（内部/镜像）、版本、兼容矩阵、检查状态。</div></li>
+        <li><div><strong>选择</strong>：默认最新合规稳定版；也可选仍合规的旧版。</div></li>
+        <li><div><strong>安装</strong>：点按钮即可；授权检查在后台完成，正常无感。</div></li>
+        <li><div><strong>执行</strong>：看到真实阶段，而不是一个转圈直到结束。</div></li>
+        <li><div><strong>完成</strong>：已可用、需重启 DSH，或失败原因；更新/回退也走这里。</div></li>
+      </ol>
+      <div class="sys">
+        <h3>系统在后台做什么</h3>
+        <ol>
+          <li><code>no-store</code> 取 <code>current</code>，核对 revision、矩阵、单源、精确版本。</li>
+          <li>判定有效期 = <code>min(60 秒, expiresAt)</code>，过期/不可达直接拒写。</li>
+          <li>调官方 <code>installBundle</code> 精确 spec；不自动补 peer、不放行脚本。</li>
+          <li>分段核对：取制品 → 包安装 → 启用保存 → Host 激活 → Client 可用。</li>
+        </ol>
+        <div class="stop">断网或授权过期时：可看缓存目录，但不能新装。更新是“移除 → 重判 → 安装”，失败会显示“旧版已移除、需要恢复”。</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2><span class="no">04</span>开发者怎么发布插件</h2>
+      <p>没有“上传”按钮：发到企业 npm + 管理员登记包名，之后自动上架</p>
+    </div>
+    <div class="phases">
+      <div class="phase">
+        <h3>做包 <span>开发者</span></h3>
+        <ul>
+          <li>在固定 Gitee group 建仓（需管理员批准）。</li>
+          <li>做成自包含、双端可用：无外部运行依赖、peer 只用基线、无终端脚本/编译。</li>
+          <li>补 en/zh <code>meta</code>、授权 icon、<code>exports/files</code>、patch。</li>
+          <li>由企业流水线发布到企业 npm 内部 scope，附 commit/build 证据。</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <h3>登记 <span>管理员</span></h3>
+        <ul>
+          <li>把精确包名加入 <code>packages</code>，<code>origin: internal</code>。</li>
+          <li>一次性动作；之后发新版不用再找管理员。</li>
+          <li>公网镜像包以 <code>origin: public-mirror</code> 登记，不需要内部 Gitee。</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <h3>上架 <span>CI 自动</span></h3>
+        <ul>
+          <li>发现稳定版 → 自动检查 → 生成索引与证据。</li>
+          <li>原子切换 <code>current</code>，市场可见、可安装。</li>
+          <li>新版本重复“发制品”即可；撤回时先发拒绝快照关闭安装。</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note" style="margin-top:12px">被拒会给具体原因（外部运行依赖、麒麟目标失败、缺 icon 等）；修正后发新版本。登记名单不等于任何版本获准，发布成功也不等于自动上架。</p>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2><span class="no">05</span>四条边界</h2>
+      <p>这四条不能用索引、缓存或 UI 隐藏替代</p>
+    </div>
+    <div class="grid2">
+      <div class="box">
+        <h3>浏览 ≠ 授权</h3>
+        <p>目录缓存、<code>fetchedAt</code>、pnpm 缓存都不能授权安装；每次写入前都要在线确认当前开关。</p>
+      </div>
+      <div class="box red">
+        <h3>索引 ≠ 强制白名单</h3>
+        <p>原生任意 spec、本地/Git/tarball、CLI、其他市场未全部证伪前，只开放浏览，<b>不算门禁通过</b>。</p>
+      </div>
+      <div class="box amber">
+        <h3>撤回分三层</h3>
+        <p>目录不可装、取包被阻断、已装代码处置是三件事；删索引或 npm deprecate 不等于后两层完成。</p>
+      </div>
+      <div class="box">
+        <h3>物理边界在企业侧</h3>
+        <p>registry ACL、内网与终端策略承担真正阻断；不承诺防恶意本机管理员，也不承诺远程卸载已装代码。</p>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i style="background:#1f5fa8"></i>目标能力</span>
+      <span><i style="background:#9a6208"></i>企业待核验</span>
+      <span><i style="background:#9c3131"></i>失败关闭</span>
+      <span>图中「目标」均未实现；企业产品、CA、双端矩阵与全通道控制仍待 G1/G2 取证。</span>
+    </div>
+  </section>
+
+  <footer>
+    依据 CORP-DSH-DESIGN-007 V1.2.0、CORP-DSH-DESIGN-012 V1.1.1、CORP-DSH-ARCH-004 V1.0.1（评审稿，审核/批准待定）。可直接离线打开，无外部脚本、字体或本机路径。
+  </footer>
+</div>
+</body>
+</html>

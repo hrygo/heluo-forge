@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.11.0 |
+| 版本 | V1.16.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -25,7 +25,7 @@
 
 本总览负责文档导航、内容归属与治理规则；编号、路径、版本和状态的登记由[文档清单](DOCUMENT-REGISTER.md)维护。入口调整不改变业务范围、版本号或已有审批记录。
 
-当前仓库已从纯方案与工程底座推进到市场模块实现：插件与 HTTP 参考服务的实现、测试及限制见[根 README](../README.md#4-仓库如何组织)和[设计索引](design/README.md#22-实现与验证入口)。受控设计仍为草案，企业联调、生产市场治理和双端分发尚未完成；代码存在或本地检查通过不代表 G0–G3 获批。DevOps/Gitee 按现有 CLI 只读基线评审，MCP 服务与核心补丁为条件项。
+当前仓库已从纯方案与工程底座推进到市场模块实现：插件与 HTTP 参考服务的实现、测试及限制见[根 README](../README.md#4-仓库如何组织)和[设计索引](design/README.md#22-实现与验证入口)。市场插件/生成设计及来源决策已形成正式评审稿，其余设计仍为草案；企业审核批准、联调、生产市场治理和双端分发尚未完成；代码存在或本地检查通过不代表 G0–G3 获批。DevOps/Gitee 按现有 CLI 只读基线评审，MCP 服务与核心补丁为条件项。
 
 ## 2. 文档地图
 
@@ -78,12 +78,16 @@
 | 入口 | 文档 | 用途与边界 |
 |---|---|---|
 | 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 七封可独立转发的正文、45 项问题；回函核验后写入技术契约，不自动构成准入 |
+| 市场正式方案 | [插件设计](<design/plugins/forge-market.md>)、[生成契约](<design/services/market-index.md>) | 正式评审稿；首版自包含双端通用、单源profile、在线授权及官方两步恢复；不等企业批准或上线 |
+| 市场来源与白名单 | [双层npm白名单与自动版本索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/12已确认源/包名单、自动版本和轻量首版；接入与全通道控制仍需验 |
+| 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
+| Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 九个安装包与两个独立服务的详细设计状态与路径 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
-辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。
+辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V1.1.0 评审稿示意，不替代正文契约或实现清单）。
 
 ## 5. 阅读顺序
 

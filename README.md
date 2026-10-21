@@ -36,6 +36,8 @@ DevOps 与 Gitee 的当前接入基线是复用现有 CLI，通过只读命令�
 | 修改仓库、提交变更或发起评审 | [贡献指南](CONTRIBUTING.md)；agent 同时遵循 [AGENTS.md](AGENTS.md) |
 | 报告安全问题或疑似泄露 | [安全策略](SECURITY.md) |
 
+市场正式技术方案见[插件设计](<docs/design/plugins/forge-market.md>)、[索引生成契约](<docs/design/services/market-index.md>)和[ADR-11/12](<docs/architecture/plugin-registry-source-decision.md>)。文档以正式评审稿交付：首版仅自包含、Windows/麒麟双端通用稳定包，单profile规范企业源、在线授权及官方移除后安装；企业审核/批准和 G1/G2 验证仍待完成，不是河洛产品发行或 npm 迁移已完成。
+
 ## 3. 本地检查
 
 先安装或切换到仓库声明的工具链：Node.js 精确版本见 [.node-version](.node-version)，pnpm 版本见 [package.json](package.json) 的 `packageManager`；不要直接采用本机默认版本代替项目约束。
@@ -72,7 +74,7 @@ pnpm check
 | `scripts/`、`tests/` | 工程检查器、检查器测试与市场跨模块测试 | 已建立离线检查与本地 HTTP 归档安装用例 |
 | `.github/` | Issue/PR 模板与检查工作流 | 仓库文件不证明服务端保护或审批已启用 |
 
-市场分为客户端插件、目录与发布控制、制品来源三层。当前安装实现取 Gitee tag 归档；企业 registry 的接入与镜像策略仍待确认，不能把 `deploy/registry/` 当作已部署设施。结构及历史整理范围见[工程仓库结构设计](docs/engineering/repository-structure-design.md)。
+市场分为客户端插件、目录与发布控制、制品来源三层。[ADR-11](<docs/architecture/plugin-registry-source-decision.md>)已确认企业私有npm为唯一制品源，统一承载公网同步包与内部定制包；内部定制源码在固定Gitee group下维护。管理员维护registry地址/插件包名双层白名单，自动收录兼容稳定版生成DSH索引，用户DSH不连接公网；不默认建设逐版本审批后台。**代码当前仍取Gitee tag归档，尚未完成双层名单、自动索引与npm迁移**；来源方向已定不代表仓库/认证/治理已接入，不能把[registry说明](<deploy/registry/README.md>)当作部署证据。结构及历史整理范围见[工程仓库结构设计](docs/engineering/repository-structure-design.md)。
 
 当前市场能力与验证边界：
 
@@ -80,9 +82,9 @@ pnpm check
 |---|---|---|
 | 市场插件 | 十个 agent 工具、服务/本地 JSON 目录、缓存回退、归档下载解包与可选落盘、登记行生成；见[模块说明](packages/forge-market/README.md) | 完整市场页面、IAM 会话与角色治理；安装落盘后仍需登记到 profile |
 | 参考服务 | 列表、详情、提交入队、评审/撤回、下载请求计数；管理端点校验共享令牌 | Gitee 自动扫描、账号与角色授权、服务端完整包校验、业务数据与审计持久化；诊断接口目前为空列表 |
-| DSH 挂载 | [设计记录](docs/design/plugins/forge-market.md#61-面板的两种视图)记载 2026-10-20 在测试 profile 激活插件并渲染三种面板状态；验证后已卸载并恢复 | 本次未重做实机验证；不代表企业 Gitee、生产服务或双端均已联调 |
+| DSH 挂载 | [设计记录](docs/design/plugins/forge-market.md#a8-当前面板与历史视图)记载 2026-10-20 在测试 profile 激活插件并渲染三种面板状态；验证后已卸载并恢复 | 本次未重做实机验证；不代表企业 Gitee、生产服务或双端均已联调 |
 
-安装链路已有域名白名单、路径校验、安装脚本拦截与条件摘要/版本检查；专门 group 授权、必需摘要、完整兼容性和角色安装限制仍须闭环。详细实现限制见[市场插件说明](packages/forge-market/README.md#当前实现限制)。
+安装链路已有域名白名单、路径校验、安装脚本拦截与条件摘要/版本检查；内部定制源码group核验、企业npm来源分类/完整性、依赖兼容、角色与撤回治理仍须按新目标闭环。详细实现限制见[市场插件说明](packages/forge-market/README.md#已知限制)。
 
 ## 5. 如何参与
 

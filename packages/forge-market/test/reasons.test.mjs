@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-test('every failure reason is documented in DESIGN-007 §8.1', async () => {
+test('every failure reason is documented in DESIGN-007 附录 A.2', async () => {
   const src = join(root, 'packages/forge-market/src');
   const files = (await readdir(src)).filter((name) => name.endsWith('.mjs'));
   const emitted = new Set();
@@ -17,7 +17,7 @@ test('every failure reason is documented in DESIGN-007 §8.1', async () => {
   assert.ok(emitted.size >= 40, `expected a broad reason space, saw ${emitted.size}`);
 
   const doc = await readFile(join(root, 'docs/design/plugins/forge-market.md'), 'utf8');
-  const section = doc.slice(doc.indexOf('## 8.1'), doc.indexOf('## 9. 权限与安全'));
+  const section = doc.slice(doc.indexOf('### A.2'), doc.indexOf('### A.3'));
   const missing = [...emitted].filter((reason) => !section.includes(`\`${reason}\``));
   assert.deepEqual(missing.sort(), [], `undocumented reasons: ${missing.join(', ')}`);
 });

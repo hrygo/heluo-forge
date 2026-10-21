@@ -58,7 +58,7 @@ test('submit sends JSON with a content type', async () => {
 test('submit sends only the fields DESIGN-012 declares', async () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   const doc = await readFile(join(root, 'docs/design/services/market-index.md'), 'utf8');
-  const section = doc.slice(doc.indexOf('**提交请求体**'), doc.indexOf('**并发**'));
+  const section = doc.slice(doc.indexOf('**提交请求体**'), doc.indexOf('**评审请求体**'));
   const documented = [...section.matchAll(/^\| `([a-z]+)` \|/gm)].map((match) => match[1]);
   assert.ok(documented.length >= 3, 'expected a documented request body');
 
@@ -78,7 +78,7 @@ test('submit sends only the fields DESIGN-012 declares', async () => {
 test('every documented entry field survives normalization', async () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   const doc = await readFile(join(root, 'docs/design/services/market-index.md'), 'utf8');
-  const section = doc.slice(doc.indexOf('字段级约定'), doc.indexOf('### 5.1'));
+  const section = doc.slice(doc.indexOf('字段级约定'), doc.indexOf('### A.4'));
   const documented = [...section.matchAll(/^\| `([a-zA-Z]+)` \|/gm)].map((match) => match[1]);
   assert.ok(documented.length >= 5, 'expected a documented field table');
 
