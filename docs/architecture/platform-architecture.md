@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-001 |
 | 文档名称 | 河洛企业级智能研发平台总体架构设计 |
-| 版本 | V2.2.0 |
+| 版本 | V2.2.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -16,7 +16,7 @@
 | 门禁 | G0 |
 | 文档层级 | L1 总体架构；字段级契约与运行手册由子文档承担（见 §12） |
 
-> 编制依据：原方案记载的 DSH `0.2.1-rc.2` 源码与官方文档核验，核验日期 2026-10-20。本版按 2026-10-21 用户确认的 ADR-11/13 同步企业 npm 来源、AIHUB 原生索引与首版自包含三目标准入；市场接口在 DSH `0.2.1-rc.2` 下只读复核，形成正式技术方案而非企业生效批准；其余历史源码验证未重跑；企业 IAM / Kong / DevOps / Gitee 接口、Windows 安全隔离与银河麒麟实机、容量及恢复演练均未实测。团队回函之前，协议能力、排期、保留期与验收阈值均不视为对方承诺。
+> 编制依据：原方案记载的 DSH `0.2.1-rc.2` 源码与官方文档核验，核验日期 2026-10-20。2026-10-21 用户确认 O3「企业 IAM 独占登录」，官方登录在企业内网不可用，§6 的 IAM seam 与官方行禁用关系已同步；同日本版按用户确认的 ADR-11/13 同步企业 npm 来源、AIHUB 原生索引与首版自包含三目标准入；市场接口在 DSH `0.2.1-rc.2` 下只读复核，形成正式技术方案而非企业生效批准；其余历史源码验证未重跑；企业 IAM / Kong / DevOps / Gitee 接口、Windows 安全隔离与银河麒麟实机、容量及恢复演练均未实测。团队回函之前，协议能力、排期、保留期与验收阈值均不视为对方承诺。
 >
 > 关联文档：[河洛企业级智能研发平台推广实施方案](../plans/rollout-plan.md)（WBS、验收、风险与待确认事项）、[河洛企业级智能研发平台需求与场景基线](../requirements/requirements-baseline.md)（范围真源、人群画像、核心场景与成功指标）。
 
@@ -237,7 +237,7 @@ flowchart TB
 | 包 | 形态 | 职责 | 依赖的 seam |
 |---|---|---|---|
 | `@heluo/forge-enterprise` | umbrella bundle | 组合下列行，给两端共用 | `cordis.patch.yml` |
-| `@heluo/forge-iam` | Host + Client 插件 | OIDC/OAuth 登录、刷新、令牌镜像、账户 UI；MCP token broker 仅按后续获批集成需要评估 | `credentials`、`authorization`、`webServer`、`llm` |
+| `@heluo/forge-iam` | Host + Client 插件 | 企业 IAM 独占登录、刷新、令牌镜像、账户 UI；官方行由组合包禁用；MCP token broker 仅按后续获批集成需要评估 | `credentials`、`webServer`、`settings`、`llm-pi-ai`（消费方）、`agentDefaultModel`；`authorization` 仅作后续通用凭据 UI 适配 |
 | `@heluo/forge-gateway` | 配置 bundle | 企业模型路由、白名单、重试策略 | `llm-pi-ai` |
 | `@heluo/forge-policy` | Host 插件 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 | `tools/pre-execute`、`tools.guard`、`otel` |
 | `@heluo/forge-devops` | CLI 接入（工具面） | 复用 DevOps CLI，经白名单开放已确认的只读命令；不建设 MCP 服务 | bash seam、策略门禁、凭据注入、审计 |
@@ -252,7 +252,7 @@ flowchart TB
 
 ### 7.1 身份与令牌
 
-**流程**：Authorization Code + PKCE（S256）→ 系统浏览器 → IAM 登录页 → `http://127.0.0.1:<port>/oauth/callback` → 校验 `state` / `nonce` / `iss` / `aud` → 写令牌。
+**流程**：Authorization Code + PKCE（S256）→ 系统浏览器 → IAM 登录页 → `http://127.0.0.1:<port>/iam/callback` → 校验 `state` / `nonce` / `iss` / `aud` → 写令牌。
 
 **存储**：refresh token 与元数据存为 `CredentialKey` 记录；模型网关的 access token 镜像到 `CredentialRef: ENTERPRISE_ACCESS_TOKEN`，因为 `llm-pi-ai` 只解析引用。仅在后续 MCP 集成经批准且需要时，由 IAM 插件 token broker 按 `resource` 取用并缓存。
 
@@ -265,7 +265,7 @@ flowchart TB
 - 内省缓存：单条结果缓存不超过 60 秒，撤销生效延迟以此为上界；缓存键使用令牌摘要，不落明文。
 - 刷新触发：到期前 60 秒预刷新，避免请求在途过期；刷新在凭据锁内 single-flight，禁止并发轮换。
 - 轮换与重用检测：IAM 若支持 refresh token 轮换，重用旧值按 `invalid_grant` 处理并视为会话失陷，清空凭据并要求重新登录，不静默重试。
-- 存储层级：优先系统凭据库（Windows DPAPI/凭据管理器；麒麟 libsecret 或内核 keyring），不可用时回退 0600 文件，并在账户页标注“未受系统保护”。
+- 存储层级：优先系统凭据库（Windows DPAPI/凭据管理器；麒麟 libsecret 或内核 keyring），不可用时回退 0600 文件，并在账户页标注“未受系统保护”。目标 DSH `0.2.1-rc.2` 仅随附 0600 文件 provider，keychain provider 未提供；A4 的文件/子进程拒绝是当前前置缓解。
 - 退出顺序：停止新请求 → 清镜像与按资源缓存 → 调用 IAM 撤销（RFC 7009）与 RP 发起退出登录（若支持）→ 关闭连接；撤销失败只记录，不阻塞本地退出。
 - 一期不引入 DPoP 或 mTLS 绑定令牌（RFC 9449）：本机单用户、无跨设备共享，收益低于改造成本；若网关后续支持 DPoP，再评估作为增量加固。
 - 稳定实例标识：需要长期客户端维度时，由 IAM 在令牌中增加 `client_instance` claim，网关据此聚合，不为此改用长期凭证；该 claim 待 IAM 确认。

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-CONF-001 |
 | 文档名称 | 跨团队确认询问函 |
-| 版本 | V0.7.0 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -19,7 +19,7 @@
 >
 > 关联文档：[总体架构设计](<../architecture/platform-architecture.md>)、[推广实施方案](<../plans/rollout-plan.md>)、[需求与场景基线](<../requirements/requirements-baseline.md>)、[AI 网关契约](<../contracts/gateway-contract.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)、[子文档模板](<../templates/_template.md>)。
 >
-> 2026-10-21 更新：市场已改为轻量模式，索引与安装问题以 [issue #12](https://github.com/hrygo/heluo-forge/issues/12) 与 DESIGN-012 为准；本文件保留为历史询问模板，不再代表当前索引/授权方案。
+> 2026-10-21 更新：市场已改为轻量模式，索引与安装问题以 [issue #12](https://github.com/hrygo/heluo-forge/issues/12) 与 DESIGN-012 为准；市场相关章节保留历史，§4.2 IAM 等其余询问函仍为当前模板。IAM 单独发函详本文档见 [IAM 统一登录与权限接入问询函](<iam-confirmation-letter.md>)。
 
 ## 1. 结论
 
@@ -30,7 +30,7 @@
 
 | 团队 | 核心负责事项 | 问题编号 |
 |---|---|---|
-| 身份团队 | 统一登录 SSO/OIDC、Token 交换与有效时限、权限注销 | CONF-IAM-01~07 |
+| 身份团队 | 统一登录 SSO/OIDC、Token 交换与有效时限、权限注销 | CONF-IAM-01~18 |
 | 网关与模型团队 | 模型 API 兼容性、调用并发与配额、流式传输、日志脱敏 | CONF-GW-01~08 |
 | DevOps 团队 | CLI 工具调用、需求只读查询、JSON 输出、权限继承 | CONF-DEVOPS-01~03, 06 |
 | Gitee 管理团队 | 内部代码仓查询、只读权限基线、Issue/PR 读取 | CONF-GITEE-01~05 |
@@ -57,7 +57,7 @@
 
 | 正文 | 问题域及数量 | 平台参考（不转发） |
 |---|---|---|
-| §4.2 身份团队 | CONF-IAM，7题 | [身份与令牌](<../architecture/platform-architecture.md>) |
+| §4.2 身份团队 | CONF-IAM，18题 | [身份与令牌](<../architecture/platform-architecture.md>) |
 | §4.3 网关与模型团队 | CONF-GW，8题 | [网关契约](<../contracts/gateway-contract.md>) |
 | §4.4 DevOps团队 | CONF-DEVOPS，4题 | [工程系统设计](<../architecture/platform-architecture.md#73-工程系统工具>) |
 | §4.5 Gitee团队 | CONF-GITEE，5题 | [工程系统设计](<../architecture/platform-architecture.md#73-工程系统工具>) |
@@ -73,7 +73,9 @@
 
 **发函日期 / 回函期限：** [发函人填写] / [发函人填写]
 
-我们拟为本机研发助手接入企业统一登录，由系统浏览器完成授权，再分别访问模型和工程服务。贵团队负责身份与令牌签发，请确认客户端登记、资源隔离、令牌生命周期和联调条件。
+我们拟将企业统一登录作为本机研发助手在企业内网的唯一登录方式：员工通过系统浏览器完成授权，客户端不保存密码，也不保留官方登录或公网模型回落。登录成功后，客户端用访问令牌访问企业模型网关；刷新令牌只保存在本机凭据存储，用于续期。
+
+下列 `CONF-IAM-01~07` 保留原编号，`08~18` 为本次新增的阻塞项。请逐题回答；无法支持的能力请直接说明，不要用“原则上支持”代替接口事实。
 
 | 问题ID | 请确认事项 |
 |---|---|
@@ -84,10 +86,27 @@
 | CONF-IAM-05 | 访问令牌（Access Token）与刷新令牌（Refresh Token）的有效期分别是多久？如何主动撤销已签发的令牌？ |
 | CONF-IAM-06 | 当访问令牌过期时，多个并发请求如何刷新？刷新时是否会影响其他服务的有效会话？ |
 | CONF-IAM-07 | 能否提供测试环境以及 1~2 个测试账号，供我们联调登录授权与失效拦截？ |
+| CONF-IAM-08 | 是否允许将本机应用注册为公共客户端（native/public client，不保存 client secret），使用授权码 + PKCE（S256）？客户端由谁登记、按设备一客户端还是全公司共用一个 `client_id`？请给出 redirect URI 规则：我们计划使用 `http://127.0.0.1:<port>/iam/callback`，端口是否必须固定、能否登记多个？ |
+| CONF-IAM-09 | 是否提供 OIDC discovery（`/.well-known/openid-configuration`）？请给出 issuer、authorization、token、jwks、revocation、end_session 的正式地址；签名算法允许哪些（RS256/ES256/PS256），是否明确拒绝 `none` 与对称算法？JWKS 轮换时 `kid` 的生效与缓存时间是多少？ |
+| CONF-IAM-10 | ID Token 必须校验哪些 claims？请确认 `iss`、`aud`、`nonce`、`exp`/`nbf`/`iat`、`auth_time`、`acr`/`amr` 的要求与允许时钟偏差；员工稳定标识用哪个 claim（`sub` 是否稳定且不可猜测，工号在哪个 claim）？`groups` 或角色 claim 的名称、类型、是否随权限变更实时更新？ |
+| CONF-IAM-11 | 是否支持 RFC 8707 `resource` 参数，为模型网关单独签发绑定到该 audience 的令牌？如果不支持，模型网关如何判断“这个令牌是给模型服务而不是工程服务”的？请给出推荐的 scope 命名、audience 值，以及一资源一令牌与 token exchange 的取舍。 |
+| CONF-IAM-12 | 刷新令牌是否轮换（每次刷新返回新 `refresh_token` 并废止旧值）？是否检测旧 `refresh_token` 重用？重用或并发刷新时返回什么错误（`invalid_grant`？），是否有短暂 grace period？刷新是否需要 `offline_access` scope？请说明多进程/多请求同时刷新时的服务端行为，避免我们误判为会话失陷。 |
+| CONF-IAM-13 | 是否提供 RFC 7009 撤销端点？可以撤销 `refresh_token`、`access_token`，还是两者？撤销 `refresh_token` 是否同时使已签发的 `access_token` 失效？撤销成功、失败、已撤销的 HTTP 状态与响应体是什么？撤销生效的最大延迟是多少？ |
+| CONF-IAM-14 | 是否支持 RP-Initiated Logout（`end_session_endpoint`）？需要 `id_token_hint` 吗？`post_logout_redirect_uri` 是否必须预登记、允许 loopback 吗？调用后是否能结束浏览器上的企业 SSO 会话？是否支持 `prompt=login` 强制重新认证？如果不支持 RP 登出，请明确本地退出只结束本机会话的边界。 |
+| CONF-IAM-15 | 访问令牌是 JWT 还是 opaque？模型网关应本地验签（JWKS）还是调用 introspection？请给出 token 的 `aud`、`scope`、`exp`、`client_id` 等 claim 示例；introspection 的缓存建议与失效延迟；网关验签时 `kid` 未命中应返回 503 还是 401？ |
+| CONF-IAM-16 | 请给出 token、refresh、revoke 端点的错误码与 HTTP 状态映射（`invalid_grant`、`invalid_client`、`invalid_scope`、`temporarily_unavailable` 等），以及限流阈值、`Retry-After` 约定和推荐超时。我们需要据此区分“网络故障可重试”和“会话失效必须重登”。 |
+| CONF-IAM-17 | 从企业 Windows 桌面与麒麟浏览器访问 IAM 端点，是否需要经过代理、专用 CA 或 IP 白名单？loopback 回调是否受终端防火墙/EDR 限制？请给出测试与生产环境的网络前置条件、证书链要求，以及推荐的排障联系人。 |
+| CONF-IAM-18 | 能否提供测试租户与测试账号矩阵：普通员工、不同角色/组、离职/停用、被撤销、无模型权限各一；是否支持我们演练 refresh 轮换、重用检测、撤销与 RP 登出？客户端登记、测试账号开通、生产 client 上线各需多少工作日，需要谁审批？ |
 
-**请提供：** 协议接入文档、测试账号申请方式、令牌刷新与撤销接口说明。
+**请提供：** 协议接入文档、客户端登记表、端点清单、测试账号矩阵、令牌刷新/撤销/登出接口说明、错误码与限流说明。
 
-**回函请按编号填写：** 结论（支持/有条件/不支持/待验证）、限制或替代方案、责任岗位、计划完成时间。
+**回函请按编号填写：**
+
+| 问题ID | 结论（支持/有条件/不支持/待验证） | 限制或替代方案 | 证据/文档链接 | 责任岗位 | 计划完成时间 | 是否阻塞（是/否/待评估） |
+|---|---|---|---|---|---|---|
+| [逐题填写] | | | | | | |
+
+如某项为“不支持”，请说明我们应采用的替代路径；如为“待验证”，请给出验证环境、责任人和计划完成时间。回函请同时注明适用的 IAM 版本与环境，避免测试与生产不一致。
 
 感谢协助；不具备的能力请直接说明，我们据此调整接入路径。
 
@@ -310,7 +329,7 @@ DSH 平台组（代拟）
 
 1. 历史版本由 Git 保留，本文为草案/代拟，审核与批准待定；依据区分文档核对与未实测，已确认的来源/名单方向不等于产品能力已验证。
 2. 七封均可从主题独立复制至署名，含本域必要背景、问题、材料、期限占位及回函字段；不依赖其他函、内部编号或仓库链接。
-3. 问题ID为45个稳定项：IAM 7、GW 8、DEVOPS 4、GITEE 5、IT 7、SEC 7、PMO 7；撤销的2项生产变更问题不重排、不复用编号。
+3. 问题ID为56个稳定项：IAM 18、GW 8、DEVOPS 4、GITEE 5、IT 7、SEC 7、PMO 7；撤销的2项生产变更问题不重排、不复用编号。
 4. 正文无G0/G1/G2/G3、REQ/A/M/C编号；必要技术词就地解释，无关规模、终端和管理员背景不向其他域泛发。
 5. 强制确认、服务端授权、禁重放、秘密隔离及留存待批等边界保留；分批时钟及延期在原题内明确。
 6. 相对链接可解析、表格列数一致、无空白错误；文档清单与索引由主代理统一同步，本文件不代改。

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-001 |
 | 文档名称 | 河洛企业级智能研发平台推广实施方案 |
-| 版本 | V2.0.0 |
+| 版本 | V2.0.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟，责任人待确认） |
@@ -16,7 +16,7 @@
 | 门禁 | G0 |
 | 文档层级 | L2 实施计划；字段级契约由子文档承担（见架构设计 §12） |
 
-> 编制依据：原文历史依据为 DSH `0.2.1-rc.2` 源码、npm registry 与 GitHub 发布资产（原记载核验日期 2026-10-20），§3 保留该历史依据，不表示本次重新核验源码或发布状态。历史 V1.2 于 2026-10-20 对照项目协作规范、需求基线、总体架构、AI 网关契约及文档清单进行文档核对；本版来源、自包含三目标首版及原生索引轻量模式依据 2026-10-21 用户确认的 ADR-11/13 和正式市场设计同步，未新增企业网络接口或实机测试证据。企业 IAM / 网关 / DevOps / Gitee 接口、Windows/UOS/麒麟实机、性能与恢复演练均未验；统信 UOS 20 与银河麒麟 aarch64 并存，不作为替代，市场矩阵按三目标取证，接口、保留期、编制责任人与签署人仍待团队确认。
+> 编制依据：原文历史依据为 DSH `0.2.1-rc.2` 源码、npm registry 与 GitHub 发布资产（原记载核验日期 2026-10-20），§3 保留该历史依据，不表示本次重新核验源码或发布状态。历史 V1.2 于 2026-10-20 对照项目协作规范、需求基线、总体架构、AI 网关契约及文档清单进行文档核对；本版来源、自包含三目标首版及原生索引轻量模式依据 2026-10-21 用户确认的 ADR-11/13 和正式市场设计同步；同日用户确认 O3「企业 IAM 独占登录」，P1-1 改为交付 `@heluo/forge-iam`，`@eduwork/dsh-oidc` 仅作参考或可选起点。未新增企业网络接口或实机测试证据。企业 IAM / 网关 / DevOps / Gitee 接口、Windows/UOS/麒麟实机、性能与恢复演练均未验；统信 UOS 20 与银河麒麟 aarch64 并存，不作为替代，市场矩阵按三目标取证，接口、保留期、编制责任人与签署人仍待团队确认。
 >
 > 关联文档：[河洛企业级智能研发平台总体架构设计](../architecture/platform-architecture.md)、[河洛企业级智能研发平台需求与场景基线](../requirements/requirements-baseline.md)、[AI 网关契约](../contracts/gateway-contract.md)、[文档清单](../DOCUMENT-REGISTER.md)。
 
@@ -51,9 +51,9 @@
 ├─ Windows（50%）：DSH Desktop（MSI 自助安装 / MDM 可选）
 └─ 银河麒麟 aarch64（50%）：dsh --profile web（绑定 127.0.0.1）+ dsh-web-open + 浏览器
 
-  ├─ IAM 插件（fork dsh-oidc，改造后）
+  ├─ IAM 插件（@heluo/forge-iam；可选参考 dsh-oidc）
   │    系统浏览器 → 企业 IAM：Code + PKCE
-  │    回调 127.0.0.1:<port>/oauth/callback
+  │    回调 127.0.0.1:<port>/iam/callback
   │    登录/刷新后写入 CredentialRef: ENTERPRISE_ACCESS_TOKEN
   │    为未来获批的 MCP 集成预留按 resource 取 token；不是 CLI 接入前提
   │
@@ -158,7 +158,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 
 | 项 | 内容 | 交付物 |
 |---|---|---|
-| P1-1 | fork `@eduwork/dsh-oidc`：接企业 IdP、模型令牌镜像、品牌最小化 | 可安装的企业 IAM 插件包；MCP token broker 不列入 DevOps/Gitee CLI 基线 |
+| P1-1 | 以 `@eduwork/dsh-oidc` 为参考或可选起点，交付 `@heluo/forge-iam`：接企业 IdP、独占登录、模型令牌镜像、官方行禁用；是否复用其代码按许可证与 `0.2.1-rc.2` 兼容性单独评估 | 可安装的企业 IAM 插件包；MCP token broker 不列入 DevOps/Gitee CLI 基线 |
 | P1-2 | Windows `desktopServices` 适配层；仅当其他获准 MCP 接入仍需要时，另行验证 `dsh-mcp-client` 补丁范围 | 约 30 行 Host 插件；MCP 补丁不计入 DevOps/Gitee CLI 接入前提 |
 | P1-3 | 刷新串行化：把“检查有效期 + 刷新（≤5s 超时）+ 写回”放进 `modifyRecord` | 双进程不互相踢出 |
 | P1-4 | Gitee CLI 只读接入：仓库 / Issue / PR 查询，验证命令权限、结构化输出、凭据与双端可用性 | 经核验的 `@heluo/forge-gitee` CLI 适配（落入 `CORP-DSH-GITEE-001`） |
@@ -235,7 +235,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 
 | 目标 | 项目 | 数据（2026-10-20） | 复用方式 | fork 深度 |
 |---|---|---|---|---|
-| IAM + 模型授权 | [@eduwork/dsh-oidc](https://github.com/ECNU/EduWork/tree/main/packages/dsh-oidc) | MIT；v0.3.0；★190；peer 对齐 `0.2.1-rc.2`；有 CI | 直接 fork，替换 IdP、镜像模型令牌与品牌最小化 | 中 |
+| IAM + 模型授权 | [@eduwork/dsh-oidc](https://github.com/ECNU/EduWork/tree/main/packages/dsh-oidc) | MIT；v0.3.0；★190；peer 对齐 `0.2.1-rc.2`；有 CI | 参考或可选起点；交付 `@heluo/forge-iam`，替换 IdP、独占登录、镜像模型令牌；是否复用代码按许可证与兼容性评估 | 不 fork；按评估复用 |
 | 多租户参考（暂不实施） | [@monotykamary/dsh-web-identity](https://www.npmjs.com/package/@monotykamary/dsh-web-identity) | MIT；0.1.9 | 仅参考 identity seam 与 session 分区 | 深 |
 | 登录门兜底 | [dsh-auth-gate](https://www.npmjs.com/package/dsh-auth-gate) | MIT；0.17.4 | 密码 / 共享令牌 / TOTP，不替代 SSO | 浅 |
 | Gitee | 企业现有 `gh` 兼容 CLI | 2026-10-20 设计输入；版本与双端产物待确认 | 通过 CLI 与只读命令白名单接入 | 不适用 |
@@ -246,7 +246,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | 网关 | [BerriAI/litellm](https://github.com/BerriAI/litellm) | ★61.6k | 仅作 Kong 的对照参考，不部署 | — |
 | 市场索引 | AIHUB 托管 format-1 JSON | 外部平台交付 | 只校验契约；不自建生成器、不 fork 宿主 | 索引由 AIHUB 负责 |
 
-取舍：当前 DevOps/Gitee 接入优先使用企业已有 CLI，不新增 MCP server 或 Gitee arm64 交叉编译封装。`dsh-oidc` 与 `dsh-mcp-client` 的改动仅在各自设计仍有独立必要性并经核验后实施，不由上述 CLI 决策自动授权。
+取舍：当前 DevOps/Gitee 接入优先使用企业已有 CLI，不新增 MCP server 或 Gitee arm64 交叉编译封装。`dsh-oidc` 仅作参考或可选起点，其复用范围与 `dsh-mcp-client` 的改动一样，仅在各自设计仍有独立必要性并经核验后实施，不由上述 CLI 决策自动授权。
 
 ## 6. 研发流程层：轻量 SDD
 
