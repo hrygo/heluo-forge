@@ -124,7 +124,7 @@ flowchart LR
 
 平台发行基线固定环境/profile 的唯一 `registryId`、目标 `matrixId`、生成器规则版本和受控输入 revision。`matrixId` 对应精确 DSH、Node、pnpm、OS-CPU、SDK 与 Client 版本集合；任何一项变化生成新矩阵，不把 `>=` 范围或当前机器版本当作矩阵。
 
-企业目标开发机操作系统与运行环境基线已明确：Windows 10 专业版 (amd64) 与统信 UOS 64 位（v20，内核 4.19.0-amd64-desktop，amd64 架构）；开发者已预装 Node.js 22.13。企业私有 npm 为 JFrog Artifactory，统一聚合内网访问入口形如 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`。未核定/未通过的组合不得开放安装。`0.2.1-rc.2` 仅为接口核验版本；企业发行版本由平台基线核定，不由市场管理员逐版填表。
+企业目标开发机操作系统与运行环境基线已明确：Windows 10 专业版 (amd64) 与统信 UOS 64 位（v20，内核 4.19.0-amd64-desktop，amd64 架构）；开发者已预装 Node.js 22.13。企业私有 npm 为 JFrog Artifactory（访问入口规范仅配置于本地配置文件，不提交至 Git 仓库）。未核定/未通过的组合不得开放安装。`0.2.1-rc.2` 仅为接口核验版本；企业发行版本由平台基线核定，不由市场管理员逐版填表。
 
 ### 3.3 首版自包含与双端交集
 
@@ -365,7 +365,7 @@ Host 存活时以不超过5分钟的轻量检查、受管目录进入/刷新及�
 
 | 核验事项 | 责任方 | 截止与关闭证据 | 未验时边界 |
 |---|---|---|---|
-| 企业私服产品/规范 URL、企业 CA/认证注入、scope 权威路由、同步/同版不可变/保留与内网 tarball | 仓库维护方、IT、安全 | 已确认 Artifactory 入口 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`，免自签 CA/代理，无重定向，内部 scope 禁公网回源，支持 Scope 访问控制拦截与不可变发布；遗留 CI 认证（E-03）与发布互斥（E-06）待闭环 | 不回退公网/Gitee，不自建 registry/proxy |
+| 企业私服产品/规范 URL、企业 CA/认证注入、scope 权威路由、同步/同版不可变/保留与内网 tarball | 仓库维护方、IT、安全 | 已确认 Artifactory，实际入口仅存本地配置不入 Git 库，免自签 CA/代理，无重定向，内部 scope 禁公网回源，支持 Scope 访问控制拦截与不可变发布；遗留 CI 认证（E-03）与发布互斥（E-06）待闭环 | 不回退公网/Gitee，不自建 registry/proxy |
 | 清单维护位置/权限与 CI/静态 HTTPS 的整任务单写、取消、优先拒绝、原子 current、5分钟轻量续期/最长15分钟租约 | 平台组、仓库与 CI/分发维护方 | 清单已确认由“AI 开发者平台”提供只读 JSON 白名单 URL 托管并在该平台维护，插件全流程由其负责；DESIGN-012 产物覆盖发布与租约待实施与验证 | 无法满足时 browse-only；具体产品实现待核验，不重新选择安全行为 |
 | 企业发行 matrixId 的精确 DSH/Node/pnpm/OS-CPU/SDK/Client、profile 基线及可信时钟 | 平台组、IT | 目标端已确认为 Windows 10 专业版 (amd64) 与统信 UOS 64 位 (v20, 内核 4.19.0-amd64-desktop, amd64)，预装 Node 22.13；DSH matrixId 待随发行版本核对 | 未核定/时钟不可信不开放安装 |
 | 内部定制 group/repo/commit/build 与公网镜像 upstream/扫描/许可、真实 pack/display | Gitee/流水线/仓库维护方、安全、平台组 | 对应包自动准入前分来源取证，真实发布包内容及资源校验 | 缺证拒收；公网不迁 Gitee，第三方 display 可标 fallback |

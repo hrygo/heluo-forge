@@ -37,7 +37,7 @@
 
 | 编号 | 待证事实 | 阻塞什么 | 责任方 | 取证方式 | 当前状态 | 不成立时 |
 |---|---|---|---|---|---|---|
-| M0-1 | 企业 registry 产品、规范聚合入口 URL、scope 是否权威解析 | 单 profile 单源、包名映射 | 仓库维护方、IT、AI 开发者平台 | 产品配置、内网解析记录与 AI 开发者平台只读白名单 URL | 部分：私服已明确为 JFrog Artifactory，访问入口 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`；包名单由 AI 开发者平台提供只读 URL | 不建市场，维持只读 |
+| M0-1 | 企业 registry 产品、规范聚合入口 URL、scope 是否权威解析 | 单 profile 单源、包名映射 | 仓库维护方、IT、AI 开发者平台 | 产品配置、内网解析记录与 AI 开发者平台只读白名单 URL | 部分：私服已明确为 JFrog Artifactory，实际入口仅留存本地配置文件、不入 Git 库；包名单由 AI 开发者平台提供只读 URL | 不建市场，维持只读 |
 | M0-2 | 企业 CA/证书链、代理、是否禁 HTTP redirect | 索引/控制/包体校验 | IT、安全 | 证书链与 curl 负向记录 | 通过：用户已确认无需企业自签 CA 证书或特殊代理，无特殊重定向 | `browse-only` |
 | M0-3 | 下载与发布认证方式、最小权限、凭据注入与轮换 | CI 只读、发布写权限分离 | 仓库维护方、IAM | 权限清单与一次鉴权请求 | 未取：待提供 CI 自动拉包与发布包的认证方式与最小 Scope 权限 | 不接 CI，P1 仅离线 |
 | M0-4 | ACL/逻辑视图对包、版本、角色及缓存/本地 spec 的实际覆盖 | 撤回与全通道边界 | 仓库维护方、安全、平台 | 越权/缺包/本地 tarball 取包负向 | 部分：私服支持按 Scope 限制访问与下载拦截；本地 spec 隔离待核验 | 只读，不宣称治理 |
@@ -56,14 +56,14 @@
 - **自身显示资源不足**：`packages/forge-market/package.json` 现无 `meta.title/description`、无 `./locale/*.json` 与 `./icon` 导出，`files` 也未包含 locale/icon。按 [DESIGN-007 §6.1](<../design/plugins/forge-market.md#61-目标最小交互>) 自身也不满足发布门禁，补资源列入 P1 前置。
 - **白名单源与插件生命周期边界**：2026-10-21 用户明确企业可用插件以 JSON 白名单形式维护，由“AI 开发者平台”维护并提供只读 URL；开发者新增插件的预创建、Gitee 指定 group 建仓、审查及发布 npm 均由 AI 开发者平台负责，不属于本项目范围。
 - **客户端内置与定制需求**：2026-10-21 用户明确 E-09 回函：统一分发客户端内置预置 `@heluo/forge-market` 插件（UI 展示名称为“dsh 插件市场”），需通过定制 DSH 发行版实现；自研/内部插件的中英文名称、描述、图标及真实 tarball 由平台负责人验收。
-- **已明确的企业接入事实**：2026-10-21 用户直接答复确认：私服为 JFrog Artifactory（访问入口 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`），支持单向向公网拉取依赖并缓存，支持按 Scope 权限拦截；私服禁止重复上传同名同版本（保证不可变性），删除需管理员权限；客户端拉包不需要自签 CA 或特殊代理；真实终端基线为 Windows 10 专业版 (amd64) 与统信 UOS 64 位（版本 20，内核 4.19.0-amd64-desktop），开发者已统一安装 Node.js 22.13。
+- **已明确的企业接入事实**：2026-10-21 用户直接答复确认：私服为 JFrog Artifactory（访问入口规范仅存在于本地配置文件，不入 Git 库），支持单向向公网拉取依赖并缓存，支持按 Scope 权限拦截；私服禁止重复上传同名同版本（保证不可变性），删除需管理员权限；客户端拉包不需要自签 CA 或特殊代理；真实终端基线为 Windows 10 专业版 (amd64) 与统信 UOS 64 位（版本 20，内核 4.19.0-amd64-desktop），开发者已统一安装 Node.js 22.13。
 - **仓库无发布流水线**：仅 `.github/workflows/check.yml`，没有发布、定时续期或原子切换任务，M0-7/M0-8 无法在仓库内证明。
 - **无双端实机安装演练**：虽然双端基线已明确为 Win10 + 统信 UOS 20（均为 x86_64/amd64），但两端受管安装与 smoke 演练仍未实机执行。
 
 ## 4. 接入核验事实与剩余待闭环项
 
 企业接入的大部分关键事实已于 2026-10-21 确认闭环并固化到 DESIGN-007 与 DESIGN-012 中：
-- 私服为 JFrog Artifactory，访问入口 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`；
+- 私服为 JFrog Artifactory（实际访问入口规范仅保存在本地配置文件中，不入 Git 仓库）；
 - 客户端拉包免配置自签 CA 证书与网络代理，无 HTTP 重定向；
 - 私服支持按 Scope 限制访问与下载拦截；内部 scope 禁止回源公网拉取，第三方依赖支持单向公网拉取并缓存；
 - 私服强制版本不可变（同版本重复发布报权限拒绝；删除需管理员权限）；

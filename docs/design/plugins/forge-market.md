@@ -16,7 +16,7 @@
 | 门禁 | G2 |
 | 模块状态 | 已有 Gitee 归档开发参考实现；本版 npm 目标未实现，企业准入未验 |
 
-> 编制依据：2026-10-21 用户确认企业接入关键基线：私服为 JFrog Artifactory（访问入口规范为 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`），单向向公网拉包并缓存，内部 scope 包禁止穿透回源，免自签 CA 证书与特殊网络代理；私服支持按 Scope 拦截与不可变校验（禁止重复上传同名同版本，删除需管理员权限）；可用插件以 JSON 白名单形式由外部“AI 开发者平台”维护并提供只读 URL，开发者新增插件的预创建/建仓/审查/发布 npm 全生命周期均由 AI 开发者平台负责，不属于本项目范围；双端真实基线为 Windows 10 专业版 (amd64) 与统信 UOS 64 位（版本 20，内核 4.19.0-amd64-desktop，amd64 架构），统一配置 Node.js 22.13；统一分发客户端需定制 DSH 发行版以预置 `@heluo/forge-market`（展示名称：“dsh 插件市场”），自研/内部插件资源与真实 tarball 由平台负责人验收。来源决策见 [ADR-11／12](<../../architecture/plugin-registry-source-decision.md>)；字段与发布契约见 [DESIGN-012](<../services/market-index.md>)。
+> 编制依据：2026-10-21 用户确认企业接入关键基线：私服为 JFrog Artifactory（访问入口规范仅配置于本地配置文件，不提交至 Git 仓库），单向向公网拉包并缓存，内部 scope 包禁止穿透回源，免自签 CA 证书与特殊网络代理；私服支持按 Scope 拦截与不可变校验（禁止重复上传同名同版本，删除需管理员权限）；可用插件以 JSON 白名单形式由外部“AI 开发者平台”维护并提供只读 URL，开发者新增插件的预创建/建仓/审查/发布 npm 全生命周期均由 AI 开发者平台负责，不属于本项目范围；双端真实基线为 Windows 10 专业版 (amd64) 与统信 UOS 64 位（版本 20，内核 4.19.0-amd64-desktop，amd64 架构），统一配置 Node.js 22.13；统一分发客户端需定制 DSH 发行版以预置 `@heluo/forge-market`（展示名称：“dsh 插件市场”），自研/内部插件资源与真实 tarball 由平台负责人验收。来源决策见 [ADR-11／12](<../../architecture/plugin-registry-source-decision.md>)；字段与发布契约见 [DESIGN-012](<../services/market-index.md>)。
 >
 > 核验边界：2026-10-21 只读核对 DSH `0.2.1-rc.2` 的 `pluginMarket`、`pluginManager` 接口与随包说明；Node 24.21.0 / pnpm 11.28.5 隔离复现用于版本保存语义。未做企业 registry、双端安装或全通道验收。`0.2.1-rc.2` 是接口核验版本，不是企业发行批准。
 >
@@ -276,7 +276,7 @@ packages/forge-market/
 
 平台发行/运维必须确认：
 
-- 企业私有 npm 为 JFrog Artifactory，统一聚合内网访问入口形如 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`（支持向公网单向回源缓存第三方依赖；内部定制 scope 包严禁回源公网拉取）。
+- 企业私有 npm 为 JFrog Artifactory，统一聚合内网访问入口由本地配置文件配置，不提交至 Git 仓库（支持向公网单向回源缓存第三方依赖；内部定制 scope 包严禁回源公网拉取）。
 - 客户端拉取包免配置企业自签 CA 证书，免配置网络代理，不存在 HTTP 重定向。
 - 目标开发机终端操作系统与运行环境基线明确：Windows 10 专业版 (amd64) 与统信 UOS 64 位（v20，内核 4.19.0-amd64-desktop，amd64 架构）；开发者已预装 Node.js 22.13。
 - 同一规范企业 registry 入口，`fallbackRegistries: []`，不跨源。
@@ -328,7 +328,7 @@ packages/forge-market/
 | 项 | 目标处理 |
 |---|---|
 | 清单 | 由“AI 开发者平台”以只读 JSON 白名单 URL 提供（白名单本身在 AI 开发者平台维护；插件预创建、建仓、审查、npm 发布由该平台全权负责）；DESIGN-012 CI 自动拉取并核验稳定版；不含 token，不逐版录摘要 |
-| 来源与出口 | 单 profile 单一规范企业 registry（Artifactory 虚拟仓 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`），空 fallback；免 CA 与代理；tarball/重定向限内网；内部 scope 支持私服按 Scope 限制访问与下载拦截，不代理公网；公网镜像包单向缓存，无需内部 Gitee repo |
+| 来源与出口 | 单 profile 单一规范企业 registry（Artifactory 虚拟仓，入口仅配置于本地配置文件，不入 Git 库），空 fallback；免 CA 与代理；tarball/重定向限内网；内部 scope 支持私服按 Scope 限制访问与下载拦截，不代理公网；公网镜像包单向缓存，无需内部 Gitee repo |
 | 写入准入 | 每次写前 `no-store` 读当前控制元数据，按 revision/matrix/单源/包名/精确根版重判；≤ 60 秒，不由目录 TTL 授权 |
 | 版本防篡改 | 私服强制版本不可变（同一版本重复发布返回权限错误拒绝覆盖；删除需管理员权限）；CI 与客户端拒绝同版换包 |
 | 通道边界 | 原生索引只筛目录；全通道覆盖未证明则 `browse-only` 并停用受管安装，**不算 REQ-14/G2 通过** |
@@ -420,7 +420,7 @@ packages/forge-market/
 
 | 问题 | 需要谁回答 | 影响与截止 | 当前状态 |
 |---|---|---|---|
-| 企业 registry 实际产品/聚合入口、认证、scope 权威路由、tarball/重定向内网与保留 | 仓库维护方、IT、安全 | G1 取证，G2 前负向验收 | 已确认 Artifactory 入口 `http://apppmp.corp.example/artifactory/api/npm/public-npm-external/`，免 CA/代理，支持 Scope 拦截与不可变发布；遗留 CI 认证（E-03）待闭环 |
+| 企业 registry 实际产品/聚合入口、认证、scope 权威路由、tarball/重定向内网与保留 | 仓库维护方、IT、安全 | G1 取证，G2 前负向验收 | 已确认 Artifactory，实际入口仅存在于本地配置、不入 Git 库，免 CA/代理，支持 Scope 拦截与不可变发布；遗留 CI 认证（E-03）待闭环 |
 | 发行 matrixId、Windows CPU、实际目标 DSH 清单与双端 smoke 环境 | 平台组、IT、发行维护方 | G1 固定基线，G2 双端取证 | 目标开发机明确为 Windows 10 专业版 (amd64) 与统信 UOS 64 位 (v20, 内核 4.19.0-amd64-desktop, amd64)，预装 Node 22.13；DSH matrixId 待随发行版本核对 |
 | 清单维护权限、012 产物托管/原子发布实现与当前元数据可用性 | 平台组、仓库管理员、CI/分发维护方 | 按 DESIGN-012 §3 实现，G2 验证 | 清单由外部“AI 开发者平台”以只读 JSON 白名单 URL 提供并维护全生命周期；012 产物发布待实施与验证 |
 | profile 基线与原生/任意 spec/工具/CLI、local/Git/tarball及停用覆盖 | 发行/运维、平台、IT、安全、仓库维护方 | G1 列路径，G2 开放前正反向取证 | 未验即 browse-only/关闭受管安装，不算REQ-14/G2通过；不自动清理存量、不造SDKhook |
