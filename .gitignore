@@ -83,6 +83,7 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .claude/
 .claude.json
 .cursor/
+.workbuddy-ai/
 .cursorrules.local
 .aider*
 .opencode/
