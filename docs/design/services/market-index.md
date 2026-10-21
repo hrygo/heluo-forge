@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件市场服务详细设计 |
-| 版本 | V1.1.1 |
+| 版本 | V1.1.3 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -149,6 +149,19 @@ flowchart LR
 候选门禁以企业私服留存的**真实 npm pack 发布包**为准，核验 `dsh.bundle.patch`、runtime/patch/Host/Client 入口、exports、files 实际内容以及资源路径，不只看仓库源文件。内部定制须提供有意义的 en/zh `meta.title/meta.description`、授权可再分发 icon，确保 locale/icon 导出与打包字节存在且格式可读；第三方缺 display 可以明确记录回退到 name/description/通用图，不因此拒绝所有第三方包。展示回退不是结构、入口或安全失败的豁免。
 
 索引 `icon` 只用内网同源绝对 HTTPS 或相对静态地址，也可省略；不得放公网 icon/CDN。registry/pnpm 配置不控制浏览器图片请求，须单独核验静态资源与浏览器出口。生产索引、registry、icons 使用 HTTPS 与企业 CA，不能关闭证书校验；历史 loopback HTTP 仿服务不改称生产例外。
+
+#### 已核验的 format-1 成员（2026-10-21）
+
+只读核对 DSH 随包 `@deepseek-ai/dsh-plugin-market-index` 的 `parseMarketIndex` 后，实际成员如下；生成器只写这些字段。
+
+| 层级 | 字段 |
+|---|---|
+| 顶层 | `format: 1`、`title`（必含 `en`）、`description`（可选）、`metadata`（可选）、`plugins[]` |
+| 插件 | `name`、`title`/`description`（可选，含 `en`）、`icon`（可选）、`author`/`homepage`/`repository`（可选）、`metadata`（可选）、`versions[]`（非空、去重、按 SemVer 降序） |
+| 版本 | `version`（精确 SemVer）、`publishTimestamp`（Unix 秒整数）、`source`（本方案只写 `npm`）、`engines`（可选，`dsh` 为 SemVer 范围） |
+| metadata | `categories`/`labels`/`sortKeys` 声明；插件侧 `category`/`keywords`/`labels`/`sortKeys` 引用，未声明 id 即拒绝 |
+
+关键行为：官方解析器对**未定义成员是丢弃**，不是报错。所以“不向原生 schema 增加未知门禁字段”不能依赖原生拒绝兜底；企业策略字段只能留在 sidecar，写进索引会被静默丢掉。`icon` 只接受内联 data URL（解码后 ≤32 KiB，SVG/PNG/JPEG/WebP）或 HTTPS，相对路径按索引 URL 解析。
 
 ### 3.5 policy / evidence / current
 
@@ -357,6 +370,8 @@ Host 存活时以不超过5分钟的轻量检查、受管目录进入/刷新及�
 | 内部定制 group/repo/commit/build 与公网镜像 upstream/扫描/许可、真实 pack/display | Gitee/流水线/仓库维护方、安全、平台组 | 对应包自动准入前分来源取证，真实发布包内容及资源校验 | 缺证拒收；公网不迁 Gitee，第三方 display 可标 fallback |
 | 受管 no-store/60 秒复判、原生/工具/CLI/path/Git/tarball/缓存/role、下载阻断及已装处置 | 平台组、仓库维护方、IT、安全 | G2 每通道负向证据、撤销时延/在途与独立已装处置记录 | 不等价即市场 browse-only；不承诺防本机管理员/远程自动卸载 |
 | 指标覆盖、保留/脱敏、可选结果回报和制品/目录恢复 | 仓库维护方、平台组、安全 | 相关展示/回报启用前冻结口径，G2 恢复证据 | 旧计数保留，不新批准 PG/IAM/账户去重；unknown 不改写 |
+
+上述事项的逐项取证、责任人与关闭证据见 [P0 接入取证单](<../../plans/market-p0-verification.md>)；未关闭前不进入安装开放。
 
 **非最小前置**：PostgreSQL/IAM/逐版评审后台、自建下载鉴权代理、Gitee 归档或本地 tarball 主源、在线构建与包体托管、评论/星级/多租户部门市场，均不在本次范围。
 

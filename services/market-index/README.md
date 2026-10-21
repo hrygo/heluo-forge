@@ -11,7 +11,7 @@
 | 不负责 | 不托管包体、不自研 registry/下载代理、不构建包、不执行安装 |
 | 客户端 | [@heluo/forge-market](../../packages/forge-market/README.md) |
 | 制品存储 | [deploy/registry](../../deploy/registry/README.md) |
-| 契约 | [DESIGN-012](<../../docs/design/services/market-index.md>)（V1.1.0 评审稿，非企业生效或发行批准） |
+| 契约 | [DESIGN-012](<../../docs/design/services/market-index.md>)（V1.1.2 评审稿，非企业生效或发行批准） |
 
 ## 现在能跑什么
 
@@ -36,6 +36,21 @@ node services/market-index/server.mjs --catalog ./catalog.json --counts ./counts
 `HELUO_MARKET_TOKEN` 由运行环境注入；未配置或不匹配时 `/api/admin/*` 返回 401。它只保护管理端点，普通查询与提交不做身份认证。
 
 **不构成部署版本**：无限流、无 Gitee 扫描、无服务端完整包校验；目录变更、待审与审计都在内存，重启丢失，只有计数可选写盘。`submitter` 为自报字段，只过滤展示。
+
+## 生成器（P1 起步，离线）
+
+| 已实现 | 未实现 |
+|---|---|
+| 受控清单校验：`schemaVersion`、唯一 id 与规范化 URL、精确包名、悬空引用、未知字段；整份拒绝 | 基线/矩阵校验、自包含与双端检查、原生索引生成、发布流水线 |
+| policy/evidence/current 组装与校验：七类检查决定 allow/deny、摘要互指、公共头一致、租约窗口、来源证据、同源地址 | 发布与续期、撤回注入 |
+| 包内检查：结构/入口/patch、自包含运行依赖、生命周期脚本、peer 基线、显示资源（第三方可 fallback） | 真实 tarball 解包、matrix smoke、provenance 与 integrity（需外部环境补齐） |
+| 原生 format-1 索引：字段校验、版本降序、icon/本地化/metadata 引用、未知成员丢弃 | 索引落盘与签名、双端 smoke 证据 |
+
+`generator/manifest.mjs` 导出 `validateManifest(input)`（返回 `{ ok, errors, manifest }`）与 `canonicalizeRegistryUrl(url)`（不合法返回 `null`）；`generator/artifacts.mjs` 导出 `buildSnapshot(input)`、`validateSnapshot(input)` 与 `CHECK_IDS`；`generator/package-check.mjs` 导出 `inspectPackage({ manifest, files, peerBaseline, origin })` 与 `tarballIntegrity(bytes)`。当前不读企业源、不写产物，只用清单与夹具验证契约。
+
+```sh
+node --test services/market-index/test/manifest.test.mjs
+```
 
 ## 指标口径
 
@@ -69,4 +84,4 @@ node services/market-index/server.mjs --catalog ./catalog.json --counts ./counts
 
 ## 测试
 
-在仓库根执行 `node --test services/market-index/test/*.test.mjs tests/integration/*.test.mjs`。根 `pnpm check` 也包含这些用例，覆盖令牌拒绝、提交/评审/撤回、计数恢复与本地安装链路；不验证真实 Gitee 或生产部署。
+在仓库根执行 `node --test services/market-index/test/*.test.mjs tests/integration/*.test.mjs`。根 `pnpm check` 也包含这些用例，覆盖清单校验、令牌拒绝、提交/评审/撤回、计数恢复与本地安装链路；不验证真实 Gitee、企业 registry 或生产部署。

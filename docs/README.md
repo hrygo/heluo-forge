@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.16.0 |
+| 版本 | V1.18.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -45,11 +45,11 @@
 |---|---|---|---|
 | `requirements/` | 范围、画像、场景、需求与指标 | [需求与场景基线](<requirements/requirements-baseline.md>) | 业务方、PM、安全、试点用户 |
 | `architecture/` | 跨域决策、信任边界、领域设计、ADR | [总体架构设计](<architecture/platform-architecture.md>)；备选 [静态密钥方案](<architecture/gateway-static-key-option.md>)（未采纳） | 架构评审、各团队负责人 |
-| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>) | PM、实施团队 |
+| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>) | PM、实施团队 |
 | `design/` | 逐模块详细设计的索引与状态 | [设计索引](<design/README.md>) | 插件与服务开发者 |
 | `contracts/` | 外部系统字段级契约 | [AI 网关契约](<contracts/gateway-contract.md>) | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
-| `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 发函人、各接入团队 |
+| `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>)；[市场接入问询函](<collaboration/market-access-clarification.md>) | 发函人、各接入团队 |
 | `engineering/` | 仓库结构、开发测试与发布约定 | [工程结构设计](<engineering/repository-structure-design.md>) | 工程负责人、维护者 |
 | `templates/` | 受控文档与模块设计模板 | [_template.md](<templates/_template.md>) | 全体撰写人 |
 | `assets/` | 可离线打开的 HTML 图解 | [认证流程图解](<assets/enterprise-authentication-flow.html>) | 评审与对接人员 |
