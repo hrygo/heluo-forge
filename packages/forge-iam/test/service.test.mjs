@@ -569,3 +569,22 @@ test('the account summary is reused briefly instead of reading the secret on eve
   await service.loadGatewayCredential();
   assert.equal(service.getView().gatewayCredential.state, 'unconfigured');
 });
+
+test('an unattributable gateway record is dropped when a new account signs in', async () => {
+  const credentials = new MemoryCredentials();
+  await createGrantStore(credentials).write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1002', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-new', accessToken: 'access-new',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  await credentials.set('ENTERPRISE_STATIC_KEY', `uag-${'3'.repeat(32)}`);
+  await credentials.modifyRecord('heluo-iam/gateway-credential', async () => ({
+    kind: 'grant',
+    payload: { version: 99 },
+  }));
+  const service = createIamService(configured, { credentials });
+  const view = await service.hydrate();
+  assert.equal(view.gatewayCredential.state, 'unconfigured');
+  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
+});

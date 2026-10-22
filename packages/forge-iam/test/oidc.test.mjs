@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { constants, createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import {
   OidcError,
   buildAuthorizationUrl,
@@ -178,4 +178,46 @@ test('multi-audience ID tokens must name this client as the authorized party', (
     () => verifyIdToken(idToken({ azp: 'other-client' }), options),
     (error) => error.code === 'IAM_ID_TOKEN_AUDIENCE',
   );
+});
+
+test('PS256 and ES256 verify, while none and HS256 stay rejected', () => {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: 'https://iam.example', sub: 'E1001', aud: 'dsh-desktop', exp: now + 300, iat: now, nonce: 'n-1',
+  };
+  const build = (header, key, options) => {
+    const head = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = sign('sha256', Buffer.from(`${head}.${body}`), { key, ...options }).toString('base64url');
+    return `${head}.${body}.${signature}`;
+  };
+  const options = { issuer: 'https://iam.example', clientId: 'dsh-desktop', nonce: 'n-1' };
+
+  const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const rsaJwk = { ...rsa.publicKey.export({ format: 'jwk' }), kid: 'p1', kty: 'RSA', alg: 'PS256' };
+  const ps = build({ alg: 'PS256', kid: 'p1' }, rsa.privateKey, {
+    padding: constants.RSA_PKCS1_PSS_PADDING,
+    saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
+  });
+  assert.equal(verifyIdToken(ps, { ...options, jwks: { keys: [rsaJwk] } }).sub, 'E1001');
+
+  const ec = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const ecJwk = { ...ec.publicKey.export({ format: 'jwk' }), kid: 'e1', kty: 'EC', crv: 'P-256', alg: 'ES256' };
+  const es = build({ alg: 'ES256', kid: 'e1' }, ec.privateKey, { dsaEncoding: 'ieee-p1363' });
+  assert.equal(verifyIdToken(es, { ...options, jwks: { keys: [ecJwk] } }).sub, 'E1001');
+
+  const none = `${Buffer.from(JSON.stringify({ alg: 'none', kid: 'e1' })).toString('base64url')}.`
+    + `${Buffer.from(JSON.stringify(payload)).toString('base64url')}.`;
+  assert.throws(() => verifyIdToken(none, { ...options, jwks: { keys: [ecJwk] } }),
+    (error) => error.code === 'IAM_ID_TOKEN_ALGORITHM');
+
+  const hsHead = Buffer.from(JSON.stringify({ alg: 'HS256', kid: 'e1' })).toString('base64url');
+  const hsBody = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const hs = `${hsHead}.${hsBody}.${createHmac('sha256', 'shared-secret').update(`${hsHead}.${hsBody}`).digest('base64url')}`;
+  assert.throws(() => verifyIdToken(hs, { ...options, jwks: { keys: [ecJwk] } }),
+    (error) => error.code === 'IAM_ID_TOKEN_ALGORITHM');
+
+  // A key of the wrong type for the declared algorithm cannot verify.
+  assert.throws(() => verifyIdToken(ps, { ...options, jwks: { keys: [ecJwk] } }),
+    (error) => error.code === 'IAM_JWKS_KEY_NOT_FOUND');
 });

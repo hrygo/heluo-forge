@@ -122,6 +122,8 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再录入网关凭据。';
       if (code === 'IAM_REQUEST_INVALID') return '请求内容无效，请重试。';
       if (code === 'IAM_REQUEST_TOO_LARGE') return '请求过大，请检查粘贴内容。';
+      if (code === 'IAM_UNAUTHENTICATED' || code === 'IAM_CONNECTION_UNAVAILABLE') return '页面会话不可用，请刷新页面后重试。';
+      if (code === 'IAM_METHOD_NOT_ALLOWED' || code === 'IAM_NOT_FOUND') return '请求不受支持，请刷新页面。';
       return `操作失败：${code}`;
     }
 
@@ -232,6 +234,19 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const cancelLogin = async () => {
+        try {
+          const result = await postJson('/api/forge-iam/cancel');
+          if (!result.ok) {
+            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            return;
+          }
+          setState((current) => ({ ...current, view: result.body?.view ?? null, authorizationUrl: null, notice: null }));
+        } catch {
+          setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+        }
+      };
+
       const signOut = async () => {
         try {
           const result = await postJson('/api/forge-iam/sign-out');
@@ -339,6 +354,7 @@ window.__ModuleLoader__.load({
         h('div', null,
           h('button', { style: button, onClick: load }, '刷新'),
           view.canSignIn ? h('button', { style: button, onClick: login }, '登录企业账号') : null,
+          view.state === 'authenticating' ? h('button', { style: button, onClick: cancelLogin }, '取消登录') : null,
           view.canSignOut ? h('button', { style: button, onClick: signOut }, '退出') : null,
           view.state === 'authenticating' ? h('button', { style: button, onClick: () => postJson('/api/forge-iam/cancel').then(load) }, '取消') : null,
         ),
@@ -413,6 +429,20 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const cancelLogin = async () => {
+        try {
+          const result = await postJson('/api/forge-iam/cancel');
+          if (!result.ok) {
+            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            return;
+          }
+          const view = result.body?.view ?? null;
+          setState((current) => ({ ...current, ...bannerFor(view), view, authorizationUrl: null, notice: null }));
+        } catch {
+          setState((current) => ({ ...current, notice: 'Host 不可达' }));
+        }
+      };
+
       if (!state.visible) return null;
       return h('div', {
         style: {
@@ -432,6 +462,9 @@ window.__ModuleLoader__.load({
         : null,
       state.reason !== 'gateway' && state.view?.canSignIn
         ? h('button', { type: 'button', style: { cursor: 'pointer' }, onClick: login }, '登录')
+        : null,
+      state.view?.state === 'authenticating'
+        ? h('button', { type: 'button', style: { cursor: 'pointer' }, onClick: cancelLogin }, '取消')
         : null,
       state.authorizationUrl
         ? h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, '打开登录页')

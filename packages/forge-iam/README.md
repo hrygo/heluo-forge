@@ -23,7 +23,7 @@
 
 ## 登录边界
 
-- 授权码 + PKCE S256；回调绑定单次 `state`/`nonce`，校验 ID Token 签名、issuer、audience（含多 audience 的 `azp`）、nonce、exp；`kid` 未命中时重取一次 JWKS。
+- 授权码 + PKCE S256；回调绑定单次 `state`/`nonce`，校验 ID Token 签名（RS256/PS256/ES256，拒绝 `none`/HS*）、issuer、audience（含多 audience 的 `azp`）、nonce、exp；`kid` 未命中时重取一次 JWKS。
 - token 交换与刷新只由 Host 发起；Client 只拿到授权 URL 和非敏感 `IamView`。
 - 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；`redirectUri` 的 path 必须与之一致，非 loopback 必须 HTTPS，生产值必须与 IAM 预注册的精确 URI 匹配。
 - 默认只允许 HTTPS；任何 HTTP（含 loopback mock）都必须显式设置 `allowInsecureHttp: true`。

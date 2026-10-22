@@ -1,4 +1,11 @@
-import { createHash, createPublicKey, randomBytes, timingSafeEqual, verify as verifySignature } from 'node:crypto';
+import {
+  constants,
+  createHash,
+  createPublicKey,
+  randomBytes,
+  timingSafeEqual,
+  verify as verifySignature,
+} from 'node:crypto';
 
 export class OidcError extends Error {
   constructor(code, message, details = {}) {
@@ -63,19 +70,48 @@ function audienceIncludes(audience, clientId) {
 }
 
 /**
- * Verify an RS256 ID token against a JWKS document and the OIDC claims this
- * service requires. No token value is included in an error.
+ * Verify an RS256/PS256/ES256 ID token against a JWKS document and the OIDC
+ * claims this service requires. `none` and HMAC algorithms are rejected. No
+ * token value is included in an error.
  */
-export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date.now(), skewSeconds = 60, algorithms = ['RS256'] } = {}) {
+// Asymmetric algorithms only: `none` and the HMAC family must never be
+// accepted, and each supported algorithm fixes the expected key type.
+const SIGNING_ALGORITHMS = Object.freeze({
+  RS256: {
+    kty: 'RSA',
+    verify: (key, input, signature) => verifySignature('RSA-SHA256', input, key, signature),
+  },
+  PS256: {
+    kty: 'RSA',
+    verify: (key, input, signature) => verifySignature('sha256', input, {
+      key,
+      padding: constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
+    }, signature),
+  },
+  ES256: {
+    kty: 'EC',
+    crv: 'P-256',
+    verify: (key, input, signature) => verifySignature('sha256', input, {
+      key,
+      dsaEncoding: 'ieee-p1363',
+    }, signature),
+  },
+});
+
+export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date.now(), skewSeconds = 60 } = {}) {
   const decoded = decodeJwt(token);
-  if (!algorithms.includes(decoded.header?.alg)) {
+  const algorithm = SIGNING_ALGORITHMS[decoded.header?.alg];
+  if (!algorithm) {
     throw new OidcError('IAM_ID_TOKEN_ALGORITHM', 'ID token uses an unsupported signing algorithm');
   }
   if (!decoded.header?.kid) {
     throw new OidcError('IAM_ID_TOKEN_INVALID', 'ID token has no key id');
   }
   const keys = Array.isArray(jwks?.keys) ? jwks.keys : [];
-  const jwk = keys.find((candidate) => candidate?.kid === decoded.header.kid && candidate?.kty === 'RSA');
+  const jwk = keys.find((candidate) => candidate?.kid === decoded.header.kid
+    && candidate?.kty === algorithm.kty
+    && (algorithm.crv === undefined || candidate?.crv === algorithm.crv));
   if (!jwk) {
     throw new OidcError('IAM_JWKS_KEY_NOT_FOUND', 'no matching JWKS key for the ID token');
   }
@@ -85,7 +121,12 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date
   } catch {
     throw new OidcError('IAM_JWKS_INVALID', 'matching JWKS key cannot be imported');
   }
-  const valid = verifySignature('RSA-SHA256', Buffer.from(decoded.input), key, decoded.signature);
+  let valid = false;
+  try {
+    valid = algorithm.verify(key, Buffer.from(decoded.input), decoded.signature);
+  } catch {
+    valid = false;
+  }
   if (!valid) throw new OidcError('IAM_ID_TOKEN_SIGNATURE', 'ID token signature is invalid');
 
   const claims = decoded.payload;

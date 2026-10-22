@@ -453,13 +453,16 @@ export function createIamService(rawConfig, options = {}) {
   let gatewayLoading = null;
 
   async function loadGatewayCredential({ force = false } = {}) {
+    // A hydrate that lost the race with dispose must not repopulate runtime state.
+    if (disposed) return null;
     if (!force && gatewayLoadedAt > 0 && now() - gatewayLoadedAt < GATEWAY_RELOAD_MS) return gatewaySummary;
     if (gatewayLoading) return gatewayLoading;
     gatewayLoadedAt = now();
     gatewayLoading = readGatewayCredential()
       .then((summary) => {
-        gatewaySummary = summary;
-        return summary;
+        // dispose() may have run while the provider was reading.
+        gatewaySummary = disposed ? null : summary;
+        return gatewaySummary;
       })
       .catch(() => {
         gatewaySummary = null;
@@ -476,8 +479,15 @@ export function createIamService(rawConfig, options = {}) {
    */
   async function reconcileGatewayOwner(subject) {
     if (!gatewayStore || !subject) return false;
-    const record = await gatewayStore.read().catch(() => null);
-    if (!record?.ok) return false;
+    const record = await gatewayStore.read().catch(() => undefined);
+    // An unreadable provider is not evidence of an unknown owner; keep the
+    // credential rather than destroying it on a transient failure.
+    if (record === undefined) return false;
+    if (!record.ok) {
+      // Corrupt or foreign metadata cannot attribute the value to this account.
+      await gatewayStore.clear().catch(() => {});
+      return true;
+    }
     const owner = record.credential?.ownerSubject;
     if (owner === subject) return false;
     // A stored value with no owner metadata cannot be attributed to the new
@@ -871,6 +881,14 @@ export function createIamService(rawConfig, options = {}) {
         throw new IamError('IAM_INVALID_GRANT', safeMessage('IAM_INVALID_GRANT'));
       }
       if (!record.grant) {
+        // Another process signed out; drop the stale in-memory copy so the
+        // account view stops claiming a session that no longer exists.
+        if (state === 'ready' || state === 'expired' || state === 'unreachable') {
+          lastGrant = null;
+          state = 'signed-out';
+          error = null;
+          notify();
+        }
         throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
       }
       assertGrantContext(record.grant);

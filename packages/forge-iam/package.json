@@ -13,6 +13,7 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
+    "./package.json": "./package.json",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"

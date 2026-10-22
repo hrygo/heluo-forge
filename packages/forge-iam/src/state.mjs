@@ -106,7 +106,7 @@ export function canSignIn(state) {
  * Build the non-secret snapshot consumed by the Host service and Client UI.
  *
  * @param {string} state
- * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, accessExpiresAt?: string | null }} [details]
+ * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, accessExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
  */
 export function createView(state, details = {}) {
   return {
