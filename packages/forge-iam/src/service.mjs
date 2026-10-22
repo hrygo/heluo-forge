@@ -21,6 +21,7 @@ import {
 const METADATA_TTL_MS = 5 * 60 * 1000;
 const JWKS_TTL_MS = 5 * 60 * 1000;
 const REFRESH_TIMEOUT_MS = 5000;
+const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
 
 function nowIso(now) {
   return new Date(now).toISOString();
@@ -58,6 +59,8 @@ function safeMessage(code) {
     IAM_ID_TOKEN_AUDIENCE: 'IAM ID token audience does not match',
     IAM_ID_TOKEN_ISSUER: 'IAM ID token issuer does not match',
     IAM_DISCOVERY_ISSUER_MISMATCH: 'IAM discovery issuer does not match configuration',
+    IAM_GRANT_CONTEXT_MISMATCH: 'IAM grant belongs to a different client or resource',
+    IAM_REVOCATION_FAILED: 'IAM local session ended but token revocation was not confirmed',
     IAM_ID_TOKEN_NONCE: 'IAM ID token nonce does not match',
     IAM_ID_TOKEN_EXPIRED: 'IAM ID token is expired',
     IAM_REFRESH_TOKEN_MISSING: 'IAM token response has no refresh token',
@@ -81,7 +84,10 @@ function safeMessage(code) {
  */
 export function createIamService(rawConfig, options = {}) {
   const checked = validateConfig(rawConfig);
-  const config = 'value' in checked ? checked.value : (rawConfig ?? {});
+  if ('issues' in checked) {
+    throw new IamError('IAM_CONFIG_INVALID', safeMessage('IAM_CONFIG_INVALID'), { issues: checked.issues });
+  }
+  const config = checked.value;
   const configured = isConfigured(config).ok;
   let exclusive = options.exclusive ?? { ok: true };
   const now = options.now ?? (() => Date.now());
@@ -125,6 +131,10 @@ export function createIamService(rawConfig, options = {}) {
   let attempt = null;
   let disposed = false;
   let refreshPromise = null;
+  let signInPromise = null;
+  let signingOut = false;
+  let sessionEpoch = 0;
+  let authEpoch = 0;
   let metadataCache = null;
   let jwksCache = null;
   const listeners = new Set();
@@ -153,7 +163,7 @@ export function createIamService(rawConfig, options = {}) {
     recheckExclusive();
     const summary = lastGrant ? summarizeGrant(lastGrant) : {};
     return createView(state, {
-      configured: configured && state !== 'unconfigured',
+      configured,
       missing: isConfigured(config).missing,
       error,
       exclusive: exclusive.ok ? 'ok' : (exclusive.reason ?? 'exclusive-violation'),
@@ -197,6 +207,10 @@ export function createIamService(rawConfig, options = {}) {
     clearAttempt();
     lastGrant = null;
     error = code;
+    if (state === 'unconfigured') {
+      notify();
+      return;
+    }
     if (state === 'authenticating') {
       const result = transition(state, 'SIGN_IN_FAILURE');
       if (result.ok) state = result.state;
@@ -230,6 +244,16 @@ export function createIamService(rawConfig, options = {}) {
     return value;
   }
 
+  function assertGrantContext(grant) {
+    if (!grant) return;
+    const wrongClient = grant.clientId !== config.clientId;
+    const wrongResource = grant.resource !== config.gatewayResource;
+    const wrongIssuer = Boolean(config.issuer) && grant.issuer !== config.issuer;
+    if (wrongClient || wrongResource || wrongIssuer) {
+      throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
+    }
+  }
+
   function redirectUri() {
     if (config.redirectUri) {
       let parsed;
@@ -240,6 +264,15 @@ export function createIamService(rawConfig, options = {}) {
       }
       if (parsed.pathname !== config.redirectPath) {
         throw new IamError('IAM_CONFIG_INVALID', 'redirectUri path must equal redirectPath');
+      }
+      let live;
+      try {
+        live = options.getOrigin?.();
+      } catch {
+        live = undefined;
+      }
+      if (live && parsed.origin !== new URL(live).origin) {
+        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri origin must equal the live web server origin');
       }
       return parsed.href;
     }
@@ -300,32 +333,59 @@ export function createIamService(rawConfig, options = {}) {
     };
   }
 
-  async function hydrate() {
+  async function syncFromStore({ mirror = false } = {}) {
+    if (disposed) return view();
     if (!configured || !exclusive.ok) return view();
+    // A user-triggered sign-in owns the state machine until its callback,
+    // cancellation, or timeout; a background hydration must not clobber it.
+    if (state === 'authenticating') return view();
+    // An explicit error (for example an expired attempt) must remain visible
+    // until the user retries or signs out; a background poll must not erase it.
+    if (state === 'error') return view();
     const targetStore = ensureStore();
     if (!targetStore) return view();
     try {
       const record = await targetStore.read();
       if (!record.ok) {
+        lastGrant = null;
         error = 'IAM_GRANT_INVALID';
         state = 'error';
         notify();
         return view();
       }
-      if (!record.grant) return view();
+      if (!record.grant) {
+        const changed = lastGrant !== null || state !== 'signed-out';
+        lastGrant = null;
+        if (changed) {
+          error = null;
+          state = 'signed-out';
+          notify();
+        }
+        return view();
+      }
+      assertGrantContext(record.grant);
+      const previous = `${state}|${error}|${lastGrant?.subject ?? ''}`;
       lastGrant = record.grant;
-      state = isRefreshUsable(record.grant) || !shouldRefresh(record.grant, now(), config.refreshSkewSeconds)
-        ? 'ready'
-        : 'expired';
+      const needsRefresh = shouldRefresh(record.grant, now(), config.refreshSkewSeconds);
+      state = needsRefresh ? 'expired' : 'ready';
       error = null;
-      if (lastGrant.accessToken) await targetStore.mirror(lastGrant.accessToken).catch(() => {});
-      notify();
-    } catch {
-      error = 'IAM_CREDENTIALS_UNAVAILABLE';
+      if (mirror) {
+        assertExclusive();
+        if (!needsRefresh && lastGrant.accessToken) await targetStore.mirror(lastGrant.accessToken).catch(() => {});
+        else await targetStore.unsetMirror().catch(() => {});
+      }
+      if (previous !== `${state}|${error}|${lastGrant.subject ?? ''}`) notify();
+    } catch (cause) {
+      lastGrant = null;
+      error = cause?.code === 'IAM_GRANT_CONTEXT_MISMATCH' ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
       state = 'error';
       notify();
     }
     return view();
+  }
+
+  async function hydrate() {
+    return syncFromStore({ mirror: true });
   }
 
   const service = {
@@ -334,9 +394,11 @@ export function createIamService(rawConfig, options = {}) {
     },
 
     hydrate,
+    syncFromStore,
 
     async startSignIn() {
       assertExclusive();
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (!configured) {
         throw new IamError('IAM_UNCONFIGURED', safeMessage('IAM_UNCONFIGURED'), {
           missing: isConfigured(config).missing,
@@ -347,6 +409,13 @@ export function createIamService(rawConfig, options = {}) {
       if (state === 'authenticating' && attempt) {
         return { view: view(), authorizationUrl: attempt.authorizationUrl };
       }
+      if (signInPromise) return signInPromise;
+      signInPromise = service._startSignInOnce().finally(() => { signInPromise = null; });
+      return signInPromise;
+    },
+
+    async _startSignInOnce() {
+      const startEpoch = authEpoch;
       if (state === 'unreachable') {
         throw new IamError('IAM_UNREACHABLE', safeMessage('IAM_UNREACHABLE'));
       }
@@ -357,6 +426,10 @@ export function createIamService(rawConfig, options = {}) {
         const code = tokenErrorMessage(err);
         const mapped = code === 'IAM_HTTP_ERROR' || code === 'IAM_DISCOVERY_INVALID' ? 'IAM_UNREACHABLE' : code;
         throw new IamError(mapped, safeMessage(mapped));
+      }
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (authEpoch !== startEpoch || signingOut) {
+        throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       }
       const oauthState = randomToken(32);
       const nonce = randomToken(32);
@@ -396,16 +469,26 @@ export function createIamService(rawConfig, options = {}) {
     },
 
     async handleCallback(rawUrl) {
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       assertExclusive();
+      let receivedState = null;
+      try {
+        receivedState = new URL(rawUrl, 'http://127.0.0.1').searchParams.get('state');
+      } catch {
+        receivedState = null;
+      }
       let parsed;
       try {
         parsed = parseCallbackUrl(rawUrl);
       } catch (error) {
         const code = tokenErrorMessage(error);
+        if (!attempt || !safeStateEqual(attempt.state, receivedState)) {
+          throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
+        }
         fail(code);
         throw new IamError(code, safeMessage(code));
       }
-      const { code, state: receivedState } = parsed;
+      const { code } = parsed;
       if (!attempt || !safeStateEqual(attempt.state, receivedState)) {
         throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
       }
@@ -417,6 +500,7 @@ export function createIamService(rawConfig, options = {}) {
         throw new IamError('IAM_ATTEMPT_EXPIRED', safeMessage('IAM_ATTEMPT_EXPIRED'));
       }
       const current = attempt;
+      const attemptEpoch = authEpoch;
       try {
         const token = await exchangeCode({
           tokenEndpoint: current.metadata.tokenEndpoint,
@@ -437,15 +521,32 @@ export function createIamService(rawConfig, options = {}) {
           issuer: current.metadata.issuer,
           clientId: config.clientId,
           nonce: current.nonce,
+          skewSeconds: ID_TOKEN_CLOCK_SKEW_SECONDS,
           now: now(),
-          skewSeconds: config.refreshSkewSeconds,
         });
         const grant = await buildGrant(token, claims, current.metadata, nowIso(now()));
+        if (attempt !== current || authEpoch !== attemptEpoch || state !== 'authenticating') {
+          if (token.refreshToken && current.metadata.revocationEndpoint) {
+            await revokeToken({
+              revocationEndpoint: current.metadata.revocationEndpoint,
+              token: token.refreshToken,
+              tokenTypeHint: 'refresh_token',
+              clientId: config.clientId,
+              fetchImpl,
+              timeoutMs: config.httpTimeoutMs,
+            }).catch(() => {});
+          }
+          throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+        }
         assertExclusive();
         const targetStore = requireStore();
         try {
           await targetStore.write(grant);
           await targetStore.mirror(token.accessToken);
+          if (attempt !== current || authEpoch !== attemptEpoch || state !== 'authenticating') {
+            await targetStore.clear().catch(() => {});
+            throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+          }
         } catch (error) {
           await targetStore.clear().catch(() => {});
           throw error;
@@ -455,6 +556,7 @@ export function createIamService(rawConfig, options = {}) {
         publish('SIGN_IN_SUCCESS');
         return view();
       } catch (error) {
+        if (error?.code === 'IAM_ATTEMPT_CANCELLED') throw error;
         const code = tokenErrorMessage(error);
         fail(code);
         throw new IamError(code, safeMessage(code));
@@ -462,38 +564,70 @@ export function createIamService(rawConfig, options = {}) {
     },
 
     async cancelSignIn() {
+      if (disposed) return view();
+      authEpoch += 1;
       if (state !== 'authenticating') return view();
       clearAttempt();
       return publish('CANCEL');
     },
 
     async signOut() {
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (signingOut) return { view: view(), logoutUrl: null, revocation: 'skipped' };
+      signingOut = true;
+      authEpoch += 1;
+      try {
+        return await service._signOutOnce();
+      } finally {
+        signingOut = false;
+      }
+    },
+
+    async _signOutOnce() {
       clearAttempt();
+      if (refreshPromise) await refreshPromise.catch(() => {});
       let grant = lastGrant;
       const targetStore = ensureStore();
-      let cleared = { ok: true };
       if (targetStore) {
         const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
         if (record?.grant) grant = record.grant;
-        cleared = await targetStore.clear().catch(() => ({ ok: false }));
       }
       lastGrant = null;
+      let revocation = 'skipped';
+      let revocationError = null;
       if (grant) {
-        const meta = metadataCache?.value;
-        const revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
+        let meta = metadataCache?.value;
+        let revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
+        if (!revocationEndpoint && config.discoveryUrl) {
+          try {
+            meta = await metadata();
+            revocationEndpoint = meta.revocationEndpoint ?? config.revocationEndpoint;
+          } catch {
+            revocationEndpoint = undefined;
+          }
+        }
         if (revocationEndpoint && grant.refreshToken) {
-          await revokeToken({
-            revocationEndpoint,
-            token: grant.refreshToken,
-            tokenTypeHint: 'refresh_token',
-            clientId: config.clientId,
-            fetchImpl,
-            timeoutMs: config.httpTimeoutMs,
-          }).catch(() => {});
+          try {
+            await revokeToken({
+              revocationEndpoint,
+              token: grant.refreshToken,
+              tokenTypeHint: 'refresh_token',
+              clientId: config.clientId,
+              fetchImpl,
+              timeoutMs: config.httpTimeoutMs,
+            });
+            revocation = 'ok';
+          } catch (cause) {
+            revocation = 'failed';
+            revocationError = tokenErrorMessage(cause);
+          }
         }
       }
+      const cleared = targetStore
+        ? await targetStore.clear().catch(() => ({ ok: false }))
+        : { ok: false };
       let logoutUrl = null;
-      if (config.logoutMode === 'rp') {
+      if (config.logoutMode === 'rp' && grant?.idToken) {
         try {
           const meta = metadataCache?.value ?? await metadata();
           const endSessionEndpoint = meta.endSessionEndpoint ?? config.endSessionEndpoint;
@@ -512,16 +646,22 @@ export function createIamService(rawConfig, options = {}) {
         error = 'IAM_CREDENTIALS_CLEAR_FAILED';
         state = 'error';
         notify();
-        return { view: view(), logoutUrl: null };
+        return { view: view(), logoutUrl: null, revocation, revocationError };
       }
+      const nextError = revocation === 'failed' ? 'IAM_REVOCATION_FAILED' : null;
       if (state !== 'unconfigured' && state !== 'signed-out') {
-        publish('SIGN_OUT');
+        publish('SIGN_OUT', nextError);
+      } else {
+        error = nextError;
+        notify();
       }
-      return { view: view(), logoutUrl };
+      return { view: view(), logoutUrl, revocation, revocationError };
     },
 
     async resolveToken() {
       assertExclusive();
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (signingOut) throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
       const targetStore = requireStore();
       let record = await targetStore.read();
       if (!record.ok) {
@@ -530,6 +670,7 @@ export function createIamService(rawConfig, options = {}) {
       if (!record.grant) {
         throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
       }
+      assertGrantContext(record.grant);
       if (!shouldRefresh(record.grant, now(), config.refreshSkewSeconds)) {
         lastGrant = record.grant;
         if (state !== 'ready') {
@@ -551,12 +692,20 @@ export function createIamService(rawConfig, options = {}) {
         throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
       }
       if (refreshPromise) return refreshPromise;
+      const epoch = sessionEpoch;
       refreshPromise = (async () => {
+        let attemptedRefreshToken = null;
+        let rotated = false;
         try {
+          // Discovery and JWKS are resolved before entering the provider lock;
+          // only the 5s-bounded token exchange runs inside it.
+          const meta = metadataCache?.value ?? await metadata();
+          const keys = await jwks(meta.jwksUri);
           const result = await targetStore.mutate(async (current) => {
             if (!current) return undefined;
+            assertGrantContext(current);
             if (!shouldRefresh(current, now(), config.refreshSkewSeconds)) return undefined;
-            const meta = metadataCache?.value ?? await metadata();
+            attemptedRefreshToken = current.refreshToken;
             const token = await refreshTokens({
               tokenEndpoint: meta.tokenEndpoint,
               refreshToken: current.refreshToken,
@@ -565,14 +714,15 @@ export function createIamService(rawConfig, options = {}) {
               fetchImpl,
               timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
             });
+            rotated = true;
             let claims = null;
             if (token.idToken) {
               claims = verifyIdToken(token.idToken, {
-                jwks: await jwks(meta.jwksUri),
+                jwks: keys,
                 issuer: meta.issuer,
                 clientId: config.clientId,
+                skewSeconds: ID_TOKEN_CLOCK_SKEW_SECONDS,
                 now: now(),
-                skewSeconds: config.refreshSkewSeconds,
               });
             }
             if (claims && current.subject && claims.sub !== current.subject) {
@@ -593,6 +743,9 @@ export function createIamService(rawConfig, options = {}) {
           if (!latest) {
             throw new IamError('IAM_INVALID_GRANT', safeMessage('IAM_INVALID_GRANT'));
           }
+          if (epoch !== sessionEpoch) {
+            throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
+          }
           lastGrant = latest;
           assertExclusive();
           await targetStore.mirror(latest.accessToken);
@@ -608,7 +761,47 @@ export function createIamService(rawConfig, options = {}) {
           return latest.accessToken;
         } catch (err) {
           const code = tokenErrorMessage(err);
+          if (code === 'IAM_DISPOSED') throw err;
+          if (code === 'IAM_GRANT_CONTEXT_MISMATCH') {
+            lastGrant = null;
+            error = code;
+            state = 'error';
+            notify();
+            throw new IamError(code, safeMessage(code));
+          }
+          if (rotated) {
+            // The IdP may already have invalidated the old refresh token. If
+            // the rotated grant cannot be persisted, keep no stale session.
+            const cleared = await targetStore.clear().catch(() => ({ ok: false }));
+            lastGrant = null;
+            if (!cleared.ok) {
+              error = 'IAM_CREDENTIALS_CLEAR_FAILED';
+              state = 'error';
+              notify();
+              throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
+            }
+            if (state === 'ready' || state === 'expired') publish('SIGN_OUT');
+            else { state = 'signed-out'; notify(); }
+            throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+          }
           if (code === 'IAM_INVALID_GRANT' || code === 'IAM_REAUTH_REQUIRED') {
+            // Another process may have rotated the refresh token after this
+            // process started its request. Never clear a newer session; adopt
+            // it when it is already usable.
+            const current = await targetStore.read().catch(() => null);
+            if (current?.ok && current.grant && attemptedRefreshToken && current.grant.refreshToken !== attemptedRefreshToken) {
+              assertGrantContext(current.grant);
+              if (lastGrant?.subject && current.grant.subject !== lastGrant.subject) {
+                throw new IamError('IAM_REFRESH_SUBJECT_MISMATCH', safeMessage('IAM_REFRESH_SUBJECT_MISMATCH'));
+              }
+              assertExclusive();
+              await targetStore.mirror(current.grant.accessToken);
+              lastGrant = current.grant;
+              state = 'ready';
+              error = null;
+              notify();
+              return current.grant.accessToken;
+            }
             const cleared = await targetStore.clear().catch(() => ({ ok: false }));
             lastGrant = null;
             if (!cleared.ok) {
@@ -683,6 +876,8 @@ export function createIamService(rawConfig, options = {}) {
     async dispose() {
       if (disposed) return;
       disposed = true;
+      sessionEpoch += 1;
+      authEpoch += 1;
       clearAttempt();
       // Stop subscribers before any await so unload cannot leave a watch()
       // caller parked forever. dispose() is lifecycle cleanup, not logout:
@@ -694,6 +889,11 @@ export function createIamService(rawConfig, options = {}) {
       lastGrant = null;
       state = 'signed-out';
       error = null;
+      // Removing the derived mirror is cache cleanup, not logout: the grant
+      // remains for the next startup, but a process that no longer mounts IAM
+      // cannot keep using an ambient access token.
+      const targetStore = ensureStore();
+      if (targetStore) await targetStore.unsetMirror().catch(() => {});
     },
   };
 

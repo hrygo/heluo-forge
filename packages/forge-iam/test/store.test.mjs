@@ -127,8 +127,27 @@ test('clear removes both the record and the mirror', async () => {
   assert.equal(credentials.refs.has(TOKEN_REF), false);
 });
 
-test('clear attempts both deletions and reports partial failure', async () => {
-  const credentials = fakeCredentials();
+test('clear keeps the grant when the mirror cannot be removed', async () => {
+  const credentials = fakeCredentials({
+    records: [[GRANT_KEY, { kind: 'grant', payload: grant }]],
+    refs: [[TOKEN_REF, 'access-placeholder']],
+  });
+  credentials.unset = async () => {
+    throw new Error('locked');
+  };
+  const store = createGrantStore(credentials);
+  const result = await store.clear();
+  assert.equal(result.ok, false);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].step, 'unset-mirror');
+  assert.equal(credentials.records.has(GRANT_KEY), true);
+});
+
+test('clear reports a record deletion failure after removing the mirror', async () => {
+  const credentials = fakeCredentials({
+    records: [[GRANT_KEY, { kind: 'grant', payload: grant }]],
+    refs: [[TOKEN_REF, 'access-placeholder']],
+  });
   credentials.deleteRecord = async () => {
     throw new Error('locked');
   };
@@ -137,6 +156,7 @@ test('clear attempts both deletions and reports partial failure', async () => {
   assert.equal(result.ok, false);
   assert.equal(result.errors.length, 1);
   assert.equal(result.errors[0].step, 'delete-record');
+  assert.equal(credentials.refs.has(TOKEN_REF), false);
 });
 
 test('legacy official records are discoverable without being deleted', async () => {

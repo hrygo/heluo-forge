@@ -62,7 +62,10 @@ export function apply(ctx, rawConfig = {}) {
   // The callback is a GET route; state/PKCE bind it to the Host attempt.
   if (typeof ctx.inject === 'function') {
     fibers.push(ctx.inject(['webServer'], (host) => {
-      const routes = createIamRoutes(service, { callbackPath: result.value.redirectPath });
+      const routes = createIamRoutes(service, {
+        callbackPath: result.value.redirectPath,
+        getOrigin: () => host.webServer.getOrigin?.(),
+      });
       const offApi = host.webServer.register({
         kind: 'prefix',
         path: '/api/forge-iam',
@@ -82,7 +85,7 @@ export function apply(ctx, rawConfig = {}) {
     }));
   }
 
-  void service.hydrate();
+  void service.hydrate().catch(() => {});
 
   return async () => {
     await service.dispose();

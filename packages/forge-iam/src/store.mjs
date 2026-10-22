@@ -101,15 +101,18 @@ export function createGrantStore(credentials, options = {}) {
 
     async clear() {
       const errors = [];
-      try {
-        await credentials.deleteRecord(key);
-      } catch (error) {
-        errors.push({ step: 'delete-record', error });
-      }
+      // Remove the derived token first. If this fails, keep the grant so a
+      // half-cleared session cannot leave a usable mirror behind.
       try {
         await credentials.unset(ref);
       } catch (error) {
         errors.push({ step: 'unset-mirror', error });
+        return { ok: false, errors };
+      }
+      try {
+        await credentials.deleteRecord(key);
+      } catch (error) {
+        errors.push({ step: 'delete-record', error });
       }
       return { ok: errors.length === 0, errors };
     },
@@ -119,6 +122,11 @@ export function createGrantStore(credentials, options = {}) {
         throw new StoreError('IAM_TOKEN_EMPTY', 'refusing to mirror an empty access token');
       }
       await credentials.set(ref, token);
+      return { ok: true };
+    },
+
+    async unsetMirror() {
+      await credentials.unset(ref);
       return { ok: true };
     },
 

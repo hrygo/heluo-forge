@@ -1,4 +1,4 @@
-import { startMockOidc } from './mock-oidc.mjs';
+import { startMockOidc } from '../test/support/mock-oidc.mjs';
 
 const mock = await startMockOidc();
 const config = {

@@ -7,6 +7,7 @@ import {
   createPkce,
   loadMetadata,
   parseCallbackUrl,
+  revokeToken,
   safeStateEqual,
   verifyIdToken,
 } from '../src/oidc.mjs';
@@ -109,6 +110,17 @@ test('metadata requires allowInsecureHttp even for loopback HTTP', async () => {
     tokenEndpoint: 'http://127.0.0.1:9/token', jwksUri: 'http://127.0.0.1:9/jwks',
   }, { allowInsecureHttp: true });
   assert.equal(meta.issuer, 'http://127.0.0.1:9');
+});
+
+test('revocation accepts an empty 200 response', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, text: async () => '' });
+  const result = await revokeToken({
+    revocationEndpoint: 'https://iam.example/revoke',
+    token: 'refresh-placeholder',
+    clientId: 'dsh-desktop',
+    fetchImpl,
+  });
+  assert.equal(result, null);
 });
 
 test('discovery issuer must match the configured issuer', async () => {

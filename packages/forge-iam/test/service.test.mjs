@@ -48,6 +48,16 @@ test('unconfigured sign-in fails closed with the missing fields', async () => {
   );
 });
 
+test('an unauthenticated error callback cannot flip an unconfigured install', async () => {
+  const service = createIamService({});
+  await assert.rejects(
+    () => service.handleCallback('http://127.0.0.1/iam/callback?error=access_denied'),
+    (error) => error.code === 'IAM_STATE_MISMATCH',
+  );
+  assert.equal(service.getView().state, 'unconfigured');
+  assert.equal(service.getView().configured, false);
+});
+
 test('configured sign-in without credential storage fails closed', async () => {
   const service = createIamService(configured);
   await assert.rejects(
@@ -100,6 +110,13 @@ test('watch yields the current snapshot and terminates on abort', async () => {
   controller.abort();
   const second = await iterator.next();
   assert.equal(second.done, true);
+});
+
+test('createIamService rejects invalid config instead of using raw defaults', () => {
+  assert.throws(
+    () => createIamService({ logoutMode: 'browser' }),
+    (error) => error instanceof IamError && error.code === 'IAM_CONFIG_INVALID',
+  );
 });
 
 test('invalid config is rejected synchronously', () => {
@@ -203,6 +220,40 @@ test('the host disposer awaits a Cordis fiber instead of calling it', async () =
   await dispose();
   assert.equal(disposed, true);
 });
+test('hydrate rejects a grant issued to another client', async () => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  await store.write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'other-client',
+    refreshToken: 'refresh-old', accessToken: 'access-old',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z',
+    obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  const service = createIamService(configured, { credentials });
+  const view = await service.hydrate();
+  assert.equal(view.state, 'error');
+  assert.equal(view.error, 'IAM_GRANT_CONTEXT_MISMATCH');
+});
+
+test('hydrate clears stale in-memory state when the shared record disappears', async () => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  await store.write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-old', accessToken: 'access-old',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z',
+    obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  const service = createIamService(configured, { credentials });
+  assert.equal((await service.hydrate()).state, 'ready');
+  await credentials.deleteRecord('heluo-iam/session');
+  const view = await service.hydrate();
+  assert.equal(view.state, 'signed-out');
+  assert.equal(view.principal, null);
+});
+
 test('an expired session can start a fresh sign-in', async () => {
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials);

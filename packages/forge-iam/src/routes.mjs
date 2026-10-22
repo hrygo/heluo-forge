@@ -20,6 +20,10 @@ const ERROR_STATUS = {
   IAM_REAUTH_REQUIRED: 401,
   IAM_NOT_SIGNED_IN: 401,
   IAM_REFRESH_SUBJECT_MISMATCH: 401,
+  IAM_GRANT_CONTEXT_MISMATCH: 401,
+  IAM_ATTEMPT_CANCELLED: 409,
+  IAM_CONFIG_INVALID: 500,
+  IAM_DISPOSED: 503,
 };
 
 function sendJson(res, status, body) {
@@ -57,22 +61,34 @@ function methodNotAllowed(res, allow) {
   return sendJson(res, 405, { error: { code: 'IAM_METHOD_NOT_ALLOWED' } });
 }
 
-function hasRequestHeader(req) {
+function expectedOriginOf(getOrigin) {
+  if (typeof getOrigin !== 'function') return null;
+  try {
+    const value = getOrigin();
+    return value ? new URL(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function hostMatches(req, expected) {
+  if (!expected) return true;
+  const headers = req?.headers ?? {};
+  const host = String(headers.host ?? '').toLowerCase();
+  if (host !== expected.host.toLowerCase()) return false;
+  const origin = headers.origin;
+  if (origin && String(origin).toLowerCase() !== expected.origin.toLowerCase()) return false;
+  return true;
+}
+
+function hasRequestHeader(req, expected) {
   const headers = req?.headers ?? {};
   if (headers[REQUEST_HEADER] !== REQUEST_VALUE) return false;
+  if (!hostMatches(req, expected)) return false;
   const contentType = String(headers['content-type'] ?? '').toLowerCase();
   if (!contentType.startsWith('application/json')) return false;
   const fetchSite = headers['sec-fetch-site'];
   if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') return false;
-  const origin = headers.origin;
-  if (origin) {
-    if (!headers.host) return false;
-    try {
-      if (new URL(origin).host !== headers.host) return false;
-    } catch {
-      return false;
-    }
-  }
   return true;
 }
 
@@ -84,15 +100,20 @@ function hasRequestHeader(req) {
  * @param {{ getView: Function, startSignIn: Function, signOut: Function, handleCallback: Function }} service
  * @param {{ callbackPath?: string }} [options]
  */
-export function createIamRoutes(service, { callbackPath = '/iam/callback' } = {}) {
+export function createIamRoutes(service, { callbackPath = '/iam/callback', getOrigin } = {}) {
   return async function handle(req, res) {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      const expected = expectedOriginOf(getOrigin);
 
       if (url.pathname === callbackPath) {
         if (req.method !== 'GET') {
           res.setHeader('allow', 'GET');
           sendHtml(res, 405, '登录回调失败', '回调只接受 GET。');
+          return;
+        }
+        if (!hostMatches(req, expected)) {
+          sendHtml(res, 403, '登录回调失败', '回调来源不受信任。');
           return;
         }
         try {
@@ -107,12 +128,15 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback' } = {}
 
       if (url.pathname === '/api/forge-iam/view') {
         if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
+        if (typeof service.syncFromStore === 'function') {
+          await service.syncFromStore().catch(() => {});
+        }
         return sendJson(res, 200, service.getView());
       }
 
       if (url.pathname === '/api/forge-iam/sign-in') {
         if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
-        if (!hasRequestHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+        if (!hasRequestHeader(req, expected)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
           return sendJson(res, 200, await service.startSignIn());
         } catch (error) {
@@ -123,7 +147,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback' } = {}
 
       if (url.pathname === '/api/forge-iam/cancel') {
         if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
-        if (!hasRequestHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+        if (!hasRequestHeader(req, expected)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
           return sendJson(res, 200, { view: await service.cancelSignIn() });
         } catch (error) {
@@ -134,7 +158,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback' } = {}
 
       if (url.pathname === '/api/forge-iam/sign-out') {
         if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
-        if (!hasRequestHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+        if (!hasRequestHeader(req, expected)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
           return sendJson(res, 200, await service.signOut());
         } catch (error) {

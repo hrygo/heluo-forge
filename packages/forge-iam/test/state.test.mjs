@@ -55,6 +55,12 @@ test('canSignIn is false for unconfigured, authenticating and ready', () => {
   assert.equal(canSignIn('error'), true);
 });
 
+test('an expired session can still be signed out', () => {
+  assert.equal(createView('expired').canSignOut, true);
+  assert.equal(createView('signed-out').canSignOut, false);
+  assert.equal(createView('ready').canSignOut, true);
+});
+
 test('view never carries tokens or verifiers', () => {
   const view = createView('ready', { principal: 'E1001', accessExpiresAt: '2030-01-01T00:00:00.000Z' });
   assert.equal(view.principal, 'E1001');

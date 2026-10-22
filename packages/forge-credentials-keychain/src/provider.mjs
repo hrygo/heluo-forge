@@ -116,7 +116,7 @@ export function createKeychainProvider(backend, options = {}) {
   return {
     kind: backend.kind,
     durable: backend.durable === true,
-    crossProcessLock: false,
+    crossProcessLock: backend.crossProcessLock === true || typeof backend.transaction === 'function',
 
     async resolve(ref) {
       const value = await backend.get(`${refPrefix}${validateRef(ref)}`);

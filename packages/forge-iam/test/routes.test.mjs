@@ -50,6 +50,35 @@ test('the callback route follows the configured path', async () => {
   assert.equal(miss.statusCode, 404);
 });
 
+test('callback and API reject a Host that differs from the live origin', async () => {
+  const handler = createIamRoutes(service(), { getOrigin: () => 'http://127.0.0.1:4567' });
+  const callback = await call(handler, 'GET', '/iam/callback?code=x&state=y', { host: 'evil.example:4567' });
+  assert.equal(callback.statusCode, 403);
+  const api = await call(handler, 'POST', '/api/forge-iam/sign-in', {
+    'x-forge-iam-request': '1', 'content-type': 'application/json', host: 'evil.example:4567',
+    origin: 'http://evil.example:4567', 'sec-fetch-site': 'same-origin',
+  });
+  assert.equal(api.statusCode, 403);
+  const good = await call(handler, 'GET', '/iam/callback?code=x&state=y', { host: '127.0.0.1:4567' });
+  assert.equal(good.statusCode, 200);
+});
+
+test('POST rejects an Origin that differs from Host even when fetch metadata is absent', async () => {
+  const handler = createIamRoutes(service(), { getOrigin: () => 'http://127.0.0.1:4567' });
+  const res = await call(handler, 'POST', '/api/forge-iam/sign-in', {
+    'x-forge-iam-request': '1', 'content-type': 'application/json',
+    host: '127.0.0.1:4567', origin: 'https://evil.example',
+  });
+  assert.equal(res.statusCode, 403);
+});
+
+test('GET view syncs the shared record before returning a snapshot', async () => {
+  let synced = 0;
+  const res = await call(createIamRoutes(service({ syncFromStore: async () => { synced += 1; } })), 'GET', '/api/forge-iam/view');
+  assert.equal(res.statusCode, 200);
+  assert.equal(synced, 1);
+});
+
 test('GET view returns the non-secret service snapshot', async () => {
   const res = await call(createIamRoutes(service()), 'GET', '/api/forge-iam/view');
   assert.equal(res.statusCode, 200);
@@ -121,6 +150,15 @@ test('methods and unknown paths are rejected without leaking internals', async (
   assert.equal(missing.statusCode, 404);
   assert.equal(missing.json().error.code, 'IAM_NOT_FOUND');
 });
+test('POST rejects cross-site fetch metadata even with a matching Host', async () => {
+  const handler = createIamRoutes(service(), { getOrigin: () => 'http://127.0.0.1:4567' });
+  const res = await call(handler, 'POST', '/api/forge-iam/sign-in', {
+    'x-forge-iam-request': '1', 'content-type': 'application/json', host: '127.0.0.1:4567',
+    'sec-fetch-site': 'cross-site',
+  });
+  assert.equal(res.statusCode, 403);
+});
+
 test('POST requests reject cross-site origin and non-JSON content', async () => {
   const handler = createIamRoutes(service());
   const crossSite = await call(handler, 'POST', '/api/forge-iam/sign-in', {

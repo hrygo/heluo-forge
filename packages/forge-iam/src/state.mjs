@@ -113,6 +113,7 @@ export function createView(state, details = {}) {
     state,
     configured: details.configured !== false,
     signedIn: isSignedIn(state),
+    canSignOut: isSignedIn(state) || state === 'expired',
     canSignIn: details.configured !== false && (details.exclusive ?? 'ok') === 'ok' && canSignIn(state),
     missing: details.missing ?? [],
     error: details.error ?? null,

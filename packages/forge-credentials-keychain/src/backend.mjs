@@ -94,6 +94,15 @@ export function createPlatformBackend() {
  * substitute for an OS keychain provider lock, but it prevents two DSH
  * processes from silently losing a refresh-token rotation in local pilots.
  */
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
 async function withFileLock(path, key, fn) {
   void key;
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -110,8 +119,24 @@ async function withFileLock(path, key, fn) {
       if (error?.code !== 'EEXIST') throw new KeychainBackendError('KEYCHAIN_LOCK_FAILED', 'keychain lock cannot be created');
       try {
         const info = await stat(lockPath);
-        if (Date.now() - info.mtimeMs > 30000) {
-          await unlink(lockPath).catch(() => {});
+        const ownerText = await readFile(lockPath, 'utf8').catch(() => '');
+        const ownerPid = Number.parseInt(ownerText.split(':')[0], 10);
+        const hasOwnerPid = Number.isInteger(ownerPid) && ownerPid > 0;
+        const ownerAlive = hasOwnerPid && pidAlive(ownerPid);
+        if (hasOwnerPid ? !ownerAlive : Date.now() - info.mtimeMs > 30000) {
+          // Move the stale lock aside first. A plain unlink could remove a
+          // lock that another waiter created between the read and the unlink.
+          const stale = `${lockPath}.stale.${process.pid}.${randomBytes(6).toString('hex')}`;
+          try {
+            // Re-read before moving: another waiter may already have replaced
+            // the stale lock with a fresh one.
+            const latest = await readFile(lockPath, 'utf8').catch(() => null);
+            if (latest !== ownerText) continue;
+            await rename(lockPath, stale);
+            await unlink(stale);
+          } catch {
+            // Another process won the reclaim race; retry normally.
+          }
           continue;
         }
       } catch {
@@ -123,12 +148,14 @@ async function withFileLock(path, key, fn) {
       await sleep(25);
     }
   }
+  const token = `${process.pid}:${randomBytes(8).toString('hex')}`;
   try {
-    await handle.writeFile(String(process.pid), 'utf8');
+    await handle.writeFile(token, 'utf8');
     return await fn();
   } finally {
     await handle.close().catch(() => {});
-    await unlink(lockPath).catch(() => {});
+    const current = await readFile(lockPath, 'utf8').catch(() => null);
+    if (current === token) await unlink(lockPath).catch(() => {});
   }
 }
 
@@ -176,10 +203,10 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     await load();
   }
 
-  async function persist() {
+  async function persist(entries = data) {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-    const payload = JSON.stringify({ version: 1, entries: Object.fromEntries(data) });
+    const payload = JSON.stringify({ version: 1, entries: Object.fromEntries(entries) });
     await writeFile(temporary, payload, { mode });
     await chmod(temporary, mode);
     await rename(temporary, path);
@@ -196,29 +223,34 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     async set(key, value) {
       await withFileLock(path, key, async () => {
         await reload();
-        data.set(key, value);
-        await persist();
+        const snapshot = new Map(data);
+        snapshot.set(key, value);
+        await persist(snapshot);
       });
     },
     async delete(key) {
       await withFileLock(path, key, async () => {
         await reload();
-        data.delete(key);
-        await persist();
+        const snapshot = new Map(data);
+        snapshot.delete(key);
+        await persist(snapshot);
       });
     },
     async list(prefix) { await reload(); return [...data.keys()].filter((key) => key.startsWith(prefix)); },
     async transaction(key, fn) {
       return withFileLock(path, key, async () => {
         await reload();
+        // Work on a private snapshot: an unlocked get()/list() in another
+        // request must not clear a pending transaction's changes.
+        const snapshot = new Map(data);
         let changed = false;
         const tx = {
-          get() { return data.get(key); },
-          set(value) { data.set(key, value); changed = true; },
-          delete() { data.delete(key); changed = true; },
+          get() { return snapshot.get(key); },
+          set(value) { snapshot.set(key, value); changed = true; },
+          delete() { snapshot.delete(key); changed = true; },
         };
         const result = await fn(tx);
-        if (changed) await persist();
+        if (changed) await persist(snapshot);
         return result;
       });
     },

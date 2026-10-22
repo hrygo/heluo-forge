@@ -8,7 +8,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 形态 | Host + Client 插件；Client 使用 interim same-origin route，Remote 未接 |
+| 形态 | Host + Client 插件；Client 使用 interim same-origin route 与 2 秒轮询，Remote/watch 未接 |
 | 配置 | `src/config.mjs`：显式端点/discovery、issuer、clientId、resource、redirectUri、超时与安全开关 |
 | 状态机 | `src/state.mjs`：`unconfigured` / `signed-out` / `authenticating` / `ready` / `expired` / `unreachable` / `error` |
 | 凭据记录 | `src/record.mjs`：`IamGrantV1` 校验、到期/刷新判定；写入 `credentials` 的 GrantRecord |
@@ -26,7 +26,7 @@
 - 默认只允许 HTTPS；任何 HTTP（含 loopback mock）都必须显式设置 `allowInsecureHttp: true`。
 - `ENTERPRISE_ACCESS_TOKEN` 只镜像 access token，供 `dsh-llm-pi-ai` 的 `apiKeyEnv` 解析；refresh token 只存 GrantRecord。
 - 登录/刷新失败不伪造 ready；`invalid_grant` 清理本地记录并回到 re-login。
-- 插件卸载只释放订阅、attempt 与内存状态，不撤销也不删除持久凭据；显式 `signOut` 或企业卸载流程才撤销 refresh token、清理记录/镜像。
+- 插件卸载只释放订阅、attempt 与内存状态，清理 `ENTERPRISE_ACCESS_TOKEN` 镜像，但不撤销也不删除 GrantRecord；下次启动 `hydrate` 会从记录恢复镜像。显式 `signOut` 或企业卸载流程才撤销 refresh token、删除记录。
 - 独占断言发现 `deepseekAccount` 仍挂载时进入 `error`，不写镜像。
 
 ## 组合顺序

@@ -5,16 +5,17 @@ import { validateConfig } from '../src/config.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 
-function configFor(mock) {
+function configFor(mock, overrides = {}) {
   return validateConfig({
     ...mock.endpoints,
     clientId: mock.clientId,
     gatewayResource: 'https://gateway.corp.example',
     redirectUri: 'http://127.0.0.1:4567/iam/callback',
     allowInsecureHttp: true,
-    refreshSkewSeconds: 7200,
+    refreshSkewSeconds: 60,
     attemptTimeoutSeconds: 30,
     httpTimeoutMs: 5000,
+    ...overrides,
   }).value;
 }
 
@@ -46,7 +47,7 @@ test('resolveToken refreshes a near-expiry access token and rotates the refresh 
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock), { credentials });
+  const service = createIamService(configFor(mock, { refreshSkewSeconds: 7200 }), { credentials });
   const { location } = await authorize(service);
   await service.handleCallback(location);
 
@@ -106,6 +107,91 @@ test('a mismatched callback state is rejected without signing in', async (t) => 
   assert.equal(await credentials.readRecord('heluo-iam/session'), undefined);
 });
 
+test('cancelling while discovery is pending aborts the sign-in', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  let delayed = false;
+  const service = createIamService({
+    ...configFor(mock),
+    discoveryUrl: `${mock.issuer}/.well-known/openid-configuration`,
+  }, {
+    credentials: new MemoryCredentials(),
+    fetch: async (url, init) => {
+      if (!delayed && String(url).includes('.well-known')) {
+        delayed = true;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      return fetch(url, init);
+    },
+  });
+  const pending = service.startSignIn();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const canceled = await service.cancelSignIn();
+  assert.equal(canceled.state, 'signed-out');
+  await assert.rejects(pending, (error) => error.code === 'IAM_ATTEMPT_CANCELLED');
+});
+
+test('a configured redirect URI must match the live web origin', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const service = createIamService(configFor(mock), {
+    credentials: new MemoryCredentials(),
+    getOrigin: () => 'http://127.0.0.1:9999',
+  });
+  await assert.rejects(
+    () => service.startSignIn(),
+    (error) => error.code === 'IAM_CONFIG_INVALID',
+  );
+});
+
+test('cancel during the token exchange discards the late grant', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  let delayed = false;
+  const service = createIamService(configFor(mock), {
+    credentials,
+    fetch: async (url, init) => {
+      if (!delayed && String(url).endsWith('/token')) {
+        delayed = true;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      return fetch(url, init);
+    },
+  });
+  const { location } = await authorize(service);
+  const pending = service.handleCallback(location);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const canceled = await service.cancelSignIn();
+  assert.equal(canceled.state, 'signed-out');
+  await assert.rejects(pending, (error) => error.code === 'IAM_ATTEMPT_CANCELLED');
+  assert.equal(await credentials.readRecord('heluo-iam/session'), undefined);
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+  assert.equal(service.getView().state, 'signed-out');
+});
+
+test('concurrent startSignIn calls share one attempt', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  let delayed = false;
+  const service = createIamService({
+    ...configFor(mock),
+    discoveryUrl: `${mock.issuer}/.well-known/openid-configuration`,
+  }, {
+    credentials: new MemoryCredentials(),
+    fetch: async (url, init) => {
+      if (!delayed && String(url).includes('.well-known')) {
+        delayed = true;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      return fetch(url, init);
+    },
+  });
+  const [first, second] = await Promise.all([service.startSignIn(), service.startSignIn()]);
+  assert.equal(first.authorizationUrl, second.authorizationUrl);
+  assert.equal(service.getView().state, 'authenticating');
+});
+
 test('cancel returns to signed-out and clears the attempt', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
@@ -122,7 +208,7 @@ test('concurrent resolveToken calls share one refresh rotation', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock), { credentials });
+  const service = createIamService(configFor(mock, { refreshSkewSeconds: 7200 }), { credentials });
   const { location } = await authorize(service);
   await service.handleCallback(location);
 
@@ -137,7 +223,7 @@ test('a rejected refresh clears credentials and requires re-authentication', asy
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock), { credentials });
+  const service = createIamService(configFor(mock, { refreshSkewSeconds: 7200 }), { credentials });
   const { location } = await authorize(service);
   await service.handleCallback(location);
   mock.refreshTokens.clear();
@@ -150,6 +236,29 @@ test('a rejected refresh clears credentials and requires re-authentication', asy
   assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
   assert.equal(service.getView().state, 'signed-out');
 });
+test('signOut reports an unconfirmed revocation instead of claiming success', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/revoke')) return new Response('', { status: 500 });
+      return fetch(url, init);
+    },
+  });
+  const { location } = await authorize(service);
+  await service.handleCallback(location);
+  const result = await service.signOut();
+  assert.equal(result.view.state, 'signed-out');
+  assert.equal(result.view.error, 'IAM_REVOCATION_FAILED');
+  assert.equal(result.revocation, 'failed');
+  assert.equal(mock.revoked.size, 0);
+  assert.equal(await credentials.readRecord('heluo-iam/session'), undefined);
+  const afterSync = await service.syncFromStore();
+  assert.equal(afterSync.error, 'IAM_REVOCATION_FAILED');
+});
+
 test('dispose releases runtime state without clearing the stored session', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
@@ -161,12 +270,13 @@ test('dispose releases runtime state without clearing the stored session', async
 
   await service.dispose();
   assert.equal((await credentials.readRecord('heluo-iam/session')).payload.refreshToken, refreshToken);
-  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN').then((r) => r.value), 'access-1');
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
   assert.equal(mock.revoked.has(refreshToken), false);
   assert.equal(service.getView().state, 'signed-out');
 
   const restored = createIamService(configFor(mock), { credentials });
   assert.equal((await restored.hydrate()).state, 'ready');
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN').then((r) => r.value), 'access-1');
   await service.dispose();
 });
 test('signOut does not claim success when the record cannot be cleared', async (t) => {
