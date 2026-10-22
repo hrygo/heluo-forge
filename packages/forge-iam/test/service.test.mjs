@@ -588,3 +588,68 @@ test('an unattributable gateway record is dropped when a new account signs in', 
   assert.equal(view.gatewayCredential.state, 'unconfigured');
   assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
 });
+
+test('adopting another account\'s grant drops the stored gateway key', async () => {
+  const credentials = new MemoryCredentials();
+  await createGrantStore(credentials).write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-1', accessToken: 'access-1',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  await createGatewayCredentialStore(credentials).save({
+    value: `uag-${'4'.repeat(32)}`,
+    ownerSubject: 'E1001',
+    deviceLabel: 'dev-a',
+    enteredAt: '2030-01-01T00:00:00.000Z',
+  });
+  const service = createIamService(configured, { credentials });
+  let view = await service.hydrate();
+  assert.equal(view.gatewayCredential.state, 'configured');
+
+  // A second process signs in as a different subject into the shared store.
+  await createGrantStore(credentials).write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1002', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-2', accessToken: 'access-2',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  view = await service.syncFromStore();
+  assert.equal(view.principal, 'E1002');
+  assert.equal(view.gatewayCredential.state, 'unconfigured');
+  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
+});
+
+test('a resolved value without owner metadata is visible as invalid and clearable', async () => {
+  class FileCredentials extends MemoryCredentials {
+    async resolve(ref) {
+      const resolved = await super.resolve(ref);
+      return resolved && { value: resolved.value, source: 'file' };
+    }
+  }
+  const credentials = new FileCredentials();
+  await credentials.set('ENTERPRISE_STATIC_KEY', `uag-${'5'.repeat(32)}`);
+  const service = createIamService(configured, { credentials });
+  const view = await service.hydrate();
+  assert.equal(view.gatewayCredential.state, 'invalid');
+  await service.clearGatewayCredential();
+  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
+});
+
+test('a revoked credentials provider stops serving gateway state', async () => {
+  const credentials = new MemoryCredentials();
+  await createGatewayCredentialStore(credentials).save({
+    value: `uag-${'6'.repeat(32)}`,
+    ownerSubject: 'E1001',
+    deviceLabel: 'dev-a',
+    enteredAt: '2030-01-01T00:00:00.000Z',
+  });
+  let current = credentials;
+  const service = createIamService(configured, { getCredentials: () => current });
+  let view = await service.hydrate();
+  assert.equal(view.gatewayCredential.state, 'configured');
+  current = undefined;
+  await service.loadGatewayCredential({ force: true });
+  view = service.getView();
+  assert.equal(view.gatewayCredential, null);
+});

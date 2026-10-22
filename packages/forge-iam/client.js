@@ -262,7 +262,15 @@ window.__ModuleLoader__.load({
             setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
             return;
           }
-          setState((current) => ({ ...current, view: result.body?.view ?? null, authorizationUrl: null, notice: null }));
+          const view = result.body?.view ?? null;
+          setState((current) => ({
+            ...current,
+            view,
+            authorizationUrl: null,
+            // An unconfirmed revocation must stay attributable after the local
+            // session is gone; silently showing "signed out" would overclaim.
+            notice: view?.error ? errorNotice(view.error) : null,
+          }));
           if (result.body?.logoutUrl) window.location.assign(result.body.logoutUrl);
         } catch {
           setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
@@ -525,17 +533,25 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         let live = true;
+        let timer = null;
         const marker = readMarker();
         if (marker === 'done' || marker === 'skipped') return () => { live = false; };
-        fetchView()
-          .then((view) => {
-            if (!live) return;
-            setState({ phase: 'ready', view, step: 0, notice: null, open: view.state === 'signed-out', authorizationUrl: null });
-          })
-          .catch(() => {
-            if (live) setState((current) => ({ ...current, phase: 'ready', open: false }));
-          });
-        return () => { live = false; };
+        const attempt = () => {
+          fetchView()
+            .then((view) => {
+              if (!live) return;
+              setState({ phase: 'ready', view, step: 0, notice: null, open: view.state === 'signed-out', authorizationUrl: null });
+            })
+            .catch(() => {
+              if (!live) return;
+              // A transient failure at first paint must not silently disable
+              // onboarding (and its completion marker) for the whole page load.
+              setState((current) => ({ ...current, phase: 'ready' }));
+              timer = setTimeout(attempt, 3000);
+            });
+        };
+        attempt();
+        return () => { live = false; if (timer) clearTimeout(timer); };
       }, []);
 
       useSessionPoll(state.open, (view) => setState((current) => ({

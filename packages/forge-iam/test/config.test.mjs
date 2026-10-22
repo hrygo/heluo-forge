@@ -155,3 +155,10 @@ test('a post-logout redirect must be an absolute non-loopback HTTP(S) or loopbac
   const relative = validateConfig({ postLogoutRedirectUri: '/bye' });
   assert.ok('issues' in relative);
 });
+
+test('redirectPath rejects the site root and trailing slashes', () => {
+  for (const redirectPath of ['/', '/iam/callback/']) {
+    const result = validateConfig({ redirectPath });
+    assert.ok(result.issues.some((entry) => entry.path[0] === 'redirectPath'), redirectPath);
+  }
+});

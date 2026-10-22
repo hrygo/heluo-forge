@@ -217,6 +217,13 @@ test('PS256 and ES256 verify, while none and HS256 stay rejected', () => {
   assert.throws(() => verifyIdToken(hs, { ...options, jwks: { keys: [ecJwk] } }),
     (error) => error.code === 'IAM_ID_TOKEN_ALGORITHM');
 
+  for (const alg of ['constructor', '__proto__', 'toString']) {
+    const head = Buffer.from(JSON.stringify({ alg, kid: 'e1' })).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    assert.throws(() => verifyIdToken(`${head}.${body}.sig`, { ...options, jwks: { keys: [ecJwk] } }),
+      (error) => error.code === 'IAM_ID_TOKEN_ALGORITHM');
+  }
+
   // A key of the wrong type for the declared algorithm cannot verify.
   assert.throws(() => verifyIdToken(ps, { ...options, jwks: { keys: [ecJwk] } }),
     (error) => error.code === 'IAM_JWKS_KEY_NOT_FOUND');
@@ -235,4 +242,35 @@ test('a JWKS key marked for encryption cannot verify an ID token', () => {
     clientId: 'dsh-desktop',
     nonce: 'n-1',
   }), (error) => error.code === 'IAM_JWKS_KEY_NOT_FOUND');
+});
+
+test('a complete explicit configuration does not depend on discovery', async () => {
+  const metadata = await loadMetadata({
+    discoveryUrl: 'https://unreachable.example/.well-known/openid-configuration',
+    issuer: 'https://iam.example',
+    authorizationEndpoint: 'https://iam.example/authorize',
+    tokenEndpoint: 'https://iam.example/token',
+    jwksUri: 'https://iam.example/jwks',
+  }, { fetchImpl: async () => { throw new Error('network down'); } });
+  assert.equal(metadata.issuer, 'https://iam.example');
+  assert.equal(metadata.tokenEndpoint, 'https://iam.example/token');
+});
+
+test('allowInsecureHttp only permits loopback, never a remote host', async () => {
+  const config = {
+    issuer: 'http://iam.corp.example',
+    authorizationEndpoint: 'http://iam.corp.example/authorize',
+    tokenEndpoint: 'http://iam.corp.example/token',
+    jwksUri: 'http://iam.corp.example/jwks',
+  };
+  await assert.rejects(() => loadMetadata(config, { allowInsecureHttp: true }),
+    (error) => error.code === 'IAM_CONFIG_INVALID');
+  const loopback = await loadMetadata({
+    ...config,
+    issuer: 'http://127.0.0.1:8080',
+    authorizationEndpoint: 'http://127.0.0.1:8080/authorize',
+    tokenEndpoint: 'http://127.0.0.1:8080/token',
+    jwksUri: 'http://127.0.0.1:8080/jwks',
+  }, { allowInsecureHttp: true });
+  assert.equal(loopback.issuer, 'http://127.0.0.1:8080');
 });

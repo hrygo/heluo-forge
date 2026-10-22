@@ -101,7 +101,10 @@ const SIGNING_ALGORITHMS = Object.freeze({
 
 export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date.now(), skewSeconds = 60 } = {}) {
   const decoded = decodeJwt(token);
-  const algorithm = SIGNING_ALGORITHMS[decoded.header?.alg];
+  const alg = decoded.header?.alg;
+  const algorithm = typeof alg === 'string' && Object.hasOwn(SIGNING_ALGORITHMS, alg)
+    ? SIGNING_ALGORITHMS[alg]
+    : undefined;
   if (!algorithm) {
     throw new OidcError('IAM_ID_TOKEN_ALGORITHM', 'ID token uses an unsupported signing algorithm');
   }
@@ -177,8 +180,16 @@ function assertSafeEndpoint(value, name, allowInsecureHttp) {
     throw new OidcError('IAM_CONFIG_INVALID', `${name} is not a valid URL`);
   }
   if (url.protocol === 'https:') return url;
-  if (url.protocol === 'http:' && allowInsecureHttp === true) return url;
-  throw new OidcError('IAM_CONFIG_INVALID', `${name} must use HTTPS unless allowInsecureHttp is explicitly true`);
+  // Plain HTTP is only for a local mock/loopback deployment; allowing it to an
+  // arbitrary host would put the authorization code, PKCE verifier and tokens
+  // on the wire in cleartext.
+  if (url.protocol === 'http:' && allowInsecureHttp === true && isLoopbackHost(url.hostname)) return url;
+  throw new OidcError('IAM_CONFIG_INVALID', `${name} must use HTTPS (plain HTTP is only allowed on loopback with allowInsecureHttp)`);
+}
+
+function isLoopbackHost(hostname) {
+  const host = hostname.startsWith('[') ? hostname.slice(1, -1) : hostname;
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
 
 function requireString(value, name) {
@@ -237,7 +248,12 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
  */
 export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allowInsecureHttp = false } = {}) {
   let document = {};
-  if (config.discoveryUrl) {
+  // Discovery is a fallback for missing explicit fields. When every endpoint and
+  // the issuer are configured, a discovery fetch must not gate sign-in: a broken
+  // or unreachable well-known URL would otherwise break a fully explicit config.
+  const needsDiscovery = Boolean(config.discoveryUrl)
+    && (!config.issuer || !config.authorizationEndpoint || !config.tokenEndpoint || !config.jwksUri);
+  if (needsDiscovery) {
     const discoveryUrl = assertSafeEndpoint(config.discoveryUrl, 'discoveryUrl', allowInsecureHttp);
     document = await fetchJson(discoveryUrl, { fetchImpl, timeoutMs, signal });
     if (document === null || typeof document !== 'object') {

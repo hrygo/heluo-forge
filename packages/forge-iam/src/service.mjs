@@ -26,6 +26,9 @@ const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
 // from an OS keychain on every poll is wasteful and may re-trigger access
 // checks, so the summary is reused briefly unless a caller forces a reload.
 const GATEWAY_RELOAD_MS = 5000;
+// Automatic refresh for an expired-but-refreshable session retries at most this
+// often; the view poll runs every two seconds and must not hammer the IdP.
+const AUTO_REFRESH_BACKOFF_MS = 30000;
 
 function nowIso(now) {
   return new Date(now).toISOString();
@@ -101,6 +104,12 @@ export function createIamService(rawConfig, options = {}) {
   let storeError = null;
   let gatewayStore = null;
   let gatewaySummary = null;
+  let gatewayLoadedAt = 0;
+  let gatewayLoading = null;
+  // Bumped whenever the credentials provider changes, so an in-flight read from
+  // the previous provider cannot repopulate the summary after revocation.
+  let gatewayEpoch = 0;
+  let lastBackgroundRefreshAt = 0;
 
   function ensureStore() {
     let credentials;
@@ -112,7 +121,14 @@ export function createIamService(rawConfig, options = {}) {
       credentials = undefined;
     }
     if (!credentials) {
+      // The provider fiber was revoked: never keep reading gateway state (and
+      // possibly resolving the secret) through the previous provider.
       store = null;
+      gatewayStore = null;
+      gatewaySummary = null;
+      gatewayLoading = null;
+      gatewayLoadedAt = 0;
+      gatewayEpoch += 1;
       storeCredentials = null;
       storeError = new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       return null;
@@ -121,6 +137,8 @@ export function createIamService(rawConfig, options = {}) {
     try {
       store = createGrantStore(credentials);
       gatewayStore = createGatewayCredentialStore(credentials);
+      gatewayLoading = null;
+      gatewayEpoch += 1;
       storeCredentials = credentials;
       storeError = null;
       return store;
@@ -184,7 +202,13 @@ export function createIamService(rawConfig, options = {}) {
 
   function notify() {
     const snapshot = view();
-    for (const listener of listeners) listener(snapshot);
+    for (const listener of listeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        // One subscriber must not corrupt a transition or starve the others.
+      }
+    }
     return snapshot;
   }
 
@@ -401,13 +425,32 @@ export function createIamService(rawConfig, options = {}) {
         return view();
       }
       assertGrantContext(record.grant);
-      const previous = `${state}|${error}|${lastGrant?.subject ?? ''}`;
+      const previousSubject = lastGrant?.subject ?? null;
+      const previous = `${state}|${error}|${previousSubject}`;
       lastGrant = record.grant;
+      // Only an actual account switch invalidates the key. The first sync after
+      // startup has no previous subject, and the startup reconcile already ran.
+      if (previousSubject !== null && record.grant.subject !== previousSubject) {
+        // Another process signed in as a different subject and this poll adopted
+        // its grant: the stored gateway key belongs to the previous subject and
+        // must stop resolving for the model before this instance reports ready.
+        await reconcileGatewayOwner(record.grant.subject);
+        if (!isCurrent()) return view();
+        await loadGatewayCredential({ force: true });
+        if (!isCurrent()) return view();
+      }
       // `expired` means the access token is no longer usable, not merely inside
       // the refresh skew: a token request renews the latter, and showing "expired"
       // while the token still works would send the user through a needless login.
       state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
       error = null;
+      // With a usable refresh token an expired session is recoverable; without
+      // this, the interim client would only ever offer a full re-login.
+      if (state === 'expired' && isRefreshUsable(record.grant, now())
+        && now() - lastBackgroundRefreshAt >= AUTO_REFRESH_BACKOFF_MS) {
+        lastBackgroundRefreshAt = now();
+        void service.resolveToken().catch(() => {});
+      }
       if (previous !== `${state}|${error}|${lastGrant.subject ?? ''}`) notify();
     } catch (cause) {
       if (!isCurrent()) return view();
@@ -420,6 +463,10 @@ export function createIamService(rawConfig, options = {}) {
   }
 
   async function readGatewayCredential() {
+    if (disposed) return null;
+    // Rebind to the current credentials provider; a revoked fiber must not keep
+    // serving gateway state (or a resolvable secret) from the previous one.
+    ensureStore();
     if (!gatewayStore) return null;
     const record = await gatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
     if (!record.ok) return { state: 'invalid' };
@@ -428,8 +475,12 @@ export function createIamService(rawConfig, options = {}) {
     // A value only counts when this store wrote its metadata (so the owner is
     // known) or the provider is the OS keychain. An ambient environment value
     // must not make the account page claim the user configured a credential.
-    if (!resolved?.value || (!record.credential && resolved.source !== 'keychain')) {
-      return { state: 'unconfigured' };
+    if (!resolved?.value) return { state: 'unconfigured' };
+    if (!record.credential && resolved.source !== 'keychain') {
+      // The provider still resolves the reference but nothing attributes it to
+      // an account: the value would be used by the model while being invisible
+      // in the account page. Report it as invalid so the UI offers a clear.
+      return { state: 'invalid', matchesAccount: false };
     }
     const storage = await gatewayStore.describe().catch(() => null);
     const signedInSubject = lastGrant?.subject ?? null;
@@ -449,19 +500,20 @@ export function createIamService(rawConfig, options = {}) {
     };
   }
 
-  let gatewayLoadedAt = 0;
-  let gatewayLoading = null;
-
   async function loadGatewayCredential({ force = false } = {}) {
     // A hydrate that lost the race with dispose must not repopulate runtime state.
     if (disposed) return null;
     if (!force && gatewayLoadedAt > 0 && now() - gatewayLoadedAt < GATEWAY_RELOAD_MS) return gatewaySummary;
     if (gatewayLoading) return gatewayLoading;
+    // Bind to the current provider before capturing the epoch, so this read is
+    // not discarded by the store creation it is about to trigger.
+    ensureStore();
+    const epoch = gatewayEpoch;
     gatewayLoadedAt = now();
     gatewayLoading = readGatewayCredential()
       .then((summary) => {
-        // dispose() may have run while the provider was reading.
-        gatewaySummary = disposed ? null : summary;
+        // dispose() or a credentials change may have happened while reading.
+        gatewaySummary = disposed || epoch !== gatewayEpoch ? null : summary;
         return gatewaySummary;
       })
       .catch(() => {
@@ -870,6 +922,11 @@ export function createIamService(rawConfig, options = {}) {
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (signingOut) throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
+      // A user sign-in owns the state machine; a background refresh must not
+      // publish ready/signed-out underneath it and strand its callback.
+      if (state === 'authenticating') {
+        throw new IamError('IAM_NOT_SIGNED_IN', 'IAM sign-in is in progress');
+      }
       const resolveEpoch = authEpoch;
       const targetStore = requireStore();
       let record = await targetStore.read();
@@ -935,7 +992,10 @@ export function createIamService(rawConfig, options = {}) {
               fetchImpl,
               timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
             });
-            rotated = true;
+            // Rotation means the IdP actually issued a different refresh token;
+            // a response without one leaves the old token usable, so a later
+            // failure must not be treated as an uncertain session.
+            rotated = Boolean(token.refreshToken && token.refreshToken !== current.refreshToken);
             let claims = null;
             if (token.idToken) {
               const verifyOptions = {
@@ -975,6 +1035,7 @@ export function createIamService(rawConfig, options = {}) {
             throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
           }
           lastGrant = latest;
+          lastBackgroundRefreshAt = 0;
           assertExclusive();
           if (state === 'expired') publish('REFRESH_SUCCESS');
           else if (state === 'unreachable' || state === 'error') {

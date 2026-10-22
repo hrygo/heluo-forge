@@ -136,6 +136,12 @@ export function validateConfig(input) {
       }
       if (!parsedPath || parsedPath.pathname !== redirectPath || parsedPath.search || parsedPath.hash) {
         issues.push(issue('redirectPath', 'redirectPath must be an absolute path without query or fragment'));
+      } else if (redirectPath !== '/' && redirectPath.endsWith('/')) {
+        // dsh-host-webserver routes are absolute pathnames without a trailing
+        // slash; registering `/x/` would not match the URL the IdP returns.
+        issues.push(issue('redirectPath', 'redirectPath must not end with /'));
+      } else if (redirectPath === '/') {
+        issues.push(issue('redirectPath', 'redirectPath must not be the site root'));
       } else if (redirectPath === '/api/forge-iam' || redirectPath.startsWith('/api/forge-iam/')) {
         // That prefix is the authenticated management API; a callback there
         // would be rejected by connection authentication in the browser.

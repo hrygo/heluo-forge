@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIamService } from '../src/index.mjs';
 import { validateConfig } from '../src/config.mjs';
+import { createGrantStore } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 
@@ -112,10 +113,14 @@ test('cancelling while discovery is pending aborts the sign-in', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   let delayed = false;
-  const service = createIamService({
-    ...configFor(mock),
+  // Discovery-only config: the fetch is required because the explicit endpoints
+  // are intentionally absent (a complete explicit config no longer fetches it).
+  const service = createIamService(validateConfig({
+    clientId: mock.clientId,
     discoveryUrl: `${mock.issuer}/.well-known/openid-configuration`,
-  }, {
+    redirectUri: 'http://127.0.0.1:4567/iam/callback',
+    allowInsecureHttp: true,
+  }).value, {
     credentials: new MemoryCredentials(),
     fetch: async (url, init) => {
       if (!delayed && String(url).includes('.well-known')) {
@@ -175,10 +180,14 @@ test('concurrent startSignIn calls share one attempt', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   let delayed = false;
-  const service = createIamService({
-    ...configFor(mock),
+  // Discovery-only config: the fetch is required because the explicit endpoints
+  // are intentionally absent (a complete explicit config no longer fetches it).
+  const service = createIamService(validateConfig({
+    clientId: mock.clientId,
     discoveryUrl: `${mock.issuer}/.well-known/openid-configuration`,
-  }, {
+    redirectUri: 'http://127.0.0.1:4567/iam/callback',
+    allowInsecureHttp: true,
+  }).value, {
     credentials: new MemoryCredentials(),
     fetch: async (url, init) => {
       if (!delayed && String(url).includes('.well-known')) {
@@ -337,4 +346,70 @@ test('a failed refresh keeps serving an access token that has not expired yet', 
   const token = await gated.resolveToken();
   assert.equal(typeof token, 'string');
   assert.equal(gated.getView().state, 'unreachable');
+});
+
+test('the view poll refreshes an expired but refreshable session', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), { credentials });
+  const { location } = await authorize(service);
+  await service.handleCallback(location);
+
+  // Force the access token past expiry while keeping the rotated refresh token usable.
+  await createGrantStore(credentials).mutate((grant) => ({
+    ...grant,
+    accessExpiresAt: '2000-01-01T00:00:00.000Z',
+  }));
+  await service.syncFromStore();
+  for (let attempt = 0; attempt < 100 && service.getView().state !== 'ready'; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const view = service.getView();
+  assert.equal(view.state, 'ready');
+  const record = await credentials.readRecord('heluo-iam/session');
+  assert.notEqual(record.payload.accessToken, 'access-1');
+  assert.ok(record.payload.accessExpiresAt > '2020-01-01');
+});
+
+test('a non-rotating refresh response does not discard the session when persistence fails', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  class FailingWriteCredentials extends MemoryCredentials {
+    constructor() {
+      super();
+      this.failWrites = false;
+    }
+
+    async modifyRecord(key, mutate) {
+      if (this.failWrites && key === 'heluo-iam/session') {
+        const error = new Error('disk full');
+        error.code = 'EIO';
+        throw error;
+      }
+      return super.modifyRecord(key, mutate);
+    }
+  }
+  const credentials = new FailingWriteCredentials();
+  const service = createIamService(configFor(mock, { refreshSkewSeconds: 7200 }), {
+    credentials,
+    fetch: async (url, init) => {
+      const response = await fetch(url, init);
+      const isRefresh = String(init?.body ?? '').includes('grant_type=refresh_token');
+      if (isRefresh && String(url).endsWith('/token')) {
+        const body = await response.json();
+        delete body.refresh_token;
+        return { ok: true, status: 200, json: async () => body };
+      }
+      return response;
+    },
+  });
+  const { location } = await authorize(service);
+  await service.handleCallback(location);
+  credentials.failWrites = true;
+  const token = await service.resolveToken();
+  assert.equal(token, 'access-1');
+  const record = await credentials.readRecord('heluo-iam/session');
+  assert.ok(record, 'the still-valid grant must not be cleared');
+  assert.equal(service.getView().state, 'ready');
 });
