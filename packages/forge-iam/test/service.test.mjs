@@ -29,14 +29,14 @@ function fakeContext() {
   };
 }
 
-test('apply registers ctx.iam without requiring a configured IAM', () => {
+test('apply registers ctx.iam without requiring a configured IAM', async () => {
   const ctx = fakeContext();
   const dispose = apply(ctx, {});
   const service = ctx.provided.get('iam');
   assert.ok(service);
   assert.equal(service.getView().state, 'unconfigured');
   assert.equal(service.getView().canSignIn, false);
-  dispose();
+  await dispose();
   assert.equal(ctx.provided.has('iam'), false);
 });
 

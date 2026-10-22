@@ -150,3 +150,32 @@ test('a rejected refresh clears credentials and requires re-authentication', asy
   assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
   assert.equal(service.getView().state, 'signed-out');
 });
+test('dispose revokes and clears credentials so a disabled plugin fails closed', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), { credentials });
+  const { location } = await authorize(service);
+  await service.handleCallback(location);
+  const refreshToken = (await credentials.readRecord('heluo-iam/session')).payload.refreshToken;
+
+  await service.dispose();
+  assert.equal(await credentials.readRecord('heluo-iam/session'), undefined);
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+  assert.equal(mock.revoked.has(refreshToken), true);
+  await service.dispose();
+});
+test('signOut does not claim success when the record cannot be cleared', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), { credentials });
+  const { location } = await authorize(service);
+  await service.handleCallback(location);
+  credentials.deleteRecord = async () => { throw new Error('disk failure'); };
+
+  const result = await service.signOut();
+  assert.equal(result.view.state, 'error');
+  assert.equal(result.logoutUrl, null);
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+});

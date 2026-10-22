@@ -66,6 +66,8 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_REQUEST_HEADER_REQUIRED') return '请求被 Host 拒绝，请刷新页面重试。';
       if (code === 'IAM_UNCONFIGURED') return 'IAM 配置不完整，请管理员补全。';
       if (code === 'IAM_CREDENTIALS_UNAVAILABLE') return '凭据存储不可用，暂时无法登录。';
+      if (code === 'IAM_CREDENTIALS_CLEAR_FAILED') return '本地凭据清理失败，请检查系统凭据库。';
+      if (code === 'IAM_EXCLUSIVE_CONFLICT') return '官方登录服务仍挂载，请修正企业组合包。';
       if (code === 'IAM_UNREACHABLE') return 'IAM 端点不可达，请稍后重试。';
       if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录回调无效，请重新登录。';
       if (code === 'IAM_ATTEMPT_EXPIRED') return '登录尝试已过期，请重新登录。';
@@ -190,7 +192,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         let live = true;
         fetchView()
-          .then((view) => { if (live) setState((current) => ({ ...current, visible: view.state === 'signed-out', view })); })
+          .then((view) => { if (live) setState((current) => ({ ...current, visible: view.state !== 'ready', view })); })
           .catch(() => {});
         return () => { live = false; };
       }, []);
@@ -198,7 +200,7 @@ window.__ModuleLoader__.load({
       useAuthenticatingPoll(state.view, (view) => setState((current) => ({
         ...current,
         view,
-        visible: view.state === 'signed-out' || view.state === 'authenticating',
+        visible: view.state !== 'ready',
       })));
 
       const login = async () => {
@@ -212,7 +214,7 @@ window.__ModuleLoader__.load({
           setState((current) => ({
             ...current,
             view,
-            visible: view?.state === 'ready' ? false : current.visible,
+            visible: view?.state === 'ready' ? false : true,
             notice: view?.state === 'authenticating' ? '浏览器已打开，等待登录完成。' : null,
           }));
           openLogin(result.body?.authorizationUrl);
@@ -263,6 +265,7 @@ window.__ModuleLoader__.load({
         ...current,
         view,
         ...(view.state === 'ready' ? { step: 2, authorizationUrl: null, notice: null } : {}),
+        ...(view.state === 'error' ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
       })));
 
       if (!state.open) return null;
@@ -274,8 +277,15 @@ window.__ModuleLoader__.load({
             setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
             return;
           }
+          const view = result.body?.view;
           openLogin(result.body?.authorizationUrl);
-          setState((current) => ({ ...current, view: result.body?.view, authorizationUrl: result.body?.authorizationUrl, notice: '浏览器已打开；若被拦截，请使用下方链接。' }));
+          setState((current) => ({
+            ...current,
+            view,
+            step: view?.state === 'ready' ? 2 : current.step,
+            authorizationUrl: result.body?.authorizationUrl,
+            notice: view?.state === 'ready' ? null : '浏览器已打开；若被拦截，请使用下方链接。',
+          }));
         } catch {
           setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
         }

@@ -45,6 +45,7 @@ function safeMessage(code) {
   const messages = {
     IAM_UNCONFIGURED: 'IAM configuration is incomplete',
     IAM_CREDENTIALS_UNAVAILABLE: 'credential storage is unavailable',
+    IAM_CREDENTIALS_CLEAR_FAILED: 'credential storage could not be cleared',
     IAM_CALLBACK_UNAVAILABLE: 'IAM callback origin is unavailable',
     IAM_UNREACHABLE: 'IAM endpoint is unreachable',
     IAM_INVALID_GRANT: 'IAM authorization is no longer valid',
@@ -120,6 +121,7 @@ export function createIamService(rawConfig, options = {}) {
   let error = exclusive.ok ? null : (exclusive.reason ?? 'exclusive-violation');
   let lastGrant = null;
   let attempt = null;
+  let disposed = false;
   let refreshPromise = null;
   let metadataCache = null;
   let jwksCache = null;
@@ -462,17 +464,19 @@ export function createIamService(rawConfig, options = {}) {
       clearAttempt();
       let grant = lastGrant;
       const targetStore = ensureStore();
+      let cleared = { ok: true };
       if (targetStore) {
         const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
         if (record?.grant) grant = record.grant;
-        await targetStore.clear().catch(() => {});
+        cleared = await targetStore.clear().catch(() => ({ ok: false }));
       }
       lastGrant = null;
       if (grant) {
         const meta = metadataCache?.value;
-        if (meta?.revocationEndpoint && grant.refreshToken) {
+        const revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
+        if (revocationEndpoint && grant.refreshToken) {
           await revokeToken({
-            revocationEndpoint: meta.revocationEndpoint,
+            revocationEndpoint,
             token: grant.refreshToken,
             tokenTypeHint: 'refresh_token',
             clientId: config.clientId,
@@ -485,8 +489,9 @@ export function createIamService(rawConfig, options = {}) {
       if (config.logoutMode === 'rp') {
         try {
           const meta = metadataCache?.value ?? await metadata();
-          if (meta.endSessionEndpoint) {
-            const url = new URL(meta.endSessionEndpoint);
+          const endSessionEndpoint = meta.endSessionEndpoint ?? config.endSessionEndpoint;
+          if (endSessionEndpoint) {
+            const url = new URL(endSessionEndpoint);
             url.searchParams.set('client_id', config.clientId);
             if (grant?.idToken) url.searchParams.set('id_token_hint', grant.idToken);
             if (config.postLogoutRedirectUri) url.searchParams.set('post_logout_redirect_uri', config.postLogoutRedirectUri);
@@ -495,6 +500,12 @@ export function createIamService(rawConfig, options = {}) {
         } catch {
           logoutUrl = null;
         }
+      }
+      if (!cleared.ok) {
+        error = 'IAM_CREDENTIALS_CLEAR_FAILED';
+        state = 'error';
+        notify();
+        return { view: view(), logoutUrl: null };
       }
       if (state !== 'unconfigured' && state !== 'signed-out') {
         publish('SIGN_OUT');
@@ -521,8 +532,14 @@ export function createIamService(rawConfig, options = {}) {
         return record.grant.accessToken;
       }
       if (!isRefreshUsable(record.grant, now())) {
-        await targetStore.clear().catch(() => {});
+        const cleared = await targetStore.clear().catch(() => ({ ok: false }));
         lastGrant = null;
+        if (!cleared.ok) {
+          error = 'IAM_CREDENTIALS_CLEAR_FAILED';
+          state = 'error';
+          notify();
+          throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
+        }
         if (state === 'ready' || state === 'expired') publish('SIGN_OUT');
         throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
       }
@@ -539,7 +556,7 @@ export function createIamService(rawConfig, options = {}) {
               clientId: config.clientId,
               resource: config.gatewayResource,
               fetchImpl,
-              timeoutMs: config.httpTimeoutMs,
+              timeoutMs: config.refreshTimeoutMs,
             });
             let claims = null;
             if (token.idToken) {
@@ -585,8 +602,14 @@ export function createIamService(rawConfig, options = {}) {
         } catch (err) {
           const code = tokenErrorMessage(err);
           if (code === 'IAM_INVALID_GRANT' || code === 'IAM_REAUTH_REQUIRED') {
-            await targetStore.clear().catch(() => {});
+            const cleared = await targetStore.clear().catch(() => ({ ok: false }));
             lastGrant = null;
+            if (!cleared.ok) {
+              error = 'IAM_CREDENTIALS_CLEAR_FAILED';
+              state = 'error';
+              notify();
+              throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
+            }
             if (state === 'ready' || state === 'expired') publish('SIGN_OUT');
             throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
           }
@@ -650,11 +673,41 @@ export function createIamService(rawConfig, options = {}) {
       }
     },
 
-    dispose() {
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
       clearAttempt();
+      // Stop subscribers before any await so unload cannot leave a watch()
+      // caller parked forever.
       listeners.clear();
       for (const stop of [...stopWaiters]) stop();
       stopWaiters.clear();
+
+      const targetStore = ensureStore();
+      let grant = lastGrant;
+      if (targetStore) {
+        const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
+        if (record?.grant) grant = record.grant;
+      }
+      lastGrant = null;
+      state = 'signed-out';
+      error = null;
+
+      // Best-effort RFC 7009 revocation only when the metadata is already
+      // cached; unload must not block on discovery or keep a token alive.
+      const meta = metadataCache?.value;
+      const revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
+      if (revocationEndpoint && grant?.refreshToken) {
+        await revokeToken({
+          revocationEndpoint,
+          token: grant.refreshToken,
+          tokenTypeHint: 'refresh_token',
+          clientId: config.clientId,
+          fetchImpl,
+          timeoutMs: config.httpTimeoutMs,
+        }).catch(() => {});
+      }
+      if (targetStore) await targetStore.clear().catch(() => {});
     },
   };
 

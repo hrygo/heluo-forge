@@ -26,6 +26,7 @@
 - 默认只允许 HTTPS 端点；`http://127.0.0.1`/`localhost` 仅用于本地 mock，且需要 `allowInsecureHttp: true`。
 - `ENTERPRISE_ACCESS_TOKEN` 只镜像 access token，供 `dsh-llm-pi-ai` 的 `apiKeyEnv` 解析；refresh token 只存 GrantRecord。
 - 登录/刷新失败不伪造 ready；`invalid_grant` 清理本地记录并回到 re-login。
+- 插件卸载时停止订阅、尽力撤销 refresh token 并清理记录/镜像，使回退后企业调用 fail closed。
 - 独占断言发现 `deepseekAccount` 仍挂载时进入 `error`，不写镜像。
 
 ## 组合顺序
@@ -46,7 +47,7 @@ node packages/forge-iam/scripts/mock-oidc.mjs
 node --test packages/forge-iam/test/login.test.mjs
 ```
 
-配置示例：
+配置示例（`<dsh-port>` 换成当前 DSH Web GUI 端口；也可省略 `redirectUri`，由 Host 从 `webServer` 推导；启动 mock 前可设 `DSH_WEB_ORIGIN`）：
 
 ```json
 {
@@ -57,7 +58,7 @@ node --test packages/forge-iam/test/login.test.mjs
   "revocationEndpoint": "http://127.0.0.1:<port>/revoke",
   "clientId": "dsh-desktop",
   "gatewayResource": "https://gateway.corp.example",
-  "redirectUri": "http://127.0.0.1:4567/iam/callback",
+  "redirectUri": "http://127.0.0.1:<dsh-port>/iam/callback",
   "allowInsecureHttp": true
 }
 ```

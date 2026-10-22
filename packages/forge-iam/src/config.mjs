@@ -21,6 +21,7 @@ export const CONFIG_FIELDS = [
   'refreshSkewSeconds',
   'attemptTimeoutSeconds',
   'httpTimeoutMs',
+  'refreshTimeoutMs',
   'logoutMode',
   'requireExclusive',
   'allowInsecureHttp',
@@ -61,6 +62,7 @@ const DEFAULTS = {
   refreshSkewSeconds: 60,
   attemptTimeoutSeconds: 300,
   httpTimeoutMs: 10000,
+  refreshTimeoutMs: 5000,
   logoutMode: 'local',
   requireExclusive: true,
   allowInsecureHttp: false,
@@ -121,12 +123,12 @@ export function validateConfig(input) {
     }
   }
 
-  for (const key of ['refreshSkewSeconds', 'attemptTimeoutSeconds', 'httpTimeoutMs']) {
+  for (const key of ['refreshSkewSeconds', 'attemptTimeoutSeconds', 'httpTimeoutMs', 'refreshTimeoutMs']) {
     const raw = source[key];
     if (raw === undefined || raw === null) continue;
     const minimum = key === 'refreshSkewSeconds' ? 0 : 1;
-    if (!Number.isInteger(raw) || raw < minimum) {
-      issues.push(issue(key, `${key} must be an integer >= ${minimum}`));
+    if (!Number.isInteger(raw) || raw < minimum || (key === 'refreshTimeoutMs' && raw > 5000)) {
+      issues.push(issue(key, key === 'refreshTimeoutMs' ? 'refreshTimeoutMs must be an integer between 1 and 5000' : `${key} must be an integer >= ${minimum}`));
       continue;
     }
     value[key] = raw;

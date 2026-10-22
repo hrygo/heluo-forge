@@ -85,7 +85,7 @@ export function apply(ctx, rawConfig = {}) {
   void service.hydrate();
 
   return async () => {
-    service.dispose();
+    await service.dispose();
     dispose?.();
     for (const fiber of fibers) {
       if (typeof fiber === 'function') fiber();

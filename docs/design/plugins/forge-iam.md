@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.3.2 |
+| 版本 | V0.3.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -141,7 +141,8 @@
 | `iam.defaultModel` | string | 空 | 否 | 登录后默认模型；空则不自动切换 |
 | `iam.refreshSkewSeconds` | number | 60 | 否 | 到期前预刷新阈值 |
 | `iam.attemptTimeoutSeconds` | number | 300 | 否 | 登录 attempt 总时限 |
-| `iam.httpTimeoutMs` | number | 10000 | 否 | 换 token / 撤销单次请求上限 |
+| `iam.httpTimeoutMs` | number | 10000 | 否 | discovery / 换 token / 撤销单次请求上限 |
+| `iam.refreshTimeoutMs` | number | 5000 | 否 | 锁内 refresh 请求硬超时；上限 5000ms |
 | `iam.logoutMode` | `local` / `rp` | `local` | 否 | 是否发起 RP 登出 |
 | `iam.requireExclusive` | boolean | `true` | 否 | 官方账号仍存在时拒绝就绪 |
 | `iam.allowInsecureHttp` | boolean | `false` | 否 | 仅本地 mock/loopback 允许 HTTP；生产必须关闭 |
@@ -363,7 +364,7 @@ flowchart TD
 
 升级：配置项只增不删；记录 `version` 迁移；新增 scope 需要重新授权，界面明确提示；DSH 升级后重新应用官方行禁用补丁，并跑“官方行是否回灌”用例。
 
-回退：禁用 `@heluo/forge-iam` 时先执行 dispose：撤销、删除记录、清理 `ENTERPRISE_ACCESS_TOKEN`，使企业调用 fail closed；进程异常退出导致引用残留时，最多持续到 access token 到期，由 A12/policy 兜底。官方行仍由企业包禁用，官方登录在内网不可用，因此回退到官方登录不是可用路径。若整体回退企业包，需同时恢复官方行并确认内网是否可达；不可达时保留企业包而不是制造一个坏掉的登录入口。
+回退：禁用 `@heluo/forge-iam` 时先执行 dispose（已实现：停止订阅、尽力撤销 refresh token、删除记录、清理 `ENTERPRISE_ACCESS_TOKEN`），使企业调用 fail closed；进程异常退出导致引用残留时，最多持续到 access token 到期，由 A12/policy 兜底。官方行仍由企业包禁用，官方登录在内网不可用，因此回退到官方登录不是可用路径。若整体回退企业包，需同时恢复官方行并确认内网是否可达；不可达时保留企业包而不是制造一个坏掉的登录入口。
 
 卸载：尽力撤销、删除 `heluo-iam/session`、清理 `ENTERPRISE_ACCESS_TOKEN`；官方旧 grant 由用户确认后清理；不删除工作区、会话或用户文件。
 

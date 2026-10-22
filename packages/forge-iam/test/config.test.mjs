@@ -12,6 +12,7 @@ test('normalizes defaults without inventing IAM endpoints', () => {
   assert.equal(result.value.refreshSkewSeconds, 60);
   assert.equal(result.value.attemptTimeoutSeconds, 300);
   assert.equal(result.value.httpTimeoutMs, 10000);
+  assert.equal(result.value.refreshTimeoutMs, 5000);
   assert.equal(result.value.allowInsecureHttp, false);
   assert.equal(result.value.issuer, '');
   assert.equal(isConfigured(result.value).ok, false);
@@ -81,6 +82,12 @@ test('non-object config is rejected', () => {
     assert.ok('issues' in result);
   }
 });
+test('refresh timeout is capped to the lock-hold budget', () => {
+  const result = validateConfig({ refreshTimeoutMs: 5001 });
+  assert.equal('issues' in result, true);
+  assert.equal(result.issues.some((issue) => issue.path.includes('refreshTimeoutMs')), true);
+});
+
 test('RP logout requires an end-session endpoint', () => {
   const result = validateConfig({ logoutMode: 'rp' });
   assert.equal('issues' in result, true);
