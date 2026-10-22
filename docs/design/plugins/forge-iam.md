@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.3.7 |
+| 版本 | V0.3.8 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -120,7 +120,7 @@
 | 官方 UI | 不显示官方账户页、官方登录入口、官方模型/API Key 入口 |
 | 挂载点 | 实际使用 `settings.section` + `shell.overlay`；不占用单占位 `settings.launcher`（避免替换官方设置触发器）；`sidebar.footer.action` 未发现，不硬编码 DOM |
 
-Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-events:none` 的穿透层，onboarding 遮罩必须显式 `pointerEvents:'auto'`，否则遮罩、dialog 与按钮全部不可点击；登录横幅的轮询绑定组件生命周期而不是 `visible`，否则进入 `ready` 后不再观察退出/失效；onboarding 的 `ready` 轮询只在 `step < 2` 时推进，重复的相同快照不得把已完成界面拉回“登录成功”。样式使用宿主主题 token（`--dsw-alias-bg-layer-1`、`--dsw-alias-label-primary`、`--dsw-alias-state-warn-primary`），不依赖未声明的 `--dsh-*` 私有变量。包里提供 `locale/en.json`、`locale/zh.json` 的 `meta.title`/`meta.description` 与 `icon.svg`，供插件管理面在不激活插件时显示；界面文案仍是硬编码中文，全量 locale 化属于未完成的发布准入项。
+Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-events:none` 的穿透层，onboarding 遮罩必须显式 `pointerEvents:'auto'`，否则遮罩、dialog 与按钮全部不可点击；登录横幅的轮询绑定组件生命周期而不是 `visible`，否则进入 `ready` 后不再观察退出/失效；onboarding 的 `ready` 轮询只在 `step < 2` 时推进，重复的相同快照不得把已完成界面拉回“登录成功”。样式使用宿主主题 token（`--dsw-alias-bg-layer-1`、`--dsw-alias-label-primary`、`--dsw-alias-state-warn-primary`），不依赖未声明的 `--dsh-*` 私有变量。包里提供 `locale/en.json`、`locale/zh.json` 的 `meta.title`/`meta.description` 与 `icon.svg`，供插件管理面在不激活插件时显示；`icon.svg` 逐字节取自预置品牌资产 `docs/assets/branding/elephant/b-kit/components/forge-iam-symbol.svg`，不另绘自造图标；界面文案仍是硬编码中文，全量 locale 化属于未完成的发布准入项。
 
 4 屏 onboarding 不是品牌营销页；不做余额、充值、用量页。复制诊断信息只含主体、状态、到期、错误类别与版本，不含 token、code、verifier 或 ID Token。
 
@@ -205,7 +205,7 @@ export interface IamAccount {
 
 Client 通过 `iam` Remote 命名空间调用 `startSignIn` / `cancelSignIn` / `signOut` / `getView` 并订阅 `watch`；`tokenFor` 不暴露给浏览器，`getPrincipal` 供 Host 内部 policy/audit 使用，Client 从 `IamView.principal` 取展示所需的最小主体。断线重连后重新 `getView`，不依赖内存事件重放。
 
-### 5.0 当前 interim 接口（V0.3.7）
+### 5.0 当前 interim 接口（V0.3.8）
 
 > 以下 TypeScript 是 V1 目标；当前实现的实际形态：
 > `createIamService(config, options)` 返回 Host 对象；`getView()` 同步返回快照，`startSignIn()` 无参并返回 `{ view, authorizationUrl }`，`cancelSignIn()`/`signOut()` 无参，`handleCallback(rawUrl)` 接收完整回调 URL，`syncFromStore()` 在 `/view` 前同步共享记录，`watch(signal)` 仅 Host 内部可用。Client 通过 interim same-origin HTTP 调用，不经过 Remote。`IamView` 当前字段为 `state`、`configured`、`signedIn`、`canSignOut`、`canSignIn`、`missing`、`error: string|null`、`exclusive: string`、`principal: string|null`、`accessExpiresAt: string|null`；不包含 `authorizationUrl`/`attemptId`，授权 URL 由 `startSignIn` 的返回值单独给出。

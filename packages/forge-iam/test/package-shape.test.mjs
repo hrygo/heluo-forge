@@ -31,3 +31,14 @@ test('the source never imports a DSH runtime just to load the skeleton', async (
   assert.doesNotMatch(source, /from '@deepseek-ai\//);
   assert.match(source, /ctx\.provide\('iam'/);
 });
+test('the packaged icon is the pre-designed brand symbol, not a redrawn copy', async () => {
+  // Provenance rule: packages ship the brand kit's symbol verbatim so the
+  // plugin surface and the design assets cannot drift apart.
+  const icon = await read('icon.svg');
+  const branded = await readFile(join(
+    here, '..', '..', 'docs', 'assets', 'branding', 'elephant', 'b-kit', 'components', 'forge-iam-symbol.svg',
+  ), 'utf8');
+  assert.equal(icon, branded);
+  assert.match(icon, /<svg[^>]+viewBox="0 0 320 320"/);
+  assert.ok(Buffer.byteLength(icon) <= 256 * 1024);
+});

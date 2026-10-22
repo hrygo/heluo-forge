@@ -31,7 +31,7 @@
 - 插件卸载只释放订阅、attempt 与内存状态，清理 `ENTERPRISE_ACCESS_TOKEN` 镜像，但不撤销也不删除 GrantRecord；下次启动 `hydrate` 会从记录恢复镜像。显式 `signOut` 或企业卸载流程才撤销 refresh token、删除记录。
 - 管理 API（`/api/forge-iam/*`）必须通过 DSH `ctx.connection.requestRejection`；`ctx.connection` 缺失时 fail closed 返回 503。自定义 `x-forge-iam-request` 头只作 CSRF 意图校验，不替代身份认证；回调改用 `state`/PKCE 且保留自己的 Host 校验。
 - 插件卸载清理由 `ctx.effect` 登记：Cordis 4 对普通 `function apply` 走构造器分支，不收集返回值，因此 `service.dispose()`、撤销 `ctx.iam` 与停止 webServer fiber 都必须显式登记，否则禁用/重载只撤销注册而不会清理镜像与运行时。
-- 界面使用宿主主题 token（`--dsw-alias-*`）；包内 `locale/{en,zh}.json` 与 `icon.svg` 提供插件管理面的显示元数据，界面文案仍是硬编码中文。
+- 界面使用宿主主题 token（`--dsw-alias-*`）；包内 `locale/{en,zh}.json` 与 `icon.svg` 提供插件管理面的显示元数据；`icon.svg` 直接取自预置品牌资产 `docs/assets/branding/elephant/b-kit/components/forge-iam-symbol.svg`，逐字节一致，不另绘，界面文案仍是硬编码中文。
 - 独占断言发现 `deepseekAccount` 仍挂载时进入 `error`，不写镜像。
 
 ## 组合顺序
