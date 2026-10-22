@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-METRICS-001 |
 | 文档名称 | 研发观察事件与上报契约 |
-| 版本 | V0.1.0 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -63,11 +63,13 @@
 | `source_version` | 客户端/投影版本的受控标识 | 解释覆盖范围 |
 | `project_ref`, `system_ref`, `change_ref`, `repository_ref` | 获准的不透明引用；缺失与不适用分开 | 由原平台映射，不采对象名称 |
 | `operation_id`, `result_version` | 逻辑动作引用与单调结果版本 | 重试、回查、跨事件结果折叠 |
-| `action`, `access_kind` | 受控动作枚举；`read` / `development_write` / `local` | 无原始 Shell 命令或参数 |
+| `action`, `access_kind` | 受控动作枚举；`read` / `development_write` / `review_write` / `local` | 无原始 Shell 命令或参数 |
 | `status` | 工具契约结果枚举 | 不把失败/缺失变成 0 |
 | `duration_ms` | 单调计时所得非负数或缺失 | 不以跨机器墙钟差冒充耗时 |
 | `error_code`, `decision_kind` | 已登记枚举；不含错误正文 | 原因分类 |
 | `loss_reason`, `loss_count`, `window_start`, `window_end` | 仅 loss 事件使用 | 数据质量 |
+
+`review.ai.publish` 与 `review.human.record` 的 `access_kind` 均为 `review_write`，`action` 必须分别保留完整动作名，以区分 AI 意见发布与人工正式评审记录；此映射同时适用于 completed/reconciled 事件。`access_kind` 只表示动作权限类别，不表示审查结论、人工批准或是否需要工程修订。发布/记录成功不能作为“无需修订”或“验收通过”的证据；工程修订分类另需冻结用途、字段与事件语义，当前允许清单不承载该分类，未具备有效平台分类时该指标不可计算。
 
 引用只能来自已核验入口/原平台映射，按冻结的标识格式和长度验证；不得将自由文本或其哈希塞进合法引用字段。各事件必需/允许字段与时间缺失语义冻结前保持导出关闭。
 
@@ -134,5 +136,6 @@
 6. 摄取超时、部分成功、限流、离线、缓冲溢出、TTL 到期与进程退出不会阻塞正常研发，缺失计数和覆盖边界可见。
 7. 任何观察故障都不改变必要审计规则、M1–M6 口径、M4 撤销状态或 G3 判定。
 8. 指标仅来自可信操作结果和平台记录，不采聊天正文、代码行数或模型自报效率。
+9. 两种 `review.*` 动作均归为 `review_write` 且保留不同 `action`；结果回查不丢失该区分。不以评审动作成功推断批准或工程修订分类，未冻结的分类字段仍拒绝。
 
 以上为目标契约用例，**NOT RUN：未建立采集器、无内网摄取端，本文不新增实现或测试**。仓库文档检查不替代事件实现与真实摄取验证。

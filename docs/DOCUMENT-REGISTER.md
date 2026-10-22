@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.26.0 |
+| 版本 | V1.27.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,7 +19,7 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.26.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.27.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.19.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.6.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.0 | 生效 | 平台组 | — |
@@ -35,9 +35,9 @@
 | CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.2.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-011 | DevOps MCP 服务详细设计 | [design/services/devops-mcp.md](<design/services/devops-mcp.md>) | V0.1.3 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-012 | 插件索引契约（format-1 / AIHUB 交付） | [design/services/market-index.md](<design/services/market-index.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | G1 索引契约；G2 三目标安装 |
-| CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.1.0 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
-| CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.1.0 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
-| CORP-DSH-METRICS-001 | 研发观察事件与上报契约 | [contracts/metrics-events.md](<contracts/metrics-events.md>) | V0.1.0 | 草案 | 平台组（代拟） | G2；指标导出启用前冻结 |
+| CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.2.0 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
+| CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.1.1 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
+| CORP-DSH-METRICS-001 | 研发观察事件与上报契约 | [contracts/metrics-events.md](<contracts/metrics-events.md>) | V0.2.0 | 草案 | 平台组（代拟） | G2；指标导出启用前冻结 |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V2.3.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | 网关静态密钥签发（备选方案） | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.2.1 | 草案 | 平台组（代拟） | 未采纳；启用须走G0决策变更 |
 | CORP-DSH-ARCH-003 | 企业插件市场调研与落地建议 | [architecture/plugin-market-research.md](<architecture/plugin-market-research.md>) | V0.3.0 | 草案 | 平台组（代拟） | 历史取证保留；来源与控制面建议由 ADR-11/13 替代 |
