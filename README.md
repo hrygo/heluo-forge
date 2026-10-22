@@ -2,9 +2,9 @@
 
 河洛企业级智能研发平台（Heluo Forge）基于 DeepSeek Harness（DSH），通过插件、配置组合、企业现有 CLI 与技能包连接企业身份、模型网关和研发系统；Model Context Protocol（MCP，模型上下文协议）按集成需要另行评估。
 
-**当前处于方案评审与轻量市场接入阶段，尚无完整河洛产品发行版。** 企业插件市场改用 DSH 原生「索引源」：AI 开发者平台（AIHUB）维护并托管 format-1 索引，原生市场浏览、官方 manager 从企业 npm 安装；`services/market-index` 只保留只读索引校验器。`@heluo/forge-market` 与旧 HTTP 服务为历史参考，不属目标；其余八个包与 DevOps MCP 仍为规划入口。企业联调、三目标安装与发行版尚未完成。
+**当前处于方案评审与开发骨架阶段，尚无完整河洛产品发行版。** 企业插件市场改用 DSH 原生「索引源」：AI 开发者平台（AIHUB）维护并托管 format-1 索引，原生市场浏览、官方 manager 从企业 npm 安装；`services/market-index` 只保留只读索引校验器。`@heluo/forge-market` 与旧 HTTP 服务为历史参考，不属目标；`@heluo/forge-iam` 与 `@heluo/forge-credentials-keychain` 为开发骨架（本地离线测试已建立，真实 IAM 与 OS keychain 未联调），其余七个包与 DevOps MCP 仍为规划入口。企业联调、三目标安装与发行版尚未完成。
 
-现状核对日期：2026-10-21。以下区分仓库实现、历史实机记录与待验证目标，不以目录或设计草案证明上线能力。
+现状核对日期：2026-10-22。以下区分仓库实现、历史实机记录与待验证目标，不以目录或设计草案证明上线能力。
 
 | 项 | 内容 |
 |---|---|
@@ -50,14 +50,15 @@ pnpm --version
 pnpm check
 ```
 
-当前检查器与索引校验器使用 Node 标准库，运行检查无需安装依赖；历史市场包的客户端面板由 DSH 提供 React。需要安装工作区依赖时使用 `pnpm install --frozen-lockfile`，安装可能访问包源。`pnpm check` 本身离线运行，测试只启动本机临时 HTTP 服务（归档安装用例），不访问企业系统。
+当前检查器、包与索引校验器使用 Node 标准库，运行检查无需安装依赖；历史市场包的客户端面板由 DSH 提供 React。需要安装工作区依赖时使用 `pnpm install --frozen-lockfile`，安装可能访问包源。`pnpm check` 本身离线运行，测试只启动本机临时 HTTP 服务（归档安装用例），不访问企业系统。
 
 | 命令 | 验证范围 |
 |---|---|
 | `pnpm check` | 依次执行文档检查、仓库检查与 Node 自动发现的全部测试 |
 | `pnpm check:docs` | 文档元数据、登记一致性、本地链接与锚点、表格及询问问题序列 |
 | `pnpm check:repo` | 工程结构、工作区、模块状态、工作流权限与敏感信息规则 |
-| `pnpm test:unit` | 当前实际执行 `node --test`，包含检查器、历史市场包契约、索引校验与归档安装用例 |
+| `pnpm test:unit` | 当前实际执行 `node --test`，包含检查器、IAM 与 keychain 骨架、历史市场包契约、索引校验与归档安装用例 |
+| `node --test packages/forge-iam/test packages/forge-credentials-keychain/test` | 单独验证 IAM 与凭据 keychain 骨架 |
 | `node --test packages/forge-market/test/*.test.mjs` | 单独验证市场插件的逻辑、契约及本地安装链路 |
 | `node --test services/market-index/test/*.test.mjs` | 单独验证索引校验器 |
 
@@ -68,7 +69,7 @@ pnpm check
 | 路径 | 维护内容 | 当前边界 |
 |---|---|---|
 | `docs/` | 需求、架构、计划、契约、设计、运维、协作与工程文档 | 导航见[文档总览](docs/README.md)，登记见[文档清单](docs/DOCUMENT-REGISTER.md) |
-| `packages/` | 安装进 DSH 的九个 `@heluo/forge-*` 扩展入口 | `forge-market` 为历史参考包；其余八个仅职责 README |
+| `packages/` | 安装进 DSH 的九个产品扩展入口与一个凭据支撑包 | `forge-market` 为历史参考；`forge-iam`、`forge-credentials-keychain` 为开发骨架；其余七个仅职责 README |
 | `services/` | 索引校验工具、条件建设的 DevOps MCP | `market-index` 只保留只读校验器；无服务、无生产部署；DevOps MCP 暂不建设 |
 | `deploy/` | 私有制品仓库接入与双端分发资产 | 仅[规划说明](deploy/README.md)，没有可执行部署配置或制品 |
 | `scripts/`、`tests/` | 工程检查器、检查器测试与历史归档安装用例 | 已建立离线检查与本地 HTTP 归档安装用例 |
