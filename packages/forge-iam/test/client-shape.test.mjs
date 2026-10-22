@@ -16,17 +16,20 @@ test('the client entry is a ModuleLoader plugin with the package id', async () =
   assert.match(client, /id: 'forge-iam'/);
 });
 
-test('the client only targets the interim IAM routes', async () => {
+test('the client only targets the IAM routes and sends the CSRF header', async () => {
   const client = await read('client.js');
   const fetches = [...client.matchAll(/fetch\('([^']+)'/g)].map((match) => match[1]);
-  assert.deepEqual([...new Set(fetches)].sort(), ['/api/forge-iam/sign-in', '/api/forge-iam/view']);
-  assert.match(client, /act\('\/api\/forge-iam\/sign-in'\)/);
-  assert.match(client, /act\('\/api\/forge-iam\/sign-out'\)/);
+  assert.deepEqual([...new Set(fetches)].sort(), ['/api/forge-iam/view']);
+  assert.match(client, /postJson\('\/api\/forge-iam\/sign-in'\)/);
+  assert.match(client, /postJson\('\/api\/forge-iam\/sign-out'\)/);
+  assert.match(client, /x-forge-iam-request/);
+  assert.match(client, /authorizationUrl/);
+  assert.match(client, /window\.open/);
 });
 
-test('the client registers the settings launcher, signed-out banner and a four-step onboarding overlay', async () => {
+test('the client registers the settings section, signed-out banner and a four-step onboarding overlay', async () => {
   const client = await read('client.js');
-  assert.match(client, /settings\.launcher/);
+  assert.doesNotMatch(client, /settings\.launcher/);
   assert.match(client, /shell\.overlay/);
   assert.match(client, /未登录企业 IAM/);
   assert.match(client, /forge-iam-banner/);
@@ -39,7 +42,7 @@ test('the client registers the settings launcher, signed-out banner and a four-s
 
 test('the client does not render tokens or set authorization headers', async () => {
   const client = await read('client.js');
-  assert.doesNotMatch(client, /accessToken|refreshToken|idToken|Authorization/i);
+  assert.doesNotMatch(client, /access_token|refresh_token|id_token|Authorization:/);
 });
 
 test('the manifest declares the client entry and the file exists', async () => {

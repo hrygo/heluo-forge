@@ -39,7 +39,7 @@ function fakeCredentials(initial = {}) {
       refs.delete(ref);
     },
     async resolve(ref) {
-      return refs.has(ref) ? { value: refs.get(ref), source: 'test' } : undefined;
+      return refs.has(ref) ? { value: refs.get(ref), source: 'keychain' } : undefined;
     },
     async listRecords() {
       return [...records.entries()].map(([key, record]) => ({ key, kind: record.kind }));
@@ -144,13 +144,15 @@ test('legacy official records are discoverable without being deleted', async () 
     records: [
       ['deepseek-account/default', { kind: 'grant', payload: {} }],
       ['deepseek-account-platform/default', { kind: 'grant', payload: {} }],
+      ['deepseek-account-platform/device', { kind: 'api-key', key: 'device' }],
       [GRANT_KEY, { kind: 'grant', payload: grant }],
     ],
   });
   const store = createGrantStore(credentials);
   const legacy = await store.findLegacyRecords();
   assert.deepEqual(legacy.sort(), ['deepseek-account-platform/default', 'deepseek-account/default']);
-  assert.equal(credentials.records.size, 3);
+  assert.equal(credentials.records.size, 4);
+  assert.equal(legacy.includes('deepseek-account-platform/device'), false);
 });
 
 test('a credentials object missing a required method is rejected', () => {
@@ -158,4 +160,10 @@ test('a credentials object missing a required method is rejected', () => {
     () => createGrantStore({ readRecord: async () => undefined }),
     (error) => error instanceof StoreError && error.code === 'IAM_CREDENTIALS_UNAVAILABLE',
   );
+});
+test('an ambient token is not accepted as the IAM mirror', async () => {
+  const credentials = fakeCredentials();
+  credentials.resolve = async () => ({ value: 'ambient-shell-token', source: 'env' });
+  const store = createGrantStore(credentials);
+  assert.equal(await store.resolveMirror(), undefined);
 });

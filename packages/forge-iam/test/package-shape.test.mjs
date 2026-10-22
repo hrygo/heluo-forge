@@ -22,7 +22,7 @@ test('the manifest declares the repository package contract', async () => {
 test('the package README claims only the development skeleton', async () => {
   const text = await read('README.md');
   assert.match(text, /状态：可用（开发骨架/);
-  assert.match(text, /未接 IAM/);
+  assert.match(text, /真实 IAM 未联调/);
   assert.doesNotMatch(text, /已联调/);
 });
 

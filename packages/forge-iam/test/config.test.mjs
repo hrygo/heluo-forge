@@ -12,6 +12,8 @@ test('normalizes defaults without inventing IAM endpoints', () => {
   assert.equal(result.value.refreshSkewSeconds, 60);
   assert.equal(result.value.attemptTimeoutSeconds, 300);
   assert.equal(result.value.httpTimeoutMs, 10000);
+  assert.equal(result.value.allowInsecureHttp, false);
+  assert.equal(result.value.issuer, '');
   assert.equal(isConfigured(result.value).ok, false);
 });
 
@@ -27,6 +29,7 @@ test('a discovery URL plus client id and gateway audience is enough to be config
 
 test('explicit endpoints can replace discovery', () => {
   const result = validateConfig({
+    issuer: 'https://iam.corp.example',
     authorizationEndpoint: 'https://iam.corp.example/authorize',
     tokenEndpoint: 'https://iam.corp.example/token',
     jwksUri: 'https://iam.corp.example/jwks',
@@ -42,7 +45,7 @@ test('missing endpoints stay unconfigured instead of falling back', () => {
   assert.ok('value' in result);
   const check = isConfigured(result.value);
   assert.equal(check.ok, false);
-  assert.deepEqual(check.missing, ['authorizationEndpoint', 'tokenEndpoint', 'jwksUri']);
+  assert.deepEqual(check.missing, ['issuer', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri']);
 });
 
 test('rejects invalid enums, paths and types', () => {
@@ -77,4 +80,9 @@ test('non-object config is rejected', () => {
     const result = validateConfig(input);
     assert.ok('issues' in result);
   }
+});
+test('RP logout requires an end-session endpoint', () => {
+  const result = validateConfig({ logoutMode: 'rp' });
+  assert.equal('issues' in result, true);
+  assert.equal(result.issues.some((issue) => issue.path.includes('endSessionEndpoint')), true);
 });

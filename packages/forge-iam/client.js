@@ -4,11 +4,12 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
     const ONBOARDING_KEY = 'forge-iam.onboarding.v1';
+    const REQUEST_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json' };
 
     const STATUS = {
       unconfigured: 'IAM 未配置',
       'signed-out': '未登录',
-      authenticating: '登录中',
+      authenticating: '等待浏览器登录',
       ready: '已登录',
       expired: '授权已过期',
       unreachable: 'IAM 暂不可达',
@@ -20,6 +21,27 @@ window.__ModuleLoader__.load({
         return await response.json();
       } catch {
         return null;
+      }
+    }
+
+    async function fetchView() {
+      const response = await fetch('/api/forge-iam/view');
+      const view = await readJson(response);
+      if (!response.ok) throw new Error(view?.error?.code ?? 'IAM_VIEW_FAILED');
+      return view;
+    }
+
+    async function postJson(path) {
+      const response = await fetch(path, { method: 'POST', headers: REQUEST_HEADERS, body: '{}' });
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    function openLogin(url) {
+      if (!url) return;
+      try {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } catch {
+        // A blocked popup is recoverable through the visible login link.
       }
     }
 
@@ -35,47 +57,79 @@ window.__ModuleLoader__.load({
       try {
         window.localStorage.setItem(ONBOARDING_KEY, value);
       } catch {
-        // Storage may be unavailable in a hardened profile; the modal still
-        // works for this session and does not fall back to a file.
+        // Storage may be unavailable in a hardened profile; keep the session
+        // usable without falling back to a file.
       }
     }
 
-    async function fetchView() {
-      const response = await fetch('/api/forge-iam/view');
-      const view = await readJson(response);
-      if (!response.ok) throw new Error(view?.error?.code ?? 'IAM_VIEW_FAILED');
-      return view;
+    function errorNotice(code) {
+      if (code === 'IAM_REQUEST_HEADER_REQUIRED') return '请求被 Host 拒绝，请刷新页面重试。';
+      if (code === 'IAM_UNCONFIGURED') return 'IAM 配置不完整，请管理员补全。';
+      if (code === 'IAM_CREDENTIALS_UNAVAILABLE') return '凭据存储不可用，暂时无法登录。';
+      if (code === 'IAM_UNREACHABLE') return 'IAM 端点不可达，请稍后重试。';
+      if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录回调无效，请重新登录。';
+      if (code === 'IAM_ATTEMPT_EXPIRED') return '登录尝试已过期，请重新登录。';
+      if (code === 'IAM_INVALID_GRANT' || code === 'IAM_REAUTH_REQUIRED') return '登录已失效，请重新登录。';
+      return `操作失败：${code}`;
+    }
+
+    function useAuthenticatingPoll(view, update) {
+      const updateRef = React.useRef(update);
+      updateRef.current = update;
+      React.useEffect(() => {
+        if (view?.state !== 'authenticating') return undefined;
+        const timer = setInterval(async () => {
+          try {
+            updateRef.current(await fetchView());
+          } catch {
+            // Keep polling; the callback or attempt expiry will settle it.
+          }
+        }, 1000);
+        return () => clearInterval(timer);
+      }, [view?.state]);
     }
 
     function Panel() {
-      const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null });
+      const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
 
       const load = React.useCallback(async () => {
         try {
-          setState({ phase: 'ready', view: await fetchView(), error: null, notice: null });
+          const view = await fetchView();
+          setState((current) => ({ ...current, phase: 'ready', view, error: null }));
         } catch (error) {
-          setState({ phase: 'error', view: null, error: error.message, notice: null });
+          setState({ phase: 'error', view: null, error: error.message, notice: null, authorizationUrl: null });
         }
       }, []);
 
-      React.useEffect(() => {
-        load();
-      }, [load]);
+      React.useEffect(() => { load(); }, [load]);
+      useAuthenticatingPoll(state.view, (view) => setState((current) => ({ ...current, view })));
 
-      const act = async (path) => {
+      const login = async () => {
         setState((current) => ({ ...current, notice: null }));
         try {
-          const response = await fetch(path, { method: 'POST' });
-          const body = await readJson(response);
-          if (!response.ok) {
-            const code = body?.error?.code ?? 'IAM_REQUEST_FAILED';
-            setState((current) => ({
-              ...current,
-              notice: code === 'IAM_NOT_IMPLEMENTED' ? '登录链路尚未接入 IAM 契约，当前不会伪造登录。' : `操作失败：${code}`,
-            }));
+          const result = await postJson('/api/forge-iam/sign-in');
+          if (!result.ok) {
+            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
             return;
           }
-          setState({ phase: 'ready', view: body, error: null, notice: null });
+          const view = result.body?.view ?? null;
+          const authorizationUrl = result.body?.authorizationUrl ?? null;
+          openLogin(authorizationUrl);
+          setState((current) => ({ ...current, view, authorizationUrl, notice: null }));
+        } catch {
+          setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+        }
+      };
+
+      const signOut = async () => {
+        try {
+          const result = await postJson('/api/forge-iam/sign-out');
+          if (!result.ok) {
+            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            return;
+          }
+          setState((current) => ({ ...current, view: result.body?.view ?? null, authorizationUrl: null, notice: null }));
+          if (result.body?.logoutUrl) window.location.assign(result.body.logoutUrl);
         } catch {
           setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
         }
@@ -89,7 +143,6 @@ window.__ModuleLoader__.load({
       if (state.phase === 'loading') {
         return h('div', { style: box }, header, h('div', { style: muted }, '正在读取登录状态…'));
       }
-
       if (state.phase === 'error') {
         return h('div', { style: box }, header,
           h('div', null, '无法读取登录状态。'),
@@ -109,6 +162,9 @@ window.__ModuleLoader__.load({
         ? h('div', { style: { color: '#b42318', marginTop: 4 } }, '官方登录服务仍挂载，企业登录不可用；请修正企业组合包。')
         : null;
       const notice = state.notice ? h('div', { style: { marginTop: 8, color: '#8a5a00' } }, state.notice) : null;
+      const loginLink = state.authorizationUrl
+        ? h('div', { style: { marginTop: 6 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录'))
+        : null;
 
       return h('div', { style: box }, header,
         h('div', null, label),
@@ -117,53 +173,49 @@ window.__ModuleLoader__.load({
         expiry,
         exclusive,
         notice,
+        loginLink,
         h('div', null,
           h('button', { style: button, onClick: load }, '刷新'),
-          view.canSignIn ? h('button', { style: button, onClick: () => act('/api/forge-iam/sign-in') }, '登录企业账号') : null,
-          view.signedIn ? h('button', { style: button, onClick: () => act('/api/forge-iam/sign-out') }, '退出') : null,
+          view.canSignIn ? h('button', { style: button, onClick: login }, '登录企业账号') : null,
+          view.signedIn ? h('button', { style: button, onClick: signOut }, '退出') : null,
+          view.state === 'authenticating' ? h('button', { style: button, onClick: () => postJson('/api/forge-iam/cancel').then(load) }, '取消') : null,
         ),
         h('div', { style: { ...muted, marginTop: 8 } }, '页面只显示非敏感状态；令牌不会进入 UI 或日志。'),
       );
     }
 
-    function Launcher({ openSettings, wide } = {}) {
-      const style = {
-        display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 0,
-        background: 'transparent', color: 'inherit', cursor: 'pointer', padding: '6px 8px',
-        textAlign: 'left', fontSize: 'inherit',
-      };
-      return h('button', { type: 'button', style, onClick: () => openSettings?.() },
-        h('span', { 'aria-hidden': true }, '●'),
-        wide === false ? null : h('span', null, '企业账号'),
-      );
-    }
-
     function SignedOutBanner() {
-      const [state, setState] = React.useState({ visible: false, notice: null });
+      const [state, setState] = React.useState({ visible: false, notice: null, view: null });
 
       React.useEffect(() => {
         let live = true;
         fetchView()
-          .then((view) => {
-            if (live) setState((current) => ({ ...current, visible: view.state === 'signed-out' }));
-          })
+          .then((view) => { if (live) setState((current) => ({ ...current, visible: view.state === 'signed-out', view })); })
           .catch(() => {});
         return () => { live = false; };
       }, []);
 
+      useAuthenticatingPoll(state.view, (view) => setState((current) => ({
+        ...current,
+        view,
+        visible: view.state === 'signed-out' || view.state === 'authenticating',
+      })));
+
       const login = async () => {
         try {
-          const response = await fetch('/api/forge-iam/sign-in', { method: 'POST' });
-          const body = await readJson(response);
-          if (!response.ok) {
-            const code = body?.error?.code ?? 'IAM_REQUEST_FAILED';
-            setState((current) => ({
-              ...current,
-              notice: code === 'IAM_NOT_IMPLEMENTED' ? '登录链路待接入 IAM 契约' : `登录失败：${code}`,
-            }));
+          const result = await postJson('/api/forge-iam/sign-in');
+          if (!result.ok) {
+            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
             return;
           }
-          setState((current) => ({ ...current, visible: false, notice: null }));
+          const view = result.body?.view;
+          setState((current) => ({
+            ...current,
+            view,
+            visible: view?.state === 'ready' ? false : current.visible,
+            notice: view?.state === 'authenticating' ? '浏览器已打开，等待登录完成。' : null,
+          }));
+          openLogin(result.body?.authorizationUrl);
         } catch {
           setState((current) => ({ ...current, notice: 'Host 不可达' }));
         }
@@ -185,7 +237,7 @@ window.__ModuleLoader__.load({
     }
 
     function Onboarding() {
-      const [state, setState] = React.useState({ phase: 'loading', view: null, step: 0, notice: null, open: false });
+      const [state, setState] = React.useState({ phase: 'loading', view: null, step: 0, notice: null, open: false, authorizationUrl: null });
 
       const close = (marker) => {
         if (marker) writeMarker(marker);
@@ -199,7 +251,7 @@ window.__ModuleLoader__.load({
         fetchView()
           .then((view) => {
             if (!live) return;
-            setState({ phase: 'ready', view, step: 0, notice: null, open: view.state === 'signed-out' });
+            setState({ phase: 'ready', view, step: 0, notice: null, open: view.state === 'signed-out', authorizationUrl: null });
           })
           .catch(() => {
             if (live) setState((current) => ({ ...current, phase: 'ready', open: false }));
@@ -207,21 +259,23 @@ window.__ModuleLoader__.load({
         return () => { live = false; };
       }, []);
 
+      useAuthenticatingPoll(state.view, (view) => setState((current) => ({
+        ...current,
+        view,
+        ...(view.state === 'ready' ? { step: 2, authorizationUrl: null, notice: null } : {}),
+      })));
+
       if (!state.open) return null;
 
       const startLogin = async () => {
         try {
-          const response = await fetch('/api/forge-iam/sign-in', { method: 'POST' });
-          const body = await readJson(response);
-          if (!response.ok) {
-            const code = body?.error?.code ?? 'IAM_REQUEST_FAILED';
-            setState((current) => ({
-              ...current,
-              notice: code === 'IAM_NOT_IMPLEMENTED' ? '登录链路尚未接入 IAM 契约；请先完成 IAM 对接。' : `登录失败：${code}`,
-            }));
+          const result = await postJson('/api/forge-iam/sign-in');
+          if (!result.ok) {
+            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
             return;
           }
-          setState((current) => ({ ...current, view: body, step: 2, notice: null }));
+          openLogin(result.body?.authorizationUrl);
+          setState((current) => ({ ...current, view: result.body?.view, authorizationUrl: result.body?.authorizationUrl, notice: '浏览器已打开；若被拦截，请使用下方链接。' }));
         } catch {
           setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
         }
@@ -270,6 +324,7 @@ window.__ModuleLoader__.load({
           h('h2', { style: { margin: '8px 0 12px', fontSize: '1.25em' } }, step.title),
           h('p', { style: { margin: 0 } }, step.body),
           state.notice ? h('p', { style: { color: '#8a5a00' } }, state.notice) : null,
+          state.authorizationUrl ? h('p', null, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', null,
             h('button', { style: button, onClick: step.onPrimary }, step.primary),
             state.step < 3 ? h('button', { style: button, onClick: () => close('skipped') }, '跳过') : null,
@@ -287,9 +342,6 @@ window.__ModuleLoader__.load({
           order: 30,
           label: () => '企业账号',
         }, Panel));
-        ctx.slots.inject('settings.launcher', () => ctx.slots.register({
-          name: 'settings.launcher',
-        }, Launcher));
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
           name: 'shell.overlay',
           id: 'forge-iam-banner',

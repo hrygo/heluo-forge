@@ -4,6 +4,7 @@
 
 export const CONFIG_FIELDS = [
   'discoveryUrl',
+  'issuer',
   'authorizationEndpoint',
   'tokenEndpoint',
   'jwksUri',
@@ -13,6 +14,7 @@ export const CONFIG_FIELDS = [
   'scopes',
   'redirectPath',
   'postLogoutRedirectUri',
+  'redirectUri',
   'gatewayResource',
   'defaultProvider',
   'defaultModel',
@@ -21,10 +23,12 @@ export const CONFIG_FIELDS = [
   'httpTimeoutMs',
   'logoutMode',
   'requireExclusive',
+  'allowInsecureHttp',
 ];
 
 const STRING_FIELDS = [
   'discoveryUrl',
+  'issuer',
   'authorizationEndpoint',
   'tokenEndpoint',
   'jwksUri',
@@ -32,6 +36,7 @@ const STRING_FIELDS = [
   'endSessionEndpoint',
   'clientId',
   'postLogoutRedirectUri',
+  'redirectUri',
   'gatewayResource',
   'defaultProvider',
   'defaultModel',
@@ -39,6 +44,7 @@ const STRING_FIELDS = [
 
 const DEFAULTS = {
   discoveryUrl: '',
+  issuer: '',
   authorizationEndpoint: '',
   tokenEndpoint: '',
   jwksUri: '',
@@ -48,6 +54,7 @@ const DEFAULTS = {
   scopes: ['openid', 'profile', 'offline_access'],
   redirectPath: '/iam/callback',
   postLogoutRedirectUri: '',
+  redirectUri: '',
   gatewayResource: '',
   defaultProvider: 'enterprise',
   defaultModel: '',
@@ -56,6 +63,7 @@ const DEFAULTS = {
   httpTimeoutMs: 10000,
   logoutMode: 'local',
   requireExclusive: true,
+  allowInsecureHttp: false,
 };
 
 function issue(path, message) {
@@ -132,12 +140,24 @@ export function validateConfig(input) {
     }
   }
 
+  if (source.allowInsecureHttp !== undefined && source.allowInsecureHttp !== null) {
+    if (typeof source.allowInsecureHttp !== 'boolean') {
+      issues.push(issue('allowInsecureHttp', 'allowInsecureHttp must be a boolean'));
+    } else {
+      value.allowInsecureHttp = source.allowInsecureHttp;
+    }
+  }
+
   if (source.requireExclusive !== undefined && source.requireExclusive !== null) {
     if (typeof source.requireExclusive !== 'boolean') {
       issues.push(issue('requireExclusive', 'requireExclusive must be a boolean'));
     } else {
       value.requireExclusive = source.requireExclusive;
     }
+  }
+
+  if (value.logoutMode === 'rp' && !value.endSessionEndpoint) {
+    issues.push(issue('endSessionEndpoint', 'RP-initiated logout requires endSessionEndpoint'));
   }
 
   if (issues.length) return { issues };
@@ -158,6 +178,7 @@ export function isConfigured(config) {
   if (!value.clientId) missing.push('clientId');
   if (!value.gatewayResource) missing.push('gatewayResource');
   if (!value.discoveryUrl) {
+    if (!value.issuer) missing.push('issuer');
     if (!value.authorizationEndpoint) missing.push('authorizationEndpoint');
     if (!value.tokenEndpoint) missing.push('tokenEndpoint');
     if (!value.jwksUri) missing.push('jwksUri');

@@ -65,6 +65,40 @@ export function createGrantStore(credentials, options = {}) {
       return { ok: true, record: written };
     },
 
+    /**
+     * Cross-process read-decide-replace for refresh. The mutator runs inside
+     * CredentialProvider.modifyRecord's lock; returning undefined leaves the
+     * record untouched.
+     */
+    async mutate(mutator) {
+      if (typeof mutator !== 'function') {
+        throw new StoreError('IAM_MUTATOR_INVALID', 'mutate requires a function');
+      }
+      const written = await credentials.modifyRecord(key, async (current) => {
+        let grant = null;
+        if (current !== undefined && current !== null) {
+          if (current.kind !== 'grant') {
+            throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing IAM record is not a grant');
+          }
+          const parsed = parseGrant(current.payload);
+          if (!parsed.ok) {
+            throw new StoreError('IAM_GRANT_INVALID', 'stored IAM grant is invalid', { errors: parsed.errors });
+          }
+          grant = parsed.value;
+        }
+        const next = await mutator(grant);
+        if (next === undefined) return undefined;
+        const validation = validateGrant(next);
+        if (!validation.ok) {
+          throw new StoreError('IAM_GRANT_INVALID', 'refusing to store an invalid IAM grant', {
+            errors: validation.errors,
+          });
+        }
+        return { kind: 'grant', payload: validation.value };
+      });
+      return { ok: true, record: written };
+    },
+
     async clear() {
       const errors = [];
       try {
@@ -90,7 +124,9 @@ export function createGrantStore(credentials, options = {}) {
 
     async resolveMirror() {
       const resolved = await credentials.resolve(ref);
-      return resolved?.value;
+      // Only this provider's stored value may satisfy the mirror. An ambient
+      // shell/project token must not outlive local sign-out.
+      return resolved?.source === 'keychain' ? resolved.value : undefined;
     },
 
     /**
@@ -99,12 +135,10 @@ export function createGrantStore(credentials, options = {}) {
      */
     async findLegacyRecords() {
       const entries = await credentials.listRecords();
+      const loginKeys = new Set(['deepseek-account/default', 'deepseek-account-platform/default']);
       return entries
-        .filter((entry) => {
-          const value = String(entry.key);
-          return value.startsWith('deepseek-account/') || value.startsWith('deepseek-account-platform/');
-        })
-        .map((entry) => String(entry.key));
+        .map((entry) => String(entry.key))
+        .filter((key) => loginKeys.has(key));
     },
   };
 }

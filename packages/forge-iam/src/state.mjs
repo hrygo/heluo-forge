@@ -55,6 +55,7 @@ const TRANSITIONS = Object.freeze({
     RESET: 'signed-out',
   }),
   expired: Object.freeze({
+    SIGN_IN: 'authenticating',
     REFRESH_SUCCESS: 'ready',
     REFRESH_FAILURE: 'signed-out',
     SIGN_OUT: 'signed-out',
