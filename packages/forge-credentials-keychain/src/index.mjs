@@ -9,6 +9,53 @@ export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 
 const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
 
+/**
+ * Report a committed credentials change through `ctx.events.dispatch` so one
+ * broken observer cannot affect the others or the durable write. Cordis
+ * `ctx.emit()` runs every listener in one synchronous `map`, so a single throw
+ * aborts the remaining listeners and an async rejection escapes unhandled;
+ * the seam requires both to be contained and logged.
+ *
+ * @param {object} ctx plugin context
+ * @param {string} event `credentials/reference-updated` or `credentials/record-updated`
+ * @param {string} subject the changed ref or record key
+ */
+function notifyContained(ctx, event, subject) {
+  const warn = (error) => {
+    try {
+      ctx.logger?.warn?.(`credentials: a ${event} listener for "${subject}" failed`, error);
+    } catch {
+      // Diagnostics must never turn a committed write into a failure.
+    }
+  };
+  const dispatch = ctx.events?.dispatch;
+  if (typeof dispatch === 'function') {
+    let listeners;
+    try {
+      listeners = dispatch.call(ctx.events, 'emit', [event, subject]);
+    } catch (error) {
+      warn(error);
+      return;
+    }
+    for (const listener of listeners ?? []) {
+      try {
+        const returned = listener(subject);
+        if (returned != null && typeof returned.then === 'function') {
+          Promise.resolve(returned).catch(warn);
+        }
+      } catch (error) {
+        warn(error);
+      }
+    }
+    return;
+  }
+  try {
+    ctx.emit?.(event, subject);
+  } catch (error) {
+    warn(error);
+  }
+}
+
 export function validateConfig(input = {}) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     return { issues: [{ path: [''], message: 'config must be an object' }] };
@@ -32,8 +79,8 @@ export function validateConfig(input = {}) {
     }
   }
 
-  if (input.filePath !== undefined && input.filePath !== null) {
-    if (typeof input.filePath !== 'string' || input.filePath.length === 0) {
+  if (input.filePath !== undefined && input.filePath !== null && input.filePath !== '') {
+    if (typeof input.filePath !== 'string') {
       issues.push({ path: ['filePath'], message: 'filePath must be a non-empty string' });
     } else {
       value.filePath = input.filePath;
@@ -93,6 +140,9 @@ export function apply(ctx, rawConfig = {}) {
   if (typeof ctx?.get !== 'function') {
     throw new KeychainProviderError('KEYCHAIN_CREDENTIALS_CHECK_UNAVAILABLE', 'ctx.get is required to check for an existing credentials provider');
   }
+  if (typeof ctx?.effect !== 'function') {
+    throw new KeychainProviderError('KEYCHAIN_HOST_UNAVAILABLE', 'ctx.effect is required to own the provider lifecycle');
+  }
 
   const existing = ctx.get('credentials');
   if (existing !== undefined && existing !== null) {
@@ -123,16 +173,25 @@ export function apply(ctx, rawConfig = {}) {
   const provider = createKeychainProvider(backend, {
     service: result.value.service,
     accountPrefix: result.value.accountPrefix,
-    notifyReference: (ref) => {
-      try { ctx.emit?.('credentials/reference-updated', ref); } catch { /* listeners are contained by DSH */ }
-    },
-    notifyRecord: (key) => {
-      try { ctx.emit?.('credentials/record-updated', key); } catch { /* listeners are contained by DSH */ }
-    },
+    notifyReference: (ref) => notifyContained(ctx, 'credentials/reference-updated', ref),
+    notifyRecord: (key) => notifyContained(ctx, 'credentials/record-updated', key),
   });
-  const dispose = ctx.provide('credentials', provider);
-  return () => {
-    provider.close();
-    dispose?.();
+
+  // Cordis runs a normal function plugin with `new`, so a returned cleanup is
+  // not collected as an effect. Register teardown explicitly: unload must
+  // unprovide ctx.credentials and close the backend even for the default
+  // (non-Cordis) call path that invokes the returned function directly.
+  let closed = false;
+  let disposeProvide;
+  const teardown = async () => {
+    if (closed) return;
+    closed = true;
+    await provider.close();
+    disposeProvide?.();
   };
+  ctx.effect(() => {
+    disposeProvide = ctx.provide('credentials', provider);
+    return teardown;
+  }, 'forge-credentials-keychain');
+  return teardown;
 }

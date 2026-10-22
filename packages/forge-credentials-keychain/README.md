@@ -11,8 +11,11 @@
 | 形态 | 替换 `ctx.credentials` 的 provider 插件 |
 | backend | 内存、不可用、显式 0600 file（含跨进程事务锁）；OS adapter 待实现 |
 | provider | `resolve / describe / set / unset / readRecord / describeRecord / listRecords / modifyRecord / deleteRecord` |
-| 并发 | 进程内单键串行；file backend 使用 O_EXCL 锁文件做跨进程串行（仅 dev/pilot）；OS backend 未实现 |
+| 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed，不自动回收；OS backend 未实现 |
 | 记录 | `api-key` / `grant` JSON；损坏记录显式报错，不静默当作空 |
+| 生命周期 | 清理登记为 `ctx.effect`（Cordis 4 不收集普通 `function apply` 的返回值）；卸载时撤销 `ctx.credentials` 并 `close` backend |
+| 配置 | `Config` 归一化幂等：缺省 `filePath` 为空串表示“不启用 file backend”，可被框架二次校验接受 |
+| 事件 | 按 seam 要求逐个监听器隔离并记录失败；同步抛错不截断后续监听器，异步拒绝不产生未处理 rejection |
 | 组合 | 必须禁用 `dsh-credentials-local`；检测到已有 `credentials` 时拒绝挂载 |
 | 安全 | 空值拒绝；不落日志；不可用/临时/不安全 backend 默认 fail closed |
 
@@ -26,6 +29,7 @@
 ## 不可用于生产
 
 - file backend 的跨进程锁是本地文件锁，只用于开发/试点；生产 OS backend 必须自行提供等价的跨进程互斥，当前尚未实现。
+- 为避免“检查旧锁后删除了另一进程的新锁”的竞态，file backend 不按时间或 PID 自动接管锁。等待超过 10 秒抛出 `KEYCHAIN_LOCK_TIMEOUT`，不写入凭据。异常退出留下锁时，须先确认使用同一凭据文件的全部进程已停止，再人工检查并清理该文件旁的 `.lock`；运行中不得删除锁。自动崩溃恢复与生产 OS adapter 不属于此 fallback 的能力。
 - file backend 是明文落盘，仅限本地开发/试点；不得进入生产配置。
 - OS keychain 双端实测尚未完成。
 

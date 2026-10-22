@@ -14,17 +14,31 @@ const configured = {
   redirectUri: 'http://127.0.0.1:9/iam/callback',
 };
 
-function fakeContext() {
+function fakeContext(credentials = new MemoryCredentials()) {
   const provided = new Map();
+  const effects = [];
   return {
     provided,
+    effects,
     get(name) {
-      if (name === 'credentials') return new MemoryCredentials();
+      if (name === 'credentials') return credentials;
       return undefined;
     },
     provide(name, value) {
       provided.set(name, value);
       return () => provided.delete(name);
+    },
+    effect(callback) {
+      const dispose = callback();
+      effects.push(dispose);
+      return dispose;
+    },
+    /** Simulate a Cordis fiber unload: run collected effects in reverse order. */
+    async unload() {
+      for (const dispose of effects.splice(0).reverse()) {
+        if (typeof dispose === 'function') await dispose();
+        else await dispose?.dispose?.();
+      }
     },
   };
 }
@@ -36,8 +50,40 @@ test('apply registers ctx.iam without requiring a configured IAM', async () => {
   assert.ok(service);
   assert.equal(service.getView().state, 'unconfigured');
   assert.equal(service.getView().canSignIn, false);
+  assert.equal(ctx.effects.length, 1);
   await dispose();
   assert.equal(ctx.provided.has('iam'), false);
+});
+
+test('unload runs the framework-owned teardown even though apply returns a cleanup', async () => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  await store.write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-old', accessToken: 'access-old',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z',
+    obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  await store.mirror('access-old');
+  const ctx = fakeContext(credentials);
+  // Cordis executes a plain function plugin with `new`, so the returned
+  // cleanup is discarded and only the registered effect runs on unload.
+  const discarded = new apply(ctx, configured);
+  assert.equal(typeof discarded, 'function');
+  const service = ctx.provided.get('iam');
+  await service.hydrate();
+  assert.equal(service.getView().state, 'ready');
+  assert.deepEqual((await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'))?.value, 'access-old');
+
+  await ctx.unload();
+
+  assert.equal(ctx.provided.has('iam'), false);
+  assert.equal(service.getView().state, 'signed-out');
+  assert.equal(service.getView().signedIn, false);
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+  // Teardown is cleanup, not logout: the persisted grant must survive.
+  assert.equal((await credentials.readRecord('heluo-iam/session'))?.kind, 'grant');
 });
 
 test('unconfigured sign-in fails closed with the missing fields', async () => {
@@ -137,7 +183,10 @@ test('a context without provide is rejected instead of silently doing nothing', 
 
 test('a context without ctx.get still fails the exclusivity check closed', () => {
   let registered;
-  const ctx = { provide(name, value) { if (name === 'iam') registered = value; } };
+  const ctx = {
+    provide(name, value) { if (name === 'iam') registered = value; },
+    effect(callback) { return callback(); },
+  };
   apply(ctx, configured);
   assert.equal(registered.getView().state, 'error');
   assert.equal(registered.getView().exclusive, 'exclusive-check-unavailable');
@@ -182,6 +231,7 @@ test('a late official account service flips the view to error and blocks sign-in
       return undefined;
     },
     provide() { return () => {}; },
+    effect(callback) { return callback(); },
   };
   apply(ctx, configured);
   const service = ctx.provided?.get?.('iam') ?? undefined;
@@ -190,6 +240,7 @@ test('a late official account service flips the view to error and blocks sign-in
   const collecting = {
     get: ctx.get,
     provide(name, value) { if (name === 'iam') registered = value; return () => {}; },
+    effect(callback) { return callback(); },
   };
   apply(collecting, configured);
   assert.equal(registered.getView().state, 'signed-out');
@@ -208,6 +259,7 @@ test('the host disposer awaits a Cordis fiber instead of calling it', async () =
   const ctx = {
     get() { return undefined; },
     provide() { return () => {}; },
+    effect(callback) { return callback(); },
     inject(_deps, callback) {
       callback({
         webServer: { register() { return () => {}; } },

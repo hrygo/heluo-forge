@@ -53,6 +53,7 @@ test('apply checks ctx.get before registering the service', () => {
     get(name) {
       return name === 'deepseekAccount' ? { getState: async () => ({}) } : undefined;
     },
+    effect(callback) { return callback(); },
   };
   apply(ctx, configured);
   const service = provided.get('iam');

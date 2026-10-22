@@ -133,7 +133,7 @@ function requireString(value, name) {
   return value;
 }
 
-export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, allowEmpty = false } = {}) {
+export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false } = {}) {
   if (typeof fetchImpl !== 'function') throw new OidcError('IAM_HTTP_UNAVAILABLE', 'fetch is unavailable');
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (signal) signals.push(signal);
@@ -163,19 +163,11 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
     });
   }
   if (response.status === 204) return null;
-  if (allowEmpty) {
-    let text;
-    try {
-      text = await response.text();
-    } catch {
-      throw new OidcError('IAM_INVALID_RESPONSE', 'IAM endpoint response cannot be read');
-    }
-    if (text.length === 0) return null;
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw new OidcError('IAM_INVALID_RESPONSE', 'IAM endpoint returned invalid JSON');
-    }
+  if (ignoreBody) {
+    // RFC 7009 §2.2: a successful revocation response body has no meaning.
+    // Release it without requiring JSON or retaining provider response data.
+    try { await response.body?.cancel(); } catch { /* status already confirms success */ }
+    return null;
   }
   try {
     return await response.json();
@@ -313,7 +305,7 @@ export async function revokeToken({ revocationEndpoint, token, tokenTypeHint = '
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: form.toString(),
-    allowEmpty: true,
+    ignoreBody: true,
   });
 }
 

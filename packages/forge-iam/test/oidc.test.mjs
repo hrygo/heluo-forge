@@ -123,6 +123,23 @@ test('revocation accepts an empty 200 response', async () => {
   assert.equal(result, null);
 });
 
+test('revocation ignores every successful response body per RFC 7009', async () => {
+  for (const body of ['OK', '{', '{"ignored":true}']) {
+    const result = await revokeToken({
+      revocationEndpoint: 'https://iam.example/revoke', token: 'refresh-placeholder',
+      clientId: 'dsh-desktop', fetchImpl: async () => new Response(body, { status: 200 }),
+    });
+    assert.equal(result, null);
+  }
+});
+
+test('revocation still rejects failed responses', async () => {
+  await assert.rejects(() => revokeToken({
+    revocationEndpoint: 'https://iam.example/revoke', token: 'refresh-placeholder',
+    clientId: 'dsh-desktop', fetchImpl: async () => new Response('unavailable', { status: 503 }),
+  }), (error) => error.code === 'IAM_HTTP_ERROR' && error.details.status === 503);
+});
+
 test('discovery issuer must match the configured issuer', async () => {
   const fetchImpl = async () => ({
     ok: true,

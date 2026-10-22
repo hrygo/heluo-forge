@@ -32,22 +32,23 @@ export function createGrantStore(credentials, options = {}) {
   const key = options.key ?? GRANT_KEY;
   const ref = options.ref ?? TOKEN_REF;
 
+  async function read() {
+    const record = await credentials.readRecord(key);
+    if (record === undefined || record === null) return { ok: true, grant: null };
+    if (record.kind !== 'grant') {
+      return { ok: false, reason: 'wrong-kind', kind: record.kind };
+    }
+    const parsed = parseGrant(record.payload);
+    if (!parsed.ok) {
+      return { ok: false, reason: 'invalid-grant', errors: parsed.errors };
+    }
+    return { ok: true, grant: parsed.value };
+  }
+
   return {
     key,
     ref,
-
-    async read() {
-      const record = await credentials.readRecord(key);
-      if (record === undefined || record === null) return { ok: true, grant: null };
-      if (record.kind !== 'grant') {
-        return { ok: false, reason: 'wrong-kind', kind: record.kind };
-      }
-      const parsed = parseGrant(record.payload);
-      if (!parsed.ok) {
-        return { ok: false, reason: 'invalid-grant', errors: parsed.errors };
-      }
-      return { ok: true, grant: parsed.value };
-    },
+    read,
 
     async write(grant) {
       const validation = validateGrant(grant);
@@ -113,6 +114,14 @@ export function createGrantStore(credentials, options = {}) {
         await credentials.deleteRecord(key);
       } catch (error) {
         errors.push({ step: 'delete-record', error });
+        return { ok: false, errors };
+      }
+      // A publisher may have passed its grant check before deletion completed.
+      // Pair this final cleanup with mirror()'s post-publication grant check.
+      try {
+        await credentials.unset(ref);
+      } catch (error) {
+        errors.push({ step: 'unset-mirror', error });
       }
       return { ok: errors.length === 0, errors };
     },
@@ -122,6 +131,11 @@ export function createGrantStore(credentials, options = {}) {
         throw new StoreError('IAM_TOKEN_EMPTY', 'refusing to mirror an empty access token');
       }
       await credentials.set(ref, token);
+      const current = await read().catch(() => null);
+      if (!current?.ok || current.grant?.accessToken !== token) {
+        await credentials.unset(ref);
+        throw new StoreError('IAM_REAUTH_REQUIRED', 'IAM grant changed while publishing its token mirror');
+      }
       return { ok: true };
     },
 

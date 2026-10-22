@@ -28,6 +28,9 @@ export function apply(ctx, rawConfig = {}) {
   if (typeof ctx?.provide !== 'function') {
     throw new IamError('IAM_HOST_UNAVAILABLE', 'ctx.provide is required to register ctx.iam');
   }
+  if (typeof ctx?.effect !== 'function') {
+    throw new IamError('IAM_HOST_UNAVAILABLE', 'ctx.effect is required to own the IAM lifecycle');
+  }
 
   let credentials;
   try {
@@ -55,44 +58,65 @@ export function apply(ctx, rawConfig = {}) {
       }
     },
   });
-  const dispose = ctx.provide('iam', service);
-  const fibers = [];
 
-  // Same-origin API for the Client skeleton plus the OIDC loopback callback.
-  // The callback is a GET route; state/PKCE bind it to the Host attempt.
-  if (typeof ctx.inject === 'function') {
-    fibers.push(ctx.inject(['webServer'], (host) => {
-      const routes = createIamRoutes(service, {
-        callbackPath: result.value.redirectPath,
-        getOrigin: () => host.webServer.getOrigin?.(),
+  // Cordis runs a normal function plugin with `new`, so a returned cleanup is
+  // not collected as an effect (only `Service.init` is). Register teardown as
+  // an explicit effect: unload must dispose the service, stop the injected
+  // webServer fiber and unprovide ctx.iam even though apply is a plain
+  // function.
+  let tornDown = false;
+  const teardown = async () => {
+    if (tornDown) return;
+    tornDown = true;
+    await service.dispose();
+    if (typeof offWebServer === 'function') offWebServer();
+    else await offWebServer?.dispose?.();
+    disposeProvide?.();
+  };
+
+  let disposeProvide;
+  let offWebServer;
+
+  ctx.effect(() => {
+    disposeProvide = ctx.provide('iam', service);
+    // Same-origin management API plus the OIDC loopback callback. The callback
+    // is a GET route; state/PKCE bind it to the Host attempt. The management
+    // API is additionally gated by DSH Connection authentication.
+    if (typeof ctx.inject === 'function') {
+      offWebServer = ctx.inject(['webServer'], (host) => {
+        const routes = createIamRoutes(service, {
+          callbackPath: result.value.redirectPath,
+          getOrigin: () => host.webServer.getOrigin?.(),
+          getConnection: () => {
+            try {
+              return ctx.get?.('connection');
+            } catch {
+              return undefined;
+            }
+          },
+        });
+        const offApi = host.webServer.register({
+          kind: 'prefix',
+          path: '/api/forge-iam',
+          handler: routes,
+        });
+        const offCallback = host.webServer.register({
+          kind: 'exact',
+          path: result.value.redirectPath,
+          handler: routes,
+        });
+        return () => {
+          offApi?.();
+          offCallback?.();
+        };
       });
-      const offApi = host.webServer.register({
-        kind: 'prefix',
-        path: '/api/forge-iam',
-        handler: routes,
-      });
-      const offCallback = host.webServer.register({
-        kind: 'exact',
-        path: result.value.redirectPath,
-        handler: routes,
-      });
-      const close = () => {
-        offApi?.();
-        offCallback?.();
-      };
-      host.effect?.(() => close);
-      return close;
-    }));
-  }
+    }
+    return teardown;
+  }, 'forge-iam');
 
   void service.hydrate().catch(() => {});
 
-  return async () => {
-    await service.dispose();
-    dispose?.();
-    for (const fiber of fibers) {
-      if (typeof fiber === 'function') fiber();
-      else await fiber?.dispose?.();
-    }
-  };
+  // Returned for direct callers (tests, non-Cordis embeddings); Cordis owns
+  // the same idempotent teardown through the effect above.
+  return teardown;
 }

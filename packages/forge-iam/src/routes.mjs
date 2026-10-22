@@ -2,6 +2,7 @@ import { IamError } from './errors.mjs';
 
 const REQUEST_HEADER = 'x-forge-iam-request';
 const REQUEST_VALUE = '1';
+const API_PREFIX = '/api/forge-iam';
 
 const ERROR_STATUS = {
   IAM_NOT_IMPLEMENTED: 501,
@@ -64,15 +65,16 @@ function methodNotAllowed(res, allow) {
 function expectedOriginOf(getOrigin) {
   if (typeof getOrigin !== 'function') return null;
   try {
-    const value = getOrigin();
-    return value ? new URL(value) : null;
+    return new URL(getOrigin());
   } catch {
-    return null;
+    // A configured resolver failing is not permission to accept any Host.
+    return false;
   }
 }
 
 function hostMatches(req, expected) {
-  if (!expected) return true;
+  if (expected === false) return false;
+  if (expected === null) return true;
   const headers = req?.headers ?? {};
   const host = String(headers.host ?? '').toLowerCase();
   if (host !== expected.host.toLowerCase()) return false;
@@ -81,10 +83,9 @@ function hostMatches(req, expected) {
   return true;
 }
 
-function hasRequestHeader(req, expected) {
+function hasMutationHeader(req) {
   const headers = req?.headers ?? {};
   if (headers[REQUEST_HEADER] !== REQUEST_VALUE) return false;
-  if (!hostMatches(req, expected)) return false;
   const contentType = String(headers['content-type'] ?? '').toLowerCase();
   if (!contentType.startsWith('application/json')) return false;
   const fetchSite = headers['sec-fetch-site'];
@@ -93,14 +94,42 @@ function hasRequestHeader(req, expected) {
 }
 
 /**
- * Same-origin API plus the OIDC loopback callback. Mutating API requests must
- * carry the custom header; a cross-site form cannot set it without a CORS
- * preflight. The callback relies on state/PKCE instead.
+ * Apply DSH Connection's browser/API authentication to the management API.
+ * The custom header above proves same-origin intent, not identity, so an
+ * unauthenticated caller must not reach the service. A composition without
+ * `ctx.connection` fails closed instead of exposing the API.
+ *
+ * @param {object} req
+ * @param {(() => object | undefined) | undefined} getConnection
+ * @returns {401 | 403 | 503 | undefined}
+ */
+function connectionRejection(req, getConnection) {
+  let connection;
+  try {
+    connection = typeof getConnection === 'function' ? getConnection() : undefined;
+  } catch {
+    connection = undefined;
+  }
+  if (!connection || typeof connection.requestRejection !== 'function') return 503;
+  try {
+    return connection.requestRejection({ headers: req?.headers ?? {} }) ?? undefined;
+  } catch {
+    return 503;
+  }
+}
+
+/**
+ * Same-origin API plus the OIDC loopback callback. Every API request must pass
+ * DSH Connection's Host/Origin policy and browser/API authentication; the
+ * custom header below only adds CSRF intent (a cross-site form cannot set it
+ * without a preflight) and never substitutes for identity. The callback keeps
+ * its own Host check and relies on state/PKCE instead: it opens in the system
+ * browser, which holds no DSH browser cookie.
  *
  * @param {{ getView: Function, startSignIn: Function, signOut: Function, handleCallback: Function }} service
- * @param {{ callbackPath?: string }} [options]
+ * @param {{ callbackPath?: string, getOrigin?: () => string | undefined, getConnection?: () => object | undefined }} [options]
  */
-export function createIamRoutes(service, { callbackPath = '/iam/callback', getOrigin } = {}) {
+export function createIamRoutes(service, { callbackPath = '/iam/callback', getOrigin, getConnection } = {}) {
   return async function handle(req, res) {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -126,6 +155,17 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         return;
       }
 
+      if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {
+        const rejected = connectionRejection(req, getConnection);
+        if (rejected) {
+          return sendJson(res, rejected, {
+            error: {
+              code: rejected === 503 ? 'IAM_CONNECTION_UNAVAILABLE' : 'IAM_UNAUTHENTICATED',
+            },
+          });
+        }
+      }
+
       if (url.pathname === '/api/forge-iam/view') {
         if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
         if (typeof service.syncFromStore === 'function') {
@@ -136,7 +176,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
 
       if (url.pathname === '/api/forge-iam/sign-in') {
         if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
-        if (!hasRequestHeader(req, expected)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+        if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
           return sendJson(res, 200, await service.startSignIn());
         } catch (error) {
@@ -147,7 +187,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
 
       if (url.pathname === '/api/forge-iam/cancel') {
         if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
-        if (!hasRequestHeader(req, expected)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+        if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
           return sendJson(res, 200, { view: await service.cancelSignIn() });
         } catch (error) {
@@ -158,7 +198,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
 
       if (url.pathname === '/api/forge-iam/sign-out') {
         if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
-        if (!hasRequestHeader(req, expected)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+        if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
           return sendJson(res, 200, await service.signOut());
         } catch (error) {

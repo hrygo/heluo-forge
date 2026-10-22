@@ -41,6 +41,7 @@ test('the plugin refuses a file backend unless explicitly allowed', async (t) =>
   const ctx = {
     get() { return undefined; },
     provide() { return () => {}; },
+    effect(callback) { return callback(); },
   };
   assert.throws(
     () => apply(ctx, { filePath: path }),
@@ -54,6 +55,7 @@ test('the plugin registers the file backend with explicit opt-in', async (t) => 
   const ctx = {
     get() { return undefined; },
     provide(name, value) { if (name === 'credentials') provided = value; return () => {}; },
+    effect(callback) { return callback(); },
   };
   const dispose = apply(ctx, { filePath: path, allowInsecureFile: true });
   assert.ok(provided);

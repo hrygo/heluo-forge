@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.3.5 |
+| 版本 | V0.3.7 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,7 +14,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-10-22 |
 | 门禁 | G0 |
-| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程已实现；当前为 interim same-origin HTTP + 2s 轮询，Remote/watch 与默认模型切换未实现；真实联调待） |
+| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程已实现；当前为 interim same-origin HTTP + 2s 轮询，管理 API 经 `ctx.connection.requestRejection` 认证，Remote/watch 与默认模型切换未实现；真实联调待） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/UOS/麒麟实机。以上未核验项不写成已实现。
 >
@@ -105,7 +105,7 @@
 ### 4.3 回调与浏览器
 
 - 回调 URI = Client 传入的 `callbackOrigin` + `iam.redirectPath`；Host 校验 origin 与 `webServer` 实际 origin 一致（loopback 或受支持的本地转发 origin），且必须是 IAM 预注册的精确 URI；不使用随机端口，不另起监听器。
-- 回调只接受 `GET`，校验 `state` 与 PKCE；按官方账号包行为，回调请求以 state/PKCE 校验而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行；同时校验 `Host`/`Origin`。
+- 回调只接受 `GET`，校验 `state` 与 PKCE；按官方账号包行为，回调请求以 state/PKCE 校验而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行。管理 API（`/api/forge-iam/*`）必须通过 DSH Connection 的 `requestRejection`（Host/Origin 策略与浏览器/API 凭据）；`ctx.connection` 不可用时 fail closed 返回 503，不以自定义请求头或本地 Origin 比较替代身份认证。回调保留自己的 Host 校验；Origin/Host 策略本身也由 Connection 负责，避免自定义 scheme（Desktop `dsh-app://`）被本地比较误判。
 - Desktop 由 Host 打开系统浏览器（Windows `start`、麒麟 `xdg-open`）；Web 由页面在点击手势中预开标签页，弹窗被拦截时展示可复制链接。
 - 回调页只返回最小 HTML，不加载外部资源，不把 code/token 写入页面或日志；当前完成后显示提示，不自动关闭标签页。
 
@@ -119,6 +119,8 @@
 | 已登录 | 账户页显示主体、状态、access 到期；退出。刷新时间、同时退出 IAM、清理官方旧记录、复制诊断与默认模型切换为 V1 目标，当前未实现 |
 | 官方 UI | 不显示官方账户页、官方登录入口、官方模型/API Key 入口 |
 | 挂载点 | 实际使用 `settings.section` + `shell.overlay`；不占用单占位 `settings.launcher`（避免替换官方设置触发器）；`sidebar.footer.action` 未发现，不硬编码 DOM |
+
+Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-events:none` 的穿透层，onboarding 遮罩必须显式 `pointerEvents:'auto'`，否则遮罩、dialog 与按钮全部不可点击；登录横幅的轮询绑定组件生命周期而不是 `visible`，否则进入 `ready` 后不再观察退出/失效；onboarding 的 `ready` 轮询只在 `step < 2` 时推进，重复的相同快照不得把已完成界面拉回“登录成功”。样式使用宿主主题 token（`--dsw-alias-bg-layer-1`、`--dsw-alias-label-primary`、`--dsw-alias-state-warn-primary`），不依赖未声明的 `--dsh-*` 私有变量。包里提供 `locale/en.json`、`locale/zh.json` 的 `meta.title`/`meta.description` 与 `icon.svg`，供插件管理面在不激活插件时显示；界面文案仍是硬编码中文，全量 locale 化属于未完成的发布准入项。
 
 4 屏 onboarding 不是品牌营销页；不做余额、充值、用量页。复制诊断信息只含主体、状态、到期、错误类别与版本，不含 token、code、verifier 或 ID Token。
 
@@ -203,7 +205,7 @@ export interface IamAccount {
 
 Client 通过 `iam` Remote 命名空间调用 `startSignIn` / `cancelSignIn` / `signOut` / `getView` 并订阅 `watch`；`tokenFor` 不暴露给浏览器，`getPrincipal` 供 Host 内部 policy/audit 使用，Client 从 `IamView.principal` 取展示所需的最小主体。断线重连后重新 `getView`，不依赖内存事件重放。
 
-### 5.0 当前 interim 接口（V0.3.5）
+### 5.0 当前 interim 接口（V0.3.7）
 
 > 以下 TypeScript 是 V1 目标；当前实现的实际形态：
 > `createIamService(config, options)` 返回 Host 对象；`getView()` 同步返回快照，`startSignIn()` 无参并返回 `{ view, authorizationUrl }`，`cancelSignIn()`/`signOut()` 无参，`handleCallback(rawUrl)` 接收完整回调 URL，`syncFromStore()` 在 `/view` 前同步共享记录，`watch(signal)` 仅 Host 内部可用。Client 通过 interim same-origin HTTP 调用，不经过 Remote。`IamView` 当前字段为 `state`、`configured`、`signedIn`、`canSignOut`、`canSignIn`、`missing`、`error: string|null`、`exclusive: string`、`principal: string|null`、`accessExpiresAt: string|null`；不包含 `authorizationUrl`/`attemptId`，授权 URL 由 `startSignIn` 的返回值单独给出。
@@ -248,6 +250,8 @@ interface IamGrantV1 {
 | 官方旧 grant | 不读取、不刷新、不用于调用 | 直到用户清理 | 清理失败保留并提示 |
 
 **存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback，账户页应显示“未受系统保护”（V1 目标；当前账号页尚未暴露 storage 字段，见 §4.4 状态说明）。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
+
+开发 fallback 的文件读写使用各操作独立快照，避免无锁读取污染锁内事务。文档锁争用超过 10 秒报 `KEYCHAIN_LOCK_TIMEOUT`，不按 PID/时间自动接管：检查旧锁后再重命名不能排除另一等待者已取得新锁的竞态。异常退出留下锁时，须先停止使用同一文件的所有进程，再人工确认和恢复；不把该最小 fallback 当作生产锁与 OS adapter 的实现。
 
 镜像说明：`credentials.set('ENTERPRISE_ACCESS_TOKEN', token)` 写入的 `refs` 段由同一 provider 保护；在 dev/pilot 的 0600 fallback 下仍为明文，账户页应提示（V1 目标；当前未实现）。`llm-pi-ai` 每次请求重新解析该引用，刷新后无需重启；不要把“内存中的 access token”写成唯一副本。
 
@@ -300,7 +304,7 @@ flowchart TD
 ### 7.3 刷新
 
 - 触发：access token 距到期 ≤`refreshSkewSeconds`，或账户页/首个请求需要 token。
-- 把“读记录 → 判断有效期 → 刷新 → 写回 → 镜像”整体放进 `ctx.credentials.modifyRecord('heluo-iam/session')`；锁内先复查，后到者复用结果。
+- 把“读记录 → 判断有效期 → 刷新 → 写回”放进 `ctx.credentials.modifyRecord('heluo-iam/session')`；锁内先复查，后到者复用结果。discovery/JWKS 预取在锁外；镜像发布也在锁外，避免 file backend 的整文档锁重入死锁。发布后重读 grant；记录缺失、access token 不匹配或读取失败时撤回镜像并要求重登，不返回旧 token，也不因此删除另一实例的新 grant。
 - 锁内网络刷新硬超时 5 秒；超时/断网时释放锁，保留未过期 access token，按退避重试；已过期则 `expired` 并要求重登。
 - `invalid_grant`：删除记录、清镜像、`signed-out`；不重试。
 - refresh 轮换：若 IAM 返回新 refresh token，先写记录再使用；写失败或响应丢失导致旧 token 可能已失效时，按“会话不确定”处理，清空并要求重登，**不得**用旧 refresh token 再试。
@@ -308,12 +312,17 @@ flowchart TD
 
 ### 7.4 退出与撤销
 
-顺序：停止新请求 → 取消进行中的登录 → 尽力撤销 refresh token（RFC 7009）→ 清镜像 → 删除记录 → 发布 `signed-out` → 审计。
+顺序：停止本实例新请求 → 取消进行中的登录 → 锁内读取最新 grant 并尽力撤销 refresh token（网络上限 5 秒）→ 清镜像 → 删除记录 → 再清镜像 → 发布 `signed-out` → 审计。
+
+当前实现（2026-10-22）用删除后的再次清理与发布后的 grant 复核配对，覆盖共享刷新、迟到 hydrate/refresh 镜像及插件卸载的指定交错；过时 callback/读取不再覆盖新生命周期。`credentials` seam 只承诺单 record 的互斥，不提供 record/ref 多键原子事务；这些终态回归不是所有跨进程时序的线性一致性证明，仍须经过生产凭据后端与企业并发验收。
+
+- 撤销按 [RFC 7009 §2.2](https://www.rfc-editor.org/rfc/rfc7009.html#section-2.2) 以成功状态判定，忽略成功正文，允许空、非 JSON 或 JSON 正文；失败 HTTP 响应仍报告失败。规范核验日期：2026-10-22。
 
 - `logoutMode=local` 只做本地退出与尽力撤销；不保证 IAM 的浏览器 SSO 会话结束。
 - `logoutMode=rp` 需要 `endSessionEndpoint` 与保存的 ID Token；跳转参数按 IAM 文档，`post_logout_redirect_uri` 必须预注册。
 - 撤销失败不回滚本地退出，也不谎报“已撤销”；记录失败类别，账户页提示“本地已退出，服务端撤销未确认”，并保留支持入口。
 - 显式退出或企业卸载流程执行撤销与清理；普通插件卸载/重载释放运行时资源并清理派生的 `ENTERPRISE_ACCESS_TOKEN` 镜像，但保留 GrantRecord，下次启动由 `hydrate` 恢复。
+- 插件生命周期由 `ctx.effect` 拥有：Cordis `4.0.5` 对普通 `function apply` 走构造器分支，只接管 `Service.init`，**不收集** `apply` 的返回值；因此 `service.dispose()`、`ctx.provide('iam')` 撤销与 webServer fiber 停止都必须显式登记为 effect。`dispose()` 复用已创建的 grant store（`store ?? ensureStore()`），避免卸载与框架撤销 `ctx.provide('credentials')` 并发时因重新解析 seam 而漏清镜像。
 - 禁用/卸载企业能力时由企业 bundle 先调用显式退出，再移除插件；不删除用户工作区或会话数据。
 
 ## 8. 失败模式
@@ -367,6 +376,18 @@ flowchart TD
 | 组合 | 禁用四行后 shell/settings/onboarding/模型选择可用；`DEEPSEEK_API_KEY` 不构成旁路；禁用插件后企业调用拒绝 | 组合夹具 |
 
 端到端必须记录至少一个拒绝反例及其可观察结果；不在真实生产 IAM 上做破坏性用例。
+
+### 10.1 2026-10-22 专项核验与回归
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| 管理 API 认证 | 未认证请求在进入 service 前被拒绝（401/403）；无 `ctx.connection` 时 503 fail closed；回调不受浏览器 Cookie 限制 | `routes.test.mjs` 连接认证用例 |
+| 卸载生命周期 | 框架 effect 卸载后 `ctx.iam` 撤销、service 进入 `signed-out`、镜像清除、GrantRecord 保留 | `service.test.mjs` 构造器分支 + `ctx.effect` 回归 |
+| keychain Config | 归一化结果可再次校验，注入 backend 可经框架激活 | `apply.test.mjs` 幂等用例 |
+| credentials 事件 | 同步抛错不再截断后续监听器，异步拒绝被收敛且不改变已提交写入 | `apply.test.mjs` 隔离用例 |
+| Client 交互 | overlay 可点击；`ready` 后仍观察退出；完成屏不被重复轮询回退 | React 19 + jsdom 受控渲染（非 DSH 内嵌 React 18 实机） |
+
+以上为仓库内自动回归与安装包契约核验；未执行真实 profile 卸载、企业 IAM 联调或 Windows/UOS/麒麟实机。
 
 ## 11. 打包、升级与回退
 

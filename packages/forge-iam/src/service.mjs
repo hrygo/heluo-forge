@@ -43,6 +43,10 @@ function tokenErrorMessage(error) {
   return 'IAM_INTERNAL';
 }
 
+function isMirrorSessionLost(error) {
+  return error instanceof StoreError && error.code === 'IAM_REAUTH_REQUIRED';
+}
+
 function safeMessage(code) {
   const messages = {
     IAM_UNCONFIGURED: 'IAM configuration is incomplete',
@@ -334,7 +338,7 @@ export function createIamService(rawConfig, options = {}) {
   }
 
   async function syncFromStore({ mirror = false } = {}) {
-    if (disposed) return view();
+    if (disposed || signingOut) return view();
     if (!configured || !exclusive.ok) return view();
     // A user-triggered sign-in owns the state machine until its callback,
     // cancellation, or timeout; a background hydration must not clobber it.
@@ -344,8 +348,12 @@ export function createIamService(rawConfig, options = {}) {
     if (state === 'error') return view();
     const targetStore = ensureStore();
     if (!targetStore) return view();
+    const syncEpoch = authEpoch;
+    const isCurrent = () => !disposed && !signingOut && authEpoch === syncEpoch
+      && state !== 'authenticating' && state !== 'error';
     try {
       const record = await targetStore.read();
+      if (!isCurrent()) return view();
       if (!record.ok) {
         lastGrant = null;
         error = 'IAM_GRANT_INVALID';
@@ -371,14 +379,23 @@ export function createIamService(rawConfig, options = {}) {
       error = null;
       if (mirror) {
         assertExclusive();
-        if (!needsRefresh && lastGrant.accessToken) await targetStore.mirror(lastGrant.accessToken).catch(() => {});
-        else await targetStore.unsetMirror().catch(() => {});
+        if (!needsRefresh && lastGrant.accessToken) await targetStore.mirror(lastGrant.accessToken);
+        else await targetStore.unsetMirror();
+        if (!isCurrent()) {
+          if (disposed) await targetStore.unsetMirror().catch(() => {});
+          return view();
+        }
       }
       if (previous !== `${state}|${error}|${lastGrant.subject ?? ''}`) notify();
     } catch (cause) {
+      if (!isCurrent()) {
+        if (disposed) await targetStore.unsetMirror().catch(() => {});
+        return view();
+      }
       lastGrant = null;
-      error = cause?.code === 'IAM_GRANT_CONTEXT_MISMATCH' ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
-      state = 'error';
+      error = isMirrorSessionLost(cause) ? 'IAM_REAUTH_REQUIRED'
+        : cause?.code === 'IAM_GRANT_CONTEXT_MISMATCH' ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
+      state = isMirrorSessionLost(cause) ? 'signed-out' : 'error';
       notify();
     }
     return view();
@@ -410,6 +427,7 @@ export function createIamService(rawConfig, options = {}) {
         return { view: view(), authorizationUrl: attempt.authorizationUrl };
       }
       if (signInPromise) return signInPromise;
+      authEpoch += 1;
       signInPromise = service._startSignInOnce().finally(() => { signInPromise = null; });
       return signInPromise;
     },
@@ -548,7 +566,9 @@ export function createIamService(rawConfig, options = {}) {
             throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
           }
         } catch (error) {
-          await targetStore.clear().catch(() => {});
+          // A failed mirror ownership check means the record may now belong
+          // to a newer session. Do not delete that session during rollback.
+          if (!isMirrorSessionLost(error)) await targetStore.clear().catch(() => {});
           throw error;
         }
         lastGrant = grant;
@@ -557,6 +577,9 @@ export function createIamService(rawConfig, options = {}) {
         return view();
       } catch (error) {
         if (error?.code === 'IAM_ATTEMPT_CANCELLED') throw error;
+        if (disposed || attempt !== current || authEpoch !== attemptEpoch) {
+          throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+        }
         const code = tokenErrorMessage(error);
         fail(code);
         throw new IamError(code, safeMessage(code));
@@ -595,26 +618,27 @@ export function createIamService(rawConfig, options = {}) {
       lastGrant = null;
       let revocation = 'skipped';
       let revocationError = null;
-      if (grant) {
-        let meta = metadataCache?.value;
-        let revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
-        if (!revocationEndpoint && config.discoveryUrl) {
-          try {
-            meta = await metadata();
-            revocationEndpoint = meta.revocationEndpoint ?? config.revocationEndpoint;
-          } catch {
-            revocationEndpoint = undefined;
-          }
+      let meta = metadataCache?.value;
+      let revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
+      if (grant && !revocationEndpoint && config.discoveryUrl) {
+        try {
+          meta = await metadata();
+          revocationEndpoint = meta.revocationEndpoint ?? config.revocationEndpoint;
+        } catch {
+          revocationEndpoint = undefined;
         }
-        if (revocationEndpoint && grant.refreshToken) {
+      }
+      const revokeCurrent = async (current) => {
+        grant = current;
+        if (revocationEndpoint && current?.refreshToken) {
           try {
             await revokeToken({
               revocationEndpoint,
-              token: grant.refreshToken,
+              token: current.refreshToken,
               tokenTypeHint: 'refresh_token',
               clientId: config.clientId,
               fetchImpl,
-              timeoutMs: config.httpTimeoutMs,
+              timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
             });
             revocation = 'ok';
           } catch (cause) {
@@ -622,6 +646,21 @@ export function createIamService(rawConfig, options = {}) {
             revocationError = tokenErrorMessage(cause);
           }
         }
+      };
+      if (targetStore) {
+        try {
+          // Discovery stays outside the record lock. A bounded revocation reads
+          // the latest rotation under that lock; deletion/ref cleanup is later.
+          await targetStore.mutate(async (current) => {
+            await revokeCurrent(current);
+            return undefined;
+          });
+        } catch (cause) {
+          revocation = 'failed';
+          revocationError = tokenErrorMessage(cause);
+        }
+      } else {
+        await revokeCurrent(grant);
       }
       const cleared = targetStore
         ? await targetStore.clear().catch(() => ({ ok: false }))
@@ -662,8 +701,13 @@ export function createIamService(rawConfig, options = {}) {
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (signingOut) throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
+      const resolveEpoch = authEpoch;
       const targetStore = requireStore();
       let record = await targetStore.read();
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (signingOut || authEpoch !== resolveEpoch) {
+        throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
+      }
       if (!record.ok) {
         throw new IamError('IAM_INVALID_GRANT', safeMessage('IAM_INVALID_GRANT'));
       }
@@ -749,6 +793,10 @@ export function createIamService(rawConfig, options = {}) {
           lastGrant = latest;
           assertExclusive();
           await targetStore.mirror(latest.accessToken);
+          if (epoch !== sessionEpoch) {
+            await targetStore.unsetMirror().catch(() => {});
+            throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
+          }
           if (state === 'expired') publish('REFRESH_SUCCESS');
           else if (state === 'unreachable' || state === 'error') {
             const next = transition(state, 'RECOVER');
@@ -760,8 +808,21 @@ export function createIamService(rawConfig, options = {}) {
           }
           return latest.accessToken;
         } catch (err) {
+          if (epoch !== sessionEpoch) {
+            await targetStore.unsetMirror().catch(() => {});
+            throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
+          }
           const code = tokenErrorMessage(err);
           if (code === 'IAM_DISPOSED') throw err;
+          if (isMirrorSessionLost(err)) {
+            // Rotation was persisted; only its derived publication lost
+            // ownership. A newer grant must survive this caller's failure.
+            lastGrant = null;
+            state = 'signed-out';
+            error = code;
+            notify();
+            throw new IamError(code, safeMessage(code));
+          }
           if (code === 'IAM_GRANT_CONTEXT_MISMATCH') {
             lastGrant = null;
             error = code;
@@ -796,6 +857,10 @@ export function createIamService(rawConfig, options = {}) {
               }
               assertExclusive();
               await targetStore.mirror(current.grant.accessToken);
+              if (epoch !== sessionEpoch) {
+                await targetStore.unsetMirror().catch(() => {});
+                throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
+              }
               lastGrant = current.grant;
               state = 'ready';
               error = null;
@@ -891,8 +956,11 @@ export function createIamService(rawConfig, options = {}) {
       error = null;
       // Removing the derived mirror is cache cleanup, not logout: the grant
       // remains for the next startup, but a process that no longer mounts IAM
-      // cannot keep using an ambient access token.
-      const targetStore = ensureStore();
+      // cannot keep using an ambient access token. Reuse the store this
+      // service already created: teardown runs concurrently with the
+      // framework disposing ctx.provide('credentials'), so re-resolving the
+      // seam here would silently skip the mirror cleanup.
+      const targetStore = store ?? ensureStore();
       if (targetStore) await targetStore.unsetMirror().catch(() => {});
     },
   };

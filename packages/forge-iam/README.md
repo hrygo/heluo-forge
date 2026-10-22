@@ -16,7 +16,7 @@
 | Host 服务 | `src/service.mjs`：OIDC 登录、state/nonce、PKCE S256、token 交换、ID Token/JWKS 校验、刷新、撤销 |
 | 登录/刷新/撤销 | 已按配置端点实现；本地 mock OIDC 有离线端到端测试；真实 IAM 未联调 |
 | keychain provider | 独立包 `@heluo/forge-credentials-keychain`；生产 OS adapter 未实现，本地可用显式 0600 file backend |
-| Client UI | `settings.section` 账户页、四步 onboarding、未登录横幅（不占用单占位 launcher）；登录走浏览器回调 |
+| Client UI | `settings.section` 账户页、四步 onboarding、未登录横幅（不占用单占位 launcher）；登录走浏览器回调；overlay 显式开启 pointer events，横幅长期观察登录态，onboarding 完成屏不被轮询回退 |
 
 ## 登录边界
 
@@ -26,7 +26,12 @@
 - 默认只允许 HTTPS；任何 HTTP（含 loopback mock）都必须显式设置 `allowInsecureHttp: true`。
 - `ENTERPRISE_ACCESS_TOKEN` 只镜像 access token，供 `dsh-llm-pi-ai` 的 `apiKeyEnv` 解析；refresh token 只存 GrantRecord。
 - 登录/刷新失败不伪造 ready；`invalid_grant` 清理本地记录并回到 re-login。
+- 挂起读取、回调和镜像发布在返回后复核生命周期；旧操作不得覆盖新登录或在退出/卸载后恢复 ready。镜像发布后重读 grant，失主时撤回引用，不删除另一实例的新 grant。
+- 退出在记录锁内读取并尽力撤销最新 refresh token（网络最多 5 秒），删除记录后再次清理镜像。已覆盖指定共享实例交错的终态回归；现有 credentials seam 不提供 record/ref 多键原子事务，不能把这些测试当作所有跨进程时序的强一致性证明。
 - 插件卸载只释放订阅、attempt 与内存状态，清理 `ENTERPRISE_ACCESS_TOKEN` 镜像，但不撤销也不删除 GrantRecord；下次启动 `hydrate` 会从记录恢复镜像。显式 `signOut` 或企业卸载流程才撤销 refresh token、删除记录。
+- 管理 API（`/api/forge-iam/*`）必须通过 DSH `ctx.connection.requestRejection`；`ctx.connection` 缺失时 fail closed 返回 503。自定义 `x-forge-iam-request` 头只作 CSRF 意图校验，不替代身份认证；回调改用 `state`/PKCE 且保留自己的 Host 校验。
+- 插件卸载清理由 `ctx.effect` 登记：Cordis 4 对普通 `function apply` 走构造器分支，不收集返回值，因此 `service.dispose()`、撤销 `ctx.iam` 与停止 webServer fiber 都必须显式登记，否则禁用/重载只撤销注册而不会清理镜像与运行时。
+- 界面使用宿主主题 token（`--dsw-alias-*`）；包内 `locale/{en,zh}.json` 与 `icon.svg` 提供插件管理面的显示元数据，界面文案仍是硬编码中文。
 - 独占断言发现 `deepseekAccount` 仍挂载时进入 `error`，不写镜像。
 
 ## 组合顺序

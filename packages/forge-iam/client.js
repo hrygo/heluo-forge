@@ -198,12 +198,12 @@ window.__ModuleLoader__.load({
       const principal = view.principal ? h('div', { style: muted }, `主体：${view.principal}`) : null;
       const expiry = view.accessExpiresAt ? h('div', { style: muted }, `access 到期：${view.accessExpiresAt}`) : null;
       const exclusive = view.exclusive && view.exclusive !== 'ok'
-        ? h('div', { style: { color: '#b42318', marginTop: 4 } }, '企业登录独占检查未通过；请修正企业组合包。')
+        ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', marginTop: 4 } }, '企业登录独占检查未通过；请修正企业组合包。')
         : null;
       const hostError = view.error
         ? h('div', { style: { color: '#b42318', marginTop: 4 } }, errorNotice(view.error))
         : null;
-      const notice = state.notice ? h('div', { style: { marginTop: 8, color: '#8a5a00' } }, state.notice) : null;
+      const notice = state.notice ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null;
       const loginLink = state.authorizationUrl
         ? h('div', { style: { marginTop: 6 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录'))
         : null;
@@ -240,7 +240,10 @@ window.__ModuleLoader__.load({
         return () => { live = false; };
       }, []);
 
-      useSessionPoll(state.visible, (view) => setState((current) => ({
+      // Observe for as long as the banner is mounted: display is derived from
+      // the view, so keying the poll on `visible` would stop observing as soon
+      // as a session becomes ready and never notice a later sign-out.
+      useSessionPoll(true, (view) => setState((current) => ({
         ...current,
         view,
         visible: view.state !== 'ready',
@@ -278,8 +281,8 @@ window.__ModuleLoader__.load({
         style: {
           position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 900,
           pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 10,
-          padding: '6px 12px', borderRadius: 999, background: 'var(--dsh-surface, #fff)',
-          color: 'var(--dsh-text, #111)', boxShadow: '0 6px 24px rgba(0,0,0,0.18)', fontSize: '0.9em',
+          padding: '6px 12px', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-1)',
+          color: 'var(--dsw-alias-label-primary)', boxShadow: '0 6px 24px rgba(0,0,0,0.18)', fontSize: '0.9em',
         },
       },
       h('span', null, '未登录企业 IAM'),
@@ -287,7 +290,7 @@ window.__ModuleLoader__.load({
       state.authorizationUrl
         ? h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, '打开登录页')
         : null,
-      state.notice ? h('span', { role: 'status', 'aria-live': 'polite', style: { color: '#8a5a00' } }, state.notice) : null,
+      state.notice ? h('span', { role: 'status', 'aria-live': 'polite', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
       );
     }
 
@@ -346,7 +349,9 @@ window.__ModuleLoader__.load({
       useSessionPoll(state.open, (view) => setState((current) => ({
         ...current,
         view,
-        ...(view.state === 'ready' ? { step: 2, authorizationUrl: null, notice: null } : {}),
+        // Advance to the success step once, then keep the user's final screen:
+        // a later identical `ready` poll must not pull them back from "完成".
+        ...(view.state === 'ready' && current.step < 2 ? { step: 2, authorizationUrl: null, notice: null } : {}),
         ...(view.state === 'error' ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
       })));
 
@@ -406,9 +411,12 @@ window.__ModuleLoader__.load({
       const overlay = {
         position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.35)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+        // shell.overlay is click-through; an interactive surface must opt back
+        // into pointer events or every click falls through to the app below.
+        pointerEvents: 'auto',
       };
       const card = {
-        width: 'min(520px, 100%)', background: 'var(--dsh-surface, #fff)', color: 'var(--dsh-text, #111)',
+        width: 'min(520px, 100%)', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
         borderRadius: 12, padding: 24, boxShadow: '0 20px 60px rgba(0,0,0,0.25)', lineHeight: 1.6,
       };
       const button = { marginRight: 8, marginTop: 16, padding: '6px 14px', cursor: 'pointer' };
@@ -418,7 +426,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { opacity: 0.6, fontSize: '0.85em' } }, `步骤 ${state.step + 1} / 4`),
           h('h2', { style: { margin: '8px 0 12px', fontSize: '1.25em' } }, step.title),
           h('p', { style: { margin: 0 } }, step.body),
-          state.notice ? h('p', { style: { color: '#8a5a00' } }, state.notice) : null,
+          state.notice ? h('p', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
           state.authorizationUrl ? h('p', null, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', null,
             h('button', { style: button, onClick: step.onPrimary }, step.primary),

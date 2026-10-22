@@ -13,11 +13,15 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
-    "./client": "./client.js"
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "src",
     "client.js",
+    "locale",
+    "icon.svg",
     "README.md"
   ],
   "dsh": {

@@ -51,3 +51,41 @@ test('the manifest declares the client entry and the file exists', async () => {
   assert.equal(manifest.exports['./client'], './client.js');
   await access(join(here, 'client.js'));
 });
+test('the overlay opts back into pointer events under the click-through shell layer', async () => {
+  const client = await read('client.js');
+  // shell.overlay is a pointer-events:none layer: the dialog must opt in or
+  // every click falls through to the application underneath.
+  const overlay = client.slice(client.indexOf('const overlay = {'), client.indexOf('const card = {'));
+  assert.match(overlay, /pointerEvents: 'auto'/);
+});
+
+test('the banner polls for the component lifetime instead of while visible', async () => {
+  const client = await read('client.js');
+  assert.match(client, /useSessionPoll\(true,/);
+  assert.doesNotMatch(client, /useSessionPoll\(state\.visible/);
+});
+
+test('a repeated ready poll cannot pull onboarding back from the final step', async () => {
+  const client = await read('client.js');
+  assert.match(client, /view\.state === 'ready' && current\.step < 2/);
+});
+
+test('the client follows host theme tokens instead of private fallbacks', async () => {
+  const client = await read('client.js');
+  assert.doesNotMatch(client, /--dsh-surface|--dsh-text/);
+  assert.match(client, /--dsw-alias-bg-layer-1/);
+  assert.match(client, /--dsw-alias-label-primary/);
+});
+
+test('the package ships plugin display metadata and an icon', async () => {
+  const manifest = JSON.parse(await read('package.json'));
+  assert.equal(manifest.exports['./icon'], './icon.svg');
+  assert.equal(manifest.exports['./locale/*.json'], './locale/*.json');
+  assert.ok(manifest.files.includes('icon.svg'));
+  assert.ok(manifest.files.includes('locale'));
+  for (const locale of ['en', 'zh']) {
+    const meta = JSON.parse(await read(`locale/${locale}.json`));
+    assert.ok(meta.meta.title);
+    assert.ok(meta.meta.description);
+  }
+});
