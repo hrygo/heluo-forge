@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.18.0 |
+| 版本 | V1.19.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-22 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -72,6 +72,8 @@
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | 平台组 + IT | G2 | 待启动 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
 | CORP-DSH-SDD-001 | SDD 流程 | 待创建 | 平台组 | G2 | 待启动 | skill、CLI、CI、产物契约 |
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | PMO | G2 | 待启动 | 3 部门 800 人分批计划、指标采集、支持渠道、退出条件 |
+
+企业研发跨模块草案：[全流程能力设计](design/plugins/forge-devops-lifecycle.md)、[工具动作契约](contracts/engineering-tools.md)、[观察事件契约](contracts/metrics-events.md)。覆盖已确认受控写目标与待审批项，不改变上述十项团队交付物的负责关系，也不代表接口已核验。
 
 ## 4. 协作与工程入口
 

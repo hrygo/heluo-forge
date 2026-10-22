@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-001 |
 | 文档名称 | 河洛企业级智能研发平台推广实施方案 |
-| 版本 | V2.0.1 |
+| 版本 | V2.1.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟，责任人待确认） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-22 |
 | 门禁 | G0 |
 | 文档层级 | L2 实施计划；字段级契约由子文档承担（见架构设计 §12） |
 
@@ -168,13 +168,13 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 
 | 项 | 内容 | 交付物 |
 |---|---|---|
-| P2-1 | 按 P1 实测结果完善 DevOps CLI 只读命令与权限矩阵；若 CLI 不满足既定前提，单独提交 MCP 服务形态变更评审 | 已确认命令清单、字段、权限矩阵与异常处理；无形态变更批准时不建设 MCP |
+| P2-1 | 完善 DevOps CLI 查询；登记需求 §2.3 的研发写动作、权限和 C3 分类评审；CLI 不足时另评替代形态 | 查询与受控写分别验收；未批写禁用；无形态批准不建 MCP；未知写可回查而非盲重送 |
 | P2-2 | 条件项：仅在其他获批 MCP 集成确认需要时，评审 `dsh-mcp-client` 的凭据更新、安全重试分类与兼容性补丁 | 未经单独范围批准不实施、不发包；若获准，补充独立测试与上游提案；任何结果未知的调用不自动重放 |
 | P2-3 | 终端打包：Windows MSI 自助安装（MDM 可选）+ 配置预置；麒麟 deb + 内部 apt 源 + `systemd --user`（绑定 `127.0.0.1`）+ `dsh-web-open` 启动脚本 | 两条自助安装通道与安装校验指引（落入 `CORP-DSH-PKG-001`） |
 | P2-4 | 自包含三目标市场：AIHUB 托管 format-1 索引、原生索引源浏览、官方 manager 精确安装；不建生成器、服务、PG、代理或自造安装器 | 以 DESIGN-007/012 与 issue #12 为契约；G1 锁定索引 URL、Artifactory 入口与终端认证；G2 做三目标安装、撤回、错误 JSON、断网与混源负向；未验不判 A9 通过 |
 | P2-5 | 策略与审计（`@heluo/forge-policy`）：7 类角色 preset、`$DSH_HOME/**` 硬拒绝、客户数据外发确认（C3）、OTel 决策审计 | 安全评审材料与策略包（落入 `CORP-DSH-POLICY-001`） |
 | P2-6 | 3 部门 800 人试点运行（6 周）：建议按支持人力（1:300）分两批各 400 人进场，第 4 周中期检查、第 6 周判定 M1–M3、M5–M6 | 试点评估报告（落入 `CORP-DSH-PILOT-001`） |
-| P2-7 | 轻量 SDD Skill 包（推广前交付）：1 skill + 1 CLI + `@heluo/forge-policy` 阶段路径规则 + 1 个 CI job | SDD 软件包与试点验证（落入 `CORP-DSH-SDD-001`） |
+| P2-7 | 最小企业 Skill 指引 + 必要 CLI/CI 校验 + `forge-policy` 产物保护；不固定 Skill 链和新 CLI 规模 | 三条不变量、变更追溯、独立交叉审查与人工确认目标分层验证（落入 `CORP-DSH-SDD-001`） |
 
 ### 4.4 P3 推广（持续）
 
@@ -250,56 +250,32 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 
 ## 6. 研发流程层：轻量 SDD
 
-结论：oh-my-sdd 的工程细节值得借鉴，但产品形态不适合引入 DSH。Harness 会吸收注入、委托、拦截、遥测与身份；SDD 仅需维护 Harness 未覆盖的三项内容：**产物契约、门禁规则、归档与交付不变量**。
+结论：DSH 替代 Comet/oh-my-sdd。参考它们获取企业上下文和使用企业 CLI 的方式，不移植 Runtime、安装器、固定阶段或结束动作；通用规划、编码、验证与修复由模型/Harness 负责。
 
-### 6.1 工具链归属
+### 6.1 能力归属
 
-| 边 | 文中做法 | DSH 归属 | 处置 |
-|---|---|---|---|
-| 宿主注入 | wrapper / rules 目录 / AGENTS / TS 插件 | AGENTS.md + skills + bundle | 删适配层，收敛为一条注入路径 |
-| 环 → skill | 固定委托 brainstorming → writing-plans、executing-plans / subagent | 同名 skills + subagent | 保留为 skill 内部步骤，删 dispatcher |
-| 环 → 校验 | `openspec new/validate/archive` | 无对应能力 | **保留**，唯一不可替代 |
-| 环 → 平台 | `gh`、DOP、`iam auth status` | CLI + IAM 凭据接入 + OTel 审计 | 由策略门禁约束，SDD 不直连平台 |
-| 环 → git | commit-msg / pre-commit / pre-push / prepare 四件套 | `@heluo/forge-policy` + CI | 只留 commit-msg 或并入 CI |
-| 环 → 遥测 | DOP 全生命周期埋点 | OTel 决策审计与 session-log | 移出 SDD，归企业遥测 |
+| 内容 | 归属与最小交付 | 不建设 |
+|---|---|---|
+| 企业上下文 | 显式系统变更入口；DevOps 正式要求；按需企业规范 | 全量注入、固定 Skill 委托链 |
+| 工具动作 | 现有 IAM/DevOps/Gitee CLI 与受控清单；缺口先核验 | 第二套企业 SDK、默认 MCP 服务 |
+| 产物与追溯 | 既有校验器优先；spec 冻结、stale、原子 PR；提交前缀 `[变更号]` | 固定 300 行 CLI、旧多宿主适配 |
+| 审查与确认 | 更强模型独立交叉审查、自动修复后复审、人确认并正式留在 PR | 通用 Agent 编排或审查调度引擎 |
+| 规则与安全 | `forge-policy` 的必要安全/路径规则；Gitee/DevOps 服务端授权 | 客户端二次授权、绕过服务端权限 |
+| 过程观察 | 既有 OTel 出口的独立投影，由 DevOps 汇聚 | 独立遥测包、任务数据库、指标平台 |
 
-文中大量“固定委托链”在补偿宿主缺少产物契约——必须经 brainstorming、必须传路径约束、必须纠正 commit 格式。这些约束在 DSH 里应由**一个 skill 的模板 + 一个校验器**承担，而不是靠调用顺序。
+### 6.2 交付顺序与准入
 
-### 6.2 治理层次收敛
+P1-4/P1-5 先核验只读查询；P2-1 负责登记[需求 §2.3](../requirements/requirements-baseline.md)受控写的动作、权限及 C3 分类评审，不因登记就启用。P2-7 交付最小企业指引和必要确定性校验，不以固定 Skill 组合或新增 CLI 为完成条件。
 
-| 原层 | 本质 | DSH 对应 | 结论 |
-|---|---|---|---|
-| L1 Data | 内容 | AGENTS.md / skill 文件 | 保留，瘦身 |
-| L2 Injection | 分发 | 原生加载 | 删除 |
-| L3 Plan gate | 流程约束 | plan mode 是软约束（工具仍全开），需靠 skill + policy | 降为 skill 的一步 + 阶段路径规则 |
-| L4 Analyze | 审查 | review skill + subagent | 保留，简化 |
-| L5 Policy Gate | 强制 | `@heluo/forge-policy`（`tools/pre-execute` + `tools.guard`）+ sandbox | 规则并入原生策略插件，不维护每宿主 hooks（见 ADR-4） |
-| L6 Amendment | 变更控制 | PR + CI | 保留模板，删 8 步命令 |
-| L7 CI | 变更控制 | 仓库 CI | 保留 1 个 job |
+写能力开放前，安全/PMO 确认范围与委托，提供方冻结字段和回查语义，平台验证宿主权限、确认与独立审查能力。未批、未验的动作关闭；未知写不盲重送。各目标及门禁见[全流程设计](../design/plugins/forge-devops-lifecycle.md) §8/§10，与现有只读验收分别出具结果。
 
-压成三层：**契约层**（产物与格式）、**门禁层**（`@heluo/forge-policy` 运行时拦截）、**交付层**（归档与 PR）。前两层是 DSH 的强项，第三层才是 SDD 的真正价值。
+### 6.3 三条不变量与结束边界
 
-### 6.3 轻量形态
+1. **一致性**：canonical spec 与代码不漂移，保留 freeze / 指纹 / stale / archive。
+2. **原子性**：交付 PR 同时包含实现、spec 与归档。
+3. **可追溯**：系统变更号贯穿 Issue、提交、PR 与验收证据。
 
-- 1 个 skill `sdd`：组合现有的 brainstorming / writing-plans / executing-plans / code-review-and-quality / test-driven-development / verification-before-completion，产出 proposal / spec / design / tasks。
-- 1 个 CLI `sdd`（约 300 行）：封装 `openspec` 的 new / validate / freeze / stale / archive / pr-body。
-- 1 组 `@heluo/forge-policy` 规则：HARD 规则（禁读 `$DSH_HOME/**`、禁密钥硬编码、禁 force push、禁 `rm -rf`、禁直编 `.env`）+ 阶段路径规则（`spec` 阶段只写 `openspec/changes/<id>/**`；`apply` 阶段 canonical spec 只读；`review` 阶段不写源码）。
-- 1 个 CI job：validate + 指纹 + baseline lint。
-- 0 宿主适配、0 五级保护控制面、0 自研遥测、0 独立 hook 引擎。
-
-### 6.4 保留与删除
-
-保留（Harness 没有）：change-id 贯穿 branch / commit / PR / tracker；产物集与落点；freeze + SHA-256 指纹 + stale 传播；原子 PR（实现 + canonical spec + archive）；OVERRIDE 理由审计；按阶段限定的写保护。
-
-删除（Harness 已吸收或不属于流程）：HostAdapter 注册表与四个宿主适配；五级保护状态机；`/sdd-constitution` 8 步；DOP 埋点与 queue；双阶段 Constitution 扫描；与流程无关的参考 skill（按需另立知识包）。
-
-### 6.5 三条不变量
-
-1. **一致性**：canonical spec 与代码不漂移（freeze / 指纹 / stale / archive）。
-2. **原子性**：一次交付的 PR 同时包含实现、spec、归档。
-3. **可追溯**：change-id 从需求到 PR 不断链。
-
-环是过程，不变量是结果。Harness 可以随时优化过程，但不变量必须由契约守住。SDD 在 P2 并行推进，不阻塞 P0/P1 的 IAM / Kong / DevOps 关键路径。
+Issue 在相应验收通过且交付 PR 已合入后关闭；DSH 不自动合并。业务验收、生产上线、用户故事及系统变更最终结束由既有流程负责，不能照搬旧 `change done`。CI/CD 已有制品与 UAT 部署关联只查询，不接管执行。
 
 ## 7. 验收标准
 
@@ -313,11 +289,11 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | A4 | 客户端无网关 Key 且凭据受保护 | 客户端仅持有授权 IAM token，不含网关上游 Key；Windows 与麒麟均实测文件工具和命令 / 编码变体 / 符号链接或路径别名 / 子进程间接访问 `$DSH_HOME/**` 的拒绝结果，并核对工作区正常访问不误拒绝；未证实覆盖路径不得承诺安全硬隔离，无法兜底的对应能力不开放，不得关沙箱绕过 |
 | A5 | 麒麟离线安装与本机启动 | deb 安装后无需现场编译、无需公网即可启动（OAuth / 企业调用仍需企业服务可达）；仅监听 `127.0.0.1`，非本机访问拒绝；`.desktop` / `dsh-web-open` 拉起浏览器完成 OAuth，不将 launch token 泄露到共享日志 |
 | A6 | 麒麟沙箱 | 在目标内核 / runner 实测允许与禁止路径、子进程、必要网络边界；结论为 bwrap / Landlock / 自定义 runner 经验证可用或未通过，组件存在不等于隔离成立；无可用隔离时 fail closed，不开放相应执行能力，所谓显式降级仅指经评审关闭能力，不是关闭沙箱继续执行；Windows 保护同按 A4 验证 |
-| A7 | DevOps 只读闭环 | 用户故事/需求查询返回真实正确结果并可用于生成 spec；工具面以提供方确认的只读清单为准，不在清单内或无法判定读写的工具拒绝；风险判断依据服务端权限与受控清单，不把工具自报 `mutating` 当可信授权源；错误 scope / 越权查询由服务端拒绝；401 / 超时 / 断流后无法确认未执行时不盲目重放；保留主体、工具与决定的最小审计 |
-| A8 | Gitee 工具闭环 | 仓库 / Issue / PR 查询可用；跨用户、错误 scope / 资源与撤销凭据的越权访问被服务端拒绝；写操作默认关闭、开关可独立控制，未启用时拒绝写；可选写能力不因验收而扩大一期必做范围 |
+| A7 | DevOps 只读闭环 | 系统变更及独立验收、系统/仓库和所属故事查询返回真实正确结果并可用于生成 spec；工具面以提供方确认的只读清单为准，不在清单内或无法判定读写的工具拒绝；风险判断依据服务端权限与受控清单，不把工具自报 `mutating` 当可信授权源；错误 scope / 越权查询由服务端拒绝；401 / 超时 / 断流后无法确认未执行时不盲目重放；保留主体、工具与决定的最小审计 |
+| A8 | Gitee 工具闭环 | 仓库 / Issue / PR 查询可用；跨用户、错误 scope / 资源与撤销凭据的越权访问被服务端拒绝；写操作默认关闭、开关可独立控制，未启用时拒绝写；需求 §2.3 受控写目标另行取得范围/安全批准并按 DESIGN-013 验收，现有查询通过不等于写已通过 |
 | A9 | 内部市场与安装 | AIHUB 索引只列自包含、三目标通用、稳定精确版本；原生市场可添加并展示；官方 manager 从企业 npm 安装成功。撤回后索引不再显示，混源/公网回落/错误 JSON 不安装。只读/受限角色禁装；原生索引源无法证明全通道硬隔离，因此不宣称 A9/REQ-14 全通道通过，不承诺防本机恶意管理员 |
 | A10 | 版本可控 | 索引只列精确稳定版本，包体来自企业 npm 且同版不可变；更版按原生能力，没有通用 upgrade 时卸载后安装；不承诺原子升级、自动回滚或恢复原排序。撤回从索引删除并在私服阻断，已装代码独立处置；不丢用户工作区 |
-| A11 | 轻量 SDD | change-id 贯穿 branch/commit/PR；freeze 后改动标记 stale；评审阶段写源码被拒绝；PR 原子包含实现+spec+archive；无宿主适配与自研遥测；无阶段元数据时仍执行 HARD 安全规则，不误阻塞普通开发 |
+| A11 | 轻量 SDD | change-id 贯穿 branch/commit/PR；freeze 后改动标记 stale；评审阶段写源码被拒绝；PR 原子包含实现+spec+archive；无移植旧宿主适配或独立遥测；交叉审查与人工确认绑定 PR 版本；无阶段元数据时仍执行 HARD 安全规则，不误阻塞普通开发 |
 | A12 | 可选插件隔离与安全回滚 | 无安全依赖的可选插件单独禁用时其余能力正常；IAM / policy / 必要审计等关键安全插件关闭或故障时，依赖它们的企业调用拒绝，不能保留原权限继续执行；bundle 回滚 ≤10 分钟为待演练目标，记录起止点及恢复后的身份、策略、审计验证，不以进程启动代替恢复 |
 | A13 | 审计完整性 | 按基线 REQ-16，模型事件按 `sub` + 调用关联标识归因，有研发变更时关联 `change-id`，普通问答不伪造；决策审计字段缺失为 0；C4 默认无正文日志，保留期经批准；G2 已具最小审计，G3 验证完整性 |
 | A14 | 标准符合性 | PKCE + loopback IP，错误 `state` / 回调 / 身份校验失败拒绝；DevOps/Gitee CLI 按确认的用户授权范围执行只读命令；若后续另有获批 HTTP MCP，按资源校验 `aud` 并暴露 PRM；错误资源/scope 拒绝；401 刷新只对可安全重试的只读请求验证，无法确认未执行时不自动重放 |

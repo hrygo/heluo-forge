@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.5.1 |
+| 版本 | V0.6.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-22 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -42,6 +42,8 @@
 网关凭据双模式横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V0.1 草案）。
 
 市场的社区/官方源码调研与选型依据见[企业插件市场调研与落地建议](<../architecture/plugin-market-research.md>)；Gitee 侧能力澄清见[专题问询函](<../collaboration/gitee-market-clarification.md>)。原研究为历史证据，来源方向由 [ADR-11](<../architecture/plugin-registry-source-decision.md>)，轻量索引模式由 ADR-13 替代；契约与真实接入仍需分别验证。
+
+[企业研发全流程能力面](plugins/forge-devops-lifecycle.md)（草案，DESIGN-013）统一六阶段地图、形态判定、人机双面、工程追溯、观察指标及开放决策。工具字段与事件字段分别见[工程工具契约](../contracts/engineering-tools.md)、[观察事件契约](../contracts/metrics-events.md)；不新增安装包，不代表内网接口或受控写已准入。
 
 ### 2.2 实现与验证入口
 
