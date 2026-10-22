@@ -168,17 +168,35 @@ test('a failed callback cannot publish an error after disposal', async (t) => {
   assert.equal(failure.code, 'IAM_ATTEMPT_CANCELLED');
 });
 
-test('a callback losing its mirror grant cannot delete a newer stored session', async (t) => {
+test('a cancelled callback cannot delete a newer stored session', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
   const entered = deferred();
   const release = deferred();
-  const set = credentials.set.bind(credentials);
-  credentials.set = async (...args) => {
+  const modifyRecord = credentials.modifyRecord.bind(credentials);
+  let injected = false;
+  credentials.modifyRecord = async (key, mutate) => {
+    if (key !== 'heluo-iam/session' || injected) return modifyRecord(key, mutate);
+    // Set the guard before the nested write below, or it re-enters this hook.
+    injected = true;
     entered.resolve();
     await release.promise;
-    return set(...args);
+    const written = await modifyRecord(key, mutate);
+    // Another process rotates the session while this callback is still in
+    // flight; the cancelled attempt must not remove that newer grant.
+    await createGrantStore(credentials).write({
+      version: 1,
+      issuer: configured.issuer,
+      subject: 'E1001',
+      clientId: configured.clientId,
+      refreshToken: 'newer-refresh',
+      accessToken: 'newer-access',
+      accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+      obtainedAt: new Date().toISOString(),
+      scope: 'openid',
+    });
+    return written;
   };
   const service = createIamService({ ...configured, ...mock.endpoints, allowInsecureHttp: true }, { credentials });
   t.after(() => service.dispose());
@@ -187,13 +205,12 @@ test('a callback losing its mirror grant cannot delete a newer stored session', 
   const authorized = await fetch(started.authorizationUrl, { redirect: 'manual' });
   const callback = service.handleCallback(authorized.headers.get('location')).catch((error) => error);
   await entered.promise;
-  const newer = await seedGrant(credentials);
+  await service.cancelSignIn();
   release.resolve();
   const failure = await callback;
 
-  assert.equal(failure.code, 'IAM_REAUTH_REQUIRED');
-  assert.deepEqual((await credentials.readRecord('heluo-iam/session'))?.payload, newer);
-  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+  assert.equal(failure.code, 'IAM_ATTEMPT_CANCELLED');
+  assert.equal((await credentials.readRecord('heluo-iam/session'))?.payload?.refreshToken, 'newer-refresh');
 });
 
 for (const action of ['signOut', 'dispose']) {
@@ -216,6 +233,10 @@ for (const action of ['signOut', 'dispose']) {
     assert.equal(service.getView().state, 'signed-out');
     assert.equal(service.getView().principal, null);
     assert.equal(failure.code, action === 'dispose' ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN');
-    assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+    if (action === 'signOut') {
+      assert.equal(await credentials.readRecord('heluo-iam/session'), undefined);
+    } else {
+      assert.equal((await credentials.readRecord('heluo-iam/session'))?.kind, 'grant');
+    }
   });
 }

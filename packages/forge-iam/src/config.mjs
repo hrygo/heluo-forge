@@ -16,6 +16,7 @@ export const CONFIG_FIELDS = [
   'postLogoutRedirectUri',
   'redirectUri',
   'gatewayResource',
+  'gatewayConsoleUrl',
   'defaultProvider',
   'defaultModel',
   'refreshSkewSeconds',
@@ -38,6 +39,7 @@ const STRING_FIELDS = [
   'postLogoutRedirectUri',
   'redirectUri',
   'gatewayResource',
+  'gatewayConsoleUrl',
   'defaultProvider',
   'defaultModel',
 ];
@@ -56,6 +58,7 @@ const DEFAULTS = {
   postLogoutRedirectUri: '',
   redirectUri: '',
   gatewayResource: '',
+  gatewayConsoleUrl: '',
   defaultProvider: 'enterprise',
   defaultModel: '',
   refreshSkewSeconds: 60,
@@ -151,6 +154,18 @@ export function validateConfig(input) {
     }
   }
 
+  if (value.gatewayConsoleUrl) {
+    let parsed;
+    try {
+      parsed = new URL(value.gatewayConsoleUrl);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
+      issues.push(issue('gatewayConsoleUrl', 'gatewayConsoleUrl must be an absolute http(s) URL'));
+    }
+  }
+
   for (const key of ['refreshSkewSeconds', 'attemptTimeoutSeconds', 'httpTimeoutMs']) {
     const raw = source[key];
     if (raw === undefined || raw === null) continue;
@@ -195,9 +210,11 @@ export function validateConfig(input) {
 }
 
 /**
- * A config is usable only when the client id, gateway audience and either a
- * discovery URL or all three explicit OIDC endpoints are present. Missing
- * values keep the plugin in `unconfigured` rather than falling back.
+ * A config is usable only when the client id and either a discovery URL or all
+ * three explicit OIDC endpoints are present. Missing values keep the plugin in
+ * `unconfigured` rather than falling back. `gatewayResource` is optional: V1
+ * authenticates model traffic with a UAG personal credential, so login must not
+ * depend on a gateway audience.
  *
  * @param {Record<string, unknown>} config
  * @returns {{ ok: boolean, missing: string[] }}
@@ -206,7 +223,6 @@ export function isConfigured(config) {
   const value = config ?? {};
   const missing = [];
   if (!value.clientId) missing.push('clientId');
-  if (!value.gatewayResource) missing.push('gatewayResource');
   if (!value.discoveryUrl) {
     if (!value.issuer) missing.push('issuer');
     if (!value.authorizationEndpoint) missing.push('authorizationEndpoint');

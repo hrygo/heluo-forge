@@ -1,6 +1,6 @@
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
-import { createGrantStore, StoreError } from './store.mjs';
+import { createGatewayCredentialStore, createGrantStore, StoreError } from './store.mjs';
 import { isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
 import { createView, transition } from './state.mjs';
 import {
@@ -41,10 +41,6 @@ function tokenErrorMessage(error) {
   if (error instanceof IamError) return error.code;
   if (error instanceof StoreError) return error.code;
   return 'IAM_INTERNAL';
-}
-
-function isMirrorSessionLost(error) {
-  return error instanceof StoreError && error.code === 'IAM_REAUTH_REQUIRED';
 }
 
 function safeMessage(code) {
@@ -99,6 +95,8 @@ export function createIamService(rawConfig, options = {}) {
   let store = null;
   let storeCredentials = null;
   let storeError = null;
+  let gatewayStore = null;
+  let gatewaySummary = null;
 
   function ensureStore() {
     let credentials;
@@ -118,11 +116,13 @@ export function createIamService(rawConfig, options = {}) {
     if (store && storeCredentials === credentials) return store;
     try {
       store = createGrantStore(credentials);
+      gatewayStore = createGatewayCredentialStore(credentials);
       storeCredentials = credentials;
       storeError = null;
       return store;
     } catch (error) {
       store = null;
+      gatewayStore = null;
       storeCredentials = null;
       storeError = error;
       return null;
@@ -173,6 +173,8 @@ export function createIamService(rawConfig, options = {}) {
       exclusive: exclusive.ok ? 'ok' : (exclusive.reason ?? 'exclusive-violation'),
       principal: summary.principal ?? null,
       accessExpiresAt: summary.accessExpiresAt ?? null,
+      gatewayCredential: gatewaySummary,
+      gatewayConsoleUrl: config.gatewayConsoleUrl || null,
     });
   }
 
@@ -251,7 +253,9 @@ export function createIamService(rawConfig, options = {}) {
   function assertGrantContext(grant) {
     if (!grant) return;
     const wrongClient = grant.clientId !== config.clientId;
-    const wrongResource = grant.resource !== config.gatewayResource;
+    // V1 login carries no gateway audience; only compare when one is configured
+    // so grants stored before the split keep working.
+    const wrongResource = Boolean(config.gatewayResource) && grant.resource !== config.gatewayResource;
     const wrongIssuer = Boolean(config.issuer) && grant.issuer !== config.issuer;
     if (wrongClient || wrongResource || wrongIssuer) {
       throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
@@ -308,7 +312,7 @@ export function createIamService(rawConfig, options = {}) {
       clientId: config.clientId,
       refreshToken,
       scope: token.scope ?? previous?.scope ?? config.scopes.join(' '),
-      resource: config.gatewayResource,
+      ...(config.gatewayResource ? { resource: config.gatewayResource } : {}),
       obtainedAt: previous?.obtainedAt ?? obtainedAt,
       accessToken: token.accessToken,
       accessExpiresAt: addSeconds(now(), token.expiresIn),
@@ -328,7 +332,7 @@ export function createIamService(rawConfig, options = {}) {
       clientId: config.clientId,
       refreshToken: token.refreshToken,
       scope: token.scope ?? config.scopes.join(' '),
-      resource: config.gatewayResource,
+      ...(config.gatewayResource ? { resource: config.gatewayResource } : {}),
       obtainedAt,
       accessToken: token.accessToken,
       accessExpiresAt: addSeconds(now(), token.expiresIn),
@@ -337,7 +341,7 @@ export function createIamService(rawConfig, options = {}) {
     };
   }
 
-  async function syncFromStore({ mirror = false } = {}) {
+  async function syncFromStore() {
     if (disposed || signingOut) return view();
     if (!configured || !exclusive.ok) return view();
     // A user-triggered sign-in owns the state machine until its callback,
@@ -377,32 +381,74 @@ export function createIamService(rawConfig, options = {}) {
       const needsRefresh = shouldRefresh(record.grant, now(), config.refreshSkewSeconds);
       state = needsRefresh ? 'expired' : 'ready';
       error = null;
-      if (mirror) {
-        assertExclusive();
-        if (!needsRefresh && lastGrant.accessToken) await targetStore.mirror(lastGrant.accessToken);
-        else await targetStore.unsetMirror();
-        if (!isCurrent()) {
-          if (disposed) await targetStore.unsetMirror().catch(() => {});
-          return view();
-        }
-      }
       if (previous !== `${state}|${error}|${lastGrant.subject ?? ''}`) notify();
     } catch (cause) {
-      if (!isCurrent()) {
-        if (disposed) await targetStore.unsetMirror().catch(() => {});
-        return view();
-      }
+      if (!isCurrent()) return view();
       lastGrant = null;
-      error = isMirrorSessionLost(cause) ? 'IAM_REAUTH_REQUIRED'
-        : cause?.code === 'IAM_GRANT_CONTEXT_MISMATCH' ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
-      state = isMirrorSessionLost(cause) ? 'signed-out' : 'error';
+      error = cause?.code === 'IAM_GRANT_CONTEXT_MISMATCH' ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
+      state = 'error';
       notify();
     }
     return view();
   }
 
+  async function loadGatewayCredential() {
+    if (!gatewayStore) {
+      gatewaySummary = null;
+      return null;
+    }
+    const record = await gatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
+    if (!record.ok) {
+      gatewaySummary = { state: 'invalid' };
+      return gatewaySummary;
+    }
+    const value = await gatewayStore.resolve().catch(() => undefined);
+    if (!value) {
+      gatewaySummary = { state: 'unconfigured' };
+      return gatewaySummary;
+    }
+    const credential = record.credential ?? {};
+    const signedInSubject = lastGrant?.subject ?? null;
+    const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
+    gatewaySummary = {
+      // Without a session the stored key is still "configured"; it only becomes
+      // a mismatch once a different subject is known.
+      state: !signedInSubject || matchesAccount ? 'configured' : 'owner-mismatch',
+      ownerSubject: credential.ownerSubject ?? null,
+      deviceLabel: credential.deviceLabel ?? null,
+      enteredAt: credential.enteredAt ?? null,
+      suggestedExpiry: credential.suggestedExpiry ?? null,
+      matchesAccount,
+    };
+    return gatewaySummary;
+  }
+
+  /**
+   * A stored key belongs to the subject that entered it. Signing in as another
+   * account must not silently keep using that key, so the record is dropped as
+   * soon as the new subject is known (the value alone would outlive its owner).
+   */
+  async function reconcileGatewayOwner(subject) {
+    if (!gatewayStore || !subject) return false;
+    const record = await gatewayStore.read().catch(() => null);
+    if (!record?.ok) return false;
+    const owner = record.credential?.ownerSubject;
+    if (owner === subject) return false;
+    // A stored value with no owner metadata cannot be attributed to the new
+    // account (older builds could write the value first), so drop it too.
+    await gatewayStore.clear().catch(() => {});
+    return true;
+  }
+
   async function hydrate() {
-    return syncFromStore({ mirror: true });
+    // V0.3.x mirrored the IAM access token into the credential store. Remove it
+    // once, because nothing derives a model credential from IAM any more.
+    const targetStore = ensureStore();
+    if (targetStore) await targetStore.clearLegacyToken().catch(() => {});
+    await syncFromStore();
+    if (lastGrant?.subject) await reconcileGatewayOwner(lastGrant.subject);
+    await loadGatewayCredential();
+    return view();
   }
 
   const service = {
@@ -412,6 +458,63 @@ export function createIamService(rawConfig, options = {}) {
 
     hydrate,
     syncFromStore,
+    loadGatewayCredential,
+
+    /**
+     * Store the UAG personal credential the user pasted. IAM only records it;
+     * it never issues, refreshes, or probes the key (that belongs to the
+     * gateway package once it exists).
+     */
+    async saveGatewayCredential({ key: value, deviceLabel } = {}) {
+      assertExclusive();
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (!configured) {
+        throw new IamError('IAM_UNCONFIGURED', safeMessage('IAM_UNCONFIGURED'), {
+          missing: isConfigured(config).missing,
+        });
+      }
+      const targetStore = requireStore();
+      if (!gatewayStore) {
+        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+      }
+      let subject = lastGrant?.subject ?? null;
+      if (!subject) {
+        const record = await targetStore.read().catch(() => null);
+        subject = record?.ok ? record.grant?.subject ?? null : null;
+      }
+      if (!subject) {
+        throw new IamError('IAM_NOT_SIGNED_IN', 'sign in before saving a gateway credential');
+      }
+      const label = typeof deviceLabel === 'string' ? deviceLabel.trim().slice(0, 64) : '';
+      const enteredAt = nowIso(now());
+      const suggestedExpiry = addSeconds(now(), 90 * 24 * 60 * 60).slice(0, 10);
+      await gatewayStore.save({
+        value,
+        ownerSubject: subject,
+        deviceLabel: label,
+        enteredAt,
+        suggestedExpiry,
+      });
+      await loadGatewayCredential();
+      notify();
+      return view();
+    },
+
+    async clearGatewayCredential() {
+      assertExclusive();
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      requireStore();
+      if (!gatewayStore) {
+        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+      }
+      const cleared = await gatewayStore.clear();
+      if (!cleared.ok) {
+        throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
+      }
+      await loadGatewayCredential();
+      notify();
+      return view();
+    },
 
     async startSignIn() {
       assertExclusive();
@@ -558,21 +661,21 @@ export function createIamService(rawConfig, options = {}) {
         }
         assertExclusive();
         const targetStore = requireStore();
-        try {
-          await targetStore.write(grant);
-          await targetStore.mirror(token.accessToken);
-          if (attempt !== current || authEpoch !== attemptEpoch || state !== 'authenticating') {
+        await targetStore.write(grant);
+        if (attempt !== current || authEpoch !== attemptEpoch || state !== 'authenticating') {
+          // Another process may have rotated the record while this write was in
+          // flight; delete only the grant this attempt actually produced.
+          const stored = await targetStore.read().catch(() => null);
+          if (stored?.ok && stored.grant?.refreshToken === grant.refreshToken) {
             await targetStore.clear().catch(() => {});
-            throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
           }
-        } catch (error) {
-          // A failed mirror ownership check means the record may now belong
-          // to a newer session. Do not delete that session during rollback.
-          if (!isMirrorSessionLost(error)) await targetStore.clear().catch(() => {});
-          throw error;
+          throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
         }
         lastGrant = grant;
         clearAttempt();
+        // A new subject must not inherit the previous account's gateway key.
+        await reconcileGatewayOwner(grant.subject);
+        await loadGatewayCredential();
         publish('SIGN_IN_SUCCESS');
         return view();
       } catch (error) {
@@ -665,6 +768,9 @@ export function createIamService(rawConfig, options = {}) {
       const cleared = targetStore
         ? await targetStore.clear().catch(() => ({ ok: false }))
         : { ok: false };
+      // Sign-out keeps the gateway credential, but the summary must stop
+      // claiming it matches the (now absent) session.
+      await loadGatewayCredential();
       let logoutUrl = null;
       if (config.logoutMode === 'rp' && grant?.idToken) {
         try {
@@ -792,11 +898,6 @@ export function createIamService(rawConfig, options = {}) {
           }
           lastGrant = latest;
           assertExclusive();
-          await targetStore.mirror(latest.accessToken);
-          if (epoch !== sessionEpoch) {
-            await targetStore.unsetMirror().catch(() => {});
-            throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
-          }
           if (state === 'expired') publish('REFRESH_SUCCESS');
           else if (state === 'unreachable' || state === 'error') {
             const next = transition(state, 'RECOVER');
@@ -809,20 +910,10 @@ export function createIamService(rawConfig, options = {}) {
           return latest.accessToken;
         } catch (err) {
           if (epoch !== sessionEpoch) {
-            await targetStore.unsetMirror().catch(() => {});
             throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
           }
           const code = tokenErrorMessage(err);
           if (code === 'IAM_DISPOSED') throw err;
-          if (isMirrorSessionLost(err)) {
-            // Rotation was persisted; only its derived publication lost
-            // ownership. A newer grant must survive this caller's failure.
-            lastGrant = null;
-            state = 'signed-out';
-            error = code;
-            notify();
-            throw new IamError(code, safeMessage(code));
-          }
           if (code === 'IAM_GRANT_CONTEXT_MISMATCH') {
             lastGrant = null;
             error = code;
@@ -856,9 +947,7 @@ export function createIamService(rawConfig, options = {}) {
                 throw new IamError('IAM_REFRESH_SUBJECT_MISMATCH', safeMessage('IAM_REFRESH_SUBJECT_MISMATCH'));
               }
               assertExclusive();
-              await targetStore.mirror(current.grant.accessToken);
               if (epoch !== sessionEpoch) {
-                await targetStore.unsetMirror().catch(() => {});
                 throw new IamError('IAM_DISPOSED', 'IAM service was disposed');
               }
               lastGrant = current.grant;
@@ -952,16 +1041,11 @@ export function createIamService(rawConfig, options = {}) {
       for (const stop of [...stopWaiters]) stop();
       stopWaiters.clear();
       lastGrant = null;
+      gatewaySummary = null;
       state = 'signed-out';
       error = null;
-      // Removing the derived mirror is cache cleanup, not logout: the grant
-      // remains for the next startup, but a process that no longer mounts IAM
-      // cannot keep using an ambient access token. Reuse the store this
-      // service already created: teardown runs concurrently with the
-      // framework disposing ctx.provide('credentials'), so re-resolving the
-      // seam here would silently skip the mirror cleanup.
-      const targetStore = store ?? ensureStore();
-      if (targetStore) await targetStore.unsetMirror().catch(() => {});
+      // Lifecycle cleanup only: the grant and the user's gateway credential
+      // stay stored, so unload cannot silently discard them.
     },
   };
 

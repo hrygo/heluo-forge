@@ -3,6 +3,7 @@ import { IamError } from './errors.mjs';
 const REQUEST_HEADER = 'x-forge-iam-request';
 const REQUEST_VALUE = '1';
 const API_PREFIX = '/api/forge-iam';
+const MAX_BODY_BYTES = 8 * 1024;
 
 const ERROR_STATUS = {
   IAM_NOT_IMPLEMENTED: 501,
@@ -25,6 +26,10 @@ const ERROR_STATUS = {
   IAM_ATTEMPT_CANCELLED: 409,
   IAM_CONFIG_INVALID: 500,
   IAM_DISPOSED: 503,
+  IAM_GATEWAY_KEY_INVALID: 400,
+  IAM_GATEWAY_OWNER_MISSING: 400,
+  IAM_REQUEST_INVALID: 400,
+  IAM_REQUEST_TOO_LARGE: 413,
 };
 
 function sendJson(res, status, body) {
@@ -55,6 +60,47 @@ function errorBody(error) {
       ...(error?.details?.missing ? { missing: error.details.missing } : {}),
     },
   };
+}
+
+/**
+ * Read a small JSON body. The credential endpoint is the only consumer, and a
+ * pasted key stays in memory: the buffer is bounded before parsing and never
+ * logged.
+ */
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    req.on('data', (chunk) => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        // Reject without destroying the socket: the response still has to be
+        // written, and resuming drains whatever the client is sending.
+        fail(new IamError('IAM_REQUEST_TOO_LARGE', 'request body is too large'));
+        req.resume?.();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      if (!chunks.length) return resolve({});
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        reject(new IamError('IAM_REQUEST_INVALID', 'request body must be JSON'));
+      }
+    });
+    req.on('error', (error) => fail(error));
+  });
 }
 
 function methodNotAllowed(res, allow) {
@@ -171,7 +217,46 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         if (typeof service.syncFromStore === 'function') {
           await service.syncFromStore().catch(() => {});
         }
+        if (typeof service.loadGatewayCredential === 'function') {
+          await service.loadGatewayCredential().catch(() => {});
+        }
         return sendJson(res, 200, service.getView());
+      }
+
+      if (url.pathname === '/api/forge-iam/credential') {
+        if (req.method === 'GET') {
+          try {
+            if (typeof service.loadGatewayCredential === 'function') await service.loadGatewayCredential();
+            return sendJson(res, 200, { credential: service.getView().gatewayCredential });
+          } catch (error) {
+            const status = ERROR_STATUS[error?.code] ?? 500;
+            return sendJson(res, status, errorBody(error));
+          }
+        }
+        if (req.method === 'PUT') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const body = await readJsonBody(req);
+            const key = typeof body?.key === 'string' ? body.key.trim() : '';
+            if (!key) return sendJson(res, 400, { error: { code: 'IAM_REQUEST_INVALID' } });
+            const view = await service.saveGatewayCredential({ key, deviceLabel: body?.deviceLabel });
+            return sendJson(res, 200, { view });
+          } catch (error) {
+            const status = ERROR_STATUS[error?.code] ?? 500;
+            // Never echo the submitted value, whatever the failure.
+            return sendJson(res, status, errorBody(error));
+          }
+        }
+        if (req.method === 'DELETE') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            return sendJson(res, 200, { view: await service.clearGatewayCredential() });
+          } catch (error) {
+            const status = ERROR_STATUS[error?.code] ?? 500;
+            return sendJson(res, status, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'GET, PUT, DELETE');
       }
 
       if (url.pathname === '/api/forge-iam/sign-in') {

@@ -36,6 +36,23 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
+    async function putJson(path, payload) {
+      const response = await fetch(path, { method: 'PUT', headers: REQUEST_HEADERS, body: JSON.stringify(payload) });
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    async function deleteJson(path) {
+      const response = await fetch(path, { method: 'DELETE', headers: REQUEST_HEADERS });
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
+    const GATEWAY_STATUS = {
+      unconfigured: '未配置',
+      configured: '已配置',
+      'owner-mismatch': '属于其他账号，需重新录入',
+      invalid: '记录损坏，请重新录入',
+    };
+
     function openLoginWindow() {
       try {
         const popup = window.open('', '_blank');
@@ -95,6 +112,10 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录回调无效，请重新登录。';
       if (code === 'IAM_ATTEMPT_EXPIRED') return '登录尝试已过期，请重新登录。';
       if (code === 'IAM_INVALID_GRANT' || code === 'IAM_REAUTH_REQUIRED') return '登录已失效，请重新登录。';
+      if (code === 'IAM_GATEWAY_KEY_INVALID') return '凭证格式不正确：应为 uag- 加 32 位十六进制。';
+      if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再录入网关凭据。';
+      if (code === 'IAM_REQUEST_INVALID') return '请求内容无效，请重试。';
+      if (code === 'IAM_REQUEST_TOO_LARGE') return '请求过大，请检查粘贴内容。';
       return `操作失败：${code}`;
     }
 
@@ -127,6 +148,7 @@ window.__ModuleLoader__.load({
 
     function Panel() {
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
+      const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
 
       const load = React.useCallback(async () => {
         try {
@@ -157,6 +179,50 @@ window.__ModuleLoader__.load({
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
           setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+        }
+      };
+
+      const saveCredential = async () => {
+        const value = credential.value.trim();
+        if (!value) {
+          setCredential((current) => ({ ...current, notice: '请输入 UAG 个人凭证。' }));
+          return;
+        }
+        setCredential((current) => ({ ...current, saving: true, notice: null }));
+        try {
+          const result = await putJson('/api/forge-iam/credential', { key: value, deviceLabel: credential.deviceLabel.trim() });
+          if (!result.ok) {
+            setCredential((current) => ({
+              ...current,
+              saving: false,
+              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+            }));
+            return;
+          }
+          // The value is never stored in component state after the write.
+          setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关凭据已保存。' });
+          setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
+        } catch {
+          setCredential((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
+        }
+      };
+
+      const clearCredential = async () => {
+        setCredential((current) => ({ ...current, saving: true, notice: null }));
+        try {
+          const result = await deleteJson('/api/forge-iam/credential');
+          if (!result.ok) {
+            setCredential((current) => ({
+              ...current,
+              saving: false,
+              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+            }));
+            return;
+          }
+          setCredential((current) => ({ ...current, saving: false, value: '', notice: '网关凭据已清除。' }));
+          setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
+        } catch {
+          setCredential((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
         }
       };
 
@@ -208,6 +274,46 @@ window.__ModuleLoader__.load({
         ? h('div', { style: { marginTop: 6 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录'))
         : null;
 
+      const gateway = view.gatewayCredential ?? { state: 'unconfigured' };
+      const gatewayStatus = GATEWAY_STATUS[gateway.state] ?? gateway.state;
+      const gatewayDetails = [
+        gateway.deviceLabel ? `设备：${gateway.deviceLabel}` : null,
+        gateway.enteredAt ? `录入：${gateway.enteredAt}` : null,
+        gateway.suggestedExpiry ? `建议到期：${gateway.suggestedExpiry}` : null,
+      ].filter(Boolean);
+      const gatewayBlock = h('div', { style: { marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+        h('div', { style: { fontWeight: 600, marginBottom: 6 } }, '模型网关凭据'),
+        h('div', { style: muted }, `UAG 个人凭证：${gatewayStatus}`),
+        gatewayDetails.length ? h('div', { style: muted }, gatewayDetails.join(' · ')) : null,
+        gateway.state === 'configured'
+          ? h('div', { style: muted }, '模型调用使用该凭据；IAM 登录状态变化不会自动替换它。')
+          : h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'),
+        h('div', { style: { marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' } },
+          h('input', {
+            type: 'password',
+            value: credential.value,
+            placeholder: 'uag-…',
+            autoComplete: 'off',
+            spellCheck: false,
+            onChange: (event) => setCredential((current) => ({ ...current, value: event.target.value })),
+            style: { flex: '1 1 240px', padding: '4px 8px' },
+          }),
+          h('input', {
+            type: 'text',
+            value: credential.deviceLabel,
+            placeholder: '设备标签（可选）',
+            maxLength: 64,
+            onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
+            style: { flex: '0 1 160px', padding: '4px 8px' },
+          }),
+          h('button', { style: button, disabled: credential.saving, onClick: saveCredential }, '保存凭据'),
+          gateway.state !== 'unconfigured' || credential.value
+            ? h('button', { style: button, disabled: credential.saving, onClick: clearCredential }, '清除凭据')
+            : null,
+        ),
+        credential.notice ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, credential.notice) : null,
+      );
+
       return h('div', { style: box }, header,
         h('div', null, label),
         missing,
@@ -223,17 +329,27 @@ window.__ModuleLoader__.load({
           view.canSignOut ? h('button', { style: button, onClick: signOut }, '退出') : null,
           view.state === 'authenticating' ? h('button', { style: button, onClick: () => postJson('/api/forge-iam/cancel').then(load) }, '取消') : null,
         ),
-        h('div', { style: { ...muted, marginTop: 8 } }, '页面只显示非敏感状态；令牌不会进入 UI 或日志。'),
+        gatewayBlock,
+        h('div', { style: { ...muted, marginTop: 8 } }, '页面只显示非敏感状态；令牌与网关 Key 不会进入 UI 或日志。'),
       );
     }
 
     function SignedOutBanner() {
       const [state, setState] = React.useState({ visible: false, notice: null, view: null, authorizationUrl: null });
 
+      const bannerFor = (view) => {
+        if (!view) return { visible: true, reason: 'signed-out' };
+        if (view.state !== 'ready') return { visible: true, reason: 'signed-out' };
+        const gateway = view.gatewayCredential?.state ?? 'unconfigured';
+        return gateway === 'configured'
+          ? { visible: false, reason: null, gateway }
+          : { visible: true, reason: 'gateway', gateway };
+      };
+
       React.useEffect(() => {
         let live = true;
         fetchView()
-          .then((view) => { if (live) setState((current) => ({ ...current, visible: view.state !== 'ready', view })); })
+          .then((view) => { if (live) setState((current) => ({ ...current, ...bannerFor(view), view })); })
           .catch(() => {
             if (live) setState((current) => ({ ...current, visible: true, notice: '无法读取登录状态，正在重试。' }));
           });
@@ -246,7 +362,7 @@ window.__ModuleLoader__.load({
       useSessionPoll(true, (view) => setState((current) => ({
         ...current,
         view,
-        visible: view.state !== 'ready',
+        ...bannerFor(view),
       })));
 
       const login = async () => {
@@ -263,9 +379,9 @@ window.__ModuleLoader__.load({
           navigateLoginWindow(popup, authorizationUrl);
           setState((current) => ({
             ...current,
+            ...bannerFor(view),
             view,
             authorizationUrl,
-            visible: view?.state === 'ready' ? false : true,
             notice: view?.state === 'authenticating'
               ? (popup ? '浏览器已打开，等待登录完成。' : '浏览器被拦截，请使用下方链接继续。')
               : null,
@@ -285,8 +401,17 @@ window.__ModuleLoader__.load({
           color: 'var(--dsw-alias-label-primary)', boxShadow: '0 6px 24px rgba(0,0,0,0.18)', fontSize: '0.9em',
         },
       },
-      h('span', null, '未登录企业 IAM'),
-      state.view?.canSignIn ? h('button', { type: 'button', style: { cursor: 'pointer' }, onClick: login }, '登录') : null,
+      h('span', null, state.reason === 'gateway'
+        ? (state.gateway === 'owner-mismatch' ? '网关凭据属于其他账号' : '模型未就绪：未配置网关凭据')
+        : '未登录企业 IAM'),
+      state.reason === 'gateway'
+        ? h('span', { style: { opacity: 0.8 } }, state.gateway === 'owner-mismatch'
+          ? '到“设置 → 企业账号”重新录入'
+          : '到“设置 → 企业账号”录入 UAG 个人凭证')
+        : null,
+      state.reason !== 'gateway' && state.view?.canSignIn
+        ? h('button', { type: 'button', style: { cursor: 'pointer' }, onClick: login }, '登录')
+        : null,
       state.authorizationUrl
         ? h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, '打开登录页')
         : null,
@@ -295,7 +420,10 @@ window.__ModuleLoader__.load({
     }
 
     function Onboarding() {
-      const [state, setState] = React.useState({ phase: 'loading', view: null, step: 0, notice: null, open: false, authorizationUrl: null });
+      const [state, setState] = React.useState({
+        phase: 'loading', view: null, step: 0, notice: null, open: false,
+        authorizationUrl: null, keyValue: '', deviceLabel: '', saving: false,
+      });
 
       const close = async (marker) => {
         try { await postJson('/api/forge-iam/cancel'); } catch { /* best effort */ }
@@ -351,7 +479,12 @@ window.__ModuleLoader__.load({
         view,
         // Advance to the success step once, then keep the user's final screen:
         // a later identical `ready` poll must not pull them back from "完成".
-        ...(view.state === 'ready' && current.step < 2 ? { step: 2, authorizationUrl: null, notice: null } : {}),
+        // Advance into the credential step once. When this account already has a
+        // matching key, skip straight to "完成"; a later identical poll must not
+        // pull the user back out of the final screen.
+        ...(view.state === 'ready' && current.step < 2
+          ? { step: view.gatewayCredential?.state === 'configured' ? 3 : 2, authorizationUrl: null, notice: null }
+          : {}),
         ...(view.state === 'error' ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
       })));
 
@@ -371,13 +504,49 @@ window.__ModuleLoader__.load({
           setState((current) => ({
             ...current,
             view,
-            step: view?.state === 'ready' ? 2 : current.step,
+            step: view?.state === 'ready'
+              ? (view.gatewayCredential?.state === 'configured' ? 3 : 2)
+              : current.step,
             authorizationUrl: result.body?.authorizationUrl,
             notice: view?.state === 'ready' ? null : '浏览器已打开；若被拦截，请使用下方链接。',
           }));
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
           setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+        }
+      };
+
+      const saveCredential = async () => {
+        const value = state.keyValue.trim();
+        if (!value) {
+          setState((current) => ({ ...current, notice: '请输入 UAG 个人凭证。' }));
+          return;
+        }
+        setState((current) => ({ ...current, saving: true, notice: null }));
+        try {
+          const result = await putJson('/api/forge-iam/credential', {
+            key: value,
+            deviceLabel: state.deviceLabel.trim(),
+          });
+          if (!result.ok) {
+            setState((current) => ({
+              ...current,
+              saving: false,
+              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+            }));
+            return;
+          }
+          // Do not keep the pasted value in component state once stored.
+          setState((current) => ({
+            ...current,
+            saving: false,
+            keyValue: '',
+            view: result.body?.view ?? current.view,
+            step: 3,
+            notice: null,
+          }));
+        } catch {
+          setState((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
         }
       };
 
@@ -395,16 +564,18 @@ window.__ModuleLoader__.load({
           onPrimary: startLogin,
         },
         {
-          title: '登录成功',
-          body: '企业登录已就绪。可以在设置中查看账户状态或退出。',
-          primary: '下一步',
-          onPrimary: () => setState((current) => ({ ...current, step: 3 })),
+          title: '配置模型网关凭据',
+          body: '企业 IAM 只负责登录；模型调用使用 UAG 个人凭证。到 UAG 控制台为本设备创建凭证后粘贴到这里。',
+          primary: '保存并继续',
+          onPrimary: saveCredential,
         },
         {
           title: '准备就绪',
-          body: '之后可在“设置 → 企业账号”查看主体、到期时间和退出操作。',
+          body: '模型是否可用取决于网关凭据是否已配置；可随时在“设置 → 企业账号”查看、更换或清除。',
           primary: '完成',
-          onPrimary: () => close('done'),
+          // Without a configured credential the model is not usable; record the
+          // skip rather than claiming onboarding completed.
+          onPrimary: () => close(state.view?.gatewayCredential?.state === 'configured' ? 'done' : 'skipped'),
         },
       ];
       const step = steps[state.step] ?? steps[0];
@@ -426,11 +597,40 @@ window.__ModuleLoader__.load({
           h('div', { style: { opacity: 0.6, fontSize: '0.85em' } }, `步骤 ${state.step + 1} / 4`),
           h('h2', { style: { margin: '8px 0 12px', fontSize: '1.25em' } }, step.title),
           h('p', { style: { margin: 0 } }, step.body),
+          state.step === 2
+            ? h('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 } },
+                h('input', {
+                  type: 'password',
+                  value: state.keyValue,
+                  placeholder: 'uag-…',
+                  autoComplete: 'off',
+                  spellCheck: false,
+                  onChange: (event) => setState((current) => ({ ...current, keyValue: event.target.value })),
+                  style: { padding: '6px 10px' },
+                }),
+                h('input', {
+                  type: 'text',
+                  value: state.deviceLabel,
+                  placeholder: '设备标签（可选，例如 工作站-01）',
+                  maxLength: 64,
+                  onChange: (event) => setState((current) => ({ ...current, deviceLabel: event.target.value })),
+                  style: { padding: '6px 10px' },
+                }),
+                state.view?.gatewayConsoleUrl
+                  ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据')
+                  : null,
+                h('div', { style: { opacity: 0.7, fontSize: '0.9em' } }, '创建时建议开启 privacy_mode，有效期 90 天。'),
+              )
+            : null,
           state.notice ? h('p', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
           state.authorizationUrl ? h('p', null, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', null,
-            h('button', { style: button, onClick: step.onPrimary }, step.primary),
-            state.step < 3 ? h('button', { style: button, onClick: () => close('skipped') }, '跳过') : null,
+            h('button', { style: button, disabled: state.saving, onClick: step.onPrimary }, step.primary),
+            state.step < 3
+              ? h('button', { style: button, onClick: () => (state.step === 2
+                ? setState((current) => ({ ...current, step: 3, notice: null }))
+                : close('skipped')) }, state.step === 2 ? '稍后配置' : '跳过')
+              : null,
           ),
         ),
       );

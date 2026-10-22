@@ -40,7 +40,8 @@ test('authorization-code + PKCE completes and stores only a validated grant', as
   assert.equal(record.kind, 'grant');
   assert.equal(record.payload.subject, 'E1001');
   assert.equal(record.payload.idToken, undefined);
-  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN').then((r) => r.value), 'access-1');
+  // V1 no longer derives a model credential from the IAM access token.
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
 });
 
 test('resolveToken refreshes a near-expiry access token and rotates the refresh token', async (t) => {
@@ -56,7 +57,7 @@ test('resolveToken refreshes a near-expiry access token and rotates the refresh 
   const record = await credentials.readRecord('heluo-iam/session');
   assert.notEqual(record.payload.refreshToken, 'refresh-initial');
   assert.equal(record.payload.accessToken, 'access-2');
-  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN').then((r) => r.value), 'access-2');
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
   assert.equal(service.getView().state, 'ready');
 });
 
@@ -76,7 +77,7 @@ test('a second service hydrates a stored grant without exposing tokens', async (
   assert.equal('refreshToken' in view, false);
 });
 
-test('signOut clears the record and mirror and revokes the refresh token', async (t) => {
+test('signOut clears the IAM record and revokes the refresh token', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
@@ -276,7 +277,7 @@ test('dispose releases runtime state without clearing the stored session', async
 
   const restored = createIamService(configFor(mock), { credentials });
   assert.equal((await restored.hydrate()).state, 'ready');
-  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN').then((r) => r.value), 'access-1');
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
   await service.dispose();
 });
 test('signOut does not claim success when the record cannot be cleared', async (t) => {

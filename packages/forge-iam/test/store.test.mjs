@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GRANT_KEY, TOKEN_REF, StoreError, createGrantStore } from '../src/store.mjs';
+import {
+  GRANT_KEY,
+  GATEWAY_RECORD_KEY,
+  GATEWAY_REF,
+  LEGACY_TOKEN_REF,
+  StoreError,
+  createGatewayCredentialStore,
+  createGrantStore,
+} from '../src/store.mjs';
 
 const grant = {
   version: 1,
@@ -9,11 +17,12 @@ const grant = {
   clientId: 'dsh-desktop',
   refreshToken: 'refresh-placeholder',
   scope: 'openid profile offline_access',
-  resource: 'https://gateway.corp.example',
   obtainedAt: '2030-01-01T00:00:00.000Z',
   accessToken: 'access-placeholder',
   accessExpiresAt: '2030-01-01T00:05:00.000Z',
 };
+
+const gatewayValue = `uag-${'a1b2c3d4'.repeat(4)}`;
 
 function fakeCredentials(initial = {}) {
   const records = new Map(initial.records ?? []);
@@ -61,7 +70,14 @@ test('write then read round-trips the grant and keeps the key stable', async () 
   assert.deepEqual(read.grant, grant);
   assert.equal(credentials.records.get(GRANT_KEY).kind, 'grant');
   assert.equal(store.key, 'heluo-iam/session');
-  assert.equal(store.ref, 'ENTERPRISE_ACCESS_TOKEN');
+});
+
+test('a grant without a gateway audience is still valid', async () => {
+  const { resource, ...withoutResource } = grant;
+  const credentials = fakeCredentials();
+  const store = createGrantStore(credentials);
+  await store.write(withoutResource);
+  assert.deepEqual((await store.read()).grant, withoutResource);
 });
 
 test('a non-grant record is reported, not overwritten implicitly', async () => {
@@ -103,61 +119,48 @@ test('an invalid grant is rejected before modifyRecord is called', async () => {
   assert.equal(called, false);
 });
 
-test('mirror set and resolve use the dedicated ref', async () => {
-  const credentials = fakeCredentials();
-  const store = createGrantStore(credentials);
-  await store.write(grant);
-  await store.mirror('access-placeholder');
-  assert.equal(await store.resolveMirror(), 'access-placeholder');
-  assert.equal(credentials.refs.get(TOKEN_REF), 'access-placeholder');
-  await assert.rejects(
-    () => store.mirror(''),
-    (error) => error instanceof StoreError && error.code === 'IAM_TOKEN_EMPTY',
-  );
-});
-
-test('clear removes both the record and the mirror', async () => {
+test('clear removes the grant and leaves model credentials alone', async () => {
   const credentials = fakeCredentials({
     records: [[GRANT_KEY, { kind: 'grant', payload: grant }]],
-    refs: [[TOKEN_REF, 'access-placeholder']],
+    refs: [[GATEWAY_REF, gatewayValue]],
   });
   const store = createGrantStore(credentials);
   const result = await store.clear();
   assert.equal(result.ok, true);
   assert.equal(credentials.records.has(GRANT_KEY), false);
-  assert.equal(credentials.refs.has(TOKEN_REF), false);
+  assert.equal(credentials.refs.get(GATEWAY_REF), gatewayValue);
 });
 
-test('clear keeps the grant when the mirror cannot be removed', async () => {
+test('clear reports a record deletion failure', async () => {
   const credentials = fakeCredentials({
     records: [[GRANT_KEY, { kind: 'grant', payload: grant }]],
-    refs: [[TOKEN_REF, 'access-placeholder']],
-  });
-  credentials.unset = async () => {
-    throw new Error('locked');
-  };
-  const store = createGrantStore(credentials);
-  const result = await store.clear();
-  assert.equal(result.ok, false);
-  assert.equal(result.errors.length, 1);
-  assert.equal(result.errors[0].step, 'unset-mirror');
-  assert.equal(credentials.records.has(GRANT_KEY), true);
-});
-
-test('clear reports a record deletion failure after removing the mirror', async () => {
-  const credentials = fakeCredentials({
-    records: [[GRANT_KEY, { kind: 'grant', payload: grant }]],
-    refs: [[TOKEN_REF, 'access-placeholder']],
   });
   credentials.deleteRecord = async () => {
     throw new Error('locked');
   };
-  const store = createGrantStore(credentials);
-  const result = await store.clear();
+  const result = await createGrantStore(credentials).clear();
   assert.equal(result.ok, false);
   assert.equal(result.errors.length, 1);
   assert.equal(result.errors[0].step, 'delete-record');
-  assert.equal(credentials.refs.has(TOKEN_REF), false);
+});
+
+test('clearLegacyToken removes the V0.3 mirror ref once', async () => {
+  const credentials = fakeCredentials({ refs: [[LEGACY_TOKEN_REF, 'old-access-token']] });
+  const result = await createGrantStore(credentials).clearLegacyToken();
+  assert.equal(result.ok, true);
+  assert.equal(credentials.refs.has(LEGACY_TOKEN_REF), false);
+  // Idempotent: a second run must not fail.
+  assert.equal((await createGrantStore(credentials).clearLegacyToken()).ok, true);
+});
+
+test('clearLegacyToken reports a storage failure without throwing', async () => {
+  const credentials = fakeCredentials({ refs: [[LEGACY_TOKEN_REF, 'old-access-token']] });
+  credentials.unset = async () => {
+    throw new Error('locked');
+  };
+  const result = await createGrantStore(credentials).clearLegacyToken();
+  assert.equal(result.ok, false);
+  assert.equal(result.error.message, 'locked');
 });
 
 test('legacy official records are discoverable without being deleted', async () => {
@@ -182,69 +185,116 @@ test('a credentials object missing a required method is rejected', () => {
     (error) => error instanceof StoreError && error.code === 'IAM_CREDENTIALS_UNAVAILABLE',
   );
 });
-test('an ambient token is not accepted as the IAM mirror', async () => {
+
+test('saving a gateway credential writes the value and its owner metadata', async () => {
   const credentials = fakeCredentials();
-  credentials.resolve = async () => ({ value: 'ambient-shell-token', source: 'env' });
-  const store = createGrantStore(credentials);
-  assert.equal(await store.resolveMirror(), undefined);
-});
-
-for (const record of [undefined, { kind: 'grant', payload: { ...grant, accessToken: 'newer-access' } }]) {
-  test(`mirror withdraws its token when the grant is ${record ? 'different' : 'missing'}`, async () => {
-    const credentials = fakeCredentials({ records: record ? [[GRANT_KEY, record]] : [] });
-    const store = createGrantStore(credentials);
-    await assert.rejects(
-      () => store.mirror(grant.accessToken),
-      (error) => error instanceof StoreError && error.code === 'IAM_REAUTH_REQUIRED',
-    );
-    assert.equal(await store.resolveMirror(), undefined);
+  const store = createGatewayCredentialStore(credentials);
+  await store.save({
+    value: gatewayValue,
+    ownerSubject: 'E1001',
+    deviceLabel: '工作站-01',
+    enteredAt: '2030-01-01T00:00:00.000Z',
+    suggestedExpiry: '2030-04-01',
   });
-}
+  assert.equal(credentials.refs.get(GATEWAY_REF), gatewayValue);
+  const record = credentials.records.get(GATEWAY_RECORD_KEY);
+  assert.equal(record.kind, 'gateway-credential');
+  assert.equal(record.payload.ownerSubject, 'E1001');
+  assert.equal(record.payload.deviceLabel, '工作站-01');
+  assert.equal((await store.read()).credential.ownerSubject, 'E1001');
+  assert.equal(await store.resolve(), gatewayValue);
+});
 
-test('mirror withdraws its token when the grant cannot be reread', async () => {
-  const credentials = fakeCredentials({ records: [[GRANT_KEY, { kind: 'grant', payload: grant }]] });
-  credentials.readRecord = async () => { throw new Error('synthetic read failure'); };
-  const store = createGrantStore(credentials);
+test('a malformed gateway credential is rejected before any write', async () => {
+  const credentials = fakeCredentials();
+  const store = createGatewayCredentialStore(credentials);
   await assert.rejects(
-    () => store.mirror(grant.accessToken),
-    (error) => error instanceof StoreError && error.code === 'IAM_REAUTH_REQUIRED',
+    () => store.save({ value: 'not-a-uag-key', ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    (error) => error instanceof StoreError && error.code === 'IAM_GATEWAY_KEY_INVALID',
   );
-  assert.equal(await store.resolveMirror(), undefined);
+  assert.equal(credentials.refs.size, 0);
+  assert.equal(credentials.records.size, 0);
 });
 
-test('clear removes a mirror published while record deletion was pending', async () => {
-  const credentials = fakeCredentials({ records: [[GRANT_KEY, { kind: 'grant', payload: grant }]] });
-  const store = createGrantStore(credentials);
-  let enterDelete;
-  let releaseDelete;
-  const entered = new Promise((resolve) => { enterDelete = resolve; });
-  const released = new Promise((resolve) => { releaseDelete = resolve; });
-  const deleteRecord = credentials.deleteRecord.bind(credentials);
-  credentials.deleteRecord = async (key) => {
-    enterDelete();
-    await released;
-    return deleteRecord(key);
-  };
-
-  const clearing = store.clear();
-  await entered;
-  await store.mirror(grant.accessToken);
-  releaseDelete();
-  assert.equal((await clearing).ok, true);
-  assert.equal((await store.read()).grant, null);
-  assert.equal(await store.resolveMirror(), undefined);
+test('a gateway credential needs the signed-in subject', async () => {
+  const credentials = fakeCredentials();
+  const store = createGatewayCredentialStore(credentials);
+  await assert.rejects(
+    () => store.save({ value: gatewayValue, ownerSubject: '', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    (error) => error instanceof StoreError && error.code === 'IAM_GATEWAY_OWNER_MISSING',
+  );
 });
 
-test('clear reports a final mirror cleanup failure after deleting the grant', async () => {
-  const credentials = fakeCredentials({ records: [[GRANT_KEY, { kind: 'grant', payload: grant }]] });
-  const unset = credentials.unset.bind(credentials);
-  let calls = 0;
-  credentials.unset = async (ref) => {
-    if (++calls === 2) throw new Error('synthetic final cleanup failure');
-    return unset(ref);
+test('a failed metadata write never stores the value', async () => {
+  const credentials = fakeCredentials();
+  const store = createGatewayCredentialStore(credentials);
+  credentials.modifyRecord = async () => {
+    throw new Error('record write failed');
   };
-  const result = await createGrantStore(credentials).clear();
+  await assert.rejects(
+    () => store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    /record write failed/,
+  );
+  assert.equal(credentials.refs.has(GATEWAY_REF), false);
+});
+
+test('a failed value write withdraws the metadata', async () => {
+  const credentials = fakeCredentials();
+  const store = createGatewayCredentialStore(credentials);
+  credentials.set = async () => {
+    throw new Error('keychain locked');
+  };
+  await assert.rejects(
+    () => store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    /keychain locked/,
+  );
+  assert.equal(credentials.records.has(GATEWAY_RECORD_KEY), false);
+  assert.equal(credentials.refs.has(GATEWAY_REF), false);
+});
+
+test('an ambient environment value is not treated as the stored gateway credential', async () => {
+  const credentials = fakeCredentials();
+  credentials.resolve = async () => ({ value: gatewayValue, source: 'env' });
+  assert.equal(await createGatewayCredentialStore(credentials).resolve(), undefined);
+});
+
+test('clearing a gateway credential removes the value first, then the metadata', async () => {
+  const credentials = fakeCredentials({
+    records: [[GATEWAY_RECORD_KEY, {
+      kind: 'gateway-credential',
+      payload: { version: 1, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' },
+    }]],
+    refs: [[GATEWAY_REF, gatewayValue]],
+  });
+  const store = createGatewayCredentialStore(credentials);
+  const result = await store.clear();
+  assert.equal(result.ok, true);
+  assert.equal(credentials.refs.has(GATEWAY_REF), false);
+  assert.equal(credentials.records.has(GATEWAY_RECORD_KEY), false);
+});
+
+test('a failed value removal keeps the metadata that reports the secret', async () => {
+  const credentials = fakeCredentials({
+    records: [[GATEWAY_RECORD_KEY, {
+      kind: 'gateway-credential',
+      payload: { version: 1, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' },
+    }]],
+    refs: [[GATEWAY_REF, gatewayValue]],
+  });
+  credentials.unset = async () => {
+    throw new Error('locked');
+  };
+  const result = await createGatewayCredentialStore(credentials).clear();
   assert.equal(result.ok, false);
-  assert.equal(result.errors[0].step, 'unset-mirror');
-  assert.equal(credentials.records.has(GRANT_KEY), false);
+  assert.equal(result.errors[0].step, 'unset-ref');
+  assert.equal(credentials.records.has(GATEWAY_RECORD_KEY), true);
+});
+
+test('a gateway record of another kind is reported, not read as a credential', async () => {
+  const credentials = fakeCredentials({
+    records: [[GATEWAY_RECORD_KEY, { kind: 'grant', payload: {} }]],
+  });
+  const read = await createGatewayCredentialStore(credentials).read();
+  assert.equal(read.ok, false);
+  assert.equal(read.reason, 'wrong-kind');
 });

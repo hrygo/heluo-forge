@@ -11,7 +11,7 @@ const keychainManifestUrl = new URL('../../packages/forge-credentials-keychain/p
 const keychainManifest = JSON.parse(await readFile(keychainManifestUrl, 'utf8'));
 const { createKeychainProvider, createMemoryBackend } = await import(new URL(keychainManifest.exports['.'], keychainManifestUrl));
 const GRANT_KEY = 'heluo-iam/session';
-const TOKEN_REF = 'ENTERPRISE_ACCESS_TOKEN';
+const GATEWAY_REF = 'ENTERPRISE_STATIC_KEY';
 
 const configured = {
   issuer: 'https://iam.corp.example',
@@ -48,18 +48,19 @@ async function seedGrant(credentials) {
   }));
 }
 
-function pauseNextMirror(credentials) {
+function pauseNextRead(credentials) {
   const entered = deferred();
   const release = deferred();
-  const set = credentials.set.bind(credentials);
+  const read = credentials.readRecord.bind(credentials);
   let paused = false;
-  credentials.set = async (ref, value) => {
-    if (ref === TOKEN_REF && !paused) {
+  credentials.readRecord = async (key) => {
+    const record = await read(key);
+    if (!paused) {
       paused = true;
       entered.resolve();
       await release.promise;
     }
-    return set(ref, value);
+    return record;
   };
   return { entered: entered.promise, release: release.resolve };
 }
@@ -83,9 +84,14 @@ function tokenFetch({ tokenGate, revoked = new Set() } = {}) {
   };
 }
 
-test('shared sign-out revokes the refresh rotation it waited for and leaves no mirror', async (t) => {
+test('shared sign-out revokes the refresh rotation it waited for and keeps the gateway credential', async (t) => {
   const credentials = createKeychainProvider(createMemoryBackend());
   await seedGrant(credentials);
+  await credentials.modifyRecord('heluo-iam/gateway-credential', async () => ({
+    kind: 'gateway-credential',
+    payload: { version: 1, ownerSubject: 'E1001', enteredAt: new Date().toISOString() },
+  }));
+  await credentials.set(GATEWAY_REF, `uag-${'a'.repeat(32)}`);
   const tokenGate = { entered: deferred(), release: deferred() };
   const revoked = new Set();
   const config = { ...configured, refreshSkewSeconds: 7200 };
@@ -122,14 +128,15 @@ test('shared sign-out revokes the refresh rotation it waited for and leaves no m
   assert.equal(result.revocation, 'ok');
   assert.equal(revoked.has('synthetic-new-refresh'), true);
   assert.equal(await credentials.readRecord(GRANT_KEY), undefined);
-  assert.equal(await credentials.resolve(TOKEN_REF), undefined);
+  // The model credential belongs to the user, not the IAM session.
+  assert.equal((await credentials.resolve(GATEWAY_REF))?.value, `uag-${'a'.repeat(32)}`);
 });
 
-test('a hydration mirror published after shared clear withdraws itself', async (t) => {
+test('a hydration racing a shared clear converges on the next sync', async (t) => {
   const credentials = createKeychainProvider(createMemoryBackend());
   await seedGrant(credentials);
   const service = createIamService(configured, { credentials });
-  const gate = pauseNextMirror(credentials);
+  const gate = pauseNextRead(credentials);
   t.after(() => service.dispose());
   t.after(() => gate.release());
 
@@ -141,44 +148,49 @@ test('a hydration mirror published after shared clear withdraws itself', async (
   gate.release();
   await hydrating;
 
+  // The stale read may finish first; the next poll must observe the clear.
+  const settled = await service.syncFromStore();
+  assert.equal(settled.state, 'signed-out');
   assert.equal(await credentials.readRecord(GRANT_KEY), undefined);
-  assert.equal(await credentials.resolve(TOKEN_REF), undefined);
-  assert.equal(service.getView().state, 'signed-out');
 });
 
-test('a stale refresh mirror cannot delete a newer shared grant', async (t) => {
-  const credentials = createKeychainProvider(createMemoryBackend());
+test('a refresh that loses a rotation adopts the newer grant instead of clearing it', async (t) => {
+  const backend = createMemoryBackend();
+  const credentials = createKeychainProvider(backend);
+  // A second provider over the same storage models the other process: its lock
+  // is independent, so it can rotate while this instance is mid-request.
+  const otherProcess = createKeychainProvider(backend);
   await seedGrant(credentials);
   const service = createIamService({ ...configured, refreshSkewSeconds: 7200 }, {
-    credentials, fetch: tokenFetch(),
+    credentials,
+    fetch: async (url) => {
+      if (String(url).endsWith('/token')) {
+        // Another process rotates first; this request's refresh token is now
+        // invalid. The losing caller must adopt the stored session.
+        await otherProcess.modifyRecord(GRANT_KEY, async (current) => ({
+          kind: 'grant',
+          payload: { ...current.payload, refreshToken: 'synthetic-latest-refresh', accessToken: 'synthetic-latest-access' },
+        }));
+        return Response.json({ error: 'invalid_grant' }, { status: 400 });
+      }
+      return tokenFetch()(url);
+    },
   });
   t.after(() => service.dispose());
   await service.hydrate();
-  const gate = pauseNextMirror(credentials);
-  t.after(() => gate.release());
 
-  const refreshing = service.resolveToken().catch((error) => error);
-  await gate.entered;
-  const rotated = await credentials.readRecord(GRANT_KEY);
-  const newer = {
-    kind: 'grant', payload: {
-      ...rotated.payload, refreshToken: 'synthetic-latest-refresh', accessToken: 'synthetic-latest-access',
-    },
-  };
-  await credentials.modifyRecord(GRANT_KEY, async () => newer);
-  gate.release();
-  const failure = await refreshing;
+  const token = await service.resolveToken();
 
-  assert.equal(failure.code, 'IAM_REAUTH_REQUIRED');
-  assert.deepEqual(await credentials.readRecord(GRANT_KEY), newer);
-  assert.equal(await credentials.resolve(TOKEN_REF), undefined);
+  assert.equal(token, 'synthetic-latest-access');
+  assert.equal(service.getView().state, 'ready');
+  assert.equal((await credentials.readRecord(GRANT_KEY)).payload.refreshToken, 'synthetic-latest-refresh');
 });
 
-test('dispose removes a late hydration mirror without deleting the stored grant', async (t) => {
+test('dispose during hydration keeps the stored grant', async (t) => {
   const credentials = createKeychainProvider(createMemoryBackend());
   await seedGrant(credentials);
   const service = createIamService(configured, { credentials });
-  const gate = pauseNextMirror(credentials);
+  const gate = pauseNextRead(credentials);
   t.after(() => service.dispose());
   t.after(() => gate.release());
 
@@ -188,29 +200,26 @@ test('dispose removes a late hydration mirror without deleting the stored grant'
   gate.release();
   await hydrating;
 
-  assert.equal(await credentials.resolve(TOKEN_REF), undefined);
   assert.equal(service.getView().state, 'signed-out');
   assert.equal((await credentials.readRecord(GRANT_KEY)).payload.refreshToken, 'synthetic-old-refresh');
 });
 
-test('dispose removes a late refresh mirror and preserves the completed rotation', async (t) => {
+test('dispose during refresh preserves the completed rotation', async (t) => {
   const credentials = createKeychainProvider(createMemoryBackend());
   await seedGrant(credentials);
+  const tokenGate = { entered: deferred(), release: deferred() };
   const service = createIamService({ ...configured, refreshSkewSeconds: 7200 }, {
-    credentials, fetch: tokenFetch(),
+    credentials, fetch: tokenFetch({ tokenGate }),
   });
   t.after(() => service.dispose());
   await service.hydrate();
-  const gate = pauseNextMirror(credentials);
-  t.after(() => gate.release());
 
   const refreshing = service.resolveToken().catch((error) => error);
-  await gate.entered;
+  await tokenGate.entered.promise;
   await service.dispose();
-  gate.release();
+  tokenGate.release.resolve();
   const failure = await refreshing;
 
-  assert.equal(await credentials.resolve(TOKEN_REF), undefined);
   assert.equal(failure.code, 'IAM_DISPOSED');
   assert.equal(service.getView().state, 'signed-out');
   assert.equal((await credentials.readRecord(GRANT_KEY)).payload.refreshToken, 'synthetic-new-refresh');

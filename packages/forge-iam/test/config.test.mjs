@@ -110,3 +110,25 @@ test('RP logout requires an end-session endpoint', () => {
   assert.equal('issues' in result, true);
   assert.equal(result.issues.some((issue) => issue.path.includes('endSessionEndpoint')), true);
 });
+
+test('a gateway console URL is optional but must be absolute http(s)', () => {
+  const ok = validateConfig({ clientId: 'c', discoveryUrl: 'https://iam.example/.well-known', gatewayConsoleUrl: 'https://uag.example/console' });
+  assert.equal(ok.issues, undefined);
+  assert.equal(ok.value.gatewayConsoleUrl, 'https://uag.example/console');
+  const bad = validateConfig({ gatewayConsoleUrl: 'javascript:alert(1)' });
+  assert.equal(bad.issues[0].path[0], 'gatewayConsoleUrl');
+  assert.deepEqual(validateConfig({}).value.gatewayConsoleUrl, '');
+});
+
+test('a gateway audience is no longer required to configure IAM', () => {
+  const result = validateConfig({
+    clientId: 'c',
+    issuer: 'https://iam.example',
+    authorizationEndpoint: 'https://iam.example/authorize',
+    tokenEndpoint: 'https://iam.example/token',
+    jwksUri: 'https://iam.example/jwks',
+  });
+  assert.equal(result.issues, undefined);
+  assert.equal(isConfigured(result.value).ok, true);
+  assert.deepEqual(isConfigured(result.value).missing, []);
+});

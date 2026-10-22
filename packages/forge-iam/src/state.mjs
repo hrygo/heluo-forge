@@ -120,6 +120,8 @@ export function createView(state, details = {}) {
     exclusive: details.exclusive ?? 'ok',
     principal: details.principal ?? null,
     accessExpiresAt: details.accessExpiresAt ?? null,
+    gatewayCredential: details.gatewayCredential ?? null,
+    gatewayConsoleUrl: details.gatewayConsoleUrl ?? null,
   };
 }
 

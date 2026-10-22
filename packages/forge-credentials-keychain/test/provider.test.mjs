@@ -143,3 +143,21 @@ test('committed changes notify reference and record listeners', async () => {
     ['record', 'heluo-iam/session'],
   ]);
 });
+
+test('gateway-credential metadata records round-trip without secrets', async () => {
+  const { value } = provider();
+  const record = { kind: 'gateway-credential', payload: { version: 1, ownerSubject: 'E1001', deviceLabel: '工作站-01' } };
+  await value.modifyRecord('heluo-iam/gateway-credential', async () => record);
+  assert.deepEqual(await value.readRecord('heluo-iam/gateway-credential'), record);
+  assert.deepEqual(await value.describeRecord('heluo-iam/gateway-credential'), {
+    configured: true, kind: 'gateway-credential', writable: true,
+  });
+});
+
+test('an unknown record kind is rejected instead of persisted', async () => {
+  const { value } = provider();
+  await assert.rejects(
+    () => value.modifyRecord('heluo-iam/other', async () => ({ kind: 'session', payload: {} })),
+    (error) => error.code === 'KEYCHAIN_RECORD_INVALID',
+  );
+});

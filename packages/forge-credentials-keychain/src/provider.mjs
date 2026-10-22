@@ -59,6 +59,12 @@ function decodeRecord(key, raw) {
     }
     return { kind: 'grant', payload: value.payload };
   }
+  if (value.kind === 'gateway-credential') {
+    if (value.payload === null || typeof value.payload !== 'object' || Array.isArray(value.payload)) {
+      throw new KeychainProviderError('KEYCHAIN_RECORD_INVALID', `stored gateway-credential ${key} has an invalid payload`);
+    }
+    return { kind: 'gateway-credential', payload: value.payload };
+  }
   if (value.kind === 'api-key') {
     if (value.key !== undefined && (typeof value.key !== 'string' || value.key.length === 0)) {
       throw new KeychainProviderError('KEYCHAIN_RECORD_INVALID', `stored api-key ${key} has an empty key`);
@@ -78,9 +84,11 @@ function decodeRecord(key, raw) {
   throw new KeychainProviderError('KEYCHAIN_RECORD_INVALID', `stored record ${key} has an unknown kind`);
 }
 
+const RECORD_KINDS = new Set(['grant', 'api-key', 'gateway-credential']);
+
 function encodeRecord(record) {
-  if (record?.kind !== 'grant' && record?.kind !== 'api-key') {
-    throw new KeychainProviderError('KEYCHAIN_RECORD_INVALID', 'record kind must be grant or api-key');
+  if (!RECORD_KINDS.has(record?.kind)) {
+    throw new KeychainProviderError('KEYCHAIN_RECORD_INVALID', 'record kind must be grant, api-key or gateway-credential');
   }
   try {
     const encoded = JSON.stringify(record);

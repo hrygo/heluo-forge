@@ -10,11 +10,13 @@ const REQUIRED_STRINGS = [
   'clientId',
   'refreshToken',
   'scope',
-  'resource',
   'obtainedAt',
 ];
 
-const OPTIONAL_STRINGS = ['accessToken', 'accessExpiresAt', 'refreshExpiresAt', 'idToken'];
+// `resource` is optional from V1 on: the gateway uses a UAG personal credential
+// instead of an IAM audience. Older grants keep their value; it is compared only
+// when configuration still asks for one.
+const OPTIONAL_STRINGS = ['accessToken', 'accessExpiresAt', 'refreshExpiresAt', 'idToken', 'resource'];
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.length > 0;

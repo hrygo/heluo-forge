@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createIamRoutes } from '../src/routes.mjs';
 
 const view = {
@@ -21,9 +22,22 @@ function response() {
   };
 }
 
-async function call(handler, method, url, headers = {}) {
+function request(method, url, headers, body) {
+  const req = new EventEmitter();
+  req.method = method;
+  req.url = url;
+  req.headers = headers;
+  req.destroy = () => {};
+  setImmediate(() => {
+    if (body !== undefined) req.emit('data', Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+    req.emit('end');
+  });
+  return req;
+}
+
+async function call(handler, method, url, headers = {}, body) {
   const res = response();
-  await handler({ method, url, headers }, res);
+  await handler(request(method, url, headers, body), res);
   return res;
 }
 
@@ -41,6 +55,9 @@ function service(overrides = {}) {
     signOut: async () => ({ view, logoutUrl: null }),
     cancelSignIn: async () => ({ ...view, state: 'signed-out' }),
     handleCallback: async () => view,
+    loadGatewayCredential: async () => ({ state: 'unconfigured' }),
+    saveGatewayCredential: async () => ({ ...view, state: 'ready', gatewayCredential: { state: 'configured' } }),
+    clearGatewayCredential: async () => ({ ...view, state: 'ready', gatewayCredential: { state: 'unconfigured' } }),
     ...overrides,
   };
 }
@@ -265,4 +282,80 @@ test('the OIDC callback does not require a DSH browser session', async () => {
   const res = await call(handler, 'GET', '/iam/callback?code=c&state=s', { host: '127.0.0.1:4567' });
   assert.equal(res.statusCode, 200);
   assert.match(res.text(), /登录完成/);
+});
+
+const MUTATION = { 'x-forge-iam-request': '1', 'content-type': 'application/json' };
+
+test('the credential API saves a key without echoing it', async () => {
+  let saved;
+  const handler = routes(service({
+    saveGatewayCredential: async (input) => {
+      saved = input;
+      return { ...view, state: 'ready', gatewayCredential: { state: 'configured' } };
+    },
+  }));
+  const key = `uag-${'a'.repeat(32)}`;
+  const res = await call(handler, 'PUT', '/api/forge-iam/credential', MUTATION, { key, deviceLabel: ' 工作站-01 ' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(saved, { key, deviceLabel: ' 工作站-01 ' });
+  assert.equal(res.text().includes(key), false);
+  assert.equal(res.json().view.gatewayCredential.state, 'configured');
+});
+
+test('the credential API rejects a malformed key', async () => {
+  const handler = routes(service({
+    saveGatewayCredential: async () => {
+      const error = new Error('invalid');
+      error.code = 'IAM_GATEWAY_KEY_INVALID';
+      throw error;
+    },
+  }));
+  const res = await call(handler, 'PUT', '/api/forge-iam/credential', MUTATION, { key: 'oops' });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.code, 'IAM_GATEWAY_KEY_INVALID');
+});
+
+test('credential writes require the CSRF header and a JSON body', async () => {
+  const handler = routes(service());
+  assert.equal((await call(handler, 'PUT', '/api/forge-iam/credential', {}, { key: 'x' })).statusCode, 403);
+  assert.equal((await call(handler, 'DELETE', '/api/forge-iam/credential', {})).statusCode, 403);
+  const noKey = await call(handler, 'PUT', '/api/forge-iam/credential', MUTATION, { deviceLabel: 'x' });
+  assert.equal(noKey.statusCode, 400);
+  assert.equal(noKey.json().error.code, 'IAM_REQUEST_INVALID');
+  const notJson = await call(handler, 'PUT', '/api/forge-iam/credential', MUTATION, '{not json');
+  assert.equal(notJson.statusCode, 400);
+  assert.equal(notJson.json().error.code, 'IAM_REQUEST_INVALID');
+});
+
+test('an oversized credential body is rejected before parsing', async () => {
+  const handler = routes(service());
+  const oversized = JSON.stringify({ key: 'x'.repeat(9 * 1024) });
+  const res = await call(handler, 'PUT', '/api/forge-iam/credential', MUTATION, oversized);
+  assert.equal(res.statusCode, 413);
+  assert.equal(res.json().error.code, 'IAM_REQUEST_TOO_LARGE');
+});
+
+test('the credential API reads and clears the stored credential', async () => {
+  let cleared = 0;
+  const handler = routes(service({
+    loadGatewayCredential: async () => ({ state: 'configured' }),
+    getView: () => ({ ...view, state: 'ready', gatewayCredential: { state: 'configured', deviceLabel: '工作站-01' } }),
+    clearGatewayCredential: async () => {
+      cleared += 1;
+      return { ...view, state: 'ready', gatewayCredential: { state: 'unconfigured' } };
+    },
+  }));
+  const read = await call(handler, 'GET', '/api/forge-iam/credential');
+  assert.equal(read.statusCode, 200);
+  assert.equal(read.json().credential.deviceLabel, '工作站-01');
+  const deleted = await call(handler, 'DELETE', '/api/forge-iam/credential', MUTATION);
+  assert.equal(deleted.statusCode, 200);
+  assert.equal(cleared, 1);
+  assert.equal(deleted.json().view.gatewayCredential.state, 'unconfigured');
+});
+
+test('the credential API rejects unsupported methods', async () => {
+  const res = await call(routes(service()), 'POST', '/api/forge-iam/credential', MUTATION, {});
+  assert.equal(res.statusCode, 405);
+  assert.equal(res.headers.allow, 'GET, PUT, DELETE');
 });
