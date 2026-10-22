@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-001 |
 | 文档名称 | 河洛企业级智能研发平台总体架构设计 |
-| 版本 | V2.3.0 |
+| 版本 | V2.4.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -30,7 +30,7 @@
 |---|---|---|
 | 身份与授权 | 自研 OAuth IAM，支持跳转登录 | 一次登录，DSH 内所有企业能力复用同一身份 |
 | 模型与成本 | 自研 Kong AI 网关（对接机构内私有化模型） | 客户端持有 UAG 个人凭证（静态 Key），不持有上游模型密钥；按凭证归属到人与团队计量限流 |
-| 工程系统 | 自研 DevOps（API + CLI）、Gitee | Agent 只读查询研发信息（用户故事/需求为主，工具面待提供方澄清），可追溯 |
+| 工程系统 | 自研 DevOps（API + CLI）、Gitee | 系统变更及独立验收为主、故事作背景；查询基线 + 受控研发写目标（待批/默认禁用），可追溯 |
 | 研发流程 | oh-my-sdd 式重流程 | 只守三条不变量，流程由 skill 承载 |
 | 分发与治理 | 无 | 私有市场、版本门禁、可回滚 |
 
@@ -302,17 +302,21 @@ flowchart TB
 
 ### 7.3 工程系统工具
 
-**DevOps**：复用现有 CLI，经 `@heluo/forge-devops` 以受控命令白名单开放只读查询，优先支持读取用户故事/需求作为 spec 生成输入。具体命令、字段、权限与结构化输出由 DevOps 提供方澄清后确定；工具面经确认前不开放相关命令。DSH 不接入生产写工具，生产环境变更由既有变更平台与人工流程承担（需求基线 N9）。只有 CLI 无法满足已确认的稳定结构化输出、用户权限校验或必要身份能力时，才重新评估 MCP 服务；该评估需单独确认，不视为当前建设项。
+**输入与真源**：用户以显式 command/Skill 加系统变更号承接任务。DevOps 的系统变更有独立描述及验收，绑定一个系统与明确仓库；所属用户故事可跨系统。DSH 一次只承接一个系统变更，不能靠相似标题猜目标。正式要求与已确认业务澄清在 DevOps；工程 Issue、PR 与评审在 Gitee。
 
-**只读面约束**：受控清单只登记经提供方确认的只读工具；工具描述中的 `mutating` 仅作提示，不能作为授权依据；不在清单内或无法判定读写的工具一律拒绝。服务端按用户、项目与环境独立授权，客户端标签不扩大权限。
+**CLI 优先，形态按职责组合**：优先使用提供方已有 CLI；Skill 承载最小企业指引，薄插件只补必要上下文、策略或人类展示，不能因为模型频繁调用就重写 CLI。命令清单、结构化输出、凭据注入、服务端鉴权、目标终端产物均待企业内网核验；不成立则关闭该动作，提交替代形态评审。MCP 仍为条件项，不自动启动服务或补丁。
 
-**Gitee**：复用现有 `gh` 兼容 CLI，经 `@heluo/forge-gitee` 以受控命令白名单开放仓库、Issue 与合并请求只读查询。命令、JSON 字段稳定性、凭据注入与银河麒麟 aarch64 可用产物仍待 Gitee 团队/平台组核实；未核实前不开放工具。写操作不属于本期范围。
+**只读基线与受控写目标分开**：REQ-09/10 查询基线保留；[需求 §2.3](../requirements/requirements-baseline.md)完整承接澄清/进展回写、Issue/分支/提交/PR 关联、审查留痕和合入后关单的目标。范围、安全及接口未批准前写保持禁用；批准后普通研发写可在有限任务委托内自动执行，不将每步操作交回人工搬运。业务取舍和人工审查仍须真实确认。未登记或无法判定读写的动作一律拒绝。服务端按用户、项目、环境独立授权，客户端标签不扩大权限；受控清单由责任方登记，工具自报读写属性不可信。
+
+**交付与边界**：简单变更可一个 Issue，复杂变更按真实交付边界拆分；相关提交以 `[变更号]` 开头。更强模型交叉审查后由人确认，正式记录落 Gitee PR 并绑定版本。相应验收与交付 PR 合入事实满足后才关 Issue；不自动合并、不代业务验收、不执行 CI 触发或生产变更、不调用故事/系统变更最终完成。CI/CD 的制品/UAT 事实优先从 DevOps 查询；最终结束由既有故事上线流程联动。
+
+字段及失败语义见[工具契约](../contracts/engineering-tools.md)，能力地图、形态反例与开放决策见[跨模块设计](../design/plugins/forge-devops-lifecycle.md)。两者为草案，不是企业接口可用证明。
 
 **MCP 身份处理**：V1 不启用 MCP。若后续获准启用，UAG 标准部署使用同一把个人凭据、以 `apikey` 头调用 `/mcp`，不提供按 `resource` 换令牌（RFC 8693 仅在 AIGS/AAM 启用时可用）；这与 A14 的目标资源隔离义务存在差距，须在 MCP 形态评审时单独裁决，不能把 UAG 现成能力写成已满足 A14。任何刷新都不得导致结果未知的写请求自动重放。DevOps/Gitee 当前 CLI 形态不依赖 MCP token broker 或 MCP client 补丁。
 
 **MCP HTTP OAuth 义务**：任何经决策启用的 HTTP MCP server 均须按适用规范暴露 Protected Resource Metadata 并校验目标资源 audience；该义务仅适用于未来获批的 MCP，V1 不适用。DevOps MCP 服务当前不建设，Gitee 也不使用 `stdio` MCP。
 
-**上下文预算**：每个 server 的工具数上限 12；不用的 server 在 preset 里禁用；流程性知识放 skill，不放工具描述。
+**上下文预算**：已批准 MCP 的每个 server 工具数上限 12；不用的 server 在 preset 禁用。按任务提供企业规则，不全量灌入历史 Skill。
 
 ### 7.4 研发流程（SDD）
 
@@ -322,9 +326,11 @@ flowchart TB
 - **原子性**：一次交付的 PR 同时包含实现、spec、归档。
 - **可追溯**：`change-id` 贯穿分支、commit、PR、tracker。
 
-形态：1 个 skill（组合现有 `brainstorming` / `writing-plans` / `executing-plans` / `code-review-and-quality` / `test-driven-development` / `verification-before-completion`）+ 1 个约 300 行的 CLI（封装 openspec 的 new/validate/freeze/stale/archive/pr-body）+ `@heluo/forge-policy` 策略插件里的路径规则。阶段只写进 `.meta.json`，不驱动对话顺序。
+形态：最小企业 Skill 指引 + 可复用的确定性校验 CLI/CI + `@heluo/forge-policy` 路径规则。分析、规划、实现、验证、修复方法交给模型与 Harness，不指定第三方 Skill 调用链、不预估新 CLI 行数，也不移植 Comet/oh-my-sdd Runtime。阶段元数据仅用于保护产物，不驱动固定对话顺序。
 
 **路径规则**（由 `@heluo/forge-policy` 基于 `tools/pre-execute` 与 `tools.guard` 执行，不维护独立 hook 引擎）：`spec` 阶段只允许写 `openspec/changes/<id>/**`；`apply` 阶段 canonical `openspec/specs/**` 与 `proposal.md`/`design.md` 只读；`review` 阶段不再写源码。无 `.meta.json` 时只执行 HARD 规则，不阻塞普通开发。
+
+技术问题修复应返回实现上下文，修复后重新交叉审查；不能在只读审查上下文绕过源码保护。旧工具的 PR 创建即最终结项动作不继承；业务结束不由 SDD 状态推断。
 
 ### 7.5 分发与治理
 
@@ -338,6 +344,11 @@ flowchart TB
 版本切换按原生能力处理；没有通用 upgrade 时先卸载再安装精确版本，不承诺原子升级、自动回滚或保留原排序。无 HMR 的启动包按官方停机/CLI/重启路径处理，不私改 profile。方案、索引契约与验收见[轻量决策](<plugin-registry-source-decision.md>)、[插件设计](<../design/plugins/forge-market.md>)及[索引契约](<../design/services/market-index.md>)。
 
 ### 7.6 审计、可观测与数据合规
+
+**过程观察投影**：由 `forge-policy` 既有 OTel 出口补平台不可见的最小事件，不新建采集包/服务。[事件契约](../contracts/metrics-events.md)与[目录](../design/plugins/forge-devops-lifecycle.md) §9 为唯一字段/口径来源；指标可独立关闭或降级，必要安全审计失败仍按原安全规则拒绝相关动作。内容及其哈希不进入指标；既有安全审计的参数哈希不得复制为效能事件字段。
+
+**C3 调整提案**：现行跨系统写一律 ask 的规则仍有效。为实现有限委托内普通研发写自动执行，需安全团队批准明确的动作/资源/版本分类；批准前保留 ask 或关闭写，不能用入口确认代替全部跨系统确认。业务决策、正式人工 review 及高风险动作不因分类而消失。
+
 
 - **决策审计**（`@heluo/forge-policy` 直接发 OTel event）：`sub`、`change_id`、`tool`、`decision`、`reason_code`、`latency`，不记参数正文，只记参数哈希。
 - **会话审计（C2）**：`session-log` 通道含正文与代码，默认关闭，不落安全事件平台（SIEM）；确需开启时先做脱敏与保留期评审。
@@ -447,8 +458,8 @@ flowchart TB
 | IAM 接入 | IAM 团队 | 端点、claims、资源/client方案、TTL与撤销；按阶段冻结并留未验清单 | G0方向及P0联调；G1接入契约；G2生产运行流程 |
 | 网关契约 | 网关团队 | 个人凭证、归属、团队/成员预算、429与C1/C4；保留期、故障和容量单独签署 | G0方向及P0联调；G1接入契约；G2运行参数 |
 | 麒麟验证 | 平台组 | 实测输出、沙箱候选、runner方案与原生模块清单；工程化再验 | G0前置验证；G2安装与隔离 |
-| DevOps CLI 接入 | DevOps 团队 | 只读命令、字段、结构化输出、凭据注入与版本兼容；CLI 不满足必要前提时另提 MCP 形态评审 | G1只读命令契约；G2运行参数 |
-| Gitee CLI 接入 | 平台组 + Gitee 团队 | CLI 版本、aarch64产物、用户凭据与只读命令隔离；写操作不在本期 | G1只读命令契约；后续写能力须单独走范围决策 |
+| DevOps CLI 接入 | DevOps 团队 | 系统变更及独立验收、故事背景、字段/身份；受控澄清/进展写的范围、C3 分类、版本与回查；CLI 不足时另评替代形态 | G1查询契约；G2受控写批准/验证与运行参数，未准入不开放 |
+| Gitee CLI 接入 | 平台组 + Gitee 团队 | CLI 版本、aarch64产物、用户凭据；查询与常规 Issue/分支/提交/PR/评审写分别列清单，核验 C3、确认和回查 | G1查询契约；G2受控写批准/验证，未准入默认禁用 |
 | 策略与审计 | 安全 + 平台组 | 7 类角色 preset、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 | G2 |
 | 分发与市场 | 平台组 + IT | registry 与 index、通道、兼容门禁、回滚步骤 | G2 |
 | 终端打包 | 平台组 + IT | MSI 自助安装/MDM、deb/apt/`systemd --user`（`127.0.0.1`）与 `dsh-web-open` 脚本、更新回滚 | G2 |
@@ -513,6 +524,7 @@ G0 先取得方向、负责人、可联调性与计划，但 P0 要求的验证�
 | ADR-11／13 | [企业私有 npm 唯一制品源 + AIHUB 原生 format-1 索引](<plugin-registry-source-decision.md>)；不再建设生成器/current/写前授权 | 自建生成器与发布控制；把纯包名名单当索引 | AIHUB 维护并托管索引；本项目只做契约、校验与三目标验收；企业源与三目标安装仍需验证 |
 | ADR-12／13 | [首版仅自包含、三目标通用稳定包](<plugin-registry-source-decision.md>)；单 profile 单规范 registry，原生索引源 + 官方移除后安装（用户于 2026-10-21 选择轻量方案） | 仅固定根版本却终端重解外部依赖；同 profile 混源；把官方安装称原子升级 | 首版只放自包含三目标稳定版；不建生成器/写前授权/租约，不宣称全通道；普通带依赖包属后续扩展，生产准入仍需 G1/G2 |
 | ADR-14 | V1 采用 UAG 个人凭证（静态 Key）接入模型网关；企业 IAM 只负责登录与身份，网关凭据由 UAG 控制台签发并录入客户端 | 要求 UAG 新增数据面 JWT 验签、把令牌直通作为一期目标 | 客户端持有长期 Key；需 SCIM/停用流程、`privacy_mode`、TTL 与容量证据；原 JWKS/introspection 增量不再适用 |
+| ADR-15 | 企业研发能力按职责组合，受控写完整设计、未批不启用 | 固定 Skill 链、重造 CLI/MCP、将工程交付等同故事结束 | 需求方已确认产品方向；C3 分类、企业接口和宿主能力待安全及提供方核验；见需求 §2.3 与 DESIGN-013 |
 
 ADR-11 的来源方向及 ADR-12 的自包含三目标首版策略已由用户确认；2026-10-21 用户进一步决定采用 ADR-13 轻量模式：AIHUB 维护并托管 format-1 索引，用户在原生「索引源」添加 URL，官方 manager 安装。本项目不再建设生成器、`current/policy/evidence`、CI 单写发布、15 分钟租约或写前授权；只保留索引契约、只读校验器与三目标验收。2026-10-22 用户裁决采用 ADR-14：UAG 个人凭证为 V1 模型网关凭据，ADR-2 令牌直通退出主路径。其余团队接口、生产准入与本文件审核/批准不据此代签。
 

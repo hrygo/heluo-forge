@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.5.6 |
+| 版本 | V0.6.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-22 |
 | 门禁 | 工程整理已获准并完成；业务能力仍按 G0—G3 验证 |
 
 > 编制依据：V0.1 于 2026-10-20 核对的初始仓库基线为提交 `034764487cddc87e8e1a0a2439d39168a4f28d4f`、12 个受跟踪文件及当时方案。用户明确后续覆盖完整方案、逐插件详细设计、全部插件开发及私有插件市场建设。初始实施记录的工具链为 Node.js 24.21.0、pnpm 11.28.5，属于历史实测，不代表后续会话默认环境；官方资料核对见 §3.3。V0.1 只形成设计，V0.2 已按批准范围完成工程整理，结果见 §4.8；未创建业务源码、插件清单、发布凭据或部署实例。V0.2.2 于 2026-10-20 复核现有入口与工程配置，修正时间与状态表述，未重新验证企业接口或部署。
@@ -121,9 +121,9 @@ heluo-forge/
 | `@heluo/forge-iam` | `packages/forge-iam/` | Host + Client；授权流程、令牌 broker 与账户 UI | `docs/design/plugins/forge-iam.md` |
 | `@heluo/forge-gateway` | `packages/forge-gateway/` | 网关接入配置；不是服务端 AI 网关实现 | `docs/design/plugins/forge-gateway.md` |
 | `@heluo/forge-policy` | `packages/forge-policy/` | Host 策略、执行前门禁与决策审计 | `docs/design/plugins/forge-policy.md` |
-| `@heluo/forge-devops` | `packages/forge-devops/` | 复用现有 DevOps CLI，以受控命令白名单提供只读工具面；MCP 服务仅在另行决策后建设 | `docs/design/plugins/forge-devops.md` |
-| `@heluo/forge-gitee` | `packages/forge-gitee/` | 复用现有 `gh` 兼容 CLI，以受控命令白名单提供只读工具面 | `docs/design/plugins/forge-gitee.md` |
-| `@heluo/forge-sdd` | `packages/forge-sdd/` | Skill pack + CLI；流程产物与一致性 | `docs/design/plugins/forge-sdd.md` |
+| `@heluo/forge-devops` | `packages/forge-devops/` | 复用现有 DevOps CLI，读取系统变更及独立验收；查询基线 + 受控写目标（待批/默认禁用），MCP 另评 | `docs/design/plugins/forge-devops.md` |
+| `@heluo/forge-gitee` | `packages/forge-gitee/` | 复用现有 `gh` 兼容 CLI，提供查询基线及常规研发/评审写目标（待批/默认禁用） | `docs/design/plugins/forge-gitee.md` |
+| `@heluo/forge-sdd` | `packages/forge-sdd/` | 最小企业指引 + 必要 CLI/CI 校验；优先复用，系统变更追溯与产物一致性 | `docs/design/plugins/forge-sdd.md` |
 | `@heluo/forge-market` | `packages/forge-market/` | 历史参考包：Host + Client、十个工具、面板、bundle 与测试；不属轻量模式目标 | `docs/design/plugins/forge-market.md` |
 | `@heluo/forge-brand` | `packages/forge-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/forge-brand.md` |
 

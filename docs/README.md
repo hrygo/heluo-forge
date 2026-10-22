@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.19.0 |
+| 版本 | V1.20.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -65,13 +65,15 @@
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | IAM 团队 | G0 | 待启动 | `resource` 支持、claims、client 注册、TTL、撤销 |
 | CORP-DSH-GW-001 | AI 网关契约（V0.9.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0 | 草案 | UAG 个人凭证、团队/成员预算、429 与错误分流、C1/C4、SCIM/停用与待批准保留期；分析稿与方向回函不替代 G1/G2 冻结与验证 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 平台组 | G0 | 待启动 | 内核、沙箱、原生模块、浏览器 |
-| CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | DevOps 团队 | G1 | 待启动 | 只读命令、结构化输出、凭据注入、错误与版本兼容；MCP 服务仅在 CLI 不满足已确认前提时另行评估 |
-| CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | 平台组 | G1 | 待启动 | CLI 版本与双端产物、只读命令、JSON 稳定性、凭据方案 |
+| CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | DevOps 团队 | G1 | 待启动 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
+| CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | 平台组 | G1 | 待启动 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | 安全 + 平台组 | G2 | 待启动 | 规则、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | 平台组 + IT | G2 | 待启动 | registry、index、通道、回滚 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | 平台组 + IT | G2 | 待启动 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
 | CORP-DSH-SDD-001 | SDD 流程 | 待创建 | 平台组 | G2 | 待启动 | skill、CLI、CI、产物契约 |
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | PMO | G2 | 待启动 | 3 部门 800 人分批计划、指标采集、支持渠道、退出条件 |
+
+企业研发跨模块草案：[全流程能力设计](design/plugins/forge-devops-lifecycle.md)、[工具动作契约](contracts/engineering-tools.md)、[观察事件契约](contracts/metrics-events.md)。覆盖已确认受控写目标与待审批项，不改变上述十项团队交付物的负责关系，也不代表接口已核验。
 
 ## 4. 协作与工程入口
 
