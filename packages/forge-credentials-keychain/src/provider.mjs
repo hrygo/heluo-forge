@@ -175,14 +175,35 @@ export function createKeychainProvider(backend, options = {}) {
         throw new KeychainProviderError('KEYCHAIN_MUTATOR_INVALID', 'modifyRecord requires a mutator');
       }
       return withKeyLock(key, async () => {
+        const storageKey = `${recordPrefix}${key}`;
+        const apply = async (current) => {
+          const next = await mutate(current);
+          if (next === undefined) return current;
+          // Validate the exact bytes before writing: a rejected record must not
+          // become durable and poison the shared credentials seam.
+          const encoded = encodeRecord(next);
+          const validated = decodeRecord(key, encoded);
+          return validated;
+        };
+        if (typeof backend.transaction === 'function') {
+          let changed = false;
+          const validated = await backend.transaction(storageKey, async (tx) => {
+            const raw = tx.get();
+            const current = raw === undefined ? undefined : decodeRecord(key, raw);
+            const next = await apply(current);
+            if (next !== current) {
+              tx.set(JSON.stringify(next));
+              changed = true;
+            }
+            return next;
+          });
+          if (changed) options.notifyRecord?.(key);
+          return validated;
+        }
         const current = await this.readRecord(key);
-        const next = await mutate(current);
-        if (next === undefined) return current;
-        // Validate the exact bytes before writing: a rejected record must not
-        // become durable and poison the shared credentials seam.
-        const encoded = encodeRecord(next);
-        const validated = decodeRecord(key, encoded);
-        await backend.set(`${recordPrefix}${key}`, JSON.stringify(validated));
+        const validated = await apply(current);
+        if (validated === current) return current;
+        await backend.set(storageKey, JSON.stringify(validated));
         options.notifyRecord?.(key);
         return validated;
       });

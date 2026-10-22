@@ -2,10 +2,13 @@
 // these operations to the OS secret store and report durable=true. The memory
 // adapter exists only for tests and local development; the file adapter is an
 // explicit, opt-in dev/pilot fallback that is never selected automatically.
+// A backend MAY expose transaction(key, fn) to make read-modify-write atomic
+// across processes; the provider uses it instead of a plain get/set sequence.
 
-import { mkdir, readFile, rename, chmod, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { chmod, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 export class KeychainBackendError extends Error {
   constructor(code, message) {
@@ -86,12 +89,56 @@ export function createPlatformBackend() {
 }
 
 /**
+ * Best-effort cross-process lock for the dev file backend. O_EXCL is atomic on
+ * the supported platforms; stale locks are reclaimed after 30s. This is not a
+ * substitute for an OS keychain provider lock, but it prevents two DSH
+ * processes from silently losing a refresh-token rotation in local pilots.
+ */
+async function withFileLock(path, key, fn) {
+  void key;
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  // One file lock for the whole JSON document: per-key locks would still
+  // clobber other keys because every writer persists the complete document.
+  const lockPath = `${path}.lock`;
+  const deadline = Date.now() + 10000;
+  let handle;
+  for (;;) {
+    try {
+      handle = await open(lockPath, 'wx', 0o600);
+      break;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw new KeychainBackendError('KEYCHAIN_LOCK_FAILED', 'keychain lock cannot be created');
+      try {
+        const info = await stat(lockPath);
+        if (Date.now() - info.mtimeMs > 30000) {
+          await unlink(lockPath).catch(() => {});
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new KeychainBackendError('KEYCHAIN_LOCK_TIMEOUT', 'keychain lock is held by another process');
+      }
+      await sleep(25);
+    }
+  }
+  try {
+    await handle.writeFile(String(process.pid), 'utf8');
+    return await fn();
+  } finally {
+    await handle.close().catch(() => {});
+    await unlink(lockPath).catch(() => {});
+  }
+}
+
+/**
  * Explicit 0600 JSON fallback for local development and pilots. It is not a
  * production keychain: callers must opt in with allowInsecureFile=true and
  * accept that the file is plaintext at rest.
  */
 export function createFileBackend({ path, mode = 0o600 } = {}) {
-  if (typeof path !== 'string' || path.length === 0) {
+  if (typeof path !== 'string' || path.length === 0 || !isAbsolute(path)) {
     throw new KeychainBackendError('KEYCHAIN_PATH_REQUIRED', 'file backend requires an absolute path');
   }
   let loaded = null;
@@ -123,6 +170,12 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     loaded = true;
   }
 
+  async function reload() {
+    loaded = false;
+    data.clear();
+    await load();
+  }
+
   async function persist() {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
@@ -139,10 +192,36 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     durable: true,
     secure: false,
     requiresExplicitOptIn: true,
-    async get(key) { await load(); return data.get(key); },
-    async set(key, value) { await load(); data.set(key, value); await persist(); },
-    async delete(key) { await load(); data.delete(key); await persist(); },
-    async list(prefix) { await load(); return [...data.keys()].filter((key) => key.startsWith(prefix)); },
+    async get(key) { await reload(); return data.get(key); },
+    async set(key, value) {
+      await withFileLock(path, key, async () => {
+        await reload();
+        data.set(key, value);
+        await persist();
+      });
+    },
+    async delete(key) {
+      await withFileLock(path, key, async () => {
+        await reload();
+        data.delete(key);
+        await persist();
+      });
+    },
+    async list(prefix) { await reload(); return [...data.keys()].filter((key) => key.startsWith(prefix)); },
+    async transaction(key, fn) {
+      return withFileLock(path, key, async () => {
+        await reload();
+        let changed = false;
+        const tx = {
+          get() { return data.get(key); },
+          set(value) { data.set(key, value); changed = true; },
+          delete() { data.delete(key); changed = true; },
+        };
+        const result = await fn(tx);
+        if (changed) await persist();
+        return result;
+      });
+    },
     async close() {},
   };
 }

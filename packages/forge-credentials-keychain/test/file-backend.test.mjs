@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFileBackend } from '../src/backend.mjs';
+import { createKeychainProvider } from '../src/provider.mjs';
 import { apply, KeychainProviderError } from '../src/index.mjs';
 
 async function tempFile(t) {
@@ -62,4 +63,38 @@ test('the plugin registers the file backend with explicit opt-in', async (t) => 
   assert.equal(raw.version, 1);
   assert.ok(raw.entries['heluo-forge/iam/ref/ENTERPRISE_ACCESS_TOKEN']);
   dispose();
+});
+test('two provider instances serialize a cross-process-style read-modify-write', async (t) => {
+  const path = await tempFile(t);
+  const first = createKeychainProvider(createFileBackend({ path }));
+  const second = createKeychainProvider(createFileBackend({ path }));
+  await first.modifyRecord('heluo-iam/session', async () => ({
+    kind: 'grant', payload: { version: 1, count: 0 },
+  }));
+  const bump = (current) => ({
+    kind: 'grant', payload: { version: 1, count: (current?.payload?.count ?? 0) + 1 },
+  });
+  await Promise.all([
+    first.modifyRecord('heluo-iam/session', bump),
+    second.modifyRecord('heluo-iam/session', bump),
+  ]);
+  const record = await first.readRecord('heluo-iam/session');
+  assert.equal(record.payload.count, 2);
+});
+test('the file backend rejects a relative path', () => {
+  assert.throws(
+    () => createFileBackend({ path: 'relative-credentials.json' }),
+    (error) => error.code === 'KEYCHAIN_PATH_REQUIRED',
+  );
+});
+test('concurrent writes to different keys do not clobber the JSON document', async (t) => {
+  const path = await tempFile(t);
+  const first = createKeychainProvider(createFileBackend({ path }));
+  const second = createKeychainProvider(createFileBackend({ path }));
+  await Promise.all([
+    first.modifyRecord('heluo-iam/one', async () => ({ kind: 'grant', payload: { version: 1, n: 1 } })),
+    second.modifyRecord('heluo-iam/two', async () => ({ kind: 'grant', payload: { version: 1, n: 2 } })),
+  ]);
+  assert.equal((await first.readRecord('heluo-iam/one')).payload.n, 1);
+  assert.equal((await first.readRecord('heluo-iam/two')).payload.n, 2);
 });
