@@ -111,7 +111,11 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date
   const keys = Array.isArray(jwks?.keys) ? jwks.keys : [];
   const jwk = keys.find((candidate) => candidate?.kid === decoded.header.kid
     && candidate?.kty === algorithm.kty
-    && (algorithm.crv === undefined || candidate?.crv === algorithm.crv));
+    && (algorithm.crv === undefined || candidate?.crv === algorithm.crv)
+    // A key published for encryption or a key that forbids `verify` must not
+    // authenticate a signature even if its material matches.
+    && (candidate?.use === undefined || candidate.use === 'sig')
+    && (candidate?.key_ops === undefined || candidate.key_ops.includes('verify')));
   if (!jwk) {
     throw new OidcError('IAM_JWKS_KEY_NOT_FOUND', 'no matching JWKS key for the ID token');
   }

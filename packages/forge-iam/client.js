@@ -168,7 +168,15 @@ window.__ModuleLoader__.load({
       }, []);
 
       React.useEffect(() => { load(); }, [load]);
-      useSessionPoll(true, (view) => setState((current) => ({ ...current, phase: 'ready', view, error: null })));
+      useSessionPoll(true, (view) => setState((current) => ({
+        ...current,
+        phase: 'ready',
+        view,
+        error: null,
+        // The authorization URL belongs to one attempt; once the session moved
+        // on, a stale "continue login" link must not stay on screen.
+        ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
+      })));
 
       const login = async () => {
         setState((current) => ({ ...current, notice: null }));
@@ -400,6 +408,7 @@ window.__ModuleLoader__.load({
         ...current,
         view,
         ...bannerFor(view),
+        ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
       })));
 
       const login = async () => {

@@ -221,3 +221,18 @@ test('PS256 and ES256 verify, while none and HS256 stay rejected', () => {
   assert.throws(() => verifyIdToken(ps, { ...options, jwks: { keys: [ecJwk] } }),
     (error) => error.code === 'IAM_JWKS_KEY_NOT_FOUND');
 });
+
+test('a JWKS key marked for encryption cannot verify an ID token', () => {
+  assert.throws(() => verifyIdToken(idToken(), {
+    jwks: { keys: [{ ...jwk, use: 'enc' }] },
+    issuer: 'https://iam.example',
+    clientId: 'dsh-desktop',
+    nonce: 'n-1',
+  }), (error) => error.code === 'IAM_JWKS_KEY_NOT_FOUND');
+  assert.throws(() => verifyIdToken(idToken(), {
+    jwks: { keys: [{ ...jwk, key_ops: ['encrypt'] }] },
+    issuer: 'https://iam.example',
+    clientId: 'dsh-desktop',
+    nonce: 'n-1',
+  }), (error) => error.code === 'IAM_JWKS_KEY_NOT_FOUND');
+});
