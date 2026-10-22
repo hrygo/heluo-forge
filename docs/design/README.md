@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.5.1 |
+| 版本 | V0.5.8 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -17,7 +17,7 @@
 
 ## 1. 结论
 
-本索引管八个 DSH 扩展包、原生插件市场与两个独立服务入口。市场已切换为轻量模式：DSH 原生索引源 + AIHUB 托管 format-1 JSON，不再要求自定义市场插件；`forge-market` 与旧 HTTP 服务为历史参考，`market-index` 只保留只读索引校验器。其余设计仍为草案；设计状态、代码实现与上线准入分别判断。
+本索引管九个 DSH 产品扩展包、一个凭据支撑包、原生插件市场与两个独立服务入口。市场已切换为轻量模式：DSH 原生索引源 + AIHUB 托管 format-1 JSON，不再要求自定义市场插件；`forge-market` 与旧 HTTP 服务为历史参考，`market-index` 只保留只读索引校验器。其余设计仍为草案；设计状态、代码实现与上线准入分别判断。
 
 详细设计使用[模块设计模板](../templates/design-template.md)，外部字段级契约仍以[契约目录](../contracts/gateway-contract.md)为唯一真源，设计只引用不复制。
 
@@ -25,7 +25,7 @@
 
 | 包 | 形态 | 设计文档 | 设计状态 | 主要待确认 |
 |---|---|---|---|---|
-| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占） | 官方四行禁用实验、IAM `resource`/轮换/撤销、0600 存储风险、最小 UI 范围 |
+| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host 骨架已落地） | IAM 回函、keychain provider、官方四行实验、UI slot |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案 | 拦截钩子实测、策略与沙箱叠加顺序、审批注册、`$DSH_HOME` 范围 |
 | `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案 | 版本断言报错形态、`fiberPhase`、角色 preset 粒度、官方四行禁用实验 |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案 | 重试插件边界实测、流式取消、错误体一致性、设备标识上报 |
@@ -47,9 +47,11 @@
 
 | 模块 | 当前实现 | 验证边界 |
 |---|---|---|
+| [forge-iam](../../packages/forge-iam/README.md) | Host + Client 开发骨架：config/state/record/store/`ctx.iam`、独占断言、`settings.section` 账户页、`settings.launcher` 入口、四步 onboarding overlay、未登录横幅；登录、刷新未实现 | 离线测试通过；账户页走 interim route，未接 IAM、未联调 |
+| [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | keychain provider 开发骨架：backend 契约、内存 backend、records/refs；平台 adapter 未实现 | 离线测试通过；平台 backend 固定不可用，未双端实测 |
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
-| 其余八包与 DevOps MCP | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
+| 其余七包与 DevOps MCP | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
 
 ## 3. 独立服务设计
 

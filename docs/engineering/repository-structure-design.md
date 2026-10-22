@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.5.5 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -52,7 +52,7 @@
 
 ### 3.1 已核实事实
 
-迁移前（V0.1 基线）仓库只有方案、登记清单、七域询问函及 HTML 图解，没有工作区、检查器、测试或 CI；工程整理阶段建立了底座。2026-10-21 核对工作区，已存在市场插件实现和目录参考服务；其余八包无业务清单/源码，DevOps MCP 暂不建设。九包命名仍见[总体架构 §6](<../architecture/platform-architecture.md#6-软件包组合>)，不应另起一套命名。
+迁移前（V0.1 基线）仓库只有方案、登记清单、七域询问函及 HTML 图解，没有工作区、检查器、测试或 CI；工程整理阶段建立了底座。2026-10-21 核对工作区，已存在市场插件实现和目录参考服务；IAM 已有 Host 开发骨架；其余七包无业务清单/源码，DevOps MCP 暂不建设。九包命名仍见[总体架构 §6](<../architecture/platform-architecture.md#6-软件包组合>)，不应另起一套命名。
 
 迁移前的协作规范曾包含过时的模块及远端状态，工程整理时已同步纠正；当前 [AGENTS.md](../../AGENTS.md)负责 agent 的任务路由、授权与交付要求，[贡献指南](../../CONTRIBUTING.md)负责贡献流程，[文档总览](../README.md)负责文档导航与治理。现有文档编号和 REQ/A/M/CONF 标识均保持不变。
 
@@ -127,7 +127,7 @@ heluo-forge/
 | `@heluo/forge-market` | `packages/forge-market/` | 历史参考包：Host + Client、十个工具、面板、bundle 与测试；不属轻量模式目标 | `docs/design/plugins/forge-market.md` |
 | `@heluo/forge-brand` | `packages/forge-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/forge-brand.md` |
 
-上表九份设计正文均已建立；市场设计为正式评审稿，其余仍为草案，设计路径不是待创建项。只有市场插件已有真实包清单与实现，其余八包仍只保留职责 README。
+上表九份设计正文均已建立；市场设计为正式评审稿，其余仍为草案，设计路径不是待创建项。市场插件已有真实包清单与实现；IAM 已有 Host + Client 开发骨架（config/state/record/`ctx.iam`、独占断言、`settings.section` 账户页、`settings.launcher` 入口、四步 onboarding overlay、未登录横幅），登录、刷新未实现，账户页暂走 interim route；其余七包仍只保留职责 README。另有凭据支撑包 `@heluo/forge-credentials-keychain`（开发骨架），不在上述九个产品模块内，实现入口见[设计索引](<../design/README.md#22-实现与验证入口>)。
 
 真实 Node 包启用时采用 `src/`、`test/`、`package.json` 等局部布局；配置 bundle 不强制建立空 `src/`。对外只能使用声明的导出，不跨包直接导入另一个包的 `src`。源码包之间采用显式 `workspace:` 依赖，并避免循环依赖；进入市场首版的实际发布包须将运行产物自包含，不携带需要终端解析的 workspace/外部 npm 运行依赖。新的 Node 组件默认 TypeScript；上游复用组件保留其合理语言，不因 monorepo 强制改写。
 

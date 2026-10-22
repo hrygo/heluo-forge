@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.2.1 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,7 +14,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-10-21 |
 | 门禁 | G0 |
-| 模块状态 | 规划 |
+| 模块状态 | 实施中（Host + Client 开发骨架） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/麒麟实机。以上未核验项不写成已实现。
 >
@@ -26,7 +26,7 @@
 
 登录解决的是“企业能力授权”，不是“打开 DSH 的准入”：应用外壳可以打开，但任何企业模型/工具调用在未登录时 fail closed，并给出重新登录入口。
 
-还缺四件事才能进实现：IAM 侧 `resource`、轮换/重用检测与撤销的书面确认；禁用官方四行后 shell/onboarding 的实测；0600 文件存储风险的接受或 keychain provider 的立项；账户页与首启提示的最小 UI 范围确认。本版按 O3 独占设计，不实现附加登录（additive）模式。
+还缺三件事才能进实现：IAM 侧 `resource`、轮换/重用检测、撤销与 RP 登出的书面确认；禁用官方四行后 shell/onboarding 的实测；keychain provider 与 UI 挂载点的双端实测。首版按 O3 独占实现 4 屏 onboarding + 账户页；生产使用 keychain provider，旧 0600 记录迁移成功后删除；不实现附加登录（additive）模式。
 
 ## 2. 目标与非目标
 
@@ -37,7 +37,7 @@
 - OIDC discovery 或显式端点；校验 `state`、`nonce`、`iss`、`aud`、签名算法、`exp`/`nbf` 与时钟容差。
 - 令牌记录进入 DSH 凭据服务；刷新在锁内 single-flight；调用方只拿 access token，不接触 refresh token。
 - 登录成功后把 access token 镜像到 `ENTERPRISE_ACCESS_TOKEN`，供 `llm-pi-ai` 按请求解析。
-- 账户页展示主体、到期、状态与登录/取消/退出；首次启动给出登录入口。
+- 账户页展示主体、到期、状态与登录/取消/退出；首启 4 屏 onboarding，可跳过；未登录隐藏企业模型/工具。
 - 退出按 RFC 7009 撤销，并清理本地记录与镜像；撤销失败可归因，不谎报成功。
 
 **非目标**
@@ -45,8 +45,8 @@
 - 不接管“打开 DSH”的入口门禁；未登录时只是企业能力不可用。
 - 不保留官方登录、官方模型、官方 API Key 或其他公网回落路由。
 - 不做 additive 双登录、多账号并存、静态 Key、MCP token broker、CLI 登录。
-- 不修改 DSH 核心，不 fork；若禁用官方行导致 shell 不可用，另提最小补丁评审，不在本设计默认接受。
-- 首版不做完整品牌 onboarding、余额/充值/用量页；只做账户页与首启提示，完整流程另行评估。
+- 不修改 DSH 核心，不 fork；若禁用官方行导致 shell 不可用，暂停 O3 并另提组合层替代方案评审，不在本设计默认接受核心补丁。
+- 首版 onboarding 固定 4 屏，不做品牌营销页、余额/充值/用量页；完整品牌化另行评估。
 
 ## 3. 需求与依赖
 
@@ -106,6 +106,19 @@
 - 回调只接受 `GET`，校验 `state` 与 PKCE；按官方账号包行为，回调请求以 state/PKCE 校验而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行；同时校验 `Host`/`Origin`。
 - Desktop 由 Host 打开系统浏览器（Windows `start`、麒麟 `xdg-open`）；Web 由页面在点击手势中预开标签页，弹窗被拦截时展示可复制链接。
 - 回调页只返回最小 HTML，不加载外部资源，不把 code/token 写入页面或日志；完成后尝试关闭标签页。
+
+### 4.4 UI 范围
+
+| 场景 | 行为 |
+|---|---|
+| 首启 | 无授权且无“已跳过/已完成”标记时显示 4 屏：欢迎、登录、成功/默认模型、完成；欢迎可跳过；完成后写本地标记 |
+| 未登录 | 隐藏企业模型/工具；显示登录横幅；账户入口可见；不做全屏入口拦截 |
+| 登录中 | 显示 attempt 状态与取消；浏览器未拉起时提供重开/复制链接 |
+| 已登录 | 账户页显示主体、状态、access 到期、刷新时间；提供登录/退出/同时退出 IAM/清理官方旧记录/复制诊断 |
+| 官方 UI | 不显示官方账户页、官方登录入口、官方模型/API Key 入口 |
+| 挂载点 | 优先 `settings.section`、`sidebar.footer.action`；无稳定 slot 时暂停该 UI 实现并回到设计确认，不硬编码 DOM |
+
+4 屏 onboarding 不是品牌营销页；不做余额、充值、用量页。复制诊断信息只含主体、状态、到期、错误类别与版本，不含 token、code、verifier 或 ID Token。
 
 ## 5. 接口与配置
 
@@ -213,7 +226,7 @@ interface IamGrantV1 {
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
-| refresh token | `GrantRecord.payload`；默认 `dsh-credentials-local` 0600 YAML | 直到撤销或轮换 | 写入失败不进入 ready |
+| refresh token | `GrantRecord.payload`；生产 `@heluo/forge-credentials-keychain`，仅 dev/pilot 可显式接受 0600 fallback | 直到撤销或轮换 | 写入失败不进入 ready；keychain 不可用 fail closed |
 | access token | 记录 + 镜像到 `ENTERPRISE_ACCESS_TOKEN` | ≤60 分钟 | 刷新/写入失败按错误分类 |
 | 授权码与 verifier | 仅内存，单次 attempt | ≤5 分钟 | 校验失败即丢弃 |
 | ID Token | 仅 `logoutMode=rp` 保存；否则不落盘 | 到退出 | 缺失则不允许 RP 登出 |
@@ -221,9 +234,9 @@ interface IamGrantV1 {
 | 日志 | 主体、资源、结果、耗时、错误类别 | 90 天（认证）/30 天（配置错误） | 本地写失败不阻断；必要审计由 policy 执行 |
 | 官方旧 grant | 不读取、不刷新、不用于调用 | 直到用户清理 | 清理失败保留并提示 |
 
-**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。本模块不自建存储；在 keychain provider 落地前，账户页必须显示“未受系统保护”，并把 A4 的 `$DSH_HOME/**` 文件/子进程拒绝作为前置条件。若不能接受该风险，需另立 keychain provider（约 +5–10 人日）并重新评估本设计。
+**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；Windows 使用 DPAPI/凭据管理器，麒麟使用 libsecret/keyring。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback，账户页必须显示“未受系统保护”。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
 
-镜像说明：`credentials.set('ENTERPRISE_ACCESS_TOKEN', token)` 写入的是上述文件的 `refs` 段，因此 access token 也会落盘；`llm-pi-ai` 每次请求重新解析该引用，刷新后无需重启。不要把“内存中的 access token”写成唯一副本。
+镜像说明：`credentials.set('ENTERPRISE_ACCESS_TOKEN', token)` 写入的 `refs` 段由同一 provider 保护；在 dev/pilot 的 0600 fallback 下仍为明文，账户页必须提示。`llm-pi-ai` 每次请求重新解析该引用，刷新后无需重启；不要把“内存中的 access token”写成唯一副本。
 
 ## 7. 流程
 
@@ -332,18 +345,18 @@ flowchart TD
 
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
-| 单元 | 状态机、PKCE/URL 构造、ID Token 校验、错误分类、记录版本与迁移、默认模型选择 | `node --test` |
+| 单元 | 状态机、PKCE/URL 构造、ID Token 校验、错误分类、记录版本与迁移、keychain 选择/迁移判定、默认模型选择 | `node --test` |
 | 契约 | discovery/端点、token/revocation 请求与错误码；`llm-pi-ai` 的 `MISSING_CREDENTIAL`；官方 row id 缺失告警 | 契约用例 |
-| 集成 | 仿 IAM：刷新轮换、重用检测、慢响应、断网、5xx、429、写盘失败、撤销失败、双进程并发 | 本地仿 IAM + 双进程夹具 |
+| 集成 | 仿 IAM：刷新轮换、重用检测、慢响应、断网、5xx、429、写盘失败、撤销失败、双进程并发；keychain 不可用 fail closed、0600 迁移成功/失败 | 本地仿 IAM + 双进程夹具 |
 | 负向 | 错误 `state`/`nonce`/`aud`/`iss`、`alg=none`、过期 ID Token、授权码重放、PKCE 降级、时钟偏差 | 契约/集成 |
-| 端到端 | Windows 桌面与麒麟 Web 各完成登录、刷新、退出；未登录无模型；官方登录入口不可见；升级后官方行不回灌 | 手工 + 脚本 |
+| 端到端 | Windows 桌面与麒麟 Web 各完成登录、刷新、退出；首启 4 屏跳过/标记；未登录无模型；官方登录入口不可见；升级后官方行不回灌 | 手工 + 脚本 |
 | 组合 | 禁用四行后 shell/settings/onboarding/模型选择可用；`DEEPSEEK_API_KEY` 不构成旁路；禁用插件后企业调用拒绝 | 组合夹具 |
 
 端到端必须记录至少一个拒绝反例及其可观察结果；不在真实生产 IAM 上做破坏性用例。
 
 ## 11. 打包、升级与回退
 
-包名 `@heluo/forge-iam`，`private: true`，Host 与 Client 分别入口，声明 `engines.dsh`；`engines` 的具体断言形态待实测。产物不含 DSH 源码补丁。
+包名 `@heluo/forge-iam`，`private: true`，Host 与 Client 分别入口，声明 `engines.dsh`；`engines` 的具体断言形态待实测。凭据保护由独立 `@heluo/forge-credentials-keychain` 提供，版本与 IAM 分开，便于单独升级/回退。产物不含 DSH 源码补丁；禁用四行实验失败时暂停 O3，不改内核。
 
 升级：配置项只增不删；记录 `version` 迁移；新增 scope 需要重新授权，界面明确提示；DSH 升级后重新应用官方行禁用补丁，并跑“官方行是否回灌”用例。
 
@@ -360,9 +373,10 @@ flowchart TD
 | IAM 是否允许公共客户端 + loopback redirect URI；是否强制 client secret | IAM 团队 | 本机登录形态是否成立；必要时改为预注册多客户端 |
 | 回调路由与 launch token/RPC 认证的交互；SSH 转发/反向代理下 `callbackOrigin` 的支持 | 平台组（实测） | 回调是否可达、是否误暴露 |
 | 禁用四行后 shell/onboarding/模型选择是否完整 | 平台组（实测） | O3 是否可在不修改核心的前提下成立 |
-| 0600 文件存储风险接受，还是另立 keychain provider | 用户、平台组、安全 | 账户页提示、A4 前置、成本 +5–10 人日 |
+| keychain provider 是否可插拔；Windows DPAPI/凭据管理器、麒麟 libsecret/keyring 的 provider API | 平台组（实测） | 生产存储是否成立；不可插拔则暂停 Q15，不静默降级 |
+| 旧 0600 记录迁移的删除时机、失败回滚与审计 | 平台组、安全 | 迁移是否可恢复、明文残留窗口 |
 | `engines.dsh` 的断言形态与目标版本范围 | 平台组（实测） | 安装/升级门禁 |
-| `settings.section`、`sidebar.footer.action`、`conversation.input.dock` 的实际可用性；是否需要 `settings.models.sign-in` | 平台组（实测） | Client 挂载点与首启入口 |
+| `settings.section`、`settings.launcher`、`shell.overlay` 已按 slot 类型注册骨架；`conversation.input.dock`、`settings.models.sign-in` 与真实挂载未验；原 `sidebar.footer.action` 在 DSH `0.2.1-rc.2` 源码中未发现 | 平台组（源码核验，未挂载实测） | Client 挂载点与首启入口 |
 | 代理、内部 CA、Windows 防火墙下的 IAM/网关可达性 | 平台组、IT | 登录成功率与支持成本 |
 | 官方旧 grant 与旧默认模型的迁移/清理策略 | 平台组、安全 | 升级体验与残留身份 |
 
@@ -376,6 +390,6 @@ flowchart TD
 | MCP token broker | 未来 MCP 按资源取 token | 范围扩大，需独立批准 | 不采用；`tokenFor` 仅 Host 预留 |
 | 静默 SSO | 少一次点击 | 依赖 IAM/浏览器策略，失败路径变多 | 不采用；`logoutMode=local` 下不承诺结束浏览器 SSO |
 | CLI 登录 | 无 GUI 环境 | 与本期终端范围不符 | 不采用 |
-| 完整品牌 onboarding | 首启体验更完整 | UI 工作量与品牌评审 | 首版不做，仅账户页 + 首启提示 |
+| 完整品牌 onboarding | 首启体验更完整 | UI 工作量与品牌评审 | 首版固定 4 屏，不做营销级 onboarding |
 
 以上选项不影响 O3 主链路；如后续确认增益成立，再单独评估并更新本设计。

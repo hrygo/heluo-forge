@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-001 |
 | 文档名称 | 河洛企业级智能研发平台推广实施方案 |
-| 版本 | V2.0.1 |
+| 版本 | V2.0.2 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟，责任人待确认） |
@@ -126,7 +126,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | 6 | Linux 沙箱链为 `bwrap → Landlock → fail closed`，无可用后端时拒绝执行而非降级 | `packages/sandbox/sandbox-local/README.md` | 约 400 台麒麟的首要准入验证项；加固内核可能直接不可用 |
 | 7 | Web 前端构建目标为 `es2022` | `apps/web/vite.config.ts` | 浏览器版本已确认达标，不再作为风险 |
 | 8 | 插件市场为 AIHUB 托管的 format-1 index，私有 registry 优先且不回落公网 | [DESIGN-012](../design/services/market-index.md)、[issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 仍需 AIHUB 索引、终端 npm 认证与三目标实机验证 |
-| 9 | 凭据文件为 0600 的 `$DSH_HOME/.credentials.yaml`，agent 以同一 OS 用户运行，可读取 | `packages/credentials/credentials-local/README.md` | 必须用 `@heluo/forge-policy` 硬拒绝访问 `$DSH_HOME/**` 并配合沙箱遮蔽挂载 + 短 TTL |
+| 9 | 目标 DSH 只随附 0600 的 `$DSH_HOME/.credentials.yaml`，agent 以同一 OS 用户运行，可读取 | `packages/credentials/credentials-local/README.md` | 生产前由独立 keychain provider 保护；不可用 fail closed；仅 dev/pilot 显式接受 0600，并用 `@heluo/forge-policy` 硬拒绝访问 `$DSH_HOME/**` + 沙箱遮蔽挂载 + 短 TTL |
 | 10 | 公开部署的 launch URL 即进程凭据，文档要求只分享给预期用户 | `docs/user/guide/public-deployments.md` | 麒麟本机 Web 强制绑定 `127.0.0.1`，由 `dsh-web-open` 脚本读取本机 launch URL 拉起 |
 | 11 | npm 上 `@deepseek-ai/dsh` 共 36 个版本，全部为预发布，最近 30 天 14 个版本，最新 `0.2.1-rc.2` | npm registry 实测 | 必须锁版本、内部镜像、兼容性门禁 |
 | 12 | `sharp`、`koffi`、`node-addon-system` 均有 linux-arm64 预编译；`node-pty` 无预编译，安装时回退 `node-gyp rebuild` | npm registry 元数据、`packages/subprocess/subprocess-local/package.json` | 麒麟需在 arm64 构建机预构建 profile，避免用户端编译 |

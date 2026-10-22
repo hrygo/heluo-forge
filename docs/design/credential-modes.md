@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-001 |
 | 文档名称 | 网关凭据双模式支持设计 |
-| 版本 | V0.1.2 |
+| 版本 | V0.1.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -67,7 +67,7 @@ interface GatewayCredentialProvider {
 | 401 处置 | 刷新后至多重试一次 | 提示重新签发 |
 | 账号切换 | 清理镜像与按资源缓存 | 清理镜像，要求重新粘贴 |
 | 探测方式 | 令牌有效性与到期时间 | 一次最小调用 |
-| 存储位置 | `CredentialKey` 记录 | 凭据记录；默认 `dsh-credentials-local` 的 0600 YAML，系统凭据库未随目标版本提供 |
+| 存储位置 | `CredentialKey` 记录 | 凭据记录；生产使用 keychain provider，仅 dev/pilot 可显式接受 `dsh-credentials-local` 的 0600 YAML |
 
 两者都不把值写进日志、配置明文或模型上下文。
 
@@ -121,7 +121,7 @@ interface GatewayCredentialProvider {
 
 ## 9. 安全边界
 
-- 凭据值只存在于凭据存储与该引用；默认 `dsh-credentials-local` 为 0600 明文 YAML，同 UID 的 Agent 可读，必须配合 A4 的文件/子进程拒绝；keychain provider 落地后再收紧。
+- 凭据值只存在于凭据存储与该引用；生产必须由 keychain provider 保护，keychain 不可用时 fail closed；仅 dev/pilot 可显式接受 `dsh-credentials-local` 的 0600 明文 YAML，并配合 A4 的文件/子进程拒绝。旧 0600 记录在 keychain 可用后迁移，成功才删除明文。
 - 静态 Key 不参与刷新，避免"用长期凭据兑换短期凭据"的混合路径。
 - 退出时两种模式都清理镜像与缓存；令牌模式额外调用撤销，静态模式不代用户撤销（撤销在控制台）。
 - 切换模式必须留下审计事件：时间、旧模式、新模式、操作者。
@@ -147,7 +147,7 @@ interface GatewayCredentialProvider {
 
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
-| 系统凭据库 provider 是否随目标版本提供 | 平台组 | 0600 明文的处置与是否另立 provider |
+| keychain provider 是否可插拔、双端可用 | 平台组 | 生产存储是否成立；不可插拔则暂停 Q15，不静默降级 |
 | 网关是否支持 Key 与令牌并行 | 网关 | `auto` 是否可用 |
 | 静态 Key 的 TTL 与轮换提示 | 网关、安全 | 探测与提示节奏 |
 | 模式配置属于用户级还是设备级 | 平台、IT | 切换粒度与支持成本 |
