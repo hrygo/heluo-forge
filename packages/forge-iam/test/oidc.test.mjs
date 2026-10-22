@@ -89,7 +89,7 @@ test('authorization URL carries PKCE, state, nonce and resource', () => {
   assert.equal(url.searchParams.get('scope'), 'openid offline_access');
 });
 
-test('metadata rejects insecure non-loopback endpoints', async () => {
+test('metadata requires allowInsecureHttp even for loopback HTTP', async () => {
   await assert.rejects(
     () => loadMetadata({
       issuer: 'http://iam.example', authorizationEndpoint: 'http://iam.example/authorize',
@@ -97,9 +97,36 @@ test('metadata rejects insecure non-loopback endpoints', async () => {
     }),
     (error) => error.code === 'IAM_CONFIG_INVALID',
   );
+  await assert.rejects(
+    () => loadMetadata({
+      issuer: 'http://127.0.0.1:9', authorizationEndpoint: 'http://127.0.0.1:9/authorize',
+      tokenEndpoint: 'http://127.0.0.1:9/token', jwksUri: 'http://127.0.0.1:9/jwks',
+    }),
+    (error) => error.code === 'IAM_CONFIG_INVALID',
+  );
   const meta = await loadMetadata({
     issuer: 'http://127.0.0.1:9', authorizationEndpoint: 'http://127.0.0.1:9/authorize',
     tokenEndpoint: 'http://127.0.0.1:9/token', jwksUri: 'http://127.0.0.1:9/jwks',
-  });
+  }, { allowInsecureHttp: true });
   assert.equal(meta.issuer, 'http://127.0.0.1:9');
+});
+
+test('discovery issuer must match the configured issuer', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      issuer: 'https://other.example',
+      authorization_endpoint: 'https://other.example/authorize',
+      token_endpoint: 'https://other.example/token',
+      jwks_uri: 'https://other.example/jwks',
+    }),
+  });
+  await assert.rejects(
+    () => loadMetadata({
+      discoveryUrl: 'https://iam.example/.well-known/openid-configuration',
+      issuer: 'https://iam.example',
+    }, { fetchImpl }),
+    (error) => error.code === 'IAM_DISCOVERY_ISSUER_MISMATCH',
+  );
 });

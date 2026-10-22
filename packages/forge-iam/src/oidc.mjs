@@ -122,10 +122,8 @@ function assertSafeEndpoint(value, name, allowInsecureHttp) {
     throw new OidcError('IAM_CONFIG_INVALID', `${name} is not a valid URL`);
   }
   if (url.protocol === 'https:') return url;
-  if (url.protocol === 'http:' && (allowInsecureHttp || ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname))) {
-    return url;
-  }
-  throw new OidcError('IAM_CONFIG_INVALID', `${name} must use HTTPS unless it is a loopback development endpoint`);
+  if (url.protocol === 'http:' && allowInsecureHttp === true) return url;
+  throw new OidcError('IAM_CONFIG_INVALID', `${name} must use HTTPS unless allowInsecureHttp is explicitly true`);
 }
 
 function requireString(value, name) {
@@ -184,6 +182,10 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
     if (document === null || typeof document !== 'object') {
       throw new OidcError('IAM_DISCOVERY_INVALID', 'discovery document must be an object');
     }
+    if (document.issuer !== undefined) requireString(document.issuer, 'issuer');
+    if (config.issuer && document.issuer && config.issuer !== document.issuer) {
+      throw new OidcError('IAM_DISCOVERY_ISSUER_MISMATCH', 'discovery issuer does not match configured issuer');
+    }
   }
   const issuer = config.issuer || document.issuer;
   const authorizationEndpoint = config.authorizationEndpoint || document.authorization_endpoint;
@@ -196,7 +198,7 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
   requireString(authorizationEndpoint, 'authorizationEndpoint');
   requireString(tokenEndpoint, 'tokenEndpoint');
   requireString(jwksUri, 'jwksUri');
-  const issuerUrl = assertSafeEndpoint(issuer, 'issuer', allowInsecureHttp);
+  assertSafeEndpoint(issuer, 'issuer', allowInsecureHttp);
   const authorizeUrl = assertSafeEndpoint(authorizationEndpoint, 'authorizationEndpoint', allowInsecureHttp);
   const tokenUrl = assertSafeEndpoint(tokenEndpoint, 'tokenEndpoint', allowInsecureHttp);
   const jwksUrl = assertSafeEndpoint(jwksUri, 'jwksUri', allowInsecureHttp);
@@ -208,7 +210,7 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
     : undefined;
 
   return {
-    issuer: issuerUrl.href.replace(/\/$/, ''),
+    issuer,
     authorizationEndpoint: authorizeUrl.href,
     tokenEndpoint: tokenUrl.href,
     jwksUri: jwksUrl.href,

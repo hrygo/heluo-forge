@@ -22,11 +22,11 @@
 
 - 授权码 + PKCE S256；回调绑定单次 `state`/`nonce`，校验 ID Token 签名、issuer、audience、nonce、exp。
 - token 交换与刷新只由 Host 发起；Client 只拿到授权 URL 和非敏感 `IamView`。
-- browser callback 固定 `/iam/callback`；生产 `redirectUri` 必须是 IAM 预注册的精确 URI。
-- 默认只允许 HTTPS 端点；`http://127.0.0.1`/`localhost` 仅用于本地 mock，且需要 `allowInsecureHttp: true`。
+- 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；`redirectUri` 的 path 必须与之一致，非 loopback 必须 HTTPS，生产值必须与 IAM 预注册的精确 URI 匹配。
+- 默认只允许 HTTPS；任何 HTTP（含 loopback mock）都必须显式设置 `allowInsecureHttp: true`。
 - `ENTERPRISE_ACCESS_TOKEN` 只镜像 access token，供 `dsh-llm-pi-ai` 的 `apiKeyEnv` 解析；refresh token 只存 GrantRecord。
 - 登录/刷新失败不伪造 ready；`invalid_grant` 清理本地记录并回到 re-login。
-- 插件卸载时停止订阅、尽力撤销 refresh token 并清理记录/镜像，使回退后企业调用 fail closed。
+- 插件卸载只释放订阅、attempt 与内存状态，不撤销也不删除持久凭据；显式 `signOut` 或企业卸载流程才撤销 refresh token、清理记录/镜像。
 - 独占断言发现 `deepseekAccount` 仍挂载时进入 `error`，不写镜像。
 
 ## 组合顺序

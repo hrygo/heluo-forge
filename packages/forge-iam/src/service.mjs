@@ -20,6 +20,7 @@ import {
 
 const METADATA_TTL_MS = 5 * 60 * 1000;
 const JWKS_TTL_MS = 5 * 60 * 1000;
+const REFRESH_TIMEOUT_MS = 5000;
 
 function nowIso(now) {
   return new Date(now).toISOString();
@@ -56,6 +57,7 @@ function safeMessage(code) {
     IAM_ID_TOKEN_SIGNATURE: 'IAM ID token signature is invalid',
     IAM_ID_TOKEN_AUDIENCE: 'IAM ID token audience does not match',
     IAM_ID_TOKEN_ISSUER: 'IAM ID token issuer does not match',
+    IAM_DISCOVERY_ISSUER_MISMATCH: 'IAM discovery issuer does not match configuration',
     IAM_ID_TOKEN_NONCE: 'IAM ID token nonce does not match',
     IAM_ID_TOKEN_EXPIRED: 'IAM ID token is expired',
     IAM_REFRESH_TOKEN_MISSING: 'IAM token response has no refresh token',
@@ -230,11 +232,16 @@ export function createIamService(rawConfig, options = {}) {
 
   function redirectUri() {
     if (config.redirectUri) {
+      let parsed;
       try {
-        return new URL(config.redirectUri).href;
+        parsed = new URL(config.redirectUri);
       } catch {
         throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must be an absolute URL');
       }
+      if (parsed.pathname !== config.redirectPath) {
+        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri path must equal redirectPath');
+      }
+      return parsed.href;
     }
     let origin;
     try {
@@ -556,7 +563,7 @@ export function createIamService(rawConfig, options = {}) {
               clientId: config.clientId,
               resource: config.gatewayResource,
               fetchImpl,
-              timeoutMs: config.refreshTimeoutMs,
+              timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
             });
             let claims = null;
             if (token.idToken) {
@@ -678,36 +685,15 @@ export function createIamService(rawConfig, options = {}) {
       disposed = true;
       clearAttempt();
       // Stop subscribers before any await so unload cannot leave a watch()
-      // caller parked forever.
+      // caller parked forever. dispose() is lifecycle cleanup, not logout:
+      // persisted credentials are cleared only by an explicit signOut() or by
+      // the enterprise uninstall flow.
       listeners.clear();
       for (const stop of [...stopWaiters]) stop();
       stopWaiters.clear();
-
-      const targetStore = ensureStore();
-      let grant = lastGrant;
-      if (targetStore) {
-        const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
-        if (record?.grant) grant = record.grant;
-      }
       lastGrant = null;
       state = 'signed-out';
       error = null;
-
-      // Best-effort RFC 7009 revocation only when the metadata is already
-      // cached; unload must not block on discovery or keep a token alive.
-      const meta = metadataCache?.value;
-      const revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
-      if (revocationEndpoint && grant?.refreshToken) {
-        await revokeToken({
-          revocationEndpoint,
-          token: grant.refreshToken,
-          tokenTypeHint: 'refresh_token',
-          clientId: config.clientId,
-          fetchImpl,
-          timeoutMs: config.httpTimeoutMs,
-        }).catch(() => {});
-      }
-      if (targetStore) await targetStore.clear().catch(() => {});
     },
   };
 

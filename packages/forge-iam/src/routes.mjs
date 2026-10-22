@@ -82,13 +82,14 @@ function hasRequestHeader(req) {
  * preflight. The callback relies on state/PKCE instead.
  *
  * @param {{ getView: Function, startSignIn: Function, signOut: Function, handleCallback: Function }} service
+ * @param {{ callbackPath?: string }} [options]
  */
-export function createIamRoutes(service) {
+export function createIamRoutes(service, { callbackPath = '/iam/callback' } = {}) {
   return async function handle(req, res) {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
 
-      if (url.pathname === '/iam/callback') {
+      if (url.pathname === callbackPath) {
         if (req.method !== 'GET') {
           res.setHeader('allow', 'GET');
           sendHtml(res, 405, '登录回调失败', '回调只接受 GET。');

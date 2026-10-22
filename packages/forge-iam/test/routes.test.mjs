@@ -38,6 +38,18 @@ function service(overrides = {}) {
   };
 }
 
+test('the callback route follows the configured path', async () => {
+  let called = 0;
+  const handler = createIamRoutes(service({ handleCallback: async () => { called += 1; return view; } }), {
+    callbackPath: '/custom/callback',
+  });
+  const hit = await call(handler, 'GET', '/custom/callback?code=x&state=y');
+  assert.equal(hit.statusCode, 200);
+  assert.equal(called, 1);
+  const miss = await call(handler, 'GET', '/iam/callback?code=x&state=y');
+  assert.equal(miss.statusCode, 404);
+});
+
 test('GET view returns the non-secret service snapshot', async () => {
   const res = await call(createIamRoutes(service()), 'GET', '/api/forge-iam/view');
   assert.equal(res.statusCode, 200);

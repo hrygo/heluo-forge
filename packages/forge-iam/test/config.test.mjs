@@ -12,7 +12,6 @@ test('normalizes defaults without inventing IAM endpoints', () => {
   assert.equal(result.value.refreshSkewSeconds, 60);
   assert.equal(result.value.attemptTimeoutSeconds, 300);
   assert.equal(result.value.httpTimeoutMs, 10000);
-  assert.equal(result.value.refreshTimeoutMs, 5000);
   assert.equal(result.value.allowInsecureHttp, false);
   assert.equal(result.value.issuer, '');
   assert.equal(isConfigured(result.value).ok, false);
@@ -82,10 +81,28 @@ test('non-object config is rejected', () => {
     assert.ok('issues' in result);
   }
 });
-test('refresh timeout is capped to the lock-hold budget', () => {
-  const result = validateConfig({ refreshTimeoutMs: 5001 });
+test('redirectUri must use the configured callback path', () => {
+  const result = validateConfig({ redirectUri: 'https://app.example/other' });
   assert.equal('issues' in result, true);
-  assert.equal(result.issues.some((issue) => issue.path.includes('refreshTimeoutMs')), true);
+  assert.equal(result.issues.some((issue) => issue.path.includes('redirectUri')), true);
+});
+
+test('redirectPath rejects query and fragment', () => {
+  const result = validateConfig({ redirectPath: '/iam/callback?x=1' });
+  assert.equal('issues' in result, true);
+  assert.equal(result.issues.some((issue) => issue.path.includes('redirectPath')), true);
+});
+
+test('an absolute redirectUri matching redirectPath is accepted', () => {
+  const result = validateConfig({ redirectUri: 'https://app.example/iam/callback' });
+  assert.ok('value' in result);
+  assert.equal(result.value.redirectUri, 'https://app.example/iam/callback');
+});
+
+test('non-loopback redirectUri cannot use plaintext HTTP', () => {
+  const result = validateConfig({ redirectUri: 'http://app.example/iam/callback' });
+  assert.equal('issues' in result, true);
+  assert.equal(result.issues.some((issue) => issue.path.includes('redirectUri')), true);
 });
 
 test('RP logout requires an end-session endpoint', () => {

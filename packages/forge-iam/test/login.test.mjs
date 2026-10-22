@@ -150,7 +150,7 @@ test('a rejected refresh clears credentials and requires re-authentication', asy
   assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
   assert.equal(service.getView().state, 'signed-out');
 });
-test('dispose revokes and clears credentials so a disabled plugin fails closed', async (t) => {
+test('dispose releases runtime state without clearing the stored session', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
@@ -160,9 +160,13 @@ test('dispose revokes and clears credentials so a disabled plugin fails closed',
   const refreshToken = (await credentials.readRecord('heluo-iam/session')).payload.refreshToken;
 
   await service.dispose();
-  assert.equal(await credentials.readRecord('heluo-iam/session'), undefined);
-  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
-  assert.equal(mock.revoked.has(refreshToken), true);
+  assert.equal((await credentials.readRecord('heluo-iam/session')).payload.refreshToken, refreshToken);
+  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN').then((r) => r.value), 'access-1');
+  assert.equal(mock.revoked.has(refreshToken), false);
+  assert.equal(service.getView().state, 'signed-out');
+
+  const restored = createIamService(configFor(mock), { credentials });
+  assert.equal((await restored.hydrate()).state, 'ready');
   await service.dispose();
 });
 test('signOut does not claim success when the record cannot be cleared', async (t) => {
