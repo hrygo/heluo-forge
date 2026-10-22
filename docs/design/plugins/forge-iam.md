@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.4.0 |
+| 版本 | V0.4.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,7 +14,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-10-22 |
 | 门禁 | G0 |
-| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程已实现；当前为 interim same-origin HTTP + 2s 轮询，管理 API 经 `ctx.connection.requestRejection` 认证，Remote/watch 与默认模型切换未实现；真实联调待） |
+| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程、网关凭据录入/清除/状态已实现；当前为 interim same-origin HTTP + 2s 轮询，管理 API 经 `ctx.connection.requestRejection` 认证；Remote/watch、凭据探测、审计与默认模型切换未实现；真实联调待） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/UOS/麒麟实机。以上未核验项不写成已实现。
 >
@@ -26,7 +26,7 @@
 
 登录解决的是“企业身份与能力授权”，不是“打开 DSH 的准入”：应用外壳可以打开，但任何企业模型/工具调用在未登录时 fail closed，并给出重新登录入口。**登录与模型网关凭据分离**：IAM access token 只用于身份/账户；模型调用使用 UAG 个人凭证（静态 Key），由 UAG 控制台签发，本模块只承载录入、存储、探测、状态展示与清除，不签发、不刷新、不自动轮换。
 
-2026-10-22 裁决后，还缺四类事才能进实现：IAM 侧登录/刷新/撤销/RP 登出的书面确认（`resource` 仅未来按资源调用需要，不阻塞 V1）；禁用官方四行后 shell/onboarding 的实测；keychain provider 与 UI 挂载点的双端实测；网关凭据录入/探测与真实 UAG 联调。首版按 O3 独占实现 4 屏 onboarding（欢迎、登录、网关凭据、完成）+ 账户页；生产使用 keychain provider，旧 0600 记录迁移成功后删除；不实现附加登录（additive）模式。
+2026-10-22 裁决后已进入 interim 实现；上线前仍缺四类事：IAM 侧登录/刷新/撤销/RP 登出的书面确认（`resource` 仅未来按资源调用需要，不阻塞 V1）；禁用官方四行后 shell/onboarding 的实测；keychain provider 与 UI 挂载点的双端实测；网关凭据录入/探测与真实 UAG 联调。首版按 O3 独占实现 4 屏 onboarding（欢迎、登录、网关凭据、完成）+ 账户页；生产使用 keychain provider，旧 0600 记录迁移成功后删除；不实现附加登录（additive）模式。
 
 ## 2. 目标与非目标
 
@@ -73,7 +73,7 @@
 
 ## 4. 扩展形态与边界
 
-> 实现状态（2026-10-22）：本节的 Remote 命名空间、`watch` 状态流与登录后默认模型选择是 V1 目标，当前代码只提供 Host service、`/api/forge-iam/*` interim 路由和 Client 2 秒轮询；不要按本节描述认为 Remote 已可用。`iam.defaultModel` / `iam.defaultProvider` 当前仅保留配置，不自动切换模型。当前代码仍保留旧的 `ENTERPRISE_ACCESS_TOKEN` 镜像及对应测试；V1 目标已改为 `ENTERPRISE_STATIC_KEY`，镜像路径与网关凭据录入/探测均待实现，代码调整前不得按本文宣称已支持。
+> 实现状态（2026-10-22）：本节的 Remote 命名空间、`watch` 状态流与登录后默认模型选择是 V1 目标，当前代码只提供 Host service、`/api/forge-iam/*` interim 路由和 Client 2 秒轮询；不要按本节描述认为 Remote 已可用。`iam.defaultModel` / `iam.defaultProvider` 当前仅保留配置，不自动切换模型。当前代码已移除 `ENTERPRISE_ACCESS_TOKEN` 镜像及对应测试；网关凭据的录入、清除与状态展示已按 `ENTERPRISE_STATIC_KEY` 实现（非敏感元数据记录 `heluo-iam/gateway-credential`），凭据探测未实现；Remote/watch 与默认模型切换仍为 V1 目标。
 
 | 项 | 内容 |
 |---|---|
@@ -108,26 +108,26 @@
 
 - 回调 URI = Client 传入的 `callbackOrigin` + `iam.redirectPath`；Host 校验 origin 与 `webServer` 实际 origin 一致（loopback 或受支持的本地转发 origin），且必须是 IAM 预注册的精确 URI；不使用随机端口，不另起监听器。
 - 回调只接受 `GET`，校验 `state` 与 PKCE；按官方账号包行为，回调请求以 state/PKCE 校验而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行。管理 API（`/api/forge-iam/*`）必须通过 DSH Connection 的 `requestRejection`（Host/Origin 策略与浏览器/API 凭据）；`ctx.connection` 不可用时 fail closed 返回 503，不以自定义请求头或本地 Origin 比较替代身份认证。回调保留自己的 Host 校验；Origin/Host 策略本身也由 Connection 负责，避免自定义 scheme（Desktop `dsh-app://`）被本地比较误判。
-- Desktop 由 Host 打开系统浏览器（Windows `start`、麒麟 `xdg-open`）；Web 由页面在点击手势中预开标签页，弹窗被拦截时展示可复制链接。
+- Desktop 目标是由 Host 打开系统浏览器（Windows `start`、麒麟 `xdg-open`）；该能力**尚未实现**，当前 Client 统一用 `window.open` + 同窗兜底，Desktop WebView 行为未实测。Web 由页面在点击手势中预开标签页，弹窗被拦截时展示可复制链接。
 - 回调页只返回最小 HTML，不加载外部资源，不把 code/token 写入页面或日志；当前完成后显示提示，不自动关闭标签页。
 
 ### 4.4 UI 范围
 
 | 场景 | 行为 |
 |---|---|
-| 首启 | 无授权且无“已跳过/已完成”标记时显示 4 屏：欢迎、登录、网关凭据（控制台入口/设备命名建议/粘贴/探测）、完成；欢迎可跳过；探测成功后才算完成，跳过后企业模型未就绪 |
-| 未登录 | 隐藏企业模型/工具；显示登录横幅；账户入口可见；不做全屏入口拦截 |
-| 登录中 | 显示 attempt 状态与取消；浏览器未拉起时提供重开/复制链接 |
-| 已登录但凭据未配置 | 企业模型不可用，显示“模型未就绪”横幅与“配置网关凭据”入口；不把此状态写成登录失败 |
-| 已登录 | 账户页显示主体、状态、access 到期、网关凭据状态/设备标签/建议到期/控制台入口/清除；退出。刷新时间、同时退出 IAM、清理官方旧记录、复制诊断与默认模型切换为 V1 目标，当前未实现 |
+| 首启 | 无“已跳过/已完成”标记时显示 4 屏：欢迎、登录、网关凭据（控制台入口/设备命名建议/粘贴）、完成；欢迎可跳过；已配置凭据时完成标记写 `done`，否则写 `skipped`；探测未实现，不以探测结果作为完成条件 |
+| 未登录 | 显示登录横幅与账户入口，不做全屏入口拦截；隐藏/禁用企业模型由策略/网关包负责，本模块尚未接线（见 §10） |
+| 登录中 | 显示 attempt 状态与取消；浏览器未拉起时提供“打开登录页”链接（复制链接未实现） |
+| 已登录但凭据未配置 | 显示“模型未就绪”横幅并引导到“设置 → 企业账号”；Client 无设置导航 API，暂不是可点击深链；不把此状态写成登录失败 |
+| 已登录 | 账户页显示主体、状态、access 到期、网关凭据状态/设备标签/录入时间/建议到期/存储来源/控制台入口/清除；退出。RP 登出在 `logoutMode=rp` 且配置 `endSessionEndpoint` 时执行（Client 跳转）；下次刷新时间、官方旧记录清理、复制诊断与默认模型切换仍未实现 |
 | 官方 UI | 不显示官方账户页、官方登录入口、官方模型/API Key 入口 |
 | 挂载点 | 实际使用 `settings.section` + `shell.overlay`；不占用单占位 `settings.launcher`（避免替换官方设置触发器）；`sidebar.footer.action` 未发现，不硬编码 DOM |
 
-Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-events:none` 的穿透层，onboarding 遮罩必须显式 `pointerEvents:'auto'`，否则遮罩、dialog 与按钮全部不可点击；登录横幅的轮询绑定组件生命周期而不是 `visible`，否则进入 `ready` 后不再观察退出/失效；onboarding 的 `ready` 轮询只在 `step < 2` 时推进，重复的相同快照不得把已完成界面拉回“登录成功”。样式使用宿主主题 token（`--dsw-alias-bg-layer-1`、`--dsw-alias-label-primary`、`--dsw-alias-state-warn-primary`），不依赖未声明的 `--dsh-*` 私有变量。包里提供 `locale/en.json`、`locale/zh.json` 的 `meta.title`/`meta.description` 与 `icon.svg`，供插件管理面在不激活插件时显示；`icon.svg` 逐字节取自预置品牌资产 `docs/assets/branding/elephant/b-kit/components/forge-iam-symbol.svg`，不另绘自造图标；界面文案仍是硬编码中文，全量 locale 化属于未完成的发布准入项。
+Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-events:none` 的穿透层，onboarding 遮罩必须显式 `pointerEvents:'auto'`，否则遮罩、dialog 与按钮全部不可点击；登录横幅的轮询绑定组件生命周期而不是 `visible`，否则进入 `ready` 后不再观察退出/失效；onboarding 的 `ready` 轮询只在 `step < 2` 时推进，重复的相同快照不得把已完成界面拉回登录屏。样式使用宿主主题 token（`--dsw-alias-bg-layer-1`、`--dsw-alias-label-primary`、`--dsw-alias-state-warn-primary`），不依赖未声明的 `--dsh-*` 私有变量。包里提供 `locale/en.json`、`locale/zh.json` 的 `meta.title`/`meta.description` 与 `icon.svg`，供插件管理面在不激活插件时显示；`icon.svg` 逐字节取自预置品牌资产 `docs/assets/branding/elephant/b-kit/components/forge-iam-symbol.svg`，不另绘自造图标；界面文案仍是硬编码中文，全量 locale 化属于未完成的发布准入项。
 
 4 屏 onboarding 不是品牌营销页；不做余额、充值、用量页。复制诊断信息只含主体、状态、到期、网关凭据状态、错误类别与版本，不含 token、code、verifier、ID Token 或网关 Key。
 
-当前实现仍为“欢迎、登录、成功、完成”；改为“网关凭据”屏后，步骤索引、`step < 2` 轮询与完成标记需同步调整。未实现前不得按本文宣称已支持网关凭据录入。
+当前实现为“欢迎、登录、网关凭据、完成”四屏：登录后进入网关凭据屏，录入成功或“稍后配置”进入完成屏；凭据探测与“探测成功才算完成”尚未实现，完成标记只反映是否已配置，未配置时企业模型仍不可用。
 
 ## 5. 接口与配置
 
@@ -145,9 +145,10 @@ Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-eve
 | `iam.endSessionEndpoint` | string | 空 | 否 | RP 登出；`logoutMode=rp` 时必填 |
 | `iam.clientId` | string | 空 | 是 | 本机公共客户端标识，无 client secret |
 | `iam.scopes` | string[] | `openid profile offline_access` | 是 | 基础 scope；不含资源 scope |
-| `iam.redirectPath` | string | `/iam/callback` | 否 | Host 回调路径 |
+| `iam.redirectPath` | string | `/iam/callback` | 否 | Host 回调路径；不得为站点根或以 `/` 结尾（DSH 路由为不带尾斜杠的绝对路径） |
 | `iam.redirectUri` | string | 空 | 否 | 绝对回调 URI；path 必须等于 `redirectPath`，非 loopback 必须 HTTPS，生产必须与 IAM 注册值精确匹配 |
-| `iam.postLogoutRedirectUri` | string | 空 | 否 | `logoutMode=rp` 时使用 |
+| `iam.postLogoutRedirectUri` | string | 空 | 否 | `logoutMode=rp` 时使用；绝对 http(s)，HTTP 仅限 loopback |
+| `iam.gatewayResource` | string | 空 | 否 | 预留：未来按资源调用换取 access token；静态 Key 模式不使用 |
 | `iam.gatewayConsoleUrl` | string | 空 | 否 | UAG 个人凭证控制台入口；仅用于引导与深链，不参与鉴权 |
 | `iam.defaultProvider` | string | `enterprise` | 否 | 预留；当前不自动设置 |
 | `iam.defaultModel` | string | 空 | 否 | 预留；当前不自动设置 |
@@ -156,7 +157,7 @@ Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-eve
 | `iam.httpTimeoutMs` | number | 10000 | 否 | discovery / 换 token / 撤销单次请求上限；锁内 refresh 另以 5000ms 为硬上限 |
 | `iam.logoutMode` | `local` / `rp` | `local` | 否 | 是否发起 RP 登出 |
 | `iam.requireExclusive` | boolean | `true` | 否 | 官方账号仍存在时拒绝就绪 |
-| `iam.allowInsecureHttp` | boolean | `false` | 否 | 仅本地 mock 显式允许 HTTP；生产必须关闭，loopback 也不例外 |
+| `iam.allowInsecureHttp` | boolean | `false` | 否 | 显式允许 HTTP；即使开启也仅对 loopback（`localhost`/`127.0.0.1`/`::1`）生效，生产必须关闭 |
 
 **导出面（V1）**
 
@@ -184,18 +185,16 @@ export interface IamPrincipal {
 }
 
 export interface GatewayCredentialView {
-  readonly status:
-    | 'missing'
-    | 'configured'
-    | 'invalid'
-    | 'suspended'
-    | 'policy_denied'
-    | 'model_not_allowed'
-    | 'unreachable';
-  readonly label?: string;
-  readonly ownerSubject?: string;
-  readonly createdAt?: string;
-  readonly suggestedExpiresAt?: string;
+  /** 当前 interim 状态；探测结果（suspended/policy_denied/model_not_allowed/unreachable）属 V1 */
+  readonly state: 'unconfigured' | 'configured' | 'invalid' | 'owner-mismatch';
+  readonly ownerSubject?: string | null;
+  readonly deviceLabel?: string | null;
+  readonly enteredAt?: string | null;
+  readonly suggestedExpiry?: string | null;
+  /** provider 来源；非 keychain 时账户页提示“未受系统保护” */
+  readonly storage?: string | null;
+  readonly matchesAccount?: boolean;
+  /** V1：最近一次探测时间与探测状态 */
   readonly lastProbeAt?: string;
 }
 
@@ -234,12 +233,12 @@ export interface IamAccount {
 }
 ```
 
-Client 通过 `iam` Remote 命名空间调用 `startSignIn` / `cancelSignIn` / `signOut` / `getView` / `setGatewayCredential` / `clearGatewayCredential` / `probeGatewayCredential` 并订阅 `watch`；`tokenFor` 不暴露给浏览器，`getPrincipal` 供 Host 内部 policy/audit 使用，Client 从 `IamView.principal` 取展示所需的最小主体。断线重连后重新 `getView`，不依赖内存事件重放。V1 中 `setGatewayCredential`/`clearGatewayCredential`/`probeGatewayCredential` 是目标接口，当前未实现。
+Client 通过 `iam` Remote 命名空间调用 `startSignIn` / `cancelSignIn` / `signOut` / `getView` / `setGatewayCredential` / `clearGatewayCredential` / `probeGatewayCredential` 并订阅 `watch`；`tokenFor` 不暴露给浏览器，`getPrincipal` 供 Host 内部 policy/audit 使用，Client 从 `IamView.principal` 取展示所需的最小主体。断线重连后重新 `getView`，不依赖内存事件重放。V1 中 `setGatewayCredential`/`clearGatewayCredential`/`probeGatewayCredential` 是目标接口；当前 interim Host 已实现录入/清除/状态读取（`saveGatewayCredential`/`clearGatewayCredential`/`loadGatewayCredential`，状态并入 `IamView.gatewayCredential`），`probeGatewayCredential` 未实现（探测归网关包）。
 
-### 5.0 当前 interim 接口（V0.4.0）
+### 5.0 当前 interim 接口（V0.4.1）
 
 > 以下 TypeScript 是 V1 目标；当前实现的实际形态：
-> `createIamService(config, options)` 返回 Host 对象；`getView()` 同步返回快照，`startSignIn()` 无参并返回 `{ view, authorizationUrl }`，`cancelSignIn()`/`signOut()` 无参，`handleCallback(rawUrl)` 接收完整回调 URL，`syncFromStore()` 在 `/view` 前同步共享记录，`watch(signal)` 仅 Host 内部可用。Client 通过 interim same-origin HTTP 调用，不经过 Remote。`IamView` 当前字段为 `state`、`configured`、`signedIn`、`canSignOut`、`canSignIn`、`missing`、`error: string|null`、`exclusive: string`、`principal: string|null`、`accessExpiresAt: string|null`；不包含 `authorizationUrl`/`attemptId`/`gatewayCredential`，授权 URL 由 `startSignIn` 的返回值单独给出；网关凭据接口尚未实现。
+> `createIamService(config, options)` 返回 Host 对象；`getView()` 同步返回快照，`startSignIn()` 无参并返回 `{ view, authorizationUrl }`，`cancelSignIn()`/`signOut()` 无参，`handleCallback(rawUrl)` 接收完整回调 URL，`syncFromStore()` 在 `/view` 前同步共享记录，`watch(signal)` 仅 Host 内部可用。Client 通过 interim same-origin HTTP 调用，不经过 Remote。`IamView` 当前字段为 `state`、`configured`、`signedIn`、`canSignOut`、`canSignIn`、`missing`、`error: string|null`、`exclusive: string`、`principal: string|null`、`accessExpiresAt: string|null`、`gatewayCredential: object|null`、`gatewayConsoleUrl: string|null`；不包含 `authorizationUrl`/`attemptId`，授权 URL 由 `startSignIn` 的返回值单独给出。网关凭据的 Host 方法为 `saveGatewayCredential({key, deviceLabel})`、`clearGatewayCredential()`、`loadGatewayCredential({force})`，状态随 `IamView.gatewayCredential` 返回（`state`、`deviceLabel`、`ownerSubject`、`enteredAt`、`suggestedExpiry`、`storage`、`matchesAccount`）；`probeGatewayCredential` 未实现。仅当 access 过期且 refresh 可用时，`syncFromStore` 才会在后台刷新（30 秒退避）。
 
 ### 5.1 凭据记录
 
@@ -258,7 +257,8 @@ interface IamGrantV1 {
   accessToken: string;
   accessExpiresAt: string;
   scope: string;
-  resource: string;
+  /** 未配置 iam.gatewayResource 时缺省；静态 Key 模式不使用 */
+  resource?: string;
   obtainedAt: string;
   authTime?: string;
   /** 仅 logoutMode=rp 时保存；含身份 claims，按敏感数据对待 */
@@ -281,11 +281,11 @@ interface IamGrantV1 {
 | 日志 | 主体、资源、结果、耗时、错误类别 | 90 天（认证）/30 天（配置错误） | 本地写失败不阻断；必要审计由 policy 执行 |
 | 官方旧 grant | 不读取、不刷新、不用于调用 | 直到用户清理 | 清理失败保留并提示 |
 
-**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback，账户页应显示“未受系统保护”（V1 目标；当前账号页尚未暴露 storage 字段，见 §4.4 状态说明）。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
+**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback。账户页已返回并展示 `gatewayCredential.storage`（`keychain`/`file` 等），非 keychain 时显示“未受系统保护”，见 §4.4。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
 
 开发 fallback 的文件读写使用各操作独立快照，避免无锁读取污染锁内事务。文档锁争用超过 10 秒报 `KEYCHAIN_LOCK_TIMEOUT`，不按 PID/时间自动接管：检查旧锁后再重命名不能排除另一等待者已取得新锁的竞态。异常退出留下锁时，须先停止使用同一文件的所有进程，再人工确认和恢复；不把该最小 fallback 当作生产锁与 OS adapter 的实现。
 
-镜像/副本说明：V1 不再把 IAM access token 写入 `ENTERPRISE_ACCESS_TOKEN`；IAM token 只存在于 GrantRecord 与内存。网关凭据 `ENTERPRISE_STATIC_KEY` 由同一 keychain provider 保护；在 dev/pilot 的 0600 fallback 下仍为明文，账户页应提示（V1 目标；当前未实现）。`llm-pi-ai` 每次请求重新解析该引用，用户更换 Key 后无需重启；不要把“内存中的 Key”写成唯一副本。
+镜像/副本说明：V1 不再把 IAM access token 写入 `ENTERPRISE_ACCESS_TOKEN`；IAM token 只存在于 GrantRecord 与内存。网关凭据 `ENTERPRISE_STATIC_KEY` 由同一 keychain provider 保护；在 dev/pilot 的 0600 fallback 下仍为明文，账户页已按 `storage` 来源提示“未受系统保护”（OS keychain adapter 未实现，生产仍按 fail closed 处理）。`llm-pi-ai` 每次请求重新解析该引用，用户更换 Key 后无需重启；不要把“内存中的 Key”写成唯一副本。
 
 ## 7. 流程
 
@@ -307,7 +307,7 @@ flowchart TD
   H -->|否| K
 ```
 
-启动不主动打 IAM：配置缺失即 `unconfigured`；已有 access token 未过期则直接恢复 IAM ready；过期才在首次需要或账户页打开时刷新。这样避免离线启动被网络等待拖住，也符合“IAM 不可达时保留仍有效的授权至原到期”。网关凭据不阻塞 IAM ready；模型调用前另查 `ENTERPRISE_STATIC_KEY`，未配置即提示配置，已配置则按需探测。
+启动不主动打 IAM：配置缺失即 `unconfigured`；已有 access token 未过期则直接恢复 IAM ready；过期且 refresh 可用时，在首次需要或 `/view` 轮询中后台刷新（30 秒退避），避免离线启动被网络等待拖住，也符合“IAM 不可达时保留仍有效的授权至原到期”。网关凭据不阻塞 IAM ready；模型调用前另查 `ENTERPRISE_STATIC_KEY`，未配置即提示配置，已配置的有效性由网关包按需探测，本模块不探测。
 
 ### 7.2 登录
 
@@ -331,7 +331,7 @@ flowchart TD
 - 每次登录一个 `attemptId`；同一账户同时只允许一个 attempt，第二次返回“已有登录进行中”，不并行打开两个浏览器流程。
 - attempt 总时限 300 秒；用户取消、关闭对话框或进程退出时清理 attempt，迟到的回调按无效处理。
 - 回调换 token 使用 `httpTimeoutMs`；授权码只兑换一次，失败不重放同一 code。
-- 登录成功后只代表 IAM ready；模型是否可用取决于 `ENTERPRISE_STATIC_KEY` 是否配置且探测通过。二者状态分开，不把“未配置网关凭据”显示成“登录失败”。
+- 登录成功后只代表 IAM ready；模型是否可用取决于 `ENTERPRISE_STATIC_KEY` 是否已配置（其有效性由网关包探测，本模块不探测）。二者状态分开，不把“未配置网关凭据”显示成“登录失败”。
 - 登录成功后设置 `iam.defaultModel` 为 V1 目标；当前未实现，配置项不生效。
 
 ### 7.3 刷新
