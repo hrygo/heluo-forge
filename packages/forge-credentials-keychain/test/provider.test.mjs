@@ -116,3 +116,30 @@ test('the provider never claims a cross-process lock or durable memory storage',
   assert.equal(value.crossProcessLock, false);
   assert.equal(value.durable, false);
 });
+test('a rejected mutator does not persist a corrupt record', async () => {
+  const { value, backend } = provider();
+  await assert.rejects(
+    () => value.modifyRecord('heluo-iam/session', async () => ({ kind: 'grant' })),
+    (error) => error.code === 'KEYCHAIN_RECORD_INVALID',
+  );
+  assert.equal(await value.readRecord('heluo-iam/session'), undefined);
+  assert.deepEqual(await value.listRecords(), []);
+  assert.equal([...backend._snapshot().keys()].some((key) => key.includes('/record/')), false);
+});
+test('committed changes notify reference and record listeners', async () => {
+  const calls = [];
+  const { value } = provider({
+    notifyReference: (ref) => calls.push(['ref', ref]),
+    notifyRecord: (key) => calls.push(['record', key]),
+  });
+  await value.set('ENTERPRISE_ACCESS_TOKEN', 'token');
+  await value.unset('ENTERPRISE_ACCESS_TOKEN');
+  await value.modifyRecord('heluo-iam/session', async () => ({ kind: 'grant', payload: { version: 1 } }));
+  await value.deleteRecord('heluo-iam/session');
+  assert.deepEqual(calls, [
+    ['ref', 'ENTERPRISE_ACCESS_TOKEN'],
+    ['ref', 'ENTERPRISE_ACCESS_TOKEN'],
+    ['record', 'heluo-iam/session'],
+    ['record', 'heluo-iam/session'],
+  ]);
+});

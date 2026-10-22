@@ -92,7 +92,7 @@ function encodeRecord(record) {
 
 /**
  * @param {object} backend
- * @param {{ service?: string, accountPrefix?: string }} [options]
+ * @param {{ service?: string, accountPrefix?: string, notifyReference?: (ref: string) => void, notifyRecord?: (key: string) => void }} [options]
  */
 export function createKeychainProvider(backend, options = {}) {
   assertBackend(backend);
@@ -134,10 +134,12 @@ export function createKeychainProvider(backend, options = {}) {
         throw new KeychainProviderError('KEYCHAIN_VALUE_EMPTY', 'refusing to store an empty credential');
       }
       await backend.set(`${refPrefix}${ref}`, value);
+      options.notifyReference?.(ref);
     },
 
     async unset(ref) {
       await backend.delete(`${refPrefix}${validateRef(ref)}`);
+      options.notifyReference?.(ref);
     },
 
     async readRecord(key) {
@@ -176,9 +178,13 @@ export function createKeychainProvider(backend, options = {}) {
         const current = await this.readRecord(key);
         const next = await mutate(current);
         if (next === undefined) return current;
+        // Validate the exact bytes before writing: a rejected record must not
+        // become durable and poison the shared credentials seam.
         const encoded = encodeRecord(next);
-        await backend.set(`${recordPrefix}${key}`, encoded);
-        return decodeRecord(key, encoded);
+        const validated = decodeRecord(key, encoded);
+        await backend.set(`${recordPrefix}${key}`, JSON.stringify(validated));
+        options.notifyRecord?.(key);
+        return validated;
       });
     },
 
@@ -186,6 +192,7 @@ export function createKeychainProvider(backend, options = {}) {
       validateRecordKey(key);
       await withKeyLock(key, async () => {
         await backend.delete(`${recordPrefix}${key}`);
+        options.notifyRecord?.(key);
       });
     },
 
