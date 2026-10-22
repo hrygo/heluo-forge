@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.3.1 |
+| 版本 | V0.3.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,7 +14,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-10-21 |
 | 门禁 | G0 |
-| 模块状态 | 实施中（Host + Client 开发骨架） |
+| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程已实现，真实联调待） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/麒麟实机。以上未核验项不写成已实现。
 >
@@ -116,7 +116,7 @@
 | 登录中 | 显示 attempt 状态与取消；浏览器未拉起时提供重开/复制链接 |
 | 已登录 | 账户页显示主体、状态、access 到期、刷新时间；提供登录/退出/同时退出 IAM/清理官方旧记录/复制诊断 |
 | 官方 UI | 不显示官方账户页、官方登录入口、官方模型/API Key 入口 |
-| 挂载点 | 优先 `settings.section`、`sidebar.footer.action`；无稳定 slot 时暂停该 UI 实现并回到设计确认，不硬编码 DOM |
+| 挂载点 | 实际使用 `settings.section` + `shell.overlay`；不占用单占位 `settings.launcher`（避免替换官方设置触发器）；`sidebar.footer.action` 未发现，不硬编码 DOM |
 
 4 屏 onboarding 不是品牌营销页；不做余额、充值、用量页。复制诊断信息只含主体、状态、到期、错误类别与版本，不含 token、code、verifier 或 ID Token。
 
@@ -125,6 +125,7 @@
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
 |---|---|---|---|---|
 | `iam.discoveryUrl` | string | 空 | 条件 | OIDC discovery；与显式端点二选一 |
+| `iam.issuer` | string | 空 | 条件 | 显式端点时必填；用于 ID Token `iss` 校验 |
 | `iam.authorizationEndpoint` | string | 空 | 条件 | 显式端点；与 discovery 同时配置时优先 |
 | `iam.tokenEndpoint` | string | 空 | 条件 | 换 token |
 | `iam.jwksUri` | string | 空 | 条件 | ID Token 验签 |
@@ -132,7 +133,8 @@
 | `iam.endSessionEndpoint` | string | 空 | 否 | RP 登出；`logoutMode=rp` 时必填 |
 | `iam.clientId` | string | 空 | 是 | 本机公共客户端标识，无 client secret |
 | `iam.scopes` | string[] | `openid profile offline_access` | 是 | 基础 scope；不含资源 scope |
-| `iam.redirectPath` | string | `/iam/callback` | 否 | 必须与 IAM 注册的 redirect URI 精确匹配 |
+| `iam.redirectPath` | string | `/iam/callback` | 否 | Host 回调路径 |
+| `iam.redirectUri` | string | 空 | 否 | 绝对回调 URI；与 `redirectPath` 二选一，生产必须与 IAM 注册值精确匹配 |
 | `iam.postLogoutRedirectUri` | string | 空 | 否 | `logoutMode=rp` 时使用 |
 | `iam.gatewayResource` | string | 空 | 是 | 网关资源标识；决定 `resource` 与镜像 |
 | `iam.defaultProvider` | string | `enterprise` | 否 | 登录后默认模型所属 provider |
@@ -142,6 +144,7 @@
 | `iam.httpTimeoutMs` | number | 10000 | 否 | 换 token / 撤销单次请求上限 |
 | `iam.logoutMode` | `local` / `rp` | `local` | 否 | 是否发起 RP 登出 |
 | `iam.requireExclusive` | boolean | `true` | 否 | 官方账号仍存在时拒绝就绪 |
+| `iam.allowInsecureHttp` | boolean | `false` | 否 | 仅本地 mock/loopback 允许 HTTP；生产必须关闭 |
 
 **导出面（V1）**
 
@@ -171,7 +174,7 @@ export interface IamPrincipal {
 export interface IamView {
   readonly state: IamState;
   readonly principal?: IamPrincipal;
-  readonly expiresAt?: number;
+  readonly accessExpiresAt?: string;
   readonly authorizationUrl?: string;
   readonly attemptId?: string;
   readonly error?: { readonly code: string; readonly message: string };
@@ -208,13 +211,13 @@ interface IamGrantV1 {
   subject: string;
   clientId: string;
   refreshToken: string;
-  refreshExpiresAt?: number;
+  refreshExpiresAt?: string;
   accessToken: string;
-  accessExpiresAt: number;
+  accessExpiresAt: string;
   scope: string;
   resource: string;
-  obtainedAt: number;
-  authTime?: number;
+  obtainedAt: string;
+  authTime?: string;
   /** 仅 logoutMode=rp 时保存；含身份 claims，按敏感数据对待 */
   idToken?: string;
 }
@@ -376,7 +379,7 @@ flowchart TD
 | keychain provider 是否可插拔；Windows DPAPI/凭据管理器、麒麟 libsecret/keyring 的 provider API | 平台组（实测） | 生产存储是否成立；不可插拔则暂停 Q15，不静默降级 |
 | 旧 0600 记录迁移的删除时机、失败回滚与审计 | 平台组、安全 | 迁移是否可恢复、明文残留窗口 |
 | `engines.dsh` 的断言形态与目标版本范围 | 平台组（实测） | 安装/升级门禁 |
-| `settings.section`、`settings.launcher`、`shell.overlay` 已按 slot 类型注册骨架；`conversation.input.dock`、`settings.models.sign-in` 与真实挂载未验；原 `sidebar.footer.action` 在 DSH `0.2.1-rc.2` 源码中未发现 | 平台组（源码核验，未挂载实测） | Client 挂载点与首启入口 |
+| `settings.section`、`shell.overlay` 已按 slot 类型注册；不占用单占位 `settings.launcher`（避免替换官方设置触发器）；`conversation.input.dock`、`settings.models.sign-in` 与真实挂载未验；原 `sidebar.footer.action` 在 DSH `0.2.1-rc.2` 源码中未发现 | 平台组（源码核验，未挂载实测） | Client 挂载点与首启入口 |
 | 代理、内部 CA、Windows 防火墙下的 IAM/网关可达性 | 平台组、IT | 登录成功率与支持成本 |
 | 官方旧 grant 与旧默认模型的迁移/清理策略 | 平台组、安全 | 升级体验与残留身份 |
 

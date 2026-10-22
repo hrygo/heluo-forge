@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-001 |
 | 文档名称 | 网关凭据双模式支持设计 |
-| 版本 | V0.1.3 |
+| 版本 | V0.1.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -67,7 +67,7 @@ interface GatewayCredentialProvider {
 | 401 处置 | 刷新后至多重试一次 | 提示重新签发 |
 | 账号切换 | 清理镜像与按资源缓存 | 清理镜像，要求重新粘贴 |
 | 探测方式 | 令牌有效性与到期时间 | 一次最小调用 |
-| 存储位置 | `CredentialKey` 记录 | 凭据记录；生产使用 keychain provider，仅 dev/pilot 可显式接受 `dsh-credentials-local` 的 0600 YAML |
+| 存储位置 | `CredentialKey` 记录 | 凭据记录；生产使用 keychain provider，仅 dev/pilot 可显式接受 `dsh-credentials-local` 的 0600 YAML 或 keychain 包的显式 0600 file backend |
 
 两者都不把值写进日志、配置明文或模型上下文。
 
@@ -121,7 +121,7 @@ interface GatewayCredentialProvider {
 
 ## 9. 安全边界
 
-- 凭据值只存在于凭据存储与该引用；生产必须由 keychain provider 保护，keychain 不可用时 fail closed；仅 dev/pilot 可显式接受 `dsh-credentials-local` 的 0600 明文 YAML，并配合 A4 的文件/子进程拒绝。旧 0600 记录在 keychain 可用后迁移，成功才删除明文。
+- 凭据值只存在于凭据存储与该引用；生产必须由 keychain provider 保护，keychain 不可用时 fail closed；仅 dev/pilot 可显式接受 `dsh-credentials-local` 的 0600 明文 YAML 或 keychain 包的 `allowInsecureFile` backend，并配合 A4 的文件/子进程拒绝。旧 0600 记录在 keychain 可用后迁移，成功才删除明文。
 - 静态 Key 不参与刷新，避免"用长期凭据兑换短期凭据"的混合路径。
 - 退出时两种模式都清理镜像与缓存；令牌模式额外调用撤销，静态模式不代用户撤销（撤销在控制台）。
 - 切换模式必须留下审计事件：时间、旧模式、新模式、操作者。
