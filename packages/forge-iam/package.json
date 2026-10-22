@@ -1,0 +1,30 @@
+{
+  "name": "@heluo/forge-iam",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Enterprise IAM exclusive sign-in for DeepSeek Harness",
+  "engines": {
+    "dsh": ">=0.2.0"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./client.js"
+  },
+  "files": [
+    "src",
+    "client.js",
+    "README.md"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}
