@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-009 |
 | 文档名称 | DevOps 接入详细设计 |
-| 版本 | V0.2.0 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -78,11 +78,14 @@
 | `devops.authEnv` | string | `DEVOPS_TOKEN` | 否 | 注入凭据的环境变量名 |
 | `devops.outputFormat` | `json` \| `text` | `json` | 否 | 期望输出格式 |
 
-```bash title="命令面（示意，以团队澄清为准）"
-devops story list --project <id> --json
-devops story show <id> --json
-devops requirement list --project <id> --json
-```
+任务输入以系统变更及独立验收为主，所属故事只作背景。以下仅为待提供方映射的业务动作，不是可执行 CLI 命令，不预设 `devops` / `dop` 的子命令或参数：
+
+| 业务动作示意 | 必须取得的事实 | 状态 |
+|---|---|---|
+| 系统变更读取（`change.read`） | 独立描述/验收、系统/仓库、要求版本、所属故事 | 查询基线；实际命令/字段待核验 |
+| 已确认澄清/研发进展回写 | 正确对象、原版本、真实确认及结果引用 | 受控写目标；范围/C3批准及验证前禁用 |
+
+实际工具字段与失败语义见[工程工具契约](../../contracts/engineering-tools.md)，不能从上述动作名拼造未确认命令。
 
 ## 6. 权限、凭据与数据
 

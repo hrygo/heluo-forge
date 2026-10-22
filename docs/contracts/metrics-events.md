@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-METRICS-001 |
 | 文档名称 | 研发观察事件与上报契约 |
-| 版本 | V0.2.0 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -92,7 +92,7 @@
 
 若现有 OTLP 通路不可用，可评审 DevOps 摄取 API，但它是替代候选而非已经存在的兜底。默认不同时双发；切换需保持事件标识和确认位置，无法证明去重时停止并核对，不新建路由服务。凭据通过已有身份机制取得，不进事件、模型或磁盘缓冲。
 
-原生 CI/CD 语义可参考 [OTel CI/CD spans](https://opentelemetry.io/docs/specs/semconv/cicd/cicd-spans/)（2026-10-22 页面核对，该页 span 约定标为 Development）；这不表示全部相关属性都处于同一稳定级别。企业采纳的具体版本与字段须单独锁定；本契约的业务事件不直接依赖实验性字段，也不部署额外 trace 服务。
+原生 CI/CD 语义参考 [OTel semconv v1.44.0 CI/CD spans](https://github.com/open-telemetry/semantic-conventions/blob/v1.44.0/docs/cicd/cicd-spans.md)（2026-10-22 核对），该版本文档状态为 **Release Candidate**；具体属性须分别核对稳定级别，不能由文档状态推断全部属性相同。企业采纳的具体版本与字段仍须单独锁定；本契约的业务事件独立定义，不直接采用该 spans schema，也不部署额外 trace 服务。
 
 ### 5.2 失败、重送与候选上限
 

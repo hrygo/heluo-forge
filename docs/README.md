@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.19.0 |
+| 版本 | V1.20.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -65,8 +65,8 @@
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | IAM 团队 | G0 | 待启动 | `resource` 支持、claims、client 注册、TTL、撤销 |
 | CORP-DSH-GW-001 | AI 网关契约（V0.8.4） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0 | 草案 | 验签方式、consumer 生命周期、双维度额度、429 契约、C1/C4 与待批准保留期；方向回函不替代 G1/G2 冻结与验证 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 平台组 | G0 | 待启动 | 内核、沙箱、原生模块、浏览器 |
-| CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | DevOps 团队 | G1 | 待启动 | 只读命令、结构化输出、凭据注入、错误与版本兼容；MCP 服务仅在 CLI 不满足已确认前提时另行评估 |
-| CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | 平台组 | G1 | 待启动 | CLI 版本与双端产物、只读命令、JSON 稳定性、凭据方案 |
+| CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | DevOps 团队 | G1 | 待启动 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
+| CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | 平台组 | G1 | 待启动 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | 安全 + 平台组 | G2 | 待启动 | 规则、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | 平台组 + IT | G2 | 待启动 | registry、index、通道、回滚 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | 平台组 + IT | G2 | 待启动 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
@@ -79,7 +79,7 @@
 
 | 入口 | 文档 | 用途与边界 |
 |---|---|---|
-| 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 七封可独立转发的正文、45 项问题；回函核验后写入技术契约，不自动构成准入 |
+| 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 七封可独立转发的正文、56 项问题；回函核验后写入技术契约，不自动构成准入 |
 | 市场方案 | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>) | 评审稿；AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；不等企业批准或上线 |
 | AIHUB 索引交付 | [issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 外部交付 issue：URL、format-1、registry、更新/撤回时限、三目标联调；作为验收跟踪，不替代企业批准 |
 | 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；索引交付、三目标安装与全通道边界仍需验 |

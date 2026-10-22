@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-001 |
 | 文档名称 | 河洛企业级智能研发平台推广实施方案 |
-| 版本 | V2.1.0 |
+| 版本 | V2.2.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟，责任人待确认） |
@@ -35,7 +35,7 @@
 | 1 | 企业自研 IAM，遵循 OAuth 标准，支持跳转登录与回调 | 走 Authorization Code + PKCE；需确认 OIDC 还是纯 OAuth2 |
 | 2 | 基于 Kong 的自研 AI 网关 + 机构内私有化模型，具备详细额度管理 | 走 token 直通，不向客户端发 API Key；数据不出机构边界（C1）；计量与限额在网关侧，支持按人 / consumer 双维度 |
 | 3 | 每人使用自己的 DSH；共享 Web 后续再议 | 多租户整块移出一期，省略 connection/session 的核心改造 |
-| 4 | 自研 DevOps 平台，提供 API 与 CLI | 复用现有 CLI，通过受控命令白名单提供只读工具面；不自建 MCP 服务 |
+| 4 | 自研 DevOps 平台，提供 API 与 CLI | 复用现有 CLI，以系统变更及独立验收为主；查询基线 + 受控写目标（待批/默认禁用），不自建 MCP 服务 |
 | 5 | 试点 3 部门 800 人，Windows 与银河麒麟（ARM）各占 50%，用户有本机管理员权限可自助安装 | Windows 走官方 App + MSI 自助安装（MDM 可选）；麒麟走本机 Web，麒麟实机验证前置为 P0 准入项 |
 | 6 | 本机 Web 不供他人使用 | 严格绑定 `127.0.0.1`，保留 launch token 门禁并由 `.desktop` 启动脚本自动读取拉起，不做入口 SSO |
 | 7 | 企业 npm 统一分发，内部定制源码固定 Gitee group；首版仅自包含、三目标通用稳定包（2026-10-21 用户决策） | 见[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)；AIHUB 维护托管索引，原生「索引源」+ 官方 manager 安装；不建生成器/在线授权/租约；npm 适配、索引交付与企业控制仍需验 |
@@ -69,8 +69,8 @@
   │      ├─ consumer 映射 + 人 / consumer 双维度限额
   │      └─ 默认关闭请求正文日志（C4）
   │
-  ├─ DevOps CLI（受控只读命令）→ 企业 DevOps API
-  └─ Gitee gh 兼容 CLI（受控只读命令）→ Gitee API
+  ├─ DevOps CLI（查询基线 + 受控写目标，未批写禁用）→ 企业 DevOps API
+  └─ Gitee gh 兼容 CLI（查询基线 + 受控写目标，未批写禁用）→ Gitee API
 ```
 
 ### 2.1 令牌与身份传递
@@ -78,7 +78,7 @@
 IAM 插件在 fork 中增加模型令牌镜像：登录与刷新成功后，把模型网关的 access token 写入 `ENTERPRISE_ACCESS_TOKEN` 这个 CredentialRef（原插件只把会话保存在凭据记录里）。按资源 token broker 仅供未来经批准的 MCP 集成评估，不属于 DevOps/Gitee CLI 接入路径。DSH 的凭据 seam 按操作重新解析引用，因此：
 
 - 模型请求由 `llm-pi-ai` 的 `apiKeyEnv` 直接取得当前 token，**不需要写新的 LLM adapter**。
-- DevOps 与 Gitee CLI 由各自服务端按用户现有权限鉴权；客户端仅注入获准凭据并执行经确认的只读命令。MCP token broker 不作为这两项接入的前提。
+- DevOps 与 Gitee CLI 由各自服务端按用户现有权限鉴权；客户端仅注入获准凭据并执行受控清单中的动作；查询基线与受控写目标分别核验，写在范围/C3分类批准及验证前禁用。MCP token broker 不作为这两项接入的前提。
 - 刷新后下一次请求即生效，无需手动重启 DSH 进程（目标行为，须经 A2 / A14 验证）。
 
 以下 YAML 沿用历史概念组合，不是可直接投产的配置：`retryPolicy.maxRetries=2` 不能证明 429 禁重试或 401 后刷新。P1 须验证实际行为；未知配置字段不得猜写，只读查询超时或结果未知时不盲目重放。
@@ -105,8 +105,8 @@ IAM 插件在 fork 中增加模型令牌镜像：登录与刷新成功后，把�
 |---|---|---|
 | IAM 登录 | Authorization Code + PKCE（S256），public client，loopback 回调 | 桌面走系统浏览器，不把 IAM 登录页嵌进 WebView |
 | 模型请求 | DSH 以 IAM access token 作 Bearer 调用 Kong；Kong 验签并映射 consumer | 客户端不持有网关 API Key |
-| DevOps CLI | 本机受控调用，只读子命令白名单；通过 bash seam 与策略门禁执行 | 确认 CLI 命令、结构化输出、凭据注入、超时及只读授权；首要闭环为用户故事/需求读取 |
-| Gitee CLI | 本机受控调用 `gh` 兼容 CLI，只读子命令白名单 | 确认企业主机、仓库/Issue/PR 查询、JSON 稳定性、凭据注入及麒麟 aarch64 可用性 |
+| DevOps CLI | 本机受控调用，经 bash seam 与策略执行；查询与受控写分别列清单 | 系统变更及独立验收为主、故事作背景；核验输出/凭据/权限，研发写待范围与 C3 分类批准后另验 |
+| Gitee CLI | 本机受控调用 `gh` 兼容 CLI；查询基线 + 受控写目标 | 核验仓库/Issue/PR 查询、JSON/凭据/双端；常规研发与评审写待范围/C3批准、真实确认及回查验证，不自动合并 |
 
 Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-connect` 做 JWKS 验签（Kong OSS 的 `jwt` 插件只支持按 consumer 配静态密钥，不适合多用户）；`key_claim_name` 与 `sub` 映射能否适用，须由网关团队确认，不是本次核实的企业实现。模型路由仅指向机构内私有化推理上游；401 后的刷新、错误分类与重试边界按 [AI 网关契约](../contracts/gateway-contract.md) 及 A2 / A3 / A14 联调，不以“重新解析凭据”代替刷新与恢复证据。
 
@@ -162,7 +162,7 @@ Kong 侧保留历史选型建议：用自研插件或 Enterprise 的 `openid-con
 | P1-2 | Windows `desktopServices` 适配层；仅当其他获准 MCP 接入仍需要时，另行验证 `dsh-mcp-client` 补丁范围 | 约 30 行 Host 插件；MCP 补丁不计入 DevOps/Gitee CLI 接入前提 |
 | P1-3 | 刷新串行化：把“检查有效期 + 刷新（≤5s 超时）+ 写回”放进 `modifyRecord` | 双进程不互相踢出 |
 | P1-4 | Gitee CLI 只读接入：仓库 / Issue / PR 查询，验证命令权限、结构化输出、凭据与双端可用性 | 经核验的 `@heluo/forge-gitee` CLI 适配（落入 `CORP-DSH-GITEE-001`） |
-| P1-5 | DevOps CLI 只读接入：用户故事/需求查询最小闭环与 10 人内测，命令面以提供方确认结果为准 | 经核验的 `@heluo/forge-devops` CLI 适配（落入 `CORP-DSH-DEVOPS-001`） |
+| P1-5 | DevOps CLI 查询基线：系统变更及独立验收为主、所属故事作背景，完成最小闭环与 10 人内测；受控写由 P2-1 取得批准并单独验证，命令面以提供方确认为准 | 经核验的 `@heluo/forge-devops` CLI 适配（落入 `CORP-DSH-DEVOPS-001`） |
 
 ### 4.3 P2 试点工程准备（4 周，准入 G2）与试点运行（6 周，准入 G3）
 
