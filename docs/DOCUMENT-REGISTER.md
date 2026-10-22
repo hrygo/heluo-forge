@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.26.2 |
+| 版本 | V1.26.4 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,7 +19,7 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.26.2 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.26.4 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.19.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.6.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.0 | 生效 | 平台组 | — |
@@ -45,10 +45,10 @@
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V0.9.0 | 草案 | 网关团队 | G0 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.5.6 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
 | CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.4.0 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
-| CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.8.1 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
+| CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.8.2 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
 | CORP-DSH-CONF-002 | 私有化 Gitee 内部插件源码接入问询函 | [collaboration/gitee-market-clarification.md](<collaboration/gitee-market-clarification.md>) | V0.3.0 | 草案 | 平台组（代拟）；Gitee 团队回函 | G1 源码接口联调前；G2 开放前确认运行事项 |
 | CORP-DSH-CONF-003 | 插件市场企业接入问询函（P0） | 已废止 | — | 废止 | 平台组 | 内容已吸收至 DESIGN-007/012 及 P0 取证单，问询草案已废止删除 |
-| CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.1.3 | 草案 | 平台组（代拟）；IAM 团队回函 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
+| CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.2.0 | 草案 | 平台组（代拟）；IAM 团队回函 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
@@ -67,6 +67,7 @@
 | 工程仓库结构设计提案图解 | [repository-structure-proposal.html](<assets/repository-structure-proposal.html>) | [工程结构设计](<engineering/repository-structure-design.md>) | 工程整理时点的目录与迁移摘要；当前市场实现见设计索引，图解不作实时清单 |
 | 网关静态 Key 方案设计 | [gateway-credential-options.html](<assets/gateway-credential-options.html>) | [个人凭证接入](<architecture/gateway-static-key-option.md>)、[网关契约](<contracts/gateway-contract.md>)§4 | 2026-10-20 原静态 Key 提议（`csk_`/API/HMAC/设备头）的辅助图解；已被 2026-10-22 ADR-14 的 UAG 个人凭证方案取代，仅作历史参考，不替代正文 |
 | 插件市场功能架构图 | [plugin-market-architecture.html](<assets/plugin-market-architecture.html>) | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>)、[ADR-11／13](<architecture/plugin-registry-source-decision.md>) | 轻量原生索引示意：AIHUB 索引、原生索引源、官方 manager、Artifactory、能/不能保证与验收；评审稿示意，不替代正文、企业接入或门禁证据 |
+| 品牌资产套件（正面象首，方向 B） | [branding/elephant/b-kit/index.html](<assets/branding/elephant/b-kit/index.html>) | [品牌与外观详细设计](<design/plugins/forge-brand.md>) | 现存的唯一预置品牌资产：主标、11 个组件标识与多分辨率切图，配 `manifest.json` 校验清单与 `usage.txt` 使用规则；状态为建议稿（代拟），方向 B 由用户选定，正式审核与批准待定；组件标识只描述职责，不表示对应模块已实现、已部署或已批准；`packages/forge-iam/icon.svg` 逐字节取自其中 `forge-iam-symbol.svg`，由 `packages/forge-iam/test/package-shape.test.mjs` 校验 |
 
 ## 2. 维护规则
 
