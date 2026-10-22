@@ -487,3 +487,85 @@ test('sign-out keeps the gateway credential but clears its session match', async
   assert.equal(view.gatewayCredential.matchesAccount, false);
   assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY'))?.value, `uag-${'e'.repeat(32)}`);
 });
+
+test('the account view reports a non-keychain storage source for the key', async () => {
+  const credentials = new MemoryCredentials();
+  await createGrantStore(credentials).write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-old', accessToken: 'access-old',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid',
+  });
+  const describe = credentials.describe.bind(credentials);
+  credentials.describe = async (ref) => ({ ...(await describe(ref)), source: 'file' });
+  await createGatewayCredentialStore(credentials).save({
+    value: `uag-${'0'.repeat(32)}`,
+    ownerSubject: 'E1001',
+    enteredAt: '2030-01-01T00:00:00.000Z',
+  });
+  const service = createIamService({ ...configured, gatewayResource: '' }, { credentials });
+  await service.hydrate();
+  assert.equal(service.getView().gatewayCredential.storage, 'file');
+  assert.deepEqual(service.getPrincipal(), { issuer: 'https://iam.corp.example', subject: 'E1001' });
+});
+
+test('a token inside the refresh skew stays ready until it actually expires', async () => {
+  const credentials = new MemoryCredentials();
+  const fixed = Date.parse('2030-01-01T00:00:00.000Z');
+  await createGrantStore(credentials).write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-old', accessToken: 'access-old',
+    accessExpiresAt: '2030-01-01T00:00:30.000Z',
+    obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  const service = createIamService(configured, { credentials, now: () => fixed });
+  const view = await service.hydrate();
+  assert.equal(view.state, 'ready');
+});
+
+test('a user-saved value counts even when the provider is a plaintext fallback', async () => {
+  const credentials = new MemoryCredentials();
+  await createGrantStore(credentials).write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-old', accessToken: 'access-old',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid',
+  });
+  await createGatewayCredentialStore(credentials).save({
+    value: `uag-${'1'.repeat(32)}`,
+    ownerSubject: 'E1001',
+    enteredAt: '2030-01-01T00:00:00.000Z',
+  });
+  const resolve = credentials.resolve.bind(credentials);
+  credentials.resolve = async (ref) => {
+    const resolved = await resolve(ref);
+    return resolved ? { ...resolved, source: 'file' } : resolved;
+  };
+  const service = createIamService({ ...configured, gatewayResource: '' }, { credentials });
+  const view = await service.hydrate();
+  assert.equal(view.gatewayCredential.state, 'configured');
+  assert.equal(view.gatewayCredential.ownerSubject, 'E1001');
+});
+
+test('the account summary is reused briefly instead of reading the secret on every poll', async () => {
+  const credentials = new MemoryCredentials();
+  let clock = Date.parse('2030-01-01T00:00:00.000Z');
+  await createGrantStore(credentials).write({
+    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
+    refreshToken: 'refresh-old', accessToken: 'access-old',
+    accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
+    scope: 'openid', resource: 'https://gateway.corp.example',
+  });
+  const gateway = createGatewayCredentialStore(credentials);
+  await gateway.save({ value: `uag-${'2'.repeat(32)}`, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+  const service = createIamService(configured, { credentials, now: () => clock });
+  await service.hydrate();
+  assert.equal(service.getView().gatewayCredential.state, 'configured');
+  await gateway.clear();
+  await service.loadGatewayCredential();
+  assert.equal(service.getView().gatewayCredential.state, 'configured');
+  clock += 6000;
+  await service.loadGatewayCredential();
+  assert.equal(service.getView().gatewayCredential.state, 'unconfigured');
+});

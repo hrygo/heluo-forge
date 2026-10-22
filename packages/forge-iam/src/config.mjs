@@ -114,6 +114,10 @@ export function validateConfig(input) {
   if (scopes !== undefined && scopes !== null) {
     if (!Array.isArray(scopes) || scopes.some((item) => typeof item !== 'string' || item.length === 0)) {
       issues.push(issue('scopes', 'scopes must be an array of non-empty strings'));
+    } else if (!scopes.includes('openid')) {
+      // The flow verifies an ID token; without `openid` the IdP returns none and
+      // every login would fail later with a confusing token error.
+      issues.push(issue('scopes', 'scopes must include openid'));
     } else {
       value.scopes = [...scopes];
     }
@@ -132,6 +136,10 @@ export function validateConfig(input) {
       }
       if (!parsedPath || parsedPath.pathname !== redirectPath || parsedPath.search || parsedPath.hash) {
         issues.push(issue('redirectPath', 'redirectPath must be an absolute path without query or fragment'));
+      } else if (redirectPath === '/api/forge-iam' || redirectPath.startsWith('/api/forge-iam/')) {
+        // That prefix is the authenticated management API; a callback there
+        // would be rejected by connection authentication in the browser.
+        issues.push(issue('redirectPath', 'redirectPath must not overlap /api/forge-iam'));
       } else {
         value.redirectPath = redirectPath;
       }
@@ -151,6 +159,20 @@ export function validateConfig(input) {
       issues.push(issue('redirectUri', 'redirectUri path must equal redirectPath and carry no query or fragment'));
     } else if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
       issues.push(issue('redirectUri', 'redirectUri must use HTTPS unless it is loopback'));
+    }
+  }
+
+  if (value.postLogoutRedirectUri) {
+    let parsed;
+    try {
+      parsed = new URL(value.postLogoutRedirectUri);
+    } catch {
+      parsed = null;
+    }
+    if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
+      issues.push(issue('postLogoutRedirectUri', 'postLogoutRedirectUri must be an absolute http(s) URL'));
+    } else if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
+      issues.push(issue('postLogoutRedirectUri', 'postLogoutRedirectUri must use HTTPS unless it is loopback'));
     }
   }
 

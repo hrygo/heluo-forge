@@ -95,6 +95,16 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date
   if (!audienceIncludes(claims?.aud, clientId)) {
     throw new OidcError('IAM_ID_TOKEN_AUDIENCE', 'ID token audience does not include this client');
   }
+  // OIDC Core 3.1.3.7: with multiple audiences `azp` must name this client, and
+  // when present it must always match. Without this check a token minted for
+  // several clients could be replayed against this one.
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (audiences.length > 1 && typeof claims.azp !== 'string') {
+    throw new OidcError('IAM_ID_TOKEN_AUDIENCE', 'ID token has multiple audiences but no azp');
+  }
+  if (claims.azp !== undefined && claims.azp !== clientId) {
+    throw new OidcError('IAM_ID_TOKEN_AUDIENCE', 'ID token authorized party does not match');
+  }
   if (nonce !== undefined && claims?.nonce !== nonce) {
     throw new OidcError('IAM_ID_TOKEN_NONCE', 'ID token nonce does not match this attempt');
   }

@@ -112,6 +112,12 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录回调无效，请重新登录。';
       if (code === 'IAM_ATTEMPT_EXPIRED') return '登录尝试已过期，请重新登录。';
       if (code === 'IAM_INVALID_GRANT' || code === 'IAM_REAUTH_REQUIRED') return '登录已失效，请重新登录。';
+      if (code === 'IAM_NOT_SIGNED_IN') return '请先登录企业账号。';
+      if (code === 'IAM_ATTEMPT_CANCELLED') return '登录已取消，请重新登录。';
+      if (code === 'IAM_CALLBACK_UNAVAILABLE') return '本机回调地址不可用，请检查 Web 服务是否启动。';
+      if (code === 'IAM_CONFIG_INVALID') return 'IAM 配置无效，请管理员检查。';
+      if (code === 'IAM_DISPOSED') return '插件已卸载，请刷新页面。';
+      if (code === 'IAM_GRANT_CONTEXT_MISMATCH' || code === 'IAM_REFRESH_SUBJECT_MISMATCH') return '登录状态已变化，请重新登录。';
       if (code === 'IAM_GATEWAY_KEY_INVALID') return '凭证格式不正确：应为 uag- 加 32 位十六进制。';
       if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再录入网关凭据。';
       if (code === 'IAM_REQUEST_INVALID') return '请求内容无效，请重试。';
@@ -267,7 +273,7 @@ window.__ModuleLoader__.load({
         ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', marginTop: 4 } }, '企业登录独占检查未通过；请修正企业组合包。')
         : null;
       const hostError = view.error
-        ? h('div', { style: { color: '#b42318', marginTop: 4 } }, errorNotice(view.error))
+        ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', marginTop: 4 } }, errorNotice(view.error))
         : null;
       const notice = state.notice ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null;
       const loginLink = state.authorizationUrl
@@ -281,10 +287,15 @@ window.__ModuleLoader__.load({
         gateway.enteredAt ? `录入：${gateway.enteredAt}` : null,
         gateway.suggestedExpiry ? `建议到期：${gateway.suggestedExpiry}` : null,
       ].filter(Boolean);
+      const storageWarning = gateway.state === 'configured' && gateway.storage && gateway.storage !== 'keychain'
+        ? h('div', { style: { color: 'var(--dsw-alias-state-warn-primary)', marginTop: 4 } },
+            `存储来源：${gateway.storage}（未受系统钥匙串保护）`)
+        : null;
       const gatewayBlock = h('div', { style: { marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
         h('div', { style: { fontWeight: 600, marginBottom: 6 } }, '模型网关凭据'),
         h('div', { style: muted }, `UAG 个人凭证：${gatewayStatus}`),
         gatewayDetails.length ? h('div', { style: muted }, gatewayDetails.join(' · ')) : null,
+        storageWarning,
         gateway.state === 'configured'
           ? h('div', { style: muted }, '模型调用使用该凭据；IAM 登录状态变化不会自动替换它。')
           : h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'),
@@ -293,6 +304,7 @@ window.__ModuleLoader__.load({
             type: 'password',
             value: credential.value,
             placeholder: 'uag-…',
+            'aria-label': 'UAG 个人凭证',
             autoComplete: 'off',
             spellCheck: false,
             onChange: (event) => setCredential((current) => ({ ...current, value: event.target.value })),
@@ -302,6 +314,7 @@ window.__ModuleLoader__.load({
             type: 'text',
             value: credential.deviceLabel,
             placeholder: '设备标签（可选）',
+            'aria-label': '设备标签',
             maxLength: 64,
             onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
             style: { flex: '0 1 160px', padding: '4px 8px' },
@@ -338,12 +351,20 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState({ visible: false, notice: null, view: null, authorizationUrl: null });
 
       const bannerFor = (view) => {
-        if (!view) return { visible: true, reason: 'signed-out' };
-        if (view.state !== 'ready') return { visible: true, reason: 'signed-out' };
+        if (!view) return { visible: true, reason: 'signed-out', sessionState: null };
+        if (view.state !== 'ready') return { visible: true, reason: 'signed-out', sessionState: view.state };
         const gateway = view.gatewayCredential?.state ?? 'unconfigured';
         return gateway === 'configured'
-          ? { visible: false, reason: null, gateway }
-          : { visible: true, reason: 'gateway', gateway };
+          ? { visible: false, reason: null, gateway, sessionState: 'ready' }
+          : { visible: true, reason: 'gateway', gateway, sessionState: 'ready' };
+      };
+
+      const SESSION_LABEL = {
+        unconfigured: 'IAM 未配置',
+        expired: '登录已过期，请重新登录',
+        unreachable: 'IAM 暂不可达；保留现有授权至到期',
+        error: '登录需要处理',
+        authenticating: '等待浏览器登录完成',
       };
 
       React.useEffect(() => {
@@ -403,7 +424,7 @@ window.__ModuleLoader__.load({
       },
       h('span', null, state.reason === 'gateway'
         ? (state.gateway === 'owner-mismatch' ? '网关凭据属于其他账号' : '模型未就绪：未配置网关凭据')
-        : '未登录企业 IAM'),
+        : SESSION_LABEL[state.sessionState] ?? '未登录企业 IAM'),
       state.reason === 'gateway'
         ? h('span', { style: { opacity: 0.8 } }, state.gateway === 'owner-mismatch'
           ? '到“设置 → 企业账号”重新录入'
@@ -443,11 +464,12 @@ window.__ModuleLoader__.load({
             return;
           }
           if (event.key !== 'Tab' || !node) return;
-          const focusable = [...node.querySelectorAll('button, a[href]')];
+          const focusable = [...node.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+            .filter((element) => !element.disabled);
           if (focusable.length === 0) return;
           const first = focusable[0];
           const last = focusable[focusable.length - 1];
-          if (event.shiftKey && document.activeElement === first) {
+          if (event.shiftKey && (document.activeElement === first || document.activeElement === node)) {
             event.preventDefault();
             last.focus();
           } else if (!event.shiftKey && document.activeElement === last) {
@@ -603,6 +625,7 @@ window.__ModuleLoader__.load({
                   type: 'password',
                   value: state.keyValue,
                   placeholder: 'uag-…',
+                  'aria-label': 'UAG 个人凭证',
                   autoComplete: 'off',
                   spellCheck: false,
                   onChange: (event) => setState((current) => ({ ...current, keyValue: event.target.value })),
@@ -612,6 +635,7 @@ window.__ModuleLoader__.load({
                   type: 'text',
                   value: state.deviceLabel,
                   placeholder: '设备标签（可选，例如 工作站-01）',
+                  'aria-label': '设备标签',
                   maxLength: 64,
                   onChange: (event) => setState((current) => ({ ...current, deviceLabel: event.target.value })),
                   style: { padding: '6px 10px' },

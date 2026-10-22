@@ -159,3 +159,23 @@ test('discovery issuer must match the configured issuer', async () => {
     (error) => error.code === 'IAM_DISCOVERY_ISSUER_MISMATCH',
   );
 });
+
+test('multi-audience ID tokens must name this client as the authorized party', () => {
+  const options = {
+    jwks: { keys: [jwk] }, issuer: 'https://iam.example', clientId: 'dsh-desktop', nonce: 'n-1',
+  };
+  assert.throws(
+    () => verifyIdToken(idToken({ aud: ['dsh-desktop', 'other-client'] }), options),
+    (error) => error.code === 'IAM_ID_TOKEN_AUDIENCE',
+  );
+  assert.throws(
+    () => verifyIdToken(idToken({ aud: ['dsh-desktop', 'other-client'], azp: 'other-client' }), options),
+    (error) => error.code === 'IAM_ID_TOKEN_AUDIENCE',
+  );
+  const claims = verifyIdToken(idToken({ aud: ['dsh-desktop', 'other-client'], azp: 'dsh-desktop' }), options);
+  assert.equal(claims.azp, 'dsh-desktop');
+  assert.throws(
+    () => verifyIdToken(idToken({ azp: 'other-client' }), options),
+    (error) => error.code === 'IAM_ID_TOKEN_AUDIENCE',
+  );
+});

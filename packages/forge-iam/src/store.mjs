@@ -2,7 +2,11 @@ import { parseGrant, validateGrant } from './record.mjs';
 
 export const GRANT_KEY = 'heluo-iam/session';
 export const GATEWAY_REF = 'ENTERPRISE_STATIC_KEY';
+// The credentials seam defines exactly two record kinds (`api-key`, `grant`);
+// a `grant` payload is owner-opaque, so the non-secret metadata uses it rather
+// than inventing a third kind that other providers would reject.
 export const GATEWAY_RECORD_KEY = 'heluo-iam/gateway-credential';
+const GATEWAY_RECORD_KIND = 'grant';
 /** V0.3.x releases mirrored the IAM access token here; V1 no longer writes it. */
 export const LEGACY_TOKEN_REF = 'ENTERPRISE_ACCESS_TOKEN';
 
@@ -182,7 +186,7 @@ export function createGatewayCredentialStore(credentials, options = {}) {
   async function read() {
     const record = await credentials.readRecord(key);
     if (record === undefined || record === null) return { ok: true, credential: null };
-    if (record.kind !== 'gateway-credential') {
+    if (record.kind !== GATEWAY_RECORD_KIND) {
       return { ok: false, reason: 'wrong-kind', kind: record.kind };
     }
     const parsed = parseGatewayCredential(record.payload);
@@ -201,7 +205,9 @@ export function createGatewayCredentialStore(credentials, options = {}) {
      */
     async resolve() {
       const resolved = await credentials.resolve(ref);
-      return resolved?.source === 'keychain' && isNonEmptyString(resolved.value) ? resolved.value : undefined;
+      return resolved && isNonEmptyString(resolved.value)
+        ? { value: resolved.value, source: resolved.source ?? null }
+        : undefined;
     },
 
     async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry }) {
@@ -222,10 +228,10 @@ export function createGatewayCredentialStore(credentials, options = {}) {
       // value is missing (visible, harmless) rather than a secret without an
       // owner (usable but invisible in the account page).
       await credentials.modifyRecord(key, async (current) => {
-        if (current !== undefined && current !== null && current.kind !== 'gateway-credential') {
+        if (current !== undefined && current !== null && current.kind !== GATEWAY_RECORD_KIND) {
           throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing record is not a gateway credential');
         }
-        return { kind: 'gateway-credential', payload };
+        return { kind: GATEWAY_RECORD_KIND, payload };
       });
       try {
         await credentials.set(ref, value);
@@ -234,6 +240,16 @@ export function createGatewayCredentialStore(credentials, options = {}) {
         throw error;
       }
       return { ok: true, credential: payload };
+    },
+
+    /** Non-secret storage facts for the account page (source/writability). */
+    async describe() {
+      if (typeof credentials.describe !== 'function') return { configured: false, writable: false };
+      try {
+        return await credentials.describe(ref);
+      } catch {
+        return { configured: false, writable: false };
+      }
     },
 
     async clear() {

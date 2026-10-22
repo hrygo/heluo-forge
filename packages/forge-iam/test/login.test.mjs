@@ -294,3 +294,47 @@ test('signOut does not claim success when the record cannot be cleared', async (
   assert.equal(result.logoutUrl, null);
   assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
 });
+
+test('a rotated signing key is retried once instead of failing the login', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  let jwksCalls = 0;
+  const service = createIamService(configFor(mock), {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/jwks')) {
+        jwksCalls += 1;
+        if (jwksCalls === 1) return Response.json({ keys: [] });
+      }
+      return fetch(url, init);
+    },
+  });
+  const { location } = await authorize(service);
+  const view = await service.handleCallback(location);
+  assert.equal(view.state, 'ready');
+  assert.equal(jwksCalls, 2);
+});
+
+test('a failed refresh keeps serving an access token that has not expired yet', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), { credentials });
+  const { location } = await authorize(service);
+  await service.handleCallback(location);
+  let failNetwork = false;
+  const original = globalThis.fetch;
+  const gated = createIamService(configFor(mock, { refreshSkewSeconds: 7200 }), {
+    credentials,
+    fetch: async (url, init) => {
+      if (failNetwork) throw new Error('offline');
+      return original(url, init);
+    },
+  });
+  await gated.hydrate();
+  failNetwork = true;
+  const token = await gated.resolveToken();
+  assert.equal(typeof token, 'string');
+  assert.equal(gated.getView().state, 'unreachable');
+});

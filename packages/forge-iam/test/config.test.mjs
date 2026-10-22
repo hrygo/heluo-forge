@@ -132,3 +132,26 @@ test('a gateway audience is no longer required to configure IAM', () => {
   assert.equal(isConfigured(result.value).ok, true);
   assert.deepEqual(isConfigured(result.value).missing, []);
 });
+
+test('scopes must keep openid because the flow verifies an ID token', () => {
+  const result = validateConfig({ scopes: ['profile', 'offline_access'] });
+  assert.ok('issues' in result);
+  assert.ok(result.issues.some((entry) => entry.path[0] === 'scopes' && entry.message.includes('openid')));
+});
+
+test('the callback path cannot overlap the authenticated management API', () => {
+  for (const redirectPath of ['/api/forge-iam', '/api/forge-iam/callback']) {
+    const result = validateConfig({ redirectPath });
+    assert.ok('issues' in result);
+    assert.ok(result.issues.some((entry) => entry.path[0] === 'redirectPath'));
+  }
+});
+
+test('a post-logout redirect must be an absolute non-loopback HTTP(S) or loopback URL', () => {
+  assert.ok('value' in validateConfig({ postLogoutRedirectUri: 'https://app.corp.example/bye' }));
+  assert.ok('value' in validateConfig({ postLogoutRedirectUri: 'http://127.0.0.1:3080/bye' }));
+  const remoteHttp = validateConfig({ postLogoutRedirectUri: 'http://app.corp.example/bye' });
+  assert.ok('issues' in remoteHttp);
+  const relative = validateConfig({ postLogoutRedirectUri: '/bye' });
+  assert.ok('issues' in relative);
+});

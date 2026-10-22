@@ -1,7 +1,7 @@
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { createGatewayCredentialStore, createGrantStore, StoreError } from './store.mjs';
-import { isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
+import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
 import { createView, transition } from './state.mjs';
 import {
   OidcError,
@@ -22,6 +22,10 @@ const METADATA_TTL_MS = 5 * 60 * 1000;
 const JWKS_TTL_MS = 5 * 60 * 1000;
 const REFRESH_TIMEOUT_MS = 5000;
 const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
+// The account view is polled every couple of seconds; re-reading the secret
+// from an OS keychain on every poll is wasteful and may re-trigger access
+// checks, so the summary is reused briefly unless a caller forces a reload.
+const GATEWAY_RELOAD_MS = 5000;
 
 function nowIso(now) {
   return new Date(now).toISOString();
@@ -250,6 +254,27 @@ export function createIamService(rawConfig, options = {}) {
     return value;
   }
 
+  /**
+   * Verify an ID token, retrying once on a missing `kid`: the IdP may have
+   * rotated keys after this process cached the JWKS document.
+   */
+  async function verifyWithJwks(token, { uri, issuer, clientId, nonce }) {
+    const options = {
+      issuer,
+      clientId,
+      skewSeconds: ID_TOKEN_CLOCK_SKEW_SECONDS,
+      now: now(),
+      ...(nonce === undefined ? {} : { nonce }),
+    };
+    try {
+      return verifyIdToken(token, { ...options, jwks: await jwks(uri) });
+    } catch (error) {
+      if (error?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw error;
+      jwksCache = null;
+      return verifyIdToken(token, { ...options, jwks: await jwks(uri) });
+    }
+  }
+
   function assertGrantContext(grant) {
     if (!grant) return;
     const wrongClient = grant.clientId !== config.clientId;
@@ -378,8 +403,10 @@ export function createIamService(rawConfig, options = {}) {
       assertGrantContext(record.grant);
       const previous = `${state}|${error}|${lastGrant?.subject ?? ''}`;
       lastGrant = record.grant;
-      const needsRefresh = shouldRefresh(record.grant, now(), config.refreshSkewSeconds);
-      state = needsRefresh ? 'expired' : 'ready';
+      // `expired` means the access token is no longer usable, not merely inside
+      // the refresh skew: a token request renews the latter, and showing "expired"
+      // while the token still works would send the user through a needless login.
+      state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
       error = null;
       if (previous !== `${state}|${error}|${lastGrant.subject ?? ''}`) notify();
     } catch (cause) {
@@ -392,25 +419,22 @@ export function createIamService(rawConfig, options = {}) {
     return view();
   }
 
-  async function loadGatewayCredential() {
-    if (!gatewayStore) {
-      gatewaySummary = null;
-      return null;
-    }
+  async function readGatewayCredential() {
+    if (!gatewayStore) return null;
     const record = await gatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
-    if (!record.ok) {
-      gatewaySummary = { state: 'invalid' };
-      return gatewaySummary;
-    }
-    const value = await gatewayStore.resolve().catch(() => undefined);
-    if (!value) {
-      gatewaySummary = { state: 'unconfigured' };
-      return gatewaySummary;
-    }
+    if (!record.ok) return { state: 'invalid' };
+    const resolved = await gatewayStore.resolve().catch(() => undefined);
     const credential = record.credential ?? {};
+    // A value only counts when this store wrote its metadata (so the owner is
+    // known) or the provider is the OS keychain. An ambient environment value
+    // must not make the account page claim the user configured a credential.
+    if (!resolved?.value || (!record.credential && resolved.source !== 'keychain')) {
+      return { state: 'unconfigured' };
+    }
+    const storage = await gatewayStore.describe().catch(() => null);
     const signedInSubject = lastGrant?.subject ?? null;
     const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
-    gatewaySummary = {
+    return {
       // Without a session the stored key is still "configured"; it only becomes
       // a mismatch once a different subject is known.
       state: !signedInSubject || matchesAccount ? 'configured' : 'owner-mismatch',
@@ -418,9 +442,31 @@ export function createIamService(rawConfig, options = {}) {
       deviceLabel: credential.deviceLabel ?? null,
       enteredAt: credential.enteredAt ?? null,
       suggestedExpiry: credential.suggestedExpiry ?? null,
+      // 'keychain' is the only source that keeps the value out of plaintext
+      // files; the account page warns for the dev/pilot fallbacks.
+      storage: storage?.configured ? (storage.source ?? null) : null,
       matchesAccount,
     };
-    return gatewaySummary;
+  }
+
+  let gatewayLoadedAt = 0;
+  let gatewayLoading = null;
+
+  async function loadGatewayCredential({ force = false } = {}) {
+    if (!force && gatewayLoadedAt > 0 && now() - gatewayLoadedAt < GATEWAY_RELOAD_MS) return gatewaySummary;
+    if (gatewayLoading) return gatewayLoading;
+    gatewayLoadedAt = now();
+    gatewayLoading = readGatewayCredential()
+      .then((summary) => {
+        gatewaySummary = summary;
+        return summary;
+      })
+      .catch(() => {
+        gatewaySummary = null;
+        return null;
+      })
+      .finally(() => { gatewayLoading = null; });
+    return gatewayLoading;
   }
 
   /**
@@ -447,7 +493,7 @@ export function createIamService(rawConfig, options = {}) {
     if (targetStore) await targetStore.clearLegacyToken().catch(() => {});
     await syncFromStore();
     if (lastGrant?.subject) await reconcileGatewayOwner(lastGrant.subject);
-    await loadGatewayCredential();
+    await loadGatewayCredential({ force: true });
     return view();
   }
 
@@ -485,7 +531,11 @@ export function createIamService(rawConfig, options = {}) {
       if (!subject) {
         throw new IamError('IAM_NOT_SIGNED_IN', 'sign in before saving a gateway credential');
       }
-      const label = typeof deviceLabel === 'string' ? deviceLabel.trim().slice(0, 64) : '';
+      // Labels are display-only: drop control characters and bound the length so
+      // a pasted newline cannot break the account page layout.
+      const label = typeof deviceLabel === 'string'
+        ? deviceLabel.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 64)
+        : '';
       const enteredAt = nowIso(now());
       const suggestedExpiry = addSeconds(now(), 90 * 24 * 60 * 60).slice(0, 10);
       await gatewayStore.save({
@@ -495,7 +545,7 @@ export function createIamService(rawConfig, options = {}) {
         enteredAt,
         suggestedExpiry,
       });
-      await loadGatewayCredential();
+      await loadGatewayCredential({ force: true });
       notify();
       return view();
     },
@@ -511,9 +561,15 @@ export function createIamService(rawConfig, options = {}) {
       if (!cleared.ok) {
         throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
       }
-      await loadGatewayCredential();
+      await loadGatewayCredential({ force: true });
       notify();
       return view();
+    },
+
+    /** Minimal principal for Host policy/audit; never tokens. */
+    getPrincipal() {
+      if (!lastGrant) return undefined;
+      return { issuer: lastGrant.issuer, subject: lastGrant.subject };
     },
 
     async startSignIn() {
@@ -636,14 +692,11 @@ export function createIamService(rawConfig, options = {}) {
         if (!token.idToken) {
           throw new IamError('IAM_ID_TOKEN_INVALID', safeMessage('IAM_ID_TOKEN_INVALID'));
         }
-        const keys = await jwks(current.metadata.jwksUri);
-        const claims = verifyIdToken(token.idToken, {
-          jwks: keys,
+        const claims = await verifyWithJwks(token.idToken, {
+          uri: current.metadata.jwksUri,
           issuer: current.metadata.issuer,
           clientId: config.clientId,
           nonce: current.nonce,
-          skewSeconds: ID_TOKEN_CLOCK_SKEW_SECONDS,
-          now: now(),
         });
         const grant = await buildGrant(token, claims, current.metadata, nowIso(now()));
         if (attempt !== current || authEpoch !== attemptEpoch || state !== 'authenticating') {
@@ -675,7 +728,7 @@ export function createIamService(rawConfig, options = {}) {
         clearAttempt();
         // A new subject must not inherit the previous account's gateway key.
         await reconcileGatewayOwner(grant.subject);
-        await loadGatewayCredential();
+        await loadGatewayCredential({ force: true });
         publish('SIGN_IN_SUCCESS');
         return view();
       } catch (error) {
@@ -770,7 +823,7 @@ export function createIamService(rawConfig, options = {}) {
         : { ok: false };
       // Sign-out keeps the gateway credential, but the summary must stop
       // claiming it matches the (now absent) session.
-      await loadGatewayCredential();
+      await loadGatewayCredential({ force: true });
       let logoutUrl = null;
       if (config.logoutMode === 'rp' && grant?.idToken) {
         try {
@@ -867,13 +920,20 @@ export function createIamService(rawConfig, options = {}) {
             rotated = true;
             let claims = null;
             if (token.idToken) {
-              claims = verifyIdToken(token.idToken, {
-                jwks: keys,
+              const verifyOptions = {
                 issuer: meta.issuer,
                 clientId: config.clientId,
                 skewSeconds: ID_TOKEN_CLOCK_SKEW_SECONDS,
                 now: now(),
-              });
+              };
+              try {
+                claims = verifyIdToken(token.idToken, { ...verifyOptions, jwks: keys });
+              } catch (error) {
+                // Key rotation between the prefetch and the token response is
+                // rare; the one extra fetch happens only on that path.
+                if (error?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw error;
+                claims = await verifyWithJwks(token.idToken, { uri: meta.jwksUri, ...verifyOptions });
+              }
             }
             if (claims && current.subject && claims.sub !== current.subject) {
               throw new IamError('IAM_REFRESH_SUBJECT_MISMATCH', safeMessage('IAM_REFRESH_SUBJECT_MISMATCH'));
@@ -967,11 +1027,20 @@ export function createIamService(rawConfig, options = {}) {
             if (state === 'ready' || state === 'expired') publish('SIGN_OUT');
             throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
           }
-          if (code === 'IAM_UNREACHABLE') {
-            if (state === 'ready') publish('UNREACHABLE', code);
-            throw new IamError(code, safeMessage(code));
+          if (code === 'IAM_UNREACHABLE' && state === 'ready') publish('UNREACHABLE', code);
+          // A failed refresh does not invalidate an access token that is still
+          // usable: keep serving it and retry the refresh on the next call
+          // (design §7.3). Only an actually expired token forces re-login.
+          if (lastGrant?.accessToken && !isAccessExpired(lastGrant, now())) {
+            return lastGrant.accessToken;
           }
-          if (state === 'expired') publish('REFRESH_FAILURE', code);
+          if (lastGrant && isAccessExpired(lastGrant, now())) {
+            // The stored grant stays: only invalid_grant or an unpersistable
+            // rotation clears it.
+            state = 'expired';
+            error = code;
+            notify();
+          }
           throw new IamError(code, safeMessage(code));
         }
       })().finally(() => { refreshPromise = null; });

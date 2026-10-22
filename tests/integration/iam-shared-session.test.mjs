@@ -88,7 +88,7 @@ test('shared sign-out revokes the refresh rotation it waited for and keeps the g
   const credentials = createKeychainProvider(createMemoryBackend());
   await seedGrant(credentials);
   await credentials.modifyRecord('heluo-iam/gateway-credential', async () => ({
-    kind: 'gateway-credential',
+    kind: 'grant',
     payload: { version: 1, ownerSubject: 'E1001', enteredAt: new Date().toISOString() },
   }));
   await credentials.set(GATEWAY_REF, `uag-${'a'.repeat(32)}`);

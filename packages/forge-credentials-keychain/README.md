@@ -12,7 +12,7 @@
 | backend | 内存、不可用、显式 0600 file（含跨进程事务锁）；OS adapter 待实现 |
 | provider | `resolve / describe / set / unset / readRecord / describeRecord / listRecords / modifyRecord / deleteRecord` |
 | 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed，不自动回收；OS backend 未实现 |
-| 记录 | `api-key` / `grant` / `gateway-credential` JSON；损坏记录显式报错，不静默当作空 |
+| 记录 | `api-key` / `grant` JSON；损坏记录显式报错，不静默当作空 |
 | 生命周期 | 清理登记为 `ctx.effect`（Cordis 4 不收集普通 `function apply` 的返回值）；卸载时撤销 `ctx.credentials` 并 `close` backend |
 | 配置 | `Config` 归一化幂等：缺省 `filePath` 为空串表示“不启用 file backend”，可被框架二次校验接受 |
 | 事件 | 按 seam 要求逐个监听器隔离并记录失败；同步抛错不截断后续监听器，异步拒绝不产生未处理 rejection |

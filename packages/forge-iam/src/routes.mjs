@@ -100,6 +100,9 @@ function readJsonBody(req) {
       }
     });
     req.on('error', (error) => fail(error));
+    // A client that disconnects before 'end' would otherwise leave the handler
+    // awaiting this promise forever.
+    req.on('close', () => fail(new IamError('IAM_REQUEST_INVALID', 'request was aborted')));
   });
 }
 

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "企业统一认证",
-    "description": "使用企业 IAM 账号登录 DeepSeek Harness，并向模型提供方提供企业访问令牌。"
+    "description": "使用企业 IAM 账号登录 DeepSeek Harness；模型调用使用 UAG 个人凭证。"
   }
 }

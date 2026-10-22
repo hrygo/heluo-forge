@@ -198,11 +198,11 @@ test('saving a gateway credential writes the value and its owner metadata', asyn
   });
   assert.equal(credentials.refs.get(GATEWAY_REF), gatewayValue);
   const record = credentials.records.get(GATEWAY_RECORD_KEY);
-  assert.equal(record.kind, 'gateway-credential');
+  assert.equal(record.kind, 'grant');
   assert.equal(record.payload.ownerSubject, 'E1001');
   assert.equal(record.payload.deviceLabel, '工作站-01');
   assert.equal((await store.read()).credential.ownerSubject, 'E1001');
-  assert.equal(await store.resolve(), gatewayValue);
+  assert.deepEqual(await store.resolve(), { value: gatewayValue, source: 'keychain' });
 });
 
 test('a malformed gateway credential is rejected before any write', async () => {
@@ -252,16 +252,16 @@ test('a failed value write withdraws the metadata', async () => {
   assert.equal(credentials.refs.has(GATEWAY_REF), false);
 });
 
-test('an ambient environment value is not treated as the stored gateway credential', async () => {
+test('resolve reports the provider source so ambient values stay distinguishable', async () => {
   const credentials = fakeCredentials();
   credentials.resolve = async () => ({ value: gatewayValue, source: 'env' });
-  assert.equal(await createGatewayCredentialStore(credentials).resolve(), undefined);
+  assert.deepEqual(await createGatewayCredentialStore(credentials).resolve(), { value: gatewayValue, source: 'env' });
 });
 
 test('clearing a gateway credential removes the value first, then the metadata', async () => {
   const credentials = fakeCredentials({
     records: [[GATEWAY_RECORD_KEY, {
-      kind: 'gateway-credential',
+      kind: 'grant',
       payload: { version: 1, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' },
     }]],
     refs: [[GATEWAY_REF, gatewayValue]],
@@ -276,7 +276,7 @@ test('clearing a gateway credential removes the value first, then the metadata',
 test('a failed value removal keeps the metadata that reports the secret', async () => {
   const credentials = fakeCredentials({
     records: [[GATEWAY_RECORD_KEY, {
-      kind: 'gateway-credential',
+      kind: 'grant',
       payload: { version: 1, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' },
     }]],
     refs: [[GATEWAY_REF, gatewayValue]],
@@ -292,7 +292,7 @@ test('a failed value removal keeps the metadata that reports the secret', async 
 
 test('a gateway record of another kind is reported, not read as a credential', async () => {
   const credentials = fakeCredentials({
-    records: [[GATEWAY_RECORD_KEY, { kind: 'grant', payload: {} }]],
+    records: [[GATEWAY_RECORD_KEY, { kind: 'api-key', key: 'stale' }]],
   });
   const read = await createGatewayCredentialStore(credentials).read();
   assert.equal(read.ok, false);
