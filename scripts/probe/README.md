@@ -42,6 +42,7 @@ node scripts/probe/run-host-probe.mjs
 | `gate-audit-failure-denies-with-zero-effects` | 前置审计不可写时拒绝且工具体零调用 |
 | `gate-audit-settle-failure-keeps-outcome-and-limits` | 补记失败保留结果、记缺口、限制后续动作，显式确认后恢复 |
 | `delegation-identity-not-model-supplied` | 工具参数里的 `agent`/`principal`/`approved`/`review_kind` 不会成为宿主身份 |
+| `model-gate-denies-on-measured-host-state` | 用宿主实测的默认模型选择与可用提供方喂给模型门禁：未登录一律拒绝（官方 API Key 被忽略）；合成输入下验证「指向已禁用模型 → 切到企业模型」分支 |
 | `skills-registry-discovery-and-load` | `ctx.skills` 的 provider 路径：目录摘要（名称/描述/何时使用/调用策略）可发现且正文不在摘要里，`get()` 才按需取正文；`invocation` 为 `modelInvocable:false`、`userInvocable:true`；加载不写文件 |
 | `agent-scoped-restriction-is-per-scope` | 用 `agents.create` + `setup` 拿到该 agent 作用域，`restrict({deny:['bash']})` 后带 agent 的视图看不到该全局工具、全局视图不变，解除后恢复 |
 | `protected-root-resolution` | 宿主进程里 `DSH_HOME` 是否可用、宿主 home 解析器能否在插件内导入（只记事实，不记字面路径） |

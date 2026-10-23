@@ -8,6 +8,8 @@
 
 ## 当前实现
 
+- 模型门禁：`src/model-gate.mjs` 提供 `evaluateModelGate`（纯判定，fail closed）。未登录一律拒绝且不给切换目标；网关凭据缺失、无企业模型、企业模型不可用分别拒绝；默认模型只在「没有显式选择」或「当前选择不可用」时切到企业模型，不覆盖显式企业选择；可用但不属于企业的提供方不静默放行。宿主侧 `saveSelection` 接线仍为 V1 目标。
+
 | 项 | 状态 |
 |---|---|
 | 形态 | Host + Client 插件；Client 使用 interim same-origin route 与 2 秒轮询，Remote/watch 未接 |

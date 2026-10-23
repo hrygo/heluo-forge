@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.6.0 |
+| 版本 | V0.7.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,7 +14,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-10-23 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
-| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程、网关凭据录入/清除/状态已实现；当前为 interim same-origin HTTP + 2s 轮询，管理 API 经 `ctx.connection.requestRejection` 认证；Remote/watch、凭据探测、审计与默认模型切换未实现；真实联调待） |
+| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程、网关凭据录入/清除/状态已实现；当前为 interim same-origin HTTP + 2s 轮询，管理 API 经 `ctx.connection.requestRejection` 认证；模型门禁判定已实现（纯判定 + 判据，见 §7.3）；Remote/watch、凭据探测、审计与宿主侧默认模型切换接线未实现；真实联调待） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/UOS/麒麟实机。以上未核验项不写成已实现。
 >
@@ -363,6 +363,28 @@ flowchart TD
 - 回调换 token 使用 `httpTimeoutMs`；授权码只兑换一次，失败不重放同一 code。
 - 登录成功后只代表 IAM ready；模型是否可用取决于 `ENTERPRISE_STATIC_KEY` 是否已配置（其有效性由网关包探测，本模块不探测）。二者状态分开，不把“未配置网关凭据”显示成“登录失败”。
 - 登录成功后设置 `iam.defaultModel` 为 V1 目标；当前未实现，配置项不生效。
+
+### 7.3 模型门禁与默认模型切换
+
+门禁是**纯判定**（`packages/forge-iam/src/model-gate.mjs`）：不读配置、不调用宿主、不写设置；宿主侧把登录态、网关凭据状态、当前默认选择与可用提供方注入进来，返回 `{allow, reason, switchTo?, notes}`。
+
+| 判定顺序 | 条件 | 结果 |
+|---|---|---|
+| 1 | 未登录 | 拒绝 `not-signed-in`，**不提供切换目标**；环境里有官方 API Key 也一律忽略，不构成旁路 |
+| 2 | 已登录但网关凭据非 `present` | 拒绝 `gateway-credential-missing`，引导录入而不回落 |
+| 3 | 未声明企业模型 | 拒绝 `no-enterprise-model` |
+| 4 | 声明的企业模型被禁用或没有可用提供方 | 拒绝 `enterprise-model-unavailable` |
+| 5 | 尚未选择 | 放行并切到企业模型 `selection-absent-switched` |
+| 6 | 当前选择不可用（含被禁用的官方模型） | 放行并切到企业模型 `selection-disabled-switched` |
+| 7 | 当前已是企业模型 | 放行且**不切换** `keep-explicit-enterprise` |
+| 8 | 同提供方的其他模型：显式选择保留；非显式收敛到企业默认 | `keep-explicit-enterprise` / `selection-not-explicit-switched` |
+| 9 | 可用但不属于企业的提供方 | 拒绝 `selection-outside-enterprise`，交企业侧裁定，不静默改用 |
+
+输入不合法（非对象、提供方列表不是数组、`enterprise`/`selection` 缺 provider/model）直接抛 `MODEL_GATE_INPUT_INVALID`，不"默默放行"。空输入的默认结果是**拒绝**。
+
+**本机实测（2026-10-24，DSH 0.2.1-rc.2，darwin-arm64）**：宿主 `agentDefaultModel.currentSelection()` 返回 `{provider: "deepseek-official", model: "deepseek-flash"}`（字段就是 provider/model），而同进程 `llm.listProviders()` 为 **0 个**——即官方行禁用后，默认选择仍停留在官方模型上，这正是决策表里"当前指向已禁用官方模型"的真实状态，不是假设。把该实测状态喂给门禁：拒绝 `not-signed-in`（并注明官方 API Key 被忽略）。同一探针里用合成输入验证了切换分支：`signedIn + gatewayCredential=present + enterprise=enterprise-probe` 且当前选择为 `deepseek/deepseek-chat` 时返回 `selection-disabled-switched` 并给出 `switchTo`。
+
+**未验**：`saveSelection` 的写入接线（探针只读，未写设置）；"登录后企业模型可用"的正向路径需要企业网关与企业凭据；官方旧默认模型的迁移/清理策略仍未定（见 §12）。
 
 ### 7.3 刷新
 
