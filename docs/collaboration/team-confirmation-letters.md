@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-CONF-001 |
 | 文档名称 | 跨团队确认询问函 |
-| 版本 | V0.9.1 |
+| 版本 | V0.10.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-22 |
+| 最后更新 | 2026-10-23 |
 | 门禁 | G0 方向与认领；G1 查询基线；G2 受控写批准/验证及运行控制；G3 试点评估 |
 
 > 编制依据：2026-10-20 文档核对所读版本为 CORP-DSH-ARCH-001 V1.4、CORP-DSH-PLAN-001 V1.3、CORP-DSH-REQ-001 V1.3、CORP-DSH-GW-001 V0.8；沿用已读项目协作规范及子文档模板。来源与名单口径按 2026-10-21 用户确认：企业私有 npm 是唯一插件制品源并由仓库侧同步公网，用户 DSH 禁公网；registry 地址与插件包名双层白名单，入名单包自动收录 DSH 兼容稳定版本，不逐版本人工审批；Gitee 固定 group 维护内部定制源码。2026-10-22 已收到网关团队《客户端接入 AI 网关》分析稿（基线 UAG `dev/2.2.1`）；其余各组未见书面回函。本函仅核对文档，产品/权限/索引接口仍待确认，不新增企业接口、终端隔离或容量实测；收到分析稿不等于团队承诺、批准或资源承诺。
@@ -21,17 +21,19 @@
 >
 > 2026-10-22 更新：IAM 统一登录与权限接入采用 SSOT 原则，由独立专项子文档 [IAM 统一登录与权限接入问询函](<iam-confirmation-letter.md>) (CORP-DSH-CONF-004) 承载问询正文、21 项确认事项与回函登记，本母文档 §4.2 仅作母子索引；同日已登记内部项目组整理的 IAM 首轮部分答复（待最终核实）。市场已改为轻量模式，索引与安装问题以 [issue #12](https://github.com/hrygo/heluo-forge/issues/12) 与 DESIGN-012 为准。
 
+> 2026-10-23 路由：新增[DSH 和应用 Agent 调用 AI 网关补充问询函](gateway-confirmation-letter.md)（CONF-GW-09—20，未发送），先讲需求再问能力；IAM 在[原函 §9 整理本轮补充正文](iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送)，先列业务需求、原函覆盖和待确认事项；§8 保留内部评估，不另起新函。个人身份、DSH 用途、应用受控开通及五分钟生命周期已由需求方确认，技术能力待核验。原网关函及回函按历史保留。
+
 ## 1. 结论
 
-本文件包含 7 封分别面向不同系统负责团队的独立问询函模板。
-每封信均可独立复制发送，用于在系统上线前向兄弟团队核实接口规范、权限边界与运行环境要求。
+本文件统筹原 7 域问询及专项子函；本轮网关新函单列，IAM 在原函下补充，不把历史原函重新当作当前完整需求。两份本轮正文分别面向网关团队与 IAM 团队，共同事项由行内实施团队协调汇总，问题对应和产品分工见[网关文档内部说明 §3.1](gateway-confirmation-letter.md#31-跨函问题对应与协调平台内部)；IAM 保留原编号、已有答复及核验状态。行内实施团队负责统筹与组织验收，DSH 平台组负责客户端接入和本地行为。
+各函按其使用说明截取正文，用于与相关团队核实接口规范、权限边界与运行环境要求。网关与 IAM 的本轮材料应配套使用，当前均未发送。
 
 ## 2. 覆盖范围与对接团队
 
 | 团队 | 核心负责事项 | 问题编号 |
 |---|---|---|
 | 身份团队 | 统一登录 SSO/OIDC、Token 交换与有效时限、权限注销 | CONF-IAM-01~21，详见[专项问询函](<iam-confirmation-letter.md>) |
-| 网关与模型团队 | 模型 API 兼容性、调用并发与配额、流式传输、日志脱敏 | CONF-GW-01~08 |
+| 网关与模型团队 | 模型 API 兼容性、调用并发与配额、流式传输、日志脱敏 | 原 CONF-GW-01~08；新 CONF-GW-09~20 见[新函](gateway-confirmation-letter.md) |
 | DevOps 团队 | 系统变更/独立验收查询、澄清/进展受控写、JSON/权限及回查 | CONF-DEVOPS-01~03, 06 |
 | Gitee 管理团队 | 仓库/Issue/PR 查询、常规研发/评审受控写、可信来源和版本绑定 | CONF-GITEE-01~05 |
 | IT 与分发团队 | 双端系统基线、私有 npm 制品库、客户端静默分发、运维支持 | CONF-IT-01~07 |
@@ -47,7 +49,7 @@
 - G2 阶段：完成安全合规、研发写范围/C3 分类批准与接口验证、双端打包及终端运维保障；未准入写默认禁用；
 - G3 阶段：试点运行观察及业务指标评估。
 
-2026-10-22 裁决补充：V1 模型网关改用 UAG 个人凭证，不再消费 IAM access token。因此 `CONF-IAM-10/11/15` 以及本文中涉及“模型网关 Access Token / JWKS / 内省 / 按 resource 取令牌”的问题，只保留为未来 MCP 或按资源调用的参考，不作为 V1 网关前置；V1 网关认证以[AI 网关契约](../contracts/gateway-contract.md) §4 为准，不要求 IAM 为模型网关提供 JWT 验签。登录、PKCE、刷新、撤销、claims 与目录同步仍按 IAM 问题确认。
+2026-10-22 曾按 Key-only 排除模型网关的 IAM token 问题；2026-10-23 新要求已恢复 CONF-IAM-03/09/10/11/15 对网关的适用性，具体补充与原回函差距以 IAM 专项函为准。当前个人 A/B 待选，不允许裸 Key 作为达标方案。
 
 ## 4. 契约
 
@@ -60,7 +62,7 @@
 | 正文 | 问题域及数量 | 平台参考（不转发） |
 |---|---|---|
 | §4.2 身份团队 | CONF-IAM，21题（母子引用） | 详见 [IAM 专项问询函](<iam-confirmation-letter.md>) |
-| §4.3 网关与模型团队 | CONF-GW，8题 | [网关契约](<../contracts/gateway-contract.md>) |
+| §4.3 网关与模型团队 | 原 CONF-GW 8 题；本轮另见[新函 12 题](gateway-confirmation-letter.md) | [网关契约](<../contracts/gateway-contract.md>) |
 | §4.4 DevOps团队 | CONF-DEVOPS，4题 | [工程系统设计](<../architecture/platform-architecture.md#73-工程系统工具>) |
 | §4.5 Gitee团队 | CONF-GITEE，5题 | [工程系统设计](<../architecture/platform-architecture.md#73-工程系统工具>) |
 | §4.6 IT与分发团队 | CONF-IT，7题 | [终端与分发计划](<../plans/rollout-plan.md>) |
@@ -75,9 +77,11 @@
 
 **发函日期 / 回函期限：** [发函人填写] / [发函人填写]
 
+> 本轮使用[专项原函 §9 补充正文](iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送)，由 IAM 团队确认本侧能力及配合条件，行内实施团队协调并汇总与网关相关的事项。以下保留原基线问题索引，原编号及已有答复记录保留，支持情况及待核实状态以专项原函为准。
+
 > **母子文档与 SSOT 约定**：本函为母文档中的统筹入口；完整专项技术细节、扩展确认项（CONF-IAM-19~21）及回函核验登记，统一以子文档 **[IAM 统一登录与权限接入问询函](<iam-confirmation-letter.md>)** 为唯一真源（SSOT）。母文档本节仅保留 18 项基线问题清单，不再重复维护扩展背景、各题细化条款及回函核验表。
 
-我们拟将企业统一登录作为本机研发助手在企业内网的唯一登录方式：员工通过系统浏览器完成授权，客户端不保存密码，也不保留官方登录或公网模型回落。登录成功后，客户端用 IAM 访问令牌访问受控研发服务；模型调用使用 UAG 个人凭证，不把 IAM token 发给模型网关。刷新令牌只保存在本机凭据存储，用于 IAM 会话续期。
+我们拟将企业统一登录作为本机研发助手在企业内网的唯一登录方式：员工通过系统浏览器完成授权，客户端不保存密码，也不保留官方登录或公网模型回落。登录成功后，客户端用 IAM 访问令牌访问受控研发服务；本轮个人模型访问需可信当前人员授权，具体 A/B 路线见专项子函，不能只用静态 Key。刷新令牌只保存在本机凭据存储，用于 IAM 会话续期。
 
 下列 `CONF-IAM-01~07` 保留原编号，`08~18` 为本次新增的阻塞项。请逐题回答；无法支持的能力请直接说明，不要用“原则上支持”代替接口事实。
 
@@ -85,7 +89,7 @@
 |---|---|
 | CONF-IAM-01 | 企业统一登录服务是纯 OAuth 2.0 还是支持 OpenID Connect (OIDC)？客户端如何获取经过认证的可信员工身份？ |
 | CONF-IAM-02 | 是否支持基于系统浏览器 + `127.0.0.1` 本地回调的授权码登录（带 PKCE S256 防截获校验）？对本地回调端口有何要求？ |
-| CONF-IAM-03 | 访问令牌是否支持按具体业务服务分别申请（一资源一令牌）？若不支持，如何做好工程服务与未来 MCP 之间的权限隔离？V1 模型网关使用 UAG 个人凭证，不在本题范围。 |
+| CONF-IAM-03 | 访问令牌是否支持按具体业务服务分别申请（一资源一令牌）？若不支持，如何做好工程服务与未来 MCP 之间的权限隔离？本轮恢复包含模型网关，补充约束以专项原函为准。 |
 | CONF-IAM-04 | 员工工号、部门与角色的权威数据源是什么？员工调岗、离职或停用账号后，权限变更多久能同步生效？ |
 | CONF-IAM-05 | 访问令牌（Access Token）与刷新令牌（Refresh Token）的有效期分别是多久？如何主动撤销已签发的令牌？ |
 | CONF-IAM-06 | 当访问令牌过期时，多个并发请求如何刷新？刷新时是否会影响其他服务的有效会话？ |
@@ -93,11 +97,11 @@
 | CONF-IAM-08 | 是否允许将本机应用注册为公共客户端（native/public client，不保存 client secret），使用授权码 + PKCE（S256）？客户端由谁登记、按设备一客户端还是全公司共用一个 `client_id`？请给出 redirect URI 规则：我们计划使用 `http://127.0.0.1:<port>/iam/callback`，端口是否必须固定、能否登记多个？ |
 | CONF-IAM-09 | 是否提供 OIDC discovery（`/.well-known/openid-configuration`）？请给出 issuer、authorization、token、jwks、revocation、end_session 的正式地址；签名算法允许哪些（RS256/ES256/PS256），是否明确拒绝 `none` 与对称算法？JWKS 轮换时 `kid` 的生效与缓存时间是多少？ |
 | CONF-IAM-10 | ID Token 必须校验哪些 claims？请确认 `iss`、`aud`、`nonce`、`exp`/`nbf`/`iat`、`auth_time`、`acr`/`amr` 的要求与允许时钟偏差；员工稳定标识用哪个 claim（`sub` 是否稳定且不可猜测，工号在哪个 claim）？`groups` 或角色 claim 的名称、类型、是否随权限变更实时更新？ |
-| CONF-IAM-11 | 是否支持 RFC 8707 `resource` 参数，为工程服务或未来 MCP 单独签发绑定到该 audience 的令牌？如果不支持，服务端如何判断“这个令牌是给我而不是其他服务”的？请给出推荐的 scope 命名、audience 值，以及一资源一令牌与 token exchange 的取舍。V1 模型网关不使用 IAM 令牌。 |
+| CONF-IAM-11 | 是否支持 RFC 8707 `resource` 参数，为工程服务或未来 MCP 单独签发绑定到该 audience 的令牌？如果不支持，服务端如何判断“这个令牌是给我而不是其他服务”的？请给出推荐的 scope 命名、audience 值，以及一资源一令牌与 token exchange 的取舍。本轮需核实网关目标 Access Token 与受众隔离。 |
 | CONF-IAM-12 | 刷新令牌是否轮换（每次刷新返回新 `refresh_token` 并废止旧值）？是否检测旧 `refresh_token` 重用？重用或并发刷新时返回什么错误（`invalid_grant`？），是否有短暂 grace period？刷新是否需要 `offline_access` scope？请说明多进程/多请求同时刷新时的服务端行为，避免我们误判为会话失陷。 |
 | CONF-IAM-13 | 是否提供 RFC 7009 撤销端点？可以撤销 `refresh_token`、`access_token`，还是两者？撤销 `refresh_token` 是否同时使已签发的 `access_token` 失效？撤销成功、失败、已撤销的 HTTP 状态与响应体是什么？撤销生效的最大延迟是多少？ |
 | CONF-IAM-14 | 是否支持 RP-Initiated Logout（`end_session_endpoint`）？需要 `id_token_hint` 吗？`post_logout_redirect_uri` 是否必须预登记、允许 loopback 吗？调用后是否能结束浏览器上的企业 SSO 会话？是否支持 `prompt=login` 强制重新认证？如果不支持 RP 登出，请明确本地退出只结束本机会话的边界。 |
-| CONF-IAM-15 | 访问令牌是 JWT 还是 opaque？未来 MCP 服务应本地验签（JWKS）还是调用 introspection？请给出 token 的 `aud`、`scope`、`exp`、`client_id` 等 claim 示例；introspection 的缓存建议与失效延迟；MCP 验签时 `kid` 未命中应返回 503 还是 401？V1 模型网关使用 UAG key-auth，不适用本题。 |
+| CONF-IAM-15 | 访问令牌是 JWT 还是 opaque？未来 MCP 服务应本地验签（JWKS）还是调用 introspection？请给出 token 的 `aud`、`scope`、`exp`、`client_id` 等 claim 示例；introspection 的缓存建议与失效延迟；MCP 验签时 `kid` 未命中应返回 503 还是 401？本轮同样适用于网关；具体格式与验证方式待确认。 |
 | CONF-IAM-16 | 请给出 token、refresh、revoke 端点的错误码与 HTTP 状态映射（`invalid_grant`、`invalid_client`、`invalid_scope`、`temporarily_unavailable` 等），以及限流阈值、`Retry-After` 约定和推荐超时。我们需要据此区分“网络故障可重试”和“会话失效必须重登”。 |
 | CONF-IAM-17 | 从企业 Windows 桌面与麒麟浏览器访问 IAM 端点，是否需要经过代理、专用 CA 或 IP 白名单？loopback 回调是否受终端防火墙/EDR 限制？请给出测试与生产环境的网络前置条件、证书链要求，以及推荐的排障联系人。 |
 | CONF-IAM-18 | 能否提供测试租户与测试账号矩阵：普通员工、不同角色/组、离职/停用、被撤销、无模型权限各一；是否支持我们演练 refresh 轮换、重用检测、撤销与 RP 登出？客户端登记、测试账号开通、生产 client 上线各需多少工作日，需要谁审批？ |
@@ -115,6 +119,8 @@ DSH 平台组（代拟）
 ---
 
 ### 4.3 AI 网关及模型服务团队询问函
+
+> 历史原函保留：本节及 §4.3.1 记录原问题和 2026-10-22 分析回复，不代表对本轮新需求的承诺。当前需求以[网关新函](gateway-confirmation-letter.md)为准，新增 CONF-GW-09—20 不改原编号。
 
 **主题：** 请联合确认研发助手的模型接入、额度、容量和日志边界
 
