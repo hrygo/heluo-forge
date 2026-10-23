@@ -44,7 +44,10 @@ function fakeHost({ approval, commands } = {}) {
   return { ctx, guards, listeners, provided, effects };
 }
 
+const DEV_AUDIT = { sink: 'memory', allowNonDurable: true };
+
 const baseConfig = {
+  audit: DEV_AUDIT,
   catalog: [ENTRY, WRITE, CONFIRM],
   tools: {
     forge_repository_read: 'repository.read',
@@ -180,6 +183,7 @@ writeFileSync(join(openDir, 'notes.md'), 'ok');
 symlinkSync(protectedDir, join(pathBase, 'shortcut'), 'dir');
 
 const pathConfig = {
+  audit: DEV_AUDIT,
   catalog: [
     { action: 'fs.read', kind: 'read', target: 'file', enabled: true, path: 'path' },
     { action: 'fs.write', kind: 'confirm', target: 'file', enabled: true, path: 'path' },
@@ -205,7 +209,7 @@ test('direct, traversal and symlink access to a protected path is denied with ze
   assert.match(String(body(undefined)), /cannot be verified/);
 });
 
-test('a granted confirmation cannot flip a protected-path denial', async () => {
+test('a protected path is denied before the confirmation stage and at the hard gate', async () => {
   const approval = { async request() { return 'allowed-once'; } };
   const host = fakeHost({ approval });
   apply(host.ctx, pathConfig);
@@ -218,9 +222,10 @@ test('a granted confirmation cannot flip a protected-path denial', async () => {
     agent: { id: 'agent-1' },
     signal: new AbortController().signal,
   };
-  const granted = await preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
-  assert.equal(granted.kind, 'allow', 'the confirmation stage itself was satisfied');
-  assert.match(String(guard(exec)), /protected path/, 'the hard denial still holds afterwards');
+  const denied = await preExecute(exec, () => Promise.resolve({ kind: 'deny', reason: 'should not be reached' }));
+  assert.equal(denied.kind, 'deny', 'the protected path is refused before any confirmation is considered');
+  assert.match(denied.reason, /protected path/);
+  assert.match(String(guard(exec)), /protected path/, 'the hard denial also holds at the gate');
 });
 
 test('path-bearing actions are closed when no protected root is configured', () => {
@@ -269,4 +274,83 @@ test('the mounted service exposes delegation, confirmation and path helpers', ()
   assert.equal(policy.digestContent({ a: 1 }).length, 64);
   assert.match(policy.renderEgressScope(policy.confirmationScope({ action: 'a.b', target: 't', content: { body: 'x' } })), /fields=\[body\]/);
   assert.doesNotThrow(() => policy.assertNoCanary('nothing here', ['canary-value']));
+});
+
+test('an enforced action is refused when no audit sink is configured', async () => {
+  const host = fakeHost();
+  apply(host.ctx, { ...baseConfig, audit: {} });
+  const exec = { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal };
+  const decision = await host.listeners.get('tools/pre-execute')(exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.equal(decision.kind, 'deny');
+  assert.match(decision.reason, /audit refused/);
+  assert.match(decision.reason, /no audit sink is available/);
+  assert.equal(host.ctx.get('policy').auditGaps().length, 0, 'a refused pre-audit is not a gap');
+});
+
+test('a non-durable audit sink is refused unless explicitly allowed', async () => {
+  const host = fakeHost();
+  apply(host.ctx, { ...baseConfig, audit: { sink: 'memory' } });
+  const decision = await host.listeners.get('tools/pre-execute')(
+    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal },
+    () => Promise.resolve({ kind: 'allow' }),
+  );
+  assert.match(decision.reason, /not durable/);
+});
+
+test('a failing audit sink refuses before the body runs', async () => {
+  const host = fakeHost();
+  apply(host.ctx, baseConfig);
+  const policy = host.ctx.get('policy');
+  let bodyCalls = 0;
+  policy.setAuditSink({ durable: true, append: () => { throw new Error('disk on fire'); } });
+  const decision = await host.listeners.get('tools/pre-execute')(
+    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal },
+    () => (bodyCalls += 1, Promise.resolve({ kind: 'allow' })),
+  );
+  assert.equal(decision.kind, 'deny');
+  assert.match(decision.reason, /disk on fire/);
+  assert.equal(bodyCalls, 0);
+});
+
+test('a post-execution audit failure keeps the outcome, records a gap and limits later actions', async () => {
+  const host = fakeHost();
+  apply(host.ctx, baseConfig);
+  const policy = host.ctx.get('policy');
+  const records = [];
+  policy.setAuditSink({ durable: true, append: (record) => {
+    if (record.phase === 'settle') throw new Error('settle failed');
+    records.push(record);
+  } });
+  const exec = { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal };
+  const allowed = await host.listeners.get('tools/pre-execute')(exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.equal(allowed.kind, 'allow');
+  assert.equal(records.length, 1, 'the pre-audit record was written first');
+  assert.equal(records[0].phase, 'begin');
+  assert.equal(JSON.stringify(records[0]).includes('arguments') === false, true);
+
+  // 宿主签名是 (exec, result, next)，默认决议 `{ kind: 'accept' }`。
+  const settled = await host.listeners.get('tools/post-execute')(exec, { isError: false }, () => Promise.resolve({ kind: 'accept' }));
+  assert.equal(settled.kind, 'accept', 'the outcome is untouched by the failed settle');
+  assert.equal(policy.auditGaps().length, 1);
+  assert.equal(policy.auditDegraded(), true);
+
+  const next = await host.listeners.get('tools/pre-execute')(
+    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c2', signal: new AbortController().signal },
+    () => Promise.resolve({ kind: 'allow' }),
+  );
+  assert.match(next.reason, /still outstanding/);
+  assert.equal(policy.acknowledgeAuditGaps(), 1);
+  const after = await host.listeners.get('tools/pre-execute')(
+    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c3', signal: new AbortController().signal },
+    () => Promise.resolve({ kind: 'allow' }),
+  );
+  assert.equal(after.kind, 'allow');
+});
+
+test('an optional telemetry failure only leaves a gap', async () => {
+  const host = fakeHost();
+  apply(host.ctx, baseConfig);
+  const policy = host.ctx.get('policy');
+  assert.equal(typeof policy.setAuditSink, 'function');
+  assert.equal(policy.auditRecords().length, 0);
 });

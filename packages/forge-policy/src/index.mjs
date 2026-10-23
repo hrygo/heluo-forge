@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 import { createGate } from './gate.mjs';
+import { createAuditBarrier } from './audit.mjs';
 import { createConfirmationLedger } from './confirmations.mjs';
 import { authorizeDelegation, createDelegation, revokeDelegation } from './delegation.mjs';
 import { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
@@ -21,6 +22,7 @@ export const inject = ['tools'];
 
 export { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 export { createGate } from './gate.mjs';
+export { buildAuditRecord, createAuditBarrier } from './audit.mjs';
 export { createConfirmationLedger } from './confirmations.mjs';
 export { authorizeDelegation, createDelegation, revokeDelegation } from './delegation.mjs';
 export { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
@@ -74,6 +76,12 @@ export function validateConfig(input = {}) {
   if (input.env !== undefined && !isPlainObject(input.env)) {
     issues.push('env must be an object when provided');
   }
+  if (input.audit !== undefined && !isPlainObject(input.audit)) {
+    issues.push('audit must be an object when provided');
+  }
+  if (isPlainObject(input.audit) && input.audit.sink !== undefined && !['none', 'memory'].includes(input.audit.sink)) {
+    issues.push('audit.sink must be none or memory');
+  }
   if (issues.length > 0) return { issues };
   return {
     value: {
@@ -81,6 +89,7 @@ export function validateConfig(input = {}) {
       tools: input.tools ?? {},
       categories: input.categories ?? {},
       protectedPaths: input.protectedPaths ?? defaultProtectedPaths(),
+      audit: input.audit ?? {},
       env: input.env,
       onDecision: input.onDecision,
     },
@@ -183,11 +192,23 @@ export function apply(ctx, rawConfig = {}) {
   const catalog = compileCatalog(config.catalog);
   const env = config.env ?? { ...defaultTemplateValues(), ...process.env };
   const protectedRoots = resolveProtectedRoots(config.protectedPaths, env);
+  const auditRecords = [];
+  const auditSink =
+    config.audit.sink === 'memory'
+      ? { durable: false, append: (record) => void auditRecords.push(record) }
+      : undefined;
+  const audit = createAuditBarrier({
+    sink: auditSink,
+    timeoutMs: config.audit.timeoutMs,
+    allowNonDurable: config.audit.allowNonDurable === true,
+    onGap: (gap) => auditRecords.push({ ...gap, phase: 'gap' }),
+  });
   const gate = createGate({
     catalog,
     tools: config.tools,
     categories: config.categories,
     protectedRoots,
+    audit,
     onDecision: config.onDecision,
   });
 
@@ -202,6 +223,13 @@ export function apply(ctx, rawConfig = {}) {
   disposers.push(ctx.tools.guard((exec) => gate.guard(exec)));
   if (typeof ctx.on === 'function') {
     disposers.push(ctx.on('tools/pre-execute', (exec, next) => gate.preExecute(ctx, exec, next)));
+    // 宿主签名：`tools/post-execute` waterfall 为 (exec, result, next)，默认决议 `{ kind: 'accept' }`。
+    disposers.push(
+      ctx.on('tools/post-execute', async (exec, result, next) => {
+        await gate.postExecute(exec, result);
+        return typeof next === 'function' ? await next() : { kind: 'accept' };
+      }),
+    );
   }
 
   const confirmations = createConfirmationLedger();
@@ -223,6 +251,11 @@ export function apply(ctx, rawConfig = {}) {
     issueConfirmation: (input) => confirmations.issue(input),
     consumeConfirmation: (input) => confirmations.consume(input),
     confirmations: () => confirmations.pending(),
+    setAuditSink: (sink) => audit.setSink(sink),
+    auditRecords: () => [...auditRecords],
+    auditGaps: () => audit.gaps(),
+    acknowledgeAuditGaps: () => audit.acknowledgeGaps(),
+    auditDegraded: () => audit.isDegraded(),
     registerCommand: (commandCtx, definition) => registerCommand(commandCtx, service, definition),
   });
   const disposeProvide = ctx.provide(SERVICE_KEY, service);
