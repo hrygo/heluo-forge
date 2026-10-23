@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.29.5 |
+| 版本 | V1.29.6 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,8 +19,8 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.5 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.21.4 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.6 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.21.5 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.8.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.0 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.3.0 | 评审稿 | 平台组（代拟） | G1 |
@@ -73,6 +73,7 @@
 | 网关静态 Key 方案设计 | [gateway-credential-options.html](<assets/gateway-credential-options.html>) | [个人凭证接入](<architecture/gateway-static-key-option.md>)、[网关契约](<contracts/gateway-contract.md>)§4 | 2026-10-20 原静态 Key 提议（`csk_`/API/HMAC/设备头）的辅助图解；已被 2026-10-22 ADR-14 的 UAG 个人凭证方案取代，仅作历史参考，不替代正文 |
 | 插件市场功能架构图 | [plugin-market-architecture.html](<assets/plugin-market-architecture.html>) | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>)、[ADR-11／13](<architecture/plugin-registry-source-decision.md>) | 轻量原生索引示意：AIHUB 索引、原生索引源、官方 manager、Artifactory、能/不能保证与验收；评审稿示意，不替代正文、企业接入或门禁证据 |
 | 品牌资产套件（河洛苍螭，方案 B） | [branding/cyber-long/index.html](<assets/branding/cyber-long/index.html>) | [品牌与外观详细设计](<design/plugins/forge-brand.md>) | 现存的唯一预置品牌资产：主标、11 个组件标识与多分辨率切图，配 `manifest.json` 校验清单与 `usage.txt` 使用规则；状态为建议稿（代拟），方案 B 由用户选定，正式审核与批准待定；组件标识只描述职责，不表示对应模块已实现、已部署或已批准；`packages/forge-iam/icon.svg` 逐字节取自其中 `forge-iam-symbol.svg`，由 `packages/forge-iam/test/package-shape.test.mjs` 校验 |
+| 开放 Issue 实施路径总览 | [issue-implementation-path.html](<assets/issue-implementation-path.html>) | [推广实施方案](<plans/rollout-plan.md>)、[设计索引](<design/README.md>) | 2026-10-23 对 GitHub Issue #12、#13、#15、#20—#40 的辅助分析：紧迫性、实施条件、ROI 与依赖，含阶段 0—3 与一条并行流；人日为工程粗估，不含跨团队等待与审批，不构成日历承诺；Issue 状态以 GitHub 为准，图解不替代受控正文、门禁证据或责任方裁定 |
 
 ## 2. 维护规则
 
