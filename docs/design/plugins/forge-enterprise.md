@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.6.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -132,6 +132,21 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 - 升级 DSH 后重新应用补丁，并跑“官方行是否回灌”用例。
 
 配置字段以本设计为准；网关字段仍见[网关契约](../../contracts/gateway-contract.md)。
+
+#### 5.1.1 禁用实验（本机实测 2026-10-24）
+
+补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：只写"禁用官方行"，不预建指向未实现包的 `insert:` 行。
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 组合树核对（web） | `dsh --profile web --dump-config` | 四行都在：`deepseek-account`、`llm-deepseek`（`dsh-llm-deepseek-api-key`）、`llm-deepseek-account`、`ui-settings-account`（`dsh-client-ui-settings-account`） |
+| 组合树核对（sdk） | `dsh --profile sdk --dump-config` | 只有前三行；无 `ui-settings-account` |
+| 应用禁用层 | `dsh --profile web --patch <补丁> --dump-config` | 与基线逐行 diff：四行各多出 `disabled: true`，并带 `patched by <补丁>` 标记 |
+| 命中不到的行 | `dsh --profile sdk --patch <补丁> --dump-config` | `dsh: [<补丁>] patch: entry "ui-settings-account" not found`，跳过且**不算已禁用** |
+| 自动化对照 | `node scripts/probe/run-host-probe.mjs` | 报告 `composition` 段逐行给出"已落地 / 警告已出现"；去掉补丁层（`DSH_HOST_PROBE_DISABLE_OFFICIAL=0`）时该段整体 FAIL 且退出码 1（负向对照） |
+| 升级回灌 | 同版本重复应用 | 结果一致；**真实 DSH 升级后的回灌未验**，升级后必须重跑上述核对 |
+
+**未验**：`desktop` profile 本机不存在同名 profile，其行 id 未核验；运行时"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"需要接了官方模型行的 desktop/web 运行时——探针 profile 的 LLM 提供方在禁用前后都是 0 个（基线对照同样为 0），因此该项在探针里以 `blocked` 记录，不用"0 个提供方"冒充已证明；当前正在使用的 GUI profile 未用补丁重启（会打断会话）。**禁用实验失败即暂停 O3**，不 patch 内核。
 
 ### 5.2 按需企业 Skill 与规范条款加载
 

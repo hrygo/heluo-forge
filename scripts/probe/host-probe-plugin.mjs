@@ -186,6 +186,31 @@ export function apply(ctx) {
     );
     disposers.push(disposePermissive, disposeDeny);
 
+    const llmService = ctx.get('llm');
+    if (llmService === undefined) {
+      blocked.push({
+        id: 'official-rows-runtime-model-surface',
+        reason: '探针 profile 未挂载 llm 服务，无法核验官方模型面的运行时影响',
+        evidence: { llmPresent: false },
+      });
+    } else {
+      const baseline = process.env.DSH_HOST_PROBE_DISABLE_OFFICIAL === '0';
+      const providers = llmService.listProviders().map((entry) => entry.id);
+      const official = providers.filter((id) => /deepseek/i.test(id));
+      blocked.push({
+        id: 'official-rows-runtime-model-surface',
+        reason:
+          '本 profile 的 LLM 提供方在禁用前后都是 0 个（基线对照同样为 0），因此无法用它证明禁用行对模型面的运行时影响；' +
+          '禁用行是否落地由驱动的 --dump-config 对照证明；运行时模型面需要在接了官方模型行的 desktop/web profile 上复跑',
+        evidence: {
+          baselineRun: baseline,
+          apiKeyPresentInEnv: process.env.DEEPSEEK_API_KEY !== undefined,
+          providerIds: providers,
+          officialProviders: official,
+        },
+      });
+    }
+
     // 宿主服务相关的检查先跑：sdk profile 在 stdin EOF 后开始卸载，越晚越容易落在失活窗口。
     if (skillsService === undefined) {
       blocked.push({

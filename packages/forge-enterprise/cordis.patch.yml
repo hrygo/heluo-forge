@@ -1,0 +1,22 @@
+# @heluo/forge-enterprise 的企业组合补丁层。
+#
+# 本文件当前只承载 O3 要求的"官方行默认禁用"（实测：`dsh --patch` 的覆写层会给命中行
+# 加上 `disabled: true`；命中不到的 id 会警告 `patch: entry "<id>" not found` 后跳过）。
+# 组合插入行（IAM、策略、网关、企业工具组）待对应包可用后再落到 `insert:` 段，
+# 不预建指向未实现包的入口。
+#
+# 用法：dsh --profile web --patch <该文件>
+# 复核：dsh --profile web --patch <该文件> --dump-config | grep -A1 "id: <行>"
+
+# 官方登录与账户 UI：企业 IAM 是唯一登录（O3），不保留公网回落。
+- id: deepseek-account
+  disabled: true
+- id: ui-settings-account
+  disabled: true
+
+# 官方模型两条路：账户登录模型与 API Key 模型。两者都关掉，
+# `DEEPSEEK_API_KEY` 才不构成旁路（核验见 docs/design/plugins/forge-enterprise.md §5.1）。
+- id: llm-deepseek-account
+  disabled: true
+- id: llm-deepseek
+  disabled: true
