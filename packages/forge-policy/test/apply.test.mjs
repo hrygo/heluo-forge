@@ -238,3 +238,35 @@ test('an unresolvable protected root refuses to mount', () => {
   );
   assert.equal(host.guards.length, 0);
 });
+
+test('the mounted service exposes delegation, confirmation and path helpers', () => {
+  const host = fakeHost();
+  apply(host.ctx, pathConfig);
+  const policy = host.ctx.get('policy');
+
+  const grant = policy.createDelegation({
+    id: 'dlg-1',
+    source: 'host',
+    principal: 'user-a',
+    changeId: 'C-2026-1',
+    repositories: ['repo-a'],
+    actions: ['fs.read'],
+    revisions: { change: 'rev-1' },
+    ttlMs: 60_000,
+  });
+  const inScope = { principal: 'user-a', changeId: 'C-2026-1', repository: 'repo-a', action: 'fs.read', revisions: { change: 'rev-1' } };
+  assert.equal(policy.authorizeDelegation({ grant, request: inScope }).action, 'allow');
+  assert.equal(policy.authorizeDelegation({ grant: policy.revokeDelegation(grant), request: inScope }).rule, 'delegation-revoked');
+
+  const issued = policy.issueConfirmation({ action: 'fs.read', target: 'repo-a', content: { body: 'x' }, revision: 'rev-1', kind: 'human', ttlMs: 60_000 });
+  assert.equal(policy.confirmations().length, 1);
+  assert.equal(policy.consumeConfirmation({ action: 'fs.read', target: 'repo-a', content: { body: 'x' }, revision: 'rev-1' }).action, 'allow');
+  assert.equal(policy.consumeConfirmation({ key: issued.key, revision: 'rev-1' }).rule, 'confirmation-consumed');
+
+  assert.deepEqual(policy.protectedPaths(), [`${protectedDir}/**`]);
+  assert.equal(policy.checkPath(join(protectedDir, 'credentials.env')).protected, true);
+  assert.equal(policy.checkPath(join(openDir, 'notes.md')).protected, false);
+  assert.equal(policy.digestContent({ a: 1 }).length, 64);
+  assert.match(policy.renderEgressScope(policy.confirmationScope({ action: 'a.b', target: 't', content: { body: 'x' } })), /fields=\[body\]/);
+  assert.doesNotThrow(() => policy.assertNoCanary('nothing here', ['canary-value']));
+});
