@@ -405,6 +405,70 @@ export function apply(ctx) {
         };
       });
 
+      await step('gate-audit-records-before-and-after-body', async () => {
+        const policy = ctx.get('policy');
+        const before = policy.auditRecords().length;
+        const result = await dispatch('probe_gate_read', { target: 'probe-target' });
+        const records = policy.auditRecords().filter((record) => record.tool === 'probe_gate_read');
+        const begin = records.find((record) => record.phase === 'begin');
+        const settle = records.find((record) => record.phase === 'settle');
+        return {
+          ok: result.isError !== true && begin !== undefined && settle !== undefined && policy.auditRecords().length > before,
+          detail: {
+            result,
+            begin: begin === undefined ? undefined : { action: begin.action, decision: begin.decision, operationId: begin.operationId },
+            settle: settle === undefined ? undefined : { decision: settle.decision, durationMs: settle.durationMs },
+            note: '前置记录先于工具体写入，执行后由 tools/post-execute 补记；记录不含参数正文',
+          },
+        };
+      });
+
+      await step('gate-audit-failure-denies-with-zero-effects', async () => {
+        const policy = ctx.get('policy');
+        const restore = policy.setAuditSink({
+          durable: true,
+          append: () => {
+            throw new Error('probe audit refused');
+          },
+        });
+        const before = gateCalls.read;
+        const result = await dispatch('probe_gate_read', { target: 'probe-target' });
+        restore();
+        return {
+          ok: result.isError === true && gateCalls.read === before && /audit refused/.test(result.text),
+          detail: { result, bodyCalls: gateCalls.read - before, note: '前置审计失败时不执行工具体' },
+        };
+      });
+
+      await step('gate-audit-settle-failure-keeps-outcome-and-limits', async () => {
+        const policy = ctx.get('policy');
+        const restore = policy.setAuditSink({
+          durable: true,
+          append: (record) => {
+            if (record.phase === 'settle') throw new Error('probe settle refused');
+          },
+        });
+        const first = await dispatch('probe_gate_read', { target: 'probe-target' });
+        const second = await dispatch('probe_gate_read', { target: 'probe-target' });
+        const gaps = policy.auditGaps().length;
+        const degraded = policy.auditDegraded();
+        policy.acknowledgeAuditGaps();
+        const third = await dispatch('probe_gate_read', { target: 'probe-target' });
+        restore();
+        policy.acknowledgeAuditGaps();
+        return {
+          ok: first.isError !== true && second.isError === true && gaps >= 1 && degraded === true && third.isError !== true,
+          detail: {
+            first,
+            second,
+            third,
+            gaps,
+            degraded,
+            note: '补记失败保留执行结果、记缺口并限制后续动作；显式确认缺口后恢复',
+          },
+        };
+      });
+
       for (const dispose of gateDisposers) dispose();
       await sleep(0);
     }
