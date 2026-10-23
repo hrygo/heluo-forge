@@ -20,6 +20,8 @@
 >
 > 关联文档：[DevOps 接入](../plugins/forge-devops.md)、[总体架构 §7.3](../../architecture/platform-architecture.md)、[网关契约 §4](../../contracts/gateway-contract.md)。
 
+> 2026-10-22 裁决补充：V1 不启用 MCP。若未来启用 UAG 标准部署的 MCP，客户端以同一 UAG 个人凭据、`apikey` 头调用 `/mcp`，不按 `resource` 换令牌；本文的 IAM JWT / JWKS / 内省校验形态只适用于另行批准的 AIGS/AAM 或独立 MCP 服务形态，不能作为 V1 前提，也不能据此宣称 A14 已满足。
+
 ## 1. 结论
 
 **当前不建设。** DevOps 按 P7 优先复用 CLI；三项前提不成立仅触发替代形态评审，须核定范围、成本、接口与验收并获准后才建设 MCP 服务。
@@ -50,7 +52,7 @@
 | 依赖 | 类型 | 版本约束 | 缺失时的行为 |
 |---|---|---|---|
 | DevOps API | 服务 | 由团队提供版本 | 服务不可用，明确报错 |
-| IAM 令牌校验 | 服务 | JWKS 或内省 | 拒绝所有请求 |
+| IAM 令牌校验 | 服务 | JWKS 或内省（仅未来 MCP 形态；V1 不适用） | 拒绝所有请求 |
 
 ## 4. 扩展形态与边界
 
@@ -68,7 +70,7 @@
 |---|---|---|---|---|
 | `server.port` | number | `8443` | 是 | 监听端口 |
 | `server.tls` | boolean | `true` | 是 | 强制 TLS |
-| `auth.jwks` | string | 空 | 是 | 令牌验签来源 |
+| `auth.jwks` | string | 空 | 条件 | 仅未来 MCP 形态的令牌验签来源；V1 不适用 |
 | `auth.audience` | string | 空 | 是 | 必须匹配的受众 |
 | `devops.apiBase` | string | 空 | 是 | 上游 API 地址 |
 

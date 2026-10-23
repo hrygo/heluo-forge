@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.20.0 |
+| 版本 | V1.20.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -63,7 +63,7 @@
 | 编号 | 交付物 | 文件 | 负责 | 门禁 | 状态 | 必须先回答 |
 |---|---|---|---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | IAM 团队 | G0 | 待启动 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V0.8.4） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0 | 草案 | 验签方式、consumer 生命周期、双维度额度、429 契约、C1/C4 与待批准保留期；方向回函不替代 G1/G2 冻结与验证 |
+| CORP-DSH-GW-001 | AI 网关契约（V0.9.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0 | 草案 | UAG 个人凭证、团队/成员预算、429 与错误分流、C1/C4、SCIM/停用与待批准保留期；分析稿与方向回函不替代 G1/G2 冻结与验证 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 平台组 | G0 | 待启动 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | DevOps 团队 | G1 | 待启动 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
 | CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | 平台组 | G1 | 待启动 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
@@ -85,20 +85,20 @@
 | 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；索引交付、三目标安装与全通道边界仍需验 |
 | 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
 | Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
-| IAM 登录与权限专题问询 | [IAM 统一登录与权限接入问询函](<collaboration/iam-confirmation-letter.md>) | 聚焦企业 OIDC/OAuth2 独占登录、PKCE、分资源授权、令牌轮换与撤销联动；作为单独发函模板 |
+| IAM 登录与权限专题问询 | [IAM 统一登录与权限接入问询函](<collaboration/iam-confirmation-letter.md>) | 聚焦企业 OIDC/OAuth2 独占登录、PKCE、工程服务/未来 MCP 的资源授权、令牌轮换与撤销联动；V1 模型网关改用 UAG 个人凭证；作为单独发函模板 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 九个安装包与两个独立服务的详细设计状态与路径 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
-辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V2.0.0 评审稿示意，不替代正文契约或实现清单）。
+辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案（历史提议）](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；网关静态 Key 页描述的是 2026-10-20 原提议，已被 2026-10-22 ADR-14 的 UAG 个人凭证方案取代，涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V2.0.0 评审稿示意，不替代正文契约或实现清单）。
 
 ## 5. 阅读顺序
 
 1. [需求与场景基线](<requirements/requirements-baseline.md>) §1–§6：先定范围、人群与指标。
 2. [总体架构设计](<architecture/platform-architecture.md>) §1–§7：原则、总体架构、插件形态与五个领域。
 3. [推广实施方案](<plans/rollout-plan.md>) §4–§8：关键路径、验收、风险与试点运行。
-4. [AI 网关契约](<contracts/gateway-contract.md>) §4：验签、额度与错误语义。
+4. [AI 网关契约](<contracts/gateway-contract.md>) §4：个人凭证、预算与错误语义。
 5. [设计索引](<design/README.md>) 与[开发约定](<engineering/development-conventions.md>)：进入实现前的模块边界与工程规则。
 6. [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) §4：按收件团队选择正文，填写联系人、期限与署名后转发。
 
