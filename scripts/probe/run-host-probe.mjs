@@ -68,6 +68,10 @@ for (const check of report.checks ?? []) {
   console.log(`${check.ok ? 'ok  ' : 'FAIL'} ${check.id}`);
   if (!check.ok) console.log(`     ${JSON.stringify(check.detail)}`);
 }
-console.log(`probe: ${report.passed}/${report.checks?.length ?? 0} checks passed${report.crashed ? ` (crashed: ${report.crashed})` : ''}`);
+for (const item of report.blocked ?? []) {
+  console.log(`blocked ${item.id}: ${item.reason}`);
+  console.log(`     ${JSON.stringify(item.evidence)}`);
+}
+console.log(`probe: ${report.passed}/${report.checks?.length ?? 0} checks passed, ${report.blocked?.length ?? 0} blocked${report.crashed ? ` (crashed: ${report.crashed})` : ''}`);
 console.log(`probe: evidence kept at ${out}`);
 process.exit(report.failed === 0 && report.crashed === undefined ? 0 : 1);

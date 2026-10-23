@@ -35,6 +35,9 @@ node scripts/probe/run-host-probe.mjs
 
 - 只证明**宿主钩子语义**。企业侧证据（真实 IAM、真实 Gitee/DevOps 权限、
   受控写批准）不在本探针范围，也不能用它替代。
-- 尚未覆盖：子 Agent 是否继承限制（需要真实 agent 会话），策略与沙箱的叠加顺序，
-  审批 UI 的注册方式与超时语义。这些在对应设计的未决事项里保留并注明截止门禁。
+- **未跑通（报告里单列 `blocked`）**：子 Agent 是否继承限制。探针所用 profile 没有可用的
+  agent 工厂与子 Agent provider（实测报 `cannot create effect on inactive context`），
+  需要在含 agent-loop 的 profile 上复跑，并做一次真实委派。
+- 尚未覆盖：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 确切范围。
+  这些在对应设计的未决事项里保留并注明截止门禁。
 - 探针插件只在探针 profile 内挂载，不写入任何用户 profile，也不改宿主代码。

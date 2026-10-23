@@ -90,7 +90,7 @@
 
 策略不可用（未挂载、加载失败、必要依赖缺失）时一律 fail-closed；**不提供 fail-open 开关**，也不以"显式声明只读模式"作为降级通道。
 
-```ts title="导出面（示意，钩子名待实测）"
+```ts title="导出面（钩子名已按 2026-10-24 live Host 契约核验）"
 export interface PolicyDecision {
   action: 'allow' | 'confirm' | 'deny';
   reason: string;
@@ -100,6 +100,8 @@ export interface PolicyEngine {
   check(input: { kind: 'fs' | 'bash' | 'egress'; target: string; meta?: unknown }): Promise<PolicyDecision>;
 }
 ```
+
+宿主接线：`ctx.tools.guard()` 承载硬拒绝（受保护路径与凭据，返回拒绝理由即阻断，且任何 guard 不能放行另一 guard 的拒绝）；`ctx.on('tools/pre-execute')` 承载需确认动作（返回 `{ kind: 'ask', reason }`，由 `ctx.approval` 决定，无 agent 或通道不可用时降级为拒绝）；`ctx.on('tools/result')` 只做观察投影，不参与判定；命令面不经工具管线，须显式接线（见 #21）。插件以 `inject: ['tools']` 声明对工具服务的硬依赖，依赖缺失即不挂载。
 
 ## 6. 权限、凭据与数据
 
@@ -165,8 +167,12 @@ flowchart TD
 | 单元 | 三类动作判定、fail-closed、规则优先级 | `node --test` |
 | 契约 | 结论与审计字段稳定 | 契约用例 |
 | 集成 | 命中受保护路径、确认超时、必要审计不可写零执行 | 本地夹具 |
+| 并发 | 并发判断无共享可变状态；审计串行不交错；并发拒绝不互相放行 | `node --test` |
+| 退出与卸载 | 卸载后工具面与命令面无残留可调用入口；退出前审计已落盘 | 宿主探针 + 本地夹具 |
 | 宿主探针 | guard 拒绝零副作用与单调性、pre-execute 异步决策、`ask` 无 agent 降级、`tools/result` 观察异常、命令面独立、`approval=never`、卸载清理 | `node scripts/probe/run-host-probe.mjs`（目标 DSH；无 `dsh` 跳过） |
 | 端到端 | 双端各跑一次拒绝、一次确认、一次放行 | 手工 + 脚本 |
+
+覆盖率门槛：≥70%；安全关键分支（受保护路径、确认超时、必要审计不可写、卸载清理）必须同时有正向与负向用例。未达到上述矩阵前不建包清单，模块保持"规划"。
 
 ## 11. 打包、升级与回退
 
@@ -178,7 +184,7 @@ flowchart TD
 
 | 问题 | 需要谁回答 | 阻塞的能力 | 截止门禁 |
 |---|---|---|---|
-| 子 Agent 限制是否继承（其余宿主行为实验已由探针跑通） | 平台组（探针 + 真实 agent 会话） | P01、P02 的准入结论 | G1 编码前 |
+| 子 Agent 限制是否继承（探针 profile 无可用的 agent 工厂与子 Agent provider，实测报 `cannot create effect on inactive context`；其余宿主行为实验已跑通） | 平台组（在含 agent-loop 的 profile 复跑探针 + 真实委派） | P01、P02 的准入结论 | G1 编码前 |
 | 策略与沙箱的叠加顺序 | 平台组（实测） | 冲突时取严是否成立 | G1 编码前 |
 | 审批 UI 的注册方式与超时语义 | 平台组（实测） | 确认流程（P02、P04） | G1 编码前 |
 | `$DSH_HOME` 的确切范围 | 平台组（实测） | 受保护路径定义（P04） | G1 编码前 |

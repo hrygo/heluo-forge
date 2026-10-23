@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const name = 'forge-host-probe';
-export const inject = ['tools'];
+export const inject = ['tools', 'agents'];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const textOf = (result) =>
@@ -53,6 +53,7 @@ export function apply(ctx) {
   mkdirSync(dir, { recursive: true });
 
   const checks = [];
+  const blocked = [];
   const step = async (id, run) => {
     try {
       const { ok, detail } = await run();
@@ -221,12 +222,67 @@ export function apply(ctx) {
       return { ok: outcome === 'rejected', detail: { outcome, expected: 'rejected' } };
     });
 
+    // 记录本轮无法跑通的一项：子 Agent 限制是否继承需要真实 agent 会话，
+    // 而探针所用的 sdk/headless profile 不含 agent-loop 与 subagent 插件。
+    // 真实 agent 只能在注入就绪的活跃作用域内创建（Cordis 效果语义）。
+    const agentFacts = await Promise.race([
+      new Promise((resolve) => {
+        ctx.inject(['agents'], (scope) => {
+          void (async () => {
+            try {
+              resolve({ handle: await scope.agents.create({ cwd: dir }) });
+            } catch (error) {
+              resolve({ error: String(error?.message ?? error) });
+            }
+          })();
+        });
+      }),
+      sleep(5000).then(() => ({ error: 'inject(agents) 未在 5s 内就绪' })),
+    ]);
+    const agentHandle = agentFacts.handle;
+    const agentCreateError = agentFacts.error;
+    const subagents = ctx.get('subagents');
+    const providers =
+      subagents === undefined
+        ? 'service-absent'
+        : subagents.list().map((providerName) => {
+            const provider = subagents.getProvider(providerName);
+            return { providerName, inheritsParentContext: provider?.inheritsParentContext, capabilities: provider?.capabilities };
+          });
+    if (agentHandle === undefined) {
+      blocked.push({
+        id: 'subagent-restriction-inheritance',
+        reason: '探针 profile 无法创建真实 agent 会话，继承实验未跑；已记录可声明的继承属性与该失败原因',
+        evidence: { agentsCreate: agentCreateError, subagentProviders: providers },
+      });
+    } else {
+      const agent = agentHandle.agent ?? agentHandle;
+      const agentCtx = agent.ctx ?? agentHandle.ctx;
+      await step('agent-scoped-restriction-is-per-scope', async () => {
+        const globalsBefore = ctx.tools.schemas().some((schema) => schema.name === 'probe_body');
+        const disposeRestrict = agentCtx.tools.restrict({ deny: ['probe_body'] });
+        const visibleForAgent = ctx.tools.get('probe_body', agent) !== undefined;
+        const globalStillVisible = ctx.tools.get('probe_body') !== undefined;
+        disposeRestrict();
+        return {
+          ok: globalsBefore && visibleForAgent === false && globalStillVisible === true,
+          detail: { globalsBefore, visibleForAgent, globalStillVisible, note: '作用域限制只影响该 agent 视图，全局视图不变' },
+        };
+      });
+      blocked.push({
+        id: 'subagent-restriction-inheritance',
+        reason: '子 Agent 是否继承父作用域限制仍需一次真实委派（会触发模型调用），本轮以 provider 声明与作用域事实记录',
+        evidence: { subagentProviders: providers, agentScopedRestriction: 'per-scope (见 agent-scoped-restriction-is-per-scope)' },
+      });
+    }
+
     const failed = checks.filter((check) => !check.ok).length;
     const report = {
       probe: 'forge-host-probe',
       harness: process.env.DSH_HOST_PROBE_HARNESS ?? 'unknown',
       env: { node: process.version, platform: `${process.platform}-${process.arch}` },
       checks,
+      blocked,
       failed,
       passed: checks.length - failed,
     };
