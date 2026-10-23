@@ -676,8 +676,8 @@
     },
     {
       "path": "index.html",
-      "bytes": 27400,
-      "sha256": "d8b869669544b257e28eb5ce2b288c178f7e35101972d7888e66d6a5a0f2da31"
+      "bytes": 34559,
+      "sha256": "15c44bc6cafa4ad97fa019e1fe3044657f7348f914d50f25f60f5d6bd21f1c72"
     },
     {
       "path": "primary/app-icon-white.png",
@@ -686,8 +686,8 @@
     },
     {
       "path": "primary/app-icon-white.svg",
-      "bytes": 3559,
-      "sha256": "ad20a06950382fdf185d637dee9a14f454f48a0861bcb3b58c80d2fcaaa3a637"
+      "bytes": 3531,
+      "sha256": "51a1ca3160bd11423a9be491e7424e7bff66ae511af27a3d999627d9ccb52365"
     },
     {
       "path": "primary/app-icon.png",
@@ -696,8 +696,8 @@
     },
     {
       "path": "primary/app-icon.svg",
-      "bytes": 3656,
-      "sha256": "d4aae503c20bd8062bc3c7e0a8d5a42ec72638988b0255dd0c0ec8c9ef57a4a8"
+      "bytes": 3628,
+      "sha256": "1d00b5b0c635d523004c52feb4060a61f20e79e3169f643a0c0d25db87954c14"
     },
     {
       "path": "primary/lockup-horizontal.png",
@@ -706,8 +706,8 @@
     },
     {
       "path": "primary/lockup-horizontal.svg",
-      "bytes": 4059,
-      "sha256": "0edce6e8846cc1ab071c9030dcd4427ad68ea1fa38aaa9775ec9e06b6335ab03"
+      "bytes": 4031,
+      "sha256": "9d7d08f8fd375a0e94ad1128cd6bc6d28338eff93c588cc2694e0f65c250c4ab"
     },
     {
       "path": "primary/lockup-vertical.png",
@@ -716,8 +716,8 @@
     },
     {
       "path": "primary/lockup-vertical.svg",
-      "bytes": 4151,
-      "sha256": "b58013189e65c4cf8b8c341e5402acb355fc298e794201fac9ecf45c1ba20131"
+      "bytes": 4123,
+      "sha256": "7b2ab2b82db28265286ea88338c6d0666ae0fd816030651acdb63b360b5dce9e"
     },
     {
       "path": "primary/symbol-color.png",
@@ -726,8 +726,8 @@
     },
     {
       "path": "primary/symbol-color.svg",
-      "bytes": 3292,
-      "sha256": "b00730ce8a0820402fd6bd80ef9b4b1891e930a84431c20feb32dd9031ad5d69"
+      "bytes": 3266,
+      "sha256": "e6e40922754cae273c4589124e3585eef6f84d69d8b7f959a47298abbcc84f80"
     },
     {
       "path": "primary/symbol-mono-dark.png",
@@ -736,8 +736,8 @@
     },
     {
       "path": "primary/symbol-mono-dark.svg",
-      "bytes": 2506,
-      "sha256": "98a178e02d06a23e2ab5c0221c45549177d1bff029a2007ad81a8564f8b15f3a"
+      "bytes": 2490,
+      "sha256": "eb3c11d53a4dc0130758013e8ed971794282bf94df6f97619b9acd7bce449a84"
     },
     {
       "path": "primary/symbol-mono-light.png",
@@ -746,8 +746,8 @@
     },
     {
       "path": "primary/symbol-mono-light.svg",
-      "bytes": 2506,
-      "sha256": "0f229f2bd1da0bb8dd0efd08d34e89ace0016539203373275232f4f92e98b121"
+      "bytes": 2490,
+      "sha256": "0dfac3ad24282f06a29a6f5e39aeba2cd337b9d01931d7c4f14b5343afb2edb5"
     },
     {
       "path": "primary/symbol-outline.png",
@@ -756,8 +756,8 @@
     },
     {
       "path": "primary/symbol-outline.svg",
-      "bytes": 3175,
-      "sha256": "94533587ee3072634aaede3bda211552603cf44780d81f6ac56b0bc8ce65c3a7"
+      "bytes": 3165,
+      "sha256": "2458f49280952225b1f967ba4d5fcc73539c248885dc7f4bbd1d162efa29ad25"
     },
     {
       "path": "primary/wordmark-color.png",

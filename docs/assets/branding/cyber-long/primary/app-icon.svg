@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="河洛苍螭 · 应用图标（深色）">
-          
+
   <defs>
     <linearGradient id="cyberLongGrad" x1="15%" y1="90%" x2="85%" y2="10%">
       <stop offset="0%" stop-color="#1D4ED8" />
@@ -22,7 +22,7 @@
           <rect x="1" y="1" width="510" height="510" rx="114" ry="114" fill="none" stroke="rgba(0, 245, 255, 0.22)" stroke-width="2" />
           <circle cx="256" cy="256" r="150" fill="url(#ambientGlow)" />
           <g transform="translate(96, 96)">
-            
+
     <g transform="translate(0, 0)">
       <g transform="translate(160, 160) scale(0.04241491363092184, -0.04241491363092184) translate(-5153.5, 23.5)" fill="url(#cyberLongGrad)">
         <path d="m3441 2750 c102 -64 184 -104 339 -165 183 -73 304 -108 500 -144 215
@@ -53,10 +53,10 @@ c126 -41 297 -76 500 -104 166 -24 249 -48 330 -96 148 -89 238 -228 260 -400
 50 46 138 107 142 98 1 -4 -26 -68 -62 -142z" />
       </g>
       <!-- Aerodynamic Eye Notch -->
-      <path d="M 198 94 C 204 90 215 93 222 98 C 215 103 204 100 198 94 Z" 
-            transform="translate(160, 160) scale(1.0) translate(-160, -160)" 
+      <path d="M 198 94 C 204 90 215 93 222 98 C 215 103 204 100 198 94 Z"
+            transform="translate(160, 160) scale(1.0) translate(-160, -160)"
             fill="#0B1224" />
     </g>
-    
+
           </g>
         </svg>
