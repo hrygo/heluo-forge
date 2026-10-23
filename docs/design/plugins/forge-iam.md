@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.4.1 |
+| 版本 | V0.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-22 |
-| 门禁 | G0 |
+| 最后更新 | 2026-10-23 |
+| 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程、网关凭据录入/清除/状态已实现；当前为 interim same-origin HTTP + 2s 轮询，管理 API 经 `ctx.connection.requestRejection` 认证；Remote/watch、凭据探测、审计与默认模型切换未实现；真实联调待） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/UOS/麒麟实机。以上未核验项不写成已实现。
@@ -24,22 +24,35 @@
 
 本模块把企业 IAM 做成 DSH 在企业内网的**唯一登录**：未登录时企业模型与企业工具全部不可用。官方 DeepSeek 登录、官方模型路由、官方 API Key 与官方账户 UI 由 `@heluo/forge-enterprise` 在组合层禁用，本模块不保留任何回落路径。
 
-登录解决的是“企业身份与能力授权”，不是“打开 DSH 的准入”：应用外壳可以打开，但任何企业模型/工具调用在未登录时 fail closed，并给出重新登录入口。**登录与模型网关凭据分离**：IAM access token 只用于身份/账户；模型调用使用 UAG 个人凭证（静态 Key），由 UAG 控制台签发，本模块只承载录入、存储、探测、状态展示与清除，不签发、不刷新、不自动轮换。
+登录解决的是“企业身份与能力授权”，不是“打开 DSH 的准入”：应用外壳可以打开，但任何企业模型/工具调用在未登录时 fail closed，并给出重新登录入口。**当前目标将身份认证与网关模型授权分开管理**：个人模型调用必须有可信当前身份；A 纯令牌 / B Key＋令牌待评审，B 中 Key 由控制台签发，不能单独放行。
 
-2026-10-22 裁决后已进入 interim 实现；上线前仍缺四类事：IAM 侧登录/刷新/撤销/RP 登出的书面确认（`resource` 仅未来按资源调用需要，不阻塞 V1）；禁用官方四行后 shell/onboarding 的实测；keychain provider 与 UI 挂载点的双端实测；网关凭据录入/探测与真实 UAG 联调。首版按 O3 独占实现 4 屏 onboarding（欢迎、登录、网关凭据、完成）+ 账户页；生产使用 keychain provider，旧 0600 记录迁移成功后删除；不实现附加登录（additive）模式。
+2026-10-22 裁决后已进入 interim 实现；上线前仍缺四类事：IAM 侧登录/刷新/撤销/RP 登出的书面确认（本轮已恢复网关目标授权及单授权生命周期为前置，resource 并非唯一路径）；禁用官方四行后 shell/onboarding 的实测；keychain provider 与 UI 挂载点的双端实测；网关凭据录入/探测与真实 UAG 联调。首版按 O3 独占实现 4 屏 onboarding（欢迎、登录、网关凭据、完成）+ 账户页；生产使用 keychain provider，旧 0600 记录迁移成功后删除；不实现附加登录（additive）模式。
+
+### 1.1 本轮目标与原基线实现的差距
+
+2026-10-23 仅更新文档。需求见[基线 §4.6](../../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求)，候选路线及时间语义见[评审稿](../../architecture/gateway-identity-review.md)，IAM 原函覆盖评估见[§8](../../collaboration/iam-confirmation-letter.md#8-本轮需求覆盖评估与补充确认清单平台内部)。需求方已确认，提供方能力、实际字段及技术路线待核验。
+
+| 原基线/已有描述 | 本轮必须满足 | 状态 |
+|---|---|---|
+| 静态 Key 录入、清除、状态与本地 ownerSubject | A 不要求 Key；B 由网关认证当前人并比较 Key owner，本地记录不能证明归属 | 待 IAM/网关能力及 DSH 承载核验 |
+| 会话 access/refresh 取用及本地单飞 | 网关目标授权、跨客户端稳定人员映射、停用后五分钟拒绝新请求 | 既有本地实现不能证明端到端满足 |
+| 本地退出、可选 RP 和单 token 撤销描述 | 默认只退出当前设备授权，接受撤销后五分钟内覆盖全部刷新后代及 AT，不牵连其他设备/应用或全局 SSO | 关键能力待 IAM 核实，不以 RP 全局登出补足 |
+| 离线/故障清理 | 本地立即停止并取消在途，服务端未确认如实展示；只有仍保证有效授权与五分钟上限时可继续调用 | 待正式契约及双端联调 |
+
+下文涉及既有接口、配置、`ENTERPRISE_STATIC_KEY`、无网关 token 镜像和固定 onboarding 的描述，保留为 2026-10-22 interim 基线及当时目标，**不是本轮认证路线已经实现的证明**。未选路前不虚构新接口；具体已实现/未实现仍以 §4、§5.0 与设计索引的实测记录为准。本轮安全准入以本节及网关契约为准，旧的 Key-only 或仅本地退出不能作可投产回退。
 
 ## 2. 目标与非目标
 
 **目标**
 
 - 企业 IAM 是唯一登录；官方登录入口、官方模型路由、官方 API Key 路由均不可用。
-- 企业 IAM 只建立身份与 IAM 会话；模型网关使用独立的 UAG 个人凭证 `ENTERPRISE_STATIC_KEY`，不把 IAM access token 镜像为模型凭据。
+- 企业 IAM 建立可信身份与目标授权；个人 A/B 路线按能力选定，原 Key-only 实现待调整，不在本轮实现。
 - 授权码 + PKCE（S256），系统浏览器，loopback 回调；回调挂在现有 `webServer` 的独立路径。
 - OIDC discovery 或显式端点；discovery `issuer` 必须与配置一致；校验 `state`、`nonce`、`iss`、`aud`、签名算法、`exp`/`nbf` 与时钟容差。
 - 令牌记录进入 DSH 凭据服务；刷新在锁内 single-flight；调用方只拿 access token，不接触 refresh token。
-- 账户/首启界面承载网关凭据录入、探测、状态与清除；Key 由 UAG 控制台签发，本模块不签发、不刷新。
+- 账户/首启界面展示必要授权状态；B 才需要个人 Key 录入/清除，Key 由控制台签发。探测是否可用以实测记录为准。
 - 账户页展示主体、到期、状态、网关凭据状态与登录/取消/退出；首启 4 屏，可跳过；未登录或网关凭据未配置时隐藏/禁用企业模型。
-- 退出按 RFC 7009 撤销 IAM 会话，并清理本地记录与运行时副本；默认保留已保存的网关凭据，但仅对录入时主体可用；撤销失败可归因，不谎报成功。
+- 退出按 §1.1 清理本地并撤销当前授权，默认保留长期个人 Key；服务端撤销当前授权及所有刷新后代能力未确认时不得声称已闭环。
 
 **非目标**
 
@@ -56,7 +69,7 @@
 |---|---|---|
 | REQ-01 / A1、A14 | 支撑 | 授权码 + PKCE、loopback 回调、错误 `state`/身份校验拒绝；未登录或网关凭据未配置时无企业模型 |
 | REQ-02 / A2 | 支撑 | 刷新成功无需重启；双进程不互相触发 `invalid_grant`；锁内刷新超时目标 ≤5 秒 |
-| REQ-05 / A2、A3 | 支撑 | 登录过期刷新一次后提示重登；网关 401 引导检查/重建凭据；额度 429 不自动重试；不静默换模型 |
+| REQ-05 / A2、A3 | 支撑 | 按契约区分身份、Key、授权、用途及故障；额度不自动重试，已执行或未知结果不重放 |
 | REQ-17 / A12 | 支撑 | IAM/凭据/必要审计缺失时，企业调用拒绝而不是降级 |
 | C1、C4 | 约束 | 只走企业网关；不保留公网路由；日志不含正文与令牌 |
 
@@ -67,9 +80,9 @@
 | `dsh-settings` | 包 | 随目标 DSH | 配置不可写；按只读配置启动或报错 |
 | `dsh-llm-pi-ai` | 包 | 随目标 DSH | 无模型路由；不影响登录本身 |
 | `dsh-agent-default-model` | 包 | 随目标 DSH | 不自动设默认模型；用户手动选择 |
-| IAM OIDC 授权服务器 | 服务 | OIDC + PKCE；`resource` 待确认（未来按资源调用） | 未配置即 `unconfigured`；不阻断其他插件 |
+| IAM OIDC 授权服务器 | 服务 | OIDC + PKCE；网关目标授权待确认，resource 或等效 audience/client 配置 | 未配置即 `unconfigured`；不阻断其他插件 |
 | `@heluo/forge-enterprise` | 包 | 同批次 | 官方行可能仍在位；本模块 `requireExclusive` 报独占冲突 |
-| `@heluo/forge-gateway` | 包 | 同批次 | 无 `ENTERPRISE_STATIC_KEY` 消费方；登录成功但未配置网关凭据也无模型可用 |
+| `@heluo/forge-gateway` | 包 | 同批次 | 所选个人路线缺少必要授权或消费方时，模型不可用 |
 
 ## 4. 扩展形态与边界
 
@@ -148,7 +161,7 @@ Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-eve
 | `iam.redirectPath` | string | `/iam/callback` | 否 | Host 回调路径；不得为站点根或以 `/` 结尾（DSH 路由为不带尾斜杠的绝对路径） |
 | `iam.redirectUri` | string | 空 | 否 | 绝对回调 URI；path 必须等于 `redirectPath`，非 loopback 必须 HTTPS，生产必须与 IAM 注册值精确匹配 |
 | `iam.postLogoutRedirectUri` | string | 空 | 否 | `logoutMode=rp` 时使用；绝对 http(s)，HTTP 仅限 loopback |
-| `iam.gatewayResource` | string | 空 | 否 | 预留：未来按资源调用换取 access token；静态 Key 模式不使用 |
+| `iam.gatewayResource` | string | 空 | 否 | 原基线预留；不证明当前实现支持网关目标令牌，新路线取用方式待确认 |
 | `iam.gatewayConsoleUrl` | string | 空 | 否 | UAG 个人凭证控制台入口；仅用于引导与深链，不参与鉴权 |
 | `iam.defaultProvider` | string | `enterprise` | 否 | 预留；当前不自动设置 |
 | `iam.defaultModel` | string | 空 | 否 | 预留；当前不自动设置 |
@@ -273,7 +286,7 @@ interface IamGrantV1 {
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
 | refresh token | `GrantRecord.payload`；生产 `@heluo/forge-credentials-keychain`，仅 dev/pilot 可显式接受 0600 fallback | 直到撤销或轮换 | 写入失败不进入 ready；keychain 不可用 fail closed |
-| access token | 仅 GrantRecord；不镜像为模型网关凭据 | ≤60 分钟 | 刷新/写入失败按错误分类 |
+| access token | 原 interim 仅 GrantRecord；无网关镜像 | 原 ≤60 分钟为历史建议，不是已核实 TTL；本轮按五分钟端到端约束确认 | 刷新/写入失败按错误分类 |
 | 网关个人凭据 | 系统凭据库中的 `ENTERPRISE_STATIC_KEY`；记录 `ownerSubject` + 设备标签，不放入 GrantRecord | 用户更换/清除；建议 90 天 | 未配置/无效 fail closed；不自动刷新、不自动重建 |
 | 授权码与 verifier | 仅内存，单次 attempt | ≤5 分钟 | 校验失败即丢弃 |
 | ID Token | 仅 `logoutMode=rp` 保存；否则不落盘 | 到退出 | 缺失则不允许 RP 登出 |
@@ -344,6 +357,9 @@ flowchart TD
 - 双进程：两个进程共用一份记录；后到者在锁内重新读取，不各刷新一次；任何一方都不得把旧 refresh token 写回。
 
 ### 7.4 退出与撤销
+
+> 2026-10-23 适用性：本节原流程是 interim 基线说明。默认目标是当前授权及刷新后代撤销，不自动调用全局 RP 登出；本地删除/只撤 AT 不能证明服务端五分钟内终结当前授权。旧代码行为未在本轮修改。相关能力未闭环则不开放相应路径。
+
 
 顺序：停止本实例新请求 → 取消进行中的登录 → 锁内读取最新 grant 并尽力撤销 refresh token（网络上限 5 秒）→ 清运行时副本 → 删除记录 → 再清副本 → 发布 `signed-out` → 审计。默认不删除已保存的 `ENTERPRISE_STATIC_KEY`；用户显式“清除网关凭据”才删除。
 
