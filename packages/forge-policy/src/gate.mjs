@@ -6,11 +6,12 @@
  * 未登记的工具不属于本门禁的作用域，不在这里假装覆盖。
  */
 import { decideAction } from './catalog.mjs';
+import { matchProtected } from './paths.mjs';
 
 /**
  * @param {{catalog: Map<string, object>, tools?: Record<string, string>, categories?: Record<string, string>, onDecision?: Function}} options
  */
-export function createGate({ catalog, tools = {}, categories = {}, onDecision }) {
+export function createGate({ catalog, tools = {}, categories = {}, protectedRoots = [], pathOptions = {}, onDecision }) {
   const approved = new WeakSet();
 
   const actionFor = (toolName) => tools[toolName] ?? categories[toolName];
@@ -61,8 +62,35 @@ export function createGate({ catalog, tools = {}, categories = {}, onDecision })
     return { kind: 'deny', reason: `${decision.reason}: ${outcome}` };
   }
 
+  /**
+   * Protected-path check. It runs before any allow/confirm decision and its
+   * denial is hard: a granted confirmation cannot flip it.
+   */
+  function pathDenial(exec, action) {
+    const entry = catalog.get(action);
+    if (entry?.path === undefined) return undefined;
+    const candidate = exec.arguments?.[entry.path];
+    if (protectedRoots.length === 0) {
+      return `action "${action}" needs a path check but no protected root is configured`;
+    }
+    try {
+      const match = matchProtected(candidate, protectedRoots, pathOptions);
+      if (match.protected) {
+        return `action "${action}" targets the protected path ${match.root}`;
+      }
+    } catch (error) {
+      return `action "${action}" path cannot be verified (${error?.code ?? error?.message})`;
+    }
+    return undefined;
+  }
+
   function guard(exec) {
     if (!isEnforced(exec.name)) return undefined;
+    const pathReason = pathDenial(exec, actionFor(exec.name));
+    if (pathReason !== undefined) {
+      notify({ toolName: exec.name, action: actionFor(exec.name), decision: { action: 'deny', reason: pathReason, rule: 'protected-path' } });
+      return pathReason;
+    }
     const decision = check(exec.name, { target: exec.arguments?.target, egress: exec.arguments?.egress });
     if (decision.action === 'deny') return decision.reason;
     if (decision.action === 'confirm' && !approved.has(exec)) {
@@ -71,5 +99,5 @@ export function createGate({ catalog, tools = {}, categories = {}, onDecision })
     return undefined;
   }
 
-  return { actionFor, isEnforced, check, preExecute, guard, isApproved: (exec) => approved.has(exec) };
+  return { actionFor, isEnforced, check, pathDenial, preExecute, guard, isApproved: (exec) => approved.has(exec) };
 }

@@ -56,6 +56,9 @@ export function compileCatalog(entries = []) {
     if (entry.retry !== undefined && !RETRY_VALUES.has(entry.retry)) {
       throw new PolicyCatalogError(`action "${action}" retry must be none, read_recheck or safe_retry`, 'POLICY_CATALOG_INVALID', { action });
     }
+    if (entry.path !== undefined && (typeof entry.path !== 'string' || entry.path.trim().length === 0)) {
+      throw new PolicyCatalogError(`action "${action}" path must name the argument carrying a filesystem path`, 'POLICY_CATALOG_INVALID', { action });
+    }
     catalog.set(action, Object.freeze({
       action,
       kind: entry.kind,
@@ -63,6 +66,7 @@ export function compileCatalog(entries = []) {
       egress: entry.egress ?? 'confirm',
       retry: entry.retry ?? (entry.kind === 'read' ? 'read_recheck' : 'none'),
       enabled: entry.enabled === true,
+      path: entry.path,
     }));
   }
   return catalog;
