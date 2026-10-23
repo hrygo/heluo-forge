@@ -1,5 +1,6 @@
 /**
- * `@heluo/forge-policy`：受控动作目录、command/tool 统一门禁、受保护路径与 C3 外发确认。
+ * `@heluo/forge-policy`：受控动作目录、command/tool 统一门禁、受保护路径、C3 外发确认、
+ * 有限委托与可信确认生命周期。
  *
  * 挂载时编译目录并注册 guard 与 `tools/pre-execute` 监听器；目录无效、策略服务
  * 已被占用或宿主缺少必要 seam 时拒绝挂载（fail closed），不做"降级为只读"。
@@ -10,6 +11,8 @@ import { join } from 'node:path';
 
 import { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 import { createGate } from './gate.mjs';
+import { createConfirmationLedger } from './confirmations.mjs';
+import { authorizeDelegation, createDelegation, revokeDelegation } from './delegation.mjs';
 import { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
 import { matchProtected, resolveProtectedRoots } from './paths.mjs';
 
@@ -18,6 +21,8 @@ export const inject = ['tools'];
 
 export { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 export { createGate } from './gate.mjs';
+export { createConfirmationLedger } from './confirmations.mjs';
+export { authorizeDelegation, createDelegation, revokeDelegation } from './delegation.mjs';
 export { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
 export { matchProtected, resolveProtectedRoots } from './paths.mjs';
 
@@ -199,6 +204,7 @@ export function apply(ctx, rawConfig = {}) {
     disposers.push(ctx.on('tools/pre-execute', (exec, next) => gate.preExecute(ctx, exec, next)));
   }
 
+  const confirmations = createConfirmationLedger();
   const service = Object.freeze({
     catalog,
     actions: () => [...catalog.keys()],
@@ -211,6 +217,12 @@ export function apply(ctx, rawConfig = {}) {
     renderEgressScope,
     digestContent,
     assertNoCanary,
+    createDelegation,
+    revokeDelegation,
+    authorizeDelegation: (request) => authorizeDelegation({ catalog, ...request }),
+    issueConfirmation: (input) => confirmations.issue(input),
+    consumeConfirmation: (input) => confirmations.consume(input),
+    confirmations: () => confirmations.pending(),
     registerCommand: (commandCtx, definition) => registerCommand(commandCtx, service, definition),
   });
   const disposeProvide = ctx.provide(SERVICE_KEY, service);

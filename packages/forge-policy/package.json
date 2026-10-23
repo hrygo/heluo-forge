@@ -14,7 +14,11 @@
   "exports": {
     ".": "./src/index.mjs",
     "./catalog": "./src/catalog.mjs",
-    "./gate": "./src/gate.mjs"
+    "./confirmations": "./src/confirmations.mjs",
+    "./delegation": "./src/delegation.mjs",
+    "./egress": "./src/egress.mjs",
+    "./gate": "./src/gate.mjs",
+    "./paths": "./src/paths.mjs"
   },
   "files": [
     "src",

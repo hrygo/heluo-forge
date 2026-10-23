@@ -263,6 +263,34 @@ export function apply(ctx) {
       };
     });
 
+    await step('delegation-identity-not-model-supplied', async () => {
+      const forged = { agent: { id: 'forged-principal' }, principal: 'forged', approved: true, review_kind: 'human' };
+      let observed;
+      const disposeListener = ctx.on('tools/pre-execute', (exec, next) => {
+        if (exec.name === 'probe_identity') {
+          observed = {
+            agentIsTheForgedArgument: exec.agent === forged.agent,
+            agentPresent: exec.agent !== undefined,
+            forgedKeys: Object.keys(exec.arguments ?? {}),
+          };
+        }
+        return next();
+      });
+      const disposeTool = ctx.tools.register(probeTool('probe_identity', () => okValue('probe_identity')));
+      const result = await dispatch('probe_identity', forged);
+      disposeTool();
+      disposeListener();
+      await sleep(0);
+      return {
+        ok: observed !== undefined && observed.agentIsTheForgedArgument === false,
+        detail: {
+          result,
+          observed,
+          note: '工具参数里的 agent/principal/approved/review_kind 不会成为宿主身份；宿主未提供身份时 exec.agent 为 undefined',
+        },
+      };
+    });
+
     // 门禁集成：当 forge-policy 与本插件同进程挂载时，用合成查询验证
     // "登记且范围内可执行、未登记/未开放/错目标一律拒绝且副作用为零"。
     if (ctx.get('policy') !== undefined) {
@@ -382,20 +410,26 @@ export function apply(ctx) {
     }
 
     // 真实 agent 只能在注入就绪的活跃作用域内创建（Cordis 效果语义）。
-    const agentFacts = await Promise.race([
-      new Promise((resolve) => {
-        ctx.inject(['agents'], (scope) => {
-          void (async () => {
-            try {
-              resolve({ handle: await scope.agents.create({ cwd: dir }) });
-            } catch (error) {
-              resolve({ error: String(error?.message ?? error) });
-            }
-          })();
-        });
-      }),
-      sleep(5000).then(() => ({ error: 'inject(agents) 未在 5s 内就绪' })),
-    ]);
+    // 宿主关闭或作用域失效时这里可能抛错；环境问题只记 blocked，不能让整份报告崩掉。
+    let agentFacts;
+    try {
+      agentFacts = await Promise.race([
+        new Promise((resolve) => {
+          ctx.inject(['agents'], (scope) => {
+            void (async () => {
+              try {
+                resolve({ handle: await scope.agents.create({ cwd: dir }) });
+              } catch (error) {
+                resolve({ error: String(error?.message ?? error) });
+              }
+            })();
+          });
+        }),
+        sleep(5000).then(() => ({ error: 'inject(agents) 未在 5s 内就绪' })),
+      ]);
+    } catch (error) {
+      agentFacts = { error: `inject(agents) failed: ${String(error?.message ?? error)}` };
+    }
     const agentHandle = agentFacts.handle;
     const agentCreateError = agentFacts.error;
     const subagents = ctx.get('subagents');
