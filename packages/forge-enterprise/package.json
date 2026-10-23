@@ -1,0 +1,22 @@
+{
+  "name": "@heluo/forge-enterprise",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Enterprise bundle composition helpers for Heluo Forge",
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./skills": "./src/skills.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}

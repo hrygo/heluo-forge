@@ -8,7 +8,7 @@
  * 只用公开服务（ctx.tools / ctx.commands / ctx.approval），不读私有字段；
  * 拟定结果写 DSH_HOST_PROBE_OUT，随后退出进程（探针 profile 专用，不改宿主行为）。
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const name = 'forge-host-probe';
@@ -77,13 +77,23 @@ export function apply(ctx) {
     let seq = 0;
     const signal = new AbortController().signal;
     const dispatch = async (toolName, args = {}) => {
-      seq += 1;
-      try {
-        const result = await ctx.tools.execute({ callId: `probe-${seq}`, name: toolName, arguments: args, signal });
-        return { isError: result?.isError === true, text: textOf(result), error: errorOf(result) };
-      } catch (error) {
-        return { threw: String(error?.message ?? error) };
+      // sdk profile 的宿主在 stdin EOF 后开始卸载，偶尔会让一次派发落在失活窗口
+      // （"inactive context"）；这不是被测行为，重试一次后仍失败才记录为该检查的失败。
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        seq += 1;
+        try {
+          const result = await ctx.tools.execute({ callId: `probe-${seq}`, name: toolName, arguments: args, signal });
+          return { isError: result?.isError === true, text: textOf(result), error: errorOf(result) };
+        } catch (error) {
+          const message = String(error?.message ?? error);
+          if (attempt === 0 && message.includes('inactive context')) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            continue;
+          }
+          return { threw: message };
+        }
       }
+      return { threw: 'unreachable' };
     };
 
     const bodyCalls = { body: 0, asyncAllow: 0, asyncDeny: 0, ask: 0, side: 0 };
@@ -105,12 +115,136 @@ export function apply(ctx) {
       ),
     );
 
+    // 实测：晚到的注册会撞上宿主卸载（"cannot create effect on inactive context"），
+    // 因此身份观察、技能注册与门禁探针工具都在入口处一次完成，后面的步骤只做观察与派发。
+    const identityForged = { agent: { id: 'forged-principal' }, principal: 'forged', approved: true, review_kind: 'human' };
+    const identityObservation = {};
+    disposers.push(
+      ctx.on('tools/pre-execute', (exec, next) => {
+        if (exec.name === 'probe_identity') {
+          identityObservation.agentIsTheForgedArgument = exec.agent === identityForged.agent;
+          identityObservation.agentPresent = exec.agent !== undefined;
+          identityObservation.forgedKeys = Object.keys(exec.arguments ?? {});
+        }
+        return next();
+      }),
+      ctx.tools.register(probeTool('probe_identity', () => okValue('probe_identity'))),
+    );
+
+    const clauseContent = '# 探针条款\n硬要求：外发前必须确认。\n';
+    const probeClauseSummary = {
+      name: 'probe-provider-clause',
+      description: '探针企业条款：外发前必须确认',
+      whenToUse: '当任务涉及企业外发时按需加载；由用户显式触发',
+      invocation: { modelInvocable: false, userInvocable: true },
+      source: 'custom',
+    };
+    const skillsService = ctx.get('skills');
+    const skillsRegistration = { registered: false, providerRegistered: false };
+    if (skillsService !== undefined) {
+      try {
+        disposers.push(
+          skillsService.register({
+            name: 'probe-enterprise-clause',
+            description: '探针企业条款：外发前必须确认',
+            whenToUse: '当任务涉及企业外发时按需加载；由用户显式触发',
+            content: clauseContent,
+            source: 'custom',
+            invocation: { modelInvocable: false, userInvocable: true },
+          }),
+        );
+        skillsRegistration.registered = true;
+      } catch (error) {
+        skillsRegistration.registerError = String(error?.message ?? error);
+      }
+      try {
+        // 目录读取走 provider 路径；正文只在 get() 时按需返回。
+        disposers.push(
+          skillsService.registerProvider(() => ({
+            name: 'probe-enterprise-provider',
+            list: async () => [
+              { ...probeClauseSummary, provider: 'probe-enterprise-provider', rank: 0, locator: { clause: 'probe-1' } },
+            ],
+            get: async () => ({
+              ...probeClauseSummary,
+              provider: 'probe-enterprise-provider',
+              content: clauseContent,
+              metadata: { owner: 'security', level: 'hard' },
+            }),
+          })),
+        );
+        skillsRegistration.providerRegistered = true;
+      } catch (error) {
+        skillsRegistration.providerError = String(error?.message ?? error);
+      }
+    }
+
     // A permissive guard first: a later denial must still win (monotonic guards).
     const disposePermissive = ctx.tools.guard((exec) => (guardSeen.push(exec.name), undefined));
     const disposeDeny = ctx.tools.guard((exec) =>
       exec.name === 'probe_body' ? 'probe-guard-deny' : undefined,
     );
     disposers.push(disposePermissive, disposeDeny);
+
+    // 宿主服务相关的检查先跑：sdk profile 在 stdin EOF 后开始卸载，越晚越容易落在失活窗口。
+    if (skillsService === undefined) {
+      blocked.push({
+        id: 'skills-registry-discovery-and-load',
+        reason: '探针 profile 未加载 skills 服务，无法核验按需技能发现与加载',
+        evidence: { skillsPresent: false },
+      });
+    } else {
+      await step('skills-registry-discovery-and-load', async () => {
+        const clausePath = join(dir, 'clause-fixture.md');
+        writeFileSync(clausePath, clauseContent);
+        const before = statSync(clausePath);
+        const summaries = await skillsService.list({ cwd: dir });
+        const providerSummary = summaries.find((entry) => entry.name === 'probe-provider-clause');
+        const runtimeSummary = summaries.find((entry) => entry.name === 'probe-enterprise-clause');
+        const loaded = await skillsService.get('probe-provider-clause', { cwd: dir });
+        const after = statSync(clausePath);
+        const result = {
+          providerRegistered: skillsRegistration.providerRegistered,
+          providerError: skillsRegistration.providerError,
+          runtimeRegistered: skillsRegistration.registered,
+          registerError: skillsRegistration.registerError,
+          summaryCount: summaries.length,
+          providerCandidateFound: providerSummary !== undefined,
+          runtimeCandidateVisible: runtimeSummary !== undefined,
+          summaryCarriesBody: providerSummary !== undefined && Object.hasOwn(providerSummary, 'content'),
+          descriptionAccurate: providerSummary?.description === '探针企业条款：外发前必须确认',
+          whenToUse: providerSummary?.whenToUse,
+          modelInvocable: providerSummary?.invocation?.modelInvocable,
+          userInvocable: providerSummary?.invocation?.userInvocable,
+          bodyLoadedOnDemand: loaded?.content === clauseContent,
+          wroteNothing: before.mtimeMs === after.mtimeMs && before.size === after.size,
+        };
+        return {
+          ok:
+            result.providerRegistered === true &&
+            result.providerCandidateFound === true &&
+            result.summaryCarriesBody === false &&
+            result.descriptionAccurate === true &&
+            result.modelInvocable === false &&
+            result.userInvocable === true &&
+            result.bodyLoadedOnDemand === true &&
+            result.wroteNothing === true,
+          detail: result,
+        };
+      });
+    }
+
+    await step('delegation-identity-not-model-supplied', async () => {
+      const result = await dispatch('probe_identity', identityForged);
+      return {
+        ok: identityObservation.agentIsTheForgedArgument === false && identityObservation.agentPresent === false,
+        detail: {
+          result,
+          observed: identityObservation,
+          note: '工具参数里的 agent/principal/approved/review_kind 不会成为宿主身份；宿主未提供身份时 exec.agent 为 undefined',
+        },
+      };
+    });
 
     await step('guard-deny-zero-side-effect', async () => {
       const result = await dispatch('probe_body');
@@ -259,34 +393,6 @@ export function apply(ctx) {
           envFacts,
           resolver,
           note: '只记录可用性与布尔事实，不记录 home 字面路径',
-        },
-      };
-    });
-
-    await step('delegation-identity-not-model-supplied', async () => {
-      const forged = { agent: { id: 'forged-principal' }, principal: 'forged', approved: true, review_kind: 'human' };
-      let observed;
-      const disposeListener = ctx.on('tools/pre-execute', (exec, next) => {
-        if (exec.name === 'probe_identity') {
-          observed = {
-            agentIsTheForgedArgument: exec.agent === forged.agent,
-            agentPresent: exec.agent !== undefined,
-            forgedKeys: Object.keys(exec.arguments ?? {}),
-          };
-        }
-        return next();
-      });
-      const disposeTool = ctx.tools.register(probeTool('probe_identity', () => okValue('probe_identity')));
-      const result = await dispatch('probe_identity', forged);
-      disposeTool();
-      disposeListener();
-      await sleep(0);
-      return {
-        ok: observed !== undefined && observed.agentIsTheForgedArgument === false,
-        detail: {
-          result,
-          observed,
-          note: '工具参数里的 agent/principal/approved/review_kind 不会成为宿主身份；宿主未提供身份时 exec.agent 为 undefined',
         },
       };
     });
@@ -482,7 +588,15 @@ export function apply(ctx) {
           ctx.inject(['agents'], (scope) => {
             void (async () => {
               try {
-                resolve({ handle: await scope.agents.create({ cwd: dir }) });
+                let capturedAgentCtx;
+                const handle = await scope.agents.create({
+                  sessionId: 'probe-agent-1',
+                  meta: { cwd: dir },
+                  setup: (agentCtx) => {
+                    capturedAgentCtx = agentCtx;
+                  },
+                });
+                resolve({ handle, agentCtx: capturedAgentCtx });
               } catch (error) {
                 resolve({ error: String(error?.message ?? error) });
               }
@@ -512,16 +626,31 @@ export function apply(ctx) {
       });
     } else {
       const agent = agentHandle.agent ?? agentHandle;
-      const agentCtx = agent.ctx ?? agentHandle.ctx;
+      const agentCtx = agentFacts.agentCtx;
       await step('agent-scoped-restriction-is-per-scope', async () => {
-        const globalsBefore = ctx.tools.schemas().some((schema) => schema.name === 'probe_body');
-        const disposeRestrict = agentCtx.tools.restrict({ deny: ['probe_body'] });
-        const visibleForAgent = ctx.tools.get('probe_body', agent) !== undefined;
-        const globalStillVisible = ctx.tools.get('probe_body') !== undefined;
+        // 作用域限制只接受全局工具名（实测：deny 本插件自己注册的工具会报 unknown global tool），
+        // 因此用全局工具 bash 验证"限制只落在该 agent 视图"。
+        const globalSeesBashBefore = ctx.tools.get('bash') !== undefined;
+        // setup 回调给出的正是该 agent 的作用域上下文；restrict 必须从该作用域调用，
+        // 视图查询按契约传 agent（"a restricted-away global reads as absent"）。
+        const disposeRestrict = agentCtx.tools.restrict({ deny: ['bash'] });
+        const visibleForAgent = ctx.tools.get('bash', agent) !== undefined;
+        const globalStillVisible = ctx.tools.get('bash') !== undefined;
         disposeRestrict();
+        const visibleForAgentAfterLift = ctx.tools.get('bash', agent) !== undefined;
         return {
-          ok: globalsBefore && visibleForAgent === false && globalStillVisible === true,
-          detail: { globalsBefore, visibleForAgent, globalStillVisible, note: '作用域限制只影响该 agent 视图，全局视图不变' },
+          ok:
+            globalSeesBashBefore &&
+            visibleForAgent === false &&
+            globalStillVisible === true &&
+            visibleForAgentAfterLift === true,
+          detail: {
+            globalSeesBashBefore,
+            visibleForAgent,
+            globalStillVisible,
+            visibleForAgentAfterLift,
+            note: '限制只落在该 agent 视图（视图查询带 agent），全局视图不变；解除后恢复；限制名必须是全局工具名',
+          },
         };
       });
       blocked.push({
