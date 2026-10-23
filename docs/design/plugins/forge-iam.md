@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.6.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -295,6 +295,23 @@ interface IamGrantV1 {
 | 官方旧 grant | 不读取、不刷新、不用于调用 | 直到用户清理 | 清理失败保留并提示 |
 
 **存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback。账户页已返回并展示 `gatewayCredential.storage`（`keychain`/`file` 等），非 keychain 时显示“未受系统保护”，见 §4.4。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
+
+**本机 spike（2026-10-24，darwin-arm64，`/usr/bin/security`）**：用 `@heluo/forge-credentials-keychain` 的 security-cli 适配器（非生产、需 `allowUnvettedPlatformAdapter: true` 显式开启）在真实系统钥匙串上跑通 backend 契约，实测到的事实：
+
+| 观察 | 结果 |
+|---|---|
+| 可用性探测 | `security list-keychains` 退出码 0，搜索列表两条（只记条数，不记字面路径） |
+| 未命中条目 | `find-generic-password` 退出码 **44**，stderr `SecKeychainSearchCopyNext: The specified item could not be found in the keychain.` |
+| 写入与覆盖 | `add-generic-password -U` 新建或覆盖同名条目；口令经 **stdin 双次输入**写入（把口令写两行管道给 `... -U -w`），**不必**出现在 argv |
+| 删除 | 命中退出码 0；未命中退出码 **44**（幂等） |
+| 明文检查 | spike 过程中除证据 JSON 外没有新文件；临时目录内任何文件都不含口令值 |
+| 枚举 | `dump-keychain` 不是稳定接口，适配器对 `list()` 直接报 `KEYCHAIN_LIST_UNSUPPORTED`，**不返回空表**——否则会把"读不到"伪装成"没有记录"，迁移因此在该适配器下不可用 |
+| 负向 | argv 传输（`secretTransport: 'argv'`）未显式允许时拒绝写入且不调用 CLI |
+| 清理 | 结束时删除测试条目并复核 `find-generic-password` 回到 44（无残留） |
+
+复跑命令：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过；`node --test tests/keychain-spike.test.mjs` 在非 darwin 或 `DSH_KEYCHAIN_SPIKE=0` 时跳过）。
+
+**不能据此声称的事**：这不是生产适配器，也不能替代 Windows/UOS/麒麟 实测——`@napi-rs/keyring` 的产物、Secret Service 可用性、keyutils 静默回退策略仍需在目标平台核验（见 §12 未决事项）；macOS 只用来验证 seam 与失败语义，以及"凭据不出现在 argv、不落明文"这两条可迁移结论。生产适配器未落地前，企业登录仍按 keychain 不可用 fail closed 处理。
 
 开发 fallback 的文件读写使用各操作独立快照，避免无锁读取污染锁内事务。文档锁争用超过 10 秒报 `KEYCHAIN_LOCK_TIMEOUT`，不按 PID/时间自动接管：检查旧锁后再重命名不能排除另一等待者已取得新锁的竞态。异常退出留下锁时，须先停止使用同一文件的所有进程，再人工确认和恢复；不把该最小 fallback 当作生产锁与 OS adapter 的实现。
 

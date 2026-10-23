@@ -22,7 +22,9 @@ test('the manifest declares the repository package contract', async () => {
 test('the README claims only the development skeleton', async () => {
   const text = await read('README.md');
   assert.match(text, /状态：可用（开发骨架/);
-  assert.match(text, /未接 OS keychain/);
+  assert.match(text, /非生产/);
+  assert.match(text, /Windows\/UOS\/麒麟适配器/);
+  assert.match(text, /allowUnvettedPlatformAdapter/);
   assert.doesNotMatch(text, /已联调/);
 });
 

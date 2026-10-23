@@ -64,6 +64,21 @@ DSH_HOST_PROBE_DISABLE_OFFICIAL=0 node scripts/probe/run-host-probe.mjs  # 负�
 - **运行时模型面未验**：探针 profile 的 `llm` 提供方在禁用前后都是 0 个（基线对照同样为 0），
   因此"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"只按 `blocked` 记录，不用 0 个提供方冒充已证明。
 
+## 系统钥匙串 spike（#13 本地区块，仅 darwin）
+
+```sh
+node scripts/probe/run-keychain-spike.mjs
+```
+
+用 `@heluo/forge-credentials-keychain` 的 macOS Security CLI 适配器（非生产、需显式 opt-in）
+在真实系统钥匙串上跑 建/读/改/删、argv 传输拒绝、未命中语义、幂等删除、枚举拒绝与**无明文落盘**，
+结束时删除自己创建的测试条目并复核无残留。证据写临时目录的 `keychain-spike.json`（只有布尔与退出码）。
+`tests/keychain-spike.test.mjs` 在非 darwin 或 `DSH_KEYCHAIN_SPIKE=0` 时跳过。
+
+- 实测要点：未命中退出码 44；`add-generic-password -U` 覆盖同名条目；口令经 stdin 双次输入写入而不进 argv；
+  `list()` 报 `KEYCHAIN_LIST_UNSUPPORTED` 而不是返回空表。
+- **不代表生产**：Windows 凭据管理器与 UOS/麒麟 Secret Service 适配器、`@napi-rs/keyring` 产物仍待目标平台核验。
+
 ## 边界
 
 - 只证明**宿主钩子语义**。企业侧证据（真实 IAM、真实 Gitee/DevOps 权限、
