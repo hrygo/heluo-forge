@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.3.1 |
+| 版本 | V0.4.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -103,6 +103,32 @@ export interface PolicyEngine {
 
 宿主接线：`ctx.tools.guard()` 承载硬拒绝（受保护路径与凭据，返回拒绝理由即阻断，且任何 guard 不能放行另一 guard 的拒绝）；`ctx.on('tools/pre-execute')` 承载需确认动作（返回 `{ kind: 'ask', reason }`，由 `ctx.approval` 决定，无 agent 或通道不可用时降级为拒绝）；`ctx.on('tools/result')` 只做观察投影，不参与判定；命令面不经工具管线，须显式接线（见 #21）。插件以 `inject: ['tools']` 声明对工具服务的硬依赖，依赖缺失即不挂载。
 
+### 5.1 受控动作目录与统一门禁
+
+动作目录由策略维护者登记，不从工具自报的读写属性推导；**未登记或未开放即拒绝**，空清单等价于全部关闭。
+
+| 登记字段 | 说明 |
+|---|---|
+| `action` | 业务动作标识，与[工程工具契约 §3](../../contracts/engineering-tools.md) 的动作标识同源，不另立命名 |
+| `kind` | `read` \| `write` \| `confirm`，决定开关与确认要求 |
+| `target` | 执行时必须按时给出的目标类型；缺失或错配一律拒绝 |
+| `egress` | 是否出网；缺省沿用 `policy.egress` 与白名单 |
+| `retry` | 默认 `none`；读可 `read_recheck`；写不允许自动重放 |
+| `enabled` | 显式开放标记；只读、普通研发写、人工确认动作分别开关 |
+
+**判定顺序**（与已核验的宿主管线一致）：`tools/pre-execute`（需确认动作返回 `{ kind: 'ask' }`，由 `ctx.approval` 决定）→ `ctx.tools.guard()`（硬拒绝，单调，任何放行 listener 都不能覆盖）→ 执行 → `tools/post-execute` → `tools/result`（只观察）。未知动作、未开放写、错目标，以及"工具自报 `readOnly`"式的越权企图都在 guard 处拒绝，执行器副作用计数为零。
+
+| 执行路径 | 覆盖方式 |
+|---|---|
+| 业务工具（含 scoped 注册） | 注册即进管线，guard 对全局与 scoped 工具同样生效；按 `action` 判定而非工具名，别名与包装不改变结论 |
+| 人工 command | command 由独立服务派发、**不经工具管线**（探针证据），必须显式接线：未登记的 command 默认拒绝，登记 command 内的动作仍走同一 `action` 判定 |
+| 子 Agent | 限制是否继承仍未实测（见 §12）；在此之前按"未证实即关闭"处理，不允许以委派绕过门禁 |
+| bash/pwsh、脚本、通用 HTTP、`run_code` | 按类别受控（`shell.exec`、`http.egress`、`code.run`）：未登记即拒绝；不向任意解释器注入业务凭据；无法可靠约束时关闭该能力，不声称覆盖 DSH 之外的全部 Shell |
+
+**失败与卸载**：业务工具插件对策略服务声明硬依赖；策略未挂载、被卸载或版本不符时工具插件不挂载，入口关闭且无可调用残留（卸载清理已由宿主探针验证）。不提供 fail-open、通用 `run(command)` 或正则黑名单式安全保证。
+
+**结果语义**：[工程工具契约 §4.2](../../contracts/engineering-tools.md) 为唯一真源；最小要求是区分未执行拒绝、可能执行与 `partial`/`unknown`，保留 `operation_id`，重试默认 `none` 或 `read_recheck`，每个具体写仍须提供自身平台的回查证据。
+
 ## 6. 权限、凭据与数据
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
@@ -167,9 +193,10 @@ flowchart TD
 | 单元 | 三类动作判定、fail-closed、规则优先级 | `node --test` |
 | 契约 | 结论与审计字段稳定 | 契约用例 |
 | 集成 | 命中受保护路径、确认超时、必要审计不可写零执行 | 本地夹具 |
+| 等价路径负测 | 未登记 command 拒绝、bash/pwsh 与通用 HTTP 按类别受控、包装与别名不提权、不向解释器注入业务凭据 | 本地夹具 + 宿主探针 |
 | 并发 | 并发判断无共享可变状态；审计串行不交错；并发拒绝不互相放行 | `node --test` |
 | 退出与卸载 | 卸载后工具面与命令面无残留可调用入口；退出前审计已落盘 | 宿主探针 + 本地夹具 |
-| 宿主探针 | guard 拒绝零副作用与单调性、pre-execute 异步决策、`ask` 无 agent 降级、`tools/result` 观察异常、命令面独立、`approval=never`、卸载清理 | `node scripts/probe/run-host-probe.mjs`（目标 DSH；无 `dsh` 跳过） |
+| 宿主探针 | guard 拒绝零副作用与单调性、pre-execute 异步决策、`ask` 无 agent 降级、`tools/result` 观察异常、命令面独立、`approval=never`、卸载清理，以及门禁集成合成查询（登记可执行 / 未开放 / 未登记 / 错目标 / 自报 `readOnly` 无效） | `node scripts/probe/run-host-probe.mjs`（目标 DSH；无 `dsh` 跳过） |
 | 端到端 | 双端各跑一次拒绝、一次确认、一次放行 | 手工 + 脚本 |
 
 覆盖率门槛：≥70%；安全关键分支（受保护路径、确认超时、必要审计不可写、卸载清理）必须同时有正向与负向用例。未达到上述矩阵前不建包清单，模块保持"规划"。

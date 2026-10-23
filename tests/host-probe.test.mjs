@@ -18,5 +18,6 @@ test('host probe: target DSH honours the documented tool-pipeline semantics', { 
   const run = spawnSync(process.execPath, [runner], { encoding: 'utf8', timeout: 300_000 });
   const output = `${run.stdout ?? ''}${run.stderr ?? ''}`;
   assert.equal(run.status, 0, `host probe failed (exit ${run.status}):\n${output}`);
-  assert.match(output, /9\/9 checks passed/, 'host probe must report every check as passed');
+  assert.match(output, /\d+\/\d+ checks passed/, 'host probe must report a check summary');
+  assert.doesNotMatch(output, /^FAIL /m, 'no host probe check may fail');
 });

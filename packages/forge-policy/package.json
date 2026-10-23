@@ -1,0 +1,23 @@
+{
+  "name": "@heluo/forge-policy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Controlled action catalog and unified command/tool gate for Heluo Forge",
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./catalog": "./src/catalog.mjs",
+    "./gate": "./src/gate.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}
