@@ -224,6 +224,72 @@ export function apply(ctx) {
 
     // 记录本轮无法跑通的一项：子 Agent 限制是否继承需要真实 agent 会话，
     // 而探针所用的 sdk/headless profile 不含 agent-loop 与 subagent 插件。
+    // 门禁集成：当 forge-policy 与本插件同进程挂载时，用合成查询验证
+    // "登记且范围内可执行、未登记/未开放/错目标一律拒绝且副作用为零"。
+    if (ctx.get('policy') !== undefined) {
+      const gateTools = {
+        read: 'probe_gate_read',
+        write: 'probe_gate_write',
+        unknown: 'probe_gate_unknown',
+        confirm: 'probe_gate_confirm',
+      };
+      const gateCalls = { read: 0, write: 0, unknown: 0, confirm: 0 };
+      const gateDisposers = [];
+      for (const [key, toolName] of Object.entries(gateTools)) {
+        gateDisposers.push(
+          ctx.tools.register(
+            probeTool(toolName, () => {
+              gateCalls[key] += 1;
+              return okValue(toolName);
+            }),
+          ),
+        );
+      }
+
+      await step('gate-registered-read-runs', async () => {
+        const result = await dispatch('probe_gate_read', { target: 'probe-target' });
+        return {
+          ok: result.isError !== true && gateCalls.read === 1,
+          detail: { result, bodyCalls: gateCalls.read },
+        };
+      });
+
+      await step('gate-disabled-write-denied', async () => {
+        const result = await dispatch('probe_gate_write', { target: 'probe-target' });
+        return {
+          ok: result.isError === true && gateCalls.write === 0 && /not enabled/.test(result.text),
+          detail: { result, bodyCalls: gateCalls.write },
+        };
+      });
+
+      await step('gate-unregistered-action-denied', async () => {
+        const result = await dispatch('probe_gate_unknown', { target: 'probe-target' });
+        return {
+          ok: result.isError === true && gateCalls.unknown === 0 && /not registered/.test(result.text),
+          detail: { result, bodyCalls: gateCalls.unknown },
+        };
+      });
+
+      await step('gate-missing-target-denied', async () => {
+        const result = await dispatch('probe_gate_read', {});
+        return {
+          ok: result.isError === true && /requires a probe-target target/.test(result.text),
+          detail: { result, bodyCalls: gateCalls.read },
+        };
+      });
+
+      await step('gate-self-reported-readonly-ignored', async () => {
+        const result = await dispatch('probe_gate_write', { target: 'probe-target', readOnly: true, mutating: false });
+        return {
+          ok: result.isError === true && gateCalls.write === 0,
+          detail: { result, bodyCalls: gateCalls.write, note: '工具自报 readOnly/mutating 未改变判定' },
+        };
+      });
+
+      for (const dispose of gateDisposers) dispose();
+      await sleep(0);
+    }
+
     // 真实 agent 只能在注入就绪的活跃作用域内创建（Cordis 效果语义）。
     const agentFacts = await Promise.race([
       new Promise((resolve) => {

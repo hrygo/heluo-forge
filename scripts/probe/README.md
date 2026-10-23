@@ -30,6 +30,11 @@ node scripts/probe/run-host-probe.mjs
 | `uninstall-cleanup` | 卸载后工具不可见、再调用报 unknown tool，无残留可调用入口 |
 | `command-surface-separate-from-tools` | 命令面由独立服务派发，工具管线 guard 看不到该次调用 |
 | `approval-never-policy-rejects` | `approval` 策略 `never` 时请求直接 `rejected` |
+| `gate-registered-read-runs` | 挂载 `@heluo/forge-policy` 后，登记且开放的动作正常执行一次 |
+| `gate-disabled-write-denied` | 未开放写被拒绝，工具体零调用 |
+| `gate-unregistered-action-denied` | 映射到未登记动作的工具被拒绝 |
+| `gate-missing-target-denied` | 目标缺失被拒绝 |
+| `gate-self-reported-readonly-ignored` | 工具自报 `readOnly`/`mutating` 不改变判定 |
 
 ## 边界
 

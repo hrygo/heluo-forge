@@ -29,9 +29,30 @@ const harness = String(version.stdout ?? '').trim();
 const dir = mkdtempSync(join(tmpdir(), 'forge-host-probe-'));
 const out = join(dir, 'probe-raw.json');
 const patch = join(dir, 'probe.patch.yml');
+const policyPackage = resolve(here, '../../packages/forge-policy/src/index.mjs');
+const gatewayCatalog = [
+  "{ action: 'probe.read', kind: 'read', target: 'probe-target', enabled: true }",
+  "{ action: 'probe.write', kind: 'write', target: 'probe-target' }",
+  "{ action: 'probe.confirm', kind: 'confirm', target: 'probe-target', enabled: true }",
+];
 writeFileSync(
   patch,
-  ['- insert:', `    - id: forge-host-probe`, `      name: '${pathToFileURL(plugin).href}'`, ''].join('\n'),
+  [
+    '- insert:',
+    "    - id: forge-policy",
+    `      name: '${pathToFileURL(policyPackage).href}'`,
+    '      config:',
+    '        catalog:',
+    ...gatewayCatalog.map((entry) => `          - ${entry}`),
+    '        tools:',
+    "          probe_gate_read: 'probe.read'",
+    "          probe_gate_write: 'probe.write'",
+    "          probe_gate_unknown: 'probe.unknown'",
+    "          probe_gate_confirm: 'probe.confirm'",
+    '    - id: forge-host-probe',
+    `      name: '${pathToFileURL(plugin).href}'`,
+    '',
+  ].join('\n'),
 );
 
 const command = `${dsh} --profile ${profile} --patch ${patch}`;
