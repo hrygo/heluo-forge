@@ -211,6 +211,60 @@ export function apply(ctx) {
       });
     }
 
+    // 模型门禁：用宿主实测的默认模型选择与可用提供方喂给门禁判定，
+    // 再加一组"合成输入"验证切换/保留分支（合成部分不代表企业模型已就绪）。
+    const defaultModelService = ctx.get('agentDefaultModel');
+    const measuredSelection = (() => {
+      if (defaultModelService === undefined) return { available: false };
+      try {
+        const selection = defaultModelService.currentSelection();
+        return {
+          available: true,
+          keys: selection !== null && typeof selection === 'object' ? Object.keys(selection) : [],
+          provider: typeof selection?.provider === 'string' ? selection.provider : undefined,
+          model: typeof selection?.model === 'string' ? selection.model : undefined,
+        };
+      } catch (error) {
+        return { available: true, error: String(error?.message ?? error) };
+      }
+    })();
+    const availableProviderIds = llmService === undefined ? [] : llmService.listProviders().map((entry) => entry.id);
+    const { evaluateModelGate } = await import('../../packages/forge-iam/src/model-gate.mjs');
+    await step('model-gate-denies-on-measured-host-state', async () => {
+      const measured = evaluateModelGate({
+        signedIn: false,
+        officialApiKeyPresent: process.env.DEEPSEEK_API_KEY !== undefined,
+        selection:
+          measuredSelection.provider === undefined
+            ? undefined
+            : { provider: measuredSelection.provider, model: measuredSelection.model, explicit: true },
+        availableProviders: availableProviderIds,
+        disabledProviders: ['deepseek'],
+      });
+      const synthetic = evaluateModelGate({
+        signedIn: true,
+        gatewayCredential: 'present',
+        enterprise: { provider: 'enterprise-probe', model: 'probe-model' },
+        selection: { provider: 'deepseek', model: 'deepseek-chat' },
+        availableProviders: ['enterprise-probe'],
+        disabledProviders: ['deepseek'],
+      });
+      return {
+        ok:
+          measured.allow === false &&
+          measured.reason === 'not-signed-in' &&
+          synthetic.allow === true &&
+          synthetic.switchTo?.provider === 'enterprise-probe',
+        detail: {
+          measuredSelection,
+          availableProviderIds,
+          measuredDecision: { allow: measured.allow, reason: measured.reason, notes: measured.notes },
+          syntheticDecision: { allow: synthetic.allow, reason: synthetic.reason, switchTo: synthetic.switchTo },
+          note: '实测部分：宿主的默认模型选择与可用提供方；合成部分：只验证切换分支，不代表企业模型已就绪',
+        },
+      };
+    });
+
     // 宿主服务相关的检查先跑：sdk profile 在 stdin EOF 后开始卸载，越晚越容易落在失活窗口。
     if (skillsService === undefined) {
       blocked.push({
