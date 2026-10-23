@@ -36,7 +36,7 @@ test('the packaged icon is the pre-designed brand symbol, not a redrawn copy', a
   // plugin surface and the design assets cannot drift apart.
   const icon = await read('icon.svg');
   const branded = await readFile(join(
-    here, '..', '..', 'docs', 'assets', 'branding', 'elephant', 'b-kit', 'components', 'forge-iam-symbol.svg',
+    here, '..', '..', 'docs', 'assets', 'branding', 'cyber-long', 'components', 'forge-iam-symbol.svg',
   ), 'utf8');
   assert.equal(icon, branded);
   assert.match(icon, /<svg[^>]+viewBox="0 0 320 320"/);

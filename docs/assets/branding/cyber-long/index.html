@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>河洛 / Heluo Forge · 品牌资产系统（河洛苍螭 / 潜龙出渊）</title>
+  <link rel="icon" type="image/svg+xml" href="primary/symbol-color.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="sizes/symbol-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="sizes/symbol-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="sizes/symbol-180.png">
+  <meta name="theme-color" content="#070C16">
+  <style>
+    :root {
+      --bg: #070C16;
+      --card-bg: rgba(14, 22, 38, 0.7);
+      --card-border: rgba(56, 189, 248, 0.15);
+      --text: #F8FAFC;
+      --text-muted: #94A3B8;
+      --cyan: #00F5FF;
+      --blue: #2563EB;
+      --royal: #1D4ED8;
+      --glow: rgba(0, 245, 255, 0.2);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", sans-serif;
+      min-height: 100vh;
+      line-height: 1.6;
+      background-image: 
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(37, 99, 235, 0.28), transparent),
+        radial-gradient(circle at 85% 85%, rgba(0, 245, 255, 0.08), transparent);
+    }
+    a { color: var(--cyan); text-decoration: none; transition: opacity 0.2s; }
+    a:hover { opacity: 0.8; }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+
+    /* Header Nav */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: rgba(7, 12, 22, 0.88);
+      border-bottom: 1px solid rgba(56, 189, 248, 0.12);
+      padding: 14px 0;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    }
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .brand-logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      flex-shrink: 0;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s;
+    }
+    .brand-logo:hover {
+      opacity: 0.95;
+      transform: translateY(-1px);
+    }
+    .brand-icon-wrap {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: radial-gradient(circle at 30% 30%, rgba(0, 245, 255, 0.2), rgba(29, 78, 216, 0.2));
+      border: 1px solid rgba(0, 245, 255, 0.35);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 0 16px rgba(0, 245, 255, 0.2);
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .brand-logo:hover .brand-icon-wrap {
+      border-color: var(--cyan);
+      box-shadow: 0 0 24px rgba(0, 245, 255, 0.45);
+      transform: scale(1.05);
+    }
+    .brand-logo-icon {
+      width: 24px;
+      height: 24px;
+      display: block;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+    }
+    .brand-text {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      background: linear-gradient(135deg, #FFFFFF 30%, #BAE6FD 70%, #00F5FF 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      white-space: nowrap;
+    }
+    .brand-sep {
+      color: rgba(255, 255, 255, 0.25);
+      font-size: 14px;
+    }
+    .brand-subtitle {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .brand-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--cyan);
+      background: rgba(0, 245, 255, 0.1);
+      border: 1px solid rgba(0, 245, 255, 0.28);
+      padding: 2px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 14px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    nav a {
+      color: var(--text-muted);
+      transition: color 0.2s;
+      white-space: nowrap;
+    }
+    nav a:not(.btn):hover {
+      color: #FFFFFF;
+    }
+    nav a.btn-manifest {
+      padding: 7px 16px;
+      border-radius: 8px;
+      background: rgba(14, 22, 38, 0.85);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: #FFFFFF;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      display: inline-flex;
+      align-items: center;
+    }
+    nav a.btn-manifest:hover {
+      background: rgba(0, 245, 255, 0.15);
+      border-color: var(--cyan);
+      color: var(--cyan);
+      box-shadow: 0 0 16px rgba(0, 245, 255, 0.3);
+      transform: translateY(-1px);
+    }
+
+    /* Hero */
+    .hero {
+      padding: 64px 0 48px;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 48px;
+      align-items: center;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: rgba(0, 245, 255, 0.1);
+      border: 1px solid rgba(0, 245, 255, 0.3);
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: clamp(34px, 4.5vw, 54px);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 18px;
+      background: linear-gradient(135deg, #FFFFFF 30%, #93C5FD 70%, #00F5FF 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .lead {
+      color: var(--text-muted);
+      font-size: 17px;
+      line-height: 1.7;
+      margin-bottom: 32px;
+    }
+    .stats-row {
+      display: flex;
+      gap: 32px;
+      margin-top: 24px;
+      padding-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .stat-item b {
+      display: block;
+      font-size: 28px;
+      font-weight: 800;
+      color: #FFFFFF;
+      background: linear-gradient(135deg, #FFF, #00D2FE);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .stat-item span { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .hero-stage {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 24px 60px -15px rgba(0, 245, 255, 0.15);
+    }
+    .hero-stage::before {
+      content: "";
+      position: absolute;
+      width: 260px;
+      height: 260px;
+      background: radial-gradient(circle, rgba(0, 245, 255, 0.25) 0%, rgba(37, 99, 235, 0.1) 70%, transparent 100%);
+      border-radius: 50%;
+      pointer-events: none;
+    }
+    .hero-stage img {
+      width: 220px;
+      height: 220px;
+      position: relative;
+      z-index: 2;
+      filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.4));
+    }
+    .hero-stage-caption {
+      margin-top: 24px;
+      text-align: center;
+      position: relative;
+      z-index: 2;
+    }
+    .hero-stage-caption h3 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .hero-stage-caption p { font-size: 13px; color: var(--text-muted); }
+
+    /* Section Styles */
+    section { padding: 56px 0 28px; }
+    .section-head {
+      margin-bottom: 32px;
+    }
+    .section-head h2 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+    .section-head p { color: var(--text-muted); font-size: 15px; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      border-color: rgba(0, 245, 255, 0.35);
+      box-shadow: 0 16px 36px -10px rgba(0, 245, 255, 0.12);
+    }
+    .card-art {
+      height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center, rgba(30, 58, 138, 0.35) 0%, rgba(11, 19, 43, 0.6) 70%);
+      padding: 24px;
+      position: relative;
+    }
+    .card-art.light { background: #FFFFFF; }
+    .card-art img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .card-body {
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+    .card-body h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    .card-body p { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 16px; flex: 1; }
+    .card-links { display: flex; gap: 12px; font-size: 12px; font-weight: 600; }
+    .btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #FFFFFF;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: rgba(0, 245, 255, 0.15); border-color: rgba(0, 245, 255, 0.4); color: var(--cyan); }
+
+    /* Multi-size Bench */
+    .bench-box {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 32px;
+    }
+    .bench-row {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      flex-wrap: wrap;
+      padding: 32px 0 16px;
+    }
+    .bench-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .bench-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+
+    /* Component Family */
+    .comp-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      transition: all 0.2s;
+    }
+    .comp-card:hover {
+      border-color: rgba(0, 245, 255, 0.4);
+      transform: translateY(-2px);
+    }
+    .comp-icon {
+      width: 64px;
+      height: 64px;
+      flex-shrink: 0;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+    }
+    .comp-icon img { width: 100%; height: 100%; object-fit: contain; }
+    .comp-info h4 { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+    .comp-info code { font-size: 12px; color: var(--cyan); }
+    .comp-info p { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+    footer {
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 40px 0 60px;
+      margin-top: 60px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 960px) {
+      .hero { grid-template-columns: 1fr; }
+      .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .brand-subtitle, .brand-sep { display: none; }
+      nav { gap: 16px; font-size: 13px; }
+    }
+    @media (max-width: 760px) {
+      .nav-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      nav {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 6px;
+        gap: 16px;
+        scrollbar-width: none;
+      }
+      nav::-webkit-scrollbar {
+        display: none;
+      }
+      .brand-tag { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap nav-inner">
+      <a href="#" class="brand-logo" aria-label="河洛 Heluo Forge 品牌首页">
+        <span class="brand-icon-wrap">
+          <svg class="brand-logo-icon" width="24" height="24" viewBox="0 0 320 320" role="img" aria-label="河洛苍螭">
+            <defs>
+              <linearGradient id="navCyberLongGrad" x1="15%" y1="90%" x2="85%" y2="10%">
+                <stop offset="0%" stop-color="#1D4ED8" />
+                <stop offset="35%" stop-color="#2563EB" />
+                <stop offset="70%" stop-color="#00D2FE" />
+                <stop offset="100%" stop-color="#00F5FF" />
+              </linearGradient>
+            </defs>
+            <g transform="translate(160, 160) scale(0.04241491363092184, -0.04241491363092184) translate(-5153.5, 23.5)" fill="url(#navCyberLongGrad)">
+              <path d="m3441 2750 c102 -64 184 -104 339 -165 183 -73 304 -108 500 -144 215 -41 361 -54 600 -54 312 1 562 35 1000 138 262 61 353 77 486 82 220 10 346 -26 531 -151 129 -87 153 -96 251 -96 125 0 279 40 579 151 103 38 185 17 259 -63 62 -67 85 -127 91 -233 5 -95 -14 -245 -43 -332 -25 -76 -109 -243 -153 -305 -41 -56 -41 -56 -113 -68 -349 -55 -696 -215 -1001 -463 -56 -45 -156 -127 -222 -182 -296 -247 -626 -406 -986 -474 -219 -42 -669 -70 -669 -42 0 5 37 24 82 41 121 47 265 122 335 175 78 58 187 176 232 249 157 260 147 604 -23 835 -136 183 -333 278 -656 316 -283 34 -489 79 -690 152 -157 57 -246 101 -384 193 -162 107 -292 240 -387 395 -60 99 -55 105 42 45z m864 -895 c126 -41 297 -76 500 -104 166 -24 249 -48 330 -96 148 -89 238 -228 260 -400 17 -136 -51 -313 -162 -424 -88 -87 -187 -135 -399 -196 -206 -58 -541 -176 -611 -214 -10 -6 -72 -35 -138 -66 -191 -89 -457 -252 -557 -342 -30 -26 -87 -75 -127 -108 -61 -51 -129 -125 -268 -296 -34 -41 -170 -280 -194 -341 -34 -86 -70 -207 -91 -303 -24 -113 -35 -390 -19 -490 44 -276 91 -408 229 -639 58 -95 89 -133 222 -267 85 -86 178 -175 205 -198 65 -56 41 -49 -140 39 -246 120 -477 305 -696 560 -71 82 -108 137 -191 280 -114 196 -167 325 -228 555 -168 629 -59 1290 303 1835 304 458 820 880 1392 1138 125 57 251 110 265 111 3 0 55 -15 115 -34z m-629 -2116 c-76 -161 -95 -231 -110 -409 -13 -158 -6 -256 29 -387 36 -138 78 -230 158 -350 130 -195 301 -345 517 -453 138 -69 177 -84 335 -125 140 -36 256 -49 430 -48 189 1 272 11 460 59 293 74 485 166 770 370 121 87 244 204 382 364 64 75 207 301 264 418 33 67 62 122 66 122 20 0 -32 -303 -82 -473 -27 -96 -117 -309 -169 -401 -196 -350 -497 -666 -836 -877 -330 -205 -724 -331 -1074 -346 -402 -16 -798 87 -1093 284 -196 131 -268 196 -376 339 -150 197 -195 291 -254 524 -25 96 -27 122 -27 300 0 148 4 212 17 266 19 80 76 249 111 327 22 50 142 250 176 294 30 39 184 206 226 246 50 46 138 107 142 98 1 -4 -26 -68 -62 -142z" />
+            </g>
+            <!-- Aerodynamic Eye Notch -->
+            <path d="M 198 94 C 204 90 215 93 222 98 C 215 103 204 100 198 94 Z"
+                  transform="translate(160, 160) scale(1.0) translate(-160, -160)"
+                  fill="#070C16" />
+          </svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-title">HELUO FORGE</span>
+          <span class="brand-sep">·</span>
+          <span class="brand-subtitle">品牌资产系统</span>
+        </span>
+        <span class="brand-tag">河洛苍螭</span>
+      </a>
+      <nav>
+        <a href="#primary">主标套件</a>
+        <a href="#components">子组件家族</a>
+        <a href="#sizes">多分辨率测试</a>
+        <a href="#rules">使用规则</a>
+        <a href="manifest.json" download class="btn btn-manifest">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          下载清单 (JSON)
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- Hero Section -->
+    <div class="hero">
+      <div>
+        <div class="badge">BRANDING SYSTEM · 正式规范</div>
+        <h1>河洛苍螭 · 潜龙出渊</h1>
+        <p class="lead">
+          河洛 (Heluo Forge) 品牌核心视觉系统。融合「极简空气动力学流线」、「电光蓝青流体」与「灵动呼吸负空间」，将华夏“河出龙图”数理本源与现代顶级 AI 架构工程心智融为一体。
+        </p>
+        <div class="stats-row">
+          <div class="stat-item">
+            <b>102</b>
+            <span>总设计产物</span>
+          </div>
+          <div class="stat-item">
+            <b>11</b>
+            <span>工程子组件</span>
+          </div>
+          <div class="stat-item">
+            <b>8 级</b>
+            <span>16px - 1024px 尺寸</span>
+          </div>
+          <div class="stat-item">
+            <b>100%</b>
+            <span>纯矢量数学建模</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-stage">
+        <img src="primary/app-icon.png" alt="河洛苍螭主图标">
+        <div class="hero-stage-caption">
+          <h3>河洛 (Heluo Forge) 官方主标</h3>
+          <p>单笔流体 G2 连续曲率 · 潜龙出渊</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Master Brand Section -->
+    <section id="primary">
+      <div class="section-head">
+        <h2>主品牌资产形态（Primary Brand Assets）</h2>
+        <p>提供多场景下的全矢量 SVG 及最高 1920px 渲染 PNG 资产：</p>
+      </div>
+
+      <div class="grid-3">
+        <!-- Symbol Color -->
+        <article class="card">
+          <div class="card-art">
+            <img src="primary/symbol-color.svg" alt="彩色主图标">
+          </div>
+          <div class="card-body">
+            <h3>彩色主图标 (Symbol Color)</h3>
+            <p>透明底，电光蓝至极光青流体渐变。用于暗色界面、产品导航、Favicon 及品牌头像。</p>
+            <div class="card-links">
+              <a href="primary/symbol-color.svg" download class="btn">SVG</a>
+              <a href="primary/symbol-color.png" download class="btn">1024px PNG</a>
+            </div>
+          </div>
+        </article>
+
+        <!-- App Icon Dark -->
+        <article class="card">
+          <div class="card-art">
+            <img src="primary/app-icon.svg" alt="暗色应用图标">
+          </div>
+          <div class="card-body">
+            <h3>应用图标 · 暗黑科技 (App Icon)</h3>
+            <p>带深邃微光背景板的圆角方块 (Squircle)，用于 macOS App、移动端及 Dock 栏启动入口。</p>
+            <div class="card-links">
+              <a href="primary/app-icon.svg" download class="btn">SVG</a>
+              <a href="primary/app-icon.png" download class="btn">1024px PNG</a>
+            </div>
+          </div>
+        </article>
+
+        <!-- App Icon Light -->
+        <article class="card">
+          <div class="card-art light">
+            <img src="primary/app-icon-white.svg" alt="浅色应用图标">
+          </div>
+          <div class="card-body">
+            <h3>应用图标 · 浅色模式 (Light App Icon)</h3>
+            <p>纯白圆角背板搭配微弧阴影，适用于明亮主题与浅色系统环境。</p>
+            <div class="card-links">
+              <a href="primary/app-icon-white.svg" download class="btn">SVG</a>
+              <a href="primary/app-icon-white.png" download class="btn">1024px PNG</a>
+            </div>
+          </div>
+        </article>
+
+        <!-- Symbol Mono Dark -->
+        <article class="card">
+          <div class="card-art">
+            <img src="primary/symbol-mono-dark.svg" alt="纯白反白图标">
+          </div>
+          <div class="card-body">
+            <h3>纯白反白图标 (Mono Dark)</h3>
+            <p>单色纯白轮廓，用于极端高对比度深色场景、印刷物料或单色丝印。</p>
+            <div class="card-links">
+              <a href="primary/symbol-mono-dark.svg" download class="btn">SVG</a>
+              <a href="primary/symbol-mono-dark.png" download class="btn">1024px PNG</a>
+            </div>
+          </div>
+        </article>
+
+        <!-- Symbol Mono Light -->
+        <article class="card">
+          <div class="card-art light">
+            <img src="primary/symbol-mono-light.svg" alt="深色单色图标">
+          </div>
+          <div class="card-body">
+            <h3>深色单色图标 (Mono Light)</h3>
+            <p>单色深墨蓝 (#0F172A)，专为白底信笺、浅色文档与灰底界面打造。</p>
+            <div class="card-links">
+              <a href="primary/symbol-mono-light.svg" download class="btn">SVG</a>
+              <a href="primary/symbol-mono-light.png" download class="btn">1024px PNG</a>
+            </div>
+          </div>
+        </article>
+
+        <!-- Symbol Outline -->
+        <article class="card">
+          <div class="card-art">
+            <img src="primary/symbol-outline.svg" alt="线框主图标">
+          </div>
+          <div class="card-body">
+            <h3>线框主图标 (Symbol Outline)</h3>
+            <p>纯净矢量描边，适合工程原理图、动效连线与科技感镂空装饰。</p>
+            <div class="card-links">
+              <a href="primary/symbol-outline.svg" download class="btn">SVG</a>
+              <a href="primary/symbol-outline.png" download class="btn">1024px PNG</a>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <!-- Lockup Wide Showcase -->
+      <div style="margin-top: 28px;" class="card">
+        <div style="height: auto; padding: 48px;" class="card-art">
+          <img src="primary/lockup-horizontal.svg" alt="横向完整主标识" style="max-height: 160px; width: 100%;">
+        </div>
+        <div class="card-body" style="flex-direction: row; align-items: center; justify-content: space-between;">
+          <div>
+            <h3>横向主品牌标识 (Lockup Horizontal)</h3>
+            <p style="margin-bottom: 0;">官网主导航、白皮书封皮、对外发布会首选形态。</p>
+          </div>
+          <div class="card-links">
+            <a href="primary/lockup-horizontal.svg" download class="btn">SVG</a>
+            <a href="primary/lockup-horizontal.png" download class="btn">1920px PNG</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Component Family Section -->
+    <section id="components">
+      <div class="section-head">
+        <h2>工程子组件家族体系（Sub-brand Family）</h2>
+        <p>11 个工程组件：forge-enterprise 直接复用平台主标，其余 10 个按功能语义形成变体。</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-iam-symbol.svg" alt="forge-iam"></div>
+          <div class="comp-info">
+            <h4>身份与凭据接入 · 精炼盘龙护盾</h4>
+            <code>@heluo/forge-iam</code>
+            <p>Unified IAM, Credential Gateway, OIDC / SSO</p>
+            <p><a href="reference/concept-01-iam-v2.png">母图</a> · <a href="components/forge-iam-symbol.svg" download>SVG</a> · <a href="components/forge-iam-symbol.png" download>PNG</a> · <a href="components/forge-iam-lockup.png" download>图文组合</a> · <a href="components/forge-iam-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-gateway-symbol.svg" alt="forge-gateway"></div>
+          <div class="comp-info">
+            <h4>模型接入网关 · 四向汇流枢纽</h4>
+            <code>@heluo/forge-gateway</code>
+            <p>Cross-Account Model Router & Protocol Dispatcher</p>
+            <p><a href="reference/concept-02-gateway.png">母图</a> · <a href="components/forge-gateway-symbol.svg" download>SVG</a> · <a href="components/forge-gateway-symbol.png" download>PNG</a> · <a href="components/forge-gateway-lockup.png" download>图文组合</a> · <a href="components/forge-gateway-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-market-symbol.svg" alt="forge-market"></div>
+          <div class="comp-info">
+            <h4>插件与制品市场 · 六方棱晶</h4>
+            <code>@heluo/forge-market</code>
+            <p>Extension Registry, Verified Plugins, Package Index</p>
+            <p><a href="reference/concept-03-market-v2.png">母图</a> · <a href="components/forge-market-symbol.svg" download>SVG</a> · <a href="components/forge-market-symbol.png" download>PNG</a> · <a href="components/forge-market-lockup.png" download>图文组合</a> · <a href="components/forge-market-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-devops-symbol.svg" alt="forge-devops"></div>
+          <div class="comp-info">
+            <h4>研发工单与流水线 · 无限流体环</h4>
+            <code>@heluo/forge-devops</code>
+            <p>Unified DevOps Pipeline, Change Gate, Release Automation</p>
+            <p><a href="reference/concept-04-devops.png">母图</a> · <a href="components/forge-devops-symbol.svg" download>SVG</a> · <a href="components/forge-devops-symbol.png" download>PNG</a> · <a href="components/forge-devops-lockup.png" download>图文组合</a> · <a href="components/forge-devops-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-policy-symbol.svg" alt="forge-policy"></div>
+          <div class="comp-info">
+            <h4>策略规则与审计 · 智律仪轨</h4>
+            <code>@heluo/forge-policy</code>
+            <p>Compliance Engine, Audit Log, Enterprise Governance</p>
+            <p><a href="reference/concept-05-policy.png">母图</a> · <a href="components/forge-policy-symbol.svg" download>SVG</a> · <a href="components/forge-policy-symbol.png" download>PNG</a> · <a href="components/forge-policy-lockup.png" download>图文组合</a> · <a href="components/forge-policy-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-sdd-symbol.svg" alt="forge-sdd"></div>
+          <div class="comp-info">
+            <h4>架构驱动设计 · 蓝图棱面</h4>
+            <code>@heluo/forge-sdd</code>
+            <p>Spec-Driven Development, Architecture Schema Core</p>
+            <p><a href="reference/concept-06-sdd.png">母图</a> · <a href="components/forge-sdd-symbol.svg" download>SVG</a> · <a href="components/forge-sdd-symbol.png" download>PNG</a> · <a href="components/forge-sdd-lockup.png" download>图文组合</a> · <a href="components/forge-sdd-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-gitee-symbol.svg" alt="forge-gitee"></div>
+          <div class="comp-info">
+            <h4>企业代码源桥接 · 节点流束</h4>
+            <code>@heluo/forge-gitee</code>
+            <p>Gitee / Git Provider Sync, Repository Hook Adapter</p>
+            <p><a href="reference/concept-07-gitee.png">母图</a> · <a href="components/forge-gitee-symbol.svg" download>SVG</a> · <a href="components/forge-gitee-symbol.png" download>PNG</a> · <a href="components/forge-gitee-lockup.png" download>图文组合</a> · <a href="components/forge-gitee-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-enterprise-symbol.svg" alt="forge-enterprise"></div>
+          <div class="comp-info">
+            <h4>企业底座与组织 · 平台主标</h4>
+            <code>@heluo/forge-enterprise</code>
+            <p>Multi-Tenant RBAC, Org Hierarchy, Audit Stream</p>
+            <p><a href="reference/concept-b-cyber-long.jpg">主标母图</a> · <a href="components/forge-enterprise-symbol.svg" download>SVG</a> · <a href="components/forge-enterprise-symbol.png" download>PNG</a> · <a href="components/forge-enterprise-lockup.png" download>图文组合</a> · <a href="components/forge-enterprise-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/forge-cli-symbol.svg" alt="forge-cli"></div>
+          <div class="comp-info">
+            <h4>统一脚手架 · 动能指示符</h4>
+            <code>@heluo/forge-cli</code>
+            <p>Unified CLI Terminal, Developer Toolchain Proxy</p>
+            <p><a href="reference/concept-09-cli.png">母图</a> · <a href="components/forge-cli-symbol.svg" download>SVG</a> · <a href="components/forge-cli-symbol.png" download>PNG</a> · <a href="components/forge-cli-lockup.png" download>图文组合</a> · <a href="components/forge-cli-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/market-index-symbol.svg" alt="market-index"></div>
+          <div class="comp-info">
+            <h4>索引服务与发现 · 声呐雷达</h4>
+            <code>services/market-index</code>
+            <p>Local Index Validator, Read-Only Catalog Search</p>
+            <p><a href="reference/concept-10-market-index.png">母图</a> · <a href="components/market-index-symbol.svg" download>SVG</a> · <a href="components/market-index-symbol.png" download>PNG</a> · <a href="components/market-index-lockup.png" download>图文组合</a> · <a href="components/market-index-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+
+        <div class="comp-card">
+          <div class="comp-icon"><img src="components/devops-mcp-symbol.svg" alt="devops-mcp"></div>
+          <div class="comp-info">
+            <h4>模型协议桥 · 精密插拔耦合</h4>
+            <code>services/devops-mcp</code>
+            <p>Model Context Protocol Bridge, Tool Call Proxy</p>
+            <p><a href="reference/concept-11-devops-mcp.png">母图</a> · <a href="components/devops-mcp-symbol.svg" download>SVG</a> · <a href="components/devops-mcp-symbol.png" download>PNG</a> · <a href="components/devops-mcp-lockup.png" download>图文组合</a> · <a href="components/devops-mcp-app-icon.png" download>App Icon</a></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Multi-size Bench Section -->
+    <section id="sizes">
+      <div class="section-head">
+        <h2>多分辨率缩放测试（Multi-Size Bench）</h2>
+        <p>基于数学矢量的连续平滑曲线，从小至 16px Favicon 到大至 512px 均保持极致锐利：</p>
+      </div>
+
+      <div class="bench-box">
+        <div class="bench-row">
+          <div class="bench-item">
+            <img src="sizes/symbol-512.png" style="width: 140px; height: 140px;" alt="512px">
+            <span class="bench-label">512px · 4K 大屏</span>
+          </div>
+          <div class="bench-item">
+            <img src="sizes/symbol-256.png" style="width: 100px; height: 100px;" alt="256px">
+            <span class="bench-label">256px · 应用商店</span>
+          </div>
+          <div class="bench-item">
+            <img src="sizes/symbol-128.png" style="width: 72px; height: 72px;" alt="128px">
+            <span class="bench-label">128px · Dock / 启动器</span>
+          </div>
+          <div class="bench-item">
+            <img src="sizes/symbol-64.png" style="width: 52px; height: 52px;" alt="64px">
+            <span class="bench-label">64px · 导航栏</span>
+          </div>
+          <div class="bench-item">
+            <img src="sizes/symbol-32.png" style="width: 32px; height: 32px;" alt="32px">
+            <span class="bench-label">32px · 工具栏</span>
+          </div>
+          <div class="bench-item">
+            <img src="sizes/symbol-16.png" style="width: 16px; height: 16px;" alt="16px">
+            <span class="bench-label">16px · Favicon</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Usage Rules -->
+    <section id="rules">
+      <div class="section-head">
+        <h2>设计规范与用色标准（Usage & Colors）</h2>
+        <p>严格受控的色彩系统，确保跨端与暗亮模式一致性：</p>
+      </div>
+
+      <div class="grid-4">
+        <div class="card" style="padding: 20px;">
+          <div style="height: 64px; background: #070C16; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 12px;"></div>
+          <h4 style="font-size: 14px;">深渊底色 (Obsidian)</h4>
+          <code style="color: var(--cyan); font-size: 12px;">#070C16</code>
+        </div>
+        <div class="card" style="padding: 20px;">
+          <div style="height: 64px; background: #1D4ED8; border-radius: 8px; margin-bottom: 12px;"></div>
+          <h4 style="font-size: 14px;">皇家深蓝 (Royal Blue)</h4>
+          <code style="color: var(--cyan); font-size: 12px;">#1D4ED8</code>
+        </div>
+        <div class="card" style="padding: 20px;">
+          <div style="height: 64px; background: #2563EB; border-radius: 8px; margin-bottom: 12px;"></div>
+          <h4 style="font-size: 14px;">电光钴蓝 (Cobalt Blue)</h4>
+          <code style="color: var(--cyan); font-size: 12px;">#2563EB</code>
+        </div>
+        <div class="card" style="padding: 20px;">
+          <div style="height: 64px; background: #00F5FF; border-radius: 8px; margin-bottom: 12px;"></div>
+          <h4 style="font-size: 14px;">极光赛博青 (Neon Aqua)</h4>
+          <code style="color: var(--cyan); font-size: 12px;">#00F5FF</code>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>河洛 (Heluo Forge) 品牌资产管理系统 · 视觉规范标准</p>
+      <p style="margin-top: 4px; font-size: 11px;">100% 离线自包含资产库 · SHA-256 完整性受控</p>
+    </div>
+  </footer>
+</body>
+</html>

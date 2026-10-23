@@ -1,10 +1,20 @@
 # 河洛 · Heluo Forge
 
+<p align="center">
+  <a href="docs/assets/branding/cyber-long/index.html">
+    <img src="docs/assets/branding/cyber-long/primary/app-icon.png" alt="河洛 / Heluo Forge 官方主标（河洛苍螭）" width="128" height="128">
+  </a>
+  <br>
+  <strong>企业级智能研发平台 · ENTERPRISE AI PLATFORM</strong>
+  <br>
+  <sub>基于 DeepSeek Harness（DSH）的企业方案与扩展工程 · 官方视觉系统：<a href="docs/assets/branding/cyber-long/index.html">河洛苍螭 (Cyber Long)</a></sub>
+</p>
+
 河洛企业级智能研发平台（Heluo Forge）基于 DeepSeek Harness（DSH），通过插件、配置组合、企业现有 CLI 与技能包连接企业身份、模型网关和研发系统；Model Context Protocol（MCP，模型上下文协议）按集成需要另行评估。
 
-**当前处于方案评审与开发骨架阶段，尚无完整河洛产品发行版。** 企业插件市场改用 DSH 原生「索引源」：AI 开发者平台（AIHUB）维护并托管 format-1 索引，原生市场浏览、官方 manager 从企业 npm 安装；`services/market-index` 只保留只读索引校验器。`@heluo/forge-market` 与旧 HTTP 服务为历史参考，不属目标；`@heluo/forge-iam` 与 `@heluo/forge-credentials-keychain` 为开发骨架（本地离线测试已建立，真实 IAM 与 OS keychain 未联调），其余七个包与 DevOps MCP 仍为规划入口。企业联调、三目标安装与发行版尚未完成。
+**当前处于方案评审与开发骨架阶段，尚无完整河洛产品发行版。** 企业插件市场改用 DSH 原生「索引源」：AI 开发者平台（AIHUB）维护并托管 format-1 索引，原生市场浏览、官方 manager 从企业 npm 安装；`services/market-index` 只保留只读索引校验器。`@heluo/forge-market` 与旧 HTTP 服务为历史参考，不属目标；`@heluo/forge-iam` 与 `@heluo/forge-credentials-keychain` 为开发骨架（本地 mock OIDC 端到端测试与 keychain fallback 已建立，真实 IAM 与 OS keychain 未联调），品牌视觉套件已全面切换并锁定为「河洛苍螭」（方案 B），其余七个包与 DevOps MCP 仍为规划入口。企业联调、三目标安装与发行版尚未完成。
 
-现状核对日期：2026-10-22。以下区分仓库实现、历史实机记录与待验证目标，不以目录或设计草案证明上线能力。
+现状核对日期：2026-10-23。以下区分仓库实现、历史实机记录与待验证目标，不以目录或设计草案证明上线能力。
 
 | 项 | 内容 |
 |---|---|
@@ -31,6 +41,7 @@ DevOps 与 Gitee 的当前接入基线是复用现有 CLI，通过只读命令�
 | 评审架构、信任边界与技术取舍 | [总体架构设计](docs/architecture/platform-architecture.md) |
 | 评估排期、依赖、门禁与验收 | [推广实施方案](docs/plans/rollout-plan.md) |
 | 查找契约、团队交付物或待确认问题 | [文档总览](docs/README.md) |
+| 查阅品牌标识、矢量切图与视觉规范 | [品牌资产全景系统](docs/assets/branding/cyber-long/index.html) → [生图提示词与规范](docs/assets/branding/prompts.md) |
 | 开始模块设计或开发 | [逐模块设计索引](docs/design/README.md) → [工程开发与发布约定](docs/engineering/development-conventions.md) |
 | 了解市场目标、索引契约与 AIHUB 交付 | [轻量市场设计](<docs/design/plugins/forge-market.md>) → [索引契约](<docs/design/services/market-index.md>) → [issue #12](https://github.com/hrygo/heluo-forge/issues/12) |
 | 修改仓库、提交变更或发起评审 | [贡献指南](CONTRIBUTING.md)；agent 同时遵循 [AGENTS.md](AGENTS.md) |
@@ -69,6 +80,7 @@ pnpm check
 | 路径 | 维护内容 | 当前边界 |
 |---|---|---|
 | `docs/` | 需求、架构、计划、契约、设计、运维、协作与工程文档 | 导航见[文档总览](docs/README.md)，登记见[文档清单](docs/DOCUMENT-REGISTER.md) |
+| `docs/assets/branding/` | 河洛苍螭视觉套件：主标、11 组件标识、全尺寸切图、manifest 清单与交互全景控制台 | 方案 B 正式归档；各包内置图标与 manifest.json 保持校验一致 |
 | `packages/` | 安装进 DSH 的九个产品扩展入口与一个凭据支撑包 | `forge-market` 为历史参考；`forge-iam`、`forge-credentials-keychain` 为开发骨架；其余七个仅职责 README |
 | `services/` | 索引校验工具、条件建设的 DevOps MCP | `market-index` 只保留只读校验器；无服务、无生产部署；DevOps MCP 暂不建设 |
 | `deploy/` | 私有制品仓库接入与双端分发资产 | 仅[规划说明](deploy/README.md)，没有可执行部署配置或制品 |
