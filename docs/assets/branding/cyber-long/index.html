@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>河洛 / Heluo Forge · 品牌资产系统（河洛苍螭 / 潜龙出渊）</title>
+  <link rel="icon" type="image/svg+xml" href="primary/symbol-color.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="sizes/symbol-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="sizes/symbol-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="sizes/symbol-180.png">
+  <meta name="theme-color" content="#070C16">
   <style>
     :root {
       --bg: #070C16;
@@ -38,27 +43,127 @@
       top: 0;
       z-index: 100;
       backdrop-filter: blur(20px);
-      background: rgba(7, 12, 22, 0.85);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      padding: 16px 0;
+      -webkit-backdrop-filter: blur(20px);
+      background: rgba(7, 12, 22, 0.88);
+      border-bottom: 1px solid rgba(56, 189, 248, 0.12);
+      padding: 14px 0;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
     }
     .nav-inner {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 20px;
     }
     .brand-logo {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 12px;
-      font-weight: 800;
-      font-size: 16px;
-      letter-spacing: 0.05em;
+      text-decoration: none;
+      flex-shrink: 0;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s;
     }
-    .brand-logo img { width: 32px; height: 32px; }
-    nav { display: flex; gap: 24px; font-size: 14px; font-weight: 500; }
-    nav a { color: var(--text-muted); }
-    nav a:hover { color: var(--text); }
+    .brand-logo:hover {
+      opacity: 0.95;
+      transform: translateY(-1px);
+    }
+    .brand-icon-wrap {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: radial-gradient(circle at 30% 30%, rgba(0, 245, 255, 0.2), rgba(29, 78, 216, 0.2));
+      border: 1px solid rgba(0, 245, 255, 0.35);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 0 16px rgba(0, 245, 255, 0.2);
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .brand-logo:hover .brand-icon-wrap {
+      border-color: var(--cyan);
+      box-shadow: 0 0 24px rgba(0, 245, 255, 0.45);
+      transform: scale(1.05);
+    }
+    .brand-logo-icon {
+      width: 24px;
+      height: 24px;
+      display: block;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+    }
+    .brand-text {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      background: linear-gradient(135deg, #FFFFFF 30%, #BAE6FD 70%, #00F5FF 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      white-space: nowrap;
+    }
+    .brand-sep {
+      color: rgba(255, 255, 255, 0.25);
+      font-size: 14px;
+    }
+    .brand-subtitle {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .brand-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--cyan);
+      background: rgba(0, 245, 255, 0.1);
+      border: 1px solid rgba(0, 245, 255, 0.28);
+      padding: 2px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+      white-space: nowrap;
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 14px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    nav a {
+      color: var(--text-muted);
+      transition: color 0.2s;
+      white-space: nowrap;
+    }
+    nav a:not(.btn):hover {
+      color: #FFFFFF;
+    }
+    nav a.btn-manifest {
+      padding: 7px 16px;
+      border-radius: 8px;
+      background: rgba(14, 22, 38, 0.85);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: #FFFFFF;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      display: inline-flex;
+      align-items: center;
+    }
+    nav a.btn-manifest:hover {
+      background: rgba(0, 245, 255, 0.15);
+      border-color: var(--cyan);
+      color: var(--cyan);
+      box-shadow: 0 0 16px rgba(0, 245, 255, 0.3);
+      transform: translateY(-1px);
+    }
 
     /* Hero */
     .hero {
@@ -90,6 +195,7 @@
       margin-bottom: 18px;
       background: linear-gradient(135deg, #FFFFFF 30%, #93C5FD 70%, #00F5FF 100%);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
     }
     .lead {
@@ -112,6 +218,7 @@
       color: #FFFFFF;
       background: linear-gradient(135deg, #FFF, #00D2FE);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
     }
     .stat-item span { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -290,25 +397,71 @@
       font-size: 13px;
     }
 
-    @media (max-width: 900px) {
+    @media (max-width: 960px) {
       .hero { grid-template-columns: 1fr; }
       .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .brand-subtitle, .brand-sep { display: none; }
+      nav { gap: 16px; font-size: 13px; }
+    }
+    @media (max-width: 760px) {
+      .nav-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      nav {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 6px;
+        gap: 16px;
+        scrollbar-width: none;
+      }
+      nav::-webkit-scrollbar {
+        display: none;
+      }
+      .brand-tag { display: none; }
     }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap nav-inner">
-      <div class="brand-logo">
-        <img src="primary/symbol-color.svg" alt="河洛">
-        <span>HELUO FORGE · 品牌资产系统</span>
-      </div>
+      <a href="#" class="brand-logo" aria-label="河洛 Heluo Forge 品牌首页">
+        <span class="brand-icon-wrap">
+          <svg class="brand-logo-icon" width="24" height="24" viewBox="0 0 320 320" role="img" aria-label="河洛苍螭">
+            <defs>
+              <linearGradient id="navCyberLongGrad" x1="15%" y1="90%" x2="85%" y2="10%">
+                <stop offset="0%" stop-color="#1D4ED8" />
+                <stop offset="35%" stop-color="#2563EB" />
+                <stop offset="70%" stop-color="#00D2FE" />
+                <stop offset="100%" stop-color="#00F5FF" />
+              </linearGradient>
+            </defs>
+            <g transform="translate(160, 160) scale(0.04241491363092184, -0.04241491363092184) translate(-5153.5, 23.5)" fill="url(#navCyberLongGrad)">
+              <path d="m3441 2750 c102 -64 184 -104 339 -165 183 -73 304 -108 500 -144 215 -41 361 -54 600 -54 312 1 562 35 1000 138 262 61 353 77 486 82 220 10 346 -26 531 -151 129 -87 153 -96 251 -96 125 0 279 40 579 151 103 38 185 17 259 -63 62 -67 85 -127 91 -233 5 -95 -14 -245 -43 -332 -25 -76 -109 -243 -153 -305 -41 -56 -41 -56 -113 -68 -349 -55 -696 -215 -1001 -463 -56 -45 -156 -127 -222 -182 -296 -247 -626 -406 -986 -474 -219 -42 -669 -70 -669 -42 0 5 37 24 82 41 121 47 265 122 335 175 78 58 187 176 232 249 157 260 147 604 -23 835 -136 183 -333 278 -656 316 -283 34 -489 79 -690 152 -157 57 -246 101 -384 193 -162 107 -292 240 -387 395 -60 99 -55 105 42 45z m864 -895 c126 -41 297 -76 500 -104 166 -24 249 -48 330 -96 148 -89 238 -228 260 -400 17 -136 -51 -313 -162 -424 -88 -87 -187 -135 -399 -196 -206 -58 -541 -176 -611 -214 -10 -6 -72 -35 -138 -66 -191 -89 -457 -252 -557 -342 -30 -26 -87 -75 -127 -108 -61 -51 -129 -125 -268 -296 -34 -41 -170 -280 -194 -341 -34 -86 -70 -207 -91 -303 -24 -113 -35 -390 -19 -490 44 -276 91 -408 229 -639 58 -95 89 -133 222 -267 85 -86 178 -175 205 -198 65 -56 41 -49 -140 39 -246 120 -477 305 -696 560 -71 82 -108 137 -191 280 -114 196 -167 325 -228 555 -168 629 -59 1290 303 1835 304 458 820 880 1392 1138 125 57 251 110 265 111 3 0 55 -15 115 -34z m-629 -2116 c-76 -161 -95 -231 -110 -409 -13 -158 -6 -256 29 -387 36 -138 78 -230 158 -350 130 -195 301 -345 517 -453 138 -69 177 -84 335 -125 140 -36 256 -49 430 -48 189 1 272 11 460 59 293 74 485 166 770 370 121 87 244 204 382 364 64 75 207 301 264 418 33 67 62 122 66 122 20 0 -32 -303 -82 -473 -27 -96 -117 -309 -169 -401 -196 -350 -497 -666 -836 -877 -330 -205 -724 -331 -1074 -346 -402 -16 -798 87 -1093 284 -196 131 -268 196 -376 339 -150 197 -195 291 -254 524 -25 96 -27 122 -27 300 0 148 4 212 17 266 19 80 76 249 111 327 22 50 142 250 176 294 30 39 184 206 226 246 50 46 138 107 142 98 1 -4 -26 -68 -62 -142z" />
+            </g>
+            <!-- Aerodynamic Eye Notch -->
+            <path d="M 198 94 C 204 90 215 93 222 98 C 215 103 204 100 198 94 Z"
+                  transform="translate(160, 160) scale(1.0) translate(-160, -160)"
+                  fill="#070C16" />
+          </svg>
+        </span>
+        <span class="brand-text">
+          <span class="brand-title">HELUO FORGE</span>
+          <span class="brand-sep">·</span>
+          <span class="brand-subtitle">品牌资产系统</span>
+        </span>
+        <span class="brand-tag">河洛苍螭</span>
+      </a>
       <nav>
         <a href="#primary">主标套件</a>
         <a href="#components">子组件家族</a>
         <a href="#sizes">多分辨率测试</a>
         <a href="#rules">使用规则</a>
-        <a href="manifest.json" download class="btn">下载清单 (JSON)</a>
+        <a href="manifest.json" download class="btn btn-manifest">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          下载清单 (JSON)
+        </a>
       </nav>
     </div>
   </header>

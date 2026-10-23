@@ -1,6 +1,6 @@
 # AGENTS.md — Heluo Forge agent 工作约定
 
-> 适用范围：仓库根目录及全部子目录。版本：V1.7；最后更新：2026-10-22。
+> 适用范围：仓库根目录及全部子目录。版本：V1.8；最后更新：2026-10-23。
 >
 > 职责：agent 的任务路由、授权差异、修改与验收要求（职责边界见[文档总览 §2.1](docs/README.md#21-仓库入口职责)）。项目状态、契约字段、文档元数据规范与命令细节留在各自正文，本文件只保留会改变 agent 行为的约束和入口。系统、开发者与当前用户指令优先；与公共约定重叠处从其规定，本文件只写差异。
 
@@ -26,6 +26,7 @@
 | 部署或运行说明 | [部署说明](deploy/README.md)、[运维索引](docs/operations/README.md) | `deploy/` 存资产；运行手册只写经验证的步骤 |
 | 检查器或 CI | [开发约定](docs/engineering/development-conventions.md)、对应脚本与测试 | 补充正反向用例；保留离线、最小权限与固定动作 SHA |
 | 市场或索引契约 | [市场设计](docs/design/plugins/forge-market.md)、[索引契约](docs/design/services/market-index.md)、[issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 分清 AIHUB 索引、原生市场与制品源职责；不建生成器、服务或写前授权 |
+| 品牌与视觉资产 | [品牌设计](docs/design/plugins/forge-brand.md)、[品牌全景](docs/assets/branding/cyber-long/index.html)、[生图规范](docs/assets/branding/prompts.md) | 遵循河洛苍螭视觉标准与 manifest 校验；切图与组件变体保持单笔流体曲率，不写已上线 |
 | 文档入口、版本或登记 | [文档总览 §6](docs/README.md#6-编写约定)、[文档清单](docs/DOCUMENT-REGISTER.md) | 同步版本、登记与全部引用；不写修订记录 |
 
 内容归属、版本与状态规则见[文档总览](docs/README.md)。发现冲突时报告双方依据并修订相关文档，不自行替团队裁定。
@@ -40,6 +41,7 @@
 
 - `packages/` 放 `@heluo/forge-*` 扩展，`services/` 放独立服务，`deploy/` 放部署资产；根工程不发布，包间使用 `workspace:` 引用，不跨包导入源码路径。
 - 模块先完成设计、目标 DSH 接口核验与设计索引登记，准入满足后再建 `package.json` 与源码。清单声明 `engines.dsh`、`private` 和实际测试入口；不预建虚构入口或零用例业务测试。`services/market-index` 只保留只读校验器，不建服务或独立清单。
+- 品牌资产唯一真源为 `docs/assets/branding/cyber-long/`；扩展包内置图标（如 `packages/forge-iam/icon.svg`）须与对应组件标识保持逐字节一致并经 `package-shape` 测试核验。
 - bundle 使用 `cordis.patch.yml`，各项能力独立配置、可单独禁用；安全依赖失效时的行为遵循设计与契约，不以“可禁用”绕过授权或安全门禁。
 - 文档按[文档总览 §6](docs/README.md#6-编写约定)与对应[模块模板](docs/templates/design-template.md)/[通用模板](docs/templates/_template.md)编写；改名或移动用 `git mv`，同一变更更新全库引用、登记与索引摘要。
 - 技术方案纪律：事实优先，以已核验的官方文档、代码、契约与可复现实验为依据，区分事实、推断与待确认，结论写明来源、核验日期与未验范围，未联调、未实机或依赖回函的内容不写成已实现或已验证；keychain、锁、协议等基础能力优先采用维护活跃、许可与平台产物清晰的成熟库或平台原语；不过度设计，只解决已确认需求，新增机制须说明现有方案的具体不足。
