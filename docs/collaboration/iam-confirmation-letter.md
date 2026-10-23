@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-CONF-004 |
 | 文档名称 | IAM 统一登录与权限接入问询函 |
-| 版本 | V0.4.2 |
+| 版本 | V0.4.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -19,7 +19,7 @@
 >
 > 关联文档：[总体架构设计](<../architecture/platform-architecture.md>)、[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[推广实施方案](<../plans/rollout-plan.md>)、[需求与场景基线](<../requirements/requirements-baseline.md>)、[AI 网关契约](<../contracts/gateway-contract.md>)、[跨团队确认询问函（母文档）](<team-confirmation-letters.md#42-iam-团队询问函>)、[文档清单](<../DOCUMENT-REGISTER.md>)、[文档总览](<../README.md>)。
 >
-> **2026-10-23 当前适用性**：需求方确认个人模型访问必须校验当前人员身份、DSH 用途及五分钟撤权/当前设备退出。纯令牌与 Key＋令牌均需 IAM 可信授权能力，因此恢复 CONF-IAM-03/09/10/11/15 对模型网关的适用性。2026-10-22 的 Key-only 裁决保留为历史背景，不能据此排除网关问题。原 21 个问题已覆盖主题，本轮沿用编号补充约束；覆盖判断见 §8，本轮拟发补充正文见 §9。由行内实施团队协调 IAM 与网关配合事项，尚未发送。
+> **2026-10-23 当前适用性与回函核验更新**：需求方确认个人模型访问必须校验当前人员身份、DSH 用途及五分钟撤权/当前设备退出。纯令牌与 Key＋令牌均需 IAM 可信授权能力，因此恢复 CONF-IAM-03/09/10/11/15 对模型网关的适用性。同日行内实施团队获取《IAM统一登录与权限接入问询函 · 回函.docx》，**已由内部团队（行内实施与平台组）完成全量文本提取与实测截图校验，确认为内部团队验证得出**。结果更新至逐项回函表与 §4.5 支撑材料，明确标注为“**内部团队验证**（待 IAM 外部团队/厂商正式书面盖章确认）”，原 21 个问题编号保持稳定。
 >
 > **2026-10-22 进展补充**：采纳 SSOT 原则，本函作为企业 IAM 专项问询函与回函核验唯一真源，承载 CONF-IAM-01~21 全量问询与回函追踪。同日内部项目组整理提取了首轮部分答复与实测材料并完成登记，明确标注为“**待最终核实**（由内部项目组提供，待 IAM 公司/团队正式核实提供）”，保留未闭环阻塞项继续推动。
 
@@ -267,31 +267,32 @@
 
 **逐项回函模板与内部核对记录**
 
-> **【状态标注】待最终核实**：下表记录内部项目组于 2026-10-22 从已获取的初步材料中整理提取的部分答复要点。**特别声明：表中所有提取内容均为内部项目组提供，待 IAM 公司 / 团队正式书面核验并正式提供回函确认为准**。未填项继续作为后续重点闭环问题。
+> **【状态标注】内部团队验证**：下表记录内部团队（行内实施与平台组）于 2026-10-23 针对《IAM统一登录与权限接入问询函 · 回函.docx》全量正文及实测截图（OCR 提取）核验得出的结论。
+> **特别声明：表中所有内容均为内部团队依据回函材料验证得出，待 IAM 外部团队/厂商正式书面盖章确认**。未填项继续作为后续重点推进事项。
 
 | 问题 ID | 事项简述 | 我行部署版本是否支持 | 当前最新 IAM 产品是否支持 | 是否计划支持（若均否） | 计划支持年月 | 技术说明与配置/替代建议 | 答复人/岗位 |
 |---|---|---|---|---|---|---|---|
-| CONF-IAM-01 | OIDC 1.0 协议与身份凭据 | 待最终核实（内部提取：支持） | — | — | — | 待最终核实（内部提取）：支持 OIDC 协议，签发标准 ID Token；算法实测固定 RS256，通过 JWKS 分发公钥 | 待 IAM 团队正式确认 |
-| CONF-IAM-02 | 本机授权码登录与 Loopback 回调 | — | — | — | — | 待 IAM 公司核实提供（阻塞项：需确认支持系统浏览器拉起 + HTTP 127.0.0.1 动态端口回调 + PKCE S256） | 待 IAM 团队确认 |
-| CONF-IAM-03 | 业务服务分资源授权（一资源一令牌） | — | — | — | — | 尚无正式答复；本轮恢复为网关目标授权前置，需补充核实 | 待 IAM 团队确认 |
-| CONF-IAM-04 | 组织架构源与离职/调岗权限变更时效 | 待最终核实（内部提取：支持） | — | — | — | 待最终核实（内部提取）：权威源为 HR；用户离职/停用后 1 小时内同步到 IAM；状态置为禁用后已签发的 Access Token 立即失效 | 待 IAM 团队正式确认 |
-| CONF-IAM-05 | 访问与刷新令牌时效（TTL）及管理端吊销 | 待最终核实（内部提取：支持） | — | — | — | 待最终核实（内部提取）：Access Token 支持配置，标准有效时长为 2 小时；Refresh Token 支持设置有效时长（答复称略长于 AT，需协商支持数天滑动过期以保障免密体验）；支持主动撤销 | 待 IAM 团队正式确认 |
-| CONF-IAM-06 | 令牌并发刷新与多端会话影响 | — | — | — | — | 待 IAM 公司核实提供（需确认服务端并发刷新幂等性与多端互踢策略；客户端本地前置单飞互斥锁） | 待 IAM 团队确认 |
-| CONF-IAM-07 | 联调测试环境与基础联调账号 | 【平台组内部确认】支持 | — | — | — | 内部项目组提取/确认：已有 3 套独立的内网 IAM 测试环境，支持开通测试 Client ID 与联调测试账号（需要时可由平台组及内部流程开通） | 平台组联调运维 |
-| CONF-IAM-08 | 公共客户端（Native Public Client）注册 | — | — | — | — | 待 IAM 公司核实提供（阻塞项：需确认允许 public client 免 client secret 注册，且 Redirect URI 支持回环端口通配） | 待 IAM 团队确认 |
-| CONF-IAM-09 | Discovery 元数据端点与 JWKS 密钥轮换 | 待最终核实（内部提取：部分支持） | — | — | — | 待最终核实（内部提取）：提供标准 OpenID Configuration 元数据端点；固定 RS256 签名算法并强制拒绝 none/HS256；**明确不支持 JWKS 密钥轮换** | 待 IAM 团队正式确认 |
-| CONF-IAM-10 | ID Token Claims 核验与工号/角色映射 | 待最终核实（内部提取：待确认） | — | — | — | 待最终核实（内部提取）：真实 Payload 中工号映射在 sub 与 preferred_username，不含角色 Claim；Userinfo (/esc-sso/oidc/profile) 包含 sub, name, employeeNumber, givenName | 待 IAM 团队正式确认 |
-| CONF-IAM-11 | RFC 8707 Resource 参数与 Audience 约束 | — | — | — | — | 尚无正式答复；本轮需核实网关目标 audience/resource 或等效配置 | 待 IAM 团队确认 |
-| CONF-IAM-12 | 刷新令牌轮换（Rotation）与重用检测 | 待最终核实（内部提取：支持/待验证） | — | — | — | 待最终核实（内部提取）：已开启 Refresh Token Rotation；具备旧 RT 重用检测（重用报错 invalid_grant）；网络抖动时的并发容忍窗口（Grace Period）待验证 | 待 IAM 团队正式确认 |
-| CONF-IAM-13 | RFC 7009 令牌撤销端点与级联失效 | 待最终核实（内部提取：部分支持） | — | — | — | 待最终核实（内部提取）：**撤销端点仅支持撤销 Access Token，不支持撤销 Refresh Token**；历史建议为 RP 登出或本地擦除；该建议不足以证明本轮单授权及刷新后代撤销 | 待 IAM 团队正式确认 |
-| CONF-IAM-14 | RP 发起注销与浏览器 SSO 会话联动 | 待最终核实（内部提取：部分支持） | — | — | — | 待最终核实（内部提取）：支持 OIDC RP-Initiated Logout 1.0 (/esc-sso/logout)；调用时不强制携带 id_token_hint；**调用后可彻底终结系统浏览器全局 SSO 会话** | 待 IAM 团队正式确认 |
-| CONF-IAM-15 | 访问令牌形态（JWT vs Opaque）与验签 | — | — | — | — | 尚无正式答复；本轮需核实网关 Access Token 及验证方式 | 待 IAM 团队确认 |
-| CONF-IAM-16 | 端点错误码映射、限流与客户端重试 | 待最终核实（内部提取：部分已知） | — | — | — | 待 IAM 公司核实提供（内部提取：重复使用 code 或旧 RT 返回 invalid_grant，Token 过期返回 401 expired_accessToken；限流与 Retry-After 仍待核实） | 待 IAM 团队确认 |
-| CONF-IAM-17 | 多端网络代理、自签根证书与终端管控策略 | 【平台组内部确认】 | — | — | — | 由平台组与 IT 终端团队内部确认，IAM 外部答复团队无需填写 | 平台组终端运维 |
-| CONF-IAM-18 | 测试账号矩阵演练与全场景验证支持 | 待最终核实（内部提取：部分支持） | — | — | — | 待最终核实（内部提取）：可提供正常在职、跨角色/部门、目录冻结账号；**不支持提供未授权 AI 模型账号**（模型权限由网关控制）；场景演练由平台组内部组织 | 待 IAM 团队正式确认 |
-| CONF-IAM-19 | SCIM 2.0 用户生命周期出站与停用联动 | — | — | — | — | 待 IAM 公司核实提供（确认是否支持向 UAG 等下游系统推送 active=false） | 待 IAM 团队确认 |
-| CONF-IAM-20 | 多因素认证（MFA）强制策略与 Step-up | — | — | — | — | 待 IAM 公司核实提供（确认是否支持客户端差异化 MFA 与 step-up 重新认证） | 待 IAM 团队确认 |
-| CONF-IAM-21 | 登录与授权审计事件、保留期与 SIEM 对接 | — | — | — | — | 待 IAM 公司核实提供（确认登录、授权、刷新、撤销等审计事件输出方式与留存期） | 待 IAM 团队确认 |
+| CONF-IAM-01 | OIDC 1.0 协议与身份凭据 | 【内部团队验证】支持 | — | — | — | 内部验证支持 OIDC 协议；签发经私钥签名的标准 ID Token，算法实测固定 RS256，通过 JWKS 端点分发公钥 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-02 | 本机授权码登录与 Loopback 回调 | 【内部团队验证】支持 | — | — | — | 内部验证具备能力：支持 PKCE（但未强制 S256，允许 plain）；Loopback 使用 HTTP 协议；端口可不校验（动态分配），但重定向 URL 为前缀匹配，端口后路径亦无法校验 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-03 | 业务服务分资源授权（一资源一令牌） | 【内部团队验证】不支持 | — | — | — | 内部验证不支持：令牌仅按 Client 区分，不按资源区分签发；令牌内不含 aud/scope，无内省端点，网关无法判读。依赖改造路径 D1（扩展校验接口返回 aud/scope/client_id/exp/sub）或 D2（结构化 Token） | 内部团队验证（待外部正式确认） |
+| CONF-IAM-04 | 组织架构源与离职/调岗权限变更时效 | 【内部团队验证】支持 | — | — | — | 内部验证：正式员工走 HR 增量文件拉取（生效最坏 ≤ 90 分钟），供应商员工走外包系统 MQ 实时投递；账号禁用后已发令牌在 IAM 侧实时作废，网关经校验接口即刻感知（阻断上限为接口调用时延）；转正时原工号离职禁用、HR 分配新工号，sub 须独立且不变 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-05 | 访问与刷新令牌时效（TTL）及管理端吊销 | 【内部团队验证】支持 | — | — | — | 内部验证：Access Token 支持设置有效时长（标准为 2 小时）；Refresh Token 支持设置有效时长（答复称略长于 AT 即可，桌面端仍需申请滑动长期凭据）；支持主动撤销令牌 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-06 | 令牌并发刷新与多端会话影响 | — | — | — | — | 回函未作具体答复（保留占位）；内部继续按单飞互斥锁（single-flight）与会话隔离策略推进 | 待 IAM 团队确认 |
+| CONF-IAM-07 | 联调测试环境与基础联调账号 | 【内部团队验证】支持 | — | — | — | 内部验证：已有 3 套独立的内网 IAM 测试环境，支持开通联调测试账号与测试 Client ID | 平台组与行内实施 |
+| CONF-IAM-08 | 公共客户端（Native Public Client）注册 | — | — | — | — | 回函未作具体答复（保留占位）；需继续确认 Native Public Client 免 secret 登记及动态回环端口前缀通配规则 | 待 IAM 团队确认 |
+| CONF-IAM-09 | Discovery 元数据端点与 JWKS 密钥轮换 | 【内部团队验证】部分支持 | — | — | — | 内部验证：提供标准 Discovery 端点（/esc-sso/oidc）；签名算法固定 RS256 并拒 none/HS256；**明确不支持 JWKS 密钥轮换**（kid="iamsso" 固定） | 内部团队验证（待外部正式确认） |
+| CONF-IAM-10 | ID Token Claims 核验与工号/角色映射 | 【内部团队验证】部分支持 | — | — | — | 内部验证：明确 7 项必验、3 项条件必验、3 项建议核验；sub/preferred_username 映射工号，**不存在部门与角色 Claim**（仅有内部用户类型且未暴露）；员工标识以 sub 为准，转正重新分配工号时需保证 sub 不变 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-11 | RFC 8707 Resource 参数与 Audience 约束 | 【内部团队验证】不支持 | — | — | — | 内部验证不支持：授权与令牌端点均不识别 resource 参数；当前令牌不可读，scope 隔离与独立 Client 隔离亦无法落地；目标形态 scope 命名规范及 URI audience 规则已在方案中定义 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-12 | 刷新令牌轮换（Rotation）与重用检测 | 【内部团队验证】支持/待验证 | — | — | — | 内部验证：已开启 Refresh Token Rotation；具备旧 RT 重用检测（重用返回 invalid_grant）；网络抖动时的并发容忍窗口待行内环境实测验证 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-13 | RFC 7009 令牌撤销端点与级联失效 | 【内部团队验证】部分支持 | — | — | — | 内部验证：撤销端点**仅支持撤销 Access Token，不支持撤销 Refresh Token**；账号离职/禁用态时已发 AT/RT 均实时作废（经由账号态校验路径生效，非 RFC 7009 级联） | 内部团队验证（待外部正式确认） |
+| CONF-IAM-14 | RP 发起注销与浏览器 SSO 会话联动 | 【内部团队验证】部分支持 | — | — | — | 内部验证：支持 OIDC RP-Initiated Logout 1.0 (/esc-sso/logout)；调用时不强制携带 id_token_hint；**调用后可彻底终结系统浏览器全局 SSO 会话** | 内部团队验证（待外部正式确认） |
+| CONF-IAM-15 | 访问令牌形态（JWT vs Opaque）与验签 | 【内部团队验证】部分支持 | — | — | — | 内部验证：Access Token 为不透明令牌，不支持本地 JWKS 验签，无 RFC 7662 端点；但 **IAM 已提供「令牌有效性校验接口」**供业务系统查询阻断（准入拦截成立，细粒度权限隔离仍需 D1 补充返回 aud/scope） | 内部团队验证（待外部正式确认） |
+| CONF-IAM-16 | 端点错误码映射、限流与客户端重试 | — | — | — | — | 回函未作具体答复（保留占位）；已知重复使用 code/旧 RT 报 invalid_grant，过期报 401 expired_accessToken；限流与 Retry-After 仍待外部核实 | 待 IAM 团队确认 |
+| CONF-IAM-17 | 多端网络代理、自签根证书与终端管控策略 | 【内部团队验证】 | — | — | — | 由平台组与 IT 终端团队内部确认，IAM 外部答复团队无需填写 | 平台组终端运维 |
+| CONF-IAM-18 | 测试账号矩阵演练与全场景验证支持 | 【内部团队验证】部分支持 | — | — | — | 内部验证：可提供正常活跃员工、具备不同用户类型/部门、冻结/停用账号；**不支持提供「明确未授权使用 AI 模型」的账号**（IAM 侧无模型权限概念）；演练由内部组织 | 内部团队验证（待外部正式确认） |
+| CONF-IAM-19 | SCIM 2.0 用户生命周期出站与停用联动 | — | — | — | — | 待外部确认（确认是否支持向 UAG 等下游系统推送 active=false） | 待 IAM 团队确认 |
+| CONF-IAM-20 | 多因素认证（MFA）强制策略与 Step-up | — | — | — | — | 待外部确认（确认是否支持客户端差异化 MFA 与 step-up 重新认证） | 待 IAM 团队确认 |
+| CONF-IAM-21 | 登录与授权审计事件、保留期与 SIEM 对接 | — | — | — | — | 待外部确认（确认登录、授权、刷新、撤销等审计事件输出方式与留存期） | 待 IAM 团队确认 |
 
 如某项能力现有系统暂不具备且无规划，请直接说明边界及可用的既有替代，我们将据此限定技术接入范围并评审等效方案；关键要求不能满足时不开放对应路径，无需承诺非规划内开发。回函与测试资源准备不等于生产开通或安全评审通过。
 
@@ -303,29 +304,30 @@ DSH 平台组（代拟）
 
 ---
 
-### 4.5 首轮部分答复提取与实测支撑材料（平台内部，待最终核实）
+### 4.5 回函提取与实测支撑材料（内部团队验证）
 
-> **【状态标注】待最终核实声明**
+> **【状态标注】内部团队验证声明**
 >
-> 本节所归纳提取的技术端点、算法结论、报文 Payload 及架构影响，系内部项目组于 2026-10-22 从已获取的初步答复文档及内网测试材料中整理提供。
-> **全部内容均标注为「待最终核实」，待 IAM 公司 / 团队正式书面核验并正式提供回函为准**。平台组据此预先开展适配设计，但不作为接口变更已正式批准的依据。
+> 本节所归纳的技术端点、算法结论、报文 Payload 及架构影响，系内部团队（行内实施与平台组）于 2026-10-23 从《IAM统一登录与权限接入问询函 · 回函.docx》全量正文及实测截图（OCR 校验）中提取核验得出。
+> **全部内容明确标注为「内部团队验证」，待 IAM 外部团队/厂商正式书面盖章确认为准**。平台组据此开展工程适配设计，但不作为接口变更已正式批准的依据。
 
 #### 4.5.1 已提取的 OIDC 核心端点清单（实测内网端点）
 
-根据 Discovery 元数据端点提取，企业 IAM 采用标准 OIDC 路径前缀（脱敏示例 `http://<corp-iam-host>/esc-sso/oidc/*`）：
+根据 Discovery 元数据端点（图 3 OCR 识别结果）提取，企业 IAM 采用标准 OIDC 路径前缀（脱敏示例 `http://<corp-iam-host>/esc-sso/oidc/*`）：
 
-| 端点类型 | 提取路径 / URL 规范 | 关键调用约束（待最终核实） | 对应问题 |
+| 端点类型 | 提取路径 / URL 规范 | 关键调用约束（内部团队验证） | 对应问题 |
 |---|---|---|---|
 | Issuer URL | `http://<corp-iam-host>/esc-sso/oidc` | 固定 Issuer，作为 ID Token 的 `iss` 校验基线 | CONF-IAM-01/09 |
 | Authorization Endpoint | `http://<corp-iam-host>/esc-sso/oidc/authorize` | GET 请求；`response_type=code`，必须携带 `client_id`、`redirect_uri`、`state`（≥32字节）、`nonce`；授权码 5 分钟有效、一次性 | CONF-IAM-01/02 |
 | Token Endpoint | `http://<corp-iam-host>/esc-sso/oidc/accessToken` | POST 表单；`grant_type=authorization_code`，返回 `access_token`、`refresh_token`、`expires_in`、`id_token`；重复使用返回 `invalid_grant` | CONF-IAM-01/08 |
-| UserInfo Endpoint | `http://<corp-iam-host>/esc-sso/oidc/profile` | GET 请求；Bearer Token 鉴权；返回人员工号、姓名与 OA 账号；失效返回 401 `expired_accessToken` | CONF-IAM-01/10 |
-| JWKS URI | `http://<corp-iam-host>/esc-sso/oidc/jwks` | GET 请求；分发 RSA 公钥；实测 `kid="iamsso"`；**不支持动态密钥轮换** | CONF-IAM-09 |
+| UserInfo Endpoint | `http://<corp-iam-host>/esc-sso/oidc/profile` | GET 请求；Bearer Token 鉴权；返回人员工号（`sub` 与 `employeeNumber`）、姓名（`name`）与 OA 账号（`givenName`）；失效返回 401 `expired_accessToken` | CONF-IAM-01/10 |
+| JWKS URI | `http://<corp-iam-host>/esc-sso/oidc/jwks` | GET 请求；分发 RSA 2048 位公钥；实测 `kid="iamsso"`；**明确不支持动态密钥轮换** | CONF-IAM-09 |
 | Registration Endpoint | `http://<corp-iam-host>/esc-sso/oidc/register` | 动态客户端注册端点（是否开放 public 注册待核实） | CONF-IAM-08 |
 | End Session Endpoint | `http://<corp-iam-host>/esc-sso/logout` | RP-Initiated Logout 注销端点；不强制 `id_token_hint`；可彻底终结系统浏览器全局 SSO 会话 | CONF-IAM-14 |
-| Token Revocation | 需确认（原问询 `/oauth/revoke`） | 仅支持撤销 Access Token，不支持撤销 Refresh Token | CONF-IAM-13 |
+| Token Revocation | 见接口文档约定 | 撤销端点仅支持撤销 Access Token，不支持撤销 Refresh Token | CONF-IAM-13 |
+| 令牌有效性校验接口 | 待获取端点完整 URL 规范 | IAM 提供的令牌有效性回查接口，返回令牌是否有效（含账号禁用后实时作废判定）；目前不返回 aud/scope | CONF-IAM-15 |
 
-#### 4.5.2 真实 ID Token 结构与 Payload 字段样例（待最终核实）
+#### 4.5.2 真实 ID Token 结构与 Payload 字段样例（内部团队验证，OCR 图 2 / 图 6 核验）
 
 实测获取的 ID Token 由 IdP 私钥签名，签名算法固定为 `RS256`，有效期标准为 2 小时（7200 秒）：
 
@@ -336,7 +338,7 @@ DSH 平台组（代拟）
   "kid": "iamsso"
 }
 
-// Payload（已脱敏示例）
+// Payload（内部实测脱敏样例）
 {
   "jti": "3fe2b0ec-4c6d-4339-be75-fbac609cb252",
   "iss": "http://<corp-iam-host>/esc-sso/oidc",
@@ -355,11 +357,11 @@ DSH 平台组（代拟）
 ```
 
 **字段核验特征**：
-1. **员工身份标识**：员工工号映射在 `sub` 及 `preferred_username` 字段（如 `"001902"`）；未在 ID Token 内直接发现部门与角色 Claims，需通过 UserInfo 端点或外部目录同步补充。
+1. **员工身份标识**：员工工号映射在 `sub` 及 `preferred_username` 字段（如 `"001902"` 或 `"001904"`）；ID Token 内不含部门与角色 Claim。经回函核实，IAM 内部只有用户类型（正式员工/供应商员工/虚拟用户），且未在 ID Token 或 UserInfo 中暴露。
 2. **时钟与有效时限**：`exp - iat = 7200` 秒（整 2 小时）；`nbf` 较 `iat` 提早 300 秒（容忍 5 分钟客户端时钟倒退）。
 3. **验签要求**：必须基于 `jwks_uri` 提取公钥验证签名，严格校验 `iss`、`aud`（等于分配的 client_id）、`nonce` 与有效时限。
 
-#### 4.5.3 JWKS 公钥数据样例（待最终核实）
+#### 4.5.3 JWKS 公钥数据样例（内部团队验证，OCR 图 5 核验）
 
 ```json
 {
@@ -373,21 +375,27 @@ DSH 平台组（代拟）
   ]
 }
 ```
-*注：答复已明确不支持 JWKS 轮换，客户端与服务端可对公钥建立静态缓存（TTL ≥ 24 小时），但需保留 `kid` 不匹配时的主动刷新重试机制。*
+*注：回函已明确不支持 JWKS 轮换，客户端与服务端对公钥建立静态缓存时需注意该限制。*
 
-#### 4.5.4 关键技术结论与架构影响分析（待二次闭环）
+#### 4.5.4 关键技术结论与架构影响分析（内部团队验证）
 
 1. **退出登录闭环机制（CONF-IAM-13 & 14 组合应对）**：
-   - *事实*：RFC 7009 撤销端点明确**不支持撤销 Refresh Token**，仅能撤销 Access Token；但 OpenID Connect RP-Initiated Logout 1.0 (`/esc-sso/logout`) **支持彻底终结系统浏览器 SSO 会话**。
-   - *当前评审影响（2026-10-23）*：只撤 AT 加全局 RP 登出无法证明“当前授权及其全部刷新后代撤销、其他设备不受影响”。不再把该组合写为默认方案；须由 IAM 补充单授权撤销能力和五分钟上限，缺失则相应路径不开放。本地立即清理仍是必要动作，但不等于服务端已撤销。
+   - *事实*：RFC 7009 撤销端点明确**不支持撤销 Refresh Token**，仅能撤销 Access Token；但 OpenID Connect RP-Initiated Logout 1.0 (`/esc-sso/logout`) **支持彻底终结系统浏览器 SSO 会话**。此外，账号离职/禁用时，IAM 侧该账号已颁发的 AT 与 RT 均会实时作废（走账号态校验路径）。
+   - *当前评审影响（2026-10-23）*：只撤 AT 加全局 RP 登出无法证明“当前授权及其全部刷新后代撤销、其他设备不受影响”。本地立即清理仍是必要动作；需由 IAM 补充单授权撤销能力和五分钟上限，缺失则相应路径不开放。
 
-2. **令牌续期时效风险（CONF-IAM-05 协商事项）**：
-   - *事实*：答复称 Refresh Token 有效期“略长于 Access Token 即可”。
-   - *架构影响*：若 Access Token 为 2 小时，若 Refresh Token 仅为 3~4 小时，员工关机或离开后将频繁被踢出要求重新登录，违背桌面助手“长期静默免密”的正常办公诉求。
-   - *行动建议*：在第二轮对接中需向 IAM 团队正式申请为研发助手客户端配置长期滑动过期的 Refresh Token（如 7~14 天），只要员工每天在职使用即自动滑动续期。
-3. **高危遗留阻塞项（CONF-IAM-02 & CONF-IAM-08 必须闭环）**：
-   - *事实*：未明确 Native Public Client 免 Secret 机制与 Loopback 通配端口策略。实测材料中 Token 请求仍包含 `client_secret` 字段。
-   - *行动建议*：第二轮问询将 CONF-IAM-02 / 08 作为 G0/G1 准入第一优先级，明确要求 IAM 团队开通免 Client Secret 的 Public Client 模式（`token_endpoint_auth_method=none`），并允许 Redirect URI 形式为 `http://127.0.0.1:<port>/iam/callback`（支持动态分配端口）。
+2. **业务分资源授权与模型网关验签（CONF-IAM-03 / 11 / 15 联动）**：
+   - *事实*：Access Token 为**不透明令牌（Opaque Token）**，且 IAM 未提供 RFC 7662 内省端点，Token 内不包含 `aud` 或 `scope`；**不支持 RFC 8707 `resource` 参数**。但 IAM **已提供「令牌有效性校验接口」**供业务系统查询阻断。
+   - *架构影响*：网关目前可借有效性校验接口阻断已作废/已过期令牌（准入拦截成立，把越权窗口从 2 小时 TTL 压到接口调用时延）；但网关仍读不到 `aud` 与 `scope`，故权限隔离暂不成立。
+   - *改造建议（路径 D1）*：推动 IAM 在现有「令牌有效性校验接口」响应中扩展返回 `aud`、`scope`、`client_id`、`exp`、`sub`，以最小改造成本闭环网关隔离要求。
+
+3. **令牌续期时效风险（CONF-IAM-05 协商事项）**：
+   - *事实*：回函答复 Refresh Token 有效期“略长于 Access Token 即可”。
+   - *架构影响*：若 Access Token 为 2 小时，若 Refresh Token 仅为 3~4 小时，员工关机或离开后将频繁被要求重新登录，违背桌面助手“长期静默免密”的正常办公诉求。
+   - *行动建议*：需向 IAM 团队申请为研发助手客户端配置长期滑动过期的 Refresh Token（如 7~14 天），只要员工在职活跃即可自动续期。
+
+4. **高危遗留阻塞项（CONF-IAM-02 & CONF-IAM-08 必须闭环）**：
+   - *事实*：CONF-IAM-02 实测表明支持 PKCE（但允许 plain 未强制 S256）、允许 HTTP Loopback 且端口可动态分配，但**重定向 URL 采用前缀匹配**，端口后路径亦无法严格校验；CONF-IAM-08 公共客户端免 Secret 登记规范在回函中仍保留占位。
+   - *行动建议*：第二轮问询将公共客户端免 Client Secret 登记（`token_endpoint_auth_method=none`）作为 G0/G1 准入第一优先级跟进。
 
 ---
 
