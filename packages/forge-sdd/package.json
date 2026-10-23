@@ -1,0 +1,26 @@
+{
+  "name": "@heluo/forge-sdd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Frozen delivery manifest and local/CI consistency checks for Heluo Forge",
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "bin": {
+    "forge-sdd": "./src/cli.mjs"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./freeze": "./src/freeze.mjs",
+    "./manifest": "./src/manifest.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}
