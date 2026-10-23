@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V0.3.0 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-24 |
 | 门禁 | G2 |
 | 模块状态 | 规划 |
 
@@ -63,7 +63,7 @@ IAM 接入与模型接入分别核验网关目标授权、双凭据承载（若 
 | 依赖 | 类型 | 版本约束 | 缺失时的行为 |
 |---|---|---|---|
 | `@heluo/forge-iam` | 包 | 同批次版本 | 拒绝挂载，报明确错误 |
-| `@heluo/forge-policy` | 包 | 同批次版本 | 拒绝挂载，除非显式声明只读模式 |
+| `@heluo/forge-policy` | 包 | 同批次版本 | 拒绝挂载；**不提供只读降级**，策略缺失即企业入口关闭 |
 | `@heluo/forge-gateway` | 包 | 同批次版本 | 允许挂载，模型能力不可用并提示 |
 | `dsh-credentials` | 上游包 | 随目标 DSH | 拒绝挂载 |
 | `dsh-deepseek-account-platform`、`dsh-llm-deepseek-account`、`dsh-llm-deepseek-api-key`、`dsh-client-ui-settings-account` | 上游包 | 随目标 DSH | 作为默认禁用目标；目标缺失时警告并跳过，不能当作已禁用 |
@@ -86,8 +86,9 @@ IAM 接入与模型接入分别核验网关目标授权、双凭据承载（若 
 |---|---|---|---|---|
 | `enterprise.profile` | `full` \| `pilot` | `full` | 否 | 试点档默认关闭市场与 SDD |
 | `enterprise.disable` | string[] | `[]` | 否 | 能力标识列表，映射到 `disabled: true` |
-| `enterprise.policyRequired` | boolean | `true` | 否 | 关闭后仅允许只读能力 |
 | `enterprise.rolePreset` | string | 空 | 否 | 角色 preset 名，决定默认禁用集 |
+
+策略是硬依赖：没有 `policyRequired` 一类开关，也不存在"关闭策略后仅允许只读"的档位。策略未挂载或不可用时，依赖它的动作入口保持关闭且无可调用残留。
 
 ```yaml title="组合顺序（示意）"
 insert:
@@ -105,9 +106,9 @@ insert:
         name: '@heluo/forge-devops'
       - id: enterprise-gitee
         name: '@heluo/forge-gitee'
-  - id: enterprise-market
-    name: '@heluo/forge-market'
-    disabled: !!js "ctx.get('enterpriseProfile') === 'pilot'"
+# 市场不插入插件行：目标形态是 DSH 原生索引源 + AIHUB 托管 format-1 索引，
+# `@heluo/forge-market` 为历史参考（ADR-11／13）。企业索引源按原生索引源配置，
+# 键名以目标版本核验为准；试点档关闭市场走原生配置，不靠禁用本包某一行。
 ```
 
 ### 5.1 官方行默认禁用

@@ -6,18 +6,25 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.2.0 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-22 |
+| 最后更新 | 2026-10-24 |
 | 门禁 | G2 |
 | 模块状态 | 规划 |
 
 > 编制依据：2026-10-20 对目标环境已安装 DSH 包做字符串级核验：`dsh-sandbox`、`dsh-sandbox-local`、`dsh-sandbox-policy`、`dsh-fs-sandbox`、`dsh-fs-observation-policy`、`dsh-bash-sandbox`、`dsh-pwsh-sandbox`、`dsh-sandbox-windows-acl`、`dsh-permission-presets`、`dsh-client-ui-permission-presets`、`dsh-client-ui-approval`、`dsh-tool-ask-user`、`dsh-tool-call-timeout-policy`、`dsh-spill-policy`。
-> **未核验**：工具调用前的拦截钩子名称与参数、审批交互的注册方式、策略与沙箱的叠加顺序。以上按包存在性推断，需运行时实测；`beforeTool` 一类标识在产物中未检索到，说明挂点名称与猜测不同。
+> **2026-10-24 宿主接口契约核验**（目标环境 DSH `0.2.1-rc.2`，macOS arm64；读取 live Host 的 Service/Event 契约，**不是行为实验**）：
+> - 工具派发管线为 `tools/pre-execute`（waterfall：放行/拒绝/取消/请求确认）→ `ctx.tools.guard`（同步、monotonic 拒绝，返回字符串即拒绝）→ `tools/execute`（around-dispatch）→ `tools/post-execute`（waterfall）→ 定义方 finalization → `tools/result`（**emit，仅观察**）。`guard` 位于 pre-execute 之后，且**任何 guard 不能强制放行另一 guard 的拒绝**。
+> - `ctx.tools.restrict({ allow, deny })` 对空过滤器、未知名、scope 局部名、保留传输名直接失败；限制取交集，scope 内注册仍可见。
+> - 人工 command 由独立服务 `ctx.commands`（`register` / `execute`）派发，**不经过 tools 管线**，须显式接线才能纳入同一门禁。
+> - 审批由 `ctx.approval`（`setPolicy` / `request`）与 `approval/request`（waterfall）承担；子 Agent 深度由 `ctx.subagents.resolveMaxDepth` 约束。
+> **2026-10-24 宿主行为实验（探针 9/9 通过）**：在目标环境用 `dsh --profile sdk` 叠加临时 patch 挂载探针插件，插件在真实进程内经 `ctx.tools` 派发调用。断言：guard 拒绝时工具体零调用且结果为错误、先注册的宽松 guard 不能放行后续拒绝、`tools/pre-execute` 的异步放行与拒绝决策均被采纳、`ask` 在无 agent 时降级为拒绝、`tools/result` 观察者抛错不影响结果与已发生副作用、卸载后工具不可见且再调用报 unknown tool、命令面由独立服务派发而工具管线 guard 未见到该次调用、`approval` 策略 `never` 返回 `rejected`。复跑：`node scripts/probe/run-host-probe.mjs`（无 `dsh` 时跳过，不伪装通过）。
+> **仍未实验**：子 Agent 限制是否继承（需真实 agent 会话）、策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
+> **仍未核验**：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
 >
 > 关联文档：[总体架构 §7.2](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md)、[设计索引](../README.md)。
 
@@ -27,7 +34,7 @@
 
 边界：它不实现沙箱（复用 DSH 沙箱），不实现审批界面（复用审批 UI），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
 
-还缺两件事才能进实现：拦截钩子的实测、策略与沙箱叠加顺序的确认。
+还缺两件事才能进实现：子 Agent 限制继承的验证（宿主钩子其余语义已由探针跑通，见编制依据）、策略与沙箱叠加顺序的确认。
 
 ## 2. 目标与非目标
 
@@ -79,10 +86,11 @@
 | `policy.egress` | `deny` \| `confirm` \| `allow` | `confirm` | 是 | 非白名单出网的默认动作 |
 | `policy.egressAllowlist` | string[] | 空 | 否 | 主机名或域名后缀 |
 | `policy.commandPatterns` | object[] | 空 | 否 | 高风险命令模式与动作 |
-| `policy.auditSink` | `local` \| `forward` | `local` | 是 | 审计落点 |
-| `policy.failMode` | `closed` \| `open` | `closed` | 是 | 策略不可用时的默认动作 |
+| `policy.auditSink` | `local` \| `forward` | `local` | 是 | 必要审计落点；落点不可用按 §8 关闭相关动作 |
 
-```ts title="导出面（示意，钩子名待实测）"
+策略不可用（未挂载、加载失败、必要依赖缺失）时一律 fail-closed；**不提供 fail-open 开关**，也不以"显式声明只读模式"作为降级通道。
+
+```ts title="导出面（钩子名已按 2026-10-24 live Host 契约核验）"
 export interface PolicyDecision {
   action: 'allow' | 'confirm' | 'deny';
   reason: string;
@@ -93,12 +101,14 @@ export interface PolicyEngine {
 }
 ```
 
+宿主接线：`ctx.tools.guard()` 承载硬拒绝（受保护路径与凭据，返回拒绝理由即阻断，且任何 guard 不能放行另一 guard 的拒绝）；`ctx.on('tools/pre-execute')` 承载需确认动作（返回 `{ kind: 'ask', reason }`，由 `ctx.approval` 决定，无 agent 或通道不可用时降级为拒绝）；`ctx.on('tools/result')` 只做观察投影，不参与判定；命令面不经工具管线，须显式接线（见 #21）。插件以 `inject: ['tools']` 声明对工具服务的硬依赖，依赖缺失即不挂载。
+
 ## 6. 权限、凭据与数据
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
 | 策略文件 | 本地只读加载，变更需重启或显式重载 | 随配置 | 解析失败即 fail-closed |
-| 审计记录 | 追加写，不含正文与令牌 | 90 天 | 写失败即拒绝高风险动作 |
+| 审计记录 | 追加写，不含正文与令牌 | 90 天 | 必要审计写失败即关闭需该保障的动作（含只读查询与 command），不按"高风险动作"打折 |
 | 用户确认 | 仅存结论与摘要，不存全文 | 会话 | 超时视为拒绝 |
 | 凭据 | 不读取、不转发、不记录 | — | 命中即拒绝 |
 
@@ -126,7 +136,8 @@ flowchart TD
 | 场景 | 行为 | 用户可见结果 | 是否可重试 |
 |---|---|---|---|
 | 策略文件缺失或损坏 | 全部拒绝 | 明确报错并指向配置 | 修复后重试 |
-| 审计不可写 | 拒绝高风险动作，允许只读 | 提示审计不可用 | 恢复后重试 |
+| 审计不可写（必要审计） | 拒绝一切需要该保障的动作，含只读查询与 command | 提示审计不可用 | 恢复后重试 |
+| 本机日志或可选指标不可用 | 记录缺口，不阻塞研发，不放宽必要审计 | 显示缺口计数 | 恢复后自动继续 |
 | 确认界面不可用 | 视为拒绝 | 提示无法确认 | 可重试 |
 | 沙箱与策略结论冲突 | 取更严的一方 | 说明冲突规则 | 否 |
 | 钩子未触发（实测发现） | 记为阻断缺陷，不降级放行 | 工具面禁用 | 修复后恢复 |
@@ -155,8 +166,13 @@ flowchart TD
 |---|---|---|
 | 单元 | 三类动作判定、fail-closed、规则优先级 | `node --test` |
 | 契约 | 结论与审计字段稳定 | 契约用例 |
-| 集成 | 命中受保护路径、确认超时、审计不可写 | 本地夹具 |
+| 集成 | 命中受保护路径、确认超时、必要审计不可写零执行 | 本地夹具 |
+| 并发 | 并发判断无共享可变状态；审计串行不交错；并发拒绝不互相放行 | `node --test` |
+| 退出与卸载 | 卸载后工具面与命令面无残留可调用入口；退出前审计已落盘 | 宿主探针 + 本地夹具 |
+| 宿主探针 | guard 拒绝零副作用与单调性、pre-execute 异步决策、`ask` 无 agent 降级、`tools/result` 观察异常、命令面独立、`approval=never`、卸载清理 | `node scripts/probe/run-host-probe.mjs`（目标 DSH；无 `dsh` 跳过） |
 | 端到端 | 双端各跑一次拒绝、一次确认、一次放行 | 手工 + 脚本 |
+
+覆盖率门槛：≥70%；安全关键分支（受保护路径、确认超时、必要审计不可写、卸载清理）必须同时有正向与负向用例。未达到上述矩阵前不建包清单，模块保持"规划"。
 
 ## 11. 打包、升级与回退
 
@@ -166,13 +182,13 @@ flowchart TD
 
 ## 12. 未决事项
 
-| 问题 | 需要谁回答 | 影响 |
-|---|---|---|
-| 工具调用拦截钩子的名称与参数 | 平台组（实测） | 第 4、5 节接口 |
-| 策略与沙箱的叠加顺序 | 平台组（实测） | 冲突时取严是否成立 |
-| 审批 UI 的注册方式与超时语义 | 平台组（实测） | 确认流程 |
-| `$DSH_HOME` 的确切范围 | 平台组（实测） | 受保护路径定义 |
-| 审计是否需要转发到集中平台 | 安全团队 | `auditSink` 默认值 |
+| 问题 | 需要谁回答 | 阻塞的能力 | 截止门禁 |
+|---|---|---|---|
+| 子 Agent 限制是否继承（探针 profile 无可用的 agent 工厂与子 Agent provider，实测报 `cannot create effect on inactive context`；其余宿主行为实验已跑通） | 平台组（在含 agent-loop 的 profile 复跑探针 + 真实委派） | P01、P02 的准入结论 | G1 编码前 |
+| 策略与沙箱的叠加顺序 | 平台组（实测） | 冲突时取严是否成立 | G1 编码前 |
+| 审批 UI 的注册方式与超时语义 | 平台组（实测） | 确认流程（P02、P04） | G1 编码前 |
+| `$DSH_HOME` 的确切范围 | 平台组（实测） | 受保护路径定义（P04） | G1 编码前 |
+| 审计是否需要转发到集中平台 | 安全团队 | `auditSink` 默认值 | G2 前 |
 
 ### 需用户确认的设计选项（增益不明确，暂不采用，保留待定）
 
