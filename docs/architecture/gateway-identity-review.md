@@ -31,7 +31,7 @@
 |---|---|---|
 | 业务要求 | Q1—Q17 由需求方确认 | 已确定要求；提供方能力待核验 |
 | 网关现状 | 2026-10-22 [UAG 分析稿](../assets/ai-gateway-replay.html)，基线 `dev/2.2.1` | 模型数据面为 key-auth；控制台支持 OIDC 不证明模型路由支持用户令牌 |
-| IAM 现状 | [原函 §4.5](../collaboration/iam-confirmation-letter.md#45-首轮部分答复提取与实测支撑材料平台内部待最终核实)的内部提取 | 不是正式回函；ID Token 样例不证明 Access Token 的格式、audience 或撤销能力 |
+| IAM 现状 | [原函 §4.5](../collaboration/iam-confirmation-letter.md#45-回函提取与实测支撑材料内部团队验证)的内部提取 | 不是正式回函；ID Token 样例不证明 Access Token 的格式、audience 或撤销能力 |
 | 当前本地实现 | [设计索引实测入口](../design/README.md#22-实现与验证入口) | 既有 interim 实现与离线测试不证明本轮目标已满足 |
 
 ## 2. 已确定要求的评审解释
