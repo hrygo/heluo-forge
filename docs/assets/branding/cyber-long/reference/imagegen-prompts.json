@@ -3,6 +3,6 @@
   "selectedBy": "用户确认选定",
   "date": "2026-10-23",
   "prompt": "A world-class minimalist tech logo for Heluo Forge representing a cyber water dragon (河洛玄螭 / 潜龙) in the exact style of DeepSeek. A single fluid aerodynamic leaping curve that suggests a celestial water dragon ascending gracefully. Pristine modern geometric vector art, ultra-clean continuous curves, zero clutter, no traditional whiskers or scales, pure fluid simplicity. Vibrant gradient from royal electric blue (#1D4ED8) to luminous neon aqua cyan (#00F5FF). Minimalist negative space eye notch. Centered on a dark obsidian slate navy background (#070C16). Pristine tech brand identity, Apple design quality, 1:1 app icon view, no text, no watermark.",
-  "architecture": "螭龙为主体母模，所有 11 个工程子组件统一保持螭龙主体，在龙心环抱处融合功能语义徽记，兼顾统一品牌心智与极简矢量化。",
+  "architecture": "forge-enterprise 直接复用平台主标，不采用独立标识；其余 10 个子组件基于螭龙母形按功能语义演变。",
   "pipeline": "AI 原生生图概念母稿 (generate_image) -> 矢量特征提取与平滑建模 (potrace + bezier) -> 本地工具链全套生成与哈希校验 (rsvg-convert)"
 }

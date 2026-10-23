@@ -20,7 +20,7 @@
 
 ---
 
-## 二、主标与 11 个子组件完整提示词清单
+## 二、主标与 11 个子组件标识规则（10 个独立变体）
 
 ### 00. 平台主标 · 河洛苍螭（潜龙出渊）
 * **定位**：河洛 (Heluo Forge) 核心母标、全平台主标识、应用商店主图标
@@ -34,10 +34,10 @@ A world-class minimalist tech logo emblem for Heluo Forge representing a cyber w
 
 ### 01. `@heluo/forge-iam` · 盘龙护盾
 * **所属模块**：统一身份与凭据网关（Unified IAM & Credentials）
-* **动势构想**：螭龙身躯优雅盘旋合围，龙躯如坚盾自体合拢，龙首与尾梢形成坚实的外壁回流，正中守护核心微光。
+* **动势构想**：螭龙身躯优雅盘旋合围，龙躯如坚盾自体合拢，龙首与尾梢形成坚实的外壁回流，中央以开阔留白表现守护；不使用星芒、光晕或细碎装饰。
 
 ```text
-A world-class minimalist tech logo emblem for Heluo Forge IAM representing enterprise identity, security, and credential gateway. A stylized cyber water dragon (螭龙) gracefully coiling its sleek aerodynamic body into the organic silhouette of a protective shield. Flawless G2 curvature continuity, strictly in the iconic DeepSeek minimalist vector aesthetic. Vibrant gradient from royal cobalt blue (#1D4ED8) to luminous cyber cyan (#00F5FF). Minimalist negative space eye notch, guarding a subtle central glowing spark inside the dragon's protective coil. Centered on a pure dark obsidian navy background (#070C16). Apple design award quality, ultra-clean vector emblem, 1:1 square canvas, no text, no watermark.
+A world-class minimalist tech logo emblem for Heluo Forge IAM representing enterprise identity, security, and credential gateway. A stylized cyber water dragon (螭龙) gracefully coiling its sleek aerodynamic body into the organic silhouette of a protective shield. Flawless G2 curvature continuity, strictly in the iconic DeepSeek minimalist vector aesthetic. Vibrant gradient from royal cobalt blue (#1D4ED8) to luminous cyber cyan (#00F5FF). Minimalist negative space eye notch, with a generous empty protected center, no spark, glow, tiny slivers or decorative fragments. Broad refined smooth curves and a clear shield silhouette readable at 32px. Centered on a pure dark obsidian navy background (#070C16). Apple design award quality, ultra-clean vector emblem, 1:1 square canvas, no text, no watermark.
 ```
 
 ---
@@ -54,10 +54,10 @@ A world-class minimalist tech logo emblem for Heluo Forge Gateway representing a
 
 ### 03. `@heluo/forge-market` · 衔晶凌虚
 * **所属模块**：插件与制品市场（Plugin Registry & Market）
-* **动势构想**：螭龙身形折转出充满几何秩序的六边形棱晶之势，身形灵动穿梭，如同一尊衔着晶莹扩展模块的探宝神龙。
+* **动势构想**：螭龙以连续平滑的新月流线环抱一枚简洁六角晶体；去除龙身多边碎面和晶体内部细线，以开阔间隙保持小尺寸识别。
 
 ```text
-A world-class minimalist tech logo emblem for Heluo Forge Market representing a plugin marketplace and extension registry. A cyber water dragon (螭龙) soaring gracefully while its fluid aerodynamic body twists into crisp hexagonal prismatic faceted contours, cradling a minimalist floating crystal facet in its curve. Strictly in the iconic DeepSeek minimalist vector aesthetic. Electric cobalt blue transitioning into radiant neon cyan gradient (#1D4ED8 to #00F5FF). Minimalist negative space eye notch. Dark obsidian slate navy background (#070C16). Crisp geometric vector emblem, 1:1 square canvas, no text, no watermark.
+A world-class minimalist tech logo emblem for Heluo Forge Market representing a plugin marketplace and extension registry. A cyber water dragon (螭龙) soaring gracefully while its smooth continuous crescent body cradles one simple floating elongated hexagonal crystal. No polygonal facets on the dragon, no internal crystal lines, no glow or tiny fragments; generous negative space readable at 32px. Strictly in the iconic DeepSeek minimalist vector aesthetic. Electric cobalt blue transitioning into radiant neon cyan gradient (#1D4ED8 to #00F5FF). Minimalist negative space eye notch. Dark obsidian slate navy background (#070C16). Crisp geometric vector emblem, 1:1 square canvas, no text, no watermark.
 ```
 
 ---
@@ -102,13 +102,10 @@ A world-class minimalist tech logo emblem for Heluo Forge Gitee representing cod
 
 ---
 
-### 08. `@heluo/forge-enterprise` · 磐石六合
+### 08. `@heluo/forge-enterprise` · 复用平台主标
 * **所属模块**：企业底座与多租户组织（Enterprise Org & RBAC Foundation）
-* **动势构想**：螭龙盘踞于坚实的六角晶格蜂巢矩阵之中，龙体外沿与蜂巢厚实的外壁浑然天成，代表固若金汤的企业级多租户基础设施。
-
-```text
-A world-class minimalist tech logo emblem for Heluo Forge Enterprise representing enterprise multi-tenant foundation and robust security architecture. A powerful cyber water dragon (螭龙) integrated seamlessly into a solid, aerodynamic hexagonal honeycomb matrix, its fluid curves reinforcing the exterior fortress walls. Strictly in the iconic DeepSeek minimalist vector aesthetic. Electric royal blue to luminous cyber cyan gradient (#1D4ED8 to #00F5FF). Minimalist negative space eye notch. Dark obsidian slate navy background (#070C16). Clean vector-sculpted app icon, 1:1 square canvas, no text, no watermark.
-```
+* **标识规则**：直接使用平台主标，不设计、不生成独立变体。组件路径保留为主标副本，图文组合仅保留组件名称与说明。
+* **母图来源**：`cyber-long/reference/concept-b-cyber-long.jpg`。
 
 ---
 
@@ -149,14 +146,13 @@ A world-class minimalist tech logo emblem for Heluo Forge DevOps-MCP representin
 1. **母图保存命名规范**：
    将生成的最佳母图（JPG 或 PNG 格式）重命名后存入 `docs/assets/branding/cyber-long/reference/`：
    * `concept-00-master.png`
-   * `concept-01-iam.png`
+   * `concept-01-iam-v2.png`（当前精炼版）
    * `concept-02-gateway.png`
-   * `concept-03-market.png`
+   * `concept-03-market-v2.png`（当前精炼版）
    * `concept-04-devops.png`
    * `concept-05-policy.png`
    * `concept-06-sdd.png`
    * `concept-07-gitee.png`
-   * `concept-08-enterprise.png`
    * `concept-09-cli.png`
    * `concept-10-market-index.png`
    * `concept-11-devops-mcp.png`
