@@ -70,7 +70,7 @@
 | 工程仓库结构设计提案图解 | [repository-structure-proposal.html](<assets/repository-structure-proposal.html>) | [工程结构设计](<engineering/repository-structure-design.md>) | 工程整理时点的目录与迁移摘要；当前市场实现见设计索引，图解不作实时清单 |
 | 网关静态 Key 方案设计 | [gateway-credential-options.html](<assets/gateway-credential-options.html>) | [个人凭证接入](<architecture/gateway-static-key-option.md>)、[网关契约](<contracts/gateway-contract.md>)§4 | 2026-10-20 原静态 Key 提议（`csk_`/API/HMAC/设备头）的辅助图解；已被 2026-10-22 ADR-14 的 UAG 个人凭证方案取代，仅作历史参考，不替代正文 |
 | 插件市场功能架构图 | [plugin-market-architecture.html](<assets/plugin-market-architecture.html>) | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>)、[ADR-11／13](<architecture/plugin-registry-source-decision.md>) | 轻量原生索引示意：AIHUB 索引、原生索引源、官方 manager、Artifactory、能/不能保证与验收；评审稿示意，不替代正文、企业接入或门禁证据 |
-| 品牌资产套件（正面象首，方向 B） | [branding/elephant/b-kit/index.html](<assets/branding/elephant/b-kit/index.html>) | [品牌与外观详细设计](<design/plugins/forge-brand.md>) | 现存的唯一预置品牌资产：主标、11 个组件标识与多分辨率切图，配 `manifest.json` 校验清单与 `usage.txt` 使用规则；状态为建议稿（代拟），方向 B 由用户选定，正式审核与批准待定；组件标识只描述职责，不表示对应模块已实现、已部署或已批准；`packages/forge-iam/icon.svg` 逐字节取自其中 `forge-iam-symbol.svg`，由 `packages/forge-iam/test/package-shape.test.mjs` 校验 |
+| 品牌资产套件（河洛苍螭，方案 B） | [branding/cyber-long/index.html](<assets/branding/cyber-long/index.html>) | [品牌与外观详细设计](<design/plugins/forge-brand.md>) | 现存的唯一预置品牌资产：主标、11 个组件标识与多分辨率切图，配 `manifest.json` 校验清单与 `usage.txt` 使用规则；状态为建议稿（代拟），方案 B 由用户选定，正式审核与批准待定；组件标识只描述职责，不表示对应模块已实现、已部署或已批准；`packages/forge-iam/icon.svg` 逐字节取自其中 `forge-iam-symbol.svg`，由 `packages/forge-iam/test/package-shape.test.mjs` 校验 |
 
 ## 2. 维护规则
 
