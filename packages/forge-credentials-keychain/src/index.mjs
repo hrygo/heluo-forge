@@ -1,10 +1,12 @@
 import { createFileBackend, createPlatformBackend } from './backend.mjs';
+import { createSecurityCliBackend } from './security-cli.mjs';
 import { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 
 export const name = 'forge-credentials-keychain';
 export const inject = [];
 
 export { createFileBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, KeychainBackendError } from './backend.mjs';
+export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
 export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 
 const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
@@ -66,6 +68,8 @@ export function validateConfig(input = {}) {
     accountPrefix: 'iam',
     allowEphemeral: false,
     allowInsecureFile: false,
+    allowUnvettedPlatformAdapter: false,
+    platformAdapter: undefined,
     filePath: '',
     backend: undefined,
   };
@@ -100,6 +104,22 @@ export function validateConfig(input = {}) {
       issues.push({ path: ['allowEphemeral'], message: 'allowEphemeral must be a boolean' });
     } else {
       value.allowEphemeral = input.allowEphemeral;
+    }
+  }
+
+  if (input.allowUnvettedPlatformAdapter !== undefined && input.allowUnvettedPlatformAdapter !== null) {
+    if (typeof input.allowUnvettedPlatformAdapter !== 'boolean') {
+      issues.push({ path: ['allowUnvettedPlatformAdapter'], message: 'allowUnvettedPlatformAdapter must be a boolean' });
+    } else {
+      value.allowUnvettedPlatformAdapter = input.allowUnvettedPlatformAdapter;
+    }
+  }
+
+  if (input.platformAdapter !== undefined && input.platformAdapter !== null) {
+    if (input.platformAdapter !== 'security-cli') {
+      issues.push({ path: ['platformAdapter'], message: "platformAdapter must be 'security-cli' (only unvetted spike adapter)" });
+    } else {
+      value.platformAdapter = input.platformAdapter;
     }
   }
 
@@ -152,8 +172,18 @@ export function apply(ctx, rawConfig = {}) {
     );
   }
 
+  if (result.value.platformAdapter === 'security-cli' && result.value.allowUnvettedPlatformAdapter !== true) {
+    throw new KeychainProviderError(
+      'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
+      'platformAdapter=security-cli is a non-production spike adapter; set allowUnvettedPlatformAdapter=true only for local experiments',
+    );
+  }
   const backend = result.value.backend
-    ?? (result.value.filePath ? createFileBackend({ path: result.value.filePath }) : createPlatformBackend());
+    ?? (result.value.platformAdapter === 'security-cli'
+      ? createSecurityCliBackend({ service: result.value.service })
+      : result.value.filePath
+        ? createFileBackend({ path: result.value.filePath })
+        : createPlatformBackend());
   if (backend.available === false) {
     throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', backend.reason ?? 'keychain backend is unavailable');
   }
@@ -161,6 +191,12 @@ export function apply(ctx, rawConfig = {}) {
     throw new KeychainProviderError(
       'KEYCHAIN_EPHEMERAL_REFUSED',
       'ephemeral backend requires allowEphemeral=true; no plaintext fallback is performed',
+    );
+  }
+  if (backend.unvetted === true && result.value.allowUnvettedPlatformAdapter !== true) {
+    throw new KeychainProviderError(
+      'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
+      'an unvetted platform adapter requires allowUnvettedPlatformAdapter=true; production must use a reviewed OS keychain adapter',
     );
   }
   if (backend.requiresExplicitOptIn === true && result.value.allowInsecureFile !== true) {

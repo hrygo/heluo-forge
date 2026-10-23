@@ -1,6 +1,6 @@
 # @heluo/forge-credentials-keychain
 
-状态：可用（开发骨架；未接 OS keychain；本地 0600 file backend 仅显式开发/试点）。
+状态：可用（开发骨架；已用 macOS Security CLI 在真实系统钥匙串上跑通 backend 契约与失败语义，该适配器**非生产**且需显式 opt-in；Windows/UOS/麒麟适配器与本地 0600 file backend 仅显式开发/试点）。
 
 一句话：`ctx.credentials` 的 keychain provider 骨架。提供 backend 契约、内存/不可用/显式 0600 file backend、记录/引用读写与进程内单键锁；Windows DPAPI/凭据管理器与麒麟 libsecret/keyring 适配尚未实现。
 
@@ -9,7 +9,7 @@
 | 项 | 状态 |
 |---|---|
 | 形态 | 替换 `ctx.credentials` 的 provider 插件 |
-| backend | 内存、不可用、显式 0600 file（含跨进程事务锁）；OS adapter 待实现 |
+| backend | 内存、不可用、显式 0600 file（含跨进程事务锁）、macOS Security CLI spike（`allowUnvettedPlatformAdapter: true` 才可用）；生产 OS adapter 待实现 |
 | provider | `resolve / describe / set / unset / readRecord / describeRecord / listRecords / modifyRecord / deleteRecord` |
 | 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed，不自动回收；OS backend 未实现 |
 | 记录 | `api-key` / `grant` JSON；损坏记录显式报错，不静默当作空 |
@@ -24,7 +24,10 @@
 - `createPlatformBackend()` 当前固定返回不可用；平台 adapter 未实现时 `apply` 直接失败。
 - `createMemoryBackend()` 只用于测试/开发，默认拒绝，需 `allowEphemeral: true`。
 - `createFileBackend({ path })` 是显式 0600 明文 fallback，默认拒绝，需 `allowInsecureFile: true`；文件权限在 POSIX 上校验为 `0600`。
-- 生产必须使用 Windows DPAPI/凭据管理器或麒麟 libsecret/keyring 的审核实现；file backend 不是生产方案。
+- `createSecurityCliBackend()` 是 macOS Security CLI 的**验证用**适配器：口令经 stdin 双次输入写入、不进 argv；`list()` 直接报 `KEYCHAIN_LIST_UNSUPPORTED`（不把"读不到"伪装成"没有记录"）；`secretTransport: 'argv'` 需显式 `allowArgvSecret: true`。
+- 组合层启用该适配器还要 `allowUnvettedPlatformAdapter: true`，否则挂载即 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`。
+- 实测（2026-10-24，darwin-arm64）：未命中条目退出码 44；`add-generic-password -U` 覆盖同名条目；删除幂等；spike 过程无明文文件、测试条目已清理。复跑：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过）。
+- 生产必须使用 Windows DPAPI/凭据管理器或麒麟 libsecret/keyring 的审核实现；file backend 与 macOS spike 适配器都不是生产方案，`@napi-rs/keyring` 的目标平台产物仍待核验。
 
 ## 不可用于生产
 
