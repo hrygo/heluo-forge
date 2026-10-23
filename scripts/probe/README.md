@@ -35,6 +35,10 @@ node scripts/probe/run-host-probe.mjs
 | `gate-unregistered-action-denied` | 映射到未登记动作的工具被拒绝 |
 | `gate-missing-target-denied` | 目标缺失被拒绝 |
 | `gate-self-reported-readonly-ignored` | 工具自报 `readOnly`/`mutating` 不改变判定 |
+| `protected-root-resolution` | 宿主进程里 `DSH_HOME` 是否可用、宿主 home 解析器能否在插件内导入（只记事实，不记字面路径） |
+| `gate-protected-path-denied` | 受保护根内的直接路径被拒绝，工具体零调用 |
+| `gate-protected-path-alias-denied` | 相对穿越与 symlink 别名同样被拒绝 |
+| `gate-path-outside-root-allowed` | 受保护根之外的路径不受影响 |
 
 ## 边界
 

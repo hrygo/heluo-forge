@@ -1,23 +1,42 @@
 /**
- * `@heluo/forge-policy`：受控动作目录与 command/tool 统一门禁。
+ * `@heluo/forge-policy`：受控动作目录、command/tool 统一门禁、受保护路径与 C3 外发确认。
  *
  * 挂载时编译目录并注册 guard 与 `tools/pre-execute` 监听器；目录无效、策略服务
  * 已被占用或宿主缺少必要 seam 时拒绝挂载（fail closed），不做"降级为只读"。
  * 业务工具插件对该服务声明硬依赖，因此策略不可用时它们的入口根本不存在。
  */
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 import { createGate } from './gate.mjs';
+import { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
+import { matchProtected, resolveProtectedRoots } from './paths.mjs';
 
 export const name = 'forge-policy';
 export const inject = ['tools'];
 
 export { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 export { createGate } from './gate.mjs';
+export { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
+export { matchProtected, resolveProtectedRoots } from './paths.mjs';
 
 const SERVICE_KEY = 'policy';
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * 宿主自有解析器（`@deepseek-ai/dsh-home-paths`）在插件内不可导入（实测），
+ * 因此按宿主契约使用环境变量，并在 `$DSH_HOME` 缺席时回落到宿主默认的 `~/.dsh`。
+ */
+function defaultProtectedPaths() {
+  return ['$DSH_HOME/**'];
+}
+
+function defaultTemplateValues() {
+  return { DSH_HOME: join(homedir(), '.dsh') };
 }
 
 /**
@@ -44,12 +63,20 @@ export function validateConfig(input = {}) {
   if (input.onDecision !== undefined && typeof input.onDecision !== 'function') {
     issues.push('onDecision must be a function');
   }
+  if (input.protectedPaths !== undefined && !Array.isArray(input.protectedPaths)) {
+    issues.push('protectedPaths must be an array of protected roots');
+  }
+  if (input.env !== undefined && !isPlainObject(input.env)) {
+    issues.push('env must be an object when provided');
+  }
   if (issues.length > 0) return { issues };
   return {
     value: {
       catalog,
       tools: input.tools ?? {},
       categories: input.categories ?? {},
+      protectedPaths: input.protectedPaths ?? defaultProtectedPaths(),
+      env: input.env,
       onDecision: input.onDecision,
     },
   };
@@ -149,10 +176,13 @@ export function apply(ctx, rawConfig = {}) {
 
   const config = result.value;
   const catalog = compileCatalog(config.catalog);
+  const env = config.env ?? { ...defaultTemplateValues(), ...process.env };
+  const protectedRoots = resolveProtectedRoots(config.protectedPaths, env);
   const gate = createGate({
     catalog,
     tools: config.tools,
     categories: config.categories,
+    protectedRoots,
     onDecision: config.onDecision,
   });
 
@@ -174,6 +204,13 @@ export function apply(ctx, rawConfig = {}) {
     actions: () => [...catalog.keys()],
     decide: (request) => decideAction({ catalog, ...request }),
     authorize: (toolName, request) => gate.check(toolName, request),
+    protectedPaths: () => protectedRoots.map((entry) => entry.raw),
+    checkPath: (candidate) => matchProtected(candidate, protectedRoots),
+    decideEgress,
+    confirmationScope,
+    renderEgressScope,
+    digestContent,
+    assertNoCanary,
     registerCommand: (commandCtx, definition) => registerCommand(commandCtx, service, definition),
   });
   const disposeProvide = ctx.provide(SERVICE_KEY, service);

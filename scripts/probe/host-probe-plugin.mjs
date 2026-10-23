@@ -24,7 +24,17 @@ function probeTool(toolName, body) {
   return {
     name: toolName,
     description: `probe tool ${toolName}`,
-    parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string' },
+        path: { type: 'string' },
+        readOnly: { type: 'boolean' },
+        mutating: { type: 'boolean' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
     // `register` requires output { schema, render }: the body value is validated
     // against the schema, and `render` projects it into the result `content`.
     output: {
@@ -224,6 +234,35 @@ export function apply(ctx) {
 
     // 记录本轮无法跑通的一项：子 Agent 限制是否继承需要真实 agent 会话，
     // 而探针所用的 sdk/headless profile 不含 agent-loop 与 subagent 插件。
+    await step('protected-root-resolution', async () => {
+      const envFacts = {
+        DSH_HOME: process.env.DSH_HOME !== undefined,
+        DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME !== undefined,
+        DSH_PROFILE_DIR: process.env.DSH_PROFILE_DIR !== undefined,
+      };
+      let resolver;
+      try {
+        const mod = await import('@deepseek-ai/dsh-home-paths');
+        resolver = {
+          importable: true,
+          dshHome: typeof mod.dshHome === 'function',
+          agentsHome: typeof mod.agentsHome === 'function',
+          display: typeof mod.dshHomeDisplay === 'function',
+        };
+      } catch (error) {
+        resolver = { importable: false, error: String(error?.message ?? error).slice(0, 120) };
+      }
+      const resolvable = envFacts.DSH_HOME === true || resolver.dshHome === true;
+      return {
+        ok: resolvable,
+        detail: {
+          envFacts,
+          resolver,
+          note: '只记录可用性与布尔事实，不记录 home 字面路径',
+        },
+      };
+    });
+
     // 门禁集成：当 forge-policy 与本插件同进程挂载时，用合成查询验证
     // "登记且范围内可执行、未登记/未开放/错目标一律拒绝且副作用为零"。
     if (ctx.get('policy') !== undefined) {
@@ -283,6 +322,58 @@ export function apply(ctx) {
         return {
           ok: result.isError === true && gateCalls.write === 0,
           detail: { result, bodyCalls: gateCalls.write, note: '工具自报 readOnly/mutating 未改变判定' },
+        };
+      });
+
+      const paths = (() => {
+        try {
+          return JSON.parse(process.env.DSH_HOST_PROBE_PATHS ?? '{}');
+        } catch {
+          return {};
+        }
+      })();
+      let pathCalls = 0;
+      gateDisposers.push(
+        ctx.tools.register(
+          probeTool('probe_gate_path', () => {
+            pathCalls += 1;
+            return okValue('probe_gate_path');
+          }),
+        ),
+      );
+
+      await step('gate-protected-path-denied', async () => {
+        const result = await dispatch('probe_gate_path', { target: 'file', path: `${paths.protectedDir}/credentials.env` });
+        return {
+          ok: result.isError === true && pathCalls === 0 && /protected path/.test(result.text),
+          detail: { result, bodyCalls: pathCalls, note: '直接命中受保护根内的路径' },
+        };
+      });
+
+      await step('gate-protected-path-alias-denied', async () => {
+        const traversal = await dispatch('probe_gate_path', {
+          target: 'file',
+          path: `${paths.protectedDir}/../protected/credentials.env`,
+        });
+        const symlink = paths.aliasReady === true
+          ? await dispatch('probe_gate_path', { target: 'file', path: `${paths.aliasLink}/credentials.env` })
+          : { isError: true, text: 'symlink unavailable on this host' };
+        return {
+          ok:
+            traversal.isError === true &&
+            symlink.isError === true &&
+            pathCalls === 0 &&
+            /protected path/.test(traversal.text) &&
+            /protected path/.test(symlink.text),
+          detail: { traversal, symlink, bodyCalls: pathCalls, aliasReady: paths.aliasReady === true },
+        };
+      });
+
+      await step('gate-path-outside-root-allowed', async () => {
+        const result = await dispatch('probe_gate_path', { target: 'file', path: `${dir}/notes.md` });
+        return {
+          ok: result.isError !== true && pathCalls === 1,
+          detail: { result, bodyCalls: pathCalls, note: '受保护根之外不受影响' },
         };
       });
 

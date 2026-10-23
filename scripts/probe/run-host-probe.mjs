@@ -9,7 +9,7 @@
  * 退出码：0 全部通过；1 有失败项；2 探针未产出结果或环境不具备。
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -30,10 +30,21 @@ const dir = mkdtempSync(join(tmpdir(), 'forge-host-probe-'));
 const out = join(dir, 'probe-raw.json');
 const patch = join(dir, 'probe.patch.yml');
 const policyPackage = resolve(here, '../../packages/forge-policy/src/index.mjs');
+const protectedDir = resolve(dir, 'protected');
+const aliasLink = resolve(dir, 'alias');
+mkdirSync(protectedDir, { recursive: true });
+writeFileSync(resolve(protectedDir, 'credentials.env'), 'probe-canary-value\n');
+let aliasReady = true;
+try {
+  symlinkSync(protectedDir, aliasLink, 'dir');
+} catch {
+  aliasReady = false;
+}
 const gatewayCatalog = [
   "{ action: 'probe.read', kind: 'read', target: 'probe-target', enabled: true }",
   "{ action: 'probe.write', kind: 'write', target: 'probe-target' }",
   "{ action: 'probe.confirm', kind: 'confirm', target: 'probe-target', enabled: true }",
+  "{ action: 'probe.fs.read', kind: 'read', target: 'file', enabled: true, path: 'path' }",
 ];
 writeFileSync(
   patch,
@@ -44,7 +55,10 @@ writeFileSync(
     '      config:',
     '        catalog:',
     ...gatewayCatalog.map((entry) => `          - ${entry}`),
+    '        protectedPaths:',
+    `          - '${protectedDir}/**'`,
     '        tools:',
+    "          probe_gate_path: 'probe.fs.read'",
     "          probe_gate_read: 'probe.read'",
     "          probe_gate_write: 'probe.write'",
     "          probe_gate_unknown: 'probe.unknown'",
@@ -66,6 +80,7 @@ const run = spawnSync(dsh, ['--profile', profile, '--patch', patch], {
   timeout: 180_000,
   env: {
     ...process.env,
+    DSH_HOST_PROBE_PATHS: JSON.stringify({ protectedDir, aliasLink, aliasReady }),
     DSH_HOST_PROBE_DIR: dir,
     DSH_HOST_PROBE_OUT: out,
     DSH_HOST_PROBE_HARNESS: harness,

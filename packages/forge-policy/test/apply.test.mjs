@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { apply, PolicyCatalogError } from '../src/index.mjs';
@@ -165,4 +168,73 @@ test('a host without the guard seam refuses to mount', () => {
     () => apply({ get: () => undefined, provide: () => () => {}, effect: () => () => {}, tools: {} }, baseConfig),
     (error) => error.code === 'POLICY_HOST_UNAVAILABLE',
   );
+});
+
+const pathBase = mkdtempSync(join(tmpdir(), 'forge-policy-gate-'));
+const protectedDir = join(pathBase, 'secrets');
+const openDir = join(pathBase, 'workspace');
+mkdirSync(protectedDir, { recursive: true });
+mkdirSync(openDir, { recursive: true });
+writeFileSync(join(protectedDir, 'credentials.env'), 'canary');
+writeFileSync(join(openDir, 'notes.md'), 'ok');
+symlinkSync(protectedDir, join(pathBase, 'shortcut'), 'dir');
+
+const pathConfig = {
+  catalog: [
+    { action: 'fs.read', kind: 'read', target: 'file', enabled: true, path: 'path' },
+    { action: 'fs.write', kind: 'confirm', target: 'file', enabled: true, path: 'path' },
+  ],
+  tools: { forge_fs_read: 'fs.read', forge_fs_write: 'fs.write' },
+  protectedPaths: [`${protectedDir}/**`],
+};
+
+test('direct, traversal and symlink access to a protected path is denied with zero body calls', () => {
+  const host = fakeHost();
+  apply(host.ctx, pathConfig);
+  const guard = host.guards[0];
+  const body = (path) => {
+    const reason = guard({ name: 'forge_fs_read', arguments: { target: 'file', path }, callId: 'c1' });
+    return reason;
+  };
+  assert.match(String(body(join(protectedDir, 'credentials.env'))), /protected path/);
+  assert.match(String(body(join(openDir, '..', 'secrets', 'credentials.env'))), /protected path/);
+  assert.match(String(body(join(pathBase, 'shortcut', 'credentials.env'))), /protected path/);
+  assert.match(String(body(join(protectedDir, 'not-created-yet'))), /protected path/);
+  assert.equal(body(join(openDir, 'notes.md')), undefined, 'a path outside the roots passes');
+  assert.match(String(body('relative/notes.md')), /cannot be verified/);
+  assert.match(String(body(undefined)), /cannot be verified/);
+});
+
+test('a granted confirmation cannot flip a protected-path denial', async () => {
+  const approval = { async request() { return 'allowed-once'; } };
+  const host = fakeHost({ approval });
+  apply(host.ctx, pathConfig);
+  const guard = host.guards[0];
+  const preExecute = host.listeners.get('tools/pre-execute');
+  const exec = {
+    name: 'forge_fs_write',
+    arguments: { target: 'file', path: join(protectedDir, 'credentials.env') },
+    callId: 'c7',
+    agent: { id: 'agent-1' },
+    signal: new AbortController().signal,
+  };
+  const granted = await preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.equal(granted.kind, 'allow', 'the confirmation stage itself was satisfied');
+  assert.match(String(guard(exec)), /protected path/, 'the hard denial still holds afterwards');
+});
+
+test('path-bearing actions are closed when no protected root is configured', () => {
+  const host = fakeHost();
+  apply(host.ctx, { ...pathConfig, protectedPaths: [] });
+  const reason = host.guards[0]({ name: 'forge_fs_read', arguments: { target: 'file', path: join(openDir, 'notes.md') }, callId: 'c1' });
+  assert.match(String(reason), /no protected root is configured/);
+});
+
+test('an unresolvable protected root refuses to mount', () => {
+  const host = fakeHost();
+  assert.throws(
+    () => apply(host.ctx, { ...pathConfig, protectedPaths: ['$DSH_AGENTS_HOME/**'], env: {} }),
+    (error) => error.code === 'POLICY_PROTECTED_ROOT_UNRESOLVED',
+  );
+  assert.equal(host.guards.length, 0);
 });

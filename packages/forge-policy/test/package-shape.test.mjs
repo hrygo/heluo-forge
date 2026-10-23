@@ -21,7 +21,7 @@ test('the manifest declares the repository package contract', async () => {
 
 test('the README claims only the gate skeleton and its boundaries', async () => {
   const text = await read('README.md');
-  assert.match(text, /状态：可用（受控动作目录与统一门禁骨架/);
+  assert.match(text, /状态：可用（受控动作目录/);
   assert.match(text, /不提供 fail-open/);
   assert.doesNotMatch(text, /已联调/);
 });
