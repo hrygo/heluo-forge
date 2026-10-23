@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.8.1 |
+| 版本 | V0.8.2 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -26,7 +26,7 @@
 | 包 | 形态 | 设计文档 | 设计状态 | 主要待确认 |
 |---|---|---|---|---|
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程与网关凭据录入/清除/状态已落地；探测、Remote/watch、审计与默认模型切换未实现） | IAM 回函、OS keychain adapter、官方四行实验、真实联调、UAG 凭据探测 |
-| `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（工具管线与 guard/restrict 接口已按 live Host 契约核验；行为实验待跑） | 宿主钩子行为实验、策略与沙箱叠加顺序、审批注册与超时、`$DSH_HOME` 范围 |
+| `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（接口契约已按 live Host 核验；宿主探针 9/9：guard/pre-execute/result/命令面/审批/卸载） | 子 Agent 限制继承、策略与沙箱叠加顺序、审批注册与超时、`$DSH_HOME` 范围 |
 | `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（策略为硬依赖，无只读降级；市场不插入历史插件行） | 版本断言报错形态、`fiberPhase`、角色 preset 粒度、官方四行禁用实验、企业索引源键名 |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（目标路线待选） | 当前身份/用途、A/B 承载、应用/IP、五分钟及单授权退出、C4 等效策略与容量联调 |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |

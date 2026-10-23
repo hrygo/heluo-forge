@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.3.0 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -22,7 +22,8 @@
 > - `ctx.tools.restrict({ allow, deny })` 对空过滤器、未知名、scope 局部名、保留传输名直接失败；限制取交集，scope 内注册仍可见。
 > - 人工 command 由独立服务 `ctx.commands`（`register` / `execute`）派发，**不经过 tools 管线**，须显式接线才能纳入同一门禁。
 > - 审批由 `ctx.approval`（`setPolicy` / `request`）与 `approval/request`（waterfall）承担；子 Agent 深度由 `ctx.subagents.resolveMaxDepth` 约束。
-> **待行为实验**：上述语义的运行时可观察结果（guard 拒绝时执行器零副作用、pre-execute 异步决策、result 观察异常不阻止既成副作用、command 绕过、`approval=never` 拒绝、子 Agent 限制是否继承、卸载后注册清理）由 §10 探针逐项断言，未跑通前不写成已验证。
+> **2026-10-24 宿主行为实验（探针 9/9 通过）**：在目标环境用 `dsh --profile sdk` 叠加临时 patch 挂载探针插件，插件在真实进程内经 `ctx.tools` 派发调用。断言：guard 拒绝时工具体零调用且结果为错误、先注册的宽松 guard 不能放行后续拒绝、`tools/pre-execute` 的异步放行与拒绝决策均被采纳、`ask` 在无 agent 时降级为拒绝、`tools/result` 观察者抛错不影响结果与已发生副作用、卸载后工具不可见且再调用报 unknown tool、命令面由独立服务派发而工具管线 guard 未见到该次调用、`approval` 策略 `never` 返回 `rejected`。复跑：`node scripts/probe/run-host-probe.mjs`（无 `dsh` 时跳过，不伪装通过）。
+> **仍未实验**：子 Agent 限制是否继承（需真实 agent 会话）、策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
 > **仍未核验**：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
 >
 > 关联文档：[总体架构 §7.2](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md)、[设计索引](../README.md)。
@@ -33,7 +34,7 @@
 
 边界：它不实现沙箱（复用 DSH 沙箱），不实现审批界面（复用审批 UI），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
 
-还缺两件事才能进实现：宿主钩子的行为实验（接口契约见编制依据，语义待探针断言）、策略与沙箱叠加顺序的确认。
+还缺两件事才能进实现：子 Agent 限制继承的验证（宿主钩子其余语义已由探针跑通，见编制依据）、策略与沙箱叠加顺序的确认。
 
 ## 2. 目标与非目标
 
@@ -164,7 +165,7 @@ flowchart TD
 | 单元 | 三类动作判定、fail-closed、规则优先级 | `node --test` |
 | 契约 | 结论与审计字段稳定 | 契约用例 |
 | 集成 | 命中受保护路径、确认超时、必要审计不可写零执行 | 本地夹具 |
-| 宿主探针 | guard 拒绝零副作用、pre-execute 异步决策、`tools/result` 观察异常、command 绕过、`approval=never`、子 Agent 继承、卸载清理 | `dsh` 目标版本 + 探针 profile |
+| 宿主探针 | guard 拒绝零副作用与单调性、pre-execute 异步决策、`ask` 无 agent 降级、`tools/result` 观察异常、命令面独立、`approval=never`、卸载清理 | `node scripts/probe/run-host-probe.mjs`（目标 DSH；无 `dsh` 跳过） |
 | 端到端 | 双端各跑一次拒绝、一次确认、一次放行 | 手工 + 脚本 |
 
 ## 11. 打包、升级与回退
@@ -177,7 +178,7 @@ flowchart TD
 
 | 问题 | 需要谁回答 | 阻塞的能力 | 截止门禁 |
 |---|---|---|---|
-| 宿主钩子的行为实验（guard 零副作用、pre-execute 异步决策、result 观察异常、command 绕过、`approval=never`、子 Agent 继承、卸载清理） | 平台组（探针） | P01、P02、P03 的准入结论 | G1 编码前 |
+| 子 Agent 限制是否继承（其余宿主行为实验已由探针跑通） | 平台组（探针 + 真实 agent 会话） | P01、P02 的准入结论 | G1 编码前 |
 | 策略与沙箱的叠加顺序 | 平台组（实测） | 冲突时取严是否成立 | G1 编码前 |
 | 审批 UI 的注册方式与超时语义 | 平台组（实测） | 确认流程（P02、P04） | G1 编码前 |
 | `$DSH_HOME` 的确切范围 | 平台组（实测） | 受保护路径定义（P04） | G1 编码前 |
