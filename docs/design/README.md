@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.8.2 |
+| 版本 | V0.8.3 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -32,7 +32,7 @@
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案 | aarch64 产物、鉴权/JSON；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验 |
-| `@heluo/forge-sdd` | 最小企业指引 + 必要 CLI/CI 校验 | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案（单一规则集：本地前置校验 + CI 权威结论） | 复用校验能力、原子交付边界、产物与系统变更号联动；不固定工具数量 |
+| `@heluo/forge-sdd` | 最小企业指引 + 必要 CLI/CI 校验 | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案（单一规则集：本地前置校验 + CI 权威结论；交付清单 freeze/verify 骨架已实现） | 企业 CI 接入与权威结论、归档联动；不固定工具数量 |
 | 原生插件市场 | DSH 内置 + AIHUB 索引 | [plugins/forge-market.md](plugins/forge-market.md) | 评审稿（轻量模式） | AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；三目标安装与索引交付待验；`@heluo/forge-market` 为历史参考 |
 
 设计文档路径相对本目录；正文均已落盘，不表示对应包或市场已实现。
