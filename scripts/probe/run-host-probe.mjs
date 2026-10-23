@@ -4,12 +4,16 @@
  * 在临时目录生成一层 patch 覆盖，把探针插件挂到目标 DSH 的 sdk profile
  * （stdio JSON-RPC 应用，stdin 关闭即退出），读取探针写入的拟定结果并打印报告。
  *
+ * 关键点：sdk profile 在 stdin EOF 后开始卸载，探针跑到中途就会撞上
+ * "cannot create effect on inactive context"。因此这里用管道保持 stdin 打开，
+ * 等探针写出拟定结果后再关闭 stdin，让宿主自行退出。
+ *
  * 用法：node scripts/probe/run-host-probe.mjs
  *   环境：DSH_BIN（默认 dsh）、DSH_HOST_PROBE_PROFILE（默认 sdk）
  * 退出码：0 全部通过；1 有失败项；2 探针未产出结果或环境不具备。
  */
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -76,19 +80,48 @@ const command = `${dsh} --profile ${profile} --patch ${patch}`;
 console.log(`probe: ${harness} | node ${process.version} | ${process.platform}-${process.arch}`);
 console.log(`probe: ${command}  (cwd ${dir})`);
 
-const run = spawnSync(dsh, ['--profile', profile, '--patch', patch], {
-  cwd: dir,
-  stdio: ['ignore', 'pipe', 'pipe'],
-  encoding: 'utf8',
-  timeout: 180_000,
-  env: {
-    ...process.env,
-    DSH_HOST_PROBE_PATHS: JSON.stringify({ protectedDir, aliasLink, aliasReady }),
-    DSH_HOST_PROBE_DIR: dir,
-    DSH_HOST_PROBE_OUT: out,
-    DSH_HOST_PROBE_HARNESS: harness,
-  },
-});
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const TIMEOUT_MS = 180_000;
+
+/** 保持 stdin 打开直到探针写出结果，再让宿主退出。 */
+async function runHarness() {
+  const child = spawn(dsh, ['--profile', profile, '--patch', patch], {
+    cwd: dir,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      DSH_HOST_PROBE_PATHS: JSON.stringify({ protectedDir, aliasLink, aliasReady }),
+      DSH_HOST_PROBE_DIR: dir,
+      DSH_HOST_PROBE_OUT: out,
+      DSH_HOST_PROBE_HARNESS: harness,
+    },
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => (stdout += chunk));
+  child.stderr.on('data', (chunk) => (stderr += chunk));
+  const exited = new Promise((done) => child.on('exit', (code, signal) => done({ code, signal })));
+  let closed = false;
+  const deadline = Date.now() + TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (existsSync(out)) {
+      closed = true;
+      child.stdin.end();
+      break;
+    }
+    const raced = await Promise.race([exited.then(() => 'exited'), sleep(200).then(() => 'tick')]);
+    if (raced === 'exited') break;
+  }
+  const exit = await Promise.race([exited, sleep(10_000).then(() => undefined)]);
+  if (exit === undefined) {
+    child.kill('SIGKILL');
+    await exited;
+    return { status: null, signal: 'timeout', stdout, stderr, closed };
+  }
+  return { status: exit.code, signal: exit.signal, stdout, stderr, closed };
+}
+
+const run = await runHarness();
 
 let report;
 try {
