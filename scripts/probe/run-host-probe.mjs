@@ -34,6 +34,7 @@ const dir = mkdtempSync(join(tmpdir(), 'forge-host-probe-'));
 const out = join(dir, 'probe-raw.json');
 const patch = join(dir, 'probe.patch.yml');
 const policyPackage = resolve(here, '../../packages/forge-policy/src/index.mjs');
+const bundlePatch = resolve(here, '../../packages/forge-enterprise/cordis.patch.yml');
 const protectedDir = resolve(dir, 'protected');
 const aliasLink = resolve(dir, 'alias');
 mkdirSync(protectedDir, { recursive: true });
@@ -76,7 +77,10 @@ writeFileSync(
   ].join('\n'),
 );
 
-const command = `${dsh} --profile ${profile} --patch ${patch}`;
+// 官方行禁用来自企业组合包自身的补丁文件（不是探针里的副本），基线对照可关掉这一层。
+const disableOfficial = process.env.DSH_HOST_PROBE_DISABLE_OFFICIAL !== '0';
+const patchArgs = disableOfficial ? ['--patch', patch, '--patch', bundlePatch] : ['--patch', patch];
+const command = `${dsh} --profile ${profile} ${patchArgs.join(' ')}`;
 console.log(`probe: ${harness} | node ${process.version} | ${process.platform}-${process.arch}`);
 console.log(`probe: ${command}  (cwd ${dir})`);
 
@@ -85,7 +89,7 @@ const TIMEOUT_MS = 180_000;
 
 /** 保持 stdin 打开直到探针写出结果，再让宿主退出。 */
 async function runHarness() {
-  const child = spawn(dsh, ['--profile', profile, '--patch', patch], {
+  const child = spawn(dsh, ['--profile', profile, ...patchArgs], {
     cwd: dir,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
@@ -94,6 +98,8 @@ async function runHarness() {
       DSH_HOST_PROBE_DIR: dir,
       DSH_HOST_PROBE_OUT: out,
       DSH_HOST_PROBE_HARNESS: harness,
+      // AC6 傍路检查：即便环境里有官方 API Key，官方模型两条路也应不可用（值本身不记录）。
+      DEEPSEEK_API_KEY: 'probe-dummy-key-not-a-real-credential',
     },
   });
   let stdout = '';
@@ -123,6 +129,41 @@ async function runHarness() {
 
 const run = await runHarness();
 
+// 组合层对照：同一条 patch 的 --dump-config 结果里，profile 中存在的官方行必须落
+// `disabled: true`；profile 中不存在的 id 必须出现 Loader 的 "not found" 警告（警告 ≠ 已禁用）。
+const officialIds = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek'];
+const dumpBase = spawnSync(dsh, ['--profile', profile, '--dump-config'], { encoding: 'utf8' });
+const dumpPatched = spawnSync(dsh, ['--profile', profile, ...patchArgs, '--dump-config'], { encoding: 'utf8' });
+const baseText = String(dumpBase.stdout ?? '');
+const patchedText = String(dumpPatched.stdout ?? '');
+const patchedWarnings = String(dumpPatched.stderr ?? '');
+const entriesOf = (text) => {
+  const map = new Map();
+  let current;
+  for (const line of text.split('\n')) {
+    const matched = /^- id: (.+?)\s*$/u.exec(line);
+    if (matched !== null) {
+      current = matched[1];
+      map.set(current, []);
+      continue;
+    }
+    if (line.startsWith('#')) current = undefined;
+    else if (current !== undefined && /^\s+\S/u.test(line)) map.get(current).push(line.trim());
+  }
+  return map;
+};
+const baseEntries = entriesOf(baseText);
+const patchedEntries = entriesOf(patchedText);
+const composition = officialIds.map((id) => {
+  const present = baseEntries.has(id);
+  const disabledInPatched = (patchedEntries.get(id) ?? []).includes('disabled: true');
+  const warned = patchedWarnings.includes(`entry "${id}" not found`);
+  return { id, presentInProfile: present, disabledInPatched, warnedWhenAbsent: !present && warned };
+});
+const compositionOk = composition.every((entry) =>
+  entry.presentInProfile ? entry.disabledInPatched : entry.warnedWhenAbsent,
+);
+
 let report;
 try {
   report = JSON.parse(readFileSync(out, 'utf8'));
@@ -144,6 +185,15 @@ for (const item of report.blocked ?? []) {
   console.log(`blocked ${item.id}: ${item.reason}`);
   console.log(`     ${JSON.stringify(item.evidence)}`);
 }
+console.log('probe: 官方行禁用（组合层，--dump-config 对照）');
+for (const entry of composition) {
+  const satisfied = entry.presentInProfile ? entry.disabledInPatched : entry.warnedWhenAbsent;
+  const state = entry.presentInProfile
+    ? `disabled: true ${entry.disabledInPatched ? '已落地' : '未落地'}`
+    : `profile 中不存在，警告 ${entry.warnedWhenAbsent ? '已出现' : '缺失'}`;
+  console.log(`${satisfied ? 'ok  ' : 'FAIL'} ${entry.id}: ${state}`);
+}
+console.log(`probe: composition ${compositionOk ? 'ok' : 'FAIL'}`);
 console.log(`probe: ${report.passed}/${report.checks?.length ?? 0} checks passed, ${report.blocked?.length ?? 0} blocked${report.crashed ? ` (crashed: ${report.crashed})` : ''}`);
 console.log(`probe: evidence kept at ${out}`);
-process.exit(report.failed === 0 && report.crashed === undefined ? 0 : 1);
+process.exit(report.failed === 0 && report.crashed === undefined && compositionOk ? 0 : 1);

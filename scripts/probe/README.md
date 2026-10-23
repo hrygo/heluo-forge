@@ -49,13 +49,29 @@ node scripts/probe/run-host-probe.mjs
 | `gate-protected-path-alias-denied` | 相对穿越与 symlink 别名同样被拒绝 |
 | `gate-path-outside-root-allowed` | 受保护根之外的路径不受影响 |
 
+## 组合层对照（官方四行禁用，#13 本地区块）
+
+驱动在探针跑完后，用**同一条 patch 栈**再跑一次 `--dump-config`，与不带企业补丁层的基线逐行对照，
+逐行给出"profile 中存在的行已落 `disabled: true`"或"profile 中不存在的行出现了 Loader 的
+`patch: entry "<id>" not found` 警告"：
+
+```sh
+node scripts/probe/run-host-probe.mjs                                 # 应用 packages/forge-enterprise/cordis.patch.yml
+DSH_HOST_PROBE_DISABLE_OFFICIAL=0 node scripts/probe/run-host-probe.mjs  # 负向对照：应为 composition FAIL、退出码 1
+```
+
+- 禁用层来自企业组合包自身的补丁文件，不是探针里的副本；探针只把它当作第二个 `--patch` 层挂上。
+- **运行时模型面未验**：探针 profile 的 `llm` 提供方在禁用前后都是 0 个（基线对照同样为 0），
+  因此"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"只按 `blocked` 记录，不用 0 个提供方冒充已证明。
+
 ## 边界
 
 - 只证明**宿主钩子语义**。企业侧证据（真实 IAM、真实 Gitee/DevOps 权限、
   受控写批准）不在本探针范围，也不能用它替代。
 - **已实测**：真实 agent 会话可在 `sdk` profile 创建（`agents.create({sessionId, meta, setup})`），
   且作用域限制只落在该 agent 视图（见 `agent-scoped-restriction-is-per-scope`）。
-- **未跑通（报告里单列 `blocked`）**：**子** Agent 是否继承父作用域限制，需要一次真实委派
+- **未跑通（报告里单列 `blocked`）**：官方行的**运行时**模型面（本 profile 无 LLM 提供方，见上），
+  以及**子** Agent 是否继承父作用域限制，后者需要一次真实委派
   （会触发模型调用），当前探针环境没有可用模型；已知的子 Agent provider 为 `spawn`
   （`inheritsParentContext: false`）与 `fork`（`true`），这是声明事实，不等于实测继承行为。
 - 尚未覆盖：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 确切范围。
