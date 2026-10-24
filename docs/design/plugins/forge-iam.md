@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.2 |
+| 版本 | V1.0.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -557,7 +557,21 @@ flowchart TD
 | 撤销失败 | 撤销端点 503 时本地退出仍完成（`signed-out`），同时 `view().error` 保留 `IAM_REVOCATION_FAILED` 归因 | AC5 |
 | 失败闭合 | 六条路径（IAM 不可达、JWKS 无签名 key、token 端点 403、429、写盘失败、回调源不可用）均落到非 `ready`、`principal` 为空、无 grant 记录 | AC7 |
 
-边界：全部用例跑在仿 IAM 与内存凭据上，负面输入由脚本注入；不构成真实 IdP、系统浏览器、keychain 或双端实机证据。授权码重放的服务端一次性由 IdP 保证，本组只证明本模块自己不复用已被消费的 attempt。官方行禁用不影响本矩阵（用例直接构造 service，不经 patch 层）。
+边界：全部用例跑在仿 IAM 与内存凭据上，负面输入由脚本注入；不构成真实 IdP、系统浏览器、keychain 或双端实机证据。
+
+### 10.3 2026-10-24 双进程刷新（#13 AC3 / 计划 P0-4）
+
+新增 `packages/forge-iam/test/dual-process-refresh.test.mjs`（4 例）：两个**真实子进程**共享一个"JSON 文件 + 目录排它锁"的凭据存储替身，各自 `hydrate()` 后调用 `resolveToken()`，断言落在"IdP 看到几次刷新"和"存储最终持有什么"上，而不是进程内的 promise 复用。
+
+| 断言 | 结果 |
+|---|---|
+| 两个进程同时遇到过期的 access token：IdP 只看到 **1 次**刷新；两个进程都拿到可用 token；存储里是轮换后的新 refresh token，旧 token 在 IdP 侧已消费 | PASS |
+| 刷新响应被拖到 8 秒：进程在约 5.1 秒失败而不是挂住（`REFRESH_TIMEOUT_MS = 5000`），存储中的 grant 不被改写 | PASS |
+| IdP 已轮换但响应被丢弃：进程不报成功、也不会存下它没收到的 token；再次刷新得到 `IAM_REAUTH_REQUIRED`，记录被清除，重新登录可在同一存储上恢复 | PASS |
+| 存储文件不含授权码、verifier、nonce、attempt | PASS |
+
+边界：凭据存储是文件 + 目录锁的测试替身，**不是**真实 keychain 的跨进程事务；IdP 是本地仿服务；5 秒是模块常量而非可配置 SLA。真实 keychain（Windows 凭据管理器/UOS/麒麟）下的双进程行为、429 与断网下的重试退避仍需在目标平台实测；本轮不构成 AC9 的双端证据。
+授权码重放的服务端一次性由 IdP 保证，本组只证明本模块自己不复用已被消费的 attempt。官方行禁用不影响本矩阵（用例直接构造 service，不经 patch 层）。
 
 ## 11. 打包、升级与回退
 

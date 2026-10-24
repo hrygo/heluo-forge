@@ -21,12 +21,24 @@ function parseBody(req) {
  * authorization-code + PKCE S256, token refresh rotation, JWKS, and revocation.
  * It is a test double only; no production behavior is derived from it.
  */
-export async function startMockOidc({ clientId = 'dsh-desktop', subject = 'E1001', accessTtl = 3600 } = {}) {
+export async function startMockOidc({
+  clientId = 'dsh-desktop',
+  subject = 'E1001',
+  accessTtl = 3600,
+  // Test-only fault injection: hold the token response long enough for a client
+  // timeout, or rotate the refresh token and then drop the connection so the
+  // client never learns the new value.
+  refreshDelayMs = 0,
+  dropRefreshResponse = false,
+} = {}) {
+  // Mutable at runtime so a test can flip a fault between two worker runs.
+  const control = { refreshDelayMs, dropRefreshResponse };
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'test-key-1', use: 'sig', alg: 'RS256' };
   const codes = new Map();
   const refreshTokens = new Map();
   const revoked = new Set();
+  const counts = { discovery: 0, authorize: 0, jwks: 0, token: 0, refresh: 0, revoke: 0 };
   let accessCounter = 0;
   let issuer;
 
@@ -42,8 +54,12 @@ export async function startMockOidc({ clientId = 'dsh-desktop', subject = 'E1001
           revocation_endpoint: `${issuer}/revoke`,
         });
       }
-      if (url.pathname === '/jwks') return json(res, 200, { keys: [jwk] });
+      if (url.pathname === '/jwks') {
+        counts.jwks += 1;
+        return json(res, 200, { keys: [jwk] });
+      }
       if (url.pathname === '/authorize') {
+        counts.authorize += 1;
         const state = url.searchParams.get('state');
         const nonce = url.searchParams.get('nonce');
         const challenge = url.searchParams.get('code_challenge');
@@ -62,6 +78,7 @@ export async function startMockOidc({ clientId = 'dsh-desktop', subject = 'E1001
         return;
       }
       if (url.pathname === '/token' && req.method === 'POST') {
+        counts.token += 1;
         const form = await parseBody(req);
         if (form.get('client_id') !== clientId) return json(res, 400, { error: 'invalid_client' });
         if (form.get('grant_type') === 'authorization_code') {
@@ -91,6 +108,12 @@ export async function startMockOidc({ clientId = 'dsh-desktop', subject = 'E1001
           refreshTokens.delete(old);
           const refresh = `refresh-${randomUUID()}`;
           refreshTokens.set(refresh, { subject });
+          counts.refresh += 1;
+          if (control.refreshDelayMs > 0) await new Promise((r) => setTimeout(r, control.refreshDelayMs));
+          if (control.dropRefreshResponse) {
+            res.destroy();
+            return undefined;
+          }
           return json(res, 200, {
             access_token: `access-${++accessCounter}`,
             token_type: 'Bearer',
@@ -103,6 +126,7 @@ export async function startMockOidc({ clientId = 'dsh-desktop', subject = 'E1001
         return json(res, 400, { error: 'unsupported_grant_type' });
       }
       if (url.pathname === '/revoke' && req.method === 'POST') {
+        counts.revoke += 1;
         const form = await parseBody(req);
         const token = form.get('token');
         if (token) revoked.add(token);
@@ -147,6 +171,8 @@ export async function startMockOidc({ clientId = 'dsh-desktop', subject = 'E1001
     },
     refreshTokens,
     revoked,
+    counts,
+    control,
     async close() {
       await new Promise((resolve) => server.close(resolve));
     },
