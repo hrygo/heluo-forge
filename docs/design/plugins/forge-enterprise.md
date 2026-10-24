@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.3.1 |
+| 版本 | V1.3.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -90,22 +90,26 @@ IAM 接入与模型接入分别核验网关目标授权、双凭据承载（若 
 
 策略是硬依赖：没有 `policyRequired` 一类开关，也不存在"关闭策略后仅允许只读"的档位。策略未挂载或不可用时，依赖它的动作入口保持关闭且无可调用残留。
 
-```yaml title="组合顺序（示意）"
+```yaml title="组合顺序（示意；§5.1.2 为当前实际挂载）"
 insert:
-  - id: enterprise-iam
-    name: '@heluo/forge-iam'
+  - id: enterprise-credentials
+    name: '@heluo/forge-credentials-keychain'   # 已实现，§5.1.2 已挂
   - id: enterprise-policy
-    name: '@heluo/forge-policy'
+    name: '@heluo/forge-policy'                  # 已实现，§5.1.2 已挂
+  - id: enterprise-iam
+    name: '@heluo/forge-iam'                     # 已实现，§5.1.2 已挂
+  - id: enterprise-sdd
+    name: '@heluo/forge-sdd'                     # 已实现，§5.1.2 已挂
   - id: enterprise-gateway
-    name: '@heluo/forge-gateway'
+    name: '@heluo/forge-gateway'                 # 仅 README，不预建入口
   - id: enterprise-tools
     name: cordis:group
     group: true
     config:
       - id: enterprise-devops
-        name: '@heluo/forge-devops'
+        name: '@heluo/forge-devops'              # 仅 README，不预建入口
       - id: enterprise-gitee
-        name: '@heluo/forge-gitee'
+        name: '@heluo/forge-gitee'               # 仅 README，不预建入口
 # 市场不插入插件行：目标形态是 DSH 原生索引源 + AIHUB 托管 format-1 索引，
 # `@heluo/forge-market` 为历史参考（ADR-11／13）。企业索引源按原生索引源配置，
 # 键名以目标版本核验为准；试点档关闭市场走原生配置，不靠禁用本包某一行。
@@ -113,7 +117,7 @@ insert:
 
 ### 5.1 官方行默认禁用
 
-O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下行；不使用 `insert` 复制新行，也不覆盖成员的 `config`：
+O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下行；企业包用独立的 `insert:` 行挂载（§5.1.2），不复用被禁用的官方行 id，也不覆盖成员的 `config`：
 
 ```yaml title="默认禁用官方登录/模型（示意）"
 - id: deepseek-account
@@ -135,7 +139,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：只写"禁用官方行"，不预建指向未实现包的 `insert:` 行。
+补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行，并挂载四个已实现的企业包（`insert:` 段见 §5.1.2）；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -145,6 +149,21 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | 命中不到的行 | `dsh --profile sdk --patch <补丁> --dump-config` | `dsh: [<补丁>] patch: entry "ui-settings-account" not found`，跳过且**不算已禁用** |
 | 自动化对照 | `node scripts/probe/run-host-probe.mjs` | 报告 `composition` 段逐行给出"已落地 / 警告已出现"；去掉补丁层（`DSH_HOST_PROBE_DISABLE_OFFICIAL=0`）时该段整体 FAIL 且退出码 1（负向对照） |
 | 升级回灌 | `--dump-config` 文本喂给 `detectOfficialRowReflow()` | 未应用补丁时认出启用中的官方行（`deepseek-account, llm-deepseek-account, llm-deepseek`）→ 报回灌；应用后回灌 0 行、缺席 `ui-settings-account` 单独记录（跳过 ≠ 已禁用）。驱动段：`probe: 回灌检测 ok`。**真实 DSH 升级后的重新应用未验** |
+
+#### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
+
+`insert:` 段挂四个已实现且有清单的包：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`、`@heluo/forge-sdd`。历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、DevOps、Gitee、品牌四包仍只有 README，不预建入口。
+
+本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出，四个包以本地目录放进该 profile 的 `node_modules/@heluo/`）：
+
+| 步骤 | 命令 | 结果 |
+|---|---|---|
+| 挂载行出现 | `dsh --profile compose --patch <补丁> --dump-config` | dump 末尾出现四行：`heluo-credentials-keychain` / `heluo-policy` / `heluo-iam` / `heluo-sdd`，`name` 与包清单一致 |
+| 官方行仍禁用 | 同上 | 四行均为 `disabled: true`（`deepseek-account` 的 `disabled` 在其 `config` 之后） |
+| 确定性 | 同上跑两次 `cmp` | 两次输出逐字节相同 |
+| 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
+
+**边界**：这是**配置组合（dump）级**证据——四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。
 
 **未验**：`desktop` profile 本机不存在同名 profile，其行 id 未核验；运行时"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"需要接了官方模型行的 desktop/web 运行时——探针 profile 的 LLM 提供方在禁用前后都是 0 个（基线对照同样为 0），因此该项在探针里以 `blocked` 记录，不用"0 个提供方"冒充已证明；当前正在使用的 GUI profile 未用补丁重启（会打断会话）。**禁用实验失败即暂停 O3**，不 patch 内核。
 
