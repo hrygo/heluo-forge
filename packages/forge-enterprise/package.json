@@ -14,7 +14,8 @@
   "exports": {
     ".": "./src/index.mjs",
     "./skills": "./src/skills.mjs",
-    "./switches": "./src/switches.mjs"
+    "./switches": "./src/switches.mjs",
+    "./reflow": "./src/reflow.mjs"
   },
   "files": [
     "src",

@@ -206,9 +206,18 @@ for (const entry of composition) {
   console.log(`${satisfied ? 'ok  ' : 'FAIL'} ${entry.id}: ${state}`);
 }
 console.log(`probe: composition ${compositionOk ? 'ok' : 'FAIL'}`);
+// #13 AC8：官方行回灌检测。基线与打补丁后的 dump 文本分别喂给检测器：
+// 补丁缺失（= 升级后未重新应用）时，启用中的官方行必须被认出来。
+const { detectOfficialRowReflow, rowsFromDump } = await import('../../packages/forge-enterprise/src/reflow.mjs');
+const baseReflow = detectOfficialRowReflow({ observed: rowsFromDump(baseText) });
+const patchedReflow = detectOfficialRowReflow({ observed: rowsFromDump(patchedText) });
+const reflowOk = baseReflow.ok === false && baseReflow.reflowed.length > 0 && patchedReflow.ok === true;
+console.log(
+  `probe: 回灌检测 ${reflowOk ? 'ok' : 'FAIL'}（未应用补丁时认出启用中的官方行 ${baseReflow.reflowed.join(', ') || '无'}；应用后回灌 ${patchedReflow.reflowed.length} 行，缺席 ${patchedReflow.absent.join(', ') || '无'}）`,
+);
 console.log(
   `probe: 行级独立性 ${independenceOk ? 'ok' : 'FAIL'}（命中 ${matchedIds.length} 行，补丁新增 ${addedRows.length} 行，被意外改动的既有行：${unexpectedRows.join(', ') || '无'}）`,
 );
 console.log(`probe: ${report.passed}/${report.checks?.length ?? 0} checks passed, ${report.blocked?.length ?? 0} blocked${report.crashed ? ` (crashed: ${report.crashed})` : ''}`);
 console.log(`probe: evidence kept at ${out}`);
-process.exit(report.failed === 0 && report.crashed === undefined && compositionOk && independenceOk ? 0 : 1);
+process.exit(report.failed === 0 && report.crashed === undefined && compositionOk && independenceOk && reflowOk ? 0 : 1);

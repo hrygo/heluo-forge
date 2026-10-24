@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.7.0 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -385,6 +385,20 @@ flowchart TD
 **本机实测（2026-10-24，DSH 0.2.1-rc.2，darwin-arm64）**：宿主 `agentDefaultModel.currentSelection()` 返回 `{provider: "deepseek-official", model: "deepseek-flash"}`（字段就是 provider/model），而同进程 `llm.listProviders()` 为 **0 个**——即官方行禁用后，默认选择仍停留在官方模型上，这正是决策表里"当前指向已禁用官方模型"的真实状态，不是假设。把该实测状态喂给门禁：拒绝 `not-signed-in`（并注明官方 API Key 被忽略）。同一探针里用合成输入验证了切换分支：`signedIn + gatewayCredential=present + enterprise=enterprise-probe` 且当前选择为 `deepseek/deepseek-chat` 时返回 `selection-disabled-switched` 并给出 `switchTo`。
 
 **未验**：`saveSelection` 的写入接线（探针只读，未写设置）；"登录后企业模型可用"的正向路径需要企业网关与企业凭据；官方旧默认模型的迁移/清理策略仍未定（见 §12）。
+
+### 7.2.1 禁用 IAM 插件与独占冲突的实测（#13 AC8 / AC1，2026-10-24）
+
+探针 `iam-absent-and-disabled-fail-closed`（`dsh 0.2.1-rc.2`，darwin-arm64，node v26.11.1，profile `sdk`）在**真实宿主进程**里做三件事，探针总况 28/28 通过、2 blocked：
+
+| 步骤 | 机制 | 实测结果 |
+|---|---|---|
+| IAM 缺席 | 探针进程内 `ctx.get('iam')` 不存在 | 门禁 `not-signed-in` → 企业调用**拒绝**（无 break-glass） |
+| 真实挂载 | `ctx.plugin(forge-iam apply, {})` 挂真实插件（无 discoveryUrl，不发起网络） | 服务注册成功、`getView().state === 'unconfigured'`，门禁仍拒绝 |
+| **禁用（dispose）** | `fiber.dispose()` 卸载同一插件 | `ctx.get('iam')` 再次消失，状态回到"缺席即拒绝"——**禁用 IAM 插件后企业调用 fail closed** |
+| 独占冲突 | 子作用域夹具提供 `deepseekAccount`，再挂真实 IAM 插件（错误注入；机制是真实的） | 真实状态机进入 `error`（**不 ready**），`checkExclusive` 返回 `exclusive-violation` |
+| 当前 profile | 对 live ctx 直接调用 `checkExclusive(ctx, {requireExclusive: true})` | `ok`——`sdk` profile 没有官方账号服务；冲突路径由上一行的注入证明 |
+
+以上只覆盖 Host 侧调用闭合；`DEEPSEEK_API_KEY` 旁路与"官方模型不可选"的运行时面仍受探针 profile 无官方模型行限制，保持 blocked（见 [forge-enterprise §5.1.1](forge-enterprise.md#511-禁用实验本机实测-2026-10-24)）。
 
 ### 7.3 刷新
 
