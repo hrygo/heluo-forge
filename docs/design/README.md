@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.10.3 |
+| 版本 | V0.10.4 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -60,7 +60,7 @@
 | [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；8 个源文件 | `node --test packages/forge-policy/test/` 94 例通过；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。模型门禁探针（`scripts/probe/model-guard-probe.mjs`）已实测**模型自决调用不会绕开门禁**：`unregistered-action`/`action-disabled`/`target-required` 三种模式各以会话记录中的 `tool/call`+`tool/result` 为据、副作用为零，并以不挂策略的正向对照证明模型确实会调用；同时暴露目录只认调用参数 `target`、真实工具（`bash` 的 `command`、`fs` 的 `path`）无法放行的缺口（见设计 §9.2.2）。沙箱叠加顺序探针（`scripts/probe/sandbox-order-probe.mjs`）已实测**策略门禁先于沙箱执行器判定**（策略拒绝归因不带沙箱信号、目标在沙箱允许区内也不产生副作用；越界写由操作系统级拒绝），见设计 §9.2.3。委托路径面（`delegate` 模式：父模型调用 `subagent`、子 Agent 的 9 次 bash 调用全部被拦、零副作用）亦已实测，**委托不能绕开门禁**。**未测**：企业环境与双端实机 |
 | [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业组合 bundle：官方四行禁用补丁、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、角色配置恢复；4 个源文件 | `node --test packages/forge-enterprise/test/` 25 例通过；真机安装/升级/回滚/卸载与残留、四层补丁层序与 `--from-default-profile` 已实测（任务 `20261024T023419Z-dsh-install-c8c2`、`20261024T025338Z-dsh-profile-replace-eb4e`）。四行禁用后的**组合层完整性**已实测（`scripts/probe/four-row-blanking-probe.mjs`：`web` 上四行均落 `disabled: true`，基线 58 个界面/设置/模型选择相关行全部保留且未禁用、无激活告警；设计 §5.2.1）。**未验**：界面功能（设置页/模型选择真的可用）与角色 preset 粒度；`desktop` profile 在本机不可 dump（应用独占管理），按 NOT RUN 记账 |
 | [forge-sdd](../../packages/forge-sdd/README.md) | SDD 规则集与本地前置校验：规则版本、结果归因、与 CI 同一规则集；4 个源文件 | `node --test packages/forge-sdd/test/` 20 例通过；**未联调**企业 CI，本地结论只作前置校验、不替代 CI 权威结论 |
-| 其余四包与 DevOps MCP（forge-brand / forge-devops / forge-gateway / forge-gitee、`services/devops-mcp`） | 规划入口，无清单、源码或测试；其中 `forge-devops` 的"只读查询 + 门禁骨架"已完成**设计准入**（D4，2026-10-24，见[能力面设计 §6.1](plugins/forge-devops-lifecycle.md)），清单/源码/测试待建 | 对应设计中的测试矩阵为目标，不是执行结果 |
+| 其余四包与 DevOps MCP | `forge-devops` 的"只读查询 + 门禁骨架"**已落地**（D4，2026-10-24）：清单、只读端口与门禁骨架源码、11 例离线测试通过，**企业 CLI 联调未做**，写动作全部关闭；`forge-brand` / `forge-gateway` / `forge-gitee` 与 `services/devops-mcp` 仍为规划入口，无清单、源码或测试（准入手册见[能力面设计 §6.1](plugins/forge-devops-lifecycle.md)） | 对应设计中的测试矩阵为目标，不是执行结果 |
 
 五条跨模块冲突（policy fail-open、无 policy 降只读、审计坏是否影响执行、SDD 双路径、历史市场行）的定位与代拟结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；结论待责任方确认，确认前不按已批准引用。
 

@@ -1,0 +1,22 @@
+{
+  "name": "@heluo/forge-devops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only DevOps query skeleton with policy gating for Heluo Forge",
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./read": "./src/read.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
+}
