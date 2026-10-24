@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V0.6.0 |
+| 版本 | V0.7.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -220,6 +220,41 @@ flowchart TD
 | 挂载完成 | 档位、启用行、禁用行、版本 | 本机日志 | 30 天 |
 | 拒绝挂载 | 缺失依赖、断言失败项 | 本机日志 | 30 天 |
 | 配置覆盖 | 被覆盖的 id 与键 | 本机日志 | 30 天 |
+
+## 5.3 组合与包体闭包（E01 / #37）
+
+组合补丁只声明行与配置，不写业务逻辑；包体要能在构建内闭合。五类开关**分别控制**，写默认禁用：
+
+| 开关 | 控制 | 默认 |
+|---|---|---|
+| 只读 | 只读查询与审查入口 | 关（随策略挂载后按目录开放） |
+| 普通研发写 | 分支/文件等常规写动作 | **禁用** |
+| AI 发布 | 自动发布类动作 | **禁用** |
+| 人工 review | 需人工确认的放行 | **禁用**（分类批准前不生效） |
+| 观察 | 指标/投影类出口 | 关（可独立降级） |
+
+主/子 Agent 与 scoped 工具的角色差异由补丁层的 `disabled` 与配置表达，不用多个包复制"企业版包含什么"；可见性不等于服务端授权。
+
+**包体闭包规则**（由 `scripts/lib/bundle-rules.mjs` 接入 `checkRepo`，2026-10-24 起生效）：
+
+| 规则 | 目的 |
+|---|---|
+| 名称＝`@heluo/forge-*` 且与目录同名 | 一个包一个身份，避免副本 |
+| `engines.dsh` 必须具体、不得为 `*` | AC1 的版本不兼容拒绝有声明依据 |
+| 不得声明 install 期构建脚本（`prepare`/`install`/`postinstall`/`preinstall`） | AC4「不现场编译」 |
+| 不得依赖 DSH 内核 `@deepseek-ai/dsh` | AC4「不补未批 runtime 依赖」、不 fork |
+| `files` 非空、相对、存在 | AC4「tarball 含全部入口」 |
+| `main`/`bin`/`exports` 目标存在（支持 `*` 通配只看目录） | 入口不悬空 |
+| `@heluo/*` 依赖必须 `workspace:` 且能解析到本仓库包 | AC4「workspace 依赖构建内闭合」 |
+| 不得跨包导入源码路径（`@heluo/forge-*/src/` 或 `../…/forge-*/src/`） | AGENTS.md §4 |
+| 有 `cordis.patch.yml` 就必须列入 `files` 且声明 `dsh.bundle.patch` | AC4「patch 随包发行」 |
+| `insert:` 的 `name` 必须是本仓库已有包 | AC4/AC5「不预建虚构入口」 |
+| 除历史市场包自身外，任何补丁不得挂 `@heluo/forge-market` | AC5「不挂历史市场」 |
+| 有 `locale/en.json` 就必须同时有 `zh.json` 且 `locale` 随包发行 | AC4「en/zh 说明」 |
+
+**本机实测（2026-10-24，本仓库工作副本）**：规则接入后立即发现两个真实缺陷——`@heluo/forge-enterprise` 的补丁层次既未列入 `files`、也未声明 `dsh.bundle.patch`，即**包体不会带上禁用四行的补丁**。两项已在本轮修复（`files` 增加 `cordis.patch.yml`、新增 `dsh.bundle.patch`），其余包与新规则一致通过。证据：`node scripts/check-repo.mjs`（修复前 2 项错误 → 修复后 `repo: ok`）、`node --test tests/bundle-closure.test.mjs`。
+
+**未验**：真实 tarball 内容（`pnpm pack` 实测）、安装/升级/卸载/回退语义、五类开关的独立性实测、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
 
 ## 10. 测试矩阵
 
