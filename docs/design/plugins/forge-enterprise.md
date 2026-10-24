@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.0.0 |
+| 版本 | V1.1.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -129,7 +129,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 - `id` 以目标 profile 实际行为准；desktop 与 web 可能不同，G0 各核验一次。
 - 目标不存在时 Loader 会警告并跳过；跳过不等于已禁用，必须由 `@heluo/forge-iam` 的独占断言兜底。
 - 禁用官方 UI 后，onboarding、侧栏入口、默认模型由 IAM 包接管；本包不复制这些 UI。
-- 升级 DSH 后重新应用补丁，并跑“官方行是否回灌”用例。
+- 升级 DSH 后重新应用补丁，并跑“官方行是否回灌”用例：检测器见 `packages/forge-enterprise/src/reflow.mjs`（判定依据是**实际生效配置**，不是“补丁文件还在不在”）。
 
 配置字段以本设计为准；网关字段仍见[网关契约](../../contracts/gateway-contract.md)。
 
@@ -144,7 +144,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | 应用禁用层 | `dsh --profile web --patch <补丁> --dump-config` | 与基线逐行 diff：四行各多出 `disabled: true`，并带 `patched by <补丁>` 标记 |
 | 命中不到的行 | `dsh --profile sdk --patch <补丁> --dump-config` | `dsh: [<补丁>] patch: entry "ui-settings-account" not found`，跳过且**不算已禁用** |
 | 自动化对照 | `node scripts/probe/run-host-probe.mjs` | 报告 `composition` 段逐行给出"已落地 / 警告已出现"；去掉补丁层（`DSH_HOST_PROBE_DISABLE_OFFICIAL=0`）时该段整体 FAIL 且退出码 1（负向对照） |
-| 升级回灌 | 同版本重复应用 | 结果一致；**真实 DSH 升级后的回灌未验**，升级后必须重跑上述核对 |
+| 升级回灌 | `--dump-config` 文本喂给 `detectOfficialRowReflow()` | 未应用补丁时认出启用中的官方行（`deepseek-account, llm-deepseek-account, llm-deepseek`）→ 报回灌；应用后回灌 0 行、缺席 `ui-settings-account` 单独记录（跳过 ≠ 已禁用）。驱动段：`probe: 回灌检测 ok`。**真实 DSH 升级后的重新应用未验** |
 
 **未验**：`desktop` profile 本机不存在同名 profile，其行 id 未核验；运行时"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"需要接了官方模型行的 desktop/web 运行时——探针 profile 的 LLM 提供方在禁用前后都是 0 个（基线对照同样为 0），因此该项在探针里以 `blocked` 记录，不用"0 个提供方"冒充已证明；当前正在使用的 GUI profile 未用补丁重启（会打断会话）。**禁用实验失败即暂停 O3**，不 patch 内核。
 
@@ -208,7 +208,7 @@ flowchart TD
 | 某能力行插错位置 | 启动失败 | 指出冲突行 id | 修正补丁 |
 | 官方行缺失/禁用被跳过 | 记录独占冲突，不标记企业能力可用 | 提示企业组合不完整 | 修正 row id 后重试 |
 | 禁用官方 UI 后 shell/onboarding 缺失 | 暂停 O3，提交组合层替代方案评审 | 指出缺失能力 | 评审后重试；不改内核 |
-| 升级后官方行回灌 | 重新应用禁用并告警 | 提示企业组合被恢复 | 重启/修正补丁 |
+| 升级后官方行回灌 | 重新应用禁用并告警（`detectOfficialRowReflow()` 给出逐行结论） | 提示企业组合被恢复 | 重启/修正补丁 |
 | 配置字段被整体替换 | 覆盖后行为异常 | 指出被替换的配置键 | 修正后重试 |
 
 最后一行是本组合层最容易踩的坑：`config` 不深合并，覆盖时必须重述全部字段。
@@ -268,7 +268,14 @@ flowchart TD
 
 **本机实测（2026-10-24，本仓库工作副本）**：规则接入后立即发现三个真实缺陷——① `@heluo/forge-enterprise` 的补丁层既未列入 `files`、也未声明 `dsh.bundle.patch`，即**包体不会带上禁用四行的补丁**；② 同包 `files` 缺少 `cordis.patch.yml` 的发行声明；③ `@heluo/forge-sdd` 的 `bin` 目标 `src/cli.mjs` 在仓库与 tarball 中都是 `644`（安装后 shim 无法执行）。三项已修复：`files` 增加补丁、新增 `dsh.bundle.patch`、`chmod +x src/cli.mjs`（`git` 记录 `100755`，`npm pack` 实测模式位由 `644` 变 `755`）。证据：`node scripts/check-repo.mjs`（修复前 2 项 + 修复后 1 项 → `repo: ok`）、`node scripts/check-bundle-tarballs.mjs`（6 个包、64 个文件 → `bundles: ok`）。
 
-**未验**：真实 DSH **profile 级**的安装/升级/回灌（`dsh plugin add` 到 profile 的注册与升级检测）、五类开关的独立性实测、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
+**官方行回灌检测（#13 AC8，`src/reflow.mjs`，2026-10-24）**：判定输入是实际生效配置里的行状态（`rowsFromDump()` 解析 `dsh --dump-config`），输出 `reflowed`（仍启用 = 回灌）、`absent`（profile 里不存在，Loader 警告跳过，**跳过 ≠ 已禁用**）、`disabled`；状态无法解析时按回灌处理（宁可当启用）。`requireAll` 可选把缺席行也判失败。
+
+| 证据 | 结果 |
+|---|---|
+| 离线用例 `packages/forge-enterprise/test/reflow.test.mjs`（7 项） | 四行全禁用 → 通过；重新启用 → 逐行报回灌并单列缺席；状态未知按回灌；无关行不影响；非法输入报错而非默默通过；dump 解析认得嵌套缩进与 `#` 注释边界 |
+| 宿主探针（`dsh 0.2.1-rc.2`，profile `sdk`） | 基线 dump（= 升级后未重新应用补丁的形态）：认出 3 行启用 → 报回灌；打补丁后：回灌 0 行、缺席 1 行。驱动段 `probe: 回灌检测 ok`，探针 28/28 通过、2 blocked |
+
+**未验**：真实 DSH **升级动作**本身（升完级再重新应用补丁的完整循环；本轮验证的是"升级后那种未应用状态"能被检测出来）、`dsh plugin add` 到 profile 的注册路径、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
 
 ## 10. 测试矩阵
 

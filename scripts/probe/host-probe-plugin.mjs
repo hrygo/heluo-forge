@@ -497,6 +497,82 @@ export function apply(ctx) {
       };
     });
 
+    // #13 AC8/AC1：IAM 插件缺席、挂载后未就绪、禁用（dispose）后企业调用是否 fail closed；
+    // 独占冲突用"真实机制 + 夹具服务"注入，观察真实状态机是否转 error（不 ready）。
+    const iamPlugin = await import('../../packages/forge-iam/src/index.mjs');
+    const { checkExclusive } = await import('../../packages/forge-iam/src/exclusive.mjs');
+    await step('iam-absent-and-disabled-fail-closed', async () => {
+      const request = { enterprise: { provider: 'enterprise', model: 'corp-model' }, gatewayCredential: 'present' };
+      const absent = ctx.get('iam') === undefined;
+      const absentGate = evaluateModelGate({ ...request, signedIn: false });
+      const pluginApi = typeof ctx.plugin === 'function';
+      const liveExclusive = checkExclusive(ctx, { requireExclusive: true });
+
+      let mountedState = null;
+      let mountedGate = null;
+      let disposedGone = null;
+      let conflictState = null;
+      let mountDiagnostics = null;
+      if (pluginApi) {
+        const { validateConfig } = await import('../../packages/forge-iam/src/config.mjs');
+        const configResult = validateConfig({});
+        const child = ctx.plugin(iamPlugin.apply, {});
+        await sleep(30);
+        const childCtx = child?.ctx ?? child;
+        const childService = typeof childCtx?.get === 'function' ? childCtx.get('iam') : undefined;
+        const parentService = ctx.get('iam');
+        const service = childService ?? parentService;
+        mountedState = service?.getView?.().state ?? null;
+        mountDiagnostics = {
+          configOk: !('issues' in configResult),
+          childHasIam: childService !== undefined,
+          parentHasIam: parentService !== undefined,
+          fiberError: child?.error?.message ?? childCtx?.fiber?.error?.message ?? null,
+        };
+        mountedGate = evaluateModelGate({ ...request, signedIn: mountedState === 'ready' });
+        child.dispose();
+        await sleep(30);
+        disposedGone = ctx.get('iam') === undefined && (typeof childCtx?.get === 'function' ? childCtx.get('iam') === undefined : true);
+
+        // 独占冲突注入：在子作用域里提供 deepseekAccount，再挂真实 IAM 插件看真实状态机。
+        const holder = ctx.plugin(
+          { name: 'probe-official-account-holder', apply(inner) { inner.provide('deepseekAccount', { fixture: true }); } },
+          {},
+        );
+        await sleep(20);
+        const holderCtx = holder?.ctx ?? holder;
+        const conflicting = holderCtx.plugin(iamPlugin.apply, {});
+        await sleep(30);
+        const conflictCtx = conflicting?.ctx ?? conflicting;
+        const conflictService = typeof conflictCtx?.get === 'function' ? conflictCtx.get('iam') : undefined;
+        conflictState = (conflictService ?? ctx.get('iam'))?.getView?.().state ?? null;
+        const conflictExclusive = checkExclusive(conflictCtx ?? ctx, { requireExclusive: true });
+        conflicting.dispose();
+        holder.dispose();
+        await sleep(20);
+        conflictState = { state: conflictState, check: conflictExclusive.ok ? 'ok' : conflictExclusive.reason };
+      }
+
+      const okBase = absent && absentGate.allow === false && absentGate.reason === 'not-signed-in';
+      const okLifecycle = !pluginApi || (mountedState === 'unconfigured' && mountedGate.allow === false && disposedGone === true);
+      const okConflict = !pluginApi || conflictState?.state === 'error';
+      return {
+        ok: okBase && okLifecycle && okConflict,
+        detail: {
+          pluginApi,
+          mountDiagnostics,
+          absent,
+          absentGate: absentGate.reason,
+          liveExclusive: liveExclusive.ok ? 'ok' : liveExclusive.reason,
+          mountedState,
+          mountedGate: mountedGate?.reason ?? null,
+          disposedGone,
+          conflictState,
+          note: '独占冲突用子作用域夹具服务注入真实机制；absent/mounted/disposed 均为真实插件生命周期',
+        },
+      };
+    });
+
     await step('uninstall-cleanup', async () => {
       for (const dispose of disposers) dispose();
       await sleep(0);
