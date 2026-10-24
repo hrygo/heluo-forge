@@ -12,7 +12,7 @@
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-25 |
 | 门禁 | G1 索引契约；G2 三目标安装 |
 
 > 编制依据：2026-10-21 用户决定采用 DSH 原生索引源轻量模式，由 AI 开发者平台（AIHUB）维护并托管 format-1 JSON；不再生成 `policy/evidence/current`，不设写前授权与租约。AIHUB 交付项见 [issue #12](https://github.com/hrygo/heluo-forge/issues/12)。

@@ -12,7 +12,7 @@
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-25 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：2026-10-20 核对仓库结构、`package.json`、`pnpm-workspace.yaml`、`scripts/check-*.mjs` 与 `.github/workflows/check.yml` 的实际内容；工具链实测为 Node.js 24.21.0、pnpm 11.28.5。未执行远端 CI，也未发布任何包。

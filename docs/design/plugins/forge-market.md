@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场（轻量原生索引模式） |
-| 版本 | V2.2.2 |
+| 版本 | V2.2.3 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-25 |
 | 门禁 | G1 索引接入；G2 三目标安装 |
 
 > 编制依据：2026-10-21 用户决定改用 DSH 原生「插件市场 → 索引源」，由 AI 开发者平台（AIHUB）维护并托管 format-1 索引 JSON；不再建设生成器、`current/policy/evidence`、CI 单写发布与租约。AIHUB 交付项以 [issue #12](https://github.com/hrygo/heluo-forge/issues/12) 跟踪。
@@ -337,7 +337,7 @@ packages/forge-market/
 | 项 | 正确写法 | 违反时的现象 |
 |---|---|---|
 | `cordis.patch.yml` 顶层 | 数组：`- insert: …` | 安装即报 `must be a top-level YAML array` |
-| `engines.dsh` | 覆盖运行时版本；预发布 `-rc.N` 在比较上小于基础版本，故按**基础版本**（而非 `-rc.N`）写下限 | 安装被拒，提示版本不兼容 |
+| `engines.dsh` | 覆盖运行时版本；预发布 `-rc.N` 在比较上小于基础版本，故下限不写 `-rc.N`。本包（历史参考实现）当前写 `>=0.2.0`，低于基础版本 `0.2.1`，属登记过的例外 | 安装被拒，提示版本不兼容 |
 | `inject` | 数组：`['tools']`；可选服务用 `ctx.get(name)` | 写成 `{ required, optional }` 会被当作两个服务名，插件永远 pending |
 | `Config` | `Config['~standard'].validate(config)` 的 standard-schema 对象 | 激活时报 `Cannot read properties of undefined (reading 'validate')` |
 

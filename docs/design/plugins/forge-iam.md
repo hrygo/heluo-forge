@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.7 |
+| 版本 | V1.0.8 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-23 |
+| 最后更新 | 2026-10-25 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（Host + Client 骨架；OIDC mock 流程已验，真实联调待；实现与验证见设计索引 §2.2） |
 
@@ -77,7 +77,7 @@
 
 | 依赖 | 类型 | 版本约束 | 缺失时的行为 |
 |---|---|---|---|
-| `dsh-credentials` + `dsh-credentials-local` | 包 | 随目标 DSH 提供（复核证据见本节末） | 无法读写记录；不进入 ready，明确报错 |
+| `dsh-credentials` + `dsh-credentials-local` | 包 | 随目标 DSH 提供（复核证据见本节开头） | 无法读写记录；不进入 ready，明确报错 |
 | `dsh-web-server`（`ctx.webServer`） | 包 | 随目标 DSH | 无法注册回调；登录不可用 |
 | `dsh-settings` | 包 | 随目标 DSH | 配置不可写；按只读配置启动或报错 |
 | `dsh-llm-pi-ai` | 包 | 随目标 DSH | 无模型路由；不影响登录本身 |
@@ -94,7 +94,7 @@
 |---|---|
 | 形态 | Host 服务插件 + Client UI 插件 |
 | 运行位置 | 本机 Host；Client 只做展示、触发与状态订阅 |
-| 目标 DSH 与 SDK | `0.2.1-rc.2`；接口核验日期 2026-10-21 |
+| 目标 DSH 与 SDK | 见仓库根 `.dsh-version`（接口核验版本 `0.2.1-rc.2`，2026-10-21） |
 | 使用的 seam 或服务 | `credentials`、`webServer`、`settings`、`llm-pi-ai`（消费方）、`agentDefaultModel` |
 | 不修改的核心 | 凭据服务实现、模型调用链、`webServer` 实现、官方账号包（仅组合层禁用） |
 | 登录入口 | Host 服务 `ctx.iam` + Remote 方法（Client 命名空间 `iam`）+ `watch` 状态流 |
