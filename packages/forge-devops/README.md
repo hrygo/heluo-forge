@@ -10,7 +10,7 @@
 | 衔接点 | bash 工具、企业策略门禁、凭据注入与审计（均待接口核验） |
 | 条件服务 | [services/devops-mcp](../../services/devops-mcp/README.md)；当前不建设 |
 | 详细设计 | [DESIGN-009](../../docs/design/plugins/forge-devops.md)（草案，已建立） |
-| 实现状态 | 已建立 `package.json`、只读端口、门禁骨架与四个只读工具、18 例离线测试；**企业 CLI 联调未做** |
+| 实现状态 | 已建立 `package.json`、只读端口、门禁骨架与四个只读工具、19 例离线测试；**企业 CLI 联调未做** |
 
 ## 骨架内容（已落地）
 

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-013 |
 | 文档名称 | 企业研发全流程能力面设计 |
-| 版本 | V0.3.3 |
+| 版本 | V0.3.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -172,7 +172,7 @@ Issue ↔ PR → Git 提交/合入版本 → 构建/制品/UAT 事实
 | 失败语义 | CLI 不可用、非 JSON、输出截断、exit 0 但缺必要事实、目标不存在 → 显式 `unknown`/拒绝，**不自动成功**；只读的 `retry` 为 `read_recheck`，不自动重放 |
 | 结论与凭据 | 只读结论必须带来源版本与核验时间；日志不含令牌、argv 与业务敏感原文 |
 
-**落地进展（2026-10-24）**：清单、只读端口、门禁骨架与四个只读工具已建立，18 例离线测试通过。工具参数名刻意取 `target`——策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（同期实测的目录缺口）；模型可见面**只注册读工具，没有任何写工具**，因此在该面上无从发起任何写动作。
+**落地进展（2026-10-24）**：清单、只读端口、门禁骨架与四个只读工具已建立，19 例离线测试通过（含 `inject` 声明的防回归断言）。工具参数名刻意取 `target`——策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（同期实测的目录缺口）；模型可见面**只注册读工具，没有任何写工具**，因此在该面上无从发起任何写动作。
 
 **宿主证据（2026-10-24）**：`node scripts/probe/devops-read-probe.mjs with-reader|no-reader` 把本包真的挂进宿主 profile，两种模式都通过——`with-reader`：模型自决调用 `forge_devops_issue_read` 经策略门禁到达适配器**恰好一次**（适配器日志 `{action: issue.read, target: group/repo#1}`，工具结果 `status=succeeded`、`source_revision=probe-rev-1`）；`no-reader`：无适配器时适配器日志为空、工具结果可见地报 `NO_READER`，且没有任何写工具调用。
 

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.9.12 |
+| 版本 | V0.9.13 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,7 +14,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-10-24 |
 | 门禁 | G2 |
-| 模块状态 | 规划 |
+| 模块状态 | 可用（门禁骨架；实现与验证见设计索引 §2.2） |
 
 > 编制依据：2026-10-20 对目标环境已安装 DSH 包做字符串级核验：`dsh-sandbox`、`dsh-sandbox-local`、`dsh-sandbox-policy`、`dsh-fs-sandbox`、`dsh-fs-observation-policy`、`dsh-bash-sandbox`、`dsh-pwsh-sandbox`、`dsh-sandbox-windows-acl`、`dsh-permission-presets`、`dsh-client-ui-permission-presets`、`dsh-client-ui-approval`、`dsh-tool-ask-user`、`dsh-tool-call-timeout-policy`、`dsh-spill-policy`。
 > **2026-10-24 宿主接口契约核验**（目标环境 DSH `0.2.1-rc.2`，macOS arm64；读取 live Host 的 Service/Event 契约，**不是行为实验**）：
@@ -25,8 +25,8 @@
 > **2026-10-24 宿主行为实验（探针 9/9 通过）**：在目标环境用 `dsh --profile sdk` 叠加临时 patch 挂载探针插件，插件在真实进程内经 `ctx.tools` 派发调用。断言：guard 拒绝时工具体零调用且结果为错误、先注册的宽松 guard 不能放行后续拒绝、`tools/pre-execute` 的异步放行与拒绝决策均被采纳、`ask` 在无 agent 时降级为拒绝、`tools/result` 观察者抛错不影响结果与已发生副作用、卸载后工具不可见且再调用报 unknown tool、命令面由独立服务派发而工具管线 guard 未见到该次调用、`approval` 策略 `never` 返回 `rejected`。复跑：`node scripts/probe/run-host-probe.mjs`（无 `dsh` 时跳过，不伪装通过）。
 > **2026-10-24 委派继承实验（探针 32/32 通过、1 blocked）**：在目标环境用宿主自己的 agent 工厂按 `parentAgent` + `origin=subagent` + `delegationDepth=1` 创建子 agent，并用**子作用域自己的工具管线**派发调用。实测三件事：① **作用域 guard 会约束子 Agent**——父作用域注册的 guard 在子作用域派发全局工具 `bash` 时照常拒绝（返回 guard 理由，工具体零调用）；② **父 agent 视图上的 `ctx.tools.restrict` 不继承**——父视图把 `bash` 拒绝掉后，子 agent 视图里 `bash` 仍然可见；③ 作用域内 `register` 的工具不进子 agent 视图（子作用域派发报 `unknown tool`），子作用域注册也不上浮到父视图，`dispose` 后限制与子注册都恢复。另实测委派服务路径：`subagents.startActivation({provider:'fork',…})` 接受并按 provider 建出子会话（`listChildren` 可见、`childId` 回填），子轮次因本 profile **无 LLM 提供方**以 `stopReason: error` 收束；`currentInitiator()` 只在显式边界内可读（边界外 `undefined`、`withInitiator` 内为父 agent id），宿主契约明确它只是进程内因果归属，既非存活证明也非授权。
 > **2026-10-24 候选平台只读事实（Ubuntu 24.04.5 / Linux aarch64，未做沙箱实验）**：`bwrap` 0.9.0 可用；Landlock 在活跃 LSM 列表中，`landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` 返回 ABI **8**；glibc 2.39；`node-pty` 未安装（`MODULE_NOT_FOUND`，不能据此判断 ABI 或不兼容）。这只说明 Linux aarch64 上存在可用的沙箱原语，未验证具体规则能否满足产品需求，也不改变"策略与沙箱叠加顺序仍未实验"的结论。
-> **仍未实验**：有模型提供方的环境里“模型自决调用”是否可能绕开门禁（本轮 profile 无 LLM 提供方）、策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
-> **仍未核验**：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
+> **仍未实验**：审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。有模型提供方的环境里“模型自决调用”与策略×沙箱叠加顺序已于 2026-10-24 实测（见 §9.2.2/§9.2.3）。
+> **仍未核验**：审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
 >
 > 关联文档：[总体架构 §7.2](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md)、[设计索引](../README.md)。
 
@@ -36,7 +36,7 @@
 
 边界：它不实现沙箱（复用 DSH 沙箱），不实现审批界面（复用审批 UI），只决定策略与记录结果。安全依赖缺失时**关闭而非放行**。
 
-还缺一件事才能进实现：策略与沙箱叠加顺序的确认（宿主钩子与子 Agent 继承语义已由探针跑通，见编制依据）。
+进实现前缺的是审批 UI 的注册与超时语义；宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序都已由探针跑通（见 §9.2.2/§9.2.3 与编制依据）。
 
 ## 2. 目标与非目标
 
@@ -129,7 +129,7 @@ export interface PolicyEngine {
 |---|---|
 | 业务工具（含 scoped 注册） | 注册即进管线，guard 对全局与 scoped 工具同样生效；按 `action` 判定而非工具名，别名与包装不改变结论 |
 | 人工 command | command 由独立服务派发、**不经工具管线**（探针证据），必须显式接线：未登记的 command 默认拒绝，登记 command 内的动作仍走同一 `action` 判定 |
-| 子 Agent | 实测（2026-10-24）：**作用域 guard 会继承**——父作用域 guard 在子作用域派发时照常拒绝且工具体零调用；**父 agent 视图的 `restrict` 不继承**，子视图仍看得见被父视图拒绝的工具；作用域内注册的工具不进子视图。因此约束必须落在**作用域 guard**（会继承）上，不能只靠父视图 `restrict`；有模型提供方的环境里“模型自决调用”仍未测，按“未证实即关闭”处理，不允许以委派绕过门禁 |
+| 子 Agent | 实测（2026-10-24）：**作用域 guard 会继承**——父作用域 guard 在子作用域派发时照常拒绝且工具体零调用；**父 agent 视图的 `restrict` 不继承**，子视图仍看得见被父视图拒绝的工具；作用域内注册的工具不进子视图。因此约束必须落在**作用域 guard**（会继承）上，不能只靠父视图 `restrict`；有模型提供方的环境里“模型自决调用”**已于 2026-10-24 实测不绕开门禁**（含经 `subagent` 的委托路径，见 §9.2.2/§9.3）；未获批准的动作仍一律关闭，不允许以委派绕过门禁 |
 | bash/pwsh、脚本、通用 HTTP、`run_code` | 按类别受控（`shell.exec`、`http.egress`、`code.run`）：未登记即拒绝；不向任意解释器注入业务凭据；无法可靠约束时关闭该能力，不声称覆盖 DSH 之外的全部 Shell |
 
 **失败与卸载**：业务工具插件对策略服务声明硬依赖；策略未挂载、被卸载或版本不符时工具插件不挂载，入口关闭且无可调用残留（卸载清理已由宿主探针验证）。不提供 fail-open、通用 `run(command)` 或正则黑名单式安全保证。
@@ -427,8 +427,8 @@ flowchart TD
 
 | 问题 | 需要谁回答 | 阻塞的能力 | 截止门禁 |
 |---|---|---|---|
-| 有模型提供方的环境里，子 Agent 的“模型自决调用”能否绕开作用域 guard（本轮实测：guard 会继承且拒绝生效、委派服务能建出子会话，但 profile 无 LLM 提供方，子轮次以 error 收束） | 平台组（在接了模型行的 profile 复跑 + 真实委派） | P01、P02 的完整性结论（P02 的硬拒绝已实测） | G1 编码前 |
-| 策略与沙箱的叠加顺序 | 平台组（实测） | 冲突时取严是否成立 | G1 编码前 |
+| 企业环境与双端实机下的门禁行为（本机已实测模型自决调用、委托路径与策略×沙箱叠加顺序，见 §9.2.2/§9.2.3） | 平台组（企业环境实测） | 企业侧门禁完整性结论 | G2前 |
+| 企业模型面的门禁行为（本机 oMLX 只作机制证据，不代表企业模型面） | 平台组（企业环境实测） | 企业侧完整性结论 | G2 |
 | 审批 UI 的注册方式与超时语义 | 平台组（实测） | 确认流程（P02、P04） | G1 编码前 |
 | `$DSH_HOME` 内部范围（哪些子目录含凭据、会话与指令）与 `$DSH_AGENTS_HOME` 是否在某些 profile 出现 | 平台组（实测） | 受保护路径默认集（P04） | G1 编码前 |
 | 审计是否需要转发到集中平台 | 安全团队 | `auditSink` 默认值 | G2 前 |
