@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { checkRepo } from '../scripts/lib/repo-rules.mjs';
-import { auditTarball, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
+import { auditTarball, npmExecutable, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
 import { buildValidRepo } from './check-repo.test.mjs';
 
 function write(root, path, content) {
@@ -313,4 +313,20 @@ test('pack output parsing tolerates the duplicated JSON some npm versions print'
   assert.deepEqual(parsePackOutput(`${document}\n${document}`), expected);
   assert.deepEqual(parsePackOutput(JSON.stringify({ files: [{ path: 'src/index.mjs' }] })), [{ path: 'src/index.mjs' }]);
   assert.equal(parsePackOutput('npm notice\nnot json at all\n'), null);
+});
+
+test('parsePackOutput accepts both the object (npm 12) and array (npm 11) shapes', () => {
+  const files = [{ path: 'src/index.mjs', size: 1, mode: 0o644 }];
+  const npm12 = JSON.stringify({ 'pkg': { id: 'pkg@1.0.0', files } });
+  const npm11 = JSON.stringify([{ id: 'pkg@1.0.0', files }]);
+  assert.deepEqual(parsePackOutput(npm12), files);
+  assert.deepEqual(parsePackOutput(npm11), files);
+  // notices around the payload must not defeat the scan
+  assert.deepEqual(parsePackOutput(`npm notice creating\n${npm11}\n`), files);
+});
+
+test('npmExecutable prefers the npm that ships with the running node', () => {
+  const execPath = '/opt/node24/bin/node';
+  assert.equal(npmExecutable(execPath, (path) => path === '/opt/node24/bin/npm'), '/opt/node24/bin/npm');
+  assert.equal(npmExecutable(execPath, () => false), 'npm');
 });
