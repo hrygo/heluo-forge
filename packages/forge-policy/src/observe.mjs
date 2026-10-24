@@ -324,6 +324,8 @@ export function createBoundedBuffer(options = {}) {
 }
 
 export const AUTH_STOP_STATUSES = Object.freeze([401, 403]);
+/** 服务端退避提示的下限保护：提示为 0 或缺失时不至于变成"立刻重试"。 */
+const MIN_BACKOFF_MS = 250;
 
 /**
  * 有界导出：默认关闭；401/403 停止；429 按服务端提示或指数退避（封顶 5 分钟、带抖动）；
@@ -363,8 +365,11 @@ export function createBoundedExporter(options = {}) {
     const base = Math.min(baseBackoffMs * 2 ** exponent, maxBackoffMs);
     const jitter = Math.floor(base * 0.2 * random());
     const delay = Math.min(base + jitter, maxBackoffMs);
-    // 服务端给了退避提示就遵循，但同样封顶。
-    const applied = Number.isFinite(hintMs) ? Math.min(Math.max(hintMs, base), maxBackoffMs) : delay;
+    // 服务端给出有效退避提示时**以提示为准**（只做下限保护与封顶）：把提示改写成自己的
+    // 指数退避会提前重试，正是限流场景下最容易把对方打垮的行为。
+    const applied = Number.isFinite(hintMs) && hintMs > 0
+      ? Math.min(Math.max(hintMs, MIN_BACKOFF_MS), maxBackoffMs)
+      : delay;
     state.nextAttemptAt = now() + applied;
     return applied;
   };
@@ -486,6 +491,91 @@ export function createLossReporter(options = {}) {
       }
       counters.emitted += 1;
       return result.event;
+    },
+  };
+}
+
+/**
+ * 把投影与导出接进插件的运行路径（#36）。
+ *
+ * 只把 `enabled` 做成配置：端点、认证资源、批量与响应格式属于契约明确"不由本仓库
+ * 发明"的部分，因此发送方必须来自宿主已有的服务（`observationSink`）。启用但没有
+ * 发送方时按 fail-closed 记为 `no-provider`，一次也不发。
+ *
+ * @param {{
+ *   config?: { export?: { enabled?: boolean, idempotentProvider?: boolean }, enums?: object },
+ *   getSink?: () => ({ send?: Function } | undefined),
+ *   sourceVersion?: string,
+ * }} [options]
+ */
+export function createObservationRuntime(options = {}) {
+  const exportConfig = options.config?.export ?? {};
+  const enabled = exportConfig.enabled === true;
+  const project = createProjection({ enums: options.config?.enums ?? {} });
+  const buffer = enabled ? createBoundedBuffer({ now: options.now }) : null;
+  let status = enabled ? 'idle' : 'disabled';
+  let exporter = null;
+  // 工具类事件必须落在"已登记枚举"里才可能通过投影；一条枚举都没给就显式停在
+  // `unregistered-enums`，而不是让每个事件被静默拒绝。
+  const enumLists = options.config?.enums ?? {};
+  const hasToolEnums = ['status', 'action'].every((name) => Array.isArray(enumLists[name]) && enumLists[name].length > 0);
+  if (enabled && !hasToolEnums) status = 'unregistered-enums';
+  if (enabled && hasToolEnums) {
+    let sink;
+    try {
+      sink = options.getSink?.();
+    } catch {
+      // 宿主服务查找失败等同于没有发送方：观察链路不得因此影响研发路径。
+      sink = undefined;
+    }
+    if (sink !== undefined && sink !== null && typeof sink.send === 'function') {
+      exporter = createBoundedExporter({
+        buffer,
+        enabled: true,
+        send: (batch) => sink.send(batch),
+        idempotentProvider: exportConfig.idempotentProvider === true,
+        batchSize: exportConfig.batchSize,
+      });
+      status = 'ready';
+    } else {
+      status = 'no-provider';
+    }
+  }
+  return {
+    project,
+    fold: foldByOperation,
+    get enabled() {
+      return enabled;
+    },
+    /** 运行态：`disabled` / `no-provider` / `ready`。导出自身的状态另见 `exportState`。 */
+    get status() {
+      return status;
+    },
+    get exportState() {
+      return exporter?.state.status ?? null;
+    },
+    buffer,
+    /** 只登记通过投影的事件；被拒绝的只返回原因码。 */
+    record(candidate) {
+      if (!enabled || buffer === null) return { ok: false, reason: 'DISABLED' };
+      const projected = project.project(candidate);
+      if (!projected.ok) return projected;
+      const stored = buffer.add(projected.event);
+      return stored.ok ? { ok: true, event: projected.event, duplicate: stored.duplicate === true } : { ok: false, reason: stored.reason };
+    },
+    /** 导出一次；关闭或没有发送方时都不发送，也不抛出。 */
+    async exportOnce() {
+      if (!enabled) return { status: 'skipped', reason: 'DISABLED' };
+      if (exporter === null) {
+        return { status: 'skipped', reason: status === 'unregistered-enums' ? 'UNREGISTERED_ENUMS' : 'NO_PROVIDER' };
+      }
+      return exporter.exportOnce();
+    },
+    resume() {
+      return exporter?.resume() ?? false;
+    },
+    stats() {
+      return buffer?.stats() ?? { events: 0, bytes: 0, dropped: {} };
     },
   };
 }

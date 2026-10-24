@@ -279,3 +279,113 @@ test('AC3: the export path has no disk queue', async () => {
   const source = await readFile(join(here, 'src', 'observe.mjs'), 'utf8');
   assert.doesNotMatch(source, /from 'node:fs|require\('node:fs\)/u, 'an unapproved persistent queue must not be added');
 });
+
+// ---- 接线（#36 交付物里的"投影/验证/有界导出接线"）----
+
+test('wiring: observation is off unless explicitly enabled, and looks up no sink', async () => {
+  const { apply } = await import('../src/index.mjs');
+  let sinkLookups = 0;
+  const provided = new Map();
+  const ctx = {
+    get(name) {
+      if (name === 'observationSink') sinkLookups += 1;
+      return undefined;
+    },
+    provide: (name, value) => (provided.set(name, value), () => provided.delete(name)),
+    effect: (callback) => callback(),
+    tools: { guard: () => () => {} },
+  };
+  apply(ctx, {});
+  const service = provided.get('policy');
+  const runtime = service.observations();
+  assert.equal(runtime.enabled, false);
+  assert.equal(runtime.status, 'disabled');
+  assert.equal(runtime.buffer, null, 'a disabled projection must not allocate a buffer');
+  assert.equal(sinkLookups, 0, 'a disabled projection must not look for a sender');
+  assert.deepEqual(await runtime.exportOnce(), { status: 'skipped', reason: 'DISABLED' });
+  assert.deepEqual(runtime.record({ event_name: 'forge.tool.completed' }), { ok: false, reason: 'DISABLED' });
+});
+
+test('wiring: enabled without a sender fails closed with no-provider', async () => {
+  const { apply } = await import('../src/index.mjs');
+  const provided = new Map();
+  const ctx = {
+    get: () => undefined,
+    provide: (name, value) => (provided.set(name, value), () => provided.delete(name)),
+    effect: (callback) => callback(),
+    tools: { guard: () => () => {} },
+  };
+  apply(ctx, { observation: { export: { enabled: true }, enums: { status: ['success'], action: ['repo.read'] } } });
+  const service = provided.get('policy');
+  const runtime = service.observations();
+  assert.equal(runtime.enabled, true);
+  assert.equal(runtime.status, 'no-provider');
+  assert.deepEqual(await runtime.exportOnce(), { status: 'skipped', reason: 'NO_PROVIDER' });
+});
+
+test('wiring: enabled without registered enums stops visibly instead of dropping events', async () => {
+  const { apply } = await import('../src/index.mjs');
+  const provided = new Map();
+  const ctx = {
+    get: (name) => (name === 'observationSink' ? { send: async () => ({ status: 200, ack: [] }) } : undefined),
+    provide: (name, value) => (provided.set(name, value), () => provided.delete(name)),
+    effect: (callback) => callback(),
+    tools: { guard: () => () => {} },
+  };
+  apply(ctx, { observation: { export: { enabled: true } } });
+  const runtime = provided.get('policy').observations();
+  assert.equal(runtime.status, 'unregistered-enums');
+  assert.deepEqual(await runtime.exportOnce(), { status: 'skipped', reason: 'UNREGISTERED_ENUMS' });
+});
+
+test('wiring: an invalid observation config is refused at load time', async () => {
+  const { apply } = await import('../src/index.mjs');
+  const ctx = {
+    get: () => undefined,
+    provide: () => () => {},
+    effect: (callback) => callback(),
+    tools: { guard: () => () => {} },
+  };
+  for (const observation of [{ export: { enabled: 'yes' } }, { export: { batchSize: 0 } }, { export: 3 }]) {
+    assert.throws(() => apply(ctx, { observation }), (error) => error.code === 'POLICY_CONFIG_INVALID');
+  }
+});
+
+test('wiring: an enabled projection records through the sender and keeps bounds', async () => {
+  const { apply } = await import('../src/index.mjs');
+  const sent = [];
+  const provided = new Map();
+  const ctx = {
+    get: (name) => (name === 'observationSink' ? { send: async (batch) => (sent.push(...batch.map((event) => event.event_id)), { status: 200, ack: [batch[0].event_id] }) } : undefined),
+    provide: (name, value) => (provided.set(name, value), () => provided.delete(name)),
+    effect: (callback) => callback(),
+    tools: { guard: () => () => {} },
+  };
+  apply(ctx, {
+    observation: {
+      export: { enabled: true },
+      enums: { status: ['success'], action: ['repo.read'] },
+    },
+  });
+  const runtime = provided.get('policy').observations();
+  assert.equal(runtime.status, 'ready');
+  assert.equal(runtime.exportState, 'idle');
+  const event = {
+    schema_version: SCHEMA_VERSION,
+    event_id: 'evt-wire-1',
+    event_name: 'forge.tool.completed',
+    source_version: '0.1.0',
+    emitted_at: '2026-10-24T10:00:00.000Z',
+    operation_id: 'op-wire',
+    action: 'repo.read',
+    access_kind: 'read',
+    status: 'success',
+  };
+  assert.equal(runtime.record(event).ok, true);
+  assert.deepEqual(runtime.record({ ...event, event_id: 'evt-wire-2', prompt: 'secret' }), { ok: false, reason: 'UNKNOWN_FIELD' });
+  const result = await runtime.exportOnce();
+  assert.equal(result.status, 'sent');
+  assert.equal(result.accepted, 1);
+  assert.equal(result.pending, 0);
+  assert.deepEqual(sent, ['evt-wire-1']);
+});

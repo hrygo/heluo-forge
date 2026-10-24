@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.9.3 |
+| 版本 | V0.9.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -91,6 +91,9 @@
 | `policy.egressAllowlist` | string[] | 空 | 否 | 主机名或域名后缀 |
 | `policy.commandPatterns` | object[] | 空 | 否 | 高风险命令模式与动作 |
 | `policy.auditSink` | `local` \| `forward` | `local` | 是 | 必要审计落点；落点不可用按 §8 关闭相关动作 |
+| `policy.observation.export.enabled` | boolean | `false` | 否 | 过程观察导出开关；**默认关闭**，启用但缺少宿主发送方（`observationSink`）或未登记枚举时停在 `no-provider` / `unregistered-enums`，一次也不发 |
+| `policy.observation.export.idempotentProvider` | boolean | `false` | 否 | 摄取方是否保证按 `event_id` 幂等；**true 才允许**响应未知时有限重送 |
+| `policy.observation.enums` | object | 空 | 启用导出时必填 | 已登记枚举（`status`/`action` 至少各一项）；本仓库不发明枚举取值 |
 
 策略不可用（未挂载、加载失败、必要依赖缺失）时一律 fail-closed；**不提供 fail-open 开关**，也不以"显式声明只读模式"作为降级通道。
 
@@ -277,7 +280,26 @@ flowchart TD
 | 有界导出 | 默认关闭；只移除被明确确认的项（部分确认保留其余）；401/403 停止且不换身份重试；429/5xx 按服务端提示或指数退避（封顶 5 分钟、带抖动），连续 5 次暂停；响应未知时只有提供方保证幂等才有限重送 | AC3 五例 |
 | 不阻塞 | 导出失败只落到返回值与状态，不抛出；loss 事件被拒绝时只计数，不递归生成 | AC4 两例 |
 
-**未验**：真实 OTel/OTLP 出口与 DevOps 汇聚端（401/403/429 的真实响应形态、去重语义、部分确认格式）都没有实测；本模块没有接进插件运行路径，也没有对外配置开关——因此"导出默认关闭"当前是**结构性成立**（没有实例化点），不是靠配置项保证。AC5（真实摄取端同 ID 同载荷不双计等）保持 BLOCKED。
+#### 9.2.1 接线与假端故障用例（2026-10-24 实测）
+
+导出已接进插件运行路径，并把"是否启用"做成配置（`policy.observation.export.enabled`，默认 `false`）；端点、认证资源、批量与响应格式仍属契约明确"不由本仓库发明"的部分，因此**发送方必须来自宿主已有服务** `observationSink`。三种状态都可见，不会静默丢事件：
+
+| 状态 | 触发条件 | 行为 |
+|---|---|---|
+| `disabled` | 默认 | 不建缓冲、不查发送方、`exportOnce()` 返回 `DISABLED` |
+| `no-provider` | 启用但宿主没有发送方 | 一次也不发，返回 `NO_PROVIDER` |
+| `unregistered-enums` | 启用但 `status`/`action` 枚举未登记 | 停在可见状态返回 `UNREGISTERED_ENUMS`，而不是逐个事件静默拒绝 |
+
+**假端故障用例**（`scripts/probe/observe-export-probe.mjs`，真实 HTTP、真实 socket、真实计时，21 条断言）已在两端跑通：
+
+| 环境 | 结果 |
+|---|---|
+| 本机 darwin-arm64 / Node `v26.11.1` | 21/21 通过 |
+| Ubuntu 24.04 Linux aarch64 / Node `v24.21.0`（离线包） | 21/21 通过 |
+
+覆盖：默认关闭不发请求；部分确认只移除确认项、未确认项以**同一 `event_id`** 重送；含 `prompt` 的事件在本地被拒且**不上网**；401 停止后不再发请求；429 遵循服务端 `Retry-After`（窗口内不发，窗口后送达）；响应未知（挂住）→ 暂停并保留事件。
+
+**未验**：真实企业摄取端（认证资源、去重权威、部分确认格式、限流策略）仍未实测；假端只能证明客户端行为，**不能替代 AC5**。真实 DSH 进程内也没有可用的 `observationSink` 服务，故尚未在 `dsh --profile` 运行中启用过导出。
 
 有限委托内普通研发写的目标见[需求 §2.3](../../requirements/requirements-baseline.md)。现行 C3 跨系统写 ask 在安全批准精确动作分类前仍有效；入口确认不自动豁免后续写。批准后需按动作/资源/版本验证授权，业务决定与正式人工评审仍需真实确认。缺原生可靠控制时禁用，不自建第二授权系统。
 
