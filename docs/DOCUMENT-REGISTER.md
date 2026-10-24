@@ -26,7 +26,7 @@
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.3.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.0.6 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.9.13 | 草案 | 平台组（代拟） | G2 |
-| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.3.5 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.3.6 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V0.3.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-007 | 企业插件市场（轻量原生索引模式） | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V2.2.0 | 评审稿 | 平台组（代拟） | G1 索引接入；G2 三目标安装 |

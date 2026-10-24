@@ -405,6 +405,20 @@ flowchart TD
 - 登录成功后只代表 IAM ready；模型是否可用取决于 `ENTERPRISE_STATIC_KEY` 是否已配置（其有效性由网关包探测，本模块不探测）。二者状态分开，不把“未配置网关凭据”显示成“登录失败”。
 - 登录成功后设置 `iam.defaultModel` 为 V1 目标；当前未实现，配置项不生效。
 
+#### 7.2.1 禁用 IAM 插件与独占冲突的实测（#13 AC8 / AC1，2026-10-24）
+
+探针 `iam-absent-and-disabled-fail-closed`（`dsh 0.2.1-rc.2`，darwin-arm64，node v26.11.1，profile `sdk`）在**真实宿主进程**里做三件事，探针总况 28/28 通过、2 blocked：
+
+| 步骤 | 机制 | 实测结果 |
+|---|---|---|
+| IAM 缺席 | 探针进程内 `ctx.get('iam')` 不存在 | 门禁 `not-signed-in` → 企业调用**拒绝**（无 break-glass） |
+| 真实挂载 | `ctx.plugin(forge-iam apply, {})` 挂真实插件（无 discoveryUrl，不发起网络） | 服务注册成功、`getView().state === 'unconfigured'`，门禁仍拒绝 |
+| **禁用（dispose）** | `fiber.dispose()` 卸载同一插件 | `ctx.get('iam')` 再次消失，状态回到"缺席即拒绝"——**禁用 IAM 插件后企业调用 fail closed** |
+| 独占冲突 | 子作用域夹具提供 `deepseekAccount`，再挂真实 IAM 插件（错误注入；机制是真实的） | 真实状态机进入 `error`（**不 ready**），`checkExclusive` 返回 `exclusive-violation` |
+| 当前 profile | 对 live ctx 直接调用 `checkExclusive(ctx, {requireExclusive: true})` | `ok`——`sdk` profile 没有官方账号服务；冲突路径由上一行的注入证明 |
+
+以上只覆盖 Host 侧调用闭合；`DEEPSEEK_API_KEY` 旁路与"官方模型不可选"的运行时面仍受探针 profile 无官方模型行限制，保持 blocked（见 [forge-enterprise §5.1.1](forge-enterprise.md#511-禁用实验本机实测-2026-10-24)）。
+
 ### 7.3 模型门禁与默认模型切换
 
 门禁是**纯判定**（`packages/forge-iam/src/model-gate.mjs`）：不读配置、不调用宿主、不写设置；宿主侧把登录态、网关凭据状态、当前默认选择与可用提供方注入进来，返回 `{allow, reason, switchTo?, notes}`。
@@ -427,21 +441,7 @@ flowchart TD
 
 **未验**：对**真实** `agentDefaultModel.saveSelection` 的写入（受控写未获准；本轮的写入路径以记录式 sink 演练，见 §7.2.2）；"登录后企业模型可用"的正向路径需要企业网关与企业凭据；官方旧默认模型的迁移/清理策略仍未定（见 §12）。
 
-### 7.2.1 禁用 IAM 插件与独占冲突的实测（#13 AC8 / AC1，2026-10-24）
-
-探针 `iam-absent-and-disabled-fail-closed`（`dsh 0.2.1-rc.2`，darwin-arm64，node v26.11.1，profile `sdk`）在**真实宿主进程**里做三件事，探针总况 28/28 通过、2 blocked：
-
-| 步骤 | 机制 | 实测结果 |
-|---|---|---|
-| IAM 缺席 | 探针进程内 `ctx.get('iam')` 不存在 | 门禁 `not-signed-in` → 企业调用**拒绝**（无 break-glass） |
-| 真实挂载 | `ctx.plugin(forge-iam apply, {})` 挂真实插件（无 discoveryUrl，不发起网络） | 服务注册成功、`getView().state === 'unconfigured'`，门禁仍拒绝 |
-| **禁用（dispose）** | `fiber.dispose()` 卸载同一插件 | `ctx.get('iam')` 再次消失，状态回到"缺席即拒绝"——**禁用 IAM 插件后企业调用 fail closed** |
-| 独占冲突 | 子作用域夹具提供 `deepseekAccount`，再挂真实 IAM 插件（错误注入；机制是真实的） | 真实状态机进入 `error`（**不 ready**），`checkExclusive` 返回 `exclusive-violation` |
-| 当前 profile | 对 live ctx 直接调用 `checkExclusive(ctx, {requireExclusive: true})` | `ok`——`sdk` profile 没有官方账号服务；冲突路径由上一行的注入证明 |
-
-以上只覆盖 Host 侧调用闭合；`DEEPSEEK_API_KEY` 旁路与"官方模型不可选"的运行时面仍受探针 profile 无官方模型行限制，保持 blocked（见 [forge-enterprise §5.1.1](forge-enterprise.md#511-禁用实验本机实测-2026-10-24)）。
-
-### 7.2.2 默认模型的写入接线（#13 AC6，`applyModelSelection()`，2026-10-24）
+#### 7.3.1 默认模型的写入接线（#13 AC6，`applyModelSelection()`，2026-10-24）
 
 判定与写入分离：`evaluateModelGate()` 只判定，`applyModelSelection()` 只负责把判定落到设置，并在写入前**独立复查**一次"绝不覆盖用户显式企业选择"——即使判定对象被伪造要求切换，接线也必须自己挡住。
 
@@ -467,7 +467,7 @@ flowchart TD
 
 离线用例 `packages/forge-iam/test/model-selection.test.mjs`（7 项）覆盖上表全部分支、写入失败与回读不一致、非法输入报错。
 
-### 7.3 刷新
+### 7.4 刷新
 
 - 触发：access token 距到期 ≤`refreshSkewSeconds`，或账户页/首个请求需要 token。
 - 把“读记录 → 判断有效期 → 刷新 → 写回”放进 `ctx.credentials.modifyRecord('heluo-iam/session')`；锁内先复查，后到者复用结果。discovery/JWKS 预取在锁外；grant 写入后重读；记录缺失、access token 不匹配或读取失败时要求重登，不返回旧 token，也不因此删除另一实例的新 grant。V1 不再发布模型凭据镜像。
@@ -476,7 +476,7 @@ flowchart TD
 - refresh 轮换：若 IAM 返回新 refresh token，先写记录再使用；写失败或响应丢失导致旧 token 可能已失效时，按“会话不确定”处理，清空并要求重登，**不得**用旧 refresh token 再试。
 - 双进程：两个进程共用一份记录；后到者在锁内重新读取，不各刷新一次；任何一方都不得把旧 refresh token 写回。
 
-### 7.4 退出与撤销
+### 7.5 退出与撤销
 
 > 2026-10-23 适用性：本节原流程是 interim 基线说明。默认目标是当前授权及刷新后代撤销，不自动调用全局 RP 登出；本地删除/只撤 AT 不能证明服务端五分钟内终结当前授权。旧代码行为未在本轮修改。相关能力未闭环则不开放相应路径。
 
