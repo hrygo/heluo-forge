@@ -10,10 +10,11 @@
     "pnpm": ">=11.0.0 <12"
   },
   "scripts": {
-    "check": "node scripts/check-docs.mjs && node scripts/check-repo.mjs && node scripts/check-bundle-tarballs.mjs && node --test",
+    "check": "node scripts/check-docs.mjs && node scripts/check-repo.mjs && node scripts/check-bundle-tarballs.mjs && node scripts/dsh-version.mjs check && node --test",
     "check:docs": "node scripts/check-docs.mjs",
     "check:repo": "node scripts/check-repo.mjs",
     "test:unit": "node --test",
-    "check:tarballs": "node scripts/check-bundle-tarballs.mjs"
+    "check:tarballs": "node scripts/check-bundle-tarballs.mjs",
+    "check:version": "node scripts/dsh-version.mjs check"
   }
 }
