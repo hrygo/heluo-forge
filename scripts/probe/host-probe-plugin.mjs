@@ -265,6 +265,93 @@ export function apply(ctx) {
       };
     });
 
+    // #13 AC6：默认模型写入接线。判定用宿主实测状态，写入用记录式 sink（**不写**真实设置，
+    // 也不碰正在使用的会话），最后再读一次真实选择确认没有被改动。
+    const { applyModelSelection } = await import('../../packages/forge-iam/src/model-gate.mjs');
+    await step('model-selection-write-guard-on-measured-host', async () => {
+      const enterprise = { provider: 'enterprise-probe', model: 'probe-model' };
+      const disabledProviders = ['deepseek'];
+      let live =
+        measuredSelection.provider === undefined
+          ? undefined
+          : { provider: measuredSelection.provider, model: measuredSelection.model, explicit: true };
+      const writes = [];
+      const sink = (target) => {
+        writes.push(target);
+        live = { ...target, explicit: false };
+      };
+      const reader = () => live;
+      const measuredDecision = evaluateModelGate({
+        signedIn: false,
+        officialApiKeyPresent: process.env.DEEPSEEK_API_KEY !== undefined,
+        selection: live,
+        availableProviders: availableProviderIds,
+        disabledProviders,
+      });
+      const denied = await applyModelSelection({
+        decision: measuredDecision,
+        readSelection: reader,
+        saveSelection: sink,
+        enterprise,
+        availableProviders: availableProviderIds,
+        disabledProviders,
+      });
+      const switchDecision = evaluateModelGate({
+        signedIn: true,
+        gatewayCredential: 'present',
+        enterprise,
+        selection: live,
+        availableProviders: [...availableProviderIds, enterprise.provider],
+        disabledProviders,
+      });
+      const switched = await applyModelSelection({
+        decision: switchDecision,
+        readSelection: reader,
+        saveSelection: sink,
+        enterprise,
+        availableProviders: [...availableProviderIds, enterprise.provider],
+        disabledProviders,
+      });
+      live = { provider: enterprise.provider, model: enterprise.model, explicit: true };
+      const kept = await applyModelSelection({
+        decision: { allow: true, switchTo: { provider: enterprise.provider, model: 'another-model' }, reason: 'forged' },
+        readSelection: reader,
+        saveSelection: sink,
+        enterprise,
+        availableProviders: [enterprise.provider],
+        disabledProviders,
+      });
+      const selectionAfter = (() => {
+        try {
+          return defaultModelService?.currentSelection?.() ?? measuredSelection;
+        } catch (error) {
+          return { error: String(error?.message ?? error) };
+        }
+      })();
+      const untouched =
+        selectionAfter?.provider === measuredSelection.provider && selectionAfter?.model === measuredSelection.model;
+      return {
+        ok:
+          denied.written === false &&
+          denied.reason === 'no-write-gate-denied' &&
+          switched.written === true &&
+          switched.verified === true &&
+          kept.written === false &&
+          kept.reason === 'no-write-keep-explicit-enterprise' &&
+          writes.length === 1 &&
+          untouched,
+        detail: {
+          measuredDecision: measuredDecision.reason,
+          denied: { written: denied.written, reason: denied.reason },
+          switched: { written: switched.written, verified: switched.verified, attempted: switched.attempted },
+          kept: { written: kept.written, reason: kept.reason },
+          writeCount: writes.length,
+          liveSelectionUntouched: untouched,
+          note: 'sink 是记录式假写入；真实 agentDefaultModel 设置未被修改，只读校验前后一致',
+        },
+      };
+    });
+
     // 宿主服务相关的检查先跑：sdk profile 在 stdin EOF 后开始卸载，越晚越容易落在失活窗口。
     if (skillsService === undefined) {
       blocked.push({

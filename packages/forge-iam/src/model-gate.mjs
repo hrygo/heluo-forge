@@ -125,3 +125,131 @@ export function describeModelGateInput(input = {}) {
     officialApiKeyPresent: input.officialApiKeyPresent === true,
   });
 }
+
+export const MODEL_SELECTION_REASONS = Object.freeze({
+  WRITTEN: 'selection-written',
+  NO_WRITE_GATE_DENIED: 'no-write-gate-denied',
+  NO_WRITE_NO_TARGET: 'no-write-no-target',
+  NO_WRITE_KEEP_EXPLICIT: 'no-write-keep-explicit-enterprise',
+  NO_WRITE_ALREADY_ENTERPRISE: 'no-write-already-enterprise',
+  NO_WRITE_UNPROVABLE_SELECTION: 'no-write-selection-unprovable',
+  WRITE_FAILED: 'selection-write-failed',
+  WRITE_UNVERIFIED: 'selection-write-unverified',
+});
+
+const isSelectionLike = (value) =>
+  value !== null && typeof value === 'object' && typeof value.provider === 'string' && typeof value.model === 'string';
+
+/**
+ * 默认模型的**写入接线**（#13 AC6 / ADR-14 决策 b）。
+ *
+ * 只做一件事：把已经判定好的切换落到设置里，并在写入前**独立复查**"绝不覆盖用户显式企业选择"。
+ * 判定与写入分离，写入因此可以在没有企业环境的机器上做正反负测；受控写默认禁用，
+ * 任何无法证明当前选择的情况一律不写。
+ *
+ * @param {{decision: {allow: boolean, switchTo?: {provider: string, model: string}},
+ *   currentSelection?: {provider: string, model: string, explicit?: boolean},
+ *   readSelection?: () => unknown, saveSelection: (target: {provider: string, model: string}) => unknown,
+ *   enterprise?: {provider: string, model: string}, availableProviders?: string[],
+ *   disabledProviders?: string[]}} input
+ */
+export async function applyModelSelection(input = {}) {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw new ModelGateError('MODEL_GATE_INPUT_INVALID', 'model selection input must be an object');
+  }
+  const { decision, saveSelection, readSelection, enterprise } = input;
+  if (decision === null || typeof decision !== 'object' || typeof decision.allow !== 'boolean') {
+    throw new ModelGateError('MODEL_GATE_INPUT_INVALID', 'decision must be an object with a boolean allow');
+  }
+  if (typeof saveSelection !== 'function') {
+    throw new ModelGateError('MODEL_GATE_INPUT_INVALID', 'saveSelection must be a function');
+  }
+  if (readSelection !== undefined && typeof readSelection !== 'function') {
+    throw new ModelGateError('MODEL_GATE_INPUT_INVALID', 'readSelection must be a function when present');
+  }
+  if (enterprise !== undefined && !isSelectionLike(enterprise)) {
+    throw new ModelGateError('MODEL_GATE_INPUT_INVALID', 'enterprise needs string provider/model');
+  }
+  const availableProviders = input.availableProviders ?? [];
+  const disabledProviders = input.disabledProviders ?? [];
+  if (!Array.isArray(availableProviders) || !Array.isArray(disabledProviders)) {
+    throw new ModelGateError('MODEL_GATE_INPUT_INVALID', 'availableProviders/disabledProviders must be arrays');
+  }
+
+  const skip = (reason, notes, current) =>
+    Object.freeze({ written: false, verified: false, reason, attempted: undefined, current: current ?? null, notes: Object.freeze(notes) });
+
+  // 当前选择：优先用宿主读取器，读不出来就不写（无法证明将覆盖什么）。
+  let current = input.currentSelection;
+  if (readSelection !== undefined) {
+    try {
+      current = await readSelection();
+    } catch (error) {
+      return skip(MODEL_SELECTION_REASONS.NO_WRITE_UNPROVABLE_SELECTION, [`读取当前选择失败：${String(error?.message ?? error)}`]);
+    }
+  }
+  if (current !== undefined && current !== null && !isSelectionLike(current)) {
+    return skip(MODEL_SELECTION_REASONS.NO_WRITE_UNPROVABLE_SELECTION, ['当前选择无法解析，按无法证明处理']);
+  }
+
+  // 独立复查：显式选择且仍然可用（含企业模型本身）一律不覆盖 —— 即使判定说要切。
+  if (isSelectionLike(current) && current.explicit === true) {
+    const isEnterprise = isSelectionLike(enterprise) && current.provider === enterprise.provider && current.model === enterprise.model;
+    const stillUsable = availableProviders.includes(current.provider) && !disabledProviders.includes(current.provider);
+    if (isEnterprise || stillUsable) {
+      return skip(MODEL_SELECTION_REASONS.NO_WRITE_KEEP_EXPLICIT, ['用户显式选择仍然可用，写入接线拒绝覆盖'], current);
+    }
+  }
+
+  if (decision.allow !== true) {
+    return skip(MODEL_SELECTION_REASONS.NO_WRITE_GATE_DENIED, [`判定未放行：${decision.reason ?? 'unknown'}`], current);
+  }
+  const target = decision.switchTo;
+  if (!isSelectionLike(target)) {
+    return skip(MODEL_SELECTION_REASONS.NO_WRITE_NO_TARGET, ['判定放行但没有给出切换目标'], current);
+  }
+  if (isSelectionLike(current) && current.provider === target.provider && current.model === target.model) {
+    return skip(MODEL_SELECTION_REASONS.NO_WRITE_ALREADY_ENTERPRISE, ['当前已经是目标模型，不重复写入'], current);
+  }
+
+  try {
+    await saveSelection({ provider: target.provider, model: target.model });
+  } catch (error) {
+    return skip(MODEL_SELECTION_REASONS.WRITE_FAILED, [`写入失败：${String(error?.message ?? error)}`], current);
+  }
+
+  if (readSelection === undefined) {
+    return Object.freeze({
+      written: true,
+      verified: false,
+      reason: MODEL_SELECTION_REASONS.WRITTEN,
+      attempted: Object.freeze({ provider: target.provider, model: target.model }),
+      current: current ?? null,
+      notes: Object.freeze(['已写入但未回读验证（调用方未提供读取器）']),
+    });
+  }
+  let after;
+  try {
+    after = await readSelection();
+  } catch (error) {
+    return Object.freeze({
+      written: true,
+      verified: false,
+      reason: MODEL_SELECTION_REASONS.WRITE_UNVERIFIED,
+      attempted: Object.freeze({ provider: target.provider, model: target.model }),
+      current: current ?? null,
+      notes: Object.freeze([`写入后回读失败：${String(error?.message ?? error)}`]),
+    });
+  }
+  const verified = isSelectionLike(after) && after.provider === target.provider && after.model === target.model;
+  return Object.freeze({
+    written: true,
+    verified,
+    reason: verified ? MODEL_SELECTION_REASONS.WRITTEN : MODEL_SELECTION_REASONS.WRITE_UNVERIFIED,
+    attempted: Object.freeze({ provider: target.provider, model: target.model }),
+    current: current ?? null,
+    notes: Object.freeze(
+      verified ? ['已写入并回读一致'] : [`写入后回读不一致：${isSelectionLike(after) ? `${after.provider}/${after.model}` : '无法解析'}，按未验证报告缺口`],
+    ),
+  });
+}
