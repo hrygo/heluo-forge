@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.6.2 |
+| 版本 | V0.6.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -138,7 +138,7 @@ heluo-forge/
 | DevOps MCP 服务 | `services/devops-mcp/` | 条件建设：仅当 DevOps CLI 无法满足已确认的结构化输出、用户授权或必要身份能力时，才评审 HTTP 工具面及服务端职责 | 当前不建设；保留边界 README 与条件设计，不启动监听或模拟生产接口 |
 | 索引契约与校验 | `services/market-index/` | 只保留 format-1 只读校验器与契约；不建市场服务、生成器、数据库或审批后台 | 校验器与 13 项测试；无服务、无生产部署 |
 | 私有 npm 制品仓库 | `deploy/registry/` | 企业私有npm承载公网同步和内部定制包；认证、内部scope、备份恢复、访问/撤回与保留策略 | 运维范围说明，不部署仓库或写入真实地址/令牌 |
-| 原生市场接入 | DSH 内置 + AIHUB 索引 | 用户添加 AIHUB 只读 URL；官方 manager 从企业 npm 安装 | 不建自定义市场插件；`packages/forge-market/` 为历史参考 |
+| 原生市场接入 | DSH 内置 + AIHUB 索引 | 用户添加 AIHUB 只读 URL；官方 manager 从企业 npm 安装 | 不建自定义市场插件；市场模式与历史参考关系见[索引契约 §1](<../design/services/market-index.md#1-一页速览>) |
 | 双端配置与分发 | `deploy/clients/` | Windows 与银河麒麟的配置、安装、更新及回退资产 | 规划说明，不提交 MSI/deb/凭据或自建新客户端 |
 
 以下为ADR-11下的目标发布流程，不是当前Gitee归档参考实现的运行图；固定group用于内部源码，所有获批插件的制品都从企业npm取得。

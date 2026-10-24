@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件索引契约（format-1 / AIHUB 交付） |
-| 版本 | V2.0.0 |
+| 版本 | V2.0.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -32,6 +32,7 @@
 | 包体从哪来 | 企业 Artifactory；由 `versions[].source.registry` 指定 |
 | 本项目做什么 | 定义字段、校验工具、验收清单；不生成、不托管、不代理 |
 | 不包含什么 | integrity、OS/CPU、policyRevision、installEnabled、expiresAt、证据 |
+| 当前状态 | 目标链路为 DSH 原生「索引源」+ AIHUB 托管 format-1 JSON，不要求企业发行预置自定义市场插件；`packages/forge-market` 与旧 HTTP 服务为历史参考；企业审核批准、AIHUB 索引交付、三目标安装与发行分发尚未完成 |
 
 一句话：**索引只回答“有哪些包、哪些精确版本、从哪个 npm 源装”，不回答“现在是否允许装”。**
 
