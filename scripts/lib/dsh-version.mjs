@@ -19,8 +19,59 @@ export const DSH_VERSION_SHAPE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
  * `127.0.0.1`、`§5.1.1` 当成版本。
  */
 const SEMVER_IN_TEXT = /(?<![\d.§])v?\d+\.\d+\.\d+(?:-rc\.\d+)?(?![\d.])/g;
-/** 行内出现 DSH 名称即视为 DSH 版本出现的强上下文。 */
-const DSH_CONTEXT = /(dsh|DSH)/;
+/**
+ * 行内出现 DSH 名称（作为独立词）或 `engines.dsh`/`dshVersion` 一类键，才算 DSH 版本上下文。
+ * 特意排除 `CORP-DSH-*`、`@heluo/...` 这类标识符里的字母组合，避免把文档编号与文档版本
+ * 误判成 DSH 版本。
+ */
+const DSH_WORD = /(?:^|[^A-Za-z0-9_@/-])dsh(?![A-Za-z0-9_/-])/gi;
+/** 键名类上下文（`engines.dsh`、`dshVersion`）与紧邻的版本才算 DSH 上下文。 */
+const DSH_KEY = /engines\.dsh|dshVersion|dsh_version/i;
+/** 版本与 DSH 名称的距离上限：超过就认为是同一行里无关的两件事（例如标题提到 DSH、末列是文档版本）。 */
+const DSH_NEAR = 24;
+
+/** 行/上下文中是否出现 DSH 名称或键（不要求邻近，用于判断"这一块在讲 DSH"）。 */
+export function mentionsDsh(text) {
+  DSH_WORD.lastIndex = 0;
+  return DSH_KEY.test(text) || DSH_WORD.test(text);
+}
+
+/** 文档清单的登记行：末列是文档版本，不是 DSH 版本，按结构排除。 */
+const REGISTER_ROW = /^\| CORP-DSH-/;
+
+/**
+ * 文档里是否算 DSH 版本出现：声明位置 / 示例 / 邻近 / 或"本行或所在证据块在讲 DSH"。
+ * 最后一条覆盖表格行（表头才提 DSH）与长句（版本离名称很远）的情况。
+ */
+export function isDocVersionCandidate({ token, line, contextText, baseline, isCanonical, examples }) {
+  if (isCanonical || examples) return true;
+  if (hasDshContext(line, token)) return true;
+  if (REGISTER_ROW.test(line)) return false;
+  if (dshReleaseLine(token) !== dshReleaseLine(baseline)) return false;
+  const blob = `${line}\n${contextText}`;
+  if (mentionsDsh(blob)) return true;
+  return HAS_DATE.test(blob) && DATED_MARKERS.test(blob);
+}
+
+export function hasDshContext(line, token) {
+  if (DSH_KEY.test(line)) return true;
+  const at = line.indexOf(token);
+  if (at < 0) return false;
+  for (const match of line.matchAll(DSH_WORD)) {
+    if (Math.abs(match.index - at) <= DSH_NEAR) return true;
+  }
+  return false;
+}
+
+/** 正文里**有意**出现的示例版本（格式说明），既不随基线变，也不算待确认。 */
+export const DOC_EXAMPLES = [
+  { file: 'docs/design/services/market-index.md', pattern: /engines/, note: 'engines 语法示例' },
+  {
+    file: 'docs/design/plugins/forge-market.md',
+    pattern: /parseEngines/,
+    note: '解析规则示例（说明 -rc.N 与基础版本的比较）',
+  },
+];
 
 /** 由基线版本推出 DSH 发布线（major.minor），据此识别版本字面量而不写死版本。 */
 export function dshReleaseLine(version) {
@@ -28,11 +79,23 @@ export function dshReleaseLine(version) {
   return match ? `${match[1]}.${match[2]}` : null;
 }
 
-export function dshVersionInLine(version, line, baseline) {
-  if (DSH_CONTEXT.test(line)) return true;
+export function dshVersionInLine(version, line, baseline, { allowReleaseLine = false } = {}) {
+  if (hasDshContext(line, version)) return true;
+  if (!allowReleaseLine) return false;
   const token = dshReleaseLine(version);
   const base = baseline ? dshReleaseLine(baseline) : null;
   return Boolean(token) && token === base;
+}
+
+/** 正文里的分类：基线位置 / 历史记录 / 示例 / 待确认。 */
+export function classifyDocLine({ line, sectionText, isCanonical, examples }) {
+  if (isCanonical) return { kind: 'canonical', reason: 'declared-spot' };
+  if (examples) return { kind: 'example', reason: examples.note };
+  if (DATED_MARKERS.test(line) || HAS_DATE.test(line)) return { kind: 'dated', reason: 'line' };
+  if (sectionText && (DATED_MARKERS.test(sectionText) || HAS_DATE.test(sectionText))) {
+    return { kind: 'dated', reason: 'section' };
+  }
+  return { kind: 'unclassified', reason: 'needs-human' };
 }
 
 /** 必须与 `.dsh-version` 一致的正文位置；改版只命中这些。 */
@@ -59,7 +122,7 @@ export const CODE_ALLOWED = [
 ];
 
 /** 文档里"历史记录"的判据：编制依据/实测/探针口径，或行内带日期。 */
-const DATED_MARKERS = /(编制依据|实测|核验|探针|npm registry|当时|历史|回退|沿用)/;
+const DATED_MARKERS = /(编制依据|实测|核验|复核|探针|npm registry|当时|历史)/;
 const HAS_DATE = /20\d\d-\d\d-\d\d/;
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.cache']);
@@ -101,21 +164,25 @@ export function listDocOccurrences(root = process.cwd(), baseline = readDshVersi
     const rel = relative(root, abs).split(sep).join('/');
     const lines = readLines(abs);
     if (!lines) continue;
+    let sectionText = '';
     lines.forEach((line, index) => {
+      const heading = line.match(/^#{1,6}\s+(.*)$/);
+      // 仓库常用「**……实测（日期）**」这类加粗段落当小节标题，一并作为上下文。
+      const bold = line.match(/^\*\*[^*]{4,400}\*\*/);
+      if (heading) sectionText = heading[1];
+      else if (bold) sectionText = bold[0];
       for (const match of line.matchAll(SEMVER_IN_TEXT)) {
         const spot = canonical.get(rel);
         const isCanonical = Boolean(spot && spot.pattern.test(line));
-        if (!isCanonical && !dshVersionInLine(match[0], line, baseline)) continue;
-        const kind = isCanonical
-          ? 'canonical'
-          : DATED_MARKERS.test(line) || HAS_DATE.test(line)
-            ? 'dated'
-            : 'unclassified';
+        const examples = DOC_EXAMPLES.find((item) => item.file === rel && item.pattern.test(line));
+        if (!isDocVersionCandidate({ token: match[0], line, contextText: sectionText, baseline, isCanonical, examples })) continue;
+        const { kind, reason } = classifyDocLine({ line, sectionText, isCanonical, examples });
         found.push({
           file: rel,
           line: index + 1,
           version: match[0],
           kind,
+          reason,
           text: line.trim().slice(0, 160),
         });
       }
@@ -140,7 +207,7 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
     if (!lines) continue;
     lines.forEach((line, index) => {
       for (const match of line.matchAll(SEMVER_IN_TEXT)) {
-        if (!dshVersionInLine(match[0], line, baseline)) continue;
+        if (!dshVersionInLine(match[0], line, baseline, { allowReleaseLine: true })) continue;
         found.push({
           file: rel,
           line: index + 1,
