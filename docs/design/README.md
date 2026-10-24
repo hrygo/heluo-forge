@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.9.1 |
+| 版本 | V0.9.2 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -54,7 +54,7 @@
 | 模块 | 当前实现 | 验证边界 |
 |---|---|---|
 | [forge-iam](../../packages/forge-iam/README.md) | Host + Client 开发骨架：状态机、凭据记录、独占断言、OIDC 登录/回调/刷新/撤销、账户页/onboarding/横幅、网关凭据录入/清除/状态；探测未实现 | 本地 mock OIDC 端到端测试与全仓离线检查通过；真实 IAM 未联调，Client 走 interim route；无 UAG 联调 |
-| [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | keychain provider 开发骨架：backend 契约、内存/不可用/显式 0600 file backend、records/refs | 离线测试通过；OS adapter 未实现，未双端实测 |
+| [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | keychain provider 开发骨架：backend 契约、内存/不可用/显式 0600 file backend、records/refs、旧 0600 → 钥匙串迁移协调器 | 离线测试通过；macOS Security CLI spike 与迁移演练（仅副本）9/9 通过；Windows/UOS/麒麟 adapter 与真实凭据迁移未实现 |
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
 | 其余七包与 DevOps MCP | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |

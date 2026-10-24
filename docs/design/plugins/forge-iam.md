@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.9.0 |
+| 版本 | V1.0.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -311,6 +311,19 @@ interface IamGrantV1 {
 
 复跑命令：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过；`node --test tests/keychain-spike.test.mjs` 在非 darwin 或 `DSH_KEYCHAIN_SPIKE=0` 时跳过）。
 
+**旧 0600 明文迁移演练（#13 AC4，2026-10-24，darwin-arm64，`/usr/bin/security`）**：迁移协调器 `migrateLegacyFileToKeychain()`（`packages/forge-credentials-keychain/src/migrate.mjs`）把旧 0600 文件里的 `${service}/${accountPrefix}/record|ref/…` 条目写进钥匙串，规则是 fail closed：
+
+| 情况 | 处理 |
+|---|---|
+| keychain 不可用 | 不迁移、不写明文、不动旧文件（`keychain-unavailable`） |
+| 目标条目已有**不同**值 | 拒绝覆盖（`target-conflict`），旧文件保留 |
+| 目标条目已有**相同**值 | 幂等跳过写入 |
+| 写入后回读不一致或回读失败 | 立即停止、旧文件保留、目标条目留待人工核查（`read-back-mismatch`） |
+| 全部回读一致 | 才删除旧文件；删除失败按"已迁移但旧文件仍在"报缺口（`legacy-delete-failed`） |
+| 任何返回值与消息 | 不含秘密值（`redactSecrets`，金丝雀检查） |
+
+本机演练（`node scripts/probe/run-keychain-migration-rehearsal.mjs`，**9/9 步通过**）只碰副本：旧文件是探针在临时目录自建的 0600 合成记录，钥匙串条目 service 固定为探针专用名、account 随机，结束删除并复核无残留。实测：迁移后回读值与旧值一致、旧文件删除、临时目录无新增明文；不可用后端下副本原样保留（仍是 0600）；回读不一致与目标冲突都按上表停止；证据 JSON 金丝雀检查通过。**未验**：Windows 凭据管理器与 UOS/麒麟 Secret Service 上的迁移、`@napi-rs/keyring` 产物、以及真实用户凭据的迁移（本轮按批准决策只演练副本，不读取、不删除任何真实凭据记录）。
+
 **不能据此声称的事**：这不是生产适配器，也不能替代 Windows/UOS/麒麟 实测——`@napi-rs/keyring` 的产物、Secret Service 可用性、keyutils 静默回退策略仍需在目标平台核验（见 §12 未决事项）；macOS 只用来验证 seam 与失败语义，以及"凭据不出现在 argv、不落明文"这两条可迁移结论。生产适配器未落地前，企业登录仍按 keychain 不可用 fail closed 处理。
 
 开发 fallback 的文件读写使用各操作独立快照，避免无锁读取污染锁内事务。文档锁争用超过 10 秒报 `KEYCHAIN_LOCK_TIMEOUT`，不按 PID/时间自动接管：检查旧锁后再重命名不能排除另一等待者已取得新锁的竞态。异常退出留下锁时，须先停止使用同一文件的所有进程，再人工确认和恢复；不把该最小 fallback 当作生产锁与 OS adapter 的实现。
@@ -386,6 +399,20 @@ flowchart TD
 
 **未验**：对**真实** `agentDefaultModel.saveSelection` 的写入（受控写未获准；本轮的写入路径以记录式 sink 演练，见 §7.2.2）；"登录后企业模型可用"的正向路径需要企业网关与企业凭据；官方旧默认模型的迁移/清理策略仍未定（见 §12）。
 
+### 7.2.1 禁用 IAM 插件与独占冲突的实测（#13 AC8 / AC1，2026-10-24）
+
+探针 `iam-absent-and-disabled-fail-closed`（`dsh 0.2.1-rc.2`，darwin-arm64，node v26.11.1，profile `sdk`）在**真实宿主进程**里做三件事，探针总况 28/28 通过、2 blocked：
+
+| 步骤 | 机制 | 实测结果 |
+|---|---|---|
+| IAM 缺席 | 探针进程内 `ctx.get('iam')` 不存在 | 门禁 `not-signed-in` → 企业调用**拒绝**（无 break-glass） |
+| 真实挂载 | `ctx.plugin(forge-iam apply, {})` 挂真实插件（无 discoveryUrl，不发起网络） | 服务注册成功、`getView().state === 'unconfigured'`，门禁仍拒绝 |
+| **禁用（dispose）** | `fiber.dispose()` 卸载同一插件 | `ctx.get('iam')` 再次消失，状态回到"缺席即拒绝"——**禁用 IAM 插件后企业调用 fail closed** |
+| 独占冲突 | 子作用域夹具提供 `deepseekAccount`，再挂真实 IAM 插件（错误注入；机制是真实的） | 真实状态机进入 `error`（**不 ready**），`checkExclusive` 返回 `exclusive-violation` |
+| 当前 profile | 对 live ctx 直接调用 `checkExclusive(ctx, {requireExclusive: true})` | `ok`——`sdk` profile 没有官方账号服务；冲突路径由上一行的注入证明 |
+
+以上只覆盖 Host 侧调用闭合；`DEEPSEEK_API_KEY` 旁路与"官方模型不可选"的运行时面仍受探针 profile 无官方模型行限制，保持 blocked（见 [forge-enterprise §5.1.1](forge-enterprise.md#511-禁用实验本机实测-2026-10-24)）。
+
 ### 7.2.2 默认模型的写入接线（#13 AC6，`applyModelSelection()`，2026-10-24）
 
 判定与写入分离：`evaluateModelGate()` 只判定，`applyModelSelection()` 只负责把判定落到设置，并在写入前**独立复查**一次"绝不覆盖用户显式企业选择"——即使判定对象被伪造要求切换，接线也必须自己挡住。
@@ -411,20 +438,6 @@ flowchart TD
 | 步骤前后再读真实 `agentDefaultModel.currentSelection()` | 与步骤前一致（`liveSelectionUntouched: true`）——只读校验证明本次演练没有改动正在使用的会话设置 |
 
 离线用例 `packages/forge-iam/test/model-selection.test.mjs`（7 项）覆盖上表全部分支、写入失败与回读不一致、非法输入报错。
-
-### 7.2.1 禁用 IAM 插件与独占冲突的实测（#13 AC8 / AC1，2026-10-24）
-
-探针 `iam-absent-and-disabled-fail-closed`（`dsh 0.2.1-rc.2`，darwin-arm64，node v26.11.1，profile `sdk`）在**真实宿主进程**里做三件事，探针总况 28/28 通过、2 blocked：
-
-| 步骤 | 机制 | 实测结果 |
-|---|---|---|
-| IAM 缺席 | 探针进程内 `ctx.get('iam')` 不存在 | 门禁 `not-signed-in` → 企业调用**拒绝**（无 break-glass） |
-| 真实挂载 | `ctx.plugin(forge-iam apply, {})` 挂真实插件（无 discoveryUrl，不发起网络） | 服务注册成功、`getView().state === 'unconfigured'`，门禁仍拒绝 |
-| **禁用（dispose）** | `fiber.dispose()` 卸载同一插件 | `ctx.get('iam')` 再次消失，状态回到"缺席即拒绝"——**禁用 IAM 插件后企业调用 fail closed** |
-| 独占冲突 | 子作用域夹具提供 `deepseekAccount`，再挂真实 IAM 插件（错误注入；机制是真实的） | 真实状态机进入 `error`（**不 ready**），`checkExclusive` 返回 `exclusive-violation` |
-| 当前 profile | 对 live ctx 直接调用 `checkExclusive(ctx, {requireExclusive: true})` | `ok`——`sdk` profile 没有官方账号服务；冲突路径由上一行的注入证明 |
-
-以上只覆盖 Host 侧调用闭合；`DEEPSEEK_API_KEY` 旁路与"官方模型不可选"的运行时面仍受探针 profile 无官方模型行限制，保持 blocked（见 [forge-enterprise §5.1.1](forge-enterprise.md#511-禁用实验本机实测-2026-10-24)）。
 
 ### 7.3 刷新
 

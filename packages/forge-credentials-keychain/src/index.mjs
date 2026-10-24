@@ -8,6 +8,7 @@ export const inject = [];
 export { createFileBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, KeychainBackendError } from './backend.mjs';
 export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
 export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
+export { isMigratableKey, KeychainMigrationError, migrateLegacyFileToKeychain, MIGRATION_REASONS, redactSecrets } from './migrate.mjs';
 
 const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
 
