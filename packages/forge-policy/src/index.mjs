@@ -13,7 +13,7 @@ import { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs'
 import { createGate } from './gate.mjs';
 import { createAuditBarrier } from './audit.mjs';
 import { createConfirmationLedger } from './confirmations.mjs';
-import { authorizeDelegation, createDelegation, revokeDelegation } from './delegation.mjs';
+import { authorizeDelegation, createDelegation, resumeDelegation, revokeDelegation } from './delegation.mjs';
 import { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
 import { matchProtected, resolveProtectedRoots } from './paths.mjs';
 
@@ -24,7 +24,7 @@ export { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs'
 export { createGate } from './gate.mjs';
 export { buildAuditRecord, createAuditBarrier } from './audit.mjs';
 export { createConfirmationLedger } from './confirmations.mjs';
-export { authorizeDelegation, createDelegation, revokeDelegation } from './delegation.mjs';
+export { authorizeDelegation, createDelegation, resumeDelegation, revokeDelegation } from './delegation.mjs';
 export { assertNoCanary, confirmationScope, decideEgress, digestContent, renderEgressScope } from './egress.mjs';
 export { matchProtected, resolveProtectedRoots } from './paths.mjs';
 
@@ -247,6 +247,7 @@ export function apply(ctx, rawConfig = {}) {
     assertNoCanary,
     createDelegation,
     revokeDelegation,
+    resumeDelegation: (input) => resumeDelegation(input),
     authorizeDelegation: (request) => authorizeDelegation({ catalog, ...request }),
     issueConfirmation: (input) => confirmations.issue(input),
     consumeConfirmation: (input) => confirmations.consume(input),
