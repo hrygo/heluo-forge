@@ -9,6 +9,7 @@
  * 写动作一条都不在此列，也不由本包开放；写按策略设计 §5.1.1 的登记表另行准入。
  */
 import { assertReadRequest, normalizeReadResult, READ_ACTIONS, READ_REASONS, DevopsReadError } from './read.mjs';
+import { buildDevopsTools, READ_TOOLS } from './tools.mjs';
 
 /** 宿主服务键；提供方（企业 CLI 适配器）用它注入只读端口。 */
 export const READER_KEY = 'devopsReader';
@@ -17,6 +18,7 @@ export const SERVICE_KEY = 'devops';
 export const DEFAULT_CONFIG = Object.freeze({});
 
 export { assertReadRequest, DevopsReadError, normalizeReadResult, READ_ACTIONS, READ_REASONS, READ_STATUSES } from './read.mjs';
+export { buildDevopsTools, READ_TOOLS } from './tools.mjs';
 
 export function validateConfig(input = {}) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -43,6 +45,8 @@ export function apply(ctx, rawConfig = {}) {
   const service = {
     /** 只读动作清单（写动作永不出现在这里）。 */
     readActions: () => [...READ_ACTIONS],
+    /** 已注册的只读工具名（模型可见面）。 */
+    toolNames: () => Object.keys(READ_TOOLS),
     /** 当前状态：没有适配器时为 `no-reader`（可见地 fail closed）。 */
     status: () => (typeof ctx.get === 'function' && ctx.get(READER_KEY) !== undefined ? 'ready' : 'no-reader'),
     /**
@@ -63,7 +67,14 @@ export function apply(ctx, rawConfig = {}) {
   };
 
   const disposeProvide = ctx.provide(SERVICE_KEY, service);
+  // 只读工具进模型可见面，走与其它业务工具同一条门禁管线；没有 tools 服务就只暴露服务、
+  // 不注册工具（宿主差异显式可见，而不是静默注册到别处）。
+  const disposers =
+    typeof ctx.tools?.register === 'function'
+      ? buildDevopsTools(service).map((definition) => ctx.tools.register(definition))
+      : [];
   const teardown = () => {
+    disposers.forEach((dispose) => dispose?.());
     disposeProvide?.();
   };
   // Cordis 以 `new` 运行普通函数插件，返回值不当作 effect 收集；显式登记卸载。

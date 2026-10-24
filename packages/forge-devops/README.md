@@ -10,7 +10,7 @@
 | 衔接点 | bash 工具、企业策略门禁、凭据注入与审计（均待接口核验） |
 | 条件服务 | [services/devops-mcp](../../services/devops-mcp/README.md)；当前不建设 |
 | 详细设计 | [DESIGN-009](../../docs/design/plugins/forge-devops.md)（草案，已建立） |
-| 实现状态 | 已建立 `package.json`、只读端口与门禁骨架源码、11 例离线测试；**企业 CLI 联调未做** |
+| 实现状态 | 已建立 `package.json`、只读端口、门禁骨架与四个只读工具、18 例离线测试；**企业 CLI 联调未做** |
 
 ## 骨架内容（已落地）
 
@@ -19,13 +19,15 @@
 1. **限定只读面**：`change.read`、`repository.read`、`issue.read`、`pr.read`（动作标识与[工程工具契约 §3](../../docs/contracts/engineering-tools.md) 同源）。
 2. **把"退出码"与"事实"分开**：适配器只给退出码、没有结构化状态或缺来源版本时，结果降级为 `unknown` 并给出原因，**不报成功**。
 
-宿主接线：只读适配器经服务键 `devopsReader` 注入（仓库内只留离线假适配器）；策略服务是硬依赖，拿不到就不挂载（入口关闭），不提供"无策略只读"降级；卸载移除服务、无残留。
+宿主接线：只读适配器经服务键 `devopsReader` 注入（仓库内只留离线假适配器）；策略服务是硬依赖，拿不到就不挂载（入口关闭），不提供“无策略只读”降级；卸载移除服务与全部工具注册、无残留。
+
+模型可见面只注册四个只读工具（`forge_devops_change_read` / `forge_devops_repository_read` / `forge_devops_issue_read` / `forge_devops_pr_read`），**没有任何写工具**。它们的参数名刻意用 `target`：策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（2026-10-24 实测的目录缺口）。
 
 ```sh
 node --test packages/forge-devops/test/
 ```
 
-覆盖：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载无残留、配置校验。
+覆盖：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载无残留、配置校验；工具侧另有：只注册四个读工具、参数用 `target` 且必填、正常路径返回契约结果、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册。
 
 ## 边界
 
