@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.9.5 |
+| 版本 | V0.9.6 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -57,7 +57,10 @@
 | [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | keychain provider 开发骨架：backend 契约、内存/不可用/显式 0600 file backend、records/refs、旧 0600 → 钥匙串迁移协调器 | 离线测试通过；macOS Security CLI spike 与迁移演练（仅副本）9/9 通过；Windows/UOS/麒麟 adapter 与真实凭据迁移未实现 |
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
-| 其余七包与 DevOps MCP | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
+| [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；8 个源文件 | `node --test packages/forge-policy/test/` 70 例通过；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。**未测**：有模型提供方时子 Agent 的"模型自决调用"能否绕开作用域 guard（现有 profile 无 LLM 行，子轮次以 error 收束）、策略与沙箱叠加顺序；未接企业环境、无双端实机 |
+| [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业组合 bundle：官方四行禁用补丁、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、角色配置恢复；4 个源文件 | `node --test packages/forge-enterprise/test/` 25 例通过；真机安装/升级/回滚/卸载与残留、四层补丁层序与 `--from-default-profile` 已实测（任务 `20261024T023419Z-dsh-install-c8c2`、`20261024T025338Z-dsh-profile-replace-eb4e`）。**未验**：禁用四行后 shell/settings/onboarding/模型选择是否完整、角色 preset 粒度、`desktop` profile（应用独占管理） |
+| [forge-sdd](../../packages/forge-sdd/README.md) | SDD 规则集与本地前置校验：规则版本、结果归因、与 CI 同一规则集；4 个源文件 | `node --test packages/forge-sdd/test/` 20 例通过；**未联调**企业 CI，本地结论只作前置校验、不替代 CI 权威结论 |
+| 其余四包与 DevOps MCP（forge-brand / forge-devops / forge-gateway / forge-gitee、`services/devops-mcp`） | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
 
 ## 3. 独立服务设计
 
