@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.3.4 |
+| 版本 | V1.3.5 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -152,7 +152,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-`insert:` 段挂四个已实现且有清单的包：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`、`@heluo/forge-sdd`。历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、DevOps、Gitee、品牌四包仍只有 README，不预建入口。
+`insert:` 段挂四个已实现且有清单的包：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`、`@heluo/forge-sdd`。历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
 
 本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出，四个包以本地目录放进该 profile 的 `node_modules/@heluo/`）：
 
@@ -228,7 +228,7 @@ flowchart TD
 | 场景 | 行为 | 用户可见结果 | 是否可重试 |
 |---|---|---|---|
 | 身份包缺失 | 拒绝挂载 | 明确提示缺少身份能力 | 修后重试 |
-| 策略包缺失 | 拒绝挂载或转只读 | 提示策略不可用 | 修后重试 |
+| 策略包缺失 | 拒绝挂载（**不提供只读降级**，与 §5 及冲突收口 C2 同一口径） | 提示策略不可用 | 修后重试 |
 | 版本不匹配 | 拒绝挂载 | 列出期望与实际的版本 | 升级后重试 |
 | 某能力行插错位置 | 启动失败 | 指出冲突行 id | 修正补丁 |
 | 官方行缺失/禁用被跳过 | 记录独占冲突，不标记企业能力可用 | 提示企业组合不完整 | 修正 row id 后重试 |

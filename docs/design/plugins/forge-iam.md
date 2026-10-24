@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.5 |
+| 版本 | V1.0.6 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,7 +14,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-10-23 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
-| 模块状态 | 实施中（Host + Client 骨架；OIDC mock 流程、网关凭据录入/清除/状态已实现；当前为 interim same-origin HTTP + 2s 轮询，管理 API 经 `ctx.connection.requestRejection` 认证；模型门禁判定已实现（纯判定 + 判据，见 §7.3）；Remote/watch、凭据探测、审计与宿主侧默认模型切换接线未实现；真实联调待） |
+| 模块状态 | 可用（Host + Client 骨架；OIDC mock 流程已验，真实联调待；实现与验证见设计索引 §2.2） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/UOS/麒麟实机。以上未核验项不写成已实现。
 >
@@ -560,7 +560,7 @@ flowchart TD
 
 ### 10.2 2026-10-24 安全矩阵（#13 AC2 / AC5 / AC7）
 
-新增 `packages/forge-iam/test/security-matrix.test.mjs`（10 例，`node --test packages/forge-iam/test/` 共 209 例通过，行覆盖 92.59%、分支 82.74%），把此前只有实现、没有断言的四处行为锁进回归：
+新增 `packages/forge-iam/test/security-matrix.test.mjs`（10 例；**当时实测**该包共 209 例通过、行覆盖 92.59%、分支 82.74%；2026-10-24 复测该包共 217 例通过，覆盖率未复测），把此前只有实现、没有断言的四处行为锁进回归：
 
 | 组 | 断言 | 对应 AC |
 |---|---|---|

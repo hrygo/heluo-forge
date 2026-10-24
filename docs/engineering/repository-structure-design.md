@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.6.1 |
+| 版本 | V0.6.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -23,7 +23,7 @@
 
 建议采用 **pnpm workspace 单仓多包（monorepo）**：文档按职责分类，客户端插件包、独立运行服务、部署资产、工程脚本及跨模块测试分别管理。该组织方式覆盖从方案评审到开发、测试、发布和运维的完整迭代，但不把本次目录整理等同于插件或市场已经实现。
 
-工程整理已交付可执行检查、协作约定与九个包、两个服务的职责入口。其后 `forge-market` 建立过旧包清单与测试，`market-index` 曾建立 HTTP 参考实现；2026-10-21 市场改用轻量模式：DSH 原生「索引源」+ AIHUB 托管 format-1 JSON，`services/market-index` 只保留只读校验器，旧插件与 HTTP 服务转为历史参考。企业私有 npm 仍为唯一制品源（[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)），本仓库不建生成器、不写前授权、不承诺全通道；索引交付与三目标安装为评审目标。
+工程整理已交付可执行检查、协作约定与各扩展包、独立服务的职责入口。其后 `forge-market` 建立过旧包清单与测试，`market-index` 曾建立 HTTP 参考实现；2026-10-21 市场改用轻量模式：DSH 原生「索引源」+ AIHUB 托管 format-1 JSON，`services/market-index` 只保留只读校验器，旧插件与 HTTP 服务转为历史参考。企业私有 npm 仍为唯一制品源（[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)），本仓库不建生成器、不写前授权、不承诺全通道；索引交付与三目标安装为评审目标。
 
 **工程整理已由用户于 2026-10-20 批准实施，§4.7 的顺序已执行，整理时点结果见 §4.8。** 该记录不等于后续模块或生产准入获批。仓库公开可见不改变敏感信息、许可证和一期产品边界；当前模块状态以[根 README](../../README.md)与[设计索引](../design/README.md)为入口。
 
@@ -96,7 +96,7 @@ heluo-forge/
 │   ├── plans/                # 推广、实施与分阶段计划
 │   ├── design/
 │   │   ├── README.md         # 逐模块设计索引、状态和依赖
-│   │   ├── plugins/          # 九个安装包的详细设计
+│   │   ├── plugins/          # 各扩展包的详细设计
 │   │   └── services/         # MCP 服务及市场目录服务设计
 │   ├── contracts/           # IAM、网关、DevOps 等外部契约
 │   ├── operations/          # 分发、发布、回滚、支持和试点运行
@@ -127,7 +127,7 @@ heluo-forge/
 | `@heluo/forge-market` | `packages/forge-market/` | 历史参考包：Host + Client、十个工具、面板、bundle 与测试；不属轻量模式目标 | `docs/design/plugins/forge-market.md` |
 | `@heluo/forge-brand` | `packages/forge-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/forge-brand.md` |
 
-上表九份设计正文均已建立；市场设计为正式评审稿，其余仍为草案，设计路径不是待创建项。市场插件已有真实包清单与实现；IAM 已有 Host + Client 开发骨架（config/state/record/`ctx.iam`、独占断言、OIDC 登录/刷新/撤销、账户页/onboarding/横幅），本地 mock 已验、真实 IAM 未联调，账户页暂走 interim route；其余七包仍只保留职责 README。另有凭据支撑包 `@heluo/forge-credentials-keychain`（开发骨架），不在上述九个产品模块内，实现入口见[设计索引](<../design/README.md#22-实现与验证入口>)。
+上表九份设计正文均已建立；市场设计为正式评审稿，其余仍为草案，设计路径不是待创建项。**截至 2026-10-24**：`@heluo/forge-market`、`@heluo/forge-iam`、`@heluo/forge-policy`、`@heluo/forge-sdd`、`@heluo/forge-enterprise` 与 `@heluo/forge-devops` 已有包清单与源码/骨架（其中 IAM 的 Host + Client 骨架本地 mock 已验、真实 IAM 未联调，账户页暂走 interim route；devops 为只读查询 + 门禁骨架，企业 CLI 未联调），`@heluo/forge-brand`、`@heluo/forge-gateway`、`@heluo/forge-gitee` 仍只保留职责 README；逐包实现状态以[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)为准。另有凭据支撑包 `@heluo/forge-credentials-keychain`（开发骨架），不在上述九个产品模块内，实现入口见[设计索引](<../design/README.md#22-实现与验证入口>)。
 
 真实 Node 包启用时采用 `src/`、`test/`、`package.json` 等局部布局；配置 bundle 不强制建立空 `src/`。对外只能使用声明的导出，不跨包直接导入另一个包的 `src`。源码包之间采用显式 `workspace:` 依赖，并避免循环依赖；进入市场首版的实际发布包须将运行产物自包含，不携带需要终端解析的 workspace/外部 npm 运行依赖。新的 Node 组件默认 TypeScript；上游复用组件保留其合理语言，不因 monorepo 强制改写。
 
@@ -224,7 +224,7 @@ flowchart LR
 | 工程底座 | pnpm workspace、`private` 根工程、固定 Node 24.21.0 与 pnpm 11.28.5、忽略规则、编辑器与换行约定 |
 | 检查器 | `scripts/check-docs.mjs`、`scripts/check-repo.mjs` 与共享规则；24 个单元用例覆盖有效与失败样例 |
 | CI | 只读权限工作流，两个外部动作固定到提交 SHA，仅执行离线检查 |
-| 模块入口 | 九个包与两个服务各一份职责 README，状态均为“规划”，无包清单、源码或运行配置 |
+| 模块入口 | （2026-10-21 整理完成时）各包与两个服务各一份职责 README，均无包清单、源码或运行配置 |
 | 图解 | 两个 HTML 按新路径重新生成，保留面板与源稿，无外部脚本与本机绝对路径 |
 
 在上述整理完成时，业务插件、独立服务、私有 registry 与市场目录、双端安装包、企业接口联调与实机验证均未实现；后续市场模块开发不改变该历史结果，也不替代 G0—G3 门禁。

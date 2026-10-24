@@ -6,8 +6,8 @@
 #   2. 企业组合的最小挂载：`insert:` 段把四个已实现的企业包挂进 profile。
 #      历史市场包 `@heluo/forge-market` 按设计不挂（它不属于轻量原生索引模式的目标）。
 #
-# 插入行的范围以"包已有清单、源码与测试"为准；网关、DevOps、Gitee、品牌四包仍只有
-# README，不预建指向未实现包的入口。
+# 插入行的范围以"包已有清单、源码与测试"为准；网关、Gitee、品牌仍只有 README
+#（DevOps 已落地只读查询 + 门禁骨架，企业 CLI 未联调），不预建指向未实现包的入口。
 #
 # 用法：dsh --profile web --patch <该文件>
 # 复核：dsh --profile web --patch <该文件> --dump-config | grep -A2 "id: heluo-"
