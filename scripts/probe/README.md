@@ -65,6 +65,18 @@ DSH_HOST_PROBE_DISABLE_OFFICIAL=0 node scripts/probe/run-host-probe.mjs  # 负�
 - **运行时模型面未验**：探针 profile 的 `llm` 提供方在禁用前后都是 0 个（基线对照同样为 0），
   因此"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"只按 `blocked` 记录，不用 0 个提供方冒充已证明。
 
+## 组合包安装/升级/回退演练（#37 E01）
+
+```sh
+node scripts/probe/run-bundle-install-rehearsal.mjs
+```
+
+在临时目录里对真实 tarball 做 装 → 用**装好的**补丁层做组合 A/B → 升级 → 回退 → 卸载，
+每步核对用户自建文件未被改动，并对比演练前后的 `git status --porcelain` 快照。
+环境变量：`DSH_BIN`（默认 `dsh`）、`DSH_HOST_PROBE_PROFILE`（默认 `sdk`）、
+`DSH_INSTALL_REHEARSAL=0` 可让用例跳过。退出码 0/1/2 与探针一致；证据写临时目录的
+`install-rehearsal.json`（只含布尔、版本号与退出码）。不联网、不安装 pnpm、不触碰真实 profile。
+
 ## 系统钥匙串 spike（#13 本地区块，仅 darwin）
 
 ```sh
