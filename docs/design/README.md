@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.10.1 |
+| 版本 | V0.10.2 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -54,7 +54,7 @@
 | 模块 | 当前实现 | 验证边界 |
 |---|---|---|
 | [forge-iam](../../packages/forge-iam/README.md) | Host + Client 开发骨架：状态机、凭据记录、独占断言、OIDC 登录/回调/刷新/撤销、账户页/onboarding/横幅、网关凭据录入/清除/状态；探测未实现 | 本地 mock OIDC 端到端测试与全仓离线检查通过；真实 IAM 未联调，Client 走 interim route；无 UAG 联调 |
-| [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | keychain provider 开发骨架：backend 契约、内存/不可用/显式 0600 file backend、records/refs、旧 0600 → 钥匙串迁移协调器 | 离线测试通过；macOS Security CLI spike 与迁移演练（仅副本）9/9 通过；Windows/UOS/麒麟 adapter 与真实凭据迁移未实现 |
+| [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | keychain provider 开发骨架：backend 契约、内存/不可用/显式 0600 file backend、records/refs、旧 0600 → 钥匙串迁移协调器 | 离线测试通过；macOS Security CLI spike 10/10、迁移演练（仅副本）9/9、**跨进程可见性补测 6/6** 通过；Windows/UOS/麒麟 adapter 与真实凭据迁移未实现 |
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
 | [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；8 个源文件 | `node --test packages/forge-policy/test/` 94 例通过；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。模型门禁探针（`scripts/probe/model-guard-probe.mjs`）已实测**模型自决调用不会绕开门禁**：`unregistered-action`/`action-disabled`/`target-required` 三种模式各以会话记录中的 `tool/call`+`tool/result` 为据、副作用为零，并以不挂策略的正向对照证明模型确实会调用；同时暴露目录只认调用参数 `target`、真实工具（`bash` 的 `command`、`fs` 的 `path`）无法放行的缺口（见设计 §9.2.2）。沙箱叠加顺序探针（`scripts/probe/sandbox-order-probe.mjs`）已实测**策略门禁先于沙箱执行器判定**（策略拒绝归因不带沙箱信号、目标在沙箱允许区内也不产生副作用；越界写由操作系统级拒绝），见设计 §9.2.3。委托路径面（`delegate` 模式：父模型调用 `subagent`、子 Agent 的 9 次 bash 调用全部被拦、零副作用）亦已实测，**委托不能绕开门禁**。**未测**：企业环境与双端实机 |
