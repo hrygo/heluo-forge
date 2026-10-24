@@ -12,7 +12,7 @@
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-21 |
+| 最后更新 | 2026-10-25 |
 | 门禁 | G1 技术准入与契约评审；G2 市场开放前验证 |
 
 > **阅读提示**：本文是 2026-10-21 的调研取证与当时建议，保留证据价值；来源与控制面决策已由 [ADR-11／13](<plugin-registry-source-decision.md>) 取代，**不要**再按本文的逐版本审批、PG 控制面或 Gitee 统一制品源实施。只想了解当前方案，读 [DESIGN-007](<../design/plugins/forge-market.md>) 与 [DESIGN-012](<../design/services/market-index.md>)。
