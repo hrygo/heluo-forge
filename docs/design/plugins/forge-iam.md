@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V0.8.0 |
+| 版本 | V0.9.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -384,7 +384,33 @@ flowchart TD
 
 **本机实测（2026-10-24，DSH 0.2.1-rc.2，darwin-arm64）**：宿主 `agentDefaultModel.currentSelection()` 返回 `{provider: "deepseek-official", model: "deepseek-flash"}`（字段就是 provider/model），而同进程 `llm.listProviders()` 为 **0 个**——即官方行禁用后，默认选择仍停留在官方模型上，这正是决策表里"当前指向已禁用官方模型"的真实状态，不是假设。把该实测状态喂给门禁：拒绝 `not-signed-in`（并注明官方 API Key 被忽略）。同一探针里用合成输入验证了切换分支：`signedIn + gatewayCredential=present + enterprise=enterprise-probe` 且当前选择为 `deepseek/deepseek-chat` 时返回 `selection-disabled-switched` 并给出 `switchTo`。
 
-**未验**：`saveSelection` 的写入接线（探针只读，未写设置）；"登录后企业模型可用"的正向路径需要企业网关与企业凭据；官方旧默认模型的迁移/清理策略仍未定（见 §12）。
+**未验**：对**真实** `agentDefaultModel.saveSelection` 的写入（受控写未获准；本轮的写入路径以记录式 sink 演练，见 §7.2.2）；"登录后企业模型可用"的正向路径需要企业网关与企业凭据；官方旧默认模型的迁移/清理策略仍未定（见 §12）。
+
+### 7.2.2 默认模型的写入接线（#13 AC6，`applyModelSelection()`，2026-10-24）
+
+判定与写入分离：`evaluateModelGate()` 只判定，`applyModelSelection()` 只负责把判定落到设置，并在写入前**独立复查**一次"绝不覆盖用户显式企业选择"——即使判定对象被伪造要求切换，接线也必须自己挡住。
+
+| 情况 | 结果 |
+|---|---|
+| 判定未放行（如未登录） | 不写 `no-write-gate-denied` |
+| 判定放行但没有 `switchTo`（如"当前已是企业模型"） | 不写 `no-write-no-target` |
+| 当前选择**显式**且仍可用（含企业模型本身） | 不写 `no-write-keep-explicit-enterprise`（独立复查，不看判定脸色） |
+| 当前已是目标模型 | 不写 `no-write-already-enterprise`（幂等） |
+| 当前选择读取失败或无法解析 | 不写 `no-write-selection-unprovable`（无法证明将覆盖什么就不写） |
+| 写入抛错 | `selection-write-failed`，如实报错不谎报成功 |
+| 写入后回读不一致 / 未提供读取器 | `written: true, verified: false`，按**未验证缺口**报告，不写成"已切换" |
+| 写入且回读一致 | `selection-written`，`verified: true` |
+
+**实测（2026-10-24，DSH `0.2.1-rc.2`，darwin-arm64，node v26.11.1，profile `sdk`）**：探针 `model-selection-write-guard-on-measured-host`（探针 29/29 通过、2 blocked）用**宿主实测状态**驱动接线，写入落点是记录式 sink（**不写真实设置**）：
+
+| 输入 | 实测结果 |
+|---|---|
+| 宿主实测判定（未登录，`not-signed-in`） | `written: false`，`no-write-gate-denied` |
+| 合成"已登录 + 网关凭据 + 企业模型"，当前选择 = **实测到的官方模型**（不可用） | `written: true`、`verified: true`，尝试写入 `enterprise-probe/probe-model`，写次数 1 |
+| 合成"当前是显式企业选择"＋伪造的切换判定 | `written: false`，`no-write-keep-explicit-enterprise` |
+| 步骤前后再读真实 `agentDefaultModel.currentSelection()` | 与步骤前一致（`liveSelectionUntouched: true`）——只读校验证明本次演练没有改动正在使用的会话设置 |
+
+离线用例 `packages/forge-iam/test/model-selection.test.mjs`（7 项）覆盖上表全部分支、写入失败与回读不一致、非法输入报错。
 
 ### 7.2.1 禁用 IAM 插件与独占冲突的实测（#13 AC8 / AC1，2026-10-24）
 

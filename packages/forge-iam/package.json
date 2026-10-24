@@ -16,7 +16,8 @@
     "./package.json": "./package.json",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./model-gate": "./src/model-gate.mjs"
   },
   "files": [
     "src",
