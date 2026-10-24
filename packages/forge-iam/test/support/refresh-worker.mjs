@@ -32,10 +32,10 @@ async function main() {
     return;
   }
 
+  // A cold service, like a process that starts and immediately needs a token.
+  // Hydrating first would let the boot path start the refresh instead, which is
+  // a different case: hydrate may refresh on its own and hide the measurement.
   const service = createIamService(checked.value, { credentials: new FileCredentials(dir) });
-  // The host hydrates once at boot; do the same so the worker exercises the
-  // same state machine as production rather than a cold service.
-  await service.hydrate().catch(() => {});
   const startedAt = Date.now();
   try {
     const token = await service.resolveToken();

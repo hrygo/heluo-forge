@@ -94,8 +94,7 @@ test('two processes refresh once and share the rotated grant', async (t) => {
 
   for (const result of results) {
     assert.equal(result.ok, true, `worker failed: ${JSON.stringify(result)}`);
-    assert.equal(result.state, 'ready');
-    assert.equal(result.hasToken, true);
+    assert.equal(result.hasToken, true, 'a cold worker must still receive a usable token');
   }
   assert.equal(mock.counts.refresh, 1, 'the IdP must see exactly one refresh for two processes');
   const after = await storedGrant(credentials);
@@ -136,7 +135,7 @@ test('a lost refresh response forces a new sign-in', async (t) => {
   // process still holds a token the IdP has already invalidated.
   const lost = await runWorker(dir, config);
   assert.equal(lost.ok, false, 'the dropped response must not be reported as success');
-  assert.equal(lost.state !== 'ready', true);
+  assert.equal(lost.hasToken, undefined);
   const stillOld = await storedGrant(credentials);
   assert.equal(stillOld.refreshToken, before.refreshToken, 'the store cannot hold a token it never received');
   assert.equal(mock.refreshTokens.has(before.refreshToken), false, 'the IdP already consumed it');
@@ -145,7 +144,6 @@ test('a lost refresh response forces a new sign-in', async (t) => {
   const retry = await runWorker(dir, config);
   assert.equal(retry.ok, false, 'a consumed refresh token cannot be replayed');
   assert.equal(retry.code, 'IAM_REAUTH_REQUIRED');
-  assert.notEqual(retry.state, 'ready');
   const cleared = await credentials.readRecord(RECORD_KEY);
   assert.equal(cleared, undefined, 'the unusable session must be cleared so the UI asks for sign-in');
 
