@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.4.0 |
+| 版本 | V0.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -64,6 +64,10 @@
 | 契约测试 | 市场包 `test/` | 市场自有协议、错误码、配置与包形态 | 市场已有本地用例；IAM、网关、DevOps 等企业契约仍待联调 |
 | 集成测试 | `packages/forge-market/test/integration.test.mjs`、`tests/integration/` | 历史归档安装链路与失败传播 | 已建立；临时目录与仿服务，不访问企业系统 |
 | 宿主与终端验收 | DESIGN-007 历史记录；后续实机证据 | DSH 挂载、Windows 与银河麒麟业务路径 | 有测试 profile 挂载/面板记录，已恢复；双端企业路径未验，无 `tests/e2e/` 自动化入口 |
+
+### 5.1 包体闭包检查
+
+`scripts/lib/bundle-rules.mjs` 接入 `scripts/lib/repo-rules.mjs`，对 `packages/*` 做静态闭包核验：包名与目录一致、`engines.dsh` 具体、无 install 期构建脚本、不依赖 DSH 内核、`files`/`main`/`bin`/`exports` 目标存在、`@heluo/*` 依赖必须 `workspace:` 且可解析、不跨包导入源码路径、补丁层随包发行且 `insert:` 不指向不存在的包、不挂历史市场包、`locale` 双语文案随包发行。规则来源与用途见[企业组合设计 §5.3](../design/plugins/forge-enterprise.md#53-组合与包体闭包e01-37)；正反向夹具在 `tests/bundle-closure.test.mjs`。静态规则不替代真实 tarball 与安装语义验证。
 
 - 没有真实用例时不建立会“零用例成功”的业务测试入口。
 - 安全负向用例（拒绝、超时、结果未知、权限不足）与正向用例同等对待。

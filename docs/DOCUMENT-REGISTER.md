@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.29.18 |
+| 版本 | V1.29.19 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,14 +19,14 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.18 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.19 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.21.5 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.8.4 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.8.5 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.0 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.3.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V0.7.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.7.0 | 草案 | 平台组（代拟） | G2 |
-| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V0.6.0 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V0.7.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V0.3.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-007 | 企业插件市场（轻量原生索引模式） | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | G1 索引接入；G2 三目标安装 |
@@ -48,7 +48,7 @@
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V2.5.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V1.0.0 | 评审稿 | 网关团队 | G0 认领；G1 接入契约；G2 联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.6.1 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
-| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.4.0 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
+| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.5.0 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.10.4 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
 | CORP-DSH-CONF-002 | 私有化 Gitee 内部插件源码接入问询函 | [collaboration/gitee-market-clarification.md](<collaboration/gitee-market-clarification.md>) | V0.3.0 | 草案 | 平台组（代拟）；Gitee 团队回函 | G1 源码接口联调前；G2 开放前确认运行事项 |
 | CORP-DSH-CONF-003 | 插件市场企业接入问询函（P0） | 已废止 | — | 废止 | 平台组 | 内容已吸收至 DESIGN-007/012 及 P0 取证单，问询草案已废止删除 |

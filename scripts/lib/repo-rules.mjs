@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname, sep } from 'node:path';
 
+import { checkBundleClosure } from './bundle-rules.mjs';
+
 const REQUIRED = [
   'README.md',
   'AGENTS.md',
@@ -198,6 +200,8 @@ export function checkRepo(root) {
       }
     });
   }
+
+  checkBundleClosure(root, errors);
 
   const assets = join(root, 'docs/assets');
   if (existsSync(assets)) {
