@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V0.7.0 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -252,9 +252,11 @@ flowchart TD
 | 除历史市场包自身外，任何补丁不得挂 `@heluo/forge-market` | AC5「不挂历史市场」 |
 | 有 `locale/en.json` 就必须同时有 `zh.json` 且 `locale` 随包发行 | AC4「en/zh 说明」 |
 
-**本机实测（2026-10-24，本仓库工作副本）**：规则接入后立即发现两个真实缺陷——`@heluo/forge-enterprise` 的补丁层次既未列入 `files`、也未声明 `dsh.bundle.patch`，即**包体不会带上禁用四行的补丁**。两项已在本轮修复（`files` 增加 `cordis.patch.yml`、新增 `dsh.bundle.patch`），其余包与新规则一致通过。证据：`node scripts/check-repo.mjs`（修复前 2 项错误 → 修复后 `repo: ok`）、`node --test tests/bundle-closure.test.mjs`。
+**真实 tarball 核验**（`scripts/check-bundle-tarballs.mjs`，对每个有清单的包跑 `npm pack --dry-run --json`，只看实际打出来的文件与模式位）：声明的 `files` 条目必须真的进包；`package.json`/`README.md`/`main`/`exports`/`bin` 目标必须在包内；`bin` 目标必须带执行位；`locale/en.json` 与 `zh.json` 必须成对；`test/`、`coverage/`、`*.test.mjs`、`pnpm-lock.yaml` 不得混进包体。用 npm 而非 pnpm 是因为 CI 只装 Node：`.github/workflows/check.yml` 不安装 pnpm，而 pack 的文件选择与模式位正是 npm 的实现语义。
 
-**未验**：真实 tarball 内容（`pnpm pack` 实测）、安装/升级/卸载/回退语义、五类开关的独立性实测、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
+**本机实测（2026-10-24，本仓库工作副本）**：规则接入后立即发现三个真实缺陷——① `@heluo/forge-enterprise` 的补丁层既未列入 `files`、也未声明 `dsh.bundle.patch`，即**包体不会带上禁用四行的补丁**；② 同包 `files` 缺少 `cordis.patch.yml` 的发行声明；③ `@heluo/forge-sdd` 的 `bin` 目标 `src/cli.mjs` 在仓库与 tarball 中都是 `644`（安装后 shim 无法执行）。三项已修复：`files` 增加补丁、新增 `dsh.bundle.patch`、`chmod +x src/cli.mjs`（`git` 记录 `100755`，`npm pack` 实测模式位由 `644` 变 `755`）。证据：`node scripts/check-repo.mjs`（修复前 2 项 + 修复后 1 项 → `repo: ok`）、`node scripts/check-bundle-tarballs.mjs`（6 个包、64 个文件 → `bundles: ok`）。
+
+**未验**：安装/升级/卸载/回退的实际语义（`npm install`/`dsh plugin add` 到临时目录与临时 profile 的演练）、五类开关的独立性实测、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
 
 ## 10. 测试矩阵
 

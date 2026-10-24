@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.5.0 |
+| 版本 | V0.6.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -69,16 +69,19 @@
 
 `scripts/lib/bundle-rules.mjs` 接入 `scripts/lib/repo-rules.mjs`，对 `packages/*` 做静态闭包核验：包名与目录一致、`engines.dsh` 具体、无 install 期构建脚本、不依赖 DSH 内核、`files`/`main`/`bin`/`exports` 目标存在、`@heluo/*` 依赖必须 `workspace:` 且可解析、不跨包导入源码路径、补丁层随包发行且 `insert:` 不指向不存在的包、不挂历史市场包、`locale` 双语文案随包发行。规则来源与用途见[企业组合设计 §5.3](../design/plugins/forge-enterprise.md#53-组合与包体闭包e01-37)；正反向夹具在 `tests/bundle-closure.test.mjs`。静态规则不替代真实 tarball 与安装语义验证。
 
+`scripts/check-bundle-tarballs.mjs` 对每个有清单的包跑 `npm pack --dry-run --json`，核对实际进包的文件与模式位（声明项、入口、`bin` 执行位、locale 成对、不得混入测试/lockfile）。它用 npm 而不是 pnpm：CI 只装 Node，不安装 pnpm。`node --run check` 已包含该步，也可单跑 `pnpm check:tarballs`。
+
 - 没有真实用例时不建立会“零用例成功”的业务测试入口。
 - 安全负向用例（拒绝、超时、结果未知、权限不足）与正向用例同等对待。
 - 测试不得依赖真实生产凭据；使用占位身份与受控测试环境。
 
 ## 6. 检查与 CI
 
-- 本地：`pnpm check` 直接串行执行两个检查脚本与 `node --test`；`test:unit` 当前也是全量 Node 测试发现，不能按命名误解为仅工程单元测试。
+- 本地：`pnpm check` 直接串行执行文档检查、仓库检查、包体 tarball 闭包检查与 `node --test`；`test:unit` 当前也是全量 Node 测试发现，不能按命名误解为仅工程单元测试。
 - 需要缩小范围定位时使用根 README 的市场包/参考服务命令；全量检查已覆盖的有效结果无需重复执行。真实仓库归档检查与 DSH/企业实机操作不进入离线 CI。
 - `check:docs` 校验元数据、登记一致性、链接与锚点、表格列数、禁写修订记录与询问函问题序列。
-- `check:repo` 校验必需文件、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径。
+- `check:repo` 校验必需文件、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径，以及包体闭包（清单/入口/workspace 依赖/补丁层/locale）。
+- `check:tarballs` 校验真实 tarball 内容与模式位。
 - CI 使用 `.github/workflows/check.yml` 的单个 `verify` job，执行 `node --run check`；默认 `contents: read`，外部动作固定到完整提交 SHA，不使用 `pull_request_target`。触发与依赖策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
 - CI 只跑离线检查；不接触企业系统、不注入生产密钥、不自动发布。
 

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { checkRepo } from '../scripts/lib/repo-rules.mjs';
-import { parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
+import { auditTarball, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
 import { buildValidRepo } from './check-repo.test.mjs';
 
 function write(root, path, content) {
@@ -202,4 +203,114 @@ test('patch parsing reads inserted names and disabled rows', () => {
     { id: 'forge-market', name: '@heluo/forge-market' },
     { id: 'nameless', name: undefined },
   ]);
+});
+
+test('tarball audit compares packed content with the declaration', () => {
+  const manifest = {
+    files: ['src', 'cordis.patch.yml', 'README.md'],
+    main: './src/index.mjs',
+    exports: { '.': './src/index.mjs', './locale/*.json': './locale/*.json' },
+    bin: { 'forge-sample': './src/cli.mjs' },
+  };
+  const clean = [
+    { path: 'package.json', mode: 0o644 },
+    { path: 'README.md', mode: 0o644 },
+    { path: 'cordis.patch.yml', mode: 0o644 },
+    { path: 'src/index.mjs', mode: 0o644 },
+    { path: 'src/cli.mjs', mode: 0o755 },
+    { path: 'locale/en.json', mode: 0o644 },
+    { path: 'locale/zh.json', mode: 0o644 },
+  ];
+  assert.deepEqual(auditTarball({ label: 'packages/forge-sample', manifest, packed: clean }), []);
+
+  const dropped = auditTarball({
+    label: 'packages/forge-sample',
+    manifest,
+    packed: [{ path: 'package.json', mode: 0o644 }, { path: 'src/index.mjs', mode: 0o644 }],
+  });
+  assert.ok(dropped.some((error) => error.includes('missing README.md')), dropped.join('\n'));
+  assert.ok(dropped.some((error) => error.includes('dropped declared files entry README.md')), dropped.join('\n'));
+  assert.ok(dropped.some((error) => error.includes('missing bin.forge-sample')), dropped.join('\n'));
+  assert.ok(dropped.some((error) => error.includes('missing exports[./locale/*.json]')), dropped.join('\n'));
+});
+
+test('tarball audit refuses non-executable bins and shipped test files', () => {
+  const manifest = { files: ['src', 'README.md'], main: './src/index.mjs', bin: { 'forge-sample': './src/cli.mjs' } };
+  const packed = [
+    { path: 'package.json', mode: 0o644 },
+    { path: 'README.md', mode: 0o644 },
+    { path: 'src/index.mjs', mode: 0o644 },
+    { path: 'src/cli.mjs', mode: 0o644 },
+    { path: 'src/gate.test.mjs', mode: 0o644 },
+    { path: 'coverage/lcov.info', mode: 0o644 },
+    { path: 'pnpm-lock.yaml', mode: 0o644 },
+    { path: 'test/cli.test.mjs', mode: 0o644 },
+  ];
+  const errors = auditTarball({ label: 'packages/forge-sample', manifest, packed });
+  assert.ok(errors.some((error) => error.includes('bin.forge-sample ./src/cli.mjs is not executable (mode 644)')), errors.join('\n'));
+  assert.ok(errors.some((error) => error.includes('must not ship src/gate.test.mjs')), errors.join('\n'));
+  assert.ok(errors.some((error) => error.includes('must not ship coverage/lcov.info')), errors.join('\n'));
+  assert.ok(errors.some((error) => error.includes('must not ship pnpm-lock.yaml')), errors.join('\n'));
+});
+
+test('tarball audit keeps locale pairs together', () => {
+  const manifest = { files: ['src', 'locale', 'README.md'], main: './src/index.mjs' };
+  const errors = auditTarball({
+    label: 'packages/forge-sample',
+    manifest,
+    packed: [
+      { path: 'package.json', mode: 0o644 },
+      { path: 'README.md', mode: 0o644 },
+      { path: 'src/index.mjs', mode: 0o644 },
+      { path: 'locale/en.json', mode: 0o644 },
+    ],
+  });
+  assert.ok(errors.some((error) => error.includes('missing locale/zh.json')), errors.join('\n'));
+});
+
+test('bin targets must be executable in the working tree', () => {
+  withFixture((root) => {
+    addPackage(root, 'forge-sample', { bin: { 'forge-sample': './src/cli.mjs' } });
+    write(root, 'packages/forge-sample/src/cli.mjs', '#!/usr/bin/env node\n');
+    const before = run(root);
+    assert.ok(before.some((error) => error.includes('must be executable')), before.join('\n'));
+    chmodSync(join(root, 'packages/forge-sample/src/cli.mjs'), 0o755);
+    assert.equal(run(root).some((error) => error.includes('must be executable')), false);
+  });
+});
+
+test('the tarball checker CLI fails on a package that drops declared files', () => {
+  const node = process.execPath;
+  const script = join(process.cwd(), 'scripts/check-bundle-tarballs.mjs');
+  const good = fixture();
+  const bad = fixture();
+  try {
+    for (const root of [good, bad]) {
+      write(root, 'packages/forge-sample/README.md', '# forge-sample\n\n状态：可用\n');
+      write(root, 'packages/forge-sample/src/index.mjs', 'export const ok = true;\n');
+      write(root, 'packages/forge-sample/package.json', manifest({ name: '@heluo/forge-sample' }));
+    }
+    write(bad, 'packages/forge-sample/package.json', manifest({ name: '@heluo/forge-sample', files: ['src', 'README.md', 'docs'] }));
+
+    const success = spawnSync(node, [script, good], { encoding: 'utf8' });
+    assert.equal(success.status, 0, success.stdout + success.stderr);
+    assert.match(success.stdout, /bundles: 1 packed/);
+    assert.match(success.stdout, /bundles: ok/);
+
+    const failure = spawnSync(node, [script, bad], { encoding: 'utf8' });
+    assert.equal(failure.status, 1, failure.stdout + failure.stderr);
+    assert.match(failure.stderr, /dropped declared files entry docs/);
+  } finally {
+    rmSync(good, { recursive: true, force: true });
+    rmSync(bad, { recursive: true, force: true });
+  }
+});
+
+test('pack output parsing tolerates the duplicated JSON some npm versions print', () => {
+  const document = JSON.stringify({ '@heluo/forge-sample': { files: [{ path: 'package.json', mode: 0o644 }] } });
+  const expected = [{ path: 'package.json', mode: 0o644 }];
+  assert.deepEqual(parsePackOutput(document), expected);
+  assert.deepEqual(parsePackOutput(`${document}\n${document}`), expected);
+  assert.deepEqual(parsePackOutput(JSON.stringify({ files: [{ path: 'src/index.mjs' }] })), [{ path: 'src/index.mjs' }]);
+  assert.equal(parsePackOutput('npm notice\nnot json at all\n'), null);
 });
