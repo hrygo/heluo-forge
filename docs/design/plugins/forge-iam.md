@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.0 |
+| 版本 | V1.0.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -529,6 +529,20 @@ flowchart TD
 | Client 交互 | overlay 可点击；`ready` 后仍观察退出；完成屏不被重复轮询回退 | React 19 + jsdom 受控渲染（非 DSH 内嵌 React 18 实机） |
 
 以上为仓库内自动回归与安装包契约核验；未执行真实 profile 卸载、企业 IAM 联调或 Windows/UOS/麒麟实机。
+
+### 10.2 2026-10-24 安全矩阵（#13 AC2 / AC5 / AC7）
+
+新增 `packages/forge-iam/test/security-matrix.test.mjs`（10 例，`node --test packages/forge-iam/test/` 共 209 例通过，行覆盖 92.59%、分支 82.74%），把此前只有实现、没有断言的四处行为锁进回归：
+
+| 组 | 断言 | 对应 AC |
+|---|---|---|
+| 授权码重放 | 成功后再次提交同一回调用例被拒（`IAM_STATE_MISMATCH`），不再到达 token 端点，已存 grant 的 refresh token 不被轮换 | AC2 |
+| 脱敏 | token 端点用 `error_description` 原样回显请求体、回调携带 token 形态的 `error_description` 时，抛出的消息与 `view()` 均不含授权码、verifier、token；失败路径不落任何 grant 记录 | AC2 / AC4 边界 |
+| RP 登出 | `logoutMode: 'rp'` + `endSessionEndpoint` 时 `signOut()` 返回的 `logoutUrl` 带 `client_id`、`id_token_hint`、`post_logout_redirect_uri`，且记录被清除 | AC5 |
+| 撤销失败 | 撤销端点 503 时本地退出仍完成（`signed-out`），同时 `view().error` 保留 `IAM_REVOCATION_FAILED` 归因 | AC5 |
+| 失败闭合 | 六条路径（IAM 不可达、JWKS 无签名 key、token 端点 403、429、写盘失败、回调源不可用）均落到非 `ready`、`principal` 为空、无 grant 记录 | AC7 |
+
+边界：全部用例跑在仿 IAM 与内存凭据上，负面输入由脚本注入；不构成真实 IdP、系统浏览器、keychain 或双端实机证据。授权码重放的服务端一次性由 IdP 保证，本组只证明本模块自己不复用已被消费的 attempt。官方行禁用不影响本矩阵（用例直接构造 service，不经 patch 层）。
 
 ## 11. 打包、升级与回退
 
