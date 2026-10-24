@@ -48,11 +48,27 @@ function fakeHost() {
   return { ctx, guards, provided };
 }
 
-function mount(catalog = CATALOG) {
+function mount(catalog = CATALOG, approvals = []) {
   const host = fakeHost();
-  apply(host.ctx, { audit: { sink: 'memory', allowNonDurable: true }, catalog, tools: TOOLS, categories: CATEGORIES });
+  apply(host.ctx, {
+    audit: { sink: 'memory', allowNonDurable: true },
+    approvals,
+    catalog,
+    tools: TOOLS,
+    categories: CATEGORIES,
+  });
   return host;
 }
+
+/** 合成台账条目：只为验证机制，不代表任何真实批准。 */
+const approvalFor = (action) => ({
+  approval_id: `APR-${action}`,
+  action,
+  resource: '*',
+  approved_by: 'test-fixture',
+  approved_at: '2026-10-01T00:00:00Z',
+  expires_at: '2099-01-01T00:00:00Z',
+});
 
 test('D1: 每一条登记的写/确认动作默认都被拒绝，且执行体零调用', () => {
   const host = mount();
@@ -71,11 +87,14 @@ test('D1: 每一条登记的写/确认动作默认都被拒绝，且执行体零
   }
 });
 
-test('D1: 拒绝来自"未批准"——只把 enabled 翻成 true，同一调用即放行', () => {
+test('D1: 拒绝来自"未批准"——有台账条目才允许 enabled，之后同一调用即放行', () => {
   const enabled = CATALOG.map((entry) => (entry.action === 'issue.close' ? { ...entry, enabled: true } : entry));
-  const host = mount(enabled);
+  // 第一层：没有台账条目就不许 enabled（挂载即拒绝）。
+  assert.throws(() => mount(enabled), (error) => error.code === 'POLICY_APPROVAL_REQUIRED');
+  // 第二层：补上有效台账条目后放行——证明上面的拒绝来自"未获批准"，不是别的原因。
+  const host = mount(enabled, [approvalFor('issue.close')]);
   const reason = host.guards[0]({ name: toolName('issue.close'), arguments: { target: 'I-1' }, callId: 'c1' });
-  assert.equal(reason, undefined, '一旦该动作被批准开放，门禁就不再拦它（否则上面的拒绝证明不了什么）');
+  assert.equal(reason, undefined);
 });
 
 test('D1: 策略服务把登记表里的动作全部列为已知动作', () => {

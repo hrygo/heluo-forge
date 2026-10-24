@@ -12,6 +12,12 @@ import { join } from 'node:path';
 import { createObservationRuntime } from './observe.mjs';
 
 import { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
+import {
+  assertEnabledEntriesApproved,
+  compileApprovals,
+  decideApproval,
+  PolicyApprovalError,
+} from './approvals.mjs';
 import { createGate } from './gate.mjs';
 import { createAuditBarrier } from './audit.mjs';
 import { createConfirmationLedger } from './confirmations.mjs';
@@ -23,6 +29,15 @@ export const name = 'forge-policy';
 export const inject = ['tools'];
 
 export { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
+export {
+  APPROVAL_FIELDS,
+  APPROVAL_REASONS,
+  assertEnabledEntriesApproved,
+  compileApprovals,
+  decideApproval,
+  needsApproval,
+  PolicyApprovalError,
+} from './approvals.mjs';
 export { createGate } from './gate.mjs';
 export { buildAuditRecord, createAuditBarrier } from './audit.mjs';
 export { createConfirmationLedger } from './confirmations.mjs';
@@ -77,6 +92,9 @@ export function validateConfig(input = {}) {
   if (input.protectedPaths !== undefined && !Array.isArray(input.protectedPaths)) {
     issues.push('protectedPaths must be an array of protected roots');
   }
+  if (input.approvals !== undefined && !Array.isArray(input.approvals)) {
+    issues.push('approvals must be an array of approval entries');
+  }
   if (input.env !== undefined && !isPlainObject(input.env)) {
     issues.push('env must be an object when provided');
   }
@@ -121,6 +139,7 @@ export function validateConfig(input = {}) {
   return {
     value: {
       catalog,
+      approvals: input.approvals ?? [],
       tools: input.tools ?? {},
       categories: input.categories ?? {},
       protectedPaths: input.protectedPaths ?? defaultProtectedPaths(),
@@ -226,6 +245,9 @@ export function apply(ctx, rawConfig = {}) {
 
   const config = result.value;
   const catalog = compileCatalog(config.catalog);
+  // 登记 ≠ 批准：没有有效台账条目的写/确认动作不许被置为 enabled（挂载即拒绝）。
+  const approvals = compileApprovals(config.approvals);
+  assertEnabledEntriesApproved(catalog, approvals);
   const env = config.env ?? { ...defaultTemplateValues(), ...process.env };
   const protectedRoots = resolveProtectedRoots(config.protectedPaths, env);
   const auditRecords = [];
@@ -302,6 +324,8 @@ export function apply(ctx, rawConfig = {}) {
     auditDegraded: () => audit.isDegraded(),
     registerCommand: (commandCtx, definition) => registerCommand(commandCtx, service, definition),
     observations: () => observations,
+    approvals: () => [...approvals.values()],
+    approvalFor: (action, query = {}) => decideApproval({ approvals, action, ...query }),
   });
   const disposeProvide = ctx.provide(SERVICE_KEY, service);
 

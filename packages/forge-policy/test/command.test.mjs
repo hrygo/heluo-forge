@@ -3,7 +3,28 @@ import test from 'node:test';
 
 import { apply, PolicyCatalogError } from '../src/index.mjs';
 
+// D1：enabled 的写/确认动作必须有有效台账条目，否则挂载即拒绝（合成批准人，非真实批准）。
+const APPROVALS = [
+  {
+    approval_id: 'APR-CMD-1',
+    action: 'issue.create_or_update',
+    resource: '*',
+    approved_by: 'test-fixture',
+    approved_at: '2026-10-01T00:00:00Z',
+    expires_at: '2099-01-01T00:00:00Z',
+  },
+  {
+    approval_id: 'APR-CMD-2',
+    action: 'review.human.record',
+    resource: '*',
+    approved_by: 'test-fixture',
+    approved_at: '2026-10-01T00:00:00Z',
+    expires_at: '2099-01-01T00:00:00Z',
+  },
+];
+
 const CONFIG = {
+  approvals: APPROVALS,
   catalog: [
     { action: 'repository.read', kind: 'read', target: 'repository', enabled: true },
     { action: 'issue.create_or_update', kind: 'write', target: 'issue', enabled: true },
