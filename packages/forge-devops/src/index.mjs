@@ -11,6 +11,14 @@
 import { assertReadRequest, normalizeReadResult, READ_ACTIONS, READ_REASONS, DevopsReadError } from './read.mjs';
 import { buildDevopsTools, READ_TOOLS } from './tools.mjs';
 
+export const name = 'forge-devops';
+// 依赖必须由 inject 声明，cordis 才会等服务就绪后再运行 apply：
+// - 少了 `tools`：`ctx.tools` 不可见，工具**静默不注册**；
+// - 少了 `policy`：apply 在策略挂载前运行，直接抛 POLICY_REQUIRED 而整项不激活。
+// 两种失败模式都由宿主探针（2026-10-24）实测到。策略不在时本项保持 pending（入口关闭），
+// 这正是设计 §6.1 要的"硬依赖、不降级"。
+export const inject = ['tools', 'policy'];
+
 /** 宿主服务键；提供方（企业 CLI 适配器）用它注入只读端口。 */
 export const READER_KEY = 'devopsReader';
 /** 本插件对外暴露的服务键。 */
