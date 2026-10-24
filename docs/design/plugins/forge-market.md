@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场（轻量原生索引模式） |
-| 版本 | V2.2.1 |
+| 版本 | V2.2.2 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -337,7 +337,7 @@ packages/forge-market/
 | 项 | 正确写法 | 违反时的现象 |
 |---|---|---|
 | `cordis.patch.yml` 顶层 | 数组：`- insert: …` | 安装即报 `must be a top-level YAML array` |
-| `engines.dsh` | 覆盖运行时版本；`0.2.1-rc.2` 小于 `0.2.1`，故写 `>=0.2.0` | 安装被拒，提示版本不兼容 |
+| `engines.dsh` | 覆盖运行时版本；预发布 `-rc.N` 在比较上小于基础版本，故按**基础版本**（而非 `-rc.N`）写下限 | 安装被拒，提示版本不兼容 |
 | `inject` | 数组：`['tools']`；可选服务用 `ctx.get(name)` | 写成 `{ required, optional }` 会被当作两个服务名，插件永远 pending |
 | `Config` | `Config['~standard'].validate(config)` 的 standard-schema 对象 | 激活时报 `Cannot read properties of undefined (reading 'validate')` |
 

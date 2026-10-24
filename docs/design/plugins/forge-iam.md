@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.6 |
+| 版本 | V1.0.7 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -65,6 +65,8 @@
 
 ## 3. 需求与依赖
 
+**随包事实的复核证据**：2026-10-21 在 `0.2.1-rc.2` 上核验；2026-10-25 在 `0.2.1-rc.3` 复核，默认组合仍挂载 `@deepseek-ai/dsh-credentials-local`（`dsh --dump-config` 的 row id `credentials`）；本机 `dsh --version` = `0.2.1-rc.3`。表内其余字段仍是 2026-10-21 的核验结论，未随版本重跑。
+
 | 需求/验收 | 关系 | 说明 |
 |---|---|---|
 | REQ-01 / A1、A14 | 支撑 | 授权码 + PKCE、loopback 回调、错误 `state`/身份校验拒绝；未登录或网关凭据未配置时无企业模型 |
@@ -75,7 +77,7 @@
 
 | 依赖 | 类型 | 版本约束 | 缺失时的行为 |
 |---|---|---|---|
-| `dsh-credentials` + `dsh-credentials-local` | 包 | 随目标 DSH `0.2.1-rc.2` | 无法读写记录；不进入 ready，明确报错 |
+| `dsh-credentials` + `dsh-credentials-local` | 包 | 随目标 DSH 提供（复核证据见本节末） | 无法读写记录；不进入 ready，明确报错 |
 | `dsh-web-server`（`ctx.webServer`） | 包 | 随目标 DSH | 无法注册回调；登录不可用 |
 | `dsh-settings` | 包 | 随目标 DSH | 配置不可写；按只读配置启动或报错 |
 | `dsh-llm-pi-ai` | 包 | 随目标 DSH | 无模型路由；不影响登录本身 |
@@ -294,7 +296,7 @@ interface IamGrantV1 {
 | 日志 | 主体、资源、结果、耗时、错误类别 | 90 天（认证）/30 天（配置错误） | 本地写失败不阻断；必要审计由 policy 执行 |
 | 官方旧 grant | 不读取、不刷新、不用于调用 | 直到用户清理 | 清理失败保留并提示 |
 
-**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback。账户页已返回并展示 `gatewayCredential.storage`（`keychain`/`file` 等），非 keychain 时显示“未受系统保护”，见 §4.4。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
+**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供（2026-10-21 核验）。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback。账户页已返回并展示 `gatewayCredential.storage`（`keychain`/`file` 等），非 keychain 时显示“未受系统保护”，见 §4.4。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
 
 **本机 spike（2026-10-24，darwin-arm64，`/usr/bin/security`）**：用 `@heluo/forge-credentials-keychain` 的 security-cli 适配器（非生产、需 `allowUnvettedPlatformAdapter: true` 显式开启）在真实系统钥匙串上跑通 backend 契约，实测到的事实：
 

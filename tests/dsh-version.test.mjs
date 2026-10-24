@@ -14,6 +14,7 @@ import {
   DSH_VERSION_SHAPE,
   dshReleaseLine,
   dshVersionInLine,
+  hasDshContext,
   listCodeOccurrences,
   listDocOccurrences,
   listEngineFloors,
@@ -62,6 +63,17 @@ test('dshVersionInLine 只认 DSH 上下文或同发布线，不误伤 IP 与无
   assert.equal(dshReleaseLine(BASELINE), BASELINE.split('.').slice(0, 2).join('.'));
 });
 
+test('hasDshContext 要求 DSH 名称与版本邻近：标题提到 DSH、末列是文档版本不算 DSH 版本', () => {
+  const docVersionRow = `| CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [x](y) | V1.0.0 | 评审稿 | 平台组 | — |`;
+  assert.equal(hasDshContext(docVersionRow, '1.0.0'), false);
+  assert.equal(hasDshContext(`目标环境 DSH \`${BASELINE}\``, BASELINE), true);
+  assert.equal(hasDshContext(`engines: { dsh: '>=${BASELINE}' }`, BASELINE), true);
+  assert.equal(
+    hasDshContext(`受保护根按模板解析，默认 \`$DSH_HOME/**\`。实测（DSH ${BASELINE} / darwin-arm64）`, BASELINE),
+    true,
+  );
+});
+
 test('listDocOccurrences 分类：基线位置、历史记录、未分类，且忽略章节号与 IP', () => {
   const root = fixtureRoot();
   try {
@@ -74,6 +86,7 @@ test('listDocOccurrences 分类：基线位置、历史记录、未分类，且�
         `> 编制依据：2026-10-24 对 DSH \`${BASELINE}\` 的核验（历史记录）`,
         `- 见 §5.1.1 与 http://127.0.0.1:4567 两处`,
         `- 恰好落在本发布线的裸表述：DSH \`${next}\``,
+        `| CORP-DSH-DESIGN-003 | 策略与审计详细设计 | V0.2.1 | 草案 |`,
       ].join('\n'),
     );
     const rows = listDocOccurrences(root, BASELINE);
@@ -85,6 +98,11 @@ test('listDocOccurrences 分类：基线位置、历史记录、未分类，且�
       rows.some((row) => row.text.includes('127.0.0')),
       false,
       'IP 不应被当作版本',
+    );
+    assert.equal(
+      rows.some((row) => row.text.includes('CORP-DSH-DESIGN-003')),
+      false,
+      '标识符 CORP-DSH-* 不应被当作 DSH 上下文（否则会把文档版本行当成 DSH 版本）',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
