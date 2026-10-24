@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.6.3 |
+| 版本 | V0.6.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -222,7 +222,7 @@ flowchart LR
 | 文档迁移 | 8 个文件按 §4.6 迁移，原子文档目录已移除；108 处相对链接重建，行号锚点改为章节锚点 |
 | 版本与登记 | 五份主文档升修订号；新增设计索引 DOC-002、运维索引 DOC-003、开发约定 ENG-002，并同步文档清单 V1.8 |
 | 工程底座 | pnpm workspace、`private` 根工程、固定 Node 24.21.0 与 pnpm 11.28.5、忽略规则、编辑器与换行约定 |
-| 检查器 | `scripts/check-docs.mjs`、`scripts/check-repo.mjs` 与共享规则；24 个单元用例覆盖有效与失败样例 |
+| 检查器 | `scripts/check-docs.mjs`、`scripts/check-repo.mjs`、`scripts/check-bundle-tarballs.mjs`、`scripts/dsh-version.mjs` 与共享规则；各自带有效与失败样例的单元用例，计数以 `node --test` 实测为准 |
 | CI | 只读权限工作流，两个外部动作固定到提交 SHA，仅执行离线检查 |
 | 模块入口 | （2026-10-21 整理完成时）各包与两个服务各一份职责 README，均无包清单、源码或运行配置 |
 | 图解 | 两个 HTML 按新路径重新生成，保留面板与源稿，无外部脚本与本机绝对路径 |
