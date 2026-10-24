@@ -1,11 +1,11 @@
 # @heluo/forge-enterprise
 
-状态：可用（组合骨架：按需企业 Skill 与规范条款装配已实现；官方行默认禁用与企业接入待实施）
+状态：可用（组合骨架：按需企业 Skill 与规范条款装配、五类开关声明与判定已实现；官方行默认禁用与装/升/退/卸演练已核验；企业接入与业务行待实施）
 
 | 项 | 内容 |
 |---|---|
 | 形态 | umbrella bundle（`cordis.patch.yml`）＋装配源码 |
-| 职责 | 按行组装企业能力、角色 preset 与默认依赖检查；按需挑选并注册企业 Skill 与规范条款 |
+| 职责 | 按行组装企业能力、角色 preset 与默认依赖检查；按需挑选并注册企业 Skill 与规范条款；声明五类开关（只读/普通研发写/AI 发布/人工 review/观察）并做 fail-closed 判定 |
 | 不负责 | 不重复实现成员包逻辑，不承载业务接口，不做路径门禁（由 [@heluo/forge-policy](../forge-policy/README.md) 执行） |
 | 详细设计 | [详细设计](../../docs/design/plugins/forge-enterprise.md)（草案；§5.2 按需企业 Skill 与规范条款加载） |
 | 实现状态 | 条款包加载、适用性选择、预算与加载记录、按需注册已实现并有离线用例；[cordis.patch.yml](cordis.patch.yml) 的官方行禁用层已实现并在本机核验（组合层对照见[详细设计 §5.1.1](../../docs/design/plugins/forge-enterprise.md)）；组合插入行、运行时模型面与企业环境接入未实现 |
@@ -21,6 +21,7 @@
 | 加载记录 | `loadRecord` 记录本次加载了什么（含引用）与跳过了什么及原因 |
 | 按需加载 | 注册为只读运行时技能：摘要只含名称/描述/何时使用/调用策略，正文由宿主 `get()` 按需取；加载与注册都不写文件 |
 | 用户入口 | 默认 `modelInvocable: false`、`userInvocable: true`：只有用户显式触发才承接，模型不能自动冒用企业入口 |
+| 五类开关 | `resolveSwitches()` 只做声明与判定：依赖未就绪/能力缺失/未批准一律关闭，审计缺失不降级为无审计只读，C3 未批准时人工 review 关闭，角色 preset 只收窄 |
 | 自证边界 | 只报告条款与引用，不产出"合规通过"结论；确定性要求引用 [S01 (#27)](https://github.com/hrygo/heluo-forge/issues/27) 的交付清单与 CI 校验 |
 
 ## 边界

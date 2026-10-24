@@ -396,6 +396,53 @@ export function apply(ctx) {
     });
     disposers.push(disposeObserverThrow, disposeObserverReject);
 
+    // 五类开关：把宿主实测的依赖事实喂给组合声明（纯判定，不注册任何东西），
+    // 再附一组合成输入验证"全就绪即全开"与"关一类不影响其他类"。
+    const { resolveSwitches } = await import('../../packages/forge-enterprise/src/switches.mjs');
+    const policyProvenReady = ['guard-deny-zero-side-effect', 'guard-monotonic-no-force-allow', 'pre-execute-async-deny']
+      .every((id) => checks.find((entry) => entry.id === id)?.ok === true);
+    const measuredIdentity = ctx.get('iam') === undefined ? 'missing' : 'ready';
+    await step('combination-switches-fail-closed-on-measured-host', async () => {
+      const measured = resolveSwitches({
+        // policy 的"就绪"来自同一次探针里 guard/pre 行为断言通过，不是配置文件存在；
+        // 探针挂的审计落点是 memory + allowNonDurable，按未就绪处理（企业落点未获准）。
+        dependencies: { policy: policyProvenReady ? 'ready' : 'missing', iam: measuredIdentity, audit: 'non-durable-dev' },
+        capabilities: { read: false, write: false, publish: false, review: false, observe: true },
+        approved: ['read', 'research-write', 'ai-publish', 'human-review', 'observe'],
+      });
+      const synthetic = resolveSwitches({
+        dependencies: { policy: 'ready', iam: 'ready', audit: 'ready' },
+        capabilities: { read: true, write: true, publish: true, review: true, observe: true },
+        approved: ['read', 'research-write', 'ai-publish', 'human-review', 'observe'],
+        c3Approved: true,
+      });
+      const narrowed = resolveSwitches({
+        dependencies: { policy: 'ready', iam: 'ready', audit: 'ready' },
+        capabilities: { read: true, write: true, publish: true, review: true, observe: true },
+        approved: ['read', 'research-write', 'ai-publish', 'human-review'],
+        c3Approved: true,
+      });
+      return {
+        ok:
+          measured.on.length === 0 &&
+          measured.blocked.length > 0 &&
+          synthetic.on.length === 5 &&
+          narrowed.switches.observe.state === 'off' &&
+          narrowed.switches.read.state === 'on',
+        detail: {
+          measuredDependencies: { policy: policyProvenReady ? 'ready' : 'missing', iam: measuredIdentity, audit: 'non-durable-dev' },
+          measured: {
+            on: measured.on,
+            blocked: measured.blocked,
+            reasons: Object.fromEntries(Object.entries(measured.switches).map(([id, value]) => [id, value.reason])),
+          },
+          synthetic: { on: synthetic.on },
+          narrowed: { on: narrowed.on, observe: narrowed.switches.observe.reason },
+          note: 'measured 部分来自宿主实测；synthetic/narrowed 只验证声明分支，不代表企业能力已就绪',
+        },
+      };
+    });
+
     await step('uninstall-cleanup', async () => {
       for (const dispose of disposers) dispose();
       await sleep(0);

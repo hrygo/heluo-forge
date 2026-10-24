@@ -13,7 +13,8 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
-    "./skills": "./src/skills.mjs"
+    "./skills": "./src/skills.mjs",
+    "./switches": "./src/switches.mjs"
   },
   "files": [
     "src",

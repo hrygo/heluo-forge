@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V0.9.0 |
+| 版本 | V1.0.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -234,6 +234,18 @@ flowchart TD
 | 观察 | 指标/投影类出口 | 关（可独立降级） |
 
 主/子 Agent 与 scoped 工具的角色差异由补丁层的 `disabled` 与配置表达，不用多个包复制"企业版包含什么"；可见性不等于服务端授权。
+
+**五类开关的声明与判定（`packages/forge-enterprise/src/switches.mjs`，2026-10-24）**：本模块只做声明与判定，不写业务逻辑、不注册任何东西。判定顺序固定：① `policy` 未就绪 → 五类全 `blocked`；② 企业身份（`iam`）未就绪 → 五类全 `blocked`；③ 必要审计未就绪 → 四类动作 `blocked`（**不降级为无审计只读**），`observe` 因无出口为 `off`；④ `human-review` 在 C3 分类未批准前一律 `blocked`；⑤ 能力行不存在 → `blocked`（不预建虚构入口）；⑥ 未被组织批准 → `off`；⑦ 角色 preset 只收窄（`observer`/`reviewer`/`developer`/`publisher`/`approver`），角色**不能**把未批准的能力打开。返回项带 `serverAuthorization: 'required'`，明确"入口可见 ≠ 服务端授权"。
+
+**实测（两次独立来源）**：
+
+| 证据 | 结果 |
+|---|---|
+| 离线用例 `packages/forge-enterprise/test/switches.test.mjs`（8 项） | 空输入全 `blocked`；policy/iam/audit 缺失各自的全关与"无审计只读"否定；能力缺失 `blocked`；C3 未批准 review 关闭；**逐类开关关闭时其余四类状态不变**；角色只收窄且不能放大 |
+| 宿主探针 `combination-switches-fail-closed-on-measured-host`（`dsh 0.2.1-rc.2`，profile `sdk`） | 把实测事实（policy 由同一次探针的 guard/pre 行为断言证明就绪；`ctx.get('iam')` 不存在；审计落点为 `memory` + `allowNonDurable` 的开发落点，按未就绪计）喂入判定 → **`on` 为空**，全部 `blocked`/`off`；另附合成输入验证"全就绪即全开"与"关一类不影响其他类"（合成部分不代表企业能力就绪） |
+| 宿主探针 `行级独立性`（`--dump-config` 对照） | 补丁命中 3 行、自行新增 2 行；**被意外改动的既有行为 0**——行级禁用是独立机制，不牵连其他行 |
+
+`ai-publish` 与 `human-review` 目前没有对应业务行（DevOps/Gitee 发布与人工 review 未落地），因此实测结论是 `blocked`；这不是缺陷，而是"不预建虚构入口"的应有状态。
 
 **包体闭包规则**（由 `scripts/lib/bundle-rules.mjs` 接入 `checkRepo`，2026-10-24 起生效）：
 

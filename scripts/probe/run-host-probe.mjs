@@ -164,6 +164,18 @@ const compositionOk = composition.every((entry) =>
   entry.presentInProfile ? entry.disabledInPatched : entry.warnedWhenAbsent,
 );
 
+// 行级独立性：打上补丁后 disabled 状态发生变化的行必须**只有**被补丁命中的那些行。
+const isDisabled = (entries, id) => (entries.get(id) ?? []).some((line) => line === 'disabled: true');
+const stateOf = (entries, id) => (entries.has(id) ? isDisabled(entries, id) : undefined);
+const changedRows = [...new Set([...baseEntries.keys(), ...patchedEntries.keys()])].filter(
+  (id) => stateOf(baseEntries, id) !== stateOf(patchedEntries, id),
+);
+const matchedIds = composition.filter((entry) => entry.presentInProfile).map((entry) => entry.id);
+// 补丁自己 insert 的新行是预期新增；除"命中行"与"新增行"外，任何既有行都不许变状态。
+const addedRows = [...patchedEntries.keys()].filter((id) => !baseEntries.has(id));
+const unexpectedRows = changedRows.filter((id) => !matchedIds.includes(id) && !addedRows.includes(id));
+const independenceOk = unexpectedRows.length === 0;
+
 let report;
 try {
   report = JSON.parse(readFileSync(out, 'utf8'));
@@ -194,6 +206,9 @@ for (const entry of composition) {
   console.log(`${satisfied ? 'ok  ' : 'FAIL'} ${entry.id}: ${state}`);
 }
 console.log(`probe: composition ${compositionOk ? 'ok' : 'FAIL'}`);
+console.log(
+  `probe: 行级独立性 ${independenceOk ? 'ok' : 'FAIL'}（命中 ${matchedIds.length} 行，补丁新增 ${addedRows.length} 行，被意外改动的既有行：${unexpectedRows.join(', ') || '无'}）`,
+);
 console.log(`probe: ${report.passed}/${report.checks?.length ?? 0} checks passed, ${report.blocked?.length ?? 0} blocked${report.crashed ? ` (crashed: ${report.crashed})` : ''}`);
 console.log(`probe: evidence kept at ${out}`);
-process.exit(report.failed === 0 && report.crashed === undefined && compositionOk ? 0 : 1);
+process.exit(report.failed === 0 && report.crashed === undefined && compositionOk && independenceOk ? 0 : 1);
