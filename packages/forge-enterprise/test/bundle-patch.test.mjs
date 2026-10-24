@@ -36,11 +36,35 @@ test('the bundle disables exactly the four official rows', async () => {
   );
 });
 
-test('the bundle composes nothing it cannot yet mount', async () => {
+test('the bundle mounts exactly the implemented enterprise packages', async () => {
   const text = await read('cordis.patch.yml');
-  assert.doesNotMatch(text, /^\s*insert:/mu, '组合插入行待对应包可用后再落，不预建未实现包的入口');
-  assert.doesNotMatch(text, /^(\s*)- id: (enterprise|forge)-/mu, '禁用段不复制企业行，只覆写官方行');
+  const inserted = [...text.matchAll(/^ {4}- id: (\S+)\n {6}name: '([^']+)'$/gmu)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(
+    inserted,
+    [
+      ['heluo-credentials-keychain', '@heluo/forge-credentials-keychain'],
+      ['heluo-policy', '@heluo/forge-policy'],
+      ['heluo-iam', '@heluo/forge-iam'],
+      ['heluo-sdd', '@heluo/forge-sdd'],
+    ],
+    '插入行只能是已实现且有清单的四包，顺序为凭据→策略→IAM→SDD',
+  );
+  assert.doesNotMatch(text, /^\s*name: '@heluo\/forge-market'$/mu, '历史市场包不挂（AC5）；注释里提到它不算挂载');
+  assert.doesNotMatch(text, /^( {4})- id: (enterprise|forge)-/mu, '禁用段不复制企业行，只覆写官方行');
   assert.match(text, /DEEPSEEK_API_KEY/, '文件需说明 API Key 傍路这条核验依据');
+});
+
+test('every inserted package exists, is private, and has a manifest', async () => {
+  const text = await read('cordis.patch.yml');
+  const names = [...text.matchAll(/^ {6}name: '([^']+)'$/gmu)].map((m) => m[1]);
+  assert.equal(names.length, 4);
+  for (const name of names) {
+    const dir = join(here, '..', name.replace('@heluo/', ''));
+    const manifest = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'));
+    assert.equal(manifest.name, name, `${name} 的清单名必须与插入行一致`);
+    assert.equal(manifest.private, true, `${name} 必须是私有包`);
+    assert.ok(manifest.engines?.dsh, `${name} 必须声明 engines.dsh`);
+  }
 });
 
 test('the README states the current bundle status honestly', async () => {
@@ -48,5 +72,6 @@ test('the README states the current bundle status honestly', async () => {
   assert.match(text, /状态：可用（组合骨架/);
   assert.match(text, /cordis\.patch\.yml/);
   assert.match(text, /官方行禁用层已实现/);
-  assert.match(text, /组合插入行[^|]*未实现/);
+  assert.match(text, /insert:[^|]*四个已实现包/);
+  assert.match(text, /运行时模型面与企业环境接入未实现/);
 });
