@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.3 |
+| 版本 | V1.0.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -566,6 +566,19 @@ flowchart TD
 | 断言 | 结果 |
 |---|---|
 | 两个进程同时遇到过期的 access token：IdP 只看到 **1 次**刷新；两个进程都拿到可用 token；存储里是轮换后的新 refresh token，旧 token 在 IdP 侧已消费 | PASS |
+
+### 10.4 2026-10-24 插件生命周期矩阵（#20 AC4）
+
+`packages/forge-iam/test/lifecycle.test.mjs`（4 例）把"注册→卸载→再注册"与"进程退出"两条轴补上，用最小 Cordis 上下文（`provide` / `effect` / `inject`）模拟 fiber 卸载顺序：
+
+| 断言 | 结果 |
+|---|---|
+| `apply` 提供 `ctx.iam`；卸载后 `ctx.iam` 被移除，旧服务后续调用抛 `IAM_DISPOSED`；再次 `apply` 得到**新的**服务实例且状态为 `signed-out` | PASS |
+| 卸载会释放插件注册的路由（真实宿主 `webServer.register()` 返回**处置函数**，不是 `{dispose}` 对象；这条在写用例时先核对了目标版本实现） | PASS |
+| 凭据后端不可读时视图不报 `ready`、仍允许发起登录；卸载照常完成 | PASS |
+| 子进程发起登录尝试后 `dispose()`，进程在 10 秒内自然退出（尝试超时是 30 秒，定时器没被清就会挂住） | PASS |
+
+**未验**：真实 DSH 进程内的插件热卸载与重载（`dsh plugin` 装/卸）仍只有本机探针层面的 `--dump-config` 证据，没有"运行中卸载再挂载后服务可用"的实测。
 | 刷新响应被拖到 8 秒：进程在约 5.1 秒失败而不是挂住（`REFRESH_TIMEOUT_MS = 5000`），存储中的 grant 不被改写 | PASS |
 | IdP 已轮换但响应被丢弃：进程不报成功、也不会存下它没收到的 token；再次刷新得到 `IAM_REAUTH_REQUIRED`，记录被清除，重新登录可在同一存储上恢复 | PASS |
 | 存储文件不含授权码、verifier、nonce、attempt | PASS |
