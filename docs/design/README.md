@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.9.6 |
+| 版本 | V0.9.7 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -61,6 +61,8 @@
 | [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业组合 bundle：官方四行禁用补丁、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、角色配置恢复；4 个源文件 | `node --test packages/forge-enterprise/test/` 25 例通过；真机安装/升级/回滚/卸载与残留、四层补丁层序与 `--from-default-profile` 已实测（任务 `20261024T023419Z-dsh-install-c8c2`、`20261024T025338Z-dsh-profile-replace-eb4e`）。**未验**：禁用四行后 shell/settings/onboarding/模型选择是否完整、角色 preset 粒度、`desktop` profile（应用独占管理） |
 | [forge-sdd](../../packages/forge-sdd/README.md) | SDD 规则集与本地前置校验：规则版本、结果归因、与 CI 同一规则集；4 个源文件 | `node --test packages/forge-sdd/test/` 20 例通过；**未联调**企业 CI，本地结论只作前置校验、不替代 CI 权威结论 |
 | 其余四包与 DevOps MCP（forge-brand / forge-devops / forge-gateway / forge-gitee、`services/devops-mcp`） | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
+
+五条跨模块冲突（policy fail-open、无 policy 降只读、审计坏是否影响执行、SDD 双路径、历史市场行）的定位与代拟结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；结论待责任方确认，确认前不按已批准引用。
 
 ## 3. 独立服务设计
 
