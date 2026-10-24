@@ -351,7 +351,7 @@ export function buildMarketTools(client, options = {}) {
 
         const built = buildRegistrationRow(result.installed, options.registration ?? {});
         const directory = options.targetDir ? packageDirFor(options.targetDir, result.installed.name) : undefined;
-        // 登记行与实装版本绑定：装 0.2.0 却按 0.1.0 排障是最难查的一类问题。
+        // 登记行与实装版本绑定：装了新版本却按旧版本排障是最难查的一类问题。
         // 即使没有 serviceUrl 无法生成行，版本与目录仍要返回。
         const registration = {
           ...(built.ok
