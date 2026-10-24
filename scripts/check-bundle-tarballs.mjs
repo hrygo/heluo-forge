@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { auditTarball, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditTarball, npmExecutable, parsePackOutput } from './lib/bundle-rules.mjs';
 
 const root = resolve(process.argv[2] ?? process.cwd());
 
@@ -31,6 +31,7 @@ for (const group of ['packages', 'services']) {
   }
 }
 
+const npm = npmExecutable();
 const errors = [];
 let packedFiles = 0;
 for (const target of targets) {
@@ -40,18 +41,27 @@ for (const target of targets) {
   }
   let packed;
   try {
-    const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    const output = execFileSync(npm, ['pack', '--dry-run', '--json'], {
       cwd: target.dir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     packed = parsePackOutput(output);
     if (packed === null) {
-      errors.push(`bundle: ${target.label} npm pack --dry-run produced no parsable file list`);
+      // Report which npm produced the unparsable output instead of guessing: the
+      // shape differs between npm major versions and between "npm not found on
+      // PATH" and "npm printed a notice first".
+      const version = execFileSync(npm, ['--version'], {
+        cwd: target.dir,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+      const head = output.replaceAll(/\s+/gu, ' ').trim().slice(0, 160);
+      errors.push(`bundle: ${target.label} npm pack --dry-run produced no parsable file list (${npm} v${version}; stdout starts: ${head || '<empty>'})`);
       continue;
     }
   } catch (error) {
-    errors.push(`bundle: ${target.label} npm pack --dry-run failed: ${String(error.message).split('\n')[0]}`);
+    errors.push(`bundle: ${target.label} ${npm} pack --dry-run failed: ${String(error.message).split('\n')[0]}`);
     continue;
   }
   packedFiles += packed.length;

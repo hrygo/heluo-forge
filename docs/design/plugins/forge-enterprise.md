@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.3.2 |
+| 版本 | V1.3.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -164,6 +164,12 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
 **边界**：这是**配置组合（dump）级**证据——四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。
+
+#### 5.3.1 Linux aarch64 上的整套检查（2026-10-24 实测）
+
+在 Ubuntu 24.04 / Linux aarch64 / Node `v24.21.0`（离线包，非发行版 Node）上，对仓库 `main` 的一次副本跑整套检查：`docs: ok`、`repo: ok`、`bundles: 6 packed, 67 files` → `bundles: ok`、`node --test` **636 例：632 通过、0 失败、4 跳过**（跳过的是两个 macOS keychain 用例的各两次条件跳过），退出码 0。
+
+**注意**：同一套检查若在 agent 的受限沙箱里跑，会因禁止 `listen` 与拦截子进程输出而失败（`listen EPERM`、CLI 输出为空），那是执行环境限制，不是仓库缺陷；复跑要在沙箱外用普通 SSH 会话。这条经验同样说明了"远端任务的退出码"必须与"任务是怎么跑的"一起读。
 
 **未验**：`desktop` profile 本机不存在同名 profile，其行 id 未核验；运行时"官方模型不可选、`DEEPSEEK_API_KEY` 不构成旁路"需要接了官方模型行的 desktop/web 运行时——探针 profile 的 LLM 提供方在禁用前后都是 0 个（基线对照同样为 0），因此该项在探针里以 `blocked` 记录，不用"0 个提供方"冒充已证明；当前正在使用的 GUI profile 未用补丁重启（会打断会话）。**禁用实验失败即暂停 O3**，不 patch 内核。
 

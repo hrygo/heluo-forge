@@ -311,6 +311,26 @@ export function auditTarball({ label, manifest, packed }) {
  * 不同 npm 版本会在 stdout 上打印**一份或两份**相同的 JSON（CI 上的 npm 打印两份），
  * 因此这里按平衡括号切出候选对象逐个尝试，而不是对整个输出直接 JSON.parse。
  */
+/**
+ * Resolve the npm that belongs to the Node running this check. `npm pack` output
+ * shape and file selection are npm-version specific, so a check must not pick up
+ * whatever `npm` happens to be first on PATH: on a machine with several Node
+ * installs that silently changes what "the tarball contains". Falls back to
+ * `npm` only when the sibling binary is absent.
+ *
+ * @param {string} [execPath] `process.execPath`
+ * @param {(path: string) => boolean} [exists]
+ * @returns {string}
+ */
+export function npmExecutable(execPath = process.execPath, exists = existsSync) {
+  const dir = dirname(execPath);
+  for (const name of process.platform === 'win32' ? ['npm.cmd', 'npm.exe'] : ['npm']) {
+    const candidate = join(dir, name);
+    if (exists(candidate)) return candidate;
+  }
+  return 'npm';
+}
+
 export function parsePackOutput(text) {
   for (const candidate of balancedObjects(text)) {
     let parsed;
@@ -320,8 +340,13 @@ export function parsePackOutput(text) {
       continue;
     }
     if (parsed === null || typeof parsed !== 'object') continue;
+    // npm 12 emits an object keyed by package name; npm 11 emits an array of
+    // entries. Both carry the file list on the entry itself.
     const entry = Array.isArray(parsed.files) ? parsed : Object.values(parsed)[0];
     if (entry !== null && typeof entry === 'object' && Array.isArray(entry.files)) return entry.files;
+    for (const value of Object.values(entry ?? {})) {
+      if (value !== null && typeof value === 'object' && Array.isArray(value.files)) return value.files;
+    }
   }
   return null;
 }
