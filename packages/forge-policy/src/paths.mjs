@@ -5,7 +5,7 @@
  * 任一步无法判定（非绝对路径、ELOOP、权限不足）都抛错，由门禁按拒绝处理。
  */
 import { realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse as parsePath, resolve as resolvePath, sep } from 'node:path';
 
 export class PolicyPathError extends Error {
   constructor(message, code, details = undefined) {
@@ -103,9 +103,45 @@ export function canonicalize(input, options = {}) {
   if (!isAbsolute(input)) {
     throw new PolicyPathError(`path "${input}" must be absolute`, 'POLICY_PATH_NOT_ABSOLUTE', { path: input });
   }
-  const lexical = resolvePath(input);
-  const real = realpathDeepest(lexical, resolve);
+  const real = resolvePhysically(input, resolve);
   return CASE_INSENSITIVE.has(platform) ? real.toLowerCase() : real;
+}
+
+/**
+ * Walk the path one component at a time, resolving symlinks before applying
+ * `..`. Lexical folding first would let `/root/link/../x` escape a protected
+ * root when `link` points into it: the shell resolves `link` and then takes the
+ * parent of its *target*, while a lexical fold takes the parent of `link`.
+ * Components that do not exist yet keep their literal value and are resolved
+ * again if a deeper ancestor appears.
+ *
+ * @param {string} input absolute path
+ * @param {Function} resolve realpath-like function
+ * @returns {string} physically resolved path
+ */
+function resolvePhysically(input, resolve) {
+  const { root } = parsePath(input);
+  let current = root === '' ? sep : root;
+  const relative = input.slice(root.length);
+  for (const part of relative.split(/[\\/]+/u)) {
+    if (part.length === 0 || part === '.') continue;
+    if (part === '..') {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, part);
+    try {
+      current = resolve(next);
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
+        throw new PolicyPathError(`cannot resolve "${input}": ${error?.code ?? error?.message}`, 'POLICY_PATH_UNRESOLVABLE', {
+          path: input,
+        });
+      }
+      current = next;
+    }
+  }
+  return current;
 }
 
 /**

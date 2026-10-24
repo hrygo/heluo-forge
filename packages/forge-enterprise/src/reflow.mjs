@@ -112,8 +112,11 @@ export function rowsFromDump(text) {
       current = undefined;
       continue;
     }
-    if (current !== undefined && /^\s+disabled: true\s*$/u.test(line)) rows.set(current, true);
-    else if (current !== undefined && /^\s+disabled: false\s*$/u.test(line)) rows.set(current, false);
+    // Only a row-level field counts. A `disabled:` nested inside the row's
+    // `config:` block says nothing about whether the row itself is disabled,
+    // and treating it as proof would turn a reflow into a false pass.
+    if (current !== undefined && /^ {2}disabled: true\s*$/u.test(line)) rows.set(current, true);
+    else if (current !== undefined && /^ {2}disabled: false\s*$/u.test(line)) rows.set(current, false);
   }
   return rows;
 }

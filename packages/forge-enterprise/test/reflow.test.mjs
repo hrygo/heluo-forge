@@ -98,3 +98,26 @@ test('dump 夹具与实际输出形状一致', () => {
   assert.deepEqual([...rows.keys()], ['deepseek-account', 'ui-settings-account']);
   assert.equal(detectOfficialRowReflow({ observed: rows }).ok, false);
 });
+
+test('a disabled field nested in the row config does not count as the row being disabled', () => {
+  // The official row is enabled; only a plugin option inside its config block
+  // says `disabled: true`. Reading any indentation as the row-level field would
+  // report this reflow as pass and hide that the patch never took effect.
+  const rows = rowsFromDump([
+    '- id: llm-deepseek',
+    '  config:',
+    '    disabled: true',
+    '- id: deepseek-account',
+    '  disabled: true',
+  ].join('\n'));
+  assert.equal(rows.get('llm-deepseek'), null, 'nested config 不能冒充行级 disabled');
+  assert.equal(rows.get('deepseek-account'), true);
+  const verdict = detectOfficialRowReflow({
+    observed: rows,
+    expected: ['llm-deepseek', 'deepseek-account'],
+    requireAll: true,
+  });
+  assert.equal(verdict.ok, false);
+  assert.deepEqual([...verdict.reflowed], ['llm-deepseek']);
+  assert.deepEqual([...verdict.disabled], ['deepseek-account']);
+});
