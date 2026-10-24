@@ -46,8 +46,29 @@ function fakeHost({ approval, commands } = {}) {
 
 const DEV_AUDIT = { sink: 'memory', allowNonDurable: true };
 
+// D1：enabled 的确认/写动作必须有有效台账条目（合成批准人，不代表任何真实批准）。
+const APPROVALS = [
+  {
+    approval_id: 'APR-TEST-1',
+    action: 'review.human.record',
+    resource: '*',
+    approved_by: 'test-fixture',
+    approved_at: '2026-10-01T00:00:00Z',
+    expires_at: '2099-01-01T00:00:00Z',
+  },
+  {
+    approval_id: 'APR-TEST-2',
+    action: 'fs.write',
+    resource: '*',
+    approved_by: 'test-fixture',
+    approved_at: '2026-10-01T00:00:00Z',
+    expires_at: '2099-01-01T00:00:00Z',
+  },
+];
+
 const baseConfig = {
   audit: DEV_AUDIT,
+  approvals: APPROVALS,
   catalog: [ENTRY, WRITE, CONFIRM],
   tools: {
     forge_repository_read: 'repository.read',
@@ -184,6 +205,7 @@ symlinkSync(protectedDir, join(pathBase, 'shortcut'), 'dir');
 
 const pathConfig = {
   audit: DEV_AUDIT,
+  approvals: APPROVALS,
   catalog: [
     { action: 'fs.read', kind: 'read', target: 'file', enabled: true, path: 'path' },
     { action: 'fs.write', kind: 'confirm', target: 'file', enabled: true, path: 'path' },
