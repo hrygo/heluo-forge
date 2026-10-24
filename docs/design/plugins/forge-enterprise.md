@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.1.0 |
+| 版本 | V1.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -275,7 +275,7 @@ flowchart TD
 | 离线用例 `packages/forge-enterprise/test/reflow.test.mjs`（7 项） | 四行全禁用 → 通过；重新启用 → 逐行报回灌并单列缺席；状态未知按回灌；无关行不影响；非法输入报错而非默默通过；dump 解析认得嵌套缩进与 `#` 注释边界 |
 | 宿主探针（`dsh 0.2.1-rc.2`，profile `sdk`） | 基线 dump（= 升级后未重新应用补丁的形态）：认出 3 行启用 → 报回灌；打补丁后：回灌 0 行、缺席 1 行。驱动段 `probe: 回灌检测 ok`，探针 28/28 通过、2 blocked |
 
-**未验**：真实 DSH **升级动作**本身（升完级再重新应用补丁的完整循环；本轮验证的是"升级后那种未应用状态"能被检测出来）、`dsh plugin add` 到 profile 的注册路径、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
+**未验**：角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。真实 DSH 升级动作与 `dsh plugin` 的 profile 级安装/卸载路径已由真机安装实测覆盖，见 §11。
 
 ## 10. 测试矩阵
 
@@ -309,6 +309,21 @@ flowchart TD
 | 工作区保护 | 演练前后 `git status --porcelain` 完全一致（按快照对比，不要求仓库本来就干净） |
 
 **无自动重放**：全程 `npm` 带 `--ignore-scripts`，两个包也没有可执行的安装期脚本；卸载后不保留任何自动重建动作。演练不接触任何真实 profile。
+
+**真机安装 / 升级 / 回退实测（#37 AC1/AC6，2026-10-24，远程 MacBook `Darwin arm64` / macOS 26.5.1 / 16 GB，任务级隔离）**：委派远端 Codex（Codex CLI `0.164.0`）在任务目录内装 Node `24.21.0`（`SHASUMS256.txt` 校验）与**公有 npm 包** `@deepseek-ai/dsh@0.2.1-rc.2`，把六个真实 tarball 装进任务本地 `web` profile；全程 `DSH_HOME`/`HOME`/`XDG_*` 指向任务目录，本机复核未写 `~/.dsh`（远端 `~/.dsh` 仍不存在、无全局 dsh、共享 pnpm store mtime 未变）。
+
+| 阶段 | 命令要点 | 实测结果 |
+|---|---|---|
+| 清装基线 | `dsh --profile web --dump-config` | 四条官方行都未禁用；无我们的行 |
+| 安装 | `dsh plugin --profile web add ./artifacts/tarballs/<pkg>-0.1.0.tgz` ×6 | 首次 **exit 127**：`dsh plugin` 把参数**转发给 profile 目录里的 pnpm**，缺 pnpm 即失败；任务内装 `pnpm@11.28.5` 后六次均 exit 0 |
+| 组合落地 | 安装后 dump + 重复 dump | 四条官方行 `disabled: true`，重复 dump **无回灌**；`@heluo/forge-market` 的补丁层插入 `forge-market` 行；**其余四包（policy/iam/sdd/credentials-keychain）只是普通依赖、不进配置树**（只有声明 `dsh.bundle.patch` 的包才注册补丁层）——**安装 ≠ 挂载** |
+| 版本不兼容 | `add` 一个 `engines.dsh: >=99.0.0` 的对照包 | rc.2 与 rc.3 都 **exit 1** 拒绝；安装器随后恢复清单、锁文件与原六包内容 |
+| 升级 | `npm install --prefix runtime/dsh @deepseek-ai/dsh@0.2.1-rc.3 --save-exact` → `dsh --version` = `0.2.1-rc.3` | 组合差异**只有上游新增一行** `entry-customization`；四条禁用自己的行 id 仍匹配、补丁继续生效、重复 dump 无回灌 |
+| 回退 | 同前缀装回 `0.2.1-rc.2` | 六包与四条禁用状态都保留（版本回退不动 profile 组合） |
+| 卸载 | `dsh plugin --profile web remove @heluo/forge-enterprise`，再 remove 其余五包（**按包名**） | 卸企业包后四条官方行**恢复默认**；再卸五包后 `forge-market` 行消失；最终 dump 与清装基线一致 |
+| 残留核查 | 前后快照逐文件对比 | 组合恢复（`package.json` 只少一个空 `dependencies: {}`，profile 的 `cordis.patch.yml` 逐字节一致）；**仍留下** `pnpm-lock.yaml`、`state.json`、`.plugin-manager/logs/*/pnpm.log` 及两处 pnpm 元数据哈希变化——**不能声称无残留回滚**，与"不宣称原子升级/自动回滚"一致 |
+
+复跑入口：远端任务目录（任务 ID `20261024T023419Z-dsh-install-c8c2`）里的 `artifacts/command-index.md`、`artifacts/config-summary.md` 与编号证据（每条命令留 argv / 清洁环境 / 退出码 / 原始输出）。本轮**未验**：在真实模型环境下禁用四行后 shell/onboarding 是否完整（§12）、角色 preset 粒度、`desktop` profile。
 
 ## 12. 未决事项
 

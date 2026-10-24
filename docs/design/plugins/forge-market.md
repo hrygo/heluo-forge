@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场（轻量原生索引模式） |
-| 版本 | V2.0.0 |
+| 版本 | V2.1.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -357,7 +357,9 @@ packages/forge-market/
 | 方式 | 参数 | 说明 |
 |---|---|---|
 | `plugin_manager` `install_bundle` | `target` 取**插件目录绝对路径** | 由工具完成包安装与补丁选择 |
-| `dsh plugin --profile <name> add <路径>` | 绝对路径，**不加 `file:` 前缀** | DSH 接受包名、Git 地址、tarball 或绝对本地路径 |
+| `dsh plugin --profile <name> add <说明符>` | 包名、Git 地址或 tarball 路径；**不加 `file:` 前缀**，相对路径亦可 | `dsh plugin` 是**把参数转发给 profile 目录里的 pnpm**，不是自带安装器：tarball 用 `npm pack` 产物即可；profile 首次使用时自动初始化；目标环境需有 pnpm（缺失时 exit 127） |
+
+真机实测（2026-10-24，远程 MacBook，DSH `0.2.1-rc.2`/`rc.3`，profile `web`）：六包用 `dsh plugin --profile web add ./artifacts/tarballs/<pkg>-0.1.0.tgz`（相对路径）安装均 exit 0；卸载用 `remove <包名>`（不是路径）。装完只有声明 `dsh.bundle.patch` 的包注册补丁层——本包因此把 `forge-market` 行插进配置树，`policy`/`iam`/`sdd`/`credentials-keychain` 只作为普通依赖存在、不进配置树；证据与状态矩阵见[企业组合包设计 §11](forge-enterprise.md#11-打包升级与回退)。
 
 `registration.row.id` 必须匹配 `[a-z0-9][a-z0-9-]*` 且在同一 profile 内唯一：
 
