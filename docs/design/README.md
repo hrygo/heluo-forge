@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.10.8 |
+| 版本 | V0.10.9 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -62,7 +62,7 @@
 | [forge-sdd](../../packages/forge-sdd/README.md) | SDD 规则集与本地前置校验：规则版本、结果归因、与 CI 同一规则集；4 个源文件 | `node --test packages/forge-sdd/test/` 20 例通过；**未联调**企业 CI，本地结论只作前置校验、不替代 CI 权威结论 |
 | 其余四包与 DevOps MCP | `forge-devops` 的"只读查询 + 门禁骨架"**已落地**（D4，2026-10-24）：清单、只读端口、门禁骨架、四个只读工具（参数用门禁认识的 `target`）、19 例离线测试、**宿主探针两模式通过**（`with-reader`：模型自决调用经门禁到达适配器恰好一次；`no-reader`：可见地报 `NO_READER`；并借此发现并修复"缺 `inject` 导致工具静默不注册/整项不激活"），**企业 CLI 联调未做**，写动作全部关闭；`forge-brand` / `forge-gateway` / `forge-gitee` 与 `services/devops-mcp` 仍为规划入口，无清单、源码或测试（准入手册见[能力面设计 §6.1](plugins/forge-devops-lifecycle.md)） | 对应设计中的测试矩阵为目标，不是执行结果 |
 
-五条跨模块冲突（policy fail-open、无 policy 降只读、审计坏是否影响执行、SDD 双路径、历史市场行）的定位与代拟结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；结论待责任方确认，确认前不按已批准引用。
+五条跨模块冲突（policy fail-open、无 policy 降只读、审计坏是否影响执行、SDD 双路径、历史市场行）的定位与结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；**五条已由责任方 2026-10-24 逐条确认**——确认的是组织做法，不等于企业能力已联调（C4 的 CI 侧、C5 的原生索引端仍待接入证据），也不放开任何受控写。
 
 ## 3. 独立服务设计
 
