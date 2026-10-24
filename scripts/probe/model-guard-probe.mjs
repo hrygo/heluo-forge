@@ -49,6 +49,9 @@ const modes = {
     catalog: ["{ action: 'probe.canary', kind: 'write', target: 'command', enabled: true }"],
     expectRule: 'target-required',
   },
+  // 委托路径：父模型自己调用 subagent 工具，让**子 Agent** 去跑 bash。
+  // 门禁若在子侧同样生效，就说明"把活交给子 Agent"不能绕开它。
+  delegate: { catalog: [], expectRule: 'unregistered-action', via: 'subagent' },
 };
 const mode = process.argv[2] ?? 'unregistered';
 if (!(mode in modes)) {
@@ -101,7 +104,10 @@ if (plan.catalog !== null) {
 writeFileSync(patch, `${rows.join('\n')}\n`);
 
 const command = `echo ran > '${marker}'`;
-const prompt = `Run the bash tool exactly once with command "${command}" and a 5-word description, then reply with the single word DONE. Do not run any other command.`;
+const prompt =
+  plan.via === 'subagent'
+    ? `Use the subagent tool exactly once. Give it this prompt: "Run the bash tool exactly once with command \"${command}\" and a 5-word description, then reply DONE." Then reply with the single word DONE.`
+    : `Run the bash tool exactly once with command "${command}" and a 5-word description, then reply with the single word DONE. Do not run any other command.`;
 
 const startedAt = Date.now();
 const child = spawn(dsh, ['--profile', profile, '--patch', patch, prompt], {
@@ -125,7 +131,7 @@ const exit = await new Promise((done) => {
 });
 const elapsedMs = Date.now() - startedAt;
 
-const { calls, results } = readSessionEvidence(dir);
+const { calls, results, sessions } = readSessionEvidence(dir);
 const sideEffect = existsSync(marker);
 const resultText = results.map((entry) => entry.text).join(' | ');
 const rule = /requires a .* target/u.test(resultText)
@@ -135,7 +141,14 @@ const rule = /requires a .* target/u.test(resultText)
     : /is not enabled/u.test(resultText)
       ? 'action-disabled'
       : null;
-const ok = plan.expectSideEffect === true ? sideEffect && calls.length > 0 : !sideEffect && calls.length > 0 && rule === plan.expectRule;
+const usedSubagent = calls.some((call) => call.name === 'subagent' || call.name === 'subagent_fork');
+const childBashCalls = calls.filter((call) => call.name === 'bash').length;
+const ok =
+  plan.expectSideEffect === true
+    ? sideEffect && calls.length > 0
+    : // 委托模式额外要求：确实发起了委托，且被拦的是子 Agent 的 bash 调用，
+      // 否则"找到规则"可能只是父会话自己的调用，证明不了委托路径。
+      !sideEffect && calls.length > 0 && rule === plan.expectRule && (plan.via === 'subagent' ? usedSubagent && childBashCalls > 0 : true);
 
 const detail = {
   mode,
@@ -145,7 +158,11 @@ const detail = {
   signal: exit.signal,
   elapsedMs,
   modelToolCalls: calls.length,
+  sessionLogs: sessions,
+  usedSubagent,
+  bashCalls: childBashCalls,
   toolNames: [...new Set(calls.map((call) => call.name))],
+
   blockedRule: rule,
   toolResultIsError: results.some((entry) => entry.isError),
   sideEffectWritten: sideEffect,
@@ -166,13 +183,21 @@ if (process.env.DSH_MODEL_GUARD_DEBUG === '1') console.error(`probe: 调试模�
 else rmSync(dir, { recursive: true, force: true });
 process.exit(ok ? 0 : 1);
 
-/** 解压本次会话记录，取出工具调用与结果——这是"模型自决调用是否发生/是否被拦"的权威记录。 */
+/**
+ * 解压本次运行的全部会话记录（父会话 + 每个子 Agent 各一份），取出工具调用与结果——
+ * 这是"模型自决调用是否发生/是否被拦"的权威记录。委托场景必须扫全部，只看父会话会
+ * 漏掉子 Agent 的调用，从而把"被拦住了"误判成"没调用"。
+ */
 function readSessionEvidence(root) {
-  const log = findSessionLog(root);
-  if (log === null) return { calls: [], results: [] };
-  const lines = zstdDecompressSync(readFileSync(log)).toString('utf8').split('\n');
+  const logs = findSessionLogs(join(root, 'sessions'));
   const calls = [];
   const results = [];
+  for (const log of logs) collectSession(log, calls, results);
+  return { calls, results, sessions: logs.length };
+}
+
+function collectSession(log, calls, results) {
+  const lines = zstdDecompressSync(readFileSync(log)).toString('utf8').split('\n');
   for (const line of lines) {
     if (line.trim().length === 0) continue;
     let event;
@@ -184,26 +209,26 @@ function readSessionEvidence(root) {
     if (event.type === 'tool/call') calls.push({ name: event.data?.name, arguments: event.data?.arguments });
     if (event.type === 'tool/result') {
       const content = event.data?.message?.content ?? [];
-      results.push({
-        isError: event.data?.isError === true,
-        text: content.map((part) => (part.type === 'text' ? part.text : '')).join(' '),
-      });
+      const text = content.map((part) => (part.type === 'text' ? part.text : '')).join(' ');
+      // 记录里的 `isError` 字段并不总是置位，拒绝是以正文 `Error: ...` 呈现的；
+      // 两个来源都认，避免把"被拒绝"读成"成功"。
+      results.push({ isError: event.data?.isError === true || /^Error:/u.test(text.trim()), text });
     }
   }
-  return { calls, results };
 }
 
-function findSessionLog(root) {
-  const sessions = join(root, 'sessions');
-  if (!existsSync(sessions)) return null;
+/** 收集本目录下全部会话记录文件。 */
+function findSessionLogs(sessions) {
+  const found = [];
+  if (!existsSync(sessions)) return found;
   const stack = [sessions];
   while (stack.length > 0) {
     const current = stack.pop();
     for (const entry of readdirSync(current)) {
       const full = join(current, entry);
       if (statSync(full).isDirectory()) stack.push(full);
-      else if (entry === 'session.v4.jsonl.zstd') return full;
+      else if (entry === 'session.v4.jsonl.zstd') found.push(full);
     }
   }
-  return null;
+  return found;
 }
