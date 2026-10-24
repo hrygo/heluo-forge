@@ -8,6 +8,7 @@
  * 只用公开服务（ctx.tools / ctx.commands / ctx.approval），不读私有字段；
  * 拟定结果写 DSH_HOST_PROBE_OUT，随后退出进程（探针 profile 专用，不改宿主行为）。
  */
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -19,6 +20,8 @@ const textOf = (result) =>
   Array.isArray(result?.content) ? result.content.map((part) => part?.text ?? '').join(' ').trim() : '';
 const okValue = (label) => ({ text: `${label} ran` });
 const errorOf = (result) => (result?.error === undefined ? undefined : { code: result.error.code, message: result.error.message });
+
+const parentAgentOf = (handle) => handle?.agent ?? handle;
 
 function probeTool(toolName, body) {
   return {
@@ -925,15 +928,17 @@ export function apply(ctx) {
     // 真实 agent 只能在注入就绪的活跃作用域内创建（Cordis 效果语义）。
     // 宿主关闭或作用域失效时这里可能抛错；环境问题只记 blocked，不能让整份报告崩掉。
     let agentFacts;
+    let agentsScope;
     try {
       agentFacts = await Promise.race([
         new Promise((resolve) => {
           ctx.inject(['agents'], (scope) => {
+            agentsScope = scope;
             void (async () => {
               try {
                 let capturedAgentCtx;
                 const handle = await scope.agents.create({
-                  sessionId: 'probe-agent-1',
+                  sessionId: `probe-agent-${randomBytes(3).toString('hex')}`,
                   meta: { cwd: dir },
                   setup: (agentCtx) => {
                     capturedAgentCtx = agentCtx;
@@ -996,11 +1001,152 @@ export function apply(ctx) {
           },
         };
       });
-      blocked.push({
-        id: 'subagent-restriction-inheritance',
-        reason: '子 Agent 是否继承父作用域限制仍需一次真实委派（会触发模型调用），本轮以 provider 声明与作用域事实记录',
-        evidence: { subagentProviders: providers, agentScopedRestriction: 'per-scope (见 agent-scoped-restriction-is-per-scope)' },
+      // #20 AC3：真实委派——父 Agent 的限制/守卫是否被子 Agent 继承。
+      // 子 Agent 走宿主自己的工厂（parentAgent + origin=subagent + delegationDepth），
+      // 然后用**子作用域自己的工具管线**派发一次调用，看父作用域注册的 guard 是否照常生效。
+      // 本轮 profile 无 LLM 提供方（providers 见 blocked/evidence），因此不含"模型自决调用"那一段。
+      const delegation = await (async () => {
+        const parentAgent = agentHandle.agent ?? agentHandle;
+        const parentCtx = agentFacts.agentCtx;
+        if (parentCtx === undefined) return { error: 'setup 未给出父 agent 作用域' };
+        const disposeRestrict = parentCtx.tools.restrict({ deny: ['bash'] });
+        const facts = { parentAgentId: parentAgent.id, parentBashHidden: ctx.tools.get('bash', parentAgent) === undefined };
+        let childCtx;
+        let childAgent;
+        try {
+          const childHandle = await agentsScope.agents.create({
+            sessionId: `probe-subagent-${Date.now().toString(36)}`,
+            parentAgent,
+            meta: { cwd: dir, origin: 'subagent', delegationDepth: 1, parentSession: parentAgent.id },
+            setup: (agentCtx, agent) => {
+              childCtx = agentCtx;
+              childAgent = agent;
+              facts.initiatorDuringChildSetup = agentsScope.agents.currentInitiator()?.id;
+            },
+          });
+          facts.childAgentId = childAgent?.id;
+          facts.childBashHidden = ctx.tools.get('bash', childAgent) === undefined;
+          const bodyBefore = bodyCalls.body;
+          try {
+            const result = await childCtx.tools.execute({ callId: 'probe-subagent-dispatch-1', name: 'probe_body', arguments: {}, signal });
+            facts.childDispatch = { isError: result?.isError === true, text: textOf(result) };
+          } catch (error) {
+            facts.childDispatch = { threw: String(error?.message ?? error) };
+          }
+          facts.childBodyRan = bodyCalls.body !== bodyBefore;
+          facts.childScopeToolVisible = !(facts.childDispatch?.text ?? '').includes('unknown tool');
+          // 父作用域对**全局**工具注册的 guard 是否管到子作用域：用 bash 派发实测（结果如实记录）。
+          const disposeBashGuard = ctx.tools.guard((exec) => (exec.name === 'bash' ? 'probe-child-bash-guard' : undefined));
+          try {
+            const bashResult = await childCtx.tools.execute({ callId: 'probe-subagent-dispatch-2', name: 'bash', arguments: { command: 'true' }, signal });
+            facts.childBashDispatch = { isError: bashResult?.isError === true, text: textOf(bashResult).slice(0, 160) };
+          } catch (error) {
+            facts.childBashDispatch = { threw: String(error?.message ?? error).slice(0, 160) };
+          }
+          disposeBashGuard();
+          facts.parentGuardConsultedForChild = (facts.childBashDispatch?.text ?? '').includes('probe-child-bash-guard');
+          const disposeChildTool = childCtx.tools.register(probeTool('probe_child_only', () => okValue('probe_child_only')));
+          facts.childToolLeaksToParent = ctx.tools.get('probe_child_only') !== undefined;
+          disposeChildTool();
+          await childHandle?.dispose?.().catch(() => {});
+          disposeRestrict();
+          facts.childToolGoneAfterDispose = ctx.tools.get('probe_child_only') === undefined;
+          facts.parentBashRestoredAfterDispose = ctx.tools.get('bash', parentAgent) !== undefined;
+          return facts;
+        } catch (error) {
+          disposeRestrict();
+          return { ...facts, error: `子 agent 创建/派发失败：${String(error?.message ?? error)}` };
+        }
+      })();
+      if (delegation.error !== undefined) {
+        blocked.push({
+          id: 'subagent-restriction-inheritance',
+          reason: `真实委派实验未跑成：${delegation.error}`,
+          evidence: { subagentProviders: providers, ...delegation },
+        });
+      } else {
+        // 实测结论（拆分两种"限制"）：
+        // 1) 作用域 guard **会**约束子 Agent 的工具派发（父作用域注册的 guard 在子作用域派发全局工具时照常拒绝）；
+        // 2) 父 agent 视图上的 restrict **不**继承（子视图仍看得见被父视图拒绝的全局工具）；
+        // 3) 作用域内注册的工具不进子 agent 视图（报 unknown tool），且子注册不上浮，dispose 后都清理。
+        await step('subagent-inherits-parent-guards-not-view-restrictions', async () => ({
+          ok:
+            delegation.parentBashHidden === true &&
+            delegation.childBashHidden === false &&
+            delegation.childScopeToolVisible === false &&
+            delegation.parentGuardConsultedForChild === true &&
+            delegation.childBashDispatch?.isError === true &&
+            delegation.childBodyRan === false &&
+            delegation.childToolLeaksToParent === false &&
+            delegation.childToolGoneAfterDispose === true &&
+            delegation.parentBashRestoredAfterDispose === true,
+          detail: {
+            ...delegation,
+            subagentProviders: providers,
+            note: '子 agent 由宿主工厂按 parentAgent/origin=subagent/delegationDepth=1 创建。实测：父作用域 guard 管到子作用域（子作用域派发 bash 被 probe-child-bash-guard 拒绝，工具体未执行）；父 agent 视图的 restrict 不继承（子视图仍看得见 bash）；作用域内注册的工具不进子视图（unknown tool）；子注册不上浮、dispose 后限制与子注册都恢复。结论：企业约束必须落在**作用域 guard**（会继承）上，不能只靠父 agent 视图的 restrict；本轮无 LLM 提供方，"模型自决调用"那段未跑',
+          },
+        }));
+      }
+
+      // 身份范围：进程内 initiator 只能证明"因果归属"，不能当授权或存活证明。
+      await step('delegation-initiator-scope-is-causal-only', async () => {
+        const outside = agentsScope.agents.currentInitiator()?.id;
+        const inside = agentsScope.agents.withInitiator(parentAgentOf(agentHandle), () => agentsScope.agents.currentInitiator()?.id);
+        const after = agentsScope.agents.currentInitiator()?.id;
+        return {
+          ok: outside === undefined && inside === parentAgentOf(agentHandle).id && after === undefined,
+          detail: {
+            outside,
+            inside,
+            after,
+            declaredProviders: providers,
+            note: 'initiator 只在显式边界内可读；宿主契约明确它只是进程内因果归属，既非存活证明也非授权（身份/授权仍须显式主体）',
+          },
+        };
       });
+
+      // 真实委派服务路径：startActivation 接受并创建子会话；本轮无 LLM 提供方，子轮次只能以错误收束。
+      if (subagents !== undefined) {
+        await step('delegation-service-start-activation', async () => {
+          const parentAgent = parentAgentOf(agentHandle);
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 20_000);
+          const facts = { declared: providers };
+          try {
+            const activation = await subagents.startActivation({
+              provider: 'fork',
+              label: 'probe-fork-child',
+              request: { prompt: [{ type: 'text', text: 'probe: 只验证委派路径，不要求模型执行' }], parent: parentAgent, cwd: dir },
+              signal: controller.signal,
+              delivery: 'caller',
+            });
+            facts.childId = activation.childId;
+            facts.acceptedMessageId = activation.messageId !== undefined;
+            const settled = await Promise.race([
+              activation.result.then((result) => ({ result }), (error) => ({ failed: String(error?.message ?? error) })),
+              sleep(15_000).then(() => ({ timedOut: true })),
+            ]);
+            facts.stopReason = settled.result?.stopReason;
+            facts.diagnostic = typeof settled.result?.diagnostic === 'string' ? settled.result.diagnostic.slice(0, 200) : undefined;
+            facts.failed = settled.failed;
+            facts.timedOut = settled.timedOut === true;
+            facts.children = await subagents.listChildren(parentAgent.id).then((rows) => rows.length).catch(() => 'unavailable');
+            await activation.dispose().catch(() => {});
+            facts.disposed = true;
+          } catch (error) {
+            facts.error = String(error?.message ?? error);
+          } finally {
+            clearTimeout(timer);
+          }
+          return {
+            ok: typeof facts.childId === 'string' && facts.disposed === true && facts.error === undefined,
+            detail: {
+              ...facts,
+              note: '委派服务接受了子会话并按 provider 创建；本轮 profile 无 LLM 提供方，子轮次只能以错误/超时收束，因此"子 Agent 能否在模型自决下绕过限制"仍待有模型环境再测',
+            },
+          };
+        });
+      }
     }
 
     const failed = checks.filter((check) => !check.ok).length;

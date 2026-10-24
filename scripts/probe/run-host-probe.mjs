@@ -73,6 +73,14 @@ writeFileSync(
     "          probe_gate_confirm: 'probe.confirm'",
     '    - id: forge-host-probe',
     `      name: '${pathToFileURL(plugin).href}'`,
+    // 探针会创建真实 agent 会话：把会话与存储根覆盖到本次临时目录，
+    // 避免在用户 DSH_HOME 下留下会话/缓存，也避免跨运行撞 session id。
+    '- id: session-persistence-jsonl',
+    '  config:',
+    `    root: '${join(dir, 'sessions')}'`,
+    '- id: storage-json',
+    '  config:',
+    `    root: '${join(dir, 'storages')}'`,
     '',
   ].join('\n'),
 );

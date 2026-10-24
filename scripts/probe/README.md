@@ -77,6 +77,16 @@ node scripts/probe/run-bundle-install-rehearsal.mjs
 `DSH_INSTALL_REHEARSAL=0` 可让用例跳过。退出码 0/1/2 与探针一致；证据写临时目录的
 `install-rehearsal.json`（只含布尔、版本号与退出码）。不联网、不安装 pnpm、不触碰真实 profile。
 
+## 真实委派与继承实验（#20 AC3，宿主探针内）
+
+宿主探针里的 `subagent-inherits-parent-guards-not-view-restrictions`、`delegation-initiator-scope-is-causal-only`、
+`delegation-service-start-activation` 三项用宿主自己的 agent 工厂与委派服务跑真实子 Agent：父 agent 按
+`parentAgent`/`origin=subagent`/`delegationDepth=1` 创建子 agent，再用**子作用域自己的工具管线**派发调用。
+实测：作用域 guard 会约束子 Agent（拒绝生效、工具体零调用），父 agent 视图的 `restrict` 不继承，
+作用域内注册的工具不进子视图、子注册不上浮，`dispose` 后都清理；`subagents.startActivation({provider:'fork'})`
+接受并建出子会话；`currentInitiator()` 只在显式边界内可读。探针会把会话/存储根覆盖到本次临时目录
+（`session-persistence-jsonl` 与 `storage-json` 的 `root`），不在用户 `DSH_HOME` 下留下会话。
+
 ## 旧 0600 → 钥匙串迁移演练（#13 AC4，仅 darwin）
 
 ```sh
