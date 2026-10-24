@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -79,4 +79,26 @@ test('case folding follows the platform, not the filesystem', () => {
   const mixed = { raw: '/var/empty/dsh', root: '/var/empty/dsh' };
   assert.equal(matchProtected('/VAR/EMPTY/DSH/.env', [mixed], { platform: 'darwin', ...lexical }).protected, true);
   assert.equal(matchProtected('/VAR/EMPTY/DSH/.env', [mixed], { platform: 'linux', ...lexical }).protected, false);
+});
+
+test('dot-dot after a symlink follows the link target, not the link name', () => {
+  // `<base>/link` points into the protected root, so `<base>/link/../secret`
+  // reaches `<base>/data/secret` at the syscall level. A lexical fold would
+  // read it as `<base>/secret` and let it through, so the check must resolve
+  // the symlink before applying `..`.
+  const base = mkdtempSync(join(tmpdir(), 'policy-symlink-'));
+  try {
+    mkdirSync(join(base, 'data', 'sub'), { recursive: true });
+    symlinkSync(join(base, 'data', 'sub'), join(base, 'link'));
+    const roots = [{ raw: join(base, 'data'), root: join(base, 'data') }];
+    const throughLink = matchProtected(`${base}/link/../secret.txt`, roots);
+    assert.equal(throughLink.protected, true);
+    const physical = matchProtected(join(realpathSync(base), 'data', 'secret.txt'), []).canonical;
+    assert.equal(throughLink.canonical, physical, 'the canonical form must be the physical target');
+    // The same-shaped path without a symlink stays outside the root.
+    const plain = matchProtected(`${base}/other/../secret.txt`, roots);
+    assert.equal(plain.protected, false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

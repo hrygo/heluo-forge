@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.3.0 |
+| 版本 | V1.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -272,7 +272,7 @@ flowchart TD
 
 | 证据 | 结果 |
 |---|---|
-| 离线用例 `packages/forge-enterprise/test/reflow.test.mjs`（7 项） | 四行全禁用 → 通过；重新启用 → 逐行报回灌并单列缺席；状态未知按回灌；无关行不影响；非法输入报错而非默默通过；dump 解析认得嵌套缩进与 `#` 注释边界 |
+| 离线用例 `packages/forge-enterprise/test/reflow.test.mjs`（7 项） | 四行全禁用 → 通过；重新启用 → 逐行报回灌并单列缺席；状态未知按回灌；无关行不影响；非法输入报错而非默默通过；dump 解析只认行级（2 空格缩进）的 `disabled:` 字段与 `#` 注释边界；行 `config:` 内嵌套的 `disabled: true` **不算**该行被禁用（2026-10-24 独立审查发现此处会伪造 `ok:true`，已收紧并加回归用例） |
 | 宿主探针（`dsh 0.2.1-rc.2`，profile `sdk`） | 基线 dump（= 升级后未重新应用补丁的形态）：认出 3 行启用 → 报回灌；打补丁后：回灌 0 行、缺席 1 行。驱动段 `probe: 回灌检测 ok`，探针 28/28 通过、2 blocked |
 
 **组合层序与整体替换实测（#37 AC1，2026-10-24，远程 MacBook，公有 DSH `0.2.1-rc.2`，profile `probe-custom`）**：同一行 id 在四层写不同值时，优先级从低到高是**组合包 patch → profile 级 `cordis.patch.yml` → home 级 `$DSH_HOME/cordis.patch.yml` → 启动参数 `--patch`（多个按参数顺序）**，后层覆盖前层，dump 用 `patched by …` 注释保留来源链且无覆盖警告。`config` 是**整个对象替换、不是按字段深合并**：profile 层一旦写 `config`，组合包里该行的其余字段在最终配置中不再存在。`--dump-default-config` 与 `--patch` 互斥（`error: --dump-default-config prints the bundle layers and takes no --patch`）。
