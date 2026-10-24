@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.9.4 |
+| 版本 | V0.9.5 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -27,7 +27,7 @@
 |---|---|---|---|---|
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型写入接线（写前独立复查、绝不覆盖显式企业选择）、禁用插件/独占冲突 fail closed 实测已落地；对真实 `saveSelection` 的受控写与 Remote/watch 未实现） | IAM 回函、OS keychain adapter、官方四行运行时模型面、真实联调、UAG 凭据探测 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（接口契约已按 live Host 核验；宿主探针 32/32 覆盖 guard/pre-execute/result/命令面/审批/卸载/五类开关/委托承接/真实委派继承；委托与确认生命周期含恢复·分叉·子 Agent 复验已实现） | 有模型提供方的环境里子 Agent“模型自决调用”实测、策略与沙箱叠加顺序、审批注册与超时、`$DSH_HOME` 范围 |
-| `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（策略为硬依赖，无只读降级；市场不插入历史插件行；按需技能/条款装配、包体闭包检查、五类开关声明与判定、官方行回灌检测已实现；官方四行禁用与装/升/退/卸演练已实测；真机 `dsh plugin` profile 级安装、rc.2→rc.3 升级循环与回退/卸载残留已实测） | 版本断言报错形态、`fiberPhase`、双端、企业索引源键名、`ai-publish`/`human-review` 业务行（未落地故 `blocked`）、角色 preset 粒度、`desktop` profile |
+| `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（策略为硬依赖，无只读降级；市场不插入历史插件行；按需技能/条款装配、包体闭包检查、五类开关声明与判定、官方行回灌检测已实现；官方四行禁用与装/升/退/卸演练已实测；真机 `dsh plugin` profile 级安装、rc.2→rc.3 升级循环与回退/卸载残留、四层组合层序与 `--from-default-profile` 整体替换已实测；企业能力行仍不挂载（补丁无 `insert:` 段）） | 版本断言报错形态、`fiberPhase`、双端、企业索引源键名、`ai-publish`/`human-review` 业务行（未落地故 `blocked`）、角色 preset 粒度、`desktop` profile |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（目标路线待选） | 当前身份/用途、A/B 承载、应用/IP、五分钟及单授权退出、C4 等效策略与容量联调 |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验 |
