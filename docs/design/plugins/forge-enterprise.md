@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.2.0 |
+| 版本 | V1.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -275,6 +275,12 @@ flowchart TD
 | 离线用例 `packages/forge-enterprise/test/reflow.test.mjs`（7 项） | 四行全禁用 → 通过；重新启用 → 逐行报回灌并单列缺席；状态未知按回灌；无关行不影响；非法输入报错而非默默通过；dump 解析认得嵌套缩进与 `#` 注释边界 |
 | 宿主探针（`dsh 0.2.1-rc.2`，profile `sdk`） | 基线 dump（= 升级后未重新应用补丁的形态）：认出 3 行启用 → 报回灌；打补丁后：回灌 0 行、缺席 1 行。驱动段 `probe: 回灌检测 ok`，探针 28/28 通过、2 blocked |
 
+**组合层序与整体替换实测（#37 AC1，2026-10-24，远程 MacBook，公有 DSH `0.2.1-rc.2`，profile `probe-custom`）**：同一行 id 在四层写不同值时，优先级从低到高是**组合包 patch → profile 级 `cordis.patch.yml` → home 级 `$DSH_HOME/cordis.patch.yml` → 启动参数 `--patch`（多个按参数顺序）**，后层覆盖前层，dump 用 `patched by …` 注释保留来源链且无覆盖警告。`config` 是**整个对象替换、不是按字段深合并**：profile 层一旦写 `config`，组合包里该行的其余字段在最终配置中不再存在。`--dump-default-config` 与 `--patch` 互斥（`error: --dump-default-config prints the bundle layers and takes no --patch`）。
+
+`dsh --profile <name> --from-default-profile <模板> --dump-config` 的**整体替换**语义（无需启动应用）：模板的四个文件逐字节恢复、profile 的 `cordis.patch.yml` 重建为模板空补丁、自定义普通文件与子目录被删除；若 profile 里已装插件，整体替换会一并删除 `node_modules/`、`pnpm-lock.yaml` 与 `.plugin-manager/`，只剩模板文件。**恢复边界是 profile**：home 级覆盖不会被这条命令删除，仍继续生效。
+
+模板里确实存在角色/权限配置（`agent-preset-registry.config.default`、`preset-standard/ptc/minimal/cordis` 及其 persona、`permission.config.presets` 三档）：profile 内对它们的修改会被整体替换重置；普通依赖安装不改动它们（安装器给"plain dependency, not a profile layer"警告），声明 `dsh.bundle.patch` 的角色/权限补丁包会改动它们，卸载后整份 dump 回到模板。这是 agent/persona/permission preset 层面的实证，**不等于**企业 IAM 角色/RBAC。
+
 **未验**：角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。真实 DSH 升级动作与 `dsh plugin` 的 profile 级安装/卸载路径已由真机安装实测覆盖，见 §11。
 
 ## 10. 测试矩阵
@@ -321,6 +327,7 @@ flowchart TD
 | 升级 | `npm install --prefix runtime/dsh @deepseek-ai/dsh@0.2.1-rc.3 --save-exact` → `dsh --version` = `0.2.1-rc.3` | 组合差异**只有上游新增一行** `entry-customization`；四条禁用自己的行 id 仍匹配、补丁继续生效、重复 dump 无回灌 |
 | 回退 | 同前缀装回 `0.2.1-rc.2` | 六包与四条禁用状态都保留（版本回退不动 profile 组合） |
 | 卸载 | `dsh plugin --profile web remove @heluo/forge-enterprise`，再 remove 其余五包（**按包名**） | 卸企业包后四条官方行**恢复默认**；再卸五包后 `forge-market` 行消失；最终 dump 与清装基线一致 |
+| 卸载参数 | `remove <包名>` 不接受安装专用参数（`--offline --ignore-scripts` → pnpm `Unknown options`，exit 1），且**必须沿用安装时的 store**（否则 `ERR_PNPM_UNEXPECTED_STORE`，exit 1） | 第二个真机任务实测；这些失败不作为卸载成功证据 |
 | 残留核查 | 前后快照逐文件对比 | 组合恢复（`package.json` 只少一个空 `dependencies: {}`，profile 的 `cordis.patch.yml` 逐字节一致）；**仍留下** `pnpm-lock.yaml`、`state.json`、`.plugin-manager/logs/*/pnpm.log` 及两处 pnpm 元数据哈希变化——**不能声称无残留回滚**，与"不宣称原子升级/自动回滚"一致 |
 
 复跑入口：远端任务目录（任务 ID `20261024T023419Z-dsh-install-c8c2`）里的 `artifacts/command-index.md`、`artifacts/config-summary.md` 与编号证据（每条命令留 argv / 清洁环境 / 退出码 / 原始输出）。本轮**未验**：在真实模型环境下禁用四行后 shell/onboarding 是否完整（§12）、角色 preset 粒度、`desktop` profile。
