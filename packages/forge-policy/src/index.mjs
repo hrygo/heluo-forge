@@ -9,6 +9,8 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { createObservationRuntime } from './observe.mjs';
+
 import { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 import { createGate } from './gate.mjs';
 import { createAuditBarrier } from './audit.mjs';
@@ -29,6 +31,8 @@ export { assertNoCanary, confirmationScope, decideEgress, digestContent, renderE
 export { matchProtected, resolveProtectedRoots } from './paths.mjs';
 
 const SERVICE_KEY = 'policy';
+// 宿主若已提供 OTel/OTLP 出口，就挂在这个服务名下；本仓库不发明端点或认证。
+const OBSERVATION_SINK_KEY = 'observationSink';
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -82,6 +86,37 @@ export function validateConfig(input = {}) {
   if (isPlainObject(input.audit) && input.audit.sink !== undefined && !['none', 'memory'].includes(input.audit.sink)) {
     issues.push('audit.sink must be none or memory');
   }
+  // 过程观察只开放"是否启用"：端点、认证与响应格式不由本仓库发明（见指标事件契约 §5.1），
+  // 发送方必须来自宿主已存在的服务。
+  if (input.observation !== undefined && !isPlainObject(input.observation)) {
+    issues.push('observation must be an object when provided');
+  }
+  if (isPlainObject(input.observation) && input.observation.enums !== undefined) {
+    // 已登记枚举：只接受"名称 → 非空字符串数组"，避免把自由文本当枚举来源。
+    if (!isPlainObject(input.observation.enums)) issues.push('observation.enums must be an object');
+    else {
+      for (const [name, values] of Object.entries(input.observation.enums)) {
+        if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || value.length === 0)) {
+          issues.push(`observation.enums.${name} must be an array of non-empty strings`);
+        }
+      }
+    }
+  }
+  if (isPlainObject(input.observation) && input.observation.export !== undefined) {
+    const exportConfig = input.observation.export;
+    if (!isPlainObject(exportConfig)) issues.push('observation.export must be an object');
+    else {
+      if (exportConfig.enabled !== undefined && typeof exportConfig.enabled !== 'boolean') {
+        issues.push('observation.export.enabled must be a boolean');
+      }
+      if (exportConfig.idempotentProvider !== undefined && typeof exportConfig.idempotentProvider !== 'boolean') {
+        issues.push('observation.export.idempotentProvider must be a boolean');
+      }
+      if (exportConfig.batchSize !== undefined && !(Number.isInteger(exportConfig.batchSize) && exportConfig.batchSize > 0)) {
+        issues.push('observation.export.batchSize must be a positive integer');
+      }
+    }
+  }
   if (issues.length > 0) return { issues };
   return {
     value: {
@@ -90,6 +125,7 @@ export function validateConfig(input = {}) {
       categories: input.categories ?? {},
       protectedPaths: input.protectedPaths ?? defaultProtectedPaths(),
       audit: input.audit ?? {},
+      observation: input.observation ?? {},
       env: input.env,
       onDecision: input.onDecision,
     },
@@ -212,6 +248,13 @@ export function apply(ctx, rawConfig = {}) {
     onDecision: config.onDecision,
   });
 
+  // 过程观察默认关闭：未显式启用时不建缓冲、不查发送方、不发送任何事件。
+  const observations = createObservationRuntime({
+    config: config.observation,
+    getSink: () => (typeof ctx.get === 'function' ? ctx.get(OBSERVATION_SINK_KEY) : undefined),
+    sourceVersion: config.observation.sourceVersion,
+  });
+
   let disposed = false;
   const teardown = () => {
     if (disposed) return;
@@ -258,6 +301,7 @@ export function apply(ctx, rawConfig = {}) {
     acknowledgeAuditGaps: () => audit.acknowledgeGaps(),
     auditDegraded: () => audit.isDegraded(),
     registerCommand: (commandCtx, definition) => registerCommand(commandCtx, service, definition),
+    observations: () => observations,
   });
   const disposeProvide = ctx.provide(SERVICE_KEY, service);
 
