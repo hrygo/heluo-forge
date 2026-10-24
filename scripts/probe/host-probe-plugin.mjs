@@ -443,6 +443,60 @@ export function apply(ctx) {
       };
     });
 
+    // #23 AC3：恢复/分叉重新验证身份与范围。本进程就是"重启后的新会话"——内存里没有
+    // 上一次运行的委托，因此天然验证"临时表/聊天不能恢复写授权"。
+    const { authorizeDelegation, createDelegation, resumeDelegation } = await import('../../packages/forge-policy/src/delegation.mjs');
+    await step('delegation-resume-needs-host-facts', async () => {
+      const now = Date.now();
+      const request = { principal: 'user-a', changeId: 'C-1', repository: 'repo-a', action: 'issue.create_or_update' };
+      const withoutGrant = authorizeDelegation({ request, now });
+      const untrustedCreate = (() => {
+        try {
+          createDelegation({ ...request, id: 'dlg-probe', source: 'chat', repositories: ['repo-a'], actions: [request.action], ttlMs: 60_000, now });
+          return null;
+        } catch (error) {
+          return error.code ?? error.name;
+        }
+      })();
+      const grant = createDelegation({
+        id: 'dlg-probe',
+        source: 'host',
+        principal: 'user-a',
+        changeId: 'C-1',
+        repositories: ['repo-a'],
+        actions: ['issue.create_or_update', 'change.read'],
+        revisions: {},
+        ttlMs: 60_000,
+        now,
+      });
+      const chatResume = resumeDelegation({ grant, resume: { source: 'temporary-map', principal: 'user-a', changeId: 'C-1' }, now });
+      const hostResume = resumeDelegation({ grant, resume: { source: 'host', principal: 'user-a', changeId: 'C-1', actions: ['change.read'] }, now });
+      const resumedAllow = hostResume.action === 'allow' ? authorizeDelegation({ grant: hostResume.grant, request: { ...request, action: 'change.read' }, now }) : null;
+      const resumedDropped = hostResume.action === 'allow' ? authorizeDelegation({ grant: hostResume.grant, request, now }) : null;
+      const widened = resumeDelegation({ grant, resume: { source: 'host', principal: 'user-a', changeId: 'C-1', actions: ['issue.close'] }, now });
+      return {
+        ok:
+          withoutGrant.rule === 'delegation-missing' &&
+          untrustedCreate === 'POLICY_DELEGATION_UNTRUSTED_SOURCE' &&
+          chatResume.rule === 'delegation-resume-untrusted-source' &&
+          hostResume.action === 'allow' &&
+          hostResume.scopeReduced === true &&
+          resumedAllow?.action === 'allow' &&
+          resumedDropped?.rule === 'delegation-action-out-of-scope' &&
+          widened.rule === 'delegation-resume-scope-widened',
+        detail: {
+          withoutGrant: withoutGrant.rule,
+          untrustedCreate,
+          chatResume: chatResume.rule,
+          hostResume: { action: hostResume.action, scopeReduced: hostResume.scopeReduced, expiresUnchanged: hostResume.grant?.expiresAt === grant.expiresAt },
+          resumedAllow: resumedAllow?.action,
+          resumedDropped: resumedDropped?.rule,
+          widened: widened.rule,
+          note: '本进程没有上一次运行的委托，等于"重启/分叉后内存为空"的实测',
+        },
+      };
+    });
+
     await step('uninstall-cleanup', async () => {
       for (const dispose of disposers) dispose();
       await sleep(0);
