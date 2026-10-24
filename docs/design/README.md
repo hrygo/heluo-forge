@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.9.9 |
+| 版本 | V0.10.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -58,7 +58,7 @@
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
 | [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；8 个源文件 | `node --test packages/forge-policy/test/` 94 例通过；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。模型门禁探针（`scripts/probe/model-guard-probe.mjs`）已实测**模型自决调用不会绕开门禁**：`unregistered-action`/`action-disabled`/`target-required` 三种模式各以会话记录中的 `tool/call`+`tool/result` 为据、副作用为零，并以不挂策略的正向对照证明模型确实会调用；同时暴露目录只认调用参数 `target`、真实工具（`bash` 的 `command`、`fs` 的 `path`）无法放行的缺口（见设计 §9.2.2）。沙箱叠加顺序探针（`scripts/probe/sandbox-order-probe.mjs`）已实测**策略门禁先于沙箱执行器判定**（策略拒绝归因不带沙箱信号、目标在沙箱允许区内也不产生副作用；越界写由操作系统级拒绝），见设计 §9.2.3。**未测**：经委托（子 Agent）发起的模型自决调用；未接企业环境、无双端实机 |
-| [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业组合 bundle：官方四行禁用补丁、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、角色配置恢复；4 个源文件 | `node --test packages/forge-enterprise/test/` 25 例通过；真机安装/升级/回滚/卸载与残留、四层补丁层序与 `--from-default-profile` 已实测（任务 `20261024T023419Z-dsh-install-c8c2`、`20261024T025338Z-dsh-profile-replace-eb4e`）。**未验**：禁用四行后 shell/settings/onboarding/模型选择是否完整、角色 preset 粒度、`desktop` profile（应用独占管理） |
+| [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业组合 bundle：官方四行禁用补丁、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、角色配置恢复；4 个源文件 | `node --test packages/forge-enterprise/test/` 25 例通过；真机安装/升级/回滚/卸载与残留、四层补丁层序与 `--from-default-profile` 已实测（任务 `20261024T023419Z-dsh-install-c8c2`、`20261024T025338Z-dsh-profile-replace-eb4e`）。四行禁用后的**组合层完整性**已实测（`scripts/probe/four-row-blanking-probe.mjs`：`web` 上四行均落 `disabled: true`，基线 58 个界面/设置/模型选择相关行全部保留且未禁用、无激活告警；设计 §5.2.1）。**未验**：界面功能（设置页/模型选择真的可用）与角色 preset 粒度；`desktop` profile 在本机不可 dump（应用独占管理），按 NOT RUN 记账 |
 | [forge-sdd](../../packages/forge-sdd/README.md) | SDD 规则集与本地前置校验：规则版本、结果归因、与 CI 同一规则集；4 个源文件 | `node --test packages/forge-sdd/test/` 20 例通过；**未联调**企业 CI，本地结论只作前置校验、不替代 CI 权威结论 |
 | 其余四包与 DevOps MCP（forge-brand / forge-devops / forge-gateway / forge-gitee、`services/devops-mcp`） | 规划入口，无清单、源码或测试 | 对应设计中的测试矩阵为目标，不是执行结果 |
 
