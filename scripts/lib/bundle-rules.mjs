@@ -124,11 +124,19 @@ function checkEntryPoints(label, base, pkg, errors) {
     if (!existsSync(join(base, value))) errors.push(`bundle: ${label}/package.json ${where} ${value} does not exist`);
   };
   requireTarget(pkg.main, 'main');
-  for (const [name, target] of Object.entries(pkg.bin ?? {})) requireTarget(target, `bin.${name}`);
+  for (const [name, target] of Object.entries(pkg.bin ?? {})) {
+    requireTarget(target, `bin.${name}`);
+    if (typeof target === 'string' && !target.includes('*')) {
+      const full = join(base, target);
+      if (existsSync(full) && (statSync(full).mode & 0o100) === 0) {
+        errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
+      }
+    }
+  }
   const walkExports = (value, where) => {
     if (typeof value === 'string') requireTarget(value, where);
     else if (value !== null && typeof value === 'object') {
-      for (const [key, nested] of Object.entries(value)) walkExports(nested, `${where}.${key}`);
+      for (const [key, nested] of Object.entries(value)) walkExports(nested, `${where}[${key}]`);
     }
   };
   walkExports(pkg.exports, 'exports');
@@ -234,4 +242,66 @@ export function checkBundleClosure(root, errors) {
     checkPatchLayer(label, base, pkg, known, errors);
     checkLocaleParity(label, base, pkg, errors);
   }
+}
+
+/**
+ * 真实 tarball 闭包核验（#37 AC4）：把 `npm pack --dry-run --json` 的结果与清单对照。
+ * 只看"包装出来的东西"，不重复静态规则；模式位来自 pack 的实际输出。
+ *
+ * @param {{label: string, manifest: Record<string, any>, packed: Array<{path: string, mode?: number}>}} input
+ */
+export function auditTarball({ label, manifest, packed }) {
+  const errors = [];
+  const paths = new Map();
+  for (const entry of packed) {
+    if (entry !== null && typeof entry === 'object' && typeof entry.path === 'string') {
+      paths.set(entry.path.replace(/^\.\//u, ''), entry.mode);
+    }
+  }
+  const hasDir = (dir) => [...paths.keys()].some((path) => path.startsWith(`${dir}/`));
+  const requirePacked = (value, where) => {
+    if (typeof value !== 'string') return;
+    if (value.includes('*')) {
+      const prefix = value.slice(0, value.indexOf('*'));
+      const dir = (prefix.endsWith('/') ? prefix.slice(0, -1) : prefix.slice(0, prefix.lastIndexOf('/'))).replace(/^\.\//u, '');
+      if (!hasDir(dir)) errors.push(`bundle: ${label} tarball is missing ${where} ${value}`);
+      return;
+    }
+    if (!paths.has(value.replace(/^\.\//u, ''))) errors.push(`bundle: ${label} tarball is missing ${where} ${value}`);
+  };
+
+  for (const required of ['package.json', 'README.md']) {
+    if (!paths.has(required)) errors.push(`bundle: ${label} tarball is missing ${required}`);
+  }
+  for (const entry of Array.isArray(manifest.files) ? manifest.files : []) {
+    if (typeof entry !== 'string') continue;
+    const clean = entry.replace(/\/$/u, '');
+    if (!paths.has(clean) && !hasDir(clean)) errors.push(`bundle: ${label} tarball dropped declared files entry ${entry}`);
+  }
+  requirePacked(manifest.main, 'main');
+  const walkExports = (value, where) => {
+    if (typeof value === 'string') requirePacked(value, where);
+    else if (value !== null && typeof value === 'object') {
+      for (const [key, nested] of Object.entries(value)) walkExports(nested, `${where}[${key}]`);
+    }
+  };
+  walkExports(manifest.exports, 'exports');
+  for (const [name, target] of Object.entries(manifest.bin ?? {})) {
+    requirePacked(target, `bin.${name}`);
+    if (typeof target === 'string' && !target.includes('*')) {
+      const mode = paths.get(target.replace(/^\.\//u, ''));
+      if (typeof mode === 'number' && (mode & 0o100) === 0) {
+        errors.push(`bundle: ${label} tarball bin.${name} ${target} is not executable (mode ${(mode & 0o777).toString(8)})`);
+      }
+    }
+  }
+  if (paths.has('locale/en.json') && !paths.has('locale/zh.json')) {
+    errors.push(`bundle: ${label} tarball is missing locale/zh.json`);
+  }
+  for (const path of paths.keys()) {
+    if (path.startsWith('test/') || path.startsWith('coverage/') || path === 'pnpm-lock.yaml' || /\.test\.mjs$/u.test(path)) {
+      errors.push(`bundle: ${label} tarball must not ship ${path}`);
+    }
+  }
+  return errors;
 }
