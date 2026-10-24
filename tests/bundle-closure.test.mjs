@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { checkRepo } from '../scripts/lib/repo-rules.mjs';
-import { auditTarball, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
+import { auditTarball, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
 import { buildValidRepo } from './check-repo.test.mjs';
 
 function write(root, path, content) {
@@ -304,4 +304,13 @@ test('the tarball checker CLI fails on a package that drops declared files', () 
     rmSync(good, { recursive: true, force: true });
     rmSync(bad, { recursive: true, force: true });
   }
+});
+
+test('pack output parsing tolerates the duplicated JSON some npm versions print', () => {
+  const document = JSON.stringify({ '@heluo/forge-sample': { files: [{ path: 'package.json', mode: 0o644 }] } });
+  const expected = [{ path: 'package.json', mode: 0o644 }];
+  assert.deepEqual(parsePackOutput(document), expected);
+  assert.deepEqual(parsePackOutput(`${document}\n${document}`), expected);
+  assert.deepEqual(parsePackOutput(JSON.stringify({ files: [{ path: 'src/index.mjs' }] })), [{ path: 'src/index.mjs' }]);
+  assert.equal(parsePackOutput('npm notice\nnot json at all\n'), null);
 });

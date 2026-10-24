@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { auditTarball } from './lib/bundle-rules.mjs';
+import { auditTarball, parsePackOutput } from './lib/bundle-rules.mjs';
 
 const root = resolve(process.argv[2] ?? process.cwd());
 
@@ -45,9 +45,11 @@ for (const target of targets) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const parsed = JSON.parse(output.slice(output.indexOf('{')));
-    const entry = Object.values(parsed)[0];
-    packed = Array.isArray(entry?.files) ? entry.files : [];
+    packed = parsePackOutput(output);
+    if (packed === null) {
+      errors.push(`bundle: ${target.label} npm pack --dry-run produced no parsable file list`);
+      continue;
+    }
   } catch (error) {
     errors.push(`bundle: ${target.label} npm pack --dry-run failed: ${String(error.message).split('\n')[0]}`);
     continue;

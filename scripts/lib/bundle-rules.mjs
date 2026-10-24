@@ -305,3 +305,51 @@ export function auditTarball({ label, manifest, packed }) {
   }
   return errors;
 }
+
+/**
+ * 解析 `npm pack --dry-run --json` 的输出，返回文件条目数组。
+ * 不同 npm 版本会在 stdout 上打印**一份或两份**相同的 JSON（CI 上的 npm 打印两份），
+ * 因此这里按平衡括号切出候选对象逐个尝试，而不是对整个输出直接 JSON.parse。
+ */
+export function parsePackOutput(text) {
+  for (const candidate of balancedObjects(text)) {
+    let parsed;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== 'object') continue;
+    const entry = Array.isArray(parsed.files) ? parsed : Object.values(parsed)[0];
+    if (entry !== null && typeof entry === 'object' && Array.isArray(entry.files)) return entry.files;
+  }
+  return null;
+}
+
+function* balancedObjects(text) {
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== '{') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === '{') depth += 1;
+      else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          yield text.slice(start, index + 1);
+          start = index;
+          break;
+        }
+      }
+    }
+  }
+}
