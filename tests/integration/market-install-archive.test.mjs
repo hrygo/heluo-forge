@@ -6,6 +6,10 @@ import { downloadArchive, installPlugin } from '../../packages/forge-market/src/
 import { extractTarball } from '../../packages/forge-market/src/tarball.mjs';
 import { buildRegistrationRow, renderPatch } from '../../packages/forge-market/src/registration.mjs';
 import { digestOf } from '../../packages/forge-market/src/installer.mjs';
+import { readDshVersion } from '../../scripts/lib/dsh-version.mjs';
+
+// 宿主版本从单一真源派生：这条用例断言"装到当前基线宿主上应当成功"，写死版本会在升版后失真。
+const HOST_DSH_VERSION = readDshVersion(new URL('../..', import.meta.url).pathname);
 
 // 最小 tar 写入器：测试要真的走 gzip → 解包 → 白名单，而不是喂现成的文件数组。
 function header(name, size, type = '0') {
@@ -65,7 +69,7 @@ test('installs a real gzipped archive served over HTTP and renders its registrat
     assert.equal(digestOf(downloaded.bytes), digestOf(bytes));
 
     const plan = { name: '@heluo/demo-archive', version: '0.3.0', tag: 'v0.3.0', repo: 'https://gitee.corp.example/g/demo-archive' };
-    const result = await installPlugin(plan, { download: async () => downloaded, extract: extractTarball, dshVersion: '0.2.1-rc.2' });
+    const result = await installPlugin(plan, { download: async () => downloaded, extract: extractTarball, dshVersion: HOST_DSH_VERSION });
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.deepEqual(result.installed.paths, ['package.json', 'cordis.patch.yml', 'README.md', 'src/index.mjs']);
 

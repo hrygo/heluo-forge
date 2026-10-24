@@ -16,12 +16,15 @@ import {
   CANONICAL_SPOTS,
   DSH_VERSION_FILE,
   DSH_VERSION_SHAPE,
+  checkEngineFloors,
+  checkTargetDeclarations,
   listCodeOccurrences,
   listDocOccurrences,
   listEngineFloors,
   readDshVersion,
   rewriteCanonical,
   rewriteEngineFloors,
+  spotMatches,
 } from './lib/dsh-version.mjs';
 
 const root = process.cwd();
@@ -53,10 +56,14 @@ function report() {
     console.log(`\n[${titles[kind] ?? kind}] ${rows.length} 处`);
     for (const row of rows) console.log(`  ${row.file}:${row.line}  ${row.version}  ${row.text}`);
   }
-  console.log(`\n代码/脚本出现 ${code.length} 处：`);
+  console.log(`\n代码/脚本出现 ${code.length} 处（扫描面：全仓，排除 docs/ 与依赖/产物目录）：`);
+  const codeTitles = { 'fixture-exception': '夹具例外（登记原因，不随基线更新）' };
   for (const [kind, rows] of groupByKind(code)) {
-    console.log(`\n[${kind}] ${rows.length} 处`);
-    for (const row of rows) console.log(`  ${row.file}:${row.line}  ${row.version}  ${row.text}`);
+    console.log(`\n[${codeTitles[kind] ?? kind}] ${rows.length} 处`);
+    for (const row of rows) {
+      const note = row.reason ? `  ← ${row.reason}` : '';
+      console.log(`  ${row.file}:${row.line}  ${row.version}  ${row.text}${note}`);
+    }
   }
   const floors = listEngineFloors(root);
   if (floors.length) {
@@ -66,6 +73,8 @@ function report() {
       console.log(`  ${floor.file}  ${floor.floor}${note}`);
     }
   }
+  const floorsCheck = checkEngineFloors(root);
+  for (const line of floorsCheck.warnings) console.log(`\n提示：${line}`);
   const canonicalSpots = new Set(CANONICAL_SPOTS.map((spot) => spot.file));
   const seen = new Set(listDocOccurrences(root).filter((row) => row.kind === 'canonical').map((row) => row.file));
   const missing = [...canonicalSpots].filter((file) => !seen.has(file));
@@ -77,16 +86,28 @@ function check() {
   const problems = [];
   for (const spot of CANONICAL_SPOTS) {
     const text = readFileSync(join(root, spot.file), 'utf8');
-    const match = text.match(spot.pattern);
-    if (!match) {
+    const matches = spotMatches(text, spot);
+    // 带日期的历史记录不算当前声明；其余命中**全部**必须等于基线（只验第一处会漏掉后加的第二处）。
+    const live = matches.filter((row) => !row.dated);
+    if (!matches.length) {
       problems.push(`${spot.file}：未找到「${spot.label}」，基线位置可能被改写（更新 CANONICAL_SPOTS 或正文）`);
       continue;
     }
-    if (match[1] !== current) {
-      problems.push(`${spot.file}：「${spot.label}」写 ${match[1]}，与 ${DSH_VERSION_FILE} 的 ${current} 不一致`);
+    if (!live.length) {
+      problems.push(`${spot.file}：「${spot.label}」只剩带日期的历史记录，缺少当前基线声明`);
+      continue;
+    }
+    for (const row of live) {
+      if (row.version !== current) {
+        problems.push(`${spot.file}:${row.line}：「${spot.label}」写 ${row.version}，与 ${DSH_VERSION_FILE} 的 ${current} 不一致`);
+      }
     }
   }
-  for (const row of listCodeOccurrences(root)) {
+  problems.push(...checkTargetDeclarations(root));
+  const floorsCheck = checkEngineFloors(root, current);
+  problems.push(...floorsCheck.problems);
+  const code = listCodeOccurrences(root, current);
+  for (const row of code) {
     if (row.kind === 'code-forbidden') {
       problems.push(`${row.file}:${row.line}：代码/脚本硬编码 DSH 版本 ${row.version}（改为读 ${DSH_VERSION_FILE} 或用清单/夹具例外）`);
     }
@@ -97,7 +118,13 @@ function check() {
     process.exitCode = 1;
     return;
   }
-  console.log(`version: ok（基线 ${current}；基线位置 ${CANONICAL_SPOTS.length} 处、代码无硬编码）`);
+  console.log(
+    `version: ok（基线 ${current}；基线位置 ${CANONICAL_SPOTS.length} 处、代码无硬编码、下限 ${listEngineFloors(root).length} 个已断言）`,
+  );
+  for (const line of floorsCheck.warnings) console.log(`version: 提示 ${line}`);
+  for (const row of code.filter((item) => item.kind === 'fixture-exception')) {
+    console.log(`version: 夹具例外 ${row.file}:${row.line}（${row.reason}）`);
+  }
 }
 
 function apply(target) {
@@ -109,17 +136,36 @@ function apply(target) {
   const write = flags.has('--write');
   const current = readDshVersion(root);
   const changes = [];
+  const staged = new Map();
   if (current !== target) changes.push({ file: DSH_VERSION_FILE, from: current, to: target });
   for (const spot of CANONICAL_SPOTS) {
     const abs = join(root, spot.file);
     const { text, replaced, from } = rewriteCanonical(readFileSync(abs, 'utf8'), spot.file, target);
+    staged.set(abs, text);
     if (replaced) {
       changes.push({ file: `${spot.file}（${spot.label}）`, from: from ?? current, to: target });
-      if (write) writeFileSync(abs, text);
     } else {
       console.log(`跳过 ${spot.file}：${spot.label} 已是 ${target}`);
     }
   }
+  // 落盘前自检：改完的正文里，声明位置的非历史命中必须**全等于**目标版本，否则会把自己写进 check 失败的状态。
+  const selfProblems = [];
+  for (const spot of CANONICAL_SPOTS) {
+    const abs = join(root, spot.file);
+    const text = staged.get(abs) ?? readFileSync(abs, 'utf8');
+    const live = spotMatches(text, spot).filter((row) => !row.dated);
+    if (!live.length) selfProblems.push(`${spot.file}：改写后找不到「${spot.label}」`);
+    for (const row of live) {
+      if (row.version !== target) selfProblems.push(`${spot.file}:${row.line}：「${spot.label}」改写后仍为 ${row.version}`);
+    }
+  }
+  if (selfProblems.length) {
+    console.error(`version: apply 自检未通过（目标 ${target} 无法被现有匹配识别），未写入任何文件`);
+    for (const line of selfProblems) console.error(`- ${line}`);
+    process.exitCode = 2;
+    return;
+  }
+  if (write) for (const [abs, text] of staged) if (text !== readFileSync(abs, 'utf8')) writeFileSync(abs, text);
   if (flags.has('--engines')) {
     for (const floor of listEngineFloors(root)) {
       if (floor.exception) {

@@ -4,9 +4,10 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   CANONICAL_SPOTS,
   CODE_ALLOWED,
@@ -164,10 +165,209 @@ test('清单里的 engines.dsh 下限可列举：形状合法，且与基线的�
   assert.ok(text.includes(next));
 });
 
-test('代码允许清单覆盖清单元数据、测试夹具与本工具自身', () => {
-  assert.ok(CODE_ALLOWED.some((re) => re.test('packages/demo/package.json')));
-  assert.ok(CODE_ALLOWED.some((re) => re.test('packages/demo/test/x.test.mjs')));
-  assert.ok(CODE_ALLOWED.some((re) => re.test('tests/x.test.mjs')));
-  assert.ok(CODE_ALLOWED.some((re) => re.test('scripts/lib/dsh-version.mjs')));
-  assert.equal(CODE_ALLOWED.some((re) => re.test('packages/demo/src/index.mjs')), false);
+test('代码允许清单：测试夹具与本工具自身放行，源码与清单不在"整文件白名单"里', () => {
+  const allowed = (rel) => CODE_ALLOWED.some((entry) => (entry.only ? entry.re.test(rel) && entry.only.test(rel) : entry.re.test(rel)));
+  assert.ok(allowed('packages/demo/test/x.test.mjs'));
+  assert.ok(allowed('tests/x.test.mjs'));
+  assert.ok(allowed('scripts/lib/dsh-version.mjs'));
+  assert.equal(allowed('packages/demo/src/index.mjs'), false);
+  // 测试目录里的数据夹具不整目录放行：确需写死版本要登记例外。
+  assert.equal(allowed('tests/fixture.json'), false);
+  // 清单不整文件放行：只放行 engines.dsh 里的值，否则 dependencies 里钉死的版本会溜过去。
+  assert.equal(allowed('packages/demo/package.json'), false);
+});
+
+// --- CLI 级用例：lib 用例覆盖不到"跑起来会不会失败" ---
+
+const CLI_SRC = join(ROOT, 'scripts/dsh-version.mjs');
+const LIB_SRC = join(ROOT, 'scripts/lib/dsh-version.mjs');
+
+/** 同发布线内的前一个候选版（如 0.2.1-rc.3 → 0.2.1-rc.2）；没有预发布后缀时返回 null。 */
+function previousCandidate(version) {
+  const match = version.match(/^(.*-rc\.)(\d+)$/);
+  return match && Number(match[2]) > 0 ? `${match[1]}${Number(match[2]) - 1}` : null;
+}
+
+/** 搭一个最小仓库：真源 + 两处声明位置 + 任意附加文件，并把被测工具复制进去。 */
+function corpusFiles(options) {
+  const { files = {}, requirement, architecture, baseline = BASELINE } = options;
+  const root = mkdtempSync(join(tmpdir(), 'dsh-version-cli-'));
+  mkdirSync(join(root, 'scripts/lib'), { recursive: true });
+  mkdirSync(join(root, 'docs/requirements'), { recursive: true });
+  mkdirSync(join(root, 'docs/architecture'), { recursive: true });
+  writeFileSync(join(root, DSH_VERSION_FILE), `${baseline}\n`);
+  copyFileSync(LIB_SRC, join(root, 'scripts/lib/dsh-version.mjs'));
+  copyFileSync(CLI_SRC, join(root, 'scripts/dsh-version.mjs'));
+  writeFileSync(
+    join(root, 'docs/requirements/requirements-baseline.md'),
+    requirement ?? `| AS-4 | 试点期间无 DSH 上游破坏性变更影响已锁版本 | 推断 | 锁版本 \`${baseline}\` + 升级门禁 |\n`,
+  );
+  writeFileSync(
+    join(root, 'docs/architecture/platform-architecture.md'),
+    architecture ?? `- **锁版本**：一期兼容目标固定 DSH \`${baseline}\`（升级循环见设计索引）。\n`,
+  );
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), content);
+  }
+  return root;
+}
+
+function withCorpus(options, fn) {
+  const root = corpusFiles(options);
+  try {
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function runCli(root, args) {
+  return spawnSync(process.execPath, [join(root, 'scripts/dsh-version.mjs'), ...args], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+}
+
+test('CLI check：基线一致通过；声明位置过期、只剩历史记录都失败', () => {
+  withCorpus({}, (root) => assert.equal(runCli(root, ['check']).status, 0));
+  withCorpus(
+    { requirement: `| AS-4 | 试点期间无 DSH 上游破坏性变更影响已锁版本 | 推断 | 锁版本 \`${sibling(BASELINE)}\` + 升级门禁 |\n` },
+    (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /AS-4 锁版本/);
+    },
+  );
+  withCorpus(
+    { requirement: '| AS-4 | 试点期间无 DSH 上游破坏性变更影响已锁版本 | 推断 | 见下方说明 |\n' },
+    (root) => assert.equal(runCli(root, ['check']).status, 1, '缺少当前基线声明应当失败'),
+  );
+});
+
+test('CLI check：同一文件里的第二处非历史过期表述会被抓到（只验第一处会漏）', () => {
+  const current = sibling(BASELINE);
+  withCorpus(
+    {
+      requirement:
+        `| AS-4 | 试点期间无 DSH 上游破坏性变更影响已锁版本 | 推断 | 锁版本 \`${BASELINE}\` + 升级门禁 |\n` +
+        `\n补充：本仓锁版本 \`${current}\`，与真源保持一致。\n`,
+    },
+    (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(current.replace(/\./g, '\\.')));
+    },
+  );
+});
+
+test('CLI check：真行之前的带日期历史引用不算过期声明', () => {
+  const old = sibling(BASELINE);
+  withCorpus(
+    {
+      requirement:
+        `> 历史：2026-10-24 曾锁版本 \`${old}\`（已升级）。\n\n` +
+        `| AS-4 | 试点期间无 DSH 上游破坏性变更影响已锁版本 | 推断 | 锁版本 \`${BASELINE}\` + 升级门禁 |\n`,
+    },
+    (root) => assert.equal(runCli(root, ['check']).status, 0),
+  );
+});
+
+test('CLI check：扫描面覆盖 deploy/、根清单以外的扩展名与 v 前缀', () => {
+  withCorpus({ files: { 'deploy/install.yml': `DSH_VERSION="${BASELINE}"\n` } }, (root) => {
+    const result = runCli(root, ['check']);
+    assert.equal(result.status, 1, 'deploy/ 下的硬编码必须被拦');
+    assert.match(result.stderr, /deploy\/install\.yml/);
+  });
+  withCorpus({ files: { 'packages/demo/src/pin.cjs': `module.exports = { pin: '${BASELINE}' };\n` } }, (root) => {
+    assert.equal(runCli(root, ['check']).status, 1, '.cjs 也必须被扫到');
+  });
+  withCorpus({ files: { 'packages/demo/src/pin.mjs': `export const PIN = 'v${BASELINE}';\n` } }, (root) => {
+    assert.equal(runCli(root, ['check']).status, 1, 'v 前缀不能绕过');
+  });
+});
+
+test('CLI check：清单只放行 engines.dsh 的值，下限断言会拦跨基础版本与高于基线', () => {
+  const below = previousCandidate(BASELINE);
+  const base = BASELINE.replace(/^v/i, '').split('-')[0];
+  const otherBase = base.replace(/(\d+)$/, (digit) => String(Number(digit) - 1));
+  withCorpus(
+    { files: { 'packages/demo/package.json': `{"name":"demo","engines":{"dsh":">=${otherBase}"}}\n` } },
+    (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1, '不同基础版本且未登记例外必须失败');
+      assert.match(result.stderr, /ENGINE_FLOOR_EXCEPTIONS/);
+    },
+  );
+  withCorpus(
+    { files: { 'packages/demo/package.json': `{"name":"demo","engines":{"dsh":">=${otherLine(BASELINE)}"}}\n` } },
+    (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /发布线/);
+    },
+  );
+  withCorpus(
+    { files: { 'packages/demo/package.json': `{"name":"demo","engines":{"dsh":">=${sibling(BASELINE)}"}}\n` } },
+    (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1, '下限高于基线必须失败');
+      assert.match(result.stderr, /高于基线/);
+    },
+  );
+  withCorpus(
+    { files: { 'packages/demo/package.json': `{"name":"demo","dependencies":{"@deepseek-ai/dsh":"^${BASELINE}"}}\n` } },
+    (root) => assert.equal(runCli(root, ['check']).status, 1, '依赖里钉死 DSH 版本也应被拦'),
+  );
+  if (below) {
+    withCorpus(
+      { files: { 'packages/demo/package.json': `{"name":"demo","engines":{"dsh":">=${below}"}}\n` } },
+      (root) => {
+        const result = runCli(root, ['check']);
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, /提示/);
+      },
+    );
+  }
+});
+
+test('CLI check：目标声明行不得写死目标版本，带核验判据的版本可以保留', () => {
+  withCorpus({ files: { 'docs/design/plugins/demo.md': `| 目标 DSH 与 SDK | \`${BASELINE}\` |\n` } }, (root) => {
+    const result = runCli(root, ['check']);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /目标 DSH 与 SDK/);
+  });
+  withCorpus(
+    {
+      files: {
+        'docs/design/plugins/demo.md': `| 目标 DSH 与 SDK | 见仓库根 \`${DSH_VERSION_FILE}\`（接口核验版本 \`${sibling(BASELINE)}\`，2026-10-21） |\n`,
+      },
+    },
+    (root) => assert.equal(runCli(root, ['check']).status, 0),
+  );
+});
+
+test('CLI apply：任意预发布后缀都能改完再通过 check，非法形状拒绝落盘', () => {
+  withCorpus({}, (root) => {
+    const target = '0.2.1-beta.1';
+    const applied = runCli(root, ['apply', target, '--write']);
+    assert.equal(applied.status, 0, applied.stderr);
+    assert.equal(readFileSync(join(root, DSH_VERSION_FILE), 'utf8').trim(), target);
+    assert.equal(runCli(root, ['check']).status, 0, '改完必须仍能通过 check（旧实现会把自己写红）');
+  });
+  withCorpus({}, (root) => {
+    const rejected = runCli(root, ['apply', 'not-a-version', '--write']);
+    assert.equal(rejected.status, 2);
+    assert.equal(readFileSync(join(root, DSH_VERSION_FILE), 'utf8').trim(), BASELINE);
+  });
+});
+
+test('CANONICAL_SPOTS 覆盖声明的基线位置（防止实现里减少声明而用例照样通过）', () => {
+  assert.deepEqual(
+    CANONICAL_SPOTS.map((spot) => [spot.file, spot.label]),
+    [
+      ['docs/requirements/requirements-baseline.md', 'AS-4 锁版本'],
+      ['docs/architecture/platform-architecture.md', '一期兼容目标'],
+    ],
+  );
 });
