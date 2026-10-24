@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.1 |
+| 版本 | V1.0.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -323,6 +323,21 @@ interface IamGrantV1 {
 | 任何返回值与消息 | 不含秘密值（`redactSecrets`，金丝雀检查） |
 
 本机演练（`node scripts/probe/run-keychain-migration-rehearsal.mjs`，**9/9 步通过**）只碰副本：旧文件是探针在临时目录自建的 0600 合成记录，钥匙串条目 service 固定为探针专用名、account 随机，结束删除并复核无残留。实测：迁移后回读值与旧值一致、旧文件删除、临时目录无新增明文；不可用后端下副本原样保留（仍是 0600）；回读不一致与目标冲突都按上表停止；证据 JSON 金丝雀检查通过。**未验**：Windows 凭据管理器与 UOS/麒麟 Secret Service 上的迁移、`@napi-rs/keyring` 产物、以及真实用户凭据的迁移（本轮按批准决策只演练副本，不读取、不删除任何真实凭据记录）。
+
+**Linux aarch64 平台探测（#13 AC4，2026-10-24，Ubuntu 24.04.5 / aarch64 / Node 22.23.2，远端任务副本）**：从包公开入口调用 API（未改源码、未读真实凭据），10/10 探测通过：
+
+| 探测 | 实测 |
+|---|---|
+| 默认平台后端 | `kind: unavailable`；`get`、provider 构造、默认 `apply` 均抛 `KEYCHAIN_UNAVAILABLE`，**无明文回退**，未产生任何文件；文案明示 `OS keychain adapter is not implemented on this platform (linux); provide a reviewed backend` |
+| file backend 未 opt-in | `KEYCHAIN_INSECURE_FILE_REFUSED`，未创建文件 |
+| 显式 `allowInsecureFile: true` | 写入合成 grant 后 `stat` 模式为 `0600`；同实例与新建实例读回一致 |
+| 损坏文件 | 读写均报 `KEYCHAIN_FILE_CORRUPT`，原字节不变，不重置也不静默降级 |
+| 真实文件系统失败 | 以普通文件作父路径时上浮真实 `EEXIST`，未产生部分文件 |
+| 迁移目标不可用 | `keychain-unavailable`；旧副本 `legacyRetained: true`、`legacyDeleted: false`，前后 SHA-256 与权限不变 |
+| 迁移回读不一致 | `read-back-mismatch`；旧副本字节与 0600 不变 |
+| 迁移成功 | `migrated`；事件序为 预读 → `set` → 相等回读 → `unlink`，删除前断言两次目标读取均已完成 |
+
+限制：迁移目标与"可用后端"都是注入的测试后端，**不是 Linux OS keychain**——未验证 Secret Service/libsecret 的持久性，未在 Node 24 复跑，也不是麒麟/UOS 验收。证据在远端任务目录 `20261024T122800Z-linux-aarch64-probe`（`scripts/keychain-linux.mjs`、`artifacts/keychain-results.json`）。
 
 **不能据此声称的事**：这不是生产适配器，也不能替代 Windows/UOS/麒麟 实测——`@napi-rs/keyring` 的产物、Secret Service 可用性、keyutils 静默回退策略仍需在目标平台核验（见 §12 未决事项）；macOS 只用来验证 seam 与失败语义，以及"凭据不出现在 argv、不落明文"这两条可迁移结论。生产适配器未落地前，企业登录仍按 keychain 不可用 fail closed 处理。
 
