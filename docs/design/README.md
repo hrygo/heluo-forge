@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.10.10 |
+| 版本 | V0.10.11 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -17,7 +17,7 @@
 
 ## 1. 结论
 
-本索引管九个 DSH 产品扩展包、一个凭据支撑包、原生插件市场与两个独立服务入口。市场已切换为轻量模式：DSH 原生索引源 + AIHUB 托管 format-1 JSON，不再要求自定义市场插件；`forge-market` 与旧 HTTP 服务为历史参考，`market-index` 只保留只读索引校验器。其余设计仍为草案；设计状态、代码实现与上线准入分别判断。2026-10-23 ADR-16 将个人访问目标调整为当前人员与 DSH 用途校验，A 纯令牌 / B Key＋令牌待选；应用访问受控开通，五分钟撤权与当前授权退出待核验。原 Key-only 实现状态不因此改写为新能力已完成。
+本索引管九个 DSH 产品扩展包、一个凭据支撑包、原生插件市场与两个独立服务入口。市场的模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。除市场为评审稿外，其余设计仍为草案；设计状态、代码实现与上线准入分别判断。2026-10-23 ADR-16 将个人访问目标调整为当前人员与 DSH 用途校验，A 纯令牌 / B Key＋令牌待选；应用访问受控开通，五分钟撤权与当前授权退出待核验。原 Key-only 实现状态不因此改写为新能力已完成。
 
 详细设计使用[模块设计模板](../templates/design-template.md)，外部字段级契约仍以[契约目录](../contracts/gateway-contract.md)为唯一真源，设计只引用不复制。
 
@@ -33,7 +33,7 @@
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案 | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案 | aarch64 产物、鉴权/JSON；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验 |
 | `@heluo/forge-sdd` | 最小企业指引 + 必要 CLI/CI 校验 | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案（单一规则集：本地前置校验 + CI 权威结论；交付清单 freeze/verify 骨架已实现） | 企业 CI 接入与权威结论、归档联动；不固定工具数量 |
-| 原生插件市场 | DSH 内置 + AIHUB 索引 | [plugins/forge-market.md](plugins/forge-market.md) | 评审稿（轻量模式；`dsh plugin` 转发 pnpm 的安装/卸载参数已真机实测） | AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；三目标安装与索引交付待验；`@heluo/forge-market` 为历史参考 |
+| 原生插件市场 | DSH 内置 + AIHUB 索引 | [plugins/forge-market.md](plugins/forge-market.md) | 评审稿；`dsh plugin` 转发 pnpm 的安装/卸载参数已真机实测 | AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>) |
 
 设计文档路径相对本目录；正文均已落盘，不表示对应包或市场已实现。
 
@@ -41,7 +41,7 @@
 
 网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V0.3.0 评审稿；A/B 候选均待核验，不是运行时二选一回落）。
 
-市场的社区/官方源码调研与选型依据见[企业插件市场调研与落地建议](<../architecture/plugin-market-research.md>)；Gitee 侧能力澄清见[专题问询函](<../collaboration/gitee-market-clarification.md>)。原研究为历史证据，来源方向由 [ADR-11](<../architecture/plugin-registry-source-decision.md>)，轻量索引模式由 ADR-13 替代；契约与真实接入仍需分别验证。
+市场的社区/官方源码调研与选型依据见[企业插件市场调研与落地建议](<../architecture/plugin-market-research.md>)；Gitee 侧能力澄清见[专题问询函](<../collaboration/gitee-market-clarification.md>)。原研究为历史证据，来源方向由 [ADR-11](<../architecture/plugin-registry-source-decision.md>)，轻量索引模式由 ADR-13 替代；契约与真实接入仍需分别验证；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。
 
 [企业研发全流程能力面](plugins/forge-devops-lifecycle.md)（草案，DESIGN-013）统一六阶段地图、形态判定、人机双面、工程追溯、观察指标及开放决策。工具字段与事件字段分别见[工程工具契约](../contracts/engineering-tools.md)、[观察事件契约](../contracts/metrics-events.md)；不新增安装包，不代表内网接口或受控写已准入。
 
@@ -71,7 +71,7 @@
 | DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设，当前不建设 | CLI 前提不成立时先评审形态变更、范围与成本，批准后才启动 |
 | 索引契约与校验 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 评审稿；只读校验器可用 | AIHUB 索引 URL/JSON/更新 SLA、Artifactory 终端认证与三目标安装待验 |
 
-[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)已确认企业 npm 唯一源与 AIHUB 原生索引；007/012 为评审稿，企业审核/批准待定，不以文档定版代表准入。本项目不建生成器、服务、写前授权或全通道强制；旧插件/HTTP 服务仅历史参考。部署与运维边界见[部署说明](../../deploy/README.md)。
+[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)已确认企业 npm 唯一源与 AIHUB 原生索引；007/012 为评审稿，不以文档定版代表准入。本项目不建生成器、服务、写前授权或全通道强制；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。部署与运维边界见[部署说明](../../deploy/README.md)。
 
 ## 4. 设计顺序
 

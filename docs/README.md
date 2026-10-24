@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.21.6 |
+| 版本 | V1.21.7 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -25,7 +25,7 @@
 
 本总览负责文档导航、内容归属与治理规则；编号、路径、版本和状态的登记由[文档清单](DOCUMENT-REGISTER.md)维护。入口调整不改变业务范围、版本号或已有审批记录。
 
-当前仓库已从纯方案推进到轻量市场接入准备：市场改用 DSH 原生「索引源」+ AIHUB 托管 format-1 JSON，`services/market-index` 只保留只读校验器；旧插件与 HTTP 服务为历史参考。索引契约、P0 与 AIHUB issue #12 已建立，企业审核批准、AIHUB 索引、三目标安装与发行分发尚未完成；代码存在或本地检查通过不代表 G0–G3 获批。DevOps/Gitee 按现有 CLI 只读基线评审，MCP 服务与核心补丁为条件项。
+当前仓库已从纯方案推进到轻量市场接入准备：索引契约、P0 取证单与 AIHUB issue #12 已建立，市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；代码存在或本地检查通过不代表 G0–G3 获批。DevOps/Gitee 按现有 CLI 只读基线评审，MCP 服务与核心补丁为条件项。
 
 ## 2. 文档地图
 
@@ -58,20 +58,20 @@
 
 ## 3. 领域技术交付物
 
-下列十份交付物承载字段级契约或运行手册；标“待启动”的由负责团队按[模板](<templates/_template.md>)起草，过门禁后只在决策变化时回写架构。
+十份交付物中标注“待创建”的由负责团队按[模板](<templates/_template.md>)起草，过门禁后只在决策变化时回写架构。交付物的负责方、门禁与状态以[文档清单](<DOCUMENT-REGISTER.md>)为唯一真源；本表不复制这三项，只保留各交付物启动前必须先回答的问题。
 
-| 编号 | 交付物 | 文件 | 负责 | 门禁 | 状态 | 必须先回答 |
-|---|---|---|---|---|---|---|
-| CORP-DSH-IAM-001 | IAM 接入 | 待创建 | IAM 团队 | G0 | 待启动 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V1.0.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 网关团队 | G0/G1/G2 | 评审稿 | 当前人员与用途、A/B 候选、应用受控开通、IP、五分钟撤权/单授权退出及 C1/C4；能力待核验，不以历史 key-auth 调通代替 |
-| CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 平台组 | G0 | 待启动 | 内核、沙箱、原生模块、浏览器 |
-| CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | DevOps 团队 | G1 | 待启动 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
-| CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | 平台组 | G1 | 待启动 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
-| CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | 安全 + 平台组 | G2 | 待启动 | 规则、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 |
-| CORP-DSH-DIST-001 | 分发与市场 | 待创建 | 平台组 + IT | G2 | 待启动 | registry、index、通道、回滚 |
-| CORP-DSH-PKG-001 | 终端打包 | 待创建 | 平台组 + IT | G2 | 待启动 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
-| CORP-DSH-SDD-001 | SDD 流程 | 待创建 | 平台组 | G2 | 待启动 | skill、CLI、CI、产物契约 |
-| CORP-DSH-PILOT-001 | 试点推广 | 待创建 | PMO | G2 | 待启动 | 3 部门 800 人分批计划、指标采集、支持渠道、退出条件 |
+| 编号 | 交付物 | 文件 | 必须先回答 |
+|---|---|---|---|
+| CORP-DSH-IAM-001 | IAM 接入 | 待创建 | `resource` 支持、claims、client 注册、TTL、撤销 |
+| CORP-DSH-GW-001 | AI 网关契约（V1.0.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 当前人员与用途、A/B 候选、应用受控开通、IP、五分钟撤权/单授权退出及 C1/C4；能力待核验，不以历史 key-auth 调通代替 |
+| CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 内核、沙箱、原生模块、浏览器 |
+| CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
+| CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
+| CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | 规则、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 |
+| CORP-DSH-DIST-001 | 分发与市场 | 待创建 | registry、index、通道、回滚 |
+| CORP-DSH-PKG-001 | 终端打包 | 待创建 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
+| CORP-DSH-SDD-001 | SDD 流程 | 待创建 | skill、CLI、CI、产物契约 |
+| CORP-DSH-PILOT-001 | 试点推广 | 待创建 | 3 部门 800 人分批计划、指标采集、支持渠道、退出条件 |
 
 企业研发跨模块草案：[全流程能力设计](design/plugins/forge-devops-lifecycle.md)、[工具动作契约](contracts/engineering-tools.md)、[观察事件契约](contracts/metrics-events.md)。覆盖已确认受控写目标与待审批项，不改变上述十项团队交付物的负责关系，也不代表接口已核验。
 
@@ -80,9 +80,9 @@
 | 入口 | 文档 | 用途与边界 |
 |---|---|---|
 | 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 原七域及专项子函路由；本轮网关新函、IAM 原函补充；回函核验后写契约，不自动准入 |
-| 市场方案 | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>) | 评审稿；AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；不等企业批准或上线 |
+| 市场方案 | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>) | 评审稿；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；不等企业批准或上线 |
 | AIHUB 索引交付 | [issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 外部交付 issue：URL、format-1、registry、更新/撤回时限、三目标联调；作为验收跟踪，不替代企业批准 |
-| 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；索引交付、三目标安装与全通道边界仍需验 |
+| 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；索引交付、三目标安装与全通道边界仍需验 |
 | 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
 | Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
 | IAM 登录与权限专题问询 | [IAM 原函及本轮补充确认](<collaboration/iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送>) | 补充正文先列业务需求、原函覆盖与待确认问题；原 21 项及已有答复保留；面向 IAM 团队补充产品依据，共同事项由行内实施团队协调汇总；未发送 |

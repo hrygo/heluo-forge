@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场（轻量原生索引模式） |
-| 版本 | V2.2.0 |
+| 版本 | V2.2.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-10-21 |
-| 门禁 | G1 索引契约；G2 三目标安装 |
+| 门禁 | G1 索引接入；G2 三目标安装 |
 
 > 编制依据：2026-10-21 用户决定改用 DSH 原生「插件市场 → 索引源」，由 AI 开发者平台（AIHUB）维护并托管 format-1 索引 JSON；不再建设生成器、`current/policy/evidence`、CI 单写发布与租约。AIHUB 交付项以 [issue #12](https://github.com/hrygo/heluo-forge/issues/12) 跟踪。
 >
@@ -183,7 +183,7 @@ AIHUB 需要提供：稳定只读 URL、合法 format-1 JSON、企业 registry �
 
 ## 11. 历史参考实现（不属目标）
 
-`packages/forge-market/` 与附录 A 是旧的 Gitee 归档参考实现（自定义市场插件、HTTP 服务、安装流水线与策略接口）。轻量模式不使用它们，也不要求企业发行预置该插件；保留仅为历史追踪与旧契约测试。目标链路只使用 DSH 原生市场。
+`packages/forge-market/` 与附录 A 是旧的 Gitee 归档参考实现（自定义市场插件、HTTP 服务、安装流水线与策略接口），保留仅为历史追踪与旧契约测试；市场当前模式与状态见[索引契约 §1](<../services/market-index.md#1-一页速览>)。
 
 ```text
 packages/forge-market/
