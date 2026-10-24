@@ -77,6 +77,17 @@ node scripts/probe/run-bundle-install-rehearsal.mjs
 `DSH_INSTALL_REHEARSAL=0` 可让用例跳过。退出码 0/1/2 与探针一致；证据写临时目录的
 `install-rehearsal.json`（只含布尔、版本号与退出码）。不联网、不安装 pnpm、不触碰真实 profile。
 
+## 旧 0600 → 钥匙串迁移演练（#13 AC4，仅 darwin）
+
+```sh
+node scripts/probe/run-keychain-migration-rehearsal.mjs
+```
+
+只碰副本：旧 0600 文件由探针在临时目录自建（合成值），钥匙串条目 service 固定为探针专用名、
+account 随机，结束删除并复核无残留。量四件事：迁移成功后才删旧值、keychain 不可用 fail closed、
+回读不一致/目标冲突即停、证据与消息不含秘密值。`DSH_KEYCHAIN_MIGRATION=0` 可让用例跳过。
+退出码 0/1/2 与其它探针一致；证据写临时目录的 `keychain-migration.json`。
+
 ## 系统钥匙串 spike（#13 本地区块，仅 darwin）
 
 ```sh
