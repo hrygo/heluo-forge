@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V0.8.0 |
+| 版本 | V0.9.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -256,7 +256,7 @@ flowchart TD
 
 **本机实测（2026-10-24，本仓库工作副本）**：规则接入后立即发现三个真实缺陷——① `@heluo/forge-enterprise` 的补丁层既未列入 `files`、也未声明 `dsh.bundle.patch`，即**包体不会带上禁用四行的补丁**；② 同包 `files` 缺少 `cordis.patch.yml` 的发行声明；③ `@heluo/forge-sdd` 的 `bin` 目标 `src/cli.mjs` 在仓库与 tarball 中都是 `644`（安装后 shim 无法执行）。三项已修复：`files` 增加补丁、新增 `dsh.bundle.patch`、`chmod +x src/cli.mjs`（`git` 记录 `100755`，`npm pack` 实测模式位由 `644` 变 `755`）。证据：`node scripts/check-repo.mjs`（修复前 2 项 + 修复后 1 项 → `repo: ok`）、`node scripts/check-bundle-tarballs.mjs`（6 个包、64 个文件 → `bundles: ok`）。
 
-**未验**：安装/升级/卸载/回退的实际语义（`npm install`/`dsh plugin add` 到临时目录与临时 profile 的演练）、五类开关的独立性实测、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
+**未验**：真实 DSH **profile 级**的安装/升级/回灌（`dsh plugin add` 到 profile 的注册与升级检测）、五类开关的独立性实测、角色 preset 粒度（§12）、`desktop` profile 行 id（CLI 被 Electron 独占，已实测 `profile "desktop" is managed exclusively by the Electron application`）。
 
 ## 10. 测试矩阵
 
@@ -275,6 +275,21 @@ flowchart TD
 升级：整包升级，成员版本必须同批次；不允许单包漂移。
 
 回退：保留上一版补丁即可回到旧组合；禁用项与用户配置不回退，避免丢失用户选择。
+
+**安装语义实测（2026-10-24，DSH `0.2.1-rc.2`，darwin-arm64，node v26.11.1，profile `sdk`）**：`scripts/probe/run-bundle-install-rehearsal.mjs` 全程只在临时目录内做真实 tarball 的装/升/退/卸，10/10 步通过。
+
+| 步骤 | 结果 |
+|---|---|
+| 前置 | `dsh --version` = `0.2.1-rc.2`；两个包都不声明任何 install 期生命周期脚本 |
+| 打包安装 | `npm pack` → 装进临时项目；装到的版本与清单一致，`cordis.patch.yml` 随包在装好的位置可用 |
+| 组合（用**装好的**补丁层） | 无补丁时四条官方行都不是 `disabled`；套上装好的补丁后 `deepseek-account`、`llm-deepseek-account`、`llm-deepseek` 三条为 `disabled: true`；`ui-settings-account` 在 `sdk` profile **不存在**，按 `--patch` 语义跳过（跳过 ≠ 已禁用，与 §5.1.1 一致） |
+| 可执行入口 | 装好的 `.bin/forge-sdd` 能启动并以文档化的退出码 2 打印用法；目标文件模式位 `755` |
+| 升级 | 升到 `0.1.1` 后组合结论不变、用户文件未被改动 |
+| 回退 | 退回 `0.1.0` 后组合结论不变、用户文件未被改动 |
+| 卸载 | 两个包目录与 `.bin` 软链都被移除，用户文件未被改动 |
+| 工作区保护 | 演练前后 `git status --porcelain` 完全一致（按快照对比，不要求仓库本来就干净） |
+
+**无自动重放**：全程 `npm` 带 `--ignore-scripts`，两个包也没有可执行的安装期脚本；卸载后不保留任何自动重建动作。演练不接触任何真实 profile。
 
 ## 12. 未决事项
 
