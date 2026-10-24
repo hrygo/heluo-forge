@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.29.51 |
+| 版本 | V1.29.52 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,9 +19,9 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.51 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.52 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.21.5 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.10.7 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.10.8 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.0 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.3.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.0.5 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
@@ -35,7 +35,7 @@
 | CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.2.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-011 | DevOps MCP 服务详细设计 | [design/services/devops-mcp.md](<design/services/devops-mcp.md>) | V0.1.3 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-012 | 插件索引契约（format-1 / AIHUB 交付） | [design/services/market-index.md](<design/services/market-index.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | G1 索引契约；G2 三目标安装 |
-| CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.3.2 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
+| CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.3.3 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
 | CORP-DSH-DESIGN-014 | 跨模块冲突收口 | [design/conflict-resolution.md](<design/conflict-resolution.md>) | V0.1.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.2.1 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
 | CORP-DSH-METRICS-001 | 研发观察事件与上报契约 | [contracts/metrics-events.md](<contracts/metrics-events.md>) | V0.2.2 | 草案 | 平台组（代拟） | G2；指标导出启用前冻结 |

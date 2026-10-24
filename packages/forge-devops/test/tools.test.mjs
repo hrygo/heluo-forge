@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { apply, buildDevopsTools, READ_ACTIONS, READ_REASONS, READ_TOOLS, SERVICE_KEY } from '../src/index.mjs';
+import { apply, buildDevopsTools, inject, name, READ_ACTIONS, READ_REASONS, READ_TOOLS, SERVICE_KEY } from '../src/index.mjs';
 
 /** 最小宿主替身：get/provide/effect + 记录工具注册与卸载。 */
 function host({ reader, withTools = true } = {}) {
@@ -122,4 +122,10 @@ test('宿主没有 tools 服务时不注册工具，但服务仍可提供（差�
   assert.equal(registered.size, 0);
   assert.ok(provided.has(SERVICE_KEY));
   assert.deepEqual(provided.get(SERVICE_KEY).toolNames(), Object.keys(READ_TOOLS));
+});
+
+test('插件声明 name 与 inject：少了 tools 会静默不注册工具，少了 policy 会整项不激活', () => {
+  // 两种失败模式都由宿主探针（scripts/probe/devops-read-probe.mjs，2026-10-24）实测到。
+  assert.equal(name, 'forge-devops');
+  assert.deepEqual([...inject].sort(), ['policy', 'tools']);
 });
