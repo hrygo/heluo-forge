@@ -52,7 +52,7 @@
 | `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 发函人、各接入团队 |
 | `engineering/` | 仓库结构、开发测试与发布约定 | [工程结构设计](<engineering/repository-structure-design.md>) | 工程负责人、维护者 |
 | `templates/` | 受控文档与模块设计模板 | [_template.md](<templates/_template.md>) | 全体撰写人 |
-| `assets/` | 可离线打开的 HTML 图解 | [认证流程图解](<assets/enterprise-authentication-flow.html>) | 评审与对接人员 |
+| `assets/` | 可离线打开的 HTML 图解与品牌资产 | [认证流程图解](<assets/enterprise-authentication-flow.html>)；品牌见[品牌全景](<assets/branding/cyber-long/index.html>)与[生图规范](<assets/branding/prompts.md>) | 评审与对接人员 |
 
 文档编号、版本与责任团队统一登记在[文档清单](<DOCUMENT-REGISTER.md>)。
 
@@ -91,6 +91,8 @@
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 各扩展包与两个独立服务的详细设计状态与路径（含实现与验证入口） |
+| 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
+| 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | 文件 backend / OS keychain / 迁移与不可用时的 fail-closed 口径 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
 辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案（历史提议）](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；网关静态 Key 页描述的是 2026-10-20 原提议，先被 2026-10-22 ADR-14 取代；当前身份/用途目标见 ADR-16 与专用访问评审，历史图解不代表已选定路线，涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V2.0.0 评审稿示意，不替代正文契约或实现清单）。开放 Issue 的排期分析另见[实施路径总览](<assets/issue-implementation-path.html>)（2026-10-23 辅助分析，人日为粗估，不构成排期承诺或门禁证据）。
