@@ -16,6 +16,13 @@ test('the bundle install/upgrade/uninstall/rollback rehearsal passes', { skip, t
   assert.match(output, /install-v1-with-patch-and-workspace-intact/);
   assert.match(output, /installed-patch-disables-official-rows/);
   assert.match(output, /installed-bin-is-executable/);
+  assert.match(output, /installed-final-tarball-closure/);
+  assert.match(output, /install-real-loader-instantiates-members/);
+  assert.match(output, /legacy-sdd-plugin-mount-is-rejected/);
+  assert.match(output, /upgrade-real-loader-instantiates-members/);
+  assert.match(output, /rollback-real-loader-instantiates-members/);
+  assert.match(output, /rollback-loader-unload-clears-registrations/);
+  assert.match(output, /installed-real-cli-freeze-verify-and-reject-tamper/);
   assert.match(output, /rollback-to-0\.1\.0-keeps-composition-and-workspace/);
   assert.match(output, /uninstall-removes-packages-and-keeps-workspace/);
   assert.match(output, /repository-working-tree-untouched/);

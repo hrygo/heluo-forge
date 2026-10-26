@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.3.7 |
+| 版本 | V1.3.8 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-25 |
+| 最后更新 | 2026-10-26 |
 | 门禁 | G2 |
 | 模块状态 | 可用（组合骨架：官方行默认禁用 + 按需技能/条款装配；企业接入待开通） |
 
@@ -139,7 +139,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行，并挂载四个已实现的企业包（`insert:` 段见 §5.1.2）；指向未实现包的入口仍不预建。
+补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行；现行 `insert:` 段挂载三个有 Host 职责的企业插件（`insert:` 段见 §5.1.2），SDD 仅随制品交付 CLI；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -152,9 +152,9 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-`insert:` 段挂四个已实现且有清单的包：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`、`@heluo/forge-sdd`。历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
+`insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`。SDD 是库/CLI（`@heluo/forge-sdd` 随发行依赖交付，不占插件行、不补空 `apply`）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
 
-本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出，四个包以本地目录放进该 profile 的 `node_modules/@heluo/`）：
+本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行三行口径以补丁文件与 `bundle-patch.test.mjs` 为准）：
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -163,7 +163,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | 确定性 | 同上跑两次 `cmp` | 两次输出逐字节相同 |
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
-**边界**：这是**配置组合（dump）级**证据——四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。
+**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**2026-10-26 现行口径**：SDD 移出 `insert:` 后，dump 级断言以三行为准（`bundle-patch.test.mjs`），上表四行仅为历史记录。
 
 ### 5.2 按需企业 Skill 与规范条款加载
 
@@ -191,7 +191,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | `web` | 四行均落 `disabled: true` | 基线中 58 行全部保留且未被禁用，无误伤 | 无 |
 | `desktop` | **NOT RUN** | — | 本机不可 dump（由应用独占管理） |
 
-补丁后新增的行是 `heluo-credentials-keychain`、`heluo-policy`、`heluo-iam`、`heluo-sdd`（企业包自身能力，不是误伤）。
+补丁后新增的行是 `heluo-credentials-keychain`、`heluo-policy`、`heluo-iam`、`heluo-sdd`（企业包自身能力，不是误伤；2026-10-24 实测形态，2026-10-26 起 SDD 行已移除，现行见 §5.1.2）。
 
 边界：这是**组合层**事实（行是否保留、是否启用、有无激活告警），不是界面功能验证——"设置页/模型选择真的能用"仍需一次真实桌面运行，`desktop` profile 也未在两台机器上 dump 成功。
 

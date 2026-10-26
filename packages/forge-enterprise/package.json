@@ -10,6 +10,21 @@
   "scripts": {
     "test": "node --test"
   },
+  "dependencies": {
+    "@heluo/forge-credentials-keychain": "workspace:*",
+    "@heluo/forge-policy": "workspace:*",
+    "@heluo/forge-iam": "workspace:*",
+    "@heluo/forge-sdd": "workspace:*"
+  },
+  "bundledDependencies": [
+    "@heluo/forge-credentials-keychain",
+    "@heluo/forge-policy",
+    "@heluo/forge-iam",
+    "@heluo/forge-sdd"
+  ],
+  "bin": {
+    "forge-sdd": "./src/sdd-cli.mjs"
+  },
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",

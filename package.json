@@ -15,6 +15,7 @@
     "check:repo": "node scripts/check-repo.mjs",
     "test:unit": "node --test",
     "check:tarballs": "node scripts/check-bundle-tarballs.mjs",
-    "check:version": "node scripts/dsh-version.mjs check"
+    "check:version": "node scripts/dsh-version.mjs check",
+    "build:enterprise": "node scripts/build-enterprise-bundle.mjs"
   }
 }

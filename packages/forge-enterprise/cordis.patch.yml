@@ -3,7 +3,7 @@
 # 本文件承载两件事：
 #   1. O3 要求的"官方行默认禁用"（实测：`dsh --patch` 的覆写层会给命中行加上
 #      `disabled: true`；命中不到的 id 会警告 `patch: entry "<id>" not found` 后跳过）。
-#   2. 企业组合的最小挂载：`insert:` 段把四个已实现的企业包挂进 profile。
+#   2. 企业组合的最小挂载：`insert:` 段把三个有真实 Host 职责的企业插件挂进 profile；SDD 仅作为库/CLI 随制品交付。
 #      历史市场包 `@heluo/forge-market` 按设计不挂（它不属于轻量原生索引模式的目标）。
 #
 # 插入行的范围以"包已有清单、源码与测试"为准；网关、Gitee、品牌仍只有 README
@@ -34,5 +34,3 @@
       name: '@heluo/forge-policy'
     - id: heluo-iam
       name: '@heluo/forge-iam'
-    - id: heluo-sdd
-      name: '@heluo/forge-sdd'

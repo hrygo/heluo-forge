@@ -45,9 +45,8 @@ test('the bundle mounts exactly the implemented enterprise packages', async () =
       ['heluo-credentials-keychain', '@heluo/forge-credentials-keychain'],
       ['heluo-policy', '@heluo/forge-policy'],
       ['heluo-iam', '@heluo/forge-iam'],
-      ['heluo-sdd', '@heluo/forge-sdd'],
     ],
-    '插入行只能是已实现且有清单的四包，顺序为凭据→策略→IAM→SDD',
+    '插入行只能是真正的三个Host插件；SDD保留CLI，不伪装插件',
   );
   assert.doesNotMatch(text, /^\s*name: '@heluo\/forge-market'$/mu, '历史市场包不挂（AC5）；注释里提到它不算挂载');
   assert.doesNotMatch(text, /^( {4})- id: (enterprise|forge)-/mu, '禁用段不复制企业行，只覆写官方行');
@@ -57,7 +56,7 @@ test('the bundle mounts exactly the implemented enterprise packages', async () =
 test('every inserted package exists, is private, and has a manifest', async () => {
   const text = await read('cordis.patch.yml');
   const names = [...text.matchAll(/^ {6}name: '([^']+)'$/gmu)].map((m) => m[1]);
-  assert.equal(names.length, 4);
+  assert.equal(names.length, 3);
   for (const name of names) {
     const dir = join(here, '..', name.replace('@heluo/', ''));
     const manifest = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'));
@@ -72,6 +71,6 @@ test('the README states the current bundle status honestly', async () => {
   assert.match(text, /状态：可用（组合骨架/);
   assert.match(text, /cordis\.patch\.yml/);
   assert.match(text, /官方行禁用层已实现/);
-  assert.match(text, /insert:[^|]*四个已实现包/);
+  assert.match(text, /insert:[^|]*三个 Host 插件/);
   assert.match(text, /运行时模型面与企业环境接入未实现/);
 });

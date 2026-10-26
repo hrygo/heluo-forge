@@ -135,6 +135,18 @@ test('patch layers must ship, declare and resolve', () => {
   });
 });
 
+test('a known workspace name is not a declared umbrella dependency', () => {
+  withFixture((root) => {
+    addPackage(root, 'forge-member');
+    const fields = { files: ['src', 'cordis.patch.yml', 'README.md'], dsh: { bundle: { patch: './cordis.patch.yml' } } };
+    addPackage(root, 'forge-combo', fields);
+    write(root, 'packages/forge-combo/cordis.patch.yml', '- insert:\n    - id: member\n      name: "@heluo/forge-member"\n');
+    assert.ok(run(root).some((error) => error.includes('without a declared build-time dependency')));
+    addPackage(root, 'forge-combo', { ...fields, dependencies: { '@heluo/forge-member': 'workspace:*' } });
+    assert.deepEqual(run(root), []);
+  });
+});
+
 test('the legacy market package may only mount itself', () => {
   withFixture((root) => {
     addPackage(root, 'forge-market', {

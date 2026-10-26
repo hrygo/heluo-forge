@@ -5,7 +5,7 @@
 // 归属：AGENTS.md §4（包间用 workspace: 引用、不跨包导入源码路径、先满足设计准入再建清单）
 // 与 docs/design/plugins/forge-enterprise.md §5.3/§11（组合与包体闭包、AC4/AC5）。
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 const LIFECYCLE_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'];
@@ -193,6 +193,9 @@ function checkPatchLayer(label, base, pkg, known, errors) {
     if (!known.has(entry.name)) {
       errors.push(`bundle: ${label}/${PATCH_FILE} inserts ${entry.name}, which is not a workspace package`);
     }
+    if (entry.name !== pkg.name && known.has(entry.name) && pkg.dependencies?.[entry.name] === undefined) {
+      errors.push(`bundle: ${label}/${PATCH_FILE} inserts ${entry.name} without a declared build-time dependency`);
+    }
     if (entry.name === MARKET_PACKAGE && pkg.name !== MARKET_PACKAGE) {
       errors.push(`bundle: ${label}/${PATCH_FILE} must not mount the legacy market package ${MARKET_PACKAGE}`);
     }
@@ -258,6 +261,21 @@ export function auditTarball({ label, manifest, packed }) {
       paths.set(entry.path.replace(/^\.\//u, ''), entry.mode);
     }
   }
+  const bundled = new Set(manifest.bundledDependencies ?? []);
+  for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) {
+    if (!bundled.has(name) || typeof spec !== 'string' || !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u.test(spec)) {
+      errors.push(`bundle: ${label} tarball has unclosed runtime dependency ${name} (${spec})`);
+    }
+  }
+  for (const field of ['peerDependencies', 'optionalDependencies']) {
+    if (Object.keys(manifest[field] ?? {}).length > 0) errors.push(`bundle: ${label} tarball has unclosed ${field}`);
+  }
+  for (const name of bundled) {
+    if (manifest.dependencies?.[name] === undefined || !paths.has(`node_modules/${name}/package.json`)) {
+      errors.push(`bundle: ${label} tarball is missing bundled member ${name}`);
+    }
+    if (!name.startsWith('@heluo/forge-')) errors.push(`bundle: ${label} tarball must not bundle external/kernel package ${name}`);
+  }
   const hasDir = (dir) => [...paths.keys()].some((path) => path.startsWith(`${dir}/`));
   const requirePacked = (value, where) => {
     if (typeof value !== 'string') return;
@@ -299,10 +317,66 @@ export function auditTarball({ label, manifest, packed }) {
     errors.push(`bundle: ${label} tarball is missing locale/zh.json`);
   }
   for (const path of paths.keys()) {
-    if (path.startsWith('test/') || path.startsWith('coverage/') || path === 'pnpm-lock.yaml' || /\.test\.mjs$/u.test(path)) {
+    if (/(?:^|\/)(?:test|tests|coverage)\//u.test(path) || /(?:^|\/)pnpm-lock\.yaml$/u.test(path) || /\.test\.mjs$/u.test(path) || path.includes('node_modules/@deepseek-ai/')) {
       errors.push(`bundle: ${label} tarball must not ship ${path}`);
     }
   }
+  return errors;
+}
+
+/** Inspect the actual unpacked release, not names in the source workspace. */
+export function auditReleaseClosure(base, { allowInstalledBinLinks = false } = {}) {
+  const errors = [];
+  const seen = new Set();
+  const rootModules = join(base, 'node_modules');
+  const visit = (dir) => {
+    if (seen.has(dir)) return;
+    seen.add(dir);
+    let pkg;
+    try { pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')); }
+    catch { errors.push(`bundle: release is missing a valid member manifest at ${dir.slice(base.length) || '.'}`); return; }
+    for (const lifecycle of LIFECYCLE_SCRIPTS) {
+      if (pkg.scripts?.[lifecycle] !== undefined) errors.push(`bundle: release ${pkg.name} has install-time script ${lifecycle}`);
+    }
+    checkFileList(`release ${pkg.name}`, dir, pkg, errors);
+    checkEntryPoints(`release ${pkg.name}`, dir, pkg, errors);
+    const bundled = new Set(pkg.bundledDependencies ?? []);
+    for (const field of ['peerDependencies', 'optionalDependencies']) {
+      if (Object.keys(pkg[field] ?? {}).length > 0) errors.push(`bundle: release ${pkg.name} has unclosed ${field}`);
+    }
+    for (const [name, spec] of Object.entries(pkg.dependencies ?? {})) {
+      const member = join(rootModules, name);
+      if (!name.startsWith('@heluo/forge-') || typeof spec !== 'string' || !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u.test(spec)) {
+        errors.push(`bundle: release ${pkg.name} has unclosed runtime dependency ${name} (${spec})`);
+        continue;
+      }
+      if (!existsSync(join(member, 'package.json'))) { errors.push(`bundle: release is missing member ${name}`); continue; }
+      let installed;
+      try { installed = JSON.parse(readFileSync(join(member, 'package.json'), 'utf8')); }
+      catch { errors.push(`bundle: release member ${name} has an invalid manifest`); continue; }
+      if (installed.name !== name || installed.version !== spec) errors.push(`bundle: release member identity/version mismatch for ${name}`);
+      if (dir === base && !bundled.has(name)) errors.push(`bundle: release ${name} is not declared bundled`);
+      visit(member);
+    }
+    const patch = pkg.dsh?.bundle?.patch;
+    if (typeof patch === 'string' && existsSync(join(dir, patch))) {
+      for (const row of parsePatchLayer(readFileSync(join(dir, patch), 'utf8')).inserted) {
+        if (row.name !== pkg.name && pkg.dependencies?.[row.name] === undefined) errors.push(`bundle: release patch inserts undeclared member ${row.name}`);
+      }
+    }
+  };
+  visit(base);
+  const scan = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (lstatSync(path).isSymbolicLink()) {
+        const binLink = allowInstalledBinLinks && dirname(path).endsWith('/node_modules/.bin') && realpathSync(path).startsWith(`${realpathSync(base)}/`);
+        if (!binLink) errors.push(`bundle: release must not contain symlink ${path.slice(base.length + 1)}`);
+      }
+      else if (entry.isDirectory()) scan(path);
+    }
+  };
+  scan(base);
   return errors;
 }
 
