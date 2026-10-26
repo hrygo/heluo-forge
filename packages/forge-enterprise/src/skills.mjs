@@ -225,12 +225,13 @@ export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterpr
 /**
  * Register the selected clauses through the host lazy provider path.
  *
- * Shape verified by the host probe (`skills-registry-discovery-and-load`,
- * DSH 0.2.1-rc.2): `registerProvider` takes a factory returning
+ * Shape verified by the host probe (`skills-registry-discovery-and-load`;
+ * probe record pinned in the enterprise design doc): `registerProvider`
+ * takes a factory returning
  * `{ name, list, get }`; `list()` yields summaries WITHOUT the body and
  * `get(name)` returns the body on demand. If the host has no provider entry,
  * this throws and the caller falls back to direct registration (eager body).
- * Provider-path availability on newer hosts (rc.3) is NOT RUN here.
+ * Provider-path availability on newer hosts is NOT RUN here.
  *
  * @param {{skills: object}} ctx host context providing `skills`
  * @param {{selection: object, namePrefix?: string, invocation?: object}} input
