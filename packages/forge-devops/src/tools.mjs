@@ -30,6 +30,8 @@ const TARGET_HINT = Object.freeze({
 const NEXT_ACTION = Object.freeze({
   NO_READER: 'configure-reader',
   POLICY_REQUIRED: 'report-to-admin',
+  POLICY_ACTION_UNREGISTERED: 'report-to-admin',
+  POLICY_DENIED: 'report-to-admin',
   UNKNOWN_ACTION: 'report-to-admin',
   MISSING_TARGET: 'give-a-target',
   MALFORMED_RESULT: 'retry',

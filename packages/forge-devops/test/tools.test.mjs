@@ -8,7 +8,15 @@ function host({ reader, withTools = true } = {}) {
   const provided = new Map();
   const registered = new Map();
   const ctx = {
-    get: (key) => (key === 'policy' ? { name: 'policy' } : key === 'devopsReader' ? reader : undefined),
+    get: (key) =>
+      key === 'policy'
+        ? {
+            catalog: new Map(READ_ACTIONS.map((action) => [action, { action, kind: 'read', enabled: true }])),
+            executeAction: async (ctx, action, exec, operation) => operation(),
+          }
+        : key === 'devopsReader'
+          ? reader
+          : undefined,
     provide: (key, value) => {
       provided.set(key, value);
       return () => provided.delete(key);

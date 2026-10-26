@@ -40,16 +40,35 @@ export function validateConfig(input = {}) {
 }
 
 /**
+ * FIX-02（#21）：已知企业入口的目录绑定在挂载时验证。
+ * 空目录、缺目录项、未开放动作都拒绝挂载——登记 ≠ 批准，未登记不得静默
+ * 落入 out-of-scope。普通非企业工具仍走门禁原有的 out-of-scope 语义，不误封。
+ */
+function assertPolicyReadActions(policy) {
+  const missing = READ_ACTIONS.filter((action) => policy.catalog?.get?.(action)?.enabled !== true);
+  if (missing.length > 0) {
+    throw new DevopsReadError(
+      READ_REASONS.POLICY_ACTION_UNREGISTERED,
+      `策略目录缺失或未开放只读动作：${missing.join(', ')}（devops 只读面不开放）`,
+      { missing },
+    );
+  }
+}
+
+/**
  * @param {{ get?: Function, provide?: Function, effect?: Function }} ctx
  * @param {object} rawConfig
  */
 export function apply(ctx, rawConfig = {}) {
   const config = validateConfig(rawConfig);
   // 硬依赖：策略服务不在就拒绝挂载（不降级为"只读模式"）。
-  if (typeof ctx.get !== 'function' || ctx.get('policy') === undefined) {
+  const policy = typeof ctx.get === 'function' ? ctx.get('policy') : undefined;
+  if (policy === undefined || policy === null) {
     throw new DevopsReadError(READ_REASONS.POLICY_REQUIRED, '策略服务未挂载，devops 只读面不开放');
   }
+  assertPolicyReadActions(policy);
 
+  let callSeq = 0;
   const service = {
     /** 只读动作清单（写动作永不出现在这里）。 */
     readActions: () => [...READ_ACTIONS],
@@ -68,8 +87,27 @@ export function apply(ctx, rawConfig = {}) {
       }
       // 先判动作与目标，再碰适配器：未登记动作不得产生任何调用。
       assertReadRequest(action, target);
-      const result = await reader.read({ action, target });
-      return normalizeReadResult({ action, target, result });
+      // 同一 admission：读也要经过策略门禁与必要审计，拒绝时适配器零调用。
+      const admitted = await policy.executeAction(
+        ctx,
+        action,
+        {
+          name: 'devops.read',
+          arguments: { target },
+          agent: undefined,
+          callId: `devops-read-${(callSeq += 1)}`,
+          signal: undefined,
+        },
+        async () => normalizeReadResult({ action, target, result: await reader.read({ action, target }) }),
+      );
+      if (admitted !== null && typeof admitted === 'object' && admitted.kind === 'error') {
+        throw new DevopsReadError(
+          READ_REASONS.POLICY_DENIED,
+          String(admitted.text ?? '策略拒绝了这次只读查询'),
+          { action },
+        );
+      }
+      return admitted;
     },
     config,
   };
