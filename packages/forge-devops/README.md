@@ -19,7 +19,7 @@
 1. **限定只读面**：`change.read`、`repository.read`、`issue.read`、`pr.read`（动作标识与[工程工具契约 §3](../../docs/contracts/engineering-tools.md) 同源）。
 2. **把"退出码"与"事实"分开**：适配器只给退出码、没有结构化状态或缺来源版本时，结果降级为 `unknown` 并给出原因，**不报成功**。
 
-宿主接线：只读适配器经服务键 `devopsReader` 注入（仓库内只留离线假适配器）；策略服务是硬依赖，拿不到就不挂载（入口关闭），不提供“无策略只读”降级；挂载时校验策略目录覆盖四个读动作且已开放（空目录/漏映射/未开放一律拒绝挂载，`POLICY_ACTION_UNREGISTERED`）；每次读取经 `policy.executeAction` 走同一门禁与必要审计，策略拒绝时适配器零调用（`POLICY_DENIED`，可见拒绝）；卸载移除服务与全部工具注册、无残留。
+宿主接线：只读适配器经服务键 `devopsReader` 注入（仓库内只留离线假适配器）；策略服务是硬依赖，拿不到或没有 admission 入口就不挂载（入口关闭），不提供“无策略只读”降级；挂载时校验策略目录覆盖四个读动作且已开放（空目录/漏映射/未开放一律拒绝挂载，`POLICY_ACTION_UNREGISTERED`）；每次读取经 `policy.executeAction` 走同一门禁与必要审计，策略拒绝时适配器零调用（`POLICY_DENIED`，可见拒绝）；调用方自带 `role` 等参数不进入 admission 身份（不扩权）；卸载移除服务与全部工具注册、无残留。
 
 模型可见面只注册四个只读工具（`forge_devops_change_read` / `forge_devops_repository_read` / `forge_devops_issue_read` / `forge_devops_pr_read`），**没有任何写工具**。它们的参数名刻意用 `target`：策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（2026-10-24 实测的目录缺口）。
 
@@ -27,7 +27,7 @@
 node --test packages/forge-devops/test/
 ```
 
-覆盖（27 例，2026-10-26）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载无残留、配置校验；工具侧另有：只注册四个读工具、参数用 `target` 且必填、正常路径返回契约结果、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；目录绑定侧（`policy-binding.test.mjs` 8 例）：空目录/漏映射/未开放/无目录拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝。
+覆盖（29 例，2026-10-26）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载无残留、配置校验；工具侧另有：只注册四个读工具、参数用 `target` 且必填、正常路径返回契约结果、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；目录绑定侧（`policy-binding.test.mjs` 10 例）：空目录/漏映射/未开放/无目录/无 admission 入口拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝、调用方自带 `role` 不进入 admission 身份。
 
 ## 边界
 

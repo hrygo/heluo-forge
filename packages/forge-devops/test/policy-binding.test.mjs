@@ -95,6 +95,24 @@ test('策略服务没有目录时拒绝挂载，不提供无目录只读', () =>
   });
 });
 
+test('FIX-08：策略服务没有 admission 入口时拒绝挂载，不以 TypeError 泄漏', () => {
+  assert.throws(
+    () => mount({ policy: { catalog: fullCatalog() } }),
+    (error) =>
+      error instanceof DevopsReadError &&
+      error.code === READ_REASONS.POLICY_REQUIRED &&
+      /admission/u.test(error.message),
+  );
+});
+
+test('FIX-08：调用方自带 role 等参数不进入 admission 身份，不扩权', async () => {
+  const stub = stubPolicy();
+  const { service } = mount({ policy: stub.service, reader: goodReader() });
+  await service.read({ action: 'issue.read', target: 'group/repo#7' });
+  assert.deepEqual(stub.calls[0].exec.arguments, { target: 'group/repo#7' });
+  assert.equal(stub.calls[0].exec.agent, undefined);
+});
+
 test('工具→动作绑定可验证：READ_TOOLS 每一项都在目录中有已开放条目', () => {
   const catalog = fullCatalog();
   for (const [toolName, action] of Object.entries(READ_TOOLS)) {

@@ -45,6 +45,14 @@ export function validateConfig(input = {}) {
  * 落入 out-of-scope。普通非企业工具仍走门禁原有的 out-of-scope 语义，不误封。
  */
 function assertPolicyReadActions(policy) {
+  // FIX-08：admission 入口本身缺失时同样拒绝挂载——不能挂上一个"看起来接了策略、
+  // 实际调用抛 TypeError"的只读面。
+  if (typeof policy.executeAction !== 'function') {
+    throw new DevopsReadError(
+      READ_REASONS.POLICY_REQUIRED,
+      '策略服务没有可用的 admission 入口（executeAction），devops 只读面不开放',
+    );
+  }
   const missing = READ_ACTIONS.filter((action) => policy.catalog?.get?.(action)?.enabled !== true);
   if (missing.length > 0) {
     throw new DevopsReadError(
