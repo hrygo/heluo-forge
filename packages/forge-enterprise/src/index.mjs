@@ -22,6 +22,7 @@ export {
 } from './switches.mjs';
 
 export {
+  assembleEnterpriseSkills,
   EnterpriseSkillError,
   loadClausePack,
   preActionConstraints,

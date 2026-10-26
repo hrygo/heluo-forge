@@ -229,3 +229,47 @@ export function preActionConstraints({ selection, action }) {
       clause.references.some((reference) => reference === action) || clause.decision === action || clause.appliesTo.length === 0),
   );
 }
+
+/**
+ * FIX-09（#37）：交付 Skill 的单一受管装配入口。
+ *
+ * 把"加载 → 选择 → 注册"三步收进一个入口：调用一次即完成装配，返回的 `dispose`
+ * 一次性注销全部已注册 Skill。发现面只暴露摘要（id/标题/摘要/owner/版本范围），
+ * 正文通过 `bodyFor(id)` 按需取用，不在发现面展开；装配本身零写入、不授予任何
+ * 权限、不固定 Skill 流程、不产出合规结论。真实企业条款来源仍待企业提供，
+ * 安装路径的实际调用待宿主装配完成后记账（见设计文档核验状态表）。
+ *
+ * @param {{skills: object}} ctx host context providing `skills`
+ * @param {{root?: string, pack?: object, systems?: Array, budgetTokens?: number, namePrefix?: string, invocation?: object}} input
+ */
+export function assembleEnterpriseSkills(ctx, { root, pack, systems = [], budgetTokens, namePrefix = 'enterprise', invocation } = {}) {
+  const loaded = pack ?? loadClausePack({ root });
+  const selection = selectClauses({ pack: loaded, systems, budgetTokens });
+  const registration = registerEnterpriseSkills(ctx, { selection, namePrefix, invocation });
+  const bodies = new Map(selection.selected.map((clause) => [clause.id, clause.body]));
+  return Object.freeze({
+    version: loaded.version,
+    /** 发现面：只有摘要，没有正文；冲突双方与责任人保持可见。 */
+    discovered: Object.freeze(selection.selected.map((clause) => Object.freeze({
+      id: clause.id,
+      title: clause.title,
+      summary: clause.summary,
+      level: clause.level,
+      owner: clause.owner,
+      appliesTo: Object.freeze(clause.appliesTo.map((target) => Object.freeze({ ...target }))),
+      references: Object.freeze([...clause.references]),
+    }))),
+    conflicts: selection.conflicts,
+    excluded: selection.excluded,
+    budget: selection.budget,
+    registered: registration.registered,
+    invocation: registration.invocation,
+    /** 正文按需取用：发现面不展开，调用时才从已加载的装配中取出。 */
+    bodyFor: (id) => bodies.get(id),
+    /** 动作前可见性：给定动作的适用硬要求（id + 摘要），由能力入口在真实动作前展示。 */
+    constraintsFor: (action) => Object.freeze(
+      preActionConstraints({ selection, action }).map((clause) => Object.freeze({ id: clause.id, summary: clause.summary, owner: clause.owner })),
+    ),
+    dispose: () => registration.dispose(),
+  });
+}
