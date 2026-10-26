@@ -24,6 +24,7 @@ const APPROVALS = [
 ];
 
 const CONFIG = {
+  audit: { sink: 'memory', allowNonDurable: true },
   approvals: APPROVALS,
   catalog: [
     { action: 'repository.read', kind: 'read', target: 'repository', enabled: true },
@@ -85,10 +86,12 @@ test('the command face runs the same decision as the tool face', async () => {
     handler: async () => ((runs += 1), { kind: 'success', text: 'read ok' }),
   });
   const command = host.registered.get('forge-read');
-  const invocation = { commandId: 'cmd-1', agent: { id: 'a' }, rawInput: '', attachments: [], signal: new AbortController().signal };
+  const invocation = { commandId: 'cmd-1', agent: { id: 'a' }, rawInput: 'repo-a', attachments: [], signal: new AbortController().signal };
 
-  const denyTarget = await command.handler({ ...invocation, target: undefined });
-  assert.equal(denyTarget.kind, 'success', 'a command name is a sufficient target for the read action');
+  const allowed = await command.handler(invocation);
+  assert.equal(allowed.kind, 'success', 'an explicit raw-input target reaches the same gate');
+  const denyTarget = await command.handler({ ...invocation, rawInput: '' });
+  assert.equal(denyTarget.kind, 'error', 'the command name cannot stand in for a missing business target');
 
   const disabled = host.ctx.get('policy').decide({ action: 'issue.close', target: 'I-1' });
   assert.equal(disabled.action, 'deny');

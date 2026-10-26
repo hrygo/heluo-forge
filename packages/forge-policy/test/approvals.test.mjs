@@ -22,14 +22,15 @@ const READ = { action: 'issue.read', kind: 'read', target: 'issue', enabled: tru
 function fakeHost() {
   const provided = new Map();
   const guards = [];
+  const listeners = new Map();
   const ctx = {
     tools: { guard: (fn) => (guards.push(fn), () => guards.splice(guards.indexOf(fn), 1)) },
-    on: () => () => {},
+    on: (event, listener) => (listeners.set(event, listener), () => listeners.delete(event)),
     get: (name) => provided.get(name),
     provide: (name, value) => (provided.set(name, value), () => provided.delete(name)),
     effect: (callback) => callback(),
   };
-  return { ctx, guards, provided };
+  return { ctx, guards, provided, listeners };
 }
 
 const mount = (config) => {
@@ -48,13 +49,15 @@ test('把一个写动作置为 enabled 但没有台账条目：挂载直接拒�
   );
 });
 
-test('台账条目存在且当前有效：写动作可以开放，门禁照常放行', () => {
+test('台账条目存在且当前有效：写动作可以开放，审计后门禁放行', async () => {
   const host = mount({
     catalog: [WRITE],
     approvals: [ROW],
     tools: { forge_issue_close: 'issue.close' },
   });
-  assert.equal(host.guards[0]({ name: 'forge_issue_close', arguments: { target: 'I-1' }, callId: 'c1' }), undefined);
+  const exec = { name: 'forge_issue_close', arguments: { target: 'group/repo', revision: 'R-1' }, callId: 'c1' };
+  assert.equal((await host.listeners.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }))).kind, 'allow');
+  assert.equal(host.guards[0](exec), undefined);
 });
 
 test('台账条目已过期：不足以开放写动作（拒绝原因 expired）', () => {
@@ -76,9 +79,11 @@ test('台账条目属于别的动作：不算批准', () => {
   );
 });
 
-test('只读动作不需要台账，enabled 也不受此约束', () => {
+test('只读动作不需要台账，但仍需要必要审计', async () => {
   const host = mount({ catalog: [READ], approvals: [], tools: { forge_issue_read: 'issue.read' } });
-  assert.equal(host.guards[0]({ name: 'forge_issue_read', arguments: { target: 'I-1' }, callId: 'c1' }), undefined);
+  const exec = { name: 'forge_issue_read', arguments: { target: 'I-1' }, callId: 'c1' };
+  assert.equal((await host.listeners.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }))).kind, 'allow');
+  assert.equal(host.guards[0](exec), undefined);
 });
 
 test('台账条目校验：字段缺失、时间倒挂、重复 id、未知字段都报错', () => {

@@ -177,5 +177,12 @@ export function createAuditBarrier(options = {}) {
       return cleared.length;
     },
     isDegraded: () => degraded,
+    // Used only by the execution barrier when unload or a broken settlement
+    // leaves an admitted action without an authoritative final outcome.
+    abandon: (receipt, reason) => {
+      degraded = true;
+      return recordGap({ kind: 'outcome-unavailable', action: receipt.receipt.action,
+        target: receipt.receipt.target, outcome: 'unknown', reason });
+    },
   };
 }

@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.9.13 |
+| 版本 | V0.10.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-24 |
+| 最后更新 | 2026-10-26 |
 | 门禁 | G2 |
 | 模块状态 | 可用（门禁骨架；实现与验证见设计索引 §2.2） |
 
@@ -123,7 +123,7 @@ export interface PolicyEngine {
 | `retry` | 默认 `none`；读可 `read_recheck`；写不允许自动重放 |
 | `enabled` | 显式开放标记；只读、普通研发写、人工确认动作分别开关 |
 
-**判定顺序**（与已核验的宿主管线一致）：`tools/pre-execute`（需确认动作返回 `{ kind: 'ask' }`，由 `ctx.approval` 决定）→ `ctx.tools.guard()`（硬拒绝，单调，任何放行 listener 都不能覆盖）→ 执行 → `tools/post-execute` → `tools/result`（只观察）。未知动作、未开放写、错目标，以及"工具自报 `readOnly`"式的越权企图都在 guard 处拒绝，执行器副作用计数为零。
+**判定顺序**：`tools/pre-execute` await 必要确认与前置审计 → `ctx.tools.guard()` 核验绑定收据并单调硬拒绝 → 执行 → `tools/post-execute` await 结清 → `tools/result` 同步登记兜底观察。最后一步不是 awaited 决策；后续动作的 prepare/guard 另保证 pending 结清前不能继续。作用域内未知动作、未开放写、缺目标，以及工具自报 `readOnly` 的越权企图必须零执行。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -275,7 +275,11 @@ export interface PolicyEngine {
 | 恢复 | 不自动重放写；不声称本地审计与远端平台之间有跨系统事务 |
 | 企业落点 | 企业审计落点未获准前，相关企业调用保持关闭（记录为阻塞，不临时改用本机文件充数） |
 
-宿主接线（已核验）：前置记录写在 `ctx.on('tools/pre-execute')`，补记写在 `ctx.on('tools/post-execute')`——该 waterfall 的签名是 `(exec, result, next)`，默认决议 `{ kind: 'accept' }`（探针实测，写错签名会让工具调用失败）。`tools/result` 仍只做观察投影。
+宿主接线：`tools/pre-execute` await 前置审计并保存绑定同一执行对象、调用身份与参数摘要的私有收据；`tools.guard` 同步核验并消费一次，故较早 listener 返回 `allow` 也不能绕过必要审计。`tools/post-execute` 的 `(exec, result, next)` waterfall await 结清；它可能被其他 listener 短路，所以 `tools/result` 的同步观察回调另登记异步兜底结清。**emit 本身不是 awaited 屏障**：pending 在 observer 返回前登记，下一受控动作的 prepare 必须等待，guard 同时拒绝 pending 窗口；双路径按同一收据幂等结清。
+
+`policy.registerCommand` 不借用工具事件，而直接调用同一准备、路径、确认、审计及结清屏障。简单命令要求明确业务目标；结构化或带路径的命令提供可信 `resolveArguments(invocation)`，规范化参数作为处理函数第二参数。空输入不得以命令名充当目标。审批仍复用原生服务，真实命令确认通道与其 open-turn 前提未联调时保持关闭。
+
+卸载或取消发生在审批、audit begin、下游 pre listener 的等待期间时，异步返回后须再次拒绝，不能依赖已被卸载的 guard。已获准而结果未明的调用在卸载时记录 `unknown` 缺口，不声称未执行或自动重放。参数摘要仅留私有内存，不写入最小审计记录。
 
 ## 6. 权限、凭据与数据
 

@@ -15,6 +15,28 @@ export class PolicyDelegationError extends Error {
 }
 
 const TRUSTED_SOURCE = 'host';
+const isText = (value) => typeof value === 'string' && value.trim().length > 0;
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isTextList = (value) => Array.isArray(value) && value.every(isText);
+const isRevisionMap = (value) => isRecord(value) && Object.entries(value).every(([name, revision]) => isText(name) && isText(revision));
+
+function validGrant(grant, now) {
+  return isRecord(grant) && isText(grant.id) && isText(grant.principal) && isText(grant.changeId)
+    && isTextList(grant.actions) && isTextList(grant.repositories) && grant.repositories.length > 0
+    && isRevisionMap(grant.revisions) && Number.isFinite(now) && Number.isFinite(grant.issuedAt)
+    && Number.isFinite(grant.expiresAt) && grant.expiresAt > grant.issuedAt && now >= grant.issuedAt;
+}
+
+// Iterate the binding, not the evidence: omitting a bound field must never remove a check.
+function checkRevisions(expected, current = {}, rejectUnknown = false) {
+  if (!isRevisionMap(current)) return 'unverifiable';
+  for (const [name, revision] of Object.entries(expected)) {
+    if (!Object.hasOwn(current, name)) return 'unverifiable';
+    if (current[name] !== revision) return 'revision-drift';
+  }
+  if (rejectUnknown && Object.keys(current).some((name) => !Object.hasOwn(expected, name))) return 'unverifiable';
+  return undefined;
+}
 
 function requireText(value, label) {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -52,15 +74,21 @@ export function createDelegation(input = {}) {
     throw new PolicyDelegationError(`delegation "${id}" needs a positive ttlMs`, 'POLICY_DELEGATION_INVALID', { id });
   }
   const now = input.now ?? Date.now();
+  const revisions = input.revisions === undefined ? {} : input.revisions;
+  const expiresAt = now + ttlMs;
+  if (!isTextList(input.repositories) || !isTextList(input.actions) || !isRevisionMap(revisions)
+      || !Number.isFinite(now) || !Number.isFinite(expiresAt) || expiresAt <= now) {
+    throw new PolicyDelegationError(`delegation "${id}" needs valid scope, revisions and lifetime`, 'POLICY_DELEGATION_INVALID', { id });
+  }
   return Object.freeze({
     id,
     principal,
     changeId,
     repositories: Object.freeze([...input.repositories]),
     actions: Object.freeze([...input.actions]),
-    revisions: Object.freeze({ ...(input.revisions ?? {}) }),
+    revisions: Object.freeze({ ...revisions }),
     issuedAt: now,
-    expiresAt: now + ttlMs,
+    expiresAt,
     revokedAt: undefined,
     source: TRUSTED_SOURCE,
   });
@@ -74,12 +102,21 @@ const RESUME_KINDS = Object.freeze(['resume', 'fork', 'subagent']);
  * 与 `authorizeDelegation` 一样只返回判定对象、从不抛错：任何无法复验的情况都按拒绝处理。
  * 范围只能维持或收窄；快照必须来自宿主事实，聊天记录、临时表或模型参数都不能恢复写授权；
  * 依据不足时返回 `delegation-resume-unverifiable`，调用方必须重新承接（重新委托）。
+ * 原委托绑定的每个 revision 都必须由当前事实显式提供；不能缺省继承旧版本。
  *
  * @param {{grant?: object, resume?: {source?: string, kind?: string, principal?: string,
  *   changeId?: string, repository?: string, actions?: readonly string[], agentId?: string,
  *   revisions?: Record<string, string>}, now?: number}} input
  */
-export function resumeDelegation({ grant, resume = {}, now = Date.now() } = {}) {
+export function resumeDelegation(input) {
+  try {
+    return resumeVerifiedDelegation(input);
+  } catch {
+    return DENY('delegation-resume-unverifiable', 'the current delegation facts cannot be verified');
+  }
+}
+
+function resumeVerifiedDelegation({ grant, resume = {}, now = Date.now() } = {}) {
   const deny = (rule, reason, details) => ({ action: 'deny', rule, reason, ...(details === undefined ? {} : { details }) });
   if (grant === undefined || grant === null) return deny('delegation-missing', 'no delegation to resume');
   if (grant.source !== TRUSTED_SOURCE) return deny('delegation-untrusted-source', 'the delegation does not come from host facts');
@@ -96,6 +133,7 @@ export function resumeDelegation({ grant, resume = {}, now = Date.now() } = {}) 
   const kind = resume.kind ?? 'resume';
   if (!RESUME_KINDS.includes(kind)) return deny('delegation-resume-unknown-kind', `unknown resume kind "${kind}"`, { kind });
   if (grant.revokedAt !== undefined) return deny('delegation-revoked', `the delegation was revoked (${grant.revokedReason ?? 'revoked'})`);
+  if (!validGrant(grant, now)) return deny('delegation-resume-unverifiable', 'the delegation scope or lifetime cannot be verified');
   if (grant.expiresAt <= now) return deny('delegation-expired', 'the delegation expired');
 
   // 身份与绑定复验：必须由宿主给出**当前**事实，不接受"沿用旧快照"式的默认。
@@ -114,10 +152,9 @@ export function resumeDelegation({ grant, resume = {}, now = Date.now() } = {}) 
   if (resume.repository !== undefined && !grant.repositories.includes(resume.repository)) {
     return deny('delegation-resume-repository-out-of-scope', `repository "${resume.repository}" is outside the delegation`);
   }
-  for (const [name, revision] of Object.entries(resume.revisions ?? {})) {
-    const expected = grant.revisions[name];
-    if (expected === undefined) return deny('delegation-resume-unverifiable', `revision "${name}" is not part of the delegation`);
-    if (expected !== revision) return deny('delegation-resume-revision-drift', `${name} moved from the delegated revision`);
+  const revisionFailure = checkRevisions(grant.revisions, resume.revisions, true);
+  if (revisionFailure !== undefined) {
+    return deny(`delegation-resume-${revisionFailure}`, 'the current revisions do not prove the complete delegation binding');
   }
   if (kind === 'subagent' && (typeof resume.agentId !== 'string' || resume.agentId.trim().length === 0)) {
     return deny('delegation-resume-unverifiable', 'a subagent resume needs the host-attested agent identity');
@@ -125,7 +162,7 @@ export function resumeDelegation({ grant, resume = {}, now = Date.now() } = {}) 
 
   // 范围：缺省继承（同等），显式给出时必须是子集——只许收窄，不许放宽。
   const requested = resume.actions === undefined ? [...grant.actions] : resume.actions;
-  if (!Array.isArray(requested) || requested.some((action) => typeof action !== 'string')) {
+  if (!isTextList(requested)) {
     return deny('delegation-resume-unverifiable', 'actions must be an array of action names when present');
   }
   const widened = requested.filter((action) => !grant.actions.includes(action));
@@ -166,7 +203,15 @@ const DENY = (rule, reason) => ({ action: 'deny', rule, reason });
  * @param {{grant?: object, request: {principal: string, changeId: string, repository: string,
  *   action: string, revisions?: Record<string, string>}, catalog?: Map<string, object>, now?: number}} input
  */
-export function authorizeDelegation({ grant, request = {}, catalog, now = Date.now() }) {
+export function authorizeDelegation(input) {
+  try {
+    return authorizeVerifiedDelegation(input);
+  } catch {
+    return DENY('delegation-unverifiable', 'the current delegation facts cannot be verified');
+  }
+}
+
+function authorizeVerifiedDelegation({ grant, request = {}, catalog, now = Date.now() } = {}) {
   if (grant === undefined || grant === null) {
     return DENY('delegation-missing', 'no delegation covers this action');
   }
@@ -175,6 +220,9 @@ export function authorizeDelegation({ grant, request = {}, catalog, now = Date.n
   }
   if (grant.revokedAt !== undefined) {
     return DENY('delegation-revoked', `the delegation was revoked (${grant.revokedReason ?? 'revoked'})`);
+  }
+  if (!validGrant(grant, now) || !isRecord(request)) {
+    return DENY('delegation-unverifiable', 'the delegation scope, request or lifetime cannot be verified');
   }
   if (grant.expiresAt <= now) {
     return DENY('delegation-expired', 'the delegation expired');
@@ -198,11 +246,9 @@ export function authorizeDelegation({ grant, request = {}, catalog, now = Date.n
   if (!grant.repositories.includes(request.repository)) {
     return DENY('delegation-repository-out-of-scope', `repository "${request.repository}" is outside the delegation`);
   }
-  for (const [name, revision] of Object.entries(request.revisions ?? {})) {
-    const expected = grant.revisions[name];
-    if (expected !== undefined && expected !== revision) {
-      return DENY('delegation-revision-drift', `${name} moved from the delegated revision`);
-    }
+  const revisionFailure = checkRevisions(grant.revisions, request.revisions);
+  if (revisionFailure !== undefined) {
+    return DENY(`delegation-${revisionFailure}`, 'the current revisions do not prove the complete delegation binding');
   }
   return { action: 'allow', rule: 'delegation-in-scope', reason: 'the action is inside the delegated scope' };
 }

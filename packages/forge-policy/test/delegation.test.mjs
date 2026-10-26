@@ -79,7 +79,7 @@ test('an incomplete delegation is refused at creation', () => {
   }
 });
 
-const hostResume = { source: 'host', principal: 'user-a', changeId: 'C-2026-1' };
+const hostResume = { source: 'host', principal: 'user-a', changeId: 'C-2026-1', revisions: { change: 'rev-1' } };
 
 test('resume re-verifies identity and can only keep or narrow the scope', () => {
   const grant = createDelegation(facts);
@@ -149,6 +149,71 @@ test('resume fails closed on revoked, expired and unverifiable input', () => {
   assert.equal(resumeDelegation({ grant, resume: { ...hostResume, changeId: '' }, now: 2_000 }).rule, 'delegation-resume-unverifiable');
   assert.equal(resumeDelegation({ grant, resume: { ...hostResume, kind: 'impersonate' }, now: 2_000 }).rule, 'delegation-resume-unknown-kind');
   assert.equal(resumeDelegation({ grant, resume: { ...hostResume, actions: 'change.read' }, now: 2_000 }).rule, 'delegation-resume-unverifiable');
+});
+
+test('every delegated revision must exist as a current own request fact', () => {
+  const grant = createDelegation({ ...facts, revisions: { change: 'rev-1', policy: 'policy-1' } });
+  const inherited = Object.create({ change: 'rev-1', policy: 'policy-1' });
+  for (const revisions of [undefined, null, {}, { change: 'rev-1' }, { policy: 'policy-1' }, inherited]) {
+    assert.equal(authorizeDelegation({ grant, request: { ...request, revisions }, catalog, now: 2_000 }).action, 'deny');
+    assert.equal(resumeDelegation({ grant, resume: { ...hostResume, revisions }, now: 2_000 }).action, 'deny');
+  }
+  const revisions = { change: 'rev-1', policy: 'policy-1' };
+  assert.equal(authorizeDelegation({ grant, request: { ...request, revisions }, catalog, now: 2_000 }).action, 'allow');
+  assert.equal(resumeDelegation({ grant, resume: { ...hostResume, revisions }, now: 2_000 }).action, 'allow');
+  assert.equal(authorizeDelegation({ grant, request: { ...request, revisions: { ...revisions, policy: 'policy-2' } }, catalog, now: 2_000 }).rule, 'delegation-revision-drift');
+});
+
+test('resume, fork and subagent cannot inherit missing revision evidence', () => {
+  const grant = createDelegation(facts);
+  for (const kind of ['resume', 'fork', 'subagent']) {
+    const candidate = { ...hostResume, kind, agentId: 'agent-7' };
+    delete candidate.revisions;
+    assert.equal(resumeDelegation({ grant, resume: candidate, now: 2_000 }).action, 'deny', kind);
+    assert.equal(resumeDelegation({ grant, resume: { ...candidate, revisions: facts.revisions }, now: 2_000 }).action, 'allow');
+  }
+});
+
+test('authorization and resume return deny for malformed and exceptional security facts', () => {
+  const grant = createDelegation(facts);
+  const exceptional = new Proxy({}, { get() { throw new Error('cannot inspect security facts'); } });
+  const exceptionalRevisions = new Proxy({}, { ownKeys() { throw new Error('cannot enumerate revisions'); } });
+  for (const candidate of [undefined, null, {}, exceptional]) {
+    assert.equal(authorizeDelegation(candidate).action, 'deny');
+    assert.equal(resumeDelegation(candidate).action, 'deny');
+  }
+  for (const candidate of [null, exceptional, { ...request, revisions: exceptionalRevisions }]) {
+    assert.equal(authorizeDelegation({ grant, request: candidate, catalog, now: 2_000 }).action, 'deny');
+  }
+  for (const candidate of [exceptional, { ...hostResume, revisions: exceptionalRevisions }]) {
+    assert.equal(resumeDelegation({ grant, resume: candidate, now: 2_000 }).action, 'deny');
+  }
+  for (const invalidGrant of [exceptional, { ...grant, actions: 'change.read' }, { ...grant, repositories: 'repo-a' }, { ...grant, expiresAt: NaN }, { ...grant, expiresAt: Infinity }, { ...grant, revisions: undefined }, { ...grant, revisions: { change: undefined } }]) {
+    assert.equal(authorizeDelegation({ grant: invalidGrant, request, catalog, now: 2_000 }).action, 'deny');
+    assert.equal(resumeDelegation({ grant: invalidGrant, resume: hostResume, now: 2_000 }).action, 'deny');
+  }
+  for (const now of [NaN, Infinity, '2000']) {
+    assert.equal(authorizeDelegation({ grant, request, catalog, now }).action, 'deny');
+    assert.equal(resumeDelegation({ grant, resume: hostResume, now }).action, 'deny');
+  }
+  assert.equal(authorizeDelegation({ grant, request, catalog: { get() { throw new Error('catalog unavailable'); } }, now: 2_000 }).action, 'deny');
+});
+
+test('invalid revision maps, scope entries and issue times cannot create grants', () => {
+  for (const changed of [
+    { revisions: null }, { revisions: [] }, { revisions: 'rev-1' }, { revisions: { change: '' } }, { revisions: { change: undefined } },
+    { repositories: [''] }, { actions: [1] }, { now: NaN }, { now: Infinity }, { now: Number.MAX_VALUE, ttlMs: Number.MAX_VALUE },
+  ]) {
+    assert.throws(() => createDelegation({ ...facts, ...changed }), (error) => error.code === 'POLICY_DELEGATION_INVALID');
+  }
+});
+
+test('unversioned grants and extra authorization facts retain their existing behavior', () => {
+  const grant = createDelegation({ ...facts, revisions: undefined });
+  assert.equal(authorizeDelegation({ grant, request: { ...request, revisions: undefined }, now: 2_000 }).action, 'allow');
+  assert.equal(resumeDelegation({ grant, resume: { ...hostResume, revisions: undefined }, now: 2_000 }).action, 'allow');
+  const bound = createDelegation(facts);
+  assert.equal(authorizeDelegation({ grant: bound, request: { ...request, revisions: { ...request.revisions, unrelated: 'current' } }, now: 2_000 }).action, 'allow');
 });
 
 test('fork and subagent resumes record the host-attested origin', () => {
