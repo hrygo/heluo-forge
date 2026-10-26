@@ -21,9 +21,9 @@ const STAGES = new Set(['spec', 'implementation', 'archive']);
 const TEST_STATES = new Set(['passed', 'failed', 'not-run', 'timeout']);
 const ARTIFACT_KINDS = new Set(['spec', 'implementation', 'archive']);
 
-/** @param {string} text @returns {string} */
-export function fingerprint(text) {
-  return createHash('sha256').update(text).digest('hex');
+/** Hash raw artifact bytes; strings retain UTF-8 compatibility. @param {string | Buffer} content @returns {string} */
+export function fingerprint(content) {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 /** @param {{path: string, unitId?: string}} artifact @param {{unitId: string}} manifest */
@@ -82,6 +82,11 @@ export function inspectManifest(manifest) {
   if (typeof manifest.testedRevision !== 'string' || manifest.testedRevision.trim().length === 0) {
     add('HARD', 'tested-revision-missing', 'testedRevision is required', 'testedRevision');
   }
+  if (typeof manifest.revision === 'string' && manifest.revision.trim().length > 0
+    && typeof manifest.testedRevision === 'string' && manifest.testedRevision.trim().length > 0
+    && manifest.testedRevision !== manifest.revision) {
+    add('HARD', 'test-revision-mismatch', `testedRevision ${manifest.testedRevision} does not cover delivery revision ${manifest.revision}`, 'testedRevision');
+  }
   if (manifest.stage !== undefined && !STAGES.has(manifest.stage)) {
     add('HARD', 'stage-unknown', `stage "${manifest.stage}" is not one of spec, implementation, archive`, 'stage');
   }
@@ -130,7 +135,7 @@ export function inspectManifest(manifest) {
   }
   if (manifest.stage !== undefined) {
     const kinds = new Set(manifest.artifacts.map((artifact) => artifact?.kind).filter((kind) => kind !== undefined));
-    if (kinds.has('spec') !== kinds.has('implementation')) {
+    if (!kinds.has('spec') || !kinds.has('implementation')) {
       add('HARD', 'atomic-delivery', 'a staged delivery must include both spec and implementation artifacts in one manifest', 'artifacts');
     }
     if (!kinds.has('archive')) {

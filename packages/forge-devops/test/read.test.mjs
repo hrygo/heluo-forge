@@ -13,7 +13,7 @@ import {
 import { READER_KEY } from '../src/index.mjs';
 
 /** 最小宿主替身：只提供本包用到的 get/provide/effect。 */
-function host({ policy = { value: {} }, reader } = {}) {
+function host({ policy = { value: admitAllPolicy() }, reader } = {}) {
   const provided = new Map();
   const ctx = {
     get: (key) => (key === 'policy' ? policy.value : key === READER_KEY ? reader : undefined),
@@ -24,6 +24,14 @@ function host({ policy = { value: {} }, reader } = {}) {
     effect: () => {},
   };
   return { ctx, provided };
+}
+
+/** FIX-02 挂载合约替身：目录覆盖四个读动作且已开放，admission 直接承认并执行。 */
+function admitAllPolicy() {
+  return {
+    catalog: new Map(READ_ACTIONS.map((action) => [action, { action, kind: 'read', enabled: true }])),
+    executeAction: async (ctx, action, exec, operation) => operation(),
+  };
 }
 
 /** 挂载插件并从已提供服务里取服务本体：`apply()` 的返回值是卸载函数（与 forge-policy 一致）。 */

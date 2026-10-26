@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  assembleEnterpriseSkills,
   EnterpriseSkillError,
   loadClausePack,
   preActionConstraints,
   registerEnterpriseSkills,
+  registerEnterpriseSkillsViaProvider,
   selectClauses,
 } from '../src/skills.mjs';
 
@@ -142,4 +144,94 @@ test('hard constraints are visible before the action and nothing claims complian
   assert.equal('verdict' in selection, false);
   const source = readFileSync(new URL('../src/skills.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /export (async )?function \w*(Complian|Attest)\w*/u, 'no self-attestation API is exported');
+});
+
+test('FIX-09: single managed assembly entry discovers summaries, loads bodies on demand, disposes cleanly', () => {
+  const { root, indexPath } = pack();
+  const before = statSync(indexPath).mtimeMs;
+  const registrations = [];
+  const ctx = { skills: { register: (skill) => (registrations.push(skill), () => void registrations.splice(registrations.indexOf(skill), 1)) } };
+  const assembled = assembleEnterpriseSkills(ctx, { root, systems: [{ name: 'devops', version: '2.1.7' }] });
+  // 发现面只有摘要：没有正文字段。
+  assert.ok(assembled.discovered.length > 0);
+  for (const item of assembled.discovered) {
+    assert.equal('body' in item, false, 'discovery must not expand bodies');
+    assert.ok(item.id.length > 0 && item.summary.length > 0 && item.owner.length > 0);
+  }
+  // 正文按需取用。
+  assert.match(assembled.bodyFor('A-1'), /冻结交付清单/);
+  assert.equal(assembled.bodyFor('NOPE'), undefined);
+  // 动作前可见性：只给 id + 摘要 + 责任人，不给"合规通过"。
+  assert.deepEqual(assembled.constraintsFor('issue.close').map((entry) => entry.id), ['A-1']);
+  assert.deepEqual(assembled.constraintsFor('unrelated.action'), []);
+  assert.equal('compliant' in assembled, false);
+  assert.equal('verdict' in assembled, false);
+  // 只注册 hard 条款；模型不可自调用；装配零写入。
+  assert.equal(registrations.length, assembled.registered.length);
+  assert.equal(assembled.invocation.modelInvocable, false);
+  assert.equal(assembled.invocation.userInvocable, true);
+  assert.equal(statSync(indexPath).mtimeMs, before, 'assembly writes nothing');
+  // 冲突双方与责任人保持可见。
+  assert.equal(assembled.conflicts.length, 1);
+  // 一次 dispose 注销全部。
+  assembled.dispose();
+  assert.equal(registrations.length, 0);
+});
+
+test('FIX-09: assembly fails closed without a host skills service and honors the budget', () => {
+  const { root } = pack();
+  assert.throws(
+    () => assembleEnterpriseSkills({}, { root, systems: [{ name: 'devops', version: '2.1.7' }] }),
+    (error) => error instanceof EnterpriseSkillError && error.code === 'ENTERPRISE_HOST_UNAVAILABLE',
+  );
+  const ctx = { skills: { register: () => () => {} } };
+  assert.throws(
+    () => assembleEnterpriseSkills(ctx, { root, systems: [{ name: 'devops', version: '2.1.7' }], budgetTokens: 1 }),
+    (error) => error instanceof EnterpriseSkillError && error.code === 'ENTERPRISE_BUDGET_EXCEEDED',
+  );
+});
+
+test('FIX-09: provider path discovers summaries and loads bodies on demand (probe-verified shape)', async () => {
+  const { root } = pack();
+  const loaded = loadClausePack({ root });
+  const selection = selectClauses({ pack: loaded, systems: [{ name: 'devops', version: '2.1.7' }] });
+  let factory;
+  let disposed = false;
+  const ctx = { skills: { registerProvider: (make) => ((factory = make), () => void (disposed = true)) } };
+  const registration = registerEnterpriseSkillsViaProvider(ctx, { selection });
+  const provider = factory();
+  const summaries = await provider.list();
+  assert.ok(summaries.length > 0);
+  for (const summary of summaries) {
+    assert.equal('content' in summary, false, 'discovery must not carry bodies');
+    assert.equal(summary.invocation.modelInvocable, false);
+    assert.equal(summary.invocation.userInvocable, true);
+  }
+  const first = await provider.get(summaries[0].name);
+  assert.match(first.content, /硬要求|冻结|确认/u);
+  assert.equal(await provider.get('no-such-skill'), undefined);
+  registration.dispose();
+  assert.equal(disposed, true);
+  assert.throws(
+    () => registerEnterpriseSkillsViaProvider({ skills: {} }, { selection }),
+    (error) => error instanceof EnterpriseSkillError && error.code === 'ENTERPRISE_PROVIDER_UNAVAILABLE',
+  );
+});
+
+test('FIX-09: assembly prefers the provider path and falls back to direct registration', async () => {
+  const { root } = pack();
+  const systems = [{ name: 'devops', version: '2.1.7' }];
+  let factory;
+  const withProvider = { skills: { registerProvider: (make) => ((factory = make), () => {}) } };
+  const viaProvider = assembleEnterpriseSkills(withProvider, { root, systems });
+  assert.ok(typeof viaProvider.registered[0].name === 'string');
+  assert.deepEqual((await factory().list()).map((entry) => entry.name), viaProvider.registered.map((entry) => entry.name));
+  assert.match(viaProvider.bodyFor(viaProvider.registered[0].id), /硬要求|冻结|确认/u);
+  viaProvider.dispose();
+  const direct = [];
+  const withoutProvider = { skills: { register: (skill) => (direct.push(skill), () => {}) } };
+  const viaDirect = assembleEnterpriseSkills(withoutProvider, { root, systems });
+  assert.equal(direct.length, viaDirect.registered.length);
+  assert.ok(direct[0].content.length > 0);
+  viaDirect.dispose();
 });

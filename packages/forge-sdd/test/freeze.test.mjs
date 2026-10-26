@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { freeze, loadManifest, verifyManifest } from '../src/freeze.mjs';
+import { freeze, loadManifest, verifyManifest } from '../src/index.mjs';
 import { SddManifestError } from '../src/manifest.mjs';
 
 function sandbox() {
@@ -44,6 +45,67 @@ test('freezing writes a manifest that verifies cleanly', () => {
   assert.equal(result.ok, true);
   assert.equal(result.severity, 'hard-only');
   assert.match(result.notes.join(' '), /不证明业务正确/);
+});
+
+test('stale tests and incomplete staged artifacts refuse freeze and legacy manifests fail verification', () => {
+  const root = sandbox();
+  const input = baseInput(root);
+  const original = freeze(input);
+  const before = readFileSync(input.freezePath, 'utf8');
+  const invalid = [
+    { ...input, revision: 'rev-8', stage: 'implementation', expectedRule: 'test-revision-mismatch' },
+    ...[undefined, 'archive', 'spec', 'implementation'].map((kind) => ({
+      ...input, stage: 'implementation', artifacts: [{ path: 'src/a.mjs', kind }], expectedRule: 'atomic-delivery',
+    })),
+  ];
+  for (const { expectedRule, ...candidate } of invalid) {
+    assert.throws(() => freeze(candidate), (error) => error.code === 'SDD_FREEZE_INVALID' && error.details.findings.some((finding) => finding.rule === expectedRule));
+    assert.equal(readFileSync(input.freezePath, 'utf8'), before, 'an invalid re-freeze preserves the previous manifest');
+    assert.equal(existsSync(`${input.freezePath}.lock`), false);
+    assert.equal(existsSync(`${input.freezePath}.tmp-${process.pid}`), false);
+    const manifest = {
+      ...original, revision: candidate.revision, stage: candidate.stage,
+      artifacts: candidate.artifacts.map((artifact) => ({ ...original.artifacts.find((entry) => entry.path === artifact.path), kind: artifact.kind })),
+    };
+    const verdict = verifyManifest({ manifest, root, currentRevision: candidate.revision });
+    assert.equal(verdict.ok, false, 'a previously persisted invalid manifest cannot pass verify');
+    assert.ok(verdict.blocking.some((finding) => finding.rule === expectedRule));
+  }
+});
+
+test('binary fingerprints use original bytes and detect a replacement-character collision', () => {
+  const root = sandbox();
+  const path = 'src/artifact.bin';
+  const input = { ...baseInput(root), artifacts: [{ path }] };
+  for (const bytes of [Buffer.alloc(0), Buffer.from('规格 v1\n'), Buffer.from([0x00, 0xff, 0x80])]) {
+    writeFileSync(join(root, path), bytes);
+    const manifest = freeze(input);
+    assert.equal(manifest.artifacts[0].sha256, createHash('sha256').update(bytes).digest('hex'));
+    assert.equal(verifyManifest({ manifest: loadManifest(input.freezePath), root, currentRevision: 'rev-7' }).ok, true);
+    assert.equal(verifyManifest({ manifest, root, readText: (path) => readFileSync(path) }).ok, true, 'injected binary readers preserve bytes too');
+  }
+  writeFileSync(join(root, path), Buffer.from([0x80]));
+  const original = freeze(input);
+  assert.equal(verifyManifest({ manifest: original, root }).ok, true);
+  writeFileSync(join(root, path), Buffer.from([0x81]));
+  const changed = verifyManifest({ manifest: original, root });
+  assert.equal(changed.ok, false);
+  assert.deepEqual(changed.blocking.map(({ rule, locator }) => ({ rule, locator })), [{ rule: 'fingerprint-mismatch', locator: path }]);
+  const refrozen = freeze(input);
+  assert.notEqual(refrozen.artifacts[0].sha256, original.artifacts[0].sha256);
+  assert.equal(verifyManifest({ manifest: refrozen, root }).ok, true);
+});
+
+test('the legacy readText injection accepts text or raw bytes and reports missing artifacts', () => {
+  const root = sandbox();
+  const input = baseInput(root);
+  const manifest = freeze(input);
+  assert.equal(verifyManifest({ manifest, root, readText: (path) => readFileSync(path, 'utf8') }).ok, true);
+  assert.equal(verifyManifest({ manifest, root, readText: (path) => readFileSync(path) }).ok, true);
+  const missing = verifyManifest({ manifest, root, readText: () => undefined });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.blocking.length, 2);
+  assert.ok(missing.blocking.every((finding) => finding.rule === 'artifact-missing'));
 });
 
 test('a missing artifact refuses the freeze and leaves no manifest behind', () => {

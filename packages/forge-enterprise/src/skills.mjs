@@ -222,10 +222,112 @@ export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterpr
   });
 }
 
+/**
+ * Register the selected clauses through the host lazy provider path.
+ *
+ * Shape verified by the host probe (`skills-registry-discovery-and-load`;
+ * probe record pinned in the enterprise design doc): `registerProvider`
+ * takes a factory returning
+ * `{ name, list, get }`; `list()` yields summaries WITHOUT the body and
+ * `get(name)` returns the body on demand. If the host has no provider entry,
+ * this throws and the caller falls back to direct registration (eager body).
+ * Provider-path availability on newer hosts is NOT RUN here.
+ *
+ * @param {{skills: object}} ctx host context providing `skills`
+ * @param {{selection: object, namePrefix?: string, invocation?: object}} input
+ */
+export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix = 'enterprise', invocation } = {}) {
+  const skills = ctx?.skills;
+  if (skills === undefined || typeof skills.registerProvider !== 'function') {
+    throw new EnterpriseSkillError('host has no skills provider entry for enterprise skills', 'ENTERPRISE_PROVIDER_UNAVAILABLE');
+  }
+  const policy = Object.freeze({
+    modelInvocable: invocation?.modelInvocable ?? false,
+    userInvocable: invocation?.userInvocable ?? true,
+  });
+  const providerName = `${namePrefix}-clauses`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
+  const skillName = (clause) => `${namePrefix}-${clause.id}`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
+  const byName = new Map(selection.hard.map((clause) => [skillName(clause), clause]));
+  const summaryOf = (clause) => ({
+    name: skillName(clause),
+    description: clause.summary.length > 0 ? clause.summary : clause.title,
+    whenToUse: `当任务涉及 ${clause.appliesTo.map((target) => target.system).join('、') || '企业规范'} 时按需加载；由用户显式触发`,
+    provider: providerName,
+    rank: 0,
+    locator: { clause: clause.id },
+    invocation: policy,
+    metadata: { owner: clause.owner, level: clause.level, references: clause.references },
+  });
+  const dispose = skills.registerProvider(() => ({
+    name: providerName,
+    list: async () => [...byName.values()].map(summaryOf),
+    get: async (name) => {
+      const clause = byName.get(name);
+      if (clause === undefined) return undefined;
+      return { ...summaryOf(clause), content: clause.body };
+    },
+  }));
+  return Object.freeze({
+    invocation: policy,
+    provider: providerName,
+    registered: Object.freeze([...byName.keys()].map((name, index) => ({ id: selection.hard[index].id, name }))),
+    dispose: () => dispose?.(),
+  });
+}
+
 /** Hard requirements that must be visible before the given action runs. */
 export function preActionConstraints({ selection, action }) {
   return Object.freeze(
     selection.hard.filter((clause) =>
       clause.references.some((reference) => reference === action) || clause.decision === action || clause.appliesTo.length === 0),
   );
+}
+
+/**
+ * FIX-09（#37）：交付 Skill 的单一受管装配入口。
+ *
+ * 把"加载 → 选择 → 注册"三步收进一个入口：调用一次即完成装配，返回的 `dispose`
+ * 一次性注销全部已注册 Skill。发现面只暴露摘要（id/标题/摘要/owner/版本范围），
+ * 正文通过 `bodyFor(id)` 按需取用，不在发现面展开；装配本身零写入、不授予任何
+ * 权限、不固定 Skill 流程、不产出合规结论。真实企业条款来源仍待企业提供，
+ * 安装路径的实际调用待宿主装配完成后记账（见设计文档核验状态表）。
+ *
+ * @param {{skills: object}} ctx host context providing `skills`
+ * @param {{root?: string, pack?: object, systems?: Array, budgetTokens?: number, namePrefix?: string, invocation?: object}} input
+ */
+export function assembleEnterpriseSkills(ctx, { root, pack, systems = [], budgetTokens, namePrefix = 'enterprise', invocation } = {}) {
+  const loaded = pack ?? loadClausePack({ root });
+  const selection = selectClauses({ pack: loaded, systems, budgetTokens });
+  // Prefer the probe-verified lazy provider path; direct registration (eager
+  // body) is the fallback for hosts without a provider entry. Either way the
+  // discovery face carries summaries only.
+  const registration = typeof ctx?.skills?.registerProvider === 'function'
+    ? registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix, invocation })
+    : registerEnterpriseSkills(ctx, { selection, namePrefix, invocation });
+  const bodies = new Map(selection.selected.map((clause) => [clause.id, clause.body]));
+  return Object.freeze({
+    version: loaded.version,
+    /** 发现面：只有摘要，没有正文；冲突双方与责任人保持可见。 */
+    discovered: Object.freeze(selection.selected.map((clause) => Object.freeze({
+      id: clause.id,
+      title: clause.title,
+      summary: clause.summary,
+      level: clause.level,
+      owner: clause.owner,
+      appliesTo: Object.freeze(clause.appliesTo.map((target) => Object.freeze({ ...target }))),
+      references: Object.freeze([...clause.references]),
+    }))),
+    conflicts: selection.conflicts,
+    excluded: selection.excluded,
+    budget: selection.budget,
+    registered: registration.registered,
+    invocation: registration.invocation,
+    /** 正文按需取用：发现面不展开，调用时才从已加载的装配中取出。 */
+    bodyFor: (id) => bodies.get(id),
+    /** 动作前可见性：给定动作的适用硬要求（id + 摘要），由能力入口在真实动作前展示。 */
+    constraintsFor: (action) => Object.freeze(
+      preActionConstraints({ selection, action }).map((clause) => Object.freeze({ id: clause.id, summary: clause.summary, owner: clause.owner })),
+    ),
+    dispose: () => registration.dispose(),
+  });
 }

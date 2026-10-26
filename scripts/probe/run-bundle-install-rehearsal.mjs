@@ -1,182 +1,184 @@
 /**
- * #37 E01 安装/升级/卸载/回退演练（AC4 安装语义 + AC6 保护用户工作区）。
- *
- * 全程只在临时目录里做：`npm pack` 打出真实 tarball → 装进临时项目 → 用**装好的**
- * 补丁层做组合 A/B 对照 → 升级 → 回退 → 卸载，每一步都核对用户自建文件未被改动，
- * 并复核仓库工作区没有被写入。不联网、不安装 pnpm、不触碰任何真实 profile。
- *
- * 环境：DSH_BIN（默认 dsh）、DSH_HOST_PROBE_PROFILE（默认 sdk）
- * 退出码：0 全部符合预期；1 有失败项；2 环境不具备（缺 dsh/npm）
- * 证据：临时目录里的 install-rehearsal.json（只含布尔、版本号与退出码）
+ * #37: final self-contained tarball -> clean offline install -> real isolated
+ * Cordis/Loader activation -> upgrade/rollback/unload/uninstall. No user profile.
+ * DSH_BIN selects an existing CLI; DSH_NODE_MODULES may explicitly select its
+ * already installed SDK modules. No downloads, symlinks, servers or OS keychain.
+ * The memory credential backend is an explicit LOCAL fixture, not enterprise IAM evidence.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildEnterpriseBundle } from '../build-enterprise-bundle.mjs';
+import { auditReleaseClosure, npmExecutable, parsePatchLayer } from '../lib/bundle-rules.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const dsh = process.env.DSH_BIN ?? 'dsh';
 const profile = process.env.DSH_HOST_PROBE_PROFILE ?? 'sdk';
 const officialRows = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek'];
-
 const dir = mkdtempSync(join(tmpdir(), 'forge-install-rehearsal-'));
 const project = join(dir, 'project');
-const evidence = { probe: 'forge-bundle-install-rehearsal', env: { profile, platform: `${process.platform}-${process.arch}`, node: process.version }, steps: [], ok: true };
-
+const evidence = { probe: 'forge-bundle-install-rehearsal', startedAt: new Date().toISOString(), scope: 'local final-tarball composition, NOT enterprise IAM/keychain/registry acceptance', env: { profile, platform: `${process.platform}-${process.arch}`, node: process.version, operatorRole: 'authorized local sol_worker; synthetic credential fixture' }, steps: [], ok: true };
 const record = (id, ok, detail = {}) => {
   evidence.steps.push({ id, ok, detail });
   if (!ok) evidence.ok = false;
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${id}${ok ? '' : ` ${JSON.stringify(detail)}`}`);
 };
+const isolatedEnv = { ...process.env, DSH_HOME: join(dir, 'dsh-home'), npm_config_cache: join(dir, 'npm-cache'), npm_config_userconfig: join(dir, 'empty-npmrc'), npm_config_registry: 'http://127.0.0.1:9' };
+delete isolatedEnv.DSH_PROFILE;
+delete isolatedEnv.DSH_PROFILE_DIR;
+const npm = (args) => execFileSync(npmExecutable(), ['--offline', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], { cwd: project, env: isolatedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const bundleDir = join(project, 'node_modules', '@heluo', 'forge-enterprise');
+const intact = () => readFileSync(join(project, 'user-file.txt'), 'utf8') === 'user-workspace-marker\n' && readFileSync(join(project, 'user-notes', 'notes.md'), 'utf8') === '# 用户笔记\n';
+const statusAtStart = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
+const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
 
-const npm = (args, options = {}) =>
-  execFileSync('npm', ['--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    ...options,
-  });
-
-const pack = (packageDir, destination) => {
-  mkdirSync(destination, { recursive: true });
-  npm(['pack', '--pack-destination', destination], { cwd: packageDir });
-  const tarballs = readdirSync(destination).filter((name) => name.endsWith('.tgz'));
-  return join(destination, tarballs[tarballs.length - 1]);
-};
-
-const installedManifest = (packageDir) => JSON.parse(readFileSync(join(project, 'node_modules', packageDir, 'package.json'), 'utf8'));
-
-const disabledRows = (dump) => {
-  const rows = new Map();
-  let current = null;
-  for (const line of dump.split('\n')) {
-    const id = line.match(/^\s*-?\s*id:\s*['"]?([^'"\s]+)['"]?\s*$/u);
-    if (id !== null) {
-      current = id[1];
-      if (!rows.has(current)) rows.set(current, false);
-      continue;
-    }
-    if (current !== null && /^\s*disabled:\s*true\s*$/u.test(line)) rows.set(current, true);
-  }
-  return rows;
-};
-
-const dumpConfig = (patchPath) => {
-  const args = ['--profile', profile, ...(patchPath === undefined ? [] : ['--patch', patchPath]), '--dump-config'];
-  const result = spawnSync(dsh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
-};
-
-const userWorkspaceIntact = () =>
-  readFileSync(join(project, 'user-file.txt'), 'utf8').trim() === 'user-workspace-marker' &&
-  readFileSync(join(project, 'user-notes', 'notes.md'), 'utf8').trim() === '# 用户笔记' &&
-  existsSync(join(project, 'user-notes'));
-
-// 仓库工作区快照：演练前后必须完全一致（不要求干净，因为操作者可能本来就有未提交改动）。
-const gitStatusAtStart = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
-
-const versionCheck = spawnSync(dsh, ['--version'], { encoding: 'utf8' });
-if (versionCheck.status !== 0) {
-  console.error(`rehearsal: 无法执行 ${dsh}（${versionCheck.error?.message ?? versionCheck.stderr}）；本演练需要目标环境已安装 DSH`);
-  process.exit(2);
+function hostRequire() {
+  if (process.env.DSH_NODE_MODULES) return createRequire(pathToFileURL(join(resolve(process.env.DSH_NODE_MODULES), '__probe__.cjs')));
+  const command = isAbsolute(dsh) ? dsh : process.env.PATH.split(delimiter).map((part) => join(part, dsh)).find((path) => existsSync(path));
+  if (command === undefined) throw new Error('DSH executable not found; supply DSH_BIN or DSH_NODE_MODULES');
+  return createRequire(pathToFileURL(realpathSync(command)));
 }
-evidence.env.dshVersion = versionCheck.stdout.trim();
-record('dsh-available', true, { version: evidence.env.dshVersion });
+
+async function activateInstalled(label, host) {
+  const load = (name) => import(pathToFileURL(host.resolve(name)).href);
+  const [{ Context }, { default: Loader }, { default: SystemPrompt }, { default: Tools }, { PluginPackages, createRuntimeResolution }] = await Promise.all([
+    load('@deepseek-ai/cordis'), load('@deepseek-ai/cordis-plugin-loader'), load('@deepseek-ai/dsh-system-prompt'), load('@deepseek-ai/dsh-tools'), load('@deepseek-ai/dsh-app-boot'),
+  ]);
+  const installedPath = realpathSync(bundleDir);
+  const installedRequire = createRequire(pathToFileURL(join(installedPath, 'package.json')));
+  const patch = parsePatchLayer(readFileSync(join(bundleDir, 'cordis.patch.yml'), 'utf8'));
+  const ctx = new Context();
+  let unloaded = false;
+  const ids = [];
+  try {
+    const resolution = await createRuntimeResolution({
+      installAnchor: host.resolve('@deepseek-ai/dsh/package.json'),
+      home: isolatedEnv.DSH_HOME,
+      profile: { dir: project, layers: [{ packageName: '@heluo/forge-enterprise', packageDir: installedPath }], skippedBundles: [] },
+    });
+    await ctx.plugin(PluginPackages, { resolution }).await();
+    const expectedMembers = Object.keys(JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).dependencies);
+    record(`${label}-native-runtime-resolves-bundled-members`, expectedMembers.every((name) => resolution.entries.some((entry) => entry.name === name && entry.scope === 'profile' && realpathSync(entry.packageDir).startsWith(`${installedPath}/`))));
+    await ctx.plugin(SystemPrompt, {}).await();
+    await ctx.plugin(Tools, {}).await();
+    await ctx.plugin(Loader, { baseUrl: pathToFileURL(join(installedPath, 'cordis.patch.yml')).href }).await();
+    const resolved = [];
+    for (const row of patch.inserted) {
+      const entry = installedRequire.resolve(row.name);
+      const memberPath = relative(installedPath, entry);
+      if (memberPath.startsWith('..') || isAbsolute(memberPath)) throw new Error(`member escaped installed tarball: ${row.name}`);
+      resolved.push({ name: row.name, entry: memberPath });
+      const config = row.name === '@heluo/forge-credentials-keychain'
+        ? { backend: (await import(pathToFileURL(entry).href)).createMemoryBackend(), allowEphemeral: true }
+        : {};
+      ids.push(await ctx.loader.create({ id: row.id, name: row.name, config }));
+    }
+    await ctx.loader.await();
+    const phases = ids.map((id) => ({ id, phase: ctx.loader.resolve(id).fiber?.state }));
+    const mounted = ['credentials', 'policy', 'iam'].every((key) => ctx.get(key) !== undefined);
+    record(`${label}-real-loader-instantiates-members`, mounted && phases.every((entry) => entry.phase === 2 /* FiberState.ACTIVE (const enum in the installed SDK) */), { resolved, phases, fixture: 'memory credentials; no real identity, keychain or network' });
+    if (label === 'install') {
+      let invalidPluginRejected = false;
+      try {
+        await ctx.loader.create({ id: 'negative-legacy-sdd', name: '@heluo/forge-sdd' });
+      } catch (error) {
+        invalidPluginRejected = /invalid plugin/iu.test(error.message);
+      } finally {
+        if (ctx.loader.store['negative-legacy-sdd']) ctx.loader.remove('negative-legacy-sdd');
+      }
+      record('legacy-sdd-plugin-mount-is-rejected', invalidPluginRejected, { note: 'negative control: the delivered SDD library remains NOT a Host plugin' });
+    }
+    const policy = ctx.get('policy');
+    const iam = ctx.get('iam');
+    record(`${label}-services-queryable`, policy !== undefined && Array.isArray(policy.actions()) && iam !== undefined && typeof iam.getView === 'function' && iam.getView() !== undefined);
+    // Removing actual Loader rows must own and remove registrations, not merely files.
+    for (const id of ids.reverse()) ctx.loader.remove(id);
+    await ctx.loader.await();
+    unloaded = ['credentials', 'policy', 'iam'].every((key) => ctx.get(key) === undefined);
+    record(`${label}-loader-unload-clears-registrations`, unloaded);
+  } finally {
+    await ctx.fiber.dispose();
+  }
+  if (!unloaded) throw new Error(`${label}: lifecycle cleanup was not proven`);
+}
+
+function dump(patch) {
+  return spawnSync(dsh, ['--profile', profile, ...(patch ? ['--patch', patch] : []), '--dump-config'], { env: isolatedEnv, encoding: 'utf8' });
+}
+function rows(text) {
+  const found = new Map();
+  let id;
+  for (const line of text.split('\n')) {
+    const match = line.match(/^\s*-?\s*id:\s*['"]?([^'"\s]+)['"]?\s*$/u);
+    if (match) { id = match[1]; found.set(id, false); }
+    if (id && /^\s*disabled:\s*true\s*$/u.test(line)) found.set(id, true);
+  }
+  return found;
+}
 
 mkdirSync(join(project, 'user-notes'), { recursive: true });
 writeFileSync(join(project, 'package.json'), '{"name":"rehearsal-project","private":true}\n');
 writeFileSync(join(project, 'user-file.txt'), 'user-workspace-marker\n');
 writeFileSync(join(project, 'user-notes', 'notes.md'), '# 用户笔记\n');
-
+writeFileSync(join(dir, 'empty-npmrc'), '');
 try {
-  const enterprise = join(repo, 'packages', 'forge-enterprise');
-  const manifest = JSON.parse(readFileSync(join(enterprise, 'package.json'), 'utf8'));
-  const lifecycle = ['preinstall', 'install', 'postinstall', 'prepare'].filter((name) => typeof manifest.scripts?.[name] === 'string');
-  record('package-declares-no-lifecycle-scripts', lifecycle.length === 0, { lifecycle });
-
-  const tgzV1 = pack(enterprise, join(dir, 'pack-v1'));
-  record('pack-v1', existsSync(tgzV1), { version: manifest.version });
-
-  npm(['install', tgzV1], { cwd: project });
-  const installedV1 = installedManifest('@heluo/forge-enterprise');
-  const patchInstalled = join(project, 'node_modules', '@heluo', 'forge-enterprise', 'cordis.patch.yml');
-  record(
-    'install-v1-with-patch-and-workspace-intact',
-    installedV1.version === manifest.version && existsSync(patchInstalled) && userWorkspaceIntact(),
-    { version: installedV1.version, patchShipped: existsSync(patchInstalled), workspaceIntact: userWorkspaceIntact() },
-  );
-
-  const base = dumpConfig();
-  const patched = dumpConfig(patchInstalled);
-  const baseRows = disabledRows(base.stdout);
-  const patchedRows = disabledRows(patched.stdout);
-  const perRow = officialRows.map((id) => ({
-    id,
-    presentInProfile: baseRows.has(id),
-    disabledWithoutPatch: baseRows.get(id) === true,
-    disabledWithPatch: patchedRows.get(id) === true,
-  }));
-  const present = perRow.filter((row) => row.presentInProfile);
-  record(
-    'installed-patch-disables-official-rows',
-    base.status === 0 && patched.status === 0 && present.length > 0 && present.every((row) => row.disabledWithPatch && !row.disabledWithoutPatch),
-    { perRow, patchedStatus: patched.status, note: '缺席的行按 --patch 语义跳过（跳过 ≠ 已禁用）' },
-  );
-
-  const sdd = join(repo, 'packages', 'forge-sdd');
-  const tgzSdd = pack(sdd, join(dir, 'pack-sdd'));
-  npm(['install', tgzSdd], { cwd: project });
-  const binPath = join(project, 'node_modules', '.bin', 'forge-sdd');
-  const cliTarget = join(project, 'node_modules', '@heluo', 'forge-sdd', 'src', 'cli.mjs');
-  const binRun = spawnSync(binPath, ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  record(
-    'installed-bin-is-executable',
-    existsSync(binPath) && existsSync(cliTarget) && (statSync(cliTarget).mode & 0o100) !== 0 && binRun.status === 2,
-    { status: binRun.status, usagePrinted: /用法/u.test(`${binRun.stdout ?? ''}${binRun.stderr ?? ''}`), mode: (statSync(cliTarget).mode & 0o777).toString(8) },
-  );
-
-  const upgradeSource = join(dir, 'upgrade-src');
-  cpSync(enterprise, upgradeSource, { recursive: true });
-  const upgradeManifest = JSON.parse(readFileSync(join(upgradeSource, 'package.json'), 'utf8'));
-  upgradeManifest.version = '0.1.1';
-  writeFileSync(join(upgradeSource, 'package.json'), `${JSON.stringify(upgradeManifest, null, 2)}\n`);
-  const tgzV2 = pack(upgradeSource, join(dir, 'pack-v2'));
-  npm(['install', tgzV2], { cwd: project });
-  const installedV2 = installedManifest('@heluo/forge-enterprise');
-  const patchedV2 = dumpConfig(join(project, 'node_modules', '@heluo', 'forge-enterprise', 'cordis.patch.yml'));
-  record(
-    'upgrade-to-0.1.1-keeps-composition-and-workspace',
-    installedV2.version === '0.1.1' && userWorkspaceIntact() && officialRows.filter((id) => baseRows.has(id)).every((id) => disabledRows(patchedV2.stdout).get(id) === true),
-    { version: installedV2.version, workspaceIntact: userWorkspaceIntact() },
-  );
-
-  npm(['install', tgzV1], { cwd: project });
-  const rolledBack = installedManifest('@heluo/forge-enterprise');
-  const patchedRollback = dumpConfig(join(project, 'node_modules', '@heluo', 'forge-enterprise', 'cordis.patch.yml'));
-  record(
-    'rollback-to-0.1.0-keeps-composition-and-workspace',
-    rolledBack.version === manifest.version && userWorkspaceIntact() && officialRows.filter((id) => baseRows.has(id)).every((id) => disabledRows(patchedRollback.stdout).get(id) === true),
-    { version: rolledBack.version, workspaceIntact: userWorkspaceIntact() },
-  );
-
-  npm(['uninstall', '@heluo/forge-enterprise', '@heluo/forge-sdd'], { cwd: project });
-  record(
-    'uninstall-removes-packages-and-keeps-workspace',
-    !existsSync(join(project, 'node_modules', '@heluo', 'forge-enterprise')) &&
-      !existsSync(join(project, 'node_modules', '@heluo', 'forge-sdd')) &&
-      !existsSync(binPath) &&
-      userWorkspaceIntact(),
-    { workspaceIntact: userWorkspaceIntact(), leftoverBin: existsSync(binPath) },
-  );
-
-  const gitStatusAtEnd = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
-  record('repository-working-tree-untouched', gitStatusAtEnd === gitStatusAtStart, {
-    entriesAtStart: gitStatusAtStart.trim().split('\n').filter(Boolean).length,
-    entriesAtEnd: gitStatusAtEnd.trim().split('\n').filter(Boolean).length,
-  });
+  const version = spawnSync(dsh, ['--version'], { env: isolatedEnv, encoding: 'utf8' });
+  if (version.status !== 0) throw new Error(`DSH unavailable: ${version.error?.message ?? version.stderr}`);
+  evidence.env.dshVersion = version.stdout.trim();
+  evidence.env.npmVersion = execFileSync(npmExecutable(), ['--version'], { encoding: 'utf8' }).trim();
+  evidence.env.sourceHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  evidence.env.sourceState = 'uncommitted shared implementation; git HEAD is not a release commit';
+  evidence.env.targetVersion = readFileSync(join(repo, '.dsh-version'), 'utf8').trim();
+  const host = hostRequire();
+  const toolsManifest = JSON.parse(readFileSync(host.resolve('@deepseek-ai/dsh-tools/package.json'), 'utf8'));
+  evidence.env.sdkVersion = toolsManifest.version;
+  evidence.env.targetVerified = toolsManifest.version === evidence.env.targetVersion;
+  evidence.env.targetStatus = evidence.env.targetVerified ? 'tested' : 'NOT RUN: installed SDK differs from target baseline';
+  record('dsh-available', true, evidence.env);
+  const first = buildEnterpriseBundle({ destination: join(dir, 'pack-v1') });
+  evidence.artifact = { sha256: sha256(first.tarball), members: first.members, files: first.packed.length, version: first.manifest.version };
+  npm(['install', first.tarball]);
+  const installed = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8'));
+  record('install-v1-with-patch-and-workspace-intact', installed.version === first.manifest.version && intact());
+  const closure = auditReleaseClosure(bundleDir, { allowInstalledBinLinks: true });
+  record('installed-final-tarball-closure', closure.length === 0, { errors: closure, isolatedEmptyCache: true, registryUnreachable: true });
+  const base = dump();
+  const patched = dump(join(bundleDir, 'cordis.patch.yml'));
+  const baselineRows = rows(base.stdout ?? '');
+  const patchedRows = rows(patched.stdout ?? '');
+  const present = officialRows.filter((id) => baselineRows.has(id));
+  record('installed-patch-disables-official-rows', base.status === 0 && patched.status === 0 && present.length > 0 && present.every((id) => patchedRows.get(id) === true && baselineRows.get(id) === false), { present, absent: officialRows.filter((id) => !baselineRows.has(id)), note: 'dump proves composition only; absent rows are NOT disabled' });
+  await activateInstalled('install', host);
+  const bin = join(project, 'node_modules', '.bin', process.platform === 'win32' ? 'forge-sdd.cmd' : 'forge-sdd');
+  const cli = spawnSync(bin, [], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
+  record('installed-bin-is-executable', cli.status === 0 && /用法/u.test(cli.stdout ?? '') && (statSync(join(bundleDir, 'src', 'sdd-cli.mjs')).mode & 0o100) !== 0, { status: cli.status });
+  const artifact = join(project, 'deliverable.txt');
+  const manifest = join(project, 'delivery.json');
+  writeFileSync(artifact, 'local CLI fixture\n');
+  const freeze = spawnSync(bin, ['freeze', '--root', project, '--manifest', manifest, '--unit', 'local-fixture', '--change', 'LOCAL-37', '--revision', 'rev-1', '--tested-revision', 'rev-1', '--artifact', 'deliverable.txt'], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
+  const verify = spawnSync(bin, ['verify', '--root', project, '--manifest', manifest, '--revision', 'rev-1'], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
+  writeFileSync(artifact, 'tampered local fixture\n');
+  const tampered = spawnSync(bin, ['verify', '--root', project, '--manifest', manifest, '--revision', 'rev-1'], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
+  record('installed-real-cli-freeze-verify-and-reject-tamper', freeze.status === 0 && verify.status === 0 && tampered.status === 1, { freeze: freeze.status, verify: verify.status, tampered: tampered.status });
+  const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });
+  npm(['install', upgraded.tarball]);
+  await activateInstalled('upgrade', host);
+  record('upgrade-to-0.1.1-keeps-composition-and-workspace', JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).version === '0.1.1' && intact());
+  npm(['install', first.tarball]);
+  await activateInstalled('rollback', host);
+  record('rollback-to-0.1.0-keeps-composition-and-workspace', JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).version === first.manifest.version && intact());
+  npm(['uninstall', '@heluo/forge-enterprise']);
+  record('uninstall-removes-packages-and-keeps-workspace', !existsSync(bundleDir) && !existsSync(bin) && intact());
+  record('repository-working-tree-untouched', execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }) === statusAtStart, { note: 'concurrent edits in shared worktree may invalidate this snapshot' });
+} catch (error) {
+  record('rehearsal-exception', false, { error: error.message });
 } finally {
   writeFileSync(join(dir, 'install-rehearsal.json'), `${JSON.stringify(evidence, null, 2)}\n`);
   console.log(`rehearsal: ${evidence.steps.filter((step) => step.ok).length}/${evidence.steps.length} steps ok`);
-  console.log(`rehearsal: 证据留在 ${dir}`);
+  console.log(`rehearsal: evidence ${join(dir, 'install-rehearsal.json')}`);
   if (!evidence.ok) process.exitCode = 1;
 }

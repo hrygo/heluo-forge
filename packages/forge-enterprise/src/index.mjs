@@ -22,9 +22,11 @@ export {
 } from './switches.mjs';
 
 export {
+  assembleEnterpriseSkills,
   EnterpriseSkillError,
   loadClausePack,
   preActionConstraints,
   registerEnterpriseSkills,
+  registerEnterpriseSkillsViaProvider,
   selectClauses,
 } from './skills.mjs';

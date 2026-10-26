@@ -61,6 +61,37 @@ test('NOT RUN, timeout and stale test revisions are not a pass', () => {
   assert.deepEqual(blockingFindings(inspectManifest({ ...base, testEvidence: [{ ref: 'ci-1', state: 'passed', testedRevision: 'rev-7' }] }).findings), []);
 });
 
+test('matching old test declarations cannot pass for a newer delivery revision', () => {
+  for (const stage of [undefined, 'implementation']) {
+    const { findings } = inspectManifest({
+      ...base,
+      revision: 'rev-8',
+      stage,
+      testEvidence: [{ ref: 'ci-old', state: 'passed', testedRevision: 'rev-7' }],
+    });
+    assert.ok(blockingFindings(findings).some((finding) => finding.rule === 'test-revision-mismatch' && finding.locator === 'testedRevision'));
+  }
+});
+
+test('every declared stage requires each of spec and implementation, including when both are missing', () => {
+  for (const stage of ['spec', 'implementation', 'archive']) {
+    for (const kind of [undefined, 'archive', 'spec', 'implementation']) {
+      const manifest = { ...base, stage, artifacts: [{ ...base.artifacts[0], kind }] };
+      assert.ok(blockingFindings(inspectManifest(manifest).findings).some((finding) => finding.rule === 'atomic-delivery'), `${stage} with only ${kind} must fail`);
+    }
+    const { findings } = inspectManifest({
+      ...base,
+      stage,
+      artifacts: [base.artifacts[0], { path: 'src/a.mjs', kind: 'implementation', sha256: sha }],
+    });
+    assert.deepEqual(blockingFindings(findings), []);
+    assert.deepEqual(findings.map((finding) => finding.rule), ['archive-missing'], 'archive absence remains soft');
+  }
+  for (const kind of [undefined, 'archive', 'spec', 'implementation']) {
+    assert.deepEqual(inspectManifest({ ...base, artifacts: [{ ...base.artifacts[0], kind }] }).findings, [], 'ordinary unstaged work needs no new artifact categories');
+  }
+});
+
 test('without stage metadata only HARD rules apply', () => {
   const { findings, stage } = inspectManifest(base);
   assert.equal(stage, undefined);

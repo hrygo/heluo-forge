@@ -16,6 +16,7 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
+    "./cli": "./src/cli.mjs",
     "./freeze": "./src/freeze.mjs",
     "./manifest": "./src/manifest.mjs"
   },

@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-008 |
 | 文档名称 | 轻量 SDD 详细设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.5.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-24 |
+| 最后更新 | 2026-10-26 |
 | 门禁 | G2 |
 | 模块状态 | 可用（本地校验骨架；CI 权威结论待企业接入） |
 
@@ -95,7 +95,7 @@ sdd submit --one    # 单变更单元提交
 | `changeId` | string | 是 | 正式变更号；缺失即失败，不用正文或文件名代替 |
 | `revision` | string | 是 | 冻结时的仓库版本；与当前版本不一致即视为冻结失效，需显式重新冻结 |
 | `requirementRevision` | string | 否 | 需求版本；变化使旧确认与旧冻结失效 |
-| `testedRevision` | string | 是 | 测试实际覆盖的版本；与当前版本不一致的"通过"不算通过 |
+| `testedRevision` | string | 是 | 测试实际覆盖的版本；必须与清单 `revision` 完全一致，校验时再以 `currentRevision` 检查冻结是否失效；两份整体过期的测试声明互相一致也不算通过 |
 | `stage` | string | 否 | `spec` / `implementation` / `archive`；**缺少阶段元数据时只跑 HARD 规则**，不阻断普通开发 |
 | `artifacts[]` | object[] | 是 | `path`（相对根目录、禁止穿越）、`sha256`、`kind`、`unitId` |
 | `testEvidence[]` | object[] | 否 | `ref`、`state`（`passed`/`failed`/`not-run`/`timeout`）、`testedRevision` |
@@ -107,16 +107,16 @@ sdd submit --one    # 单变更单元提交
 | 产物缺文件、指纹不一致 | HARD | 失败，指出具体文件 |
 | 产物条目属于其他交付单元 | HARD | 失败，列出多余文件并提示拆分 |
 | 清单版本与当前仓库版本不一致 | HARD | 冻结失效，要求显式解冻/重新冻结；不静默沿用旧指纹 |
-| 测试证据为 `not-run`/`timeout`，或 `testedRevision` 落后 | HARD | 不算通过，失败原因可定位 |
+| 测试证据为 `not-run`/`timeout`/`failed`，或版本不一致 | HARD | `testedRevision` 必须等于 `revision`，已声明通过证据的版本也须匹配 `testedRevision`；不一致报 `test-revision-mismatch`，未提供 `currentRevision` 时仍校验清单内部一致性 |
 | 路径为绝对路径或含 `..` 穿越 | HARD | 失败；路径规则与 `@heluo/forge-policy` 同源，不另建第二套 |
-| 有阶段元数据时，同一交付的 spec 与 implementation 产物未同时进入清单 | HARD | 失败（原子交付）；归档缺失为 SOFT |
+| 有阶段元数据时，同一交付的 spec 与 implementation 产物未同时进入清单 | HARD | 缺任意一种均报 `atomic-delivery`，无 `kind` 或仅 archive 同样失败；无阶段时不额外要求类别，归档缺失仍为 SOFT |
 | 仅有 HARD 规则、无阶段元数据 | — | 正常运行，不强制固定流程 |
 
 **执行位置**：`本地前置校验` 与 `CI 权威结论` 跑同一规则集、同一夹具应给出一致结果；本地结论标注"未经 CI 验证"，不替代 CI。
 
 **原子性与并发**：`freeze` 先写临时文件再原子改名，进程退出不会留下半份有效清单；同一产物目录用 `O_EXCL` 文件锁串行，锁被占用即拒绝，**不自动回收**陈旧锁。
 
-**指纹语义**：指纹一致只证明文件未被改动，**不证明业务正确**；每次显式变更都要重新冻结，旧冻结随仓库版本失效。
+**指纹语义**：SHA-256 直接哈希产物原始字节，文本和二进制均不做解码、替换字符或换行归一化；清单本身仍按 UTF-8 JSON 读取。指纹一致只证明文件未被改动，**不证明业务正确**；每次显式变更都要重新冻结，旧冻结随仓库版本失效。格式版本仍为 `1`，合法 UTF-8 文本的旧指纹不变；旧实现对非 UTF-8 内容计算的指纹不再接受，需核实原始产物后显式重新冻结，不回退到有损解码来兼容。
 
 ## 6. 权限、凭据与数据
 

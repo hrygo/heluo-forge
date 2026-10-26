@@ -166,7 +166,12 @@ export const Config = {
  *
  * @param {object} commandCtx context providing `commands`
  * @param {object} service the mounted policy service
- * @param {{name: string, action: string, description: string, handler: Function}} definition
+ * Simple commands use their explicit raw-input target. Structured/path-bearing
+ * commands supply a trusted resolveArguments(invocation) parser; the normalized
+ * arguments are also passed to the body as its second argument. A command name
+ * never substitutes for a missing business resource.
+ *
+ * @param {{name: string, action: string, description: string, handler: Function, resolveArguments?: Function}} definition
  * @returns {Function} disposer removing the command
  */
 export function registerCommand(commandCtx, service, definition) {
@@ -194,29 +199,22 @@ export function registerCommand(commandCtx, service, definition) {
     name: commandName,
     description,
     handler: async (invocation) => {
-      const target = typeof invocation?.target === 'string' ? invocation.target : commandName;
-      const decision = service.decide({ action, target });
-      if (decision.action === 'deny') return { kind: 'error', text: decision.reason };
-      if (decision.action === 'confirm') {
-        const approval = typeof commandCtx.get === 'function' ? commandCtx.get('approval') : undefined;
-        if (approval === undefined || invocation?.agent === undefined) {
-          return { kind: 'error', text: `${decision.reason}: no approval channel is available for this command` };
-        }
-        let outcome;
-        try {
-          outcome = await approval.request({
-            agent: invocation.agent,
-            toolName: `/${commandName}`,
-            callId: invocation.commandId,
-            reason: decision.reason,
-            signal: invocation.signal,
-          });
-        } catch (error) {
-          return { kind: 'error', text: `${decision.reason}: approval unavailable (${error?.message ?? error})` };
-        }
-        if (outcome !== 'allowed-once') return { kind: 'error', text: `${decision.reason}: ${outcome}` };
+      let args;
+      try {
+        args = typeof definition.resolveArguments === 'function'
+          ? await definition.resolveArguments(invocation)
+          : { target: invocation?.target ?? invocation?.rawInput?.trim(), egress: invocation?.egress, revision: invocation?.revision };
+        if (!isPlainObject(args)) return { kind: 'error', text: 'command arguments cannot be verified' };
+      } catch {
+        return { kind: 'error', text: 'command arguments cannot be verified' };
       }
-      return await handler(invocation);
+      return await service.executeAction(commandCtx, action, {
+        name: `/${commandName}`,
+        arguments: args,
+        agent: invocation?.agent,
+        callId: invocation?.commandId,
+        signal: invocation?.signal,
+      }, () => handler(invocation, args));
     },
   });
 }
@@ -268,6 +266,9 @@ export function apply(ctx, rawConfig = {}) {
     protectedRoots,
     audit,
     onDecision: config.onDecision,
+    // FIX-03: the compiled ledger is shared with the execution gate so every
+    // write/confirm admission re-verifies action + resource + revision + time.
+    approvals,
   });
 
   // 过程观察默认关闭：未显式启用时不建缓冲、不查发送方、不发送任何事件。
@@ -281,6 +282,7 @@ export function apply(ctx, rawConfig = {}) {
   const teardown = () => {
     if (disposed) return;
     disposed = true;
+    gate.dispose();
     for (const dispose of disposers.splice(0).reverse()) dispose?.();
     disposeProvide?.();
   };
@@ -295,6 +297,10 @@ export function apply(ctx, rawConfig = {}) {
         return typeof next === 'function' ? await next() : { kind: 'accept' };
       }),
     );
+    // Final result cannot be short-circuited like the post waterfall. This
+    // callback remains synchronous; the gate tracks its settlement promise and
+    // blocks the next protected action until it has finished.
+    disposers.push(ctx.on('tools/result', (exec, result) => { void gate.postExecute(exec, result); }));
   }
 
   const confirmations = createConfirmationLedger();
@@ -322,6 +328,7 @@ export function apply(ctx, rawConfig = {}) {
     auditGaps: () => audit.gaps(),
     acknowledgeAuditGaps: () => audit.acknowledgeGaps(),
     auditDegraded: () => audit.isDegraded(),
+    executeAction: (commandCtx, action, exec, operation) => gate.executeAction(commandCtx, action, exec, operation),
     registerCommand: (commandCtx, definition) => registerCommand(commandCtx, service, definition),
     observations: () => observations,
     approvals: () => [...approvals.values()],

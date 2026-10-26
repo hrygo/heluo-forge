@@ -7,3 +7,30 @@ settings:
 importers:
 
   .: {}
+
+  packages/forge-credentials-keychain: {}
+
+  packages/forge-devops: {}
+
+  packages/forge-enterprise:
+    dependencies:
+      '@heluo/forge-credentials-keychain':
+        specifier: workspace:*
+        version: link:../forge-credentials-keychain
+      '@heluo/forge-iam':
+        specifier: workspace:*
+        version: link:../forge-iam
+      '@heluo/forge-policy':
+        specifier: workspace:*
+        version: link:../forge-policy
+      '@heluo/forge-sdd':
+        specifier: workspace:*
+        version: link:../forge-sdd
+
+  packages/forge-iam: {}
+
+  packages/forge-market: {}
+
+  packages/forge-policy: {}
+
+  packages/forge-sdd: {}

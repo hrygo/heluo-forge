@@ -38,14 +38,15 @@ const CATEGORIES = { bash: 'shell.exec', pwsh: 'shell.exec' };
 function fakeHost() {
   const provided = new Map();
   const guards = [];
+  const listeners = new Map();
   const ctx = {
     tools: { guard: (fn) => (guards.push(fn), () => guards.splice(guards.indexOf(fn), 1)) },
-    on: () => () => {},
+    on: (event, listener) => (listeners.set(event, listener), () => listeners.delete(event)),
     get: (name) => provided.get(name),
     provide: (name, value) => (provided.set(name, value), () => provided.delete(name)),
     effect: (callback) => callback(),
   };
-  return { ctx, guards, provided };
+  return { ctx, guards, provided, listeners };
 }
 
 function mount(catalog = CATALOG, approvals = []) {
@@ -87,14 +88,15 @@ test('D1: 每一条登记的写/确认动作默认都被拒绝，且执行体零
   }
 });
 
-test('D1: 拒绝来自"未批准"——有台账条目才允许 enabled，之后同一调用即放行', () => {
+test('D1: 拒绝来自"未批准"——有台账且审计后才允许执行', async () => {
   const enabled = CATALOG.map((entry) => (entry.action === 'issue.close' ? { ...entry, enabled: true } : entry));
   // 第一层：没有台账条目就不许 enabled（挂载即拒绝）。
   assert.throws(() => mount(enabled), (error) => error.code === 'POLICY_APPROVAL_REQUIRED');
   // 第二层：补上有效台账条目后放行——证明上面的拒绝来自"未获批准"，不是别的原因。
   const host = mount(enabled, [approvalFor('issue.close')]);
-  const reason = host.guards[0]({ name: toolName('issue.close'), arguments: { target: 'I-1' }, callId: 'c1' });
-  assert.equal(reason, undefined);
+  const exec = { name: toolName('issue.close'), arguments: { target: 'I-1' }, callId: 'c1' };
+  assert.equal((await host.listeners.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }))).kind, 'allow');
+  assert.equal(host.guards[0](exec), undefined);
 });
 
 test('D1: 策略服务把登记表里的动作全部列为已知动作', () => {

@@ -87,20 +87,22 @@ test('apply installs the guard, the pre-execute stage and the policy service', (
   assert.deepEqual(host.provided.get('policy').actions(), ['repository.read', 'issue.create_or_update', 'review.human.record']);
 });
 
-test('the guard denies unregistered actions and disabled writes with zero body calls', () => {
+test('the guard denies unregistered actions and disabled writes with zero body calls', async () => {
   const host = fakeHost();
   apply(host.ctx, baseConfig);
   const guard = host.guards[0];
   let bodyCalls = 0;
-  const run = (name, args) => {
-    const reason = guard({ name, arguments: args, callId: 'c1' });
+  const run = async (name, args) => {
+    const exec = { name, arguments: args, callId: 'c1' };
+    const decision = await host.listeners.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }));
+    const reason = decision.kind === 'deny' ? decision.reason : guard(exec);
     if (reason === undefined) bodyCalls += 1;
     return reason;
   };
-  assert.equal(run('forge_repository_read', { target: 'r' }), undefined, 'a registered read action passes');
-  assert.match(String(run('forge_typo_tool', { target: 'r' })), /not registered/, 'a mapped but unregistered action is denied');
-  assert.match(String(run('forge_issue_write', { target: 'I-1' })), /not enabled/, 'a disabled write is denied');
-  assert.match(String(run('forge_repository_read', {})), /requires a repository target/, 'a missing target is denied');
+  assert.equal(await run('forge_repository_read', { target: 'r' }), undefined, 'an audited registered read action passes');
+  assert.match(String(await run('forge_typo_tool', { target: 'r' })), /not registered/, 'a mapped but unregistered action is denied');
+  assert.match(String(await run('forge_issue_write', { target: 'I-1' })), /not enabled/, 'a disabled write is denied');
+  assert.match(String(await run('forge_repository_read', {})), /requires a repository target/, 'a missing target is denied');
   assert.equal(guard({ name: 'forge_unmapped_tool', arguments: { target: 'r' }, callId: 'c9' }), undefined, 'an unmapped tool is outside this gate, never claimed as covered');
   assert.equal(bodyCalls, 1, 'only the registered enabled read action reaches the body');
 });
@@ -143,9 +145,10 @@ test('a confirm action fails closed until the confirmation stage approved it', a
   assert.match(String(guard(exec)), /confirmation stage did not run/);
 
   allowed = true;
-  const granted = await preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
+  const retry = { ...exec, callId: 'c10' };
+  const granted = await preExecute(retry, () => Promise.resolve({ kind: 'allow' }));
   assert.equal(granted.kind, 'allow');
-  assert.equal(guard(exec), undefined);
+  assert.equal(guard(retry), undefined);
   assert.equal(requests.length, 2);
 });
 
@@ -214,21 +217,21 @@ const pathConfig = {
   protectedPaths: [`${protectedDir}/**`],
 };
 
-test('direct, traversal and symlink access to a protected path is denied with zero body calls', () => {
+test('direct, traversal and symlink access to a protected path is denied with zero body calls', async () => {
   const host = fakeHost();
   apply(host.ctx, pathConfig);
-  const guard = host.guards[0];
-  const body = (path) => {
-    const reason = guard({ name: 'forge_fs_read', arguments: { target: 'file', path }, callId: 'c1' });
-    return reason;
+  const body = async (path) => {
+    const exec = { name: 'forge_fs_read', arguments: { target: 'file', path }, callId: 'c1' };
+    const decision = await host.listeners.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }));
+    return decision.kind === 'deny' ? decision.reason : host.guards[0](exec);
   };
-  assert.match(String(body(join(protectedDir, 'credentials.env'))), /protected path/);
-  assert.match(String(body(join(openDir, '..', 'secrets', 'credentials.env'))), /protected path/);
-  assert.match(String(body(join(pathBase, 'shortcut', 'credentials.env'))), /protected path/);
-  assert.match(String(body(join(protectedDir, 'not-created-yet'))), /protected path/);
-  assert.equal(body(join(openDir, 'notes.md')), undefined, 'a path outside the roots passes');
-  assert.match(String(body('relative/notes.md')), /cannot be verified/);
-  assert.match(String(body(undefined)), /cannot be verified/);
+  assert.match(String(await body(join(protectedDir, 'credentials.env'))), /protected path/);
+  assert.match(String(await body(join(openDir, '..', 'secrets', 'credentials.env'))), /protected path/);
+  assert.match(String(await body(join(pathBase, 'shortcut', 'credentials.env'))), /protected path/);
+  assert.match(String(await body(join(protectedDir, 'not-created-yet'))), /protected path/);
+  assert.equal(await body(join(openDir, 'notes.md')), undefined, 'an audited path outside the roots passes');
+  assert.match(String(await body('relative/notes.md')), /cannot be verified/);
+  assert.match(String(await body(undefined)), /cannot be verified/);
 });
 
 test('a protected path is denied before the confirmation stage and at the hard gate', async () => {
