@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { resolveDshProbeHost } from '../scripts/lib/dsh-probe-runtime.mjs';
 
@@ -27,6 +29,25 @@ test('probe host: ordinary CLI resolves from its real path, including PATH symli
     runtime: null,
     kind: 'node-cli',
   });
+});
+
+test('probe host: local Node/web CLI loads its own SDK through a relative bin symlink', async (t) => {
+  const { root, file } = fixture(t);
+  const cli = file('web/node_modules/@deepseek-ai/dsh/lib/bin.js');
+  const manifest = file('web/node_modules/@deepseek-ai/dsh-tools/package.json', JSON.stringify({
+    name: '@deepseek-ai/dsh-tools', type: 'module', exports: { '.': './index.mjs', './package.json': './package.json' },
+  }));
+  file('web/node_modules/@deepseek-ai/dsh-tools/index.mjs', 'export const fixture = "node-web-sdk";\n');
+  const bin = join(root, 'web/node_modules/.bin/dsh');
+  mkdirSync(dirname(bin), { recursive: true });
+  symlinkSync('../@deepseek-ai/dsh/lib/bin.js', bin);
+  const result = resolveDshProbeHost({ dsh: relative(process.cwd(), bin), searchPath: '' });
+  assert.equal(result.kind, 'node-cli');
+  assert.equal(result.runtime, null, 'Node/web must not depend on an Electron runtime');
+  assert.equal(result.anchor, realpathSync(cli));
+  const host = createRequire(result.anchor);
+  assert.equal(host.resolve('@deepseek-ai/dsh-tools/package.json'), realpathSync(manifest));
+  assert.equal((await import(pathToFileURL(host.resolve('@deepseek-ai/dsh-tools')).href)).fixture, 'node-web-sdk');
 });
 
 test('probe host: packaged macOS CLI selects its own Electron runtime and ASAR SDK', (t) => {

@@ -9,7 +9,9 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:pa
  */
 export function resolveDshProbeHost({ dsh = 'dsh', searchPath = process.env.PATH ?? '', modules } = {}) {
   if (modules) return { anchor: join(resolve(modules), '__probe__.cjs'), runtime: null, kind: 'explicit-modules' };
-  const candidates = isAbsolute(dsh) ? [dsh] : searchPath.split(delimiter).filter(Boolean).map((part) => join(part, dsh));
+  const candidates = isAbsolute(dsh) || /[/\\]/u.test(dsh)
+    ? [resolve(dsh)]
+    : searchPath.split(delimiter).filter(Boolean).map((part) => join(part, dsh));
   const command = candidates.find((path) => existsSync(path) && statSync(path).isFile());
   if (command === undefined) throw new Error('DSH executable not found; supply DSH_BIN or DSH_NODE_MODULES');
   const cli = realpathSync(command);
