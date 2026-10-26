@@ -167,9 +167,9 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 ### 5.2 按需企业 Skill 与规范条款加载
 
-企业入口负责**装配**按需技能与规范条款，不重复实现成员包逻辑，也不把全部条款一次性注入上下文。宿主技能服务（`ctx.skills`）探针结论（2026-10-26 复核，rc.2）：直接 `register` 路径可用（注册"只读运行时技能"成功，`modelInvocable: false` 保持）；`registerProvider` 的 list/get 懒加载路径仅验证到"注册调用不抛错"，**未验证 list→get 真实往返**，因此交付代码不依赖该路径——本包如实嵌入正文，不虚构宿主侧懒加载能力。按需语义落在本包装配层：发现面只暴露摘要，正文经 `bodyFor(id)` 按需取用。
+企业入口负责**装配**按需技能与规范条款，不重复实现成员包逻辑，也不把全部条款一次性注入上下文。宿主技能服务（`ctx.skills`）探针结论（`skills-registry-discovery-and-load`，rc.2 实测通过）：直接 `register` 路径可用；`registerProvider` 懒加载路径已验证 list→get 真实往返——`list()` 只给无正文摘要（`summaryCarriesBody === false`）、`get(name)` 按需返回正文、加载零写入、`modelInvocable: false` 保持。
 
-**FIX-09 交付状态（2026-10-26）**：`assembleEnterpriseSkills(ctx, …)` 是交付 Skill 的单一受管入口（加载→选择→注册一次完成，一次 `dispose()` 注销全部；`skills.test.mjs` 9 例：发现面无正文、按需取正文、动作前约束可见、零写入、无合规结论、预算/无宿主服务拒绝）。`constraintsFor(action)` 给出动作前可见性的真实调用点，由能力入口在真实动作前调用展示。**待验（不宣称已交付）**：真实企业条款来源（企业提供）；安装路径的实际调用（宿主装配完成后记账）；provider list/get 懒加载往返。
+**FIX-09 交付状态（2026-10-26）**：`assembleEnterpriseSkills(ctx, …)` 是交付 Skill 的单一受管入口——有 provider 入口时走 `registerEnterpriseSkillsViaProvider`（与探针验证同形的 list/get 懒加载），无 provider 入口时回落到直接 `register`（正文如实嵌入，不虚构宿主能力）；一次 `dispose()` 注销全部；无宿主 skills 服务即拒绝。`skills.test.mjs` 11 例覆盖 provider 往返（发现无正文/按需取正文/未知名返回空/注销）、回落路径、发现面无正文、动作前约束可见、零写入、无合规结论、预算拒绝。`constraintsFor(action)` 给出动作前可见性的调用点，由能力入口在真实动作前调用展示。**待验（不宣称已交付）**：provider 形状在 rc.3 的重验（本轮仅 rc.2 探针 + 离线单测）；真实企业条款来源（企业提供）；安装路径的实际调用（宿主装配完成后记账）。
 
 | 规则 | 要求 |
 |---|---|

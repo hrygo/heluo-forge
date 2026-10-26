@@ -222,6 +222,58 @@ export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterpr
   });
 }
 
+/**
+ * Register the selected clauses through the host lazy provider path.
+ *
+ * Shape verified by the host probe (`skills-registry-discovery-and-load`,
+ * DSH 0.2.1-rc.2): `registerProvider` takes a factory returning
+ * `{ name, list, get }`; `list()` yields summaries WITHOUT the body and
+ * `get(name)` returns the body on demand. If the host has no provider entry,
+ * this throws and the caller falls back to direct registration (eager body).
+ * Provider-path availability on newer hosts (rc.3) is NOT RUN here.
+ *
+ * @param {{skills: object}} ctx host context providing `skills`
+ * @param {{selection: object, namePrefix?: string, invocation?: object}} input
+ */
+export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix = 'enterprise', invocation } = {}) {
+  const skills = ctx?.skills;
+  if (skills === undefined || typeof skills.registerProvider !== 'function') {
+    throw new EnterpriseSkillError('host has no skills provider entry for enterprise skills', 'ENTERPRISE_PROVIDER_UNAVAILABLE');
+  }
+  const policy = Object.freeze({
+    modelInvocable: invocation?.modelInvocable ?? false,
+    userInvocable: invocation?.userInvocable ?? true,
+  });
+  const providerName = `${namePrefix}-clauses`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
+  const skillName = (clause) => `${namePrefix}-${clause.id}`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
+  const byName = new Map(selection.hard.map((clause) => [skillName(clause), clause]));
+  const summaryOf = (clause) => ({
+    name: skillName(clause),
+    description: clause.summary.length > 0 ? clause.summary : clause.title,
+    whenToUse: `当任务涉及 ${clause.appliesTo.map((target) => target.system).join('、') || '企业规范'} 时按需加载；由用户显式触发`,
+    provider: providerName,
+    rank: 0,
+    locator: { clause: clause.id },
+    invocation: policy,
+    metadata: { owner: clause.owner, level: clause.level, references: clause.references },
+  });
+  const dispose = skills.registerProvider(() => ({
+    name: providerName,
+    list: async () => [...byName.values()].map(summaryOf),
+    get: async (name) => {
+      const clause = byName.get(name);
+      if (clause === undefined) return undefined;
+      return { ...summaryOf(clause), content: clause.body };
+    },
+  }));
+  return Object.freeze({
+    invocation: policy,
+    provider: providerName,
+    registered: Object.freeze([...byName.keys()].map((name, index) => ({ id: selection.hard[index].id, name }))),
+    dispose: () => dispose?.(),
+  });
+}
+
 /** Hard requirements that must be visible before the given action runs. */
 export function preActionConstraints({ selection, action }) {
   return Object.freeze(
@@ -245,7 +297,12 @@ export function preActionConstraints({ selection, action }) {
 export function assembleEnterpriseSkills(ctx, { root, pack, systems = [], budgetTokens, namePrefix = 'enterprise', invocation } = {}) {
   const loaded = pack ?? loadClausePack({ root });
   const selection = selectClauses({ pack: loaded, systems, budgetTokens });
-  const registration = registerEnterpriseSkills(ctx, { selection, namePrefix, invocation });
+  // Prefer the probe-verified lazy provider path; direct registration (eager
+  // body) is the fallback for hosts without a provider entry. Either way the
+  // discovery face carries summaries only.
+  const registration = typeof ctx?.skills?.registerProvider === 'function'
+    ? registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix, invocation })
+    : registerEnterpriseSkills(ctx, { selection, namePrefix, invocation });
   const bodies = new Map(selection.selected.map((clause) => [clause.id, clause.body]));
   return Object.freeze({
     version: loaded.version,

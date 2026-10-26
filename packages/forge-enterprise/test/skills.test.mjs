@@ -10,6 +10,7 @@ import {
   loadClausePack,
   preActionConstraints,
   registerEnterpriseSkills,
+  registerEnterpriseSkillsViaProvider,
   selectClauses,
 } from '../src/skills.mjs';
 
@@ -188,4 +189,49 @@ test('FIX-09: assembly fails closed without a host skills service and honors the
     () => assembleEnterpriseSkills(ctx, { root, systems: [{ name: 'devops', version: '2.1.7' }], budgetTokens: 1 }),
     (error) => error instanceof EnterpriseSkillError && error.code === 'ENTERPRISE_BUDGET_EXCEEDED',
   );
+});
+
+test('FIX-09: provider path discovers summaries and loads bodies on demand (probe-verified shape)', async () => {
+  const { root } = pack();
+  const loaded = loadClausePack({ root });
+  const selection = selectClauses({ pack: loaded, systems: [{ name: 'devops', version: '2.1.7' }] });
+  let factory;
+  let disposed = false;
+  const ctx = { skills: { registerProvider: (make) => ((factory = make), () => void (disposed = true)) } };
+  const registration = registerEnterpriseSkillsViaProvider(ctx, { selection });
+  const provider = factory();
+  const summaries = await provider.list();
+  assert.ok(summaries.length > 0);
+  for (const summary of summaries) {
+    assert.equal('content' in summary, false, 'discovery must not carry bodies');
+    assert.equal(summary.invocation.modelInvocable, false);
+    assert.equal(summary.invocation.userInvocable, true);
+  }
+  const first = await provider.get(summaries[0].name);
+  assert.match(first.content, /硬要求|冻结|确认/u);
+  assert.equal(await provider.get('no-such-skill'), undefined);
+  registration.dispose();
+  assert.equal(disposed, true);
+  assert.throws(
+    () => registerEnterpriseSkillsViaProvider({ skills: {} }, { selection }),
+    (error) => error instanceof EnterpriseSkillError && error.code === 'ENTERPRISE_PROVIDER_UNAVAILABLE',
+  );
+});
+
+test('FIX-09: assembly prefers the provider path and falls back to direct registration', async () => {
+  const { root } = pack();
+  const systems = [{ name: 'devops', version: '2.1.7' }];
+  let factory;
+  const withProvider = { skills: { registerProvider: (make) => ((factory = make), () => {}) } };
+  const viaProvider = assembleEnterpriseSkills(withProvider, { root, systems });
+  assert.ok(typeof viaProvider.registered[0].name === 'string');
+  assert.deepEqual((await factory().list()).map((entry) => entry.name), viaProvider.registered.map((entry) => entry.name));
+  assert.match(viaProvider.bodyFor(viaProvider.registered[0].id), /硬要求|冻结|确认/u);
+  viaProvider.dispose();
+  const direct = [];
+  const withoutProvider = { skills: { register: (skill) => (direct.push(skill), () => {}) } };
+  const viaDirect = assembleEnterpriseSkills(withoutProvider, { root, systems });
+  assert.equal(direct.length, viaDirect.registered.length);
+  assert.ok(direct[0].content.length > 0);
+  viaDirect.dispose();
 });

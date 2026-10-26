@@ -27,5 +27,6 @@ export {
   loadClausePack,
   preActionConstraints,
   registerEnterpriseSkills,
+  registerEnterpriseSkillsViaProvider,
   selectClauses,
 } from './skills.mjs';
