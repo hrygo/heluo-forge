@@ -118,8 +118,13 @@ test('decideApproval 的资源与版本范围判定各自归因', () => {
     APPROVAL_REASONS.REVISION_OUT_OF_RANGE,
   );
   assert.equal(
-    decideApproval({ approvals, action: 'issue.close', now: Date.parse('2020-01-01T00:00:00Z') }).reason,
+    decideApproval({ approvals, action: 'issue.close', resource: 'group/repo', revision: 'R-1', now: Date.parse('2020-01-01T00:00:00Z') }).reason,
     APPROVAL_REASONS.NOT_YET_VALID,
+  );
+  // 版本绑定的批准不覆盖无版本调用：缺 revision 时含范围的行直接不匹配（FIX-03）。
+  assert.equal(
+    decideApproval({ approvals, action: 'issue.close', resource: 'group/repo', now }).reason,
+    APPROVAL_REASONS.REVISION_OUT_OF_RANGE,
   );
   assert.equal(decideApproval({ approvals, action: 'review.ai.publish', now }).reason, APPROVAL_REASONS.NO_APPROVAL);
 });

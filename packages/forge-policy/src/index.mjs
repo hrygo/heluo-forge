@@ -266,6 +266,9 @@ export function apply(ctx, rawConfig = {}) {
     protectedRoots,
     audit,
     onDecision: config.onDecision,
+    // FIX-03: the compiled ledger is shared with the execution gate so every
+    // write/confirm admission re-verifies action + resource + revision + time.
+    approvals,
   });
 
   // 过程观察默认关闭：未显式启用时不建缓冲、不查发送方、不发送任何事件。

@@ -103,18 +103,22 @@ export const needsApproval = (entry) => entry.kind !== 'read' && entry.enabled =
 
 /**
  * 判定某动作当前是否被有效批准。
+ *
+ * `enforceScope: false` 只做挂载期早期发现：核对动作有时限内有效的台账行，
+ * 不绑定具体资源与版本；执行期必须用默认的完整绑定复验。
  * @returns {{allowed: boolean, reason: string|null, approvalId: string|null}}
  */
-export function decideApproval({ approvals, action, resource = undefined, revision = undefined, now = Date.now() }) {
+export function decideApproval({ approvals, action, resource = undefined, revision = undefined, now = Date.now(), enforceScope = true }) {
   const rows = [...approvals.values()].filter((row) => row.action === action);
   if (rows.length === 0) return { allowed: false, reason: APPROVAL_REASONS.NO_APPROVAL, approvalId: null };
   let mismatch = null;
   for (const row of rows) {
-    if (resource !== undefined && row.resource !== '*' && row.resource !== resource) {
+    if (enforceScope && resource !== undefined && row.resource !== '*' && row.resource !== resource) {
       mismatch ??= APPROVAL_REASONS.RESOURCE_MISMATCH;
       continue;
     }
-    if (revision !== undefined && row.revisionRange.length > 0 && !row.revisionRange.includes(revision)) {
+    // 版本绑定的批准不覆盖无版本调用：revision 缺失时含范围的行一律不匹配。
+    if (enforceScope && row.revisionRange.length > 0 && !row.revisionRange.includes(revision)) {
       mismatch ??= APPROVAL_REASONS.REVISION_OUT_OF_RANGE;
       continue;
     }
@@ -139,7 +143,8 @@ export function assertEnabledEntriesApproved(catalog, approvals, now = Date.now(
   const offenders = [];
   for (const entry of catalog.values()) {
     if (!needsApproval(entry)) continue;
-    const decision = decideApproval({ approvals, action: entry.action, now });
+    // 挂载只做早期发现：动作有时限内有效的台账行即可；资源与版本的完整绑定在每次执行时复验。
+    const decision = decideApproval({ approvals, action: entry.action, now, enforceScope: false });
     if (decision.allowed !== true) offenders.push({ action: entry.action, reason: decision.reason });
   }
   if (offenders.length > 0) {

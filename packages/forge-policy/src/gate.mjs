@@ -4,10 +4,11 @@
  * Ordinary unmapped host tools remain outside the enterprise policy's scope.
  */
 import { decideAction } from './catalog.mjs';
+import { decideApproval, needsApproval } from './approvals.mjs';
 import { digestContent } from './egress.mjs';
 import { matchProtected } from './paths.mjs';
 
-export function createGate({ catalog, tools = {}, categories = {}, protectedRoots = [], pathOptions = {}, audit, onDecision }) {
+export function createGate({ catalog, tools = {}, categories = {}, protectedRoots = {}, pathOptions = {}, audit, onDecision, approvals = new Map(), now = () => Date.now() }) {
   const approved = new WeakSet();
   const receipts = new Map();
   const attempted = new WeakSet();
@@ -57,6 +58,32 @@ export function createGate({ catalog, tools = {}, categories = {}, protectedRoot
   const interruption = (exec) => !active ? 'the policy service was disposed'
     : exec.signal?.aborted ? 'the execution was cancelled before admission' : undefined;
 
+  // FIX-03: the organization approval ledger is re-verified on every execution
+  // (action + actual resource + revision range + current time), not only at mount.
+  // The scope is captured once at prepare and replayed at guard with fresh time,
+  // so an approval lapsing mid-flight is caught instead of grandfathered in.
+  function approvalScope(exec) {
+    try {
+      return {
+        resource: typeof exec.arguments?.target === 'string' ? exec.arguments.target : undefined,
+        revision: exec.arguments?.revision,
+      };
+    } catch {
+      return { unreadable: true };
+    }
+  }
+
+  function approvalDenial(exec, action, at, scope) {
+    const entry = catalog.get(action);
+    if (entry === undefined || !needsApproval(entry)) return undefined;
+    if (scope.unreadable === true) return 'execution arguments cannot be verified for approval';
+    const approval = decideApproval({ approvals, action, resource: scope.resource, revision: scope.revision, now: at });
+    if (approval.allowed !== true) {
+      return `the organization approval does not cover this execution (${approval.reason})`;
+    }
+    return undefined;
+  }
+
   async function prepare(ctx, exec, action) {
     if (!active) return deny('the policy service was disposed');
     if (attempted.has(exec)) return deny('the audit admission for this execution was already prepared');
@@ -69,6 +96,9 @@ export function createGate({ catalog, tools = {}, categories = {}, protectedRoot
     if (pathReason !== undefined) return deny(pathReason);
     const decision = decisionFor(exec.name, action, exec.arguments);
     if (decision.action === 'deny') return deny(decision.reason);
+    const scope = approvalScope(exec);
+    const approvalReason = approvalDenial(exec, action, now(), scope);
+    if (approvalReason !== undefined) return deny(approvalReason);
     let digest;
     const agent = exec.agent;
     try { digest = snapshot(exec, action); } catch { return deny('execution arguments cannot be verified for audit'); }
@@ -93,7 +123,7 @@ export function createGate({ catalog, tools = {}, categories = {}, protectedRoot
         await audit.settle(receipt, { decision: 'cancelled' });
         return deny(interruption(exec) ?? 'execution arguments or identity changed during audit');
       }
-      receipts.set(exec, { receipt, digest, action, agent, used: false });
+      receipts.set(exec, { receipt, digest, action, agent, used: false, resource: scope.resource, revision: scope.revision });
       if (decision.action === 'confirm') approved.add(exec);
       return { kind: 'allow' };
     } catch (error) {
@@ -136,6 +166,18 @@ export function createGate({ catalog, tools = {}, categories = {}, protectedRoot
     if (admission.used) return 'the audit admission for this execution was already consumed';
     if (admission.action !== action || changed(exec, action, admission.digest, admission.agent)) {
       return 'execution arguments or identity changed after the mandatory audit';
+    }
+    // FIX-03: an approval that was valid at prepare time may lapse while an
+    // awaited downstream or confirmation is in flight; re-verify with fresh time.
+    const recheck = decideApproval({
+      approvals,
+      action,
+      resource: admission.resource,
+      revision: admission.revision,
+      now: now(),
+    });
+    if (catalog.get(action) !== undefined && needsApproval(catalog.get(action)) && recheck.allowed !== true) {
+      return `the organization approval does not cover this execution (${recheck.reason})`;
     }
     admission.used = true;
     return undefined;

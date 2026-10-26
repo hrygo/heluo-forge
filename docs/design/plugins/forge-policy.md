@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-003 |
 | 文档名称 | 策略与审计详细设计 |
-| 版本 | V0.10.0 |
+| 版本 | V0.10.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -123,7 +123,7 @@ export interface PolicyEngine {
 | `retry` | 默认 `none`；读可 `read_recheck`；写不允许自动重放 |
 | `enabled` | 显式开放标记；只读、普通研发写、人工确认动作分别开关 |
 
-**判定顺序**：`tools/pre-execute` await 必要确认与前置审计 → `ctx.tools.guard()` 核验绑定收据并单调硬拒绝 → 执行 → `tools/post-execute` await 结清 → `tools/result` 同步登记兜底观察。最后一步不是 awaited 决策；后续动作的 prepare/guard 另保证 pending 结清前不能继续。作用域内未知动作、未开放写、缺目标，以及工具自报 `readOnly` 的越权企图必须零执行。
+**判定顺序**：`tools/pre-execute` 复验组织批准（动作 + 实际资源 + 版本范围 + 当前时间）→ await 必要确认与前置审计 → `ctx.tools.guard()` 核验绑定收据、用新时间重验批准并单调硬拒绝 → 执行 → `tools/post-execute` await 结清 → `tools/result` 同步登记兜底观察。最后一步不是 awaited 决策；后续动作的 prepare/guard 另保证 pending 结清前不能继续。作用域内未知动作、未开放写、缺目标、批准不覆盖本次执行，以及工具自报 `readOnly` 的越权企图必须零执行。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -174,9 +174,11 @@ export interface PolicyEngine {
 | `approved_at` / `expires_at` | 生效与失效时刻 | ISO 时间；`expires_at` 必须晚于 `approved_at` |
 | `revision_range` | 适用的版本范围 | 非空字符串数组；空数组表示不限版本 |
 
-判定顺序（逐条比对，任一不满足即拒绝并给出原因）：`no-approval` → `resource-mismatch` → `revision-out-of-range` → `not-yet-valid` → `expired`。过期与未来生效都按"未批准"处理。
+判定顺序（逐条比对，任一不满足即拒绝并给出原因）：`no-approval` → `resource-mismatch` → `revision-out-of-range` → `not-yet-valid` → `expired`。过期与未来生效都按"未批准"处理。版本绑定的批准行不覆盖无版本调用：调用未声明版本（`arguments.revision` 缺失）而台账行限定了版本范围时，该行直接不匹配（`revision-out-of-range`）。
 
-**机制边界**：本台账是**机器可查的约束**，不是批准来源。空台账等价于全部关闭；台账条目从哪里来（评审会签、工单、邮件）不是本仓库能裁定的事。**实现证据（2026-10-24）**：`packages/forge-policy/test/approvals.test.mjs`（8 例）覆盖"enabled 无台账即拒绝挂载"、"过期不足以开放"、"台账属于别的动作不算批准"、"只读不受此约束"、字段校验与逐条归因；`write-register.test.mjs` 相应升级为两层断言（先无台账必拒、补台账后放行）。
+**执行期复验（2026-10-26，#21 FIX-03）**：挂载检查只做早期发现（动作有时限内有效的台账行即可）；每次执行时共享门禁按实际调用复验动作 + 实际资源 + 版本范围 + 当前时间，任一不满足即拒绝且执行体零调用（工具面与命令面一致）。`prepare` 绑定时的作用域在 `guard` 处用新时间重验：批准在等待下游或人工确认期间过期同样被拦下，不吃"已放行"的祖父待遇。组织批准（本台账）、有限任务委托（`delegation.mjs`）、具体单次确认（`confirmations.mjs` + 宿主人工确认通道）三者职责分开，任何一个都不能被"目录 `enabled`"替代。
+
+**机制边界**：本台账是**机器可查的约束**，不是批准来源。空台账等价于全部关闭；台账条目从哪里来（评审会签、工单、邮件）不是本仓库能裁定的事。**实现证据（2026-10-24）**：`packages/forge-policy/test/approvals.test.mjs`（8 例）覆盖"enabled 无台账即拒绝挂载"、"过期不足以开放"、"台账属于别的动作不算批准"、"只读不受此约束"、字段校验与逐条归因；`write-register.test.mjs` 相应升级为两层断言（先无台账必拒、补台账后放行)。**实现证据（2026-10-26）**：`packages/forge-policy/test/approval-execution.test.mjs`（7 例）覆盖执行期放行、资源错/版本错/版本缺失拒绝且零调用、命令面一致、运行中到期与未到生效期。
 
 #### 5.1.3 受控写动作送审表（D1，2026-10-24 代拟，待安全逐条签署）
 
