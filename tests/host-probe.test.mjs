@@ -14,8 +14,10 @@ const skip =
     ? false
     : `目标 DSH 不在本机 PATH（${version.error.message}）；宿主探针只在装有目标版本的环境运行`;
 
-test('host probe: target DSH honours the documented tool-pipeline semantics', { skip }, () => {
-  const run = spawnSync(process.execPath, [runner], { encoding: 'utf8', timeout: 300_000 });
+test('host probe: target DSH honours the documented tool-pipeline semantics without DSH_HOME', { skip }, () => {
+  const env = { ...process.env };
+  delete env.DSH_HOME;
+  const run = spawnSync(process.execPath, [runner], { encoding: 'utf8', timeout: 300_000, env });
   const output = `${run.stdout ?? ''}${run.stderr ?? ''}`;
   assert.equal(run.status, 0, `host probe failed (exit ${run.status}):\n${output}`);
   assert.match(output, /\d+\/\d+ checks passed/, 'host probe must report a check summary');

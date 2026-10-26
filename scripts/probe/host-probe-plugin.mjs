@@ -10,6 +10,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 export const name = 'forge-host-probe';
@@ -712,8 +713,7 @@ export function apply(ctx) {
       return { ok: outcome === 'rejected', detail: { outcome, expected: 'rejected' } };
     });
 
-    // 记录本轮无法跑通的一项：子 Agent 限制是否继承需要真实 agent 会话，
-    // 而探针所用的 sdk/headless profile 不含 agent-loop 与 subagent 插件。
+    // 内部解析包的可导入性只作为观测；准入断言验证本项目已采用的路径解析契约。
     await step('protected-root-resolution', async () => {
       const envFacts = {
         DSH_HOME: process.env.DSH_HOME !== undefined,
@@ -732,13 +732,23 @@ export function apply(ctx) {
       } catch (error) {
         resolver = { importable: false, error: String(error?.message ?? error).slice(0, 120) };
       }
-      const resolvable = envFacts.DSH_HOME === true || resolver.dshHome === true;
+      const { validateConfig, resolveProtectedRoots, matchProtected } = await import('../../packages/forge-policy/src/index.mjs');
+      const config = validateConfig({});
+      const home = process.env.DSH_HOME ?? join(homedir(), '.dsh');
+      const roots = resolveProtectedRoots(config.value.protectedPaths, { DSH_HOME: home });
+      const rootProtected = matchProtected(home, roots).protected;
+      const childProtected = matchProtected(join(home, 'probe-not-created'), roots).protected;
+      const siblingRejected = !matchProtected(`${home}-probe-sibling`, roots).protected;
       return {
-        ok: resolvable,
+        ok: rootProtected && childProtected && siblingRejected,
         detail: {
           envFacts,
           resolver,
-          note: '只记录可用性与布尔事实，不记录 home 字面路径',
+          rootSource: envFacts.DSH_HOME ? 'environment' : 'documented-default',
+          rootProtected,
+          childProtected,
+          siblingRejected,
+          note: '按环境变量或已约定的 ~/.dsh 默认值验证策略根解析；只记录布尔事实，不读取目录内容或写入文件',
         },
       };
     });

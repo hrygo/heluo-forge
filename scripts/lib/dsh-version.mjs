@@ -226,7 +226,8 @@ function manifestEnginesTokens(abs) {
 const DATED_MARKERS = /(编制依据|实测|核验|复核|探针|npm registry|当时|历史)/;
 const HAS_DATE = /20\d\d-\d\d-\d\d/;
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.cache', 'coverage', 'artifacts']);
+// Paperclip 保存独立工作副本，不能作为当前仓库的版本检查输入。
+const SKIP_DIRS = new Set(['node_modules', '.git', '.paperclip', 'dist', 'build', '.cache', 'coverage', 'artifacts']);
 
 export function readDshVersion(root = process.cwd()) {
   const raw = readFileSync(join(root, DSH_VERSION_FILE), 'utf8').trim();

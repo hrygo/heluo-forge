@@ -78,6 +78,7 @@ yarn-error.log*
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # AI Coding & Agent tools local cache/session/artifacts
+.paperclip/
 .gemini/
 .claude/
 .claude.json
