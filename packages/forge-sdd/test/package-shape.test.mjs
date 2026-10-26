@@ -15,6 +15,9 @@ test('the manifest declares the repository package contract', async () => {
   assert.ok(manifest.scripts.test);
   await access(join(here, manifest.main));
   await access(join(here, manifest.bin['forge-sdd']));
+  assert.equal(manifest.exports['./cli'], manifest.bin['forge-sdd'], 'public CLI subpath resolves to the executable, not a Host plugin');
+  assert.equal(fileURLToPath(import.meta.resolve('@heluo/forge-sdd/cli')), join(here, manifest.bin['forge-sdd']));
+  for (const entry of Object.values(manifest.exports)) await access(join(here, entry));
   for (const file of manifest.files.filter((entry) => entry.includes('.'))) {
     await access(join(here, file));
   }

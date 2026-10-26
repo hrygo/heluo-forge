@@ -8,9 +8,9 @@ import { dirname } from 'node:path';
 
 import { blockingFindings, fingerprint, inspectManifest, MANIFEST_VERSION, SddManifestError } from './manifest.mjs';
 
-function readText(path) {
+function readFileOrUndefined(path, encoding = undefined) {
   try {
-    return readFileSync(path, 'utf8');
+    return readFileSync(path, encoding);
   } catch (error) {
     if (error?.code === 'ENOENT') return undefined;
     throw error;
@@ -18,7 +18,7 @@ function readText(path) {
 }
 
 export function loadManifest(path) {
-  const text = readText(path);
+  const text = readFileOrUndefined(path, 'utf8');
   if (text === undefined) {
     throw new SddManifestError(`manifest "${path}" does not exist`, 'SDD_MANIFEST_MISSING', { path });
   }
@@ -64,13 +64,13 @@ export function freeze(input) {
     const entries = [];
     for (const artifact of artifacts) {
       const absolute = `${root}/${artifact.path}`.replace(/\/+/gu, '/');
-      const text = readText(absolute);
-      if (text === undefined) {
+      const bytes = readFileOrUndefined(absolute);
+      if (bytes === undefined) {
         throw new SddManifestError(`artifact "${artifact.path}" does not exist`, 'SDD_ARTIFACT_MISSING', { path: artifact.path });
       }
       entries.push({
         path: artifact.path,
-        sha256: fingerprint(text),
+        sha256: fingerprint(bytes),
         kind: artifact.kind,
         unitId: artifact.unitId ?? input.unitId,
       });
@@ -109,11 +109,14 @@ export function freeze(input) {
 /**
  * Verify a frozen manifest against the working tree.
  *
- * @param {{manifest: object, root?: string, currentRevision?: string, readText?: (path: string) => string | undefined}} input
+ * The legacy readText injection still accepts UTF-8 strings for text fixtures;
+ * binary-aware readers must return Buffer, as the default reader does.
+ *
+ * @param {{manifest: object, root?: string, currentRevision?: string, readText?: (path: string) => string | Buffer | undefined}} input
  */
 export function verifyManifest(input) {
   const { manifest, root = '.', currentRevision } = input;
-  const read = input.readText ?? readText;
+  const read = input.readText ?? readFileOrUndefined;
   const { findings, stage } = inspectManifest(manifest);
   const results = [...findings];
   for (const artifact of Array.isArray(manifest?.artifacts) ? manifest.artifacts : []) {

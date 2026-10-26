@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { loadManifest, verifyManifest } from '../src/freeze.mjs';
+import { freeze, loadManifest, verifyManifest } from '../src/freeze.mjs';
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli.mjs');
 
@@ -45,6 +45,54 @@ test('the CLI freezes and verifies a delivery, and its verdict matches the libra
   assert.deepEqual(parsed.blocking, libraryVerdict.blocking);
   assert.deepEqual(parsed.notes, libraryVerdict.notes);
   assert.equal(parsed.severity, 'hard-only');
+});
+
+test('the CLI and shared library reject all three FIX-04 counterexamples', () => {
+  for (const scenario of ['stale-tests', 'untyped-stage', 'archive-only-stage', 'binary-tamper']) {
+    const root = sandbox();
+    const manifestPath = join(root, 'docs/sdd/freeze.json');
+    const binary = scenario === 'binary-tamper';
+    const path = binary ? 'artifact.bin' : 'docs/sdd/spec.md';
+    if (binary) writeFileSync(join(root, path), Buffer.from([0x80]));
+    const manifest = freeze({
+      root, freezePath: manifestPath, unitId: 'U-1', changeId: 'C-1', revision: 'rev-7', testedRevision: 'rev-7',
+      artifacts: [{ path }], testEvidence: [{ ref: 'ci-old', state: 'passed', testedRevision: 'rev-7' }],
+    });
+    const verifyArgs = ['verify', '--root', root, '--manifest', manifestPath, '--revision', 'rev-7', '--json'];
+    assert.equal(run(verifyArgs).code, 0, `${scenario}: the unchanged unstaged fixture passes`);
+    let expectedRule;
+    if (scenario === 'stale-tests') {
+      manifest.revision = 'rev-8';
+      verifyArgs[verifyArgs.indexOf('--revision') + 1] = 'rev-8';
+      expectedRule = 'test-revision-mismatch';
+    } else if (binary) {
+      writeFileSync(join(root, path), Buffer.from([0x81]));
+      expectedRule = 'fingerprint-mismatch';
+    } else {
+      manifest.stage = 'implementation';
+      if (scenario === 'archive-only-stage') manifest.artifacts[0].kind = 'archive';
+      expectedRule = 'atomic-delivery';
+    }
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    const cliVerdict = run(verifyArgs);
+    const libraryVerdict = verifyManifest({ manifest, root, currentRevision: manifest.revision });
+    assert.equal(cliVerdict.code, 1, `${scenario}: CLI must block`);
+    assert.equal(libraryVerdict.ok, false, `${scenario}: shared library must block`);
+    assert.deepEqual(JSON.parse(cliVerdict.stdout), JSON.parse(JSON.stringify(libraryVerdict)), 'CLI and library JSON verdicts must match');
+    assert.ok(libraryVerdict.blocking.some((finding) => finding.rule === expectedRule));
+  }
+});
+
+test('the CLI refuses freezing stale tests or a staged delivery with no required kinds', () => {
+  const root = sandbox();
+  const args = ['freeze', '--root', root, '--manifest', join(root, 'docs/sdd/freeze.json'), '--unit', 'U-1', '--change', 'C-1', '--revision', 'rev-8', '--tested-revision', 'rev-7', '--artifact', 'docs/sdd/spec.md'];
+  const stale = run(args);
+  assert.equal(stale.code, 2);
+  assert.match(stale.stderr, /test-revision-mismatch/);
+  args[args.indexOf('--tested-revision') + 1] = 'rev-8';
+  const untyped = run([...args, '--stage', 'implementation']);
+  assert.equal(untyped.code, 2);
+  assert.match(untyped.stderr, /atomic-delivery/);
 });
 
 test('the CLI reports a located failure and exits non-zero', () => {
