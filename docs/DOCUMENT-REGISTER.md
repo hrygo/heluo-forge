@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.29.70 |
+| 版本 | V1.29.71 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,7 +19,7 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.70 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.29.71 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.21.7 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.10.15 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.1 | 生效 | 平台组 | — |
@@ -46,6 +46,7 @@
 | CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [architecture/gateway-identity-review.md](architecture/gateway-identity-review.md) | V1.0.0 | 评审稿 | 平台组（代拟） | G0 认领与路线评估；G1 契约；G2 联调与安全准入 |
 | CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V2.3.4 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-PLAN-002 | 插件市场 P0 接入取证单 | [plans/market-p0-verification.md](<plans/market-p0-verification.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
+| CORP-DSH-PLAN-003 | 已关闭任务修复验收台账 | [plans/fix-acceptance-ledger.md](<plans/fix-acceptance-ledger.md>) | V0.1.0 | 草案（代拟，待负责人确认） | 平台组（代拟） | — |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V2.5.3 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V1.0.1 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.6.4 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
