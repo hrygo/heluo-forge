@@ -77,6 +77,7 @@ export function normalizeReadResult({ action, target, result }) {
     observed_at: typeof result.observed_at === 'string' ? result.observed_at : null,
     error_code: result.status === 'succeeded' ? null : (result.error_code ?? null),
     retry_policy: 'read_recheck',
+    ...(result?.facts !== null && typeof result?.facts === 'object' && !Array.isArray(result.facts) ? { facts: result.facts } : {}),
   };
 }
 
@@ -90,5 +91,6 @@ function unknownResult(action, target, reason, result = undefined) {
     observed_at: typeof result?.observed_at === 'string' ? result.observed_at : null,
     error_code: reason,
     retry_policy: 'read_recheck',
+    ...(result?.facts !== null && typeof result?.facts === 'object' && !Array.isArray(result.facts) ? { facts: result.facts } : {}),
   };
 }

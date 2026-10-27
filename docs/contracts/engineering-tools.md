@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-TOOLS-001 |
 | 文档名称 | 企业工程工具最小契约 |
-| 版本 | V0.2.1 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-24 |
+| 最后更新 | 2026-10-27 |
 | 门禁 | G1 查询映射；G2 受控写准入 |
 
 > 编制依据：2026-10-22 依据需求方业务澄清及旧项目企业工具使用文档制定目标语义；**无企业内网访问，未执行企业 CLI、未验证命令或字段，未实测 DSH SDK**。本契约的业务动作与规范化字段均为待提供方映射的候选，不是既有 CLI/API 声明，不要求实现新的工具框架。
@@ -20,6 +20,11 @@
 > 关联文档：[需求基线](../requirements/requirements-baseline.md)、[全流程能力设计](../design/plugins/forge-devops-lifecycle.md)、[DevOps 接入](../design/plugins/forge-devops.md)、[Gitee 接入](../design/plugins/forge-gitee.md)。
 
 ## 1. 结论
+
+2026-10-27 查询切片依据补充：用户确认 `oh-my-sdd` 用法已在企业实测；本方固定核对该项目提交 `3b95d536230fde36f867b3b1917d6569ae0d918c` 的 `hooks/session-start.js`、`skills/sdd-doc/SKILL.md`、`scripts/dop`。采用显式 `dop change view <ID> -j`，ID 为 `^[A-Z]{2,6}\\d+$`，不用旧文候选命令名或猜测的 token 环境变量。JSON 使用 `id/title/status/description/acceptance_criteria:string[]`；可选 `sub_systems:[{code,name}]`、`user_stories:[{code,title,release_info:{release_num,release_name}|null}]`，排期取故事中首个非空 `release_num`。`id` 必须等于显式请求目标；必填字段缺失/类型错即拒绝，不用自由文本兜底。子系统/故事区分缺失、null 与空数组。源契约没有核定需求版本/仓库映射；未知别名不得充当权威字段，也不推导链接、仓库或需求版本。
+
+只读结果可以附加 `facts`，承载已校验的上述业务事实，仅返回到获准会话/用户显式报告，不进入审计/指标。缺少 `source_revision` 时仍保持 `status: unknown` 和原因码，保留可读事实不等于允许冻结、承接或覆盖。命令用法为用户提供的企业依据；完整字段样例来自该源项目校准 mock，本方仿 CLI 回归不证明本次企业往返。当前本机诊断入口复用 policy 判定核心与必要审计，但不冒充已安装 DSH profile 的角色/委托/组织开关。
+
 
 相同业务动作在人类 CLI 与 Agent 面共享资源、身份、结果和审计语义。优先直接使用现有 CLI；以下字段只描述必须取得的事实，可映射原有 JSON，不因命名不同而新建包装层。只有必要缺口经确认后才做薄适配。
 

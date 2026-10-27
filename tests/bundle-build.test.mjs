@@ -31,6 +31,26 @@ function fixture(t, overrides = {}) {
 }
 const digest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
 
+test('real change briefing artifact installs offline with empty cache and runs outside checkout', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'forge-cli-release-'));
+  t.after(() => { assert.ok(root.startsWith(join(tmpdir(), 'forge-cli-release-'))); rmSync(root, { recursive: true, force: true }); });
+  const artifact = buildEnterpriseBundle({ destination: join(root, 'artifact'), packageName: '@heluo/forge-devops' });
+  assert.deepEqual(artifact.members, { '@heluo/forge-policy': '0.1.0' });
+  const project = join(root, 'clean-project');
+  put(project, 'package.json', { name: 'read-demo-test', private: true });
+  execFileSync(npmExecutable(), ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=http://127.0.0.1:9', `--cache=${join(root, 'empty-cache')}`, artifact.tarball], { cwd: project, stdio: 'pipe' });
+  const released = join(project, 'node_modules/@heluo/forge-devops');
+  assert.deepEqual(auditReleaseClosure(released), []);
+  const result = execFileSync(process.execPath, [join(released, 'src/change-cli.mjs'), 'demo', '--json'], { cwd: project, encoding: 'utf8' });
+  const report = JSON.parse(result);
+  assert.equal(report.mode, 'demo'); assert.equal(report.facts.id, 'DEMO100001'); assert.equal(report.facts.acceptance.length, 4);
+  assert.equal(report.facts.engineeringReady, false);
+  if (process.platform !== 'win32') {
+    const bin = execFileSync(process.execPath, [join(project, 'node_modules/.bin/heluo-change'), 'demo', '--json'], { cwd: project, encoding: 'utf8' });
+    assert.equal(JSON.parse(bin).facts.id, 'DEMO100001');
+  }
+});
+
 test('build closes workspace dependencies, is reproducible, and installs offline without cache', (t) => {
   const root = fixture(t);
   const source = join(root, 'packages/forge-enterprise/package.json');

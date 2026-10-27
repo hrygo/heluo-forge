@@ -43,8 +43,8 @@ for (const target of targets) {
   }
   let packed;
   try {
-    if (target.manifest.name === '@heluo/forge-enterprise') {
-      const result = buildEnterpriseBundle({ root });
+    if (target.manifest.name === '@heluo/forge-enterprise' || Object.values(target.manifest.dependencies ?? {}).includes('workspace:*')) {
+      const result = buildEnterpriseBundle({ root, packageName: target.manifest.name });
       packedFiles += result.packed.length;
       errors.push(...auditTarball({ label: target.label, manifest: result.manifest, packed: result.packed }));
       const artifactDir = dirname(result.tarball);

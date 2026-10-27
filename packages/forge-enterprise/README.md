@@ -29,8 +29,9 @@
 ## 自包含制品与本地验收
 
 - 构建入口：从仓库根执行 `node scripts/build-enterprise-bundle.mjs [输出目录]`；省略输出目录时使用独立 OS 临时目录，返回最终 `.tgz` 路径。裸源码目录的 `npm pack` 不是本包的发行入口。
-- 源码四成员关系使用 `workspace:*`；构建期只复制各成员 `files` 中声明的实体资源，生成精确版本的 `dependencies` 与标准 `bundledDependencies`，再由 npm 打出最终 tarball。安装端无需另取成员、补 peer、编译或连接源码仓库；不打入 DSH 内核、测试或缓存。构建拒绝软链、未闭合运行时依赖及安装钩子，失败不发布半成品、不改源目录；相同输入的 tarball 摘要可重复。
+- 源码成员关系使用 `workspace:*`；构建期只复制各成员 `files` 中声明的实体资源，生成精确版本的 `dependencies` 与标准 `bundledDependencies`，再由 npm 打出最终 tarball。安装端无需另取成员、补 peer、编译或连接源码仓库；不打入 DSH 内核、测试或缓存。构建拒绝软链、未闭合运行时依赖及安装钩子，失败不发布半成品、不改源目录；相同输入的 tarball 摘要可重复。
 - `forge-sdd` bin 转发成员公开的 `@heluo/forge-sdd/cli`，执行真正的本地/CI 冻结与验证；不向 Cordis 插入 SDD 行，也不增加空 `apply`。
+- `heluo-change` bin 转发 `@heluo/forge-devops/change-cli`，提供本地仿 CLI 演示/显式本机诊断与离线 HTML 简报；不新增 Cordis 挂载行，不冒充 profile IAM/组织开关已接入。见[试用手册](../../docs/operations/change-briefing.md)。
 - 定向验收：`node --test tests/bundle-build.test.mjs tests/bundle-closure.test.mjs tests/bundle-install-rehearsal.test.mjs packages/forge-enterprise/test/bundle-patch.test.mjs`。闭包失败/成功回归与真实最终制品演练分开记账。
 - `node scripts/probe/run-bundle-install-rehearsal.mjs` 使用空 npm cache、`--offline` 和不可达 registry，在干净 scratch 项目安装最终 tarball；分别证明 dump 组合、真实 Cordis/Loader 插件实例化与服务查询、SDD CLI 冻结/验证/篡改拒绝、升级/回退、卸载注册清理及用户标记保留。`DSH_BIN` 选择已有 CLI，`DSH_NODE_MODULES` 可显式选择已有 SDK 的 node_modules 目录；不下载或升级宿主。
 - **2026-10-26 本地证据边界**：已安装宿主只覆盖清单声明的兼容下限；仓库 `.dsh-version` 目标尚未运行，证据 JSON 明确记录实际/目标版本与 `NOT RUN`，不能宣称目标基线通过。凭据使用显式内存夹具，IAM 未配置企业端点；这只验证本地方向的制品/组合生命周期，不代表真实 IAM、OS keychain、企业 registry/官方 manager、Windows 或麒麟业务准入。

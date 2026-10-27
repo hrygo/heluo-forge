@@ -29,7 +29,7 @@ function copyResource(source, target) {
 }
 
 /** Build a self-contained npm tarball using only explicitly declared workspace resources. */
-export function buildEnterpriseBundle({ root = repo, destination, version } = {}) {
+export function buildEnterpriseBundle({ root = repo, destination, version, packageName = '@heluo/forge-enterprise' } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'forge-bundle-build-'));
   const stage = join(work, 'package');
   const output = destination === undefined ? mkdtempSync(join(tmpdir(), 'forge-bundle-artifact-')) : resolve(destination);
@@ -68,7 +68,7 @@ export function buildEnterpriseBundle({ root = repo, destination, version } = {}
       // The terminal never runs source scripts or sees workspace references.
       delete released.scripts;
       delete released.devDependencies;
-      if (name === '@heluo/forge-enterprise' && version !== undefined) released.version = version;
+      if (name === packageName && version !== undefined) released.version = version;
       if (deps.length > 0) {
         released.dependencies = Object.fromEntries(deps.map(([dep]) => [dep, readManifest(sources.get(dep)).version]));
         released.bundledDependencies = deps.map(([dep]) => dep);
@@ -79,7 +79,7 @@ export function buildEnterpriseBundle({ root = repo, destination, version } = {}
       writeFileSync(join(target, 'package.json'), `${JSON.stringify(released, null, 2)}\n`);
       for (const [dep] of deps) visit(dep, join(stage, 'node_modules', dep));
     };
-    visit('@heluo/forge-enterprise', stage);
+    visit(packageName, stage);
     const manifest = readManifest(stage);
     const closureErrors = auditReleaseClosure(stage);
     if (closureErrors.length > 0) fail(closureErrors.join('; '));

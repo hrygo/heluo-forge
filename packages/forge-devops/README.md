@@ -10,16 +10,29 @@
 | 衔接点 | bash 工具、企业策略门禁、凭据注入与审计（均待接口核验） |
 | 条件服务 | [services/devops-mcp](../../services/devops-mcp/README.md)；当前不建设 |
 | 详细设计 | [DESIGN-009](../../docs/design/plugins/forge-devops.md)（草案，已建立） |
-| 实现状态 | 已建立 `package.json`、只读端口、门禁骨架与四个只读工具、19 例离线测试；**企业 CLI 联调未做** |
+| 实现状态 | 已建立清单、只读端口、门禁骨架、四个只读工具、DOP 只读子进程适配器和用户简报 CLI；本地证据见[设计索引](../../docs/design/README.md)；**企业 CLI 联调未做** |
+
+## 用户可见入口
+
+```sh
+pnpm demo:change
+node packages/forge-devops/src/change-cli.mjs demo --out ./change-demo.html
+```
+
+新增 `heluo-change demo` / `view` 端到端只读简报：显式变更号 → 固定 DOP argv → 真实子进程 → 字段/目标校验 → 需求与独立验收/故事/排期 → 终端或自包含 HTML。demo 无网络、无真实凭据；只读实源必须显式选 CLI 与新审计文件，拒绝覆盖、超时/权限/坏 JSON 不重试。命令依据 `oh-my-sdd` 的用户企业实测确认；本方本地仿 CLI 回归不冒充本次企业联调。
+
+该入口是人类直接运行的诊断 CLI，复用 policy 判定与必要审计核心，**不等于已接入当前 DSH profile 的 IAM/角色/组织开关**。导出的 `createDopReader` 仅实现 `change.read`；其他三种读动作没有借此自动开放真实提供方。需求版本/仓库映射未核定时，只读结果仍是 `unknown`，保留已校验 `facts` 供阅读，不作冻结或自动承接依据。
+
+[试用步骤与最小测试输入](../../docs/operations/change-briefing.md)。发行物自包含 policy，不需终端联网解析 workspace 依赖或安装进真实 profile。
 
 ## 骨架内容（已落地）
 
-只做两件事：
+原有端口继续保持两条约束：
 
 1. **限定只读面**：`change.read`、`repository.read`、`issue.read`、`pr.read`（动作标识与[工程工具契约 §3](../../docs/contracts/engineering-tools.md) 同源）。
 2. **把"退出码"与"事实"分开**：适配器只给退出码、没有结构化状态或缺来源版本时，结果降级为 `unknown` 并给出原因，**不报成功**。
 
-宿主接线：只读适配器经服务键 `devopsReader` 注入（仓库内只留离线假适配器）；策略服务是硬依赖，拿不到或没有 admission 入口就不挂载（入口关闭），不提供“无策略只读”降级；挂载时校验策略目录覆盖四个读动作且已开放（空目录/漏映射/未开放一律拒绝挂载，`POLICY_ACTION_UNREGISTERED`）；每次读取经 `policy.executeAction` 走同一门禁与必要审计，策略拒绝时适配器零调用（`POLICY_DENIED`，可见拒绝）；调用方自带 `role` 等参数不进入 admission 身份（不扩权）；卸载移除服务与全部工具注册、无残留。
+宿主接线：只读适配器经服务键 `devopsReader` 注入（真实 DOP reader 由 `./dop-reader` 导出，宿主仍须显式接线；不自挂不明来源）；策略服务是硬依赖，拿不到或没有 admission 入口就不挂载（入口关闭），不提供“无策略只读”降级；挂载时校验策略目录覆盖四个读动作且已开放（空目录/漏映射/未开放一律拒绝挂载，`POLICY_ACTION_UNREGISTERED`）；每次读取经 `policy.executeAction` 走同一门禁与必要审计，策略拒绝时适配器零调用（`POLICY_DENIED`，可见拒绝）；调用方自带 `role` 等参数不进入 admission 身份（不扩权）；卸载移除服务与全部工具注册、无残留。
 
 模型可见面只注册四个只读工具（`forge_devops_change_read` / `forge_devops_repository_read` / `forge_devops_issue_read` / `forge_devops_pr_read`），**没有任何写工具**。它们的参数名刻意用 `target`：策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（2026-10-24 实测的目录缺口）。
 

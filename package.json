@@ -16,6 +16,7 @@
     "test:unit": "node --test",
     "check:tarballs": "node scripts/check-bundle-tarballs.mjs",
     "check:version": "node scripts/dsh-version.mjs check",
-    "build:enterprise": "node scripts/build-enterprise-bundle.mjs"
+    "build:enterprise": "node scripts/build-enterprise-bundle.mjs",
+    "demo:change": "node packages/forge-devops/src/change-cli.mjs demo"
   }
 }

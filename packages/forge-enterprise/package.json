@@ -14,16 +14,19 @@
     "@heluo/forge-credentials-keychain": "workspace:*",
     "@heluo/forge-policy": "workspace:*",
     "@heluo/forge-iam": "workspace:*",
-    "@heluo/forge-sdd": "workspace:*"
+    "@heluo/forge-sdd": "workspace:*",
+    "@heluo/forge-devops": "workspace:*"
   },
   "bundledDependencies": [
     "@heluo/forge-credentials-keychain",
     "@heluo/forge-policy",
     "@heluo/forge-iam",
-    "@heluo/forge-sdd"
+    "@heluo/forge-sdd",
+    "@heluo/forge-devops"
   ],
   "bin": {
-    "forge-sdd": "./src/sdd-cli.mjs"
+    "forge-sdd": "./src/sdd-cli.mjs",
+    "heluo-change": "./src/change-cli.mjs"
   },
   "main": "./src/index.mjs",
   "exports": {

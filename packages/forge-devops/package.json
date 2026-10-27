@@ -10,10 +10,17 @@
   "scripts": {
     "test": "node --test"
   },
+  "dependencies": {
+    "@heluo/forge-policy": "workspace:*"
+  },
+  "bundledDependencies": ["@heluo/forge-policy"],
+  "bin": { "heluo-change": "./src/change-cli.mjs" },
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
-    "./read": "./src/read.mjs"
+    "./read": "./src/read.mjs",
+    "./dop-reader": "./src/change-briefing.mjs",
+    "./change-cli": "./src/change-cli.mjs"
   },
   "files": [
     "src",
