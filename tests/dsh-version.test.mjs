@@ -287,6 +287,24 @@ test('CLI check：扫描面覆盖 deploy/、根清单以外的扩展名与 v 前
   });
 });
 
+test('CLI check/report：排除 Paperclip 本地工作副本，仍检查相近名称目录与 CI 配置', () => {
+  const pin = `DSH_VERSION="${BASELINE}"\n`;
+  withCorpus({ files: { '.paperclip/worktrees/demo/packages/demo/pin.mjs': pin } }, (root) => {
+    const result = runCli(root, ['check']);
+    assert.equal(result.status, 0, result.stderr);
+    const report = runCli(root, ['report']);
+    assert.equal(report.status, 0, report.stderr);
+    assert.doesNotMatch(report.stdout, /\.paperclip\//);
+  });
+  for (const file of ['.paperclip-other/pin.mjs', '.github/workflows/pin.yml', 'packages/demo/src/pin.mjs']) {
+    withCorpus({ files: { [file]: pin } }, (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1, `${file} 仍须检查`);
+      assert.ok(result.stderr.includes(file), result.stderr);
+    });
+  }
+});
+
 test('CLI check：清单只放行 engines.dsh 的值，下限断言会拦跨基础版本与高于基线', () => {
   const below = previousCandidate(BASELINE);
   const base = BASELINE.replace(/^v/i, '').split('-')[0];

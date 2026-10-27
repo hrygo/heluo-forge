@@ -3,6 +3,8 @@
  * Cordis/Loader activation -> upgrade/rollback/unload/uninstall. No user profile.
  * DSH_BIN selects an existing CLI; DSH_NODE_MODULES may explicitly select its
  * already installed SDK modules. No downloads, symlinks, servers or OS keychain.
+ * The measured macOS desktop launcher uses its installed Electron runtime to
+ * read app.asar; ordinary CLI installations keep their original Node runtime.
  * The memory credential backend is an explicit LOCAL fixture, not enterprise IAM evidence.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -10,13 +12,25 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildEnterpriseBundle } from '../build-enterprise-bundle.mjs';
 import { auditReleaseClosure, npmExecutable, parsePatchLayer } from '../lib/bundle-rules.mjs';
+import { resolveDshProbeHost } from '../lib/dsh-probe-runtime.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const dsh = process.env.DSH_BIN ?? 'dsh';
+const hostLocation = resolveDshProbeHost({ dsh, modules: process.env.DSH_NODE_MODULES });
+// Vanilla Node cannot import modules inside ASAR. Re-enter once using this
+// installation's own Electron, preserving argv, exit status and the Node/npm PATH.
+if (hostLocation.runtime !== null && realpathSync(process.execPath) !== hostLocation.runtime) {
+  const child = spawnSync(hostLocation.runtime, ['--expose-internals', fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    stdio: 'inherit',
+  });
+  if (child.error) console.error(`rehearsal: desktop runtime failed: ${child.error.message}`);
+  process.exit(child.status ?? 1);
+}
 const profile = process.env.DSH_HOST_PROBE_PROFILE ?? 'sdk';
 const officialRows = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek'];
 const dir = mkdtempSync(join(tmpdir(), 'forge-install-rehearsal-'));
@@ -35,13 +49,6 @@ const bundleDir = join(project, 'node_modules', '@heluo', 'forge-enterprise');
 const intact = () => readFileSync(join(project, 'user-file.txt'), 'utf8') === 'user-workspace-marker\n' && readFileSync(join(project, 'user-notes', 'notes.md'), 'utf8') === '# 用户笔记\n';
 const statusAtStart = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
 const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
-
-function hostRequire() {
-  if (process.env.DSH_NODE_MODULES) return createRequire(pathToFileURL(join(resolve(process.env.DSH_NODE_MODULES), '__probe__.cjs')));
-  const command = isAbsolute(dsh) ? dsh : process.env.PATH.split(delimiter).map((part) => join(part, dsh)).find((path) => existsSync(path));
-  if (command === undefined) throw new Error('DSH executable not found; supply DSH_BIN or DSH_NODE_MODULES');
-  return createRequire(pathToFileURL(realpathSync(command)));
-}
 
 async function activateInstalled(label, host) {
   const load = (name) => import(pathToFileURL(host.resolve(name)).href);
@@ -133,7 +140,8 @@ try {
   evidence.env.sourceHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
   evidence.env.sourceState = 'uncommitted shared implementation; git HEAD is not a release commit';
   evidence.env.targetVersion = readFileSync(join(repo, '.dsh-version'), 'utf8').trim();
-  const host = hostRequire();
+  const host = createRequire(pathToFileURL(hostLocation.anchor));
+  evidence.env.sdkLayout = hostLocation.kind;
   const toolsManifest = JSON.parse(readFileSync(host.resolve('@deepseek-ai/dsh-tools/package.json'), 'utf8'));
   evidence.env.sdkVersion = toolsManifest.version;
   evidence.env.targetVerified = toolsManifest.version === evidence.env.targetVersion;
