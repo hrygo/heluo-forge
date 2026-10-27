@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-TOOLS-001 |
 | 文档名称 | 企业工程工具最小契约 |
-| 版本 | V0.3.0 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -22,6 +22,8 @@
 ## 1. 结论
 
 2026-10-27 查询切片依据补充：用户确认 `oh-my-sdd` 用法已在企业实测；本方固定核对该项目提交 `3b95d536230fde36f867b3b1917d6569ae0d918c` 的 `hooks/session-start.js`、`skills/sdd-doc/SKILL.md`、`scripts/dop`。采用显式 `dop change view <ID> -j`，ID 为 `^[A-Z]{2,6}\\d+$`，不用旧文候选命令名或猜测的 token 环境变量。JSON 使用 `id/title/status/description/acceptance_criteria:string[]`；可选 `sub_systems:[{code,name}]`、`user_stories:[{code,title,release_info:{release_num,release_name}|null}]`，排期取故事中首个非空 `release_num`。`id` 必须等于显式请求目标；必填字段缺失/类型错即拒绝，不用自由文本兜底。子系统/故事区分缺失、null 与空数组。源契约没有核定需求版本/仓库映射；未知别名不得充当权威字段，也不推导链接、仓库或需求版本。
+
+同日用户补充确认：企业内网 Gitee CLI 的语法与功能完全兼容 `gh`，后续直接采用标准 gh 用法，不再索取命令兼容性证明。本轮明确授权了两个变更及其测试仓库映射；该映射由用户输入提供，不伪装成 DOP JSON 的原生字段。实际本机演练将 DOP mock 与真实 GitHub 读取分别标注；`gh repo view`、指定 `gh issue view` 和平台返回的同仓关闭 PR 构成只读追溯。仓库链接须与显式授权的主机/owner/repository 一致，不因返回元数据而自动切换目标。Issue/PR 历史状态不构成逐项业务验收结论，DOP 与 Issue 的验收声明也不静默合并。
 
 只读结果可以附加 `facts`，承载已校验的上述业务事实，仅返回到获准会话/用户显式报告，不进入审计/指标。缺少 `source_revision` 时仍保持 `status: unknown` 和原因码，保留可读事实不等于允许冻结、承接或覆盖。命令用法为用户提供的企业依据；完整字段样例来自该源项目校准 mock，本方仿 CLI 回归不证明本次企业往返。当前本机诊断入口复用 policy 判定核心与必要审计，但不冒充已安装 DSH profile 的角色/委托/组织开关。
 
