@@ -27,6 +27,8 @@ export const DEFAULT_CONFIG = Object.freeze({});
 
 export { assertReadRequest, DevopsReadError, normalizeReadResult, READ_ACTIONS, READ_REASONS, READ_STATUSES } from './read.mjs';
 export { buildDevopsTools, READ_TOOLS } from './tools.mjs';
+export { GH_JSON_FIELDS, GhProcessError, runGh } from './gh-process.mjs';
+export { createGhReader, createHostReader, HostReaderError, parseGhTarget } from './host-readers.mjs';
 
 export function validateConfig(input = {}) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
