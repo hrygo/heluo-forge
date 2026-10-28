@@ -9,6 +9,7 @@ import {
   createAttestation,
   formatTrailer,
   keyIdFromPublicKey,
+  normalizeMessage,
   parseTrailer,
   rulesDigest,
   sha256Hex,
@@ -118,6 +119,10 @@ test('attestation signature is bound to tree and message', () => {
   assert.equal(parsed.fields.message, sha256Hex(body));
   assert.equal(stripTrailer(formatTrailer(body, attestation.fields)), body);
   assert.notEqual(parsed.fields.sig, '');
+});
+
+test('normalizeMessage folds CRLF before hashing', () => {
+  assert.equal(normalizeMessage('subject\r\n\r\nbody\r\n'), 'subject\n\nbody\n');
 });
 
 test('stripTrailer does not truncate body content when the marker is embedded', () => {
