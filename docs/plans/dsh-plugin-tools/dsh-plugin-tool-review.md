@@ -27,5 +27,7 @@
 - 图片：Markdown 无图片引用；Excel 无图片。
 - 表格：主方案 63 个表块、终版 18 个表块，列数一致；Excel 5 个工作表。
 - 文档检查：`node scripts/check-docs.mjs` 通过；`node scripts/check-repo.mjs` 通过；`git diff --check` 通过。
-- PR：`#101`，10 个文件，CI `verify` 通过。
-- 测试：`node --test` 812 项，803 通过、9 失败；失败集中在钥匙串实机探针、bundle 构建/回放和 host probe，均为本机沙箱/构建环境限制，与本次纯文档改动无关。`pnpm check` 因 lockfile 写入权限失败，改用直接脚本检查。
+- PR：`#101`，18 个文件，CI `verify` 通过。
+- 测试：`node --test` 814 项，805 通过、9 失败；失败集中在钥匙串实机探针、bundle 构建/回放和 host probe，均为本机沙箱/构建环境限制，与本次文档及配置守卫改动无关；`packages/forge-iam/test` 218 项全部通过。`pnpm check` 因 lockfile 写入权限失败，改用直接脚本检查。
+
+> 2026-10-28 一致性复核补记（不新增审查轮次）：复核修正后的文档，发现 review 自身仍写 10 files/812 tests、solution 仍写“改 authMode/关闭 PKCE”、P0-6 被当作 1 周桌面工作。已分别改为 18 files/814 tests、“实现 authMode（当前配置校验拒绝）/PKCE 不可关闭”、P0 关键路径门禁（G0 只验收计划，30 人试点前关闭）。

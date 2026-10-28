@@ -30,7 +30,7 @@
 
 ### 1.2　终版不承诺
 
-终版不承诺“三重交权全量落地”。三重交权需要业务系统实时权限数据；取不到时，最终权限退化为“智能体能力上限 ∩ 策略范围”，审计标注 `degraded=true`。终版不承诺“五分钟停用”在所有网关节点成立；实测超过五分钟，就把该能力标为未达标，限制高风险用途，而不是改口径。终版不承诺“AIGS 生产全覆盖”；AIGS 只覆盖工具调用，人的登录、模型 Key、DevOps/Gitee 仍由各自服务端负责。终版不承诺“PKCE 已支持”；只有 IAM 书面确认并通过回归，才把 `authMode=pkce` 打开。 终版也不把共享 `client_secret` 当长期形态：2027-06 前必须在“公共客户端/PKCE、per-device 凭据、或书面风险接受”之间作出决定；若仍未决定，终版只能标注为过渡态，不能称为最终身份架构。
+终版不承诺“三重交权全量落地”。三重交权需要业务系统实时权限数据；取不到时，最终权限退化为“智能体能力上限 ∩ 策略范围”，审计标注 `degraded=true`。终版不承诺“五分钟停用”在所有网关节点成立；实测超过五分钟，就把该能力标为未达标，限制高风险用途，而不是改口径。终版不承诺“AIGS 生产全覆盖”；AIGS 只覆盖工具调用，人的登录、模型 Key、DevOps/Gitee 仍由各自服务端负责。终版不承诺“PKCE 已支持”；只有 IAM 书面确认并通过回归，才把 `authMode=pkce`（当前未实现）打开。 终版也不把共享 `client_secret` 当长期形态：2027-06 前必须在“公共客户端/PKCE、per-device 凭据、或书面风险接受”之间作出决定；若仍未决定，终版只能标注为过渡态，不能称为最终身份架构。
 
 ## 2　终版能力矩阵
 
@@ -87,7 +87,7 @@
 
 | 演进缝 | V1 实现 | 2027 实现 | 兼容规则 |
 | --- | --- | --- | --- |
-| 认证模式 | confidential | confidential / pkce / aigs | 配置项 authMode；同一回调路径 |
+| 认证模式 | confidential | confidential / pkce / aigs | `authMode` 为 V1 目标接口，当前未实现且配置校验拒绝；同一回调路径 |
 | 令牌来源 | staticKey | key+token / delegated | TokenSource 接口；不改变调用方 |
 | 策略 | 本地 policy | 本地 + AIGS PDP | decision 结构 allow/deny/approval + obligations |
 | 工具描述 | risk/resource/action | 同左 + agentScope | 字段只增不减；旧字段保留 |

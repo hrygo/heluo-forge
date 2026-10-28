@@ -144,7 +144,7 @@
 
 | 演进缝 | V1 实现 | 2027 实现 | 兼容规则 |
 | --- | --- | --- | --- |
-| 认证模式 | confidential | confidential / pkce / aigs | 配置项 authMode；同一回调路径 |
+| 认证模式 | confidential | confidential / pkce / aigs | `authMode` 为 V1 目标接口，当前未实现且配置校验拒绝；同一回调路径 |
 | 令牌来源 | staticKey | key+token / delegated | TokenSource 接口；不改变调用方 |
 | 策略 | 本地 policy | 本地 + AIGS PDP | decision 结构 allow/deny/approval + obligations |
 | 工具描述 | risk/resource/action | 同左 + agentScope | 字段只增不减；旧字段保留 |
@@ -162,7 +162,7 @@
 | 组件 | 现在有什么 | P0（2026Q4） | P1/P2 | 明确不做 |
 | --- | --- | --- | --- | --- |
 | forge-enterprise | 组合包、官方行禁用、装升退卸已实测 | 锁定版本；加 IAM/策略/凭据三插件与 SDD CLI | 随 IAM 6.3 更新配置 | 不改 DSH 核心 |
-| forge-iam | Host+Client 骨架、OIDC mock、账户页、网关凭据状态 | 改 authMode=confidential；钥匙串；登录/刷新/登出 | P1 接 6.3 的 claims/RP 登出；P2 不接 AIGS | 不宣称 PKCE；不代建网关 Key |
+| forge-iam | Host+Client 骨架、OIDC mock、账户页、网关凭据状态 | 实现 authMode=confidential（当前配置校验拒绝，不能仅改配置）；钥匙串；登录/刷新/登出 | P1 接 6.3 的 claims/RP 登出；P2 不接 AIGS | 不宣称 PKCE；不代建网关 Key |
 | 网关接入 | DSH 原生 llm-pi-ai + 凭据 seam；无独立 gateway 包 | Key 入钥匙串；UA；IP；privacy_mode；模型白名单 | P1 令牌+Key（若 AI 网关 支持）；P2 MCP 走 AIGS | 不新建重复的模型 provider；不做共享 Key |
 | forge-policy | guard、pre-execute、硬拒绝、审计已实测 | 启用 $DSH_HOME 硬拒绝、C3 确认、工具白名单 | P1 审批台账；P2 接 AIGS PDP | 不替代服务端授权 |
 | forge-devops | 只读四工具、门禁骨架、27 例离线测试 | 流水线/日志/构建只读 | P1 受控写：评论/重跑 | 不自动合并/发布 |
@@ -277,7 +277,7 @@ P3 把 P0—P2 的能力收敛成可运营的终版：800 人、双端、读写�
 
 终版不承诺“三重交权全量落地”。三重交权需要业务系统的实时权限数据；如果取不到，最终权限退化为“智能体能力上限 ∩ 策略范围”，并在审计中标注 `degraded=true`。终版不承诺“五分钟停用”在所有网关节点成立；如果实测超过五分钟，就把该能力标为未达标，限制高风险用途，而不是改口径。
 
-终版不承诺“AIGS 生产全覆盖”。AIGS 只覆盖工具调用；人的登录、模型 Key、DevOps/Gitee 仍由 IAM/网关/各自服务端负责。终版不承诺“PKCE 已支持”；只有 IAM 书面确认并通过回归，才把 `authMode=pkce` 打开。
+终版不承诺“AIGS 生产全覆盖”。AIGS 只覆盖工具调用；人的登录、模型 Key、DevOps/Gitee 仍由 IAM/网关/各自服务端负责。终版不承诺“PKCE 已支持”；只有 IAM 书面确认并通过回归，才把 `authMode=pkce`（当前未实现）打开。
 
 ### 6.5　终版的可运营性
 
@@ -332,7 +332,7 @@ P3 把 P0—P2 的能力收敛成可运营的终版：800 人、双端、读写�
 
 | 编号 | 原主张 | 证据 | 结论 | 修订 |
 | --- | --- | --- | --- | --- |
-| F01 | V1 用授权码 + PKCE | 厂商 08：6.0.3/6.3 均不支持；内部 §08 未答 | 不成立 | 改机密客户端；PKCE 留开关 |
+| F01 | V1 用授权码 + PKCE | 厂商 08：6.0.3/6.3 均不支持；内部 §08 未答 | 不成立 | 改机密客户端；PKCE 留开关（代码待实现） |
 | F02 | 网关校验当前人 | AI 网关 2.2.1 只有 key-auth | 不成立 | 改 Key-only；UA/IP 只降误用 |
 | F03 | AIGS 承接 IAM SCIM | IAM 19 无出站；AIGS 需上游推送 | 不成立 | AIGS 只做工具；SCIM 单独设门 |
 | F04 | 五分钟撤权已满足 | 无书面证据；网关凭据缓存约 300s | 未证实 | 改为实测项；不写已满足 |
@@ -378,7 +378,7 @@ P3 把 P0—P2 的能力收敛成可运营的终版：800 人、双端、读写�
 
 | 项 | 上一版（2026-10-27 口头方案） | 本版 |
 | --- | --- | --- |
-| 登录 | 机密客户端 + 钥匙串 | 保留；增加按部门多 client、authMode 开关、6.3 回归门 |
+| 登录 | 机密客户端 + 钥匙串 | 保留；增加按部门多 client、authMode 开关（目标接口，当前未实现）、6.3 回归门 |
 | 网关 | 个人 Key + UA/IP | 保留；明确不建 gateway 包，改为配置；令牌+Key 设条件门 |
 | 工具 | 只读 | 保留；增加 L0—L3 分级与 P1 审批台账 |
 | AIGS | Q2 POC | 保留；增加 SCIM/三重交权的降级路径与停止规则 |
@@ -412,7 +412,7 @@ P3 把 P0—P2 的能力收敛成可运营的终版：800 人、双端、读写�
 - 冻结 DSH 0.2.1-rc.3 与插件清单；生成企业组合包；锁定 engines 与依赖。
 - 注册部门级 IAM 机密客户端；确认回环/动态端口；client_secret 入钥匙串；AT TTL 设 300—900 秒。
 - 开通 30 个 AI 网关个人 Key；UA、IP、privacy_mode、模型白名单全部配置。
-- 改 `forge-iam` 的 `authMode=confidential`；保留 PKCE 代码但关闭；完成登录/刷新/登出。
+- 实现 `forge-iam` 的 `authMode=confidential`（当前配置校验拒绝，不能仅改配置）；PKCE 代码保留但不可关闭；完成登录/刷新/登出。
 - 启用 `forge-policy` 硬拒绝、C3 确认、工具白名单；`forge-devops` 只读上线。
 - 30 人试点两周；记录五项指标；做一次回滚演练。
 
@@ -426,7 +426,7 @@ P3 把 P0—P2 的能力收敛成可运营的终版：800 人、双端、读写�
 ### 10.3　61—90 天
 
 - IAM 6.3 升级；跑 claims/RP 登出/SCIM/TTL/强制下线五项回归。
-- 按回归结果开/关 `authMode=pkce`、`logout=rp`、`scim=on`；不通过则保持 V1 兜底。
+- 按回归结果实现/启用 `authMode=pkce`（当前未实现）、`logout=rp`、`scim=on`；不通过则保持 V1 兜底。
 - 网关令牌+Key 若可用，做 A/B 对比；不可用则记录为未达标，不阻塞 800。
 - 形成 2027 终版差距清单；进入 P1 扩量与 P2 AIGS 准备。
 
