@@ -1,0 +1,48 @@
+name: sensitive-attestation
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout base revision only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          # Base-only checkout; the verifier reads git objects and never executes PR code.
+          persist-credentials: true
+          fetch-depth: 0
+          show-progress: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Verify local attestations
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SENSITIVE_SCAN_ENFORCE: ${{ vars.SENSITIVE_SCAN_ENFORCE }}
+        run: |
+          if [ "${SENSITIVE_SCAN_ENFORCE}" != "true" ]; then
+            echo "sensitive-attestation is not enabled; set repository variable SENSITIVE_SCAN_ENFORCE=true after enrolling keys and allowlisting rules"
+            exit 0
+          fi
+          git fetch --no-tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/head"
+          HEAD_SHA="$(git rev-parse refs/remotes/pull/head)"
+          node scripts/sensitive-scan/verify.mjs --base "${BASE_SHA}" --head "${HEAD_SHA}"
+        # SENSITIVE_SCAN_ENFORCE is a repository variable, not a secret.
+        # An absent variable keeps this check non-blocking during bootstrap.
+        # Once enabled, make "sensitive-attestation / verify" a required check
+        # and require linear history; do not enable squash or merge commits.

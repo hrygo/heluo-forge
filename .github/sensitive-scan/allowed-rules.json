@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "rules": [],
+  "scanners": [
+    "heluo-sensitive-scan@1.0.0"
+  ]
+}
