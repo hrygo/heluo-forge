@@ -161,11 +161,25 @@ export function checkRepo(root) {
     }
   }
 
+  const sensitiveAttestationWorkflow = '.github/workflows/sensitive-attestation.yml';
   for (const file of workflowFiles(root)) {
     counts.workflows += 1;
     const name = posix(relative(root, file));
     const text = readFileSync(file, 'utf8');
-    if (text.includes('pull_request_target')) errors.push(`repo: ${name} must not use pull_request_target`);
+    if (text.includes('pull_request_target') && name !== sensitiveAttestationWorkflow) {
+      errors.push(`repo: ${name} must not use pull_request_target`);
+    }
+    if (name === sensitiveAttestationWorkflow && text.includes('pull_request_target')) {
+      // This exception is intentionally narrow: base-only checkout, no PR code
+      // checkout/execution, no secrets. The verifier reads git objects only.
+      if (!/ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}/.test(text)) {
+        errors.push(`repo: ${name} must checkout the pull_request base sha`);
+      }
+      if (/ref:\s*\$\{\{\s*github\.event\.pull_request\.head\.sha/.test(text)) {
+        errors.push(`repo: ${name} must not checkout the pull_request head`);
+      }
+      if (/secrets\./.test(text)) errors.push(`repo: ${name} must not read secrets`);
+    }
     if (!/^permissions:\s*$/m.test(text) || !/^\s+contents:\s*read\s*$/m.test(text)) {
       errors.push(`repo: ${name} must declare permissions with contents: read`);
     }

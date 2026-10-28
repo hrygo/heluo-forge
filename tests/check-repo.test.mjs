@@ -150,6 +150,42 @@ test('pull_request_target is rejected', () => {
   }
 });
 
+test('sensitive-attestation may use base-only pull_request_target, but not PR head checkout', () => {
+  const root = fixture();
+  const workflow = `name: sensitive-attestation
+on:
+  pull_request_target:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: \${{ github.event.pull_request.base.sha }}
+      - run: node scripts/sensitive-scan/verify.mjs
+`;
+  try {
+    write(root, '.github/workflows/sensitive-attestation.yml', workflow);
+    const accepted = checkRepo(root);
+    assert.deepEqual(accepted.errors, []);
+
+    write(
+      root,
+      '.github/workflows/sensitive-attestation.yml',
+      workflow.replace('base.sha', 'head.sha'),
+    );
+    const rejected = checkRepo(root);
+    assert.ok(
+      rejected.errors.some((error) => error.includes('must not checkout the pull_request head')),
+      rejected.errors.join('\n'),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('workflow without read-only permissions is rejected', () => {
   const root = fixture();
   try {
