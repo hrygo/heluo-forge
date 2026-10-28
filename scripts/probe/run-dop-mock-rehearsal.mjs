@@ -78,7 +78,7 @@ export async function runRehearsal(options, dependencies = {}) {
       for (const ref of issue.closedByPullRequestsReferences) {
         assert.ok(Number.isSafeInteger(ref.number) && ref.number > 0, 'INVALID_PR_NUMBER');
         assert.equal(ref.url, `${repository.url}/pull/${ref.number}`, 'CROSS_REPOSITORY_PR');
-        const pr = await readGh('pr.read', `${options.repo}#${ref.number}`, ['pr', 'view', String(ref.number), '--repo', options.repo, '--json', 'number,title,state,url,headRefOid,baseRefName,mergedAt']);
+        const pr = await readGh('pr.read', `${options.repo}#${ref.number}`, ['pr', 'view', String(ref.number), '--repo', options.repo, '--json', 'number,title,state,url,headRefOid,baseRefName,mergedAt,commits']);
         assert.equal(pr.url, ref.url, 'PR_REPOSITORY_MISMATCH');
         assert.equal(pr.number, ref.number, 'PR_MISMATCH');
         assert.ok(typeof pr.headRefOid === 'string' && /^[a-f0-9]{40,64}$/u.test(pr.headRefOid), 'PR_REVISION_MISSING');
