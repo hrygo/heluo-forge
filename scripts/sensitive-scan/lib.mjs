@@ -59,7 +59,14 @@ export function readJsonFromGit(ref, path, label = path) {
 }
 
 export function normalizeMessage(message) {
-  return `${String(message).replace(/[ \t]+$/gm, '').replace(/\s+$/u, '')}\n`;
+  return `${String(message)
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\s+$/u, '')}\n`;
+}
+
+function messageLines(message) {
+  return String(message).replace(/\r\n?/g, '\n').split('\n');
 }
 
 export function cleanMessage(message) {
@@ -72,7 +79,7 @@ export function cleanMessage(message) {
 }
 
 export function stripTrailer(message) {
-  const lines = String(message).split('\n');
+  const lines = messageLines(message);
   const index = lines.findLastIndex((line) => line === TRAILER_MARKER);
   if (index === -1) return normalizeMessage(message);
   try {
@@ -84,7 +91,7 @@ export function stripTrailer(message) {
 }
 
 export function parseTrailer(message) {
-  const lines = String(message).split('\n');
+  const lines = messageLines(message);
   const index = lines.findLastIndex((line) => line === TRAILER_MARKER);
   if (index === -1) return null;
 

@@ -31,7 +31,9 @@ not the final hardware-backed design.
 
    The private key is written outside the repository, under
    `~/.config/heluo-forge/sensitive-scan/device-key.pem` by default, with mode
-   `0600`. The command prints a public registry entry.
+   `0600` on POSIX. The command prints a public registry entry. On Windows the
+   POSIX mode check is skipped because Windows uses ACLs; keep the key in the
+   user profile and restrict the file ACL to the current user.
 
 2. Put the local rules file outside the repository, for example:
 
@@ -131,8 +133,9 @@ stronger protection; the repository workflow is the reference implementation.
 
 ## Limitations
 
-- The initial key is a 0600 file; production should move it to an OS keychain,
-  TPM or secure enclave with non-exportable keys.
+- The initial key is a 0600 file on POSIX; Windows ACL enforcement is not
+  implemented by this bootstrap tool. Production should move it to an OS
+  keychain, TPM or secure enclave with non-exportable keys.
 - A compromised developer account can sign a false statement. Hardware-backed
   keys and device compliance reduce, but do not eliminate, this risk.
 - Merge commits and squash merges are rejected. Use rebase merge with linear

@@ -4,9 +4,17 @@ import { join, resolve } from 'node:path';
 import { gitOutput, repoRoot } from './lib.mjs';
 
 const MARKER = '# managed by scripts/sensitive-scan/install-hook.mjs';
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+// Pin the Node executable used at install time. On Windows this avoids
+// depending on how Git Bash inherits PATH; the path is converted to MSYS form.
+const NODE = shellQuote(process.execPath.replace(/\\/g, '/'));
 const SHIM = `#!/bin/sh
 ${MARKER}
-exec node "$(git rev-parse --show-toplevel)/scripts/sensitive-scan/commit-msg.mjs" "$1"
+exec ${NODE} "$(git rev-parse --show-toplevel)/scripts/sensitive-scan/commit-msg.mjs" "$1"
 `;
 
 try {
