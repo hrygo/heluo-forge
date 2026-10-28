@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.10.16 |
+| 版本 | V0.11.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -39,7 +39,9 @@
 
 ### 2.1 跨模块设计
 
-网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V0.3.0 评审稿；A/B 候选均待核验，不是运行时二选一回落）。
+网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V0.4.0 评审稿；A/B 候选均待核验，不是运行时二选一回落）。
+
+DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识（UA）方案设计](client-identification.md)（CORP-DSH-DESIGN-015，V0.2.0 草案；需求方决定使用 DSH 默认 UA，由网关按关键字匹配，不改写 UA；候选关键字、网关能力和代理链路待确认）。
 
 市场的社区/官方源码调研与选型依据见[企业插件市场调研与落地建议](<../architecture/plugin-market-research.md>)；Gitee 侧能力澄清见[专题问询函](<../collaboration/gitee-market-clarification.md>)。原研究为历史证据，来源方向由 [ADR-11](<../architecture/plugin-registry-source-decision.md>)，轻量索引模式由 ADR-13 替代；契约与真实接入仍需分别验证；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。
 
@@ -60,6 +62,7 @@
 | [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；10 个源文件 | 2026-10-26 `node --test packages/forge-policy/test/*.test.mjs` 141 例通过、无跳过；10 源文件原生覆盖率（行/分支/函数）96.01%/90.70%/94.44%；必要审计另有 65 例聚焦测试及 rc.2 实际组件独立复核 6 项通过；目标 rc.3 尚未复跑（D1 写动作登记负测：12 条登记动作默认全部被拒、执行体零调用；批准台账负测：`enabled` 的写/确认动作没有有效台账条目就拒绝挂载、过期条目不足以开放、台账动作不匹配不算批准、只读不受约束，见设计 §5.1.2）；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。模型门禁探针（`scripts/probe/model-guard-probe.mjs`）已实测**模型自决调用不会绕开门禁**：`unregistered-action`/`action-disabled`/`target-required` 三种模式各以会话记录中的 `tool/call`+`tool/result` 为据、副作用为零，并以不挂策略的正向对照证明模型确实会调用；同时暴露目录只认调用参数 `target`、真实工具（`bash` 的 `command`、`fs` 的 `path`）无法放行的缺口（见设计 §9.2.2）。沙箱叠加顺序探针（`scripts/probe/sandbox-order-probe.mjs`）已实测**策略门禁先于沙箱执行器判定**（策略拒绝归因不带沙箱信号、目标在沙箱允许区内也不产生副作用；越界写由操作系统级拒绝），见设计 §9.2.3。委托路径面（`delegate` 模式：父模型调用 `subagent`、子 Agent 的 9 次 bash 调用全部被拦、零副作用）亦已实测，**委托不能绕开门禁**。**未完成/未测**：默认企业工具自动绑定、运行时批准范围复验、可信 principal/真实会话恢复与分叉承接仍须单独整改验收；企业环境、双端实机及目标 rc.3 未验，不以纯函数或旧探针泛化 |
 | [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业组合 bundle：官方四行禁用补丁、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、角色配置恢复、自包含构建与三插件挂载 + SDD CLI 转发；5 个源文件 | `node --test packages/forge-enterprise/test/*.test.mjs` 27 例通过（2026-10-26 复测）；`tests/bundle-build`/`bundle-closure` 51 例通过，自包含构建 + 安装/升级/回退/卸载演练通过（2026-10-26）；真机安装/升级/回滚/卸载与残留、四层补丁层序与 `--from-default-profile` 已实测（任务 `20261024T023419Z-dsh-install-c8c2`、`20261024T025338Z-dsh-profile-replace-eb4e`）。四行禁用后的**组合层完整性**已实测（`scripts/probe/four-row-blanking-probe.mjs`：`web` 上四行均落 `disabled: true`，基线 58 个界面/设置/模型选择相关行全部保留且未禁用、无激活告警；设计 §5.2.1）。**未验**：界面功能（设置页/模型选择真的可用）与角色 preset 粒度；`desktop` profile 在本机不可 dump（应用独占管理），按 NOT RUN 记账 |
 | [forge-sdd](../../packages/forge-sdd/README.md) | SDD 规则集与本地前置校验：规则版本、结果归因、与 CI 同一规则集；4 个源文件；交付版本须与测试版本一致，阶段交付分别具备规格与实现，产物以原始字节校验 | 2026-10-26 `node --test packages/forge-sdd/test/*.test.mjs` 27 例通过，无跳过；同组 Node 原生覆盖率（行/分支/函数）99.53%/93.06%/100%；CLI 与库的拒绝结论一致；**未联调**企业 CI、未认证真实测试来源，本地结论不替代 CI 权威结论；`currentRevision` 仍为可选调用者输入 |
+| [DSH 客户端标识](client-identification.md) | 使用宿主默认 UA，由网关匹配关键字；未实现网关规则，也不通过插件改写 UA | 2026-10-28 在本机 DSH `0.2.1-rc.3` 用 [`issue100-user-agent-probe.mjs`](../../scripts/probe/issue100-user-agent-probe.mjs) 测试 pi-ai 的 OpenAI-compatible 流式请求：宿主覆盖配置中的 UA，默认 UA 与可选合成诊断头到达本地模拟服务；探针退出成功只表示取证成功，不代表网关验收。真实网关及代理、Windows/麒麟、其他协议和 Coding Plan 均未验 |
 | 其余四包与 DevOps MCP | `forge-devops` 的"只读查询 + 门禁骨架"**已落地**（D4，2026-10-24）：清单、只读端口、门禁骨架、四个只读工具（参数用门禁认识的 `target`）、27 例离线测试（2026-10-26：空目录/漏映射/未开放拒绝挂载，读取走同一 `executeAction` admission，拒绝时适配器零调用）、**宿主探针两模式通过**（`with-reader`：模型自决调用经门禁到达适配器恰好一次；`no-reader`：可见地报 `NO_READER`；并借此发现并修复"缺 `inject` 导致工具静默不注册/整项不激活"），**企业 CLI 联调未做**，写动作全部关闭；`forge-brand` / `forge-gateway` / `forge-gitee` 与 `services/devops-mcp` 仍为规划入口，无清单、源码或测试（准入手册见[能力面设计 §6.1](plugins/forge-devops-lifecycle.md)） | 对应设计中的测试矩阵为目标，不是执行结果 |
 
 五条跨模块冲突（policy fail-open、无 policy 降只读、审计坏是否影响执行、SDD 双路径、历史市场行）的定位与结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；**五条已由责任方 2026-10-24 逐条确认**——确认的是组织做法，不等于企业能力已联调（C4 的 CI 侧、C5 的原生索引端仍待接入证据），也不放开任何受控写。
