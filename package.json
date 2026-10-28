@@ -16,6 +16,10 @@
     "test:unit": "node --test",
     "check:tarballs": "node scripts/check-bundle-tarballs.mjs",
     "check:version": "node scripts/dsh-version.mjs check",
+    "sensitive:scan": "node scripts/sensitive-scan/scan.mjs",
+    "sensitive:install": "node scripts/sensitive-scan/install-hook.mjs",
+    "sensitive:keygen": "node scripts/sensitive-scan/keygen.mjs",
+    "sensitive:verify": "node scripts/sensitive-scan/verify.mjs",
     "build:enterprise": "node scripts/build-enterprise-bundle.mjs"
   }
 }
