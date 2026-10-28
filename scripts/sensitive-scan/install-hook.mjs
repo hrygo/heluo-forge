@@ -9,12 +9,15 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-// Pin the Node executable used at install time. On Windows this avoids
-// depending on how Git Bash inherits PATH; the path is converted to MSYS form.
-const NODE = shellQuote(process.execPath.replace(/\\/g, '/'));
+// Prefer the Node on PATH so upgrades keep working; fall back to the exact
+// executable used at install time (useful for Git GUI environments that do not
+// inherit the developer terminal's PATH). Convert Windows paths to MSYS form.
+const INSTALL_NODE = shellQuote(process.execPath.replace(/\\/g, '/'));
 const SHIM = `#!/bin/sh
 ${MARKER}
-exec ${NODE} "$(git rev-parse --show-toplevel)/scripts/sensitive-scan/commit-msg.mjs" "$1"
+NODE="$(command -v node 2>/dev/null || true)"
+[ -n "$NODE" ] || NODE=${INSTALL_NODE}
+exec "$NODE" "$(git rev-parse --show-toplevel)/scripts/sensitive-scan/commit-msg.mjs" "$1"
 `;
 
 try {
