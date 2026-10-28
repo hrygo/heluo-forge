@@ -12,6 +12,7 @@ import {
   repoRoot,
   rulesDigest,
   scanStaged,
+  scanText,
   stripTrailer,
 } from './lib.mjs';
 
@@ -28,6 +29,15 @@ try {
   const original = readFileSync(messageFile, 'utf8');
   const body = cleanMessage(stripTrailer(original));
   if (!body.trim()) throw new Error('empty commit message');
+
+  const messageFindings = scanText(body, rules);
+  if (messageFindings.length > 0) {
+    console.error('sensitive-scan: blocked; the commit message contains a finding');
+    for (const finding of messageFindings) {
+      console.error(`commit-message:${finding.line} ${finding.ruleId} (${finding.severity})`);
+    }
+    process.exit(1);
+  }
 
   const result = scanStaged({ cwd, rules });
   if (result.findings.length > 0) {

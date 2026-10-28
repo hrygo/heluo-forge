@@ -155,6 +155,28 @@ test('commit-msg blocks a synthetic sensitive finding and writes no trailer', ()
   }
 });
 
+test('commit-msg blocks a sensitive finding in the commit message itself', () => {
+  const { dir, repo } = newRepo();
+  try {
+    const rules = writeRules(dir);
+    const key = writeDeviceKey(dir);
+    writeFileSync(join(repo, 'safe.txt'), 'safe\n');
+    gitOk(repo, ['add', 'safe.txt']);
+    const messagePath = join(repo, '.git', 'message.txt');
+    writeFileSync(messagePath, 'message SECRET-ABC12345\n');
+    const result = spawnSync(process.execPath, [COMMIT_MSG, messagePath], {
+      cwd: repo,
+      env: { ...process.env, SENSITIVE_SCAN_RULES: rules, SENSITIVE_SCAN_KEY_FILE: key.privatePath },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /commit-message:1/);
+    assert.doesNotMatch(readFileSync(messagePath, 'utf8'), /Sensitive-Scan: v1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('verifier accepts a clean signed commit and rejects a reused trailer on another tree', () => {
   const { dir, repo } = newRepo();
   try {
