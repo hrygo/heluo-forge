@@ -390,7 +390,7 @@ V1 按当前版本的真实能力落地，不等 PKCE、不等 SCIM、不等网�
 | 组件 | 现在有什么 | P0（2026Q4） | P1/P2 | 明确不做 |
 |---|---|---|---|---|
 | `forge-enterprise` | 组合包、官方行禁用、装升退卸已实测 | 锁定版本；加 IAM/策略/凭据三插件与 SDD CLI | 随 IAM 6.3 更新配置 | 不改 DSH 核心 |
-| `forge-iam` | Host+Client 骨架、OIDC mock、账户页、网关凭据状态 | 改 `authMode=confidential`；钥匙串；登录/刷新/登出 | P1 接 6.3 的 claims/RP 登出；P2 不接 AIGS | 不宣称 PKCE；不代建网关 Key |
+| `forge-iam` | Host+Client 骨架、OIDC mock、账户页、网关凭据状态 | 实现 `authMode=confidential`（当前配置校验拒绝，不能仅改配置）；钥匙串；登录/刷新/登出 | P1 接 6.3 的 claims/RP 登出；P2 不接 AIGS | 不宣称 PKCE；不代建网关 Key |
 | 网关接入 | DSH 原生 `llm-pi-ai` + 凭据 seam；无独立 gateway 包 | Key 入钥匙串；UA；IP；`privacy_mode`；模型白名单 | P1 令牌+Key（若网关支持）；P2 MCP 走 AIGS | 不新建重复模型 provider；不做共享 Key |
 | `forge-policy` | guard、pre-execute、硬拒绝、审计已实测 | `$DSH_HOME` 硬拒绝、C3 确认、工具白名单 | P1 审批台账；P2 接 AIGS PDP | 不替代服务端授权 |
 | `forge-devops` | 只读四工具、门禁骨架、27 例离线测试 | 流水线/日志/构建只读 | P1 受控写：评论/重跑 | 不自动合并/发布 |
@@ -463,7 +463,7 @@ P2 只选一个低风险、只读、单工具场景（代码检索或日志查�
 
 | 演进缝 | V1 实现 | 2027 实现 | 兼容规则 |
 |---|---|---|---|
-| 认证模式 | `confidential` | `confidential` / `pkce` / `aigs` | 配置项 `authMode`；同一回调路径 |
+| 认证模式 | `confidential` | `confidential` / `pkce` / `aigs` | `authMode` 为 V1 目标接口，当前配置校验拒绝；同一回调路径 |
 | 令牌来源 | `staticKey` | `key+token` / `delegated` | `TokenSource` 接口；不改变调用方 |
 | 策略 | 本地 policy | 本地 + AIGS PDP | decision 结构 allow/deny/approval + obligations |
 | 工具描述 | risk/resource/action | 同左 + `agentScope` | 字段只增不减；旧字段保留 |

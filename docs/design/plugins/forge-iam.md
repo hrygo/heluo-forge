@@ -124,7 +124,7 @@
 ### 4.3 回调与浏览器
 
 - 回调 URI = Client 传入的 `callbackOrigin` + `iam.redirectPath`；Host 校验 origin 与 `webServer` 实际 origin 一致（loopback 或受支持的本地转发 origin），且必须是 IAM 预注册的精确 URI；不使用随机端口，不另起监听器。
-- 回调只接受 `GET`，校验 `state`；仅在 `authMode=pkce` 时再校验 `code_verifier`；按官方账号包行为，回调请求以 state 校验（启用 PKCE 时加 `code_verifier`）而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行。管理 API（`/api/forge-iam/*`）必须通过 DSH Connection 的 `requestRejection`（Host/Origin 策略与浏览器/API 凭据）；`ctx.connection` 不可用时 fail closed 返回 503，不以自定义请求头或本地 Origin 比较替代身份认证。回调保留自己的 Host 校验；Origin/Host 策略本身也由 Connection 负责，避免自定义 scheme（Desktop `dsh-app://`）被本地比较误判。
+- 回调只接受 `GET`，校验 `state`；仅在 PKCE 条件开启时（未来 `authMode=pkce`，当前未实现）再校验 `code_verifier`；按官方账号包行为，回调请求以 state 校验（启用 PKCE 时加 `code_verifier`）而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行。管理 API（`/api/forge-iam/*`）必须通过 DSH Connection 的 `requestRejection`（Host/Origin 策略与浏览器/API 凭据）；`ctx.connection` 不可用时 fail closed 返回 503，不以自定义请求头或本地 Origin 比较替代身份认证。回调保留自己的 Host 校验；Origin/Host 策略本身也由 Connection 负责，避免自定义 scheme（Desktop `dsh-app://`）被本地比较误判。
 - Desktop 目标是由 Host 打开系统浏览器（Windows `start`、麒麟 `xdg-open`）；该能力**尚未实现**，当前 Client 统一用 `window.open` + 同窗兜底，Desktop WebView 行为未实测。Web 由页面在点击手势中预开标签页，弹窗被拦截时展示可复制链接。
 - 回调页只返回最小 HTML，不加载外部资源，不把 code/token 写入页面或日志；当前完成后显示提示，不自动关闭标签页。
 
