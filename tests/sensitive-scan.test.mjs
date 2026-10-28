@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -161,6 +161,33 @@ test('commit-msg blocks large and binary files instead of signing a partial scan
     assert.equal(binary.status, 1);
     assert.match(binary.stderr, /binary/);
     assert.doesNotMatch(readFileSync(messagePath, 'utf8'), /Sensitive-Scan: v1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('installed hook runs through git commit on this platform', () => {
+  const { dir, repo } = newRepo();
+  try {
+    const rules = writeRules(dir);
+    const key = writeDeviceKey(dir);
+    mkdirSync(join(repo, 'scripts'), { recursive: true });
+    cpSync(join(ROOT, 'scripts', 'sensitive-scan'), join(repo, 'scripts', 'sensitive-scan'), { recursive: true });
+    const install = spawnSync(process.execPath, [join(repo, 'scripts', 'sensitive-scan', 'install-hook.mjs')], {
+      cwd: repo,
+      encoding: 'utf8',
+    });
+    assert.equal(install.status, 0, install.stderr);
+
+    writeFileSync(join(repo, 'safe.txt'), 'safe\n');
+    gitOk(repo, ['add', 'safe.txt']);
+    const commit = spawnSync('git', ['commit', '-q', '-m', 'hooked'], {
+      cwd: repo,
+      env: { ...process.env, SENSITIVE_SCAN_RULES: rules, SENSITIVE_SCAN_KEY_FILE: key.privatePath },
+      encoding: 'utf8',
+    });
+    assert.equal(commit.status, 0, commit.stderr);
+    assert.match(gitOk(repo, ['log', '-1', '--format=%B']), /Sensitive-Scan: v1/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
