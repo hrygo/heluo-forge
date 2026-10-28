@@ -65,6 +65,18 @@ test('rejects invalid enums, paths and types', () => {
   assert.ok(paths.includes('requireExclusive'));
 });
 
+test('rejects reserved confidential-client keys until they are implemented', () => {
+  const result = validateConfig({
+    clientId: 'dsh-desktop',
+    authMode: 'confidential',
+    clientSecretRef: 'secret://client',
+  });
+  assert.ok('issues' in result);
+  const paths = result.issues.map((entry) => entry.path[0]);
+  assert.ok(paths.includes('authMode'));
+  assert.ok(paths.includes('clientSecretRef'));
+});
+
 test('the standard-schema adapter is synchronous and returns issues', () => {
   const adapter = Config['~standard'];
   assert.equal(adapter.version, 1);
