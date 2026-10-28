@@ -12,9 +12,9 @@
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-25 |
+| 最后更新 | 2026-10-28 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
-| 模块状态 | 可用（Host + Client 骨架；OIDC mock 流程已验，真实联调待；实现与验证见设计索引 §2.2） |
+| 模块状态 | 可用（Host + Client 骨架；OIDC mock 流程已验，真实联调待；机密客户端迁移待；实现与验证见设计索引 §2.2） |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**；官方登录在企业内网不可用，因此不保留官方登录、官方模型、官方 API Key 与官方账户 UI 旁路。已核验：`ctx.credentials` 的 `resolve` / `set` / `readRecord` / `modifyRecord` / `deleteRecord` 与 `GrantRecord.payload`；`ctx.authorization` 的 flow 注册、单次尝试与 commit 语义；`ctx.webServer.register` 及官方账号包对 `/oauth/callback` 的占用；`dsh-llm-pi-ai` 的 `apiKeyEnv` 每请求解析；`dsh-credentials-local` 的 0600 YAML 存储；官方账号、模型与 UI 包名及目标 profile 的 row id。**未核验**：IAM 的 `resource`、refresh 轮换/重用检测、RFC 7009 撤销与 RP 登出；禁用四行后 shell/onboarding 是否完整；回调路由与 launch token/RPC 认证的交互；`engines.dsh` 断言形态；Windows/UOS/麒麟实机。以上未核验项不写成已实现。
 >
@@ -29,6 +29,8 @@
 2026-10-22 裁决后已进入 interim 实现；上线前仍缺四类事：IAM 侧登录/刷新/撤销/RP 登出的书面确认（本轮已恢复网关目标授权及单授权生命周期为前置，resource 并非唯一路径）；禁用官方四行后 shell/onboarding 的实测；keychain provider 与 UI 挂载点的双端实测；网关凭据录入/探测与真实 UAG 联调。首版按 O3 独占实现 4 屏 onboarding（欢迎、登录、网关凭据、完成）+ 账户页；生产使用 keychain provider，旧 0600 记录迁移成功后删除；不实现附加登录（additive）模式。
 
 ### 1.1 本轮目标与原基线实现的差距
+
+> **2026-10-28 IAM 回函口径校正（设计目标，不是已实现）**：厂商 6.0.3/6.3 书面回函均不支持公共客户端/PKCE S256；内部校验回函 §02 仅称授权码 PKCE 能力（允许 `plain`），§08 未答，不能推出免 Secret 公共客户端。V1 生产形态改为预注册机密客户端 + `client_secret` 存系统钥匙串，保留 PKCE 代码但默认关闭；当前 interim 代码仍按公共客户端/no secret，尚未迁移，不能作为生产准入证据。依据与逐项冲突见 [IAM 台账 §4.5.5](../../collaboration/iam-confirmation-letter.md#455-新版回函的来源冲突与待核验边界)。
 
 2026-10-23 仅更新文档。需求见[基线 §4.6](../../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求)，候选路线及时间语义见[评审稿](../../architecture/gateway-identity-review.md)，IAM 原函覆盖评估见[§8](../../collaboration/iam-confirmation-letter.md#8-本轮需求覆盖评估与补充确认清单平台内部)。需求方已确认，提供方能力、实际字段及技术路线待核验。
 
@@ -47,7 +49,7 @@
 
 - 企业 IAM 是唯一登录；官方登录入口、官方模型路由、官方 API Key 路由均不可用。
 - 企业 IAM 建立可信身份与目标授权；个人 A/B 路线按能力选定，原 Key-only 实现待调整，不在本轮实现。
-- 授权码 + PKCE（S256），系统浏览器，loopback 回调；回调挂在现有 `webServer` 的独立路径。
+- 授权码 + loopback 回调，系统浏览器；V1 以机密客户端 + 系统钥匙串落地，PKCE 代码保留但仅在 IAM 书面确认且配置启用时使用；回调挂在现有 `webServer` 的独立路径。
 - OIDC discovery 或显式端点；discovery `issuer` 必须与配置一致；校验 `state`、`nonce`、`iss`、`aud`、签名算法、`exp`/`nbf` 与时钟容差。
 - 令牌记录进入 DSH 凭据服务；刷新在锁内 single-flight；调用方只拿 access token，不接触 refresh token。
 - 账户/首启界面展示必要授权状态；B 才需要个人 Key 录入/清除，Key 由控制台签发。探测是否可用以实测记录为准。
@@ -69,7 +71,7 @@
 
 | 需求/验收 | 关系 | 说明 |
 |---|---|---|
-| REQ-01 / A1、A14 | 支撑 | 授权码 + PKCE、loopback 回调、错误 `state`/身份校验拒绝；未登录或网关凭据未配置时无企业模型 |
+| REQ-01 / A1、A14 | 支撑 | 授权码 + loopback 回调；V1 机密客户端，PKCE 为条件能力；错误 `state`/身份校验拒绝；未登录或网关凭据未配置时无企业模型 |
 | REQ-02 / A2 | 支撑 | 刷新成功无需重启；双进程不互相触发 `invalid_grant`；锁内刷新超时目标 ≤5 秒 |
 | REQ-05 / A2、A3 | 支撑 | 按契约区分身份、Key、授权、用途及故障；额度不自动重试，已执行或未知结果不重放 |
 | REQ-17 / A12 | 支撑 | IAM/凭据/必要审计缺失时，企业调用拒绝而不是降级 |
@@ -82,7 +84,7 @@
 | `dsh-settings` | 包 | 随目标 DSH | 配置不可写；按只读配置启动或报错 |
 | `dsh-llm-pi-ai` | 包 | 随目标 DSH | 无模型路由；不影响登录本身 |
 | `dsh-agent-default-model` | 包 | 随目标 DSH | 不自动设默认模型；用户手动选择 |
-| IAM OIDC 授权服务器 | 服务 | OIDC + PKCE；网关目标授权待确认，resource 或等效 audience/client 配置 | 未配置即 `unconfigured`；不阻断其他插件 |
+| IAM OIDC 授权服务器 | 服务 | OIDC；V1 机密客户端，PKCE 条件启用；网关目标授权待确认 | 未配置即 `unconfigured`；不阻断其他插件 |
 | `@heluo/forge-enterprise` | 包 | 同批次 | 官方行可能仍在位；本模块 `requireExclusive` 报独占冲突 |
 | `@heluo/forge-gateway` | 包 | 同批次 | 所选个人路线缺少必要授权或消费方时，模型不可用 |
 
@@ -122,7 +124,7 @@
 ### 4.3 回调与浏览器
 
 - 回调 URI = Client 传入的 `callbackOrigin` + `iam.redirectPath`；Host 校验 origin 与 `webServer` 实际 origin 一致（loopback 或受支持的本地转发 origin），且必须是 IAM 预注册的精确 URI；不使用随机端口，不另起监听器。
-- 回调只接受 `GET`，校验 `state` 与 PKCE；按官方账号包行为，回调请求以 state/PKCE 校验而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行。管理 API（`/api/forge-iam/*`）必须通过 DSH Connection 的 `requestRejection`（Host/Origin 策略与浏览器/API 凭据）；`ctx.connection` 不可用时 fail closed 返回 503，不以自定义请求头或本地 Origin 比较替代身份认证。回调保留自己的 Host 校验；Origin/Host 策略本身也由 Connection 负责，避免自定义 scheme（Desktop `dsh-app://`）被本地比较误判。
+- 回调只接受 `GET`，校验 `state`；仅在 `authMode=pkce` 时再校验 `code_verifier`；按官方账号包行为，回调请求以 state 校验（启用 PKCE 时加 `code_verifier`）而非 RPC 认证，但需在目标 profile 实测 launch token/连接层是否放行。管理 API（`/api/forge-iam/*`）必须通过 DSH Connection 的 `requestRejection`（Host/Origin 策略与浏览器/API 凭据）；`ctx.connection` 不可用时 fail closed 返回 503，不以自定义请求头或本地 Origin 比较替代身份认证。回调保留自己的 Host 校验；Origin/Host 策略本身也由 Connection 负责，避免自定义 scheme（Desktop `dsh-app://`）被本地比较误判。
 - Desktop 目标是由 Host 打开系统浏览器（Windows `start`、麒麟 `xdg-open`）；该能力**尚未实现**，当前 Client 统一用 `window.open` + 同窗兜底，Desktop WebView 行为未实测。Web 由页面在点击手势中预开标签页，弹窗被拦截时展示可复制链接。
 - 回调页只返回最小 HTML，不加载外部资源，不把 code/token 写入页面或日志；当前完成后显示提示，不自动关闭标签页。
 
@@ -158,7 +160,9 @@ Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-eve
 | `iam.jwksUri` | string | 空 | 条件 | ID Token 验签 |
 | `iam.revocationEndpoint` | string | 空 | 否 | RFC 7009；空则只做本地退出 |
 | `iam.endSessionEndpoint` | string | 空 | 否 | RP 登出；`logoutMode=rp` 时必填 |
-| `iam.clientId` | string | 空 | 是 | 本机公共客户端标识，无 client secret |
+| `iam.authMode` | `confidential` / `pkce` | `confidential` | 否 | V1 目标；当前实现未提供。`pkce` 仅在 IAM 书面确认公共客户端可用后启用 |
+| `iam.clientId` | string | 空 | 是 | 预注册客户端标识；V1 为机密客户端，当前 interim 仍按公共客户端，迁移前不得用于生产 |
+| `iam.clientSecretRef` | string | 空 | V1 是 | 系统钥匙串中的 `client_secret` 引用；**当前实现未提供，迁移前不得使用** |
 | `iam.scopes` | string[] | `openid profile offline_access` | 是 | 基础 scope；不含资源 scope |
 | `iam.redirectPath` | string | `/iam/callback` | 否 | Host 回调路径；不得为站点根或以 `/` 结尾（DSH 路由为不带尾斜杠的绝对路径） |
 | `iam.redirectUri` | string | 空 | 否 | 绝对回调 URI；path 必须等于 `redirectPath`，非 loopback 必须 HTTPS，生产必须与 IAM 注册值精确匹配 |
@@ -392,7 +396,7 @@ flowchart TD
   D --> E[Desktop Host 打开系统浏览器；Web Client 预开标签页]
   E --> F[IAM 登录页]
   F --> G["/iam/callback"]
-  G --> H{state 与 PKCE 校验}
+  G --> H{state 校验；启用 PKCE 时校验 code_verifier}
   H -->|失败| I[拒绝；保留 attempt 至到期/取消]
   H -->|通过| J[换 token]
   J --> K{"ID Token 验签/iss/aud/nonce/时钟"}
@@ -481,9 +485,11 @@ flowchart TD
 ### 7.5 退出与撤销
 
 > 2026-10-23 适用性：本节原流程是 interim 基线说明。默认目标是当前授权及刷新后代撤销，不自动调用全局 RP 登出；本地删除/只撤 AT 不能证明服务端五分钟内终结当前授权。旧代码行为未在本轮修改。相关能力未闭环则不开放相应路径。
+>
+> **2026-10-28 回函边界**：厂商 6.0.3 的 RFC 7009 端点仅明确支持撤销 Access Token，Refresh Token 撤销与级联未确认；内部回函称账号禁用可实时作废，但与厂商“已发 AT 按不具备规划”冲突。若当前环境只能撤 AT，必须如实显示“当前授权未确认撤销”，不得把本地退出或只撤 AT 写成当前设备授权闭环。
 
 
-顺序：停止本实例新请求 → 取消进行中的登录 → 锁内读取最新 grant 并尽力撤销 refresh token（网络上限 5 秒）→ 清运行时副本 → 删除记录 → 再清副本 → 发布 `signed-out` → 审计。默认不删除已保存的 `ENTERPRISE_STATIC_KEY`；用户显式“清除网关凭据”才删除。
+顺序：停止本实例新请求 → 取消进行中的登录 → 锁内读取最新 grant，按端点实际能力撤销 refresh token；若只能撤 Access Token，则撤 AT 并保留“当前授权未确认撤销”状态（网络上限 5 秒）→ 清运行时副本 → 删除记录 → 再清副本 → 发布 `signed-out` → 审计。默认不删除已保存的 `ENTERPRISE_STATIC_KEY`；用户显式“清除网关凭据”才删除。
 
 当前实现（2026-10-22）用删除后的再次清理与发布后的 grant 复核配对，覆盖共享刷新、迟到 hydrate/refresh 副本及插件卸载的指定交错；过时 callback/读取不再覆盖新生命周期。`credentials` seam 只承诺单 record 的互斥，不提供 record/ref 多键原子事务；这些终态回归不是所有跨进程时序的线性一致性证明，仍须经过生产凭据后端与企业并发验收。
 
@@ -617,7 +623,7 @@ flowchart TD
 |---|---|---|
 | IAM 是否支持 `resource`；不支持时如何按 audience/预注册 client 替代 | IAM 团队 | 未来 MCP 服务的 `aud` 是否成立；V1 模型网关不适用 |
 | refresh 轮换、重用检测、撤销与 RP 登出的实际能力 | IAM 团队 | 第 7.3/7.4 节失败分支与残余授权窗口 |
-| IAM 是否允许公共客户端 + loopback redirect URI；是否强制 client secret | IAM 团队 | 本机登录形态是否成立；必要时改为预注册多客户端 |
+| 公共客户端/PKCE 已明确不支持；机密客户端 secret 的下发、轮换、吊销与防提取 | IAM 团队 | 本机登录形态与密钥托管；当前设计按机密客户端 + 钥匙串，代码待迁移 |
 | 回调路由与 launch token/RPC 认证的交互；SSH 转发/反向代理下 `callbackOrigin` 的支持 | 平台组（实测） | 回调是否可达、是否误暴露 |
 | 禁用四行后 shell/onboarding/模型选择是否完整 | 平台组（实测） | O3 是否可在不修改核心的前提下成立 |
 | keychain provider 是否可插拔；`@napi-rs/keyring` 在 Windows/UOS/麒麟的产物与 Secret Service 可用性 | 平台组（实测） | 生产存储是否成立；不可插拔则暂停 Q15，不静默降级 |

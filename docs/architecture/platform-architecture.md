@@ -12,7 +12,7 @@
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-25 |
+| 最后更新 | 2026-10-28 |
 | 门禁 | G0 |
 | 文档层级 | L1 总体架构；字段级契约与运行手册由子文档承担（见 §12） |
 
@@ -122,7 +122,7 @@ quadrantChart
 
 | 标准 | 要求 | 本方案 | 差距 / 决策 |
 |---|---|---|---|
-| OAuth 2.1（draft-15） | PKCE 必须；无 implicit / ROPC；redirect 精确匹配 | Code + PKCE，public client | 无 |
+| OAuth 2.1（draft-15） | PKCE 必须；无 implicit / ROPC；redirect 精确匹配 | V1 机密客户端；PKCE 条件启用；公共客户端未确认 | IAM 6.0.3/6.3 不支持公共客户端/PKCE；需等效安全路径 |
 | RFC 8252 | 原生应用用 loopback；优先 IP 字面量 | `127.0.0.1` 回调 | 禁用 `localhost` |
 | RFC 8707 | `resource` 参数标识目标资源 | 改为按资源取 token | 依赖 IAM 支持 `resource` |
 | RFC 9728 | HTTP MCP server 暴露 Protected Resource Metadata | 仅对后续经决策启用的 HTTP MCP server 适用；DevOps MCP 当前不建设 | 不纳入本期 CLI 接入 |
@@ -184,7 +184,7 @@ flowchart TB
 
 四条请求路径：
 
-1. **登录**：浏览器 → IAM（Code + PKCE）→ 本机回调 → Host 写 IAM 会话；网关目标授权的取用方式待核验。
+1. **登录**：浏览器 → IAM（授权码；V1 机密客户端，PKCE 条件）→ 本机回调 → Host 写 IAM 会话；网关目标授权的取用方式待核验。
 2. **模型**：经核验的 DSH 凭据 seam 取得网关目标授权（A 纯令牌，或 B 令牌＋本人 Key）→ 网关验证当前身份、用途、网络、模型及预算 → 机构内私有化模型服务；具体承载尚未冻结。
 3. **工具**：受控命令调用 DevOps CLI 或 Gitee `gh` 兼容 CLI → 工程系统 API；服务端按用户现有权限鉴权，每次工具调用先过企业策略插件。
 4. **插件分发**：公网包由企业 registry 同步；内部定制源码从固定 Gitee group 经构建发布至同一 registry；AIHUB 维护 format-1 索引，终端在原生「索引源」添加该 URL，由官方管理器从企业 npm 取精确版本，禁止公网/归档备用路径。
@@ -254,7 +254,7 @@ flowchart TB
 
 ### 7.1 身份与令牌
 
-**登录基线**：企业 IAM 独占登录，系统浏览器、公共原生客户端授权码＋PKCE（S256）、loopback 回调；校验 state、nonce、issuer、audience 和适用签名/时效。公共客户端登记与目标 Access Token 能力仍待 IAM 正式确认。ID Token 用于登录，不能代替模型 API Access Token。
+**登录基线**：企业 IAM 独占登录，系统浏览器、授权码 + loopback 回调；V1 以机密客户端 + 系统钥匙串落地，PKCE 仅在 IAM 书面确认且配置启用时使用；校验 state、nonce、issuer、audience 和适用签名/时效。公共客户端/PKCE 已由厂商回函明确不支持，目标 Access Token 能力仍待确认。ID Token 用于登录，不能代替模型 API Access Token。
 
 **人员与授权**：IAM 给出可信稳定人员及目标授权；网关执行用途、模型、预算和网络策略。跨客户端 subject 不预设相等，账号重建/改名的映射由 IAM 与网关明确。普通 DSH 应用标识、接入协议版本和随机安装实例只用于防误用与关联，不构成不可伪造的身份或撤销权限，不要求硬件指纹、内置通用秘密或新增设备密码学体系。
 
@@ -476,7 +476,7 @@ G0 先取得方向、负责人、可联调性与计划，但 P0 要求的验证�
 |---|---|---|
 | A12 | 插件隔离与回滚 | 可选能力单独禁用不影响无依赖能力；IAM/policy/必要审计关闭或故障时，相关企业调用被拒绝；受支持组合回滚 ≤10 分钟 |
 | A13 | 审计完整性 | 按需求基线与完整验收矩阵核对模型事件与工具调用归因，要求字段缺失为 0；最小必要审计与C4在G2前已就绪，G3完成完整性评估 |
-| A14 | 标准符合性 | PKCE + loopback IP；未来 HTTP MCP 按目标资源绑定令牌并校验 aud（resource 或经确认的 audience/client 替代）；HTTP server 暴露 PRM；未来 MCP 的 401 刷新与安全重试仅限可安全重试的只读请求，无法确认未执行时不自动重放；本轮网关目标授权、人员/用途及五分钟生命周期按契约核验，不能裸 Key 降级；无法确认未执行不自动重放 |
+| A14 | 标准符合性 | 授权码 + loopback IP（V1 机密客户端；PKCE 条件）；未来 HTTP MCP 按目标资源绑定令牌并校验 aud（resource 或经确认的 audience/client 替代）；HTTP server 暴露 PRM；未来 MCP 的 401 刷新与安全重试仅限可安全重试的只读请求，无法确认未执行时不自动重放；本轮网关目标授权、人员/用途及五分钟生命周期按契约核验，不能裸 Key 降级；无法确认未执行不自动重放 |
 
 > A14 的 MCP 目标资源绑定是未来 MCP 集成的前提；V1 不启用 MCP；本轮网关目标授权也需验证，不能用现成个人凭据或控制台 OIDC 宣称 A14 已满足。
 
