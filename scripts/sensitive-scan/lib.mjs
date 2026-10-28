@@ -1,6 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 
@@ -73,15 +73,19 @@ export function cleanMessage(message) {
 
 export function stripTrailer(message) {
   const lines = String(message).split('\n');
-  const index = lines.findIndex((line) => line === TRAILER_MARKER);
+  const index = lines.findLastIndex((line) => line === TRAILER_MARKER);
   if (index === -1) return normalizeMessage(message);
-  const body = lines.slice(0, index).join('\n');
-  return body.trim() ? normalizeMessage(body) : '';
+  try {
+    return parseTrailer(message).body;
+  } catch {
+    // Do not silently drop body content when the marker is embedded in prose.
+    return normalizeMessage(message);
+  }
 }
 
 export function parseTrailer(message) {
   const lines = String(message).split('\n');
-  const index = lines.findIndex((line) => line === TRAILER_MARKER);
+  const index = lines.findLastIndex((line) => line === TRAILER_MARKER);
   if (index === -1) return null;
 
   const fields = {};
@@ -91,7 +95,9 @@ export function parseTrailer(message) {
     if (!match) {
       throw new Error(`unexpected line after ${TRAILER_MARKER}: ${line}`);
     }
-    fields[(match[1] || 'version').toLowerCase()] = match[2];
+    const key = (match[1] || 'version').toLowerCase();
+    if (Object.hasOwn(fields, key)) throw new Error(`duplicate field: Sensitive-Scan-${key}`);
+    fields[key] = match[2];
   }
 
   const required = ['version', 'tree', 'message', 'rules', 'scanner', 'time', 'nonce', 'key', 'sig'];
@@ -156,12 +162,18 @@ export function createAttestation({ body, tree, rules, keyId, privateKey, now = 
 
 export function keyIdFromPublicKey(publicKey) {
   const spki = publicKey.export({ type: 'spki', format: 'der' });
-  return sha256Hex(spki).slice(0, 16);
+  return sha256Hex(spki);
 }
 
 export function loadKeyPair(privateKeyPath = defaultKeyPath()) {
   if (!existsSync(privateKeyPath)) {
     throw new Error(`private key not found: ${privateKeyPath}; run scripts/sensitive-scan/keygen.mjs`);
+  }
+  if (process.platform !== 'win32') {
+    const mode = statSync(privateKeyPath).mode & 0o777;
+    if (mode & 0o077) {
+      throw new Error(`private key is accessible by group/others (${mode.toString(8)}): ${privateKeyPath}; chmod 600 it`);
+    }
   }
   const privateKey = createPrivateKey(readFileSync(privateKeyPath));
   const publicKey = createPublicKey(privateKey);
@@ -243,6 +255,18 @@ export function scanStaged({ cwd = process.cwd(), rules, maxFileBytes = DEFAULT_
       skipped.push({ path: file, reason: 'excluded' });
       continue;
     }
+    let size;
+    try {
+      size = Number(gitOutput(['cat-file', '-s', `:${file}`], { cwd }).trim());
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error('invalid blob size');
+    } catch {
+      skipped.push({ path: file, reason: 'unreadable' });
+      continue;
+    }
+    if (size > maxFileBytes) {
+      skipped.push({ path: file, reason: 'too-large', size });
+      continue;
+    }
     let buffer;
     try {
       buffer = execFileSync('git', ['show', `:${file}`], {
@@ -258,7 +282,7 @@ export function scanStaged({ cwd = process.cwd(), rules, maxFileBytes = DEFAULT_
       continue;
     }
     if (buffer.length > maxFileBytes) {
-      skipped.push({ path: file, reason: 'too-large' });
+      skipped.push({ path: file, reason: 'too-large', size: buffer.length });
       continue;
     }
     const text = buffer.toString('utf8');

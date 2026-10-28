@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -120,6 +120,70 @@ test('attestation signature is bound to tree and message', () => {
   assert.notEqual(parsed.fields.sig, '');
 });
 
+test('stripTrailer does not truncate body content when the marker is embedded', () => {
+  const message = 'subject\n\nSensitive-Scan: v1\nnot a trailer\n';
+  assert.equal(stripTrailer(message), 'subject\n\nSensitive-Scan: v1\nnot a trailer\n');
+  assert.throws(() => parseTrailer(message), /unexpected line/);
+});
+
+test('commit-msg blocks large and binary files instead of signing a partial scan', () => {
+  const { dir, repo } = newRepo();
+  try {
+    const rules = writeRules(dir);
+    const key = writeDeviceKey(dir);
+    const messagePath = join(repo, '.git', 'message.txt');
+    const env = { ...process.env, SENSITIVE_SCAN_RULES: rules, SENSITIVE_SCAN_KEY_FILE: key.privatePath };
+
+    writeFileSync(join(repo, 'large.txt'), Buffer.concat([
+      Buffer.alloc(1024 * 1024 + 512, 0x78),
+      Buffer.from('\nSECRET-ABC12345\n'),
+    ]));
+    gitOk(repo, ['add', 'large.txt']);
+    writeFileSync(messagePath, 'large\n');
+    const large = spawnSync(process.execPath, [COMMIT_MSG, messagePath], { cwd: repo, env, encoding: 'utf8' });
+    assert.equal(large.status, 1);
+    assert.match(large.stderr, /too-large/);
+    assert.doesNotMatch(readFileSync(messagePath, 'utf8'), /Sensitive-Scan: v1/);
+
+    gitOk(repo, ['reset', '-q']);
+    writeFileSync(join(repo, 'binary.bin'), Buffer.concat([
+      Buffer.from([0]),
+      Buffer.from('SECRET-ABC12345\n'),
+    ]));
+    gitOk(repo, ['add', 'binary.bin']);
+    writeFileSync(messagePath, 'binary\n');
+    const binary = spawnSync(process.execPath, [COMMIT_MSG, messagePath], { cwd: repo, env, encoding: 'utf8' });
+    assert.equal(binary.status, 1);
+    assert.match(binary.stderr, /binary/);
+    assert.doesNotMatch(readFileSync(messagePath, 'utf8'), /Sensitive-Scan: v1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadKeyPair rejects a group-readable private key', { skip: process.platform === 'win32' }, () => {
+  const { dir, repo } = newRepo();
+  try {
+    const rules = writeRules(dir);
+    const key = writeDeviceKey(dir);
+    chmodSync(key.privatePath, 0o644);
+    writeFileSync(join(repo, 'safe.txt'), 'safe\n');
+    gitOk(repo, ['add', 'safe.txt']);
+    const messagePath = join(repo, '.git', 'message.txt');
+    writeFileSync(messagePath, 'mode\n');
+    const result = spawnSync(process.execPath, [COMMIT_MSG, messagePath], {
+      cwd: repo,
+      env: { ...process.env, SENSITIVE_SCAN_RULES: rules, SENSITIVE_SCAN_KEY_FILE: key.privatePath },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /accessible by group\/others/);
+    assert.doesNotMatch(readFileSync(messagePath, 'utf8'), /Sensitive-Scan: v1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('install-hook writes an executable managed commit-msg shim', () => {
   const { dir, repo } = newRepo();
   try {
@@ -235,9 +299,41 @@ test('verifier accepts a clean signed commit and rejects a reused trailer on ano
     registry.keys[0].status = 'active';
     writeFileSync(registryPath, JSON.stringify(registry, null, 2));
 
+    const allowedPath = join(registryDir, 'allowed-rules.json');
+    const allowed = JSON.parse(readFileSync(allowedPath, 'utf8'));
+    allowed.rules[0].digest = '0'.repeat(64);
+    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
+    const badRules = verify(signed);
+    assert.equal(badRules.status, 1);
+    assert.match(badRules.stderr, /rules digest is not allowlisted/);
+    allowed.rules[0].digest = rulesDigest(rules);
+    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
+
+    allowed.scanners = ['other-scanner@1.0.0'];
+    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
+    const badScanner = verify(signed);
+    assert.equal(badScanner.status, 1);
+    assert.match(badScanner.stderr, /scanner is not allowlisted/);
+    allowed.scanners = ['heluo-sensitive-scan@1.0.0'];
+    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
+
+    const messagePath = join(repo, '.git', 'message.txt');
+    const signedMessage = gitOk(repo, ['show', '-s', '--format=%B', signed]);
+    const markerIndex = signedMessage.split('\n').indexOf('Sensitive-Scan: v1');
+    const trailerBlock = signedMessage.split('\n').slice(markerIndex).join('\n');
+    writeFileSync(messagePath, `different\n\n${trailerBlock}\n`);
+    gitOk(repo, ['commit', '--allow-empty', '--no-verify', '-q', '-F', messagePath]);
+    const sameTree = gitOk(repo, ['rev-parse', 'HEAD']);
+    assert.equal(
+      gitOk(repo, ['show', '-s', '--format=%T', sameTree]),
+      gitOk(repo, ['show', '-s', '--format=%T', signed]),
+    );
+    const changedMessage = verify(sameTree);
+    assert.equal(changedMessage.status, 1);
+    assert.match(changedMessage.stderr, /message digest does not match/);
+
     writeFileSync(join(repo, 'safe.txt'), 'tampered\n');
     gitOk(repo, ['add', 'safe.txt']);
-    const messagePath = join(repo, '.git', 'message.txt');
     writeFileSync(messagePath, 'tampered\n');
     const trailer = gitOk(repo, ['show', '-s', '--format=%B', signed]);
     writeFileSync(messagePath, `${trailer}\n`);

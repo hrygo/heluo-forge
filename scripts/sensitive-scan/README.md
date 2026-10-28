@@ -101,9 +101,11 @@ trailers. It has read-only permissions and no secrets. It does not execute PR
 code. The workflow is non-blocking until `SENSITIVE_SCAN_ENFORCE=true` is set.
 
 After enabling, the check name is `sensitive-attestation / verify`. It should be
-required by the branch ruleset. A PR can modify the workflow file, so use an
-organization-level required workflow for stronger protection; the repository
-workflow is the reference implementation.
+required by the branch ruleset, with "require branches to be up to date before
+merging" enabled. Without that setting, a key revocation or allowlist change on
+the base branch does not re-run checks already attached to an open PR. A PR can
+modify the workflow file, so use an organization-level required workflow for
+stronger protection; the repository workflow is the reference implementation.
 
 ## Enrollment and rotation
 
@@ -138,3 +140,6 @@ workflow is the reference implementation.
 - Rules updates require a new allowlist digest and a reviewed registry change.
 - The verifier checks the allowlist digest, not the rule content; the remote
   cannot know what the local rules were.
+- Binary, oversized or unreadable files are blocking by default. A path must be
+  explicitly excluded in the approved local rules to skip it; otherwise the
+  local hook refuses to create an attestation.

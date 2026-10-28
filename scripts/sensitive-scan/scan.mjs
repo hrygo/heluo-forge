@@ -35,12 +35,14 @@ try {
   const rules = loadRules(args.rules);
   const digest = rulesDigest(args.rules);
   const result = scanStaged({ rules });
+  const blocking = result.skipped.filter((item) => item.reason !== 'excluded');
   const output = {
     scanner: 'heluo-sensitive-scan@1.0.0',
     rulesDigest: digest,
     scanned: result.scanned,
     total: result.total,
     skipped: result.skipped,
+    blocking,
     findings: result.findings,
   };
   if (args.json) {
@@ -51,9 +53,12 @@ try {
     for (const finding of result.findings) {
       console.log(`${finding.path}:${finding.line} ${finding.ruleId} (${finding.severity})`);
     }
-    if (result.findings.length === 0) console.log('sensitive-scan: clean');
+    for (const item of blocking) {
+      console.log(`${item.path}: ${item.reason}${item.size ? ` (${item.size} bytes)` : ''}`);
+    }
+    if (result.findings.length === 0 && blocking.length === 0) console.log('sensitive-scan: clean');
   }
-  process.exit(result.findings.length === 0 ? 0 : 2);
+  process.exit(result.findings.length === 0 && blocking.length === 0 ? 0 : 2);
 } catch (error) {
   console.error(`sensitive-scan: ${error.message}`);
   process.exit(1);

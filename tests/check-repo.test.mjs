@@ -178,8 +178,19 @@ jobs:
     );
     const rejected = checkRepo(root);
     assert.ok(
-      rejected.errors.some((error) => error.includes('must not checkout the pull_request head')),
+      rejected.errors.some((error) => error.includes('must not reference the pull_request head')),
       rejected.errors.join('\n'),
+    );
+
+    write(
+      root,
+      '.github/workflows/sensitive-attestation.yml',
+      workflow.replace('base.sha', 'head.ref'),
+    );
+    const headRef = checkRepo(root);
+    assert.ok(
+      headRef.errors.some((error) => error.includes('must not reference the pull_request head')),
+      headRef.errors.join('\n'),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
