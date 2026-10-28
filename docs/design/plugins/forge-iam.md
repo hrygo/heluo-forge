@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.8 |
+| 版本 | V1.0.9 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -30,7 +30,7 @@
 
 ### 1.1 本轮目标与原基线实现的差距
 
-> **2026-10-28 IAM 回函口径校正（设计目标，不是已实现）**：厂商 6.0.3/6.3 书面回函均不支持公共客户端/PKCE S256；内部校验回函 §02 仅称授权码 PKCE 能力（允许 `plain`），§08 未答，不能推出免 Secret 公共客户端。V1 生产形态改为预注册机密客户端 + `client_secret` 存系统钥匙串，保留 PKCE 代码但默认关闭；当前 interim 代码仍按公共客户端/no secret，尚未迁移，不能作为生产准入证据。依据与逐项冲突见 [IAM 台账 §4.5.5](../../collaboration/iam-confirmation-letter.md#455-新版回函的来源冲突与待核验边界)。
+> **2026-10-28 IAM 回函口径校正（设计目标，不是已实现）**：厂商 6.0.3/6.3 书面回函均不支持公共客户端/PKCE S256；内部校验回函 §02 仅称授权码 PKCE 能力（允许 `plain`），§08 未答，不能推出免 Secret 公共客户端。V1 生产形态改为预注册机密客户端 + `client_secret` 存系统钥匙串，保留 PKCE 代码但当前无法关闭；当前 interim 代码仍按公共客户端/no secret，尚未迁移；`authMode` / `clientSecretRef` 尚未实现且配置校验会显式拒绝，不能作为生产准入证据。依据与逐项冲突见 [IAM 台账 §4.5.5](../../collaboration/iam-confirmation-letter.md#455-新版回函的来源冲突与待核验边界)。
 
 2026-10-23 仅更新文档。需求见[基线 §4.6](../../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求)，候选路线及时间语义见[评审稿](../../architecture/gateway-identity-review.md)，IAM 原函覆盖评估见[§8](../../collaboration/iam-confirmation-letter.md#8-本轮需求覆盖评估与补充确认清单平台内部)。需求方已确认，提供方能力、实际字段及技术路线待核验。
 
@@ -160,9 +160,7 @@ Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-eve
 | `iam.jwksUri` | string | 空 | 条件 | ID Token 验签 |
 | `iam.revocationEndpoint` | string | 空 | 否 | RFC 7009；空则只做本地退出 |
 | `iam.endSessionEndpoint` | string | 空 | 否 | RP 登出；`logoutMode=rp` 时必填 |
-| `iam.authMode` | `confidential` / `pkce` | `confidential` | 否 | V1 目标；当前实现未提供。`pkce` 仅在 IAM 书面确认公共客户端可用后启用 |
-| `iam.clientId` | string | 空 | 是 | 预注册客户端标识；V1 为机密客户端，当前 interim 仍按公共客户端，迁移前不得用于生产 |
-| `iam.clientSecretRef` | string | 空 | V1 是 | 系统钥匙串中的 `client_secret` 引用；**当前实现未提供，迁移前不得使用** |
+| `iam.clientId` | string | 空 | 是 | 预注册客户端标识；当前实现按公共客户端/no secret，机密客户端迁移前不得用于生产 |
 | `iam.scopes` | string[] | `openid profile offline_access` | 是 | 基础 scope；不含资源 scope |
 | `iam.redirectPath` | string | `/iam/callback` | 否 | Host 回调路径；不得为站点根或以 `/` 结尾（DSH 路由为不带尾斜杠的绝对路径） |
 | `iam.redirectUri` | string | 空 | 否 | 绝对回调 URI；path 必须等于 `redirectPath`，非 loopback 必须 HTTPS，生产必须与 IAM 注册值精确匹配 |
@@ -177,6 +175,23 @@ Client 契约（2026-10-22 核验并修复）：`shell.overlay` 是 `pointer-eve
 | `iam.logoutMode` | `local` / `rp` | `local` | 否 | 是否发起 RP 登出 |
 | `iam.requireExclusive` | boolean | `true` | 否 | 官方账号仍存在时拒绝就绪 |
 | `iam.allowInsecureHttp` | boolean | `false` | 否 | 显式允许 HTTP；即使开启也仅对 loopback（`localhost`/`127.0.0.1`/`::1`）生效，生产必须关闭 |
+
+> **V1 目标接口状态（2026-10-28）**：`authMode` / `clientSecretRef` 尚未实现；为避免“配置了但静默忽略”，`validateConfig` 会拒绝这两个键。机密客户端落地前，`clientId` 仍按公共客户端/no secret 运行；不得把未实现字段写入 profile。
+
+### 4.5 机密客户端迁移与 secret 生命周期（未实现，P0 阻断）
+
+当前只是设计目标，不能按已可用配置实施。落地前必须补齐：
+
+| 事项 | 要求 | 当前状态 |
+|---|---|---|
+| client 注册 | 按部门/批次注册；粒度、数量和 IAM 管理容量待确认；不宣称按设备自动注册 | 未开始 |
+| secret 下发 | 登录前一次性注入；优先受控配置/MDM/管理员协助，不把 secret 放入安装包明文或公共下载 | 未设计 |
+| 存储 | 系统钥匙串；不可用即 fail closed；0600 仅 dev/pilot，不能作为生产后备 | keychain 生产适配器未实现 |
+| 轮换/吊销 | 每个 client 独立轮换与吊销；明确周期、责任人、受影响用户、回滚动作 | 未定 |
+| 首次引导 | 现有 4 屏 onboarding 不含 secret 录入；secret 必须登录前预置，否则新增 enrollment 步骤或阻断登录 | 未实现 |
+| 验收 | token / refresh / revoke 均携带 client auth；错误或缺失 secret 被拒；secret 不进日志/argv/错误消息；client A 不能使用 client B 的 secret；轮换后旧 secret 失效 | 未实现、未测试 |
+
+**风险边界**：`client_secret` 是客户端凭据，不是用户凭据。钥匙串只保护静态存储，不能阻止正在使用该客户端的本人或同用户进程提取；短 AT 也不能阻止持有 secret 的攻击者持续换新令牌。因此这是有期限的过渡，不是“已解决”的安全方案；未完成 secret 生命周期和平台 keychain 前，不得进入 800 人扩量。
 
 **导出面（V1）**
 
@@ -545,10 +560,10 @@ flowchart TD
 
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
-| 单元 | 状态机、PKCE/URL 构造、ID Token 校验、错误分类、记录版本与迁移、keychain 选择/迁移判定、网关凭据状态映射、`ownerSubject` 绑定、默认模型选择 | `node --test` |
+| 单元 | 状态机、PKCE/URL 构造、ID Token 校验、错误分类、记录版本与迁移、keychain 选择/迁移判定、网关凭据状态映射、`ownerSubject` 绑定、默认模型选择；client_secret 认证（待实现） | `node --test` |
 | 契约 | discovery/端点、token/revocation 请求与错误码；`ENTERPRISE_STATIC_KEY` 缺失/无效；官方 row id 缺失告警 | 契约用例 |
 | 集成 | 仿 IAM：刷新轮换、重用检测、慢响应、断网、5xx、429、写盘失败、撤销失败、双进程并发；keychain 不可用 fail closed、0600 迁移成功/失败；网关凭据录入/探测/清除、账号切换不沿用 | 本地仿 IAM + 双进程夹具 |
-| 负向 | 错误 `state`/`nonce`/`aud`/`iss`、`alg=none`、过期 ID Token、授权码重放、PKCE 降级、时钟偏差；粘贴无效 Key、探测 401/403/400 | 契约/集成 |
+| 负向 | 错误 `state`/`nonce`/`aud`/`iss`、`alg=none`、过期 ID Token、授权码重放、PKCE 降级、时钟偏差；client_secret 缺失/错误、client A 使用 client B secret（待实现）；粘贴无效 Key、探测 401/403/400 | 契约/集成 |
 | 端到端 | Windows、UOS、麒麟各完成登录、刷新、退出、网关凭据录入与调用；首启 4 屏（含网关凭据）跳过/完成；未登录无模型；官方登录入口不可见；升级后官方行不回灌 | 手工 + 脚本 |
 | 组合 | 禁用四行后 shell/settings/onboarding/模型选择可用；`DEEPSEEK_API_KEY` 不构成旁路；禁用插件后企业调用拒绝 | 组合夹具 |
 

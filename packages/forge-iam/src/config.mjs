@@ -2,6 +2,11 @@
 // 必须同步返回 { value } 或 { issues }。这里不依赖外部校验库，保持包骨架可在
 // 没有 DSH 运行时的环境下测试。
 
+// These keys are documented as a V1 target but are not implemented. Reject
+// them explicitly instead of silently dropping them: a profile that believes it
+// switched to a confidential client must fail closed, not keep running PKCE.
+export const RESERVED_UNIMPLEMENTED_FIELDS = ['authMode', 'clientSecretRef'];
+
 export const CONFIG_FIELDS = [
   'discoveryUrl',
   'issuer',
@@ -99,6 +104,12 @@ export function validateConfig(input) {
 
   const issues = [];
   const value = { ...DEFAULTS, scopes: [...DEFAULTS.scopes] };
+
+  for (const key of RESERVED_UNIMPLEMENTED_FIELDS) {
+    if (source[key] !== undefined) {
+      issues.push(issue(key, `${key} is not implemented; remove it from the profile until confidential-client support lands`));
+    }
+  }
 
   for (const key of STRING_FIELDS) {
     const raw = source[key];
