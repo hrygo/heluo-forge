@@ -12,7 +12,7 @@
 | [DSH 插件与工具证据底稿](dsh-plugin-tool-evidence.xlsx) | 20 条证据、审查发现、决策与验收指标 |
 | [DSH 插件与工具审查记录](dsh-plugin-tool-review.md) | 五轮审查、检查结果与残余风险 |
 | [IAM 向 AIGS 演进](iam-to-aigs-evolution.md) | 演进主张、五项能力、边界与 POC 建议 |
-| [IAM 回函分析](iam-response-analysis.xlsx) | 21 项回函分析、追问清单、矛盾与缺口 |
+| [IAM 回函分析](iam-response-analysis.xlsx) | 21 项回函分析、追问清单、矛盾与缺口、来源与冲突 |
 
 ## 使用说明
 
