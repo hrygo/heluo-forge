@@ -172,11 +172,18 @@ export function checkRepo(root) {
     if (name === sensitiveAttestationWorkflow && text.includes('pull_request_target')) {
       // This exception is intentionally narrow: base-only checkout, no PR code
       // checkout/execution, no secrets. The verifier reads git objects only.
-      if (!/ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}/.test(text)) {
-        errors.push(`repo: ${name} must checkout the pull_request base sha`);
+      const checkoutUses = [...text.matchAll(/^\s*-?\s*uses:\s*actions\/checkout@/gm)].length;
+      if (checkoutUses !== 1) errors.push(`repo: ${name} must use exactly one actions/checkout step`);
+      const refs = [...text.matchAll(/^\s*ref:\s*(.+?)\s*$/gm)].map((match) => match[1]);
+      const baseRef = /^\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}$/;
+      if (refs.length !== 1 || !baseRef.test(refs[0])) {
+        errors.push(`repo: ${name} must checkout only the pull_request base sha`);
       }
-      if (/ref:\s*\$\{\{\s*github\.event\.pull_request\.head\.sha/.test(text)) {
-        errors.push(`repo: ${name} must not checkout the pull_request head`);
+      if (/github\.head_ref|pull_request\.head\.(?:sha|ref)|refs\/pull\//.test(text)) {
+        errors.push(`repo: ${name} must not reference the pull_request head`);
+      }
+      if (/git\s+(?:checkout|switch|worktree)\b/.test(text)) {
+        errors.push(`repo: ${name} must not check out code at runtime`);
       }
       if (/secrets\./.test(text)) errors.push(`repo: ${name} must not read secrets`);
     }

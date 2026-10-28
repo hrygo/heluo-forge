@@ -4,6 +4,7 @@ import {
   SCANNER_ID,
   canonicalPayload,
   gitOutput,
+  keyIdFromPublicKey,
   loadAllowedRules,
   loadRegistry,
   parseTrailer,
@@ -93,8 +94,10 @@ function verifyCommit(sha, { registry, allowed, maxAgeDays, now }) {
   const { fields, body } = parsed;
   if (!body.trim()) throw new Error('empty commit message body');
 
-  const entry = registry.keys.find((candidate) => candidate.keyId === fields.key);
-  if (!entry) throw new Error(`unknown key: ${fields.key}`);
+  const matches = registry.keys.filter((candidate) => candidate.keyId === fields.key);
+  if (matches.length === 0) throw new Error(`unknown key: ${fields.key}`);
+  if (matches.length > 1) throw new Error(`duplicate key id: ${fields.key}`);
+  const [entry] = matches;
   if (entry.status !== 'active') throw new Error(`inactive key: ${fields.key}`);
   const notBefore = Date.parse(entry.notBefore);
   const notAfter = entry.notAfter ? Date.parse(entry.notAfter) : null;
@@ -133,6 +136,9 @@ function verifyCommit(sha, { registry, allowed, maxAgeDays, now }) {
     publicKey = createPublicKey(entry.publicKey);
   } catch (error) {
     throw new Error(`invalid public key for ${fields.key}: ${error.message}`);
+  }
+  if (keyIdFromPublicKey(publicKey) !== entry.keyId) {
+    throw new Error(`registry key id does not match its public key: ${fields.key}`);
   }
   const valid = verify(
     null,

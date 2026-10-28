@@ -49,6 +49,17 @@ try {
     process.exit(1);
   }
 
+  const blocking = result.skipped.filter((item) => item.reason !== 'excluded');
+  if (blocking.length > 0) {
+    console.error('sensitive-scan: blocked; some staged files were not scanned');
+    for (const item of blocking) {
+      const detail = item.size ? ` (${item.size} bytes)` : '';
+      console.error(`${item.path}: ${item.reason}${detail}`);
+    }
+    console.error('exclude a binary/large path explicitly in the approved rules, or make it scannable');
+    process.exit(1);
+  }
+
   const tree = gitOutput(['write-tree'], { cwd }).trim();
   const { fields } = createAttestation({
     body,
@@ -58,7 +69,7 @@ try {
     privateKey: key.privateKey,
   });
   writeFileSync(messageFile, formatTrailer(body, fields), 'utf8');
-  console.error(`sensitive-scan: clean; signed ${result.scanned}/${result.total} staged files`);
+  console.error(`sensitive-scan: clean; signed ${result.scanned}/${result.total} staged files; ${result.skipped.length} explicitly excluded`);
 } catch (error) {
   console.error(`sensitive-scan: ${error.message}`);
   process.exit(1);
