@@ -10,6 +10,8 @@ export class HostReaderError extends Error {
   }
 }
 
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
 /** Fixed runner codes allowed to surface; anything else collapses to CLI_FAILED. */
 const RUNNER_CODES = new Set(['BAD_TARGET', 'CLI_NOT_FOUND', 'CLI_FAILED', 'AUTH_FAILED', 'CLI_TIMEOUT', 'CLI_CANCELLED', 'OUTPUT_LIMIT', 'INVALID_JSON', 'INVALID_OPTIONS']);
 
@@ -22,6 +24,19 @@ function assertHostRepo(repo, allowedHost) {
   if (!HOSTED_REPO_PATTERN.test(repo)) throw new HostReaderError('BAD_REPOSITORY');
   const host = repo.split('/')[0];
   if (host.toLowerCase() !== allowedHost.toLowerCase()) throw new HostReaderError('HOST_MISMATCH');
+}
+
+/** Bounded commit list for `[变更号]` prefix checks; null = not returned. */
+function normalizeCommits(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (!Array.isArray(raw) || raw.length > 100) throw new HostReaderError('PR_MISMATCH');
+  return raw.map((commit) => {
+    if (!isRecord(commit) || typeof commit.messageHeadline !== 'string' || commit.messageHeadline.includes('\0')
+      || (commit.oid !== undefined && (typeof commit.oid !== 'string' || !REVISION_PATTERN.test(commit.oid)))) {
+      throw new HostReaderError('PR_MISMATCH');
+    }
+    return { oid: commit.oid ?? null, messageHeadline: commit.messageHeadline };
+  });
 }
 
 function checkFixtureProvenance(raw) {
@@ -123,6 +138,9 @@ export function createGhReader({ executable, prefixArgs, allowedHost, cwd, env, 
         || typeof raw.headRefOid !== 'string' || !REVISION_PATTERN.test(raw.headRefOid)) {
         throw new HostReaderError('PR_MISMATCH');
       }
+      // `commits` is optional on the read: absent means "not returned", never
+      // "no commits". Present-but-malformed is a mismatch, not partial trust.
+      const commits = normalizeCommits(raw.commits);
       return {
         status: 'unknown', source_revision: null, target_ref: target, result_refs: [],
         observed_at: new Date().toISOString(), error_code: 'MISSING_SOURCE_REVISION',
@@ -131,6 +149,7 @@ export function createGhReader({ executable, prefixArgs, allowedHost, cwd, env, 
           title: typeof raw.title === 'string' ? raw.title : null, url: raw.url,
           headRefOid: raw.headRefOid, baseRefName: typeof raw.baseRefName === 'string' ? raw.baseRefName : null,
           mergedAt: typeof raw.mergedAt === 'string' ? raw.mergedAt : null,
+          commits,
           ...(provenance ? { provenance } : {}),
         },
       };

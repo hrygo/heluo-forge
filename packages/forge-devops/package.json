@@ -20,7 +20,9 @@
     ".": "./src/index.mjs",
     "./read": "./src/read.mjs",
     "./dop-reader": "./src/change-briefing.mjs",
-    "./change-cli": "./src/change-cli.mjs"
+    "./change-cli": "./src/change-cli.mjs",
+    "./trace-loop": "./src/trace-loop.mjs",
+    "./host-readers": "./src/host-readers.mjs"
   },
   "files": [
     "src",

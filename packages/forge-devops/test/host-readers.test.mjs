@@ -17,6 +17,7 @@ const issueRaw = {
 const prRaw = {
   number: 3, title: 't', state: 'MERGED', url: `https://${REPO}/pull/3`,
   headRefOid: 'a'.repeat(40), baseRefName: 'main', mergedAt: '2026-06-20T00:00:00Z',
+  commits: [{ oid: 'b'.repeat(40), messageHeadline: '[ARD123456] deliver synthetic change' }],
 };
 
 const runnerFor = (raw, seen = []) => async (options) => {

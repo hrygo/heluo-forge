@@ -17,7 +17,7 @@ const repository = "gitee.corp.example/demo/repo"
 const repoURL = "https://" + repository
 const repoFields = "nameWithOwner,url,isPrivate,defaultBranchRef"
 const issueFields = "number,title,body,state,url,closedByPullRequestsReferences"
-const prFields = "number,title,state,url,headRefOid,baseRefName,mergedAt"
+const prFields = "number,title,state,url,headRefOid,baseRefName,mergedAt,commits"
 
 var cases = map[string]bool{
 	"success": true, "denied401": true, "denied403": true, "malformed": true,
@@ -158,7 +158,9 @@ func payload(kind, target string) map[string]any {
 			"state": state, "url": fmt.Sprintf("%s/issues/%d", repoURL, number), "closedByPullRequestsReferences": refs,
 		}
 	case "pr":
-		value = map[string]any{"number": 3, "title": "Synthetic fixture merged PR", "state": "MERGED", "url": repoURL + "/pull/3", "headRefOid": strings.Repeat("a", 40), "baseRefName": "main", "mergedAt": "2026-06-20T00:00:00Z"}
+		value = map[string]any{"number": 3, "title": "Synthetic fixture merged PR", "state": "MERGED", "url": repoURL + "/pull/3", "headRefOid": strings.Repeat("a", 40), "baseRefName": "main", "mergedAt": "2026-06-20T00:00:00Z", "commits": []any{
+			map[string]any{"oid": strings.Repeat("b", 40), "messageHeadline": "[ARD123456] synthetic change commit"},
+		}}
 	}
 	value["_heluo_fixture"] = provenance
 	return value

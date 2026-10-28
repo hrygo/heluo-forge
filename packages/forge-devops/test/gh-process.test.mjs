@@ -69,7 +69,7 @@ after(async () => {
 
 const REPO_ARGS = ['repo', 'view', REPO, '--json', 'nameWithOwner,url,isPrivate,defaultBranchRef'];
 const ISSUE_ARGS = ['issue', 'view', '2', '--repo', REPO, '--json', 'number,title,body,state,url,closedByPullRequestsReferences'];
-const PR_ARGS = ['pr', 'view', '3', '--repo', REPO, '--json', 'number,title,state,url,headRefOid,baseRefName,mergedAt'];
+const PR_ARGS = ['pr', 'view', '3', '--repo', REPO, '--json', 'number,title,state,url,headRefOid,baseRefName,mergedAt,commits'];
 
 function run(args = REPO_ARGS, options = {}) {
   return runGh({
@@ -148,7 +148,7 @@ test('write or unlisted argv shapes are refused before spawn', async () => {
     ['issue', 'view', '2', '--repo', REPO, '--json', 'number'],
     ['issue', 'view', '0', '--repo', REPO, '--json', 'number,title,body,state,url,closedByPullRequestsReferences'],
     ['issue', 'view', '2', '--repo', 'github.com/other/repo', '--json', 'number,title,body,state,url,closedByPullRequestsReferences'],
-    ['pr', 'view', '3', '--repo', 'github.com/other/repo', '--json', 'number,title,state,url,headRefOid,baseRefName,mergedAt'],
+    ['pr', 'view', '3', '--repo', 'github.com/other/repo', '--json', 'number,title,state,url,headRefOid,baseRefName,mergedAt,commits'],
     ['repo', 'view', 'not-a-repo', '--json', 'nameWithOwner,url,isPrivate,defaultBranchRef'],
     ['repo', 'view', `${HOST}/demo/repo/extra`, '--json', 'nameWithOwner,url,isPrivate,defaultBranchRef'],
     [...REPO_ARGS, '--extra'], ['status'],

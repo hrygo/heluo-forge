@@ -23,6 +23,14 @@ node packages/forge-devops/src/change-cli.mjs demo --out ./change-demo.html
 
 该入口是人类直接运行的诊断 CLI，复用 policy 判定与必要审计核心，**不等于已接入当前 DSH profile 的 IAM/角色/组织开关**。导出的 `createDopReader` 仅实现 `change.read`；其他三种读动作没有借此自动开放真实提供方。需求版本/仓库映射未核定时，只读结果仍是 `unknown`，保留已校验 `facts` 供阅读，不作冻结或自动承接依据。
 
+宿主只读适配器与闭环判定（#25/#26，2026-10-27 本地实测）：
+
+- `gh-process.mjs`：只执行三种固定 `view --json`（repo/issue/pr），生产路径要求绝对可执行文件，`shell:false`、输出/超时有界、POSIX 进程组与 Windows `taskkill /T /F` 清理、错误码固定脱敏。PR 读取含 `commits`（用于 `[变更号]` 前缀核对）。
+- `host-readers.mjs`：`createHostReader` 把 `change.read` 路由到 DOP、其余三读路由到 gh；显式 host 绑定、跨仓关闭引用拒绝，结果一律 `unknown` + 已校验 `facts`；提交列表缺失记 `null`，不当成"无提交"。
+- `trace-loop.mjs`：`assessIssueClosure` 按四项可核对事实（变更关联行、同仓关闭 PR、每个提交标题以 `[变更号]` 开头、人工验收记录）给出 `closable`/`not-closable`；`buildWriteSteps` 只产出写动作计划（`plan-only`，从不执行）。判定只读，不代替人工验收或关闭 Issue。
+
+`node scripts/probe/run-trace-loop.mjs --cli-dir <含dop/gh目录> --repo <HOST/OWNER/REPO> --targets <变更号>:<Issue号> --out <新目录> [--acceptance <验收记录.json>]` 输出 `loop.json`/`index.html`/`plan.json`/`audit.jsonl`。
+
 [试用步骤与最小测试输入](../../docs/operations/change-briefing.md)。发行物自包含 policy，不需终端联网解析 workspace 依赖或安装进真实 profile。
 
 ## 骨架内容（已落地）

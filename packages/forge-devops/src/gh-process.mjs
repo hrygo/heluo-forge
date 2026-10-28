@@ -25,7 +25,7 @@ export class GhProcessError extends Error {
 
 const REPO_FIELDS = 'nameWithOwner,url,isPrivate,defaultBranchRef';
 const ISSUE_FIELDS = 'number,title,body,state,url,closedByPullRequestsReferences';
-const PR_FIELDS = 'number,title,state,url,headRefOid,baseRefName,mergedAt';
+const PR_FIELDS = 'number,title,state,url,headRefOid,baseRefName,mergedAt,commits';
 
 export const GH_JSON_FIELDS = Object.freeze({
   repo: REPO_FIELDS,
