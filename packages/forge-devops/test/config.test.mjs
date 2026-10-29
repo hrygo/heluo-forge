@@ -173,7 +173,8 @@ test('timeoutMs 合法边界：1000 与 600000 通过', () => {
 });
 
 test('endpoint 非法（相对地址 / 非 http(s) / 内嵌凭据）→ CONFIG_INVALID', () => {
-  // 内嵌凭据的地址用 URL 对象拼出来：避免源码里出现 `scheme://user:口令@host` 形态的字面量（团队敏感扫描按字面量拦截）。
+  // 内嵌凭据的地址用 URL 对象在运行时拼出来：仓库检查器与团队敏感扫描都按字面量拦截
+  // `scheme://user:口令@host` 形态，所以这里的构造是本意，不是可以合并回字面量的冗余。
   const credentialUrl = new URL('https://dop.example/api');
   credentialUrl.username = 'user';
   credentialUrl.password = 'abc';
