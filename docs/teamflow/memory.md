@@ -4,7 +4,7 @@
 
 ## 约定
 
-- **插件交付形态**：交付物必须能被宿主以 profile 包形态安装——`package.json` 声明 `dsh.bundle.patch`，补丁 `insert:` 行 `name` 用**包根名**（子路径会被判"无 client 声明"而静默跳过）；声明文件进 `files` 白名单；安装清单不含 `workspace:` 等本地协议（源码引用由构建期闭包，见 ADR-12/#37）；`@deepseek-ai/*` 与 `react` 只走 `peerDependencies` + `peerDependenciesMeta.optional`；策略依赖型插件（如 devops）的补丁层还须自带非空 `config.catalog`（覆盖其只读动作）与显式 `config.audit`（内存舱须 `allowNonDurable`，生产换持久 sink），否则装上也不激活；同一 profile 勿叠加两个都插 `heluo-policy` 的补丁层（重复 id）。
+- **插件交付形态**：交付物必须能被宿主以 profile 包形态安装——`package.json` 声明 `dsh.bundle.patch`，补丁 `insert:` 行 `name` 用**包根名**（子路径会被判"无 client 声明"而静默跳过）；声明文件进 `files` 白名单；安装清单不含 `workspace:` 等本地协议（源码引用由构建期闭包，见 ADR-12/#37）；`@deepseek-ai/*` 与 `react` 只走 `peerDependencies` + `peerDependenciesMeta.optional`；策略依赖型插件（如 devops）的补丁层还须自带非空 `config.catalog`（覆盖其只读动作）与显式 `config.audit`（内存舱须 `allowNonDurable`，生产换持久 sink），否则装上也不激活；策略依赖型插件与既有策略服务共存时，补丁层用独立行 id（如 `heluo-policy-gitee`）并为策略行与插件行写同一个 `isolate: {policy: <label>}`，各自声明本插件目录；同 id 叠加仍禁止（后装者覆盖先装者 config、先装方工具静默掉线）。
 - **安装入口以本机探测为准**，不写死 profile 名/路径：`dsh` 在 PATH 时用 `dsh plugin --profile <p> add|remove <pkg>`（转发到 profile 目录执行 pnpm），`dsh.profile.bundles` 条目由包自身的 `dsh.bundle.patch` 推导；安装发生在工作区之外，由**主 agent** 执行并预先写明回滚步骤。
 - **CLI 入口与配置面**：路径类配置以插件配置页（Web UI 表单；经 `dsh-settings` 表单面 + `dsh-config-editor` 落到活动 profile 补丁）为主路径，环境变量只在 CI / 无 UI 场景兜底；缺省由装配期自动发现自身位置。Windows 自动发现只认 `.exe`，`.cmd`/`.bat`/`.ps1` 包装脚本一律不接受（固定 argv + `shell:false` 执行不了它们，放开等于重开 shell 通道）。六个 camelCase 配置键 `dopBin`/`dopEndpoint`/`ghBin`/`ghOwner`/`sourceType`/`timeoutMs`；路径与 endpoint 只在配置页内可见，工具输出、日志、报告一律不回显。
 - **平台来源分工**：业务事实（系统变更、用户故事、验收条件、发布信息）走企业 dop CLI（`change view <id> -j`，字段契约按 2026-07-06 校准；本机为 mock，位于外部工程 oh-my-sdd 的 `scripts/dop`，不在 PATH、非常驻服务，可执行路径与 endpoint 按「插件配置页 > 环境变量 > 装配期自动发现」三层解析，不硬编码、不写入文档、不落版本库）；仓库/Issue/PR 的事实与动作走 GitHub `gh`（本机已登录，写动作指向**真实远端仓库**）。mock 结果不算企业证据。
@@ -18,3 +18,4 @@
 - profile `web` 现存 2026-10-28 的手工 `file://` UAT 段（`forge-policy` / `heluo-uat-reader` / `forge-devops`）待被正式安装替代；替换时同步删除该段并在回滚时原样恢复。
 - 宿主版本双轨（仓库目标 `.dsh-version` `0.2.1-rc.3`，本机已装 `0.2.1-rc.2`）：目标版本上的装载证据仍为 `NOT RUN`，升级宿主后补跑。
 - r3 配置页三处人工补测仍 `NOT RUN`：Windows 实机零配置（AC-1/2）、真实浏览器点击走查（AC-6/7）、真实 web profile 重启（AC-8，需先删 2026-10-28 手工 `file://` UAT 段）。`dist/` 内 `UAT-WINDOWS.md` 与旧 tarball 是 r3 前构建产物，勿作为新版本分发。
+- gitee（`@heluo/forge-gitee`）人工补测：真实 `web` profile 按 PRD §10.3 装入并回读 `dependencies`/`bundles`、真实会话内 8 个 `forge_gitee_*` 工具枚举；企业 Gitee CLI 与 `--json` 字段联调、Windows/麒麟 aarch64、真实凭据持久化仍 `NOT RUN`。

@@ -1,0 +1,65 @@
+# @heluo/forge-gitee 的补丁层（ADR-0012 单安装单元）。
+#
+# 本文件只做一件事：把 gitee 插件挂载所需的最小配置插进 profile，使"只装 gitee 一个包"也能
+# 挂载并直接用于只读查询。两行的顺序即加载顺序，策略必须先行。
+#   1. `heluo-policy`：gitee 的策略门禁是硬依赖。`policy` 服务缺失、或三个 `gitee.*` 只读动作
+#      未登记/未启用时，`apply()` 按 fail-closed 语义拒绝挂载（`GITEE_POLICY_UNAVAILABLE` /
+#      `GITEE_ACTION_UNREGISTERED`，`missing` 列全），不降级成"无策略只读"。
+#   2. `heluo-gitee`：`name` 必须是**包根名**（与清单 `name` 一致），写成子路径宿主解析不到该包。
+#
+# 目录（catalog）刻意只有 3 条 `kind: read`，**0 条 write**：
+#   - 五个受控动作（`gitee.issue.write` / `gitee.pr.write` / `gitee.review.publish` /
+#     `gitee.review.record` / `gitee.delivery.judge`）**不登记**，默认即 `denied`
+#     （`rule: 'unregistered-action'`），且适配器与 `execFile` 出口都是 0 次调用——
+#     "没批准的能力不出现"靠不登记实现，而不是靠运行时开关。
+#   - 需要写能力时，由所属 profile 显式追加对应动作（写/确认类动作还需 `approvals` 台账条目，
+#     见 @heluo/forge-policy 的 `assertEnabledEntriesApproved`）。默认分发层不替任何人预置授权。
+#   - 审计舱用内存 sink：属**联调/试点级**证据，记录随进程退出丢失。生产或合规场景必须在
+#     profile 注入持久 sink 后删掉 `allowNonDurable`（否则每个动作都会被 `POLICY_AUDIT_*` 拒绝）。
+#   - 不写 `tools` 映射：插件的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射一次
+#     会重复准入、重复审计。
+#
+# 共存形态（README 与设计文档同口径）：
+#   - **推荐二选一安装**：GitHub 面用 `@heluo/forge-devops`，Gitee 面用本包，各自带自己的
+#     策略目录，互不干扰。
+#   - 同一 profile 两者共存：**两个补丁层直接叠加即可**，无需并层、无需改既有补丁层。
+#     做法是下面两行都带 `isolate: { policy: gitee }`——`isolate` 是 loader 的 entry 选项
+#     （`Dict<true | string>`，同 label 的 entry 共用同一服务域），于是本包的 `heluo-policy-gitee`
+#     提供的是 `policy@gitee` 这一独立实例，与 `@heluo/forge-devops` 在 root 域提供的 `policy`
+#     互不覆盖；本包插件行用同一 label 取到自己那份目录。
+#     - 修 D-2 前的实况：两行同名 `heluo-policy` 且无 isolate ⇒ loader 按 id 覆盖 config，
+#       只剩 gitee 的 3 条目录，devops 掉线 `POLICY_ACTION_UNREGISTERED`，且**没有**
+#       `POLICY_SERVICE_CONFLICT`（宿主只留 warning）。行 id 因此也改为 `heluo-policy-gitee`。
+#     - 只要 label 不同（或某行不写 isolate），两个策略实例就落在同一服务域，后者 `apply`
+#       抛 `POLICY_SERVICE_CONFLICT`——这条单实例约束仍在，只是本包不再踩它。
+#   - 也可并层：把下面 3 条 `gitee.*` 目录并入既有那一条 `heluo-policy` 行的
+#     `config.catalog`，并删掉本包的策略行（改用同一实例）。并层与隔离二选一，不要混用同一
+#     实例再叠一行。
+#
+# 用法：dsh --profile web --patch <包内 cordis.patch.yml>
+# 复核：dsh --profile web --patch <该文件> --dump-config | grep -A2 "id: heluo-"
+# 门禁：packages/forge-gitee/test/entry.test.mjs 校验形状；patch-mount.test.mjs 用本文件的
+# config 真实装配策略 + 插件（含空目录反向用例）；coexistence.test.mjs 覆盖上述三种形态。
+
+- insert:
+    - id: heluo-policy-gitee
+      name: '@heluo/forge-policy'
+      # D-2：独立的 `policy` 服务域，label 与本包插件行一致（两句必须同 label 才互相可见）。
+      isolate: { policy: gitee }
+      config:
+        catalog:
+          - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
+          - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
+        audit:
+          sink: memory
+          allowNonDurable: true
+    - id: heluo-gitee
+      name: '@heluo/forge-gitee'
+      # 与上面策略行同一 label：`policy` 只在 `gitee` 服务域内解析（不与 devops 的实例互通）。
+      isolate: { policy: gitee }
+      # 显式空配置：宿主 resolveConfig 会把**缺席**的 `config:` 当 `undefined` 交给
+      # `ConfigStandard.validate`，校验器一旦拒绝 undefined 整条 entry 就不激活（插件与 8 个
+      # 工具一起消失，`--dump-config` 看不出来）。`config: {}` 让"零配置"是写下来的事实。
+      # 四个可配键（cliPath / host / timeoutMs / authEnv）都可省略，默认值归 runtime-config。
+      config: {}
