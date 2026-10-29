@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CONFIG_REASONS,
+  ConfigStandard,
   DEFAULT_GH_BIN,
   DEFAULT_SOURCE_TYPE,
   DEFAULT_TIMEOUT_MS,
@@ -21,6 +22,7 @@ import {
   SOURCE_TYPES,
   describeRuntimeConfig,
   resolveRuntimeConfig,
+  validateConfigField,
 } from '../src/runtime-config.mjs';
 import { createCliRunner } from '../src/cli-runner.mjs';
 
@@ -229,4 +231,173 @@ test('源码不含本机绝对路径、URL 字面量与凭据形态（AC-22 静�
     if (/\b(password|passwd|token|secret)\s*[:=]\s*['"]/i.test(text)) offenders.push(`${file}: 凭据字面量`);
   }
   assert.deepEqual(offenders, [], `路径与 endpoint 必须环境注入：${offenders.join('; ')}`);
+});
+
+/* ───────────── T2 增量：字段校验的唯一实现处 + Standard Schema 校验面 ─────────────
+ *
+ * 三层合并（`cli-config`）与配置写入（`dsh-config-editor`）共用这里的一套字段规则：
+ * 若两边各写一份，「页面能存、加载即失败」就会成为常态。这些用例锁的是"一份规则"本身，
+ * 而不是某条具体提示语——提示语改动只应改一处实现，不应让任何用例失效。 */
+
+/** 内嵌凭据的样例用拼接构造：仓库检查器禁止源码出现 `scheme://user:pass@` 字面量。 */
+const CREDENTIAL_ENDPOINT = ['https://user', 'pass@dop.example/api'].join(':');
+
+const FIELD_CASES = [
+  { field: 'dopBin', raw: DOP_BIN, ok: true, value: DOP_BIN },
+  { field: 'dopBin', raw: 42, ok: false },
+  { field: 'dopEndpoint', raw: ENDPOINT, ok: true, value: ENDPOINT },
+  { field: 'dopEndpoint', raw: 'dop.example/api', ok: false },
+  { field: 'dopEndpoint', raw: 'ftp://dop.example/api', ok: false },
+  { field: 'dopEndpoint', raw: CREDENTIAL_ENDPOINT, ok: false },
+  { field: 'ghBin', raw: ' /usr/local/bin/gh ', ok: true, value: '/usr/local/bin/gh' },
+  { field: 'ghBin', raw: 42, ok: false },
+  { field: 'ghOwner', raw: 'acme', ok: true, value: 'acme' },
+  { field: 'ghOwner', raw: '-acme', ok: false },
+  { field: 'ghOwner', raw: 'ac me', ok: false },
+  { field: 'sourceType', raw: ' Enterprise ', ok: true, value: 'enterprise' },
+  { field: 'sourceType', raw: 'prod', ok: false },
+  { field: 'timeoutMs', raw: '15000', ok: true, value: 15_000 },
+  { field: 'timeoutMs', raw: 20_000, ok: true, value: 20_000 },
+  { field: 'timeoutMs', raw: '0', ok: false },
+  { field: 'timeoutMs', raw: '12.5', ok: false },
+  { field: 'timeoutMs', raw: String(MAX_TIMEOUT_MS + 1), ok: false },
+];
+
+test('validateConfigField 逐字段归一化：去空白、小写枚举、数字超时（AC-9）', () => {
+  for (const item of FIELD_CASES.filter((entry) => entry.ok)) {
+    const verdict = validateConfigField(item.field, item.raw);
+    assert.equal(verdict.ok, true, `${item.field}=${String(item.raw)}`);
+    assert.equal(verdict.value, item.value, `${item.field}=${String(item.raw)}`);
+  }
+});
+
+test('validateConfigField 逐字段拒绝非法值，只给可读原因、不回显输入（AC-10）', () => {
+  for (const item of FIELD_CASES.filter((entry) => !entry.ok)) {
+    const verdict = validateConfigField(item.field, item.raw);
+    assert.equal(verdict.ok, false, `${item.field}=${String(item.raw)}`);
+    assert.equal(typeof verdict.message, 'string');
+    assert.ok(verdict.message.length > 0);
+    // 只对"可辨识的值"做回显检查：单字符（如 '0'）会撞上文案里的数字区间，不构成外泄证据。
+    if (String(item.raw).length >= 6) {
+      assert.equal(verdict.message.includes(String(item.raw)), false, '错误信息不得回显用户输入');
+    }
+  }
+});
+
+test('validateConfigField 与 resolveRuntimeConfig 结论一致（同一规则两个入口）', () => {
+  for (const item of FIELD_CASES) {
+    const raw = String(item.raw);
+    if (typeof item.raw !== 'string') {
+      // 环境变量层只有文本；非文本值只出现在页面/API 层，这里只锁字段层结论，不跨层比对
+      assert.equal(validateConfigField(item.field, item.raw).ok, item.ok, `${item.field}=${raw}`);
+      continue;
+    }
+    const env = { [ENV_KEYS.dopBin]: DOP_BIN, [ENV_KEYS[item.field]]: raw };
+    const resolved = resolveRuntimeConfig(env);
+    assert.equal(resolved.ok, item.ok, `${item.field}=${raw}`);
+    if (item.ok && item.field !== 'dopBin') assert.equal(resolved.value[item.field], item.value);
+  }
+});
+
+test('六键全覆盖：每个逻辑字段都有合法/非法样例（不存在漏校验的键）', () => {
+  const valid = {
+    dopBin: DOP_BIN,
+    dopEndpoint: ENDPOINT,
+    ghBin: 'gh',
+    ghOwner: 'acme',
+    sourceType: 'mock',
+    timeoutMs: 20_000,
+  };
+  const invalid = {
+    dopBin: 42,
+    dopEndpoint: 'ftp://x/api',
+    ghBin: 42,
+    ghOwner: '-x',
+    sourceType: 'prod',
+    timeoutMs: 0,
+  };
+  assert.deepEqual(Object.keys(valid), Object.keys(ENV_KEYS), '字段表与 ENV_KEYS 同源');
+  assert.deepEqual(Object.keys(invalid), Object.keys(ENV_KEYS));
+  for (const field of Object.keys(ENV_KEYS)) {
+    assert.equal(validateConfigField(field, valid[field]).ok, true, field);
+    assert.equal(validateConfigField(field, invalid[field]).ok, false, field);
+  }
+  assert.equal(validateConfigField('dop', DOP_BIN).ok, false, '未知字段名一律拒');
+  assert.equal(validateConfigField('', DOP_BIN).ok, false);
+});
+
+test('validateConfigField 的 null/空串语义：清空是合法意图，返回 value:null', () => {
+  for (const field of Object.keys(ENV_KEYS)) {
+    for (const raw of [null, undefined, '', '   ']) {
+      assert.deepEqual(validateConfigField(field, raw), { ok: true, value: null }, field);
+    }
+  }
+});
+
+test('ConfigStandard 只暴露 Standard Schema v1 校验面（无 toJSON，不引 schemastery）', () => {
+  assert.ok(Object.isFrozen(ConfigStandard));
+  assert.deepEqual(Object.keys(ConfigStandard), ['~standard']);
+  const standard = ConfigStandard['~standard'];
+  assert.ok(Object.isFrozen(standard));
+  assert.equal(standard.version, 1);
+  assert.equal(standard.vendor, 'heluo');
+  assert.equal(typeof standard.validate, 'function');
+  assert.equal('toJSON' in ConfigStandard, false, '不提供 toJSON：settings 表单面不在本需求的落地路径');
+});
+
+test('ConfigStandard.validate 接受合法对象：返回归一化 value，缺席字段保持缺席', () => {
+  const result = ConfigStandard['~standard'].validate({
+    dopBin: `  ${DOP_BIN}  `,
+    sourceType: ' Enterprise',
+    timeoutMs: '45000',
+  });
+  assert.deepEqual({ ...result }, { value: { dopBin: DOP_BIN, sourceType: 'enterprise', timeoutMs: 45_000 } });
+  assert.equal('issues' in result, false);
+  assert.deepEqual(ConfigStandard['~standard'].validate({}), { value: {} }, '空对象合法，是否 fail closed 由装配层决定');
+});
+
+test('ConfigStandard.validate 非法输入返回 issues（每条带字段 path），绝不抛错', () => {
+  const result = ConfigStandard['~standard'].validate({
+    dopBin: 42,
+    sourceType: 'prod',
+    timeoutMs: 0,
+    ghOwner: '-acme',
+    dopEndpoint: 'dop.example/api',
+  });
+  assert.equal('value' in result, false, '有错就不给半成品配置');
+  assert.deepEqual(
+    result.issues.map((issue) => issue.path),
+    [['dopBin'], ['dopEndpoint'], ['ghOwner'], ['sourceType'], ['timeoutMs']],
+  );
+  for (const issue of result.issues) assert.equal(typeof issue.message, 'string');
+});
+
+test('ConfigStandard.validate 对非对象输入与未知键都返回 issues，不抛错', () => {
+  for (const input of ['dop', 42, true]) {
+    const result = ConfigStandard['~standard'].validate(input);
+    assert.equal('value' in result, false, String(input));
+    assert.equal(result.issues.length, 1, String(input));
+  }
+  assert.equal('value' in ConfigStandard['~standard'].validate([]), false, '数组不是字段对象');
+  assert.deepEqual(ConfigStandard['~standard'].validate({ dopBin: DOP_BIN, dopbin: DOP_BIN }), {
+    issues: [{ message: '未知配置项：dopbin', path: ['dopbin'] }],
+  });
+});
+
+test('ConfigStandard.validate 把缺省配置（undefined/null）当零配置：等价 {}，绝不报错', () => {
+  // QA D-1：宿主 resolveConfig 在补丁层那一行没写 `config:` 时传的是 `undefined`。
+  // 判成非法 → 装配期 ValidationError → 整条 entry 不激活（插件整体消失）。
+  for (const input of [undefined, null]) {
+    assert.deepEqual(ConfigStandard['~standard'].validate(input), { value: {} }, String(input));
+  }
+  // 空配置到底"可不可用"由装配层决定（fail closed 在工具面），校验器只回答"形状对不对"。
+  assert.deepEqual(ConfigStandard['~standard'].validate({}), { value: {} });
+});
+
+test('ConfigStandard 与 validateConfigField 结论一致（一份规则，两个入口）', () => {
+  for (const item of FIELD_CASES) {
+    const fieldOk = validateConfigField(item.field, item.raw).ok;
+    const objectOk = 'value' in ConfigStandard['~standard'].validate({ [item.field]: item.raw });
+    assert.equal(objectOk, fieldOk, `${item.field}=${String(item.raw)}`);
+  }
 });
