@@ -226,8 +226,22 @@ function manifestEnginesTokens(abs) {
 const DATED_MARKERS = /(编制依据|实测|核验|复核|探针|npm registry|当时|历史)/;
 const HAS_DATE = /20\d\d-\d\d-\d\d/;
 
-// Paperclip 保存独立工作副本，不能作为当前仓库的版本检查输入。
-const SKIP_DIRS = new Set(['node_modules', '.git', '.paperclip', 'dist', 'build', '.cache', 'coverage', 'artifacts']);
+/**
+ * 不作为当前仓库版本检查输入的目录：依赖与构建产物、工具本地工作副本（Paperclip、AI 工具），
+ * 以及 TeamFlow 运行日志（宿主托管的临时区，跑完即归档并删除，不是交付源码）。
+ */
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.paperclip',
+  '.agents',
+  'dist',
+  'build',
+  '.cache',
+  'coverage',
+  'artifacts',
+  'logs',
+]);
 
 export function readDshVersion(root = process.cwd()) {
   const raw = readFileSync(join(root, DSH_VERSION_FILE), 'utf8').trim();
@@ -243,7 +257,8 @@ function walk(dir, filter, root, out = []) {
     if (SKIP_DIRS.has(name)) continue;
     const abs = join(dir, name);
     const st = statSync(abs);
-    if (st.isDirectory()) walk(abs, filter, root, out);
+    // 嵌套检出（`.git` 文件或目录）自成仓库，不属当前仓库的受管源码。
+    if (st.isDirectory() && !existsSync(join(abs, '.git'))) walk(abs, filter, root, out);
     else if (filter(relative(root, abs).split(sep).join('/'))) out.push(abs);
   }
   return out;

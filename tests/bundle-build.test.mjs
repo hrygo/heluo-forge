@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { buildEnterpriseBundle } from '../scripts/build-enterprise-bundle.mjs';
+import { buildBundle, buildEnterpriseBundle } from '../scripts/build-enterprise-bundle.mjs';
 import { auditReleaseClosure, auditTarball, npmExecutable } from '../scripts/lib/bundle-rules.mjs';
 
 // These fixtures test packaging failures only; the real product tarball and
@@ -67,6 +67,18 @@ for (const [label, overrides, expected] of [
   const destination = join(root, 'release');
   assert.throws(() => buildEnterpriseBundle({ root, destination }), expected);
   assert.equal(existsSync(destination), false);
+});
+
+test('buildBundle 以指定安装单元为根闭包构建，默认入口仍是企业组合包', (t) => {
+  const root = fixture(t);
+  const member = buildBundle({ root, entry: '@heluo/forge-member', destination: join(root, 'member') });
+  assert.equal(member.manifest.name, '@heluo/forge-member');
+  assert.equal(member.manifest.dependencies, undefined, '无依赖的安装单元不得带 workspace 引用');
+  assert.deepEqual(member.members, {});
+  assert.deepEqual(auditTarball({ label: 'member', manifest: member.manifest, packed: member.packed }), []);
+  const umbrella = buildEnterpriseBundle({ root, destination: join(root, 'umbrella') });
+  assert.equal(umbrella.manifest.name, '@heluo/forge-enterprise');
+  assert.equal(umbrella.manifest.dependencies['@heluo/forge-member'], '0.1.0');
 });
 
 test('build refuses source symlinks and accidentally declared test/cache resources', (t) => {

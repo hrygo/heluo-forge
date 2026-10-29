@@ -77,6 +77,10 @@ yarn-debug.log*
 yarn-error.log*
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
+# TeamFlow run logs and local delivery artifacts (never committed)
+logs/
+.dsh-devops/
+
 # AI Coding & Agent tools local cache/session/artifacts
 .paperclip/
 .gemini/

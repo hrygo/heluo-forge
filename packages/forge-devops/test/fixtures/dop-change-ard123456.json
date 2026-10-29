@@ -1,0 +1,36 @@
+{
+  "id": "ARD123456",
+  "title": "用户测试demo",
+  "status": "open",
+  "type": "feature",
+  "owner": "alice",
+  "description": "用户测试 demo - 用于验证 oh-my-sdd 端到端流程",
+  "acceptance_criteria": [
+    "可以走完 SDD 5 环流程",
+    "openspec/specs/ 被 archive merge 更新",
+    "gh issue + PR 自动关联"
+  ],
+  "created_at": "2026-06-20T00:00:00Z",
+  "sub_systems": [
+    {"code": "ARD.ard-sdk", "name": "智能研发平台.AI原生框架套件"}
+  ],
+  "user_stories": [
+    {
+      "id": "c7fe4770a27841a48dd26d20c49da8b",
+      "code": "US-95376",
+      "title": "用户测试 demo 故事",
+      "type": "主动故事",
+      "state": "正常",
+      "stage": "已上线",
+      "team": "统一开发平台",
+      "assignee": "alice",
+      "business_owner": "alice",
+      "release_info": {
+        "release_num": "R20260620001",
+        "release_name": "用户测试 demo 排期",
+        "release_date": "2026-06-25T00:00:00Z",
+        "release_stage": "投产实施"
+      }
+    }
+  ]
+}
