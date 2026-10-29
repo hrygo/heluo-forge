@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { canonicalPayload, normalizeMessage, parseTrailer } from '../scripts/sensitive-scan/lib.mjs';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, cpSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, cpSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -361,8 +361,19 @@ test('inside-repository destinations must be ignored and untracked', () => {
   const f = setup();
   try {
     const target = join(f.repo, 'device-key.pem');
-    const env = { ...f.env, SENSITIVE_SCAN_KEY_FILE: target };
-    assert.notEqual(installDefault(f, env).status, 0);
+    const trace = join(f.dir, 'git-trace.log');
+    const env = { ...f.env, SENSITIVE_SCAN_KEY_FILE: target, GIT_TRACE: trace };
+    const result = installDefault(f, env);
+    assert.notEqual(result.status, 0, result.status === 0 ? JSON.stringify({
+      platform: process.platform, repo: f.repo, target,
+      gitRoot: run('git', ['rev-parse', '--show-toplevel'], { cwd: f.repo, env }).stdout.trim(),
+      realRepo: realpathSync(f.repo), realAncestor: realpathSync(f.repo),
+      targetExists: existsSync(target), realTarget: existsSync(target) ? realpathSync(target) : null,
+      trace: existsSync(trace) ? readFileSync(trace, 'utf8').split('\n').filter((line) => /built-in: git (?:ls-files|check-ignore)\b/.test(line)) : [],
+      ignored: run('git', ['check-ignore', '-v', '--no-index', '--', 'device-key.pem'], { cwd: f.repo, env }).stdout.trim(),
+      tracked: run('git', ['ls-files', '--', 'device-key.pem'], { cwd: f.repo, env }).stdout.trim(),
+      excludesFile: run('git', ['config', '--show-origin', '--get', 'core.excludesfile'], { cwd: f.repo, env }).stdout.trim(),
+    }) : undefined);
     assert.equal(existsSync(target), false);
     writeFileSync(target, f.key);
     ok('git', ['add', 'device-key.pem'], { cwd: f.repo });
@@ -380,9 +391,22 @@ test('installer rejects already tracked explicit secrets even if ignored', () =>
     writeFileSync(join(dir, 'rules.json'), f.rule, { mode: 0o600 });
     ok('git', ['add', 'secrets/sensitive-scan/rules.json'], { cwd: f.repo });
     writeFileSync(join(f.repo, '.gitignore'), '/secrets/sensitive-scan/\n');
-    const env = { ...f.env, SENSITIVE_SCAN_KEY_FILE: join(dir, 'device-key.pem'), SENSITIVE_SCAN_RULES: join(dir, 'rules.json') };
-    assert.notEqual(installDefault(f, env).status, 0);
-    assert.equal(existsSync(join(dir, 'device-key.pem')), false);
+    const target = join(dir, 'device-key.pem');
+    const rules = join(dir, 'rules.json');
+    const trace = join(f.dir, 'git-trace.log');
+    const env = { ...f.env, SENSITIVE_SCAN_KEY_FILE: target, SENSITIVE_SCAN_RULES: rules, GIT_TRACE: trace };
+    const result = installDefault(f, env);
+    assert.notEqual(result.status, 0, result.status === 0 ? JSON.stringify({
+      platform: process.platform, repo: f.repo, target, rules,
+      gitRoot: run('git', ['rev-parse', '--show-toplevel'], { cwd: f.repo, env }).stdout.trim(),
+      realRepo: realpathSync(f.repo), realAncestor: realpathSync(dir), realRules: realpathSync(rules),
+      targetExists: existsSync(target), realTarget: existsSync(target) ? realpathSync(target) : null,
+      trace: existsSync(trace) ? readFileSync(trace, 'utf8').split('\n').filter((line) => /built-in: git (?:ls-files|check-ignore)\b/.test(line)) : [],
+      ignored: run('git', ['check-ignore', '-v', '--no-index', '--', 'secrets/sensitive-scan/rules.json'], { cwd: f.repo, env }).stdout.trim(),
+      tracked: run('git', ['ls-files', '--', 'secrets/sensitive-scan/rules.json'], { cwd: f.repo, env }).stdout.trim(),
+      excludesFile: run('git', ['config', '--show-origin', '--get', 'core.excludesfile'], { cwd: f.repo, env }).stdout.trim(),
+    }) : undefined);
+    assert.equal(existsSync(target), false);
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
 
