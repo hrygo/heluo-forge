@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
+import { createPrivateKey, generateKeyPairSync } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,6 @@ import {
   keyIdFromPublicKey,
   normalizeMessage,
   parseTrailer,
-  rulesDigest,
   sha256Hex,
   stripTrailer,
 } from '../scripts/sensitive-scan/lib.mjs';
@@ -20,6 +19,7 @@ const ROOT = resolve(import.meta.dirname, '..');
 const COMMIT_MSG = join(ROOT, 'scripts/sensitive-scan/commit-msg.mjs');
 const VERIFY = join(ROOT, 'scripts/sensitive-scan/verify.mjs');
 const INSTALL = join(ROOT, 'scripts/sensitive-scan/install-hook.mjs');
+const KEYGEN = join(ROOT, 'scripts/sensitive-scan/keygen.mjs');
 
 function git(cwd, args, options = {}) {
   return spawnSync('git', args, { cwd, encoding: 'utf8', ...options });
@@ -60,23 +60,12 @@ function writeDeviceKey(dir) {
   };
 }
 
-function writeRegistry(repo, entry, rules) {
+function writeTeamPublicKey(repo, entry) {
   const dir = join(repo, '.github', 'sensitive-scan');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'keys.json'), JSON.stringify({ version: 1, keys: [entry] }, null, 2));
-  writeFileSync(
-    join(dir, 'allowed-rules.json'),
-    JSON.stringify(
-      {
-        version: 1,
-        rules: [{ digest: rulesDigest(rules), policyId: 'test-policy' }],
-        scanners: ['heluo-sensitive-scan@1.0.0'],
-      },
-      null,
-      2,
-    ),
-  );
-  return dir;
+  const path = join(dir, 'team-public-key.pub');
+  writeFileSync(path, entry.publicKey);
+  return path;
 }
 
 function newRepo() {
@@ -98,6 +87,11 @@ function commitSigned(repo, message, env) {
     encoding: 'utf8',
   });
   if (result.status !== 0) throw new Error(`commit-msg failed: ${result.stderr}`);
+  const parsed = parseTrailer(readFileSync(messagePath, 'utf8'));
+  const privateKey = createPrivateKey(readFileSync(env.SENSITIVE_SCAN_KEY_FILE));
+  const parenttree = gitOk(repo, ['rev-parse', 'HEAD^{tree}']);
+  const { fields } = createAttestation({ body: parsed.body, tree: parsed.fields.tree, parenttree, rules: parsed.fields.rules, keyId: parsed.fields.key, privateKey });
+  writeFileSync(messagePath, formatTrailer(parsed.body, fields));
   const committed = git(repo, ['commit', '--no-verify', '-q', '-F', messagePath]);
   if (committed.status !== 0) throw new Error(`git commit failed: ${committed.stderr}`);
   return gitOk(repo, ['rev-parse', 'HEAD']);
@@ -129,6 +123,17 @@ test('stripTrailer does not truncate body content when the marker is embedded', 
   const message = 'subject\n\nSensitive-Scan: v1\nnot a trailer\n';
   assert.equal(stripTrailer(message), 'subject\n\nSensitive-Scan: v1\nnot a trailer\n');
   assert.throws(() => parseTrailer(message), /unexpected line/);
+});
+
+test('stripTrailer replaces v1 and v2 trailers without truncating prose', () => {
+  const keys = generateKeyPairSync('ed25519');
+  const body = 'subject\n\nSensitive-Scan: v2\nnot a trailer\n';
+  for (const parenttree of [undefined, 'c'.repeat(40)]) {
+    const fields = createAttestation({ body, tree: 'a'.repeat(40), parenttree, rules: 'b'.repeat(64), keyId: keyIdFromPublicKey(keys.publicKey), privateKey: keys.privateKey }).fields;
+    const text = formatTrailer(body, fields);
+    assert.equal(stripTrailer(text), body);
+    assert.equal(parseTrailer(text).fields.version, parenttree ? 'v2' : 'v1');
+  }
 });
 
 test('commit-msg blocks large and binary files instead of signing a partial scan', () => {
@@ -273,12 +278,105 @@ test('commit-msg blocks a sensitive finding in the commit message itself', () =>
   }
 });
 
+test('team keygen prints a public PEM and never overwrites an existing private key', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-key-'));
+  try {
+    const keyPath = join(dir, 'team.pem');
+    const run = () => spawnSync(process.execPath, [KEYGEN, '--key-file', keyPath], { encoding: 'utf8' });
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /-----BEGIN PUBLIC KEY-----/);
+    assert.doesNotMatch(first.stdout, /PRIVATE KEY/);
+    const existing = readFileSync(keyPath);
+    const second = run();
+    assert.notEqual(second.status, 0);
+    assert.deepEqual(readFileSync(keyPath), existing);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('verifier rejects a missing, malformed, or non-Ed25519 key from base', () => {
+  const { dir, repo } = newRepo();
+  try {
+    writeFileSync(join(repo, 'file'), 'base\n');
+    gitOk(repo, ['add', '.']);
+    gitOk(repo, ['commit', '--no-verify', '-q', '-m', 'base']);
+    const run = (base) => spawnSync(process.execPath, [VERIFY, '--base', base, '--head', base], { cwd: repo, encoding: 'utf8' });
+    assert.match(run('HEAD').stderr, /cannot read team public key/);
+    const path = writeTeamPublicKey(repo, { publicKey: 'not a key' });
+    gitOk(repo, ['add', '.']); gitOk(repo, ['commit', '--no-verify', '-q', '-m', 'invalid']);
+    assert.match(run('HEAD').stderr, /invalid team public key/);
+    const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    writeFileSync(path, publicKey.export({ type: 'spki', format: 'pem' }));
+    gitOk(repo, ['add', '.']); gitOk(repo, ['commit', '--no-verify', '-q', '-m', 'rsa']);
+    assert.match(run('HEAD').stderr, /must be Ed25519/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('verifier never accepts a local override for the base public key', () => {
+  const result = spawnSync(process.execPath, [VERIFY, '--base', 'HEAD', '--head', 'HEAD', '--public-key-file', 'override.pem'], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /unknown argument: --public-key-file/);
+});
+
+test('PR cannot replace the trusted public key from its own head', () => {
+  const { dir, repo } = newRepo();
+  try {
+    const rules = writeRules(dir);
+    const trusted = writeDeviceKey(dir);
+    const path = writeTeamPublicKey(repo, trusted.entry);
+    gitOk(repo, ['add', '.']);
+    gitOk(repo, ['commit', '--no-verify', '-q', '-m', 'base']);
+    const base = gitOk(repo, ['rev-parse', 'HEAD']);
+    mkdirSync(join(dir, 'other'));
+    const other = writeDeviceKey(join(dir, 'other'));
+    writeFileSync(path, other.entry.publicKey);
+    gitOk(repo, ['add', '.']);
+    const head = commitSigned(repo, 'replace key', { SENSITIVE_SCAN_RULES: rules, SENSITIVE_SCAN_KEY_FILE: other.privatePath });
+    const result = spawnSync(process.execPath, [VERIFY, '--base', base, '--head', head], { cwd: repo, encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /key does not match/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('verifier trusts one public key from base without registry or allowlist', () => {
+  const { dir, repo } = newRepo();
+  try {
+    const rules = writeRules(dir);
+    const key = writeDeviceKey(dir);
+    const publicDir = join(repo, '.github', 'sensitive-scan');
+    mkdirSync(publicDir, { recursive: true });
+    writeFileSync(join(publicDir, 'team-public-key.pub'), key.entry.publicKey);
+    gitOk(repo, ['add', '.']);
+    gitOk(repo, ['commit', '--no-verify', '-q', '-m', 'base']);
+    const base = gitOk(repo, ['rev-parse', 'HEAD']);
+    writeFileSync(join(repo, 'safe.txt'), 'safe\n');
+    gitOk(repo, ['add', 'safe.txt']);
+    const head = commitSigned(repo, 'signed', {
+      SENSITIVE_SCAN_RULES: rules,
+      SENSITIVE_SCAN_KEY_FILE: key.privatePath,
+    });
+    const result = spawnSync(process.execPath, [VERIFY, '--base', base, '--head', head], {
+      cwd: repo, encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /1 commit\(s\) verified/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('verifier accepts a clean signed commit and rejects a reused trailer on another tree', () => {
   const { dir, repo } = newRepo();
   try {
     const rules = writeRules(dir);
     const key = writeDeviceKey(dir);
-    const registryDir = writeRegistry(repo, key.entry, rules);
+    const publicKeyPath = writeTeamPublicKey(repo, key.entry);
     writeFileSync(join(repo, 'base.txt'), 'base\n');
     gitOk(repo, ['add', '.']);
     gitOk(repo, ['commit', '--no-verify', '-q', '-m', 'base']);
@@ -301,10 +399,6 @@ test('verifier accepts a clean signed commit and rejects a reused trailer on ano
           base,
           '--head',
           head,
-          '--registry-file',
-          join(registryDir, 'keys.json'),
-          '--rules-file',
-          join(registryDir, 'allowed-rules.json'),
         ],
         { cwd: repo, env, encoding: 'utf8' },
       );
@@ -321,37 +415,25 @@ test('verifier accepts a clean signed commit and rejects a reused trailer on ano
     assert.equal(fromBase.status, 0, fromBase.stderr);
     assert.match(fromBase.stdout, /1 commit\(s\) verified/);
 
-    const registryPath = join(registryDir, 'keys.json');
-    const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
-    registry.keys[0].status = 'revoked';
-    writeFileSync(registryPath, JSON.stringify(registry, null, 2));
-    const revoked = verify(signed);
-    assert.equal(revoked.status, 1);
-    assert.match(revoked.stderr, /inactive key/);
-    registry.keys[0].status = 'active';
-    writeFileSync(registryPath, JSON.stringify(registry, null, 2));
-
-    const allowedPath = join(registryDir, 'allowed-rules.json');
-    const allowed = JSON.parse(readFileSync(allowedPath, 'utf8'));
-    allowed.rules[0].digest = '0'.repeat(64);
-    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
-    const badRules = verify(signed);
-    assert.equal(badRules.status, 1);
-    assert.match(badRules.stderr, /rules digest is not allowlisted/);
-    allowed.rules[0].digest = rulesDigest(rules);
-    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
-
-    allowed.scanners = ['other-scanner@1.0.0'];
-    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
-    const badScanner = verify(signed);
-    assert.equal(badScanner.status, 1);
-    assert.match(badScanner.stderr, /scanner is not allowlisted/);
-    allowed.scanners = ['heluo-sensitive-scan@1.0.0'];
-    writeFileSync(allowedPath, JSON.stringify(allowed, null, 2));
-
     const messagePath = join(repo, '.git', 'message.txt');
     const signedMessage = gitOk(repo, ['show', '-s', '--format=%B', signed]);
-    const markerIndex = signedMessage.split('\n').indexOf('Sensitive-Scan: v1');
+    const signedTree = gitOk(repo, ['show', '-s', '--format=%T', signed]);
+    const checkCorruption = (message) => {
+      const forged = gitOk(repo, ['commit-tree', signedTree, '-p', signed], { input: `${message}\n` });
+      return spawnSync(process.execPath, [VERIFY, '--base', signed, '--head', forged], { cwd: repo, encoding: 'utf8' });
+    };
+    const unsigned = checkCorruption('unsigned');
+    assert.equal(unsigned.status, 1);
+    assert.match(unsigned.stderr, /missing Sensitive-Scan trailer/);
+    const corruptedSignature = signedMessage.replace(/(Sensitive-Scan-Sig: )([A-Za-z0-9+/])/, (_match, prefix, first) => `${prefix}${first === 'A' ? 'B' : 'A'}`);
+    const badSignature = checkCorruption(corruptedSignature);
+    assert.equal(badSignature.status, 1);
+    assert.match(badSignature.stderr, /signature verification failed/);
+    const corruptedMetadata = signedMessage.replace(/Sensitive-Scan-Rules: [a-f0-9]+/, `Sensitive-Scan-Rules: ${'0'.repeat(64)}`);
+    const badMetadata = checkCorruption(corruptedMetadata);
+    assert.equal(badMetadata.status, 1);
+    assert.match(badMetadata.stderr, /signature verification failed/);
+    const markerIndex = signedMessage.split('\n').indexOf('Sensitive-Scan: v2');
     const trailerBlock = signedMessage.split('\n').slice(markerIndex).join('\n');
     writeFileSync(messagePath, `different\n\n${trailerBlock}\n`);
     gitOk(repo, ['commit', '--allow-empty', '--no-verify', '-q', '-F', messagePath]);

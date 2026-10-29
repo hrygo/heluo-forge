@@ -1,148 +1,86 @@
-# Sensitive-scan local attestation
+# Team sensitive-scan attestation
 
-This directory implements the **local scan + remote signature verification**
-contract. Rule patterns and file contents stay on the developer machine. The
-remote side receives only a signed commit trailer containing a tree OID, a
-message digest, a rules digest and a scanner version.
+This change provides a local scan and a remote signature verifier using one team
+Ed25519 key pair. The Git `commit-msg` hook scans staged changes and the commit
+message; GitHub verifies signed commit trailers using the public key from the PR
+base. Git repository contents are pushed normally. The shared private key, real
+rules and scan results must not be committed or uploaded to the remote service.
+The verifier does not scan files or receive the real rules or findings.
 
-The design is intentionally **not** a remote scanner: sensitive rule sets must
-not be copied to a SaaS CI system, and scan findings must not be uploaded.
+## Installation and trust boundary
 
-## Trust boundary
+Use the controlled complete distribution and follow [TEAM-FULL-INSTALL.md](TEAM-FULL-INSTALL.md).
+It includes the existing team key and rules; its unencrypted ZIP and extracted
+copies are sensitive key material. Do not create individual developer keys.
+The installer places scripts, private key and rules in the Git common dir and
+installs the Git-selected hook; linked worktrees ordinarily share that setup,
+while independent clones each need installation. Existing different hooks or
+files are not overwritten. Check the installation guide for path, permission,
+worktree and platform limitations; later Git configuration can bypass the hook.
 
-The signature proves:
+A valid signature proves only that a holder of the shared private key signed a
+v2 statement bound to the commit tree, the scanned baseline HEAD tree, normalized
+commit message and trailer metadata. It does not prove the hook ran, the scanner was unmodified, or the rules were
+correct or effective. A malicious or compromised key holder can sign a false
+statement; this is not a defense against them, and individual holders cannot be
+identified or revoked using the shared key. The signed rules digest, scanner ID,
+time and nonce are informational: the remote verifier does not enforce a rules
+or scanner allowlist or attestation age.
 
-> A holder of key `key-id` signed a statement that the local scanner passed for
-> tree `X`, message `M`, rules digest `R` and scanner version `S`.
+## Bootstrap and GitHub configuration
 
-It does **not** prove that the scanner binary was unmodified, that the rules
-were effective, or that the signer is not a compromised same-user process. A
-per-device key stored in an OS keychain/TPM is the recommended production
-control; the initial CLI stores a 0600 key file and is a bootstrap mechanism,
-not the final hardware-backed design.
+The target workflow always verifies; no repository-variable bypass is used.
+Missing or invalid public key on the base fails closed. The workflow and key in a
+worktree do not establish remote deployment, successful checks or branch rules.
 
-## Setup
+1. Review and merge the verifier, workflow and `team-public-key.pub` into the PR
+   base before requiring the new check. During initial bootstrap, the base lacks
+   the new key, so the new check can fail and must not yet be required. Confirm
+   the key fingerprint through an independent trusted channel.
+2. Test a correctly signed PR and an unsigned or incorrectly signed PR. Only
+   after verifying the results, configure the one new required context
+   `sensitive-attestation-verify`; keep the existing `verify` check separately.
+   Require up-to-date branches and linear history, disable squash and merge
+   commits, and use rebase merging. These are administrator actions, not effects
+   of installing the package.
+3. The `pull_request_target` workflow checks out trusted base code, fetches PR
+   Git objects and verifies the event head; it does not check out or execute PR
+   code, reads no secrets and uses read-only contents permission. Protect workflow
+   and public key changes with review; an organization-level required workflow
+   offers stronger control. Merge queue is not supported by this workflow.
 
-1. Generate a device key:
-
-   ```sh
-   node scripts/sensitive-scan/keygen.mjs --owner "your-enterprise-identity"
-   ```
-
-   The private key is written outside the repository, under
-   `~/.config/heluo-forge/sensitive-scan/device-key.pem` by default, with mode
-   `0600` on POSIX. The command prints a public registry entry. On Windows the
-   POSIX mode check is skipped because Windows uses ACLs; keep the key in the
-   user profile and restrict the file ACL to the current user.
-
-2. Put the local rules file outside the repository, for example:
-
-   ```sh
-   ~/.config/heluo-forge/sensitive-scan/rules.json
-   ```
-
-   `scripts/sensitive-scan/rules.example.json` is a synthetic example only.
-   Do not commit real rule patterns. Keep the effective rules file out of git.
-
-3. Add the printed public entry to `.github/sensitive-scan/keys.json` through a
-   reviewed pull request. Add the SHA-256 of the approved rules file to
-   `.github/sensitive-scan/allowed-rules.json`.
-
-4. Install the local `commit-msg` hook:
-
-   ```sh
-   node scripts/sensitive-scan/install-hook.mjs
-   ```
-
-   This is a convenience and feedback path. It is not an enforcement boundary;
-   the server-side required check is.
-
-5. Enable enforcement only after keys and rules are registered:
-
-   - set repository variable `SENSITIVE_SCAN_ENFORCE=true`;
-   - make `sensitive-attestation / verify` a required check;
-   - require linear history and review;
-   - disable squash merge and merge commits.
-
-## Commit trailer
-
-The `commit-msg` hook appends:
-
-```text
-Sensitive-Scan: v1
-Sensitive-Scan-Tree: <tree oid>
-Sensitive-Scan-Message: <sha256 of message without trailer>
-Sensitive-Scan-Rules: <sha256 of local rules file>
-Sensitive-Scan-Scanner: heluo-sensitive-scan@1.0.0
-Sensitive-Scan-Time: <unix seconds>
-Sensitive-Scan-Nonce: <random>
-Sensitive-Scan-Key: <key id>
-Sensitive-Scan-Sig: <base64 Ed25519 signature>
-```
-
-The signature covers `v1`, tree, message digest, rules digest, scanner id, time
-and nonce. The tree and message binding prevents copying a valid trailer onto a
-different commit. Parents are intentionally not signed so a conflict-free
-rebase does not invalidate the attestation; any conflict resolution changes the
-tree and requires a new scan.
-
-## Verify locally
+## Verification and rotation
 
 ```sh
 node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD
 ```
 
-The verifier reads public keys and the rules allowlist from `--base` by default,
-not from the PR head. It never reads the local rules file and never scans files.
+The team hook signs v2 with the actual scanned baseline HEAD tree. The verifier
+reads the public key from `--base`, rejects v1 and requires exactly one parent;
+it checks that the parent's tree matches the signed baseline tree, as well as
+the signature, commit tree and message. Root and merge commits cannot be signed
+by the team hook; empty ranges are rejected. A changed baseline tree after rebase
+requires a fresh scan and signature. Ordinary amend also requires a fresh scan
+and signature: its final parent tree normally differs from the HEAD tree scanned
+by the hook, so a trailer produced during that amend is rejected. Rewriting the
+committer or a conflict-free rebase can retain the signature only when the signed
+baseline tree, commit tree and message remain unchanged. Tree binding does not
+prevent races during scanning or forgery by a key holder. Unscannable content is
+blocked by the local hook unless explicitly excluded in local rules; see the
+installation guide for supported file types and limitations.
 
-## GitHub enforcement
+The older `sensitive:scan` and `sensitive:install` CLI entries use the legacy v1
+scanner and different rule format and paths; they cannot satisfy the v2 remote
+check. The legacy installer refuses to overwrite the team hook. Existing v1
+complete-package installations require the new complete package and its explicit
+`--upgrade-known-v1` procedure; see [TEAM-FULL-INSTALL.md](TEAM-FULL-INSTALL.md)
+for preconditions, backups and interruption recovery. Do not overwrite unknown
+hooks or replace private keys or rules manually.
 
-`.github/workflows/sensitive-attestation.yml` runs on `pull_request_target`,
-checks out the base revision only, fetches the PR commits, and verifies the
-trailers. It has read-only permissions and no secrets. It does not execute PR
-code. The workflow is non-blocking until `SENSITIVE_SCAN_ENFORCE=true` is set.
-
-After enabling, the check name is `sensitive-attestation / verify`. It should be
-required by the branch ruleset, with "require branches to be up to date before
-merging" enabled. Without that setting, a key revocation or allowlist change on
-the base branch does not re-run checks already attached to an open PR. A PR can
-modify the workflow file, so use an organization-level required workflow for
-stronger protection; the repository workflow is the reference implementation.
-
-## Enrollment and rotation
-
-- The first key/rules allowlist can only be merged while enforcement is off
-  (bootstrap). After that, key-enrollment PRs must be signed by an already
-  trusted key; otherwise the base registry has no key to verify them.
-- Rotate by adding the new public key and revoking the old one in a reviewed PR.
-  Merge the rotation before revoking commits that are still in flight.
-- Offboarding: set `status: "revoked"` and/or `notAfter`; the verifier reads the
-  base registry, so revocation takes effect for new PR checks immediately.
-- A rules update changes the digest. Add the new digest to the allowlist and
-  remove the old one only after in-flight PRs are rebased and re-signed.
-
-## Why not a fixed string or remote scan
-
-- A fixed string is forgeable and copyable.
-- A shared HMAC key can be extracted from one client and used to forge all
-  clients.
-- Remote scanning requires sending sensitive rules or findings to the remote
-  service.
-- A per-device asymmetric key plus a tree-bound payload is the minimum practical
-  contract when rules must stay local.
-
-## Limitations
-
-- The initial key is a 0600 file on POSIX; Windows ACL enforcement is not
-  implemented by this bootstrap tool. Production should move it to an OS
-  keychain, TPM or secure enclave with non-exportable keys.
-- A compromised developer account can sign a false statement. Hardware-backed
-  keys and device compliance reduce, but do not eliminate, this risk.
-- Merge commits and squash merges are rejected. Use rebase merge with linear
-  history, or add a trusted merge bot that re-signs the final commit.
-- Rules updates require a new allowlist digest and a reviewed registry change.
-- The verifier checks the allowlist digest, not the rule content; the remote
-  cannot know what the local rules were.
-- Binary, oversized or unreadable files are blocking by default. A path must be
-  explicitly excluded in the approved local rules to skip it; otherwise the
-  local hook refuses to create an attestation.
+Rotate the shared pair under custodian control. A reviewed key-replacement PR
+must be signed with the old key because the verifier reads the base key. After
+merge, securely distribute the new private key and re-sign in-flight PRs; only
+one key is trusted at a time. If the old key is unavailable or compromised,
+use a reviewed administrator-controlled recovery process rather than claiming an
+unsigned PR passed the required check. The complete package does not configure
+GitHub settings; platform and remote enforcement acceptance remain separate.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { gitOutput, repoRoot } from './lib.mjs';
 
@@ -25,18 +25,24 @@ try {
   const hooksDir = resolve(root, gitOutput(['rev-parse', '--git-path', 'hooks'], { cwd: root }).trim());
   mkdirSync(hooksDir, { recursive: true });
   const target = join(hooksDir, 'commit-msg');
-  if (existsSync(target)) {
-    const current = readFileSync(target, 'utf8');
-    if (!current.includes(MARKER)) {
-      const backup = `${target}.bak.${Date.now()}`;
-      copyFileSync(target, backup);
-      console.error(`sensitive-scan: backed up existing hook to ${backup}`);
+  try {
+    // Exclusive creation prevents an existing hook, including a dangling symlink,
+    // from being replaced between an existence check and the write.
+    const fd = openSync(target, 'wx', 0o755);
+    try {
+      writeFileSync(fd, SHIM);
+      fchmodSync(fd, 0o755);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    if (!lstatSync(target).isFile() || readFileSync(target, 'utf8') !== SHIM) {
+      throw new Error(`refusing to overwrite existing commit-msg hook: ${target}`);
     }
   }
-  writeFileSync(target, SHIM, { mode: 0o755 });
-  chmodSync(target, 0o755);
   console.log(`sensitive-scan: installed ${target}`);
-  console.log('run `git commit` once to create a signed attestation; --no-verify is visible to the server check');
+  console.log('legacy v1 hook installed; it cannot satisfy the team v2 remote check. Use TEAM-FULL-INSTALL.md for the team hook.');
 } catch (error) {
   console.error(`sensitive-scan install-hook: ${error.message}`);
   process.exit(1);

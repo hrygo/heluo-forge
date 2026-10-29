@@ -64,4 +64,4 @@ jobs:
           node-version-file: .node-version
           package-manager-cache: false
       - name: Run portable sensitive-scan tests
-        run: node --test tests/sensitive-scan.test.mjs
+        run: node --test tests/sensitive-scan.test.mjs tests/sensitive-scan-team.test.mjs tests/sensitive-scan-full-distribution.test.mjs tests/sensitive-scan-parent-tree.test.mjs tests/sensitive-scan-legacy-install.test.mjs tests/sensitive-scan-managed-upgrade.test.mjs

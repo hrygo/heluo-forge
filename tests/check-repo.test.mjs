@@ -171,6 +171,10 @@ jobs:
     const accepted = checkRepo(root);
     assert.deepEqual(accepted.errors, []);
 
+    const withExpectedSha = workflow.replace('      - run: node', '      - env:\n          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n        run: node');
+    write(root, '.github/workflows/sensitive-attestation.yml', withExpectedSha);
+    assert.deepEqual(checkRepo(root).errors, []);
+
     write(
       root,
       '.github/workflows/sensitive-attestation.yml',
