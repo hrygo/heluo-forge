@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.6.6 |
+| 版本 | V0.6.7 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -87,7 +87,7 @@
 - `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。
 - CI 使用 `.github/workflows/check.yml` 的单个 `verify` job，执行 `node --run check`；默认 `contents: read`，外部动作固定到完整提交 SHA，常规检查不使用 `pull_request_target`。触发与依赖策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
 - `.github/workflows/check.yml` 另有非必需的 `sensitive-scan` 矩阵，仅在 Ubuntu、macOS、Windows runner 上执行本地敏感扫描单测，用于跨环境回归；稳定后再评估是否设为 required。
-- 唯一例外是 `.github/workflows/sensitive-attestation.yml`：它使用 `pull_request_target` 仅为从基线加载受信任的验签脚本，checkout 基线、只 fetch PR 的 git 对象，不 checkout、不执行 PR 代码，不读取 secrets，权限仅 `contents: read`。本地敏感规则与扫描内容不上传；远端只验证本地签名的 tree/规则摘要。实现与边界见[敏感扫描说明](../../scripts/sensitive-scan/README.md)。启用前必须完成密钥登记、规则摘要 allowlist 与 required check 配置。
+- `pull_request_target` 的窄例外是 `.github/workflows/sensitive-attestation.yml`：目标实现从 PR 基线加载受信任的验签脚本及单一团队公钥，checkout 基线、只 fetch PR 的 Git 对象并校验事件 head，不 checkout、不执行 PR 代码，不读取 secrets，权限仅 `contents: read`。工作流始终验签，基线缺少或无效公钥时失败；首次合入工作流与公钥后，须实测正反例，再将唯一新 required context `sensitive-attestation-verify` 与现有 `verify` 分别配置。团队 v2 签名绑定实际扫描的 HEAD tree，远端要求唯一父提交 tree 与签名基线一致并拒绝 v1；基线 tree 改变的 rebase 和普通 amend 须重新扫描签名。旧 `sensitive:scan` / `sensitive:install` 是不同规则格式和路径的 legacy v1，不能满足 v2。Git 仓库内容正常推送，私钥、真实规则与扫描结果不上远端；签名不证明规则有效，也不能防止扫描竞态或恶意持钥人伪造声明。共享 Git common dir 安装、引导与限制见[敏感扫描说明](../../scripts/sensitive-scan/README.md)；工作流合入、远端实测及分支保护配置均须分别取证。
 - CI 只跑离线检查；不接触企业系统、不注入生产密钥、不自动发布。
 
 ## 7. 版本与发布

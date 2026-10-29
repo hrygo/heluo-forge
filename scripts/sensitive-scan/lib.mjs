@@ -80,10 +80,10 @@ export function cleanMessage(message) {
 
 export function stripTrailer(message) {
   const lines = messageLines(message);
-  const index = lines.findLastIndex((line) => line === TRAILER_MARKER);
+  const index = lines.findLastIndex((line) => line === TRAILER_MARKER || line === 'Sensitive-Scan: v2');
   if (index === -1) return normalizeMessage(message);
   try {
-    return parseTrailer(message).body;
+    return parseTrailerInternal(message, true).body;
   } catch {
     // Do not silently drop body content when the marker is embedded in prose.
     return normalizeMessage(message);
@@ -91,8 +91,12 @@ export function stripTrailer(message) {
 }
 
 export function parseTrailer(message) {
+  return parseTrailerInternal(message, false);
+}
+
+function parseTrailerInternal(message, allowLegacyV2) {
   const lines = messageLines(message);
-  const index = lines.findLastIndex((line) => line === TRAILER_MARKER);
+  const index = lines.findLastIndex((line) => line === TRAILER_MARKER || line === 'Sensitive-Scan: v2');
   if (index === -1) return null;
 
   const fields = {};
@@ -100,30 +104,39 @@ export function parseTrailer(message) {
     if (!line) continue;
     const match = /^Sensitive-Scan(?:-([A-Za-z]+))?: (.+)$/.exec(line);
     if (!match) {
-      throw new Error(`unexpected line after ${TRAILER_MARKER}: ${line}`);
+      throw new Error('unexpected line in Sensitive-Scan trailer');
     }
     const key = (match[1] || 'version').toLowerCase();
-    if (Object.hasOwn(fields, key)) throw new Error(`duplicate field: Sensitive-Scan-${key}`);
+    if (Object.hasOwn(fields, key)) throw new Error('duplicate Sensitive-Scan field');
     fields[key] = match[2];
   }
 
-  const required = ['version', 'tree', 'message', 'rules', 'scanner', 'time', 'nonce', 'key', 'sig'];
+  if (!['v1', 'v2'].includes(fields.version)) {
+    throw new Error(`unsupported Sensitive-Scan version: ${fields.version}`);
+  }
+  const required = ['version', 'tree', 'message', 'scanner', 'time', 'nonce', 'key', 'sig'];
+  if (fields.version === 'v1') required.push('rules');
+  else {
+    required.push('parenttree');
+    if (allowLegacyV2 && Object.hasOwn(fields, 'rules')) required.push('rules');
+    for (const key of Object.keys(fields)) {
+      if (!required.includes(key)) throw new Error('unexpected Sensitive-Scan field (rules or extra)');
+    }
+  }
   for (const key of required) {
     if (!fields[key]) throw new Error(`missing Sensitive-Scan-${key}`);
-  }
-  if (fields.version !== TRAILER_VERSION) {
-    throw new Error(`unsupported Sensitive-Scan version: ${fields.version}`);
   }
   const body = lines.slice(0, index).join('\n');
   return { fields, body: body.trim() ? normalizeMessage(body) : '' };
 }
 
-export function canonicalPayload({ tree, message, rules, scanner, time, nonce }) {
+export function canonicalPayload({ tree, parenttree, message, rules, scanner, time, nonce, version = 'v1' }) {
   return [
-    TRAILER_VERSION,
+    version,
     `tree=${tree}`,
+    ...(version === 'v2' ? [`parent-tree=${parenttree}`] : []),
     `message=${message}`,
-    `rules=${rules}`,
+    ...(version === 'v1' ? [`rules=${rules}`] : []),
     `scanner=${scanner}`,
     `time=${time}`,
     `nonce=${nonce}`,
@@ -132,10 +145,11 @@ export function canonicalPayload({ tree, message, rules, scanner, time, nonce })
 
 export function formatTrailer(body, fields) {
   const lines = [
-    TRAILER_MARKER,
+    `Sensitive-Scan: ${fields.version ?? TRAILER_VERSION}`,
     `Sensitive-Scan-Tree: ${fields.tree}`,
+    ...(fields.version === 'v2' ? [`Sensitive-Scan-ParentTree: ${fields.parenttree}`] : []),
     `Sensitive-Scan-Message: ${fields.message}`,
-    `Sensitive-Scan-Rules: ${fields.rules}`,
+    ...(fields.version === 'v2' ? [] : [`Sensitive-Scan-Rules: ${fields.rules}`]),
     `Sensitive-Scan-Scanner: ${fields.scanner}`,
     `Sensitive-Scan-Time: ${fields.time}`,
     `Sensitive-Scan-Nonce: ${fields.nonce}`,
@@ -146,18 +160,20 @@ export function formatTrailer(body, fields) {
   return `${prefix}${lines.join('\n')}\n`;
 }
 
-export function createAttestation({ body, tree, rules, keyId, privateKey, now = Date.now() }) {
+export function createAttestation({ body, tree, parenttree, rules, keyId, privateKey, now = Date.now() }) {
   const digest = sha256Hex(normalizeMessage(body));
   const time = Math.floor(now / 1000);
   const nonce = randomBytes(16).toString('hex');
-  const payload = canonicalPayload({ tree, message: digest, rules, scanner: SCANNER_ID, time, nonce });
+  const version = parenttree === undefined ? 'v1' : 'v2';
+  const payload = canonicalPayload({ version, tree, parenttree, message: digest, rules, scanner: SCANNER_ID, time, nonce });
   const signature = sign(null, Buffer.from(payload, 'utf8'), privateKey).toString('base64');
   return {
     digest,
     fields: {
+      ...(version === 'v2' ? { version, parenttree } : {}),
       tree,
       message: digest,
-      rules,
+      ...(version === 'v1' ? { rules } : {}),
       scanner: SCANNER_ID,
       time,
       nonce,

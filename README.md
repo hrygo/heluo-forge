@@ -73,9 +73,9 @@ pnpm check
 | `node --test packages/forge-iam/test packages/forge-credentials-keychain/test` | 单独验证 IAM 与凭据 keychain 骨架 |
 | `node --test packages/forge-market/test/*.test.mjs` | 单独验证市场插件的逻辑、契约及本地安装链路 |
 | `node --test services/market-index/test/*.test.mjs` | 单独验证索引校验器 |
-| `node scripts/sensitive-scan/verify.mjs --base <rev> --head <rev>` | 验证本地敏感扫描 attestation；不向远端发送规则或文件内容 |
+| `node scripts/sensitive-scan/verify.mjs --base <rev> --head <rev>` | 用基线团队公钥验证敏感扫描 attestation；Git 仓库内容仍正常推送，私钥、真实规则和扫描结果不上远端 |
 
-[CI 工作流](.github/workflows/check.yml)通过 `node --run check` 执行相同定义，以只读权限运行，外部动作固定到提交 SHA。本地检查通过只证明对应规则和离线用例通过；远端 CI、分支保护、企业联调与 Windows / 麒麟实机效果需分别取证。 本地敏感扫描的 hook、密钥登记、规则摘要 allowlist 与 `pull_request_target` 的窄例外见[敏感扫描说明](scripts/sensitive-scan/README.md)。
+[CI 工作流](.github/workflows/check.yml)通过 `node --run check` 执行相同定义，以只读权限运行，外部动作固定到提交 SHA。本地检查通过只证明对应规则和离线用例通过；远端 CI、分支保护、企业联调与 Windows / 麒麟实机效果需分别取证。 本地敏感扫描的共享 Git common dir 安装、团队单公钥与 `pull_request_target` 的窄例外见[敏感扫描说明](scripts/sensitive-scan/README.md)；合入和远端 required 配置须分别完成，签名不能防止恶意持钥人。
 
 ## 4. 仓库如何组织
 
