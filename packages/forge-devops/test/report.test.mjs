@@ -28,7 +28,7 @@ const OTHER_SHA = 'b'.repeat(40);
 const AT = '2026-10-28T21:00:00+08:00';
 
 const evidence = (sourceType, overrides = {}) => ({
-  command: 'dop change view ARD123456 -j',
+  command: 'dop change view ARD123456 --json',
   at: AT,
   hostVersion: '0.2.1-rc.2',
   target: 'ARD123456',
@@ -54,7 +54,7 @@ function sampleReport(overrides = {}) {
       {
         index: 1,
         text: '上下文卡字段齐全',
-        evidence: [evidence('mock'), evidence('enterprise', { command: 'dop change view ARD123456 -j --endpoint', result: '企业环境同字段' })],
+        evidence: [evidence('mock'), evidence('enterprise', { command: 'dop change view ARD123456 --json --endpoint', result: '企业环境同字段' })],
         conclusion: 'passed',
       },
       { index: 2, text: '报告逐条证据', evidence: [evidence('mock', { command: 'node --test test/report.test.mjs' })], conclusion: 'passed' },

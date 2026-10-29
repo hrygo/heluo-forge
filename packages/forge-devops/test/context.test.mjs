@@ -77,8 +77,8 @@ const ARD222222 = {
   ],
 };
 
-const DOP_SOURCE = { kind: 'dop', command: 'dop change view ARD222222 -j', at: AT, sourceRevision: 'dop:abcdef123456', sourceType: 'mock' };
-const GH_SOURCE = { kind: 'gh', command: 'gh repo list --limit 100 --json nameWithOwner', at: AT, sourceRevision: 'gh:2026-10-28T09:00:00+08:00', sourceType: 'mock' };
+const DOP_SOURCE = { kind: 'dop', command: 'dop change view ARD222222 --json', at: AT, sourceRevision: 'dop:abcdef123456', sourceType: 'mock' };
+const GH_SOURCE = { kind: 'gh', command: 'gh repo list --limit 100 ---jsonson nameWithOwner', at: AT, sourceRevision: 'gh:2026-10-28T09:00:00+08:00', sourceType: 'mock' };
 
 const normalize = (raw = ARD222222) => normalizeChangeRecord(raw, { at: AT });
 const buildingOf = (change, visibleRepos) => resolveBuildingRepository({ change, visibleRepos });
@@ -239,9 +239,9 @@ test('失败注入：dop 读不到 → change=null 的 blocked 卡，未知项�
   const building = buildingOf(change, null);
   assert.deepEqual(building.reasons, [RESOLVE_REASONS.NO_REPO_SCOPE]);
 
-  const failure = new DevopsReadError(READ_REASONS.COMMAND_FAILED, 'dop change view ARD123456 -j 退出码 1', {
+  const failure = new DevopsReadError(READ_REASONS.COMMAND_FAILED, 'dop change view ARD123456 --json 退出码 1', {
     field: 'change',
-    command: '/opt/corp/bin/dop change view ARD123456 -j --endpoint https://dop.internal.example/api',
+    command: '/opt/corp/bin/dop change view ARD123456 --json --endpoint https://dop.internal.example/api',
     exitCode: 1,
     observedAt: AT,
   });
@@ -257,7 +257,7 @@ test('失败注入：dop 读不到 → change=null 的 blocked 卡，未知项�
   const rendered = renderContextCard(card);
   assert.ok(rendered.includes('## 未知项'));
   assert.ok(rendered.includes('`change`：`COMMAND_FAILED`'));
-  assert.ok(rendered.includes('`dop change view ARD123456 -j --endpoint <env:FORGE_DEVOPS_DOP_ENDPOINT>`'));
+  assert.ok(rendered.includes('`dop change view ARD123456 --json --endpoint <env:FORGE_DEVOPS_DOP_ENDPOINT>`'));
   assert.ok(!rendered.includes('/opt/corp'), '绝对路径不得进卡片');
   assert.ok(!rendered.includes('dop.internal'), 'endpoint 不得进卡片');
   assert.ok(rendered.includes('读取失败'));
@@ -286,7 +286,7 @@ test('sources 缺 provenance 即拒绝（种类/命令/时间或版本/产物类
   const building = buildingOf(change, READY_REPOS);
 
   reject(
-    () => buildContextCard({ change, building, sources: [{ kind: 'dop', command: 'change view X -j', sourceType: 'mock' }] }),
+    () => buildContextCard({ change, building, sources: [{ kind: 'dop', command: 'change view X --json', sourceType: 'mock' }] }),
     CONTEXT_REASONS.SOURCE_INVALID,
   );
   reject(
@@ -311,7 +311,7 @@ test('AC-22 渲染脱敏：endpoint 用环境变量占位、绝对路径只保�
     sources: [
       {
         kind: 'dop',
-        command: '/opt/corp/bin/dop change view ARD222222 -j --endpoint=https://dop.corp.example/api',
+        command: '/opt/corp/bin/dop change view ARD222222 --json --endpoint=https://dop.corp.example/api',
         at: AT,
         sourceRevision: 'dop:abcdef123456',
         sourceType: 'mock',
@@ -320,7 +320,7 @@ test('AC-22 渲染脱敏：endpoint 用环境变量占位、绝对路径只保�
   });
   const rendered = renderContextCard(card);
 
-  assert.ok(rendered.includes('`dop change view ARD222222 -j --endpoint <env:FORGE_DEVOPS_DOP_ENDPOINT>`'));
+  assert.ok(rendered.includes('`dop change view ARD222222 --json --endpoint <env:FORGE_DEVOPS_DOP_ENDPOINT>`'));
   assert.ok(!rendered.includes('dop.corp.example'));
   assert.ok(!rendered.includes('/opt/corp/bin'));
 });
@@ -341,7 +341,7 @@ test('渲染确定：同卡两次渲染逐字相同，契约外字段与包装�
 test('unknowns 三形态：Error / 读信封 / {field,reason,command}；无效形态拒绝', () => {
   const change = normalize(ARD222222);
   const building = buildingOf(change, READY_REPOS);
-  const error = new DevopsReadError(READ_REASONS.COMMAND_TIMEOUT, 'dop 超时', { field: 'change', command: 'dop change view ARD222222 -j' });
+  const error = new DevopsReadError(READ_REASONS.COMMAND_TIMEOUT, 'dop 超时', { field: 'change', command: 'dop change view ARD222222 --json' });
   const envelope = {
     action: 'change.read',
     target_ref: 'ARD222222',
@@ -353,7 +353,7 @@ test('unknowns 三形态：Error / 读信封 / {field,reason,command}；无效�
 
   const card = buildContextCard({ change, building, unknowns: [error, envelope, plain] });
   assert.deepEqual(card.unknowns, [
-    { field: 'change', reason: READ_REASONS.COMMAND_TIMEOUT, command: 'dop change view ARD222222 -j' },
+    { field: 'change', reason: READ_REASONS.COMMAND_TIMEOUT, command: 'dop change view ARD222222 --json' },
     { field: 'change.read', reason: READ_REASONS.COMMAND_TIMEOUT, command: 'gh repo list --limit 100' },
     { field: 'repos', reason: RESOLVE_REASONS.NO_REPO_SCOPE, command: 'gh repo list' },
   ]);

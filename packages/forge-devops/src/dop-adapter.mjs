@@ -7,8 +7,10 @@
  * 都由 `normalizeChangeRecord(raw, { expectedId })` 判定——适配器不越权替上层做契约校验。
  *
  * 命令面（AC-22 / TECHNICAL §5.3），两条都是只读：
- *   `change view <changeId> -j`（运行时配置了 endpoint 时追加 `--endpoint <env>`）
- *   `change list -j`（可选 `--status <status>`）
+ *   `change view <changeId> --json`（运行时配置了 endpoint 时追加 `--endpoint <env>`）
+ *   `change list --json`（可选 `--status <status>`）
+ * 结构化输出**只用长名 `--json`**：内网真 CLI 没有短名 `-j`（2026-10 实测直接报错），
+ * 只有 mock 同时收两者——短名会让离线全绿、到真实环境才炸，别改回去。
  * 写命令与"通用 run(args)"入口在本模块**不存在**：argv 由本文件的常量与字段校验拼出，
  * 调用方只能传业务字段，传 `args` 之类的 argv 覆盖项不会生效。
  *
@@ -167,11 +169,11 @@ export function createDopAdapter({ runner = null, dopBin = '', dopEndpoint = '',
   }
 
   return Object.freeze({
-    /** `change view <id> -j`：只读一条变更；记录不在此处校验，`raw` 原样交出。 */
+    /** `change view <id> --json`：只读一条变更；记录不在此处校验，`raw` 原样交出。 */
     async readChange({ changeId } = {}) {
       const id = assertChangeId(changeId);
       const { result, context } = await invoke({
-        args: [...DOP_COMMANDS.changeView, id, '-j'],
+        args: [...DOP_COMMANDS.changeView, id, '--json'],
         purpose: 'dop.change.view',
       });
       const raw = parseRecord(result.stdout, context);
@@ -189,10 +191,10 @@ export function createDopAdapter({ runner = null, dopBin = '', dopEndpoint = '',
       };
     },
 
-    /** `change list -j`：只读变更清单（幂等查重与范围提示用），不做分页推断。 */
+    /** `change list --json`：只读变更清单（幂等查重与范围提示用），不做分页推断。 */
     async listChanges({ status } = {}) {
       const filter = status === undefined || status === null || text(status) === '' ? '' : assertStatus(status);
-      const args = [...DOP_COMMANDS.changeList, '-j', ...(filter === '' ? [] : ['--status', filter])];
+      const args = [...DOP_COMMANDS.changeList, '--json', ...(filter === '' ? [] : ['--status', filter])];
       const { result, context } = await invoke({ args, purpose: 'dop.change.list' });
       const raw = parseRecord(result.stdout, context);
       const items = asArray(raw.changes);

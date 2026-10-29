@@ -47,7 +47,7 @@ async function rejectsWith(promise, code) {
   });
 }
 
-test('readChange：argv 固定为 change view <id> -j，信封带 raw 记录与 stdout 指纹', async () => {
+test('readChange：argv 固定为 change view <id> --json，信封带 raw 记录与 stdout 指纹', async () => {
   const runner = fakeRunner();
   const adapter = adapterWith(runner);
   const result = await adapter.readChange({ changeId: 'ARD123456' });
@@ -55,7 +55,7 @@ test('readChange：argv 固定为 change view <id> -j，信封带 raw 记录与 
   assert.equal(runner.calls.length, 1);
   assert.deepEqual(runner.calls[0], {
     bin: '/opt/corp/dop',
-    args: ['change', 'view', 'ARD123456', '-j'],
+    args: ['change', 'view', 'ARD123456', '--json'],
     purpose: 'dop.change.view',
   });
   assert.equal(result.status, 'succeeded');
@@ -64,7 +64,7 @@ test('readChange：argv 固定为 change view <id> -j，信封带 raw 记录与 
   assert.equal(result.source_revision, `dop:${sha12(ARD123456)}`);
   assert.equal(result.observed_at, AT);
   assert.deepEqual(result.result_refs, []);
-  assert.equal(result.command, 'dop change view ARD123456 -j');
+  assert.equal(result.command, 'dop change view ARD123456 --json');
   assert.deepEqual(result.raw, JSON.parse(ARD123456), 'raw 必须原样交出记录，字段映射不在此处做');
 });
 
@@ -83,8 +83,8 @@ test('配置了 endpoint 才追加 --endpoint；诊断标签与实践参数里�
   const endpoint = 'https://dop.internal.example/api';
   const result = await adapterWith(runner, { dopEndpoint: endpoint }).readChange({ changeId: 'ARD123456' });
 
-  assert.deepEqual(runner.calls[0].args, ['change', 'view', 'ARD123456', '-j', '--endpoint', endpoint]);
-  assert.equal(result.command, 'dop change view ARD123456 -j', '命令标签不得包含 endpoint');
+  assert.deepEqual(runner.calls[0].args, ['change', 'view', 'ARD123456', '--json', '--endpoint', endpoint]);
+  assert.equal(result.command, 'dop change view ARD123456 --json', '命令标签不得包含 endpoint');
   assert.ok(!JSON.stringify(result).includes(endpoint), '读信封不得回显 endpoint（AC-22）');
 });
 
@@ -97,7 +97,7 @@ test('未注入 endpoint 时不拼 --endpoint，也不存在其它拼参通道',
 test('readChange 不接受 argv 覆盖：传 args 也不会改变命令面', async () => {
   const runner = fakeRunner();
   await adapterWith(runner).readChange({ changeId: 'ARD123456', args: ['change', 'done', 'ARD123456'] });
-  assert.deepEqual(runner.calls[0].args, ['change', 'view', 'ARD123456', '-j']);
+  assert.deepEqual(runner.calls[0].args, ['change', 'view', 'ARD123456', '--json']);
 });
 
 test('适配器不替上层做记录契约校验：{} 也交出信封（id/字段判定归 change-context）', async () => {
@@ -108,12 +108,12 @@ test('适配器不替上层做记录契约校验：{} 也交出信封（id/字�
   assert.equal(result.source_revision, `dop:${sha12('{}')}`);
 });
 
-test('listChanges：change list -j，items 来自 changes 数组，total 取平台值', async () => {
+test('listChanges：change list --json，items 来自 changes 数组，total 取平台值', async () => {
   const stdout = JSON.stringify({ user: 'alice', total: 2, changes: [{ id: 'ARD123456' }, { id: 'ARD222222' }] });
   const runner = fakeRunner(() => ({ exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false }));
   const result = await adapterWith(runner).listChanges({});
 
-  assert.deepEqual(runner.calls[0].args, ['change', 'list', '-j']);
+  assert.deepEqual(runner.calls[0].args, ['change', 'list', '--json']);
   assert.equal(result.count, 2);
   assert.equal(result.total, 2);
   assert.equal(result.items[0].id, 'ARD123456');
@@ -125,7 +125,7 @@ test('listChanges：给了 status 才拼 --status（并校验为安全令牌）'
   const runner = fakeRunner(() => ({ exitCode: 0, stdout: '{"changes":[]}', stderr: '', durationMs: 1, timedOut: false }));
   const adapter = adapterWith(runner);
   await adapter.listChanges({ status: 'open' });
-  assert.deepEqual(runner.calls[0].args, ['change', 'list', '-j', '--status', 'open']);
+  assert.deepEqual(runner.calls[0].args, ['change', 'list', '--json', '--status', 'open']);
 
   await rejectsWith(adapter.listChanges({ status: '--all' }), READ_REASONS.MISSING_TARGET);
   await rejectsWith(adapter.listChanges({ status: 'open; rm -rf' }), READ_REASONS.MISSING_TARGET);
@@ -137,7 +137,7 @@ test('非零退出 → COMMAND_FAILED，detail 带 exitCode 与实际命令', as
   await assert.rejects(adapterWith(runner).readChange({ changeId: 'ARD123456' }), (error) => {
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.exitCode, 1);
-    assert.equal(error.detail.command, 'dop change view ARD123456 -j');
+    assert.equal(error.detail.command, 'dop change view ARD123456 --json');
     assert.match(error.message, /forced/);
     return true;
   });
