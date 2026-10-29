@@ -30,14 +30,18 @@ It rejects older experimental v2 trailers that contain a rules field.
 
 ## Bootstrap and GitHub configuration
 
-The target workflow always verifies; no repository-variable bypass is used.
-Missing or invalid public key on the base fails closed. The workflow and key in a
-worktree do not establish remote deployment, successful checks or branch rules.
+Once deployed in the PR base, the target workflow always verifies; no
+repository-variable bypass is used, and a missing or invalid base public key
+fails closed. A worktree copy does not establish remote deployment, successful
+checks or branch rules.
 
 1. Review and merge the verifier, workflow and `team-public-key.pub` into the PR
-   base before requiring the new check. During initial bootstrap, the base lacks
-   the new key, so the new check can fail and must not yet be required. Confirm
-   the key fingerprint through an independent trusted channel.
+   base before requiring the new check. The bootstrap PR runs the workflow from
+   its existing base, not the candidate workflow: the previous workflow skips
+   verification when `SENSITIVE_SCAN_ENFORCE` is not enabled, so its success is
+   not evidence that v2 was checked. If enabled, the previous verifier follows
+   its own legacy configuration. Confirm the public key fingerprint through an
+   independent trusted channel.
 2. Test a correctly signed PR and an unsigned or incorrectly signed PR. Only
    after verifying the results, configure the one new required context
    `sensitive-attestation-verify`; keep the existing `verify` check separately.
