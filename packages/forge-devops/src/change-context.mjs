@@ -2,7 +2,7 @@
  * `@heluo/forge-devops` 的上下文卡（AC-11 业务侧 + AC-12 承建判定的展示面）。
  *
  * 只在这里做的三件事：
- * 1. **映射**：dop `change view -j` 的 2026-07-06 字段契约 → 内部 `Change`。snake_case 只在 `normalizeChangeRecord`
+ * 1. **映射**：dop `change view --json` 的 2026-07-06 字段契约 → 内部 `Change`。snake_case 只在 `normalizeChangeRecord`
  *    里出现一次；契约外字段只留在 `raw` 供调试，进卡片前剥掉（卡会落盘成产物，不把企业侧多余字段带出去）。
  * 2. **规则**：`release_info` 取首个非空。`firstReleaseInfo` 是唯一实现，卡与报告都调它——两处各写一遍必然漂移。
  * 3. **构建与渲染**：事实 + 来源（版本/时间戳）+ 未知项 + 承建判定 + 已记录假设 + 下一步，固定结构的 Markdown。
