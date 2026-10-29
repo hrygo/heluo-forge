@@ -14,6 +14,13 @@
  * - `commands` 不是硬依赖：没有命令面时 `entryStatus` 报 `no-command-face`，工具面照常注册。
  *
  * 顶层不碰 ctx 与 env：环境在 `apply` 内解析（路径与 endpoint 只经环境注入，不硬编码、不落文档）。
+ *
+ * r3（配置页与 CLI 自动发现）在本层只做**装配**：
+ * - 装配期构造一次 `cli-access`（有界只读发现 + 三层合并：配置页 > 环境变量 > 自动发现），
+ *   合并结果以显式 config 形式交给流程（`normalizeResolution` 的"显式优先"语义一字未改）；
+ * - 配置页读写走同源 `/api/forge-devops` 路由；`webServer` / `configEditor` 都是**可选**服务，
+ *   缺失、晚到或端点已被占用都只降级（页面只读 / 无端点），绝不塌掉装配与工具面；
+ * - 未命中时只读面仍以 `NO_READER` 失败（原因码不加码），细因与页面指引放 `detail`。
  */
 import {
   assertReadRequest,
@@ -27,8 +34,18 @@ import { writeArtifact } from './artifacts.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
 import { createDevopsFlow } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
+import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS } from './cli-config.mjs';
+import { createCliAccess } from './cli-access.mjs';
+import { CLI_API_PREFIX, createCliApi, toNodeRoute } from './http.mjs';
+import { ConfigStandard } from './runtime-config.mjs';
 
 export const name = 'forge-devops';
+
+/**
+ * 插件配置的结构化校验面（standard-schema）：宿主 `config-editor` 与字段级校验共用同一套规则。
+ * 与 `cli-config` 的合并、`runtime-config` 的字段规则都不重复实现——这里只交出**入口**。
+ */
+export const Config = ConfigStandard;
 // 依赖必须由 inject 声明，cordis 才会等服务就绪后再运行 apply：
 // - 少了 `tools`：`ctx.tools` 不可见，工具**静默不注册**；
 // - 少了 `policy`：apply 在策略挂载前运行，直接抛 POLICY_REQUIRED 而整项不激活。
@@ -49,15 +66,9 @@ export const DEFAULT_CONFIG = Object.freeze({});
 /**
  * 运行时配置键：装配方把 env 解析成 `resolveRuntimeConfig` 的输出后传入（路径与 endpoint
  * 由环境注入，不硬编码、不落文档）。这里只声明"允许哪些键"，默认值与校验归属运行时配置模块。
+ * 键表与配置页六字段同源（`cli-config.CLI_FIELDS`），不另立一份。
  */
-export const RUNTIME_CONFIG_KEYS = Object.freeze([
-  'dopBin',
-  'dopEndpoint',
-  'ghBin',
-  'ghOwner',
-  'sourceType',
-  'timeoutMs',
-]);
+export const RUNTIME_CONFIG_KEYS = Object.freeze([...CLI_FIELDS]);
 
 /** 装配层的失败原因码（与平台动作四状态、流程态词表分开）。 */
 export const FLOW_REASONS = Object.freeze({
@@ -87,19 +98,56 @@ const isFlowLike = (value) =>
 const isReaderLike = (value) =>
   value !== null && typeof value === 'object' && typeof value.read === 'function';
 
+/** `config-editor` 的形状判据：只认本包真正用到的那三面，别的一概当"没有写面"。 */
+const isEditorLike = (value) =>
+  value !== null &&
+  typeof value === 'object' &&
+  (typeof value.configuration === 'function' || typeof value.edit === 'function');
+
 /**
- * 显式配置项（camelCase）优先于环境：装配层只把调用方给的键原样传下去，
- * 默认值、校验与"未配置"判定都留在 `runtime-config.mjs` / `flow.mjs`（单一真源）。
+ * 三层合并结果（装配期快照）→ 流程认识的六字段显式配置。
+ *
+ * `cli-access` 不直接暴露合并值（回显边界），所以这里从**同一份合并结论**的 entries 里取值：
+ * 路径字段取 `path`、其余取 `value`，`missing` 来源跳过。返回值只进流程的显式 config
+ * （工具面与页面都拿不到它），不打印、不落盘。
  */
-function runtimeOverrideOf(config) {
-  const override = {};
+function mergedRuntimeOf(snapshot) {
+  const fields = snapshot !== null && typeof snapshot === 'object' ? snapshot.entries : null;
+  if (fields === null || typeof fields !== 'object') return null;
+  const merged = {};
   let count = 0;
-  for (const key of RUNTIME_CONFIG_KEYS) {
-    if (config[key] === undefined) continue;
-    override[key] = config[key];
+  for (const field of CLI_FIELDS) {
+    const item = fields[field];
+    if (item === null || typeof item !== 'object') continue;
+    if (item.origin === undefined || item.origin === null || item.origin === CLI_ORIGINS.MISSING) continue;
+    const value = typeof item.path === 'string' ? item.path : item.value;
+    if (value === null || value === undefined || value === '') continue;
+    merged[field] = value;
     count += 1;
   }
-  return count === 0 ? null : override;
+  return count === 0 ? null : Object.freeze(merged);
+}
+
+/**
+ * 未命中时的结构化信封：只读面仍以 `NO_READER` 失败（原因码不加码），
+ * `detail.reason` 给细因（`CLI_NOT_FOUND` / `CLI_CONFIG_INVALID`），`detail.searched` 只给**类别**，
+ * `detail.next` 给配置页入口。整条信封不含盘符、绝对路径或 endpoint（AC-10）。
+ */
+function unavailableOf(described) {
+  const reason = typeof described?.reason === 'string' && described.reason !== '' ? described.reason : CLI_REASONS.NOT_FOUND;
+  const guidance =
+    typeof described?.guidance === 'string' && described.guidance !== ''
+      ? described.guidance
+      : `未找到命令行工具 · 请到「${CLI_PAGE_HINT}」指定位置`;
+  return Object.freeze({
+    code: READ_REASONS.NO_READER,
+    message: guidance,
+    detail: Object.freeze({
+      reason,
+      searched: Array.isArray(described?.searched) ? [...described.searched] : [],
+      next: CLI_PAGE_HINT,
+    }),
+  });
 }
 
 export function validateConfig(input = {}) {
@@ -152,22 +200,76 @@ export function apply(ctx, rawConfig = {}) {
   }
   assertPolicyReadActions(policy);
 
-  // D-1：流程协作对象在包内生产——配置（显式或环境注入）→ runner → dop/gh → 门禁 → 动作 → 读。
+  // r3：装配期做**一次**三层合并（配置页 > 环境变量 > 自动发现），此后只有页面显式刷新会重扫（AC-4）。
+  // `configEditor` 是可选服务：缺失时读面照常工作（页面降级只读），不影响工具面与流程面。
+  const configEditor = typeof ctx.get === 'function' ? ctx.get('configEditor') : undefined;
+  const access = createCliAccess({
+    config,
+    configEditor: isEditorLike(configEditor) ? configEditor : null,
+  });
+  // 合并结果只以**显式 config** 的形式交给流程（`normalizeResolution` 的"显式优先"语义不变）：
+  // 解析不到就显式给空环境，流程侧不得再自己读一次进程环境（单一真源，避免两处各合并一次）。
+  // 这两项必须可重算：页面保存成功后 `access` 会重新合并，闭包里冻住"装配那一刻"的值会让
+  // 「保存后立刻生效」（AC-8）变成"重启后才生效"。
+  let cliConfig = null;
+  let cliUnavailable = null;
+  const readCli = () => {
+    const described = access.describe();
+    cliConfig = described.ready === true ? mergedRuntimeOf(access.snapshot()) : null;
+    cliUnavailable = cliConfig === null ? unavailableOf(described) : null;
+  };
+  readCli();
+
+  // D-1：流程协作对象在包内生产——配置（三层合并）→ runner → dop/gh → 门禁 → 动作 → 读。
   // 之前只认 `ctx.get(FLOW_KEY)`，仓库里没有生产者，9 个工具中 5 个流程工具恒 FLOW_UNAVAILABLE。
   const injectedFlow = typeof ctx.get === 'function' ? ctx.get(FLOW_KEY) : undefined;
   // 写路径的门禁适配在装配层做一次，流程侧不再各造一份（读路径仍直接用 policy.executeAction）。
   const guard = createPolicyGuard({ policy });
-  const flow = isFlowLike(injectedFlow)
-    ? injectedFlow
-    : createDevopsFlow({ ctx, policy, guard, config: runtimeOverrideOf(config) });
-  const described = typeof flow.describe === 'function' ? flow.describe() : null;
-  const configured = described !== null && described.configured === true;
+  /** 包内生产的那份流程随配置变化重建；宿主注入的那份归宿主，不重建。 */
+  const ownedFlow = !isFlowLike(injectedFlow);
+  const buildFlow = () =>
+    createDevopsFlow({
+      ctx,
+      policy,
+      guard,
+      config: cliConfig,
+      env: cliConfig === null ? {} : null,
+      unavailable: cliUnavailable,
+    });
+  let flow = ownedFlow ? buildFlow() : injectedFlow;
   const injectedReader = typeof ctx.get === 'function' ? ctx.get(READER_KEY) : undefined;
-  const reader = isReaderLike(injectedReader)
-    ? injectedReader
-    : configured && isReaderLike(flow.reader)
-      ? flow.reader
-      : undefined;
+  let flowDescribed = null;
+  let configured = false;
+  let reader = undefined;
+  let flowProvideOff = null;
+  let readerProvideOff = null;
+
+  /** 把 `FLOW_KEY` / `READER_KEY` 的提供换成当前这版（重建后旧引用必须撤掉，否则下游读到的是旧流程）。 */
+  const provideFaces = () => {
+    flowProvideOff?.();
+    readerProvideOff?.();
+    flowProvideOff = ownedFlow ? ctx.provide(FLOW_KEY, flow) : null;
+    readerProvideOff =
+      reader === undefined || isReaderLike(injectedReader) ? null : ctx.provide(READER_KEY, reader);
+  };
+
+  /**
+   * 重算读面（配置/发现变了之后调用）。
+   * `rebuild` 只在配置真的换了才传：重建流程会换掉 runner 的路径解析，重建本身**不**重扫发现（AC-4）。
+   */
+  const syncFaces = ({ rebuild = false } = {}) => {
+    readCli();
+    if (rebuild === true && ownedFlow) flow = buildFlow();
+    flowDescribed = typeof flow.describe === 'function' ? flow.describe() : null;
+    configured = flowDescribed !== null && flowDescribed.configured === true;
+    reader = isReaderLike(injectedReader)
+      ? injectedReader
+      : configured && isReaderLike(flow.reader)
+        ? flow.reader
+        : undefined;
+    provideFaces();
+  };
+  syncFaces();
 
   // 命令面是可选的：宿主没装 commands 时不算故障，但状态必须可见。
   const entryStatus = commandFaceStatus(ctx);
@@ -175,6 +277,35 @@ export function apply(ctx, rawConfig = {}) {
   const ledger = new Map();
   let callSeq = 0;
   let currentChangeId = null;
+
+  // 同源配置页端点（GET 快照 / POST 保存）。`webServer` 是可选服务：缺失、晚到、
+  // 或同前缀已被别的实例占用时都只降级——绝不因为"页面挂不上"塌掉工具面与流程面。
+  // 注册一步幂等：宿主已就绪时立即挂；未就绪时经 `ctx.inject` 等它就绪再挂（直接读 ctx.get 会拿到 undefined）。
+  const cliApi = createCliApi({ access });
+  const cliRoute = toNodeRoute(cliApi);
+  let routeState = 'no-webserver';
+  let disposeRoute = null;
+  const mountCliRoute = (scope) => {
+    if (disposeRoute !== null) return;
+    const server = (scope ?? ctx)?.get?.('webServer') ?? null;
+    if (server === null || server === undefined || typeof server.register !== 'function') return;
+    try {
+      const off = server.register({
+        kind: 'prefix',
+        path: CLI_API_PREFIX,
+        handler: cliRoute,
+        description: 'forge-devops 命令行配置（只读快照 / 保存）',
+      });
+      disposeRoute = typeof off === 'function' ? off : () => {};
+      routeState = 'registered';
+    } catch {
+      // 前缀冲突（别的插件已占了同一段）不抛：状态可见地记成 conflict，页面显示"端点不可用"。
+      routeState = 'conflict';
+    }
+  };
+  mountCliRoute(ctx);
+  const disposeInject =
+    typeof ctx.inject === 'function' ? ctx.inject(['webServer'], (host) => mountCliRoute(host)) : null;
 
   /** 按动作调协作者上的同名方法；缺方法同样是显式失败，而不是静默成功。 */
   const callFlow = async (operation, method, input) => {
@@ -210,6 +341,23 @@ export function apply(ctx, rawConfig = {}) {
     toolNames: () => [...Object.keys(READ_TOOLS), ...Object.keys(FLOW_TOOLS)],
     /** 当前状态：没有可用适配器时为 `no-reader`（可见地 fail closed）。 */
     status: () => (reader === undefined ? 'no-reader' : 'ready'),
+    /** 命令行配置的**脱敏**描述（origin / 缺哪一层 / 指引文案，不含路径与 endpoint）。 */
+    cliStatus: () => Object.freeze({ ...access.describe(), route: routeState }),
+    /** 配置页快照（含命中路径）：只给同源 GET 路由与页面，不进工具信封、不进日志（AC-10）。 */
+    cliSnapshot: ({ refresh } = {}) => access.snapshot({ refresh: refresh === true }),
+    /** 保存配置：revision 栅栏、字段校验、写后回读都在 `cli-access`（本层不重算、不猜默认值）。 */
+    saveCliConfig: async ({ revision, fields } = {}) => {
+      const result = await access.save({ revision, fields });
+      // 写成功即重算读面（AC-8「保存后立刻生效」）：重建包内那份流程，注入的那份不碰。
+      if (result?.ok === true) syncFaces({ rebuild: true });
+      return result;
+    },
+    /** 页面「重新发现」：重扫一次并重新合并（工具调用永远不会触发扫描，AC-4）。 */
+    rediscover: () => {
+      const snapshot = access.snapshot({ refresh: true });
+      syncFaces({ rebuild: true });
+      return snapshot;
+    },
     /** 命令面状态：`registered` 或 `no-command-face`（工具面照常可用）。 */
     entryStatus: () => entryStatus,
     /** 会话内写动作台账（只读副本；不持久化、不跨会话）。 */
@@ -222,6 +370,13 @@ export function apply(ctx, rawConfig = {}) {
      */
     read: async ({ action, target } = {}) => {
       if (reader === undefined) {
+        // 原因码不加码（仍是 NO_READER，工具信封与既有用例一致）：细因、已查类别与页面指引放 detail。
+        if (cliUnavailable !== null) {
+          throw new DevopsReadError(cliUnavailable.code, cliUnavailable.message, {
+            action,
+            ...cliUnavailable.detail,
+          });
+        }
         throw new DevopsReadError(READ_REASONS.NO_READER, '没有可用的只读适配器（按关闭处理）', { action });
       }
       // 先判动作与目标，再碰适配器：未登记动作不得产生任何调用。
@@ -308,9 +463,7 @@ export function apply(ctx, rawConfig = {}) {
 
   const disposeProvide = ctx.provide(SERVICE_KEY, service);
   // 自建的协作者也提供出去：宿主侧其它插件（或后续 reload）能看到同一个实例，而不是各装配各的。
-  const disposeFlowProvide = isFlowLike(injectedFlow) ? null : ctx.provide(FLOW_KEY, flow);
-  const disposeReaderProvide =
-    reader === undefined || isReaderLike(injectedReader) ? null : ctx.provide(READER_KEY, reader);
+  // `FLOW_KEY` / `READER_KEY` 的当前引用由 `provideFaces()` 维护（保存/刷新后会换成新实例）。
   // 工具进模型可见面，走与其它业务工具同一条门禁管线；没有 tools 服务就只暴露服务、
   // 不注册工具（宿主差异显式可见，而不是静默注册到别处）。
   const disposers =
@@ -322,8 +475,10 @@ export function apply(ctx, rawConfig = {}) {
   const teardown = () => {
     disposers.forEach((dispose) => dispose?.());
     disposeCommand?.();
-    disposeReaderProvide?.();
-    disposeFlowProvide?.();
+    disposeRoute?.();
+    disposeInject?.();
+    flowProvideOff?.();
+    readerProvideOff?.();
     disposeProvide?.();
     ledger.clear();
     currentChangeId = null;

@@ -16,18 +16,28 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
+    "./client": "./client.js",
     "./read": "./src/read.mjs",
     "./runtime-config": "./src/runtime-config.mjs",
     "./cli-runner": "./src/cli-runner.mjs"
   },
   "files": [
     "src",
+    "client.js",
     "cordis.patch.yml",
     "README.md"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots",
+        "locale"
+      ]
     }
   }
 }
