@@ -179,7 +179,10 @@ export function checkRepo(root) {
       if (refs.length !== 1 || !baseRef.test(refs[0])) {
         errors.push(`repo: ${name} must checkout only the pull_request base sha`);
       }
-      if (/github\.head_ref|pull_request\.head\.(?:sha|ref)|refs\/pull\//.test(text)) {
+      // Permit the event SHA only as a fixed environment value for comparing
+      // against the fetched object; never permit it as a checkout ref.
+      const withoutExpectedSha = text.replace(/^\s*EXPECTED_HEAD_SHA:\s*\$\{\{\s*github\.event\.pull_request\.head\.sha\s*\}\}\s*$/gm, '');
+      if (/github\.head_ref|pull_request\.head\.(?:sha|ref)|refs\/pull\//.test(withoutExpectedSha)) {
         errors.push(`repo: ${name} must not reference the pull_request head`);
       }
       if (/git\s+(?:checkout|switch|worktree)\b/.test(text)) {

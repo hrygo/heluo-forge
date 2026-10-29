@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  sensitive-attestation-verify:
+    name: sensitive-attestation-verify
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -33,16 +34,14 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          SENSITIVE_SCAN_ENFORCE: ${{ vars.SENSITIVE_SCAN_ENFORCE }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ "${SENSITIVE_SCAN_ENFORCE}" != "true" ]; then
-            echo "sensitive-attestation is not enabled; set repository variable SENSITIVE_SCAN_ENFORCE=true after enrolling keys and allowlisting rules"
-            exit 0
-          fi
           git fetch --no-tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/head"
           HEAD_SHA="$(git rev-parse refs/remotes/pull/head)"
-          node scripts/sensitive-scan/verify.mjs --base "${BASE_SHA}" --head "${HEAD_SHA}"
-        # SENSITIVE_SCAN_ENFORCE is a repository variable, not a secret.
-        # An absent variable keeps this check non-blocking during bootstrap.
-        # Once enabled, make "sensitive-attestation / verify" a required check
-        # and require linear history; do not enable squash or merge commits.
+          if [ "$HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+            echo 'PR head changed during verification; retry the check.' >&2
+            exit 1
+          fi
+          node scripts/sensitive-scan/verify.mjs --base "${BASE_SHA}" --head "${EXPECTED_HEAD_SHA}"
+        # Install the team public key in the base branch before requiring this check.
+        # Missing or invalid public keys fail closed; no PR code is executed.

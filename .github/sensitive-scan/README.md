@@ -1,15 +1,15 @@
-# Sensitive-scan public registry
+# Team sensitive-scan public key
 
-This directory contains only public verification data. It must never contain
-local rule patterns, scan findings, private keys or production secret values.
+`team-public-key.pub` is the single trusted team Ed25519 public key. The remote
+verifier reads it from the PR base revision, not the PR head; a missing or invalid
+base key fails verification. Confirm its fingerprint with the authorized
+custodian and change it only through a reviewed PR.
 
-- `keys.json`: public Ed25519 keys registered for devices. Add entries through
-  a reviewed pull request after a device is enrolled; remove or set
-  `status: "revoked"` on offboarding or suspected key compromise.
-- `allowed-rules.json`: SHA-256 digests of approved local rule files and the
-  approved scanner versions. The remote verifier reads these from the base
-  revision of a pull request, so a pull request cannot register its own key.
+This directory must never contain private keys, real local rules, scan findings
+or production secrets. Git repository contents are pushed normally; the private
+key, real rules and scan results are not uploaded. The signature does not defend
+against a malicious holder of the shared private key.
 
-An empty registry is intentional until the first device is enrolled. The
-GitHub workflow stays non-enforcing until the repository variable
-`SENSITIVE_SCAN_ENFORCE` is set to `true`.
+See [the sensitive-scan guide](../../scripts/sensitive-scan/README.md) for the
+bootstrap, required check and rotation procedure. A file in this worktree does
+not establish that the workflow or branch protection has been deployed.
