@@ -5,7 +5,12 @@
  *   1. 蓝图层声明的成员是否真的存在且可导入（禁止发明成员名，接口契约硬缺陷）；
  *   2. 半落地装配（import 指向不存在的模块）、两套词表混用、禁项通道复活、shell 拼串；
  *   3. 清单/补丁/环境注入/产物落盘/入口格式等跨文件一致性（单模块测试看不到）；
- *   4. 交付卫生：文档与源码不含本机绝对路径、凭据与日志目录引用。
+ *   4. 交付卫生：文档与源码不含本机绝对路径、凭据与日志目录引用；
+ *   5. r3（CLI 路径自动发现）增量，就地扩展而非新建检查器：`cli-discovery` 零子进程、
+ *      配置页客户端不打印/不持久化路径、工具面不把取值型 access 字段拼进 `detail`、
+ *      补丁层与 README 无绝对路径样例且口径改为「配置页优先」、清单声明客户端半
+ *      （`dsh.client` + `./client` 导出 + 发布白名单含 `client.js`），以及
+ *      「零回退」的三个可核对形式（9 个工具、`READ_REASONS` 不加码、只读面语义不变）。
  *
  * dev 阶段按依赖分波产出，T8 可能先于部分任务执行：模块文件缺失时记为 DEFERRED
  * （诊断信息带归属任务），文件一旦落地立刻转为硬断言——自检随交付推进逐条生效，
@@ -20,7 +25,20 @@ import { fileURLToPath } from 'node:url';
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = path.resolve(PACKAGE_ROOT, '..', '..');
 const SRC_DIR = path.join(PACKAGE_ROOT, 'src');
-const TASK_DOCS = path.join(REPO_ROOT, 'docs', 'teamflow', '20261028-r1-devops-change-flow');
+const CLIENT_FILE = path.join(PACKAGE_ROOT, 'client.js');
+/** 基线需求（r1）与本需求（r3）各一个自包含任务夹；两个夹都不许出现本机路径。 */
+const TASK_DOC_SETS = [
+  {
+    dir: path.join(REPO_ROOT, 'docs', 'teamflow', '20261028-r1-devops-change-flow'),
+    docs: ['PRD.md', 'TECHNICAL.md'],
+    label: 'r1',
+  },
+  {
+    dir: path.join(REPO_ROOT, 'docs', 'teamflow', '20261029-r3-cli-path-autodiscovery'),
+    docs: ['PRD.md', 'DESIGN.md', 'TECHNICAL.md'],
+    label: 'r3',
+  },
+];
 
 /** 蓝图（TECHNICAL §11 + 架构蓝图）声明的模块与成员。多导出允许，缺导出即缺陷。 */
 const MODULE_CONTRACTS = [
@@ -39,6 +57,33 @@ const MODULE_CONTRACTS = [
   { file: 'commit-message.mjs', task: 'T6', exports: ['assertCommitMessage'] },
   { file: 'artifacts.mjs', task: 'T7', exports: ['ARTIFACT_KINDS', 'artifactPath', 'renderFrontMatter', 'writeArtifact'] },
   { file: 'entry.mjs', task: 'T7', exports: ['ENTRY_NAME', 'ENTRY_HELP', 'parseChangeId', 'registerEntry'] },
+  // r3 增量：四个新模块 + 三处增量导出。`landedWith` 表示该成员随同波次的另一文件落地，
+  // 文件先于同波次落地时记 DEFERRED（不是静默放行：gate 文件一出现即转为硬断言）。
+  {
+    file: 'cli-discovery.mjs',
+    task: 'T1(r3)',
+    exports: ['WRAPPER_SUFFIXES', 'DISCOVERY_TIERS', 'candidateExecutableNames', 'parsePathVar', 'candidateDirs', 'isDirectlyExecutable', 'discoverTool', 'discoverCli'],
+  },
+  {
+    file: 'cli-config.mjs',
+    task: 'T2(r3)',
+    exports: ['CLI_FIELDS', 'CLI_ORIGINS', 'CLI_REASONS', 'resolveCliAccess', 'describeCliAccess', 'validateCliField', 'buildCliPatch', 'cliGuidance'],
+  },
+  {
+    file: 'runtime-config.mjs',
+    task: 'T2(r3)',
+    exports: ['validateConfigField', 'ConfigStandard'],
+    landedWith: 'cli-config.mjs',
+  },
+  { file: 'cli-access.mjs', task: 'T3(r3)', exports: ['createCliAccess'] },
+  { file: 'http.mjs', task: 'T3(r3)', exports: ['CLI_API_PREFIX', 'CLI_REQUEST_HEADER', 'createCliApi', 'toNodeRoute'] },
+  {
+    file: 'index.mjs',
+    task: 'T4(r3)',
+    exports: ['Config', 'apply'],
+    // T4 同时拥有 index.mjs 与 package.json：清单声明 dsh.client 即 T4 已落地。
+    gate: () => Boolean(JSON.parse(read(pkgPath('package.json'))).dsh?.client),
+  },
 ];
 
 const read = (file) => readFileSync(file, 'utf8');
@@ -58,17 +103,21 @@ const deferred = (t, file, task, detail) => {
   return true;
 };
 const load = (file) => import(new URL(`../src/${file}`, import.meta.url).href);
+/** r3 装配是否已落地：T4 拥有 index.mjs 与清单，`dsh.client` 出现即该波次已合入。 */
+const r3Landed = () => Boolean(JSON.parse(read(pkgPath('package.json'))).dsh?.client);
 
 test('交付文档存在且不含本机绝对路径、凭据', () => {
-  for (const name of ['PRD.md', 'TECHNICAL.md']) {
-    const file = path.join(TASK_DOCS, name);
-    assert.ok(existsSync(file), `任务夹缺 ${name}`);
-    const text = read(file);
-    assert.ok(!/\/Users\/[A-Za-z]/.test(text), `${name} 出现本机绝对路径（AC-22：路径不落文档）`);
-    assert.ok(!/\/home\/[a-z]/.test(text), `${name} 出现本机绝对路径（AC-22）`);
-    assert.ok(!/[A-Za-z]:\\\\Users\\\\/.test(text), `${name} 出现 Windows 本机绝对路径（AC-22）`);
-    assert.ok(!/ghp_[A-Za-z0-9]{16,}/.test(text), `${name} 出现 GitHub 令牌片段（凭据不得进文档）`);
-    assert.ok(!/-----BEGIN [A-Z ]*PRIVATE KEY/.test(text), `${name} 出现私钥块`);
+  for (const { dir, docs, label } of TASK_DOC_SETS) {
+    for (const name of docs) {
+      const file = path.join(dir, name);
+      assert.ok(existsSync(file), `${label} 任务夹缺 ${name}`);
+      const text = read(file);
+      assert.ok(!/\/Users\/[A-Za-z][\w.-]*\//.test(text), `${label}/${name} 出现本机绝对路径（AC-10：路径不落文档）`);
+      assert.ok(!/\/home\/[a-z][\w.-]*\//.test(text), `${label}/${name} 出现本机绝对路径（AC-10）`);
+      assert.ok(!/[A-Za-z]:\\+Users\\+/i.test(text), `${label}/${name} 出现 Windows 本机绝对路径（AC-10）`);
+      assert.ok(!/ghp_[A-Za-z0-9]{16,}/.test(text), `${label}/${name} 出现 GitHub 令牌片段（凭据不得进文档）`);
+      assert.ok(!/-----BEGIN [A-Z ]*PRIVATE KEY/.test(text), `${label}/${name} 出现私钥块`);
+    }
   }
 });
 
@@ -112,6 +161,14 @@ test('蓝图接口契约：已落地模块导出全部声明成员（未落地�
   for (const contract of MODULE_CONTRACTS) {
     if (!existsSync(pkgPath('src', contract.file))) {
       deferred(t, contract.file, contract.task, '本波次尚未产出');
+      continue;
+    }
+    if (contract.landedWith && !existsSync(pkgPath('src', contract.landedWith))) {
+      deferred(t, contract.file, contract.task, `增量随 ${contract.landedWith} 同波次落地`);
+      continue;
+    }
+    if (contract.gate && !contract.gate()) {
+      deferred(t, contract.file, contract.task, '同波次清单声明尚未落地');
       continue;
     }
     const module = await load(contract.file);
@@ -496,4 +553,177 @@ test('交付卫生：日志与产物目录必须被忽略（未补记 DEFERRED �
   if (missing.length > 0) {
     deferred(t, '.gitignore', 'T1', `缺 ${missing.join('、')}（R6：运行日志与本地产物不得进提交）`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// r3 · CLI 路径自动发现：就地扩展上面的扫描口径（不新建检查器）
+// ---------------------------------------------------------------------------
+
+/** 样例里不允许出现的形态：本机用户目录（真实身份）与运行日志目录。通用盘符样例不在此列。 */
+const MACHINE_PATH_PATTERNS = [
+  [/\/Users\/[A-Za-z][\w.-]*\//, 'POSIX 本机用户目录'],
+  [/\/home\/[a-z][\w.-]*\//, 'POSIX 本机用户目录'],
+  [/[A-Za-z]:\\+Users\\+/i, 'Windows 本机用户目录'],
+];
+
+test('r3 补丁层与 README 无本机路径样例；补丁层不写死 endpoint（AC-10）', () => {
+  const scanned = [
+    { name: 'cordis.patch.yml', hardcodedEndpoint: true },
+    { name: 'README.md', hardcodedEndpoint: false },
+  ];
+  for (const { name, hardcodedEndpoint } of scanned) {
+    const text = read(pkgPath(name));
+    const hits = MACHINE_PATH_PATTERNS.filter(([pattern]) => pattern.test(text)).map(([, label]) => label);
+    if (hardcodedEndpoint && /https?:\/\//.test(text)) hits.push('硬编码 endpoint');
+    assert.deepEqual(hits, [], `${name} 出现 ${hits.join('、')}：示例只能用通用形态或 corp.example，补丁层不写默认值`);
+  }
+});
+
+test('r3 工具面不把取值型 access 字段拼进错误 detail（AC-10 回显边界）', () => {
+  // 取值型字段：命中路径、endpoint 实值、移动端快照。它们只允许出现在 GET 响应体与页面 DOM。
+  const VALUE_CARRIERS = /(?:\bdopBin\b|\bghBin\b|\bdopEndpoint\b|access\.entries|\bentries\s*\[|\.snapshot\s*\()/;
+  const leaks = [];
+  for (const file of srcFiles()) {
+    const text = srcText(file);
+    for (const match of text.matchAll(/\bdetail\s*:/g)) {
+      const window = text.slice(match.index, match.index + 220);
+      if (VALUE_CARRIERS.test(window)) leaks.push(`${file}:${text.slice(0, match.index).split('\n').length}`);
+    }
+  }
+  assert.deepEqual(leaks, [], `detail 里出现取值型 access 字段（绝对路径/endpoint 会外泄到工具输出）：${leaks.join(', ')}`);
+  const toolHits = ['dopBin', 'ghBin', 'dopEndpoint', 'access.'].filter((key) => srcText('tools.mjs').includes(key));
+  assert.deepEqual(toolHits, [], `工具面只认脱敏描述，不得接触 access 快照：${toolHits.join(', ')}`);
+});
+
+test('r3 cli-discovery 零子进程：发现只走注入的 fs，不执行任何命令（AC-2、AC-4）', (t) => {
+  const file = 'cli-discovery.mjs';
+  if (!existsSync(pkgPath('src', file))) return deferred(t, file, 'T1(r3)', '发现模块尚未产出');
+  const text = srcText(file);
+  const spawners = [
+    [/child_process/, 'child_process'],
+    [/\bexecSync\b/, 'execSync'],
+    [/\bexecFile\b/, 'execFile'],
+    [/\bspawn(?:Sync)?\b/, 'spawn'],
+    [/shell\s*:\s*true/, 'shell:true'],
+  ];
+  const hits = spawners.filter(([pattern]) => pattern.test(text)).map(([, label]) => label);
+  assert.deepEqual(hits, [], `${file} 不得执行子进程（发现必须在装配期完成且零命令）：${hits.join('; ')}`);
+});
+
+test('r3 字段规则唯一出口：cli-config 复用 runtime-config 的校验，且自身零 IO、零宿主依赖（AC-3）', (t) => {
+  if (!existsSync(pkgPath('src', 'cli-config.mjs'))) return deferred(t, 'cli-config.mjs', 'T2(r3)', '三层合并模块尚未产出');
+  const text = srcText('cli-config.mjs');
+  assert.match(
+    text,
+    /import\s*\{[^}]*\bvalidateConfigField\b[^}]*\}\s*from\s*'\.\/runtime-config\.mjs'/,
+    'cli-config 必须 import validateConfigField：环境变量层与页面层若各写一套规则，迟早漂移',
+  );
+  // 纯函数留一个只管合并与文案的模块：fs / platform / pathModule 全部由调用方注入，才能离线矩阵化。
+  for (const dep of ['node:child_process', 'node:fs', 'node:os', 'node:path', 'node:net', 'node:http']) {
+    assert.ok(!text.includes(dep), `cli-config 不得直接依赖 ${dep}（应由入参注入，保持纯函数可测）`);
+  }
+});
+
+test('r3 包装脚本后缀表单一定义：全仓只有 cli-discovery 声明 WRAPPER_SUFFIXES（P2-1）', (t) => {
+  const file = 'cli-config.mjs';
+  if (!existsSync(pkgPath('src', file))) return deferred(t, file, 'T2(r3)', '三层合并模块尚未产出');
+  const declaredIn = srcFiles().filter((name) => /export\s+const\s+WRAPPER_SUFFIXES\b/.test(srcText(name)));
+  assert.deepEqual(
+    declaredIn,
+    ['cli-discovery.mjs'],
+    `WRAPPER_SUFFIXES 只能有一处定义（否则发现侧与校验侧会各自演进）：${declaredIn.join(', ')}`,
+  );
+  // 校验侧必须 import 复用它（常量或判定函数二者之一），不得再抄一张后缀表。
+  assert.match(
+    srcText(file),
+    /import\s*\{[^}]*\b(?:WRAPPER_SUFFIXES|wrapperSuffixOf)\b[^}]*\}\s*from\s*'\.\/cli-discovery\.mjs'/,
+    'cli-config 必须 import cli-discovery 的包装脚本判定，不得自带一份副本',
+  );
+  assert.ok(
+    !/\.cmd['"]?\s*,\s*['"]\.bat/u.test(srcText(file)),
+    'cli-config 不得再内联一张 .cmd/.bat 后缀表',
+  );
+});
+
+test('r3 配置页客户端不打印、不持久化路径（AC-10、AC-7）', (t) => {
+  if (!existsSync(CLIENT_FILE)) return deferred(t, 'client.js', 'T5(r3)', '配置页尚未产出');
+  const text = read(CLIENT_FILE);
+  const offenders = [];
+  if (/\bconsole\.(?:log|info|warn|error|debug|trace)\s*\(/.test(text)) offenders.push('console.*（路径会被打印进宿主控制台）');
+  if (/\b(?:localStorage|sessionStorage)\b/.test(text)) offenders.push('web storage（路径会被持久化出配置页）');
+  if (/document\.cookie/.test(text)) offenders.push('document.cookie');
+  for (const [pattern, label] of MACHINE_PATH_PATTERNS.slice(0, 3)) {
+    if (pattern.test(text)) offenders.push(`${label}字面量`);
+  }
+  assert.deepEqual(offenders, [], `客户端只允许把路径渲染进本页 DOM，不得打印或持久化：${offenders.join('; ')}`);
+});
+
+test('r3 settings.section 注册一律经 slots.inject 等父条目声明（D-2 全仓类面）', (t) => {
+  if (!existsSync(CLIENT_FILE)) return deferred(t, 'client.js', 'T5(r3)', '配置页尚未产出');
+  // 缺陷类别：往父条目声明的槽位里**裸注册**。宿主在槽位晚于 apply 声明时直接抛
+  // `slot "..." is not declared`，整片分区消失。全仓每个 client.js 都要先等声明。
+  const packagesDir = path.join(REPO_ROOT, 'packages');
+  const clients = readdirSync(packagesDir)
+    .map((name) => path.join(packagesDir, name, 'client.js'))
+    .filter((file) => existsSync(file));
+  const offenders = [];
+  for (const file of clients) {
+    const text = read(file);
+    if (!/name:\s*'settings\.section'/u.test(text)) continue; // 不往该槽位注册的客户端无关
+    if (!/slots\.inject\(\s*'settings\.section'/u.test(text)) {
+      offenders.push(`${path.relative(REPO_ROOT, file)}：注册 settings.section 但未用 slots.inject 等声明`);
+    }
+  }
+  assert.deepEqual(offenders, [], offenders.join('; '));
+});
+
+test('r3 清单声明客户端半：dsh.client + ./client 导出 + 发布白名单含 client.js（否则安装后 404）', (t) => {
+  const manifest = JSON.parse(read(pkgPath('package.json')));
+  const declared = Boolean(manifest.dsh?.client);
+  if (!existsSync(CLIENT_FILE) && !declared) return deferred(t, 'client.js', 'T5(r3)', '客户端半尚未产出');
+  assert.ok(existsSync(CLIENT_FILE), '清单声明了 dsh.client 但包内没有 client.js');
+  assert.equal(manifest.exports?.['./client'], './client.js', '必须导出 ./client 供宿主装载页面');
+  assert.equal(manifest.dsh?.client?.platform, 'web', 'dsh.client.platform 必须是 web');
+  const inject = manifest.dsh?.client?.inject ?? [];
+  for (const slot of ['slots', 'locale']) assert.ok(inject.includes(slot), `dsh.client.inject 缺 ${slot}（缺一项宿主就不装配客户端半）`);
+  assert.ok(manifest.files?.includes('client.js'), '发布白名单必须含 client.js（否则安装后页面 404）');
+});
+
+test('r3 文档口径 UI 优先：README 配置页在前、六键表齐全、补丁注释同步改写（AC-12）', (t) => {
+  if (!r3Landed()) return deferred(t, 'README.md', 'T4/T6(r3)', 'r3 装配尚未落地，文档口径检查随波次生效');
+  const readme = read(pkgPath('README.md'));
+  const pageAt = readme.indexOf('配置页');
+  const envAt = readme.indexOf('环境变量');
+  assert.ok(pageAt >= 0, 'README 必须给出配置页进入路径（AC-12：不设环境变量也能装好可用）');
+  assert.ok(envAt === -1 || pageAt < envAt, `README 必须配置页在前、环境变量降为 CI 兜底（配置页@${pageAt}、环境变量@${envAt}）`);
+  for (const field of ['dopBin', 'dopEndpoint', 'ghBin', 'ghOwner', 'sourceType', 'timeoutMs']) {
+    assert.ok(readme.includes(field), `README 配置项表缺 ${field}（六键表）`);
+  }
+  assert.match(read(pkgPath('cordis.patch.yml')), /配置页/, '补丁层注释口径必须改为「配置页优先、环境变量兜底」（旧口径会持续误导运维）');
+});
+
+test('r3 零回退：READ_REASONS 不加码，只读面语义与工具数不变（AC-14）', async () => {
+  const readModule = await load('read.mjs');
+  const baselineReasons = [
+    'COMMAND_FAILED',
+    'COMMAND_TIMEOUT',
+    'MALFORMED_RESULT',
+    'MISSING_SOURCE_REVISION',
+    'MISSING_TARGET',
+    'NO_READER',
+    'NO_STRUCTURED_STATUS',
+    'POLICY_ACTION_UNREGISTERED',
+    'POLICY_DENIED',
+    'POLICY_REQUIRED',
+    'UNKNOWN_ACTION',
+  ];
+  assert.deepEqual(
+    Object.keys(readModule.READ_REASONS).sort(),
+    baselineReasons,
+    '本次需求不得新增只读原因码：细因放 detail.reason（cli-discovery 未命中仍是 NO_READER）',
+  );
+  const toolsText = srcText('tools.mjs');
+  assert.equal(new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []).size, 9, '工具面仍是 9 个（配置页只写配置，不新增工具）');
+  const indexText = srcText('index.mjs');
+  assert.match(indexText, /NO_READER/, '未命中仍以 NO_READER 失败（fail closed 不变）');
 });

@@ -93,11 +93,28 @@ function createPorts({ runtime, execFile, now }) {
   };
 }
 
+/** 不可用信封的形状判据：只有带字符串 `code` 的对象才算，别的原样当普通值处理。 */
+const isUnavailableEnvelope = (value) =>
+  value !== null &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  typeof value.code === 'string' &&
+  value.code.trim() !== '';
+
 /**
  * 只读工具面的适配器：动作 → 固定方法，未登记的动作在发子进程之前就被拒绝。
  * 配置缺失时保留同一个对象，读取以 CONFIG_MISSING 失败（fail closed，而不是返回空结果）。
+ *
+ * `unavailable`（r3）是装配层给的**结构化石封**：`{ code, message, detail }`。它优先于
+ * `reason`——只读原因码不加码（仍是 NO_READER），细因（CLI_NOT_FOUND + 已查类别 + 页面指引）
+ * 放 `detail`。没有信封时行为与基线一字不差（旧 `reason` 字符串路径保留）。
  */
-export function createDevopsReader({ ports = null, reason = FLOW_REASONS.CONFIG_MISSING } = {}) {
+export function createDevopsReader({
+  ports = null,
+  reason = FLOW_REASONS.CONFIG_MISSING,
+  unavailable = null,
+} = {}) {
+  const envelope = isUnavailableEnvelope(unavailable) ? unavailable : null;
   return Object.freeze({
     async read({ action, target } = {}) {
       const route = READ_ROUTES[action];
@@ -105,6 +122,14 @@ export function createDevopsReader({ ports = null, reason = FLOW_REASONS.CONFIG_
         throw new DevopsReadError(READ_REASONS.UNKNOWN_ACTION, `只读动作未登记：${String(action)}`, { action });
       }
       if (ports === null) {
+        if (envelope !== null) {
+          const detail = envelope.detail !== null && typeof envelope.detail === 'object' ? envelope.detail : {};
+          throw new DevopsReadError(envelope.code, String(envelope.message ?? reason), {
+            action,
+            target,
+            ...detail,
+          });
+        }
         throw new DevopsReadError(reason, `运行时配置不可用（${reason}），未发起 ${action}`, { action, target });
       }
       return route(ports, target);
@@ -121,6 +146,8 @@ export function createDevopsReader({ ports = null, reason = FLOW_REASONS.CONFIG_
  * @param {object|null} [options.guard] 装配层做好的门禁适配；缺省时按 policy 自建（单独使用本工厂时）。
  * @param {object|null} [options.config] `resolveRuntimeConfig` 的结果或裸配置。
  * @param {object|null} [options.env] 进程环境；与 config 二选一。
+ * @param {object|string|null} [options.unavailable] 装配层给的不可用信封（`{code,message,detail}`）或原因字符串。
+ *   有信封时只读面按信封失败（`detail.reason` 带细因），卡内未知项与写拒绝仍用原因字符串。
  * @param {Function} [options.execFile] 子进程注入点（离线用例用假实现）。
  * @param {Function} [options.now] 时间注入点，默认 ISO 字符串。
  */
@@ -130,13 +157,16 @@ export function createDevopsFlow({
   guard = null,
   config = null,
   env = null,
+  unavailable = null,
   execFile,
   now = () => new Date().toISOString(),
 } = {}) {
   const resolution = normalizeResolution(config, env);
   const runtime = resolution.ok === true ? resolution.value : null;
   const sourceType = text(runtime?.sourceType) === '' ? 'mock' : runtime.sourceType;
-  const unavailable = resolution.ok === true ? null : resolution.reason;
+  // 可用性优先：调用方直接给的原因字符串/信封压过解析结果（装配层已做过三层合并，解析结论只是兜底）。
+  const reasonOverride = typeof unavailable === 'string' && unavailable !== '' ? unavailable : null;
+  const unavailableReason = resolution.ok === true ? null : (reasonOverride ?? resolution.reason);
   const gate =
     guard !== null && typeof guard === 'object' && typeof guard.execute === 'function'
       ? guard
@@ -144,7 +174,11 @@ export function createDevopsFlow({
         ? createPolicyGuard({ policy })
         : null;
   const ports = runtime === null ? null : createPorts({ runtime, execFile, now });
-  const reader = createDevopsReader({ ports, reason: unavailable ?? FLOW_REASONS.CONFIG_MISSING });
+  const reader = createDevopsReader({
+    ports,
+    reason: unavailableReason ?? FLOW_REASONS.CONFIG_MISSING,
+    unavailable,
+  });
 
   /** 本会话里真的判定过的承建结论：写动作只信这里，不信调用方自报。 */
   const findings = new Map();
@@ -161,7 +195,7 @@ export function createDevopsFlow({
 
     if (ports === null) {
       for (const field of ['dop.change.view', 'gh.repository.list']) {
-        unknowns.push({ field, reason: unavailable ?? FLOW_REASONS.CONFIG_MISSING, command: null });
+        unknowns.push({ field, reason: unavailableReason ?? FLOW_REASONS.CONFIG_MISSING, command: null });
       }
     } else {
       try {
@@ -316,7 +350,7 @@ export function createDevopsFlow({
       return denied(action, target, FLOW_REASONS.MISSING_CHANGE_ID, '尚未绑定变更号（先跑 devops-change <变更号>）');
     }
     if (ports === null) {
-      return denied(action, target, unavailable ?? FLOW_REASONS.CONFIG_MISSING, '运行时配置不可用，写动作不执行');
+      return denied(action, target, unavailableReason ?? FLOW_REASONS.CONFIG_MISSING, '运行时配置不可用，写动作不执行');
     }
     return null;
   }
@@ -445,7 +479,7 @@ export function createDevopsFlow({
     describe: () =>
       Object.freeze({
         configured: runtime !== null,
-        reason: unavailable,
+        reason: unavailableReason,
         missing: resolution.ok === true ? [] : asArray(resolution.missing),
         invalid: resolution.ok === true ? [] : asArray(resolution.invalid),
         sourceType,
