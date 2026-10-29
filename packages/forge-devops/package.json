@@ -3,20 +3,31 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Read-only DevOps query skeleton with policy gating for Heluo Forge",
+  "description": "DevOps change flow host plugin for Heluo Forge: policy-gated reads, fixed argv adapters and offline-testable delivery flow",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
   "scripts": {
     "test": "node --test"
   },
+  "dependencies": {
+    "@heluo/forge-policy": "workspace:*"
+  },
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
-    "./read": "./src/read.mjs"
+    "./read": "./src/read.mjs",
+    "./runtime-config": "./src/runtime-config.mjs",
+    "./cli-runner": "./src/cli-runner.mjs"
   },
   "files": [
     "src",
+    "cordis.patch.yml",
     "README.md"
-  ]
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
 }

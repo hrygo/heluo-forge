@@ -10,7 +10,11 @@ importers:
 
   packages/forge-credentials-keychain: {}
 
-  packages/forge-devops: {}
+  packages/forge-devops:
+    dependencies:
+      '@heluo/forge-policy':
+        specifier: workspace:*
+        version: link:../forge-policy
 
   packages/forge-enterprise:
     dependencies:
