@@ -37,7 +37,7 @@ function ensureOutsideRepo(path, repo) {
 function normalizeRepoAlias(path, repo) {
   let ancestor = dirname(path);
   while (true) {
-    if (statIfPresent(ancestor) && realpathSync(ancestor) === realpathSync(repo)) return resolve(repo, relative(ancestor, path));
+    if (statIfPresent(ancestor) && relative(realpathSync(ancestor), realpathSync(repo)) === '') return resolve(repo, relative(ancestor, path));
     const parent = dirname(ancestor);
     if (parent === ancestor) return path;
     ancestor = parent;
@@ -59,7 +59,7 @@ function checkWorktree(path, repo) {
     if (error.status === 128 && String(error.stderr).includes('not a git repository')) return;
     throw new Error('cannot inspect destination worktree');
   }
-  if (realpathSync(worktree) !== realpathSync(repo)) throw new Error('destination is inside another Git worktree');
+  if (relative(realpathSync(worktree), realpathSync(repo)) !== '') throw new Error('destination is inside another Git worktree');
 }
 function checkParents(path) {
   let current = dirname(path);
@@ -127,7 +127,7 @@ function checkCommonDir(common, root) {
 function checkDestination(path, repo) {
   checkParents(path);
   checkWorktree(path, repo);
-  const rel = relative(repo, path);
+  const rel = relative(realpathSync(repo), effectivePath(path));
   const inside = rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
   if (!inside) {
     ensureOutsideRepo(path, repo);
@@ -145,9 +145,10 @@ function checkDestination(path, repo) {
       throw new Error('unsafe destination directory');
     }
   }
-  const tracked = gitOutput(['ls-files', '-z', '--', `:(literal)${rel}`], { cwd: repo });
+  const gitPath = process.platform === 'win32' ? rel.replaceAll('\\', '/') : rel;
+  const tracked = gitOutput(['ls-files', '-z', '--', `:(${process.platform === 'win32' ? 'literal,icase' : 'literal'})${gitPath}`], { cwd: repo });
   if (tracked) throw new Error('destination is tracked by Git');
-  try { gitOutput(['check-ignore', '--no-index', '-q', '--', rel], { cwd: repo }); }
+  try { gitOutput(['check-ignore', '--no-index', '-q', '--', gitPath], { cwd: repo }); }
   catch { throw new Error('destination must be ignored by Git'); }
   const parent = statIfPresent(dirname(path));
   if (parent && process.platform !== 'win32' && (parent.mode & 0o077)) throw new Error('destination directory permissions are too broad');

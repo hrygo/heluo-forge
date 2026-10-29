@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, verify } from 'node:crypto';
 import { canonicalPayload, normalizeMessage, parseTrailer } from '../scripts/sensitive-scan/lib.mjs';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, cpSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -248,7 +248,12 @@ test('installed scanner refuses a common directory moved into a worktree', () =>
     assert.ok(parseTrailer(readFileSync(message, 'utf8')).fields.sig);
     writeFileSync(message, 'safe\n');
     renameSync(original, moved);
-    writeFileSync(join(repo, '.git'), `gitdir: ${moved}\n`);
+    // Git may mark this gitfile hidden on Windows, where opening it with 'w' can fail.
+    const gitfile = openSync(join(repo, '.git'), 'r+');
+    try {
+      ftruncateSync(gitfile, 0);
+      writeFileSync(gitfile, `gitdir: ${moved}\n`);
+    } finally { closeSync(gitfile); }
     const unsafe = run(process.execPath, [join(moved, 'heluo-sensitive-scan/scripts/team-commit-msg.mjs'), message], { cwd: repo, env });
     assert.notEqual(unsafe.status, 0, 'scanner must reject trackable common directory');
     assert.equal(readFileSync(message, 'utf8'), 'safe\n');

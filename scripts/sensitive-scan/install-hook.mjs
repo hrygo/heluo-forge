@@ -26,8 +26,15 @@ try {
   mkdirSync(hooksDir, { recursive: true });
   const target = join(hooksDir, 'commit-msg');
   try {
-    // Exclusive creation prevents an existing hook, including a dangling symlink,
-    // from being replaced between an existence check and the write.
+    // Windows exclusive creation may follow a dangling symlink. Reject one
+    // already present explicitly; retain exclusive creation for other races.
+    try {
+      if (lstatSync(target).isSymbolicLink()) {
+        throw new Error(`refusing to overwrite existing commit-msg hook: ${target}`);
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
     const fd = openSync(target, 'wx', 0o755);
     try {
       writeFileSync(fd, SHIM);

@@ -42,14 +42,26 @@ for (const [name, content] of [
 test('refuses a dangling hook symlink without creating its target', t => {
   const { hooks, target, run } = setup(t);
   mkdirSync(hooks, { recursive: true });
-  try { symlinkSync('missing-hook', target); } catch (error) {
-    if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error.code)) return t.skip('symbolic link privilege unavailable');
-    throw error;
-  }
+  symlinkSync('missing-hook', target, 'file');
   const result = run();
   assert.notEqual(result.status, 0, result.stderr);
   assert.equal(lstatSync(target).isSymbolicLink(), true);
   assert.deepEqual(readdirSync(hooks), ['commit-msg']);
+});
+
+test('refuses a symlink to an identical legacy hook without changing it', t => {
+  const { hooks, target, run } = setup(t);
+  const first = run(); assert.equal(first.status, 0, first.stderr);
+  const content = readFileSync(target);
+  const other = join(hooks, 'other-hook');
+  writeFileSync(other, content);
+  rmSync(target);
+  symlinkSync('other-hook', target, 'file');
+  const result = run();
+  assert.notEqual(result.status, 0, result.stderr);
+  assert.equal(lstatSync(target).isSymbolicLink(), true);
+  assert.deepEqual(readFileSync(other), content);
+  assert.deepEqual(readdirSync(hooks).sort(), ['commit-msg', 'other-hook']);
 });
 
 test('installs the original executable legacy hook when absent', t => {

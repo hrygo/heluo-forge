@@ -26,7 +26,7 @@ function checkWorktree(path, root) {
     if (error.status === 128 && String(error.stderr).includes('not a git repository')) return;
     throw new Error('cannot inspect destination worktree');
   }
-  if (realpathSync(worktree) !== realpathSync(root)) throw new Error('destination is inside another Git worktree');
+  if (relative(realpathSync(worktree), realpathSync(root)) !== '') throw new Error('destination is inside another Git worktree');
 }
 
 function checkParents(path) {
@@ -90,7 +90,7 @@ function checkSecret(path, root, shared) {
   let ancestor = dirname(path);
   while (true) {
     try {
-      if (realpathSync(ancestor) === realpathSync(root)) {
+      if (relative(realpathSync(ancestor), realpathSync(root)) === '') {
         path = resolve(root, relative(ancestor, path));
         break;
       }
@@ -100,7 +100,7 @@ function checkSecret(path, root, shared) {
     ancestor = parent;
   }
   checkWorktree(path, root);
-  const rel = relative(root, path);
+  const rel = relative(realpathSync(root), realpathSync(path));
   const inside = rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
   if (!inside) {
     const resolved = relative(realpathSync(root), realpathSync(path));
@@ -114,8 +114,9 @@ function checkSecret(path, root, shared) {
       if (!stat.isDirectory() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o022))) throw new Error('unsafe directory');
     }
     if (process.platform !== 'win32' && (lstatSync(dirname(path)).mode & 0o077)) throw new Error('unsafe directory permissions');
-    if (gitOutput(['ls-files', '-z', '--', `:(literal)${rel}`], { cwd: root })) throw new Error('tracked secret');
-    gitOutput(['check-ignore', '--no-index', '-q', '--', rel], { cwd: root });
+    const gitPath = process.platform === 'win32' ? rel.replaceAll('\\', '/') : rel;
+    if (gitOutput(['ls-files', '-z', '--', `:(${process.platform === 'win32' ? 'literal,icase' : 'literal'})${gitPath}`], { cwd: root })) throw new Error('tracked secret');
+    gitOutput(['check-ignore', '--no-index', '-q', '--', gitPath], { cwd: root });
   }
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o077))) throw new Error('unsafe secret file');
