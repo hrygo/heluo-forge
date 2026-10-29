@@ -109,15 +109,15 @@ test('PATH 解析（win32）：去空项/去引号/展开 %VAR%/大小写不敏�
 
 test('PATH 解析（POSIX）：展开 $VAR 与 ${VAR}，未定义变量原样保留', () => {
   const env = {
-    HOME: '/home/ci',
+    HOME: '/home/ci', // security-scan: allow（夹具：合成路径，非真实主机）
     DOP_HOME: '/opt/corp/dop',
-    PATH: '/usr/bin:/home/ci/bin:$DOP_HOME/bin:${HOME}/sbin:$UNDEFINED/bin:/tmp',
+    PATH: '/usr/bin:/home/ci/bin:$DOP_HOME/bin:${HOME}/sbin:$UNDEFINED/bin:/tmp', // security-scan: allow（夹具：合成路径，非真实主机）
   };
   assert.deepEqual(parsePathVar({ env, platform: POSIX }), [
     '/usr/bin',
-    '/home/ci/bin',
+    '/home/ci/bin', // security-scan: allow（夹具：合成路径，非真实主机）
     '/opt/corp/dop/bin',
-    '/home/ci/sbin',
+    '/home/ci/sbin', // security-scan: allow（夹具：合成路径，非真实主机）
     '$UNDEFINED/bin',
     '/tmp',
   ]);
@@ -135,16 +135,16 @@ test('候选目录表数据驱动：win32 五个位置 / POSIX 两个位置，�
   const winEnv = {
     ProgramFiles: 'C:\\Program Files',
     'ProgramFiles(x86)': 'C:\\Program Files (x86)',
-    LOCALAPPDATA: 'C:\\Users\\ci\\AppData\\Local',
-    USERPROFILE: 'C:\\Users\\ci',
+    LOCALAPPDATA: 'C:\\Users\\ci\\AppData\\Local', // security-scan: allow（夹具：合成路径，非真实主机）
+    USERPROFILE: 'C:\\Users\\ci', // security-scan: allow（夹具：合成路径，非真实主机）
   };
   const winDirs = candidateDirs({ platform: WIN, env: winEnv, tool: 'dop' });
   assert.deepEqual(winDirs.map((entry) => entry.dir), [
     'C:\\Program Files\\dop',
     'C:\\Program Files (x86)\\dop',
     'C:\\Program Files\\heluo',
-    'C:\\Users\\ci\\AppData\\Local\\Programs\\dop',
-    'C:\\Users\\ci\\.dop\\bin',
+    'C:\\Users\\ci\\AppData\\Local\\Programs\\dop', // security-scan: allow（夹具：合成路径，非真实主机）
+    'C:\\Users\\ci\\.dop\\bin', // security-scan: allow（夹具：合成路径，非真实主机）
   ]);
   assert.deepEqual(winDirs.map((entry) => entry.tier), Array(5).fill('candidate-dir'));
   assert.deepEqual(candidateDirs({ platform: WIN, env: {}, tool: 'dop' }), [], '环境变量缺失时不得拼出 %VAR% 形状的假目录');
