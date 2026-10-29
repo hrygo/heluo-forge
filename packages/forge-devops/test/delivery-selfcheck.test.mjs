@@ -194,7 +194,8 @@ test('dop 适配器：固定 argv、未注入 endpoint 不拼参、无写通道'
   const call = calls.at(-1);
   assert.equal(call.bin, '/opt/corp/dop');
   assert.deepEqual(call.args.slice(0, 3), ['change', 'view', 'ARD123456'], '固定命令面 change view <id>');
-  assert.ok(call.args.includes('-j'), '必须要求结构化输出 -j');
+  assert.ok(call.args.includes('--json'), '必须要求结构化输出 --json');
+  assert.ok(!call.args.includes('-j'), '不得用短名 -j：内网真 CLI 只认 --json（2026-10 实测）');
   assert.ok(!call.args.includes('--endpoint'), '未注入 endpoint 不得拼该参数');
 
   const withEndpoint = createDopAdapter({ runner, dopBin: '/opt/corp/dop', dopEndpoint: 'https://dop.example/api' });

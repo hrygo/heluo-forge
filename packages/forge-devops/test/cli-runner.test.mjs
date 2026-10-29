@@ -33,13 +33,13 @@ test('成功调用返回五字段，且 argv 与程序名分开传（不拼串�
   const runner = createCliRunner({ execFile, env: { GH_HOST: 'corp.example' } });
   const result = await runner.run({
     bin: DOP_BIN,
-    args: ['change', 'view', 'ARD123456', '-j'],
+    args: ['change', 'view', 'ARD123456', '--json'],
     purpose: '读取变更',
   });
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].bin, DOP_BIN);
-  assert.deepEqual(calls[0].args, ['change', 'view', 'ARD123456', '-j']);
+  assert.deepEqual(calls[0].args, ['change', 'view', 'ARD123456', '--json']);
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout, '{"ok":true}');
   assert.equal(result.stderr, '');
@@ -77,7 +77,7 @@ test('非零退出：exitCode 取数值并保留 stderr（失败是数据不是�
     callback(error, '', 'boom');
   });
   const runner = createCliRunner({ execFile });
-  const result = await runner.run({ bin: DOP_BIN, args: ['change', 'view', 'ARD000000', '-j'] });
+  const result = await runner.run({ bin: DOP_BIN, args: ['change', 'view', 'ARD000000', '--json'] });
   assert.equal(result.exitCode, 2);
   assert.equal(result.stderr, 'boom');
   assert.equal(result.timedOut, false);
@@ -114,7 +114,7 @@ test('起不来（ENOENT）不吞原因：exitCode null 且 stderr 带消息', a
     callback(Object.assign(new Error('spawn dop ENOENT'), { code: 'ENOENT' }), '', '');
   });
   const runner = createCliRunner({ execFile });
-  const result = await runner.run({ bin: DOP_BIN, args: ['change', 'view', 'ARD123456', '-j'] });
+  const result = await runner.run({ bin: DOP_BIN, args: ['change', 'view', 'ARD123456', '--json'] });
   assert.equal(result.exitCode, null);
   assert.equal(result.stderr, 'spawn dop ENOENT');
   assert.equal(result.timedOut, false);
