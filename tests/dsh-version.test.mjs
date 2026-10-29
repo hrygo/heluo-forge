@@ -148,6 +148,26 @@ test('listCodeOccurrences：src 里的硬编码被拒，清单与夹具例外被
   }
 });
 
+test('listCodeOccurrences：忽略区与嵌套检出不计入受管源码', () => {
+  const root = fixtureRoot();
+  try {
+    mkdirSync(join(root, 'logs/teamflow/run/state'), { recursive: true });
+    mkdirSync(join(root, '.agents/worktrees/wt/src'), { recursive: true });
+    mkdirSync(join(root, 'vendor/clone/src'), { recursive: true });
+    mkdirSync(join(root, 'packages/demo/src'), { recursive: true });
+    writeFileSync(join(root, '.agents/worktrees/wt/.git'), 'gitdir: /elsewhere\n');
+    writeFileSync(join(root, 'vendor/clone/.git'), 'gitdir: /elsewhere\n');
+    writeFileSync(join(root, 'logs/teamflow/run/state/prd.json'), `{ "dsh": "${BASELINE}" }\n`);
+    writeFileSync(join(root, '.agents/worktrees/wt/src/index.mjs'), `export const pinned = '${BASELINE}';\n`);
+    writeFileSync(join(root, 'vendor/clone/src/index.mjs'), `export const pinned = '${BASELINE}';\n`);
+    writeFileSync(join(root, 'packages/demo/src/index.mjs'), `export const pinned = '${BASELINE}';\n`);
+    const files = listCodeOccurrences(root, BASELINE).map((row) => row.file);
+    assert.deepEqual(files, ['packages/demo/src/index.mjs'], `受管源码之外的副本被计入：${files.join(' ')}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('清单里的 engines.dsh 下限可列举：形状合法，且与基线的差异必须有登记的原因', () => {
   const floors = listEngineFloors(ROOT);
   assert.ok(floors.length >= 5, `只找到 ${floors.length} 个清单`);

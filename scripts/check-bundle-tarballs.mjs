@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // #37 AC4：真实 tarball 闭包核验。对每个有清单的 packages/*、services/* 目录跑
-// `npm pack --dry-run --json`；enterprise 先构建真正的自包含 tarball 再审计、清理。
+// `npm pack --dry-run --json`；有运行时依赖的包（enterprise 组合包、devops 单安装单元）
+// 先按该包为根构建真正的自包含 tarball 再审计、清理 —— dry-run 清单里依赖仍是
+// `workspace:*`，直接审计只会得到 unclosed runtime dependency。
 // 不联网、不安装，把实际文件列表与模式位交给 auditTarball。用 npm 而不是 pnpm：
 // 而 pack 的文件选择与模式位正是 npm 的实现语义。
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildEnterpriseBundle } from './build-enterprise-bundle.mjs';
+import { buildBundle } from './build-enterprise-bundle.mjs';
 
 import { auditTarball, npmExecutable, parsePackOutput } from './lib/bundle-rules.mjs';
 
@@ -43,8 +45,8 @@ for (const target of targets) {
   }
   let packed;
   try {
-    if (target.manifest.name === '@heluo/forge-enterprise') {
-      const result = buildEnterpriseBundle({ root });
+    if (Object.keys(target.manifest.dependencies ?? {}).length > 0) {
+      const result = buildBundle({ root, entry: target.manifest.name });
       packedFiles += result.packed.length;
       errors.push(...auditTarball({ label: target.label, manifest: result.manifest, packed: result.packed }));
       const artifactDir = dirname(result.tarball);

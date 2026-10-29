@@ -1,0 +1,86 @@
+{
+  "repos": [
+    {
+      "nameWithOwner": "acme/ard-sdk",
+      "name": "ard-sdk",
+      "description": "AI原生框架套件",
+      "repositoryTopics": [{"name": "ard"}, {"name": "sdd"}],
+      "url": "https://github.example/acme/ard-sdk",
+      "isPrivate": true,
+      "updatedAt": "2026-10-20T08:00:00Z"
+    },
+    {
+      "nameWithOwner": "acme/points-mall",
+      "name": "points-mall",
+      "description": "信用卡中心.积分商城子系统",
+      "repositoryTopics": [{"name": "points"}],
+      "url": "https://github.example/acme/points-mall",
+      "isPrivate": true,
+      "updatedAt": "2026-10-21T09:30:00Z"
+    }
+  ],
+  "issues": [
+    {
+      "number": 12,
+      "title": "[ARD123456] 门禁回读",
+      "state": "OPEN",
+      "url": "https://github.example/acme/ard-sdk/issues/12",
+      "updatedAt": "2026-10-27T10:00:00Z"
+    }
+  ],
+  "prs": [
+    {
+      "number": 7,
+      "title": "[ARD123456] 上下文卡与门禁",
+      "state": "OPEN",
+      "url": "https://github.example/acme/ard-sdk/pull/7",
+      "headRefName": "feat/devops-change-flow",
+      "updatedAt": "2026-10-27T11:00:00Z"
+    }
+  ],
+  "issueDetail": {
+    "number": 12,
+    "title": "[ARD123456] 门禁回读",
+    "state": "OPEN",
+    "url": "https://github.example/acme/ard-sdk/issues/12",
+    "updatedAt": "2026-10-27T10:00:00Z",
+    "labels": [{"name": "devops-change"}],
+    "comments": [
+      {
+        "id": "IC_kwDOAbc123",
+        "body": "澄清回写：AC-2 的验收口径已确认",
+        "url": "https://github.example/acme/ard-sdk/issues/12#issuecomment-9001",
+        "author": {"login": "alice"},
+        "createdAt": "2026-10-27T10:30:00Z"
+      }
+    ]
+  },
+  "prDetail": {
+    "number": 7,
+    "title": "[ARD123456] 上下文卡与门禁",
+    "state": "OPEN",
+    "url": "https://github.example/acme/ard-sdk/pull/7",
+    "updatedAt": "2026-10-27T11:00:00Z",
+    "headRefName": "feat/devops-change-flow",
+    "baseRefName": "main",
+    "isDraft": false,
+    "mergedAt": null,
+    "comments": [
+      {
+        "id": "IC_kwDOAbc456",
+        "body": "审查结论：AC-12 承建判定通过",
+        "url": "https://github.example/acme/ard-sdk/pull/7#issuecomment-9002",
+        "author": {"login": "reviewer"},
+        "createdAt": "2026-10-27T11:30:00Z"
+      }
+    ]
+  },
+  "created": {
+    "issue": "https://github.example/acme/ard-sdk/issues/13\n",
+    "issueJson": "{\"number\":13,\"url\":\"https://github.example/acme/ard-sdk/issues/13\"}",
+    "pr": "https://github.example/acme/ard-sdk/pull/8\n",
+    "issueComment": "https://github.example/acme/ard-sdk/issues/12#issuecomment-9100\n",
+    "prComment": "https://github.example/acme/ard-sdk/pull/7#issuecomment-9101\n",
+    "unrecognized": "created\n"
+  }
+}

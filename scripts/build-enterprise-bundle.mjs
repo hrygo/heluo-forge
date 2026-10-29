@@ -28,8 +28,16 @@ function copyResource(source, target) {
   } else fail(`not a regular release file: ${basename(source)}`);
 }
 
-/** Build a self-contained npm tarball using only explicitly declared workspace resources. */
-export function buildEnterpriseBundle({ root = repo, destination, version } = {}) {
+/** 默认安装单元：企业组合包。 */
+export const DEFAULT_ENTRY = '@heluo/forge-enterprise';
+
+/**
+ * Build a self-contained npm tarball for one workspace entry, using only explicitly
+ * declared workspace resources. `entry` is the package that becomes the tarball root:
+ * the enterprise umbrella and single-install units (e.g. devops) share this one
+ * closure-building path, so neither can ship a `workspace:` reference.
+ */
+export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, version } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'forge-bundle-build-'));
   const stage = join(work, 'package');
   const output = destination === undefined ? mkdtempSync(join(tmpdir(), 'forge-bundle-artifact-')) : resolve(destination);
@@ -68,7 +76,7 @@ export function buildEnterpriseBundle({ root = repo, destination, version } = {}
       // The terminal never runs source scripts or sees workspace references.
       delete released.scripts;
       delete released.devDependencies;
-      if (name === '@heluo/forge-enterprise' && version !== undefined) released.version = version;
+      if (name === entry && version !== undefined) released.version = version;
       if (deps.length > 0) {
         released.dependencies = Object.fromEntries(deps.map(([dep]) => [dep, readManifest(sources.get(dep)).version]));
         released.bundledDependencies = deps.map(([dep]) => dep);
@@ -79,7 +87,7 @@ export function buildEnterpriseBundle({ root = repo, destination, version } = {}
       writeFileSync(join(target, 'package.json'), `${JSON.stringify(released, null, 2)}\n`);
       for (const [dep] of deps) visit(dep, join(stage, 'node_modules', dep));
     };
-    visit('@heluo/forge-enterprise', stage);
+    visit(entry, stage);
     const manifest = readManifest(stage);
     const closureErrors = auditReleaseClosure(stage);
     if (closureErrors.length > 0) fail(closureErrors.join('; '));
@@ -113,6 +121,11 @@ export function buildEnterpriseBundle({ root = repo, destination, version } = {}
     if (pendingOutput !== undefined && dirname(pendingOutput) === output && basename(pendingOutput).endsWith('.tmp')) rmSync(pendingOutput, { force: true });
     if (dirname(work) === tmpdir() && basename(work).startsWith('forge-bundle-build-')) rmSync(work, { recursive: true, force: true });
   }
+}
+
+/** 默认安装单元（企业组合包）的构建入口，行为与 `buildBundle({ entry: DEFAULT_ENTRY })` 一致。 */
+export function buildEnterpriseBundle(options = {}) {
+  return buildBundle({ ...options, entry: DEFAULT_ENTRY });
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

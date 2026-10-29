@@ -1,0 +1,48 @@
+# @heluo/forge-devops 的补丁层（ADR-0012 单安装单元）。
+#
+# 本文件只做一件事：把 devops 所需的最小挂载插进 profile，使"只装 devops 一个包"也能挂载。
+#   1. `heluo-policy` 必须先行：devops 的策略门禁是硬依赖，`policy` 服务缺失、或四个只读动作
+#      未登记/未启用时，`apply()` 按 fail-closed 语义拒绝挂载（不降级、不放行）。顺序即加载顺序。
+#   2. `forge-devops` 紧随其后，行 `name` 用包根名（与清单 `name` 一致），
+#      否则安装后的 profile 解析不到该包。
+# 业务配置只给最小集：路径、endpoint、凭据一律由环境注入（AC-22），补丁层不写默认值，
+# 也不写任何主机绝对路径。
+#
+# 策略目录（catalog）必须是**非空且覆盖 devops 只读面**的四条 read：
+# 空目录会编译成"什么都没有"的策略，devops 随即以 POLICY_ACTION_UNREGISTERED 拒绝挂载
+# （QA N-1：安装成功但 `dump-config` 超时、宿主报 entry did not activate）。
+# 写动作（issue/pr/change 写）不预置：策略对 enabled 的写/确认动作要求审批台账条目，
+# 属单独的范围批准；需要写能力时由 profile 显式追加，而不是在分发层默认开放。
+# 不写 `tools` 映射：devops 的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射
+# 会重复准入、重复审计；未映射的宿主工具按策略自身的 out-of-scope 语义放行。
+#
+# 审计舱：`@heluo/forge-policy` 无可用 sink 时对每个动作都拒绝
+# （POLICY_AUDIT_UNAVAILABLE），非持久 sink 未声明 allowNonDurable 时同样拒绝
+# （POLICY_AUDIT_NOT_DURABLE）——所以"只补目录不补审计"仍是装上不可用。
+# 这里给内存审计舱，属**联调/试点级**证据；生产或合规场景必须在 profile 注入持久 sink
+# 后删掉 allowNonDurable（内存记录随进程退出丢失，不能作为审计留痕）。
+#
+# 用法：dsh --profile web --patch <包内 cordis.patch.yml>
+# 复核：dsh --profile web --patch <该文件> --dump-config | grep -A2 "id: heluo-"
+# 门禁：packages/forge-devops/test/patch-mount.test.mjs 会解析本文件，用其中的 config
+# 真实装配策略 + devops（并全仓扫描任何插入 forge-devops 的补丁层）。
+#
+# 注意：本补丁层面向"单独安装 devops"的安装单元。若同一 profile 已 apply
+# `@heluo/forge-enterprise` 的补丁层（其中已插 heluo-policy），不要再叠加本层，
+# 两条 insert 会重复挂载同一个 id；此时把 devops 行并入企业层，并按上面同样的要求
+# 补齐该层的策略目录与审计配置。
+
+- insert:
+    - id: heluo-policy
+      name: '@heluo/forge-policy'
+      config:
+        catalog:
+          - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
+          - { action: 'repository.read', kind: 'read', target: 'repository', enabled: true }
+          - { action: 'issue.read', kind: 'read', target: 'issue', enabled: true }
+          - { action: 'pr.read', kind: 'read', target: 'pull-request', enabled: true }
+        audit:
+          sink: memory
+          allowNonDurable: true
+    - id: forge-devops
+      name: '@heluo/forge-devops'
