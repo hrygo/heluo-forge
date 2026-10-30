@@ -26,8 +26,8 @@ import {
   resolveCliAccess,
   validateCliField,
 } from '../src/cli-config.mjs';
-// P2-1：包装脚本后缀表只有 cli-discovery 一份定义，校验侧 import 复用（不再复制常量）。
-import { WRAPPER_SUFFIXES } from '../src/cli-discovery.mjs';
+// AC-4/r8：入口形态的唯一真源在 `entry-form.mjs`，校验侧只消费它的判定（源码静态断言见文件末尾）。
+// 因此这里不再 import 任何后缀表——本文件用「6 形态同等放行」证明保存口已无后缀门槛（AC-1）。
 import { ENV_KEYS } from '../src/runtime-config.mjs';
 
 const WIN = 'win32';
@@ -45,6 +45,21 @@ const WIN_DIR = 'C:\\heluo';
 const WIN_MISSING = 'C:\\missing\\dop.exe';
 const POSIX_DOP = '/opt/corp/dop';
 const POSIX_NOEXEC = '/opt/corp/notes';
+/* AC-1 的 6 种「能存」形态。第一行正是本次报障值：npm 在 Windows 上生成的命令 shim，没有后缀。 */
+/* npm 全局 bin 目录的两种写法：无后缀 shim 与同名 .cmd（r8 报障的现场形态，路径用占位目录）。 */
+const WIN_SHIM_NOEXT = 'C:\\npm-global\\dop';
+const WIN_NPM_CMD = 'C:\\npm-global\\dop.cmd';
+const WIN_PS1 = 'C:\\tools\\dop.ps1';
+const WIN_GH_PS1 = 'C:\\tools\\gh.ps1';
+const WIN_EXE_UPPER = 'C:\\tools\\DOP.EXE';
+/* 存在但不是普通文件（管道/设备）：形态放开了也不该让它过。 */
+const WIN_OTHER = 'C:\\tools\\dop-fifo';
+/* POSIX 上的包装脚本：即使执行位齐全也不可直接启动（r3 口径，PRD 要求 POSIX 不动）。 */
+const POSIX_CMD = '/opt/corp/dop.cmd';
+/* 形状非法的路径（含控制字符）：无 fs 的解析期也必须 fail closed，用它做「层非法」的样本。 */
+const WIN_CTRL = 'C:\\tools\\dop\u0000.exe';
+/* 正斜杠写法：Windows API 接受，保存时不得擅自改成反斜杠。 */
+const WIN_SLASH_CMD = 'C:/tools/dop.cmd';
 const ENDPOINT = 'https://dop.corp.example/api';
 /* 内嵌凭据的样例用拼接构造，避免在仓库里出现"看起来像真凭据"的字面量。 */
 const CRED_ENDPOINT = ['https', '://svc:', 'pw', '@dop.corp.example/api'].join('');
@@ -77,8 +92,16 @@ const FILE_FS = fakeFs({
   [WIN_CMD]: { kind: 'file' },
   [WIN_BAT]: { kind: 'file' },
   [WIN_SH]: { kind: 'file' },
+  [WIN_SHIM_NOEXT]: { kind: 'file' },
+  [WIN_NPM_CMD]: { kind: 'file' },
+  [WIN_PS1]: { kind: 'file' },
+  [WIN_GH_PS1]: { kind: 'file' },
+  [WIN_EXE_UPPER]: { kind: 'file' },
+  [WIN_OTHER]: { kind: 'other' },
+  [WIN_SLASH_CMD]: { kind: 'file' },
   [WIN_DIR]: { kind: 'dir' },
   [POSIX_DOP]: { kind: 'file', mode: 0o755 },
+  [POSIX_CMD]: { kind: 'file', mode: 0o755 },
   [POSIX_NOEXEC]: { kind: 'file', mode: 0o644 },
 });
 
@@ -113,7 +136,7 @@ test('常量表：字段与 ENV_KEYS 同键，五种 origin 各有中文标签�
     Object.values(CLI_ORIGIN_LABELS),
     ['配置', '环境变量', '自动发现', '基线缺省', '未找到'],
   );
-  for (const table of [CLI_FIELDS, CLI_ORIGINS, CLI_REASONS, CLI_ORIGIN_LABELS, WRAPPER_SUFFIXES]) {
+  for (const table of [CLI_FIELDS, CLI_ORIGINS, CLI_REASONS, CLI_ORIGIN_LABELS]) {
     assert.ok(Object.isFrozen(table), '常量表不允许运行时改写');
   }
   // AC-1 改名：指引里的入口名与页面 nav/title 逐字同源，写死旧名会让工具失败提示指向不存在的入口。
@@ -342,8 +365,10 @@ test('覆盖关系可解释：配置压过环境变量/自动发现、环境变�
 });
 
 test('配置层非法：CLI_CONFIG_INVALID，且不回落环境变量/自动发现（不静默换路径）', () => {
+  // 解析期不读盘（fs 缺失），所以"非法"只能来自形状：含控制字符的路径谁都救不回来。
+  // 包装脚本不再是非法值（AC-1）——这条分支的样本必须换掉，否则测的是已被删除的规则。
   const access = resolve({
-    config: { dopBin: WIN_CMD },
+    config: { dopBin: WIN_CTRL },
     env: { [ENV_KEYS.dopBin]: ENV_DOP },
     discovery: discoveryOf({ dop: [DISC_DOP] }),
   });
@@ -351,7 +376,7 @@ test('配置层非法：CLI_CONFIG_INVALID，且不回落环境变量/自动发�
   assert.equal(access.reason, CLI_REASONS.INVALID);
   assert.equal(access.value, null);
   assert.deepEqual(access.invalid.map((item) => [item.field, item.origin]), [['dopBin', CLI_ORIGINS.CONFIG]]);
-  assert.equal(access.invalid[0].message, '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件');
+  assert.equal(access.invalid[0].message, '不能包含换行或控制字符');
   assert.equal(access.entries.dopBin.value, null);
   assert.match(access.guidance, /命令行配置不可用（dopBin：/);
 });
@@ -359,7 +384,7 @@ test('配置层非法：CLI_CONFIG_INVALID，且不回落环境变量/自动发�
 test('环境变量层非法同样 fail closed，origin 记 env（不是 config）', () => {
   const access = resolve({
     config: {},
-    env: { [ENV_KEYS.dopBin]: WIN_BAT },
+    env: { [ENV_KEYS.dopBin]: WIN_CTRL },
     discovery: discoveryOf({ dop: [DISC_DOP] }),
   });
   assert.equal(access.ready, false);
@@ -457,11 +482,11 @@ test('剖白描述（describeCliAccess）：origin/布尔/枚举，零路径零 
 });
 
 test('剖白描述对未就绪态同样零泄漏，并保留可读指引', () => {
-  const access = resolve({ config: { dopBin: WIN_CMD }, env: {}, discovery: discoveryOf({}) });
+  const access = resolve({ config: { dopBin: WIN_CTRL }, env: {}, discovery: discoveryOf({}) });
   const described = describeCliAccess(access);
   const json = JSON.stringify(described);
   assert.equal(json.includes('CLI_CONFIG_INVALID'), true, '失败原因是类别码/类别名，不是路径');
-  assert.equal(json.includes('dop.cmd'), false, '非法输入值不得随描述外泄');
+  assert.equal(json.includes('C:\\tools'), false, '非法输入值不得随描述外泄');
   assert.equal(described.ready, false);
   assert.equal(described.invalid[0].field, 'dopBin');
   assert.equal(described.invalid[0].origin, CLI_ORIGINS.CONFIG);
@@ -480,18 +505,19 @@ test('同一环境两次解析结论一致（AC-3 的可重复性）', () => {
   assert.deepEqual(resolveCliAccess(input), resolveCliAccess(input));
 });
 
-test('12 条非法值：逐字段可读原因，且 message 不回显用户输入（AC-9/AC-10）', () => {
+test('12 条非法值：逐字段可读原因，且 message 不回显用户输入（AC-2/AC-9/AC-10）', () => {
   const cases = [
     { field: 'dopBin', value: WIN_MISSING, platform: WIN, expected: '找不到这个文件' },
-    { field: 'dopBin', value: WIN_DIR, platform: WIN, expected: '这是目录，需要指向 dop.exe 本体' },
-    // AC-3：包装脚本拒收句同轮去 .exe（页面 error.wrapperScript 与这里同源）；
-    // 但「Windows 上请指向 .exe」是规则事实，下一行的后缀句保留。
-    { field: 'dopBin', value: WIN_CMD, platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件' },
-    { field: 'dopBin', value: WIN_BAT, platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件' },
-    { field: 'dopBin', value: WIN_SH, platform: WIN, expected: '不是可直接执行的文件（Windows 上请指向 .exe）' },
-    { field: 'ghBin', value: 'dop.ps1', platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件' },
+    // AC-2 文案：不再点名 `.exe`（win32 上本体未必带 `.exe`），但必须说清"这是目录"并给出本体名。
+    { field: 'dopBin', value: WIN_DIR, platform: WIN, expected: '这是目录，需要指向 dop 的可执行文件本体' },
+    { field: 'ghBin', value: WIN_DIR, platform: WIN, expected: '这是目录，需要指向 gh 的可执行文件本体' },
+    // 形态放开了，「存在但不是普通文件」仍然是硬错（管道/设备/套接字）。
+    { field: 'dopBin', value: WIN_OTHER, platform: WIN, expected: '不是可直接执行的文件' },
     { field: 'dopBin', value: 42, platform: WIN, expected: '需要一个文本值' },
+    { field: 'dopBin', value: WIN_CTRL, platform: WIN, expected: '不能包含换行或控制字符' },
+    // POSIX 口径不动：包装脚本仍然不可直接启动，执行位仍然是门槛（文案保持原样）。
     { field: 'dopBin', value: POSIX_NOEXEC, platform: POSIX, expected: '不是可直接执行的文件（缺少执行位）' },
+    { field: 'dopBin', value: POSIX_CMD, platform: POSIX, expected: '不是可直接执行的文件' },
     { field: 'dopEndpoint', value: BAD_SCHEME, platform: WIN, expected: '需要 http 或 https 地址，且地址里不能带用户名密码' },
     { field: 'dopEndpoint', value: CRED_ENDPOINT, platform: WIN, expected: '需要 http 或 https 地址，且地址里不能带用户名密码' },
     { field: 'ghOwner', value: '-acme', platform: WIN, expected: '只能是字母、数字和连字符，且不能以连字符开头' },
@@ -507,6 +533,53 @@ test('12 条非法值：逐字段可读原因，且 message 不回显用户输�
     assert.equal(verdict.message, item.expected, `${item.field}=${String(item.value)}`);
     assert.equal(String(verdict.message).includes(String(item.value)), false, '错误信息不得回显输入值');
   }
+  // 后缀不再是拒收理由：同一批非法值里不许再出现"请指向 .exe / 只接受 .exe"这类把用户引向猜后缀的话。
+  for (const item of cases) {
+    assert.equal(/\.exe/.test(String(item.expected)), false, `${item.field} 的文案不得点名后缀形态`);
+  }
+});
+
+test('AC-1 六形态放行：win32 只判「存在且是普通文件」，且原值逐字（大小写/斜杠/后缀都不动）', () => {
+  const saveable = [
+    [WIN_SHIM_NOEXT, '无后缀（npm 在 Windows 上生成的命令 shim，本次报障值）'],
+    [WIN_NPM_CMD, '.cmd 包装脚本'],
+    [WIN_CMD, '.cmd（普通目录下的相对常规写法）'],
+    [WIN_PS1, '.ps1'],
+    [WIN_BAT, '.bat'],
+    [CONF_DOP, '.exe 原生入口'],
+    [WIN_EXE_UPPER, '大写 .EXE（不因大小写被拒）'],
+    [WIN_SH, '其它后缀（.sh）同样可存：win32 不看后缀'],
+  ];
+  for (const [value, label] of saveable) {
+    // ① 字段校验：与保存路径结论一致（都 ok），值原样返回
+    assert.deepEqual(validateCliField({ field: 'dopBin', value, platform: WIN, fs: FILE_FS }), {
+      ok: true,
+      value,
+    }, label);
+    // ② 保存补丁：写进用户层的必须是原值逐字（不补后缀、不改大小写、不换斜杠）
+    assert.deepEqual(
+      buildCliPatch({ current: {}, patch: { dopBin: value }, platform: WIN, fs: FILE_FS }),
+      { ok: true, next: { dopBin: value } },
+      label,
+    );
+    // ③ 保存成功后该字段来源仍是配置层（AC-1 的 origin='config'），不是被自动发现顶掉
+    const access = resolve({ config: { dopBin: value }, env: {}, discovery: discoveryOf({ dop: [DISC_DOP] }) });
+    assert.equal(access.ready, true, label);
+    assert.equal(access.entries.dopBin.origin, CLI_ORIGINS.CONFIG, label);
+    assert.equal(access.entries.dopBin.value, value, label);
+  }
+
+  // 逐字回写的边界：首尾空白按既有规则去掉，中间字符一个不动（`/` 不转 `\`，`C:` 不改大小写）。
+  assert.deepEqual(
+    buildCliPatch({ current: {}, patch: { dopBin: `  ${WIN_SLASH_CMD}  ` }, platform: WIN, fs: FILE_FS }),
+    { ok: true, next: { dopBin: WIN_SLASH_CMD } },
+    '只去首尾空白，不把 / 换成 \\',
+  );
+  // gh 同理：目录/后缀都不拦，只有"找不到/是目录/不是普通文件"才拦。
+  assert.deepEqual(validateCliField({ field: 'ghBin', value: WIN_GH_PS1, platform: WIN, fs: FILE_FS }), {
+    ok: true,
+    value: WIN_GH_PS1,
+  });
 });
 
 test('合法值：归一化（去空白/小写/数字）与"清空即回落"都视为 ok', () => {
@@ -571,9 +644,10 @@ test('指引文案：类别名 + 指向配置页，不含路径/endpoint/环境�
   assert.equal(/[A-Za-z]:\\/.test(notFound), false, '工具面文案不得出现盘符路径');
   assert.equal(/FORGE_DEVOPS_/.test(notFound), false, '环境变量名只进次级说明，不进主句');
 
-  const invalid = cliGuidance(resolve({ config: { dopBin: WIN_CMD }, env: {}, discovery: discoveryOf({}) }));
-  assert.match(invalid, /^命令行配置不可用（dopBin：\.cmd \/ \.bat 包装脚本不能直接执行，请指向可直接执行的文件）· 请到「设置 → 企业 DevOps」修正$/);
-  assert.equal(invalid.includes(WIN_CMD), false, '校验失败的细节只给字段名与原因，不给用户输入值');
+  const invalid = cliGuidance(resolve({ config: { dopBin: WIN_CTRL }, env: {}, discovery: discoveryOf({}) }));
+  assert.match(invalid, /^命令行配置不可用（dopBin：不能包含换行或控制字符）· 请到「设置 → 企业 DevOps」修正$/);
+  assert.equal(invalid.includes('C:\\tools'), false, '校验失败的细节只给字段名与原因，不给用户输入值');
+  assert.equal(/\.exe/.test(invalid), false, '拒绝原因不再把用户引向"猜后缀"');
 });
 
 test('ready 态指引用 origin 标签说话（不写死中文层名）', () => {
@@ -589,4 +663,9 @@ test('源码静态纪律：无 node:fs 导入、无子进程、无 URL 字面量
   assert.equal(/https?:\/\//.test(source), false, 'endpoint 只能来自配置/环境，不写死');
   assert.equal(/process\.env/.test(source), false, '环境变量表由调用方显式传入');
   assert.equal(/logs\/teamflow/.test(source), false, '运行日志目录不进交付源码');
+  // AC-4（保存侧的一半）：入口形态判定只消费 entry-form，本文件不得再自带后缀规则。
+  assert.match(source, /import \{ isDirectlyExecutable \} from '\.\/entry-form\.mjs'/u, '判定必须来自单点模块');
+  assert.equal(/WRAPPER_SUFFIXES|wrapperSuffixOf|WRAPPER_MESSAGE/.test(source), false, '不得自带后缀表/后缀拒收文案');
+  assert.equal(/endsWith\(\s*'\.exe'\s*\)/i.test(source), false, '不得再按 .exe 结尾判可执行');
+  assert.equal(/\.cmd\s*\/\s*\.bat/.test(source), false, '不得再按包装脚本后缀拒收（AC-1）');
 });

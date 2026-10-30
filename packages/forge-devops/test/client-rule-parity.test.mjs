@@ -13,12 +13,18 @@
  *   2. **隐藏三键不对称**：页面恒 null（没有规则、也不渲染），服务端**仍严**——
  *      页面收窄不是服务端放宽；删页面规则时顺手删掉服务端边界，只会让保存把非法值写进配置。
  *
+ * r8 又把「三键等值」收窄了一次：入口路径在**页面侧**只剩长度上界，后缀/包装脚本形态不再拦截
+ * （原来 `.cmd`/`.bat`/`.ps1` 在 blur 就被拒，服务端现在一律可存）。所以矩阵里不再有「后缀差异」
+ * 这一类：形态样本两侧必须同判，页面也不再拥有任何后缀词表——那条规则回到服务端唯一真源
+ * `src/entry-form.mjs`，页面复制第二份就是分叉的开始（AC-4/AC-7）。
+ *
  * 做法：从**已交付的** `client.js` 源码里切出那份规则（不重写、不复述），与服务端
  * **保存期判定**（路径类字段 → `buildCliPatch`，其余 → `validateConfigField`）跑同一张矩阵。
  *
  * 判定口径（与 QA 探针 `qa-r3-rule-parity.mjs` 一致，避免两套判据各自漂移）：
- *   - 路径类的存在性 / 是否目录 / 执行位是**保存期职责**（`fs: null` 只比形态），不算漂移；
+ *   - 路径类的存在性 / 是否目录 / 执行位是**保存期职责**（`fs: null` 只比格式规则），不算漂移；
  *   - 漂移只有两种：页面放行而服务端因格式规则拒绝（page-loose），页面拦住而服务端接受（page-strict）。
+ *   - r8 后格式规则只剩长度一条：矩阵里所有形态样本两侧同判，`delegated` 必须为空（见最后一条用例）。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -67,7 +73,6 @@ const PAGE_FIELDS = new Function(`${sliceClientConst('PAGE_FIELDS')}\nreturn PAG
 // eslint-disable-next-line no-new-func
 const pageValidateField = new Function(
   [
-    sliceClientConst('WRAPPER_PATTERN'),
     sliceClientConst('MAX_PATH_LENGTH'),
     sliceClientConst('TIMEOUT_MIN'),
     sliceClientConst('TIMEOUT_MAX'),
@@ -77,7 +82,10 @@ const pageValidateField = new Function(
   ].join('\n'),
 )();
 
-/** 4096 / 4097 字符的 `.exe` 路径：长度上界的合法与越界两侧（与 MAX_PATH_LENGTH 等值）。 */
+/**
+ * 4096 / 4097 字符的入口路径：长度上界的合法与越界两侧（与 MAX_PATH_LENGTH 等值）。
+ * `.exe` 只是让样本看起来像真实入口；r8 后后缀**不承担任何规则含义**（换成 `.cmd` 或裸名同判）。
+ */
 const PATH_PREFIX = 'C:\\tools\\';
 const pathOfLength = (length) => `${PATH_PREFIX}${'a'.repeat(length - PATH_PREFIX.length - '.exe'.length)}.exe`;
 const PATH_AT_LIMIT = pathOfLength(4096);
@@ -93,7 +101,7 @@ const DELEGATED_REASON = /找不到这个文件|这是目录|不是可直接执�
 
 function serverVerdict(field, value) {
   if (PATH_FIELDS.has(field)) {
-    // fs: null → 跳过存在性 / 目录 / 执行位，只留形态判定（包装脚本、Win32 后缀）。
+    // fs: null → 跳过存在性 / 目录 / 执行位，只留格式规则（r8 后入口只剩长度上界）。
     const built = buildCliPatch({ current: {}, patch: { [field]: value }, platform: 'win32', fs: null });
     return built.ok === true ? { ok: true, message: '' } : { ok: false, message: built.errors?.[field] ?? '' };
   }
@@ -106,15 +114,18 @@ function serverVerdict(field, value) {
  * 页面只为其中三键背书——另三键由「页面恒 null / 服务端仍严」那条用例守着。
  */
 const MATRIX = [
-  ['dopBin', 'C:\\tools\\dop.exe', 'win32 正常 .exe'],
-  ['dopBin', 'C:\\tools\\dop.cmd', '包装脚本'],
-  ['dopBin', 'C:\\tools\\dop.bat', '包装脚本'],
-  ['dopBin', '/usr/local/bin/dop', 'win32 上无 .exe 后缀'],
-  ['dopBin', 'C:\\tools\\missing.exe', '只查存在性的形态'],
+  ['dopBin', 'C:\\tools\\dop.exe', 'win32 原生入口'],
+  ['dopBin', 'C:\\tools\\dop.cmd', 'npm 生成的 .cmd shim（r8 起可存）'],
+  ['dopBin', 'C:\\tools\\dop.bat', '.bat 包装脚本'],
+  ['dopBin', 'C:\\tools\\dop.ps1', '.ps1 脚本'],
+  ['dopBin', 'C:\\npm-global\\dop', 'npm 生成的无后缀裸名 shim'],
+  ['dopBin', '/usr/local/bin/dop', 'POSIX 绝对路径（win32 上无后缀）'],
+  ['dopBin', 'C:\\tools\\DOP.EXE', '大写后缀（win32 折叠后同一形态）'],
+  ['dopBin', 'C:\\tools\\missing.exe', '形态合法、存在性由保存期判'],
   ['dopBin', PATH_AT_LIMIT, '4096 字符（长度上界内）'],
   ['dopBin', PATH_OVER_LIMIT, '4097 字符（超长度上界）'],
   ['ghBin', 'gh', '裸命令名（默认值形态）'],
-  ['ghBin', 'C:\\tools\\gh.ps1', '包装脚本'],
+  ['ghBin', 'C:\\tools\\gh.cmd', 'npm shim（gh 与 dop 同口径）'],
   ['dopEndpoint', 'https://devops.corp.example/api', '正常地址'],
   ['dopEndpoint', 'http://devops.corp.example:8080/api', '带端口'],
   ['dopEndpoint', 'devops.corp.example/api', '缺协议'],
@@ -183,6 +194,35 @@ test('同类边界：路径长度 4096 放行、4097 失焦即拒（与服务端
   assert.equal(buildCliPatch({ current: {}, patch: { dopBin: PATH_OVER_LIMIT }, platform: 'win32', fs: null }).ok, false);
 });
 
+test('页面入口规则只剩长度：后缀/包装脚本形态一律放行，且页面无后缀词表（AC-7）', () => {
+  // r8 的核心回归：这七种形态过去有三种在 blur 就被拒（`.cmd`/`.bat`/`.ps1`），
+  // 用户只能「先猜后缀、报错、再回来改」。现在页面只判长度——形态与可执行性归服务端保存期
+  // （唯一真源 `src/entry-form.mjs`），页面不复制第二份规则（AC-4）。
+  const SHAPES = [
+    'C:\\tools\\dop.exe',
+    'C:\\tools\\dop.cmd',
+    'C:\\tools\\dop.bat',
+    'C:\\tools\\dop.ps1',
+    'C:\\npm-global\\dop',
+    'C:\\tools\\DOP.EXE',
+    'D:\\tools\\dop.vbs',
+  ];
+  for (const value of SHAPES) {
+    assert.equal(pageValidateField('dopBin', value), null, `页面不得再按后缀拦入口路径：${value}`);
+    const server = serverVerdict('dopBin', value);
+    assert.equal(server.ok, true, `服务端保存期也不得按后缀拒收（${value}）：${server.message}`);
+  }
+  // 拦住的只有长度：这条边界不能随「删后缀」一起被删掉（R2-1 的同类缺陷）。
+  assert.equal(pageValidateField('dopBin', PATH_OVER_LIMIT), 'error.pathLength', '超长度仍要在 blur 就拒');
+  // 页面规则与源码里都不得残留后缀判定，也不得再引用已删除的 i18n 键。
+  assert.ok(!/WRAPPER_PATTERN|wrapperScript/u.test(String(pageValidateField)), '页面 validateField 不得残留后缀判定');
+  assert.ok(!/WRAPPER_PATTERN|wrapperScript/u.test(SOURCE), 'client.js 不得残留 WRAPPER_PATTERN / error.wrapperScript');
+  // i18n 成对删除：悬空键会让界面露出裸键；留下的那条入口错误句仍必须 zh/en 各一条。
+  const count = (key) => [...SOURCE.matchAll(new RegExp(`'${key}':\\s*'`, 'gu'))].length;
+  assert.equal(count('error.wrapperScript'), 0, 'error.wrapperScript 必须随后缀拦截一起成对删除');
+  assert.equal(count('error.pathLength'), 2, 'error.pathLength 是入口字段唯一的错误句，zh/en 各一条');
+});
+
 test('页面三键规则与服务端保存期判定在矩阵上等值（无 page-loose / page-strict 漂移）', () => {
   const drift = [];
   const delegated = [];
@@ -205,11 +245,12 @@ test('页面三键规则与服务端保存期判定在矩阵上等值（无 page
     );
   }
   assert.deepEqual(drift, [], `页面规则与服务端判定出现漂移（失焦无提示 / 保存才 422）：\n  ${drift.join('\n  ')}`);
+  // r8：格式规则两侧完全同判，不再有「页面放行 / 服务端按后缀拒收」这一类委托。
+  // 存在性 / 目录 / 执行位仍是保存期职责，但它们在 fs:null 下不参与判定，本矩阵看不到。
   assert.deepEqual(
     delegated,
-    // 只允许这一条：Win32 的「必须 .exe」依赖平台事实，浏览器半看不到平台，只能由服务端在保存时判。
-    ['dopBin win32 上无 .exe 后缀'],
-    '已声明的保存期委托只应有平台相关这一条，新出现的要按漂移处理',
+    [],
+    'r8 去掉后缀门槛后：形态样本两侧必须同判；再出现「页面放行、服务端按格式拒收」就是新漂移',
   );
 });
 

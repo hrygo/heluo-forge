@@ -72,7 +72,7 @@ function makeFs({ dirs = {}, files = {} } = {}) {
 const baseFs = () =>
   makeFs({
     dirs: { [TOOLS]: ['dop.exe', 'gh.exe', 'dop.cmd'] },
-    files: { [DOP]: {}, [GH]: {}, [DOP_CONF]: {} },
+    files: { [DOP]: {}, [GH]: {}, [DOP_CMD]: {}, [DOP_CONF]: {} },
   });
 
 /**
@@ -130,10 +130,8 @@ test('装配期快照：零配置即 ready，路径来自自动发现，revision
   assert.equal(snapshot.reason, null);
   assert.equal(snapshot.entries.dopBin.origin, 'discovered', 'origin 必须是发现层（AC-3）');
   assert.equal(snapshot.entries.dopBin.path, DOP);
-  assert.deepEqual(snapshot.entries.dopBin.candidates, [{ path: DOP, tier: 'PATH' }], '候选按结构给页面');
-  assert.equal(snapshot.entries.dopBin.rejected.length, 1, '包装脚本只记录不参与解析（AC-2）');
-  assert.equal(snapshot.entries.dopBin.rejected[0].path, DOP_CMD);
-  assert.equal(snapshot.entries.dopBin.rejected[0].why, 'wrapper-script');
+  assert.deepEqual(snapshot.entries.dopBin.candidates, [{ path: DOP, tier: 'PATH' }, { path: DOP_CMD, tier: 'PATH' }], '候选按结构给页面，原生 .exe 在首位');
+  assert.deepEqual(snapshot.entries.dopBin.rejected, [], 'r8 起发现不再拒收任何形态：键保留、恒为空（AC-3）');
   assert.equal(snapshot.entries.ghBin.path, GH);
   assert.equal(snapshot.entries.dopEndpoint.origin, 'missing', 'endpoint 不做发现（PRD 非目标）');
   assert.equal(snapshot.entries.dopEndpoint.value, null);
@@ -288,7 +286,9 @@ test('保存第三步：非法值逐字段报错、一个字段都不写（AC-9�
   const result = await access.save({
     revision: access.revision(),
     fields: {
-      dopBin: DOP_CMD,
+      // r8 AC-1：`.cmd` 现在存得下（后缀不再是保存门槛），所以这里用"不存在"这条持久理由，
+      // 校验仍必须逐字段报错且一个字段都不写。
+      dopBin: `${TOOLS}\\absent-dop.exe`,
       timeoutMs: 999999,
       sourceType: 'nonsense',
       mystery: 'x',

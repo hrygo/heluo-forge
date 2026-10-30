@@ -55,9 +55,12 @@ window.__ModuleLoader__.load({
      * 逐字段的取值边界都要与 `src/runtime-config.mjs` 的规则等值：浏览器半不能 import 服务端模块，
      * 等值关系由 `test/client-rule-parity.test.mjs` 的跨面矩阵用例守着（改任何一侧先红在那里）。
      * 隐藏三键没有页面规则——"页面收窄、服务端不放宽"正由该矩阵断言。
+     *
+     * 入口字段只剩这条长度上界（与服务端 `MAX_PATH_LENGTH` 等值，挡住误粘整段日志）。
+     * r8 起页面**不再**判后缀：`.cmd`/`.bat`/`.ps1`/无后缀 shim 都允许暂存与提交，
+     * 形态与可执行性的唯一真源是服务端的 `src/entry-form.mjs`；浏览器半复制第二份，
+     * 只会让「能保存」和「能起起来」两套口径再次分叉（失败时由服务端 422 / 运行期提示说明）。
      */
-    const WRAPPER_PATTERN = /\.(?:cmd|bat|ps1|com|vbs)$/i;
-    /** 路径长度上限：与服务端 `MAX_PATH_LENGTH`（runtime-config.mjs）等值，挡住误粘整段日志。 */
     const MAX_PATH_LENGTH = 4096;
     const TIMEOUT_MIN = 1000;
     const TIMEOUT_MAX = 600000;
@@ -220,7 +223,6 @@ window.__ModuleLoader__.load({
       'field.timeoutMs.hint': '1000–600000，默认 20000',
       'section.commandline': '命令行入口与超时',
       'error.notFound': '找不到这个文件',
-      'error.wrapperScript': '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件',
       'error.pathLength': '路径太长（上限 4096 个字符），请确认没有粘进整段日志',
       'error.timeout': '请输入 1000–600000 之间的整数（毫秒）',
       'error.load': '无法读取命令行位置',
@@ -277,7 +279,6 @@ window.__ModuleLoader__.load({
       'field.timeoutMs.hint': '1000–600000, default 20000',
       'section.commandline': 'Command-line entries and timeout',
       'error.notFound': 'That file does not exist',
-      'error.wrapperScript': '.cmd / .bat wrappers cannot be executed; point at a directly executable file',
       'error.pathLength': 'Path is too long (4096 chars max); check you did not paste a log block',
       'error.timeout': 'Enter an integer between 1000 and 600000 (ms)',
       'error.load': 'Cannot read command-line locations',
@@ -324,9 +325,9 @@ window.__ModuleLoader__.load({
       const value = normalize(raw);
       if (value === '') return null;
       if (field === 'dopBin' || field === 'ghBin') {
-        // 长度先判：服务端保存时同样按 4096 截断（否则用户要等到 422 才知道粘多了）。
-        if (value.length > MAX_PATH_LENGTH) return 'error.pathLength';
-        return WRAPPER_PATTERN.test(value) ? 'error.wrapperScript' : null;
+        // 只有长度这一条（服务端同样按 4096 截断，否则用户要等到 422 才知道粘多了）；
+        // 形态/存在性/执行位一律留到保存期：页面判形态就会把可保存的 shim 提前拦掉。
+        return value.length > MAX_PATH_LENGTH ? 'error.pathLength' : null;
       }
       if (field === 'timeoutMs') {
         const timeout = Number(value);

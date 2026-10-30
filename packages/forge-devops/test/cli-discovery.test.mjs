@@ -86,13 +86,18 @@ test('词表冻结：包装脚本后缀与两个发现层级是唯一口径（AC
   assert.equal(DEFAULT_DEADLINE_MS, 250);
 });
 
-test('可执行名字表：win32 只认 .exe，POSIX 认裸命令名', () => {
-  assert.deepEqual(candidateExecutableNames('dop', WIN), ['dop.exe']);
-  assert.deepEqual(candidateExecutableNames('gh', WIN), ['gh.exe']);
-  assert.deepEqual(candidateExecutableNames('dop', POSIX), ['dop']);
+test('可执行名字表：win32 六项且顺序即优先级，POSIX 只认裸命令名（AC-3）', () => {
+  assert.deepEqual(
+    candidateExecutableNames('dop', WIN),
+    ['dop.exe', 'dop', 'dop.cmd', 'dop.ps1', 'dop.bat', 'dop.com'],
+    '顺序即优先级：原生 .exe → npm 裸名 shim → .cmd → .ps1 → .bat → .com',
+  );
+  assert.deepEqual(candidateExecutableNames('gh', WIN), ['gh.exe', 'gh', 'gh.cmd', 'gh.ps1', 'gh.bat', 'gh.com']);
+  assert.deepEqual(candidateExecutableNames('dop', POSIX), ['dop'], 'POSIX 口径零变化');
   assert.deepEqual(candidateExecutableNames('gh', POSIX), ['gh']);
   assert.deepEqual(candidateExecutableNames('', WIN), [], '空工具名不得产出一个".exe"候选');
   assert.deepEqual(candidateExecutableNames(null, POSIX), []);
+  assert.equal(candidateExecutableNames('  dop  ', WIN)[0], 'dop.exe', '工具名先 trim 再拼后缀');
 });
 
 test('PATH 解析（win32）：去空项/去引号/展开 %VAR%/大小写不敏感去重', () => {
@@ -158,37 +163,50 @@ test('候选目录表数据驱动：win32 五个位置 / POSIX 两个位置，�
   ]);
 });
 
-test('isDirectlyExecutable：win32 只认 .exe，POSIX 认执行位，包装脚本一律 false', () => {
+test('isDirectlyExecutable（再导出，定义在 entry-form）：win32 只判普通文件，POSIX 认执行位（AC-4）', () => {
   assert.equal(isDirectlyExecutable({ path: 'C:\\tools\\dop.exe', platform: WIN, stat: asFile() }), true);
   assert.equal(isDirectlyExecutable({ path: 'C:\\tools\\DOP.EXE', platform: WIN, stat: asFile() }), true, '大小写不敏感');
-  assert.equal(isDirectlyExecutable({ path: 'C:\\tools\\dop.cmd', platform: WIN, stat: asFile() }), false);
-  assert.equal(isDirectlyExecutable({ path: 'C:\\tools\\dop', platform: WIN, stat: asFile() }), false, '无扩展名在 Windows 上不可直接执行');
+  assert.equal(
+    isDirectlyExecutable({ path: 'C:\\tools\\dop.cmd', platform: WIN, stat: asFile() }),
+    true,
+    'r8：win32 不再按后缀拒收——能不能启动由运行期提示回答，不由发现阶段替用户拦',
+  );
+  assert.equal(
+    isDirectlyExecutable({ path: 'C:\\tools\\dop', platform: WIN, stat: asFile() }),
+    true,
+    'npm 生成的无后缀 shim 也是普通文件',
+  );
   assert.equal(isDirectlyExecutable({ path: 'C:\\tools\\dop.exe', platform: WIN, stat: asDir() }), false, '目录不是可执行入口');
+  assert.equal(isDirectlyExecutable({ path: 'C:\\tools\\dop.exe', platform: WIN, stat: undefined }), false);
+  assert.equal(isDirectlyExecutable({ path: 'C:\\tools\\dop.exe', platform: WIN, stat: { isFile: () => true } }), true, 'win32 不看 mode');
   assert.equal(isDirectlyExecutable({ path: '/opt/dop', platform: POSIX, stat: asFile(0o755) }), true);
   assert.equal(isDirectlyExecutable({ path: '/opt/dop', platform: POSIX, stat: asFile(0o644) }), false);
   assert.equal(isDirectlyExecutable({ path: '/opt/dop', platform: POSIX, stat: asFile(0o700) }), true, '任一执行位即可');
   assert.equal(isDirectlyExecutable({ path: '/opt/dop', platform: POSIX, stat: asDir() }), false);
-  assert.equal(isDirectlyExecutable({ path: '/opt/dop.cmd', platform: POSIX, stat: asFile(0o755) }), false, '包装脚本在 POSIX 上同样不选');
+  assert.equal(isDirectlyExecutable({ path: '/opt/dop.cmd', platform: POSIX, stat: asFile(0o755) }), false, '包装脚本在 POSIX 上同样不选（POSIX 口径零变化）');
   assert.equal(isDirectlyExecutable({ path: '/opt/dop', platform: POSIX, stat: undefined }), false);
   assert.equal(isDirectlyExecutable({ path: '/opt/dop', platform: POSIX, stat: { isFile: () => true } }), false, 'mode 缺失视为不可判定');
 });
 
-test('win32 发现：.exe 入选；同目录的 .cmd/.bat/.ps1/.com/.vbs 记 rejected 且不参与解析（AC-2）', () => {
-  const wrappers = ['dop.cmd', 'dop.bat', 'dop.ps1', 'dop.com', 'dop.vbs'];
+test('win32 发现：六种候选名全部入选且按优先级排序，.vbs 与其它名字不入选，rejected 恒为空（AC-3）', () => {
+  // 目录条目故意逆序给出：排序必须由候选名下标决定，不能靠 readdir 的自然顺序。
+  const names = ['readme.txt', 'dop.vbs', 'dop.com', 'dop.bat', 'dop.ps1', 'dop.cmd', 'dop', 'dop.exe'];
   const files = {};
-  for (const name of [...wrappers, 'dop.exe', 'readme.txt']) files[winPath('C:\\tools', name)] = asFile();
-  const fs = fakeFs({ dirs: { 'C:\\tools': [...wrappers, 'dop.exe', 'readme.txt'] }, files });
+  for (const name of names) files[winPath('C:\\tools', name)] = asFile();
+  const fs = fakeFs({ dirs: { 'C:\\tools': names }, files });
 
   const discovery = discoverTool({ tool: 'dop', platform: WIN, env: { PATH: 'C:\\tools' }, fs, now: () => 0 });
 
-  assert.deepEqual(discovery.found, [{ path: 'C:\\tools\\dop.exe', tier: 'PATH' }]);
-  assert.deepEqual(discovery.rejected, [
-    { path: 'C:\\tools\\dop.bat', why: 'wrapper-script' },
-    { path: 'C:\\tools\\dop.cmd', why: 'wrapper-script' },
-    { path: 'C:\\tools\\dop.com', why: 'wrapper-script' },
-    { path: 'C:\\tools\\dop.ps1', why: 'wrapper-script' },
-    { path: 'C:\\tools\\dop.vbs', why: 'wrapper-script' },
+  assert.deepEqual(discovery.found, [
+    { path: 'C:\\tools\\dop.exe', tier: 'PATH' },
+    { path: 'C:\\tools\\dop', tier: 'PATH' },
+    { path: 'C:\\tools\\dop.cmd', tier: 'PATH' },
+    { path: 'C:\\tools\\dop.ps1', tier: 'PATH' },
+    { path: 'C:\\tools\\dop.bat', tier: 'PATH' },
+    { path: 'C:\\tools\\dop.com', tier: 'PATH' },
   ]);
+  assert.equal(discovery.found[0].path, 'C:\\tools\\dop.exe', '同目录双形态并存时原生入口必须排第一（AC-3）');
+  assert.deepEqual(discovery.rejected, [], 'r8 起不再产出 rejected[].why = "wrapper-script"');
   assert.deepEqual(discovery.searched, ['PATH', 'candidate-dir']);
   assert.equal(discovery.scannedDirs, 1);
   assert.equal(discovery.skippedDirs, 0);
@@ -196,20 +214,54 @@ test('win32 发现：.exe 入选；同目录的 .cmd/.bat/.ps1/.com/.vbs 记 rej
   assert.deepEqual(Object.keys(discovery).sort(), [
     'elapsedMs', 'found', 'rejected', 'scannedDirs', 'searched', 'skippedDirs', 'tool', 'truncated',
   ]);
+  assert.ok(fs.calls.stat.every((file) => !file.endsWith('.vbs') && !file.endsWith('readme.txt')), '非候选名连 stat 都不做');
 });
 
-test('win32 发现：无后缀的 dop 与 dop.sh 不入选；大小写不同的 .EXE 仍命中', () => {
+test('win32 发现：无后缀 shim 与 .EXE 都入选且大小写不敏感，不在候选表里的名字不入（AC-3）', () => {
   const fs = fakeFs({
-    dirs: { 'C:\\tools': ['dop', 'dop.sh', 'DOP.EXE'] },
+    dirs: { 'C:\\tools': ['dop.sh', 'dop', 'DOP.EXE'] },
     files: {
-      'C:\\tools\\dop': asFile(),
       'C:\\tools\\dop.sh': asFile(),
+      'C:\\tools\\dop': asFile(),
       'C:\\tools\\DOP.EXE': asFile(),
     },
   });
   const discovery = discoverTool({ tool: 'dop', platform: WIN, env: { PATH: 'C:\\tools' }, fs, now: () => 0 });
-  assert.deepEqual(discovery.found, [{ path: 'C:\\tools\\DOP.EXE', tier: 'PATH' }]);
-  assert.deepEqual(discovery.rejected, [], '只有包装脚本后缀才进 rejected，其它名字连记录都不必');
+  assert.deepEqual(discovery.found, [
+    { path: 'C:\\tools\\DOP.EXE', tier: 'PATH' },
+    { path: 'C:\\tools\\dop', tier: 'PATH' },
+  ], '大小写不同的 .EXE 仍按 .exe 优先级排第一；无后缀 shim 入选；dop.sh 不是候选名');
+  assert.deepEqual(discovery.rejected, []);
+});
+
+test('found 排序：同层级内按候选名下标，跨目录时 .exe 仍先于更早 PATH 项的 .cmd（AC-3）', () => {
+  const build = () => fakeFs({
+    dirs: { 'C:\\a': ['dop.cmd'], 'C:\\b': ['dop.exe'] },
+    files: { 'C:\\a\\dop.cmd': asFile(), 'C:\\b\\dop.exe': asFile() },
+  });
+  // PATH 里 C:\a 在前：扫描顺序靠前，但优先级由候选名下标决定。
+  const discovery = discoverTool({ tool: 'dop', platform: WIN, env: { PATH: 'C:\\a;C:\\b' }, fs: build(), now: () => 0 });
+  assert.deepEqual(discovery.found, [
+    { path: 'C:\\b\\dop.exe', tier: 'PATH' },
+    { path: 'C:\\a\\dop.cmd', tier: 'PATH' },
+  ], 'PATH 先后只决定扫描顺序，不决定优先级；found[0] 必须是原生入口');
+  assert.deepEqual(discovery.rejected, []);
+
+  // 层级仍压过候选名：PATH 里的 .cmd 先于候选目录里的 .exe（tier 是排序键的第一层）。
+  const layered = discoverTool({
+    tool: 'dop',
+    platform: WIN,
+    env: { PATH: 'C:\\a', ProgramFiles: 'C:\\pf' },
+    fs: fakeFs({
+      dirs: { 'C:\\a': ['dop.cmd'], 'C:\\pf\\dop': ['dop.exe'] },
+      files: { 'C:\\a\\dop.cmd': asFile(), 'C:\\pf\\dop\\dop.exe': asFile() },
+    }),
+    now: () => 0,
+  });
+  assert.deepEqual(layered.found, [
+    { path: 'C:\\a\\dop.cmd', tier: 'PATH' },
+    { path: 'C:\\pf\\dop\\dop.exe', tier: 'candidate-dir' },
+  ], 'tier 是第一排序键（PATH 优先），候选名下标只在其内生效');
 });
 
 test('POSIX 发现：执行位决定命中，同名的不可执行文件不算（AC-2）', () => {
@@ -371,7 +423,7 @@ test('入参防御：缺 fs / 缺工具名抛 TypeError，不静默返回空发�
   assert.throws(() => discoverTool({ tool: 'dop', platform: POSIX, env: {}, fs: fakeFs(), now: 'later' }), TypeError);
 });
 
-test('零外部程序：模块源码没有子进程通道，只依赖 node:path 与注入的 fs（AC-2）', () => {
+test('零外部程序：模块源码没有子进程通道，只依赖 node:path 与 entry-form.mjs（AC-2）', () => {
   const text = readFileSync(MODULE_FILE, 'utf8');
   const banned = [
     [/child_process/, 'child_process'],
@@ -383,5 +435,7 @@ test('零外部程序：模块源码没有子进程通道，只依赖 node:path 
   const hits = banned.filter(([pattern]) => pattern.test(text)).map(([, label]) => label);
   assert.deepEqual(hits, [], `发现模块不得启动任何进程：${hits.join('; ')}`);
   const imports = [...text.matchAll(/from\s+'([^']+)'/g)].map((match) => match[1]);
-  assert.deepEqual(imports, ['node:path'], '发现只能依赖 node:path；文件系统必须由调用方注入');
+  assert.deepEqual(imports, ['node:path', './entry-form.mjs'], '发现只能依赖 node:path 与入口形态单点模块；文件系统必须由调用方注入');
+  assert.match(text, /export\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}/, '形态判定必须由 entry-form 再导出，不得在本模块自带一份');
+  assert.ok(!/export\s+const\s+WRAPPER_SUFFIXES\b/.test(text), 'WRAPPER_SUFFIXES 不得在发现模块重新声明（唯一定义在 entry-form.mjs）');
 });

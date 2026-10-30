@@ -5,7 +5,9 @@
  *   1. **当前生效哪一层**：逐字段 `配置 > 环境变量 > 自动发现`，`ghBin`/`sourceType`/`timeoutMs`
  *      另有基线缺省（`default`）。`dopBin` 永不给默认值——fail closed 不能被一个猜测的路径掩盖。
  *   2. **值能不能存**：字段规则只有一份（`runtime-config.validateConfigField`），本模块只在其上
- *      追加需要平台与文件系统的**路径类**判定（存在性、目录、包装脚本、执行位）。
+ *      追加需要平台与文件系统的**路径类**判定（存在性、目录、普通文件/执行位）。**后缀形态不是门槛**：
+ *      win32 下 `.exe`/无后缀/`.cmd`/`.ps1`/`.bat` 一律可存（AC-1/r8）；"能不能直接启动"由
+ *      `entry-form.isDirectlyExecutable` 单点判定（AC-4），本模块不自带任何后缀表。
  *   3. **能不能说出去**：带路径的 `Access` 只留在主机内；对外的 `describeCliAccess()` 结构上
  *      不读 `value`，只给 origin/布尔/枚举。两者是两个函数，故意不合并成一个带 `reveal` 开关的
  *      函数——开关迟早会被顺手传 true（TECHNICAL §0 判断 3 / §5 回显边界）。
@@ -35,8 +37,8 @@ import {
   ENV_KEYS,
   validateConfigField,
 } from './runtime-config.mjs';
-// 包装脚本判定与发现侧共用同一份实现（P2-1：不允许两处各写一张后缀表）。
-import { wrapperSuffixOf } from './cli-discovery.mjs';
+// 入口形态（后缀词表 + 可直接执行判定）的唯一真源：保存侧只消费，不再自带后缀规则（AC-4/r8）。
+import { isDirectlyExecutable } from './entry-form.mjs';
 
 /** 六个逻辑字段，顺序即页面字段顺序（与 `ENV_KEYS` 同键，不另立词表）。 */
 export const CLI_FIELDS = Object.freeze([
@@ -96,13 +98,10 @@ const CATEGORY_LABELS = Object.freeze({
 export const CLI_PAGE_HINT = '设置 → 企业 DevOps';
 
 /**
- * 包装脚本拒收（AC-2）：`dop.cmd` 长得像可执行文件，但 `execFile` 在不带 shell 的前提下
- * 根本跑不起来，存进去只会把"配置成功"变成"运行时启动失败"。
- *
- * 后缀表与判定只在 `cli-discovery.mjs` 定义一份（QA P2-1）：发现侧拒收候选、
- * 校验侧拒收用户手填，是同一规则的两个调用点，不是两份规则。
+ * 拒收文案（AC-2）：只描述**真问题**——找不到文件、是目录、不是普通文件、缺执行位。
+ * r8 起没有"后缀不对"这一类，因此也没有对应文案：win32 的 `.exe`/无后缀/`.cmd`/`.ps1`/`.bat`
+ * 一律可存（AC-1），包装脚本"存得下但跑不起来"由运行期归因提示（`entry-form.describeSpawnFailure`，AC-5）。
  */
-const WRAPPER_MESSAGE = '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件';
 const NOT_EXECUTABLE_MESSAGE = '不是可直接执行的文件';
 
 /** 路径类字段 ←→ 发现工具名（其余字段没有发现层）。 */
@@ -173,24 +172,20 @@ function looksLikePath(value, platform) {
   return platform === 'win32' ? /[\\/]/.test(value) || /^[A-Za-z]:/.test(value) : value.includes('/');
 }
 
+/** 目录文案按字段点名本体（`dop`/`gh`），便于用户对着资源管理器找（DESIGN §6 error.isDirectory）。 */
+function binaryLabel(field) {
+  return TOOL_BY_FIELD[field] ?? 'dop';
+}
+
 /**
- * Windows 上的可执行形态：**路径形态**的值必须以 `.exe` 结尾；裸命令名（如 `gh`）不当作路径——
- * 它是 PATH 名，交给子进程的 PATH 解析，不是这里的责任。
+ * 读盘判定：存在性 → 目录 → **可直接执行**（末审只有一处：`entry-form.isDirectlyExecutable`）。
+ *
+ * 判定本身不在这里复制（AC-4）：win32 只看「是普通文件」——r8 去后缀门槛（AC-1）；POSIX 仍是
+ * 包装脚本 / 执行位口径（PRD 明确 POSIX 不动）。这里只负责把 `false` 翻译成一句能据以修的原因，
+ * 所以目录先判：「这是目录」比「不是可直接执行的文件」有用得多。
+ *
+ * `fs` 缺失时跳过（解析环节只做形状判定，读盘只在「发现」与「保存校验」两处）。
  */
-function checkExecutableSuffix(value, platform) {
-  if (platform !== 'win32') return { ok: true, value };
-  if (!looksLikePath(value, platform)) return { ok: true, value };
-  if (value.toLowerCase().endsWith('.exe')) return { ok: true, value };
-  return { ok: false, message: `${NOT_EXECUTABLE_MESSAGE}（Windows 上请指向 .exe）` };
-}
-
-/** 目录/执行位文案按字段点名本体，便于用户对着资源管理器找（DESIGN §6 error.isDirectory）。 */
-function binaryLabel(field, platform) {
-  const tool = TOOL_BY_FIELD[field] ?? 'dop';
-  return platform === 'win32' ? `${tool}.exe` : tool;
-}
-
-/** 读盘判定：存在性 → 目录 → 普通文件 → 执行位（posix）。`fs` 缺失时跳过（解析环节不读盘）。 */
 function probeFile(field, value, platform, fs) {
   if (fs === null || fs === undefined || typeof fs.statSync !== 'function') return { ok: true, value };
   let stat;
@@ -201,23 +196,27 @@ function probeFile(field, value, platform, fs) {
   }
   if (!isPlainObject(stat)) return { ok: true, value };
   if (typeof stat.isDirectory === 'function' && stat.isDirectory() === true) {
-    return { ok: false, message: `这是目录，需要指向 ${binaryLabel(field, platform)} 本体` };
+    return { ok: false, message: `这是目录，需要指向 ${binaryLabel(field)} 的可执行文件本体` };
   }
+  if (isDirectlyExecutable({ path: value, platform, stat }) === true) return { ok: true, value };
+  // 形态判定已归 entry-form，这里只剩两种否决理由：不是普通文件 / POSIX 缺执行位。
   if (typeof stat.isFile === 'function' && stat.isFile() !== true) {
     return { ok: false, message: NOT_EXECUTABLE_MESSAGE };
   }
-  if (platform !== 'win32') {
-    const mode = typeof stat.mode === 'number' ? stat.mode : 0;
-    if ((mode & 0o111) === 0) return { ok: false, message: `${NOT_EXECUTABLE_MESSAGE}（缺少执行位）` };
-  }
-  return { ok: true, value };
+  const mode = typeof stat.mode === 'number' ? stat.mode : 0;
+  if ((mode & 0o111) === 0) return { ok: false, message: `${NOT_EXECUTABLE_MESSAGE}（缺少执行位）` };
+  return { ok: false, message: NOT_EXECUTABLE_MESSAGE };
 }
 
 /**
- * 字段级校验（层解析与保存校验共用）：基础规则 → 包装脚本 → 可选读盘 → 可执行形态。
+ * 字段级校验（层解析与保存校验共用）：基础规则 → 可选读盘（存在/目录/可执行）→ 原值放行。
  *
- * 顺序有意为之：目录/不存在这类"看得见的错"优先于扩展名，用户先修掉最直观的问题；
- * 扩展名判定放在读盘之后，否则一个真实存在的目录会被报成"不是 .exe"，反而更费解。
+ * **没有后缀判定**：`dop` / `dop.cmd` / `dop.ps1` / `dop.bat` / `dop.exe` / `DOP.EXE` 在 win32 上
+ * 一视同仁（AC-1）——存不存得下与「跑不跑得起来」是两件事，后者由运行期归因提示（AC-5）负责。
+ * 裸命令名（如 `gh`）不当作路径：那是 PATH 名，交给子进程的 PATH 解析，不是这里的责任。
+ *
+ * 放行时返回 `base.value`（只去首尾空白），其余字符**逐字回写**（AC-1）：不补后缀、不改大小写、
+ * 不把 `/` 换成 `\`。
  */
 function checkFieldValue({ field, value, platform, fs }) {
   const base = validateConfigField(field, value);
@@ -225,14 +224,8 @@ function checkFieldValue({ field, value, platform, fs }) {
   if (TOOL_BY_FIELD[field] === undefined || base.value === null) return base;
 
   const path = base.value;
-  if (wrapperSuffixOf(path) !== null) return { ok: false, message: WRAPPER_MESSAGE };
   if (!looksLikePath(path, platform)) return { ok: true, value: path };
-
-  const probed = probeFile(field, path, platform, fs);
-  if (probed.ok !== true) return probed;
-  const suffix = checkExecutableSuffix(path, platform);
-  if (suffix.ok !== true) return suffix;
-  return { ok: true, value: path };
+  return probeFile(field, path, platform, fs);
 }
 
 function entryOf(field, origin, value, overrides) {
