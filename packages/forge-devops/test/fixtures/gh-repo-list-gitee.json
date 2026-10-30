@@ -1,0 +1,24 @@
+{
+  "_fixture": {
+    "sourceType": "mock",
+    "origin": "按 UAT 报告描述的「gh repo list --json」原生包封形状手工构造（data.list + path_with_namespace），**非企业环境导出**；不得作为企业实测证据",
+    "covers": "data.list 包封 + path_with_namespace / full_name 仓库名别名 + 三段命名空间保留"
+  },
+  "data": {
+    "list": [
+      {
+        "path_with_namespace": "acme/group/demo",
+        "description": "演示子系统（三段命名空间）",
+        "url": "https://git.example/acme/group/demo",
+        "is_private": true
+      },
+      {
+        "full_name": "acme/points-mall",
+        "name": "points-mall",
+        "description": "信用卡中心.积分商城子系统",
+        "url": "https://git.example/acme/points-mall",
+        "is_private": true
+      }
+    ]
+  }
+}

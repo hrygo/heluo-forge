@@ -27,6 +27,7 @@ import { createHash } from 'node:crypto';
 
 import { FLOW_ACTIONS } from './tools.mjs';
 import { GUARD_REASONS } from './policy-guard.mjs';
+import { isRepoRef, parseTargetRef } from './repo-ref.mjs';
 
 /** 平台动作状态；顺序即文档顺序（`done`/`failed`/`denied`/`unknown`），不含任何流程态。 */
 export const ACTION_STATUSES = Object.freeze(['done', 'failed', 'denied', 'unknown']);
@@ -58,11 +59,16 @@ export const ACTION_REASONS = Object.freeze({
   INTERNAL: 'INTERNAL',
 });
 
-/** `owner/name`；`gh-adapter` 的 `assertRepo` 才是权威校验，这里只做"别走到子进程"的前置拦截。 */
-const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-
-/** 评论目标：`owner/name#12` 或 `owner/name!12`（与工具面 `repoOf` 同形）。 */
-const COMMENT_TARGET_PATTERN = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)[#!](\d+)$/;
+/**
+ * 仓库引用与评论目标的语法**不在本模块定义**（r6）：统一走 `repo-ref.mjs` 的
+ * `isRepoRef`（2..3 段）与 `parseTargetRef`（尾部 `#n` / `!n`）。
+ *
+ * 这里曾自己写一份 `REPO_PATTERN`，与 `gh-adapter.mjs` 的那份判词不同（那份锚定首字符，
+ * 这份不锚定），且两段上限让三段 `org/group/repo` 在写路径入口就被拦死——表现为
+ * "三段仓库根本写不了"，比报错更难查。判据收敛到单点后，本模块只做"别走到子进程"的
+ * 前置拦截，`gh-adapter` 的 `assertRepo` / `assertTarget` 仍是权威校验（不是两套判词）。
+ */
+const REPO_REF_RULE = 'owner/name 或 org/group/repo';
 
 /** 标题归一化时剥掉的尾部标点（"Fix gate." 与 "fix gate" 是同一个对象）。 */
 const TRAILING_PUNCTUATION = /[.。,，;；:：!！?？、]+$/u;
@@ -287,7 +293,7 @@ function findComment(object, body) {
   return undefined;
 }
 
-/** 对象引用：优先平台链接（人可直接点开），否则 `owner/name#编号`。 */
+/** 对象引用：优先平台链接（人可直接点开），否则 `owner/name#编号` / `org/group/repo#编号`。 */
 function objectRefOf(item, repo) {
   const source = asObject(item);
   const url = text(source.url);
@@ -296,7 +302,7 @@ function objectRefOf(item, repo) {
   return number === null ? null : `${repo}#${number}`;
 }
 
-/** 回读用的目标：`owner/name#编号`（适配器只接受这一形或链接，不接受裸编号）。 */
+/** 回读用的目标：`owner/name#编号` 或 `org/group/repo#编号`（适配器只接受这一形或链接，不接受裸编号）。 */
 function qualifiedRef(repo, number, url) {
   if (Number.isInteger(number)) return `${repo}#${number}`;
   return text(url);
@@ -321,12 +327,18 @@ function classifyWriteError(error, what) {
   return { status: 'unknown', reason: code, detail: `${what}结果不确定，转人工核对（不自动重放）：${message}` };
 }
 
-/** 评论目标解析：`owner/name#12` / `owner/name!12` → `{ repo, ref, number }`。 */
+/**
+ * 评论目标解析：`owner/name#12` / `owner/name!12`（两段），以及 `org/group/repo#12`
+ * （三段，企业 Gitee 命名空间）→ `{ repo, ref, number }`。
+ *
+ * 语法由 `repo-ref.parseTargetRef` 判定：`repo` 是**完整路径**（三段不折成两段），
+ * `ref` 是剥掉首尾空白后的原样目标（写回读与门禁核对都用它），`number` 是尾部编号。
+ * 链接与裸编号照旧 `null`（链接的形状校验在 `gh-adapter.assertTarget`）。
+ */
 function parseCommentTarget(target) {
-  const raw = text(target);
-  const matched = COMMENT_TARGET_PATTERN.exec(raw);
-  if (matched === null) return null;
-  return { repo: matched[1], ref: raw, number: Number.parseInt(matched[2], 10) };
+  const parsed = parseTargetRef(target);
+  if (parsed === null) return null;
+  return { repo: parsed.repo, ref: text(target), number: parsed.number };
 }
 
 /**
@@ -359,8 +371,8 @@ export async function createIssueIdempotent({
   const content = typeof body === 'string' ? body : '';
 
   if (id === '') return denyInput(action, repository, ACTION_REASONS.MISSING_ARGUMENT, '缺少变更号（changeId）');
-  if (!REPO_PATTERN.test(repository)) {
-    return denyInput(action, repository, ACTION_REASONS.MISSING_TARGET, `目标仓库必须是 owner/name，收到 ${repository === '' ? '空值' : repository}`);
+  if (!isRepoRef(repository)) {
+    return denyInput(action, repository, ACTION_REASONS.MISSING_TARGET, `目标仓库必须是 ${REPO_REF_RULE}，收到 ${repository === '' ? '空值' : repository}`);
   }
   if (normalizeTitle(subject) === '') return denyInput(action, repository, ACTION_REASONS.MISSING_ARGUMENT, '缺少标题（title）');
   if (content.trim() === '') return denyInput(action, repository, ACTION_REASONS.MISSING_ARGUMENT, '缺少正文（body），拒绝创建空 Issue');
@@ -495,8 +507,8 @@ export async function createPrIdempotent({
   const content = typeof body === 'string' ? body : '';
 
   if (id === '') return denyInput(action, repository, ACTION_REASONS.MISSING_ARGUMENT, '缺少变更号（changeId）');
-  if (!REPO_PATTERN.test(repository)) {
-    return denyInput(action, repository, ACTION_REASONS.MISSING_TARGET, `目标仓库必须是 owner/name，收到 ${repository === '' ? '空值' : repository}`);
+  if (!isRepoRef(repository)) {
+    return denyInput(action, repository, ACTION_REASONS.MISSING_TARGET, `目标仓库必须是 ${REPO_REF_RULE}，收到 ${repository === '' ? '空值' : repository}`);
   }
   if (headRef === '') return denyInput(action, repository, ACTION_REASONS.MISSING_ARGUMENT, '缺少来源分支（head）');
   if (baseRef === '') return denyInput(action, repository, ACTION_REASONS.MISSING_ARGUMENT, '缺少目标分支（base）');
@@ -622,7 +634,7 @@ export async function commentIssueIdempotent({ guard, gh, ctx, changeId, target,
 
   if (id === '') return denyInput(action, shown, ACTION_REASONS.MISSING_ARGUMENT, '缺少变更号（changeId）');
   if (parsed === null) {
-    return denyInput(action, shown, ACTION_REASONS.MISSING_TARGET, `评论目标必须是 owner/name#编号，收到 ${shown === '' ? '空值' : shown}`);
+    return denyInput(action, shown, ACTION_REASONS.MISSING_TARGET, `评论目标必须是 owner/name#编号 或 org/group/repo#编号，收到 ${shown === '' ? '空值' : shown}`);
   }
   if (content.trim() === '') return denyInput(action, parsed.ref, ACTION_REASONS.MISSING_ARGUMENT, '缺少评论正文（body）');
 
@@ -732,7 +744,7 @@ export async function commentPrIdempotent({ guard, gh, ctx, changeId, target, co
 
   if (id === '') return denyInput(action, shown, ACTION_REASONS.MISSING_ARGUMENT, '缺少变更号（changeId）');
   if (parsed === null) {
-    return denyInput(action, shown, ACTION_REASONS.MISSING_TARGET, `评论目标必须是 owner/name#编号，收到 ${shown === '' ? '空值' : shown}`);
+    return denyInput(action, shown, ACTION_REASONS.MISSING_TARGET, `评论目标必须是 owner/name#编号 或 org/group/repo#编号，收到 ${shown === '' ? '空值' : shown}`);
   }
   if (sha === '') return denyInput(action, parsed.ref, ACTION_REASONS.MISSING_ARGUMENT, '缺少被审查的提交 sha（commit），审查评论必须绑定提交');
   if (content.trim() === '') return denyInput(action, parsed.ref, ACTION_REASONS.MISSING_ARGUMENT, '缺少评论正文（body）');
@@ -834,7 +846,8 @@ export async function commentPrIdempotent({ guard, gh, ctx, changeId, target, co
  * - `issue`：必须过门禁 + `confirm{repo,object}` + 回读，否则 `denied`/`unknown`。
  *
  * `targets` 每项可以是字符串（`'dop'` / `'issue'`）或对象
- * `{ channel: 'issue', target: 'owner/name#12', confirm?: {repo,object} }`；
+ * `{ channel: 'issue', target: 'owner/name#12', confirm?: {repo,object} }`（三段
+ * `'org/group/repo#12'` 同形，`confirm.repo` 必须是完整路径）；
  * 裸 `'issue'` 的目标取 `sheet.issueTarget`，确认取 `sheet.confirm`。
  *
  * 正文**原样写出**，不改写：不合规就拒绝（与提交信息"违规拒绝不改写"同一原则）。

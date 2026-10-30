@@ -20,6 +20,7 @@ import { createPolicyGuard, GUARD_REASONS } from './policy-guard.mjs';
 import { describeRuntimeConfig, ENV_KEYS, resolveRuntimeConfig } from './runtime-config.mjs';
 import { buildContextCard, normalizeChangeRecord, renderContextCard } from './change-context.mjs';
 import { resolveBuildingRepository } from './repository-resolver.mjs';
+import { repoOfTarget } from './repo-ref.mjs';
 import {
   ACTION_REASONS,
   commentIssueIdempotent,
@@ -355,22 +356,30 @@ export function createDevopsFlow({
     return null;
   }
 
-  /** 承建仓库必须已判定且与目标一致：写到候选之外的仓库等于猜。 */
+  /**
+   * 承建仓库必须已判定且与目标一致：写到候选之外的仓库等于猜。
+   *
+   * 仓库名由 `repo-ref.repoOfTarget` 这一处给出（本文件不再自写 `repo#n` 正则），比较的是
+   * **完整路径**：三段目标 `org/group/repo!12` 得到 `org/group/repo`，与 `building.selected`
+   * 逐字比对——**不折成两段**。折叠会把 `org/group/repo` 与 `group/repo` 判成同一个仓库，
+   * 也会把同组兄弟仓库 `org/group/other` 判成承建仓库，那是放松门禁而不是修 bug。
+   *
+   * 取不到仓库（链接、裸编号、段数/字符非法）时本函数**不表态**：那是"目标语法"问题，
+   * 由 `actions` 的权威校验回 `MISSING_TARGET`（同样是零下游调用）。在这里拿空串去比，
+   * 只会把"目标无法解析"误报成"写到了候选之外"。
+   */
   function repoMismatch(building, target) {
     if (building.status !== 'resolved') return null;
     const expected = text(building.selected).toLowerCase();
-    if (expected === '' || expected === text(target).toLowerCase()) return null;
+    const repo = repoOfTarget(target);
+    if (expected === '' || repo === null) return null;
+    if (expected === repo.toLowerCase()) return null;
     return { expected: building.selected };
   }
 
   function buildingOf() {
     const found = findings.get(boundChangeId);
     return found === undefined ? resolveBuildingRepository({ change: {}, visibleRepos: null }) : found.building;
-  }
-
-  function repoOf(target) {
-    const match = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)[#!]\d+$/u.exec(text(target));
-    return match === null ? null : match[1];
   }
 
   async function issueWrite(input = {}) {
@@ -449,7 +458,7 @@ export function createDevopsFlow({
       });
     }
     if (op === 'comment') {
-      const mismatch = repoMismatch(building, repoOf(target));
+      const mismatch = repoMismatch(building, target);
       if (mismatch !== null) {
         return denied(
           action,

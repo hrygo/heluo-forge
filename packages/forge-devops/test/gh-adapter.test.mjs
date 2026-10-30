@@ -6,6 +6,9 @@
  *   2. **信封**：单对象读的版本取 `updatedAt`，拿不到就 `null`（由 read 层降级 unknown，不编版本号）；
  *   3. **写语义**：只把"退出码为 0"翻译成结果，输出解析不出对象编号时抛带 `mayHaveSideEffect` 的错误；
  *   4. **禁项**：合并/关闭/发版/触发流水线/通用接口/编辑删除通道在适配器上不存在。
+ *   5. **平台方言**（r6）：`data.list` / `{ data: {...} }` 包封、`path_with_namespace` 仓库名别名、
+ *      2..3 段仓库引用与三段链接命名空间——判词来自 `repo-ref.mjs`，本文件只核对适配器行为。
+ *      相关夹具是按 UAT 报告描述构造的 mock，非企业实测。
  */
 
 import test from 'node:test';
@@ -28,6 +31,8 @@ import { DevopsReadError, READ_REASONS } from '../src/read.mjs';
 const AT = '2026-10-28T12:00:00.000Z';
 const now = () => AT;
 const LISTS = JSON.parse(readFileSync(new URL('./fixtures/gh-lists.json', import.meta.url), 'utf8'));
+// mock · 报告描述的「data.list + path_with_namespace」原生包封形状，非企业实测（见夹具内 `_fixture`）。
+const GITEE_REPO_LIST = JSON.parse(readFileSync(new URL('./fixtures/gh-repo-list-gitee.json', import.meta.url), 'utf8'));
 
 function fakeRunner(handler = null) {
   const calls = [];
@@ -79,8 +84,9 @@ test('readRepository：repo view <repo> --json 字段按 §5.3 逐字', async ()
   assert.deepEqual(result.object, {
     repo: 'acme/demo',
     nameWithOwner: 'acme/demo',
-    owner: '',
-    name: '',
+    // owner/name 由完整路径拆出（最后一段之前的前缀 / 最后一段），不再因 `--json` 未要 owner 而留空。
+    owner: 'acme',
+    name: 'demo',
     description: '演示仓库',
     url: 'https://github.example/acme/demo',
     isPrivate: false,
@@ -160,7 +166,7 @@ test('listRepos：repo list <owner> --limit 100，输出可直接作为 visibleR
   assert.deepEqual(result.items[0], {
     repo: 'acme/ard-sdk',
     nameWithOwner: 'acme/ard-sdk',
-    owner: '',
+    owner: 'acme',
     name: 'ard-sdk',
     description: 'AI原生框架套件',
     url: 'https://github.example/acme/ard-sdk',
@@ -279,15 +285,58 @@ test('写动作失败：非零退出 → COMMAND_FAILED（mayHaveSideEffect）�
 test('仓库/目标格式非法 → MISSING_TARGET 且零调用（argv 不接受可疑令牌）', async () => {
   const runner = fakeRunner();
   const adapter = adapterWith(runner);
-  for (const repo of ['', 'acme', 'acme/demo/extra', '--repo', 'acme demo']) {
+  // 2..3 段是合法引用；4 段、1 段、空段、连字符开头、含空格一律拒（拒收位由四段顶上）。
+  for (const repo of ['', 'acme', 'acme/demo/x/y', '--repo', '-bad/x', 'acme demo', 'acme /demo', 'acme//demo']) {
     await rejectsWith(adapter.readRepository({ repo }), READ_REASONS.MISSING_TARGET);
     await rejectsWith(adapter.createIssue({ repo, title: 't', body: 'b' }), READ_REASONS.MISSING_TARGET);
   }
-  for (const target of [undefined, '', 'abc', 'acme/demo#x', 'acme/demo#12 extra']) {
+  for (const target of [
+    undefined, '', 'abc', 'acme/demo#x', 'acme/demo#12 extra', 'acme/demo/x/y#12',
+    // 链接命名空间同样只放宽到 3 段：四段仍拒。
+    'https://git.example/acme/group/demo/x/issues/1',
+  ]) {
     await rejectsWith(adapter.readIssue({ target }), READ_REASONS.MISSING_TARGET);
     await rejectsWith(adapter.readPr({ target }), READ_REASONS.MISSING_TARGET);
   }
   assert.equal(runner.calls.length, 0);
+});
+
+test('三段仓库引用 org/group/repo 被接受，argv 一字不改（只放宽段数，不拆参）', async () => {
+  const runner = fakeRunner((input) => {
+    const stdout = input.args[0] === 'repo'
+      ? JSON.stringify({ path_with_namespace: 'acme/group/demo', updatedAt: '2026-10-27T08:00:00Z' })
+      : input.args[1] === 'create'
+        ? 'https://git.example/acme/group/demo/issues/12'
+        : '[]';
+    return okWith(stdout)();
+  });
+  const adapter = adapterWith(runner);
+
+  const read = await adapter.readRepository({ repo: 'acme/group/demo' });
+  assert.deepEqual(runner.calls[0].args, ['repo', 'view', 'acme/group/demo', '--json', GH_REPO_FIELDS.join(',')]);
+  assert.equal(read.object.repo, 'acme/group/demo', '完整路径不折叠');
+  assert.equal(read.object.owner, 'acme/group', 'owner 是最后一段之前的完整前缀');
+  assert.equal(read.object.name, 'demo');
+
+  await adapter.createIssue({ repo: 'acme/group/demo', title: 't', body: 'b' });
+  assert.deepEqual(runner.calls[1].args, [
+    'issue', 'create', '-R', 'acme/group/demo', '--title', 't', '--body', 'b',
+  ]);
+  await adapter.listOpenIssues({ repo: 'acme/group/demo' });
+  assert.deepEqual(runner.calls[2].args.slice(0, 5), ['issue', 'list', '-R', 'acme/group/demo', '--state']);
+});
+
+test('三段目标：org/group/repo#n 与三段命名空间的 Issue/PR 链接都原样作为位置参数', async () => {
+  const runner = fakeRunner(okWith(JSON.stringify({ number: 12, updatedAt: '2026-10-27T10:00:00Z' })));
+  const adapter = adapterWith(runner);
+  await adapter.readIssue({ target: 'acme/group/demo#12' });
+  await adapter.readPr({ target: 'acme/group/demo!7' });
+  await adapter.readIssue({ target: 'https://git.example/acme/group/demo/issues/12' });
+  assert.deepEqual(runner.calls.map((call) => call.args[2]), [
+    'acme/group/demo#12',
+    'acme/group/demo!7',
+    'https://git.example/acme/group/demo/issues/12',
+  ]);
 });
 
 test('target 支持 owner/repo#n、纯编号与 Issue/PR 链接三种写法，均原样作为一个位置参数', async () => {
@@ -308,6 +357,58 @@ test('清单只回单个对象时按单元素处理（不读成空清单）', as
   const result = await adapterWith(runner).listOpenIssues({ repo: 'acme/demo' });
   assert.equal(result.count, 1);
   assert.equal(result.items[0].number, 12);
+});
+
+test('原生包封 data.list + path_with_namespace：可见仓库如实列出（mock 夹具，非企业实测）', async () => {
+  const runner = fakeRunner(okWith(JSON.stringify(GITEE_REPO_LIST)));
+  const result = await adapterWith(runner).listRepos({ owner: 'acme' });
+
+  assert.deepEqual(runner.calls[0].args, ['repo', 'list', 'acme', '--limit', '100', '--json', GH_REPO_LIST_FIELDS.join(',')]);
+  assert.equal(result.count, 2);
+  assert.equal(result.items[0].repo, 'acme/group/demo', '三段路径不折叠');
+  assert.equal(result.items[0].owner, 'acme/group');
+  assert.equal(result.items[0].name, 'demo');
+  assert.equal(result.items[1].repo, 'acme/points-mall', 'full_name 别名同样被吸收');
+  assert.equal(result.items[1].owner, 'acme');
+  assert.equal(result.source_revision, null, '清单是查询快照，不冻结事实版本');
+});
+
+test('data.list 为空数组 → 空清单，不回落成单元素（否则会凭空造一条脏仓库）', async () => {
+  const runner = fakeRunner(okWith(JSON.stringify({ data: { list: [] } })));
+  const result = await adapterWith(runner).listRepos({ owner: 'acme' });
+  assert.equal(result.count, 0);
+  assert.deepEqual(result.items, []);
+});
+
+test('data.list 不是数组 → MALFORMED_RESULT（坏包封不当成一条记录）', async () => {
+  const runner = fakeRunner(okWith(JSON.stringify({ data: { list: 'oops' } })));
+  await rejectsWith(adapterWith(runner).listRepos({ owner: 'acme' }), READ_REASONS.MALFORMED_RESULT);
+  assert.equal(runner.calls.length, 1, '命令已执行，失败发生在解析而不是前置校验');
+});
+
+test('清单包封的其余两级：data 直接是数组、items 数组都按清单解析', async () => {
+  const direct = fakeRunner(okWith(JSON.stringify({ data: [{ number: 1, title: 'a' }] })));
+  assert.equal((await adapterWith(direct).listOpenIssues({ repo: 'acme/demo' })).count, 1);
+
+  const wrapped = fakeRunner(okWith(JSON.stringify({ items: [{ number: 2, title: 'b' }] })));
+  const result = await adapterWith(wrapped).listOpenIssues({ repo: 'acme/demo' });
+  assert.equal(result.count, 1);
+  assert.equal(result.items[0].number, 2);
+});
+
+test('单对象读解单键 { data: {...} } 包封：字段与版本取内层，无 updatedAt 时 source_revision 为 null', async () => {
+  const runner = fakeRunner(okWith(JSON.stringify({ data: { path_with_namespace: 'acme/group/demo', description: '包封内的仓库' } })));
+  const result = await adapterWith(runner).readRepository({ repo: 'acme/group/demo' });
+  assert.equal(result.status, 'succeeded');
+  assert.equal(result.source_revision, null);
+  assert.equal(result.object.repo, 'acme/group/demo');
+  assert.equal(result.object.description, '包封内的仓库');
+  assert.equal(result.object.owner, 'acme/group');
+
+  // 多键包装不猜：`{ data, meta }` 不是单键包封，照旧按原对象处理（不静默取内层）。
+  const multi = fakeRunner(okWith(JSON.stringify({ data: { nameWithOwner: 'acme/demo' }, meta: { page: 1 } })));
+  const kept = await adapterWith(multi).readRepository({ repo: 'acme/demo' });
+  assert.equal(kept.object.repo, '', '多键包装不拆，保持"照旧"语义');
 });
 
 test('ghBin 缺省用固定名 gh（dop 没有默认值，gh 有）', async () => {

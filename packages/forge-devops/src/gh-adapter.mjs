@@ -26,6 +26,14 @@
  */
 
 import { DevopsReadError, READ_REASONS } from './read.mjs';
+import {
+  REPO_REF_MAX_SEGMENTS,
+  REPO_REF_MIN_SEGMENTS,
+  REPO_SEGMENT_SOURCE,
+  isRepoRef,
+  parseRepoRef,
+  parseTargetRef,
+} from './repo-ref.mjs';
 
 /** 允许的命令面（枚举到函数）。测试按此表逐条核对，表里没有的动词不存在。 */
 export const GH_COMMANDS = Object.freeze({
@@ -68,11 +76,15 @@ export const GH_PR_LIST_FIELDS = Object.freeze(['number', 'title', 'url', 'headR
 export const GH_DEFAULT_BIN = 'gh';
 export const GH_LOGICAL_NAME = 'gh';
 
-const REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const TARGET_QUALIFIED_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*#\d{1,9}$/;
+// 仓库引用与带编号目标**不再在本文件写正则**：语法唯一真源是 `repo-ref.mjs`
+// （`REPO_PATTERN`/`TARGET_QUALIFIED_PATTERN` 曾在这里自写一份，与 `actions.mjs` 的判词漂移）。
 const TARGET_NUMBER_PATTERN = /^\d{1,9}$/;
-// Issue/PR 链接：主机名不写死（企业版域名由调用方给），只认 <scheme>://<host>/<owner>/<repo>/(issues|pull)/<n> 结构。
-const TARGET_LINK_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?[^\s/]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/(?:issues|pull)\/\d{1,9}(?:[#?]\S*)?$/;
+// Issue/PR 链接：主机名不写死（企业版域名由调用方给），只认
+// <scheme>://<host>/<namespace 2..3 段>/(issues|pull)/<n> 结构；段语法与段数都取自 `repo-ref`。
+const TARGET_LINK_PATTERN = new RegExp(
+  `^(?:[A-Za-z][A-Za-z0-9+.-]*:\\/\\/)?[^\\s/]+\\/(?:${REPO_SEGMENT_SOURCE}\\/){${REPO_REF_MIN_SEGMENTS},${REPO_REF_MAX_SEGMENTS}}(?:issues|pull)\\/\\d{1,9}(?:[#?]\\S*)?$`,
+  'u',
+);
 const BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const DIAGNOSTIC_LIMIT = 160;
 const TEXT_LIMIT = 65536;
@@ -99,11 +111,19 @@ function fail(code, message, detail = {}) {
   throw new DevopsReadError(code, message, detail);
 }
 
+/**
+ * 仓库引用校验：`owner/repo` 或 `org/group/repo`（2..3 段），判词交给 `repo-ref`，
+ * 保证"零子进程前置拒绝"与写路径/门禁对同一输入给出同一结论。
+ */
 function assertRepo(repo) {
   const value = text(repo);
-  if (value === '') fail(READ_REASONS.MISSING_TARGET, '缺少仓库（形如 owner/repo）', { field: 'repo' });
-  if (!REPO_PATTERN.test(value)) {
-    fail(READ_REASONS.MISSING_TARGET, `仓库格式非法：${clip(value, 60)}（必须是 owner/repo，且不以连字符开头）`, { field: 'repo' });
+  if (value === '') fail(READ_REASONS.MISSING_TARGET, '缺少仓库（形如 owner/repo 或 org/group/repo）', { field: 'repo' });
+  if (!isRepoRef(value)) {
+    fail(
+      READ_REASONS.MISSING_TARGET,
+      `仓库格式非法：${clip(value, 60)}（必须是 owner/repo 或 org/group/repo 的 2 或 3 段路径，且不以连字符开头）`,
+      { field: 'repo' },
+    );
   }
   return value;
 }
@@ -111,9 +131,13 @@ function assertRepo(repo) {
 function assertTarget(target, { field = 'target' } = {}) {
   const value = text(target);
   if (value === '') fail(READ_REASONS.MISSING_TARGET, '缺少目标（形如 owner/repo#12、12 或 Issue/PR 链接）', { field });
-  const accepted = TARGET_QUALIFIED_PATTERN.test(value) || TARGET_NUMBER_PATTERN.test(value) || TARGET_LINK_PATTERN.test(value);
+  const accepted = parseTargetRef(value) !== null || TARGET_NUMBER_PATTERN.test(value) || TARGET_LINK_PATTERN.test(value);
   if (!accepted) {
-    fail(READ_REASONS.MISSING_TARGET, `目标格式非法：${clip(value, 60)}（形如 owner/repo#12、编号或 Issue/PR 链接）`, { field });
+    fail(
+      READ_REASONS.MISSING_TARGET,
+      `目标格式非法：${clip(value, 60)}（形如 owner/repo#12、org/group/repo#12、编号或 Issue/PR 链接）`,
+      { field },
+    );
   }
   return value;
 }
@@ -148,21 +172,63 @@ function parseJson(stdout, context) {
   return undefined;
 }
 
+/**
+ * 单对象读的包封解包：企业 gh 把结果放在**单键** `{ data: { ... } }` 里
+ * （`repo view` / `issue view` 同源），而契约形状是内层对象本身。
+ * 只有"恰好一个键且键名是 data、值是普通对象"时才拆；其余形态照旧返回原对象
+ * （多键包装或 `data` 不是对象都不猜，避免把两种形状都读成同一件事）。
+ */
+function unwrapObjectEnvelope(parsed) {
+  const keys = Object.keys(parsed);
+  if (keys.length !== 1 || keys[0] !== 'data') return parsed;
+  const inner = parsed.data;
+  if (inner === null || typeof inner !== 'object' || Array.isArray(inner)) return parsed;
+  return inner;
+}
+
 function parseObject(stdout, context) {
   const parsed = parseJson(stdout, context);
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     fail(READ_REASONS.MALFORMED_RESULT, `${context.command} 的 JSON 输出必须是对象`, context);
   }
-  return parsed;
+  return unwrapObjectEnvelope(parsed);
+}
+
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+/**
+ * 清单包封解包（顺序固定）：数组 → `{ data: { list: [...] } }` → `{ data: [...] }` → `{ items: [...] }`。
+ * 返回 `null` 表示"这层没有清单壳"，由 `parseList` 走单对象兜底。
+ *
+ * 两条硬约束（否则"恒空"会变成"凭空造一条脏仓库"）：
+ * - `data.list` 存在但**不是数组** → `MALFORMED_RESULT`（坏包封不当成一条记录）；
+ * - `data.list: []` 是**空清单**，原样返回空数组，绝不回落成单元素。
+ */
+function unwrapListEnvelope(parsed, context) {
+  if (Array.isArray(parsed)) return parsed;
+  const source = asObject(parsed);
+  if (hasOwn(source, 'data')) {
+    const data = source.data;
+    if (data !== null && typeof data === 'object' && !Array.isArray(data) && hasOwn(data, 'list')) {
+      if (!Array.isArray(data.list)) {
+        fail(READ_REASONS.MALFORMED_RESULT, `${context.command} 的 data.list 不是数组，无法作为清单解析`, context);
+      }
+      return data.list;
+    }
+    if (Array.isArray(data)) return data;
+  }
+  if (hasOwn(source, 'items') && Array.isArray(source.items)) return source.items;
+  return null;
 }
 
 /**
- * 清单解析：正常是数组；命令只回一个对象时按单元素清单处理（不猜第二条，
- * 也不把"单条"读成"空清单"）。
+ * 清单解析：先解包封，再保留"命令只回一个对象时按单元素清单处理"的既有语义
+ * （不猜第二条，也不把"单条"读成"空清单"）。解包出空数组就真的是空清单。
  */
 function parseList(stdout, context) {
   const parsed = parseJson(stdout, context);
-  if (Array.isArray(parsed)) return parsed;
+  const items = unwrapListEnvelope(parsed, context);
+  if (items !== null) return items;
   if (parsed !== null && typeof parsed === 'object') return [parsed];
   fail(READ_REASONS.MALFORMED_RESULT, `${context.command} 的 JSON 输出既不是数组也不是对象`, context);
   return [];
@@ -174,12 +240,38 @@ const revisionOf = (object) => {
   return updatedAt === '' ? null : `gh:${updatedAt}`;
 };
 
-/** 仓库归一：输出即可直接作为 `visibleRepos` 元素交给承建判定。 */
+/**
+ * 仓库名的平台方言：契约键是 `nameWithOwner`，企业 Gitee 的 gh 回 `path_with_namespace`，
+ * GitHub 风格回 `full_name` / `name_with_owner`。方言只在本层吸收，下游只看到 `nameWithOwner`。
+ */
+const REPO_NAME_ALIASES = Object.freeze(['path_with_namespace', 'full_name', 'name_with_owner']);
+
+/** 仓库完整路径：契约键优先，其次平台别名；都没有回空串（由调用方用 owner/name 拼）。 */
+function repoPathOf(source) {
+  const contract = text(source.nameWithOwner);
+  if (contract !== '') return contract;
+  for (const key of REPO_NAME_ALIASES) {
+    const aliased = text(source[key]);
+    if (aliased !== '') return aliased;
+  }
+  return '';
+}
+
+/**
+ * 仓库归一：输出即可直接作为 `visibleRepos` 元素交给承建判定。
+ *
+ * `repo`/`nameWithOwner` 保留**完整路径**（三段 `org/group/repo` 不折叠——折叠会把
+ * 另一个仓库判成同一个）；`owner` 是最后一段之前的**完整前缀**（三段下为 `org/group`），
+ * `name` 是最后一段。路径不是合法 2..3 段引用时不拆段、不猜，退回声明字段。
+ */
 function normalizeRepo(raw) {
   const source = asObject(raw);
-  const owner = text(source.owner) || text(asObject(source.owner).login);
-  const name = text(source.name);
-  const nameWithOwner = text(source.nameWithOwner) || (owner !== '' && name !== '' ? `${owner}/${name}` : '');
+  const declaredOwner = text(source.owner) || text(asObject(source.owner).login);
+  const declaredName = text(source.name);
+  const nameWithOwner = repoPathOf(source) || (declaredOwner !== '' && declaredName !== '' ? `${declaredOwner}/${declaredName}` : '');
+  const parsed = parseRepoRef(nameWithOwner);
+  const owner = parsed === null ? declaredOwner : parsed.segments.slice(0, -1).join('/');
+  const name = parsed === null ? declaredName : parsed.segments.at(-1);
   const flatTopics = asArray(source.topics).map((topic) => token(topic)).filter((topic) => topic !== '');
   const structuredTopics = asArray(source.repositoryTopics)
     .map((topic) => token(asObject(topic).name) || token(topic))

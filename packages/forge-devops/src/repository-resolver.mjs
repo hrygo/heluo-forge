@@ -11,10 +11,18 @@
  * - `[]` 表示查过但没有可见仓库 → `NO_VISIBLE_REPOS`；
  * - 数组元素可以是纯字符串（`owner/name`）或 gh 的结构化对象（`nameWithOwner/name/description/topics`）。
  *
- * 不允许做的两件事（写在这里是因为它们最容易被"顺手"加回来）：
+ * `explicit`（用户在候选里点名的那个）的匹配交给 `repo-ref.mjs` 的 `pickRepoRef`：
+ * 整串（去空白、大小写不敏感）优先；裸名只在**候选内唯一同名**时命中；跨组同名一律
+ * `blocked/MULTIPLE_CANDIDATES`。本模块不再自己写"候选最后一段等于输入"的兜底——那份兜底
+ * 会在 `orgA/repo` 与 `orgB/repo` 两个候选里静默挑第一个，等于跨组串仓（幂等复用会落到错的仓库）。
+ *
+ * 不允许做的三件事（写在这里是因为它们最容易被"顺手"加回来）：
  * - 不按变更号/需求标题去 gh 搜索仓库——那是网络推断，不是候选来源；
- * - `explicit` 只能从已算出的候选里挑一个，不得引入候选之外的新仓库。
+ * - `explicit` 只能从已算出的候选里挑一个，不得引入候选之外的新仓库；
+ * - 不自己写裸名兜底：同名唯一性只有 `pickRepoRef` 一处实现，否则两处判词迟早分叉。
  */
+
+import { pickRepoRef } from './repo-ref.mjs';
 
 /** 判定结果只有两态：可继续 / 阻断（区别于平台动作的 done/failed/denied/unknown 词表）。 */
 export const RESOLVE_STATUSES = Object.freeze(['resolved', 'blocked']);
@@ -167,20 +175,14 @@ function compareText(left, right) {
   return left < right ? -1 : 1;
 }
 
-const bareRepo = (value) => text(value).split('/').pop().toLowerCase();
-
-function sameRepo(candidate, explicit) {
-  const wanted = text(explicit).toLowerCase();
-  return wanted !== '' && (candidate.toLowerCase() === wanted || bareRepo(candidate) === wanted);
-}
-
 function blocked(reasons, candidates) {
   return { status: 'blocked', selected: null, candidates, reasons: [...reasons] };
 }
 
 /**
  * 判定承建仓库。
- * `explicit` 只能从候选里挑（用户在候选里选一个，不是自由填一个仓库）——它不扩大候选集。
+ * `explicit` 只能从候选里挑（用户在候选里选一个，不是自由填一个仓库）——它不扩大候选集；
+ * "挑中哪个"由 `pickRepoRef` 判定：整串优先、裸名需候选内唯一，跨组同名不猜。
  */
 export function resolveBuildingRepository({ change = null, visibleRepos = null, explicit = null } = {}) {
   const changeObject = asObject(change);
@@ -197,8 +199,13 @@ export function resolveBuildingRepository({ change = null, visibleRepos = null, 
   const candidates = subSystems.length === 0 || repos === null || repos.length === 0 ? [] : findCandidates(subSystems, repos);
 
   if (explicitId !== '') {
-    const picked = candidates.find((candidate) => sameRepo(candidate.repo, explicitId));
-    if (picked !== undefined) return { status: 'resolved', selected: picked.repo, candidates, reasons: [] };
+    const picked = pickRepoRef(
+      candidates.map((candidate) => candidate.repo),
+      explicitId,
+    );
+    if (picked.selected !== null) return { status: 'resolved', selected: picked.selected, candidates, reasons: [] };
+    // 裸名在候选内同名不唯一：不替用户挑第一个（那是跨组串仓），显式阻断并列出全部同名候选。
+    if (picked.ambiguous.length > 0) return blocked([RESOLVE_REASONS.MULTIPLE_CANDIDATES], candidates);
     if (candidates.length > 0) return blocked([RESOLVE_REASONS.EXPLICIT_NOT_CANDIDATE], candidates);
     return blocked(reasons.length > 0 ? reasons : [RESOLVE_REASONS.NO_CANDIDATE], candidates);
   }

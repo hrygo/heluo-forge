@@ -32,6 +32,22 @@ export const CONTEXT_STATUSES = Object.freeze(['ready', 'blocked']);
 /** `release_info` 的取值规则；写进卡片与报告，让人知道排期是怎么挑出来的。 */
 export const RELEASE_RULE = 'first-non-empty';
 
+/**
+ * 平台方言的**唯一**别名表：dop 原生字段名 → 契约键（只收录 UAT 点名的四个键，不猜名字）。
+ * 原生命名只在本模块入口出现一次；下游（flow / 渲染 / 报告）只该看到契约 snake_case 形状。
+ * `summary` 是一对多：既兜 `description`，也在没有 `title` 时兜 `title`（UAT 报告未给标题字段；
+ * 同一串喂两处不影响幂等键——键用的是调用方显式 title）。
+ */
+export const NATIVE_ALIASES = Object.freeze({
+  code: 'id',
+  state: 'status',
+  summary: 'description',
+  userStory: 'user_stories',
+});
+
+/** `summary` 的第二落点（见 `NATIVE_ALIASES` 注释）：单列出来，免得被当成笔误删掉。 */
+const SUMMARY_TITLE_ALIAS = Object.freeze({ summary: 'title' });
+
 /** 构建卡片时的拒绝原因（不是展示给用户的流程结论，是本模块的入参契约）。 */
 export const CONTEXT_REASONS = Object.freeze({
   RECORD_INVALID: 'CONTEXT_RECORD_INVALID',
@@ -52,8 +68,12 @@ export class ContextError extends Error {
   }
 }
 
-/** 契约必填（缺失或类型错即拒绝，不用自由文本兜底）。 */
-const REQUIRED_FIELDS = Object.freeze(['id', 'title', 'status', 'description', 'acceptance_criteria']);
+/**
+ * 契约必填收敛为三项：没有它们无法判定"读到的是哪条变更"（缺失或类型错即拒绝，不用自由文本兜底）。
+ * `description` / `acceptance_criteria` 缺失不是"记录坏了"而是"平台没给"——进 `missingFields`，
+ * 卡片走既有「平台未提供 `acceptance_criteria`」分支（降级有现成渲染，不新增机制、不伪造字段）。
+ */
+const REQUIRED_FIELDS = Object.freeze(['id', 'title', 'status']);
 /** 契约可选（可缺失，但要进 `missingFields`，让"平台没给"和"我们没读"分得开）。 */
 const OPTIONAL_FIELDS = Object.freeze(['type', 'owner', 'created_at', 'sub_systems', 'user_stories']);
 const ENDPOINT_PLACEHOLDER = '<env:FORGE_DEVOPS_DOP_ENDPOINT>';
@@ -110,6 +130,58 @@ export function firstReleaseInfo(stories) {
   return null;
 }
 
+/** "平台没给"的判定：未给 / 空白串 / 空数组；对象与数字等"给了值"一律不算空。 */
+const isBlankField = (value) => {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+};
+
+/** 原生命名取值：空白按"没给"处理；`userStory` 允许单对象，按单元素数组（否则 `asArray` 会把它读成空）。 */
+function nativeValue(record, nativeKey) {
+  const value = record[nativeKey];
+  if (isBlankField(value)) return null;
+  if (nativeKey === 'userStory') {
+    if (Array.isArray(value)) return value;
+    return isPlainObject(value) ? [value] : null;
+  }
+  return value;
+}
+
+/**
+ * 契约键优先的补别名：只有契约键为空（未给 / 空串 / 空数组）时才落别名，返回新对象、不改入参。
+ * 故事项也过这张表（同一别名、同一优先级），见 `normalizeChangeRecord` 里的 `userStories`。
+ */
+function fillAliases(record) {
+  const filled = { ...record };
+  for (const [nativeKey, contractKey] of [...Object.entries(NATIVE_ALIASES), ...Object.entries(SUMMARY_TITLE_ALIAS)]) {
+    if (!isBlankField(filled[contractKey])) continue;
+    const value = nativeValue(record, nativeKey);
+    if (value !== null) filled[contractKey] = value;
+  }
+  return filled;
+}
+
+/**
+ * 入口别名层：把 dop 原生命名吸收成契约键（映射后仍是 AC-11 的 snake_case 契约，`Change` 形状不变）。
+ * `id` 与 `code` 同时存在且不同：按契约键 `id` 取值并**显式**抛 `ID_MISMATCH`——不静默择一
+ * （择一意味着可能读到另一条变更，这比报错糟得多）。故事项不做这条判定：故事的业务编号与内部 id 天然不同。
+ */
+export function aliasChangeRecord(raw) {
+  if (!isPlainObject(raw)) return raw;
+  const contractId = text(raw.id);
+  const nativeCode = nativeValue(raw, 'code');
+  if (contractId !== '' && typeof nativeCode === 'string' && text(nativeCode) !== contractId) {
+    throw new ContextError(
+      CONTEXT_REASONS.ID_MISMATCH,
+      `id 与 code 不一致（id=${contractId}，code=${text(nativeCode)}）：按契约键 id 取值，不静默择一`,
+      { field: 'code', expectedId: contractId, actualId: text(nativeCode) },
+    );
+  }
+  return fillAliases(raw);
+}
+
 /**
  * dop 记录 → `Change`（2026-07-06 契约的唯一映射点）。
  * `expectedId` 用来核对"读到的就是请求的那条"：`id` 不等即拒绝，不静默改读别的变更。
@@ -119,27 +191,37 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
   if (!isPlainObject(raw)) {
     throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, 'dop 记录必须是 JSON 对象', { expectedId });
   }
+  // 原生命名只在这一步入契约；之后一律读 `record`，别名不往下游漏。
+  const record = aliasChangeRecord(raw);
   for (const field of REQUIRED_FIELDS) {
-    if (raw[field] === undefined || raw[field] === null) {
+    if (record[field] === undefined || record[field] === null) {
       throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, `缺少契约必填字段 ${field}`, { field, expectedId });
     }
   }
-  if (text(raw.id) === '') throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, '必填字段 id 不能为空', { field: 'id' });
-  for (const field of ['title', 'status', 'description']) {
-    if (typeof raw[field] !== 'string') {
-      throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, `必填字段 ${field} 必须是字符串`, { field });
+  // 必填 = 存在 + 是非空字符串：`''`（以及纯空白，按 `text()` 的 trim 约定）等于"这条记录看不出是哪条"，
+  // 不能让它带着空标题/空状态流到卡片上被当成 `ready`（空串进去只会留在 missingFields 里被静默放行）。
+  for (const field of REQUIRED_FIELDS) {
+    if (typeof record[field] !== 'string' || text(record[field]) === '') {
+      throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, `必填字段 ${field} 必须是非空字符串`, { field });
     }
   }
-  if (!Array.isArray(raw.acceptance_criteria) || raw.acceptance_criteria.some((entry) => typeof entry !== 'string')) {
-    throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, '必填字段 acceptance_criteria 必须是字符串数组', {
-      field: 'acceptance_criteria',
-    });
+  // 降级字段：未给 / null 视为"平台没给"（进 missingFields）；给了就必须是对的类型，非字符串照旧拒绝。
+  if (record.description !== undefined && record.description !== null && typeof record.description !== 'string') {
+    throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, '字段 description 必须是字符串', { field: 'description' });
+  }
+  if (record.acceptance_criteria !== undefined && record.acceptance_criteria !== null) {
+    const criteria = record.acceptance_criteria;
+    if (!Array.isArray(criteria) || criteria.some((entry) => typeof entry !== 'string')) {
+      throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, '字段 acceptance_criteria 必须是字符串数组', {
+        field: 'acceptance_criteria',
+      });
+    }
   }
   const wantedId = text(expectedId);
-  if (wantedId !== '' && raw.id !== wantedId) {
-    throw new ContextError(CONTEXT_REASONS.ID_MISMATCH, `读到的记录是 ${raw.id}，不是请求的 ${wantedId}`, {
+  if (wantedId !== '' && record.id !== wantedId) {
+    throw new ContextError(CONTEXT_REASONS.ID_MISMATCH, `读到的记录是 ${record.id}，不是请求的 ${wantedId}`, {
       expectedId: wantedId,
-      actualId: raw.id,
+      actualId: record.id,
     });
   }
   const kind = text(sourceType);
@@ -147,17 +229,18 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
     throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, `sourceType 必须是 ${CHANGE_SOURCE_TYPES.join('/')}`, { sourceType });
   }
 
-  const acceptanceCriteria = asArray(raw.acceptance_criteria)
+  const acceptanceCriteria = asArray(record.acceptance_criteria)
     .map((entry) => text(entry))
     .filter((entry) => entry !== '')
     .map((entry, index) => ({ index: index + 1, text: entry }));
 
-  const subSystems = asArray(raw.sub_systems)
+  const subSystems = asArray(record.sub_systems)
     .map((entry) => (typeof entry === 'string' ? { code: text(entry), name: '' } : { code: text(asObject(entry).code), name: text(asObject(entry).name) }))
     .filter((entry) => entry.code !== '' || entry.name !== '');
 
-  const userStories = asArray(raw.user_stories).map((entry, index) => {
-    const story = asObject(entry);
+  const userStories = asArray(record.user_stories).map((entry, index) => {
+    // 故事项过同一张别名表（`summary` → `title` 在原生故事里同样成立），契约键优先。
+    const story = fillAliases(asObject(entry));
     const code = text(story.code);
     return {
       id: text(story.id) || code || `#${index + 1}`,
@@ -174,9 +257,10 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
   });
 
   const missingFields = [];
-  for (const field of ['title', 'status', 'description', ...OPTIONAL_FIELDS]) {
+  // 只列"平台没给"的可选字段：`title`/`status` 上面已判为非空，永远不会出现在这里。
+  for (const field of ['description', ...OPTIONAL_FIELDS]) {
     if (field === 'sub_systems' || field === 'user_stories') continue;
-    if (text(raw[field]) === '') missingFields.push(field);
+    if (text(record[field]) === '') missingFields.push(field);
   }
   if (acceptanceCriteria.length === 0) missingFields.push('acceptance_criteria');
   if (subSystems.length === 0) missingFields.push('sub_systems');
@@ -184,18 +268,19 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
 
   const revision = text(sourceRevision);
   const change = {
-    changeId: raw.id,
-    title: text(raw.title),
-    status: text(raw.status),
-    type: text(raw.type),
-    owner: text(raw.owner),
-    description: text(raw.description),
-    createdAt: text(raw.created_at),
+    changeId: text(record.id),
+    title: text(record.title),
+    status: text(record.status),
+    type: text(record.type),
+    owner: text(record.owner),
+    description: text(record.description),
+    createdAt: text(record.created_at),
     acceptanceCriteria,
     subSystems,
     userStories,
     releaseInfo: firstReleaseInfo(userStories),
     missingFields,
+    // 指纹取**收到的原样**（`raw`）：契约键记录与旧行为逐字节一致，别名是我们对平台的解读，不是平台事实。
     sourceRevision: revision !== '' ? revision : `dop:${sha12(stableStringify(raw))}`,
     observedAt: text(at) || null,
     sourceType: kind,

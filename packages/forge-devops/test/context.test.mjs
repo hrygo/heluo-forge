@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   CHANGE_SOURCE_TYPES,
   CONTEXT_REASONS,
   CONTEXT_STATUSES,
   ContextError,
+  NATIVE_ALIASES,
   RELEASE_RULE,
+  aliasChangeRecord,
   buildContextCard,
   firstReleaseInfo,
   normalizeChangeRecord,
@@ -16,6 +19,12 @@ import { DevopsReadError, READ_REASONS } from '../src/read.mjs';
 import { RESOLVE_REASONS, resolveBuildingRepository } from '../src/repository-resolver.mjs';
 
 const AT = '2026-10-28T10:00:00+08:00';
+
+/**
+ * 原生字段夹具：按 UAT 报告描述的形状构造（`code`/`state`/`summary`/`userStory` + 缺 `acceptance_criteria`），
+ * **非企业环境导出**，取证只能记 `sourceType: 'mock'`（夹具文件内的 `_fixture` 也这样标）。
+ */
+const NATIVE_FIXTURE = JSON.parse(readFileSync(new URL('./fixtures/dop-change-native.json', import.meta.url), 'utf8'));
 
 /** 夹具内联：dop 输出夹具归 T2 所有（`test/fixtures/`），这里只放本模块要吃的契约样本。 */
 const ARD123456 = {
@@ -174,10 +183,50 @@ test('release_info 全空则无排期（不取第一项凑数；wrapper 的改�
 test('必填字段缺失或类型错误即拒绝（不猜、不补默认值）', () => {
   reject(() => normalizeChangeRecord(null), CONTEXT_REASONS.RECORD_INVALID);
   reject(() => normalizeChangeRecord({}), CONTEXT_REASONS.RECORD_INVALID);
-  reject(() => normalizeChangeRecord({ ...ARD123456, description: undefined }), CONTEXT_REASONS.RECORD_INVALID);
+  reject(() => normalizeChangeRecord({ ...ARD123456, id: undefined }), CONTEXT_REASONS.RECORD_INVALID);
   reject(() => normalizeChangeRecord({ ...ARD123456, title: 42 }), CONTEXT_REASONS.RECORD_INVALID);
+  reject(() => normalizeChangeRecord({ ...ARD123456, status: undefined }), CONTEXT_REASONS.RECORD_INVALID);
+  // 降级不是放松：description 给了就必须是字符串；acceptance_criteria 给了就必须是字符串数组。
+  reject(() => normalizeChangeRecord({ ...ARD123456, description: 42 }), CONTEXT_REASONS.RECORD_INVALID);
   reject(() => normalizeChangeRecord({ ...ARD123456, acceptance_criteria: '可以走完 SDD 5 环流程' }), CONTEXT_REASONS.RECORD_INVALID);
   reject(() => normalizeChangeRecord({ ...ARD123456, acceptance_criteria: ['可以走完', 2] }), CONTEXT_REASONS.RECORD_INVALID);
+});
+
+// QA Q-1 门禁（缺陷类别：必填字段只校验"类型"、不校验"非空"）。
+// 必填 = 存在 + 非空字符串；空标题/空状态不是"平台没给"而是"读不出是哪条"，
+// 必须在入口拒——否则空串只会进 missingFields，卡片仍判 ready 继续流转。
+test('必填字段为空串即拒绝：空标题/空状态不得降级成 missingFields 继续流转', () => {
+  const bad = [
+    { code: 'A1', title: '', status: 'open' },
+    { code: 'A1', title: '有标题但空状态', status: '' },
+    { id: 'A1', title: '   ', status: 'open' },
+    { id: 'A1', title: '有标题', status: '  ' },
+  ];
+  for (const record of bad) {
+    reject(() => normalizeChangeRecord(record, { sourceType: 'mock' }), CONTEXT_REASONS.RECORD_INVALID);
+  }
+  // 反向：非空必填照旧放行，且多余空白被 trim 掉（不是把合法记录一起拒掉）。
+  const ok = normalizeChangeRecord({ code: 'A1', title: ' 有标题 ', status: 'open ' }, { sourceType: 'mock' });
+  assert.deepEqual([ok.changeId, ok.title, ok.status], ['A1', '有标题', 'open']);
+  // 不变量：必填字段永远不会出现在 missingFields（那里只记"平台没给"）。
+  const sparse = normalizeChangeRecord({ id: 'A2', title: 't', status: 'open' }, { sourceType: 'mock' });
+  assert.ok(!sparse.missingFields.includes('title'));
+  assert.ok(!sparse.missingFields.includes('status'));
+});
+
+test('description / acceptance_criteria 缺失只降级：进 missingFields，不拒绝整条记录', () => {
+  const noDescription = normalizeChangeRecord({ ...ARD123456, description: undefined }, { at: AT });
+  assert.equal(noDescription.changeId, 'ARD123456');
+  assert.equal(noDescription.description, '');
+  assert.ok(noDescription.missingFields.includes('description'));
+  assert.ok(!noDescription.missingFields.includes('acceptance_criteria'));
+
+  const noCriteria = normalizeChangeRecord({ id: 'ARD888888', title: '缺验收条件的记录', status: 'open' }, { at: AT });
+  assert.deepEqual(noCriteria.acceptanceCriteria, []);
+  assert.ok(noCriteria.missingFields.includes('acceptance_criteria'));
+  // 既有「平台未提供」渲染分支直接接住降级，不新增卡片机制。
+  const rendered = renderContextCard(buildContextCard({ change: noCriteria, building: buildingOf(noCriteria, null) }));
+  assert.ok(rendered.includes('平台未提供 `acceptance_criteria`'));
 });
 
 test('expectedId 核对读到的就是请求的那条；sourceType 只认 mock/enterprise', () => {
@@ -198,6 +247,74 @@ test('可选字段缺失进 missingFields（"平台没给"和"我们没读"分�
   });
 
   assert.deepEqual(change.missingFields, ['type', 'owner', 'created_at', 'sub_systems', 'user_stories']);
+});
+
+test('原生字段别名只有一张表（code/state/summary/userStory），且契约键优先', () => {
+  assert.deepEqual({ ...NATIVE_ALIASES }, { code: 'id', state: 'status', summary: 'description', userStory: 'user_stories' });
+
+  const mixed = aliasChangeRecord({
+    code: 'ARD123456',
+    id: 'ARD123456',
+    title: '契约标题',
+    summary: '原生摘要',
+    state: 'open',
+    description: '',
+  });
+  assert.equal(mixed.title, '契约标题', '契约键有值时别名不得覆盖');
+  assert.equal(mixed.description, '原生摘要', '契约键为空串时由 summary 兜底');
+  assert.equal(mixed.status, 'open');
+
+  // 纯函数：不改入参（调用方还要按原样派生 sourceRevision）。
+  const source = { code: 'ARD1', state: 'open', summary: '摘要' };
+  const aliased = aliasChangeRecord(source);
+  assert.deepEqual(source, { code: 'ARD1', state: 'open', summary: '摘要' });
+  assert.equal(aliased.id, 'ARD1');
+  assert.equal(aliased.title, '摘要');
+  assert.deepEqual(aliased.user_stories, undefined);
+});
+
+test('原生夹具归一（mock 形状）：变更内容、单对象 userStory 与排期可读，缺验收条件只降级', () => {
+  const change = normalizeChangeRecord(NATIVE_FIXTURE, { at: AT, sourceType: 'mock' });
+
+  assert.equal(change.changeId, 'ARD777777');
+  assert.equal(change.title, '企业原生字段：积分兑换二期');
+  assert.equal(change.status, 'open');
+  assert.equal(change.description, '企业原生字段：积分兑换二期');
+  assert.equal(change.userStories.length, 1, 'userStory 单对象必须转成单元素数组');
+  assert.equal(change.userStories[0].code, 'US-20001');
+  assert.equal(change.userStories[0].assignee, '李四');
+  assert.equal(change.releaseInfo.storyId, 'US-20001');
+  assert.equal(change.releaseInfo.value.releaseNum, 'R20260706001');
+  assert.deepEqual(change.acceptanceCriteria, []);
+  assert.ok(change.missingFields.includes('acceptance_criteria'));
+  assert.match(change.sourceRevision, /^dop:/);
+
+  const card = buildContextCard({ change, building: buildingOf(change, null), sources: [] });
+  const rendered = renderContextCard(card);
+  assert.match(rendered, /^# 上下文卡 — ARD777777/);
+  assert.ok(rendered.includes('平台未提供 `acceptance_criteria`'));
+  assert.ok(rendered.includes('US-20001'));
+  assert.ok(rendered.includes('R20260706001'));
+  // 仓库侧没给只阻断写动作，业务侧事实照常展示。
+  assert.equal(card.status, 'blocked');
+});
+
+test('原生命名也不放松：缺 code 且缺 id、id 与 code 不一致都显式拒绝', () => {
+  reject(() => normalizeChangeRecord({ state: 'open', summary: '没有编号' }, { at: AT }), CONTEXT_REASONS.RECORD_INVALID);
+  reject(() => normalizeChangeRecord({ code: 'ARD1', state: 'open' }, { at: AT }), CONTEXT_REASONS.RECORD_INVALID);
+
+  let captured = null;
+  assert.throws(
+    () => normalizeChangeRecord({ code: 'ARD2', id: 'ARD1', state: 'open', summary: '两键不一致' }, { at: AT }),
+    (error) => {
+      captured = error;
+      return error instanceof ContextError && error.code === CONTEXT_REASONS.ID_MISMATCH;
+    },
+  );
+  // 显式阻断而不是静默取一个：detail 同时带上两个值，人工可核。
+  assert.equal(captured.detail.field, 'code');
+  assert.equal(captured.detail.expectedId, 'ARD1');
+  assert.equal(captured.detail.actualId, 'ARD2');
 });
 
 test('ready 卡：澄清单只带进度、假设从清单派生、raw 不外泄', () => {
