@@ -282,6 +282,76 @@ test('写动作失败：非零退出 → COMMAND_FAILED（mayHaveSideEffect）�
   });
 });
 
+/** 绝对路径（盘符 / UNC / POSIX）都不许进 message（AC-5 ④）；与 dop 适配器同一套脱敏。 */
+const ABSOLUTE_PATH = /[A-Za-z]:[\\/]|\\\\|(?:^|\s)\//u;
+
+function assertNoLeak(message, secrets) {
+  assert.doesNotMatch(message, ABSOLUTE_PATH, `message 不得包含绝对路径：${message}`);
+  for (const secret of secrets) {
+    assert.ok(!message.includes(secret), `message 不得包含 ${secret}：${message}`);
+  }
+}
+
+test('未启动 + .cmd 入口（EINVAL）→ 与 dop 同口径的三段提示，保留 spawnFailed', async () => {
+  const runner = fakeRunner(() => ({ exitCode: null, stdout: '', stderr: 'spawn EINVAL', durationMs: 1, timedOut: false }));
+  const adapter = adapterWith(runner, {
+    ghBin: 'C:\\Users\\<用户名>\\AppData\\Roaming\\npm\\gh.cmd', // security-scan: allow（夹具：合成路径，非真实主机）
+    platform: 'win32',
+  });
+  await assert.rejects(adapter.readIssue({ target: 'acme/ard-sdk#12' }), (error) => {
+    assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
+    assert.equal(error.detail.spawnFailed, true);
+    assert.equal(error.detail.exitCode, null);
+    assert.match(error.message, /未启动/);
+    assert.match(error.message, /\.cmd 包装脚本/);
+    assert.match(error.message, /固定 argv 且未经 shell 启动时无法运行/);
+    assert.match(error.message, /启动方式的限制/);
+    assert.match(error.message, /原生可执行文件/);
+    assert.doesNotMatch(error.message, /重试/);
+    assertNoLeak(error.message, ['C:\\Users', 'AppData']);
+    return true;
+  });
+});
+
+test('未启动 + 无后缀 shim（ENOENT）→ npm 替身提示；写动作仍 spawnFailed 且只调用一次', async () => {
+  const runner = fakeRunner(() => ({ exitCode: null, stdout: '', stderr: 'spawn ENOENT', durationMs: 1, timedOut: false }));
+  const adapter = adapterWith(runner, {
+    ghBin: 'C:\\Users\\<用户名>\\AppData\\Roaming\\npm\\gh', // security-scan: allow（夹具：合成路径，非真实主机）
+    platform: 'win32',
+  });
+  await assert.rejects(adapter.createIssue({ repo: 'acme/ard-sdk', title: 't', body: 'b' }), (error) => {
+    assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
+    assert.equal(error.detail.spawnFailed, true, '写动作据此记 failed（无副作用）而非 unknown');
+    assert.equal(error.detail.mayHaveSideEffect, true);
+    assert.match(error.message, /没有扩展名的命令 shim/);
+    assert.match(error.message, /npm 在 Windows 上生成的替身/);
+    assert.match(error.message, /原生可执行文件/);
+    assert.doesNotMatch(error.message, /重试/);
+    assertNoLeak(error.message, ['C:\\Users', 'AppData']);
+    return true;
+  });
+  assert.equal(runner.calls.length, 1, '未启动不得重放写动作');
+});
+
+test('原生 .exe 未启动 → 不套包装脚本解释（回退到脱敏证据行）', async () => {
+  const runner = fakeRunner(() => ({
+    exitCode: null,
+    stdout: '',
+    stderr: 'spawn C:\\Program Files\\GitHub CLI\\gh.exe ENOENT',
+    durationMs: 1,
+    timedOut: false,
+  }));
+  const adapter = adapterWith(runner, { ghBin: 'C:\\Program Files\\GitHub CLI\\gh.exe', platform: 'win32' });
+  await assert.rejects(adapter.readPr({ target: 'acme/ard-sdk#7' }), (error) => {
+    assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
+    assert.equal(error.detail.spawnFailed, true);
+    assert.doesNotMatch(error.message, /包装脚本|shim/);
+    assert.match(error.message, /ENOENT/);
+    assertNoLeak(error.message, ['C:\\Program Files', 'GitHub CLI\\gh.exe']);
+    return true;
+  });
+});
+
 test('仓库/目标格式非法 → MISSING_TARGET 且零调用（argv 不接受可疑令牌）', async () => {
   const runner = fakeRunner();
   const adapter = adapterWith(runner);

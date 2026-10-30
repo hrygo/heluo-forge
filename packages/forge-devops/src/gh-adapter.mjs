@@ -25,6 +25,7 @@
  * 不冻结事实版本，`source_revision` 恒为 `null`，观测时间看 `observed_at`。
  */
 
+import { describeSpawnFailure } from './entry-form.mjs';
 import { DevopsReadError, READ_REASONS } from './read.mjs';
 import {
   REPO_REF_MAX_SEGMENTS,
@@ -380,15 +381,25 @@ function parseCommentRef(stdout, context) {
 
 /**
  * 创建 gh 适配器。
- * @param {{runner: {run: Function}, ghBin?: string, now?: () => string}} options
+ *
+ * `platform` 只用于**未启动时的入口形态归因**（与 dop 适配器共用 `describeSpawnFailure`），
+ * 可选注入以便在任意宿主上离线断言 win32 提示；缺省跟随 `process.platform`。
+ *
+ * @param {{runner: {run: Function}, ghBin?: string, now?: () => string, platform?: string}} options
  */
-export function createGhAdapter({ runner = null, ghBin = GH_DEFAULT_BIN, now = () => new Date().toISOString() } = {}) {
+export function createGhAdapter({
+  runner = null,
+  ghBin = GH_DEFAULT_BIN,
+  now = () => new Date().toISOString(),
+  platform = process.platform,
+} = {}) {
   if (runner === null || typeof runner !== 'object' || typeof runner.run !== 'function') {
     throw new TypeError('createGhAdapter 需要可注入的 runner（{ run({bin,args,purpose}) }），不允许在适配器内自建子进程');
   }
   if (typeof now !== 'function') throw new TypeError('now 必须是返回 ISO 时间串的函数');
 
   const bin = text(ghBin) || GH_DEFAULT_BIN;
+  const hostPlatform = platform ?? process.platform;
   const at = () => now();
   const labelOf = (args) => [GH_LOGICAL_NAME, ...args].join(' ');
 
@@ -409,9 +420,13 @@ export function createGhAdapter({ runner = null, ghBin = GH_DEFAULT_BIN, now = (
     }
     if (!Number.isInteger(result.exitCode) || result.exitCode !== 0) {
       const spawnFailed = result.exitCode === null || result.exitCode === undefined;
+      // 未启动与 dop 同一口径：按入口形态归因（`.cmd`/`.ps1` 包装脚本、npm 无后缀 shim），
+      // 不读 errno、不出现路径与 endpoint；`spawnFailed` 依旧保留，写动作据此记 failed 而非 unknown。
+      const evidence = failureLine(result);
+      const line = spawnFailed ? describeSpawnFailure({ bin, platform: hostPlatform, evidence }) : evidence;
       fail(
         READ_REASONS.COMMAND_FAILED,
-        `${command} 失败（${spawnFailed ? '未启动' : `退出码 ${result.exitCode}`}）：${failureLine(result)}`,
+        `${command} 失败（${spawnFailed ? '未启动' : `退出码 ${result.exitCode}`}）：${line}`,
         {
           ...context,
           exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
