@@ -7,11 +7,16 @@
 #      `GITEE_ACTION_UNREGISTERED`，`missing` 列全），不降级成"无策略只读"。
 #   2. `heluo-gitee`：`name` 必须是**包根名**（与清单 `name` 一致），写成子路径宿主解析不到该包。
 #
-# 目录（catalog）刻意只有 3 条 `kind: read`，**0 条 write**：
-#   - 五个受控动作（`gitee.issue.write` / `gitee.pr.write` / `gitee.review.publish` /
-#     `gitee.review.record` / `gitee.delivery.judge`）**不登记**，默认即 `denied`
-#     （`rule: 'unregistered-action'`），且适配器与 `execFile` 出口都是 0 次调用——
-#     "没批准的能力不出现"靠不登记实现，而不是靠运行时开关。
+# 目录（catalog）是 4 条：**3 读 + 1 只读判定，0 条 write**：
+#   - 第 4 条 `gitee.delivery.judge` 是"只判定、不执行"的只读能力，随包默认登记：
+#     `kind: 'read'`（不建审批台账，见 @heluo/forge-policy 的 `needsApproval`）、
+#     `target: 'change'`（逐字，非 `delivery` 等替代串）、`egress: 'allow'`（**必需**：门禁统一
+#     以 `platform-write` 发起裁决，条目缺席 `egress` 时编译成默认 `confirm`，判定会永远拿不到
+#     `done`）。判定回的 `executed` 恒为 `false`、`remote_calls` 恒为 `0`。
+#   - 四个受控写（`gitee.issue.write` / `gitee.pr.write` / `gitee.review.publish` /
+#     `gitee.review.record`）**不登记**，默认即 `denied`（`rule: 'unregistered-action'`），
+#     且适配器与 `execFile` 出口都是 0 次调用——"没批准的能力不出现"靠不登记实现，而不是靠
+#     运行时开关。
 #   - 需要写能力时，由所属 profile 显式追加对应动作（写/确认类动作还需 `approvals` 台账条目，
 #     见 @heluo/forge-policy 的 `assertEnabledEntriesApproved`）。默认分发层不替任何人预置授权。
 #   - 审计舱用内存 sink：属**联调/试点级**证据，记录随进程退出丢失。生产或合规场景必须在
@@ -32,7 +37,7 @@
 #       `POLICY_SERVICE_CONFLICT`（宿主只留 warning）。行 id 因此也改为 `heluo-policy-gitee`。
 #     - 只要 label 不同（或某行不写 isolate），两个策略实例就落在同一服务域，后者 `apply`
 #       抛 `POLICY_SERVICE_CONFLICT`——这条单实例约束仍在，只是本包不再踩它。
-#   - 也可并层：把下面 3 条 `gitee.*` 目录并入既有那一条 `heluo-policy` 行的
+#   - 也可并层：把下面 4 条 `gitee.*` 目录并入既有那一条 `heluo-policy` 行的
 #     `config.catalog`，并删掉本包的策略行（改用同一实例）。并层与隔离二选一，不要混用同一
 #     实例再叠一行。
 #
@@ -51,6 +56,7 @@
           - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
           - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
           - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' }
         audit:
           sink: memory
           allowNonDurable: true

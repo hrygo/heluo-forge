@@ -1,18 +1,21 @@
 /**
- * `@heluo/forge-gitee` 的模型可见工具面：**固定 8 个**（3 只读 + 5 受控动作）。
+ * `@heluo/forge-gitee` 的模型可见工具面：**固定 8 个**（3 只读 + 1 只读判定 + 4 受控写）。
  *
  * 三个刻意的设计点：
  * 1. **固定面、无泛化入口**：`GITEE_TOOLS` 是唯一真源，且名字必须是 `forge_gitee_<名词>_<动词>`
  *    形状——没有 `run` / `exec` / `shell` / `api` 这类"把命令交给模型"的工具。唯一子进程出口
  *    在 `gitee-cli.mjs`，模型够不到 argv，也没法用新命令绕过固定白名单（AC-9/14）。
- * 2. **组装而不重写**：只读定义来自 `gitee-read.mjs`、受控动作定义来自 `gitee-actions.mjs`；
+ * 2. **组装而不重写**：只读定义来自 `gitee-read.mjs`、受控动作与判定定义来自 `gitee-actions.mjs`；
  *    本模块只做注册表校验——缺项、多项、重名、没有执行体、名字越界都**当场抛错**，让
  *    "装上了 8 个"成为装配期事实，而不是运行到一半才发现少了某个工具。
- * 3. **顺序归一**：子表各自怎么排都行，注册顺序一律按 `GITEE_TOOLS`（3 读在前、5 写在后），
+ * 3. **顺序归一**：子表各自怎么排都行，注册顺序一律按 `GITEE_TOOLS`（3 读 → 4 写 → 1 判定），
  *    这样模型看到的工具顺序与设计文档逐条对齐，不会随实现细节抖动。
  *
- * 写工具默认不可用不是靠这里的开关：五个写动作在分发补丁层里**不登记**，门禁返回
- * `denied`（`rule: 'unregistered-action'`），适配器一次都不调用（AC-17）。
+ * 写工具默认不可用不是靠这里的开关：四个写动作在分发补丁层里**不登记**，门禁返回
+ * `denied`（`rule: 'unregistered-action'`），适配器一次都不调用（AC-3）。判定
+ * （`GITEE_JUDGE_TOOLS`）是另一类能力：它随包**默认登记**为只读（`kind: 'read'` +
+ * `egress: 'allow'`），只判定不执行（`executed: false`、`remote_calls: 0`），所以不并入
+ * 写工具集合——"4 写 denied"与"1 判定可用"在结构上各有各的常量。
  */
 import { writeToolDefinitions } from './gitee-actions.mjs';
 import { readToolDefinitions } from './gitee-read.mjs';
@@ -25,7 +28,7 @@ export const GITEE_READ_TOOLS = Object.freeze([
 ]);
 
 /**
- * 受控动作工具（顺序即注册顺序）：创建/评论、审查发布与记录、交付判定。
+ * 受控写工具（顺序即注册顺序）：创建/评论、审查发布与记录。
  * 它们全部经过门禁，默认因"动作未登记"被拒；`done` 还要求回读一致。
  */
 export const GITEE_WRITE_TOOLS = Object.freeze([
@@ -33,11 +36,17 @@ export const GITEE_WRITE_TOOLS = Object.freeze([
   'forge_gitee_pr_write',
   'forge_gitee_review_publish',
   'forge_gitee_review_record',
-  'forge_gitee_delivery_gate',
 ]);
 
-/** 模型可见工具面：8 个，顺序固定（AC-9/14）。 */
-export const GITEE_TOOLS = Object.freeze([...GITEE_READ_TOOLS, ...GITEE_WRITE_TOOLS]);
+/**
+ * 只读判定工具：交付关闭条件判定。与写工具分开成一张表，因为权限事实相反——
+ * 它在分发补丁层里**默认登记**（`kind: 'read'`、`egress: 'allow'`），开箱可用；
+ * 判定只读仓库/提交状态，`executed` 恒 `false`、`remote_calls` 恒 `0`，没有关闭/合并通道。
+ */
+export const GITEE_JUDGE_TOOLS = Object.freeze(['forge_gitee_delivery_gate']);
+
+/** 模型可见工具面：8 个，顺序固定（3 读 → 4 写 → 1 判定，AC-9/14）。 */
+export const GITEE_TOOLS = Object.freeze([...GITEE_READ_TOOLS, ...GITEE_WRITE_TOOLS, ...GITEE_JUDGE_TOOLS]);
 
 /** 工具名必须落在 `forge_gitee_` 命名空间里（防止别处的工具混进这张表）。 */
 export const GITEE_TOOL_PREFIX = 'forge_gitee_';

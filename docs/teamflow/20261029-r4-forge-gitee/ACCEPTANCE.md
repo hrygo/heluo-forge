@@ -2,6 +2,7 @@
 
 - 需求夹：`docs/teamflow/20261029-r4-forge-gitee/`（PRD 25 条 AC / TECHNICAL 蓝图 / QA-REPORT 复核轮）
 - 验收对象：`packages/forge-gitee`（独立单安装单元；3 读 + 5 受控写，8 个 `forge_gitee_*` 工具）
+  > r7 修订：原文结论为「3 读 + 5 受控写」；现为「3 读 + 1 只读判定 + 4 受控写」，8 个工具不变，判定随包登记为只读（target 逐字 change）、4 个写仍 denied。
 - 验收方式：独立复跑 QA 检查器 + 静态核对 + 架构一致性对照；不以“文件存在 / README 自称可用 / 历史记录”作证据
 - 环境：Node 24.13.0；`dsh` 0.2.1-rc.2（PATH 内，隔离 `DSH_HOME` 下装入）；目标 `.dsh-version` 为 0.2.1-rc.3；分支 `feat/devops-change-flow`（改动未提交，符合 PRD §10.2）；复跑时间 2026-10-29 20:04–20:08（+08:00）
 
@@ -15,7 +16,7 @@
 | AC-4 | src 零宿主/React 导入，依赖仅策略包 | `qa-r4-shape.mjs` 23/23；`dependencies` 仅 `@heluo/forge-policy`；`@deepseek-ai/*`、`react` import 计数 0 | 通过 |
 | AC-5 | 无 lib/dist；入口与工作区逐字节一致 | `tests/bundle-gitee.test.mjs` 断言入口 sha256 一致；包内无 `lib/`、`dist/`；`main`/`exports` 所指文件全在包内 | 通过 |
 | AC-6 | 动态 import 安全、顶层不抛错 | `node --input-type=module -e "await import('./packages/forge-gitee/src/index.mjs')"` → exit 0；缺能力路径抛可读 `GiteeMountError`（entry 用例） | 通过 |
-| AC-7 | 默认 catalog 3 条只读、0 写、显式 audit/config | 补丁 3 条 `kind:read`（repository/issue/pr），无 write；`audit: memory/allowNonDurable`；插件行 `config: {}`；空 catalog 即 denied（patch-mount 用例） | 通过 |
+| AC-7 | 默认 catalog 3 条只读、0 写、显式 audit/config | 补丁 3 条 `kind:read`（repository/issue/pr），无 write；`audit: memory/allowNonDurable`；插件行 `config: {}`；空 catalog 即 denied（patch-mount 用例）<br>r7 修订：原文结论为「默认 catalog 3 条只读」；现为 4 条（3 读 + 1 只读判定，kind: read、target 逐字 change、egress: allow），0 条 write 不变。 | 通过 |
 | AC-8 | 探测 profile 真实装入并回读清单 | `qa-r4-install-load.sh`：隔离 `DSH_HOME` 下 `dsh plugin --profile qa add <tgz>` → `dependencies` 与 `dsh.profile.bundles` 均出现包名；**用户真实 `web` profile 未装**（人工补测） | 通过（等价证据） |
 | AC-9 | 重启后加载、工具可枚举、无静默跳过 | 隔离 profile 启动 0 行激活失败；`qa-r4-host-contract.mjs` 以真实 `@deepseek-ai/dsh-tools@0.2.1-rc.2` 的 `register()` 判据验 8/8 工具、契约问题 0；会话内枚举无宿主命令可查（人工补测） | 通过（间接证据） |
 | AC-10 | 装前写卸载步骤、失败即回滚并回读 | README 回滚节含 `dsh plugin remove` + bundles 摘除；脚本 remove 后 `dependencies=null`、bundles 摘除；共存下单包回滚 0 残留 | 通过 |
@@ -25,7 +26,7 @@
 | AC-14 | 只读命令/参数固定白名单，越界零子进程 | adapter 用例覆盖命令枚举、`--json` 子集、`--web/-f/字符串/argv 数组` 拒绝；mainpath 越界参数 0 子进程 | 通过 |
 | AC-15 | 信封五项齐全、固定 reason、只读不重试 | read 用例断言 status/source_revision/observed_at/provider/result_refs；缺版本降 `unknown/MISSING_SOURCE_REVISION`；失败 reason 固定枚举、不重试 | 通过 |
 | AC-16 | 四状态、done=回读一致、幂等 reused、unknown 不重放 | actions 用例 + mainpath：done→reused（0 新增）、unknown 不重放；幂等键 sha256 前 16 位 | 通过 |
-| AC-17 | 默认无写 catalog；5 写工具 denied 且零调用 | patch-mount 用例逐个断言 `denied`+`rule`、门禁 0 次、适配器/execFile 0 调用；退出码 0 不计成功 | 通过 |
+| AC-17 | 默认无写 catalog；5 写工具 denied 且零调用 | patch-mount 用例逐个断言 `denied`+`rule`、门禁 0 次、适配器/execFile 0 调用；退出码 0 不计成功<br>r7 修订：原文结论为「5 写工具 denied 且零调用」；现为 4 个受控写逐个 denied、0 调用，判定 delivery_gate 默认登记（只读、executed: false）。 | 通过 |
 | AC-18 | 提交信息前缀+描述，不改写、不执行 git 写 | delivery 用例三类 reason（缺变更号/缺描述/前缀缺失）；`review-delivery-mainpath.mjs` 9/9；无 git 写调用 | 通过 |
 | AC-19 | review.md 四段+AI 栏+模型名+sha、分栏、无敏感信息 | review 用例断言四段、实际模型名与降级明示、commit sha、AI/人工分栏、token/内网地址/本机路径零命中 | 通过 |
 | AC-20 | 人工确认仅显式写入、模型自填拒绝、sha 变化 stale | review/delivery 用例：模型自填拒绝、sha 变化旧确认标 stale 且不作通过依据；平台发布默认禁用 | 通过 |

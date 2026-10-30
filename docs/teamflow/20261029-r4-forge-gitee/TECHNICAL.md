@@ -14,7 +14,7 @@
 | # | 判断 | 理由 |
 |---|---|---|
 | D-1 | **provider 靠本包常量声明，不靠调用点推断**：`GITEE_PROVIDER = 'gitee'` 出现在每个信封、每个工具返回、每份 `gitee.*` 动作名；非 `gitee.*` 动作在 `gitee-guard` 边界直接拒绝且零子进程 | AC-11/AC-12。沿用 devops 的"调用点即证据"做法会在双包共存时无法自证来源 |
-| D-2 | **策略实例全 profile 只有一个**：本包补丁层自带 `heluo-policy` 行（3 条 `gitee.*` 只读 + 内存审计舱），**共存走"并层"而不是"叠加两层"**；README 与补丁注释写明推荐形态 | `packages/forge-policy/src/index.mjs:239-241` 在已有策略服务时抛 `POLICY_SERVICE_CONFLICT`；PRD R4 要求"补丁层不制造第二个同名 id 的隐式叠加"。叠加的后果见 §8.2 三形态表 |
+| D-2 | **策略实例全 profile 只有一个**：本包补丁层自带 `heluo-policy` 行（3 条 `gitee.*` 只读 + 内存审计舱），**共存走"并层"而不是"叠加两层"**；README 与补丁注释写明推荐形态 | `packages/forge-policy/src/index.mjs:239-241` 在已有策略服务时抛 `POLICY_SERVICE_CONFLICT`；PRD R4 要求"补丁层不制造第二个同名 id 的隐式叠加"。叠加的后果见 §8.2 三形态表<br>r7 修订：原文结论为「3 条 gitee.* 只读」；现为 4 条（3 读 + 1 只读判定 gitee.delivery.judge，kind: read、target 逐字 change、egress: allow），写仍 0 条。 |
 | D-3 | **受控重复而非抽公共包**：`gitee-cli.mjs`（唯一 `execFile` 出口）、幂等台账、`review.md` 渲染、交付判定各自实现，不抽 `@heluo/forge-actioncore` | PRD 非目标"不改写 forge-devops"；抽包要动 devops 源码与 27+ 用例。用**静态门禁测试**（禁项 grep、枚举值一致性、出口唯一性）替代共享代码，漂移风险落成 `§12 R-2` |
 | D-4 | **配置只有 4 个扁平键**（`cliPath`/`host`/`timeoutMs`/`authEnv`），不做 Web 配置页 | PRD T5 推荐项；CLI 名已确认，r3 配置页的收益（自动发现）在本轮不存在。PRD 里的 `gitee.cliPath` 是命名空间标注，不是嵌套对象——不放两份配置副本 |
 
@@ -54,10 +54,10 @@
 | 7 | `packages/forge-gitee/src/gitee-actions.mjs` | 平台写三动作：`issue_write`/`pr_write`/`review_publish`（四状态 + 幂等 + 回读 + 不重放） | `GITEE_ACTIONS`、`ACTION_STATUSES=['done','failed','denied','unknown']`、`GITEE_OBJECT_TYPES`、`ACTION_REASONS`、`createIssueWrite()`、`createPrWrite()`、`publishReview()`、`writeToolDefinitions(service)` | guard、session、adapter |
 | 8 | `packages/forge-gitee/src/gitee-review.mjs` | `review.md`：四段 + AI/人工分栏 + 模型名 + sha + `stale` + 跨 provider 拒覆盖 | `REVIEW_SECTIONS=['问题','风险','意见','结论']`、`REVIEW_DECISIONS`、`REVIEW_STALENESS`、`class ReviewError`、`buildReviewRecord({changeId,commit,model,findings,risks,opinion,conclusion})`、`recordHumanConfirmation(review,{by,at,commit,decision,note})`、`reviewStaleness(review,currentCommit)`、`renderReview(review)`、`assertReviewSections(text)`、`writeReviewFile({repoRoot,changeId,review}) -> {path,sha256}` | — |
 | 9 | `packages/forge-gitee/src/gitee-delivery.mjs` | 提交信息 `[变更号]` 校验 + 关闭条件四项判定（只判定不执行） | `expectedCommitFormat(changeId)`、`assertCommitMessage({changeId,change,message})`、`COMMIT_REASONS`、`CLOSE_ITEMS=['acceptance','merged','pendingDelivery','humanConfirmed']`、`CLOSE_REASONS`、`judgeCloseReadiness({criteria})` | — |
-| 10 | `packages/forge-gitee/src/gitee-tools.mjs` | 8 个工具注册表（顺序：3 读 → 5 受控动作） | `GITEE_TOOLS`、`GITEE_WRITE_TOOLS`、`TOOL_REASONS`、`buildGiteeTools(service) -> ToolDefinition[]` | gitee-read、gitee-actions |
+| 10 | `packages/forge-gitee/src/gitee-tools.mjs` | 8 个工具注册表（顺序：3 读 → 5 受控动作） | `GITEE_TOOLS`、`GITEE_WRITE_TOOLS`、`TOOL_REASONS`、`buildGiteeTools(service) -> ToolDefinition[]` | gitee-read、gitee-actions<br>r7 修订：原文口径为「3 读 → 5 受控动作」；现为 3 读 + 1 判定 + 4 写，GITEE_WRITE_TOOLS 收敛为 4 个写工具、新增 GITEE_JUDGE_TOOLS，8 个工具与顺序不变。 |
 | 11 | `packages/forge-gitee/src/index.mjs` | 插件入口：`name`/`inject`/`Config`/`apply`；装配期 fail closed | `name='forge-gitee'`、`inject=['tools','policy']`、`Config`、`SERVICE_KEY='gitee'`、`ADAPTER_KEY='giteeAdapter'`、`GITEE_REASONS`、`class GiteeMountError`、`apply(ctx,rawConfig={})`、再导出 §3 的公共符号 | 全部 |
 | — | `packages/forge-gitee/package.json` | 单安装单元清单 | — | — |
-| — | `packages/forge-gitee/cordis.patch.yml` | 补丁层：`heluo-policy`（3 条 `gitee.*` 只读 + `audit: memory`）+ `heluo-gitee`（`config: {}`） | — | — |
+| — | `packages/forge-gitee/cordis.patch.yml` | 补丁层：`heluo-policy`（3 条 `gitee.*` 只读 + `audit: memory`）+ `heluo-gitee`（`config: {}`）<br>r7 修订：原文结论为「3 条 gitee.* 只读」；现为 4 条（3 读 + 1 只读判定，kind: read、target 逐字 change、egress: allow）。 | — | — |
 | — | `packages/forge-gitee/README.md` | 状态（从"规划"改为实际）、安装/回滚、**共存 vs 二选一**推荐形态、证据表 + `NOT RUN` | — | — |
 
 `apply` 的动作（顺序即失败顺序，全部 fail closed、可读错误、退出码 0 不算成功）：
@@ -76,7 +76,7 @@
 | 数据 | 载体 | 生命周期 | 写入方 |
 |---|---|---|---|
 | 业务配置（4 键） | profile 补丁层 `config:` | 持久（重启生效） | 运维/主 agent；本插件只读 |
-| 策略目录/审计舱 | 补丁层 `heluo-policy.config` | 持久 | 运维；`gitee.*` 3 条只读随包分发 |
+| 策略目录/审计舱 | 补丁层 `heluo-policy.config` | 持久 | 运维；`gitee.*` 3 条只读随包分发<br>r7 修订：原文结论为「3 条只读随包分发」；现为 4 条（3 读 + 1 只读判定 gitee.delivery.judge）。 |
 | 幂等台账 | 进程内 `Map` | 进程生命周期 | `gitee-session`（**不落盘**，避免跨进程误判复用） |
 | 审查结论 | `<repoRoot>/docs/teamflow/<changeId>/review.md` | 仓库内持久 | `review_record`（人工确认只能人工写） |
 | 工具输出/报告 | 返回体（不落文件） | 单次调用 | — |
@@ -172,6 +172,7 @@ updatedAt: <ISO>
 ```
 
 - 0 条 write：五个写动作**不登记**，默认即 `denied`（`rule: 'unregistered-action'`）。
+  > r7 修订：原文结论为「五个写动作不登记、默认 denied」；现为 0 条 write 不变，4 个写动作不登记并默认 denied，第 5 个 `gitee.delivery.judge` 是只读判定、随包登记且默认可用。
 - 内存审计舱属联调级证据；生产须换持久 sink 并删 `allowNonDurable`（README §证据纪律）。
 
 ## 5. API 设计
@@ -187,7 +188,7 @@ updatedAt: <ISO>
 | 5 | `forge_gitee_pr_write` | `{ op:'create'\|'comment', target, changeId, head?, base?, title?, body?, confirm }` | 动作结果 | `gitee.pr.write` | `denied` |
 | 6 | `forge_gitee_review_publish` | `{ target, changeId, commit, body, confirm }` | 动作结果 | `gitee.review.publish` | `denied` |
 | 7 | `forge_gitee_review_record` | `{ repoRoot, changeId, commit, model, findings, risks, opinion, conclusion, human? }` | 动作结果 + `path`/`sha256` | `gitee.review.record` | `denied` |
-| 8 | `forge_gitee_delivery_gate` | `{ changeId, commit, message, criteria:{acceptance,merged,pendingDelivery,humanConfirmed} }` | 判定结果（只判定） | `gitee.delivery.judge` | `denied` |
+| 8 | `forge_gitee_delivery_gate` | `{ changeId, commit, message, criteria:{acceptance,merged,pendingDelivery,humanConfirmed} }` | 判定结果（只判定） | `gitee.delivery.judge` | `denied`<br>r7 修订：原文默认值为 denied；现为随包登记、默认可用（kind: read、target 逐字 change、egress: allow，executed: false），其余 4 个写仍 denied。 |
 
 - 只读参数白名单（AC-14）：`state ∈ {open,closed,all}`、`limit ∈ 1..100`、`json ⊆ GITEE_JSON_SUBSETS[action]`；其余键 → `ARG_NOT_WHITELISTED`，**零子进程**。
 - 写工具确认前置：`confirm.repo === 目标仓库` 且 `confirm.object === 目标全串`，否则 `CONFIRMATION_REQUIRED`；只在工具边界做一次，不重复到门禁。
@@ -236,7 +237,7 @@ updatedAt: <ISO>
 
 | AC | 落点 | 门禁用例 |
 |---|---|---|
-| 1/6/7 | `package.json` + `cordis.patch.yml` + `index.mjs` | `test/entry.test.mjs`：`dsh.bundle.patch` 指向存在文件；插入行 `name` 精确等于包根名；动态 `import()` 子进程退出码 0；`compileCatalog` 后正好 3 条 `kind:'read'`、0 条 write |
+| 1/6/7 | `package.json` + `cordis.patch.yml` + `index.mjs` | `test/entry.test.mjs`：`dsh.bundle.patch` 指向存在文件；插入行 `name` 精确等于包根名；动态 `import()` 子进程退出码 0；`compileCatalog` 后正好 3 条 `kind:'read'`、0 条 write<br>r7 修订：原文结论为「3 条 kind:read」；现为 4 条 kind:read（3 读 + 1 只读判定）、0 条 write 不变。 |
 | 2/3/5 | `scripts/check-bundle-tarballs.mjs`（自动发现新包）+ `tests/bundle-gitee.test.mjs` | tarball 无 `test/`、无 `*.tgz`；`dependencies` 真 semver；`bundledDependencies` 覆盖 `@heluo/forge-policy`；入口 sha256 与工作区逐字节一致 |
 | 4 | `package.json.dependencies` 仅 1 项；`src/` 零 `@deepseek-ai/*`/`react` | `test/entry.test.mjs` 静态扫描 |
 | 8/9/10 | 主 agent 安装（`$DSH_HOME/profiles/web`） | 本轮 **NOT RUN**（子代理无工作区外写权限）；步骤与回滚写在 README |
@@ -245,7 +246,7 @@ updatedAt: <ISO>
 | 14 | `assertArgv`/`GITEE_JSON_SUBSETS` | 越界参数与越界 `--json` 各 1 例，断言 `ARG_NOT_WHITELISTED`/`JSON_FIELD_NOT_DECLARED` 且桩 `run` 0 次 |
 | 15 | `normalizeGiteeReadResult` | 五项齐全 + `provider` + 失败固定 `reason` 枚举 |
 | 16 | `gitee-actions` + `gitee-session` | 四状态矩阵；幂等命中 `reused:true` 且 0 次远端；`unknown` 不重放 |
-| 17 | 补丁层 0 write + `writeToolDefinitions` | 五工具逐个 `denied` + `rule`，适配器与 `execFile` 桩**均 0 次**，返回体无 `done` |
+| 17 | 补丁层 0 write + `writeToolDefinitions` | 五工具逐个 `denied` + `rule`，适配器与 `execFile` 桩**均 0 次**，返回体无 `done`<br>r7 修订：原文结论为「五工具逐个 denied」；现为 4 个受控写逐个 denied 且 0 次，判定 delivery_gate 默认登记、只读、executed: false。 |
 | 18 | `assertCommitMessage` | 无前缀/空前缀/空描述三例拒绝，含期望格式；不改写 message、不执行 git |
 | 19/20 | `gitee-review` | 四段矩阵、模型名缺失拒绝、人工分栏、sha 变更前后 `stale`、模型自填拒绝 |
 | 21 | `judgeCloseReadiness` | 四项矩阵含 `unknown` 分支；白名单断言无 close/merge |
@@ -258,12 +259,13 @@ updatedAt: <ISO>
 
 | 形态 | 装配 | 结果 | 证据 |
 |---|---|---|---|
-| A 单装 gitee | 本包补丁层（`heluo-policy` 3 条 + `heluo-gitee`） | 3 读可用；5 受控动作 `denied` | `patch-mount.test.mjs` 用补丁层真实 `config` 装配 |
+| A 单装 gitee | 本包补丁层（`heluo-policy` 3 条 + `heluo-gitee`） | 3 读可用；5 受控动作 `denied` | `patch-mount.test.mjs` 用补丁层真实 `config` 装配<br>r7 修订：原文结论为「3 条目录、3 读可用、5 受控动作 denied」；现为 4 条目录、3 读 + 1 只读判定可用、4 个写 denied。 |
 | B 叠加两层 | devops 层 + 本包层 → 两个 `heluo-policy` 行 | 第一个策略实例生效；第二个在 `apply` 抛 `POLICY_SERVICE_CONFLICT`（`code` 原样可见）；先挂载方工具**仍在**；后装包的工具按未登记 fail closed，**不静默消失** | `coexistence.test.mjs`：假宿主逐个 `apply` 并收集每条的失败，断言 8 个 gitee 工具仍可枚举、错误码可见 |
-| C 并层（**推荐共存**） | 单一 `heluo-policy` 行（devops 4 条 + gitee 3 条 = 7 条）+ 两插件行 | 17 个工具全枚举，无冲突 | `coexistence.test.mjs`：7 条目录装配后断言 3+4 全 `enabled`、gitee 8 工具可枚举 |
+| C 并层（**推荐共存**） | 单一 `heluo-policy` 行（devops 4 条 + gitee 3 条 = 7 条）+ 两插件行 | 17 个工具全枚举，无冲突 | `coexistence.test.mjs`：7 条目录装配后断言 3+4 全 `enabled`、gitee 8 工具可枚举<br>r7 修订：原文结论为「gitee 3 条并入共 7 条目录」；现为 gitee 4 条并入（并层 8 条目录）、17 个工具不变。 |
 
 - 假宿主 `test/helpers/fake-host.mjs` 提供 `ctx.get/provide/effect/inject/tools.register` 与 `policy.executeAction` 桩；**不跨包导入 devops 源码**，"另一插件"用等价假插件（9 个哑工具）代替——devops 真实装配由其自身 `patch-mount` 用例承担。
 - README 与补丁注释必须写明："推荐二选一安装；必须在同一 profile 共存时，把 gitee 的 3 条目录并入既有 `heluo-policy` 行的 catalog（并层），**不要**叠加两个补丁层"。
+  > r7 修订：原文结论为「gitee 3 条目录并入」；现为 4 条目录并入（并层 8 条目录），README 与设计文档同批改成同字面。
 
 ### 8.3 失败矩阵（固定枚举，不新增自由文本）
 
@@ -301,7 +303,7 @@ updatedAt: <ISO>
 | `test/cli.test.mjs` | AC-22/23 | 三键入参；`shell:false`；超时；1 MiB 截断；token 脱敏；持久令牌阻断且 0 子进程 |
 | `test/adapter.test.mjs` | AC-12/14/23 | 分表；禁用字段；argv/`--json` 白名单；禁项；src 零 `GH_` 标识 |
 | `test/read.test.mjs` | AC-15 | 信封九项；四类降级；失败枚举固定 |
-| `test/actions.test.mjs` | AC-16/17 | 四状态矩阵；回读一致才 `done`；默认禁用五工具 `denied` + 0 调用 |
+| `test/actions.test.mjs` | AC-16/17 | 四状态矩阵；回读一致才 `done`；默认禁用五工具 `denied` + 0 调用<br>r7 修订：原文结论为「默认禁用五工具 denied」；现为 4 个受控写默认 denied、1 个只读判定默认可用。 |
 | `test/session.test.mjs` | AC-16 | 幂等键前 16 位；命中 `reused`；`unknown` 不重放 |
 | `test/review.test.mjs` | AC-19/20 | 四段；模型名；分栏；`stale`；模型自填拒绝；脱敏阻断；跨 provider 不覆盖 |
 | `test/delivery.test.mjs` | AC-18/21 | `[变更号]` 格式矩阵；关闭四项含 `unknown`；白名单无 close/merge |
@@ -353,5 +355,5 @@ dsh --profile web --patch packages/forge-gitee/cordis.patch.yml --dump-config
 | R-1 | F1 字段集合未验 | 字段表集中一处 + `--json` 子集白名单；取不到即 `missing_fields`/`unknown`，不猜 | 若实测不一致，只改 `gitee-adapter.mjs` 一张表，命令面按可用子集收窄 |
 | R-2 | 与 devops 的重复实现（出口/幂等/审查渲染） | 受控重复 + 静态门禁（禁项 grep、枚举值一致性）替代共享包 | 漂移风险落成 `test/adapter.test.mjs` 与 `test/actions.test.mjs` 的不变量断言；下一轮若两边都要演进，再抽 `@heluo/forge-actioncore`（本轮不做） |
 | R-3 | 共存需人工"并层" | 不提供第二份补丁文件、不自动改既有 `heluo-policy` 行 | 装配步骤写进 README；F4 若判定"必须共存"，升 P0 并在同一任务夹补一条自动化并层校验 |
-| R-4 | `review_record` 与 `delivery_gate` 也默认 `denied` | 严格照 AC-17 的"五个受控动作"口径 | 默认条件下 `review.md` 需显式追加目录才能写；README 给出追加示例 |
+| R-4 | `review_record` 与 `delivery_gate` 也默认 `denied` | 严格照 AC-17 的"五个受控动作"口径 | 默认条件下 `review.md` 需显式追加目录才能写；README 给出追加示例<br>r7 修订：原文结论为「review_record 与 delivery_gate 均默认 denied」；现仅 review_record 默认 denied，delivery_gate 随包登记为只读判定（kind: read、target 逐字 change），默认可用。 |
 | R-5 | `host` 只经 `GH_HOST` 注入、不进 argv | `--host` 是否被企业 CLI 支持未验（F1/F2） | 未验期 `host` 不参与 argv，避免"看着配了其实没生效" |

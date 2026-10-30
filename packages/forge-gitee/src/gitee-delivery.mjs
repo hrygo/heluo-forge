@@ -260,6 +260,19 @@ const statusOf = (value) => {
   return status === 'passed' || status === 'failed' || status === 'unknown' ? status : null;
 };
 
+/**
+ * 结论字符串归一：模型面描述（`forge_gitee_delivery_gate` 的 `criteria` 参数）逐字声明
+ * 「取值 `pass|fail|unknown`」，而对象 `status` 只认 `passed|failed|unknown`。两种写法在这里
+ * 归一成同一套取值——否则"照描述写"只能拿到 `unknown`，默认可用的判定实际不可达。
+ * 不认识的字符串返回 `null`（继续走对象分支 → `unavailable`，判定器不替调用方翻译含义）。
+ */
+const conclusionOf = (value) => {
+  const conclusion = text(value).toLowerCase();
+  if (conclusion === 'pass' || conclusion === 'passed') return 'passed';
+  if (conclusion === 'fail' || conclusion === 'failed') return 'failed';
+  return null;
+};
+
 /** 标记"这一项没证据"：`unknown` + 原因，而不是猜一个通过。 */
 function unavailable(detail) {
   return {
@@ -273,12 +286,18 @@ function unavailable(detail) {
 /**
  * 单个条件的归一化判定。
  *
- * 入参两种写法都收：**结论**（`true`/`false`/`'passed'`/`'merged'`/`{status}`）与**事实**
- * （`{count}`/`{prs}`/`{decision}`）。不认识的写法一律 `unknown`——判定器不替调用方翻译含义。
+ * 入参三种写法都收：**结论字符串**（`'pass'`/`'passed'`/`'fail'`/`'failed'`/`'unknown'`，即模型面
+ * 描述里的取值）、**布尔**（`true`/`false`）与**对象**（`{status}`/`{count}`/`{decision}`/`{value}`）。
+ * 不认识的写法一律 `unknown`——判定器不替调用方翻译含义。
  */
 function evaluateCriterion(item, raw, currentCommit = null) {
   if (raw === undefined || raw === null) return unavailable(`未提供「${CLOSE_EXPECTATIONS[item]}」的证据（CI/UAT 取不到时按 unknown，不计入通过）`);
   if (raw === 'unknown') return unavailable(`调用方明确标 unknown：「${CLOSE_EXPECTATIONS[item]}」没有可用证据`);
+  if (typeof raw === 'string') {
+    const conclusion = conclusionOf(raw);
+    // 描述公开的写法与对象 `status` 同义：归一后走同一套判定，写法不同不会得出不同结论。
+    if (conclusion !== null) return evaluateCriterion(item, { status: conclusion }, currentCommit);
+  }
 
   if (typeof raw === 'boolean') {
     if (item === 'pendingDelivery') {

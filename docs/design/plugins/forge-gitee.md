@@ -33,7 +33,7 @@
 3. **受控重复 + 静态门禁替代抽公共包**。唯一子进程出口、幂等键公式、审查渲染各自实现，用禁项扫描、枚举一致性、出口唯一性测试防漂移（§13）。
 4. **配置只 4 个扁平键**。本轮无前端、无 HTTP 面、无配置页；CLI 名已由企业确认，r3 的"发现编排"收益在本包不成立。
 
-边界：查询为已实现基线；五个受控动作默认不登记、不执行（`denied`），开闸属单独范围批准。不代理用户权限，授权由 Gitee 服务端校验；包内没有合并、关闭、发版、触发流水线的入口。
+边界：查询为已实现基线；四个受控写默认不登记、不执行（`denied`），开闸属单独范围批准。`gitee.delivery.judge` 是**只读判定**：随包登记、开箱可用，但只判定不执行（`executed: false`、`remote_calls: 0`），不构成写能力开闸。不代理用户权限，授权由 Gitee 服务端校验；包内没有合并、关闭、发版、触发流水线的入口。
 
 ## 2. 目标与非目标
 
@@ -60,7 +60,7 @@
 | REQ 代码托管只读查询 | 直接实现 | 仓库、Issue、PR（3 个只读工具） |
 | 验收 A8 Gitee 只读闭环 | 支撑 | 查询链路可判定 + 失败可归因 |
 | 计划 P1-4 | **改写** | 由"arm64 交叉编译 MCP"改为"CLI 适配与命令面" |
-| 全流程工程闭环 | 部分实现 | 受控写/审查/交付判定已实现、默认禁用；关闭动作只判定不执行 |
+| 全流程工程闭环 | 部分实现 | 受控写/审查/交付判定已实现；四个受控写默认禁用，交付判定随包登记为只读、默认可用（只判定不执行） |
 
 | 依赖 | 类型 | 版本约束 | 缺失时的行为 |
 |---|---|---|---|
@@ -115,7 +115,8 @@
 | 面 | 形状 | 状态 |
 |---|---|---|
 | 读 | `{provider, action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}` | `succeeded` / `failed` / `partial` / `unknown`；准入拒绝单列 `denied`（`rule: policy-denied` 等） |
-| 写 | `{provider, action, status, target, targetRefs, evidence, rule, reason, message}` | `done` / `failed` / `denied` / `unknown`；`done` 必须"CLI 成功 + 回读一致" |
+| 写 | `{provider, action, status, target, targetRefs, evidence, rule, reason, message}` | `done` / `failed` / `denied` / `unknown`；`done` 必须"CLI 成功 + 回读一致"；四个写的返回体**不含** `executed` 键 |
+| 判定 | 与写同形，另带 `executed`（仅在判定体显式声明时输出，当前只有 `gitee.delivery.judge` 声明 `executed: false`） | `done` / `failed` / `denied` / `unknown`；`executed` 恒 `false`、`remote_calls` 恒 `0`；`unknown` 不计入通过 |
 
 固定原因枚举（自由文本只进 `message`/`detail`，不新增枚举值）：读侧 `AUTH_MISSING`、`GITEE_PERSISTENT_TOKEN`、`HOST_NOT_ENTERPRISE`、`SPAWN_FAILED`、`NONZERO_EXIT`、`UNSUPPORTED_FIELD`、`ARG_NOT_WHITELISTED`、`ARG_INVALID`、`JSON_FIELD_NOT_DECLARED`、`FORBIDDEN_ARGV`、`TIMEOUT`、`MALFORMED_RESULT`、`OUTPUT_TRUNCATED`、`NO_STRUCTURED_STATUS`、`MISSING_SOURCE_REVISION`、`MIXED_PROVIDER_FIELDS`、`POLICY_DENIED`、`GITEE_STATUS_DISPOSED`；写侧另有 `REPLAY_BLOCKED`、`READBACK_MISMATCH`、`READBACK_UNAVAILABLE`、`HUMAN_CONFIRMATION_FORBIDDEN`、`COMMIT_MESSAGE_INVALID`、`REVIEW_INVALID`。
 
@@ -131,7 +132,9 @@
 
 `gh` 习惯把令牌写进自己的配置目录，因此这一项是**阻断**而不是告警：检测到持久令牌时任何动作都不执行。
 
-策略目录：补丁层预置 3 条 `kind: read`（`gitee.repository.read`/`gitee.issue.read`/`gitee.pr.read`）、**0 条 write**。五个受控动作（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record`、`gitee.delivery.judge`）靠"不登记"实现默认禁用：未登记即 `denied`（`unregistered-action`）且适配器 0 次调用。开写须由所属 profile 显式追加动作，写/确认类还需审批台账条目；默认分发层不替任何人预置授权。
+策略目录：补丁层预置 **4 条 `kind: read`（3 读 + 1 只读判定）、0 条 write**，对应工具面 **8 个 = 3 读 + 1 只读判定 + 4 受控写**。前三条是读动作 `gitee.repository.read`/`gitee.issue.read`/`gitee.pr.read`（`target` 分别为 `repository`/`issue`/`pull-request`）；第 4 条 `gitee.delivery.judge` 是只判定不执行的只读判定，`target` 逐字 `change`，`egress: 'allow'` 为必需项——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 时编译成默认 `confirm`，无审批台账即永远拿不到 `done`。`kind: read` 让它不进审批台账，判定返回体 `executed` 恒 `false`、`remote_calls` 恒 `0`。四个受控写（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record`）靠"不登记"实现默认禁用：未登记即 `denied`（`unregistered-action`）且适配器 0 次调用。开写须由所属 profile 显式追加动作，写/确认类还需审批台账条目；默认分发层不替任何人预置授权。
+
+读动作的 fail-closed 不因判定放宽：`apply()` 的 `assertReadCatalog` 仍只要求上述 3 条读动作，缺 `gitee.delivery.judge` 时挂载照常成功、只有判定工具降级为 `denied`（`unregistered-action`），挂载语义与错误码不变。
 
 审计 provider 槽：`forge-policy` 的审计字段白名单不含 `provider`，gitee 侧以动作前缀 `gitee.*` 与固定 `subject='gitee'` 自证，门禁后断言，不一致即 `GITEE_AUDIT_PROVIDER_MISMATCH`（不改策略包）。
 
@@ -190,7 +193,7 @@ flowchart LR
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
 | 单元/契约 | 入口与清单、配置、出口、适配器、只读信封、写动作、幂等、审查、交付、共存四形态、宿主 `register()` 判据 | `node --test "packages/forge-gitee/test/*.test.mjs"` |
-| 装配 | 解析分发补丁层 → 真实装配策略 + 插件；空目录反向用例 | 同上（`patch-mount.test.mjs`） |
+| 装配 | 解析分发补丁层 → 真实装配策略 + 插件：3 读 + 1 只读判定可用、4 个写动作 denied；空目录反向用例 | 同上（`patch-mount.test.mjs`） |
 | 安装单元 | `buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致 | `node --test "tests/bundle-gitee.test.mjs"` |
 | 端到端 | 企业实机双端各完成一次仓库与 Issue 查询、一次受控写 | **NOT RUN**（见 §12） |
 
@@ -198,7 +201,9 @@ flowchart LR
 
 形态为**单安装单元**：清单声明 `dsh.bundle.patch: ./cordis.patch.yml`、`files` 白名单（`src`/补丁层/README）、`engines.dsh: >=0.2.1-rc.2`，并把 `@heluo/forge-policy` 声明为 `workspace:*` 依赖；构建期 `buildBundle` 把它闭包成真版本并进 `bundledDependencies`，产物为 `heluo-forge-gitee-0.1.0.tgz`（26 个条目，无编译产物、无 `lib/`、不带测试文件）。
 
-补丁层两行、顺序即加载顺序：策略行（`id: heluo-policy-gitee`，3 条只读目录 + 内存审计舱 `allowNonDurable`）在前，插件行（`config: {}` 显式空配置，避免宿主把"缺席"当 `undefined` 交给校验器）在后。两行都用**包根名**：写成子路径宿主会静默跳过该包。两行同时声明 `isolate: { policy: gitee }`——策略实例进独立服务域，与 GitHub 面的 root 域互不可见（D-2 的修法；`isolate` 是 loader 的 entry 选项，`Dict<true|string>`，同 label 的 entry 共用一个域）。
+补丁层两行、顺序即加载顺序：策略行（`id: heluo-policy-gitee`，4 条目录 = 3 读 + 1 只读判定 + 内存审计舱 `allowNonDurable`）在前，插件行（`config: {}` 显式空配置，避免宿主把"缺席"当 `undefined` 交给校验器）在后。两行都用**包根名**：写成子路径宿主会静默跳过该包。两行同时声明 `isolate: { policy: gitee }`——策略实例进独立服务域，与 GitHub 面的 root 域互不可见（D-2 的修法；`isolate` 是 loader 的 entry 选项，`Dict<true|string>`，同 label 的 entry 共用一个域）。
+
+目录**随包分发**：4 条 `gitee.*` 条目写在包内 `cordis.patch.yml`，由 `buildBundle` 原样打进 tgz（`tests/bundle-gitee.test.mjs` 解包断言含 `gitee.delivery.judge` / `target: change` / `egress: 'allow'`），装包即登记，不靠 profile 手改。
 
 共存形态：
 
@@ -206,7 +211,7 @@ flowchart LR
 |---|---|---|
 | 只装一个 | 各带自己的目录，互不干扰 | **推荐** |
 | 同 profile 叠加两层 | 两个策略实例分处 `gitee` 域与 root 域，17 个工具全枚举、0 行激活失败 | **默认可行**（不改配置） |
-| 同 profile 并层 | 3 条 `gitee.*` 并入既有那条 `heluo-policy` 行的 `catalog`，并删掉本包插件行的 `isolate` | 想统一审计出口时用 |
+| 同 profile 并层 | 4 条 `gitee.*`（3 读 + 1 判定）并入既有那条 `heluo-policy` 行的 `catalog`，并删掉本包插件行的 `isolate`；结果是 8 条目录（devops 4 读 + 本包 4 条）/ 17 个工具 | 想统一审计出口时用 |
 | 去掉 `isolate` 再叠加（反证） | 第二个策略 `apply` 抛 `POLICY_SERVICE_CONFLICT`（可见），本包插件按未登记 fail closed，先挂载方工具仍在 | 不采用 |
 
 升级：命令面只增不删；`--json` 字段稳定性须在升级 CLI 前回归。回退：移除 profile 补丁层条目 → 重载 → `dsh plugin --profile web remove @heluo/forge-gitee`；不写缓存或临时文件，卸载后无残留（步骤与复核命令写在包 README"回滚"一节，装在装之前可读）。
@@ -219,13 +224,13 @@ flowchart LR
 | 是否支持环境变量注入、可否禁用自身配置存储 | Gitee 团队 | §6 凭据方式（当前按"阻断持久令牌"实现） |
 | `--json` 字段是否稳定、是否与上游一致 | Gitee 团队、平台组 | §5.2 字段表与解析（F1） |
 | 只读子命令清单与权限映射 | Gitee 团队 | §5.2 命令面 |
-| 五个受控写的范围与 C3 分类 | 平台组、Gitee、PMO | 默认 `denied` 能否开闸 |
+| 四个受控写的范围与 C3 分类 | 平台组、Gitee、PMO | 默认 `denied` 能否开闸 |
 | CLI 双端实测与风险关闭证据 | 平台组、Gitee、PMO | G1 前仍须确认命令、凭据和双端运行证据 |
 
 **NOT RUN（本轮未取得证据，不得据本文推断已验证）**
 
 1. 企业实机联调：argv 形状、`--json` 字段、鉴权与权限模型。
-2. Windows 实机与银河麒麟 aarch64 上的 CLI 产物与包装脚本的行为（离线用例注入平台与假环境，**不是实机证据**）。
+2. Windows 实机与银河麒麟 aarch64 上的 CLI 产物与包装脚本的表现（离线用例注入平台与假环境，**不是实机证据**）。
 3. 真实 profile 的装入/重启/回滚（`dsh plugin add` 需要工作区外写权限，归主流程；本包只提供补丁层解析与装配证据）。
 4. 持久审计 sink、审批台账与写动作开闸（范围批准后才验）。
 5. 宿主 rc.3（本机 rc.2）。
@@ -245,11 +250,11 @@ flowchart LR
 
 ## 13. 工程闭环、审查与 provider 分流
 
-依据[需求 §2.3](../../requirements/requirements-baseline.md)、[全流程设计](forge-devops-lifecycle.md)及[工具契约](../../contracts/engineering-tools.md)，工程闭环面的实现如下，且全部默认禁用：
+依据[需求 §2.3](../../requirements/requirements-baseline.md)、[全流程设计](forge-devops-lifecycle.md)及[工具契约](../../contracts/engineering-tools.md)，工程闭环面的实现如下：四个受控写默认禁用，交付判定随包登记为只读、默认可用，但不产生任何远端写：
 
 - **对象与追溯**：Issue/PR 的创建与评论以变更号为幂等键；commit message 以 `[变更号]` 开头（`expectedCommitFormat()`），校验只看首行前缀与说明是否齐。
 - **审查**：`review.md` 落 `docs/teamflow/<变更号>/review.md`，四段（问题/风险/意见/结论）+ AI 与人工**两栏物理分节**，写模型名与被审 `commit`；人工栏只能经 `recordHumanConfirmation()` 写入（`origin` 白名单），模型自填即 `REVIEW_HUMAN_FILL_FORBIDDEN`；写盘前命中令牌/内网主机/绝对路径即 `REVIEW_REDACTION_BLOCKED`；`stale` 是"被审 sha 已不是当前 sha"的派生结果，不落盘，避免"确认后被改成通过"的窗口。
-- **交付判定**：`judgeCloseReadiness()` 只判定不执行——验收、已合入、无未完成交付、针对当前 commit 的人工确认四项；`unknown` 不计入通过；包里没有 close/merge 入口（白名单天然缺失）。
+- **交付判定**：`judgeCloseReadiness()` 只判定不执行——验收、已合入、无未完成交付、针对当前 commit 的人工确认四项；`unknown` 不计入通过。它与写共用门禁但不共用权限事实：`gitee.delivery.judge` 随包登记为只读（`kind: read`、`target` 逐字 `change`、`egress: 'allow'`），信封带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口（白名单天然缺失）。
 - **更强模型交叉审查**：AI 意见与人工确认分开留痕并绑定版本；不让模型自填确认人，不把聊天"同意"冒充 Gitee 的正式批准。
 
 **与 `@heluo/forge-devops` 的分流与受控重复（R-2）**：唯一子进程出口、幂等键公式、审查渲染三处在两个包各有一份实现——本轮 PRD 非目标禁止改写 devops，因此不抽公共包，改用静态门禁替代：`test/adapter.test.mjs` 断言 `src/` 零 GitHub 语义标识与字段分表、`test/cli.test.mjs` 断言出口唯一性（`execFile` 只出现在 `gitee-cli.mjs`）、`test/session.test.mjs` 断言幂等键逐字一致（`sha256(changeId|objectType|title)` 前 16 位，否则双 provider 同变更会二次建单）。下一轮若两边同步演进，再评估抽出 `@heluo/forge-actioncore`。

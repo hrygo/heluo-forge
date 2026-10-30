@@ -3,7 +3,7 @@
  *
  * 三种形态都是**装载后果**，不是设计偏好，所以全部用"真实策略服务 + 真实补丁层数据"
  * 离线复现：
- *   A 单装——只装本包：8 个工具、3 条只读目录；策略落在 `gitee` 服务域（`isolate`），
+ *   A 单装——只装本包：8 个工具、4 条目录（3 读 + 1 只读判定）；策略落在 `gitee` 服务域（`isolate`），
  *     root 域不出现 `policy`，不与任何别的 provider 抢名字。
  *   B 叠加（D-2 的修法）——devops 补丁层 + 本包补丁层**都按原样叠加**：两个策略实例分处
  *     root 与 `gitee` 两个服务域，17 个工具全枚举、0 行激活失败、devops 的 4 条目录一条不少。
@@ -11,8 +11,8 @@
  *   B- 反证（门禁有牙）——把本包两行的 `isolate` 去掉再叠加：两个策略实例撞进同一服务域，
  *     第二个 `apply` 抛 `POLICY_SERVICE_CONFLICT`，本包插件按"动作未登记"fail closed。
  *     这就是 D-2 的原始失败形态；用例锁住"隔离不是可选项"。
- *   C 并层——另一条合法路径：唯一的策略行把 GitHub 的 4 条与 gitee 的 3 条并在一起，插件行
- *     去掉 `isolate` 共用同一实例，7 条目录 / 17 个工具全枚举。
+ *   C 并层——另一条合法路径：唯一的策略行把 GitHub 的 4 条与 gitee 的 4 条并在一起，插件行
+ *     去掉 `isolate` 共用同一实例，8 条目录 / 17 个工具全枚举。
  *
  * GitHub 侧用等价假插件（9 个哑工具 + 同样的"目录未登记即 fail closed"）：本包测试不导入
  * devops 源码（包间零源码依赖），而"叠加"这个后果只取决于"它也要求策略目录"这一点。
@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 
 import { apply } from '../src/index.mjs';
 import { GITEE_READ_ACTIONS } from '../src/gitee-read.mjs';
-import { GITEE_TOOLS } from '../src/gitee-tools.mjs';
+import { GITEE_JUDGE_TOOLS, GITEE_TOOLS } from '../src/gitee-tools.mjs';
 import { createEquivalentPlatformPlugin, createFakeHost, readPatch } from './helpers/fake-host.mjs';
 
 const GITEE_PATCH = fileURLToPath(new URL('../cordis.patch.yml', import.meta.url));
@@ -79,14 +79,15 @@ function mountLayer(host, rows, { devopsPolicy, dropIsolate = false } = {}) {
 
 const failuresOf = (results) => results.filter((result) => result.ok !== true).map((result) => `${result.row.id}:${result.code ?? 'ok'}`);
 
-test('AC-13 形态 A: 单装本包——8 个工具、3 条只读目录、策略隔离在 gitee 域', async () => {
+test('AC-13 形态 A: 单装本包——8 个工具、4 条目录（3 读 + 1 判定）、策略隔离在 gitee 域', async () => {
   const { gitee } = await layers();
   const host = createFakeHost();
   const results = mountLayer(host, gitee);
 
   assert.equal(results.length, 2);
   assert.deepEqual(failuresOf(results), [], '单装不该有任何失败行');
-  assert.equal(host.policyIn(GITEE_REALM).catalog.size, GITEE_READ_ACTIONS.length);
+  assert.equal(host.policyIn(GITEE_REALM).catalog.size, GITEE_READ_ACTIONS.length + GITEE_JUDGE_TOOLS.length);
+  assert.equal(host.policyIn(GITEE_REALM).catalog.size, 4, 'r7：3 条读 + 1 条只读判定');
   assert.equal(host.policyIn(undefined), undefined, 'root 服务域不出现 policy（不污染别的 provider）');
   assert.deepEqual(host.toolNames(), [...GITEE_TOOLS]);
   assert.equal(host.services.get('gitee').status(), 'ready');
@@ -154,11 +155,11 @@ test('AC-13 形态 B-: 去掉 isolate 再叠加——两个策略实例撞车，
   assert.equal(host.services.get('gitee'), undefined);
 });
 
-test('AC-13 形态 C: 并层单一策略行——7 条目录 / 17 个工具全枚举', async () => {
+test('AC-13 形态 C: 并层单一策略行——8 条目录 / 17 个工具全枚举', async () => {
   const { giteePolicy, devopsPolicy, giteePlugin, devopsPlugin } = await layers();
   const host = createFakeHost();
 
-  // 唯一一行策略（不带 isolate，root 域），把 GitHub 的 4 条与 gitee 的 3 条并在一起。
+  // 唯一一行策略（不带 isolate，root 域），把 GitHub 的 4 条与 gitee 的 4 条并在一起。
   const merged = {
     catalog: [...devopsPolicy.catalog, ...giteePolicy.catalog],
     audit: devopsPolicy.audit,
@@ -167,7 +168,7 @@ test('AC-13 形态 C: 并层单一策略行——7 条目录 / 17 个工具全�
   assert.equal(mountedPolicy.ok, true, `并层策略挂载失败：${mountedPolicy.error?.message ?? ''}`);
   const policy = mountedPolicy.policy;
   assert.equal(policy.catalog.size, devopsPolicy.catalog.length + giteePolicy.catalog.length);
-  assert.equal(policy.catalog.size, 7);
+  assert.equal(policy.catalog.size, 8);
 
   const devopsMount = host.mount(devopsEquivalent(devopsPolicy), devopsPlugin.config);
   // 并层时本包插件行也要去掉 isolate（共用同一实例），见补丁层注释的"并层"做法。
@@ -180,7 +181,11 @@ test('AC-13 形态 C: 并层单一策略行——7 条目录 / 17 个工具全�
   assert.deepEqual([...host.toolNames()].sort(), [...expected].sort());
   assert.equal(new Set(host.toolNames()).size, host.toolNames().length, '工具名不得重复');
 
-  for (const action of [...devopsPolicy.catalog.map((entry) => entry.action), ...GITEE_READ_ACTIONS]) {
+  const mergedActions = [
+    ...devopsPolicy.catalog.map((entry) => entry.action),
+    ...giteePolicy.catalog.map((entry) => entry.action),
+  ];
+  for (const action of mergedActions) {
     assert.equal(policy.catalog.get(action)?.enabled, true, `${action} 在并层目录里应可用`);
   }
   assert.deepEqual(host.services.get('gitee').toolNames(), [...GITEE_TOOLS]);
@@ -190,6 +195,8 @@ test('AC-13 形态 C: 并层单一策略行——7 条目录 / 17 个工具全�
   assert.deepEqual(host.toolNames(), []);
   assert.equal(host.services.get('gitee'), undefined);
 
-  // 并层也不打开任何写动作：两份补丁层的目录里都不含写条目（本包 0 write 是 AC-17 的默认口径）。
+  // 并层也不打开任何写动作：两份补丁层的目录里都不含写条目（本包 0 write 是 AC-3 的默认口径；
+  // r7 新增的 judge 是 kind='read'，不该被这条断言误伤，也不该被当成写动作放行）。
   assert.equal(merged.catalog.filter((entry) => entry.kind === 'write').length, 0);
+  assert.equal(giteePolicy.catalog.filter((entry) => entry.action === 'gitee.delivery.judge' && entry.kind === 'read').length, 1);
 });
