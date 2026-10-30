@@ -167,7 +167,7 @@ test('幂等键：缺参抛 TypeError（接线缺陷早暴露，不静默生成�
   assert.throws(() => idempotencyKey({ change: CHANGE, objectType: 'issue', title: '   ' }), TypeError);
 });
 
-test('建 Issue：目标不是 owner/name 时 denied，gh 零调用', async () => {
+test('建 Issue：目标不是 owner/name 或 org/group/repo 时 denied，gh 零调用', async () => {
   const gh = fakeGh();
   const guard = allowGuard();
   const result = await createIssueIdempotent({
@@ -624,4 +624,179 @@ test('澄清回写：未知通道一律 denied/COMMAND_NOT_WHITELISTED（白名�
   assert.equal(result.statuses[0].status, 'denied');
   assert.equal(result.statuses[0].reason, ACTION_REASONS.COMMAND_NOT_WHITELISTED);
   assert.equal(gh.calls.length, 0);
+});
+
+// ————————————————————————————————————————————————————————————————
+// r6：仓库引用从"两段"放宽到 2..3 段（TECH-CHANGE §3.2 / §5.2 缺陷 2）
+//
+// 判据只在 `repo-ref.mjs` 一处定义（`isRepoRef` / `parseTargetRef`），本模块的前置拦截必须与
+// 适配器、门禁给出同一判词：
+// - 三段 `org/group/repo` 可写（此前被本地 `REPO_PATTERN` 恒判 `MISSING_TARGET`，
+//   表现为"三段仓库根本写不了"）；
+// - 两段 `owner/name` 行为一字不变（含幂等键、四状态、回读）；
+// - 1 段 / 4 段 / 空段 / 首字符连字符 / 段内空格一律 `MISSING_TARGET` 且适配器零调用
+//   （首字符锚定与 `gh-adapter` 同判词，消除两份正则的漂移）；
+// - 门禁不放松：三段目标下 `confirm.repo` 必须是**完整路径**，把 `org/group/repo` 折成
+//   `group/repo` 仍然拒绝——折叠重合才是真放松门禁。
+// 全部用例注入假 gh（mock），不 spawn 真实 `gh`。
+// ————————————————————————————————————————————————————————————————
+
+const REPO_3 = 'acme/group/demo';
+
+test('r6 · 建 Issue：三段仓库 org/group/repo 被接受，命令面路径一字不改', async () => {
+  const gh = fakeGh();
+  const result = await createIssueIdempotent({
+    guard: allowGuard(),
+    gh,
+    changeId: CHANGE,
+    repo: REPO_3,
+    title: 'Fix gate',
+    body: '正文',
+    confirm: { repo: REPO_3, object: REPO_3 },
+  });
+  assert.equal(result.status, 'done');
+  assert.equal(result.reason, null);
+  assert.equal(result.target, REPO_3, '三段路径不折叠成 group/demo');
+  assert.equal(gh.calls.find((entry) => entry.name === 'createIssue').args.repo, REPO_3);
+  assert.equal(gh.calls.find((entry) => entry.name === 'readIssue').args.target, `${REPO_3}#7`);
+});
+
+test('r6 · 建 PR：三段仓库被接受，head/base 与回读语义不变', async () => {
+  const gh = fakeGh();
+  const result = await createPrIdempotent({
+    guard: allowGuard(),
+    gh,
+    changeId: CHANGE,
+    repo: REPO_3,
+    head: 'feat/gate',
+    base: 'main',
+    title: 'Fix gate',
+    body: '正文',
+    confirm: { repo: REPO_3, object: REPO_3 },
+  });
+  assert.equal(result.status, 'done');
+  assert.equal(result.target, REPO_3);
+  assert.equal(gh.calls.find((entry) => entry.name === 'createPr').args.repo, REPO_3);
+  assert.equal(result.readback.head, 'feat/gate');
+  assert.equal(result.readback.base, 'main');
+});
+
+test('r6 · 建 Issue：三段之外的形态仍 denied/MISSING_TARGET 且适配器零调用', async () => {
+  const cases = [
+    ['acme', '一段'],
+    ['acme/demo/x/y', '四段'],
+    ['-bad/demo', '首字符连字符（与 gh-adapter 同判词）'],
+    ['acme /demo', '段内空格'],
+    ['acme//demo', '空段'],
+    ['', '空值'],
+  ];
+  for (const [repo, why] of cases) {
+    const gh = fakeGh();
+    const guard = allowGuard();
+    const result = await createIssueIdempotent({
+      guard,
+      gh,
+      changeId: CHANGE,
+      repo,
+      title: 'Fix gate',
+      body: '正文',
+      confirm: { repo, object: repo },
+    });
+    assert.equal(result.status, 'denied', `${why} 应被拒`);
+    assert.equal(result.reason, ACTION_REASONS.MISSING_TARGET, `${why} 的原因码`);
+    assert.equal(result.calls, 0, `${why} 不得走到子进程`);
+    assert.equal(gh.calls.length, 0, `${why} 适配器零调用`);
+    assert.equal(guard.seen.length, 0, `${why} 连门禁都不必问`);
+  }
+});
+
+test('r6 · 写 Issue 评论：三段目标 org/group/repo#12 可解析，仓库取完整路径', async () => {
+  let reads = 0;
+  const gh = fakeGh({
+    readIssue: async ({ target }) => {
+      reads += 1;
+      return {
+        status: 'succeeded',
+        object: { number: 12, title: 'Fix gate', url: target, comments: reads === 1 ? [] : [{ id: 'c4', body: '澄清正文', url: 'https://gh.test/comment/4' }] },
+      };
+    },
+  });
+  const target = `${REPO_3}#12`;
+  const result = await commentIssueIdempotent({
+    guard: allowGuard(),
+    gh,
+    changeId: CHANGE,
+    target,
+    body: '澄清正文',
+    confirm: { repo: REPO_3, object: target },
+  });
+  assert.equal(result.status, 'done');
+  assert.equal(result.target, target);
+  assert.equal(gh.calls.find((entry) => entry.name === 'commentIssue').args.target, target);
+  assert.equal(result.readback.commentId, 'c4');
+});
+
+test('r6 · 写 PR 审查评论：三段目标 org/group/repo!9 可解析，commit 仍须绑定', async () => {
+  let reads = 0;
+  const gh = fakeGh({
+    readPr: async ({ target }) => {
+      reads += 1;
+      return {
+        status: 'succeeded',
+        object: {
+          number: 9,
+          title: 'Fix gate',
+          url: target,
+          headRefName: 'feat/gate',
+          baseRefName: 'main',
+          comments: reads === 1 ? [] : [{ id: 'c5', body: '审查意见', url: 'https://gh.test/comment/5' }],
+        },
+      };
+    },
+  });
+  const target = `${REPO_3}!9`;
+  const result = await commentPrIdempotent({
+    guard: allowGuard(),
+    gh,
+    changeId: CHANGE,
+    target,
+    commit: 'abc1234',
+    body: '审查意见',
+    confirm: { repo: REPO_3, object: target },
+  });
+  assert.equal(result.status, 'done');
+  assert.equal(result.action, FLOW_ACTIONS.PR_COMMENT);
+  assert.equal(result.readback.commit, 'abc1234');
+  assert.equal(gh.calls.find((entry) => entry.name === 'commentPr').args.target, target);
+});
+
+test('r6 · 写 Issue 评论：非目标形态仍 denied/MISSING_TARGET 且适配器零调用', async () => {
+  for (const [target, why] of [
+    [`${REPO_3}`, '缺编号（纯仓库名不是评论目标）'],
+    ['7', '裸编号'],
+    [`${REPO_3}/x#7`, '四段目标'],
+    [`acme /demo#7`, '段内空格'],
+  ]) {
+    const gh = fakeGh();
+    const result = await commentIssueIdempotent({ guard: allowGuard(), gh, changeId: CHANGE, target, body: '正文' });
+    assert.equal(result.status, 'denied', `${why} 应被拒`);
+    assert.equal(result.reason, ACTION_REASONS.MISSING_TARGET, `${why} 的原因码`);
+    assert.equal(gh.calls.length, 0, `${why} 适配器零调用`);
+  }
+});
+
+test('r6 · 门禁不放松：三段目标下 confirm.repo 折成 group/repo 仍然拒绝', async () => {
+  const gh = fakeGh();
+  const target = `${REPO_3}#12`;
+  const result = await commentIssueIdempotent({
+    guard: allowGuard(),
+    gh,
+    changeId: CHANGE,
+    target,
+    body: '澄清正文',
+    confirm: { repo: 'group/demo', object: target },
+  });
+  assert.equal(result.status, 'denied');
+  assert.equal(result.reason, ACTION_REASONS.CONFIRMATION_REQUIRED);
+  assert.equal(gh.calls.length, 0, '确认不一致时不触达平台');
 });

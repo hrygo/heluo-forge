@@ -100,9 +100,64 @@ test('explicit 只能在候选里挑：命中即 resolved，多候选时用作�
   assert.equal(picked.status, 'resolved');
   assert.equal(picked.selected, 'acme/points-mall');
 
-  const bare = resolveBuildingRepository({ change: subSystems, visibleRepos: repos, explicit: 'ZETA/POINTS-MALL' });
-  assert.equal(bare.status, 'resolved');
-  assert.equal(bare.selected, 'zeta/points-mall');
+  // 整串比较大小写不敏感：选中值回填候选里的原样写法，不是用户输入。
+  const upper = resolveBuildingRepository({ change: subSystems, visibleRepos: repos, explicit: 'ZETA/POINTS-MALL' });
+  assert.equal(upper.status, 'resolved');
+  assert.equal(upper.selected, 'zeta/points-mall');
+});
+
+test('explicit 裸名：候选内唯一同名时命中（唯一的裸名兜底）', () => {
+  const result = resolveBuildingRepository({
+    change: change([{ code: 'CARD.points' }]),
+    visibleRepos: [{ nameWithOwner: 'acme/points-mall' }, { nameWithOwner: 'acme/points-sdk' }],
+    explicit: 'points-mall',
+  });
+
+  assert.equal(result.status, 'resolved');
+  assert.equal(result.selected, 'acme/points-mall');
+  assert.deepEqual(result.reasons, []);
+});
+
+test('explicit 裸名跨组同名 → blocked/MULTIPLE_CANDIDATES（不静默挑第一个）', () => {
+  const result = resolveBuildingRepository({
+    change: change([{ code: 'CARD.points-mall' }]),
+    visibleRepos: [{ nameWithOwner: 'orgB/points-mall' }, { nameWithOwner: 'orgA/points-mall' }],
+    explicit: 'points-mall',
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.selected, null);
+  assert.deepEqual(result.reasons, [RESOLVE_REASONS.MULTIPLE_CANDIDATES]);
+  assert.deepEqual(result.candidates.map((candidate) => candidate.repo), ['orgA/points-mall', 'orgB/points-mall']);
+});
+
+test('explicit 整串优先：三段同名时按完整路径选中；两段不是完整路径仍拒', () => {
+  const subSystems = change([{ code: 'CARD.points-mall' }]);
+  const repos = [{ nameWithOwner: 'acme/group/points-mall' }, { nameWithOwner: 'other/group/points-mall' }];
+
+  const exact = resolveBuildingRepository({ change: subSystems, visibleRepos: repos, explicit: 'ACME/GROUP/POINTS-MALL' });
+  assert.equal(exact.status, 'resolved');
+  assert.equal(exact.selected, 'acme/group/points-mall');
+
+  const partial = resolveBuildingRepository({ change: subSystems, visibleRepos: repos, explicit: 'group/points-mall' });
+  assert.equal(partial.status, 'blocked');
+  assert.deepEqual(partial.reasons, [RESOLVE_REASONS.EXPLICIT_NOT_CANDIDATE]);
+  assert.equal(partial.selected, null);
+});
+
+test('explicit 非法形态（一段 / 四段 / 带编号）不引入新仓库，仍 EXPLICIT_NOT_CANDIDATE', () => {
+  const subSystems = change([{ code: 'CARD.points' }]);
+  for (const explicit of ['acme', 'acme/points-mall/extra/path', 'acme/points-mall#12']) {
+    const result = resolveBuildingRepository({
+      change: subSystems,
+      visibleRepos: [{ nameWithOwner: 'acme/points-mall' }],
+      explicit,
+    });
+    assert.equal(result.status, 'blocked', `「${explicit}」不得被接受`);
+    assert.deepEqual(result.reasons, [RESOLVE_REASONS.EXPLICIT_NOT_CANDIDATE], `「${explicit}」必须显式越界`);
+    assert.equal(result.selected, null);
+    assert.deepEqual(result.candidates.map((candidate) => candidate.repo), ['acme/points-mall']);
+  }
 });
 
 test('explicit 越界（候选之外）→ blocked/EXPLICIT_NOT_CANDIDATE，不引入新仓库', () => {

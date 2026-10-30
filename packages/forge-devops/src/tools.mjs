@@ -9,10 +9,13 @@
  *    这样"哪个工具走哪个门禁动作"可以逐条核对。
  * 3. **写工具必须带 `confirm: { repo, object }`**：模型自填"已确认"不算数，
  *    repo/object 与实际写入目标不一致时直接 `denied`，一次下游调用都不发生。
+ *    仓库引用统一交给 `repo-ref.mjs` 解析（`org/group/repo#12` 的 repo 是**完整三段**
+ *    `org/group/repo`，不折成 `group/repo`）——工具面不再自写正则，判词与适配器、门禁只有一份。
  * 4. **产物落盘没有平台动作**（`action: null`）：它只写本地 `.dsh-devops/`，
  *    但仍要求 kind 与证据齐全，避免"报告没有证据也算产物"。
  */
 import { READ_ACTIONS } from './read.mjs';
+import { repoOfTarget } from './repo-ref.mjs';
 
 const json = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
 
@@ -51,9 +54,9 @@ export const TOOL_REASONS = Object.freeze({
 
 const TARGET_HINT = Object.freeze({
   'change.read': '系统变更号，例如 CHG-2026-0042',
-  'repository.read': '仓库标识，例如 group/repo',
-  'issue.read': 'Issue 引用，例如 group/repo#123',
-  'pr.read': 'PR 引用，例如 group/repo!456',
+  'repository.read': '仓库标识，例如 group/repo 或 org/group/repo',
+  'issue.read': 'Issue 引用，例如 group/repo#123 或 org/group/repo#123',
+  'pr.read': 'PR 引用，例如 group/repo!456 或 org/group/repo!456',
 });
 
 const NEXT_ACTION = Object.freeze({
@@ -90,16 +93,15 @@ function reasonOf(error) {
   return typeof error?.code === 'string' ? error.code : TOOL_REASONS.INTERNAL;
 }
 
-/** 从 `group/repo` 或 `group/repo#123` / `group/repo!456` 里取出仓库标识。 */
-function repoOf(target) {
-  if (typeof target !== 'string') return null;
-  const match = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:[#!]\d+)?$/u.exec(target.trim());
-  return match ? match[1] : null;
-}
-
 /**
- * 写动作的确认前置：`confirm.repo` 必须等于目标的仓库，`confirm.object` 必须等于目标本身。
+ * 写动作的确认前置：`confirm.repo` 必须等于目标的仓库（完整 2 或 3 段路径），
+ * `confirm.object` 必须等于目标本身。
  * 返回 null 表示通过，否则返回原因码。只在工具边界做一次，语义与门禁的 confirm 通道一致。
+ *
+ * 取仓库走 `repoOfTarget`（单点解析，剥 `#n` / `!n`）：旧实现自写的两段正则对
+ * `org/group/repo#12` 取不到仓库，会恒返 `MISSING_TARGET`，写动作永远到不了门禁。
+ * 这里**不做裸名兜底**：`confirm.repo='group/repo'` 对 `org/group/repo` 仍是
+ * `CONFIRMATION_REQUIRED`——把三段折成两段等于把两个仓库判成同一个，那是放松门禁。
  */
 function checkConfirm(confirm, target, { repoBound = true } = {}) {
   if (confirm === null || typeof confirm !== 'object' || Array.isArray(confirm)) {
@@ -111,7 +113,7 @@ function checkConfirm(confirm, target, { repoBound = true } = {}) {
     return TOOL_REASONS.CONFIRMATION_REQUIRED;
   }
   if (!repoBound) return null;
-  const repo = repoOf(object);
+  const repo = repoOfTarget(object);
   if (repo === null) return TOOL_REASONS.MISSING_TARGET;
   if (typeof confirm.repo !== 'string' || confirm.repo.trim() !== repo) {
     return TOOL_REASONS.CONFIRMATION_REQUIRED;
@@ -171,12 +173,29 @@ const CONFIRM_SCHEMA = Object.freeze({
   type: 'object',
   description: '写入确认：repo 必须等于目标仓库，object 必须等于目标引用（模型自填不算数）',
   properties: {
-    repo: { type: 'string', description: '目标仓库，例如 group/repo' },
+    repo: {
+      type: 'string',
+      description: '目标仓库的完整路径（含命名空间，2 或 3 段），例如 group/repo 或 org/group/repo',
+    },
     object: { type: 'string', description: '本次要写的对象，例如 group/repo#123' },
   },
   required: ['repo', 'object'],
   additionalProperties: false,
 });
+
+/**
+ * 拒绝时的可读原因：`MISSING_TARGET` 有两种成因——没给 target，或给了 target 但取不出仓库
+ * （链接、裸编号、1 段、4 段、段内含空格）。两者都零下游调用，但要让人看见是哪一种，
+ * 否则调用方会以为"参数齐全却被说成缺 target"。
+ */
+function confirmDetail(reason, target) {
+  if (reason !== TOOL_REASONS.MISSING_TARGET) {
+    return `confirm 与写入目标不一致：target=${target || '(空)'}`;
+  }
+  return target === ''
+    ? '缺少 target，无法核对写入对象'
+    : `target 不是可核对的仓库引用（需要 2 或 3 段仓库路径，可带 #n / !n）：target=${target}`;
+}
 
 function writeTool({ service, method, toolName, description, action, properties, required, run, repoBound = true }) {
   return {
@@ -192,11 +211,7 @@ function writeTool({ service, method, toolName, description, action, properties,
     async execute(args) {
       const target = typeof args?.target === 'string' ? args.target.trim() : '';
       const denied = checkConfirm(args?.confirm, target, { repoBound });
-      if (denied !== null) {
-        return failure(action, denied, denied === TOOL_REASONS.MISSING_TARGET
-          ? '缺少 target，无法核对写入对象'
-          : `confirm 与写入目标不一致：target=${target || '(空)'}`);
-      }
+      if (denied !== null) return failure(action, denied, confirmDetail(denied, target));
       try {
         const missing = run.missing(args);
         if (missing !== null) return failure(action, TOOL_REASONS.MISSING_ARGUMENT, `缺少参数 ${missing}`);
@@ -220,7 +235,7 @@ function issueWriteTool(service) {
       'up before creation and re-read afterwards; a mismatch is reported as unknown, never replayed.',
     properties: {
       op: { type: 'string', enum: ['create', 'comment'], description: 'create=新建 Issue，comment=追加评论' },
-      target: { type: 'string', description: '仓库（create）或 Issue 引用（comment），例如 group/repo#123' },
+      target: { type: 'string', description: '仓库（create）或 Issue 引用（comment），例如 group/repo#123 或 org/group/repo#123' },
       title: { type: 'string', description: 'create 必填：Issue 标题' },
       body: { type: 'string', description: '正文（Markdown）' },
     },
@@ -252,7 +267,7 @@ function prWriteTool(service) {
       'closing and releasing are not available: those commands do not exist in this plugin.',
     properties: {
       op: { type: 'string', enum: ['create', 'comment'], description: 'create=新建 PR，comment=追加审查评论' },
-      target: { type: 'string', description: '仓库（create）或 PR 引用（comment），例如 group/repo!456' },
+      target: { type: 'string', description: '仓库（create）或 PR 引用（comment），例如 group/repo!456 或 org/group/repo!456' },
       head: { type: 'string', description: 'create 必填：源分支' },
       base: { type: 'string', description: 'create 必填：目标分支' },
       title: { type: 'string', description: 'create 必填：PR 标题' },

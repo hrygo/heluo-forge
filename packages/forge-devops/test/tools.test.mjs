@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { READ_ACTIONS, READ_REASONS } from '../src/read.mjs';
-import { FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS, buildDevopsTools } from '../src/tools.mjs';
+import { FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS, TOOL_REASONS, buildDevopsTools } from '../src/tools.mjs';
 import { apply, FLOW_KEY, READER_KEY, SERVICE_KEY } from '../src/index.mjs';
 
 /**
@@ -132,6 +132,107 @@ test('写工具：confirm 缺失或不一致时 denied，且零下游调用', as
     assert.equal(payload.next_action, 'confirm-object');
   }
   assert.deepEqual(calls, [], '确认不一致时不得发生任何平台调用');
+});
+
+test('写工具：三段仓库按整串核对，目标原样交下去（缺陷②）', async () => {
+  const { service, calls } = fakeService();
+  const tools = buildDevopsTools(service);
+  const issue = byName(tools, 'forge_devops_issue_write');
+
+  const commented = parse(
+    await issue.execute({
+      op: 'comment',
+      target: 'acme/group/demo#12',
+      body: '审查意见',
+      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo#12' },
+    }),
+  );
+  assert.equal(commented.ok, true, 'org/group/repo#12 必须进入后续核对，而不是恒 MISSING_TARGET');
+  assert.equal(calls[0].args.target, 'acme/group/demo#12', '命令面一字不改：三段不折叠成两段');
+
+  const created = parse(
+    await issue.execute({
+      op: 'create',
+      target: 'acme/group/demo',
+      title: '[ARD123456] 实现',
+      body: '正文',
+      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo' },
+    }),
+  );
+  assert.equal(created.ok, true, 'create 的纯三段仓库同样可确认');
+  assert.equal(calls[1].args.target, 'acme/group/demo');
+
+  const pr = parse(
+    await byName(tools, 'forge_devops_pr_write').execute({
+      op: 'comment',
+      target: 'acme/group/demo!7',
+      body: '审查记录',
+      commit: 'abc1234',
+      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo!7' },
+    }),
+  );
+  assert.equal(pr.ok, true, '! 形式的三段目标同样可确认');
+  assert.equal(calls.at(-1).args.target, 'acme/group/demo!7');
+});
+
+test('写工具：三段折成两段仍被拒——不把 org/group/repo 与 group/repo 判成同一仓库', async () => {
+  const { service, calls } = fakeService();
+  const issue = byName(buildDevopsTools(service), 'forge_devops_issue_write');
+  const cases = [
+    { target: 'acme/group/demo#12', repo: 'group/demo' },
+    { target: 'group/demo#12', repo: 'acme/group/demo' },
+    { target: 'acme/group/demo#12', repo: 'acme/group' },
+  ];
+  for (const { target, repo } of cases) {
+    const payload = parse(await issue.execute({ op: 'comment', target, body: 'x', confirm: { repo, object: target } }));
+    assert.equal(payload.ok, false, `confirm.repo=${repo} 对 target=${target} 必须被拒`);
+    assert.equal(payload.reason, TOOL_REASONS.CONFIRMATION_REQUIRED);
+    assert.equal(payload.next_action, 'confirm-object');
+    assert.match(payload.detail, /不一致/u);
+  }
+  assert.deepEqual(calls, [], '仓库不一致时不得发生任何平台调用');
+});
+
+test('写工具：取不到仓库的目标 MISSING_TARGET 且零下游调用', async () => {
+  const { service, calls } = fakeService();
+  const issue = byName(buildDevopsTools(service), 'forge_devops_issue_write');
+  const targets = [
+    'acme', // 1 段
+    '-bad/x', // 段首连字符（旧 actions 正则曾放行）
+    'acme/demo/x/y#1', // 4 段
+    'acme /demo#1', // 段内含空格
+    'https://gitee.com/acme/demo/issues/1', // 链接不是写工具的目标形态
+    'acme/demo#abc', // 编号非数字
+  ];
+  for (const target of targets) {
+    const payload = parse(
+      await issue.execute({ op: 'comment', target, body: 'x', confirm: { repo: 'acme/demo', object: target } }),
+    );
+    assert.equal(payload.ok, false, `target=${target} 必须被拒`);
+    assert.equal(payload.reason, TOOL_REASONS.MISSING_TARGET);
+    assert.equal(payload.next_action, 'give-a-target');
+    assert.match(payload.detail, /不是可核对的仓库引用/u, '要能区分"没给 target"与"给了但取不出仓库"');
+  }
+  assert.deepEqual(calls, [], '取不到仓库时不得发生任何平台调用');
+
+  const empty = parse(
+    await issue.execute({ op: 'comment', target: '', body: 'x', confirm: { repo: 'acme/demo', object: '' } }),
+  );
+  assert.equal(empty.ok, false);
+  assert.equal(empty.reason, TOOL_REASONS.MISSING_TARGET);
+  assert.match(empty.detail, /缺少 target/u);
+});
+
+test('门禁侧复用仓库引用单点：tools.mjs 不再自写仓库正则，confirm.repo 写明完整路径', () => {
+  const source = readFileSync(new URL('../src/tools.mjs', import.meta.url), 'utf8');
+  assert.match(source, /import \{ repoOfTarget \} from '\.\/repo-ref\.mjs';/u);
+  assert.match(source, /repoOfTarget\(/u);
+  assert.doesNotMatch(source, /function repoOf\(/u, '本地 repoOf 必须删除，否则判词会与 repo-ref 漂移');
+  assert.doesNotMatch(source, /\[A-Za-z0-9_.-\]/u, '不得再内联仓库段正则（单点在 repo-ref.mjs）');
+
+  const issue = byName(buildDevopsTools(fakeService().service), 'forge_devops_issue_write');
+  const repoParam = issue.parameters.properties.confirm.properties.repo;
+  assert.match(repoParam.description, /完整路径/u, '参数上要写明 repo 是完整 2 或 3 段路径');
 });
 
 test('写工具：确认一致才交下去，平台四状态原样透出', async () => {
@@ -440,4 +541,33 @@ test('装配：产物落盘要先用入口绑定变更号，写出后路径与�
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('端到端：三段仓库的写动作经工具→服务→流程走到 done，target 与台账一字不改', async () => {
+  const seen = [];
+  const flow = {
+    // `startFromChange` 是宿主判定"这是流程协作者"的形状判据（isFlowLike），缺了会自建组合根。
+    startFromChange: async () => ({ ok: true, text: '## 上下文卡' }),
+    issueWrite: async (input) => {
+      seen.push(input);
+      return { status: 'done', idempotencyKey: 'k-3seg', object: 'issue#12' };
+    },
+  };
+  const { registered, service } = mountIndex({ flow });
+  const payload = parse(
+    await registered.get('forge_devops_issue_write').execute({
+      op: 'comment',
+      target: 'acme/group/demo#12',
+      body: '审查意见',
+      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo#12' },
+    }),
+  );
+  assert.equal(payload.ok, true, '三段目标必须能走完写路径（旧正则下这里恒 MISSING_TARGET）');
+  assert.equal(payload.result.status, 'done');
+  assert.equal(seen[0].target, 'acme/group/demo#12', '承建/平台侧收到的是原样三段引用');
+  assert.deepEqual(
+    service.ledger().map(({ action, target, status }) => ({ action, target, status })),
+    [{ action: FLOW_ACTIONS.ISSUE, target: 'acme/group/demo#12', status: 'done' }],
+    '台账记录终态 done，且目标未被折叠',
+  );
 });
