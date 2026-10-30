@@ -120,7 +120,7 @@ test('分发内容就是产物内容：源码、补丁层与 README，无测试�
   });
 });
 
-test('产物入口与工作区逐字节一致，缺失或被改动都能被测出来（AC-5）', () => {
+test('产物入口与工作区逐字节一致，缺失或被改动都能被测出来（AC-5）；补丁层随包分发且含只读判定（AC-11）', () => {
   withTemp('gitee-artifact-', (dir) => {
     const built = buildBundle({ root, entry: '@heluo/forge-gitee', destination: dir });
     const artifact = readTarball(built.tarball);
@@ -134,6 +134,41 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
     );
     assert.equal(artifact.has('package/lib/index.mjs'), false, '不得有编译产物');
     assert.equal(artifact.has('package/dist/index.mjs'), false, '不得有编译产物');
+
+    // AC-11：权限事实（补丁层）是交付物的一部分——它必须真的进包、与工作区逐字节一致，
+    // 且目录按 kind 分类为「3 读 + 1 只读判定」、写动作一条都不登记。只在源码断言会漏掉
+    // `files` 白名单或打包遗漏：那种情况下用户装到的包与通过用例的树是两个东西。
+    const patchPath = 'package/cordis.patch.yml';
+    assert.ok(artifact.has(patchPath), '产物里必须有补丁层（依赖它挂载策略与工具面）');
+    const patchBytes = artifact.get(patchPath);
+    assert.equal(
+      sha256(patchBytes),
+      sha256(readFileSync(join(packageDir, 'cordis.patch.yml'))),
+      '产物补丁层必须与工作区逐字节一致（无构建期改写）',
+    );
+    // 目录行用「行首 - { action:」定位：文件头注释里也提到动作名，按行取行才不会把散文当目录。
+    const catalogRows = patchBytes
+      .toString('utf8')
+      .split('\n')
+      .filter((line) => /^\s*-\s*\{\s*action:/u.test(line));
+    assert.equal(catalogRows.length, 4, `补丁层目录应为 4 条（3 读 + 1 只读判定），实为 ${catalogRows.length} 条`);
+    const judgeRow = catalogRows.find((row) => row.includes("'gitee.delivery.judge'"));
+    assert.ok(judgeRow, '产物补丁层必须含 gitee.delivery.judge 目录（判定随包默认登记）');
+    assert.match(judgeRow, /kind:\s*'read'/u, '判定必须是只读能力（不建审批台账）');
+    assert.match(judgeRow, /target:\s*'change'/u, '判定 target 必须逐字为 change');
+    assert.match(judgeRow, /enabled:\s*true/u, '判定必须随包默认启用');
+    assert.match(
+      judgeRow,
+      /egress:\s*'allow'/u,
+      "判定必须显式 egress: 'allow'；缺席时编译成默认 confirm，判定永远拿不到放行",
+    );
+    for (const action of ['gitee.issue.write', 'gitee.pr.write', 'gitee.review.publish', 'gitee.review.record']) {
+      assert.equal(
+        catalogRows.some((row) => row.includes(`'${action}'`)),
+        false,
+        `补丁层不得登记写动作 ${action}（默认 denied 靠不登记实现，而不是运行时开关）`,
+      );
+    }
 
     // 反向：拷一份产物改一个字节，摘要必须变——否则上面的断言与"读出来的字节"无关。
     const copy = join(dir, 'tampered.tgz');

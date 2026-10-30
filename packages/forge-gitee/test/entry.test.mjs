@@ -2,7 +2,7 @@
  * 入口与装载面门禁：AC-1 / AC-4 / AC-6 / AC-7（静态半）。
  *
  * 这一组用例回答的是"分发出去的那份东西能不能被宿主认出来"：清单（入口名、分发白名单、
- * engines、补丁指针）、补丁层（3 条只读 + 0 条写 + 显式审计 + 显式 config）、以及
+ * engines、补丁指针）、补丁层（4 条目录：3 读 + 1 只读判定 + 0 条写 + 显式审计 + 显式 config）、以及
  * **装载安全**（模块顶层不碰宿主、不碰子进程；缺能力时 `apply` 抛可读错误而不是未捕获异常）。
  *
  * 断言尽量落在"文件里真实写了什么"上：AC-1 要求 `insert` 行的 name 精确等于包根名，
@@ -243,18 +243,26 @@ test('AC-1/AC-7: 真实补丁层可装配——8 个工具按固定顺序注册�
   assert.equal(typeof mounted.teardown, 'function');
 });
 
+// r7：目录从 3 条变 4 条（多出只读判定 `gitee.delivery.judge`），但"写动作 = 不登记"不变——
+// 所以 `kind === 'write'` 的断言原样保留，新增的只是第 4 条的取值（kind/target/egress/enabled）。
 test('AC-7: 补丁层自带目录与审计，0 条写；插件行不重复 heluo-policy', async () => {
   const rows = await readPatch(PATCH_FILE);
   const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
   assert.ok(policyRow !== undefined);
   const catalog = policyRow.catalog;
-  assert.equal(catalog.length, 3, '目录恰好 3 条只读');
+  assert.equal(catalog.length, 4, '目录恰好 4 条：3 条只读 + 1 条只读判定');
   for (const entry of catalog) {
     assert.ok(entry.action.startsWith('gitee.'), `目录动作必须落在 gitee.* 命名空间：${entry.action}`);
     assert.equal(entry.kind, 'read');
     assert.equal(entry.enabled, true);
   }
-  assert.deepEqual(catalog.map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
+  assert.deepEqual(catalog.slice(0, 3).map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
+  // 第 4 条：判定的取值本身就是策略事实，逐项写死而不是"包含 judge 即可"。
+  assert.deepEqual(
+    catalog[3],
+    { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' },
+    "判定目录必须逐字：kind=read、target=change、egress=allow（缺省 egress 会取 'confirm'，判定就拿不到 allow）",
+  );
   assert.equal(catalog.filter((entry) => entry.kind === 'write').length, 0, '默认禁用写动作 = 不登记');
 
   assert.equal(policyRow.audit.sink, 'memory');
@@ -264,9 +272,14 @@ test('AC-7: 补丁层自带目录与审计，0 条写；插件行不重复 heluo
   const host = createFakeHost();
   const mountedPolicy = host.mountPolicy({ catalog, audit: policyRow.audit });
   assert.equal(mountedPolicy.ok, true);
-  for (const action of GITEE_READ_ACTIONS) {
+  for (const action of [...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
     assert.equal(mountedPolicy.policy.catalog.get(action)?.enabled, true);
   }
+  assert.equal(
+    mountedPolicy.policy.catalog.get('gitee.delivery.judge')?.egress,
+    'allow',
+    '编译后的判定条目必须保留 egress=allow（否则运行期会退化成 egress-confirm）',
+  );
 
   // 补丁层自己不得重复插入策略行（叠加安装才会出现两个 heluo-policy）。
   const ids = rows.map((row) => row.id);

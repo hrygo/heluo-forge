@@ -37,6 +37,8 @@
 
 一个**独立安装单元**：`@heluo/forge-gitee` 自带 `package.json` + `cordis.patch.yml` + 构建期闭包，往宿主注入 8 个 `forge_gitee_*` 工具（3 读 + 5 写），写动作默认不登记、不执行，全程单出口 `execFile`。
 
+> r7 修订：原文结论为「3 读 + 5 写」；现为「3 读 + 1 只读判定 + 4 受控写」——8 个工具名与顺序不变，`gitee.delivery.judge` 随包登记为只读判定（kind: read、target 逐字 change、egress: allow），4 个写仍默认不登记、不执行。
+
 ## 2. 用户故事与验收要点
 
 ### US-1 作为研发/审查者，我要在企业 Gitee 仓库上查到真实事实
@@ -95,7 +97,7 @@ token 只从环境注入、输出零回显；所有子进程经唯一 `execFile`
 | AC-4 | `src/` 对 `@deepseek-ai/*` 与 `react` 的 import 数 = 0（宿主能力经 ctx 注入）；`dependencies` 仅 `@heluo/forge-policy`；若引入宿主包，只允许出现在 `peerDependencies` 且每项在 `peerDependenciesMeta` 标 `optional` | P0 | `grep -rn "@deepseek-ai/\|from 'react'" packages/forge-gitee/src` 计数为 0 + 清单断言 |
 | AC-5 | 包内无 `lib/`、`dist/` 或其他生成目录；安装单元内 `package/src/index.mjs` 的 sha256 与工作区同名文件逐字节一致；`main`/`exports` 指向的文件在产物中全部存在 | P0 | 解包后 `shasum -a 256` 双向比对；产物文件清单核对 |
 | AC-6 | `node --input-type=module -e "await import('./packages/forge-gitee/src/index.mjs')"` 退出码 0；模块顶层不访问未注入的 `ctx.settings`/`ctx.tools`、不发起子进程与网络；`apply()` 遇缺能力返回可读错误（`POLICY_HOST_UNAVAILABLE` 语义）而非顶层未捕获异常 | P0 | 命令退出码 + 用例：import 后断言无副作用、且不依赖宿主 |
-| AC-7 | `cordis.patch.yml` 自带非空 `config.catalog`：3 条只读 `gitee.repository.read` / `gitee.issue.read` / `gitee.pr.read`（`kind: read`、`enabled: true`），**0 条 write**；显式 `config.audit`（`sink: memory`、`allowNonDurable: true`）；插件 entry 带显式 `config: {}`；离线 `compileCatalog` 后 3 条可用；catalog 为空时工具必须 `denied` 而非静默放行 | P0 | 解析补丁 + 直接调 `compileCatalog` 断言条数与 kind；空 catalog 反向用例 |
+| AC-7 | `cordis.patch.yml` 自带非空 `config.catalog`：3 条只读 `gitee.repository.read` / `gitee.issue.read` / `gitee.pr.read`（`kind: read`、`enabled: true`），**0 条 write**；显式 `config.audit`（`sink: memory`、`allowNonDurable: true`）；插件 entry 带显式 `config: {}`；离线 `compileCatalog` 后 3 条可用；catalog 为空时工具必须 `denied` 而非静默放行 | P0 | 解析补丁 + 直接调 `compileCatalog` 断言条数与 kind；空 catalog 反向用例<br>r7 修订：原文结论为「3 条只读、compileCatalog 后 3 条可用」；现为 4 条（3 读 + 1 只读判定，kind: read、target 逐字 change、egress: allow），0 条 write 与「空 catalog 即 denied」不变。 |
 | AC-8 | 由**主 agent** 在探测到的 profile 目录（`$DSH_HOME/profiles/web`）执行 §10.3 安装；装后 profile `dependencies` 出现 `@heluo/forge-gitee`、`dsh.profile.bundles` 含包名；证据写明 dsh 版本（本机 0.2.1-rc.2，仓库目标 0.2.1-rc.3）、命令与时间 | P0 | 读 profile 清单 + 安装日志（不写死路径以外的东西；探测失败则问用户） |
 | AC-9 | 重启宿主后，启动日志/插件列表出现 `@heluo/forge-gitee`，其工具在工具列表中可枚举；不出现"无 client 声明而静默跳过"；仅有源码或 tarball 不算 | P0 | 加载后的工具列表证据（日志行/截图），与 dsh 版本同框 |
 | AC-10 | 安装前已在 §10.3 写明卸载步骤（`dsh plugin --profile web remove @heluo/forge-gitee` + 从 `dsh.profile.bundles` 摘除 + 恢复 profile 清单）；装后任一验证项失败即执行卸载，并**回读** profile 清单确认已移除；包名从产物 `package.json` 读取，不写死 | P0 | 卸载前后 profile 清单 diff（或"未触发回滚"的显式记录 + 步骤可用性核对） |
@@ -105,7 +107,7 @@ token 只从环境注入、输出零回显；所有子进程经唯一 `execFile`
 | AC-14 | 只读子命令为固定枚举 `repo view\|list`、`issue view\|list`、`pr view\|list`；每项只接受声明过的 `--json` 字段子集与有限参数（`--repo`/`-R`、`--state`、`--limit`，`--limit` 有固化上限）；`--web`、`--template`、任意 `-f/--raw-field` 透传、命令行字符串或 argv 数组入参一律拒绝且零子进程 | P0 | 表驱动单测：合法参数放行、越界参数断言 0 次 runner 调用 |
 | AC-15 | 信封含 `status` / `source_revision` / `observed_at` / `provider` / `result_refs`；取不到版本置 `null` 并降级 `unknown`；失败 reason 为固定枚举（CLI 未找到 / 主机非企业 / 输出非 JSON / 令牌缺失 / 退出码非 0 / 输出截断）；只读失败不重试、不触发任何写 | P0 | 桩 CLI 注入六种失败，断言 reason 且写通道 0 调用 |
 | AC-16 | 写工具返回 `done\|failed\|denied\|unknown`；`done` 仅等于"命令成功 + 回读一致"；幂等键 = `sha256(变更号\|对象类型\|归一化标题)` 前 16 位，执行前查同名 open 对象，命中即 `reused: true` 且 0 次创建；`unknown` 不自动重放 | P0 | 桩测试：回读不一致→`unknown`；同名已存在→`reused` 且 0 次创建；再次调用断言不重放 |
-| AC-17 | 默认补丁层 catalog 不含任何写动作；此时 5 个写工具逐个返回 `denied` + `rule`，且适配器与 `execFile` 出口**均为 0 次调用**；退出码 0 不算成功；无"空成功"返回 | P0 | 负测：五写工具逐个断言 `denied` + 桩 0 调用 + 返回体无 `done` |
+| AC-17 | 默认补丁层 catalog 不含任何写动作；此时 5 个写工具逐个返回 `denied` + `rule`，且适配器与 `execFile` 出口**均为 0 次调用**；退出码 0 不算成功；无"空成功"返回 | P0 | 负测：五写工具逐个断言 `denied` + 桩 0 调用 + 返回体无 `done`<br>r7 修订：原文结论为「5 个写工具逐个 denied」；现为 4 个受控写（issue_write / pr_write / review_publish / review_record）逐个 denied 且 0 调用，delivery_gate 是只读判定、默认登记可用。 |
 | AC-18 | 提交信息校验：首行须 `[<本变更号>] ` + 非空描述，违规拒绝并返回期望格式与 reason（缺变更号 / 缺描述 / 前缀缺失）；不改写 message；只读取"分支—提交—PR"关联（PR 的 head/base 与 commit sha），**不执行 git 写** | P0 | 纯函数单测（三类 reason + 正例）+ 关闭条件联动用例 |
 | AC-19 | `review.md` 含问题/风险/意见/结论四段 + AI 意见栏 + **实际模型名**（更强档；降级须明示）+ commit sha；AI 意见与人工确认分栏不混写；正文不含 token、内网地址与本机绝对路径 | P0 | 夹具生成后断言四段、模型名、sha、分栏；脱敏正则零命中 |
 | AC-20 | 人工确认栏只能由显式人工输入写入，模型自填路径必须拒绝；commit sha 变化后旧确认标 `stale`，且 `stale` 不得作为通过依据；平台侧发布（PR 评论）走门禁，默认禁用 | P0 | 单测：sha 变更前后断言 `stale`；模型自填断言拒绝；默认禁用断言 `denied` |
@@ -123,6 +125,7 @@ token 只从环境注入、输出零回显；所有子进程经唯一 `execFile`
 2. **工具面 8 个**（命名与 devops 对齐，provider 前缀 `forge_gitee_`）：
    - 读：`forge_gitee_repository_read`、`forge_gitee_issue_read`、`forge_gitee_pr_read`
    - 写（默认禁用）：`forge_gitee_issue_write`（创建/评论）、`forge_gitee_pr_write`（建 PR：head/base；评论）、`forge_gitee_review_publish`（AI 意见发布/评论；受门禁）、`forge_gitee_review_record`（本地 `review.md` 记录）、`forge_gitee_delivery_gate`（提交信息校验 + 关闭条件判定，只读）
+   > r7 修订：原文把 5 个工具归为「写（默认禁用）」；现为 4 个受控写（issue_write / pr_write / review_publish / review_record）仍默认禁用，`forge_gitee_delivery_gate` 是只读判定、随包登记且默认可用。
 3. **provider 分流**：独立 `src/gitee-adapter.mjs`（`GITEE_*` 字段表/参数表）、策略 action 前缀 `gitee.`、信封与审计带 `provider`。
 4. **受控写语义**：四状态、幂等键与复用、回读确认、`unknown` 不重放、禁项。
 5. **审查与交付**：`review.md`（AI/人工分栏 + 模型名 + sha + stale）、提交信息前缀校验、关闭条件判定。

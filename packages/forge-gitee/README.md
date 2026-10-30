@@ -4,8 +4,8 @@
 
 | 项 | 内容 |
 |---|---|
-| 形态 | 独立单安装单元：`cordis.patch.yml` + Node ESM 源码，往宿主注入 8 个 `forge_gitee_*` 工具（3 读 + 5 受控写） |
-| 职责 | `gitee.*` 只读查询（仓库 / Issue / PR）、受控写（Issue、PR、审查发布与记录、交付判定）、审查 `review.md` 与关闭条件判定 |
+| 形态 | 独立单安装单元：`cordis.patch.yml` + Node ESM 源码，往宿主注入 8 个 `forge_gitee_*` 工具（3 读 + 1 只读判定 + 4 受控写） |
+| 职责 | `gitee.*` 只读查询（仓库 / Issue / PR）、只读交付判定、受控写（Issue、PR、审查发布与记录）、审查 `review.md` 与关闭条件判定 |
 | 不负责 | 不重写 Gitee API，不自建 MCP，不做 arm64 交叉编译，不执行 `git` 动作、不合并/关闭/发版，不把个人凭据写入仓库或模型上下文 |
 | 衔接点 | `tools` + `policy` 两个注入服务；策略目录与审计由 `@heluo/forge-policy` 提供；唯一子进程出口 `src/gitee-cli.mjs` |
 | 详细设计 | [DESIGN-010](../../docs/design/plugins/forge-gitee.md) |
@@ -17,11 +17,11 @@
 
 ```sh
 # 1. 构建安装单元（构建期把 workspace: 依赖闭包成真版本，产物自带策略包）
-node --input-type=module -e "import('./scripts/build-enterprise-bundle.mjs').then(m=>m.buildBundle({entry:'@heluo/forge-gitee',destination:'dist/r4'}))"
-# → dist/r4/heluo-forge-gitee-0.1.0.tgz
+node --input-type=module -e "import('./scripts/build-enterprise-bundle.mjs').then(m=>m.buildBundle({entry:'@heluo/forge-gitee',destination:'dist/r7'}))"
+# → dist/r7/heluo-forge-gitee-0.1.0.tgz
 
 # 2. 装进 profile（tarball 自带包内补丁层，宿主按 dsh.bundle.patch 自动挂载策略行 + 插件行）
-dsh plugin --profile web add dist/r4/heluo-forge-gitee-0.1.0.tgz
+dsh plugin --profile web add dist/r7/heluo-forge-gitee-0.1.0.tgz
 
 # 3. 复核补丁层是否进了组合树（应看到 heluo-policy-gitee 与 heluo-gitee 两行，策略在前）
 dsh --profile web --dump-config | grep -A2 "id: heluo-"
@@ -53,21 +53,23 @@ dsh --profile web --dump-config | grep -A2 "id: heluo-"
 | `forge_gitee_pr_write` | `op`(create\|comment)、`target`、`changeId`、`body`、`confirm` | `gitee.pr.write` | `denied`（未登记） |
 | `forge_gitee_review_publish` | `target`、`changeId`、`commit`、`body`、`confirm` | `gitee.review.publish` | `denied`（未登记） |
 | `forge_gitee_review_record` | `repoRoot`、`changeId`、`commit`、`model`、`opinion`、`conclusion` | `gitee.review.record` | `denied`（未登记） |
-| `forge_gitee_delivery_gate` | `changeId`、`message`、`criteria` | `gitee.delivery.judge` | `denied`（未登记） |
+| `forge_gitee_delivery_gate` | `changeId`、`message`、`criteria` | `gitee.delivery.judge` | 放行（补丁层已登记为只读判定：`kind: read`、`target: change`、`egress: allow`） |
+
+8 个工具按能力分三类：**3 读 + 1 只读判定 + 4 受控写**。判定与写的区别是结构性的，不是放行程度不同：判定只读仓库/提交状态并比对提交信息与关闭四条件，不产生远端写，返回体 `executed` 恒为 `false`、`remote_calls` 恒为 `0`；四个写各有 `done`/`failed`/`denied`/`unknown` 四状态与幂等台账。工具名与注册顺序不因放行策略变化（判定恒在最后一位）。
 
 没有 `run`/`exec`/`shell`/`api` 这类泛化入口：动作是具名枚举，表里拼不出的动词在包里不存在（`pr merge`、`pr close`、`issue close`、`release`、`workflow`、`api`、`auth`、`config`、`gist` 属禁项，出现即拒绝且零子进程）。
 
 结果契约：
 
 - **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。
-- **写**：四状态 `done`/`failed`/`denied`/`unknown`。`done` 必须"CLI 成功 + 回读一致"；退出码 0 单凭算 `unknown`。写前有幂等台账（`sha256(changeId|objectType|title)` 前 16 位，进程内 6 小时），命中返回 `reused` 且远端 0 次调用；失败不重放。
+- **写**：四状态 `done`/`failed`/`denied`/`unknown`。`done` 必须"CLI 成功 + 回读一致"；退出码 0 单凭算 `unknown`。写前有幂等台账（`sha256(changeId|objectType|title)` 前 16 位，进程内 6 小时），命中返回 `reused` 且远端 0 次调用；失败不重放。四个写的返回体**不出现 `executed` 键**（该键只由判定体的 `produced` 声明产生，写动作返回体一个键都不多）。
 - **审查**：`review.md` 四段（问题 / 风险 / 意见 / 结论）+ AI 与人工两栏物理分节；人工栏只能由 `recordHumanConfirmation` 写，模型自填即拒；`stale` 是派生结果不落盘。
-- **交付**：只判定不执行——`[变更号]` 提交信息前缀、关闭四条件（验收、已合入、无未完成交付、针对当前 commit 的人工确认），`unknown` 不计入通过；包里没有 close/merge 入口。
+- **交付判定**：只判定不执行——`[变更号]` 提交信息前缀、关闭四条件（验收、已合入、无未完成交付、针对当前 commit 的人工确认），`unknown` 不计入通过；返回体带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口。
 
 ## 策略门禁与凭据
 
-- 策略是硬依赖：`policy` 服务缺失、或三个 `gitee.*` 只读动作未登记/未启用，`apply()` 直接抛可读错误（`GITEE_POLICY_UNAVAILABLE` / `GITEE_ACTION_UNREGISTERED`，`missing` 列全），**不降级成"无策略只读"**。
-- 补丁层预置 3 条 `kind: read` 目录、**0 条 write**：五个受控动作靠"不登记"实现默认禁用，而不是运行期开关；要开写须由所属 profile 显式追加动作（写/确认类还需审批台账条目）。
+- 策略是硬依赖：`policy` 服务缺失、或三个 `gitee.*` 只读动作未登记/未启用，`apply()` 直接抛可读错误（`GITEE_POLICY_UNAVAILABLE` / `GITEE_ACTION_UNREGISTERED`，`missing` 列全），**不降级成"无策略只读"**。判定不在这一断言内：缺 `gitee.delivery.judge` 时挂载照常成功，只有该工具降级为 `denied`（读动作的 fail-closed 不因判定放宽）。
+- 补丁层预置 **4 条 `kind: read` 目录（3 读 + 1 只读判定）、0 条 write**：`gitee.delivery.judge` 随包登记，`target` 逐字 `change`，`egress: 'allow'` 是**必需项**而非风格——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 会被编译成默认 `confirm`，无审批台账时判定永远拿不到 `done`。四个受控写（`gitee.issue.write`/`gitee.pr.write`/`gitee.review.publish`/`gitee.review.record`）靠"不登记"实现默认禁用，而不是运行期开关；要开写须由所属 profile 显式追加动作（写/确认类还需审批台账条目）。
 - 审计舱用内存 sink（`allowNonDurable: true`），属**联调/试点级**证据，记录随进程退出丢失；生产须注入持久 sink 并去掉该开关。
 - 凭据只在环境变量里：CLI 配置目录存在持久令牌时安全阻断（`GITEE_PERSISTENT_TOKEN`，`denied`，零子进程）；子进程环境走白名单，输出按令牌值脱敏后再返回。
 - 唯一的子进程出口是 `src/gitee-cli.mjs`：`execFile` + `shell: false` + 超时 + 单流 1 MiB 上限；入参只接受 `{bin, args, purpose}` 三键，没有"把整条命令当字符串"的通道。
@@ -78,7 +80,7 @@ dsh --profile web --dump-config | grep -A2 "id: heluo-"
 |---|---|---|
 | 只装一个（GitHub 面或 Gitee 面） | 各自带自己的策略目录，互不干扰 | **推荐**；`prd` T4 的"按 provider 分流"就是这一形态 |
 | 同 profile **叠加两个补丁层**（各装各的） | 本包的策略行 id 是 `heluo-policy-gitee`、两行都声明 `isolate: { policy: gitee }`：Gitee 的策略实例落在**自己的服务域**，GitHub 那条留在 root 域，两个插件各自看得见自己的目录，**不用改任何配置** | **默认可行**：`dsh plugin add` 两个 tgz 即可，17 个工具全枚举、0 行激活失败 |
-| 同 profile **并层**（唯一一条策略行） | 把本包 3 条 `gitee.*` 目录并入既有 `heluo-policy` 行的 `config.catalog`，并**删掉本包插件行的 `isolate`**（插件改从同一实例取目录） | 想统一审计出口时用；改完仍是 7 条目录 / 17 个工具 |
+| 同 profile **并层**（唯一一条策略行） | 把本包 4 条 `gitee.*` 目录（3 读 + 1 只读判定）并入既有 `heluo-policy` 行的 `config.catalog`，并**删掉本包插件行的 `isolate`**（插件改从同一实例取目录） | 想统一审计出口时用；改完是 8 条目录（devops 4 读 + 本包 3 读 + 1 判定）/ 17 个工具 |
 | 保留 `isolate` 但删掉本包策略行 | 插件在自己的服务域里找不到 `policy` → 挂载期 `GITEE_POLICY_UNAVAILABLE` fail closed（不会静默装上一个没有目录的空壳） | 不要这样装 |
 
 三种失败/成功形态都有离线用例（`test/coexistence.test.mjs`：A 单装、B 叠加、B- 去掉 `isolate` 的反证、C 并层），跨包的策略行 id 与 `isolate` 对齐由 `tests/plugin-patch-layers.test.mjs` 静态守住；真实 profile 的叠加由 `dsh plugin add` 两包实测。
@@ -89,7 +91,7 @@ dsh --profile web --dump-config | grep -A2 "id: heluo-"
 
 装之前先读这一节：卸载步骤不需要动本包源码。
 
-1. **停用写能力（不需要时）**：确认 profile 补丁层里 `heluo-policy-gitee` 的 `config.catalog` 只有 3 条 `kind: read`，没有 `gitee.*.write`/`gitee.review.*`/`gitee.delivery.judge`。
+1. **停用写能力（不需要时）**：确认 profile 补丁层里 `heluo-policy-gitee` 的 `config.catalog` 只有 4 条 `kind: read`（3 读 + 1 只读判定），没有 `gitee.*.write`/`gitee.review.*`。判定是只读能力、默认登记，**不需要也不应该**为了"停用写"把它删掉。
 2. **手工回滚配置**：在活动 profile 的补丁文件里删掉 `heluo-gitee` 条目的 `config:` 段（保留注释与其它条目原样），保存后重载 profile。
 3. **卸载**：`dsh plugin --profile web remove @heluo/forge-gitee`。
 4. **复核**：`dsh --profile web --dump-config | grep -A2 "id: heluo-gitee"` 应无输出、`grep -A2 "id: heluo-policy-gitee"` 应无输出（与 GitHub 面的 `heluo-policy` 无关）；8 个工具从工具面消失；`git status --short` 不新增文件（插件不写缓存或临时文件，`review.md` 只在被调用时写 `docs/teamflow/<变更号>/review.md`）。
@@ -100,9 +102,9 @@ dsh --profile web --dump-config | grep -A2 "id: heluo-"
 node --test "packages/forge-gitee/test/*.test.mjs"
 ```
 
-覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；空目录反向）、`coexistence.test.mjs`（单装 / 叠加服务域隔离 / 去掉 `isolate` 的反证冲突可见 / 并层全枚举）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：8 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（4 键校验、未知键拒绝、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、持久令牌阻断）、`adapter.test.mjs`（字段分表、禁用字段、argv/`--json` 白名单、禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封与四类降级）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、默认禁用五工具 `denied` 且 0 调用）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断、跨 provider 不覆盖）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致）与 `tests/plugin-patch-layers.test.mjs`（跨包策略行 id 不撞名、`isolate` 对齐）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过。
+覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；3 读 + 1 判定可用、4 写 denied；空目录反向）、`coexistence.test.mjs`（单装 / 叠加服务域隔离 / 去掉 `isolate` 的反证冲突可见 / 并层全枚举）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：8 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（4 键校验、未知键拒绝、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、持久令牌阻断）、`adapter.test.mjs`（字段分表、禁用字段、argv/`--json` 白名单、禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封与四类降级）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写默认 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断、跨 provider 不覆盖）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（跨包策略行 id 不撞名、`isolate` 对齐）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为判定并入目录前的实测；目录 3→4 后的条数与结果以本需求 QA 实测为准）。
 
-## 证据表（本轮，2026-10-29）
+## 证据表（r4 轮，2026-10-29）
 
 来源类型沿用 `buildEvidence()` 的词表：`none` = 未调用任何 CLI（纯离线），`policy-only` = 只经策略门禁未触达远端。宿主版本 `0.2.1-rc.2`；目标对象为**本仓库离线工程**，不含企业实例。
 

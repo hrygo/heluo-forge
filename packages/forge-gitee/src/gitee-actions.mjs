@@ -1,5 +1,5 @@
 /**
- * 三个平台写动作 + 两个受控判定动作的四状态机（AC-16 / AC-17）。
+ * 三个平台写动作 + 一个本地写 + 一个只读判定的四状态机（AC-3 / AC-16）。
  *
  * ## 状态机（每个写动作都走同一条，没有第二条路）
  *
@@ -15,8 +15,10 @@
  * 2. **`unknown` 不重放**。超时、非零退出、畸形输出、回读不一致都可能已经落地；台账记
  *    `unknown`，下次命中直接 `replay_blocked`，零子进程（重复建单比"没做成"更贵）。
  * 3. **`failed` 才是确定没生效**（preflight 拒绝、命令未启动），所以它可以重试，也不写台账。
- * 4. **默认禁用靠门禁**。五个动作在分发目录里不登记 → 门禁 `denied`（`unregistered-action`），
- *    本文件一行都不执行，适配器与 `execFile` 0 次调用（AC-17）。
+ * 4. **默认禁用靠门禁**。四个写动作在分发目录里不登记 → 门禁 `denied`（`unregistered-action`），
+ *    本文件一行都不执行，适配器与 `execFile` 0 次调用（AC-3）。判定是另一类：它随包默认登记为
+ *    只读（`kind: 'read'` + `egress: 'allow'`），开箱可用，但只判定不执行——信封里的 `executed`
+ *    恒 `false`、`remote_calls` 恒 `0`，没有关闭/合并/发布通道。
  *
  * ## 与 r1 的关系
  *
@@ -36,7 +38,11 @@ import { GITEE_COMMANDS, GITEE_PROVIDER } from './gitee-adapter.mjs';
 import { GUARD_REASONS } from './gitee-guard.mjs';
 import { REPLAY_BLOCKED_STATUSES, buildEvidence, idempotencyKey } from './gitee-session.mjs';
 
-/** 五个受控动作（名字即策略目录里的 `action`，也是审计里的一等公民）。 */
+/**
+ * 受控动作全集：**4 写 + 1 只读判定**（名字即策略目录里的 `action`，也是审计里的一等公民）。
+ * 判定之所以和写动作同表，只因为它共享同一套信封与门禁入口；权限事实相反（随包默认登记、
+ * 只判定不执行），调用方要按 `action` 区分，不能把 `DELIVERY_JUDGE` 当写动作对待。
+ */
 export const GITEE_ACTIONS = Object.freeze({
   ISSUE_WRITE: 'gitee.issue.write',
   PR_WRITE: 'gitee.pr.write',
@@ -83,7 +89,7 @@ export const ACTION_REASONS = Object.freeze({
   INTERNAL: 'INTERNAL',
 });
 
-/** 工具名（与 `gitee-tools.mjs` 的 `GITEE_WRITE_TOOLS` 同名同序，装配期由那张表校验）。 */
+/** 工具名：前 4 个与 `gitee-tools.mjs` 的 `GITEE_WRITE_TOOLS` 同名同序，末位对应 `GITEE_JUDGE_TOOLS`（装配期由那两张表校验）。 */
 const TOOL_NAMES = Object.freeze({
   ISSUE_WRITE: 'forge_gitee_issue_write',
   PR_WRITE: 'forge_gitee_pr_write',
@@ -151,6 +157,10 @@ function bodyDigest(body) {
  *
  * `evidence` 只在**真的执行过命令**或**从台账复用**时出现：被拒的动作没有证据，
  * 留一个 `null` 会被误读成"执行过但没证据"，所以被拒时这个字段根本不出现。
+ *
+ * `executed` 同理，但方向相反：它是"只判定不执行"的运行时证据，只有下游 produced
+ * 显式声明了才输出（当前仅 `gitee-delivery.judge` 声明 `executed: false`）。四个写动作的
+ * produced 没有这个键，所以写信封一个键都不多——新增字段不能借道扩散成写契约变更（AC-3）。
  */
 function actionResult({
   tool,
@@ -167,6 +177,7 @@ function actionResult({
   readback,
   evidence,
   remoteCalls = 0,
+  executed,
 } = {}) {
   return {
     ok: status === 'done',
@@ -185,6 +196,7 @@ function actionResult({
     readback,
     evidence,
     remote_calls: remoteCalls,
+    ...(executed === undefined ? {} : { executed }),
   };
 }
 
@@ -1070,6 +1082,9 @@ function createDeliveryGate() {
                         : null,
                   rule: !commitOk ? 'commit-message-invalid' : status === 'done' ? 'ready' : 'not-ready',
                   detail: commitDetail,
+                  // 只判定：把"没有执行任何远端动作"作为运行时事实声明出来（来源恒 false），
+                  // 信封层按"produced 声明才输出"透传，读写动作不会因此多键。
+                  executed: judged?.executed === true,
                   readback: {
                     via: 'gitee-delivery',
                     ok: status === 'done',
@@ -1155,6 +1170,8 @@ function settleVerdict(spec, verdict, { target, key }) {
     readback: produced.readback,
     evidence: produced.evidence,
     remoteCalls: produced.remote_calls ?? 0,
+    // 判定体的 `executed: false` 在这里过桥；写动作 produced 无此键 ⇒ undefined ⇒ 信封不出现该键。
+    executed: produced.executed,
   });
 }
 
@@ -1172,7 +1189,11 @@ const PARAMETERS = Object.freeze({
 });
 
 /**
- * 五个受控动作的模型可见定义（顺序与 `GITEE_WRITE_TOOLS` 一致）。
+ * 5 个受控工具的模型可见定义（4 写 + 1 只读判定；函数名沿用 `writeToolDefinitions` 以免契约漂移）。
+ *
+ * 顺序即注册顺序：前 4 个对应 `gitee-tools.mjs` 的 `GITEE_WRITE_TOOLS`，末位对应
+ * `GITEE_JUDGE_TOOLS`，合起来正好是 `GITEE_TOOLS` 的尾部 5 个。判定与写动作共用这个工厂，
+ * 是因为它们共享同一套定义形状校验，但权限事实不同：判定随包默认登记（只读），4 写默认 `denied`。
  *
  * 每个定义只有 `name` / `description` / `parameters` / `output` / `execute`：没有 argv、没有
  * 命令名、没有"重试上一次"这种入口。模型能表达的最坏输入，仍要过门禁的目录与确认两道门。
@@ -1277,7 +1298,7 @@ export function writeToolDefinitions(service) {
     {
       name: deliveryGate.tool,
       description:
-        '判定交付是否满足关闭条件（只判定，不关闭、不合并）：提交信息是否带 [变更号] + 关闭四项。有 unknown 项即返回 unknown（不计入通过）。',
+        '判定交付是否满足关闭条件（只判定，不关闭、不合并）：提交信息是否带 [变更号] + 关闭四项。随包默认登记、开箱可用（只读判定）；返回体 executed 恒为 false、remote_calls 恒为 0。有 unknown 项即返回 unknown（不计入通过）。',
       parameters: {
         type: 'object',
         properties: {
@@ -1286,7 +1307,8 @@ export function writeToolDefinitions(service) {
           message: { type: 'string', description: '提交信息（校验 [变更号] 前缀）' },
           criteria: {
             type: 'object',
-            description: '关闭四项：{ acceptance, merged, pendingDelivery, humanConfirmed }，取值 pass|fail|unknown',
+            description:
+              '关闭四项：{ acceptance, merged, pendingDelivery, humanConfirmed }。每项可写结论取值 pass|fail|unknown（四项通用，pendingDelivery 的 pass = 没有未完成交付），也可写对象事实：{ status: \'passed\'|\'failed\'|\'unknown\', evidence, sourceType }、pendingDelivery 的 { count }、humanConfirmed 的 { decision: \'confirmed\' }。缺项按 unknown（不计入通过）。',
             additionalProperties: true,
           },
         },

@@ -1,6 +1,7 @@
 # QA-REPORT · r4 `@heluo/forge-gitee`（企业 Gitee 研发闭环插件）· 复核轮（round-2）
 
 - 需求夹：`docs/teamflow/20261029-r4-forge-gitee/`；被测对象：新增独立包 `packages/forge-gitee`（3 读 + 5 受控写，25 条 AC）
+  > r7 修订：原文结论为「3 读 + 5 受控写」；现为「3 读 + 1 只读判定 + 4 受控写」，25 条 AC 与 8 个工具不变，判定随包登记为只读、4 个写仍 denied。
 - 本轮性质：**上轮 4 条缺陷的复核**（D-1 P0 / D-2 P1 声明已修，D-3 / D-4 声明未动），并补测上轮未覆盖的共存轴
 - 结论：**可验收**。无 P0/P1/P2 未闭；D-1 与 D-2 在**真实宿主**（真 CLI + 真 loader + 真 profile）上复核通过，未复现；余 3 条 P3 观察项见 §5，其中 D-4 涉及 AC-24「宿主版本」一项的口径缺口，需验收方在签收时明确是否接受 `null` 降级
 
@@ -21,7 +22,7 @@
 |---|---|---|---|
 | 1 | 包内单测 12 文件（入口/补丁层/共存/配置/CLI/适配器/只读/会话/动作/守卫/审查/交付/宿主契约） | `node --test "packages/forge-gitee/test/*.test.mjs"` | PASS 171/171，exit 0 |
 | 2 | 全仓门禁 | `pnpm check` | PASS 1391/1391，0 fail |
-| 3 | 主路径端到端（真子进程：preflight→3 读→越界零子进程→5 写暂扣→done/reused） | `node logs/.../qa-r4-mainpath.mjs` | PASS 42/42（`TERMINAL ok`） |
+| 3 | 主路径端到端（真子进程：preflight→3 读→越界零子进程→5 写暂扣→done/reused） | `node logs/.../qa-r4-mainpath.mjs` | PASS 42/42（`TERMINAL ok`）<br>r7 修订：原文口径为「5 写暂扣」；现为 4 个写动作暂扣 + 1 个只读判定（delivery_gate）默认可用，8 个工具不变。 |
 | 4 | 跨模块接口一致性（import 符号/成员/参数形状/蓝图 api） | `node logs/.../qa-r4-interface-consistency.mjs` | PASS 55/55（imports 30 / port 成员 15 / 工具 8） |
 | 5 | 交付形态 9 条静态面 + 凭据/文档纪律 | `node logs/.../qa-r4-shape.mjs` | PASS 23/23 |
 | 6 | 审查与交付判定主路径（AC-18/19/20/21） | `node logs/.../review-delivery-mainpath.mjs` | PASS 9/9 |
@@ -44,7 +45,7 @@
 | AC-8/9/10（真实 profile 装入、重启后加载、卸载回滚） | `qa-r4-install-load.sh`（隔离 DSH_HOME：add → boot → dump-config → remove → 回读清单） | 通过（工具枚举见 §7-2） |
 | AC-11/12/14/15（provider 分流、字段分表、命令枚举、信封五项） | `mainpath` 42/42（含越界参数零子进程、`MISSING_SOURCE_REVISION` 降级）+ `adapter/read` 用例 + `qa-r4-interface-consistency.mjs` | 通过 |
 | AC-13（双包共存不消失、冲突可见） | `qa-r4-coexist.sh`（正序/反序/回滚/0 激活失败）+ `coexistence.test.mjs` 四形态 | 通过 |
-| AC-16/17（写动作四状态、幂等、默认 denied 零调用） | `mainpath`（done→reused）+ `actions/session` 用例 + `patch-mount.test.mjs`（5 个写工具逐个 denied、门禁 0 次、反向标定） | 通过 |
+| AC-16/17（写动作四状态、幂等、默认 denied 零调用） | `mainpath`（done→reused）+ `actions/session` 用例 + `patch-mount.test.mjs`（5 个写工具逐个 denied、门禁 0 次、反向标定）<br>r7 修订：原文结论为「5 个写工具逐个 denied」；现为 4 个受控写仍 denied 且 0 调用，判定 delivery_gate 默认登记为只读（executed: false）。 | 通过 |
 | AC-18~AC-21（提交信息门禁、review.md 四段、人工确认、关闭条件） | `review-delivery-mainpath.mjs` 9/9 + `review/delivery` 用例 | 通过 |
 | AC-22（凭据纪律） | `tk2-config-cli-mainpath.mjs` 8/8（真实落盘令牌 → `denied`/0 子进程）+ `cli.test.mjs` | 通过 |
 | AC-23（唯一 execFile 出口） | `actions.test.mjs` 内静态不变量（`child_process`/`spawn`/`exec(` 零命中）+ `adapter.test.mjs` argv 白名单 | 通过 |
@@ -99,7 +100,7 @@
 | 2 | 真实 web profile 内**工具枚举** | `dsh plugin --profile web add <tgz>` 后重启宿主，在会话里确认 8 个 `forge_gitee_*` 工具可见 | 8 个工具可枚举且无静默跳过（`dsh` 无"列工具"子命令，本轮只能以启动日志 0 激活失败 + 真实 `register()` 判据为间接证据） |
 | 3 | 企业 Gitee CLI 联调 | 真实企业 `gh` 客户端 + `GITEE_TOKEN`：`repo/issue/pr` 的 `view\|list`、`--json` 字段实测（F1） | 字段表与实机一致或按可用子集收窄；鉴权失败给固定 reason 且不重试 |
 | 4 | 真实凭据持久化检测 | 在本机 `hosts.yml` 写入令牌后发起调用 | `denied` + 0 子进程（离线已验，需企业侧复核 `hosts.yml` 真实路径） |
-| 5 | 并层形态（唯一策略行）人工装配 | 按 README §共存 第三行把 3 条目录并入 `heluo-policy` 并删 `isolate` | 7 目录/17 工具，写动作仍 denied |
+| 5 | 并层形态（唯一策略行）人工装配 | 按 README §共存 第三行把 3 条目录并入 `heluo-policy` 并删 `isolate` | 7 目录/17 工具，写动作仍 denied<br>r7 修订：原文结论为「gitee 3 条目录并入、7 目录/17 工具」；现为 4 条目录并入（并层 8 条目录）、17 个工具不变，写动作仍 denied。 |
 
 ## 9. 结论
 

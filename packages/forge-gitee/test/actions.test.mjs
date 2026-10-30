@@ -1,10 +1,12 @@
 /**
- * 受控动作四状态机 + 门禁准入（AC-11 / AC-16 / AC-17）。
+ * 受控动作四状态机 + 门禁准入（AC-3 / AC-5 / AC-6 / AC-8 / AC-9 / AC-11 / AC-14 / AC-16）。
  *
  * 这个文件有三块职责，分别对应三件真会出事的事：
  *
- * 1. **默认禁用是真的禁用**（AC-17）：五个写动作在未登记的分发目录下必须 `denied`，且适配器与
- *    `execFile` 各 0 次调用——"工具存在但拒了"与"工具根本不能被调用"要能区分开。
+ * 1. **默认禁用是真的禁用**（AC-3；r4 编号 AC-17）：四个写动作在未登记的分发目录下必须 `denied`，
+ *    且适配器与 `execFile` 各 0 次调用——"工具存在但拒了"与"工具根本不能被调用"要能区分开。
+ *    r7 起判定（`gitee.delivery.judge`）是**默认登记的只读能力**，它在这里只保留"目录缺条目
+ *    时同样 denied"的单元镜像（AC-8），不再算进"写动作默认禁用"的口径。
  * 2. **`done` 不能只看退出码**（AC-16）：退出码 0 只说明命令跑了。回读不一致、回读失败、超时、
  *    输出畸形一律降格 `unknown`，并且台账记下来挡住重放。
  * 3. **门禁是唯一准入点**（AC-11）：动作名必须 `gitee.*`、目标必须存在、确认必须逐字相符、
@@ -30,12 +32,13 @@ import {
 } from '../src/gitee-actions.mjs';
 import { CONFIRM_REQUIRED_ACTIONS, GUARD_REASONS, createGiteeGuard } from '../src/gitee-guard.mjs';
 import { createGiteeSession } from '../src/gitee-session.mjs';
+import { GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
 
 const SRC_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'src');
 const CLOCK = 1_700_000_000_000;
 
-/** 五个写工具（顺序即 `GITEE_WRITE_TOOLS`；名字是 PRD 契约，不能随手改）。 */
-const WRITE_TOOLS = [
+/** 5 个受控工具（顺序 = 4 写 + 1 判定；名字是 PRD 契约，不能随手改）。 */
+const CONTROLLED_TOOLS = [
   'forge_gitee_issue_write',
   'forge_gitee_pr_write',
   'forge_gitee_review_publish',
@@ -64,6 +67,24 @@ const DELIVERY_GATE = {
   commit: 'a'.repeat(40),
   message: '[CHG-2026-001] feat: 同步变更',
   criteria: { acceptance: 'pass', merged: 'unknown', pendingDelivery: 'pass', humanConfirmed: 'pass' },
+};
+
+/**
+ * 判定"全通过"的输入（TECHNICAL §3.2 逐字）：四项条件全部 passed / count 0。
+ *
+ * 裸结论字符串 `'pass'` 现在与 `status: 'passed'` 同义（r7 QA DEF-1：工具描述声明的取值必须
+ * 真的被接受）；这里仍用对象事实写法，让 AC-2/AC-5 覆盖 TECHNICAL §3.2 声明的形状。
+ */
+const DELIVERY_GATE_READY = {
+  changeId: 'CHG-2026-001',
+  commit: 'a'.repeat(40),
+  message: '[CHG-2026-001] 判定默认登记',
+  criteria: {
+    acceptance: { status: 'passed', evidence: '离线 CI 全绿', sourceType: 'ci' },
+    merged: { status: 'passed', evidence: 'PR 已合入', sourceType: 'platform' },
+    pendingDelivery: { count: 0 },
+    humanConfirmed: { decision: 'confirmed' },
+  },
 };
 
 function reviewRecordArgs(repoRoot) {
@@ -221,10 +242,13 @@ function readbackObject(object) {
 
 const doneReadback = readbackObject({ title: '同步变更', state: 'open', comments: 1 });
 
-test('AC-9/14 写工具面固定 5 个，顺序与命名不可随手改，且没有 argv/命令/泛化入口', () => {
+test('AC-9/14 受控工具面固定 5 个（4 写 + 1 判定），顺序与命名不可随手改，且没有 argv/命令/泛化入口', () => {
   assert.deepEqual([...ACTION_STATUSES], ['done', 'failed', 'denied', 'unknown']);
+  // 两处口径必须同字面：测试清单 vs `gitee-tools.mjs` 的常量（本次 r7 拆成 4 写 + 1 判定）。
+  assert.deepEqual(CONTROLLED_TOOLS, [...GITEE_WRITE_TOOLS, ...GITEE_JUDGE_TOOLS], '受控工具清单与 gitee-tools 常量不符');
+  assert.deepEqual([...GITEE_JUDGE_TOOLS], ['forge_gitee_delivery_gate'], '判定工具名是契约');
   const definitions = writeToolDefinitions(createHarness().service);
-  assert.deepEqual(definitions.map((definition) => definition.name), WRITE_TOOLS);
+  assert.deepEqual(definitions.map((definition) => definition.name), CONTROLLED_TOOLS);
   for (const definition of definitions) {
     assert.equal(typeof definition.execute, 'function');
     assert.ok(definition.description.length > 20, `${definition.name} 缺少可读描述`);
@@ -238,15 +262,18 @@ test('AC-9/14 写工具面固定 5 个，顺序与命名不可随手改，且没
   }
 });
 
-test('AC-17 默认禁用：未登记时五个动作全部 denied、规则固定、适配器与 execFile 各 0 次调用', async () => {
+// r4 的 AC-17 在这里按 r7 口径拆开：前 4 个写动作 = "默认禁用写"（AC-3）；第 5 个判定在这个
+// 用例里 deny 是**单元镜像**（目录里没有这条 = AC-8 的降级），不是分发默认（默认它是登记的只读判定）。
+test('AC-3/AC-8 默认禁用：未登记时四个写动作逐个 denied、规则固定、适配器与 execFile 各 0 次调用', async () => {
   const harness = createHarness({ admit: false });
-  const cases = [
+  const writeCases = [
     ['forge_gitee_issue_write', ISSUE_CREATE],
     ['forge_gitee_pr_write', PR_CREATE],
     ['forge_gitee_review_publish', REVIEW_PUBLISH],
     ['forge_gitee_review_record', reviewRecordArgs(mkdtempSync(join(tmpdir(), 'forge-gitee-deny-')))],
-    ['forge_gitee_delivery_gate', DELIVERY_GATE],
   ];
+  const cases = [...writeCases, ['forge_gitee_delivery_gate', DELIVERY_GATE]];
+  assert.equal(writeCases.length, GITEE_WRITE_TOOLS.length, '写动作清单必须与 GITEE_WRITE_TOOLS 等长');
 
   for (const [tool, args] of cases) {
     const body = await runTool(harness.service, tool, args);
@@ -518,6 +545,106 @@ test('AC-21 交付判定入参：缺提交信息或缺关闭条件即拒绝，�
   assert.equal(missingCriteria.status, 'denied');
   assert.equal(missingCriteria.reason, ACTION_REASONS.INVALID_ARGUMENT);
   assert.equal(harness.counters.execFile, 0);
+});
+
+test('AC-5: criteria 含 unknown → status unknown、固定 reason、不计通过', async () => {
+  const harness = createHarness();
+  const body = await runTool(harness.service, 'forge_gitee_delivery_gate', {
+    ...DELIVERY_GATE_READY,
+    criteria: { ...DELIVERY_GATE_READY.criteria, merged: { status: 'unknown', evidence: 'PR 是否合入取不到' } },
+  });
+  assert.equal(body.status, 'unknown', `有 unknown 项时不得判通过（实际：${body.status}）`);
+  assert.equal(body.ok, false, 'unknown 不计入通过');
+  assert.equal(body.rule, 'not-ready');
+  assert.equal(body.reason, ACTION_REASONS.DELIVERY_UNAVAILABLE);
+  assert.equal(body.readback.ok, false);
+  assert.equal(body.readback.ready, false);
+  assert.deepEqual(body.readback.unknown_items, ['merged']);
+  assert.equal(body.executed, false, '判定只判定不执行');
+  assert.equal(body.remote_calls, 0);
+  assert.doesNotMatch(JSON.stringify(body), /"status":"done"/u, 'unknown 不得在任何位置写成 done');
+  assert.equal(harness.counters.invoke, 0);
+  assert.equal(harness.counters.execFile, 0);
+});
+
+test('AC-2 模型面描述与判定接受面一致：照描述写也到 done（r7 QA DEF-1 回归门禁）', async () => {
+  const harness = createHarness();
+  // 描述取自真实注册的工具定义，不从源码里抄文本：描述漂移必须在这里变红。
+  const judge = writeToolDefinitions(harness.service)
+    .find((definition) => definition.name === 'forge_gitee_delivery_gate');
+  assert.ok(judge !== undefined, '工具面必须含交付判定工具');
+  const description = judge.parameters.properties.criteria.description;
+  // 与 QA 检查器同一段描述语法：`取值 a|b|c`（模型照它写）。
+  const advertised = (description.match(/取值\s*([a-z|]+)/u)?.[1] ?? '')
+    .split('|')
+    .map((token) => token.trim())
+    .filter(Boolean);
+  assert.ok(advertised.length > 0, `描述必须声明取值（实际：${description}）`);
+  for (const item of ['acceptance', 'merged', 'pendingDelivery', 'humanConfirmed']) {
+    assert.match(description, new RegExp(item, 'u'), `描述必须点名四项之一：${item}`);
+  }
+
+  // 照描述写：四项都填描述声明的取值，应当得到与取值一致的判定，而不是一律 unknown。
+  const expected = { pass: 'done', passed: 'done', fail: 'failed', failed: 'failed', unknown: 'unknown' };
+  for (const token of advertised) {
+    assert.ok(expected[token] !== undefined, `描述声明的取值「${token}」不在实现接受面内（pass|passed|fail|failed|unknown）`);
+    const criteria = Object.fromEntries(['acceptance', 'merged', 'pendingDelivery', 'humanConfirmed'].map((item) => [item, token]));
+    const body = await runTool(harness.service, 'forge_gitee_delivery_gate', { ...DELIVERY_GATE_READY, criteria });
+    assert.equal(
+      body.status,
+      expected[token],
+      `照描述写 criteria=全部 ${token} 应为 ${expected[token]}（实际：${body.status}/${body.reason}）`,
+    );
+    assert.equal(body.executed, false, '判定只判定不执行');
+    assert.equal(body.remote_calls, 0);
+    if (token === 'pass' || token === 'passed') {
+      assert.equal(body.rule, 'ready');
+      assert.equal(body.readback.ok, true);
+    }
+  }
+
+  // 对象事实写法（TECHNICAL §3.2）仍须 done：新增写法不得挤掉既有接受面。
+  const fact = await runTool(harness.service, 'forge_gitee_delivery_gate', DELIVERY_GATE_READY);
+  assert.equal(fact.status, 'done', '对象事实写法必须保持可用');
+});
+
+test('AC-6: 判定缺参/非法入参 fail closed——零策略、零子进程、零平台调用', async () => {
+  const harness = createHarness();
+  const cases = [
+    ['缺 changeId', { ...DELIVERY_GATE_READY, changeId: undefined }, ACTION_REASONS.MISSING_ARGUMENT],
+    ['changeId 空白', { ...DELIVERY_GATE_READY, changeId: '  ' }, ACTION_REASONS.MISSING_ARGUMENT],
+    ['缺 message', { ...DELIVERY_GATE_READY, message: undefined }, ACTION_REASONS.MISSING_ARGUMENT],
+    ['criteria 缺失', { ...DELIVERY_GATE_READY, criteria: undefined }, ACTION_REASONS.INVALID_ARGUMENT],
+    ['criteria 非对象', { ...DELIVERY_GATE_READY, criteria: 'passed' }, ACTION_REASONS.INVALID_ARGUMENT],
+  ];
+  for (const [label, args, reason] of cases) {
+    const body = await runTool(harness.service, 'forge_gitee_delivery_gate', args);
+    assert.equal(body.status, 'denied', `${label} 必须 fail closed（实际：${body.status}）`);
+    assert.equal(body.ok, false);
+    assert.equal(body.reason, reason, `${label} 的原因码不许漂移`);
+    assert.equal(body.rule, 'argument-invalid');
+    assert.equal(body.remote_calls, 0);
+    assert.equal('evidence' in body, false, `${label} 被拒却带了证据`);
+    assert.equal(body.executed, undefined, `${label} 被拒不得声称 executed`);
+  }
+  assert.equal(harness.counters.decide, 0, '入参不成立时不打扰策略层');
+  assert.equal(harness.counters.operations, 0);
+  assert.equal(harness.counters.invoke, 0);
+  assert.equal(harness.counters.read, 0);
+  assert.equal(harness.counters.execFile, 0);
+
+  // 提交信息不带变更号：不是缺参，而是判定的确定失败——仍不得发任何命令。
+  const badMessage = await runTool(harness.service, 'forge_gitee_delivery_gate', {
+    ...DELIVERY_GATE_READY,
+    message: 'feat: 忘记带变更号',
+  });
+  assert.equal(badMessage.status, 'failed');
+  assert.equal(badMessage.rule, 'commit-message-invalid');
+  assert.equal(badMessage.reason, ACTION_REASONS.COMMIT_MESSAGE_INVALID);
+  assert.equal(badMessage.executed, false, '判定即使失败也只判定不执行');
+  assert.equal(badMessage.remote_calls, 0);
+  assert.equal(harness.counters.execFile, 0);
+  assert.equal(harness.counters.invoke, 0);
 });
 
 test('AC-11 本地/判定类动作不要求 confirm，但仍过门禁与审计（远程写才需要确认）', async () => {

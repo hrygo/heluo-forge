@@ -30,6 +30,7 @@
  * |---|---|
  * | `provider` | 恒为 `'gitee'`（信封与动作命名空间的唯一来源） |
  * | `readActions()` / `toolNames()` | 3 个只读动作 / 8 个工具名（顺序固定） |
+ * | `writeTools()` | 4 个受控写工具名（交付判定是只读能力，归 `GITEE_JUDGE_TOOLS`，不算写工具） |
  * | `status()` | `'ready'`（已装配）或 `'disposed'`（已卸载） |
  * | `describe()` | 脱敏配置描述（不含令牌内容与绝对路径） |
  * | `preflight()` | CLI/凭据预检（首次调用才真正执行，返回原因码而非抛错） |
@@ -234,6 +235,8 @@ function createService({ ctx, policy, adapter, guard, session, config }) {
     provider: GITEE_PROVIDER,
     readActions: () => [...GITEE_READ_ACTIONS],
     toolNames: () => [...GITEE_TOOLS],
+    // 只报 4 个受控写：判定（`GITEE_JUDGE_TOOLS`）是随包默认登记的只读能力，混进"写工具"
+    // 会让调用方与文档口径继续对不上（AC-3）。
     writeTools: () => [...GITEE_WRITE_TOOLS],
     status: () => status,
     describe: () => describeGiteeConfig(config),
