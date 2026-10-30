@@ -16,6 +16,7 @@
  * 产物契约（蓝图 §3.2）：
  *   CLI_FIELDS / CLI_ORIGINS / CLI_REASONS / CLI_ORIGIN_LABELS / CLI_SEARCH_CATEGORIES
  *   resolveCliAccess({ config, env, discovery, platform }) -> Access
+ *   deriveSourceType(entries) -> 'mock' | 'enterprise'（唯一推导处；只在 resolveCliAccess 里调用一次）
  *   describeCliAccess(access) -> 脱敏描述（无 path、无 endpoint 值）
  *   validateCliField({ field, value, platform, fs }) -> { ok:true, value } | { ok:false, message }
  *   buildCliPatch({ current, patch, platform, fs }) -> { ok:true, next } | { ok:false, errors }
@@ -92,7 +93,7 @@ const CATEGORY_LABELS = Object.freeze({
 });
 
 /** 修复指引的唯一一句话：README、页面、工具失败文案都指向这里（AC-12）。 */
-export const CLI_PAGE_HINT = '设置 → DevOps 变更流程';
+export const CLI_PAGE_HINT = '设置 → 企业 DevOps';
 
 /**
  * 包装脚本拒收（AC-2）：`dop.cmd` 长得像可执行文件，但 `execFile` 在不带 shell 的前提下
@@ -101,7 +102,7 @@ export const CLI_PAGE_HINT = '设置 → DevOps 变更流程';
  * 后缀表与判定只在 `cli-discovery.mjs` 定义一份（QA P2-1）：发现侧拒收候选、
  * 校验侧拒收用户手填，是同一规则的两个调用点，不是两份规则。
  */
-const WRAPPER_MESSAGE = '.cmd / .bat 包装脚本不能直接执行，请指向 .exe';
+const WRAPPER_MESSAGE = '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件';
 const NOT_EXECUTABLE_MESSAGE = '不是可直接执行的文件';
 
 /** 路径类字段 ←→ 发现工具名（其余字段没有发现层）。 */
@@ -270,6 +271,34 @@ function resolveField(field, sources, invalid) {
   return entryOf(field, CLI_ORIGINS.MISSING, null, []);
 }
 
+/**
+ * 入口"解析到可直接执行的文件"：有值且来源是显式/发现。
+ *
+ * `default`（裸命令名 `gh`，`runtime-config.mjs` 的基线缺省）不算就绪——装配期不做 PATH 探测，
+ * 把"恰好有个默认名"当作已解析到可执行文件，正是伪企业证据的入口（AC-8）。
+ * 非法值同理：`resolveField` 对非法层给的是 `value:null`，这里自然为 false（宁可少标）。
+ */
+function entryReady(entry) {
+  if (!isPlainObject(entry)) return false;
+  if (typeof entry.value !== 'string' || entry.value === '') return false;
+  return (
+    entry.origin === CLI_ORIGINS.CONFIG ||
+    entry.origin === CLI_ORIGINS.ENV ||
+    entry.origin === CLI_ORIGINS.DISCOVERED
+  );
+}
+
+/**
+ * 推导事实来源（AC-7）：dop 与 gh 都就绪才 `enterprise`，其余一律 `mock`（宁可少标）。
+ *
+ * **唯一实现处**：页面拿得到 `entries` 但不发送该键，装配层只消费 `resolveCliAccess()` 的结论；
+ * 任何一处再推导都会让"这批结论算不算企业实测"出现第二个口径。
+ */
+export function deriveSourceType(entries) {
+  const source = isPlainObject(entries) ? entries : {};
+  return entryReady(source.dopBin) && entryReady(source.ghBin) ? 'enterprise' : 'mock';
+}
+
 /** 找过哪几类位置：配置与环境变量恒查；发现层的 tier 来自发现结果自报。 */
 function searchedCategories(discovery) {
   const tiers = new Set();
@@ -325,6 +354,10 @@ function guidanceOf(access) {
  * 任一层出现非法值即 `ready:false` + `CLI_CONFIG_INVALID`，并**不**回落到下一层；
  * `dopBin` 三层都没有则 `ready:false` + `CLI_NOT_FOUND`。两种失败都带 `guidance`。
  *
+ * `sourceType` 的优先级：配置 > 环境变量 > 推导（`deriveSourceType`）。推导只填既有 `default`
+ * 槽位，因此 `entries.sourceType.origin` 只有 `config`/`env`/`default` 三种取值，调用方不必分辨
+ * "缺省值"与"推导值"——两者都不压任何层，`overrides` 恒为空。
+ *
  * @param {object} [options]
  * @param {object|null} [options.config] 配置层（裸字段对象或 `resolveRuntimeConfig` 信封）
  * @param {object|null} [options.env] 环境变量表（显式传入，不读进程环境）
@@ -343,6 +376,12 @@ export function resolveCliAccess({ config = null, env = null, discovery = null, 
   const invalid = [];
   const entries = {};
   for (const field of CLI_FIELDS) entries[field] = resolveField(field, sources, invalid);
+
+  // 事实来源（AC-7）：只有配置层与环境变量层都没声明时才推导。推导结果占用既有 `default`
+  // 槽位（origin 词表不新增、overrides 为空），页面永不发送该键——显式声明永远压过推导。
+  if (entries.sourceType.origin === CLI_ORIGINS.DEFAULT) {
+    entries.sourceType = entryOf('sourceType', CLI_ORIGINS.DEFAULT, deriveSourceType(entries), []);
+  }
 
   const ready = entries.dopBin.value !== null && invalid.length === 0;
   const reason = ready
