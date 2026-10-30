@@ -137,13 +137,34 @@ test('装配期快照：零配置即 ready，路径来自自动发现，revision
   assert.equal(snapshot.entries.ghBin.path, GH);
   assert.equal(snapshot.entries.dopEndpoint.origin, 'missing', 'endpoint 不做发现（PRD 非目标）');
   assert.equal(snapshot.entries.dopEndpoint.value, null);
-  assert.equal(snapshot.entries.sourceType.value, 'mock');
+  // 推导（AC-7）：dop 与 gh 都由自动发现解析到可执行文件 → 企业实测；推导结果仍占 default 槽位。
+  assert.equal(snapshot.entries.sourceType.value, 'enterprise');
   assert.equal(snapshot.entries.sourceType.origin, 'default', '基线缺省不是第四层，但它要说清楚');
+  assert.deepEqual(Array.from(snapshot.entries.sourceType.overrides), [], '推导不压任何层');
   assert.equal(snapshot.entries.timeoutMs.value, 20000);
   assert.match(snapshot.revision, REVISION_PATTERN, 'revision = sha256 前 16 位（§2.5）');
   assert.deepEqual(snapshot.writable, { ok: true, documentPath: true });
   assert.equal(snapshot.host.platform, WIN);
   assert.ok(snapshot.guidance.includes('自动发现'), '指引用类别词，不用环境变量名（AC-5）');
+});
+
+test('事实来源推导经快照到装配层：双入口就绪才 enterprise、只有 dop 回落 mock（AC-7/AC-8）', () => {
+  const both = makeAccess().snapshot();
+  assert.equal(both.entries.sourceType.value, 'enterprise', 'dop 与 gh 都在 PATH 上 → 企业实测');
+  assert.equal(both.entries.sourceType.origin, 'default', '推导占用既有 default 槽位，词表不新增');
+
+  // 只有 dop：gh 停在基线缺省 `gh`，宁可少标也不把 mock 结论写成企业实测
+  const onlyDopFs = makeFs({ dirs: { [TOOLS]: ['dop.exe'] }, files: { [DOP]: {} } });
+  const onlyDop = makeAccess({ fs: onlyDopFs }).snapshot();
+  assert.equal(onlyDop.ready, true, 'dop 就绪时页面照常可用，不因少标来源而 degraded');
+  assert.equal(onlyDop.entries.ghBin.origin, 'default');
+  assert.equal(onlyDop.entries.ghBin.path, 'gh');
+  assert.equal(onlyDop.entries.sourceType.value, 'mock', '只有 dop 不许标成 enterprise');
+
+  // 显式声明压过推导：配置层 sourceType 直接生效，origin 不再是 default
+  const declared = makeAccess({ config: { sourceType: 'mock' } }).snapshot();
+  assert.equal(declared.entries.sourceType.origin, 'config');
+  assert.equal(declared.entries.sourceType.value, 'mock');
 });
 
 test('未命中 fail closed：原因码是类别词，指引指向配置页且不含路径与环境变量名（AC-5）', () => {
@@ -155,7 +176,7 @@ test('未命中 fail closed：原因码是类别词，指引指向配置页且�
   assert.equal(snapshot.entries.dopBin.origin, 'missing');
   assert.equal(snapshot.entries.ghBin.path, 'gh', 'gh 仍有默认名兜底');
   assert.equal(snapshot.entries.ghBin.origin, 'default');
-  assert.ok(snapshot.guidance.includes('设置 → DevOps 变更流程'), '指引把人带到配置页');
+  assert.ok(snapshot.guidance.includes('设置 → 企业 DevOps'), '指引把人带到配置页');
   assert.ok(snapshot.guidance.includes('PATH'), '说清楚去哪儿找过');
   assert.equal(/[A-Za-z]:\\/u.test(snapshot.guidance), false, '不得回显盘符路径');
   assert.equal(snapshot.guidance.includes('FORGE_DEVOPS'), false, '不再让用户去配环境变量（AG-3）');

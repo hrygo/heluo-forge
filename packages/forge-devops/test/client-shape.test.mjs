@@ -86,16 +86,17 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
     'CandidateList',
     'CliEntryField',
     'DevopsSection',
-    'SegmentedField',
     'StatusLine',
     'apply',
     'inject',
   ].sort());
   assert.deepEqual(CLIENT.module.inject, ['slots', 'locale'], 'inject 缺一项宿主就不装配客户端半');
   assert.equal(typeof CLIENT.module.apply, 'function');
-  for (const name of ['DevopsSection', 'CliEntryField', 'SegmentedField', 'StatusLine', 'CandidateList']) {
+  for (const name of ['DevopsSection', 'CliEntryField', 'StatusLine', 'CandidateList']) {
     assert.equal(typeof CLIENT.module[name], 'function', `${name} 必须是可渲染的组件函数`);
   }
+  // 段控件随「事实来源」一起下线：导出面不允许留一个没人能填的控件（页面收窄到三键）。
+  assert.equal(CLIENT.module.SegmentedField, undefined, 'SegmentedField 必须从导出面移除（r5 收窄到三行一列）');
   // 浏览器侧模块不得自带 node 依赖（否则宿主 require 直接抛错，页面白屏）。
   for (const dep of ['node:fs', 'node:path', 'node:os', 'node:child_process', 'node:http']) {
     assert.ok(!SOURCE.includes(dep), `client.js 不得依赖 ${dep}`);
@@ -356,7 +357,46 @@ const en = DICTS.en;
 test('zh/en 键集完全一致、占位符一致（少一条就是界面上出现裸键）', () => {
   assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort(), 'en 与 zh 必须一一对应');
   const keys = Object.keys(zh);
-  assert.ok(keys.length >= 60, `文案太少（${keys.length}）：状态/动作/字段/错误/兜底缺一都会露出裸键`);
+  // r5 删掉 10 个隐藏键文案后总数从 64 收到 54。这里不靠「总数够大」撑强度：
+  // 先断**必含面**（状态/动作/入口/字段/来源/错误/兜底各一组），再断总数不倒退。
+  const REQUIRED = [
+    'nav',
+    'title',
+    'intro',
+    'status.ready',
+    'status.missing',
+    'status.unavailable',
+    'action.takeOver',
+    'action.reset',
+    'action.refresh',
+    'entry.dop',
+    'entry.gh',
+    'entry.placeholder',
+    'entry.placeholder.reset',
+    'entry.hint.discovered',
+    'entry.hint.env',
+    'entry.hint.config',
+    'entry.hint.missing',
+    'entry.hint.help',
+    'candidates.summary',
+    'candidates.current',
+    'field.timeoutMs',
+    'field.timeoutMs.hint',
+    'section.commandline',
+    'error.wrapperScript',
+    'error.pathLength',
+    'error.timeout',
+    'error.load',
+    'saved',
+    'saveFailed',
+    'saveFailedStale',
+    'unavailable.title',
+    'unavailable.envDop',
+    'unavailable.envGh',
+  ];
+  const missing = REQUIRED.filter((key) => !keys.includes(key));
+  assert.deepEqual(missing, [], `缺这些关键文案（页面会露出裸键）：${missing.join(', ')}`);
+  assert.ok(keys.length >= 54, `文案太少（${keys.length}）：收窄是删隐藏键文案，不是删状态/动作/兜底`);
   const placeholders = (value) => [...String(value).matchAll(/\{([a-zA-Z]+)\}/gu)].map((match) => match[1]).sort();
   for (const key of keys) {
     assert.equal(typeof zh[key], 'string', `zh.${key} 必须是字符串`);
@@ -372,14 +412,46 @@ test('英文文案不含中文（漏译会混排）', () => {
   assert.deepEqual(offenders, [], `en 里出现中文：${offenders.join(', ')}`);
 });
 
-test('六个字段与五个 origin 与 cli-config 逐字对齐（不另立词表）', () => {
-  // 两个路径键用入口卡的标题（entry.*），其余四个用表单标签（field.*）：两处都要有键，否则界面露裸键。
-  const labelKeys = { dopBin: 'entry.dop', ghBin: 'entry.gh' };
-  for (const field of CLI_FIELDS) {
-    // 路径键的说明按「来源状态」共用（entry.hint.*），所以只要求标题键；其余字段要求标题 + 说明。
-    const keys = labelKeys[field] ? [labelKeys[field]] : [`field.${field}`, `field.${field}.hint`];
-    for (const key of keys) {
+test('页面文案零命中旧显示名与隐藏字段词（收窄后不得残留说明）', () => {
+  // 页面只问「入口在哪、超时多少」：事实来源改由后端推导，所以页面上不该再出现
+  // 服务地址 / gh 组织 / 事实来源 / mock / enterprise / .exe 任何一处（DESIGN §2.3）。
+  const forbidden = /dop 服务地址|gh 组织|事实来源|\bmock\b|\benterprise\b|\.exe/u;
+  for (const [locale, dict] of [['zh', zh], ['en', en]]) {
+    const hits = Object.keys(dict).filter((key) => forbidden.test(dict[key]));
+    assert.deepEqual(hits, [], `${locale} 里仍有旧字段/旧显示名文案：${hits.join(', ')}`);
+  }
+  // 显示名与进入路径同源改名：「企业 DevOps」，中英一处两边都改。
+  assert.equal(zh.nav, '企业 DevOps');
+  assert.equal(zh.title, zh.nav, 'nav 与 title 必须同句，否则侧栏与页头两个名字');
+  assert.equal(en.nav, 'Enterprise DevOps');
+  // 隐藏三键的文案整组删除：留着就是给不可见字段写说明。
+  for (const key of ['field.dopEndpoint', 'field.dopEndpoint.hint', 'field.ghOwner', 'field.ghOwner.hint', 'field.sourceType', 'field.sourceType.hint', 'error.endpoint', 'error.owner', 'error.source', 'section.connection']) {
+    assert.ok(!Object.prototype.hasOwnProperty.call(zh, key), `隐藏键文案 ${key} 必须删除（页面不持有不可见字段）`);
+  }
+});
+
+test('页面三键收敛，服务端六键词表不动（页面收窄 ≠ 契约放宽）', () => {
+  // 页面可编辑面的唯一真源：client.js 的 PAGE_FIELDS。它必须是 CLI_FIELDS 的真子集，
+  // 且恰好是 dop 入口 / gh 入口 / 超时三项——多一键就是页面又问了用户判断不了的机器事实。
+  const pageDecl = SOURCE.match(/const PAGE_FIELDS = \[([^\]]+)\]/u);
+  assert.ok(pageDecl, 'client.js 必须声明 PAGE_FIELDS（页面可编辑面）');
+  const pageFields = pageDecl[1].split(',').map((item) => item.trim().replace(/^['"]|['"]$/gu, '')).filter(Boolean);
+  assert.deepEqual(pageFields, ['dopBin', 'ghBin', 'timeoutMs'], '页面只收敛到三键（DESIGN §2.1）');
+  for (const field of pageFields) {
+    assert.ok(CLI_FIELDS.includes(field), `PAGE_FIELDS 的 ${field} 不在服务端 CLI_FIELDS 里（页面会提交服务端不认的键）`);
+  }
+  // 文案面：两个路径键用入口卡标题（entry.*，说明按来源状态共用），超时用 field.* 标题 + 说明。
+  const labelKeys = { dopBin: 'entry.dop', ghBin: 'entry.gh', timeoutMs: ['field.timeoutMs', 'field.timeoutMs.hint'] };
+  for (const field of pageFields) {
+    const keys = labelKeys[field];
+    for (const key of Array.isArray(keys) ? keys : [keys]) {
       assert.ok(Object.prototype.hasOwnProperty.call(zh, key), `缺文案 ${key}（字段 ${field} 会显示裸键）`);
+    }
+  }
+  // 隐藏三键没有任何表单文案：页面不渲染它们，留着文案只会变成第二份没人校验的字段表。
+  for (const field of CLI_FIELDS.filter((item) => !pageFields.includes(item))) {
+    for (const key of [`field.${field}`, `field.${field}.hint`]) {
+      assert.ok(!Object.prototype.hasOwnProperty.call(zh, key), `隐藏字段 ${field} 不该有文案 ${key}`);
     }
   }
   for (const key of ['entry.hint.discovered', 'entry.hint.env', 'entry.hint.config', 'entry.hint.missing']) {
@@ -389,9 +461,9 @@ test('六个字段与五个 origin 与 cli-config 逐字对齐（不另立词表
     assert.ok(Object.prototype.hasOwnProperty.call(zh, `origin.${origin}`), `缺 origin.${origin} 的 Tag 文案`);
   }
   assert.equal(Object.values(CLI_ORIGINS).length, 5, 'origin 枚举只有五个（config/env/discovered/default/missing）');
-  // 客户端自己的字段表必须与 cli-config 同序：顺序即页面字段顺序，两处不一致页面会错位。
+  // 客户端自己的字段表必须与 cli-config 同序：顺序即契约顺序，两处不一致会让补丁合并错位。
   const declared = SOURCE.match(/const CLI_FIELDS = \[([^\]]+)\]/u);
-  assert.ok(declared, 'client.js 必须声明自己的 CLI_FIELDS（用于表单遍历）');
+  assert.ok(declared, 'client.js 必须声明自己的 CLI_FIELDS（与 cli-config 对齐的契约面）');
   const names = declared[1].split(',').map((item) => item.trim().replace(/^['"]|['"]$/gu, '')).filter(Boolean);
   assert.deepEqual(names, [...CLI_FIELDS], `客户端字段表与 cli-config.CLI_FIELDS 不一致：${names.join(',')}`);
 });
@@ -438,11 +510,11 @@ test('无本机路径 / 内网地址 / 凭据字面量（AC-10）', () => {
 test('度量常量集中一处：DESIGN §5.2 的 13/500、34、12/18、12px 0 不散落组件内', () => {
   const metrics = SOURCE.match(/const METRICS = \{([\s\S]*?)\n    \};/u);
   assert.ok(metrics, '必须有集中的 METRICS 块');
-  for (const [name, value] of [['labelSize', '13'], ['labelWeight', '500'], ['inputHeight', '34'], ['hintSize', '12'], ['hintLine', '18'], ['fieldPadY', '12']]) {
+  for (const [name, value] of [['labelSize', '13'], ['labelWeight', '500'], ['inputHeight', '34'], ['hintSize', '12'], ['hintLine', '18'], ['fieldPadY', '12'], ['scalarInputWidth', '220'], ['skeletonRow', '108']]) {
     assert.match(metrics[1], new RegExp(`${name}: ${value}\\b`, 'u'), `METRICS.${name} 必须是 ${value}（DESIGN 度量）`);
   }
   // 数值只能从 METRICS 插值进 CSS：源码里不该再出现这些裸量。
-  for (const literal of ['13px', '34px', '18px', '500px']) {
+  for (const literal of ['13px', '34px', '18px', '500px', '220px', '108px']) {
     assert.ok(!SOURCE.includes(literal), `源码里出现裸量 ${literal}：度量必须走 METRICS`);
   }
   // 样式只用 --dsw-*/--ds-* token，不写死颜色。
@@ -471,6 +543,22 @@ test('保存按钮只在 dirty 时可用；等值噪声不提交', () => {
   assert.match(SOURCE, /function isChanged\(field, value\)/u, '必须判「与用户层现值是否不同」');
   assert.match(SOURCE, /if \(Object\.keys\(fields\)\.length === 0\) return;/u, '无变更时不得发请求');
   assert.match(SOURCE, /const dirty = changed\.length > 0;/u);
+});
+
+test('页面行为只遍历 PAGE_FIELDS：焦点/脏判定/提交体/422 都不碰隐藏三键', () => {
+  // 收窄的机器证据：四处页面行为一律走三键表。若有一处仍用六键表，
+  // 隐藏键就会在保存时被写进 fields（页面根本不该发送它们）。
+  const traversals = SOURCE.match(/for \(const field of PAGE_FIELDS\)/gu) ?? [];
+  assert.equal(traversals.length, 2, `焦点与提交两处循环都必须走 PAGE_FIELDS（实际 ${traversals.length} 处）`);
+  assert.ok(!/for \(const field of CLI_FIELDS\)/u.test(SOURCE), '禁止再用 CLI_FIELDS 驱动页面行为（会带出幽灵字段）');
+  assert.match(SOURCE, /PAGE_FIELDS\.filter\(/u, '脏判定只在三键上过滤');
+  assert.match(SOURCE, /if \(PAGE_FIELDS\.includes\(field\)\) serverErrors\[field\]/u, '422 只映射页面可见三键');
+  // 422 只回隐藏键原因时不能造幽灵字段，必须折进 footer 兜底提示。
+  assert.match(SOURCE, /setNotice\(\{ kind: 'failed', text: t\('saveFailed', \{ reason: errorCode\(body\) \?\? 'CLI_CONFIG_INVALID' \}\) \}\)/u);
+  // 隐藏三键不得出现在 staged 写入路径上：页面从不 setStaged 它们。
+  for (const field of ['dopEndpoint', 'ghOwner', 'sourceType']) {
+    assert.ok(!new RegExp(`setStaged\\([^)]*${field}`, 'u').test(SOURCE), `不得为隐藏键 ${field} 写 staged`);
+  }
 });
 
 test('409 保留 staged 并给刷新入口，422 聚焦首个非法字段（AC-9）', () => {
@@ -756,6 +844,34 @@ const snapshotOf = (overrides = {}, revision = 'rev-1') => ({
   },
 });
 
+test('E2E 三行一列：dop 入口 / gh 入口 / 超时，隐藏三键零 DOM、零段控件', async () => {
+  const stub = stubFetch({ body: snapshotOf() });
+  try {
+    const page = createPage();
+    await page.settle();
+
+    // ① 三行一列：输入框 id 恰好是 PAGE_FIELDS，顺序即页面顺序。
+    const ids = page.inputs().map((node) => node.props.id).sort();
+    assert.deepEqual(ids, ['fdv-dopBin', 'fdv-ghBin', 'fdv-timeoutMs'], `页面只渲染三行，实际 ${ids.join(',')}`);
+    assert.equal(page.byClass('fdv-card').length, 2, '两个入口卡（dop/gh）');
+    assert.equal(page.byClass('fdv-scalar').length, 1, '超时是第三行、页面唯一的标量行');
+    assert.equal(page.byClass('fdv-group').length, 1, '只有一个分组标题（「连接与身份」整组已下线）');
+    assert.equal(page.byClass('fdv-track').length, 0, '段控件随隐藏键下线（页面没有 .fdv-track）');
+
+    // ② 隐藏三键：连 DOM 都不进——不是灰显、不是折叠（收窄后页面无权展示它们）。
+    for (const field of ['dopEndpoint', 'ghOwner', 'sourceType']) {
+      assert.equal(page.findAll((node) => String(node.props.id ?? '') === `fdv-${field}`).length, 0, `隐藏键 ${field} 不得进 DOM`);
+      assert.equal(page.findAll((node) => String(node.props.id ?? '') === `fdv-${field}-foot`).length, 0, `隐藏键 ${field} 不得留 foot 节点`);
+    }
+    assert.ok(!page.text().includes('MISSING:'), `页面出现裸键：${page.text().match(/MISSING:[a-zA-Z.]+/gu)?.join(',')}`);
+
+    // ③ 骨架同构：加载完毕的页面里，骨架骨架组/行已全部消失（不会与表单叠罗汉）。
+    assert.equal(page.byClass('fdv-skeleton-row').length, 0, '加载完成必须移除三行骨架');
+  } finally {
+    stub.restore();
+  }
+});
+
 test('E2E 只读首页 → 改为手动指定（预填）→ 保存提交 {revision, fields}', async () => {
   const stub = stubFetch(
     { body: snapshotOf() },
@@ -806,6 +922,9 @@ test('E2E 只读首页 → 改为手动指定（预填）→ 保存提交 {revis
     assert.equal(post.init.method, 'POST');
     assert.equal(post.init.headers['x-forge-devops-request'], '1', '写操作必须带 CSRF 预检头');
     assert.deepEqual(JSON.parse(post.init.body), { revision: 'rev-1', fields: { dopBin: PATH_NEW } }, '只提交真正变化的键');
+    // 保存体键集只能是三键（隐藏键既不渲染也不发送，服务端按六键契约逐字保留它们）。
+    const sentFields = Object.keys(JSON.parse(post.init.body).fields);
+    assert.ok(sentFields.every((key) => ['dopBin', 'ghBin', 'timeoutMs'].includes(key)), `保存体只允许三键，实际 ${sentFields.join(',')}`);
 
     // ⑤ 终态：回填服务端新快照，提示已保存，保存键回落禁用。
     assert.ok(page.text().includes(tZh('saved')), '保存后必须给出成功反馈');
@@ -857,14 +976,21 @@ test('E2E 未命中原生可填；写面缺失整页降级只读但字段仍可�
     await page.settle();
     const text = page.text();
     assert.ok(text.includes(tZh('origin.missing')), '未找到必须有独立来源态，不能显示成配置');
-    assert.ok(text.includes(tZh('entry.hint.help')), '未找到且可填时给「复制文件地址」的一句话指引（AC-5）');
+    assert.ok(text.includes(tZh('entry.hint.help', { tool: 'dop' })), '未找到且可填时给「复制文件地址」的一句话指引（AC-5），工具名按字段插值');
     const first = page.inputs()[0];
     assert.ok(!first.props.readOnly, '未命中时直接可填，不要求先点「改为手动指定」（AC-5）');
-    assert.equal(first.props.placeholder, tZh('entry.placeholder', { tool: 'dop.exe' }));
-    // env 层来源：生效值走 placeholder（输入框留空 = 不覆盖该层），输入端可写即覆盖。
-    const endpointInput = page.inputWithPlaceholder('https://dop.corp.example');
-    assert.equal(endpointInput.props.readOnly, false, 'env 层的文本字段直接可写（写了就是覆盖），路径卡才需要「改为手动指定」');
-    assert.ok(page.text().includes(tZh('origin.env')));
+    assert.equal(first.props.placeholder, tZh('entry.placeholder', { tool: 'dop' }));
+    // 指引句按字段插值：dop 卡不得再显示 gh 的名字（r3 的错位在这里钉死）。
+    assert.ok(!text.includes('gh 文件右键'), 'dop 入口卡的指引不得提到 gh');
+    // 服务端回六个字段，页面恒定渲染三行：隐藏三键连 DOM 都不进（不是灰显、不是折叠）。
+    assert.equal(page.inputs().length, 3, `页面只渲染三行，实际 ${page.inputs().length} 个输入框`);
+    assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-dopEndpoint').length, 0, '隐藏键 dopEndpoint 不得有输入框');
+    assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-ghOwner').length, 0, '隐藏键 ghOwner 不得有输入框');
+    assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-sourceType').length, 0, '隐藏键 sourceType 不得有输入框');
+    // 超时行未改过时把生效值镜像进 placeholder（留空 = 不覆盖该层）。
+    const timeoutInput = page.inputWithPlaceholder('20000');
+    assert.equal(timeoutInput.props.readOnly, false, '超时是页面可编辑的一行');
+    assert.ok(page.text().includes(tZh('origin.missing')));
   } finally {
     stub.restore();
   }
@@ -877,10 +1003,11 @@ test('E2E 未命中原生可填；写面缺失整页降级只读但字段仍可�
     assert.ok(page.text().includes(tZh('unavailable.envDop')), '降级时给出环境变量兜底');
     assert.equal(page.byClass('fdv-primary').length, 0, '降级态不渲染保存键（不能给假按钮）');
     assert.equal(page.inputWithValue(PATH_DOP).props.readOnly, true, '降级态字段仍只读可见');
-    // 降级时文本字段把生效值镜像进 value（placeholder 不可复制），且用 readOnly 而非 disabled。
-    const lockedEndpoint = page.inputWithValue('https://dop.corp.example');
-    assert.equal(lockedEndpoint.props.readOnly, true, '降级态文本字段只读但可聚焦复制');
-    assert.equal(lockedEndpoint.props.disabled, undefined, '不得用 disabled（无法聚焦/复制）');
+    // 降级时第三行（超时）把生效值镜像进 value（placeholder 不可复制），且用 readOnly 而非 disabled。
+    const lockedTimeout = page.inputWithValue('20000');
+    assert.equal(lockedTimeout.props.readOnly, true, '降级态标量行只读但可聚焦复制');
+    assert.equal(lockedTimeout.props.disabled, undefined, '不得用 disabled（无法聚焦/复制）');
+    assert.equal(page.inputs().length, 3, '降级态仍是三行，不会因为只读而多出隐藏字段');
   } finally {
     degradedStub.restore();
   }

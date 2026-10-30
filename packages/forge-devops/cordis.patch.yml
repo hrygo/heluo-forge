@@ -6,12 +6,16 @@
 #   2. `forge-devops` 紧随其后，行 `name` 用包根名（与清单 `name` 一致），
 #      否则安装后的 profile 解析不到该包。
 # 业务配置只给最小集：dop/gh 的位置与 endpoint 口径是**配置页优先、环境变量兜底**
-# （r3 取代"路径一律由环境注入"的旧口径）：
-#   1. 装配后在「设置 → DevOps 变更流程」配置页指定（六个字段 dopBin / dopEndpoint / ghBin /
-#      ghOwner / sourceType / timeoutMs），保存即写回本 profile 的补丁层，重启后仍生效；
+# （r3 取代"路径一律由环境注入"的旧口径；r5 把页面收敛成三项）：
+#   1. 装配后在「设置 → 企业 DevOps」配置页指定三项（dopBin / ghBin / timeoutMs），
+#      保存即写回本 profile 的补丁层，重启后仍生效；页面只提交这三项，
+#      另外三项契约键（dopEndpoint / ghOwner / sourceType）页面不展示、保存时逐字保留，
+#      但仍可写在下面 `config:` 段里（或走环境变量）。`CLI_FIELDS` 始终是六键契约；
 #   2. 配置页没有指定时回落环境变量（CI / 无头场景的兜底，不是普通用户的主路径）；
 #   3. 两层都没有时在装配期自动发现操作系统里可直接执行的 dop / gh（只认 .exe 与执行位，
 #      .cmd/.bat 一律拒；零子进程、只读、有界）。
+# `sourceType` 不写就在这里由后端推导（dop 与 gh 都解析到可执行文件才 enterprise，否则 mock），
+# 落在既有 default 槽位，不新增词表；显式配置与环境变量优先于推导。
 # 补丁层因此不写默认值，也不写任何主机绝对路径；凭据仍只由环境注入，不落配置页与文档。
 #
 # 策略目录（catalog）必须是**非空且覆盖 devops 只读面**的四条 read：

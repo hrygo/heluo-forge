@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "DevOps change flow host plugin for Heluo Forge: policy-gated reads, fixed argv adapters and offline-testable delivery flow",
+  "description": "Enterprise DevOps host plugin for Heluo Forge: policy-gated reads, fixed argv adapters and offline-testable delivery flow",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },

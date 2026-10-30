@@ -1,5 +1,5 @@
 /**
- * @heluo/forge-devops — Web 配置页（settings.section「DevOps 变更流程」）。
+ * @heluo/forge-devops — Web 配置页（settings.section「企业 DevOps」）。
  *
  * 定位：页面即状态，不是表单。装配期自动发现的结果经同源 `/api/forge-devops/cli`
  * 读到本页；用户常态下「只读不填」，只有未命中或被显式覆盖时才进编辑态。
@@ -37,22 +37,25 @@ window.__ModuleLoader__.load({
     /** 样式标签去重键（重复挂载不产生第二个 style）。 */
     const CSS_TAG_ID = '@heluo/forge-devops/client.css';
 
-    /** 六个配置键（与 CLI_FIELDS 同名同序）。 */
+    /** 六个配置键（与服务端 CLI_FIELDS 同名同序；页面只用到其中三个，契约仍是六个）。 */
     const CLI_FIELDS = ['dopBin', 'dopEndpoint', 'ghBin', 'ghOwner', 'sourceType', 'timeoutMs'];
     /** 需要「发现」的可执行文件字段：只读展示 + 候选展开 + 手动指定。 */
     const ENTRY_FIELDS = ['dopBin', 'ghBin'];
-    /** 文本字段（网格第一行两个 + 超时）。 */
-    const TEXT_FIELDS = ['dopEndpoint', 'ghOwner', 'timeoutMs'];
-    /** 段控件字段：把非法输入消灭在源头。 */
-    const SEGMENT_FIELDS = ['sourceType'];
-    const SOURCE_TYPES = ['mock', 'enterprise'];
     /**
-     * 与服务端同源的字段规则（服务端另有存在性/可执行判定）。
-     * 逐字段的取值边界都要与 `src/runtime-config.mjs` 的规则等值：浏览器半不能 import 服务端模块，
-     * 等值关系由 `test/client-shape.test.mjs` 的跨面矩阵用例守着（改任何一侧先红在那里）。
-     * ghOwner 上界 39（与 GitHub 一致）：写成 `{0,38}`，少一个字符就退化成"失焦放行、保存才 422"。
+     * 页面可编辑面（三键）：渲染、页面校验、dirty、POST body 与 422 聚焦都只走这张表。
+     * 隐藏三键（dopEndpoint / ghOwner / sourceType）**不进 DOM、不进 staged、不发送**——
+     * 「保存时逐字保留」由服务端 `buildCliPatch` 的补丁合并兜底：页面不持有自己无法校验的状态，
+     * 服务端也不必因为页面收敛而收窄校验。
      */
-    const OWNER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+    const PAGE_FIELDS = ['dopBin', 'ghBin', 'timeoutMs'];
+    /** 入口字段 → 工具名：**只用于 i18n 插值 `{tool}`**，不参与解析 / 校验 / 请求（与服务端 TOOL_BY_FIELD 不互用）。 */
+    const TOOL_OF_FIELD = Object.freeze({ dopBin: 'dop', ghBin: 'gh' });
+    /**
+     * 与服务端同源的字段规则（服务端另有存在性/可执行判定，且对六个键一律不放松）。
+     * 逐字段的取值边界都要与 `src/runtime-config.mjs` 的规则等值：浏览器半不能 import 服务端模块，
+     * 等值关系由 `test/client-rule-parity.test.mjs` 的跨面矩阵用例守着（改任何一侧先红在那里）。
+     * 隐藏三键没有页面规则——"页面收窄、服务端不放宽"正由该矩阵断言。
+     */
     const WRAPPER_PATTERN = /\.(?:cmd|bat|ps1|com|vbs)$/i;
     /** 路径长度上限：与服务端 `MAX_PATH_LENGTH`（runtime-config.mjs）等值，挡住误粘整段日志。 */
     const MAX_PATH_LENGTH = 4096;
@@ -85,11 +88,7 @@ window.__ModuleLoader__.load({
       hintSize: 12,
       hintLine: 18,
       fieldPadY: 12,
-      gridGap: 16,
-      trackHeight: 34,
-      trackPad: 3,
-      segmentHeight: 28,
-      segmentPadX: 12,
+      scalarInputWidth: 220,
       footerGapTop: 16,
       buttonHeight: 32,
       separator: 0.5,
@@ -97,9 +96,7 @@ window.__ModuleLoader__.load({
       tagSize: 11,
       codeSize: 12,
       candidatePadY: 6,
-      skeletonHeight: 34,
-      skeletonCell: 66,
-      narrowWidth: 700,
+      skeletonRow: 108,
       ease: 'var(--ds-ease-in-out)',
       fast: 100,
       swap: 160,
@@ -125,7 +122,7 @@ window.__ModuleLoader__.load({
 .fdv-cards{display:flex;flex-direction:column}
 .fdv-card{padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
 .fdv-card-first{border-top:0 none}
-.fdv-head{display:flex;align-items:center;gap:${METRICS.statusGap}px;min-width:0;line-height:${METRICS.labelLine}px}
+.fdv-head{display:flex;align-items:center;flex-wrap:wrap;row-gap:4px;gap:${METRICS.statusGap}px;min-width:0;line-height:${METRICS.labelLine}px}
 .fdv-label{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fdv-head-actions{margin-left:auto;display:flex;align-items:center;gap:${METRICS.statusGap}px;flex:none}
 .fdv-input{box-sizing:border-box;display:block;width:100%;height:${METRICS.inputHeight}px;margin-top:${METRICS.headGap}px;padding:0 10px;border:1px solid var(--dsw-alias-border-l4);border-radius:${METRICS.radiusSm};background:transparent;color:inherit;font-family:inherit;font-size:${METRICS.labelSize}px;line-height:${METRICS.labelLine}px;transition:border-color ${METRICS.fast}ms ${METRICS.ease}}
@@ -155,14 +152,8 @@ window.__ModuleLoader__.load({
 .fdv-tag-quiet{color:var(--dsw-alias-label-tertiary)}
 .fdv-tag-warn{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 14%,transparent)}
 .fdv-tag-ok{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent)}
-.fdv-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:${METRICS.gridGap}px;row-gap:0}
-.fdv-field{box-sizing:border-box;min-width:0;padding:${METRICS.fieldPadY}px 0}
-.fdv-label-row{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin:0;min-width:0;line-height:${METRICS.labelLine}px}
-.fdv-track{box-sizing:border-box;display:inline-flex;align-items:center;gap:0;height:${METRICS.trackHeight}px;margin-top:${METRICS.headGap}px;padding:${METRICS.trackPad}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover)}
-.fdv-segment{box-sizing:border-box;height:${METRICS.segmentHeight}px;padding:0 ${METRICS.segmentPadX}px;border:0 none;border-radius:${METRICS.radiusSm};background:none;cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.segmentHeight}px;color:var(--dsw-alias-label-secondary);transition:background-color ${METRICS.fast}ms ${METRICS.ease},color ${METRICS.fast}ms ${METRICS.ease}}
-.fdv-segment:hover{color:var(--dsw-alias-label-primary)}
-.fdv-segment-on{background:var(--dsw-alias-bg-layer-3);box-shadow:inset 0 0 0 ${METRICS.separator}px var(--dsw-alias-border-l4);color:var(--dsw-alias-label-primary)}
-.fdv-segment:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.fdv-scalar{box-sizing:border-box;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-scalar-input{width:${METRICS.scalarInputWidth}px;max-width:100%;font-variant-numeric:tabular-nums}
 .fdv-footer{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px}
 .fdv-note{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-note-error{color:var(--dsw-alias-state-error-primary)}
@@ -176,15 +167,14 @@ window.__ModuleLoader__.load({
 .fdv-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
 .fdv-unavailable-body{margin:${METRICS.headGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-unavailable-env{display:block;margin-top:4px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:${METRICS.codeSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
-.fdv-skeleton{display:flex;flex-direction:column;gap:${METRICS.inputGap}px;margin-top:${METRICS.groupGapTop}px}
-.fdv-skeleton-bar{height:${METRICS.skeletonHeight}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
-.fdv-skeleton-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:${METRICS.gridGap}px;margin-top:${METRICS.statusGap}px}
-.fdv-skeleton-cell{height:${METRICS.skeletonCell}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
+.fdv-skeleton{display:flex;flex-direction:column;margin-top:${METRICS.groupGapTop}px}
+.fdv-skeleton-group{height:${METRICS.groupLine}px;margin:0 0 ${METRICS.groupGapBottom}px;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
+.fdv-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
+.fdv-skeleton-row + .fdv-skeleton-row{border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
 @keyframes fdv-breathe{0%,100%{opacity:1}50%{opacity:.55}}
 @keyframes fdv-reveal{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
-@container (max-width:519px){.fdv-grid,.fdv-skeleton-grid{grid-template-columns:1fr}.fdv-candidates{max-height:176px;overflow-y:auto}}
-@media (max-width:${METRICS.narrowWidth}px){.fdv-grid,.fdv-skeleton-grid{grid-template-columns:1fr}}
-@media (prefers-reduced-motion:reduce){.fdv-skeleton-bar,.fdv-skeleton-cell{animation:none}.fdv-candidates{animation:none}.fdv-caret,.fdv-dot,.fdv-input,.fdv-segment,.fdv-primary,.fdv-link{transition:none}}
+@container (max-width:519px){.fdv-candidates{max-height:176px;overflow-y:auto}}
+@media (prefers-reduced-motion:reduce){.fdv-skeleton-group,.fdv-skeleton-row{animation:none}.fdv-candidates{animation:none}.fdv-caret,.fdv-dot,.fdv-input,.fdv-primary,.fdv-link{transition:none}}
 `;
 
     /* ------------------------------------------------------------------ *
@@ -192,8 +182,8 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
 
     const zh = {
-      nav: 'DevOps 变更流程',
-      title: 'DevOps 变更流程',
+      nav: '企业 DevOps',
+      title: '企业 DevOps',
       intro: '插件会自己找 dop 与 gh；只有找不到时才需要你指定位置。',
       'status.ready': '只读面 ready · {summary}',
       'status.summary': 'dop {dop} · gh {gh}',
@@ -215,7 +205,7 @@ window.__ModuleLoader__.load({
       'entry.hint.env': '来自环境变量 · 在此保存将覆盖它',
       'entry.hint.config': '已手动指定 · 清空即回落自动发现',
       'entry.hint.missing': '未找到 · 已查 PATH、候选目录、环境变量',
-      'entry.hint.help': '在资源管理器里右键 dop.exe →「复制文件地址」，粘贴到这里',
+      'entry.hint.help': '在资源管理器里选中 {tool} 文件右键 →「复制文件地址」，粘贴到这里',
       'entry.hint.reset': '已重置为自动发现 · 保存后生效',
       'entry.hint.override': '已指定 · 保存后覆盖下一层来源',
       'origin.config': '配置',
@@ -226,23 +216,13 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': '覆盖环境变量',
       'candidates.summary': '另有 {n} 个候选',
       'candidates.current': '当前生效',
-      'field.dopEndpoint': 'dop 服务地址',
-      'field.dopEndpoint.hint': 'http 或 https 地址，不含凭据；留空则不配置',
-      'field.ghOwner': 'gh 组织 / 用户',
-      'field.ghOwner.hint': '1–39 个字母、数字或连字符，首字符不能是连字符',
-      'field.sourceType': '事实来源',
-      'field.sourceType.hint': 'mock = 本地模拟，enterprise = 企业实测；默认 mock',
       'field.timeoutMs': '超时（毫秒）',
       'field.timeoutMs.hint': '1000–600000，默认 20000',
-      'section.commandline': '命令行入口',
-      'section.connection': '连接与身份',
+      'section.commandline': '命令行入口与超时',
       'error.notFound': '找不到这个文件',
-      'error.wrapperScript': '.cmd / .bat 包装脚本不能直接执行，请指向 .exe',
+      'error.wrapperScript': '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件',
       'error.pathLength': '路径太长（上限 4096 个字符），请确认没有粘进整段日志',
-      'error.endpoint': '需要 http 或 https 地址，且地址里不能带用户名密码',
-      'error.owner': '只能是 1–39 个字母、数字和连字符，且不能以连字符开头',
       'error.timeout': '请输入 1000–600000 之间的整数（毫秒）',
-      'error.source': '事实来源只能是 mock 或 enterprise',
       'error.load': '无法读取命令行位置',
       load: '正在读取命令行位置',
       save: '保存',
@@ -259,8 +239,8 @@ window.__ModuleLoader__.load({
     };
 
     const en = {
-      nav: 'DevOps change flow',
-      title: 'DevOps change flow',
+      nav: 'Enterprise DevOps',
+      title: 'Enterprise DevOps',
       intro: 'The plugin locates dop and gh by itself; you only point at a path when it fails.',
       'status.ready': 'Reader ready · {summary}',
       'status.summary': 'dop {dop} · gh {gh}',
@@ -282,7 +262,7 @@ window.__ModuleLoader__.load({
       'entry.hint.env': 'From environment · saving here overrides it',
       'entry.hint.config': 'Set manually · clear it to fall back to autodiscovery',
       'entry.hint.missing': 'Not found · searched PATH, candidate folders, environment',
-      'entry.hint.help': 'Right-click dop.exe in Explorer → "Copy as path", then paste it here',
+      'entry.hint.help': 'In Explorer, select the {tool} file, right-click → "Copy as path", then paste it here',
       'entry.hint.reset': 'Reset to autodiscovery · takes effect on save',
       'entry.hint.override': 'Specified · overrides the layer below on save',
       'origin.config': 'config',
@@ -293,23 +273,13 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': 'overrides environment',
       'candidates.summary': '{n} more candidate',
       'candidates.current': 'active',
-      'field.dopEndpoint': 'dop service endpoint',
-      'field.dopEndpoint.hint': 'http or https, no credentials; leave empty to skip',
-      'field.ghOwner': 'gh owner',
-      'field.ghOwner.hint': '1–39 letters, digits or dashes; must not start with a dash',
-      'field.sourceType': 'Fact source',
-      'field.sourceType.hint': 'mock = local simulation, enterprise = measured; default mock',
       'field.timeoutMs': 'Timeout (ms)',
       'field.timeoutMs.hint': '1000–600000, default 20000',
-      'section.commandline': 'Command-line entries',
-      'section.connection': 'Connection and identity',
+      'section.commandline': 'Command-line entries and timeout',
       'error.notFound': 'That file does not exist',
-      'error.wrapperScript': '.cmd / .bat wrappers cannot be executed; point at the .exe',
+      'error.wrapperScript': '.cmd / .bat wrappers cannot be executed; point at a directly executable file',
       'error.pathLength': 'Path is too long (4096 chars max); check you did not paste a log block',
-      'error.endpoint': 'Needs an http or https URL without credentials',
-      'error.owner': 'Use 1–39 letters, digits or dashes; no leading dash',
       'error.timeout': 'Enter an integer between 1000 and 600000 (ms)',
-      'error.source': 'Fact source must be mock or enterprise',
       'error.load': 'Cannot read command-line locations',
       load: 'Reading command-line locations',
       save: 'Save',
@@ -345,8 +315,9 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 客户端字段校验：只做**格式**判定，与服务端同一套语义的子集。
-     * 存在性、是否目录、是否可执行由服务端在保存时判定（422 逐字段返回）。
+     * 客户端字段校验：只做**格式**判定，且只覆盖 `PAGE_FIELDS` 三键（页面能编辑的那三个）。
+     * 存在性、是否目录、是否可执行由服务端在保存时判定（422 逐字段返回）；隐藏三键没有页面规则，
+     * 页面既不渲染也不提交它们，服务端仍按六键契约校验——收窄在页面，不在服务端。
      * @returns {string|null} i18n 键；合法返回 null。空值 = 清除该层，恒合法。
      */
     function validateField(field, raw) {
@@ -357,26 +328,14 @@ window.__ModuleLoader__.load({
         if (value.length > MAX_PATH_LENGTH) return 'error.pathLength';
         return WRAPPER_PATTERN.test(value) ? 'error.wrapperScript' : null;
       }
-      if (field === 'dopEndpoint') {
-        try {
-          const url = new URL(value);
-          if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'error.endpoint';
-          if (url.username !== '' || url.password !== '') return 'error.endpoint';
-        } catch {
-          return 'error.endpoint';
-        }
-        return null;
-      }
-      if (field === 'ghOwner') return OWNER_PATTERN.test(value) ? null : 'error.owner';
       if (field === 'timeoutMs') {
         const timeout = Number(value);
         return Number.isInteger(timeout) && timeout >= TIMEOUT_MIN && timeout <= TIMEOUT_MAX ? null : 'error.timeout';
       }
-      if (field === 'sourceType') return SOURCE_TYPES.includes(value) ? null : 'error.source';
       return null;
     }
 
-    /** 提交值：空串一律转 null（= 清除该层，回落下一层）。 */
+    /** 提交值：空串一律转 null（= 清除该层，回落下一层）；三键里只有 timeoutMs 需要转数字。 */
     function payloadValue(field, raw) {
       const value = normalize(raw);
       if (value === '') return null;
@@ -490,7 +449,7 @@ window.__ModuleLoader__.load({
 
       let hint;
       if (reset) hint = t('entry.hint.reset');
-      else if (origin === 'missing') hint = editable ? t('entry.hint.help') : t('entry.hint.missing');
+      else if (origin === 'missing') hint = editable ? t('entry.hint.help', { tool }) : t('entry.hint.missing');
       else if (origin === 'discovered') hint = others > 0 ? t('entry.hint.discovered', { n: others }) : t('entry.hint.discovered.single');
       else if (origin === 'env') hint = t('entry.hint.env');
       else if (owned) hint = t('entry.hint.config');
@@ -549,50 +508,12 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 段控件：只有合法取值可选（sourceType），方向键切换 + roving tabindex。 */
-    function SegmentedField(props) {
-      const { t, field, label, hint, options, value, error, locked, inputRef, onChange } = props;
-      const selected = options.includes(value) ? value : options[0];
-
-      function step(event, position) {
-        const delta = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0;
-        if (delta === 0) return;
-        event.preventDefault();
-        onChange(options[(position + delta + options.length) % options.length]);
-      }
-
-      return h(
-        'div',
-        { className: 'fdv-field' },
-        h('div', { className: 'fdv-label-row' }, h('span', { className: 'fdv-label' }, label)),
-        h(
-          'div',
-          { className: 'fdv-track', role: 'radiogroup', 'aria-label': label, onKeyDown: (event) => step(event, options.indexOf(selected)) },
-          options.map((option) =>
-            h(
-              'button',
-              {
-                key: option,
-                type: 'button',
-                role: 'radio',
-                'aria-checked': option === selected,
-                tabIndex: option === selected ? 0 : -1,
-                disabled: locked === true,
-                className: `fdv-segment${option === selected ? ' fdv-segment-on' : ''}`,
-                ref: option === selected ? inputRef : undefined,
-                onClick: () => onChange(option),
-                onKeyDown: (event) => step(event, options.indexOf(option)),
-              },
-              option,
-            ),
-          ),
-        ),
-        h(FieldFoot, { id: `fdv-${field}-foot`, error, hint }),
-      );
-    }
-
-    /** 文本字段（endpoint / owner / timeout）：值来自 staged，占位显示当前生效值。 */
-    function TextField(props) {
+    /**
+     * 超时单行（`PAGE_FIELDS` 里唯一的非路径字段）：值来自 staged，生效值走 placeholder。
+     * 与入口卡同节律（12 上下内距 + 6 label/input + 6 input/hint），行间只靠 `.fdv-scalar`
+     * 的上边框分隔——不新开分组、不加外框：超时是第三行，不是第二组。
+     */
+    function TimeoutField(props) {
       const { t, field, label, hint, placeholder, value, error, locked, inputRef, onChange, onBlur } = props;
       const id = `fdv-${field}`;
       const readOnly = locked === true;
@@ -601,13 +522,13 @@ window.__ModuleLoader__.load({
       const shown = readOnly ? value || placeholder || '' : value;
       return h(
         'div',
-        { className: 'fdv-field' },
-        h('label', { className: 'fdv-label-row', htmlFor: id }, h('span', { className: 'fdv-label' }, label)),
+        { className: 'fdv-scalar' },
+        h('label', { className: 'fdv-label', htmlFor: id }, label),
         h('input', {
           id,
-          className: 'fdv-input',
+          className: 'fdv-input fdv-scalar-input',
           type: 'text',
-          inputMode: field === 'timeoutMs' ? 'numeric' : undefined,
+          inputMode: 'numeric',
           readOnly,
           value: shown,
           placeholder,
@@ -623,14 +544,16 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 首次加载骨架：入口区两条输入高度的呼吸条 + 网格占位，避免页面跳动。 */
+    /**
+     * 首次加载骨架：与三行一列**同构**（`groupLine` 标题占位 + 三行 `skeletonRow` + 两条 `separator`），
+     * 加载完成到表单零跳动。不再画 2×2 四格——那会暗示页面上有四个字段。
+     */
     function Skeleton() {
       return h(
         'div',
         { className: 'fdv-skeleton', 'aria-hidden': 'true' },
-        h('div', { className: 'fdv-skeleton-bar' }),
-        h('div', { className: 'fdv-skeleton-bar' }),
-        h('div', { className: 'fdv-skeleton-grid' }, [0, 1, 2, 3].map((index) => h('div', { key: index, className: 'fdv-skeleton-cell' }))),
+        h('div', { className: 'fdv-skeleton-group' }),
+        [0, 1, 2].map((index) => h('div', { key: index, className: 'fdv-skeleton-row' })),
       );
     }
 
@@ -708,8 +631,9 @@ window.__ModuleLoader__.load({
         return nodeRefs.current[field];
       }
 
+      /** 焦点移到第一个非法字段（只在页面可见的三键里找，别为隐藏键聚焦一个不存在的输入框）。 */
       function focusFirst(map) {
-        for (const field of CLI_FIELDS) {
+        for (const field of PAGE_FIELDS) {
           if (Object.prototype.hasOwnProperty.call(map, field)) {
             pendingFocus.current = field;
             return;
@@ -822,12 +746,12 @@ window.__ModuleLoader__.load({
         setExpanded((prev) => ({ ...prev, [field]: prev[field] !== true }));
       }
 
-      /** 保存：只提交真正变化的键；空值转 null（= 清除该层，回落下一层）。 */
+      /** 保存：只提交真正变化的键（且只可能是 PAGE_FIELDS 三键）；空值转 null（= 清除该层，回落下一层）。 */
       async function save() {
         const snapshot = snapshotRef.current;
         if (!snapshot) return;
         const fields = {};
-        for (const field of CLI_FIELDS) {
+        for (const field of PAGE_FIELDS) {
           if (!Object.prototype.hasOwnProperty.call(staged, field)) continue;
           if (!isChanged(field, staged[field])) continue;
           fields[field] = payloadValue(field, staged[field]);
@@ -878,13 +802,18 @@ window.__ModuleLoader__.load({
             const returned = body && typeof body.errors === 'object' && body.errors !== null ? body.errors : {};
             const serverErrors = {};
             for (const field of Object.keys(returned)) {
-              if (CLI_FIELDS.includes(field)) serverErrors[field] = fieldMessage(t, returned[field]);
+              // 只映射页面可见的三键：隐藏键没有输入框，为一个不存在的字段画红字就是"幽灵字段"。
+              if (PAGE_FIELDS.includes(field)) serverErrors[field] = fieldMessage(t, returned[field]);
             }
             if (Object.keys(serverErrors).length > 0) {
               focusFirst(serverErrors);
               setErrors(serverErrors);
               return;
             }
+            // 422 却只带回隐藏键的原因（页面根本不发送它们）：原因折进 footer 兜底，
+            // 这样"服务端比页面更严"仍然可见，而页面不会造出不可见字段。
+            setNotice({ kind: 'failed', text: t('saveFailed', { reason: errorCode(body) ?? 'CLI_CONFIG_INVALID' }) });
+            return;
           }
           setNotice({
             kind: 'failed',
@@ -901,7 +830,7 @@ window.__ModuleLoader__.load({
 
       const snapshot = view.snapshot;
       const entries = (snapshot && snapshot.entries) || {};
-      const changed = snapshot ? CLI_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(staged, field) && isChanged(field, staged[field])) : [];
+      const changed = snapshot ? PAGE_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(staged, field) && isChanged(field, staged[field])) : [];
       const dirty = changed.length > 0;
 
       function statusView() {
@@ -918,42 +847,25 @@ window.__ModuleLoader__.load({
 
       const status = statusView();
 
-      function textField(field) {
+      /** 超时行（第三行）：值来自 staged，生效值走 placeholder（`20000` 是既有默认值的兜底占位）。 */
+      function timeoutField() {
+        const field = 'timeoutMs';
         const entry = entries[field] ?? {};
         const stagedValue = Object.prototype.hasOwnProperty.call(staged, field) ? normalize(staged[field]) : '';
         const live = effectiveValue(field, entry);
-        const placeholder = field === 'timeoutMs' ? live || '20000' : live;
-        return h(TextField, {
-          key: field,
+        return h(TimeoutField, {
+          key: 'scalar',
           t,
           field,
-          label: t(`field.${field}`),
-          hint: t(`field.${field}.hint`),
-          placeholder,
+          label: t('field.timeoutMs'),
+          hint: t('field.timeoutMs.hint'),
+          placeholder: live || '20000',
           value: stagedValue,
           error: errors[field] ?? null,
           locked,
           inputRef: inputRef(field),
           onChange: (next) => onInput(field, next),
           onBlur: () => onBlur(field),
-        });
-      }
-
-      function segmentField(field) {
-        const entry = entries[field] ?? {};
-        const stagedValue = Object.prototype.hasOwnProperty.call(staged, field) ? normalize(staged[field]) : '';
-        return h(SegmentedField, {
-          key: field,
-          t,
-          field,
-          label: t(`field.${field}`),
-          hint: t(`field.${field}.hint`),
-          options: SOURCE_TYPES,
-          value: stagedValue || effectiveValue(field, entry) || SOURCE_TYPES[0],
-          error: errors[field] ?? null,
-          locked,
-          inputRef: inputRef(field),
-          onChange: (next) => onInput(field, next),
         });
       }
 
@@ -996,7 +908,7 @@ window.__ModuleLoader__.load({
               t,
               field,
               entry: entries[field] ?? {},
-              tool: field === 'dopBin' ? 'dop.exe' : 'gh.exe',
+              tool: TOOL_OF_FIELD[field],
               staged: Object.prototype.hasOwnProperty.call(staged, field) ? staged[field] : undefined,
               editing: editing[field] === true,
               reset: Object.prototype.hasOwnProperty.call(staged, field) && staged[field] === null,
@@ -1015,14 +927,8 @@ window.__ModuleLoader__.load({
         ),
       );
 
-      children.push(h('div', { className: 'fdv-group', key: 'group-connection' }, t('section.connection')));
-      children.push(
-        h(
-          'div',
-          { className: 'fdv-grid', key: 'grid' },
-          [textField('dopEndpoint'), textField('ghOwner'), segmentField('sourceType'), textField('timeoutMs')],
-        ),
-      );
+      // 第三行：超时（单行 .fdv-scalar）。页面只有三行一列，行间只有两条 .5px 分隔线。
+      children.push(timeoutField());
 
       const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict') ? ' fdv-note-error' : '';
       children.push(
@@ -1116,6 +1022,6 @@ window.__ModuleLoader__.load({
 
     const inject = ['slots', 'locale'];
 
-    return { apply, inject, DevopsSection, CliEntryField, SegmentedField, StatusLine, CandidateList };
+    return { apply, inject, DevopsSection, CliEntryField, StatusLine, CandidateList };
   },
 });

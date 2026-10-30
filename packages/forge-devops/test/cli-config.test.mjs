@@ -21,6 +21,7 @@ import {
   CLI_SEARCH_CATEGORIES,
   buildCliPatch,
   cliGuidance,
+  deriveSourceType,
   describeCliAccess,
   resolveCliAccess,
   validateCliField,
@@ -115,7 +116,9 @@ test('常量表：字段与 ENV_KEYS 同键，五种 origin 各有中文标签�
   for (const table of [CLI_FIELDS, CLI_ORIGINS, CLI_REASONS, CLI_ORIGIN_LABELS, WRAPPER_SUFFIXES]) {
     assert.ok(Object.isFrozen(table), '常量表不允许运行时改写');
   }
-  assert.ok(CLI_PAGE_HINT.includes('DevOps 变更流程'), '指引必须指向配置页（AC-5/AC-12）');
+  // AC-1 改名：指引里的入口名与页面 nav/title 逐字同源，写死旧名会让工具失败提示指向不存在的入口。
+  assert.equal(CLI_PAGE_HINT, '设置 → 企业 DevOps', '指引必须指向配置页（AC-1/AC-5/AC-12）');
+  assert.equal(CLI_PAGE_HINT.includes('DevOps 变更流程'), false, '旧名必须零残留');
 });
 
 test('零配置 + 自动发现命中：ready 且两层路径字段都记 discovered（AC-1）', () => {
@@ -132,7 +135,7 @@ test('零配置 + 自动发现命中：ready 且两层路径字段都记 discove
     dopEndpoint: undefined,
     ghBin: WIN_GH,
     ghOwner: undefined,
-    sourceType: 'mock',
+    sourceType: 'enterprise',
     timeoutMs: 20_000,
   });
   assert.deepEqual(Array.from(access.searched), ['config', 'env', 'PATH', 'candidate-dirs']);
@@ -178,6 +181,115 @@ test('ghBin 矩阵：三层之外还有基线缺省 gh（origin=default），不
     assert.equal(access.entries.ghBin.origin, item.origin);
     assert.equal(access.entries.ghBin.value, item.value);
   }
+});
+
+/**
+ * 推导判据（AC-7/AC-8）：事实来源只在一处推导，页面与装配层都只消费结论。
+ * 表驱动而不是逐条 `assert`：判据一改（例如改成"单 dop 即 enterprise"），四态表先红。
+ */
+const readyEntry = (origin, value) => ({ origin, value, overrides: [] });
+
+test('deriveSourceType 四态表：dop 与 gh 都就绪才 enterprise，其余一律 mock（AC-7/AC-8）', () => {
+  const cases = [
+    {
+      label: '双入口都来自配置层',
+      dopBin: readyEntry(CLI_ORIGINS.CONFIG, CONF_DOP),
+      ghBin: readyEntry(CLI_ORIGINS.CONFIG, WIN_GH),
+      expected: 'enterprise',
+    },
+    {
+      label: '双入口都来自自动发现（装好即企业，最常见）',
+      dopBin: readyEntry(CLI_ORIGINS.DISCOVERED, DISC_DOP),
+      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
+      expected: 'enterprise',
+    },
+    {
+      label: 'dop 配置 + gh 环境变量（层不同不影响判据）',
+      dopBin: readyEntry(CLI_ORIGINS.CONFIG, CONF_DOP),
+      ghBin: readyEntry(CLI_ORIGINS.ENV, 'C:\\env\\gh.exe'),
+      expected: 'enterprise',
+    },
+    {
+      label: '只有 dop，gh 停在基线缺省 gh（裸命令名不验证存在性）',
+      dopBin: readyEntry(CLI_ORIGINS.DISCOVERED, DISC_DOP),
+      ghBin: readyEntry(CLI_ORIGINS.DEFAULT, 'gh'),
+      expected: 'mock',
+    },
+    {
+      label: '只有 gh，dop 缺失',
+      dopBin: readyEntry(CLI_ORIGINS.MISSING, null),
+      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
+      expected: 'mock',
+    },
+    {
+      label: 'dop 非法（origin=config、value=null）不因"声明过"升级',
+      dopBin: readyEntry(CLI_ORIGINS.CONFIG, null),
+      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
+      expected: 'mock',
+    },
+    {
+      label: '入口值是空串同样不算就绪',
+      dopBin: readyEntry(CLI_ORIGINS.ENV, ''),
+      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
+      expected: 'mock',
+    },
+    {
+      label: '两个入口都没有',
+      dopBin: readyEntry(CLI_ORIGINS.MISSING, null),
+      ghBin: readyEntry(CLI_ORIGINS.DEFAULT, 'gh'),
+      expected: 'mock',
+    },
+  ];
+  for (const item of cases) {
+    assert.equal(deriveSourceType({ dopBin: item.dopBin, ghBin: item.ghBin }), item.expected, item.label);
+  }
+  // 容错：入参不是 entries 形状时宁可少标，绝不在装配期抛错。
+  assert.equal(deriveSourceType(null), 'mock');
+  assert.equal(deriveSourceType({}), 'mock');
+});
+
+test('推导落 default 槽位、显式声明优先：配置 > 环境变量 > 推导（AC-7 三种覆盖态）', () => {
+  // ① 双发现 → enterprise；origin 仍是 default、overrides 为空（推导不压任何层）
+  const derived = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }) });
+  assert.equal(derived.entries.sourceType.origin, CLI_ORIGINS.DEFAULT);
+  assert.equal(derived.entries.sourceType.value, 'enterprise');
+  assert.deepEqual(Array.from(derived.entries.sourceType.overrides), []);
+  assert.equal(derived.entries.sourceType.tool, undefined, 'sourceType 不是路径字段，不带 tool');
+  assert.equal(derived.value.sourceType, 'enterprise', '推导要经 Access.value 到装配层才有用');
+
+  // ② 只有 dop → mock：gh 停在裸命令名，不许标成企业实测
+  const onlyDop = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP] }) });
+  assert.equal(onlyDop.entries.ghBin.origin, CLI_ORIGINS.DEFAULT);
+  assert.equal(onlyDop.entries.sourceType.value, 'mock', '缺 gh 不许标成企业实测（AC-8）');
+
+  // ③ 环境变量压过推导：入口不齐也照用用户声明
+  const envDeclared = resolve({
+    config: {},
+    env: { [ENV_KEYS.sourceType]: 'enterprise' },
+    discovery: discoveryOf({ dop: [DISC_DOP] }),
+  });
+  assert.equal(envDeclared.entries.sourceType.origin, CLI_ORIGINS.ENV);
+  assert.equal(envDeclared.entries.sourceType.value, 'enterprise');
+
+  // ④ 配置层压过环境变量与推导，压制关系留痕
+  const configDeclared = resolve({
+    config: { sourceType: 'mock' },
+    env: { [ENV_KEYS.sourceType]: 'enterprise' },
+    discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }),
+  });
+  assert.equal(configDeclared.entries.sourceType.origin, CLI_ORIGINS.CONFIG);
+  assert.equal(configDeclared.entries.sourceType.value, 'mock', '显式 mock 压过"看起来像企业"的环境');
+  assert.deepEqual(Array.from(configDeclared.entries.sourceType.overrides), [CLI_ORIGINS.ENV]);
+
+  // ⑤ 显式值非法时不推导、不回落：仍是 CLI_CONFIG_INVALID + 该字段 value=null
+  const bad = resolve({
+    config: { sourceType: 'prod' },
+    env: {},
+    discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }),
+  });
+  assert.equal(bad.entries.sourceType.origin, CLI_ORIGINS.CONFIG);
+  assert.equal(bad.entries.sourceType.value, null);
+  assert.deepEqual(bad.invalid.map((item) => item.field), ['sourceType']);
 });
 
 test('dopBin 永不出现 default：三层都没有即 CLI_NOT_FOUND（fail closed）', () => {
@@ -239,7 +351,7 @@ test('配置层非法：CLI_CONFIG_INVALID，且不回落环境变量/自动发�
   assert.equal(access.reason, CLI_REASONS.INVALID);
   assert.equal(access.value, null);
   assert.deepEqual(access.invalid.map((item) => [item.field, item.origin]), [['dopBin', CLI_ORIGINS.CONFIG]]);
-  assert.equal(access.invalid[0].message, '.cmd / .bat 包装脚本不能直接执行，请指向 .exe');
+  assert.equal(access.invalid[0].message, '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件');
   assert.equal(access.entries.dopBin.value, null);
   assert.match(access.guidance, /命令行配置不可用（dopBin：/);
 });
@@ -353,7 +465,7 @@ test('剖白描述对未就绪态同样零泄漏，并保留可读指引', () =>
   assert.equal(described.ready, false);
   assert.equal(described.invalid[0].field, 'dopBin');
   assert.equal(described.invalid[0].origin, CLI_ORIGINS.CONFIG);
-  assert.match(described.guidance, /DevOps 变更流程/);
+  assert.match(described.guidance, /企业 DevOps/);
   // 描述结果本身也能喂给 cliGuidance（两个函数的入参同形）
   assert.equal(cliGuidance(described), described.guidance);
 });
@@ -372,10 +484,12 @@ test('12 条非法值：逐字段可读原因，且 message 不回显用户输�
   const cases = [
     { field: 'dopBin', value: WIN_MISSING, platform: WIN, expected: '找不到这个文件' },
     { field: 'dopBin', value: WIN_DIR, platform: WIN, expected: '这是目录，需要指向 dop.exe 本体' },
-    { field: 'dopBin', value: WIN_CMD, platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向 .exe' },
-    { field: 'dopBin', value: WIN_BAT, platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向 .exe' },
+    // AC-3：包装脚本拒收句同轮去 .exe（页面 error.wrapperScript 与这里同源）；
+    // 但「Windows 上请指向 .exe」是规则事实，下一行的后缀句保留。
+    { field: 'dopBin', value: WIN_CMD, platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件' },
+    { field: 'dopBin', value: WIN_BAT, platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件' },
     { field: 'dopBin', value: WIN_SH, platform: WIN, expected: '不是可直接执行的文件（Windows 上请指向 .exe）' },
-    { field: 'ghBin', value: 'dop.ps1', platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向 .exe' },
+    { field: 'ghBin', value: 'dop.ps1', platform: WIN, expected: '.cmd / .bat 包装脚本不能直接执行，请指向可直接执行的文件' },
     { field: 'dopBin', value: 42, platform: WIN, expected: '需要一个文本值' },
     { field: 'dopBin', value: POSIX_NOEXEC, platform: POSIX, expected: '不是可直接执行的文件（缺少执行位）' },
     { field: 'dopEndpoint', value: BAD_SCHEME, platform: WIN, expected: '需要 http 或 https 地址，且地址里不能带用户名密码' },
@@ -453,12 +567,12 @@ test('buildCliPatch：意图合并、null 即回落、逐字段报错且一字�
 
 test('指引文案：类别名 + 指向配置页，不含路径/endpoint/环境变量名（AC-5/AC-10）', () => {
   const notFound = cliGuidance(resolve({ config: {}, env: {}, discovery: discoveryOf({}) }));
-  assert.match(notFound, /^未找到 dop · 已查 配置、环境变量、PATH、候选目录 · 请到「设置 → DevOps 变更流程」指定位置$/);
+  assert.match(notFound, /^未找到 dop · 已查 配置、环境变量、PATH、候选目录 · 请到「设置 → 企业 DevOps」指定位置$/);
   assert.equal(/[A-Za-z]:\\/.test(notFound), false, '工具面文案不得出现盘符路径');
   assert.equal(/FORGE_DEVOPS_/.test(notFound), false, '环境变量名只进次级说明，不进主句');
 
   const invalid = cliGuidance(resolve({ config: { dopBin: WIN_CMD }, env: {}, discovery: discoveryOf({}) }));
-  assert.match(invalid, /^命令行配置不可用（dopBin：\.cmd \/ \.bat 包装脚本不能直接执行，请指向 \.exe）· 请到「设置 → DevOps 变更流程」修正$/);
+  assert.match(invalid, /^命令行配置不可用（dopBin：\.cmd \/ \.bat 包装脚本不能直接执行，请指向可直接执行的文件）· 请到「设置 → 企业 DevOps」修正$/);
   assert.equal(invalid.includes(WIN_CMD), false, '校验失败的细节只给字段名与原因，不给用户输入值');
 });
 
