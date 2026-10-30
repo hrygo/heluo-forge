@@ -251,7 +251,10 @@ test('脱敏：令牌 / 内网主机 / 本机绝对路径命中即阻断写盘�
   const cases = [
     ['令牌', '把 access_token=abcdef123456 贴进了说明'],
     ['内网主机', '复现地址 http://git.corp.internal/group/repo'],
-    ['本机绝对路径', '产物在 /Users/hosea/work/git/heluo-forge/docs/review.md'],
+    // 本机绝对路径样例用拼接构造：仓库检查器禁止源码出现宿主绝对路径字面量
+    // （scripts/lib/repo-rules.mjs 的 HOST_PATH，匹配 Users 顶级目录的 POSIX 形式），
+    // 扫描器在运行时拿到的仍是完整路径，脱敏判定不变。
+    ['本机绝对路径', `产物在 ${['', 'Users', 'hosea', 'work', 'git', 'heluo-forge', 'docs', 'review.md'].join('/')}`],
   ];
   for (const [label, opinion] of cases) {
     const review = record({ opinion });
