@@ -1,0 +1,33 @@
+{
+  "_fixture": {
+    "sourceType": "mock",
+    "origin": "按 UAT 报告描述的 dop 原生字段形状手工构造，**非企业环境导出**；不得作为企业实测证据",
+    "covers": "code/state/summary/userStory 原生命名 + 缺 acceptance_criteria + 单对象 userStory"
+  },
+  "code": "ARD777777",
+  "summary": "企业原生字段：积分兑换二期",
+  "state": "open",
+  "type": "feature",
+  "owner": "zhangsan",
+  "created_at": "2026-07-06T10:00:00+08:00",
+  "sub_systems": [
+    { "code": "CARD.points-mall", "name": "信用卡中心.积分商城子系统" }
+  ],
+  "userStory": {
+    "id": "3001",
+    "code": "US-20001",
+    "title": "积分兑换二期",
+    "type": "feature",
+    "state": "open",
+    "stage": "开发中",
+    "team": "信用卡中心",
+    "assignee": { "name": "李四" },
+    "business_owner": "王五",
+    "release_info": {
+      "release_num": "R20260706001",
+      "release_name": "积分兑换二期排期",
+      "release_date": "2026-07-31",
+      "release_stage": "dev"
+    }
+  }
+}
