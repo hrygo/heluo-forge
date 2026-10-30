@@ -123,8 +123,20 @@ function createFakeCtx({ declareSlot = true } = {}) {
     for (const callback of pending) callback();
   };
   const ctx = {
+    // 与 cordis `_execute` 同语义的 effect 返回值校验：只收 函数(disposer) / null /
+    // Promise / 可迭代；普通对象（例如浏览器里的 `<style>` 元素）抛 `Invalid effect`。
+    // 离线 Node 无 document 走 null 分支，浏览器分支由下方「Invalid effect 回归」用例补。
     effect: (callback, label) => {
-      effects.push({ label, dispose: callback() ?? null });
+      const value = callback();
+      const cordisEffect =
+        typeof value === 'function' ||
+        value === null || value === undefined ||
+        (typeof value === 'object' &&
+          ('then' in value || Symbol.iterator in value || Symbol.asyncIterator in value));
+      if (!cordisEffect) {
+        throw new TypeError(`Invalid effect (${label}): effect 回调返回 ${Object.prototype.toString.call(value)}`);
+      }
+      effects.push({ label, dispose: value ?? null });
     },
     slots: {
       /** 模拟父条目（settings 壳）晚到的槽位声明。 */
@@ -197,6 +209,63 @@ test('装配注册双语字典与样式，且 effect 可整体回收', () => {
   // 官方插件同法：单一全局 style 标签 + plugin-css 去重键，重复挂载不产生第二份样式。
   assert.match(SOURCE, /data-plugin-css=["'`]/u, '样式去重键必须落在 data-plugin-css 上');
   assert.ok(!SOURCE.includes('createTextNode'), '文案一律走 React children，不手工建文本节点');
+});
+
+/**
+ * 真实浏览器 boot 回归（2026-10-30，P0）：`ensureStyle()` 曾返回 `<style>` DOM 元素，
+ * 而 `ctx.effect` 只收 函数(disposer) / null / Promise / 可迭代——cordis `_execute`
+ * 抛 `TypeError: Invalid effect` → apply 整条抛错 → entry `failed` → 页面 HARNESS
+ * 「web boot: 1 entry did not activate / @heluo/forge-devops: failed」。
+ * 离线 Node 无 document 走 `return null` 合法分支，所以旧单测全绿也看不出来；
+ * 本用例补上「有 document」的浏览器分支：伪造 document 首挂载，逐条校验 effect 返回值。
+ */
+test('浏览器分支：有 document 时样式 effect 返回 disposer，不抛 Invalid effect（boot 回归）', () => {
+  const created = [];
+  const head = { appendChild: (tag) => created.push(tag) };
+  const makeTag = () => ({
+    tagName: 'STYLE',
+    dataset: {},
+    textContent: '',
+    remove() {
+      const index = created.indexOf(this);
+      if (index >= 0) created.splice(index, 1);
+    },
+  });
+  const fakeDocument = {
+    querySelector: () => null, // 首挂载：无既有 tag
+    createElement: makeTag,
+    head,
+  };
+  const previousDocument = globalThis.document;
+  globalThis.document = fakeDocument;
+  let applied;
+  try {
+    applied = applyToFakeCtx(CLIENT.module); // effect 校验内置在假 ctx 里，非法返回值直接抛
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+  assert.equal(created.length, 1, '首挂载必须真的挂上一个样式 tag');
+  const styles = applied.effects.find((effect) => effect.label === 'forge-devops: styles');
+  assert.ok(styles, '样式 effect 必须注册');
+  assert.equal(typeof styles.dispose, 'function', 'effect 返回值必须是 disposer（宿主靠它卸载）');
+  styles.dispose();
+  assert.equal(created.length, 0, 'effect 卸载后样式 tag 必须被移除');
+  // 重复挂载：既有 tag 场景返回 null（同样是合法 effect 值），且不接管别处创建的 tag。
+  globalThis.document = {
+    querySelector: () => ({ tagName: 'STYLE' }),
+    createElement: makeTag,
+    head,
+  };
+  try {
+    const again = applyToFakeCtx(CLIENT.module);
+    const againStyles = again.effects.find((effect) => effect.label === 'forge-devops: styles');
+    assert.equal(againStyles.dispose, null, '既有 tag 不接管：返回 null，卸载时不代其移除');
+    assert.equal(created.length, 0, '既有 tag 时不产生第二份样式');
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
 });
 
 /**

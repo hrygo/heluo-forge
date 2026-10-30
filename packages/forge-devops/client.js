@@ -1063,7 +1063,16 @@ window.__ModuleLoader__.load({
      * 装配                                                                *
      * ------------------------------------------------------------------ */
 
-    /** 注入一次全局样式（重复挂载复用同一 tag，卸载时移除）。 */
+    /**
+     * 注入一次全局样式（重复挂载复用同一 tag，卸载时移除）。
+     *
+     * **返回值必须是 disposer 或 null**：`ctx.effect` 的回调只接受
+     * 函数 / null / Promise / 可迭代——返回 `<style>` 元素会抛
+     * `TypeError: Invalid effect`，让整条 entry 不激活（真实浏览器首挂载必现，
+     * 页面报 "web boot: 1 entry did not activate / @heluo/forge-devops: failed"；
+     * Node 离线测不到：无 document 走 `return null` 合法分支）。
+     * 既有 tag 由别处（同插件重复挂载）创建时不接管，返回 null 即不代其释放。
+     */
     function ensureStyle() {
       if (typeof document === 'undefined') return null;
       const existing = document.querySelector(`style[data-plugin-css="${CSS_TAG_ID}"]`);
@@ -1073,7 +1082,7 @@ window.__ModuleLoader__.load({
       tag.dataset.pluginCss = CSS_TAG_ID;
       tag.textContent = CSS;
       document.head.appendChild(tag);
-      return tag;
+      return () => tag.remove();
     }
 
     function apply(ctx) {
