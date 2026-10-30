@@ -28,8 +28,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CLI_FIELDS, CLI_ORIGINS } from '../src/cli-config.mjs';
-// P2-1：包装脚本后缀表唯一真源在 cli-discovery（校验侧 import 复用）。
-import { WRAPPER_SUFFIXES } from '../src/cli-discovery.mjs';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLIENT_FILE = path.join(PACKAGE_ROOT, 'client.js');
@@ -357,8 +355,9 @@ const en = DICTS.en;
 test('zh/en 键集完全一致、占位符一致（少一条就是界面上出现裸键）', () => {
   assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort(), 'en 与 zh 必须一一对应');
   const keys = Object.keys(zh);
-  // r5 删掉 10 个隐藏键文案后总数从 64 收到 54。这里不靠「总数够大」撑强度：
-  // 先断**必含面**（状态/动作/入口/字段/来源/错误/兜底各一组），再断总数不倒退。
+  // r5 删掉 10 个隐藏键文案后总数从 64 收到 54；r8 再删 `error.wrapperScript`（页面不做后缀
+  // 拦截，那条错误句没有触发路径了）收到 53——**删的是键，不是强度**。这里不靠「总数够大」
+  // 撑强度：先断**必含面**（状态/动作/入口/字段/来源/错误/兜底各一组），再断总数不倒退。
   const REQUIRED = [
     'nav',
     'title',
@@ -383,7 +382,6 @@ test('zh/en 键集完全一致、占位符一致（少一条就是界面上出�
     'field.timeoutMs',
     'field.timeoutMs.hint',
     'section.commandline',
-    'error.wrapperScript',
     'error.pathLength',
     'error.timeout',
     'error.load',
@@ -396,7 +394,7 @@ test('zh/en 键集完全一致、占位符一致（少一条就是界面上出�
   ];
   const missing = REQUIRED.filter((key) => !keys.includes(key));
   assert.deepEqual(missing, [], `缺这些关键文案（页面会露出裸键）：${missing.join(', ')}`);
-  assert.ok(keys.length >= 54, `文案太少（${keys.length}）：收窄是删隐藏键文案，不是删状态/动作/兜底`);
+  assert.ok(keys.length >= 53, `文案太少（${keys.length}）：收窄是删隐藏键/失效错误句，不是删状态/动作/兜底`);
   const placeholders = (value) => [...String(value).matchAll(/\{([a-zA-Z]+)\}/gu)].map((match) => match[1]).sort();
   for (const key of keys) {
     assert.equal(typeof zh[key], 'string', `zh.${key} 必须是字符串`);
@@ -478,11 +476,11 @@ test('提示文案零环境变量名、零目录路径（用户不该被要求�
   // 兜底说明里给环境变量是允许的（那是降级场景），但必须集中在 unavailable.* 一组。
   const envMentions = Object.keys(zh).filter((key) => /FORGE_DEVOPS_/u.test(zh[key]));
   assert.deepEqual(envMentions.sort(), ['unavailable.envDop', 'unavailable.envGh'], '只有写面不可用时的兜底才提环境变量');
-  // 包装脚本必须按后缀表拒收，与 cli-config 的 WRAPPER_SUFFIXES 同源语义。
-  for (const suffix of WRAPPER_SUFFIXES) {
-    assert.ok(suffix.startsWith('.'), `WRAPPER_SUFFIXES 项必须以点开头：${suffix}`);
-  }
-  assert.match(SOURCE, /const WRAPPER_PATTERN = \/\\\.\(\?:cmd\|bat/, '客户端必须在 blur 时就拒收 .cmd/.bat（而不是等 422）');
+  // r8：页面**不做**后缀判定。入口形态的唯一真源是服务端 `src/entry-form.mjs`，浏览器半再写
+  // 一份正则，就会把能保存的 `.cmd` / 无后缀 shim 在 blur 时提前拦掉（AC-4 单点、AC-7）。
+  assert.ok(!/WRAPPER_PATTERN/u.test(SOURCE), 'client.js 不得再持有 WRAPPER_PATTERN（后缀规则唯一真源在 entry-form.mjs）');
+  assert.ok(!/wrapperScript/u.test(SOURCE), 'client.js 不得残留 error.wrapperScript（中英成对删除，不留悬空键）');
+  assert.ok(!/\.\(\?:cmd\|bat\|ps1/u.test(SOURCE), 'client.js 不得再出现「后缀表」形式的正则（那是判定，不是文案）');
 });
 
 /* ------------------------------------------------------------------------- *
@@ -828,6 +826,10 @@ const PATH_DOP = 'D:\\tools\\dop.exe';
 const PATH_GH = 'D:\\tools\\gh.exe';
 const PATH_NEW = 'E:\\corp\\bin\\dop.exe';
 const PATH_GH_ALT = 'C:\\Program Files\\GitHub CLI\\gh.exe';
+// r8：两种 npm shim 形态（.cmd 与无后缀裸名）。它们在页面上只是「可保存的值」，
+// 能不能起起来是保存期判定 + 运行期提示的事——页面不再按后缀拦。
+const PATH_SHIM = 'D:\\tools\\dop.cmd';
+const PATH_NOEXT = 'C:\\npm-global\\dop';
 
 /** 契约快照夹具（CliSnapshot：entries + revision + writable，见 TECHNICAL §3.1）。 */
 const snapshotOf = (overrides = {}, revision = 'rev-1') => ({
@@ -911,7 +913,7 @@ test('E2E 只读首页 → 改为手动指定（预填）→ 保存提交 {revis
     // ④ 改成新路径 → blur 校验通过 → 保存：POST 带 revision 栅栏与字段增量。
     await page.change(editable, PATH_NEW);
     await page.blur(page.inputWithValue(PATH_NEW));
-    assert.ok(!page.text().includes(tZh('error.wrapperScript')), '合法 .exe 路径不得报错');
+    assert.notEqual(page.inputWithValue(PATH_NEW).props['aria-invalid'], 'true', '合法入口路径 blur 不得标红');
     const save = page.byClass('fdv-primary')[0];
     assert.equal(save.props.disabled, false, '有改动后保存可用');
     await page.click(save);
@@ -936,34 +938,54 @@ test('E2E 只读首页 → 改为手动指定（预填）→ 保存提交 {revis
   }
 });
 
-test('E2E 包装脚本 blur 即拒 → 409 保留 staged → 页面刷新才带 refresh=1', async () => {
-  const stub = stubFetch({ body: snapshotOf() }, { status: 409, body: { ok: false, code: 'CLI_CONFIG_STALE', message: 'stale' } }, { body: snapshotOf() });
+test('E2E 入口后缀不再被页面拦截：.cmd / 无后缀失焦无红字且可提交 → 409 保留 staged → 刷新才带 refresh=1', async () => {
+  const stub = stubFetch(
+    { body: snapshotOf() },
+    { status: 409, body: { ok: false, code: 'CLI_CONFIG_STALE', message: 'stale' } },
+    { body: snapshotOf() },
+    { body: { ok: true, snapshot: snapshotOf({ dopBin: { origin: 'config', path: PATH_NEW, candidates: [] } }, 'rev-2') } },
+  );
   try {
     const page = createPage();
     await page.settle();
     await page.click(page.buttonsByText(tZh('action.takeOver'))[0]);
 
-    // ① 包装脚本：blur 当场报错，不等到 422（AC-9 的前置拦截）。
-    await page.change(page.inputWithValue(PATH_DOP), 'D:\\tools\\dop.cmd');
-    await page.blur(page.inputWithValue('D:\\tools\\dop.cmd'));
-    assert.ok(page.text().includes(tZh('error.wrapperScript')), '.cmd 必须在 blur 时被拒收');
+    // ① r8 前这里是「blur 即拒」：两种 npm shim 都被本地规则挡下，用户只能等 422 或猜后缀。
+    //    现在页面只判长度，形态交给服务端保存期 → 失焦不标红、值可提交（AC-7）。
+    await page.change(page.inputWithValue(PATH_DOP), PATH_SHIM);
+    await page.blur(page.inputWithValue(PATH_SHIM));
+    assert.notEqual(page.inputWithValue(PATH_SHIM).props['aria-invalid'], 'true', '.cmd shim 失焦不得标红');
+    assert.ok(!page.text().includes(tZh('error.pathLength')), '短路径不得触发长度错误句（入口字段只剩这一条规则）');
+    await page.change(page.inputWithValue(PATH_SHIM), PATH_NOEXT);
+    await page.blur(page.inputWithValue(PATH_NOEXT));
+    assert.notEqual(page.inputWithValue(PATH_NOEXT).props['aria-invalid'], 'true', '无后缀 shim 失焦不得标红');
     await page.click(page.byClass('fdv-primary')[0]);
-    assert.equal(stub.calls.length, 1, '本地校验不通过时不得发保存请求');
+    assert.equal(stub.calls.length, 2, 'shim 是可提交值：页面必须真的发出保存请求（不再是本地拦截）');
+    assert.equal(stub.calls[1].init.method, 'POST');
+    assert.deepEqual(JSON.parse(stub.calls[1].init.body), { revision: 'rev-1', fields: { dopBin: PATH_NOEXT } }, '提交值逐字保留（不改写后缀/不折叠大小写）');
 
     // ② 409：冲突提示 + staged 保留 + 保存仍可用（用户填的东西不被清空）。
-    await page.change(page.inputWithValue('D:\\tools\\dop.cmd'), PATH_NEW);
-    await page.blur(page.inputWithValue(PATH_NEW));
-    await page.click(page.byClass('fdv-primary')[0]);
-    assert.equal(stub.calls.length, 2);
-    assert.equal(stub.calls[1].init.method, 'POST');
     assert.ok(page.text().includes(tZh('saveFailedStale')), '409 必须显示版本冲突文案');
-    assert.equal(page.inputWithValue(PATH_NEW).props.value, PATH_NEW, '409 后 staged 必须保留');
+    assert.equal(page.inputWithValue(PATH_NOEXT).props.value, PATH_NOEXT, '409 后 staged 必须保留');
     assert.equal(page.byClass('fdv-primary')[0].props.disabled, false, '409 后保存仍可用（改完再存）');
-
-    // ③ 冲突提示里的「刷新」是页面唯一会重扫的动作：GET + refresh=1。
+    // ③ 冲突提示里的「刷新」是页面唯一会重扫的动作：GET + refresh=1，且不清掉用户刚填的值
+    //    （重扫 ≠ 丢弃输入；配置页最怕的就是冲突后一刷新白填一遍）。
     await page.click(page.button(tZh('action.refresh')));
     assert.equal(stub.calls.length, 3);
     assert.ok(stub.calls[2].url.includes('?refresh=1'), '刷新才允许触发重新扫描（AC-4）');
+    assert.equal(stub.calls[2].init.method ?? 'GET', 'GET');
+    assert.equal(page.inputWithValue(PATH_NOEXT).props.value, PATH_NOEXT, '刷新后 staged 仍在');
+
+    // ④ 改完再存：拿到新快照 → 回填、提示已保存、保存键回落禁用。
+    await page.change(page.inputWithValue(PATH_NOEXT), PATH_NEW);
+    await page.blur(page.inputWithValue(PATH_NEW));
+    await page.click(page.byClass('fdv-primary')[0]);
+    assert.equal(stub.calls.length, 4);
+    assert.equal(stub.calls[3].init.method, 'POST');
+    assert.deepEqual(JSON.parse(stub.calls[3].init.body), { revision: 'rev-1', fields: { dopBin: PATH_NEW } });
+    assert.ok(page.text().includes(tZh('saved')), '拿到新快照后必须给出保存成功反馈');
+    assert.equal(page.inputWithValue(PATH_NEW).props.value, PATH_NEW, '保存后显示服务端回填的新值');
+    assert.equal(page.byClass('fdv-primary')[0].props.disabled, true, '保存完成后回到未改动状态');
   } finally {
     stub.restore();
   }

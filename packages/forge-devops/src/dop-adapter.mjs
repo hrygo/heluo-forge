@@ -23,6 +23,7 @@
 
 import { createHash } from 'node:crypto';
 
+import { describeSpawnFailure } from './entry-form.mjs';
 import { DevopsReadError, READ_REASONS } from './read.mjs';
 
 /**
@@ -112,15 +113,26 @@ function parseRecord(stdout, detail) {
 
 /**
  * 创建 dop 适配器。
- * @param {{runner: {run: Function}, dopBin?: string, dopEndpoint?: string, now?: () => string}} options
+ *
+ * `platform` 只影响**未启动时的归因文案**（入口形态判定），可选注入是为了让 win32 提示
+ * 能在任意宿主上离线断言；不传时跟随 `process.platform`，现有调用零改动。
+ *
+ * @param {{runner: {run: Function}, dopBin?: string, dopEndpoint?: string, now?: () => string, platform?: string}} options
  */
-export function createDopAdapter({ runner = null, dopBin = '', dopEndpoint = '', now = () => new Date().toISOString() } = {}) {
+export function createDopAdapter({
+  runner = null,
+  dopBin = '',
+  dopEndpoint = '',
+  now = () => new Date().toISOString(),
+  platform = process.platform,
+} = {}) {
   if (runner === null || typeof runner !== 'object' || typeof runner.run !== 'function') {
     throw new TypeError('createDopAdapter 需要可注入的 runner（{ run({bin,args,purpose}) }），不允许在适配器内自建子进程');
   }
   if (typeof now !== 'function') throw new TypeError('now 必须是返回 ISO 时间串的函数');
 
   const bin = text(dopBin);
+  const hostPlatform = platform ?? process.platform;
   const endpoint = text(dopEndpoint);
   const at = () => now();
 
@@ -150,9 +162,14 @@ export function createDopAdapter({ runner = null, dopBin = '', dopEndpoint = '',
     }
     if (!Number.isInteger(result.exitCode) || result.exitCode !== 0) {
       const spawnFailed = result.exitCode === null || result.exitCode === undefined;
+      // 未启动（exitCode null）按入口形态归因：固定 argv + `shell:false` 启动不了脚本/shim，
+      // 这是启动方式的限制而非路径写法问题。判定不读 errno（.cmd 常见 EINVAL、npm 无后缀
+      // shim 常见 ENOENT，原因相同），原生入口由 helper 回退到脱敏证据行，不套包装脚本解释。
+      const evidence = failureLine(result);
+      const line = spawnFailed ? describeSpawnFailure({ bin, platform: hostPlatform, evidence }) : evidence;
       fail(
         READ_REASONS.COMMAND_FAILED,
-        `${context.command} 失败（${spawnFailed ? '未启动' : `退出码 ${result.exitCode}`}）：${failureLine(result)}`,
+        `${context.command} 失败（${spawnFailed ? '未启动' : `退出码 ${result.exitCode}`}）：${line}`,
         { ...context, exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null, spawnFailed },
       );
     }

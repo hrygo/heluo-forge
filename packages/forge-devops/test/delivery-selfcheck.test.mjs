@@ -57,6 +57,21 @@ const MODULE_CONTRACTS = [
   { file: 'commit-message.mjs', task: 'T6', exports: ['assertCommitMessage'] },
   { file: 'artifacts.mjs', task: 'T7', exports: ['ARTIFACT_KINDS', 'artifactPath', 'renderFrontMatter', 'writeArtifact'] },
   { file: 'entry.mjs', task: 'T7', exports: ['ENTRY_NAME', 'ENTRY_HELP', 'parseChangeId', 'registerEntry'] },
+  // r8 增量：入口形态单点模块。它被保存侧、发现侧与两个适配器共读，成员名一旦漂移，
+  // 最先崩的是运行期（适配器起不来），所以这里按蓝图 §3.1 逐字核对。
+  {
+    file: 'entry-form.mjs',
+    task: 'T1(r8)',
+    exports: [
+      'WRAPPER_SUFFIXES',
+      'ENTRY_FORMS',
+      'wrapperSuffixOf',
+      'entryFormOf',
+      'isDirectlyExecutable',
+      'describeSpawnFailure',
+      'redactPathLike',
+    ],
+  },
   // r3 增量：四个新模块 + 三处增量导出。`landedWith` 表示该成员随同波次的另一文件落地，
   // 文件先于同波次落地时记 DEFERRED（不是静默放行：gate 文件一出现即转为硬断言）。
   {
@@ -624,24 +639,50 @@ test('r3 字段规则唯一出口：cli-config 复用 runtime-config 的校验�
   }
 });
 
-test('r3 包装脚本后缀表单一定义：全仓只有 cli-discovery 声明 WRAPPER_SUFFIXES（P2-1）', (t) => {
-  const file = 'cli-config.mjs';
-  if (!existsSync(pkgPath('src', file))) return deferred(t, file, 'T2(r3)', '三层合并模块尚未产出');
+test('r8 入口形态单点定义：全仓只有 entry-form 声明 WRAPPER_SUFFIXES，其余模块全是消费者（AC-4）', (t) => {
+  const gate = 'entry-form.mjs';
+  if (!existsSync(pkgPath('src', gate))) return deferred(t, gate, 'T1(r8)', '入口形态单点模块尚未产出');
   const declaredIn = srcFiles().filter((name) => /export\s+const\s+WRAPPER_SUFFIXES\b/.test(srcText(name)));
   assert.deepEqual(
     declaredIn,
-    ['cli-discovery.mjs'],
-    `WRAPPER_SUFFIXES 只能有一处定义（否则发现侧与校验侧会各自演进）：${declaredIn.join(', ')}`,
+    [gate],
+    `WRAPPER_SUFFIXES 只能有一处定义（否则保存侧与发现侧会各自演进）：${declaredIn.join(', ')}`,
   );
-  // 校验侧必须 import 复用它（常量或判定函数二者之一），不得再抄一张后缀表。
-  assert.match(
-    srcText(file),
-    /import\s*\{[^}]*\b(?:WRAPPER_SUFFIXES|wrapperSuffixOf)\b[^}]*\}\s*from\s*'\.\/cli-discovery\.mjs'/,
-    'cli-config 必须 import cli-discovery 的包装脚本判定，不得自带一份副本',
+  // 「可直接启动」的判定同样只能有一份实现：保存侧 import 复用，发现侧再导出。
+  const execDeclaredIn = srcFiles().filter((name) => /export\s+function\s+isDirectlyExecutable\b/.test(srcText(name)));
+  assert.deepEqual(
+    execDeclaredIn,
+    [gate],
+    `isDirectlyExecutable 只能有一处实现（AC-4 的硬要求）：${execDeclaredIn.join(', ')}`,
   );
   assert.ok(
-    !/\.cmd['"]?\s*,\s*['"]\.bat/u.test(srcText(file)),
+    !/export\s+function\s+isDirectlyExecutable\b/.test(srcText('cli-config.mjs')),
+    'cli-config 不得自带可执行判定，只能消费 entry-form',
+  );
+  // 校验侧必须 import 复用判定，不得再抄一张后缀表或自己写后缀规则。
+  assert.match(
+    srcText('cli-config.mjs'),
+    /import\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}\s*from\s*'\.\/entry-form\.mjs'/,
+    'cli-config 必须 import entry-form 的入口形态判定，不得自带一份副本',
+  );
+  assert.ok(
+    !/\.cmd['"]?\s*,\s*['"]\.bat/u.test(srcText('cli-config.mjs')),
     'cli-config 不得再内联一张 .cmd/.bat 后缀表',
+  );
+  // 发现侧必须是「再导出」而不是重新声明：既有调用方与测试的 import 面保持不动。
+  // 两种等价写法都接受——`export { … } from './entry-form.mjs'`，或 import 后再 export。
+  const discoveryText = srcText('cli-discovery.mjs');
+  const reExportsDirectly = /export\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}\s*from\s*'\.\/entry-form\.mjs'/.test(discoveryText);
+  const importsThenExports =
+    /import\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}\s*from\s*'\.\/entry-form\.mjs'/.test(discoveryText) &&
+    /export\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}/.test(discoveryText);
+  assert.ok(
+    reExportsDirectly || importsThenExports,
+    'cli-discovery 必须从 entry-form 再导出形态判定（契约面不变，定义只有一份）',
+  );
+  assert.ok(
+    !/export\s+function\s+wrapperSuffixOf\b/.test(discoveryText),
+    'wrapperSuffixOf 也不得在发现模块重新实现（唯一定义在 entry-form.mjs）',
   );
 });
 
