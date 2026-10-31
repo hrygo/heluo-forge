@@ -11,12 +11,15 @@ const ERROR_STATUS = {
   IAM_EXCLUSIVE_CONFLICT: 409,
   IAM_INVALID_TRANSITION: 409,
   IAM_CREDENTIALS_UNAVAILABLE: 503,
+  IAM_ATOMIC_STORE_UNVERIFIED: 503,
   IAM_CREDENTIALS_CLEAR_FAILED: 503,
   IAM_CALLBACK_UNAVAILABLE: 500,
   IAM_UNREACHABLE: 502,
   IAM_STATE_MISMATCH: 400,
   IAM_ATTEMPT_EXPIRED: 410,
   IAM_CALLBACK_INVALID: 400,
+  IAM_CALLBACK_ISSUER: 400,
+  IAM_ATTEMPT_IN_PROGRESS: 409,
   IAM_AUTHORIZATION_ERROR: 400,
   IAM_INVALID_GRANT: 401,
   IAM_REAUTH_REQUIRED: 401,
@@ -196,7 +199,14 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           return;
         }
         try {
-          await service.handleCallback(url.href);
+          // Resolve origin-form requests against the trusted live origin, not
+          // the synthetic localhost base used only for routing above.
+          const callbackUrl = new URL(req.url ?? '/', expected?.origin || 'http://localhost');
+          if (expected && callbackUrl.origin !== expected.origin) {
+            sendHtml(res, 403, '登录回调失败', '回调来源不受信任。');
+            return;
+          }
+          await service.handleCallback(callbackUrl.href);
           sendHtml(res, 200, '登录完成', '企业 IAM 登录已完成，可以关闭此页面并返回应用。');
         } catch (error) {
           const status = ERROR_STATUS[error?.code] ?? 500;
@@ -289,7 +299,11 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
         if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
-          return sendJson(res, 200, await service.signOut());
+          const result = await service.signOut();
+          if (result?.view?.error === 'IAM_CREDENTIALS_CLEAR_FAILED' || result?.revocation === 'unknown') {
+            return sendJson(res, 503, { ...result, logoutUrl: null, error: { code: 'IAM_CREDENTIALS_CLEAR_FAILED' } });
+          }
+          return sendJson(res, 200, result);
         } catch (error) {
           const status = ERROR_STATUS[error?.code] ?? 500;
           return sendJson(res, status, errorBody(error));

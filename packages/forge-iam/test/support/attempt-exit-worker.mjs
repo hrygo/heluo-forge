@@ -1,7 +1,7 @@
 // Child entry for the lifecycle matrix: start a sign-in attempt (which arms the
 // attempt timeout), dispose, then return. If dispose leaves the timer armed the
 // process cannot exit, which is exactly what the parent measures.
-import { createIamService } from '../../src/index.mjs';
+import { createIamService } from './trusted-service.mjs';
 import { validateConfig } from '../../src/config.mjs';
 import { MemoryCredentials } from './memory-credentials.mjs';
 

@@ -87,16 +87,15 @@ node scripts/probe/run-bundle-install-rehearsal.mjs
 接受并建出子会话；`currentInitiator()` 只在显式边界内可读。探针会把会话/存储根覆盖到本次临时目录
 （`session-persistence-jsonl` 与 `storage-json` 的 `root`），不在用户 `DSH_HOME` 下留下会话。
 
-## 旧 0600 → 钥匙串迁移演练（#13 AC4，仅 darwin）
+## 旧 0600 迁移阻断探针（#107，离线）
 
 ```sh
 node scripts/probe/run-keychain-migration-rehearsal.mjs
 ```
 
-只碰副本：旧 0600 文件由探针在临时目录自建（合成值），钥匙串条目 service 固定为探针专用名、
-account 随机，结束删除并复核无残留。量四件事：迁移成功后才删旧值、keychain 不可用 fail closed、
-回读不一致/目标冲突即停、证据与消息不含秘密值。`DSH_KEYCHAIN_MIGRATION=0` 可让用例跳过。
-退出码 0/1/2 与其它探针一致；证据写临时目录的 `keychain-migration.json`。
+当前探针只创建临时合成文件，验证迁移入口不调用目标、读取器或删除器且不改变副本；
+探针退出 0 只表示阻断路径符合预期，实际迁移与目标平台验收仍为 BLOCKED，不访问系统钥匙串。
+旧版 2026-10-24 的真实钥匙串迁移演练是历史结果，不代表当前入口支持迁移。
 
 ## 系统钥匙串 spike（#13 本地区块，仅 darwin）
 

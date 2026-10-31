@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.0.9 |
+| 版本 | V1.1.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-28 |
+| 最后更新 | 2026-10-30 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（Host + Client 骨架；OIDC mock 流程已验，真实联调待；机密客户端迁移待；实现与验证见设计索引 §2.2） |
 
@@ -315,7 +315,7 @@ interface IamGrantV1 {
 | 日志 | 主体、资源、结果、耗时、错误类别 | 90 天（认证）/30 天（配置错误） | 本地写失败不阻断；必要审计由 policy 执行 |
 | 官方旧 grant | 不读取、不刷新、不用于调用 | 直到用户清理 | 清理失败保留并提示 |
 
-**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供（2026-10-21 核验）。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback。账户页已返回并展示 `gatewayCredential.storage`（`keychain`/`file` 等），非 keychain 时显示“未受系统保护”，见 §4.4。旧 0600 记录在 keychain 可用后迁移，迁移成功才删除明文；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
+**存储事实**：目标 DSH 默认组合的 `dsh-credentials-local` 把 `refs` 与 `records` 写在 `$DSH_HOME/.credentials.yaml`，权限 0600、内容为明文 YAML；同 UID 的 Agent 工具进程可以读取。OS keychain provider 未随 `0.2.1-rc.2` 提供（2026-10-21 核验）。因此本设计新增独立 `@heluo/forge-credentials-keychain`，生产必须注册；生产计划使用 `@napi-rs/keyring`：Windows 走 Credential Manager，UOS/麒麟固定 Secret Service 并拒绝 keyutils 静默回退；当前包仅实现 file backend，OS adapter 未实现。keychain 不可用时企业登录 fail closed；仅 dev/pilot 可显式接受 0600 fallback。账户页已返回并展示 `gatewayCredential.storage`（`keychain`/`file` 等），非 keychain 时显示“未受系统保护”，见 §4.4。旧 0600 记录的受控迁移是目标而非当前可用能力；由于尚未证明目标跨进程互斥及源文件隔离，当前迁移入口不读取、不复制也不删除旧文件。迁移与精确清理须在受权及隔离副本演练后另行实现；不新写明文。若 provider 无法插拔，暂停 Q15 的 keychain 实现并重评，不静默降级。
 
 **本机 spike（2026-10-24，darwin-arm64，`/usr/bin/security`）**：用 `@heluo/forge-credentials-keychain` 的 security-cli 适配器（非生产、需 `allowUnvettedPlatformAdapter: true` 显式开启）在真实系统钥匙串上跑通 backend 契约，实测到的事实：
 
@@ -332,7 +332,7 @@ interface IamGrantV1 {
 
 复跑命令：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过；`node --test tests/keychain-spike.test.mjs` 在非 darwin 或 `DSH_KEYCHAIN_SPIKE=0` 时跳过）。
 
-**旧 0600 明文迁移演练（#13 AC4，2026-10-24，darwin-arm64，`/usr/bin/security`）**：迁移协调器 `migrateLegacyFileToKeychain()`（`packages/forge-credentials-keychain/src/migrate.mjs`）把旧 0600 文件里的 `${service}/${accountPrefix}/record|ref/…` 条目写进钥匙串，规则是 fail closed：
+**旧 0600 明文迁移**：当前 `migrateLegacyFileToKeychain()` 入口一律 fail closed，不读取旧文件、不调用目标后端、不复制或删除；`legacyRetained: null` 表示未核实旧文件是否存在。以下是 2026-10-24 旧实现的历史演练规则，不代表当前实现支持迁移或已通过生产验收：
 
 | 情况 | 处理 |
 |---|---|
@@ -343,7 +343,7 @@ interface IamGrantV1 {
 | 全部回读一致 | 才删除旧文件；删除失败按"已迁移但旧文件仍在"报缺口（`legacy-delete-failed`） |
 | 任何返回值与消息 | 不含秘密值（`redactSecrets`，金丝雀检查） |
 
-本机演练（`node scripts/probe/run-keychain-migration-rehearsal.mjs`，**9/9 步通过**）只碰副本：旧文件是探针在临时目录自建的 0600 合成记录，钥匙串条目 service 固定为探针专用名、account 随机，结束删除并复核无残留。实测：迁移后回读值与旧值一致、旧文件删除、临时目录无新增明文；不可用后端下副本原样保留（仍是 0600）；回读不一致与目标冲突都按上表停止；证据 JSON 金丝雀检查通过。**未验**：Windows 凭据管理器与 UOS/麒麟 Secret Service 上的迁移、`@napi-rs/keyring` 产物、以及真实用户凭据的迁移（本轮按批准决策只演练副本，不读取、不删除任何真实凭据记录）。
+2026-10-24 旧实现曾在 macOS 钥匙串和合成副本上记录 9/9；该结果只适用于当时的实现。当前 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 改为离线合成夹具，验证关闭入口不会访问目标、读取或删除旧文件，并不执行迁移。**未验**：安全迁移实现、Windows 凭据管理器与 UOS/麒麟 Secret Service 上的迁移、`@napi-rs/keyring` 产物及真实用户凭据迁移。
 
 **跨进程可见性补测（#13 AC4，2026-10-24，darwin-arm64，真钥匙串）**：既有证据都在**同一个进程**里完成往返，而跨进程是另一类风险——backend 里只要存在任何进程内状态（缓存、句柄、按 pid 命名），本进程往返会通过、CLI 与桌面应用之间却读不到对方记录。`node scripts/probe/run-keychain-cross-process-probe.mjs` 把写、读、删拆到不同进程，**6/6 步通过**：
 
@@ -358,7 +358,7 @@ interface IamGrantV1 {
 
 **未验**不变：Windows/UOS/麒麟适配器与其上的跨进程行为、`@napi-rs/keyring` 产物、真实用户凭据（本轮同样只碰探针自建条目）。
 
-**Linux aarch64 平台探测（#13 AC4，2026-10-24，Ubuntu 24.04.5 / aarch64 / Node 22.23.2，远端任务副本）**：从包公开入口调用 API（未改源码、未读真实凭据），10/10 探测通过：
+**Linux aarch64 平台探测（#13 AC4，2026-10-24，Ubuntu 24.04.5 / aarch64 / Node 22.23.2，远端任务副本）**：从当时的包公开入口调用 API（未改源码、未读真实凭据），10/10 探测通过；下表迁移结果只适用于旧实现，当前迁移入口已关闭：
 
 | 探测 | 实测 |
 |---|---|
@@ -377,7 +377,7 @@ interface IamGrantV1 {
 
 开发 fallback 的文件读写使用各操作独立快照，避免无锁读取污染锁内事务。文档锁争用超过 10 秒报 `KEYCHAIN_LOCK_TIMEOUT`，不按 PID/时间自动接管：检查旧锁后再重命名不能排除另一等待者已取得新锁的竞态。异常退出留下锁时，须先停止使用同一文件的所有进程，再人工确认和恢复；不把该最小 fallback 当作生产锁与 OS adapter 的实现。
 
-镜像/副本说明：V1 不再把 IAM access token 写入 `ENTERPRISE_ACCESS_TOKEN`；IAM token 只存在于 GrantRecord 与内存。网关凭据 `ENTERPRISE_STATIC_KEY` 由同一 keychain provider 保护；在 dev/pilot 的 0600 fallback 下仍为明文，账户页已按 `storage` 来源提示“未受系统保护”（OS keychain adapter 未实现，生产仍按 fail closed 处理）。`llm-pi-ai` 每次请求重新解析该引用，用户更换 Key 后无需重启；不要把“内存中的 Key”写成唯一副本。
+镜像/副本说明：V1 不再把 IAM access token 写入 `ENTERPRISE_ACCESS_TOKEN`；新取得的 IAM token 只保存于 GrantRecord 与内存。既有旧引用在启动时保留，其他消费者仍可能解析它，须另做执行入口阻断及受授权遗留处理；保留不等于隔离。网关凭据 `ENTERPRISE_STATIC_KEY` 由同一 keychain provider 保护；在 dev/pilot 的 0600 fallback 下仍为明文，账户页已按 `storage` 来源提示“未受系统保护”（OS keychain adapter 未实现，生产仍按 fail closed 处理）。`llm-pi-ai` 每次请求重新解析该引用，用户更换 Key 后无需重启；不要把“内存中的 Key”写成唯一副本。
 
 ## 7. 流程
 
@@ -491,22 +491,23 @@ flowchart TD
 ### 7.4 刷新
 
 - 触发：access token 距到期 ≤`refreshSkewSeconds`，或账户页/首个请求需要 token。
-- 把“读记录 → 判断有效期 → 刷新 → 写回”放进 `ctx.credentials.modifyRecord('heluo-iam/session')`；锁内先复查，后到者复用结果。discovery/JWKS 预取在锁外；grant 写入后重读；记录缺失、access token 不匹配或读取失败时要求重登，不返回旧 token，也不因此删除另一实例的新 grant。V1 不再发布模型凭据镜像。
-- 锁内网络刷新硬超时 5 秒；超时/断网时释放锁，保留未过期 access token，按退避重试；已过期则 `expired` 并要求重登。
-- `invalid_grant`：删除记录、清运行时副本、`signed-out`；不重试。
-- refresh 轮换：若 IAM 返回新 refresh token，先写记录再使用；写失败或响应丢失导致旧 token 可能已失效时，按“会话不确定”处理，清空并要求重登，**不得**用旧 refresh token 再试。
-- 双进程：两个进程共用一份记录；后到者在锁内重新读取，不各刷新一次；任何一方都不得把旧 refresh token 写回。
+- **原子 provider 门禁（本地实现，待生产验证）**：未经可信组合代码确认具体 provider 实例的记录原子性与提交语义，不得启动新登录、发送刷新或执行回调条件清理。默认 `apply` 不注入可信实例 verifier，因此新登录与刷新被拒绝；当前尚无经验证的生产 provider。用户已同意现有通过配置启用的 0600 文件开发登录暂不可用；离线测试可由受信测试代码对具体实例显式注入 verifier。注入声明本身不证明后端能力，真实跨进程锁、提交语义、旧客户端及 provider 替换期间的迟到提交均待验证。
+- 此门禁不改变当前对无需刷新的旧有效 grant 的读取：未知 provider 上既有会话仍可能经 `hydrate` 显示 `ready`、被读取；实际模型/工具执行门禁尚未接线，不能声称安全或据此开放生产。未知 provider 退出保留持久 grant，清理及远端撤销状态未知，不应当作退出成功的证据。
+- 在 `ctx.credentials.modifyRecord('heluo-iam/session')` 内复查记录并写入唯一 `pending` 标志，确认写入成功后才在锁外发送一次刷新请求；成功响应经校验后以第二次记录事务比较原记录及操作标志再写回。discovery/JWKS 在声明操作前预取。
+- 发送超时、断网、`invalid_grant`、校验失败或不能确认结果时不返回旧 access token、不重放旧 refresh token；保留 `pending` 并要求重新登录。成功响应未提供新 refresh token 或返回同值亦按不确定处理，直到 IAM 书面确认其他安全语义。`pending` 没有自动接管期限，即使请求前进程崩溃也不能据此判断可以重发。
+- 并发等待者只等待同一操作的结果，不可因超时接管；等待期间采用单调时钟截止，并限制异步 provider 读取的等待，但不取消底层 I/O。首次读取、claim/写入、事件循环阻塞及退出自身 I/O 不在此时间界限内。迟到结果不得覆盖其他登录；记录更新后的回复丢失与底层持久化保障仍须具体 provider 契约核验。
+- 这些约束以所有参与进程遵守协议、provider 确有跨进程原子排他和可靠提交为前提；当前合成双进程夹具不是生产 OS keychain。旧客户端、未验证后端、跨进程注销和远端撤销未被上述机制证明安全。V1 不发布模型凭据镜像。
 
 ### 7.5 退出与撤销
 
-> 2026-10-23 适用性：本节原流程是 interim 基线说明。默认目标是当前授权及刷新后代撤销，不自动调用全局 RP 登出；本地删除/只撤 AT 不能证明服务端五分钟内终结当前授权。旧代码行为未在本轮修改。相关能力未闭环则不开放相应路径。
+> 2026-10-23 适用性：本节原流程是 interim 基线说明。默认目标是当前授权及刷新后代撤销，不自动调用全局 RP 登出；本地删除/只撤 AT 不能证明服务端五分钟内终结当前授权。相关能力未闭环则不开放相应路径；当前实现限制见下文。
 >
 > **2026-10-28 回函边界**：厂商 6.0.3 的 RFC 7009 端点仅明确支持撤销 Access Token，Refresh Token 撤销与级联未确认；内部回函称账号禁用可实时作废，但与厂商“已发 AT 按不具备规划”冲突。若当前环境只能撤 AT，必须如实显示“当前授权未确认撤销”，不得把本地退出或只撤 AT 写成当前设备授权闭环。
 
 
-顺序：停止本实例新请求 → 取消进行中的登录 → 锁内读取最新 grant，按端点实际能力撤销 refresh token；若只能撤 Access Token，则撤 AT 并保留“当前授权未确认撤销”状态（网络上限 5 秒）→ 清运行时副本 → 删除记录 → 再清副本 → 发布 `signed-out` → 审计。默认不删除已保存的 `ENTERPRISE_STATIC_KEY`；用户显式“清除网关凭据”才删除。
+目标顺序：停止本实例新请求并取消登录 → 读取拟退出的 grant 快照 → 可信 provider 的同一记录事务内严格比较完整快照，检查无 pending 后尽力撤销该记录的 refresh token（网络上限 5 秒），并写入无敏感信息的固定逻辑墓碑 → 核对事务回执后清运行时副本并发布 `signed-out`。若锁内发现记录变化、pending、无效记录、provider 不可信或提交结果未知，则保留相关记录并报告清理及远端撤销未知；不得在锁外无条件删除。无会话标识的旧 grant 也按完整快照比较，不将缺失 ID 视为同一会话的证明。墓碑视为逻辑空但不等于物理删除，后续登录可覆盖。撤销端点的成功响应只表明该请求获得成功响应，不证明授权及刷新后代已撤销；若只能撤 Access Token，当前授权撤销仍未确认。默认不删除已保存的 `ENTERPRISE_STATIC_KEY`；用户显式“清除网关凭据”才删除。
 
-当前实现（2026-10-22）用删除后的再次清理与发布后的 grant 复核配对，覆盖共享刷新、迟到 hydrate/refresh 副本及插件卸载的指定交错；过时 callback/读取不再覆盖新生命周期。`credentials` seam 只承诺单 record 的互斥，不提供 record/ref 多键原子事务；这些终态回归不是所有跨进程时序的线性一致性证明，仍须经过生产凭据后端与企业并发验收。
+当前实现与模拟验证入口见[设计索引 §2.2](../README.md#22-实现与验证入口)。条件墓碑不是物理删除；提交回执异常、provider 替换或迟到提交不能靠回读证明成功。真实跨进程锁、提交语义、旧客户端及远端撤销均未验证；完整快照比较不能识别无实例 ID 且字节完全相同的旧记录 ABA。未知 provider 的退出保留持久 grant，清理及远端撤销状态未知；不得将本地退出写成强一致或远端授权撤销已验证。
 
 - 撤销按 [RFC 7009 §2.2](https://www.rfc-editor.org/rfc/rfc7009.html#section-2.2) 以成功状态判定，忽略成功正文，允许空、非 JSON 或 JSON 正文；失败 HTTP 响应仍报告失败。规范核验日期：2026-10-22。
 
@@ -531,10 +532,10 @@ flowchart TD
 | JWKS `kid` 未命中 | 视为密钥轮换，短退避后重取 JWKS | 暂时不可用，不冒充登录过期 | 是，有上限 |
 | 换 token 网络超时/5xx | 不重放同一 code；按未知结果处理 | 提示重试登录 | 是 |
 | 换 token `invalid_grant` | 清理会话 | 提示重新登录 | 否 |
-| 刷新网络错误/429 | 保留未过期 access token，退避 | 保留会话并提示 | 是，有上限 |
-| 刷新 `invalid_grant` | 删除记录与运行时副本 | 要求重新登录 | 否 |
-| 刷新轮换后写盘失败/响应丢失 | 视为会话不确定，清空 | 要求重新登录 | 否 |
-| 双进程并发刷新 | 锁内复查，后到者复用 | 无感 | — |
+| 刷新请求已发送后网络错误/429 | 结果未知，保留 `pending`，不返回旧 access token | 要求重新登录 | 否 |
+| 刷新 `invalid_grant` | 保留 `pending`，不得锁外无条件删除 | 要求重新登录 | 否 |
+| 刷新轮换后写盘失败/响应丢失 | 状态不确定，已确认的 `pending` 阻止重复发送；提交成功但回复失败须依具体后端判断 | 要求重新登录 | 否 |
+| 双进程并发刷新 | 满足协议与底层互斥前提时等待并匹配同一操作；超时不接管 | 等待或重新登录 | — |
 | 账号禁用/403 | 停止企业调用，保留可归因错误 | 提示账号无权限或已禁用 | 否，联系管理员 |
 | 网关 401 | 不刷新 IAM、不重放；网关包提示检查/重建 UAG 凭据 | 提示检查 Key 或到 UAG 控制台核查 | 否 |
 | 网关 403 | 不刷新，不重试 | 挂起则联系管理员；策略拒绝展示原因 | 否 |
@@ -615,8 +616,8 @@ flowchart TD
 | 子进程发起登录尝试后 `dispose()`，进程在 10 秒内自然退出（尝试超时是 30 秒，定时器没被清就会挂住） | PASS |
 
 **未验**：真实 DSH 进程内的插件热卸载与重载（`dsh plugin` 装/卸）仍只有本机探针层面的 `--dump-config` 证据，没有"运行中卸载再挂载后服务可用"的实测。
-| 刷新响应被拖到 8 秒：进程在约 5.1 秒失败而不是挂住（`REFRESH_TIMEOUT_MS = 5000`），存储中的 grant 不被改写 | PASS |
-| IdP 已轮换但响应被丢弃：进程不报成功、也不会存下它没收到的 token；再次刷新得到 `IAM_REAUTH_REQUIRED`，记录被清除，重新登录可在同一存储上恢复 | PASS |
+| 刷新响应被拖到 8 秒：进程在约 5 秒失败；当前协议先写 `pending`，不再期望记录不变 | 当前用例见 `dual-process-refresh.test.mjs` |
+| IdP 已轮换但响应被丢弃：旧令牌不得再次发送；保留 `pending`，重新登录可恢复 | 当前用例见 `dual-process-refresh.test.mjs` |
 | 存储文件不含授权码、verifier、nonce、attempt | PASS |
 
 边界：凭据存储是文件 + 目录锁的测试替身，**不是**真实 keychain 的跨进程事务；IdP 是本地仿服务；5 秒是模块常量而非可配置 SLA。真实 keychain（Windows 凭据管理器/UOS/麒麟）下的双进程行为、429 与断网下的重试退避仍需在目标平台实测；本轮不构成 AC9 的双端证据。
@@ -628,9 +629,9 @@ flowchart TD
 
 升级：配置项只增不删；记录 `version` 迁移；新增 scope 需要重新授权，界面明确提示；DSH 升级后重新应用官方行禁用补丁，并跑“官方行是否回灌”用例。
 
-回退：禁用 `@heluo/forge-iam` 时，企业卸载流程先调用显式 `signOut`（撤销 refresh token、删除记录、清理运行时副本），再移除插件；普通 `dispose` 停止订阅、释放内存并清理派生的运行时副本，但保留 GrantRecord 与已保存的 `ENTERPRISE_STATIC_KEY`；下次启动由 `hydrate` 恢复。进程异常退出导致引用残留时，最多持续到 access token 到期，由 A12/policy 兜底。官方行仍由企业包禁用，官方登录在内网不可用，因此回退到官方登录不是可用路径。若整体回退企业包，需同时恢复官方行并确认内网是否可达；不可达时保留企业包而不是制造一个坏掉的登录入口。
+回退：禁用 `@heluo/forge-iam` 时，企业卸载流程先调用显式 `signOut`，核查清理与撤销结果，再移除插件；普通 `dispose` 停止订阅、释放内存并清理派生的运行时副本，但保留 GrantRecord 与已保存的 `ENTERPRISE_STATIC_KEY`；下次启动由 `hydrate` 恢复。进程异常退出后的残留及 A12/policy 的实际兜底仍须在真实执行入口核验，不以 access token 到期推断全部授权已撤销。官方行仍由企业包禁用，官方登录在内网不可用，因此回退到官方登录不是可用路径。若整体回退企业包，需同时恢复官方行并确认内网是否可达；不可达时保留企业包而不是制造一个坏掉的登录入口。
 
-卸载：先显式 `signOut`，尽力撤销、删除 `heluo-iam/session`、清理运行时副本；网关凭据默认保留，由用户显式清除；官方旧 grant 由用户确认后清理；不删除工作区、会话或用户文件。
+卸载：先显式 `signOut`，尽力撤销并按 §7.5 条件逻辑清除 `heluo-iam/session`，核查未知结果；网关凭据默认保留，由用户显式清除；官方旧 grant 由用户确认后清理；不删除工作区、会话或用户文件。
 
 ## 12. 未决事项
 

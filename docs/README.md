@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.21.7 |
+| 版本 | V1.22.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-10-25 |
+| 最后更新 | 2026-10-28 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -63,7 +63,7 @@
 | 编号 | 交付物 | 文件 | 必须先回答 |
 |---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V1.0.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 当前人员与用途、A/B 候选、应用受控开通、IP、五分钟撤权/单授权退出及 C1/C4；能力待核验，不以历史 key-auth 调通代替 |
+| CORP-DSH-GW-001 | AI 网关契约（V2.0.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 当前人员与用途、A/B 候选、应用受控开通、IP、五分钟撤权/单授权退出及 C1/C4；能力待核验，不以历史 key-auth 调通代替 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
 | CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
@@ -85,14 +85,15 @@
 | 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；索引交付、三目标安装与全通道边界仍需验 |
 | 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
 | Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
-| IAM 登录与权限专题问询 | [IAM 原函及本轮补充确认](<collaboration/iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送>) | 补充正文先列业务需求、原函覆盖与待确认问题；原 21 项及已有答复保留；面向 IAM 团队补充产品依据，共同事项由行内实施团队协调汇总；未发送 |
+| IAM 登录与权限专题问询 | [IAM 原函及本轮补充确认](<collaboration/iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送>) | 补充正文先列业务需求、原函覆盖与待确认问题；原 21 项及已有答复保留；面向 IAM 团队补充产品依据，共同事项由实施团队协调汇总；未发送 |
 | 专用访问评审 | [DSH 与 Agent 模型网关认证方案](architecture/gateway-identity-review.md) | 需求方已确认；比较纯令牌/Key＋令牌，能力及路线待核验，技术审核/批准待定 |
-| 网关新问询 | [DSH 和应用 Agent 调用 AI 网关补充问询函](collaboration/gateway-confirmation-letter.md) | 先说明定制化 DeepSeek Harness 与应用自动调用两类场景，再按 CONF-GW-09—20 询问是否支持；正文面向网关团队；跨函问题对应与协调放在内部说明 §3.1，避免重复问询；代拟未发送 |
+| 网关新问询 | [DSH 和应用 Agent 调用 AI 网关补充问询函](collaboration/gateway-confirmation-letter.md) | 先说明定制化 DeepSeek Harness 与应用自动调用两类场景，再按 CONF-GW-09—20 询问是否支持；正文面向网关团队；跨函问题对应与协调放在内部说明 §3.1，回函处置见 §3.2；已发出，2026-10-27 收到解答 v1.2，第二轮待发出 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 各扩展包与两个独立服务的详细设计状态与路径（含实现与验证入口） |
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
 | 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | 文件 backend / OS keychain / 迁移与不可用时的 fail-closed 口径 |
+| 客户端标识 | [DSH 客户端标识（UA）方案设计](<design/client-identification.md>) | 使用 DSH 默认 UA，网关按关键字匹配；不改写宿主 UA，匹配能力及企业链路待确认 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
 辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案（历史提议）](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；网关静态 Key 页描述的是 2026-10-20 原提议，先被 2026-10-22 ADR-14 取代；当前身份/用途目标见 ADR-16 与专用访问评审，历史图解不代表已选定路线，涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V2.0.0 评审稿示意，不替代正文契约或实现清单）。开放 Issue 的排期分析另见[实施路径总览](<assets/issue-implementation-path.html>)（2026-10-23 辅助分析，人日为粗估，不构成排期承诺或门禁证据）。

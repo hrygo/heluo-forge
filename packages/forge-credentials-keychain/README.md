@@ -11,7 +11,7 @@
 | 形态 | 替换 `ctx.credentials` 的 provider 插件 |
 | backend | 内存、不可用、显式 0600 file（含跨进程事务锁）、macOS Security CLI spike（`allowUnvettedPlatformAdapter: true` 才可用）；生产 OS adapter 待实现 |
 | provider | `resolve / describe / set / unset / readRecord / describeRecord / listRecords / modifyRecord / deleteRecord` |
-| 迁移 | `migrateLegacyFileToKeychain()`：旧 0600 文件 → 钥匙串，fail closed——不可用不迁移、目标不同值不覆盖、写后回读一致才删旧文件、删除失败按缺口报告、返回值与消息经 `redactSecrets` |
+| 迁移 | `migrateLegacyFileToKeychain()` 暂时 fail closed：不读取旧文件、不访问目标、不复制也不删除；`legacyRetained: null` 表示未核实旧文件是否存在。跨进程互斥和源文件隔离契约核验前不可迁移 |
 | 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed，不自动回收；OS backend 未实现 |
 | 记录 | `api-key` / `grant` JSON；损坏记录显式报错，不静默当作空 |
 | 生命周期 | 清理登记为 `ctx.effect`（Cordis 4 不收集普通 `function apply` 的返回值）；卸载时撤销 `ctx.credentials` 并 `close` backend |
@@ -28,7 +28,7 @@
 - `createSecurityCliBackend()` 是 macOS Security CLI 的**验证用**适配器：口令经 stdin 双次输入写入、不进 argv；`list()` 直接报 `KEYCHAIN_LIST_UNSUPPORTED`（不把"读不到"伪装成"没有记录"）；`secretTransport: 'argv'` 需显式 `allowArgvSecret: true`。
 - 组合层启用该适配器还要 `allowUnvettedPlatformAdapter: true`，否则挂载即 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`。
 - 实测（2026-10-24，darwin-arm64）：未命中条目退出码 44；`add-generic-password -U` 覆盖同名条目；删除幂等；spike 过程无明文文件、测试条目已清理。复跑：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过）。
-- 迁移演练（2026-10-24，darwin-arm64，**只碰副本**）：`node scripts/probe/run-keychain-migration-rehearsal.mjs` **9/9 步通过**——迁移后回读一致且旧文件删除、临时目录无新增明文、不可用后端下副本原样保留（0600）、回读不一致与目标冲突都停止且保留旧文件、证据无秘密值、条目清理后无残留。真实凭据未被读取或删除。
+- 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
 - 生产必须使用 Windows DPAPI/凭据管理器或麒麟 libsecret/keyring 的审核实现；file backend 与 macOS spike 适配器都不是生产方案，`@napi-rs/keyring` 的目标平台产物仍待核验。
 
 ## 不可用于生产

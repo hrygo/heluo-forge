@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, createIamService, IamError } from '../src/index.mjs';
+import { apply, IamError } from '../src/index.mjs';
+import { createIamService } from './support/trusted-service.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { createGatewayCredentialStore, createGrantStore } from '../src/store.mjs';
 
@@ -331,7 +332,7 @@ test('an expired session can start a fresh sign-in', async () => {
   assert.equal(started.view.state, 'authenticating');
 });
 
-test('hydrate removes the V0.3 access-token mirror once', async () => {
+test('hydrate preserves a pre-existing legacy access-token reference', async () => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
     version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
@@ -342,7 +343,7 @@ test('hydrate removes the V0.3 access-token mirror once', async () => {
   await credentials.set('ENTERPRISE_ACCESS_TOKEN', 'access-old');
   const service = createIamService(configured, { credentials });
   await service.hydrate();
-  assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+  assert.equal((await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'))?.value, 'access-old');
   assert.equal(service.getView().state, 'ready');
 });
 
@@ -381,7 +382,7 @@ test('saving and clearing a gateway credential keeps IAM sign-in intact', async 
   assert.equal((await credentials.readRecord('heluo-iam/session'))?.kind, 'grant');
 });
 
-test('a credential entered by another account is removed on sign-in', async () => {
+test('hydrate preserves another account’s credential and reports owner mismatch', async () => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
     version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
@@ -394,13 +395,16 @@ test('a credential entered by another account is removed on sign-in', async () =
     ownerSubject: 'E1002',
     enteredAt: '2030-01-01T00:00:00.000Z',
   });
+  const before = structuredClone(await credentials.readRecord('heluo-iam/gateway-credential'));
   const service = createIamService(configured, { credentials });
   await service.hydrate();
-  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
-  assert.equal(service.getView().gatewayCredential.state, 'unconfigured');
+  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, `uag-${'c'.repeat(32)}`);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/gateway-credential'), before);
+  assert.equal(service.getView().gatewayCredential.state, 'owner-mismatch');
+  assert.equal(service.getView().gatewayCredential.matchesAccount, false);
 });
 
-test('a stored value without owner metadata is dropped on sign-in', async () => {
+test('hydrate preserves a stored value without metadata and reports invalid', async () => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
     version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
@@ -411,8 +415,9 @@ test('a stored value without owner metadata is dropped on sign-in', async () => 
   await credentials.set('ENTERPRISE_STATIC_KEY', `uag-${'f'.repeat(32)}`);
   const service = createIamService(configured, { credentials });
   await service.hydrate();
-  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
-  assert.equal(service.getView().gatewayCredential.state, 'unconfigured');
+  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, `uag-${'f'.repeat(32)}`);
+  assert.equal(await credentials.readRecord('heluo-iam/gateway-credential'), undefined);
+  assert.equal(service.getView().gatewayCredential.state, 'invalid');
 });
 
 test('a stored gateway credential belongs to the signed-in account in the view', async () => {
@@ -570,7 +575,7 @@ test('the account summary is reused briefly instead of reading the secret on eve
   assert.equal(service.getView().gatewayCredential.state, 'unconfigured');
 });
 
-test('an unattributable gateway record is dropped when a new account signs in', async () => {
+test('hydrate preserves corrupt gateway metadata and its value as invalid', async () => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
     version: 1, issuer: 'https://iam.corp.example', subject: 'E1002', clientId: 'dsh-desktop',
@@ -583,13 +588,21 @@ test('an unattributable gateway record is dropped when a new account signs in', 
     kind: 'grant',
     payload: { version: 99 },
   }));
+  const before = structuredClone(await credentials.readRecord('heluo-iam/gateway-credential'));
   const service = createIamService(configured, { credentials });
   const view = await service.hydrate();
-  assert.equal(view.gatewayCredential.state, 'unconfigured');
+  assert.equal(view.gatewayCredential.state, 'invalid');
+  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, `uag-${'3'.repeat(32)}`);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/gateway-credential'), before);
+  const replacement = `uag-${'7'.repeat(32)}`;
+  assert.equal((await service.saveGatewayCredential({ key: replacement })).gatewayCredential.state, 'configured');
+  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, replacement);
+  await service.clearGatewayCredential();
   assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
+  assert.equal(await credentials.readRecord('heluo-iam/gateway-credential'), undefined);
 });
 
-test('adopting another account\'s grant drops the stored gateway key', async () => {
+test('adopting another account\'s grant preserves the stored gateway key', async () => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
     version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
@@ -603,6 +616,7 @@ test('adopting another account\'s grant drops the stored gateway key', async () 
     deviceLabel: 'dev-a',
     enteredAt: '2030-01-01T00:00:00.000Z',
   });
+  const before = structuredClone(await credentials.readRecord('heluo-iam/gateway-credential'));
   const service = createIamService(configured, { credentials });
   let view = await service.hydrate();
   assert.equal(view.gatewayCredential.state, 'configured');
@@ -616,8 +630,9 @@ test('adopting another account\'s grant drops the stored gateway key', async () 
   });
   view = await service.syncFromStore();
   assert.equal(view.principal, 'E1002');
-  assert.equal(view.gatewayCredential.state, 'unconfigured');
-  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
+  assert.equal(view.gatewayCredential.state, 'owner-mismatch');
+  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, `uag-${'4'.repeat(32)}`);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/gateway-credential'), before);
 });
 
 test('a resolved value without owner metadata is visible as invalid and clearable', async () => {

@@ -92,7 +92,7 @@ function encodeRecord(record) {
 
 /**
  * @param {object} backend
- * @param {{ service?: string, accountPrefix?: string, notifyReference?: (ref: string) => void, notifyRecord?: (key: string) => void }} [options]
+ * @param {{ service?: string, accountPrefix?: string, notifyReference?: (ref: string) => void | PromiseLike<void>, notifyRecord?: (key: string) => void | PromiseLike<void> }} [options]
  */
 export function createKeychainProvider(backend, options = {}) {
   assertBackend(backend);
@@ -102,6 +102,16 @@ export function createKeychainProvider(backend, options = {}) {
   const refPrefix = `${namespace}/ref/`;
   const recordPrefix = `${namespace}/record/`;
   const locks = new Map();
+
+  // Notifications are best-effort after a successful backend operation. Never
+  // surface or log their errors: they may contain credential data.
+  function notify(callback) {
+    try {
+      Promise.resolve(callback()).catch(() => {});
+    } catch {
+      // A notification cannot change the already committed backend result.
+    }
+  }
 
   function withKeyLock(key, fn) {
     const previous = locks.get(key) ?? Promise.resolve();
@@ -134,12 +144,12 @@ export function createKeychainProvider(backend, options = {}) {
         throw new KeychainProviderError('KEYCHAIN_VALUE_EMPTY', 'refusing to store an empty credential');
       }
       await backend.set(`${refPrefix}${ref}`, value);
-      options.notifyReference?.(ref);
+      notify(() => options.notifyReference?.(ref));
     },
 
     async unset(ref) {
       await backend.delete(`${refPrefix}${validateRef(ref)}`);
-      options.notifyReference?.(ref);
+      notify(() => options.notifyReference?.(ref));
     },
 
     async readRecord(key) {
@@ -197,14 +207,14 @@ export function createKeychainProvider(backend, options = {}) {
             }
             return next;
           });
-          if (changed) options.notifyRecord?.(key);
+          if (changed) notify(() => options.notifyRecord?.(key));
           return validated;
         }
         const current = await this.readRecord(key);
         const validated = await apply(current);
         if (validated === current) return current;
         await backend.set(storageKey, JSON.stringify(validated));
-        options.notifyRecord?.(key);
+        notify(() => options.notifyRecord?.(key));
         return validated;
       });
     },
@@ -213,7 +223,7 @@ export function createKeychainProvider(backend, options = {}) {
       validateRecordKey(key);
       await withKeyLock(key, async () => {
         await backend.delete(`${recordPrefix}${key}`);
-        options.notifyRecord?.(key);
+        notify(() => options.notifyRecord?.(key));
       });
     },
 

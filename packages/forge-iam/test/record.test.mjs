@@ -65,6 +65,15 @@ test('parseGrant accepts JSON and rejects corrupt payloads', () => {
   assert.match(broken.errors[0], /JSON/);
 });
 
+test('session instance id is optional for legacy grants but canonical 32-byte base64url when present', () => {
+  assert.equal(parseGrant(grant()).ok, true);
+  const valid = Buffer.alloc(32, 7).toString('base64url');
+  assert.equal(parseGrant(grant({ sessionInstanceId: valid })).ok, true);
+  for (const id of [undefined, null, '', 'A'.repeat(42), 'A'.repeat(42) + 'B', valid + '=', 42]) {
+    assert.equal(parseGrant(grant({ sessionInstanceId: id })).ok, false, String(id));
+  }
+});
+
 test('expiry and refresh decisions use the configured skew', () => {
   const value = grant();
   assert.equal(isAccessExpired(value, now), false);

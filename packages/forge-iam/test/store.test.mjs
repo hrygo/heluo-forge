@@ -72,6 +72,93 @@ test('write then read round-trips the grant and keeps the key stable', async () 
   assert.equal(store.key, 'heluo-iam/session');
 });
 
+test('guard rejects a delayed grant write inside modifyRecord without reporting success', async () => {
+  const credentials = fakeCredentials({ records: [[GRANT_KEY, { kind: 'grant', payload: grant }]] });
+  const modify = credentials.modifyRecord;
+  let entered;
+  let release;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  credentials.modifyRecord = async (key, mutate) => {
+    entered();
+    await gate;
+    return modify(key, mutate);
+  };
+  let valid = true;
+  const store = createGrantStore(credentials);
+  const pending = store.write({ ...grant, accessToken: 'stale' }, {
+    guard: () => { if (!valid) throw new Error('attempt interrupted'); },
+  });
+  const rejected = assert.rejects(pending, /attempt interrupted/);
+  await waiting;
+  valid = false;
+  release();
+  await rejected;
+  assert.deepEqual((await store.read()).grant, grant);
+});
+
+test('a guard that does not return true rejects rather than reporting a successful write', async () => {
+  for (const guard of [() => false, () => undefined, 'invalid']) {
+    const credentials = fakeCredentials({ records: [[GRANT_KEY, { kind: 'grant', payload: grant }]] });
+    await assert.rejects(
+      createGrantStore(credentials).write({ ...grant, accessToken: 'stale' }, { guard }),
+      { code: 'IAM_GRANT_WRITE_REJECTED' },
+    );
+    assert.deepEqual((await createGrantStore(credentials).read()).grant, grant);
+  }
+});
+
+test('callback discard atomically tombstones only its identified grant and permits later login', async () => {
+  const credentials = fakeCredentials();
+  const store = createGrantStore(credentials, { verifyAtomicStore: (instance) => instance === credentials });
+  const own = { ...grant, sessionInstanceId: Buffer.alloc(32, 1).toString('base64url') };
+  const newer = { ...own, sessionInstanceId: Buffer.alloc(32, 2).toString('base64url') };
+  await store.write(own);
+  assert.equal((await store.discardCallbackGrant(newer)).ok, true);
+  assert.deepEqual((await store.read()).grant, own);
+  assert.equal((await store.discardCallbackGrant(own)).ok, true);
+  assert.deepEqual(credentials.records.get(GRANT_KEY), { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' } });
+  assert.deepEqual(await store.read(), { ok: true, grant: null });
+  let seen;
+  await store.mutate((current) => { seen = current; return undefined; });
+  assert.equal(seen, null);
+  await store.write(newer);
+  assert.deepEqual((await store.read()).grant, newer);
+});
+
+test('discard refuses legacy or malformed records and unconfirmed provider results', async () => {
+  const own = { ...grant, sessionInstanceId: Buffer.alloc(32, 1).toString('base64url') };
+  for (const record of [
+    { kind: 'grant', payload: grant },
+    { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone', secret: 'x' } },
+    { kind: 'api-key', payload: { version: 1, type: 'heluo-iam-session-tombstone' } },
+  ]) {
+    const credentials = fakeCredentials({ records: [[GRANT_KEY, record]] });
+    const store = createGrantStore(credentials, { verifyAtomicStore: (instance) => instance === credentials });
+    if (record.payload.type) assert.equal((await store.read()).ok, false);
+    assert.equal((await store.discardCallbackGrant(own)).ok, false);
+    assert.deepEqual(credentials.records.get(GRANT_KEY), record);
+  }
+  const credentials = fakeCredentials({ records: [[GRANT_KEY, { kind: 'grant', payload: own }]] });
+  credentials.modifyRecord = async (_key, mutator) => { await mutator(credentials.records.get(GRANT_KEY)); return undefined; };
+  assert.equal((await createGrantStore(credentials, { verifyAtomicStore: (instance) => instance === credentials }).discardCallbackGrant(own)).ok, false);
+  assert.equal((await createGrantStore(credentials).read()).grant.sessionInstanceId, own.sessionInstanceId);
+});
+
+test('discard reports unknown if the provider throws after tombstone commit', async () => {
+  const own = { ...grant, sessionInstanceId: Buffer.alloc(32, 5).toString('base64url') };
+  const credentials = fakeCredentials({ records: [[GRANT_KEY, { kind: 'grant', payload: own }]] });
+  const modify = credentials.modifyRecord;
+  credentials.modifyRecord = async (key, mutate) => {
+    await modify(key, mutate);
+    throw new Error('synthetic acknowledgement failure');
+  };
+  const store = createGrantStore(credentials, { verifyAtomicStore: (instance) => instance === credentials });
+  assert.equal((await store.discardCallbackGrant(own)).ok, false);
+  assert.deepEqual(await store.read(), { ok: true, grant: null });
+  assert.deepEqual(credentials.records.get(GRANT_KEY), { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' } });
+});
+
 test('a grant without a gateway audience is still valid', async () => {
   const { resource, ...withoutResource } = grant;
   const credentials = fakeCredentials();

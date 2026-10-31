@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
     }
 
     const GATEWAY_STATUS = {
+      unknown: '状态未知',
       unconfigured: '未配置',
       configured: '已配置',
       'owner-mismatch': '属于其他账号，需重新录入',
@@ -127,7 +128,7 @@ window.__ModuleLoader__.load({
       return `操作失败：${code}`;
     }
 
-    function useSessionPoll(enabled, update) {
+    function useSessionPoll(enabled, update, barrierRef) {
       const updateRef = React.useRef(update);
       updateRef.current = update;
       React.useEffect(() => {
@@ -137,9 +138,10 @@ window.__ModuleLoader__.load({
         const timer = setInterval(async () => {
           if (inFlight) return;
           inFlight = true;
+          const epoch = barrierRef?.current.epoch;
           try {
             const view = await fetchView();
-            if (live) updateRef.current(view);
+            if (live && (!barrierRef || (!barrierRef.current.pending && barrierRef.current.epoch === epoch))) updateRef.current(view);
           } catch {
             // The next tick retries; a transient Host failure must not erase
             // the last known state.
@@ -157,12 +159,18 @@ window.__ModuleLoader__.load({
     function Panel() {
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
       const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
+      const viewBarrier = React.useRef({ epoch: 0, pending: false });
+      const isViewCurrent = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
 
       const load = React.useCallback(async () => {
+        if (viewBarrier.current.pending) return;
+        const epoch = viewBarrier.current.epoch;
         try {
           const view = await fetchView();
+          if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
           setState((current) => ({ ...current, phase: 'ready', view, error: null }));
         } catch (error) {
+          if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
           setState({ phase: 'error', view: null, error: error.message, notice: null, authorizationUrl: null });
         }
       }, []);
@@ -176,13 +184,19 @@ window.__ModuleLoader__.load({
         // The authorization URL belongs to one attempt; once the session moved
         // on, a stale "continue login" link must not stay on screen.
         ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
-      })));
+      })), viewBarrier);
 
       const login = async () => {
+        if (viewBarrier.current.pending) return;
+        const epoch = viewBarrier.current.epoch;
         setState((current) => ({ ...current, notice: null }));
         const popup = openLoginWindow();
         try {
           const result = await postJson('/api/forge-iam/sign-in');
+          if (!isViewCurrent(epoch)) {
+            try { popup?.close(); } catch { /* already closed */ }
+            return;
+          }
           if (!result.ok) {
             try { popup?.close(); } catch { /* already closed */ }
             setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
@@ -194,11 +208,13 @@ window.__ModuleLoader__.load({
           setState((current) => ({ ...current, view, authorizationUrl, notice: null }));
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
-          setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
         }
       };
 
       const saveCredential = async () => {
+        if (viewBarrier.current.pending) return;
+        const epoch = viewBarrier.current.epoch;
         const value = credential.value.trim();
         if (!value) {
           setCredential((current) => ({ ...current, notice: '请输入 UAG 个人凭证。' }));
@@ -217,13 +233,15 @@ window.__ModuleLoader__.load({
           }
           // The value is never stored in component state after the write.
           setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关凭据已保存。' });
-          setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
+          if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
           setCredential((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
         }
       };
 
       const clearCredential = async () => {
+        if (viewBarrier.current.pending) return;
+        const epoch = viewBarrier.current.epoch;
         setCredential((current) => ({ ...current, saving: true, notice: null }));
         try {
           const result = await deleteJson('/api/forge-iam/credential');
@@ -236,30 +254,42 @@ window.__ModuleLoader__.load({
             return;
           }
           setCredential((current) => ({ ...current, saving: false, value: '', notice: '网关凭据已清除。' }));
-          setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
+          if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
           setCredential((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
         }
       };
 
       const cancelLogin = async () => {
+        if (viewBarrier.current.pending) return;
+        const epoch = viewBarrier.current.epoch;
         try {
           const result = await postJson('/api/forge-iam/cancel');
+          if (!isViewCurrent(epoch)) return;
           if (!result.ok) {
             setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
             return;
           }
           setState((current) => ({ ...current, view: result.body?.view ?? null, authorizationUrl: null, notice: null }));
         } catch {
-          setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
         }
       };
 
       const signOut = async () => {
+        if (viewBarrier.current.pending) return;
+        viewBarrier.current.epoch += 1;
+        viewBarrier.current.pending = true;
+        setState((current) => ({ ...current, view: null, authorizationUrl: null, notice: '正在退出…' }));
         try {
           const result = await postJson('/api/forge-iam/sign-out');
           if (!result.ok) {
-            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            setState((current) => ({
+              ...current,
+              view: result.body?.view ?? null,
+              authorizationUrl: null,
+              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+            }));
             return;
           }
           const view = result.body?.view ?? null;
@@ -273,7 +303,10 @@ window.__ModuleLoader__.load({
           }));
           if (result.body?.logoutUrl) window.location.assign(result.body.logoutUrl);
         } catch {
-          setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+          setState((current) => ({ ...current, view: null, authorizationUrl: null, notice: '退出结果未确认，Host 不可达；请刷新核实。' }));
+        } finally {
+          viewBarrier.current.epoch += 1;
+          viewBarrier.current.pending = false;
         }
       };
 
@@ -306,12 +339,13 @@ window.__ModuleLoader__.load({
       const hostError = view.error
         ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', marginTop: 4 } }, errorNotice(view.error))
         : null;
-      const notice = state.notice ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null;
+      const notice = state.notice && (!view.error || state.notice !== errorNotice(view.error))
+        ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null;
       const loginLink = state.authorizationUrl
         ? h('div', { style: { marginTop: 6 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录'))
         : null;
 
-      const gateway = view.gatewayCredential ?? { state: 'unconfigured' };
+      const gateway = view.gatewayCredential ?? { state: 'unknown' };
       const gatewayStatus = GATEWAY_STATUS[gateway.state] ?? gateway.state;
       const gatewayDetails = [
         gateway.deviceLabel ? `设备：${gateway.deviceLabel}` : null,
@@ -329,7 +363,9 @@ window.__ModuleLoader__.load({
         storageWarning,
         gateway.state === 'configured'
           ? h('div', { style: muted }, '模型调用使用该凭据；IAM 登录状态变化不会自动替换它。')
-          : h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'),
+          : gateway.state === 'unknown'
+            ? h('div', { style: muted }, '网关凭据状态尚未确认，请刷新核实。')
+            : h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'),
         h('div', { style: { marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' } },
           h('input', {
             type: 'password',
@@ -350,9 +386,9 @@ window.__ModuleLoader__.load({
             onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
             style: { flex: '0 1 160px', padding: '4px 8px' },
           }),
-          h('button', { style: button, disabled: credential.saving, onClick: saveCredential }, '保存凭据'),
-          gateway.state !== 'unconfigured' || credential.value
-            ? h('button', { style: button, disabled: credential.saving, onClick: clearCredential }, '清除凭据')
+          h('button', { style: button, disabled: credential.saving || viewBarrier.current.pending, onClick: saveCredential }, '保存凭据'),
+          (gateway.state !== 'unconfigured' && gateway.state !== 'unknown') || credential.value
+            ? h('button', { style: button, disabled: credential.saving || viewBarrier.current.pending, onClick: clearCredential }, '清除凭据')
             : null,
         ),
         credential.notice ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, credential.notice) : null,
@@ -368,7 +404,7 @@ window.__ModuleLoader__.load({
         notice,
         loginLink,
         h('div', null,
-          h('button', { style: button, onClick: load }, '刷新'),
+          h('button', { style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
           view.canSignIn ? h('button', { style: button, onClick: login }, '登录企业账号') : null,
           view.state === 'authenticating' ? h('button', { style: button, onClick: cancelLogin }, '取消登录') : null,
           view.canSignOut ? h('button', { style: button, onClick: signOut }, '退出') : null,

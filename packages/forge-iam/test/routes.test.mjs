@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createIamRoutes } from '../src/routes.mjs';
+import { createIamService } from './support/trusted-service.mjs';
+import { createIamService as createUntrustedService } from '../src/service.mjs';
+import { validateConfig } from '../src/config.mjs';
+import { MemoryCredentials } from './support/memory-credentials.mjs';
+import { startMockOidc } from './support/mock-oidc.mjs';
 
 const view = {
   state: 'signed-out', configured: true, signedIn: false, canSignIn: true,
@@ -80,6 +85,40 @@ test('the callback rejects a Host that differs from the live origin', async () =
   assert.equal(callback.statusCode, 403);
   const good = await call(handler, 'GET', '/iam/callback?code=x&state=y', { host: '127.0.0.1:4567' });
   assert.equal(good.statusCode, 200);
+});
+
+test('callback route passes the live origin and exact path to the real service', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const origin = 'http://127.0.0.1:4567';
+  const config = validateConfig({
+    ...mock.endpoints, clientId: mock.clientId,
+    redirectUri: `${origin}/iam/callback`, allowInsecureHttp: true,
+  }).value;
+  const iam = createIamService(config, { credentials, getOrigin: () => origin });
+  const handler = routes(iam, { getOrigin: () => origin });
+  const started = await iam.startSignIn();
+  const authorization = await fetch(started.authorizationUrl, { redirect: 'manual' });
+  const callback = new URL(authorization.headers.get('location'));
+  const target = `${callback.pathname}${callback.search}`;
+  assert.equal((await call(handler, 'GET', target, { host: '127.0.0.1:4568' })).statusCode, 403);
+  assert.equal((await call(handler, 'GET', `http://localhost:4567${target}`, { host: '127.0.0.1:4567' })).statusCode, 403);
+  assert.equal((await call(handler, 'GET', `/wrong${target}`, { host: '127.0.0.1:4567' })).statusCode, 404);
+  assert.equal(mock.counts.token, 0);
+  assert.equal((await call(handler, 'GET', target, { host: '127.0.0.1:4567' })).statusCode, 200);
+  assert.equal(iam.getView().state, 'ready');
+  assert.equal(mock.counts.token, 1);
+});
+
+test('unverified atomic store produces a safe 503 for sign-in', async () => {
+  const credentials = new MemoryCredentials();
+  const config = { issuer: 'https://iam.example', authorizationEndpoint: 'https://iam.example/authorize', tokenEndpoint: 'https://iam.example/token', jwksUri: 'https://iam.example/jwks', clientId: 'client', redirectUri: 'http://127.0.0.1:4567/iam/callback' };
+  const handler = routes(createUntrustedService(config, { credentials }));
+  const result = await call(handler, 'POST', '/api/forge-iam/sign-in', { 'x-forge-iam-request': '1', 'content-type': 'application/json' });
+  assert.equal(result.statusCode, 503);
+  assert.equal(result.json().error.code, 'IAM_ATOMIC_STORE_UNVERIFIED');
+  assert.doesNotMatch(result.text(), /refresh-token|access-token/);
 });
 
 test('the API defers Host and Origin policy to DSH Connection', async () => {
@@ -183,6 +222,29 @@ test('sign-out returns the view and optional logout URL', async () => {
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().view.state, 'signed-out');
   assert.equal(res.json().logoutUrl, 'https://iam.example/logout');
+});
+
+test('sign-out unknown suppresses logout URL and reports unavailable', async () => {
+  const handler = routes(service({
+    signOut: async () => ({ view: { ...view, state: 'error', error: 'IAM_CREDENTIALS_CLEAR_FAILED' }, revocation: 'unknown', logoutUrl: 'https://iam.example/logout' }),
+  }));
+  const res = await call(handler, 'POST', '/api/forge-iam/sign-out', { 'x-forge-iam-request': '1', 'content-type': 'application/json', host: '127.0.0.1:4567' });
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.json().error.code, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(res.json().revocation, 'unknown');
+  assert.equal(res.json().logoutUrl, null);
+  assert.equal('accessToken' in res.json(), false);
+  assert.equal('refreshToken' in res.json(), false);
+});
+
+test('sign-out preserves an unconfirmed remote revocation warning', async () => {
+  const handler = routes(service({
+    signOut: async () => ({ view: { ...view, error: 'IAM_REVOCATION_FAILED' }, revocation: 'failed', logoutUrl: null }),
+  }));
+  const res = await call(handler, 'POST', '/api/forge-iam/sign-out', { 'x-forge-iam-request': '1', 'content-type': 'application/json', host: '127.0.0.1:4567' });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().view.error, 'IAM_REVOCATION_FAILED');
+  assert.equal(res.json().revocation, 'failed');
 });
 
 test('cancel is a POST with the request header and returns the view', async () => {
