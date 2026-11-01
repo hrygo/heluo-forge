@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { constants, createHmac, generateKeyPairSync, sign } from 'node:crypto';
+import { constants, createHash, createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import {
   OidcError,
   buildAuthorizationUrl,
@@ -72,6 +72,137 @@ test('signature, audience, nonce and expiry failures are rejected', () => {
       jwks: { keys: [jwk] }, issuer: 'https://iam.example', clientId: 'dsh-desktop', nonce: 'n-1',
     }), (error) => error.code === code, code);
   }
+});
+
+const verifyOptions = { jwks: { keys: [jwk] }, issuer: 'https://iam.example', clientId: 'dsh-desktop', nonce: 'n-1' };
+
+function tokenWithRawNumber(claim, number) {
+  const head = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k1' })).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const json = JSON.stringify({ iss: 'https://iam.example', sub: 'E1001', aud: 'dsh-desktop', exp: now + 300, iat: now, nonce: 'n-1', [claim]: 'NUMBER' });
+  const body = Buffer.from(json.replace('"NUMBER"', number)).toString('base64url');
+  return `${head}.${body}.${sign('RSA-SHA256', Buffer.from(`${head}.${body}`), privateKey).toString('base64url')}`;
+}
+
+test('compact JWS segments must be nonempty canonical unpadded base64url', async (t) => {
+  const [header, payload, signature] = idToken().split('.');
+  const resign = (head, body) => `${head}.${body}.${sign('RSA-SHA256', Buffer.from(`${head}.${body}`), privateKey).toString('base64url')}`;
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const noncanonicalSignature = signature.slice(0, -1) + alphabet[alphabet.indexOf(signature.at(-1)) | 1];
+  assert.deepEqual(Buffer.from(noncanonicalSignature, 'base64url'), Buffer.from(signature, 'base64url'));
+  const cases = [
+    ['signature junk', `${header}.${payload}.${signature}!`],
+    ['signature padding', `${header}.${payload}.${signature}=`],
+    ['noncanonical signature pad bits', `${header}.${payload}.${noncanonicalSignature}`],
+    ['empty signature', `${header}.${payload}.`],
+    ['header padding', resign(`${header}=`, payload)],
+    ['payload padding', resign(header, `${payload}=`)],
+    ['header junk', resign(`${header}!`, payload)],
+    ['payload junk', resign(header, `${payload}!`)],
+  ];
+  for (const [name, token] of cases) await t.test(name, () => {
+    assert.throws(() => verifyIdToken(token, verifyOptions), (error) => error.code === 'IAM_ID_TOKEN_INVALID');
+  });
+});
+
+test('unsupported critical JWS headers are rejected', async (t) => {
+  const [, payload] = idToken().split('.');
+  for (const crit of [['unknown'], [], 'unknown', null]) await t.test(JSON.stringify(crit), () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k1', crit, unknown: true })).toString('base64url');
+    const signature = sign('RSA-SHA256', Buffer.from(`${header}.${payload}`), privateKey).toString('base64url');
+    assert.throws(() => verifyIdToken(`${header}.${payload}.${signature}`, verifyOptions), (error) => error.code === 'IAM_ID_TOKEN_INVALID');
+  });
+});
+
+test('expiry is exclusive at the clock-skew boundary', () => {
+  const token = idToken({ iat: 1999999900, exp: 2000000000 });
+  assert.equal(verifyIdToken(token, { ...verifyOptions, now: 2000000059 * 1000, skewSeconds: 60 }).sub, 'E1001');
+  assert.throws(() => verifyIdToken(token, { ...verifyOptions, now: 2000000060 * 1000, skewSeconds: 60 }), (error) => error.code === 'IAM_ID_TOKEN_EXPIRED');
+  assert.throws(() => verifyIdToken(token, { ...verifyOptions, now: 2000000000 * 1000, skewSeconds: 0 }), (error) => error.code === 'IAM_ID_TOKEN_EXPIRED');
+});
+
+test('RSA ID token signing keys must have at least 2048 bits', () => {
+  const weak = generateKeyPairSync('rsa', { modulusLength: 1024 });
+  const weakJwk = { ...weak.publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256' };
+  assert.throws(() => verifyIdToken(idToken({}, { key: weak.privateKey }), { ...verifyOptions, jwks: { keys: [weakJwk] } }), (error) => error.code === 'IAM_JWKS_INVALID');
+  assert.equal(verifyIdToken(idToken(), verifyOptions).sub, 'E1001');
+});
+
+test('JWKS selection requires one compatible key with valid metadata', async (t) => {
+  const cases = [
+    ['duplicate compatible keys', [jwk, jwk], 'IAM_JWKS_INVALID'],
+    ['conflicting alg', [{ ...jwk, alg: 'PS256' }], 'IAM_JWKS_KEY_NOT_FOUND'],
+    ['non-string alg', [{ ...jwk, alg: 42 }], 'IAM_JWKS_KEY_NOT_FOUND'],
+    ['non-string use', [{ ...jwk, use: ['sig'] }], 'IAM_JWKS_KEY_NOT_FOUND'],
+    ['string key_ops', [{ ...jwk, key_ops: 'verify' }], 'IAM_JWKS_KEY_NOT_FOUND'],
+    ['null key_ops', [{ ...jwk, key_ops: null }], 'IAM_JWKS_KEY_NOT_FOUND'],
+    ['mixed key_ops', [{ ...jwk, key_ops: ['verify', 1] }], 'IAM_JWKS_KEY_NOT_FOUND'],
+    ['conflicting key_ops', [{ ...jwk, key_ops: ['verify', 'encrypt'] }], 'IAM_JWKS_KEY_NOT_FOUND'],
+  ];
+  for (const [name, keys, code] of cases) await t.test(name, () => {
+    assert.throws(() => verifyIdToken(idToken(), { ...verifyOptions, jwks: { keys } }), (error) => error.code === code);
+  });
+  assert.equal(verifyIdToken(idToken(), { ...verifyOptions, jwks: { keys: [{ ...jwk, use: 'sig', key_ops: ['verify'] }] } }).sub, 'E1001');
+});
+
+test('ID token time claims must be finite and required where applicable', async (t) => {
+  const cases = [
+    ['missing iat', idToken({ iat: undefined }), 'IAM_ID_TOKEN_ISSUED_AT'],
+    ['string iat', idToken({ iat: '123' }), 'IAM_ID_TOKEN_ISSUED_AT'],
+    ['infinite iat', tokenWithRawNumber('iat', '1e400'), 'IAM_ID_TOKEN_ISSUED_AT'],
+    ['negative infinite iat', tokenWithRawNumber('iat', '-1e400'), 'IAM_ID_TOKEN_ISSUED_AT'],
+    ['future iat', idToken({ iat: Math.floor(Date.now() / 1000) + 120 }), 'IAM_ID_TOKEN_ISSUED_AT'],
+    ['missing exp', idToken({ exp: undefined }), 'IAM_ID_TOKEN_EXPIRED'],
+    ['infinite exp', tokenWithRawNumber('exp', '1e400'), 'IAM_ID_TOKEN_EXPIRED'],
+    ['infinite nbf', tokenWithRawNumber('nbf', '-1e400'), 'IAM_ID_TOKEN_NOT_BEFORE'],
+    ['string nbf', idToken({ nbf: '0' }), 'IAM_ID_TOKEN_NOT_BEFORE'],
+    ['future nbf', idToken({ nbf: Math.floor(Date.now() / 1000) + 120 }), 'IAM_ID_TOKEN_NOT_BEFORE'],
+  ];
+  for (const [name, token, code] of cases) await t.test(name, () => {
+    assert.throws(() => verifyIdToken(token, verifyOptions), (error) => error.code === code);
+  });
+});
+
+test('audience is a nonempty string or array of nonempty strings', async (t) => {
+  for (const aud of [['dsh-desktop', 1], ['dsh-desktop', ''], [], '', null]) await t.test(JSON.stringify(aud), () => {
+    assert.throws(() => verifyIdToken(idToken({ aud, azp: 'dsh-desktop' }), verifyOptions), (error) => error.code === 'IAM_ID_TOKEN_AUDIENCE');
+  });
+});
+
+test('at_hash binds the provided access token and cannot be ignored', async (t) => {
+  const accessToken = 'access-token-placeholder';
+  const hash = createHash('sha256').update(accessToken, 'ascii').digest().subarray(0, 16).toString('base64url');
+  assert.equal(verifyIdToken(idToken({ at_hash: hash }), { ...verifyOptions, accessToken }).sub, 'E1001');
+  const cases = [
+    ['no access token', hash, undefined],
+    ['empty access token', hash, ''],
+    ['different access token', hash, 'different'],
+    ['bad hash', 'wrong', accessToken],
+    ['invalid type', 42, accessToken],
+    ['null hash', null, accessToken],
+  ];
+  for (const [name, atHash, token] of cases) await t.test(name, () => {
+    assert.throws(() => verifyIdToken(idToken({ at_hash: atHash }), { ...verifyOptions, accessToken: token }), (error) => error.code === 'IAM_ID_TOKEN_AT_HASH');
+  });
+  assert.equal(verifyIdToken(idToken(), verifyOptions).sub, 'E1001');
+});
+
+test('callback rejects ambiguous and empty response parameters without leaking provider error', async (t) => {
+  const invalid = [
+    '?code=c&state=s&iss=a&iss=b', '?code=c&state=s&error=denied',
+    '?error=denied&error=other&state=s', '?error=denied', '?error=&state=s',
+    '?code=c&state=s&iss=', '?code=&state=s', '?code=c&state=',
+    '?error=denied&state=s&state=t', '?error=denied&state=s&iss=a&iss=b',
+  ];
+  for (const query of invalid) await t.test(query, () => {
+    assert.throws(() => parseCallbackUrl(`/iam/callback${query}`), (error) => error.code === 'IAM_CALLBACK_INVALID');
+  });
+  assert.deepEqual(parseCallbackUrl('/iam/callback?code=c&state=s&iss=https%3A%2F%2Fiam.example'), { code: 'c', state: 's', iss: 'https://iam.example' });
+  assert.throws(() => parseCallbackUrl('/iam/callback?error=private-provider-value&state=s'), (error) => {
+    assert.equal(error.code, 'IAM_AUTHORIZATION_ERROR');
+    assert.equal(JSON.stringify({ message: error.message, details: error.details }).includes('private-provider-value'), false);
+    return true;
+  });
 });
 
 test('authorization URL carries PKCE, state, nonce and resource', () => {
@@ -207,7 +338,7 @@ test('PS256 and ES256 verify, while none and HS256 stay rejected', () => {
   assert.equal(verifyIdToken(es, { ...options, jwks: { keys: [ecJwk] } }).sub, 'E1001');
 
   const none = `${Buffer.from(JSON.stringify({ alg: 'none', kid: 'e1' })).toString('base64url')}.`
-    + `${Buffer.from(JSON.stringify(payload)).toString('base64url')}.`;
+    + `${Buffer.from(JSON.stringify(payload)).toString('base64url')}.AA`;
   assert.throws(() => verifyIdToken(none, { ...options, jwks: { keys: [ecJwk] } }),
     (error) => error.code === 'IAM_ID_TOKEN_ALGORITHM');
 

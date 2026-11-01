@@ -8,7 +8,7 @@
 // side effects, so it counts as a file with no tests rather than a failure.
 
 import { FileCredentials } from './file-credentials.mjs';
-import { createIamService } from '../../src/index.mjs';
+import { createIamService } from './trusted-service.mjs';
 import { validateConfig } from '../../src/config.mjs';
 
 function readArgv(name) {

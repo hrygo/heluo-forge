@@ -40,21 +40,29 @@ export function parseCallbackUrl(raw) {
   }
   const states = url.searchParams.getAll('state');
   const codes = url.searchParams.getAll('code');
-  if (url.searchParams.has('error')) {
-    throw new OidcError('IAM_AUTHORIZATION_ERROR', 'authorization endpoint returned an error', {
-      error: url.searchParams.get('error') ?? 'unknown',
-    });
+  const errors = url.searchParams.getAll('error');
+  const issuers = url.searchParams.getAll('iss');
+  if (states.length !== 1 || !states[0] || issuers.length > 1 || (issuers.length === 1 && !issuers[0])
+      || codes.length > 1 || errors.length > 1 || codes.length + errors.length !== 1
+      || (codes.length === 1 && !codes[0]) || (errors.length === 1 && !errors[0])) {
+    throw new OidcError('IAM_CALLBACK_INVALID', 'callback must carry exactly one code or error and one state');
   }
-  if (states.length !== 1 || codes.length !== 1 || !states[0] || !codes[0]) {
-    throw new OidcError('IAM_CALLBACK_INVALID', 'callback must carry exactly one code and one state');
+  if (errors.length === 1) {
+    throw new OidcError('IAM_AUTHORIZATION_ERROR', 'authorization endpoint returned an error');
   }
-  return { code: codes[0], state: states[0] };
+  return { code: codes[0], state: states[0], ...(issuers.length === 1 ? { iss: issuers[0] } : {}) };
 }
 
 export function decodeJwt(token) {
   if (typeof token !== 'string') throw new OidcError('IAM_ID_TOKEN_INVALID', 'ID token is missing');
   const parts = token.split('.');
   if (parts.length !== 3) throw new OidcError('IAM_ID_TOKEN_INVALID', 'ID token must have three segments');
+  // Buffer's base64url decoder is permissive; enforce canonical JWS encoding
+  // before decoding, including zero pad bits and no '=' or other characters.
+  if (parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part)
+      || Buffer.from(part, 'base64url').toString('base64url') !== part)) {
+    throw new OidcError('IAM_ID_TOKEN_INVALID', 'ID token has an invalid JWS encoding');
+  }
   try {
     const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
@@ -66,7 +74,9 @@ export function decodeJwt(token) {
 
 function audienceIncludes(audience, clientId) {
   if (typeof audience === 'string') return audience === clientId;
-  return Array.isArray(audience) && audience.includes(clientId);
+  return Array.isArray(audience) && audience.length > 0
+    && audience.every((value) => typeof value === 'string' && value.length > 0)
+    && audience.includes(clientId);
 }
 
 /**
@@ -99,8 +109,12 @@ const SIGNING_ALGORITHMS = Object.freeze({
   },
 });
 
-export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date.now(), skewSeconds = 60 } = {}) {
+export function verifyIdToken(token, { jwks, issuer, clientId, nonce, accessToken, now = Date.now(), skewSeconds = 60 } = {}) {
   const decoded = decodeJwt(token);
+  // No critical JWS extensions are implemented, so none may be declared.
+  if (decoded.header?.crit !== undefined) {
+    throw new OidcError('IAM_ID_TOKEN_INVALID', 'ID token uses unsupported critical headers');
+  }
   const alg = decoded.header?.alg;
   const algorithm = typeof alg === 'string' && Object.hasOwn(SIGNING_ALGORITHMS, alg)
     ? SIGNING_ALGORITHMS[alg]
@@ -108,25 +122,34 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date
   if (!algorithm) {
     throw new OidcError('IAM_ID_TOKEN_ALGORITHM', 'ID token uses an unsupported signing algorithm');
   }
-  if (!decoded.header?.kid) {
+  if (typeof decoded.header?.kid !== 'string' || decoded.header.kid.length === 0) {
     throw new OidcError('IAM_ID_TOKEN_INVALID', 'ID token has no key id');
   }
   const keys = Array.isArray(jwks?.keys) ? jwks.keys : [];
-  const jwk = keys.find((candidate) => candidate?.kid === decoded.header.kid
+  const matches = keys.filter((candidate) => candidate?.kid === decoded.header.kid
     && candidate?.kty === algorithm.kty
     && (algorithm.crv === undefined || candidate?.crv === algorithm.crv)
-    // A key published for encryption or a key that forbids `verify` must not
-    // authenticate a signature even if its material matches.
+    && (candidate?.alg === undefined || candidate.alg === alg)
     && (candidate?.use === undefined || candidate.use === 'sig')
-    && (candidate?.key_ops === undefined || candidate.key_ops.includes('verify')));
-  if (!jwk) {
+    && (candidate?.key_ops === undefined || (Array.isArray(candidate.key_ops)
+      && candidate.key_ops.includes('verify')
+      && candidate.key_ops.every((op) => op === 'verify' || op === 'sign')
+      && new Set(candidate.key_ops).size === candidate.key_ops.length)));
+  if (matches.length === 0) {
     throw new OidcError('IAM_JWKS_KEY_NOT_FOUND', 'no matching JWKS key for the ID token');
   }
+  if (matches.length !== 1) {
+    throw new OidcError('IAM_JWKS_INVALID', 'multiple matching JWKS keys for the ID token');
+  }
+  const [jwk] = matches;
   let key;
   try {
     key = createPublicKey({ key: jwk, format: 'jwk' });
   } catch {
     throw new OidcError('IAM_JWKS_INVALID', 'matching JWKS key cannot be imported');
+  }
+  if (algorithm.kty === 'RSA' && !(key.asymmetricKeyDetails?.modulusLength >= 2048)) {
+    throw new OidcError('IAM_JWKS_INVALID', 'matching RSA key is too small');
   }
   let valid = false;
   try {
@@ -160,14 +183,28 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, now = Date
     throw new OidcError('IAM_ID_TOKEN_SUBJECT', 'ID token has no subject');
   }
   const nowSeconds = Math.floor(now / 1000);
-  if (typeof claims?.exp !== 'number' || nowSeconds > claims.exp + skewSeconds) {
+  if (!Number.isFinite(claims?.exp) || nowSeconds >= claims.exp + skewSeconds) {
     throw new OidcError('IAM_ID_TOKEN_EXPIRED', 'ID token is expired');
   }
-  if (typeof claims?.iat === 'number' && claims.iat > nowSeconds + skewSeconds) {
-    throw new OidcError('IAM_ID_TOKEN_ISSUED_AT', 'ID token was issued in the future');
+  if (!Number.isFinite(claims?.iat) || claims.iat > nowSeconds + skewSeconds) {
+    throw new OidcError('IAM_ID_TOKEN_ISSUED_AT', 'ID token has an invalid issuance time');
   }
-  if (claims?.nbf !== undefined && (typeof claims.nbf !== 'number' || nowSeconds + skewSeconds < claims.nbf)) {
+  if (claims?.nbf !== undefined && (!Number.isFinite(claims.nbf) || nowSeconds + skewSeconds < claims.nbf)) {
     throw new OidcError('IAM_ID_TOKEN_NOT_BEFORE', 'ID token is not valid yet');
+  }
+  if (claims.at_hash !== undefined) {
+    // All supported signing algorithms use SHA-256; OIDC hashes ASCII access
+    // token bytes, then base64url-encodes the left half of the digest.
+    if (typeof accessToken !== 'string' || !/^[\x21-\x7e]+$/.test(accessToken)
+        || typeof claims.at_hash !== 'string') {
+      throw new OidcError('IAM_ID_TOKEN_AT_HASH', 'ID token access token hash is invalid');
+    }
+    const digest = createHash('sha256').update(accessToken, 'ascii').digest();
+    const expected = Buffer.from(digest.subarray(0, digest.length / 2).toString('base64url'));
+    const received = Buffer.from(claims.at_hash, 'utf8');
+    if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+      throw new OidcError('IAM_ID_TOKEN_AT_HASH', 'ID token access token hash is invalid');
+    }
   }
   return claims;
 }
