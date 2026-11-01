@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createMemoryBackend } from '../src/backend.mjs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createFileBackend, createMemoryBackend } from '../src/backend.mjs';
 import { createKeychainProvider, KeychainProviderError } from '../src/provider.mjs';
 
 const namespace = 'heluo-forge/iam';
@@ -126,6 +129,85 @@ test('a rejected mutator does not persist a corrupt record', async () => {
   assert.deepEqual(await value.listRecords(), []);
   assert.equal([...backend._snapshot().keys()].some((key) => key.includes('/record/')), false);
 });
+for (const failure of ['throw', 'reject']) {
+  test(`notification ${failure} cannot disguise successful reference writes or deletes`, async (t) => {
+    const secret = 'synthetic-reference-canary';
+    const output = [];
+    for (const method of ['log', 'warn', 'error']) t.mock.method(console, method, (...args) => output.push(args));
+    const notifyReference = () => {
+      if (failure === 'throw') throw new Error(secret);
+      return Promise.reject(new Error(secret));
+    };
+    const { value, backend } = provider({ notifyReference });
+    let setError;
+    try { await value.set('EXAMPLE_REF', secret); } catch (error) { setError = error; }
+    assert.equal(await backend.get(`${namespace}/ref/EXAMPLE_REF`), secret);
+    assert.equal(setError === undefined, true, 'committed set must succeed despite notification failure');
+    let unsetError;
+    try { await value.unset('EXAMPLE_REF'); } catch (error) { unsetError = error; }
+    assert.equal(await backend.get(`${namespace}/ref/EXAMPLE_REF`), undefined);
+    assert.equal(unsetError === undefined, true, 'committed unset must succeed despite notification failure');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(JSON.stringify(output).includes(secret), false);
+  });
+
+  for (const transactional of [false, true]) {
+    test(`notification ${failure} cannot disguise successful ${transactional ? 'transactional' : 'non-transactional'} record writes or deletes`, async (t) => {
+      const secret = 'synthetic-record-canary';
+      const output = [];
+      for (const method of ['log', 'warn', 'error']) t.mock.method(console, method, (...args) => output.push(args));
+      const notifyRecord = () => {
+        if (failure === 'throw') throw new Error(secret);
+        return Promise.reject(new Error(secret));
+      };
+      let backend = createMemoryBackend();
+      if (transactional) {
+        const dir = await mkdtemp(join(tmpdir(), 'forge-notify-test-'));
+        t.after(() => rm(dir, { recursive: true, force: true }));
+        backend = createFileBackend({ path: join(dir, 'records.json') });
+      }
+      const { value } = provider({ backend, notifyRecord });
+      const record = { kind: 'grant', payload: { refreshToken: secret } };
+      let result;
+      let writeError;
+      try { result = await value.modifyRecord('heluo-iam/session', () => record); } catch (error) { writeError = error; }
+      assert.equal((await value.readRecord('heluo-iam/session')).payload.refreshToken, secret);
+      assert.equal(writeError === undefined, true, 'committed write must succeed despite notification failure');
+      assert.equal(result.payload.refreshToken, secret);
+      let deleteError;
+      try { await value.deleteRecord('heluo-iam/session'); } catch (error) { deleteError = error; }
+      assert.equal(await value.readRecord('heluo-iam/session'), undefined);
+      assert.equal(deleteError === undefined, true, 'committed delete must succeed despite notification failure');
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(JSON.stringify(output).includes(secret), false);
+    });
+  }
+}
+
+test('backend write and delete failures still propagate without notification', async () => {
+  const backend = createMemoryBackend();
+  const failure = new Error('backend failed');
+  backend.set = async () => { throw failure; };
+  backend.delete = async () => { throw failure; };
+  let notified = 0;
+  const { value } = provider({ backend, notifyRecord: () => { notified += 1; }, notifyReference: () => { notified += 1; } });
+  await assert.rejects(() => value.set('EXAMPLE_REF', 'synthetic'), (error) => error === failure);
+  await assert.rejects(() => value.unset('EXAMPLE_REF'), (error) => error === failure);
+  await assert.rejects(() => value.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: {} })), (error) => error === failure);
+  await assert.rejects(() => value.deleteRecord('heluo-iam/session'), (error) => error === failure);
+  assert.equal(notified, 0);
+});
+
+test('a backend transaction failure propagates without notification', async () => {
+  const backend = createMemoryBackend();
+  const failure = new Error('transaction failed');
+  backend.transaction = async () => { throw failure; };
+  let notified = false;
+  const { value } = provider({ backend, notifyRecord: () => { notified = true; } });
+  await assert.rejects(() => value.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: {} })), (error) => error === failure);
+  assert.equal(notified, false);
+});
+
 test('committed changes notify reference and record listeners', async () => {
   const calls = [];
   const { value } = provider({

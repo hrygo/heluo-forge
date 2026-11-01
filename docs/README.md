@@ -85,9 +85,9 @@
 | 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；索引交付、三目标安装与全通道边界仍需验 |
 | 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
 | Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
-| IAM 登录与权限专题问询 | [IAM 原函及本轮补充确认](<collaboration/iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送>) | 补充正文先列业务需求、原函覆盖与待确认问题；原 21 项及已有答复保留；面向 IAM 团队补充产品依据，共同事项由行内实施团队协调汇总；未发送 |
+| IAM 登录与权限专题问询 | [IAM 原函及本轮补充确认](<collaboration/iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送>) | 补充正文先列业务需求、原函覆盖与待确认问题；原 21 项及已有答复保留；面向 IAM 团队补充产品依据，共同事项由实施团队协调汇总；未发送 |
 | 专用访问评审 | [DSH 与 Agent 模型网关认证方案](architecture/gateway-identity-review.md) | 需求方已确认；比较纯令牌/Key＋令牌，能力及路线待核验，技术审核/批准待定 |
-| 网关新问询 | [DSH 和应用 Agent 调用 AI 网关补充问询函](collaboration/gateway-confirmation-letter.md) | 先说明定制化 DeepSeek Harness 与应用自动调用两类场景，再按 CONF-GW-09—20 询问是否支持；首轮已发并于 2026-10-27 收到 v1.2 回函，CONF-GW-10 补充问题待发送；跨函协调见内部说明 §3.1 |
+| 网关新问询 | [DSH 和应用 Agent 调用 AI 网关补充问询函](collaboration/gateway-confirmation-letter.md) | 先说明定制化 DeepSeek Harness 与应用自动调用两类场景，再按 CONF-GW-09—20 询问是否支持；正文面向网关团队；跨函问题对应与协调放在内部说明 §3.1，回函处置见 §3.2；已发出，2026-10-27 收到解答 v1.2，第二轮待发出 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 各扩展包与两个独立服务的详细设计状态与路径（含实现与验证入口） |

@@ -10,7 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createIamService } from '../src/index.mjs';
+import { createIamService } from './support/trusted-service.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
@@ -79,6 +79,111 @@ function assertNoSecret(value, secrets) {
     );
   }
 }
+
+test('concurrent identical callbacks exchange the authorization code only once', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  let entered;
+  let release;
+  const enteredToken = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  let exchanges = 0;
+  const service = createIamService(configFor(mock), {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/token')) {
+        exchanges += 1;
+        entered();
+        await gate;
+      }
+      return fetch(url, init);
+    },
+  });
+  const { location } = await authorize(service);
+  const first = service.handleCallback(location);
+  await enteredToken;
+  const second = service.handleCallback(location);
+  const settled = Promise.allSettled([first, second]);
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  const results = await settled;
+  assert.equal(exchanges, 1, 'the second callback must never reach /token');
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[1].status, 'rejected');
+  assert.equal(service.getView().state, 'ready');
+  assert.ok(grantRecord(credentials));
+});
+
+test('invalid state and malformed same-state replay do not affect an in-flight callback', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  let entered;
+  let release;
+  const enteredToken = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  let exchanges = 0;
+  const service = createIamService(configFor(mock), {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/token')) {
+        exchanges += 1;
+        entered();
+        await gate;
+      }
+      return fetch(url, init);
+    },
+  });
+  const { location } = await authorize(service);
+  const pending = service.handleCallback(location);
+  await enteredToken;
+  const wrong = new URL(location);
+  wrong.searchParams.set('state', 'wrong');
+  await assert.rejects(service.handleCallback(wrong.href), { code: 'IAM_STATE_MISMATCH' });
+  const malformed = new URL(location);
+  malformed.searchParams.set('error', 'access_denied');
+  await assert.rejects(service.handleCallback(malformed.href), { code: 'IAM_ATTEMPT_IN_PROGRESS' });
+  assert.equal(service.getView().state, 'authenticating');
+  release();
+  assert.equal((await pending).state, 'ready');
+  assert.equal(exchanges, 1);
+  assert.ok(grantRecord(credentials));
+});
+
+test('a rejected in-flight duplicate cannot turn a failed exchange into success or trigger a retry', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  let entered;
+  let release;
+  const enteredToken = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  let exchanges = 0;
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/token')) {
+        exchanges += 1;
+        entered();
+        await gate;
+        return Response.json({ error: 'invalid_grant' }, { status: 400 });
+      }
+      return fetch(url, init);
+    },
+  });
+  const { location } = await authorize(service);
+  const pending = service.handleCallback(location);
+  const result = assert.rejects(pending, { code: 'IAM_INVALID_GRANT' });
+  await enteredToken;
+  await assert.rejects(service.handleCallback(location), { code: 'IAM_ATTEMPT_IN_PROGRESS' });
+  release();
+  await result;
+  await assert.rejects(service.handleCallback(location), { code: 'IAM_STATE_MISMATCH' });
+  assert.equal(exchanges, 1);
+  assert.equal(service.getView().state, 'error');
+  assert.equal(grantRecord(credentials), undefined);
+});
 
 test('a replayed authorization code cannot be exchanged twice', async (t) => {
   const mock = await startMockOidc();
@@ -167,7 +272,7 @@ test('RP-initiated logout builds the documented URL when the provider advertises
   assert.equal(logout.searchParams.get('client_id'), mock.clientId);
   assert.equal(logout.searchParams.get('id_token_hint'), idToken);
   assert.equal(logout.searchParams.get('post_logout_redirect_uri'), 'http://127.0.0.1:4567/iam/logged-out');
-  assert.equal(grantRecord(credentials), undefined, 'sign-out must clear the grant');
+  assert.deepEqual(grantRecord(credentials), { version: 1, type: 'heluo-iam-session-tombstone' }, 'sign-out must replace the grant with a tombstone');
 });
 
 test('local logout still completes and stays attributable when revocation fails', async (t) => {
@@ -185,7 +290,7 @@ test('local logout still completes and stays attributable when revocation fails'
   assert.equal(result.revocationError, 'IAM_HTTP_ERROR');
   assert.equal(result.view.state, 'signed-out', 'local logout completes even when revocation fails');
   assert.equal(result.view.error, 'IAM_REVOCATION_FAILED', 'the unconfirmed revocation stays visible');
-  assert.equal(grantRecord(credentials), undefined, 'the local grant is still cleared');
+  assert.deepEqual(grantRecord(credentials), { version: 1, type: 'heluo-iam-session-tombstone' }, 'the local grant is replaced even when revocation fails');
 });
 
 // Each fail-closed path must land on a non-ready state with no grant. None of

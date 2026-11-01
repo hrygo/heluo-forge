@@ -59,6 +59,23 @@ export function validateGrant(input) {
     }
   }
 
+  if (Object.hasOwn(input, 'sessionInstanceId')
+    && (typeof input.sessionInstanceId !== 'string'
+      || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(input.sessionInstanceId))) {
+    errors.push('grant.sessionInstanceId is invalid');
+  }
+
+  if (Object.hasOwn(input, 'refreshOperation')) {
+    const operation = input.refreshOperation;
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)
+      || Object.keys(operation).sort().join(',') !== 'base,id,state,version'
+      || operation.version !== 1 || !['pending', 'complete'].includes(operation.state)
+      || typeof operation.id !== 'string' || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(operation.id)
+      || typeof operation.base !== 'string' || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(operation.base)) {
+      errors.push('grant.refreshOperation is invalid');
+    }
+  }
+
   const hasAccess = isNonEmptyString(input.accessToken);
   const hasAccessExpiry = isNonEmptyString(input.accessExpiresAt);
   if (hasAccess !== hasAccessExpiry) {
