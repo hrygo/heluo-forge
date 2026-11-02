@@ -114,8 +114,8 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 
 1. **页面回滚（推荐）**：在「设置 → 企业 DevOps」里对改过的入口点「重置为自动发现」、把超时输入框清空，再点「保存」。这三项会从补丁层里删除，各自回落（环境变量 → 自动发现 / 缺省 `20000`）；`dopEndpoint` / `ghOwner` / `sourceType` 页面不展示、保存时逐字保留，要一并回滚就按第 2 步手工删掉整段 `config:`。
 2. **手工回滚**：在活动 profile 的补丁文件里删掉 `forge-devops` 条目下的 `config:` 段（保留注释与其它条目原样），保存后重载 profile。
-3. **卸载**：`dsh plugin --profile web remove @heluo/forge-devops`。
-4. **复核**：`dsh --profile web --dump-config | grep -A2 "id: forge-devops"` 里不应再有 `config:`；页面回到「自动发现 / 未找到」；`git status --short` 不应新增文件（插件不写缓存或临时文件）。
+3. **卸载**：`pnpm uninstall:devops --profile web`——先按精确条目（`forge-devops` / `@heluo/forge-devops`）删掉 profile 补丁层里本插件写入的那一条并回显删除区间（其它条目逐字不动），再调 `dsh plugin --profile web remove @heluo/forge-devops` 移除插件。**不能只跑 `dsh plugin remove`**：上游 `remove_bundle` 只移除依赖并重载，不清理 profile 补丁层，残留的 `- id: forge-devops` 行会让每次冷启动打印「entry not found」。只需清理、稍后自行移除插件时加 `--keep-plugin`（不调用任何子进程，打印下一步）。
+4. **复核**：整包卸载后 `dsh --profile web --dump-config | grep "id: forge-devops"` 应无输出；只做第 1/2 步配置回滚时，`grep -A2 "id: forge-devops"` 里不应再有 `config:`。页面回到「自动发现 / 未找到」；`git status --short` 不应新增文件（插件不写缓存或临时文件）。
 
 ## 安装单元与策略门禁（20261028-r1）
 
@@ -134,7 +134,7 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 
 宿主接线（`src/index.mjs` 是唯一装配点）：`apply()` 按「配置（三层合并）→ 子进程出口 → dop/gh 适配器 → 门禁适配 → 流程协作者 → 工具与入口注册」装配。配置由 `createCliAccess` 在装配期做一次三层合并（配置页 > 环境变量 > 自动发现；页面「重新自动发现」是唯一重扫入口），合并结果只以**显式配置**的形式交给流程，流程侧不再自己读一次进程环境；子进程只有一个出口 `createCliRunner`；适配器用 `createDopAdapter`/`createGhAdapter`；门禁用 `createPolicyGuard` 包住 `policy.executeAction`；流程协作者由 `createDevopsFlow` 生产，并以服务键 `devopsFlow` 提供（只读端口另以 `devopsReader` 提供，未就绪时不提供）。宿主注入同名协作者时以注入为准（离线测试或网关替换用），不注入即包内自建——两条路都由本包保证可达。
 
-策略服务是硬依赖，拿不到或没有 admission 入口就不挂载（入口关闭），不提供"无策略只读"降级；挂载时校验策略目录覆盖四个读动作且已开放（空目录/漏映射/未开放一律拒绝挂载，`POLICY_ACTION_UNREGISTERED`）；每次读取与写入都经同一门禁（`POLICY_DENIED` 时零下游调用），调用方自带 `role` 等参数不进入 admission 身份（不扩权）；卸载移除服务与全部工具注册、无残留。
+策略服务是硬依赖，拿不到或没有 admission 入口就不挂载（入口关闭），不提供"无策略只读"降级；挂载时校验策略目录覆盖四个读动作且已开放（空目录/漏映射/未开放一律拒绝挂载，`POLICY_ACTION_UNREGISTERED`）；每次读取与写入都经同一门禁（`POLICY_DENIED` 时零下游调用），调用方自带 `role` 等参数不进入 admission 身份（不扩权）；卸载后插件服务与全部工具注册一并移除、无残留（此处指插件自身；profile 补丁层里的条目由 `pnpm uninstall:devops` 清理，见[回滚](#回滚)）。
 
 模型可见面注册九个工具：四个只读（`forge_devops_change_read` / `forge_devops_repository_read` / `forge_devops_issue_read` / `forge_devops_pr_read`）、聚合读（`forge_devops_change_context` 产出上下文卡）、三个写（`forge_devops_issue_write` / `forge_devops_pr_write` / `forge_devops_clarify_write`，需 `confirm{repo,object}` 且目标必须是已判定的承建仓库）与产物落盘（`forge_devops_artifact_write`）。参数名统一用 `target`：策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（2026-10-24 实测的目录缺口）。未就绪时流程面仍可达，但只产出 `blocked` 卡（零子进程调用），只读工具按 `NO_READER` 失败并给出配置页指引；写动作在子进程之前按「门禁 → 变更号 → 运行时配置」三段拒绝。配置页的读写端点在同源 `/api/forge-devops` 下（`GET` 快照、`POST` 保存；写请求要求自定义请求头，响应一律 `no-store`），`webServer` 缺失或前缀冲突时只降级，不影响工具面与流程面。
 
@@ -144,7 +144,9 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 node --test "packages/forge-devops/test/*.test.mjs"
 ```
 
-覆盖（`node --test` 全量，条数以实跑为准）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、未启动（`exitCode: null`）按入口形态归因并保留 `detail.spawnFailed`、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载无残留、配置校验；工具侧另有：只注册九个工具、参数用 `target` 且必填、正常路径返回契约结果、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；组合根侧（`flow.test.mjs`）：配置齐全时产出 `ready` 卡（dop/gh 各一次固定 argv）、未配置时 `blocked` 卡 + 零调用、写动作三段前置拒绝、非法变更号早退；目录绑定侧（`policy-binding.test.mjs`）：空目录/漏映射/未开放/无目录/无 admission 入口拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝、调用方自带 `role` 不进入 admission 身份。CLI 配置面另有：`entry-form.test.mjs`（入口形态单点：win32 的 `.exe` / 无后缀 / `.cmd` / `.ps1` / `.bat` / `.com` 六形态都能直接执行，POSIX 仍要执行位、仍不选包装脚本；未启动提示按形态归因、不含路径与 endpoint）、`cli-discovery.test.mjs`（名字表 6 项、`.exe` 优先排序、`rejected` 恒空、执行位、PATH 去重与展开、目录上限、假时钟截止；Windows 规则靠注入平台与假文件系统覆盖，真机属未验）、`cli-config.test.mjs`（三层优先级矩阵、事实来源推导四态、来源语义、脱敏零命中、逐字段报错）、`cli-access.test.mjs`（快照/刷新/revision 栅栏/保存四路径）、`cli-http.test.mjs`（GET/POST 状态码、请求头、`no-store`、错误体形状）、`client-shape.test.mjs`（页面骨架的静态契约、三键渲染与文案零命中）、`delivery-selfcheck.test.mjs`（全仓安全扫描：发现层零子进程、客户端不打印路径）。
+覆盖（`node --test` 全量，条数以实跑为准）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、未启动（`exitCode: null`）按入口形态归因并保留 `detail.spawnFailed`、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载（插件服务与工具注册）无残留、配置校验；工具侧另有：只注册九个工具、参数用 `target` 且必填、正常路径返回契约结果、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；组合根侧（`flow.test.mjs`）：配置齐全时产出 `ready` 卡（dop/gh 各一次固定 argv）、未配置时 `blocked` 卡 + 零调用、写动作三段前置拒绝、非法变更号早退；目录绑定侧（`policy-binding.test.mjs`）：空目录/漏映射/未开放/无目录/无 admission 入口拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝、调用方自带 `role` 不进入 admission 身份。CLI 配置面另有：`entry-form.test.mjs`（入口形态单点：win32 的 `.exe` / 无后缀 / `.cmd` / `.ps1` / `.bat` / `.com` 六形态都能直接执行，POSIX 仍要执行位、仍不选包装脚本）、`failure-face.test.mjs`（spawn 失败面单点：读信封、写动作结果与变更卡片三出口同口径，只给 `reason` / 失败类别 / `next`，零路径、零 errno、零原始报错）、`cli-discovery.test.mjs`（名字表 6 项、`.exe` 优先排序、`rejected` 恒空、执行位、PATH 去重与展开、目录上限、假时钟截止；Windows 规则靠注入平台与假文件系统覆盖，真机属未验）、`cli-config.test.mjs`（三层优先级矩阵、事实来源推导四态、来源语义、脱敏零命中、逐字段报错）、`cli-access.test.mjs`（快照/刷新/revision 栅栏/保存四路径）、`cli-http.test.mjs`（GET/POST 状态码、请求头、`no-store`、错误体形状、`?refresh=1` 在响应前完成发现→重合并→重建读面）、`client-shape.test.mjs`（页面骨架的静态契约、三键渲染与文案零命中）、`delivery-selfcheck.test.mjs`（全仓安全扫描：发现层零子进程、客户端不打印路径）。
+
+仓库根另有卸载命令的离线用例：`node --test tests/patch-layer-blocks.test.mjs tests/uninstall-devops.test.mjs`——补丁层按缩进块精确删条目（缩进更深的同名 `- id:` 不命中）、重复执行幂等、无 `dsh` 时只清理并打印下一步、stdout 零绝对路径。
 
 ## 边界
 
@@ -157,6 +159,6 @@ node --test "packages/forge-devops/test/*.test.mjs"
 ## 未验（NOT RUN）
 
 - **Windows 实机**：自动发现与配置页在真实 Windows 上的行为（中文目录、含空格路径、UNC 与长路径、768 高度视口）未跑；上述规则与页面行为由离线用例覆盖（注入平台、假文件系统与假时钟），**不是实机证据**。企业内网 Windows 上按报障场景复测「保存 npm 全局目录下那个无后缀的 `dop`」（保存即通过）同样**未跑**。
-- **包装脚本与 shim 的真实启动失败**：`describeSpawnFailure` 的文案与脱敏由注入 `EINVAL` / `ENOENT` 桩在离线用例里覆盖，**没有在真实 npm shim 上跑过**；真实 Windows 上 `dop.cmd`、无后缀 shim 的报错文案与 errno 分布仍属未验。
+- **包装脚本与 shim 的真实启动失败**：未启动提示由 `src/failure-face.mjs` 单点按入口形态归因，结构化 detail 带 `reason` / 失败类别 / `next`，不含路径与 errno；这一面由注入 `EINVAL` / `ENOENT` 桩在离线用例里覆盖，**没有在真实 npm shim 上跑过**；真实 Windows 上 `dop.cmd`、无后缀 shim 的启动失败仍属未验。
 - **宿主组合**：当前插件在目标宿主版本下的 `configEditor` 写面与写后热调和未联调；配置页未走宿主表单面，改由同源路由 + profile 补丁写入。
 - **企业前提**：dop 是否随附原生 Windows 可执行文件、是否提供离线身份探针、真实安装目录分布均未知。发现规则不依赖这些；未命中时页面显示已查类别与全部候选，由用户指定位置。

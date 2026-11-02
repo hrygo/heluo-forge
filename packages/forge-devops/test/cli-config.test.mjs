@@ -129,6 +129,8 @@ test('常量表：字段与 ENV_KEYS 同键，五种 origin 各有中文标签�
     'CLI_CONFIG_INVALID',
     'CLI_CONFIG_CONFLICT',
     'CLI_CONFIG_UNAVAILABLE',
+    // r9：刷新重建读面失败的**细因**（只出现在 detail.reason，工具信封仍以 NO_READER 失败）。
+    'CLI_REBUILD_FAILED',
   ]);
   // origin 文案只有一份：五个枚举值必须一一对应，页面 Tag / 指引 / 状态面共用它。
   assert.deepEqual(Object.keys(CLI_ORIGIN_LABELS).sort(), Object.values(CLI_ORIGINS).sort());

@@ -93,8 +93,8 @@ dsh --profile web --dump-config | grep -A2 "id: heluo-"
 
 1. **停用写能力（不需要时）**：确认 profile 补丁层里 `heluo-policy-gitee` 的 `config.catalog` 只有 4 条 `kind: read`（3 读 + 1 只读判定），没有 `gitee.*.write`/`gitee.review.*`。判定是只读能力、默认登记，**不需要也不应该**为了"停用写"把它删掉。
 2. **手工回滚配置**：在活动 profile 的补丁文件里删掉 `heluo-gitee` 条目的 `config:` 段（保留注释与其它条目原样），保存后重载 profile。
-3. **卸载**：`dsh plugin --profile web remove @heluo/forge-gitee`。
-4. **复核**：`dsh --profile web --dump-config | grep -A2 "id: heluo-gitee"` 应无输出、`grep -A2 "id: heluo-policy-gitee"` 应无输出（与 GitHub 面的 `heluo-policy` 无关）；8 个工具从工具面消失；`git status --short` 不新增文件（插件不写缓存或临时文件，`review.md` 只在被调用时写 `docs/teamflow/<变更号>/review.md`）。
+3. **卸载**：`dsh plugin --profile web remove @heluo/forge-gitee`。这条命令只移除依赖并重载，**不清理 profile 补丁层**：`heluo-gitee` 与 `heluo-policy-gitee` 两条顶层条目会残留，冷启动因找不到对应包而打印 `entry not found`。本包暂无等价清理命令（仓库的 `pnpm uninstall:devops` 只处理 devops 条目）：卸载前先在补丁文件里按整条 `- id: …` 删掉这两条（保留注释与其它条目原样），再执行 `remove`；只删 `config:` 段只是第 2 步的配置回滚，不解决条目残留。
+4. **复核**：整包卸载后 `dsh --profile web --dump-config | grep "id: heluo-gitee"` 与 `grep "id: heluo-policy-gitee"` 均应无输出（与 GitHub 面的 `heluo-policy` 无关）；只做第 2 步配置回滚时，条目仍在但 `config:` 段已删。8 个工具从工具面消失；`git status --short` 不新增文件（插件不写缓存或临时文件，`review.md` 只在被调用时写 `docs/teamflow/<变更号>/review.md`）。
 
 ## 测试
 

@@ -23,7 +23,7 @@
 
 import { createHash } from 'node:crypto';
 
-import { describeSpawnFailure } from './entry-form.mjs';
+import { failureFaceOf } from './failure-face.mjs';
 import { DevopsReadError, READ_REASONS } from './read.mjs';
 
 /**
@@ -161,17 +161,19 @@ export function createDopAdapter({
       fail(READ_REASONS.COMMAND_TIMEOUT, `${context.command} 超时，未取得平台事实`, { ...context, timedOut: true });
     }
     if (!Number.isInteger(result.exitCode) || result.exitCode !== 0) {
+      // 失败面由 `failure-face.mjs` 单点渲染（r9 / AC-1、AC-5）：本模块只回答「这次调用失败了
+      // 吗」，不再自己拼用户可见的句子。未启动（exitCode 为 null）时**证据行根本不传进去**——
+      // 形态即结论，这是 AC-2「六注入零命中」的结构性保证，而不是靠正则把路径抹掉。
       const spawnFailed = result.exitCode === null || result.exitCode === undefined;
-      // 未启动（exitCode null）按入口形态归因：固定 argv + `shell:false` 启动不了脚本/shim，
-      // 这是启动方式的限制而非路径写法问题。判定不读 errno（.cmd 常见 EINVAL、npm 无后缀
-      // shim 常见 ENOENT，原因相同），原生入口由 helper 回退到脱敏证据行，不套包装脚本解释。
-      const evidence = failureLine(result);
-      const line = spawnFailed ? describeSpawnFailure({ bin, platform: hostPlatform, evidence }) : evidence;
-      fail(
-        READ_REASONS.COMMAND_FAILED,
-        `${context.command} 失败（${spawnFailed ? '未启动' : `退出码 ${result.exitCode}`}）：${line}`,
-        { ...context, exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null, spawnFailed },
-      );
+      const face = failureFaceOf({
+        command: context.command,
+        bin,
+        platform: hostPlatform,
+        exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
+        evidence: spawnFailed ? '' : failureLine(result),
+        observedAt: context.observedAt,
+      });
+      fail(face.code, face.message, face.detail);
     }
   }
 

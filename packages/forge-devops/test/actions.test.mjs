@@ -333,8 +333,28 @@ test('建 Issue：创建命令未启动 → failed（确定没写出去）', asy
   });
   const result = await createIssueIdempotent({ guard: allowGuard(), gh, changeId: CHANGE, repo: REPO, title: 'Fix gate', body: '正文', confirm: CONFIRM });
   assert.equal(result.status, 'failed');
-  assert.equal(result.reason, 'COMMAND_FAILED');
+  assert.equal(result.reason, 'CLI_SPAWN_FAILED', '未启动是细因（r9 / AC-1），语义仍是"确定没写出去"');
   assert.match(result.detail, /未启动/u);
+  assert.match(result.detail, /无副作用/u);
+  assert.match(result.detail, /下一步/u, '失败面要给出下一步（类别 + 页面指引）');
+  assert.doesNotMatch(result.detail, /[A-Za-z]:\\|ENOENT|EINVAL/u, '写动作结果同样不得带路径与 errno');
+});
+
+test('建 Issue：注入桩把原始 Node 报错塞进 message，写动作结果仍按类别重建（AC-2）', async () => {
+  const gh = fakeGh({
+    createIssue: async () => {
+      // 合成的本机路径样本（非真实主机），只为断言失败面把它整段丢弃；因而放行扫描。
+      const error = new Error('spawn C:\\Users\\<用户名>\\AppData\\Roaming\\npm\\gh.cmd EINVAL'); // security-scan: allow
+      error.code = 'COMMAND_FAILED';
+      error.detail = { spawnFailed: true, category: 'WRAPPER_SCRIPT', suffix: '.cmd', mayHaveSideEffect: false };
+      throw error;
+    },
+  });
+  const result = await createIssueIdempotent({ guard: allowGuard(), gh, changeId: CHANGE, repo: REPO, title: 'Fix gate', body: '正文', confirm: CONFIRM });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.reason, 'CLI_SPAWN_FAILED');
+  assert.match(result.detail, /\.cmd 包装脚本/u);
+  assert.doesNotMatch(result.detail, /Users|AppData|EINVAL|[A-Za-z]:\\/u, '原始报错不得穿到动作结果');
 });
 
 test('建 Issue：创建命令超时 → unknown（可能已写，转人工核对）', async () => {

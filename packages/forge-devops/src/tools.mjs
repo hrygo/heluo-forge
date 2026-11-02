@@ -14,6 +14,7 @@
  * 4. **产物落盘没有平台动作**（`action: null`）：它只写本地 `.dsh-devops/`，
  *    但仍要求 kind 与证据齐全，避免"报告没有证据也算产物"。
  */
+import { failureMessageOf, toolFailureOf } from './failure-face.mjs';
 import { READ_ACTIONS } from './read.mjs';
 import { repoOfTarget } from './repo-ref.mjs';
 
@@ -94,6 +95,24 @@ function reasonOf(error) {
 }
 
 /**
+ * 工具失败信封的唯一分流点（r9 / AC-1 第一出口）。
+ *
+ * 「命令没启动」给**结构化 detail**（`{reason, category, next, command, observedAt}`）并指明
+ * `configure-reader`：下一步就是去设置页指一个能启动的入口，模型不必再猜。其余失败维持
+ * 字符串 detail——拒绝、缺参、超时给的是原因码，卡片与 report 按字符串读，把对象混进这条
+ * 分支会让下游渲染出 `[object Object]`。
+ *
+ * 两条分支的 message 都经 `failure-face` 脱敏，工具输出因此不携带本机路径（AC-2）。
+ */
+function failureOf(action, error) {
+  const detail = error?.detail;
+  if (detail !== null && typeof detail === 'object' && detail.spawnFailed === true) {
+    return json(toolFailureOf(action, error));
+  }
+  return failure(action, reasonOf(error), failureMessageOf(error) || String(error ?? ''));
+}
+
+/**
  * 写动作的确认前置：`confirm.repo` 必须等于目标的仓库（完整 2 或 3 段路径），
  * `confirm.object` 必须等于目标本身。
  * 返回 null 表示通过，否则返回原因码。只在工具边界做一次，语义与门禁的 confirm 通道一致。
@@ -138,7 +157,7 @@ function readTool(service, toolName, action) {
       try {
         return json({ ok: true, result: await service.read({ action, target: args?.target }) });
       } catch (error) {
-        return failure(action, reasonOf(error), error?.message ?? error);
+        return failureOf(action, error);
       }
     },
   };
@@ -163,7 +182,7 @@ function contextTool(service) {
       try {
         return json({ ok: true, ...(await service.context({ target: args?.target })) });
       } catch (error) {
-        return failure('change.read', reasonOf(error), error?.message ?? error);
+        return failureOf('change.read', error);
       }
     },
   };
@@ -218,7 +237,7 @@ function writeTool({ service, method, toolName, description, action, properties,
         const result = await service[method](run.payload(args, target));
         return json({ ok: result?.status === 'done', result });
       } catch (error) {
-        return failure(action, reasonOf(error), error?.message ?? error);
+        return failureOf(action, error);
       }
     },
   };
@@ -366,7 +385,7 @@ function artifactWriteTool(service) {
         });
         return json({ ok: true, artifact });
       } catch (error) {
-        return failure('artifact.write', reasonOf(error), error?.message ?? error);
+        return failureOf('artifact.write', error);
       }
     },
   };

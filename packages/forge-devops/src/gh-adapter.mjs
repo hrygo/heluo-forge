@@ -25,7 +25,7 @@
  * 不冻结事实版本，`source_revision` 恒为 `null`，观测时间看 `observed_at`。
  */
 
-import { describeSpawnFailure } from './entry-form.mjs';
+import { failureFaceOf } from './failure-face.mjs';
 import { DevopsReadError, READ_REASONS } from './read.mjs';
 import {
   REPO_REF_MAX_SEGMENTS,
@@ -382,8 +382,8 @@ function parseCommentRef(stdout, context) {
 /**
  * 创建 gh 适配器。
  *
- * `platform` 只用于**未启动时的入口形态归因**（与 dop 适配器共用 `describeSpawnFailure`），
- * 可选注入以便在任意宿主上离线断言 win32 提示；缺省跟随 `process.platform`。
+ * `platform` 只用于**未启动时的入口形态归因**（与 dop 适配器共用 `failure-face.mjs` 的
+ * 单点渲染），可选注入以便在任意宿主上离线断言 win32 提示；缺省跟随 `process.platform`。
  *
  * @param {{runner: {run: Function}, ghBin?: string, now?: () => string, platform?: string}} options
  */
@@ -419,21 +419,20 @@ export function createGhAdapter({
       });
     }
     if (!Number.isInteger(result.exitCode) || result.exitCode !== 0) {
+      // 与 dop 适配器共用同一个失败面（r9 / AC-5：渲染只一处），这里只判「失败了吗」。
+      // 未启动时证据行不传入（形态即结论，AC-2 的结构性保证）；`mayHaveSideEffect` 仍随
+      // detail 交给动作层——写命令的 spawn 失败意味着**确定没写出去**，动作层据此记 failed。
       const spawnFailed = result.exitCode === null || result.exitCode === undefined;
-      // 未启动与 dop 同一口径：按入口形态归因（`.cmd`/`.ps1` 包装脚本、npm 无后缀 shim），
-      // 不读 errno、不出现路径与 endpoint；`spawnFailed` 依旧保留，写动作据此记 failed 而非 unknown。
-      const evidence = failureLine(result);
-      const line = spawnFailed ? describeSpawnFailure({ bin, platform: hostPlatform, evidence }) : evidence;
-      fail(
-        READ_REASONS.COMMAND_FAILED,
-        `${command} 失败（${spawnFailed ? '未启动' : `退出码 ${result.exitCode}`}）：${line}`,
-        {
-          ...context,
-          exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
-          spawnFailed,
-          mayHaveSideEffect: true,
-        },
-      );
+      const face = failureFaceOf({
+        command,
+        bin,
+        platform: hostPlatform,
+        exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null,
+        evidence: spawnFailed ? '' : failureLine(result),
+        observedAt,
+        mayHaveSideEffect: true,
+      });
+      fail(face.code, face.message, face.detail);
     }
     return { result, context };
   }

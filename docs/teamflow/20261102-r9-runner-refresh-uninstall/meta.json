@@ -1,0 +1,7 @@
+{
+  "reqId": "req-9",
+  "runId": "tf-mvykcipp-3eo1wi",
+  "title": "实现三项修复（用户已在会话中确认立项、范围＝三项全修，并授权按团队流水线交付）： 一、实现 spawn 失败的错误脱敏：当 runner 启动外部命令失败时，C",
+  "mode": "full",
+  "createdAt": 1793581888980
+}

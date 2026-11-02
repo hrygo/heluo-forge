@@ -12,6 +12,10 @@
  * - 只读不自动重放；重试语义是 `read_recheck`。
  */
 
+// 失败面单点（r9 / AC-5）：信封 message 是路径泄漏的最后一个入口——`error.message` 里可能带着
+// 适配器攒好的证据行，统一经 `failureMessageOf` 去前缀并脱敏；`status`/`error_code` 词表不变。
+import { failureMessageOf } from './failure-face.mjs';
+
 /** 只读面动作，与工程工具契约 §3 同源；写动作不在此列，也不得由本包开放。 */
 export const READ_ACTIONS = Object.freeze(['change.read', 'repository.read', 'issue.read', 'pr.read']);
 
@@ -125,7 +129,7 @@ export function normalizeReadError({ action = null, target = null, error = null 
     observed_at: typeof detail.observedAt === 'string' ? detail.observedAt : null,
     error_code: reason,
     retry_policy: 'read_recheck',
-    message: typeof error?.message === 'string' ? error.message : null,
+    message: failureMessageOf(error) || null,
     detail: { ...detail },
   };
 }

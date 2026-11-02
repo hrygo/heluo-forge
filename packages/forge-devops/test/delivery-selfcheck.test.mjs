@@ -59,6 +59,8 @@ const MODULE_CONTRACTS = [
   { file: 'entry.mjs', task: 'T7', exports: ['ENTRY_NAME', 'ENTRY_HELP', 'parseChangeId', 'registerEntry'] },
   // r8 增量：入口形态单点模块。它被保存侧、发现侧与两个适配器共读，成员名一旦漂移，
   // 最先崩的是运行期（适配器起不来），所以这里按蓝图 §3.1 逐字核对。
+  // r9：`describeSpawnFailure` / `redactPathLike` 迁到 `failure-face.mjs`（失败面单点，
+  // AC-5），本模块收窄为纯形态/可执行判定。
   {
     file: 'entry-form.mjs',
     task: 'T1(r8)',
@@ -68,8 +70,22 @@ const MODULE_CONTRACTS = [
       'wrapperSuffixOf',
       'entryFormOf',
       'isDirectlyExecutable',
-      'describeSpawnFailure',
-      'redactPathLike',
+    ],
+  },
+  // r9 增量：失败面唯一渲染点。三出口（读信封 / 写动作 / 变更卡片）共用，成员名漂移
+  // 会让 spawn 失败文案分叉或直接崩，所以按 r9 蓝图 §3.1 逐字核对。
+  {
+    file: 'failure-face.mjs',
+    task: 'T1(r9)',
+    exports: [
+      'SPAWN_FAILURE_REASON',
+      'SPAWN_CATEGORIES',
+      'spawnFailureFace',
+      'failureFaceOf',
+      'redactFailureText',
+      'failureMessageOf',
+      'toolFailureOf',
+      'writeFailureOf',
     ],
   },
   // r3 增量：四个新模块 + 三处增量导出。`landedWith` 表示该成员随同波次的另一文件落地，

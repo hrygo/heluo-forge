@@ -20,6 +20,7 @@
     "sensitive:install": "node scripts/sensitive-scan/install-hook.mjs",
     "sensitive:keygen": "node scripts/sensitive-scan/keygen.mjs",
     "sensitive:verify": "node scripts/sensitive-scan/verify.mjs",
-    "build:enterprise": "node scripts/build-enterprise-bundle.mjs"
+    "build:enterprise": "node scripts/build-enterprise-bundle.mjs",
+    "uninstall:devops": "node scripts/uninstall-devops.mjs"
   }
 }

@@ -332,6 +332,22 @@ function displayableChange(change) {
   };
 }
 
+/**
+ * spawn 失败的类别与下一步（r9 / AC-3）：只认 detail 里的结构化字段，不解析 message。
+ *
+ * 非 spawn 的未知项**不加这两个键**——卡片对既有失败逐字不变（用例按 `deepEqual` 比对
+ * `{field, reason, command}`），只有"命令没启动"这类可行动的失败才多说一句。
+ */
+function failureFaceOfUnknown(detail) {
+  if (detail.spawnFailed !== true) return {};
+  const face = {};
+  const category = text(detail.category);
+  const next = text(detail.next);
+  if (category !== '') face.category = category;
+  if (next !== '') face.next = next;
+  return face;
+}
+
 /** 未知项三种入参：Error（适配器抛错）、读信封（service.read 的 unknown）、{field,reason,command}。 */
 function toUnknown(entry, index) {
   const fail = (message) => new ContextError(CONTEXT_REASONS.UNKNOWN_INVALID, message, { index });
@@ -340,14 +356,14 @@ function toUnknown(entry, index) {
     const envelope = normalizeReadError({ action: entry.action ?? null, target: entry.target ?? null, error: entry });
     const field = text(detail.field) || who(entry.action) || who(entry.target);
     if (field === '') throw fail(`unknowns[${index}] 是错误对象但没有 field/action，无法指明哪项事实缺失`);
-    return { field, reason: envelope.error_code, command: text(detail.command) || null };
+    return { field, reason: envelope.error_code, command: text(detail.command) || null, ...failureFaceOfUnknown(detail) };
   }
   if (!isPlainObject(entry)) throw fail(`unknowns[${index}] 必须是 Error、读信封或 {field,reason,command}`);
   const detail = asObject(entry.detail);
   const field = text(entry.field) || text(detail.field) || text(entry.action) || text(entry.target_ref);
   const reason = text(entry.reason) || text(entry.error_code);
   if (field === '' || reason === '') throw fail(`unknowns[${index}] 必须带 field 与 reason（取不到事实不得静默省略）`);
-  return { field, reason, command: text(entry.command) || text(detail.command) || null };
+  return { field, reason, command: text(entry.command) || text(detail.command) || null, ...failureFaceOfUnknown(detail) };
 }
 
 function normalizeUnknowns(unknowns) {
@@ -705,7 +721,10 @@ export function renderContextCard(card) {
   } else {
     unknowns.forEach((item) => {
       const command = text(item.command) === '' ? '' : `（命令：${code(redactCommand(item.command))}）`;
-      lines.push(`- ${code(item.field)}：${code(item.reason)}${command}`);
+      // 失败面第三出口（r9 / AC-3）：没启动的项追加类别与下一步，让人知道"去哪儿改"。
+      const category = text(item.category) === '' ? '' : ` · 类别 ${code(item.category)}`;
+      const next = text(item.next) === '' ? '' : ` · 下一步 ${item.next}`;
+      lines.push(`- ${code(item.field)}：${code(item.reason)}${command}${category}${next}`);
     });
     lines.push('');
   }

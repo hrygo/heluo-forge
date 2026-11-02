@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CLI_REASONS } from '../src/cli-config.mjs';
+import { CLI_PAGE_HINT, CLI_REASONS } from '../src/cli-config.mjs';
 import { createCliAccess } from '../src/cli-access.mjs';
 import { CLI_API_PREFIX, CLI_REQUEST_HEADER, CLI_ROUTE_PATH, createCliApi, toNodeRoute } from '../src/http.mjs';
 
@@ -121,8 +121,57 @@ test('GET 读面失败：500 + 固定文案，绝不回显宿主异常里的路�
   assert.equal(response.status, 500);
   assert.equal(response.body.ok, false);
   assert.equal(response.body.code, 'CLI_SNAPSHOT_FAILED');
+  assert.deepEqual(
+    response.body.detail,
+    { reason: 'CLI_SNAPSHOT_FAILED', next: CLI_PAGE_HINT },
+    'r9：失败面给"为什么 + 下一步"，页面不再靠猜',
+  );
   assert.equal(JSON.stringify(response.body).includes(SECRET), false);
   assert.equal(JSON.stringify(response.body).includes('C:'), false);
+});
+
+test('刷新走注入的快照源：`?refresh=1` 原样交给源，路由不再自己读 access（r9 / AC-8 同源）', () => {
+  const sourceCalls = [];
+  const access = makeAccess();
+  const api = createCliApi({
+    access,
+    snapshot: (options) => {
+      sourceCalls.push(options ?? null);
+      return { ...SNAPSHOT, revision: 'fedcba9876543210' };
+    },
+    now: () => AT,
+  });
+
+  const refreshed = api.handleGet({ query: new URLSearchParams('refresh=1') });
+  assert.equal(refreshed.status, 200);
+  assert.deepEqual(sourceCalls, [{ refresh: true }], '刷新标志原样交给注入源（由装配层决定怎么重建）');
+  assert.equal(refreshed.body.revision, 'fedcba9876543210');
+  assert.equal(access.calls.snapshot.length, 0, '路由不得绕过注入源直读 access：那会变成"只重扫不重建"');
+
+  api.handleGet();
+  assert.deepEqual(sourceCalls, [{ refresh: true }, { refresh: false }], '普通读取同样走注入源');
+  assert.equal(access.calls.snapshot.length, 0);
+});
+
+test('刷新重建失败：500 带 detail.reason/next，文案固定、零路径（r9 / AC-10）', () => {
+  const api = createCliApi({
+    access: makeAccess(),
+    // 注入源的失败多半来自发现阶段读目录（fs 错误消息里就带本机绝对路径）：HTTP 层不得透出去。
+    snapshot: () => {
+      throw new Error(`EACCES: open '${SECRET}'`);
+    },
+    now: () => AT,
+  });
+
+  const response = api.handleGet({ query: new URLSearchParams('refresh=1') });
+  assert.equal(response.status, 500);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.code, 'CLI_SNAPSHOT_FAILED');
+  assert.deepEqual(response.body.detail, { reason: CLI_REASONS.REBUILD_FAILED, next: CLI_PAGE_HINT });
+  const text = JSON.stringify(response.body);
+  assert.equal(text.includes(SECRET), false);
+  assert.equal(text.includes('EACCES'), false);
+  assert.equal(text.includes('C:'), false);
 });
 
 test('GET 未装配：503 而不是抛异常（可选服务缺失不得让整片读面炸掉）', () => {

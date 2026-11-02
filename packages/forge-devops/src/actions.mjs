@@ -26,6 +26,7 @@
 import { createHash } from 'node:crypto';
 
 import { FLOW_ACTIONS } from './tools.mjs';
+import { SPAWN_FAILURE_REASON, failureMessageOf, writeFailureOf } from './failure-face.mjs';
 import { GUARD_REASONS } from './policy-guard.mjs';
 import { isRepoRef, parseTargetRef } from './repo-ref.mjs';
 
@@ -56,6 +57,8 @@ export const ACTION_REASONS = Object.freeze({
   MALFORMED_RESULT: 'MALFORMED_RESULT',
   COMMAND_TIMEOUT: 'COMMAND_TIMEOUT',
   COMMAND_FAILED: 'COMMAND_FAILED',
+  /** 子进程**未启动**（r9 / AC-1）：比 `COMMAND_FAILED` 更细，语义仍是"确定没写出去"。 */
+  SPAWN_FAILED: SPAWN_FAILURE_REASON,
   INTERNAL: 'INTERNAL',
 });
 
@@ -315,12 +318,13 @@ function qualifiedRef(repo, number, url) {
  * 把"可能写成功"记成"失败"会让人重跑一次，正是重复创建的开始。
  */
 function classifyWriteError(error, what) {
+  // 未启动：文案与下一步由 `failure-face.mjs` 单点给出（r9 / AC-1 第二出口），原因码细化成
+  // `CLI_SPAWN_FAILED`。语义不变——确定没跑起来 = 无副作用 = `failed`（AC-17 的纪律）。
+  const spawn = writeFailureOf(error, what);
+  if (spawn !== null) return spawn;
   const detail = asObject(error?.detail);
   const code = text(error?.code) || ACTION_REASONS.COMMAND_FAILED;
-  const message = describeError(error);
-  if (detail.spawnFailed === true) {
-    return { status: 'failed', reason: code, detail: `${what}命令未启动（无副作用）：${message}` };
-  }
+  const message = failureMessageOf(error) || describeError(error);
   if (detail.timedOut === true) {
     return { status: 'unknown', reason: ACTION_REASONS.COMMAND_TIMEOUT, detail: `${what}超时，写入可能已发生，转人工核对（不自动重放）：${message}` };
   }

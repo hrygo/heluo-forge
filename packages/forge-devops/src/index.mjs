@@ -209,16 +209,10 @@ export function apply(ctx, rawConfig = {}) {
   });
   // 合并结果只以**显式 config** 的形式交给流程（`normalizeResolution` 的"显式优先"语义不变）：
   // 解析不到就显式给空环境，流程侧不得再自己读一次进程环境（单一真源，避免两处各合并一次）。
-  // 这两项必须可重算：页面保存成功后 `access` 会重新合并，闭包里冻住"装配那一刻"的值会让
-  // 「保存后立刻生效」（AC-8）变成"重启后才生效"。
+  // 读面是六个变量的组合体（配置 / 不可用信封 / 流程 / 流程描述 / 就绪 / reader）：
+  // r9 起一次性算完再提交——重建抛错时只提交"明确不可用"，绝不留下半新半旧的状态（AC-10）。
   let cliConfig = null;
   let cliUnavailable = null;
-  const readCli = () => {
-    const described = access.describe();
-    cliConfig = described.ready === true ? mergedRuntimeOf(access.snapshot()) : null;
-    cliUnavailable = cliConfig === null ? unavailableOf(described) : null;
-  };
-  readCli();
 
   // D-1：流程协作对象在包内生产——配置（三层合并）→ runner → dop/gh → 门禁 → 动作 → 读。
   // 之前只认 `ctx.get(FLOW_KEY)`，仓库里没有生产者，9 个工具中 5 个流程工具恒 FLOW_UNAVAILABLE。
@@ -227,17 +221,19 @@ export function apply(ctx, rawConfig = {}) {
   const guard = createPolicyGuard({ policy });
   /** 包内生产的那份流程随配置变化重建；宿主注入的那份归宿主，不重建。 */
   const ownedFlow = !isFlowLike(injectedFlow);
-  const buildFlow = () =>
+  const buildFlow = ({ config, unavailable }) =>
     createDevopsFlow({
       ctx,
       policy,
       guard,
-      config: cliConfig,
-      env: cliConfig === null ? {} : null,
-      unavailable: cliUnavailable,
+      config,
+      env: config === null ? {} : null,
+      unavailable,
     });
-  let flow = ownedFlow ? buildFlow() : injectedFlow;
   const injectedReader = typeof ctx.get === 'function' ? ctx.get(READER_KEY) : undefined;
+  // 读面初值：宿主流入的那份协作者先就位（它不是我们建的，永远不重建）；自建的那份留给第一次
+  // `syncFaces()` 一次性换成真实值。降级时自建面被清空，注入面原样保留——所有权不因故障转移。
+  let flow = ownedFlow ? null : injectedFlow;
   let flowDescribed = null;
   let configured = false;
   let reader = undefined;
@@ -248,26 +244,98 @@ export function apply(ctx, rawConfig = {}) {
   const provideFaces = () => {
     flowProvideOff?.();
     readerProvideOff?.();
-    flowProvideOff = ownedFlow ? ctx.provide(FLOW_KEY, flow) : null;
+    flowProvideOff = ownedFlow && flow !== null ? ctx.provide(FLOW_KEY, flow) : null;
     readerProvideOff =
       reader === undefined || isReaderLike(injectedReader) ? null : ctx.provide(READER_KEY, reader);
   };
 
   /**
-   * 重算读面（配置/发现变了之后调用）。
-   * `rebuild` 只在配置真的换了才传：重建流程会换掉 runner 的路径解析，重建本身**不**重扫发现（AC-4）。
+   * 计算下一份读面（**不提交**）。`rebuild` 只在配置/发现真的换了才传：重建流程会换掉
+   * runner 的路径解析，重建本身**不**重扫发现（AC-4）。
    */
-  const syncFaces = ({ rebuild = false } = {}) => {
-    readCli();
-    if (rebuild === true && ownedFlow) flow = buildFlow();
-    flowDescribed = typeof flow.describe === 'function' ? flow.describe() : null;
-    configured = flowDescribed !== null && flowDescribed.configured === true;
-    reader = isReaderLike(injectedReader)
+  const computeFaces = ({ rebuild = false } = {}) => {
+    const described = access.describe();
+    const nextConfig = described.ready === true ? mergedRuntimeOf(access.snapshot()) : null;
+    const nextUnavailable = nextConfig === null ? unavailableOf(described) : null;
+    const nextFlow =
+      ownedFlow && (rebuild === true || flow === null)
+        ? buildFlow({ config: nextConfig, unavailable: nextUnavailable })
+        : flow;
+    const nextDescribed =
+      nextFlow !== null && typeof nextFlow.describe === 'function' ? nextFlow.describe() : null;
+    const nextConfigured = nextDescribed !== null && nextDescribed.configured === true;
+    const nextReader = isReaderLike(injectedReader)
       ? injectedReader
-      : configured && isReaderLike(flow.reader)
-        ? flow.reader
+      : nextConfigured && isReaderLike(nextFlow.reader)
+        ? nextFlow.reader
         : undefined;
+    return {
+      cliConfig: nextConfig,
+      cliUnavailable: nextUnavailable,
+      flow: nextFlow,
+      flowDescribed: nextDescribed,
+      configured: nextConfigured,
+      reader: nextReader,
+    };
+  };
+
+  /** 一次性提交六个变量再换对外引用：任何一步抛错都不会留下半重建的读面。 */
+  const commitFaces = (faces) => {
+    cliConfig = faces.cliConfig;
+    cliUnavailable = faces.cliUnavailable;
+    flow = faces.flow;
+    flowDescribed = faces.flowDescribed;
+    configured = faces.configured;
+    reader = faces.reader;
     provideFaces();
+    return faces;
+  };
+
+  /**
+   * 重建失败的**明确不可用**态（AC-10）：不保留"上次看起来还行"的旧读面、不猜路径；
+   * 细因 `CLI_REBUILD_FAILED` 与页面指引放 detail，工具信封仍是 `NO_READER`（原因码不加码）。
+   */
+  const degradedUnavailable = () =>
+    Object.freeze({
+      code: READ_REASONS.NO_READER,
+      message: `刷新失败 · 请到「${CLI_PAGE_HINT}」重试`,
+      detail: Object.freeze({ reason: CLI_REASONS.REBUILD_FAILED, next: CLI_PAGE_HINT }),
+    });
+
+  const degradeFaces = () => {
+    cliConfig = null;
+    cliUnavailable = degradedUnavailable();
+    // 宿主注入的流程/reader 归宿主：只把包内自建的这份置为不可用，注入的照旧（不越权降级）。
+    flow = ownedFlow ? null : injectedFlow;
+    flowDescribed = null;
+    configured = false;
+    reader = isReaderLike(injectedReader) ? injectedReader : undefined;
+    provideFaces();
+  };
+
+  /** 事务化重算读面：先算后提交（保存后与刷新后走同一条）。 */
+  const syncFaces = ({ rebuild = false } = {}) => commitFaces(computeFaces({ rebuild }));
+
+  /**
+   * 刷新单点（AC-6 / AC-7 / AC-8）：一次发现 → 重建读面 → 用同一份合并态出响应。
+   * HTTP 的 `?refresh=1`、工具侧 `rediscover`、`cliSnapshot({refresh:true})` 全部走这里，
+   * 不允许再存在"只重扫不重建"的第二条路径。
+   */
+  const refreshSnapshot = () => {
+    try {
+      // ① 唯一一次扫描：发现 + 重新合并（`access` 内部完成）；② 用这份结果事务化重建读面。
+      access.snapshot({ refresh: true });
+      syncFaces({ rebuild: true });
+    } catch {
+      degradeFaces();
+      throw new DevopsReadError(
+        CLI_REASONS.REBUILD_FAILED,
+        `刷新失败 · 请到「${CLI_PAGE_HINT}」重试`,
+        { reason: CLI_REASONS.REBUILD_FAILED, next: CLI_PAGE_HINT },
+      );
+    }
+    // ③ 响应读的是重建后的缓存合并态：与随后工具调用看到的是同一份（AC-6），且不再扫描（AC-9）。
+    return access.snapshot();
   };
   syncFaces();
 
@@ -281,7 +349,11 @@ export function apply(ctx, rawConfig = {}) {
   // 同源配置页端点（GET 快照 / POST 保存）。`webServer` 是可选服务：缺失、晚到、
   // 或同前缀已被别的实例占用时都只降级——绝不因为"页面挂不上"塌掉工具面与流程面。
   // 注册一步幂等：宿主已就绪时立即挂；未就绪时经 `ctx.inject` 等它就绪再挂（直接读 ctx.get 会拿到 undefined）。
-  const cliApi = createCliApi({ access });
+  const cliApi = createCliApi({
+    access,
+    // 刷新与工具侧共用同一个单点（AC-6）：路由不再自己调 `access.snapshot({refresh})`。
+    snapshot: ({ refresh } = {}) => (refresh === true ? refreshSnapshot() : access.snapshot()),
+  });
   const cliRoute = toNodeRoute(cliApi);
   let routeState = 'no-webserver';
   let disposeRoute = null;
@@ -309,6 +381,14 @@ export function apply(ctx, rawConfig = {}) {
 
   /** 按动作调协作者上的同名方法；缺方法同样是显式失败，而不是静默成功。 */
   const callFlow = async (operation, method, input) => {
+    if (flow === null) {
+      // 重建失败后的降级态：明确不可用且**零调用**（AC-10），不退回旧流程、不按旧路径 spawn。
+      throw new DevopsReadError(
+        FLOW_REASONS.UNAVAILABLE,
+        `流程协作者当前不可用（上次刷新失败），${operation} 未执行`,
+        { operation, reason: CLI_REASONS.REBUILD_FAILED, next: CLI_PAGE_HINT },
+      );
+    }
     if (typeof flow[method] !== 'function') {
       throw new DevopsReadError(
         FLOW_REASONS.MISSING_METHOD,
@@ -342,9 +422,21 @@ export function apply(ctx, rawConfig = {}) {
     /** 当前状态：没有可用适配器时为 `no-reader`（可见地 fail closed）。 */
     status: () => (reader === undefined ? 'no-reader' : 'ready'),
     /** 命令行配置的**脱敏**描述（origin / 缺哪一层 / 指引文案，不含路径与 endpoint）。 */
-    cliStatus: () => Object.freeze({ ...access.describe(), route: routeState }),
+    cliStatus: () =>
+      Object.freeze({
+        ...access.describe(),
+        // 重建失败后读面已明确不可用：状态与下一次工具调用同结论（AC-10），不能还报 ready。
+        ...(flow === null
+          ? {
+              ready: false,
+              reason: CLI_REASONS.REBUILD_FAILED,
+              guidance: degradedUnavailable().message,
+            }
+          : {}),
+        route: routeState,
+      }),
     /** 配置页快照（含命中路径）：只给同源 GET 路由与页面，不进工具信封、不进日志（AC-10）。 */
-    cliSnapshot: ({ refresh } = {}) => access.snapshot({ refresh: refresh === true }),
+    cliSnapshot: ({ refresh } = {}) => (refresh === true ? refreshSnapshot() : access.snapshot()),
     /** 保存配置：revision 栅栏、字段校验、写后回读都在 `cli-access`（本层不重算、不猜默认值）。 */
     saveCliConfig: async ({ revision, fields } = {}) => {
       const result = await access.save({ revision, fields });
@@ -352,12 +444,8 @@ export function apply(ctx, rawConfig = {}) {
       if (result?.ok === true) syncFaces({ rebuild: true });
       return result;
     },
-    /** 页面「重新发现」：重扫一次并重新合并（工具调用永远不会触发扫描，AC-4）。 */
-    rediscover: () => {
-      const snapshot = access.snapshot({ refresh: true });
-      syncFaces({ rebuild: true });
-      return snapshot;
-    },
+    /** 页面「重新发现」：走刷新单点（发现 → 重建读面 → 同源出响应；工具调用仍不触发扫描，AC-4）。 */
+    rediscover: () => refreshSnapshot(),
     /** 命令面状态：`registered` 或 `no-command-face`（工具面照常可用）。 */
     entryStatus: () => entryStatus,
     /** 会话内写动作台账（只读副本；不持久化、不跨会话）。 */
@@ -446,11 +534,14 @@ export function apply(ctx, rawConfig = {}) {
      * 注入的协作者形状不完整时返回结构化拒绝，而不是让命令面显示 INTERNAL——原因必须可见。
      */
     startFromChange: async (changeId) => {
-      if (typeof flow.startFromChange !== 'function') {
+      if (flow === null || typeof flow.startFromChange !== 'function') {
         return {
           ok: false,
-          reason: FLOW_REASONS.MISSING_METHOD,
-          detail: `流程协作者缺少 startFromChange（${FLOW_KEY}），未取回平台事实`,
+          reason: flow === null ? FLOW_REASONS.UNAVAILABLE : FLOW_REASONS.MISSING_METHOD,
+          detail:
+            flow === null
+              ? '流程协作者当前不可用（上次刷新失败），未取回平台事实'
+              : `流程协作者缺少 startFromChange（${FLOW_KEY}），未取回平台事实`,
           text: '上下文卡未产出：不进入澄清/计划/实现步骤。',
         };
       }
