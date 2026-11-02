@@ -301,14 +301,16 @@ test('未启动 + .cmd 入口（EINVAL）→ 与 dop 同口径的三段提示，
   await assert.rejects(adapter.readIssue({ target: 'acme/ard-sdk#12' }), (error) => {
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.spawnFailed, true);
-    assert.equal(error.detail.exitCode, null);
+    assert.equal(error.detail.reason, 'CLI_SPAWN_FAILED');
+    assert.equal(error.detail.category, 'WRAPPER_SCRIPT');
+    assert.ok(!('exitCode' in error.detail), '未启动的 detail 不带退出码');
     assert.match(error.message, /未启动/);
     assert.match(error.message, /\.cmd 包装脚本/);
-    assert.match(error.message, /固定 argv 且未经 shell 启动时无法运行/);
-    assert.match(error.message, /启动方式的限制/);
+    assert.match(error.message, /固定 argv 且未经 shell 无法启动脚本/);
     assert.match(error.message, /原生可执行文件/);
     assert.doesNotMatch(error.message, /重试/);
     assertNoLeak(error.message, ['C:\\Users', 'AppData']);
+    assertNoLeak(JSON.stringify(error.detail), ['C:\\Users', 'AppData']);
     return true;
   });
 });
@@ -323,8 +325,8 @@ test('未启动 + 无后缀 shim（ENOENT）→ npm 替身提示；写动作仍 
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.spawnFailed, true, '写动作据此记 failed（无副作用）而非 unknown');
     assert.equal(error.detail.mayHaveSideEffect, true);
-    assert.match(error.message, /没有扩展名的命令 shim/);
-    assert.match(error.message, /npm 在 Windows 上生成的替身/);
+    assert.equal(error.detail.category, 'EXTENSIONLESS_SHIM');
+    assert.match(error.message, /npm 生成的无后缀 shim/);
     assert.match(error.message, /原生可执行文件/);
     assert.doesNotMatch(error.message, /重试/);
     assertNoLeak(error.message, ['C:\\Users', 'AppData']);
@@ -333,7 +335,7 @@ test('未启动 + 无后缀 shim（ENOENT）→ npm 替身提示；写动作仍 
   assert.equal(runner.calls.length, 1, '未启动不得重放写动作');
 });
 
-test('原生 .exe 未启动 → 不套包装脚本解释（回退到脱敏证据行）', async () => {
+test('原生 .exe 未启动 → 不套包装脚本解释，也不回显证据行（AC-2）', async () => {
   const runner = fakeRunner(() => ({
     exitCode: null,
     stdout: '',
@@ -345,8 +347,10 @@ test('原生 .exe 未启动 → 不套包装脚本解释（回退到脱敏证据
   await assert.rejects(adapter.readPr({ target: 'acme/ard-sdk#7' }), (error) => {
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.spawnFailed, true);
+    assert.equal(error.detail.category, 'NATIVE_ENTRY');
     assert.doesNotMatch(error.message, /包装脚本|shim/);
-    assert.match(error.message, /ENOENT/);
+    assert.doesNotMatch(error.message, /ENOENT/, '未启动不读证据行（AC-1 / AC-2）');
+    assert.match(error.message, /入口未能启动/);
     assertNoLeak(error.message, ['C:\\Program Files', 'GitHub CLI\\gh.exe']);
     return true;
   });

@@ -59,12 +59,19 @@ export const CLI_ORIGINS = Object.freeze({
   MISSING: 'missing',
 });
 
-/** 原因码（AC-5 / AC-9 / AC-15）。http 层原样透传，页面按码选文案。 */
+/**
+ * 原因码（AC-5 / AC-9 / AC-15 / AC-10）。http 层原样透传，页面按码选文案。
+ *
+ * 前四码是**保存与发现**的对外词表；`REBUILD_FAILED`（r9）只作**细因**出现在
+ * `detail.reason`（刷新重建读面失败），工具信封仍以 `NO_READER` 失败——原因码不加码，
+ * 页面按错误码展示，不把它当成第五种保存失败。
+ */
 export const CLI_REASONS = Object.freeze({
   NOT_FOUND: 'CLI_NOT_FOUND',
   INVALID: 'CLI_CONFIG_INVALID',
   CONFLICT: 'CLI_CONFIG_CONFLICT',
   UNAVAILABLE: 'CLI_CONFIG_UNAVAILABLE',
+  REBUILD_FAILED: 'CLI_REBUILD_FAILED',
 });
 
 /**
@@ -100,7 +107,7 @@ export const CLI_PAGE_HINT = '设置 → 企业 DevOps';
 /**
  * 拒收文案（AC-2）：只描述**真问题**——找不到文件、是目录、不是普通文件、缺执行位。
  * r8 起没有"后缀不对"这一类，因此也没有对应文案：win32 的 `.exe`/无后缀/`.cmd`/`.ps1`/`.bat`
- * 一律可存（AC-1），包装脚本"存得下但跑不起来"由运行期归因提示（`entry-form.describeSpawnFailure`，AC-5）。
+ * 一律可存（AC-1），包装脚本"存得下但跑不起来"由运行期归因提示（`failure-face.spawnFailureFace`，AC-5）。
  */
 const NOT_EXECUTABLE_MESSAGE = '不是可直接执行的文件';
 

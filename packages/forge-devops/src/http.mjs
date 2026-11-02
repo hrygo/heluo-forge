@@ -18,7 +18,7 @@
  */
 import { Buffer } from 'node:buffer';
 
-import { CLI_FIELDS, CLI_REASONS } from './cli-config.mjs';
+import { CLI_FIELDS, CLI_PAGE_HINT, CLI_REASONS } from './cli-config.mjs';
 
 /** 路由前缀：`index.mjs` 用它注册（`kind:'prefix'`），页面用它拼端点。 */
 export const CLI_API_PREFIX = '/api/forge-devops';
@@ -66,11 +66,25 @@ function ok(body, extraHeaders = null) {
   return { status: 200, headers: headersOf(extraHeaders), body };
 }
 
-/** 统一错误体 `{ ok:false, code, message, errors? }`——页面据此选文案，别再拼字符串。 */
-function fail(status, code, message, errors = null, extraHeaders = null) {
+/** 统一错误体 `{ ok:false, code, message, errors?, detail? }`——页面据此选文案，别再拼字符串。 */
+function fail(status, code, message, errors = null, extraHeaders = null, detail = null) {
   const body = { ok: false, code, message };
   if (isPlainObject(errors) && Object.keys(errors).length > 0) body.errors = { ...errors };
+  if (isPlainObject(detail) && Object.keys(detail).length > 0) body.detail = { ...detail };
   return { status, headers: headersOf(extraHeaders), body };
+}
+
+/**
+ * 失败细因（r9 / AC-10）：页面按 `code` 选文案，`detail.reason` + `detail.next` 给出
+ * "为什么失败 + 下一步点哪里"。只输出词表值与固定指引——**绝不**拼 `error.message`，
+ * 这里就是路径泄漏的最后一道闸。
+ */
+function failureDetailOf(error, refresh) {
+  const code = isPlainObject(error) && typeof error.code === 'string' ? error.code : '';
+  if (refresh === true || code === CLI_REASONS.REBUILD_FAILED) {
+    return { reason: CLI_REASONS.REBUILD_FAILED, next: CLI_PAGE_HINT };
+  }
+  return { reason: CODES.SNAPSHOT_FAILED, next: CLI_PAGE_HINT };
 }
 
 /** 去掉尾斜杠：`/api/forge-devops/cli/` 与 exact 注册等价。 */
@@ -167,13 +181,19 @@ function parseBody(rawBody) {
  * @param {object} options
  * @param {{revision:Function, snapshot:Function, describe:Function, save:Function}} [options.access]
  *   `createCliAccess()` 的返回值（缺失时读面 503，而不是抛异常）
+ * @param {(options: {refresh: boolean}) => object} [options.snapshot]
+ *   读快照的**注入源**（r9）：给了它就由它决定 `refresh` 怎么实现（装配层传 `refreshSnapshot()`），
+ *   路由不再知道"重建读面"这件事；不给则退回 `access.snapshot()`（既有行为不变）。
  * @param {() => number} [options.now] 时钟：只用于响应头 `x-forge-devops-at`（诊断用）
  * @returns {{handleGet: (request?: object) => object, handlePost: (request?: object) => Promise<object>}}
  */
 export function createCliApi(options = {}) {
-  const { access = null, now = Date.now } = options ?? {};
+  const { access = null, snapshot = null, now = Date.now } = options ?? {};
   const clock = typeof now === 'function' ? now : Date.now;
-  const usable = isPlainObject(access) && typeof access.snapshot === 'function';
+  const source = typeof snapshot === 'function' ? snapshot : null;
+  const canRead = source !== null || (isPlainObject(access) && typeof access.snapshot === 'function');
+  const canSave = isPlainObject(access) && typeof access.save === 'function';
+  const readSnapshot = source !== null ? source : (request) => access.snapshot(request);
 
   function stamp() {
     const value = clock();
@@ -181,21 +201,32 @@ export function createCliApi(options = {}) {
     return { 'x-forge-devops-at': at.toISOString() };
   }
 
-  /** GET：无参 = 装配期快照；`?refresh=1` = 重新做一次有界发现（页面唯一的重扫动作）。 */
+  /**
+   * GET：无参 = 装配期快照；`?refresh=1` = 重新做一次有界发现（页面唯一的重扫动作）。
+   * 刷新走**注入源**（装配层的 `refreshSnapshot()`：发现 → 重建读面 → 同源出响应，AC-8）：
+   * 路由自己调 `access.snapshot({ refresh })` 只会重扫不重建，响应与下一次工具调用就不一致了。
+   */
   function handleGet(request = {}) {
-    if (!usable) return fail(503, CLI_REASONS.UNAVAILABLE, '配置面尚未装配，无法读取命令行状态');
+    if (!canRead) return fail(503, CLI_REASONS.UNAVAILABLE, '配置面尚未装配，无法读取命令行状态');
+    const refresh = refreshFlag(request?.query);
     try {
-      const snapshot = access.snapshot({ refresh: refreshFlag(request?.query) });
-      return ok(snapshot, stamp());
-    } catch {
-      // 不拼 error.message：fs / YAML 的错误消息里可能带绝对路径（AC-10）。
-      return fail(500, CODES.SNAPSHOT_FAILED, '读取命令行状态失败，请刷新重试');
+      return ok(readSnapshot({ refresh }), stamp());
+    } catch (error) {
+      // 不拼 error.message：fs / YAML / 发现的错误消息里可能带绝对路径（AC-10）。
+      return fail(
+        500,
+        CODES.SNAPSHOT_FAILED,
+        '读取命令行状态失败，请刷新重试',
+        null,
+        null,
+        failureDetailOf(error, refresh),
+      );
     }
   }
 
   /** POST：预检头 → JSON → 形状 → 保存，状态码见 TECHNICAL §3.1。 */
   async function handlePost(request = {}) {
-    if (!usable || typeof access.save !== 'function') {
+    if (!canRead || !canSave) {
       return fail(503, CLI_REASONS.UNAVAILABLE, '配置面尚未装配，无法保存配置');
     }
 

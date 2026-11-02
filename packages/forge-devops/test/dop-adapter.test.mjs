@@ -167,17 +167,20 @@ function assertNoLeak(message, secrets) {
   }
 }
 
-test('起不来（exitCode null 且未超时）→ COMMAND_FAILED + spawnFailed', async () => {
+test('起不来（exitCode null 且未超时）→ COMMAND_FAILED + spawnFailed + 细因 CLI_SPAWN_FAILED', async () => {
   const runner = fakeRunner(() => ({ exitCode: null, stdout: '', stderr: 'spawn ENOENT', durationMs: 1, timedOut: false }));
   await assert.rejects(adapterWith(runner).readChange({ changeId: 'ARD123456' }), (error) => {
-    assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
+    assert.equal(error.code, READ_REASONS.COMMAND_FAILED, '信封错误码词表不变（§3.4）');
     assert.equal(error.detail.spawnFailed, true);
-    assert.equal(error.detail.exitCode, null);
+    assert.equal(error.detail.reason, 'CLI_SPAWN_FAILED');
+    assert.equal(error.detail.command, 'dop change view ARD123456 --json');
+    assert.ok(!('exitCode' in error.detail), '未启动的 detail 不带退出码');
+    assert.ok(!('stderr' in error.detail) && !('evidence' in error.detail), '未启动的 detail 不带证据行');
     return true;
   });
 });
 
-test('未启动 + .cmd 入口（EINVAL）→ 三段可行动提示，保留 spawnFailed，不泄露路径/endpoint', async () => {
+test('未启动 + .cmd 入口（EINVAL）→ 三段可行动提示，detail 结构化，不泄露路径/endpoint', async () => {
   const endpoint = 'https://dop.example/api';
   const runner = fakeRunner(() => ({ exitCode: null, stdout: '', stderr: 'spawn EINVAL', durationMs: 1, timedOut: false }));
   const adapter = adapterWith(runner, {
@@ -189,13 +192,17 @@ test('未启动 + .cmd 入口（EINVAL）→ 三段可行动提示，保留 spaw
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.spawnFailed, true, 'spawnFailed 是写动作记 failed 而非 unknown 的依据');
     assert.match(error.message, /未启动/);
-    // ① 入口形态；② 原因归属运行时能力（与路径写法无关）；③ 下一步。
+    // ① 入口形态；② 原因归属启动方式（不是路径写法）；③ 下一步。
     assert.match(error.message, /\.cmd 包装脚本/);
-    assert.match(error.message, /固定 argv 且未经 shell 启动时无法运行/);
-    assert.match(error.message, /启动方式的限制/);
+    assert.match(error.message, /固定 argv 且未经 shell 无法启动脚本/);
     assert.match(error.message, /原生可执行文件/);
     assert.doesNotMatch(error.message, /重试/, '未启动不得暗示重试');
+    // 结构化面：类别 + 下一步，供写动作与卡片复用同一套判定。
+    assert.equal(error.detail.category, 'WRAPPER_SCRIPT');
+    assert.equal(error.detail.suffix, '.cmd');
+    assert.match(error.detail.next, /企业 DevOps/);
     assertNoLeak(error.message, [WIN_USERS, 'AppData', endpoint, 'dop.example']);
+    assertNoLeak(JSON.stringify(error.detail), [WIN_USERS, 'AppData', endpoint, 'dop.example']);
     return true;
   });
 });
@@ -209,8 +216,8 @@ test('未启动 + 无后缀 shim（ENOENT）→ 提示 npm 替身，不依赖具
   await assert.rejects(adapter.readChange({ changeId: 'ARD123456' }), (error) => {
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.spawnFailed, true);
-    assert.match(error.message, /没有扩展名的命令 shim/);
-    assert.match(error.message, /npm 在 Windows 上生成的替身/);
+    assert.equal(error.detail.category, 'EXTENSIONLESS_SHIM');
+    assert.match(error.message, /npm 生成的无后缀 shim/);
     assert.match(error.message, /原生可执行文件/);
     assert.doesNotMatch(error.message, /重试/);
     assertNoLeak(error.message, [WIN_USERS, 'AppData']);
@@ -218,7 +225,7 @@ test('未启动 + 无后缀 shim（ENOENT）→ 提示 npm 替身，不依赖具
   });
 });
 
-test('原生 .exe 未启动 → 不套包装脚本解释，回退到脱敏证据行（errno 保留）', async () => {
+test('原生 .exe 未启动 → 不套包装脚本解释，也不再回显证据行（AC-2 结构性保证）', async () => {
   const runner = fakeRunner(() => ({
     exitCode: null,
     stdout: '',
@@ -230,22 +237,25 @@ test('原生 .exe 未启动 → 不套包装脚本解释，回退到脱敏证据
   await assert.rejects(adapter.readChange({ changeId: 'ARD123456' }), (error) => {
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.spawnFailed, true);
+    assert.equal(error.detail.category, 'NATIVE_ENTRY');
     assert.doesNotMatch(error.message, /包装脚本/, '原生入口不得被解释成包装脚本');
     assert.doesNotMatch(error.message, /shim/);
-    assert.match(error.message, /ENOENT/, '用户仍需看到失败线索');
+    assert.doesNotMatch(error.message, /ENOENT/, '未启动不读证据行，errno 不再出现在出口（AC-1 / AC-2）');
+    assert.match(error.message, /入口未能启动/);
     assertNoLeak(error.message, ['C:\\tools\\dop.exe', 'C:\\tools']);
     return true;
   });
 });
 
-test('POSIX 无后缀不是 Windows shim：走脱敏证据行，不出现 Windows 措辞', async () => {
+test('POSIX 无后缀是原生入口：不出现 Windows 措辞，也不回显 errno', async () => {
   const runner = fakeRunner(() => ({ exitCode: null, stdout: '', stderr: 'spawn ENOENT', durationMs: 1, timedOut: false }));
   const adapter = adapterWith(runner, { dopBin: '/opt/corp/dop', platform: 'linux' });
   await assert.rejects(adapter.readChange({ changeId: 'ARD123456' }), (error) => {
     assert.equal(error.code, READ_REASONS.COMMAND_FAILED);
     assert.equal(error.detail.spawnFailed, true);
+    assert.equal(error.detail.category, 'NATIVE_ENTRY');
     assert.doesNotMatch(error.message, /shim|包装脚本/);
-    assert.match(error.message, /ENOENT/);
+    assert.match(error.message, /入口未能启动/);
     return true;
   });
 });
