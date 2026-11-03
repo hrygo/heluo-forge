@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.16.0 |
+| 版本 | V1.16.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -466,12 +466,12 @@ DSH 凭据存储 (ctx.credentials)
 ### 6.3 存储后端与 OS Keychain 演进
 
 1. **现行存储事实**：目标 DSH 默认的 `@deepseek-ai/dsh-credentials-local` 将凭据以 0600 YAML 明文写入 `$DSH_HOME/.credentials.yaml`，同 UID 进程均可读取。
-2. **生产 Keychain 方案**：设计新增 `@heluo/forge-credentials-keychain` 模块，生产环境使用 `@napi-rs/keyring`：Windows 接入 Credential Manager，UOS/麒麟接入系统 Secret Service（拒绝 keyutils 静默回退）。
-3. **真实系统钥匙串验证证据**：
-   - **macOS Spike（2026-10-24，darwin-arm64）**：利用 `/usr/bin/security` 跑通测试契约，验证了 stdin 管道双次输入写入、未命中返回码 44、argv 不泄露口令，10/10 步骤通过。
-   - **跨进程可见性实测（2026-10-24）**：验证子进程 A 写入、父进程读取、子进程 C 删除，证实按用户账户共享条目，不依赖特定进程，6/6 步骤通过。
-   - **Linux aarch64 探测（2026-10-24，Ubuntu 24.04.5）**：默认平台报 `KEYCHAIN_UNAVAILABLE` 并 fail-closed，证实无明文回退。
-4. **旧明文迁移策略**：当前 `migrateLegacyFileToKeychain()` 入口一律 fail closed。在未严格证明目标后端跨进程互斥与原文件安全隔离前，不盲目执行迁移。
+2. **生产 Keychain 方向**：`@heluo/forge-credentials-keychain` 的候选库为 `@napi-rs/keyring`：Windows 接入 Credential Manager，UOS/麒麟接入系统 Secret Service（拒绝 keyutils 静默回退）。候选库可读写不代表已满足完整枚举、Windows 长 grant、跨进程事务或网关双键原子提交；实施顺序与 G1/G2 停止条件见[多端凭据方案](<../../plans/2026-11-03-credential-multiplatform.md>)，原生样机不签发 IAM trust。
+3. **真实系统钥匙串验证证据及边界**：
+   - **macOS Spike（2026-10-24，darwin-arm64）**：利用 `/usr/bin/security` 跑通测试契约，验证了 stdin 管道双次输入写入、未命中返回码 44、argv 不泄露口令，10/10 步骤通过。该验证用适配器不等于生产实现。
+   - **跨进程可见性实测（2026-10-24）**：验证子进程 A 写入、父进程读取、子进程 C 删除，证实按用户账户共享条目，不依赖特定进程，6/6 步骤通过；没有证明读改写互斥或多键崩溃原子性。
+   - **Linux aarch64 探测（2026-10-24，Ubuntu 24.04.5）**：默认平台 backend 报 `KEYCHAIN_UNAVAILABLE`，仅证明该调用拒绝，不能证明默认组合无明文回退。2026-11-03 [#125](https://github.com/hrygo/heluo-forge/issues/125) 报告默认组合仍可激活 local 并写盘；含 `secret` 的文件本身不证明企业 AT/RT 已落盘。本轮为源码与报告核对，未重跑该实机复现。
+4. **旧明文迁移策略**：当前 `migrateLegacyFileToKeychain()` 入口一律 fail closed。在未严格证明目标后端跨进程互斥与原文件安全隔离前，不盲目执行迁移；遗留文件存在也不等于本次运行发生静默回退。
 
 ### 6.4 网关联合变更（当前原型）
 

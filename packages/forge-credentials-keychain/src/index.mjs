@@ -1,4 +1,5 @@
-import { createFileBackend, createPlatformBackend } from './backend.mjs';
+import { KeychainBackendError, createFileBackend, createPlatformBackend } from './backend.mjs';
+import { createNativeKeyringBackend } from './native-keyring.mjs';
 import { createSecurityCliBackend } from './security-cli.mjs';
 import { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 
@@ -6,11 +7,35 @@ export const name = 'forge-credentials-keychain';
 export const inject = [];
 
 export { createFileBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, KeychainBackendError } from './backend.mjs';
+export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES } from './native-keyring.mjs';
 export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
 export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 export { isMigratableKey, KeychainMigrationError, migrateLegacyFileToKeychain, MIGRATION_REASONS, redactSecrets } from './migrate.mjs';
 
 const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
+
+/**
+ * Mark an explicitly permitted non-production backend in the startup log.
+ * The message stays generic: a file path or a backend reason could expose
+ * local layout or credentials, and a failing logger must never turn a
+ * permitted opt-in into a mount failure.
+ *
+ * @param {object} ctx plugin context
+ * @param {object} backend selected backend
+ */
+function warnNonProduction(ctx, backend) {
+  const notice = backend?.requiresExplicitOptIn === true
+    ? 'credentials: 非生产凭据后端（明文文件）已启用；仅限开发/试点，不得用于生产'
+    : backend?.unvetted === true
+      ? 'credentials: 非审核平台适配器已启用；仅限本地实验，不得用于生产'
+      : undefined;
+  if (notice === undefined) return;
+  try {
+    ctx.logger?.warn?.(notice);
+  } catch {
+    // Diagnostics must not change the already permitted mount.
+  }
+}
 
 /**
  * Report a committed credentials change through `ctx.events.dispatch` so one
@@ -70,6 +95,7 @@ export function validateConfig(input = {}) {
     allowEphemeral: false,
     allowInsecureFile: false,
     allowUnvettedPlatformAdapter: false,
+    allowUnverifiedEnumeration: false,
     platformAdapter: undefined,
     filePath: '',
     backend: undefined,
@@ -117,10 +143,18 @@ export function validateConfig(input = {}) {
   }
 
   if (input.platformAdapter !== undefined && input.platformAdapter !== null) {
-    if (input.platformAdapter !== 'security-cli') {
-      issues.push({ path: ['platformAdapter'], message: "platformAdapter must be 'security-cli' (only unvetted spike adapter)" });
+    if (input.platformAdapter !== 'security-cli' && input.platformAdapter !== 'native-keyring') {
+      issues.push({ path: ['platformAdapter'], message: "platformAdapter must be 'security-cli' or 'native-keyring' (both unvetted)" });
     } else {
       value.platformAdapter = input.platformAdapter;
+    }
+  }
+
+  if (input.allowUnverifiedEnumeration !== undefined && input.allowUnverifiedEnumeration !== null) {
+    if (typeof input.allowUnverifiedEnumeration !== 'boolean') {
+      issues.push({ path: ['allowUnverifiedEnumeration'], message: 'allowUnverifiedEnumeration must be a boolean' });
+    } else {
+      value.allowUnverifiedEnumeration = input.allowUnverifiedEnumeration;
     }
   }
 
@@ -179,12 +213,31 @@ export function apply(ctx, rawConfig = {}) {
       'platformAdapter=security-cli is a non-production spike adapter; set allowUnvettedPlatformAdapter=true only for local experiments',
     );
   }
-  const backend = result.value.backend
-    ?? (result.value.platformAdapter === 'security-cli'
-      ? createSecurityCliBackend({ service: result.value.service })
-      : result.value.filePath
-        ? createFileBackend({ path: result.value.filePath })
-        : createPlatformBackend());
+  if (result.value.platformAdapter === 'native-keyring' && result.value.allowUnvettedPlatformAdapter !== true) {
+    throw new KeychainProviderError(
+      'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
+      'platformAdapter=native-keyring is an unvetted prototype; set allowUnvettedPlatformAdapter=true only for local experiments',
+    );
+  }
+  let backend;
+  try {
+    backend = result.value.backend
+      ?? (result.value.platformAdapter === 'security-cli'
+        ? createSecurityCliBackend({ service: result.value.service })
+        : result.value.platformAdapter === 'native-keyring'
+          ? createNativeKeyringBackend({
+            service: result.value.service,
+            enumeration: result.value.allowUnverifiedEnumeration === true ? 'find-credentials' : 'unsupported',
+          })
+          : result.value.filePath
+            ? createFileBackend({ path: result.value.filePath })
+            : createPlatformBackend());
+  } catch (error) {
+    // A backend that cannot be constructed is a mount failure, never a reason
+    // to try a different (plaintext) backend.
+    if (error instanceof KeychainBackendError) throw new KeychainProviderError(error.code, error.message);
+    throw error;
+  }
   if (backend.available === false) {
     throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', backend.reason ?? 'keychain backend is unavailable');
   }
@@ -206,6 +259,7 @@ export function apply(ctx, rawConfig = {}) {
       'file backend requires allowInsecureFile=true; production must use an OS keychain',
     );
   }
+  warnNonProduction(ctx, backend);
 
   const provider = createKeychainProvider(backend, {
     service: result.value.service,

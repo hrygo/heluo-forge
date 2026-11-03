@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createMemoryBackend } from '../src/backend.mjs';
 import { apply, Config, KeychainProviderError, validateConfig } from '../src/index.mjs';
 
@@ -183,4 +186,54 @@ test('record listeners are isolated too and the committed write still lands', as
   await dispose();
 
   assert.deepEqual(calls, ['heluo-iam/session']);
+});
+
+test('an explicitly allowed plaintext file backend is announced as non-production', async () => {
+  const warnings = [];
+  const ctx = fakeContext();
+  ctx.logger = { warn: (message) => warnings.push(message) };
+  const filePath = join(mkdtempSync(join(tmpdir(), 'forge-keychain-notice-')), 'credentials.json');
+  const dispose = apply(ctx, { filePath, allowInsecureFile: true });
+  await dispose();
+
+  assert.equal(warnings.length, 1, '非生产后端必须留下恰好一条启动提示');
+  assert.match(warnings[0], /非生产/u);
+  assert.match(warnings[0], /明文文件/u);
+  assert.equal(warnings[0].includes(filePath), false, '提示不得包含本地绝对路径');
+});
+
+test('the notice is skipped for reviewed backends and a failing logger cannot block the mount', async () => {
+  const silent = fakeContext();
+  let calls = 0;
+  silent.logger = { warn: () => { calls += 1; } };
+  const memory = apply(silent, { backend: createMemoryBackend(), allowEphemeral: true });
+  await memory();
+  assert.equal(calls, 0, '内存测试后端不是明文文件或未审核适配器，不产生该提示');
+
+  const throwing = fakeContext();
+  throwing.logger = { warn: () => { throw new Error('synthetic-logger'); } };
+  const filePath = join(mkdtempSync(join(tmpdir(), 'forge-keychain-notice-')), 'credentials.json');
+  const dispose = apply(throwing, { filePath, allowInsecureFile: true });
+  assert.equal(typeof throwing.provided.get('credentials')?.resolve, 'function');
+  await dispose();
+});
+
+test('native-keyring is accepted by config but still requires the unvetted opt-in', () => {
+  assert.deepEqual(validateConfig({ platformAdapter: 'native-keyring' }).value.platformAdapter, 'native-keyring');
+  assert.ok('issues' in validateConfig({ platformAdapter: 'native-keyring-unpinned' }), '未知适配器名必须被拒绝');
+  const ctx = fakeContext();
+  assert.throws(
+    () => apply(ctx, { platformAdapter: 'native-keyring' }),
+    (error) => error instanceof KeychainProviderError && error.code === 'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
+  );
+  assert.equal(ctx.provided.size, 0);
+});
+
+test('an allowed native adapter without the module fails closed instead of writing a file', () => {
+  const ctx = fakeContext();
+  assert.throws(
+    () => apply(ctx, { platformAdapter: 'native-keyring', allowUnvettedPlatformAdapter: true }),
+    (error) => error instanceof KeychainProviderError && error.code === 'KEYCHAIN_UNAVAILABLE',
+  );
+  assert.equal(ctx.provided.size, 0);
 });

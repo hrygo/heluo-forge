@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.38.0 |
+| 版本 | V1.38.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -45,7 +45,7 @@
 |---|---|---|---|
 | `requirements/` | 范围、画像、场景、需求与指标 | [需求与场景基线](<requirements/requirements-baseline.md>) | 业务方、PM、安全、试点用户 |
 | `architecture/` | 跨域决策、信任边界、领域设计、ADR | [总体架构设计](<architecture/platform-architecture.md>)；[专用访问评审](architecture/gateway-identity-review.md)，[静态 Key 接入](architecture/gateway-static-key-option.md)仅保留历史依据 | 架构评审、各团队负责人 |
-| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>)；本地 [IAM 联合变更计划](<plans/2026-11-02-iam-gateway-atomic.md>)、[默认模型只读编排计划](<plans/2026-11-02-iam-default-model-readonly.md>)、[隔离消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)；后续[收尾计划](<plans/2026-11-03-iam-mock-closeout.md>) | PM、实施团队 |
+| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>)；本地 [IAM 联合变更计划](<plans/2026-11-02-iam-gateway-atomic.md>)、[默认模型只读编排计划](<plans/2026-11-02-iam-default-model-readonly.md>)、[隔离消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)；后续[收尾计划](<plans/2026-11-03-iam-mock-closeout.md>)；[多端凭据存储方案](<plans/2026-11-03-credential-multiplatform.md>)（默认组合止血、非生产样机与生产门禁分开） | PM、实施团队 |
 | `design/` | 逐模块详细设计的索引与状态 | [设计索引](<design/README.md>) | 插件与服务开发者 |
 | `contracts/` | 外部系统字段级契约与明确标注的私有隔离草案 | [AI 网关契约](<contracts/gateway-contract.md>)；[IAM 消费隔离草案](<contracts/iam-consumer-isolated.md>)（source/mock见证/许可/合成工具与模型已分段验收；根联合已实现，本地验收已完成，真实准入未开放）；[IAM 只读订阅隔离草案](<contracts/iam-view-observer-isolated.md>)（私有source/mock接缝已验收；真实注册关闭） | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
@@ -88,6 +88,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
 | Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
 | IAM 登录与权限专题问询 | [IAM 原函及本轮补充确认](<collaboration/iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送>) | 补充正文先列业务需求、原函覆盖与待确认问题；原 21 项及已有答复保留；面向 IAM 团队补充产品依据，共同事项由实施团队协调汇总；未发送 |
+| IAM 接入方案确认 | [DSH 研发助手接入企业 IAM 确认函](<collaboration/iam-access-confirmation.md>) | 面向 IAM 团队的 11 项确认：客户端形态与 secret、停用与登出、人员标识、刷新复用；代拟未发送，确认前不联调 |
 | 专用访问评审 | [DSH 与 Agent 模型网关认证方案](architecture/gateway-identity-review.md) | 需求方已确认；比较纯令牌/Key＋令牌，能力及路线待核验，技术审核/批准待定 |
 | 网关新问询 | [DSH 和应用 Agent 调用 AI 网关补充问询函](collaboration/gateway-confirmation-letter.md) | 先说明定制化 DeepSeek Harness 与应用自动调用两类场景，再按 CONF-GW-09—20 询问是否支持；正文面向网关团队；跨函问题对应与协调放在内部说明 §3.1，回函处置见 §3.2；已发出，2026-10-27 收到解答 v1.2，第二轮待发出 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |

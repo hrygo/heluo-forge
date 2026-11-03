@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.61.0 |
+| 版本 | V1.62.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,14 +19,14 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.61.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.38.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.36.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.62.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.38.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.36.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.1 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.16.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
+| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.16.1 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
-| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.5.0 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.5.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V0.4.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-007 | 企业插件市场（轻量原生索引模式） | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V2.2.3 | 评审稿 | 平台组（代拟） | G1 索引接入；G2 三目标安装 |
@@ -59,6 +59,7 @@
 | CORP-DSH-PLAN-007 | IAM 模型与工具隔离消费实施计划 | [plans/2026-11-02-iam-consumer-isolated.md](<plans/2026-11-02-iam-consumer-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 完整 source/mock 设计已获用户批准；不动真实环境 |
 | CORP-DSH-PLAN-008 | IAM 下一阶段收尾计划 | [plans/2026-11-03-iam-mock-closeout.md](<plans/2026-11-03-iam-mock-closeout.md>) | V0.6.0 | 草案 | 平台组（代拟） | 最小订阅source/mock已实现并定向验收；真实注册、真实Client接线与probe不开放 |
 | CORP-DSH-PLAN-009 | SDD 退出实施计划 | [plans/2026-11-03-sdd-retirement-implementation.md](<plans/2026-11-03-sdd-retirement-implementation.md>) | V0.2.0 | 草案 | 项目负责人（代拟） | 待用户授权实施；退役前完成调用方盘点与回退演练 |
+| CORP-DSH-PLAN-010 | 多端凭据存储实现与验收方案 | [plans/2026-11-03-credential-multiplatform.md](<plans/2026-11-03-credential-multiplatform.md>) | V0.6.0 | 草案 | 平台组（代拟） | A 已实现并在本机 macOS 取证（组合探针 18/18）；B 原生样机已实现、仅合成用例；G1 枚举/容量/事务/可信装配未关闭；G2 Windows/UOS/麒麟未验 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.0.1 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.1 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.0.0 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
@@ -67,8 +68,9 @@
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.13.0 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
 | CORP-DSH-CONF-002 | 私有化 Gitee 内部插件源码接入问询函 | [collaboration/gitee-market-clarification.md](<collaboration/gitee-market-clarification.md>) | V0.3.0 | 草案 | 平台组（代拟）；Gitee 团队回函 | G1 源码接口联调前；G2 开放前确认运行事项 |
 | CORP-DSH-CONF-003 | 插件市场企业接入问询函（P0） | 已废止 | — | 废止 | 平台组 | 内容已吸收至 DESIGN-007/012 及 P0 取证单，问询草案已废止删除 |
-| CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.5.0 | 草案 | 平台组（代拟）；IAM 团队答复；实施协调汇总 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
+| CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.5.1 | 草案 | 平台组（代拟）；IAM 团队答复；实施协调汇总 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-CONF-005 | DSH 和应用 Agent 调用 AI 网关补充问询函 | [collaboration/gateway-confirmation-letter.md](collaboration/gateway-confirmation-letter.md) | V0.5.0 | 草案 | 平台组（代拟）；网关团队答复；实施协调汇总 | G0 认领与能力评估；G1 契约；G2 联调准入 |
+| CORP-DSH-CONF-006 | DSH 研发助手接入企业 IAM 确认函 | [collaboration/iam-access-confirmation.md](<collaboration/iam-access-confirmation.md>) | V0.1.0 | 草案 | 平台组（代拟）；IAM 团队确认；实施协调汇总 | G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 前置验证；G2 安装与隔离 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
