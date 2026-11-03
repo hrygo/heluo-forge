@@ -15,6 +15,11 @@
 //     `enumeration: 'find-credentials'`.
 //   - Keys are stored verbatim as the full backend key, so the provider's
 //     namespace prefixes and any other owner's records keep their meaning.
+//   - Every call awaits the class the module exports: `AsyncEntry` does the
+//     store round-trip off the JS thread, while the synchronous `Entry` blocks
+//     the host event loop for the whole D-Bus / Security call. Async is
+//     preferred when present; `await` on the synchronous surface is a no-op,
+//     so a module that only exports `Entry` keeps working.
 
 import { createRequire } from 'node:module';
 import { KeychainBackendError, NAMESPACE_PATTERN } from './backend.mjs';
@@ -122,8 +127,20 @@ export function createNativeKeyringBackend(options = {}) {
     if (loaded === null || typeof loaded !== 'object' || typeof loaded.Entry !== 'function') {
       throw new KeychainBackendError('KEYCHAIN_UNAVAILABLE', 'native keyring module does not export Entry');
     }
+    // `AsyncEntry` is optional; `Entry` stays required so a module that cannot
+    // do async work is still usable (it just blocks).
     module = loaded;
     return module;
+  }
+
+  /**
+   * Prefer `AsyncEntry`: the synchronous class blocks the host event loop for
+   * the whole store round-trip, and a locked store can stall the process that
+   * serves the UI.
+   */
+  function EntryClass() {
+    const loaded = store();
+    return typeof loaded.AsyncEntry === 'function' ? loaded.AsyncEntry : loaded.Entry;
   }
 
   /** One entry per key, always pinned to the reviewed Linux store. */
@@ -131,7 +148,7 @@ export function createNativeKeyringBackend(options = {}) {
     if (typeof key !== 'string' || key.length === 0) {
       throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'backend key must be a non-empty string');
     }
-    const { Entry } = store();
+    const Entry = EntryClass();
     const bag = entryOptionsFor(platform);
     return bag === undefined ? new Entry(service, key) : new Entry(service, key, bag);
   }
@@ -148,7 +165,7 @@ export function createNativeKeyringBackend(options = {}) {
     // read-modify-write atomicity that this module does not provide.
 
     async get(key) {
-      const value = entry(key).getPassword();
+      const value = await entry(key).getPassword();
       // 2.1.2 returns null when absent; the provider only understands undefined.
       if (value === null || value === undefined) return undefined;
       if (typeof value !== 'string') {
@@ -159,14 +176,14 @@ export function createNativeKeyringBackend(options = {}) {
 
     async set(key, value) {
       assertStorable(platform, value);
-      entry(key).setPassword(value);
+      await entry(key).setPassword(value);
     },
 
     async delete(key) {
       // `deletePassword` returns false for an absent credential and throws when
       // it exists but cannot be removed; a failed delete is never reported as
       // a no-op.
-      entry(key).deletePassword();
+      await entry(key).deletePassword();
     },
 
     async list(prefix) {
@@ -179,12 +196,15 @@ export function createNativeKeyringBackend(options = {}) {
           'native keyring enumeration is not verified for this platform; refusing to report an empty store',
         );
       }
-      const { findCredentials } = store();
-      if (typeof findCredentials !== 'function') {
+      const loaded = store();
+      const enumerate = typeof loaded.findCredentialsAsync === 'function'
+        ? loaded.findCredentialsAsync
+        : loaded.findCredentials;
+      if (typeof enumerate !== 'function') {
         throw new KeychainBackendError('KEYCHAIN_LIST_UNSUPPORTED', 'native keyring does not export findCredentials');
       }
       // Errors propagate: a locked or unreachable store must not look empty.
-      const found = findCredentials(service);
+      const found = await enumerate.call(loaded, service);
       if (!Array.isArray(found)) {
         throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration did not return a list');
       }
@@ -206,9 +226,11 @@ export function createNativeKeyringBackend(options = {}) {
     },
   };
 
-  // Fail at mount, not at the first credential use: an unavailable native
-  // module must stop the composition (fail closed) instead of leaving a
-  // provider that only breaks later during sign-in.
+  // Module-level failures stop the composition at mount (fail closed) instead of
+  // leaving a provider that only breaks during sign-in. Store-level failures
+  // (locked or unreachable Secret Service, denied access) cannot be told apart
+  // from a normal empty read here, so they surface on first use as operation
+  // errors — the mount check is about the module, not the store.
   store();
 
   return backend;
