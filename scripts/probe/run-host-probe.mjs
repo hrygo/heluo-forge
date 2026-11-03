@@ -139,7 +139,9 @@ const run = await runHarness();
 
 // 组合层对照：同一条 patch 的 --dump-config 结果里，profile 中存在的官方行必须落
 // `disabled: true`；profile 中不存在的 id 必须出现 Loader 的 "not found" 警告（警告 ≠ 已禁用）。
-const officialIds = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek'];
+// `credentials` 是官方本地明文凭据提供方：企业组合默认禁用它是 #125 的修复项，
+// 因此它和四个登录/模型行一样属于“被补丁命中的既有行”。
+const officialIds = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek', 'credentials'];
 const dumpBase = spawnSync(dsh, ['--profile', profile, '--dump-config'], { encoding: 'utf8' });
 const dumpPatched = spawnSync(dsh, ['--profile', profile, ...patchArgs, '--dump-config'], { encoding: 'utf8' });
 const baseText = String(dumpBase.stdout ?? '');

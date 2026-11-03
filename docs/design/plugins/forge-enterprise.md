@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.5.0 |
+| 版本 | V1.5.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -124,7 +124,7 @@ insert:
 
 ### 5.1 官方行默认禁用
 
-O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下行；企业包用独立的 `insert:` 行挂载（§5.1.2），不复用被禁用的官方行 id，也不覆盖成员的 `config`：
+O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下行；企业包用独立的 `insert:` 行挂载（§5.1.2），不复用被禁用的官方行 id，也不覆盖成员的 `config`。除四个官方登录/模型/账户行外，官方本地凭据提供方 `credentials`（0600 明文 YAML）同样默认禁用：它保留在组合里只加 `disabled: true`，出现在 dump 中属正常，禁用不等于删除。
 
 ```yaml title="默认禁用官方登录/模型（示意）"
 - id: deepseek-account
@@ -146,7 +146,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行；现行 `insert:` 段挂载三个有 Host 职责的企业插件（`insert:` 段见 §5.1.2）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
+补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行与官方 `credentials` 行；现行 `insert:` 段挂载三个有 Host 职责的企业插件（`insert:` 段见 §5.1.2）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|

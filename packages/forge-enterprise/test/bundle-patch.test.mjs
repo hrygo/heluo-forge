@@ -21,19 +21,30 @@ function disabledIds(text) {
   return disabled;
 }
 
-test('the bundle disables exactly the four official rows', async () => {
+test('the bundle disables exactly the four official rows and the local credentials provider', async () => {
   const text = await read('cordis.patch.yml');
   const disabled = disabledIds(text);
   assert.deepEqual(
     [...disabled.entries()].sort(),
     [
+      ['credentials', true],
       ['deepseek-account', true],
       ['llm-deepseek', true],
       ['llm-deepseek-account', true],
       ['ui-settings-account', true],
     ],
-    '四个官方行都必须以 disabled: true 关闭，且不多不少',
+    '四个官方行与官方本地凭据提供方都必须以 disabled: true 关闭，且不多不少',
   );
+});
+
+test('the local credentials row is disabled rather than removed or re-enabled', async () => {
+  const text = await read('cordis.patch.yml');
+  const disabled = disabledIds(text);
+  assert.equal(disabled.get('credentials'), true, '官方 local 提供方必须命中并被禁用');
+  // 覆写层只加 disabled 字段，行本身仍由基础组合提供；这里防止用删除或
+  // 重新插入同名行来“看起来”关掉它。
+  assert.doesNotMatch(text, /^ {4}- id: credentials$/mu, '不得把官方 local 行复制进 insert 段');
+  assert.match(text, /# 只禁用、不删除该行/u, '补丁需说明禁用不等于删除，dump 中仍会有该行');
 });
 
 test('the bundle mounts exactly the implemented enterprise packages', async () => {
