@@ -6,18 +6,18 @@
 |---|---|
 | 文档编号 | CORP-DSH-CONF-004 |
 | 文档名称 | IAM 统一登录与权限接入问询函 |
-| 版本 | V0.5.0 |
+| 版本 | V0.5.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-28 |
+| 最后更新 | 2026-11-03 |
 | 门禁 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 
 > 编制依据：2026-10-21 对目标环境已安装 DSH `0.2.1-rc.2` 做运行时与包文档核验，并同日由用户确认采用 **O3「企业 IAM 独占登录」**（官方登录在企业内网不可用，不保留官方登录、模型路由、API Key 与官方账户 UI 旁路）。本函据此归纳企业 IAM 统一认证、OIDC/OAuth 2.0 协议规范、Public Native Client 与 PKCE、RFC 8707 资源隔离、刷新令牌轮换与重用检测、RFC 7009 撤销及 RP 登出等对接问题，供 IAM 团队核实并书面答复。
 >
-> 关联文档：[总体架构设计](<../architecture/platform-architecture.md>)、[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[推广实施方案](<../plans/rollout-plan.md>)、[需求与场景基线](<../requirements/requirements-baseline.md>)、[AI 网关契约](<../contracts/gateway-contract.md>)、[跨团队确认询问函（母文档）](<team-confirmation-letters.md#42-iam-团队询问函>)、[文档清单](<../DOCUMENT-REGISTER.md>)、[文档总览](<../README.md>)。
+> 关联文档：[总体架构设计](<../architecture/platform-architecture.md>)、[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[推广实施方案](<../plans/rollout-plan.md>)、[需求与场景基线](<../requirements/requirements-baseline.md>)、[AI 网关契约](<../contracts/gateway-contract.md>)、[跨团队确认询问函（母文档）](<team-confirmation-letters.md#42-iam-团队询问函>)、[接入方案确认函](<iam-access-confirmation.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)、[文档总览](<../README.md>)。
 >
 > 回函依据：2026-10-26 收到《IAM统一登录与权限接入问询函 · 回函(3).docx》，用户明确其为**我方 IAM 团队内部校验回函**。本次核对 DOCX 正文并同步逐项台账；不重新证明正文所述实测，不含企业环境联调或嵌入截图复验。厂商正式能力、部署版本、接口契约与生产准入仍须对应证据。原 21 个问题编号保持稳定；材料内部矛盾及未决边界见 §4.5.5。
 >
@@ -25,7 +25,7 @@
 
 ## 1. 结论（平台内部）
 
-本函是 IAM 问题、已有答复及补充确认的统一记录。§4 保留原 21 项问题、已有答复和支撑材料；本轮对外使用 §9，先说明业务需求，再列原函覆盖情况和需补充确认的内容，不另起 IAM 新函或重新编号。
+本函是 IAM 问题、已有答复及补充确认的统一记录。§4 保留原 21 项问题、已有答复和支撑材料；本轮对外使用 §9，先说明业务需求，再列原函覆盖情况和需补充确认的内容，不重新编号；接入形态与五项令牌语义的单独确认见[接入方案确认函](<iam-access-confirmation.md>)（CONF-006），问询与回函记录仍以本文为准。
 
 企业内实施团队正在会同厂商开展 AI 网关实施。涉及身份对应、模型调用、停用和退出的配合事项，由相应团队确认产品能力及配合条件，企业内实施团队协调并汇总处理。
 
