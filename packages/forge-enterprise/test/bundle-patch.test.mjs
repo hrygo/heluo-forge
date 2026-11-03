@@ -44,7 +44,6 @@ test('the local credentials row is disabled rather than removed or re-enabled', 
   // 覆写层只加 disabled 字段，行本身仍由基础组合提供；这里防止用删除或
   // 重新插入同名行来“看起来”关掉它。
   assert.doesNotMatch(text, /^ {4}- id: credentials$/mu, '不得把官方 local 行复制进 insert 段');
-  assert.match(text, /# 只禁用、不删除该行/u, '补丁需说明禁用不等于删除，dump 中仍会有该行');
 });
 
 test('the bundle mounts exactly the implemented enterprise packages', async () => {

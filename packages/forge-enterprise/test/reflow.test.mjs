@@ -8,14 +8,15 @@ const dump = (entries) =>
     .map(([id, disabled]) => `- id: ${id}\n  source: builtin${disabled ? '\n  disabled: true' : ''}`)
     .join('\n');
 
-test('四行全部禁用才算不回灌', () => {
+test('官方行全部禁用才算不回灌（含官方明文凭据提供方）', () => {
   const patched = detectOfficialRowReflow({
     observed: new Map(OFFICIAL_ROWS.map((id) => [id, true])),
   });
   assert.equal(patched.ok, true);
   assert.deepEqual([...patched.reflowed], []);
   assert.deepEqual([...patched.disabled], [...OFFICIAL_ROWS]);
-  assert.equal(patched.checked, 4);
+  assert.equal(patched.checked, OFFICIAL_ROWS.length);
+  assert.ok(OFFICIAL_ROWS.includes('credentials'), '官方明文凭据提供方必须在官方行清单内');
 });
 
 test('官方行重新启用即报回灌，缺席行单独记录', () => {
@@ -28,7 +29,7 @@ test('官方行重新启用即报回灌，缺席行单独记录', () => {
   });
   assert.equal(base.ok, false);
   assert.deepEqual([...base.reflowed], ['deepseek-account', 'llm-deepseek-account', 'llm-deepseek']);
-  assert.deepEqual([...base.absent], ['ui-settings-account']);
+  assert.deepEqual([...base.absent], ['ui-settings-account', 'credentials']);
 
   const strict = detectOfficialRowReflow({
     observed: new Map(OFFICIAL_ROWS.filter((id) => id !== 'ui-settings-account').map((id) => [id, true])),
@@ -49,6 +50,24 @@ test('状态未知按回灌处理，不按"没写 disabled 就等于禁用"放�
   });
   assert.equal(unknown.ok, false);
   assert.deepEqual([...unknown.reflowed], ['deepseek-account', 'llm-deepseek']);
+});
+
+test('官方明文凭据提供方重新启用即报回灌，不会被当作无关行放行', () => {
+  // #125 的形态：其余官方行都禁用了，只有 credentials 行重新启用。
+  const rows = rowsFromDump([
+    '- id: deepseek-account',
+    '  disabled: true',
+    '- id: ui-settings-account',
+    '  disabled: true',
+    '- id: llm-deepseek-account',
+    '  disabled: true',
+    '- id: llm-deepseek',
+    '  disabled: true',
+    '- id: credentials',
+  ].join('\n'));
+  const verdict = detectOfficialRowReflow({ observed: rows });
+  assert.equal(verdict.ok, false, '启用的 credentials 行必须判为回灌');
+  assert.deepEqual([...verdict.reflowed], ['credentials']);
 });
 
 test('额外行与自定义期望集', () => {
@@ -87,7 +106,7 @@ test('dump 解析认得嵌套缩进与注释边界', () => {
   const verdict = detectOfficialRowReflow({ observed: rows });
   assert.equal(verdict.ok, false);
   assert.deepEqual([...verdict.reflowed], ['llm-deepseek']);
-  assert.deepEqual([...verdict.absent], ['ui-settings-account', 'llm-deepseek-account']);
+  assert.deepEqual([...verdict.absent], ['ui-settings-account', 'llm-deepseek-account', 'credentials']);
 });
 
 test('dump 夹具与实际输出形状一致', () => {
