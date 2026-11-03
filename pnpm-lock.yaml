@@ -34,7 +34,11 @@ importers:
         specifier: workspace:*
         version: link:../forge-policy
 
-  packages/forge-iam: {}
+  packages/forge-iam:
+    dependencies:
+      '@heluo/forge-credentials-keychain':
+        specifier: workspace:*
+        version: link:../forge-credentials-keychain
 
   packages/forge-market: {}
 
