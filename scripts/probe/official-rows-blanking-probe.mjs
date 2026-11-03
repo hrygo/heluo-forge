@@ -12,7 +12,7 @@
  *   2. **幸存行**：基线 dump 里出现的界面/设置/模型选择相关行，在打完补丁后必须仍然存在
  *      且没有被 `disabled: true`——这是"整体替换没有误伤"的证据。
  *
- * 用法：node scripts/probe/four-row-blanking-probe.mjs
+ * 用法：node scripts/probe/official-rows-blanking-probe.mjs
  * 环境：DSH_BIN（默认 dsh）、BLANKING_PROFILES（默认 web,desktop，逗号分隔）
  * 退出码：0 全部满足；1 有断言不成立；2 环境不具备。
  */
