@@ -7,12 +7,15 @@
 // and tells the user to sign in again when the access token has expired.
 
 import { accessTokenOf, EXIT, sessionFromRecord, SESSION_RECORD_KEY } from '../src/cli-session.mjs';
+import { BRIDGE_REF } from '../src/bridge.mjs';
 
 const USAGE = `用法：
   heluo-forge auth whoami [--json]   输出当前身份与登录状态
   heluo-forge auth token             输出未过期的访问令牌（不刷新）
 
 环境变量：
+  HELUO_FORGE_IAM_URL                 运行中的 DSH 地址（如 http://127.0.0.1:49196）；设置后
+                                      auth token 经 loopback 桥向 Host 取，过期也能拿到新票
   HELUO_FORGE_CREDENTIALS_FILE        明文文件后端路径（仅开发/试点）
   HELUO_FORGE_KEYCHAIN_SERVICE        钥匙串 service，默认 heluo-forge
   HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX 钥匙串 account 前缀，默认 iam
@@ -43,6 +46,31 @@ async function openReader() {
   }
 }
 
+/** Ask the running Host for a token through the loopback bridge. */
+async function tokenFromHost(reader, baseUrl) {
+  const capability = (await reader.resolve(BRIDGE_REF).catch(() => undefined))?.value;
+  if (typeof capability !== 'string' || capability.length === 0) {
+    return { ok: false, code: 'IAM_CREDENTIALS_UNAVAILABLE' };
+  }
+  let response;
+  try {
+    response = await fetch(new URL('/api/forge-iam/bridge/token', baseUrl), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${capability}` },
+    });
+  } catch {
+    return { ok: false, code: 'IAM_HOST_UNREACHABLE' };
+  }
+  if (!response.ok) {
+    return { ok: false, code: response.status === 401 ? 'IAM_BRIDGE_UNAUTHORIZED' : 'IAM_HOST_REJECTED' };
+  }
+  const body = await response.json().catch(() => ({}));
+  if (typeof body?.token !== 'string' || body.token.length === 0) {
+    return { ok: false, code: 'IAM_HOST_REJECTED' };
+  }
+  return { ok: true, token: body.token, expiresAt: body.expiresAt ?? null };
+}
+
 async function main(argv) {
   const args = argv.slice(2);
   const json = args.includes('--json');
@@ -71,6 +99,17 @@ async function main(argv) {
     else if (session.principal) process.stdout.write(`${session.principal.subject} (${session.principal.issuer ?? 'unknown issuer'})\n`);
     else process.stdout.write('未登录\n');
     return EXIT.OK;
+  }
+
+  const hostUrl = process.env.HELUO_FORGE_IAM_URL;
+  if (typeof hostUrl === 'string' && hostUrl.length > 0) {
+    const fromHost = await tokenFromHost(reader, hostUrl);
+    if (fromHost.ok) {
+      process.stdout.write(`${fromHost.token}\n`);
+      return EXIT.OK;
+    }
+    fail(fromHost.code, '无法从运行中的 DSH 取得令牌', json);
+    return EXIT.UNAVAILABLE;
   }
 
   const result = accessTokenOf(record);

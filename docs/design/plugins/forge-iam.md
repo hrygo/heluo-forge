@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.17.6 |
+| 版本 | V1.17.7 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -334,6 +334,7 @@ DSH 内置的 `ctx.authorization` flow 适合“任意界面单次唤起凭据�
 |---|---|---|
 | `GET /api/forge-iam/session` | 无 | 200 OK 返回 §5.5.2 的身份快照；不触发同步或刷新，永不含令牌 |
 | `POST /api/forge-iam/token` | 无 | 200 OK 返回 `{ token, expiresAt }`；要求 `x-forge-iam-request: 1`，响应不缓存 |
+| `POST /api/forge-iam/bridge/token` | loopback + `authorization: Bearer <能力值>` | 200 OK 返回 `{ token, expiresAt }`；不缓存 |
 | `GET /api/forge-iam/view` | 无 | 200 OK 返回 `IamView` 快照（可能触发后台过期刷新） |
 | `POST /api/forge-iam/sign-in` | `{}` | 200 OK 返回 `{ view, authorizationUrl }` |
 | `POST /api/forge-iam/cancel` | `{}` | 200 OK 返回 `{ view }` |
@@ -477,7 +478,12 @@ export interface IamAccount {
 | `heluo-forge auth whoami [--json]` | 身份与状态（与 `getSession()` 同形） | 0 |
 | `heluo-forge auth token` | 仅令牌一行 | 0；未登录 2；已过期 3；后端不可用 4；用法错误 64 |
 
-当前实现走**离线直读**：`HELUO_FORGE_CREDENTIALS_FILE` 指向文件后端、或用原生钥匙串，经 `@heluo/forge-credentials-keychain` 的 provider 读 `heluo-iam/session`，不刷新、不写回。原计划的"Host 在线走 HTTP"未实施：管理 API 由 DSH Connection 鉴权，CLI 侧没有已验证可用的凭据渠道，写死一个猜测的取法只会在真实环境里失败。该路径待在宿主侧确认 CLI 可用的鉴权方式后再补，届时仍由 Host 刷新。
+两条路径，优先 Host 在线：
+
+- **Host 在线**：`HELUO_FORGE_IAM_URL` 指向运行中的 DSH（如 `http://127.0.0.1:49196`）时，CLI 从凭据库取能力值 `HELUO_IAM_BRIDGE_TOKEN`，`POST /api/forge-iam/bridge/token`，由 Host 刷新并返回令牌。存储里的访问令牌即使已过期也能拿到新票，刷新仍只发生在 Host。
+- **离线直读**：未配置地址时，`HELUO_FORGE_CREDENTIALS_FILE` 指向文件后端、或用原生钥匙串，经 `@heluo/forge-credentials-keychain` 的 provider 读 `heluo-iam/session`，只返回未过期令牌，不刷新、不写回。
+
+桥路由为何单独开一个口：管理 API 由 DSH Connection 的浏览器鉴权守卫，CLI 无法持有该凭据（核验过 `connection` 只提供浏览器 cookie 与进程内 token，`subprocess.terminalEnvironment` 只返回平台与默认 shell）。因此新增的唯一通道要求 loopback 对端加凭据库中的能力值，按常量时间比较；能力值可用即意味着调用方本来就能读同一凭据库，这不是第二套授权模型，也不扩大既有暴露面。能力值在首次请求时惰性生成（32 字节随机，base64url），写入同一凭据库的 `HELUO_IAM_BRIDGE_TOKEN` 引用。
 
 子进程环境不注入令牌，需要时由调用方执行 `auth token` 取值。
 
@@ -503,7 +509,7 @@ export interface IamAccount {
 | 4 | 文档与契约 | 设计索引、文档登记与相对链接通过检查器 |
 
 第 1 步已实施：`getSession()` 与 `GET /api/forge-iam/session`，含 2 项服务用例与 2 项路由用例。
-第 2 步部分实施：`POST /api/forge-iam/token` 与 `getAccessToken()` 已落地（2 项路由用例）；CLI 的 Host 在线路径未实施，原因见 §5.5.4。
+第 2 步已实施：`POST /api/forge-iam/token`、`getAccessToken()` 与 CLI 的 Host 在线路径（loopback 桥 + 凭据库能力值），含路由与 CLI 用例。
 第 3 步已实施：`heluo-forge auth whoami` / `auth token` 离线直读，5 项用例覆盖身份投影、过期拒绝、退出码与不含令牌。
 第 4 步随本版完成（路由与 CLI 写入正文、登记同步）。`displayName`、`groups` 是否落盘另立字段契约，不在本节范围；本节也不重新讨论是否改用 `ctx.authorization` flow，结论见 §4.6。
 

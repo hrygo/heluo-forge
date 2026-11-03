@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
@@ -1495,6 +1495,24 @@ export function createIamService(rawConfig, options = {}) {
         notify();
       }
       return { view: view(), logoutUrl, revocation, revocationError };
+    },
+
+    /**
+     * Read (or lazily mint) the loopback bridge capability. The value lives in
+     * the credential store, so a caller must already be able to read that store
+     * to obtain it; this is not a second authorization model.
+     */
+    async bridgeCapability() {
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      const credentials = storeCredentials;
+      if (!credentials || typeof credentials.resolve !== 'function' || typeof credentials.set !== 'function') {
+        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+      }
+      const existing = await credentials.resolve(BRIDGE_REF);
+      if (typeof existing?.value === 'string' && existing.value.length > 0) return existing.value;
+      const secret = randomBytes(32).toString('base64url');
+      await credentials.set(BRIDGE_REF, secret);
+      return secret;
     },
 
     /** Alias of `resolveToken()` for the documented cross-module read surface. */

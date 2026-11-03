@@ -115,6 +115,7 @@ export function apply(ctx, rawConfig = {}) {
         const routes = createIamRoutes(service, {
           callbackPath: result.value.redirectPath,
           getOrigin: () => host.webServer.getOrigin?.(),
+          getBridgeSecret: () => service.bridgeCapability().catch(() => undefined),
           getConnection: () => {
             try {
               return ctx.get?.('connection');

@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createFileBackend, createKeychainProvider } from '@heluo/forge-credentials-keychain';
 import { accessTokenOf, SESSION_RECORD_KEY, sessionFromRecord } from '../src/cli-session.mjs';
+import { BRIDGE_REF } from '../src/bridge.mjs';
 
 const run = promisify(execFile);
 const BIN = fileURLToPath(new URL('../bin/heluo-forge.mjs', import.meta.url));
@@ -100,4 +102,55 @@ test('heluo-forge auth whoami reports a signed-out store without inventing ident
   const session = JSON.parse(result.stdout);
   assert.equal(session.status, 'signed-out');
   assert.equal(session.principal, undefined);
+});
+
+async function bridgeServer(t, { status = 200, token = 'placeholder-host-token' } = {}) {
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push({ method: req.method, url: req.url, authorization: req.headers.authorization });
+    res.setHeader('content-type', 'application/json');
+    if (status !== 200) {
+      res.statusCode = status;
+      res.end(JSON.stringify({ error: { code: 'IAM_BRIDGE_UNAUTHORIZED' } }));
+      return;
+    }
+    res.end(JSON.stringify({ token, expiresAt: new Date(Date.now() + 3600_000).toISOString() }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  return { server, seen, url: `http://127.0.0.1:${server.address().port}` };
+}
+
+test('heluo-forge auth token asks the running Host before falling back to the store', async (t) => {
+  // The stored token is expired; only the Host can produce a usable one, so a
+  // successful run proves the bridge path was taken rather than the offline read.
+  const path = await storeWith(t, grant({ accessExpiresAt: new Date(Date.now() - 60_000).toISOString() }));
+  const provider = createKeychainProvider(createFileBackend({ path }));
+  await provider.set(BRIDGE_REF, 'placeholder-capability');
+  const host = await bridgeServer(t);
+
+  const result = await run(process.execPath, [BIN, 'auth', 'token'], {
+    env: { ...process.env, HELUO_FORGE_CREDENTIALS_FILE: path, HELUO_FORGE_IAM_URL: host.url },
+  });
+  assert.equal(result.stdout.trim(), 'placeholder-host-token');
+  assert.equal(host.seen.length, 1);
+  assert.equal(host.seen[0].method, 'POST');
+  assert.equal(host.seen[0].url, '/api/forge-iam/bridge/token');
+  assert.equal(host.seen[0].authorization, 'Bearer placeholder-capability');
+});
+
+test('heluo-forge auth token fails closed when the Host rejects the capability', async (t) => {
+  const path = await storeWith(t, grant());
+  const provider = createKeychainProvider(createFileBackend({ path }));
+  await provider.set(BRIDGE_REF, 'placeholder-wrong-capability');
+  const host = await bridgeServer(t, { status: 401 });
+
+  await assert.rejects(run(process.execPath, [BIN, 'auth', 'token'], {
+    env: { ...process.env, HELUO_FORGE_CREDENTIALS_FILE: path, HELUO_FORGE_IAM_URL: host.url },
+    }).then((result) => result), (error) => {
+    assert.equal(error.code, 4);
+    assert.match(String(error.stderr), /IAM_BRIDGE_UNAUTHORIZED/u);
+    assert.equal(String(error.stdout), '');
+    return true;
+  });
 });
