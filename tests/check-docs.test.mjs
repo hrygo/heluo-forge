@@ -211,6 +211,24 @@ function mutate(root, path, replace, replacement) {
   writeFileSync(file, text.replace(replace, replacement));
 }
 
+// 把一份受控正文改成“用户已确认”的形态：生效状态 + 审核／批准 + 四项确认记录。
+function confirmRollout(root, date = '2026-11-03') {
+  const path = 'docs/plans/rollout-plan.md';
+  mutate(root, path, '| 文档状态 | 草案 |', '| 文档状态 | 生效 |');
+  mutate(
+    root,
+    path,
+    '| 审核 | 待定 |\n| 批准 | 待定 |',
+    `| 审核 | 项目负责人（当前用户，${date}） |\n| 批准 | 项目负责人（当前用户，${date}） |\n| 确认人 | 项目负责人（当前用户） |\n| 确认日期 | ${date} |\n| 确认事项 | 验收口径 |\n| 适用范围 | 本文正文 |`,
+  );
+  mutate(
+    root,
+    'docs/DOCUMENT-REGISTER.md',
+    '| CORP-DSH-PLAN-001 | 计划 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V0.1 | 草案 |',
+    '| CORP-DSH-PLAN-001 | 计划 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V0.1 | 生效 |',
+  );
+}
+
 test('valid documentation tree passes', () => {
   const root = fixture();
   try {
@@ -369,4 +387,119 @@ test('slugify mirrors GitHub heading anchors for CJK headings', () => {
   assert.equal(slugify('6. 软件包组合'), '6-软件包组合');
   assert.equal(slugify('Use `pnpm` for CI'), 'use-pnpm-for-ci');
   assert.deepEqual(unfenced('| a |\n```\n| b |\n```\n| c |'), ['| a |', '', '', '', '| c |']);
+});
+
+test('a user-confirmed document may record approval with its confirmation facts', () => {
+  const root = fixture();
+  try {
+    confirmRollout(root);
+    const { errors } = checkDocs(root);
+    assert.deepEqual(errors, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('non-pending approval without the confirmation facts is reported', () => {
+  const root = fixture();
+  try {
+    mutate(
+      root,
+      'docs/plans/rollout-plan.md',
+      '| 审核 | 待定 |',
+      '| 审核 | 项目负责人（当前用户，2026-11-03） |',
+    );
+    const { errors } = checkDocs(root);
+    assert.ok(
+      errors.some((error) => error.includes('non-待定 审核/批准 requires 文档状态 生效')),
+      errors.join('\n'),
+    );
+    for (const key of ['确认人', '确认日期', '确认事项', '适用范围']) {
+      assert.ok(errors.some((error) => error.includes(`requires ${key}`)), errors.join('\n'));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('confirmation date must be a real ISO date', () => {
+  for (const date of ['2026/11/03', '2026-02-30', '2026-13-01']) {
+    const root = fixture();
+    try {
+      confirmRollout(root, date);
+      const { errors } = checkDocs(root);
+      assert.ok(
+        errors.some((error) => error.includes('确认日期 must be a real YYYY-MM-DD date')),
+        `${date}: ${errors.join('\n')}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('placeholder confirmation values are rejected', () => {
+  for (const [key, original, placeholder] of [
+    ['确认人', '项目负责人（当前用户）', '待定'],
+    ['确认事项', '验收口径', '—'],
+    ['适用范围', '本文正文', '无'],
+  ]) {
+    const root = fixture();
+    try {
+      confirmRollout(root);
+      mutate(root, 'docs/plans/rollout-plan.md', `| ${key} | ${original} |`, `| ${key} | ${placeholder} |`);
+      const { errors } = checkDocs(root);
+      assert.ok(
+        errors.some((error) => error.includes(`requires ${key}`)),
+        `${key}: ${errors.join('\n')}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('confirmation facts must live in the document-info table', () => {
+  const root = fixture();
+  try {
+    confirmRollout(root);
+    const path = 'docs/plans/rollout-plan.md';
+    const facts = '| 确认人 | 项目负责人（当前用户） |\n| 确认日期 | 2026-11-03 |\n| 确认事项 | 验收口径 |\n| 适用范围 | 本文正文 |';
+    mutate(root, path, facts, '');
+    writeFileSync(
+      join(root, path),
+      `${readFileSync(join(root, path), 'utf8')}\n正文表格：\n\n| 项 | 内容 |\n|---|---|\n${facts}\n`,
+    );
+    const { errors } = checkDocs(root);
+    for (const key of ['确认人', '确认日期', '确认事项', '适用范围']) {
+      assert.ok(errors.some((error) => error.includes(`requires ${key}`)), `${key}: ${errors.join('\n')}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('annotated pending values stay accepted', () => {
+  const root = fixture();
+  try {
+    confirmRollout(root);
+    const path = 'docs/plans/rollout-plan.md';
+    mutate(root, path, '| 审核 | 项目负责人（当前用户，2026-11-03） |', '| 审核 | 待定（技术章节） |');
+    const { errors } = checkDocs(root);
+    assert.deepEqual(errors, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('both approvals annotated as pending need no confirmation facts', () => {
+  const root = fixture();
+  try {
+    const path = 'docs/plans/rollout-plan.md';
+    mutate(root, path, '| 审核 | 待定 |\n| 批准 | 待定 |', '| 审核 | 待定（技术章节） |\n| 批准 | 待定（范围待定） |');
+    const { errors } = checkDocs(root);
+    assert.deepEqual(errors, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

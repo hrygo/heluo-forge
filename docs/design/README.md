@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.34.0 |
+| 版本 | V0.35.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -32,7 +32,7 @@
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案（2026-11-03 r10：只讲 dop 变更流程，四个工具、配置四键（`dopBin`/`dopEndpoint`/`sourceType`/`timeoutMs`）；仓库/Issue/PR 事实由 `forge-gitee` 唯一负责） | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案（2026-11-03 r10：10 个 `forge_gitee_*` 工具 = 3 读 + 1 只读判定 + 4 受控写 + 2 git（`git commit` 为本地动作、`git push` 为远端写默认拒绝）、13 个源模块与离线用例已落地，见 §2.2；`gitee.*` 动作命名空间与 `GITEE_*` 白名单字段子集、判定随包登记（`target: change`、`egress: allow`）、唯一 `execFile` 出口（gitee CLI 与 git 共用 `run()`/`runGit()`）、幂等台账、`review.md` 与关闭条件判定已实现） | aarch64 产物、鉴权注入与 `--json` 字段稳定性（企业 CLI 未联调）；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验 |
-| `@heluo/forge-sdd` | 最小企业指引 + 必要 CLI/CI 校验 | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案（单一规则集：本地前置校验 + CI 权威结论；交付清单 freeze/verify 骨架已实现） | 企业 CI 接入与权威结论、归档联动；不固定工具数量 |
+| `@heluo/forge-sdd` | 现存兼容库 + CLI（非 Host；退出默认交付，待盘点退役） | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 草案（兼容与退役设计：freeze/verify 已实现；调用方、最小保留与退役顺序待盘点） | CLI／bin、企业组合包、测试与外部 caller 盘点；企业 CI 与归档不再是默认前提 |
 | 原生插件市场 | DSH 内置 + AIHUB 索引 | [plugins/forge-market.md](plugins/forge-market.md) | 评审稿；`dsh plugin` 转发 pnpm 的安装/卸载参数已真机实测 | AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>) |
 
 设计文档路径相对本目录；正文均已落盘，不表示对应包或市场已实现。
@@ -61,7 +61,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
 | [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；10 个源文件 | 2026-10-26 `node --test packages/forge-policy/test/*.test.mjs` 141 例通过、无跳过；10 源文件原生覆盖率（行/分支/函数）96.01%/90.70%/94.44%；必要审计另有 65 例聚焦测试及 rc.2 实际组件独立复核 6 项通过；目标 rc.3 尚未复跑（D1 写动作登记负测：12 条登记动作默认全部被拒、执行体零调用；批准台账负测：`enabled` 的写/确认动作没有有效台账条目就拒绝挂载、过期条目不足以开放、台账动作不匹配不算批准、只读不受约束，见设计 §5.1.2）；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。模型门禁探针（`scripts/probe/model-guard-probe.mjs`）已实测**模型自决调用不会绕开门禁**：`unregistered-action`/`action-disabled`/`target-required` 三种模式各以会话记录中的 `tool/call`+`tool/result` 为据、副作用为零，并以不挂策略的正向对照证明模型确实会调用；同时暴露目录只认调用参数 `target`、真实工具（`bash` 的 `command`、`fs` 的 `path`）无法放行的缺口（见设计 §9.2.2）。沙箱叠加顺序探针（`scripts/probe/sandbox-order-probe.mjs`）已实测**策略门禁先于沙箱执行器判定**（策略拒绝归因不带沙箱信号、目标在沙箱允许区内也不产生副作用；越界写由操作系统级拒绝），见设计 §9.2.3。委托路径面（`delegate` 模式：父模型调用 `subagent`、子 Agent 的 9 次 bash 调用全部被拦、零副作用）亦已实测，**委托不能绕开门禁**。**未完成/未测**：默认企业工具自动绑定、运行时批准范围复验、可信 principal/真实会话恢复与分叉承接仍须单独整改验收；企业环境、双端实机及目标 rc.3 未验，不以纯函数或旧探针泛化 |
 | [forge-enterprise](../../packages/forge-enterprise/README.md) | 企业组合 bundle：官方四行禁用补丁、配置整体替换、回灌检测（未知状态按 fail-closed 处理）、角色配置恢复、自包含构建与三插件挂载 + SDD CLI 转发；5 个源文件 | `node --test packages/forge-enterprise/test/*.test.mjs` 27 例通过（2026-10-26 复测）；`tests/bundle-build`/`bundle-closure` 51 例通过，自包含构建 + 安装/升级/回退/卸载演练通过（2026-10-26）；真机安装/升级/回滚/卸载与残留、四层补丁层序与 `--from-default-profile` 已实测（任务 `20261024T023419Z-dsh-install-c8c2`、`20261024T025338Z-dsh-profile-replace-eb4e`）。四行禁用后的**组合层完整性**已实测（`scripts/probe/four-row-blanking-probe.mjs`：`web` 上四行均落 `disabled: true`，基线 58 个界面/设置/模型选择相关行全部保留且未禁用、无激活告警；设计 §5.2.1）。**未验**：界面功能（设置页/模型选择真的可用）与角色 preset 粒度；`desktop` profile 在本机不可 dump（应用独占管理），按 NOT RUN 记账 |
-| [forge-sdd](../../packages/forge-sdd/README.md) | SDD 规则集与本地前置校验：规则版本、结果归因、与 CI 同一规则集；4 个源文件；交付版本须与测试版本一致，阶段交付分别具备规格与实现，产物以原始字节校验 | 2026-10-26 `node --test packages/forge-sdd/test/*.test.mjs` 27 例通过，无跳过；同组 Node 原生覆盖率（行/分支/函数）99.53%/93.06%/100%；CLI 与库的拒绝结论一致；**未联调**企业 CI、未认证真实测试来源，本地结论不替代 CI 权威结论；`currentRevision` 仍为可选调用者输入 |
+| [forge-sdd](../../packages/forge-sdd/README.md) | 兼容性 SDD 库与 CLI：freeze/verify 规则、结果归因与清单校验；**非默认 Issue 交付要求**；4 个源文件；交付版本须与测试版本一致，阶段交付分别具备规格与实现，产物以原始字节校验 | 2026-10-26 `node --test packages/forge-sdd/test/*.test.mjs` 27 例通过，无跳过；同组 Node 原生覆盖率（行/分支/函数）99.53%/93.06%/100%；CLI 与库的拒绝结论一致；**未联调**企业 CI、未认证真实测试来源；本地结论只在现存明确调用中替代 CI 同项检查，`currentRevision` 仍为可选调用者输入 |
 | [DSH 客户端标识](client-identification.md) | 使用宿主默认 UA，由网关匹配关键字；未实现网关规则，也不通过插件改写 UA | 2026-10-28 在本机 DSH `0.2.1-rc.3` 用 [`issue100-user-agent-probe.mjs`](../../scripts/probe/issue100-user-agent-probe.mjs) 测试 pi-ai 的 OpenAI-compatible 流式请求：宿主覆盖配置中的 UA，默认 UA 与可选合成诊断头到达本地模拟服务；探针退出成功只表示取证成功，不代表网关验收。真实网关及代理、Windows/麒麟、其他协议和 Coding Plan 均未验 |
 | [forge-gitee](../../packages/forge-gitee/README.md) | 独立 CLI 接入包（单安装单元）：10 个 `forge_gitee_*` 工具（3 读 + 4 受控写 + 1 只读判定 + 2 git；判定随包默认登记可用、写与 push 默认不登记即拒绝）、`gitee.*` 动作命名空间、`GITEE_*` 白名单字段子集（`GITEE_PLATFORM`）、唯一 `execFile` 出口（`run()`/`runGit()` 共用）、幂等台账、`review.md` 渲染与关闭条件判定；13 个源模块 + `cordis.patch.yml`（策略行 `heluo-policy` + 插件行 `forge-gitee`，与 devops 补丁层同 id、目录逐字相同、无 `isolate`） | 2026-10-29 `node --test "packages/forge-gitee/test/*.test.mjs"` 171 例、`node --test tests/bundle-gitee.test.mjs tests/plugin-patch-layers.test.mjs` 8 例离线通过（覆盖只读信封降级、写动作四状态与回读、默认禁用零调用、宿主 `register()` 判据、真实补丁层装载、共存形态与跨包策略行一致性、`buildBundle` 闭包与产物逐字节一致）；**未验**企业 Gitee CLI 联调、aarch64 产物、真实 profile 装入与 `--json` 字段稳定性；r10 增删模块后的条数与结果以本需求 QA 实测为准，明细见包 README 证据表与 NOT RUN 清单 |
 | 其余四包与 DevOps MCP | `forge-devops` 的"只读查询 + 门禁骨架"**已落地**（D4，2026-10-24）：清单、只读端口（r10 起只剩 `change.read`）、门禁骨架、四个工具（`change_read`/`change_context`/`clarify_write`/`artifact_write`，参数用门禁认识的 `target`）、离线测试（2026-10-26：空目录/漏映射/未开放拒绝挂载，读取走同一 `executeAction` admission，拒绝时适配器零调用）、**宿主探针两模式通过**（`with-reader`：模型自决调用经门禁到达适配器恰好一次；`no-reader`：可见地报 `NO_READER`；并借此发现并修复"缺 `inject` 导致工具静默不注册/整项不激活"），**企业 CLI 联调未做**，写动作全部关闭；r10 起仓库/Issue/PR 的读写改由 `forge-gitee` 唯一负责，devops 的 gh 侧七个模块已删除；`forge-brand` / `forge-gateway` 与 `services/devops-mcp` 仍为规划入口，无清单、源码或测试；`forge-gitee` 已另起独立单安装单元（见 §2.2 与包 README）。准入手册见[能力面设计 §6.1](plugins/forge-devops-lifecycle.md) | 对应设计中的测试矩阵为目标，不是执行结果 |
@@ -116,7 +116,7 @@ Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍
 - [policy 当前注册](<../../packages/forge-policy/src/index.mjs>)只覆盖登记范围，卸载撤销 guard 和服务，没有读取 IAM；[DevOps 硬依赖](<../../packages/forge-devops/src/index.mjs>)确实声明 policy，但不因此获得实时 IAM 身份或用途授权。[模型纯判定](<../../packages/forge-iam/src/model-gate.mjs>)也不是执行拦截。
 - 受保护对象、独立于 IAM 的门禁所有者及可信授权来源仍是下一阶段的关键边界。缺来源拒绝、失效交错、下游零调用和解绑可由 mock 验证；真实人员/用途授权与五分钟撤权不能由 fixture 承诺。
 
-五条跨模块冲突（policy fail-open、无 policy 降只读、审计坏是否影响执行、SDD 双路径、历史市场行）的定位与结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；**五条已由责任方 2026-10-24 逐条确认**——确认的是组织做法，不等于企业能力已联调（C4 的 CI 侧、C5 的原生索引端仍待接入证据），也不放开任何受控写。
+五条跨模块冲突（policy fail-open、无 policy 降只读、审计失败是否阻断、SDD 本地／CI 双路径、历史市场行与 SDD 挂载口径）的定位与结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；**五条已由责任方 2026-10-24 逐条确认**——确认的是组织做法，不等于企业能力已联调（C4 的 CI 侧、C5 的安装与依赖事实仍待证据），也不放开任何受控写。
 
 ## 3. 独立服务设计
 

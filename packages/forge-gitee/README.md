@@ -67,7 +67,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 - **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。
 - **写**：四状态 `done`/`failed`/`denied`/`unknown`。`done` 必须"CLI 成功 + 回读一致"；退出码 0 单凭算 `unknown`。写前有幂等台账（`sha256(changeId|objectType|title)` 前 16 位，进程内 6 小时），命中返回 `reused` 且远端 0 次调用；失败不重放。写动作返回体**不出现 `executed` 键**（该键只由判定体的 `produced` 声明产生，写动作返回体一个键都不多）。
 - **审查**：`review.md` 四段（问题 / 风险 / 意见 / 结论）+ AI 与人工两栏物理分节；人工栏只能由 `recordHumanConfirmation` 写，模型自填即拒；`stale` 是派生结果不落盘。
-- **交付判定**：只判定不执行——`[变更号]` 提交信息前缀、关闭四条件（验收、已合入、无未完成交付、针对当前 commit 的人工确认），`unknown` 不计入通过；返回体带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口。
+- **现有关闭条件判定**：只判定不执行——`[变更号]` 提交信息前缀、关闭四条件（验收、已合入、无未完成交付、针对当前 commit 的人工确认），`unknown` 不计入通过；返回体带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口。此处如实描述现有判定器，不是所有用户验收的统一门槛：2026-11-03 已确认本地验证与独立 AI 审查后可形成待验收候选，由用户对实际代码版本验收；CI／合入／Issue 关闭／验收／业务结束分记，必要 CI 与分支保护仍须守，判定器未在本轮改造。
 
 ## 策略门禁与凭据
 
@@ -132,5 +132,7 @@ node --test "packages/forge-gitee/test/*.test.mjs"
 
 - 查询以仓库 / Issue / PR 为主；CLI 版本、双端产物、凭据方式与 JSON 字段由提供方核验，不把 `gh` 兼容输入当作双端已可用证据。
 - 凭据经环境注入，用户权限由 Gitee 服务端校验；不在 CLI 配置文件、仓库或模型上下文保存长期凭据。
-- 查询基线与受控写分开核验；写在范围/C3 分类批准及接口验证前默认禁用，永不自动合并或关闭。
+- 当前用户于 2026-11-03 最终确认[Issue 交付模型](../../docs/requirements/requirements-baseline.md#23-issue-交付模型与受控研发目标需求已确认)：变更 1:N Issue，每 Issue 恰一变更及一仓库，跨仓库拆可独立交付验收 Issue；支持双入口，run 为执行记录。`changeId` 入参本身不证明权威关联，真实关系及权限仍待核验。
+- 提交保留 `[变更号]`、PR 关联 Issue，不强制新分支语法；本地提交工具不进策略目录不等于可自动暂存他人改动。Skill 提供企业语义、Teamflow 唯一执行，充分 Issue 不另写规格，SDD 不作默认交付前提。
+- 查询与受控写分开核验；需求已确认不再等平台／安全／PMO 代批，真实动作开关、审批台账、C3 分类、可信确认、权限与接口验证仍必须满足；本轮不改默认禁用、源码或配置，永不自动合并或关闭。
 - CLI 前提不成立时关闭查询能力并提交替代形态评审，不自动恢复 MCP 或 arm64 交叉编译工作项。
