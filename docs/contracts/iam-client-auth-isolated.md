@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-IAM-002 |
 | 文档名称 | IAM 机密客户端隔离开发契约 |
-| 版本 | V0.4.0 |
+| 版本 | V0.4.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -31,7 +31,7 @@
 
 所有模式保持现有 mandatory PKCE S256、state、nonce、code_verifier。字段只属于本包 source/mock 提案；没有 editor 开关或原生来源自动发现能解除真实来源门禁。
 
-**已确认的外部轮换事实（2026-11-03 IAM 答复，未联调）**：企业 IAM 全企业共用一个 client_id；client_secret 只能人工轮换，后台更新后最迟两分钟经缓存生效；轮换不会作废已发出的访问令牌（按 7200 秒自然过期），刷新接口必须同时携带 secret，因此旧刷新令牌在 secret 更换后实际不可用。本契约仍采用更严格的本地策略：认证上下文（method/ref/revision）改变后不采用旧 AT/RT，需新登录；不得用新 secret 重放旧 RT。轮换后至少等待两分钟再判定失败，不在该窗口内反复重建来源或切换方法。依据见[接入确认函 §5](<../collaboration/iam-access-confirmation.md#5-客户端注册与-secret-管理>)。
+**已确认的外部轮换事实（2026-11-03 IAM 答复，未联调）**：企业 IAM 全企业共用一个 client_id；client_secret 只能人工轮换，后台更新后最迟两分钟经缓存生效；轮换不会作废已发出的访问令牌（按 7200 秒自然过期），刷新接口必须同时携带 secret，因此旧刷新令牌在 secret 更换后实际不可用。本契约仍采用更严格的本地策略：认证上下文（method/ref/revision）改变后不采用旧 AT/RT，需新登录；不得用新 secret 重放旧 RT。轮换后至少等待两分钟再判定失败，不在该窗口内反复重建来源或切换方法。本项目内部使用，client_id/client_secret 泄露不在评估范围（用户 2026-11-03 决定，视为无影响）；凭据存放与轮换按存储和运维要求执行。依据见[接入确认函 §5](<../collaboration/iam-access-confirmation.md#5-客户端注册与-secret-管理>)。
 
 ## 2. 私有只读来源
 
@@ -96,4 +96,4 @@ verifyClientSecretSource?: (
 
 三个 IAM_CLIENT_AUTH_* 码已由实际管理 handler 验证503/409/401；不据此宣称 IAM_CONFIG_INVALID 已映射400。消息固定，不附 source 异常、原始响应、secret、ref、完整 snapshot、header 或表单。既有 OAuth 标准码只允许精确白名单；unknown/mixed error 不保留。成功业务响应不因错误脱敏而被删改。
 
-检查只能拒绝可观察的旧结果，不能撤回已发请求、证明远端旧 secret 失效、远端 token 后代撤销或跨进程一致。IAM 答复旧访问令牌不随 secret 轮换作废，单机侧不能把轮换当成全网止损；泄露处置须另按用户或令牌注销。未知不补偿、不借新来源重试。secret 不可用时，本地退出仍按既有精确快照和受信 grant 规则处理；远端 revoke 不发送无认证请求，不盲删其他模式/主体记录，结果如实标未确认。
+检查只能拒绝可观察的旧结果，不能撤回已发请求、证明远端旧 secret 失效、远端 token 后代撤销或跨进程一致。IAM 答复旧访问令牌不随 secret 轮换作废；按范围前提，轮换按运维窗口执行。未知不补偿、不借新来源重试。secret 不可用时，本地退出仍按既有精确快照和受信 grant 规则处理；远端 revoke 不发送无认证请求，不盲删其他模式/主体记录，结果如实标未确认。
