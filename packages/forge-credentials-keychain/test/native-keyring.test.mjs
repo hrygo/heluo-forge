@@ -320,3 +320,25 @@ test('enumeration awaits findCredentialsAsync when the module exposes it', async
   assert.deepEqual(await backend.list('heluo-forge-test/'), ['heluo-forge-test/a', 'heluo-forge-test/b']);
   assert.deepEqual(seen, ['heluo-forge-test']);
 });
+
+test('a delete that reports nothing to remove is verified against the store', async () => {
+  const entries = new Map([['survivor', 'still-here']]);
+  class Entry {
+    constructor(service, account) {
+      this.account = account;
+    }
+    getPassword() {
+      return entries.has(this.account) ? entries.get(this.account) : null;
+    }
+    setPassword() {}
+    // A library that reports a failed removal as `false` would make the caller
+    // believe the credential is gone.
+    deletePassword() {
+      return false;
+    }
+  }
+  const backend = createNativeKeyringBackend({ service: 'heluo-forge-test', platform: 'darwin', load: () => ({ Entry }) });
+  await assert.rejects(backend.delete('survivor'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+  entries.delete('survivor');
+  await backend.delete('survivor');
+});
