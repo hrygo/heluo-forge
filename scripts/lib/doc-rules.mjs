@@ -9,6 +9,10 @@ const INDEX_DOCS = new Set([
   'docs/operations/README.md',
 ]);
 const META_KEYS = ['文档编号', '文档名称', '版本', '文档状态', '密级', '编制', '审核', '批准', '最后更新', '门禁'];
+const CONFIRMATION_KEYS = ['确认人', '确认日期', '确认事项', '适用范围'];
+const CONFIRMATION_BLANK = new Set(['', '—', '-', '待定', '待确认', '未确认', '无']);
+const PENDING = /^待定(?:（[^）]*）)?$/u;
+const EFFECTIVE = /^生效(?:（[^）]*）)?$/u;
 const STALE_PHRASES = ['docs/subdocs/', '跨团队询问函暂未纳入本仓库'];
 
 /** Lines with fenced code blanked out, so tables and links inside code are ignored. */
@@ -80,6 +84,41 @@ function metadata(text, key) {
     if (cells && cells[0] === key) return cells[1];
   }
   return null;
+}
+
+// 文档信息表是第一张含“文档编号”的表；确认字段只从这张表取值，避免正文数据表冒充。
+function metadataTable(text) {
+  let rows = [];
+  let hasId = false;
+  for (const line of unfenced(text)) {
+    const cells = parseRow(line);
+    if (cells) {
+      rows.push(cells);
+      if (cells[0] === '文档编号') hasId = true;
+      continue;
+    }
+    if (rows.length === 0) continue;
+    if (hasId) return rows;
+    rows = [];
+    hasId = false;
+  }
+  return hasId ? rows : null;
+}
+
+function tableValue(table, key) {
+  const row = table?.find((cells) => cells[0] === key);
+  if (!row) return null;
+  const value = (row[1] ?? '').trim();
+  return CONFIRMATION_BLANK.has(value) ? null : value;
+}
+
+// 只认真实存在的日历日，避免 2026-13-45 这类正则通过但并非日期的值。
+function isRealIsoDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const [year, month, day] = match.slice(1).map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function parseRow(line) {
@@ -196,9 +235,7 @@ export function checkDocs(root, options = {}) {
     }
     if (controlled) {
       counts.controlled += 1;
-      for (const key of ['审核', '批准']) {
-        if (metadata(text, key) !== '待定') errors.push(`${path}: ${key} must stay 待定 for agent drafts`);
-      }
+      checkApprovals(path, text, errors);
       if (!text.includes('编制依据')) errors.push(`${path}: missing 编制依据`);
       if (!text.includes('关联文档')) errors.push(`${path}: missing 关联文档`);
     }
@@ -209,6 +246,25 @@ export function checkDocs(root, options = {}) {
   errors.push(...checkSequences(root, texts, errors));
 
   return { errors, counts };
+}
+
+// 受控正文默认由 agent 起草，审核／批准保持“待定”。用户已确认需求时允许记录真实确认，
+// 但必须同时留下有效的确认人、日期、事项与适用范围（不能是待定、破折号或空），且文档为生效状态（文档总览 §6.1）。
+function checkApprovals(path, text, errors) {
+  const approvals = ['审核', '批准'].map((key) => metadata(text, key));
+  if (approvals.every((value) => value !== null && PENDING.test(value))) return;
+  const status = metadata(text, '文档状态');
+  if (status === null || !EFFECTIVE.test(status)) {
+    errors.push(`${path}: non-待定 审核/批准 requires 文档状态 生效`);
+  }
+  const table = metadataTable(text);
+  for (const key of CONFIRMATION_KEYS) {
+    if (!tableValue(table, key)) errors.push(`${path}: non-待定 审核/批准 requires ${key}`);
+  }
+  const confirmedAt = tableValue(table, '确认日期');
+  if (confirmedAt && !isRealIsoDate(confirmedAt)) {
+    errors.push(`${path}: 确认日期 must be a real YYYY-MM-DD date`);
+  }
 }
 
 function checkRegister(root, texts) {

@@ -24,7 +24,7 @@
 | 受管装配 | `assembleEnterpriseSkills(ctx, …)` 是交付 Skill 的单一入口：加载→选择→注册一次完成，一次 `dispose()` 注销全部；无宿主 skills 服务即拒绝，不授予权限、不固定流程、不产出合规结论；真实企业条款来源与安装路径实际调用待企业提供/宿主装配完成后记账 |
 | 五类开关 | `resolveSwitches()` 只做声明与判定：依赖未就绪/能力缺失/未批准一律关闭，审计缺失不降级为无审计只读，C3 未批准时人工 review 关闭，角色 preset 只收窄 |
 | 回灌检测 | `detectOfficialRowReflow()` 只看实际生效配置：仍启用的官方行报回灌（状态未知也按启用），缺席行单列（跳过 ≠ 已禁用）；`rowsFromDump()` 解析 `--dump-config` |
-| 自证边界 | 只报告条款与引用，不产出"合规通过"结论；确定性要求引用 [S01 (#27)](https://github.com/hrygo/heluo-forge/issues/27) 的交付清单与 CI 校验 |
+| 自证边界 | 只报告条款与引用，不产出"合规通过"结论；[S01 (#27)](https://github.com/hrygo/heluo-forge/issues/27) 的清单／CI 为历史能力依据，不再是默认 Issue 交付要求；本地验证＋独立 AI 审查形成待用户验收候选，针对实际版本验收，必要 CI／分支保护仍守 |
 
 ## 自包含制品与本地验收
 
