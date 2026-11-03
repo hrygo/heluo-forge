@@ -104,14 +104,39 @@ test('unknown record kinds and invalid keys are rejected', async () => {
   await assert.rejects(() => value.readRecord('Foo/bar'), (error) => error.code === 'KEYCHAIN_KEY_INVALID');
 });
 
-test('listRecords ignores other namespaces and reports invalid stored keys', async () => {
-  const { value, backend } = provider();
+test('a foreign key under the record prefix is skipped and counted, never fatal', async () => {
+  const notices = [];
+  const { value, backend } = provider({ onForeignKeys: (detail) => notices.push(detail) });
   await backend.set('another/iam/record/foo/bar', JSON.stringify({ kind: 'grant', payload: {} }));
   await value.modifyRecord('heluo-iam/session', async () => ({ kind: 'grant', payload: {} }));
   assert.deepEqual(await value.listRecords(), [{ key: 'heluo-iam/session', kind: 'grant' }]);
+  assert.deepEqual(notices, [], '别的命名空间不算外来键');
 
+  // Someone else wrote under our prefix: one bad key must not brick the listing.
   await backend.set(`${namespace}/record/not-a-key`, JSON.stringify({ kind: 'grant', payload: {} }));
-  await assert.rejects(() => value.listRecords(), (error) => error.code === 'KEYCHAIN_RECORD_INVALID');
+  assert.deepEqual(await value.listRecords(), [{ key: 'heluo-iam/session', kind: 'grant' }]);
+  assert.deepEqual(notices, [{ count: 1 }]);
+});
+
+test('a batched backend listing is read once instead of per record', async () => {
+  const backend = createMemoryBackend();
+  const reads = [];
+  const counting = {
+    ...backend,
+    async get(key) {
+      reads.push(key);
+      return backend.get(key);
+    },
+  };
+  const value = createKeychainProvider(counting);
+  await value.modifyRecord('heluo-iam/one', async () => ({ kind: 'grant', payload: { a: 1 } }));
+  await value.modifyRecord('heluo-iam/two', async () => ({ kind: 'grant', payload: { b: 2 } }));
+  reads.length = 0;
+  assert.deepEqual(await value.listRecords(), [
+    { key: 'heluo-iam/one', kind: 'grant' },
+    { key: 'heluo-iam/two', kind: 'grant' },
+  ]);
+  assert.deepEqual(reads, [], '有 listEntries 时不应该逐条回读');
 });
 
 test('the provider never claims a cross-process lock or durable memory storage', () => {

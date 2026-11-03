@@ -46,6 +46,11 @@ export function createMemoryBackend(initial = {}) {
     async list(prefix) {
       return [...store.keys()].filter((key) => key.startsWith(prefix));
     },
+    async listEntries(prefix) {
+      return [...store.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, value]) => ({ key, value }));
+    },
     async close() {},
     /** Test-only inspection; never expose this through the provider surface. */
     _snapshot() {
@@ -206,6 +211,13 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
       });
     },
     async list(prefix) { return [...(await load()).keys()].filter((key) => key.startsWith(prefix)); },
+    async listEntries(prefix) {
+      // One document read for the whole listing: the provider must not issue a
+      // separate read per record when the store already has every value.
+      return [...(await load()).entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, value]) => ({ key, value }));
+    },
     async transaction(key, fn) {
       return withFileLock(path, key, async () => {
         const snapshot = await load();

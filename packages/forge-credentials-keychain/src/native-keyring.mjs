@@ -153,6 +153,41 @@ export function createNativeKeyringBackend(options = {}) {
     return bag === undefined ? new Entry(service, key) : new Entry(service, key, bag);
   }
 
+  async function enumerate(prefix) {
+    if (typeof prefix !== 'string' || prefix.length === 0) {
+      throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'list requires a non-empty prefix');
+    }
+    if (enumeration === 'unsupported') {
+      throw new KeychainBackendError(
+        'KEYCHAIN_LIST_UNSUPPORTED',
+        'native keyring enumeration is not verified for this platform; refusing to report an empty store',
+      );
+    }
+    const loaded = store();
+    const list = typeof loaded.findCredentialsAsync === 'function'
+      ? loaded.findCredentialsAsync
+      : loaded.findCredentials;
+    if (typeof list !== 'function') {
+      throw new KeychainBackendError('KEYCHAIN_LIST_UNSUPPORTED', 'native keyring does not export findCredentials');
+    }
+    // Errors propagate: a locked or unreachable store must not look empty.
+    const found = await list.call(loaded, service);
+    if (!Array.isArray(found)) {
+      throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration did not return a list');
+    }
+    const entries = [];
+    for (const item of found) {
+      const account = item?.account;
+      if (typeof account !== 'string') {
+        throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration returned an entry without an account');
+      }
+      if (!account.startsWith(prefix)) continue;
+      const password = item?.password;
+      entries.push(typeof password === 'string' ? { key: account, value: password } : { key: account });
+    }
+    return entries;
+  }
+
   const backend = {
     kind: 'native-keyring',
     available: true,
@@ -197,37 +232,14 @@ export function createNativeKeyringBackend(options = {}) {
     },
 
     async list(prefix) {
-      if (typeof prefix !== 'string' || prefix.length === 0) {
-        throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'list requires a non-empty prefix');
-      }
-      if (enumeration === 'unsupported') {
-        throw new KeychainBackendError(
-          'KEYCHAIN_LIST_UNSUPPORTED',
-          'native keyring enumeration is not verified for this platform; refusing to report an empty store',
-        );
-      }
-      const loaded = store();
-      const enumerate = typeof loaded.findCredentialsAsync === 'function'
-        ? loaded.findCredentialsAsync
-        : loaded.findCredentials;
-      if (typeof enumerate !== 'function') {
-        throw new KeychainBackendError('KEYCHAIN_LIST_UNSUPPORTED', 'native keyring does not export findCredentials');
-      }
-      // Errors propagate: a locked or unreachable store must not look empty.
-      const found = await enumerate.call(loaded, service);
-      if (!Array.isArray(found)) {
-        throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration did not return a list');
-      }
-      const keys = [];
-      for (const item of found) {
-        const account = item?.account;
-        if (typeof account !== 'string') {
-          throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration returned an entry without an account');
-        }
-        // Accounts only: never surface the password half of a Credential.
-        if (account.startsWith(prefix)) keys.push(account);
-      }
-      return keys;
+      // Accounts only: never surface the password half of a Credential here.
+      return (await enumerate(prefix)).map((item) => item.key);
+    },
+
+    async listEntries(prefix) {
+      // The native enumeration already carries both halves, so the provider can
+      // decode every record without one store round-trip per record.
+      return enumerate(prefix);
     },
 
     async close() {
