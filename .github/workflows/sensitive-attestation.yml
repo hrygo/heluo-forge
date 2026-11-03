@@ -1,3 +1,10 @@
+# pull_request_target is required here: the workflow definition must come from the
+# base branch, otherwise a pull request could weaken the gate that verifies it.
+# That event is blocked for public repositories by a GitHub default policy
+# (enforced 2026-12-02) unless a repository Actions policy allows it, so this
+# workflow depends on the repo policy "sensitive-attestation needs
+# pull_request_target" (Settings -> Actions -> Policies). Recreate that policy
+# if the repository is ever re-created; without it these checks stop running.
 name: sensitive-attestation
 
 on:
