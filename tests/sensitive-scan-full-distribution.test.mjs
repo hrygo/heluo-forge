@@ -7,6 +7,10 @@ import { chmodSync, closeSync, cpSync, existsSync, ftruncateSync, mkdirSync, mkd
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+// The installer rejects group-writable fixtures; model a conventional umask so a
+// host with umask 0002 cannot turn security checks into suite failures.
+process.umask(0o022);
+
 const ROOT = resolve(import.meta.dirname, '..');
 const SOURCE = join(ROOT, 'scripts/sensitive-scan');
 function run(file, args, options = {}) { return spawnSync(file, args, { encoding: 'utf8', ...options }); }

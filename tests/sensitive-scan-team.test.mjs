@@ -8,6 +8,10 @@ import { crc32 } from 'node:zlib';
 import { join, resolve } from 'node:path';
 import { canonicalPayload, createAttestation, formatTrailer, keyIdFromPublicKey, parseTrailer, sha256Hex } from '../scripts/sensitive-scan/lib.mjs';
 
+// The installer rejects group-writable fixtures; model a conventional umask so a
+// host with umask 0002 cannot turn security checks into suite failures.
+process.umask(0o022);
+
 const hook = resolve(import.meta.dirname, '../scripts/sensitive-scan/team-commit-msg.mjs');
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), 'legacy-team-test-'));
