@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.17.4 |
+| 版本 | V1.17.5 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -332,6 +332,7 @@ DSH 内置的 `ctx.authorization` flow 适合“任意界面单次唤起凭据�
 
 | 路径与方法 | 输入 Body | 返回状态与数据 |
 |---|---|---|
+| `GET /api/forge-iam/session` | 无 | 200 OK 返回 §5.5.2 的身份快照；不触发同步或刷新，永不含令牌 |
 | `GET /api/forge-iam/view` | 无 | 200 OK 返回 `IamView` 快照（可能触发后台过期刷新） |
 | `POST /api/forge-iam/sign-in` | `{}` | 200 OK 返回 `{ view, authorizationUrl }` |
 | `POST /api/forge-iam/cancel` | `{}` | 200 OK 返回 `{ view }` |
@@ -498,7 +499,7 @@ export interface IamAccount {
 | 3 | CLI 离线兜底 | 以假 seam 断言未发生写回；令牌过期时非零退出并报 `IAM_REAUTH_REQUIRED` |
 | 4 | 文档与契约 | 设计索引、文档登记与相对链接通过检查器 |
 
-四项均未实施。`displayName`、`groups` 是否落盘另立字段契约，不在本节范围；本节也不重新讨论是否改用 `ctx.authorization` flow，结论见 §4.6。
+第 1 步已实施：`getSession()` 与 `GET /api/forge-iam/session`，含 2 项服务用例与 2 项路由用例；其余三步未实施。`displayName`、`groups` 是否落盘另立字段契约，不在本节范围；本节也不重新讨论是否改用 `ctx.authorization` flow，结论见 §4.6。
 
 ---
 

@@ -238,6 +238,17 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         }
       }
 
+      if (url.pathname === '/api/forge-iam/session') {
+        if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
+        try {
+          // Identity only: no store sync and no refresh on this path.
+          return sendJson(res, 200, await service.getSession());
+        } catch (error) {
+          const status = ERROR_STATUS[error?.code] ?? 500;
+          return sendJson(res, status, errorBody(error));
+        }
+      }
+
       if (url.pathname === '/api/forge-iam/view') {
         if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
         if (typeof service.syncFromStore === 'function') {
