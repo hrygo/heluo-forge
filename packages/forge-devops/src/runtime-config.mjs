@@ -11,11 +11,11 @@
  *
  * 产物契约（蓝图声明 + 一处显式扩展）：
  *   resolveRuntimeConfig(env)
- *     -> { ok: true, value: { dopBin, dopEndpoint, ghBin, ghOwner, sourceType, timeoutMs } }
+ *     -> { ok: true, value: { dopBin, dopEndpoint, sourceType, timeoutMs } }
  *      | { ok: false, reason: 'CONFIG_MISSING', missing: string[] }
  *      | { ok: false, reason: 'CONFIG_INVALID', invalid: string[] }
  *   describeRuntimeConfig(cfg | result)
- *     -> { dopBin: boolean, dopEndpoint: boolean, ghBin: boolean, ghOwner: boolean,
+ *     -> { dopBin: boolean, dopEndpoint: boolean,
  *          sourceType: string | null, timeoutMs: number | null }
  *   validateConfigField(field, value)
  *     -> { ok: true, value } | { ok: false, message }   // T2 增量：字段级校验唯一实现处
@@ -35,11 +35,16 @@
 export const ENV_KEYS = Object.freeze({
   dopBin: 'FORGE_DEVOPS_DOP_BIN',
   dopEndpoint: 'FORGE_DEVOPS_DOP_ENDPOINT',
-  ghBin: 'FORGE_DEVOPS_GH_BIN',
-  ghOwner: 'FORGE_DEVOPS_GH_OWNER',
   sourceType: 'FORGE_DEVOPS_SOURCE_TYPE',
   timeoutMs: 'FORGE_DEVOPS_TIMEOUT_MS',
 });
+
+/**
+ * r10 退役键：gh 侧字段已随模块删除。历史 profile 里可能还留着 `ghBin`/`ghOwner`，
+ * **必须静默忽略**——若按未知配置项报 issue，宿主装配期会整条 entry 不激活（插件消失），
+ * 与「已保存的 ghBin 被忽略且不报错」的契约直接冲突。其余未知键仍按非法处理。
+ */
+const RETIRED_KEYS = Object.freeze(['ghBin', 'ghOwner']);
 
 /** 失败原因码。`CONFIG_MISSING` 为蓝图声明，`CONFIG_INVALID` 见文件头扩展说明。 */
 export const CONFIG_REASONS = Object.freeze({
@@ -50,15 +55,11 @@ export const CONFIG_REASONS = Object.freeze({
 /** 事实来源类型：mock（企业 dop 的本地模拟）与 enterprise（企业实测）。 */
 export const SOURCE_TYPES = Object.freeze(['mock', 'enterprise']);
 
-/** 非机密默认值：`gh` 走 PATH，来源默认 mock，超时默认 20s（与 cli-runner 默认一致）。 */
-export const DEFAULT_GH_BIN = 'gh';
+/** 非机密默认值：来源默认 mock，超时默认 20s（与 cli-runner 默认一致）。dopBin 故意无默认。 */
 export const DEFAULT_SOURCE_TYPE = 'mock';
 export const DEFAULT_TIMEOUT_MS = 20_000;
 export const MIN_TIMEOUT_MS = 1_000;
 export const MAX_TIMEOUT_MS = 600_000;
-
-/** 组织/用户名：字母数字与连字符，不以连字符开头（挡掉 `--flag` 形状的注入）。 */
-const OWNER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
 function readText(env, key) {
   const raw = env === null || env === undefined ? undefined : env[key];
@@ -118,7 +119,7 @@ function validateText(value, max = MAX_PATH_LENGTH) {
  * 文件系统的路径类判定（存在性、目录、包装脚本、执行位）由 `cli-config` 在本函数之上
  * 追加一层，因此本模块不读磁盘、不认平台。
  *
- * @param {string} field 六个逻辑字段之一（与 `ENV_KEYS` 同键）
+ * @param {string} field 四个逻辑字段之一（与 `ENV_KEYS` 同键）
  * @param {unknown} value 字符串/数字/null（null 与空串等价于「未配置」）
  * @returns {{ok: true, value: unknown} | {ok: false, message: string}}
  *   成功时 `value` 是归一化后的值（首尾去空白、`sourceType` 小写、`timeoutMs` 为数字）；
@@ -133,18 +134,11 @@ export function validateConfigField(field, value) {
 
   switch (field) {
     case 'dopBin':
-    case 'ghBin':
       return validateText(value);
     case 'dopEndpoint': {
       const text = asText(value);
       if (text === null) return fail('需要一个文本值');
       if (!isEndpointLike(text)) return fail('需要 http 或 https 地址，且地址里不能带用户名密码');
-      return { ok: true, value: text };
-    }
-    case 'ghOwner': {
-      const text = asText(value);
-      if (text === null) return fail('需要一个文本值');
-      if (!OWNER_PATTERN.test(text)) return fail('只能是字母、数字和连字符，且不能以连字符开头');
       return { ok: true, value: text };
     }
     case 'sourceType': {
@@ -191,11 +185,6 @@ export function resolveRuntimeConfig(env = {}) {
   const dopEndpoint = readText(env, ENV_KEYS.dopEndpoint);
   if (dopEndpoint !== undefined && !isEndpointLike(dopEndpoint)) invalid.push(ENV_KEYS.dopEndpoint);
 
-  const ghBin = readText(env, ENV_KEYS.ghBin) ?? DEFAULT_GH_BIN;
-
-  const ghOwner = readText(env, ENV_KEYS.ghOwner);
-  if (ghOwner !== undefined && !OWNER_PATTERN.test(ghOwner)) invalid.push(ENV_KEYS.ghOwner);
-
   const sourceType = (readText(env, ENV_KEYS.sourceType) ?? DEFAULT_SOURCE_TYPE).toLowerCase();
   if (!SOURCE_TYPES.includes(sourceType)) invalid.push(ENV_KEYS.sourceType);
 
@@ -219,7 +208,7 @@ export function resolveRuntimeConfig(env = {}) {
 
   return {
     ok: true,
-    value: Object.freeze({ dopBin, dopEndpoint, ghBin, ghOwner, sourceType, timeoutMs }),
+    value: Object.freeze({ dopBin, dopEndpoint, sourceType, timeoutMs }),
   };
 }
 
@@ -229,7 +218,7 @@ export function resolveRuntimeConfig(env = {}) {
  * 接受 `resolveRuntimeConfig()` 的返回值或它的 `value`，让调用方不必先解包。
  *
  * @param {object | undefined} config
- * @returns {{dopBin: boolean, dopEndpoint: boolean, ghBin: boolean, ghOwner: boolean,
+ * @returns {{dopBin: boolean, dopEndpoint: boolean,
  *   sourceType: string | null, timeoutMs: number | null}}
  */
 export function describeRuntimeConfig(config) {
@@ -240,8 +229,6 @@ export function describeRuntimeConfig(config) {
   return Object.freeze({
     dopBin: configured('dopBin'),
     dopEndpoint: configured('dopEndpoint'),
-    ghBin: configured('ghBin'),
-    ghOwner: configured('ghOwner'),
     sourceType: typeof value.sourceType === 'string' ? value.sourceType : null,
     timeoutMs: isPositiveInt(value.timeoutMs, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS) ? value.timeoutMs : null,
   });
@@ -270,6 +257,7 @@ function validateConfigObject(input) {
   const issues = [];
   const value = {};
   for (const key of Object.keys(candidate)) {
+    if (RETIRED_KEYS.includes(key)) continue;
     if (!Object.prototype.hasOwnProperty.call(ENV_KEYS, key)) {
       issues.push({ message: `未知配置项：${key}`, path: [key] });
     }

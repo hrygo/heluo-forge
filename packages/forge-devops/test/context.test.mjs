@@ -7,16 +7,17 @@ import {
   CONTEXT_REASONS,
   CONTEXT_STATUSES,
   ContextError,
+  EXTERNAL_REPO_FACT_REASON,
   NATIVE_ALIASES,
   RELEASE_RULE,
   aliasChangeRecord,
   buildContextCard,
+  externalRepoFacts,
   firstReleaseInfo,
   normalizeChangeRecord,
   renderContextCard,
 } from '../src/change-context.mjs';
 import { DevopsReadError, READ_REASONS } from '../src/read.mjs';
-import { RESOLVE_REASONS, resolveBuildingRepository } from '../src/repository-resolver.mjs';
 
 const AT = '2026-10-28T10:00:00+08:00';
 
@@ -87,11 +88,28 @@ const ARD222222 = {
 };
 
 const DOP_SOURCE = { kind: 'dop', command: 'dop change view ARD222222 --json', at: AT, sourceRevision: 'dop:abcdef123456', sourceType: 'mock' };
-const GH_SOURCE = { kind: 'gh', command: 'gh repo list --limit 100 ---jsonson nameWithOwner', at: AT, sourceRevision: 'gh:2026-10-28T09:00:00+08:00', sourceType: 'mock' };
+const SECOND_SOURCE = { kind: 'dop', command: 'dop change view ARD222222 --json --recheck', at: AT, sourceRevision: 'dop:abcdef654321', sourceType: 'mock' };
 
 const normalize = (raw = ARD222222) => normalizeChangeRecord(raw, { at: AT });
-const buildingOf = (change, visibleRepos) => resolveBuildingRepository({ change, visibleRepos });
-const READY_REPOS = [{ nameWithOwner: 'acme/points-mall', description: '积分商城首期' }];
+/**
+ * r10：承建仓库不再由本包判定，`building` 段只是**被别人回答的事实**。
+ * 卡片的形状契约（status / selected / candidates / reasons / next_actions）仍然要逐条守住，
+ * 所以这三档夹具直接构造卡片形状：resolved（集成方给的）、blocked（事实不全）、unknown（本包默认）。
+ */
+const buildingOf = () => externalRepoFacts();const buildingResolved = (repo = 'acme/points-mall') => ({
+  status: 'resolved',
+  selected: repo,
+  candidates: [{ repo, evidence: [{ kind: 'repo.name', value: repo, source: 'gitee.repository_read' }] }],
+  reasons: [],
+  next_actions: [],
+});
+const buildingBlocked = (reason = 'NO_REPO_SCOPE') => ({
+  status: 'blocked',
+  selected: null,
+  candidates: [],
+  reasons: [reason],
+  next_actions: [],
+});
 const reject = (fn, code) =>
   assert.throws(fn, (error) => error instanceof ContextError && error.code === code, `期望 ${code}`);
 
@@ -225,7 +243,7 @@ test('description / acceptance_criteria 缺失只降级：进 missingFields，�
   assert.deepEqual(noCriteria.acceptanceCriteria, []);
   assert.ok(noCriteria.missingFields.includes('acceptance_criteria'));
   // 既有「平台未提供」渲染分支直接接住降级，不新增卡片机制。
-  const rendered = renderContextCard(buildContextCard({ change: noCriteria, building: buildingOf(noCriteria, null) }));
+  const rendered = renderContextCard(buildContextCard({ change: noCriteria, building: buildingBlocked() }));
   assert.ok(rendered.includes('平台未提供 `acceptance_criteria`'));
 });
 
@@ -289,7 +307,7 @@ test('原生夹具归一（mock 形状）：变更内容、单对象 userStory �
   assert.ok(change.missingFields.includes('acceptance_criteria'));
   assert.match(change.sourceRevision, /^dop:/);
 
-  const card = buildContextCard({ change, building: buildingOf(change, null), sources: [] });
+  const card = buildContextCard({ change, building: buildingBlocked(), sources: [] });
   const rendered = renderContextCard(card);
   assert.match(rendered, /^# 上下文卡 — ARD777777/);
   assert.ok(rendered.includes('平台未提供 `acceptance_criteria`'));
@@ -331,8 +349,8 @@ test('ready 卡：澄清单只带进度、假设从清单派生、raw 不外泄'
   };
   const card = buildContextCard({
     change,
-    building: buildingOf(change, READY_REPOS),
-    sources: [DOP_SOURCE, GH_SOURCE],
+    building: buildingResolved(),
+    sources: [DOP_SOURCE, SECOND_SOURCE],
     clarify: sheet,
   });
 
@@ -353,8 +371,8 @@ test('ready 卡：澄清单只带进度、假设从清单派生、raw 不外泄'
 
 test('失败注入：dop 读不到 → change=null 的 blocked 卡，未知项带 command 且在渲染里脱敏', () => {
   const change = normalize(ARD123456);
-  const building = buildingOf(change, null);
-  assert.deepEqual(building.reasons, [RESOLVE_REASONS.NO_REPO_SCOPE]);
+  const building = buildingBlocked();
+  assert.deepEqual(building.reasons, ['NO_REPO_SCOPE']);
 
   const failure = new DevopsReadError(READ_REASONS.COMMAND_FAILED, 'dop change view ARD123456 --json 退出码 1', {
     field: 'change',
@@ -382,25 +400,28 @@ test('失败注入：dop 读不到 → change=null 的 blocked 卡，未知项�
   reject(() => buildContextCard({ changeId: 'ARD123456', change: null, building }), CONTEXT_REASONS.UNKNOWN_INVALID);
 });
 
-test('多候选：卡标 blocked，渲染列出候选、依据与"写动作全部阻断"', () => {
+test('外部事实：unknown 卡标 blocked，渲染 REPO_FACTS_EXTERNAL 与下一步工具名，且不猜候选仓库', () => {
   const change = normalize(ARD222222);
-  const building = buildingOf(change, [{ nameWithOwner: 'zeta/points-mall' }, { nameWithOwner: 'acme/points-mall' }]);
-  assert.deepEqual(building.reasons, [RESOLVE_REASONS.MULTIPLE_CANDIDATES]);
+  const building = buildingOf();
+  assert.equal(building.status, 'unknown');
+  assert.deepEqual(building.candidates, []);
+  assert.deepEqual(building.reasons, [EXTERNAL_REPO_FACT_REASON]);
 
-  const card = buildContextCard({ change, building, sources: [DOP_SOURCE, GH_SOURCE] });
+  const card = buildContextCard({ change, building, sources: [DOP_SOURCE, SECOND_SOURCE] });
   const rendered = renderContextCard(card);
 
-  assert.equal(card.status, 'blocked');
-  assert.ok(rendered.includes('写动作全部阻断'));
-  assert.ok(rendered.includes('`MULTIPLE_CANDIDATES`'));
-  assert.ok(rendered.includes('候选（按仓库名排序'));
-  assert.ok(rendered.indexOf('`acme/points-mall`') < rendered.indexOf('`zeta/points-mall`'));
-  assert.ok(rendered.includes('不按变更号文本推断仓库（AC-12）'));
+  // 仓库事实外部化后不再单独把业务卡打成 blocked：dop 事实齐全即可推进，仓库段自己声明 unknown。
+  assert.equal(card.status, 'ready');
+  assert.ok(rendered.includes(EXTERNAL_REPO_FACT_REASON));
+  assert.ok(rendered.includes('forge_gitee_repository_read'));
+  assert.ok(rendered.includes('forge_gitee_issue_read'));
+  assert.ok(!rendered.includes('- 候选'), 'unknown 时不列候选——本包不判定承建仓库');
+  assert.ok(rendered.includes('AC-12'));
 });
 
 test('sources 缺 provenance 即拒绝（种类/命令/时间或版本/产物类型四样都要）', () => {
   const change = normalize(ARD222222);
-  const building = buildingOf(change, READY_REPOS);
+  const building = buildingResolved();
 
   reject(
     () => buildContextCard({ change, building, sources: [{ kind: 'dop', command: 'change view X --json', sourceType: 'mock' }] }),
@@ -424,7 +445,7 @@ test('AC-22 渲染脱敏：endpoint 用环境变量占位、绝对路径只保�
   const change = normalize(ARD222222);
   const card = buildContextCard({
     change,
-    building: buildingOf(change, READY_REPOS),
+    building: buildingResolved(),
     sources: [
       {
         kind: 'dop',
@@ -445,7 +466,7 @@ test('AC-22 渲染脱敏：endpoint 用环境变量占位、绝对路径只保�
 test('渲染确定：同卡两次渲染逐字相同，契约外字段与包装字段都不进卡', () => {
   const raw = { ...ARD222222, internal_note: 'secret-token-123', release: { number: 'R9' } };
   const change = normalize(raw);
-  const card = buildContextCard({ change, building: buildingOf(change, READY_REPOS), sources: [DOP_SOURCE, GH_SOURCE] });
+  const card = buildContextCard({ change, building: buildingResolved(), sources: [DOP_SOURCE, SECOND_SOURCE] });
   const rendered = renderContextCard(card);
 
   assert.equal(rendered, renderContextCard(card));
@@ -457,7 +478,7 @@ test('渲染确定：同卡两次渲染逐字相同，契约外字段与包装�
 
 test('unknowns 三形态：Error / 读信封 / {field,reason,command}；无效形态拒绝', () => {
   const change = normalize(ARD222222);
-  const building = buildingOf(change, READY_REPOS);
+  const building = buildingResolved();
   const error = new DevopsReadError(READ_REASONS.COMMAND_TIMEOUT, 'dop 超时', { field: 'change', command: 'dop change view ARD222222 --json' });
   const envelope = {
     action: 'change.read',
@@ -466,13 +487,13 @@ test('unknowns 三形态：Error / 读信封 / {field,reason,command}；无效�
     error_code: READ_REASONS.COMMAND_TIMEOUT,
     detail: { command: 'gh repo list --limit 100' },
   };
-  const plain = { field: 'repos', reason: RESOLVE_REASONS.NO_REPO_SCOPE, command: 'gh repo list' };
+  const plain = { field: 'repos', reason: 'NO_REPO_SCOPE', command: 'gh repo list' };
 
   const card = buildContextCard({ change, building, unknowns: [error, envelope, plain] });
   assert.deepEqual(card.unknowns, [
     { field: 'change', reason: READ_REASONS.COMMAND_TIMEOUT, command: 'dop change view ARD222222 --json' },
     { field: 'change.read', reason: READ_REASONS.COMMAND_TIMEOUT, command: 'gh repo list --limit 100' },
-    { field: 'repos', reason: RESOLVE_REASONS.NO_REPO_SCOPE, command: 'gh repo list' },
+    { field: 'repos', reason: 'NO_REPO_SCOPE', command: 'gh repo list' },
   ]);
 
   reject(() => buildContextCard({ change, building, unknowns: [{}] }), CONTEXT_REASONS.UNKNOWN_INVALID);
@@ -481,12 +502,12 @@ test('unknowns 三形态：Error / 读信封 / {field,reason,command}；无效�
 
 test('端到端主路径：normalize → resolve → build → render 跑到 ready 终态，失败注入变体到 blocked', () => {
   const change = normalize(ARD222222);
-  const building = buildingOf(change, READY_REPOS);
+  const building = buildingResolved();
   const card = buildContextCard({
     change,
     building,
     related: { issues: [{ number: 42, title: '积分兑换需求', state: 'open' }], prs: [] },
-    sources: [DOP_SOURCE, GH_SOURCE],
+    sources: [DOP_SOURCE, SECOND_SOURCE],
   });
   const rendered = renderContextCard(card);
 
@@ -502,15 +523,16 @@ test('端到端主路径：normalize → resolve → build → render 跑到 rea
 
   const blockedChange = normalize(ARD123456);
   const blocked = buildContextCard({
-    change: blockedChange,
-    building: buildingOf(blockedChange, null),
+    change: null,
+    changeId: 'ARD123456',
+    building: buildingOf(),
     sources: [],
-    unknowns: [{ field: 'repos', reason: RESOLVE_REASONS.NO_REPO_SCOPE, command: 'gh repo list' }],
+    unknowns: [{ field: 'change', reason: READ_REASONS.COMMAND_FAILED, command: 'dop change view ARD123456 --json' }],
   });
   const blockedRender = renderContextCard(blocked);
 
   assert.equal(blocked.status, 'blocked');
   assert.ok(blockedRender.includes('`blocked`（**只阻断写动作**'));
-  assert.ok(blockedRender.includes('`NO_REPO_SCOPE`'));
-  assert.ok(blockedRender.endsWith('不得手工开 Issue 绕过。'));
+  assert.ok(blockedRender.includes(EXTERNAL_REPO_FACT_REASON));
+  assert.ok(blockedRender.endsWith('3. 事实恢复前不创建 Issue/PR、不写澄清记录。'));
 });

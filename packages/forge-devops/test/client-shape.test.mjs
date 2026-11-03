@@ -355,9 +355,8 @@ const en = DICTS.en;
 test('zh/en 键集完全一致、占位符一致（少一条就是界面上出现裸键）', () => {
   assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort(), 'en 与 zh 必须一一对应');
   const keys = Object.keys(zh);
-  // r5 删掉 10 个隐藏键文案后总数从 64 收到 54；r8 再删 `error.wrapperScript`（页面不做后缀
-  // 拦截，那条错误句没有触发路径了）收到 53——**删的是键，不是强度**。这里不靠「总数够大」
-  // 撑强度：先断**必含面**（状态/动作/入口/字段/来源/错误/兜底各一组），再断总数不倒退。
+  // r10 又删掉 gh 入口与 gh 环境变量兜底（devops 只讲 dop 变更流程），总数从 53 收到 51——
+  // **删的是键，不是强度**。这里不靠「总数够大」撑强度：先断**必含面**（状态/动作/入口/字段/来源/错误/兜底各一组），再断总数不倒退。
   const REQUIRED = [
     'nav',
     'title',
@@ -369,7 +368,6 @@ test('zh/en 键集完全一致、占位符一致（少一条就是界面上出�
     'action.reset',
     'action.refresh',
     'entry.dop',
-    'entry.gh',
     'entry.placeholder',
     'entry.placeholder.reset',
     'entry.hint.discovered',
@@ -390,11 +388,10 @@ test('zh/en 键集完全一致、占位符一致（少一条就是界面上出�
     'saveFailedStale',
     'unavailable.title',
     'unavailable.envDop',
-    'unavailable.envGh',
   ];
   const missing = REQUIRED.filter((key) => !keys.includes(key));
   assert.deepEqual(missing, [], `缺这些关键文案（页面会露出裸键）：${missing.join(', ')}`);
-  assert.ok(keys.length >= 53, `文案太少（${keys.length}）：收窄是删隐藏键/失效错误句，不是删状态/动作/兜底`);
+  assert.ok(keys.length >= 51, `文案太少（${keys.length}）：收窄是删隐藏键/失效错误句，不是删状态/动作/兜底`);
   const placeholders = (value) => [...String(value).matchAll(/\{([a-zA-Z]+)\}/gu)].map((match) => match[1]).sort();
   for (const key of keys) {
     assert.equal(typeof zh[key], 'string', `zh.${key} 必须是字符串`);
@@ -422,31 +419,31 @@ test('页面文案零命中旧显示名与隐藏字段词（收窄后不得残�
   assert.equal(zh.nav, '企业 DevOps');
   assert.equal(zh.title, zh.nav, 'nav 与 title 必须同句，否则侧栏与页头两个名字');
   assert.equal(en.nav, 'Enterprise DevOps');
-  // 隐藏三键的文案整组删除：留着就是给不可见字段写说明。
-  for (const key of ['field.dopEndpoint', 'field.dopEndpoint.hint', 'field.ghOwner', 'field.ghOwner.hint', 'field.sourceType', 'field.sourceType.hint', 'error.endpoint', 'error.owner', 'error.source', 'section.connection']) {
+  // 隐藏两键的文案整组删除：留着就是给不可见字段写说明。
+  for (const key of ['field.dopEndpoint', 'field.dopEndpoint.hint', 'field.sourceType', 'field.sourceType.hint', 'error.endpoint', 'error.source', 'section.connection']) {
     assert.ok(!Object.prototype.hasOwnProperty.call(zh, key), `隐藏键文案 ${key} 必须删除（页面不持有不可见字段）`);
   }
 });
 
-test('页面三键收敛，服务端六键词表不动（页面收窄 ≠ 契约放宽）', () => {
+test('页面两键收敛，服务端四键词表不动（页面收窄 ≠ 契约放宽）', () => {
   // 页面可编辑面的唯一真源：client.js 的 PAGE_FIELDS。它必须是 CLI_FIELDS 的真子集，
-  // 且恰好是 dop 入口 / gh 入口 / 超时三项——多一键就是页面又问了用户判断不了的机器事实。
+  // 且恰好是 dop 入口 / 超时两项——多一键就是页面又问了用户判断不了的机器事实。
   const pageDecl = SOURCE.match(/const PAGE_FIELDS = \[([^\]]+)\]/u);
   assert.ok(pageDecl, 'client.js 必须声明 PAGE_FIELDS（页面可编辑面）');
   const pageFields = pageDecl[1].split(',').map((item) => item.trim().replace(/^['"]|['"]$/gu, '')).filter(Boolean);
-  assert.deepEqual(pageFields, ['dopBin', 'ghBin', 'timeoutMs'], '页面只收敛到三键（DESIGN §2.1）');
+  assert.deepEqual(pageFields, ['dopBin', 'timeoutMs'], '页面只收敛到两键（DESIGN §2.1）');
   for (const field of pageFields) {
     assert.ok(CLI_FIELDS.includes(field), `PAGE_FIELDS 的 ${field} 不在服务端 CLI_FIELDS 里（页面会提交服务端不认的键）`);
   }
-  // 文案面：两个路径键用入口卡标题（entry.*，说明按来源状态共用），超时用 field.* 标题 + 说明。
-  const labelKeys = { dopBin: 'entry.dop', ghBin: 'entry.gh', timeoutMs: ['field.timeoutMs', 'field.timeoutMs.hint'] };
+  // 文案面：路径键用入口卡标题（entry.*，说明按来源状态共用），超时用 field.* 标题 + 说明。
+  const labelKeys = { dopBin: 'entry.dop', timeoutMs: ['field.timeoutMs', 'field.timeoutMs.hint'] };
   for (const field of pageFields) {
     const keys = labelKeys[field];
     for (const key of Array.isArray(keys) ? keys : [keys]) {
       assert.ok(Object.prototype.hasOwnProperty.call(zh, key), `缺文案 ${key}（字段 ${field} 会显示裸键）`);
     }
   }
-  // 隐藏三键没有任何表单文案：页面不渲染它们，留着文案只会变成第二份没人校验的字段表。
+  // 隐藏两键没有任何表单文案：页面不渲染它们，留着文案只会变成第二份没人校验的字段表。
   for (const field of CLI_FIELDS.filter((item) => !pageFields.includes(item))) {
     for (const key of [`field.${field}`, `field.${field}.hint`]) {
       assert.ok(!Object.prototype.hasOwnProperty.call(zh, key), `隐藏字段 ${field} 不该有文案 ${key}`);
@@ -475,7 +472,7 @@ test('提示文案零环境变量名、零目录路径（用户不该被要求�
   }
   // 兜底说明里给环境变量是允许的（那是降级场景），但必须集中在 unavailable.* 一组。
   const envMentions = Object.keys(zh).filter((key) => /FORGE_DEVOPS_/u.test(zh[key]));
-  assert.deepEqual(envMentions.sort(), ['unavailable.envDop', 'unavailable.envGh'], '只有写面不可用时的兜底才提环境变量');
+  assert.deepEqual(envMentions.sort(), ['unavailable.envDop'], '只有写面不可用时的兜底才提环境变量');
   // r8：页面**不做**后缀判定。入口形态的唯一真源是服务端 `src/entry-form.mjs`，浏览器半再写
   // 一份正则，就会把能保存的 `.cmd` / 无后缀 shim 在 blur 时提前拦掉（AC-4 单点、AC-7）。
   assert.ok(!/WRAPPER_PATTERN/u.test(SOURCE), 'client.js 不得再持有 WRAPPER_PATTERN（后缀规则唯一真源在 entry-form.mjs）');
@@ -543,18 +540,18 @@ test('保存按钮只在 dirty 时可用；等值噪声不提交', () => {
   assert.match(SOURCE, /const dirty = changed\.length > 0;/u);
 });
 
-test('页面行为只遍历 PAGE_FIELDS：焦点/脏判定/提交体/422 都不碰隐藏三键', () => {
-  // 收窄的机器证据：四处页面行为一律走三键表。若有一处仍用六键表，
+test('页面行为只遍历 PAGE_FIELDS：焦点/脏判定/提交体/422 都不碰隐藏两键', () => {
+  // 收窄的机器证据：四处页面行为一律走两键表。若有一处仍用四键表，
   // 隐藏键就会在保存时被写进 fields（页面根本不该发送它们）。
   const traversals = SOURCE.match(/for \(const field of PAGE_FIELDS\)/gu) ?? [];
   assert.equal(traversals.length, 2, `焦点与提交两处循环都必须走 PAGE_FIELDS（实际 ${traversals.length} 处）`);
   assert.ok(!/for \(const field of CLI_FIELDS\)/u.test(SOURCE), '禁止再用 CLI_FIELDS 驱动页面行为（会带出幽灵字段）');
-  assert.match(SOURCE, /PAGE_FIELDS\.filter\(/u, '脏判定只在三键上过滤');
-  assert.match(SOURCE, /if \(PAGE_FIELDS\.includes\(field\)\) serverErrors\[field\]/u, '422 只映射页面可见三键');
+  assert.match(SOURCE, /PAGE_FIELDS\.filter\(/u, '脏判定只在两键上过滤');
+  assert.match(SOURCE, /if \(PAGE_FIELDS\.includes\(field\)\) serverErrors\[field\]/u, '422 只映射页面可见两键');
   // 422 只回隐藏键原因时不能造幽灵字段，必须折进 footer 兜底提示。
   assert.match(SOURCE, /setNotice\(\{ kind: 'failed', text: t\('saveFailed', \{ reason: errorCode\(body\) \?\? 'CLI_CONFIG_INVALID' \}\) \}\)/u);
-  // 隐藏三键不得出现在 staged 写入路径上：页面从不 setStaged 它们。
-  for (const field of ['dopEndpoint', 'ghOwner', 'sourceType']) {
+  // 隐藏两键不得出现在 staged 写入路径上：页面从不 setStaged 它们。
+  for (const field of ['dopEndpoint', 'sourceType']) {
     assert.ok(!new RegExp(`setStaged\\([^)]*${field}`, 'u').test(SOURCE), `不得为隐藏键 ${field} 写 staged`);
   }
 });
@@ -823,9 +820,8 @@ function stubFetch(...responses) {
 }
 
 const PATH_DOP = 'D:\\tools\\dop.exe';
-const PATH_GH = 'D:\\tools\\gh.exe';
 const PATH_NEW = 'E:\\corp\\bin\\dop.exe';
-const PATH_GH_ALT = 'C:\\Program Files\\GitHub CLI\\gh.exe';
+const PATH_DOP_ALT = 'C:\\Program Files\\dop.exe';
 // r8：两种 npm shim 形态（.cmd 与无后缀裸名）。它们在页面上只是「可保存的值」，
 // 能不能起起来是保存期判定 + 运行期提示的事——页面不再按后缀拦。
 const PATH_SHIM = 'D:\\tools\\dop.cmd';
@@ -837,38 +833,36 @@ const snapshotOf = (overrides = {}, revision = 'rev-1') => ({
   writable: { ok: true },
   entries: {
     dopBin: { origin: 'discovered', path: PATH_DOP, candidates: [{ path: PATH_DOP }, { path: 'D:\\old\\dop.exe' }] },
-    ghBin: { origin: 'discovered', path: PATH_GH, candidates: [] },
     dopEndpoint: { origin: 'missing' },
-    ghOwner: { origin: 'missing' },
     sourceType: { origin: 'default', value: 'mock' },
     timeoutMs: { origin: 'default', value: 20000 },
     ...overrides,
   },
 });
 
-test('E2E 三行一列：dop 入口 / gh 入口 / 超时，隐藏三键零 DOM、零段控件', async () => {
+test('E2E 两行一列：dop 入口 / 超时，隐藏两键零 DOM、零段控件', async () => {
   const stub = stubFetch({ body: snapshotOf() });
   try {
     const page = createPage();
     await page.settle();
 
-    // ① 三行一列：输入框 id 恰好是 PAGE_FIELDS，顺序即页面顺序。
+    // ① 两行一列：输入框 id 恰好是 PAGE_FIELDS，顺序即页面顺序。
     const ids = page.inputs().map((node) => node.props.id).sort();
-    assert.deepEqual(ids, ['fdv-dopBin', 'fdv-ghBin', 'fdv-timeoutMs'], `页面只渲染三行，实际 ${ids.join(',')}`);
-    assert.equal(page.byClass('fdv-card').length, 2, '两个入口卡（dop/gh）');
-    assert.equal(page.byClass('fdv-scalar').length, 1, '超时是第三行、页面唯一的标量行');
+    assert.deepEqual(ids, ['fdv-dopBin', 'fdv-timeoutMs'], `页面只渲染两行，实际 ${ids.join(',')}`);
+    assert.equal(page.byClass('fdv-card').length, 1, '只剩 dop 入口卡');
+    assert.equal(page.byClass('fdv-scalar').length, 1, '超时是第二行、页面唯一的标量行');
     assert.equal(page.byClass('fdv-group').length, 1, '只有一个分组标题（「连接与身份」整组已下线）');
     assert.equal(page.byClass('fdv-track').length, 0, '段控件随隐藏键下线（页面没有 .fdv-track）');
 
-    // ② 隐藏三键：连 DOM 都不进——不是灰显、不是折叠（收窄后页面无权展示它们）。
-    for (const field of ['dopEndpoint', 'ghOwner', 'sourceType']) {
+    // ② 隐藏两键：连 DOM 都不进——不是灰显、不是折叠（收窄后页面无权展示它们）。
+    for (const field of ['dopEndpoint', 'sourceType']) {
       assert.equal(page.findAll((node) => String(node.props.id ?? '') === `fdv-${field}`).length, 0, `隐藏键 ${field} 不得进 DOM`);
       assert.equal(page.findAll((node) => String(node.props.id ?? '') === `fdv-${field}-foot`).length, 0, `隐藏键 ${field} 不得留 foot 节点`);
     }
     assert.ok(!page.text().includes('MISSING:'), `页面出现裸键：${page.text().match(/MISSING:[a-zA-Z.]+/gu)?.join(',')}`);
 
-    // ③ 骨架同构：加载完毕的页面里，骨架骨架组/行已全部消失（不会与表单叠罗汉）。
-    assert.equal(page.byClass('fdv-skeleton-row').length, 0, '加载完成必须移除三行骨架');
+    // ③ 骨架同构：加载完毕的页面里，骨架组/行已全部消失（不会与表单叠罗汉）。
+    assert.equal(page.byClass('fdv-skeleton-row').length, 0, '加载完成必须移除两行骨架');
   } finally {
     stub.restore();
   }
@@ -896,18 +890,16 @@ test('E2E 只读首页 → 改为手动指定（预填）→ 保存提交 {revis
     assert.ok(!text.includes('MISSING:'), `文案出现裸键：${text.match(/MISSING:[a-zA-Z.]+/gu)?.join(',')}`);
     const readonlyInput = page.inputWithValue(PATH_DOP);
     assert.equal(readonlyInput.props.readOnly, true, '只读态用 readOnly（disabled 无法聚焦复制）');
-    assert.equal(page.inputWithValue(PATH_GH).props.readOnly, true, '另一个入口同样是只读展示');
     assert.equal(page.byClass('fdv-primary')[0].props.disabled, true, '未改动时保存必须禁用');
 
     // ③ 改为手动指定：预填当前生效值并进入编辑态。从「自动发现」切到「配置层」本身就是
     //    一次真实变更（把路径钉住），保存因此在未改字的情况下也可用；等值噪声规则只对
     //    「已在本层写入相同值」生效，见用例 4。
     const takeOvers = page.buttonsByText(tZh('action.takeOver'));
-    assert.equal(takeOvers.length, 2, '两个入口卡各有一个「改为手动指定」');
+    assert.equal(takeOvers.length, 1, '唯一入口卡有一个「改为手动指定」');
     await page.click(takeOvers[0]);
     const editable = page.inputWithValue(PATH_DOP);
     assert.ok(!editable.props.readOnly, '点「改为手动指定」后该输入端可编辑');
-    assert.equal(page.inputWithValue(PATH_GH).props.readOnly, true, '另一张卡仍是只读（逐字段覆盖，不整页切编辑态）');
     assert.equal(page.byClass('fdv-primary')[0].props.disabled, false, '钉住自动发现结果是一次层变更，保存应可用');
 
     // ④ 改成新路径 → blur 校验通过 → 保存：POST 带 revision 栅栏与字段增量。
@@ -924,9 +916,9 @@ test('E2E 只读首页 → 改为手动指定（预填）→ 保存提交 {revis
     assert.equal(post.init.method, 'POST');
     assert.equal(post.init.headers['x-forge-devops-request'], '1', '写操作必须带 CSRF 预检头');
     assert.deepEqual(JSON.parse(post.init.body), { revision: 'rev-1', fields: { dopBin: PATH_NEW } }, '只提交真正变化的键');
-    // 保存体键集只能是三键（隐藏键既不渲染也不发送，服务端按六键契约逐字保留它们）。
+    // 保存体键集只能是两键（隐藏键既不渲染也不发送，服务端按四键契约逐字保留它们）。
     const sentFields = Object.keys(JSON.parse(post.init.body).fields);
-    assert.ok(sentFields.every((key) => ['dopBin', 'ghBin', 'timeoutMs'].includes(key)), `保存体只允许三键，实际 ${sentFields.join(',')}`);
+    assert.ok(sentFields.every((key) => ['dopBin', 'timeoutMs'].includes(key)), `保存体只允许两键，实际 ${sentFields.join(',')}`);
 
     // ⑤ 终态：回填服务端新快照，提示已保存，保存键回落禁用。
     assert.ok(page.text().includes(tZh('saved')), '保存后必须给出成功反馈');
@@ -1004,10 +996,9 @@ test('E2E 找不到原生入口时可填；写面缺失整页降级只读但字�
     assert.equal(first.props.placeholder, tZh('entry.placeholder', { tool: 'dop' }));
     // 指引句按字段插值：dop 卡不得再显示 gh 的名字（r3 的错位在这里钉死）。
     assert.ok(!text.includes('gh 文件右键'), 'dop 入口卡的指引不得提到 gh');
-    // 服务端回六个字段，页面恒定渲染三行：隐藏三键连 DOM 都不进（不是灰显、不是折叠）。
-    assert.equal(page.inputs().length, 3, `页面只渲染三行，实际 ${page.inputs().length} 个输入框`);
+    // 服务端回四个字段，页面恒定渲染两行：隐藏两键连 DOM 都不进（不是灰显、不是折叠）。
+    assert.equal(page.inputs().length, 2, `页面只渲染两行，实际 ${page.inputs().length} 个输入框`);
     assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-dopEndpoint').length, 0, '隐藏键 dopEndpoint 不得有输入框');
-    assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-ghOwner').length, 0, '隐藏键 ghOwner 不得有输入框');
     assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-sourceType').length, 0, '隐藏键 sourceType 不得有输入框');
     // 超时行未改过时把生效值镜像进 placeholder（留空 = 不覆盖该层）。
     const timeoutInput = page.inputWithPlaceholder('20000');
@@ -1025,11 +1016,11 @@ test('E2E 找不到原生入口时可填；写面缺失整页降级只读但字�
     assert.ok(page.text().includes(tZh('unavailable.envDop')), '降级时给出环境变量兜底');
     assert.equal(page.byClass('fdv-primary').length, 0, '降级态不渲染保存键（不能给假按钮）');
     assert.equal(page.inputWithValue(PATH_DOP).props.readOnly, true, '降级态字段仍只读可见');
-    // 降级时第三行（超时）把生效值镜像进 value（placeholder 不可复制），且用 readOnly 而非 disabled。
+    // 降级时第二行（超时）把生效值镜像进 value（placeholder 不可复制），且用 readOnly 而非 disabled。
     const lockedTimeout = page.inputWithValue('20000');
     assert.equal(lockedTimeout.props.readOnly, true, '降级态标量行只读但可聚焦复制');
     assert.equal(lockedTimeout.props.disabled, undefined, '不得用 disabled（无法聚焦/复制）');
-    assert.equal(page.inputs().length, 3, '降级态仍是三行，不会因为只读而多出隐藏字段');
+    assert.equal(page.inputs().length, 2, '降级态仍是两行，不会因为只读而多出隐藏字段');
   } finally {
     degradedStub.restore();
   }
@@ -1039,14 +1030,13 @@ test('E2E 等值噪声不提交：本层同样的值改回去，保存重新禁�
   // candidates 是 [{ path, tier }]（TECHNICAL §2.4），首个即命中项，其余计入「另有 N 个」。
   const stub = stubFetch({
     body: snapshotOf({
-      dopBin: { origin: 'config', path: PATH_DOP, tool: 'dop', candidates: [] },
-      ghBin: {
-        origin: 'discovered',
-        path: PATH_GH,
-        tool: 'gh',
+      dopBin: {
+        origin: 'config',
+        path: PATH_DOP,
+        tool: 'dop',
         candidates: [
-          { path: PATH_GH, tier: 'path' },
-          { path: PATH_GH_ALT, tier: 'candidate-dirs' },
+          { path: PATH_DOP, tier: 'path' },
+          { path: PATH_DOP_ALT, tier: 'candidate-dirs' },
         ],
       },
     }),
@@ -1059,11 +1049,29 @@ test('E2E 等值噪声不提交：本层同样的值改回去，保存重新禁�
     assert.equal(page.byClass('fdv-primary')[0].props.disabled, false, '真的改了才允许保存');
     await page.change(page.inputWithValue(PATH_NEW), PATH_DOP);
     assert.equal(page.byClass('fdv-primary')[0].props.disabled, true, '改回原值 = 无变更，不得提交等值噪声');
-    // 多候选：命中首个 + 「另有 N 个候选」可展开（不静默把多份安装吞掉）。
+    // 多候选展开在下面的独立用例里验证（自动发现态才可展开，配置层在编辑态时不展开）。
+    assert.equal(page.buttonsIncluding('另有 1 个候选').length, 0, '编辑态不再展开候选，避免与输入框抢时间');
+  } finally {
+    stub.restore();
+  }
+});
+
+test('E2E 多候选可展开：自动发现命中首个，另 N 个折在链上可见', async () => {
+  const candidates = [
+    { path: PATH_DOP, tier: 'path' },
+    { path: PATH_DOP_ALT, tier: 'candidate-dirs' },
+  ];
+  const stub = stubFetch({
+    body: snapshotOf({ dopBin: { origin: 'discovered', path: PATH_DOP, tool: 'dop', candidates } }),
+  });
+  try {
+    const page = createPage();
+    await page.settle();
+    assert.equal(page.inputWithValue(PATH_DOP).props.readOnly, true, '发现值只读展示');
     const more = page.buttonsIncluding('另有 1 个候选');
     assert.equal(more.length, 1, '另有 1 个候选时应给出可展开入口');
     await page.click(more[0]);
-    assert.ok(page.text().includes(PATH_GH_ALT), '展开后候选路径可见（企业多份安装不自作主张）');
+    assert.ok(page.text().includes(PATH_DOP_ALT), '展开后候选路径可见（企业多份安装不自作主张）');
     assert.ok(page.text().includes(tZh('candidates.current')), '展开后标出当前生效项');
   } finally {
     stub.restore();

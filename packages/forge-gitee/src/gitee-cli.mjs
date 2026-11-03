@@ -1,23 +1,27 @@
 /**
- * `@heluo/forge-gitee` 的唯一子进程出口（TK2，AC-23）与凭据面（AC-22）。
+ * `@heluo/forge-gitee` 的唯一子进程出口（TK2，AC-23；r10 起兼管本地 git）与凭据面。
  *
- * 本包所有 CLI 调用都必须经过这里的 `run()`：没有第二个 `execFile`，没有 `spawn`，
- * 没有 shell 拼串，也没有"拼一个命令字符串"的通道。四道约束写在实现里：
+ * 本包所有子进程调用都必须经过这里的 `run()`（gitee CLI）或 `runGit()`（本地 git）：
+ * 没有第二个 `execFile`，没有 `spawn`，没有 shell 拼串，也没有"拼一个命令字符串"的
+ * 通道。四道约束写在实现里：
  *
- *   1. **入参白名单**：`run({ bin, args, purpose })`，多一个字段就拒（未知字段等于有人
- *      在试通用命令通道）。
+ *   1. **入参白名单**：`run({ bin, args, purpose })` / `runGit({ args, purpose, cwd })`，
+ *      多一个字段就拒（未知字段等于有人在试通用命令通道）。git 的 bin 固定在装配期
+ *      注入，不给调用方传 `/bin/sh` 的机会。
  *   2. **有界执行**：`shell: false`、超时 → `timedOut`、单流 1 MiB 截断 → `truncated`，
  *      失败是数据不是异常（与 r1 `cli-runner` 同一套终态口径，受控重复见 R-2）。
  *   3. **环境白名单**：子进程只拿到 `ENV_ALLOWLIST` 里的运行态变量 + `authEnv` 点名的
- *      凭据变量。`AWS_SECRET_ACCESS_KEY`、`CORP_PASSWORD` 这类与企业无关的机密不会
- *      被继承下去；凭据也永远不会进 argv。
- *   4. **凭据只从环境变量来**：落盘凭据（CLI 配置目录里的 `hosts.yml` 等）一律不放行——
- *      第一次 `run()` 之前自检，命中就抛 `GITEE_PERSISTENT_TOKEN`，**零子进程**。
+ *      凭据变量。git 调用额外叠 `GIT_TERMINAL_PROMPT=0`：绝不因为缺凭据而在管道里
+ *      等一个永远不来的输入。
+ *   4. **凭据只是提示**：落盘凭据（CLI 配置目录里的 `hosts.yml` 等）默认只告警
+ *      （`persistentToken: 'warn'`）；配成 `block` 才在第一次调用前抛
+ *      `GITEE_PERSISTENT_TOKEN`（**零子进程**）。凭据也永远不会进 argv。
  *
  * 产物契约（蓝图 §3 第 2 行，下游逐字使用）：
- *   createGiteeRunner({execFile, env, timeoutMs, maxOutputBytes, now})
- *     -> { run({ bin, args, purpose }) }
- *   run(...) -> { exitCode, stdout, stderr, durationMs, timedOut, truncated }
+ *   createGiteeRunner({execFile, env, timeoutMs, maxOutputBytes, now, authEnv, gitBin,
+ *                      gitCwd, persistentTokenPolicy})
+ *     -> { run({ bin, args, purpose }), runGit({ args, purpose, cwd }), credentialStatus, describe }
+ *   run(...) / runGit(...) -> { exitCode, stdout, stderr, durationMs, timedOut, truncated }
  *   scrubSecrets(text, tokens) -> string
  *   detectPersistentToken({ env, readFile }) -> { blocked, reason, files, checked, next_action }
  */
@@ -25,13 +29,30 @@
 import { execFile as nodeExecFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-import { DEFAULT_AUTH_ENV, DEFAULT_TIMEOUT_MS } from './runtime-config.mjs';
+import {
+  DEFAULT_AUTH_ENV,
+  DEFAULT_PERSISTENT_TOKEN_POLICY,
+  DEFAULT_TIMEOUT_MS,
+  PERSISTENT_TOKEN_POLICIES,
+} from './runtime-config.mjs';
 
 /** 单流默认上限 1 MiB：够装下列表类 JSON，又不至于把上下文塞满（与 r1 同值）。 */
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 
 /** 允许的入参字段。白名单而非"忽略额外字段"：未知字段意味着有人在试通用命令通道。 */
 export const INVOCATION_KEYS = Object.freeze(['bin', 'args', 'purpose']);
+
+/** git 调用的入参字段：**没有** bin（bin 在装配期固定），只有 argv 与工作目录。 */
+export const GIT_INVOCATION_KEYS = Object.freeze(['args', 'purpose', 'cwd']);
+
+/** 本地 git 的默认可执行名：走 PATH，装配期可用 `gitBin` 覆盖。 */
+export const DEFAULT_GIT_BIN = 'git';
+
+/**
+ * git 子进程额外的环境位：`GIT_TERMINAL_PROMPT=0` 让 git 在缺凭据时**报错退出**而不是
+ * 阻塞等输入（管道里没有终端，等待会一直拖到超时）。只加这一位，不覆盖白名单推导结果。
+ */
+const GIT_ENV_OVERRIDES = Object.freeze({ GIT_TERMINAL_PROMPT: '0' });
 
 /**
  * 从宿主继承给子进程的环境变量白名单：只放运行态需要的东西。
@@ -138,7 +159,12 @@ function normalizeEnv(env) {
   return overrides;
 }
 
-/** 凭据变量名：数组或单值；重复消除但保序（先配先生效）。 */
+/**
+ * 凭据变量名：数组或单值；重复消除但保序（先配先生效）。
+ *
+ * 空数组合法（r10）：默认 `authEnv` 就是空，表示"不注入任何凭据变量"——缺凭据不再
+ * 阻断只读命令，所以"一个都不点名"是意图，不是配置错误。
+ */
 function normalizeAuthEnv(authEnv) {
   const list = Array.isArray(authEnv) ? authEnv : [authEnv];
   const names = [];
@@ -150,7 +176,6 @@ function normalizeAuthEnv(authEnv) {
     }
     if (!names.includes(name)) names.push(name);
   }
-  if (names.length === 0) throw new GiteeCliError('authEnv 至少需要一个环境变量名');
   return names;
 }
 
@@ -185,19 +210,23 @@ function normalizeTokens(tokens) {
   return seen.sort((left, right) => right.length - left.length);
 }
 
+/** 凭据的"形状"兜底：即使没点名变量（默认 authEnv 为空），输出里形似令牌的串也要抹掉。 */
+const SECRET_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|gitee_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,})\b/g;
+
 /**
- * 输出脱敏：把令牌值逐字替换成 `***`。
+ * 输出脱敏：把令牌值逐字替换成 `***`，再按形状兜底。
  *
- * 用 `split/join` 而不是正则：令牌里可能有 `.`/`*`/`(` 之类的正则元字符，构造正则
- * 既慢又容易因为转义漏掉（AC-22 要求全链路零命中）。
+ * 值替换用 `split/join` 而不是正则：令牌里可能有 `.`/`*`/`(` 之类的正则元字符，构造
+ * 正则既慢又容易因为转义漏掉（AC-22 要求全链路零命中）。形状兜底覆盖"没点名变量、
+ * 但 CLI 自己把令牌打进了错误信息"这种情况。
  */
 export function scrubSecrets(text, tokens) {
   const source = typeof text === 'string' ? text : (text === null || text === undefined ? '' : String(text));
+  if (source.length === 0) return source;
   const list = normalizeTokens(tokens);
-  if (list.length === 0 || source.length === 0) return source;
   let scrubbed = source;
   for (const token of list) scrubbed = scrubbed.split(token).join(REDACTED);
-  return scrubbed;
+  return scrubbed.replace(SECRET_SHAPE, REDACTED);
 }
 
 /** 默认读文件：任何错误都当"没有这个文件"，检测不该因为权限/缺失而中断。 */
@@ -396,6 +425,45 @@ function normalizeInvocation(input) {
   return { bin, args: [...args], purpose: purpose ?? '' };
 }
 
+/**
+ * 校验 git 调用形状：只认 `{args, purpose, cwd}`，`args` 必须是**非空**的干净字符串数组。
+ *
+ * 与 `run()` 的差别有两处，都是刻意的：没有 `bin`（git 可执行在装配期固定，调用方
+ * 不能改），`args` 非空（`git` 裸跑只会打印帮助，说明调用点拼错了）。
+ */
+function normalizeGitInvocation(input) {
+  if (input === null || typeof input !== 'object') {
+    throw new GiteeCliError('runGit() 需要 { args, purpose }');
+  }
+  const extra = Object.keys(input).filter((key) => !GIT_INVOCATION_KEYS.includes(key));
+  if (extra.length > 0) {
+    throw new GiteeCliError(`runGit() 不接受字段 ${extra.join(', ')}：只允许 args/purpose/cwd，可执行由装配期固定`);
+  }
+
+  const { args, purpose, cwd } = input;
+  if (!Array.isArray(args) || args.length === 0) {
+    throw new GiteeCliError('runGit().args 必须是非空的字符串数组（子命令与参数分开传，不拼串）');
+  }
+  for (const arg of args) {
+    if (typeof arg !== 'string' || arg.length === 0) {
+      throw new GiteeCliError('runGit().args 只接受非空字符串');
+    }
+    if (arg.includes('\0')) {
+      throw new GiteeCliError('runGit().args 不允许包含 NUL 字符');
+    }
+  }
+  if (purpose !== undefined && typeof purpose !== 'string') {
+    throw new GiteeCliError('runGit().purpose 必须是字符串（仅用于诊断，可省略）');
+  }
+  if (cwd !== undefined && cwd !== null) {
+    if (typeof cwd !== 'string' || cwd.trim().length === 0 || cwd.includes('\0')) {
+      throw new GiteeCliError('runGit().cwd 必须是非空且不含 NUL 的目录路径（可省略）');
+    }
+  }
+
+  return { args: [...args], purpose: purpose ?? '', cwd: asText(cwd) };
+}
+
 function assertOptions({ execFile, timeoutMs, maxOutputBytes, now }) {
   if (typeof execFile !== 'function') {
     throw new GiteeCliError('createGiteeRunner 需要可注入的 execFile（唯一子进程出口）');
@@ -411,12 +479,29 @@ function assertOptions({ execFile, timeoutMs, maxOutputBytes, now }) {
   }
 }
 
+function assertPolicy(persistentTokenPolicy) {
+  if (!PERSISTENT_TOKEN_POLICIES.includes(persistentTokenPolicy)) {
+    throw new GiteeCliError(`persistentToken 只接受 ${PERSISTENT_TOKEN_POLICIES.join(' / ')}`);
+  }
+  return persistentTokenPolicy;
+}
+
+/** 诊断里只给文件名：看得出用哪个可执行，又不泄露本机绝对路径。 */
+function baseName(bin) {
+  const parts = String(bin).split(/[\\/]/).filter((part) => part.length > 0);
+  return parts.length > 0 ? parts[parts.length - 1] : String(bin);
+}
+
 /**
  * 装配唯一子进程出口。
  *
  * `env` 是**显式环境**（覆盖 `process.env`，与 r1 `cli-runner` 同语义）：子进程环境
  * 由"白名单 + `authEnv`"从合并结果推导；落盘凭据自检只看这份显式 env（不传则用
  * `process.env`），因此离线用例传显式 env 就完全离线。
+ *
+ * r10 新增：`runGit()` 与 `run()` 走同一个执行体（同一份超时/截断/env 白名单/脱敏），
+ * 只叠加 `GIT_TERMINAL_PROMPT=0` 与 `cwd`；`persistentTokenPolicy` 决定落盘凭据是
+ * 告警（`warn`，默认）还是拒绝（`block`）。
  *
  * @param {object} [options]
  * @param {Function} [options.execFile] 注入点；默认 `node:child_process.execFile`
@@ -426,6 +511,9 @@ function assertOptions({ execFile, timeoutMs, maxOutputBytes, now }) {
  * @param {() => number} [options.now] 可注入时钟（时长统计）
  * @param {string[] | string} [options.authEnv] 凭据变量名（默认与配置层同源，不在此另写一份）
  * @param {(file: string) => string | null} [options.readFile] 凭据自检的读文件注入点
+ * @param {string} [options.gitBin] 本地 git 可执行（默认 `git`，走 PATH）
+ * @param {string} [options.gitCwd] git 默认工作目录（省略则用子进程继承的 cwd）
+ * @param {'warn' | 'block'} [options.persistentTokenPolicy] 落盘凭据策略
  */
 export function createGiteeRunner({
   execFile = nodeExecFile,
@@ -435,10 +523,18 @@ export function createGiteeRunner({
   now = Date.now,
   authEnv = DEFAULT_AUTH_ENV,
   readFile = defaultReadFile,
+  gitBin = DEFAULT_GIT_BIN,
+  gitCwd,
+  persistentTokenPolicy = DEFAULT_PERSISTENT_TOKEN_POLICY,
 } = {}) {
   assertOptions({ execFile, timeoutMs, maxOutputBytes, now });
   const authNames = normalizeAuthEnv(authEnv);
   if (typeof readFile !== 'function') throw new GiteeCliError('readFile 必须是函数（凭据自检注入点）');
+  if (typeof gitBin !== 'string' || gitBin.trim().length === 0) {
+    throw new GiteeCliError('gitBin 必须是非空可执行标识');
+  }
+  const workdir = asText(gitCwd);
+  const policy = assertPolicy(persistentTokenPolicy);
 
   const overrides = normalizeEnv(env);
   const source = { ...process.env, ...overrides };
@@ -450,35 +546,35 @@ export function createGiteeRunner({
   let credentialSnapshot = null;
   function credentialStatus() {
     if (credentialSnapshot === null) {
-      credentialSnapshot = detectPersistentToken({ env: detectEnv, readFile });
+      const detected = detectPersistentToken({ env: detectEnv, readFile });
+      credentialSnapshot = Object.freeze({
+        ...detected,
+        policy,
+        enforced: detected.blocked && policy === 'block',
+      });
     }
     return credentialSnapshot;
   }
 
-  /**
-   * @param {{bin: string, args?: string[], purpose?: string}} invocation
-   * @returns {Promise<{exitCode: number | null, stdout: string, stderr: string,
-   *   durationMs: number, timedOut: boolean, truncated: boolean}>}
-   */
-  async function run(invocation) {
-    const { bin, args } = normalizeInvocation(invocation);
-
+  /** 命中落盘凭据且策略为 block 时先拒后调：一次子进程都不起（AC-22 的"阻断"）。 */
+  function assertCredentialsOpen() {
     const credentials = credentialStatus();
-    if (credentials.blocked) {
-      // 先拒后调：命中落盘凭据时一次子进程都不起（AC-22 的"阻断"，不是"事后告警"）。
-      throw new GiteeCliError(
-        '检测到 CLI 配置目录存在持久令牌：本包只接受环境变量注入的凭据，已停止执行',
-        {
-          code: 'PERSISTENT_TOKEN',
-          reason: CREDENTIAL_REASONS.PERSISTENT,
-          status: 'denied',
-          detail: { files: credentials.files, next_action: credentials.next_action },
-        },
-      );
-    }
+    if (credentials.enforced !== true) return;
+    throw new GiteeCliError(
+      '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请改用环境变量注入后重启',
+      {
+        code: 'PERSISTENT_TOKEN',
+        reason: CREDENTIAL_REASONS.PERSISTENT,
+        status: 'denied',
+        detail: { files: credentials.files, next_action: credentials.next_action, policy: credentials.policy },
+      },
+    );
+  }
 
+  /** 两个命令面共用的执行体：唯一调子进程的地方、有界、出口统一脱敏。 */
+  async function execute(bin, args, { cwd, extraEnv } = {}) {
     const options = {
-      env: childEnv,
+      env: extraEnv === undefined ? childEnv : { ...childEnv, ...extraEnv },
       encoding: 'utf8',
       timeout: timeoutMs,
       killSignal: 'SIGTERM',
@@ -486,6 +582,7 @@ export function createGiteeRunner({
       shell: false,
       windowsHide: true,
     };
+    if (typeof cwd === 'string' && cwd.length > 0) options.cwd = cwd;
 
     const startedAt = now();
     const outcome = await invoke(execFile, bin, args, options);
@@ -503,7 +600,48 @@ export function createGiteeRunner({
     };
   }
 
-  return Object.freeze({ run });
+  /**
+   * @param {{bin: string, args?: string[], purpose?: string}} invocation
+   * @returns {Promise<{exitCode: number | null, stdout: string, stderr: string,
+   *   durationMs: number, timedOut: boolean, truncated: boolean}>}
+   */
+  async function run(invocation) {
+    const { bin, args } = normalizeInvocation(invocation);
+    assertCredentialsOpen();
+    return execute(bin, args);
+  }
+
+  /**
+   * 本地 git 调用面（r10）：与 `run()` 同一执行体，只叠加 `GIT_TERMINAL_PROMPT=0` 与 cwd。
+   *
+   * @param {{args: string[], purpose?: string, cwd?: string}} invocation
+   * @returns {Promise<{exitCode: number | null, stdout: string, stderr: string,
+   *   durationMs: number, timedOut: boolean, truncated: boolean}>}
+   */
+  async function runGit(invocation) {
+    const { args, cwd } = normalizeGitInvocation(invocation);
+    assertCredentialsOpen();
+    return execute(gitBin, args, { cwd: cwd ?? workdir, extraEnv: GIT_ENV_OVERRIDES });
+  }
+
+  function describe() {
+    const credentials = credentialStatus();
+    return Object.freeze({
+      timeoutMs,
+      maxOutputBytes,
+      authEnv: Object.freeze([...authNames]),
+      persistentToken: credentials.blocked ? 'detected' : 'absent',
+      persistentTokenPolicy: policy,
+      git: Object.freeze({
+        bin: baseName(gitBin),
+        cwd: workdir === null ? null : baseName(workdir),
+        terminalPrompt: false,
+      }),
+      shell: false,
+    });
+  }
+
+  return Object.freeze({ run, runGit, credentialStatus, describe });
 }
 
 function buildResult(outcome, maxOutputBytes, durationMs) {

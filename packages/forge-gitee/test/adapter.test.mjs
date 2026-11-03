@@ -1,17 +1,17 @@
 /**
- * TK3 适配器与命令面（AC-12 / AC-14 / AC-23）。
+ * TK3 适配器与命令面（AC-12 / AC-14 / AC-23；r10 平台收敛）。
  *
  * 这个文件守三件事：
- * 1. **provider 分流是实体表**：字段/命令/参数全部按 Gitee 语义（snake_case）分表，GitHub 字段
- *    （`mergedAt`/`statusCheckRollup`/`isPrivate`…）在本包里请求即失败、返回即降级；
+ * 1. **字段分流是实体表**：字段/命令/参数全部按 Gitee 语义（snake_case）分表，GitHub 字段
+ *    （`mergedAt`/`statusCheckRollup`/`isPrivate`…）根本不在任何表里，请求即失败；
  * 2. **命令面是枚举**：没有的动词不存在，禁项（merge/close/release/workflow/api/auth/config/gist）
  *    连表都进不来；合并、关闭、发版、通用接口调用没有入口；
  * 3. **越界即零子进程**：参数白名单、`--json` 子集、target 形状、必填项都在触碰 runner 之前校验，
  *    套用命令行字符串或 argv 数组一律拒绝（AC-14）。
  *
- * 另外两条静态不变量（AC-12/AC-23）：本模块不 import `gh-adapter`、不出现 `GH_*` 语义常量
- * （`GH_TOKEN` 作为凭据环境变量名是唯一例外），并且 `packages/forge-gitee/src/` 里只有
- * `gitee-cli.mjs` 碰 `node:child_process`——适配器永不自建子进程。
+ * 另外两条静态不变量（AC-12/AC-23）：本模块不 import `gh-adapter`、不出现 `GH_*` 语义常量，
+ * 并且 `packages/forge-gitee/src/` 里只有 `gitee-cli.mjs` 碰 `node:child_process`——
+ * 适配器永不自建子进程。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -23,7 +23,6 @@ import {
   ADAPTER_REASONS,
   GITEE_ARGV_FLAGS,
   GITEE_COMMANDS,
-  GITEE_FORBIDDEN_FIELDS,
   GITEE_FORBIDDEN_FLAGS,
   GITEE_FORBIDDEN_VERBS,
   GITEE_ISSUE_FIELDS,
@@ -31,9 +30,9 @@ import {
   GITEE_JSON_SUBSETS,
   GITEE_LIST_LIMIT,
   GITEE_LOGICAL_NAME,
+  GITEE_PLATFORM,
   GITEE_PR_FIELDS,
   GITEE_PR_LIST_FIELDS,
-  GITEE_PROVIDER,
   GITEE_REPO_FIELDS,
   GITEE_REPO_LIST_FIELDS,
   GiteeAdapterError,
@@ -82,7 +81,7 @@ function assertRejected(runner, run, code) {
   assert.ok(caught !== null, `期望抛出 ${code}`);
   assert.ok(caught instanceof GiteeAdapterError, `期望 GiteeAdapterError，实际 ${caught?.name}`);
   assert.equal(caught.code, code, `期望 ${code}，实际 ${caught?.code}（${caught?.message}）`);
-  assert.equal(caught.provider, GITEE_PROVIDER);
+  assert.equal(caught.provider, GITEE_PLATFORM);
   assert.equal(runner.calls.length, 0, '校验失败必须零子进程');
   return caught;
 }
@@ -102,7 +101,7 @@ async function assertRejectedAsync(run, code) {
 }
 
 test('provider 常量与命令面是 Gitee 语义的枚举（AC-12）', () => {
-  assert.equal(GITEE_PROVIDER, 'gitee');
+  assert.equal(GITEE_PLATFORM, 'gitee');
   assert.equal(GITEE_LOGICAL_NAME, 'gitee');
   assert.equal(GITEE_LIST_LIMIT, 100);
 
@@ -152,15 +151,24 @@ test('字段表逐字为 Gitee snake_case，且 GitHub 字段不在任何表里�
   assert.deepEqual([...GITEE_ISSUE_LIST_FIELDS], ['number', 'title', 'url', 'state']);
   assert.deepEqual([...GITEE_PR_FIELDS], ['number', 'title', 'state', 'url', 'updated_at', 'head', 'base', 'draft', 'mergeable', 'comments']);
   assert.deepEqual([...GITEE_PR_LIST_FIELDS], ['number', 'title', 'url', 'head', 'state']);
-  assert.deepEqual([...GITEE_FORBIDDEN_FIELDS], ['mergedAt', 'merged_at', 'statusCheckRollup', 'checks', 'reviewDecision', 'autoMergeRequest']);
 
   const all = [GITEE_REPO_FIELDS, GITEE_REPO_LIST_FIELDS, GITEE_ISSUE_FIELDS, GITEE_ISSUE_LIST_FIELDS, GITEE_PR_FIELDS, GITEE_PR_LIST_FIELDS];
   const declared = new Set(all.flat());
-  for (const forbidden of GITEE_FORBIDDEN_FIELDS) {
-    assert.ok(!declared.has(forbidden), `禁用字段 ${forbidden} 不得出现在 GITEE_* 表里`);
-  }
-  for (const githubOnly of ['nameWithOwner', 'isPrivate', 'defaultBranchRef', 'updatedAt', 'mergeableState', 'statusCheckRollup']) {
-    assert.ok(!declared.has(githubOnly), `Gitee 表不得含 GitHub 字段 ${githubOnly}`);
+  // r10 删了 GitHub 语义黑名单：白名单本身就是判据，这里直接断言"那些名字不在表里"。
+  for (const githubOnly of [
+    'mergedAt',
+    'merged_at',
+    'statusCheckRollup',
+    'checks',
+    'reviewDecision',
+    'autoMergeRequest',
+    'nameWithOwner',
+    'isPrivate',
+    'defaultBranchRef',
+    'updatedAt',
+    'mergeableState',
+  ]) {
+    assert.ok(!declared.has(githubOnly), `Gitee 表不得含 GitHub 语义字段 ${githubOnly}`);
   }
   // 表里全部是 snake_case/小写标识（Gitee 语义），没有 camelCase 混入。
   for (const field of declared) {
@@ -269,15 +277,14 @@ test('参数白名单：未声明键、状态值、上限、必填项都在起�
   }), ADAPTER_REASONS.ARG_INVALID);
 });
 
-test('--json 只接受声明的子集，GitHub 语义字段请求即失败（AC-12/AC-14）', () => {
+test('--json 只接受声明的子集，表外字段请求即失败（AC-14）', () => {
   const runner = fakeRunner();
-  // 未声明字段。
+  // 未声明字段（含 GitHub 语义字段）：白名单是唯一判据。
   assertRejected(runner, () => assertArgv('issueView', { target: ISSUE_TARGET, json: ['number', 'body'] }), ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED);
-  // GitHub 语义字段即使在别的 provider 的字段表里"存在"，这里也不认。
-  for (const forbidden of GITEE_FORBIDDEN_FIELDS) {
+  for (const undeclared of ['mergedAt', 'statusCheckRollup', 'checks', 'reviewDecision', 'autoMergeRequest']) {
     assertRejected(
       runner,
-      () => assertArgv('prView', { target: ISSUE_TARGET, json: ['number', forbidden] }),
+      () => assertArgv('prView', { target: ISSUE_TARGET, json: ['number', undeclared] }),
       ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED,
     );
   }
@@ -336,24 +343,26 @@ test('只读归一：事实版本缺失即 unknown，混入 GitHub 字段即 unk
   assert.ok(degraded.missing_fields.includes('updated_at'));
   assert.equal(degraded.object.updated_at, null);
 
-  // GitHub 语义字段混入：不接受"顺手推断"，整条 unknown。
+  // 表外字段（GitHub 语义）：不进 object、不改状态——白名单之外的键一律不采信。
   const mixed = createGiteeAdapter({
     runner: fakeRunner(() => jsonOut({ ...base, mergedAt: '2026-10-29T02:00:00Z' })),
     env: SECRET_ENV,
   });
   const mixedResult = await mixed.read('gitee.pr.read', ISSUE_TARGET, {});
-  assert.equal(mixedResult.status, 'unknown');
-  assert.equal(mixedResult.error_code, ADAPTER_REASONS.MIXED_PROVIDER_FIELDS);
-  assert.equal(mixedResult.rejected_field, 'mergedAt');
+  assert.equal(mixedResult.status, 'succeeded');
+  assert.equal(mixedResult.error_code, null);
   assert.ok(!('mergedAt' in mixedResult.object));
+  assert.equal(mixedResult.object.updated_at, base.updated_at);
 
   const checks = createGiteeAdapter({
     runner: fakeRunner(() => jsonOut({ ...base, head: { ref: 'feat/x', statusCheckRollup: ['ci'] } })),
     env: SECRET_ENV,
   });
   const nested = await checks.read('gitee.pr.read', ISSUE_TARGET, {});
-  assert.equal(nested.error_code, ADAPTER_REASONS.MIXED_PROVIDER_FIELDS);
-  assert.equal(nested.rejected_field, 'statusCheckRollup');
+  // `head` 是本包声明的字段，其内部形状原样保留；未声明的顶层字段不进来、也不触发降级。
+  assert.equal(nested.status, 'succeeded');
+  assert.equal(nested.error_code, null);
+  assert.deepEqual(nested.object.head, { ref: 'feat/x', statusCheckRollup: ['ci'] });
 });
 
 test('清单只读：默认 --state open 与 --limit 100，数组归一为字段表（AC-12/AC-14）', async () => {
@@ -445,8 +454,8 @@ test('命令结果翻译：超时/非零退出/字段不支持/起不来/畸形 
 });
 
 test('失败信息脱敏：stderr 里的令牌不回到消息与 detail（AC-22）', async () => {
-  const runner = fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: `auth failed for ${TOKEN_VALUE} / ${SECRET_SHAPE}` }));
-  const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
+  const runner = fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: `boom for ${TOKEN_VALUE} / ${SECRET_SHAPE}` }));
+  const adapter = createGiteeAdapter({ runner, env: SECRET_ENV, authEnv: TOKEN_NAME });
   const error = await assertRejectedAsync(() => adapter.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.NONZERO_EXIT);
   assert.ok(!error.message.includes(TOKEN_VALUE), '消息不得含令牌');
   assert.ok(!error.message.includes(SECRET_SHAPE), '消息不得含令牌');
@@ -454,18 +463,30 @@ test('失败信息脱敏：stderr 里的令牌不回到消息与 detail（AC-22�
   assert.ok(!JSON.stringify(error.detail).includes(TOKEN_VALUE));
 });
 
-test('preflight 返回原因码而不抛错：缺令牌/持久令牌都零子进程（AC-22）', () => {
+test('服务端拒绝凭据 → AUTH_MISSING（不再笼统报命令失败），文案指向 authEnv', async () => {
+  const runner = fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'HTTP 401 Unauthorized' }));
+  const adapter = createGiteeAdapter({ runner, env: EMPTY_ENV });
+  const error = await assertRejectedAsync(() => adapter.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.AUTH_MISSING);
+  assert.match(error.message, /401/);
+  assert.match(error.message, /authEnv/);
+  assert.equal(error.detail.mayHaveSideEffect, true);
+});
+
+test('preflight 零子进程：缺令牌仍可读、落盘凭据按策略告警或拒绝（AC-22 / r10）', () => {
   const runner = fakeRunner();
   const missing = createGiteeAdapter({ runner, env: EMPTY_ENV });
   const missingResult = missing.preflight();
-  assert.equal(missingResult.ok, false);
-  assert.equal(missingResult.reason, ADAPTER_REASONS.AUTH_MISSING);
+  // r10：缺令牌不再是拒绝——只读命令照常发，受限仓库由 CLI 的非零退出说明。
+  assert.equal(missingResult.ok, true);
+  assert.equal(missingResult.reason, null);
   assert.equal(missingResult.tokenSource, 'none');
   assert.equal(missingResult.provider, 'gitee');
   assert.equal(missingResult.mayHaveSideEffect, false);
+  assert.equal(missingResult.persistentToken, 'absent');
+  assert.match(missingResult.message, /只读命令照常执行/);
   assert.ok(!JSON.stringify(missingResult).includes(TOKEN_VALUE));
 
-  const ready = createGiteeAdapter({ runner, env: SECRET_ENV });
+  const ready = createGiteeAdapter({ runner, env: SECRET_ENV, authEnv: TOKEN_NAME });
   const readyResult = ready.preflight();
   assert.equal(readyResult.ok, true);
   assert.equal(readyResult.reason, null);
@@ -473,16 +494,29 @@ test('preflight 返回原因码而不抛错：缺令牌/持久令牌都零子进
   assert.deepEqual([...readyResult.authEnv], [TOKEN_NAME]);
   assert.ok(!JSON.stringify(readyResult).includes(TOKEN_VALUE), 'preflight 只报来源不报值');
 
-  const persistent = createGiteeAdapter({ runner, env: SECRET_ENV, persistentTokenProbe: () => true });
-  const persistentResult = persistent.preflight();
-  assert.equal(persistentResult.ok, false);
-  assert.equal(persistentResult.reason, ADAPTER_REASONS.GITEE_PERSISTENT_TOKEN);
+  // 落盘凭据：默认 warn 照常放行；只有显式 block 才拒绝。
+  const warned = createGiteeAdapter({ runner, env: SECRET_ENV, persistentTokenProbe: () => true });
+  const warnedResult = warned.preflight();
+  assert.equal(warnedResult.ok, true);
+  assert.equal(warnedResult.persistentToken, 'detected');
+  assert.equal(warnedResult.persistentTokenPolicy, 'warn');
+  assert.match(warnedResult.message, /warn/);
+
+  const blocked = createGiteeAdapter({
+    runner,
+    env: SECRET_ENV,
+    persistentTokenProbe: () => true,
+    persistentTokenPolicy: 'block',
+  });
+  const blockedResult = blocked.preflight();
+  assert.equal(blockedResult.ok, false);
+  assert.equal(blockedResult.reason, ADAPTER_REASONS.GITEE_PERSISTENT_TOKEN);
   assert.equal(runner.calls.length, 0, 'preflight 永不起子进程');
 });
 
 test('describe() 脱敏：报路径种类与命令面，不回显令牌与绝对路径（AC-22）', () => {
   const runner = fakeRunner();
-  const adapter = createGiteeAdapter({ runner, cliPath: ABSOLUTE_BIN, env: SECRET_ENV, host: 'gitee.example' });
+  const adapter = createGiteeAdapter({ runner, cliPath: ABSOLUTE_BIN, env: SECRET_ENV, authEnv: TOKEN_NAME, host: 'gitee.example' });
   const described = adapter.describe();
   const text = JSON.stringify(described);
   assert.equal(described.provider, 'gitee');
@@ -508,10 +542,10 @@ test('静态不变量：零 gh-adapter 导入、零 GH_ 语义常量、唯一 ch
   assert.ok(!/require\(\s*['"][^'"]*gh-adapter/.test(src), '适配器不得 require gh-adapter');
   assert.ok(!/[f]rom\s+['"]?\.\.?\/[^'"]*devops/.test(src), '适配器不得引用 devops 源码');
   assert.ok(!/\bDevopsReadError\b/.test(src), '不得搬用 devops 的错误类型');
-  // GH_* 只允许作为凭据/环境变量名出现（企业 CLI 的令牌与主机变量），语义常量一个都不许有。
+  // GH_* 只允许作为主机变量名在注释里出现；语义常量与凭据默认值一个都不许有（r10：authEnv 默认空）。
   const ghIdentifiers = [...src.matchAll(/\bGH_[A-Z0-9_]+\b/g)].map((match) => match[0]);
-  assert.deepEqual([...new Set(ghIdentifiers)].sort(), ['GH_HOST', 'GH_TOKEN']);
-  for (const semantic of ['GH_COMMANDS', 'GH_FIELDS', 'GH_LIST_LIMIT', 'GH_ARGV_FLAGS', 'GH_PROVIDER']) {
+  assert.deepEqual([...new Set(ghIdentifiers)].sort(), ['GH_HOST']);
+  for (const semantic of ['GH_COMMANDS', 'GH_FIELDS', 'GH_LIST_LIMIT', 'GH_ARGV_FLAGS', 'GH_PROVIDER', 'GH_TOKEN']) {
     assert.ok(!src.includes(semantic), `适配器不得含 ${semantic}`);
   }
   // 唯一 execFile 出口：适配器不建子进程、不 import child_process。
@@ -554,7 +588,7 @@ test('构造期拒绝不自建子进程：runner 必填且必须是对象（AC-2
   });
   const runner = fakeRunner();
   const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
-  assert.equal(adapter.provider, GITEE_PROVIDER);
+  assert.equal(adapter.provider, GITEE_PLATFORM);
   assert.equal(adapter.logicalName, GITEE_LOGICAL_NAME);
   for (const member of ['preflight', 'invoke', 'read', 'describe']) {
     assert.equal(typeof adapter[member], 'function', `缺成员 ${member}`);

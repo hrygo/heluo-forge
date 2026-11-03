@@ -2,11 +2,11 @@
  * `@heluo/forge-devops` 宿主插件装配层（#15 / D4，设计准入见能力面设计 §6.1；T7 装配）。
  *
  * 只做**装配**，不做业务判定：策略门禁判"能不能做"、固定 argv 白名单判"有没有这条命令"、
- * 纯函数流程判"该不该做、做完能否核对"。本文件把三者接起来，并对外暴露 9 个工具、
+ * 纯函数流程判"该不该做、做完能否核对"。本文件把三者接起来，并对外暴露 4 个工具、
  * 一个命令面与一个服务。
  *
  * 端口约定（D-1 起本包自己就是生产者，注入键仍然优先）：
- * - 流程协作者（配置 → runner → dop/gh 适配器 → 门禁 → 动作）由 `flow.mjs` 组合并在装配时创建；
+ * - 流程协作者（配置 → runner → dop 适配器 → 只读面 → 上下文卡）由 `flow.mjs` 组合并在装配时创建；
  *   宿主若已通过服务键 `devopsFlow` 提供实现，以宿主为准（企业侧替换点，不允许两套同时跑）。
  * - 只读适配器同理：宿主经 `devopsReader` 注入优先；没有注入且运行时配置可用时，用流程协作者自带的
  *   只读面（同一批固定 argv），否则可见地 `no-reader`/`CONFIG_MISSING`，绝不返回空结果冒充成功。
@@ -29,7 +29,7 @@ import {
   READ_ACTIONS,
   READ_REASONS,
 } from './read.mjs';
-import { buildDevopsTools, FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS } from './tools.mjs';
+import { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS } from './tools.mjs';
 import { writeArtifact } from './artifacts.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
 import { createDevopsFlow } from './flow.mjs';
@@ -55,7 +55,7 @@ export const inject = ['tools', 'policy'];
 
 /** 宿主服务键；提供方（企业 CLI 适配器）用它注入只读端口。 */
 export const READER_KEY = 'devopsReader';
-/** 流程协作者端口：dop/gh 适配器、门禁适配、写动作与上下文卡的装配体。 */
+/** 流程协作者端口：dop 适配器、只读面与上下文卡的装配体（写动作已归 `@heluo/forge-gitee`）。 */
 export const FLOW_KEY = 'devopsFlow';
 /** 本插件对外暴露的服务键。 */
 export const SERVICE_KEY = 'devops';
@@ -86,10 +86,11 @@ export {
   READ_REASONS,
   READ_STATUSES,
 } from './read.mjs';
-export { buildDevopsTools, FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS } from './tools.mjs';
+export { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS } from './tools.mjs';
 export { ARTIFACT_KINDS, artifactPath, renderFrontMatter, writeArtifact } from './artifacts.mjs';
 export { ENTRY_HELP, ENTRY_NAME, parseChangeId, registerEntry } from './entry.mjs';
-export { createDevopsFlow, createDevopsReader } from './flow.mjs';
+export { createDevopsFlow } from './flow.mjs';
+export { createDevopsReader } from './read.mjs';
 
 /** 流程协作者与只读适配器的形状判据：形状不对就不当注入，宁可退回自建或显式拒绝。 */
 const isFlowLike = (value) =>
@@ -214,10 +215,10 @@ export function apply(ctx, rawConfig = {}) {
   let cliConfig = null;
   let cliUnavailable = null;
 
-  // D-1：流程协作对象在包内生产——配置（三层合并）→ runner → dop/gh → 门禁 → 动作 → 读。
-  // 之前只认 `ctx.get(FLOW_KEY)`，仓库里没有生产者，9 个工具中 5 个流程工具恒 FLOW_UNAVAILABLE。
+  // D-1：流程协作对象在包内生产——配置（三层合并）→ runner → dop → 只读面 → 上下文卡。
+  // 之前只认 `ctx.get(FLOW_KEY)`，仓库里没有生产者，4 个工具中 2 个流程工具恒 FLOW_UNAVAILABLE。
   const injectedFlow = typeof ctx.get === 'function' ? ctx.get(FLOW_KEY) : undefined;
-  // 写路径的门禁适配在装配层做一次，流程侧不再各造一份（读路径仍直接用 policy.executeAction）。
+  // 策略门禁适配仍在装配层构造一次：本包不再持有写动作，但读路径与流程侧共用同一份策略视图。
   const guard = createPolicyGuard({ policy });
   /** 包内生产的那份流程随配置变化重建；宿主注入的那份归宿主，不重建。 */
   const ownedFlow = !isFlowLike(injectedFlow);
@@ -341,8 +342,6 @@ export function apply(ctx, rawConfig = {}) {
 
   // 命令面是可选的：宿主没装 commands 时不算故障，但状态必须可见。
   const entryStatus = commandFaceStatus(ctx);
-  // 会话内写动作台账：只防同一次会话里的重复写，跨会话以平台回查为准（不做第二真源）。
-  const ledger = new Map();
   let callSeq = 0;
   let currentChangeId = null;
 
@@ -399,26 +398,11 @@ export function apply(ctx, rawConfig = {}) {
     return flow[method](input);
   };
 
-  /** 写动作台账：幂等键优先，缺键时退回"动作|目标"，只用于会话内可见。 */
-  const record = (action, target, result) => {
-    const key = typeof result?.idempotencyKey === 'string'
-      ? result.idempotencyKey
-      : `${action}|${target}`;
-    ledger.set(key, {
-      action,
-      target,
-      status: result?.status ?? 'unknown',
-      reason: result?.reason ?? null,
-      at: new Date().toISOString(),
-    });
-    return result;
-  };
-
   const service = {
     /** 只读动作清单（写动作永不出现在这里）。 */
     readActions: () => [...READ_ACTIONS],
-    /** 已注册的工具名（模型可见面）：4 只读 + 5 流程工具。 */
-    toolNames: () => [...Object.keys(READ_TOOLS), ...Object.keys(FLOW_TOOLS)],
+    /** 已注册的工具名（模型可见面）：4 条 dop 工具，枚举只有 `tools.mjs` 一份。 */
+    toolNames: () => [...DEVOPS_TOOLS],
     /** 当前状态：没有可用适配器时为 `no-reader`（可见地 fail closed）。 */
     status: () => (reader === undefined ? 'no-reader' : 'ready'),
     /** 命令行配置的**脱敏**描述（origin / 缺哪一层 / 指引文案，不含路径与 endpoint）。 */
@@ -448,8 +432,6 @@ export function apply(ctx, rawConfig = {}) {
     rediscover: () => refreshSnapshot(),
     /** 命令面状态：`registered` 或 `no-command-face`（工具面照常可用）。 */
     entryStatus: () => entryStatus,
-    /** 会话内写动作台账（只读副本；不持久化、不跨会话）。 */
-    ledger: () => [...ledger.values()],
     /** 当前会话绑定的变更号（入口写入；产物落盘依赖它）。 */
     changeId: () => currentChangeId,
     /**
@@ -491,20 +473,8 @@ export function apply(ctx, rawConfig = {}) {
       }
       return admitted;
     },
-    /** 聚合读：一次取回变更记录、承建判定与关联对象，产出上下文卡（不做多次往返拼事实）。 */
+    /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）。 */
     context: async (input = {}) => callFlow('change.context', 'context', input),
-    /** 建/评 Issue（`issue.create_or_update`）：四状态 + 幂等 + 回读确认在流程侧完成。 */
-    issueWrite: async (input = {}) => record(
-      FLOW_ACTIONS.ISSUE,
-      input.target,
-      await callFlow('issue.write', 'issueWrite', input),
-    ),
-    /** 建 PR / 追加审查评论（`pr.create_or_update` / `review.ai.publish`）。 */
-    prWrite: async (input = {}) => record(
-      input.op === 'comment' ? FLOW_ACTIONS.PR_COMMENT : FLOW_ACTIONS.PR,
-      input.target,
-      await callFlow('pr.write', 'prWrite', input),
-    ),
     /**
      * 澄清回写：dop 命令面没有澄清写命令，因此恒 `denied` 且**零调用**。
      * 拒绝必须可见（澄清单留在本地产物），不能静默跳过，也不能用评论冒充平台字段。
@@ -571,7 +541,6 @@ export function apply(ctx, rawConfig = {}) {
     flowProvideOff?.();
     readerProvideOff?.();
     disposeProvide?.();
-    ledger.clear();
     currentChangeId = null;
   };
   // Cordis 以 `new` 运行普通函数插件，返回值不当作 effect 收集；显式登记卸载。

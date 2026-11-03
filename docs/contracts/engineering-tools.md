@@ -53,7 +53,7 @@
 | `change.read` | 明确变更号、当前用户 | 要求、验收、归属与版本 | 读；只读基线 |
 | `change.clarification.write` | 已确认的澄清、目标对象与原版本 | 原平台新版本及关联确认 | 研发写；目标待批，当前禁用 |
 | `change.progress.write` | 平台确认的开始/进展字段及语义 | 实际记录值与版本 | 研发写；不得改最终完成/结束时间 |
-| `repository.read`, `issue.read`, `pr.read` | 明确仓库/对象 | 状态与可核对引用 | 读；只读基线 |
+| `gitee.repository.read`, `gitee.issue.read`, `gitee.pr.read` | 明确仓库/对象 | 状态与可核对引用 | 读；只读基线；由 `@heluo/forge-gitee` 唯一实现 |
 | `issue.create_or_update` | 当前变更、交付项、验收及关联 | 已创建/更新对象引用 | 研发写；目标待批 |
 | `branch.create`, `commit.record`, `pr.create_or_update` | 目标仓库/分支、变更号、受控差异范围 | 分支、提交或 PR 正式引用 | 本地/远端写；目标待批；提交前缀不可丢 |
 | `review.ai.publish` | 真实审查结果、对应 PR 版本及可信来源依据 | 可验证为 AI 来源的意见记录 | 评审写；不是人工批准 |
@@ -62,6 +62,20 @@
 | `delivery.read` | 当前变更及交付引用 | 构建、制品、UAT 状态 | 条件读；接口/必要性待验 |
 
 能力地图中的测试用例/缺陷查询及生产发布信息查询为条件需求，不在当前最小动作目录；本稿尚不定义 `test.read` / `release.read` 的可执行映射。若需启用，须由提供方先冻结对象、动作、权限与结果语义；不得通过 `delivery.read` 扩大测试/生产访问范围。
+
+### 3.1 平台归属与实现映射（r10 收敛）
+
+动作目录是业务语义，落到两个 bundle 的分工时只有一条轴——**按平台切**：dop 只讲变更流程，Gitee 只讲代码托管。
+
+| 动作族 | 归属 | 实现动作标识 | 登记状态 |
+|---|---|---|---|
+| 变更读取与澄清回写 | `@heluo/forge-devops` | `change.read`；`change.clarification.write` | 读随包登记；澄清回写默认不登记即拒绝 |
+| 仓库 / Issue / PR 读取 | `@heluo/forge-gitee` | `gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read` | 随包登记（只读） |
+| 交付就绪判定 | `@heluo/forge-gitee` | `gitee.delivery.judge` | 随包登记为只读判定（`target: change`、`egress: allow`），只判定不执行 |
+| Issue / PR / 评审写 | `@heluo/forge-gitee` | `gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record` | 默认不登记即拒绝；开闸需审批台账条目与 `confirm{repo,object}` |
+| 本地提交与推送 | `@heluo/forge-gitee` | `git commit` 是**本地动作**（不进策略目录，首行 `[变更号]` 由 `git-message.mjs` 强校验）；`git push` 是远端写，动作 `gitee.git.push` | push 默认不登记即拒绝，登记后仍需确认与审批 |
+
+r10 起 devops 不再持有仓库/Issue/PR 的读写实现（gh 侧模块已删除），`change_context` 的承建仓库段降级为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。`git commit` 不进策略目录不是放宽：策略对任何 `enabled` 的非读动作恒要求审批台账，而提交必须发生，因此改为本地动作 + 提交信息单源校验。
 
 不提供 `pr.merge`、CI 触发/重跑、生产部署/回滚/审批、故事/变更最终完成动作；旧项目中的 `dop change done` 不进入本清单。不提供通用 `run(command)` 型企业代理，也不允许通过别名或改用 Shell 绕过被拒绝的业务动作。
 

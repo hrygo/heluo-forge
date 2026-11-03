@@ -12,9 +12,12 @@
  *   3. 策略服务：`ctx.get('policy')` 且有 `executeAction` → `GITEE_POLICY_UNAVAILABLE`
  *   4. 目录自检：三个 `gitee.*` 只读动作必须已登记且 `enabled` → `GITEE_ACTION_UNREGISTERED`
  *      （`detail.missing` 列全）。缺策略、缺目录都不降级成"无策略只读"。
- *   5. 依赖装配：`resolveGiteeConfig` → runner/adapter/guard/session（**惰性**：`preflight()`
- *      在首次真正调用时执行，装配期不起子进程、不读凭据内容）
- *   6. `provide('gitee', service)` + `provide('giteeAdapter', adapter)` + 注册 8 个工具
+ *      **只查 gitee 自己的三条**：默认目录是 devops 与 gitee 的 5 条并集（含 `change.read`），
+ *      本插件不依赖那条 dop 动作，要求它存在就是耦合到另一个平台的配置面。
+ *   5. 依赖装配：`resolveGiteeConfig` → runner → git adapter / CLI adapter → guard → session
+ *      （**惰性**：`preflight()` 在首次真正调用时执行，装配期不起子进程、不读凭据内容；
+ *      但 git 适配器的 argv 表与 `runGit` 出口在装配期就校验，缺 `runGit` 直接拒绝挂载）
+ *   6. `provide('gitee', service)` + `provide('giteeAdapter', adapter)` + 注册 10 个工具
  *   7. `ctx.effect(() => teardown)`：卸载时撤工具、撤服务，`status()` 变 `disposed`
  *
  * 顶层没有任何副作用：不访问 `ctx`、不读 `process.env`、不起子进程——插件模块在宿主
@@ -29,7 +32,7 @@
  * | 成员 | 语义 |
  * |---|---|
  * | `provider` | 恒为 `'gitee'`（信封与动作命名空间的唯一来源） |
- * | `readActions()` / `toolNames()` | 3 个只读动作 / 8 个工具名（顺序固定） |
+ * | `readActions()` / `toolNames()` | 3 个只读动作 / 10 个工具名（顺序固定） |
  * | `writeTools()` | 4 个受控写工具名（交付判定是只读能力，归 `GITEE_JUDGE_TOOLS`，不算写工具） |
  * | `status()` | `'ready'`（已装配）或 `'disposed'`（已卸载） |
  * | `describe()` | 脱敏配置描述（不含令牌内容与绝对路径） |
@@ -38,11 +41,13 @@
  * | `execute({action,target,payload,confirm,…})` | 受控动作：**直通** `guard.execute`（唯一准入点），不做二次解释、不重试、不重放 |
  * | `write(request)` | `execute` 的同义入口（两侧工具定义的叫法不同，语义只有一套） |
  * | `invoke(command,params,purpose)` | 经适配器调用 CLI（仍是唯一 `execFile` 出口，argv 由适配器白名单构造） |
- * | `adapter()` / `guard()` / `session()` | 只给同包内工具定义用的装配件（幂等台账是进程内 Map，不落盘） |
+ * | `adapter()` / `guard()` / `session()` / `git()` | 只给同包内工具定义用的装配件（幂等台账是进程内 Map，不落盘） |
+ * | `git()` | 本地 git 命令面（`commit` 是本地动作、`push` 走受控动作 `gitee.git.push`）；工具层只拿端口，不持 runner |
  */
-import { GITEE_PROVIDER, createGiteeAdapter } from './gitee-adapter.mjs';
+import { createGiteeAdapter } from './gitee-adapter.mjs';
 import { createGiteeRunner, detectPersistentToken } from './gitee-cli.mjs';
-import { createGiteeGuard } from './gitee-guard.mjs';
+import { createGiteeGitAdapter } from './gitee-git.mjs';
+import { GITEE_PLATFORM, createGiteeGuard } from './gitee-guard.mjs';
 import { GITEE_READ_ACTIONS, normalizeGiteeReadResult } from './gitee-read.mjs';
 import { createGiteeSession } from './gitee-session.mjs';
 import { GITEE_TOOLS, GITEE_WRITE_TOOLS, buildGiteeTools } from './gitee-tools.mjs';
@@ -132,7 +137,7 @@ function assertHost(ctx) {
   if (typeof ctx?.tools?.register !== 'function') {
     throw mountError(
       GITEE_REASONS.HOST_UNAVAILABLE,
-      '宿主缺少 ctx.tools.register：8 个工具无处注册，静默装一半比不装更危险',
+      '宿主缺少 ctx.tools.register：10 个工具无处注册，静默装一半比不装更危险',
       { missing: ['ctx.tools.register'] },
     );
   }
@@ -163,6 +168,10 @@ function assertPolicy(ctx) {
  * 这一项不是防手滑，而是把"装了插件但没配目录"变成装配期可见的失败。空目录 / 少一条 /
  * 被 `enabled: false` 关掉的目录，以前会装上一个每次调用都 `denied` 的工具面——看起来
  * 装了，其实什么都查不到；现在直接拒绝挂载并列出缺哪些动作。
+ *
+ * 自检面**只含 gitee 自己的三条读**（`GITEE_READ_ACTIONS`），不含并集里的 `change.read`：
+ * 默认目录是两包共用的 5 条并集，`change.read` 属于 devops 的 dop 流程，gitee 插件不依赖它；
+ * 把它写进自检等于让 gitee 的单装前置条件依赖另一个平台的配置。
  */
 function assertReadCatalog(policy) {
   const read = typeof policy?.catalog?.get === 'function' ? (action) => policy.catalog.get(action) : () => undefined;
@@ -186,7 +195,7 @@ function denialError(reason, message, detail) {
   return error;
 }
 
-function createService({ ctx, policy, adapter, guard, session, config }) {
+function createService({ ctx, policy, adapter, gitAdapter, guard, session, config }) {
   let status = 'ready';
   let callSeq = 0;
   const nextCallId = (kind) => {
@@ -232,7 +241,7 @@ function createService({ ctx, policy, adapter, guard, session, config }) {
   }
 
   return Object.freeze({
-    provider: GITEE_PROVIDER,
+    provider: GITEE_PLATFORM,
     readActions: () => [...GITEE_READ_ACTIONS],
     toolNames: () => [...GITEE_TOOLS],
     // 只报 4 个受控写：判定（`GITEE_JUDGE_TOOLS`）是随包默认登记的只读能力，混进"写工具"
@@ -246,6 +255,9 @@ function createService({ ctx, policy, adapter, guard, session, config }) {
     write: execute,
     invoke: (command, params, purpose) => adapter.invoke(command, params, purpose),
     adapter: () => adapter,
+    // 本地 git 命令面：工具层只拿端口（`git().commit()` / `git().push()`），永不直接持有
+    // runner；push 的准入仍由 `guard.execute` 按动作 `gitee.git.push` 裁决。
+    git: () => gitAdapter,
     guard: () => guard,
     session: () => session,
     dispose: () => {
@@ -274,7 +286,21 @@ export function apply(ctx, rawConfig = {}) {
     timeoutMs: resolved.timeoutMs,
     // 用配置里的凭据变量名做脱敏（不是默认那一个）：换了 authEnv 也照样抹掉输出里的令牌。
     authEnv: resolved.authEnv,
+    // 落盘凭据的处置策略归配置层（缺省 'warn'）：'block' 只留给合规场景。
+    persistentTokenPolicy: resolved.persistentToken,
   });
+  let gitAdapter;
+  try {
+    // git 与 gitee CLI 共用同一个出口：适配器只要 runner（`runGit`），不自己起子进程。
+    // 工作目录缺省用进程 cwd（r10 不新增 repoRoot 配置键）；`cwd` 传 undefined 即默认。
+    gitAdapter = createGiteeGitAdapter({ runner, cwd: resolved.gitCwd });
+  } catch (error) {
+    throw mountError(
+      GITEE_REASONS.TOOLS_UNAVAILABLE,
+      `gitee git 命令面无法装配：${error?.message ?? error}`,
+      { error },
+    );
+  }
   const adapter = createGiteeAdapter({
     runner,
     cliPath: resolved.cliPath,
@@ -284,11 +310,12 @@ export function apply(ctx, rawConfig = {}) {
     // 落盘凭据自检（AC-22）在装配期注入：CLI 配置目录里有持久令牌时动作层必须阻断，
     // 而不是只靠适配器单测覆盖。
     persistentTokenProbe: () => detectPersistentToken({ env: process.env }).blocked,
+    persistentTokenPolicy: resolved.persistentToken,
   });
-  const guard = createGiteeGuard({ policy, provider: GITEE_PROVIDER });
+  const guard = createGiteeGuard({ policy });
   const session = createGiteeSession();
 
-  const service = createService({ ctx, policy, adapter, guard, session, config });
+  const service = createService({ ctx, policy, adapter, gitAdapter, guard, session, config });
 
   let tools;
   try {
@@ -350,6 +377,7 @@ export function apply(ctx, rawConfig = {}) {
  */
 export * from './runtime-config.mjs';
 export * from './gitee-cli.mjs';
+export * from './gitee-git.mjs';
 export * from './gitee-adapter.mjs';
 export * from './gitee-read.mjs';
 export * from './gitee-guard.mjs';

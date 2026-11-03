@@ -93,6 +93,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 各扩展包与两个独立服务的详细设计状态与路径（含实现与验证入口） |
+| Issue 交付调整提案 | [Issue 交付单元与研发职责调整方案](requirements/issue-delivery-adjustment-proposal.md) | 代拟草案：变更／Issue／单仓库交付模型、职责收敛与待验证缺口；未替代现行基线，未批准删除 SDD 或实施新流程 |
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
 | 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | 文件 backend / OS keychain / 迁移与不可用时的 fail-closed 口径 |
 | 客户端标识 | [DSH 客户端标识（UA）方案设计](<design/client-identification.md>) | 使用 DSH 默认 UA，网关按关键字匹配；不改写宿主 UA，匹配能力及企业链路待确认 |

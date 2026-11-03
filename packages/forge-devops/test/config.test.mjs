@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 import {
   CONFIG_REASONS,
   ConfigStandard,
-  DEFAULT_GH_BIN,
   DEFAULT_SOURCE_TYPE,
   DEFAULT_TIMEOUT_MS,
   ENV_KEYS,
@@ -30,13 +29,11 @@ const SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..',
 const DOP_BIN = '/secret/bin/dop';
 const ENDPOINT = 'https://secret-endpoint.example/dop';
 
-test('ENV_KEYS 点名六个环境变量且互不重复（文档表格与代码同源）', () => {
+test('ENV_KEYS 点名四个环境变量且互不重复（文档表格与代码同源）', () => {
   const names = Object.values(ENV_KEYS);
   assert.deepEqual(names, [
     'FORGE_DEVOPS_DOP_BIN',
     'FORGE_DEVOPS_DOP_ENDPOINT',
-    'FORGE_DEVOPS_GH_BIN',
-    'FORGE_DEVOPS_GH_OWNER',
     'FORGE_DEVOPS_SOURCE_TYPE',
     'FORGE_DEVOPS_TIMEOUT_MS',
   ]);
@@ -58,21 +55,17 @@ test('未配置时也不接受 undefined 入参（防御式默认）', () => {
   assert.equal(result.reason, CONFIG_REASONS.MISSING);
 });
 
-test('最小配置即可用：其余取非机密默认值（gh 走 PATH、来源 mock、超时 20s）', () => {
+test('最小配置即可用：其余取非机密默认值（来源 mock、超时 20s）', () => {
   const result = resolveRuntimeConfig({ FORGE_DEVOPS_DOP_BIN: DOP_BIN });
   assert.equal(result.ok, true);
   assert.deepEqual(Object.keys(result.value).sort(), [
     'dopBin',
     'dopEndpoint',
-    'ghBin',
-    'ghOwner',
     'sourceType',
     'timeoutMs',
   ]);
   assert.equal(result.value.dopBin, DOP_BIN);
   assert.equal(result.value.dopEndpoint, undefined);
-  assert.equal(result.value.ghBin, DEFAULT_GH_BIN);
-  assert.equal(result.value.ghOwner, undefined);
   assert.equal(result.value.sourceType, DEFAULT_SOURCE_TYPE);
   assert.equal(result.value.timeoutMs, DEFAULT_TIMEOUT_MS);
   assert.deepEqual(SOURCE_TYPES, ['mock', 'enterprise']);
@@ -82,8 +75,6 @@ test('完整配置原样传递，并去掉首尾空白', () => {
   const result = resolveRuntimeConfig({
     FORGE_DEVOPS_DOP_BIN: `  ${DOP_BIN}  `,
     FORGE_DEVOPS_DOP_ENDPOINT: ENDPOINT,
-    FORGE_DEVOPS_GH_BIN: ' /usr/local/bin/gh ',
-    FORGE_DEVOPS_GH_OWNER: 'acme',
     FORGE_DEVOPS_SOURCE_TYPE: 'enterprise',
     FORGE_DEVOPS_TIMEOUT_MS: '45000',
   });
@@ -91,8 +82,6 @@ test('完整配置原样传递，并去掉首尾空白', () => {
   assert.deepEqual({ ...result.value }, {
     dopBin: DOP_BIN,
     dopEndpoint: ENDPOINT,
-    ghBin: '/usr/local/bin/gh',
-    ghOwner: 'acme',
     sourceType: 'enterprise',
     timeoutMs: 45_000,
   });
@@ -112,21 +101,17 @@ test('describeRuntimeConfig 只给「已配/未配」布尔位，不回显路径
   const result = resolveRuntimeConfig({
     FORGE_DEVOPS_DOP_BIN: DOP_BIN,
     FORGE_DEVOPS_DOP_ENDPOINT: ENDPOINT,
-    FORGE_DEVOPS_GH_OWNER: 'acme',
   });
   const described = describeRuntimeConfig(result.value);
   assert.deepEqual({ ...described }, {
     dopBin: true,
     dopEndpoint: true,
-    ghBin: true,
-    ghOwner: true,
     sourceType: 'mock',
     timeoutMs: DEFAULT_TIMEOUT_MS,
   });
   const text = JSON.stringify(described);
   assert.ok(!text.includes(DOP_BIN), '不得回显 dop 路径');
   assert.ok(!text.includes('secret-endpoint.example'), '不得回显 endpoint');
-  assert.ok(!text.includes('acme'), '组织名同样按值处理，不外泄');
 });
 
 test('describeRuntimeConfig 接受 resolve 结果或裸 value', () => {
@@ -139,8 +124,6 @@ test('describeRuntimeConfig 对未配置/空值返回全 false 与 null 枚举',
     const described = describeRuntimeConfig(input);
     assert.equal(described.dopBin, false);
     assert.equal(described.dopEndpoint, false);
-    assert.equal(described.ghBin, false);
-    assert.equal(described.ghOwner, false);
     assert.equal(described.sourceType, null);
     assert.equal(described.timeoutMs, null);
   }
@@ -184,14 +167,6 @@ test('endpoint 非法（相对地址 / 非 http(s) / 内嵌凭据）→ CONFIG_I
     const result = resolveRuntimeConfig({ FORGE_DEVOPS_DOP_BIN: DOP_BIN, FORGE_DEVOPS_DOP_ENDPOINT: endpoint });
     assert.equal(result.ok, false, `endpoint=${endpoint} 应被拒绝`);
     assert.deepEqual(result.invalid, ['FORGE_DEVOPS_DOP_ENDPOINT']);
-  }
-});
-
-test('ghOwner 非法（带斜杠 / 空白 / 连字符开头）→ CONFIG_INVALID', () => {
-  for (const owner of ['acme/demo', 'ac me', '-acme']) {
-    const result = resolveRuntimeConfig({ FORGE_DEVOPS_DOP_BIN: DOP_BIN, FORGE_DEVOPS_GH_OWNER: owner });
-    assert.equal(result.ok, false, `ghOwner=${owner} 应被拒绝`);
-    assert.deepEqual(result.invalid, ['FORGE_DEVOPS_GH_OWNER']);
   }
 });
 
@@ -253,11 +228,6 @@ const FIELD_CASES = [
   { field: 'dopEndpoint', raw: 'dop.example/api', ok: false },
   { field: 'dopEndpoint', raw: 'ftp://dop.example/api', ok: false },
   { field: 'dopEndpoint', raw: CREDENTIAL_ENDPOINT, ok: false },
-  { field: 'ghBin', raw: ' /usr/local/bin/gh ', ok: true, value: '/usr/local/bin/gh' },
-  { field: 'ghBin', raw: 42, ok: false },
-  { field: 'ghOwner', raw: 'acme', ok: true, value: 'acme' },
-  { field: 'ghOwner', raw: '-acme', ok: false },
-  { field: 'ghOwner', raw: 'ac me', ok: false },
   { field: 'sourceType', raw: ' Enterprise ', ok: true, value: 'enterprise' },
   { field: 'sourceType', raw: 'prod', ok: false },
   { field: 'timeoutMs', raw: '15000', ok: true, value: 15_000 },
@@ -303,20 +273,16 @@ test('validateConfigField 与 resolveRuntimeConfig 结论一致（同一规则�
   }
 });
 
-test('六键全覆盖：每个逻辑字段都有合法/非法样例（不存在漏校验的键）', () => {
+test('四键全覆盖：每个逻辑字段都有合法/非法样例（不存在漏校验的键）', () => {
   const valid = {
     dopBin: DOP_BIN,
     dopEndpoint: ENDPOINT,
-    ghBin: 'gh',
-    ghOwner: 'acme',
     sourceType: 'mock',
     timeoutMs: 20_000,
   };
   const invalid = {
     dopBin: 42,
     dopEndpoint: 'ftp://x/api',
-    ghBin: 42,
-    ghOwner: '-x',
     sourceType: 'prod',
     timeoutMs: 0,
   };
@@ -365,13 +331,12 @@ test('ConfigStandard.validate 非法输入返回 issues（每条带字段 path�
     dopBin: 42,
     sourceType: 'prod',
     timeoutMs: 0,
-    ghOwner: '-acme',
     dopEndpoint: 'dop.example/api',
   });
   assert.equal('value' in result, false, '有错就不给半成品配置');
   assert.deepEqual(
     result.issues.map((issue) => issue.path),
-    [['dopBin'], ['dopEndpoint'], ['ghOwner'], ['sourceType'], ['timeoutMs']],
+    [['dopBin'], ['dopEndpoint'], ['sourceType'], ['timeoutMs']],
   );
   for (const issue of result.issues) assert.equal(typeof issue.message, 'string');
 });
@@ -386,6 +351,19 @@ test('ConfigStandard.validate 对非对象输入与未知键都返回 issues，�
   assert.deepEqual(ConfigStandard['~standard'].validate({ dopBin: DOP_BIN, dopbin: DOP_BIN }), {
     issues: [{ message: '未知配置项：dopbin', path: ['dopbin'] }],
   });
+});
+
+test('退役键 ghBin/ghOwner 静默忽略：老 profile 升级后插件仍激活（AC：不报错）', () => {
+  // r10 删了 gh 侧配置面。历史 YAML 里残留的 ghBin 若被当作「未知配置项」，
+  // 宿主装配期会整条 entry 不激活——插件消失，且 dump-config 看不出来。
+  const result = ConfigStandard['~standard'].validate({
+    dopBin: DOP_BIN,
+    ghBin: 'gh',
+    ghOwner: 'acme-corp',
+  });
+  assert.deepEqual(result, { value: { dopBin: DOP_BIN } }, '退役键被丢弃且不进运行时值');
+  // 其余未知键仍按非法处理（退役键是显式白名单，不是放开校验）。
+  assert.equal('issues' in ConfigStandard['~standard'].validate({ ghBinx: 'gh' }), true);
 });
 
 test('ConfigStandard.validate 把缺省配置（undefined/null）当零配置：等价 {}，绝不报错', () => {

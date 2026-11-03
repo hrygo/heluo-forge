@@ -23,7 +23,7 @@ const SNAPSHOT = Object.freeze({
   writable: Object.freeze({ ok: true, documentPath: true }),
   ready: true,
   reason: null,
-  guidance: '命令行工具已就绪（dop 来自自动发现 · gh 来自自动发现）',
+  guidance: '命令行工具已就绪（dop 来自自动发现）',
   entries: Object.freeze({}),
   host: Object.freeze({ platform: 'win32', arch: 'x64', node: process.version }),
 });
@@ -221,6 +221,13 @@ test('POST 形状校验：未知顶层键 / 未知配置项 / fields 非对象 /
   assert.equal(stray.status, 400);
   assert.equal(stray.body.errors.nope, '未知配置项');
 
+  // r10 收键：ghBin/ghOwner 已随模块删除，请求里再出现就是未知配置项（白名单随 CLI_FIELDS 收紧）。
+  for (const legacy of ['ghBin', 'ghOwner']) {
+    const retired = await post(api, { body: { fields: { [legacy]: null } } });
+    assert.equal(retired.status, 400, `退役键 ${legacy} 必须被拒`);
+    assert.equal(retired.body.errors[legacy], '未知配置项');
+  }
+
   assert.equal((await post(api, { body: { fields: [] } })).status, 400);
   assert.equal((await post(api, { body: { revision: 7, fields: {} } })).status, 400);
   assert.equal(apiAccess(api).calls.save.length, 0, '形状不对不进 save');
@@ -352,7 +359,7 @@ test('toNodeRoute：GET 走快照、POST 走保存、未知路径 404、其他�
     method: 'POST',
     url: ENDPOINT,
     headers: { [CLI_REQUEST_HEADER]: '1', 'content-type': 'application/json' },
-    body: { revision: SNAPSHOT.revision, fields: { ghBin: null } },
+    body: { revision: SNAPSHOT.revision, fields: { dopEndpoint: null } },
   });
   assert.equal(save.status, 200);
   assert.equal(save.body.ok, true);
@@ -379,9 +386,9 @@ test('toNodeRoute：流式请求体（无 req.body）也能读出，超限直接
     },
   });
 
-  const ok = await callRoute(route, stream(['{"fields":', '{"ghBin":null}}']));
+  const ok = await callRoute(route, stream(['{"fields":', '{"dopEndpoint":null}}']));
   assert.equal(ok.status, 200);
-  assert.deepEqual(apiAccess(api).calls.save[0], { revision: '', fields: { ghBin: null } });
+  assert.deepEqual(apiAccess(api).calls.save[0], { revision: '', fields: { dopEndpoint: null } });
 
   const big = await callRoute(route, stream(['x'.repeat(70000)]));
   assert.equal(big.status, 400);
@@ -404,8 +411,8 @@ test('toNodeRoute：路径带尾斜杠仍命中，options.path 可覆盖端点�
 test('端到端主路径：GET 就绪 → POST 保存落盘 → GET 变 config → 旧 revision 被 409 挡住（真 access + 真路由）', async () => {
   const TOOLDIR = 'C:\\tools';
   const CHOSEN = 'C:\\config\\dop.exe';
-  const dirs = { [TOOLDIR]: ['dop.exe', 'gh.exe'] };
-  const files = { [`${TOOLDIR}\\dop.exe`]: true, [`${TOOLDIR}\\gh.exe`]: true, [CHOSEN]: true };
+  const dirs = { [TOOLDIR]: ['dop.exe'] };
+  const files = { [`${TOOLDIR}\\dop.exe`]: true, [CHOSEN]: true };
   const miss = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
   const fs = {
     readdirSync(dir) {

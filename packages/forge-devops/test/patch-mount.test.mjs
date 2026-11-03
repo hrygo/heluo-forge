@@ -198,7 +198,7 @@ test('补丁层给 devops 挂载所需的最小策略目录，并显式配置审
 /**
  * QA D-1（2026-10-29，P1）：补丁层那一行不写 `config:` 时，宿主把 `undefined` 交给
  * `ConfigStandard.validate`；校验器判"必须是字段对象"→ `ValidationError` → 整条 entry
- * `did not activate`，插件与 9 个工具一起消失（`--dump-config` 与存在性检查都看不出来）。
+ * `did not activate`，插件与它的全部工具一起消失（`--dump-config` 与存在性检查都看不出来）。
  *
  * 本用例是这条缺陷的**永久门禁**，把宿主那段 `resolveConfig` 的两步照原样走一遍：
  * 1. 补丁层写下来的 `config`（缺席时是 `undefined`，不是 `{}`）；
@@ -224,7 +224,7 @@ test('宿主不传 config（undefined）时按空配置通过校验：补丁层�
   }
 });
 
-test('按补丁层配置真实装配策略 + devops：挂载不抛、9 工具、读经门禁放行', async () => {
+test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、读经门禁放行', async () => {
   const text = await readFile(join(here, 'cordis.patch.yml'), 'utf8');
   const patch = parsePatch(text);
   const policyRow = assertPolicyConfigComplete(patch, 'packages/forge-devops/cordis.patch.yml');
@@ -247,7 +247,7 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、9 工具、
   assert.ok(service, 'devops 必须提供自己的服务');
 
   assert.equal(service.status(), 'ready', '注入了只读适配器后状态必须是 ready');
-  assert.equal(service.toolNames().length, 9, '工具面 9 个（4 只读 + 5 流程）');
+  assert.equal(service.toolNames().length, 4, '工具面 4 个（1 只读 + 3 流程）：仓库/Issue/PR 归 gitee');
 
   // 3) 读动作走真实门禁 + 审计：审计舱不可用会在这里变成 POLICY_DENIED。
   const result = await service.read({ action: 'change.read', target: 'CHG-2026-0042' });

@@ -1,9 +1,10 @@
 /**
- * TK2 运行时配置（AC-7 / AC-22）：四个扁平键、一份校验规则、脱敏描述。
+ * TK2 运行时配置（AC-7 / AC-22 / r10）：五个扁平键、一份校验规则、脱敏描述。
  *
- * 这些用例是"装配层能拒绝启动"的唯一依据：只要有一条放松，插件就会在没配置
- * `host` 的机器上把请求打到猜测的主机，或者把令牌写进可展示的配置描述里。
- * 断言尽量锁**结论**（进出值、issue 路径）而不是提示语原文，改文案不应让用例失效。
+ * 这些用例是"装配层能拒绝启动"的唯一依据：凭据与主机都不再是必需品（r10 放宽），
+ * 但**落盘凭据策略**必须显式可配（`warn`/`block`），并且任何键都不得把令牌值写进
+ * 可展示的配置描述里。断言尽量锁**结论**（进出值、issue 路径）而不是提示语原文，
+ * 改文案不应让用例失效。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,9 +18,11 @@ import {
   ConfigStandard,
   DEFAULT_AUTH_ENV,
   DEFAULT_CLI_PATH,
+  DEFAULT_PERSISTENT_TOKEN_POLICY,
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
+  PERSISTENT_TOKEN_POLICIES,
   describeGiteeConfig,
   resolveGiteeConfig,
   validateGiteeConfig,
@@ -34,23 +37,25 @@ const CLI_PATH = ['', 'secret', 'bin', 'forge-gitee'].join('/');
 const TOKEN_VALUE = ['gitee', 'pat', 'fixture', 'value'].join('-');
 const HOST = 'gitee.example';
 
-test('CONFIG_KEYS 恰好四个扁平键、互不重复、顺序固定（PRD T5：不做 Web 配置页）', () => {
+test('CONFIG_KEYS 恰好五个扁平键、互不重复、顺序固定（PRD T5：不做 Web 配置页）', () => {
   assert.ok(Object.isFrozen(CONFIG_KEYS));
-  assert.deepEqual([...CONFIG_KEYS], ['cliPath', 'host', 'timeoutMs', 'authEnv']);
+  assert.deepEqual([...CONFIG_KEYS], ['cliPath', 'host', 'timeoutMs', 'authEnv', 'persistentToken']);
   assert.equal(new Set(CONFIG_KEYS).size, CONFIG_KEYS.length);
 });
 
-test('默认值只有非机密项：cliPath=gh、超时 20s、区间 1s–10min、默认凭据变量 GH_TOKEN', () => {
+test('默认值只有非机密项：cliPath=gh、超时 20s、区间 1s–10min、凭据变量默认空、落盘策略 warn', () => {
   assert.equal(DEFAULT_CLI_PATH, 'gh');
   assert.equal(DEFAULT_TIMEOUT_MS, 20_000);
   assert.equal(MIN_TIMEOUT_MS, 1_000);
   assert.equal(MAX_TIMEOUT_MS, 600_000);
   assert.ok(MIN_TIMEOUT_MS < DEFAULT_TIMEOUT_MS && DEFAULT_TIMEOUT_MS < MAX_TIMEOUT_MS);
-  assert.deepEqual([...DEFAULT_AUTH_ENV], ['GH_TOKEN']);
+  // r10：默认不点名任何凭据变量——只读命令照常跑，凭据由用的人显式配置。
+  assert.deepEqual([...DEFAULT_AUTH_ENV], []);
   assert.ok(Object.isFrozen(DEFAULT_AUTH_ENV));
+  assert.deepEqual([...PERSISTENT_TOKEN_POLICIES], ['warn', 'block']);
+  assert.equal(DEFAULT_PERSISTENT_TOKEN_POLICY, 'warn');
   assert.deepEqual({ ...CONFIG_REASONS }, {
     INVALID: 'GITEE_CONFIG_INVALID',
-    AUTH_MISSING: 'AUTH_MISSING',
     PERSISTENT: 'GITEE_PERSISTENT_TOKEN',
   });
 });
@@ -140,19 +145,19 @@ test('timeoutMs 接受数字与数字串（含边界），拒绝 0/小数/越界
   }
 });
 
-test('authEnv 接受单值或数组、去重保序；拒绝空数组、非法名、非字符串与超过上限', () => {
+test('authEnv 接受单值或数组、去重保序、允许为空；拒绝非法名、非字符串与超过上限', () => {
   assert.deepEqual(validateGiteeConfig({ authEnv: ' GITEE_TOKEN ' }), {
     value: { authEnv: ['GITEE_TOKEN'] },
   });
   assert.deepEqual(validateGiteeConfig({ authEnv: ['B_TOKEN', 'A_TOKEN', 'B_TOKEN'] }), {
     value: { authEnv: ['B_TOKEN', 'A_TOKEN'] },
   });
+  // r10：空数组是合法意图（"不注入任何凭据变量"），不再当作错误。
+  assert.deepEqual(validateGiteeConfig({ authEnv: [] }), { value: { authEnv: [] } });
 
   const rejected = [
-    [[], '空数组'],
     [['bad name'], '非法名'],
     [['1TOKEN'], '数字开头'],
-    [[]],
     [[42], '非字符串'],
     [Array.from({ length: 9 }, (_item, index) => `T${index}_TOKEN`), '超过上限'],
     [42, '类型'],
@@ -166,18 +171,40 @@ test('authEnv 接受单值或数组、去重保序；拒绝空数组、非法名
   assert.equal(illegalName.issues[0].message.includes('bad name'), false, '不回显用户输入');
 });
 
+test('persistentToken 只认 warn/block：默认 warn，其他取值一律拒绝并带字段路径', () => {
+  assert.deepEqual(validateGiteeConfig({ persistentToken: 'warn' }), { value: { persistentToken: 'warn' } });
+  assert.deepEqual(validateGiteeConfig({ persistentToken: ' block ' }), { value: { persistentToken: 'block' } });
+  for (const raw of ['strict', 'deny', true, 1, ['warn']]) {
+    const result = validateGiteeConfig({ persistentToken: raw });
+    assert.equal('value' in result, false, String(raw));
+    assert.deepEqual(result.issues.map((issue) => issue.path), [['persistentToken']], String(raw));
+  }
+});
+
 test('清空是合法意图：空串/纯空白/null 视为该字段缺席，不产生 issue', () => {
   for (const raw of ['', '   ', null, undefined]) {
-    assert.deepEqual(validateGiteeConfig({ cliPath: raw, host: raw, timeoutMs: raw, authEnv: raw }), {
+    assert.deepEqual(validateGiteeConfig({ cliPath: raw, host: raw, timeoutMs: raw, authEnv: raw, persistentToken: raw }), {
       value: {},
     }, String(raw));
   }
 });
 
 test('多字段非法一次报全，path 逐条带字段名（用户一次改完，不用来回试）', () => {
-  const result = validateGiteeConfig({ host: 42, timeoutMs: 0, cliPath: 'gh.cmd', authEnv: [] });
+  const result = validateGiteeConfig({
+    host: 42,
+    timeoutMs: 0,
+    cliPath: 'gh.cmd',
+    authEnv: ['bad name'],
+    persistentToken: 'strict',
+  });
   assert.equal('value' in result, false);
-  assert.deepEqual(result.issues.map((issue) => issue.path), [['cliPath'], ['host'], ['timeoutMs'], ['authEnv']]);
+  assert.deepEqual(result.issues.map((issue) => issue.path), [
+    ['cliPath'],
+    ['host'],
+    ['timeoutMs'],
+    ['authEnv'],
+    ['persistentToken'],
+  ]);
 });
 
 /* ───────────── Standard Schema：宿主 loader 的入口 ───────────── */
@@ -212,28 +239,30 @@ test('ConfigStandard.validate 与 validateGiteeConfig 逐例一致（一份规�
 
 /* ───────────── resolve：显式 env、缺失清单、不回显 ───────────── */
 
-test('resolve 默认结论：gh + 20s + GH_TOKEN，host 与令牌都进 missing（不猜主机）', () => {
+test('resolve 默认结论：gh + 20s + 空凭据 + warn，什么都不缺（不猜主机、不逼凭据）', () => {
   const resolved = resolveGiteeConfig({ config: {}, env: {} });
   assert.deepEqual({ ...resolved, authEnv: [...resolved.authEnv], missing: [...resolved.missing] }, {
     cliPath: 'gh',
     host: null,
     timeoutMs: DEFAULT_TIMEOUT_MS,
-    authEnv: ['GH_TOKEN'],
+    authEnv: [],
     tokenSource: null,
-    missing: ['host', 'GH_TOKEN'],
+    persistentToken: 'warn',
+    missing: [],
   });
   assert.ok(Object.isFrozen(resolved));
   assert.ok(Object.isFrozen(resolved.authEnv));
   assert.ok(Object.isFrozen(resolved.missing));
 });
 
-test('resolve 完整配置：四项就位、missing 为空，且返回值里没有令牌值', () => {
+test('resolve 完整配置：五键就位、missing 为空，且返回值里没有令牌值', () => {
   const resolved = resolveGiteeConfig({
     config: {
       cliPath: CLI_PATH,
       host: 'Gitee.Example',
       timeoutMs: 45_000,
       authEnv: ['GITEE_TOKEN', 'GH_TOKEN'],
+      persistentToken: 'block',
     },
     env: { GITEE_TOKEN: TOKEN_VALUE },
   });
@@ -242,39 +271,41 @@ test('resolve 完整配置：四项就位、missing 为空，且返回值里没�
   assert.equal(resolved.timeoutMs, 45_000);
   assert.deepEqual([...resolved.authEnv], ['GITEE_TOKEN', 'GH_TOKEN']);
   assert.equal(resolved.tokenSource, 'GITEE_TOKEN', '先配先生效');
+  assert.equal(resolved.persistentToken, 'block');
   assert.deepEqual([...resolved.missing], []);
   assert.equal(JSON.stringify(resolved).includes(TOKEN_VALUE), false, '令牌值不进返回值');
 });
 
-test('resolve 多候选变量：按顺序取第一个有值的，一个都没值时全部进 missing', () => {
+test('resolve 多候选变量：按顺序取第一个有值的，一个都没值时点名的变量全进 missing', () => {
   const withSecond = resolveGiteeConfig({ config: { authEnv: ['A_TOKEN', 'B_TOKEN'] }, env: { B_TOKEN: TOKEN_VALUE } });
   assert.equal(withSecond.tokenSource, 'B_TOKEN');
-  assert.deepEqual([...withSecond.missing], ['host']);
+  assert.deepEqual([...withSecond.missing], []);
 
   const none = resolveGiteeConfig({ config: { authEnv: ['A_TOKEN', 'B_TOKEN'] }, env: { A_TOKEN: '   ' } });
   assert.equal(none.tokenSource, null);
-  assert.deepEqual([...none.missing], ['host', 'A_TOKEN', 'B_TOKEN'], '空白值等于没注入');
+  assert.deepEqual([...none.missing], ['A_TOKEN', 'B_TOKEN'], '空白值等于没注入');
 });
 
-test('resolve 不抛错：非法配置按未配置处理，落进 missing（原因由 validateGiteeConfig 给出）', () => {
-  const resolved = resolveGiteeConfig({ config: { host: 42, timeoutMs: 0, cliPath: 'gh.cmd' }, env: {} });
+test('resolve 不抛错：非法配置按未配置处理（原因由 validateGiteeConfig 给出）', () => {
+  const resolved = resolveGiteeConfig({ config: { host: 42, timeoutMs: 0, cliPath: 'gh.cmd', persistentToken: 'nope' }, env: {} });
   assert.equal(resolved.cliPath, DEFAULT_CLI_PATH);
   assert.equal(resolved.host, null);
   assert.equal(resolved.timeoutMs, DEFAULT_TIMEOUT_MS);
-  assert.deepEqual([...resolved.missing], ['host', 'GH_TOKEN']);
+  assert.equal(resolved.persistentToken, DEFAULT_PERSISTENT_TOKEN_POLICY);
+  assert.deepEqual([...resolved.missing], []);
 });
 
 test('resolve 只认显式 env：坏 env（非对象）按空处理，不读进程环境', () => {
   const resolved = resolveGiteeConfig({ config: {}, env: 'not-an-object' });
   assert.equal(resolved.tokenSource, null);
-  assert.deepEqual([...resolved.missing], ['host', 'GH_TOKEN']);
+  assert.deepEqual([...resolved.missing], []);
 });
 
 /* ───────────── describe：可展示形态 ───────────── */
 
 test('describe 只给枚举/数字/变量名：不含令牌值，也不含绝对路径', () => {
   const resolved = resolveGiteeConfig({
-    config: { cliPath: CLI_PATH, host: HOST, timeoutMs: 45_000 },
+    config: { cliPath: CLI_PATH, host: HOST, timeoutMs: 45_000, authEnv: ['GH_TOKEN'] },
     env: { GH_TOKEN: TOKEN_VALUE },
   });
   const text = describeGiteeConfig(resolved);
@@ -283,19 +314,21 @@ test('describe 只给枚举/数字/变量名：不含令牌值，也不含绝对
   assert.match(text, /host=gitee\.example/);
   assert.match(text, /timeoutMs=45000/);
   assert.match(text, /token=已注入\(GH_TOKEN\)/);
+  assert.match(text, /persistentToken=warn/);
   assert.match(text, /cliPath=…\/forge-gitee/, '路径类值只留文件名');
   assert.equal(text.includes(TOKEN_VALUE), false, 'AC-22：令牌值零出现');
   assert.equal(text.includes('/secret'), false, 'AC-22：绝对路径不出现');
   assert.match(text, /missing=-/);
 });
 
-test('describe 对空配置给出"未配置/未注入"，且缺项照 resolve 的清单呈现', () => {
+test('describe 对空配置给出"未配置/未注入"，且不把可选键报成缺项', () => {
   const text = describeGiteeConfig(resolveGiteeConfig({ config: {}, env: {} }));
   assert.match(text, /cliPath=gh/);
   assert.match(text, /host=未配置/);
   assert.match(text, /token=未注入/);
-  assert.match(text, /authEnv=GH_TOKEN/);
-  assert.match(text, /missing=host,GH_TOKEN/);
+  assert.match(text, /authEnv=未配置/);
+  assert.match(text, /persistentToken=warn/);
+  assert.match(text, /missing=-/);
 });
 
 test('describe 接受裸配置、resolve 结果与缺省入参（三种入口同一结论）', () => {

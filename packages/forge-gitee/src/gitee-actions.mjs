@@ -34,14 +34,15 @@
  * 这两个工具压根到不了加载那一步（未登记即 `denied`）。
  */
 import { createHash } from 'node:crypto';
-import { GITEE_COMMANDS, GITEE_PROVIDER } from './gitee-adapter.mjs';
-import { GUARD_REASONS } from './gitee-guard.mjs';
+import { GITEE_COMMANDS } from './gitee-adapter.mjs';
+import { GUARD_REASONS, GITEE_PLATFORM } from './gitee-guard.mjs';
 import { REPLAY_BLOCKED_STATUSES, buildEvidence, idempotencyKey } from './gitee-session.mjs';
 
 /**
- * 受控动作全集：**4 写 + 1 只读判定**（名字即策略目录里的 `action`，也是审计里的一等公民）。
- * 判定之所以和写动作同表，只因为它共享同一套信封与门禁入口；权限事实相反（随包默认登记、
- * 只判定不执行），调用方要按 `action` 区分，不能把 `DELIVERY_JUDGE` 当写动作对待。
+ * 受控动作全集：**4 写 + 1 只读判定 + 1 远端写（git push）**（名字即策略目录里的 `action`，
+ * 也是审计里的一等公民）。判定之所以和写动作同表，只因为它共享同一套信封与门禁入口；
+ * 权限事实相反（随包默认登记、只判定不执行），调用方要按 `action` 区分，不能把
+ * `DELIVERY_JUDGE` 当写动作对待。`git commit` 不在这张表里：它是本地动作，不经策略目录。
  */
 export const GITEE_ACTIONS = Object.freeze({
   ISSUE_WRITE: 'gitee.issue.write',
@@ -49,6 +50,7 @@ export const GITEE_ACTIONS = Object.freeze({
   REVIEW_PUBLISH: 'gitee.review.publish',
   REVIEW_RECORD: 'gitee.review.record',
   DELIVERY_JUDGE: 'gitee.delivery.judge',
+  GIT_PUSH: 'gitee.git.push',
 });
 
 /** 平台动作状态；顺序即文档顺序（`done`/`failed`/`denied`/`unknown`），不含任何流程态。 */
@@ -181,7 +183,7 @@ function actionResult({
 } = {}) {
   return {
     ok: status === 'done',
-    provider: GITEE_PROVIDER,
+    provider: GITEE_PLATFORM,
     tool,
     action,
     status,
@@ -893,7 +895,7 @@ async function loadModule(name, reason) {
  *
  * 入参**不接受**人工确认：AI 段落由模型写，人工段只能人工自己填（`human` 出现即拒绝）。
  */
-function createReviewRecord() {
+export function createReviewRecord() {
   const spec = { tool: TOOL_NAMES.REVIEW_RECORD, action: GITEE_ACTIONS.REVIEW_RECORD };
   return Object.freeze({
     ...spec,
@@ -1008,7 +1010,7 @@ function createReviewRecord() {
           key,
         });
       }
-      return settleVerdict(spec, verdict, { target, key, session });
+      return settleActionVerdict(spec, verdict, { target, key, session });
     },
   });
 }
@@ -1020,7 +1022,7 @@ function createReviewRecord() {
  * - 四项关闭条件：全过 → `done`；有 `unknown` → `unknown`（不计入通过）；有未过 → `failed`。
  * - 白名单里没有 close/merge，本动作也从不调用它们。
  */
-function createDeliveryGate() {
+export function createDeliveryGate() {
   const spec = { tool: TOOL_NAMES.DELIVERY_GATE, action: GITEE_ACTIONS.DELIVERY_JUDGE };
   return Object.freeze({
     ...spec,
@@ -1118,13 +1120,17 @@ function createDeliveryGate() {
           detail: describeError(error),
         });
       }
-      return settleVerdict(spec, verdict, { target, key: null, session: null });
+      return settleActionVerdict(spec, verdict, { target, key: null, session: null });
     },
   });
 }
 
 /** 门禁裁决 → 动作信封（本地/判定类动作共用；幂等台账由各自处理）。 */
-function settleVerdict(spec, verdict, { target, key }) {
+/**
+ * 判定结果 → 动作信封：guard 的 done/denied 与本地动作（commit）的结果都收敛成同一形状，
+ * 工具层不需要各自拼信封。导出给 `gitee-git.mjs` 复用，避免再复制一份兜底逻辑。
+ */
+export function settleActionVerdict(spec, verdict, { target, key }) {
   if (!isPlainObject(verdict) || text(verdict.status) !== 'done') {
     const status = text(verdict?.status) === 'failed' && verdict?.mayHaveSideEffect === true
       ? 'unknown'

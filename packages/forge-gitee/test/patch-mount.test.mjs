@@ -117,7 +117,7 @@ async function shippedRowsWithoutJudge() {
   const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
   const pluginRow = rows.find((row) => row.name === '@heluo/forge-gitee');
   assert.ok(policyRow !== undefined && pluginRow !== undefined, '补丁层结构被改动过：策略行/插件行缺失');
-  assert.equal(policyRow.catalog.length, 3, '删掉 judge 后应只剩 3 条只读目录');
+  assert.equal(policyRow.catalog.length, 4, '删掉 judge 后应只剩 4 条：change.read + 3 条 gitee 只读');
   return { policyRow, pluginRow };
 }
 
@@ -171,14 +171,19 @@ async function mountWithAdmittingPolicy({ pluginConfig } = {}) {
   return { host, calls, mounted, pluginRow, policyRow };
 }
 
-test('AC-1: 用分发补丁层挂载后，3 读 + 1 只读判定可用、4 个写动作未登记', async () => {
+test('AC-1: 用分发补丁层挂载后，5 条并集可用（含 change.read）、4 个写动作未登记', async () => {
   const { host, real, mounted } = await mountWithRealPolicy();
   assert.equal(mounted.ok, true, `插件挂载失败：${mounted.error?.message ?? ''}`);
   assert.deepEqual(host.toolNames(), [...GITEE_TOOLS]);
-  assert.equal(real.catalog.size, GITEE_READ_ACTIONS.length + GITEE_JUDGE_TOOLS.length);
+  assert.equal(
+    real.catalog.size,
+    GITEE_READ_ACTIONS.length + GITEE_JUDGE_TOOLS.length + 1,
+    '默认目录 = 3 条 gitee 只读 + 1 条只读判定 + 1 条 devops 的 change.read（两包共用同一份并集）',
+  );
 
-  for (const action of [...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
-    const decision = real.decide({ action, target: action === 'gitee.delivery.judge' ? 'CHG-2026-001' : 'acme/repo' });
+  for (const action of ['change.read', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
+    const target = action === 'gitee.delivery.judge' || action === 'change.read' ? 'CHG-2026-001' : 'acme/repo';
+    const decision = real.decide({ action, target });
     assert.equal(decision.action, 'allow', `${action} 应可用：${decision.reason}`);
     assert.equal(decision.rule, 'registered-action');
   }
@@ -242,7 +247,8 @@ test('AC-3: 默认目录下 4 个写工具逐个 denied、规则固定、门禁 
 
 test('AC-4: 默认登记判定、不默认登记写', async () => {
   const { real } = await mountWithRealPolicy();
-  assert.equal(real.catalog.size, 4, `默认目录应恰好 4 条（3 读 + 1 判定），实际 ${real.catalog.size}`);
+  assert.equal(real.catalog.size, 5, `默认目录应恰好 5 条（3 读 + 1 判定 + change.read），实际 ${real.catalog.size}`);
+  assert.equal(real.catalog.get('change.read')?.kind, 'read', 'devops 的变更读也在这份并集目录里（同装时唯一来源）');
 
   const judge = real.catalog.get('gitee.delivery.judge');
   assert.ok(judge !== undefined, '判定必须随包登记（开箱可用），否则等于没有这个能力');
@@ -274,7 +280,7 @@ test('AC-8: 目录缺 judge 时仍可挂载，判定降级 denied', async () => 
     pluginConfig: pluginRow.config,
   });
   assert.equal(mounted.ok, true, `判定缺失不得阻塞挂载：${mounted.error?.message ?? ''}`);
-  assert.deepEqual(host.toolNames(), [...GITEE_TOOLS], '8 个工具照旧注册（工具面不随目录条数变）');
+  assert.deepEqual(host.toolNames(), [...GITEE_TOOLS], '10 个工具照旧注册（工具面不随目录条数变）');
 
   const { body } = await invokeTool(host, 'forge_gitee_delivery_gate', DELIVERY_CALL);
   assert.equal(body?.status, 'denied', `判定未登记时必须 denied（实际：${body?.status}）`);
@@ -353,8 +359,14 @@ test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（
     insertsGitee += 1;
     const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
     assert.ok(policyRow !== undefined, `${packageName} 插入 gitee 却没有自带策略行`);
-    // 只要求 3 条读目录：AC-8 明确"缺 judge 不阻塞挂载"，所以这里不能把判定算进门槛。
-    assert.ok(policyRow.catalog.length >= 3, `${packageName} 的策略行目录缺 gitee 只读动作`);
+    // 只要求 3 条 gitee 只读目录：AC-8 明确"缺 judge 不阻塞挂载"，所以这里不能把判定算进门槛；
+    // 并集里的 change.read 属于 devops，也不计入 gitee 的最低要求。
+    for (const action of GITEE_READ_ACTIONS) {
+      assert.ok(
+        policyRow.catalog.some((entry) => entry.action === action),
+        `${packageName} 的策略行目录缺 gitee 只读动作 ${action}`,
+      );
+    }
     assert.equal(policyRow.audit.sink, 'memory', `${packageName} 的策略行缺显式审计舱`);
     assert.equal(policyRow.audit.allowNonDurable, true);
     assert.equal(typeof giteeRow.config, 'object', `${packageName} 的 gitee 行缺显式 config`);

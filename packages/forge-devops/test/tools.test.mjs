@@ -5,22 +5,18 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { READ_ACTIONS, READ_REASONS } from '../src/read.mjs';
-import { FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS, TOOL_REASONS, buildDevopsTools } from '../src/tools.mjs';
+import { DEVOPS_TOOLS, FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS, buildDevopsTools } from '../src/tools.mjs';
 import { apply, FLOW_KEY, READER_KEY, SERVICE_KEY } from '../src/index.mjs';
 
 /**
- * 工具面契约：9 个工具、名字→动作映射唯一真源、参数用 target、写工具前置 confirm。
+ * 工具面契约（r10）：4 个工具、名字→动作映射唯一真源、参数用 target、澄清写前置 confirm。
  * 业务判定（幂等/回读/四状态）不在工具里，所以这里只验证"工具是否把动作与参数原样交下去"。
+ * 仓库 / Issue / PR 读写已归 `@heluo/forge-gitee`，本包不再持有跨平台写入口。
  */
 
 const TOOL_NAMES = [
   'forge_devops_change_read',
-  'forge_devops_repository_read',
-  'forge_devops_issue_read',
-  'forge_devops_pr_read',
   'forge_devops_change_context',
-  'forge_devops_issue_write',
-  'forge_devops_pr_write',
   'forge_devops_clarify_write',
   'forge_devops_artifact_write',
 ];
@@ -36,8 +32,6 @@ function fakeService(overrides = {}) {
     service: {
       read: record('read', (args) => ({ status: 'succeeded', action: args.action, target_ref: args.target })),
       context: record('context', { card: { change: 'ARD123456' }, text: '## 上下文卡' }),
-      issueWrite: record('issueWrite', { status: 'done', object: 'issue#1' }),
-      prWrite: record('prWrite', { status: 'done', object: 'pr#1' }),
       clarifyWrite: record('clarifyWrite', { status: 'denied', reason: 'COMMAND_NOT_WHITELISTED' }),
       artifactWrite: record('artifactWrite', { path: '/tmp/x/report.md', bytes: 10 }),
       ...overrides,
@@ -48,44 +42,36 @@ function fakeService(overrides = {}) {
 const parse = (payload) => JSON.parse(payload.content[0].text);
 const byName = (tools, name) => tools.find((tool) => tool.name === name);
 
-test('工具面恰好 9 个，映射表与门禁动作逐条对应', () => {
-  const { service } = fakeService();
-  const tools = buildDevopsTools(service);
-  assert.deepEqual(tools.map((tool) => tool.name), TOOL_NAMES);
-  assert.deepEqual(Object.keys(READ_TOOLS).sort(), TOOL_NAMES.slice(0, 4).sort());
-  assert.deepEqual(Object.keys(FLOW_TOOLS).sort(), TOOL_NAMES.slice(4).sort());
-  for (const [name, action] of Object.entries(READ_TOOLS)) {
-    assert.ok(READ_ACTIONS.includes(action), `${name} 未映射到已开放的只读动作`);
-  }
+test('工具面恰好 4 个，映射表与门禁动作逐条对应', () => {
+  assert.deepEqual([...DEVOPS_TOOLS], TOOL_NAMES);
+  assert.deepEqual(Object.keys(READ_TOOLS), ['forge_devops_change_read']);
+  assert.deepEqual(Object.keys(FLOW_TOOLS).sort(), TOOL_NAMES.slice(1).sort());
+  assert.equal(READ_TOOLS.forge_devops_change_read, 'change.read');
   assert.equal(FLOW_TOOLS.forge_devops_change_context.action, 'change.read');
-  assert.equal(FLOW_TOOLS.forge_devops_issue_write.action, FLOW_ACTIONS.ISSUE);
-  assert.equal(FLOW_TOOLS.forge_devops_pr_write.action, FLOW_ACTIONS.PR);
   assert.equal(FLOW_TOOLS.forge_devops_clarify_write.action, FLOW_ACTIONS.CLARIFY);
   assert.equal(FLOW_TOOLS.forge_devops_artifact_write.action, null, '产物落盘没有平台动作');
-  assert.deepEqual(
-    [FLOW_ACTIONS.ISSUE, FLOW_ACTIONS.PR, FLOW_ACTIONS.CLARIFY],
-    ['issue.create_or_update', 'pr.create_or_update', 'change.clarification.write'],
-  );
+  assert.deepEqual(Object.keys(FLOW_ACTIONS), ['CLARIFY'], '写动作只剩澄清回写');
+  assert.equal(FLOW_ACTIONS.CLARIFY, 'change.clarification.write');
 });
 
-test('工具名与动作的唯一真源：源码里恰好出现 9 个工具名', () => {
+test('工具名与动作的唯一真源：源码里恰好出现 4 个工具名，且不含跨平台写工具', () => {
   const source = readFileSync(new URL('../src/tools.mjs', import.meta.url), 'utf8');
   const names = new Set(source.match(/forge_devops_[a-z_]+/gu) ?? []);
   assert.deepEqual([...names].sort(), [...TOOL_NAMES].sort());
-  assert.match(source, /confirm/u, '写工具必须要求 confirm{repo,object}');
+  assert.match(source, /confirm/u, '澄清写必须要求 confirm{object}');
+  assert.doesNotMatch(source, /forge_devops_(issue_write|pr_write|repository_read|issue_read|pr_read)/u);
 });
 
 test('只读工具：参数只有 target，正常路径原样返回契约结果', async () => {
   const { service, calls } = fakeService();
-  const tools = buildDevopsTools(service);
-  for (const tool of tools.slice(0, 4)) {
-    assert.deepEqual(tool.parameters.required, ['target']);
-    assert.deepEqual(Object.keys(tool.parameters.properties), ['target'], '门禁只读 exec.arguments.target');
-    const payload = parse(await tool.execute({ target: 'X-1' }));
-    assert.equal(payload.ok, true);
-    assert.equal(payload.result.action, READ_TOOLS[tool.name]);
-  }
-  assert.deepEqual(calls.map((call) => call.method), ['read', 'read', 'read', 'read']);
+  const tool = byName(buildDevopsTools(service), 'forge_devops_change_read');
+  assert.deepEqual(tool.parameters.required, ['target']);
+  assert.deepEqual(Object.keys(tool.parameters.properties), ['target'], '门禁只读 exec.arguments.target');
+  const payload = parse(await tool.execute({ target: 'ARD123456' }));
+  assert.equal(payload.ok, true);
+  assert.equal(payload.result.action, 'change.read');
+  assert.deepEqual(calls, [{ method: 'read', args: { action: 'change.read', target: 'ARD123456' } }]);
+  assert.deepEqual([...READ_ACTIONS], ['change.read'], '只读面只有 dop 变更一条');
 });
 
 test('只读工具失败时给可见拒绝与下一步，而不是空成功', async () => {
@@ -95,7 +81,7 @@ test('只读工具失败时给可见拒绝与下一步，而不是空成功', as
     },
   });
   const payload = parse(
-    await byName(buildDevopsTools(service), 'forge_devops_issue_read').execute({ target: 'group/repo#7' }),
+    await byName(buildDevopsTools(service), 'forge_devops_change_read').execute({ target: 'ARD123456' }),
   );
   assert.equal(payload.ok, false);
   assert.equal(payload.reason, READ_REASONS.NO_READER);
@@ -114,209 +100,24 @@ test('聚合读工具：一次取回上下文卡与渲染文本', async () => {
   assert.deepEqual(calls[0], { method: 'context', args: { target: 'ARD123456' } });
 });
 
-test('写工具：confirm 缺失或不一致时 denied，且零下游调用', async () => {
+test('澄清写工具：confirm 缺失或与目标不一致时 denied，且零下游调用', async () => {
   const { service, calls } = fakeService();
-  const issue = byName(buildDevopsTools(service), 'forge_devops_issue_write');
-  const badConfirms = [
-    undefined,
-    {},
-    { repo: 'group/repo' },
-    { repo: 'group/other', object: 'group/repo' },
-    { repo: 'group/repo', object: 'group/repo#8' },
-    { repo: 'group/repo', object: '' },
-  ];
+  const tool = byName(buildDevopsTools(service), 'forge_devops_clarify_write');
+  const badConfirms = [undefined, {}, { object: 'CHG-2026-0043' }, { object: '  ' }];
   for (const confirm of badConfirms) {
-    const payload = parse(await issue.execute({ op: 'comment', target: 'group/repo#9', body: 'x', confirm }));
-    assert.equal(payload.ok, false, `confirm=${JSON.stringify(confirm)} 必须被拒`);
+    const payload = parse(await tool.execute({ target: 'CHG-2026-0042', body: '澄清', confirm }));
+    assert.equal(payload.ok, false, `${JSON.stringify(confirm)} 应被拒绝`);
     assert.equal(payload.reason, 'CONFIRMATION_REQUIRED');
-    assert.equal(payload.next_action, 'confirm-object');
+    assert.equal(payload.action, FLOW_ACTIONS.CLARIFY);
   }
-  assert.deepEqual(calls, [], '确认不一致时不得发生任何平台调用');
-});
+  assert.equal(calls.length, 0, 'confirm 不通过时一次下游都不该调用');
 
-test('写工具：三段仓库按整串核对，目标原样交下去（缺陷②）', async () => {
-  const { service, calls } = fakeService();
-  const tools = buildDevopsTools(service);
-  const issue = byName(tools, 'forge_devops_issue_write');
-
-  const commented = parse(
-    await issue.execute({
-      op: 'comment',
-      target: 'acme/group/demo#12',
-      body: '审查意见',
-      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo#12' },
-    }),
+  const ok = parse(
+    await tool.execute({ target: 'CHG-2026-0042', body: '澄清', confirm: { object: 'CHG-2026-0042' } }),
   );
-  assert.equal(commented.ok, true, 'org/group/repo#12 必须进入后续核对，而不是恒 MISSING_TARGET');
-  assert.equal(calls[0].args.target, 'acme/group/demo#12', '命令面一字不改：三段不折叠成两段');
-
-  const created = parse(
-    await issue.execute({
-      op: 'create',
-      target: 'acme/group/demo',
-      title: '[ARD123456] 实现',
-      body: '正文',
-      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo' },
-    }),
-  );
-  assert.equal(created.ok, true, 'create 的纯三段仓库同样可确认');
-  assert.equal(calls[1].args.target, 'acme/group/demo');
-
-  const pr = parse(
-    await byName(tools, 'forge_devops_pr_write').execute({
-      op: 'comment',
-      target: 'acme/group/demo!7',
-      body: '审查记录',
-      commit: 'abc1234',
-      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo!7' },
-    }),
-  );
-  assert.equal(pr.ok, true, '! 形式的三段目标同样可确认');
-  assert.equal(calls.at(-1).args.target, 'acme/group/demo!7');
-});
-
-test('写工具：三段折成两段仍被拒——不把 org/group/repo 与 group/repo 判成同一仓库', async () => {
-  const { service, calls } = fakeService();
-  const issue = byName(buildDevopsTools(service), 'forge_devops_issue_write');
-  const cases = [
-    { target: 'acme/group/demo#12', repo: 'group/demo' },
-    { target: 'group/demo#12', repo: 'acme/group/demo' },
-    { target: 'acme/group/demo#12', repo: 'acme/group' },
-  ];
-  for (const { target, repo } of cases) {
-    const payload = parse(await issue.execute({ op: 'comment', target, body: 'x', confirm: { repo, object: target } }));
-    assert.equal(payload.ok, false, `confirm.repo=${repo} 对 target=${target} 必须被拒`);
-    assert.equal(payload.reason, TOOL_REASONS.CONFIRMATION_REQUIRED);
-    assert.equal(payload.next_action, 'confirm-object');
-    assert.match(payload.detail, /不一致/u);
-  }
-  assert.deepEqual(calls, [], '仓库不一致时不得发生任何平台调用');
-});
-
-test('写工具：取不到仓库的目标 MISSING_TARGET 且零下游调用', async () => {
-  const { service, calls } = fakeService();
-  const issue = byName(buildDevopsTools(service), 'forge_devops_issue_write');
-  const targets = [
-    'acme', // 1 段
-    '-bad/x', // 段首连字符（旧 actions 正则曾放行）
-    'acme/demo/x/y#1', // 4 段
-    'acme /demo#1', // 段内含空格
-    'https://gitee.com/acme/demo/issues/1', // 链接不是写工具的目标形态
-    'acme/demo#abc', // 编号非数字
-  ];
-  for (const target of targets) {
-    const payload = parse(
-      await issue.execute({ op: 'comment', target, body: 'x', confirm: { repo: 'acme/demo', object: target } }),
-    );
-    assert.equal(payload.ok, false, `target=${target} 必须被拒`);
-    assert.equal(payload.reason, TOOL_REASONS.MISSING_TARGET);
-    assert.equal(payload.next_action, 'give-a-target');
-    assert.match(payload.detail, /不是可核对的仓库引用/u, '要能区分"没给 target"与"给了但取不出仓库"');
-  }
-  assert.deepEqual(calls, [], '取不到仓库时不得发生任何平台调用');
-
-  const empty = parse(
-    await issue.execute({ op: 'comment', target: '', body: 'x', confirm: { repo: 'acme/demo', object: '' } }),
-  );
-  assert.equal(empty.ok, false);
-  assert.equal(empty.reason, TOOL_REASONS.MISSING_TARGET);
-  assert.match(empty.detail, /缺少 target/u);
-});
-
-test('门禁侧复用仓库引用单点：tools.mjs 不再自写仓库正则，confirm.repo 写明完整路径', () => {
-  const source = readFileSync(new URL('../src/tools.mjs', import.meta.url), 'utf8');
-  assert.match(source, /import \{ repoOfTarget \} from '\.\/repo-ref\.mjs';/u);
-  assert.match(source, /repoOfTarget\(/u);
-  assert.doesNotMatch(source, /function repoOf\(/u, '本地 repoOf 必须删除，否则判词会与 repo-ref 漂移');
-  assert.doesNotMatch(source, /\[A-Za-z0-9_.-\]/u, '不得再内联仓库段正则（单点在 repo-ref.mjs）');
-
-  const issue = byName(buildDevopsTools(fakeService().service), 'forge_devops_issue_write');
-  const repoParam = issue.parameters.properties.confirm.properties.repo;
-  assert.match(repoParam.description, /完整路径/u, '参数上要写明 repo 是完整 2 或 3 段路径');
-});
-
-test('写工具：确认一致才交下去，平台四状态原样透出', async () => {
-  const { service, calls } = fakeService();
-  const issue = byName(buildDevopsTools(service), 'forge_devops_issue_write');
-  const confirm = { repo: 'group/repo', object: 'group/repo#9' };
-  const done = parse(await issue.execute({ op: 'comment', target: 'group/repo#9', body: '审查意见', confirm }));
-  assert.equal(done.ok, true);
-  assert.equal(done.result.status, 'done');
-  assert.deepEqual(calls[0], {
-    method: 'issueWrite',
-    args: { op: 'comment', target: 'group/repo#9', title: undefined, body: '审查意见', confirm },
-  });
-
-  const denied = parse(
-    await byName(buildDevopsTools(service), 'forge_devops_clarify_write').execute({
-      target: 'ARD123456',
-      body: '澄清',
-      confirm: { repo: '', object: 'ARD123456' },
-    }),
-  );
-  assert.equal(denied.ok, false);
-  assert.equal(denied.result.status, 'denied', '平台拒绝要原样可见，不能被读成流程 blocked');
-  assert.equal(denied.result.reason, 'COMMAND_NOT_WHITELISTED');
-});
-
-test('写工具：必填参数缺失时早退，不发起调用', async () => {
-  const { service, calls } = fakeService();
-  const tools = buildDevopsTools(service);
-  const issue = parse(
-    await byName(tools, 'forge_devops_issue_write').execute({
-      op: 'create',
-      target: 'group/repo',
-      body: 'x',
-      confirm: { repo: 'group/repo', object: 'group/repo' },
-    }),
-  );
-  assert.equal(issue.ok, false);
-  assert.equal(issue.reason, 'MISSING_ARGUMENT');
-  assert.match(issue.detail, /title/u);
-
-  const pr = parse(
-    await byName(tools, 'forge_devops_pr_write').execute({
-      op: 'comment',
-      target: 'group/repo!1',
-      body: 'x',
-      confirm: { repo: 'group/repo', object: 'group/repo!1' },
-    }),
-  );
-  assert.equal(pr.ok, false);
-  assert.equal(pr.reason, 'MISSING_ARGUMENT');
-  assert.match(pr.detail, /commit/u);
-  assert.deepEqual(calls, []);
-});
-
-test('PR 工具：create 与 comment 都走同一入口，参数原样交下去', async () => {
-  const { service, calls } = fakeService();
-  const pr = byName(buildDevopsTools(service), 'forge_devops_pr_write');
-  const created = parse(
-    await pr.execute({
-      op: 'create',
-      target: 'group/repo',
-      head: 'feat/x',
-      base: 'main',
-      title: '[ARD123456] 实现',
-      body: 'body',
-      confirm: { repo: 'group/repo', object: 'group/repo' },
-    }),
-  );
-  assert.equal(created.ok, true);
-  assert.equal(calls[0].method, 'prWrite');
-  assert.equal(calls[0].args.head, 'feat/x');
-
-  const commented = parse(
-    await pr.execute({
-      op: 'comment',
-      target: 'group/repo!1',
-      body: '审查记录',
-      commit: 'abc1234',
-      confirm: { repo: 'group/repo', object: 'group/repo!1' },
-    }),
-  );
-  assert.equal(commented.ok, true);
-  assert.equal(calls[1].args.commit, 'abc1234');
+  assert.equal(ok.ok, false, 'dop 命令面无澄清写：结果仍是 denied（拒绝必须可见）');
+  assert.equal(ok.result.status, 'denied');
+  assert.deepEqual(calls[0], { method: 'clarifyWrite', args: { target: 'CHG-2026-0042', body: '澄清' } });
 });
 
 test('产物落盘工具：没有平台动作，错误码原样透出', async () => {
@@ -371,7 +172,6 @@ function mountIndex({ flow, reader, commands } = {}) {
   };
   const provided = new Map();
   const registered = new Map();
-  const commandsSeen = [];
   const ctx = {
     get: (key) => {
       if (key === 'policy') return policy;
@@ -393,7 +193,7 @@ function mountIndex({ flow, reader, commands } = {}) {
     },
   };
   const teardown = apply(ctx, {});
-  return { provided, registered, commandsSeen, teardown, service: provided.get(SERVICE_KEY) };
+  return { provided, registered, teardown, service: provided.get(SERVICE_KEY) };
 }
 
 const fakeCommands = () => {
@@ -409,13 +209,13 @@ const fakeCommands = () => {
   };
 };
 
-test('装配：9 个工具全部注册，缺命令面时 entryStatus=no-command-face 而工具面照常可用', () => {
+test('装配：4 个工具全部注册，缺命令面时 entryStatus=no-command-face 而工具面照常可用', () => {
   const { registered, service } = mountIndex();
-  assert.equal(registered.size, 9);
-  assert.equal(service.toolNames().length, 9);
+  assert.equal(registered.size, 4);
+  assert.deepEqual(service.toolNames(), TOOL_NAMES);
   assert.equal(service.entryStatus(), 'no-command-face');
   assert.deepEqual(service.readActions(), Array.from(READ_ACTIONS));
-  assert.equal(service.ledger().length, 0);
+  assert.equal(service.ledger, undefined, 'r10 删除写动作后不再保留写台账');
 });
 
 test('装配：有 commands 服务时注册 devops-change 入口，teardown 一并释放', async () => {
@@ -439,7 +239,7 @@ test('装配：有 commands 服务时注册 devops-change 入口，teardown 一�
 test('装配：宿主未注入流程协作者时 apply 自建组合根；未配置运行时环境产出 blocked 卡且零调用', async () => {
   const { registered, provided } = mountIndex();
   assert.equal(provided.has(FLOW_KEY), true, 'apply 应把自建的流程协作者提供为 devopsFlow（D-1）');
-  assert.equal(typeof provided.get(FLOW_KEY).issueWrite, 'function');
+  assert.equal(provided.get(FLOW_KEY).issueWrite, undefined);
   assert.equal(provided.has(READER_KEY), false, '未配置运行时环境时不提供只读适配器（可见 no-reader）');
 
   const context = parse(await registered.get('forge_devops_change_context').execute({ target: 'ARD123456' }));
@@ -457,7 +257,7 @@ test('装配：宿主未注入流程协作者时 apply 自建组合根；未配�
     await registered.get('forge_devops_clarify_write').execute({
       target: 'ARD123456',
       body: '澄清',
-      confirm: { repo: 'group/repo', object: 'ARD123456' },
+      confirm: { object: 'ARD123456' },
     }),
   );
   assert.equal(clarify.ok, false);
@@ -466,16 +266,12 @@ test('装配：宿主未注入流程协作者时 apply 自建组合根；未配�
   assert.equal(clarify.result.calls, 0);
 });
 
-test('装配：流程协作者就位后工具→服务→协作者逐层交下去，台账记录四状态', async () => {
+test('装配：流程协作者就位后工具→服务→协作者逐层交下去，不写任何跨平台台账', async () => {
   const seen = [];
   const flow = {
     context: async (input) => {
       seen.push({ method: 'context', input });
       return { card: { change: input.target }, text: '## 上下文卡' };
-    },
-    issueWrite: async (input) => {
-      seen.push({ method: 'issueWrite', input });
-      return { status: 'done', idempotencyKey: 'k-1', object: 'issue#7' };
     },
     startFromChange: async ({ changeId }) => {
       seen.push({ method: 'startFromChange', changeId });
@@ -487,22 +283,8 @@ test('装配：流程协作者就位后工具→服务→协作者逐层交下�
   const context = parse(await registered.get('forge_devops_change_context').execute({ target: 'ARD123456' }));
   assert.equal(context.ok, true);
   assert.equal(context.card.change, 'ARD123456');
-  assert.equal(seen[0].input.target, 'ARD123456');
-
-  const issue = parse(
-    await registered.get('forge_devops_issue_write').execute({
-      op: 'create',
-      target: 'group/repo',
-      title: '[ARD123456] 实现',
-      body: '正文',
-      confirm: { repo: 'group/repo', object: 'group/repo' },
-    }),
-  );
-  assert.equal(issue.ok, true);
-  assert.equal(issue.result.status, 'done');
-  assert.deepEqual(service.ledger(), [
-    { action: FLOW_ACTIONS.ISSUE, target: 'group/repo', status: 'done', reason: null, at: service.ledger()[0].at },
-  ]);
+  assert.deepEqual(seen[0], { method: 'context', input: { target: 'ARD123456' } });
+  assert.equal(service.ledger, undefined);
 });
 
 test('装配：产物落盘要先用入口绑定变更号，写出后路径与头部可核对', async () => {
@@ -543,31 +325,43 @@ test('装配：产物落盘要先用入口绑定变更号，写出后路径与�
   }
 });
 
-test('端到端：三段仓库的写动作经工具→服务→流程走到 done，target 与台账一字不改', async () => {
+test('端到端：变更读取经工具→服务→门禁→流程走到 succeeded，聚合读与落盘复用同一份绑定', async () => {
   const seen = [];
-  const flow = {
-    // `startFromChange` 是宿主判定"这是流程协作者"的形状判据（isFlowLike），缺了会自建组合根。
-    startFromChange: async () => ({ ok: true, text: '## 上下文卡' }),
-    issueWrite: async (input) => {
-      seen.push(input);
-      return { status: 'done', idempotencyKey: 'k-3seg', object: 'issue#12' };
-    },
-  };
-  const { registered, service } = mountIndex({ flow });
-  const payload = parse(
-    await registered.get('forge_devops_issue_write').execute({
-      op: 'comment',
-      target: 'acme/group/demo#12',
-      body: '审查意见',
-      confirm: { repo: 'acme/group/demo', object: 'acme/group/demo#12' },
-    }),
-  );
-  assert.equal(payload.ok, true, '三段目标必须能走完写路径（旧正则下这里恒 MISSING_TARGET）');
-  assert.equal(payload.result.status, 'done');
-  assert.equal(seen[0].target, 'acme/group/demo#12', '承建/平台侧收到的是原样三段引用');
-  assert.deepEqual(
-    service.ledger().map(({ action, target, status }) => ({ action, target, status })),
-    [{ action: FLOW_ACTIONS.ISSUE, target: 'acme/group/demo#12', status: 'done' }],
-    '台账记录终态 done，且目标未被折叠',
-  );
+  const repoRoot = mkdtempSync(path.join(tmpdir(), 'forge-devops-e2e-'));
+  try {
+    const reader = {
+      read: async ({ action, target }) => {
+        seen.push({ action, target });
+        return { status: 'succeeded', action, target_ref: target, source_revision: 'dop:sha' };
+      },
+    };
+    const flow = {
+      context: async (input) => ({ card: { change: input.target }, text: '## 上下文卡' }),
+      startFromChange: async () => ({ ok: true, text: '## 上下文卡' }),
+    };
+    const { registered, service } = mountIndex({ flow, reader });
+    assert.equal(service.readActions().length, 1);
+
+    const read = parse(await registered.get('forge_devops_change_read').execute({ target: 'ARD123456' }));
+    assert.equal(read.ok, true);
+    assert.equal(read.result.status, 'succeeded');
+    assert.deepEqual(seen, [{ action: 'change.read', target: 'ARD123456' }], '只读面只交付 dop 变更一条事实');
+
+    const context = parse(await registered.get('forge_devops_change_context').execute({ target: 'ARD123456' }));
+    assert.equal(context.ok, true);
+    assert.equal(context.text, '## 上下文卡', '聚合读复用注入的流程协作者，不另建一份');
+
+    await service.startFromChange('ARD123456');
+    const artifact = parse(
+      await registered.get('forge_devops_artifact_write').execute({
+        repoRoot,
+        kind: 'context',
+        body: '## 上下文卡',
+        meta: { sourceType: 'mock', sourceRevision: 'dop:sha' },
+      }),
+    );
+    assert.equal(artifact.ok, true, '绑定变更号后落盘可完成（终态 ok:true）');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });

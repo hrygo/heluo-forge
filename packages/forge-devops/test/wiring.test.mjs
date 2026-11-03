@@ -1,6 +1,6 @@
 /**
  * 装配层用例（AC-5 / AC-14 的机器证据）：
- *   - 装配期只做一次三层合并，`ready` 与否都不改工具面（仍是 9 个）；
+ *   - 装配期只做一次三层合并，`ready` 与否都不改工具面（仍是 4 个）；
  *   - 未命中时 fail closed，但原因码不加码（NO_READER），细因/已查类别/页面指引放 detail，
  *     文案里**没有盘符、没有 URL、没有路径**；
  *   - 配置页快照（含路径）与脱敏描述是两个函数，脱敏面永远不含路径；
@@ -140,13 +140,13 @@ function fakeRes() {
   };
 }
 
-test('未命中：工具仍是 9 个，read 以 NO_READER 失败并给配置页指引（无盘符/无 URL/无路径）', async () => {
+test('未命中：工具仍是 4 个，read 以 NO_READER 失败并给配置页指引（无盘符/无 URL/无路径）', async () => {
   const empty = tempDir();
   try {
     await withEnv({ PATH: empty, Path: empty }, async () => {
       const { service, toolNames } = mount();
-      assert.equal(toolNames.length, 9, 'AC-14：工具面仍是 9 个');
-      assert.equal(service.toolNames().length, 9);
+      assert.equal(toolNames.length, 4, 'AC-14：工具面收敛为 4 个');
+      assert.equal(service.toolNames().length, 4);
       assert.equal(service.status(), 'no-reader', '未命中必须 fail closed');
       assert.equal(service.cliStatus().ready, false);
 
@@ -177,7 +177,7 @@ test('三层合并：环境变量兜底命中 → 流程可用、origin=env，�
       assert.equal(status.ready, true, '环境变量层必须能把流程拉起来');
       assert.equal(service.status(), 'ready');
       assert.equal(status.entries.dopBin.origin, CLI_ORIGINS.ENV);
-      assert.equal(toolNames.length, 9);
+      assert.equal(toolNames.length, 4);
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -212,7 +212,7 @@ test('零配置：PATH 上发现 → origin=discovered、流程可用', async ()
       assert.equal(status.ready, true, 'AC-2：装好就能用');
       assert.equal(status.entries.dopBin.origin, CLI_ORIGINS.DISCOVERED);
       assert.equal(service.status(), 'ready');
-      assert.equal(toolNames.length, 9, 'AC-14：发现命中与否都不改工具面');
+      assert.equal(toolNames.length, 4, 'AC-14：发现命中与否都不改工具面');
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -256,7 +256,7 @@ test('保存：revision 栅栏命中时写一次，陈旧 revision 不写盘', a
       assert.equal(fake.state.edits, 1);
       assert.equal(service.status(), 'ready', '保存后立刻重新合并，不必重启');
 
-      const stale = await service.saveCliConfig({ revision: before.revision, fields: { ghOwner: 'heluo' } });
+      const stale = await service.saveCliConfig({ revision: before.revision, fields: { dopBin: `${target}.stale` } });
       assert.equal(stale.ok, false);
       assert.equal(stale.code, CLI_REASONS.CONFLICT);
       assert.equal(fake.state.edits, 1, 'AC-9：陈旧 revision 不得写盘');
@@ -329,7 +329,7 @@ test('可选服务：webServer 缺失/晚到/前缀冲突都不塌装配，注�
       // 1) 装配时没有 webServer：照常挂载，状态可见。
       const first = mount();
       assert.equal(first.service.cliStatus().route, 'no-webserver');
-      assert.equal(first.toolNames.length, 9);
+      assert.equal(first.toolNames.length, 4);
       assert.equal(first.injections.length, 1);
       assert.deepEqual(first.injections[0].deps, ['webServer']);
 
@@ -352,7 +352,7 @@ test('可选服务：webServer 缺失/晚到/前缀冲突都不塌装配，注�
         },
       });
       assert.equal(conflicted.service.cliStatus().route, 'conflict');
-      assert.equal(conflicted.toolNames.length, 9);
+      assert.equal(conflicted.toolNames.length, 4);
     });
   } finally {
     rmSync(empty, { recursive: true, force: true });

@@ -2,7 +2,7 @@
  * `@heluo/forge-devops` 命令行配置（T2）：三层合并、来源归属、逐字段校验、脱敏描述。
  *
  * 这个模块回答三个问题，且是它们的**唯一**回答处：
- *   1. **当前生效哪一层**：逐字段 `配置 > 环境变量 > 自动发现`，`ghBin`/`sourceType`/`timeoutMs`
+ *   1. **当前生效哪一层**：逐字段 `配置 > 环境变量 > 自动发现`，`sourceType`/`timeoutMs`
  *      另有基线缺省（`default`）。`dopBin` 永不给默认值——fail closed 不能被一个猜测的路径掩盖。
  *   2. **值能不能存**：字段规则只有一份（`runtime-config.validateConfigField`），本模块只在其上
  *      追加需要平台与文件系统的**路径类**判定（存在性、目录、普通文件/执行位）。**后缀形态不是门槛**：
@@ -16,7 +16,7 @@
  * `resolveCliAccess` 连 `fs` 都不需要——装配期解析只做形状判定，读盘只在"发现"与"保存校验"两处。
  *
  * 产物契约（蓝图 §3.2）：
- *   CLI_FIELDS / CLI_ORIGINS / CLI_REASONS / CLI_ORIGIN_LABELS / CLI_SEARCH_CATEGORIES
+ *   CLI_FIELDS / CLI_PAGE_FIELDS / CLI_ORIGINS / CLI_REASONS / CLI_ORIGIN_LABELS / CLI_SEARCH_CATEGORIES
  *   resolveCliAccess({ config, env, discovery, platform }) -> Access
  *   deriveSourceType(entries) -> 'mock' | 'enterprise'（唯一推导处；只在 resolveCliAccess 里调用一次）
  *   describeCliAccess(access) -> 脱敏描述（无 path、无 endpoint 值）
@@ -26,12 +26,11 @@
  *
  * `Access`（主机内，含路径与 endpoint 值）：
  *   { ready, reason, entries: { <field>: { origin, value, overrides, tool? } },
- *     value: { 六字段 } | null, invalid: [{ field, origin, message }], searched: string[], guidance }
+ *     value: { 四字段 } | null, invalid: [{ field, origin, message }], searched: string[], guidance }
  *   `overrides` 是"被本层压过的下层"（如 `['env']` = 配置覆盖了环境变量），页面据此显示
  *   「覆盖环境变量」Tag；环境变量/自动发现/缺省被压过时同样记录，绝不静默。
  */
 import {
-  DEFAULT_GH_BIN,
   DEFAULT_SOURCE_TYPE,
   DEFAULT_TIMEOUT_MS,
   ENV_KEYS,
@@ -40,15 +39,15 @@ import {
 // 入口形态（后缀词表 + 可直接执行判定）的唯一真源：保存侧只消费，不再自带后缀规则（AC-4/r8）。
 import { isDirectlyExecutable } from './entry-form.mjs';
 
-/** 六个逻辑字段，顺序即页面字段顺序（与 `ENV_KEYS` 同键，不另立词表）。 */
-export const CLI_FIELDS = Object.freeze([
-  'dopBin',
-  'dopEndpoint',
-  'ghBin',
-  'ghOwner',
-  'sourceType',
-  'timeoutMs',
-]);
+/** 四个逻辑字段，顺序即配置面字段顺序（与 `ENV_KEYS` 同键，不另立词表）。 */
+export const CLI_FIELDS = Object.freeze(['dopBin', 'dopEndpoint', 'sourceType', 'timeoutMs']);
+
+/**
+ * 页面可编辑面（两键）：`dopBin` 是唯一可发现的入口，`timeoutMs` 是唯一可手填的标量。
+ * 隐藏两键（`dopEndpoint` / `sourceType`）只由环境变量/装配层声明，页面不渲染、不提交；
+ * 浏览器半的 `PAGE_FIELDS` 必须与本表逐字相同（`client-shape`/`client-rule-parity` 守）。
+ */
+export const CLI_PAGE_FIELDS = Object.freeze(['dopBin', 'timeoutMs']);
 
 /** 来源枚举（AC-3）。`default` 是终值而非第四层：只有带基线缺省的字段会出现。 */
 export const CLI_ORIGINS = Object.freeze({
@@ -112,21 +111,18 @@ export const CLI_PAGE_HINT = '设置 → 企业 DevOps';
 const NOT_EXECUTABLE_MESSAGE = '不是可直接执行的文件';
 
 /** 路径类字段 ←→ 发现工具名（其余字段没有发现层）。 */
-const TOOL_BY_FIELD = Object.freeze({ dopBin: 'dop', ghBin: 'gh' });
+const TOOL_BY_FIELD = Object.freeze({ dopBin: 'dop' });
 
 /** 逐字段的层序。缺省值不在此表：它在 `DEFAULTS`，出现时 origin 记为 `default`。 */
 const LAYERS = Object.freeze({
   dopBin: Object.freeze(['config', 'env', 'discovered']),
-  ghBin: Object.freeze(['config', 'env', 'discovered']),
   dopEndpoint: Object.freeze(['config', 'env']),
-  ghOwner: Object.freeze(['config', 'env']),
   sourceType: Object.freeze(['config', 'env']),
   timeoutMs: Object.freeze(['config', 'env']),
 });
 
 /** 基线缺省（非机密、与 `resolveRuntimeConfig` 同源）。`dopBin` 故意缺席。 */
 const DEFAULTS = Object.freeze({
-  ghBin: DEFAULT_GH_BIN,
   sourceType: DEFAULT_SOURCE_TYPE,
   timeoutMs: DEFAULT_TIMEOUT_MS,
 });
@@ -179,7 +175,7 @@ function looksLikePath(value, platform) {
   return platform === 'win32' ? /[\\/]/.test(value) || /^[A-Za-z]:/.test(value) : value.includes('/');
 }
 
-/** 目录文案按字段点名本体（`dop`/`gh`），便于用户对着资源管理器找（DESIGN §6 error.isDirectory）。 */
+/** 目录文案按字段点名本体（`dop`），便于用户对着资源管理器找（DESIGN §6 error.isDirectory）。 */
 function binaryLabel(field) {
   return TOOL_BY_FIELD[field] ?? 'dop';
 }
@@ -220,7 +216,7 @@ function probeFile(field, value, platform, fs) {
  *
  * **没有后缀判定**：`dop` / `dop.cmd` / `dop.ps1` / `dop.bat` / `dop.exe` / `DOP.EXE` 在 win32 上
  * 一视同仁（AC-1）——存不存得下与「跑不跑得起来」是两件事，后者由运行期归因提示（AC-5）负责。
- * 裸命令名（如 `gh`）不当作路径：那是 PATH 名，交给子进程的 PATH 解析，不是这里的责任。
+ * 裸命令名（如 `dop`）不当作路径：那是 PATH 名，交给子进程的 PATH 解析，不是这里的责任。
  *
  * 放行时返回 `base.value`（只去首尾空白），其余字符**逐字回写**（AC-1）：不补后缀、不改大小写、
  * 不把 `/` 换成 `\`。
@@ -274,7 +270,7 @@ function resolveField(field, sources, invalid) {
 /**
  * 入口"解析到可直接执行的文件"：有值且来源是显式/发现。
  *
- * `default`（裸命令名 `gh`，`runtime-config.mjs` 的基线缺省）不算就绪——装配期不做 PATH 探测，
+ * `default`（`runtime-config.mjs` 的基线缺省）不算就绪——装配期不做 PATH 探测，
  * 把"恰好有个默认名"当作已解析到可执行文件，正是伪企业证据的入口（AC-8）。
  * 非法值同理：`resolveField` 对非法层给的是 `value:null`，这里自然为 false（宁可少标）。
  */
@@ -289,20 +285,23 @@ function entryReady(entry) {
 }
 
 /**
- * 推导事实来源（AC-7）：dop 与 gh 都就绪才 `enterprise`，其余一律 `mock`（宁可少标）。
+ * 推导事实来源（AC-7）：dop 就绪即 `enterprise`，否则 `mock`（宁可少标）。
+ *
+ * r10 起代码托管面在 Gitee，devops 只持有 dop 一条入口；「代码托管 CLI 也找到才算企业」
+ * 的分流随该字段一起删除——同一事实不能既由 dop 配置面又由 gitee 侧再判一次。
  *
  * **唯一实现处**：页面拿得到 `entries` 但不发送该键，装配层只消费 `resolveCliAccess()` 的结论；
  * 任何一处再推导都会让"这批结论算不算企业实测"出现第二个口径。
  */
 export function deriveSourceType(entries) {
   const source = isPlainObject(entries) ? entries : {};
-  return entryReady(source.dopBin) && entryReady(source.ghBin) ? 'enterprise' : 'mock';
+  return entryReady(source.dopBin) ? 'enterprise' : 'mock';
 }
 
 /** 找过哪几类位置：配置与环境变量恒查；发现层的 tier 来自发现结果自报。 */
 function searchedCategories(discovery) {
   const tiers = new Set();
-  for (const tool of ['dop', 'gh']) {
+  for (const tool of ['dop']) {
     const found = isPlainObject(discovery) ? discovery[tool] : undefined;
     if (!isPlainObject(found)) continue;
     const searched = found.searched;
@@ -334,7 +333,7 @@ function originLabel(access, field) {
 function guidanceOf(access) {
   const hint = `请到「${CLI_PAGE_HINT}」`;
   if (access.ready === true) {
-    return `命令行工具已就绪（dop 来自${originLabel(access, 'dopBin')} · gh 来自${originLabel(access, 'ghBin')}）`;
+    return `命令行工具已就绪（dop 来自${originLabel(access, 'dopBin')}）`;
   }
   if (access.reason === CLI_REASONS.INVALID) {
     const detail = (Array.isArray(access.invalid) ? access.invalid : [])
@@ -361,7 +360,7 @@ function guidanceOf(access) {
  * @param {object} [options]
  * @param {object|null} [options.config] 配置层（裸字段对象或 `resolveRuntimeConfig` 信封）
  * @param {object|null} [options.env] 环境变量表（显式传入，不读进程环境）
- * @param {{dop?: object, gh?: object}|null} [options.discovery] `discoverCli()` 的输出
+ * @param {{dop?: object}|null} [options.discovery] `discoverCli()` 的输出
  * @param {string} [options.platform] `process.platform` 口径；显式传入以便离线复现 Windows
  * @returns {Readonly<object>} Access
  */
@@ -394,8 +393,6 @@ export function resolveCliAccess({ config = null, env = null, discovery = null, 
     ? Object.freeze({
         dopBin: entries.dopBin.value,
         dopEndpoint: entries.dopEndpoint.value ?? undefined,
-        ghBin: entries.ghBin.value,
-        ghOwner: entries.ghOwner.value ?? undefined,
         sourceType: entries.sourceType.value,
         timeoutMs: entries.timeoutMs.value,
       })

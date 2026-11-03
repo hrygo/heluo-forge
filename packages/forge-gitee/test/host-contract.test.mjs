@@ -4,7 +4,8 @@
  * 真机事实：宿主 `@deepseek-ai/dsh-tools` 的 `register()` 对每个工具强制
  * `output = { schema, render, presentationMeta? }`、且 `output.schema` 只能用受支持的
  * 关键字子集；一条不合格就抛错、整条 entry 回滚——本包 5 个写工具缺 `output` 时，
- * 连 3 个只读工具都一起拿不到（r4 QA 的 D-1）。
+ * 连 3 个只读工具都一起拿不到（r4 QA 的 D-1）。r10 新增两个 git 工具后仍是同一套判据：
+ * 10 条定义任一条缺 `output`，整条 entry 都会回滚。
  *
  * 这里用 `helpers/fake-host.mjs` 里**镜像宿主判据**的 `assertHostToolDefinition()`：
  * 假宿主在 `tools.register()` 里就会校验，所以任何回退都逃不过离线用例。
@@ -13,19 +14,29 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { writeToolDefinitions } from '../src/gitee-actions.mjs';
+import { gitToolDefinitions } from '../src/gitee-git.mjs';
 import { readToolDefinitions } from '../src/gitee-read.mjs';
 import { assertHostToolDefinition, hostSchemaViolations } from './helpers/fake-host.mjs';
 
-/** 八个工具的最小装配：只提供端口形状，不触达子进程。 */
+/**
+ * 十个工具的最小装配：只提供端口形状，不触达子进程。
+ *
+ * 不给 `git`：git 工具的定义期不解析端口（`gitPort(service)` 在执行期才取），所以 stub 只需
+ * 保证"声明期不碰执行器"——这本身也是接口约定（工具层永不直接持有 runner）。
+ */
 const stubService = Object.fromEntries(
   ['execute', 'invoke', 'preflight', 'adapter', 'session', 'read'].map((member) => [member, async () => ({})]),
 );
 
-const allDefinitions = () => [...readToolDefinitions(stubService), ...writeToolDefinitions(stubService)];
+const allDefinitions = () => [
+  ...readToolDefinitions(stubService),
+  ...writeToolDefinitions(stubService),
+  ...gitToolDefinitions(stubService),
+];
 
-test('D-1: 8 个工具全部满足宿主 register() 判据（output.render 是函数 + schema 只用支持子集）', () => {
+test('D-1: 10 个工具全部满足宿主 register() 判据（output.render 是函数 + schema 只用支持子集）', () => {
   const definitions = allDefinitions();
-  assert.equal(definitions.length, 8, '3 读 + 5 写');
+  assert.equal(definitions.length, 10, '3 读 + 5 受控写/判定 + 2 git');
   for (const definition of definitions) {
     assert.doesNotThrow(() => assertHostToolDefinition(definition), `${definition.name} 不满足宿主工具契约`);
     assert.deepEqual(hostSchemaViolations(definition.parameters, 'parameters'), [], `${definition.name} 的参数面越界`);
@@ -38,6 +49,8 @@ test('D-1: 8 个工具全部满足宿主 register() 判据（output.render 是�
     'forge_gitee_review_publish',
     'forge_gitee_review_record',
     'forge_gitee_delivery_gate',
+    'forge_gitee_git_commit',
+    'forge_gitee_git_push',
   ]);
 });
 

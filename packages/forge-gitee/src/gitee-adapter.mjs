@@ -17,8 +17,9 @@
  *    连表都进不来，另有一道 argv 结构扫描做纵深防御。
  * 2. 参数只来自本文件的表：`assertArgv` 先校验再拼 argv，**越界即抛错且零子进程**；不接受
  *    命令行字符串、不接受 argv 数组、不接受 `bin`/`args`/`purpose` 之类的"透传键"。
- * 3. 只有 `--json` 声明的字段子集能出现在 argv 里，`GITEE_FORBIDDEN_FIELDS`
- *    （`mergedAt`/`statusCheckRollup` 等 GitHub 语义）**请求即失败、返回即降级**。
+ * 3. 只有 `--json` 声明的字段子集能出现在 argv 里（`JSON_FIELD_NOT_DECLARED`）。
+ *    r10 删掉了那张 GitHub 语义黑名单：字段子集已经是白名单，再维护一张黑名单就是
+ *    第二套口径（且平台收敛后"混入另一平台字段"不再是本包的事实）。
  * 4. 本模块不建子进程：`runner` 由 `gitee-cli.mjs` 的唯一 `execFile` 出口注入；这里连
  *    `child_process` 都不 import。
  *
@@ -27,8 +28,19 @@
  * 取不到则整条降级 `unknown`（`MISSING_SOURCE_REVISION`），不编版本号。
  */
 
-/** provider 常量：信封、工具返回、动作名都靠它自证来源，不从调用点推断（AC-12）。 */
-export const GITEE_PROVIDER = 'gitee';
+import {
+  DEFAULT_PERSISTENT_TOKEN_POLICY,
+  PERSISTENT_TOKEN_POLICIES,
+} from './runtime-config.mjs';
+
+/**
+ * 平台常量：信封、工具返回、动作名都靠它自证来源，不从调用点推断（AC-12）。
+ *
+ * r10 把旧的「provider」措辞常量改名（值仍 `'gitee'`）：只有一个平台之后那个词只剩
+ * 历史意义，信封与诊断里的字段名不变。本模块**不**从 `gitee-guard.mjs` 导入同值常量——
+ * 适配器不能反向依赖策略层，`gitee.` 前缀由本文件自己声明。
+ */
+export const GITEE_PLATFORM = 'gitee';
 
 /**
  * provider 的逻辑名（诊断标签前缀），不是可执行文件名：可执行文件来自配置 `cliPath`
@@ -78,19 +90,6 @@ export const GITEE_PR_FIELDS = Object.freeze(['number', 'title', 'state', 'url',
 
 /** `pr list` 的字段：清单取识别项 + 头分支（判"同分支已有 PR"）。 */
 export const GITEE_PR_LIST_FIELDS = Object.freeze(['number', 'title', 'url', 'head', 'state']);
-
-/**
- * GitHub 语义字段的黑名单（AC-12）：请求即 `JSON_FIELD_NOT_DECLARED`，返回即整条降级
- * `unknown`（`MIXED_PROVIDER_FIELDS`）。列在这里的名字**永远**不会出现在任何 `GITEE_*` 表里。
- */
-export const GITEE_FORBIDDEN_FIELDS = Object.freeze([
-  'mergedAt',
-  'merged_at',
-  'statusCheckRollup',
-  'checks',
-  'reviewDecision',
-  'autoMergeRequest',
-]);
 
 /**
  * 每个命令允许的 argv 参数，**按实际发命令行顺序**排列（表即真源，`argvFor` 照抄）。
@@ -208,7 +207,6 @@ export const ADAPTER_REASONS = Object.freeze({
   SPAWN_FAILED: 'SPAWN_FAILED',
   UNSUPPORTED_FIELD: 'UNSUPPORTED_FIELD',
   MALFORMED_RESULT: 'MALFORMED_RESULT',
-  MIXED_PROVIDER_FIELDS: 'MIXED_PROVIDER_FIELDS',
   MISSING_SOURCE_REVISION: 'MISSING_SOURCE_REVISION',
   UNKNOWN_READ_ACTION: 'UNKNOWN_READ_ACTION',
 });
@@ -266,8 +264,8 @@ export class GiteeAdapterError extends Error {
     super(`${code}: ${message}`);
     this.name = 'GiteeAdapterError';
     this.code = code;
-    this.provider = GITEE_PROVIDER;
-    this.detail = Object.freeze({ provider: GITEE_PROVIDER, ...detail });
+    this.provider = GITEE_PLATFORM;
+    this.detail = Object.freeze({ provider: GITEE_PLATFORM, ...detail });
   }
 }
 
@@ -308,8 +306,8 @@ function normalizeJsonRequest(command, value) {
     if (name === '') {
       fail(ADAPTER_REASONS.ARG_INVALID, `${command} 的 json 含空字段名`, { command, field: 'json' });
     }
-    if (GITEE_FORBIDDEN_FIELDS.includes(name) || !declared.includes(name)) {
-      // GitHub 语义字段与"没声明过的字段"是同一类错误：都不许进 argv（AC-12/AC-14）。
+    if (!declared.includes(name)) {
+      // 只认声明过的子集：白名单之外的名字不许进 argv（AC-14）。
       fail(ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED, `${command} 的 json 字段 "${name}" 未在本包声明`, {
         command,
         field: 'json',
@@ -516,7 +514,7 @@ export function argvFor(command, params = {}) {
 /** 读动作 → 命令。`kind:'list'` 时用 `*List`，否则 `*View`；动作名可带/不带 `gitee.` 前缀。 */
 function commandForReadAction(action, kind) {
   const name = text(action);
-  const key = name.startsWith(`${GITEE_PROVIDER}.`) ? name : `${GITEE_PROVIDER}.${name}`;
+  const key = name.startsWith(`${GITEE_PLATFORM}.`) ? name : `${GITEE_PLATFORM}.${name}`;
   const subject = READ_ACTION_SUBJECTS[key];
   if (subject === undefined) {
     fail(ADAPTER_REASONS.UNKNOWN_READ_ACTION, `"${String(action)}" 不是本包的只读动作`, {
@@ -549,18 +547,6 @@ function parseJsonOutcome(stdout, command, expected) {
   fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 的输出不是对象`, { command });
 }
 
-/** 递归找禁用字段（AC-12）：命中即整条降级，绝不拿 GitHub 语义推断 Gitee 状态。 */
-function findForbiddenField(value, seen = new Set(), depth = 0) {
-  if (depth > 8 || value === null || typeof value !== 'object' || seen.has(value)) return null;
-  seen.add(value);
-  for (const [key, child] of Object.entries(value)) {
-    if (GITEE_FORBIDDEN_FIELDS.includes(key)) return key;
-    const nested = findForbiddenField(child, seen, depth + 1);
-    if (nested !== null) return nested;
-  }
-  return null;
-}
-
 /** 按字段表逐字取；取不到的键置 `null` 并记进 `missing_fields`（不猜、不省略）。 */
 function pickFields(raw, fields) {
   const object = {};
@@ -584,20 +570,23 @@ function pickFields(raw, fields) {
  *   唯一子进程出口（`gitee-cli.mjs`），本模块不自建子进程
  * @param {string} [options.cliPath] 可执行文件名或路径；缺省 `gh`（PATH 解析，不写绝对路径）
  * @param {string} [options.host] 企业 Gitee 域名（只做诊断与 `--host` 显式参数，默认不注入 argv）
- * @param {string|string[]} [options.authEnv] 承载令牌的环境变量名，缺省 `GH_TOKEN`
+ * @param {string|string[]} [options.authEnv] 承载令牌的环境变量名，缺省空（不点名就不注入）
  * @param {(() => string)} [options.now] 时间源（测试可注入固定时钟）
  * @param {object} [options.env] 环境变量来源（令牌只从这里取，缺省 `process.env`）
  * @param {(() => boolean)} [options.persistentTokenProbe]
  *   持久令牌探测（由配置/CLI 层注入的文件系统探测；本模块只负责判定与给出固定 reason）
+ * @param {'warn' | 'block'} [options.persistentTokenPolicy]
+ *   探测到落盘凭据时的处置：`warn`（默认）只告警放行，`block` 才拒绝
  */
 export function createGiteeAdapter({
   runner = null,
   cliPath = 'gh',
   host = '',
-  authEnv = 'GH_TOKEN',
+  authEnv = [],
   now = () => new Date().toISOString(),
   env = process.env,
   persistentTokenProbe = null,
+  persistentTokenPolicy = DEFAULT_PERSISTENT_TOKEN_POLICY,
 } = {}) {
   if (runner === null || typeof runner !== 'object' || typeof runner.run !== 'function') {
     throw new TypeError('createGiteeAdapter 需要可注入的 runner（{ run({bin,args,purpose}) }），不允许在适配器内自建子进程');
@@ -605,6 +594,9 @@ export function createGiteeAdapter({
   if (typeof now !== 'function') throw new TypeError('now 必须是返回 ISO 时间串的函数');
   if (persistentTokenProbe !== null && typeof persistentTokenProbe !== 'function') {
     throw new TypeError('persistentTokenProbe 必须是返回布尔值的函数');
+  }
+  if (!PERSISTENT_TOKEN_POLICIES.includes(persistentTokenPolicy)) {
+    throw new TypeError(`persistentTokenPolicy 只接受 ${PERSISTENT_TOKEN_POLICIES.join(' / ')}`);
   }
 
   const bin = text(cliPath) || 'gh';
@@ -631,58 +623,78 @@ export function createGiteeAdapter({
   const failureLine = (outcome) => redact(clip(outcome?.stderr) || clip(outcome?.stdout));
 
   /**
-   * preflight：令牌与持久令牌判定（AC-22）。**零子进程、不抛错、不返回令牌值**。
+   * preflight：凭据面诊断（AC-22）。**零子进程、不抛错、不返回令牌值**。
    *
-   * 返回值固定形状：`{ ok, provider, reason, message, authEnv, tokenSource, host, mayHaveSideEffect:false }`。
-   * 调用方（`gitee-actions.mjs` 的状态机：`admission → confirm → preflight → invoke`）按 `ok`
-   * 决定拒绝，`reason` 直接进信封；`tokenSource ∈ {'env','none'}` 只说明来源，不含令牌本身。
-   * 之所以"返回而不抛"：状态机要使拒绝可见（`denied` + 固定 reason），抛错会被上层当成
-   * 未知异常，反而丢掉"为什么拒绝"。
+   * 返回值固定形状：`{ ok, provider, reason, message, authEnv, tokenSource, host,
+   * persistentToken, persistentTokenPolicy, mayHaveSideEffect:false }`。调用方
+   * （`gitee-actions.mjs` 的状态机：`admission → confirm → preflight → invoke`）按 `ok`
+   * 决定是否继续，`reason` 直接进信封；`tokenSource ∈ {'env','none'}` 只说明来源。
    *
-   * `persistentTokenProbe` 由配置/CLI 层注入（探测配置目录里的持久凭据文件）；探测到即拒绝，
-   * 因为凭据必须只来自环境变量，文件里的令牌会让"这次用的是谁的令牌"不可审计。
+   * r10 的两处放宽：
+   * - **缺令牌不再是拒绝**。默认 `authEnv` 为空，`ok:true, tokenSource:'none'`，只在
+   *   `message` 里提示"受限仓库会被 CLI 拒绝"——企业里大量只读命令在无令牌下也能跑，
+   *   用 `AUTH_MISSING` 拦住它们等于让用户为一个不缺的东西配置凭据。
+   * - **落盘凭据默认只告警**。`persistentTokenPolicy:'warn'` 时 `ok:true`，策略 `block`
+   *   才 `ok:false` 并给出固定 reason（合规场景的显式选择）。
    */
   function preflight() {
     const tokens = tokenValues();
+    const detected = persistentTokenProbe !== null && persistentTokenProbe() === true;
     const base = {
-      provider: GITEE_PROVIDER,
+      provider: GITEE_PLATFORM,
       authEnv: [...authNames],
       host: text(host) || null,
       mayHaveSideEffect: false,
+      persistentToken: detected ? 'detected' : 'absent',
+      persistentTokenPolicy,
     };
-    if (persistentTokenProbe !== null && persistentTokenProbe() === true) {
+    if (detected && persistentTokenPolicy === 'block') {
       return Object.freeze({
         ...base,
         ok: false,
         reason: ADAPTER_REASONS.GITEE_PERSISTENT_TOKEN,
-        message: '检测到 CLI 配置目录存在持久令牌：请改用环境变量注入后重启；本包不读不写该文件',
+        message: '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请改用环境变量注入后重启',
         tokenSource: tokens.length === 0 ? 'none' : 'env',
       });
     }
     if (tokens.length === 0) {
+      // 缺令牌是提示不是拒绝：命令照常发，受限仓库由 CLI 自己的非零退出说明原因。
+      // 落盘凭据（warn）同时存在时也要说出来，否则告警会被"无凭据"掩盖。
+      const noTokenGuide = authNames.length === 0
+        ? '未配置凭据变量（authEnv 为空）：只读命令照常执行，受限仓库会由 CLI 的非零退出说明'
+        : `未在环境里找到 ${authNames.join('|')}：只读命令照常执行，受限仓库会由 CLI 的非零退出说明`;
       return Object.freeze({
         ...base,
-        ok: false,
-        reason: ADAPTER_REASONS.AUTH_MISSING,
-        message: `缺少令牌环境变量（${authNames.join('|') || '未配置'}）：本包只从环境变量读取，缺令牌即拒绝`,
+        ok: true,
+        reason: null,
+        message: detected
+          ? `检测到待确认的落盘凭据：当前策略为 warn，照常执行；${noTokenGuide}`
+          : noTokenGuide,
         tokenSource: 'none',
       });
     }
-    return Object.freeze({ ...base, ok: true, reason: null, message: '', tokenSource: 'env' });
+    return Object.freeze({
+      ...base,
+      ok: true,
+      reason: null,
+      message: detected ? '检测到待确认的落盘凭据：当前策略为 warn，照常执行' : '',
+      tokenSource: 'env',
+    });
   }
 
   /**
    * 发一条命令：先 `assertArgv`（越界即抛、零子进程），再把命令结果翻译成事实。
    *
    * 不抛"成功/失败以外"的东西：超时 → `TIMEOUT`（`mayHaveSideEffect: true`，须回读不得重放）；
-   * 非零退出 → `NONZERO_EXIT`（stderr 说字段不支持时是 `UNSUPPORTED_FIELD`）；起不来 →
-   * `SPAWN_FAILED`。只有调用方代码写错（未知命令、越界参数）才是"先抛"的那一类。
+   * 非零退出 → `NONZERO_EXIT`（stderr 说字段不支持时是 `UNSUPPORTED_FIELD`，说凭据被拒时是
+   * `AUTH_MISSING`）；起不来 → `SPAWN_FAILED`。只有调用方代码写错（未知命令、越界参数）
+   * 才是"先抛"的那一类。
    */
   async function invoke(command, params = {}, purpose = '') {
     const plan = assertArgv(command, params);
     const label = labelOf(plan.args);
     const observedAt = at();
-    const reason = text(purpose) || PURPOSES[command] || `${GITEE_PROVIDER}.${command}`;
+    const reason = text(purpose) || PURPOSES[command] || `${GITEE_PLATFORM}.${command}`;
     const outcome = await runner.run({ bin, args: [...plan.args], purpose: reason });
     if (!isPlainObject(outcome)) {
       fail(ADAPTER_REASONS.MALFORMED_RESULT, `${label} 没有返回命令结果`, { command, purpose: reason });
@@ -699,10 +711,18 @@ export function createGiteeAdapter({
     if (!Number.isInteger(outcome.exitCode) || outcome.exitCode !== 0) {
       const spawned = outcome.exitCode !== null && outcome.exitCode !== undefined;
       const line = failureLine(outcome);
-      const unsupported = /unknown field|unsupported field|invalid field|no such field|invalid json/i.test(`${outcome?.stderr ?? ''}`);
+      const stderr = `${outcome?.stderr ?? ''}`;
+      const unsupported = /unknown field|unsupported field|invalid field|no such field|invalid json/i.test(stderr);
+      // 凭据问题单独归一：缺令牌不再是客户端拒绝，服务端拒了就要说清是"凭据"而不是
+      // 笼统的"命令失败"——否则模型只能靠猜（r10 的 AUTH_MISSING 只剩这一个触发点）。
+      const authRefused = /\b401\b|\b403\b|unauthori[sz]ed|authenticat|permission denied|invalid (?:token|credential)/i.test(stderr);
+      const code = unsupported
+        ? ADAPTER_REASONS.UNSUPPORTED_FIELD
+        : (spawned ? (authRefused ? ADAPTER_REASONS.AUTH_MISSING : ADAPTER_REASONS.NONZERO_EXIT) : ADAPTER_REASONS.SPAWN_FAILED);
+      const hint = authRefused ? '（服务端拒绝了当前凭据：私有仓库请在 authEnv 点名令牌变量后重启）' : '';
       fail(
-        unsupported ? ADAPTER_REASONS.UNSUPPORTED_FIELD : (spawned ? ADAPTER_REASONS.NONZERO_EXIT : ADAPTER_REASONS.SPAWN_FAILED),
-        `${label} 失败（${spawned ? `退出码 ${outcome.exitCode}` : '未启动'}）${line === '' ? '' : `：${line}`}`,
+        code,
+        `${label} 失败（${spawned ? `退出码 ${outcome.exitCode}` : '未启动'}）${line === '' ? '' : `：${line}`}${hint}`,
         {
           command,
           purpose: reason,
@@ -713,7 +733,7 @@ export function createGiteeAdapter({
       );
     }
     return Object.freeze({
-      provider: GITEE_PROVIDER,
+      provider: GITEE_PLATFORM,
       command,
       label,
       args: Object.freeze([...plan.args]),
@@ -780,7 +800,6 @@ export function createGiteeAdapter({
     const declared = GITEE_JSON_SUBSETS[command];
     if (kind === 'list') {
       const items = parseJsonOutcome(outcome.stdout, outcome.label, 'array');
-      const forbidden = findForbiddenField(items);
       const normalized = [];
       const missing = new Set();
       for (const entry of items) {
@@ -788,21 +807,19 @@ export function createGiteeAdapter({
         for (const gap of gaps) missing.add(gap);
         normalized.push(object);
       }
-      const degraded = forbidden !== null;
       return Object.freeze({
-        provider: GITEE_PROVIDER,
+        provider: GITEE_PLATFORM,
         action: actionKey,
         kind: 'list',
         target_ref: text(target),
-        status: degraded ? 'unknown' : 'succeeded',
+        status: 'succeeded',
         // 清单是查询快照，不冻结事实版本：`source_revision` 恒为 `null`，观测时间看 observed_at。
         source_revision: null,
         observed_at: outcome.observedAt,
         result_refs: Object.freeze([]),
         command: outcome.label,
         missing_fields: Object.freeze([...missing]),
-        error_code: degraded ? ADAPTER_REASONS.MIXED_PROVIDER_FIELDS : null,
-        rejected_field: forbidden,
+        error_code: null,
         items: Object.freeze(normalized),
         count: normalized.length,
         truncated: outcome.truncated,
@@ -810,16 +827,13 @@ export function createGiteeAdapter({
       });
     }
     const raw = parseJsonOutcome(outcome.stdout, outcome.label, 'object');
-    const forbidden = findForbiddenField(raw);
     const { object, missing } = pickFields(raw, declared);
     const revision = typeof raw.updated_at === 'string' && raw.updated_at.trim() !== '' ? raw.updated_at.trim() : null;
     const link = typeof raw.url === 'string' && raw.url.trim() !== '' ? raw.url.trim() : null;
-    // 降级优先级：混入 GitHub 语义（不许推断）> 缺事实版本（不许编）。
-    const errorCode = forbidden !== null
-      ? ADAPTER_REASONS.MIXED_PROVIDER_FIELDS
-      : (revision === null ? ADAPTER_REASONS.MISSING_SOURCE_REVISION : null);
+    // 唯一的降级理由：缺事实版本（不许编版本号）。字段表之外的键本来就不进 object。
+    const errorCode = revision === null ? ADAPTER_REASONS.MISSING_SOURCE_REVISION : null;
     return Object.freeze({
-      provider: GITEE_PROVIDER,
+      provider: GITEE_PLATFORM,
       action: actionKey,
       kind: 'object',
       target_ref: text(target),
@@ -830,7 +844,6 @@ export function createGiteeAdapter({
       command: outcome.label,
       missing_fields: Object.freeze(missing),
       error_code: errorCode,
-      rejected_field: forbidden,
       object: Object.freeze(object),
       raw,
     });
@@ -841,7 +854,7 @@ export function createGiteeAdapter({
     const absolute = bin.includes('/') || bin.includes('\\');
     const name = absolute ? (bin.split(/[\\/]/).pop() || bin) : bin;
     return Object.freeze({
-      provider: GITEE_PROVIDER,
+      provider: GITEE_PLATFORM,
       logicalName: GITEE_LOGICAL_NAME,
       cliPathKind: absolute ? 'absolute' : 'name',
       cliPathName: name,
@@ -856,7 +869,7 @@ export function createGiteeAdapter({
   }
 
   return Object.freeze({
-    provider: GITEE_PROVIDER,
+    provider: GITEE_PLATFORM,
     logicalName: GITEE_LOGICAL_NAME,
     preflight,
     invoke,

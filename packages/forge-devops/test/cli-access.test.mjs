@@ -22,7 +22,6 @@ const TOOLS = 'C:\\tools';
 const CORP = 'C:\\company';
 const LATE = 'C:\\z-tools';
 const DOP = `${TOOLS}\\dop.exe`;
-const GH = `${TOOLS}\\gh.exe`;
 const DOP_CMD = `${TOOLS}\\dop.cmd`;
 const DOP_CONF = `${CORP}\\dop.exe`;
 const LATE_DOP = `${LATE}\\dop.exe`;
@@ -71,8 +70,8 @@ function makeFs({ dirs = {}, files = {} } = {}) {
 
 const baseFs = () =>
   makeFs({
-    dirs: { [TOOLS]: ['dop.exe', 'gh.exe', 'dop.cmd'] },
-    files: { [DOP]: {}, [GH]: {}, [DOP_CMD]: {}, [DOP_CONF]: {} },
+    dirs: { [TOOLS]: ['dop.exe', 'dop.cmd'] },
+    files: { [DOP]: {}, [DOP_CMD]: {}, [DOP_CONF]: {} },
   });
 
 /**
@@ -132,10 +131,9 @@ test('装配期快照：零配置即 ready，路径来自自动发现，revision
   assert.equal(snapshot.entries.dopBin.path, DOP);
   assert.deepEqual(snapshot.entries.dopBin.candidates, [{ path: DOP, tier: 'PATH' }, { path: DOP_CMD, tier: 'PATH' }], '候选按结构给页面，原生 .exe 在首位');
   assert.deepEqual(snapshot.entries.dopBin.rejected, [], 'r8 起发现不再拒收任何形态：键保留、恒为空（AC-3）');
-  assert.equal(snapshot.entries.ghBin.path, GH);
   assert.equal(snapshot.entries.dopEndpoint.origin, 'missing', 'endpoint 不做发现（PRD 非目标）');
   assert.equal(snapshot.entries.dopEndpoint.value, null);
-  // 推导（AC-7）：dop 与 gh 都由自动发现解析到可执行文件 → 企业实测；推导结果仍占 default 槽位。
+  // 推导（AC-7）：dop 由自动发现解析到可执行文件 → 企业实测；推导结果仍占 default 槽位。
   assert.equal(snapshot.entries.sourceType.value, 'enterprise');
   assert.equal(snapshot.entries.sourceType.origin, 'default', '基线缺省不是第四层，但它要说清楚');
   assert.deepEqual(Array.from(snapshot.entries.sourceType.overrides), [], '推导不压任何层');
@@ -146,18 +144,16 @@ test('装配期快照：零配置即 ready，路径来自自动发现，revision
   assert.ok(snapshot.guidance.includes('自动发现'), '指引用类别词，不用环境变量名（AC-5）');
 });
 
-test('事实来源推导经快照到装配层：双入口就绪才 enterprise、只有 dop 回落 mock（AC-7/AC-8）', () => {
-  const both = makeAccess().snapshot();
-  assert.equal(both.entries.sourceType.value, 'enterprise', 'dop 与 gh 都在 PATH 上 → 企业实测');
-  assert.equal(both.entries.sourceType.origin, 'default', '推导占用既有 default 槽位，词表不新增');
+test('事实来源推导经快照到装配层：dop 就绪即 enterprise、无入口回落 mock（AC-7/AC-8）', () => {
+  const found = makeAccess().snapshot();
+  assert.equal(found.entries.sourceType.value, 'enterprise', 'dop 在 PATH 上 → 企业实测');
+  assert.equal(found.entries.sourceType.origin, 'default', '推导占用既有 default 槽位，词表不新增');
 
-  // 只有 dop：gh 停在基线缺省 `gh`，宁可少标也不把 mock 结论写成企业实测
-  const onlyDopFs = makeFs({ dirs: { [TOOLS]: ['dop.exe'] }, files: { [DOP]: {} } });
-  const onlyDop = makeAccess({ fs: onlyDopFs }).snapshot();
-  assert.equal(onlyDop.ready, true, 'dop 就绪时页面照常可用，不因少标来源而 degraded');
-  assert.equal(onlyDop.entries.ghBin.origin, 'default');
-  assert.equal(onlyDop.entries.ghBin.path, 'gh');
-  assert.equal(onlyDop.entries.sourceType.value, 'mock', '只有 dop 不许标成 enterprise');
+  // 没有 dop：宁可少标也不把 mock 结论写成企业实测
+  const emptyFs = makeFs({ dirs: {}, files: {} });
+  const none = makeAccess({ fs: emptyFs }).snapshot();
+  assert.equal(none.ready, false, '没有 dop 就连读面也不可用（fail closed）');
+  assert.equal(none.entries.sourceType.value, 'mock', '没有入口不许标成 enterprise');
 
   // 显式声明压过推导：配置层 sourceType 直接生效，origin 不再是 default
   const declared = makeAccess({ config: { sourceType: 'mock' } }).snapshot();
@@ -172,8 +168,6 @@ test('未命中 fail closed：原因码是类别词，指引指向配置页且�
   assert.equal(snapshot.ready, false, '找不到就 fail closed，不猜');
   assert.equal(snapshot.reason, CLI_REASONS.NOT_FOUND);
   assert.equal(snapshot.entries.dopBin.origin, 'missing');
-  assert.equal(snapshot.entries.ghBin.path, 'gh', 'gh 仍有默认名兜底');
-  assert.equal(snapshot.entries.ghBin.origin, 'default');
   assert.ok(snapshot.guidance.includes('设置 → 企业 DevOps'), '指引把人带到配置页');
   assert.ok(snapshot.guidance.includes('PATH'), '说清楚去哪儿找过');
   assert.equal(/[A-Za-z]:\\/u.test(snapshot.guidance), false, '不得回显盘符路径');
@@ -318,7 +312,7 @@ test('保存成功：只写变化的键、写后回读、重新合并但不重�
   assert.equal(result.snapshot.entries.dopBin.origin, 'config');
   assert.equal(result.snapshot.entries.dopBin.path, DOP_CONF);
   assert.notEqual(result.snapshot.revision, revisionBefore, '写后回读给出新的栅栏值');
-  assert.equal(result.snapshot.entries.ghBin.origin, 'discovered', '没动的字段仍由发现层供给');
+  assert.equal(result.snapshot.entries.sourceType.value, 'enterprise', '没动的字段仍由推导供给');
   assert.equal(fs.calls.readdir, scannedBefore, '保存不得触发重新发现');
 });
 
@@ -399,7 +393,7 @@ test('describe() 脱敏：路径与 endpoint 零命中，快照与描述是两�
   assert.ok(access.snapshot().entries.dopBin.path === DOP_CONF, '快照仍要能回显路径（两函数分工）');
 });
 
-test('快照覆盖六个字段且不含悬空键：字段表与 CLI_FIELDS 同源', () => {
+test('快照覆盖四个字段且不含悬空键：字段表与 CLI_FIELDS 同源', () => {
   const snapshot = makeAccess().snapshot();
   assert.deepEqual(Object.keys(snapshot.entries), [...CLI_FIELDS]);
   for (const field of CLI_FIELDS) {
