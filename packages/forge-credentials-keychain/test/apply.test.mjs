@@ -249,3 +249,16 @@ test('an allowed native adapter without the module fails closed instead of writi
   );
   assert.equal(ctx.provided.size, 0);
 });
+test('a backend that fails to close is still unprovided', async () => {
+  const ctx = fakeContext();
+  const backend = {
+    ...createMemoryBackend(),
+    async close() {
+      throw new Error('synthetic close failure');
+    },
+  };
+  const dispose = apply(ctx, { backend, allowEphemeral: true });
+  assert.equal(ctx.provided.has('credentials'), true);
+  await assert.rejects(dispose(), /synthetic close failure/u);
+  assert.equal(ctx.provided.has('credentials'), false, '关闭失败也必须解除凭据提供方');
+});
