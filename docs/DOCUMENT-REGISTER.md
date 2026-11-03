@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.58.0 |
+| 版本 | V1.59.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,7 +19,7 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.58.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.59.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.37.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.35.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.1 | 生效 | 平台组 | — |
@@ -58,6 +58,7 @@
 | CORP-DSH-PLAN-006 | IAM 机密客户端隔离开发实施计划 | [plans/2026-11-02-iam-confidential-isolated.md](<plans/2026-11-02-iam-confidential-isolated.md>) | V0.2.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；真实来源与生产关闭 |
 | CORP-DSH-PLAN-007 | IAM 模型与工具隔离消费实施计划 | [plans/2026-11-02-iam-consumer-isolated.md](<plans/2026-11-02-iam-consumer-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 完整 source/mock 设计已获用户批准；不动真实环境 |
 | CORP-DSH-PLAN-008 | IAM 下一阶段收尾计划 | [plans/2026-11-03-iam-mock-closeout.md](<plans/2026-11-03-iam-mock-closeout.md>) | V0.6.0 | 草案 | 平台组（代拟） | 最小订阅source/mock已实现并定向验收；真实注册、真实Client接线与probe不开放 |
+| CORP-DSH-PLAN-009 | SDD 退出实施计划 | [plans/2026-11-03-sdd-retirement-implementation.md](<plans/2026-11-03-sdd-retirement-implementation.md>) | V0.1.0 | 草案 | 项目负责人（代拟） | 待用户授权实施；退役前完成调用方盘点与回退演练 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.0.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.0 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.0.0 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
