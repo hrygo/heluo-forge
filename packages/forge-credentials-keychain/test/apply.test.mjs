@@ -61,6 +61,20 @@ test('apply refuses to replace an existing credentials provider', () => {
   );
 });
 
+test('a plaintext file backend without explicit approval is refused', () => {
+  const ctx = fakeContext();
+  const filePath = join(mkdtempSync(join(tmpdir(), 'forge-insecure-')), 'credentials.json');
+  assert.throws(
+    () => apply(ctx, { filePath }),
+    (error) => {
+      assert.equal(error.code, 'KEYCHAIN_INSECURE_FILE_REFUSED');
+      assert.match(error.message, /allowInsecureFile=true/u);
+      assert.equal(ctx.provided.has('credentials'), false);
+      return true;
+    },
+  );
+});
+
 test('apply fails closed when the platform backend is unavailable', () => {
   const ctx = fakeContext();
   assert.throws(
