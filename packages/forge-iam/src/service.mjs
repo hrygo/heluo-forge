@@ -1747,9 +1747,9 @@ export function createIamService(rawConfig, options = {}) {
             timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
           });
           checkAlive();
-          // Rotation semantics are not yet confirmed by the IdP. Never make an
-          // already-sent refresh token eligible for another request by assuming
-          // a missing or identical token is reusable.
+          // C9（2026-11-03 书面答复）已确认轮换：旧刷新令牌即时作废、重用只拒本次请求。
+          // 因此响应里缺少新令牌、或原样返回旧令牌，都说明这条授权链不能再续用；
+          // 不得把已经发出的刷新令牌当成可以再次使用。
           if (!token.refreshToken || token.refreshToken === claimedGrant.refreshToken) return rejectSession();
           let claims = null;
           if (token.idToken) {
