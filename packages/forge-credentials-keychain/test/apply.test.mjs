@@ -69,6 +69,23 @@ test('apply fails closed when the platform backend is unavailable', () => {
   );
 });
 
+test('the unavailable error names the unimplemented adapter and the development override', () => {
+  const ctx = fakeContext();
+  assert.throws(
+    () => apply(ctx, {}),
+    (error) => {
+      assert.equal(error.code, 'KEYCHAIN_UNAVAILABLE');
+      // The operator must be able to tell "not implemented" apart from
+      // "misconfigured", and find the non-production escape hatch.
+      assert.match(error.message, /not implemented on this platform/u);
+      assert.match(error.message, /fails closed/u);
+      assert.match(error.message, /filePath/u);
+      assert.match(error.message, /allowInsecureFile/u);
+      return true;
+    },
+  );
+});
+
 test('apply requires ctx.get to prove no provider is mounted', () => {
   const ctx = { provide() {}, effect(callback) { return callback(); } };
   assert.throws(
