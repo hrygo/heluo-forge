@@ -279,8 +279,13 @@ export function apply(ctx, rawConfig = {}) {
   const teardown = async () => {
     if (closed) return;
     closed = true;
-    await provider.close();
-    disposeProvide?.();
+    try {
+      await provider.close();
+    } finally {
+      // Unprovide even when the backend fails to close: leaving a provider that
+      // points at a half-closed backend behind is worse than the close error.
+      disposeProvide?.();
+    }
   };
   ctx.effect(() => {
     disposeProvide = ctx.provide('credentials', provider);
