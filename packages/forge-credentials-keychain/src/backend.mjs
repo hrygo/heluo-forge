@@ -95,7 +95,7 @@ export function createUnavailableBackend(reason = 'OS keychain adapter is not im
 
 export function createPlatformBackend() {
   return createUnavailableBackend(
-    `OS keychain adapter is not implemented on this platform (${process.platform}); provide a reviewed backend`,
+    `OS keychain adapter is not implemented on this platform (${process.platform}); this profile fails closed. Use a reviewed backend for production, or the documented development override (filePath + allowInsecureFile) in a non-production profile`,
   );
 }
 

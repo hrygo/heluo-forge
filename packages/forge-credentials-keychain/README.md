@@ -33,6 +33,25 @@
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
 - 生产必须使用 Windows DPAPI/凭据管理器或麒麟 libsecret/keyring 的审核实现；file backend 与 macOS spike 适配器都不是生产方案，`@napi-rs/keyring` 的目标平台产物仍待核验。
 
+## 开发/试点覆盖层（非生产）
+
+企业组合只挂本包，并已禁用官方 `credentials` 行。本机没有审核过的 OS 适配器时，`apply` 抛 `KEYCHAIN_UNAVAILABLE` 并拒绝挂载，属于预期的 fail closed，不是缺陷。
+
+开发/试点需要可用凭据时，在 profile 上再叠一层补丁，显式启用文件后端：
+
+```yaml
+- id: heluo-credentials-keychain
+  config:
+    filePath: /tmp/forge-pilot/credentials.json   # 必须在仓库外
+    allowInsecureFile: true
+```
+
+约束：
+
+- 路径放在仓库外，POSIX 权限 `0600`，只放开发/试点账号，不复用生产 IAM 会话。
+- `allowInsecureFile` 不得进入企业默认补丁；启用时 `apply` 会打印 non-production 告警。
+- 要回到生产形态，删掉这层补丁即可，不需要改默认组合。
+
 ## 不可用于生产
 
 - file backend 的跨进程锁是本地文件锁，只用于开发/试点；生产 OS backend 必须自行提供等价的跨进程互斥，当前尚未实现。
