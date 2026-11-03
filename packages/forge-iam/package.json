@@ -22,6 +22,7 @@
   },
   "files": [
     "src",
+    "bin",
     "client.js",
     "locale",
     "icon.svg",
@@ -34,5 +35,11 @@
       "immediately": true,
       "inject": []
     }
+  },
+  "bin": {
+    "heluo-forge": "./bin/heluo-forge.mjs"
+  },
+  "dependencies": {
+    "@heluo/forge-credentials-keychain": "workspace:*"
   }
 }

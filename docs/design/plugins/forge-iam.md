@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.17.5 |
+| 版本 | V1.17.6 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -333,6 +333,7 @@ DSH 内置的 `ctx.authorization` flow 适合“任意界面单次唤起凭据�
 | 路径与方法 | 输入 Body | 返回状态与数据 |
 |---|---|---|
 | `GET /api/forge-iam/session` | 无 | 200 OK 返回 §5.5.2 的身份快照；不触发同步或刷新，永不含令牌 |
+| `POST /api/forge-iam/token` | 无 | 200 OK 返回 `{ token, expiresAt }`；要求 `x-forge-iam-request: 1`，响应不缓存 |
 | `GET /api/forge-iam/view` | 无 | 200 OK 返回 `IamView` 快照（可能触发后台过期刷新） |
 | `POST /api/forge-iam/sign-in` | `{}` | 200 OK 返回 `{ view, authorizationUrl }` |
 | `POST /api/forge-iam/cancel` | `{}` | 200 OK 返回 `{ view }` |
@@ -471,12 +472,14 @@ export interface IamAccount {
 
 #### 5.5.4 CLI
 
-| 命令 | 输出 | 取数顺序 |
+| 命令 | 输出 | 退出码 |
 |---|---|---|
-| `heluo-forge auth whoami [--json]` | 身份与状态 | Host 在线走 HTTP；离线只读 seam |
-| `heluo-forge auth token` | 仅令牌一行 | 同上；离线且已过期时非零退出 |
+| `heluo-forge auth whoami [--json]` | 身份与状态（与 `getSession()` 同形） | 0 |
+| `heluo-forge auth token` | 仅令牌一行 | 0；未登录 2；已过期 3；后端不可用 4；用法错误 64 |
 
-离线路径只读 grant 记录，不刷新、不写回；Host 在线路径与页面共用同一个刷新者。子进程环境不注入令牌，需要时由调用方执行 `auth token` 取值。
+当前实现走**离线直读**：`HELUO_FORGE_CREDENTIALS_FILE` 指向文件后端、或用原生钥匙串，经 `@heluo/forge-credentials-keychain` 的 provider 读 `heluo-iam/session`，不刷新、不写回。原计划的"Host 在线走 HTTP"未实施：管理 API 由 DSH Connection 鉴权，CLI 侧没有已验证可用的凭据渠道，写死一个猜测的取法只会在真实环境里失败。该路径待在宿主侧确认 CLI 可用的鉴权方式后再补，届时仍由 Host 刷新。
+
+子进程环境不注入令牌，需要时由调用方执行 `auth token` 取值。
 
 #### 5.5.5 不变量
 
@@ -499,7 +502,10 @@ export interface IamAccount {
 | 3 | CLI 离线兜底 | 以假 seam 断言未发生写回；令牌过期时非零退出并报 `IAM_REAUTH_REQUIRED` |
 | 4 | 文档与契约 | 设计索引、文档登记与相对链接通过检查器 |
 
-第 1 步已实施：`getSession()` 与 `GET /api/forge-iam/session`，含 2 项服务用例与 2 项路由用例；其余三步未实施。`displayName`、`groups` 是否落盘另立字段契约，不在本节范围；本节也不重新讨论是否改用 `ctx.authorization` flow，结论见 §4.6。
+第 1 步已实施：`getSession()` 与 `GET /api/forge-iam/session`，含 2 项服务用例与 2 项路由用例。
+第 2 步部分实施：`POST /api/forge-iam/token` 与 `getAccessToken()` 已落地（2 项路由用例）；CLI 的 Host 在线路径未实施，原因见 §5.5.4。
+第 3 步已实施：`heluo-forge auth whoami` / `auth token` 离线直读，5 项用例覆盖身份投影、过期拒绝、退出码与不含令牌。
+第 4 步随本版完成（路由与 CLI 写入正文、登记同步）。`displayName`、`groups` 是否落盘另立字段契约，不在本节范围；本节也不重新讨论是否改用 `ctx.authorization` flow，结论见 §4.6。
 
 ---
 

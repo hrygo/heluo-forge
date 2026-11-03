@@ -249,6 +249,21 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         }
       }
 
+      if (url.pathname === '/api/forge-iam/token') {
+        if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
+        if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+        try {
+          const token = typeof service.getAccessToken === 'function'
+            ? await service.getAccessToken()
+            : await service.resolveToken();
+          const session = await service.getSession();
+          return sendJson(res, 200, { token, expiresAt: session?.accessExpiresAt ?? null });
+        } catch (error) {
+          const status = ERROR_STATUS[error?.code] ?? 500;
+          return sendJson(res, status, errorBody(error));
+        }
+      }
+
       if (url.pathname === '/api/forge-iam/view') {
         if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
         if (typeof service.syncFromStore === 'function') {
