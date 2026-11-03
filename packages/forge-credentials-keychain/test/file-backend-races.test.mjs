@@ -72,23 +72,37 @@ test('a late unlocked read cannot restore a deleted credential during a write', 
   assert.equal(await other.get('new'), 'new-placeholder');
 });
 
-test('an orphaned lock times out without unsafe automatic takeover', async (t) => {
+test('a lock whose owner cannot be identified is never taken over', async (t) => {
   const path = await tempFile(t);
-  const backend = createFileBackend({ path });
+  const backend = createFileBackend({ path, lockTimeoutMs: 120 });
   const lockPath = `${path}.lock`;
-  // A non-existent PID previously triggered an uncoordinated check/rename race.
-  const owner = '2147483647:orphaned-placeholder';
+  // No pid means no way to prove the owner is gone: time out instead of guessing.
+  const owner = 'not-a-pid:orphaned-placeholder';
   await fs.writeFile(lockPath, owner, { mode: 0o600 });
-  let clock = 0;
-  const mockedNow = t.mock.method(Date, 'now', () => clock++ === 0 ? 0 : 10001);
-  try {
-    await assert.rejects(
-      backend.set('credential', 'placeholder'),
-      (error) => error.code === 'KEYCHAIN_LOCK_TIMEOUT',
-    );
-  } finally {
-    mockedNow.mock.restore();
-  }
+  await assert.rejects(
+    () => backend.set('credential', 'placeholder'),
+    (error) => error.code === 'KEYCHAIN_LOCK_TIMEOUT',
+  );
   assert.equal(await fs.readFile(lockPath, 'utf8'), owner);
   await assert.rejects(fs.access(path), (error) => error.code === 'ENOENT');
+});
+
+test('a lock left by a dead process is reclaimed instead of blocking forever', async (t) => {
+  const path = await tempFile(t);
+  await fs.writeFile(`${path}.lock`, '999999:deadbeef', { mode: 0o600 });
+  const backend = createFileBackend({ path, lockTimeoutMs: 2000 });
+  await backend.set('recovered', 'value');
+  assert.equal(await backend.get('recovered'), 'value');
+  await assert.rejects(fs.access(`${path}.lock`), '正常完成写入后不应留下锁文件');
+});
+
+test('a lock held by a live process is never displaced', async (t) => {
+  const path = await tempFile(t);
+  await fs.writeFile(`${path}.lock`, `${process.pid}:alive`, { mode: 0o600 });
+  const backend = createFileBackend({ path, lockTimeoutMs: 120 });
+  await assert.rejects(
+    () => backend.set('blocked', 'value'),
+    (error) => error.code === 'KEYCHAIN_LOCK_TIMEOUT',
+  );
+  assert.equal(await fs.readFile(`${path}.lock`, 'utf8'), `${process.pid}:alive`);
 });

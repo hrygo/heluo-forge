@@ -12,7 +12,7 @@
 | backend | 内存、不可用、显式 0600 file（含跨进程事务锁）、macOS Security CLI spike、`@napi-rs/keyring` 原生样机（三者都需 `allowUnvettedPlatformAdapter: true`）；生产 OS adapter 待实现 |
 | provider | `resolve / describe / set / unset / readRecord / describeRecord / listRecords / modifyRecord / deleteRecord` |
 | 迁移 | `migrateLegacyFileToKeychain()` 暂时 fail closed：不读取旧文件、不访问目标、不复制也不删除；`legacyRetained: null` 表示未核实旧文件是否存在。跨进程互斥和源文件隔离契约核验前不可迁移 |
-| 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed，不自动回收；OS backend 未实现 |
+| 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed；只有锁记录的 PID 确已不存在时才用原子 rename 回收，存活进程持有的锁不会被顶替；OS backend 未实现 |
 | 记录 | `api-key` / `grant` JSON；损坏记录显式报错，不静默当作空 |
 | 生命周期 | 清理登记为 `ctx.effect`（Cordis 4 不收集普通 `function apply` 的返回值）；卸载时撤销 `ctx.credentials` 并 `close` backend |
 | 配置 | `Config` 归一化幂等：缺省 `filePath` 为空串表示“不启用 file backend”，可被框架二次校验接受 |
@@ -36,7 +36,8 @@
 ## 不可用于生产
 
 - file backend 的跨进程锁是本地文件锁，只用于开发/试点；生产 OS backend 必须自行提供等价的跨进程互斥，当前尚未实现。
-- 为避免“检查旧锁后删除了另一进程的新锁”的竞态，file backend 不按时间或 PID 自动接管锁。等待超过 10 秒抛出 `KEYCHAIN_LOCK_TIMEOUT`，不写入凭据。异常退出留下锁时，须先确认使用同一凭据文件的全部进程已停止，再人工检查并清理该文件旁的 `.lock`；运行中不得删除锁。自动崩溃恢复与生产 OS adapter 不属于此 fallback 的能力。
+- 崩溃遗留锁按“所有者确定已消失”回收：锁文件里记 `pid:随机串`，等待方只在 PID 不存在（`process.kill(pid, 0)` 返回 ESRCH）时，用一次原子 `rename` 把旧锁移到唯一名字再删除。rename 只有一个赢家，落败者看到 ENOENT 后重试独占创建，因此不会误删别人刚建的新锁。锁的 PID 读不出来、或进程仍活着（含 EPERM 的非本用户进程）时不接管，等待超过 `lockTimeoutMs`（默认 10 秒）抛 `KEYCHAIN_LOCK_TIMEOUT`。
+- 掉电语义：写入先 `fsync` 临时文件、再 `rename`、最后对目录做一次 best-effort `fsync`（Windows 无法以 fd 打开目录，那里跳过目录同步，`rename` 本身仍是原子的）。这样崩溃后不会出现新名字指向空文件的形态；尚未在真实掉电或 `kill -9` 窗口下实测。
 - file backend 是明文落盘，仅限本地开发/试点；不得进入生产配置。
 - OS keychain 双端实测尚未完成。
 
