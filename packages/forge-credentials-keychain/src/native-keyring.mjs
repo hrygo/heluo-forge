@@ -17,7 +17,7 @@
 //     namespace prefixes and any other owner's records keep their meaning.
 
 import { createRequire } from 'node:module';
-import { KeychainBackendError } from './backend.mjs';
+import { KeychainBackendError, NAMESPACE_PATTERN } from './backend.mjs';
 
 /** Platform packages are resolved by name; this module never installs them. */
 const DEFAULT_MODULE = '@napi-rs/keyring';
@@ -25,10 +25,8 @@ const DEFAULT_MODULE = '@napi-rs/keyring';
 /** Windows CREDENTIALW blob limit; UTF-16LE means at most half as many code units. */
 const WINDOWS_BLOB_LIMIT_BYTES = 2560;
 
-const SERVICE_PATTERN = /^[A-Za-z0-9._-]+$/;
-
 function assertService(service) {
-  if (typeof service !== 'string' || !SERVICE_PATTERN.test(service)) {
+  if (typeof service !== 'string' || !NAMESPACE_PATTERN.test(service)) {
     throw new KeychainBackendError(
       'KEYCHAIN_SERVICE_INVALID',
       'native keyring service must match the credential namespace grammar',

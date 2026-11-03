@@ -119,9 +119,7 @@ async function compose({ localFirst, localEnabled, backend }) {
 }
 
 const fileExists = () => existsSync(legacyFile);
-const fileHash = () => (fileExists() ? readFileSync(legacyFile) : null);
 const resetHome = () => { rmSync(home, { recursive: true, force: true }); };
-const providers = (ctx) => (ctx.get('credentials') === undefined ? [] : [ctx.get('credentials')]);
 
 for (const localFirst of [true, false]) {
   const order = localFirst ? 'local-first' : 'keychain-first';
@@ -132,16 +130,24 @@ for (const localFirst of [true, false]) {
     const backend = keychain.createMemoryBackend();
     const { ctx, error } = await compose({ localFirst, localEnabled: true, backend });
     const owner = ctx.get('credentials');
-    record(`enabled-local/${order}-records-the-collision`, true, {
-      error: error?.code ?? null,
-      note: '启用的 local 与 keychain 同时存在时的实际结果；默认组合因此必须禁用 local',
+    // 第二个提供方必须被拒绝：local 先挂时由 keychain 拒绝（自有错误码），
+    // keychain 先挂时由 Cordis 拒绝重复注册。两种顺序都不能出现双提供方。
+    const refused = localFirst
+      ? error?.code === 'KEYCHAIN_CREDENTIALS_CONFLICT'
+      // Cordis 拒绝重复注册时的文案形如 `service "credentials" has been registered at <...>`。
+      : error !== undefined && /registered/iu.test(String(error?.message ?? ''));
+    record(`enabled-local/${order}-second-provider-refused`, refused, {
+      expectedCode: localFirst ? 'KEYCHAIN_CREDENTIALS_CONFLICT' : 'cordis-service-conflict',
+      code: error?.code ?? null,
+      message: String(error?.message ?? '').slice(0, 160),
     });
     await owner?.set?.('SYNTHETIC_REF', 'synthetic-value').catch(() => {});
     const plaintext = fileExists();
-    // The step id carries the observed outcome so the evidence is visible in a
-    // passing run, not only in a failure payload.
-    record(`enabled-local/${order}-effective-owner-is-${plaintext ? 'local' : 'keychain'}`, true, {
-      owner: plaintext ? 'local-plaintext-file' : 'keychain-or-none',
+    // 谁真正接管写入按行为判定：local 先挂则落到明文文件，keychain 先挂则不落盘。
+    const observed = plaintext ? 'local' : 'keychain';
+    const expected = localFirst ? 'local' : 'keychain';
+    record(`enabled-local/${order}-effective-owner-is-${observed}`, observed === expected, {
+      expected,
       reproducedIssue125: plaintext,
       note: plaintext
         ? '写入落到了明文文件：#125 的默认回退形态'
@@ -182,9 +188,14 @@ for (const localFirst of [true, false]) {
     const before = `refs:\n  SYNTHETIC_REF: synthetic-value\n`;
     await fs.mkdir(home, { recursive: true });
     await fs.writeFile(legacyFile, before, { mode: 0o600 });
-    const { ctx } = await compose({ localFirst, localEnabled: false, backend });
+    const { ctx, error } = await compose({ localFirst, localEnabled: false, backend });
     const after = fileExists() ? readFileSync(legacyFile, 'utf8') : null;
-    record(`disabled-local/${order}-legacy-file-untouched`, after === before, { existedBefore: true, existsAfter: after !== null });
+    // 挂载失败时"没动文件"是废话，必须先要求这次组合真的起来了。
+    record(`disabled-local/${order}-legacy-file-untouched`, error === undefined && after === before, {
+      error: error?.code ?? null,
+      existedBefore: true,
+      existsAfter: after !== null,
+    });
     await ctx.fiber.dispose();
   }
 }
