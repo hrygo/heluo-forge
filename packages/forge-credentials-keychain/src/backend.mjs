@@ -170,9 +170,17 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
     const payload = JSON.stringify({ version: 1, entries: Object.fromEntries(entries) });
-    await writeFile(temporary, payload, { mode });
-    await chmod(temporary, mode);
-    await rename(temporary, path);
+    try {
+      await writeFile(temporary, payload, { mode });
+      await chmod(temporary, mode);
+      await rename(temporary, path);
+    } catch (error) {
+      // The temporary document holds the same plaintext credentials as the
+      // store; a failed or interrupted write must not leave a copy behind in
+      // the same directory.
+      await unlink(temporary).catch(() => {});
+      throw error;
+    }
     await chmod(path, mode).catch(() => {});
   }
 
