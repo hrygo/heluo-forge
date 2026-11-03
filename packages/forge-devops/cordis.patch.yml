@@ -1,33 +1,40 @@
 # @heluo/forge-devops 的补丁层（ADR-0012 单安装单元）。
 #
 # 本文件只做一件事：把 devops 所需的最小挂载插进 profile，使"只装 devops 一个包"也能挂载。
-#   1. `heluo-policy` 必须先行：devops 的策略门禁是硬依赖，`policy` 服务缺失、或四个只读动作
+#   1. `heluo-policy` 必须先行：devops 的策略门禁是硬依赖，`policy` 服务缺失、或 `change.read`
 #      未登记/未启用时，`apply()` 按 fail-closed 语义拒绝挂载（不降级、不放行）。顺序即加载顺序。
 #   2. `forge-devops` 紧随其后，行 `name` 用包根名（与清单 `name` 一致），
 #      否则安装后的 profile 解析不到该包。
-# 业务配置只给最小集：dop/gh 的位置与 endpoint 口径是**配置页优先、环境变量兜底**
-# （r3 取代"路径一律由环境注入"的旧口径；r5 把页面收敛成三项）：
-#   1. 装配后在「设置 → 企业 DevOps」配置页指定三项（dopBin / ghBin / timeoutMs），
-#      保存即写回本 profile 的补丁层，重启后仍生效；页面只提交这三项，
-#      另外三项契约键（dopEndpoint / ghOwner / sourceType）页面不展示、保存时逐字保留，
-#      但仍可写在下面 `config:` 段里（或走环境变量）。`CLI_FIELDS` 始终是六键契约；
+#
+# 业务配置只给最小集：dop 的位置与 endpoint 口径是**配置页优先、环境变量兜底**
+# （r10 把配置面收敛成四键 dopBin / dopEndpoint / sourceType / timeoutMs，页面只暴露
+# dopBin 与 timeoutMs 两项）：
+#   1. 装配后在「设置 → 企业 DevOps」配置页指定两项（dopBin / timeoutMs），保存即写回本
+#      profile 的补丁层，重启后仍生效；页面只提交这两项，另外两项契约键（dopEndpoint /
+#      sourceType）页面不展示、保存时逐字保留，但仍可写在下面 `config:` 段里（或走环境变量）；
 #   2. 配置页没有指定时回落环境变量（CI / 无头场景的兜底，不是普通用户的主路径）；
-#   3. 两层都没有时在装配期自动发现操作系统里可直接执行的 dop / gh（零子进程、只读、有界）。
+#   3. 两层都没有时在装配期自动发现操作系统里可直接执行的 dop（零子进程、只读、有界）。
 #      Windows 上按「存在且是普通文件」判定，不按扩展名拦截：原生 .exe、npm 生成的无后缀
 #      shim 与 .cmd / .ps1 / .bat 都能保存、也都会被发现（同一位置有 .exe 时 .exe 优先）；
-#      POSIX 仍要求执行位。执行层不变（固定 argv + shell:false），所以这类脚本形态
-#      「存得下、跑不起来」时由运行期提示归因到启动方式，不因此改启动方式或引入 shell。
-# `sourceType` 不写就在这里由后端推导（dop 与 gh 都解析到可执行文件才 enterprise，否则 mock），
+#      POSIX 仍要求执行位。执行层不变（固定 argv + shell:false）。
+# `sourceType` 不写就在这里由后端推导（dop 解析到可执行文件即 enterprise，否则 mock），
 # 落在既有 default 槽位，不新增词表；显式配置与环境变量优先于推导。
 # 补丁层因此不写默认值，也不写任何主机绝对路径；凭据仍只由环境注入，不落配置页与文档。
+# 代码托管（仓库 / Issue / PR / 评审 / 交付判定）由 `@heluo/forge-gitee` 提供，本包不再持有
+# 跨平台写入口，也不再猜承建仓库——变更卡片给出 `forge_gitee_repository_read` 的下一步指引。
 #
-# 策略目录（catalog）必须是**非空且覆盖 devops 只读面**的四条 read：
-# 空目录会编译成"什么都没有"的策略，devops 随即以 POLICY_ACTION_UNREGISTERED 拒绝挂载
-# （QA N-1：安装成功但 `dump-config` 超时、宿主报 entry did not activate）。
-# 写动作（issue/pr/change 写）不预置：策略对 enabled 的写/确认动作要求审批台账条目，
-# 属单独的范围批准；需要写能力时由 profile 显式追加，而不是在分发层默认开放。
-# 不写 `tools` 映射：devops 的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射
-# 会重复准入、重复审计；未映射的宿主工具按策略自身的 out-of-scope 语义放行。
+# 策略目录（catalog）是 **5 条并集、0 条 write**：`change.read`（本包的 dop 变更读）+
+# 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定。
+#   - 这一份并集**逐字**写在本包与 `@heluo/forge-gitee` 的补丁层里，两行都叫 `id: heluo-policy`，
+#     都不另立服务域：loader 按 id 覆盖 config，同装后只剩一个 `policy` 实例、一份目录；任一插件
+#     单独装也能自洽。两处文本必须完全一致，否则幸存目录取决于装配顺序
+#     （`tests/plugin-patch-layers.test.mjs` 静态守这份一致，`coexistence.test.mjs` 再验装配后果）。
+#   - 空目录会编译成"什么都没有"的策略，devops 随即以 `POLICY_ACTION_UNREGISTERED` 拒绝挂载
+#     （QA N-1：安装成功但 `dump-config` 超时、宿主报 entry did not activate）。
+#   - 写动作（issue / pr / 变更写）与 `gitee.git.push` 不预置：策略对 enabled 的写/确认动作要求
+#     审批台账条目，属单独的范围批准；需要写能力时由 profile 显式追加，而不是在分发层默认开放。
+#   - 不写 `tools` 映射：devops 的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射
+#     会重复准入、重复审计；未映射的宿主工具按策略自身的 out-of-scope 语义放行。
 #
 # 审计舱：`@heluo/forge-policy` 无可用 sink 时对每个动作都拒绝
 # （POLICY_AUDIT_UNAVAILABLE），非持久 sink 未声明 allowNonDurable 时同样拒绝
@@ -41,9 +48,10 @@
 # 真实装配策略 + devops（并全仓扫描任何插入 forge-devops 的补丁层）。
 #
 # 注意：本补丁层面向"单独安装 devops"的安装单元。若同一 profile 已 apply
-# `@heluo/forge-enterprise` 的补丁层（其中已插 heluo-policy），不要再叠加本层，
-# 两条 insert 会重复挂载同一个 id；此时把 devops 行并入企业层，并按上面同样的要求
-# 补齐该层的策略目录与审计配置。
+# `@heluo/forge-enterprise` 的补丁层（其中已插 heluo-policy），仍可叠加本层：
+# loader 按 id 折叠成**一个**条目（后写入的 config 覆盖先前的，而不是重复挂载两份策略实例）；
+# 企业 / devops / gitee 三层的策略行携带逐字相同的并集目录与审计配置，因此装配顺序不影响
+# 幸存配置；`tests/plugin-patch-layers.test.mjs` 静态守这三份一致。
 
 - insert:
     - id: heluo-policy
@@ -51,9 +59,10 @@
       config:
         catalog:
           - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
-          - { action: 'repository.read', kind: 'read', target: 'repository', enabled: true }
-          - { action: 'issue.read', kind: 'read', target: 'issue', enabled: true }
-          - { action: 'pr.read', kind: 'read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
+          - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' }
         audit:
           sink: memory
           allowNonDurable: true

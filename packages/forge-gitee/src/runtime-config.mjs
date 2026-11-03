@@ -1,13 +1,14 @@
 /**
  * `@heluo/forge-gitee` 运行时配置（TK2，AC-7 / AC-22）。
  *
- * 只有四个扁平键——`cliPath` / `host` / `timeoutMs` / `authEnv`，全部来自补丁层的
- * `config:`；凭据**只**从环境变量读取（默认 `GH_TOKEN`，可配多名）。四条纪律写死在
- * 实现里，而不是靠约定：
+ * 五个扁平键——`cliPath` / `host` / `timeoutMs` / `authEnv` / `persistentToken`，全部来自
+ * 补丁层的 `config:`。r10 的关键变化：**凭据不再是必需品**。`authEnv` 默认为空（不注入
+ * 任何变量），`host` 缺省不影响执行，令牌缺失只提示不阻断——「缺令牌」从拒绝理由降级为
+ * 诊断信息，受限仓库由 CLI 自己的非零退出说明。四条纪律写死在实现里：
  *
  *   1. **不猜路径与主机**：`cliPath` 只有 `gh` 一个非机密默认值（企业已确认 CLI 名，
- *      PRD T5），`host` 没有默认值——未配置就是未配置，进 `missing`，由适配器
- *      `preflight()` 以 `AUTH_MISSING` 拒绝，绝不在猜测里起子进程。
+ *      PRD T5），`host` 没有默认值——未配置就是未配置，只在诊断里显示「未配置」，既
+ *      不进执行路径，也**不**进 `missing` 阻断。
  *   2. **不读隐式环境**：`resolveGiteeConfig({config, env})` 只认显式传入的 `env`，
  *      不去读宿主进程环境；装配层负责把真实环境传进来，因此全部结论可离线复现。
  *   3. **不回显**：`describeGiteeConfig()` 只给枚举、数字与环境变量**名**，路径类值
@@ -18,20 +19,20 @@
  * 产物契约（蓝图 §3 第 1 行，下游逐字使用）：
  *   validateGiteeConfig(input) -> { value } | { issues: [{ message, path }] }
  *   resolveGiteeConfig({ config, env })
- *     -> { cliPath, host, timeoutMs, authEnv, tokenSource, missing }
+ *     -> { cliPath, host, timeoutMs, authEnv, tokenSource, persistentToken, missing }
  *   describeGiteeConfig(config) -> string
  *   ConfigStandard -> { '~standard': { version: 1, vendor: 'heluo', validate } }
  *
- * `missing` 是"还缺什么才能跑"的稳定清单：**配置键名**（`host`）与**环境变量名**
- * （`authEnv` 里一个都没值的那些）。两者都是用户可直接照做的动作。
+ * `missing` 现在只是**提示清单**：用户显式点名了 `authEnv` 变量、但环境里一个都没值时，
+ * 列出这些变量名（默认 `authEnv` 为空时恒为 `[]`）。它不再阻断执行，也不再包含 `host`。
  *
  * `resolveGiteeConfig` **不抛错**：非法值按未配置处理（原因由 `validateGiteeConfig`
  * 给出，装配期先校验并 fail closed，TECHNICAL §3 `apply` 第 1 步），非法值不会
- * 变成"静默放行"，只会更早落进 `missing`。
+ * 变成"静默放行"，只会回落到默认值。
  */
 
-/** 四个配置键。顺序即文档表格与 issue 输出顺序，别处不再复制一份。 */
-export const CONFIG_KEYS = Object.freeze(['cliPath', 'host', 'timeoutMs', 'authEnv']);
+/** 五个配置键。顺序即文档表格与 issue 输出顺序，别处不再复制一份。 */
+export const CONFIG_KEYS = Object.freeze(['cliPath', 'host', 'timeoutMs', 'authEnv', 'persistentToken']);
 
 /** 非机密默认值：CLI 名走 PATH（企业已确认叫 `gh`），超时 20s（与 runner 默认同源）。 */
 export const DEFAULT_CLI_PATH = 'gh';
@@ -39,18 +40,25 @@ export const DEFAULT_TIMEOUT_MS = 20_000;
 export const MIN_TIMEOUT_MS = 1_000;
 export const MAX_TIMEOUT_MS = 600_000;
 
-/** 凭据变量默认名：AC-22 明确"默认 `GH_TOKEN`，可配"。 */
-export const DEFAULT_AUTH_ENV = Object.freeze(['GH_TOKEN']);
+/**
+ * 凭据变量默认名：r10 起为空——默认**不**向子进程注入任何凭据变量（AC-22 的「只注入
+ * 你点名的」）。需要令牌时由补丁层显式配 `authEnv:`；缺令牌不再阻断只读命令。
+ */
+export const DEFAULT_AUTH_ENV = Object.freeze([]);
 
 /**
- * 失败原因码（TECHNICAL §8.3 固定枚举，不新增自由文本）。
+ * 落盘凭据（CLI 配置目录里的令牌文件）的处置策略。
  *
- * `AUTH_MISSING` 不带前缀是本表的现状口径：矩阵里它就是裸码，改动会让适配器与
- * 文档的固定枚举分叉，因此这里照抄而不是"统一加前缀"。
+ * - `warn`（默认）：检测到只告警，照常执行——企业环境常由 CLI 自己管理凭据，
+ *   落盘凭据自检只是诊断信息；
+ * - `block`：检测到即拒绝（合规场景），`GITEE_PERSISTENT_TOKEN` 仍是固定 reason。
  */
+export const PERSISTENT_TOKEN_POLICIES = Object.freeze(['warn', 'block']);
+export const DEFAULT_PERSISTENT_TOKEN_POLICY = 'warn';
+
+/** 失败原因码（TECHNICAL §8.3 固定枚举，不新增自由文本）。 */
 export const CONFIG_REASONS = Object.freeze({
   INVALID: 'GITEE_CONFIG_INVALID',
-  AUTH_MISSING: 'AUTH_MISSING',
   PERSISTENT: 'GITEE_PERSISTENT_TOKEN',
 });
 
@@ -127,10 +135,14 @@ function validateTimeoutMs(value) {
   return { ok: true, value: parsed };
 }
 
-/** `authEnv` 接受单个变量名或名称数组；去重保序（先配先生效），不回显输入。 */
+/**
+ * `authEnv` 接受单个变量名或名称数组；去重保序（先配先生效），不回显输入。
+ *
+ * 空数组是合法意图（r10）：默认就是空，表示"不向子进程注入任何凭据变量"；缺令牌
+ * 不再阻断只读命令，所以"一个都不点名"不是配置错误。
+ */
 function validateAuthEnv(value) {
   const list = Array.isArray(value) ? value : [value];
-  if (list.length === 0) return fail('至少需要一个环境变量名');
   if (list.length > MAX_AUTH_ENV) return fail(`最多 ${MAX_AUTH_ENV} 个候选变量`);
   const names = [];
   for (const entry of list) {
@@ -145,11 +157,24 @@ function validateAuthEnv(value) {
   return { ok: true, value: names };
 }
 
+/** 落盘凭据的处置策略：只认固定枚举，自由文本会让"到底拦不拦"变成猜的。 */
+function validatePersistentToken(value) {
+  const text = asText(value);
+  if (text === null) {
+    return fail(`需要一个策略值（${PERSISTENT_TOKEN_POLICIES.join(' / ')}）`);
+  }
+  if (!PERSISTENT_TOKEN_POLICIES.includes(text)) {
+    return fail(`只接受 ${PERSISTENT_TOKEN_POLICIES.join(' / ')}`);
+  }
+  return { ok: true, value: text };
+}
+
 const FIELD_VALIDATORS = Object.freeze({
   cliPath: validateCliPath,
   host: validateHost,
   timeoutMs: validateTimeoutMs,
   authEnv: validateAuthEnv,
+  persistentToken: validatePersistentToken,
 });
 
 /**
@@ -196,12 +221,14 @@ export function validateGiteeConfig(input) {
 /**
  * 把补丁层配置 + 显式 env 解析成运行配置。
  *
- * 缺失优先的位置只有一处：`missing` 先列配置键（`host`），再列令牌变量名——用户
- * 照单修完即可，不需要在两种错误之间来回试。
+ * r10 起 `missing` **不阻断**：`host` 缺省只是"未配置主机"，`authEnv` 默认就是空。
+ * 只有用户显式点名了令牌变量、而环境里一个都没值时，才把那些变量名列进 `missing`——
+ * 这是"你可能忘了注入"的提示，不是错误。
  *
  * @param {{config?: object, env?: Record<string, string | undefined>}} [input]
  * @returns {Readonly<{cliPath: string, host: string | null, timeoutMs: number,
- *   authEnv: readonly string[], tokenSource: string | null, missing: readonly string[]}>}
+ *   authEnv: readonly string[], tokenSource: string | null,
+ *   persistentToken: string, missing: readonly string[]}>}
  */
 export function resolveGiteeConfig({ config, env } = {}) {
   const verified = validateGiteeConfig(config ?? {});
@@ -211,10 +238,10 @@ export function resolveGiteeConfig({ config, env } = {}) {
   const host = accepted.host ?? null;
   const timeoutMs = accepted.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const authEnv = [...(accepted.authEnv ?? DEFAULT_AUTH_ENV)];
+  const persistentToken = accepted.persistentToken ?? DEFAULT_PERSISTENT_TOKEN_POLICY;
 
   const source = env === null || env === undefined ? {} : env;
   const missing = [];
-  if (host === null) missing.push('host');
 
   let tokenSource = null;
   for (const name of authEnv) {
@@ -231,6 +258,7 @@ export function resolveGiteeConfig({ config, env } = {}) {
     timeoutMs,
     authEnv: Object.freeze(authEnv),
     tokenSource,
+    persistentToken,
     missing: Object.freeze(missing),
   });
 }
@@ -264,7 +292,10 @@ export function describeGiteeConfig(config) {
   const timeoutMs = Number.isSafeInteger(value.timeoutMs) ? value.timeoutMs : DEFAULT_TIMEOUT_MS;
   const authEnv = Array.isArray(value.authEnv) && value.authEnv.length > 0
     ? value.authEnv.join(',')
-    : DEFAULT_AUTH_ENV.join(',');
+    : '未配置';
+  const persistentToken = PERSISTENT_TOKEN_POLICIES.includes(value.persistentToken)
+    ? value.persistentToken
+    : DEFAULT_PERSISTENT_TOKEN_POLICY;
   const tokenSource = typeof value.tokenSource === 'string' && value.tokenSource.length > 0
     ? `已注入(${value.tokenSource})`
     : '未注入';
@@ -273,7 +304,7 @@ export function describeGiteeConfig(config) {
     : '-';
 
   return `forge-gitee 配置：cliPath=${cliPath} host=${host} timeoutMs=${timeoutMs} `
-    + `authEnv=${authEnv} token=${tokenSource} missing=${missing}`;
+    + `authEnv=${authEnv} persistentToken=${persistentToken} token=${tokenSource} missing=${missing}`;
 }
 
 /**

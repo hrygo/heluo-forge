@@ -652,6 +652,7 @@ test('AC-11 本地/判定类动作不要求 confirm，但仍过门禁与审计�
     GITEE_ACTIONS.ISSUE_WRITE,
     GITEE_ACTIONS.PR_WRITE,
     GITEE_ACTIONS.REVIEW_PUBLISH,
+    GITEE_ACTIONS.GIT_PUSH,
   ]);
   const repoRoot = mkdtempSync(join(tmpdir(), 'forge-gitee-local-'));
   try {
@@ -673,8 +674,15 @@ test('AC-11 本地/判定类动作不要求 confirm，但仍过门禁与审计�
 });
 
 test('AC-23 唯一子进程出口：动作层与门禁层不直接起进程，写动作只能经 service.invoke/read', () => {
-  for (const file of ['gitee-actions.mjs', 'gitee-guard.mjs', 'gitee-session.mjs']) {
-    const source = readFileSync(join(SRC_DIR, file), 'utf8');
+  // 只看代码：注释里可以解释"不 import node:child_process"，真正要守的是没有导入/调用。
+  const codeOnly = (text) =>
+    text
+      .replace(/\/\*[\s\S]*?\*\//gu, ' ')
+      .split(/\r?\n/u)
+      .map((line) => line.replace(/^\s*\/\/.*$/u, ' '))
+      .join('\n');
+  for (const file of ['gitee-actions.mjs', 'gitee-guard.mjs', 'gitee-session.mjs', 'gitee-git.mjs']) {
+    const source = codeOnly(readFileSync(join(SRC_DIR, file), 'utf8'));
     for (const forbidden of ['child_process', 'execFile(', 'execSync(', 'spawn(', 'spawnSync(', 'fork(']) {
       assert.equal(source.includes(forbidden), false, `${file} 直接使用了 ${forbidden}（绕过唯一出口）`);
     }
@@ -687,7 +695,7 @@ test('AC-23 唯一子进程出口：动作层与门禁层不直接起进程，�
   assert.equal(actions.includes("'prCreate'"), true);
 });
 
-test('AC-16 动作名是策略目录的坐标：五个动作都在 gitee.* 命名空间且互不相同', () => {
+test('AC-16 动作名是策略目录的坐标：六个动作都在 gitee.* 命名空间且互不相同', () => {
   const names = Object.values(GITEE_ACTIONS);
   assert.deepEqual(names, [
     'gitee.issue.write',
@@ -695,6 +703,7 @@ test('AC-16 动作名是策略目录的坐标：五个动作都在 gitee.* 命�
     'gitee.review.publish',
     'gitee.review.record',
     'gitee.delivery.judge',
+    'gitee.git.push',
   ]);
   assert.equal(new Set(names).size, names.length);
   for (const name of names) assert.match(name, /^gitee\.[a-z]+\.[a-z]+$/u);

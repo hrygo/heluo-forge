@@ -37,24 +37,24 @@ window.__ModuleLoader__.load({
     /** 样式标签去重键（重复挂载不产生第二个 style）。 */
     const CSS_TAG_ID = '@heluo/forge-devops/client.css';
 
-    /** 六个配置键（与服务端 CLI_FIELDS 同名同序；页面只用到其中三个，契约仍是六个）。 */
-    const CLI_FIELDS = ['dopBin', 'dopEndpoint', 'ghBin', 'ghOwner', 'sourceType', 'timeoutMs'];
+    /** 四个配置键（与服务端 CLI_FIELDS 同名同序；页面只用到其中两个，契约仍是四个）。 */
+    const CLI_FIELDS = ['dopBin', 'dopEndpoint', 'sourceType', 'timeoutMs'];
     /** 需要「发现」的可执行文件字段：只读展示 + 候选展开 + 手动指定。 */
-    const ENTRY_FIELDS = ['dopBin', 'ghBin'];
+    const ENTRY_FIELDS = ['dopBin'];
     /**
-     * 页面可编辑面（三键）：渲染、页面校验、dirty、POST body 与 422 聚焦都只走这张表。
-     * 隐藏三键（dopEndpoint / ghOwner / sourceType）**不进 DOM、不进 staged、不发送**——
+     * 页面可编辑面（两键）：渲染、页面校验、dirty、POST body 与 422 聚焦都只走这张表。
+     * 隐藏两键（dopEndpoint / sourceType）**不进 DOM、不进 staged、不发送**——
      * 「保存时逐字保留」由服务端 `buildCliPatch` 的补丁合并兜底：页面不持有自己无法校验的状态，
      * 服务端也不必因为页面收敛而收窄校验。
      */
-    const PAGE_FIELDS = ['dopBin', 'ghBin', 'timeoutMs'];
+    const PAGE_FIELDS = ['dopBin', 'timeoutMs'];
     /** 入口字段 → 工具名：**只用于 i18n 插值 `{tool}`**，不参与解析 / 校验 / 请求（与服务端 TOOL_BY_FIELD 不互用）。 */
-    const TOOL_OF_FIELD = Object.freeze({ dopBin: 'dop', ghBin: 'gh' });
+    const TOOL_OF_FIELD = Object.freeze({ dopBin: 'dop' });
     /**
-     * 与服务端同源的字段规则（服务端另有存在性/可执行判定，且对六个键一律不放松）。
+     * 与服务端同源的字段规则（服务端另有存在性/可执行判定，且对四个键一律不放松）。
      * 逐字段的取值边界都要与 `src/runtime-config.mjs` 的规则等值：浏览器半不能 import 服务端模块，
      * 等值关系由 `test/client-rule-parity.test.mjs` 的跨面矩阵用例守着（改任何一侧先红在那里）。
-     * 隐藏三键没有页面规则——"页面收窄、服务端不放宽"正由该矩阵断言。
+     * 隐藏两键没有页面规则——"页面收窄、服务端不放宽"正由该矩阵断言。
      *
      * 入口字段只剩这条长度上界（与服务端 `MAX_PATH_LENGTH` 等值，挡住误粘整段日志）。
      * r8 起页面**不再**判后缀：`.cmd`/`.bat`/`.ps1`/无后缀 shim 都允许暂存与提交，
@@ -187,9 +187,9 @@ window.__ModuleLoader__.load({
     const zh = {
       nav: '企业 DevOps',
       title: '企业 DevOps',
-      intro: '插件会自己找 dop 与 gh；只有找不到时才需要你指定位置。',
+      intro: '插件会自己找 dop；只有找不到时才需要你指定位置。',
       'status.ready': '只读面 ready · {summary}',
-      'status.summary': 'dop {dop} · gh {gh}',
+      'status.summary': 'dop {dop}',
       'status.checking': '正在检测命令行位置',
       'status.unchanged': '位置未变',
       'status.missing': '未找到 {cli} · 已查 PATH、候选目录、环境变量',
@@ -200,7 +200,6 @@ window.__ModuleLoader__.load({
       'action.reset': '重置为自动发现',
       'action.refresh': '刷新',
       'entry.dop': 'dop 可执行文件',
-      'entry.gh': 'gh 可执行文件',
       'entry.placeholder': '粘贴 {tool} 的完整路径',
       'entry.placeholder.reset': '保存后自动发现',
       'entry.hint.discovered': '自动发现命中 · 另有 {n} 个候选',
@@ -236,16 +235,15 @@ window.__ModuleLoader__.load({
       'unavailable.body': '当前 profile 没有挂载配置面（settings / config-editor）。',
       'unavailable.envHint': '可以改用环境变量：',
       'unavailable.envDop': 'FORGE_DEVOPS_DOP_BIN  dop 可执行文件',
-      'unavailable.envGh': 'FORGE_DEVOPS_GH_BIN  gh 可执行文件',
       'unavailable.readme': '详见 packages/forge-devops/README.md',
     };
 
     const en = {
       nav: 'Enterprise DevOps',
       title: 'Enterprise DevOps',
-      intro: 'The plugin locates dop and gh by itself; you only point at a path when it fails.',
+      intro: 'The plugin locates dop by itself; you only point at a path when it fails.',
       'status.ready': 'Reader ready · {summary}',
-      'status.summary': 'dop {dop} · gh {gh}',
+      'status.summary': 'dop {dop}',
       'status.checking': 'Detecting command-line locations',
       'status.unchanged': 'locations unchanged',
       'status.missing': '{cli} not found · searched PATH, candidate folders, environment',
@@ -256,7 +254,6 @@ window.__ModuleLoader__.load({
       'action.reset': 'Reset to autodiscovery',
       'action.refresh': 'Refresh',
       'entry.dop': 'dop executable',
-      'entry.gh': 'gh executable',
       'entry.placeholder': 'Paste the full path to {tool}',
       'entry.placeholder.reset': 'Resolved on save',
       'entry.hint.discovered': 'Found automatically · {n} more candidate',
@@ -292,7 +289,6 @@ window.__ModuleLoader__.load({
       'unavailable.body': 'This profile mounts no configuration surface (settings / config-editor).',
       'unavailable.envHint': 'Environment variables still work:',
       'unavailable.envDop': 'FORGE_DEVOPS_DOP_BIN  dop executable',
-      'unavailable.envGh': 'FORGE_DEVOPS_GH_BIN  gh executable',
       'unavailable.readme': 'See packages/forge-devops/README.md',
     };
 
@@ -316,15 +312,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 客户端字段校验：只做**格式**判定，且只覆盖 `PAGE_FIELDS` 三键（页面能编辑的那三个）。
-     * 存在性、是否目录、是否可执行由服务端在保存时判定（422 逐字段返回）；隐藏三键没有页面规则，
-     * 页面既不渲染也不提交它们，服务端仍按六键契约校验——收窄在页面，不在服务端。
+     * 客户端字段校验：只做**格式**判定，且只覆盖 `PAGE_FIELDS` 两键（页面能编辑的那两个）。
+     * 存在性、是否目录、是否可执行由服务端在保存时判定（422 逐字段返回）；隐藏两键没有页面规则，
+     * 页面既不渲染也不提交它们，服务端仍按四键契约校验——收窄在页面，不在服务端。
      * @returns {string|null} i18n 键；合法返回 null。空值 = 清除该层，恒合法。
      */
     function validateField(field, raw) {
       const value = normalize(raw);
       if (value === '') return null;
-      if (field === 'dopBin' || field === 'ghBin') {
+      if (field === 'dopBin') {
         // 只有长度这一条（服务端同样按 4096 截断，否则用户要等到 422 才知道粘多了）；
         // 形态/存在性/执行位一律留到保存期：页面判形态就会把可保存的 shim 提前拦掉。
         return value.length > MAX_PATH_LENGTH ? 'error.pathLength' : null;
@@ -336,7 +332,7 @@ window.__ModuleLoader__.load({
       return null;
     }
 
-    /** 提交值：空串一律转 null（= 清除该层，回落下一层）；三键里只有 timeoutMs 需要转数字。 */
+    /** 提交值：空串一律转 null（= 清除该层，回落下一层）；两键里只有 timeoutMs 需要转数字。 */
     function payloadValue(field, raw) {
       const value = normalize(raw);
       if (value === '') return null;
@@ -435,7 +431,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 入口字段（dop/gh）：只读展示生效路径，覆盖时才可编辑。
+     * 入口字段（dop）：只读展示生效路径，覆盖时才可编辑。
      * 三态：resolved（只读）/ editing（可编辑）/ reset（已置空，保存后回落）。
      */
     function CliEntryField(props) {
@@ -484,7 +480,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'fdv-head' },
-          h('label', { className: 'fdv-label', htmlFor: `fdv-${field}` }, t(field === 'dopBin' ? 'entry.dop' : 'entry.gh')),
+          h('label', { className: 'fdv-label', htmlFor: `fdv-${field}` }, t('entry.dop')),
           h(Tag, { tone: ORIGIN_TONE[origin] ?? 'quiet', text: t(`origin.${origin}`) }),
           origin === 'config' && overridesEnv(entry) ? h(Tag, { tone: 'quiet', text: t('origin.overridesEnv') }) : null,
           action ? h('span', { className: 'fdv-head-actions' }, action) : null,
@@ -512,7 +508,7 @@ window.__ModuleLoader__.load({
     /**
      * 超时单行（`PAGE_FIELDS` 里唯一的非路径字段）：值来自 staged，生效值走 placeholder。
      * 与入口卡同节律（12 上下内距 + 6 label/input + 6 input/hint），行间只靠 `.fdv-scalar`
-     * 的上边框分隔——不新开分组、不加外框：超时是第三行，不是第二组。
+     * 的上边框分隔——不新开分组、不加外框：超时是第二行，不是第二组。
      */
     function TimeoutField(props) {
       const { t, field, label, hint, placeholder, value, error, locked, inputRef, onChange, onBlur } = props;
@@ -546,7 +542,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 首次加载骨架：与三行一列**同构**（`groupLine` 标题占位 + 三行 `skeletonRow` + 两条 `separator`），
+     * 首次加载骨架：与两行一列**同构**（`groupLine` 标题占位 + 两行 `skeletonRow` + `separator`），
      * 加载完成到表单零跳动。不再画 2×2 四格——那会暗示页面上有四个字段。
      */
     function Skeleton() {
@@ -554,7 +550,7 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'fdv-skeleton', 'aria-hidden': 'true' },
         h('div', { className: 'fdv-skeleton-group' }),
-        [0, 1, 2].map((index) => h('div', { key: index, className: 'fdv-skeleton-row' })),
+        [0, 1].map((index) => h('div', { key: index, className: 'fdv-skeleton-row' })),
       );
     }
 
@@ -571,7 +567,6 @@ window.__ModuleLoader__.load({
         h('p', { className: 'fdv-unavailable-body' }, t('unavailable.body')),
         h('p', { className: 'fdv-unavailable-body' }, t('unavailable.envHint')),
         h('code', { className: 'fdv-unavailable-env' }, t('unavailable.envDop')),
-        h('code', { className: 'fdv-unavailable-env' }, t('unavailable.envGh')),
         h('p', { className: 'fdv-unavailable-body' }, t('unavailable.readme')),
       );
     }
@@ -632,7 +627,7 @@ window.__ModuleLoader__.load({
         return nodeRefs.current[field];
       }
 
-      /** 焦点移到第一个非法字段（只在页面可见的三键里找，别为隐藏键聚焦一个不存在的输入框）。 */
+      /** 焦点移到第一个非法字段（只在页面可见的两键里找，别为隐藏键聚焦一个不存在的输入框）。 */
       function focusFirst(map) {
         for (const field of PAGE_FIELDS) {
           if (Object.prototype.hasOwnProperty.call(map, field)) {
@@ -700,9 +695,8 @@ window.__ModuleLoader__.load({
         const snapshot = result.snapshot;
         const next = {
           dop: normalize(snapshot.entries?.dopBin?.path),
-          gh: normalize(snapshot.entries?.ghBin?.path),
         };
-        const unchanged = refresh && paths.current !== null && paths.current.dop === next.dop && paths.current.gh === next.gh;
+        const unchanged = refresh && paths.current !== null && paths.current.dop === next.dop;
         paths.current = next;
         if (!mounted.current) return;
         applySnapshot(snapshot);
@@ -747,7 +741,7 @@ window.__ModuleLoader__.load({
         setExpanded((prev) => ({ ...prev, [field]: prev[field] !== true }));
       }
 
-      /** 保存：只提交真正变化的键（且只可能是 PAGE_FIELDS 三键）；空值转 null（= 清除该层，回落下一层）。 */
+      /** 保存：只提交真正变化的键（且只可能是 PAGE_FIELDS 两键）；空值转 null（= 清除该层，回落下一层）。 */
       async function save() {
         const snapshot = snapshotRef.current;
         if (!snapshot) return;
@@ -803,7 +797,7 @@ window.__ModuleLoader__.load({
             const returned = body && typeof body.errors === 'object' && body.errors !== null ? body.errors : {};
             const serverErrors = {};
             for (const field of Object.keys(returned)) {
-              // 只映射页面可见的三键：隐藏键没有输入框，为一个不存在的字段画红字就是"幽灵字段"。
+              // 只映射页面可见的两键：隐藏键没有输入框，为一个不存在的字段画红字就是"幽灵字段"。
               if (PAGE_FIELDS.includes(field)) serverErrors[field] = fieldMessage(t, returned[field]);
             }
             if (Object.keys(serverErrors).length > 0) {
@@ -838,17 +832,16 @@ window.__ModuleLoader__.load({
         if (view.mode === 'loading' || phase === 'checking') return { tone: 'idle', text: t('status.checking') };
         if (view.mode === 'error') return { tone: 'unavailable', text: t('status.unavailable', { reason: view.reason ?? t('error.load') }) };
         if (!snapshot || snapshot.ready !== true) {
-          const missing = originOf('dopBin') === 'missing' ? 'dop' : originOf('ghBin') === 'missing' ? 'gh' : 'dop';
-          return { tone: 'missing', text: t('status.missing', { cli: missing }) };
+          return { tone: 'missing', text: t('status.missing', { cli: 'dop' }) };
         }
-        const summary = t('status.summary', { dop: t(`origin.${originOf('dopBin')}`), gh: t(`origin.${originOf('ghBin')}`) });
+        const summary = t('status.summary', { dop: t(`origin.${originOf('dopBin')}`) });
         const text = t('status.ready', { summary });
         return { tone: 'ready', text: steady ? `${text} · ${t('status.unchanged')}` : text };
       }
 
       const status = statusView();
 
-      /** 超时行（第三行）：值来自 staged，生效值走 placeholder（`20000` 是既有默认值的兜底占位）。 */
+      /** 超时行（第二行）：值来自 staged，生效值走 placeholder（`20000` 是既有默认值的兜底占位）。 */
       function timeoutField() {
         const field = 'timeoutMs';
         const entry = entries[field] ?? {};
@@ -928,7 +921,7 @@ window.__ModuleLoader__.load({
         ),
       );
 
-      // 第三行：超时（单行 .fdv-scalar）。页面只有三行一列，行间只有两条 .5px 分隔线。
+      // 第二行：超时（单行 .fdv-scalar）。页面只有两行一列，行间只有一条 .5px 分隔线。
       children.push(timeoutField());
 
       const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict') ? ' fdv-note-error' : '';

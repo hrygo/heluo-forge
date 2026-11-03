@@ -2,7 +2,8 @@
  * 入口与装载面门禁：AC-1 / AC-4 / AC-6 / AC-7（静态半）。
  *
  * 这一组用例回答的是"分发出去的那份东西能不能被宿主认出来"：清单（入口名、分发白名单、
- * engines、补丁指针）、补丁层（4 条目录：3 读 + 1 只读判定 + 0 条写 + 显式审计 + 显式 config）、以及
+ * engines、补丁指针）、补丁层（5 条并集目录：4 读 + 1 只读判定 + 0 条写 + 显式审计 + 显式
+ * config，且与 forge-devops 的补丁层共用同一行 `heluo-policy`）、以及
  * **装载安全**（模块顶层不碰宿主、不碰子进程；缺能力时 `apply` 抛可读错误而不是未捕获异常）。
  *
  * 断言尽量落在"文件里真实写了什么"上：AC-1 要求 `insert` 行的 name 精确等于包根名，
@@ -21,7 +22,7 @@ import {
   inject,
   name as pluginName,
 } from '../src/index.mjs';
-import { GITEE_READ_ACTIONS as READ_ACTIONS_FROM_READ } from '../src/gitee-read.mjs';
+import { GITEE_READ_ACTIONS as READ_ACTIONS_FROM_READ, failureEnvelope, isReadEnvelope } from '../src/gitee-read.mjs';
 import { createFakeHost, parsePatch, readPatch } from './helpers/fake-host.mjs';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -120,7 +121,7 @@ test('AC-6: 装载安全——模块本身可 import，顶层不碰宿主也不�
   assert.deepEqual([...inject], ['tools', 'policy']);
 
   // 宿主在补丁行省略 config 时会把 undefined 交给 schema；这里必须能给出 value 而不是 issues，
-  // 否则插件不激活、9 个工具会静默消失（devops 侧同类用例 D-1）。
+  // 否则插件不激活、10 个工具会静默消失（devops 侧同类用例 D-1）。
   const validated = ConfigStandard['~standard'].validate(undefined);
   assert.deepEqual(validated.issues ?? null, null);
   assert.equal(typeof validated.value, 'object');
@@ -209,7 +210,7 @@ test('AC-6: 配置非法在挂载期拒绝，错误里只带字段与原因', ()
   assert.match(JSON.stringify(thrown.detail.issues), /nope/u, '要能定位到出错字段');
 });
 
-test('AC-1/AC-7: 真实补丁层可装配——8 个工具按固定顺序注册，卸载后干净', async () => {
+test('AC-1/AC-7: 真实补丁层可装配——10 个工具按固定顺序注册，卸载后干净', async () => {
   const rows = await readPatch(PATCH_FILE);
   assert.equal(rows.length, 2, '分发补丁层只插两行（策略 + 本插件），不多插别的东西');
   const [policyRow, pluginRow] = rows;
@@ -218,12 +219,14 @@ test('AC-1/AC-7: 真实补丁层可装配——8 个工具按固定顺序注册�
   assert.equal(typeof pluginRow.config, 'object', '插件行必须写显式 config（否则宿主交给 schema 的是 undefined）');
 
   const host = createFakeHost();
-  // 按**分发补丁层原样**挂载：两行都带 `isolate: { policy: gitee }`，策略落在 `gitee` 服务域。
-  const mountedPolicy = host.mountPolicy({ catalog: policyRow.catalog, audit: policyRow.audit, isolate: policyRow.isolate });
+  // 按**分发补丁层原样**挂载：两行都在根服务域（r10 取消独立服务域），同装 devops 时
+  // 另一份同 id 的策略行按 id 覆盖 config，最终只有一个 `policy` 实例、一份 5 条并集目录。
+  const mountedPolicy = host.mountPolicy({ catalog: policyRow.catalog, audit: policyRow.audit });
   assert.equal(mountedPolicy.ok, true, `策略层挂载失败：${mountedPolicy.error?.message ?? ''}`);
 
-  const mounted = host.mount(apply, pluginRow.config, pluginRow.name, { isolate: pluginRow.isolate });
+  const mounted = host.mount(apply, pluginRow.config, pluginRow.name);
   assert.equal(mounted.ok, true, `插件挂载失败：${mounted.error?.message ?? ''}`);
+  assert.equal(host.realms.size, 0, 'r10 单实例：不得再建独立服务域（label 数必须为 0）');
   assert.deepEqual(host.toolNames(), [...GITEE_TOOLS]);
 
   for (const toolName of host.toolNames()) {
@@ -243,23 +246,30 @@ test('AC-1/AC-7: 真实补丁层可装配——8 个工具按固定顺序注册�
   assert.equal(typeof mounted.teardown, 'function');
 });
 
-// r7：目录从 3 条变 4 条（多出只读判定 `gitee.delivery.judge`），但"写动作 = 不登记"不变——
-// 所以 `kind === 'write'` 的断言原样保留，新增的只是第 4 条的取值（kind/target/egress/enabled）。
-test('AC-7: 补丁层自带目录与审计，0 条写；插件行不重复 heluo-policy', async () => {
+// r10：目录从 4 条变 5 条——多出 `change.read`（devops 的 dop 变更读），与 forge-devops 补丁层
+// 逐字共用同一份并集；"写动作 = 不登记"不变，所以 `kind === 'write'` 的断言原样保留。
+test('AC-7: 补丁层自带 5 条并集目录与审计，0 条写；两包共用同一行 heluo-policy', async () => {
   const rows = await readPatch(PATCH_FILE);
   const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
   assert.ok(policyRow !== undefined);
   const catalog = policyRow.catalog;
-  assert.equal(catalog.length, 4, '目录恰好 4 条：3 条只读 + 1 条只读判定');
+  assert.equal(catalog.length, 5, '目录恰好 5 条并集：change.read + 3 条 gitee 只读 + 1 条只读判定');
+  assert.deepEqual(
+    catalog[0],
+    { action: 'change.read', kind: 'read', target: 'change', enabled: true },
+    '第 1 条是 devops 的 dop 变更读：并集目录必须与 @heluo/forge-devops 补丁层逐字相同',
+  );
   for (const entry of catalog) {
-    assert.ok(entry.action.startsWith('gitee.'), `目录动作必须落在 gitee.* 命名空间：${entry.action}`);
     assert.equal(entry.kind, 'read');
     assert.equal(entry.enabled, true);
   }
-  assert.deepEqual(catalog.slice(0, 3).map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
-  // 第 4 条：判定的取值本身就是策略事实，逐项写死而不是"包含 judge 即可"。
+  assert.deepEqual(catalog.slice(1, 4).map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
+  for (const entry of catalog.slice(1)) {
+    assert.ok(entry.action.startsWith('gitee.'), `gitee 侧目录动作必须落在 gitee.* 命名空间：${entry.action}`);
+  }
+  // 最后一条：判定的取值本身就是策略事实，逐项写死而不是"包含 judge 即可"。
   assert.deepEqual(
-    catalog[3],
+    catalog[4],
     { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' },
     "判定目录必须逐字：kind=read、target=change、egress=allow（缺省 egress 会取 'confirm'，判定就拿不到 allow）",
   );
@@ -272,7 +282,7 @@ test('AC-7: 补丁层自带目录与审计，0 条写；插件行不重复 heluo
   const host = createFakeHost();
   const mountedPolicy = host.mountPolicy({ catalog, audit: policyRow.audit });
   assert.equal(mountedPolicy.ok, true);
-  for (const action of [...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
+  for (const action of ['change.read', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
     assert.equal(mountedPolicy.policy.catalog.get(action)?.enabled, true);
   }
   assert.equal(
@@ -284,13 +294,14 @@ test('AC-7: 补丁层自带目录与审计，0 条写；插件行不重复 heluo
   // 补丁层自己不得重复插入策略行（叠加安装才会出现两个 heluo-policy）。
   const ids = rows.map((row) => row.id);
   assert.equal(new Set(ids).size, ids.length, `补丁层 id 重复：${ids.join(', ')}`);
-  // D-2：策略行不与 devops 补丁层同名（同 id 会被 loader 整体覆盖 config），且两行同 label
-  // 的服务域——provider 与 consumer 必须写同一句，才互相可见。
-  assert.notEqual(policyRow.id, 'heluo-policy', '策略行 id 必须与 forge-devops 补丁层的策略行区分开（D-2）');
+  // r10 单实例：策略行与 forge-devops 的补丁层**同名同目录**（loader 按 id 覆盖 config），
+  // 且两行都不写隔离域——任一条单边改动都会让幸存配置取决于装配顺序。
+  assert.equal(policyRow.id, 'heluo-policy', '策略行必须与 forge-devops 补丁层同 id（r10 单实例）');
   for (const row of rows) {
-    assert.deepEqual(row.isolate, { policy: 'gitee' }, `${row.id} 必须声明 isolate.policy（D-2：独立服务域）`);
+    assert.equal(row.isolate, undefined, `${row.id} 不得写 isolate（r10 取消独立服务域）`);
   }
   const text = await readFile(PATCH_FILE, 'utf8');
+  assert.doesNotMatch(text, /isolate/u, '补丁层文本不得出现 isolate（tests/plugin-patch-layers.test.mjs 同口径）');
   assert.equal(parsePatch(text).length, 2);
   assert.equal((text.match(/- insert:/gu) ?? []).length, 1, '只允许一个 insert 块');
 });
@@ -301,4 +312,19 @@ test('static: 源码里没有任何以 forge_gitee_ 为名的泛化执行入口'
     assert.doesNotMatch(text, new RegExp(`name: '${forbidden}'`, 'u'), `不得注册泛化入口 ${forbidden}`);
   }
   assert.ok(PACKAGE_ROOT.endsWith('/'));
+});
+
+test('D-4: 蓝图 API 点名的 gitee 侧成员可从模块 import（文档与实现对齐）', async () => {
+  const actions = await import('../src/gitee-actions.mjs');
+  const read = await import('../src/gitee-read.mjs');
+  for (const [name, value] of Object.entries({
+    createReviewRecord: actions.createReviewRecord,
+    createDeliveryGate: actions.createDeliveryGate,
+    failureEnvelope: read.failureEnvelope,
+    isReadEnvelope: read.isReadEnvelope,
+  })) {
+    assert.equal(typeof value, 'function', `${name} 必须是可 import 的函数（蓝图 api 清单点名）`);
+  }
+  assert.equal(typeof failureEnvelope, 'function');
+  assert.equal(typeof isReadEnvelope, 'function');
 });

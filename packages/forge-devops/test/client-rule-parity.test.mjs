@@ -6,12 +6,15 @@
  * 只要差一个字符，界面就退化成「失焦放行、点保存才 422」——R2-1 正是如此：页面
  * `OWNER_PATTERN` 无上界、服务端 `{0,38}`，40 字符的组织名在 blur 时毫无提示。
  *
- * r5 之后页面只可编辑三键（`PAGE_FIELDS`：dop 入口 / gh 入口 / 超时），隐藏三键
- * （dopEndpoint / ghOwner / sourceType）不进 DOM、不进 staged、不发送。于是「等值」拆成两条
+ * r5 之后页面只可编辑两键（`PAGE_FIELDS`：dop 入口 / 超时），隐藏两键
+ * （dopEndpoint / sourceType）不进 DOM、不进 staged、不发送。于是「等值」拆成两条
  * 不变量，缺一条都会让收窄变成事故：
- *   1. **三键等值**：页面规则与服务端保存期判定逐条同判（漂移只有 page-loose / page-strict 两种）；
- *   2. **隐藏三键不对称**：页面恒 null（没有规则、也不渲染），服务端**仍严**——
+ *   1. **两键等值**：页面规则与服务端保存期判定逐条同判（漂移只有 page-loose / page-strict 两种）；
+ *   2. **隐藏两键不对称**：页面恒 null（没有规则、也不渲染），服务端**仍严**——
  *      页面收窄不是服务端放宽；删页面规则时顺手删掉服务端边界，只会让保存把非法值写进配置。
+ *
+ * r10 按平台切库：gh 入口与 ghOwner 整键退场（Gitee 由 forge-gitee 负责），页面字段表
+ * 收敛为 dop 入口 + 超时两项，服务端契约同步 6→4 键。
  *
  * r8 又把「三键等值」收窄了一次：入口路径在**页面侧**只剩长度上界，后缀/包装脚本形态不再拦截
  * （原来 `.cmd`/`.bat`/`.ps1` 在 blur 就被拒，服务端现在一律可存）。所以矩阵里不再有「后缀差异」
@@ -95,7 +98,7 @@ const PATH_OVER_LIMIT = pathOfLength(4097);
  * 服务端保存期判定：按字段形状选面（与 http 保存路径同源）                     *
  * ------------------------------------------------------------------------- */
 
-const PATH_FIELDS = new Set(['dopBin', 'ghBin']);
+const PATH_FIELDS = new Set(['dopBin']);
 /** 已声明的保存期职责：不是格式规则，页面不判不算漂移。 */
 const DELEGATED_REASON = /找不到这个文件|这是目录|不是可直接执行的文件/u;
 
@@ -110,8 +113,8 @@ function serverVerdict(field, value) {
 }
 
 /**
- * 取值矩阵：六个字段的合法与非法两侧（服务端契约面，一条都不能少）。
- * 页面只为其中三键背书——另三键由「页面恒 null / 服务端仍严」那条用例守着。
+ * 取值矩阵：四个字段的合法与非法两侧（服务端契约面，一条都不能少）。
+ * 页面只为其中两键背书——另两键由「页面恒 null / 服务端仍严」那条用例守着。
  */
 const MATRIX = [
   ['dopBin', 'C:\\tools\\dop.exe', 'win32 原生入口'],
@@ -124,18 +127,10 @@ const MATRIX = [
   ['dopBin', 'C:\\tools\\missing.exe', '形态合法、存在性由保存期判'],
   ['dopBin', PATH_AT_LIMIT, '4096 字符（长度上界内）'],
   ['dopBin', PATH_OVER_LIMIT, '4097 字符（超长度上界）'],
-  ['ghBin', 'gh', '裸命令名（默认值形态）'],
-  ['ghBin', 'C:\\tools\\gh.cmd', 'npm shim（gh 与 dop 同口径）'],
   ['dopEndpoint', 'https://dop.example/api', '正常地址'],
   ['dopEndpoint', 'http://dop.example:8080/api', '带端口'],
   ['dopEndpoint', 'dop.example/api', '缺协议'],
   ['dopEndpoint', 'ftp://dop.example', '非 http 协议'],
-  ['ghOwner', 'hrygo', '正常组织名'],
-  ['ghOwner', 'a'.repeat(39), '39 字符（上界内）'],
-  ['ghOwner', 'a'.repeat(40), '40 字符（越界）'],
-  ['ghOwner', 'a'.repeat(45), '45 字符（越界）'],
-  ['ghOwner', '-bad', '首字符是连字符'],
-  ['ghOwner', 'has_underscore', '含下划线'],
   ['sourceType', 'mock', '合法'],
   ['sourceType', 'ENTERPRISE', '大写（服务端 lowercases 后接受）'],
   ['sourceType', 'prod', '非法取值'],
@@ -146,33 +141,27 @@ const MATRIX = [
   ['timeoutMs', '12.5', '非整数'],
 ];
 
-test('矩阵覆盖全部六个字段，且三键在页面直面、另三键在服务端直面', () => {
+test('矩阵覆盖全部四个字段，且两键在页面直面、另两键在服务端直面', () => {
   const covered = new Set(MATRIX.map(([field]) => field));
   assert.deepEqual([...covered].sort(), [...CLI_FIELDS].sort(), `矩阵没有覆盖全部字段：${[...covered].join(',')}`);
-  // 页面可编辑面是服务端字段表的真子集，且恰好三键（收窄在页面，词表不动）。
-  assert.deepEqual(PAGE_FIELDS, ['dopBin', 'ghBin', 'timeoutMs'], `页面只收敛到三键，实际 ${PAGE_FIELDS.join(',')}`);
+  // 页面可编辑面是服务端字段表的真子集，且恰好两键（收窄在页面，词表不动）。
+  assert.deepEqual(PAGE_FIELDS, ['dopBin', 'timeoutMs'], `页面只收敛到两键，实际 ${PAGE_FIELDS.join(',')}`);
   for (const field of PAGE_FIELDS) {
     assert.ok(CLI_FIELDS.includes(field), `PAGE_FIELDS 里的 ${field} 不在服务端 CLI_FIELDS（页面会提交服务端不认的键）`);
   }
   const hidden = CLI_FIELDS.filter((field) => !PAGE_FIELDS.includes(field));
-  assert.deepEqual(hidden.sort(), ['dopEndpoint', 'ghOwner', 'sourceType'], `隐藏三键必须正好是这三个，实际 ${hidden.join(',')}`);
+  assert.deepEqual(hidden.sort(), ['dopEndpoint', 'sourceType'], `隐藏两键必须正好是这两个，实际 ${hidden.join(',')}`);
 });
 
-test('隐藏三键：页面恒 null（无规则、不渲染），服务端仍逐条拒收（收窄 ≠ 放宽）', () => {
+test('隐藏两键：页面恒 null（无规则、不渲染），服务端仍逐条拒收（收窄 ≠ 放宽）', () => {
   const hiddenRows = MATRIX.filter(([field]) => !PAGE_FIELDS.includes(field));
-  assert.ok(hiddenRows.length >= 10, `矩阵必须覆盖隐藏三键的边界样本（实际 ${hiddenRows.length} 条）`);
+  assert.ok(hiddenRows.length >= 5, `矩阵必须覆盖隐藏两键的边界样本（实际 ${hiddenRows.length} 条）`);
   // 页面连这些字段的输入框都没有：留着页面规则就是维护一份没人能触发的判定。
   for (const [field, raw, label] of hiddenRows) {
     assert.equal(pageValidateField(field, String(raw)), null, `页面不得为隐藏字段 ${field} 保留规则：${label}`);
   }
   // 服务端的边界一条都不能跟着消失（这些正是「删页面规则时顺手删掉」的高危项）。
   const serverCases = [
-    ['ghOwner', 'hrygo', true, '正常组织名'],
-    ['ghOwner', 'a'.repeat(39), true, '39 字符上界内'],
-    ['ghOwner', 'a'.repeat(40), false, '40 字符越界'],
-    ['ghOwner', 'a'.repeat(45), false, '45 字符越界'],
-    ['ghOwner', '-bad', false, '首字符连字符'],
-    ['ghOwner', 'has_underscore', false, '含下划线'],
     ['dopEndpoint', 'https://dop.example/api', true, '正常地址'],
     ['dopEndpoint', 'http://dop.example:8080/api', true, '带端口'],
     ['dopEndpoint', 'dop.example/api', false, '缺协议'],
@@ -223,11 +212,11 @@ test('页面入口规则只剩长度：后缀/包装脚本形态一律放行，�
   assert.equal(count('error.pathLength'), 2, 'error.pathLength 是入口字段唯一的错误句，zh/en 各一条');
 });
 
-test('页面三键规则与服务端保存期判定在矩阵上等值（无 page-loose / page-strict 漂移）', () => {
+test('页面两键规则与服务端保存期判定在矩阵上等值（无 page-loose / page-strict 漂移）', () => {
   const drift = [];
   const delegated = [];
   for (const [field, raw, label] of MATRIX) {
-    // 隐藏三键走上面那条不对称用例：页面没有规则，等值比较在这里没有意义。
+    // 隐藏两键走上面那条不对称用例：页面没有规则，等值比较在这里没有意义。
     if (!PAGE_FIELDS.includes(field)) continue;
     const value = String(raw);
     const pageKey = pageValidateField(field, value);

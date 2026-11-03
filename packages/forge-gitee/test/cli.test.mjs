@@ -1,8 +1,9 @@
 /**
- * TK2 唯一子进程出口（AC-23）与凭据面（AC-22）。
+ * TK2 唯一子进程出口（AC-23）与凭据面（AC-22 / r10）。
  *
- * 这个文件守的是"没有第二条执行路径"：入参白名单、`shell: false`、超时、1 MiB 上限、
- * 环境白名单、令牌脱敏、落盘令牌阻断（阻断发生在**起进程之前**）与静态出口唯一性。
+ * 这个文件守的是"没有第二条执行路径"：`run()`（gitee CLI）与 `runGit()`（本地 git）
+ * 共用同一个 `execFile` 站点——入参白名单、`shell:false`、超时、1 MiB 上限、环境白名单、
+ * 令牌脱敏、落盘凭据策略（warn 只告警 / block 在**起进程之前**阻断）与静态出口唯一性。
  * 终态口径与 r1 `cli-runner` 一致（失败是数据不是异常），差异在更严的环境与凭据策略。
  */
 import test from 'node:test';
@@ -14,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   ENV_ALLOWLIST,
+  GIT_INVOCATION_KEYS,
   GiteeCliError,
   INVOCATION_KEYS,
   createGiteeRunner,
@@ -97,6 +99,7 @@ test('环境白名单：只放行运行态变量与点名凭据，无关机密�
   const { execFile, calls } = fakeExecFile(() => ({ stdout: '' }));
   const runner = createGiteeRunner({
     execFile,
+    authEnv: ['GH_TOKEN'],
     env: {
       GH_TOKEN: TOKEN_VALUE,
       CORP_PASSWORD: ['l', 'e', 'a', 'k'].join(''),
@@ -256,7 +259,7 @@ test('入参形状错误逐类拒绝：bin 空、args 非数组、元素非字�
   }
 });
 
-test('装配期校验：注入点/超时/上限/时钟/环境/凭据名不合法就直接报错（fail closed）', () => {
+test('装配期校验：注入点/超时/上限/时钟/环境/凭据名/凭据策略不合法就直接报错（fail closed）', () => {
   const cases = [
     [{ execFile: 'gh' }, 'execFile 非函数'],
     [{ timeoutMs: 0 }, '超时非正'],
@@ -264,13 +267,15 @@ test('装配期校验：注入点/超时/上限/时钟/环境/凭据名不合法
     [{ maxOutputBytes: -1 }, '上限非正'],
     [{ now: 42 }, '时钟非函数'],
     [{ env: 'not-an-object' }, 'env 非对象'],
-    [{ authEnv: [] }, '凭据名为空'],
     [{ authEnv: ['bad name'] }, '凭据名非法'],
+    [{ persistentTokenPolicy: 'strict' }, '凭据策略非法'],
     [{ readFile: 42 }, '读文件注入点非函数'],
   ];
   for (const [options, label] of cases) {
     assert.throws(() => createGiteeRunner(options), GiteeCliError, label);
   }
+  // r10：空凭据名是合法配置（不注入任何凭据变量），构造期不再拒绝。
+  assert.equal(typeof createGiteeRunner({ execFile: () => {}, authEnv: [] }).run, 'function');
 });
 
 test('并发调用互不干扰：结果与各自入参一一对应', async () => {
@@ -296,7 +301,7 @@ test('脱敏：stdout/stderr 里的令牌被整体替换，含正则元字符的
     stdout: `token ${token} leaked\n`,
     stderr: `retry with ${token}\n`,
   }));
-  const runner = createGiteeRunner({ execFile, env: { GH_TOKEN: token } });
+  const runner = createGiteeRunner({ execFile, env: { GH_TOKEN: token }, authEnv: ['GH_TOKEN'] });
   const result = await runner.run({ bin: 'gh', args: ['api', 'user'] });
   assert.equal(result.stdout.includes(token), false);
   assert.equal(result.stderr.includes(token), false);
@@ -305,9 +310,18 @@ test('脱敏：stdout/stderr 里的令牌被整体替换，含正则元字符的
 
 test('sourceTokens 在子进程输出里重复出现时全部替换（split/join 不做单次替换）', async () => {
   const { execFile } = fakeExecFile(() => ({ stdout: `${TOKEN_VALUE}|${TOKEN_VALUE}\n` }));
-  const runner = createGiteeRunner({ execFile, env: { GH_TOKEN: TOKEN_VALUE } });
+  const runner = createGiteeRunner({ execFile, env: { GH_TOKEN: TOKEN_VALUE }, authEnv: ['GH_TOKEN'] });
   const result = await runner.run({ bin: 'gh', args: ['version'] });
   assert.equal(result.stdout, '***|***\n');
+});
+
+test('形状兜底：未点名但形似凭据的串同样被抹掉（默认 authEnv 为空时也生效）', async () => {
+  const shape = ['ghp', 'abcdefghijklmnopqrstuvwxyz012345'].join('_');
+  const { execFile } = fakeExecFile(() => ({ stdout: `leaked ${shape}\n` }));
+  const runner = createGiteeRunner({ execFile, env: {} });
+  const result = await runner.run({ bin: 'gh', args: ['version'] });
+  assert.equal(result.stdout.includes(shape), false);
+  assert.equal(result.stdout, 'leaked ***\n');
 });
 
 test('scrubSecrets 是纯函数：空令牌/非字符串/无命中都不改内容', () => {
@@ -378,30 +392,116 @@ test('detectPersistentToken：命中落盘令牌时只报文件名与下一步�
   assert.equal(JSON.stringify(result).includes(TOKEN_VALUE), false, 'AC-22：不回显令牌值');
 });
 
-test('落盘令牌命中时 run() 抛 GITEE_PERSISTENT_TOKEN 且零子进程（阻断在起进程之前）', async () => {
-  const { execFile, calls } = fakeExecFile(() => ({ stdout: 'should-not-run' }));
+test('落盘令牌默认只告警：run() 照常执行，credentialStatus 报 detected + policy warn', async () => {
+  const { execFile, calls } = fakeExecFile(() => ({ stdout: 'ok' }));
   const runner = createGiteeRunner({
     execFile,
     env: { HOME: HOME_FIXTURE, GH_TOKEN: TOKEN_VALUE },
     readFile: (file) => (file.endsWith('config.yml') ? `token: ${OTHER_TOKEN}\n` : null),
   });
 
-  await assert.rejects(
-    runner.run({ bin: 'gh', args: ['issue', 'list'] }),
-    (error) => {
-      assert.ok(error instanceof GiteeCliError);
-      assert.equal(error.code, 'PERSISTENT_TOKEN');
-      assert.equal(error.reason, 'GITEE_PERSISTENT_TOKEN');
-      assert.equal(error.status, 'denied');
-      assert.match(error.message, /环境变量/);
-      assert.equal(JSON.stringify(error.detail).includes(OTHER_TOKEN), false);
-      assert.equal(error.message.includes(OTHER_TOKEN), false);
-      return true;
-    },
-    '应阻断持久令牌',
-  );
+  const result = await runner.run({ bin: 'gh', args: ['issue', 'list'] });
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls.length, 1, 'warn 不阻断');
+  const status = runner.credentialStatus();
+  assert.equal(status.blocked, true);
+  assert.equal(status.policy, 'warn');
+  assert.equal(status.enforced, false);
+  assert.equal(JSON.stringify(status).includes(OTHER_TOKEN), false, 'AC-22：不回显令牌值');
+});
+
+test('落盘令牌 + block 策略：run()/runGit() 都抛 GITEE_PERSISTENT_TOKEN 且零子进程', async () => {
+  const { execFile, calls } = fakeExecFile(() => ({ stdout: 'should-not-run' }));
+  const runner = createGiteeRunner({
+    execFile,
+    env: { HOME: HOME_FIXTURE, GH_TOKEN: TOKEN_VALUE },
+    persistentTokenPolicy: 'block',
+    readFile: (file) => (file.endsWith('config.yml') ? `token: ${OTHER_TOKEN}\n` : null),
+  });
+
+  for (const invoke of [
+    () => runner.run({ bin: 'gh', args: ['issue', 'list'] }),
+    () => runner.runGit({ args: ['status', '--short'], purpose: 'git.status' }),
+  ]) {
+    await assert.rejects(
+      invoke(),
+      (error) => {
+        assert.ok(error instanceof GiteeCliError);
+        assert.equal(error.code, 'PERSISTENT_TOKEN');
+        assert.equal(error.reason, 'GITEE_PERSISTENT_TOKEN');
+        assert.equal(error.status, 'denied');
+        assert.equal(error.detail.policy, 'block');
+        assert.match(error.message, /环境变量/);
+        assert.equal(JSON.stringify(error.detail).includes(OTHER_TOKEN), false);
+        assert.equal(error.message.includes(OTHER_TOKEN), false);
+        return true;
+      },
+      '应阻断持久令牌',
+    );
+  }
   assert.equal(calls.length, 0, 'AC-22：阻断必须发生在子进程创建之前');
 });
+
+/* ───────────── runGit：本地 git 与 gitee CLI 共用唯一出口 ───────────── */
+
+test('runGit 起进程参数：bin=git、cwd、GIT_TERMINAL_PROMPT=0、shell:false、同一套超时与上限', async () => {
+  const { execFile, calls } = fakeExecFile(() => ({ stdout: ' M src/a.mjs\n' }));
+  const runner = createGiteeRunner({ execFile, env: { HOME: HOME_FIXTURE }, gitCwd: HOME_FIXTURE });
+  const result = await runner.runGit({ args: ['status', '--short'], purpose: 'git.status' });
+  assert.equal(result.exitCode, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].bin, 'git');
+  assert.deepEqual(calls[0].args, ['status', '--short']);
+  assert.equal(calls[0].options.cwd, HOME_FIXTURE);
+  assert.equal(calls[0].options.shell, false);
+  assert.equal(calls[0].options.env.GIT_TERMINAL_PROMPT, '0');
+  assert.equal(calls[0].options.timeout, runner.describe().timeoutMs);
+  assert.equal(calls[0].options.maxBuffer, DEFAULT_MAX_OUTPUT_BYTES);
+
+  // 调用点可以逐次覆盖 cwd（每个仓库一个工作区），但不会自带 bin/argv 拼接。
+  await runner.runGit({ args: ['rev-parse', 'HEAD'], cwd: BIN });
+  assert.equal(calls[1].options.cwd, BIN);
+});
+
+test('runGit 入参白名单：拒未知键、拒空/非字符串 args、拒 NUL、拒 null 字节', async () => {
+  const { execFile, calls } = fakeExecFile(() => ({ stdout: '' }));
+  const runner = createGiteeRunner({ execFile, env: {} });
+  const bad = [
+    [{ args: ['status'], bin: 'git' }, '未知键 bin'],
+    [{ args: ['status'], shell: true }, '未知键 shell'],
+    [{ args: [] }, '空 argv'],
+    [{ args: 'status' }, '非数组'],
+    [{ args: ['status', 42] }, '非字符串'],
+    [{ args: ['status', ''] }, '空串参数'],
+    [{ args: ['commit', '-m', 'a\u0000b'] }, 'NUL'],
+    [{ args: ['status'], cwd: '' }, '空 cwd'],
+    [{ args: ['status'], purpose: 42 }, 'purpose 非字符串'],
+  ];
+  for (const [input, label] of bad) {
+    await assert.rejects(runner.runGit(input), GiteeCliError, label);
+  }
+  assert.equal(calls.length, 0, '校验失败必须零子进程');
+  assert.deepEqual([...GIT_INVOCATION_KEYS], ['args', 'purpose', 'cwd']);
+  assert.deepEqual([...INVOCATION_KEYS], ['bin', 'args', 'purpose']);
+});
+
+test('runGit 也走脱敏与截断：输出里的点名令牌被抹掉，超过 1 MiB 标记 truncated', async () => {
+  const token = OTHER_TOKEN;
+  const big = 'x'.repeat(DEFAULT_MAX_OUTPUT_BYTES + 512);
+  const { execFile } = fakeExecFile((request) => (
+    request.args.includes('big') ? { stdout: big } : { stdout: `token ${token}\n` }
+  ));
+  const runner = createGiteeRunner({ execFile, env: { GH_TOKEN: token }, authEnv: ['GH_TOKEN'] });
+
+  const small = await runner.runGit({ args: ['log', '-1'], purpose: 'git.log' });
+  assert.equal(small.stdout.includes(token), false);
+  assert.equal(small.stdout, 'token ***\n');
+
+  const capped = await runner.runGit({ args: ['big'], purpose: 'git.big' });
+  assert.equal(capped.truncated, true);
+  assert.ok(capped.stdout.length <= DEFAULT_MAX_OUTPUT_BYTES);
+});
+
 
 test('自检只做一次：多次 run 不重复读配置目录', async () => {
   let reads = 0;

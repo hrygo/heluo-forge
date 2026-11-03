@@ -26,11 +26,24 @@
   disabled: true
 
 # 企业组合的最小挂载。顺序即加载顺序：凭据先于 IAM，策略先于工具面。
-# 每行只给最小配置；缺配置时按包自己的 fail-closed 语义拒绝，不在补丁里塞默认凭据。
+# 策略行携带与 devops / gitee 两个补丁层**逐字相同**的 5 条并集目录与内存审计：三层同
+#  id 时 loader 按 id 覆盖 config，只留一个策略实例，装配顺序不影响幸存配置（D-5）。
+# 内存审计舱属联调/试点级证据；生产或合规场景必须注入持久 sink 并去掉 allowNonDurable。
+# 其余行只给最小配置；缺配置时按包自己的 fail-closed 语义拒绝，不在补丁里塞默认凭据。
 - insert:
     - id: heluo-credentials-keychain
       name: '@heluo/forge-credentials-keychain'
     - id: heluo-policy
       name: '@heluo/forge-policy'
+      config:
+        catalog:
+          - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
+          - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
+          - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' }
+        audit:
+          sink: memory
+          allowNonDurable: true
     - id: heluo-iam
       name: '@heluo/forge-iam'

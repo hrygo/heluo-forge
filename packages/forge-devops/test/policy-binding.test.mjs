@@ -15,6 +15,9 @@ import { READER_KEY } from '../src/index.mjs';
  * FIX-02（#21）：已知企业入口的目录绑定必须可验证。
  * 空目录、缺目录项、未开放动作都拒绝挂载；运行时拒绝走同一策略 admission，
  * 拒绝时适配器零调用。普通非企业工具不在此列（门禁 out-of-scope 语义保留）。
+ *
+ * r10：只读面收敛为 `change.read` 一条（仓库 / Issue / PR 读归 `@heluo/forge-gitee`），
+ * 因此"目录绑定"要校验的条目从四条降到一条——校验逻辑本身不变。
  */
 
 const fullCatalog = () =>
@@ -61,7 +64,7 @@ const goodReader = () => ({
   read: async ({ action, target }) => ({ status: 'succeeded', target_ref: target, source_revision: 'rev-1', action }),
 });
 
-test('空目录拒绝挂载：四个读动作一个都不能少', () => {
+test('空目录拒绝挂载：读动作一个都不能少', () => {
   assert.throws(
     () => mount({ policy: stubPolicy({ catalog: new Map() }).service }),
     (error) =>
@@ -71,19 +74,19 @@ test('空目录拒绝挂载：四个读动作一个都不能少', () => {
 
 test('漏一项映射拒绝挂载，并列出缺失动作', () => {
   const catalog = fullCatalog();
-  catalog.delete('pr.read');
+  catalog.delete('change.read');
   assert.throws(
     () => mount({ policy: stubPolicy({ catalog }).service }),
     (error) =>
       error instanceof DevopsReadError &&
       error.code === READ_REASONS.POLICY_ACTION_UNREGISTERED &&
-      /pr\.read/u.test(error.message),
+      /change\.read/u.test(error.message),
   );
 });
 
 test('目录中有未开放动作拒绝挂载（登记 ≠ 批准）', () => {
   const stub = stubPolicy();
-  stub.service.catalog.set('issue.read', { action: 'issue.read', kind: 'read', enabled: false });
+  stub.service.catalog.set('change.read', { action: 'change.read', kind: 'read', enabled: false });
   assert.throws(() => mount({ policy: stub.service }), {
     code: READ_REASONS.POLICY_ACTION_UNREGISTERED,
   });
@@ -108,8 +111,8 @@ test('FIX-08：策略服务没有 admission 入口时拒绝挂载，不以 TypeE
 test('FIX-08：调用方自带 role 等参数不进入 admission 身份，不扩权', async () => {
   const stub = stubPolicy();
   const { service } = mount({ policy: stub.service, reader: goodReader() });
-  await service.read({ action: 'issue.read', target: 'group/repo#7' });
-  assert.deepEqual(stub.calls[0].exec.arguments, { target: 'group/repo#7' });
+  await service.read({ action: 'change.read', target: 'CHG-2026-0042', role: 'admin' });
+  assert.deepEqual(stub.calls[0].exec.arguments, { target: 'CHG-2026-0042' });
   assert.equal(stub.calls[0].exec.agent, undefined);
 });
 
@@ -142,7 +145,7 @@ test('策略拒绝时适配器零调用，拒绝可见（POLICY_DENIED + 网关�
   const reader = { read: async () => ((calls += 1), { status: 'succeeded', source_revision: 'r' }) };
   const denying = stubPolicy({ admit: false });
   const { service } = mount({ policy: denying.service, reader });
-  await assert.rejects(() => service.read({ action: 'issue.read', target: 'group/repo#7' }), {
+  await assert.rejects(() => service.read({ action: 'change.read', target: 'CHG-2026-0042' }), {
     code: READ_REASONS.POLICY_DENIED,
   });
   assert.equal(calls, 0, '策略拒绝不得触碰适配器');
@@ -154,7 +157,7 @@ test('工具面同样经过 admission：拒绝时 ok:false + next_action，不�
   const reader = { read: async () => ((calls += 1), { status: 'succeeded', source_revision: 'r' }) };
   const { registered } = mount({ policy: stubPolicy({ admit: false }).service, reader });
   const payload = JSON.parse(
-    (await registered.get('forge_devops_pr_read').execute({ target: 'group/repo!3' })).content[0].text,
+    (await registered.get('forge_devops_change_read').execute({ target: 'CHG-2026-0042' })).content[0].text,
   );
   assert.equal(payload.ok, false);
   assert.equal(payload.reason, READ_REASONS.POLICY_DENIED);

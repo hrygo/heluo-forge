@@ -16,6 +16,7 @@ import {
   CLI_FIELDS,
   CLI_ORIGINS,
   CLI_ORIGIN_LABELS,
+  CLI_PAGE_FIELDS,
   CLI_PAGE_HINT,
   CLI_REASONS,
   CLI_SEARCH_CATEGORIES,
@@ -37,7 +38,6 @@ const POSIX = 'linux';
 const CONF_DOP = 'C:\\conf\\dop.exe';
 const ENV_DOP = 'C:\\env\\dop.exe';
 const DISC_DOP = 'C:\\disc\\dop.exe';
-const WIN_GH = 'C:\\disc\\gh.exe';
 const WIN_CMD = 'C:\\tools\\dop.cmd';
 const WIN_BAT = 'C:\\tools\\dop.bat';
 const WIN_SH = 'C:\\tools\\dop.sh';
@@ -50,7 +50,6 @@ const POSIX_NOEXEC = '/opt/corp/notes';
 const WIN_SHIM_NOEXT = 'C:\\npm-global\\dop';
 const WIN_NPM_CMD = 'C:\\npm-global\\dop.cmd';
 const WIN_PS1 = 'C:\\tools\\dop.ps1';
-const WIN_GH_PS1 = 'C:\\tools\\gh.ps1';
 const WIN_EXE_UPPER = 'C:\\tools\\DOP.EXE';
 /* 存在但不是普通文件（管道/设备）：形态放开了也不该让它过。 */
 const WIN_OTHER = 'C:\\tools\\dop-fifo';
@@ -88,14 +87,12 @@ const FILE_FS = fakeFs({
   [CONF_DOP]: { kind: 'file' },
   [ENV_DOP]: { kind: 'file' },
   [DISC_DOP]: { kind: 'file' },
-  [WIN_GH]: { kind: 'file' },
   [WIN_CMD]: { kind: 'file' },
   [WIN_BAT]: { kind: 'file' },
   [WIN_SH]: { kind: 'file' },
   [WIN_SHIM_NOEXT]: { kind: 'file' },
   [WIN_NPM_CMD]: { kind: 'file' },
   [WIN_PS1]: { kind: 'file' },
-  [WIN_GH_PS1]: { kind: 'file' },
   [WIN_EXE_UPPER]: { kind: 'file' },
   [WIN_OTHER]: { kind: 'other' },
   [WIN_SLASH_CMD]: { kind: 'file' },
@@ -105,7 +102,7 @@ const FILE_FS = fakeFs({
   [POSIX_NOEXEC]: { kind: 'file', mode: 0o644 },
 });
 
-function discoveryOf({ dop = [], gh = [], searched = ['PATH', 'candidate-dirs'] } = {}) {
+function discoveryOf({ dop = [], searched = ['PATH', 'candidate-dirs'] } = {}) {
   const shape = (tool, found) => ({
     tool,
     found: found.map((path) => ({ path, tier: 'PATH' })),
@@ -115,14 +112,16 @@ function discoveryOf({ dop = [], gh = [], searched = ['PATH', 'candidate-dirs'] 
     truncated: false,
     elapsedMs: 1,
   });
-  return { dop: shape('dop', dop), gh: shape('gh', gh) };
+  return { dop: shape('dop', dop) };
 }
 
 const resolve = (options) => resolveCliAccess({ platform: WIN, ...options });
 
 test('常量表：字段与 ENV_KEYS 同键，五种 origin 各有中文标签，原因码与蓝图一致', () => {
   assert.deepEqual(Array.from(CLI_FIELDS), Object.keys(ENV_KEYS));
-  assert.deepEqual(Array.from(CLI_FIELDS), ['dopBin', 'dopEndpoint', 'ghBin', 'ghOwner', 'sourceType', 'timeoutMs']);
+  assert.deepEqual(Array.from(CLI_FIELDS), ['dopBin', 'dopEndpoint', 'sourceType', 'timeoutMs']);
+  assert.deepEqual(Array.from(CLI_PAGE_FIELDS), ['dopBin', 'timeoutMs']);
+  assert.deepEqual(CLI_FIELDS.filter((field) => !CLI_PAGE_FIELDS.includes(field)), ['dopEndpoint', 'sourceType']);
   assert.deepEqual(Object.values(CLI_ORIGINS), ['config', 'env', 'discovered', 'default', 'missing']);
   assert.deepEqual(Object.values(CLI_REASONS), [
     'CLI_NOT_FOUND',
@@ -138,7 +137,7 @@ test('常量表：字段与 ENV_KEYS 同键，五种 origin 各有中文标签�
     Object.values(CLI_ORIGIN_LABELS),
     ['配置', '环境变量', '自动发现', '基线缺省', '未找到'],
   );
-  for (const table of [CLI_FIELDS, CLI_ORIGINS, CLI_REASONS, CLI_ORIGIN_LABELS]) {
+  for (const table of [CLI_FIELDS, CLI_PAGE_FIELDS, CLI_ORIGINS, CLI_REASONS, CLI_ORIGIN_LABELS]) {
     assert.ok(Object.isFrozen(table), '常量表不允许运行时改写');
   }
   // AC-1 改名：指引里的入口名与页面 nav/title 逐字同源，写死旧名会让工具失败提示指向不存在的入口。
@@ -146,20 +145,16 @@ test('常量表：字段与 ENV_KEYS 同键，五种 origin 各有中文标签�
   assert.equal(CLI_PAGE_HINT.includes('DevOps 变更流程'), false, '旧名必须零残留');
 });
 
-test('零配置 + 自动发现命中：ready 且两层路径字段都记 discovered（AC-1）', () => {
-  const access = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }) });
+test('零配置 + 自动发现命中：ready 且唯一路径字段记 discovered（AC-1）', () => {
+  const access = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP] }) });
   assert.equal(access.ready, true);
   assert.equal(access.reason, null);
   assert.equal(access.entries.dopBin.origin, CLI_ORIGINS.DISCOVERED);
   assert.equal(access.entries.dopBin.value, DISC_DOP);
   assert.equal(access.entries.dopBin.tool, 'dop');
-  assert.equal(access.entries.ghBin.value, WIN_GH);
-  assert.equal(access.entries.ghBin.tool, 'gh');
   assert.deepEqual(access.value, {
     dopBin: DISC_DOP,
     dopEndpoint: undefined,
-    ghBin: WIN_GH,
-    ghOwner: undefined,
     sourceType: 'enterprise',
     timeoutMs: 20_000,
   });
@@ -190,83 +185,69 @@ test('3×3 优先级矩阵（dopBin）：配置 > 环境变量 > 自动发现，
   }
 });
 
-test('ghBin 矩阵：三层之外还有基线缺省 gh（origin=default），不是第四层', () => {
-  const cases = [
-    { config: false, env: false, found: false, origin: CLI_ORIGINS.DEFAULT, value: 'gh' },
-    { config: false, env: false, found: true, origin: CLI_ORIGINS.DISCOVERED, value: WIN_GH },
-    { config: false, env: true, found: false, origin: CLI_ORIGINS.ENV, value: 'gh-env' },
-    { config: true, env: true, found: true, origin: CLI_ORIGINS.CONFIG, value: WIN_GH },
-  ];
-  for (const item of cases) {
-    const access = resolve({
-      config: item.config ? { dopBin: CONF_DOP, ghBin: WIN_GH } : { dopBin: CONF_DOP },
-      env: item.env ? { [ENV_KEYS.ghBin]: 'gh-env' } : {},
-      discovery: discoveryOf({ dop: [DISC_DOP], gh: item.found ? [WIN_GH] : [] }),
-    });
-    assert.equal(access.entries.ghBin.origin, item.origin);
-    assert.equal(access.entries.ghBin.value, item.value);
-  }
+/**
+ * r10 收键：老 profile 的配置层可能还留着 ghBin/ghOwner。它们必须被静默忽略——
+ * 不得出现在 entries/value 里，也不得让 resolveCliAccess 报错或降级（契约：不报错）。
+ */
+test('退役键 ghBin/ghOwner 在配置层被静默忽略，不产生条目、不影响就绪判定', () => {
+  const access = resolve({
+    config: { dopBin: CONF_DOP, ghBin: 'C:\\old\\gh.exe', ghOwner: 'acme-corp' },
+    env: {},
+    discovery: discoveryOf({}),
+  });
+  assert.deepEqual(Array.from(Object.keys(access.entries)), ['dopBin', 'dopEndpoint', 'sourceType', 'timeoutMs']);
+  assert.equal(access.entries.ghBin, undefined, '退役键不得复活成条目');
+  assert.equal(access.entries.ghOwner, undefined);
+  assert.equal(access.ready, true, '退役键不影响 dop 的就绪判定');
+  assert.deepEqual(access.value, {
+    dopBin: CONF_DOP,
+    dopEndpoint: undefined,
+    sourceType: 'enterprise',
+    timeoutMs: 20_000,
+  });
 });
 
 /**
  * 推导判据（AC-7/AC-8）：事实来源只在一处推导，页面与装配层都只消费结论。
- * 表驱动而不是逐条 `assert`：判据一改（例如改成"单 dop 即 enterprise"），四态表先红。
+ * 表驱动而不是逐条 `assert`：判据一改（例如改成"看代码托管 CLI"），表先红。
  */
 const readyEntry = (origin, value) => ({ origin, value, overrides: [] });
 
-test('deriveSourceType 四态表：dop 与 gh 都就绪才 enterprise，其余一律 mock（AC-7/AC-8）', () => {
+test('deriveSourceType：dop 就绪即 enterprise，否则一律 mock（AC-7/AC-8）', () => {
   const cases = [
     {
-      label: '双入口都来自配置层',
+      label: 'dop 来自配置层',
       dopBin: readyEntry(CLI_ORIGINS.CONFIG, CONF_DOP),
-      ghBin: readyEntry(CLI_ORIGINS.CONFIG, WIN_GH),
       expected: 'enterprise',
     },
     {
-      label: '双入口都来自自动发现（装好即企业，最常见）',
+      label: 'dop 来自自动发现（装好即企业，最常见）',
       dopBin: readyEntry(CLI_ORIGINS.DISCOVERED, DISC_DOP),
-      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
       expected: 'enterprise',
     },
     {
-      label: 'dop 配置 + gh 环境变量（层不同不影响判据）',
-      dopBin: readyEntry(CLI_ORIGINS.CONFIG, CONF_DOP),
-      ghBin: readyEntry(CLI_ORIGINS.ENV, 'C:\\env\\gh.exe'),
+      label: 'dop 来自环境变量（层不同不影响判据）',
+      dopBin: readyEntry(CLI_ORIGINS.ENV, ENV_DOP),
       expected: 'enterprise',
-    },
-    {
-      label: '只有 dop，gh 停在基线缺省 gh（裸命令名不验证存在性）',
-      dopBin: readyEntry(CLI_ORIGINS.DISCOVERED, DISC_DOP),
-      ghBin: readyEntry(CLI_ORIGINS.DEFAULT, 'gh'),
-      expected: 'mock',
-    },
-    {
-      label: '只有 gh，dop 缺失',
-      dopBin: readyEntry(CLI_ORIGINS.MISSING, null),
-      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
-      expected: 'mock',
     },
     {
       label: 'dop 非法（origin=config、value=null）不因"声明过"升级',
       dopBin: readyEntry(CLI_ORIGINS.CONFIG, null),
-      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
       expected: 'mock',
     },
     {
       label: '入口值是空串同样不算就绪',
       dopBin: readyEntry(CLI_ORIGINS.ENV, ''),
-      ghBin: readyEntry(CLI_ORIGINS.DISCOVERED, WIN_GH),
       expected: 'mock',
     },
     {
-      label: '两个入口都没有',
+      label: '入口缺失',
       dopBin: readyEntry(CLI_ORIGINS.MISSING, null),
-      ghBin: readyEntry(CLI_ORIGINS.DEFAULT, 'gh'),
       expected: 'mock',
     },
   ];
   for (const item of cases) {
-    assert.equal(deriveSourceType({ dopBin: item.dopBin, ghBin: item.ghBin }), item.expected, item.label);
+    assert.equal(deriveSourceType({ dopBin: item.dopBin }), item.expected, item.label);
   }
   // 容错：入参不是 entries 形状时宁可少标，绝不在装配期抛错。
   assert.equal(deriveSourceType(null), 'mock');
@@ -274,20 +255,20 @@ test('deriveSourceType 四态表：dop 与 gh 都就绪才 enterprise，其余�
 });
 
 test('推导落 default 槽位、显式声明优先：配置 > 环境变量 > 推导（AC-7 三种覆盖态）', () => {
-  // ① 双发现 → enterprise；origin 仍是 default、overrides 为空（推导不压任何层）
-  const derived = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }) });
+  // ① 发现到 dop → enterprise；origin 仍是 default、overrides 为空（推导不压任何层）
+  const derived = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP] }) });
   assert.equal(derived.entries.sourceType.origin, CLI_ORIGINS.DEFAULT);
   assert.equal(derived.entries.sourceType.value, 'enterprise');
   assert.deepEqual(Array.from(derived.entries.sourceType.overrides), []);
   assert.equal(derived.entries.sourceType.tool, undefined, 'sourceType 不是路径字段，不带 tool');
   assert.equal(derived.value.sourceType, 'enterprise', '推导要经 Access.value 到装配层才有用');
 
-  // ② 只有 dop → mock：gh 停在裸命令名，不许标成企业实测
-  const onlyDop = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP] }) });
-  assert.equal(onlyDop.entries.ghBin.origin, CLI_ORIGINS.DEFAULT);
-  assert.equal(onlyDop.entries.sourceType.value, 'mock', '缺 gh 不许标成企业实测（AC-8）');
+  // ② 没发现到 dop → mock：推导不凭空升级，必须由真实入口支撑
+  const noEntry = resolve({ config: {}, env: {}, discovery: discoveryOf({}) });
+  assert.equal(noEntry.entries.dopBin.origin, CLI_ORIGINS.MISSING);
+  assert.equal(noEntry.entries.sourceType.value, 'mock', '没有入口不许标成企业实测（AC-8）');
 
-  // ③ 环境变量压过推导：入口不齐也照用用户声明
+  // ③ 环境变量压过推导：入口缺失也照用用户声明
   const envDeclared = resolve({
     config: {},
     env: { [ENV_KEYS.sourceType]: 'enterprise' },
@@ -300,7 +281,7 @@ test('推导落 default 槽位、显式声明优先：配置 > 环境变量 > �
   const configDeclared = resolve({
     config: { sourceType: 'mock' },
     env: { [ENV_KEYS.sourceType]: 'enterprise' },
-    discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }),
+    discovery: discoveryOf({ dop: [DISC_DOP] }),
   });
   assert.equal(configDeclared.entries.sourceType.origin, CLI_ORIGINS.CONFIG);
   assert.equal(configDeclared.entries.sourceType.value, 'mock', '显式 mock 压过"看起来像企业"的环境');
@@ -310,7 +291,7 @@ test('推导落 default 槽位、显式声明优先：配置 > 环境变量 > �
   const bad = resolve({
     config: { sourceType: 'prod' },
     env: {},
-    discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }),
+    discovery: discoveryOf({ dop: [DISC_DOP] }),
   });
   assert.equal(bad.entries.sourceType.origin, CLI_ORIGINS.CONFIG);
   assert.equal(bad.entries.sourceType.value, null);
@@ -327,20 +308,18 @@ test('dopBin 永不出现 default：三层都没有即 CLI_NOT_FOUND（fail clos
   assert.equal(access.guidance.includes('未找到 dop'), true);
 });
 
-test('无发现层可言的字段：sourceType/timeoutMs 取 default，dopEndpoint/ghOwner 记 missing', () => {
+test('无发现层可言的字段：sourceType/timeoutMs 取 default，dopEndpoint 记 missing', () => {
   const access = resolve({ config: { dopBin: CONF_DOP }, env: {}, discovery: discoveryOf({ dop: [DISC_DOP] }) });
   assert.deepEqual(
     {
       sourceType: [access.entries.sourceType.origin, access.entries.sourceType.value],
       timeoutMs: [access.entries.timeoutMs.origin, access.entries.timeoutMs.value],
       dopEndpoint: [access.entries.dopEndpoint.origin, access.entries.dopEndpoint.value],
-      ghOwner: [access.entries.ghOwner.origin, access.entries.ghOwner.value],
     },
     {
-      sourceType: [CLI_ORIGINS.DEFAULT, 'mock'],
+      sourceType: [CLI_ORIGINS.DEFAULT, 'enterprise'],
       timeoutMs: [CLI_ORIGINS.DEFAULT, 20_000],
       dopEndpoint: [CLI_ORIGINS.MISSING, null],
-      ghOwner: [CLI_ORIGINS.MISSING, null],
     },
   );
   // 发现层不参与非路径字段：给了也不许取
@@ -395,9 +374,9 @@ test('环境变量层非法同样 fail closed，origin 记 env（不是 config�
   assert.equal(access.entries.dopBin.origin, CLI_ORIGINS.ENV);
 });
 
-test('非路径字段的非法值也拒：endpoint/owner/sourceType/timeoutMs 逐字段进 invalid', () => {
+test('非路径字段的非法值也拒：endpoint/sourceType/timeoutMs 逐字段进 invalid', () => {
   const access = resolve({
-    config: { dopBin: CONF_DOP, dopEndpoint: BAD_SCHEME, ghOwner: '-acme', sourceType: 'prod', timeoutMs: 999 },
+    config: { dopBin: CONF_DOP, dopEndpoint: BAD_SCHEME, sourceType: 'prod', timeoutMs: 999 },
     env: {},
     discovery: discoveryOf({}),
   });
@@ -405,7 +384,7 @@ test('非路径字段的非法值也拒：endpoint/owner/sourceType/timeoutMs �
   assert.equal(access.reason, CLI_REASONS.INVALID);
   assert.deepEqual(
     access.invalid.map((item) => item.field),
-    ['dopEndpoint', 'ghOwner', 'sourceType', 'timeoutMs'],
+    ['dopEndpoint', 'sourceType', 'timeoutMs'],
   );
   assert.match(access.guidance, /命令行配置不可用/);
 });
@@ -439,7 +418,7 @@ test('searched 只报真正查过的类别：无发现层则只有配置与环�
   ]);
 
   const silent = discoveryOf({});
-  for (const tool of ['dop', 'gh']) delete silent[tool].searched;
+  for (const tool of ['dop']) delete silent[tool].searched;
   assert.deepEqual(Array.from(resolve({ config: {}, env: {}, discovery: silent }).searched), [
     'config',
     'env',
@@ -450,14 +429,14 @@ test('searched 只报真正查过的类别：无发现层则只有配置与环�
 
 test('剖白描述（describeCliAccess）：origin/布尔/枚举，零路径零 endpoint 零值（AC-10）', () => {
   const access = resolve({
-    config: { dopBin: CONF_DOP, dopEndpoint: ENDPOINT, ghOwner: 'acme', sourceType: 'enterprise', timeoutMs: 30_000 },
+    config: { dopBin: CONF_DOP, dopEndpoint: ENDPOINT, sourceType: 'enterprise', timeoutMs: 30_000 },
     env: {},
-    discovery: discoveryOf({ dop: [CONF_DOP], gh: [WIN_GH] }),
+    discovery: discoveryOf({ dop: [CONF_DOP] }),
   });
   const described = describeCliAccess(access);
   const json = JSON.stringify(described);
 
-  for (const secret of [CONF_DOP, WIN_GH, ENDPOINT, 'acme', 'corp.example']) {
+  for (const secret of [CONF_DOP, ENDPOINT, 'corp.example']) {
     assert.equal(json.includes(secret), false, `脱敏描述不得出现 ${secret} 这样的值`);
   }
   assert.equal(json.includes('.exe'), false, '连可执行文件名片段都不给');
@@ -469,14 +448,12 @@ test('剖白描述（describeCliAccess）：origin/布尔/枚举，零路径零 
     {
       dopBin: 'config',
       dopEndpoint: 'config',
-      ghBin: 'discovered',
-      ghOwner: 'config',
       sourceType: 'config',
       timeoutMs: 'config',
     },
   );
   assert.equal(described.entries.dopBin.configured, true);
-  assert.equal(described.entries.ghOwner.configured, true, '只给"配没配"，不给配了什么');
+  assert.equal(described.entries.dopEndpoint.configured, true, '只给"配没配"，不给配了什么');
   assert.equal(described.sourceType, 'enterprise');
   assert.equal(described.timeoutMs, 30_000);
   // 覆盖关系照样可以脱敏说明：配置压过自动发现（AC-3 要求"压制可见"，AC-10 要求"值不可见"）
@@ -500,8 +477,8 @@ test('剖白描述对未就绪态同样零泄漏，并保留可读指引', () =>
 test('同一环境两次解析结论一致（AC-3 的可重复性）', () => {
   const input = {
     config: { dopBin: CONF_DOP },
-    env: { [ENV_KEYS.ghOwner]: 'acme' },
-    discovery: discoveryOf({ dop: [DISC_DOP], gh: [WIN_GH] }),
+    env: { [ENV_KEYS.dopEndpoint]: ENDPOINT },
+    discovery: discoveryOf({ dop: [DISC_DOP] }),
     platform: WIN,
   };
   assert.deepEqual(resolveCliAccess(input), resolveCliAccess(input));
@@ -512,7 +489,6 @@ test('12 条非法值：逐字段可读原因，且 message 不回显用户输�
     { field: 'dopBin', value: WIN_MISSING, platform: WIN, expected: '找不到这个文件' },
     // AC-2 文案：不再点名 `.exe`（win32 上本体未必带 `.exe`），但必须说清"这是目录"并给出本体名。
     { field: 'dopBin', value: WIN_DIR, platform: WIN, expected: '这是目录，需要指向 dop 的可执行文件本体' },
-    { field: 'ghBin', value: WIN_DIR, platform: WIN, expected: '这是目录，需要指向 gh 的可执行文件本体' },
     // 形态放开了，「存在但不是普通文件」仍然是硬错（管道/设备/套接字）。
     { field: 'dopBin', value: WIN_OTHER, platform: WIN, expected: '不是可直接执行的文件' },
     { field: 'dopBin', value: 42, platform: WIN, expected: '需要一个文本值' },
@@ -522,7 +498,6 @@ test('12 条非法值：逐字段可读原因，且 message 不回显用户输�
     { field: 'dopBin', value: POSIX_CMD, platform: POSIX, expected: '不是可直接执行的文件' },
     { field: 'dopEndpoint', value: BAD_SCHEME, platform: WIN, expected: '需要 http 或 https 地址，且地址里不能带用户名密码' },
     { field: 'dopEndpoint', value: CRED_ENDPOINT, platform: WIN, expected: '需要 http 或 https 地址，且地址里不能带用户名密码' },
-    { field: 'ghOwner', value: '-acme', platform: WIN, expected: '只能是字母、数字和连字符，且不能以连字符开头' },
     { field: 'timeoutMs', value: 999, platform: WIN, expected: '请输入 1000–600000 之间的整数（毫秒）' },
     { field: 'timeoutMs', value: '1000.5', platform: WIN, expected: '请输入 1000–600000 之间的整数（毫秒）' },
     { field: 'sourceType', value: 'prod', platform: WIN, expected: '只能取 mock 或 enterprise' },
@@ -577,11 +552,6 @@ test('AC-1 六形态放行：win32 只判「存在且是普通文件」，且原
     { ok: true, next: { dopBin: WIN_SLASH_CMD } },
     '只去首尾空白，不把 / 换成 \\',
   );
-  // gh 同理：目录/后缀都不拦，只有"找不到/是目录/不是普通文件"才拦。
-  assert.deepEqual(validateCliField({ field: 'ghBin', value: WIN_GH_PS1, platform: WIN, fs: FILE_FS }), {
-    ok: true,
-    value: WIN_GH_PS1,
-  });
 });
 
 test('合法值：归一化（去空白/小写/数字）与"清空即回落"都视为 ok', () => {
@@ -589,14 +559,12 @@ test('合法值：归一化（去空白/小写/数字）与"清空即回落"都�
     validateCliField({ field, value, platform, fs: FILE_FS });
 
   assert.deepEqual(accept('dopBin', `  ${CONF_DOP}  `), { ok: true, value: CONF_DOP });
-  assert.deepEqual(accept('ghBin', 'gh'), { ok: true, value: 'gh' }, '裸命令名走 PATH，不要求 .exe');
   assert.deepEqual(accept('dopBin', POSIX_DOP, POSIX), { ok: true, value: POSIX_DOP });
   assert.deepEqual(accept('dopBin', '   '), { ok: true, value: null });
   assert.deepEqual(accept('dopBin', null), { ok: true, value: null });
   assert.deepEqual(accept('timeoutMs', '15000'), { ok: true, value: 15_000 });
   assert.deepEqual(accept('sourceType', ' Enterprise '), { ok: true, value: 'enterprise' });
   assert.deepEqual(accept('dopEndpoint', ENDPOINT), { ok: true, value: ENDPOINT });
-  assert.deepEqual(accept('ghOwner', 'acme-corp'), { ok: true, value: 'acme-corp' });
   // 无 fs 时只做形状判定：路径存在性是"保存"环节的责任，解析环节不读盘
   assert.deepEqual(validateCliField({ field: 'dopBin', value: WIN_MISSING, platform: WIN }), {
     ok: true,
@@ -605,7 +573,7 @@ test('合法值：归一化（去空白/小写/数字）与"清空即回落"都�
 });
 
 test('buildCliPatch：意图合并、null 即回落、逐字段报错且一字段不写（AC-9/AC-15）', () => {
-  const current = { ghOwner: 'acme', timeoutMs: 20_000 };
+  const current = { sourceType: 'mock', timeoutMs: 20_000 };
 
   const merged = buildCliPatch({
     current,
@@ -613,10 +581,10 @@ test('buildCliPatch：意图合并、null 即回落、逐字段报错且一字�
     platform: WIN,
     fs: FILE_FS,
   });
-  assert.deepEqual(merged, { ok: true, next: { ghOwner: 'acme', timeoutMs: 30_000, dopBin: CONF_DOP } });
-  assert.deepEqual(current, { ghOwner: 'acme', timeoutMs: 20_000 }, '纯函数：current 不得被改写');
+  assert.deepEqual(merged, { ok: true, next: { sourceType: 'mock', timeoutMs: 30_000, dopBin: CONF_DOP } });
+  assert.deepEqual(current, { sourceType: 'mock', timeoutMs: 20_000 }, '纯函数：current 不得被改写');
 
-  const cleared = buildCliPatch({ current, patch: { dopBin: null, ghOwner: null }, platform: WIN, fs: FILE_FS });
+  const cleared = buildCliPatch({ current, patch: { dopBin: null, sourceType: null }, platform: WIN, fs: FILE_FS });
   assert.deepEqual(cleared, { ok: true, next: { timeoutMs: 20_000 } });
 
   const emptied = buildCliPatch({ current: { dopBin: CONF_DOP }, patch: { dopBin: null }, platform: WIN, fs: FILE_FS });
@@ -624,13 +592,13 @@ test('buildCliPatch：意图合并、null 即回落、逐字段报错且一字�
 
   const bad = buildCliPatch({
     current,
-    patch: { dopBin: WIN_MISSING, dopEndpoint: BAD_SCHEME, timeoutMs: 99, ghOwner: 'acme' },
+    patch: { dopBin: WIN_MISSING, dopEndpoint: BAD_SCHEME, timeoutMs: 99, sourceType: 'enterprise' },
     platform: WIN,
     fs: FILE_FS,
   });
   assert.equal(bad.ok, false);
   assert.deepEqual(Object.keys(bad.errors), ['dopBin', 'dopEndpoint', 'timeoutMs']);
-  assert.equal(bad.errors.ghOwner, undefined, '合法字段不报错');
+  assert.equal(bad.errors.sourceType, undefined, '合法字段不报错');
 
   const unknown = buildCliPatch({ current, patch: { dopbin: CONF_DOP }, platform: WIN, fs: FILE_FS });
   assert.deepEqual(unknown, { ok: false, errors: { dopbin: '未知配置项：dopbin' } });
@@ -654,7 +622,7 @@ test('指引文案：类别名 + 指向配置页，不含路径/endpoint/环境�
 
 test('ready 态指引用 origin 标签说话（不写死中文层名）', () => {
   const ready = resolve({ config: {}, env: {}, discovery: discoveryOf({ dop: [DISC_DOP] }) });
-  assert.equal(cliGuidance(ready), '命令行工具已就绪（dop 来自自动发现 · gh 来自基线缺省）');
+  assert.equal(cliGuidance(ready), '命令行工具已就绪（dop 来自自动发现）');
   assert.equal(cliGuidance(null), cliGuidance({ ready: false, reason: null }));
 });
 

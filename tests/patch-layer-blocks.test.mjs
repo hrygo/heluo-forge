@@ -50,7 +50,7 @@ const PATCH_LAYER = [
   "  name: '@heluo/forge-devops'",
   '  config:',
   '    dopBin: tools/dop',
-  '    ghBin: gh',
+  '    timeoutMs: 30000',
   '',
   '- id: llm-deepseek',
   '  name: "@deepseek-ai/dsh-llm-deepseek-api-key"',
@@ -93,8 +93,8 @@ test('块模型只认顶层 `- ` 块，块尾不含空行与顶格注释', () =>
   assert.equal(devops.name, '@heluo/forge-devops');
   assert.equal(devops.indent, 0);
   assert.equal(lines[devops.start], '- id: forge-devops');
-  // 块尾停在 `ghBin: gh` 之后：空行属于分隔，不随条目删除。
-  assert.equal(lines[devops.end - 1], '    ghBin: gh');
+  // 块尾停在 `timeoutMs: 30000` 之后：空行属于分隔，不随条目删除。
+  assert.equal(lines[devops.end - 1], '    timeoutMs: 30000');
   assert.equal(lines[devops.end], '');
 
   const last = blocks.at(-1);

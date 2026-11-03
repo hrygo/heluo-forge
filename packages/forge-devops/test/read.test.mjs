@@ -26,7 +26,7 @@ function host({ policy = { value: admitAllPolicy() }, reader } = {}) {
   return { ctx, provided };
 }
 
-/** FIX-02 挂载合约替身：目录覆盖四个读动作且已开放，admission 直接承认并执行。 */
+/** FIX-02 挂载合约替身：目录覆盖本包的读动作且已开放，admission 直接承认并执行。 */
 function admitAllPolicy() {
   return {
     catalog: new Map(READ_ACTIONS.map((action) => [action, { action, kind: 'read', enabled: true }])),
@@ -59,7 +59,7 @@ test('缺目标被拒绝，且不触碰适配器', async () => {
   let calls = 0;
   const reader = { read: async () => ((calls += 1), {}) };
   const { service } = mount({ reader });
-  await assert.rejects(() => service.read({ action: 'issue.read', target: '  ' }), {
+  await assert.rejects(() => service.read({ action: 'change.read', target: '  ' }), {
     code: READ_REASONS.MISSING_TARGET,
   });
   assert.equal(calls, 0);
@@ -84,14 +84,14 @@ test('只给退出码的适配器不算成功：降级为 unknown 并给出 NO_S
 });
 
 test('缺来源版本的事实降级为 unknown，不伪造冻结依据', () => {
-  const normalized = normalizeReadResult({ action: 'pr.read', target: 'pr-9', result: { status: 'succeeded' } });
+  const normalized = normalizeReadResult({ action: 'change.read', target: 'CHG-2026-0042', result: { status: 'succeeded' } });
   assert.equal(normalized.status, 'unknown');
   assert.equal(normalized.error_code, READ_REASONS.MISSING_SOURCE_REVISION);
 });
 
 test('非对象结果降级为 unknown，不抛错也不报成功', () => {
   for (const result of [undefined, 'ok', 42, ['a']]) {
-    const normalized = normalizeReadResult({ action: 'repository.read', target: 'repo-1', result });
+    const normalized = normalizeReadResult({ action: 'change.read', target: 'CHG-2026-0042', result });
     assert.equal(normalized.status, 'unknown');
     assert.equal(normalized.error_code, READ_REASONS.MALFORMED_RESULT);
   }
@@ -104,26 +104,26 @@ test('事实齐全时规整为契约结果，并把请求原样交给适配器',
       seen.push(request);
       return {
         status: 'succeeded',
-        target_ref: 'issue-42',
+        target_ref: 'CHG-2026-0042',
         source_revision: 'rev-7',
-        result_refs: ['issue-42@rev-7'],
+        result_refs: ['CHG-2026-0042@rev-7'],
         observed_at: '2026-10-24T12:00:00Z',
       };
     },
   };
   const { service } = mount({ reader });
   assert.equal(service.status(), 'ready');
-  const result = await service.read({ action: 'issue.read', target: 'issue-42' });
-  assert.deepEqual(seen, [{ action: 'issue.read', target: 'issue-42' }]);
+  const result = await service.read({ action: 'change.read', target: 'CHG-2026-0042' });
+  assert.deepEqual(seen, [{ action: 'change.read', target: 'CHG-2026-0042' }]);
   assert.equal(result.status, 'succeeded');
-  assert.equal(result.target_ref, 'issue-42');
+  assert.equal(result.target_ref, 'CHG-2026-0042');
   assert.equal(result.source_revision, 'rev-7');
-  assert.deepEqual(result.result_refs, ['issue-42@rev-7']);
+  assert.deepEqual(result.result_refs, ['CHG-2026-0042@rev-7']);
   assert.equal(result.retry_policy, 'read_recheck');
 });
 
-test('只读面只含四个读动作，不含任何写动作', () => {
-  assert.deepEqual([...READ_ACTIONS], ['change.read', 'repository.read', 'issue.read', 'pr.read']);
+test('只读面只含 `change.read` 一个读动作，不含任何写动作（r10：仓库/Issue/PR 读在 forge-gitee）', () => {
+  assert.deepEqual([...READ_ACTIONS], ['change.read']);
   const { service } = mount();
   for (const action of service.readActions()) {
     assert.ok(action.endsWith('.read'), `${action} 不应出现在只读面`);

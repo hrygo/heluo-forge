@@ -10,7 +10,7 @@
  *      配置页客户端不打印/不持久化路径、工具面不把取值型 access 字段拼进 `detail`、
  *      补丁层与 README 无绝对路径样例且口径改为「配置页优先」、清单声明客户端半
  *      （`dsh.client` + `./client` 导出 + 发布白名单含 `client.js`），以及
- *      「零回退」的三个可核对形式（9 个工具、`READ_REASONS` 不加码、只读面语义不变）。
+ *      「零回退」的可核对形式（r10 起收敛为 4 个工具、`READ_REASONS` 不加码、只读面语义不变）。
  *
  * dev 阶段按依赖分波产出，T8 可能先于部分任务执行：模块文件缺失时记为 DEFERRED
  * （诊断信息带归属任务），文件一旦落地立刻转为硬断言——自检随交付推进逐条生效，
@@ -45,16 +45,19 @@ const MODULE_CONTRACTS = [
   { file: 'runtime-config.mjs', task: 'T1', exports: ['resolveRuntimeConfig', 'describeRuntimeConfig', 'ENV_KEYS'] },
   { file: 'cli-runner.mjs', task: 'T1', exports: ['createCliRunner'] },
   { file: 'dop-adapter.mjs', task: 'T2', exports: ['createDopAdapter', 'DOP_COMMANDS'] },
-  { file: 'gh-adapter.mjs', task: 'T2', exports: ['createGhAdapter', 'GH_COMMANDS'] },
   { file: 'policy-guard.mjs', task: 'T5', exports: ['createPolicyGuard', 'GUARD_STATUSES'] },
-  { file: 'change-context.mjs', task: 'T3', exports: ['normalizeChangeRecord', 'firstReleaseInfo', 'buildContextCard', 'renderContextCard'] },
-  { file: 'repository-resolver.mjs', task: 'T3', exports: ['resolveBuildingRepository'] },
+  // r10（devops/gitee 按平台收敛）：gh-adapter / actions / repository-resolver / repo-ref /
+  // review / report / commit-message 七个模块连同其用例一并删除——仓库、Issue、PR 事实与
+  // 提交信息校验改由 forge-gitee 唯一实现（`git-message.mjs` 是提交信息单源）。收敛后
+  // devops 的核心契约只剩两条：只读面（仅 dop 变更）与 dop 四工具面。
+  { file: 'read.mjs', task: 'T2(r10)', exports: ['READ_ACTIONS', 'READ_STATUSES', 'createDevopsReader'] },
+  { file: 'tools.mjs', task: 'T4(r10)', exports: ['DEVOPS_TOOLS', 'FLOW_ACTIONS', 'buildDevopsTools'] },
+  // D-4（蓝图 api 清单点名）：命令面端口工厂与卡片归一必须可从模块 import；私有化会让
+  // 文档声明与实现长期不一致，也让复用方只能复制粘贴。
+  { file: 'flow.mjs', task: 'T2(r10)', exports: ['FLOW_REASONS', 'createPorts', 'createDevopsFlow'] },
+  { file: 'change-context.mjs', task: 'T3', exports: ['normalizeChangeRecord', 'firstReleaseInfo', 'buildContextCard', 'renderContextCard', 'externalRepoFacts', 'normalizeBuilding', 'EXTERNAL_REPO_FACT_REASON'] },
   { file: 'clarify.mjs', task: 'T4', exports: ['createClarifySheet', 'validateClarifySheet', 'bumpClarifyVersion', 'clarifyRevisionId', 'HARD_GATE_KINDS', 'CLARIFY_REASONS'] },
   { file: 'plan.mjs', task: 'T4', exports: ['buildDeliveryPlan', 'validatePlan', 'renderPlan'] },
-  { file: 'actions.mjs', task: 'T5', exports: ['ACTION_STATUSES', 'idempotencyKey', 'createIssueIdempotent', 'commentIssueIdempotent', 'createPrIdempotent', 'commentPrIdempotent', 'writeClarification'] },
-  { file: 'review.mjs', task: 'T6', exports: ['MODEL_TIERS', 'assertModelRecorded', 'buildReviewRecord', 'recordHumanConfirmation', 'reviewStaleness', 'renderReview'] },
-  { file: 'report.mjs', task: 'T6', exports: ['buildReport', 'validateReport', 'issueCloseReadiness', 'renderReport'] },
-  { file: 'commit-message.mjs', task: 'T6', exports: ['assertCommitMessage'] },
   { file: 'artifacts.mjs', task: 'T7', exports: ['ARTIFACT_KINDS', 'artifactPath', 'renderFrontMatter', 'writeArtifact'] },
   { file: 'entry.mjs', task: 'T7', exports: ['ENTRY_NAME', 'ENTRY_HELP', 'parseChangeId', 'registerEntry'] },
   // r8 增量：入口形态单点模块。它被保存侧、发现侧与两个适配器共读，成员名一旦漂移，
@@ -172,19 +175,22 @@ test('相对 import 闭合：src 内每个本地导入都有对应文件（半�
   }
 });
 
-test('既有只读面语义不变：4 个读动作、4 个读状态、4 个只读工具', async () => {
+test('只读面收敛：1 个读动作、4 个读状态、1 个只读工具（r10 AC-10）', async () => {
   const readModule = await load('read.mjs');
   const toolsModule = await load('tools.mjs');
-  assert.deepEqual(Array.from(readModule.READ_ACTIONS), ['change.read', 'repository.read', 'issue.read', 'pr.read']);
+  assert.deepEqual(
+    Array.from(readModule.READ_ACTIONS),
+    ['change.read'],
+    '仓库/Issue/PR 读已按平台交给 forge-gitee，devops 只留 dop 变更读取（同装时不能有两套读面事实）',
+  );
   for (const status of ['succeeded', 'failed', 'partial', 'unknown']) {
     assert.ok(readModule.READ_STATUSES.includes(status), `读状态词表缺 ${status}`);
   }
-  assert.deepEqual(Object.keys(toolsModule.READ_TOOLS).sort(), [
-    'forge_devops_change_read',
-    'forge_devops_issue_read',
-    'forge_devops_pr_read',
-    'forge_devops_repository_read',
-  ]);
+  const name = 'forge_devops_change_read';
+  assert.ok(
+    JSON.stringify(toolsModule.DEVOPS_TOOLS ?? {}).includes(name),
+    `工具面缺 ${name}（r10：devops 四工具的变化读取入口）`,
+  );
 });
 
 test('蓝图接口契约：已落地模块导出全部声明成员（未落地记 DEFERRED + 归属任务）', async (t) => {
@@ -250,7 +256,6 @@ test('环境注入 fail closed：未配置点名字段，describe 不回显值',
   const resolved = resolveRuntimeConfig({
     FORGE_DEVOPS_DOP_BIN: '/secret/bin/dop',
     FORGE_DEVOPS_DOP_ENDPOINT: 'https://secret-endpoint.example/dop',
-    FORGE_DEVOPS_GH_OWNER: 'acme',
   });
   if (resolved.ok !== true) {
     t.diagnostic(`SKIP describe：最小注入未解析成功（${resolved.reason}），由 T1 自测覆盖`);
@@ -289,36 +294,6 @@ test('dop 适配器：固定 argv、未注入 endpoint 不拼参、无写通道'
   const withEndpoint = createDopAdapter({ runner, dopBin: '/opt/corp/dop', dopEndpoint: 'https://dop.example/api' });
   await withEndpoint.readChange({ changeId: 'ARD123456' });
   assert.ok(calls.at(-1).args.includes('--endpoint'), '注入 endpoint 时必须显式传递');
-});
-
-test('gh 适配器：读写命令面固定、无 merge/close/release/workflow/api 通道', async (t) => {
-  if (!existsSync(pkgPath('src', 'gh-adapter.mjs'))) return deferred(t, 'gh-adapter.mjs', 'T2', 'argv 契约无法验证');
-  const { createGhAdapter } = await load('gh-adapter.mjs');
-  const calls = [];
-  const runner = {
-    run: async ({ bin, args }) => {
-      calls.push({ bin, args: [...args] });
-      return { exitCode: 0, stdout: '{"number":1,"state":"open"}', stderr: '', durationMs: 1, timedOut: false };
-    },
-  };
-  const gh = createGhAdapter({ runner, ghBin: 'gh' });
-  for (const forbidden of ['merge', 'close', 'release', 'workflow', 'api', 'delete', 'edit']) {
-    assert.ok(!(forbidden in gh), `gh 适配器不得有 ${forbidden} 通道（AC-19 禁项）`);
-  }
-  await gh.readRepository({ repo: 'acme/demo' });
-  assert.equal(calls.at(-1).bin, 'gh');
-  assert.deepEqual(calls.at(-1).args.slice(0, 3), ['repo', 'view', 'acme/demo']);
-  await gh.listOpenIssues({ repo: 'acme/demo' });
-  const listArgs = calls.at(-1).args;
-  assert.deepEqual(listArgs.slice(0, 2), ['issue', 'list']);
-  assert.equal(listArgs[listArgs.indexOf('--state') + 1], 'open', 'open 对象清单必须只查 open');
-  assert.ok(listArgs.includes('--limit') && listArgs.includes('100'), '清单需固定上限');
-  await gh.createIssue({ repo: 'acme/demo', title: '门禁回读', body: '正文' });
-  const createArgs = calls.at(-1).args;
-  assert.deepEqual(createArgs.slice(0, 2), ['issue', 'create']);
-  assert.ok(createArgs.includes('--title') && createArgs.includes('--body'), '建 Issue 必须显式带标题与正文');
-  await gh.commentIssue({ target: 'acme/demo#12', body: '审查记录' });
-  assert.deepEqual(calls.at(-1).args.slice(0, 3), ['issue', 'comment', 'acme/demo#12']);
 });
 
 test('子进程出口不允许 shell 拼串、不允许同步 exec（跨模块安全底线）', (t) => {
@@ -394,29 +369,6 @@ test('门禁唯一真源：未登记动作零下游调用，拒绝可见', async
   assert.equal(downstream, before, '被拒绝时下游零调用（AC-5）');
 });
 
-test('两套词表不混用：平台动作四态与流程态分离', async (t) => {
-  if (!existsSync(pkgPath('src', 'actions.mjs'))) return deferred(t, 'actions.mjs', 'T5', '状态词表无法验证');
-  const { ACTION_STATUSES } = await load('actions.mjs');
-  assert.deepEqual(Array.from(ACTION_STATUSES), ['done', 'failed', 'denied', 'unknown']);
-  for (const flow of ['blocked', 'skipped', 'stale', 'pending', 'ready']) {
-    assert.ok(!ACTION_STATUSES.includes(flow), `流程态 ${flow} 不得混入平台动作词表（§7.1）`);
-  }
-  const text = srcText('actions.mjs');
-  assert.match(text, /READBACK_MISMATCH/, '回读不一致必须有可见原因 READBACK_MISMATCH（§7.7 第 7 行）');
-  assert.match(text, /reused/, '命中已有 open 对象必须标 reused 并复用（§7.7 第 8 行）');
-  assert.match(text, /denied/, '四状态中的 denied 必须有产出点（dop 无澄清写命令，§5.3）');
-});
-
-test('幂等键：同标题不同空白/大小写同键，对象类型与变更号不同则异键', async (t) => {
-  if (!existsSync(pkgPath('src', 'actions.mjs'))) return deferred(t, 'actions.mjs', 'T5', '幂等键无法验证');
-  const { idempotencyKey } = await load('actions.mjs');
-  const key = idempotencyKey({ change: 'ARD123456', objectType: 'issue', title: ' Fix   Gate. ' });
-  assert.match(String(key), /^[0-9a-f]{16}$/, `幂等键应为 16 位十六进制，实际 ${key}`);
-  assert.equal(idempotencyKey({ change: 'ARD123456', objectType: 'issue', title: 'fix gate' }), key);
-  assert.notEqual(idempotencyKey({ change: 'ARD123456', objectType: 'pr', title: 'fix gate' }), key);
-  assert.notEqual(idempotencyKey({ change: 'ARD999999', objectType: 'issue', title: 'fix gate' }), key);
-});
-
 test('入口只收变更号：格式非法早退，命令对模型不可调用', async (t) => {
   if (!existsSync(pkgPath('src', 'entry.mjs'))) return deferred(t, 'entry.mjs', 'T7', '入口未落地');
   const { ENTRY_NAME, parseChangeId } = await load('entry.mjs');
@@ -468,87 +420,22 @@ test('产物落盘：kind 枚举、front matter 六字段定序、路径逃逸�
   assert.ok(escapeRejected, '产物路径逃逸必须拒绝（§7.7 第 10 行）');
 });
 
-test('提交信息前缀：不合规拒绝且不改写', async (t) => {
-  if (!existsSync(pkgPath('src', 'commit-message.mjs'))) return deferred(t, 'commit-message.mjs', 'T6', '提交信息校验未落地');
-  const { assertCommitMessage } = await load('commit-message.mjs');
-  const good = assertCommitMessage({ changeId: 'ARD123456', message: '[ARD123456] 门禁回读改为 unknown' });
-  assert.equal(good.ok, true);
-  for (const message of ['门禁回读改为 unknown', '[ARD999999] 错号', '[ARD123456]']) {
-    const result = assertCommitMessage({ changeId: 'ARD123456', message });
-    assert.equal(result.ok, false, `不合规提交信息必须拒绝：${message}`);
-    assert.equal(result.reason, 'PREFIX_MISSING');
-    assert.match(String(result.expectedFormat), /^\[ARD123456\]/, '拒绝时必须给出期望格式');
-  }
-});
-
-test('审查分栏：人工栏只由确认函数写，commit 变化判 stale', async (t) => {
-  if (!existsSync(pkgPath('src', 'review.mjs'))) return deferred(t, 'review.mjs', 'T6', '审查记录未落地');
-  const { MODEL_TIERS, assertModelRecorded, buildReviewRecord, recordHumanConfirmation, reviewStaleness } = await load('review.mjs');
-  for (const tier of ['deepseek-v4-pro', 'gpt-6.1-sol', 'gpt-6-astra', 'muse-spark-1.3-contributor']) {
-    assert.ok(Array.from(MODEL_TIERS).includes(tier), `模型档位缺 ${tier}（§7.5）`);
-  }
-  assert.doesNotThrow(() =>
-    assertModelRecorded({ modelName: 'muse-spark-1.3-contributor', degraded: false, note: '' }),
-  );
-  assert.throws(
-    () => assertModelRecorded({ modelName: 'unknown-model', degraded: false, note: '' }),
-    '档外模型未标 degraded 必须拒绝记录',
-  );
-  const review = buildReviewRecord({
-    changeId: 'ARD123456',
-    commit: 'abcdef1',
-    model: { modelName: 'muse-spark-1.3-contributor', degraded: false },
-    findings: ['门禁回读缺失'],
-    risks: ['弱网重试'],
-    opinion: '可以提测',
-    conclusion: 'approve',
-  });
-  assert.equal(review.model.name, 'muse-spark-1.3-contributor', '模型记录在顶层 model{name,tier,degraded}（§4.3）');
-  assert.deepEqual(review.humanColumn, [], 'AI 结论不得预填人工确认栏（AC-18）');
-  const confirmed = recordHumanConfirmation(review, {
-    by: 'hosea',
-    at: '2026-10-28T12:00:00.000Z',
-    commit: 'abcdef1',
-    decision: 'confirmed',
-    note: '已看过风险项',
-  });
-  assert.equal(confirmed.humanColumn.at(-1).by, 'hosea');
-  assert.deepEqual(confirmed.aiColumn, review.aiColumn, '人工确认不得改写 AI 栏');
-  assert.equal(reviewStaleness(confirmed, 'abcdef1'), 'current');
-  assert.equal(reviewStaleness(confirmed, 'deadbee9'), 'stale');
-});
-
-test('报告：关闭就绪只判定不执行，证据项字段齐全', async (t) => {
-  if (!existsSync(pkgPath('src', 'report.mjs'))) return deferred(t, 'report.mjs', 'T6', '报告模块未落地');
-  const { issueCloseReadiness } = await load('report.mjs');
-  const readiness = issueCloseReadiness({ criteria: [], prs: [], pending: [], humanConfirmed: false });
-  assert.equal(typeof readiness?.ready, 'boolean', 'issueCloseReadiness 必须给出 ready 布尔判定');
-  assert.ok(Array.isArray(readiness.missing), 'issueCloseReadiness 必须给出 missing 清单');
-  assert.equal(readiness.ready, false, '无证据、无人工确认时不得判定为可关闭');
-  assert.deepEqual(Object.keys(readiness).sort(), ['missing', 'ready'], '只判定不执行：返回值不得带动作句柄（AC-19）');
-});
-
-test('工具面 9 个：名字与动作映射唯一真源，写工具须 confirm', async (t) => {
+test('工具面 4 个：名字与动作映射唯一真源，写工具须 confirm（r10 AC-10）', async (t) => {
   const toolsText = srcText('tools.mjs');
-  if (!toolsText.includes('forge_devops_change_context')) {
-    return deferred(t, 'tools.mjs', 'T7', '聚合工具与写工具尚未加入工具面');
-  }
   const expected = [
-    'forge_devops_change_read',
-    'forge_devops_repository_read',
-    'forge_devops_issue_read',
-    'forge_devops_pr_read',
-    'forge_devops_change_context',
-    'forge_devops_issue_write',
-    'forge_devops_pr_write',
-    'forge_devops_clarify_write',
     'forge_devops_artifact_write',
+    'forge_devops_change_context',
+    'forge_devops_change_read',
+    'forge_devops_clarify_write',
   ];
   const found = new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []);
-  assert.equal(found.size, 9, `工具面应为 9 个，实际识别到 ${found.size}：${[...found].join(', ')}`);
+  assert.equal(found.size, 4, `工具面应为 4 个（17 → 14 的收敛项），实际识别到 ${found.size}：${[...found].join(', ')}`);
   for (const name of expected) assert.ok(found.has(name), `工具面缺 ${name}（§5.2）`);
+  for (const gone of ['forge_devops_issue_write', 'forge_devops_pr_write', 'forge_devops_repository_read', 'forge_devops_issue_read', 'forge_devops_pr_read']) {
+    assert.ok(!found.has(gone), `${gone} 必须随 gh 侧模块删除：跨平台写/读入口只能留在 forge-gitee（r10）`);
+  }
   assert.match(toolsText, /confirm/, '写工具必须要求 confirm{repo,object}（§5.2）');
-  for (const action of ['issue.create_or_update', 'pr.create_or_update', 'change.clarification.write']) {
+  for (const action of ['change.clarification.write']) {
     assert.ok(toolsText.includes(action), `工具→动作映射表缺写动作 ${action}（§5.2）`);
   }
   const noCommandFace = srcFiles().filter((file) => /no-command-face/.test(srcText(file)));
@@ -571,9 +458,13 @@ test('装配层组合根：index 生产流程协作者并以服务键提供，fl
   assert.match(indexText, /createDevopsFlow/u, '流程协作者必须在包内生产，不能只靠宿主注入');
   assert.match(indexText, /provide\(\s*FLOW_KEY/u, '流程协作者要以 devopsFlow 服务键提供，宿主与工具面才能取到');
   const flowText = srcText('flow.mjs');
-  for (const name of ['createCliRunner', 'createDopAdapter', 'createGhAdapter']) {
+  for (const name of ['createCliRunner', 'createDopAdapter']) {
     assert.match(flowText, new RegExp(name, 'u'), `flow.mjs 未组合 ${name}：流程模块会重新变成孤儿`);
   }
+  assert.ok(
+    !/createGhAdapter|gh-adapter\.mjs/u.test(flowText + indexText),
+    'r10：gh 侧模块已删除，装配层不得再引入第二套仓库事实来源',
+  );
 });
 
 test('交付卫生：日志与产物目录必须被忽略（未补记 DEFERRED 到 T1）', (t) => {
@@ -612,7 +503,7 @@ test('r3 补丁层与 README 无本机路径样例；补丁层不写死 endpoint
 
 test('r3 工具面不把取值型 access 字段拼进错误 detail（AC-10 回显边界）', () => {
   // 取值型字段：命中路径、endpoint 实值、移动端快照。它们只允许出现在 GET 响应体与页面 DOM。
-  const VALUE_CARRIERS = /(?:\bdopBin\b|\bghBin\b|\bdopEndpoint\b|access\.entries|\bentries\s*\[|\.snapshot\s*\()/;
+  const VALUE_CARRIERS = /(?:\bdopBin\b|\bdopEndpoint\b|access\.entries|\bentries\s*\[|\.snapshot\s*\()/;
   const leaks = [];
   for (const file of srcFiles()) {
     const text = srcText(file);
@@ -622,7 +513,7 @@ test('r3 工具面不把取值型 access 字段拼进错误 detail（AC-10 回�
     }
   }
   assert.deepEqual(leaks, [], `detail 里出现取值型 access 字段（绝对路径/endpoint 会外泄到工具输出）：${leaks.join(', ')}`);
-  const toolHits = ['dopBin', 'ghBin', 'dopEndpoint', 'access.'].filter((key) => srcText('tools.mjs').includes(key));
+  const toolHits = ['dopBin', 'dopEndpoint', 'access.'].filter((key) => srcText('tools.mjs').includes(key));
   assert.deepEqual(toolHits, [], `工具面只认脱敏描述，不得接触 access 快照：${toolHits.join(', ')}`);
 });
 
@@ -746,15 +637,18 @@ test('r3 清单声明客户端半：dsh.client + ./client 导出 + 发布白名�
   assert.ok(manifest.files?.includes('client.js'), '发布白名单必须含 client.js（否则安装后页面 404）');
 });
 
-test('r3 文档口径 UI 优先：README 配置页在前、六键表齐全、补丁注释同步改写（AC-12）', (t) => {
+test('r3 文档口径 UI 优先：README 配置页在前、四键表齐全、补丁注释同步改写（AC-12；r10 收键）', (t) => {
   if (!r3Landed()) return deferred(t, 'README.md', 'T4/T6(r3)', 'r3 装配尚未落地，文档口径检查随波次生效');
   const readme = read(pkgPath('README.md'));
   const pageAt = readme.indexOf('配置页');
   const envAt = readme.indexOf('环境变量');
   assert.ok(pageAt >= 0, 'README 必须给出配置页进入路径（AC-12：不设环境变量也能装好可用）');
   assert.ok(envAt === -1 || pageAt < envAt, `README 必须配置页在前、环境变量降为 CI 兜底（配置页@${pageAt}、环境变量@${envAt}）`);
-  for (const field of ['dopBin', 'dopEndpoint', 'ghBin', 'ghOwner', 'sourceType', 'timeoutMs']) {
-    assert.ok(readme.includes(field), `README 配置项表缺 ${field}（六键表）`);
+  for (const field of ['dopBin', 'dopEndpoint', 'sourceType', 'timeoutMs']) {
+    assert.ok(readme.includes(field), `README 配置项表缺 ${field}（r10 四键表）`);
+  }
+  for (const gone of ['ghBin', 'ghOwner']) {
+    assert.ok(!readme.includes(gone), `README 仍写 ${gone}：gh 侧字段已随模块删除，配置面 6 → 4 键（r10）`);
   }
   assert.match(read(pkgPath('cordis.patch.yml')), /配置页/, '补丁层注释口径必须改为「配置页优先、环境变量兜底」（旧口径会持续误导运维）');
 });
@@ -780,7 +674,11 @@ test('r3 零回退：READ_REASONS 不加码，只读面语义与工具数不变�
     '本次需求不得新增只读原因码：细因放 detail.reason（cli-discovery 未命中仍是 NO_READER）',
   );
   const toolsText = srcText('tools.mjs');
-  assert.equal(new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []).size, 9, '工具面仍是 9 个（配置页只写配置，不新增工具）');
+  assert.equal(
+    new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []).size,
+    4,
+    'r10 起工具面是 4 个：仓库/Issue/PR 读写已交给 forge-gitee（配置页只写配置，不新增工具）',
+  );
   const indexText = srcText('index.mjs');
   assert.match(indexText, /NO_READER/, '未命中仍以 NO_READER 失败（fail closed 不变）');
 });

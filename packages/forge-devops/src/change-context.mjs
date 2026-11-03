@@ -1,27 +1,67 @@
 /**
- * `@heluo/forge-devops` 的上下文卡（AC-11 业务侧 + AC-12 承建判定的展示面）。
+ * `@heluo/forge-devops` 的上下文卡（AC-11 业务侧 + AC-12 承建仓库段的降级展示）。
  *
  * 只在这里做的三件事：
  * 1. **映射**：dop `change view --json` 的 2026-07-06 字段契约 → 内部 `Change`。snake_case 只在 `normalizeChangeRecord`
  *    里出现一次；契约外字段只留在 `raw` 供调试，进卡片前剥掉（卡会落盘成产物，不把企业侧多余字段带出去）。
  * 2. **规则**：`release_info` 取首个非空。`firstReleaseInfo` 是唯一实现，卡与报告都调它——两处各写一遍必然漂移。
- * 3. **构建与渲染**：事实 + 来源（版本/时间戳）+ 未知项 + 承建判定 + 已记录假设 + 下一步，固定结构的 Markdown。
+ * 3. **构建与渲染**：事实 + 来源（版本/时间戳）+ 未知项 + 承建仓库段 + 已记录假设 + 下一步，固定结构的 Markdown。
+ *
+ * r10（按平台收敛）之后，**承建仓库不再由本包判定**：`externalRepoFacts()` 给出 `unknown` +
+ * `REPO_FACTS_EXTERNAL` + 下一步（`forge_gitee_repository_read` / `forge_gitee_issue_read`），
+ * 由 Gitee 工具回答。`normalizeBuilding` 仍接受外部构造的 `resolved` / `blocked` 卡片
+ * （dop 未来回传仓库事实时不必改渲染口径），但本包自己不产生这两种状态。
  *
  * 纯函数：不读时钟、不读文件、不调平台；时间与来源版本由调用方传入，拿不到就写 `null` 并列进未知项。
  * 同输入必然同输出——上下文卡才能当产物落盘并逐字复核。
  *
  * 三条容易被顺手破坏的纪律：
  * - 取不到的事实**不静默省略**：要么进 `unknowns`（带 field/reason/command），要么构建时直接报错；
- * - 卡片 `blocked` **只阻断写动作**，读取与信息展示照常（AC-11"仓库侧取不到不阻塞业务侧"）；
+ * - 卡片 `blocked` **只表示事实不全**：读取与信息展示照常（AC-11"仓库侧取不到不阻塞业务侧"）；
+ *   写动作的门禁在 `@heluo/forge-gitee`，不再由这张卡的 `blocked` 阻断。
  * - 渲染要**脱敏**：endpoint 与绝对路径不落文档（AC-22），命令只保留可核对的部分。
  */
 
 import { createHash } from 'node:crypto';
 import { normalizeReadError } from './read.mjs';
-import { EVIDENCE_KINDS, RESOLVE_STATUSES, EVIDENCE_SOURCES } from './repository-resolver.mjs';
 
-/** 事实来源只有两族：平台业务事实（dop）与仓库侧事实（gh）。 */
-export const SOURCE_KINDS = Object.freeze(['dop', 'gh']);
+/**
+ * 事实来源只有一族：平台业务事实（dop）。
+ *
+ * r10 起仓库侧事实由 `@heluo/forge-gitee` 自己的读信封给出，不再混进本卡——同一张卡里
+ * 混两族的来源，读的人就无法判断"这一行是谁说的"。
+ */
+export const SOURCE_KINDS = Object.freeze(['dop']);
+
+/**
+ * 承建判定的状态词表。r10 起本包**不再产生** `resolved` / `blocked`：仓库事实由 Gitee 工具
+ * 回答，devops 只给 `unknown` + `REPO_FACTS_EXTERNAL` + 下一步。三态仍全部接受，是因为
+ * `normalizeBuilding` 也校验外部构造的卡片（`context.test.mjs` 直接构造 resolved 卡片），
+ * 且 dop 未来若回传仓库事实时可复用同一套渲染口径——删掉等于给 AC-11 埋第二次改动。
+ */
+export const BUILDING_STATUSES = Object.freeze(['resolved', 'blocked', 'unknown']);
+
+/**
+ * 「仓库事实不在这里」的唯一原因码：出现在卡片 `building.reason`、渲染的承建判定段与
+ * flow 的未知项指引三处。单点定义，是为了让"下一次有人想在这里猜仓库"必须改一个常量，
+ * 而不是散落三句文案。
+ */
+export const EXTERNAL_REPO_FACT_REASON = 'REPO_FACTS_EXTERNAL';
+
+/** 事实的主人：读仓库与读 Issue 是回答"承建仓库 / 关联对象"的两条正路（模型下一步该调的）。 */
+export const EXTERNAL_REPO_FACT_NEXT_ACTIONS = Object.freeze([
+  'forge_gitee_repository_read',
+  'forge_gitee_issue_read',
+]);
+
+/** 证据种类：命中发生在哪个字段上（只校验外部构造的 resolved 卡片，本包不产生证据）。 */
+const EVIDENCE_KINDS = Object.freeze([
+  'sub_system.code',
+  'sub_system.name',
+  'repo.name',
+  'repo.description',
+  'repo.topic',
+]);
 
 /** 证据类型与 AC-23 一致：mock 实测与真实远端/企业实测分开记，不许合并成一个"已实测"。 */
 export const CHANGE_SOURCE_TYPES = Object.freeze(['mock', 'enterprise']);
@@ -370,14 +410,42 @@ function normalizeUnknowns(unknowns) {
   return asArray(unknowns).map((entry, index) => toUnknown(entry, index));
 }
 
-/** 承建判定必须是 `resolveBuildingRepository` 的产物：状态、候选、证据三样都要对得上。 */
-function normalizeBuilding(building) {
+/**
+ * 承建仓库段：**本包不判定**，只声明"这是外部事实"。
+ *
+ * 返回结构与 `normalizeBuilding` 的入参同族，`buildContextCard` 因此不需要额外分支；
+ * `next_actions` 直接指向事实的主人（Gitee 工具），渲染时逐条列出——模型照着调即可，
+ * 不必先猜一次再被拒绝。`reasons` 与 `reason` 同时给，是因为渲染按数组、单点判断按单值。
+ */
+export function externalRepoFacts() {
+  return {
+    status: 'unknown',
+    reason: EXTERNAL_REPO_FACT_REASON,
+    selected: null,
+    candidates: [],
+    reasons: [EXTERNAL_REPO_FACT_REASON],
+    evidence: [],
+    next_actions: [...EXTERNAL_REPO_FACT_NEXT_ACTIONS],
+  };
+}
+
+/**
+ * 承建判定必须是可核对的形状：状态、候选、证据、下一步四样都要对得上。
+ *
+ * `unknown` 是 r10 的常态（仓库事实在 Gitee 侧）：它**必须**带原因，否则"不知道"会被渲染成
+ * 一句空话；`resolved` 必须给出 `selected`，且 `selected` 只能来自候选（不得引入候选之外的仓库）。
+ */
+export function normalizeBuilding(building) {
   if (!isPlainObject(building)) {
-    throw new ContextError(CONTEXT_REASONS.BUILDING_INVALID, '上下文卡必须带承建判定（先调 resolveBuildingRepository）', {});
+    throw new ContextError(
+      CONTEXT_REASONS.BUILDING_INVALID,
+      '上下文卡必须带承建仓库段（外部事实用 externalRepoFacts()）',
+      {},
+    );
   }
   const status = text(building.status);
-  if (!RESOLVE_STATUSES.includes(status)) {
-    throw new ContextError(CONTEXT_REASONS.BUILDING_INVALID, `building.status 必须是 ${RESOLVE_STATUSES.join('/')}`, { status });
+  if (!BUILDING_STATUSES.includes(status)) {
+    throw new ContextError(CONTEXT_REASONS.BUILDING_INVALID, `building.status 必须是 ${BUILDING_STATUSES.join('/')}`, { status });
   }
   const selected = text(building.selected) || null;
   const candidates = asArray(building.candidates).map((entry, index) => {
@@ -394,12 +462,19 @@ function normalizeBuilding(building) {
     });
     return { repo, evidence };
   });
-  const reasons = asArray(building.reasons).map((entry) => text(entry)).filter((entry) => entry !== '');
+  // 原因两种写法都收：`reasons: []`（历史形状）与 `reason: '(单值)'`（r10 的外部事实）。
+  const reasons = [...asArray(building.reasons), text(building.reason)]
+    .map((entry) => text(entry))
+    .filter((entry, index, list) => entry !== '' && list.indexOf(entry) === index);
+  // 下一步只收非空文本并去重：重复的指引等于噪音，空字符串等于"没有下一步"。
+  const nextActions = asArray(building.next_actions)
+    .map((entry) => text(entry))
+    .filter((entry, index, list) => entry !== '' && list.indexOf(entry) === index);
   if (status === 'resolved' && selected === null) {
     throw new ContextError(CONTEXT_REASONS.BUILDING_INVALID, 'resolved 必须给出 selected', {});
   }
-  if (status === 'blocked' && reasons.length === 0) {
-    throw new ContextError(CONTEXT_REASONS.BUILDING_INVALID, 'blocked 必须给出至少一条原因', {});
+  if ((status === 'blocked' || status === 'unknown') && reasons.length === 0) {
+    throw new ContextError(CONTEXT_REASONS.BUILDING_INVALID, `${status} 必须给出至少一条原因`, { status });
   }
   if (selected !== null && candidates.length > 0) {
     const wanted = selected.toLowerCase();
@@ -407,7 +482,7 @@ function normalizeBuilding(building) {
       throw new ContextError(CONTEXT_REASONS.BUILDING_INVALID, `selected ${selected} 不在候选里（不得引入候选之外的仓库）`, { selected });
     }
   }
-  return { status, selected, candidates, reasons };
+  return { status, selected, candidates, reasons, next_actions: nextActions };
 }
 
 const RELATED_KINDS = Object.freeze(['issues', 'prs']);
@@ -570,6 +645,15 @@ function redactCommand(value) {
 /** 一条证据的读法：`kind` = `value`（来源）。照着就能回平台查。 */
 const evidenceLine = (item) => `${code(item.kind)} = ${code(item.value)}（来源 ${code(item.source, '（未标注）')}）`;
 
+/** 承建仓库段的外部指引：没有下一步时明确写"见下一步"，不留一句悬空的 unknown。 */
+function nextActionsText(building) {
+  const actions = asArray(building.next_actions)
+    .map((entry) => text(entry))
+    .filter((entry) => entry !== '');
+  if (actions.length === 0) return '见"下一步"';
+  return actions.map((name) => code(name)).join(' / ');
+}
+
 function releaseText(release) {
   const value = asObject(release);
   const parts = [code(value.releaseNum), inline(value.releaseName)];
@@ -622,11 +706,13 @@ export function renderContextCard(card) {
     }
     const subSystems = asArray(change.subSystems).map(asObject);
     lines.push(
-      `- 承建系统：${subSystems.length === 0 ? '（平台未给 `sub_systems`，承建判定只能 blocked）' : subSystems.map((item) => [code(item.code, ''), inline(item.name)].filter((part) => part !== '').join(' · ')).join('；')}`,
+      `- 承建系统：${subSystems.length === 0 ? '（平台未给 `sub_systems`；承建仓库段因此只能是 `unknown`）' : subSystems.map((item) => [code(item.code, ''), inline(item.name)].filter((part) => part !== '').join(' · ')).join('；')}`,
     );
   }
   if (text(building.status) === 'resolved') {
-    lines.push(`- 承建仓库：${code(building.selected)}（候选 ${asArray(building.candidates).length} 个，依据见"承建判定"）`);
+    lines.push(`- 承建仓库：${code(building.selected)}（候选 ${asArray(building.candidates).length} 个，依据见"承建仓库"）`);
+  } else if (text(building.status) === 'unknown') {
+    lines.push(`- 承建仓库：（外部事实 ${code(EXTERNAL_REPO_FACT_REASON)} → ${nextActionsText(building)}）`);
   } else {
     lines.push(`- 承建仓库：（未确定：${asArray(building.reasons).map((reason) => code(reason)).join('、') || '（缺原因）'}）`);
   }
@@ -664,34 +750,41 @@ export function renderContextCard(card) {
     lines.push('');
   }
 
-  lines.push('## 承建判定（候选只来自 `dop.sub_systems` × `gh` 可见仓库）', '');
+  lines.push('## 承建仓库（外部事实：本包不判定，也不按变更号文本推断，AC-12）', '');
   if (text(building.status) === 'resolved') {
     lines.push(`- 结果：\`resolved\` → ${code(building.selected)}`);
+  } else if (text(building.status) === 'unknown') {
+    lines.push(`- 结果：\`unknown\`（${code(EXTERNAL_REPO_FACT_REASON)}）：仓库事实归 \`@heluo/forge-gitee\`，本卡只给指引，不猜第二个答案`);
+    lines.push(`- 下一步：${nextActionsText(building)}`);
   } else {
-    lines.push(`- 结果：\`blocked\`（写动作全部阻断，不猜仓库）`);
+    lines.push('- 结果：`blocked`（事实不全，不猜仓库）');
     lines.push(`- 原因：${asArray(building.reasons).map((reason) => code(reason)).join('、') || '（缺原因）'}`);
   }
   const candidates = asArray(building.candidates).map(asObject);
-  if (candidates.length === 0) {
-    lines.push('- 候选：无（承建系统未声明，或可见仓库清单为空/不可得）');
-  } else {
-    if (candidates.length > 1) lines.push('- 候选（按仓库名排序；由人在候选中选定后重跑）：');
-    else lines.push('- 候选与依据：');
-    candidates.forEach((candidate, index) => {
-      const evidence = asArray(candidate.evidence).map(asObject);
-      const prefix = candidates.length > 1 ? `  ${index + 1}. ${code(candidate.repo)}` : `  - ${code(candidate.repo)}`;
-      lines.push(prefix);
-      if (evidence.length === 0) {
-        lines.push('    - 依据：（缺失：没有命中证据的候选不可当作已确定）');
-      } else {
-        evidence.forEach((item) => lines.push(`    - ${evidenceLine(item)}`));
-      }
-    });
+  if (text(building.status) !== 'unknown') {
+    if (candidates.length === 0) {
+      lines.push('- 候选：无（承建系统未声明，或可见仓库清单为空/不可得）');
+    } else {
+      if (candidates.length > 1) lines.push('- 候选（按仓库名排序；由人在候选中选定后重跑）：');
+      else lines.push('- 候选与依据：');
+      candidates.forEach((candidate, index) => {
+        const evidence = asArray(candidate.evidence).map(asObject);
+        const prefix = candidates.length > 1 ? `  ${index + 1}. ${code(candidate.repo)}` : `  - ${code(candidate.repo)}`;
+        lines.push(prefix);
+        if (evidence.length === 0) {
+          lines.push('    - 依据：（缺失：没有命中证据的候选不可当作已确定）');
+        } else {
+          evidence.forEach((item) => lines.push(`    - ${evidenceLine(item)}`));
+        }
+      });
+    }
   }
-  lines.push(`- 证据来源：${code(EVIDENCE_SOURCES.SUB_SYSTEMS)} + ${code(EVIDENCE_SOURCES.REPOSITORIES)}；不按变更号文本推断仓库（AC-12）`);
+  if (text(building.status) === 'resolved') {
+    lines.push('- 证据来源：`dop.sub_systems` + Gitee 仓库读（`forge_gitee_repository_read`）；不按变更号文本推断仓库（AC-12）');
+  }
   lines.push('');
 
-  lines.push('## 关联 Issue / PR（`gh` 只读；只列能对应上本变更的对象）', '');
+  lines.push('## 关联 Issue / PR（由 Gitee 工具读取；本卡只列调用方已确认能对应上的对象）', '');
   const issues = asArray(related.issues).map(asObject);
   const prs = asArray(related.prs).map(asObject);
   const relatedLine = (label, list) => {
@@ -700,7 +793,11 @@ export function renderContextCard(card) {
       .map((item) => `#${item.number}「${inline(item.title)}」（${cell(item.state)}${text(item.matchedBy) === '' ? '' : `；对应依据 ${code(item.matchedBy)}`}）`)
       .join('；')}`;
   };
-  lines.push(relatedLine('Issue', issues), relatedLine('PR', prs), '');
+  lines.push(relatedLine('Issue', issues), relatedLine('PR', prs));
+  if (issues.length === 0 && prs.length === 0) {
+    lines.push(`- 查询入口：${code('forge_gitee_issue_read')} / ${code('forge_gitee_pr_read')}（本包不再聚合仓库侧对象）`);
+  }
+  lines.push('');
 
   lines.push('## 已记录假设（H-n；不阻断推进，完成报告逐条复核）', '');
   if (assumptions.length === 0) {
@@ -748,10 +845,14 @@ export function renderContextCard(card) {
     lines.push('1. 先恢复业务事实读取：确认 dop 已配置且可用（路径与 endpoint 由环境注入，不在本卡展示）；');
     lines.push(`2. 重跑 \`devops-change ${changeId}\` 重新聚合，不手工补写上下文卡；`);
     lines.push('3. 事实恢复前不创建 Issue/PR、不写澄清记录。');
+  } else if (text(building.status) === 'unknown') {
+    lines.push(`1. 取仓库事实：\`${EXTERNAL_REPO_FACT_NEXT_ACTIONS[0]}\`（承建仓库）与 \`${EXTERNAL_REPO_FACT_NEXT_ACTIONS[1]}\`（关联 Issue）；`);
+    lines.push('2. 把上一步的事实与本卡一起用 `forge_devops_artifact_write`（kind=context）落盘，不手工补写卡片；');
+    lines.push('3. 写动作在 `@heluo/forge-gitee`：默认拒绝，需在 profile 显式登记动作并带 `confirm{repo,object}`。');
   } else if (text(building.status) === 'blocked') {
-    lines.push('1. 先解决"承建判定"的阻断原因：在候选里由人选定承建仓库，或补齐 `sub_systems`/仓库范围；');
-    lines.push(`2. 重跑 \`devops-change ${changeId}\` 重新判定；`);
-    lines.push('3. 阻断期间写动作全部拒绝（`BUILDING_NOT_RESOLVED`），不得手工开 Issue 绕过。');
+    lines.push('1. 先补齐事实缺口：重跑读取或补齐 dop 变更记录（如 `sub_systems`），本包不猜第二个答案；');
+    lines.push(`2. 重跑 \`devops-change ${changeId}\` 重新聚合；`);
+    lines.push('3. 事实恢复前不把这张卡当作"已确认"。');
   } else {
     lines.push('1. 生成澄清单：硬门禁项须人工确认，其余歧义记为 `H-n` 假设；');
     lines.push('2. 生成交付计划：逐条验收条件绑定实现项与验证方式；');

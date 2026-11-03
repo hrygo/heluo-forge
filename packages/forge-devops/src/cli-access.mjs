@@ -40,11 +40,11 @@ export const DEFAULT_ENTRY_ID = 'forge-devops';
 /** `revision` 取哈希的前多少个十六进制字符：够短可抄，够长不撞。 */
 export const REVISION_LENGTH = 16;
 
-/** 六个字段里"值是一条命令行路径"的两个（快照要给候选与拒收项，其余只给值）。 */
-const PATH_FIELDS = Object.freeze(['dopBin', 'ghBin']);
+/** 四个字段里"值是一条命令行路径"的只有 `dopBin`（快照要给候选与拒收项，其余只给值）。 */
+const PATH_FIELDS = Object.freeze(['dopBin']);
 
 /** 路径字段 ←→ 发现工具名：与 `cli-config` 的 `TOOL_BY_FIELD` 同源，快照要用它挑候选。 */
-const TOOL_BY_FIELD = Object.freeze({ dopBin: 'dop', ghBin: 'gh' });
+const TOOL_BY_FIELD = Object.freeze({ dopBin: 'dop' });
 
 /** 默认注入的同步 fs 面：只读、同步、无子进程（发现与保存校验共用）。 */
 const NODE_FS = Object.freeze({ statSync, readdirSync });

@@ -6,15 +6,15 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-009 |
 | 文档名称 | DevOps 接入详细设计 |
-| 版本 | V0.3.0 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-22 |
+| 最后更新 | 2026-11-03 |
 | 门禁 | G1 |
-| 模块状态 | 可用（只读查询 + 门禁骨架；企业 CLI 未联调，见设计索引 §2.2） |
+| 模块状态 | 可用（四个工具：变更读取、上下文卡、澄清回写、产物落盘；企业 dop CLI 未联调，见设计索引 §2.2） |
 
 > 编制依据：2026-10-20 依据两点事实——DevOps 平台已提供 CLI 工具；架构 P7 要求复用企业既有资产。据此本设计以 CLI 为接入形态，不新建 MCP 服务端。**未核验**：CLI 在银河麒麟 aarch64 上的可用性、是否支持环境变量注入凭据、是否提供结构化输出。三项均由 DevOps 团队补充确认，写入 §12，不阻塞设计其余部分。
 >
@@ -27,6 +27,8 @@
 这个选择的前提是 CLI 能覆盖只读查询（系统变更及独立验收、所属故事、系统/仓库与必要项目信息）。若 CLI 缺失或必要前提不成立，关闭对应命令并提交替代形态、成本与验收评审；不自动恢复 MCP 服务或核心补丁工作项。
 
 边界：本模块不实现授权，授权由 DevOps 服务端校验。查询为现有基线；经需求方确认的受控回写目标见 §13，范围/安全/接口未准入前禁用，不把设计确认当作服务授权。
+
+**范围与平台边界（r10）**：本模块只讲 dop（DevOps 平台）变更流程。仓库、Issue、PR 的读写事实由 `@heluo/forge-gitee` 唯一负责，devops 不再持有 `gh` 侧实现（gh 适配器、actions、repository-resolver、repo-ref、review、report、commit-message 七个模块已删除）。因此 `change_context` 的承建仓库段降级为外部指引：`REPO_FACTS_EXTERNAL` + 下一步 `forge_gitee_repository_read` / `forge_gitee_issue_read`，不猜第二次。工具面收敛为四个（`forge_devops_change_read` / `forge_devops_change_context` / `forge_devops_clarify_write` / `forge_devops_artifact_write`），配置四键（`dopBin` / `dopEndpoint` / `sourceType` / `timeoutMs`），页面可编辑两项（dop 入口、超时）。
 
 ## 2. 目标与非目标
 
@@ -62,7 +64,7 @@
 | 项 | 内容 |
 |---|---|
 | 形态 | 工具面接入：技能提示 + 命令白名单 + 策略校验（无独立服务端） |
-| 运行位置 | 本机 Host，经 bash 工具调用 CLI |
+| 运行位置 | 本机 Host，固定 argv 经唯一 `execFile` 出口（`shell: false`），不经 bash 拼接 |
 | 目标 DSH 与 SDK | 随目标版本 |
 | 使用的 seam 或服务 | bash 工具、策略门禁、凭据注入、审计事件 |
 | 不修改的核心 | 无 |
@@ -71,14 +73,14 @@
 
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
 |---|---|---|---|---|
-| `devops.cliPath` | string | `devops` | 是 | CLI 可执行文件路径 |
-| `devops.allowedCommands` | string[] | `[]` | 是 | 只读子命令白名单，空即禁用 |
-| `devops.timeoutMs` | number | `60000` | 否 | 单次命令上限 |
-| `devops.maxOutputBytes` | number | `262144` | 否 | 输出截断阈值 |
-| `devops.authEnv` | string | `DEVOPS_TOKEN` | 否 | 注入凭据的环境变量名 |
-| `devops.outputFormat` | `json` \| `text` | `json` | 否 | 期望输出格式 |
+| `dopBin` | string | 自动发现 | 是 | dop 可执行文件路径；页面可编辑 |
+| `dopEndpoint` | string | 空 | 否 | dop 服务端点；仅环境变量注入 |
+| `sourceType` | `dop` | `dop` | 否 | 事实来源类型；由 dop 单独推导，不认 `gh` |
+| `timeoutMs` | number | `60000` | 否 | 单次命令上限；页面可编辑 |
 
-任务输入以系统变更及独立验收为主，所属故事只作背景。以下仅为待提供方映射的业务动作，不是可执行 CLI 命令，不预设 `devops` / `dop` 的子命令或参数：
+配置页只有两项可编辑（`dopBin`、`timeoutMs`）；其余键由环境变量或推导获得。配置面只有四个键：历史上的 `ghBin` / `ghOwner` 及其环境变量形式不在契约内，加载时被静默忽略——不报错、不产生条目、也不影响就绪判定（老 profile 升级后插件照常激活）。
+
+任务输入以系统变更及独立验收为主，所属故事只作背景。以下仅为待提供方映射的业务动作，不是可执行 CLI 命令，不预设 `dop` 的子命令或参数。r10 起动作目录只剩这两条：仓库、Issue、PR 的读取动作（`gitee.repository.read` / `gitee.issue.read` / `gitee.pr.read`）及其写动作已整体归 `@heluo/forge-gitee`，本模块不保留同名入口。
 
 | 业务动作示意 | 必须取得的事实 | 状态 |
 |---|---|---|

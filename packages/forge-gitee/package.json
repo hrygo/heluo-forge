@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Gitee change-flow host plugin for Heluo Forge: gitee.* read queries, policy-gated controlled writes and review/delivery judgement, isolated from the GitHub (forge-devops) semantics",
+  "description": "Gitee change-flow host plugin for Heluo Forge: gitee.* read queries, policy-gated controlled writes, review/delivery judgement, and local git commit/push behind the same policy gate",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },

@@ -2,8 +2,9 @@
  * 只读面契约：AC-15（读信封与固定 reason 枚举）+ AC-14 的读参数面 + AC-9 的三个读工具。
  *
  * 用例全部离线：子进程出口被替换成**桩 runner**（`{ run({bin,args,purpose}) }`），
- * 六类失败按 AC-15 的方式注入：CLI 未找到（未启动）、主机非企业、输出非 JSON、令牌缺失、
- * 退出码非 0、输出截断。每条用例都同时断言"读通道只发只读命令、失败不重试"。
+ * 六类失败按 AC-15 的方式注入：CLI 未找到（未启动）、主机非企业、输出非 JSON、
+ * 退出码非 0、输出截断、未声明字段；另守 r10 的两条放宽——无令牌仍可读、
+ * 落盘凭据按策略（warn 放行 / block 拒绝）。每条用例都同时断言"读通道只发只读命令、失败不重试"。
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -63,8 +64,24 @@ function assertReadOnlyCalls(calls) {
   }
 }
 
-function makeAdapter({ runner, host = '', env = { GH_TOKEN: TOKEN }, persistentTokenProbe = null, now = () => '2026-10-30T08:00:00.000Z' } = {}) {
-  return createGiteeAdapter({ runner, cliPath: 'gh', host, authEnv: 'GH_TOKEN', env, now, persistentTokenProbe });
+function makeAdapter({
+  runner,
+  host = '',
+  env = { GH_TOKEN: TOKEN },
+  persistentTokenProbe = null,
+  persistentTokenPolicy = 'warn',
+  now = () => '2026-10-30T08:00:00.000Z',
+} = {}) {
+  return createGiteeAdapter({
+    runner,
+    cliPath: 'gh',
+    host,
+    authEnv: 'GH_TOKEN',
+    env,
+    now,
+    persistentTokenProbe,
+    persistentTokenPolicy,
+  });
 }
 
 /** 真实适配器 + 服务端口（等价于 index.mjs 装配出来的只读最小面）。 */
@@ -182,17 +199,18 @@ test('AC-15: 取不到 updated_at 的对象读降级 unknown，不编事实版�
   assert.equal(envelope.object.name, 'repo', '已取到的字段仍要交付，只把状态降级');
 });
 
-test('AC-15: 结果混入 GitHub 语义字段 → unknown（MIXED_PROVIDER_FIELDS），不采信', async () => {
+test('AC-15: 表外字段（GitHub 语义）不进对象，也不把状态降级（r10 只留白名单）', async () => {
   const mixed = { ...REPO_JSON, mergedAt: '2026-10-29T00:00:00Z' };
   const runner = stubRunner(() => outcome({ stdout: JSON.stringify(mixed) }));
   const adapter = makeAdapter({ runner });
   const facts = await adapter.read('gitee.repository.read', 'group/repo');
   const envelope = normalizeGiteeReadResult({ action: 'gitee.repository.read', target: 'group/repo', result: facts });
 
-  assert.equal(envelope.status, 'unknown');
-  assert.equal(envelope.error_code, READ_REASONS.MIXED_PROVIDER_FIELDS);
-  assert.match(envelope.message, /未声明的字段/);
-  assert.equal('mergedAt' in envelope.object, false);
+  assert.equal(envelope.status, 'succeeded');
+  assert.equal(envelope.error_code, null);
+  assert.equal('mergedAt' in envelope.object, false, '未声明的字段一律不采信');
+  assert.equal(envelope.object.name, 'repo');
+  assert.equal(envelope.source_revision, mixed.updated_at);
 });
 
 test('AC-15: 输出截断 → unknown（OUTPUT_TRUNCATED），载荷标记 truncated', async () => {
@@ -257,23 +275,28 @@ test('AC-15: CLI 未找到 / 退出码非 0 / 超时三类失败原因固定', a
   }
 });
 
-test('AC-15: 令牌缺失 → failed（AUTH_MISSING），且一次子进程都不起', async () => {
+test('r10: 无令牌仍可读（tokenSource none），照常发一次只读命令', async () => {
   const runner = stubRunner(() => outcome({ stdout: JSON.stringify(REPO_JSON) }));
   const adapter = makeAdapter({ runner, env: {} });
+  const preflight = adapter.preflight();
+  assert.equal(preflight.ok, true);
+  assert.equal(preflight.tokenSource, 'none');
+  assert.match(preflight.message, /只读命令照常执行/);
+
   const [repository] = readToolDefinitions(adapterService(adapter));
   const body = parseBody(await repository.execute({ target: 'group/repo' }));
 
-  assert.equal(runner.calls.length, 0);
-  assert.equal(body.status, 'failed');
-  assert.equal(body.error_code, READ_REASONS.AUTH_MISSING);
+  assert.equal(runner.calls.length, 1);
+  assertReadOnlyCalls(runner.calls);
+  assert.equal(body.status, 'succeeded');
   assert.equal(body.provider, 'gitee');
-  assert.match(body.message, /GH_TOKEN/);
+  assert.equal(body.error_code, null);
 });
 
 test('AC-15: 主机非企业 → failed（HOST_NOT_ENTERPRISE）', async () => {
-  // 情形一：配置的是公共 SaaS 域 —— 读之前就拒，零子进程。
+  // 情形一：配置的是公共 SaaS 域（r10 黑名单只剩 Gitee 自有域）—— 读之前就拒，零子进程。
   const publicRunner = stubRunner(() => outcome({ stdout: JSON.stringify(REPO_JSON) }));
-  const publicAdapter = makeAdapter({ runner: publicRunner, host: 'github.com' });
+  const publicAdapter = makeAdapter({ runner: publicRunner, host: 'gitee.com' });
   const [repository] = readToolDefinitions(adapterService(publicAdapter));
   const publicBody = parseBody(await repository.execute({ target: 'group/repo' }));
   assert.equal(publicRunner.calls.length, 0);
@@ -281,7 +304,7 @@ test('AC-15: 主机非企业 → failed（HOST_NOT_ENTERPRISE）', async () => {
   assert.equal(publicBody.error_code, READ_REASONS.HOST_NOT_ENTERPRISE);
 
   // 情形二：结果链接指向别的主机 —— 命令执行了一次，但事实不采信。
-  const otherHostJson = { ...REPO_JSON, url: 'https://github.com/group/repo' };
+  const otherHostJson = { ...REPO_JSON, url: 'https://other.example/group/repo' };
   const wrongLinkRunner = stubRunner(() => outcome({ stdout: JSON.stringify(otherHostJson) }));
   const wrongLinkAdapter = makeAdapter({ runner: wrongLinkRunner, host: HOST });
   const wrongLinkBody = parseBody(await readToolDefinitions(adapterService(wrongLinkAdapter))[0]
@@ -290,7 +313,7 @@ test('AC-15: 主机非企业 → failed（HOST_NOT_ENTERPRISE）', async () => {
   assert.equal(wrongLinkBody.status, 'failed');
   assert.equal(wrongLinkBody.error_code, READ_REASONS.HOST_NOT_ENTERPRISE);
   assert.deepEqual([...wrongLinkBody.result_refs], []);
-  assert.match(wrongLinkBody.message, /github\.com/);
+  assert.match(wrongLinkBody.message, /other\.example/);
 
   // 情形三：目标链接自带的主机与配置的不一致 —— 读之前就拒，零子进程。
   const targetRunner = stubRunner(() => outcome({ stdout: JSON.stringify(REPO_JSON) }));
@@ -302,12 +325,13 @@ test('AC-15: 主机非企业 → failed（HOST_NOT_ENTERPRISE）', async () => {
   assert.equal(targetBody.error_code, READ_REASONS.HOST_NOT_ENTERPRISE);
 });
 
-test('AC-15/AC-22: 失败消息里不出现令牌值', async () => {
+test('AC-15/AC-22: 服务端拒凭据 → failed/AUTH_MISSING，且失败消息里不出现令牌值', async () => {
   const runner = stubRunner(() => outcome({ exitCode: 1, stderr: `HTTP 401 invalid token ${TOKEN}` }));
   const adapter = makeAdapter({ runner });
   const thrown = await catchError(() => adapter.read('gitee.repository.read', 'group/repo'));
   const envelope = normalizeGiteeReadError({ action: 'gitee.repository.read', target: 'group/repo', error: thrown });
   assert.equal(envelope.status, 'failed');
+  assert.equal(envelope.error_code, READ_REASONS.AUTH_MISSING);
   assert.equal(JSON.stringify(envelope).includes(TOKEN), false, '信封里不许回显令牌');
 });
 
@@ -345,9 +369,17 @@ test('AC-15/AC-16: 策略拒绝 → denied 信封（retry_policy 为 null），�
   assert.equal(body.retry_policy, null);
 });
 
-test('AC-15/AC-22: 持久令牌 → denied（GITEE_PERSISTENT_TOKEN），零子进程', async () => {
+test('AC-15/AC-22: 落盘凭据 warn 照常读、block 才 denied（GITEE_PERSISTENT_TOKEN）', async () => {
+  // warn（默认）：只告警，读路径照常走完。
+  const warnRunner = stubRunner(() => outcome({ stdout: JSON.stringify(REPO_JSON) }));
+  const warned = makeAdapter({ runner: warnRunner, persistentTokenProbe: () => true });
+  const warnBody = parseBody(await readToolDefinitions(adapterService(warned))[0].execute({ target: 'group/repo' }));
+  assert.equal(warnRunner.calls.length, 1);
+  assert.equal(warnBody.status, 'succeeded');
+
+  // block：起进程之前就拒。
   const runner = stubRunner(() => outcome({ stdout: JSON.stringify(REPO_JSON) }));
-  const adapter = makeAdapter({ runner, persistentTokenProbe: () => true });
+  const adapter = makeAdapter({ runner, persistentTokenProbe: () => true, persistentTokenPolicy: 'block' });
   const body = parseBody(await readToolDefinitions(adapterService(adapter))[0].execute({ target: 'group/repo' }));
 
   assert.equal(runner.calls.length, 0);
@@ -406,9 +438,11 @@ test('AC-15: 归一不抛错（只有请求形状错误才抛），并保留缺�
       missing_fields: [],
     },
   });
+  // 结果自称的 provider 不是 gitee：不采信（r10 不再有"混合 provider"原因码，走通用失败面）。
   assert.equal(foreignProvider.status, 'unknown');
-  assert.equal(foreignProvider.error_code, READ_REASONS.MIXED_PROVIDER_FIELDS);
+  assert.equal(foreignProvider.error_code, READ_REASONS.COMMAND_FAILED);
   assert.equal(foreignProvider.provider, 'gitee', '信封 provider 恒为 gitee');
+  assert.match(foreignProvider.message, /不是 gitee/);
 
   // 请求形状错误仍抛：读层不对"要读什么"做猜测。
   assert.throws(

@@ -47,10 +47,13 @@ function commitError(fn, reason) {
     fn();
   } catch (error) {
     assert.ok(error instanceof CommitMessageError, `期望 CommitMessageError，收到 ${error?.name}`);
-    assert.ok(error instanceof DeliveryError, 'CommitMessageError 是 DeliveryError 的子类（调用方按一种错误处理）');
+    // r10：提交信息规则搬到独立纯模块 git-message.mjs（全局唯一实现），gitee-delivery 只
+    // re-export。纯模块不继承 delivery 的 DeliveryError，调用方按 `code`/`reason` 判定即可。
+    assert.equal(error.name, 'CommitMessageError');
     assert.equal(error.reason, reason, `期望 ${reason}，收到 ${error.reason}（${error.message}）`);
     assert.equal(error.code, reason);
     assert.equal(error.ok, false);
+    assert.equal(error.detail?.expectedFormat, error.expectedFormat, 'detail.expectedFormat 与顶层字段同源');
     // 期望格式必须是"能照着改"的那一句；没有变更号时给出占位形态。
     assert.ok(
       typeof error.expectedFormat === 'string' && /^\[.+\] 一句话说明$/u.test(error.expectedFormat),

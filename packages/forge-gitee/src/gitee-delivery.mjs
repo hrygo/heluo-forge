@@ -1,31 +1,26 @@
 /**
- * 交付面（AC-18 / AC-21）：提交信息 `[变更号]` 校验 + 关闭条件四项判定。
+ * 交付面（AC-18 / AC-21）：关闭条件四项判定；提交信息规则见 `git-message.mjs`。
  *
- * 两条边界写死在这里：
- * 1. **只判定，不执行**。本模块没有关闭/合并/合并请求批准的任何通道，连 argv 都不构造——
+ * 边界写死在这里：
+ * 1. **只判定，不执行**。本模块没有关闭/合并/批准请求的任何通道，连 argv 都不构造——
  *    命令白名单 `DELIVERY_ALLOWED_VERBS` 只有 `view`/`list`，`close`/`merge` 在
- *    `DELIVERY_FORBIDDEN_VERBS` 里被逐字禁掉（AC-21 的"白名单无 close/merge"因此是静态可查的
+ *    `DELIVERY_FORBIDDEN_VERBS` 里被逐字禁掉（AC-21 的「白名单无 close/merge」因此是静态可查的
  *    不变量，不是口头承诺）。判定结果里的 `executed: false` 是同一件事的运行时证据。
- * 2. **提交信息只校验、不改写**。自动补前缀会把"人写错了"变成"工具替人做主"，也让历史无法
- *    回溯真实意图；返回值里没有任何替换后的 message，只有一个 `subject` 供调用方自己决定。
+ * 2. **提交信息只校验、不改写**。规则本体在 `git-message.mjs`（全局唯一实现），这里只
+ *    re-export 既有符号，保持 `delivery.test.mjs` 与工具层的导入路径不变；自动补前缀会把
+ *    「人写错了」变成「工具替人做主」，也让历史无法回溯真实意图。
  *
- * 与 `@heluo/forge-devops`（`commit-message.mjs` / `report.mjs#issueCloseReadiness`）是**受控
- * 重复**（PRD 非目标禁止改写 devops）：同义的拒绝码沿用同名（`CRITERION_NOT_PASSED` /
- * `PENDING_DELIVERY` / `HUMAN_CONFIRMATION_REQUIRED`），provider 语义各一份；跨包漂移由
- * `test/delivery.test.mjs` 的静态断言兜住，不靠共享代码。
- *
- * 除 `reviewStaleness` 的比较规则外不依赖其他模块；`judgeCloseReadiness` 不读时钟、不读网络。
+ * 除变更号格式与审查记录新鲜度外不依赖其他模块；`judgeCloseReadiness` 不读时钟、不读网络。
  */
 import { CHANGE_ID_PATTERN, reviewStaleness } from './gitee-review.mjs';
 
-/** 提交信息校验的拒绝原因（`缺变更号` / `缺描述` / `前缀缺失`，AC-18 的三类）。 */
-export const COMMIT_REASONS = Object.freeze({
-  MISSING_CHANGE_ID: 'COMMIT_MISSING_CHANGE_ID',
-  INVALID_CHANGE_ID: 'COMMIT_INVALID_CHANGE_ID',
-  MISSING_MESSAGE: 'COMMIT_MISSING_MESSAGE',
-  PREFIX_MISSING: 'COMMIT_PREFIX_MISSING',
-  DESCRIPTION_MISSING: 'COMMIT_DESCRIPTION_MISSING',
-});
+export {
+  COMMIT_REASONS,
+  CommitMessageError,
+  expectedCommitFormat,
+  verifyCommitMessage,
+  assertCommitMessage,
+} from './git-message.mjs';
 
 /** 关闭条件四项（顺序即文档与报告顺序，AC-21）。 */
 export const CLOSE_ITEMS = Object.freeze(['acceptance', 'merged', 'pendingDelivery', 'humanConfirmed']);
@@ -117,23 +112,6 @@ export class DeliveryError extends Error {
   }
 }
 
-/**
- * 提交信息不合规（AC-18）：`code` 即拒绝原因，`expectedFormat` 是给人照着改的那句话。
- *
- * 做成**异常**（而不是只返回 `{ok:false}`）是因为调用方（`gitee-actions` 的动作体）用
- * `try/catch` 判定"这次提交不许放行"——返回对象会被它当成通过，门禁静默失效；
- * 同时把 `ok/reason/expectedFormat/detail` 挂在异常上，需要对象形态的调用方直接读字段即可。
- */
-export class CommitMessageError extends DeliveryError {
-  constructor({ reason, expectedFormat, detail }) {
-    super(reason, detail, { expectedFormat });
-    this.name = 'CommitMessageError';
-    this.reason = reason;
-    this.expectedFormat = expectedFormat;
-    this.ok = false;
-  }
-}
-
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asObject = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -144,113 +122,6 @@ function evidenceText(value) {
   const raw = typeof value === 'string' ? value : String(value ?? '');
   const flat = raw.replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim();
   return flat.length > 120 ? `${flat.slice(0, 119)}…` : flat;
-}
-
-/** 期望格式：给人看的同一句话，测试与提示共用（不各写一份）。 */
-export function expectedCommitFormat(changeId) {
-  return `[${text(changeId) || '<变更号>'}] 一句话说明`;
-}
-
-/**
- * 校验提交信息首行是否以**本变更号**为前缀（AC-18）。
- *
- * 规则（与 devops 同源）：首行 `[<本变更号>]` + 至少一个空白 + 非空描述；方括号里写别的变更号
- * 同样拒绝（避免把改动记到另一个需求名下）。只认首行——git 的 subject 就是首行，正文多行不校验。
- * **不改写 message**：返回值里没有任何替换后的提交信息，只有一个 `subject` 供调用方自己决定。
- *
- * @param {{ changeId?: string, change?: string, message?: string }} input
- * @returns {{ ok: true, changeId: string, expectedFormat: string, subject: string }}
- * @throws {CommitMessageError} 不合规：`code` = 拒绝原因，`expectedFormat` = 期望格式
- */
-export function assertCommitMessage(input = {}) {
-  const result = evaluateCommitMessage(input);
-  if (!result.ok) throw new CommitMessageError(result);
-  return result;
-}
-
-/**
- * `assertCommitMessage` 的不抛错形态：给"想先看结论再决定要不要拦"的调用方用，
- * 结论与抛错形态**同源**（同一个判定函数），不会出现一处放过一处拦住。
- *
- * @param {{ changeId?: string, change?: string, message?: string }} input
- * @returns {{ ok: true, changeId: string, expectedFormat: string, subject: string }
- *   | { ok: false, reason: string, expectedFormat: string, detail: string }}
- */
-export function verifyCommitMessage(input = {}) {
-  return evaluateCommitMessage(input);
-}
-
-/**
- * `assertCommitMessage` 的判定本体（不抛错的内部形态）：每个拒绝理由都带期望格式，
- * 测试与异常构造共用同一份文字。
- */
-function evaluateCommitMessage({ changeId, change, message } = {}) {
-  const id = text(changeId) || text(change);
-  const expectedFormat = expectedCommitFormat(id);
-  if (id === '') {
-    return {
-      ok: false,
-      reason: COMMIT_REASONS.MISSING_CHANGE_ID,
-      expectedFormat,
-      detail: '没有变更号：无法确认这条提交属于哪个需求，拒绝（并给不出期望格式里的具体号）',
-    };
-  }
-  if (!CHANGE_ID_PATTERN.test(id)) {
-    return {
-      ok: false,
-      reason: COMMIT_REASONS.INVALID_CHANGE_ID,
-      expectedFormat,
-      detail: `变更号「${id}」不是合法格式（字母或数字开头，只含字母/数字/下划线/连字符，2–64 位）`,
-    };
-  }
-  if (typeof message !== 'string' || message.trim() === '') {
-    return {
-      ok: false,
-      reason: COMMIT_REASONS.MISSING_MESSAGE,
-      expectedFormat,
-      detail: `提交信息为空（${typeof message === 'string' ? '仅空白' : typeof message}）`,
-    };
-  }
-
-  // 只剥掉首部空行：带空行开头的提交信息仍按"首行无前缀"拒绝，不替调用方整理格式。
-  const subject = message.replace(/^(?:[ \t]*\r?\n)+/u, '').split(/\r?\n/u)[0].trimEnd();
-  const matched = /^\[([^\]]*)\]([ \t\u3000]*)([\s\S]*)$/u.exec(subject);
-  if (matched === null) {
-    return {
-      ok: false,
-      reason: COMMIT_REASONS.PREFIX_MISSING,
-      expectedFormat,
-      detail: `首行必须以 \`[${id}]\` 开头，当前首行：${subject === '' ? '（空）' : evidenceText(subject)}`,
-    };
-  }
-  const found = matched[1];
-  // 方括号内容逐字比较（不 trim）：`[ CHG-2026-0042 ]` 这类空白错误要显出来，否则前缀看着对、
-  // 抄进日志却对不上变更号。
-  if (found === '') {
-    return {
-      ok: false,
-      reason: COMMIT_REASONS.PREFIX_MISSING,
-      expectedFormat,
-      detail: `首行的方括号是空的：必须写本变更号 ${id}`,
-    };
-  }
-  if (found.toUpperCase() !== id.toUpperCase()) {
-    return {
-      ok: false,
-      reason: COMMIT_REASONS.PREFIX_MISSING,
-      expectedFormat,
-      detail: `方括号内是本变更号之外的值：${evidenceText(found)}（应为 ${id}）`,
-    };
-  }
-  if (matched[2] === '' || matched[3].trim() === '') {
-    return {
-      ok: false,
-      reason: COMMIT_REASONS.DESCRIPTION_MISSING,
-      expectedFormat,
-      detail: `前缀后必须接空格与非空描述，当前首行：${evidenceText(subject)}`,
-    };
-  }
-  return { ok: true, changeId: id, expectedFormat, subject: evidenceText(matched[3]) };
 }
 
 /* ------------------------------------------------------------------ 关闭判定 */

@@ -12,7 +12,7 @@
  *    `error_code`，同时保留已取到的载荷与 `missing_fields`（"取不到"与"没有"不是一件事）。
  *
  * 三条与 devops 对齐但不共享代码的不变量（AC-12）：
- * - `provider` 只认 `GITEE_PROVIDER`：别的 provider 的结果不许被盖上 gitee 的章；
+ * - `provider` 只认 `GITEE_PLATFORM`：本平台之外的结果不许被盖上 gitee 的章；
  * - 主机守卫只认企业内主机：配置主机为空时**不判定**（默认安装即可只读，r3 的"装上就能用"），
  *   一旦配置了，就拒绝公共 SaaS 主机、拒绝指向别处的目标与结果链接（`HOST_NOT_ENTERPRISE`）；
  * - 失败不重试：`retry_policy` 只声明"允许再发一次新的只读调用"（`read_recheck`），本模块
@@ -23,7 +23,7 @@
  * 恒为 `null`）误判成"缺事实版本"再降一级。
  */
 
-import { GITEE_LIST_LIMIT, GITEE_PROVIDER } from './gitee-adapter.mjs';
+import { GITEE_LIST_LIMIT, GITEE_PLATFORM } from './gitee-adapter.mjs';
 
 /** 只读动作（唯一真源）：入口 `readActions()`、补丁层目录与工具定义都从这里取。 */
 export const GITEE_READ_ACTIONS = Object.freeze([
@@ -90,8 +90,6 @@ export const READ_REASONS = Object.freeze({
   NO_STRUCTURED_STATUS: 'NO_STRUCTURED_STATUS',
   /** 结果里没有 `updated_at`：事实版本取不到，降级 `unknown`（不编版本）。 */
   MISSING_SOURCE_REVISION: 'MISSING_SOURCE_REVISION',
-  /** 结果里混入 GitHub 语义字段（`mergedAt`/`statusCheckRollup` 等）：不采信。 */
-  MIXED_PROVIDER_FIELDS: 'MIXED_PROVIDER_FIELDS',
   /** 其余命令级错误（含未登记的适配器错误码）：状态按"可能已执行"处理。 */
   COMMAND_FAILED: 'COMMAND_FAILED',
   /** 策略层拒绝（未登记动作/显式 deny）。 */
@@ -127,24 +125,22 @@ const UNKNOWN_REASONS = new Set([
   READ_REASONS.OUTPUT_TRUNCATED,
   READ_REASONS.NO_STRUCTURED_STATUS,
   READ_REASONS.MISSING_SOURCE_REVISION,
-  READ_REASONS.MIXED_PROVIDER_FIELDS,
   READ_REASONS.COMMAND_FAILED,
 ]);
 
 /** 允许再发一次新的只读调用（本模块自己绝不重发）。被拒动作没有下一次。 */
 const RETRY_POLICY = 'read_recheck';
 
-/** 公共 SaaS 主机：企业内 Gitee 不该是这些；配成它们说明配置指错了地方。 */
+/**
+ * 公共 SaaS 主机：企业内 Gitee 不该是这些；配成它们说明配置指错了地方。
+ *
+ * r10 只留 Gitee 自有域：平台收敛后本包只认 Gitee，把 github/gitlab/bitbucket 列在这里
+ * 等于维护一份"别家平台"的名单（第二套口径，且永不触发的条目会掩盖真正的配置错误）。
+ */
 const PUBLIC_SAAS_HOSTS = Object.freeze([
   'gitee.com',
   'www.gitee.com',
   'api.gitee.com',
-  'github.com',
-  'www.github.com',
-  'api.github.com',
-  'gitlab.com',
-  'www.gitlab.com',
-  'bitbucket.org',
 ]);
 
 const HOST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
@@ -177,8 +173,8 @@ export class GiteeReadError extends Error {
     this.name = 'GiteeReadError';
     this.code = reason;
     this.reason = reason;
-    this.provider = GITEE_PROVIDER;
-    this.detail = Object.freeze({ provider: GITEE_PROVIDER, ...detail });
+    this.provider = GITEE_PLATFORM;
+    this.detail = Object.freeze({ provider: GITEE_PLATFORM, ...detail });
   }
 }
 
@@ -221,9 +217,9 @@ function statusForReason(reason) {
 }
 
 /** 已归一信封的识别：适配器事实里没有 `retry_policy`，所以这一键就是"归一过"的证据。 */
-function isReadEnvelope(value) {
+export function isReadEnvelope(value) {
   if (!isPlainObject(value)) return false;
-  if (value.provider !== GITEE_PROVIDER) return false;
+  if (value.provider !== GITEE_PLATFORM) return false;
   if (typeof value.action !== 'string' || value.action === '') return false;
   if (!GITEE_READ_STATUSES.includes(value.status) && !GITEE_READ_BOUNDARY_STATUSES.includes(value.status)) return false;
   return 'retry_policy' in value
@@ -275,7 +271,7 @@ function buildEnvelope({
   rule = null,
 }) {
   const body = {
-    provider: GITEE_PROVIDER,
+    provider: GITEE_PLATFORM,
     action: text(action),
     target_ref: targetRef,
     status,
@@ -293,7 +289,7 @@ function buildEnvelope({
 }
 
 /** 失败信封：确定失败（`failed`）或被拒（`denied`），零载荷。 */
-function failureEnvelope({ action, targetRef, reason, observedAt, message = '' }) {
+export function failureEnvelope({ action, targetRef, reason, observedAt, message = '' }) {
   const status = statusForReason(reason);
   return buildEnvelope({
     action,
@@ -306,7 +302,7 @@ function failureEnvelope({ action, targetRef, reason, observedAt, message = '' }
   });
 }
 
-/** 适配器事实里的载荷：只搬已声明的结构键，不搬 `raw`/`rejected_field` 之类内部字段。 */
+/** 适配器事实里的载荷：只搬已声明的结构键，不搬 `raw` 之类内部字段。 */
 function payloadOf(facts) {
   const payload = {};
   if (facts.kind === 'object' || facts.kind === 'list') payload.kind = facts.kind;
@@ -449,14 +445,15 @@ export function normalizeGiteeReadResult(request = {}) {
   const payload = payloadOf(facts);
   const revision = text(facts.source_revision);
 
-  // provider 自证：别的 provider 的事实不许被盖上 gitee 的章（AC-12）。
-  if (facts.provider !== undefined && facts.provider !== GITEE_PROVIDER) {
+  // 平台自证：不是本平台的事实不许被盖上 gitee 的章（AC-12）。r10 起只有一个平台，
+  // 「结果混入另一个平台的字段」不再是本包的事实，因此只保留"来源不符"这一条判定。
+  if (facts.provider !== undefined && facts.provider !== GITEE_PLATFORM) {
     return failureEnvelope({
       action,
       targetRef,
-      reason: READ_REASONS.MIXED_PROVIDER_FIELDS,
+      reason: READ_REASONS.COMMAND_FAILED,
       observedAt,
-      message: `结果来自 provider "${text(facts.provider) || '空'}"，不是 gitee：不采信`,
+      message: `结果来自 "${text(facts.provider) || '空'}"，不是 gitee：不采信`,
     });
   }
 
@@ -488,9 +485,6 @@ export function normalizeGiteeReadResult(request = {}) {
 
   if (facts.status === 'unknown' || facts.status === 'failed') {
     const reason = reasonOfCode(facts.error_code) ?? READ_REASONS.COMMAND_FAILED;
-    const message = reason === READ_REASONS.MIXED_PROVIDER_FIELDS
-      ? `结果里出现未声明的字段（${text(facts.rejected_field) || '未标注'}）：按 provider 分表不采信`
-      : '';
     return buildEnvelope({
       action,
       targetRef,
@@ -501,7 +495,7 @@ export function normalizeGiteeReadResult(request = {}) {
       resultRefs,
       missingFields,
       payload,
-      message,
+      message: '',
     });
   }
 

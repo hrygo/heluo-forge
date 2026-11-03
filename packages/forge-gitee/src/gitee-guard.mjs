@@ -1,7 +1,7 @@
 /**
  * 写路径的**唯一准入点**（AC-11 / AC-16 / AC-17）。
  *
- * 契约：`createGiteeGuard({ policy, provider }).execute({ action, target, tool, confirm, payload })`
+ * 契约：`createGiteeGuard({ policy }).execute({ action, target, tool, confirm, payload })`
  * 返回一个四状态裁决，`payload = { arguments, run }`——`run()` 才是真正发子进程的那一段，
  * 它**只在** `policy.executeAction` 的 operation 回调里被调用。于是"被拒 = 零子进程"不是靠
  * 调用方自觉，而是结构上不存在第二条路：本模块是 `packages/forge-gitee/src/` 里唯一调用
@@ -26,7 +26,12 @@
  *     审计记录不可观察（持久 sink 或桩策略没有内存缓冲）时**不伪造结论**：裁决里标
  *     `audit.observable: false`，不据此升降状态。
  */
-import { GITEE_PROVIDER } from './gitee-adapter.mjs';
+/**
+ * 平台名（单 provider）：信封与诊断里的 `provider` 字段值仍是 `'gitee'`。
+ * r10 统一用平台措辞命名常量，只为消除「两个 provider」的漂移；
+ * 本模块定义唯一字面量，`gitee-actions` 从这里取用，避免各写一份。
+ */
+export const GITEE_PLATFORM = 'gitee';
 
 /** 门禁裁决状态：`done` = 已放行并执行完；`denied` = 未执行；`failed` = 执行中出错。 */
 export const GUARD_STATUSES = Object.freeze(['done', 'denied', 'failed']);
@@ -55,14 +60,15 @@ export const GITEE_AUDIT_SUBJECT = 'gitee';
 /**
  * 必须带确认的远程写动作。
  *
- * 只包含**会产生远端副作用**的三个：Issue/PR 的创建与评论、审查发布。`gitee.review.record`
- * （本地 `review.md`）与 `gitee.delivery.judge`（纯判定）不在此列——给本地写也套一层"确认
- * 目标"，只会让"确认"这个动作失去意义（什么都确认等于什么都没确认）。
+ * 只包含**会产生远端副作用**的四个：Issue/PR 的创建与评论、审查发布、`git push`。
+ * `gitee.review.record`（本地 `review.md`）、`gitee.delivery.judge`（纯判定）与本地
+ * `git commit` 不在此列——给本地写也套一层「确认目标」，只会让「确认」这个动作失去意义。
  */
 export const CONFIRM_REQUIRED_ACTIONS = Object.freeze([
   'gitee.issue.write',
   'gitee.pr.write',
   'gitee.review.publish',
+  'gitee.git.push',
 ]);
 
 /** 写动作声明的出网范围：策略目录据此走确认/出网分支（与 r1 同字面量）。 */
@@ -94,10 +100,10 @@ function denial({ status = 'denied', action, target, tool, rule, reason, detail 
 }
 
 /**
- * @param {{ policy: object, provider?: string, now?: () => number }} options
+ * @param {{ policy: object, now?: () => number }} options
  * @returns {{ execute: (request: object) => Promise<object>, provider: string, describe: () => object }}
  */
-export function createGiteeGuard({ policy = null, provider = GITEE_PROVIDER, now = Date.now } = {}) {
+export function createGiteeGuard({ policy = null, now = Date.now } = {}) {
   if (policy === null || typeof policy !== 'object') {
     throw new TypeError('gitee 门禁需要策略服务（policy）：缺门禁即拒绝装配，不降级成无策略执行');
   }
@@ -109,7 +115,7 @@ export function createGiteeGuard({ policy = null, provider = GITEE_PROVIDER, now
   }
   if (typeof now !== 'function') throw new TypeError('门禁的 now 必须是返回毫秒数的函数');
 
-  const namespace = text(provider) || GITEE_PROVIDER;
+  const namespace = GITEE_PLATFORM;
   let sequence = 0;
   const nextCallId = (kind) => {
     sequence += 1;

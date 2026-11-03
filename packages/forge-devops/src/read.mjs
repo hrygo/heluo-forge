@@ -16,8 +16,14 @@
 // 适配器攒好的证据行，统一经 `failureMessageOf` 去前缀并脱敏；`status`/`error_code` 词表不变。
 import { failureMessageOf } from './failure-face.mjs';
 
-/** 只读面动作，与工程工具契约 §3 同源；写动作不在此列，也不得由本包开放。 */
-export const READ_ACTIONS = Object.freeze(['change.read', 'repository.read', 'issue.read', 'pr.read']);
+/**
+ * 只读面动作，与工程工具契约 §3 同源；写动作不在此列，也不得由本包开放。
+ *
+ * r10（按平台收敛）只留 `change.read`：仓库 / Issue / PR 的事实由 `@heluo/forge-gitee`
+ * 唯一负责，同装时不能出现两套读面对同一事实各说一套。以后若有人想「顺手加回一条」，
+ * 先回答：这条事实的主人在哪个包。
+ */
+export const READ_ACTIONS = Object.freeze(['change.read']);
 
 /** 契约 §4.2 允许的结果状态。 */
 export const READ_STATUSES = Object.freeze(['succeeded', 'failed', 'partial', 'unknown']);
@@ -58,6 +64,16 @@ export class DevopsReadError extends Error {
 }
 
 export const isReadAction = (action) => typeof action === 'string' && READ_ACTIONS.includes(action);
+
+/**
+ * 只读动作 → 端口方法的唯一映射（r10：只剩 dop 变更一条）。
+ *
+ * 映射留在这里而不是工具层：工具层只认 `target` 与失败信封，谁去取事实必须能逐条核对。
+ * 端口形状是 `{ dop: { readChange } }`——本包不再持有 gh 端口。
+ */
+export const READ_ROUTES = Object.freeze({
+  'change.read': (ports, target) => ports.dop.readChange({ changeId: target }),
+});
 
 /**
  * 把适配器返回值规整成契约结果。
@@ -145,4 +161,50 @@ function unknownResult(action, target, reason, result = undefined) {
     error_code: reason,
     retry_policy: 'read_recheck',
   };
+}
+
+/** 不可用信封的形状判据：只有带非空字符串 `code` 的对象才算，别的原样当普通值处理。 */
+const isUnavailableEnvelope = (value) =>
+  value !== null &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  typeof value.code === 'string' &&
+  value.code.trim() !== '';
+
+/**
+ * 只读面适配器（r10 从 `flow.mjs` 迁到本模块：读面与它的判定核心在同一处，flow 只管流程组合）。
+ *
+ * 只做两件事：**动作 → 固定方法**（未登记的动作在发子进程之前就被拒绝）、
+ * **配置缺失时 fail closed**（保留同一个对象，读取以原因码失败，绝不返回空结果冒充成功）。
+ *
+ * `unavailable` 是装配层给的**结构化石封**：`{ code, message, detail }`。它优先于 `reason`——
+ * 只读原因码不加码（仍是 NO_READER），细因（CLI_NOT_FOUND + 已查类别 + 页面指引）放 `detail`。
+ * 没有信封时行为与基线一字不差（旧 `reason` 字符串路径保留）。
+ */
+export function createDevopsReader({
+  ports = null,
+  reason = 'CONFIG_MISSING',
+  unavailable = null,
+} = {}) {
+  const envelope = isUnavailableEnvelope(unavailable) ? unavailable : null;
+  return Object.freeze({
+    async read({ action, target } = {}) {
+      const route = READ_ROUTES[action];
+      if (route === undefined) {
+        throw new DevopsReadError(READ_REASONS.UNKNOWN_ACTION, `只读动作未登记：${String(action)}`, { action });
+      }
+      if (ports === null) {
+        if (envelope !== null) {
+          const detail = envelope.detail !== null && typeof envelope.detail === 'object' ? envelope.detail : {};
+          throw new DevopsReadError(envelope.code, String(envelope.message ?? reason), {
+            action,
+            target,
+            ...detail,
+          });
+        }
+        throw new DevopsReadError(reason, `运行时配置不可用（${reason}），未发起 ${action}`, { action, target });
+      }
+      return route(ports, target);
+    },
+  });
 }

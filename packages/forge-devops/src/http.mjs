@@ -32,7 +32,7 @@ export const CLI_REQUEST_HEADER = 'x-forge-devops-request';
 /** 请求体形状：只认这两个顶层键，多一个就 400（不猜"也许他想写 revision"）。 */
 const BODY_KEYS = Object.freeze(['revision', 'fields']);
 
-/** 请求体上限：六个短字段的补丁，超过这个尺寸一定不是本页面发的。 */
+/** 请求体上限：四个短字段的补丁，超过这个尺寸一定不是本页面发的。 */
 const MAX_BODY_BYTES = 64 * 1024;
 
 /** 本模块自己的原因码（配置层的四码之外，只用于"请求不合法 / 路由不存在"）。 */
