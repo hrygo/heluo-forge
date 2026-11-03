@@ -1,4 +1,5 @@
 import { IamError } from './errors.mjs';
+import { bridgeRejection } from './bridge.mjs';
 
 const REQUEST_HEADER = 'x-forge-iam-request';
 const REQUEST_VALUE = '1';
@@ -194,7 +195,7 @@ function connectionRejection(req, getConnection) {
  * @param {{ getView: Function, startSignIn: Function, signOut: Function, handleCallback: Function }} service
  * @param {{ callbackPath?: string, getOrigin?: () => string | undefined, getConnection?: () => object | undefined }} [options]
  */
-export function createIamRoutes(service, { callbackPath = '/iam/callback', getOrigin, getConnection } = {}) {
+export function createIamRoutes(service, { callbackPath = '/iam/callback', getOrigin, getConnection, getBridgeSecret } = {}) {
   return async function handle(req, res) {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -225,6 +226,39 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           sendHtml(res, status, '登录失败', '企业 IAM 登录未完成，请返回应用重试。');
         }
         return;
+      }
+
+      if (url.pathname === '/api/forge-iam/bridge/token') {
+        // Exempt from the Connection guard on purpose: a local CLI cannot hold
+        // a browser credential. Loopback plus the store-backed capability are
+        // the whole admission rule, and the route only ever reads.
+        if (req.method !== 'POST') return methodNotAllowed(res, 'POST');
+        let secret;
+        try {
+          secret = await getBridgeSecret?.();
+        } catch {
+          secret = undefined;
+        }
+        const rejected = bridgeRejection(
+          { socketAddress: req.socket?.remoteAddress, authorization: req.headers?.authorization },
+          secret,
+        );
+        if (rejected) {
+          const code = rejected === 401
+            ? 'IAM_BRIDGE_UNAUTHORIZED'
+            : rejected === 403 ? 'IAM_BRIDGE_FORBIDDEN' : 'IAM_CREDENTIALS_UNAVAILABLE';
+          return sendJson(res, rejected, { error: { code } });
+        }
+        try {
+          const token = typeof service.getAccessToken === 'function'
+            ? await service.getAccessToken()
+            : await service.resolveToken();
+          const session = await service.getSession();
+          return sendJson(res, 200, { token, expiresAt: session?.accessExpiresAt ?? null });
+        } catch (error) {
+          const status = ERROR_STATUS[error?.code] ?? 500;
+          return sendJson(res, status, errorBody(error));
+        }
       }
 
       if (url.pathname === API_PREFIX || url.pathname.startsWith(`${API_PREFIX}/`)) {

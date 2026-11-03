@@ -27,11 +27,12 @@ function response() {
   };
 }
 
-function request(method, url, headers, body) {
+function request(method, url, headers, body, remoteAddress = '127.0.0.1') {
   const req = new EventEmitter();
   req.method = method;
   req.url = url;
   req.headers = headers;
+  req.socket = { remoteAddress };
   req.destroy = () => {};
   setImmediate(() => {
     if (body !== undefined) req.emit('data', Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
@@ -40,9 +41,9 @@ function request(method, url, headers, body) {
   return req;
 }
 
-async function call(handler, method, url, headers = {}, body) {
+async function call(handler, method, url, headers = {}, body, remoteAddress) {
   const res = response();
-  await handler(request(method, url, headers, body), res);
+  await handler(request(method, url, headers, body, remoteAddress), res);
   return res;
 }
 
@@ -520,4 +521,42 @@ test('the token route reports a signed-out session as 401 without a token', asyn
   assert.equal(res.statusCode, 401);
   assert.equal(res.json().error.code, 'IAM_NOT_SIGNED_IN');
   assert.doesNotMatch(res.text(), /placeholder-access-token/u);
+});
+
+test('the bridge admits only a loopback caller holding the capability', async () => {
+  const handler = routes(
+    service({
+      getAccessToken: async () => 'placeholder-bridge-token',
+      getSession: () => ({ status: 'ready', accessExpiresAt: '2026-11-04T02:00:00.000Z' }),
+    }),
+    { getBridgeSecret: async () => 'placeholder-capability' },
+  );
+
+  const ok = await call(handler, 'POST', '/api/forge-iam/bridge/token',
+    { authorization: 'Bearer placeholder-capability' });
+  assert.equal(ok.statusCode, 200);
+  assert.deepEqual(ok.json(), { token: 'placeholder-bridge-token', expiresAt: '2026-11-04T02:00:00.000Z' });
+  assert.equal(ok.headers['cache-control'], 'no-store');
+
+  const wrong = await call(handler, 'POST', '/api/forge-iam/bridge/token',
+    { authorization: 'Bearer wrong-capability' });
+  assert.equal(wrong.statusCode, 401);
+  assert.equal(wrong.json().error.code, 'IAM_BRIDGE_UNAUTHORIZED');
+
+  const remote = await call(handler, 'POST', '/api/forge-iam/bridge/token',
+    { authorization: 'Bearer placeholder-capability' }, undefined, '203.0.113.7');
+  assert.equal(remote.statusCode, 403);
+  assert.equal(remote.json().error.code, 'IAM_BRIDGE_FORBIDDEN');
+
+  const missing = await call(handler, 'POST', '/api/forge-iam/bridge/token', {});
+  assert.equal(missing.statusCode, 401);
+  assert.doesNotMatch(missing.text(), /placeholder-bridge-token/u);
+});
+
+test('the bridge fails closed when no capability is available', async () => {
+  const handler = routes(service({ getAccessToken: async () => 'placeholder-bridge-token' }),
+    { getBridgeSecret: async () => undefined });
+  const res = await call(handler, 'POST', '/api/forge-iam/bridge/token', { authorization: 'Bearer anything' });
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.json().error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
 });
