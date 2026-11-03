@@ -7,6 +7,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { canonicalPayload, parseTrailer } from '../scripts/sensitive-scan/lib.mjs';
 
+// The installer rejects group-writable fixtures; model a conventional umask so a
+// host with umask 0002 cannot turn security checks into suite failures.
+process.umask(0o022);
+
 // Public program sources from commit 513f, pinned for shallow CI checkouts.
 const OLD = resolve(import.meta.dirname, 'fixtures/sensitive-scan-v1');
 const HASHES = { 'lib.mjs': '9973e15ad4b9ce7077e2c18bd0b334cad6055fbd534ade422b380101dff9dcc8', 'team-commit-msg.mjs': '1dcdf2b1ff8da88f7366d7b67568037a27363749b5e4e9e62e60253e2eafb54a', 'team-scan.mjs': '761ad1e8fb517e589505884113bc3f9194d46b96be985860d2899ed647c1c90b' };
