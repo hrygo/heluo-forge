@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
   verify as verifySignature,
 } from 'node:crypto';
+import { assertClientAuthCurrent, buildClientAuthRequest } from './client-auth.mjs';
 
 export class OidcError extends Error {
   constructor(code, message, details = {}) {
@@ -236,11 +237,14 @@ function requireString(value, name) {
   return value;
 }
 
-export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false } = {}) {
+export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, signal, method = 'GET', headers, body, ignoreBody = false, clientAuthentication } = {}) {
   if (typeof fetchImpl !== 'function') throw new OidcError('IAM_HTTP_UNAVAILABLE', 'fetch is unavailable');
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (signal) signals.push(signal);
   let response;
+  // Local invalidation is not a network failure. Nothing awaits between this
+  // synchronous check and the actual fetch invocation.
+  assertClientAuthCurrent(clientAuthentication);
   try {
     response = await fetchImpl(url, {
       method,
@@ -256,7 +260,13 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
     let oauthError;
     try {
       const payload = await response.json();
-      oauthError = typeof payload?.error === 'string' ? payload.error : undefined;
+      const candidate = payload?.error;
+      // Copy only exact standard codes, never provider text that may echo credentials.
+      if (typeof candidate === 'string' && [
+        'invalid_request', 'invalid_client', 'invalid_grant', 'unauthorized_client',
+        'unsupported_grant_type', 'invalid_scope', 'unsupported_token_type',
+        'access_denied', 'unsupported_response_type', 'server_error', 'temporarily_unavailable',
+      ].includes(candidate)) oauthError = candidate;
     } catch {
       // Non-JSON error bodies are intentionally not surfaced.
     }
@@ -371,50 +381,33 @@ function normalizeTokenResponse(payload) {
   };
 }
 
-async function postToken(endpoint, form, { fetchImpl, timeoutMs, signal }) {
+async function postForm(endpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody = false }) {
+  const request = buildClientAuthRequest(clientId, form, clientAuthentication);
   return fetchJson(endpoint, {
-    fetchImpl,
-    timeoutMs,
-    signal,
+    fetchImpl, timeoutMs, signal, clientAuthentication, ignoreBody,
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-    body: form.toString(),
+    headers: ignoreBody ? request.headers : { ...request.headers, accept: 'application/json' },
+    body: request.body,
   });
 }
 
-export async function exchangeCode({ tokenEndpoint, code, codeVerifier, redirectUri, clientId, resource, fetchImpl, timeoutMs, signal }) {
+export async function exchangeCode({ tokenEndpoint, code, codeVerifier, redirectUri, clientId, resource, fetchImpl, timeoutMs, signal, clientAuthentication }) {
   const form = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: redirectUri,
-    client_id: clientId,
-    code_verifier: codeVerifier,
+    grant_type: 'authorization_code', code, redirect_uri: redirectUri, code_verifier: codeVerifier,
   });
   if (resource) form.set('resource', resource);
-  return normalizeTokenResponse(await postToken(tokenEndpoint, form, { fetchImpl, timeoutMs, signal }));
+  return normalizeTokenResponse(await postForm(tokenEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal }));
 }
 
-export async function refreshTokens({ tokenEndpoint, refreshToken, clientId, resource, fetchImpl, timeoutMs, signal }) {
-  const form = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: clientId,
-  });
+export async function refreshTokens({ tokenEndpoint, refreshToken, clientId, resource, fetchImpl, timeoutMs, signal, clientAuthentication }) {
+  const form = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken });
   if (resource) form.set('resource', resource);
-  return normalizeTokenResponse(await postToken(tokenEndpoint, form, { fetchImpl, timeoutMs, signal }));
+  return normalizeTokenResponse(await postForm(tokenEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal }));
 }
 
-export async function revokeToken({ revocationEndpoint, token, tokenTypeHint = 'refresh_token', clientId, fetchImpl, timeoutMs, signal }) {
-  const form = new URLSearchParams({ token, token_type_hint: tokenTypeHint, client_id: clientId });
-  return fetchJson(revocationEndpoint, {
-    fetchImpl,
-    timeoutMs,
-    signal,
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: form.toString(),
-    ignoreBody: true,
-  });
+export async function revokeToken({ revocationEndpoint, token, tokenTypeHint = 'refresh_token', clientId, fetchImpl, timeoutMs, signal, clientAuthentication }) {
+  const form = new URLSearchParams({ token, token_type_hint: tokenTypeHint });
+  return postForm(revocationEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody: true });
 }
 
 export function safeStateEqual(expected, received) {

@@ -17,14 +17,16 @@
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
-    "./model-gate": "./src/model-gate.mjs"
+    "./model-gate": "./src/model-gate.mjs",
+    "./isolated-testing": "./src/isolated-testing.mjs"
   },
   "files": [
     "src",
     "client.js",
     "locale",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "docs"
   ],
   "dsh": {
     "client": {

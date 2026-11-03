@@ -25,6 +25,8 @@ export async function startMockOidc({
   clientId = 'dsh-desktop',
   subject = 'E1001',
   accessTtl = 3600,
+  clientAuthMethod = 'none',
+  clientSecret,
   // Test-only fault injection: hold the token response long enough for a client
   // timeout, or rotate the refresh token and then drop the connection so the
   // client never learns the new value.
@@ -41,6 +43,15 @@ export async function startMockOidc({
   const counts = { discovery: 0, authorize: 0, jwks: 0, token: 0, refresh: 0, revoke: 0 };
   let accessCounter = 0;
   let issuer;
+  const component = (value) => new URLSearchParams([['', value]]).toString().slice(1);
+  const authenticated = (req, form) => {
+    if (clientAuthMethod === 'client_secret_basic') {
+      const expected = `Basic ${Buffer.from(`${component(clientId)}:${component(clientSecret)}`).toString('base64')}`;
+      return req.headers.authorization === expected && !form.has('client_id') && !form.has('client_secret');
+    }
+    return req.headers.authorization === undefined && form.get('client_id') === clientId
+      && (clientAuthMethod === 'none' ? !form.has('client_secret') : form.get('client_secret') === clientSecret);
+  };
 
   const server = createServer(async (req, res) => {
     try {
@@ -80,7 +91,7 @@ export async function startMockOidc({
       if (url.pathname === '/token' && req.method === 'POST') {
         counts.token += 1;
         const form = await parseBody(req);
-        if (form.get('client_id') !== clientId) return json(res, 400, { error: 'invalid_client' });
+        if (!authenticated(req, form)) return json(res, 400, { error: 'invalid_client' });
         if (form.get('grant_type') === 'authorization_code') {
           const entry = codes.get(form.get('code'));
           if (!entry) return json(res, 400, { error: 'invalid_grant' });
@@ -128,6 +139,7 @@ export async function startMockOidc({
       if (url.pathname === '/revoke' && req.method === 'POST') {
         counts.revoke += 1;
         const form = await parseBody(req);
+        if (!authenticated(req, form)) return json(res, 400, { error: 'invalid_client' });
         const token = form.get('token');
         if (token) revoked.add(token);
         res.statusCode = 200;

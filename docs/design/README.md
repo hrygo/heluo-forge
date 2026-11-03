@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.12.0 |
+| 版本 | V0.34.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-10-30 |
+| 最后更新 | 2026-11-03 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -55,7 +55,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 
 | 模块 | 当前实现 | 验证边界 |
 |---|---|---|
-| [forge-iam](../../packages/forge-iam/README.md) | Host + Client 开发骨架；原子 provider 门禁、callback 条件墓碑和退出快照条件墓碑已本地实现。默认 `apply` 不注入可信实例 verifier，新登录与刷新被拒绝；用户同意 0600 配置的开发登录暂不可用 | 旧有效 grant 仍可能经 `hydrate` 为 `ready` 并被读取，真实模型/工具门禁未接线，不能声称安全；未知 provider 退出保留持久 grant、清理及远端撤销未知。退出条件墓碑仅经合成测试；墓碑不是物理删除，真实跨进程锁、提交、旧客户端及旧记录完全相同的 ABA 未验；远端授权及刷新后代撤销未证实。历史 mock OIDC 测试不证明当前生产安全；真实 IAM 与 UAG 未联调，Client 走 interim route |
+| [forge-iam](../../packages/forge-iam/README.md) | Host + Client 开发骨架；原子 provider 门禁、callback 条件墓碑和退出快照条件墓碑已本地实现。默认 `apply` 不注入单记录 verifier 或独立网关联合能力，新登录、刷新及网关保存/清除被拒绝；旧网关格式只读保留，不自动迁移 | issuer 上下文已知且匹配的旧有效 grant 仍可能经 `hydrate` 为 `ready` 并被读取，真实模型/工具门禁未接线，不能声称安全；未知 provider 退出保留持久 grant、清理及远端撤销未知。退出条件墓碑仅经合成测试；墓碑不是物理删除，真实跨进程锁、提交、旧客户端及旧记录完全相同的 ABA 未验；远端授权及刷新后代撤销未证实。历史 mock OIDC 测试不证明当前生产安全；真实 IAM 与 UAG 未联调，Client 走 interim route |
 | [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | keychain provider 开发骨架：backend 契约、内存/不可用/显式 0600 file backend、records/refs；迁移入口当前 fail closed，不访问源或目标 | 离线测试及当前阻断探针通过；macOS Security CLI spike 10/10、旧实现的副本迁移演练 9/9 与跨进程可见性补测 6/6 是历史记录，不证明当前迁移能力；Windows/UOS/麒麟 adapter 与安全迁移未实现 |
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
@@ -65,6 +65,56 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | [DSH 客户端标识](client-identification.md) | 使用宿主默认 UA，由网关匹配关键字；未实现网关规则，也不通过插件改写 UA | 2026-10-28 在本机 DSH `0.2.1-rc.3` 用 [`issue100-user-agent-probe.mjs`](../../scripts/probe/issue100-user-agent-probe.mjs) 测试 pi-ai 的 OpenAI-compatible 流式请求：宿主覆盖配置中的 UA，默认 UA 与可选合成诊断头到达本地模拟服务；探针退出成功只表示取证成功，不代表网关验收。真实网关及代理、Windows/麒麟、其他协议和 Coding Plan 均未验 |
 | [forge-gitee](../../packages/forge-gitee/README.md) | 独立 CLI 接入包（单安装单元）：8 个 `forge_gitee_*` 工具（3 读 + 1 只读判定 + 4 受控写；判定随包默认登记可用、写动作默认不登记即拒绝）、`gitee.*` 动作命名空间、`GITEE_*` 字段分表与禁用字段表、唯一 `execFile` 出口、幂等台账、`review.md` 渲染与关闭条件判定；11 个源模块 + `cordis.patch.yml`（策略行 `heluo-policy-gitee` + 两行 `isolate: { policy: gitee }`） | 2026-10-29 `node --test "packages/forge-gitee/test/*.test.mjs"` 171 例、`node --test tests/bundle-gitee.test.mjs tests/plugin-patch-layers.test.mjs` 8 例离线通过（覆盖只读信封降级、写动作四状态与回读、默认禁用零调用、宿主 `register()` 判据、真实补丁层装载、共存四形态与跨包策略行 id 不撞名、`buildBundle` 闭包与产物逐字节一致）；**未验**企业 Gitee CLI 联调、aarch64 产物、真实 profile 装入与 `--json` 字段稳定性，明细见包 README 证据表与 NOT RUN 清单 |
 | 其余四包与 DevOps MCP | `forge-devops` 的"只读查询 + 门禁骨架"**已落地**（D4，2026-10-24）：清单、只读端口、门禁骨架、四个只读工具（参数用门禁认识的 `target`）、27 例离线测试（2026-10-26：空目录/漏映射/未开放拒绝挂载，读取走同一 `executeAction` admission，拒绝时适配器零调用）、**宿主探针两模式通过**（`with-reader`：模型自决调用经门禁到达适配器恰好一次；`no-reader`：可见地报 `NO_READER`；并借此发现并修复"缺 `inject` 导致工具静默不注册/整项不激活"），**企业 CLI 联调未做**，写动作全部关闭；`forge-brand` / `forge-gateway` 与 `services/devops-mcp` 仍为规划入口，无清单、源码或测试；`forge-gitee` 已另起独立单安装单元（见 §2.2 与包 README）。准入手册见[能力面设计 §6.1](plugins/forge-devops-lifecycle.md) | 对应设计中的测试矩阵为目标，不是执行结果 |
+
+### 2.2.1 IAM 离线验收清单
+
+账户操作见[用户指南](<../../packages/forge-iam/docs/user-guide.md>)，代码接口和验证方法见[开发指南](<../../packages/forge-iam/docs/developer-guide.md>)。下表区分可重复验证的当前行为、尚未闭合的本地缺口与外部证据，不用 mock 结果代替生产准入。
+
+| 能力 | 验收入口 | 当前边界或待闭合项 |
+|---|---|---|
+| 配置与 OIDC 登录 | `config`、`login`、`oidc`、`security-matrix` 及 [错误字段脱敏](<../../packages/forge-iam/test/oidc-error-redaction.test.mjs>) | 普通apply仍为public + 强制S256；实际私有测试工厂已支持机密Basic/Post，见下行。HTTP error只保留精确标准码，不带任意error原文；合法invalid_grant及成功业务数据保持。生产secret来源/生命周期仍未接 |
+| 机密认证基础与隔离服务 | [配置](<../../packages/forge-iam/test/client-auth-config.test.mjs>)、[来源](<../../packages/forge-iam/test/client-auth-source.test.mjs>)、[HTTP](<../../packages/forge-iam/test/client-auth-transport.test.mjs>)及[格式/跨模式](<../../packages/forge-iam/test/client-auth-record.test.mjs>)、[实际服务](<../../packages/forge-iam/test/client-auth-service.test.mjs>)、[生命周期](<../../packages/forge-iam/test/client-auth-lifecycle.test.mjs>)、[刷新](<../../packages/forge-iam/test/client-auth-refresh.test.mjs>) | 独立认可的具体来源驱动实际Basic/Post code/refresh/revoke、V2恢复与清理；V1/V2和完整authContext严格隔离，来源/代际变化拒绝旧操作，未知不重发。public不采用或盲删V2；普通apply没有生产secret adapter，隔离闭环不等于正式能力 |
+| 管理 API 认证 | `routes` 测试 | 仅 Connection 同步返回 undefined 时放行；异常结果拒绝且 service 零调用 |
+| 会话同步与 provider 归属 | `provider-replacement-read`、`sync-provider-replacement` 测试 | 同步前后复查 provider，以本地采纳版本和身份快照保护结果；旧读取/错误不覆盖新会话或新确认的空状态，替换仅清本次仍持有的旧身份。`getView/getPrincipal` 只读缓存，不提供即时撤权检查 |
+| 刷新与重启恢复 | `dual-process-refresh`、`refresh-complete-validation`、`service-singleflight-regression` 测试 | pending/complete 协议依赖受信原子后端；默认组合拒绝新登录与刷新 |
+| 条件退出及远端撤销结果 | `signout-pending`、`signout-replacement`、`routes` 及 [RP 行为保护](<../../packages/forge-iam/test/rp-logout-issuer-context.test.mjs>) | 清理未知不等于退出成功；墓碑不是物理删除，成功撤销响应不证明后代授权已终结。合法 RP 配置要求显式退出地址且优先于 discovery；迟到 metadata 不替换该地址，六项内存回归保护现有行为，不是漏洞修复 |
+| 账户恢复、取消及退出交错 | `client-signout-behavior` 测试 | 真实 Client 源码的模拟渲染与受控交付；不证明跨入口/跨进程排序 |
+| 网关凭据读写与归属 | [默认拒绝](<../../packages/forge-iam/test/gateway-atomic-policy.test.mjs>)、[联合条件提交](<../../packages/forge-iam/test/gateway-atomic-transactions.test.mjs>)、[服务集成](<../../packages/forge-iam/test/gateway-atomic-service.test.mjs>)、[原始意图保护](<../../packages/forge-iam/test/gateway-atomic-intent.test.mjs>)及 `gateway-provider-context`、`store`、`service` | 默认保存/清除零变更拒绝；V1、orphan 和不一致 pair 只读不迁移。明确注入的 one-turn 双 Map fixture 验证完整快照 CAS、提交内 guard、唯一代际墓碑、ABA、参数与私有意图隔离及未知回执不补偿。仅证明两键与本地上下文；没有生产 adapter，不证明跨进程 grant 授权、OS 耐久提交或真实调用 |
+| discovery-only 的旧会话绑定 | [issuer-context-policy](<../../packages/forge-iam/test/issuer-context-policy.test.mjs>)、[discovery-issuer-outbound](<../../packages/forge-iam/test/discovery-issuer-outbound.test.mjs>) | 不为恢复补齐未知 issuer 而启动探测；无明确 pin 或本实例已验证上下文时拒绝采用旧身份、AT 及主体，保留记录。显式 pin 匹配的旧 V1 仍可读；异步操作与共享刷新固定 issuer，错误出口不发送旧 RT |
+| 用户自助信息 | [client-clipboard-behavior](<../../packages/forge-iam/test/client-clipboard-behavior.test.mjs>)、Client 与随包指南测试 | 账户页可主动复制已取得的登录链接和最小白名单诊断；不额外联网、不导出身份或凭据。异步结果受页面代际/链接身份/生命周期保护；不代替真实浏览器权限或原生剪贴板验收 |
+| 模型只读编排与隔离适配 | [实际 Host 编排](<../../packages/forge-iam/test/model-selection-host.test.mjs>)、`model-gate`、`model-selection` 及 [outcome 回归](<../../packages/forge-iam/test/model-selection-outcome.test.mjs>) | 真实 apply/服务加模拟 SDK 验证严格只读、保存 getter 零访问、原选择不变、单飞与解绑、异步旧结果失效及模型错误不清 OIDC grant。只复用纯判定，不应用切换；记录式 sink 写入保持独立，异常用 written:null 标示未知。SDK无明确空态/条件保存；另有隔离执行组合证据见下表，真实原生模型入口与人员/用途授权仍未接线 |
+| 包说明与制品 | `package-shape`、仓库包体检查 | 用户/开发指南随包，检查本地链接、锚点与表格；不代替 GUI 或生产操作验收 |
+
+#### 本阶段关闭项与剩余可模拟项
+
+下表区分已按策略关闭的真实自动保存与尚未闭合的本地功能，后者不应笼统归为“仅缺真实环境”。前置决定未定时保留现状，不虚构生产协议或用 fixture 自动批准。
+
+| 事项 | 可在隔离环境验证的部分 | 决定与剩余边界 |
+|---|---|---|
+| 真实默认模型自动保存（本阶段关闭） | 实际 Host 严格只读编排已接线并模拟验证；[实施计划](<../plans/2026-11-02-iam-default-model-readonly.md>)不包含真实写入 | 已选择真实 Host 不自动写；SDK 未提供的空态与条件提交不得由 fixture 补足，真实写待可靠能力与另行授权，不是尚待补做的模拟放行分支。 |
+| 机密客户端与 secret 生命周期 | 已确认管理员预置隔离基线；[设计](<iam-confidential-isolated.md>)与[字段契约](<../contracts/iam-client-auth-isolated.md>)定义 code/refresh/revoke 与来源失效边界；实际隔离服务已接入 | 独立建造审阅无重要剩余问题，用户已批准完整 source/mock 设计，[实施计划](<../plans/2026-11-02-iam-confidential-isolated.md>)已登记，实际 Basic/Post、V2 生产/恢复、共享刷新 pin 与 cleanup 已接入，54项新服务用例和851项必要合并通过，最终冻结验收见计划。真实来源不开启；供应商 Basic/Post、存储与生产生命周期仍待 G1，不能把 fixture 写成正式能力。 |
+| 模型与工具执行入口 | SDK 形状接缝的本地必要条件拒绝、下游零调用与失效交错；[DESIGN-017](<iam-consumer-isolated.md>)与[IAM-003](<../contracts/iam-consumer-isolated.md>)为已批准的私有source/mock设计 | 用户已批准完整“假账号、假模型、假工具、不动真实环境” source/mock 设计。实际工厂会话见证A已实现并通过57新例/760项必要合并，peer与代表性变异已关闭；按[PLAN-007](<../plans/2026-11-02-iam-consumer-isolated.md>)已验收B局部许可算法（62新例/210项policy回归及独立变异），C合成工具/命令已验收（31新例/241回归及独立变异），D合成模型已验收（29新例/270项policy回归，含最终错误桥修复与独立复核）；E根16项实际IAM联合已验收（含不同issuer/person整体替换），分段/联合独立审阅已关闭；Root最终完整检查1889总项、1887通过、0失败/取消、2平台跳过、exit0。首次discovery ready不补见证票，不开放真实调用。不能随 IAM 卸载撤闸，也不能以缓存 ready 代替人员/用途授权；真实 provider/action 与授权契约独立待核。 |
+
+Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍按模块准入单独处理。网关 A/B 与既有 P0 原生 Key 路线存在待收口事项，不由本清单替责任方裁决生产授权。
+
+2026-11-02 的剩余边界盘点将“能够模拟”与“协议已经决定”分开：
+
+| 事项 | 当前证据与下一最小动作 |
+|---|---|
+| Client Remote/watch | Host watch已实现，Client仍HTTP两秒轮询。[私有只读订阅接缝](<../contracts/iam-view-observer-isolated.md>)已按source/mock实现：共享单飞读、独立管理面校验、代际取消，18项定向用例通过；真实Client未接线，真实上下文/资源策略与生产准入未开放 |
+| tokenFor(resource) | 当前只有resolveToken；资源/audience信任与实际消费者未定。不把旧AT加标签当资源换票，也不以fixture新增提供方能力 |
+| 网关凭据probe | 当前只保存/读取，无探测。无副作用端点、owner/用途依据与错误分类须由网关协议确认，不把configured或假成功当有效授权 |
+
+这些待定接口不混入已批准的PLAN-007，也不因本批完成就自动删除或宣称全目标关闭；后续隔离设计与批准须另行收口。正式secret投递、OS保护、实时人员用途与五分钟撤权依赖提供方证据；本地模拟不替其背书。
+
+后续按[PLAN-008收尾计划](<../plans/2026-11-03-iam-mock-closeout.md>)推进。[只读订阅私有接缝](<plugins/forge-iam.md#523-最小只读订阅接缝sourcemock-已实现>)已按批准范围实现并验收：白名单投影、Host 单飞同步、独立管理校验与代际取消。真实注册、真实 Host 上下文与资源策略仍待准入；旧 SDK 入口文字证据不能替代生命周期兼容。probe 缺正式契约保持未启用；模拟验收不写成真实接通。
+
+
+执行入口的只读核验（2026-11-02）还确认以下限度，不是已接 IAM 门禁的声明：
+
+- SDK 的 tools.guard 是同步、单调拒绝，llm/stream 则是可短路的 waterfall；后者不能被写成任意监听顺序下的硬闸。注册均有所属上下文，卸载会移除。
+- [policy 当前注册](<../../packages/forge-policy/src/index.mjs>)只覆盖登记范围，卸载撤销 guard 和服务，没有读取 IAM；[DevOps 硬依赖](<../../packages/forge-devops/src/index.mjs>)确实声明 policy，但不因此获得实时 IAM 身份或用途授权。[模型纯判定](<../../packages/forge-iam/src/model-gate.mjs>)也不是执行拦截。
+- 受保护对象、独立于 IAM 的门禁所有者及可信授权来源仍是下一阶段的关键边界。缺来源拒绝、失效交错、下游零调用和解绑可由 mock 验证；真实人员/用途授权与五分钟撤权不能由 fixture 承诺。
 
 五条跨模块冲突（policy fail-open、无 policy 降只读、审计坏是否影响执行、SDD 双路径、历史市场行）的定位与结论见[跨模块冲突收口](conflict-resolution.md)（DESIGN-014）；**五条已由责任方 2026-10-24 逐条确认**——确认的是组织做法，不等于企业能力已联调（C4 的 CI 侧、C5 的原生索引端仍待接入证据），也不放开任何受控写。
 

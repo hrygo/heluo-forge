@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { createIamService } from './support/trusted-service.mjs';
 import { validateConfig } from '../src/config.mjs';
-import { createGatewayCredentialStore, createGrantStore } from '../src/store.mjs';
+import { createGrantStore } from '../src/store.mjs';
+import { seedLegacyGateway } from './support/atomic-gateway.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 
@@ -476,7 +477,7 @@ test('callback preserves another account’s gateway value and metadata', async 
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
   const value = `uag-${'a'.repeat(32)}`;
-  await createGatewayCredentialStore(credentials).save({ value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
+  seedLegacyGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
   const before = structuredClone(await credentials.readRecord('heluo-iam/gateway-credential'));
   const service = createIamService(configFor(mock), { credentials });
   const { location } = await authorize(service);
@@ -502,7 +503,7 @@ test('cancel during gateway read preserves its value and metadata and discards t
   }
   const credentials = new DelayedGatewayCredentials();
   const value = `uag-${'b'.repeat(32)}`;
-  await createGatewayCredentialStore(credentials).save({ value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
+  seedLegacyGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
   const before = structuredClone(credentials.records.get('heluo-iam/gateway-credential'));
   const service = createIamService(configFor(mock), { credentials });
   const { location } = await authorize(service);

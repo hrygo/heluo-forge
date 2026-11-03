@@ -2,9 +2,12 @@ import { createHmac } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
+import { assertClientAuthConfigured, assertClientAuthCurrent, assertGrantAuthBinding, clientAuthContext, clientAuthDescriptor, grantAuthPin, prepareClientAuthentication } from './client-auth.mjs';
 import { createGatewayCredentialStore, createGrantStore, StoreError } from './store.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
 import { createView, transition } from './state.mjs';
+import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
+import { createConsumptionWitness } from './consumption-witness.mjs';
 import {
   OidcError,
   buildAuthorizationUrl,
@@ -50,6 +53,10 @@ function sameGrantIgnoringRefreshMarker(left, right) {
   return isDeepStrictEqual(leftBase, rightBase);
 }
 
+function grantIdentity({ version, issuer, clientId, resource, subject, obtainedAt, sessionInstanceId, authContext }) {
+  return { version, issuer, clientId, resource, subject, obtainedAt, sessionInstanceId, ...(authContext ? { authContext } : {}) };
+}
+
 function nowIso(now) {
   return new Date(now).toISOString();
 }
@@ -73,8 +80,15 @@ function tokenErrorMessage(error) {
 function safeMessage(code) {
   const messages = {
     IAM_UNCONFIGURED: 'IAM configuration is incomplete',
+    IAM_CLIENT_AUTH_CONTEXT_INVALID: 'IAM client authentication context is invalid',
+    IAM_CLIENT_AUTH_UNVERIFIED: 'IAM client authentication is not verified',
+    IAM_CLIENT_AUTH_CHANGED: 'IAM client authentication changed',
     IAM_CREDENTIALS_UNAVAILABLE: 'credential storage is unavailable',
     IAM_ATOMIC_STORE_UNVERIFIED: 'credential storage atomicity is not trusted by this composition',
+    IAM_GATEWAY_ATOMIC_UNVERIFIED: 'joint gateway credential storage is not trusted by this composition',
+    IAM_GATEWAY_LEGACY_READ_ONLY: 'existing gateway credential data is read-only and was not changed',
+    IAM_GATEWAY_CHANGED: 'gateway credential changed before this operation could commit',
+    IAM_GATEWAY_WRITE_UNKNOWN: 'gateway credential write outcome is unknown; no automatic retry was attempted',
     IAM_CREDENTIALS_CLEAR_FAILED: 'credential storage could not be cleared',
     IAM_CALLBACK_UNAVAILABLE: 'IAM callback origin is unavailable',
     IAM_UNREACHABLE: 'IAM endpoint is unreachable',
@@ -87,7 +101,7 @@ function safeMessage(code) {
     IAM_ID_TOKEN_AUDIENCE: 'IAM ID token audience does not match',
     IAM_ID_TOKEN_ISSUER: 'IAM ID token issuer does not match',
     IAM_DISCOVERY_ISSUER_MISMATCH: 'IAM discovery issuer does not match configuration',
-    IAM_GRANT_CONTEXT_MISMATCH: 'IAM grant belongs to a different client or resource',
+    IAM_GRANT_CONTEXT_MISMATCH: 'IAM grant issuer context is unverified or does not match the configured issuer, client or resource',
     IAM_REVOCATION_FAILED: 'IAM local session ended but token revocation was not confirmed',
     IAM_ID_TOKEN_NONCE: 'IAM ID token nonce does not match',
     IAM_ID_TOKEN_EXPIRED: 'IAM ID token is expired',
@@ -105,6 +119,7 @@ function safeMessage(code) {
  * @param {{
  *   exclusive?: { ok: boolean, reason?: string },
  *   credentials?: object,
+ *   getModelSelectionServices?: () => {llm: object, agentDefaultModel: object} | undefined,
  *   getOrigin?: () => string | undefined,
  *   fetch?: typeof fetch,
  *   now?: () => number,
@@ -116,6 +131,8 @@ export function createIamService(rawConfig, options = {}) {
     throw new IamError('IAM_CONFIG_INVALID', safeMessage('IAM_CONFIG_INVALID'), { issues: checked.issues });
   }
   const config = checked.value;
+  // Real apply supplies neither private function; configuration cannot unlock it.
+  assertClientAuthConfigured(config, options);
   const configured = isConfigured(config).ok;
   let exclusive = options.exclusive ?? { ok: true };
   const now = options.now ?? (() => Date.now());
@@ -130,6 +147,9 @@ export function createIamService(rawConfig, options = {}) {
   // Bumped whenever the credentials provider changes, so an in-flight read from
   // the previous provider cannot repopulate the summary after revocation.
   let gatewayEpoch = 0;
+  let modelSelectionFlight = null;
+  let modelSelectionQueued = false;
+  let modelSelectionGeneration = 0;
   let lastBackgroundRefreshAt = 0;
 
   function ensureStore() {
@@ -161,7 +181,12 @@ export function createIamService(rawConfig, options = {}) {
         try { assertAtomic(targetStore, instance); return true; } catch { return false; }
       } });
       store = targetStore;
-      gatewayStore = createGatewayCredentialStore(credentials);
+      gatewayStore = createGatewayCredentialStore(credentials, {
+        getGatewayAtomicStore: options.getGatewayAtomicStore,
+        verifyGatewayAtomicStore: options.verifyGatewayAtomicStore,
+      });
+      gatewaySummary = null;
+      gatewayLoadedAt = 0;
       gatewayLoading = null;
       gatewayEpoch += 1;
       storeCredentials = credentials;
@@ -170,6 +195,10 @@ export function createIamService(rawConfig, options = {}) {
     } catch (error) {
       store = null;
       gatewayStore = null;
+      gatewaySummary = null;
+      gatewayLoadedAt = 0;
+      gatewayLoading = null;
+      gatewayEpoch += 1;
       storeCredentials = null;
       storeError = error;
       return null;
@@ -179,6 +208,9 @@ export function createIamService(rawConfig, options = {}) {
   let state = !exclusive.ok ? 'error' : (configured ? 'signed-out' : 'unconfigured');
   let error = exclusive.ok ? null : (exclusive.reason ?? 'exclusive-violation');
   let lastGrant = null;
+  // Non-secret provenance/pin and the last authenticated session identity only.
+  let sessionAuthentication = null;
+  let refreshPromiseAuthentication = null;
   // A weak association prevents a discarded cached grant retaining its provider.
   const grantOwners = new WeakMap();
   let attempt = null;
@@ -186,16 +218,45 @@ export function createIamService(rawConfig, options = {}) {
   let refreshPromise = null;
   let refreshPromiseStore = null;
   let refreshPromiseCredentials = null;
+  let refreshPromiseIssuer = null;
   let signInPromise = null;
   let signOutPromise = null;
   let signingOut = false;
   let sessionEpoch = 0;
   let authEpoch = 0;
+  let syncPublications = 0;
   let observedPending = null;
   let metadataCache = null;
   let jwksCache = null;
   const listeners = new Set();
   const stopWaiters = new Set();
+  // Absent in real apply: do not inspect private binding readers without opt-in.
+  const consumptionWitness = typeof options.registerWitness === 'function'
+    ? createConsumptionWitness(config, options, (adopted) => {
+      recheckExclusive();
+      return !disposed && !signingOut && state === 'ready' && exclusive.ok
+        && authEpoch === adopted.binding.authEpoch && sessionEpoch === adopted.binding.sessionEpoch
+        && store === adopted.binding.store && storeCredentials === adopted.binding.credentials
+        && lastGrant?.sessionInstanceId === adopted.sessionInstanceId
+        && lastGrant.issuer === adopted.issuer && lastGrant.subject === adopted.subject
+        && lastGrant.accessExpiresAt === adopted.accessExpiresAt && lastGrant.version === adopted.version
+        && lastGrant.clientId === adopted.clientId && lastGrant.resource === adopted.resource
+        && isDeepStrictEqual(lastGrant.authContext, adopted.authContext) && !isAccessExpired(lastGrant, now());
+    }) : undefined;
+
+  function beginConsumption(issuer, target, credentials, expected) {
+    return consumptionWitness?.begin(issuer, credentials, target, authEpoch, sessionEpoch, expected);
+  }
+
+  function adoptConsumption(ticket, grant) {
+    if (!consumptionWitness) return;
+    const { issuer, subject, sessionInstanceId, accessExpiresAt, version, clientId, resource } = grant;
+    const authContext = grant.authContext ? Object.freeze({ mode: grant.authContext.mode,
+      method: grant.authContext.method, secretRef: grant.authContext.secretRef,
+      secretRevision: grant.authContext.secretRevision }) : undefined;
+    consumptionWitness.adopt(ticket, { issuer, subject, sessionInstanceId, accessExpiresAt,
+      version, clientId, resource, authContext });
+  }
 
   function recheckExclusive() {
     if (typeof options.recheckExclusive !== 'function') return;
@@ -241,6 +302,7 @@ export function createIamService(rawConfig, options = {}) {
         // One subscriber must not corrupt a transition or starve the others.
       }
     }
+    scheduleDefaultModelReconciliation();
     return snapshot;
   }
 
@@ -276,6 +338,29 @@ export function createIamService(rawConfig, options = {}) {
     if (ensureStore() !== target || storeCredentials !== credentials || !atomicVerified(credentials)) {
       throw new IamError('IAM_ATOMIC_STORE_UNVERIFIED', safeMessage('IAM_ATOMIC_STORE_UNVERIFIED'));
     }
+  }
+
+  async function prepareAuthentication(issuer, target, credentials, { grant, expected = sessionAuthentication, guard } = {}) {
+    if (config.authMode !== 'confidential') return undefined;
+    const current = () => {
+      if (guard) guard();
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      assertExclusive();
+      if (ensureStore() !== target || storeCredentials !== credentials) {
+        throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
+      }
+      if (guard) guard();
+      return true;
+    };
+    current();
+    const operation = await prepareClientAuthentication(config, options, { issuer, credentials,
+      expectedPin: grantAuthPin(grant) ?? expected?.pin, expectedProvenance: expected?.provenance, guard: current });
+    assertClientAuthCurrent(operation);
+    return operation;
+  }
+
+  function rememberAuthentication(operation, grant) {
+    if (operation) sessionAuthentication = Object.freeze({ ...clientAuthDescriptor(operation), identity: grantIdentity(grant), credentials: storeCredentials });
   }
 
   function requireStore() {
@@ -330,7 +415,7 @@ export function createIamService(rawConfig, options = {}) {
    * Verify an ID token, retrying once on a missing `kid`: the IdP may have
    * rotated keys after this process cached the JWKS document.
    */
-  async function verifyWithJwks(token, { uri, issuer, clientId, nonce, accessToken }) {
+  async function verifyWithJwks(token, { uri, issuer, clientId, nonce, accessToken, guard }) {
     const options = {
       issuer,
       clientId,
@@ -340,22 +425,41 @@ export function createIamService(rawConfig, options = {}) {
       ...(nonce === undefined ? {} : { nonce }),
     };
     try {
-      return verifyIdToken(token, { ...options, jwks: await jwks(uri) });
+      const keys = await jwks(uri);
+      if (guard) guard();
+      return verifyIdToken(token, { ...options, jwks: keys });
     } catch (error) {
+      if (guard) guard();
       if (error?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw error;
       jwksCache = null;
-      return verifyIdToken(token, { ...options, jwks: await jwks(uri) });
+      const keys = await jwks(uri);
+      if (guard) guard();
+      return verifyIdToken(token, { ...options, jwks: keys });
     }
   }
 
-  function assertGrantContext(grant) {
+  // Only normalized configuration or metadata validated by this instance can
+  // bind a stored identity. Neither the grant nor discovery URL is an issuer pin.
+  function knownIssuer() {
+    return config.issuer || metadataCache?.value.issuer || '';
+  }
+
+  function assertGrantBinding(grant) {
     if (!grant) return;
+    assertGrantAuthBinding(config, grant);
     const wrongClient = grant.clientId !== config.clientId;
     // V1 login carries no gateway audience; only compare when one is configured
     // so grants stored before the split keep working.
     const wrongResource = Boolean(config.gatewayResource) && grant.resource !== config.gatewayResource;
-    const wrongIssuer = Boolean(config.issuer) && grant.issuer !== config.issuer;
-    if (wrongClient || wrongResource || wrongIssuer) {
+    if (wrongClient || wrongResource) {
+      throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
+    }
+  }
+
+  function assertGrantContext(grant, expectedIssuer) {
+    if (!grant) return;
+    assertGrantBinding(grant);
+    if (!expectedIssuer || grant.issuer !== expectedIssuer) {
       throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
     }
   }
@@ -404,7 +508,8 @@ export function createIamService(rawConfig, options = {}) {
       throw new IamError('IAM_REFRESH_TOKEN_MISSING', safeMessage('IAM_REFRESH_TOKEN_MISSING'));
     }
     return {
-      version: 1,
+      version: previous?.version ?? 1,
+      ...(previous?.authContext ? { authContext: { ...previous.authContext } } : {}),
       issuer,
       subject: previous?.subject ?? null,
       clientId: config.clientId,
@@ -420,12 +525,13 @@ export function createIamService(rawConfig, options = {}) {
     };
   }
 
-  async function buildGrant(token, claims, meta, obtainedAt) {
+  async function buildGrant(token, claims, meta, obtainedAt, authentication) {
     if (!token.refreshToken) {
       throw new IamError('IAM_REFRESH_TOKEN_MISSING', safeMessage('IAM_REFRESH_TOKEN_MISSING'));
     }
     return {
-      version: 1,
+      version: authentication ? 2 : 1,
+      ...(authentication ? { authContext: clientAuthContext(authentication.pin) } : {}),
       issuer: meta.issuer,
       subject: claims.sub,
       sessionInstanceId: randomToken(32),
@@ -454,16 +560,50 @@ export function createIamService(rawConfig, options = {}) {
       observedPending = null;
       return view();
     }
+    const expectedIssuer = knownIssuer();
+    const syncEpoch = authEpoch;
+    let publication = syncPublications;
+    let expectedGrant = lastGrant;
+    const isActive = () => !disposed && !signingOut && exclusive.ok && authEpoch === syncEpoch
+      && syncPublications === publication && lastGrant === expectedGrant
+      && (observation ? state === 'error' && error === 'IAM_REAUTH_REQUIRED'
+        && observedPending === observation && now() < observation.deadline
+        : state !== 'authenticating' && state !== 'error');
+    const published = () => {
+      publication = ++syncPublications;
+      expectedGrant = lastGrant;
+    };
+    const discardIdentity = () => {
+      // Store lookups can be rebound independently. Clear only the adopted
+      // identity this sync still owns, never a later publication (even null).
+      if (expectedGrant && lastGrant === expectedGrant && grantOwners.has(expectedGrant)) {
+        lastGrant = null;
+        state = 'signed-out';
+        error = null;
+        published();
+        notify();
+      }
+    };
     const targetStore = ensureStore();
+    if (!isActive()) return view();
     if (!targetStore || (observation && targetStore !== observation.store)) {
+      if (!targetStore) discardIdentity();
       observedPending = null;
       return view();
     }
-    const syncEpoch = authEpoch;
-    const isCurrent = () => !disposed && !signingOut && exclusive.ok && authEpoch === syncEpoch
-      && store === targetStore && (observation ? state === 'error' && error === 'IAM_REAUTH_REQUIRED'
-        && observedPending === observation && now() < observation.deadline
-        : state !== 'authenticating' && state !== 'error');
+    const targetCredentials = storeCredentials;
+    const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
+    // Re-read the live provider after each await; the lookup itself may also
+    // synchronously dispose this service or start a newer auth operation.
+    const isCurrent = () => {
+      if (!isActive()) return false;
+      const currentStore = ensureStore();
+      if (!isActive()) return false;
+      if (currentStore === targetStore && storeCredentials === targetCredentials) return true;
+      discardIdentity();
+      if (observation && observedPending === observation) observedPending = null;
+      return false;
+    };
     try {
       const record = await targetStore.read();
       recheckExclusive();
@@ -473,6 +613,7 @@ export function createIamService(rawConfig, options = {}) {
         lastGrant = null;
         error = 'IAM_GRANT_INVALID';
         state = 'error';
+        published();
         notify();
         return view();
       }
@@ -483,6 +624,7 @@ export function createIamService(rawConfig, options = {}) {
         }
         const changed = lastGrant !== null || state !== 'signed-out';
         lastGrant = null;
+        published();
         if (changed) {
           error = null;
           state = 'signed-out';
@@ -490,10 +632,14 @@ export function createIamService(rawConfig, options = {}) {
         }
         return view();
       }
-      assertGrantContext(record.grant);
+      assertGrantContext(record.grant, expectedIssuer);
+      const authentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: () => {
+        if (!isCurrent()) throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
+      } });
+      if (!isCurrent()) return view();
+      assertClientAuthCurrent(authentication);
       const marker = record.grant.refreshOperation;
-      const identity = (({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId }) =>
-        ({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId }))(record.grant);
+      const identity = grantIdentity(record.grant);
       const refreshDigest = (grant, id) => createHmac('sha256', id).update(grant.refreshToken).digest('base64url');
       if (observation) {
         if (!marker || marker.version !== observation.version || marker.id !== observation.id
@@ -515,6 +661,7 @@ export function createIamService(rawConfig, options = {}) {
         lastGrant = null;
         state = 'error';
         error = 'IAM_REAUTH_REQUIRED';
+        published();
         notify();
         return view();
       }
@@ -522,6 +669,7 @@ export function createIamService(rawConfig, options = {}) {
       const previous = `${state}|${error}|${previousSubject}`;
       lastGrant = record.grant;
       grantOwners.set(record.grant, targetStore);
+      published();
       // An adopted subject changes the displayed match, not the stored key.
       if (observation || (previousSubject !== null && record.grant.subject !== previousSubject)) {
         await loadGatewayCredential({ force: true });
@@ -529,13 +677,16 @@ export function createIamService(rawConfig, options = {}) {
           if (lastGrant === record.grant) lastGrant = null;
           return view();
         }
+        assertClientAuthCurrent(authentication);
       }
+      rememberAuthentication(authentication, record.grant);
       if (observation) observedPending = null;
       // `expired` means the access token is no longer usable, not merely inside
       // the refresh skew: a token request renews the latter, and showing "expired"
       // while the token still works would send the user through a needless login.
       state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
       error = null;
+      adoptConsumption(consumption, record.grant);
       // With a usable refresh token an expired session is recoverable; without
       // this, the interim client would only ever offer a full re-login.
       if (state === 'expired' && isRefreshUsable(record.grant, now())
@@ -548,29 +699,31 @@ export function createIamService(rawConfig, options = {}) {
       if (!isCurrent()) return view();
       observedPending = null;
       lastGrant = null;
-      error = cause?.code === 'IAM_GRANT_CONTEXT_MISMATCH' ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
+      error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED'].includes(cause?.code)
+        ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
       state = 'error';
+      published();
       notify();
     }
     return view();
   }
 
-  async function readGatewayCredential() {
-    if (disposed) return null;
-    // Rebind to the current credentials provider; a revoked fiber must not keep
-    // serving gateway state (or a resolvable secret) from the previous one.
-    ensureStore();
-    if (!gatewayStore) return null;
-    const record = await gatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
+  async function readGatewayCredential(targetGatewayStore, targetStore, isCurrent) {
+    if (!isCurrent()) return null;
+    const record = await targetGatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
+    if (!isCurrent()) return null;
     if (!record.ok) return { state: 'invalid' };
-    const resolved = await gatewayStore.resolve().catch(() => undefined);
+    const resolved = await targetGatewayStore.resolve(record.credential).catch(() => undefined);
+    if (!isCurrent()) return null;
     const credential = record.credential ?? {};
+    if (resolved?.invalid) return { state: 'invalid' };
     if (!resolved?.value) return { state: 'unconfigured' };
     // A keychain value without metadata is still unattributable. This status is
     // informational; it does not prevent another consumer resolving the ref.
     if (!record.credential) return { state: 'invalid', matchesAccount: false };
-    const storage = await gatewayStore.describe().catch(() => null);
-    const signedInSubject = lastGrant?.subject ?? null;
+    const storage = await targetGatewayStore.describe().catch(() => null);
+    if (!isCurrent()) return null;
+    const signedInSubject = lastGrant && grantOwners.get(lastGrant) === targetStore ? lastGrant.subject : null;
     const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
     return {
       // Without a session the stored key is still "configured"; it only becomes
@@ -588,27 +741,123 @@ export function createIamService(rawConfig, options = {}) {
   }
 
   async function loadGatewayCredential({ force = false } = {}) {
-    // A hydrate that lost the race with dispose must not repopulate runtime state.
     if (disposed) return null;
+    // Cache hits and singleflight reuse must belong to the live provider too.
+    const targetStore = ensureStore();
+    if (disposed || !targetStore || !gatewayStore) return null;
     if (!force && gatewayLoadedAt > 0 && now() - gatewayLoadedAt < GATEWAY_RELOAD_MS) return gatewaySummary;
     if (gatewayLoading) return gatewayLoading;
-    // Bind to the current provider before capturing the epoch, so this read is
-    // not discarded by the store creation it is about to trigger.
-    ensureStore();
+    const targetGatewayStore = gatewayStore;
+    const targetCredentials = storeCredentials;
     const epoch = gatewayEpoch;
-    gatewayLoadedAt = now();
-    gatewayLoading = readGatewayCredential()
+    const isCurrent = () => {
+      if (disposed || epoch !== gatewayEpoch) return false;
+      const current = ensureStore();
+      return !disposed && epoch === gatewayEpoch && current === targetStore
+        && gatewayStore === targetGatewayStore && storeCredentials === targetCredentials;
+    };
+    const request = readGatewayCredential(targetGatewayStore, targetStore, isCurrent)
       .then((summary) => {
-        // dispose() or a credentials change may have happened while reading.
-        gatewaySummary = disposed || epoch !== gatewayEpoch ? null : summary;
-        return gatewaySummary;
+        if (!isCurrent()) return null;
+        const changed = !isDeepStrictEqual(gatewaySummary, summary);
+        gatewaySummary = summary;
+        gatewayLoadedAt = now();
+        // Own forced reads do not feed back into another observation.
+        if (changed && !modelSelectionFlight) scheduleDefaultModelReconciliation();
+        return summary;
       })
       .catch(() => {
-        gatewaySummary = null;
+        if (isCurrent()) { gatewaySummary = null; gatewayLoadedAt = 0; }
         return null;
       })
-      .finally(() => { gatewayLoading = null; });
-    return gatewayLoading;
+      .finally(() => { if (gatewayLoading === request) gatewayLoading = null; });
+    gatewayLoading = request;
+    return request;
+  }
+
+  function scheduleDefaultModelReconciliation() {
+    if (disposed || !config.defaultModel.trim()) return;
+    if (modelSelectionFlight) {
+      modelSelectionQueued = true;
+      return;
+    }
+    // Deliberately detached from login/callback failure handling. A read-only
+    // model observation must never discard a grant or revoke a token.
+    void reconcileDefaultModel().catch(() => {});
+  }
+
+  // The private composition getter keeps one binding object per scoped lifetime.
+  function modelSelectionServices() {
+    try {
+      if (typeof options.getModelSelectionServices !== 'function') return undefined;
+      const binding = options.getModelSelectionServices();
+      if (binding && typeof binding.then === 'function') {
+        Promise.resolve(binding).catch(() => {});
+        return undefined;
+      }
+      if (!binding || typeof binding !== 'object') return undefined;
+      // Retain the binding identity too: an injected scope may be removed and
+      // rebound with the same two SDK instances while an old read is pending.
+      const llm = binding.llm;
+      const agentDefaultModel = binding.agentDefaultModel;
+      return llm && agentDefaultModel ? { binding, llm, agentDefaultModel } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function reconcileDefaultModel() {
+    if (!config.defaultModel.trim() || !config.defaultProvider.trim()) {
+      return readonlyModelResult('default-model-unconfigured');
+    }
+    if (disposed || signingOut || state !== 'ready') return readonlyModelResult('iam-not-ready');
+    const targetStore = ensureStore();
+    const targetCredentials = storeCredentials;
+    const grant = lastGrant;
+    if (!targetStore || !grant || grantOwners.get(grant) !== targetStore
+      || isAccessExpired(grant, now())) return readonlyModelResult('iam-not-ready');
+    const services = modelSelectionServices();
+    if (!services) return readonlyModelResult('model-services-unavailable');
+    if (modelSelectionFlight) {
+      modelSelectionQueued = true;
+      return modelSelectionFlight.promise;
+    }
+    const auth = authEpoch;
+    const generation = modelSelectionGeneration;
+    const gateway = gatewayEpoch;
+    const active = () => !disposed && !signingOut && state === 'ready' && exclusive.ok
+      && authEpoch === auth && modelSelectionGeneration === generation && gatewayEpoch === gateway
+      && lastGrant === grant && !isAccessExpired(grant, now());
+    const isCurrent = () => {
+      try {
+        if (!active()) return false;
+        assertExclusive();
+        if (!active() || ensureStore() !== targetStore || storeCredentials !== targetCredentials) return false;
+        const current = modelSelectionServices();
+        return active() && current?.binding === services.binding && current.llm === services.llm
+          && current.agentDefaultModel === services.agentDefaultModel;
+      } catch { return false; }
+    };
+    const request = Promise.resolve().then(async () => {
+      if (!isCurrent()) return readonlyModelResult('model-context-changed');
+      const summary = await loadGatewayCredential({ force: true });
+      if (!isCurrent()) return readonlyModelResult('model-context-changed');
+      if (summary?.state !== 'configured' || summary.matchesAccount !== true) {
+        return readonlyModelResult('gateway-credential-unavailable');
+      }
+      return inspectReadonlyModelSelection(services, {
+        provider: config.defaultProvider, model: config.defaultModel,
+      }, isCurrent);
+    }).catch(() => readonlyModelResult(isCurrent() ? 'model-read-failed' : 'model-context-changed'))
+      .finally(() => {
+        if (modelSelectionFlight?.promise !== request) return;
+        modelSelectionFlight = null;
+        const queued = modelSelectionQueued;
+        modelSelectionQueued = false;
+        if (queued) scheduleDefaultModelReconciliation();
+      });
+    modelSelectionFlight = { promise: request };
+    return request;
   }
 
   async function hydrate() {
@@ -627,6 +876,8 @@ export function createIamService(rawConfig, options = {}) {
     hydrate,
     syncFromStore,
     loadGatewayCredential,
+    // Host-only observation; intentionally absent from routes and IamView.
+    reconcileDefaultModel,
 
     /**
      * Store the UAG personal credential the user pasted. IAM only records it;
@@ -636,20 +887,43 @@ export function createIamService(rawConfig, options = {}) {
     async saveGatewayCredential({ key: value, deviceLabel } = {}) {
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      modelSelectionGeneration += 1;
       if (!configured) {
         throw new IamError('IAM_UNCONFIGURED', safeMessage('IAM_UNCONFIGURED'), {
           missing: isConfigured(config).missing,
         });
       }
+      const expectedIssuer = knownIssuer();
+      const epoch = authEpoch;
       const targetStore = requireStore();
-      if (!gatewayStore) {
+      const targetGatewayStore = gatewayStore;
+      const targetCredentials = storeCredentials;
+      if (!targetGatewayStore) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
-      let subject = lastGrant?.subject ?? null;
-      if (!subject) {
-        const record = await targetStore.read().catch(() => null);
-        subject = record?.ok ? record.grant?.subject ?? null : null;
-      }
+      const assertCurrent = () => {
+        const active = () => {
+          if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+          if (signingOut || authEpoch !== epoch || state === 'authenticating') {
+            throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+          }
+          assertExclusive();
+        };
+        active();
+        if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
+          throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+        }
+        active();
+      };
+      assertCurrent();
+      // A cached subject may belong to an earlier provider or shared session.
+      const record = await targetStore.read().catch(() => null);
+      assertCurrent();
+      if (!record?.ok) throw new IamError('IAM_GRANT_INVALID', safeMessage('IAM_GRANT_INVALID'));
+      assertGrantContext(record.grant, expectedIssuer);
+      const authentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: assertCurrent });
+      assertCurrent();
+      const subject = record.grant?.subject;
       if (!subject) {
         throw new IamError('IAM_NOT_SIGNED_IN', 'sign in before saving a gateway credential');
       }
@@ -660,14 +934,25 @@ export function createIamService(rawConfig, options = {}) {
         : '';
       const enteredAt = nowIso(now());
       const suggestedExpiry = addSeconds(now(), 90 * 24 * 60 * 60).slice(0, 10);
-      await gatewayStore.save({
-        value,
-        ownerSubject: subject,
-        deviceLabel: label,
-        enteredAt,
-        suggestedExpiry,
-      });
+      assertCurrent();
+      try {
+        await targetGatewayStore.save({
+          value,
+          ownerSubject: subject,
+          deviceLabel: label,
+          enteredAt,
+          suggestedExpiry,
+        }, { guard: () => { assertCurrent(); assertClientAuthCurrent(authentication); return true; } });
+      } catch (cause) {
+        if (cause instanceof StoreError) throw new IamError(cause.code, safeMessage(cause.code));
+        throw cause;
+      }
+      // A post-commit lifecycle change does not roll back a confirmed transaction.
+      assertCurrent();
+      assertClientAuthCurrent(authentication);
       await loadGatewayCredential({ force: true });
+      assertCurrent();
+      assertClientAuthCurrent(authentication);
       notify();
       return view();
     },
@@ -675,15 +960,35 @@ export function createIamService(rawConfig, options = {}) {
     async clearGatewayCredential() {
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      requireStore();
-      if (!gatewayStore) {
+      modelSelectionGeneration += 1;
+      const targetStore = requireStore();
+      const targetGatewayStore = gatewayStore;
+      const targetCredentials = storeCredentials;
+      if (!targetGatewayStore) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
-      const cleared = await gatewayStore.clear();
+      const assertCurrent = () => {
+        if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+        assertExclusive();
+        if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
+          throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+        }
+        if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      };
+      assertCurrent();
+      let cleared;
+      try {
+        cleared = await targetGatewayStore.clear({ guard: () => { assertCurrent(); return true; } });
+      } catch (cause) {
+        if (cause instanceof StoreError) throw new IamError(cause.code, safeMessage(cause.code));
+        throw cause;
+      }
+      assertCurrent();
       if (!cleared.ok) {
         throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
       }
       await loadGatewayCredential({ force: true });
+      assertCurrent();
       notify();
       return view();
     },
@@ -717,16 +1022,26 @@ export function createIamService(rawConfig, options = {}) {
       assertAtomic(targetStore, credentials);
       if (state === 'ready') return { view: view(), authorizationUrl: null };
       if (state === 'authenticating' && attempt) {
+        if (config.authMode === 'confidential') {
+          const current = attempt; const epoch = authEpoch;
+          const authentication = await prepareAuthentication(current.metadata.issuer, targetStore, credentials, { expected: current.authentication, guard: () => {
+            if (attempt !== current || epoch !== authEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+            assertAtomic(targetStore, credentials);
+          } });
+          assertClientAuthCurrent(authentication);
+        }
         return { view: view(), authorizationUrl: attempt.authorizationUrl };
       }
       if (signInPromise) return signInPromise;
       authEpoch += 1;
       observedPending = null;
-      signInPromise = service._startSignInOnce(targetStore, credentials).finally(() => { signInPromise = null; });
+      consumptionWitness?.invalidate();
+      const consumption = beginConsumption(knownIssuer(), targetStore, credentials);
+      signInPromise = service._startSignInOnce(targetStore, credentials, consumption).finally(() => { signInPromise = null; });
       return signInPromise;
     },
 
-    async _startSignInOnce(targetStore, credentials) {
+    async _startSignInOnce(targetStore, credentials, consumption) {
       const startEpoch = authEpoch;
       if (state === 'unreachable') {
         throw new IamError('IAM_UNREACHABLE', safeMessage('IAM_UNREACHABLE'));
@@ -744,6 +1059,13 @@ export function createIamService(rawConfig, options = {}) {
         throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       }
       assertAtomic(targetStore, credentials);
+      const authentication = await prepareAuthentication(meta.issuer, targetStore, credentials, { expected: null, guard: () => {
+        if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+        assertAtomic(targetStore, credentials);
+      } });
+      assertClientAuthCurrent(authentication);
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       const oauthState = randomToken(32);
       const nonce = randomToken(32);
       const pkce = createPkce();
@@ -768,6 +1090,8 @@ export function createIamService(rawConfig, options = {}) {
         metadata: meta,
         targetStore,
         credentials,
+        authentication: clientAuthDescriptor(authentication),
+        consumption,
         expiresAt: now() + config.attemptTimeoutSeconds * 1000,
       };
       const scheduledAttempt = attempt;
@@ -841,6 +1165,7 @@ export function createIamService(rawConfig, options = {}) {
       // never consume the same authorization code or interfere with its owner.
       current.processing = true;
       const attemptEpoch = authEpoch;
+      const consumption = beginConsumption(current.metadata.issuer, current.targetStore, current.credentials, current.consumption ?? null);
       const isCurrent = () => {
         if (attempt === current && authEpoch === attemptEpoch && state === 'authenticating'
           && now() > current.expiresAt) {
@@ -860,11 +1185,21 @@ export function createIamService(rawConfig, options = {}) {
       let intendedStore;
       let writeUnconfirmed = false;
       let guardRejection;
+      let authentication;
+      const callbackGuard = () => {
+        if (!isCurrent()) throw interrupted();
+        assertExclusive();
+        assertAtomic(current.targetStore, current.credentials);
+        if (!isCurrent()) throw interrupted();
+      };
       try {
+        authentication = await prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
+        callbackGuard();
         const token = await exchangeCode({
           tokenEndpoint: current.metadata.tokenEndpoint,
           code,
           codeVerifier: current.verifier,
+          clientAuthentication: authentication,
           redirectUri: current.redirectUri,
           clientId: config.clientId,
           resource: config.gatewayResource,
@@ -872,6 +1207,8 @@ export function createIamService(rawConfig, options = {}) {
           timeoutMs: config.httpTimeoutMs,
         });
         issuedToken = token;
+        assertClientAuthCurrent(authentication);
+        callbackGuard();
         assertAtomic(current.targetStore, current.credentials);
         if (!token.idToken) {
           throw new IamError('IAM_ID_TOKEN_INVALID', safeMessage('IAM_ID_TOKEN_INVALID'));
@@ -881,9 +1218,12 @@ export function createIamService(rawConfig, options = {}) {
           issuer: current.metadata.issuer,
           clientId: config.clientId,
           nonce: current.nonce,
+          guard: () => { callbackGuard(); assertClientAuthCurrent(authentication); },
           accessToken: token.accessToken,
         });
-        const grant = await buildGrant(token, claims, current.metadata, nowIso(now()));
+        assertClientAuthCurrent(authentication);
+        const grant = await buildGrant(token, claims, current.metadata, nowIso(now()), authentication);
+        assertClientAuthCurrent(authentication);
         if (!isCurrent()) throw interrupted();
         assertExclusive();
         assertAtomic(current.targetStore, current.credentials);
@@ -893,6 +1233,7 @@ export function createIamService(rawConfig, options = {}) {
         const written = await intendedStore.write(grant, {
           guard: () => {
             assertAtomic(current.targetStore, current.credentials);
+            try { assertClientAuthCurrent(authentication); } catch (cause) { guardRejection = cause; throw cause; }
             if (!isCurrent()) {
               guardRejection = interrupted();
               throw guardRejection;
@@ -904,19 +1245,27 @@ export function createIamService(rawConfig, options = {}) {
           throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
         }
         writeUnconfirmed = false;
+        assertClientAuthCurrent(authentication);
         assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
         // Show any owner mismatch without changing the user's stored key.
         lastGrant = grant;
         grantOwners.set(grant, current.targetStore);
         await loadGatewayCredential({ force: true });
+        assertClientAuthCurrent(authentication);
         assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
+        rememberAuthentication(authentication, grant);
         clearAttempt();
         publish('SIGN_IN_SUCCESS');
+        adoptConsumption(consumption, grant);
         return view();
       } catch (cause) {
         const guardPreventedWrite = guardRejection && cause === guardRejection;
+        // A late HTTP/JWKS failure is no longer authoritative after auth changed.
+        if (authentication && isCurrent()) {
+          try { assertClientAuthCurrent(authentication); } catch (currentCause) { cause = currentCause; }
+        }
         let cleanupUnknown = Boolean(writeUnconfirmed && !guardPreventedWrite);
         if (intendedStore && intendedGrant && !guardPreventedWrite) {
           const cleanup = await intendedStore.discardCallbackGrant(intendedGrant).catch(() => ({ ok: false }));
@@ -924,14 +1273,19 @@ export function createIamService(rawConfig, options = {}) {
         }
         if (lastGrant === intendedGrant) lastGrant = null;
         if (issuedToken?.refreshToken && current.metadata.revocationEndpoint) {
-          await revokeToken({
-            revocationEndpoint: current.metadata.revocationEndpoint,
-            token: issuedToken.refreshToken,
-            tokenTypeHint: 'refresh_token',
-            clientId: config.clientId,
-            fetchImpl,
-            timeoutMs: config.httpTimeoutMs,
-          }).catch(() => {});
+          try {
+            const cleanupAuthentication = await prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
+            await revokeToken({
+              revocationEndpoint: current.metadata.revocationEndpoint,
+              token: issuedToken.refreshToken,
+              clientAuthentication: cleanupAuthentication,
+              tokenTypeHint: 'refresh_token',
+              clientId: config.clientId,
+              fetchImpl,
+              timeoutMs: config.httpTimeoutMs,
+            });
+            assertClientAuthCurrent(cleanupAuthentication);
+          } catch { /* no new source, no unauthenticated fallback or retry */ }
         }
         const stillCurrent = isCurrent();
         if (cleanupUnknown) {
@@ -953,6 +1307,7 @@ export function createIamService(rawConfig, options = {}) {
     },
 
     async cancelSignIn() {
+      consumptionWitness?.invalidate();
       if (disposed) return view();
       authEpoch += 1;
       observedPending = null;
@@ -966,6 +1321,7 @@ export function createIamService(rawConfig, options = {}) {
     },
 
     async signOut() {
+      consumptionWitness?.invalidate();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (signOutPromise) return signOutPromise;
       signingOut = true;
@@ -986,9 +1342,11 @@ export function createIamService(rawConfig, options = {}) {
         if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       };
       checkDisposed();
+      let expectedIssuer = knownIssuer();
       if (refreshPromise) await refreshPromise.catch(() => {});
       checkDisposed();
       let grant = null;
+      const previouslyAuthenticated = sessionAuthentication;
       const targetStore = ensureStore();
       const targetCredentials = storeCredentials;
       checkDisposed();
@@ -1007,7 +1365,10 @@ export function createIamService(rawConfig, options = {}) {
         try {
           // Do not let a provider mutate nested fields of the captured snapshot.
           grant = structuredClone(record.grant);
-          assertGrantContext(grant);
+          // Explicit logout may establish issuer context through discovery below;
+          // its initial client/resource check must not trust the grant's issuer.
+          assertGrantBinding(grant);
+          if (config.issuer) assertGrantContext(grant, expectedIssuer);
         } catch { return unknownSignOut(); }
       }
       checkDisposed();
@@ -1018,33 +1379,51 @@ export function createIamService(rawConfig, options = {}) {
       let revocationError = null;
       let meta = metadataCache?.value;
       let revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
-      if (grant && !revocationEndpoint && config.discoveryUrl) {
+      if (grant && config.discoveryUrl && (!revocationEndpoint || !config.issuer)) {
         try {
           meta = await metadata();
           revocationEndpoint = meta.revocationEndpoint ?? config.revocationEndpoint;
         } catch {
+          // An explicit endpoint cannot authenticate an otherwise unbound issuer.
+          if (!config.issuer) return unknownSignOut();
           revocationEndpoint = undefined;
         }
       }
+      expectedIssuer = meta?.issuer || expectedIssuer;
+      try { assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
       checkDisposed();
+      let logoutAuthentication;
+      if (config.authMode === 'confidential' && grant) {
+        try {
+          logoutAuthentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant, guard: () => { checkDisposed(); assertAtomic(targetStore, targetCredentials); } });
+        } catch (cause) {
+          if (!previouslyAuthenticated || previouslyAuthenticated.credentials !== targetCredentials
+            || !isDeepStrictEqual(previouslyAuthenticated.identity, grantIdentity(grant))) return unknownSignOut();
+          revocation = 'unknown';
+          revocationError = tokenErrorMessage(cause);
+        }
+      }
       const revokeCurrent = async (current) => {
         checkDisposed();
         assertAtomic(targetStore, targetCredentials);
         checkDisposed();
+        assertGrantContext(current, expectedIssuer);
         grant = current;
-        if (revocationEndpoint && current?.refreshToken) {
+        if (revocationEndpoint && current?.refreshToken && (config.authMode !== 'confidential' || logoutAuthentication)) {
           try {
             await revokeToken({
               revocationEndpoint,
               token: current.refreshToken,
+              clientAuthentication: logoutAuthentication,
               tokenTypeHint: 'refresh_token',
               clientId: config.clientId,
               fetchImpl,
               timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
             });
+            assertClientAuthCurrent(logoutAuthentication);
             revocation = 'ok';
           } catch (cause) {
-            revocation = 'failed';
+            revocation = config.authMode === 'confidential' && cause?.code?.startsWith('IAM_CLIENT_AUTH_') ? 'unknown' : 'failed';
             revocationError = tokenErrorMessage(cause);
           }
         }
@@ -1088,7 +1467,8 @@ export function createIamService(rawConfig, options = {}) {
       checkDisposed();
       try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
-      const nextError = revocation === 'failed' ? 'IAM_REVOCATION_FAILED' : null;
+      sessionAuthentication = null;
+      const nextError = revocation === 'failed' || revocation === 'unknown' ? 'IAM_REVOCATION_FAILED' : null;
       if (state !== 'unconfigured' && state !== 'signed-out') {
         publish('SIGN_OUT', nextError);
       } else {
@@ -1104,10 +1484,15 @@ export function createIamService(rawConfig, options = {}) {
       if (signingOut || state === 'authenticating') {
         throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
       }
+      const expectedIssuer = knownIssuer();
       const useSharedRefresh = async (checkBefore = true) => {
+        if (checkBefore && (!expectedIssuer || refreshPromiseIssuer !== expectedIssuer)) {
+          throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
+        }
         const shared = refreshPromise;
         const sharedStore = refreshPromiseStore;
         const sharedCredentials = refreshPromiseCredentials;
+        const sharedAuthentication = refreshPromiseAuthentication;
         const sharedSessionEpoch = sessionEpoch;
         const sharedAuthEpoch = authEpoch;
         const checkLifecycle = () => {
@@ -1135,8 +1520,23 @@ export function createIamService(rawConfig, options = {}) {
             throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
           }
         };
-        if (checkBefore) checkProvider();
+        let authentication;
+        if (checkBefore) {
+          checkProvider();
+          if (config.authMode === 'confidential') {
+            const latest = await sharedStore.read();
+            checkProvider();
+            if (!latest.ok || !latest.grant) throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
+            assertGrantContext(latest.grant, expectedIssuer);
+            authentication = await prepareAuthentication(expectedIssuer, sharedStore, sharedCredentials, { grant: latest.grant, expected: sharedAuthentication?.value ?? sessionAuthentication, guard: checkProvider });
+          }
+        }
         const token = await shared;
+        checkProvider();
+        if (config.authMode === 'confidential' && !authentication) {
+          authentication = await prepareAuthentication(expectedIssuer, sharedStore, sharedCredentials, { expected: sharedAuthentication?.value, guard: checkProvider });
+        }
+        assertClientAuthCurrent(authentication);
         checkProvider();
         return token;
       };
@@ -1146,15 +1546,18 @@ export function createIamService(rawConfig, options = {}) {
       const targetStore = requireStore();
       const targetCredentials = storeCredentials;
       const grantAtStart = lastGrant;
+      const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
       let refreshing = false;
       let operationGrant = null;
+      let authentication;
       const alive = () => !disposed && !signingOut && epoch === sessionEpoch
         && auth === authEpoch && state !== 'authenticating';
-      const checkAlive = () => {
+      const checkLifecycle = () => {
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         assertExclusive();
         if (refreshing) assertAtomic(targetStore, targetCredentials);
       };
+      const checkAlive = () => { checkLifecycle(); assertClientAuthCurrent(authentication); };
       const rejectSession = (code = 'IAM_REAUTH_REQUIRED') => {
         // A late failure belongs to its original provider, not a newer session.
         const current = ensureStore();
@@ -1177,14 +1580,16 @@ export function createIamService(rawConfig, options = {}) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
         }
         checkAlive();
-        assertGrantContext(grant);
+        assertGrantContext(grant, expectedIssuer);
         if (!grant?.accessToken || grant.refreshOperation?.state === 'pending' || isAccessExpired(grant, now())) return rejectSession();
         observedPending = null;
+        rememberAuthentication(authentication, grant);
         lastGrant = grant;
         grantOwners.set(grant, targetStore);
         lastBackgroundRefreshAt = 0;
         state = 'ready';
         error = null;
+        adoptConsumption(consumption, grant);
         notify();
         return grant.accessToken;
       };
@@ -1205,14 +1610,20 @@ export function createIamService(rawConfig, options = {}) {
       if (refreshPromise) return useSharedRefresh();
       refreshPromiseStore = targetStore;
       refreshPromiseCredentials = targetCredentials;
-      refreshPromise = (async () => {
+      refreshPromiseIssuer = expectedIssuer;
+      const flightAuthentication = {};
+      refreshPromiseAuthentication = flightAuthentication;
+      const flight = Promise.resolve().then(async () => {
         try {
           checkAlive();
           if (!record.ok) return rejectSession('IAM_INVALID_GRANT');
           if (!record.grant) return rejectSession('IAM_NOT_SIGNED_IN');
           operationGrant = record.grant;
-          assertGrantContext(record.grant);
+          assertGrantContext(record.grant, expectedIssuer);
           const initial = record.grant;
+          authentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
+          checkAlive();
+          flightAuthentication.value = clientAuthDescriptor(authentication);
           if (initial.refreshOperation?.state !== 'pending' && !shouldRefresh(initial, now(), config.refreshSkewSeconds)) {
             return useGrant(initial);
           }
@@ -1235,8 +1646,7 @@ export function createIamService(rawConfig, options = {}) {
               notify();
             }
             const operation = pending.refreshOperation;
-            const identity = (({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId }) =>
-              ({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId }))(pending);
+            const identity = grantIdentity(pending);
             const originalRefresh = pending.refreshToken;
             const deadline = performance.now() + REFRESH_TIMEOUT_MS;
             const remaining = () => deadline - performance.now();
@@ -1260,10 +1670,9 @@ export function createIamService(rawConfig, options = {}) {
               }
               checkAlive();
               if (latest === timeout || remaining() <= 0 || !latest.ok || !latest.grant) return rejectSession();
-              assertGrantContext(latest.grant);
+              assertGrantContext(latest.grant, expectedIssuer);
               const marker = latest.grant.refreshOperation;
-              const latestIdentity = (({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId }) =>
-                ({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId }))(latest.grant);
+              const latestIdentity = grantIdentity(latest.grant);
               if (!marker || marker.version !== operation.version || marker.id !== operation.id || marker.base !== operation.base
                 || !isDeepStrictEqual(identity, latestIdentity)) return rejectSession();
               if (marker.state === 'pending' && latest.grant.refreshToken === originalRefresh) continue;
@@ -1280,6 +1689,7 @@ export function createIamService(rawConfig, options = {}) {
           // Preload metadata before claiming, never while a record lock is held.
           const meta = metadataCache?.value ?? await metadata();
           checkAlive();
+          assertGrantContext(initial, meta.issuer);
           const keys = await jwks(meta.jwksUri);
           checkAlive();
           const operationId = randomToken(32);
@@ -1289,17 +1699,18 @@ export function createIamService(rawConfig, options = {}) {
           const claim = await targetStore.mutate((current) => {
             checkAlive();
             if (!current) return undefined;
-            assertGrantContext(current);
+            assertGrantContext(current, meta.issuer);
             if (current.refreshOperation?.state === 'pending' || !isDeepStrictEqual(current, initial)) return undefined;
             if (!shouldRefresh(current, now(), config.refreshSkewSeconds) || !isRefreshUsable(current, now())) return undefined;
             claimed = true;
             claimedGrant = current;
             return { ...current, refreshOperation: operation };
-          });
+          }, { guard: () => { checkAlive(); return true; } });
           checkAlive();
           const claimedRecord = claim.record?.kind === 'grant' ? claim.record.payload : null;
           if (!claimed) {
             const latest = await targetStore.read();
+            checkAlive();
             if (!latest.ok || !latest.grant) return rejectSession();
             if (latest.grant.refreshOperation?.state === 'pending') {
               const { refreshOperation: ignoredLatest, ...latestBase } = latest.grant;
@@ -1310,8 +1721,7 @@ export function createIamService(rawConfig, options = {}) {
               return await waitFor(latest.grant);
             }
             const marker = latest.grant.refreshOperation;
-            const identity = ({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId }) =>
-              ({ issuer, clientId, resource, subject, obtainedAt, sessionInstanceId });
+            const identity = grantIdentity;
             if (marker?.state === 'complete' && marker.base === refreshBaseId(initial, marker.id)
               && isDeepStrictEqual(identity(initial), identity(latest.grant))
               && latest.grant.refreshToken !== initial.refreshToken
@@ -1324,9 +1734,13 @@ export function createIamService(rawConfig, options = {}) {
           // A resolved provider call and its returned record are both required;
           // an exception or ambiguous result can never authorize the POST.
           if (!isDeepStrictEqual(claimedRecord, { ...claimedGrant, refreshOperation: operation })) return rejectSession();
+          // Re-read the original pin for this POST, outside the provider lock.
+          authentication = await prepareAuthentication(meta.issuer, targetStore, targetCredentials, { grant: initial, expected: flightAuthentication.value, guard: checkLifecycle });
+          checkAlive();
           const token = await refreshTokens({
             tokenEndpoint: meta.tokenEndpoint,
             refreshToken: claimedGrant.refreshToken,
+            clientAuthentication: authentication,
             clientId: config.clientId,
             resource: config.gatewayResource,
             fetchImpl,
@@ -1345,9 +1759,10 @@ export function createIamService(rawConfig, options = {}) {
               claims = verifyIdToken(token.idToken, { ...verifyOptions, jwks: keys });
             } catch (cause) {
               if (cause?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw cause;
-              claims = await verifyWithJwks(token.idToken, { uri: meta.jwksUri, ...verifyOptions });
+              claims = await verifyWithJwks(token.idToken, { uri: meta.jwksUri, ...verifyOptions, guard: checkAlive });
             }
           }
+          checkAlive();
           if (claims && claims.sub !== claimedGrant.subject) {
             throw new IamError('IAM_REFRESH_SUBJECT_MISMATCH', safeMessage('IAM_REFRESH_SUBJECT_MISMATCH'));
           }
@@ -1361,25 +1776,30 @@ export function createIamService(rawConfig, options = {}) {
             if (!isDeepStrictEqual(current, { ...claimedGrant, refreshOperation: operation })) return undefined;
             committed = true;
             return next;
-          });
+          }, { guard: () => { checkAlive(); return true; } });
           checkAlive();
           if (!committed || result.record?.kind !== 'grant'
             || !isDeepStrictEqual(result.record.payload, next)) return rejectSession();
           return useGrant(next);
         } catch (cause) {
           if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
-          if (['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE'].includes(cause?.code)) {
+          try { checkAlive(); } catch (currentCause) { cause = currentCause; }
+          if (['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_CHANGED', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE'].includes(cause?.code)) {
             return rejectSession(cause.code);
           }
           // Once a request might have been sent, pending remains authoritative;
           // do not erase it or fall back to an old access token.
           return rejectSession();
         }
-      })().finally(() => {
+      }).finally(() => {
+        if (refreshPromise !== flight) return;
         refreshPromise = null;
+        refreshPromiseAuthentication = null;
         refreshPromiseStore = null;
         refreshPromiseCredentials = null;
+        refreshPromiseIssuer = null;
       });
+      refreshPromise = flight;
       return useSharedRefresh(false);
     },
 
@@ -1433,8 +1853,10 @@ export function createIamService(rawConfig, options = {}) {
     },
 
     async dispose() {
+      consumptionWitness?.dispose();
       if (disposed) return;
       disposed = true;
+      modelSelectionQueued = false;
       sessionEpoch += 1;
       authEpoch += 1;
       observedPending = null;
@@ -1447,6 +1869,7 @@ export function createIamService(rawConfig, options = {}) {
       for (const stop of [...stopWaiters]) stop();
       stopWaiters.clear();
       lastGrant = null;
+      sessionAuthentication = null;
       gatewaySummary = null;
       state = 'signed-out';
       error = null;
@@ -1455,5 +1878,6 @@ export function createIamService(rawConfig, options = {}) {
     },
   };
 
+  consumptionWitness?.register(service);
   return service;
 }

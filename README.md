@@ -42,6 +42,8 @@ DevOps 与 Gitee 的当前接入基线是复用现有 CLI，通过只读命令�
 | 评估排期、依赖、门禁与验收 | [推广实施方案](docs/plans/rollout-plan.md) |
 | 查找契约、团队交付物或待确认问题 | [文档总览](docs/README.md) |
 | 查阅品牌标识、矢量切图与视觉规范 | [品牌资产全景系统](docs/assets/branding/cyber-long/index.html) → [生图提示词与规范](docs/assets/branding/prompts.md) |
+| 使用企业账号或排查账户状态 | [IAM 用户指南](<packages/forge-iam/docs/user-guide.md>)（开发骨架说明，不是生产运行手册） |
+| 开发或验证 IAM 插件 | [IAM 开发指南](<packages/forge-iam/docs/developer-guide.md>) → [IAM 设计](<docs/design/plugins/forge-iam.md>) |
 | 开始模块设计或开发 | [逐模块设计索引](docs/design/README.md) → [工程开发与发布约定](docs/engineering/development-conventions.md) |
 | 了解市场目标、索引契约与 AIHUB 交付 | [轻量市场设计](<docs/design/plugins/forge-market.md>) → [索引契约](<docs/design/services/market-index.md>) → [issue #12](https://github.com/hrygo/heluo-forge/issues/12) |
 | 修改仓库、提交变更或发起评审 | [贡献指南](CONTRIBUTING.md)；agent 同时遵循 [AGENTS.md](AGENTS.md) |
@@ -70,7 +72,7 @@ pnpm check
 | `pnpm check:repo` | 工程结构、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
 | `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
 | `pnpm test:unit` | 当前实际执行 `node --test`，包含检查器、IAM 与 keychain 骨架、历史市场包契约、索引校验与归档安装用例 |
-| `node --test packages/forge-iam/test packages/forge-credentials-keychain/test` | 单独验证 IAM 与凭据 keychain 骨架 |
+| `DSH_KEYCHAIN_SPIKE=0 node --test packages/forge-iam/test/*.test.mjs packages/forge-credentials-keychain/test/*.test.mjs` | 单独验证 IAM 与凭据 keychain 骨架 |
 | `node --test packages/forge-market/test/*.test.mjs` | 单独验证市场插件的逻辑、契约及本地安装链路 |
 | `node --test services/market-index/test/*.test.mjs` | 单独验证索引校验器 |
 | `node scripts/sensitive-scan/verify.mjs --base <rev> --head <rev>` | 用基线团队公钥验证敏感扫描 attestation；Git 仓库内容仍正常推送，私钥、真实规则和扫描结果不上远端 |

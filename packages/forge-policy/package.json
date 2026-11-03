@@ -18,7 +18,8 @@
     "./delegation": "./src/delegation.mjs",
     "./egress": "./src/egress.mjs",
     "./gate": "./src/gate.mjs",
-    "./paths": "./src/paths.mjs"
+    "./paths": "./src/paths.mjs",
+    "./isolated-testing": "./src/isolated-testing.mjs"
   },
   "files": [
     "src",

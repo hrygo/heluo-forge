@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { apply, IamError } from '../src/index.mjs';
 import { createIamService } from './support/trusted-service.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
-import { createGatewayCredentialStore, createGrantStore } from '../src/store.mjs';
+import { createGrantStore } from '../src/store.mjs';
+import { createAtomicGatewayFixture, seedLegacyGateway } from './support/atomic-gateway.mjs';
 
 const configured = {
   issuer: 'https://iam.corp.example',
@@ -66,8 +67,7 @@ test('unload runs the framework-owned teardown even though apply returns a clean
     obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid', resource: 'https://gateway.corp.example',
   });
-  const gateway = createGatewayCredentialStore(credentials);
-  await gateway.save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'0123456789abcdef'.repeat(2)}`,
     ownerSubject: 'E1001',
     enteredAt: '2030-01-01T00:00:00.000Z',
@@ -348,7 +348,8 @@ test('hydrate preserves a pre-existing legacy access-token reference', async () 
 });
 
 test('saving a gateway credential requires a signed-in account', async () => {
-  const service = createIamService(configured, { credentials: new MemoryCredentials() });
+  const atomic = createAtomicGatewayFixture();
+  const service = createIamService(configured, { credentials: atomic.credentials, ...atomic.options });
   await service.hydrate();
   await assert.rejects(
     () => service.saveGatewayCredential({ key: `uag-${'a'.repeat(32)}` }),
@@ -357,14 +358,15 @@ test('saving a gateway credential requires a signed-in account', async () => {
 });
 
 test('saving and clearing a gateway credential keeps IAM sign-in intact', async () => {
-  const credentials = new MemoryCredentials();
+  const atomic = createAtomicGatewayFixture();
+  const { credentials } = atomic;
   await createGrantStore(credentials).write({
     version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh-desktop',
     refreshToken: 'refresh-old', accessToken: 'access-old',
     accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid', resource: 'https://gateway.corp.example',
   });
-  const service = createIamService(configured, { credentials });
+  const service = createIamService(configured, { credentials, ...atomic.options });
   await service.hydrate();
   const value = `uag-${'b'.repeat(32)}`;
 
@@ -390,7 +392,7 @@ test('hydrate preserves another account’s credential and reports owner mismatc
     accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid', resource: 'https://gateway.corp.example',
   });
-  await createGatewayCredentialStore(credentials).save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'c'.repeat(32)}`,
     ownerSubject: 'E1002',
     enteredAt: '2030-01-01T00:00:00.000Z',
@@ -428,7 +430,7 @@ test('a stored gateway credential belongs to the signed-in account in the view',
     accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid', resource: 'https://gateway.corp.example',
   });
-  await createGatewayCredentialStore(credentials).save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'d'.repeat(32)}`,
     ownerSubject: 'E1001',
     enteredAt: '2030-01-01T00:00:00.000Z',
@@ -475,7 +477,7 @@ test('sign-out keeps the gateway credential but clears its session match', async
     accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid', resource: 'https://gateway.corp.example',
   });
-  await createGatewayCredentialStore(credentials).save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'e'.repeat(32)}`,
     ownerSubject: 'E1001',
     enteredAt: '2030-01-01T00:00:00.000Z',
@@ -503,7 +505,7 @@ test('the account view reports a non-keychain storage source for the key', async
   });
   const describe = credentials.describe.bind(credentials);
   credentials.describe = async (ref) => ({ ...(await describe(ref)), source: 'file' });
-  await createGatewayCredentialStore(credentials).save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'0'.repeat(32)}`,
     ownerSubject: 'E1001',
     enteredAt: '2030-01-01T00:00:00.000Z',
@@ -537,7 +539,7 @@ test('a user-saved value counts even when the provider is a plaintext fallback',
     accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid',
   });
-  await createGatewayCredentialStore(credentials).save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'1'.repeat(32)}`,
     ownerSubject: 'E1001',
     enteredAt: '2030-01-01T00:00:00.000Z',
@@ -562,12 +564,13 @@ test('the account summary is reused briefly instead of reading the secret on eve
     accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid', resource: 'https://gateway.corp.example',
   });
-  const gateway = createGatewayCredentialStore(credentials);
-  await gateway.save({ value: `uag-${'2'.repeat(32)}`, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+  seedLegacyGateway(credentials, { value: `uag-${'2'.repeat(32)}`, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
   const service = createIamService(configured, { credentials, now: () => clock });
   await service.hydrate();
   assert.equal(service.getView().gatewayCredential.state, 'configured');
-  await gateway.clear();
+  // Simulate an external fixture change without migrating a legacy V1 pair.
+  credentials.refs.delete('ENTERPRISE_STATIC_KEY');
+  credentials.records.delete('heluo-iam/gateway-credential');
   await service.loadGatewayCredential();
   assert.equal(service.getView().gatewayCredential.state, 'configured');
   clock += 6000;
@@ -595,11 +598,10 @@ test('hydrate preserves corrupt gateway metadata and its value as invalid', asyn
   assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, `uag-${'3'.repeat(32)}`);
   assert.deepEqual(await credentials.readRecord('heluo-iam/gateway-credential'), before);
   const replacement = `uag-${'7'.repeat(32)}`;
-  assert.equal((await service.saveGatewayCredential({ key: replacement })).gatewayCredential.state, 'configured');
-  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, replacement);
-  await service.clearGatewayCredential();
-  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
-  assert.equal(await credentials.readRecord('heluo-iam/gateway-credential'), undefined);
+  await assert.rejects(service.saveGatewayCredential({ key: replacement }), { code: 'IAM_GATEWAY_ATOMIC_UNVERIFIED' });
+  await assert.rejects(service.clearGatewayCredential(), { code: 'IAM_GATEWAY_ATOMIC_UNVERIFIED' });
+  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, `uag-${'3'.repeat(32)}`);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/gateway-credential'), before);
 });
 
 test('adopting another account\'s grant preserves the stored gateway key', async () => {
@@ -610,7 +612,7 @@ test('adopting another account\'s grant preserves the stored gateway key', async
     accessExpiresAt: '2030-01-01T00:05:00.000Z', obtainedAt: '2030-01-01T00:00:00.000Z',
     scope: 'openid', resource: 'https://gateway.corp.example',
   });
-  await createGatewayCredentialStore(credentials).save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'4'.repeat(32)}`,
     ownerSubject: 'E1001',
     deviceLabel: 'dev-a',
@@ -635,7 +637,7 @@ test('adopting another account\'s grant preserves the stored gateway key', async
   assert.deepEqual(await credentials.readRecord('heluo-iam/gateway-credential'), before);
 });
 
-test('a resolved value without owner metadata is visible as invalid and clearable', async () => {
+test('a resolved value without owner metadata stays invalid and read-only without atomic capability', async () => {
   class FileCredentials extends MemoryCredentials {
     async resolve(ref) {
       const resolved = await super.resolve(ref);
@@ -647,13 +649,14 @@ test('a resolved value without owner metadata is visible as invalid and clearabl
   const service = createIamService(configured, { credentials });
   const view = await service.hydrate();
   assert.equal(view.gatewayCredential.state, 'invalid');
-  await service.clearGatewayCredential();
-  assert.equal(await credentials.resolve('ENTERPRISE_STATIC_KEY'), undefined);
+  await assert.rejects(service.clearGatewayCredential(), { code: 'IAM_GATEWAY_ATOMIC_UNVERIFIED' });
+  assert.equal((await credentials.resolve('ENTERPRISE_STATIC_KEY')).value, `uag-${'5'.repeat(32)}`);
+  assert.equal(await credentials.readRecord('heluo-iam/gateway-credential'), undefined);
 });
 
 test('a revoked credentials provider stops serving gateway state', async () => {
   const credentials = new MemoryCredentials();
-  await createGatewayCredentialStore(credentials).save({
+  seedLegacyGateway(credentials, {
     value: `uag-${'6'.repeat(32)}`,
     ownerSubject: 'E1001',
     deviceLabel: 'dev-a',

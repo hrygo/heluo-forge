@@ -339,6 +339,49 @@ test('a throwing Connection check fails closed', async () => {
   assert.equal(res.statusCode, 503);
 });
 
+test('a throwing Connection method getter is unavailable before any IAM operation', async () => {
+  let operations = 0;
+  const connection = Object.defineProperty({}, 'requestRejection', {
+    get() { throw new Error('synthetic method lookup failure'); },
+  });
+  const handler = routes(service({ getView: () => { operations++; return view; } }), { getConnection: () => connection });
+  const res = await call(handler, 'GET', '/api/forge-iam/view');
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.json().error.code, 'IAM_CONNECTION_UNAVAILABLE');
+  assert.equal(operations, 0);
+});
+
+for (const [label, result] of [
+  ['false', () => false], ['null', () => null], ['zero', () => 0],
+  ['empty string', () => ''], ['string status', () => '401'], ['unexpected status', () => 200],
+  ['object', () => ({ admitted: true })], ['NaN', () => NaN],
+  ['async admission', () => Promise.resolve(undefined)],
+  ['async rejection', () => Promise.reject(new Error('synthetic auth failure'))],
+]) {
+  test(`Connection ${label} result rejects management requests before any IAM operation`, async () => {
+    let operations = 0;
+    const count = () => { operations++; return view; };
+    const handler = routes(service({
+      getView: count, syncFromStore: async () => count(), loadGatewayCredential: async () => count(),
+      startSignIn: async () => count(), signOut: async () => count(), cancelSignIn: async () => count(),
+      saveGatewayCredential: async () => count(), clearGatewayCredential: async () => count(),
+    }), { getConnection: () => ({ requestRejection: result }) });
+    for (const [method, path] of [
+      ['GET', '/view'], ['POST', '/sign-in'], ['POST', '/sign-out'], ['POST', '/cancel'],
+      ['GET', '/credential'], ['PUT', '/credential'], ['DELETE', '/credential'],
+    ]) {
+      const response = await call(handler, method, `/api/forge-iam${path}`, {
+        'x-forge-iam-request': '1', 'content-type': 'application/json',
+      }, { key: 'synthetic' });
+      assert.equal(response.statusCode, 503, `${method} ${path}`);
+      assert.equal(response.json().error.code, 'IAM_CONNECTION_UNAVAILABLE');
+      assert.equal(response.headers['cache-control'], 'no-store');
+    }
+    assert.equal(operations, 0);
+    await new Promise(setImmediate);
+  });
+}
+
 test('the OIDC callback does not require a DSH browser session', async () => {
   const handler = routes(service(), { getConnection: () => ({ requestRejection: () => 401 }) });
   const res = await call(handler, 'GET', '/iam/callback?code=c&state=s', { host: '127.0.0.1:4567' });

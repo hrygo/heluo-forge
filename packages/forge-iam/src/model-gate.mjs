@@ -1,8 +1,8 @@
-// 模型门禁：未登录/无企业网关凭据时企业模型整片 fail closed；默认模型只在
-// "没有显式企业选择"或"当前指向已禁用/不可用模型"时切换，绝不覆盖用户已选企业模型。
+// 本模块提供模型前提的纯判定与可注入保存器的隔离适配，不拦截真实模型或工具执行。
+// evaluateModelGate 只计算给定输入；放行不证明当前人员、用途或服务端权限。
 //
-// 这是纯判定函数：不读配置、不调用宿主、不写设置。宿主侧的 `agentDefaultModel`
-// 读写与 IAM 登录态由调用方注入，便于离线用例覆盖正反负分支。
+// selection.explicit 是调用方声明，不是 SDK 原生字段；不能因 SDK 缺少它就推断可覆盖。
+// applyModelSelection 只调用显式传入的保存器；它不是 Host 的严格只读编排路径。
 
 export const MODEL_GATE_REASONS = Object.freeze({
   NOT_SIGNED_IN: 'not-signed-in',
@@ -147,6 +147,12 @@ const isSelectionLike = (value) =>
  * 判定与写入分离，写入因此可以在没有企业环境的机器上做正反负测；受控写默认禁用，
  * 任何无法证明当前选择的情况一律不写。
  *
+ * written 为三态：false 仅表示未调用 saveSelection；null 表示调用抛错或拒绝，
+ * 持久化结果未知（即使实现可能已提交）；true 仅表示调用正常返回，不证明耐久提交。
+ * verified 仅表示随后即时回读与原目标一致，也不证明持久化完成或排除其他 writer。
+ * 调用失败保留 WRITE_FAILED 兼容原因；不重试、不补偿、不在失败后回读猜测自身提交。
+ * attempted 为调用前捕获的目标快照；SDK 异常及回读值不进入 notes。
+ *
  * @param {{decision: {allow: boolean, switchTo?: {provider: string, model: string}},
  *   currentSelection?: {provider: string, model: string, explicit?: boolean},
  *   readSelection?: () => unknown, saveSelection: (target: {provider: string, model: string}) => unknown,
@@ -184,8 +190,8 @@ export async function applyModelSelection(input = {}) {
   if (readSelection !== undefined) {
     try {
       current = await readSelection();
-    } catch (error) {
-      return skip(MODEL_SELECTION_REASONS.NO_WRITE_UNPROVABLE_SELECTION, [`读取当前选择失败：${String(error?.message ?? error)}`]);
+    } catch {
+      return skip(MODEL_SELECTION_REASONS.NO_WRITE_UNPROVABLE_SELECTION, ['读取当前选择失败，未调用写入']);
     }
   }
   if (current !== undefined && current !== null && !isSelectionLike(current)) {
@@ -212,10 +218,18 @@ export async function applyModelSelection(input = {}) {
     return skip(MODEL_SELECTION_REASONS.NO_WRITE_ALREADY_ENTERPRISE, ['当前已经是目标模型，不重复写入'], current);
   }
 
+  const attempted = Object.freeze({ provider: target.provider, model: target.model });
   try {
-    await saveSelection({ provider: target.provider, model: target.model });
-  } catch (error) {
-    return skip(MODEL_SELECTION_REASONS.WRITE_FAILED, [`写入失败：${String(error?.message ?? error)}`], current);
+    await saveSelection({ ...attempted });
+  } catch {
+    return Object.freeze({
+      written: null,
+      verified: false,
+      reason: MODEL_SELECTION_REASONS.WRITE_FAILED,
+      attempted,
+      current: current ?? null,
+      notes: Object.freeze(['写入调用失败，持久化结果未知；不自动重试或补偿']),
+    });
   }
 
   if (readSelection === undefined) {
@@ -223,33 +237,33 @@ export async function applyModelSelection(input = {}) {
       written: true,
       verified: false,
       reason: MODEL_SELECTION_REASONS.WRITTEN,
-      attempted: Object.freeze({ provider: target.provider, model: target.model }),
+      attempted,
       current: current ?? null,
-      notes: Object.freeze(['已写入但未回读验证（调用方未提供读取器）']),
+      notes: Object.freeze(['写入调用已返回，但未回读验证；不证明持久化完成']),
     });
   }
   let after;
   try {
     after = await readSelection();
-  } catch (error) {
+  } catch {
     return Object.freeze({
       written: true,
       verified: false,
       reason: MODEL_SELECTION_REASONS.WRITE_UNVERIFIED,
-      attempted: Object.freeze({ provider: target.provider, model: target.model }),
+      attempted,
       current: current ?? null,
-      notes: Object.freeze([`写入后回读失败：${String(error?.message ?? error)}`]),
+      notes: Object.freeze(['写入调用已返回，但回读失败，持久化结果未验证']),
     });
   }
-  const verified = isSelectionLike(after) && after.provider === target.provider && after.model === target.model;
+  const verified = isSelectionLike(after) && after.provider === attempted.provider && after.model === attempted.model;
   return Object.freeze({
     written: true,
     verified,
     reason: verified ? MODEL_SELECTION_REASONS.WRITTEN : MODEL_SELECTION_REASONS.WRITE_UNVERIFIED,
-    attempted: Object.freeze({ provider: target.provider, model: target.model }),
+    attempted,
     current: current ?? null,
     notes: Object.freeze(
-      verified ? ['已写入并回读一致'] : [`写入后回读不一致：${isSelectionLike(after) ? `${after.provider}/${after.model}` : '无法解析'}，按未验证报告缺口`],
+      verified ? ['写入调用已返回并回读一致；不证明持久化完成'] : ['写入调用已返回，但回读不一致，持久化结果未验证'],
     ),
   });
 }

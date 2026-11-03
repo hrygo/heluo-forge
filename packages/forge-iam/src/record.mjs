@@ -1,8 +1,9 @@
-// IamGrantV1 is the non-secret shape stored in the credentials grant payload.
-// It is validated before any write; version mismatch is always a re-login, never
-// a best-effort field migration.
-
+// Session payloads contain user tokens, never the client secret. V1 is public;
+// V2 is confidential. Parsing either format does not authorize its adoption.
 export const GRANT_VERSION = 1;
+export const CONFIDENTIAL_GRANT_VERSION = 2;
+const AUTH_MARKERS = ['authContext', 'clientAuth', 'authMode', 'clientAuthMethod',
+  'clientSecretRef', 'clientSecret', 'client_secret', 'secretRef', 'secretRevision', 'Authorization', 'authorization'];
 
 const REQUIRED_STRINGS = [
   'issuer',
@@ -31,13 +32,47 @@ function isIsoDate(value) {
  * @returns {{ ok: true, value: Record<string, unknown> } | { ok: false, errors: string[] }}
  */
 export function validateGrant(input) {
+  try {
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+      return { ok: false, errors: ['grant must be an object'] };
+    }
+    // Read each own field once. Validation and output use the same private data,
+    // including presence-only markers and V1's unknown extensions.
+    const snapshot = Object.fromEntries(Reflect.ownKeys(input).map((key) => [key, input[key]]));
+    const marker = snapshot.refreshOperation;
+    if (marker && typeof marker === 'object' && !Array.isArray(marker)) {
+      snapshot.refreshOperation = Object.freeze(Object.fromEntries(Reflect.ownKeys(marker).map((key) => [key, marker[key]])));
+    }
+    return validateGrantFields(snapshot);
+  } catch { return { ok: false, errors: ['grant fields are invalid'] }; }
+}
+
+function validateGrantFields(input) {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     return { ok: false, errors: ['grant must be an object'] };
   }
 
   const errors = [];
-  if (input.version !== GRANT_VERSION) {
-    errors.push(`grant.version must be ${GRANT_VERSION}`);
+  let authContext;
+  if (input.version !== GRANT_VERSION && input.version !== CONFIDENTIAL_GRANT_VERSION) {
+    errors.push('grant.version must be 1 or 2');
+  } else if (input.version === GRANT_VERSION) {
+    if (AUTH_MARKERS.some((key) => Object.hasOwn(input, key))) errors.push('grant V1 must not contain authentication markers');
+  } else {
+    const allowed = ['version', ...REQUIRED_STRINGS, ...OPTIONAL_STRINGS, 'sessionInstanceId', 'refreshOperation', 'authContext'];
+    if (Reflect.ownKeys(input).some((key) => !allowed.includes(key))) errors.push('grant V2 contains unsupported fields');
+    const context = input.authContext;
+    const fields = ['mode', 'method', 'secretRef', 'secretRevision'];
+    if (!context || typeof context !== 'object' || Array.isArray(context)
+      || Reflect.ownKeys(context).length !== fields.length || fields.some((key) => !Object.hasOwn(context, key))) {
+      errors.push('grant.version 2 requires a complete authContext');
+    } else {
+      const copy = Object.fromEntries(fields.map((key) => [key, context[key]]));
+      if (copy.mode !== 'confidential' || !['client_secret_basic', 'client_secret_post'].includes(copy.method)
+        || !isNonEmptyString(copy.secretRef) || !isNonEmptyString(copy.secretRevision)) {
+        errors.push('grant.version 2 authContext is invalid');
+      } else authContext = Object.freeze(copy);
+    }
   }
 
   for (const key of REQUIRED_STRINGS) {
@@ -83,7 +118,7 @@ export function validateGrant(input) {
   }
 
   if (errors.length) return { ok: false, errors };
-  return { ok: true, value: { ...input } };
+  return { ok: true, value: { ...input, ...(authContext ? { authContext } : {}) } };
 }
 
 /**

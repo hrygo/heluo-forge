@@ -10,7 +10,7 @@
 | 职责 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 |
 | 不负责 | 不替代服务端鉴权，不维护独立 hook 引擎 |
 | 衔接点 | `tools.guard`（单调硬拒绝）、`tools/pre-execute`（需确认动作）、`ctx.commands`（命令面）、`otel` |
-| 详细设计 | [详细设计](../../docs/design/plugins/forge-policy.md)（草案；§5.1 受控动作目录与统一门禁） |
+| 详细设计依据 | CORP-DSH-DESIGN-003（草案，整仓评审材料不随包分发）；本页说明现行代码与边界 |
 | 实现状态 | 目录编译与判定、guard 与确认阶段、命令包装、受保护路径、C3 外发、决策审计与卸载清理已实现，并有离线用例与宿主探针覆盖；审批 UI 注册与超时、企业环境与双端实机未验 |
 
 ## 当前实现
@@ -29,6 +29,18 @@
 | 必要审计 | 前置记录绑定同一执行对象及参数摘要；`tools/post-execute` awaited 结清，`tools/result` 同步登记异步兜底，下一动作必须等待结清，guard 也拒绝未结清窗口；命令同用该屏障；无可用落点一律拒绝，只读不豁免；结清失败保留结果、记缺口并限制后续动作；记录只含允许字段，不含参数或内容摘要 |
 | 生命周期 | 卸载撤销 guard、监听器与服务；等待审批、前置审计或下游 listener 时卸载/取消，旧调用仍拒绝；已获准但结果未明的调用留下 `unknown` 缺口，不伪造完成、不重放；已挂载时拒绝再次挂载 |
 | 安全 | 目录无效、受保护根模板未解析或宿主缺少 `tools.guard` 时拒绝挂载；路径不可判定按拒绝；**不提供 fail-open、通用 `run(command)` 或正则黑名单式保证** |
+
+## IAM隔离许可算法
+
+[私有算法](<src/iam-consumer.mjs>)与[显式测试入口](<src/isolated-testing.mjs>)已实现许可准备、原件同步复验、单次发送与结果收束；62项新例及210项policy全包回归通过，独立审阅关闭。它绑定实际执行对象、原arguments对象与摘要、原会话见证和原许可；不把operation或许可放进exec/arguments，不借新会话重试。
+
+这些是局部算法与合成授权控制器证据，不是实际IAM、SDK工具或模型联合接通证明。普通apply没有注入这些私有来源。
+
+[合成工具/命令入口](<src/iam-consumer-tools.mjs>)已在本地SDK-shaped注册链通过31项新例与241项policy回归，独立审阅关闭。原操作贯穿pre、审计、同步guard、callee等待与发送；owned finalizeContent在post后收束原操作，result观察者只清理、不撤回。IAM来源消失时工具闸仍留；owner卸载撤自己能力。命令内部执行标识由owned adapter生成，不是SDK Invocation字段。
+
+[合成模型入口](<src/iam-consumer-models.mjs>)已实现，并经29项新例及270项policy回归验证，包含最终错误桥修复与独立复核。显式测试入口的模型工厂只装配控制器独享route，在实际进入owned adapter.stream时准备许可，不以metadata prepareCall或外层stream创建当作认证起点。原operation贯穿异步等待与流式片段检查，失效不借新许可继续；fixedLlmFailure只输出固定code/message，错误carrier按已核SDK ABI收敛。
+
+这些是私有API的本地SDK-shaped证据，普通apply不启用、不改变默认模型、不接真实provider。根组合另有16项实际IAM工厂＋mock IdP联合验证，覆盖public/Basic及不同issuer/person整体替换；不是同issuer纯换人或真实提供方联调。maxRetries=0只约束内置与受控caller原操作，不证明任意恢复listener不会重试；已经输出的片段不能撤回。真实人员/用途、提供方权限及五分钟撤权仍需独立验收。
 
 ## 边界
 
