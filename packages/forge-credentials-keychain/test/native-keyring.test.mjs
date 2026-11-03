@@ -259,3 +259,64 @@ test('an entry without an account is an operation failure instead of being skipp
     (error) => error.code === 'KEYCHAIN_OPERATION_FAILED',
   );
 });
+
+test('an async entry class is preferred so the store round-trip never blocks the host', async () => {
+  const events = [];
+  class Entry {
+    constructor() {
+      throw new Error('the synchronous class must not be used when AsyncEntry exists');
+    }
+  }
+  class AsyncEntry {
+    constructor(service, account) {
+      this.account = account;
+    }
+    async getPassword() {
+      return 'value-from-async';
+    }
+    async setPassword(value) {
+      events.push(`set:${value}`);
+    }
+    async deletePassword() {
+      events.push('delete');
+      return true;
+    }
+  }
+  const backend = createNativeKeyringBackend({
+    service: 'heluo-forge-test',
+    platform: 'darwin',
+    load: () => ({ Entry, AsyncEntry }),
+  });
+  await backend.set('key', 'value');
+  assert.equal(await backend.get('key'), 'value-from-async');
+  await backend.delete('key');
+  assert.deepEqual(events, ['set:value', 'delete']);
+});
+
+test('a module that only exports the synchronous class still works', async () => {
+  const fake = fakeModule();
+  const backend = backendFor(fake);
+  await backend.set('key', 'value');
+  assert.equal(await backend.get('key'), 'value');
+  assert.deepEqual(fake.created.map((item) => item.account), ['key', 'key']);
+});
+
+test('enumeration awaits findCredentialsAsync when the module exposes it', async () => {
+  const seen = [];
+  class Entry {}
+  const module = {
+    Entry,
+    async findCredentialsAsync(service) {
+      seen.push(service);
+      return [{ account: 'heluo-forge-test/a' }, { account: 'heluo-forge-test/b' }];
+    },
+  };
+  const backend = createNativeKeyringBackend({
+    service: 'heluo-forge-test',
+    platform: 'darwin',
+    load: () => module,
+    enumeration: 'find-credentials',
+  });
+  assert.deepEqual(await backend.list('heluo-forge-test/'), ['heluo-forge-test/a', 'heluo-forge-test/b']);
+  assert.deepEqual(seen, ['heluo-forge-test']);
+});
