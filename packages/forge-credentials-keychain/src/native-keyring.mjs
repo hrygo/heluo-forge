@@ -180,10 +180,20 @@ export function createNativeKeyringBackend(options = {}) {
     },
 
     async delete(key) {
-      // `deletePassword` returns false for an absent credential and throws when
-      // it exists but cannot be removed; a failed delete is never reported as
-      // a no-op.
-      await entry(key).deletePassword();
+      // `deletePassword` resolves true when something was removed, false when
+      // nothing was there, and rejects when removal failed. Do not take `false`
+      // on faith: if the store still answers a value afterwards, the credential
+      // survived and the caller must not believe it was deleted.
+      const deleted = await entry(key).deletePassword();
+      if (deleted !== true) {
+        const survivor = await entry(key).getPassword();
+        if (survivor !== null && survivor !== undefined) {
+          throw new KeychainBackendError(
+            'KEYCHAIN_OPERATION_FAILED',
+            'native keyring reported no credential to delete, but the entry can still be read',
+          );
+        }
+      }
     },
 
     async list(prefix) {
