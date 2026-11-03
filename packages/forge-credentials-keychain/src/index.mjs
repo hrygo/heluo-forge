@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { KeychainBackendError, createFileBackend, createPlatformBackend } from './backend.mjs';
 import { createNativeKeyringBackend } from './native-keyring.mjs';
 import { createSecurityCliBackend } from './security-cli.mjs';
@@ -23,6 +25,26 @@ const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
  * @param {object} ctx plugin context
  * @param {object} backend selected backend
  */
+/**
+ * A credential document that lives inside a git work tree is one `git add -A`
+ * away from being published. Refuse it at mount instead of trusting the caller
+ * to have picked a directory outside the repository.
+ */
+function assertFileOutsideRepository(path) {
+  let current = dirname(resolve(path));
+  for (;;) {
+    if (existsSync(join(current, '.git'))) {
+      throw new KeychainProviderError(
+        'KEYCHAIN_FILE_INSIDE_REPOSITORY',
+        'filePath points inside a git work tree; keep the plaintext credential document outside any repository',
+      );
+    }
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
 function warnNonProduction(ctx, backend) {
   const notice = backend?.requiresExplicitOptIn === true
     ? 'credentials: 非生产凭据后端（明文文件）已启用；仅限开发/试点，不得用于生产'
@@ -232,7 +254,7 @@ export function apply(ctx, rawConfig = {}) {
             enumeration: result.value.allowUnverifiedEnumeration === true ? 'find-credentials' : 'unsupported',
           })
           : result.value.filePath
-            ? createFileBackend({ path: result.value.filePath })
+            ? (assertFileOutsideRepository(result.value.filePath), createFileBackend({ path: result.value.filePath }))
             : createPlatformBackend());
   } catch (error) {
     // A backend that cannot be constructed is a mount failure, never a reason
@@ -268,6 +290,14 @@ export function apply(ctx, rawConfig = {}) {
     accountPrefix: result.value.accountPrefix,
     notifyReference: (ref) => notifyContained(ctx, 'credentials/reference-updated', ref),
     notifyRecord: (key) => notifyContained(ctx, 'credentials/record-updated', key),
+    onForeignKeys: ({ count }) => {
+      // Count only: the key text belongs to whoever wrote it and need not be echoed.
+      try {
+        ctx.logger?.warn?.(`credentials: 存储里有 ${count} 个不属于本命名空间的记录键，已跳过`);
+      } catch {
+        // Diagnostics must not change the listing result.
+      }
+    },
   });
 
   // Cordis runs a normal function plugin with `new`, so a returned cleanup is

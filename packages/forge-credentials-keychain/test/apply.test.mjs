@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryBackend } from '../src/backend.mjs';
@@ -261,4 +261,23 @@ test('a backend that fails to close is still unprovided', async () => {
   assert.equal(ctx.provided.has('credentials'), true);
   await assert.rejects(dispose(), /synthetic close failure/u);
   assert.equal(ctx.provided.has('credentials'), false, '关闭失败也必须解除凭据提供方');
+});
+
+test('a plaintext document inside a git work tree is refused at mount', async () => {
+  const repository = mkdtempSync(join(tmpdir(), 'forge-keychain-repo-'));
+  mkdirSync(join(repository, '.git'));
+  const inside = join(repository, 'credentials.json');
+  const ctx = fakeContext();
+  assert.throws(
+    () => apply(ctx, { filePath: inside, allowInsecureFile: true }),
+    (error) => error.code === 'KEYCHAIN_FILE_INSIDE_REPOSITORY',
+  );
+  assert.equal(ctx.provided.has('credentials'), false);
+
+  // A neighbouring directory is not part of the work tree and stays usable.
+  const outside = mkdtempSync(join(tmpdir(), 'forge-keychain-outside-'));
+  const okContext = fakeContext();
+  const dispose = apply(okContext, { filePath: join(outside, 'credentials.json'), allowInsecureFile: true });
+  assert.equal(okContext.provided.has('credentials'), true);
+  await dispose();
 });

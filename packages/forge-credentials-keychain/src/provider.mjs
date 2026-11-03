@@ -167,16 +167,26 @@ export function createKeychainProvider(backend, options = {}) {
     },
 
     async listRecords() {
-      const keys = await backend.list(recordPrefix);
+      // Backends that can hand back key and value together are read once for
+      // the whole listing; the per-record fallback exists for stores that can
+      // only enumerate names.
+      const entries = typeof backend.listEntries === 'function'
+        ? await backend.listEntries(recordPrefix)
+        : (await backend.list(recordPrefix)).map((key) => ({ key }));
       const records = [];
-      for (const storageKey of keys) {
-        const suffix = storageKey.slice(recordPrefix.length);
+      let foreign = 0;
+      for (const entry of entries) {
+        const suffix = String(entry.key ?? '').slice(recordPrefix.length);
         if (!KEY_PATTERN.test(suffix)) {
-          throw new KeychainProviderError('KEYCHAIN_RECORD_INVALID', 'stored record key is outside the credential key grammar');
+          // A key under our prefix that is not ours (another owner, a manual
+          // edit) must not brick the listing: skip it and report the count.
+          foreign += 1;
+          continue;
         }
-        const record = await this.readRecord(suffix);
+        const record = entry.value === undefined ? await this.readRecord(suffix) : decodeRecord(suffix, entry.value);
         if (record !== undefined) records.push({ key: suffix, kind: record.kind });
       }
+      if (foreign > 0) notify(() => options.onForeignKeys?.({ count: foreign }));
       return records;
     },
 
