@@ -202,13 +202,25 @@ test('an explicitly allowed plaintext file backend is announced as non-productio
   assert.equal(warnings[0].includes(filePath), false, '提示不得包含本地绝对路径');
 });
 
-test('the notice is skipped for reviewed backends and a failing logger cannot block the mount', async () => {
+test('an ephemeral in-memory backend is announced as non-durable', async () => {
+  const warnings = [];
+  const ctx = fakeContext();
+  ctx.logger = { warn: (message) => warnings.push(message) };
+  const dispose = apply(ctx, { backend: createMemoryBackend(), allowEphemeral: true });
+  await dispose();
+  assert.equal(warnings.length, 1, '临时后端必须留下恰好一条启动提示');
+  assert.match(warnings[0], /内存/u);
+  assert.match(warnings[0], /失效/u);
+});
+
+test('a reviewed durable backend stays silent and a failing logger cannot block the mount', async () => {
   const silent = fakeContext();
   let calls = 0;
   silent.logger = { warn: () => { calls += 1; } };
-  const memory = apply(silent, { backend: createMemoryBackend(), allowEphemeral: true });
-  await memory();
-  assert.equal(calls, 0, '内存测试后端不是明文文件或未审核适配器，不产生该提示');
+  const durable = { ...createMemoryBackend(), durable: true };
+  const reviewed = apply(silent, { backend: durable });
+  await reviewed();
+  assert.equal(calls, 0, '持久且已审核的后端不产生非生产提示');
 
   const throwing = fakeContext();
   throwing.logger = { warn: () => { throw new Error('synthetic-logger'); } };

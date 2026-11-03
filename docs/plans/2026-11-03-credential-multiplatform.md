@@ -253,7 +253,7 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 ### 7.1 顺序与交付判据
 
 - [x] **A1**：补丁正反用例先红后绿，完成默认 local 禁用、非生产提示与说明同步。（`bundle-patch.test.mjs` 5 项通过；`apply.test.mjs` 覆盖非生产提示与 native 配置拒绝）
-- [x] **A2**：在已安装 SDK `0.2.1-rc.5` 上跑真实组合探针，两种挂载顺序各 9 步：启用 local 时写入落到明文文件（#125 形态）、禁用后单一提供方且写入走 keychain backend、后端不可用不发布提供方且不落盘、遗留文件不被迁移或删除。`tests/credentials-composition.test.mjs` 1 项通过。**仍未完成**：进程退出专项取证（见 §4.3），#125 不整体关单。
+- [x] **A2**：在已安装 SDK `0.2.1-rc.5` 上跑真实组合探针，两种挂载顺序各 9 步：启用 local 时第二个提供方按顺序被拒（local 先挂由 keychain 抛冲突码、keychain 先挂由 Cordis 拒绝重复注册），local 先挂时写入落到明文文件（#125 形态）；禁用后单一提供方且写入走 keychain backend；后端不可用不发布提供方且不落盘；遗留文件不被迁移或删除（并要求该次组合确实挂载成功）。18 步全部为可失败断言。`tests/credentials-composition.test.mjs` 1 项通过（无宿主时 skip，不冒充已验）。**仍未完成**：进程退出专项取证（见 §4.3），#125 不整体关单。
 - [x] **B1/B2**：可注入 native loader 的字符串 backend 样机与 19 项单元测试完成，默认 `KEYCHAIN_LIST_UNSUPPORTED`、Linux 固定 Secret Service、Windows 2560 B 上限、`null → undefined`；未审核适配器默认拒绝，不签发 IAM trust。
 - [ ] **B3**：按 §6 构建原生资源闭包；用最终安装产物完成分平台合成探针。
 - [ ] **C**：关闭 §9 的 G1 关键项，回写设计、契约与冻结文件表，经评审后才实现生产事务与可信装配。

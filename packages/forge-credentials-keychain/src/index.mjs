@@ -28,7 +28,9 @@ function warnNonProduction(ctx, backend) {
     ? 'credentials: 非生产凭据后端（明文文件）已启用；仅限开发/试点，不得用于生产'
     : backend?.unvetted === true
       ? 'credentials: 非审核平台适配器已启用；仅限本地实验，不得用于生产'
-      : undefined;
+      : backend?.durable === false && backend?.available !== false
+        ? 'credentials: 临时内存凭据后端已启用；进程退出即失效'
+        : undefined;
   if (notice === undefined) return;
   try {
     ctx.logger?.warn?.(notice);

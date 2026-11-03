@@ -236,3 +236,26 @@ test('delete failures are never reported as an absent entry', async () => {
   const backend = backendFor(fakeModule({ failOn: 'delete' }));
   await assert.rejects(backend.delete('heluo-forge-test/iam/ref/A'), /synthetic store denied/u);
 });
+
+test('opted-in enumeration drives listRecords end to end and never leaks reference values', async () => {
+  const fake = fakeModule();
+  const backend = backendFor(fake, { enumeration: 'find-credentials' });
+  const provider = createKeychainProvider(backend, { service: 'heluo-forge-test', accountPrefix: 'iam' });
+
+  await provider.modifyRecord('heluo-iam/session', async () => ({ kind: 'grant', payload: { sub: 'synthetic' } }));
+  await provider.set('ENTERPRISE_STATIC_KEY', 'synthetic-static-key');
+
+  // 枚举只回读记录命名空间下的条目：ref 不是 record，不能出现在结果里。
+  assert.deepEqual(await provider.listRecords(), [{ key: 'heluo-iam/session', kind: 'grant' }]);
+  const keys = await backend.list('heluo-forge-test/iam/record/');
+  assert.deepEqual(keys, ['heluo-forge-test/iam/record/heluo-iam/session']);
+  assert.equal(await backend.get('heluo-forge-test/iam/ref/ENTERPRISE_STATIC_KEY'), 'synthetic-static-key');
+});
+
+test('an entry without an account is an operation failure instead of being skipped', async () => {
+  const backend = backendFor(fakeModule({ credentials: [{ password: 'synthetic' }] }), { enumeration: 'find-credentials' });
+  await assert.rejects(
+    backend.list('heluo-forge-test/iam/record/'),
+    (error) => error.code === 'KEYCHAIN_OPERATION_FAILED',
+  );
+});

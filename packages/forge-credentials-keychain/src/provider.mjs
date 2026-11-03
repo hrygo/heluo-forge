@@ -1,6 +1,7 @@
+import { NAMESPACE_PATTERN } from './backend.mjs';
+
 const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const KEY_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
-const NAMESPACE_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export class KeychainProviderError extends Error {
   constructor(code, message, details = {}) {

@@ -18,7 +18,7 @@ test('the single-credentials-provider composition holds in both activation order
   const result = spawnSync(process.execPath, [script], {
     encoding: 'utf8',
     timeout: 150_000,
-    env: { ...process.env, DSH_HOST_PROBE_PROFILE: undefined },
+    env: process.env,
   });
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
   assert.equal(result.status, 0, `probe exited ${result.status}: ${output}`);
@@ -28,7 +28,11 @@ test('the single-credentials-provider composition holds in both activation order
   assert.match(output, /ok +enabled-local\/local-first-effective-owner-is-local/u);
   // Order matters and the probe records both facts instead of hiding one:
   // mounting the real local provider first leaves it owning the store.
-  assert.match(output, /ok +enabled-local\/keychain-first-effective-owner-is-(local|keychain)/u);
+  assert.match(output, /ok +enabled-local\/keychain-first-effective-owner-is-keychain/u);
+  assert.match(output, /ok +enabled-local\/local-first-second-provider-refused/u);
+  assert.match(output, /ok +enabled-local\/keychain-first-second-provider-refused/u);
+  assert.match(output, /ok +disabled-local\/local-first-legacy-file-untouched/u);
+  assert.match(output, /ok +disabled-local\/keychain-first-legacy-file-untouched/u);
   // Fixed composition: one provider, keychain-backed write, no plaintext file.
   for (const order of ['local-first', 'keychain-first']) {
     assert.match(output, new RegExp(`ok +disabled-local/${order}-mounts-one-provider`));
