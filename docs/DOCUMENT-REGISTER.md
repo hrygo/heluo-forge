@@ -70,7 +70,7 @@
 | CORP-DSH-CONF-003 | 插件市场企业接入问询函（P0） | 已废止 | — | 废止 | 平台组 | 内容已吸收至 DESIGN-007/012 及 P0 取证单，问询草案已废止删除 |
 | CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.6.1 | 草案 | 平台组（代拟）；IAM 团队答复；实施协调汇总 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-CONF-005 | DSH 和应用 Agent 调用 AI 网关补充问询函 | [collaboration/gateway-confirmation-letter.md](collaboration/gateway-confirmation-letter.md) | V0.5.0 | 草案 | 平台组（代拟）；网关团队答复；实施协调汇总 | G0 认领与能力评估；G1 契约；G2 联调准入 |
-| CORP-DSH-CONF-006 | DSH 研发助手接入企业 IAM 确认函 | [collaboration/iam-access-confirmation.md](<collaboration/iam-access-confirmation.md>) | V0.4.1 | 草案 | 平台组（代拟）；IAM 团队确认；实施协调汇总 | G1 身份登录与令牌闭环；G2 撤销与登出联动 |
+| CORP-DSH-CONF-006 | DSH 研发助手接入企业 IAM 确认函 | [collaboration/iam-access-confirmation.md](<collaboration/iam-access-confirmation.md>) | V0.4.2 | 草案 | 平台组（代拟）；IAM 团队确认；实施协调汇总 | G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 前置验证；G2 安装与隔离 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
