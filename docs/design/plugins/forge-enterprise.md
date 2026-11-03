@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.4.0 |
+| 版本 | V1.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -42,7 +42,7 @@ IAM 接入与模型接入分别核验网关目标授权、双凭据承载（若 
 
 Teamflow 唯一执行，Skill 只提供企业语义。充分 Issue 不另写规格，必要设计按需；内部 PRD／蓝图是运行材料，不成为新真源或要求用户重复填写。本地验证＋独立只读 AI 审查形成待用户验收的实际版本；不统一强制 CI 通过或 PR 先合并，必要 CI／分支保护仍须遵守。CI、用户验收、合入、Issue 关闭与业务结束分开，组合包不自动执行或代人工结论。
 
-`forge-sdd` 退出默认交付，以退役独立组件为目标；现存 dependencies／bundledDependencies 与 bin 转发仍保留，先核实 CLI、组合、测试、caller，再只保留明确用途的最小能力，不反向创造冻结需求。实际补丁仅三 Host，SDD 非 Host；本轮仅文档同步，不删除代码、不改配置或安装。[兼容与退役设计](forge-sdd.md)保留旧编号和路径。
+`forge-sdd` 已于 2026-11-03 全量退役：dependencies／bundledDependencies 与 `forge-sdd` bin 已移除，`src/sdd-cli.mjs` 与 `packages/forge-sdd` 已删除；已安装 profile 与已发布制品不动。实际补丁仍仅三 Host，SDD 从未是 Host。[兼容与退役设计](forge-sdd.md)保留历史编号、路径与记录。
 
 ## 2. 目标与非目标
 
@@ -106,7 +106,7 @@ insert:
     name: '@heluo/forge-policy'                  # 已实现，§5.1.2 已挂
   - id: enterprise-iam
     name: '@heluo/forge-iam'                     # 已实现，§5.1.2 已挂
-# SDD 是随包库/CLI，不是 Host 行；退出默认交付，现存依赖与 bin 尚未移除。
+# SDD 已退役（2026-11-03）：非 Host 行，依赖、bundledDependencies 与 bin 均已移除。
   - id: enterprise-gateway
     name: '@heluo/forge-gateway'                 # 仅 README，不预建入口
   - id: enterprise-tools
@@ -146,7 +146,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行；现行 `insert:` 段挂载三个有 Host 职责的企业插件（`insert:` 段见 §5.1.2），SDD 仅随制品交付 CLI；指向未实现包的入口仍不预建。
+补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行；现行 `insert:` 段挂载三个有 Host 职责的企业插件（`insert:` 段见 §5.1.2）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -159,7 +159,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-`insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`。SDD 是库/CLI（`@heluo/forge-sdd` 随发行依赖交付，不占插件行、不补空 `apply`）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
+`insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
 
 本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行三行口径以补丁文件与 `bundle-patch.test.mjs` 为准）：
 
@@ -367,7 +367,7 @@ flowchart TD
 | 前置 | `dsh --version` = `0.2.1-rc.2`；两个包都不声明任何 install 期生命周期脚本 |
 | 打包安装 | `npm pack` → 装进临时项目；装到的版本与清单一致，`cordis.patch.yml` 随包在装好的位置可用 |
 | 组合（用**装好的**补丁层） | 无补丁时四条官方行都不是 `disabled`；套上装好的补丁后 `deepseek-account`、`llm-deepseek-account`、`llm-deepseek` 三条为 `disabled: true`；`ui-settings-account` 在 `sdk` profile **不存在**，按 `--patch` 语义跳过（跳过 ≠ 已禁用，与 §5.1.1 一致） |
-| 可执行入口 | 装好的 `.bin/forge-sdd` 能启动并以文档化的退出码 2 打印用法；目标文件模式位 `755` |
+| 可执行入口（历史） | 2026-10-24 曾验证装好的 `.bin/forge-sdd` 能启动并以退出码 2 打印用法；2026-11-03 退役后该 bin 已移除，记录仅供追溯 |
 | 升级 | 升到 `0.1.1` 后组合结论不变、用户文件未被改动 |
 | 回退 | 退回 `0.1.0` 后组合结论不变、用户文件未被改动 |
 | 卸载 | 两个包目录与 `.bin` 软链都被移除，用户文件未被改动 |

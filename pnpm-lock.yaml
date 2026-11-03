@@ -27,9 +27,6 @@ importers:
       '@heluo/forge-policy':
         specifier: workspace:*
         version: link:../forge-policy
-      '@heluo/forge-sdd':
-        specifier: workspace:*
-        version: link:../forge-sdd
 
   packages/forge-gitee:
     dependencies:
@@ -42,5 +39,3 @@ importers:
   packages/forge-market: {}
 
   packages/forge-policy: {}
-
-  packages/forge-sdd: {}

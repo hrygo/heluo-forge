@@ -9,7 +9,7 @@
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -89,15 +89,9 @@ async function activateInstalled(label, host) {
     const mounted = ['credentials', 'policy', 'iam'].every((key) => ctx.get(key) !== undefined);
     record(`${label}-real-loader-instantiates-members`, mounted && phases.every((entry) => entry.phase === 2 /* FiberState.ACTIVE (const enum in the installed SDK) */), { resolved, phases, fixture: 'memory credentials; no real identity, keychain or network' });
     if (label === 'install') {
-      let invalidPluginRejected = false;
-      try {
-        await ctx.loader.create({ id: 'negative-legacy-sdd', name: '@heluo/forge-sdd' });
-      } catch (error) {
-        invalidPluginRejected = /invalid plugin/iu.test(error.message);
-      } finally {
-        if (ctx.loader.store['negative-legacy-sdd']) ctx.loader.remove('negative-legacy-sdd');
-      }
-      record('legacy-sdd-plugin-mount-is-rejected', invalidPluginRejected, { note: 'negative control: the delivered SDD library remains NOT a Host plugin' });
+      const installed = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8'));
+      const members = [...Object.keys(installed.dependencies ?? {}), ...(installed.bundledDependencies ?? [])];
+      record('legacy-sdd-member-retired', !members.includes('@heluo/forge-sdd'), { members });
     }
     const policy = ctx.get('policy');
     const iam = ctx.get('iam');
@@ -161,17 +155,6 @@ try {
   const present = officialRows.filter((id) => baselineRows.has(id));
   record('installed-patch-disables-official-rows', base.status === 0 && patched.status === 0 && present.length > 0 && present.every((id) => patchedRows.get(id) === true && baselineRows.get(id) === false), { present, absent: officialRows.filter((id) => !baselineRows.has(id)), note: 'dump proves composition only; absent rows are NOT disabled' });
   await activateInstalled('install', host);
-  const bin = join(project, 'node_modules', '.bin', process.platform === 'win32' ? 'forge-sdd.cmd' : 'forge-sdd');
-  const cli = spawnSync(bin, [], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
-  record('installed-bin-is-executable', cli.status === 0 && /用法/u.test(cli.stdout ?? '') && (statSync(join(bundleDir, 'src', 'sdd-cli.mjs')).mode & 0o100) !== 0, { status: cli.status });
-  const artifact = join(project, 'deliverable.txt');
-  const manifest = join(project, 'delivery.json');
-  writeFileSync(artifact, 'local CLI fixture\n');
-  const freeze = spawnSync(bin, ['freeze', '--root', project, '--manifest', manifest, '--unit', 'local-fixture', '--change', 'LOCAL-37', '--revision', 'rev-1', '--tested-revision', 'rev-1', '--artifact', 'deliverable.txt'], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
-  const verify = spawnSync(bin, ['verify', '--root', project, '--manifest', manifest, '--revision', 'rev-1'], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
-  writeFileSync(artifact, 'tampered local fixture\n');
-  const tampered = spawnSync(bin, ['verify', '--root', project, '--manifest', manifest, '--revision', 'rev-1'], { cwd: project, env: isolatedEnv, encoding: 'utf8' });
-  record('installed-real-cli-freeze-verify-and-reject-tamper', freeze.status === 0 && verify.status === 0 && tampered.status === 1, { freeze: freeze.status, verify: verify.status, tampered: tampered.status });
   const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });
   npm(['install', upgraded.tarball]);
   await activateInstalled('upgrade', host);

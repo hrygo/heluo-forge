@@ -127,7 +127,7 @@ test('build CLI emits the final artifact and refuses replacing it', (t) => {
   const output = execFileSync(process.execPath, [builder, join(root, 'cli-release')], { encoding: 'utf8' });
   const result = JSON.parse(output);
   assert.ok(existsSync(result.tarball));
-  assert.ok(Object.hasOwn(result.members, '@heluo/forge-sdd'));
+  assert.ok(!Object.hasOwn(result.members, '@heluo/forge-sdd'));
   assert.throws(() => execFileSync(process.execPath, [builder, join(root, 'cli-release')], { stdio: 'pipe' }), (error) => error.status === 1 && /refusing to replace/u.test(error.stderr));
 });
 
