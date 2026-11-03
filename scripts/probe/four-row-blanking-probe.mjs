@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * #13 AC8 组合层核验：企业包禁用官方四行后，其余行是否**仍然存在且启用**。
+ * #13 AC8 组合层核验：企业包禁用官方行（四个登录/模型行 + 官方明文凭据 `credentials`）
+ * 后，其余行是否**仍然存在且启用**。
  *
  * 背景：设计索引 §2.2 的 forge-enterprise 行把"禁用四行后 shell/settings/onboarding/
  * 模型选择是否完整"列为未验。企业组合包对配置是**整体替换**，因此"只关掉该关的"必须
  * 被断言——否则一次替换就可能顺手关掉无关行，而既有探针只检查了四个官方行。
  *
  * 判据（`--dump-config` 的组合层事实，不启动界面）：
- *   1. 四个官方行：存在于该 profile 的必须落 `disabled: true`；不存在的记录为 Loader 警告。
+ *   1. 官方行（`OFFICIAL_ROWS`）：存在于该 profile 的必须落 `disabled: true`；不存在的记录为 Loader 警告。
  *   2. **幸存行**：基线 dump 里出现的界面/设置/模型选择相关行，在打完补丁后必须仍然存在
  *      且没有被 `disabled: true`——这是"整体替换没有误伤"的证据。
  *
@@ -22,7 +23,8 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const dsh = process.env.DSH_BIN ?? 'dsh';
 const bundlePatch = resolve(here, '../../packages/forge-enterprise/cordis.patch.yml');
-const officialRows = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek'];
+// 与回灌检测同源：官方行清单只维护一处，避免新增行被静默漏检。
+const { OFFICIAL_ROWS: officialRows } = await import('../../packages/forge-enterprise/src/reflow.mjs');
 // 官方行之外、必须活下来的行：界面外壳与设置、模型选择、以及被禁用的账户 UI 之外的基础行。
 const survivorPatterns = [
   /^ui-/u,
@@ -90,7 +92,7 @@ for (const profile of profiles) {
     addedRows: added,
     activationWarnings: activationWarnings.slice(0, 3),
     note: ok
-      ? '四行落 disabled；界面/设置/模型选择相关行全部保留且启用；无激活告警'
+      ? `官方行 ${officials.length} 条中在册的都落 disabled；界面/设置/模型选择相关行全部保留且启用；无激活告警`
       : '存在不成立的断言（见 officials / casualties / activationWarnings）',
   });
 }

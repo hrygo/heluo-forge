@@ -1,5 +1,6 @@
 // 官方行回灌检测（#13 AC8）：DSH 升级或 profile 重建后，`deepseek-account`、
-// `ui-settings-account`、`llm-deepseek-account`、`llm-deepseek` 可能重新变为启用状态。
+// `ui-settings-account`、`llm-deepseek-account`、`llm-deepseek` 与官方明文凭据
+// 提供方 `credentials` 可能重新变为启用状态。
 // 判定输入是**实际生效配置**里的行状态（`dsh --dump-config`），不是"补丁文件还在不在"：
 // 补丁在而没生效，仍是回灌。
 //
@@ -11,6 +12,8 @@ export const OFFICIAL_ROWS = Object.freeze([
   'ui-settings-account',
   'llm-deepseek-account',
   'llm-deepseek',
+  // 官方明文凭据提供方：重新启用即让企业凭据退回 0600 明文 YAML（#125）。
+  'credentials',
 ]);
 
 export class EnterpriseReflowError extends Error {

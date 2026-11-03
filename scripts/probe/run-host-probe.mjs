@@ -141,7 +141,9 @@ const run = await runHarness();
 // `disabled: true`；profile 中不存在的 id 必须出现 Loader 的 "not found" 警告（警告 ≠ 已禁用）。
 // `credentials` 是官方本地明文凭据提供方：企业组合默认禁用它是 #125 的修复项，
 // 因此它和四个登录/模型行一样属于“被补丁命中的既有行”。
-const officialIds = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek', 'credentials'];
+// 官方行清单与回灌检测同源：多份副本会静默漏掉新增行（#125 的 credentials）。
+const { detectOfficialRowReflow, OFFICIAL_ROWS, rowsFromDump } = await import('../../packages/forge-enterprise/src/reflow.mjs');
+const officialIds = [...OFFICIAL_ROWS];
 const dumpBase = spawnSync(dsh, ['--profile', profile, '--dump-config'], { encoding: 'utf8' });
 const dumpPatched = spawnSync(dsh, ['--profile', profile, ...patchArgs, '--dump-config'], { encoding: 'utf8' });
 const baseText = String(dumpBase.stdout ?? '');
@@ -218,7 +220,6 @@ for (const entry of composition) {
 console.log(`probe: composition ${compositionOk ? 'ok' : 'FAIL'}`);
 // #13 AC8：官方行回灌检测。基线与打补丁后的 dump 文本分别喂给检测器：
 // 补丁缺失（= 升级后未重新应用）时，启用中的官方行必须被认出来。
-const { detectOfficialRowReflow, rowsFromDump } = await import('../../packages/forge-enterprise/src/reflow.mjs');
 const baseReflow = detectOfficialRowReflow({ observed: rowsFromDump(baseText) });
 const patchedReflow = detectOfficialRowReflow({ observed: rowsFromDump(patchedText) });
 const reflowOk = baseReflow.ok === false && baseReflow.reflowed.length > 0 && patchedReflow.ok === true;

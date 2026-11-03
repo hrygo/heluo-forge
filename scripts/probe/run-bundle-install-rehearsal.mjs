@@ -32,7 +32,7 @@ if (hostLocation.runtime !== null && realpathSync(process.execPath) !== hostLoca
   process.exit(child.status ?? 1);
 }
 const profile = process.env.DSH_HOST_PROBE_PROFILE ?? 'sdk';
-const officialRows = ['deepseek-account', 'ui-settings-account', 'llm-deepseek-account', 'llm-deepseek'];
+const { OFFICIAL_ROWS: officialRows } = await import('../../packages/forge-enterprise/src/reflow.mjs');
 const dir = mkdtempSync(join(tmpdir(), 'forge-install-rehearsal-'));
 const project = join(dir, 'project');
 const evidence = { probe: 'forge-bundle-install-rehearsal', startedAt: new Date().toISOString(), scope: 'local final-tarball composition, NOT enterprise IAM/keychain/registry acceptance', env: { profile, platform: `${process.platform}-${process.arch}`, node: process.version, operatorRole: 'authorized local sol_worker; synthetic credential fixture' }, steps: [], ok: true };
