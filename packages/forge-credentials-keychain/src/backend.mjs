@@ -100,19 +100,35 @@ export function createPlatformBackend() {
 }
 
 /**
- * Local dev/pilot document lock. Never reclaim a canonical lock after an
- * asynchronous ownership check: another waiter may have replaced it. A crash
- * therefore requires manual recovery after every owner has stopped; contention
- * times out instead of risking concurrent credential writes.
+ * Local dev/pilot document lock for the whole JSON document: per-key locks
+ * would still clobber other keys because every writer persists the complete
+ * document.
+ *
+ * A lock left behind by a crashed process is reclaimed only when its recorded
+ * owner pid is gone, and the reclaim itself is an atomic rename: exactly one
+ * waiter can move the stale lock away, the others see ENOENT and retry the
+ * exclusive create. A live owner is never displaced — contention times out.
  */
 
-async function withFileLock(path, key, fn) {
-  void key;
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to someone else.
+    return error?.code === 'EPERM';
+  }
+}
+
+function lockOwnerPid(token) {
+  const parsed = Number.parseInt(String(token).split(':')[0] ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+async function withFileLock(path, fn, timeoutMs) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  // One file lock for the whole JSON document: per-key locks would still
-  // clobber other keys because every writer persists the complete document.
   const lockPath = `${path}.lock`;
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + timeoutMs;
   let handle;
   for (;;) {
     try {
@@ -120,6 +136,18 @@ async function withFileLock(path, key, fn) {
       break;
     } catch (error) {
       if (error?.code !== 'EEXIST') throw new KeychainBackendError('KEYCHAIN_LOCK_FAILED', 'keychain lock cannot be created');
+      const token = await readFile(lockPath, 'utf8').catch(() => null);
+      const owner = lockOwnerPid(token ?? '');
+      if (owner !== undefined && !isProcessAlive(owner)) {
+        const graveyard = `${lockPath}.stale.${process.pid}.${randomBytes(4).toString('hex')}`;
+        try {
+          await rename(lockPath, graveyard);
+          await unlink(graveyard).catch(() => {});
+          continue;
+        } catch {
+          // Another waiter reclaimed it first; retry the exclusive create.
+        }
+      }
       if (Date.now() > deadline) {
         throw new KeychainBackendError('KEYCHAIN_LOCK_TIMEOUT', 'keychain lock is held by another process');
       }
@@ -142,7 +170,7 @@ async function withFileLock(path, key, fn) {
  * production keychain: callers must opt in with allowInsecureFile=true and
  * accept that the file is plaintext at rest.
  */
-export function createFileBackend({ path, mode = 0o600 } = {}) {
+export function createFileBackend({ path, mode = 0o600, lockTimeoutMs = 10000 } = {}) {
   if (typeof path !== 'string' || path.length === 0 || !isAbsolute(path)) {
     throw new KeychainBackendError('KEYCHAIN_PATH_REQUIRED', 'file backend requires an absolute path');
   }
@@ -176,9 +204,19 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
     const payload = JSON.stringify({ version: 1, entries: Object.fromEntries(entries) });
     try {
-      await writeFile(temporary, payload, { mode });
+      // fsync before rename: without it a power loss can leave the new name
+      // pointing at an empty or truncated document, which would lose every
+      // credential instead of only the in-flight write.
+      const created = await open(temporary, 'wx', mode);
+      try {
+        await created.writeFile(payload, 'utf8');
+        await created.sync();
+      } finally {
+        await created.close().catch(() => {});
+      }
       await chmod(temporary, mode);
       await rename(temporary, path);
+      await syncDirectory(dirname(path));
     } catch (error) {
       // The temporary document holds the same plaintext credentials as the
       // store; a failed or interrupted write must not leave a copy behind in
@@ -189,6 +227,23 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     await chmod(path, mode).catch(() => {});
   }
 
+  /**
+   * Persist the directory entry itself. Windows cannot open a directory as a
+   * file descriptor; there the rename is still atomic, so a failed directory
+   * sync is not a write failure.
+   */
+  async function syncDirectory(directory) {
+    let handle;
+    try {
+      handle = await open(directory, 'r');
+      await handle.sync();
+    } catch {
+      // Best effort: the file content is already durable.
+    } finally {
+      await handle?.close().catch(() => {});
+    }
+  }
+
   return {
     kind: 'file',
     available: true,
@@ -197,18 +252,18 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
     requiresExplicitOptIn: true,
     async get(key) { return (await load()).get(key); },
     async set(key, value) {
-      await withFileLock(path, key, async () => {
+      await withFileLock(path, async () => {
         const snapshot = await load();
         snapshot.set(key, value);
         await persist(snapshot);
-      });
+      }, lockTimeoutMs);
     },
     async delete(key) {
-      await withFileLock(path, key, async () => {
+      await withFileLock(path, async () => {
         const snapshot = await load();
         snapshot.delete(key);
         await persist(snapshot);
-      });
+      }, lockTimeoutMs);
     },
     async list(prefix) { return [...(await load()).keys()].filter((key) => key.startsWith(prefix)); },
     async listEntries(prefix) {
@@ -219,7 +274,7 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
         .map(([key, value]) => ({ key, value }));
     },
     async transaction(key, fn) {
-      return withFileLock(path, key, async () => {
+      return withFileLock(path, async () => {
         const snapshot = await load();
         let changed = false;
         const tx = {
@@ -230,7 +285,7 @@ export function createFileBackend({ path, mode = 0o600 } = {}) {
         const result = await fn(tx);
         if (changed) await persist(snapshot);
         return result;
-      });
+      }, lockTimeoutMs);
     },
     async close() {},
   };
