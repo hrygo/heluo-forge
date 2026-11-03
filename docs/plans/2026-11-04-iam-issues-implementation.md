@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-011 |
 | 文档名称 | IAM 相关 Issue 整体实施计划 |
-| 版本 | V0.1.0 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -111,3 +111,36 @@ mock、纯判定函数、文档描述都不算 PASS；这类结果只能写成 N
 - 每个 issue 的仓库内工作项有对应用例或配置检查，且在本机 `pnpm check` 中通过。
 - BLOCKED 项写明依赖方、所需证据与当前阻碍；不以 mock 或文档替代。
 - 设计、契约、登记与 issue 状态一致；issue 关闭前把结论回写正文。
+
+## 7. 收口矩阵（M6，2026-11-04）
+
+AC 编号沿用 #124。结论只取 PASS、BLOCKED、NOT RUN；PASS 必须能指到仓库内的用例或命令。
+
+| AC | 结论 | 证据位置 | 说明 |
+|---|---|---|---|
+| AC1 官方登录/模型/API Key 不能绕开 | 部分 PASS | `packages/forge-enterprise/test/bundle-patch.test.mjs`；设计 §5.1.1 | 四行禁用与单 provider 有用例；真实执行入口复验仍缺，见 AC7/#122 |
+| AC2 回调精确匹配、客户端认证、重放 | PASS（隔离） | `packages/forge-iam/test/client-auth-*.test.mjs`（8 个文件） | 无企业联调，未覆盖真实 IAM 行为差异 |
+| AC3 双进程、轮换、超时、响应丢失 | PASS（隔离） | `test/dual-process-refresh.test.mjs`、`test/dual-process-signout.test.mjs` | 结果不确定的刷新令牌不重用；用文件后端共享 |
+| AC4 两平台系统凭据实测 | BLOCKED | 0600 门禁：`test/apply.test.mjs`；实机：无 | 需 Windows DPAPI / 麒麟 libsecret 的写入、读取、失效、跨进程可见记录 |
+| AC5 本地立即拦住并如实显示远端未确认 | PASS（本地）/ BLOCKED（服务端） | 设计 §5.7；`dual-process-signout.test.mjs` | 撤销三态 ok/failed/unknown 已区分；五分钟窗口无接口 |
+| AC6 四步引导可跳过、账户页、缺凭据不阻止 shell | NOT RUN | `client-*.test.mjs` 覆盖界面行为 | 真实宿主未复验，见 PLAN-012 O-04 |
+| AC7 存储/鉴权不可用不自造就绪、不回退 | PASS（隔离） | `apply.test.mjs`、`run-credentials-composition-probe.mjs`（18/18） | 入口拦截仍 BLOCKED，见 #122 的 §5.6 |
+| AC8 四行禁用后 shell/设置/模型选择正常；升级回灌、卸载负测 | NOT RUN | PLAN-012 O-01—O-06 | 需实机 |
+| AC9 双端登录/刷新/退出/凭据/权限/恢复 | BLOCKED | PLAN-012 | 无 Windows 与麒麟机器及账号权限 |
+
+子项交付对应：
+
+| 子项 | 本轮落地 | 仍缺 |
+|---|---|---|
+| #125 | 组合探针 18/18、失败信息与覆盖层文档、门禁反证 | 叠加覆盖层后的真实启动日志观察（NOT RUN） |
+| #122 | 只读订阅（SSE + 客户端 EventSource）、能力核验 §5.6 | 真实执行入口拦截（拒绝面未决） |
+| #120 | 跨进程退出用例 §5.7 | 服务端撤销与五分钟窗口 |
+| #121 | 生命周期 §4.7、ADR-25、0600 门禁用例 | 两平台实机、IAM 侧生效时延 |
+| #123 | PLAN-012 骨架 | 全部实机执行 |
+
+## 8. 完成判定与 issue 状态
+
+- #125：仓库内完成（组合探针、门禁、文档、反证）；仅剩启动日志观察，保持 open 直到有人在真实组合里看一眼日志。
+- #122、#120、#121：仓库内可做的已交付，BLOCKED 部分依赖企业接口与拒绝面决策，保持 open。
+- #123：骨架就绪，实机执行 BLOCKED，保持 open。
+- #124：本矩阵即其收口依据；待 BLOCKED 项消除后再关。
