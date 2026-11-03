@@ -79,7 +79,8 @@
 
 ## 6. 检查与 CI
 
-- 本地：`pnpm check` 直接串行执行文档检查、仓库检查、包体 tarball 闭包检查、DSH 版本检查与 `node --test`；`test:unit` 当前也是全量 Node 测试发现，不能按命名误解为仅工程单元测试。
+- 本地：`pnpm check` 先跑 `scripts/link-workspace.mjs` 在根 `node_modules/@heluo` 下建包名链接（离线、幂等，只建 `pnpm install` 本来会建的那层目录链接，不联网也不执行脚本），再串行执行文档检查、仓库检查、包体 tarball 闭包检查、DSH 版本检查与 `node --test`；`test:unit` 当前也是全量 Node 测试发现，不能按命名误解为仅工程单元测试。
+- 需要链接的原因：CI 的 `node --run check` 不安装依赖，而包内测试按裸包名 import 同仓兄弟包（如 `@heluo/forge-policy`），没有链接即 `ERR_MODULE_NOT_FOUND`。该步只补解析路径，不替代 `pnpm install`：本地装过依赖时已有同指向链接，脚本计为 kept 且不重写；被占位时只报告、不覆盖。
 - 需要缩小范围定位时使用根 README 的市场包/参考服务命令；全量检查已覆盖的有效结果无需重复执行。真实仓库归档检查与 DSH/企业实机操作不进入离线 CI。
 - `check:docs` 校验元数据、登记一致性、链接与锚点、表格列数、禁写修订记录与询问函问题序列。
 - `check:repo` 校验必需文件、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径，以及包体闭包（清单/入口/workspace 依赖/补丁层/locale）。
