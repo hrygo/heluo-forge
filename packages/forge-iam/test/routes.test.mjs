@@ -560,3 +560,33 @@ test('the bridge fails closed when no capability is available', async () => {
   assert.equal(res.statusCode, 503);
   assert.equal(res.json().error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
 });
+
+test('the events route streams the same non-sensitive projection as the view', async () => {
+  const handler = routes(service({
+    watch: async function* watch() {
+      yield { state: 'signed-out', signedIn: false };
+      yield { state: 'ready', signedIn: true, principal: { issuer: 'https://iam.corp.example', subject: 'E1001' } };
+    },
+  }));
+  const req = request('GET', '/api/forge-iam/events', {});
+  const res = {
+    statusCode: 0,
+    headers: {},
+    headersSent: false,
+    body: '',
+    setHeader(name, value) { this.headers[name] = value; },
+    write(chunk) { this.body += chunk; },
+    end() { this.headersSent = true; },
+  };
+  await handler(req, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['content-type'], 'text/event-stream; charset=utf-8');
+  assert.equal(res.headers['cache-control'], 'no-store');
+  const frames = res.body.split('\n\n').filter(Boolean).map((frame) => JSON.parse(frame.replace(/^data: /u, '')));
+  assert.deepEqual(frames.map((frame) => frame.state), ['signed-out', 'ready']);
+  assert.doesNotMatch(res.body, /token|eyJ/iu);
+
+  const wrongMethod = await call(handler, 'POST', '/api/forge-iam/events');
+  assert.equal(wrongMethod.statusCode, 405);
+  assert.equal(wrongMethod.headers.allow, 'GET');
+});

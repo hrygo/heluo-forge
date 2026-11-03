@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.17.7 |
+| 版本 | V1.17.8 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -514,6 +514,21 @@ export interface IamAccount {
 第 4 步随本版完成（路由与 CLI 写入正文、登记同步）。`displayName`、`groups` 是否落盘另立字段契约，不在本节范围；本节也不重新讨论是否改用 `ctx.authorization` flow，结论见 §4.6。
 
 ---
+
+### 5.6 宿主能力核验与状态订阅（2026-11-04）
+
+用 Host Inspect 对目标 DSH `0.2.1-rc.5` 逐项核验 #122 依赖的能力，结论只取 PASS / BLOCKED：
+
+| 能力 | 结论 | 证据 |
+|---|---|---|
+| Remote 注册 | PASS | `typertGateway` 提供 `@Remote` 与 `registerRemoteEvents`；`agentPresets`、`commands`、`workspaceController`、`terminalController` 已在用 |
+| 状态推送 | PASS（本插件自建） | `GET /api/forge-iam/events` 用 SSE 推送 `watch()` 的同一份非敏感视图；客户端优先 EventSource，代理缓冲时回落 2 秒轮询 |
+| 连接鉴权 | PASS | `connection.requestRejection` / `admit` / `authenticatedUrl`；现有路由已用，事件流同样经过该守卫 |
+| 请求取消 | PASS | `@Remote` 方法形参带 `signal: AbortSignal`；`watch(signal)` 与 SSE 路由在连接关闭时 abort |
+| 卸载 | PASS | `registerRemoteEvents` 返回 disposer；`ctx.effect` 已有 teardown，`watch()` 停止订阅后才等待后续清理 |
+| 模型与工具真实执行入口拦截 | BLOCKED | 未决：哪些工具/模型调用在未登录时必须拒（需与“缺凭据不阻止 shell”对齐）；且本仓库无宿主 SDK，无法把守卫接到真实执行链路并用宿主探针取证 |
+
+事件流不引入新授权模型：它复用 `/api/forge-iam` 的同源与 Connection 守卫，帧内容与 `GET /view` 相同，令牌不进入任何帧。
 
 ## 6. 凭据存储与安全隔离
 

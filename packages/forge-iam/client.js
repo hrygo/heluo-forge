@@ -171,7 +171,35 @@ window.__ModuleLoader__.load({
         if (!enabled) return undefined;
         let live = true;
         let inFlight = false;
-        const timer = setInterval(async () => {
+        const apply = (view) => {
+          const epoch = barrierRef?.current.epoch;
+          if (!live || (barrierRef && (barrierRef.current.pending || barrierRef.current.epoch !== epoch))) return;
+          updateRef.current(view);
+        };
+        // Prefer the Host's read-only stream; polling stays as the fallback so
+        // a proxy that buffers event-stream responses cannot freeze the panel.
+        let stream = null;
+        let timer = null;
+        const closeStream = () => {
+          if (!stream) return;
+          try { stream.close(); } catch { /* already closed */ }
+          stream = null;
+        };
+        const openStream = () => {
+          if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return false;
+          try {
+            stream = new window.EventSource('/api/forge-iam/events');
+            stream.onmessage = (event) => {
+              try { apply(JSON.parse(event.data)); } catch { /* ignore malformed frame */ }
+            };
+            stream.onerror = () => { closeStream(); startPolling(); };
+            return true;
+          } catch {
+            stream = null;
+            return false;
+          }
+        };
+        const poll = async () => {
           if (inFlight) return;
           inFlight = true;
           const epoch = barrierRef?.current.epoch;
@@ -184,10 +212,13 @@ window.__ModuleLoader__.load({
           } finally {
             inFlight = false;
           }
-        }, 2000);
+        };
+        const startPolling = () => { if (!timer) timer = setInterval(poll, 2000); };
+        if (!openStream()) startPolling();
         return () => {
           live = false;
-          clearInterval(timer);
+          closeStream();
+          if (timer) clearInterval(timer);
         };
       }, [enabled]);
     }

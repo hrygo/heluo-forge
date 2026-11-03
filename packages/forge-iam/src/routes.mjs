@@ -298,6 +298,35 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         }
       }
 
+      if (url.pathname === '/api/forge-iam/events') {
+        if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
+        if (typeof service.watch !== 'function') {
+          return sendJson(res, 501, { error: { code: 'IAM_NOT_IMPLEMENTED' } });
+        }
+        // Read-only state stream: the same non-sensitive view the polling route
+        // returns, pushed when it changes. No token ever enters a frame.
+        res.statusCode = 200;
+        res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+        res.setHeader('cache-control', 'no-store');
+        res.setHeader('x-content-type-options', 'nosniff');
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        req.on?.('close', abort);
+        try {
+          for await (const view of service.watch(controller.signal)) {
+            if (controller.signal.aborted) break;
+            res.write(`data: ${JSON.stringify(view)}\n\n`);
+          }
+        } catch {
+          // A dropped connection ends the stream; the client reconnects.
+        } finally {
+          req.off?.('close', abort);
+          controller.abort();
+          if (typeof res.end === 'function') res.end();
+        }
+        return;
+      }
+
       if (url.pathname === '/api/forge-iam/view') {
         if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
         if (typeof service.syncFromStore === 'function') {
