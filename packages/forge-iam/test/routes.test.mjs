@@ -464,3 +464,30 @@ test('the credential API rejects unsupported methods', async () => {
   assert.equal(res.statusCode, 405);
   assert.equal(res.headers.allow, 'GET, PUT, DELETE');
 });
+
+test('the session route returns identity and never a token', async () => {
+  const session = {
+    status: 'ready',
+    signedIn: true,
+    principal: { issuer: 'https://iam.corp.example', subject: 'E1001' },
+    accessExpiresAt: '2026-11-04T02:00:00.000Z',
+    scope: 'openid profile',
+  };
+  const handler = routes(service({ getSession: () => session }));
+  const res = await call(handler, 'GET', '/api/forge-iam/session');
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['cache-control'], 'no-store');
+  assert.deepEqual(res.json(), session);
+  assert.doesNotMatch(res.text(), /accessToken|refreshToken|eyJ/u);
+
+  const wrongMethod = await call(handler, 'POST', '/api/forge-iam/session');
+  assert.equal(wrongMethod.statusCode, 405);
+  assert.equal(wrongMethod.headers.allow, 'GET');
+});
+
+test('the session route is refused when the connection seam is unavailable', async () => {
+  const handler = createIamRoutes(service({ getSession: () => ({ status: 'ready' }) }), { getConnection: () => undefined });
+  const res = await call(handler, 'GET', '/api/forge-iam/session');
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.json().error.code, 'IAM_CONNECTION_UNAVAILABLE');
+});

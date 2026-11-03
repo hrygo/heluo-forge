@@ -873,6 +873,25 @@ export function createIamService(rawConfig, options = {}) {
       return view();
     },
 
+    /**
+     * Identity and freshness only. Never a token, verifier or ID token: this is
+     * the cross-module read surface, and it must not become a token channel by
+     * accident. Use `resolveToken()` (or `getAccessToken()`) for the token.
+     */
+    getSession() {
+      recheckExclusive();
+      const summary = lastGrant ? summarizeGrant(lastGrant) : {};
+      return {
+        status: state,
+        signedIn: summary.signedIn === true,
+        principal: summary.principal
+          ? { issuer: summary.issuer ?? null, subject: summary.principal }
+          : undefined,
+        accessExpiresAt: summary.accessExpiresAt ?? null,
+        scope: summary.scope ?? null,
+      };
+    },
+
     hydrate,
     syncFromStore,
     loadGatewayCredential,
