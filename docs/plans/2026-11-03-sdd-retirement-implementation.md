@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-009 |
 | 文档名称 | SDD 退出实施计划 |
-| 版本 | V0.1.1 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 项目负责人（Agent 代拟） |
@@ -21,20 +21,20 @@
 
 ## 1. 结论与授权边界
 
-`forge-sdd` 已退出默认 Issue 交付要求，以退役独立组件为目标。本计划只定义**实施顺序、影响面、验证与回退**，不在本轮执行删除、改配置、卸载或停用；每一步落到源码或组合配置前，须由用户按该步骤的授权点逐项确认。用户已产出的清单与产物不随组件删除；已安装的 profile／企业制品不因本计划自动变化。
+`forge-sdd` 已退出默认 Issue 交付要求，以退役独立组件为目标。本计划定义**实施顺序、影响面、验证与回退**；用户已产出的清单与产物不随组件删除，已安装 profile／企业制品不因本计划自动变化。
 
-2026-11-03 用户已选择**方案 A（全量退役）**。删除包目录、构建制品与发布仍按 §4 的授权点分别确认；方案 B 只保留为历史备选。
+2026-11-03 用户已选择**方案 A（全量退役）**，并明确删除 `packages/forge-sdd` 目录、已安装 profile 与已发布制品不动。当日已执行步骤 1、2、4；步骤 3（制品演练）与步骤 5（发布／回退）未执行，另行授权。
 
 ## 2. 已核实事实与未验项
 
 | 对象 | 已核实（2026-11-03 本机静态＋单测） | 未验 |
 |---|---|---|
-| [SDD 包](../../packages/forge-sdd/package.json) | 私有包 `@heluo/forge-sdd`，bin `forge-sdd`，仅 `freeze`／`verify`；4 个源文件；27 例单测通过 | 外部 caller、目标仓库 CI 是否调用 |
-| [企业组合包](../../packages/forge-enterprise/package.json) | dependencies 与 bundledDependencies 均含 SDD；bin `forge-sdd` 转发 [sdd-cli.mjs](../../packages/forge-enterprise/src/sdd-cli.mjs)；补丁 `insert` 仅 credentials-keychain／policy／IAM 三 Host | 真机安装包体与已发布制品范围 |
-| 测试与演练 | [bundle-build](../../tests/bundle-build.test.mjs) 断言闭包含 SDD；[装包演练](../../scripts/probe/run-bundle-install-rehearsal.mjs) 覆盖已安装 bin 的 freeze／verify／篡改夹具及“SDD 不是 Host”负对照 | 演练在本机外的可移植性 |
-| CI 与锁文件 | `.github/workflows` 无 `forge-sdd` 引用；`pnpm-lock.yaml` 仅 workspace link | 其他流水线或外部仓库引用 |
+| SDD 包（已删除） | 删除前为私有包 `@heluo/forge-sdd`，bin `forge-sdd`，仅 `freeze`／`verify`；4 个源文件；27 例单测通过 | 外部 caller、目标仓库 CI 是否调用；删除后无在库实现 |
+| [企业组合包](../../packages/forge-enterprise/package.json) | 2026-11-03 已移除 SDD 依赖、bundledDependencies 与 bin；`src/sdd-cli.mjs` 已删除；补丁 `insert` 仍仅 credentials-keychain／policy／IAM 三 Host | 真机安装包体与已发布制品范围 |
+| 测试与演练 | [bundle-build](../../tests/bundle-build.test.mjs) 已改为断言成员不存在；[装包演练](../../scripts/probe/run-bundle-install-rehearsal.mjs) 已移除 SDD bin 夹具与负对照 | 演练未执行（缺 dsh／npm 环境） |
+| CI 与锁文件 | `.github/workflows` 无 `forge-sdd` 引用；锁文件已重算，无 SDD 条目 | 其他流水线或外部仓库引用 |
 | 已安装 profile | 本机 web profile 的 `@heluo` 包仅 devops、gitee，未装 SDD | 其他机器与企业 profile |
-| 文档 | 设计索引、登记、架构 §6、SDD 设计、推广方案均已标注退出默认；SDD-001 更名“兼容与退役盘点” | 外部文档副本 |
+| 文档 | 设计索引、登记、架构、SDD 设计、推广方案已同步“已退役”；SDD-001 标为已废止 | 外部文档副本 |
 
 结论：当前唯一功能性依赖是**企业组合包自包含与装包演练**，没有默认交付流程依赖 SDD。因此移除必须以“先改调用、后删包”的顺序进行，避免留下悬空 bin 或闭包断言。
 
@@ -46,7 +46,15 @@
 
 选择 B 前必须给出真实使用方、用途与调用证据；否则按 A 执行。
 
-## 4. 实施步骤
+## 4. 实施步骤与执行状态
+
+| 步骤 | 状态 |
+|---|---|
+| 1 移除企业调用 | 已完成（2026-11-03） |
+| 2 删除包 | 已完成（2026-11-03） |
+| 3 制品演练 | 未执行（缺 dsh／npm 环境） |
+| 4 文档与登记 | 已完成（2026-11-03） |
+| 5 发布与回退 | 未执行（另行授权） |
 
 ### 步骤 0：冻结与基线（只读，无授权点）
 
@@ -57,7 +65,7 @@
 ### 步骤 1：先移除调用（授权点 1：源码与包清单）
 
 1. [企业组合包清单](../../packages/forge-enterprise/package.json)：从 `dependencies`、`bundledDependencies` 删除 `@heluo/forge-sdd`，删除 `bin.forge-sdd`。
-2. 删除 [sdd-cli.mjs](../../packages/forge-enterprise/src/sdd-cli.mjs)。
+2. 删除 `src/sdd-cli.mjs`（已删除）。
 3. 调整 [bundle-build 测试](../../tests/bundle-build.test.mjs)（闭包含成员断言）与 [装包演练](../../scripts/probe/run-bundle-install-rehearsal.mjs)：
    - 移除已安装 bin 的 freeze／verify／篡改夹具；
    - 保留或改写“SDD 不是 Host”的负对照（若包已删除，负对照改为断言补丁不含 SDD 行／依赖）；
@@ -99,14 +107,14 @@
 ## 5. 待用户决策点
 
 1. ~~选 A（全量退役）还是 B（保留最小 freeze/verify 库）？~~ 已于 2026-11-03 选定 **A（全量退役）**；方案 B 不再作为默认备选。
-2. 删除包目录，还是保留 `packages/forge-sdd` 但移出组合包作为历史归档？
-3. 是否同步处理已安装 profile／已发布制品（默认不动）。
-4. 实施授权范围与时间窗口（源码、制品、发布分别授权）。
+2. ~~删除包目录还是保留归档？~~ 已选定：删除 `packages/forge-sdd`（2026-11-03 执行）。
+3. ~~是否处理已安装 profile／已发布制品？~~ 已确定：不动（2026-11-03）。
+4. 步骤 3 制品演练与步骤 5 发布／回退：另行授权。
 
 ## 6. 验收标准
 
 - `pnpm check` 全绿，`git diff --check` 干净。
-- 企业组合包依赖、bin 与闭包均不含 SDD；安装演练无 `forge-sdd` bin。
+- 企业组合包依赖、bin 与闭包均不含 SDD（已完成静态部分）。
 - 文档登记、索引、架构与推广方案一致；SDD-001 与 DESIGN-008 状态与实际一致。
 - 回退演练通过，且未删除任何用户产物或已安装实例。
 - 全程未把本地演练写成企业 CI 或生产验证。

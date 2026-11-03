@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-014 |
 | 文档名称 | 跨模块冲突收口 |
-| 版本 | V0.3.0 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -33,8 +33,8 @@
 | C1 | **policy fail-open**：策略失效是否放行 | 需求基线要求缺可靠控制时禁用；早期有只读兜底提议 | **关闭，无 fail-open 开关**：策略缺失、加载失败或必要依赖缺失时拒绝受门禁动作，不以只读标签降级 | [gate 拒绝用例](../../packages/forge-policy/test/apply.test.mjs)（未登记／未开放／缺目标均拒绝）及历史宿主 guard 负测；不等于服务端权限可豁免 | 责任方 2026-10-24 已确认；当前边界保持 |
 | C2 | **无 policy 降只读**：工具是否仍挂载 | 组合设计将 policy 列为硬依赖；只读可用性提议 | **不降级**：依赖策略的入口关闭，无可调用残留；不存在禁用策略后保留只读权限档位 | [组合设计 §5](plugins/forge-enterprise.md#5-接口与配置)与 gate 空／缺目录负测；未验全入口不宣称覆盖 | 责任方 2026-10-24 已确认；当前边界保持 |
 | C3 | **审计失败是否阻断** | IAM 本地会话审计与受门禁动作必要审计不是同一条路径 | **分作用域**：本地登录／会话事件审计失败不阻断登录；C3 外发及受控写在必要审计不可用时拒绝。可选指标故障不能冒充必要审计，也不统一转研发停机 | [IAM §9](plugins/forge-iam.md#9-安全审计与可观测性)、[policy §5.5](plugins/forge-policy.md#55-必要审计前置与执行后缺口)及 gate sink 负测 | 责任方 2026-10-24 已确认；必要审计和可选观察分别处理 |
-| C4 | **SDD 本地／CI 双路径** | 旧设计强调本地前置不替代 CI；当前 Issue 默认交付不要求 SDD 清单 | **同项单规则集**：仅对现存明确调用，本地与 CI 的同一检查用同一规则、同一版本；本地标“未经 CI 验证”，不替代 CI，不一致按缺陷处理。不要求每次双跑或每 Issue 必跑 SDD | [SDD §4](plugins/forge-sdd.md#4-明确调用下的单规则集)与 [SDD 测试](../../packages/forge-sdd/test/)；静态用例不认证企业 CI 已接入 | 保留 2026-10-24 历史确认；当前适用由用户 2026-11-03 决定 |
-| C5 | **历史市场行与 SDD 挂载口径** | 市场走原生索引；旧表称 enterprise 插入凭据／policy／IAM／SDD 四包 | **不挂历史 market；实际仅三 Host**：credentials-keychain、policy、IAM。SDD 仍为 dependency／bundledDependency，enterprise bin 转发 CLI，不是第四 Host。默认退出不等于包已退役 | [实际补丁](../../packages/forge-enterprise/cordis.patch.yml)、[清单](../../packages/forge-enterprise/package.json)、[转发](../../packages/forge-enterprise/src/sdd-cli.mjs)；历史四行 dump 仅见[组合设计 §5.1.2](plugins/forge-enterprise.md#512-insert-最小挂载本机实测-2026-10-24) | 2026-10-24 不挂历史 market 的确认保留；当前挂载事实按源码纠正，非新组织裁决 |
+| C4 | **SDD 本地／CI 双路径** | 旧设计强调本地前置不替代 CI；当前 Issue 默认交付不要求 SDD 清单 | **同项单规则集**：仅对现存明确调用，本地与 CI 的同一检查用同一规则、同一版本；本地标“未经 CI 验证”，不替代 CI，不一致按缺陷处理。不要求每次双跑或每 Issue 必跑 SDD | [SDD §4](plugins/forge-sdd.md#4-明确调用下的单规则集)（历史兼容语义）；SDD 测试目录已随包删除，静态结论不认证企业 CI | 保留 2026-10-24 历史确认；当前适用由用户 2026-11-03 决定 |
+| C5 | **历史市场行与 SDD 挂载口径** | 市场走原生索引；旧表称 enterprise 插入凭据／policy／IAM／SDD 四包 | **不挂历史 market；实际仅三 Host**：credentials-keychain、policy、IAM。SDD 从未是第四 Host，且已于 2026-11-03 从依赖、bundledDependencies 与 bin 移除并删除包；已安装 profile 与已发布制品不动 | [实际补丁](../../packages/forge-enterprise/cordis.patch.yml)、[清单](../../packages/forge-enterprise/package.json)；历史四行 dump 仅见[组合设计 §5.1.2](plugins/forge-enterprise.md#512-insert-最小挂载本机实测-2026-10-24) | 2026-10-24 不挂历史 market 的确认保留；挂载与依赖事实按源码纠正，非新组织裁决 |
 
 默认 Issue 交付按需求基线执行：Teamflow 唯一执行，充分 Issue 不另写规格，必要设计按需；本地验证＋独立只读 AI 审查后交用户验收实际版本。必要 CI 与分支保护不豁免，但 CI、验收、merge、Issue close、业务结束必须分开，不能用 C4 推导统一“CI 通过／PR 先合并才能验收”。
 
@@ -46,7 +46,7 @@
 | 企业能力口径 | 历史组织确认不等于企业可用／已联调 | 各模块自己的真实接入、版本与实测证据 |
 | C4 企业 CI | 本地相同规则不等于企业任务已部署 | 若目标仓库需要该项 CI，须有同项同版本任务及真实结果；未跑不冒充通过 |
 | C5 挂载与依赖 | 不挂历史市场包不等于 SDD 已移除，也不等于原生索引可用 | enterprise dependencies／bundledDependencies、bin 转发与补丁事实；#12 索引接入与目标终端证据；IAM／网关／市场目标范围不因本轮改变 |
-| SDD 退役 | 无 Host 行不等于无 CLI、依赖或调用 | 先盘点 CLI／组合包／测试／caller，明确最小保留用途后另行实施；本轮文档不删除代码、不改配置或安装 |
+| SDD 退役 | 无 Host 行不等于无 CLI、依赖或调用 | 2026-11-03 已全量退役：包删除，企业依赖与 bin 移除；已安装 profile／发布制品不动；外部 caller 未取证 |
 
 ## 4. 不做的事
 

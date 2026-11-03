@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-001 |
 | 文档名称 | 河洛企业级智能研发平台总体架构设计 |
-| 版本 | V3.0.0 |
+| 版本 | V3.1.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -182,7 +182,7 @@ flowchart TB
   P -->|"令牌、工具与审计"| PL
 ```
 
-> 图：客户端 / DSH 运行时 / 企业能力 / 企业平台四层；能力格是职责视图，不等于现有 Host 挂载行。企业语义由 Skill 提供，研发执行归 Teamflow。当前企业组合补丁实际只插入 credentials-keychain、policy、IAM 三个 Host，SDD 为随包库/CLI 而非 Host。运行时中未逐一展开的 `authorization`、`settings`、`webServer` 见 §5。
+> 图：客户端 / DSH 运行时 / 企业能力 / 企业平台四层；能力格是职责视图，不等于现有 Host 挂载行。企业语义由 Skill 提供，研发执行归 Teamflow。当前企业组合补丁实际只插入 credentials-keychain、policy、IAM 三个 Host；SDD 已于 2026-11-03 退役并从组合包删除，不是 Host。运行时中未逐一展开的 `authorization`、`settings`、`webServer` 见 §5。
 
 四条请求路径：
 
@@ -246,11 +246,11 @@ flowchart TB
 | `@heluo/forge-policy` | Host 插件 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 | `tools/pre-execute`、`tools.guard`、`otel` |
 | `@heluo/forge-devops` | CLI 接入（工具面） | 复用 DevOps CLI，经白名单开放已确认的只读命令；不建设 MCP 服务 | bash seam、策略门禁、凭据注入、审计 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | 复用 Gitee 的 `gh` 兼容 CLI，经白名单开放只读命令；不自建 MCP 或交叉编译 | bash seam、策略门禁、凭据注入、审计 |
-| `@heluo/forge-sdd` | 现存兼容库 + CLI（非默认交付组件） | 仅对明确调用提供清单 freeze/verify；先盘点调用，以退役独立组件为目标 | 随 enterprise 依赖与 bin 转发交付，非 Host 行；不建立新冻结需求 |
+| `@heluo/forge-sdd` | 已退役（包与 CLI 已删除，2026-11-03） | 历史规则与 freeze/verify 语义仅留档；无在库实现 | 已从 enterprise 依赖、bundledDependencies 与 bin 移除；非 Host 行；已安装 profile／发布制品不动 |
 | DSH 原生插件市场 | DSH 内置 | 读取 AIHUB 索引、展示插件并调用官方 manager 安装 | `pluginMarket`、`pluginManager` |
 | `@heluo/forge-brand` | 配置 bundle | 产品名、Logo、主题 token | `brand`、`client-ui-theme` |
 
-组合方式区分目标职责与实际交付：当前 umbrella patch 既有官方行 `disabled` 覆写，也以 `insert` 插入 credentials-keychain、policy、IAM 三个 Host；`@heluo/forge-sdd` 仍在依赖和 bundledDependencies 中，并由 enterprise 的 `forge-sdd` bin 转发，不是第四个 Host。本文不删除依赖或停用已安装配置；退役盘点及兼容边界见[SDD 兼容与退役设计](../design/plugins/forge-sdd.md)。**可被关闭不等于关闭后仍保持依赖权限**：IAM、policy 和必要审计须在相关操作时满足安全依赖，缺失则拒绝；可执行性仍须按门禁取得负向验收证据。
+组合方式区分目标职责与实际交付：当前 umbrella patch 既有官方行 `disabled` 覆写，也以 `insert` 插入 credentials-keychain、policy、IAM 三个 Host；`@heluo/forge-sdd` 已于 2026-11-03 从依赖、bundledDependencies 与 bin 移除并删除包，不是第四个 Host。已安装 profile 与已发布制品不动；历史兼容语义见[SDD 兼容与退役设计](../design/plugins/forge-sdd.md)。**可被关闭不等于关闭后仍保持依赖权限**：IAM、policy 和必要审计须在相关操作时满足安全依赖，缺失则拒绝；可执行性仍须按门禁取得负向验收证据。
 
 ## 7. 领域设计
 
@@ -312,7 +312,7 @@ C4 同时约束两类访问及两条候选路线。有 Key 时开启现有 `priv
 
 **控制与证据**：动作、路径、风险确认及必要审计归既有 Policy 与服务端；不在 Skill／SDD 复制硬门禁，不把旧 spec/apply/archive 路径状态机绑定为默认 Issue 流程。独立 AI 审查上下文只读，技术修复返回实现上下文后复审。验证、审查与用户确认均绑定实际版本；需求、代码或验收变化后重判旧证据覆盖。
 
-**兼容而非默认**：`forge-sdd` 退出默认交付要求，以退役独立组件为目标。先盘点 CLI、组合包、测试及调用，只保留有明确用途的最小能力，不为现存代码创造 freeze 需求；不以 spec／freeze／archive 齐套作为开工或验收前提。现存冻结契约仅服务明确调用，实际 CLI 是 `freeze`／`verify`，不证明 Git 原子交付、真实测试或 Issue／repo 权威关联。详见[兼容与退役设计](../design/plugins/forge-sdd.md)。本轮仅同步文档，不删除源码、不改配置、不卸载或停用已安装能力。
+**已退役**：`forge-sdd` 已于 2026-11-03 全量退役——包目录删除，企业组合包依赖、bundledDependencies 与 `forge-sdd` bin 移除；已安装 profile 与已发布制品不动。不以 spec／freeze／archive 齐套作为开工或验收前提；历史冻结语义仅留档，不证明 Git 原子交付、真实测试或 Issue／repo 权威关联。详见[兼容与退役设计](../design/plugins/forge-sdd.md)。
 
 ### 7.5 分发与治理
 
@@ -408,7 +408,7 @@ C4 同时约束两类访问及两条候选路线。有 Key 时开启现有 `priv
 
 ## 11. 版本与兼容性管理
 
-- **锁版本**：一期兼容目标固定 DSH `0.2.1-rc.3`（版本单一真源为仓库根 `.dsh-version`；rc.2→rc.3 的安装/升级/回退/卸载循环已实测，见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)）。内部兼容性套件（登录、模型、工具、SDD、市场）**尚未开跑**，其结论是 G1 的输入，届时回写 §2.2。由于终端以用户自助安装为主，客户端启动时检查最低兼容版本门禁。
+- **锁版本**：一期兼容目标固定 DSH `0.2.1-rc.3`（版本单一真源为仓库根 `.dsh-version`；rc.2→rc.3 的安装/升级/回退/卸载循环已实测，见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)）。内部兼容性套件（登录、模型、工具、市场）**尚未开跑**，其结论是 G1 的输入，届时回写 §2.2。由于终端以用户自助安装为主，客户端启动时检查最低兼容版本门禁。
 - **标准漂移**：OAuth 2.1 仍是 draft，MCP 规范按日期发版；兼容性套件里固定规范版本（PRM、`resource`、`aud`），规范升级时先跑套件再放行。
 - **内部包**：SemVer；`engines.dsh` 写区间；host 插件与 client 插件同版本发布。
 - **通道**：`internal`（默认）与 `canary`（灰度）；可选插件故障可单行回滚，身份/策略/审计相关回滚须同时检查依赖与服务端兼容，不能恢复到缺失强制控制的版本。
@@ -440,7 +440,7 @@ C4 同时约束两类访问及两条候选路线。有 Key 时开启现有 `priv
 | 策略与审计 | 7 类角色 preset、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 |
 | 分发与市场 | registry 与 index、通道、兼容门禁、回滚步骤 |
 | 终端打包 | MSI 自助安装/MDM、deb/apt/`systemd --user`（`127.0.0.1`）与 `dsh-web-open` 脚本、更新回滚 |
-| Issue 交付与 SDD 兼容退役 | Skill／Teamflow 分工、实际版本的验证与审查、用户验收；现存 CLI／组合包／测试／调用盘点及最小保留理由 |
+| Issue 交付与 SDD 兼容退役 | Skill／Teamflow 分工、实际版本的验证与审查、用户验收；2026-11-03 退役记录（包删除、企业依赖与 bin 移除） |
 | 试点推广 | 3 部门 800 人批次（建议分两批各 400 人）、M1–M3、M5–M6 指标、支持渠道、退出条件 |
 
 子文档按 [_template.md](../templates/_template.md) 规范编写，结论先行；主文档不复制子文档细节，只在决策变化时回写。上表各子文档的负责方与门禁以[文档清单](../DOCUMENT-REGISTER.md)为唯一真源，本表不复制。
@@ -500,7 +500,7 @@ G0 先取得方向、负责人、可联调性与计划，但 P0 要求的验证�
 | ADR-20 | 默认模型采用严格只读编排；真实 Host 不自动保存，现有选择全部保留 | 猜测空态或显式来源、以前置检查替代条件提交、把隔离 sink 当真实设置事务 | 用户于 2026-11-02 选择严格保护；当前 SDK 排队保存无法条件取消，真实自动写待可靠能力与另行授权，不改当前 profile，见 IAM 模块 §7.3.2 |
 | ADR-21 | 机密认证采用管理员预置的隔离来源与 V2/public V1 reader 隔离，真实 apply 不接 secret 来源 | 通用 resolve 自证来源、仅给 V1 加机密标记让旧 reader 忽略、先开放真实预置或 enrollment | 用户已批准 source/mock 设计；隔离实际服务已接，真实 apply 无受信来源仍拒绝 confidential，public 不采用 V2。V2 不是防旧 writer 回滚；生产仍按 G1，见[设计](<../design/iam-confidential-isolated.md>) |
 | ADR-22（隔离） | 仅在隔离组合验证实际 IAM 会话见证与独立人员/用途许可；工具复用 policy 的单调屏障，模型在合成 adapter 实际发送边界校验，消费 owner 独立于 IAM 存亡 | 缓存 ready 授权、由 IAM 自己卸载执行闸、把 waterfall 称为任意顺序硬闸、另造假登录真相或生产权限平台 | 用户已批准完整“假账号、假模型、假工具、不动真实环境” source/mock 设计，机密 C 验收后实施；无代码、非生产批准。非秘密依赖代际在实际认证等待前固定，成功采纳后才能更新；字段见[IAM-003](<../contracts/iam-consumer-isolated.md>)，方案见[DESIGN-017](<../design/iam-consumer-isolated.md>)。不修改默认模型或真实 provider，生产门禁独立待核 |
-| ADR-23 | 以 Issue 承载交付要求，Teamflow 唯一执行，SDD 退出默认并以退役独立组件为目标（用户 2026-11-03 确认） | 单变更单仓库、重复手填规格、强制 freeze／archive、CI／合入一律先于用户验收、第二执行引擎 | 变更 1:N Issue，每 Issue 唯一变更和仓库；本地验证＋独立 AI 审查形成待验收版本，必要 CI／保护不豁免；现存 SDD 先盘点，明确调用最小保留，文档轮不删代码或配置 |
+| ADR-23 | 以 Issue 承载交付要求，Teamflow 唯一执行，SDD 退出默认并以退役独立组件为目标（用户 2026-11-03 确认） | 单变更单仓库、重复手填规格、强制 freeze／archive、CI／合入一律先于用户验收、第二执行引擎 | 变更 1:N Issue，每 Issue 唯一变更和仓库；本地验证＋独立 AI 审查形成待验收版本，必要 CI／保护不豁免；现存 SDD 先盘点；2026-11-03 后续授权已全量退役（包删除、企业依赖与 bin 移除，已安装 profile/制品不动） |
 
 ADR-11 的来源方向及 ADR-12 的自包含三目标首版策略已由用户确认；2026-10-21 用户进一步决定采用 ADR-13 轻量模式：AIHUB 维护并托管 format-1 索引，用户在原生「索引源」添加 URL，官方 manager 安装。本项目不再建设生成器、`current/policy/evidence`、CI 单写发布、15 分钟租约或写前授权；只保留索引契约、只读校验器与三目标验收。2026-10-22 用户裁决采用 ADR-14：UAG 个人凭证为 V1 模型网关凭据，ADR-2 令牌直通退出主路径。2026-10-23 需求方补充确认 ADR-16，Key-only 不再满足当前目标，具体路线仍待评审。其余团队接口、生产准入与本文件审核/批准不据此代签。 2026-10-28 增补 ADR-17：在 IAM 6.0.3/6.3 明确不支持公共客户端/PKCE 的约束下，V1 采用机密客户端过渡；该偏离的威胁模型与门禁见 DESIGN-002 §4.5，不能据此宣称登录安全已闭环。
 
@@ -533,7 +533,7 @@ heluo-forge/
 │  ├─ forge-policy/        # host plugin (含门禁、$DSH_HOME 保护、SDD 路径规则与审计)
 │  ├─ forge-devops/        # existing CLI + read-only command allowlist
 │  ├─ forge-gitee/        # gh-compatible CLI + read-only command allowlist
-│  ├─ forge-sdd/           # skills + CLI
+│  ├─ (目录已删除 2026-11-03)  # 历史 forge-sdd：skills + CLI，已退役
 │  ├─ forge-market/       # index + registry
 │  └─ forge-brand/        # brand tokens
 ├─ profiles/

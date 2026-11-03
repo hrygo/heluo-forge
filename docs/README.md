@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.37.0 |
+| 版本 | V1.38.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -70,7 +70,7 @@
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | 规则、`$DSH_HOME` 硬拒绝、客户数据外发确认（C3）、决策 schema、保留期 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | registry、index、通道、回滚 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
-| CORP-DSH-SDD-001 | SDD 兼容与退役盘点 | 待创建 | 历史交付编号保留；不新增默认 SDD 流程交付，先核实 CLI、bundle、测试及调用者，按清晰用途保留最小能力 |
+| CORP-DSH-SDD-001 | SDD 兼容与退役盘点（已完成） | 已归档（无独立正文） | 历史交付编号保留；2026-11-03 完成全量退役：包删除、企业依赖与 bin 移除；已安装 profile/发布制品不动 |
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | 3 部门 800 人分批计划、指标采集、支持渠道、退出条件 |
 
 IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.md>)、[字段契约](<contracts/iam-client-auth-isolated.md>)。完整 source/mock 设计已获用户批准，[实施计划](<plans/2026-11-02-iam-confidential-isolated.md>)已登记；基础 schema、来源/HTTP、codec 与实际机密隔离服务已验；真实来源未开放。消费模拟A/B/C/D已分段验收，E根联合16项定向通过，源码、联合审阅与本批完整检查已完成，见[消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)。
@@ -93,7 +93,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 各扩展包与两个独立服务的详细设计状态与路径（含实现与验证入口） |
-| Issue 交付调整方案 | [Issue 交付单元与研发职责调整方案](requirements/issue-delivery-adjustment-proposal.md) | 2026-11-03 用户已最终确认交付模型与四项取舍；基线为唯一范围真源，本文记录决定、落实顺序与 Agent 验证事项；本轮仅文档，SDD 未实际移除 |
+| Issue 交付调整方案 | [Issue 交付单元与研发职责调整方案](requirements/issue-delivery-adjustment-proposal.md) | 2026-11-03 用户已最终确认交付模型与四项取舍；基线为唯一范围真源，本文记录决定、落实顺序与 Agent 验证事项；SDD 已于 2026-11-03 全量退役 |
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
 | 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | 文件 backend / OS keychain / 迁移与不可用时的 fail-closed 口径 |
 | 客户端标识 | [DSH 客户端标识（UA）方案设计](<design/client-identification.md>) | 使用 DSH 默认 UA，网关按关键字匹配；不改写宿主 UA，匹配能力及企业链路待确认 |
