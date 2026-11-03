@@ -163,7 +163,9 @@ try {
   await activateInstalled('rollback', host);
   record('rollback-to-0.1.0-keeps-composition-and-workspace', JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).version === first.manifest.version && intact());
   npm(['uninstall', '@heluo/forge-enterprise']);
-  record('uninstall-removes-packages-and-keeps-workspace', !existsSync(bundleDir) && !existsSync(bin) && intact());
+  // SDD 退役后 bin 链接也应消失；路径按安装位置就地计算，不依赖已删除的变量。
+  const retiredBin = join(project, 'node_modules', '.bin', process.platform === 'win32' ? 'forge-sdd.cmd' : 'forge-sdd');
+  record('uninstall-removes-packages-and-keeps-workspace', !existsSync(bundleDir) && !existsSync(retiredBin) && intact());
   record('repository-working-tree-untouched', execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }) === statusAtStart, { note: 'concurrent edits in shared worktree may invalidate this snapshot' });
 } catch (error) {
   record('rehearsal-exception', false, { error: error.message });
