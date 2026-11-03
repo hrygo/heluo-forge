@@ -39,6 +39,7 @@ export function apply(ctx, rawConfig = {}) {
     credentials = undefined;
   }
 
+  let modelServices;
   const service = createIamService(result.value, {
     exclusive: checkExclusive(ctx, result.value),
     recheckExclusive: () => checkExclusive(ctx, result.value),
@@ -49,6 +50,12 @@ export function apply(ctx, rawConfig = {}) {
       } catch {
         return undefined;
       }
+    },
+    getModelSelectionServices: () => {
+      try {
+        return modelServices && ctx.get?.('llm') === modelServices.llm
+          && ctx.get?.('agentDefaultModel') === modelServices.agentDefaultModel ? modelServices : undefined;
+      } catch { return undefined; }
     },
     getOrigin: () => {
       try {
@@ -68,7 +75,10 @@ export function apply(ctx, rawConfig = {}) {
   const teardown = async () => {
     if (tornDown) return;
     tornDown = true;
+    modelServices = undefined;
     await service.dispose();
+    if (typeof offModelServices === 'function') offModelServices();
+    else await offModelServices?.dispose?.();
     if (typeof offWebServer === 'function') offWebServer();
     else await offWebServer?.dispose?.();
     disposeProvide?.();
@@ -76,9 +86,27 @@ export function apply(ctx, rawConfig = {}) {
 
   let disposeProvide;
   let offWebServer;
+  let offModelServices;
 
   ctx.effect(() => {
     disposeProvide = ctx.provide('iam', service);
+    if (result.value.defaultModel.trim() && typeof ctx.inject === 'function') {
+      offModelServices = ctx.inject(['llm', 'agentDefaultModel'], (host) => {
+        if (tornDown) return;
+        const binding = Object.freeze({ llm: host.llm, agentDefaultModel: host.agentDefaultModel });
+        modelServices = binding;
+        const observe = () => {
+          if (!tornDown && modelServices === binding) void service.reconcileDefaultModel().catch(() => {});
+        };
+        // The SDK declares this topology notification as payload-free emit.
+        const offEvent = host.on?.('llm/adapters-updated', observe);
+        observe();
+        return () => {
+          offEvent?.();
+          if (modelServices === binding) modelServices = undefined;
+        };
+      });
+    }
     // Same-origin management API plus the OIDC loopback callback. The callback
     // is a GET route; state/PKCE bind it to the Host attempt. The management
     // API is additionally gated by DSH Connection authentication.

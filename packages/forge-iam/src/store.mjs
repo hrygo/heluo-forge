@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { createHash, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
 
 const TOMBSTONE = Object.freeze({ kind: 'grant', payload: Object.freeze({ version: 1, type: 'heluo-iam-session-tombstone' }) });
@@ -16,7 +17,18 @@ export const LEGACY_TOKEN_REF = 'ENTERPRISE_ACCESS_TOKEN';
 
 /** UAG personal credentials are `uag-` plus 128 bits of lowercase hex. */
 const GATEWAY_VALUE_PATTERN = /^uag-[0-9a-f]{32}$/i;
-const GATEWAY_VERSION = 1;
+const GATEWAY_VERSION = 2;
+const GATEWAY_LEGACY_VERSION = 1;
+const WRITE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const valueDigest = (value) => createHash('sha256').update(value).digest('hex');
+const gatewayTombstone = () => ({ kind: GATEWAY_RECORD_KIND, payload: {
+  version: GATEWAY_VERSION, type: 'heluo-iam-gateway-tombstone', writeOperationId: randomUUID(),
+} });
+const isGatewayTombstone = (record) => record?.kind === GATEWAY_RECORD_KIND
+  && Object.keys(record).length === 2 && record.payload?.version === GATEWAY_VERSION
+  && record.payload.type === 'heluo-iam-gateway-tombstone'
+  && Object.keys(record.payload).length === 3 && typeof record.payload.writeOperationId === 'string'
+  && WRITE_ID_PATTERN.test(record.payload.writeOperationId);
 
 export class StoreError extends Error {
   constructor(code, message, details = {}) {
@@ -104,7 +116,7 @@ export function createGrantStore(credentials, options = {}) {
      * CredentialProvider.modifyRecord's lock; returning undefined leaves the
      * record untouched.
      */
-    async mutate(mutator) {
+    async mutate(mutator, { guard } = {}) {
       if (typeof mutator !== 'function') {
         throw new StoreError('IAM_MUTATOR_INVALID', 'mutate requires a function');
       }
@@ -121,6 +133,10 @@ export function createGrantStore(credentials, options = {}) {
           grant = parsed.value;
         }
         const next = await mutator(grant);
+        // Recheck after the async mutator, before returning a commit candidate.
+        if (guard !== undefined && (typeof guard !== 'function' || guard() !== true)) {
+          throw new StoreError('IAM_GRANT_WRITE_REJECTED', 'grant write guard rejected the write');
+        }
         if (next === undefined) return undefined;
         const validation = validateGrant(next);
         if (!validation.ok) {
@@ -183,6 +199,7 @@ export function createGrantStore(credentials, options = {}) {
     async discardCallbackGrant(expected) {
       const valid = validateGrant(expected);
       if (!valid.ok || !expected.sessionInstanceId || !atomicVerified()) return { ok: false };
+      const snapshot = valid.value;
       let called = false;
       let decision;
       let expectedResult;
@@ -198,14 +215,15 @@ export function createGrantStore(credentials, options = {}) {
           if (current.kind !== 'grant') throw new Error('invalid record');
           const parsed = parseGrant(current.payload);
           if (!parsed.ok || !parsed.value.sessionInstanceId) throw new Error('unattributable grant');
-          if (parsed.value.sessionInstanceId !== expected.sessionInstanceId) {
+          if (parsed.value.sessionInstanceId !== snapshot.sessionInstanceId) {
             decision = 'replaced';
             expectedResult = current;
             return undefined;
           }
-          for (const field of ['issuer', 'subject', 'clientId', 'resource', 'obtainedAt']) {
-            if (parsed.value[field] !== expected[field]) throw new Error('grant context mismatch');
+          for (const field of ['version', 'issuer', 'subject', 'clientId', 'resource', 'obtainedAt']) {
+            if (parsed.value[field] !== snapshot[field]) throw new Error('grant context mismatch');
           }
+          if (!isDeepStrictEqual(parsed.value.authContext, snapshot.authContext)) throw new Error('grant authentication context mismatch');
           decision = 'discarded';
           expectedResult = TOMBSTONE;
           return { kind: 'grant', payload: { ...TOMBSTONE.payload } };
@@ -260,7 +278,7 @@ function parseGatewayCredential(payload) {
     return { ok: false, errors: ['gateway credential must be an object'] };
   }
   const errors = [];
-  if (payload.version !== GATEWAY_VERSION) errors.push(`gateway credential version must be ${GATEWAY_VERSION}`);
+  if (![GATEWAY_LEGACY_VERSION, GATEWAY_VERSION].includes(payload.version)) errors.push('unsupported gateway credential version');
   for (const field of ['ownerSubject', 'enteredAt']) {
     if (!isNonEmptyString(payload[field])) errors.push(`gateway credential ${field} must be a non-empty string`);
   }
@@ -269,108 +287,173 @@ function parseGatewayCredential(payload) {
       errors.push(`gateway credential ${field} must be a string when present`);
     }
   }
+  if (payload.version === GATEWAY_VERSION) {
+    if (typeof payload.writeOperationId !== 'string' || !WRITE_ID_PATTERN.test(payload.writeOperationId)) errors.push('invalid gateway write generation');
+    if (typeof payload.valueDigest !== 'string' || !/^[0-9a-f]{64}$/.test(payload.valueDigest)) errors.push('invalid gateway value binding');
+  }
   if (errors.length) return { ok: false, errors };
   return { ok: true, value: payload };
 }
 
 /**
- * Gateway personal credential. The secret lives in `ENTERPRISE_STATIC_KEY`
- * because `llm-pi-ai` resolves that reference per request; the non-secret
- * metadata (owner, device, timestamps) lives in a record, because references
- * carry values only.
+ * Host-only gateway storage. The SDK has no joint ref/record transaction, so
+ * mutations require a separate composition-vouched private adapter. No default
+ * adapter exists and no sequence of SDK writes is used as a fallback.
  *
- * @param {object} credentials
- * @param {{ key?: string, ref?: string }} [options]
+ * The adapter supplies detached stored pairs (never environment fallbacks):
+ * snapshot(scope) -> { record, value }; compareAndSwap(scope, expected, next,
+ * guard) -> { ok: false } or { ok: true, snapshot: committedPair }. Full compare,
+ * exactly one synchronous guard and both writes share one atomic commit.
+ * This contract is not an existing credentials Service method.
  */
 export function createGatewayCredentialStore(credentials, options = {}) {
   assertCredentials(credentials);
   const key = options.key ?? GATEWAY_RECORD_KEY;
   const ref = options.ref ?? GATEWAY_REF;
+  const scope = Object.freeze({ recordKey: key, ref });
+  const unknown = () => new StoreError('IAM_GATEWAY_WRITE_UNKNOWN', 'gateway mutation outcome is unconfirmed');
+  const readOnly = () => new StoreError('IAM_GATEWAY_LEGACY_READ_ONLY', 'gateway data is read-only and is not migrated automatically');
+  const changed = () => new StoreError('IAM_GATEWAY_CHANGED', 'gateway snapshot changed; no automatic retry is performed');
+
+  function rejectAsync(value) {
+    if (value && typeof value.then === 'function') {
+      Promise.resolve(value).catch(() => {});
+      return true;
+    }
+    return false;
+  }
+
+  function requireAtomic() {
+    try {
+      if (typeof options.getGatewayAtomicStore !== 'function' || typeof options.verifyGatewayAtomicStore !== 'function') throw new Error('missing');
+      const adapter = options.getGatewayAtomicStore(credentials);
+      if (rejectAsync(adapter)) throw new Error('async adapter');
+      const verified = options.verifyGatewayAtomicStore(credentials, adapter, scope);
+      if (rejectAsync(verified) || verified !== true) throw new Error('unverified');
+      if (typeof adapter?.snapshot !== 'function' || typeof adapter?.compareAndSwap !== 'function') throw new Error('invalid');
+      return adapter;
+    } catch {
+      throw new StoreError('IAM_GATEWAY_ATOMIC_UNVERIFIED', 'joint gateway storage atomicity is not verified');
+    }
+  }
+
+  async function snapshot(adapter) {
+    try {
+      const pair = await adapter.snapshot(scope);
+      if (!pair || typeof pair !== 'object' || !Object.hasOwn(pair, 'record') || !Object.hasOwn(pair, 'value')
+        || (pair.value !== undefined && typeof pair.value !== 'string')) throw new Error('invalid');
+      return structuredClone({ record: pair.record, value: pair.value });
+    } catch { throw unknown(); }
+  }
+
+  function assertMutable(pair) {
+    if (pair.record === undefined && pair.value === undefined) return;
+    if (isGatewayTombstone(pair.record) && pair.value === undefined) return;
+    if (pair.record?.kind !== GATEWAY_RECORD_KIND) throw readOnly();
+    const parsed = parseGatewayCredential(pair.record.payload);
+    if (!parsed.ok || parsed.value.version !== GATEWAY_VERSION
+      || typeof pair.value !== 'string' || !GATEWAY_VALUE_PATTERN.test(pair.value)
+      || parsed.value.valueDigest !== valueDigest(pair.value)) throw readOnly();
+  }
+
+  async function commit(adapter, expected, next, guard) {
+    // Keep the comparison baselines private. Adapter argument normalization or
+    // retained references must not redefine the original snapshot or intent.
+    let requestedExpected;
+    let requestedNext;
+    try {
+      requestedExpected = structuredClone(expected);
+      requestedNext = structuredClone(next);
+    } catch { throw unknown(); }
+    let calls = 0;
+    let permitted = false;
+    let guardFailure;
+    let hasGuardFailure = false;
+    const admit = () => {
+      try {
+        if (++calls !== 1) throw unknown();
+        if (requireAtomic() !== adapter) throw new StoreError('IAM_GATEWAY_ATOMIC_UNVERIFIED', 'gateway atomic adapter changed');
+        const result = guard === undefined ? true : typeof guard === 'function' ? guard() : false;
+        if (rejectAsync(result) || result !== true) throw changed();
+        let argumentsMatch;
+        try {
+          argumentsMatch = isDeepStrictEqual(requestedExpected, expected) && isDeepStrictEqual(requestedNext, next);
+        } catch { throw unknown(); }
+        if (!argumentsMatch) throw unknown();
+        permitted = true;
+        return true;
+      } catch (error) {
+        hasGuardFailure = true;
+        guardFailure = error instanceof Error ? error : changed();
+        throw guardFailure;
+      }
+    };
+    let receipt;
+    try { receipt = await adapter.compareAndSwap(scope, requestedExpected, requestedNext, admit); }
+    catch (error) {
+      // The trusted transaction propagates this exact pre-commit rejection.
+      // Other exceptions may have occurred after commit: never compensate.
+      if (hasGuardFailure && error === guardFailure) throw error;
+      throw unknown();
+    }
+    let receiptOk;
+    let matches;
+    try {
+      receiptOk = receipt?.ok;
+      matches = receiptOk === true && isDeepStrictEqual(receipt.snapshot, next);
+    } catch { throw unknown(); }
+    if (receiptOk === false && calls === 0) throw changed();
+    if (receiptOk !== true || calls !== 1 || !permitted || hasGuardFailure || !matches) throw unknown();
+    try { if (requireAtomic() !== adapter) throw unknown(); } catch { throw unknown(); }
+  }
 
   async function read() {
     const record = await credentials.readRecord(key);
-    if (record === undefined || record === null) return { ok: true, credential: null };
-    if (record.kind !== GATEWAY_RECORD_KIND) {
-      return { ok: false, reason: 'wrong-kind', kind: record.kind };
-    }
+    if (record === undefined || record === null || isGatewayTombstone(record)) return { ok: true, credential: null };
+    if (record.kind !== GATEWAY_RECORD_KIND) return { ok: false, reason: 'wrong-kind', kind: record.kind };
     const parsed = parseGatewayCredential(record.payload);
     if (!parsed.ok) return { ok: false, reason: 'invalid-credential', errors: parsed.errors };
     return { ok: true, credential: parsed.value };
   }
 
   return {
-    key,
-    ref,
-    read,
-
-    /**
-     * Only this provider's stored value counts: an ambient environment value
-     * must not make the account page claim the user configured a credential.
-     */
-    async resolve() {
+    key, ref, read,
+    async resolve(credential) {
       const resolved = await credentials.resolve(ref);
+      if (credential?.version === GATEWAY_VERSION && (!isNonEmptyString(resolved?.value)
+        || valueDigest(resolved.value) !== credential.valueDigest)) return { invalid: true };
       return resolved && isNonEmptyString(resolved.value)
-        ? { value: resolved.value, source: resolved.source ?? null }
-        : undefined;
+        ? { value: resolved.value, source: resolved.source ?? null } : undefined;
     },
-
-    async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry }) {
+    async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry }, { guard } = {}) {
       if (typeof value !== 'string' || !GATEWAY_VALUE_PATTERN.test(value)) {
         throw new StoreError('IAM_GATEWAY_KEY_INVALID', 'gateway credential must be uag- plus 32 hexadecimal digits');
       }
-      if (!isNonEmptyString(ownerSubject)) {
-        throw new StoreError('IAM_GATEWAY_OWNER_MISSING', 'a gateway credential needs the signed-in subject');
-      }
-      const payload = {
-        version: GATEWAY_VERSION,
-        ownerSubject,
-        enteredAt,
-        ...(deviceLabel ? { deviceLabel } : {}),
-        ...(suggestedExpiry ? { suggestedExpiry } : {}),
+      if (!isNonEmptyString(ownerSubject)) throw new StoreError('IAM_GATEWAY_OWNER_MISSING', 'a gateway credential needs the signed-in subject');
+      const payload = { version: GATEWAY_VERSION, ownerSubject, enteredAt,
+        writeOperationId: randomUUID(), valueDigest: valueDigest(value),
+        ...(deviceLabel ? { deviceLabel } : {}), ...(suggestedExpiry ? { suggestedExpiry } : {}),
       };
-      // Metadata first: a crash between the two writes leaves a record whose
-      // value is missing (visible, harmless) rather than a secret without an
-      // owner (usable but invisible in the account page).
-      await credentials.modifyRecord(key, async (current) => {
-        if (current !== undefined && current !== null && current.kind !== GATEWAY_RECORD_KIND) {
-          throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing record is not a gateway credential');
-        }
-        return { kind: GATEWAY_RECORD_KIND, payload };
-      });
-      try {
-        await credentials.set(ref, value);
-      } catch (error) {
-        await credentials.deleteRecord(key).catch(() => {});
-        throw error;
-      }
+      if (!parseGatewayCredential(payload).ok) throw new StoreError('IAM_REQUEST_INVALID', 'gateway metadata is invalid');
+      const adapter = requireAtomic();
+      const expected = await snapshot(adapter);
+      assertMutable(expected);
+      await commit(adapter, expected, { record: { kind: GATEWAY_RECORD_KIND, payload }, value }, guard);
       return { ok: true, credential: payload };
     },
-
-    /** Non-secret storage facts for the account page (source/writability). */
+    /** Underlying storage facts, not permission for gateway business writes. */
     async describe() {
       if (typeof credentials.describe !== 'function') return { configured: false, writable: false };
-      try {
-        return await credentials.describe(ref);
-      } catch {
-        return { configured: false, writable: false };
-      }
+      try { return await credentials.describe(ref); }
+      catch { return { configured: false, writable: false }; }
     },
-
-    async clear() {
-      const errors = [];
-      try {
-        await credentials.unset(ref);
-      } catch (error) {
-        // The secret may still be present, so keep the metadata that says so.
-        errors.push({ step: 'unset-ref', error });
-        return { ok: false, errors };
-      }
-      try {
-        await credentials.deleteRecord(key);
-      } catch (error) {
-        errors.push({ step: 'delete-record', error });
-      }
-      return { ok: errors.length === 0, errors };
+    async clear({ guard } = {}) {
+      const adapter = requireAtomic();
+      const expected = await snapshot(adapter);
+      assertMutable(expected);
+      // Even an empty clear advances the generation, fencing older snapshots.
+      await commit(adapter, expected, { record: gatewayTombstone(), value: undefined }, guard);
+      return { ok: true };
     },
   };
 }

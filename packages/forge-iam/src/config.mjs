@@ -2,12 +2,18 @@
 // 必须同步返回 { value } 或 { issues }。这里不依赖外部校验库，保持包骨架可在
 // 没有 DSH 运行时的环境下测试。
 
-// These keys are documented as a V1 target but are not implemented. Reject
-// them explicitly instead of silently dropping them: a profile that believes it
-// switched to a confidential client must fail closed, not keep running PKCE.
-export const RESERVED_UNIMPLEMENTED_FIELDS = ['authMode', 'clientSecretRef'];
+// Authentication configuration is a tagged union. This schema alone never
+// supplies a secret or enables the staged confidential service implementation.
+const FORBIDDEN_AUTH_FIELDS = [
+  'clientSecret', 'client_secret', 'Authorization', 'authorization', 'headers', 'body',
+  'authorizationHeader', 'tokenHeaders', 'tokenBody', 'clientAuthBody', 'clientAuthentication',
+  'pkce', 'pkceMethod', 'codeChallengeMethod', 'code_challenge_method', 'disablePkce',
+];
 
 export const CONFIG_FIELDS = [
+  'authMode',
+  'clientAuthMethod',
+  'clientSecretRef',
   'discoveryUrl',
   'issuer',
   'authorizationEndpoint',
@@ -50,6 +56,8 @@ const STRING_FIELDS = [
 ];
 
 const DEFAULTS = {
+  authMode: 'public',
+  clientAuthMethod: 'none',
   discoveryUrl: '',
   issuer: '',
   authorizationEndpoint: '',
@@ -105,11 +113,29 @@ export function validateConfig(input) {
   const issues = [];
   const value = { ...DEFAULTS, scopes: [...DEFAULTS.scopes] };
 
-  for (const key of RESERVED_UNIMPLEMENTED_FIELDS) {
-    if (source[key] !== undefined) {
-      issues.push(issue(key, `${key} is not implemented; remove it from the profile until confidential-client support lands`));
+  for (const key of FORBIDDEN_AUTH_FIELDS) {
+    if (Object.hasOwn(source, key)) issues.push(issue(key, 'authentication overrides and PKCE switches are not supported'));
+  }
+  const mode = source.authMode === undefined ? 'public' : source.authMode;
+  const method = source.clientAuthMethod === undefined ? 'none' : source.clientAuthMethod;
+  if (!['public', 'confidential'].includes(mode)) {
+    issues.push(issue('authMode', 'authMode must be public or confidential'));
+  } else if (mode === 'public') {
+    if (method !== 'none') issues.push(issue('clientAuthMethod', 'public authentication only permits none'));
+    if (Object.hasOwn(source, 'clientSecretRef')) issues.push(issue('clientSecretRef', 'public authentication must not contain a secret reference'));
+  } else {
+    const validMethod = ['client_secret_basic', 'client_secret_post'].includes(method);
+    const validRef = typeof source.clientSecretRef === 'string' && source.clientSecretRef.trim().length > 0;
+    if (!validMethod || !validRef) {
+      issues.push(issue('authMode', 'confidential authentication requires an explicit method and reference'));
+      if (!validMethod) issues.push(issue('clientAuthMethod', 'confidential authentication requires an explicit supported method'));
+      issues.push(issue('clientSecretRef', 'a confidential reference requires the complete authentication configuration'));
+    } else {
+      value.clientAuthMethod = method;
+      value.clientSecretRef = source.clientSecretRef;
     }
   }
+  if (mode === 'confidential') value.authMode = mode;
 
   for (const key of STRING_FIELDS) {
     const raw = source[key];

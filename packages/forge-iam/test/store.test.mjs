@@ -9,6 +9,7 @@ import {
   createGatewayCredentialStore,
   createGrantStore,
 } from '../src/store.mjs';
+import { createAtomicGatewayFixture } from './support/atomic-gateway.mjs';
 
 const grant = {
   version: 1,
@@ -273,9 +274,10 @@ test('a credentials object missing a required method is rejected', () => {
   );
 });
 
-test('saving a gateway credential writes the value and its owner metadata', async () => {
-  const credentials = fakeCredentials();
-  const store = createGatewayCredentialStore(credentials);
+test('saving a gateway credential atomically writes its value and bound V2 owner metadata', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const { credentials } = atomic;
+  const store = createGatewayCredentialStore(credentials, atomic.options);
   await store.save({
     value: gatewayValue,
     ownerSubject: 'E1001',
@@ -286,15 +288,21 @@ test('saving a gateway credential writes the value and its owner metadata', asyn
   assert.equal(credentials.refs.get(GATEWAY_REF), gatewayValue);
   const record = credentials.records.get(GATEWAY_RECORD_KEY);
   assert.equal(record.kind, 'grant');
+  assert.equal(record.payload.version, 2);
+  assert.equal(typeof record.payload.writeOperationId, 'string');
+  assert.equal(typeof record.payload.valueDigest, 'string');
   assert.equal(record.payload.ownerSubject, 'E1001');
   assert.equal(record.payload.deviceLabel, '工作站-01');
+  assert.equal(JSON.stringify(record).includes(gatewayValue), false);
+  assert.equal(atomic.adapter.commits, 1);
   assert.equal((await store.read()).credential.ownerSubject, 'E1001');
   assert.deepEqual(await store.resolve(), { value: gatewayValue, source: 'keychain' });
 });
 
 test('a malformed gateway credential is rejected before any write', async () => {
-  const credentials = fakeCredentials();
-  const store = createGatewayCredentialStore(credentials);
+  const atomic = createAtomicGatewayFixture();
+  const { credentials } = atomic;
+  const store = createGatewayCredentialStore(credentials, atomic.options);
   await assert.rejects(
     () => store.save({ value: 'not-a-uag-key', ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
     (error) => error instanceof StoreError && error.code === 'IAM_GATEWAY_KEY_INVALID',
@@ -304,39 +312,61 @@ test('a malformed gateway credential is rejected before any write', async () => 
 });
 
 test('a gateway credential needs the signed-in subject', async () => {
-  const credentials = fakeCredentials();
-  const store = createGatewayCredentialStore(credentials);
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
   await assert.rejects(
     () => store.save({ value: gatewayValue, ownerSubject: '', enteredAt: '2030-01-01T00:00:00.000Z' }),
     (error) => error instanceof StoreError && error.code === 'IAM_GATEWAY_OWNER_MISSING',
   );
 });
 
-test('a failed metadata write never stores the value', async () => {
-  const credentials = fakeCredentials();
-  const store = createGatewayCredentialStore(credentials);
-  credentials.modifyRecord = async () => {
-    throw new Error('record write failed');
-  };
-  await assert.rejects(
-    () => store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
-    /record write failed/,
-  );
-  assert.equal(credentials.refs.has(GATEWAY_REF), false);
+test('a failed gateway snapshot never changes either member of the pair', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  const before = atomic.pair();
+  let snapshots = 0;
+  atomic.adapter.snapshot = async () => { snapshots++; throw new Error('synthetic snapshot failure'); };
+  await assert.rejects(store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    { code: 'IAM_GATEWAY_WRITE_UNKNOWN' });
+  assert.equal(snapshots, 1);
+  assert.deepEqual(atomic.pair(), before);
+  assert.equal(atomic.adapter.attempts, 0);
+  assert.equal(atomic.adapter.commits, 0);
 });
 
-test('a failed value write withdraws the metadata', async () => {
-  const credentials = fakeCredentials();
-  const store = createGatewayCredentialStore(credentials);
-  credentials.set = async () => {
-    throw new Error('keychain locked');
-  };
-  await assert.rejects(
-    () => store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
-    /keychain locked/,
-  );
-  assert.equal(credentials.records.has(GATEWAY_RECORD_KEY), false);
-  assert.equal(credentials.refs.has(GATEWAY_REF), false);
+test('a rejected gateway CAS leaves both value and metadata unchanged', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  const before = atomic.pair();
+  atomic.adapter.compareAndSwap = async () => ({ ok: false });
+  await assert.rejects(store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    { code: 'IAM_GATEWAY_CHANGED' });
+  assert.deepEqual(atomic.pair(), before);
+  assert.equal(atomic.adapter.commits, 0);
+});
+
+test('a gateway commit failure before updating either map leaves the pair unchanged', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  const before = atomic.pair();
+  atomic.adapter.beforeCommit = async () => { throw new Error('synthetic transaction failure'); };
+  await assert.rejects(store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    { code: 'IAM_GATEWAY_WRITE_UNKNOWN' });
+  assert.deepEqual(atomic.pair(), before);
+  assert.equal(atomic.adapter.commits, 0);
+});
+
+test('an unknown gateway commit receipt never compensates by deleting the committed pair', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  atomic.adapter.afterCommit = async () => { throw new Error('synthetic lost receipt'); };
+  await assert.rejects(store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    { code: 'IAM_GATEWAY_WRITE_UNKNOWN' });
+  const after = atomic.pair();
+  assert.equal(after.value === gatewayValue, true);
+  assert.equal(after.record?.payload?.ownerSubject === 'E1001', true);
+  assert.equal(after.record?.payload?.version, 2);
+  assert.equal(atomic.adapter.commits, 1);
 });
 
 test('resolve reports the provider source so ambient values stay distinguishable', async () => {
@@ -345,36 +375,48 @@ test('resolve reports the provider source so ambient values stay distinguishable
   assert.deepEqual(await createGatewayCredentialStore(credentials).resolve(), { value: gatewayValue, source: 'env' });
 });
 
-test('clearing a gateway credential removes the value first, then the metadata', async () => {
-  const credentials = fakeCredentials({
-    records: [[GATEWAY_RECORD_KEY, {
-      kind: 'grant',
-      payload: { version: 1, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' },
-    }]],
-    refs: [[GATEWAY_REF, gatewayValue]],
-  });
-  const store = createGatewayCredentialStore(credentials);
-  const result = await store.clear();
-  assert.equal(result.ok, true);
+test('clearing a modern gateway pair atomically removes the value and writes a fresh tombstone nonce', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const { credentials } = atomic;
+  const store = createGatewayCredentialStore(credentials, atomic.options);
+  await store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+  const savedNonce = atomic.pair().record.payload.writeOperationId;
+  assert.equal((await store.clear()).ok, true);
   assert.equal(credentials.refs.has(GATEWAY_REF), false);
-  assert.equal(credentials.records.has(GATEWAY_RECORD_KEY), false);
+  assert.equal((await store.read()).credential, null);
+  const firstNonce = atomic.pair().record.payload.writeOperationId;
+  assert.equal(typeof firstNonce, 'string');
+  assert.notEqual(firstNonce, savedNonce);
+  assert.equal((await store.clear()).ok, true);
+  assert.notEqual(atomic.pair().record.payload.writeOperationId, firstNonce);
+  assert.equal(atomic.adapter.commits, 3);
 });
 
-test('a failed value removal keeps the metadata that reports the secret', async () => {
+test('legacy V1 gateway pairs stay read-only even with exact atomic capability', async () => {
   const credentials = fakeCredentials({
-    records: [[GATEWAY_RECORD_KEY, {
-      kind: 'grant',
-      payload: { version: 1, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' },
-    }]],
+    records: [[GATEWAY_RECORD_KEY, { kind: 'grant',
+      payload: { version: 1, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' } }]],
     refs: [[GATEWAY_REF, gatewayValue]],
   });
-  credentials.unset = async () => {
-    throw new Error('locked');
-  };
-  const result = await createGatewayCredentialStore(credentials).clear();
-  assert.equal(result.ok, false);
-  assert.equal(result.errors[0].step, 'unset-ref');
-  assert.equal(credentials.records.has(GATEWAY_RECORD_KEY), true);
+  const atomic = createAtomicGatewayFixture(credentials);
+  const store = createGatewayCredentialStore(credentials, atomic.options);
+  const before = atomic.pair();
+  await assert.rejects(store.clear(), { code: 'IAM_GATEWAY_LEGACY_READ_ONLY' });
+  await assert.rejects(store.save({ value: gatewayValue, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    { code: 'IAM_GATEWAY_LEGACY_READ_ONLY' });
+  assert.deepEqual(atomic.pair(), before);
+  assert.equal(atomic.adapter.commits, 0);
+});
+
+test('a failed modern gateway clear keeps the entire bound pair unchanged', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  await store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+  const before = atomic.pair();
+  atomic.adapter.beforeCommit = async () => { throw new Error('synthetic clear transaction failure'); };
+  await assert.rejects(store.clear(), { code: 'IAM_GATEWAY_WRITE_UNKNOWN' });
+  assert.deepEqual(atomic.pair(), before);
+  assert.equal(atomic.adapter.commits, 1);
 });
 
 test('a gateway record of another kind is reported, not read as a credential', async () => {

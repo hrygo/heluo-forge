@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.22.0 |
+| 版本 | V1.36.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-10-28 |
+| 最后更新 | 2026-11-03 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -45,9 +45,9 @@
 |---|---|---|---|
 | `requirements/` | 范围、画像、场景、需求与指标 | [需求与场景基线](<requirements/requirements-baseline.md>) | 业务方、PM、安全、试点用户 |
 | `architecture/` | 跨域决策、信任边界、领域设计、ADR | [总体架构设计](<architecture/platform-architecture.md>)；[专用访问评审](architecture/gateway-identity-review.md)，[静态 Key 接入](architecture/gateway-static-key-option.md)仅保留历史依据 | 架构评审、各团队负责人 |
-| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>) | PM、实施团队 |
+| `plans/` | 关键路径、门禁证据、验收与试点运行 | [推广实施方案](<plans/rollout-plan.md>)；市场侧 [P0 接入取证单](<plans/market-p0-verification.md>)；本地 [IAM 联合变更计划](<plans/2026-11-02-iam-gateway-atomic.md>)、[默认模型只读编排计划](<plans/2026-11-02-iam-default-model-readonly.md>)、[隔离消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)；后续[收尾计划](<plans/2026-11-03-iam-mock-closeout.md>) | PM、实施团队 |
 | `design/` | 逐模块详细设计的索引与状态 | [设计索引](<design/README.md>) | 插件与服务开发者 |
-| `contracts/` | 外部系统字段级契约 | [AI 网关契约](<contracts/gateway-contract.md>) | 网关、模型与安全团队 |
+| `contracts/` | 外部系统字段级契约与明确标注的私有隔离草案 | [AI 网关契约](<contracts/gateway-contract.md>)；[IAM 消费隔离草案](<contracts/iam-consumer-isolated.md>)（source/mock见证/许可/合成工具与模型已分段验收；根联合已实现，本地验收已完成，真实准入未开放）；[IAM 只读订阅隔离草案](<contracts/iam-view-observer-isolated.md>)（私有source/mock接缝已验收；真实注册关闭） | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
 | `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 发函人、各接入团队 |
 | `engineering/` | 仓库结构、开发测试与发布约定 | [工程结构设计](<engineering/repository-structure-design.md>) | 工程负责人、维护者 |
@@ -72,6 +72,8 @@
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | MSI 自助安装/MDM、deb/apt/`systemd --user` 与 `dsh-web-open` 启动脚本 |
 | CORP-DSH-SDD-001 | SDD 流程 | 待创建 | skill、CLI、CI、产物契约 |
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | 3 部门 800 人分批计划、指标采集、支持渠道、退出条件 |
+
+IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.md>)、[字段契约](<contracts/iam-client-auth-isolated.md>)。完整 source/mock 设计已获用户批准，[实施计划](<plans/2026-11-02-iam-confidential-isolated.md>)已登记；基础 schema、来源/HTTP、codec 与实际机密隔离服务已验；真实来源未开放。消费模拟A/B/C/D已分段验收，E根联合16项定向通过，源码、联合审阅与本批完整检查已完成，见[消费实施计划](<plans/2026-11-02-iam-consumer-isolated.md>)。
 
 企业研发跨模块草案：[全流程能力设计](design/plugins/forge-devops-lifecycle.md)、[工具动作契约](contracts/engineering-tools.md)、[观察事件契约](contracts/metrics-events.md)。覆盖已确认受控写目标与待审批项，不改变上述十项团队交付物的负责关系，也不代表接口已核验。
 
@@ -100,6 +102,8 @@
 
 ## 5. 阅读顺序
 
+使用账户页时，直接阅读 [IAM 用户指南](<../packages/forge-iam/docs/user-guide.md>)；开发或验证 IAM 时，阅读 [IAM 开发指南](<../packages/forge-iam/docs/developer-guide.md>)与[模块设计](<design/plugins/forge-iam.md>)。随包指南描述当前开发骨架，不是生产运行手册。
+
 1. [需求与场景基线](<requirements/requirements-baseline.md>) §1–§6：先定范围、人群与指标。
 2. [总体架构设计](<architecture/platform-architecture.md>) §1–§7：原则、总体架构、插件形态与五个领域。
 3. [推广实施方案](<plans/rollout-plan.md>) §4–§8：关键路径、验收、风险与试点运行。
@@ -121,7 +125,7 @@
 | 编制依据 | 来源及适用版本、核验日期、已验方式与范围、未验项；上游源码路径不能当作本仓库文件 |
 | 待确认表 | 具体问题、回答责任方、截止门禁；现有模块模板的“未决事项”表应同时写明截止门禁 |
 | 版本历史 | 不写修订记录表：版本号只维护在文档信息与文档清单，历史由 Git 提交记录承担 |
-| 仓库说明与模板 | 根 README、AGENTS、CONTRIBUTING、SECURITY、模块职责 README 和模板不因存在而成为已批准的技术契约，不强加受控正文编号 |
+| 仓库说明与模板 | 根 README、AGENTS、CONTRIBUTING、SECURITY、模块职责 README、仅描述当前代码行为的随包使用说明和模板不因存在而成为已批准的技术契约，不强加受控正文编号；随包说明不承载外部契约或生产准入批准 |
 
 受控正文缺少必备内容时按草案处理，不标“评审稿”或“生效”。agent 代拟时标注“代拟”，新增审核、批准栏保持“待定”；既有审批记录保留，不倒填审批人。
 

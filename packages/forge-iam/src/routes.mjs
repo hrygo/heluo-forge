@@ -26,12 +26,19 @@ const ERROR_STATUS = {
   IAM_NOT_SIGNED_IN: 401,
   IAM_REFRESH_SUBJECT_MISMATCH: 401,
   IAM_GRANT_CONTEXT_MISMATCH: 401,
+  IAM_CLIENT_AUTH_UNVERIFIED: 503,
+  IAM_CLIENT_AUTH_CHANGED: 409,
+  IAM_CLIENT_AUTH_CONTEXT_INVALID: 401,
   IAM_ATTEMPT_CANCELLED: 409,
   IAM_CONFIG_INVALID: 500,
   IAM_DISPOSED: 503,
   IAM_RECORD_KIND_MISMATCH: 409,
   IAM_GATEWAY_KEY_INVALID: 400,
   IAM_GATEWAY_OWNER_MISSING: 400,
+  IAM_GATEWAY_ATOMIC_UNVERIFIED: 503,
+  IAM_GATEWAY_LEGACY_READ_ONLY: 409,
+  IAM_GATEWAY_CHANGED: 409,
+  IAM_GATEWAY_WRITE_UNKNOWN: 503,
   IAM_REQUEST_INVALID: 400,
   IAM_REQUEST_TOO_LARGE: 413,
 };
@@ -163,9 +170,14 @@ function connectionRejection(req, getConnection) {
   } catch {
     connection = undefined;
   }
-  if (!connection || typeof connection.requestRejection !== 'function') return 503;
   try {
-    return connection.requestRejection({ headers: req?.headers ?? {} }) ?? undefined;
+    if (!connection || typeof connection.requestRejection !== 'function') return 503;
+    const result = connection.requestRejection({ headers: req?.headers ?? {} });
+    if (result === undefined || result === 401 || result === 403) return result;
+    // The Connection seam is synchronous. Only explicit undefined admits;
+    // malformed values and async implementations are not an auth decision.
+    if (result && typeof result.then === 'function') Promise.resolve(result).catch(() => {});
+    return 503;
   } catch {
     return 503;
   }

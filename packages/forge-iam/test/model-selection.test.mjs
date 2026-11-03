@@ -141,7 +141,7 @@ test('写入失败与写入后回读不一致都如实报告，不谎报成功',
     availableProviders,
     disabledProviders,
   });
-  assert.equal(failed.written, false);
+  assert.equal(failed.written, null);
   assert.equal(failed.reason, MODEL_SELECTION_REASONS.WRITE_FAILED);
 
   const mismatched = await applyModelSelection({

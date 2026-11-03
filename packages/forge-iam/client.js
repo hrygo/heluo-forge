@@ -50,8 +50,8 @@ window.__ModuleLoader__.load({
       unknown: '状态未知',
       unconfigured: '未配置',
       configured: '已配置',
-      'owner-mismatch': '属于其他账号，需重新录入',
-      invalid: '记录损坏，请重新录入',
+      'owner-mismatch': '属于其他账号，请核对记录',
+      invalid: '记录不一致，已保留',
     };
 
     function openLoginWindow() {
@@ -121,11 +121,47 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_GRANT_CONTEXT_MISMATCH' || code === 'IAM_REFRESH_SUBJECT_MISMATCH') return '登录状态已变化，请重新登录。';
       if (code === 'IAM_GATEWAY_KEY_INVALID') return '凭证格式不正确：应为 uag- 加 32 位十六进制。';
       if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再录入网关凭据。';
+      if (code === 'IAM_GATEWAY_ATOMIC_UNVERIFIED') return '当前存储未提供已核验的凭据与归属信息联合原子能力，暂不可保存或清除。';
+      if (code === 'IAM_GATEWAY_LEGACY_READ_ONLY') return '现有网关凭据仅可读取，本次未修改，也未自动迁移或修复。';
+      if (code === 'IAM_GATEWAY_CHANGED') return '网关凭据已变化，本次操作未提交；请刷新核实。';
+      if (code === 'IAM_GATEWAY_WRITE_UNKNOWN') return '未确认网关凭据写入结果，未自动重试；请刷新核实，不要直接重复提交。';
       if (code === 'IAM_REQUEST_INVALID') return '请求内容无效，请重试。';
       if (code === 'IAM_REQUEST_TOO_LARGE') return '请求过大，请检查粘贴内容。';
       if (code === 'IAM_UNAUTHENTICATED' || code === 'IAM_CONNECTION_UNAVAILABLE') return '页面会话不可用，请刷新页面后重试。';
       if (code === 'IAM_METHOD_NOT_ALLOWED' || code === 'IAM_NOT_FOUND') return '请求不受支持，请刷新页面。';
       return `操作失败：${code}`;
+    }
+
+    const DIAGNOSTIC_ERRORS = new Set([
+      'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_UNCONFIGURED', 'IAM_CONFIG_INVALID',
+      'IAM_CREDENTIALS_UNAVAILABLE', 'IAM_CREDENTIALS_CLEAR_FAILED', 'IAM_REVOCATION_FAILED',
+      'IAM_EXCLUSIVE_CONFLICT', 'IAM_UNREACHABLE', 'IAM_STATE_MISMATCH', 'IAM_CALLBACK_INVALID',
+      'IAM_ATTEMPT_EXPIRED', 'IAM_INVALID_GRANT', 'IAM_REAUTH_REQUIRED', 'IAM_NOT_SIGNED_IN',
+      'IAM_ATTEMPT_CANCELLED', 'IAM_CALLBACK_UNAVAILABLE', 'IAM_DISPOSED',
+      'IAM_GRANT_CONTEXT_MISMATCH', 'IAM_REFRESH_SUBJECT_MISMATCH',
+      'IAM_GATEWAY_KEY_INVALID', 'IAM_GATEWAY_OWNER_MISSING', 'IAM_REQUEST_HEADER_REQUIRED',
+      'IAM_GATEWAY_ATOMIC_UNVERIFIED', 'IAM_GATEWAY_LEGACY_READ_ONLY',
+      'IAM_GATEWAY_CHANGED', 'IAM_GATEWAY_WRITE_UNKNOWN',
+      'IAM_REQUEST_INVALID', 'IAM_REQUEST_TOO_LARGE', 'IAM_UNAUTHENTICATED',
+      'IAM_CONNECTION_UNAVAILABLE', 'IAM_METHOD_NOT_ALLOWED', 'IAM_NOT_FOUND',
+      'IAM_REQUEST_FAILED', 'IAM_VIEW_FAILED',
+    ]);
+
+    // Build a new scalar object: the original view/state may contain private data.
+    function diagnosticSnapshot(state) {
+      const view = state.view;
+      const code = view?.error ?? state.error;
+      return {
+        format: 'forge-iam-diagnostic', version: 1,
+        pagePhase: ['loading', 'ready', 'error'].includes(state.phase) ? state.phase : 'unknown',
+        iamState: typeof view?.state === 'string' && Object.hasOwn(STATUS, view.state) ? view.state : 'unknown',
+        configured: typeof view?.configured === 'boolean' ? view.configured : null,
+        signedIn: typeof view?.signedIn === 'boolean' ? view.signedIn : null,
+        exclusive: view?.exclusive === 'ok' ? 'ok' : typeof view?.exclusive === 'string' && view.exclusive ? 'not-ok' : 'unknown',
+        gatewayState: typeof view?.gatewayCredential?.state === 'string' && Object.hasOwn(GATEWAY_STATUS, view.gatewayCredential.state) ? view.gatewayCredential.state : 'unknown',
+        errorCode: code == null ? null : DIAGNOSTIC_ERRORS.has(code) ? code : 'unknown',
+        missingConfigCount: Array.isArray(view?.missing) ? view.missing.length : null,
+      };
     }
 
     function useSessionPoll(enabled, update, barrierRef) {
@@ -160,6 +196,14 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
       const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
       const viewBarrier = React.useRef({ epoch: 0, pending: false });
+      const linkIdentity = React.useRef(null);
+      const copyRequest = React.useRef(null);
+      const copyLive = React.useRef(true);
+      const [copy, setCopy] = React.useState({ pending: false, notice: null, epoch: null, url: null });
+      React.useEffect(() => {
+        copyLive.current = true;
+        return () => { copyLive.current = false; copyRequest.current = null; };
+      }, []);
       const isViewCurrent = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
 
       const load = React.useCallback(async () => {
@@ -168,26 +212,30 @@ window.__ModuleLoader__.load({
         try {
           const view = await fetchView();
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
-          setState((current) => ({ ...current, phase: 'ready', view, error: null }));
+          if (view?.state !== 'authenticating') linkIdentity.current = null;
+          setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }) }));
         } catch (error) {
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
+          linkIdentity.current = null;
           setState({ phase: 'error', view: null, error: error.message, notice: null, authorizationUrl: null });
         }
       }, []);
 
       React.useEffect(() => { load(); }, [load]);
-      useSessionPoll(true, (view) => setState((current) => ({
-        ...current,
-        phase: 'ready',
-        view,
-        error: null,
-        // The authorization URL belongs to one attempt; once the session moved
-        // on, a stale "continue login" link must not stay on screen.
-        ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
-      })), viewBarrier);
+      useSessionPoll(true, (view) => {
+        // Invalidate before enqueueing React state, not only on the next render.
+        if (view?.state !== 'authenticating') linkIdentity.current = null;
+        setState((current) => ({
+          ...current, phase: 'ready', view, error: null,
+          ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
+        }));
+      }, viewBarrier);
 
       const login = async () => {
         if (viewBarrier.current.pending) return;
+        linkIdentity.current = null;
+        // A new explicit login invalidates acknowledgements of the old view.
+        viewBarrier.current.epoch += 1;
         const epoch = viewBarrier.current.epoch;
         setState((current) => ({ ...current, notice: null }));
         const popup = openLoginWindow();
@@ -204,6 +252,7 @@ window.__ModuleLoader__.load({
           }
           const view = result.body?.view ?? null;
           const authorizationUrl = result.body?.authorizationUrl ?? null;
+          linkIdentity.current = view?.state === 'authenticating' && typeof authorizationUrl === 'string' && authorizationUrl.trim() ? authorizationUrl : null;
           navigateLoginWindow(popup, authorizationUrl);
           setState((current) => ({ ...current, view, authorizationUrl, notice: null }));
         } catch {
@@ -262,6 +311,7 @@ window.__ModuleLoader__.load({
 
       const cancelLogin = async () => {
         if (viewBarrier.current.pending) return;
+        linkIdentity.current = null;
         const epoch = viewBarrier.current.epoch;
         try {
           const result = await postJson('/api/forge-iam/cancel');
@@ -278,6 +328,7 @@ window.__ModuleLoader__.load({
 
       const signOut = async () => {
         if (viewBarrier.current.pending) return;
+        linkIdentity.current = null;
         viewBarrier.current.epoch += 1;
         viewBarrier.current.pending = true;
         setState((current) => ({ ...current, view: null, authorizationUrl: null, notice: '正在退出…' }));
@@ -310,19 +361,59 @@ window.__ModuleLoader__.load({
         }
       };
 
+      const copyText = async (text, url = null) => {
+        if (!copyLive.current || viewBarrier.current.pending || copyRequest.current) return;
+        const request = {};
+        const epoch = viewBarrier.current.epoch;
+        const isCurrent = () => copyLive.current && isViewCurrent(epoch)
+          && (!url || linkIdentity.current === url);
+        copyRequest.current = request;
+        setCopy({ pending: true, notice: null, epoch, url });
+        try {
+          const clipboard = window.navigator?.clipboard;
+          if (typeof clipboard?.writeText !== 'function') throw new Error('unavailable');
+          // Invoke before any await to retain the browser's user activation.
+          const receipt = clipboard.writeText(text);
+          if (!receipt || typeof receipt.then !== 'function') throw new Error('unconfirmed');
+          await receipt;
+          if (isCurrent()) setCopy((current) => ({ ...current, notice: url
+            ? '登录链接已复制，含登录参数，请勿转发。' : '脱敏诊断已复制（点击时的页面快照）。' }));
+        } catch {
+          if (isCurrent()) setCopy((current) => ({ ...current, notice: '未确认复制，请检查浏览器剪贴板权限；页面内容已保留。' }));
+        } finally {
+          if (copyRequest.current === request) {
+            copyRequest.current = null;
+            if (copyLive.current) setCopy((current) => ({ ...current, pending: false }));
+          }
+        }
+      };
+      const copyLink = () => {
+        const url = linkIdentity.current;
+        if (!url || url !== state.authorizationUrl || state.view?.state !== 'authenticating') return;
+        return copyText(url, url);
+      };
+      const copyDiagnostic = () => copyText(JSON.stringify(diagnosticSnapshot(state)));
+
       const box = { padding: '12px 0', lineHeight: 1.6 };
       const button = { marginRight: 8, marginTop: 8, padding: '4px 10px', cursor: 'pointer' };
       const muted = { opacity: 0.7, fontSize: '0.9em' };
       const header = h('div', { style: { fontWeight: 600, marginBottom: 6 } }, '企业 IAM');
+      const copyTools = h('div', null,
+        state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
+          ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
+        h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制脱敏诊断'),
+        copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
+          ? h('div', { role: 'status', 'aria-live': 'polite', style: muted }, copy.notice) : null,
+      );
 
       if (state.phase === 'loading') {
-        return h('div', { style: box }, header, h('div', { style: muted }, '正在读取登录状态…'));
+        return h('div', { style: box }, header, h('div', { style: muted }, '正在读取登录状态…'), copyTools);
       }
       if (state.phase === 'error') {
         return h('div', { style: box }, header,
           h('div', null, '无法读取登录状态。'),
           h('div', { style: muted }, state.error),
-          h('button', { style: button, onClick: load }, '重试'),
+          h('button', { style: button, onClick: load }, '重试'), copyTools,
         );
       }
 
@@ -362,10 +453,12 @@ window.__ModuleLoader__.load({
         gatewayDetails.length ? h('div', { style: muted }, gatewayDetails.join(' · ')) : null,
         storageWarning,
         gateway.state === 'configured'
-          ? h('div', { style: muted }, '模型调用使用该凭据；IAM 登录状态变化不会自动替换它。')
+          ? h('div', { style: muted }, '凭据仅在本地保存；保存状态不证明模型调用已接通。')
           : gateway.state === 'unknown'
             ? h('div', { style: muted }, '网关凭据状态尚未确认，请刷新核实。')
-            : h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'),
+            : gateway.state === 'unconfigured'
+              ? h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。')
+              : h('div', { style: muted }, '请先核对现有记录；页面不会自动迁移或修复，能否更换由 Host 核验。'),
         h('div', { style: { marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' } },
           h('input', {
             type: 'password',
@@ -403,6 +496,9 @@ window.__ModuleLoader__.load({
         hostError,
         notice,
         loginLink,
+        copyTools,
+        view.state === 'authenticating' && !state.authorizationUrl
+          ? h('div', { style: muted }, '登录链接未在本页面保存；点击后可能继续当前共享登录尝试，也可能重新发起登录。') : null,
         h('div', null,
           h('button', { style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
           view.canSignIn ? h('button', { style: button, onClick: login }, '登录企业账号') : null,
@@ -411,7 +507,7 @@ window.__ModuleLoader__.load({
           view.state === 'authenticating' ? h('button', { style: button, onClick: () => postJson('/api/forge-iam/cancel').then(load) }, '取消') : null,
         ),
         gatewayBlock,
-        h('div', { style: { ...muted, marginTop: 8 } }, '页面只显示非敏感状态；令牌与网关 Key 不会进入 UI 或日志。'),
+        h('div', { style: { ...muted, marginTop: 8 } }, '页面不回显已保存的令牌或 Key；诊断不包含录入草稿。'),
       );
     }
 
@@ -506,11 +602,13 @@ window.__ModuleLoader__.load({
         },
       },
       h('span', null, state.reason === 'gateway'
-        ? (state.gateway === 'owner-mismatch' ? '网关凭据属于其他账号' : '模型未就绪：未配置网关凭据')
+        ? (state.gateway === 'owner-mismatch' ? '网关凭据属于其他账号'
+          : state.gateway === 'invalid' ? '网关凭据记录不一致，已保留'
+            : '模型未就绪：未配置网关凭据')
         : SESSION_LABEL[state.sessionState] ?? '未登录企业 IAM'),
       state.reason === 'gateway'
-        ? h('span', { style: { opacity: 0.8 } }, state.gateway === 'owner-mismatch'
-          ? '到“设置 → 企业账号”重新录入'
+        ? h('span', { style: { opacity: 0.8 } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid'
+          ? '到“设置 → 企业账号”核对现有记录'
           : '到“设置 → 企业账号”录入 UAG 个人凭证')
         : null,
       state.reason !== 'gateway' && state.view?.canSignIn
