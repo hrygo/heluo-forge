@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-010 |
 | 文档名称 | 多端凭据存储实现与验收方案 |
-| 版本 | V0.6.0 |
+| 版本 | V0.6.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -19,6 +19,8 @@
 > 编制依据：2026-11-03 的 macOS 开发机与远程 Mac 安装试验、[#125](https://github.com/hrygo/heluo-forge/issues/125) 的 Linux 报告，以及同日对本仓库、已安装 DSH `0.2.1-rc.5`、`@napi-rs/keyring` **2.1.2** 发布元数据与固定提交源码的只读核对。目标 DSH 版本以根 [.dsh-version](<../../.dsh-version>) 为准；rc.5 读码不替代目标版本实测。Windows、UOS、麒麟尚无本方案的原生适配器实机证据。历史试验、读码与推断分别列出，不作为生产批准。
 >
 > 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[总体架构](<../architecture/platform-architecture.md>)、[IAM 接入设计](<../design/plugins/forge-iam.md>)、[企业组合设计](<../design/plugins/forge-enterprise.md>)、[凭据包说明](<../../packages/forge-credentials-keychain/README.md>)、[IAM 联合变更计划](<2026-11-02-iam-gateway-atomic.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)。
+
+**2026-11-03 范围更新**：client_id/client_secret 泄露不在评估范围，视为无影响；本计划的明文回退修复仍按 IAM 用户令牌保护、单 provider 与 fail-closed 执行，不以 client secret 泄露为由。
 
 ## 1. 执行判断
 
