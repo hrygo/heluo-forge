@@ -130,12 +130,16 @@ for (const localFirst of [true, false]) {
     const backend = keychain.createMemoryBackend();
     const { ctx, error } = await compose({ localFirst, localEnabled: true, backend });
     const owner = ctx.get('credentials');
+    // 判定 owner 之前先确认确实挂上了一个提供方：两边都挂失败时 owner 为空，
+    // 写入会被 `?.` 吞掉、也不会落盘，若不先断言就会把“没挂上”记成 keychain 接管。
+    const mounted = typeof owner?.describe === 'function';
     // 第二个提供方必须被拒绝：local 先挂时由 keychain 拒绝（自有错误码），
     // keychain 先挂时由 Cordis 拒绝重复注册。两种顺序都不能出现双提供方。
     const refused = localFirst
       ? error?.code === 'KEYCHAIN_CREDENTIALS_CONFLICT'
-      // Cordis 拒绝重复注册时的文案形如 `service "credentials" has been registered at <...>`。
-      : error !== undefined && /registered/iu.test(String(error?.message ?? ''));
+      // Cordis 拒绝重复注册时没有稳定错误码，只断言“有错误且提到 credentials 服务”；
+      // 具体文案随版本变化，不匹配整句。
+      : error !== undefined && /credentials/iu.test(String(error?.message ?? ''));
     record(`enabled-local/${order}-second-provider-refused`, refused, {
       expectedCode: localFirst ? 'KEYCHAIN_CREDENTIALS_CONFLICT' : 'cordis-service-conflict',
       code: error?.code ?? null,
@@ -144,9 +148,10 @@ for (const localFirst of [true, false]) {
     await owner?.set?.('SYNTHETIC_REF', 'synthetic-value').catch(() => {});
     const plaintext = fileExists();
     // 谁真正接管写入按行为判定：local 先挂则落到明文文件，keychain 先挂则不落盘。
-    const observed = plaintext ? 'local' : 'keychain';
+    const observed = !mounted ? 'none' : plaintext ? 'local' : 'keychain';
     const expected = localFirst ? 'local' : 'keychain';
     record(`enabled-local/${order}-effective-owner-is-${observed}`, observed === expected, {
+      mounted,
       expected,
       reproducedIssue125: plaintext,
       note: plaintext
