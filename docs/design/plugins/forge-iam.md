@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.17.3 |
+| 版本 | V1.17.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
+| 最后更新 | 2026-11-04 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（设计阶段；实现与验证见设计索引 §2.2） |
 
@@ -429,6 +429,76 @@ export interface IamAccount {
 | 程序化撤销与登出 | 客户端可调用的单授权撤销接口、鉴权、回执与最坏时延 | 未确认（D1）；登出无法按 RP 隔离 |
 | 首次引导 | 登录前必须预置 Secret，否则阻断登录流程；禁止在前端 4 屏中由普通用户手工录入 | 流程待设计 |
 | 协议验收 | `/token`、刷新与撤销均携带合规的客户端凭据；Secret 不进日志、不进错误堆栈 | 隔离实际服务已验，企业端点未验 |
+
+---
+
+### 5.5 跨模块身份与令牌读取（B+E 方案）
+
+> 2026-11-04 用户确认。本节只定读取面；代码侧目前仅 `resolveToken()`、`getPrincipal()`、`getView()`、`watch()` 存在，其余接口未实现。
+
+问题：登录完成后，其他插件、服务与 CLI 没有公开读法。`ctx.iam` 上虽然有方法，但没有契约、没有消费方、没有令牌出口，用户信息只有 `subject`。
+
+#### 5.5.1 分层与唯一刷新者
+
+| 消费方 | 入口 | 能拿到 |
+|---|---|---|
+| Host 插件与服务 | `ctx.iam.getSession()` / `getAccessToken()` | 身份、时效；令牌须显式取 |
+| 浏览器插件、同源页面 | `GET /api/forge-iam/session`、`POST /api/forge-iam/token` | 身份；令牌单独端点 |
+| CLI、脚本、子进程 | `heluo-forge auth whoami` / `auth token` | 同上 |
+
+**只有 IAM 服务刷新令牌。** 其余入口一律只读：已确认的轮换语义是旧刷新令牌使用即作废，并发刷新会互相踢掉会话。CLI 在 Host 不在时只返回未过期访问令牌，过期即报错要求回到 Host 重新登录。
+
+#### 5.5.2 Host 服务方法
+
+| 方法 | 参数 | 返回 | 语义 |
+|---|---|---|---|
+| `getSession()` | 无 | `{ status, signedIn, principal, accessExpiresAt, scope }` | 只读身份快照，永不含令牌 |
+| `getAccessToken()` | 无 | `Promise<string>` | 等价现有 `resolveToken()`；按需刷新，单飞 |
+| `subscribe(listener)` | `(snapshot) => void` | 取消函数 | 现有 `watch()` 的监听别名，供非生成器消费方 |
+| `getPrincipal()` | 无 | `{ issuer, subject }` | 保留，向后兼容 |
+
+`status` 沿用 `IamState`（unconfigured、signed-out、authenticating、ready、expired、unreachable、error）。
+
+#### 5.5.3 同源 HTTP
+
+| 路径与方法 | 请求约束 | 成功 | 失败 |
+|---|---|---|---|
+| `GET /api/forge-iam/session` | 同源放行（`ctx.connection.requestRejection`） | 200 `getSession()` | 409 未配置；503 凭据不可用 |
+| `POST /api/forge-iam/token` | 同源 + `x-forge-iam-request: 1` | 200 `{ token, expiresAt }` | 401 `IAM_NOT_SIGNED_IN`；409 `IAM_REAUTH_REQUIRED` |
+
+两者均返回 `cache-control: no-store` 与 `x-content-type-options: nosniff`；令牌端点只接受 POST，不支持表单编码，不提供 GET 形态。
+
+#### 5.5.4 CLI
+
+| 命令 | 输出 | 取数顺序 |
+|---|---|---|
+| `heluo-forge auth whoami [--json]` | 身份与状态 | Host 在线走 HTTP；离线只读 seam |
+| `heluo-forge auth token` | 仅令牌一行 | 同上；离线且已过期时非零退出 |
+
+离线路径只读 grant 记录，不刷新、不写回；Host 在线路径与页面共用同一个刷新者。子进程环境不注入令牌，需要时由调用方执行 `auth token` 取值。
+
+#### 5.5.5 不变量
+
+1. 身份与令牌分离：`getSession()`、`/session`、`whoami` 的任何字段都不含令牌原文。
+2. 刷新所有权在 Host：其他路径只读，跨进程不并发刷新。
+3. 失败要响：未登录返回 401 与 `IAM_NOT_SIGNED_IN`，不返回空串或上次令牌。
+4. 令牌不落日志、不进环境变量、不进视图；端点响应不缓存。
+5. 会话快照按 `accessExpiresAt` 复用，提前 30 秒视为过期，与现有时钟偏斜一致；无有效快照时不返回旧值。
+
+#### 5.5.6 安全边界
+
+同用户身份的进程本就可读凭据 seam，本层不是隔离机制，价值在统一格式、保证时效、避免各模块自行解析记录或随手打印令牌。要真正提升隔离，需要企业侧按模块签发不同 scope，或把钥匙串访问收敛到单一 helper，两者都未实现。HTTP 只对 loopback 与同源放行，不提供跨机访问，也不作为企业授权点。
+
+#### 5.5.7 实施与验收
+
+| 步骤 | 内容 | 验收 |
+|---|---|---|
+| 1 | `getSession()` 与 `GET /session` | 响应体不含令牌字段或令牌样例；未登录时返回 409 或 401，同样不含令牌 |
+| 2 | `POST /token` 与 CLI `auth token`（Host 在线） | 缺请求头被拒；响应带不缓存头；CLI 输出的过期时间与 Host 会话一致 |
+| 3 | CLI 离线兜底 | 以假 seam 断言未发生写回；令牌过期时非零退出并报 `IAM_REAUTH_REQUIRED` |
+| 4 | 文档与契约 | 设计索引、文档登记与相对链接通过检查器 |
+
+四项均未实施。`displayName`、`groups` 是否落盘另立字段契约，不在本节范围；本节也不重新讨论是否改用 `ctx.authorization` flow，结论见 §4.6。
 
 ---
 
