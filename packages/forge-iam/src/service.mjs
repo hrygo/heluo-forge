@@ -1497,6 +1497,11 @@ export function createIamService(rawConfig, options = {}) {
       return { view: view(), logoutUrl, revocation, revocationError };
     },
 
+    /** Alias of `resolveToken()` for the documented cross-module read surface. */
+    getAccessToken() {
+      return this.resolveToken();
+    },
+
     async resolveToken() {
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');

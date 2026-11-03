@@ -491,3 +491,33 @@ test('the session route is refused when the connection seam is unavailable', asy
   assert.equal(res.statusCode, 503);
   assert.equal(res.json().error.code, 'IAM_CONNECTION_UNAVAILABLE');
 });
+
+test('the token route requires the request header and returns expiry only', async () => {
+  const handler = routes(service({
+    getAccessToken: async () => 'placeholder-access-token',
+    getSession: () => ({ status: 'ready', signedIn: true, accessExpiresAt: '2026-11-04T02:00:00.000Z' }),
+  }));
+  const missingHeader = await call(handler, 'POST', '/api/forge-iam/token', { 'content-type': 'application/json' }, {});
+  assert.equal(missingHeader.statusCode, 403);
+
+  const ok = await call(handler, 'POST', '/api/forge-iam/token',
+    { 'content-type': 'application/json', 'x-forge-iam-request': '1' }, {});
+  assert.equal(ok.statusCode, 200);
+  assert.deepEqual(ok.json(), { token: 'placeholder-access-token', expiresAt: '2026-11-04T02:00:00.000Z' });
+  assert.equal(ok.headers['cache-control'], 'no-store');
+
+  const wrongMethod = await call(handler, 'GET', '/api/forge-iam/token', { 'x-forge-iam-request': '1' });
+  assert.equal(wrongMethod.statusCode, 405);
+  assert.equal(wrongMethod.headers.allow, 'POST');
+});
+
+test('the token route reports a signed-out session as 401 without a token', async () => {
+  const handler = routes(service({
+    getAccessToken: async () => { const error = new Error('not signed in'); error.code = 'IAM_NOT_SIGNED_IN'; throw error; },
+  }));
+  const res = await call(handler, 'POST', '/api/forge-iam/token',
+    { 'content-type': 'application/json', 'x-forge-iam-request': '1' }, {});
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.json().error.code, 'IAM_NOT_SIGNED_IN');
+  assert.doesNotMatch(res.text(), /placeholder-access-token/u);
+});
