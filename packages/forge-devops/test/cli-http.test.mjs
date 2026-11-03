@@ -15,7 +15,7 @@ import { createCliAccess } from '../src/cli-access.mjs';
 import { CLI_API_PREFIX, CLI_REQUEST_HEADER, CLI_ROUTE_PATH, createCliApi, toNodeRoute } from '../src/http.mjs';
 
 const AT = Date.parse('2026-10-29T07:00:00.000Z');
-const SECRET = 'C:\\Users\\someone\\profile\\dsh.patch.yml';
+const SECRET = 'C:\\Users\\someone\\profile\\dsh.patch.yml'; // security-scan: allow（夹具：合成路径，非真实主机）
 const ENDPOINT = '/api/forge-devops/cli';
 
 const SNAPSHOT = Object.freeze({

@@ -137,16 +137,16 @@ test('候选目录表数据驱动：win32 五个位置 / POSIX 两个位置，�
   const winEnv = {
     ProgramFiles: 'C:\\Program Files',
     'ProgramFiles(x86)': 'C:\\Program Files (x86)',
-    LOCALAPPDATA: 'C:\\Users\\ci\\AppData\\Local',
-    USERPROFILE: 'C:\\Users\\ci',
+    LOCALAPPDATA: 'C:\\Users\\ci\\AppData\\Local', // security-scan: allow（夹具：合成路径，非真实主机）
+    USERPROFILE: 'C:\\Users\\ci', // security-scan: allow（夹具：合成路径，非真实主机）
   };
   const winDirs = candidateDirs({ platform: WIN, env: winEnv, tool: 'dop' });
   assert.deepEqual(winDirs.map((entry) => entry.dir), [
     'C:\\Program Files\\dop',
     'C:\\Program Files (x86)\\dop',
     'C:\\Program Files\\heluo',
-    'C:\\Users\\ci\\AppData\\Local\\Programs\\dop',
-    'C:\\Users\\ci\\.dop\\bin',
+    'C:\\Users\\ci\\AppData\\Local\\Programs\\dop', // security-scan: allow（夹具：合成路径，非真实主机）
+    'C:\\Users\\ci\\.dop\\bin', // security-scan: allow（夹具：合成路径，非真实主机）
   ]);
   assert.deepEqual(winDirs.map((entry) => entry.tier), Array(5).fill('candidate-dir'));
   assert.deepEqual(candidateDirs({ platform: WIN, env: {}, tool: 'dop' }), [], '环境变量缺失时不得拼出 %VAR% 形状的假目录');
