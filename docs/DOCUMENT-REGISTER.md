@@ -21,7 +21,7 @@
 |---|---|---|---|---|---|---|
 | CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.2 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.39.1 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.37.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.37.2 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.1 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.17.2 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
