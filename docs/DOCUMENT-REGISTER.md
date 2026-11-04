@@ -31,11 +31,11 @@
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-007 | 企业插件市场（轻量原生索引模式） | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V2.2.3 | 评审稿 | 平台组（代拟） | G1 索引接入；G2 三目标安装 |
 | CORP-DSH-DESIGN-008 | SDD 兼容与退役设计 | [design/plugins/forge-sdd.md](<design/plugins/forge-sdd.md>) | V0.7.0 | 已废止 | 平台组（代拟） | 已退役：包删除，企业依赖与 bin 移除；无在库交付 |
-| CORP-DSH-DESIGN-009 | DevOps 接入详细设计 | [design/plugins/forge-devops.md](<design/plugins/forge-devops.md>) | V0.4.0 | 草案 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
+| CORP-DSH-DESIGN-009 | DevOps 接入详细设计 | [design/plugins/forge-devops.md](<design/plugins/forge-devops.md>) | V0.5.0 | 草案 | 平台组（代拟） | G1 |
+| CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.3.1 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-011 | DevOps MCP 服务详细设计 | [design/services/devops-mcp.md](<design/services/devops-mcp.md>) | V0.1.3 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-012 | 插件索引契约（format-1 / AIHUB 交付） | [design/services/market-index.md](<design/services/market-index.md>) | V2.0.1 | 评审稿 | 平台组（代拟） | G1 索引契约；G2 三目标安装 |
-| CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.4.1 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
+| CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.4.2 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
 | CORP-DSH-DESIGN-014 | 跨模块冲突收口 | [design/conflict-resolution.md](<design/conflict-resolution.md>) | V0.3.1 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-015 | DSH 客户端标识（UA）方案设计 | [design/client-identification.md](<design/client-identification.md>) | V0.2.0 | 草案 | 平台组（代拟） | G1 接入契约 |
 | CORP-DSH-DESIGN-016 | IAM 机密客户端隔离开发设计 | [design/iam-confidential-isolated.md](<design/iam-confidential-isolated.md>) | V0.3.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；不开放真实来源与生产 |
@@ -43,7 +43,7 @@
 | CORP-DSH-IAM-002 | IAM 机密客户端隔离开发契约 | [contracts/iam-client-auth-isolated.md](<contracts/iam-client-auth-isolated.md>) | V0.4.1 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；生产 G1 未关闭 |
 | CORP-DSH-IAM-003 | IAM 模型与工具隔离消费契约草案 | [contracts/iam-consumer-isolated.md](<contracts/iam-consumer-isolated.md>) | V0.7.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；见证/许可/合成工具与模型已分段验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
 | CORP-DSH-IAM-004 | IAM 只读状态订阅隔离契约 | [contracts/iam-view-observer-isolated.md](<contracts/iam-view-observer-isolated.md>) | V0.3.0 | 草案 | 平台组（代拟） | 私有接缝已实现并定向验收；真实注册关闭 |
-| CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
+| CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.3.1 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
 | CORP-DSH-METRICS-001 | 研发观察事件与上报契约 | [contracts/metrics-events.md](<contracts/metrics-events.md>) | V0.2.4 | 草案 | 平台组（代拟） | G2；指标导出启用前冻结 |
 | CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V3.2.3 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | AI 网关个人凭证（静态 Key）接入 | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | 历史依据；当前目标见 ADR-16 |

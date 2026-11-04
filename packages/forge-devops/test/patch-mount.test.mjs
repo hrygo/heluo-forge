@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { apply as applyPolicy } from '@heluo/forge-policy';
 
-import { apply as applyDevops, READ_ACTIONS, READER_KEY, SERVICE_KEY } from '../src/index.mjs';
+import { apply as applyDevops, READ_ACTIONS, READ_REASONS, READER_KEY, SERVICE_KEY } from '../src/index.mjs';
 import { ConfigStandard } from '../src/runtime-config.mjs';
 
 /**
@@ -109,7 +109,7 @@ export function parsePatch(text) {
   return rows;
 }
 
-/** 挂 devops 的补丁层必须自带的策略配置：覆盖四个只读动作，且审计舱可用。 */
+/** 挂 devops 的补丁层必须自带的策略配置：覆盖本包全部只读动作，且审计舱可用。 */
 function assertPolicyConfigComplete(patch, label) {
   const policy = patch.find((row) => row.name === '@heluo/forge-policy');
   assert.ok(policy, `${label}：必须插入 @heluo/forge-policy（devops 的策略门禁是硬依赖）`);
@@ -224,7 +224,7 @@ test('宿主不传 config（undefined）时按空配置通过校验：补丁层�
   }
 });
 
-test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、读经门禁放行', async () => {
+test('按补丁层配置真实装配策略 + devops：挂载不抛、3 工具、两条读动作各经门禁放行', async () => {
   const text = await readFile(join(here, 'cordis.patch.yml'), 'utf8');
   const patch = parsePatch(text);
   const policyRow = assertPolicyConfigComplete(patch, 'packages/forge-devops/cordis.patch.yml');
@@ -247,12 +247,22 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、
   assert.ok(service, 'devops 必须提供自己的服务');
 
   assert.equal(service.status(), 'ready', '注入了只读适配器后状态必须是 ready');
-  assert.equal(service.toolNames().length, 4, '工具面 4 个（1 只读 + 3 流程）：仓库/Issue/PR 归 gitee');
+  assert.equal(service.toolNames().length, 3, '工具面 3 个（1 只读 runner + 1 聚合读 + 1 落盘）：仓库/Issue/PR 归 gitee');
 
-  // 3) 读动作走真实门禁 + 审计：审计舱不可用会在这里变成 POLICY_DENIED。
-  const result = await service.read({ action: 'change.read', target: 'CHG-2026-0042' });
-  assert.equal(result.status, 'succeeded', '策略放行后读结果必须原样归一化返回');
-  assert.ok(policy.auditRecords().length > 0, '前置审计必须真的写入记录，而不是跳过审计');
+  // 3) 两条读动作都走真实门禁 + 审计：审计舱不可用会在这里变成 POLICY_DENIED。
+  const recordsBefore = policy.auditRecords().length;
+  const read = await service.read({ action: 'change.read', target: 'CHG-2026-0042' });
+  assert.equal(read.status, 'succeeded', '策略放行后读结果必须原样归一化返回');
+  const listed = await service.read({ action: 'change.list', target: '@me', status: 'open' });
+  assert.equal(listed.status, 'succeeded', 'change.list 同样经门禁放行');
+  assert.ok(policy.auditRecords().length >= recordsBefore + 2, '前置审计必须真的写入记录，而不是跳过审计');
+
+  // 4) 写动作仍未登记：目录里一条 write 都没有，读面也不收写动作。
+  const writeEntries = [...policy.catalog.values()].filter((entry) => entry.kind !== 'read');
+  assert.deepEqual(writeEntries, [], '策略目录不得出现写动作（写面归 forge-gitee）');
+  await assert.rejects(service.read({ action: 'change.clarification.write', target: 'CHG-2026-0042' }), {
+    code: READ_REASONS.UNKNOWN_ACTION,
+  });
 });
 
 test('全仓扫描：任何插入 forge-devops 的补丁层都必须自带可用策略目录与可校验的 config', async () => {

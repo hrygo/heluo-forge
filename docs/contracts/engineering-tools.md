@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-TOOLS-001 |
 | 文档名称 | 企业工程工具最小契约 |
-| 版本 | V0.3.0 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -53,6 +53,7 @@
 | 动作标识 | 输入/前置事实 | 预期结果 | 属性/目标状态 |
 |---|---|---|---|
 | `change.read` | 明确变更号、当前用户 | 要求、验收、归属与版本 | 读；只读基线 |
+| `change.list` | 当前用户（`@me`）、可选状态过滤（真实 flag 待核验） | 本用户可见的变更清单（编号/标题/状态/类型）与总数 | 读；只读基线；CLI 的 `change list` 天然是当前登录人范围，不另建权限判断 |
 | `change.clarification.write` | 用户已采纳且属于变更层的澄清、目标及原版本 | 原平台新版本及关联确认 | 研发写；需求已确认，当前禁用及接口缺口不变 |
 | `change.progress.write` | 平台确认的开始/进展字段及语义 | 实际记录值与版本 | 研发写；不得改最终完成/结束时间 |
 | `gitee.repository.read`, `gitee.issue.read`, `gitee.pr.read` | 明确仓库/对象 | 状态与可核对引用 | 读；只读基线；由 `@heluo/forge-gitee` 唯一实现 |
@@ -71,13 +72,15 @@
 
 | 动作族 | 归属 | 实现动作标识 | 登记状态 |
 |---|---|---|---|
-| 变更读取与澄清回写 | `@heluo/forge-devops` | `change.read`；`change.clarification.write` | 读随包登记；澄清回写默认不登记即拒绝 |
+| 变更读取与澄清回写 | `@heluo/forge-devops` | `change.read`、`change.list`；`change.clarification.write` | 两条读随包登记；澄清回写默认不登记即拒绝，且当前工具面不提供该动作（dop 无澄清写命令，不保留恒失败入口） |
 | 仓库 / Issue / PR 读取 | `@heluo/forge-gitee` | `gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read` | 随包登记（只读） |
 | 交付就绪判定 | `@heluo/forge-gitee` | `gitee.delivery.judge` | 随包登记为只读判定（`target: change`、`egress: allow`），只判定不执行 |
 | Issue / PR / 评审写 | `@heluo/forge-gitee` | `gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record` | 默认不登记即拒绝；开闸需审批台账条目与 `confirm{repo,object}` |
 | 本地提交与推送 | `@heluo/forge-gitee` | `git commit` 是**本地动作**（不进策略目录，首行 `[变更号]` 由 `git-message.mjs` 强校验）；`git push` 是远端写，动作 `gitee.git.push` | push 默认不登记即拒绝，登记后仍需确认与审批 |
 
 r10 起 devops 不再持有仓库/Issue/PR 的读写实现（gh 侧模块已删除），`change_context` 的承建仓库段降级为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。`git commit` 不进策略目录不是放宽：策略对任何 `enabled` 的非读动作恒要求审批台账，而提交必须发生，因此改为本地动作 + 提交信息单源校验。
+
+2026-11-03（用户确认 D 方案）：只读面改为枚举式薄 runner——一个只读工具按 `change.read` / `change.list` 两个动作分发，每个动作有自己的参数 schema（不是自由 argv）；新增清单读取是因为 CLI 已有 `change list` 而原工具面没有入口。产物落盘的 `clarify` / `plan` 两类改由纯函数机检后生成正文（硬门禁/假设/修订标识、验收条件→实现→验证逐条映射），手写正文不再绕过检查。工具面因此从 4 个降为 3 个：恒 `denied` 的澄清写工具删除，澄清单改为本地产物 + 待人工确认。以上是工具面与校验口径调整，不代表企业 CLI 已联调；`--status` 等扩展参数的真实 flag 仍待核验。
 
 不提供 `pr.merge`、CI 触发/重跑、生产部署/回滚/审批、故事/变更最终完成动作；旧项目中的 `dop change done` 不进入本清单。不提供通用 `run(command)` 型企业代理，也不允许通过别名或改用 Shell 绕过被拒绝的业务动作。
 
@@ -104,6 +107,9 @@ r10 起 devops 不再持有仓库/Issue/PR 的读写实现（gh 侧模块已删�
 | `result_refs` | 已证实产生的对象和版本；没有证据不得合成 URL/对象编号 |
 | `completed_effects`, `pending_effects` | 仅在复合调用确有部分成功时使用；不得以总退出码覆盖 |
 | `error_code`, `retry_policy` | 结构化原因；`none` / `read_recheck` / `safe_retry`；安全重试必须有提供方依据 |
+| `command` | 实际执行的逻辑命令标签（不含 endpoint、盘符与绝对路径），供复核与来源记录；不是可执行字符串 |
+| `truncated` | 输出是否被长度上限截断；为 `true` 时只能作诊断线索，不得据此判定事实完整 |
+| `facts` | 平台原始事实（仅当前受权会话）：单条读取携带平台记录与归一结果，清单读取携带 `user`/`total`/`count`/`items`/`filter`。不得进入指标、审计或产物；原始记录中的契约外字段不落盘 |
 | `observed_at`, `source_revision` | 原始观察时间和来源版本；来源版本取该对象在提供方输出里**实际存在**的时间事实（Gitee 实测：Issue/PR 为 `updated_at`，仓库只有 `last_activity_at`，见 [Gitee 接入详细设计](../design/plugins/forge-gitee.md) §5.2）；取不到时才标缺失，不伪造冻结事实，也不拿不相干的时间字段冒充 |
 
 字段名以提供方输出与 CLI 的**实测结果**为准，不按其他平台的命名习惯改写（例如 Gitee 的 PR 编号是 `iid`、Issue 是 `id`，仓库链接是 `web_url`）；实测不存在的字段按缺失处理，不用同名近似字段替代。读取侧不假设 CLI 具备字段过滤能力：字段子集只是本地投影，取不到的键走 `missing_fields`，不因此伪造字段或降级成猜测值。

@@ -92,7 +92,7 @@ test('未配置运行时环境：产出 blocked 卡、未知项点名 CONFIG_MIS
   assert.equal(calls.length, 0, '未配置时不得发起任何子进程（AC-22）');
 });
 
-test('写端口已随模块删除：flow 只暴露读面与聚合读，澄清写仍恒 denied 且零调用', async () => {
+test('写端口已随模块删除：flow 只暴露读面与聚合读，不再有跨平台写入口', async () => {
   const { execFile } = fakeCli();
   const flow = createDevopsFlow({ config: CONFIG, execFile, now });
   assert.equal(typeof flow.startFromChange, 'function');

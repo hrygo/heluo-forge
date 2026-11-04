@@ -2,7 +2,7 @@
  * `@heluo/forge-devops` 宿主插件装配层（#15 / D4，设计准入见能力面设计 §6.1；T7 装配）。
  *
  * 只做**装配**，不做业务判定：策略门禁判"能不能做"、固定 argv 白名单判"有没有这条命令"、
- * 纯函数流程判"该不该做、做完能否核对"。本文件把三者接起来，并对外暴露 4 个工具、
+ * 纯函数流程判"该不该做、做完能否核对"。本文件把三者接起来，并对外暴露 3 个工具、
  * 一个命令面与一个服务。
  *
  * 端口约定（D-1 起本包自己就是生产者，注入键仍然优先）：
@@ -29,8 +29,9 @@ import {
   READ_ACTIONS,
   READ_REASONS,
 } from './read.mjs';
-import { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS } from './tools.mjs';
+import { buildDevopsTools, DEVOPS_TOOLS } from './tools.mjs';
 import { writeArtifact } from './artifacts.mjs';
+import { displayableChange, normalizeChangeRecord } from './change-context.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
 import { createDevopsFlow } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
@@ -86,7 +87,7 @@ export {
   READ_REASONS,
   READ_STATUSES,
 } from './read.mjs';
-export { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS, FLOW_TOOLS, READ_TOOLS } from './tools.mjs';
+export { buildDevopsTools, DEVOPS_TOOLS, FLOW_TOOLS, QUERY_ACTIONS, QUERY_TOOL } from './tools.mjs';
 export { ARTIFACT_KINDS, artifactPath, renderFrontMatter, writeArtifact } from './artifacts.mjs';
 export { ENTRY_HELP, ENTRY_NAME, parseChangeId, registerEntry } from './entry.mjs';
 export { createDevopsFlow } from './flow.mjs';
@@ -216,7 +217,7 @@ export function apply(ctx, rawConfig = {}) {
   let cliUnavailable = null;
 
   // D-1：流程协作对象在包内生产——配置（三层合并）→ runner → dop → 只读面 → 上下文卡。
-  // 之前只认 `ctx.get(FLOW_KEY)`，仓库里没有生产者，4 个工具中 2 个流程工具恒 FLOW_UNAVAILABLE。
+  // 之前只认 `ctx.get(FLOW_KEY)`，仓库里没有生产者，3 个工具中 2 个流程工具恒 FLOW_UNAVAILABLE。
   const injectedFlow = typeof ctx.get === 'function' ? ctx.get(FLOW_KEY) : undefined;
   // 策略门禁适配仍在装配层构造一次：本包不再持有写动作，但读路径与流程侧共用同一份策略视图。
   const guard = createPolicyGuard({ policy });
@@ -345,6 +346,46 @@ export function apply(ctx, rawConfig = {}) {
   let callSeq = 0;
   let currentChangeId = null;
 
+  /** 绑定当前会话变更号（三条路径共用，见 D 方案 §6）：空值不是绑定，不覆盖已有值。 */
+  const bindChangeId = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    if (id !== '') currentChangeId = id;
+  };
+
+  /**
+   * `change.read` 的归一投影（与上下文卡同一映射，不复制第二份）。
+   *
+   * 读成功但记录归一失败时**不抛**：`normalized=null`、`normalize_error=<原因码>`，
+   * `raw` 照常返回——读事实成功了，只是我们解读不了；抛错会把"读到了但格式不认识"
+   * 误报成"没读到"。
+   */
+  const normalizeChangeFacts = (envelope, target) => {
+    if (envelope?.action !== 'change.read') return envelope;
+    const facts =
+      envelope.facts !== null && typeof envelope.facts === 'object' && !Array.isArray(envelope.facts)
+        ? envelope.facts
+        : {};
+    const raw = facts.raw;
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ...envelope, facts: { normalized: null, raw: raw ?? null, normalize_error: null } };
+    }
+    let normalized = null;
+    let normalizeError = null;
+    try {
+      normalized = displayableChange(
+        normalizeChangeRecord(raw, {
+          at: envelope.observed_at,
+          sourceRevision: envelope.source_revision,
+          sourceType: flowDescribed?.sourceType ?? 'mock',
+          expectedId: target,
+        }),
+      );
+    } catch (error) {
+      normalizeError = typeof error?.code === 'string' && error.code !== '' ? error.code : 'UNKNOWN_ERROR';
+    }
+    return { ...envelope, facts: { normalized, raw, normalize_error: normalizeError } };
+  };
+
   // 同源配置页端点（GET 快照 / POST 保存）。`webServer` 是可选服务：缺失、晚到、
   // 或同前缀已被别的实例占用时都只降级——绝不因为"页面挂不上"塌掉工具面与流程面。
   // 注册一步幂等：宿主已就绪时立即挂；未就绪时经 `ctx.inject` 等它就绪再挂（直接读 ctx.get 会拿到 undefined）。
@@ -401,7 +442,7 @@ export function apply(ctx, rawConfig = {}) {
   const service = {
     /** 只读动作清单（写动作永不出现在这里）。 */
     readActions: () => [...READ_ACTIONS],
-    /** 已注册的工具名（模型可见面）：4 条 dop 工具，枚举只有 `tools.mjs` 一份。 */
+    /** 已注册的工具名（模型可见面）：3 条 dop 工具，枚举只有 `tools.mjs` 一份。 */
     toolNames: () => [...DEVOPS_TOOLS],
     /** 当前状态：没有可用适配器时为 `no-reader`（可见地 fail closed）。 */
     status: () => (reader === undefined ? 'no-reader' : 'ready'),
@@ -432,13 +473,17 @@ export function apply(ctx, rawConfig = {}) {
     rediscover: () => refreshSnapshot(),
     /** 命令面状态：`registered` 或 `no-command-face`（工具面照常可用）。 */
     entryStatus: () => entryStatus,
-    /** 当前会话绑定的变更号（入口写入；产物落盘依赖它）。 */
+    /** 当前会话绑定的变更号（入口 / 读成功 / 卡片 ready 三条路径写入；产物落盘依赖它）。 */
     changeId: () => currentChangeId,
     /**
-     * 执行一次只读查询。适配器返回什么都由 `normalizeReadResult` 规整：
-     * 退出码不算事实，缺结构化状态或缺来源版本一律 `unknown`。
+     * 执行一次只读查询（typed runner：`change.read` / `change.list`）。适配器返回什么都由
+     * `normalizeReadResult` 规整：退出码不算事实，缺结构化状态或缺来源版本一律 `unknown`。
+     *
+     * `change.read` 成功后额外做两件事：把原始记录归一成与上下文卡同一份显示形状（失败不抛，
+     * 写 `normalize_error`），并把 target 绑定为当前会话变更号——这样 Web 会话不依赖命令面
+     * 也能落盘产物。
      */
-    read: async ({ action, target } = {}) => {
+    read: async ({ action, target, status } = {}) => {
       if (reader === undefined) {
         // 原因码不加码（仍是 NO_READER，工具信封与既有用例一致）：细因、已查类别与页面指引放 detail。
         if (cliUnavailable !== null) {
@@ -451,18 +496,24 @@ export function apply(ctx, rawConfig = {}) {
       }
       // 先判动作与目标，再碰适配器：未登记动作不得产生任何调用。
       assertReadRequest(action, target);
+      const requestedTarget = typeof target === 'string' ? target.trim() : target;
       // 同一 admission：读也要经过策略门禁与必要审计，拒绝时适配器零调用。
       const admitted = await policy.executeAction(
         ctx,
         action,
         {
           name: 'devops.read',
-          arguments: { target },
+          arguments: { target: requestedTarget },
           agent: undefined,
           callId: `devops-read-${(callSeq += 1)}`,
           signal: undefined,
         },
-        async () => normalizeReadResult({ action, target, result: await reader.read({ action, target }) }),
+        async () =>
+          normalizeReadResult({
+            action,
+            target: requestedTarget,
+            result: await reader.read({ action, target: requestedTarget, status }),
+          }),
       );
       if (admitted !== null && typeof admitted === 'object' && admitted.kind === 'error') {
         throw new DevopsReadError(
@@ -471,33 +522,27 @@ export function apply(ctx, rawConfig = {}) {
           { action },
         );
       }
-      return admitted;
+      const result = action === 'change.read' ? normalizeChangeFacts(admitted, requestedTarget) : admitted;
+      // 只在读成功（envelope status=succeeded）时绑定：失败仍要能重试，不留下半绑定状态。
+      if (action === 'change.read' && result?.status === 'succeeded') bindChangeId(requestedTarget);
+      return result;
     },
-    /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）。 */
-    context: async (input = {}) => callFlow('change.context', 'context', input),
-    /**
-     * 澄清回写：dop 命令面没有澄清写命令，因此恒 `denied` 且**零调用**。
-     * 拒绝必须可见（澄清单留在本地产物），不能静默跳过，也不能用评论冒充平台字段。
-     */
-    clarifyWrite: async ({ target, body } = {}) => ({
-      status: 'denied',
-      reason: FLOW_REASONS.COMMAND_NOT_WHITELISTED,
-      action: FLOW_ACTIONS.CLARIFY,
-      target: typeof target === 'string' ? target : null,
-      detail: 'dop 命令面无澄清写命令；澄清单作为本地产物保留，不回写平台',
-      calls: 0,
-      body_bytes: typeof body === 'string' ? Buffer.byteLength(body, 'utf8') : 0,
-    }),
-    /** 产物落盘：唯一出口 `artifacts.mjs`；变更号来自入口（未绑定则拒绝，不猜）。 */
-    artifactWrite: async ({ repoRoot, kind, body, meta } = {}) => {
+    /** 聚合读：一次取回变更记录与上下文卡（不做多次往返拼事实）；卡片 ready 即绑定变更号。 */
+    context: async (input = {}) => {
+      const result = await callFlow('change.context', 'context', input);
+      if (result?.status === 'ready') bindChangeId(result?.changeId);
+      return result;
+    },
+    /** 产物落盘：唯一出口 `artifacts.mjs`；变更号来自绑定（未绑定则拒绝，不猜）。 */
+    artifactWrite: async ({ repoRoot, kind, body, data, meta } = {}) => {
       if (typeof currentChangeId !== 'string') {
         throw new DevopsReadError(
           FLOW_REASONS.MISSING_CHANGE_ID,
-          '尚未通过 devops-change 绑定变更号，产物落盘不执行',
+          '尚未绑定变更号，产物落盘不执行',
           { kind },
         );
       }
-      return writeArtifact({ repoRoot, changeId: currentChangeId, kind, body, meta });
+      return writeArtifact({ repoRoot, changeId: currentChangeId, kind, body, data, meta });
     },
     /**
      * 入口：取回上下文卡并**只在成功时**绑定变更号（失败仍要能重试，不留下半绑定的状态）。
@@ -516,7 +561,7 @@ export function apply(ctx, rawConfig = {}) {
         };
       }
       const card = await flow.startFromChange({ changeId });
-      if (card?.ok !== false) currentChangeId = changeId;
+      if (card?.ok !== false) bindChangeId(changeId);
       return card;
     },
     config,

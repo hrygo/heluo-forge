@@ -103,9 +103,10 @@ function catalogLines(text) {
 
 const POLICY_NAME = '@heluo/forge-policy';
 const SHARED_POLICY_ID = 'heluo-policy';
-/** r10 并集目录：devops 的 dop 变更读 + gitee 的三条读 + 交付判定（不执行关闭/合并）。 */
+/** 并集目录：devops 的两条 dop 变更读 + gitee 的三条读 + 交付判定（不执行关闭/合并）。 */
 const UNION_ACTIONS = [
   'change.read',
+  'change.list',
   'gitee.repository.read',
   'gitee.issue.read',
   'gitee.pr.read',
@@ -146,7 +147,7 @@ function assertSharedPolicyRow({ devops, gitee, devopsText, giteeText }) {
   assert.deepEqual(
     devopsCatalog.map((line) => /\{ action: '([^']+)'/u.exec(line)[1]),
     UNION_ACTIONS,
-    `策略目录必须是 5 条并集（${UNION_ACTIONS.join(' / ')}）；写动作不入目录——push 默认未登记即拒绝`,
+    `策略目录必须是 6 条并集（${UNION_ACTIONS.join(' / ')}）；写动作不入目录——push 默认未登记即拒绝`,
   );
   // 文本口径也要守：单行没有 isolate 还不够，注释里写回 isolate 同样会被下一步照抄成真实配置
   // （r4 的隔离域形态就是从示例里长出来的），所以这段文本级断言必须落在同一个谓词里。
@@ -295,7 +296,7 @@ function assertUniformPolicyCatalogs(layers) {
   assert.deepEqual(
     expected.map((line) => /\{ action: '([^']+)'/u.exec(line)[1]),
     UNION_ACTIONS,
-    `基准目录必须是 5 条并集（${UNION_ACTIONS.join(' / ')}）`,
+    `基准目录必须是 6 条并集（${UNION_ACTIONS.join(' / ')}）`,
   );
   for (const layer of policyLayers) {
     assert.deepEqual(

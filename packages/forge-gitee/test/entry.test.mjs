@@ -2,7 +2,7 @@
  * 入口与装载面门禁：AC-1 / AC-4 / AC-6 / AC-7（静态半）。
  *
  * 这一组用例回答的是"分发出去的那份东西能不能被宿主认出来"：清单（入口名、分发白名单、
- * engines、补丁指针）、补丁层（5 条并集目录：4 读 + 1 只读判定 + 0 条写 + 显式审计 + 显式
+ * engines、补丁指针）、补丁层（6 条并集目录：5 读 + 1 只读判定 + 0 条写 + 显式审计 + 显式
  * config，且与 forge-devops 的补丁层共用同一行 `heluo-policy`）、以及
  * **装载安全**（模块顶层不碰宿主、不碰子进程；缺能力时 `apply` 抛可读错误而不是未捕获异常）。
  *
@@ -220,7 +220,7 @@ test('AC-1/AC-7: 真实补丁层可装配——10 个工具按固定顺序注册
 
   const host = createFakeHost();
   // 按**分发补丁层原样**挂载：两行都在根服务域（r10 取消独立服务域），同装 devops 时
-  // 另一份同 id 的策略行按 id 覆盖 config，最终只有一个 `policy` 实例、一份 5 条并集目录。
+  // 另一份同 id 的策略行按 id 覆盖 config，最终只有一个 `policy` 实例、一份 6 条并集目录。
   const mountedPolicy = host.mountPolicy({ catalog: policyRow.catalog, audit: policyRow.audit });
   assert.equal(mountedPolicy.ok, true, `策略层挂载失败：${mountedPolicy.error?.message ?? ''}`);
 
@@ -246,30 +246,36 @@ test('AC-1/AC-7: 真实补丁层可装配——10 个工具按固定顺序注册
   assert.equal(typeof mounted.teardown, 'function');
 });
 
-// r10：目录从 4 条变 5 条——多出 `change.read`（devops 的 dop 变更读），与 forge-devops 补丁层
-// 逐字共用同一份并集；"写动作 = 不登记"不变，所以 `kind === 'write'` 的断言原样保留。
-test('AC-7: 补丁层自带 5 条并集目录与审计，0 条写；两包共用同一行 heluo-policy', async () => {
+// 并集目录现在是 6 条：devops 的两条 dop 变更读（`change.read` / `change.list`）+ 3 条 gitee 只读
+// + 1 条只读判定，与 forge-devops 补丁层逐字共用同一份并集；"写动作 = 不登记"不变，
+// 所以 `kind === 'write'` 的断言原样保留。
+test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用同一行 heluo-policy', async () => {
   const rows = await readPatch(PATCH_FILE);
   const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
   assert.ok(policyRow !== undefined);
   const catalog = policyRow.catalog;
-  assert.equal(catalog.length, 5, '目录恰好 5 条并集：change.read + 3 条 gitee 只读 + 1 条只读判定');
+  assert.equal(catalog.length, 6, '目录恰好 6 条并集：change.read / change.list + 3 条 gitee 只读 + 1 条只读判定');
   assert.deepEqual(
     catalog[0],
     { action: 'change.read', kind: 'read', target: 'change', enabled: true },
     '第 1 条是 devops 的 dop 变更读：并集目录必须与 @heluo/forge-devops 补丁层逐字相同',
   );
+  assert.deepEqual(
+    catalog[1],
+    { action: 'change.list', kind: 'read', target: 'changes', enabled: true },
+    '第 2 条是 devops 的 dop 变更清单读：并集目录必须与 @heluo/forge-devops 补丁层逐字相同',
+  );
   for (const entry of catalog) {
     assert.equal(entry.kind, 'read');
     assert.equal(entry.enabled, true);
   }
-  assert.deepEqual(catalog.slice(1, 4).map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
-  for (const entry of catalog.slice(1)) {
+  assert.deepEqual(catalog.slice(2, 5).map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
+  for (const entry of catalog.slice(2)) {
     assert.ok(entry.action.startsWith('gitee.'), `gitee 侧目录动作必须落在 gitee.* 命名空间：${entry.action}`);
   }
   // 最后一条：判定的取值本身就是策略事实，逐项写死而不是"包含 judge 即可"。
   assert.deepEqual(
-    catalog[4],
+    catalog[5],
     { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' },
     "判定目录必须逐字：kind=read、target=change、egress=allow（缺省 egress 会取 'confirm'，判定就拿不到 allow）",
   );
@@ -282,7 +288,7 @@ test('AC-7: 补丁层自带 5 条并集目录与审计，0 条写；两包共用
   const host = createFakeHost();
   const mountedPolicy = host.mountPolicy({ catalog, audit: policyRow.audit });
   assert.equal(mountedPolicy.ok, true);
-  for (const action of ['change.read', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
+  for (const action of ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
     assert.equal(mountedPolicy.policy.catalog.get(action)?.enabled, true);
   }
   assert.equal(

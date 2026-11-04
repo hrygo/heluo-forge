@@ -153,12 +153,16 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
       .filter((line) => /^\s*-\s*\{\s*action:/u.test(line));
     assert.equal(
       catalogRows.length,
-      5,
-      `补丁层目录应为 5 条并集（3 读 + 1 只读判定 + devops 的 change.read），实为 ${catalogRows.length} 条`,
+      6,
+      `补丁层目录应为 6 条并集（3 读 + 1 只读判定 + devops 的 change.read / change.list），实为 ${catalogRows.length} 条`,
     );
     assert.ok(
       catalogRows.some((row) => row.includes("'change.read'")),
       '产物补丁层必须含 devops 的 change.read：两包同装时共用同一行策略与同一份并集目录',
+    );
+    assert.ok(
+      catalogRows.some((row) => row.includes("'change.list'")),
+      '产物补丁层必须含 devops 的第二条变更读 change.list：并集目录与 devops 侧逐字相同',
     );
     const judgeRow = catalogRows.find((row) => row.includes("'gitee.delivery.judge'"));
     assert.ok(judgeRow, '产物补丁层必须含 gitee.delivery.judge 目录（判定随包默认登记）');

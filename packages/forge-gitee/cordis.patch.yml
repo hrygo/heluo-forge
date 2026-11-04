@@ -7,7 +7,7 @@
 #      `GITEE_ACTION_UNREGISTERED`，`missing` 列全），不降级成"无策略只读"。
 #   2. `heluo-gitee`：`name` 必须是**包根名**（与清单 `name` 一致），写成子路径宿主解析不到该包。
 #
-# 目录（catalog）是 **5 条并集、0 条 write**：`change.read`（devops 的 dop 变更读）+
+# 目录（catalog）是 **6 条并集、0 条 write**：`change.read` / `change.list`（devops 的两条 dop 变更读）+
 # 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定。
 #   - 这一份并集**逐字**写在本包与 `@heluo/forge-devops` 的补丁层里，两行都叫
 #     `id: heluo-policy`，都不另立服务域：loader 按 id 覆盖 config，同装后只剩一个 `policy`
@@ -42,6 +42,7 @@
       config:
         catalog:
           - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
+          - { action: 'change.list', kind: 'read', target: 'changes', enabled: true }
           - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
           - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
           - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }

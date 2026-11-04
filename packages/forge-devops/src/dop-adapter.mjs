@@ -228,6 +228,8 @@ export function createDopAdapter({
         items,
         count: items.length,
         total: Number.isInteger(raw.total) ? raw.total : items.length,
+        // 平台清单自报的"当前用户"：没有就显式 null，不按本机账号猜。
+        user: raw.user ?? null,
         truncated: result.truncated === true,
         raw,
       };

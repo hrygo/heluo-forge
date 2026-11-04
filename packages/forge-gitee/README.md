@@ -72,7 +72,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 ## 策略门禁与凭据
 
 - 策略是硬依赖：`policy` 服务缺失、或三个 `gitee.*` 只读动作未登记/未启用，`apply()` 直接抛可读错误（`GITEE_POLICY_UNAVAILABLE` / `GITEE_ACTION_UNREGISTERED`，`missing` 列全），**不降级成"无策略只读"**。判定与 git push 不在这一断言内：缺 `gitee.delivery.judge`/`gitee.git.push` 时挂载照常成功，只有对应工具降级为 `denied`（读动作的 fail-closed 不因它们放宽）。
-- 补丁层预置 **5 条 `kind: read` 目录（本包 3 读 + 1 只读判定 + 1 条 devops 的 `change.read`，与 devops 补丁层逐字相同）、0 条 write**：`gitee.delivery.judge` 随包登记，`target` 逐字 `change`，`egress: 'allow'` 是**必需项**而非风格——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 会被编译成默认 `confirm`，无审批台账时判定永远拿不到 `done`。五个受控写（`gitee.issue.write`/`gitee.pr.write`/`gitee.review.publish`/`gitee.review.record`/`gitee.git.push`）靠"不登记"实现默认禁用，而不是运行期开关；要开写须由所属 profile 显式追加动作（写/确认类还需审批台账条目）。`gitee.git.push` 进 `CONFIRM_REQUIRED_ACTIONS`：登记后还要 `confirm{repo,object}` 逐字匹配。第 5 条 `change.read` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**——目录是并集，装谁都不缺自己那条。
+- 补丁层预置 **6 条 `kind: read` 目录（本包 3 读 + 1 只读判定 + 2 条 devops 的变更读 `change.read`/`change.list`，与 devops 补丁层逐字相同）、0 条 write**：`gitee.delivery.judge` 随包登记，`target` 逐字 `change`，`egress: 'allow'` 是**必需项**而非风格——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 会被编译成默认 `confirm`，无审批台账时判定永远拿不到 `done`。五个受控写（`gitee.issue.write`/`gitee.pr.write`/`gitee.review.publish`/`gitee.review.record`/`gitee.git.push`）靠"不登记"实现默认禁用，而不是运行期开关；要开写须由所属 profile 显式追加动作（写/确认类还需审批台账条目）。`gitee.git.push` 进 `CONFIRM_REQUIRED_ACTIONS`：登记后还要 `confirm{repo,object}` 逐字匹配。第 5、6 条 `change.read`/`change.list` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**——目录是并集，装谁都不缺自己那条。
 - 审计舱用内存 sink（`allowNonDurable: true`），属**联调/试点级**证据，记录随进程退出丢失；生产须注入持久 sink 并去掉该开关。
 - 凭据只在环境变量里：CLI 配置目录存在持久令牌时默认**告警**并从执行环境剥离（`persistentToken: 'block'` 才以 `GITEE_PERSISTENT_TOKEN` 拒绝、零子进程）；子进程环境走白名单，输出按令牌值脱敏后再返回。
 - 唯一的子进程出口是 `src/gitee-cli.mjs`：`execFile` + `shell: false` + 超时 + 单流 1 MiB 上限；`run()` 发 gitee CLI，`runGit()` 发本机 git（只叠加 `GIT_TERMINAL_PROMPT=0` 与 `cwd`），共用同一套白名单/超时/截断/脱敏，入参只接受 `{bin|args, purpose, cwd}` 这几键，没有"把整条命令当字符串"的通道。
@@ -81,8 +81,8 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 | 形态 | 结果 | 建议 |
 |---|---|---|
-| 只装一个（Gitee 面或 devops 面） | 5 条并集目录 + 自己的插件行；本包工具 10 个，目录里另有一条 devops 的 `change.read`（多一条读不会放行任何写） | **推荐** |
-| 同 profile **叠加两个补丁层**（各装各的，默认） | 两个策略行同 `id: heluo-policy`、目录逐字相同、都不写 `isolate`：loader 按 id 覆盖 config，留下**唯一**一个策略实例；两处内容相同，幸存者不取决于装配顺序；14 个工具全枚举、0 行激活失败，**不用改任何配置** | **默认可行**：`dsh plugin add` 两个 tgz 即可 |
+| 只装一个（Gitee 面或 devops 面） | 6 条并集目录 + 自己的插件行；本包工具 10 个，目录里另有两条 devops 的变更读（多几条读不会放行任何写） | **推荐** |
+| 同 profile **叠加两个补丁层**（各装各的，默认） | 两个策略行同 `id: heluo-policy`、目录逐字相同、都不写 `isolate`：loader 按 id 覆盖 config，留下**唯一**一个策略实例；两处内容相同，幸存者不取决于装配顺序；13 个工具全枚举、0 行激活失败，**不用改任何配置** | **默认可行**：`dsh plugin add` 两个 tgz 即可 |
 | **单边改过目录**再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按 `GITEE_ACTION_UNREGISTERED` fail closed（`missing` 列全），先挂载方的工具仍在 | 不采用（`tests/plugin-patch-layers.test.mjs` 会红） |
 | 想回到 r4 的服务域隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
 
@@ -94,7 +94,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 装之前先读这一节：卸载步骤不需要动本包源码。
 
-1. **停用写能力（不需要时）**：确认 profile 补丁层里 `heluo-policy` 的 `config.catalog` 只有 5 条 `kind: read`（本包 3 读 + 1 只读判定 + devops 的 `change.read`），没有 `gitee.*.write`/`gitee.review.*`/`gitee.git.push`。判定是只读能力、默认登记，**不需要也不应该**为了"停用写"把它删掉。
+1. **停用写能力（不需要时）**：确认 profile 补丁层里 `heluo-policy` 的 `config.catalog` 只有 6 条 `kind: read`（本包 3 读 + 1 只读判定 + devops 的 `change.read`/`change.list`），没有 `gitee.*.write`/`gitee.review.*`/`gitee.git.push`。判定是只读能力、默认登记，**不需要也不应该**为了"停用写"把它删掉。
 2. **手工回滚配置**：在活动 profile 的补丁文件里把 `heluo-gitee` 条目的 `config:` 恢复为 `config: {}`——删掉手工加的 `cliPath`/`host`/`timeoutMs`/`authEnv`/`persistentToken`，保留注释与其它条目原样，保存后重载 profile。**不要把 `config: {}` 整段删掉**：缺席的 `config:` 会被当成 `undefined` 交给校验器，整条 entry 不激活（`heluo-gitee` 行上方的注释说明了这一点）。
 3. **卸载**：`dsh plugin --profile web remove @heluo/forge-gitee`。这条命令只移除依赖并重载，**不清理 profile 补丁层**：`heluo-gitee` 条目会残留，冷启动因找不到对应包而打印 `entry not found`；卸载前先在补丁文件里按整条 `- id: heluo-gitee` 删掉它（保留注释与其它条目原样），再执行 `remove`。**策略行 `heluo-policy` 与 devops 共用**：devops 仍装着时不要删它（删了会让 devops 也失去目录），只有两个包都卸载后才可整条移除。
 4. **复核**：整包卸载后 `dsh --profile web --dump-config | grep "id: heluo-gitee"` 应无输出；`heluo-policy` 是否仍在取决于 devops 是否还装着。10 个工具从工具面消失；`git status --short` 不新增文件（插件不写缓存或临时文件，`review.md` 只在被调用时写 `docs/teamflow/<变更号>/review.md`）。

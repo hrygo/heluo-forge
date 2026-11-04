@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-009 |
 | 文档名称 | DevOps 接入详细设计 |
-| 版本 | V0.4.0 |
+| 版本 | V0.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -14,9 +14,11 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-11-03 |
 | 门禁 | G1 |
-| 模块状态 | 可用（四个工具：变更读取、上下文卡、澄清回写、产物落盘；企业 dop CLI 未联调，见设计索引 §2.2） |
+| 模块状态 | 可用（三个工具：只读 runner（`change.read` / `change.list`）、上下文卡、产物落盘（含 clarify/plan 机检）；企业 dop CLI 未联调，见设计索引 §2.2） |
 
 > 编制依据：2026-10-20 依据两点事实——DevOps 平台已提供 CLI 工具；架构 P7 要求复用企业既有资产。据此本设计以 CLI 为接入形态，不新建 MCP 服务端。**未核验**：CLI 在银河麒麟 aarch64 上的可用性、是否支持环境变量注入凭据、是否提供结构化输出。三项均由 DevOps 团队补充确认，写入 §12，不阻塞设计其余部分。
+>
+> 2026-11-03 用户确认 D 方案（typed read runner）：只读面从「按能力切 4 个工具」改为「1 个枚举动作的 runner + 上下文卡 + 产物落盘」，删除恒 `denied` 的澄清写工具；`clarify` / `plan` 产物改由纯函数机检后生成正文。本版只调整工具面与校验口径，未新增企业 CLI 实测；`change list` 的真实 flag（含 `--status`）与双平台产物仍待核验。
 >
 > 关联文档：[总体架构 §7.3](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md) REQ-12、[策略与审计](forge-policy.md)。
 
@@ -28,7 +30,7 @@
 
 边界：本模块不实现授权，授权由 DevOps 服务端校验。查询为现有基线；经需求方确认的受控回写目标见 §13，范围/安全/接口未准入前禁用，不把设计确认当作服务授权。
 
-**范围与平台边界（r10）**：本模块只讲 dop（DevOps 平台）变更流程。仓库、Issue、PR 的读写事实由 `@heluo/forge-gitee` 唯一负责，devops 不再持有 `gh` 侧实现（gh 适配器、actions、repository-resolver、repo-ref、review、report、commit-message 七个模块已删除）。因此 `change_context` 的承建仓库段降级为外部指引：`REPO_FACTS_EXTERNAL` + 下一步 `forge_gitee_repository_read` / `forge_gitee_issue_read`，不猜第二次。工具面收敛为四个（`forge_devops_change_read` / `forge_devops_change_context` / `forge_devops_clarify_write` / `forge_devops_artifact_write`），配置四键（`dopBin` / `dopEndpoint` / `sourceType` / `timeoutMs`），页面可编辑两项（dop 入口、超时）。
+**范围与平台边界（r10）**：本模块只讲 dop（DevOps 平台）变更流程。仓库、Issue、PR 的读写事实由 `@heluo/forge-gitee` 唯一负责，devops 不再持有 `gh` 侧实现（gh 适配器、actions、repository-resolver、repo-ref、review、report、commit-message 七个模块已删除）。因此 `change_context` 的承建仓库段降级为外部指引：`REPO_FACTS_EXTERNAL` + 下一步 `forge_gitee_repository_read` / `forge_gitee_issue_read`，不猜第二次。工具面收敛为三个（`forge_devops_query` / `forge_devops_change_context` / `forge_devops_artifact_write`），配置四键（`dopBin` / `dopEndpoint` / `sourceType` / `timeoutMs`），页面可编辑两项（dop 入口、超时）。只读面不再按能力逐个开工具：一个 runner 以枚举动作分发（`change.read` / `change.list`），每个动作有自己的参数 schema，写动作永不入表；清单读取补上了原 CLI 已有、旧工具面缺失的 `change list`。
 
 ## 2. 目标与非目标
 
@@ -44,6 +46,7 @@
 - 不执行生产变更，不做部署与回滚。
 - 不自建 MCP 服务、不暴露 PRM。
 - 不代理用户权限，不做二次授权判定。
+- 不提供自由 argv 或通用 `run(command)`：只读子命令只能经枚举动作 + 每动作参数 schema 进入，扩展参数不是「把命令行交给模型」。
 
 ## 3. 需求与依赖
 
@@ -88,6 +91,24 @@
 | 已确认澄清/研发进展回写 | 正确对象、原版本、真实确认及结果引用 | 受控写目标；范围/C3批准及验证前禁用 |
 
 实际工具字段与失败语义见[工程工具契约](../../contracts/engineering-tools.md)，不能从上述动作名拼造未确认命令。
+
+### 5.1 工具面（2026-11-03，用户确认 D 方案）
+
+三个工具各自只有一种职责；「哪个动作 → 哪条策略条目」可逐条核对：
+
+| 工具 | 动作 / 门禁 | 输入 | 输出与边界 |
+|---|---|---|---|
+| `forge_devops_query` | `change.read` / `change.list`（读） | `action`（枚举）、`target`（`change.read` 为变更号；`change.list` 只接受 `@me`）、`status`（仅清单，真实 flag 待核验） | 读信封（`status` / `source_revision` / `observed_at` / `command` / `truncated`）+ `facts`（单条：平台记录与归一结果；清单：`user` / `total` / `count` / `items` / `filter`）；不写平台 |
+| `forge_devops_change_context` | `change.read`（读） | `target` 变更号 | 上下文卡（`text` 可直接作为 `context.md`）；承建仓库段是外部指引（`REPO_FACTS_EXTERNAL`） |
+| `forge_devops_artifact_write` | 无平台动作（本地落盘） | `repoRoot`、`kind`、`body` 或 `data`、`meta` | 五类产物；`clarify` 需 `data.findings` 且过机检，`plan` 需 `data.items` 且逐条映射过机检；六字段 front matter 与路径约束不变 |
+
+三条边界：
+
+- **枚举而非自由命令**：`action` 只允许契约里登记的两个读动作；清单的 `target` 只接受 `@me`（CLI 的 list 天然是当前登录人范围），其他取值在工具层拒绝、零下游调用。以后新增只读子命令时，先取证真实 flag，再把动作与 schema 加进枚举——不引入「把 argv 交给模型」的通用入口。
+- **原始与归一分层**：`facts.raw` 是平台原始事实（仅当前受权会话，不落指标/审计/产物）；`facts.normalized` 是契约形状（与上下文卡同一映射），归一失败不抛错，`normalize_error` 可见。
+- **产物不绕过机检**：`clarify` / `plan` 两类只接受结构化 `data`，正文由 `renderClarifySheet` / `renderPlan` 生成；`body` 与 `data` 互斥，手写正文无法混过检查。澄清回写仍无 dop 命令面，工具面不再保留恒 `denied` 的写工具，澄清单以本地产物 + 待人工确认存在。
+
+**target 不是可选项**：策略条目对任何动作都要求非空 target；清单的 `target` 固定为 `@me`，不是省略。产物落盘用的变更号来自入口绑定或一次成功读取（`change.read` 成功、`change.context` 返回 `ready`），不再要求必须先跑命令入口。
 
 ## 6. 权限、凭据与数据
 
@@ -142,9 +163,11 @@ flowchart TD
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
 | 单元 | 白名单、参数脱敏、输出解析 | `node --test` |
-| 契约 | 命令面与团队澄清清单一致 | 契约用例 |
+| 契约 | 枚举动作、每动作参数 schema、`body`/`data` 互斥、clarify/plan 机检 | `node --test` |
 | 集成 | 未授权、超时、非 JSON 三类 | 本地仿 CLI |
 | 端到端 | 双端各完成一次只读查询 | 手工 |
+
+离线用例还覆盖：两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 透传、归一失败只记 `normalize_error`、clarify 零选项与 plan 缺验证方式被拒且不落盘。
 
 ## 11. 打包、升级与回退
 
@@ -164,21 +187,25 @@ flowchart TD
 | 只读子命令清单与字段 | DevOps 团队 | 第 5 节命令面 |
 | CLI 前提失败时的替代形态、成本与验收 | 平台组、DevOps、PMO | G1 前关闭失败命令；启用替代前单独批准，不自动恢复 REQ-12 |
 
-### 需用户确认的设计选项（增益不明确，暂不采用，保留待定）
+### 设计选项与取舍（含 2026-11-03 用户确认项）
 
 | 选项 | 可能的增益 | 代价 | 当前处理 |
 |---|---|---|---|
 | 同时保留 MCP 服务端 | 结构化工具面 | 两套并存，补丁与运维成本不降 | 不采用，待 CLI 确认后裁定 |
 | 本地缓存查询结果 | 减少调用 | 数据新鲜度与权限变更不可控 | 不采用 |
 | 受控研发写清单 | 澄清与进展回写 | 需范围、安全、幂等及并发核验 | 目标已确认，未准入前关闭，见 §13 |
-| 自建 CLI 包装层 | 统一输出 | 与 P7 冲突，多一层维护 | 不采用 |
+| 按能力切工具（每个只读子命令一个工具） | 模型侧最直白 | 每加一条 CLI 子命令要改契约/动作表/工具/策略目录/补丁层/用例六处，能力容易落后于原 CLI | 2026-11-03 由用户改为 typed runner（见下行） |
+| **typed read runner**（枚举动作 + 每动作 schema） | 拿回原 CLI 只读能力与扩展参数，写动作仍不可达 | 需要维护动作枚举表；扩展参数必须逐个取证，不能一把透传 | **采用**（2026-11-03 用户确认 D 方案）；仍是 §5.1.3 的薄适配，不是「自建 CLI 包装层」 |
+| 自建 CLI 包装层（另做一个包装 CLI 进程） | 统一输出 | 与 P7 冲突，多一层维护 | 不采用；本包是进程内薄适配，不新增可执行体 |
 | 把 CLI 调用改成 MCP 桥接 | 兼容旧工具面 | 回到被替换的形态 | 不采用 |
 
-以上五项均不影响主链路；若后续确认增益，再单独评估。若 CLI 三项前提任一不成立，关闭对应命令并提交替代形态评审；不自动回到 MCP 或恢复 REQ-12。
+以上各项均不影响主链路；若后续确认增益，再单独评估。若 CLI 三项前提任一不成立，关闭对应命令并提交替代形态评审；不自动回到 MCP 或恢复 REQ-12。
 
 ## 13. 企业研发能力与受控回写
 
 [需求基线 §2.3](../../requirements/requirements-baseline.md)是范围唯一真源，[全流程设计](forge-devops-lifecycle.md)定义产品行为，[工具契约](../../contracts/engineering-tools.md)定义待核验动作/结果；本模块不复制字段。
+
+2026-11-03 起工具面不再提供澄清写（恒 `denied` 的入口删除）；澄清单与交付计划经机检后落本地产物，回写能力仍待 dop 命令面具备与动作批准后另立。
 
 显式入口加系统变更号后读取独立描述、验收、系统/仓库和所属故事。经人确认的业务澄清回写正确对象；开始时间及研发进展仅在字段语义明确后自动维护。不调用故事或系统变更最终完成，不用工程结束代填结束时间；最终状态随既有故事上线流程联动。
 
