@@ -15,8 +15,8 @@ copies are sensitive key material. Do not create individual developer keys.
 The installer places scripts, private key and rules in the Git common dir and
 installs the Git-selected hook; linked worktrees ordinarily share that setup,
 while independent clones each need installation. Existing different hooks or
-files are not overwritten. Check the installation guide for path, permission,
-worktree and platform limitations; later Git configuration can bypass the hook.
+files are not overwritten. Check the installation guide for permission requirements (`umask 022`,
+or the explicit `--allow-group-writable` opt-in), plus path, worktree and platform limitations; later Git configuration can bypass the hook.
 
 A valid signature proves only that a holder of the shared private key signed a
 v2 statement bound to the commit tree, the scanned baseline HEAD tree, normalized

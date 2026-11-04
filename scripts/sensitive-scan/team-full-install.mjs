@@ -184,11 +184,13 @@ try {
   const args = process.argv.slice(2);
   let repo = process.cwd();
   let upgrade = false;
+  let allowGroupWritable = false;
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === '--repo') repo = args[++i] ?? '';
     else if (args[i] === '--upgrade-known-v1') upgrade = true;
+    else if (args[i] === '--allow-group-writable') allowGroupWritable = true;
     else if (args[i] === '--help' || args[i] === '-h') {
-      console.log('usage: node scripts/sensitive-scan/team-full-install.mjs [--repo <repository>] [--upgrade-known-v1]');
+      console.log('usage: node scripts/sensitive-scan/team-full-install.mjs [--repo <repository>] [--upgrade-known-v1] [--allow-group-writable]');
       process.exit(0);
     } else throw new Error(`unknown argument: ${args[i]}`);
   }
@@ -197,6 +199,28 @@ try {
   for (const name of ['SENSITIVE_SCAN_KEY_FILE', 'SENSITIVE_SCAN_RULES']) {
     if (process.env[name] && !isAbsolute(process.env[name])) throw new Error(`${name} must be an absolute path`);
   }
+/**
+ * The package scripts and keys become a hook that runs on every commit. A file
+ * another local user can write is a supply-chain hole, so refuse by default and
+ * name the path, the actual mode and the fix. `--allow-group-writable` accepts a
+ * copy the installer's owner can still rewrite; every installed file is then
+ * still written 0600 by the install path itself.
+ */
+function assertSafeSource(stat, path, label) {
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`unsafe ${label}: ${path} is not a regular file`);
+  }
+  if (process.platform === 'win32') return;
+  const mode = stat.mode & 0o777;
+  if ((mode & 0o022) === 0) return;
+  const octal = mode.toString(8).padStart(4, '0');
+  if (allowGroupWritable && stat.uid === process.getuid()) {
+    console.error(`sensitive-scan: installing from owner-writable ${path} (${octal}) because --allow-group-writable was given`);
+    return;
+  }
+  throw new Error(`unsafe ${label}: ${path} is ${octal} (group/other writable); run "chmod go-w" on it, clone with "umask 022", or pass --allow-group-writable to accept an owner-writable copy`);
+}
+
   const root = gitOutput(['rev-parse', '--show-toplevel'], { cwd: resolve(repo) }).trim();
   ensureOutsideRepo(packageRoot, root);
   let packageInsideGit = false;
@@ -215,8 +239,7 @@ try {
   const sharedFiles = ['lib.mjs', 'team-scan.mjs', 'team-commit-msg.mjs'].map((name) => {
     const source = resolve(import.meta.dirname, name);
     checkParents(source);
-    const stat = lstatSync(source);
-    if (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o022))) throw new Error('unsafe package script');
+    assertSafeSource(lstatSync(source), source, `package script ${name}`);
     return { path: resolve(shared, 'scripts', name), data: readFileSync(source), label: `script ${name}` };
   });
   checkParents(resolve(shared, 'scripts/file'));
@@ -248,8 +271,7 @@ try {
   const sourcePublicPath = resolve(packageRoot, '.github/sensitive-scan/team-public-key.pub');
   for (const path of [sourceKeyPath, sourceRulesPath, sourcePublicPath]) {
     checkParents(path);
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o022))) throw new Error('unsafe package file');
+    assertSafeSource(lstatSync(path), path, 'package file');
   }
   const sourceKey = readFileSync(sourceKeyPath);
   const sourceRules = readFileSync(sourceRulesPath);
