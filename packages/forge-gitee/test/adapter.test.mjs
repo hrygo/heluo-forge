@@ -46,6 +46,8 @@ import {
   assertArgv,
   createGiteeAdapter,
   projectionFor,
+  STATE_DEFAULTS,
+  STATE_VALUES,
 } from '../src/gitee-adapter.mjs';
 
 /** 夹具用的占位主机（分段拼装，避免源文件里出现完整远端地址）。 */
@@ -263,13 +265,21 @@ test('provider 常量与命令面是 Gitee 语义的枚举（AC-12）', () => {
 test('字段投影清单逐字为企业 CLI 实测字段名（AC-12 / r11 实测）', () => {
   assert.deepEqual([...GITEE_REPO_FIELDS], [
     'name', 'path', 'path_with_namespace', 'description', 'default_branch',
-    'visibility', 'web_url', 'last_activity_at', 'archived', 'ssh_url_to_repo',
+    'visibility', 'web_url', 'last_activity_at', 'archived', 'ssh_url_to_repo', 'http_url_to_repo',
   ]);
+  // 列表元素与详情对象**不是同一套**：列表没有 visibility/web_url/archived/path，
+  // 链接字段是 http_url/ssh_url（无 `_to_repo` 后缀）。
   assert.deepEqual([...GITEE_REPO_LIST_FIELDS], [
-    'name', 'path', 'path_with_namespace', 'visibility', 'web_url', 'last_activity_at', 'archived',
+    'created_at', 'description', 'fork_from_path', 'http_url', 'id', 'last_activity_at',
+    'name', 'path_with_namespace', 'ssh_url',
   ]);
-  assert.deepEqual([...GITEE_ISSUE_FIELDS], ['id', 'title', 'description', 'state', 'labels', 'updated_at', 'web_url']);
-  assert.deepEqual([...GITEE_ISSUE_LIST_FIELDS], ['id', 'title', 'state', 'updated_at', 'web_url']);
+  // 详情载荷没有 updated_at/web_url，`id` 是字符串键（如 I2N6），另带 author/priority。
+  assert.deepEqual([...GITEE_ISSUE_FIELDS], [
+    'author', 'created_at', 'description', 'id', 'labels', 'priority', 'state', 'title',
+  ]);
+  // `issue list` 的元素**恰好** 5 个键（实测）：清单载荷没有 state/web_url，倒是有
+  // description/labels——表按载荷逐字对，不能拿 view 的字段集来凑。
+  assert.deepEqual([...GITEE_ISSUE_LIST_FIELDS], ['description', 'id', 'labels', 'title', 'updated_at']);
   assert.deepEqual([...GITEE_PR_FIELDS], [
     'iid', 'title', 'state', 'web_url', 'updated_at',
     'source_branch', 'target_branch', 'merge_status', 'merged_at', 'user_notes_count',
@@ -301,17 +311,20 @@ test('字段投影清单逐字为企业 CLI 实测字段名（AC-12 / r11 实测
   // 实测载荷里这些名字确实存在，所以投影取得到（不是"表里写了、载荷里没有"）。
   for (const field of GITEE_REPO_FIELDS) assert.ok(field in REPO_VIEW_PAYLOAD, `仓库载荷没有 ${field}`);
   for (const field of GITEE_PR_FIELDS) assert.ok(field in PR_LIST_PAYLOAD.data[0], `PR 载荷没有 ${field}`);
-  // Issue 清单项按实测只有四个字段：投影里多出来的两个正是"取不到就进 missing_fields"的那两个。
+  // Issue 清单项按实测恰好五个键：投影里每个名字都在载荷里，state/web_url 则根本不在载荷里，
+  // 所以它们既不能进清单表，也不能靠"取不到就进 missing_fields"留在表里。
   for (const field of GITEE_ISSUE_LIST_FIELDS) {
-    const present = field in ISSUE_LIST_PAYLOAD.data.list[0];
-    assert.equal(present, !['state', 'web_url'].includes(field), `Issue 清单项 ${field} 的存在性与实测不符`);
+    assert.ok(field in ISSUE_LIST_PAYLOAD.data.list[0], `Issue 清单载荷没有 ${field}`);
+  }
+  for (const absent of ['state', 'web_url', 'number', 'url']) {
+    assert.ok(!GITEE_ISSUE_LIST_FIELDS.includes(absent), `Issue 清单投影不得含 ${absent}`);
   }
 });
 
 test('事实版本字段按对象类型分开：仓库没有 updated_at，取 last_activity_at', () => {
   assert.deepEqual({ ...GITEE_REVISION_FIELDS }, {
     repositoryView: 'last_activity_at',
-    issueView: 'updated_at',
+    issueView: 'created_at',
     prView: 'updated_at',
   });
   // 仓库载荷确实没有 updated_at：这是"取哪个字段当版本"的事实依据，不是偏好。
@@ -332,35 +345,63 @@ test('本地投影清单与字段表同源（同一对象，不存在两处漂�
   }
 });
 
-test('argv 形状固定：位置参数与 -R 的分工逐条钉住，--json 是无值开关（AC-14 / r11 实测）', () => {
+test('argv 形状固定：单对象命令拆成「编号 + -R」，repo list 没有位置参数（AC-14 / 规格 §2.4/§2.5）', () => {
+  // `repo view [repository]`：位置参数就是仓库（Usage 里写着 `[repository]`）。
   assert.deepEqual(argvFor('repositoryView', { target: REPO_TARGET }), ['repo', 'view', REPO_TARGET]);
   // `--json` 只追加旗标本身：实测 `--json name,path` 与裸 `--json` 输出完全一样，
   // 逗号清单会被忽略，所以字段清单永远不进 argv（否则 argv 里躺着一段假参数）。
   assert.deepEqual(argvFor('repositoryView', { target: REPO_TARGET, json: true }), [
     'repo', 'view', REPO_TARGET, '--json',
   ]);
-  assert.deepEqual(argvFor('issueView', { target: ISSUE_TARGET, json: false }), ['issue', 'view', ISSUE_TARGET]);
+
+  // 单对象命令（规格 §2.4/§2.5：`gh issue view <number>`）：位置参数**只有一个编号**，
+  // 仓库由全局 `-R` 给。把 `owner/repo#12` 整串当编号传，CLI 一定解析失败。
+  assert.deepEqual(argvFor('issueView', { target: ISSUE_TARGET }), ['issue', 'view', '7', '-R', REPO_TARGET]);
+  assert.deepEqual(argvFor('issueView', { target: ISSUE_TARGET, json: true }), [
+    'issue', 'view', '7', '-R', REPO_TARGET, '--json',
+  ]);
+  assert.deepEqual(argvFor('prView', { target: 'osc/ard/ard-sdk#12' }), [
+    'pr', 'view', '12', '-R', 'osc/ard/ard-sdk',
+  ]);
+  assert.deepEqual(argvFor('issueComment', { target: ISSUE_TARGET, body: '评论' }), [
+    'issue', 'comment', '7', '-R', REPO_TARGET, '--body', '评论',
+  ]);
+  assert.deepEqual(argvFor('prComment', { target: 'osc/ard/ard-sdk#12', body: '评论' }), [
+    'pr', 'comment', '12', '-R', 'osc/ard/ard-sdk', '--body', '评论',
+  ]);
+
+  // 纯数字 target：有意不加 `-R`（规格 §1.2：无 `-R` 时按当前目录 git remote 解析仓库）。
+  assert.deepEqual(argvFor('issueView', { target: '12' }), ['issue', 'view', '12']);
+  assert.deepEqual(argvFor('prComment', { target: '3', body: '评论' }), ['pr', 'comment', '3', '--body', '评论']);
+
+  // 单对象命令必须有编号：仓库名不是编号，不能当位置参数发出去（零子进程）。
+  assertRejected(fakeRunner(), () => assertArgv('issueView', { target: REPO_TARGET }), ADAPTER_REASONS.ARG_INVALID);
+  assertRejected(fakeRunner(), () => assertArgv('prComment', { target: REPO_TARGET, body: 'x' }), ADAPTER_REASONS.ARG_INVALID);
+
+  // `repo list` 没有位置参数（Usage：`gh repo list [flags]`）：它列的是令牌可见的仓库，
+  // target 只校验形状、不进 argv——"按仓库过滤 repo list"这种能力不存在。
+  assert.deepEqual(argvFor('repositoryList', { target: REPO_TARGET }), ['repo', 'list']);
+  assert.deepEqual(argvFor('repositoryList', { target: REPO_TARGET, limit: 20, json: true }), [
+    'repo', 'list', '--json', '--limit', '20',
+  ]);
+
   // 把字段清单塞进 argv 参数位是不合法形状：投影选择器只在 read() 里消费。
   assertRejected(fakeRunner(), () => assertArgv('issueView', { target: ISSUE_TARGET, json: ['id'] }), ADAPTER_REASONS.ARG_INVALID);
-  assert.deepEqual(argvFor('repositoryList', { target: REPO_TARGET }), ['repo', 'list', REPO_TARGET]);
-  assert.deepEqual(argvFor('issueView', { target: ISSUE_TARGET }), ['issue', 'view', ISSUE_TARGET]);
-  // argvFor 只拼调用方给的参数（`--json` 缺省由 read() 注入，见只读归一用例）。
-  assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, state: 'open', limit: 20 }), [
+
+  // argvFor 只拼调用方给的参数（`--json` 缺省由 read() 注入，`--state` 缺省归 CLI 默认值）。
+  assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, state: 'created', limit: 20 }), [
     'issue', 'list', '-R', REPO_TARGET,
-    '--state', 'open',
+    '--state', 'created',
     '--limit', '20',
   ]);
-  assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, state: 'open', limit: 20, json: true }), [
+  assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, state: 'created', limit: 20, json: true }), [
     'issue', 'list', '-R', REPO_TARGET,
     '--json',
-    '--state', 'open',
+    '--state', 'created',
     '--limit', '20',
   ]);
   assert.deepEqual(argvFor('issueCreate', { target: REPO_TARGET, title: '标题', body: '正文' }), [
     'issue', 'create', '-R', REPO_TARGET, '--title', '标题', '--body', '正文',
-  ]);
-  assert.deepEqual(argvFor('issueComment', { target: ISSUE_TARGET, body: '评论' }), [
-    'issue', 'comment', ISSUE_TARGET, '--body', '评论',
   ]);
   assert.deepEqual(argvFor('prCreate', {
     target: REPO_TARGET, title: 't', body: 'b', head: 'feat/x', base: 'main', draft: true,
@@ -374,7 +415,34 @@ test('argv 形状固定：位置参数与 -R 的分工逐条钉住，--json 是�
   assert.equal(plan.command, 'prView');
   assert.deepEqual([...plan.words], ['pr', 'view']);
   assert.equal(plan.target, ISSUE_TARGET);
+  assert.deepEqual([...plan.args], ['pr', 'view', '7', '-R', REPO_TARGET]);
   assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.args));
+});
+
+test('--state 词表按命令分表：issue 与 pr 不共用，`open` 在两边都非法（规格 §2.4/§2.5）', () => {
+  // 两套词表各自的合法值都要能原样进 argv。
+  for (const state of ['created', 'processing', 'rejected', 'finished', 'all']) {
+    assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, state }), [
+      'issue', 'list', '-R', REPO_TARGET, '--state', state,
+    ]);
+  }
+  for (const state of ['opened', 'closed', 'merged', 'all']) {
+    assert.deepEqual(argvFor('prList', { target: REPO_TARGET, state }), [
+      'pr', 'list', '-R', REPO_TARGET, '--state', state,
+    ]);
+  }
+  // `open` 是旧词表留下的值：两个命令都不认——它是读出来归一后的词，不是能发出去的筛选值。
+  for (const command of ['issueList', 'prList']) {
+    assertRejected(fakeRunner(), () => assertArgv(command, { target: REPO_TARGET, state: 'open' }), ADAPTER_REASONS.ARG_INVALID);
+  }
+  // 也不许串用：`created` 只属于 issue，`merged` 只属于 pr。
+  assertRejected(fakeRunner(), () => assertArgv('prList', { target: REPO_TARGET, state: 'created' }), ADAPTER_REASONS.ARG_INVALID);
+  assertRejected(fakeRunner(), () => assertArgv('issueList', { target: REPO_TARGET, state: 'merged' }), ADAPTER_REASONS.ARG_INVALID);
+  // 导出的是两张表（工具面的 enum 从这里取），不是并集。
+  assert.deepEqual(Object.keys({ ...STATE_VALUES }).sort(), ['issueList', 'prList']);
+  assert.deepEqual([...STATE_VALUES.issueList], ['created', 'processing', 'rejected', 'finished', 'all']);
+  assert.deepEqual([...STATE_VALUES.prList], ['opened', 'closed', 'merged', 'all']);
+  assert.deepEqual({ ...STATE_DEFAULTS }, { issueList: 'created', prList: 'opened' });
 });
 
 test('命令面拒绝未枚举动词与套字符串/数组写法（AC-14/AC-23）', () => {
@@ -396,6 +464,9 @@ test('参数白名单：未声明键、状态值、上限、必填项都在起�
     { web: true }, { template: '{{.}}' }, { rawField: 'a=b' }, { field: 'x' },
     { method: 'DELETE' }, { admin: true }, { paginate: true }, { merge: true }, { args: ['--json', 'x'] },
     { bin: 'git' }, { exec: 'rm -rf /' },
+    // 本 CLI 没有 `--host` 这个全局 flag（规格 §1.1）：主机来自 CLI 自己的配置文件，
+    // 传进来就是未声明参数，不是"被忽略的选项"。
+    { host: 'evil.example' },
   ]) {
     assertRejected(runner, () => assertArgv('issueView', { target: ISSUE_TARGET, ...extra }), ADAPTER_REASONS.ARG_NOT_WHITELISTED);
   }
@@ -494,15 +565,17 @@ test('实测载荷：repo view 是扁平对象，版本取 last_activity_at、�
 });
 
 test('实测载荷：{data:{…}} 会剥壳，opened 归一到既有词表的 open，缺版本仍降级（AC-15）', async () => {
+  // 详情载荷按规格 §2.4 的 8 字段造：`id` 是字符串键、有 created_at、**没有** web_url/updated_at。
   const issueView = {
     data: {
+      author: '000002-示例审批人',
+      created_at: '2026-11-03T19:40:24.433000+08:00',
       description: '<p>测试issue</p>',
-      id: 1,
+      id: 'I2N6',
       labels: [],
-      title: 'test001',
+      priority: 'medium',
       state: 'opened',
-      updated_at: '2026-11-03T19:40:24.433000+08:00',
-      web_url: 'http://corp.example.com/osc/ard/ard-sdk/issues/1',
+      title: 'test001',
     },
   };
   const runner = fakeRunner(() => jsonOut(issueView));
@@ -510,15 +583,16 @@ test('实测载荷：{data:{…}} 会剥壳，opened 归一到既有词表的 op
   const facts = await adapter.read('gitee.issue.read', ISSUE_TARGET);
 
   assert.equal(facts.status, 'succeeded');
-  assert.equal(facts.object.id, 1, 'Issue 的编号字段是 id（没有 number）');
+  assert.equal(facts.object.id, 'I2N6', '详情里的 id 是字符串键（列表里才是数字 iid）');
   assert.equal('number' in facts.object, false);
   assert.equal(facts.object.state, 'open', 'opened 归一到信封词表的 open');
-  assert.equal(facts.source_revision, issueView.data.updated_at);
-  assert.deepEqual([...facts.result_refs], [issueView.data.web_url]);
+  assert.equal(facts.source_revision, issueView.data.created_at, '详情载荷没有 updated_at，版本取 created_at');
+  // 详情载荷没有 web_url：宁可 result_refs 为空，也不去猜一个链接出来。
+  assert.deepEqual([...facts.result_refs], []);
   assert.deepEqual([...facts.missing_fields], []);
 
   // 缺 updated_at：不编版本号，整条降级 unknown，并把缺失落进 missing_fields。
-  const { updated_at: _drop, ...withoutRevision } = issueView.data;
+  const { created_at: _drop, ...withoutRevision } = issueView.data;
   const noRevision = createGiteeAdapter({
     runner: fakeRunner(() => jsonOut({ data: withoutRevision })),
     env: SECRET_ENV,
@@ -527,8 +601,8 @@ test('实测载荷：{data:{…}} 会剥壳，opened 归一到既有词表的 op
   assert.equal(degraded.status, 'unknown');
   assert.equal(degraded.error_code, ADAPTER_REASONS.MISSING_SOURCE_REVISION);
   assert.equal(degraded.source_revision, null);
-  assert.deepEqual([...degraded.missing_fields], ['updated_at']);
-  assert.equal(degraded.object.updated_at, null);
+  assert.deepEqual([...degraded.missing_fields], ['created_at']);
+  assert.equal(degraded.object.created_at, null);
   assert.equal(degraded.object.title, 'test001', '已取到的字段仍交付，只降级状态');
 });
 
@@ -540,25 +614,30 @@ test('投影选择器只决定交付哪些键：事实版本与链接仍从原�
   assert.deepEqual(Object.keys(facts.items[0]), ['id', 'title']);
   // 没勾的字段不进 missing_fields（那不是"取不到"，是"没要"）。
   assert.deepEqual([...facts.missing_fields], []);
-  // argv 依旧只有开关本身：投影是本地行为。
-  assert.deepEqual(runner.calls[0].args, ['issue', 'list', '-R', REPO_TARGET, '--json', '--state', 'open', '--limit', '100']);
+  // argv 依旧只有开关本身：投影是本地行为；没传 state 就不注入默认值（默认归 CLI）。
+  assert.deepEqual(runner.calls[0].args, ['issue', 'list', '-R', REPO_TARGET, '--json', '--limit', '100']);
+  assert.equal(runner.calls[0].args.includes('--state'), false, '调用方不传 state 时本包不替 CLI 填默认值');
 
   // 对象读同理：只交付点名的键，但事实版本与链接是"读的事实"，仍从原始载荷取。
   const issueView = {
     data: {
-      id: 1,
+      author: '000002-示例审批人',
+      created_at: '2026-11-03T19:40:24.433000+08:00',
+      description: '<p>测试issue</p>',
+      id: 'I2N6',
+      labels: [],
+      priority: 'medium',
+      state: 'finished',
       title: 'test001',
-      state: 'opened',
-      updated_at: '2026-11-03T19:40:24.433000+08:00',
-      web_url: 'http://corp.example.com/osc/ard/ard-sdk/issues/1',
     },
   };
   const single = await createGiteeAdapter({ runner: fakeRunner(() => jsonOut(issueView)), env: SECRET_ENV })
     .read('gitee.issue.read', ISSUE_TARGET, { json: ['id', 'title'] });
   assert.equal(single.status, 'succeeded');
   assert.deepEqual(Object.keys(single.object), ['id', 'title']);
-  assert.equal(single.source_revision, issueView.data.updated_at, '版本从原始载荷取，不因投影缺席而丢');
-  assert.deepEqual([...single.result_refs], [issueView.data.web_url], '链接同样从原始载荷取');
+  assert.equal(single.source_revision, issueView.data.created_at, '版本从原始载荷取，不因投影缺席而丢');
+  // 详情载荷没有 web_url：result_refs 为空是事实，不去猜链接。
+  assert.deepEqual([...single.result_refs], []);
 });
 
 test('实测载荷：Issue 清单在 data.list 里，编号用 id，meta.total_count 作为附加事实（AC-12/AC-14）', async () => {
@@ -574,15 +653,14 @@ test('实测载荷：Issue 清单在 data.list 里，编号用 id，meta.total_c
   assert.deepEqual(Object.keys(listed.items[0]), [...GITEE_ISSUE_LIST_FIELDS]);
   assert.equal(listed.items[0].id, 1);
   assert.equal('number' in listed.items[0], false);
-  // 实测清单项没有 state/web_url：走 missing_fields 如实上报，不填假值。
-  assert.deepEqual([...listed.missing_fields].sort(), ['state', 'web_url']);
-  assert.equal(listed.items[0].state, null);
-  assert.equal(listed.items[0].web_url, null);
-  // 默认参数逐字进 argv：`--json` 无值、状态 open、上限 100。
+  // 实测清单项恰好 5 个键：投影里没有 state/web_url（载荷本来就没有），也没有 missing_fields。
+  assert.deepEqual([...listed.missing_fields], []);
+  assert.equal('state' in listed.items[0], false);
+  assert.equal('web_url' in listed.items[0], false);
+  // 默认参数逐字进 argv：`--json` 无值、上限 100；`--state` 不传就不发（默认归 CLI 的 created）。
   assert.deepEqual(runner.calls[0].args, [
     'issue', 'list', '-R', REPO_TARGET,
     '--json',
-    '--state', 'open',
     '--limit', '100',
   ]);
 });
@@ -643,6 +721,34 @@ test('包裹形状：扁平对象、{data:[…]}、{data:{list:[…]}}、{items:
     const adapter = createGiteeAdapter({ runner: fakeRunner(() => jsonOut(payload)), env: SECRET_ENV });
     await assertRejectedAsync(
       () => adapter.read('gitee.issue.read', REPO_TARGET, { list: true }),
+      ADAPTER_REASONS.MALFORMED_RESULT,
+    );
+  }
+});
+
+test('空 PR 列表不是畸形：`{"message":"No pull requests found."}` 解成 0 条（规格 §4 第 5 条）', async () => {
+  const empty = createGiteeAdapter({
+    runner: fakeRunner(() => jsonOut({ message: 'No pull requests found.' })),
+    env: SECRET_ENV,
+  });
+  const facts = await empty.read('gitee.pr.read', REPO_TARGET, { list: true });
+  assert.equal(facts.status, 'succeeded', '"这仓库没有 PR" 不是工具故障');
+  assert.equal(facts.kind, 'list');
+  assert.deepEqual([...facts.items], []);
+  assert.equal(facts.count, 0);
+  assert.deepEqual([...facts.missing_fields], []);
+  assert.equal('total_count' in facts, false, 'message 信封没有 meta：不编 total_count');
+
+  // 别顺手把其它畸形形状也放行：多一个键、message 非字符串、空对象与只有 data:null 都要报错。
+  for (const payload of [
+    { message: 'No pull requests found.', data: null },
+    { message: 42 },
+    { data: null },
+    {},
+  ]) {
+    const broken = createGiteeAdapter({ runner: fakeRunner(() => jsonOut(payload)), env: SECRET_ENV });
+    await assertRejectedAsync(
+      () => broken.read('gitee.pr.read', REPO_TARGET, { list: true }),
       ADAPTER_REASONS.MALFORMED_RESULT,
     );
   }
@@ -812,9 +918,10 @@ test('静态不变量：零 gh-adapter 导入、零 GH_ 语义常量、唯一 ch
   assert.ok(!/require\(\s*['"][^'"]*gh-adapter/.test(src), '适配器不得 require gh-adapter');
   assert.ok(!/[f]rom\s+['"]?\.\.?\/[^'"]*devops/.test(src), '适配器不得引用 devops 源码');
   assert.ok(!/\bDevopsReadError\b/.test(src), '不得搬用 devops 的错误类型');
-  // GH_* 只允许作为主机变量名在注释里出现；语义常量与凭据默认值一个都不许有（r10：authEnv 默认空）。
+  // 适配器里不许出现任何 GH_* 标识：主机也不走环境变量（规格 §1.1/§1.5——主机来自 CLI 自己的
+  // `~/.gitee-cli/config.json` 的 base_url），语义常量与凭据默认值同样一个都没有（authEnv 默认空）。
   const ghIdentifiers = [...src.matchAll(/\bGH_[A-Z0-9_]+\b/g)].map((match) => match[0]);
-  assert.deepEqual([...new Set(ghIdentifiers)].sort(), ['GH_HOST']);
+  assert.deepEqual([...new Set(ghIdentifiers)].sort(), []);
   for (const semantic of ['GH_COMMANDS', 'GH_FIELDS', 'GH_LIST_LIMIT', 'GH_ARGV_FLAGS', 'GH_PROVIDER', 'GH_TOKEN']) {
     assert.ok(!src.includes(semantic), `适配器不得含 ${semantic}`);
   }
@@ -872,8 +979,10 @@ test('仓库标识允许嵌套命名空间：实测企业仓库是三级（osc/a
   assert.deepEqual(argvFor('repositoryView', { target: nested }), ['repo', 'view', nested]);
   assert.deepEqual(argvFor('issueList', { target: nested }), ['issue', 'list', '-R', nested]);
   assert.equal(GITEE_FIELD_PROJECTIONS.repositoryView.length > 0, true);
-  // 限定引用同样按嵌套命名空间解析：`osc/ard/ard-sdk#12`。
-  assert.deepEqual(argvFor('issueView', { target: 'osc/ard/ard-sdk#12' }), ['issue', 'view', 'osc/ard/ard-sdk#12']);
+  // 限定引用同样按嵌套命名空间解析：`osc/ard/ard-sdk#12` → 编号 12 + `-R osc/ard/ard-sdk`。
+  assert.deepEqual(argvFor('issueView', { target: 'osc/ard/ard-sdk#12' }), [
+    'issue', 'view', '12', '-R', 'osc/ard/ard-sdk',
+  ]);
   // 单段不是仓库（没有命名空间），仍然拒绝。
   assert.throws(
     () => assertArgv('repositoryView', { target: 'ard-sdk' }),

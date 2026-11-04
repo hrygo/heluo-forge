@@ -23,7 +23,7 @@
  * 恒为 `null`）误判成"缺事实版本"再降一级。
  */
 
-import { GITEE_LIST_LIMIT, GITEE_PLATFORM } from './gitee-adapter.mjs';
+import { GITEE_LIST_LIMIT, GITEE_PLATFORM, STATE_DEFAULTS, STATE_VALUES } from './gitee-adapter.mjs';
 
 /** 只读动作（唯一真源）：入口 `readActions()`、补丁层目录与工具定义都从这里取。 */
 export const GITEE_READ_ACTIONS = Object.freeze([
@@ -636,31 +636,40 @@ const TARGET_PROPERTY = Object.freeze({
   description: 'Target: "group/repo" for the repository, "group/repo#12" / "12" / an issue or pull-request link for a single item; a list read uses "group/repo".',
 });
 
-/** 清单类只读动作的有限参数（与适配器的 `list`/`state`/`limit`/`json` 白名单一一对应）。 */
-const LIST_PARAMETERS = Object.freeze({
-  list: Object.freeze({
-    type: 'boolean',
-    description: 'Set true to list items instead of reading one; state/limit/json are only accepted in list mode.',
-  }),
-  state: Object.freeze({
-    type: 'string',
-    enum: Object.freeze(['open', 'closed', 'all']),
-    description: 'List state filter: open (default) / closed / all.',
-  }),
-  limit: Object.freeze({
-    type: 'integer',
-    // D-1：`minimum`/`maximum` 不在宿主支持的 JSON Schema 子集内（只允许 type/oneOf/
-    // properties/required/additionalProperties/items/enum/const + annotations），写上去会让
-    // 参数面在宿主侧降级。1..GITEE_LIST_LIMIT 的边界由唯一校验点 `gitee-adapter.mjs`
-    // （`ARG_INVALID`）在运行期强制，工具面只声明类型与范围文案。
-    description: `List size (1-${GITEE_LIST_LIMIT}, default ${GITEE_LIST_LIMIT}); out-of-range is rejected as ARG_INVALID; the read never paginates.`,
-  }),
-  json: Object.freeze({
-    type: 'array',
-    items: Object.freeze({ type: 'string' }),
-    description: 'Optional subset of the declared Gitee field names to project into the result; defaults to the full declared set. Projection is local, after the read — the CLI has no field filtering. Undeclared names are rejected as JSON_FIELD_NOT_DECLARED.',
-  }),
-});
+/**
+ * 清单类只读动作的有限参数（与适配器的 `list`/`state`/`limit`/`json` 白名单一一对应）。
+ *
+ * `state` 的 enum **按命令取**（`STATE_VALUES` 是唯一真源）：`issue list` 是
+ * created/processing/rejected/finished/all，`pr list` 是 opened/closed/merged/all，两套词表
+ * 不通用。这里不另写一份字面量，也不做并集——并集会让模型看见两个命令都"能用 open"。
+ */
+function listParameters(command) {
+  const states = STATE_VALUES[command];
+  return Object.freeze({
+    list: Object.freeze({
+      type: 'boolean',
+      description: 'Set true to list items instead of reading one; state/limit/json are only accepted in list mode.',
+    }),
+    state: Object.freeze({
+      type: 'string',
+      enum: states,
+      description: `List state filter: ${states.join(' / ')}. Omitted means the CLI default (${STATE_DEFAULTS[command]}); this tool does not inject a default.`,
+    }),
+    limit: Object.freeze({
+      type: 'integer',
+      // D-1：`minimum`/`maximum` 不在宿主支持的 JSON Schema 子集内（只允许 type/oneOf/
+      // properties/required/additionalProperties/items/enum/const + annotations），写上去会让
+      // 参数面在宿主侧降级。1..GITEE_LIST_LIMIT 的边界由唯一校验点 `gitee-adapter.mjs`
+      // （`ARG_INVALID`）在运行期强制，工具面只声明类型与范围文案。
+      description: `List size (1-${GITEE_LIST_LIMIT}, default ${GITEE_LIST_LIMIT}); out-of-range is rejected as ARG_INVALID; the read never paginates.`,
+    }),
+    json: Object.freeze({
+      type: 'array',
+      items: Object.freeze({ type: 'string' }),
+      description: 'Optional subset of the declared Gitee field names to project into the result; defaults to the full declared set. Projection is local, after the read — the CLI has no field filtering. Undeclared names are rejected as JSON_FIELD_NOT_DECLARED.',
+    }),
+  });
+}
 
 /** 读工具声明：顺序与 `GITEE_READ_ACTIONS` 一致（仓库 → Issue → PR）。 */
 const READ_TOOL_SPECS = Object.freeze([
@@ -673,14 +682,14 @@ const READ_TOOL_SPECS = Object.freeze([
   Object.freeze({
     name: 'forge_gitee_issue_read',
     action: 'gitee.issue.read',
-    description: 'Read Gitee issues through the enterprise Gitee CLI (gh). One issue with target "group/repo#12" or an issue link; a list with target "group/repo" and list:true (state defaults to open, limit up to 100). Same Gitee read envelope as forge_gitee_repository_read: status, source_revision, observed_at, result_refs, fixed error_code. The issue number comes from the CLI field id (the payload has no number field). Reads only; nothing is created, edited or closed.',
-    parameters: LIST_PARAMETERS,
+    description: 'Read Gitee issues through the enterprise Gitee CLI (gh). One issue with target "group/repo#12" or an issue link; a list with target "group/repo" and list:true (state is one of created / processing / rejected / finished / all, omitted means the CLI default "created"; limit up to 100). Same Gitee read envelope as forge_gitee_repository_read: status, source_revision, observed_at, result_refs, fixed error_code. The issue number comes from the CLI field id (the payload has no number field). Reads only; nothing is created, edited or closed.',
+    parameters: listParameters('issueList'),
   }),
   Object.freeze({
     name: 'forge_gitee_pr_read',
     action: 'gitee.pr.read',
-    description: 'Read Gitee pull requests through the enterprise Gitee CLI (gh). One pull request with target "group/repo#12" or a pull-request link; a list with target "group/repo" and list:true (state defaults to open, limit up to 100). Same Gitee read envelope as forge_gitee_repository_read. The pull-request number comes from the CLI field iid (id is the global id); branches are source_branch / target_branch and mergeability is merge_status. Pull requests are only read here: this tool never merges, closes or approves anything.',
-    parameters: LIST_PARAMETERS,
+    description: 'Read Gitee pull requests through the enterprise Gitee CLI (gh). One pull request with target "group/repo#12" or a pull-request link; a list with target "group/repo" and list:true (state is one of opened / closed / merged / all, omitted means the CLI default "opened"; limit up to 100). Same Gitee read envelope as forge_gitee_repository_read. The pull-request number comes from the CLI field iid (id is the global id); branches are source_branch / target_branch and mergeability is merge_status. Pull requests are only read here: this tool never merges, closes or approves anything.',
+    parameters: listParameters('prList'),
   }),
 ]);
 

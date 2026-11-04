@@ -28,11 +28,14 @@
  * - `repo view --json`：扁平对象；**没有** `url`/`private`/`updated_at`——链接是 `web_url`、
  *   可见性是 `visibility`、全名在 `path_with_namespace`（`path` 只是仓库 slug），唯一时间事实
  *   是 `last_activity_at`；
- * - `issue list --json`：`{data:{list:[…]}, meta:{…}}`；编号字段是 `id`（**没有** `number`）；
+ * - `issue list --json`：`{data:{list:[…]}, meta:{…}}`；编号字段是 `id`（**没有** `number`），
+ *   清单项恰好 `description`/`id`/`labels`/`title`/`updated_at` 五个键；
  * - `pr list --json`：`{data:[…], meta:{…}}`；编号是 `iid`（`id` 是全局号），分支是
- *   `source_branch`/`target_branch`，可合并性是 `merge_status`，状态值是 `opened`。
- * `issue view`/`pr view`/`repo list` 的输出形状**未实测**：缺字段一律走 `missing_fields`
- * 如实上报，不按别的平台的习惯补齐；`source_revision` 取不到就整条降级 `unknown`
+ *   `source_branch`/`target_branch`，可合并性是 `merge_status`，状态值是 `opened`；
+ *   空列表不是 `data` 包裹，而是一行 `{"message":"No pull requests found."}`（规格 §4 第 5 条）。
+ * `issue view`/`pr view`/`repo list` 的**字段投影**尚未按规格 §2.3/§2.4 重写（README 的
+ * 未验第 1 条列了与本 CLI 实测字段的差异）：缺字段一律走 `missing_fields` 如实上报，不按
+ * 别的平台的习惯补齐；`source_revision` 取不到就整条降级 `unknown`
  * （`MISSING_SOURCE_REVISION`），不编版本号。
  */
 
@@ -96,41 +99,57 @@ export const GITEE_REPO_FIELDS = Object.freeze([
   'last_activity_at',
   'archived',
   'ssh_url_to_repo',
+  'http_url_to_repo',
 ]);
 
 /**
  * `repo list` 的投影清单：`repo view` 去掉 `description`/`default_branch`（列表只用于识别），
  * 也去掉 `ssh_url_to_repo`（列表不需要远端地址）。`repo list` 的真实形状**未实测**。
  */
+// `repo list` 的元素只有 9 个字段（规格 §2.3 实测），与 `repo view` 的完整对象**不是同一套**：
+// 列表里没有 visibility/web_url/archived/path，链接字段叫 http_url/ssh_url（没有 `_to_repo` 后缀）。
 export const GITEE_REPO_LIST_FIELDS = Object.freeze([
-  'name',
-  'path',
-  'path_with_namespace',
-  'visibility',
-  'web_url',
+  'created_at',
+  'description',
+  'fork_from_path',
+  'http_url',
+  'id',
   'last_activity_at',
-  'archived',
+  'name',
+  'path_with_namespace',
+  'ssh_url',
 ]);
 
 /**
  * Issue 读的投影清单：编号字段是 `id`（实测**没有** `number`），正文是 `description`
  * （实测是 HTML 片段），链接是 `web_url`。`issue view` 的真实形状未实测。
  */
+// issue **详情**的字段集与列表元素不是同一套（规格 §2.4「issue view --json 恰好 8 字段」）：
+// 详情里 `id` 是字符串键（如 `I2N6`），没有 `updated_at`/`web_url`，多出 `author`/`priority`。
 export const GITEE_ISSUE_FIELDS = Object.freeze([
-  'id',
-  'title',
+  'author',
+  'created_at',
   'description',
-  'state',
+  'id',
   'labels',
-  'updated_at',
-  'web_url',
+  'priority',
+  'state',
+  'title',
 ]);
 
 /**
- * `issue list` 的投影清单：识别项 + 状态/版本。实测清单项只有 `description`/`id`/`labels`/
- * `title`/`updated_at`——`state` 与 `web_url` 会进 `missing_fields`（取不到就是取不到）。
+ * `issue list` 的投影清单：2026-11-03 实测清单项**恰好**这五个键（规格 §2.4）。
+ *
+ * 此前表里写着 `state`/`web_url` 而丢掉了 `description`/`labels`：清单载荷根本没有前两个，
+ * 于是每一行都掉进 `missing_fields`，真正存在的两个反而交付不出去。表按载荷逐字对。
  */
-export const GITEE_ISSUE_LIST_FIELDS = Object.freeze(['id', 'title', 'state', 'updated_at', 'web_url']);
+export const GITEE_ISSUE_LIST_FIELDS = Object.freeze([
+  'description',
+  'id',
+  'labels',
+  'title',
+  'updated_at',
+]);
 
 /**
  * PR 读的投影清单：编号是 `iid`（`id` 是 671766 这类全局号，对不上 URL 里的 2），分支是
@@ -169,35 +188,42 @@ export const GITEE_PR_LIST_FIELDS = Object.freeze([
  * "取不到版本"就让仓库读永远 `unknown`，那份工具就没有可用状态；反过来也不能拿
  * `created_at` 之类冒充"最近更新"。真正取不到时才降级 `MISSING_SOURCE_REVISION`。
  */
+// 每个载荷能证明"这份事实是哪个版本"的字段各不相同：详情载荷没有 `updated_at` 时
+// 不能拿它当版本（否则每次读都降级 unknown），用载荷里真实存在的时间事实。
 export const GITEE_REVISION_FIELDS = Object.freeze({
   repositoryView: 'last_activity_at',
-  issueView: 'updated_at',
+  issueView: 'created_at',
   prView: 'updated_at',
 });
 
 /**
  * 每个命令允许的 argv 参数，**按实际发命令行顺序**排列（表即真源，`argvFor` 照抄）。
  *
- * 目标（`target`）的落位规则：
- * - 单对象命令（`repo|issue|pr view`、`issue|pr comment`、`repo list`）走**位置参数**——
- *   target 已经带上仓库，不再拆成 `<n> -R <repo>`（拆参会在 `issue comment` 上改变位置参数形状）；
- * - 仓库作用域的集合/创建命令（`issue|pr list|create`）走 `-R <target>`：AC-14 把
- *   `--repo`/`-R` 列为有限参数，而 §5.3 的参数列只列了读写差异项。**F1 未验**（企业 CLI 的
- *   argv 形状未联调），若实测不符只改本表与 `GITEE_COMMANDS` 两处（TECHNICAL R-1）。
- * - `--host` 是声明过的有限参数（AC-14），但默认只读路径**不**注入它：`host` 经 `GH_HOST`
- *   环境变量（runner 的 env 白名单）生效，避免"看着配了其实没生效"（TECHNICAL R-5）。
+ * 目标（`target`）的落位规则（与规格 §2.4/§2.5 的 Usage 逐条对应）：
+ * - 单对象命令（`issue|pr view|comment`）的位置参数**只有编号**，仓库由 `-R <owner/repo>` 给：
+ *   `gh issue view <number>`。把 `owner/repo#12` 整串当编号传给 CLI 必然失败，所以
+ *   `assertArgv` 先把 target 拆成 `<number>` + `-R <repo>`；纯数字 target **有意不加** `-R`
+ *   ——规格 §1.2：无 `-R` 时按当前目录的 git remote 解析仓库，"读当前仓库某号"是合法用法。
+ * - `repo view [repository]` 仍是位置参数（Usage 里就写着 `[repository]`）。
+ * - `repo list` **没有**位置参数（Usage：`gh repo list [flags]`），target 只做形状校验、不进
+ *   argv：它列的是令牌可见的仓库，不是"某个仓库里的清单"，按仓库过滤这种能力不存在。
+ * - 仓库作用域的集合/创建命令（`issue|pr list|create`）走 `-R <target>`。
+ *
+ * 全局 flag 只有 `-R/--repo`、`--json`、`--debug`、`-h`、`-v`（规格 §1.1）：主机地址来自
+ * `~/.gitee-cli/config.json` 的 `base_url`，既不是参数也不是环境变量，所以这里没有 `--host`；
+ * 配置键 `host` 只用于诊断与企业域校验，不拼进 argv 或环境。
  */
 export const GITEE_ARGV_FLAGS = Object.freeze({
-  repositoryView: Object.freeze(['--json', '--host']),
+  repositoryView: Object.freeze(['--json']),
   repositoryList: Object.freeze(['--json', '--limit']),
-  issueView: Object.freeze(['--json', '--host']),
+  issueView: Object.freeze(['-R', '--json']),
   issueList: Object.freeze(['-R', '--json', '--state', '--limit']),
   issueCreate: Object.freeze(['-R', '--title', '--body']),
-  issueComment: Object.freeze(['--body']),
-  prView: Object.freeze(['--json', '--host']),
+  issueComment: Object.freeze(['-R', '--body']),
+  prView: Object.freeze(['-R', '--json']),
   prList: Object.freeze(['-R', '--json', '--state', '--limit']),
   prCreate: Object.freeze(['-R', '--title', '--body', '--head', '--base', '--draft']),
-  prComment: Object.freeze(['--body']),
+  prComment: Object.freeze(['-R', '--body']),
 });
 
 /**
@@ -219,15 +245,17 @@ export const GITEE_FIELD_PROJECTIONS = Object.freeze({
 /** 不带值、出现即为真的开关参数（`pr create --draft`；读命令的 `--json` 同样不接值）。 */
 const BOOLEAN_FLAGS = Object.freeze(['--draft', '--json']);
 
-/** 走位置参数的命令（其余仓库作用域命令用 `-R`）。 */
-const POSITIONAL_TARGET_COMMANDS = Object.freeze([
-  'repositoryView',
-  'repositoryList',
-  'issueView',
-  'issueComment',
-  'prView',
-  'prComment',
-]);
+/**
+ * 位置参数就是 target 本体的命令：只有 `repo view [repository]`。
+ * 单对象命令的位置参数只有编号，见 `SINGLE_OBJECT_COMMANDS`；`repo list` 没有位置参数。
+ */
+const POSITIONAL_TARGET_COMMANDS = Object.freeze(['repositoryView']);
+
+/**
+ * 单对象命令（规格 §2.4/§2.5：`gh issue view <number>`、`gh pr comment <number>` …）：
+ * 位置参数只放数字号，仓库拆到 `-R`。
+ */
+const SINGLE_OBJECT_COMMANDS = Object.freeze(['issueView', 'prView', 'issueComment', 'prComment']);
 
 /** 必填参数：缺一个就拒绝，而不是让 CLI 报错（那样会先起子进程）。 */
 const REQUIRED_PARAMS = Object.freeze({
@@ -320,14 +348,28 @@ const PURPOSES = Object.freeze({
 });
 
 /**
- * `--state` 的取值词表（筛选条件），也是本包**唯一**的对象状态词表：CLI 返回 `opened`，
- * 归一时映射成这里的 `open`，与筛选参数、`closed` 保持同一套词。
+ * `--state` 的取值词表：**按命令分表**，两个命令不共用（规格 §2.4/§2.5 的 flag 说明）：
+ * `issue list` 是 `created/processing/rejected/finished/all`，`pr list` 是
+ * `opened/closed/merged/all`。这是本包对 `--state` 的**唯一**校验点，工具面的 enum 也从这里
+ * 取（`gitee-read.mjs`），不在两处各写一份——写两份的下场就是一边改了另一边还在收旧值。
  */
-const STATE_VALUES = Object.freeze(['open', 'closed', 'all']);
+export const STATE_VALUES = Object.freeze({
+  issueList: Object.freeze(['created', 'processing', 'rejected', 'finished', 'all']),
+  prList: Object.freeze(['opened', 'closed', 'merged', 'all']),
+});
 
 /**
- * Gitee 状态值 → 既有词表。只映射实测过的写法（`opened` 出现于 PR 与 Issue 载荷）；不认识的
- * 状态原样保留、不新增词——`merged`/`locked` 这类值尚未实测，猜一个同义词就等于替平台作决定。
+ * 两个命令的 `--state` 默认值：**CLI 自己的默认**（规格 §2.4/§2.5），本包不注入。
+ * 写在这里只为工具面文案与文档同源，argv 里不出现它——替 CLI 填默认值等于把两份默认值
+ * 抄进本包，CLI 改了这里就会漂移。
+ */
+export const STATE_DEFAULTS = Object.freeze({ issueList: 'created', prList: 'opened' });
+
+/**
+ * 载荷状态值 → 既有交付词表。只映射实测过的写法（`opened` 出现于 PR 与 Issue 载荷）；
+ * 不认识的状态原样保留、不新增词——`merged`/`locked` 这类值尚未实测，猜一个同义词就等于替平台
+ * 作决定。注意它与上面的 `--state` 筛选词表是两件事：这里归一的是**读出来的**状态，
+ * 筛选词表是**发出去的**参数，二者不互相推导。
  */
 const STATE_ALIASES = Object.freeze({
   opened: 'open',
@@ -349,7 +391,6 @@ const TARGET_NUMBER_PATTERN = /^\d{1,9}$/;
 // Gitee 的 Issue/PR 链接：`/issues/<n>` 与 `/pulls/<n>`（GitHub 的 `/pull/<n>` 也认，只认结构不认域名）。
 // 命名空间同样允许嵌套（`.../osc/ard/ard-cli/-/pull_requests/2` 这类路径里取最后两段）。
 const TARGET_LINK_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?[^\s/]+\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+\/(?:issues|issue|pulls|pull|pull_requests|merge_requests)\/\d{1,9}(?:[#?]\S*)?$/;
-const HOST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
 const BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/;
 const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const TITLE_LIMIT = 512;
@@ -459,12 +500,13 @@ function assertParamValue(command, flag, value) {
       // 仓库作用域把 target 作为 `-R` 的值：形状校验与位置参数完全相同，只换落位。
       return assertTargetFor(command, value);
     case '--state': {
+      const allowed = STATE_VALUES[command] ?? [];
       const state = text(value);
-      if (!STATE_VALUES.includes(state)) {
-        fail(ADAPTER_REASONS.ARG_INVALID, `${command} 的 state 必须是 ${STATE_VALUES.join('|')}`, {
+      if (!allowed.includes(state)) {
+        fail(ADAPTER_REASONS.ARG_INVALID, `${command} 的 state 必须是 ${allowed.join('|')}`, {
           command,
           field,
-          allowed: [...STATE_VALUES],
+          allowed: [...allowed],
         });
       }
       return state;
@@ -480,13 +522,6 @@ function assertParamValue(command, flag, value) {
         });
       }
       return String(raw);
-    }
-    case '--host': {
-      const host = text(value);
-      if (!HOST_PATTERN.test(host)) {
-        fail(ADAPTER_REASONS.ARG_INVALID, `${command} 的 host 形状非法`, { command, field });
-      }
-      return host;
     }
     case '--title': {
       const title = typeof value === 'string' ? value.trim() : '';
@@ -541,6 +576,33 @@ function assertTargetFor(command, value) {
     });
   }
   return target;
+}
+
+/**
+ * target 落到 argv 的哪里：由 Usage 决定，不是偏好（规格 §2.4/§2.5）。
+ *
+ * 单对象命令的位置参数只有编号，仓库拆到 `-R`；纯数字 target 的 `repo` 是 `null`，因此
+ * 不发 `-R`——规格 §1.2：无 `-R` 时按当前目录 git remote 解析仓库，这是有意保留的用法，
+ * 不在这里替调用方猜一个仓库。链接只能取到编号：Gitee 的 web 路径形态不唯一
+ * （`/osc/_code/.../-/pull_requests/2` 与 `/owner/issues/1` 都见过），反推仓库不可靠，
+ * 宁可退回 git remote 也不猜。
+ *
+ * `repo list` 没有任何位置参数：它的 target 只做形状校验（工具面要求必填），不进 argv。
+ */
+function placementFor(command, target) {
+  if (SINGLE_OBJECT_COMMANDS.includes(command)) {
+    const qualified = QUALIFIED_TARGET_PATTERN.exec(target);
+    if (qualified !== null) return { positional: qualified[2], repo: qualified[1] };
+    if (TARGET_NUMBER_PATTERN.test(target)) return { positional: target, repo: null };
+    const link = TARGET_LINK_PATTERN.test(target) ? /(\d{1,9})(?:[#?]\S*)?$/u.exec(target) : null;
+    if (link !== null) return { positional: link[1], repo: null };
+    fail(ADAPTER_REASONS.ARG_INVALID, `${command} 的 target 必须带工作项编号（owner/repo#12 或纯数字号）`, {
+      command,
+      field: 'target',
+    });
+  }
+  if (POSITIONAL_TARGET_COMMANDS.includes(command)) return { positional: target, repo: null };
+  return { positional: undefined, repo: target };
 }
 
 /** argv 结构扫描：任何以 `-` 开头的 token 都必须是本命令声明过的旗标（纵深防御）。 */
@@ -609,12 +671,12 @@ export function assertArgv(command, params = {}) {
     fail(ADAPTER_REASONS.ARG_MISSING, `${command} 缺少必填参数：${missing.join(', ')}`, { command, missing });
   }
   const target = assertTargetFor(command, params.target);
-  const positional = POSITIONAL_TARGET_COMMANDS.includes(command);
+  const placement = placementFor(command, target);
   const args = [...words];
-  if (positional) args.push(target);
+  if (placement.positional !== undefined) args.push(placement.positional);
   for (const flag of GITEE_ARGV_FLAGS[command]) {
-    const value = flag === '-R' ? target : params[flag.slice(2)];
-    if (value === undefined) continue;
+    const value = flag === '-R' ? placement.repo : params[flag.slice(2)];
+    if (value === undefined || value === null) continue;
     const safe = assertParamValue(command, flag, value);
     if (BOOLEAN_FLAGS.includes(flag)) {
       if (safe === true) args.push(flag);
@@ -627,8 +689,8 @@ export function assertArgv(command, params = {}) {
 }
 
 /**
- * argv 构造的薄壳：`argvFor('issueList', { target:'g/r', state:'open', json: true })`
- * → `['issue','list','-R','g/r','--state','open','--json']`。
+ * argv 构造的薄壳：`argvFor('issueList', { target:'g/r', state:'created', json: true })`
+ * → `['issue','list','-R','g/r','--json','--state','created']`。
  *
  * 读命令的 `json` 在这里只是**布尔开关**（`true` → 追加 `--json` 一个 token）：字段清单是
  * 本地投影清单，由 `projectionFor()` 决定，永远不进 argv。
@@ -665,10 +727,22 @@ function parseJsonOutcome(stdout, command) {
 }
 
 /**
- * 剥壳：实测出现过三种包裹形态，扁平形状也必须能吃。
+ * 空结果信封：只有 `message` 一个字符串键（`pr list` 没有 PR 时的实测形状）。
+ *
+ * 判据故意**只要这一种形状**：多一个键、message 不是字符串、或是数组，都不算空列表——
+ * "这仓库没有 PR" 与 "CLI 换了一种包裹" 必须能区分开，否则以后任何畸形输出都会被读成空。
+ */
+function isEmptyMessageEnvelope(value) {
+  const keys = Object.keys(value);
+  return keys.length === 1 && keys[0] === 'message' && typeof value.message === 'string';
+}
+
+/**
+ * 剥壳：实测出现过四种包裹形态，扁平形状也必须能吃。
  *
  * - `{data:{list:[…]}, meta:{…}}`（`issue list`，2026-11-03 实测）
  * - `{data:[…], meta:{…}}`（`pr list`，实测）
+ * - `{"message":"No pull requests found."}`（`pr list` **空**结果，规格 §4 第 5 条）
  * - `{data:{…}}` 与**扁平对象**（`repo view` 实测是扁平对象；`issue|pr view`、`repo list` 未实测）
  *
  * 只剥已知的壳，不做"猜哪一层是数据"的递归：认不出就报畸形结果——把 `data` 或 `meta`
@@ -684,6 +758,10 @@ function unwrapOutput(parsed, expected, command) {
       if (isPlainObject(parsed.data) && Array.isArray(parsed.data.list)) return { value: parsed.data.list, meta };
       // `{items:[…]}` 是 r10 之前就接受的旧形状，留着以免把"包裹形状变了"误报成畸形。
       if (Array.isArray(parsed.items)) return { value: parsed.items, meta };
+      // **空列表**不是畸形：`pr list` 没有 PR 时只回一行 `{"message":"…"}`，没有 data/items。
+      // 只放行"恰好只有一个 message 字符串"的对象——其它畸形形状（data 非数组、message 之外
+      // 还有别的键）照旧报错，别让这道口子把认不出的载荷也放过去。
+      if (isEmptyMessageEnvelope(parsed)) return { value: [], meta: null };
     }
     fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 的输出里没有数组（认得的包裹：data / data.list / items）`, {
       command,
@@ -732,7 +810,8 @@ function pickFields(raw, fields) {
  * @param {{run: ({bin: string, args: string[], purpose: string}) => Promise<object>}} options.runner
  *   唯一子进程出口（`gitee-cli.mjs`），本模块不自建子进程
  * @param {string} [options.cliPath] 可执行文件名或路径；缺省 `gh`（PATH 解析，不写绝对路径）
- * @param {string} [options.host] 企业 Gitee 域名（只做诊断与 `--host` 显式参数，默认不注入 argv）
+ * @param {string} [options.host] 企业 Gitee 域名（只做诊断与企业域校验，不进 argv、不进环境：
+ *   本 CLI 的主机来自它自己的 `~/.gitee-cli/config.json` 的 `base_url`，没有 `--host` 参数）
  * @param {string|string[]} [options.authEnv] 承载令牌的环境变量名，缺省空（不点名就不注入）
  * @param {(() => string)} [options.now] 时间源（测试可注入固定时钟）
  * @param {object} [options.env] 环境变量来源（令牌只从这里取，缺省 `process.env`）
@@ -953,8 +1032,9 @@ export function createGiteeAdapter({
           field: 'state',
         });
       }
-      // 清单默认 `--state open`：与"当前需要处理的项"一致，显式传 all/closed 才扩大范围。
-      if (acceptsState) argvParams.state = options.state === undefined ? 'open' : options.state;
+      // 调用方不传就不发 `--state`：默认值归 CLI 自己（issue 默认 created、pr 默认 opened，
+      // 规格 §2.4/§2.5）。替 CLI 填默认值等于把两份默认值抄进本包，CLI 一改这里就漂移。
+      if (options.state !== undefined) argvParams.state = options.state;
     } else if (options.state !== undefined || options.limit !== undefined) {
       fail(ADAPTER_REASONS.ARG_NOT_WHITELISTED, `${command} 不接受 state/limit（只有清单动作有这两个参数）`, {
         action: actionKey,

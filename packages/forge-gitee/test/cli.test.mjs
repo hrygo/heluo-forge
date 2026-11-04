@@ -121,6 +121,26 @@ test('环境白名单：只放行运行态变量与点名凭据，无关机密�
   assert.equal(calls[0].args.includes(TOKEN_VALUE), false, '凭据绝不进 argv');
 });
 
+test('GITEE_TOKEN 是本 CLI 的认证模型：不点名 authEnv 也继承，其它凭据变量仍不继承（规格 §1.3）', async () => {
+  const { execFile, calls } = fakeExecFile(() => ({ stdout: '' }));
+  const runner = createGiteeRunner({
+    execFile,
+    env: {
+      GITEE_TOKEN: OTHER_TOKEN,
+      GH_TOKEN: TOKEN_VALUE,
+      GITHUB_TOKEN: ['other', 'platform', 'secret'].join('-'),
+    },
+  });
+  await runner.run({ bin: 'gh', args: ['issue', 'list'] });
+
+  assert.ok(ENV_ALLOWLIST.includes('GITEE_TOKEN'), 'GITEE_TOKEN 必须在白名单里');
+  const childEnv = calls[0].options.env;
+  assert.equal(childEnv.GITEE_TOKEN, OTHER_TOKEN, '按 CLI 文档设了变量就该被看见');
+  assert.equal(childEnv.GH_TOKEN, undefined, '别家 CLI 的令牌变量仍不继承');
+  assert.equal(childEnv.GITHUB_TOKEN, undefined);
+  assert.equal(calls[0].args.includes(OTHER_TOKEN), false, '凭据绝不进 argv');
+});
+
 test('authEnv 可配：只注入点名的变量，其余同名凭据不继承', async () => {
   const { execFile, calls } = fakeExecFile(() => ({ stdout: '' }));
   const runner = createGiteeRunner({
@@ -361,6 +381,52 @@ test('detectPersistentToken：四种配置目录布局都被检查，且返回�
   ]) {
     assert.ok(seen.includes(expected), `未检查 ${expected}`);
   }
+});
+
+test('detectPersistentToken：~/.gitee-cli/config.json 的 token 也被检出（JSON 布局，规格 §1.5）', () => {
+  const giteeConfig = `${HOME_FIXTURE}/.gitee-cli/config.json`;
+  const seen = [];
+  const result = detectPersistentToken({
+    env: { HOME: HOME_FIXTURE },
+    readFile: (file) => {
+      seen.push(file);
+      return file === giteeConfig
+        ? `{\n  "base_url": "http://corp.example.com/api/v8",\n  "token": "${TOKEN_VALUE}"\n}`
+        : null;
+    },
+  });
+  assert.ok(seen.includes(giteeConfig), '本 CLI 的落盘令牌位置必须在候选里');
+  assert.equal(result.blocked, true, '只扫 YAML 会让这个令牌永远检测不到');
+  assert.equal(result.reason, 'GITEE_PERSISTENT_TOKEN');
+  assert.deepEqual(result.files, [giteeConfig], '只回文件名');
+  assert.match(result.next_action, /环境变量/);
+  assert.equal(JSON.stringify(result).includes(TOKEN_VALUE), false, 'AC-22：不回显令牌值');
+
+  // `"token": ""` 等于"没设置"（规格 §1.5 只存被显式 set 过的键）：不能当成命中。
+  const emptyToken = detectPersistentToken({
+    env: { HOME: HOME_FIXTURE },
+    readFile: (file) => (file === giteeConfig ? '{\n  "token": ""\n}' : null),
+  });
+  assert.equal(emptyToken.blocked, false);
+
+  // 解析不了的 JSON 不猜：半截文件自造的告警无法复现。
+  const brokenJson = detectPersistentToken({
+    env: { HOME: HOME_FIXTURE },
+    readFile: (file) => (file === giteeConfig ? '{"token": "abc' : null),
+  });
+  assert.equal(brokenJson.blocked, false);
+
+  // Windows 布局：HOME 与 USERPROFILE 都可能给出主目录，两边各看一次。
+  const profile = ['', 'secret', 'users', 'svc'].join('/');
+  const seenWindows = [];
+  detectPersistentToken({
+    env: { HOME: HOME_FIXTURE, USERPROFILE: profile },
+    readFile: (file) => {
+      seenWindows.push(file);
+      return null;
+    },
+  });
+  assert.ok(seenWindows.includes(`${profile}/.gitee-cli/config.json`), 'USERPROFILE 下的 config.json 也要扫');
 });
 
 test('detectPersistentToken：零候选环境（无 HOME）不阻断也不读盘', () => {

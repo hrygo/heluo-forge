@@ -65,7 +65,7 @@ export const CONFIG_REASONS = Object.freeze({
 /** 环境变量名：字母/下划线开头，只含字母数字下划线（避免把别的东西当变量名读）。 */
 const AUTH_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** 主机名（可带端口）：拒绝协议前缀、路径与 userinfo——那些会把 `--host` 变成注入面。 */
+/** 主机名（可带端口）：拒绝协议前缀、路径与 userinfo——那些会把主机配置变成注入面（本 CLI 没有 `--host` 参数，见 gitee-adapter 的 argv 表）。 */
 const HOST_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::[0-9]{1,5})?$/;
 
 /** 带协议的写法（`scheme://…`）：`cliPath` 是可执行文件标识，不是 URL。 */
