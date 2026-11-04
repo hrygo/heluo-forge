@@ -25,7 +25,7 @@ import {
   normalizeChangeRecord,
   renderContextCard,
 } from './change-context.mjs';
-import { createDevopsReader } from './read.mjs';
+import { createDevopsReader, DevopsReadError, READ_REASONS } from './read.mjs';
 import { parseChangeId } from './entry.mjs';
 
 /** 流程面自己的拒绝原因；平台动作四状态之外的值只用于"没走到平台"的早退。 */
@@ -213,5 +213,17 @@ export function createDevopsFlow({
     reader,
     startFromChange: async ({ changeId } = {}) => readChange(changeId),
     context: async (input = {}) => readChange(text(input.target) || text(input.changeId)),
+    /**
+     * 受控写的执行面：门禁/confirm/绑定在装配层，这里只把三个字段交给固定 argv。
+     * 未配置运行时环境时抛 `NO_READER`（零子进程），与只读面同一条 fail-closed 语义。
+     */
+    changeUpdate: async ({ changeId, summary, description, aiAc } = {}) => {
+      if (ports === null) {
+        throw new DevopsReadError(READ_REASONS.NO_READER, '运行时配置不可用，写回不执行', {
+          action: 'change.clarification.write',
+        });
+      }
+      return ports.dop.updateChange({ changeId, summary, description, aiAc });
+    },
   });
 }

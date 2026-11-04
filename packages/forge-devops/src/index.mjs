@@ -29,7 +29,7 @@ import {
   READ_ACTIONS,
   READ_REASONS,
 } from './read.mjs';
-import { buildDevopsTools, DEVOPS_TOOLS } from './tools.mjs';
+import { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS } from './tools.mjs';
 import { writeArtifact } from './artifacts.mjs';
 import { displayableChange, normalizeChangeRecord } from './change-context.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
@@ -77,6 +77,8 @@ export const FLOW_REASONS = Object.freeze({
   COMMAND_NOT_WHITELISTED: 'COMMAND_NOT_WHITELISTED',
   MISSING_CHANGE_ID: 'MISSING_CHANGE_ID',
   MISSING_METHOD: 'FLOW_METHOD_MISSING',
+  /** 写回目标与当前会话已读到的变更不一致：写动作只对"读过的那条"开放。 */
+  TARGET_NOT_BOUND: 'TARGET_NOT_BOUND',
 });
 
 export {
@@ -87,7 +89,7 @@ export {
   READ_REASONS,
   READ_STATUSES,
 } from './read.mjs';
-export { buildDevopsTools, DEVOPS_TOOLS, FLOW_TOOLS, QUERY_ACTIONS, QUERY_TOOL } from './tools.mjs';
+export { buildDevopsTools, DEVOPS_TOOLS, FLOW_ACTIONS, FLOW_TOOLS, QUERY_ACTIONS, QUERY_TOOL } from './tools.mjs';
 export { ARTIFACT_KINDS, artifactPath, renderFrontMatter, writeArtifact } from './artifacts.mjs';
 export { ENTRY_HELP, ENTRY_NAME, parseChangeId, registerEntry } from './entry.mjs';
 export { createDevopsFlow } from './flow.mjs';
@@ -532,6 +534,48 @@ export function apply(ctx, rawConfig = {}) {
       const result = await callFlow('change.context', 'context', input);
       if (result?.status === 'ready') bindChangeId(result?.changeId);
       return result;
+    },
+    /**
+     * 受控写：把分析后的标题/描述/验收标准回写到**当前会话已读到的那条变更**。
+     *
+     * 三层前置：绑定校验（先读再写，目标必须等于 currentChangeId）→ 策略门禁
+     * （`change.clarification.write`，默认未登记即拒绝、零子进程）→ 适配器固定 argv + 回读。
+     * 返回值是适配器的结果三态（done / failed / unknown），退出码 0 不当成功。
+     */
+    changeUpdate: async ({ target, summary, description, aiAc } = {}) => {
+      const id = typeof target === 'string' ? target.trim() : '';
+      if (currentChangeId === null) {
+        throw new DevopsReadError(
+          FLOW_REASONS.MISSING_CHANGE_ID,
+          '尚未读取任何变更，写回不执行（先读该变更再写）',
+          { action: FLOW_ACTIONS.CHANGE_UPDATE },
+        );
+      }
+      if (id === '' || id !== currentChangeId) {
+        throw new DevopsReadError(
+          FLOW_REASONS.TARGET_NOT_BOUND,
+          `写回目标 ${id || '(空)'} 与当前会话已读到的变更 ${currentChangeId} 不一致`,
+          { target: id, bound: currentChangeId },
+        );
+      }
+      const admitted = await policy.executeAction(
+        ctx,
+        FLOW_ACTIONS.CHANGE_UPDATE,
+        {
+          name: 'devops.change.update',
+          arguments: { target: id },
+          agent: undefined,
+          callId: `devops-write-${(callSeq += 1)}`,
+          signal: undefined,
+        },
+        async () => callFlow('change.update', 'changeUpdate', { changeId: id, summary, description, aiAc }),
+      );
+      if (admitted !== null && typeof admitted === 'object' && admitted.kind === 'error') {
+        throw new DevopsReadError(READ_REASONS.POLICY_DENIED, String(admitted.text ?? '策略拒绝了这次写回'), {
+          action: FLOW_ACTIONS.CHANGE_UPDATE,
+        });
+      }
+      return admitted;
     },
     /** 产物落盘：唯一出口 `artifacts.mjs`；变更号来自绑定（未绑定则拒绝，不猜）。 */
     artifactWrite: async ({ repoRoot, kind, body, data, meta } = {}) => {

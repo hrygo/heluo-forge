@@ -5,19 +5,20 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { READ_ACTIONS, READ_REASONS } from '../src/read.mjs';
-import { DEVOPS_TOOLS, FLOW_TOOLS, QUERY_ACTIONS, QUERY_TOOL, buildDevopsTools } from '../src/tools.mjs';
+import { DEVOPS_TOOLS, FLOW_ACTIONS, FLOW_TOOLS, QUERY_ACTIONS, QUERY_TOOL, buildDevopsTools } from '../src/tools.mjs';
 import { apply, FLOW_KEY, READER_KEY, SERVICE_KEY } from '../src/index.mjs';
 
 /**
- * 工具面契约（D 方案）：3 个工具（typed 只读 runner / 聚合读 / 产物落盘）、名字→动作映射唯一真源、
+ * 工具面契约（D 方案 + 写回）：4 个工具（typed 只读 runner / 聚合读 / 受控写 / 产物落盘）、名字→动作映射唯一真源、
  * 参数用 target、change.list 只接受 @me、clarify/plan 的 data 与 body 互斥。
  * 业务判定（归一、机检、门禁）不在工具里，所以这里只验证"工具是否把动作与参数原样交下去"。
  * 仓库 / Issue / PR 读写已归 `@heluo/forge-gitee`，本包不再持有跨平台写入口。
  */
 
 const CONTEXT_TOOL = 'forge_devops_change_context';
+const UPDATE_TOOL = 'forge_devops_change_update';
 const ARTIFACT_TOOL = 'forge_devops_artifact_write';
-const TOOL_NAMES = [QUERY_TOOL, CONTEXT_TOOL, ARTIFACT_TOOL];
+const TOOL_NAMES = [QUERY_TOOL, CONTEXT_TOOL, UPDATE_TOOL, ARTIFACT_TOOL];
 
 const META = Object.freeze({ sourceType: 'mock', sourceRevision: 'dop:abc123456789' });
 
@@ -47,6 +48,13 @@ function fakeService(overrides = {}) {
         truncated: false,
       })),
       context: record('context', { card: { change: 'ARD123456' }, text: '## 上下文卡' }),
+      changeUpdate: record('changeUpdate', (args) => ({
+        status: 'done',
+        target_ref: args.target,
+        fields: { summary: args.summary, description: args.description, aiAc: args.aiAc },
+        readback: { ok: true, fields: { summary: 'match', description: 'match', aiAc: 'match' } },
+        retry_policy: 'none',
+      })),
       artifactWrite: record('artifactWrite', { path: '/tmp/x/report.md', bytes: 10 }),
       ...overrides,
     },
@@ -56,16 +64,17 @@ function fakeService(overrides = {}) {
 const parse = (payload) => JSON.parse(payload.content[0].text);
 const byName = (tools, name) => tools.find((tool) => tool.name === name);
 
-test('工具面恰好 3 个，映射表与门禁动作逐条对应', () => {
+test('工具面恰好 4 个，映射表与门禁动作逐条对应', () => {
   assert.deepEqual([...DEVOPS_TOOLS], TOOL_NAMES);
   assert.equal(QUERY_TOOL, 'forge_devops_query');
   assert.deepEqual([...QUERY_ACTIONS], [...READ_ACTIONS], '只读 runner 的动作词表与只读动作同源');
-  assert.deepEqual(Object.keys(FLOW_TOOLS), [CONTEXT_TOOL, ARTIFACT_TOOL], '流程工具只剩聚合读与落盘');
+  assert.deepEqual(Object.keys(FLOW_TOOLS), [CONTEXT_TOOL, UPDATE_TOOL, ARTIFACT_TOOL], '流程工具：聚合读 / 受控写 / 落盘');
   assert.equal(FLOW_TOOLS[CONTEXT_TOOL].action, 'change.read');
+  assert.equal(FLOW_TOOLS[UPDATE_TOOL].action, FLOW_ACTIONS.CHANGE_UPDATE, '写回按 change.clarification.write 登记');
   assert.equal(FLOW_TOOLS[ARTIFACT_TOOL].action, null, '产物落盘没有平台动作');
 });
 
-test('工具名与动作的唯一真源：源码里恰好 3 个工具名，且不含已被删除/跨平台的工具', () => {
+test('工具名与动作的唯一真源：源码里恰好 4 个工具名，且不含已被删除/跨平台的工具', () => {
   const source = readFileSync(new URL('../src/tools.mjs', import.meta.url), 'utf8');
   const names = new Set(source.match(/forge_devops_[a-z_]+/gu) ?? []);
   assert.deepEqual([...names].sort(), [...TOOL_NAMES].sort());
@@ -168,6 +177,95 @@ test('聚合读工具：一次取回上下文卡与渲染文本', async () => {
   assert.deepEqual(calls[0], { method: 'context', args: { target: 'ARD123456' } });
 });
 
+test('写回工具：confirm 与目标不一致时拒绝且零下游调用', async () => {
+  const { service, calls } = fakeService();
+  const tool = byName(buildDevopsTools(service), UPDATE_TOOL);
+  for (const confirm of [undefined, {}, { object: 'ARD000001' }, { object: '  ' }]) {
+    const payload = parse(await tool.execute({ target: 'ARD123456', summary: '新标题', confirm }));
+    assert.equal(payload.ok, false, `${JSON.stringify(confirm)} 应被拒绝`);
+    assert.equal(payload.reason, 'CONFIRMATION_REQUIRED');
+    assert.equal(payload.action, FLOW_ACTIONS.CHANGE_UPDATE);
+  }
+  assert.equal(calls.length, 0, 'confirm 不通过时一次下游都不该调用');
+});
+
+test('写回工具：三个字段都为空 → MISSING_ARGUMENT，零下游调用', async () => {
+  const { service, calls } = fakeService();
+  const tool = byName(buildDevopsTools(service), UPDATE_TOOL);
+  const payload = parse(
+    await tool.execute({ target: 'ARD123456', confirm: { object: 'ARD123456' }, summary: '   ', description: '' }),
+  );
+  assert.equal(payload.ok, false);
+  assert.equal(payload.reason, 'MISSING_ARGUMENT');
+  assert.equal(payload.next_action, 'complete-arguments');
+  assert.equal(calls.length, 0);
+});
+
+test('写回工具：字段原样交给 service，结果 done 才 ok:true', async () => {
+  const { service, calls } = fakeService();
+  const tool = byName(buildDevopsTools(service), UPDATE_TOOL);
+  const payload = parse(
+    await tool.execute({
+      target: ' ARD123456 ',
+      summary: '优化启动性能',
+      description: '补齐启动链路的重试',
+      aiAc: '启动耗时下降 30%',
+      confirm: { object: 'ARD123456' },
+    }),
+  );
+  assert.equal(payload.ok, true);
+  assert.equal(payload.result.status, 'done');
+  assert.deepEqual(payload.result.fields, {
+    summary: '优化启动性能',
+    description: '补齐启动链路的重试',
+    aiAc: '启动耗时下降 30%',
+  });
+  assert.deepEqual(calls[0], {
+    method: 'changeUpdate',
+    args: { target: 'ARD123456', summary: '优化启动性能', description: '补齐启动链路的重试', aiAc: '启动耗时下降 30%' },
+  });
+});
+
+test('写回工具：策略拒绝/绑定不符时给可见失败与下一步，而静默成功', async () => {
+  const cases = [
+    ['POLICY_ACTION_UNREGISTERED', 'report-to-admin'],
+    ['TARGET_NOT_BOUND', 'read-the-change'],
+    ['MISSING_CHANGE_ID', 'report-to-admin'],
+  ];
+  for (const [code, next] of cases) {
+    const { service } = fakeService({
+      changeUpdate: async () => {
+        throw Object.assign(new Error('拒绝'), { code });
+      },
+    });
+    const payload = parse(
+      await byName(buildDevopsTools(service), UPDATE_TOOL).execute({
+        target: 'ARD123456',
+        summary: 'x',
+        confirm: { object: 'ARD123456' },
+      }),
+    );
+    assert.equal(payload.ok, false, `${code} 必须可见失败`);
+    assert.equal(payload.reason, code);
+    assert.equal(payload.next_action, next);
+  }
+});
+
+test('写回工具：unknown 结果不报成功（退出码 0 不算完成）', async () => {
+  const { service } = fakeService({
+    changeUpdate: async () => ({ status: 'unknown', target_ref: 'ARD123456', readback: { ok: false }, retry_policy: 'none' }),
+  });
+  const payload = parse(
+    await byName(buildDevopsTools(service), UPDATE_TOOL).execute({
+      target: 'ARD123456',
+      summary: 'x',
+      confirm: { object: 'ARD123456' },
+    }),
+  );
+  assert.equal(payload.ok, false, 'unknown 不是成功');
+  assert.equal(payload.result.status, 'unknown');
+});
+
 test('产物落盘工具：schema 含 data，body 不再是必填；clarify/plan 只交 data', async () => {
   const { service, calls } = fakeService();
   const tool = byName(buildDevopsTools(service), ARTIFACT_TOOL);
@@ -244,10 +342,17 @@ test('service 缺方法时工具报 INTERNAL，而不是静默成功', async () 
 /* ─────────────────────────── 装配层（index.mjs）─────────────────────────── */
 
 /** 假宿主：策略目录齐全、可按需注入只读端口/流程端口/命令面。 */
-function mountIndex({ flow, reader, commands } = {}) {
+function mountIndex({ flow, reader, commands, write = false, onAction = null } = {}) {
+  const catalog = new Map(READ_ACTIONS.map((action) => [action, { action, kind: 'read', enabled: true }]));
+  if (write === true) {
+    catalog.set(FLOW_ACTIONS.CHANGE_UPDATE, { action: FLOW_ACTIONS.CHANGE_UPDATE, kind: 'write', enabled: true });
+  }
   const policy = {
-    catalog: new Map(READ_ACTIONS.map((action) => [action, { action, kind: 'read', enabled: true }])),
-    executeAction: async (_ctx, _action, _exec, operation) => operation(),
+    catalog,
+    executeAction: async (_ctx, action, exec, operation) => {
+      onAction?.({ action, target: exec?.arguments?.target });
+      return operation();
+    },
   };
   const provided = new Map();
   const registered = new Map();
@@ -290,12 +395,13 @@ const fakeCommands = () => {
 
 test('装配：3 个工具全部注册，缺命令面时 entryStatus=no-command-face 而工具面照常可用', () => {
   const { registered, service } = mountIndex();
-  assert.equal(registered.size, 3);
+  assert.equal(registered.size, 4);
   assert.deepEqual(service.toolNames(), TOOL_NAMES);
   assert.equal(service.entryStatus(), 'no-command-face');
   assert.deepEqual(service.readActions(), Array.from(READ_ACTIONS));
-  assert.equal(service.clarifyWrite, undefined, 'D 方案删除恒 denied 的澄清写工具');
-  assert.equal(service.ledger, undefined, 'r10 删除写动作后不再保留写台账');
+  assert.equal(service.clarifyWrite, undefined, '恒 denied 的旧澄清写工具已删除，写回只走 change_update');
+  assert.equal(typeof service.changeUpdate, 'function', '受控写服务存在（默认被策略拒绝）');
+  assert.equal(service.ledger, undefined, '不保留本地写台账：结果以平台回读为准');
 });
 
 test('装配：有 commands 服务时注册 devops-change 入口，teardown 一并释放', async () => {
@@ -391,6 +497,49 @@ test('装配：产物落盘要先用入口绑定变更号，写出后路径与�
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('写回经装配层：先读再写、目标不一致拒绝、门禁收到动作与目标、done 才 ok', async () => {
+  const seen = [];
+  const reader = {
+    read: async ({ target }) => ({
+      status: 'succeeded',
+      target_ref: target,
+      source_revision: 'dop:sha',
+      observed_at: '2026-11-04T00:00:00.000Z',
+      raw: { id: target, title: 't', status: 'open' },
+    }),
+  };
+  const flow = {
+    startFromChange: async () => ({ ok: true, text: '## 上下文卡' }),
+    context: async () => ({ card: { change: 'ARD123456' }, text: '## 上下文卡' }),
+    changeUpdate: async ({ changeId, summary }) => ({
+      status: 'done',
+      target_ref: changeId,
+      fields: { summary },
+      readback: { ok: true },
+      retry_policy: 'none',
+    }),
+  };
+  const { registered, service } = mountIndex({ flow, reader, write: true, onAction: (entry) => seen.push(entry) });
+  const writes = () => seen.filter((entry) => entry.action === FLOW_ACTIONS.CHANGE_UPDATE);
+  const tool = registered.get(UPDATE_TOOL);
+  const ask = (target) => tool.execute({ target, summary: '新标题', confirm: { object: target } });
+
+  const before = parse(await ask('ARD123456'));
+  assert.equal(before.ok, false);
+  assert.equal(before.reason, 'MISSING_CHANGE_ID', '没读过就不能写');
+  assert.equal(writes().length, 0, '绑定不成立时零下游');
+
+  await service.read({ action: 'change.read', target: 'ARD123456' });
+  const wrong = parse(await ask('ARD999999'));
+  assert.equal(wrong.reason, 'TARGET_NOT_BOUND', '只能写会话已读到的那条变更');
+  assert.equal(writes().length, 0);
+
+  const ok = parse(await ask('ARD123456'));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.result.status, 'done');
+  assert.deepEqual(writes().at(-1), { action: FLOW_ACTIONS.CHANGE_UPDATE, target: 'ARD123456' }, '门禁收到动作与目标');
 });
 
 test('装配：上下文卡 ready 时绑定变更号，blocked 不绑定', async () => {

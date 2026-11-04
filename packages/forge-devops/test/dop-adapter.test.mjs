@@ -2,7 +2,7 @@
  * dop 适配器的命令行契约测试（T2）。
  *
  * 三层断言：
- *   1. **argv 逐字**：命令面只有 `change view/list`，参数顺序固定，endpoint 只在注入时追加；
+ *   1. **argv 逐字**：命令面是 `change view/list/update`，参数顺序固定，endpoint 只在注入时追加；
  *   2. **信封**：`source_revision` 是 raw stdout 的指纹，`observed_at` 由注入时钟给出；
  *   3. **失败语义**：超时/非零退出/输出不可解析各自给已登记原因码，且拒绝的输入零调用；
  *      **未启动（r8）**：按入口形态给三段可行动提示（`.cmd` 包装脚本 / 无后缀 shim），
@@ -83,20 +83,21 @@ test('夹具保真：ARD222222 首个 user_story 的 release_info 为空、第�
   assert.deepEqual(result.raw.sub_systems, [{ code: 'CARD.points-mall', name: '信用卡中心.积分商城子系统' }]);
 });
 
-test('配置了 endpoint 才追加 --endpoint；诊断标签与实践参数里都不回显它', async () => {
+test('配置了 endpoint 才追加 --api-endpoint（真实 flag 名）；诊断标签与实参都不回显它', async () => {
   const runner = fakeRunner();
   const endpoint = 'https://dop.example/api';
   const result = await adapterWith(runner, { dopEndpoint: endpoint }).readChange({ changeId: 'ARD123456' });
 
-  assert.deepEqual(runner.calls[0].args, ['change', 'view', 'ARD123456', '--json', '--endpoint', endpoint]);
+  assert.deepEqual(runner.calls[0].args, ['change', 'view', 'ARD123456', '--json', '--api-endpoint', endpoint]);
+  assert.ok(!runner.calls[0].args.includes('--endpoint'), '真实 CLI 没有 --endpoint（1.0.4 全局 flag 是 --api-endpoint）');
   assert.equal(result.command, 'dop change view ARD123456 --json', '命令标签不得包含 endpoint');
   assert.ok(!JSON.stringify(result).includes(endpoint), '读信封不得回显 endpoint（AC-22）');
 });
 
-test('未注入 endpoint 时不拼 --endpoint，也不存在其它拼参通道', async () => {
+test('未注入 endpoint 时不拼 --api-endpoint，也不存在其它拼参通道', async () => {
   const runner = fakeRunner();
   await adapterWith(runner, { dopEndpoint: '' }).readChange({ changeId: 'ARD123456' });
-  assert.ok(!runner.calls[0].args.includes('--endpoint'));
+  assert.ok(!runner.calls[0].args.includes('--api-endpoint'));
 });
 
 test('readChange 不接受 argv 覆盖：传 args 也不会改变命令面', async () => {
@@ -135,11 +136,21 @@ test('listChanges：平台没给 user 时显式 null，不按本机账号猜', a
   assert.equal(result.count, 0);
 });
 
-test('listChanges：给了 status 才拼 --status（并校验为安全令牌）', async () => {
+test('listChanges：真实 1.x 的 --json 是数组（无 changes/total 包裹）也能解析', async () => {
+  const stdout = JSON.stringify([{ code: 'ARD384859', summary: '企业级sdd工具开发' }]);
+  const runner = fakeRunner(() => ({ exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false }));
+  const result = await adapterWith(runner).listChanges({});
+  assert.equal(result.count, 1);
+  assert.equal(result.items[0].code, 'ARD384859');
+  assert.equal(result.total, 1, '数组形状没有 total 元数据：total = 本次条数');
+  assert.equal(result.user, null);
+});
+
+test('listChanges：给了 status 才拼 --state（真实 flag），非法值零调用', async () => {
   const runner = fakeRunner(() => ({ exitCode: 0, stdout: '{"changes":[]}', stderr: '', durationMs: 1, timedOut: false }));
   const adapter = adapterWith(runner);
   await adapter.listChanges({ status: 'open' });
-  assert.deepEqual(runner.calls[0].args, ['change', 'list', '--json', '--status', 'open']);
+  assert.deepEqual(runner.calls[0].args, ['change', 'list', '--json', '--state', 'open']);
 
   await rejectsWith(adapter.listChanges({ status: '--all' }), READ_REASONS.MISSING_TARGET);
   await rejectsWith(adapter.listChanges({ status: 'open; rm -rf' }), READ_REASONS.MISSING_TARGET);
@@ -299,7 +310,7 @@ test('capabilities 只报能力与布尔位，不回显路径/endpoint', () => {
   const adapter = createDopAdapter({ runner: fakeRunner(), dopBin: '/opt/corp/dop', dopEndpoint: 'https://dop.example/api', now });
   const capabilities = adapter.capabilities();
   assert.deepEqual(capabilities.read, ['change.view', 'change.list']);
-  assert.deepEqual(capabilities.write, [], 'dop 没有写命令：能力面必须为空数组');
+  assert.deepEqual(capabilities.write, ['change.update'], '唯一的写通道是 change update');
   assert.equal(capabilities.endpoint_configured, true);
   assert.equal(capabilities.executable_configured, true);
   assert.ok(Object.isFrozen(capabilities));
@@ -308,17 +319,109 @@ test('capabilities 只报能力与布尔位，不回显路径/endpoint', () => {
   assert.ok(!serialized.includes('dop.example'));
 });
 
-test('命令面枚举到函数：只有两条只读命令，没有写通道属性', () => {
-  assert.deepEqual(Object.keys(DOP_COMMANDS), ['changeView', 'changeList']);
+test('命令面枚举到函数：view/list/update 三条，禁项（done/create/delete/close）没有通道', () => {
+  assert.deepEqual(Object.keys(DOP_COMMANDS), ['changeView', 'changeList', 'changeUpdate']);
   assert.deepEqual(DOP_COMMANDS.changeView, ['change', 'view']);
   assert.deepEqual(DOP_COMMANDS.changeList, ['change', 'list']);
-  assert.ok(Object.isFrozen(DOP_COMMANDS.changeView) && Object.isFrozen(DOP_COMMANDS.changeList));
+  assert.deepEqual(DOP_COMMANDS.changeUpdate, ['change', 'update']);
+  assert.ok(Object.isFrozen(DOP_COMMANDS.changeUpdate));
 
   const adapter = createDopAdapter({ runner: fakeRunner(), dopBin: '/opt/corp/dop', now });
-  for (const forbidden of ['done', 'create', 'update', 'delete', 'close']) {
+  assert.equal(typeof adapter.updateChange, 'function', '写回只经 change update 一个方法');
+  for (const forbidden of ['done', 'create', 'delete', 'close']) {
     assert.ok(!(forbidden in adapter), `dop 适配器不得有 ${forbidden} 通道（§5.3 禁项）`);
   }
   assert.equal(typeof adapter.capabilities, 'function');
+});
+
+/* ───────────────────── change update：固定 argv + 写后回读（2026-11-04） ───────────────────── */
+
+/** 回读夹具：平台 `change view --json` 的 camelCase 形状（summary/description/userStory.storyAC）。 */
+const READBACK_OK = JSON.stringify({
+  summary: '优化启动性能',
+  description: '补齐启动链路的重试',
+  userStory: { storyAC: '<p>启动耗时下降 30%</p>' },
+});
+const READBACK_STALE = JSON.stringify({ summary: '旧标题', description: '', userStory: null });
+
+const updateRunner = (outcomes) => {
+  const calls = [];
+  const runner = {
+    calls,
+    run: async (input) => {
+      calls.push({ args: [...input.args], purpose: input.purpose });
+      const next = outcomes[Math.min(calls.length - 1, outcomes.length - 1)];
+      return { stderr: '', stdout: '', durationMs: 1, timedOut: false, ...next };
+    },
+  };
+  return runner;
+};
+
+test('updateChange：argv 固定为 change update <id> + 三个字段 flag，不拼 --json', async () => {
+  const runner = updateRunner([{ exitCode: 0 }, { exitCode: 0, stdout: READBACK_OK }]);
+  const result = await adapterWith(runner).updateChange({
+    changeId: 'ARD123456',
+    summary: '优化启动性能',
+    description: '补齐启动链路的重试',
+    aiAc: '启动耗时下降 30%',
+  });
+
+  assert.deepEqual(runner.calls[0].args, [
+    'change', 'update', 'ARD123456',
+    '--summary', '优化启动性能',
+    '--description', '补齐启动链路的重试',
+    '--ai-ac', '启动耗时下降 30%',
+  ]);
+  assert.ok(!runner.calls[0].args.includes('--json'), '写命令不拼 --json（未取证）');
+  assert.match(runner.calls[1].args.join(' '), /change view ARD123456 --json/u, '写后必须回读');
+  assert.equal(result.status, 'done', '退出码 0 + 回读一致才算 done');
+  assert.deepEqual(result.readback.fields, { summary: 'match', description: 'match', aiAc: 'match' });
+  assert.equal(result.retry_policy, 'none');
+});
+
+test('updateChange：只拼本次给出的字段（缺省字段不出现空 flag）', async () => {
+  const runner = updateRunner([{ exitCode: 0 }, { exitCode: 0, stdout: READBACK_OK }]);
+  await adapterWith(runner).updateChange({ changeId: 'ARD123456', description: '只改描述' });
+  assert.deepEqual(runner.calls[0].args, ['change', 'update', 'ARD123456', '--description', '只改描述']);
+});
+
+test('updateChange：三个字段都为空 → MISSING_FIELDS 且零子进程', async () => {
+  const runner = updateRunner([{ exitCode: 0 }]);
+  await rejectsWith(adapterWith(runner).updateChange({ changeId: 'ARD123456' }), 'MISSING_FIELDS');
+  assert.equal(runner.calls.length, 0);
+});
+
+test('updateChange：写成功但回读不一致 → unknown（不重放、可能已有副作用）', async () => {
+  const runner = updateRunner([{ exitCode: 0 }, { exitCode: 0, stdout: READBACK_STALE }]);
+  const result = await adapterWith(runner).updateChange({ changeId: 'ARD123456', summary: '优化启动性能' });
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.readback.ok, false);
+  assert.equal(result.readback.fields.summary, 'mismatch');
+  assert.equal(result.may_have_side_effect, true);
+  assert.equal(result.retry_policy, 'none');
+});
+
+test('updateChange：非零退出且回读确认未写入 → failed；超时且回读已写入 → unknown', async () => {
+  const failedRunner = updateRunner([{ exitCode: 1, stderr: 'server rejected' }, { exitCode: 0, stdout: READBACK_STALE }]);
+  const failed = await adapterWith(failedRunner).updateChange({ changeId: 'ARD123456', summary: '优化启动性能' });
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.reason, 'COMMAND_FAILED');
+  assert.equal(failed.may_have_side_effect, false);
+
+  const timeoutRunner = updateRunner([{ exitCode: null, timedOut: true }, { exitCode: 0, stdout: READBACK_OK }]);
+  const timeout = await adapterWith(timeoutRunner).updateChange({ changeId: 'ARD123456', summary: '优化启动性能' });
+  assert.equal(timeout.status, 'unknown');
+  assert.equal(timeout.reason, 'COMMAND_TIMEOUT');
+  assert.equal(timeout.may_have_side_effect, true);
+});
+
+test('updateChange：进程没起来（spawn 失败）→ 抛出可见失败，且不做回读', async () => {
+  const runner = updateRunner([{ exitCode: null }]);
+  await assert.rejects(
+    adapterWith(runner).updateChange({ changeId: 'ARD123456', summary: 'x' }),
+    (error) => error?.detail?.spawnFailed === true,
+  );
+  assert.equal(runner.calls.length, 1, '没启动就没有写发生，不再回读');
 });
 
 test('创建适配器必须注入 runner：不允许在适配器内自建子进程', () => {

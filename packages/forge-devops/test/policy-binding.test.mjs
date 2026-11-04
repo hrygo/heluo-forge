@@ -134,6 +134,11 @@ test('工具→动作绑定可验证：只读 runner 的每个动作与流程工
   for (const [toolName, flowTool] of Object.entries(FLOW_TOOLS)) {
     if (flowTool.action === null) continue; // 落盘没有平台动作
     const entry = catalog.get(flowTool.action);
+    if (flowTool.kind === 'write') {
+      // 写动作默认不登记（登记 ≠ 批准）：目录里没有它才是默认关闭。
+      assert.equal(entry, undefined, `${toolName} 的写动作不得默认登记`);
+      continue;
+    }
     assert.ok(entry !== undefined && entry.enabled === true, `${toolName} 的动作缺少已开放目录条目`);
   }
 });

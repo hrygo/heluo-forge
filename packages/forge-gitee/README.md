@@ -82,7 +82,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 | 形态 | 结果 | 建议 |
 |---|---|---|
 | 只装一个（Gitee 面或 devops 面） | 6 条并集目录 + 自己的插件行；本包工具 10 个，目录里另有两条 devops 的变更读（多几条读不会放行任何写） | **推荐** |
-| 同 profile **叠加两个补丁层**（各装各的，默认） | 两个策略行同 `id: heluo-policy`、目录逐字相同、都不写 `isolate`：loader 按 id 覆盖 config，留下**唯一**一个策略实例；两处内容相同，幸存者不取决于装配顺序；13 个工具全枚举、0 行激活失败，**不用改任何配置** | **默认可行**：`dsh plugin add` 两个 tgz 即可 |
+| 同 profile **叠加两个补丁层**（各装各的，默认） | 两个策略行同 `id: heluo-policy`、目录逐字相同、都不写 `isolate`：loader 按 id 覆盖 config，留下**唯一**一个策略实例；两处内容相同，幸存者不取决于装配顺序；14 个工具全枚举、0 行激活失败，**不用改任何配置** | **默认可行**：`dsh plugin add` 两个 tgz 即可 |
 | **单边改过目录**再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按 `GITEE_ACTION_UNREGISTERED` fail closed（`missing` 列全），先挂载方的工具仍在 | 不采用（`tests/plugin-patch-layers.test.mjs` 会红） |
 | 想回到 r4 的服务域隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
 
