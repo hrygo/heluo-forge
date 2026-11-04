@@ -35,17 +35,20 @@ function setup() {
   writeFileSync(join(privateDir, 'device-key.pem'), key, { mode: 0o600 });
   writeFileSync(join(privateDir, 'rules.json'), rule, { mode: 0o600 });
   writeFileSync(join(publicDir, 'team-public-key.pub'), pub);
-  ok('git', ['init', '-q', repo]);
-  ok('git', ['config', 'user.name', 'Test'], { cwd: repo });
-  ok('git', ['config', 'user.email', 'test-user'], { cwd: repo });
+  // A tester's global gitignore must not decide whether this fixture can add a
+  // key file; isolate user/system configuration for every git call here.
+  const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' };
+  ok('git', ['init', '-q', repo], { env: gitEnv });
+  ok('git', ['config', 'user.name', 'Test'], { cwd: repo, env: gitEnv });
+  ok('git', ['config', 'user.email', 'test-user'], { cwd: repo, env: gitEnv });
   mkdirSync(join(repo, '.github/sensitive-scan'), { recursive: true });
   writeFileSync(join(repo, '.github/sensitive-scan/team-public-key.pub'), pub);
-  ok('git', ['add', '.'], { cwd: repo });
-  ok('git', ['commit', '--no-verify', '-q', '-m', 'base'], { cwd: repo });
-  const base = ok('git', ['rev-parse', 'HEAD'], { cwd: repo });
+  ok('git', ['add', '.'], { cwd: repo, env: gitEnv });
+  ok('git', ['commit', '--no-verify', '-q', '-m', 'base'], { cwd: repo, env: gitEnv });
+  const base = ok('git', ['rev-parse', 'HEAD'], { cwd: repo, env: gitEnv });
   const installedKey = join(dir, 'config', 'device-key.pem');
   const installedRules = join(dir, 'config', 'rules.json');
-  const env = { ...process.env, SENSITIVE_SCAN_KEY_FILE: installedKey, SENSITIVE_SCAN_RULES: installedRules };
+  const env = { ...gitEnv, SENSITIVE_SCAN_KEY_FILE: installedKey, SENSITIVE_SCAN_RULES: installedRules };
   const installer = join(scriptDir, 'team-full-install.mjs');
   const install = () => run(process.execPath, [installer, '--repo', repo], { cwd: dir, env });
   return { dir, repo, pkg, key, publicKey, rule, env, installedKey, installedRules, base, install };
@@ -369,7 +372,7 @@ test('inside-repository destinations must be ignored and untracked', () => {
     assert.notEqual(installDefault(f, env).status, 0);
     assert.equal(existsSync(target), false);
     writeFileSync(target, f.key);
-    ok('git', ['add', 'device-key.pem'], { cwd: f.repo });
+    ok('git', ['add', 'device-key.pem'], { cwd: f.repo, env: f.env });
     writeFileSync(join(f.repo, '.gitignore'), '/device-key.pem\n');
     assert.notEqual(installDefault(f, env).status, 0);
     assert.equal(existsSync(f.installedRules), false);

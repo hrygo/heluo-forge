@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { outsideRepositoryTmp } from './support/tmp.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
 import { apply, Config, KeychainProviderError, validateConfig } from '../src/index.mjs';
 
@@ -63,7 +63,7 @@ test('apply refuses to replace an existing credentials provider', () => {
 
 test('a plaintext file backend without explicit approval is refused', () => {
   const ctx = fakeContext();
-  const filePath = join(mkdtempSync(join(tmpdir(), 'forge-insecure-')), 'credentials.json');
+  const filePath = join(outsideRepositoryTmp('forge-insecure-'), 'credentials.json');
   assert.throws(
     () => apply(ctx, { filePath }),
     (error) => {
@@ -223,7 +223,7 @@ test('an explicitly allowed plaintext file backend is announced as non-productio
   const warnings = [];
   const ctx = fakeContext();
   ctx.logger = { warn: (message) => warnings.push(message) };
-  const filePath = join(mkdtempSync(join(tmpdir(), 'forge-keychain-notice-')), 'credentials.json');
+  const filePath = join(outsideRepositoryTmp('forge-keychain-notice-'), 'credentials.json');
   const dispose = apply(ctx, { filePath, allowInsecureFile: true });
   await dispose();
 
@@ -255,7 +255,7 @@ test('a reviewed durable backend stays silent and a failing logger cannot block 
 
   const throwing = fakeContext();
   throwing.logger = { warn: () => { throw new Error('synthetic-logger'); } };
-  const filePath = join(mkdtempSync(join(tmpdir(), 'forge-keychain-notice-')), 'credentials.json');
+  const filePath = join(outsideRepositoryTmp('forge-keychain-notice-'), 'credentials.json');
   const dispose = apply(throwing, { filePath, allowInsecureFile: true });
   assert.equal(typeof throwing.provided.get('credentials')?.resolve, 'function');
   await dispose();
@@ -295,7 +295,7 @@ test('a backend that fails to close is still unprovided', async () => {
 });
 
 test('a plaintext document inside a git work tree is refused at mount', async () => {
-  const repository = mkdtempSync(join(tmpdir(), 'forge-keychain-repo-'));
+  const repository = outsideRepositoryTmp('forge-keychain-repo-');
   mkdirSync(join(repository, '.git'));
   const inside = join(repository, 'credentials.json');
   const ctx = fakeContext();
@@ -306,7 +306,7 @@ test('a plaintext document inside a git work tree is refused at mount', async ()
   assert.equal(ctx.provided.has('credentials'), false);
 
   // A neighbouring directory is not part of the work tree and stays usable.
-  const outside = mkdtempSync(join(tmpdir(), 'forge-keychain-outside-'));
+  const outside = outsideRepositoryTmp('forge-keychain-outside-');
   const okContext = fakeContext();
   const dispose = apply(okContext, { filePath: join(outside, 'credentials.json'), allowInsecureFile: true });
   assert.equal(okContext.provided.has('credentials'), true);

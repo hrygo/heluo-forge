@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-012 |
 | 文档名称 | IAM 双端验收矩阵（Windows / 麒麟） |
-| 版本 | V0.1.0 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-04 |
-| 门禁 | 骨架已就绪；实机执行 BLOCKED（无目标机器与账号权限） |
+| 门禁 | 2026-11-04 已在远程 macbook 与 megacube 做过一次部署复验；完整验收仍待目标环境与 IAM 账号 |
 | 文档层级 | L2 验收矩阵；能力证据引用 #120—#122 的记录，本文只做平台复验 |
 
 > 编制依据：2026-11-04 对 #123 正文、PLAN-011 M5 与既有 `pnpm check`、组合探针结果的核对。矩阵中没有任何一项在 Windows 或麒麟上执行过，全部保持 NOT RUN / BLOCKED；文档存在不构成验收证据。
@@ -98,7 +98,28 @@
 | R-02 | `git diff --check` 干净 | 命令输出 | NOT RUN | |
 | R-03 | 包体可安装到目标 profile | 安装日志与版本 | NOT RUN | |
 
-## 4. 当前状态
+## 4. 首次实机部署复验（2026-11-04）
+
+环境：远程 macbook（macOS 26.5.1 arm64，Node 26.4.0）、megacube（Linux aarch64，Node 24.21.0，DSH 0.2.1-rc.3）；macbook 用新装 DSH 0.2.1-rc.5。两台都从 `main@730f76e` 的 bundle 克隆，`pnpm install --frozen-lockfile`，再装同一份企业制品。
+
+| 项 | macbook（macOS） | megacube（Linux） | 结论 |
+|---|---|---|---|
+| `pnpm check` | 2514 项 / 2508 通过 / 6 跳过 / 0 失败 | 同左 | PASS |
+| 制品安装 | `dsh plugin add` 成功 | 同 | PASS |
+| 组合树 | 3 条企业行、官方四行 `disabled: true` | 同 | PASS |
+| 缺失条目告警 | `ui-settings-account` not found | 同 | 最小 profile 无该客户端插件；跳过 ≠ 已禁用 |
+| 启动 | `KEYCHAIN_UNAVAILABLE`，`authorization` 等待 `credentials`，无明文凭据文件 | 同 | PASS（按设计 fail closed） |
+| 系统钥匙串 | 未接入，需开发覆盖层 | 未接入 | AC4 仍 BLOCKED |
+
+实机暴露并已修的三处环境假设：
+
+1. `team-full-install.mjs` 只接受 Node 24，macOS 的 Node 26 被拒；改为要求 24 及以上。
+2. 密钥链测试用 `os.tmpdir()` 当“仓库外目录”，而 megacube 的 `/tmp` 本身是 git 仓库；改为挑选可证明在仓库外的临时根。
+3. 安装器测试夹具继承用户全局 gitignore，`device-key.pem` 被忽略导致 `git add` 失败；夹具隔离 `GIT_CONFIG_GLOBAL`。
+
+未修、需环境要求：Linux 以 `umask 002` 克隆时文件为 664，安装器按“安全脚本不得组可写”拒绝；用 `umask 022` 克隆后 24/24 通过。该拒绝是有意的安全门禁，是否改为“属主可写即收紧后使用”待定。
+
+## 5. 当前状态
 
 - 全部用例 `NOT RUN`；服务端语义三项 `BLOCKED`。
 - 阻塞原因：没有 Windows 与麒麟实机，也没有对应的测试账号权限。

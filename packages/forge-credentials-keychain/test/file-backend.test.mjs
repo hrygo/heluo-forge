@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm, stat, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 import { createFileBackend } from '../src/backend.mjs';
 import { createKeychainProvider } from '../src/provider.mjs';
 import { apply, KeychainProviderError } from '../src/index.mjs';
 
 async function tempFile(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-keychain-'));
+  const directory = await outsideRepositoryTmpAsync('forge-keychain-');
   t.after(() => rm(directory, { recursive: true, force: true }));
   return join(directory, 'credentials.json');
 }
