@@ -2,13 +2,21 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
-export async function mountPanel(fetch, { open = () => null, navigator, componentId = 'forge-iam' } = {}) {
+export async function mountPanel(fetch, { open = () => null, navigator, componentId = 'forge-iam', componentProps = {}, storage } = {}) {
   const source = await readFile(new URL('../../client.js', import.meta.url), 'utf8');
   const cells = [];
   const effects = [];
   const cleanups = [];
   const timers = new Map();
   const locations = [];
+  // A Map-backed localStorage: the panel caches model personalisation there, so
+  // tests must be able to seed and inspect it instead of relying on absence.
+  const persisted = new Map(Object.entries(storage ?? {}));
+  const localStorage = {
+    getItem: key => persisted.has(key) ? persisted.get(key) : null,
+    setItem: (key, value) => { persisted.set(key, String(value)); },
+    removeItem: (key) => { persisted.delete(key); },
+  };
   let closed = false;
   let lateUpdates = 0;
   let cursor = 0;
@@ -44,15 +52,15 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
       } });
     } },
     location: { assign: (url) => locations.push(url) },
-    open, navigator,
+    open, navigator, localStorage,
   };
   runInNewContext(source, {
-    window, fetch,
+    window, fetch, navigator, setTimeout: () => 0,
     setInterval: (fn) => { const id = ++nextTimer; timers.set(id, fn); return id; },
     clearInterval: (id) => timers.delete(id),
   });
   assert.ok(Panel);
-  const render = () => { cursor = 0; return Panel(); };
+  const render = () => { cursor = 0; return Panel(componentProps); };
   render();
   for (const effect of effects.splice(0)) {
     const cleanup = effect();
@@ -70,7 +78,7 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
     return undefined;
   };
   return {
-    render, text, findButton, locations,
+    render, text, findButton, locations, storage: persisted,
     tick() { assert.equal(timers.size, 1); return [...timers.values()][0](); },
     get lateUpdates() { return lateUpdates; },
     close() { closed = true; for (const cleanup of cleanups) cleanup(); assert.equal(timers.size, 0); },

@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { assertClientAuthConfigured, assertClientAuthCurrent, assertGrantAuthBinding, clientAuthContext, clientAuthDescriptor, grantAuthPin, prepareClientAuthentication } from './client-auth.mjs';
-import { createGatewayCredentialStore, createGrantStore, StoreError } from './store.mjs';
+import { createGatewayCredentialStore, createGrantStore, createModelSelectionStore, StoreError } from './store.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
 import { createView, transition } from './state.mjs';
 import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
@@ -24,93 +24,23 @@ import {
   verifyIdToken,
 } from './oidc.mjs';
 
+import {
+  canonicalRecord,
+  refreshBaseId,
+  sameGrantIgnoringRefreshMarker,
+  grantIdentity,
+  nowIso,
+  addSeconds,
+  tokenErrorMessage,
+  safeMessage,
+} from './service-helpers.mjs';
+
 const METADATA_TTL_MS = 5 * 60 * 1000;
 const JWKS_TTL_MS = 5 * 60 * 1000;
 const REFRESH_TIMEOUT_MS = 5000;
 const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
-// The account view is polled every couple of seconds; re-reading the secret
-// from an OS keychain on every poll is wasteful and may re-trigger access
-// checks, so the summary is reused briefly unless a caller forces a reload.
 const GATEWAY_RELOAD_MS = 5000;
-// Automatic refresh for an expired-but-refreshable session retries at most this
-// often; the view poll runs every two seconds and must not hammer the IdP.
 const AUTO_REFRESH_BACKOFF_MS = 30000;
-
-function canonicalRecord(value) {
-  if (Array.isArray(value)) return value.map(canonicalRecord);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalRecord(value[key])]));
-  }
-  return value;
-}
-
-function refreshBaseId(grant, id) {
-  return createHmac('sha256', id).update(JSON.stringify(canonicalRecord(grant))).digest('base64url');
-}
-
-function sameGrantIgnoringRefreshMarker(left, right) {
-  const { refreshOperation: ignoredLeft, ...leftBase } = left;
-  const { refreshOperation: ignoredRight, ...rightBase } = right;
-  return isDeepStrictEqual(leftBase, rightBase);
-}
-
-function grantIdentity({ version, issuer, clientId, resource, subject, obtainedAt, sessionInstanceId, authContext }) {
-  return { version, issuer, clientId, resource, subject, obtainedAt, sessionInstanceId, ...(authContext ? { authContext } : {}) };
-}
-
-function nowIso(now) {
-  return new Date(now).toISOString();
-}
-
-function addSeconds(now, seconds) {
-  return new Date(now + seconds * 1000).toISOString();
-}
-
-function tokenErrorMessage(error) {
-  if (error instanceof OidcError) {
-    if (error.code === 'IAM_HTTP_ERROR' && error.details?.oauthError === 'invalid_grant') {
-      return 'IAM_INVALID_GRANT';
-    }
-    return error.code;
-  }
-  if (error instanceof IamError) return error.code;
-  if (error instanceof StoreError) return error.code;
-  return 'IAM_INTERNAL';
-}
-
-function safeMessage(code) {
-  const messages = {
-    IAM_UNCONFIGURED: 'IAM configuration is incomplete',
-    IAM_CLIENT_AUTH_CONTEXT_INVALID: 'IAM client authentication context is invalid',
-    IAM_CLIENT_AUTH_UNVERIFIED: 'IAM client authentication is not verified',
-    IAM_CLIENT_AUTH_CHANGED: 'IAM client authentication changed',
-    IAM_CREDENTIALS_UNAVAILABLE: 'credential storage is unavailable',
-    IAM_ATOMIC_STORE_UNVERIFIED: 'credential storage atomicity is not trusted by this composition',
-    IAM_GATEWAY_ATOMIC_UNVERIFIED: 'joint gateway credential storage is not trusted by this composition',
-    IAM_GATEWAY_LEGACY_READ_ONLY: 'existing gateway credential data is read-only and was not changed',
-    IAM_GATEWAY_CHANGED: 'gateway credential changed before this operation could commit',
-    IAM_GATEWAY_WRITE_UNKNOWN: 'gateway credential write outcome is unknown; no automatic retry was attempted',
-    IAM_CREDENTIALS_CLEAR_FAILED: 'credential storage could not be cleared',
-    IAM_CALLBACK_UNAVAILABLE: 'IAM callback origin is unavailable',
-    IAM_UNREACHABLE: 'IAM endpoint is unreachable',
-    IAM_INVALID_GRANT: 'IAM authorization is no longer valid',
-    IAM_REAUTH_REQUIRED: 'IAM sign-in is required again',
-    IAM_STATE_MISMATCH: 'IAM callback state does not match this attempt',
-    IAM_ATTEMPT_EXPIRED: 'IAM sign-in attempt expired',
-    IAM_ID_TOKEN_INVALID: 'IAM ID token is invalid',
-    IAM_ID_TOKEN_SIGNATURE: 'IAM ID token signature is invalid',
-    IAM_ID_TOKEN_AUDIENCE: 'IAM ID token audience does not match',
-    IAM_ID_TOKEN_ISSUER: 'IAM ID token issuer does not match',
-    IAM_DISCOVERY_ISSUER_MISMATCH: 'IAM discovery issuer does not match configuration',
-    IAM_GRANT_CONTEXT_MISMATCH: 'IAM grant issuer context is unverified or does not match the configured issuer, client or resource',
-    IAM_REVOCATION_FAILED: 'IAM local session ended but token revocation was not confirmed',
-    IAM_ID_TOKEN_NONCE: 'IAM ID token nonce does not match',
-    IAM_ID_TOKEN_EXPIRED: 'IAM ID token is expired',
-    IAM_REFRESH_TOKEN_MISSING: 'IAM token response has no refresh token',
-    IAM_REFRESH_SUBJECT_MISMATCH: 'IAM refresh response changed the subject',
-  };
-  return messages[code] ?? 'IAM operation failed';
-}
 
 /**
  * Host-side IAM session. Login is OIDC authorization-code + PKCE against
@@ -142,6 +72,7 @@ export function createIamService(rawConfig, options = {}) {
   let storeCredentials = null;
   let storeError = null;
   let gatewayStore = null;
+  let modelSelectionStore = null;
   let gatewaySummary = null;
   let gatewayLoadedAt = 0;
   let gatewayLoading = null;
@@ -167,6 +98,7 @@ export function createIamService(rawConfig, options = {}) {
       // possibly resolving the secret) through the previous provider.
       store = null;
       gatewayStore = null;
+      modelSelectionStore = null;
       gatewaySummary = null;
       gatewayLoading = null;
       gatewayLoadedAt = 0;
@@ -186,6 +118,8 @@ export function createIamService(rawConfig, options = {}) {
         getGatewayAtomicStore: options.getGatewayAtomicStore,
         verifyGatewayAtomicStore: options.verifyGatewayAtomicStore,
       });
+      // No secret and no joint transaction: the plain provider lock is enough.
+      modelSelectionStore = createModelSelectionStore(credentials);
       gatewaySummary = null;
       gatewayLoadedAt = 0;
       gatewayLoading = null;
@@ -196,6 +130,7 @@ export function createIamService(rawConfig, options = {}) {
     } catch (error) {
       store = null;
       gatewayStore = null;
+      modelSelectionStore = null;
       gatewaySummary = null;
       gatewayLoadedAt = 0;
       gatewayLoading = null;
@@ -204,6 +139,23 @@ export function createIamService(rawConfig, options = {}) {
       storeError = error;
       return null;
     }
+  }
+
+  /**
+   * Resolve the subject that owns a person's durable model settings. The grant
+   * is read back from the provider instead of trusting a cached copy: an
+   * account or provider change must not let one person's selection be read or
+   * written under another's name.
+   */
+  async function selectionOwner() {
+    const target = ensureStore();
+    if (!target) return null;
+    const credentials = storeCredentials;
+    const record = await target.read().catch(() => null);
+    if (!record?.ok || !record.grant?.subject) return null;
+    try { assertGrantContext(record.grant, knownIssuer()); } catch { return null; }
+    const expires = Date.parse(record.grant.accessExpiresAt);
+    return { subject: record.grant.subject, credentials, expired: !Number.isFinite(expires) || expires <= now() };
   }
 
   let state = !exclusive.ok ? 'error' : (configured ? 'signed-out' : 'unconfigured');
@@ -924,6 +876,41 @@ export function createIamService(rawConfig, options = {}) {
     getModelOptions() {
       const runtime = options.getManagedModelRuntime?.();
       return runtime?.getModelOptions?.() ?? {};
+    },
+
+    /**
+     * Durable model selection for the signed-in person. The record is bound to
+     * one subject, so another person's saved choice is never adopted: it simply
+     * reads as "nothing saved" and the runtime starts from the catalogue.
+     */
+    async readModelSelection() {
+      const current = await selectionOwner();
+      if (!current) return { subject: null, saved: false, models: {}, defaultModelId: null };
+      const target = ensureStore() ? modelSelectionStore : null;
+      if (!target || storeCredentials !== current.credentials) {
+        return { subject: current.subject, saved: false, models: {}, defaultModelId: null };
+      }
+      const record = await target.read();
+      if (!record.ok || !record.selection || record.selection.subject !== current.subject) {
+        // Nothing stored for this subject (or the record belongs to someone
+        // else / is unreadable): the caller decides the first-run default.
+        return { subject: current.subject, saved: false, models: {}, defaultModelId: null };
+      }
+      return { subject: current.subject, saved: true, models: record.selection.models, defaultModelId: record.selection.defaultModelId };
+    },
+
+    /** Persist the enabled set. Never a token channel: only model ids and overrides. */
+    async saveModelSelection({ models, defaultModelId } = {}) {
+      assertExclusive();
+      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      const current = await selectionOwner();
+      if (!current || current.expired) throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
+      const target = ensureStore() ? modelSelectionStore : null;
+      if (!target || storeCredentials !== current.credentials) {
+        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法写入模型设置。');
+      }
+      const saved = await target.save({ subject: current.subject, models, defaultModelId });
+      return saved.selection;
     },
 
     async resolveGatewayConnection() {

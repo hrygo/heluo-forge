@@ -27,9 +27,10 @@ test('the client only targets the IAM routes and sends the CSRF header', async (
   assert.match(client, /window\.open/);
 });
 
-test('the client registers the settings section, signed-out banner and a four-step onboarding overlay', async () => {
+test('the client registers the settings section, launcher, signed-out banner and a four-step onboarding overlay', async () => {
   const client = await read('client.js');
-  assert.doesNotMatch(client, /settings\.launcher/);
+  assert.match(client, /settings\.launcher/);
+  assert.match(client, /forge-iam-launcher/);
   assert.match(client, /shell\.overlay/);
   assert.match(client, /尚未登录企业账号/);
   assert.match(client, /forge-iam-banner/);
