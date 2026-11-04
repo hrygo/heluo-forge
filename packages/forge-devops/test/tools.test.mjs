@@ -592,6 +592,36 @@ test('装配：artifact_write 的 data 经真实 service 落盘，body/data 互�
     assert.equal(mismatch.reason, 'ARTIFACT_ARGUMENT_MISMATCH');
     assert.equal(mismatch.next_action, 'fix-arguments', '参数互斥是可修正的：下一步改参数，而不是找管理员');
 
+    // clarify 机检不通过：信封必须把逐条 problems 带回，否则调用方无从修正（只回一句"未通过机检"
+    // 等于把可自动纠正的错误变成必须读源码的错误）。
+    const badClarify = parse(
+      await tool.execute({
+        repoRoot,
+        kind: 'clarify',
+        data: {
+          findings: [
+            {
+              id: 'Q-9',
+              kind: 'acceptance',
+              question: '只有单项、且没有列出代价的问题是合格的澄清单吗？',
+              basis: 'acceptance_criteria[1]',
+              options: [{ id: 'O-1', label: '唯一选项' }],
+              recommendation: { optionId: 'O-1', why: '没有别的选择' },
+            },
+          ],
+        },
+        meta: { sourceType: 'mock', sourceRevision: 'dop:abc123' },
+      }),
+    );
+    assert.equal(badClarify.ok, false);
+    assert.equal(badClarify.reason, 'ARTIFACT_CLARIFY_INVALID');
+    assert.ok(Array.isArray(badClarify.problems) && badClarify.problems.length > 0, '机检失败必须带回逐条 problems');
+    assert.ok(
+      badClarify.problems.every((problem) => typeof problem.rule === 'string' && problem.rule !== ''),
+      '每条 problems 都要有可定位的 rule（pros 空、cons 空、零选项…）',
+    );
+    assert.equal(typeof badClarify.detail, 'string', 'detail 仍是字符串：卡片与 report 按字符串读，不混对象');
+
     // clarify：data.findings 经机检后渲染落盘（正文不是调用方给的）。
     const clarify = parse(
       await tool.execute({
@@ -637,6 +667,12 @@ test('装配：artifact_write 的 data 经真实 service 落盘，body/data 互�
     assert.equal(plan.reason, 'ARTIFACT_PLAN_INVALID');
     assert.equal(plan.next_action, 'fix-content');
     assert.match(plan.detail, /交付计划未通过机检/u, '拒绝必须可见：detail 说明是机检不通过');
+    assert.ok(Array.isArray(plan.gaps) && plan.gaps.length > 0, 'plan 机检失败必须带回逐条 gaps');
+    assert.ok(
+      plan.gaps.every((gap) => typeof gap.reason === 'string' && gap.reason !== '' && 'criterionIndex' in gap),
+      '每条 gaps 带原因与验收条件定位',
+    );
+    assert.equal(typeof plan.detail, 'string', 'detail 仍是字符串：卡片与 report 按字符串读，不混对象');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
