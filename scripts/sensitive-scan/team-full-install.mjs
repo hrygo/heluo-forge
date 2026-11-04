@@ -193,7 +193,7 @@ try {
     } else throw new Error(`unknown argument: ${args[i]}`);
   }
   if (!repo) throw new Error('--repo must not be empty');
-  if (Number(process.versions.node.split('.')[0]) !== 24) throw new Error('Node.js 24 is required');
+  if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node.js 24 or newer is required');
   for (const name of ['SENSITIVE_SCAN_KEY_FILE', 'SENSITIVE_SCAN_RULES']) {
     if (process.env[name] && !isAbsolute(process.env[name])) throw new Error(`${name} must be an absolute path`);
   }
