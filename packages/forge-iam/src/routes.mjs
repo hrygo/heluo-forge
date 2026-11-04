@@ -420,9 +420,21 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
       }
 
       if (url.pathname === '/api/forge-iam/models') {
-        if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
-        try { return sendJson(res, 200, { ...(await service.refreshGatewayModels()), view: service.getView() }); }
-        catch (error) { return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error)); }
+        if (req.method === 'GET') {
+          try { return sendJson(res, 200, { ...(await service.refreshGatewayModels()), view: service.getView() }); }
+          catch (error) { return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error)); }
+        }
+        if (req.method === 'PUT' || req.method === 'POST') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const body = await readJsonBody(req);
+            const result = await service.updateModelOptions(body?.options ?? {});
+            return sendJson(res, 200, { ...result, view: service.getView() });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'GET, PUT, POST');
       }
 
       if (url.pathname === '/api/forge-iam/credential') {

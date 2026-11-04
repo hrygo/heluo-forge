@@ -48,3 +48,47 @@ test('refresh action uses only the Host model route and shows the returned catal
   assert.match(panel.text(panel.render()), /模型列表已更新，共 1 个模型/);
   assert.doesNotMatch(panel.text(panel.render()), /corp-chat/);
 });
+
+test('fine-grained model options can be edited, expanded, and saved to the models endpoint', async t => {
+  const modelWrites = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      modelWrites.push(JSON.parse(init.body));
+      return Response.json({ ok: true, view });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  }); t.after(() => panel.close());
+
+  // Expand model configuration
+  const configBtn = panel.findButton(panel.render(), '精细配置 ▼');
+  assert.ok(configBtn);
+  await configBtn.props.onClick();
+
+  // Find input fields
+  const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
+  assert.ok(input('显示名称 1'));
+  assert.ok(input('上下文窗口 1'));
+  assert.ok(input('最大输出 Token 1'));
+  assert.ok(input('图片输入模态 1'));
+
+  // Edit fields
+  input('显示名称 1').props.onChange({ target: { value: '企业定制模型' } });
+  input('上下文窗口 1').props.onChange({ target: { value: '128K' } });
+  input('最大输出 Token 1').props.onChange({ target: { value: '8K' } });
+  input('图片输入模态 1').props.onChange({ target: { checked: true } });
+
+  // Save options
+  const saveBtn = panel.findButton(panel.render(), '保存模型配置');
+  assert.ok(saveBtn);
+  await saveBtn.props.onClick();
+
+  assert.equal(modelWrites.length, 1);
+  assert.deepEqual(modelWrites[0].options['corp-chat'], {
+    name: '企业定制模型',
+    contextWindow: '128K',
+    maxTokens: '8K',
+    inputModalities: ['text', 'image'],
+  });
+  assert.match(panel.text(panel.render()), /模型精细化配置已保存并生效/);
+});

@@ -197,3 +197,28 @@ test('same-session token renewal preserves a prepared gateway call while updatin
   assert.equal((await chunks(prepared.stream(options))).at(-1).reason.kind, 'stop');
   assert.equal(f.calls, 1);
 });
+
+test('fine-grained model options apply capacity and modality overrides to catalog and listModels', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal((await f.adapter.listModels('enterprise'))[0].inputModalities[0], 'text');
+
+  await f.runtime.updateModelOptions({
+    'enterprise-chat': {
+      name: '定制企业大模型',
+      contextWindow: '128K',
+      maxTokens: '8K',
+      inputModalities: ['text', 'image'],
+      reasoningEfforts: { off: null, high: 'high' },
+    },
+  });
+
+  const models = await f.adapter.listModels('enterprise');
+  assert.equal(models[0].name, '定制企业大模型');
+  assert.deepEqual(models[0].inputModalities, ['text', 'image']);
+
+  const view = f.runtime.getView();
+  assert.equal(view.models[0].contextWindow, 128000);
+  assert.equal(view.models[0].maxTokens, 8000);
+  assert.equal(view.models[0].reasoning, true);
+});
