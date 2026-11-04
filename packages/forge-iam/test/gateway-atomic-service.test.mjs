@@ -211,7 +211,7 @@ for (const [code, status] of Object.entries(errorStatus)) {
     }), { navigator: { clipboard: { writeText: async (text) => { copied.push(text); } } } });
     t.after(() => panel.close());
     assert.equal(panel.text(panel.render()).includes(`操作失败：${code}`), false);
-    const button = panel.findButton(panel.render(), '复制脱敏诊断');
+    const button = panel.findButton(panel.render(), '复制问题信息');
     assert.ok(button);
     await button.props.onClick();
     const diagnostic = JSON.parse(copied[0]);

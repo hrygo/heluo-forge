@@ -263,6 +263,14 @@ test('callback success and failure are HTML and do not expose details', async ()
   assert.equal(success.statusCode, 200);
   assert.match(success.text(), /登录完成/);
   assert.doesNotMatch(success.text(), /access|refresh/i);
+  assert.match(success.text(), /name="viewport"/);
+  assert.match(success.text(), /返回 DeepSeek Harness/);
+  assert.match(success.text(), /@media \(prefers-color-scheme: dark\)/);
+  assert.match(success.text(), /--dsw-alias-bg-layer-1/);
+  assert.equal(success.headers['content-security-policy'], "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+  assert.equal(success.headers['referrer-policy'], 'no-referrer');
+  assert.doesNotMatch(success.text(), /<script\b|<link\b|<img\b/i);
+  assert.doesNotMatch(success.text(), /code=c|state=s/);
 
   const failure = routes(service({
     handleCallback: async () => { throw Object.assign(new Error('bad'), { code: 'IAM_STATE_MISMATCH' }); },
@@ -270,6 +278,8 @@ test('callback success and failure are HTML and do not expose details', async ()
   const failed = await call(failure, 'GET', '/iam/callback?code=c&state=s');
   assert.equal(failed.statusCode, 400);
   assert.match(failed.text(), /登录失败/);
+  assert.match(failed.text(), /返回 DeepSeek Harness/);
+  assert.doesNotMatch(failed.text(), /登录成功|登录已完成/);
   assert.doesNotMatch(failed.text(), /state mismatch|IAM_STATE_MISMATCH/i);
 });
 

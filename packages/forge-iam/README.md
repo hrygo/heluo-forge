@@ -118,6 +118,7 @@ git diff --check
 ## 关联
 
 - 实施 issue：`#13`
+- 下游凭据接入：[FORGE-IAM 凭据接入指南](docs/credential-access.md)（存储键、文件/钥匙串位置、CLI 与 HTTP 取票样例）
 - 详细设计：`docs/design/plugins/forge-iam.md`
 - 官方行禁用：`docs/design/plugins/forge-enterprise.md`
 - IAM 询问函：`docs/collaboration/team-confirmation-letters.md` §4.2

@@ -31,10 +31,10 @@ test('the client registers the settings section, signed-out banner and a four-st
   const client = await read('client.js');
   assert.doesNotMatch(client, /settings\.launcher/);
   assert.match(client, /shell\.overlay/);
-  assert.match(client, /未登录企业 IAM/);
+  assert.match(client, /尚未登录企业账号/);
   assert.match(client, /forge-iam-banner/);
   assert.match(client, /forge-iam\.onboarding\.v1/);
-  for (const title of ['欢迎使用企业版', '登录企业账号', '配置模型网关凭据', '准备就绪']) {
+  for (const title of ['欢迎使用企业版', '登录企业账号', '添加 UAG 个人凭证', '准备就绪']) {
     assert.match(client, new RegExp(title));
   }
   assert.match(client, /close\('skipped'\)/);
@@ -46,7 +46,7 @@ test('the client registers the settings section, signed-out banner and a four-st
 
 test('the client distinguishes an unconfigured model credential from sign-out', async () => {
   const client = await read('client.js');
-  assert.match(client, /模型未就绪：未配置网关凭据/);
+  assert.match(client, /无法使用模型：尚未保存 UAG 个人凭证/);
   assert.match(client, /gatewayCredential/);
   // The credential value is submitted once and never rendered back.
   assert.match(client, /type: 'password'/);

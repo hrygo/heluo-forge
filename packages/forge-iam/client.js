@@ -7,27 +7,211 @@ window.__ModuleLoader__.load({
     const REQUEST_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json' };
     // Use the host palette so the embedded controls follow light and dark themes.
     const inputStyle = {
-      boxSizing: 'border-box', minWidth: 0, minHeight: 40, padding: '9px 12px',
-      border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8,
-      background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit',
+      boxSizing: 'border-box', minWidth: 0, minHeight: 36, padding: '0 12px',
+      border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm)',
+      background: 'var(--dsw-specific-input-major)', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)',
     };
     const secondaryButton = {
-      minHeight: 38, padding: '8px 14px', border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8,
-      background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
-      font: 'inherit', fontWeight: 550, cursor: 'pointer',
+      minHeight: 32, padding: '0 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm)',
+      background: 'var(--dsw-alias-button-floating-fill)', color: 'var(--dsw-alias-label-primary)',
+      font: 'var(--dsw-font-xs-13)', cursor: 'pointer',
     };
     const primaryButton = {
       ...secondaryButton, borderColor: 'transparent',
-      background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-1)',
+      background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)',
     };
+    const fieldLabel = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, font: 'var(--dsw-font-s-14)' };
+    const interactionStyles = `
+      .forge-iam-ui {
+        --fiam-primary: var(--dsw-alias-state-business-primary, #2563eb);
+        --fiam-success: var(--dsw-alias-state-success-primary, #10b981);
+        --fiam-warn: var(--dsw-alias-state-warn-primary, #f59e0b);
+        --fiam-error: var(--dsw-alias-state-error-primary, #ef4444);
+      }
+      .forge-iam-ui button:not(:disabled), .forge-iam-ui a { cursor: pointer; }
+      .forge-iam-ui button:not(:disabled):hover { background-color: var(--dsw-alias-button-floating-hover) !important; }
+      .forge-iam-ui button.forge-iam-primary:not(:disabled):hover { background-color: var(--dsw-alias-button-primary-hover) !important; opacity: 0.94; }
+      .forge-iam-ui button:not(:disabled):active { filter: brightness(.92); transform: translateY(1px); }
+      .forge-iam-ui a { color: var(--dsw-alias-state-business-primary); text-decoration: none; }
+      .forge-iam-ui a:hover { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+      .forge-iam-ui input:not(:disabled):hover { border-color: var(--dsw-alias-border-l3) !important; }
+      .forge-iam-ui input:focus { outline: none; border-color: var(--dsw-alias-state-business-primary) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 15%, transparent); }
+      .forge-iam-ui :is(button, a):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+      .forge-iam-ui :is(button, input):disabled { cursor: not-allowed; opacity: .55; }
+      @media (prefers-reduced-motion: reduce) { .forge-iam-ui button:active { transform: none; } }
+
+      .fiam-card {
+        box-sizing: border-box;
+        background: var(--dsw-alias-bg-layer-1);
+        border: 1px solid var(--dsw-alias-border-l2);
+        border-radius: var(--dsw-radius-md, 10px);
+        padding: 18px 20px;
+        margin-top: 14px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .fiam-card:hover { border-color: var(--dsw-alias-border-l3); }
+      .fiam-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .fiam-card-title-group {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+      .fiam-card-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--dsw-alias-label-primary);
+        line-height: 20px;
+      }
+      .fiam-card-subtitle {
+        font-size: var(--dsw-font-xxs-12);
+        color: var(--dsw-alias-label-secondary);
+        line-height: 16px;
+        margin-top: 2px;
+      }
+      .fiam-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: var(--dsw-font-xxs-12);
+        font-weight: 500;
+        line-height: 18px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .fiam-badge-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .fiam-badge-success {
+        background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+        color: var(--dsw-alias-state-success-primary);
+      }
+      .fiam-badge-success .fiam-badge-dot { background: var(--dsw-alias-state-success-primary); }
+      .fiam-badge-idle {
+        background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04));
+        color: var(--dsw-alias-label-secondary);
+      }
+      .fiam-badge-idle .fiam-badge-dot { background: var(--dsw-alias-label-tertiary, #9ca3af); }
+      .fiam-badge-authenticating {
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+        color: var(--dsw-alias-state-business-primary);
+      }
+      .fiam-badge-authenticating .fiam-badge-dot {
+        background: var(--dsw-alias-state-business-primary);
+        animation: fiam-pulse 1.4s ease-in-out infinite;
+      }
+      .fiam-badge-warn {
+        background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+        color: var(--dsw-alias-state-warn-primary);
+      }
+      .fiam-badge-warn .fiam-badge-dot { background: var(--dsw-alias-state-warn-primary); }
+      .fiam-badge-error {
+        background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+        color: var(--dsw-alias-state-error-primary);
+      }
+      .fiam-badge-error .fiam-badge-dot { background: var(--dsw-alias-state-error-primary); }
+      @keyframes fiam-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.35; transform: scale(0.85); }
+      }
+      .fiam-avatar {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+        color: var(--dsw-alias-state-business-primary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .fiam-callout {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.03));
+        border-radius: var(--dsw-radius-sm);
+        color: var(--dsw-alias-label-secondary);
+        font-size: var(--dsw-font-xxs-12);
+        line-height: 18px;
+        margin-top: 10px;
+      }
+      .fiam-callout-icon {
+        flex-shrink: 0;
+        margin-top: 2px;
+        color: var(--dsw-alias-label-tertiary);
+      }
+      .fiam-notice {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: var(--dsw-radius-sm);
+        font-size: var(--dsw-font-xxs-12);
+        line-height: 18px;
+        margin-top: 10px;
+      }
+      .fiam-notice-success {
+        background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+        color: var(--dsw-alias-state-success-primary);
+      }
+      .fiam-notice-warn {
+        background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+        color: var(--dsw-alias-state-warn-primary);
+      }
+      .fiam-notice-error {
+        background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+        color: var(--dsw-alias-state-error-primary);
+      }
+      .fiam-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+      }
+      .fiam-spinner {
+        width: 20px;
+        height: 20px;
+        border: 2px solid var(--dsw-alias-border-l3);
+        border-top-color: var(--dsw-alias-state-business-primary);
+        border-radius: 50%;
+        animation: fiam-spin 0.8s linear infinite;
+      }
+      @keyframes fiam-spin {
+        to { transform: rotate(360deg); }
+      }
+    `;
+    const interactionStyle = () => h('style', null, interactionStyles);
+
+    function formatTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+        hour12: false, timeZoneName: 'short',
+      }).format(date);
+    }
 
     const STATUS = {
-      unconfigured: 'IAM 未配置',
+      unconfigured: '企业登录尚未设置',
       'signed-out': '未登录',
       authenticating: '等待浏览器登录',
       ready: '已登录',
       expired: '授权已过期',
-      unreachable: 'IAM 暂不可达',
+      unreachable: '暂时无法连接登录服务',
       error: '需要处理',
     };
 
@@ -63,11 +247,26 @@ window.__ModuleLoader__.load({
 
     const GATEWAY_STATUS = {
       unknown: '状态未知',
-      unconfigured: '未配置',
-      configured: '已配置',
+      unconfigured: '未保存',
+      configured: '已保存',
       'owner-mismatch': '属于其他账号，请核对记录',
       invalid: '记录不一致，已保留',
     };
+
+    function statusBadgeClass(state) {
+      if (state === 'ready') return 'success';
+      if (state === 'signed-out') return 'idle';
+      if (state === 'authenticating') return 'authenticating';
+      if (state === 'expired' || state === 'unconfigured') return 'warn';
+      return 'error';
+    }
+
+    function gatewayBadgeClass(state) {
+      if (state === 'configured') return 'success';
+      if (state === 'unconfigured') return 'idle';
+      if (state === 'unknown') return 'warn';
+      return 'error';
+    }
 
     function openLoginWindow() {
       try {
@@ -118,33 +317,33 @@ window.__ModuleLoader__.load({
     }
 
     function errorNotice(code) {
-      if (code === 'IAM_REQUEST_HEADER_REQUIRED') return '请求被 Host 拒绝，请刷新页面重试。';
-      if (code === 'IAM_UNCONFIGURED') return 'IAM 配置不完整，请管理员补全。';
+      if (code === 'IAM_REQUEST_HEADER_REQUIRED') return '操作未完成，请刷新页面后重试。';
+      if (code === 'IAM_UNCONFIGURED') return '企业登录尚未设置完成，请联系管理员。';
       if (code === 'IAM_CREDENTIALS_UNAVAILABLE') return '凭据存储不可用，暂时无法登录。';
-      if (code === 'IAM_CREDENTIALS_CLEAR_FAILED') return '本地凭据清理失败，请检查系统凭据库。';
-      if (code === 'IAM_REVOCATION_FAILED') return '本地已退出，但服务端撤销未确认。';
-      if (code === 'IAM_EXCLUSIVE_CONFLICT') return '官方登录服务仍挂载，请修正企业组合包。';
-      if (code === 'IAM_UNREACHABLE') return 'IAM 端点不可达，请稍后重试。';
-      if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录回调无效，请重新登录。';
+      if (code === 'IAM_CREDENTIALS_CLEAR_FAILED') return '无法清除本设备的登录信息，请联系管理员。';
+      if (code === 'IAM_REVOCATION_FAILED') return '已在此设备退出，但无法确认服务器已撤销登录。';
+      if (code === 'IAM_EXCLUSIVE_CONFLICT') return '登录设置有冲突，请联系管理员。';
+      if (code === 'IAM_UNREACHABLE') return '暂时无法连接登录服务，请稍后重试。';
+      if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录未能完成，请重新登录。';
       if (code === 'IAM_ATTEMPT_EXPIRED') return '登录尝试已过期，请重新登录。';
       if (code === 'IAM_INVALID_GRANT' || code === 'IAM_REAUTH_REQUIRED') return '登录已失效，请重新登录。';
       if (code === 'IAM_NOT_SIGNED_IN') return '请先登录企业账号。';
       if (code === 'IAM_ATTEMPT_CANCELLED') return '登录已取消，请重新登录。';
-      if (code === 'IAM_CALLBACK_UNAVAILABLE') return '本机回调地址不可用，请检查 Web 服务是否启动。';
-      if (code === 'IAM_CONFIG_INVALID') return 'IAM 配置无效，请管理员检查。';
-      if (code === 'IAM_DISPOSED') return '插件已卸载，请刷新页面。';
+      if (code === 'IAM_CALLBACK_UNAVAILABLE') return '登录服务暂不可用，请刷新页面后重试。';
+      if (code === 'IAM_CONFIG_INVALID') return '企业登录设置有误，请联系管理员。';
+      if (code === 'IAM_DISPOSED') return '登录服务已关闭，请刷新页面。';
       if (code === 'IAM_GRANT_CONTEXT_MISMATCH' || code === 'IAM_REFRESH_SUBJECT_MISMATCH') return '登录状态已变化，请重新登录。';
-      if (code === 'IAM_GATEWAY_KEY_INVALID') return '凭证格式不正确：应为 uag- 加 32 位十六进制。';
-      if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再录入网关凭据。';
-      if (code === 'IAM_GATEWAY_ATOMIC_UNVERIFIED') return '当前存储未提供已核验的凭据与归属信息联合原子能力，暂不可保存或清除。';
-      if (code === 'IAM_GATEWAY_LEGACY_READ_ONLY') return '现有网关凭据仅可读取，本次未修改，也未自动迁移或修复。';
-      if (code === 'IAM_GATEWAY_CHANGED') return '网关凭据已变化，本次操作未提交；请刷新核实。';
-      if (code === 'IAM_GATEWAY_WRITE_UNKNOWN') return '未确认网关凭据写入结果，未自动重试；请刷新核实，不要直接重复提交。';
+      if (code === 'IAM_GATEWAY_KEY_INVALID') return '凭证格式不正确，请完整复制 UAG 控制台中的个人凭证后重试。';
+      if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再添加个人凭证。';
+      if (code === 'IAM_GATEWAY_ATOMIC_UNVERIFIED') return '暂时无法安全地保存或清除凭证，请联系管理员。';
+      if (code === 'IAM_GATEWAY_LEGACY_READ_ONLY') return '现有凭证暂时只能查看，本次没有更改。如需更换，请联系管理员。';
+      if (code === 'IAM_GATEWAY_CHANGED') return '凭证已发生变化，本次没有更改。请刷新页面后核对。';
+      if (code === 'IAM_GATEWAY_WRITE_UNKNOWN') return '无法确认凭证是否已更改。请刷新页面查看状态，暂时不要重复操作。';
       if (code === 'IAM_REQUEST_INVALID') return '请求内容无效，请重试。';
       if (code === 'IAM_REQUEST_TOO_LARGE') return '请求过大，请检查粘贴内容。';
       if (code === 'IAM_UNAUTHENTICATED' || code === 'IAM_CONNECTION_UNAVAILABLE') return '页面会话不可用，请刷新页面后重试。';
       if (code === 'IAM_METHOD_NOT_ALLOWED' || code === 'IAM_NOT_FOUND') return '请求不受支持，请刷新页面。';
-      return `操作失败：${code}`;
+      return '操作未完成，请重试；如仍有问题，请联系管理员。';
     }
 
     const DIAGNOSTIC_ERRORS = new Set([
@@ -303,7 +502,7 @@ window.__ModuleLoader__.load({
           setState((current) => ({ ...current, view, authorizationUrl, notice: null }));
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
-          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -330,7 +529,7 @@ window.__ModuleLoader__.load({
           setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关凭据已保存。' });
           if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
-          setCredential((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
+          setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -351,7 +550,7 @@ window.__ModuleLoader__.load({
           setCredential((current) => ({ ...current, saving: false, value: '', notice: '网关凭据已清除。' }));
           if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
-          setCredential((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
+          setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -368,7 +567,7 @@ window.__ModuleLoader__.load({
           }
           setState((current) => ({ ...current, view: result.body?.view ?? null, authorizationUrl: null, notice: null }));
         } catch {
-          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -400,7 +599,7 @@ window.__ModuleLoader__.load({
           }));
           if (result.body?.logoutUrl) window.location.assign(result.body.logoutUrl);
         } catch {
-          setState((current) => ({ ...current, view: null, authorizationUrl: null, notice: '退出结果未确认，Host 不可达；请刷新核实。' }));
+          setState((current) => ({ ...current, view: null, authorizationUrl: null, notice: '无法连接服务，退出结果未确认。请刷新页面查看登录状态。' }));
         } finally {
           viewBarrier.current.epoch += 1;
           viewBarrier.current.pending = false;
@@ -423,7 +622,7 @@ window.__ModuleLoader__.load({
           if (!receipt || typeof receipt.then !== 'function') throw new Error('unconfirmed');
           await receipt;
           if (isCurrent()) setCopy((current) => ({ ...current, notice: url
-            ? '登录链接已复制，含登录参数，请勿转发。' : '脱敏诊断已复制（点击时的页面快照）。' }));
+            ? '登录链接已复制，请勿转发给他人。' : '问题信息已复制，反映复制时的状态，不含账号和凭证。' }));
         } catch {
           if (isCurrent()) setCopy((current) => ({ ...current, notice: '未确认复制，请检查浏览器剪贴板权限；页面内容已保留。' }));
         } finally {
@@ -440,120 +639,221 @@ window.__ModuleLoader__.load({
       };
       const copyDiagnostic = () => copyText(JSON.stringify(diagnosticSnapshot(state)));
 
-      const box = { padding: '12px 0 24px', lineHeight: 1.6, maxWidth: 680 };
-      const button = { ...secondaryButton, marginRight: 8, marginTop: 8 };
-      const muted = { opacity: 0.7, fontSize: '0.9em' };
-      const header = h('div', { style: { fontWeight: 650, fontSize: '1.15em', letterSpacing: '-0.01em', marginBottom: 12 } }, '企业 IAM');
-      const copyTools = h('div', null,
+      const box = { padding: '0 0 24px', maxWidth: 680, color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
+      const button = secondaryButton;
+      const muted = { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' };
+      const header = h('div', { style: { marginBottom: 16 } },
+        h('div', { style: { font: 'var(--dsw-font-m-18)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '企业账号'),
+        h('div', { style: { ...muted, marginTop: 4 } }, '管理企业统一身份登录与模型使用凭证'),
+      );
+      const copyTools = h('div', { className: 'fiam-actions' },
         state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
           ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
-        h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制脱敏诊断'),
+        h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
         copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
-          ? h('div', { role: 'status', 'aria-live': 'polite', style: muted }, copy.notice) : null,
+          ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
       );
 
       if (state.phase === 'loading') {
-        return h('div', { style: box }, header, h('div', { style: muted }, '正在读取登录状态…'), copyTools);
+        return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
+          header,
+          h('div', { className: 'fiam-card', style: { padding: '28px 20px', textAlign: 'center' } },
+            h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 } },
+              h('div', { className: 'fiam-spinner' }),
+              h('div', { style: muted }, '正在读取登录状态…'),
+            )
+          ),
+          copyTools,
+        );
       }
       if (state.phase === 'error') {
-        return h('div', { style: box }, header,
-          h('div', null, '无法读取登录状态。'),
-          h('div', { style: muted }, state.error),
-          h('button', { style: button, onClick: load }, '重试'), copyTools,
+        return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
+          header,
+          h('div', { className: 'fiam-card', style: { padding: '24px 20px' } },
+            h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 14 } },
+              h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent)', color: 'var(--dsw-alias-state-error-primary)' } },
+                h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+                  h('circle', { cx: 10, cy: 10, r: 8 }),
+                  h('path', { d: 'M10 6v5m0 3h.01' })
+                )
+              ),
+              h('div', { style: { flex: 1, minWidth: 0 } },
+                h('div', { style: { fontWeight: 600, fontSize: 15, marginBottom: 4 } }, '无法读取登录状态。'),
+                h('div', { style: muted }, errorNotice(state.error)),
+                h('div', { className: 'fiam-actions', style: { marginTop: 14 } },
+                  h('button', { type: 'button', style: primaryButton, onClick: load }, '重试'),
+                  h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
+                )
+              )
+            )
+          ),
+          copyTools,
         );
       }
 
       const view = state.view ?? {};
-      const label = STATUS[view.state] ?? view.state ?? '未知状态';
+      const label = STATUS[view.state] ?? '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
-        ? h('div', { style: muted }, `缺少配置：${view.missing.join('、')}`)
+        ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
-      const principal = view.principal ? h('div', { style: muted }, `主体：${view.principal}`) : null;
-      const expiry = view.accessExpiresAt ? h('div', { style: muted }, `access 到期：${view.accessExpiresAt}`) : null;
+      const principal = view.principal ? h('div', { style: muted }, `账号标识：${view.principal}`) : null;
+      const expiry = view.accessExpiresAt ? h('div', { style: muted }, `当前访问授权到期：${formatTime(view.accessExpiresAt)}`) : null;
       const exclusive = view.exclusive && view.exclusive !== 'ok'
-        ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', marginTop: 4 } }, '企业登录独占检查未通过；请修正企业组合包。')
+        ? h('div', { className: 'fiam-notice fiam-notice-error' }, '登录设置有冲突，请联系管理员。')
         : null;
       const hostError = view.error
-        ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary)', marginTop: 4 } }, errorNotice(view.error))
+        ? h('div', { className: 'fiam-notice fiam-notice-error' }, errorNotice(view.error))
         : null;
       const notice = state.notice && (!view.error || state.notice !== errorNotice(view.error))
-        ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null;
+        ? h('div', { className: 'fiam-notice fiam-notice-warn' }, state.notice) : null;
       const loginLink = state.authorizationUrl
-        ? h('div', { style: { marginTop: 6 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录'))
+        ? h('div', { style: { marginTop: 8 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录'))
         : null;
 
       const gateway = view.gatewayCredential ?? { state: 'unknown' };
-      const gatewayStatus = GATEWAY_STATUS[gateway.state] ?? gateway.state;
+      const gatewayStatus = GATEWAY_STATUS[gateway.state] ?? '状态未知';
       const gatewayDetails = [
         gateway.deviceLabel ? `设备：${gateway.deviceLabel}` : null,
-        gateway.enteredAt ? `录入：${gateway.enteredAt}` : null,
+        gateway.enteredAt ? `录入：${formatTime(gateway.enteredAt)}` : null,
         gateway.suggestedExpiry ? `建议到期：${gateway.suggestedExpiry}` : null,
       ].filter(Boolean);
       const storageWarning = gateway.state === 'configured' && gateway.storage && gateway.storage !== 'keychain'
-        ? h('div', { style: { color: 'var(--dsw-alias-state-warn-primary)', marginTop: 4 } },
-            `存储来源：${gateway.storage}（未受系统钥匙串保护）`)
+        ? h('div', { className: 'fiam-notice fiam-notice-warn' },
+            '凭证未使用系统安全存储，请联系管理员。')
         : null;
-      const gatewayBlock = h('div', { style: { marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
-        h('div', { style: { fontWeight: 650, fontSize: '1.05em', marginBottom: 8 } }, '模型网关凭据'),
-        h('div', { style: muted }, `UAG 个人凭证：${gatewayStatus}`),
-        gatewayDetails.length ? h('div', { style: muted }, gatewayDetails.join(' · ')) : null,
-        storageWarning,
-        gateway.state === 'configured'
-          ? h('div', { style: muted }, '凭据仅在本地保存；保存状态不证明模型调用已接通。')
-          : gateway.state === 'unknown'
-            ? h('div', { style: muted }, '网关凭据状态尚未确认，请刷新核实。')
-            : gateway.state === 'unconfigured'
-              ? h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。')
-              : h('div', { style: muted }, '请先核对现有记录；页面不会自动迁移或修复，能否更换由 Host 核验。'),
-        h('div', { style: { marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
-          h('input', {
-            type: 'password',
-            value: credential.value,
-            placeholder: 'uag-…',
-            'aria-label': 'UAG 个人凭证',
-            autoComplete: 'off',
-            spellCheck: false,
-            onChange: (event) => setCredential((current) => ({ ...current, value: event.target.value })),
-            style: { ...inputStyle, flex: '1 1 240px' },
-          }),
-          h('input', {
-            type: 'text',
-            value: credential.deviceLabel,
-            placeholder: '设备标签（可选）',
-            'aria-label': '设备标签',
-            maxLength: 64,
-            onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
-            style: { ...inputStyle, flex: '1 1 150px' },
-          }),
-          h('button', { style: button, disabled: credential.saving || viewBarrier.current.pending, onClick: saveCredential }, '保存凭据'),
-          (gateway.state !== 'unconfigured' && gateway.state !== 'unknown') || credential.value
-            ? h('button', { style: button, disabled: credential.saving || viewBarrier.current.pending, onClick: clearCredential }, '清除凭据')
-            : null,
-        ),
-        credential.notice ? h('div', { role: 'status', 'aria-live': 'polite', style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, credential.notice) : null,
-      );
 
-      return h('div', { style: box }, header,
-        h('div', null, label),
+      const accountCard = h('div', { className: 'fiam-card' },
+        h('div', { className: 'fiam-card-header' },
+          h('div', { className: 'fiam-card-title-group' },
+            h('div', { className: 'fiam-avatar' },
+              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+                h('path', { d: 'M16 17v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 15.5V17' }),
+                h('circle', { cx: 10, cy: 7, r: 3 })
+              )
+            ),
+            h('div', null,
+              h('div', { className: 'fiam-card-title' }, view.state === 'ready' && view.principal ? view.principal : '企业账号认证'),
+              h('div', { className: 'fiam-card-subtitle' }, view.state === 'ready' ? '已绑定企业 OIDC 身份' : '单点登录至企业账号'),
+            ),
+          ),
+          h('span', { className: `fiam-badge fiam-badge-${statusBadgeClass(view.state)}` },
+            h('span', { className: 'fiam-badge-dot' }),
+            label,
+          ),
+        ),
+        (view.principal || view.accessExpiresAt) ? h('div', { style: { padding: '10px 14px', background: 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.02))', borderRadius: 'var(--dsw-radius-sm)', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 4 } },
+          principal,
+          expiry,
+        ) : null,
         missing,
-        principal,
-        expiry,
         exclusive,
         hostError,
         notice,
         loginLink,
-        copyTools,
         view.state === 'authenticating' && !state.authorizationUrl
-          ? h('div', { style: muted }, '登录链接未在本页面保存；点击后可能继续当前共享登录尝试，也可能重新发起登录。') : null,
-        h('div', null,
-          h('button', { style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
-          view.canSignIn ? h('button', { style: button, onClick: login }, '登录企业账号') : null,
-          view.state === 'authenticating' ? h('button', { style: button, onClick: cancelLogin }, '取消登录') : null,
-          view.canSignOut ? h('button', { style: button, onClick: signOut }, '退出') : null,
-          view.state === 'authenticating' ? h('button', { style: button, onClick: () => postJson('/api/forge-iam/cancel').then(load) }, '取消') : null,
+          ? h('div', { className: 'fiam-callout' }, '请在浏览器中完成登录；如果无法继续，请取消后重试。') : null,
+        h('div', { className: 'fiam-actions' },
+          view.canSignIn ? h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: login }, '登录企业账号') : null,
+          view.state === 'authenticating' ? h('button', { type: 'button', style: button, onClick: cancelLogin }, '取消登录') : null,
+          h('button', { type: 'button', style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
+          view.canSignOut ? h('button', { type: 'button', style: button, onClick: signOut }, '退出') : null,
+          state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
+            ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
+          h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
         ),
-        gatewayBlock,
-        h('div', { style: { ...muted, marginTop: 8 } }, '页面不回显已保存的令牌或 Key；诊断不包含录入草稿。'),
+        copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
+          ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
+      );
+
+      const gatewayCard = h('div', { className: 'fiam-card' },
+        h('div', { className: 'fiam-card-header' },
+          h('div', { className: 'fiam-card-title-group' },
+            h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent)', color: 'var(--dsw-alias-state-business-primary)' } },
+              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+                h('path', { d: 'M10 2s6 2.5 6 7c0 4.5-3.5 7.5-6 9-2.5-1.5-6-4.5-6-9 0-4.5 6-7 6-7Z' }),
+                h('path', { d: 'm7.5 10 2 2 3.5-3.5' })
+              )
+            ),
+            h('div', null,
+              h('div', { className: 'fiam-card-title' }, '模型使用凭证'),
+              h('div', { className: 'fiam-card-subtitle' }, '配置用于大模型请求的 UAG 凭证'),
+            ),
+          ),
+          h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gateway.state)}` },
+            h('span', { className: 'fiam-badge-dot' }),
+            `UAG 个人凭证：${gatewayStatus}`,
+          ),
+        ),
+        gatewayDetails.length ? h('div', { style: { ...muted, marginBottom: 8 } }, gatewayDetails.join(' · ')) : null,
+        storageWarning,
+        h('div', { className: 'fiam-callout' },
+          h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+            h('circle', { cx: 8, cy: 8, r: 6 }),
+            h('path', { d: 'M8 7v4m0-6h.01' })
+          ),
+          h('div', null,
+            gateway.state === 'configured'
+              ? 'UAG 个人凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
+              : gateway.state === 'unknown'
+                ? '网关凭据状态尚未确认，请刷新核实。'
+                : gateway.state === 'unconfigured'
+                  ? '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'
+                  : '请先核对现有凭证；如有疑问，请联系管理员。',
+            gateway.state === 'unconfigured' && view.gatewayConsoleUrl
+              ? h('div', { style: { marginTop: 4 } },
+                  h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据 ↗')
+                )
+              : null
+          )
+        ),
+        h('div', { style: { marginTop: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
+          h('label', { style: { ...fieldLabel, flex: '2 1 240px' } },
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, 'UAG 个人凭证'),
+            h('input', {
+              type: 'password',
+              value: credential.value,
+              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴 UAG 个人凭证',
+              'aria-label': 'UAG 个人凭证',
+              autoComplete: 'off',
+              spellCheck: false,
+              disabled: credential.saving || viewBarrier.current.pending,
+              onChange: (event) => setCredential((current) => ({ ...current, value: event.target.value })),
+              style: inputStyle,
+            })
+          ),
+          h('label', { style: { ...fieldLabel, flex: '1 1 150px' } },
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '设备标签（可选）'),
+            h('input', {
+              type: 'text',
+              value: credential.deviceLabel,
+              placeholder: '设备标签（可选）',
+              'aria-label': '设备标签',
+              maxLength: 64,
+              disabled: credential.saving || viewBarrier.current.pending,
+              onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
+              style: inputStyle,
+            })
+          ),
+        ),
+        h('div', { className: 'fiam-actions' },
+          h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: saveCredential }, credential.saving ? '正在处理…' : '保存凭据'),
+          (gateway.state !== 'unconfigured' && gateway.state !== 'unknown') || credential.value
+            ? h('button', { type: 'button', style: secondaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: clearCredential }, '清除凭据')
+            : null,
+        ),
+        credential.notice
+          ? h('div', {
+              role: 'status',
+              'aria-live': 'polite',
+              className: `fiam-notice fiam-notice-${credential.notice.includes('已保存') || credential.notice.includes('已清除') ? 'success' : 'warn'}`,
+            }, credential.notice)
+          : null,
+      );
+
+      return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
+        header,
+        accountCard,
+        gatewayCard,
       );
     }
 
@@ -570,9 +870,9 @@ window.__ModuleLoader__.load({
       };
 
       const SESSION_LABEL = {
-        unconfigured: 'IAM 未配置',
+        unconfigured: '企业登录尚未设置',
         expired: '登录已过期，请重新登录',
-        unreachable: 'IAM 暂不可达；保留现有授权至到期',
+        unreachable: '暂时无法连接登录服务，现有授权保留至到期',
         error: '登录需要处理',
         authenticating: '等待浏览器登录完成',
       };
@@ -620,7 +920,7 @@ window.__ModuleLoader__.load({
           }));
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
-          setState((current) => ({ ...current, notice: 'Host 不可达' }));
+          setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -634,34 +934,41 @@ window.__ModuleLoader__.load({
           const view = result.body?.view ?? null;
           setState((current) => ({ ...current, ...bannerFor(view), view, authorizationUrl: null, notice: null }));
         } catch {
-          setState((current) => ({ ...current, notice: 'Host 不可达' }));
+          setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
       if (!state.visible) return null;
       return h('div', {
+        className: 'forge-iam-ui',
         style: {
           position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 900,
-          pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 10,
-          padding: '6px 12px', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-1)',
-          color: 'var(--dsw-alias-label-primary)', boxShadow: '0 6px 24px rgba(0,0,0,0.18)', fontSize: '0.9em',
+          pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 8,
+          boxSizing: 'border-box', maxWidth: 'calc(100vw - 24px)',
+          padding: '6px 14px', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-1)',
+          border: '1px solid var(--dsw-alias-border-l2)',
+          color: 'var(--dsw-alias-label-primary)', boxShadow: 'var(--dsw-elevation-prominent)', font: 'var(--dsw-font-xs-13)',
         },
       },
-      h('span', null, state.reason === 'gateway'
-        ? (state.gateway === 'owner-mismatch' ? '网关凭据属于其他账号'
-          : state.gateway === 'invalid' ? '网关凭据记录不一致，已保留'
-            : '模型未就绪：未配置网关凭据')
-        : SESSION_LABEL[state.sessionState] ?? '未登录企业 IAM'),
+      interactionStyle(),
+      h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
+        h('span', { className: 'fiam-badge-dot', style: { background: state.reason === 'gateway' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-tertiary)' } }),
+        state.reason === 'gateway'
+          ? (state.gateway === 'owner-mismatch' ? '个人凭证属于其他账号'
+            : state.gateway === 'invalid' ? '个人凭证信息需要检查，已保留'
+              : '无法使用模型：尚未保存 UAG 个人凭证')
+          : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号'),
+      ),
       state.reason === 'gateway'
-        ? h('span', { style: { opacity: 0.8 } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid'
+        ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid'
           ? '到“设置 → 企业账号”核对现有记录'
           : '到“设置 → 企业账号”录入 UAG 个人凭证')
         : null,
       state.reason !== 'gateway' && state.view?.canSignIn
-        ? h('button', { type: 'button', style: { cursor: 'pointer' }, onClick: login }, '登录')
+        ? h('button', { type: 'button', style: { ...secondaryButton, minHeight: 28, padding: '0 10px' }, onClick: login }, '登录')
         : null,
       state.view?.state === 'authenticating'
-        ? h('button', { type: 'button', style: { cursor: 'pointer' }, onClick: cancelLogin }, '取消')
+        ? h('button', { type: 'button', style: { ...secondaryButton, minHeight: 28, padding: '0 10px' }, onClick: cancelLogin }, '取消')
         : null,
       state.authorizationUrl
         ? h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, '打开登录页')
@@ -675,8 +982,10 @@ window.__ModuleLoader__.load({
         phase: 'loading', view: null, step: 0, notice: null, open: false,
         authorizationUrl: null, keyValue: '', deviceLabel: '', saving: false,
       });
+      const savingRef = React.useRef(false);
 
       const close = async (marker) => {
+        if (savingRef.current) return;
         try { await postJson('/api/forge-iam/cancel'); } catch { /* best effort */ }
         if (marker) writeMarker(marker);
         setState((current) => ({ ...current, open: false }));
@@ -772,16 +1081,18 @@ window.__ModuleLoader__.load({
           }));
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
-          setState((current) => ({ ...current, notice: 'Host 不可达，请稍后重试。' }));
+          setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
       const saveCredential = async () => {
+        if (savingRef.current) return;
         const value = state.keyValue.trim();
         if (!value) {
           setState((current) => ({ ...current, notice: '请输入 UAG 个人凭证。' }));
           return;
         }
+        savingRef.current = true;
         setState((current) => ({ ...current, saving: true, notice: null }));
         try {
           const result = await putJson('/api/forge-iam/credential', {
@@ -806,14 +1117,33 @@ window.__ModuleLoader__.load({
             notice: null,
           }));
         } catch {
-          setState((current) => ({ ...current, saving: false, notice: 'Host 不可达，请稍后重试。' }));
+          setState((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
+        } finally {
+          savingRef.current = false;
         }
       };
 
+      const gatewayState = state.view?.gatewayCredential?.state ?? 'unknown';
+      const completionTitle = gatewayState === 'configured'
+        ? (state.view?.state === 'ready' ? '准备就绪' : '请先登录企业账号')
+        : gatewayState === 'unconfigured'
+          ? (state.view?.state === 'ready' ? '登录完成，尚未配置凭据' : '尚未保存 UAG 个人凭证')
+          : '请检查凭证状态';
+      const completionBody = gatewayState === 'configured'
+        ? (state.view?.state === 'ready'
+          ? 'UAG 个人凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
+          : 'UAG 个人凭证已保存。请前往“设置 → 企业账号”登录后继续。')
+        : gatewayState === 'unconfigured'
+          ? 'UAG 个人凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并配置凭证。'
+          : gatewayState === 'owner-mismatch'
+            ? '现有凭证属于其他账号，已为你保留。请前往“设置 → 企业账号”核对。'
+            : gatewayState === 'invalid'
+              ? '现有凭证信息需要检查，已为你保留。请前往“设置 → 企业账号”核对。'
+              : '无法确认凭证是否已保存。请前往“设置 → 企业账号”刷新后查看。';
       const steps = [
         {
           title: '欢迎使用企业版',
-          body: '企业 IAM 是唯一登录方式。登录后，企业模型与工具才可用；应用外壳可以先打开。',
+          body: '登录企业账号并完成配置后，即可使用已授权的模型和工具。也可以先跳过，稍后在“设置 → 企业账号”中登录。',
           primary: '开始',
           onPrimary: () => setState((current) => ({ ...current, step: 1 })),
         },
@@ -824,23 +1154,23 @@ window.__ModuleLoader__.load({
           onPrimary: startLogin,
         },
         {
-          title: '配置模型网关凭据',
-          body: '企业 IAM 只负责登录；模型调用使用 UAG 个人凭证。到 UAG 控制台为本设备创建凭证后粘贴到这里。',
+          title: '添加 UAG 个人凭证',
+          body: '使用企业模型还需要 UAG 个人凭证。请在 UAG 控制台为这台设备创建凭证，然后粘贴到下方。',
           primary: '保存并继续',
           onPrimary: saveCredential,
         },
         {
-          title: '准备就绪',
-          body: '模型是否可用取决于网关凭据是否已配置；可随时在“设置 → 企业账号”查看、更换或清除。',
+          title: completionTitle,
+          body: completionBody,
           primary: '完成',
           // Without a configured credential the model is not usable; record the
           // skip rather than claiming onboarding completed.
-          onPrimary: () => close(state.view?.gatewayCredential?.state === 'configured' ? 'done' : 'skipped'),
+          onPrimary: () => close(state.view?.state === 'ready' && gatewayState === 'configured' ? 'done' : 'skipped'),
         },
       ];
       const step = steps[state.step] ?? steps[0];
       const overlay = {
-        position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.35)',
+        position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--dsw-alias-bg-mask-1)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
         // shell.overlay is click-through; an interactive surface must opt back
         // into pointer events or every click falls through to the app below.
@@ -849,55 +1179,62 @@ window.__ModuleLoader__.load({
       const card = {
         boxSizing: 'border-box', width: 'min(520px, 100%)', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto',
         background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
-        border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 16, padding: 28,
-        boxShadow: '0 20px 60px rgba(0,0,0,0.25)', lineHeight: 1.6,
+        border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 'var(--dsw-radius-lg)', padding: 28,
+        boxShadow: 'var(--dsw-elevation-panel)', font: 'var(--dsw-font-s-14)',
       };
 
-      return h('div', { style: overlay, role: 'presentation' },
+      return h('div', { className: 'forge-iam-ui', style: overlay, role: 'presentation' }, interactionStyle(),
         h('div', { ref: dialogRef, tabIndex: -1, style: card, role: 'dialog', 'aria-modal': 'true', 'aria-label': step.title },
-          h('div', { style: { opacity: 0.7, fontSize: '0.85em', fontWeight: 600 } }, `步骤 ${state.step + 1} / 4`),
+          h('div', { style: { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-strong-12)' } }, `步骤 ${state.step + 1} / 4`),
           h('div', { 'aria-hidden': 'true', style: { display: 'flex', gap: 6, marginTop: 10, marginBottom: 24 } },
             ...steps.map((_, index) => h('span', { key: index, style: {
-              height: 3, flex: 1, borderRadius: 999, background: 'var(--dsw-alias-label-primary)',
-              opacity: index <= state.step ? 0.85 : 0.16,
+              height: 3, flex: 1, borderRadius: 'var(--dsw-radius-xs)',
+              background: index <= state.step ? 'var(--dsw-alias-button-primary-fill)' : 'var(--dsw-alias-border-l3)',
             } }))),
-          h('h2', { style: { margin: '0 0 10px', fontSize: '1.35em', lineHeight: 1.3, letterSpacing: '-0.02em' } }, step.title),
-          h('p', { style: { margin: 0, opacity: 0.8, maxWidth: '42em' } }, step.body),
+          h('div', { 'aria-hidden': 'true', style: { display: 'flex', gap: 6, marginTop: -16, marginBottom: 20, color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' } },
+            ...['欢迎', '登录', '凭据', '完成'].map((label, index) => h('span', { key: label, style: { flex: 1, color: index === state.step ? 'var(--dsw-alias-label-primary)' : undefined } }, label))),
+          h('h2', { style: { margin: '0 0 10px', font: 'var(--dsw-font-l-20)' } }, step.title),
+          h('p', { style: { margin: 0, color: 'var(--dsw-alias-label-secondary)', maxWidth: '42em' } }, step.body),
           state.step === 2
-            ? h('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 } },
-                h('input', {
+          ? h('div', { style: { marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 } },
+              h('label', { style: fieldLabel }, 'UAG 个人凭证', h('input', {
                   type: 'password',
                   value: state.keyValue,
                   placeholder: 'uag-…',
                   'aria-label': 'UAG 个人凭证',
                   autoComplete: 'off',
                   spellCheck: false,
+                disabled: state.saving,
                   onChange: (event) => setState((current) => ({ ...current, keyValue: event.target.value })),
                   style: inputStyle,
-                }),
-                h('input', {
+              })),
+              h('label', { style: fieldLabel }, '设备标签（可选）', h('input', {
                   type: 'text',
                   value: state.deviceLabel,
                   placeholder: '设备标签（可选，例如 工作站-01）',
                   'aria-label': '设备标签',
                   maxLength: 64,
+                disabled: state.saving,
                   onChange: (event) => setState((current) => ({ ...current, deviceLabel: event.target.value })),
                   style: inputStyle,
-                }),
+              })),
                 state.view?.gatewayConsoleUrl
                   ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据')
                   : null,
-                h('div', { style: { opacity: 0.7, fontSize: '0.9em' } }, '创建时建议开启 privacy_mode，有效期 90 天。'),
+                h('div', { style: { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' } }, '创建时建议开启隐私保护，并设置 90 天有效期。'),
               )
             : null,
           state.notice ? h('p', { role: 'status', 'aria-live': 'polite', style: { margin: '12px 0 0', color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
           state.authorizationUrl ? h('p', null, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 } },
-            h('button', { type: 'button', style: primaryButton, disabled: state.saving, onClick: step.onPrimary }, state.saving ? '正在保存…' : step.primary),
+            h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, disabled: state.saving, onClick: step.onPrimary }, state.saving ? '正在保存…' : step.primary),
             state.step < 3
-              ? h('button', { type: 'button', style: secondaryButton, onClick: () => (state.step === 2
-                ? setState((current) => ({ ...current, step: 3, notice: null }))
-                : close('skipped')) }, state.step === 2 ? '稍后配置' : '跳过')
+              ? h('button', { type: 'button', style: secondaryButton, disabled: state.saving, onClick: () => {
+                if (savingRef.current) return;
+                return state.step === 2
+                  ? setState((current) => ({ ...current, step: 3, notice: null }))
+                  : close('skipped');
+              } }, state.step === 2 ? '稍后配置' : '跳过')
               : null,
           ),
         ),

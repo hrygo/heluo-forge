@@ -59,8 +59,80 @@ function sendHtml(res, status, title, body) {
   res.setHeader('cache-control', 'no-store');
   res.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
   res.setHeader('referrer-policy', 'no-referrer');
-  res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>${title}</title>`
-    + '<body style="font-family:system-ui,sans-serif;padding:2rem"><h1>' + title + '</h1><p>' + body + '</p></body></html>');
+  // The callback runs in a separate browser page and cannot inherit Host CSS.
+  // These are the corresponding light/dark DSH theme values, checked against
+  // the target Host; they must be rechecked when the DSH theme changes.
+  const success = status === 200;
+  const symbol = success
+    ? '<path d="m5 12 4.5 4.5L19 7"/>'
+    : '<path d="M12 7v6m0 4h.01"/>';
+  const instruction = success ? '回到应用继续操作。' : '回到应用后重新尝试登录。';
+  res.end(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>${title}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --dsw-alias-bg-base: #fff;
+      --dsw-alias-bg-layer-1: #fff;
+      --dsw-alias-label-primary: #0f1115;
+      --dsw-alias-label-secondary: #61666b;
+      --dsw-alias-border-l2: #0000001a;
+      --dsw-alias-state-success-tertiary: #e6faed;
+      --dsw-alias-state-error-primary: #ec1313;
+      --dsw-radius-lg: 16px;
+      --dsw-elevation-panel: 0 0 0 .5px #00000029, 0 3px 8px 0 #00000008, 0 0 16px 0 #00000005;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --dsw-alias-bg-base: #151517;
+        --dsw-alias-bg-layer-1: #232324;
+        --dsw-alias-label-primary: #f9fafb;
+        --dsw-alias-label-secondary: #cfd3d6;
+        --dsw-alias-border-l2: #ffffff1f;
+        --dsw-alias-state-success-tertiary: #233c2c;
+        --dsw-alias-state-error-primary: #f25a5a;
+        --dsw-elevation-panel: 0 0 0 .5px #fff3, 0 3px 8px 0 #00000008, 0 0 16px 0 #00000005;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; min-height: 100dvh;
+      display: grid; place-items: center; padding: 24px;
+      background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
+      font: 14px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    main {
+      width: min(100%, 480px); padding: 40px;
+      border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-layer-1);
+      box-shadow: var(--dsw-elevation-panel);
+    }
+    .status {
+      display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%;
+      background: var(--dsw-alias-state-success-tertiary); color: var(--dsw-alias-label-primary);
+    }
+    .status.error { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-state-error-primary); box-shadow: 0 0 0 1px var(--dsw-alias-border-l2); }
+    svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    h1 { margin: 24px 0 8px; font-size: 24px; line-height: 32px; letter-spacing: -.02em; }
+    p { margin: 0; color: var(--dsw-alias-label-secondary); }
+    .next { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--dsw-alias-border-l2); }
+    .next strong { display: block; margin-bottom: 4px; color: var(--dsw-alias-label-primary); }
+    @media (max-width: 480px) { body { padding: 16px; } main { padding: 28px 24px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="status${success ? '' : ' error'}" aria-hidden="true"><svg viewBox="0 0 24 24">${symbol}</svg></div>
+    <h1>${title}</h1>
+    <p>${body}</p>
+    <div class="next"><strong>返回 DeepSeek Harness</strong><p>${instruction}此页面可以关闭。</p></div>
+  </main>
+</body>
+</html>`);
 }
 
 function errorBody(error) {
@@ -220,10 +292,10 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
             return;
           }
           await service.handleCallback(callbackUrl.href);
-          sendHtml(res, 200, '登录完成', '企业 IAM 登录已完成，可以关闭此页面并返回应用。');
+          sendHtml(res, 200, '登录完成', '企业账号已完成登录。');
         } catch (error) {
           const status = ERROR_STATUS[error?.code] ?? 500;
-          sendHtml(res, status, '登录失败', '企业 IAM 登录未完成，请返回应用重试。');
+          sendHtml(res, status, '登录失败', '企业账号登录未完成。');
         }
         return;
       }
