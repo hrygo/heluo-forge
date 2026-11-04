@@ -117,7 +117,17 @@
 2. 密钥链测试用 `os.tmpdir()` 当“仓库外目录”，而 megacube 的 `/tmp` 本身是 git 仓库；改为挑选可证明在仓库外的临时根。
 3. 安装器测试夹具继承用户全局 gitignore，`device-key.pem` 被忽略导致 `git add` 失败；夹具隔离 `GIT_CONFIG_GLOBAL`。
 
-未修、需环境要求：Linux 以 `umask 002` 克隆时文件为 664，安装器按“安全脚本不得组可写”拒绝；用 `umask 022` 克隆后 24/24 通过。该拒绝是有意的安全门禁，是否改为“属主可写即收紧后使用”待定。
+Linux 以 `umask 002` 克隆时文件为 664，安装器曾只回一句 `unsafe package script`。按评审结论改为：报错带路径、实际权限位与修复命令，另加 `--allow-group-writable` 显式开关（只接受属主仍是当前用户的副本，目标端仍写 0600/0700）。见 PR #143。
+
+### 4.1 开发覆盖层实机尝试（macbook，2026-11-04）
+
+默认组合在 macOS 与 Linux 都停在 `KEYCHAIN_UNAVAILABLE`，因此试一次文档里的逃生门。
+
+- 生效位置：`--patch` 传入同一行会被 bundle 层覆盖，必须写进 profile 的 `cordis.patch.yml`（“applied after every bundle layer”）。
+- 组合证据：`--dump-config` 中该行带上了 `filePath` 与 `allowInsecureFile: true`。
+- 启动观察：不再出现 `KEYCHAIN_UNAVAILABLE`，也不再出现 `warning: 2 entries did not activate`，日志为空。
+- 未证：该最小 profile 没有 HTTP 监听（127.0.0.1 在 150 秒内无响应），无法判定“就绪可用”。
+- 落盘：插件按需创建凭据文档，本次结束时 `~/forge-pilot/` 仍为空；测试后目录已删除，`cordis.patch.yml` 已还原为 `[]`。
 
 ## 5. 当前状态
 
