@@ -123,6 +123,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (last !== current) {
       last = current; version++; lease.abort(); lease = new AbortController();
       rawModels = []; models = []; backend = undefined; catalogState = 'unconfigured'; catalogError = null;
+      modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
       publish();
     }
     // A successful same-session IAM refresh changes the deadline, not the
@@ -227,8 +228,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (!selectionSaved && found.length > 0) {
         const chosen = pickDefaultModel(found, config.defaultModel);
         if (chosen) { modelOptions = { [chosen]: {} }; defaultModelId = chosen; await persistSelection(); current(); }
-      } else if (defaultModelId && !enabled(defaultModelId)) {
-        defaultModelId = Object.keys(modelOptions)[0] ?? null;
+      } else if (!defaultModelId || !enabled(defaultModelId) || !found.some(m => m.id === defaultModelId)) {
+        defaultModelId = found.find(m => enabled(m.id))?.id ?? Object.keys(modelOptions)[0] ?? null;
       }
       models = applyModelOptions(rawModels, modelOptions);
       const resolved = await createAdapter({
@@ -314,7 +315,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const nextMap = normalizeSelection(nextOptions);
       for (const id of Object.keys(nextMap)) if (!enabledInCatalog(id)) delete nextMap[id];
       modelOptions = nextMap;
-      if (defaultModelId && !enabled(defaultModelId)) defaultModelId = Object.keys(modelOptions)[0] ?? null;
+      if (!defaultModelId || !enabled(defaultModelId)) defaultModelId = Object.keys(modelOptions)[0] ?? null;
       const persisted = await persistSelection();
       models = applyModelOptions(rawModels, modelOptions);
       if (backend && rawModels.length > 0) {
