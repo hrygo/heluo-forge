@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
-export async function mountPanel(fetch, { open = () => null, navigator } = {}) {
+export async function mountPanel(fetch, { open = () => null, navigator, componentId = 'forge-iam' } = {}) {
   const source = await readFile(new URL('../../client.js', import.meta.url), 'utf8');
   const cells = [];
   const effects = [];
@@ -40,7 +40,7 @@ export async function mountPanel(fetch, { open = () => null, navigator } = {}) {
       });
       plugin.apply({ slots: {
         inject(_name, register) { register(); },
-        register(options, component) { if (options.name === 'settings.section') Panel = component; },
+        register(options, component) { if (options.id === componentId) Panel = component; },
       } });
     } },
     location: { assign: (url) => locations.push(url) },

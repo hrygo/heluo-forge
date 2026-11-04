@@ -5,6 +5,21 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const ONBOARDING_KEY = 'forge-iam.onboarding.v1';
     const REQUEST_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json' };
+    // Use the host palette so the embedded controls follow light and dark themes.
+    const inputStyle = {
+      boxSizing: 'border-box', minWidth: 0, minHeight: 40, padding: '9px 12px',
+      border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8,
+      background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit',
+    };
+    const secondaryButton = {
+      minHeight: 38, padding: '8px 14px', border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8,
+      background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
+      font: 'inherit', fontWeight: 550, cursor: 'pointer',
+    };
+    const primaryButton = {
+      ...secondaryButton, borderColor: 'transparent',
+      background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-1)',
+    };
 
     const STATUS = {
       unconfigured: 'IAM 未配置',
@@ -425,10 +440,10 @@ window.__ModuleLoader__.load({
       };
       const copyDiagnostic = () => copyText(JSON.stringify(diagnosticSnapshot(state)));
 
-      const box = { padding: '12px 0', lineHeight: 1.6 };
-      const button = { marginRight: 8, marginTop: 8, padding: '4px 10px', cursor: 'pointer' };
+      const box = { padding: '12px 0 24px', lineHeight: 1.6, maxWidth: 680 };
+      const button = { ...secondaryButton, marginRight: 8, marginTop: 8 };
       const muted = { opacity: 0.7, fontSize: '0.9em' };
-      const header = h('div', { style: { fontWeight: 600, marginBottom: 6 } }, '企业 IAM');
+      const header = h('div', { style: { fontWeight: 650, fontSize: '1.15em', letterSpacing: '-0.01em', marginBottom: 12 } }, '企业 IAM');
       const copyTools = h('div', null,
         state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
           ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
@@ -478,8 +493,8 @@ window.__ModuleLoader__.load({
         ? h('div', { style: { color: 'var(--dsw-alias-state-warn-primary)', marginTop: 4 } },
             `存储来源：${gateway.storage}（未受系统钥匙串保护）`)
         : null;
-      const gatewayBlock = h('div', { style: { marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
-        h('div', { style: { fontWeight: 600, marginBottom: 6 } }, '模型网关凭据'),
+      const gatewayBlock = h('div', { style: { marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+        h('div', { style: { fontWeight: 650, fontSize: '1.05em', marginBottom: 8 } }, '模型网关凭据'),
         h('div', { style: muted }, `UAG 个人凭证：${gatewayStatus}`),
         gatewayDetails.length ? h('div', { style: muted }, gatewayDetails.join(' · ')) : null,
         storageWarning,
@@ -490,7 +505,7 @@ window.__ModuleLoader__.load({
             : gateway.state === 'unconfigured'
               ? h('div', { style: muted }, '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。')
               : h('div', { style: muted }, '请先核对现有记录；页面不会自动迁移或修复，能否更换由 Host 核验。'),
-        h('div', { style: { marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' } },
+        h('div', { style: { marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
           h('input', {
             type: 'password',
             value: credential.value,
@@ -499,7 +514,7 @@ window.__ModuleLoader__.load({
             autoComplete: 'off',
             spellCheck: false,
             onChange: (event) => setCredential((current) => ({ ...current, value: event.target.value })),
-            style: { flex: '1 1 240px', padding: '4px 8px' },
+            style: { ...inputStyle, flex: '1 1 240px' },
           }),
           h('input', {
             type: 'text',
@@ -508,14 +523,14 @@ window.__ModuleLoader__.load({
             'aria-label': '设备标签',
             maxLength: 64,
             onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
-            style: { flex: '0 1 160px', padding: '4px 8px' },
+            style: { ...inputStyle, flex: '1 1 150px' },
           }),
           h('button', { style: button, disabled: credential.saving || viewBarrier.current.pending, onClick: saveCredential }, '保存凭据'),
           (gateway.state !== 'unconfigured' && gateway.state !== 'unknown') || credential.value
             ? h('button', { style: button, disabled: credential.saving || viewBarrier.current.pending, onClick: clearCredential }, '清除凭据')
             : null,
         ),
-        credential.notice ? h('div', { style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, credential.notice) : null,
+        credential.notice ? h('div', { role: 'status', 'aria-live': 'polite', style: { marginTop: 8, color: 'var(--dsw-alias-state-warn-primary)' } }, credential.notice) : null,
       );
 
       return h('div', { style: box }, header,
@@ -705,7 +720,7 @@ window.__ModuleLoader__.load({
           fetchView()
             .then((view) => {
               if (!live) return;
-              setState({ phase: 'ready', view, step: 0, notice: null, open: view.state === 'signed-out', authorizationUrl: null });
+              setState((current) => ({ ...current, phase: 'ready', view, step: 0, notice: null, open: view.state === 'signed-out', authorizationUrl: null }));
             })
             .catch(() => {
               if (!live) return;
@@ -832,16 +847,22 @@ window.__ModuleLoader__.load({
         pointerEvents: 'auto',
       };
       const card = {
-        width: 'min(520px, 100%)', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
-        borderRadius: 12, padding: 24, boxShadow: '0 20px 60px rgba(0,0,0,0.25)', lineHeight: 1.6,
+        boxSizing: 'border-box', width: 'min(520px, 100%)', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto',
+        background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
+        border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 16, padding: 28,
+        boxShadow: '0 20px 60px rgba(0,0,0,0.25)', lineHeight: 1.6,
       };
-      const button = { marginRight: 8, marginTop: 16, padding: '6px 14px', cursor: 'pointer' };
 
       return h('div', { style: overlay, role: 'presentation' },
         h('div', { ref: dialogRef, tabIndex: -1, style: card, role: 'dialog', 'aria-modal': 'true', 'aria-label': step.title },
-          h('div', { style: { opacity: 0.6, fontSize: '0.85em' } }, `步骤 ${state.step + 1} / 4`),
-          h('h2', { style: { margin: '8px 0 12px', fontSize: '1.25em' } }, step.title),
-          h('p', { style: { margin: 0 } }, step.body),
+          h('div', { style: { opacity: 0.7, fontSize: '0.85em', fontWeight: 600 } }, `步骤 ${state.step + 1} / 4`),
+          h('div', { 'aria-hidden': 'true', style: { display: 'flex', gap: 6, marginTop: 10, marginBottom: 24 } },
+            ...steps.map((_, index) => h('span', { key: index, style: {
+              height: 3, flex: 1, borderRadius: 999, background: 'var(--dsw-alias-label-primary)',
+              opacity: index <= state.step ? 0.85 : 0.16,
+            } }))),
+          h('h2', { style: { margin: '0 0 10px', fontSize: '1.35em', lineHeight: 1.3, letterSpacing: '-0.02em' } }, step.title),
+          h('p', { style: { margin: 0, opacity: 0.8, maxWidth: '42em' } }, step.body),
           state.step === 2
             ? h('div', { style: { marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 } },
                 h('input', {
@@ -852,7 +873,7 @@ window.__ModuleLoader__.load({
                   autoComplete: 'off',
                   spellCheck: false,
                   onChange: (event) => setState((current) => ({ ...current, keyValue: event.target.value })),
-                  style: { padding: '6px 10px' },
+                  style: inputStyle,
                 }),
                 h('input', {
                   type: 'text',
@@ -861,7 +882,7 @@ window.__ModuleLoader__.load({
                   'aria-label': '设备标签',
                   maxLength: 64,
                   onChange: (event) => setState((current) => ({ ...current, deviceLabel: event.target.value })),
-                  style: { padding: '6px 10px' },
+                  style: inputStyle,
                 }),
                 state.view?.gatewayConsoleUrl
                   ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据')
@@ -869,12 +890,12 @@ window.__ModuleLoader__.load({
                 h('div', { style: { opacity: 0.7, fontSize: '0.9em' } }, '创建时建议开启 privacy_mode，有效期 90 天。'),
               )
             : null,
-          state.notice ? h('p', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
+          state.notice ? h('p', { role: 'status', 'aria-live': 'polite', style: { margin: '12px 0 0', color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
           state.authorizationUrl ? h('p', null, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
-          h('div', null,
-            h('button', { style: button, disabled: state.saving, onClick: step.onPrimary }, step.primary),
+          h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 } },
+            h('button', { type: 'button', style: primaryButton, disabled: state.saving, onClick: step.onPrimary }, state.saving ? '正在保存…' : step.primary),
             state.step < 3
-              ? h('button', { style: button, onClick: () => (state.step === 2
+              ? h('button', { type: 'button', style: secondaryButton, onClick: () => (state.step === 2
                 ? setState((current) => ({ ...current, step: 3, notice: null }))
                 : close('skipped')) }, state.step === 2 ? '稍后配置' : '跳过')
               : null,
