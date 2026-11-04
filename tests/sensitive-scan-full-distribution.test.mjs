@@ -488,3 +488,38 @@ test('installer rejects symlink directory escapes and insecure existing files', 
     assert.equal(existsSync(f.installedKey), false);
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
+
+test('a group-writable package is refused with its path, mode and the fix', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX permissions only');
+  const f = setup();
+  try {
+    const script = join(f.pkg, 'scripts/sensitive-scan/team-scan.mjs');
+    chmodSync(script, 0o664);
+    const r = installDefault(f);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /group\/other writable/u);
+    assert.match(r.stderr, /team-scan\.mjs/u, 'the offender is named');
+    assert.match(r.stderr, /0664/u, 'the actual mode is shown');
+    assert.match(r.stderr, /umask 022/u, 'the fix is shown');
+    assert.equal(existsSync(f.installedKey), false);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('the explicit opt-in accepts an owner-writable package and installs 0600 copies', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX permissions only');
+  const f = setup();
+  try {
+    for (const name of ['lib.mjs', 'team-scan.mjs', 'team-commit-msg.mjs', 'team-full-install.mjs']) {
+      chmodSync(join(f.pkg, 'scripts/sensitive-scan', name), 0o664);
+    }
+    chmodSync(join(f.pkg, 'private/device-key.pem'), 0o664);
+    chmodSync(join(f.pkg, 'private/rules.json'), 0o664);
+    const r = run(process.execPath, [join(f.pkg, 'scripts/sensitive-scan/team-full-install.mjs'), '--repo', f.repo, '--allow-group-writable'], { cwd: f.dir, env: defaultEnv(f) });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /owner-writable/u);
+    const sharedPrivate = join(f.repo, '.git/heluo-sensitive-scan/private');
+    for (const path of [join(sharedPrivate, 'device-key.pem'), join(sharedPrivate, 'rules.json'), join(f.repo, '.git/heluo-sensitive-scan/scripts/lib.mjs')]) {
+      assert.equal(statSync(path).mode & 0o077, 0, `${path} stays private`);
+    }
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
