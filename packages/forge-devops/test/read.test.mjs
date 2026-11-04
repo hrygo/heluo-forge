@@ -11,6 +11,7 @@ import {
   validateConfig,
 } from '../src/index.mjs';
 import { READER_KEY } from '../src/index.mjs';
+import { READ_ROUTES, projectFacts } from '../src/read.mjs';
 
 /** 最小宿主替身：只提供本包用到的 get/provide/effect。 */
 function host({ policy = { value: admitAllPolicy() }, reader } = {}) {
@@ -108,25 +109,133 @@ test('事实齐全时规整为契约结果，并把请求原样交给适配器',
         source_revision: 'rev-7',
         result_refs: ['CHG-2026-0042@rev-7'],
         observed_at: '2026-10-24T12:00:00Z',
+        command: 'dop change view CHG-2026-0042 --json',
+        raw: { id: 'CHG-2026-0042', title: '示例变更', status: 'in_progress' },
+        truncated: false,
       };
     },
   };
   const { service } = mount({ reader });
   assert.equal(service.status(), 'ready');
   const result = await service.read({ action: 'change.read', target: 'CHG-2026-0042' });
-  assert.deepEqual(seen, [{ action: 'change.read', target: 'CHG-2026-0042' }]);
+  assert.deepEqual(seen, [{ action: 'change.read', target: 'CHG-2026-0042', status: undefined }]);
   assert.equal(result.status, 'succeeded');
   assert.equal(result.target_ref, 'CHG-2026-0042');
   assert.equal(result.source_revision, 'rev-7');
   assert.deepEqual(result.result_refs, ['CHG-2026-0042@rev-7']);
   assert.equal(result.retry_policy, 'read_recheck');
+  assert.equal(result.command, 'dop change view CHG-2026-0042 --json', '命令标签必须透传，事实才可核对');
+  assert.equal(result.truncated, false, '截断标记必须可见（不把截断当完整事实）');
 });
 
-test('只读面只含 `change.read` 一个读动作，不含任何写动作（r10：仓库/Issue/PR 读在 forge-gitee）', () => {
-  assert.deepEqual([...READ_ACTIONS], ['change.read']);
+test('只读 runner 两个动作、两条路由：change.read 走 readChange，change.list 走 listChanges 并透传 status', async () => {
+  assert.deepEqual([...READ_ACTIONS], ['change.read', 'change.list']);
+  assert.deepEqual(Object.keys(READ_ROUTES).sort(), ['change.list', 'change.read']);
+
+  const ports = {
+    dop: {
+      readChange: async (input) => ({ kind: 'readChange', input }),
+      listChanges: async (input) => ({ kind: 'listChanges', input }),
+    },
+  };
+  assert.deepEqual(await READ_ROUTES['change.read'](ports, { target: 'CHG-1' }), {
+    kind: 'readChange',
+    input: { changeId: 'CHG-1' },
+  });
+  assert.deepEqual(await READ_ROUTES['change.list'](ports, { target: '@me', status: 'open' }), {
+    kind: 'listChanges',
+    input: { status: 'open' },
+  });
+
+  // 服务层把请求原样交给 reader（status 由路由决定用不用），再归一成契约结果。
+  const seen = [];
+  const reader = {
+    read: async (request) => {
+      seen.push(request);
+      return {
+        status: 'succeeded',
+        target_ref: 'changes',
+        source_revision: 'rev-8',
+        command: 'dop change list --json --status open',
+        user: 'alice',
+        total: 2,
+        count: 1,
+        filter: { status: 'open' },
+        items: [{ id: 'CHG-1' }],
+        raw: { user: 'alice', total: 2, changes: [{ id: 'CHG-1' }] },
+      };
+    },
+  };
+  const { service } = mount({ reader });
+  const listed = await service.read({ action: 'change.list', target: '@me', status: 'open' });
+  assert.deepEqual(seen, [{ action: 'change.list', target: '@me', status: 'open' }]);
+  assert.equal(listed.status, 'succeeded');
+  assert.equal(listed.command, 'dop change list --json --status open');
+  assert.deepEqual(listed.facts, {
+    user: 'alice',
+    total: 2,
+    count: 1,
+    filter: { status: 'open' },
+    items: [{ id: 'CHG-1' }],
+    raw: { user: 'alice', total: 2, changes: [{ id: 'CHG-1' }] },
+  });
+});
+
+test('normalizeReadResult 透传 command 与 facts；没有命令与事实时不伪造', () => {
+  const normalized = normalizeReadResult({
+    action: 'change.read',
+    target: 'CHG-1',
+    result: {
+      status: 'succeeded',
+      source_revision: 'rev-1',
+      command: 'dop change view CHG-1 --json',
+      raw: { id: 'CHG-1' },
+      truncated: true,
+    },
+  });
+  assert.equal(normalized.command, 'dop change view CHG-1 --json');
+  assert.deepEqual(normalized.facts, { raw: { id: 'CHG-1' } });
+  assert.equal(normalized.truncated, true);
+
+  const bare = normalizeReadResult({
+    action: 'change.read',
+    target: 'CHG-1',
+    result: { status: 'succeeded', source_revision: 'rev-1' },
+  });
+  assert.equal(bare.command, null, '没有命令可核对时必须显式 null');
+  assert.equal(bare.facts, undefined, '没有可投影的记录时不返回空 facts');
+});
+
+test('projectFacts 按动作单点投影：change.read 只要 raw，change.list 给清单摘要', () => {
+  const record = { id: 'CHG-1', title: '示例' };
+  assert.deepEqual(projectFacts('change.read', { raw: record, command: 'x' }), { raw: record });
+  assert.equal(projectFacts('change.read', {}), undefined, 'raw 不是普通对象时不给 facts');
+  assert.equal(projectFacts('change.read', null), undefined);
+  assert.deepEqual(projectFacts('change.list', { user: 'alice', total: 3, count: 1, filter: null, items: [{ id: 'CHG-1' }], raw: { total: 3 } }), {
+    user: 'alice',
+    total: 3,
+    count: 1,
+    filter: null,
+    items: [{ id: 'CHG-1' }],
+    raw: { total: 3 },
+  });
+  assert.deepEqual(
+    projectFacts('change.list', {}),
+    { user: null, total: null, count: null, filter: null, items: [], raw: null },
+    '平台没给的可选位显式 null，不伪造数字',
+  );
+  assert.equal(projectFacts('change.clarification.write', { raw: {} }), undefined, '未登记动作没有投影');
+});
+
+test('只读面只含 dop 变更的两条读动作，不含任何写动作（r10：仓库/Issue/PR 读在 forge-gitee）', () => {
+  assert.deepEqual([...READ_ACTIONS], ['change.read', 'change.list']);
   const { service } = mount();
   for (const action of service.readActions()) {
-    assert.ok(action.endsWith('.read'), `${action} 不应出现在只读面`);
+    assert.ok(READ_ACTIONS.includes(action), `${action} 不在只读动作词表里`);
+    assert.ok(
+      !/\.(write|create|update|delete|close|merge|done)$/u.test(action),
+      `${action} 是写动作，不得出现在只读面`,
+    );
   }
 });
 

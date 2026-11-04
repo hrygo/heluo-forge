@@ -1,14 +1,18 @@
 /**
  * `@heluo/forge-devops` 的唯一落盘出口（T7 / AC-20 / AC-23）。
  *
- * 三条纪律都收在这一个文件里，别的模块不得再实现一遍：
+ * 四条纪律都收在这一个文件里，别的模块不得再实现一遍：
  * 1. **路径唯一且不越界**：`<目标仓库根>/.dsh-devops/<变更号>/<kind>.md`。变更号只允许
  *    `[A-Za-z0-9_-]`，kind 只允许枚举值，落盘前再验一次"解析后仍在仓库根内"——
  *    `..`、绝对路径、带分隔符的变更号一律拒绝，不落盘。
  * 2. **front matter 定长定序**：`change` / `kind` / `generatedAt` / `sourceType` /
  *    `sourceRevision` / `commit`，六项缺一即不合格产物；值里出现换行直接拒绝，
  *    否则正文可以伪造头部字段。
- * 3. **写入可核对**：返回 `{ path, bytes, header }`；报告生成时读回同一份文件核对，
+ * 3. **clarify / plan 的正文由机检后的渲染生成**（D 方案）：调用方给结构化 `data`，这里
+ *    走 `createClarifySheet` + `validateClarifySheet` + `renderClarifySheet` /
+ *    `buildDeliveryPlan` + `validatePlan` + `renderPlan`；机检不通过**不落盘**，逐条问题
+ *    随错误 detail 带回。正文与 data 互斥，避免"正文说一套、机检看另一套"。
+ * 4. **写入可核对**：返回 `{ path, bytes, header }`；报告生成时读回同一份文件核对，
  *    而不是相信内存里的对象（AC-23 证据纪律）。
  *
  * 变更号格式的判定也放在这里：入口解析与落盘路径必须同源，否则会出现"命令收得下、
@@ -16,6 +20,9 @@
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+
+import { createClarifySheet, renderClarifySheet, validateClarifySheet } from './clarify.mjs';
+import { buildDeliveryPlan, renderPlan, validatePlan } from './plan.mjs';
 
 /** 产物种类；与设计 §4.4 一一对应，顺序即报告引用顺序。 */
 export const ARTIFACT_KINDS = Object.freeze(['context', 'clarify', 'plan', 'review', 'report']);
@@ -46,6 +53,12 @@ export const ARTIFACT_REASONS = Object.freeze({
   INVALID_VALUE: 'ARTIFACT_INVALID_VALUE',
   MISSING_META: 'ARTIFACT_MISSING_META',
   MISSING_BODY: 'ARTIFACT_MISSING_BODY',
+  /** body 与 data 的互斥被破坏（clarify/plan 只收 data，其余只收 body）。 */
+  ARGUMENT_MISMATCH: 'ARTIFACT_ARGUMENT_MISMATCH',
+  /** clarify 的 findings 未通过机检：不落盘，problems 逐条带回。 */
+  CLARIFY_INVALID: 'ARTIFACT_CLARIFY_INVALID',
+  /** plan 的验收映射未通过机检：不落盘，gaps 逐条带回。 */
+  PLAN_INVALID: 'ARTIFACT_PLAN_INVALID',
 });
 
 export class ArtifactError extends Error {
@@ -206,27 +219,88 @@ function assertMetaFor(kind, meta) {
 }
 
 /**
- * 写一份产物：路径校验 → 头部渲染 → `mkdir -p` → 临时文件改名（不留半截文件）。
+ * clarify / plan 的机检正文单点。
  *
- * @param {{ repoRoot?: string, changeId?: string, kind?: string, body?: string, meta?: object }} input
+ * - `clarify`：`data.findings` 必须是数组，机检不通过（零选项、缺依据、推荐不在选项里…）
+ *   一律 `ARTIFACT_CLARIFY_INVALID` + `problems`；通过后用 `renderClarifySheet` 出正文。
+ * - `plan`：`data` 必须是对象，`criteria` / `items` 必须是数组；机检不通过
+ *   （缺验证方式、验收条件无映射、带固定阶段模板…）一律 `ARTIFACT_PLAN_INVALID` + `gaps`。
+ * - 其余 kind：`body` 必填、`data` 缺席（反之即 `ARTIFACT_ARGUMENT_MISMATCH`）。
+ *
+ * 失败路径**零落盘**：本函数在 `mkdir -p` 之前抛错，调用方不会留下半截目录或文件。
+ */
+function bodyOf(kind, { changeId, body, data }) {
+  const mismatch = (message, detail = {}) =>
+    new ArtifactError(ARTIFACT_REASONS.ARGUMENT_MISMATCH, `产物 ${kind} ${message}`, detail);
+
+  if (kind === 'clarify' || kind === 'plan') {
+    if (body !== undefined && body !== null) {
+      throw mismatch('不接受 body：正文由机检后的渲染生成（clarify/plan 只收 data）', { field: 'body' });
+    }
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+      throw mismatch(
+        kind === 'clarify' ? '需要 data.findings（数组）' : '需要 data.criteria / data.items（数组）',
+        { field: 'data' },
+      );
+    }
+    if (kind === 'clarify') {
+      if (!Array.isArray(data.findings)) {
+        throw mismatch('需要 data.findings 数组', { field: 'data.findings' });
+      }
+      const sheet = createClarifySheet({ changeId, findings: data.findings });
+      const check = validateClarifySheet(sheet);
+      if (check.ok !== true) {
+        throw new ArtifactError(ARTIFACT_REASONS.CLARIFY_INVALID, '澄清单未通过机检，不落盘', {
+          problems: check.problems,
+        });
+      }
+      return renderClarifySheet(sheet);
+    }
+    const criteria = data.criteria ?? [];
+    const items = data.items ?? [];
+    for (const [field, value] of [['criteria', criteria], ['items', items]]) {
+      if (!Array.isArray(value)) throw mismatch(`的 data.${field} 必须是数组`, { field: `data.${field}` });
+    }
+    const plan = buildDeliveryPlan({ changeId, criteria, items });
+    const check = validatePlan(plan);
+    if (check.ok !== true) {
+      throw new ArtifactError(ARTIFACT_REASONS.PLAN_INVALID, '交付计划未通过机检，不落盘', { gaps: check.gaps });
+    }
+    return renderPlan(plan);
+  }
+
+  if (data !== undefined) {
+    throw mismatch('不接受 data（只有 clarify / plan 使用 data）', { field: 'data' });
+  }
+  if (typeof body !== 'string' || body.trim().length === 0) {
+    throw new ArtifactError(ARTIFACT_REASONS.MISSING_BODY, `产物 ${kind} 正文为空`);
+  }
+  return body;
+}
+
+/**
+ * 写一份产物：路径校验 → 正文（机检 / 调用方给定）→ 头部渲染 → `mkdir -p` → 临时文件改名
+ * （不留半截文件）。clarify / plan 的机检发生在任何文件系统操作之前。
+ *
+ * @param {{ repoRoot?: string, changeId?: string, kind?: string, body?: string, data?: object,
+ *   meta?: object }} input
  * @returns {{ path: string, bytes: number, header: string, changeId: string, kind: string }}
  */
-export function writeArtifact({ repoRoot, changeId, kind, body, meta = {} } = {}) {
+export function writeArtifact({ repoRoot, changeId, kind, body, data, meta = {} } = {}) {
   const target = artifactPath({ repoRoot, changeId, kind });
   const artifactKind = assertArtifactKind(kind);
-  if (typeof body !== 'string' || body.trim().length === 0) {
-    throw new ArtifactError(ARTIFACT_REASONS.MISSING_BODY, `产物 ${artifactKind} 正文为空`);
-  }
+  const id = assertChangeId(changeId);
+  const bodyText = bodyOf(artifactKind, { changeId: id, body, data });
   assertMetaFor(artifactKind, meta);
   const header = renderFrontMatter({
-    changeId,
+    changeId: id,
     kind: artifactKind,
     generatedAt: meta.generatedAt ?? new Date().toISOString(),
     sourceType: meta.sourceType,
     sourceRevision: meta.sourceRevision,
     commit: meta.commit ?? null,
   });
-  const content = `${header}\n${body.endsWith('\n') ? body : `${body}\n`}`;
+  const content = `${header}\n${bodyText.endsWith('\n') ? bodyText : `${bodyText}\n`}`;
   const temporary = `${target}.tmp`;
   try {
     mkdirSync(path.dirname(target), { recursive: true });
@@ -245,7 +319,7 @@ export function writeArtifact({ repoRoot, changeId, kind, body, meta = {} } = {}
     path: target,
     bytes: Buffer.byteLength(content, 'utf8'),
     header,
-    changeId: assertChangeId(changeId),
+    changeId: id,
     kind: artifactKind,
   };
 }

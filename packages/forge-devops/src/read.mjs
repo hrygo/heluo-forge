@@ -19,11 +19,15 @@ import { failureMessageOf } from './failure-face.mjs';
 /**
  * 只读面动作，与工程工具契约 §3 同源；写动作不在此列，也不得由本包开放。
  *
- * r10（按平台收敛）只留 `change.read`：仓库 / Issue / PR 的事实由 `@heluo/forge-gitee`
- * 唯一负责，同装时不能出现两套读面对同一事实各说一套。以后若有人想「顺手加回一条」，
- * 先回答：这条事实的主人在哪个包。
+ * r10（按平台收敛）把仓库 / Issue / PR 的事实交给 `@heluo/forge-gitee` 唯一负责；本包只留
+ * dop 变更的两条读动作：`change.read`（单条记录 + 其归一投影）与 `change.list`（当前用户
+ * 的变更清单，目标语义只有 `@me`，在工具层判定）。以后若有人想「顺手加回一条」，先回答：
+ * 这条事实的主人在哪个包。
+ *
+ * 动作标识与策略目录同名（`change.read` / `change.list`），不另造一套词表：只读 runner 的
+ * 枚举、策略门禁的目录与补丁层的 catalog 三处指同一串字面量。
  */
-export const READ_ACTIONS = Object.freeze(['change.read']);
+export const READ_ACTIONS = Object.freeze(['change.read', 'change.list']);
 
 /** 契约 §4.2 允许的结果状态。 */
 export const READ_STATUSES = Object.freeze(['succeeded', 'failed', 'partial', 'unknown']);
@@ -52,6 +56,7 @@ export const READ_REASONS = Object.freeze({
 
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 const asObject = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {});
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const REGISTERED_REASONS = new Set(Object.values(READ_REASONS));
 
 export class DevopsReadError extends Error {
@@ -66,13 +71,16 @@ export class DevopsReadError extends Error {
 export const isReadAction = (action) => typeof action === 'string' && READ_ACTIONS.includes(action);
 
 /**
- * 只读动作 → 端口方法的唯一映射（r10：只剩 dop 变更一条）。
+ * 只读动作 → 端口方法的唯一映射（r10：只剩 dop 变更两条）。
  *
  * 映射留在这里而不是工具层：工具层只认 `target` 与失败信封，谁去取事实必须能逐条核对。
- * 端口形状是 `{ dop: { readChange } }`——本包不再持有 gh 端口。
+ * 端口形状是 `{ dop: { readChange, listChanges } }`——本包不再持有 gh 端口。
+ * `change.list` 的 `target` 语义（只接受 `@me`）在工具层判定，适配器只收 `status`：
+ * 读层若也判一次，就会与工具层形成两套 `@me` 规则。
  */
 export const READ_ROUTES = Object.freeze({
-  'change.read': (ports, target) => ports.dop.readChange({ changeId: target }),
+  'change.read': (ports, { target }) => ports.dop.readChange({ changeId: target }),
+  'change.list': (ports, { target, status }) => ports.dop.listChanges({ status }),
 });
 
 /**
@@ -90,6 +98,37 @@ export function assertReadRequest(action, target) {
     throw new DevopsReadError(READ_REASONS.MISSING_TARGET, `${action} 缺少目标`, { action });
   }
 }
+
+/**
+ * 按动作把适配器结果投影成给调用方看的 `facts`（单点：工具层不再各写一遍投影）。
+ *
+ * 投影保留 **适配器原样**（`raw`）而不是重新拼一遍：字段映射与归一属于
+ * `change-context.mjs` 的 `normalizeChangeRecord`，读层只负责"哪些字段交出去"。
+ * 没有可投影的形状时返回 `undefined`（调用方按"没有 facts"处理，而不是拿到空对象
+ * 误以为读到了事实）。
+ */
+export function projectFacts(action, result) {
+  const source = isPlainObject(result) ? result : null;
+  if (action === 'change.read') {
+    return source !== null && isPlainObject(source.raw) ? { raw: source.raw } : undefined;
+  }
+  if (action === 'change.list') {
+    if (source === null) return undefined;
+    return {
+      user: source?.user ?? null,
+      total: source?.total ?? null,
+      count: source?.count ?? null,
+      filter: source?.filter ?? null,
+      items: Array.isArray(source?.items) ? [...source.items] : [],
+      raw: source?.raw ?? null,
+    };
+  }
+  return undefined;
+}
+
+/** `command` 只在非空字符串时透传，否则显式 `null`（"没有命令可核对"必须可见）。 */
+const commandOf = (result) =>
+  typeof result?.command === 'string' && result.command.trim().length > 0 ? result.command : null;
 
 export function normalizeReadResult({ action, target, result }) {
   assertReadRequest(action, target);
@@ -112,6 +151,10 @@ export function normalizeReadResult({ action, target, result }) {
     observed_at: typeof result.observed_at === 'string' ? result.observed_at : null,
     error_code: result.status === 'succeeded' ? null : (result.error_code ?? null),
     retry_policy: 'read_recheck',
+    // 透传层：命令标签（可核对"这条事实由哪条命令产出"）与按动作投影的事实。
+    command: commandOf(result),
+    facts: projectFacts(action, result),
+    truncated: result.truncated === true,
   };
 }
 
@@ -160,6 +203,9 @@ function unknownResult(action, target, reason, result = undefined) {
     observed_at: typeof result?.observed_at === 'string' ? result.observed_at : null,
     error_code: reason,
     retry_policy: 'read_recheck',
+    // 降级时同样透传：拿到的命令标签与投影照常给（读失败了，但"跑了哪条命令"仍可核对）。
+    command: commandOf(result),
+    facts: projectFacts(action, result),
   };
 }
 
@@ -188,7 +234,7 @@ export function createDevopsReader({
 } = {}) {
   const envelope = isUnavailableEnvelope(unavailable) ? unavailable : null;
   return Object.freeze({
-    async read({ action, target } = {}) {
+    async read({ action, target, status } = {}) {
       const route = READ_ROUTES[action];
       if (route === undefined) {
         throw new DevopsReadError(READ_REASONS.UNKNOWN_ACTION, `只读动作未登记：${String(action)}`, { action });
@@ -204,7 +250,7 @@ export function createDevopsReader({
         }
         throw new DevopsReadError(reason, `运行时配置不可用（${reason}），未发起 ${action}`, { action, target });
       }
-      return route(ports, target);
+      return route(ports, { target, status });
     },
   });
 }

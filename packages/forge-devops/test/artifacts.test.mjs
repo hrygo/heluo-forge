@@ -134,7 +134,7 @@ test('review 必须绑定 commit 与模型名；report 必须带证据数组', (
 
 test('空正文与非法 kind 不落盘', () => {
   assert.throws(
-    () => writeArtifact({ repoRoot, changeId: 'ARD123456', kind: 'plan', body: '   ', meta: META }),
+    () => writeArtifact({ repoRoot, changeId: 'ARD123456', kind: 'context', body: '   ', meta: META }),
     isArtifactError(ARTIFACT_REASONS.MISSING_BODY),
   );
   assert.throws(
@@ -142,4 +142,195 @@ test('空正文与非法 kind 不落盘', () => {
     isArtifactError(ARTIFACT_REASONS.INVALID_KIND),
   );
   assert.equal(existsSync(path.join(repoRoot, '.dsh-devops', 'ARD123456', 'notes.md')), false);
+});
+
+/* ─────────────────────── clarify / plan：结构化 data 机检后落盘 ─────────────────────── */
+
+/** 合格的硬门禁发现（与 clarify.test.mjs 同形）：2 个 effect 互异选项、利弊非空、推荐属于选项。 */
+const gateFinding = (overrides = {}) => ({
+  id: 'Q-1',
+  kind: 'acceptance',
+  question: '“可用”指什么？',
+  basis: 'acceptance_criteria[1]：“变更后界面可用”',
+  options: [
+    { id: 'O-1', label: '可通过构建', effect: '验收只看构建与冒烟', pros: ['当天可验收'], cons: ['性能问题留到后续'] },
+    { id: 'O-2', label: '通过性能基线', effect: '需要先补性能基线用例', pros: ['一次量化'], cons: ['延长 2 天'] },
+  ],
+  recommendation: { optionId: 'O-2', why: '与需求里的性能目标一致' },
+  ...overrides,
+});
+
+const assumptionFinding = (label) => ({
+  id: `F-${label}`,
+  kind: 'naming',
+  text: `${label} 假设`,
+  basis: `${label} 的依据`,
+  impactIfWrong: `${label} 若不成立的影响`,
+});
+
+test('clarify：合法 findings 机检通过后落盘，正文含硬门禁与假设', () => {
+  const artifact = writeArtifact({
+    repoRoot,
+    changeId: 'ARD123456',
+    kind: 'clarify',
+    data: { findings: [gateFinding(), assumptionFinding('A')] },
+    meta: META,
+  });
+  const text = readFileSync(artifact.path, 'utf8');
+  assert.equal(artifact.kind, 'clarify');
+  assert.match(text, /^kind: clarify$/mu, 'front matter 六字段不变');
+  assert.match(text, /# 澄清单 — ARD123456/u);
+  assert.match(text, /## 硬门禁项/u);
+  assert.match(text, /Q-1/u);
+  assert.match(text, /## 已记录假设/u);
+  assert.match(text, /H-1/u);
+  assert.match(text, /修订标识/u);
+});
+
+test('clarify：零选项 findings 判不通过（ARTIFACT_CLARIFY_INVALID）且不落盘', () => {
+  assert.throws(
+    () =>
+      writeArtifact({
+        repoRoot,
+        changeId: 'ARD900001',
+        kind: 'clarify',
+        data: { findings: [{ id: 'Q-1', kind: 'acceptance', question: '怎么办？', basis: '需求没写清' }] },
+        meta: META,
+      }),
+    (error) =>
+      error instanceof ArtifactError &&
+      error.code === ARTIFACT_REASONS.CLARIFY_INVALID &&
+      Array.isArray(error.detail.problems) &&
+      error.detail.problems.some((problem) => problem.code === 'NO_OPTIONS'),
+  );
+  assert.equal(existsSync(path.join(repoRoot, '.dsh-devops', 'ARD900001', 'clarify.md')), false, '机检失败不得落盘');
+});
+
+test('clarify：findings 不是数组或同时给了 body → ARTIFACT_ARGUMENT_MISMATCH，不落盘', () => {
+  assert.throws(
+    () => writeArtifact({ repoRoot, changeId: 'ARD900002', kind: 'clarify', data: {}, meta: META }),
+    isArtifactError(ARTIFACT_REASONS.ARGUMENT_MISMATCH),
+  );
+  assert.throws(
+    () =>
+      writeArtifact({
+        repoRoot,
+        changeId: 'ARD900002',
+        kind: 'clarify',
+        body: '## 手写澄清单',
+        data: { findings: [gateFinding()] },
+        meta: META,
+      }),
+    isArtifactError(ARTIFACT_REASONS.ARGUMENT_MISMATCH),
+  );
+  assert.equal(existsSync(path.join(repoRoot, '.dsh-devops', 'ARD900002', 'clarify.md')), false);
+});
+
+const planData = () => ({
+  criteria: [{ index: 1, text: '变更后界面可用' }, { index: 2, text: '审计留痕可查' }],
+  items: [
+    {
+      id: 'P-1',
+      criterionIndex: 1,
+      change: '补冒烟用例',
+      verification: [{ kind: 'unit', command: 'node --test packages/forge-devops/test/*.test.mjs' }],
+      files: ['packages/forge-devops/src/index.mjs'],
+      boundary: 'devops',
+    },
+    {
+      id: 'P-2',
+      criterionIndex: 2,
+      change: '审计记录断言',
+      verification: [{ kind: 'integration', command: 'node --test test/audit.test.mjs' }],
+      boundary: 'audit',
+    },
+  ],
+});
+
+test('plan：合法 criteria/items 机检通过后落盘，正文含逐条映射与交付拆分', () => {
+  const artifact = writeArtifact({
+    repoRoot,
+    changeId: 'ARD123456',
+    kind: 'plan',
+    data: planData(),
+    meta: META,
+  });
+  const text = readFileSync(artifact.path, 'utf8');
+  assert.equal(artifact.kind, 'plan');
+  assert.match(text, /^kind: plan$/mu);
+  assert.match(text, /# 交付计划 — ARD123456/u);
+  assert.match(text, /## 验收条件 → 实现 → 验证/u);
+  assert.match(text, /P-1/u);
+  assert.match(text, /## 交付拆分/u);
+});
+
+test('plan：缺验证方式判不通过（ARTIFACT_PLAN_INVALID）且不落盘', () => {
+  const data = planData();
+  data.items = data.items.map((item) => ({ ...item, verification: [] }));
+  assert.throws(
+    () => writeArtifact({ repoRoot, changeId: 'ARD900003', kind: 'plan', data, meta: META }),
+    (error) =>
+      error instanceof ArtifactError &&
+      error.code === ARTIFACT_REASONS.PLAN_INVALID &&
+      Array.isArray(error.detail.gaps) &&
+      error.detail.gaps.some((gap) => gap.reason === 'NO_VERIFICATION'),
+  );
+  assert.equal(existsSync(path.join(repoRoot, '.dsh-devops', 'ARD900003', 'plan.md')), false, '机检失败不得落盘');
+});
+
+test('plan：data 不是对象、criteria 不是数组或同时给了 body → ARTIFACT_ARGUMENT_MISMATCH', () => {
+  for (const data of [[], null, 'criteria']) {
+    assert.throws(
+      () => writeArtifact({ repoRoot, changeId: 'ARD900004', kind: 'plan', data, meta: META }),
+      isArtifactError(ARTIFACT_REASONS.ARGUMENT_MISMATCH),
+      `data=${JSON.stringify(data)} 必须被拒绝`,
+    );
+  }
+  assert.throws(
+    () =>
+      writeArtifact({
+        repoRoot,
+        changeId: 'ARD900004',
+        kind: 'plan',
+        data: { criteria: '一条验收条件', items: [] },
+        meta: META,
+      }),
+    isArtifactError(ARTIFACT_REASONS.ARGUMENT_MISMATCH),
+    'criteria 必须是数组（内容判定归 validatePlan）',
+  );
+  assert.throws(
+    () =>
+      writeArtifact({
+        repoRoot,
+        changeId: 'ARD900004',
+        kind: 'plan',
+        body: '## 手写计划',
+        data: planData(),
+        meta: META,
+      }),
+    isArtifactError(ARTIFACT_REASONS.ARGUMENT_MISMATCH),
+  );
+  assert.equal(existsSync(path.join(repoRoot, '.dsh-devops', 'ARD900004', 'plan.md')), false);
+});
+
+test('context / review / report：body 必填且拒绝 data（互斥不可绕过）', () => {
+  const body = '正文';
+  for (const kind of ['context', 'review', 'report']) {
+    const meta =
+      kind === 'review'
+        ? { ...META, commit: 'abc1234', model: 'deepseek-v4.1-flash' }
+        : kind === 'report'
+          ? { ...META, evidence: [{ ac: 'AC-1', evidence: 'ok' }] }
+          : META;
+    assert.throws(
+      () => writeArtifact({ repoRoot, changeId: 'ARD123456', kind, body, data: { findings: [] }, meta }),
+      isArtifactError(ARTIFACT_REASONS.ARGUMENT_MISMATCH),
+      `${kind} 不接受 data`,
+    );
+    assert.throws(
+      () => writeArtifact({ repoRoot, changeId: 'ARD123456', kind, body: '  ', meta }),
+      isArtifactError(ARTIFACT_REASONS.MISSING_BODY),
+      `${kind} 正文不能为空`,
+    );
+  }
 });

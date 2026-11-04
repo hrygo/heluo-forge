@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-010 |
 | 文档名称 | Gitee 接入详细设计 |
-| 版本 | V0.3.0 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -29,7 +29,7 @@
 四条决定性判断：
 
 1. **平台靠常量声明，不靠调用点推断**。`GITEE_PLATFORM='gitee'` 落在每个信封与返回体上；`gitee-guard` 在入口断言动作前缀，非 `gitee.*` 动作直接拒绝且**零子进程**。本包只服务 Gitee 一个平台，「结果来自别的 provider」不是可发生的事实，因此没有对应原因码，字段表也只有白名单一份。
-2. **共存 = 同一策略行单实例，不是服务域隔离**。r4 曾用 `isolate: { policy: gitee }` 把两个 bundle 隔到不同服务域，代价是同装后有两份策略实例、两套读面事实。r10 改为：两份补丁层写**同一个** `id: heluo-policy` 与**逐字相同**的 5 条并集目录、两处都**不写** `isolate`——loader 按 id 覆盖 `config`（r4 QA 的 D-2 实测），两处内容相同，幸存者就不取决于装配顺序；同装后只有一个策略实例、14 个工具全枚举。单边编辑目录会让幸存配置取决于装配顺序，因此逐字一致由 `tests/plugin-patch-layers.test.mjs` 静态守死，装配后果由 `test/coexistence.test.mjs` 用真实策略服务复现（一实例 / 14 工具 / 卸载归零）。
+2. **共存 = 同一策略行单实例，不是服务域隔离**。r4 曾用 `isolate: { policy: gitee }` 把两个 bundle 隔到不同服务域，代价是同装后有两份策略实例、两套读面事实。r10 改为：两份补丁层写**同一个** `id: heluo-policy` 与**逐字相同**的 6 条并集目录、两处都**不写** `isolate`——loader 按 id 覆盖 `config`（r4 QA 的 D-2 实测），两处内容相同，幸存者就不取决于装配顺序；同装后只有一个策略实例、13 个工具全枚举。单边编辑目录会让幸存配置取决于装配顺序，因此逐字一致由 `tests/plugin-patch-layers.test.mjs` 静态守死，装配后果由 `test/coexistence.test.mjs` 用真实策略服务复现（一实例 / 13 工具 / 卸载归零）。
 3. **受控重复 + 静态门禁替代抽公共包**。唯一子进程出口、幂等键公式、审查渲染各自实现，用禁项扫描、枚举一致性、出口唯一性测试防漂移（§13）。
 4. **配置只 5 个扁平键**。本轮无前端、无 HTTP 面、无配置页；CLI 名已由企业确认，r3 的"发现编排"收益在本包不成立。r10 再放宽两处：`host` 与 `authEnv` 都不再是必填前提——未配 `authEnv` 时 `preflight()` 返回 `ok: true, tokenSource: 'none'`（公开仓库可匿名读，企业实例的鉴权失败由服务端裁决，不在客户端假装"没令牌也能读"）。
 
@@ -221,7 +221,7 @@ flowchart LR
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
 | 单元/契约 | 入口与清单、配置、出口（gitee CLI 与 git 共用）、适配器、只读信封、写动作、幂等、审查、交付、提交信息单源、git 动词表、共存形态、宿主 `register()` 判据 | `node --test "packages/forge-gitee/test/*.test.mjs"` |
-| 装配 | 解析分发补丁层 → 真实装配策略 + 插件：3 读 + 1 只读判定可用、5 个写动作 denied（含 `gitee.git.push`）、同装单实例 / 14 工具；空目录反向用例 | 同上（`patch-mount.test.mjs`、`coexistence.test.mjs`） |
+| 装配 | 解析分发补丁层 → 真实装配策略 + 插件：3 读 + 1 只读判定可用、5 个写动作 denied（含 `gitee.git.push`）、同装单实例 / 13 工具；空目录反向用例 | 同上（`patch-mount.test.mjs`、`coexistence.test.mjs`） |
 | 安装单元 | `buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致 | `node --test "tests/bundle-gitee.test.mjs"` |
 | 端到端 | 企业实机双端各完成一次仓库与 Issue 查询、一次受控写 | **NOT RUN**（见 §12） |
 
@@ -229,7 +229,7 @@ flowchart LR
 
 形态为**单安装单元**：清单声明 `dsh.bundle.patch: ./cordis.patch.yml`、`files` 白名单（`src`/补丁层/README）、`engines.dsh: >=0.2.1-rc.2`，并把 `@heluo/forge-policy` 声明为 `workspace:*` 依赖；构建期 `buildBundle` 把它闭包成真版本并进 `bundledDependencies`，产物为 `heluo-forge-gitee-0.1.0.tgz`（无编译产物、无 `lib/`、不带测试文件；条目数随 `src` 白名单增减）。
 
-补丁层两行、顺序即加载顺序：策略行（`id: heluo-policy`，**5 条并集目录** = 本包 3 读 + 1 只读判定 + devops 的 `change.read`，加内存审计舱 `allowNonDurable`）在前，插件行（`id: heluo-gitee`、`name: '@heluo/forge-gitee'`，`config: {}` 显式空配置，避免宿主把"缺席"当 `undefined` 交给校验器）在后。两行的 `name` 都用**包根名**：写成子路径宿主会静默跳过该包。**两行都不写 `isolate`**：两个 bundle 同处 root 域、共用唯一一个策略实例（派生的策略行 id 与 `isolate` 一律不出现，验收用 grep 兜底）。同一行 `id` 与逐字相同的目录是与 devops 补丁层的硬约定——`tests/plugin-patch-layers.test.mjs` 静态比较两处原文。
+补丁层两行、顺序即加载顺序：策略行（`id: heluo-policy`，**6 条并集目录** = 本包 3 读 + 1 只读判定 + devops 的 `change.read` / `change.list`，加内存审计舱 `allowNonDurable`）在前，插件行（`id: heluo-gitee`、`name: '@heluo/forge-gitee'`，`config: {}` 显式空配置，避免宿主把"缺席"当 `undefined` 交给校验器）在后。两行的 `name` 都用**包根名**：写成子路径宿主会静默跳过该包。**两行都不写 `isolate`**：两个 bundle 同处 root 域、共用唯一一个策略实例（派生的策略行 id 与 `isolate` 一律不出现，验收用 grep 兜底）。同一行 `id` 与逐字相同的目录是与 devops 补丁层的硬约定——`tests/plugin-patch-layers.test.mjs` 静态比较两处原文。
 
 目录**随包分发**：5 条条目写在包内 `cordis.patch.yml`，由 `buildBundle` 原样打进 tgz（`tests/bundle-gitee.test.mjs` 解包断言含 `gitee.delivery.judge` / `target: change` / `egress: 'allow'`），装包即登记，不靠 profile 手改。
 
@@ -237,8 +237,8 @@ flowchart LR
 
 | 形态 | 结果 | 建议 |
 |---|---|---|
-| 只装一个 | 5 条并集目录 + 自己的插件行；本包工具 10 个，目录里除自己四条外还有一条 devops 的 `change.read`（多一条读不会放行任何写） | **推荐** |
-| 同 profile 叠加两层（默认） | 两行同 `id`，loader 留下**唯一**一个策略实例；两处目录逐字相同，幸存者不取决于装配顺序；14 个工具全枚举、0 行激活失败 | **默认可行**（不改配置） |
+| 只装一个 | 6 条并集目录 + 自己的插件行；本包工具 10 个，目录里除自己四条外还有两条 devops 的变更读（多几条读不会放行任何写） | **推荐** |
+| 同 profile 叠加两层（默认） | 两行同 `id`，loader 留下**唯一**一个策略实例；两处目录逐字相同，幸存者不取决于装配顺序；13 个工具全枚举、0 行激活失败 | **默认可行**（不改配置） |
 | 单边改过目录再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按未登记 `GITEE_ACTION_UNREGISTERED` fail closed，先挂载方工具仍在 | 不采用（门禁会红） |
 | 想回到 r4 的隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
 

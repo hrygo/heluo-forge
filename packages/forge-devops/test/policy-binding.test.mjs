@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import {
   apply,
   DevopsReadError,
+  FLOW_TOOLS,
+  QUERY_ACTIONS,
+  QUERY_TOOL,
   READ_ACTIONS,
   READ_REASONS,
-  READ_TOOLS,
   SERVICE_KEY,
 } from '../src/index.mjs';
 import { READER_KEY } from '../src/index.mjs';
@@ -16,8 +18,8 @@ import { READER_KEY } from '../src/index.mjs';
  * 空目录、缺目录项、未开放动作都拒绝挂载；运行时拒绝走同一策略 admission，
  * 拒绝时适配器零调用。普通非企业工具不在此列（门禁 out-of-scope 语义保留）。
  *
- * r10：只读面收敛为 `change.read` 一条（仓库 / Issue / PR 读归 `@heluo/forge-gitee`），
- * 因此"目录绑定"要校验的条目从四条降到一条——校验逻辑本身不变。
+ * r10 / D 方案：只读面收敛为 dop 变更两条（`change.read` / `change.list`；仓库 / Issue / PR
+ * 读归 `@heluo/forge-gitee`），因此"目录绑定"要校验的条目是两条——校验逻辑本身不变。
  */
 
 const fullCatalog = () =>
@@ -73,15 +75,18 @@ test('空目录拒绝挂载：读动作一个都不能少', () => {
 });
 
 test('漏一项映射拒绝挂载，并列出缺失动作', () => {
-  const catalog = fullCatalog();
-  catalog.delete('change.read');
-  assert.throws(
-    () => mount({ policy: stubPolicy({ catalog }).service }),
-    (error) =>
-      error instanceof DevopsReadError &&
-      error.code === READ_REASONS.POLICY_ACTION_UNREGISTERED &&
-      /change\.read/u.test(error.message),
-  );
+  for (const missing of ['change.read', 'change.list']) {
+    const catalog = fullCatalog();
+    catalog.delete(missing);
+    assert.throws(
+      () => mount({ policy: stubPolicy({ catalog }).service }),
+      (error) =>
+        error instanceof DevopsReadError &&
+        error.code === READ_REASONS.POLICY_ACTION_UNREGISTERED &&
+        new RegExp(missing.replace('.', '\\.'), 'u').test(error.message),
+      `${missing} 未登记时不得挂载`,
+    );
+  }
 });
 
 test('目录中有未开放动作拒绝挂载（登记 ≠ 批准）', () => {
@@ -116,11 +121,19 @@ test('FIX-08：调用方自带 role 等参数不进入 admission 身份，不扩
   assert.equal(stub.calls[0].exec.agent, undefined);
 });
 
-test('工具→动作绑定可验证：READ_TOOLS 每一项都在目录中有已开放条目', () => {
+test('工具→动作绑定可验证：只读 runner 的每个动作与流程工具动作都在目录中有已开放条目', () => {
   const catalog = fullCatalog();
-  for (const [toolName, action] of Object.entries(READ_TOOLS)) {
-    assert.ok(READ_ACTIONS.includes(action), `${toolName} 映射到未知动作`);
+  assert.equal(QUERY_TOOL, 'forge_devops_query');
+  assert.deepEqual([...QUERY_ACTIONS], ['change.read', 'change.list'], 'runner 的枚举只有这两条读动作');
+  assert.deepEqual([...QUERY_ACTIONS], [...READ_ACTIONS], 'runner 的动作词表与只读动作同源');
+  for (const action of QUERY_ACTIONS) {
+    assert.ok(READ_ACTIONS.includes(action), `${action} 映射到未知动作`);
     const entry = catalog.get(action);
+    assert.ok(entry !== undefined && entry.enabled === true, `${action} 缺少已开放目录条目`);
+  }
+  for (const [toolName, flowTool] of Object.entries(FLOW_TOOLS)) {
+    if (flowTool.action === null) continue; // 落盘没有平台动作
+    const entry = catalog.get(flowTool.action);
     assert.ok(entry !== undefined && entry.enabled === true, `${toolName} 的动作缺少已开放目录条目`);
   }
 });
@@ -157,7 +170,7 @@ test('工具面同样经过 admission：拒绝时 ok:false + next_action，不�
   const reader = { read: async () => ((calls += 1), { status: 'succeeded', source_revision: 'r' }) };
   const { registered } = mount({ policy: stubPolicy({ admit: false }).service, reader });
   const payload = JSON.parse(
-    (await registered.get('forge_devops_change_read').execute({ target: 'CHG-2026-0042' })).content[0].text,
+    (await registered.get(QUERY_TOOL).execute({ action: 'change.read', target: 'CHG-2026-0042' })).content[0].text,
   );
   assert.equal(payload.ok, false);
   assert.equal(payload.reason, READ_REASONS.POLICY_DENIED);

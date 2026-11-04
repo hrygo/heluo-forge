@@ -23,7 +23,7 @@
 # 代码托管（仓库 / Issue / PR / 评审 / 交付判定）由 `@heluo/forge-gitee` 提供，本包不再持有
 # 跨平台写入口，也不再猜承建仓库——变更卡片给出 `forge_gitee_repository_read` 的下一步指引。
 #
-# 策略目录（catalog）是 **5 条并集、0 条 write**：`change.read`（本包的 dop 变更读）+
+# 策略目录（catalog）是 **6 条并集、0 条 write**：`change.read` / `change.list`（本包的两条 dop 变更读）+
 # 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定。
 #   - 这一份并集**逐字**写在本包与 `@heluo/forge-gitee` 的补丁层里，两行都叫 `id: heluo-policy`，
 #     都不另立服务域：loader 按 id 覆盖 config，同装后只剩一个 `policy` 实例、一份目录；任一插件
@@ -59,6 +59,7 @@
       config:
         catalog:
           - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
+          - { action: 'change.list', kind: 'read', target: 'changes', enabled: true }
           - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
           - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
           - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }

@@ -113,7 +113,7 @@ test('适配器不替上层做记录契约校验：{} 也交出信封（id/字�
   assert.equal(result.source_revision, `dop:${sha12('{}')}`);
 });
 
-test('listChanges：change list --json，items 来自 changes 数组，total 取平台值', async () => {
+test('listChanges：change list --json，items 来自 changes 数组，total 取平台值，user 取平台当前用户', async () => {
   const stdout = JSON.stringify({ user: 'alice', total: 2, changes: [{ id: 'ARD123456' }, { id: 'ARD222222' }] });
   const runner = fakeRunner(() => ({ exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false }));
   const result = await adapterWith(runner).listChanges({});
@@ -122,8 +122,17 @@ test('listChanges：change list --json，items 来自 changes 数组，total 取
   assert.equal(result.count, 2);
   assert.equal(result.total, 2);
   assert.equal(result.items[0].id, 'ARD123456');
+  assert.equal(result.user, 'alice', '清单要带平台返回的当前用户，供 @me 语义核对');
   assert.equal(result.target_ref, 'changes');
   assert.equal(result.source_revision, `dop:${sha12(stdout)}`);
+});
+
+test('listChanges：平台没给 user 时显式 null，不按本机账号猜', async () => {
+  const stdout = JSON.stringify({ changes: [] });
+  const runner = fakeRunner(() => ({ exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false }));
+  const result = await adapterWith(runner).listChanges({});
+  assert.equal(result.user, null);
+  assert.equal(result.count, 0);
 });
 
 test('listChanges：给了 status 才拼 --status（并校验为安全令牌）', async () => {

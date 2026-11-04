@@ -10,7 +10,7 @@
  *      配置页客户端不打印/不持久化路径、工具面不把取值型 access 字段拼进 `detail`、
  *      补丁层与 README 无绝对路径样例且口径改为「配置页优先」、清单声明客户端半
  *      （`dsh.client` + `./client` 导出 + 发布白名单含 `client.js`），以及
- *      「零回退」的可核对形式（r10 起收敛为 4 个工具、`READ_REASONS` 不加码、只读面语义不变）。
+ *      「零回退」的可核对形式（D 方案起收敛为 3 个工具、`READ_REASONS` 不加码、只读面语义不变）。
  *
  * dev 阶段按依赖分波产出，T8 可能先于部分任务执行：模块文件缺失时记为 DEFERRED
  * （诊断信息带归属任务），文件一旦落地立刻转为硬断言——自检随交付推进逐条生效，
@@ -50,8 +50,10 @@ const MODULE_CONTRACTS = [
   // review / report / commit-message 七个模块连同其用例一并删除——仓库、Issue、PR 事实与
   // 提交信息校验改由 forge-gitee 唯一实现（`git-message.mjs` 是提交信息单源）。收敛后
   // devops 的核心契约只剩两条：只读面（仅 dop 变更）与 dop 四工具面。
-  { file: 'read.mjs', task: 'T2(r10)', exports: ['READ_ACTIONS', 'READ_STATUSES', 'createDevopsReader'] },
-  { file: 'tools.mjs', task: 'T4(r10)', exports: ['DEVOPS_TOOLS', 'FLOW_ACTIONS', 'buildDevopsTools'] },
+  { file: 'read.mjs', task: 'T2(r10)', exports: ['READ_ACTIONS', 'READ_STATUSES', 'createDevopsReader', 'projectFacts'] },
+  // D 方案（typed read runner）：只读面收成一个受枚举约束的跑批工具，工具名 → 动作的唯一真源
+  // 由 `QUERY_TOOL` / `QUERY_ACTIONS` / `FLOW_TOOLS` / `DEVOPS_TOOLS` 四张表给出。
+  { file: 'tools.mjs', task: 'T4(r10)', exports: ['DEVOPS_TOOLS', 'QUERY_TOOL', 'QUERY_ACTIONS', 'buildDevopsTools'] },
   // D-4（蓝图 api 清单点名）：命令面端口工厂与卡片归一必须可从模块 import；私有化会让
   // 文档声明与实现长期不一致，也让复用方只能复制粘贴。
   { file: 'flow.mjs', task: 'T2(r10)', exports: ['FLOW_REASONS', 'createPorts', 'createDevopsFlow'] },
@@ -175,22 +177,30 @@ test('相对 import 闭合：src 内每个本地导入都有对应文件（半�
   }
 });
 
-test('只读面收敛：1 个读动作、4 个读状态、1 个只读工具（r10 AC-10）', async () => {
+test('只读面收敛：2 个读动作、4 个读状态、只读入口是 query 工具（D 方案）', async () => {
   const readModule = await load('read.mjs');
   const toolsModule = await load('tools.mjs');
   assert.deepEqual(
     Array.from(readModule.READ_ACTIONS),
-    ['change.read'],
+    ['change.read', 'change.list'],
     '仓库/Issue/PR 读已按平台交给 forge-gitee，devops 只留 dop 变更读取（同装时不能有两套读面事实）',
   );
   for (const status of ['succeeded', 'failed', 'partial', 'unknown']) {
     assert.ok(readModule.READ_STATUSES.includes(status), `读状态词表缺 ${status}`);
   }
-  const name = 'forge_devops_change_read';
-  assert.ok(
-    JSON.stringify(toolsModule.DEVOPS_TOOLS ?? {}).includes(name),
-    `工具面缺 ${name}（r10：devops 四工具的变化读取入口）`,
+  assert.equal(toolsModule.QUERY_TOOL, 'forge_devops_query', '只读面统一由一个受枚举约束的 runner 提供');
+  assert.deepEqual(
+    Array.from(toolsModule.QUERY_ACTIONS),
+    Array.from(readModule.READ_ACTIONS),
+    'runner 的动作词表必须与只读动作同源（不另造词表）',
   );
+  assert.ok(
+    Array.from(toolsModule.DEVOPS_TOOLS).includes(toolsModule.QUERY_TOOL),
+    `工具面缺 ${toolsModule.QUERY_TOOL}`,
+  );
+  assert.equal(Array.from(toolsModule.DEVOPS_TOOLS).length, 3, '工具面 3 个：query + change_context + artifact_write');
+  assert.ok(!Array.from(toolsModule.DEVOPS_TOOLS).includes('forge_devops_change_read'), '旧 change_read 工具已删除');
+  assert.ok(!Array.from(toolsModule.DEVOPS_TOOLS).includes('forge_devops_clarify_write'), '恒 denied 的澄清写工具已删除');
 });
 
 test('蓝图接口契约：已落地模块导出全部声明成员（未落地记 DEFERRED + 归属任务）', async (t) => {
@@ -420,24 +430,30 @@ test('产物落盘：kind 枚举、front matter 六字段定序、路径逃逸�
   assert.ok(escapeRejected, '产物路径逃逸必须拒绝（§7.7 第 10 行）');
 });
 
-test('工具面 4 个：名字与动作映射唯一真源，写工具须 confirm（r10 AC-10）', async (t) => {
+test('工具面 3 个：名字与动作映射唯一真源，平台写动作不在这里（D 方案）', async (t) => {
   const toolsText = srcText('tools.mjs');
   const expected = [
     'forge_devops_artifact_write',
     'forge_devops_change_context',
-    'forge_devops_change_read',
-    'forge_devops_clarify_write',
+    'forge_devops_query',
   ];
   const found = new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []);
-  assert.equal(found.size, 4, `工具面应为 4 个（17 → 14 的收敛项），实际识别到 ${found.size}：${[...found].join(', ')}`);
-  for (const name of expected) assert.ok(found.has(name), `工具面缺 ${name}（§5.2）`);
-  for (const gone of ['forge_devops_issue_write', 'forge_devops_pr_write', 'forge_devops_repository_read', 'forge_devops_issue_read', 'forge_devops_pr_read']) {
-    assert.ok(!found.has(gone), `${gone} 必须随 gh 侧模块删除：跨平台写/读入口只能留在 forge-gitee（r10）`);
+  assert.equal(found.size, 3, `工具面应为 3 个（D 方案：query + 聚合读 + 落盘），实际识别到 ${found.size}：${[...found].join(', ')}`);
+  for (const name of expected) assert.ok(found.has(name), `工具面缺 ${name}`);
+  for (const gone of [
+    'forge_devops_change_read',
+    'forge_devops_clarify_write',
+    'forge_devops_issue_write',
+    'forge_devops_pr_write',
+    'forge_devops_repository_read',
+    'forge_devops_issue_read',
+    'forge_devops_pr_read',
+  ]) {
+    assert.ok(!found.has(gone), `${gone} 必须已删除：跨平台读写入口只能留在 forge-gitee，恒 denied 的写工具不得占位`);
   }
-  assert.match(toolsText, /confirm/, '写工具必须要求 confirm{repo,object}（§5.2）');
-  for (const action of ['change.clarification.write']) {
-    assert.ok(toolsText.includes(action), `工具→动作映射表缺写动作 ${action}（§5.2）`);
-  }
+  // 工具面不再持有任何平台写动作（clarify_write 随平台写面一起归 forge-gitee）。
+  assert.doesNotMatch(toolsText, /change\.clarification\.write/u, '工具面不得再登记平台写动作');
+  assert.doesNotMatch(toolsText, /confirm\s*\{/u, '工具面不得再要求 confirm（平台写面已不在本包）');
   const noCommandFace = srcFiles().filter((file) => /no-command-face/.test(srcText(file)));
   assert.ok(noCommandFace.length > 0, "commands 服务缺失时入口状态必须是 'no-command-face'（§7.7 第 12 行）");
   const { buildDevopsTools } = await load('tools.mjs');
@@ -676,8 +692,8 @@ test('r3 零回退：READ_REASONS 不加码，只读面语义与工具数不变�
   const toolsText = srcText('tools.mjs');
   assert.equal(
     new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []).size,
-    4,
-    'r10 起工具面是 4 个：仓库/Issue/PR 读写已交给 forge-gitee（配置页只写配置，不新增工具）',
+    3,
+    'D 方案起工具面是 3 个：只读 runner + 聚合读 + 落盘（仓库/Issue/PR 已交给 forge-gitee）',
   );
   const indexText = srcText('index.mjs');
   assert.match(indexText, /NO_READER/, '未命中仍以 NO_READER 失败（fail closed 不变）');

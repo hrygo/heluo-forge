@@ -329,8 +329,13 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
   return change;
 }
 
-/** 卡片里只保留契约内字段：`raw` 可能含企业侧额外字段，落盘产物不展示（AC-22/23）。 */
-function displayableChange(change) {
+/**
+ * 卡片里只保留契约内字段：`raw` 可能含企业侧额外字段，落盘产物不展示（AC-22/23）。
+ *
+ * 导出给装配层的只读 runner 复用（`service.read` 的 `change.read` 归一投影）：同一张卡与
+ * 同一个工具的归一结果必须是同一份映射，不能各写一遍。
+ */
+export function displayableChange(change) {
   const item = asObject(change);
   if (!isPlainObject(change)) {
     throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, 'change 必须是 normalizeChangeRecord 的产物', {});

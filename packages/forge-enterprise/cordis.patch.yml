@@ -35,7 +35,7 @@
 
 # 企业组合的最小挂载。Cordis Loader 并发创建条目，行序不构成加载顺序语义；
 # 凭据、策略与 IAM 的先后由各自的依赖注入决定，不靠本文件的排列保证。
-# 策略行携带与 devops / gitee 两个补丁层**逐字相同**的 5 条并集目录与内存审计：三层同
+# 策略行携带与 devops / gitee 两个补丁层**逐字相同**的 6 条并集目录与内存审计：三层同
 # id 时 loader 按 id 覆盖 config，只留一个策略实例，装配顺序不影响幸存配置（D-5）。
 # 内存审计舱属联调/试点级证据；生产或合规场景必须注入持久 sink 并去掉 allowNonDurable。
 # 其余行只给最小配置；缺配置时按包自己的 fail-closed 语义拒绝，不在补丁里塞默认凭据。
@@ -47,6 +47,7 @@
       config:
         catalog:
           - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
+          - { action: 'change.list', kind: 'read', target: 'changes', enabled: true }
           - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
           - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
           - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
