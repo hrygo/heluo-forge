@@ -81,7 +81,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 
 | 入口 | 文档 | 用途与边界 |
 |---|---|---|
-| 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 原七域及专项子函路由；本轮网关新函、IAM 原函补充；回函核验后写契约，不自动准入 |
+| 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 原七域及专项子函路由；本轮网关新函、IAM 原函补充（含 2026-10-28 三项必要确认答复，见 IAM 专项函 §4.5.8）；回函核验后写契约，不自动准入 |
 | 市场方案 | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>) | 评审稿；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；不等企业批准或上线 |
 | AIHUB 索引交付 | [issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 外部交付 issue：URL、format-1、registry、更新/撤回时限、三目标联调；作为验收跟踪，不替代企业批准 |
 | 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；索引交付、三目标安装与全通道边界仍需验 |
