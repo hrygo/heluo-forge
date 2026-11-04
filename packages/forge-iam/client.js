@@ -7,20 +7,21 @@ window.__ModuleLoader__.load({
     const REQUEST_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json' };
     // Use the host palette so the embedded controls follow light and dark themes.
     const inputStyle = {
-      boxSizing: 'border-box', minWidth: 0, minHeight: 36, padding: '0 12px',
-      border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm)',
-      background: 'var(--dsw-specific-input-major)', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)',
+      boxSizing: 'border-box', minWidth: 0, height: 32, padding: '0 10px',
+      border: '0.5px solid var(--dsw-alias-border-l4)', borderRadius: 'var(--dsw-radius-md)',
+      background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', font: 'inherit', fontSize: 13,
     };
     const secondaryButton = {
-      minHeight: 32, padding: '0 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 'var(--dsw-radius-sm)',
-      background: 'var(--dsw-alias-button-floating-fill)', color: 'var(--dsw-alias-label-primary)',
-      font: 'var(--dsw-font-xs-13)', cursor: 'pointer',
+      boxSizing: 'border-box', height: 32, minHeight: 32, padding: '0 12px',
+      border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 'var(--dsw-radius-md)',
+      background: 'transparent', color: 'var(--dsw-alias-label-primary)',
+      font: 'inherit', fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
     };
     const primaryButton = {
-      ...secondaryButton, borderColor: 'transparent',
+      ...secondaryButton, border: 'none',
       background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)',
     };
-    const fieldLabel = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, font: 'var(--dsw-font-s-14)' };
+    const fieldLabel = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, fontSize: 13 };
     const interactionStyles = `
       .forge-iam-ui {
         --fiam-primary: var(--dsw-alias-state-business-primary, #2563eb);
@@ -29,25 +30,28 @@ window.__ModuleLoader__.load({
         --fiam-error: var(--dsw-alias-state-error-primary, #ef4444);
       }
       .forge-iam-ui button:not(:disabled), .forge-iam-ui a { cursor: pointer; }
-      .forge-iam-ui button:not(:disabled):hover { background-color: var(--dsw-alias-button-floating-hover) !important; }
-      .forge-iam-ui button.forge-iam-primary:not(:disabled):hover { background-color: var(--dsw-alias-button-primary-hover) !important; opacity: 0.94; }
+      .forge-iam-ui button:not(:disabled):hover { background-color: var(--dsw-alias-button-floating-hover); }
+      .forge-iam-ui button.forge-iam-primary:not(:disabled):hover { background-color: var(--dsw-alias-button-primary-hover); opacity: 0.94; }
       .forge-iam-ui button:not(:disabled):active { filter: brightness(.92); transform: translateY(1px); }
       .forge-iam-ui a { color: var(--dsw-alias-state-business-primary); text-decoration: none; }
       .forge-iam-ui a:hover { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
-      .forge-iam-ui input:not(:disabled):hover { border-color: var(--dsw-alias-border-l3) !important; }
-      .forge-iam-ui input:focus { outline: none; border-color: var(--dsw-alias-state-business-primary) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 15%, transparent); }
+      .forge-iam-ui input:not(:disabled):hover { border-color: var(--dsw-alias-border-l3); }
+      .forge-iam-ui input:focus { outline: none; border-color: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 15%, transparent); }
       .forge-iam-ui :is(button, a):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
       .forge-iam-ui :is(button, input):disabled { cursor: not-allowed; opacity: .55; }
       @media (prefers-reduced-motion: reduce) { .forge-iam-ui button:active { transform: none; } }
 
       .fiam-card {
         box-sizing: border-box;
-        background: var(--dsw-alias-bg-layer-1);
-        border: 1px solid var(--dsw-alias-border-l2);
-        border-radius: var(--dsw-radius-md, 10px);
-        padding: 18px 20px;
-        margin-top: 14px;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        background: var(--dsw-alias-settings-card-fill);
+        border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+        border-radius: var(--dsw-radius-xl);
+        padding: 14px 16px;
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        transition: border-color 0.15s ease;
       }
       .fiam-card:hover { border-color: var(--dsw-alias-border-l3); }
       .fiam-card-header {
@@ -55,7 +59,7 @@ window.__ModuleLoader__.load({
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        margin-bottom: 12px;
+        margin-bottom: 2px;
       }
       .fiam-card-title-group {
         display: flex;
@@ -67,25 +71,26 @@ window.__ModuleLoader__.load({
         font-size: 15px;
         font-weight: 600;
         color: var(--dsw-alias-label-primary);
-        line-height: 20px;
+        line-height: 22px;
       }
       .fiam-card-subtitle {
         font-size: var(--dsw-font-xxs-12);
-        color: var(--dsw-alias-label-secondary);
-        line-height: 16px;
-        margin-top: 2px;
+        color: var(--dsw-alias-label-tertiary);
+        line-height: 18px;
+        margin-top: 1px;
       }
       .fiam-badge {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        padding: 3px 10px;
-        border-radius: 999px;
-        font-size: var(--dsw-font-xxs-12);
+        gap: 5px;
+        padding: 1px 8px;
+        border-radius: var(--dsw-radius-xs, 4px);
+        font-size: var(--dsw-font-xxs-11);
         font-weight: 500;
-        line-height: 18px;
+        line-height: 16px;
         white-space: nowrap;
         flex-shrink: 0;
+        border: 0.5px solid transparent;
       }
       .fiam-badge-dot {
         width: 6px;
@@ -94,31 +99,36 @@ window.__ModuleLoader__.load({
         flex-shrink: 0;
       }
       .fiam-badge-success {
-        background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+        background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
         color: var(--dsw-alias-state-success-primary);
+        border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 22%, transparent);
       }
       .fiam-badge-success .fiam-badge-dot { background: var(--dsw-alias-state-success-primary); }
       .fiam-badge-idle {
         background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04));
         color: var(--dsw-alias-label-secondary);
+        border-color: var(--dsw-alias-border-l4);
       }
       .fiam-badge-idle .fiam-badge-dot { background: var(--dsw-alias-label-tertiary, #9ca3af); }
       .fiam-badge-authenticating {
-        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
         color: var(--dsw-alias-state-business-primary);
+        border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent);
       }
       .fiam-badge-authenticating .fiam-badge-dot {
         background: var(--dsw-alias-state-business-primary);
         animation: fiam-pulse 1.4s ease-in-out infinite;
       }
       .fiam-badge-warn {
-        background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+        background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
         color: var(--dsw-alias-state-warn-primary);
+        border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 22%, transparent);
       }
       .fiam-badge-warn .fiam-badge-dot { background: var(--dsw-alias-state-warn-primary); }
       .fiam-badge-error {
-        background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+        background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
         color: var(--dsw-alias-state-error-primary);
+        border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 22%, transparent);
       }
       .fiam-badge-error .fiam-badge-dot { background: var(--dsw-alias-state-error-primary); }
       @keyframes fiam-pulse {
@@ -200,45 +210,88 @@ window.__ModuleLoader__.load({
         justify-content: space-between;
         gap: 10px;
         flex-wrap: wrap;
-        margin-top: 12px;
+        margin-top: 6px;
+        margin-bottom: 6px;
       }
       .fiam-model-search {
-        flex: 1 1 220px;
+        flex: 1 1 200px;
         min-width: 0;
+        height: 32px;
+        box-sizing: border-box;
+        border: 0.5px solid var(--dsw-alias-border-l4);
+        border-radius: var(--dsw-radius-md);
+        background: var(--dsw-alias-bg-layer-1);
+        color: var(--dsw-alias-label-primary);
+        padding: 0 10px;
+        font-size: 13px;
+        line-height: 20px;
+      }
+      .fiam-model-search:focus {
+        border-color: var(--dsw-alias-state-business-primary);
+        outline: none;
       }
       .fiam-model-filters {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 2px;
+        padding: 2px;
+        background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-module-platform));
+        border: 0.5px solid var(--dsw-alias-border-l3);
+        border-radius: var(--dsw-radius-md);
         flex-shrink: 0;
+      }
+      .fiam-model-filters .fiam-chip {
+        padding: 3px 10px;
+        border-radius: var(--dsw-radius-sm);
+        font-size: var(--dsw-font-xxs-12);
+        line-height: 18px;
+        border: none;
+        background: transparent;
+        color: var(--dsw-alias-label-secondary);
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .fiam-model-filters .fiam-chip:hover {
+        color: var(--dsw-alias-label-primary);
+        background: var(--dsw-alias-interactive-bg-hover);
+      }
+      .fiam-model-filters .fiam-chip-active {
+        background: var(--dsw-alias-bg-layer-1);
+        color: var(--dsw-alias-label-primary);
+        font-weight: 500;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
       }
       .fiam-model-list {
         display: flex;
         flex-direction: column;
         gap: 8px;
-        margin-top: 10px;
-        margin-bottom: 14px;
-        max-height: 420px;
+        margin-top: 6px;
+        margin-bottom: 6px;
+        max-height: 480px;
         overflow-y: auto;
         padding-right: 2px;
       }
       .fiam-model-item {
-        border: 1px solid var(--dsw-alias-border-l2);
-        border-radius: var(--dsw-radius-md, 8px);
-        background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1));
+        border: 0.5px solid var(--dsw-alias-border-l4);
+        border-radius: var(--dsw-radius-lg);
+        background: var(--dsw-alias-bg-layer-1);
         overflow: hidden;
-        transition: border-color 0.15s ease;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
         flex-shrink: 0;
       }
       .fiam-model-item:hover {
+        border-color: var(--dsw-alias-border-l3);
+      }
+      .fiam-model-item.fiam-model-item-expanded {
         border-color: var(--dsw-alias-border-l3);
       }
       .fiam-model-row {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 10px 14px;
-        gap: 12px;
+        padding: 8px 12px;
+        gap: 10px;
+        min-height: 40px;
       }
       .fiam-model-info {
         display: flex;
@@ -246,39 +299,72 @@ window.__ModuleLoader__.load({
         gap: 8px;
         flex-wrap: wrap;
         min-width: 0;
+        flex: 1;
+      }
+      .fiam-model-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        display: inline-block;
+      }
+      .fiam-model-dot-enabled {
+        background: var(--dsw-alias-state-success-primary);
+      }
+      .fiam-model-dot-disabled {
+        background: var(--dsw-alias-label-dimmed, var(--dsw-alias-border-l3));
       }
       .fiam-model-name {
-        font-weight: 600;
-        font-size: var(--dsw-font-s-14);
+        font-weight: 500;
+        font-size: var(--dsw-font-xs-13);
         color: var(--dsw-alias-label-primary);
+        line-height: 20px;
       }
       .fiam-model-id {
-        font-family: monospace;
-        font-size: var(--dsw-font-xxs-12);
-        color: var(--dsw-alias-label-secondary);
+        font-family: var(--ds-font-family-code, monospace);
+        font-size: 11px;
+        color: var(--dsw-alias-label-tertiary);
         background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04));
         padding: 1px 6px;
-        border-radius: 4px;
+        border-radius: var(--dsw-radius-xs, 4px);
+        line-height: 16px;
       }
       .fiam-model-advanced {
-        padding: 14px;
-        border-top: 1px solid var(--dsw-alias-border-l2);
-        background: var(--dsw-alias-bg-layer-1);
+        padding: 12px 14px;
+        border-top: 0.5px solid var(--dsw-alias-border-l2);
+        background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-module-platform));
         display: flex;
         flex-direction: column;
         gap: 12px;
       }
       .fiam-field-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
         gap: 12px;
+      }
+      .fiam-field-title {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--dsw-alias-label-secondary);
+        line-height: 18px;
+      }
+      .fiam-field-hint {
+        font-size: 11px;
+        color: var(--dsw-alias-label-tertiary);
+        line-height: 15px;
+      }
+      .fiam-field-section-title {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--dsw-alias-label-secondary);
+        line-height: 18px;
       }
       .fiam-checkbox-group {
         display: flex;
         align-items: center;
         gap: 16px;
         flex-wrap: wrap;
-        margin-top: 4px;
+        margin-top: 2px;
       }
       .fiam-checkbox-item {
         display: inline-flex;
@@ -290,8 +376,8 @@ window.__ModuleLoader__.load({
       }
       .fiam-checkbox-item input[type="checkbox"] {
         cursor: pointer;
-        width: 15px;
-        height: 15px;
+        width: 14px;
+        height: 14px;
         accent-color: var(--dsw-alias-state-business-primary);
       }
       .fiam-reasoning-chips {
@@ -299,27 +385,38 @@ window.__ModuleLoader__.load({
         align-items: center;
         gap: 6px;
         flex-wrap: wrap;
-        margin-top: 4px;
+        margin-top: 2px;
       }
       .fiam-chip {
         padding: 3px 10px;
-        border-radius: 999px;
+        border-radius: var(--dsw-radius-sm, 6px);
         font-size: var(--dsw-font-xxs-12);
-        border: 1px solid var(--dsw-alias-border-l2);
+        line-height: 18px;
+        border: 0.5px solid var(--dsw-alias-border-l3);
         background: var(--dsw-alias-bg-layer-1);
         color: var(--dsw-alias-label-secondary);
         cursor: pointer;
         transition: all 0.15s ease;
       }
       .fiam-chip:hover {
-        border-color: var(--dsw-alias-border-l3);
+        border-color: var(--dsw-alias-border-l2);
         color: var(--dsw-alias-label-primary);
+        background: var(--dsw-alias-interactive-bg-hover);
       }
       .fiam-chip-active {
         background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
         border-color: var(--dsw-alias-state-business-primary);
         color: var(--dsw-alias-state-business-primary);
         font-weight: 500;
+      }
+      .fiam-model-advanced-actions {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        margin-top: 4px;
+        padding-top: 8px;
+        border-top: 0.5px solid var(--dsw-alias-border-l3);
       }
 
       /* Launcher in sidebar footArea */
@@ -452,10 +549,14 @@ window.__ModuleLoader__.load({
       .fiam-launcher-menu {
         position: absolute;
         bottom: calc(100% + 8px);
-        left: 2px;
-        width: 260px;
+        left: 0;
+        right: 0;
+        width: auto;
+        min-width: 0;
+        max-width: 100%;
+        box-sizing: border-box;
         background: var(--dsw-alias-bg-layer-1);
-        border: 1px solid var(--dsw-alias-border-l2);
+        border: 0.5px solid var(--dsw-alias-border-l2);
         border-radius: var(--dsw-radius-md, 10px);
         box-shadow: var(--dsw-elevation-prominent, 0 10px 25px -5px rgba(0, 0, 0, 0.2));
         padding: 10px;
@@ -465,13 +566,16 @@ window.__ModuleLoader__.load({
         backdrop-filter: blur(12px);
       }
       .fiam-launcher-rail .fiam-launcher-menu {
-        left: 48px;
+        left: calc(100% + 10px);
+        right: auto;
         bottom: 0;
+        width: 240px;
+        max-width: 260px;
       }
       .fiam-launcher-menu-section {
         padding-bottom: 8px;
         margin-bottom: 8px;
-        border-bottom: 1px solid var(--dsw-alias-border-l1);
+        border-bottom: 0.5px solid var(--dsw-alias-border-l2);
       }
       .fiam-launcher-menu-row {
         display: flex;
@@ -481,14 +585,18 @@ window.__ModuleLoader__.load({
         font-size: var(--dsw-font-xxs-12);
         line-height: 1.4;
         margin-top: 4px;
+        min-width: 0;
       }
       .fiam-launcher-menu-label {
         color: var(--dsw-alias-label-secondary);
+        flex-shrink: 0;
+        white-space: nowrap;
       }
       .fiam-launcher-menu-value {
         font-weight: 500;
         color: var(--dsw-alias-label-primary);
         text-align: right;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -498,6 +606,7 @@ window.__ModuleLoader__.load({
         align-items: center;
         gap: 8px;
         width: 100%;
+        box-sizing: border-box;
         padding: 6px 8px;
         border: none;
         background: transparent;
@@ -506,6 +615,9 @@ window.__ModuleLoader__.load({
         font: var(--dsw-font-xs-13);
         cursor: pointer;
         text-align: left;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         transition: background-color 0.15s ease;
       }
       .fiam-launcher-menu-item:hover {
@@ -1047,9 +1159,10 @@ window.__ModuleLoader__.load({
       const isEnabled = Object.hasOwn(modelOptions, model.id);
       const isDefaultModel = view?.modelAccess?.defaultModelId === model.id;
 
-      return h('div', { key: model.id, className: 'fiam-model-item' },
+      return h('div', { key: model.id, className: `fiam-model-item${isExpanded ? ' fiam-model-item-expanded' : ''}` },
         h('div', { className: 'fiam-model-row' },
           h('div', { className: 'fiam-model-info' },
+            h('span', { className: `fiam-model-dot ${isEnabled ? 'fiam-model-dot-enabled' : 'fiam-model-dot-disabled'}` }),
             h('span', { className: 'fiam-model-name' }, displayName),
             displayName !== model.id ? h('span', { className: 'fiam-model-id' }, model.id) : null,
             h('span', { className: 'fiam-badge fiam-badge-idle' }, `${contextVal} · 输出 ${maxTokensVal}`),
@@ -1062,7 +1175,7 @@ window.__ModuleLoader__.load({
           ),
           h('button', {
             type: 'button',
-            style: { ...secondaryButton, minHeight: 26, padding: '0 8px', fontSize: 12, flexShrink: 0 },
+            style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 8px', fontSize: 12, flexShrink: 0 },
             'aria-expanded': isExpanded,
             'aria-label': `配置 ${model.id}`,
             onClick: () => toggleModelExpand(model.id),
@@ -1072,7 +1185,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'fiam-model-advanced' },
               h('div', { className: 'fiam-field-grid' },
                 h('label', { style: fieldLabel },
-                  h('span', { style: { fontWeight: 500, fontSize: 13 } }, '显示名称'),
+                  h('span', { className: 'fiam-field-title' }, '显示名称'),
                   h('input', {
                     type: 'text',
                     style: inputStyle,
@@ -1081,10 +1194,10 @@ window.__ModuleLoader__.load({
                     'aria-label': `显示名称 ${idx + 1}`,
                     onChange: (e) => updateOptionField(model.id, 'name', e.target.value),
                   }),
-                  h('span', { style: muted }, '留空时使用模型 ID'),
+                  h('span', { className: 'fiam-field-hint', style: muted }, '留空时使用模型 ID'),
                 ),
                 h('label', { style: fieldLabel },
-                  h('span', { style: { fontWeight: 500, fontSize: 13 } }, '上下文窗口 (Context Window)'),
+                  h('span', { className: 'fiam-field-title' }, '上下文窗口 (Context Window)'),
                   h('input', {
                     type: 'text',
                     style: inputStyle,
@@ -1093,11 +1206,11 @@ window.__ModuleLoader__.load({
                     'aria-label': `上下文窗口 ${idx + 1}`,
                     onChange: (e) => updateOptionField(model.id, 'contextWindow', e.target.value),
                   }),
-                  h('span', { style: contextInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 } : muted },
+                  h('span', { className: 'fiam-field-hint', style: contextInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
                     contextInvalid ? '请输入正整数或 K/M 容量值（如 128K、1M）' : '输入数字或 K/M，如 128K、256K、1M'),
                 ),
                 h('label', { style: fieldLabel },
-                  h('span', { style: { fontWeight: 500, fontSize: 13 } }, '最大输出 Token (Max Tokens)'),
+                  h('span', { className: 'fiam-field-title' }, '最大输出 Token (Max Tokens)'),
                   h('input', {
                     type: 'text',
                     style: inputStyle,
@@ -1106,12 +1219,12 @@ window.__ModuleLoader__.load({
                     'aria-label': `最大输出 Token ${idx + 1}`,
                     onChange: (e) => updateOptionField(model.id, 'maxTokens', e.target.value),
                   }),
-                  h('span', { style: maxTokensInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 } : muted },
+                  h('span', { className: 'fiam-field-hint', style: maxTokensInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
                     maxTokensInvalid ? '请输入正整数或 K/M 容量值（如 8K、32K）' : '留空使用网关默认上限；支持 8K、32K、64K'),
                 ),
               ),
               h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                h('span', { style: { fontWeight: 500, fontSize: 13 } }, '输入模态与能力'),
+                h('span', { className: 'fiam-field-section-title' }, '输入模态与能力'),
                 h('div', { className: 'fiam-checkbox-group' },
                   h('label', { className: 'fiam-checkbox-item' },
                     h('input', { type: 'checkbox', checked: true, disabled: true }),
@@ -1133,7 +1246,7 @@ window.__ModuleLoader__.load({
                 ),
               ),
               h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                h('span', { style: { fontWeight: 500, fontSize: 13 } }, '推理强度等级 (Reasoning Effort)'),
+                h('span', { className: 'fiam-field-section-title' }, '推理强度等级 (Reasoning Effort)'),
                 h('div', { className: 'fiam-reasoning-chips' },
                   ...['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'all'].map(level => {
                     const enabledKeys = opt.reasoningEfforts
@@ -1169,27 +1282,27 @@ window.__ModuleLoader__.load({
                     }, labelMap[level]);
                   })
                 ),
-                h('span', { style: muted }, '开启后在对话输入框可切换思考强度（适用于支持 reasoning_effort 的模型）'),
+                h('span', { className: 'fiam-field-hint', style: muted }, '开启后在对话输入框可切换思考强度（适用于支持 reasoning_effort 的模型）'),
               ),
-              h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 } },
+              h('div', { className: 'fiam-model-advanced-actions' },
                 hasCustom
                   ? h('button', {
                       type: 'button',
-                      style: { ...secondaryButton, minHeight: 26, fontSize: 12 },
+                      style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
                       onClick: () => resetModelOption(model.id),
                     }, '恢复默认参数')
                   : null,
                 isEnabled
                   ? h('button', {
                       type: 'button',
-                      style: { ...secondaryButton, minHeight: 26, fontSize: 12 },
+                      style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
                       'aria-label': `停用 ${model.id}`,
                       onClick: () => disableModelOption(model.id),
                     }, '停用模型')
                   : h('button', {
                       type: 'button',
                       className: 'forge-iam-primary',
-                      style: { ...primaryButton, minHeight: 26, fontSize: 12 },
+                      style: { ...primaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
                       'aria-label': `启用 ${model.id}`,
                       onClick: () => enableModelOption(model.id),
                     }, '启用模型')
