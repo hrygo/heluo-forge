@@ -84,6 +84,20 @@ async function mountPanel(fetch) {
   };
 }
 
+for (const [state, label] of [
+  ['configured', '已保存'],
+  ['unconfigured', '未保存'],
+  ['unknown', '状态未知'],
+  ['owner-mismatch', '属于其他账号，请核对记录'],
+  ['invalid', '记录不一致，已保留'],
+]) {
+  test(`account page reports credential state ${state} without guessing`, async (t) => {
+    const panel = await mountPanel(async () => Response.json({ ...ready, gatewayCredential: { state } }));
+    t.after(() => panel.close());
+    assert.ok(panel.text(panel.render()).includes(`UAG 个人凭证：${label}`));
+  });
+}
+
 test('a poll during sign-out cannot restore ready or start a duplicate sign-out', async (t) => {
   const post = deferred();
   let posts = 0;
@@ -95,7 +109,7 @@ test('a poll during sign-out cannot restore ready or start a duplicate sign-out'
   });
   t.after(() => { post.resolve(Response.json({ view: failed }, { status: 503 })); panel.close(); });
   let tree = panel.render();
-  assert.match(panel.text(tree), /UAG 个人凭证：已配置/);
+  assert.match(panel.text(tree), /UAG 个人凭证：已保存/);
   const button = panel.findButton(tree, '退出');
   assert.ok(button);
   const first = button.props.onClick();
@@ -105,15 +119,15 @@ test('a poll during sign-out cannot restore ready or start a duplicate sign-out'
   tree = panel.render();
   assert.doesNotMatch(panel.text(tree), /已登录|synthetic-user/);
   assert.match(panel.text(tree), /UAG 个人凭证：状态未知/);
-  assert.doesNotMatch(panel.text(tree), /UAG 个人凭证：未配置/);
+  assert.doesNotMatch(panel.text(tree), /UAG 个人凭证：未保存/);
   assert.equal(panel.findButton(tree, '刷新').props.disabled, true);
   assert.equal(panel.findButton(tree, '保存凭据').props.disabled, true);
   post.resolve(Response.json({ view: failed, error: { code: 'IAM_CREDENTIALS_CLEAR_FAILED' } }, { status: 503 }));
   await first;
   tree = panel.render();
   assert.doesNotMatch(panel.text(tree), /已登录|synthetic-user/);
-  assert.match(panel.text(tree), /本地凭据清理失败/);
-  assert.equal(panel.text(tree).split('本地凭据清理失败').length - 1, 1);
+  assert.match(panel.text(tree), /无法清除本设备的登录信息/);
+  assert.equal(panel.text(tree).split('无法清除本设备的登录信息').length - 1, 1);
 });
 
 test('an earlier manual refresh cannot overwrite a completed sign-out', async (t) => {
@@ -178,8 +192,8 @@ test('a failed remote revocation remains visible after local sign-out', async (t
   t.after(() => panel.close());
   await panel.findButton(panel.render(), '退出').props.onClick();
   const text = panel.text(panel.render());
-  assert.match(text, /本地已退出，但服务端撤销未确认/);
-  assert.equal(text.split('本地已退出，但服务端撤销未确认').length - 1, 1);
+  assert.match(text, /已在此设备退出，但无法确认服务器已撤销登录/);
+  assert.equal(text.split('已在此设备退出，但无法确认服务器已撤销登录').length - 1, 1);
   assert.doesNotMatch(text, /synthetic-user/);
 });
 
@@ -211,8 +225,8 @@ for (const outcome of ['503', '503-no-view', '403', 'network', 'success']) {
     tree = panel.render();
     assert.doesNotMatch(panel.text(tree), /已登录|synthetic-user/);
     assert.equal(panel.findButton(tree, '退出'), undefined);
-    if (outcome === '503') assert.match(panel.text(tree), /本地凭据清理失败/);
-    if (outcome === 'network') assert.match(panel.text(tree), /Host 不可达/);
+    if (outcome === '503') assert.match(panel.text(tree), /无法清除本设备的登录信息/);
+    if (outcome === 'network') assert.match(panel.text(tree), /无法连接服务/);
     assert.equal(panel.locations.length, 0);
     poll.resolve(Response.json(ready));
     await inFlight;

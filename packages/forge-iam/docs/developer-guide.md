@@ -78,6 +78,8 @@ public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 auth
 
 ## 实际接口
 
+跨模块与下游 CLI 读取「用户令牌 + 身份」的对外契约（存储内容、位置、获取方法与样例）单独成文：[FORGE-IAM 凭据接入指南](<credential-access.md>)。本节只列 Host 与 HTTP 的当前方法，不重复该契约。
+
 ### Host 服务
 
 [服务工厂](<../src/service.mjs>)为 `createIamService(config, options)`；插件将返回对象注册为 `ctx.iam`。以下均为现行接口，不是未来 Remote 定义。

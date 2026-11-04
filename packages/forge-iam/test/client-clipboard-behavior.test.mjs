@@ -48,13 +48,13 @@ test('diagnostic is a fixed scalar projection and excludes all private fields an
   const input = nodes(f.render()).find((node) => node.props['aria-label'] === 'UAG 个人凭证');
   input.props.onChange({ target: { value: secret } });
   const before = f.requests.length;
-  assert.equal(f.button('复制脱敏诊断').props.type, 'button');
-  await f.button('复制脱敏诊断').props.onClick();
+  assert.equal(f.button('复制问题信息').props.type, 'button');
+  await f.button('复制问题信息').props.onClick();
   assert.equal(f.requests.length, before);
   assert.equal(f.writes.length, 1);
   assert.doesNotMatch(f.writes[0], /synthetic-private|https:|principal|accessToken|deviceLabel|authorizationUrl/);
   assert.deepEqual(JSON.parse(f.writes[0]), { format: 'forge-iam-diagnostic', version: 1, pagePhase: 'ready', iamState: 'error', configured: true, signedIn: false, exclusive: 'ok', gatewayState: 'configured', errorCode: 'IAM_GRANT_CONTEXT_MISMATCH', missingConfigCount: 2 });
-  assert.match(f.text(f.render()), /页面快照/);
+  assert.match(f.text(f.render()), /复制时的状态/);
   assert.ok(nodes(f.render()).some((node) => node.props.role === 'status'));
 });
 
@@ -62,7 +62,7 @@ for (const phase of ['loading', 'error']) {
   test(`${phase} can copy an honest unknown diagnostic without a new request`, async (t) => {
     const gate = deferred();
     const f = await fixture(t, { fetchView: () => phase === 'loading' ? gate.promise : Promise.reject(new Error(secret)) });
-    await f.button('复制脱敏诊断').props.onClick();
+    await f.button('复制问题信息').props.onClick();
     const data = JSON.parse(f.writes[0]);
     assert.equal(data.pagePhase, phase);
     assert.equal(data.iamState, 'unknown');
@@ -76,7 +76,7 @@ for (const phase of ['loading', 'error']) {
 
 test('unexpected strings and non-boolean values do not escape diagnostic enums', async (t) => {
   const f = await fixture(t, { view: { ...signedOut, state: 'toString', configured: secret, signedIn: 1, exclusive: {}, error: `IAM_${secret}`, missing: secret, gatewayCredential: { state: '__proto__' } } });
-  await f.button('复制脱敏诊断').props.onClick();
+  await f.button('复制问题信息').props.onClick();
   const data = JSON.parse(f.writes[0]);
   assert.equal(data.iamState, 'unknown');
   assert.equal(data.gatewayState, 'unknown');
@@ -114,7 +114,7 @@ test('pending copy synchronously rejects duplicate handlers without blocking sig
   const b = f.button('复制登录链接');
   const pending = b.props.onClick();
   await b.props.onClick();
-  await f.button('复制脱敏诊断').props.onClick();
+  await f.button('复制问题信息').props.onClick();
   assert.equal(f.writes.length, 1);
   assert.equal(f.button('复制登录链接').props.disabled, true);
   await f.button('退出').props.onClick();
@@ -156,14 +156,14 @@ test('poll invalidates a link before render, suppresses its late acknowledgement
 
 test('new explicit login invalidates an older diagnostic acknowledgement', async (t) => {
   const gate = deferred(); const f = await fixture(t, { write: () => gate.promise });
-  const pending = f.button('复制脱敏诊断').props.onClick();
+  const pending = f.button('复制问题信息').props.onClick();
   await f.login(); gate.resolve(); await pending;
-  assert.doesNotMatch(f.text(f.render()), /诊断已复制/);
+  assert.doesNotMatch(f.text(f.render()), /问题信息已复制/);
 });
 
 test('local gateway recording does not claim live model integration', async (t) => {
   const f = await fixture(t, { view: { ...signedOut, gatewayCredential: { state: 'configured' } } });
-  assert.match(f.text(f.render()), /保存状态不证明模型调用已接通/);
+  assert.match(f.text(f.render()), /保存凭证不代表模型已连接或可用/);
   assert.doesNotMatch(f.text(f.render()), /模型调用使用该凭据|Key 不会进入 UI/);
 });
 
@@ -177,7 +177,7 @@ test('a URL returned with a non-authenticating view is not offered for copy', as
 test('clipboard accessor failures do not escape private exception contents', async (t) => {
   const navigator = { get clipboard() { throw new Error(secret); } };
   const f = await fixture(t, { navigator });
-  await f.button('复制脱敏诊断').props.onClick();
+  await f.button('复制问题信息').props.onClick();
   assert.match(f.text(f.render()), /未确认复制/);
   assert.doesNotMatch(f.text(f.render()), /synthetic-private/);
   assert.deepEqual(f.writes, []);
@@ -204,13 +204,13 @@ for (const outcome of ['success', 'failure']) {
 test('only an explicit second click retries after a browser rejection', async (t) => {
   let calls = 0;
   const f = await fixture(t, { write: () => ++calls === 1 ? Promise.reject(new Error(secret)) : Promise.resolve() });
-  await f.button('复制脱敏诊断').props.onClick();
+  await f.button('复制问题信息').props.onClick();
   await settle();
   assert.equal(calls, 1);
   assert.match(f.text(f.render()), /未确认复制/);
-  await f.button('复制脱敏诊断').props.onClick();
+  await f.button('复制问题信息').props.onClick();
   assert.equal(calls, 2);
-  assert.match(f.text(f.render()), /诊断已复制/);
+  assert.match(f.text(f.render()), /问题信息已复制/);
 });
 
 test('native clipboard receiver is retained and clipboard is never read', async (t) => {
@@ -220,14 +220,14 @@ test('native clipboard receiver is retained and clipboard is never read', async 
     writeText(text) { assert.equal(this, clipboard); values.push(text); return Promise.resolve(); },
   };
   const f = await fixture(t, { navigator: { clipboard } });
-  await f.button('复制脱敏诊断').props.onClick();
+  await f.button('复制问题信息').props.onClick();
   assert.equal(values.length, 1);
   assert.equal(JSON.parse(values[0]).format, 'forge-iam-diagnostic');
 });
 
 test('an arbitrary exclusive reason is reduced to a constant, not exported', async (t) => {
   const f = await fixture(t, { view: { ...signedOut, exclusive: secret } });
-  await f.button('复制脱敏诊断').props.onClick();
+  await f.button('复制问题信息').props.onClick();
   assert.equal(JSON.parse(f.writes[0]).exclusive, 'not-ok');
   assert.doesNotMatch(f.writes[0], /synthetic-private/);
 });

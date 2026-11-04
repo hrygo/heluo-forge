@@ -6,13 +6,14 @@ const signedOut = { state: 'signed-out', canSignIn: true };
 const ready = { state: 'ready', gatewayCredential: { state: 'unconfigured' } };
 const nodes = (node) => node && typeof node === 'object' ? [node, ...(node.children ?? []).flatMap(nodes)] : [];
 
-async function onboarding(t) {
+async function onboarding(t, { save, loginView = ready } = {}) {
   const writes = [];
   const panel = await mountPanel(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(signedOut);
-    if (path === '/api/forge-iam/sign-in') return Response.json({ view: ready });
+    if (path === '/api/forge-iam/sign-in') return Response.json({ view: loginView });
     if (path === '/api/forge-iam/credential') {
       writes.push(JSON.parse(init.body));
+      if (save) return save();
       return Response.json({ view: { ...ready, gatewayCredential: { state: 'configured' } } });
     }
     throw new Error(`unexpected request: ${path}`);
@@ -25,7 +26,7 @@ async function onboarding(t) {
   };
   button('开始').props.onClick();
   await button('登录').props.onClick();
-  assert.match(panel.text(panel.render()), /配置模型网关凭据/);
+  assert.match(panel.text(panel.render()), /添加 UAG 个人凭证/);
   return { panel, button, writes };
 }
 
@@ -36,6 +37,34 @@ test('onboarding displays required credential feedback before any input', async 
   assert.equal(writes.length, 0);
 });
 
+for (const [gatewayState, notice] of [
+  ['unknown', /无法确认凭证是否已保存/],
+  ['owner-mismatch', /凭证属于其他账号/],
+  ['invalid', /凭证信息需要检查/],
+]) {
+  test(`skipping preserves an honest ${gatewayState} credential state`, async (t) => {
+    const { panel, button, writes } = await onboarding(t, {
+      loginView: { ...ready, gatewayCredential: { state: gatewayState } },
+    });
+    button('稍后配置').props.onClick();
+    const text = panel.text(panel.render());
+    assert.match(text, notice);
+    assert.doesNotMatch(text, /尚未保存|个人凭证已保存/);
+    assert.equal(writes.length, 0);
+  });
+}
+
+test('skipping the credential explains the remaining step and where to return', async (t) => {
+  const { panel, button, writes } = await onboarding(t);
+  button('稍后配置').props.onClick();
+  const text = panel.text(panel.render());
+  assert.match(text, /登录完成，尚未配置凭据/);
+  assert.match(text, /模型暂不可用/);
+  assert.match(text, /UAG 个人凭证尚未保存/);
+  assert.match(text, /设置 → 企业账号/);
+  assert.equal(writes.length, 0);
+});
+
 test('onboarding saves a credential without an optional device label', async (t) => {
   const { panel, button, writes } = await onboarding(t);
   const input = nodes(panel.render()).find((node) => node.props['aria-label'] === 'UAG 个人凭证');
@@ -43,5 +72,27 @@ test('onboarding saves a credential without an optional device label', async (t)
   await button('保存并继续').props.onClick();
   assert.equal(writes.length, 1);
   assert.equal(writes[0].deviceLabel, '');
+  assert.match(panel.text(panel.render()), /准备就绪/);
+  assert.match(panel.text(panel.render()), /UAG 个人凭证已保存/);
+  assert.doesNotMatch(panel.text(panel.render()), /uag-00000000000000000000000000000000/);
+});
+
+test('a pending credential save cannot be repeated or skipped', async (t) => {
+  const pending = Promise.withResolvers();
+  const { panel, button, writes } = await onboarding(t, { save: () => pending.promise });
+  t.after(() => pending.resolve(Response.json({ view: ready })));
+  const input = nodes(panel.render()).find((node) => node.props['aria-label'] === 'UAG 个人凭证');
+  input.props.onChange({ target: { value: 'uag-00000000000000000000000000000000' } });
+  const originalSave = button('保存并继续');
+  const originalSkip = button('稍后配置');
+  const saving = originalSave.props.onClick();
+  const duplicate = originalSave.props.onClick();
+  originalSkip.props.onClick();
+  assert.equal(writes.length, 1);
+  assert.equal(button('正在保存…').props.disabled, true);
+  assert.equal(button('稍后配置').props.disabled, true);
+  assert.match(panel.text(panel.render()), /添加 UAG 个人凭证/);
+  pending.resolve(Response.json({ view: { ...ready, gatewayCredential: { state: 'configured' } } }));
+  await Promise.all([saving, duplicate]);
   assert.match(panel.text(panel.render()), /准备就绪/);
 });
