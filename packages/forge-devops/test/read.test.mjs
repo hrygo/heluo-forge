@@ -12,6 +12,7 @@ import {
 } from '../src/index.mjs';
 import { READER_KEY } from '../src/index.mjs';
 import { READ_ROUTES, projectFacts } from '../src/read.mjs';
+import { withoutDiscoveredCli } from './support/env-isolation.mjs';
 
 /** 最小宿主替身：只提供本包用到的 get/provide/effect。 */
 function host({ policy = { value: admitAllPolicy() }, reader } = {}) {
@@ -66,11 +67,13 @@ test('缺目标被拒绝，且不触碰适配器', async () => {
   assert.equal(calls, 0);
 });
 
-test('没有适配器时 fail closed：可见状态为 no-reader，读取拒绝而不是返回空结果', async () => {
-  const { service } = mount();
-  assert.equal(service.status(), 'no-reader');
-  await assert.rejects(() => service.read({ action: 'change.read', target: 'C-1' }), { code: READ_REASONS.NO_READER });
-});
+test('没有适配器时 fail closed：可见状态为 no-reader，读取拒绝而不是返回空结果', () =>
+  withoutDiscoveredCli(async () => {
+    // 隔离宿主 PATH：本机装了 dop 时，"未配置"要由本用例自己造，而不是碰运气。
+    const { service } = mount();
+    assert.equal(service.status(), 'no-reader');
+    await assert.rejects(() => service.read({ action: 'change.read', target: 'C-1' }), { code: READ_REASONS.NO_READER });
+  }));
 
 test('只给退出码的适配器不算成功：降级为 unknown 并给出 NO_STRUCTURED_STATUS', () => {
   const normalized = normalizeReadResult({

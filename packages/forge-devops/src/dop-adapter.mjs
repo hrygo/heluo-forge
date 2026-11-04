@@ -238,22 +238,35 @@ export function createDopAdapter({
     };
   }
 
-  /** 写后回读：`change view --json` 的平台记录里，三个字段落在哪里（字段缺失按 absent）。 */
+  /**
+   * 写后回读：`change view --json` 的平台记录里，三个字段落在哪里（字段缺失按 absent）。
+   *
+   * `--ai-ac` 的落点没有企业样本：mock CLI 1.0.4 上实测写在变更级 `aiAcceptanceCriteria`，UAT 形状则塞进
+   * 故事 `storyAC`。两处都认（变更级优先），并用 `aiAc_source` 说明这次按哪一处判定——只认故事一处
+   * 会让每一次成功的写回都被判成 `mismatch`（写进去了也报 unknown）。
+   */
   function readbackOf(raw, fields) {
     const value = (input) => (typeof input === 'string' ? input.trim() : '');
-    const storyAc = value(asObject(raw?.userStory).storyAC);
+    const story = Array.isArray(raw?.userStory) ? asObject(raw.userStory[0]) : asObject(raw?.userStory);
+    const aiAcCandidates = [
+      { source: 'ai_acceptance_criteria', actual: value(raw?.aiAcceptanceCriteria) },
+      { source: 'user_story.storyAC', actual: value(story.storyAC) },
+    ].filter((entry) => entry.actual !== '');
+    const aiAc = aiAcCandidates[0] ?? { source: null, actual: '' };
     const state = (expected, actual, { contains = false } = {}) => {
       if (expected === '') return 'skipped';
       if (actual === '') return 'absent';
       if (actual === expected) return 'match';
-      // `--ai-ac` 写进故事的 storyAC（平台可能用 HTML 包裹），包含即视为已写入；
-      // 这只用于"回读是否可见"，不改变写入内容。
+      // `--ai-ac` 平台可能用 HTML 包裹，包含即视为已写入；这只用于"回读是否可见"，不改变写入内容。
       return contains && actual.includes(expected) ? 'match' : 'mismatch';
     };
     return {
-      summary: state(fields.summary, value(raw?.summary)),
-      description: state(fields.description, value(raw?.description)),
-      aiAc: state(fields.aiAc, storyAc, { contains: true }),
+      states: {
+        summary: state(fields.summary, value(raw?.summary)),
+        description: state(fields.description, value(raw?.description)),
+        aiAc: state(fields.aiAc, aiAc.actual, { contains: true }),
+      },
+      aiAcSource: aiAc.source,
     };
   }
 
@@ -314,10 +327,11 @@ export function createDopAdapter({
       let readbackError = null;
       try {
         const read = await readChangeOf({ changeId: id });
-        const states = readbackOf(read.raw, fields);
+        const { states, aiAcSource } = readbackOf(read.raw, fields);
         readback = {
           ok: Object.values(states).every((state) => state === 'match' || state === 'skipped'),
           fields: states,
+          aiAc_source: aiAcSource,
           source_revision: read.source_revision,
           observed_at: read.observed_at,
         };

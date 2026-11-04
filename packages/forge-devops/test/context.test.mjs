@@ -27,6 +27,13 @@ const AT = '2026-10-28T10:00:00+08:00';
  */
 const NATIVE_FIXTURE = JSON.parse(readFileSync(new URL('./fixtures/dop-change-native.json', import.meta.url), 'utf8'));
 
+/**
+ * 1.0.4 实测形状夹具：`changeType`/`created`/`subSystems{name,description}`/`assignee`/
+ * `ReleaseInfo{name,stage}`/`storyAC`（富文本），字段名取自 `docs/contracts/dop-cli-spec.md` 并已脱敏，
+ * **非企业环境导出**，取证只能记 `sourceType: 'mock'`。
+ */
+const SPEC_FIXTURE = JSON.parse(readFileSync(new URL('./fixtures/dop-change-spec-v1.json', import.meta.url), 'utf8'));
+
 /** 夹具内联：dop 输出夹具归 T2 所有（`test/fixtures/`），这里只放本模块要吃的契约样本。 */
 const ARD123456 = {
   id: 'ARD123456',
@@ -267,8 +274,21 @@ test('可选字段缺失进 missingFields（"平台没给"和"我们没读"分�
   assert.deepEqual(change.missingFields, ['type', 'owner', 'created_at', 'sub_systems', 'user_stories']);
 });
 
-test('原生字段别名只有一张表（code/state/summary/userStory），且契约键优先', () => {
-  assert.deepEqual({ ...NATIVE_ALIASES }, { code: 'id', state: 'status', summary: 'description', userStory: 'user_stories' });
+test('原生字段别名只有一张表，且契约键优先', () => {
+  assert.deepEqual(
+    { ...NATIVE_ALIASES },
+    {
+      code: 'id',
+      state: 'status',
+      summary: 'description',
+      userStory: 'user_stories',
+      changeType: 'type',
+      created: 'created_at',
+      subSystems: 'sub_systems',
+      ReleaseInfo: 'release_info',
+    },
+    '只收 UAT 四键 + 1.0.4 实测四键；未取证的改名不进表',
+  );
 
   const mixed = aliasChangeRecord({
     code: 'ARD123456',
@@ -315,6 +335,121 @@ test('原生夹具归一（mock 形状）：变更内容、单对象 userStory �
   assert.ok(rendered.includes('R20260706001'));
   // 仓库侧没给只阻断写动作，业务侧事实照常展示。
   assert.equal(card.status, 'blocked');
+});
+
+test('1.0.4 实测形状归一：changeType/created/subSystems/ReleaseInfo/storyAC 都读得到', () => {
+  const change = normalizeChangeRecord(SPEC_FIXTURE, { at: AT, sourceType: 'mock' });
+
+  assert.equal(change.changeId, 'ARD900001');
+  assert.equal(change.type, '代码开发', 'changeType 是类型，不该被判成"平台没给"');
+  assert.equal(change.createdAt, '2026-11-01 09:20:11', 'created 是创建时间');
+  assert.equal(change.owner, '示例用户', '没有 owner 时由 assignee 兜负责人');
+  assert.deepEqual(
+    change.subSystems,
+    [
+      { code: 'SYS.example-sdk', name: '示例研发平台.示例套件' },
+      { code: 'SYS.example-gateway', name: '示例研发平台.示例网关' },
+    ],
+    '子系统项 {name, description} 归一成 {code, name}',
+  );
+  assert.deepEqual(change.acceptanceCriteria, [
+    { index: 1, text: '重复回调 10 次仅入账 1 次；' },
+    { index: 2, text: '幂等键缺失时拒绝入账并告警。' },
+    { index: 3, text: '对账任务可补偿漏单。' },
+  ], 'storyAC 的富文本按块级分隔切条');
+  assert.equal(change.acceptanceCriteriaSource, 'story_ac');
+  assert.equal(change.releaseInfo.storyId, 'US-900001');
+  assert.equal(change.releaseInfo.value.releaseNum, 'R20261101001');
+  assert.equal(change.releaseInfo.value.releaseName, '示例：回调幂等改造发布', 'ReleaseInfo.name 是发布名');
+  assert.equal(change.releaseInfo.value.releaseStage, '已审批', 'ReleaseInfo.stage 是发布阶段');
+  assert.deepEqual(change.missingFields, [], '审计字段齐全时不应有任何"平台没给"');
+});
+
+test('卡片不再谎称"平台未给"：验收条件带来源标注，承建系统与排期照常展示', () => {
+  const change = normalizeChangeRecord(SPEC_FIXTURE, { at: AT, sourceType: 'mock' });
+  const card = buildContextCard({ change, building: buildingBlocked(), sources: [] });
+  const rendered = renderContextCard(card);
+
+  assert.ok(!rendered.includes('平台未提供 `acceptance_criteria`'), '平台提供了验收条件，不得写成未提供');
+  assert.ok(!rendered.includes('平台未给 `sub_systems`'), '平台给了子系统，不得写成未给');
+  assert.ok(!rendered.includes('所有故事的 `release_info` 均为空'), '平台给了排期，不得写成全空');
+  assert.ok(rendered.includes('来源：故事 `userStory.storyAC`'), '验收条件要标来源');
+  assert.ok(rendered.includes('SYS.example-sdk'));
+  assert.ok(rendered.includes('示例研发平台.示例套件'));
+  assert.ok(rendered.includes('R20261101001'));
+});
+
+test('验收条件三个落点：契约字段 → 故事 storyAC → 平台回写的 aiAcceptanceCriteria', () => {
+  const base = { id: 'ARD1', title: '标题', status: 'open', description: '描述' };
+
+  const contract = normalizeChangeRecord({ ...base, acceptance_criteria: ['契约条目'], aiAcceptanceCriteria: '<p>AI 条目</p>' });
+  assert.deepEqual(contract.acceptanceCriteria.map((item) => item.text), ['契约条目']);
+  assert.equal(contract.acceptanceCriteriaSource, 'contract', '契约字段优先');
+
+  const story = normalizeChangeRecord({ ...base, userStory: { storyAC: '<p>故事条目</p>' }, aiAcceptanceCriteria: '<p>AI 条目</p>' });
+  assert.deepEqual(story.acceptanceCriteria.map((item) => item.text), ['故事条目']);
+  assert.equal(story.acceptanceCriteriaSource, 'story_ac', '平台的原始验收条件优先于 AI 回写');
+
+  const ai = normalizeChangeRecord({ ...base, aiAcceptanceCriteria: '<p>AI 条目一</p><p>AI 条目二</p>' });
+  assert.deepEqual(ai.acceptanceCriteria.map((item) => item.text), ['AI 条目一', 'AI 条目二']);
+  assert.equal(ai.acceptanceCriteriaSource, 'ai_ac');
+
+  const none = normalizeChangeRecord(base);
+  assert.deepEqual(none.acceptanceCriteria, []);
+  assert.equal(none.acceptanceCriteriaSource, null);
+  assert.ok(none.missingFields.includes('acceptance_criteria'));
+
+});
+
+test('只有小标题的行不算验收条件（`详细规则：` 这类）', () => {
+  const base = { id: 'ARD1', title: '标题', status: 'open', description: '描述' };
+
+  // 真实 storyAC 常写成「小标题：+ 正文」，小标题不该占一个验收条件编号。
+  const mixed = normalizeChangeRecord({ ...base, userStory: { storyAC: '<p>详细规则：<br/>先退后付；</p><p>Rules:<br/>idempotent;</p>' } });
+  assert.deepEqual(mixed.acceptanceCriteria, [
+    { index: 1, text: '先退后付；' },
+    { index: 2, text: 'idempotent;' },
+  ], '中英文冒号结尾的小标题都丢掉，正文按原顺序重新编号');
+
+  // 只有小标题时等于"平台没给验收条件"：宁可留空，也不把一句空话编成第 1 条。
+  const onlyLabel = normalizeChangeRecord({ ...base, userStory: { storyAC: '<p>详细规则：<br/></p>' } });
+  assert.deepEqual(onlyLabel.acceptanceCriteria, []);
+  assert.equal(onlyLabel.acceptanceCriteriaSource, null);
+  assert.ok(onlyLabel.missingFields.includes('acceptance_criteria'));
+});
+
+test('平台回写的 AI 验收标准单独展示，不顶替平台原始验收条件', () => {
+  const base = { id: 'ARD1', title: '标题', status: 'open', description: '描述' };
+  const change = normalizeChangeRecord({
+    ...base,
+    userStory: { storyAC: '<p>平台条目</p>' },
+    aiAcceptanceCriteria: '<p>AI 条目一</p><p>AI 条目二</p>',
+  });
+
+  assert.equal(change.aiAcceptanceCriteria, 'AI 条目一\nAI 条目二', 'AI 验收标准保留原文（按行）');
+  assert.deepEqual(change.acceptanceCriteria.map((item) => item.text), ['平台条目'], '平台原始验收条件优先');
+  assert.equal(change.acceptanceCriteriaSource, 'story_ac');
+
+  const card = buildContextCard({ change, building: buildingBlocked(), sources: [] });
+  const rendered = renderContextCard(card);
+  assert.ok(rendered.includes('1. 平台条目'));
+  assert.ok(rendered.includes('AI 验收标准，平台已回写，供复核：AI 条目一 AI 条目二'), '卡片上要能看见上一次分析写了什么');
+
+  // 平台没有原始验收条件时，AI 回写就是唯一来源：不再重复一行"AI 验收标准"。
+  const aiOnly = normalizeChangeRecord({ ...base, aiAcceptanceCriteria: '<p>AI 条目</p>' });
+  const aiOnlyText = renderContextCard(buildContextCard({ change: aiOnly, building: buildingBlocked(), sources: [] }));
+  assert.ok(aiOnlyText.includes('来源：平台回写的 `aiAcceptanceCriteria`'));
+  assert.ok(!aiOnlyText.includes('AI 验收标准，平台已回写，供复核'), '同一内容不重复展示');
+});
+
+test('负责人三级兜底：owner → assignee → createUser → manager', () => {
+  const base = { id: 'ARD1', title: '标题', status: 'open' };
+  assert.equal(normalizeChangeRecord({ ...base, owner: '契约负责人', assignee: { name: '负责人甲' } }).owner, '契约负责人');
+  assert.equal(normalizeChangeRecord({ ...base, assignee: { name: '负责人甲' } }).owner, '负责人甲');
+  assert.equal(normalizeChangeRecord({ ...base, createUser: { name: '创建人乙' } }).owner, '创建人乙');
+  assert.equal(normalizeChangeRecord({ ...base, manager: { name: '经理丙' } }).owner, '经理丙');
+  assert.equal(normalizeChangeRecord(base).owner, '');
+  assert.ok(normalizeChangeRecord(base).missingFields.includes('owner'));
 });
 
 test('原生命名也不放松：缺 code 且缺 id、id 与 code 不一致都显式拒绝', () => {

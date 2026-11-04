@@ -376,6 +376,36 @@ test('updateChange：argv 固定为 change update <id> + 三个字段 flag，不
   assert.match(runner.calls[1].args.join(' '), /change view ARD123456 --json/u, '写后必须回读');
   assert.equal(result.status, 'done', '退出码 0 + 回读一致才算 done');
   assert.deepEqual(result.readback.fields, { summary: 'match', description: 'match', aiAc: 'match' });
+  assert.equal(result.readback.aiAc_source, 'user_story.storyAC', 'UAT 形状：ai-ac 落在故事 storyAC');
+  assert.equal(result.retry_policy, 'none');
+});
+
+test('updateChange：--ai-ac 落在变更级 aiAcceptanceCriteria 也算写入成功（1.0.4 实测落点）', async () => {
+  // 1.0.4 的 `change update --ai-ac` 写变更级 `aiAcceptanceCriteria`，故事上的 storyAC 保持原样；
+  // 只认故事一处会把这种成功写回判成 mismatch（写进去了也报 unknown）。
+  const readback = JSON.stringify({
+    summary: '优化启动性能',
+    description: '补齐启动链路的重试',
+    aiAcceptanceCriteria: '启动耗时下降 30%',
+    userStory: { storyAC: '<p>平台原有的验收条件</p>' },
+  });
+  const runner = updateRunner([{ exitCode: 0 }, { exitCode: 0, stdout: readback }]);
+  const result = await adapterWith(runner).updateChange({ changeId: 'ARD123456', aiAc: '启动耗时下降 30%' });
+
+  assert.equal(result.status, 'done');
+  assert.equal(result.readback.fields.aiAc, 'match');
+  assert.equal(result.readback.aiAc_source, 'ai_acceptance_criteria');
+});
+
+test('updateChange：两处都没有 ai-ac 落点 → absent（仍判 unknown，不重放）', async () => {
+  const readback = JSON.stringify({ summary: '优化启动性能', description: '', userStory: {} });
+  const runner = updateRunner([{ exitCode: 0 }, { exitCode: 0, stdout: readback }]);
+  const result = await adapterWith(runner).updateChange({ changeId: 'ARD123456', aiAc: '启动耗时下降 30%' });
+
+  assert.equal(result.readback.fields.aiAc, 'absent');
+  assert.equal(result.readback.aiAc_source, null);
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.may_have_side_effect, true);
   assert.equal(result.retry_policy, 'none');
 });
 
