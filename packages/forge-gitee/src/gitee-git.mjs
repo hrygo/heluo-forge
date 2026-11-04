@@ -13,6 +13,7 @@
  */
 
 import { GITEE_ACTIONS, ACTION_REASONS, settleActionVerdict } from './gitee-actions.mjs';
+import { REPO_PATTERN } from './gitee-adapter.mjs';
 import { buildEvidence } from './gitee-session.mjs';
 import { assertCommitMessage, CommitMessageError } from './git-message.mjs';
 
@@ -69,8 +70,9 @@ const PURPOSE_OF = Object.freeze({
 const BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/u;
 const REMOTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u;
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u;
-// 与 `gitee-actions` 的仓库引用同形（owner/name）；权威的 target 归一仍在动作层，这里只做入参快速拒绝。
-const REPO_TARGET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+// 仓库形状取自适配器的唯一真源（允许嵌套命名空间：实测企业仓库是 `osc/ard/ard-sdk`）；
+// 权威的 target 归一仍在动作层，这里只做入参快速拒绝。
+const REPO_TARGET_PATTERN = REPO_PATTERN;
 
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -196,11 +198,17 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
   const root = cwd;
   const clock = now;
 
-  async function run(verb, params) {
+  /**
+   * `into` 是**这一次调用**的仓库目录（由调用方给出会话工作目录），省略则回落到装配期目录。
+   * 宿主进程自己的 cwd 是启动目录（npx、快捷方式、家目录都可能），拿它当仓库会指向错误目标；
+   * 所以每次调用都允许覆盖，取不到才用装配期值兜底。
+   */
+  async function run(verb, params, into = root) {
     const { argv, purpose } = assertGitArgv(verb, params);
+    const dir = typeof into === 'string' && into.trim() !== '' ? into : root;
     let outcome;
     try {
-      outcome = await runner.runGit({ args: argv, purpose, cwd: root });
+      outcome = await runner.runGit({ args: argv, purpose, cwd: dir });
     } catch (error) {
       // 唯一出口在真正启动子进程前抛错：没有副作用，可以记 failed。
       throw new GiteeGitError(`git ${verb} 未能启动：${describeError(error)}`, {
@@ -224,16 +232,18 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
       });
     }
     if (exitCode !== 0) {
+      // 把实际目录写进失败说明：`not a git repository` 这类错误的根因几乎都是「跑错了目录」，
+      // 不写出来就只能靠猜。
       throw new GiteeGitError(
-        `git ${verb} 失败（exit ${exitCode === null ? '未知' : exitCode}）：${clip(stderr || stdout) || '无输出'}`,
-        { reason: GIT_REASONS.COMMAND_FAILED, detail: { exitCode, mayHaveSideEffect: false } },
+        `git ${verb} 在 ${dir} 失败（exit ${exitCode === null ? '未知' : exitCode}）：${clip(stderr || stdout) || '无输出'}`,
+        { reason: GIT_REASONS.COMMAND_FAILED, detail: { exitCode, cwd: dir, mayHaveSideEffect: false } },
       );
     }
     return Object.freeze({ exitCode, stdout, stderr, timedOut: false, truncated: outcome.truncated === true });
   }
 
-  async function head() {
-    const outcome = await run('head', {});
+  async function head(into) {
+    const outcome = await run('head', {}, into);
     const sha = (outcome.stdout.split(/\r?\n/u).find((line) => line.trim() !== '') ?? '').trim().toLowerCase();
     if (!SHA_PATTERN.test(sha)) {
       throw new GiteeGitError(`git rev-parse HEAD 的输出不是 sha：${clip(sha) || '（空）'}`, {
@@ -244,22 +254,22 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
     return Object.freeze({ sha });
   }
 
-  async function branch() {
-    const outcome = await run('branch', {});
+  async function branch(into) {
+    const outcome = await run('branch', {}, into);
     const name = (outcome.stdout.split(/\r?\n/u).find((line) => line.trim() !== '') ?? '').trim();
     // 分离头指针时 `--show-current` 输出为空：这不是失败，交给调用方决定怎么表达。
     return Object.freeze({ branch: name });
   }
 
-  async function commit({ changeId, message } = {}) {
+  async function commit({ changeId, message, cwd } = {}) {
     // 适配器自己也校验一次（纵深防御）：即使工具层被绕过，也不会把不合规的提交写进历史。
     const verified = assertCommitMessage({ changeId, message });
-    await run('commit', { message });
+    await run('commit', { message }, cwd);
     let sha;
     let branchName;
     try {
-      sha = (await head()).sha;
-      branchName = (await branch()).branch;
+      sha = (await head(cwd)).sha;
+      branchName = (await branch(cwd)).branch;
     } catch (error) {
       // 提交已经发生，只是回读失败：如实标记「可能已落地」，让工具层转人工核对而不是重放。
       throw new GiteeGitError(`提交已执行，但回读 HEAD 失败：${describeError(error)}`, {
@@ -282,10 +292,10 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
     });
   }
 
-  async function push({ remote = 'origin', branch: branchName } = {}) {
+  async function push({ remote = 'origin', branch: branchName, cwd } = {}) {
     const remoteName = assertRemote(remote);
     const targetBranch = assertBranch(branchName);
-    await run('push', { remote: remoteName, branch: targetBranch });
+    await run('push', { remote: remoteName, branch: targetBranch }, cwd);
     return Object.freeze({ ok: true, remote: remoteName, branch: targetBranch });
   }
 
@@ -396,7 +406,7 @@ export function createGitCommit() {
   const spec = Object.freeze({ tool: GITEE_GIT_TOOLS.COMMIT, action: GIT_COMMIT_ACTION });
   return Object.freeze({
     ...spec,
-    async run(args = {}, service) {
+    async run(args = {}, service, cwd) {
       const input = isPlainObject(args) ? args : {};
       const unknown = assertKnownArguments(input, ['changeId', 'message']);
       if (unknown !== '') return denyGit(spec, ACTION_REASONS.INVALID_ARGUMENT, unknown);
@@ -418,7 +428,7 @@ export function createGitCommit() {
         );
       }
       try {
-        const result = await gitPort(service).commit({ changeId: verified.changeId, message: input.message });
+        const result = await gitPort(service).commit({ changeId: verified.changeId, message: input.message, cwd });
         return settleActionVerdict(
           spec,
           {
@@ -459,7 +469,7 @@ export function createGitPush() {
   const spec = Object.freeze({ tool: GITEE_GIT_TOOLS.PUSH, action: GITEE_ACTIONS.GIT_PUSH });
   return Object.freeze({
     ...spec,
-    async run(args = {}, service) {
+    async run(args = {}, service, cwd) {
       const input = isPlainObject(args) ? args : {};
       const unknown = assertKnownArguments(input, ['target', 'branch', 'remote', 'changeId', 'confirm']);
       if (unknown !== '') return denyGit(spec, ACTION_REASONS.INVALID_ARGUMENT, unknown);
@@ -494,7 +504,7 @@ export function createGitPush() {
             arguments: { target, remote, branch, change: text(input.changeId) || null, op: 'push' },
             run: async () => {
               try {
-                const result = await gitPort(service).push({ remote, branch });
+                const result = await gitPort(service).push({ remote, branch, cwd });
                 return {
                   status: 'done',
                   target,
@@ -535,9 +545,19 @@ export function createGitPush() {
  * 两个 git 工具的定义（顺序：commit → push）。输出与既有写工具同形：
  * `{schema:'object', render}` + 一段 JSON 文本，模型按同一套形状读结果。
  */
-export function gitToolDefinitions(service) {
+export function gitToolDefinitions(service, resolveCwd = async () => undefined) {
   const commit = createGitCommit();
   const push = createGitPush();
+  // 目录每次现算、不缓存：同一宿主里不同会话的仓库目录不同。
+  const cwdFor = async (exec) => {
+    try {
+      const dir = await resolveCwd(exec);
+      return typeof dir === 'string' && dir.trim() !== '' ? dir : undefined;
+    } catch {
+      // 解析目录失败不该让工具直接崩：退回装配期目录，由 git 自己的报错说明问题。
+      return undefined;
+    }
+  };
   return [
     {
       name: commit.tool,
@@ -560,7 +580,7 @@ export function gitToolDefinitions(service) {
         additionalProperties: false,
       },
       output: TOOL_OUTPUT,
-      execute: async (args) => json(await commit.run(args ?? {}, service)),
+      execute: async (args, exec) => json(await commit.run(args ?? {}, service, await cwdFor(exec))),
     },
     {
       name: push.tool,
@@ -570,7 +590,7 @@ export function gitToolDefinitions(service) {
       parameters: {
         type: 'object',
         properties: {
-          target: { type: 'string', description: '目标仓库 owner/name（不含 #编号）。' },
+          target: { type: 'string', description: '目标仓库 命名空间/仓库（支持嵌套组，如 osc/ard/ard-sdk；不含 #编号）。' },
           branch: { type: 'string', description: '要推送的本地分支名。' },
           remote: { type: 'string', description: '远端名，默认 origin。' },
           changeId: { type: 'string', description: '关联变更号（可选，用于证据与台账关联）。' },
@@ -588,7 +608,7 @@ export function gitToolDefinitions(service) {
         additionalProperties: false,
       },
       output: TOOL_OUTPUT,
-      execute: async (args) => json(await push.run(args ?? {}, service)),
+      execute: async (args, exec) => json(await push.run(args ?? {}, service, await cwdFor(exec))),
     },
   ];
 }

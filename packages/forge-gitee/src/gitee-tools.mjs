@@ -195,11 +195,12 @@ function collect(factory, service, tool) {
  * @param {object} service 装配层端口
  * @returns {object[]} 10 个 `ToolDefinition`，顺序同 `GITEE_TOOLS`
  */
-export function buildGiteeTools(service) {
+export function buildGiteeTools(service, options = {}) {
+  const resolveGitCwd = typeof options?.resolveGitCwd === 'function' ? options.resolveGitCwd : undefined;
   const collected = [
     ...collect(readToolDefinitions, service, '只读'),
     ...collect(writeToolDefinitions, service, '受控动作'),
-    ...collect(gitToolDefinitions, service, 'git'),
+    ...collect((port) => gitToolDefinitions(port, resolveGitCwd), service, 'git'),
   ];
 
   const byName = new Map();

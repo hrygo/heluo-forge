@@ -68,7 +68,7 @@ export const READ_REASONS = Object.freeze({
   SPAWN_FAILED: 'SPAWN_FAILED',
   /** 退出码非 0。 */
   NONZERO_EXIT: 'NONZERO_EXIT',
-  /** CLI 不认识 `--json` 字段（F1 未验的收缩点）。 */
+  /** CLI 自报"字段/开关不认识"（实测 `--json` 是无值开关，不会再传字段清单，这条只兜底 CLI 自身错误）。 */
   UNSUPPORTED_FIELD: 'UNSUPPORTED_FIELD',
   /** 参数不在声明白名单里（`list`/`state`/`limit`/`json` 之外）。 */
   ARG_NOT_WHITELISTED: 'ARG_NOT_WHITELISTED',
@@ -76,7 +76,7 @@ export const READ_REASONS = Object.freeze({
   ARG_INVALID: 'ARG_INVALID',
   /** 必填参数缺失（写动作才有；读动作保留同名原因以统一消费）。 */
   ARG_MISSING: 'ARG_MISSING',
-  /** `--json` 请求了未声明的字段。 */
+  /** `json` 投影选择里出现未声明的字段名（投影只认声明集，越界零子进程）。 */
   JSON_FIELD_NOT_DECLARED: 'JSON_FIELD_NOT_DECLARED',
   /** argv 里出现禁项（纵深防御，正常路径拼不出来）。 */
   FORBIDDEN_ARGV: 'FORBIDDEN_ARGV',
@@ -310,6 +310,9 @@ function payloadOf(facts) {
   if (isPlainObject(facts.object)) payload.object = facts.object;
   if (Array.isArray(facts.items)) payload.items = Object.freeze([...facts.items]);
   if (Number.isInteger(facts.count)) payload.count = facts.count;
+  // CLI 的 `meta.total_count`：清单被 `--limit` 截住时说明"总共有多少条"，是附加事实而不是
+  // 缺失字段——它没进 `missing_fields`，也不会在取不到时出现（宁缺不编）。
+  if (Number.isInteger(facts.total_count)) payload.total_count = facts.total_count;
   if (facts.truncated === true) payload.truncated = true;
   return payload;
 }
@@ -655,7 +658,7 @@ const LIST_PARAMETERS = Object.freeze({
   json: Object.freeze({
     type: 'array',
     items: Object.freeze({ type: 'string' }),
-    description: 'Optional subset of the declared Gitee field names; defaults to the full declared set. GitHub-only fields are rejected.',
+    description: 'Optional subset of the declared Gitee field names to project into the result; defaults to the full declared set. Projection is local, after the read — the CLI has no field filtering. Undeclared names are rejected as JSON_FIELD_NOT_DECLARED.',
   }),
 });
 
@@ -664,19 +667,19 @@ const READ_TOOL_SPECS = Object.freeze([
   Object.freeze({
     name: 'forge_gitee_repository_read',
     action: 'gitee.repository.read',
-    description: 'Read one Gitee repository overview through the enterprise Gitee CLI (gh). Returns a Gitee read envelope: provider "gitee", target_ref, status (succeeded / failed / partial / unknown), the fact revision in source_revision, observed_at, result_refs and missing_fields. Failures come back as a fixed error_code (never thrown, never retried). Only Gitee field names are read (for example default_branch, updated_at); GitHub-only fields are rejected.',
+    description: 'Read one Gitee repository overview through the enterprise Gitee CLI (gh). Returns a Gitee read envelope: provider "gitee", target_ref, status (succeeded / failed / partial / unknown), the fact revision in source_revision, observed_at, result_refs and missing_fields. Failures come back as a fixed error_code (never thrown, never retried). Field names are the ones the enterprise CLI actually returns (for example path_with_namespace, web_url, last_activity_at); GitHub-style names such as nameWithOwner or isPrivate are rejected.',
     parameters: Object.freeze({}),
   }),
   Object.freeze({
     name: 'forge_gitee_issue_read',
     action: 'gitee.issue.read',
-    description: 'Read Gitee issues through the enterprise Gitee CLI (gh). One issue with target "group/repo#12" or an issue link; a list with target "group/repo" and list:true (state defaults to open, limit up to 100). Same Gitee read envelope as forge_gitee_repository_read: status, source_revision, observed_at, result_refs, fixed error_code. Reads only; nothing is created, edited or closed.',
+    description: 'Read Gitee issues through the enterprise Gitee CLI (gh). One issue with target "group/repo#12" or an issue link; a list with target "group/repo" and list:true (state defaults to open, limit up to 100). Same Gitee read envelope as forge_gitee_repository_read: status, source_revision, observed_at, result_refs, fixed error_code. The issue number comes from the CLI field id (the payload has no number field). Reads only; nothing is created, edited or closed.',
     parameters: LIST_PARAMETERS,
   }),
   Object.freeze({
     name: 'forge_gitee_pr_read',
     action: 'gitee.pr.read',
-    description: 'Read Gitee pull requests through the enterprise Gitee CLI (gh). One pull request with target "group/repo#12" or a pull-request link; a list with target "group/repo" and list:true (state defaults to open, limit up to 100). Same Gitee read envelope as forge_gitee_repository_read. Pull requests are only read here: this tool never merges, closes or approves anything.',
+    description: 'Read Gitee pull requests through the enterprise Gitee CLI (gh). One pull request with target "group/repo#12" or a pull-request link; a list with target "group/repo" and list:true (state defaults to open, limit up to 100). Same Gitee read envelope as forge_gitee_repository_read. The pull-request number comes from the CLI field iid (id is the global id); branches are source_branch / target_branch and mergeability is merge_status. Pull requests are only read here: this tool never merges, closes or approves anything.',
     parameters: LIST_PARAMETERS,
   }),
 ]);

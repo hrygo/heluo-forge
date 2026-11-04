@@ -292,7 +292,8 @@ export function apply(ctx, rawConfig = {}) {
   let gitAdapter;
   try {
     // git 与 gitee CLI 共用同一个出口：适配器只要 runner（`runGit`），不自己起子进程。
-    // 工作目录缺省用进程 cwd（r10 不新增 repoRoot 配置键）；`cwd` 传 undefined 即默认。
+    // 这里的 cwd 只是**兜底**：每次调用由 `resolveGitCwd` 现算会话工作目录并覆盖它。
+    // 宿主进程的 cwd 是启动目录（npx 目录、快捷方式、家目录都可能），不能当仓库用。
     gitAdapter = createGiteeGitAdapter({ runner, cwd: resolved.gitCwd });
   } catch (error) {
     throw mountError(
@@ -301,6 +302,22 @@ export function apply(ctx, rawConfig = {}) {
       { error },
     );
   }
+  /**
+   * 按次解析 git 的仓库目录：取**调用方会话**的工作目录，而不是宿主进程目录。
+   *
+   * 用 `get(agent.session)` 而不是 `ensure(agent)`：`ensure()` 会写会话事件（目录被删时还会
+   * 触发恢复并 append `working-directory/change`），一个只读的路径解析不该有副作用。
+   * `ctx.workingDirectory` 是可选服务，任一环拿不到就返回 `undefined` 让适配器兜底，绝不猜目录。
+   */
+  const resolveGitCwd = async (exec) => {
+    const agent = exec?.agent;
+    if (!agent || agent.session === undefined || agent.session === null) return undefined;
+    const directories = typeof ctx.get === 'function' ? ctx.get('workingDirectory') : undefined;
+    if (directories === null || typeof directories !== 'object') return undefined;
+    if (typeof directories.get !== 'function') return undefined;
+    const dir = directories.get(agent.session);
+    return typeof dir === 'string' && dir.trim() !== '' ? dir : undefined;
+  };
   const adapter = createGiteeAdapter({
     runner,
     cliPath: resolved.cliPath,
@@ -319,7 +336,7 @@ export function apply(ctx, rawConfig = {}) {
 
   let tools;
   try {
-    tools = buildGiteeTools(service);
+    tools = buildGiteeTools(service, { resolveGitCwd });
   } catch (error) {
     throw mountError(
       GITEE_REASONS.TOOLS_UNAVAILABLE,

@@ -481,3 +481,85 @@ test('离线 e2e：真 git 临时工作仓 + 本地 bare 仓，commit → push �
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('适配器：按次目录覆盖装配期目录（宿主进程目录不能当仓库用）', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: `${SHA}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'branch') {
+      return { exitCode: 0, stdout: 'feat/r11\n', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/spawn-dir' });
+
+  // 显式给出会话目录：commit / rev-parse / branch 三次调用必须全部落在同一个目录。
+  await adapter.commit({ changeId: CHANGE, message: `[${CHANGE}] 会话目录提交`, cwd: '/tmp/session-repo' });
+  assert.deepEqual(runner.calls.map((call) => call.cwd), ['/tmp/session-repo', '/tmp/session-repo', '/tmp/session-repo']);
+
+  // 不给目录时仍用装配期值：覆盖只在「这一次」，不是全局改掉。
+  runner.calls.length = 0;
+  await adapter.commit({ changeId: CHANGE, message: `[${CHANGE}] 兜底目录提交` });
+  assert.deepEqual(runner.calls.map((call) => call.cwd), ['/tmp/spawn-dir', '/tmp/spawn-dir', '/tmp/spawn-dir']);
+
+  // 空白字符串一律回落，不把空目录交给子进程。
+  runner.calls.length = 0;
+  await adapter.commit({ changeId: CHANGE, message: `[${CHANGE}] 空目录回落`, cwd: '   ' });
+  assert.deepEqual(runner.calls.map((call) => call.cwd), ['/tmp/spawn-dir', '/tmp/spawn-dir', '/tmp/spawn-dir']);
+});
+
+test('适配器：失败说明里带实际目录（跑错目录要能一眼看出来）', async () => {
+  const runner = fakeRunner(() => ({
+    exitCode: 128,
+    stdout: '',
+    stderr: 'fatal: not a git repository (or any of the parent directories): .git',
+    durationMs: 1,
+    timedOut: false,
+    truncated: false,
+  }));
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/spawn-dir' });
+  await assert.rejects(
+    () => adapter.commit({ changeId: CHANGE, message: `[${CHANGE}] 说明`, cwd: '/tmp/not-a-repo' }),
+    (error) =>
+      error.code === GIT_REASONS.COMMAND_FAILED
+      && error.detail.cwd === '/tmp/not-a-repo'
+      && error.message.includes('/tmp/not-a-repo'),
+  );
+});
+
+test('工具定义：resolveGitCwd 每次现算目录并交给 git；解析失败回落且不崩', async () => {
+  const seen = [];
+  const git = {
+    commit: async ({ cwd }) => {
+      seen.push(cwd);
+      return { sha: SHA, branch: 'feat/r11', subject: '说明', evidence: { command: 'git.commit' } };
+    },
+    push: async ({ cwd }) => {
+      seen.push(cwd);
+      return { ok: true, remote: 'origin', branch: 'feat/r11' };
+    },
+  };
+  const stub = {
+    read: async () => ({}),
+    execute: async () => ({ status: 'done' }),
+    invoke: async () => ({}),
+    preflight: async () => ({ ok: true }),
+    adapter: () => ({ read: async () => ({}) }),
+    session: () => ({}),
+    git: () => git,
+  };
+
+  const definitions = gitToolDefinitions(stub, async (exec) => exec?.agent?.workingDirectory);
+  const commit = definitions.find((definition) => definition.name === GITEE_GIT_TOOLS.COMMIT);
+  await commit.execute({ changeId: CHANGE, message: `[${CHANGE}] 说明` }, { agent: { workingDirectory: '/tmp/session-a' } });
+  await commit.execute({ changeId: CHANGE, message: `[${CHANGE}] 说明` }, { agent: { workingDirectory: '/tmp/session-b' } });
+  assert.deepEqual(seen, ['/tmp/session-a', '/tmp/session-b']);
+
+  // 解析器抛错：工具照常执行，目录交给适配器兜底（undefined）。
+  const broken = gitToolDefinitions(stub, async () => {
+    throw new Error('workingDirectory 不可用');
+  });
+  await broken[0].execute({ changeId: CHANGE, message: `[${CHANGE}] 说明` }, {});
+  assert.equal(seen.at(-1), undefined);
+});

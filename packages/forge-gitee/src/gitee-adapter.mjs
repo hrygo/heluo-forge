@@ -1,13 +1,13 @@
 /**
- * `@heluo/forge-gitee` 的 Gitee 适配器：命令面、`GITEE_*` 字段分表与 argv 白名单（TK3）。
+ * `@heluo/forge-gitee` 的 Gitee 适配器：命令面、`GITEE_*` 字段投影清单与 argv 白名单（TK3）。
  *
  * 与 `@heluo/forge-devops` 的 `gh-adapter.mjs` **同形不同表**（AC-12）：不 import 对方的任何
- * 符号，也不复用 `GH_*` 常量；provider 由本文件常量与 `gitee.*` 动作名声明，字段名按 Gitee
- * 语义的 snake_case 重写。共享的是"不变量"（固定 argv、固定字段子集、只把退出码翻译成
+ * 符号，也不复用 `GH_*` 常量；provider 由本文件常量与 `gitee.*` 动作名声明，字段名按企业
+ * CLI 的实测输出逐字取。共享的是"不变量"（固定 argv、固定字段白名单、只把退出码翻译成
  * 事实、禁项在代码里不存在），对齐靠契约用例而不是共享代码——PRD 非目标禁止改写 devops。
  *
  * 三层职责里本模块只负责中间那层：**argv 构造**（有没有这条命令、参数是否在白名单里）与
- * **输出归一**（字段表逐字取，取不到就记 `missing_fields`，绝不猜）。
+ * **输出归一**（先按实测形状剥壳，再按投影清单逐字取；取不到就记 `missing_fields`，绝不猜）。
  * "能不能做"归策略门禁（`gitee-guard.mjs`），"做完能否核对"归动作层（`gitee-actions.mjs`：
  * 幂等、回读、四状态）。因此这里不会声称"写成功"，只把命令结果翻译成事实。
  *
@@ -17,15 +17,23 @@
  *    连表都进不来，另有一道 argv 结构扫描做纵深防御。
  * 2. 参数只来自本文件的表：`assertArgv` 先校验再拼 argv，**越界即抛错且零子进程**；不接受
  *    命令行字符串、不接受 argv 数组、不接受 `bin`/`args`/`purpose` 之类的"透传键"。
- * 3. 只有 `--json` 声明的字段子集能出现在 argv 里（`JSON_FIELD_NOT_DECLARED`）。
- *    r10 删掉了那张 GitHub 语义黑名单：字段子集已经是白名单，再维护一张黑名单就是
- *    第二套口径（且平台收敛后"混入另一平台字段"不再是本包的事实）。
+ * 3. **`--json` 是无值开关，后面不接字段清单**（2026-11-03 实测：`repo view --json name,path`
+ *    与裸 `repo view --json` 输出完全一样，逗号清单被忽略）。字段子集因此降级为**本地投影
+ *    清单**：只决定归一后交付哪些键，永远不进 argv。投影名仍按白名单校验，越界即
+ *    `JSON_FIELD_NOT_DECLARED` 且零子进程——白名单仍是唯一判据，不做"发出去再问 CLI"。
  * 4. 本模块不建子进程：`runner` 由 `gitee-cli.mjs` 的唯一 `execFile` 出口注入；这里连
  *    `child_process` 都不 import。
  *
- * F1（企业 CLI 的 `--json` 字段集合未验）的收缩策略（TECHNICAL §4.2）：字段表是本文件唯一
- * 副本，实测不符时只改这一处；取不到的字段记 `missing_fields` 并置 `null`；`source_revision`
- * 取不到则整条降级 `unknown`（`MISSING_SOURCE_REVISION`），不编版本号。
+ * 实测形状（2026-11-03，企业 Windows 机器上的 CLI，载荷进 `test/adapter.test.mjs` 当夹具）：
+ * - `repo view --json`：扁平对象；**没有** `url`/`private`/`updated_at`——链接是 `web_url`、
+ *   可见性是 `visibility`、全名在 `path_with_namespace`（`path` 只是仓库 slug），唯一时间事实
+ *   是 `last_activity_at`；
+ * - `issue list --json`：`{data:{list:[…]}, meta:{…}}`；编号字段是 `id`（**没有** `number`）；
+ * - `pr list --json`：`{data:[…], meta:{…}}`；编号是 `iid`（`id` 是全局号），分支是
+ *   `source_branch`/`target_branch`，可合并性是 `merge_status`，状态值是 `opened`。
+ * `issue view`/`pr view`/`repo list` 的输出形状**未实测**：缺字段一律走 `missing_fields`
+ * 如实上报，不按别的平台的习惯补齐；`source_revision` 取不到就整条降级 `unknown`
+ * （`MISSING_SOURCE_REVISION`），不编版本号。
  */
 
 import {
@@ -69,27 +77,103 @@ export const GITEE_COMMANDS = Object.freeze({
 });
 
 /**
- * `repo view` 的 JSON 字段：Gitee 语义（snake_case），逐字取自 TECHNICAL §4.2，不额外加推断字段。
+ * `repo view` 的本地投影清单：逐字取自 2026-11-03 实测载荷。
  *
  * 注意与 devops 的同位表不同名也不同形：`nameWithOwner`/`isPrivate`/`defaultBranchRef`/
- * `updatedAt` 是 GitHub 语义，本包一个都不认（AC-12）。
+ * `updatedAt` 是 GitHub 语义，本包一个都不认（AC-12）。仓库载荷里没有 `url`/`private`/
+ * `updated_at` 这三个常见名字，所以链接取 `web_url`、可见性取 `visibility`、全名取
+ * `path_with_namespace`——把 GitHub 名字写进投影清单，只会让每个字段都掉进
+ * `missing_fields`，那才是真正的"猜"。
  */
-export const GITEE_REPO_FIELDS = Object.freeze(['name', 'path', 'description', 'url', 'default_branch', 'private', 'updated_at']);
+export const GITEE_REPO_FIELDS = Object.freeze([
+  'name',
+  'path',
+  'path_with_namespace',
+  'description',
+  'default_branch',
+  'visibility',
+  'web_url',
+  'last_activity_at',
+  'archived',
+  'ssh_url_to_repo',
+]);
 
-/** `repo list` 的 JSON 字段：比 `repo view` 少 `description`/`default_branch`，多用于列表展示的 `updated_at`。 */
-export const GITEE_REPO_LIST_FIELDS = Object.freeze(['name', 'path', 'url', 'private', 'updated_at']);
+/**
+ * `repo list` 的投影清单：`repo view` 去掉 `description`/`default_branch`（列表只用于识别），
+ * 也去掉 `ssh_url_to_repo`（列表不需要远端地址）。`repo list` 的真实形状**未实测**。
+ */
+export const GITEE_REPO_LIST_FIELDS = Object.freeze([
+  'name',
+  'path',
+  'path_with_namespace',
+  'visibility',
+  'web_url',
+  'last_activity_at',
+  'archived',
+]);
 
-/** Issue 读的字段：含 `comments`，写动作按正文查重要用。 */
-export const GITEE_ISSUE_FIELDS = Object.freeze(['number', 'title', 'state', 'url', 'updated_at', 'labels', 'comments']);
+/**
+ * Issue 读的投影清单：编号字段是 `id`（实测**没有** `number`），正文是 `description`
+ * （实测是 HTML 片段），链接是 `web_url`。`issue view` 的真实形状未实测。
+ */
+export const GITEE_ISSUE_FIELDS = Object.freeze([
+  'id',
+  'title',
+  'description',
+  'state',
+  'labels',
+  'updated_at',
+  'web_url',
+]);
 
-/** `issue list` 的字段：清单只取识别项所需，状态与链接够用。 */
-export const GITEE_ISSUE_LIST_FIELDS = Object.freeze(['number', 'title', 'url', 'state']);
+/**
+ * `issue list` 的投影清单：识别项 + 状态/版本。实测清单项只有 `description`/`id`/`labels`/
+ * `title`/`updated_at`——`state` 与 `web_url` 会进 `missing_fields`（取不到就是取不到）。
+ */
+export const GITEE_ISSUE_LIST_FIELDS = Object.freeze(['id', 'title', 'state', 'updated_at', 'web_url']);
 
-/** PR 读的字段：含分支、草稿与可合并标记；**不含**合并时间（合并态不在本包判定范围内）。 */
-export const GITEE_PR_FIELDS = Object.freeze(['number', 'title', 'state', 'url', 'updated_at', 'head', 'base', 'draft', 'mergeable', 'comments']);
+/**
+ * PR 读的投影清单：编号是 `iid`（`id` 是 671766 这类全局号，对不上 URL 里的 2），分支是
+ * `source_branch`/`target_branch`，可合并性是 `merge_status`，评论数是 `user_notes_count`。
+ * `pr view` 的真实形状未实测。
+ */
+export const GITEE_PR_FIELDS = Object.freeze([
+  'iid',
+  'title',
+  'state',
+  'web_url',
+  'updated_at',
+  'source_branch',
+  'target_branch',
+  'merge_status',
+  'merged_at',
+  'user_notes_count',
+]);
 
-/** `pr list` 的字段：清单取识别项 + 头分支（判"同分支已有 PR"）。 */
-export const GITEE_PR_LIST_FIELDS = Object.freeze(['number', 'title', 'url', 'head', 'state']);
+/** `pr list` 的投影清单：识别项 + 头/目标分支（判"同分支已有 PR"）与可合并性。 */
+export const GITEE_PR_LIST_FIELDS = Object.freeze([
+  'iid',
+  'title',
+  'state',
+  'web_url',
+  'source_branch',
+  'target_branch',
+  'merge_status',
+]);
+
+/**
+ * 单个对象读的**事实版本**字段（`source_revision`）。
+ *
+ * Issue/PR 取 `updated_at`；仓库实测没有 `updated_at`，CLI 给出的唯一时间事实是
+ * `last_activity_at`，因此仓库以它作版本。这是一次有意的口径选择，不是补字段：如果为了
+ * "取不到版本"就让仓库读永远 `unknown`，那份工具就没有可用状态；反过来也不能拿
+ * `created_at` 之类冒充"最近更新"。真正取不到时才降级 `MISSING_SOURCE_REVISION`。
+ */
+export const GITEE_REVISION_FIELDS = Object.freeze({
+  repositoryView: 'last_activity_at',
+  issueView: 'updated_at',
+  prView: 'updated_at',
+});
 
 /**
  * 每个命令允许的 argv 参数，**按实际发命令行顺序**排列（表即真源，`argvFor` 照抄）。
@@ -117,10 +201,13 @@ export const GITEE_ARGV_FLAGS = Object.freeze({
 });
 
 /**
- * 每个读命令的 `--json` 子集：与字段表**同一对象**（不是抄一份），所以"表改了子集跟着改"，
- * 不存在两处漂移。写命令没有 `--json`（输出是人类文本，由解析器取编号/链接）。
+ * 每个读命令的**本地投影清单**：与字段表**同一对象**（不是抄一份），所以"表改了投影跟着改"，
+ * 不存在两处漂移。写命令没有投影（输出是人类文本，由解析器取编号/链接）。
+ *
+ * 名字里的 projection 是有意的：旧名 `GITEE_JSON_SUBSETS` 会让人以为这份清单会拼进 argv，
+ * 而实测表明 CLI 根本不做字段过滤。清单决定的是"归一时交付哪些键"，与命令行无关。
  */
-export const GITEE_JSON_SUBSETS = Object.freeze({
+export const GITEE_FIELD_PROJECTIONS = Object.freeze({
   repositoryView: GITEE_REPO_FIELDS,
   repositoryList: GITEE_REPO_LIST_FIELDS,
   issueView: GITEE_ISSUE_FIELDS,
@@ -129,8 +216,8 @@ export const GITEE_JSON_SUBSETS = Object.freeze({
   prList: GITEE_PR_LIST_FIELDS,
 });
 
-/** 不带值、出现即为真的开关参数（`pr create --draft`）。 */
-const BOOLEAN_FLAGS = Object.freeze(['--draft']);
+/** 不带值、出现即为真的开关参数（`pr create --draft`；读命令的 `--json` 同样不接值）。 */
+const BOOLEAN_FLAGS = Object.freeze(['--draft', '--json']);
 
 /** 走位置参数的命令（其余仓库作用域命令用 `-R`）。 */
 const POSITIONAL_TARGET_COMMANDS = Object.freeze([
@@ -232,12 +319,36 @@ const PURPOSES = Object.freeze({
   prComment: 'gitee.pr.comment',
 });
 
+/**
+ * `--state` 的取值词表（筛选条件），也是本包**唯一**的对象状态词表：CLI 返回 `opened`，
+ * 归一时映射成这里的 `open`，与筛选参数、`closed` 保持同一套词。
+ */
 const STATE_VALUES = Object.freeze(['open', 'closed', 'all']);
-const REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const TARGET_QUALIFIED_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*#\d{1,9}$/;
+
+/**
+ * Gitee 状态值 → 既有词表。只映射实测过的写法（`opened` 出现于 PR 与 Issue 载荷）；不认识的
+ * 状态原样保留、不新增词——`merged`/`locked` 这类值尚未实测，猜一个同义词就等于替平台作决定。
+ */
+const STATE_ALIASES = Object.freeze({
+  opened: 'open',
+  open: 'open',
+  closed: 'closed',
+});
+
+// 仓库标识允许**嵌套命名空间**：实测企业仓库全名是三级（`name_with_namespace: "osc/ard/ard-sdk"`），
+// 只认 `owner/repo` 两段会把真实仓库全部按形状拒掉。段数上限放到 8 段，够覆盖嵌套组，
+// 又不至于把任意长路径当仓库名。
+const REPO_SEGMENT = '[A-Za-z0-9][A-Za-z0-9._-]*';
+/** 仓库标识的**唯一**形状源：读/写/git 三条路径共用，避免三处各写一份正则。 */
+export const REPO_TARGET_SOURCE = `${REPO_SEGMENT}(?:/${REPO_SEGMENT}){1,7}`;
+export const REPO_PATTERN = new RegExp(`^${REPO_TARGET_SOURCE}$`);
+/** 限定引用（`owner/repo#12`、`owner/repo!12`），捕获组 1 是仓库部分。 */
+export const QUALIFIED_TARGET_PATTERN = new RegExp(`^(${REPO_TARGET_SOURCE})[#!](\\d{1,9})$`, 'u');
+const TARGET_QUALIFIED_PATTERN = new RegExp(`^${REPO_TARGET_SOURCE}#\\d{1,9}$`);
 const TARGET_NUMBER_PATTERN = /^\d{1,9}$/;
 // Gitee 的 Issue/PR 链接：`/issues/<n>` 与 `/pulls/<n>`（GitHub 的 `/pull/<n>` 也认，只认结构不认域名）。
-const TARGET_LINK_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?[^\s/]+\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/(?:issues|issue|pulls|pull)\/\d{1,9}(?:[#?]\S*)?$/;
+// 命名空间同样允许嵌套（`.../osc/ard/ard-cli/-/pull_requests/2` 这类路径里取最后两段）。
+const TARGET_LINK_PATTERN = /^(?:[A-Za-z][A-Za-z0-9+.-]*:\/\/)?[^\s/]+\/(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+\/(?:issues|issue|pulls|pull|pull_requests|merge_requests)\/\d{1,9}(?:[#?]\S*)?$/;
 const HOST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/;
 const BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/;
 const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
@@ -283,12 +394,26 @@ function allowedParamKeys(command) {
   return keys;
 }
 
-/** 归一 `--json` 入参：字符串按逗号切、数组照收，其余拒绝。 */
-function normalizeJsonRequest(command, value) {
-  const declared = GITEE_JSON_SUBSETS[command];
+/**
+ * 归一读命令的投影选择：字符串按逗号切、数组照收，缺省即完整声明集。
+ *
+ * 这是投影名的**唯一校验点**：只认声明过的名字，越界 → `JSON_FIELD_NOT_DECLARED` 且零子进程；
+ * 去重保序。返回值决定归一后交付哪些键，**不进 argv**——实测 CLI 不认字段清单，把它拼上去
+ * 只会多一个被忽略的 token（旧实现正是这么做的）。
+ *
+ * @param {string} command `GITEE_COMMANDS` 的键
+ * @param {string | string[]} [value] 投影选择；省略即完整声明集
+ * @returns {readonly string[]} 投影清单（顺序即交付顺序）
+ */
+export function projectionFor(command, value = undefined) {
+  const declared = GITEE_FIELD_PROJECTIONS[command];
   if (declared === undefined) {
-    fail(ADAPTER_REASONS.ARG_NOT_WHITELISTED, `${command} 不接受 --json`, { command, field: 'json' });
+    fail(ADAPTER_REASONS.ARG_NOT_WHITELISTED, `${command} 不接受字段投影（没有 JSON 输出）`, {
+      command,
+      field: 'json',
+    });
   }
+  if (value === undefined) return declared;
   const requested = typeof value === 'string'
     ? value.split(',').map((entry) => entry.trim()).filter((entry) => entry !== '')
     : Array.isArray(value)
@@ -307,7 +432,7 @@ function normalizeJsonRequest(command, value) {
       fail(ADAPTER_REASONS.ARG_INVALID, `${command} 的 json 含空字段名`, { command, field: 'json' });
     }
     if (!declared.includes(name)) {
-      // 只认声明过的子集：白名单之外的名字不许进 argv（AC-14）。
+      // 只认声明过的名字：白名单之外的名字既不能进 argv（本来也不进），也不能进投影。
       fail(ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED, `${command} 的 json 字段 "${name}" 未在本包声明`, {
         command,
         field: 'json',
@@ -317,7 +442,7 @@ function normalizeJsonRequest(command, value) {
     }
     if (!picked.includes(name)) picked.push(name);
   }
-  return picked;
+  return Object.freeze(picked);
 }
 
 /** 单个参数的取值校验：类型、边界、形状；**不回显值**（值里可能有人贴了凭据）。 */
@@ -333,8 +458,6 @@ function assertParamValue(command, flag, value) {
     case '-R':
       // 仓库作用域把 target 作为 `-R` 的值：形状校验与位置参数完全相同，只换落位。
       return assertTargetFor(command, value);
-    case '--json':
-      return normalizeJsonRequest(command, value).join(',');
     case '--state': {
       const state = text(value);
       if (!STATE_VALUES.includes(state)) {
@@ -504,8 +627,11 @@ export function assertArgv(command, params = {}) {
 }
 
 /**
- * argv 构造的薄壳：`argvFor('issueList', { target:'g/r', state:'open' })`
- * → `['issue','list','-R','g/r','--state','open',…]`（`--json` 显式要字段，否则 CLI 输出人类文本）。
+ * argv 构造的薄壳：`argvFor('issueList', { target:'g/r', state:'open', json: true })`
+ * → `['issue','list','-R','g/r','--state','open','--json']`。
+ *
+ * 读命令的 `json` 在这里只是**布尔开关**（`true` → 追加 `--json` 一个 token）：字段清单是
+ * 本地投影清单，由 `projectionFor()` 决定，永远不进 argv。
  */
 export function argvFor(command, params = {}) {
   return assertArgv(command, params).args;
@@ -526,28 +652,65 @@ function commandForReadAction(action, kind) {
 }
 
 /** 解析 JSON 输出：解析不动就是畸形结果，不拿自由文本当事实。 */
-function parseJsonOutcome(stdout, command, expected) {
+function parseJsonOutcome(stdout, command) {
   const raw = text(stdout);
   if (raw === '') {
-    fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 没有输出 JSON（期望 ${expected}）`, { command });
+    fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 没有输出 JSON`, { command });
   }
-  let parsed;
   try {
-    parsed = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch {
     fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 的输出不是合法 JSON`, { command });
   }
+}
+
+/**
+ * 剥壳：实测出现过三种包裹形态，扁平形状也必须能吃。
+ *
+ * - `{data:{list:[…]}, meta:{…}}`（`issue list`，2026-11-03 实测）
+ * - `{data:[…], meta:{…}}`（`pr list`，实测）
+ * - `{data:{…}}` 与**扁平对象**（`repo view` 实测是扁平对象；`issue|pr view`、`repo list` 未实测）
+ *
+ * 只剥已知的壳，不做"猜哪一层是数据"的递归：认不出就报畸形结果——把 `data` 或 `meta`
+ * 当对象交付出去，下游会拿到一堆 null 还以为读到了东西。`meta` 只把 `total_count` 交给调用方，
+ * 其余键丢弃：它不是"取不到的字段"，只是没声明要用的元数据，不该混进 `missing_fields`。
+ */
+function unwrapOutput(parsed, expected, command) {
+  const meta = isPlainObject(parsed) && isPlainObject(parsed.meta) ? parsed.meta : null;
   if (expected === 'array') {
-    if (Array.isArray(parsed)) return parsed;
-    if (isPlainObject(parsed) && Array.isArray(parsed.items)) return parsed.items;
-    if (isPlainObject(parsed) && Array.isArray(parsed.data)) return parsed.data;
-    fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 的输出不是数组`, { command });
+    if (Array.isArray(parsed)) return { value: parsed, meta };
+    if (isPlainObject(parsed)) {
+      if (Array.isArray(parsed.data)) return { value: parsed.data, meta };
+      if (isPlainObject(parsed.data) && Array.isArray(parsed.data.list)) return { value: parsed.data.list, meta };
+      // `{items:[…]}` 是 r10 之前就接受的旧形状，留着以免把"包裹形状变了"误报成畸形。
+      if (Array.isArray(parsed.items)) return { value: parsed.items, meta };
+    }
+    fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 的输出里没有数组（认得的包裹：data / data.list / items）`, {
+      command,
+    });
   }
-  if (isPlainObject(parsed)) return parsed;
+  if (isPlainObject(parsed)) {
+    if ('data' in parsed) {
+      if (isPlainObject(parsed.data)) return { value: parsed.data, meta };
+      fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 的输出 data 不是对象`, { command });
+    }
+    return { value: parsed, meta };
+  }
   fail(ADAPTER_REASONS.MALFORMED_RESULT, `${command} 的输出不是对象`, { command });
 }
 
-/** 按字段表逐字取；取不到的键置 `null` 并记进 `missing_fields`（不猜、不省略）。 */
+/** 状态值归一：只映射实测过的写法，其余原样保留（不新增词表，见 `STATE_ALIASES`）。 */
+function normalizeState(value) {
+  if (typeof value !== 'string') return value;
+  return STATE_ALIASES[value.trim().toLowerCase()] ?? value;
+}
+
+/**
+ * 按投影清单逐字取；取不到的键置 `null` 并记进 `missing_fields`（不猜、不省略）。
+ *
+ * `state` 在这里过一遍归一（实测是 `opened`，信封词表里叫 `open`），其余字段原样交付——
+ * 深挖嵌套结构（如 `namespace`/`diff_refs`）不在投影清单里，也就不解析。
+ */
 function pickFields(raw, fields) {
   const object = {};
   const missing = [];
@@ -556,7 +719,7 @@ function pickFields(raw, fields) {
       object[field] = null;
       missing.push(field);
     } else {
-      object[field] = raw[field];
+      object[field] = field === 'state' ? normalizeState(raw[field]) : raw[field];
     }
   }
   return { object, missing };
@@ -750,7 +913,11 @@ export function createGiteeAdapter({
    *
    * 返回**事实**而不是完整信封（信封由 `gitee-read.mjs` 归一）：`status` 只有
    * `succeeded`/`unknown`，`source_revision` 取不到就 `null` 并由 `error_code` 说明原因；
-   * `missing_fields` 记录字段表里取不到的键。命令级失败（超时/非零退出）**抛错**，由读层归一。
+   * `missing_fields` 记录投影清单里取不到的键。命令级失败（超时/非零退出）**抛错**，由读层归一。
+   *
+   * `json` 是**本地投影选择器**（见 `projectionFor`）：它决定归一后交付哪些键，argv 里只多一个
+   * 无值的 `--json` 开关。投影之外、但仍属于事实的键（`source_revision`/`result_refs`）照旧
+   * 从**原始载荷**取——它们是读的事实，不该因为调用方没勾某个字段就消失。
    */
   async function read(action, target, params = {}) {
     const options = isPlainObject(params) ? params : null;
@@ -773,6 +940,8 @@ export function createGiteeAdapter({
     }
     const kind = options.list === true ? 'list' : 'object';
     const { key: actionKey, command } = commandForReadAction(action, kind);
+    // 投影先算、越界先拒：投影名不合法时连子进程都不该起（与其它参数同一口径）。
+    const projection = projectionFor(command, options.json);
     const argvParams = { target };
     const acceptsState = (GITEE_ARGV_FLAGS[command] ?? []).includes('--state');
     if (kind === 'list') {
@@ -794,19 +963,21 @@ export function createGiteeAdapter({
       });
     }
     // `--json` 永远显式给出：省略时 CLI 会输出人类文本，解析不出来就只能算畸形结果。
-    argvParams.json = options.json === undefined ? GITEE_JSON_SUBSETS[command] : options.json;
+    // 它是无值开关（实测不认字段清单），所以这里只传 `true`，投影清单留在本地。
+    argvParams.json = true;
 
     const outcome = await invoke(command, argvParams, PURPOSES[command]);
-    const declared = GITEE_JSON_SUBSETS[command];
     if (kind === 'list') {
-      const items = parseJsonOutcome(outcome.stdout, outcome.label, 'array');
+      const { value: items, meta } = unwrapOutput(parseJsonOutcome(outcome.stdout, outcome.label), 'array', outcome.label);
       const normalized = [];
       const missing = new Set();
       for (const entry of items) {
-        const { object, missing: gaps } = pickFields(isPlainObject(entry) ? entry : {}, declared);
+        const { object, missing: gaps } = pickFields(isPlainObject(entry) ? entry : {}, projection);
         for (const gap of gaps) missing.add(gap);
         normalized.push(object);
       }
+      // CLI 的 `meta.total_count` 是附加事实：清单被 `--limit` 截住时，它说明"总共有多少条"。
+      const totalCount = meta !== null && Number.isInteger(meta.total_count) ? meta.total_count : null;
       return Object.freeze({
         provider: GITEE_PLATFORM,
         action: actionKey,
@@ -822,15 +993,18 @@ export function createGiteeAdapter({
         error_code: null,
         items: Object.freeze(normalized),
         count: normalized.length,
+        ...(totalCount === null ? {} : { total_count: totalCount }),
         truncated: outcome.truncated,
         raw: items,
       });
     }
-    const raw = parseJsonOutcome(outcome.stdout, outcome.label, 'object');
-    const { object, missing } = pickFields(raw, declared);
-    const revision = typeof raw.updated_at === 'string' && raw.updated_at.trim() !== '' ? raw.updated_at.trim() : null;
-    const link = typeof raw.url === 'string' && raw.url.trim() !== '' ? raw.url.trim() : null;
-    // 唯一的降级理由：缺事实版本（不许编版本号）。字段表之外的键本来就不进 object。
+    const { value: raw } = unwrapOutput(parseJsonOutcome(outcome.stdout, outcome.label), 'object', outcome.label);
+    const { object, missing } = pickFields(raw, projection);
+    const revisionField = GITEE_REVISION_FIELDS[command] ?? 'updated_at';
+    const revision = text(raw[revisionField]) || null;
+    // 链接只认 `web_url`（实测字段名）；取不到就空 result_refs，不拿别的键拼一个像链接的东西。
+    const link = text(raw.web_url) || null;
+    // 唯一的降级理由：缺事实版本（不许编版本号）。投影清单之外的键本来就不进 object。
     const errorCode = revision === null ? ADAPTER_REASONS.MISSING_SOURCE_REVISION : null;
     return Object.freeze({
       provider: GITEE_PLATFORM,
@@ -864,7 +1038,8 @@ export function createGiteeAdapter({
       listLimit: GITEE_LIST_LIMIT,
       commands: Object.freeze(Object.keys(GITEE_COMMANDS)),
       readActions: Object.freeze(Object.keys(READ_ACTION_SUBJECTS)),
-      jsonSubsets: Object.freeze(Object.keys(GITEE_JSON_SUBSETS)),
+      // 旧名 `jsonSubsets` 会让人以为这份清单进 argv：它只是本地投影，字段清单一个都不发。
+      fieldProjections: Object.freeze(Object.keys(GITEE_FIELD_PROJECTIONS)),
     });
   }
 
