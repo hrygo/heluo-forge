@@ -29,6 +29,7 @@
 - 组合层启用该适配器还要 `allowUnvettedPlatformAdapter: true`，否则挂载即 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`。
 - `createNativeKeyringBackend({ service, load })` 是 `@napi-rs/keyring` 的**未审核样机**：模块由调用方注入，本包不声明该依赖；backend key 原样作为 account，`getPassword()` 的 `null` 归一为 `undefined`，Linux 每个 Entry 固定 `{ linux: { store: 'secret-service' } }`（拒绝 keyutils 回退），Windows 按 UTF-16LE 字节拒绝超过 2560 B 的值。它不导出 `transaction()`、不自报跨进程锁，因此 provider 不会声称原子能力；`durable: true` 是对 OS 钥匙串持久性的假设，Linux Secret Service 集合是否跨重启保留未在目标平台验证。枚举默认显式 `KEYCHAIN_LIST_UNSUPPORTED`，只有 `allowUnverifiedEnumeration: true` 才走 `findCredentials`（Windows 过滤语法与 macOS 静默跳过不可读条目的差异仍未核验）。
 - 该样机的枚举默认不可用：`listRecords()` 报 `KEYCHAIN_LIST_UNSUPPORTED`，而不是返回空表；只有显式 `allowUnverifiedEnumeration: true` 才使用 `findCredentials`，且各平台的过滤/编码差异仍未核验。没有它，IAM 拿不到 `listRecords`，写路径仍应保持关闭。
+- 真实钥匙串取证（#121 AC2）：`node scripts/probe/run-native-keyring-probe.mjs` 用真实驱动（不注入 `load`）在目标平台系统凭据库上跑建/读/改/删、枚举拒绝、跨进程可见与无明文落盘。2026-11-04 darwin-arm64 **13/13 步通过**；Windows 与麒麟实机待复跑（同一条命令），完成评审前样机保持 `unvetted`。
 - 实测（2026-10-24，darwin-arm64）：未命中条目退出码 44；`add-generic-password -U` 覆盖同名条目；删除幂等；spike 过程无明文文件、测试条目已清理。复跑：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过）。
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
 - 生产必须使用 Windows DPAPI/凭据管理器或麒麟 libsecret/keyring 的审核实现；file backend 与 macOS spike 适配器都不是生产方案，`@napi-rs/keyring` 的目标平台产物仍待核验。

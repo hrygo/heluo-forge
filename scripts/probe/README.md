@@ -112,6 +112,26 @@ node scripts/probe/run-keychain-spike.mjs
   `list()` 报 `KEYCHAIN_LIST_UNSUPPORTED` 而不是返回空表。
 - **不代表生产**：Windows 凭据管理器与 UOS/麒麟 Secret Service 适配器、`@napi-rs/keyring` 产物仍待目标平台核验。
 
+## native-keyring 实机探针（#121 AC2；darwin 已测，win32/linux 待实机）
+
+```sh
+node scripts/probe/run-native-keyring-probe.mjs
+```
+
+用 `createNativeKeyringBackend` 的**真实驱动路径**（不注入 `load`；`@napi-rs/keyring` 不进发布闭环，实机运行前在仓库根
+执行 `pnpm add -w -D @napi-rs/keyring` 本地安装，不提交 manifest 变更）在目标平台系统凭据库上量：建/读/改/删、默认枚举拒绝
+（`KEYCHAIN_LIST_UNSUPPORTED`）、（darwin/win32）显式 opt-in 的 `findCredentials` 枚举、
+Windows 2560 字节 UTF-16LE 上限拒绝（仅 win32）、跨进程写/读/删可见性、无明文落盘与清理无残留。
+不做跨进程读改写计数——该 backend 有意不导出 `transaction()`（见包 README），
+"多进程竞争刷新"归 #120 的宿主侧矩阵。
+
+- 2026-11-04 darwin-arm64：**13/13 步通过**（真实系统钥匙串，证据 `native-keyring-probe.json`
+  只含布尔/计数/退出码）。该证据证明驱动封装在真实钥匙串上成立，**不构成** Windows/麒麟结论。
+- Windows 与麒麟实机验收：在目标机器复跑同一命令，把结果与证据路径按
+  [双端验收矩阵](../docs/plans/2026-11-04-iam-dual-platform-acceptance.md)（F-01/F-04/F-05 行）
+  回填；完成评审前 backend 保持 `unvetted`，默认挂载即拒绝。
+- 退出码 0/1/2 与其它探针一致；依赖未安装时退出 2 并提示 `pnpm install`。
+
 ## 边界
 
 - 只证明**宿主钩子语义**。企业侧证据（真实 IAM、真实 Gitee/DevOps 权限、
