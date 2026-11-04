@@ -224,7 +224,7 @@ test('宿主不传 config（undefined）时按空配置通过校验：补丁层�
   }
 });
 
-test('按补丁层配置真实装配策略 + devops：挂载不抛、3 工具、两条读动作各经门禁放行', async () => {
+test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、两条读动作各经门禁放行', async () => {
   const text = await readFile(join(here, 'cordis.patch.yml'), 'utf8');
   const patch = parsePatch(text);
   const policyRow = assertPolicyConfigComplete(patch, 'packages/forge-devops/cordis.patch.yml');
@@ -247,7 +247,7 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、3 工具、
   assert.ok(service, 'devops 必须提供自己的服务');
 
   assert.equal(service.status(), 'ready', '注入了只读适配器后状态必须是 ready');
-  assert.equal(service.toolNames().length, 3, '工具面 3 个（1 只读 runner + 1 聚合读 + 1 落盘）：仓库/Issue/PR 归 gitee');
+  assert.equal(service.toolNames().length, 4, '工具面 4 个（只读 runner + 聚合读 + 受控写 + 落盘）：仓库/Issue/PR 归 gitee');
 
   // 3) 两条读动作都走真实门禁 + 审计：审计舱不可用会在这里变成 POLICY_DENIED。
   const recordsBefore = policy.auditRecords().length;
@@ -263,6 +263,13 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、3 工具、
   await assert.rejects(service.read({ action: 'change.clarification.write', target: 'CHG-2026-0042' }), {
     code: READ_REASONS.UNKNOWN_ACTION,
   });
+
+  // 5) 写回默认关闭：目录里没有 change.clarification.write，写调用必须可见拒绝且零下游。
+  await assert.rejects(
+    service.changeUpdate({ target: 'CHG-2026-0042', summary: '优化启动性能' }),
+    (error) => error?.code === READ_REASONS.POLICY_DENIED,
+    '写动作未登记时必须可见拒绝（不是静默跳过）',
+  );
 });
 
 test('全仓扫描：任何插入 forge-devops 的补丁层都必须自带可用策略目录与可校验的 config', async () => {

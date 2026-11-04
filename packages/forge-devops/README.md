@@ -1,18 +1,18 @@
 # @heluo/forge-devops
 
-状态：可用（只读 runner + 上下文卡 + 产物落盘 + 门禁骨架 + Web 配置页与 CLI 自动发现；#15 / D4，责任方 2026-10-24 决定；2026-11-03 用户确认 D 方案：工具面 4→3、只读面改为枚举式 runner、澄清写工具删除）。"可用"指本包有清单、源码与离线可执行的用例；**企业 CLI 未联调**，`merge`/`close`/`change done` 不在命令白名单内，澄清回写没有 dop 命令面（不再保留恒失败工具，澄清单落本地产物）。
+状态：可用（只读 runner + 上下文卡 + 产物落盘 + 门禁骨架 + Web 配置页与 CLI 自动发现；#15 / D4，责任方 2026-10-24 决定；2026-11-03 用户确认 D 方案：只读面改为枚举式 runner；2026-11-04 起新增受控写回 `change update`，写动作默认不登记即拒绝）。"可用"指本包有清单、源码与离线可执行的用例；**企业 CLI 未联调**，`merge`/`close`/`change done` 不在命令白名单内，澄清回写没有 dop 命令面（不再保留恒失败工具，澄清单落本地产物）。
 
 | 项 | 内容 |
 |---|---|
 | 形态 | 现有 CLI 接入：查询基线（单条 / 清单）+ 上下文卡与产物落盘；受控回写目标见详细设计（写面归 `@heluo/forge-gitee`，澄清回写无 dop 命令面） |
 | 前置条件 | 装好即可用，不需要预先设置环境变量：装配期自动发现 dop；只有机器上确实找不到时才需要到配置页指定位置（见「配置」） |
 | 配置入口 | `设置 → 企业 DevOps`（Web 配置页，页面上只设 2 项：dop 入口 / 超时）；三层来源「配置页 > 环境变量 > 自动发现」，环境变量只作 CI 与无界面 profile 的兜底 |
-| 职责 | 复用 DevOps CLI，以固定 argv、凭据注入与策略门禁读取系统变更（单条 / 清单）及独立验收、所属故事背景；产出上下文卡；产物落盘（clarify / plan 由纯函数机检后生成正文）；受控回写见详细设计 |
+| 职责 | 复用 DevOps CLI，以固定 argv、凭据注入与策略门禁读取系统变更（单条 / 清单）及独立验收、所属故事背景；产出上下文卡；分析后回写标题/描述/验收标准（`change update`，默认关闭）；产物落盘（clarify / plan 由纯函数机检后生成正文） |
 | 不负责 | 不碰仓库 / Issue / PR 的读写（这些事实由 `@heluo/forge-gitee` 唯一负责）、不内置平台凭据、不接入生产写工具、不替代平台权限 |
 | 衔接点 | bash 工具、企业策略门禁、凭据注入与审计（均待接口核验） |
 | 条件服务 | [services/devops-mcp](../../services/devops-mcp/README.md)；当前不建设 |
 | 详细设计 | [DESIGN-009](../../docs/design/plugins/forge-devops.md)（草案，已建立） |
-| 实现状态 | 已建立 `package.json`、只读端口（`src/read.mjs`，两条读动作）、门禁骨架、流程组合根（`src/flow.mjs`）、三个工具（只读 runner / 上下文卡 / 产物落盘）与 `devops-change` 入口、Web 配置页（`client.js`）与四键 CLI 配置模块（自动发现 / 三层合并 / 宿主适配 / 同源路由）、离线测试（`node --test`）；**企业 CLI 联调未做** |
+| 实现状态 | 已建立 `package.json`、只读端口（`src/read.mjs`，两条读动作）、门禁骨架、流程组合根（`src/flow.mjs`）、四个工具（只读 runner / 上下文卡 / 受控写回 / 产物落盘）与 `devops-change` 入口、Web 配置页（`client.js`）与四键 CLI 配置模块（自动发现 / 三层合并 / 宿主适配 / 同源路由）、离线测试（`node --test`）；**企业 CLI 联调未做** |
 
 ## 安装
 
@@ -117,7 +117,7 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 
 单个包就是完整安装单元：清单声明 `dsh.bundle.patch: ./cordis.patch.yml`、`files` 带补丁层与 `client.js`，并把 `@heluo/forge-policy` 声明为包依赖（`workspace:*`），使"只装 devops"也能挂载。补丁层**先插策略、后插 devops**，两行都用包根名——策略先行是硬依赖，顺序错了按 fail-closed 拒绝挂载。若同一 profile 已 apply `@heluo/forge-enterprise` 的补丁层（其中已插策略），仍可叠加本层：两层策略行同 `id`、目录逐字相同，loader 按 id 折叠为一个条目（后写入的 `config` 覆盖先前的，不是重复挂载两份策略实例），幸存目录不取决于装配顺序。
 
-策略行必须自带非空的 `config.catalog` 才会挂载成功：策略缺省目录是空表，devops 校验"两条读动作已登记且 `enabled`"随即以 `POLICY_ACTION_UNREGISTERED` 拒绝挂载（2026-10-28 第 2 轮 QA 的 N-1：包能装进 profile，但宿主启动时报 `1 entry did not activate`，加载路径挂住）。补丁层因此预置**6 条只读动作的并集**——本包的两条（`change.read` `target: change`、`change.list` `target: changes`）加 `@heluo/forge-gitee` 的四条（`gitee.repository.read` / `gitee.issue.read` / `gitee.pr.read` / `gitee.delivery.judge`，`target` 分别为 `repository` / `issue` / `pull-request` / `change`）；这条策略行与 gitee 补丁层的那条 **id 相同、目录逐字相同**，同装时 loader 按 id 覆盖、只留一个实例（r10 起不再写 `isolate`）。写动作不预置，因为策略要求 enabled 的写/确认动作带审批台账条目，属单独的范围批准。同时必须显式配置 `config.audit`：策略无可用审计舱时对每个动作都拒绝（`POLICY_AUDIT_UNAVAILABLE`；内存舱未声明 `allowNonDurable` 时是 `POLICY_AUDIT_NOT_DURABLE`），只补目录不补审计仍是"装上不可用"。补丁层给的是内存审计舱，属**联调/试点级**证据，生产须在 profile 注入持久 sink 并去掉 `allowNonDurable`。补丁层也不写 `tools` 映射：devops 自己每次读/写都调 `policy.executeAction`，宿主层再映射会重复准入与重复审计，未映射的宿主工具按策略自身的 out-of-scope 语义放行。以上配置由 `test/patch-mount.test.mjs` 固化为门禁：解析分发出去的补丁层，用其中配置真实装配策略 + devops（3 个工具、读经门禁放行、审计记录落账），并全仓扫描任何插入 `@heluo/forge-devops` 的补丁层。
+策略行必须自带非空的 `config.catalog` 才会挂载成功：策略缺省目录是空表，devops 校验"两条读动作已登记且 `enabled`"随即以 `POLICY_ACTION_UNREGISTERED` 拒绝挂载（2026-10-28 第 2 轮 QA 的 N-1：包能装进 profile，但宿主启动时报 `1 entry did not activate`，加载路径挂住）。补丁层因此预置**6 条只读动作的并集**——本包的两条（`change.read` `target: change`、`change.list` `target: changes`）加 `@heluo/forge-gitee` 的四条（`gitee.repository.read` / `gitee.issue.read` / `gitee.pr.read` / `gitee.delivery.judge`，`target` 分别为 `repository` / `issue` / `pull-request` / `change`）；这条策略行与 gitee 补丁层的那条 **id 相同、目录逐字相同**，同装时 loader 按 id 覆盖、只留一个实例（r10 起不再写 `isolate`）。写动作不预置，因为策略要求 enabled 的写/确认动作带审批台账条目，属单独的范围批准。同时必须显式配置 `config.audit`：策略无可用审计舱时对每个动作都拒绝（`POLICY_AUDIT_UNAVAILABLE`；内存舱未声明 `allowNonDurable` 时是 `POLICY_AUDIT_NOT_DURABLE`），只补目录不补审计仍是"装上不可用"。补丁层给的是内存审计舱，属**联调/试点级**证据，生产须在 profile 注入持久 sink 并去掉 `allowNonDurable`。补丁层也不写 `tools` 映射：devops 自己每次读/写都调 `policy.executeAction`，宿主层再映射会重复准入与重复审计，未映射的宿主工具按策略自身的 out-of-scope 语义放行。以上配置由 `test/patch-mount.test.mjs` 固化为门禁：解析分发出去的补丁层，用其中配置真实装配策略 + devops（4 个工具、读经门禁放行、审计记录落账），并全仓扫描任何插入 `@heluo/forge-devops` 的补丁层。
 
 子进程只有一个出口（`src/cli-runner.mjs`）：`execFile` + `shell: false` + 超时 + 单流输出上限；入参只接受 `{ bin, args, purpose }`，程序名与参数分开传，没有"把整条命令当字符串"的通道；`execFile` 可注入，离线测试用假实现，不 spawn 真实 CLI。失败是数据不是异常：非零退出、超时、起不来分别落到 `exitCode`、`timedOut`、`exitCode: null`，由适配器映射为 `failed`/`unknown`，不重放。子进程环境沿用宿主进程环境，覆盖项只放非机密开关。
 
@@ -132,7 +132,31 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 
 策略服务是硬依赖，拿不到或没有 admission 入口就不挂载（入口关闭），不提供"无策略只读"降级；挂载时校验策略目录覆盖两条读动作且已开放（空目录/漏映射/未开放一律拒绝挂载，`POLICY_ACTION_UNREGISTERED`）；`change_read` / `change_list` 每次调用都经同一门禁（`POLICY_DENIED` 时零下游调用），调用方自带 `role` 等参数不进入 admission 身份（不扩权）。**已知边界**：上下文卡（`change_context`）的 dop 读取在挂载期目录校验后直连适配器，运行期不重复准入，也不产生第二条审计；若要求它与查询同口径，需单独接线（未在本轮范围）。卸载后插件服务与全部工具注册一并移除、无残留（此处指插件自身；profile 补丁层里的条目由 `pnpm uninstall:devops` 清理，见[回滚](#回滚)）。
 
-模型可见面注册三个工具：`forge_devops_query`（只读 runner，动作为枚举的 `change.read` / `change.list`；单条读取返回读信封 + `facts`（平台记录与归一结果），清单返回 `user` / `total` / `count` / `items` / `filter`；归一失败只记 `normalize_error`，raw 仍返回）、`forge_devops_change_context`（聚合读，产出上下文卡；承建仓库段为外部指引 `REPO_FACTS_EXTERNAL`）、`forge_devops_artifact_write`（产物落盘，唯一落盘出口；`clarify` 需 `data.findings`、`plan` 需 `data.items` 且必须过机检，`body` 与 `data` 互斥）。参数名统一用 `target`：策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（2026-10-24 实测的目录缺口）。未就绪时流程面仍可达，但只产出 `blocked` 卡（零子进程调用），只读工具按 `NO_READER` 失败并给出配置页指引；产物落盘在写文件之前按「变更号绑定 → kind/参数（body 与 data 互斥）→ meta 证据」三段校验，clarify/plan 机检失败零落盘。配置页的读写端点在同源 `/api/forge-devops` 下（`GET` 快照、`POST` 保存；写请求要求自定义请求头，响应一律 `no-store`），`webServer` 缺失或前缀冲突时只降级，不影响工具面与流程面。
+模型可见面注册四个工具：`forge_devops_query`（只读 runner，动作为枚举的 `change.read` / `change.list`；单条读取返回读信封 + `facts`（平台记录与归一结果），清单返回 `user` / `total` / `count` / `items` / `filter`；归一失败只记 `normalize_error`，raw 仍返回）、`forge_devops_change_context`（聚合读，产出上下文卡；承建仓库段为外部指引 `REPO_FACTS_EXTERNAL`）、`forge_devops_change_update`（受控写回：`summary` 标题 / `description` 描述 / `aiAc` 验收标准，动作 `change.clarification.write`，默认不登记即拒绝，需 `confirm{object}` 且目标必须是会话已读到的变更）、`forge_devops_artifact_write`（产物落盘，唯一落盘出口；`clarify` 需 `data.findings`、`plan` 需 `data.items` 且必须过机检，`body` 与 `data` 互斥）。参数名统一用 `target`：策略门禁只读 `exec.arguments.target`，用 `command`/`path` 之类名字会让 `target-required` 永远无法满足（2026-10-24 实测的目录缺口）。未就绪时流程面仍可达，但只产出 `blocked` 卡（零子进程调用），只读工具按 `NO_READER` 失败并给出配置页指引；产物落盘在写文件之前按「变更号绑定 → kind/参数（body 与 data 互斥）→ meta 证据」三段校验，clarify/plan 机检失败零落盘。配置页的读写端点在同源 `/api/forge-devops` 下（`GET` 快照、`POST` 保存；写请求要求自定义请求头，响应一律 `no-store`），`webServer` 缺失或前缀冲突时只降级，不影响工具面与流程面。
+
+### 写回变更内容（`change update`，默认关闭）
+
+`dop change update <变更号> --summary "标题" --description "描述" --ai-ac "验收标准"`（用户 2026-11-04 提供，dop 1.x 新参数）用于 Agent 分析完变更内容后回写标题、描述与验收标准。
+
+- **只有三个字段**：`summary`（标题）、`description`（描述）、`aiAc`（`--ai-ac`，验收标准）；至少给一个，空字段不拼 flag，不做通用 argv 透传。
+- **三层前置**：`confirm{object}` 与目标逐字一致 → 目标必须等于本次会话已读到的变更号（先读再写）→ 策略门禁 `change.clarification.write`（默认未登记即拒绝、零子进程）。
+- **写后回读**：`change view --json` 核对三个字段（`summary` / `description` / `userStory.storyAC`，平台可能 HTML 包裹），结果只有 `done` / `failed` / `unknown`；退出码 0 不单独算成功，`unknown` 不重放。
+- **默认关闭**：分发补丁层不登记写动作；要启用，在活动 profile 的补丁层给 `heluo-policy` 加目录条目与**有效审批台账**（登记 ≠ 批准，缺台账挂载即拒绝）：
+
+```yaml
+catalog:
+  - { action: 'change.clarification.write', kind: 'write', target: 'change', enabled: true }
+approvals:
+  - approval_id: 'APR-DEVOPS-UPDATE-001'
+    action: 'change.clarification.write'
+    resource: 'ARD123456'          # 只批准这一条变更；'*' 表示该动作全部资源
+    approved_by: '<批准人>'
+    approved_at: '2026-11-04T10:00:00+08:00'
+    revision_range: []             # 空 = 不绑定版本；有范围时不匹配无版本调用
+    expires_at: '2027-11-04T10:00:00+08:00'
+```
+
+写回的 `--help`、输出样例与 `--ai-ac` 的落点尚未取得真实样本（见「未验」）；审批台账由你自己填写，工具不代替审批。
 
 ## 测试
 
@@ -140,14 +164,14 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 node --test "packages/forge-devops/test/*.test.mjs"
 ```
 
-覆盖（`node --test` 全量，条数以实跑为准）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、未启动（`exitCode: null`）按入口形态归因并保留 `detail.spawnFailed`、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载（插件服务与工具注册）无残留、配置校验；工具侧另有：只注册三个工具、参数用 `target` 且必填、两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 与 `command` 透传、clarify 零选项与 plan 缺验证方式被拒且不落盘、`body`/`data` 互斥、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；组合根侧（`flow.test.mjs`）：配置齐全时产出 `ready` 卡（dop 一次固定 argv）、未配置时 `blocked` 卡 + 零调用、无写端口、非法变更号早退；目录绑定侧（`policy-binding.test.mjs`）：空目录/漏映射/未开放/无目录/无 admission 入口拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝、调用方自带 `role` 不进入 admission 身份。CLI 配置面另有：`entry-form.test.mjs`（入口形态单点：win32 的 `.exe` / 无后缀 / `.cmd` / `.ps1` / `.bat` / `.com` 六形态都能直接执行，POSIX 仍要执行位、仍不选包装脚本）、`failure-face.test.mjs`（spawn 失败面单点：读信封、写动作结果与变更卡片三出口同口径，只给 `reason` / 失败类别 / `next`，零路径、零 errno、零原始报错）、`cli-discovery.test.mjs`（名字表 6 项、`.exe` 优先排序、`rejected` 恒空、执行位、PATH 去重与展开、目录上限、假时钟截止；Windows 规则靠注入平台与假文件系统覆盖，真机属未验）、`cli-config.test.mjs`（三层优先级矩阵、事实来源推导四态、来源语义、脱敏零命中、逐字段报错）、`cli-access.test.mjs`（快照/刷新/revision 栅栏/保存四路径）、`cli-http.test.mjs`（GET/POST 状态码、请求头、`no-store`、错误体形状、`?refresh=1` 在响应前完成发现→重合并→重建读面）、`client-shape.test.mjs`（页面骨架的静态契约、两键渲染与文案零命中）、`delivery-selfcheck.test.mjs`（全仓安全扫描：发现层零子进程、客户端不打印路径，以及 3 个工具 / 4 个配置键 / 无 gh 残留的清单自检）。
+覆盖（`node --test` 全量，条数以实跑为准）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、未启动（`exitCode: null`）按入口形态归因并保留 `detail.spawnFailed`、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载（插件服务与工具注册）无残留、配置校验；工具侧另有：只注册四个工具、参数用 `target` 且必填、写回的 confirm/字段/未知三态、两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 与 `command` 透传、clarify 零选项与 plan 缺验证方式被拒且不落盘、`body`/`data` 互斥、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；组合根侧（`flow.test.mjs`）：配置齐全时产出 `ready` 卡（dop 一次固定 argv）、未配置时 `blocked` 卡 + 零调用、无写端口、非法变更号早退；目录绑定侧（`policy-binding.test.mjs`）：空目录/漏映射/未开放/无目录/无 admission 入口拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝、调用方自带 `role` 不进入 admission 身份。CLI 配置面另有：`entry-form.test.mjs`（入口形态单点：win32 的 `.exe` / 无后缀 / `.cmd` / `.ps1` / `.bat` / `.com` 六形态都能直接执行，POSIX 仍要执行位、仍不选包装脚本）、`failure-face.test.mjs`（spawn 失败面单点：读信封、写动作结果与变更卡片三出口同口径，只给 `reason` / 失败类别 / `next`，零路径、零 errno、零原始报错）、`cli-discovery.test.mjs`（名字表 6 项、`.exe` 优先排序、`rejected` 恒空、执行位、PATH 去重与展开、目录上限、假时钟截止；Windows 规则靠注入平台与假文件系统覆盖，真机属未验）、`cli-config.test.mjs`（三层优先级矩阵、事实来源推导四态、来源语义、脱敏零命中、逐字段报错）、`cli-access.test.mjs`（快照/刷新/revision 栅栏/保存四路径）、`cli-http.test.mjs`（GET/POST 状态码、请求头、`no-store`、错误体形状、`?refresh=1` 在响应前完成发现→重合并→重建读面）、`client-shape.test.mjs`（页面骨架的静态契约、两键渲染与文案零命中）、`delivery-selfcheck.test.mjs`（全仓安全扫描：发现层零子进程、客户端不打印路径，以及 4 个工具 / 4 个配置键 / 无 gh 残留的清单自检）。
 
 仓库根另有卸载命令的离线用例：`node --test tests/patch-layer-blocks.test.mjs tests/uninstall-devops.test.mjs`——补丁层按缩进块精确删条目（缩进更深的同名 `- id:` 不命中）、重复执行幂等、无 `dsh` 时只清理并打印下一步、stdout 零绝对路径。
 
 ## 边界
 
 - 2026-11-03 当前用户最终确认[Issue 交付模型](../../docs/requirements/requirements-baseline.md#23-issue-交付模型与受控研发目标需求已确认)：变更组织目标与总体约束，1:N Issue；每 Issue 恰一变更及一仓库，跨仓库拆独立交付验收 Issue。变更／Issue 双入口须读真实关联，run 只是执行记录。
-- dop 读取变更（单条 / 清单）、总体约束与关联线索，以故事作背景；仓库／Issue／PR 事实仍由 Gitee 唯一负责，不以 `change_context` 指引冒充权威关联。三工具与四配置键不因此增加接口；只读 runner 的扩展参数必须逐个取证后进枚举，不把 argv 交给模型。
+- dop 读取变更（单条 / 清单）、总体约束与关联线索，以故事作背景；仓库／Issue／PR 事实仍由 Gitee 唯一负责，不以 `change_context` 指引冒充权威关联。四工具与四配置键不因此增加接口；只读 runner 的扩展参数必须逐个取证后进枚举，写回只经固定三个 flag，不把 argv 交给模型。
 - 双端产物、凭据注入、真实关联和用户权限须验证；未获准或验证失败时关闭对应命令。需求不再等平台／安全／PMO 代批，但真实强制控制不可绕过。
 - 充分 Issue 不另写规格，Agent 按需设计，Skill 提供企业语义，Teamflow 唯一执行；内部 PRD／技术蓝图不是第二需求真源。澄清按归属写回变更或 Issue，仍需动作授权、C3 分类、版本与回查；现有默认禁用及未验状态不变，不主动最终结项。
 - 超时、断流或无法确认未执行时不盲目重放，按冻结规则处理。
@@ -159,4 +183,5 @@ node --test "packages/forge-devops/test/*.test.mjs"
 - **包装脚本与 shim 的真实启动失败**：未启动提示由 `src/failure-face.mjs` 单点按入口形态归因，结构化 detail 带 `reason` / 失败类别 / `next`，不含路径与 errno；这一面由注入 `EINVAL` / `ENOENT` 桩在离线用例里覆盖，**没有在真实 npm shim 上跑过**；真实 Windows 上 `dop.cmd`、无后缀 shim 的启动失败仍属未验。
 - **宿主组合**：当前插件在目标宿主版本下的 `configEditor` 写面与写后热调和未联调；配置页未走宿主表单面，改由同源路由 + profile 补丁写入。
 - **企业前提**：dop 是否随附原生 Windows 可执行文件、是否提供离线身份探针、真实安装目录分布均未知。发现规则不依赖这些；未命中时页面显示已查类别与全部候选，由用户指定位置。
-- **`change list` 扩展参数**：清单读取的主路径（`change list --json`）有适配器与离线用例；`--status` 等扩展 flag 的拼写与语义**没有真实 CLI 证据**（待 `dop change list --help`），失败会以 `COMMAND_FAILED` 可见返回、不静默；`@me` 之外的过滤/分页未实现。
+- **`change list` 扩展参数**：清单读取的主路径（`change list --json`）有适配器与离线用例；`--state` 已按 2026-11-04 的 spec 修正（`--status` 不存在），分页/搜索/team 未接入；真实输出样例仍待企业实测。
+- **`change update` 写回**：`--summary/--description/--ai-ac` 三个 flag 由用户 2026-11-04 口头给出，**没有 `--help` / 输出样例取证**；`--ai-ac` 回读按 `userStory.storyAC` 假设核对，真实落点待实测；写结果依赖回读，企业环境未联调。

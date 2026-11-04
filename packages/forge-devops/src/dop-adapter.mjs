@@ -6,9 +6,15 @@
  * 原样放进 `raw`，避免同一个字段出现两份映射。同理，记录字段齐不齐、id 是否与请求一致，
  * 都由 `normalizeChangeRecord(raw, { expectedId })` 判定——适配器不越权替上层做契约校验。
  *
- * 命令面（AC-22 / TECHNICAL §5.3），两条都是只读：
- *   `change view <changeId> --json`（运行时配置了 endpoint 时追加 `--endpoint <env>`）
+ * 命令面（AC-22 / TECHNICAL §5.3）：
+ *   `change view <changeId> --json`（配置了 endpoint 时追加 `--api-endpoint <env>`）
  *   `change list --json`（可选 `--status <status>`）
+ *   `change update <changeId> [--summary <s>] [--description <s>] [--ai-ac <s>]`（受控写，
+ *   2026-11-04 用户提供的 dop 1.x 新参数；三个 flag 逐一固定，不做通用 argv 透传）
+ *
+ * endpoint flag 的名义与真实 CLI 对齐：1.0.4 的全局 flag 是 `--api-endpoint`（此前写成
+ * `--endpoint`，配置了 endpoint 时会以 unknown flag 直接失败）。1.0.4 实测该 flag 被解析但
+ * 不改变实际请求地址；这里仍原样透传，兼容后续版本。
  * 结构化输出**只用长名 `--json`**：内网真 CLI 没有短名 `-j`（2026-10 实测直接报错），
  * 只有 mock 同时收两者——短名会让离线全绿、到真实环境才炸，别改回去。
  * 写命令与"通用 run(args)"入口在本模块**不存在**：argv 由本文件的常量与字段校验拼出，
@@ -33,6 +39,24 @@ import { DevopsReadError, READ_REASONS } from './read.mjs';
 export const DOP_COMMANDS = Object.freeze({
   changeView: Object.freeze(['change', 'view']),
   changeList: Object.freeze(['change', 'list']),
+  changeUpdate: Object.freeze(['change', 'update']),
+});
+
+/**
+ * `change update` 支持的三个字段与它们的 flag（顺序即 argv 顺序）。
+ *
+ * `summary` = 标题、`description` = 描述、`aiAc` = 验收标准（用户 2026-11-04 给出）。
+ * 真实 CLI 的 `--help` 尚未取证：只按这三条固定 flag 拼参，新增参数必须先拿到实测输出。
+ */
+export const DOP_UPDATE_FIELDS = Object.freeze([
+  Object.freeze({ field: 'summary', flag: '--summary' }),
+  Object.freeze({ field: 'description', flag: '--description' }),
+  Object.freeze({ field: 'aiAc', flag: '--ai-ac' }),
+]);
+
+/** `change update` 的写前置原因（命令失败/超时按结果四态返回，不在这里抛）。 */
+export const DOP_WRITE_REASONS = Object.freeze({
+  MISSING_FIELDS: 'MISSING_FIELDS',
 });
 
 /** 诊断标签用的逻辑程序名：真实路径由环境注入，任何输出/错误文案都不回显它。 */
@@ -49,6 +73,7 @@ const DIAGNOSTIC_LIMIT = 160;
 
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 const asArray = (value) => (Array.isArray(value) ? value : []);
+const asObject = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
 function clip(value, limit = DIAGNOSTIC_LIMIT) {
   const raw = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
@@ -95,8 +120,11 @@ function assertStatus(status) {
  */
 const digest = (stdout) => createHash('sha256').update(String(stdout ?? ''), 'utf8').digest('hex').slice(0, 12);
 
-/** dop 的 JSON 只接受对象；解析失败就是拿不到结构化事实，直接抛而非猜字段。 */
-function parseRecord(stdout, detail) {
+/**
+ * dop 的 JSON 解析：单条记录必须是对象；清单（`change list --json`）在真实 1.x 里是数组，
+ * 只有显式 `allowArray` 的调用方接受数组——两种形状都在这里判，不在下游猜。
+ */
+function parseRecord(stdout, detail, { allowArray = false } = {}) {
   const raw = text(stdout);
   if (raw === '') fail(READ_REASONS.MALFORMED_RESULT, 'dop 没有输出，无法解析 JSON 记录', detail);
   let parsed;
@@ -105,6 +133,7 @@ function parseRecord(stdout, detail) {
   } catch {
     fail(READ_REASONS.MALFORMED_RESULT, `dop 输出不是合法 JSON：${clip(raw)}`, detail);
   }
+  if (allowArray && Array.isArray(parsed)) return parsed;
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     fail(READ_REASONS.MALFORMED_RESULT, `dop 的 JSON 输出必须是对象，实际是 ${Array.isArray(parsed) ? 'array' : typeof parsed}`, detail);
   }
@@ -146,9 +175,9 @@ export function createDopAdapter({
     }
   }
 
-  /** endpoint 只作实参透传；命令标签不含它，避免诊断文案泄露环境信息。 */
+  /** endpoint 只作实参透传（真实 flag 名 `--api-endpoint`）；命令标签不含它，避免泄露环境信息。 */
   function argvOf(args) {
-    return endpoint === '' ? [...args] : [...args, '--endpoint', endpoint];
+    return endpoint === '' ? [...args] : [...args, '--api-endpoint', endpoint];
   }
 
   const labelOf = (args) => [DOP_LOGICAL_NAME, ...args].join(' ');
@@ -187,36 +216,143 @@ export function createDopAdapter({
     return { result, context };
   }
 
+  /** `change view <id> --json` 的单点实现：读面与写后回读共用。 */
+  async function readChangeOf({ changeId } = {}) {
+    const id = assertChangeId(changeId);
+    const { result, context } = await invoke({
+      args: [...DOP_COMMANDS.changeView, id, '--json'],
+      purpose: 'dop.change.view',
+    });
+    const raw = parseRecord(result.stdout, context);
+    return {
+      status: 'succeeded',
+      target_ref: id,
+      source_revision: `dop:${digest(result.stdout)}`,
+      observed_at: context.observedAt,
+      result_refs: [],
+      command: context.command,
+      change_id: id,
+      duration_ms: Number.isFinite(result.durationMs) ? result.durationMs : null,
+      truncated: result.truncated === true,
+      raw,
+    };
+  }
+
+  /** 写后回读：`change view --json` 的平台记录里，三个字段落在哪里（字段缺失按 absent）。 */
+  function readbackOf(raw, fields) {
+    const value = (input) => (typeof input === 'string' ? input.trim() : '');
+    const storyAc = value(asObject(raw?.userStory).storyAC);
+    const state = (expected, actual, { contains = false } = {}) => {
+      if (expected === '') return 'skipped';
+      if (actual === '') return 'absent';
+      if (actual === expected) return 'match';
+      // `--ai-ac` 写进故事的 storyAC（平台可能用 HTML 包裹），包含即视为已写入；
+      // 这只用于"回读是否可见"，不改变写入内容。
+      return contains && actual.includes(expected) ? 'match' : 'mismatch';
+    };
+    return {
+      summary: state(fields.summary, value(raw?.summary)),
+      description: state(fields.description, value(raw?.description)),
+      aiAc: state(fields.aiAc, storyAc, { contains: true }),
+    };
+  }
+
   return Object.freeze({
     /** `change view <id> --json`：只读一条变更；记录不在此处校验，`raw` 原样交出。 */
-    async readChange({ changeId } = {}) {
+    readChange: readChangeOf,
+
+    /**
+     * `change update <id> [--summary/--description/--ai-ac]`：受控写的**执行面**。
+     *
+     * 只做三件事：固定 argv、把命令面失败翻译成结果状态、写后用 `change view` 回读核对。
+     * 门禁、confirm、变更号绑定都在工具/装配层；本方法不知道"谁批准了这次写"。
+     *
+     * 结果状态：`done`（回读三字段全部 match/skipped）、`unknown`（命令可能已执行但回读
+     * 不一致/不可得，**不重放**）、`failed`（命令失败且回读确认未写入）。
+     */
+    async updateChange({ changeId, summary, description, aiAc } = {}) {
       const id = assertChangeId(changeId);
-      const { result, context } = await invoke({
-        args: [...DOP_COMMANDS.changeView, id, '--json'],
-        purpose: 'dop.change.view',
-      });
-      const raw = parseRecord(result.stdout, context);
+      const fields = {
+        summary: text(summary),
+        description: text(description),
+        aiAc: text(aiAc),
+      };
+      if (fields.summary === '' && fields.description === '' && fields.aiAc === '') {
+        fail(DOP_WRITE_REASONS.MISSING_FIELDS, 'change update 至少需要一个字段（summary / description / aiAc）', {
+          field: 'summary',
+        });
+      }
+      const args = [...DOP_COMMANDS.changeUpdate, id];
+      for (const { field, flag } of DOP_UPDATE_FIELDS) {
+        if (fields[field] !== '') args.push(flag, fields[field]);
+      }
+      const command = labelOf(args);
+      const observedAt = at();
+      const context = { command, observedAt };
+      assertConfigured(context);
+
+      let outcome = 'sent';
+      let reason = null;
+      try {
+        await invoke({ args, purpose: 'dop.change.update' });
+      } catch (error) {
+        const detail = asObject(error?.detail);
+        // 没启动 = 没写；超时/非零退出 = 可能已写，交给回读判定，绝不重放。
+        if (detail.spawnFailed === true) throw error;
+        if (detail.timedOut === true) {
+          outcome = 'uncertain';
+          reason = 'COMMAND_TIMEOUT';
+        } else if (text(error?.code) === 'COMMAND_FAILED') {
+          outcome = 'uncertain';
+          reason = 'COMMAND_FAILED';
+        } else {
+          throw error;
+        }
+      }
+
+      let readback = null;
+      let readbackError = null;
+      try {
+        const read = await readChangeOf({ changeId: id });
+        const states = readbackOf(read.raw, fields);
+        readback = {
+          ok: Object.values(states).every((state) => state === 'match' || state === 'skipped'),
+          fields: states,
+          source_revision: read.source_revision,
+          observed_at: read.observed_at,
+        };
+      } catch (error) {
+        readbackError = text(error?.code) || 'READBACK_FAILED';
+      }
+
+      const verified = readback !== null && readback.ok === true;
+      const status = verified ? (outcome === 'sent' ? 'done' : 'unknown') : outcome === 'sent' || readback === null ? 'unknown' : 'failed';
       return {
-        status: 'succeeded',
+        status,
         target_ref: id,
-        source_revision: `dop:${digest(result.stdout)}`,
-        observed_at: context.observedAt,
-        result_refs: [],
-        command: context.command,
-        change_id: id,
-        duration_ms: Number.isFinite(result.durationMs) ? result.durationMs : null,
-        truncated: result.truncated === true,
-        raw,
+        command,
+        observed_at: observedAt,
+        fields: Object.freeze({ ...fields }),
+        reason,
+        readback,
+        readback_error: readbackError,
+        // 写动作的可能副作用标记：非零退出/超时时即使未回读到，也不能假设"没发生"。
+        // 命令跑完（exit 0）或回读不可得时，都不能假设"没发生"；非零退出且回读确认未写入才算无副作用。
+        may_have_side_effect: verified || outcome === 'sent' || readback === null,
+        retry_policy: 'none',
       };
     },
 
     /** `change list --json`：只读变更清单（幂等查重与范围提示用），不做分页推断。 */
     async listChanges({ status } = {}) {
       const filter = status === undefined || status === null || text(status) === '' ? '' : assertStatus(status);
-      const args = [...DOP_COMMANDS.changeList, '--json', ...(filter === '' ? [] : ['--status', filter])];
+      // 真实 1.x 的清单过滤 flag 是 `--state`（`--status` 不存在）；分页/搜索/team 尚未接入。
+      const args = [...DOP_COMMANDS.changeList, '--json', ...(filter === '' ? [] : ['--state', filter])];
       const { result, context } = await invoke({ args, purpose: 'dop.change.list' });
-      const raw = parseRecord(result.stdout, context);
-      const items = asArray(raw.changes);
+      const raw = parseRecord(result.stdout, context, { allowArray: true });
+      // 真实 1.x 的 JSON 是数组（无 changes/total 包裹，也没有分页元数据）；旧 mock 是对象。
+      const list = Array.isArray(raw) ? null : asObject(raw);
+      const items = Array.isArray(raw) ? raw : asArray(list.changes);
       return {
         status: 'succeeded',
         target_ref: filter === '' ? 'changes' : `changes:${filter}`,
@@ -227,9 +363,9 @@ export function createDopAdapter({
         filter: filter === '' ? null : { status: filter },
         items,
         count: items.length,
-        total: Number.isInteger(raw.total) ? raw.total : items.length,
+        total: list !== null && Number.isInteger(list.total) ? list.total : items.length,
         // 平台清单自报的"当前用户"：没有就显式 null，不按本机账号猜。
-        user: raw.user ?? null,
+        user: list !== null && typeof list.user === 'string' ? list.user : null,
         truncated: result.truncated === true,
         raw,
       };
@@ -240,7 +376,7 @@ export function createDopAdapter({
       return Object.freeze({
         source: DOP_LOGICAL_NAME,
         read: Object.freeze(['change.view', 'change.list']),
-        write: Object.freeze([]),
+        write: Object.freeze(['change.update']),
         endpoint_configured: endpoint !== '',
         executable_configured: bin !== '',
       });

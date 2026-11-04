@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-TOOLS-001 |
 | 文档名称 | 企业工程工具最小契约 |
-| 版本 | V0.3.1 |
+| 版本 | V0.3.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -54,7 +54,7 @@
 |---|---|---|---|
 | `change.read` | 明确变更号、当前用户 | 要求、验收、归属与版本 | 读；只读基线 |
 | `change.list` | 当前用户（`@me`）、可选状态过滤（真实 flag 待核验） | 本用户可见的变更清单（编号/标题/状态/类型）与总数 | 读；只读基线；CLI 的 `change list` 天然是当前登录人范围，不另建权限判断 |
-| `change.clarification.write` | 用户已采纳且属于变更层的澄清、目标及原版本 | 原平台新版本及关联确认 | 研发写；需求已确认，当前禁用及接口缺口不变 |
+| `change.clarification.write` | 用户已采纳且属于变更层的澄清、目标及原版本 | 原平台新版本及关联确认（`change update --summary/--description/--ai-ac`） | 研发写；需求已确认，**默认不登记即拒绝**，登记 `enabled` 还须审批台账；工具面入口 `forge_devops_change_update`，写后回读，结果 done/failed/unknown |
 | `change.progress.write` | 平台确认的开始/进展字段及语义 | 实际记录值与版本 | 研发写；不得改最终完成/结束时间 |
 | `gitee.repository.read`, `gitee.issue.read`, `gitee.pr.read` | 明确仓库/对象 | 状态与可核对引用 | 读；只读基线；由 `@heluo/forge-gitee` 唯一实现 |
 | `issue.create_or_update` | 当前变更、本仓库交付项、验收及真实关联 | 已创建／更新对象引用；本项澄清写回 Issue | 研发写；需求已确认，能力与门禁待验证 |
@@ -72,13 +72,15 @@
 
 | 动作族 | 归属 | 实现动作标识 | 登记状态 |
 |---|---|---|---|
-| 变更读取与澄清回写 | `@heluo/forge-devops` | `change.read`、`change.list`；`change.clarification.write` | 两条读随包登记；澄清回写默认不登记即拒绝，且当前工具面不提供该动作（dop 无澄清写命令，不保留恒失败入口） |
+| 变更读取与澄清回写 | `@heluo/forge-devops` | `change.read`、`change.list`；`change.clarification.write` | 两条读随包登记；澄清回写默认不登记即拒绝，登记 enabled 还须有效审批台账；工具面入口 `forge_devops_change_update`（`change update`），需 `confirm{object}`，写后用 `change view` 回读 |
 | 仓库 / Issue / PR 读取 | `@heluo/forge-gitee` | `gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read` | 随包登记（只读） |
 | 交付就绪判定 | `@heluo/forge-gitee` | `gitee.delivery.judge` | 随包登记为只读判定（`target: change`、`egress: allow`），只判定不执行 |
 | Issue / PR / 评审写 | `@heluo/forge-gitee` | `gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record` | 默认不登记即拒绝；开闸需审批台账条目与 `confirm{repo,object}` |
 | 本地提交与推送 | `@heluo/forge-gitee` | `git commit` 是**本地动作**（不进策略目录，首行 `[变更号]` 由 `git-message.mjs` 强校验）；`git push` 是远端写，动作 `gitee.git.push` | push 默认不登记即拒绝，登记后仍需确认与审批 |
 
 r10 起 devops 不再持有仓库/Issue/PR 的读写实现（gh 侧模块已删除），`change_context` 的承建仓库段降级为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。`git commit` 不进策略目录不是放宽：策略对任何 `enabled` 的非读动作恒要求审批台账，而提交必须发生，因此改为本地动作 + 提交信息单源校验。
+
+2026-11-04（用户提供 dop 1.x 写回参数）：`change update <code> --summary <标题> --description <描述> --ai-ac <验收标准>` 成为澄清回写的实现命令（此前按“无命令面”不提供工具）。工具面新增 `forge_devops_change_update`：`confirm{object}` 与目标逐字一致、目标必须是本次会话已读到的那条变更、动作按 `change.clarification.write` 登记（默认不登记即拒绝，登记 enabled 还须审批台账）、写后回读核对，结果只有 done/failed/unknown，退出码 0 不当成功、未知不重放。命令的 `--help`、输出与 `--ai-ac` 的落点尚未取得真实样本，按未验处理。
 
 2026-11-03（用户确认 D 方案）：只读面改为枚举式薄 runner——一个只读工具按 `change.read` / `change.list` 两个动作分发，每个动作有自己的参数 schema（不是自由 argv）；新增清单读取是因为 CLI 已有 `change list` 而原工具面没有入口。产物落盘的 `clarify` / `plan` 两类改由纯函数机检后生成正文（硬门禁/假设/修订标识、验收条件→实现→验证逐条映射），手写正文不再绕过检查。工具面因此从 4 个降为 3 个：恒 `denied` 的澄清写工具删除，澄清单改为本地产物 + 待人工确认。以上是工具面与校验口径调整，不代表企业 CLI 已联调；`--status` 等扩展参数的真实 flag 仍待核验。
 

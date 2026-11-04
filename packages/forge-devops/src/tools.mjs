@@ -1,5 +1,5 @@
 /**
- * `@heluo/forge-devops` 的模型可见工具面（D 方案：3 个 = 1 只读 runner + 1 聚合读 + 1 产物落盘）。
+ * `@heluo/forge-devops` 的模型可见工具面（4 个 = 1 只读 runner + 1 聚合读 + 1 受控写 + 1 产物落盘）。
  *
  * 平台收敛原则：devops 只讲 dop 变更流程，仓库 / Issue / PR 的读写全部归 `@heluo/forge-gitee`。
  * 因此这里不再有 `issue_write` / `pr_write` / `repository_read` / `issue_read` / `pr_read`——
@@ -11,7 +11,11 @@
  * 2. **只读面是一个受枚举约束的 typed runner**（`forge_devops_query`）：`action` 与策略目录
  *    同名，不另造词表；`change.read` 只接受单个变更号，`change.list` 只接受 `@me`（工具层
  *    直接拒绝，零下游调用），两条动作的原始事实与归一投影都在结果里可见。
- * 3. **产物落盘没有平台动作**（`action: null`）：它只写本地 `.dsh-devops/`，但 kind 与证据
+ * 3. **受控写只有一个入口**（`forge_devops_change_update`）：把分析后的标题/描述/验收标准
+ *    用 `change update` 回写到变更，动作是 `change.clarification.write`。默认不登记即拒绝；
+ *    写前要求 `confirm{object}` 与本次会话已读到的变更号，写后由适配器用 `change view` 回读，
+ *    结果只有 done / failed / unknown 三态，退出码 0 不当成功、未知不重放。
+ * 4. **产物落盘没有平台动作**（`action: null`）：它只写本地 `.dsh-devops/`，但 kind 与证据
  *    必须齐全；clarify / plan 的正文由纯函数机检后渲染，缺 findings / 缺验证方式不落盘。
  *
  * 工具名 → 动作的映射表是唯一真源（`QUERY_TOOL` / `FLOW_TOOLS` / `DEVOPS_TOOLS`）：
@@ -35,15 +39,21 @@ export const QUERY_ACTIONS = Object.freeze([...READ_ACTIONS]);
 /** `change.list` 唯一接受的 target：平台按登录凭据取"我"的清单，不接受任意用户。 */
 const SELF_TARGET = '@me';
 
-/** 流程工具：`kind` 区分聚合读 / 本地落盘，`action` 是门禁动作（落盘为 null）。 */
+/** 平台写动作词表（写动作只在这里出现，禁止在工具里另写动作字符串）。 */
+export const FLOW_ACTIONS = Object.freeze({
+  CHANGE_UPDATE: 'change.clarification.write',
+});
+
+/** 流程工具：`kind` 区分聚合读 / 受控写 / 本地落盘，`action` 是门禁动作（落盘为 null）。 */
 export const FLOW_TOOLS = Object.freeze({
   forge_devops_change_context: Object.freeze({ kind: 'read', action: 'change.read' }),
+  forge_devops_change_update: Object.freeze({ kind: 'write', action: FLOW_ACTIONS.CHANGE_UPDATE }),
   forge_devops_artifact_write: Object.freeze({ kind: 'artifact', action: null }),
 });
 
 /**
- * 模型可见工具名（顺序即注册顺序）：1 只读 runner → 1 聚合读 → 1 落盘。
- * 静态门禁按这份枚举核对"恰好 3 个"，避免"加了工具忘登记"或"删了模块留下幽灵入口"。
+ * 模型可见工具名（顺序即注册顺序）：1 只读 runner → 1 聚合读 → 1 受控写 → 1 落盘。
+ * 静态门禁按这份枚举核对"恰好 4 个"，避免"加了工具忘登记"或"删了模块留下幽灵入口"。
  */
 export const DEVOPS_TOOLS = Object.freeze([QUERY_TOOL, ...Object.keys(FLOW_TOOLS)]);
 
@@ -53,6 +63,8 @@ export const TOOL_REASONS = Object.freeze({
   MISSING_ARGUMENT: 'MISSING_ARGUMENT',
   MISSING_TARGET: 'MISSING_TARGET',
   UNSUPPORTED_TARGET: 'UNSUPPORTED_TARGET',
+  /** 写回目标与会话已读到的变更不一致（防止对没读过的变更盲写）。 */
+  TARGET_NOT_BOUND: 'TARGET_NOT_BOUND',
   INTERNAL: 'INTERNAL',
 });
 
@@ -77,6 +89,9 @@ const NEXT_ACTION = Object.freeze({
   MISSING_ARGUMENT: 'complete-arguments',
   CONFIG_MISSING: 'configure-runtime',
   COMMAND_NOT_WHITELISTED: 'use-supported-channel',
+  // 写回：至少一个字段、先读再写、审批台账缺失时给可执行下一步。
+  MISSING_FIELDS: 'complete-arguments',
+  TARGET_NOT_BOUND: 'read-the-change',
   // 产物落盘的三种新失败：参数给错（body/data 互斥）与内容不合格（clarify/plan 机检）。
   ARTIFACT_ARGUMENT_MISMATCH: 'fix-arguments',
   ARTIFACT_CLARIFY_INVALID: 'fix-content',
@@ -217,6 +232,79 @@ function contextTool(service) {
   };
 }
 
+const CONFIRM_SCHEMA = Object.freeze({
+  type: 'object',
+  description: '写入确认：object 必须等于本次写回的变更号（模型自填不算数）',
+  properties: {
+    object: { type: 'string', description: '本次写回的变更号，例如 CHG-2026-0042' },
+  },
+  required: ['object'],
+  additionalProperties: false,
+});
+
+/** 写回前置：`confirm.object` 必须与目标逐字一致；目标为空单独报 MISSING_TARGET。 */
+function checkConfirm(confirm, target) {
+  if (confirm === null || typeof confirm !== 'object' || Array.isArray(confirm)) {
+    return TOOL_REASONS.CONFIRMATION_REQUIRED;
+  }
+  if (typeof target !== 'string' || target === '') return TOOL_REASONS.MISSING_TARGET;
+  if (typeof confirm.object !== 'string' || confirm.object.trim() !== target) {
+    return TOOL_REASONS.CONFIRMATION_REQUIRED;
+  }
+  return null;
+}
+
+/**
+ * 受控写：把 Agent 分析后的标题/描述/验收标准回写到变更。
+ *
+ * 三层前置全在工具里先做（confirm → 字段 → 下游），任何一项不成立都**零下游调用**：
+ * 1. `confirm.object` 与 `target` 逐字一致；
+ * 2. 三个内容字段至少给一个；
+ * 3. 真正的门禁、绑定校验与回读在 service/适配器（这里不透传 argv）。
+ */
+function changeUpdateTool(service) {
+  return {
+    name: 'forge_devops_change_update',
+    description:
+      'Write analyzed change content back to the platform (change.clarification.write) via `change update`: ' +
+      'summary = title, description = description, aiAc = acceptance criteria. Requires confirm{object} ' +
+      'equal to target and a change already read in this session; default denied unless the profile ' +
+      'registers the action and a valid approval entry. Result is done/failed/unknown from a `change view` ' +
+      'readback — an exit code alone is never success, and unknown is never retried.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: TARGET_HINT['change.read'] },
+        summary: { type: 'string', description: '标题（回写到变更 summary）' },
+        description: { type: 'string', description: '描述（回写到变更 description）' },
+        aiAc: { type: 'string', description: '验收标准（`--ai-ac`，平台可能以 HTML 包裹）' },
+        confirm: CONFIRM_SCHEMA,
+      },
+      required: ['target', 'confirm'],
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object' }, render: (_args, value) => json(value).content },
+    async execute(args) {
+      const action = FLOW_ACTIONS.CHANGE_UPDATE;
+      const target = typeof args?.target === 'string' ? args.target.trim() : '';
+      const denied = checkConfirm(args?.confirm, target);
+      if (denied !== null) return failure(action, denied, `confirm 与写回目标不一致：target=${target || '(空)'}`);
+      const summary = typeof args?.summary === 'string' ? args.summary.trim() : '';
+      const description = typeof args?.description === 'string' ? args.description.trim() : '';
+      const aiAc = typeof args?.aiAc === 'string' ? args.aiAc.trim() : '';
+      if (summary === '' && description === '' && aiAc === '') {
+        return failure(action, TOOL_REASONS.MISSING_ARGUMENT, '至少提供 summary / description / aiAc 之一');
+      }
+      try {
+        const result = await service.changeUpdate({ target, summary, description, aiAc });
+        return json({ ok: result?.status === 'done', result });
+      } catch (error) {
+        return failureOf(action, error);
+      }
+    },
+  };
+}
+
 /** 产物落盘：唯一出口 `artifacts.mjs`；没有平台动作，但 kind/证据/正文由纯函数机检。 */
 function artifactWriteTool(service) {
   return {
@@ -287,5 +375,5 @@ function artifactWriteTool(service) {
  * 静态门禁逐条核对。
  */
 export function buildDevopsTools(service) {
-  return [queryTool(service), contextTool(service), artifactWriteTool(service)];
+  return [queryTool(service), contextTool(service), changeUpdateTool(service), artifactWriteTool(service)];
 }

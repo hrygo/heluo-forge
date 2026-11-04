@@ -10,7 +10,7 @@
  *      配置页客户端不打印/不持久化路径、工具面不把取值型 access 字段拼进 `detail`、
  *      补丁层与 README 无绝对路径样例且口径改为「配置页优先」、清单声明客户端半
  *      （`dsh.client` + `./client` 导出 + 发布白名单含 `client.js`），以及
- *      「零回退」的可核对形式（D 方案起收敛为 3 个工具、`READ_REASONS` 不加码、只读面语义不变）。
+ *      「零回退」的可核对形式（D 方案起 3 个只读/落盘工具 + 1 个受控写工具、`READ_REASONS` 不加码、只读面语义不变）。
  *
  * dev 阶段按依赖分波产出，T8 可能先于部分任务执行：模块文件缺失时记为 DEFERRED
  * （诊断信息带归属任务），文件一旦落地立刻转为硬断言——自检随交付推进逐条生效，
@@ -198,7 +198,7 @@ test('只读面收敛：2 个读动作、4 个读状态、只读入口是 query 
     Array.from(toolsModule.DEVOPS_TOOLS).includes(toolsModule.QUERY_TOOL),
     `工具面缺 ${toolsModule.QUERY_TOOL}`,
   );
-  assert.equal(Array.from(toolsModule.DEVOPS_TOOLS).length, 3, '工具面 3 个：query + change_context + artifact_write');
+  assert.equal(Array.from(toolsModule.DEVOPS_TOOLS).length, 4, '工具面 4 个：query + change_context + change_update + artifact_write');
   assert.ok(!Array.from(toolsModule.DEVOPS_TOOLS).includes('forge_devops_change_read'), '旧 change_read 工具已删除');
   assert.ok(!Array.from(toolsModule.DEVOPS_TOOLS).includes('forge_devops_clarify_write'), '恒 denied 的澄清写工具已删除');
 });
@@ -290,7 +290,8 @@ test('dop 适配器：固定 argv、未注入 endpoint 不拼参、无写通道'
   const adapter = createDopAdapter({ runner, dopBin: '/opt/corp/dop', dopEndpoint: undefined });
   assert.equal(typeof adapter.readChange, 'function');
   assert.equal(typeof adapter.listChanges, 'function');
-  for (const forbidden of ['done', 'create', 'update', 'delete', 'close']) {
+  assert.equal(typeof adapter.updateChange, 'function', '写回只经 change update 一个方法');
+  for (const forbidden of ['done', 'create', 'delete', 'close']) {
     assert.ok(!(forbidden in adapter), `dop 适配器不得有 ${forbidden} 通道（§5.3 禁项）`);
   }
   await adapter.readChange({ changeId: 'ARD123456' });
@@ -299,11 +300,11 @@ test('dop 适配器：固定 argv、未注入 endpoint 不拼参、无写通道'
   assert.deepEqual(call.args.slice(0, 3), ['change', 'view', 'ARD123456'], '固定命令面 change view <id>');
   assert.ok(call.args.includes('--json'), '必须要求结构化输出 --json');
   assert.ok(!call.args.includes('-j'), '不得用短名 -j：内网真 CLI 只认 --json（2026-10 实测）');
-  assert.ok(!call.args.includes('--endpoint'), '未注入 endpoint 不得拼该参数');
+  assert.ok(!call.args.includes('--api-endpoint'), '未注入 endpoint 不得拼该参数（真实 flag 是 --api-endpoint）');
 
   const withEndpoint = createDopAdapter({ runner, dopBin: '/opt/corp/dop', dopEndpoint: 'https://dop.example/api' });
   await withEndpoint.readChange({ changeId: 'ARD123456' });
-  assert.ok(calls.at(-1).args.includes('--endpoint'), '注入 endpoint 时必须显式传递');
+  assert.ok(calls.at(-1).args.includes('--api-endpoint'), '注入 endpoint 时必须按真实 flag 名传递');
 });
 
 test('子进程出口不允许 shell 拼串、不允许同步 exec（跨模块安全底线）', (t) => {
@@ -430,15 +431,16 @@ test('产物落盘：kind 枚举、front matter 六字段定序、路径逃逸�
   assert.ok(escapeRejected, '产物路径逃逸必须拒绝（§7.7 第 10 行）');
 });
 
-test('工具面 3 个：名字与动作映射唯一真源，平台写动作不在这里（D 方案）', async (t) => {
+test('工具面 4 个：名字与动作映射唯一真源，写回必须带 confirm（D 方案 + 写回）', async (t) => {
   const toolsText = srcText('tools.mjs');
   const expected = [
     'forge_devops_artifact_write',
     'forge_devops_change_context',
+    'forge_devops_change_update',
     'forge_devops_query',
   ];
   const found = new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []);
-  assert.equal(found.size, 3, `工具面应为 3 个（D 方案：query + 聚合读 + 落盘），实际识别到 ${found.size}：${[...found].join(', ')}`);
+  assert.equal(found.size, 4, `工具面应为 4 个（query + 聚合读 + 受控写 + 落盘），实际识别到 ${found.size}：${[...found].join(', ')}`);
   for (const name of expected) assert.ok(found.has(name), `工具面缺 ${name}`);
   for (const gone of [
     'forge_devops_change_read',
@@ -451,9 +453,13 @@ test('工具面 3 个：名字与动作映射唯一真源，平台写动作不�
   ]) {
     assert.ok(!found.has(gone), `${gone} 必须已删除：跨平台读写入口只能留在 forge-gitee，恒 denied 的写工具不得占位`);
   }
-  // 工具面不再持有任何平台写动作（clarify_write 随平台写面一起归 forge-gitee）。
-  assert.doesNotMatch(toolsText, /change\.clarification\.write/u, '工具面不得再登记平台写动作');
-  assert.doesNotMatch(toolsText, /confirm\s*\{/u, '工具面不得再要求 confirm（平台写面已不在本包）');
+  // 唯一的平台写动作是 change.clarification.write（change update），必须要求 confirm；
+  // 其它平台写动作（issue/pr/评审/git push）仍归 forge-gitee。
+  assert.match(toolsText, /change\.clarification\.write/u, '写回动作必须登记为 change.clarification.write');
+  assert.match(toolsText, /confirm/u, '写回必须要求 confirm{object}');
+  for (const goneAction of ['issue.create_or_update', 'pr.create_or_update', 'review.ai.publish', 'review.human.record', 'gitee.git.push']) {
+    assert.ok(!toolsText.includes(goneAction), `工具面不得登记跨平台写动作 ${goneAction}`);
+  }
   const noCommandFace = srcFiles().filter((file) => /no-command-face/.test(srcText(file)));
   assert.ok(noCommandFace.length > 0, "commands 服务缺失时入口状态必须是 'no-command-face'（§7.7 第 12 行）");
   const { buildDevopsTools } = await load('tools.mjs');
@@ -692,8 +698,8 @@ test('r3 零回退：READ_REASONS 不加码，只读面语义与工具数不变�
   const toolsText = srcText('tools.mjs');
   assert.equal(
     new Set(toolsText.match(/forge_devops_[a-z_]+/g) ?? []).size,
-    3,
-    'D 方案起工具面是 3 个：只读 runner + 聚合读 + 落盘（仓库/Issue/PR 已交给 forge-gitee）',
+    4,
+    'D 方案起工具面是 4 个：只读 runner + 聚合读 + 受控写 + 落盘（仓库/Issue/PR 已交给 forge-gitee）',
   );
   const indexText = srcText('index.mjs');
   assert.match(indexText, /NO_READER/, '未命中仍以 NO_READER 失败（fail closed 不变）');
