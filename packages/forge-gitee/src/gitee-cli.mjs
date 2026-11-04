@@ -11,11 +11,12 @@
  *   2. **有界执行**：`shell: false`、超时 → `timedOut`、单流 1 MiB 截断 → `truncated`，
  *      失败是数据不是异常（与 r1 `cli-runner` 同一套终态口径，受控重复见 R-2）。
  *   3. **环境白名单**：子进程只拿到 `ENV_ALLOWLIST` 里的运行态变量 + `authEnv` 点名的
- *      凭据变量。git 调用额外叠 `GIT_TERMINAL_PROMPT=0`：绝不因为缺凭据而在管道里
- *      等一个永远不来的输入。
- *   4. **凭据只是提示**：落盘凭据（CLI 配置目录里的 `hosts.yml` 等）默认只告警
- *      （`persistentToken: 'warn'`）；配成 `block` 才在第一次调用前抛
- *      `GITEE_PERSISTENT_TOKEN`（**零子进程**）。凭据也永远不会进 argv。
+ *      凭据变量。白名单里有**唯一**一个凭据例外 `GITEE_TOKEN`：它就是这个 CLI 的认证模型，
+ *      其余凭据变量仍不继承。git 调用额外叠 `GIT_TERMINAL_PROMPT=0`：绝不因为缺凭据而在
+ *      管道里等一个永远不来的输入。
+ *   4. **凭据只是提示**：落盘凭据（CLI 配置目录里的 `hosts.yml`、本 CLI 的
+ *      `~/.gitee-cli/config.json` 等）默认只告警（`persistentToken: 'warn'`）；配成 `block`
+ *      才在第一次调用前抛 `GITEE_PERSISTENT_TOKEN`（**零子进程**）。凭据也永远不会进 argv。
  *
  * 产物契约（蓝图 §3 第 2 行，下游逐字使用）：
  *   createGiteeRunner({execFile, env, timeoutMs, maxOutputBytes, now, authEnv, gitBin,
@@ -57,8 +58,13 @@ const GIT_ENV_OVERRIDES = Object.freeze({ GIT_TERMINAL_PROMPT: '0' });
 /**
  * 从宿主继承给子进程的环境变量白名单：只放运行态需要的东西。
  *
- * 刻意**不含**任何凭据变量：凭据只从 `authEnv` 点名的变量来（AC-22）。也不含
- * "另一个 provider 的 host 变量"之类的语义，host 走 `--host` 参数由适配器加。
+ * 唯一的凭据例外是 `GITEE_TOKEN`：本 CLI 的认证模型就是"环境变量 `GITEE_TOKEN` 优先于
+ * 系统凭据管理器（keyring service `gitee-cli-go`）"（规格 §1.3）。不放行它，用户按 CLI
+ * 文档设了变量也只会拿到 `Not authenticated.`；系统凭据管理器是子进程自己读的，不经过环境。
+ * 别家 CLI 的令牌变量、云厂商密钥等仍一律不继承——`authEnv` 是显式注入通道，同名变量以它为准。
+ *
+ * 里面也没有"另一个 provider 的 host 变量"之类的语义：主机地址来自本 CLI 自己的
+ * `~/.gitee-cli/config.json` 的 `base_url`，既不是参数也不是环境变量（规格 §1.1/§1.5）。
  */
 export const ENV_ALLOWLIST = Object.freeze([
   'PATH',
@@ -93,6 +99,8 @@ export const ENV_ALLOWLIST = Object.freeze([
   'NO_COLOR',
   'CLICOLOR',
   'CI',
+  // 唯一凭据例外：本 CLI 的认证模型（规格 §1.3），见上方白名单注释。
+  'GITEE_TOKEN',
 ]);
 
 /** 凭据面的固定原因码（TECHNICAL §8.3）：落盘令牌阻断、缺令牌。 */
@@ -104,8 +112,20 @@ export const CREDENTIAL_REASONS = Object.freeze({
 /** 替换后的占位符：看得出被脱敏过，但看不出原值（长度也不泄露）。 */
 const REDACTED = '***';
 
-/** CLI 配置目录里可能落盘凭据的文件名（`gh` 兼容 CLI 的既有布局）。 */
+/**
+ * CLI 配置目录里可能落盘凭据的 YAML 文件名（`gh` 兼容布局：另一份 CLI 形态仍在用）。
+ */
 const CONFIG_FILE_NAMES = Object.freeze(['hosts.yml', 'hosts.yaml', 'config.yml', 'config.yaml']);
+
+/**
+ * 本 CLI 的实际落盘布局：`<用户主目录>/.gitee-cli/config.json`（规格 §1.5）。
+ *
+ * 它是 2 空格缩进 JSON，可能出现的键只有 `token`/`base_url`/`remote_pattern`；`auth login`
+ * 默认写系统凭据管理器，但 `config set token …` 会把令牌落进这个文件——AC-22 的风险检查
+ * 必须能看见它，否则"检测不到"就只是"扫错了地方"。
+ */
+const GITEE_CONFIG_DIR_NAME = '.gitee-cli';
+const GITEE_CONFIG_FILE_NAMES = Object.freeze(['config.json']);
 
 /** 只扫描前 64 KiB：令牌在文件头部，超大文件不该成为启动期开销。 */
 const MAX_CREDENTIAL_SCAN_BYTES = 65_536;
@@ -239,7 +259,7 @@ function defaultReadFile(file) {
 }
 
 /**
- * 从环境推出 CLI 配置目录下的候选文件（`gh` 兼容布局）。
+ * 从环境推出 CLI 配置目录下的候选文件：`gh` 兼容的 YAML 布局 + 本 CLI 的 JSON 布局。
  *
  * 只看传进来的 env：装配层传真实环境，离线用例传显式 env 即零候选——检测逻辑因此
  * 完全可复现，不会在测试里读到开发机的真实配置。
@@ -247,26 +267,51 @@ function defaultReadFile(file) {
 function candidateConfigFiles(env) {
   const source = env === null || env === undefined ? {} : env;
   const files = [];
-  const pushDir = (dir, ...rest) => {
+  const pushDir = (dir, segments, names) => {
     const base = asText(dir);
     if (base === null) return;
     const trimmed = base.replace(/[\\/]+$/, '');
     if (trimmed.length === 0) return;
-    for (const name of CONFIG_FILE_NAMES) files.push([trimmed, ...rest, name].join('/'));
+    for (const name of names) files.push([trimmed, ...segments, name].join('/'));
   };
 
-  pushDir(source.GH_CONFIG_DIR);
+  pushDir(source.GH_CONFIG_DIR, [], CONFIG_FILE_NAMES);
   const xdg = asText(source.XDG_CONFIG_HOME);
-  if (xdg !== null) pushDir(xdg, 'gh');
+  if (xdg !== null) pushDir(xdg, ['gh'], CONFIG_FILE_NAMES);
   const appData = asText(source.APPDATA);
-  if (appData !== null) pushDir(appData, 'GitHub CLI');
+  if (appData !== null) pushDir(appData, ['GitHub CLI'], CONFIG_FILE_NAMES);
   const home = asText(source.HOME) ?? asText(source.USERPROFILE);
-  if (home !== null) pushDir(home, '.config', 'gh');
+  if (home !== null) pushDir(home, ['.config', 'gh'], CONFIG_FILE_NAMES);
+  // 本 CLI 的落盘位置：`~/.gitee-cli/config.json` 与 `%USERPROFILE%\.gitee-cli\config.json`。
+  // 两个变量在部分环境里都设了且不同，各看一次；重复由末尾的 Set 收口。
+  for (const profile of [asText(source.HOME), asText(source.USERPROFILE)]) {
+    if (profile !== null) pushDir(profile, [GITEE_CONFIG_DIR_NAME], GITEE_CONFIG_FILE_NAMES);
+  }
 
   return [...new Set(files)];
 }
 
-function hasPersistentToken(text) {
+/**
+ * `~/.gitee-cli/config.json` 的判据：解析 JSON 后看顶层 `token` 是不是**非空字符串**。
+ *
+ * 空串/缺键都等于"没设置"（规格 §1.5：只存被显式 set 过的键），所以不能只看键名。
+ * 解析失败不猜：半截文件自造的告警无法复现，交给下面的形状扫描兜底。
+ */
+function hasJsonToken(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const flat = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+  return flat && typeof parsed.token === 'string' && parsed.token.trim() !== '';
+}
+
+function hasPersistentToken(text, file = '') {
+  // JSON 布局按字段判：形状扫描只认 YAML 的 `token: value`，对 `"token": "…"` 不成立，
+  // 硬套会把 `"token": ""` 也当成命中（误报）或整份文件漏掉（漏报）。
+  if (String(file).toLowerCase().endsWith('.json') && hasJsonToken(text)) return true;
   for (const pattern of PERSISTENT_TOKEN_PATTERNS) {
     if (pattern.test(text)) return true;
   }
@@ -275,6 +320,9 @@ function hasPersistentToken(text) {
 
 /**
  * 落盘凭据自检（AC-22）：CLI 配置目录里存在持久令牌时阻断，不静默继续。
+ *
+ * 候选覆盖两套布局：`gh` 兼容的 YAML（`hosts.yml` 等）与本 CLI 的
+ * `~/.gitee-cli/config.json`（规格 §1.5）。只扫 YAML 会让这个 CLI 的落盘令牌永远检测不到。
  *
  * 返回值**只含文件名与下一步动作**，不含令牌值；`checked` 是本次实际看过的候选数，
  * 让"零候选"与"看了但干净"在证据里可区分（前者是因为环境里没有 HOME）。
@@ -297,7 +345,7 @@ export function detectPersistentToken({ env = {}, readFile = defaultReadFile } =
       text = null;
     }
     if (typeof text !== 'string' || text.length === 0) continue;
-    if (hasPersistentToken(text.slice(0, MAX_CREDENTIAL_SCAN_BYTES))) hits.push(file);
+    if (hasPersistentToken(text.slice(0, MAX_CREDENTIAL_SCAN_BYTES), file)) hits.push(file);
   }
 
   if (hits.length === 0) {
@@ -392,7 +440,7 @@ function invoke(execFile, bin, args, options) {
 
 /**
  * 校验调用形状：只认 `{bin, args, purpose}`，`args` 必须是干净的字符串数组。
- * NUL 会被内核截断参数（`--limit=5\0 --host=x`），属于注入面，直接拒绝。
+ * NUL 会被内核截断参数（`--limit=5\0 --state=all`），属于注入面，直接拒绝。
  */
 function normalizeInvocation(input) {
   if (input === null || typeof input !== 'object') {

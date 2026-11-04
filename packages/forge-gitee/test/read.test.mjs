@@ -110,24 +110,27 @@ const REPO_JSON = Object.freeze({
   last_activity_at: '2026-10-29T12:00:00+08:00',
   archived: false,
   ssh_url_to_repo: `ssh://git@${HOST}:30004/group/repo.git`,
+  http_url_to_repo: `http://${HOST}/group/repo.git`,
 });
 
+// issue 详情载荷（规格 §2.4）：8 个字段，`id` 是字符串键，没有 web_url/updated_at。
 const ISSUE_JSON = Object.freeze({
-  id: 12,
-  title: '示例 Issue',
+  author: '000002-示例审批人',
+  created_at: '2026-10-29T12:30:00+08:00',
   description: '<p>示例正文</p>',
-  state: 'opened',
-  web_url: `http://${HOST}/group/repo/issues/12`,
-  updated_at: '2026-10-29T12:30:00+08:00',
+  id: 'I2N6',
   labels: Object.freeze(['bug']),
+  priority: 'medium',
+  state: 'opened',
+  title: '示例 Issue',
 });
 
 const ISSUE_LIST = Object.freeze({
   data: {
     list: [
-      // 实测清单项只有 id/title/updated_at（外加 description/labels）：没有 state、没有 web_url。
-      { id: 12, title: '示例 Issue', updated_at: '2026-10-29T12:30:00+08:00' },
-      { id: 11, title: '另一个', updated_at: '2026-10-29T12:00:00+08:00' },
+      // 实测清单项恰好 5 个键：description/id/labels/title/updated_at（没有 state、没有 web_url）。
+      { description: '<p>示例正文</p>', id: 12, labels: [], title: '示例 Issue', updated_at: '2026-10-29T12:30:00+08:00' },
+      { description: '', id: 11, labels: [], title: '另一个', updated_at: '2026-10-29T12:00:00+08:00' },
     ],
   },
   meta: { current_page: 1, total_count: 2, total_pages: 1 },
@@ -193,10 +196,17 @@ test('AC-15: 清单读是查询快照 —— source_revision 为 null 仍算 suc
   assert.equal(envelope.kind, 'list');
   assert.equal(envelope.count, 2);
   assert.equal(envelope.total_count, 2, 'meta.total_count 作为附加事实带出，不进 missing_fields');
-  assert.deepEqual([...envelope.missing_fields].sort(), ['state', 'web_url'], '实测清单项没有这两个键，如实上报');
+  assert.deepEqual([...envelope.missing_fields], [], '实测清单项的 5 个键都在载荷里');
   assert.equal(envelope.items.length, 2);
   assert.equal(envelope.items[0].id, 12, 'Issue 清单编号是 id');
+  assert.deepEqual(Object.keys(envelope.items[0]), [
+    'description', 'id', 'labels', 'title', 'updated_at',
+  ]);
   assert.ok(runner.calls[0].args.includes('--limit'));
+  // 显式传的 state 原样发出去（`all` 在 issue 词表里合法）；不传时不注入默认值另有断言。
+  const args = runner.calls[0].args;
+  assert.equal(args.includes('--state'), true, '显式传入的 state 要发出去');
+  assert.equal(args[args.indexOf('--state') + 1], 'all');
 
   // 归一幂等：服务边界已经归一过的信封不许被二次降级（index.mjs 会再传一次）。
   const again = normalizeGiteeReadResult({ action: 'gitee.issue.read', target: 'group/repo', result: envelope });
@@ -503,12 +513,23 @@ test('AC-9/14: 三个读工具名、顺序与参数面固定', async () => {
   assert.deepEqual(Object.keys(definitions[0].parameters.properties), ['target']);
   for (const definition of definitions.slice(1)) {
     assert.deepEqual(Object.keys(definition.parameters.properties), ['target', 'list', 'state', 'limit', 'json']);
-    assert.deepEqual([...definition.parameters.properties.state.enum], ['open', 'closed', 'all']);
     // D-1：参数面只能用宿主支持的子集（`minimum`/`maximum` 会被宿主判为不支持的关键字，
     // 取数边界由适配器 `ARG_INVALID` 强制）。范围仍要以文案写出来，模型看得见。
     assert.deepEqual(hostSchemaViolations(definition.parameters, 'parameters'), []);
     assert.equal(definition.parameters.properties.limit.type, 'integer');
     assert.match(definition.parameters.properties.limit.description, new RegExp(`1-${GITEE_LIST_LIMIT}`, 'u'));
+  }
+  // 两个命令的 state 词表**不共用**（规格 §2.4/§2.5）：issue 是 created/processing/rejected/
+  // finished，pr 是 opened/closed/merged。工具面从 `STATE_VALUES` 取，少一个都会让合法值被模型当成越界。
+  const [, issueTool, prTool] = definitions;
+  assert.deepEqual([...issueTool.parameters.properties.state.enum], [
+    'created', 'processing', 'rejected', 'finished', 'all',
+  ]);
+  assert.deepEqual([...prTool.parameters.properties.state.enum], ['opened', 'closed', 'merged', 'all']);
+  for (const definition of [issueTool, prTool]) {
+    assert.equal(definition.parameters.properties.state.type, 'string');
+    assert.match(definition.parameters.properties.state.description, /CLI default/);
+    assert.ok(!definition.parameters.properties.state.enum.includes('open'), '`open` 不是筛选值');
   }
 
   assert.throws(() => readToolDefinitions(null), (error) => {
@@ -576,8 +597,9 @@ test('端到端主路径: 工具 → 装配端口 → 适配器 → 桩 CLI，�
 
   const singleEnvelope = parseBody(await issue.execute({ target: 'group/repo#12' }));
   assert.equal(singleEnvelope.status, 'succeeded');
-  assert.equal(singleEnvelope.source_revision, ISSUE_JSON.updated_at);
-  assert.deepEqual([...singleEnvelope.result_refs], [ISSUE_JSON.web_url]);
+  assert.equal(singleEnvelope.source_revision, ISSUE_JSON.created_at);
+  // 详情载荷没有 web_url：宁可 result_refs 为空，也不猜链接。
+  assert.deepEqual([...singleEnvelope.result_refs], []);
   assert.equal(runner.calls.length, 3);
 
   // 终态核对：三次调用都是只读命令，没有写通道被触发，也没有重试。

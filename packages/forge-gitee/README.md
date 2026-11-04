@@ -1,6 +1,6 @@
 # @heluo/forge-gitee
 
-状态：可用（离线用例全绿；只读面的字段名与响应形状已按 2026-11-03 企业实测反写，实机与真实凭据见[未验（NOT RUN）](#未验not-run)）
+状态：可用（离线用例全绿；只读面的字段名与响应形状已按 2026-11-03 企业实测反写，argv 形状、`--state` 词表、空结果解包与凭据路径按实测规格 `docs/contracts/gh-cli-spec.md` 对齐；实机与真实凭据见[未验（NOT RUN）](#未验not-run)）
 
 | 项 | 内容 |
 |---|---|
@@ -11,7 +11,7 @@
 | 详细设计 | [DESIGN-010](../../docs/design/plugins/forge-gitee.md) |
 | 实现状态 | `package.json`、`src/`（13 模块）、`test/`（见[测试](#测试)）、`cordis.patch.yml` 已落地 |
 
-`GITEE_PLATFORM='gitee'` 是本包唯一的平台声明，落在每个信封与返回体上。仓库 / Issue / PR 的事实只有这一份实现：`@heluo/forge-devops` 退回 dop 变更流程四工具，`change_context` 的承建仓库段改为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。字段只有白名单一套（`GITEE_FIELD_PROJECTIONS`），而且名字是**实测来的**：2026-11-03 在企业机器上取到 `repo view`/`issue list`/`pr list` 三段真实输出，据此把 gh 风格的猜测全部换掉（仓库没有 `url`/`private`/`updated_at`，PR 编号是 `iid`、Issue 是 `id`，链接是 `web_url`），`mergedAt`/`statusCheckRollup`/`reviewDecision` 这类 GitHub 语义名字与实测不存在的旧名一律不在表里，请求即拒绝、返回不进对象。同时实测确认 `--json` 是**无值开关**（`--json name,path` 与裸 `--json` 输出逐字相同），所以字段清单只做**本地投影**、不进 argv；响应按 `{data:{list:[…]}}`/`{data:[…]}`/扁平对象剥壳。没有独立的黑名单，也没有「结果来自别的 provider」这类原因码——本包只服务 Gitee 一个平台，那类事实不存在。两个包不共享源码，只共享不变量与契约测试。
+`GITEE_PLATFORM='gitee'` 是本包唯一的平台声明，落在每个信封与返回体上。仓库 / Issue / PR 的事实只有这一份实现：`@heluo/forge-devops` 退回 dop 变更流程四工具，`change_context` 的承建仓库段改为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。字段只有白名单一套（`GITEE_FIELD_PROJECTIONS`），而且名字是**实测来的**：2026-11-03 在企业机器上取到 `repo view`/`issue list`/`pr list` 三段真实输出，据此把 gh 风格的猜测全部换掉（仓库没有 `url`/`private`/`updated_at`，PR 编号是 `iid`、Issue 是 `id`，链接是 `web_url`），`mergedAt`/`statusCheckRollup`/`reviewDecision` 这类 GitHub 语义名字与实测不存在的旧名一律不在表里，请求即拒绝、返回不进对象。同时实测确认 `--json` 是**无值开关**（`--json name,path` 与裸 `--json` 输出逐字相同），所以字段清单只做**本地投影**、不进 argv；响应按 `{data:{list:[…]}}`/`{data:[…]}`/扁平对象剥壳，`pr list` 空结果的 `{"message":"No pull requests found."}` 解成 0 条、不报畸形。没有独立的黑名单，也没有「结果来自别的 provider」这类原因码——本包只服务 Gitee 一个平台，那类事实不存在。两个包不共享源码，只共享不变量与契约测试。
 
 ## 安装
 
@@ -31,15 +31,15 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 ## 配置
 
-五个扁平键，全部可选，来自补丁层的 `config:`（本轮不做配置页）。凭据**只**从环境变量取，配置里没有存令牌的字段；**空配置也是合法状态**。
+五个扁平键，全部可选，来自补丁层的 `config:`（本轮不做配置页）。配置里没有存令牌的字段——凭据由本包经环境变量注入（本 CLI 自己还可以走系统凭据管理器，那不经过本包）；**空配置也是合法状态**。
 
 | 键 | 默认 | 约束 | 说明 |
 |---|---|---|---|
 | `cliPath` | `gh` | 可执行文件名/路径；拒绝 `scheme://`、控制字符、`.cmd`/`.bat`/`.ps1`/`.com`/`.vbs` 包装脚本 | 企业已确认 CLI 名为 `gh`；配置值只决定"起哪个程序"，不改变命令面 |
-| `host` | 空（无默认） | 主机名（可带端口），拒绝协议前缀、路径与 userinfo | r10 起**不必填**：不配即不做企业域断言；配了非企业主机仍以 `HOST_NOT_ENTERPRISE` 拒绝 |
+| `host` | 空（无默认） | 主机名（可带端口），拒绝协议前缀、路径与 userinfo | r10 起**不必填**：不配即不做企业域断言；配了非企业主机仍以 `HOST_NOT_ENTERPRISE` 拒绝。**只用于诊断与企业域校验**：它不是 CLI 参数也不是环境变量，CLI 的主机来自它自己的 `~/.gitee-cli/config.json` 的 `base_url`（规格 §1.1/§1.5） |
 | `timeoutMs` | `20000` | `1000`–`600000` 的整数 | 单次 CLI 调用超时；超时按"可能已执行"降级 `unknown`，不重放 |
-| `authEnv` | `[]` | 最多 8 个变量名（`[A-Za-z_][A-Za-z0-9_]*`） | 令牌变量名清单；为空即匿名读（`preflight()` 返回 `tokenSource: 'none'`），服务端拒绝时如实降级 `AUTH_MISSING`，不阻断装配 |
-| `persistentToken` | `'warn'` | `'warn'` \| `'block'` | CLI 配置目录含持久令牌时的策略：`warn` 只提示并从执行环境剥离令牌，`block` 才拒绝执行（合规场景保留） |
+| `authEnv` | `[]` | 最多 8 个变量名（`[A-Za-z_][A-Za-z0-9_]*`） | 额外凭据变量名清单。不点名时 `preflight()` 返回 `tokenSource: 'none'`；本 CLI 自己的 `GITEE_TOKEN` 是子进程白名单里的**唯一**凭据例外、不点名也会继承，其它凭据变量仍只经这里显式注入；服务端拒绝时如实降级 `AUTH_MISSING`，不阻断装配 |
+| `persistentToken` | `'warn'` | `'warn'` \| `'block'` | CLI 配置目录含持久令牌时的策略：候选含 `~/.gitee-cli/config.json`（JSON 里 `token` 非空即命中）与 `gh` 兼容的 `hosts.yml` 等；`warn` 只提示，`block` 才拒绝执行（合规场景保留） |
 
 `describeGiteeConfig()` 只输出枚举、数字与环境变量**名**（路径只留文件名），返回值里不存在令牌值；`validateGiteeConfig()` 是补丁层、宿主 `ConfigStandard` 与 `resolve` 的唯一口径，未知键直接拒绝，`missing` 只收"提供了但非法"的键。
 
@@ -48,8 +48,8 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 | 工具 | 参数 | 策略动作 | 默认 |
 |---|---|---|---|
 | `forge_gitee_repository_read` | `target` | `gitee.repository.read` | 放行（补丁层已登记） |
-| `forge_gitee_issue_read` | `target`、`list`/`state`/`limit`/`json` | `gitee.issue.read` | 放行（补丁层已登记） |
-| `forge_gitee_pr_read` | `target`、`list`/`state`/`limit`/`json` | `gitee.pr.read` | 放行（补丁层已登记） |
+| `forge_gitee_issue_read` | `target`、`list`/`state`(created\|processing\|rejected\|finished\|all)/`limit`/`json` | `gitee.issue.read` | 放行（补丁层已登记） |
+| `forge_gitee_pr_read` | `target`、`list`/`state`(opened\|closed\|merged\|all)/`limit`/`json` | `gitee.pr.read` | 放行（补丁层已登记） |
 | `forge_gitee_issue_write` | `op`(create\|comment)、`target`、`changeId`、`body`、`confirm` | `gitee.issue.write` | `denied`（未登记） |
 | `forge_gitee_pr_write` | `op`(create\|comment)、`target`、`changeId`、`body`、`confirm` | `gitee.pr.write` | `denied`（未登记） |
 | `forge_gitee_review_publish` | `target`、`changeId`、`commit`、`body`、`confirm` | `gitee.review.publish` | `denied`（未登记） |
@@ -62,9 +62,21 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 没有 `run`/`exec`/`shell`/`api` 这类泛化入口：动作是具名枚举，表里拼不出的动词在包里不存在（`pr merge`、`pr close`、`issue close`、`release`、`workflow`、`api`、`auth`、`config`、`gist` 属禁项，出现即拒绝且零子进程）。
 
+## CLI 调用形状
+
+argv 按 2026-11-03 实测的规格 `docs/contracts/gh-cli-spec.md` 逐条对齐（不是按 gh 直觉拼的）：
+
+| 命令 | argv 形状 | 说明 |
+|---|---|---|
+| `issue view` / `pr view` / `issue comment` / `pr comment` | `['issue','view','12','-R','owner/repo','--json']` | 位置参数**只有一个数字号**，仓库由全局 `-R` 给（规格 §2.4/§2.5）；把 `owner/repo#12` 整串当编号传必然失败。纯数字 target（`['issue','view','12']`）**有意不发 `-R`**：此时按 CLI 的 git remote 规则解析仓库（规格 §1.2） |
+| `repo list` | `['repo','list','--json','--limit','20']` | **不是仓库作用域命令**（Usage：`gh repo list [flags]`）：它列的是令牌可见的仓库，`target` 只做形状校验、不进 argv，不存在"按仓库过滤" |
+| `issue list` | `['issue','list','-R','owner/repo','--json','--state',…,'--limit',…]` | `--state` ∈ `created`/`processing`/`rejected`/`finished`/`all`；**不传就不发**，默认 `created` 归 CLI |
+| `pr list` | 同上（动词换成 `pr`） | `--state` ∈ `opened`/`closed`/`merged`/`all`；不传就不发，默认 `opened` 归 CLI |
+| 全部命令 | 全局 flag 只有 `-R/--repo`、`--json`、`--debug`、`-h/--help`、`-v/--version` | 没有 `--host`（传了按未声明参数拒绝）；主机来自 CLI 自己的 `~/.gitee-cli/config.json` 的 `base_url`，既不是参数也不是环境变量（规格 §1.1/§1.5） |
+
 结果契约：
 
-- **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。载荷另带 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`）。`json` 参数是**本地投影选择器**（默认完整声明集，越界名字按 `JSON_FIELD_NOT_DECLARED` 拒绝），不改变 argv。事实版本：Issue/PR 取 `updated_at`，仓库取 `last_activity_at`（实测无 `updated_at`）；取不到即 `unknown`，不编版本。
+- **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。载荷另带 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`）。`json` 参数是**本地投影选择器**（默认完整声明集，越界名字按 `JSON_FIELD_NOT_DECLARED` 拒绝），不改变 argv；清单投影按实测载荷：`issue list` 元素恰好 `description`/`id`/`labels`/`title`/`updated_at`（没有 `state`/`web_url`）。剥壳认得 `{data:{list:[…]}}`、`{data:[…]}`、扁平对象，以及 `pr list` 空结果的 `{"message":"No pull requests found."}`——后者解成 0 条，不报畸形。事实版本：Issue/PR 取 `updated_at`，仓库取 `last_activity_at`（实测无 `updated_at`）；取不到即 `unknown`，不编版本。
 - **写**：四状态 `done`/`failed`/`denied`/`unknown`。`done` 必须"CLI 成功 + 回读一致"；退出码 0 单凭算 `unknown`。写前有幂等台账（`sha256(changeId|objectType|title)` 前 16 位，进程内 6 小时），命中返回 `reused` 且远端 0 次调用；失败不重放。写动作返回体**不出现 `executed` 键**（该键只由判定体的 `produced` 声明产生，写动作返回体一个键都不多）。
 - **审查**：`review.md` 四段（问题 / 风险 / 意见 / 结论）+ AI 与人工两栏物理分节；人工栏只能由 `recordHumanConfirmation` 写，模型自填即拒；`stale` 是派生结果不落盘。
 - **现有关闭条件判定**：只判定不执行——`[变更号]` 提交信息前缀、关闭四条件（验收、已合入、无未完成交付、针对当前 commit 的人工确认），`unknown` 不计入通过；返回体带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口。此处如实描述现有判定器，不是所有用户验收的统一门槛：2026-11-03 已确认本地验证与独立 AI 审查后可形成待验收候选，由用户对实际代码版本验收；CI／合入／Issue 关闭／验收／业务结束分记，必要 CI 与分支保护仍须守，判定器未在本轮改造。
@@ -74,7 +86,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 - 策略是硬依赖：`policy` 服务缺失、或三个 `gitee.*` 只读动作未登记/未启用，`apply()` 直接抛可读错误（`GITEE_POLICY_UNAVAILABLE` / `GITEE_ACTION_UNREGISTERED`，`missing` 列全），**不降级成"无策略只读"**。判定与 git push 不在这一断言内：缺 `gitee.delivery.judge`/`gitee.git.push` 时挂载照常成功，只有对应工具降级为 `denied`（读动作的 fail-closed 不因它们放宽）。
 - 补丁层预置 **6 条 `kind: read` 目录（本包 3 读 + 1 只读判定 + 2 条 devops 的变更读 `change.read`/`change.list`，与 devops 补丁层逐字相同）、0 条 write**：`gitee.delivery.judge` 随包登记，`target` 逐字 `change`，`egress: 'allow'` 是**必需项**而非风格——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 会被编译成默认 `confirm`，无审批台账时判定永远拿不到 `done`。五个受控写（`gitee.issue.write`/`gitee.pr.write`/`gitee.review.publish`/`gitee.review.record`/`gitee.git.push`）靠"不登记"实现默认禁用，而不是运行期开关；要开写须由所属 profile 显式追加动作（写/确认类还需审批台账条目）。`gitee.git.push` 进 `CONFIRM_REQUIRED_ACTIONS`：登记后还要 `confirm{repo,object}` 逐字匹配。第 5、6 条 `change.read`/`change.list` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**——目录是并集，装谁都不缺自己那条。
 - 审计舱用内存 sink（`allowNonDurable: true`），属**联调/试点级**证据，记录随进程退出丢失；生产须注入持久 sink 并去掉该开关。
-- 凭据只在环境变量里：CLI 配置目录存在持久令牌时默认**告警**并从执行环境剥离（`persistentToken: 'block'` 才以 `GITEE_PERSISTENT_TOKEN` 拒绝、零子进程）；子进程环境走白名单，输出按令牌值脱敏后再返回。
+- 凭据只从环境变量来：本 CLI 只认 `GITEE_TOKEN` 或系统凭据管理器（keyring service `gitee-cli-go`，规格 §1.3），所以 `GITEE_TOKEN` 是子进程环境白名单里的**唯一**凭据例外、不点名 `authEnv` 也会继承；其它凭据变量仍只经 `authEnv` 显式注入，配置里没有存令牌的字段。CLI 配置目录存在持久令牌时默认**告警**（`persistentToken: 'block'` 才以 `GITEE_PERSISTENT_TOKEN` 拒绝、零子进程），自检覆盖 `~/.gitee-cli/config.json` 与 `gh` 兼容的 `hosts.yml` 等布局，结果只回文件名与下一步、不回显令牌值；子进程输出按令牌值脱敏后再返回。
 - 唯一的子进程出口是 `src/gitee-cli.mjs`：`execFile` + `shell: false` + 超时 + 单流 1 MiB 上限；`run()` 发 gitee CLI，`runGit()` 发本机 git（只叠加 `GIT_TERMINAL_PROMPT=0` 与 `cwd`），共用同一套白名单/超时/截断/脱敏，入参只接受 `{bin|args, purpose, cwd}` 这几键，没有"把整条命令当字符串"的通道。
 
 ## 共存形态（与 `@heluo/forge-devops`）
@@ -105,7 +117,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 node --test "packages/forge-gitee/test/*.test.mjs"
 ```
 
-覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；3 读 + 1 判定可用、四个写与 push denied；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 14 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：10 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、持久令牌 warn/block、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（三段真实载荷当夹具：字段投影、`--json` 无值开关、剥壳、`iid`/`id`、`opened` 归一、`meta.total_count`；禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封与四类降级）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写默认 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 未登记即 `denied`）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
+覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；3 读 + 1 判定可用、四个写与 push denied；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 14 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：10 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、`GITEE_TOKEN` 白名单唯一例外、持久令牌 warn/block 与 `~/.gitee-cli/config.json` 检出、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（三段真实载荷当夹具：字段投影、`--json` 无值开关、argv 形状（单对象命令的编号 + `-R`、纯数字 target、`repo list` 无位置参数）、`--state` 按命令分表、空 PR 列表解包、`iid`/`id`、`opened` 归一、`meta.total_count`；禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封、四类降级与两个读工具的 state enum）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写默认 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 未登记即 `denied`）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
 
 ## 证据表（r4 轮，2026-10-29）
 
@@ -122,7 +134,7 @@ node --test "packages/forge-gitee/test/*.test.mjs"
 
 ## 未验（NOT RUN）
 
-1. **企业 CLI 联调**：三段只读载荷已于 2026-11-03 实测（`repo view --json` 扁平对象、`issue list --limit 1 --json` 的 `{data:{list:[…]}, meta:{…}}`、`pr list --limit 1 --json` 的 `{data:[…], meta:{…}}`），字段名与剥壳按实测反写，载荷进了 `test/adapter.test.mjs` 当夹具（域名/人名换成占位，字段名逐字保留）。**仍未实机**：`issue view`/`pr view`/`repo list` 的 argv 与输出形状（缺字段一律走 `missing_fields`）、写命令的 argv、鉴权与权限模型、CLI 版本号。若实测再有不符，只改 `src/gitee-adapter.mjs` 的投影表与剥壳，不动其它模块。
+1. **企业 CLI 联调**：三段只读载荷已于 2026-11-03 实测（`repo view --json` 扁平对象、`issue list --limit 1 --json` 的 `{data:{list:[…]}, meta:{…}}`、`pr list --limit 1 --json` 的 `{data:[…], meta:{…}}`），字段名与剥壳按实测反写，载荷进了 `test/adapter.test.mjs` 当夹具（域名/人名换成占位，字段名逐字保留）。argv 形状、`--state` 词表、`pr list` 空结果解包与凭据路径已按实测规格 `docs/contracts/gh-cli-spec.md` 对齐（见上文「CLI 调用形状」），但**仍未在本机实机跑过**。**已知与规格不符、本轮未改的字段投影**：`issue view --json`（规格实测 8 字段 `author`/`created_at`/`description`/`id`/`labels`/`priority`/`state`/`title`，本包表里是 `id`/`title`/`description`/`state`/`labels`/`updated_at`/`web_url`，于是版本字段取不到会降级 `unknown`、链接也取不到）与 `repo list --json`（规格实测元素 9 字段里没有 `visibility`/`web_url`/`archived`/`path`）；写命令的 argv、鉴权与权限模型、CLI 版本号同样未验。若实测再有不符，只改 `src/gitee-adapter.mjs` 的投影表与剥壳，不动其它模块。
 2. **Windows 实机与麒麟 aarch64**：包装脚本拒绝、路径与主机校验由离线用例覆盖（注入平台与假环境），**不是实机证据**。
 3. **真实 profile 装入与重启（AC-8）与回滚执行（AC-10）**：`dsh plugin add` 之后的重启、`--dump-config` 复核、装后回读 profile 清单与工具面在真实会话里可见，需工作区外写权限，归主流程执行。本包提供的是：AC-10 要求的**卸载步骤已在上面[回滚](#回滚)一节装之前写明**（含复核命令），AC-8 所需的补丁层解析与装配证据见 `test/patch-mount.test.mjs`；**执行与回读均未做**，不记为已验证。
 4. **真实凭据与审计落账**：内存审计舱的联调级证据；持久 sink、审批台账与写动作开闸均属范围批准后才验证。

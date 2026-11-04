@@ -88,7 +88,7 @@
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
 |---|---|---|---|---|
 | `cliPath` | string | `gh` | 否 | 可执行文件名/路径；拒绝 `scheme://`、控制字符与 `.cmd`/`.bat`/`.ps1`/`.com`/`.vbs` 包装脚本 |
-| `host` | string | 空（无默认） | 否 | 企业 Gitee 主机名（可带端口）；拒绝协议前缀、路径与 userinfo。r10 起**不再必填**（公共 Gitee 无需指定） |
+| `host` | string | 空（无默认） | 否 | 企业 Gitee 主机名（可带端口）；拒绝协议前缀、路径与 userinfo。r10 起**不再必填**；2026-11-04 起**仅用于诊断与企业域校验**——本 CLI 没有 `--host` 参数，主机实际取自它自己的 `~/.gitee-cli/config.json` 的 `base_url`，本包不拼进 argv 也不注入环境 |
 | `timeoutMs` | number | `20000` | 否 | 1000–600000 的整数；超时按"可能已执行"降级 `unknown` |
 | `authEnv` | string[] | `[]` | 否 | 最多 8 个变量名；按序取第一个有值项。为空即匿名读（`tokenSource: 'none'`，**不阻断**） |
 | `persistentToken` | `'warn' \| 'block'` | `'warn'` | 否 | CLI 配置目录含持久令牌时的策略：`warn` 只提示并从执行环境剥离，`block` 才拒绝执行（合规场景保留） |
@@ -99,11 +99,11 @@
 
 | 用途 | 命令 | 参数白名单 | 本地投影清单（归一后交付的键） |
 |---|---|---|---|
-| 仓库详情 | `repo view` | `--json`（无值）、`--host` | `name`、`path`、`path_with_namespace`、`description`、`default_branch`、`visibility`、`web_url`、`last_activity_at`、`archived`、`ssh_url_to_repo` |
-| 仓库清单 | `repo list` | `--json`（无值）、`--limit` | 同上，去掉 `description`、`default_branch`、`ssh_url_to_repo` |
-| Issue 详情 | `issue view` | `--json`（无值）、`--host` | `id`、`title`、`description`、`state`、`labels`、`updated_at`、`web_url` |
-| Issue 清单 | `issue list` | `-R`、`--json`（无值）、`--state`、`--limit` | `id`、`title`、`state`、`updated_at`、`web_url` |
-| PR 详情 | `pr view` | `--json`（无值）、`--host` | `iid`、`title`、`state`、`web_url`、`updated_at`、`source_branch`、`target_branch`、`merge_status`、`merged_at`、`user_notes_count` |
+| 仓库详情 | `repo view <仓库>` | `--json`（无值） | `name`、`path`、`path_with_namespace`、`description`、`default_branch`、`visibility`、`web_url`、`last_activity_at`、`archived`、`ssh_url_to_repo`、`http_url_to_repo` |
+| 仓库清单 | `repo list` | `--json`（无值）、`--limit` | `created_at`、`description`、`fork_from_path`、`http_url`、`id`、`last_activity_at`、`name`、`path_with_namespace`、`ssh_url` |
+| Issue 详情 | `issue view <编号> -R` | `--json`（无值）、`-R` | `author`、`created_at`、`description`、`id`、`labels`、`priority`、`state`、`title` |
+| Issue 清单 | `issue list` | `-R`、`--json`（无值）、`--state`、`--limit` | `description`、`id`、`labels`、`title`、`updated_at` |
+| PR 详情 | `pr view <编号> -R` | `--json`（无值）、`-R` | `iid`、`title`、`state`、`web_url`、`updated_at`、`source_branch`、`target_branch`、`merge_status`、`merged_at`、`user_notes_count` |
 | PR 清单 | `pr list` | `-R`、`--json`（无值）、`--state`、`--limit` | `iid`、`title`、`state`、`web_url`、`source_branch`、`target_branch`、`merge_status` |
 | Issue 创建/评论 | `issue create` / `issue comment` | `-R`、`--title`、`--body` | —（人类文本，解析编号/链接） |
 | PR 创建/评论 | `pr create` / `pr comment` | `-R`、`--title`、`--body`、`--head`、`--base`、`--draft` | — |
@@ -111,6 +111,8 @@
 禁项（出现即拒绝且零子进程）：动词 `pr merge`/`pr close`/`pr review --approve`/`issue close`/`issue delete`/`repo delete`/`repo create`/`release`/`workflow`/`api`/`auth`/`config`/`gist`；参数 `--web`/`--template`/`-f`/`--raw-field`/`--field`/`--input`/`--body-file`/`--method`/`--approve`/`--request-changes`/`--merge`/`--close`/`--delete`/`--admin`/`--paginate`/`--jq`/`--hostname`。
 
 第四列是**本地投影清单**，第三列的 `--json` 是**无值开关**：2026-11-03 实测 `repo view --json name,path` 与裸 `repo view --json` 输出逐字相同，逗号字段清单被忽略，因此 argv 里永远只有 `--json` 一个 token。清单与字段表是同一个对象（`GITEE_FIELD_PROJECTIONS`，不是抄一份），名字越界仍按 `JSON_FIELD_NOT_DECLARED` 拒绝且零子进程。
+
+**命名空间与参数落位**（2026-11-04 按 `docs/contracts/gh-cli-spec.md` 校正）：仓库标识允许嵌套命名空间（`osc/ard/ard-sdk` 这类两段以上，企业实测即三段），读/写/git 三条路径共用同一个形状源。单对象命令的位置参数**只有编号**，仓库走全局 `-R`（`issue view 12 -R osc/ard/ard-sdk`）；`repo list` **不接受位置参数**（它列的是令牌可见的仓库，不是某个仓库的清单）。`--state` 词表**按命令分表**：`issue list` 是 `created/processing/rejected/finished/all`，`pr list` 是 `opened/closed/merged/all`。本 CLI **没有 `--host` 参数**，主机来自 CLI 自己的 `~/.gitee-cli/config.json` 的 `base_url`。
 
 **剥壳**：实测出现三种包裹——`issue list` 是 `{data:{list:[…]}, meta:{…}}`、`pr list` 是 `{data:[…], meta:{…}}`、`repo view` 是扁平对象；对象读同样接受 `{data:{…}}`。`meta.total_count` 作为附加事实带进读载荷（清单被 `--limit` 截住时说明总量），其余 `meta` 键丢弃，且**不**进 `missing_fields`——那不是"取不到的字段"。认不出的壳按 `MALFORMED_RESULT` 处理，不把 `data`/`meta` 当数据交付。
 
