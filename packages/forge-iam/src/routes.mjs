@@ -35,6 +35,15 @@ const ERROR_STATUS = {
   IAM_DISPOSED: 503,
   IAM_RECORD_KIND_MISMATCH: 409,
   IAM_GATEWAY_KEY_INVALID: 400,
+  IAM_GATEWAY_URL_INVALID: 400,
+  IAM_GATEWAY_CREDENTIAL_REQUIRED: 401,
+  IAM_LOGIN_REQUIRED: 401,
+  IAM_MODEL_CONTEXT_CHANGED: 409,
+  ENTERPRISE_MODELS_UNAVAILABLE: 503,
+  ENTERPRISE_MODEL_CATALOG_INVALID: 502,
+  ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: 401,
+  ENTERPRISE_GATEWAY_FORBIDDEN: 403,
+  ENTERPRISE_GATEWAY_UNAVAILABLE: 502,
   IAM_GATEWAY_OWNER_MISSING: 400,
   IAM_GATEWAY_ATOMIC_UNVERIFIED: 503,
   IAM_GATEWAY_LEGACY_READ_ONLY: 409,
@@ -410,6 +419,12 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         return sendJson(res, 200, service.getView());
       }
 
+      if (url.pathname === '/api/forge-iam/models') {
+        if (req.method !== 'GET') return methodNotAllowed(res, 'GET');
+        try { return sendJson(res, 200, { ...(await service.refreshGatewayModels()), view: service.getView() }); }
+        catch (error) { return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error)); }
+      }
+
       if (url.pathname === '/api/forge-iam/credential') {
         if (req.method === 'GET') {
           try {
@@ -426,7 +441,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
             const body = await readJsonBody(req);
             const key = typeof body?.key === 'string' ? body.key.trim() : '';
             if (!key) return sendJson(res, 400, { error: { code: 'IAM_REQUEST_INVALID' } });
-            const view = await service.saveGatewayCredential({ key, deviceLabel: body?.deviceLabel });
+            const view = await service.saveGatewayCredential({ key, deviceLabel: body?.deviceLabel, ...(body?.baseURL !== undefined ? { baseURL: body.baseURL } : {}) });
             return sendJson(res, 200, { view });
           } catch (error) {
             const status = ERROR_STATUS[error?.code] ?? 500;

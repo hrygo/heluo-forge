@@ -12,6 +12,8 @@ export const OFFICIAL_ROWS = Object.freeze([
   'ui-settings-account',
   'llm-deepseek-account',
   'llm-deepseek',
+  'llm-pi-ai',
+  'ui-settings-models',
   // 官方明文凭据提供方：重新启用即让企业凭据退回 0600 明文 YAML（#125）。
   'credentials',
 ]);

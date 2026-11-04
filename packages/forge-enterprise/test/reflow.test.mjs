@@ -29,7 +29,7 @@ test('官方行重新启用即报回灌，缺席行单独记录', () => {
   });
   assert.equal(base.ok, false);
   assert.deepEqual([...base.reflowed], ['deepseek-account', 'llm-deepseek-account', 'llm-deepseek']);
-  assert.deepEqual([...base.absent], ['ui-settings-account', 'credentials']);
+  assert.deepEqual([...base.absent], ['ui-settings-account', 'llm-pi-ai', 'ui-settings-models', 'credentials']);
 
   const strict = detectOfficialRowReflow({
     observed: new Map(OFFICIAL_ROWS.filter((id) => id !== 'ui-settings-account').map((id) => [id, true])),
@@ -106,7 +106,7 @@ test('dump 解析认得嵌套缩进与注释边界', () => {
   const verdict = detectOfficialRowReflow({ observed: rows });
   assert.equal(verdict.ok, false);
   assert.deepEqual([...verdict.reflowed], ['llm-deepseek']);
-  assert.deepEqual([...verdict.absent], ['ui-settings-account', 'llm-deepseek-account', 'credentials']);
+  assert.deepEqual([...verdict.absent], ['ui-settings-account', 'llm-deepseek-account', 'llm-pi-ai', 'ui-settings-models', 'credentials']);
 });
 
 test('dump 夹具与实际输出形状一致', () => {
@@ -139,4 +139,13 @@ test('a disabled field nested in the row config does not count as the row being 
   assert.equal(verdict.ok, false);
   assert.deepEqual([...verdict.reflowed], ['llm-deepseek']);
   assert.deepEqual([...verdict.disabled], ['deepseek-account']);
+});
+
+
+test('通用模型与自由配置入口回灌会使企业组合检查失败', () => {
+  for (const id of ['llm-pi-ai', 'ui-settings-models']) {
+    assert.ok(OFFICIAL_ROWS.includes(id));
+    const observed = new Map(OFFICIAL_ROWS.map(row => [row, row !== id]));
+    assert.deepEqual([...detectOfficialRowReflow({ observed }).reflowed], [id]);
+  }
 });

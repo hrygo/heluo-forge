@@ -122,6 +122,7 @@ export function createView(state, details = {}) {
     accessExpiresAt: details.accessExpiresAt ?? null,
     gatewayCredential: details.gatewayCredential ?? null,
     gatewayConsoleUrl: details.gatewayConsoleUrl ?? null,
+    modelAccess: details.modelAccess ?? null,
   };
 }
 

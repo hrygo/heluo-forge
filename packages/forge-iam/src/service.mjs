@@ -1,3 +1,4 @@
+import { normalizeGatewayBaseURL } from './managed-models.mjs';
 import { createHmac, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
@@ -290,6 +291,10 @@ export function createIamService(rawConfig, options = {}) {
       accessExpiresAt: summary.accessExpiresAt ?? null,
       gatewayCredential: gatewaySummary,
       gatewayConsoleUrl: config.gatewayConsoleUrl || null,
+      modelAccess: { ...(options.getManagedModelRuntime?.()?.getView() ?? { managed: true, state: 'unconfigured', models: [] }),
+        configured: Boolean(gatewaySummary?.baseURL || config.managedModels?.baseURL),
+        baseURL: gatewaySummary?.baseURL ?? config.managedModels?.baseURL ?? '',
+        ...(state !== 'ready' || gatewaySummary?.matchesAccount !== true ? { models: [] } : {}) },
     });
   }
 
@@ -730,6 +735,8 @@ export function createIamService(rawConfig, options = {}) {
       // a mismatch once a different subject is known.
       state: !signedInSubject || matchesAccount ? 'configured' : 'owner-mismatch',
       ownerSubject: credential.ownerSubject ?? null,
+      baseURL: credential.baseURL ?? config.managedModels?.baseURL ?? null,
+      generation: credential.writeOperationId ?? null,
       deviceLabel: credential.deviceLabel ?? null,
       enteredAt: credential.enteredAt ?? null,
       suggestedExpiry: credential.suggestedExpiry ?? null,
@@ -872,6 +879,7 @@ export function createIamService(rawConfig, options = {}) {
     getView() {
       return view();
     },
+    getModelAccessEpoch() { return `${authEpoch}:${sessionEpoch}:${modelSelectionGeneration}`; },
 
     /**
      * Identity and freshness only. Never a token, verifier or ID token: this is
@@ -898,12 +906,59 @@ export function createIamService(rawConfig, options = {}) {
     // Host-only observation; intentionally absent from routes and IamView.
     reconcileDefaultModel,
 
+    /** Host-only request credential; never exposed by management routes or IamView. */
+    async resolveGatewayCredential() { return (await service.resolveGatewayConnection()).key; },
+
+    async refreshGatewayModels() {
+      const runtime = options.getManagedModelRuntime?.();
+      if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
+      return runtime.refresh();
+    },
+
+    async resolveGatewayConnection() {
+      // Refresh and validate the current grant through the existing authoritative path.
+      // V1 sends only the personal Key to UAG; the IAM token never leaves this method.
+      await service.resolveToken();
+      const epoch = authEpoch;
+      const targetStore = requireStore();
+      const targetGatewayStore = gatewayStore;
+      const targetCredentials = storeCredentials;
+      const subject = lastGrant?.subject;
+      const generation = modelSelectionGeneration;
+      const check = () => {
+        if (disposed || signingOut || authEpoch !== epoch || modelSelectionGeneration !== generation
+          || state !== 'ready' || !subject || lastGrant?.subject !== subject || Date.parse(lastGrant.accessExpiresAt) <= now()) {
+          throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
+        }
+        assertExclusive();
+        if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
+          throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法读取个人凭证。');
+        }
+      };
+      check();
+      const record = await targetGatewayStore?.read();
+      check();
+      if (!record?.ok || record.credential?.ownerSubject !== subject) {
+        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的 UAG 个人凭证。');
+      }
+      const resolved = await targetGatewayStore.resolve(record.credential);
+      check();
+      if (resolved?.invalid || !resolved?.value) {
+        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的 UAG 个人凭证。');
+      }
+      const address = record.credential.baseURL ?? config.managedModels?.baseURL;
+      if (!address) throw new IamError('IAM_GATEWAY_URL_INVALID', '请先设置网关地址。');
+      const baseURL = normalizeGatewayBaseURL(address, config.allowInsecureHttp);
+      return { key: resolved.value, baseURL, generation: record.credential.writeOperationId ?? null };
+    },
+
     /**
      * Store the UAG personal credential the user pasted. IAM only records it;
-     * it never issues, refreshes, or probes the key (that belongs to the
-     * gateway package once it exists).
+     * it never issues or refreshes the key. Model discovery/calls use the
+     * independently guarded runtime, after this storage transaction.
      */
-    async saveGatewayCredential({ key: value, deviceLabel } = {}) {
+    async saveGatewayCredential({ key: value, deviceLabel, baseURL: address } = {}) {
+      const baseURL = address === undefined ? undefined : normalizeGatewayBaseURL(address, config.allowInsecureHttp);
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       modelSelectionGeneration += 1;
@@ -957,6 +1012,7 @@ export function createIamService(rawConfig, options = {}) {
       try {
         await targetGatewayStore.save({
           value,
+          baseURL,
           ownerSubject: subject,
           deviceLabel: label,
           enteredAt,

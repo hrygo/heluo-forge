@@ -1,3 +1,4 @@
+import { createManagedModelRuntime } from './managed-models.mjs';
 import { Config, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { checkExclusive } from './exclusive.mjs';
@@ -40,6 +41,7 @@ export function apply(ctx, rawConfig = {}) {
   }
 
   let modelServices;
+  let managedRuntime;
   const service = createIamService(result.value, {
     exclusive: checkExclusive(ctx, result.value),
     recheckExclusive: () => checkExclusive(ctx, result.value),
@@ -51,6 +53,7 @@ export function apply(ctx, rawConfig = {}) {
         return undefined;
       }
     },
+    getManagedModelRuntime: () => managedRuntime,
     getModelSelectionServices: () => {
       try {
         return modelServices && ctx.get?.('llm') === modelServices.llm
@@ -76,6 +79,8 @@ export function apply(ctx, rawConfig = {}) {
     if (tornDown) return;
     tornDown = true;
     modelServices = undefined;
+    if (typeof offManagedModels === 'function') await offManagedModels();
+    else await offManagedModels?.dispose?.();
     await service.dispose();
     if (typeof offModelServices === 'function') offModelServices();
     else await offModelServices?.dispose?.();
@@ -87,9 +92,20 @@ export function apply(ctx, rawConfig = {}) {
   let disposeProvide;
   let offWebServer;
   let offModelServices;
+  let offManagedModels;
 
   ctx.effect(() => {
     disposeProvide = ctx.provide('iam', service);
+    if (typeof ctx.inject === 'function') {
+      offManagedModels = ctx.inject(['llm'], (host) => {
+        if (tornDown) return;
+        const runtime = createManagedModelRuntime({ host, iam: service, config: result.value });
+        managedRuntime = runtime;
+        const release = async () => { if (managedRuntime === runtime) managedRuntime = undefined; await runtime.dispose(); };
+        host.effect(() => release, 'forge-iam-managed-models');
+        return release;
+      });
+    }
     if (result.value.defaultModel.trim() && typeof ctx.inject === 'function') {
       offModelServices = ctx.inject(['llm', 'agentDefaultModel'], (host) => {
         if (tornDown) return;

@@ -21,7 +21,7 @@ function disabledIds(text) {
   return disabled;
 }
 
-test('the bundle disables exactly the four official rows and the local credentials provider', async () => {
+test('the bundle disables official access, generic model configuration and local credentials', async () => {
   const text = await read('cordis.patch.yml');
   const disabled = disabledIds(text);
   assert.deepEqual(
@@ -31,9 +31,11 @@ test('the bundle disables exactly the four official rows and the local credentia
       ['deepseek-account', true],
       ['llm-deepseek', true],
       ['llm-deepseek-account', true],
+      ['llm-pi-ai', true],
       ['ui-settings-account', true],
+      ['ui-settings-models', true],
     ],
-    '四个官方行与官方本地凭据提供方都必须以 disabled: true 关闭，且不多不少',
+    '官方账号、通用模型配置与本地凭据提供方都必须以 disabled: true 关闭',
   );
 });
 

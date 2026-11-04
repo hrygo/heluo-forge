@@ -242,3 +242,39 @@ for (const [state, label] of [
     assert.equal(panel.findButton(rendered, '保存凭据')?.props.disabled, false);
   });
 }
+
+test('Host model credential read requires a current grant and matching account; logout keeps no access', async t => {
+  const f = await setup(t, { grantAtomic: true });
+  await f.service.hydrate();
+  await f.service.saveGatewayCredential({ ...input, baseURL: 'https://gateway.corp.example/v1' });
+  assert.equal(await f.service.resolveGatewayCredential(), input.key);
+  assert.equal(JSON.stringify(f.service.getView()).includes(input.key), false);
+  await f.service.signOut();
+  await assert.rejects(f.service.resolveGatewayCredential(), { code: 'IAM_NOT_SIGNED_IN' });
+});
+
+test('Host credential read does not adopt a different account or an orphan key', async t => {
+  const f = await setup(t, { grantAtomic: true });
+  await f.service.hydrate();
+  seedLegacyGateway(f.credentials, { value: input.key, ownerSubject: 'another-person', enteredAt: new Date(now).toISOString() });
+  await assert.rejects(f.service.resolveGatewayCredential(), { code: 'IAM_GATEWAY_CREDENTIAL_REQUIRED' });
+});
+
+test('gateway address and an opaque compatible Key commit together and remain Host-only', async t => {
+  const f = await setup(t, { grantAtomic: true }); await f.service.hydrate();
+  const key = 'synthetic-compatible-key';
+  await f.service.saveGatewayCredential({ key, baseURL: 'https://gateway.corp.example/' });
+  const connection = await f.service.resolveGatewayConnection();
+  assert.equal(connection.baseURL, 'https://gateway.corp.example/v1'); assert.equal(connection.key, key);
+  assert.equal(f.service.getView().gatewayCredential.baseURL, connection.baseURL);
+  assert.equal(JSON.stringify(f.service.getView()).includes(key), false);
+  const before = f.pair();
+  await assert.rejects(f.service.saveGatewayCredential({ key, baseURL: credentialURL() }), { code: 'IAM_GATEWAY_URL_INVALID' });
+  assertUnchanged(f, before);
+});
+
+function credentialURL() {
+  const url = new URL('https://gateway.corp.example/v1');
+  url.username = 'synthetic-user'; url.password = 'synthetic-password';
+  return url.href;
+}
