@@ -70,7 +70,53 @@ async function discover(connection, signal, fetcher, headers) {
     if (typeof item?.id !== 'string' || !/^[\w./:-]{1,200}$/u.test(item.id) || seen.has(item.id)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
     seen.add(item.id);
     // Standard /models does not promise capacity or modality metadata.
-    return { id: item.id, name: item.id, contextWindow: 32768, maxTokens: 4096 };
+    return { id: item.id, name: item.id, contextWindow: 32768, maxTokens: 4096, input: ['text'], inputModalities: ['text'] };
+  });
+}
+
+const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
+const CAPACITY_SCALE = { k: 1000, m: 1000000 };
+
+/** Parse numeric capacity with optional K / M suffix. */
+export function parseCapacity(text) {
+  if (typeof text === 'number') return Number.isFinite(text) && text > 0 ? Math.round(text) : undefined;
+  if (typeof text !== 'string') return undefined;
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const match = CAPACITY_PATTERN.exec(trimmed);
+  if (!match) return undefined;
+  const suffix = match[2]?.toLowerCase();
+  const scale = suffix === 'k' || suffix === 'm' ? CAPACITY_SCALE[suffix] : 1;
+  const scaled = Number(match[1]) * scale;
+  return Number.isFinite(scaled) && scaled > 0 ? Math.round(scaled) : undefined;
+}
+
+/** Overlay fine-grained user options onto discovered gateway models. */
+export function applyModelOptions(rawModels, options = {}) {
+  if (!Array.isArray(rawModels)) return [];
+  return rawModels.map(item => {
+    const opt = options?.[item.id] || {};
+    const contextWindow = parseCapacity(opt.contextWindow) ?? item.contextWindow ?? 32768;
+    const maxTokens = parseCapacity(opt.maxTokens) ?? item.maxTokens ?? 4096;
+    const name = typeof opt.name === 'string' && opt.name.trim() ? opt.name.trim() : (item.name || item.id);
+    const input = Array.isArray(opt.inputModalities) && opt.inputModalities.length > 0
+      ? opt.inputModalities.filter(m => m === 'text' || m === 'image')
+      : (Array.isArray(opt.input) && opt.input.length > 0 ? opt.input.filter(m => m === 'text' || m === 'image') : (item.input ?? ['text']));
+    const inputModalities = input.length > 0 ? input : ['text'];
+    const reasoningEfforts = opt.reasoningEfforts && typeof opt.reasoningEfforts === 'object' && !Array.isArray(opt.reasoningEfforts)
+      ? opt.reasoningEfforts : (item.reasoningEfforts ?? null);
+    const reasoning = Boolean(opt.reasoning || (reasoningEfforts && Object.keys(reasoningEfforts).length > 0));
+    return {
+      ...item,
+      id: item.id,
+      name,
+      contextWindow,
+      maxTokens,
+      input: inputModalities,
+      inputModalities,
+      reasoning,
+      reasoningEfforts,
+    };
   });
 }
 
@@ -84,7 +130,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       dispose: async () => { off?.(); } };
   }
   const provider = config.defaultProvider;
-  let models = []; let catalogState = 'unconfigured'; let catalogError = null;
+  let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null;
   const allowed = (route, model) => route === provider && models.some(item => item.id === model);
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let deadline; let timer; let disposed = false; let backend; let flight;
@@ -93,7 +139,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const view = iam.getView(); const current = `${identity(view)}:${iam.getModelAccessEpoch?.() ?? ''}`;
     if (last !== current) {
       last = current; version++; lease.abort(); lease = new AbortController();
-      models = []; backend = undefined; catalogState = 'unconfigured'; catalogError = null;
+      rawModels = []; models = []; backend = undefined; catalogState = 'unconfigured'; catalogError = null;
       publish();
     }
     // A successful same-session IAM refresh changes the deadline, not the
@@ -101,7 +147,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const nextDeadline = view?.state === 'ready' ? expires(view) : null;
     if (deadline !== nextDeadline) {
       deadline = nextDeadline; clearTimeout(timer);
-      const expire = () => { version++; lease.abort(); models = []; backend = undefined; publish(); };
+      const expire = () => { version++; lease.abort(); rawModels = []; models = []; backend = undefined; publish(); };
       const remaining = deadline - Date.now();
       if (deadline !== null && remaining > 0) {
         timer = setTimeout(expire, Math.min(remaining, 2147483647)); timer.unref?.();
@@ -157,17 +203,19 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const connection = await iam.resolveGatewayConnection(); current();
       const headers = await requestHeaders(); current();
       const found = await discover(connection, AbortSignal.any([lifetime.signal, lease.signal]), fetcher, headers); current();
-      const resolved = await createAdapter({ host, config: { ...config, managedModels: { baseURL: connection.baseURL, models: found } }, resolveKey: async () => {
+      rawModels = found;
+      models = applyModelOptions(rawModels, modelOptions);
+      const resolved = await createAdapter({ host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveKey: async () => {
         current();
         const next = await iam.resolveGatewayConnection(); current();
         if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
         return next.key;
       } }); current();
-      models = found; backend = resolved; catalogState = 'ready'; catalogError = null; publish();
-      return { models: found.map(({ id, name }) => ({ id, name })) };
+      backend = resolved; catalogState = 'ready'; catalogError = null; publish();
+      return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
     }).catch(cause => {
       if (mine === version && !disposed) {
-        models = []; backend = undefined; catalogState = 'error';
+        rawModels = []; models = []; backend = undefined; catalogState = 'error';
         catalogError = Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE'; publish();
       }
       throw error(Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE');
@@ -180,7 +228,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (key === 'providerRetryPolicy') return () => ({ mode: 'normal', maxRetries: 0 });
     if (key === 'listModels') return async route => {
       if (disposed || route !== provider || permit(sample()) || !backend) return [];
-      return models.map(({ id, name }) => ({ provider, id, name, inputModalities: ['text'] }));
+      return models.map(({ id, name, inputModalities, input }) => ({
+        provider,
+        id,
+        name: name || id,
+        inputModalities: inputModalities ?? input ?? ['text'],
+      }));
     };
     if (key === 'stream') return request => protect(request, options => backend.stream(options));
     if (key === 'prepareCall') return async (route, model, signal) => {
@@ -205,14 +258,48 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const before = version; sample();
       if ((before !== version || !backend) && !permit(iam.getView())) void refresh().catch(() => {});
     } }
-    catch { if (!disposed) { lease.abort(); models = []; backend = undefined; publish(); } }
+    catch { if (!disposed) { lease.abort(); rawModels = []; models = []; backend = undefined; publish(); } }
   })();
-  return { ready, refresh, getView: () => ({ managed: true, configured: true,
-    state: catalogState, error: catalogError, models: models.map(({ id, name }) => ({ id, name })) }),
+  return { ready, refresh,
+    async updateModelOptions(nextOptions = {}) {
+      if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+      modelOptions = { ...modelOptions, ...(nextOptions || {}) };
+      models = applyModelOptions(rawModels, modelOptions);
+      if (backend && rawModels.length > 0) {
+        try {
+          const connection = await iam.resolveGatewayConnection();
+          const resolved = await createAdapter({
+            host,
+            config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
+            resolveKey: async () => {
+              const next = await iam.resolveGatewayConnection();
+              if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
+              return next.key;
+            },
+          });
+          backend = resolved;
+        } catch { /* keep existing backend if rebuild fails */ }
+      }
+      publish();
+      return { ok: true, models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
+    },
+    getModelOptions: () => ({ ...modelOptions }),
+    getView: () => ({ managed: true, configured: true,
+      state: catalogState, error: catalogError,
+      models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
+        id,
+        name,
+        contextWindow: contextWindow ?? 32768,
+        maxTokens: maxTokens ?? 4096,
+        inputModalities: inputModalities ?? ['text'],
+        reasoningEfforts: reasoningEfforts ?? null,
+        reasoning: Boolean(reasoning),
+      })),
+      modelOptions: { ...modelOptions } }),
     async dispose() {
       if (disposed) return;
       disposed = true; clearTimeout(timer); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
-      await observation; models = []; backend = undefined;
+      await observation; rawModels = []; models = []; backend = undefined;
     } };
 }
 
@@ -224,14 +311,19 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
   ]);
   const { baseURL, models } = config.managedModels; const provider = config.defaultProvider;
   const protocol = openAICompletionsApi();
-  const catalog = models.map(({ id, name, contextWindow, maxTokens }) => ({ id, name, contextWindow, maxTokens,
-    provider, api: 'openai-completions', baseUrl: baseURL, reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
+  const catalog = models.map(({ id, name, contextWindow, maxTokens, input, inputModalities, reasoning, reasoningEfforts }) => ({
+    id, name: name || id, contextWindow: contextWindow ?? 32768, maxTokens: maxTokens ?? 4096,
+    provider, api: 'openai-completions', baseUrl: baseURL,
+    reasoning: Boolean(reasoning || (reasoningEfforts && Object.keys(reasoningEfforts).length > 0)),
+    ...(reasoningEfforts ? { reasoningEfforts } : {}),
+    input: inputModalities ?? input ?? ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
   const piProvider = { id: provider, name: '企业模型', baseUrl: baseURL,
     auth: { apiKey: { name: '企业个人凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
     getModels: () => catalog, stream: (...args) => protocol.stream(...args), streamSimple: (...args) => protocol.streamSimple(...args) };
   const profiles = new Map([[provider, { provider, displayName: '企业模型', piProvider,
-    streamIdleTimeoutMs: 60000, maxRequestImageBytes: 1, requestImagePixelBudget: 1, requestImageMaxBytes: 1,
-    modelErrors: new Map(), configuredMaxTokens: new Map(models.map(m => [m.id, m.maxTokens])),
+    streamIdleTimeoutMs: 60000, maxRequestImageBytes: 10 * 1024 * 1024, requestImagePixelBudget: 4096 * 4096, requestImageMaxBytes: 10 * 1024 * 1024,
+    modelErrors: new Map(), configuredMaxTokens: new Map(models.map(m => [m.id, m.maxTokens ?? 4096])),
     retryPolicy: { mode: 'normal', maxRetries: 0 } }]]);
   // This provider accepts only the per-request IAM-resolved key, never ambient OAuth or env credentials.
   return new PiAiAdapter({ profiles: () => profiles, resolveApiKey: resolveKey,

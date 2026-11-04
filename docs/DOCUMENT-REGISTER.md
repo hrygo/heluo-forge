@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.63.4 |
+| 版本 | V1.63.5 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,12 +19,12 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.4 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.39.2 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.37.4 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.5 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.39.3 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.37.5 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.1 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.17.11 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
+| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.18.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.5.3 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V0.4.0 | 草案 | 平台组（代拟） | G2 |
@@ -47,12 +47,12 @@
 | CORP-DSH-CLI-002 | Gitee CLI（gh）接口规格（1.0.6） | [contracts/gh-cli-spec.md](<contracts/gh-cli-spec.md>) | V0.1.0 | 草案 | 平台组（代拟） | G1 接口事实 |
 | CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.3.2 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
 | CORP-DSH-METRICS-001 | 研发观察事件与上报契约 | [contracts/metrics-events.md](<contracts/metrics-events.md>) | V0.2.4 | 草案 | 平台组（代拟） | G2；指标导出启用前冻结 |
-| CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V3.2.3 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V3.2.4 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | AI 网关个人凭证（静态 Key）接入 | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | 历史依据；当前目标见 ADR-16 |
 | CORP-DSH-ARCH-003 | 企业插件市场调研与落地建议 | [architecture/plugin-market-research.md](<architecture/plugin-market-research.md>) | V0.3.1 | 草案 | 平台组（代拟） | 历史取证保留；来源与控制面建议由 ADR-11/13 替代 |
 | CORP-DSH-ARCH-004 | 插件市场决策：企业 Artifactory + AIHUB 原生索引 | [architecture/plugin-registry-source-decision.md](<architecture/plugin-registry-source-decision.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | 正式技术方案；G1 接入与发行基线核验，G2 安装开放验证 |
 | CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [architecture/gateway-identity-review.md](architecture/gateway-identity-review.md) | V1.1.0 | 评审稿 | 平台组（代拟） | G0 认领与路线评估；G1 契约；G2 联调与安全准入 |
-| CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V4.2.1 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V4.2.2 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-PLAN-002 | 插件市场 P0 接入取证单 | [plans/market-p0-verification.md](<plans/market-p0-verification.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-PLAN-003 | 已关闭任务修复验收台账 | [plans/fix-acceptance-ledger.md](<plans/fix-acceptance-ledger.md>) | V0.1.0 | 草案（代拟，待负责人确认） | 平台组（代拟） | — |
 | CORP-DSH-PLAN-004 | IAM 网关联合变更实施计划 | [plans/2026-11-02-iam-gateway-atomic.md](<plans/2026-11-02-iam-gateway-atomic.md>) | V0.1.1 | 草案 | 平台组（代拟） | 本地模拟验收；不授予生产能力 |
@@ -62,19 +62,19 @@
 | CORP-DSH-PLAN-008 | IAM 下一阶段收尾计划 | [plans/2026-11-03-iam-mock-closeout.md](<plans/2026-11-03-iam-mock-closeout.md>) | V0.6.0 | 草案 | 平台组（代拟） | 最小订阅source/mock已实现并定向验收；真实注册、真实Client接线与probe不开放 |
 | CORP-DSH-PLAN-009 | SDD 退出实施计划 | [plans/2026-11-03-sdd-retirement-implementation.md](<plans/2026-11-03-sdd-retirement-implementation.md>) | V0.2.0 | 草案 | 项目负责人（代拟） | 待用户授权实施；退役前完成调用方盘点与回退演练 |
 | CORP-DSH-PLAN-010 | 多端凭据存储实现与验收方案 | [plans/2026-11-03-credential-multiplatform.md](<plans/2026-11-03-credential-multiplatform.md>) | V0.6.1 | 草案 | 平台组（代拟） | A 已实现并在本机 macOS 取证（组合探针 18/18）；B 原生样机已实现、仅合成用例；G1 枚举/容量/事务/可信装配未关闭；G2 Windows/UOS/麒麟未验 |
-| CORP-DSH-PLAN-011 | IAM 相关 Issue 整体实施计划 | [plans/2026-11-04-iam-issues-implementation.md](<plans/2026-11-04-iam-issues-implementation.md>) | V0.2.0 | 草案 | 平台组（代拟） | 仓库内工作项按里程碑实施；硬件与外部接口依赖项保持 BLOCKED |
-| CORP-DSH-PLAN-012 | IAM 双端验收矩阵（Windows / 麒麟） | [plans/2026-11-04-iam-dual-platform-acceptance.md](<plans/2026-11-04-iam-dual-platform-acceptance.md>) | V0.2.0 | 草案 | 平台组（代拟） | 远程 macbook 与 megacube 已做首次部署复验；完整验收仍待目标环境与 IAM 账号 |
+| CORP-DSH-PLAN-011 | IAM 相关 Issue 整体实施计划 | [plans/2026-11-04-iam-issues-implementation.md](<plans/2026-11-04-iam-issues-implementation.md>) | V0.2.1 | 草案 | 平台组（代拟） | 仓库内工作项按里程碑实施；硬件与外部接口依赖项保持 BLOCKED |
+| CORP-DSH-PLAN-012 | IAM 双端验收矩阵（Windows / 麒麟） | [plans/2026-11-04-iam-dual-platform-acceptance.md](<plans/2026-11-04-iam-dual-platform-acceptance.md>) | V0.2.1 | 草案 | 平台组（代拟） | 远程 macbook 与 megacube 已做首次部署复验；完整验收仍待目标环境与 IAM 账号 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.0.1 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.1 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |
-| CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.0.0 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
+| CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.0.1 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.1 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
 | CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.6.7 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.13.2 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
 | CORP-DSH-CONF-002 | 私有化 Gitee 内部插件源码接入问询函 | [collaboration/gitee-market-clarification.md](<collaboration/gitee-market-clarification.md>) | V0.3.0 | 草案 | 平台组（代拟）；Gitee 团队回函 | G1 源码接口联调前；G2 开放前确认运行事项 |
 | CORP-DSH-CONF-003 | 插件市场企业接入问询函（P0） | 已废止 | — | 废止 | 平台组 | 内容已吸收至 DESIGN-007/012 及 P0 取证单，问询草案已废止删除 |
-| CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.6.3 | 草案 | 平台组（代拟）；IAM 团队答复；实施协调汇总 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
+| CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.6.4 | 草案 | 平台组（代拟）；IAM 团队答复；实施协调汇总 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-CONF-005 | DSH 和应用 Agent 调用 AI 网关补充问询函 | [collaboration/gateway-confirmation-letter.md](collaboration/gateway-confirmation-letter.md) | V0.5.0 | 草案 | 平台组（代拟）；网关团队答复；实施协调汇总 | G0 认领与能力评估；G1 契约；G2 联调准入 |
-| CORP-DSH-CONF-006 | DSH 研发助手接入企业 IAM 确认函 | [collaboration/iam-access-confirmation.md](<collaboration/iam-access-confirmation.md>) | V0.5.1 | 草案 | 平台组（代拟）；IAM 团队确认；实施协调汇总 | G1 身份登录与令牌闭环；G2 撤销与登出联动 |
+| CORP-DSH-CONF-006 | DSH 研发助手接入企业 IAM 确认函 | [collaboration/iam-access-confirmation.md](<collaboration/iam-access-confirmation.md>) | V0.6.0 | 草案 | 平台组（代拟）；IAM 团队确认；实施协调汇总 | G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 前置验证；G2 安装与隔离 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |

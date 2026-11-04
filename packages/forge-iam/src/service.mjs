@@ -915,6 +915,17 @@ export function createIamService(rawConfig, options = {}) {
       return runtime.refresh();
     },
 
+    async updateModelOptions(nextOptions) {
+      const runtime = options.getManagedModelRuntime?.();
+      if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
+      return runtime.updateModelOptions(nextOptions);
+    },
+
+    getModelOptions() {
+      const runtime = options.getManagedModelRuntime?.();
+      return runtime?.getModelOptions?.() ?? {};
+    },
+
     async resolveGatewayConnection() {
       // Refresh and validate the current grant through the existing authoritative path.
       // V1 sends only the personal Key to UAG; the IAM token never leaves this method.
