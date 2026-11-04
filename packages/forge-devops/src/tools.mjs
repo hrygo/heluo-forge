@@ -100,14 +100,31 @@ const NEXT_ACTION = Object.freeze({
 });
 
 /** 统一失败信封：拒绝必须可见，并给出下一步，而不是让调用方猜"为什么没结果"。 */
-function failure(action, reason, detail) {
-  return json({
+function failure(action, reason, detail, extra = undefined) {
+  const body = {
     ok: false,
     action,
     reason,
     next_action: NEXT_ACTION[reason] ?? 'report-to-admin',
     detail: String(detail ?? ''),
-  });
+  };
+  if (extra !== undefined) Object.assign(body, extra);
+  return json(body);
+}
+
+/**
+ * 机检失败的结构化证据：只有非空数组形态的 `problems` / `gaps` 才算数。
+ *
+ * 单列在信封平级位置而不是塞进 `detail`：`detail` 的字符串形态是既有契约（卡片与 report
+ * 按字符串读），但"零选项、缺依据、验收条件无映射"这类判定如果只留一句"未通过机检"，
+ * 调用方拿不到任何可执行的修正方向——那是把可自动纠正的错误变成必须读源码的错误。
+ */
+function machineEvidence(detail) {
+  if (detail === null || typeof detail !== 'object') return undefined;
+  const evidence = {};
+  if (Array.isArray(detail.problems) && detail.problems.length > 0) evidence.problems = detail.problems;
+  if (Array.isArray(detail.gaps) && detail.gaps.length > 0) evidence.gaps = detail.gaps;
+  return Object.keys(evidence).length === 0 ? undefined : evidence;
 }
 
 function reasonOf(error) {
@@ -120,7 +137,8 @@ function reasonOf(error) {
  * 「命令没启动」给**结构化 detail**（`{reason, category, next, command, observedAt}`）并指明
  * `configure-reader`：下一步就是去设置页指一个能启动的入口，模型不必再猜。其余失败维持
  * 字符串 detail——拒绝、缺参、超时给的是原因码，卡片与 report 按字符串读，把对象混进这条
- * 分支会让下游渲染出 `[object Object]`。
+ * 分支会让下游渲染出 `[object Object]`。机检失败另带**平级**的 `problems` / `gaps`
+ * 数组（`machineEvidence`），字符串 detail 不变。
  *
  * 两条分支的 message 都经 `failure-face` 脱敏，工具输出因此不携带本机路径（AC-2）。
  */
@@ -129,7 +147,7 @@ function failureOf(action, error) {
   if (detail !== null && typeof detail === 'object' && detail.spawnFailed === true) {
     return json(toolFailureOf(action, error));
   }
-  return failure(action, reasonOf(error), failureMessageOf(error) || String(error ?? ''));
+  return failure(action, reasonOf(error), failureMessageOf(error) || String(error ?? ''), machineEvidence(detail));
 }
 
 /**
@@ -314,7 +332,8 @@ function artifactWriteTool(service) {
       'review|report.md) with a fixed six-field front matter. context/review/report require body ' +
       'and reject data; clarify requires data.findings and no body; plan requires data.criteria/' +
       'data.items and no body. Path escapes are rejected; review requires a commit and a model ' +
-      'name; report requires an evidence array.',
+      'name; report requires an evidence array. A rejected clarify/plan writes nothing and returns ' +
+      'the per-item problems/gaps to fix.',
     parameters: {
       type: 'object',
       properties: {
@@ -328,9 +347,31 @@ function artifactWriteTool(service) {
           type: 'object',
           description: 'clarify 需 findings；plan 需 criteria/items；其余 kind 不接受 data',
           properties: {
-            findings: { type: 'array', items: {} },
-            criteria: { type: 'array', items: {} },
-            items: { type: 'array', items: {} },
+            findings: {
+              type: 'array',
+              items: {},
+              description:
+                'clarify 的逐条问题。每项 {kind, question, basis, options[], recommendation}：' +
+                'kind 取 acceptance / scope 即硬门禁；basis 是判定依据（与平台字段对得上，不能为空）；' +
+                'options 至少两项，每项 {label, effect, pros[], cons[]}——pros 与 cons 都必须非空；' +
+                'recommendation 为 {optionId, why}，optionId 必须是某个选项的 id。' +
+                '任一不满足则 ARTIFACT_CLARIFY_INVALID，修正项在返回的 problems 里逐条给出。',
+            },
+            criteria: {
+              type: 'array',
+              items: {},
+              description:
+                'plan 的验收条件。每项 {index, ...}；index 从 1 开始，实现项的 criterionIndex 必须指向它。至少一条。',
+            },
+            items: {
+              type: 'array',
+              items: {},
+              description:
+                'plan 的实现项。每项 {id, change, criterionIndex, verification[]}：' +
+                'criterionIndex 必须命中 criteria；verification 至少一条 {kind, command}，' +
+                'kind 取 unit / integration / e2e / command / manual，command 不能为空。' +
+                '带 stage / stages 视为固定阶段模板，判不合格。缺口在返回的 gaps 里逐条给出。',
+            },
           },
           additionalProperties: false,
         },

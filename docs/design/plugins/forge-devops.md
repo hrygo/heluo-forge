@@ -103,7 +103,7 @@
 | `forge_devops_query` | `change.read` / `change.list`（读） | `action`（枚举）、`target`（`change.read` 为变更号；`change.list` 只接受 `@me`）、`status`（仅清单，真实 flag 待核验） | 读信封（`status` / `source_revision` / `observed_at` / `command` / `truncated`）+ `facts`（单条：平台记录与归一结果；清单：`user` / `total` / `count` / `items` / `filter`）；不写平台 |
 | `forge_devops_change_context` | `change.read`（读） | `target` 变更号 | 上下文卡（`text` 可直接作为 `context.md`）；承建仓库段是外部指引（`REPO_FACTS_EXTERNAL`） |
 | `forge_devops_change_update` | `change.clarification.write`（写） | `target` 变更号、`summary` / `description` / `aiAc` 至少一个、`confirm{object}` | 默认不登记即拒绝；目标必须是本次会话已读到的变更；固定 argv `change update`，写后用 `change view` 回读；结果 done/failed/unknown，未知不重放 |
-| `forge_devops_artifact_write` | 无平台动作（本地落盘） | `repoRoot`、`kind`、`body` 或 `data`、`meta` | 五类产物；`clarify` 需 `data.findings` 且过机检，`plan` 需 `data.items` 且逐条映射过机检；六字段 front matter 与路径约束不变 |
+| `forge_devops_artifact_write` | 无平台动作（本地落盘） | `repoRoot`、`kind`、`body` 或 `data`、`meta` | 五类产物；`clarify` 需 `data.findings` 且过机检，`plan` 需 `data.items` 且逐条映射过机检；六字段 front matter 与路径约束不变。机检不通过**零落盘**，信封在平级字段带回逐条证据（`clarify` 为 `problems`、`plan` 为 `gaps`），`detail` 仍是字符串——只回一句"未通过机检"会让调用方无法修正。`data.findings` 的结构（`kind` / `basis` / 每个选项的 `pros` 与 `cons` / `recommendation.optionId`）写在工具参数说明里，不要求调用方读源码 |
 
 三条边界：
 
