@@ -126,8 +126,20 @@ Linux 以 `umask 002` 克隆时文件为 664，安装器曾只回一句 `unsafe 
 - 生效位置：`--patch` 传入同一行会被 bundle 层覆盖，必须写进 profile 的 `cordis.patch.yml`（“applied after every bundle layer”）。
 - 组合证据：`--dump-config` 中该行带上了 `filePath` 与 `allowInsecureFile: true`。
 - 启动观察：不再出现 `KEYCHAIN_UNAVAILABLE`，也不再出现 `warning: 2 entries did not activate`，日志为空。
-- 未证：该最小 profile 没有 HTTP 监听（127.0.0.1 在 150 秒内无响应），无法判定“就绪可用”。
-- 落盘：插件按需创建凭据文档，本次结束时 `~/forge-pilot/` 仍为空；测试后目录已删除，`cordis.patch.yml` 已还原为 `[]`。
+- 最小 profile 没有 HTTP 监听（150 秒无响应），无法判定就绪，改用 `--from-default-profile web` 新建的完整 web profile 重试。
+
+完整 web profile 的结果（2026-11-04，macbook）：
+
+| 项 | 结果 |
+|---|---|
+| 启动 | `dsh web: http://127.0.0.1:47930/?token=…`，带 token 访问首页 303（就绪） |
+| 鉴权 | `/api/forge-iam/view` 返回 401，连接守卫在位 |
+| 未激活条目 | 只剩 `account-controller` 等 `deepseekAccount`；该依赖已被补丁禁用，属组合残留告警 |
+| 凭据文档 | 首次使用后生成 `~/forge-pilot/credentials.json`，0600，键只有 `entries`、`version` |
+| 非生产告警 | 日志里未见“明文文件已启用”提示，插件用 `ctx.logger.warn` 输出，未进 stderr，诊断可见性待查 |
+| 清理 | 停进程、删 profile 与目录；补丁改动未写入仓库 |
+
+结论：覆盖层在完整 web profile 上可用且能到就绪；但“非生产”提示不可见、`account-controller` 残留两处需要处理。
 
 ## 5. 当前状态
 
