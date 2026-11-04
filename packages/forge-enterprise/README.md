@@ -46,3 +46,8 @@
 - 条款责任人与维护者由企业侧指定；本包只按索引标注呈现，不代替责任人裁定。
 - `cordis.patch.yml` 的 `insert:` 段只挂三个有真实 Host 职责的插件（凭据/策略/IAM）；SDD 已退役并从包中删除，不补空 `apply` 伪装成插件；网关、Gitee、品牌仍只有 README，不预建指向未实现包的入口。
 - 禁用实验失败即暂停 O3，不 patch 内核；`desktop` profile 行 id 与运行时模型面待核验。
+
+
+## 企业模型入口
+
+企业补丁另行禁用通用 `llm-pi-ai` 与原生 `ui-settings-models`，防止独立提供方和 Key 绕开账号流程。用户在“企业账号”页配置网关地址和个人 Key，模型目录由 `/v1/models` 获取；执行门禁与本地验证边界见 IAM [开发指南](<../forge-iam/docs/developer-guide.md#可配置网关与动态模型目录>)。回灌检测包含这两个入口。

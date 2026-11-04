@@ -230,6 +230,11 @@ window.__ModuleLoader__.load({
       return view;
     }
 
+    async function getJson(path) {
+      const response = await fetch(path);
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    }
+
     async function postJson(path) {
       const response = await fetch(path, { method: 'POST', headers: REQUEST_HEADERS, body: '{}' });
       return { ok: response.ok, status: response.status, body: await readJson(response) };
@@ -333,7 +338,13 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_CONFIG_INVALID') return '企业登录设置有误，请联系管理员。';
       if (code === 'IAM_DISPOSED') return '登录服务已关闭，请刷新页面。';
       if (code === 'IAM_GRANT_CONTEXT_MISMATCH' || code === 'IAM_REFRESH_SUBJECT_MISMATCH') return '登录状态已变化，请重新登录。';
-      if (code === 'IAM_GATEWAY_KEY_INVALID') return '凭证格式不正确，请完整复制 UAG 控制台中的个人凭证后重试。';
+      if (code === 'IAM_GATEWAY_KEY_INVALID') return '个人 Key 格式不正确，请完整复制网关提供的 Key 后重试。';
+      if (code === 'IAM_GATEWAY_URL_INVALID') return '请输入有效的网关地址，例如 https://gateway.example/v1。';
+      if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED') return '网关未接受个人 Key，请核对或更换后重试。';
+      if (code === 'ENTERPRISE_GATEWAY_FORBIDDEN') return '当前账号没有模型使用权限，请联系管理员。';
+      if (code === 'ENTERPRISE_MODEL_CATALOG_INVALID') return '网关返回的模型列表无法识别，请检查网关地址。';
+      if (code === 'ENTERPRISE_GATEWAY_UNAVAILABLE' || code === 'ENTERPRISE_MODELS_UNAVAILABLE') return '暂时无法获取企业模型，请检查网关地址或稍后重试。';
+      if (code === 'IAM_LOGIN_REQUIRED' || code === 'IAM_MODEL_CONTEXT_CHANGED') return '账号状态已变化，请重新登录后再试。';
       if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再添加个人凭证。';
       if (code === 'IAM_GATEWAY_ATOMIC_UNVERIFIED') return '暂时无法安全地保存或清除凭证，请联系管理员。';
       if (code === 'IAM_GATEWAY_LEGACY_READ_ONLY') return '现有凭证暂时只能查看，本次没有更改。如需更换，请联系管理员。';
@@ -516,7 +527,8 @@ window.__ModuleLoader__.load({
         }
         setCredential((current) => ({ ...current, saving: true, notice: null }));
         try {
-          const result = await putJson('/api/forge-iam/credential', { key: value, deviceLabel: credential.deviceLabel.trim() });
+          const result = await putJson('/api/forge-iam/credential', { key: value, deviceLabel: credential.deviceLabel.trim(),
+            baseURL: (credential.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '').trim() });
           if (!result.ok) {
             setCredential((current) => ({
               ...current,
@@ -526,11 +538,26 @@ window.__ModuleLoader__.load({
             return;
           }
           // The value is never stored in component state after the write.
-          setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关凭据已保存。' });
+          setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关地址和个人 Key 已保存，正在获取模型列表。' });
           if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
           setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
         }
+      };
+
+      const refreshModels = async () => {
+        if (viewBarrier.current.pending || credential.saving) return;
+        const epoch = viewBarrier.current.epoch;
+        setCredential((current) => ({ ...current, saving: true, notice: null }));
+        try {
+          const result = await getJson('/api/forge-iam/models');
+          if (!isViewCurrent(epoch)) return;
+          setCredential((current) => ({ ...current, saving: false, notice: result.ok
+            ? `模型列表已更新，共 ${result.body?.models?.length ?? 0} 个模型。`
+            : errorNotice(result.body?.error?.code) }));
+          if (result.ok) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
+        } catch { if (isViewCurrent(epoch)) setCredential((current) => ({ ...current, notice: '暂时无法获取模型列表，请稍后重试。' })); }
+        finally { if (copyLive.current) setCredential((current) => ({ ...current, saving: false })); }
       };
 
       const clearCredential = async () => {
@@ -784,6 +811,16 @@ window.__ModuleLoader__.load({
             `UAG 个人凭证：${gatewayStatus}`,
           ),
         ),
+        h('label', { style: fieldLabel },
+          h('span', null, '网关地址'),
+          h('input', { type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
+            value: credential.baseURL ?? gateway.baseURL ?? view.modelAccess?.baseURL ?? '',
+            placeholder: 'https://gateway.example/v1', disabled: credential.saving || viewBarrier.current.pending,
+            onChange: (event) => setCredential((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle }),
+          h('span', { style: muted }, '填写网关提供的地址；修改地址时请重新输入对应的个人 Key。'),
+        ),
+        credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? ''))
+          ? h('p', { role: 'status', style: muted }, '有未保存的更改。保存后将重新获取模型列表。') : null,
         gatewayDetails.length ? h('div', { style: { ...muted, marginBottom: 8 } }, gatewayDetails.join(' · ')) : null,
         storageWarning,
         h('div', { className: 'fiam-callout' },
@@ -853,6 +890,25 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
         header,
         accountCard,
+        h('section', { className: 'fiam-card', 'aria-label': '企业模型' },
+          h('div', { className: 'fiam-card-title' }, '企业模型'),
+          h('p', { style: muted }, view.modelAccess?.configured
+            ? '登录后保存网关地址和个人 Key，应用将自动获取你可用的模型。在对话窗口选择模型即可开始。'
+            : '请先在下方设置网关地址和个人 Key。'),
+          view.modelAccess?.configured
+            ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8 }, 'aria-label': '企业预置模型' },
+                ...(view.modelAccess.models ?? []).map((model) => h('span', { key: model.id, className: 'fiam-badge' }, model.name || model.id)),
+              ) : null,
+          view.modelAccess?.state === 'loading' ? h('p', { role: 'status', style: muted }, '正在获取模型列表…') : null,
+          view.modelAccess?.state === 'ready' && !view.modelAccess.models?.length
+            ? h('p', { role: 'status', style: muted }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
+          view.modelAccess?.error ? h('p', { role: 'status', style: muted }, errorNotice(view.modelAccess.error)) : null,
+          h('button', { type: 'button', style: secondaryButton, disabled: credential.saving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured', onClick: refreshModels },
+            credential.saving ? '正在处理…' : '刷新模型列表'),
+          h('p', { style: muted }, view.state !== 'ready' ? '下一步：登录企业账号。'
+            : gateway.state !== 'configured' || gateway.matchesAccount === false ? '下一步：在下方保存当前账号的个人凭证。'
+            : '保存后会自动获取模型。列表更新成功后，关闭设置并在对话窗口选择模型；实际可用范围以网关授权为准。'),
+        ),
         gatewayCard,
       );
     }
@@ -1097,6 +1153,7 @@ window.__ModuleLoader__.load({
         try {
           const result = await putJson('/api/forge-iam/credential', {
             key: value,
+            baseURL: (state.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '').trim(),
             deviceLabel: state.deviceLabel.trim(),
           });
           if (!result.ok) {
@@ -1197,10 +1254,17 @@ window.__ModuleLoader__.load({
           h('p', { style: { margin: 0, color: 'var(--dsw-alias-label-secondary)', maxWidth: '42em' } }, step.body),
           state.step === 2
           ? h('div', { style: { marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 } },
+              h('label', { style: fieldLabel },
+                h('span', null, '网关地址'),
+                h('input', { type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
+                  value: state.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '',
+                  placeholder: 'https://gateway.example/v1', disabled: state.saving,
+                  onChange: (event) => setState((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle }),
+              ),
               h('label', { style: fieldLabel }, 'UAG 个人凭证', h('input', {
                   type: 'password',
                   value: state.keyValue,
-                  placeholder: 'uag-…',
+                  placeholder: '输入网关提供的个人 Key',
                   'aria-label': 'UAG 个人凭证',
                   autoComplete: 'off',
                   spellCheck: false,

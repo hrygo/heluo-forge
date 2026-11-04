@@ -94,11 +94,11 @@ public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 auth
 | `signOut()` | 返回 `{view, logoutUrl, revocation, revocationError?}`；结果可能是已清理、撤销失败或未知。 |
 | `resolveToken()` | 返回 access token 字符串或拒绝；refresh token 不通过此方法交给调用方。 |
 | `getPrincipal()` | 返回最小 `{issuer, subject}` 或 `undefined`，供 Host 使用；不是独立的服务端授权证明。 |
-| `saveGatewayCredential({key, deviceLabel})` | 在独立受信联合存储上保存新格式值及元数据，返回 view；还要求可取得会话主体和可变更的目标 pair。 |
+| `saveGatewayCredential({key, deviceLabel, baseURL})` | 在独立受信联合存储上保存新格式值及元数据，返回 view；还要求可取得会话主体和可变更的目标 pair。 |
 | `clearGatewayCredential()` / `loadGatewayCredential({force})` | 清除同样需要独立联合能力及可变更目标；读取不自动迁移，不探测网关。 |
 | `watch(signal)` / `dispose()` | Host 内部状态观察与释放运行时资源。 |
 
-view 包含 `state`、`configured`、`signedIn`、`canSignIn`、`canSignOut`、`missing`、`error`、`exclusive`、`principal`、`accessExpiresAt`、`gatewayCredential`、`gatewayConsoleUrl`。`principal` 为主体字符串或 null，`error` 为错误码字符串或 null；view 不含 token、`authorizationUrl` 或 `attemptId`。授权 URL 随 `startSignIn` 单独返回。
+view 包含 `state`、`configured`、`signedIn`、`canSignIn`、`canSignOut`、`missing`、`error`、`exclusive`、`principal`、`accessExpiresAt`、`gatewayCredential`、`gatewayConsoleUrl` 与 `modelAccess`。`principal` 为主体字符串或 null，`error` 为错误码字符串或 null；view 不含 token、`authorizationUrl` 或 `attemptId`。授权 URL 随 `startSignIn` 单独返回。
 
 ### 同源 HTTP
 
@@ -317,9 +317,22 @@ Host 已接入严格只读编排：可选绑定 llm 与 agentDefaultModel，在 
 - 默认 verifier 不注入；未知 provider 上旧有效 grant 仍可 ready/读取，退出保留持久记录。存储门禁不能抵御同权 JS 直接写存储。
 - 旧 V1 不携带 discovery 来源，不能从旧记录自己取得可信 issuer。启动不联网；无明确 issuer pin 或本实例已验证的 metadata 上下文时，拒绝恢复身份、返回 AT 或采用其主体保存网关 Key，保留持久记录。显式 issuer 匹配的旧 V1 继续兼容，不因缺少 `sessionInstanceId` 一刀拒绝；不自动增加来源字段或迁移。只配 discovery 的新登录仍是有效配置，本实例取得可信 metadata 后可按其固定上下文处理会话。
 - [只读模型采样](<../src/model-selection-host.mjs>)已接入 Host 生命周期，但没有实际保存或模型/工具执行授权。独立的[判定与记录式适配](<../src/model-gate.mjs>)保留显式选择、未知写入和回读缺口的测试；不把 SDK 缺少 explicit 或明确空态视为覆盖许可。真实默认模型配置不自动保存。
-- 真实模型/工具执行门禁与网关消费方未接线。前端隐藏、Key 保存、ownerSubject 匹配及旧引用保留均不能证明实际调用已安全隔离；个人 A/B 授权路线及服务端归属校验未完成。
+- 本地模型执行门禁与网关消费方已接入；真实企业授权和工具执行入口仍须分别核验。前端隐藏、Key 保存、ownerSubject 匹配及旧引用保留均不能证明实际调用已安全隔离；个人 A/B 授权路线及服务端归属校验未完成。
 - 生产 OS adapter、安全旧记录迁移、Client Remote/watch 与凭据探测未实现；真实 GUI/浏览器调度、跨入口顺序、Windows/麒麟平台及真实 IAM/UAG 路径缺少完整验证。界面文案仍为中文，locale 元数据不等于界面全量本地化。
 
 **生产开放前必须另行满足**：IAM 支持且落地的客户端认证与 secret 下发/存储/轮换/吊销；经审核并验证的目标平台存储、原子排他及提交语义；真实执行入口的身份/用途/授权检查与无官方或旧引用绕行；五分钟撤权、当前授权及刷新后代撤销的正式契约和联调；目标双端、GUI 与组合验收，以及责任方批准。现行代码和本地测试不能替代这些门禁。
 
 仓库详细设计、外部契约、回函与设计索引是扩展评审材料，不随本包分发；安装包使用不依赖这些材料，但生产准入必须由对应权威证据判断。
+
+
+## 可配置网关与动态模型目录
+
+`managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人 Key 一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧只读记录。显式地址的兼容 Key 为 1—4096 个可见 ASCII 字符；旧的无地址路径继续使用 UAG 格式校验。Key 原文不进入视图、日志或错误响应。
+
+新增同源 `GET /api/forge-iam/models`，在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。`modelAccess` 提供目录 `state`、`error`、`models` 及已保存地址；不是网关授权证明。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际，每次通过 `resolveToken()` 复查会话及 Key owner，异步读取后复查生命周期；令牌不发往网关。
+
+[模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方与目录外模型。目录请求带宿主 `attributionHeaders()`，只请求标准 `/v1/models`，禁用重定向、限制响应大小与数量、去重校验 ID，失败清目录。地址/Key/身份变化、过期或退出均撤销旧代际；本地在途流收到 abort，迟到目录和内容不交付。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 32768/4096 的本地容量默认值，不宣称为网关实际上限。
+
+宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务。默认模型保持严格只读，不自动保存。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出，不自动重放失败请求。
+
+回归命令：`node --test packages/forge-iam/test/managed-models.test.mjs packages/forge-iam/test/gateway-atomic-service.test.mjs`。安装宿主组合探针：`node scripts/probe/run-iam-managed-models-probe.mjs`；支持现有 `DSH_BIN` / `DSH_NODE_MODULES` 定位参数。探针使用实际 Cordis/LLM/PiAiAdapter、模拟 IAM 与网关及显式内存事务夹具，验证登录、标准目录、流式对话、刷新和退出后零模型请求；不构成生产存储、真实 IAM/UAG 或双端 GUI 验收。

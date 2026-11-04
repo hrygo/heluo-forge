@@ -1,3 +1,5 @@
+import { validateManagedModels } from './managed-models.mjs';
+
 // Cordis 用 standard-schema 校验插件配置：Config['~standard'].validate(config)
 // 必须同步返回 { value } 或 { issues }。这里不依赖外部校验库，保持包骨架可在
 // 没有 DSH 运行时的环境下测试。
@@ -30,6 +32,7 @@ export const CONFIG_FIELDS = [
   'gatewayConsoleUrl',
   'defaultProvider',
   'defaultModel',
+  'managedModels',
   'refreshSkewSeconds',
   'attemptTimeoutSeconds',
   'httpTimeoutMs',
@@ -74,6 +77,7 @@ const DEFAULTS = {
   gatewayConsoleUrl: '',
   defaultProvider: 'enterprise',
   defaultModel: '',
+  managedModels: null,
   refreshSkewSeconds: 60,
   attemptTimeoutSeconds: 300,
   httpTimeoutMs: 10000,
@@ -268,6 +272,13 @@ export function validateConfig(input) {
 
   if (value.logoutMode === 'rp' && !value.endSessionEndpoint) {
     issues.push(issue('endSessionEndpoint', 'RP-initiated logout requires endSessionEndpoint'));
+  }
+
+  const managed = validateManagedModels(source.managedModels, value.allowInsecureHttp);
+  if (managed.issues) issues.push(...managed.issues);
+  else value.managedModels = managed.value;
+  if (value.managedModels && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value.defaultProvider)) {
+    issues.push(issue('defaultProvider', 'managed model provider must be an exact route ID'));
   }
 
   if (issues.length) return { issues };

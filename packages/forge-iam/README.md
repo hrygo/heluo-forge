@@ -122,3 +122,8 @@ git diff --check
 - 详细设计：`docs/design/plugins/forge-iam.md`
 - 官方行禁用：`docs/design/plugins/forge-enterprise.md`
 - IAM 询问函：`docs/collaboration/team-confirmation-letters.md` §4.2
+
+
+## 企业模型设置闭环
+
+企业账号页统一配置网关地址与个人 Key，通过标准 `/v1/models` 获取目录；登录和凭证就绪后才能列出或调用模型。默认模型不自动改写，退出、到期及配置变化会撤销旧目录和调用代际。实现与限制见[开发指南](<docs/developer-guide.md#可配置网关与动态模型目录>)；生产原子存储、真实 IAM/UAG 和工具授权门禁不因此获得准入。

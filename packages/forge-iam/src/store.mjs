@@ -1,3 +1,4 @@
+import { normalizeGatewayBaseURL } from './managed-models.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
@@ -282,10 +283,14 @@ function parseGatewayCredential(payload) {
   for (const field of ['ownerSubject', 'enteredAt']) {
     if (!isNonEmptyString(payload[field])) errors.push(`gateway credential ${field} must be a non-empty string`);
   }
-  for (const field of ['deviceLabel', 'suggestedExpiry']) {
+  for (const field of ['deviceLabel', 'suggestedExpiry', 'baseURL']) {
     if (payload[field] !== undefined && payload[field] !== null && typeof payload[field] !== 'string') {
       errors.push(`gateway credential ${field} must be a string when present`);
     }
+  }
+  if (payload.baseURL !== undefined) {
+    try { if (normalizeGatewayBaseURL(payload.baseURL, true) !== payload.baseURL) errors.push('invalid gateway address'); }
+    catch { errors.push('invalid gateway address'); }
   }
   if (payload.version === GATEWAY_VERSION) {
     if (typeof payload.writeOperationId !== 'string' || !WRITE_ID_PATTERN.test(payload.writeOperationId)) errors.push('invalid gateway write generation');
@@ -425,14 +430,15 @@ export function createGatewayCredentialStore(credentials, options = {}) {
       return resolved && isNonEmptyString(resolved.value)
         ? { value: resolved.value, source: resolved.source ?? null } : undefined;
     },
-    async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry }, { guard } = {}) {
-      if (typeof value !== 'string' || !GATEWAY_VALUE_PATTERN.test(value)) {
+    async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry, baseURL }, { guard } = {}) {
+      if (typeof value !== 'string' || (baseURL ? !/^[\x21-\x7e]{1,4096}$/u.test(value) : !GATEWAY_VALUE_PATTERN.test(value))) {
         throw new StoreError('IAM_GATEWAY_KEY_INVALID', 'gateway credential must be uag- plus 32 hexadecimal digits');
       }
       if (!isNonEmptyString(ownerSubject)) throw new StoreError('IAM_GATEWAY_OWNER_MISSING', 'a gateway credential needs the signed-in subject');
       const payload = { version: GATEWAY_VERSION, ownerSubject, enteredAt,
         writeOperationId: randomUUID(), valueDigest: valueDigest(value),
         ...(deviceLabel ? { deviceLabel } : {}), ...(suggestedExpiry ? { suggestedExpiry } : {}),
+        ...(baseURL ? { baseURL } : {}),
       };
       if (!parseGatewayCredential(payload).ok) throw new StoreError('IAM_REQUEST_INVALID', 'gateway metadata is invalid');
       const adapter = requireAtomic();
