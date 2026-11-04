@@ -97,20 +97,26 @@
 
 ### 5.2 命令面（枚举到 argv 动词）
 
-| 用途 | 命令 | 参数白名单 | `--json` 子集 |
+| 用途 | 命令 | 参数白名单 | 本地投影清单（归一后交付的键） |
 |---|---|---|---|
-| 仓库详情 | `repo view` | `--json`、`--host` | `name`、`path`、`description`、`url`、`default_branch`、`private`、`updated_at` |
-| 仓库清单 | `repo list` | `--json`、`--limit` | `name`、`path`、`url`、`private`、`updated_at` |
-| Issue 详情 | `issue view` | `--json`、`--host` | `number`、`title`、`state`、`url`、`updated_at`、`labels`、`comments` |
-| Issue 清单 | `issue list` | `-R`、`--json`、`--state`、`--limit` | `number`、`title`、`url`、`state` |
-| PR 详情 | `pr view` | `--json`、`--host` | `number`、`title`、`state`、`url`、`updated_at`、`head`、`base`、`draft`、`mergeable`、`comments` |
-| PR 清单 | `pr list` | `-R`、`--json`、`--state`、`--limit` | `number`、`title`、`url`、`head`、`state` |
+| 仓库详情 | `repo view` | `--json`（无值）、`--host` | `name`、`path`、`path_with_namespace`、`description`、`default_branch`、`visibility`、`web_url`、`last_activity_at`、`archived`、`ssh_url_to_repo` |
+| 仓库清单 | `repo list` | `--json`（无值）、`--limit` | 同上，去掉 `description`、`default_branch`、`ssh_url_to_repo` |
+| Issue 详情 | `issue view` | `--json`（无值）、`--host` | `id`、`title`、`description`、`state`、`labels`、`updated_at`、`web_url` |
+| Issue 清单 | `issue list` | `-R`、`--json`（无值）、`--state`、`--limit` | `id`、`title`、`state`、`updated_at`、`web_url` |
+| PR 详情 | `pr view` | `--json`（无值）、`--host` | `iid`、`title`、`state`、`web_url`、`updated_at`、`source_branch`、`target_branch`、`merge_status`、`merged_at`、`user_notes_count` |
+| PR 清单 | `pr list` | `-R`、`--json`（无值）、`--state`、`--limit` | `iid`、`title`、`state`、`web_url`、`source_branch`、`target_branch`、`merge_status` |
 | Issue 创建/评论 | `issue create` / `issue comment` | `-R`、`--title`、`--body` | —（人类文本，解析编号/链接） |
 | PR 创建/评论 | `pr create` / `pr comment` | `-R`、`--title`、`--body`、`--head`、`--base`、`--draft` | — |
 
 禁项（出现即拒绝且零子进程）：动词 `pr merge`/`pr close`/`pr review --approve`/`issue close`/`issue delete`/`repo delete`/`repo create`/`release`/`workflow`/`api`/`auth`/`config`/`gist`；参数 `--web`/`--template`/`-f`/`--raw-field`/`--field`/`--input`/`--body-file`/`--method`/`--approve`/`--request-changes`/`--merge`/`--close`/`--delete`/`--admin`/`--paginate`/`--jq`/`--hostname`。
 
-`--json` 子集与字段表是**同一个对象**（不是抄一份），表改则子集跟着改，不存在两处漂移。
+第四列是**本地投影清单**，第三列的 `--json` 是**无值开关**：2026-11-03 实测 `repo view --json name,path` 与裸 `repo view --json` 输出逐字相同，逗号字段清单被忽略，因此 argv 里永远只有 `--json` 一个 token。清单与字段表是同一个对象（`GITEE_FIELD_PROJECTIONS`，不是抄一份），名字越界仍按 `JSON_FIELD_NOT_DECLARED` 拒绝且零子进程。
+
+**剥壳**：实测出现三种包裹——`issue list` 是 `{data:{list:[…]}, meta:{…}}`、`pr list` 是 `{data:[…], meta:{…}}`、`repo view` 是扁平对象；对象读同样接受 `{data:{…}}`。`meta.total_count` 作为附加事实带进读载荷（清单被 `--limit` 截住时说明总量），其余 `meta` 键丢弃，且**不**进 `missing_fields`——那不是"取不到的字段"。认不出的壳按 `MALFORMED_RESULT` 处理，不把 `data`/`meta` 当数据交付。
+
+**编号与状态语义**：PR 用 `iid`（`id` 是全局号，`iid` 才对得上 URL 里的编号），Issue 用 `id`（实测载荷**没有** `number`）；分支是 `source_branch`/`target_branch`，可合并性是 `merge_status`，评论数是 `user_notes_count`。状态值实测是 `opened`，归一到既有词表 `open`/`closed`；未实测的状态值（如 `merged`）原样保留，不新增词、不猜同义词。
+
+**事实版本**：Issue/PR 取 `updated_at`；仓库实测**没有** `updated_at`，取 `last_activity_at`（CLI 给出的唯一时间事实，见 §12）。取不到才降级 `MISSING_SOURCE_REVISION`。`issue view`/`pr view`/`repo list` 的输出形状**未实测**：投影里取不到的键一律进 `missing_fields`，不按别的平台的习惯补齐，也不回落成 `number` 之类的猜法。
 
 #### 5.2.1 本地 git 命令面（r10 新增）
 
@@ -132,6 +138,8 @@
 | 读 | `{provider, action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}` | `succeeded` / `failed` / `partial` / `unknown`；准入拒绝单列 `denied`（`rule: policy-denied` 等） |
 | 写 | `{provider, action, status, target, targetRefs, evidence, rule, reason, message}` | `done` / `failed` / `denied` / `unknown`；`done` 必须"CLI 成功 + 回读一致"；五个写的返回体**不含** `executed` 键 |
 | 判定 | 与写同形，另带 `executed`（仅在判定体显式声明时输出，当前只有 `gitee.delivery.judge` 声明 `executed: false`） | `done` / `failed` / `denied` / `unknown`；`executed` 恒 `false`、`remote_calls` 恒 `0`；`unknown` 不计入通过 |
+
+读载荷另带 `kind`/`command` 与 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`，没有就不出现）与 `truncated`；这些是载荷键，不占上述固定七项，也不冒充 `missing_fields`。
 
 固定原因枚举（自由文本只进 `message`/`detail`，不新增枚举值）：读侧 `AUTH_MISSING`、`GITEE_PERSISTENT_TOKEN`、`HOST_NOT_ENTERPRISE`、`SPAWN_FAILED`、`NONZERO_EXIT`、`UNSUPPORTED_FIELD`、`ARG_NOT_WHITELISTED`、`ARG_INVALID`、`JSON_FIELD_NOT_DECLARED`、`FORBIDDEN_ARGV`、`TIMEOUT`、`MALFORMED_RESULT`、`OUTPUT_TRUNCATED`、`NO_STRUCTURED_STATUS`、`MISSING_SOURCE_REVISION`、`POLICY_DENIED`、`GITEE_STATUS_DISPOSED`；写侧另有 `REPLAY_BLOCKED`、`READBACK_MISMATCH`、`READBACK_UNAVAILABLE`、`HUMAN_CONFIRMATION_FORBIDDEN`、`COMMIT_MESSAGE_INVALID`、`REVIEW_INVALID`。没有「结果来自别的 provider」这类原因码：本包只服务 Gitee 一个平台，那不是可发生的事实。git 侧原因码由 `GIT_REASONS` 单列（提交信息不合规、argv 越界、非零退出、超时），不混进读侧枚举。
 
@@ -174,7 +182,7 @@ flowchart LR
   K -->|超时或截断| N[unknown, 不重放]
 ```
 
-- **读**：`read(action, target, params)` → 适配器 `argvFor` → runner → 归一到信封；`provider` 不符、主机不是企业域、缺 `source_revision` 分别降级为 `unknown`/`failed`，**不编版本**。
+- **读**：`read(action, target, params)` → 适配器 `argvFor`（`--json` 开关 + 本地投影选择）→ runner → 剥壳与投影 → 归一到信封；`provider` 不符、主机不是企业域、缺 `source_revision` 分别降级为 `unknown`/`failed`，**不编版本**。
 - **写**：确认（`confirm{repo,object}` 形状）→ 幂等键 `sha256(changeId|objectType|title)` 前 16 位 → 门禁 `executeAction` → 子进程 → 回读条目比对（编号/链接/正文一致才算 `done`）。
 - **git**：`commit` 先过 `git-message`（首行 `[变更号]`、描述非空），不合规零子进程；合规则经 `runGit()` 单一出口执行，成功以"新 HEAD 与提交前不同"为据。`push` 是远端写：门禁 `executeAction`（动作 `gitee.git.push`，未登记即 `denied`）→ `confirm{repo,object}` 逐字匹配 → `runGit()`；失败不重放，超时按 `unknown`。
 - **并发**：允许并发调用，环境变量按调用隔离；幂等台账命中返回 `reused` 且远端 0 次调用。
@@ -191,7 +199,7 @@ flowchart LR
 | 动作未登记（默认写） | 拒绝，适配器 0 调用 | `denied` + `rule: unregistered-action` | 范围批准后追加目录 |
 | 参数越界/禁项 | 拒绝，零子进程 | `ARG_NOT_WHITELISTED`/`FORBIDDEN_ARGV` | 改成白名单内调用 |
 | 输出非 JSON 或缺版本 | 降级 | `MALFORMED_RESULT`/`MISSING_SOURCE_REVISION`（`unknown`） | 否（先查 CLI 版本） |
-| 输出超 1 MiB | 截断降级 | `OUTPUT_TRUNCATED`（`unknown`） | 收窄 `--json` 或 `--limit` |
+| 输出超 1 MiB | 截断降级 | `OUTPUT_TRUNCATED`（`unknown`） | 收窄 `--limit` 或目标范围（`--json` 无值，不能用来收窄） |
 | 超时 | 终止子进程 | `unknown` + `TIMEOUT` | 人工确认后重试（写不自动重放） |
 | 回读不一致 | `failed`，不重放 | `READBACK_MISMATCH` | 人工核对远端 |
 | 提交信息不合规 | 拒绝，零子进程 | `COMMIT_MESSAGE_INVALID` + `expectedFormat` | 改首行后重试 |
@@ -234,7 +242,7 @@ flowchart LR
 | 单边改过目录再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按未登记 `GITEE_ACTION_UNREGISTERED` fail closed，先挂载方工具仍在 | 不采用（门禁会红） |
 | 想回到 r4 的隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
 
-升级：命令面只增不删；`--json` 字段稳定性须在升级 CLI 前回归。回退：移除 profile 补丁层的**插件行**（`id: heluo-gitee`）→ 重载 → `dsh plugin --profile web remove @heluo/forge-gitee`；不写缓存或临时文件，卸载后无残留（步骤与复核命令写在包 README"回滚"一节，装在装之前可读）。**策略行 `heluo-policy` 与 devops 共用**：另一个包仍装着时不得删除它，只有两个包都卸载后才可整条移除。
+升级：命令面只增不删；CLI 的输出形状（包裹层级、字段名、状态值写法）须在升级 CLI 前回归——r11 的投影表就是从 2026-11-03 实测反写出来的，字段名变化会直接表现为 `missing_fields` 变多或整条降级 `unknown`。回退：移除 profile 补丁层的**插件行**（`id: heluo-gitee`）→ 重载 → `dsh plugin --profile web remove @heluo/forge-gitee`；不写缓存或临时文件，卸载后无残留（步骤与复核命令写在包 README"回滚"一节，装在装之前可读）。**策略行 `heluo-policy` 与 devops 共用**：另一个包仍装着时不得删除它，只有两个包都卸载后才可整条移除。
 
 ## 12. 未决事项
 
@@ -242,18 +250,20 @@ flowchart LR
 |---|---|---|
 | 麒麟 aarch64 是否有可用产物 | Gitee 团队 | 方案可行性前提 |
 | 是否支持环境变量注入、可否禁用自身配置存储 | Gitee 团队 | §6 凭据方式（当前按"阻断持久令牌"实现） |
-| `--json` 字段是否稳定、是否与上游一致 | Gitee 团队、平台组 | §5.2 字段表与解析（F1） |
+| `issue view`/`pr view`/`repo list` 的实际输出形状（`repo view`/`issue list`/`pr list` 已于 2026-11-03 实测） | Gitee 团队、平台组 | §5.2 投影清单与剥壳（F1 余项） |
+| 仓库目标只接受 `owner/repo` 两段，而实测仓库位于三级命名空间（`osc/ard/ard-sdk`）：`-R`/位置参数能否寻址 | Gitee 团队 | §5.2 目标形状（未实测，当前按形状拒绝） |
 | 只读子命令清单与权限映射 | Gitee 团队 | §5.2 命令面 |
 | 五个受控写（含 `gitee.git.push`）的范围与 C3 分类 | 平台组、Gitee、PMO | 默认 `denied` 能否开闸 |
 | CLI 双端实测与风险关闭证据 | 平台组、Gitee、PMO | G1 前仍须确认命令、凭据和双端运行证据 |
 
 **NOT RUN（本轮未取得证据，不得据本文推断已验证）**
 
-1. 企业实机联调：argv 形状、`--json` 字段、鉴权与权限模型。
+1. 企业实机联调：三段只读载荷（`repo view`/`issue list`/`pr list`）已于 2026-11-03 实测并按实测反写；**仍未实机**的是 `issue view`/`pr view`/`repo list` 的 argv 与输出形状、写命令的 argv、鉴权与权限模型。
 2. Windows 实机与银河麒麟 aarch64 上的 CLI 产物与包装脚本的表现（离线用例注入平台与假环境，**不是实机证据**）。
 3. 真实 profile 的装入/重启/回滚（`dsh plugin add` 需要工作区外写权限，归主流程；本包只提供补丁层解析与装配证据）。
 4. 持久审计 sink、审批台账与写动作开闸（范围批准后才验）。
 5. 宿主 rc.3（本机 rc.2）。
+6. CLI 版本号与升级回归：三段载荷取自 2026-11-03 的一次实测，未记录 CLI 版本；升级后需按 §11 的口径回归输出形状。
 
 **需用户确认的设计选项（增益不明确，暂不采用，保留待定）**
 

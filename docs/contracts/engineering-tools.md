@@ -104,7 +104,9 @@ r10 起 devops 不再持有仓库/Issue/PR 的读写实现（gh 侧模块已删�
 | `result_refs` | 已证实产生的对象和版本；没有证据不得合成 URL/对象编号 |
 | `completed_effects`, `pending_effects` | 仅在复合调用确有部分成功时使用；不得以总退出码覆盖 |
 | `error_code`, `retry_policy` | 结构化原因；`none` / `read_recheck` / `safe_retry`；安全重试必须有提供方依据 |
-| `observed_at`, `source_revision` | 原始观察时间和来源版本；无版本明确缺失，不伪造冻结事实 |
+| `observed_at`, `source_revision` | 原始观察时间和来源版本；来源版本取该对象在提供方输出里**实际存在**的时间事实（Gitee 实测：Issue/PR 为 `updated_at`，仓库只有 `last_activity_at`，见 [Gitee 接入详细设计](../design/plugins/forge-gitee.md) §5.2）；取不到时才标缺失，不伪造冻结事实，也不拿不相干的时间字段冒充 |
+
+字段名以提供方输出与 CLI 的**实测结果**为准，不按其他平台的命名习惯改写（例如 Gitee 的 PR 编号是 `iid`、Issue 是 `id`，仓库链接是 `web_url`）；实测不存在的字段按缺失处理，不用同名近似字段替代。读取侧不假设 CLI 具备字段过滤能力：字段子集只是本地投影，取不到的键走 `missing_fields`，不因此伪造字段或降级成猜测值。
 
 业务内容与结果引用可以进入当前受权会话，但不得原样进入指标或审计。非 JSON/截断结果可提示人类诊断，不可作为可自动决策的成功结构。
 

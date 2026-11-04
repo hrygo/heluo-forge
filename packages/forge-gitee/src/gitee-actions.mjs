@@ -34,7 +34,11 @@
  * 这两个工具压根到不了加载那一步（未登记即 `denied`）。
  */
 import { createHash } from 'node:crypto';
-import { GITEE_COMMANDS } from './gitee-adapter.mjs';
+import {
+  GITEE_COMMANDS,
+  QUALIFIED_TARGET_PATTERN,
+  REPO_PATTERN as REPO_TARGET_PATTERN,
+} from './gitee-adapter.mjs';
 import { GUARD_REASONS, GITEE_PLATFORM } from './gitee-guard.mjs';
 import { REPLAY_BLOCKED_STATUSES, buildEvidence, idempotencyKey } from './gitee-session.mjs';
 
@@ -100,15 +104,24 @@ const TOOL_NAMES = Object.freeze({
   DELIVERY_GATE: 'forge_gitee_delivery_gate',
 });
 
-const REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// 仓库形状只有一个源（gitee-adapter），这里不另写一份：实测企业仓库是三级命名空间
+// （`osc/ard/ard-sdk`），两段正则会把真实仓库全部按形状拒掉。
+const REPO_PATTERN = REPO_TARGET_PATTERN;
 /** 工作项引用：`owner/name#12` 或 `owner/name!12`（`!` 是工具面对 PR 的写法，见 `refForCli`）。 */
-const QUALIFIED_PATTERN = /^([A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*)[#!](\d{1,9})$/u;
+const QUALIFIED_PATTERN = QUALIFIED_TARGET_PATTERN;
 /** 写命令输出里可能是可回读对象的链接（Issue 的 id 在 Gitee 上可能不是纯数字，一并认）。 */
 const OBJECT_LINK_PATTERN = /https?:\/\/[^\s<>"'`]+\/(?:issues|issue|pulls|pull)\/[A-Za-z0-9_-]+/u;
 const SHA_PATTERN = /^[0-9a-f]{7,40}$/u;
 const TRAILING_PUNCTUATION = /[.。,，;；:：!！?？、]+$/u;
-/** 回读里的"评论数"字段：Gitee 侧叫 `comments`，拿不到就不猜（降 `unknown`）。 */
-const COMMENTS_FIELD = 'comments';
+/**
+ * 回读里的"评论数"字段：按对象类型分表。实测 PR 载荷有 `user_notes_count`（`pr list` 证据），
+ * Issue 载荷没有任何计数（`issue list` 只有 description/id/labels/title/updated_at，`issue view`
+ * 形状未实测）——所以 Issue 侧没有可用字段，只能 `unknown`，不拿别的字段凑数。
+ */
+const COMMENT_COUNT_FIELDS = Object.freeze({
+  [GITEE_OBJECT_TYPES.PR_COMMENT]: 'user_notes_count',
+  [GITEE_OBJECT_TYPES.REVIEW]: 'user_notes_count',
+});
 
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -553,7 +566,7 @@ async function runWrite(service, spec) {
     revision: text(observed?.source_revision) || null,
     title: text(object.title) || null,
     state: text(object.state) || null,
-    comments: typeof object[COMMENTS_FIELD] === 'number' ? object[COMMENTS_FIELD] : null,
+    comments: commentCountOf(object, objectType),
   };
 
   if (verification.ok !== true) {
@@ -683,7 +696,7 @@ export function createIssueWrite() {
           readbackTarget: shape.ref,
           readback: {
             action: 'gitee.issue.read',
-            verify: (object, { target }) => verifyComment(object, target),
+            verify: (object, { target }) => verifyComment(object, target, GITEE_OBJECT_TYPES.ISSUE_COMMENT),
           },
         });
       }
@@ -751,12 +764,13 @@ export function createPrWrite() {
                   detail: `回读标题与写入不一致（写入「${expected}」/ 回读「${text(object.title)}」），转人工核对`,
                 };
               }
-              const observedHead = text(object.head);
-              if (observedHead !== '' && observedHead !== head) {
+              // 源分支的实测字段名是 `source_branch`（`head` 是 GitHub 语义，Gitee 载荷里没有）。
+              const observedSource = text(object.source_branch);
+              if (observedSource !== '' && observedSource !== head) {
                 return {
                   ok: false,
                   reason: ACTION_REASONS.READBACK_MISMATCH,
-                  detail: `回读源分支与写入不一致（写入「${head}」/ 回读「${observedHead}」），转人工核对`,
+                  detail: `回读源分支与写入不一致（写入「${head}」/ 回读「${observedSource}」），转人工核对`,
                 };
               }
               return { ok: true };
@@ -786,7 +800,7 @@ export function createPrWrite() {
           readbackTarget: shape.ref,
           readback: {
             action: 'gitee.pr.read',
-            verify: (object, { target }) => verifyComment(object, target),
+            verify: (object, { target }) => verifyComment(object, target, GITEE_OBJECT_TYPES.PR_COMMENT),
           },
         });
       }
@@ -849,33 +863,48 @@ export function publishReview() {
         readbackTarget: shape.ref,
         readback: {
           action: 'gitee.pr.read',
-          verify: (object, { target }) => verifyComment(object, target),
+          verify: (object, { target }) => verifyComment(object, target, GITEE_OBJECT_TYPES.REVIEW),
         },
       });
     },
   });
 }
 
+/** 回读摘要里的评论数：字段按对象类型取（Issue 没有已声明字段时就是 `null`，不编 0）。 */
+function commentCountOf(object, objectType) {
+  const countField = COMMENT_COUNT_FIELDS[objectType] ?? null;
+  if (countField === null) return null;
+  return typeof object?.[countField] === 'number' ? object[countField] : null;
+}
+
 /**
  * 评论类回读：确认"评论数 ≥ 1"。
  *
- * Gitee 的字段稳定性未联调（TECHNICAL R-1）：字段缺失一律 `unknown`（`readback-unavailable`），
- * 不把"取不到"当成"写成功"。
+ * 计数**按对象类型**取已声明的字段（PR 是 `user_notes_count`）；Issue 侧没有已声明字段时
+ * 一律 `unknown`（`readback-unavailable`）——"取不到"不等于"没写成功"，但也不能当成功报。
  */
-function verifyComment(object, target) {
-  const comments = object?.[COMMENTS_FIELD];
-  if (typeof comments !== 'number') {
+function verifyComment(object, target, objectType) {
+  const countField = COMMENT_COUNT_FIELDS[objectType] ?? null;
+  if (countField === null) {
     return {
       ok: false,
       reason: ACTION_REASONS.READBACK_UNAVAILABLE,
-      detail: `回读结果里没有可用的 ${COMMENTS_FIELD} 计数，无法确认评论已落地（不重放）`,
+      detail: 'CLI 的 Issue 载荷里没有已声明的评论计数（实测 issue list 无该字段、issue view 形状未实测），无法确认评论已落地（不重放，转人工核对）',
     };
   }
-  if (comments < 1) {
+  const count = object?.[countField];
+  if (typeof count !== 'number') {
+    return {
+      ok: false,
+      reason: ACTION_REASONS.READBACK_UNAVAILABLE,
+      detail: `回读结果里没有可用的 ${countField} 计数，无法确认评论已落地（不重放）`,
+    };
+  }
+  if (count < 1) {
     return {
       ok: false,
       reason: ACTION_REASONS.READBACK_MISMATCH,
-      detail: `回读显示 ${COMMENTS_FIELD}=0，评论未落地（不当作成功，转人工核对）`,
+      detail: `回读显示 ${countField}=0，评论未落地（不当作成功，转人工核对）`,
     };
   }
   return { ok: true };
@@ -1182,11 +1211,11 @@ export function settleActionVerdict(spec, verdict, { target, key }) {
 }
 
 const PARAMETERS = Object.freeze({
-  target: { type: 'string', description: '目标：仓库 owner/name，或工作项 owner/name#12（PR 也可写 owner/name!12）' },
+  target: { type: 'string', description: '目标：仓库 命名空间/仓库（支持嵌套组，如 osc/ard/ard-sdk），或工作项 命名空间/仓库#12（PR 也可写 !12）' },
   changeId: { type: 'string', description: '变更号（如 CHG-2026-001）。幂等键的第一段，必填。' },
   confirm: {
     type: 'object',
-    description: '确认块：{ repo: owner/name, object: 本次写入的完整目标 }。两者必须与 target 逐字相符，否则直接拒绝。',
+    description: '确认块：{ repo: 命名空间/仓库, object: 本次写入的完整目标 }。两者必须与 target 逐字相符，否则直接拒绝。',
     properties: { repo: { type: 'string' }, object: { type: 'string' } },
     required: ['repo', 'object'],
     additionalProperties: false,

@@ -1,6 +1,6 @@
 # @heluo/forge-gitee
 
-状态：可用（离线用例全绿；企业 Gitee CLI 未联调，实机与真实凭据见[未验（NOT RUN）](#未验not-run)）
+状态：可用（离线用例全绿；只读面的字段名与响应形状已按 2026-11-03 企业实测反写，实机与真实凭据见[未验（NOT RUN）](#未验not-run)）
 
 | 项 | 内容 |
 |---|---|
@@ -11,7 +11,7 @@
 | 详细设计 | [DESIGN-010](../../docs/design/plugins/forge-gitee.md) |
 | 实现状态 | `package.json`、`src/`（13 模块）、`test/`（见[测试](#测试)）、`cordis.patch.yml` 已落地 |
 
-`GITEE_PLATFORM='gitee'` 是本包唯一的平台声明，落在每个信封与返回体上。仓库 / Issue / PR 的事实只有这一份实现：`@heluo/forge-devops` 退回 dop 变更流程四工具，`change_context` 的承建仓库段改为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。字段表只有白名单一套（`GITEE_JSON_SUBSETS`）：`mergedAt`/`statusCheckRollup`/`reviewDecision` 等 GitHub 语义字段不在白名单里，请求即拒绝、返回即整条降级 `unknown`；没有独立的黑名单，也没有「结果来自别的 provider」这类原因码——本包只服务 Gitee 一个平台，那类事实不存在。两个包不共享源码，只共享不变量与契约测试。
+`GITEE_PLATFORM='gitee'` 是本包唯一的平台声明，落在每个信封与返回体上。仓库 / Issue / PR 的事实只有这一份实现：`@heluo/forge-devops` 退回 dop 变更流程四工具，`change_context` 的承建仓库段改为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。字段只有白名单一套（`GITEE_FIELD_PROJECTIONS`），而且名字是**实测来的**：2026-11-03 在企业机器上取到 `repo view`/`issue list`/`pr list` 三段真实输出，据此把 gh 风格的猜测全部换掉（仓库没有 `url`/`private`/`updated_at`，PR 编号是 `iid`、Issue 是 `id`，链接是 `web_url`），`mergedAt`/`statusCheckRollup`/`reviewDecision` 这类 GitHub 语义名字与实测不存在的旧名一律不在表里，请求即拒绝、返回不进对象。同时实测确认 `--json` 是**无值开关**（`--json name,path` 与裸 `--json` 输出逐字相同），所以字段清单只做**本地投影**、不进 argv；响应按 `{data:{list:[…]}}`/`{data:[…]}`/扁平对象剥壳。没有独立的黑名单，也没有「结果来自别的 provider」这类原因码——本包只服务 Gitee 一个平台，那类事实不存在。两个包不共享源码，只共享不变量与契约测试。
 
 ## 安装
 
@@ -64,7 +64,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 结果契约：
 
-- **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。
+- **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。载荷另带 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`）。`json` 参数是**本地投影选择器**（默认完整声明集，越界名字按 `JSON_FIELD_NOT_DECLARED` 拒绝），不改变 argv。事实版本：Issue/PR 取 `updated_at`，仓库取 `last_activity_at`（实测无 `updated_at`）；取不到即 `unknown`，不编版本。
 - **写**：四状态 `done`/`failed`/`denied`/`unknown`。`done` 必须"CLI 成功 + 回读一致"；退出码 0 单凭算 `unknown`。写前有幂等台账（`sha256(changeId|objectType|title)` 前 16 位，进程内 6 小时），命中返回 `reused` 且远端 0 次调用；失败不重放。写动作返回体**不出现 `executed` 键**（该键只由判定体的 `produced` 声明产生，写动作返回体一个键都不多）。
 - **审查**：`review.md` 四段（问题 / 风险 / 意见 / 结论）+ AI 与人工两栏物理分节；人工栏只能由 `recordHumanConfirmation` 写，模型自填即拒；`stale` 是派生结果不落盘。
 - **现有关闭条件判定**：只判定不执行——`[变更号]` 提交信息前缀、关闭四条件（验收、已合入、无未完成交付、针对当前 commit 的人工确认），`unknown` 不计入通过；返回体带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口。此处如实描述现有判定器，不是所有用户验收的统一门槛：2026-11-03 已确认本地验证与独立 AI 审查后可形成待验收候选，由用户对实际代码版本验收；CI／合入／Issue 关闭／验收／业务结束分记，必要 CI 与分支保护仍须守，判定器未在本轮改造。
@@ -105,7 +105,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 node --test "packages/forge-gitee/test/*.test.mjs"
 ```
 
-覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；3 读 + 1 判定可用、四个写与 push denied；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 14 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：10 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、持久令牌 warn/block、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（字段白名单子集、argv/`--json` 白名单、禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封与四类降级）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写默认 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 未登记即 `denied`）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
+覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；3 读 + 1 判定可用、四个写与 push denied；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 14 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：10 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、持久令牌 warn/block、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（三段真实载荷当夹具：字段投影、`--json` 无值开关、剥壳、`iid`/`id`、`opened` 归一、`meta.total_count`；禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封与四类降级）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写默认 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 未登记即 `denied`）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
 
 ## 证据表（r4 轮，2026-10-29）
 
@@ -122,7 +122,7 @@ node --test "packages/forge-gitee/test/*.test.mjs"
 
 ## 未验（NOT RUN）
 
-1. **企业 CLI 联调**：`gh` 在本企业环境的 argv 形状、`--json` 字段稳定性、鉴权与权限模型**全部未联调**。命令面与字段表按设计定稿，若实测不符只改 `src/gitee-adapter.mjs` 的两张表（命令表 + 字段表）并按可用子集收窄，不动其它模块。
+1. **企业 CLI 联调**：三段只读载荷已于 2026-11-03 实测（`repo view --json` 扁平对象、`issue list --limit 1 --json` 的 `{data:{list:[…]}, meta:{…}}`、`pr list --limit 1 --json` 的 `{data:[…], meta:{…}}`），字段名与剥壳按实测反写，载荷进了 `test/adapter.test.mjs` 当夹具（域名/人名换成占位，字段名逐字保留）。**仍未实机**：`issue view`/`pr view`/`repo list` 的 argv 与输出形状（缺字段一律走 `missing_fields`）、写命令的 argv、鉴权与权限模型、CLI 版本号。若实测再有不符，只改 `src/gitee-adapter.mjs` 的投影表与剥壳，不动其它模块。
 2. **Windows 实机与麒麟 aarch64**：包装脚本拒绝、路径与主机校验由离线用例覆盖（注入平台与假环境），**不是实机证据**。
 3. **真实 profile 装入与重启（AC-8）与回滚执行（AC-10）**：`dsh plugin add` 之后的重启、`--dump-config` 复核、装后回读 profile 清单与工具面在真实会话里可见，需工作区外写权限，归主流程执行。本包提供的是：AC-10 要求的**卸载步骤已在上面[回滚](#回滚)一节装之前写明**（含复核命令），AC-8 所需的补丁层解析与装配证据见 `test/patch-mount.test.mjs`；**执行与回读均未做**，不记为已验证。
 4. **真实凭据与审计落账**：内存审计舱的联调级证据；持久 sink、审批台账与写动作开闸均属范围批准后才验证。

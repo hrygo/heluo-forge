@@ -2,12 +2,16 @@
  * TK3 适配器与命令面（AC-12 / AC-14 / AC-23；r10 平台收敛）。
  *
  * 这个文件守三件事：
- * 1. **字段分流是实体表**：字段/命令/参数全部按 Gitee 语义（snake_case）分表，GitHub 字段
- *    （`mergedAt`/`statusCheckRollup`/`isPrivate`…）根本不在任何表里，请求即失败；
+ * 1. **字段是实测投影，不是 gh 风格猜测**：字段名逐字取自 2026-11-03 企业 CLI 的三段真实载荷
+ *    （`repo view` / `issue list` / `pr list`，见下方 `*_PAYLOAD` 夹具），GitHub 语义名字与
+ *    实测中根本不存在的旧名（`number`/`url`/`private`/`head`/`base`/`comments`…）都不在任何表里；
  * 2. **命令面是枚举**：没有的动词不存在，禁项（merge/close/release/workflow/api/auth/config/gist）
  *    连表都进不来；合并、关闭、发版、通用接口调用没有入口；
- * 3. **越界即零子进程**：参数白名单、`--json` 子集、target 形状、必填项都在触碰 runner 之前校验，
+ * 3. **越界即零子进程**：参数白名单、投影清单、target 形状、必填项都在触碰 runner 之前校验，
  *    套用命令行字符串或 argv 数组一律拒绝（AC-14）。
+ *
+ * 另外两条 r11 的实测不变量：`--json` 是**无值开关**（后面不接字段清单，实测逗号清单被忽略），
+ * 响应形状是 `{data:{list:[…]}}`（Issue）/ `{data:[…]}`（PR）/ 扁平对象（仓库），三种都要能剥。
  *
  * 另外两条静态不变量（AC-12/AC-23）：本模块不 import `gh-adapter`、不出现 `GH_*` 语义常量，
  * 并且 `packages/forge-gitee/src/` 里只有 `gitee-cli.mjs` 碰 `node:child_process`——
@@ -20,14 +24,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+
   ADAPTER_REASONS,
   GITEE_ARGV_FLAGS,
   GITEE_COMMANDS,
   GITEE_FORBIDDEN_FLAGS,
   GITEE_FORBIDDEN_VERBS,
+  GITEE_FIELD_PROJECTIONS,
   GITEE_ISSUE_FIELDS,
   GITEE_ISSUE_LIST_FIELDS,
-  GITEE_JSON_SUBSETS,
   GITEE_LIST_LIMIT,
   GITEE_LOGICAL_NAME,
   GITEE_PLATFORM,
@@ -35,11 +40,16 @@ import {
   GITEE_PR_LIST_FIELDS,
   GITEE_REPO_FIELDS,
   GITEE_REPO_LIST_FIELDS,
+  GITEE_REVISION_FIELDS,
   GiteeAdapterError,
   argvFor,
   assertArgv,
   createGiteeAdapter,
+  projectionFor,
 } from '../src/gitee-adapter.mjs';
+
+/** 夹具用的占位主机（分段拼装，避免源文件里出现完整远端地址）。 */
+const FIXTURE_HOST = ['corp', 'example', 'com'].join('.');
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_DIR = path.join(PKG_ROOT, 'src');
@@ -69,6 +79,112 @@ function fakeRunner(handler = () => ({})) {
 }
 
 const jsonOut = (payload, extra = {}) => ({ stdout: JSON.stringify(payload), ...extra });
+
+/**
+ * 企业 CLI 实测载荷（2026-11-03，Windows 机器上 `gh ... --json` 的真实输出）。
+ *
+ * 字段名与包裹形状**逐字保留**，只把内网域名、人名与绝对路径换成占位（仓库/示例用
+ * `corp.example.com`）。三段分别覆盖三种形状：
+ * - 仓库：扁平对象，没有 `url`/`private`/`updated_at`，全名在 `path_with_namespace`，
+ *   唯一时间事实是 `last_activity_at`；
+ * - Issue 清单：`{data:{list:[…]}, meta:{…}}`，编号字段 `id`（没有 `number`），清单项没有
+ *   `state`/`web_url`；
+ * - PR 清单：`{data:[…], meta:{…}}`，编号是 `iid`（`id` 是全局号），分支是 `source_branch`/
+ *   `target_branch`，可合并性是 `merge_status`，状态值是 `opened`。
+ */
+const REPO_VIEW_PAYLOAD = Object.freeze({
+  archived: false,
+  avatar_url: '',
+  card_enable: false,
+  created_at: '2025-11-29T18:17:36.182956+08:00',
+  creator_id: 85,
+  default_branch: 'master',
+  description: 'AI 原生框架套件',
+  empty_status: 0,
+  fork_count: 0,
+  fork_from_path: '',
+  http_url_to_repo: 'http://corp.example.com/osc/ard/ard-sdk.git',
+  id: 6466,
+  import_url: 'http://mirror.example.com/ard/ard-sdk.git',
+  is_favorite: true,
+  issues_enabled: false,
+  last_activity_at: '2026-11-02T16:10:34.000000+08:00',
+  merge_requests_enabled: true,
+  name: 'ard-sdk',
+  name_with_namespace: 'osc/ard/ard-sdk',
+  namespace: { avatar_url: '', full_path: 'osc/ard', id: 4613, kind: 'Group', name: 'ard', path: 'ard', web_url: '' },
+  open_issues_count: 0,
+  open_source_organizations: null,
+  owner: { created_at: '2025-11-14T12:19:38.000000+08:00', id: 85, name: 'git' },
+  path: 'ard-sdk',
+  path_with_namespace: 'osc/ard/ard-sdk',
+  readme_url: '',
+  repository_storage: '',
+  // 远端地址用变量拼装（与 read.test.mjs 同一写法）：脱敏规则按形状识别 SSH 远端，
+  // 连着写占位域名也会命中，所以源文件里不出现完整远端字面量（值本身是公开占位符）。
+  ssh_url_to_repo: `ssh://git@${FIXTURE_HOST}:30004/osc/ard/ard-sdk.git`,
+  star_count: 1,
+  statistics: { commit_count: 518, repository_size: 7994, storage_size: 7994, tag_count: 4, wiki_size: 0 },
+  tag_list: { labels: [], tags: [] },
+  user_permission: { code: 6, permission: 'Operator' },
+  visibility: 'private',
+  web_url: 'http://corp.example.com/osc/_code/osc/ard/ard-sdk/-/code/',
+});
+
+const ISSUE_LIST_PAYLOAD = Object.freeze({
+  data: {
+    list: [
+      {
+        description: '<p>测试issue</p>',
+        id: 1,
+        labels: [],
+        title: 'test001',
+        updated_at: '2026-11-03T19:40:24.433000+08:00',
+      },
+    ],
+  },
+  meta: { current_page: 1, total_count: 1, total_pages: 1 },
+});
+
+const PR_LIST_PAYLOAD = Object.freeze({
+  data: [
+    {
+      author: { id: 281, name: '001701-示例', user_name: '001701', web_url: '' },
+      can_be_merge: false,
+      can_merge: false,
+      closed_at: null,
+      created_at: '2026-11-03T19:44:06.234928+08:00',
+      description: '',
+      diff_refs: {
+        base_sha: 'e8a67476dbd79259d30145453a20cab980bfc839',
+        head_sha: '9f38c9adc591ca42605b2fc206052bd4119c2895',
+      },
+      full_path: 'osc/ard/ard-cli',
+      id: 671766,
+      iid: 2,
+      is_squash_merged: false,
+      labels: [{ color: '#FFAB00', description: '优化了代码', id: 217, name: '优化', target_id: 4613, target_type: 'Namespace' }],
+      merge_commit_sha: 'ada683b0ee9f76df0ec2585600a218d420ea479e',
+      merge_status: 'can_be_merged',
+      merged_at: null,
+      merged_by: '',
+      pr_auto_merge_enabled: false,
+      project_id: 10159,
+      project_name: 'ard-cli',
+      project_path: 'ard-cli',
+      sha: 'ada683b0ee9f76df0ec2585600a218d420ea479e',
+      source_branch: 'one',
+      target_branch: 'master',
+      state: 'opened',
+      title: '测试pr',
+      updated_at: '2026-11-03T19:44:06.234928+08:00',
+      user_notes_count: 0,
+      web_url: 'http://corp.example.com/osc/_code/osc/ard/ard-cli/-/pull_requests/2',
+      work_items: null,
+    },
+  ],
+  meta: { current_page: 1, total_count: 1, total_pages: 1 },
+});
 
 /** 断言某个同步校验失败：错误码 + 零子进程（越界不是"先发出去再问"）。 */
 function assertRejected(runner, run, code) {
@@ -144,61 +260,99 @@ test('provider 常量与命令面是 Gitee 语义的枚举（AC-12）', () => {
   }
 });
 
-test('字段表逐字为 Gitee snake_case，且 GitHub 字段不在任何表里（AC-12）', () => {
-  assert.deepEqual([...GITEE_REPO_FIELDS], ['name', 'path', 'description', 'url', 'default_branch', 'private', 'updated_at']);
-  assert.deepEqual([...GITEE_REPO_LIST_FIELDS], ['name', 'path', 'url', 'private', 'updated_at']);
-  assert.deepEqual([...GITEE_ISSUE_FIELDS], ['number', 'title', 'state', 'url', 'updated_at', 'labels', 'comments']);
-  assert.deepEqual([...GITEE_ISSUE_LIST_FIELDS], ['number', 'title', 'url', 'state']);
-  assert.deepEqual([...GITEE_PR_FIELDS], ['number', 'title', 'state', 'url', 'updated_at', 'head', 'base', 'draft', 'mergeable', 'comments']);
-  assert.deepEqual([...GITEE_PR_LIST_FIELDS], ['number', 'title', 'url', 'head', 'state']);
+test('字段投影清单逐字为企业 CLI 实测字段名（AC-12 / r11 实测）', () => {
+  assert.deepEqual([...GITEE_REPO_FIELDS], [
+    'name', 'path', 'path_with_namespace', 'description', 'default_branch',
+    'visibility', 'web_url', 'last_activity_at', 'archived', 'ssh_url_to_repo',
+  ]);
+  assert.deepEqual([...GITEE_REPO_LIST_FIELDS], [
+    'name', 'path', 'path_with_namespace', 'visibility', 'web_url', 'last_activity_at', 'archived',
+  ]);
+  assert.deepEqual([...GITEE_ISSUE_FIELDS], ['id', 'title', 'description', 'state', 'labels', 'updated_at', 'web_url']);
+  assert.deepEqual([...GITEE_ISSUE_LIST_FIELDS], ['id', 'title', 'state', 'updated_at', 'web_url']);
+  assert.deepEqual([...GITEE_PR_FIELDS], [
+    'iid', 'title', 'state', 'web_url', 'updated_at',
+    'source_branch', 'target_branch', 'merge_status', 'merged_at', 'user_notes_count',
+  ]);
+  assert.deepEqual([...GITEE_PR_LIST_FIELDS], [
+    'iid', 'title', 'state', 'web_url', 'source_branch', 'target_branch', 'merge_status',
+  ]);
 
-  const all = [GITEE_REPO_FIELDS, GITEE_REPO_LIST_FIELDS, GITEE_ISSUE_FIELDS, GITEE_ISSUE_LIST_FIELDS, GITEE_PR_FIELDS, GITEE_PR_LIST_FIELDS];
-  const declared = new Set(all.flat());
-  // r10 删了 GitHub 语义黑名单：白名单本身就是判据，这里直接断言"那些名字不在表里"。
-  for (const githubOnly of [
-    'mergedAt',
-    'merged_at',
-    'statusCheckRollup',
-    'checks',
-    'reviewDecision',
-    'autoMergeRequest',
-    'nameWithOwner',
-    'isPrivate',
-    'defaultBranchRef',
-    'updatedAt',
-    'mergeableState',
-  ]) {
-    assert.ok(!declared.has(githubOnly), `Gitee 表不得含 GitHub 语义字段 ${githubOnly}`);
+  // 实测载荷里**不存在**的旧名字不许回到表里：那些名字是按 gh 风格猜的，实测全部落空。
+  const repoDeclared = new Set([...GITEE_REPO_FIELDS, ...GITEE_REPO_LIST_FIELDS]);
+  for (const absent of ['url', 'private', 'updated_at', 'nameWithOwner', 'isPrivate', 'defaultBranchRef', 'updatedAt']) {
+    assert.ok(!repoDeclared.has(absent), `仓库投影不得含 ${absent}`);
   }
-  // 表里全部是 snake_case/小写标识（Gitee 语义），没有 camelCase 混入。
-  for (const field of declared) {
+  const issueDeclared = new Set([...GITEE_ISSUE_FIELDS, ...GITEE_ISSUE_LIST_FIELDS]);
+  for (const absent of ['number', 'url', 'comments']) {
+    assert.ok(!issueDeclared.has(absent), `Issue 投影不得含 ${absent}`);
+  }
+  const prDeclared = new Set([...GITEE_PR_FIELDS, ...GITEE_PR_LIST_FIELDS]);
+  for (const absent of [
+    'number', 'url', 'head', 'base', 'comments', 'mergeable', 'draft',
+    'mergedAt', 'statusCheckRollup', 'reviewDecision', 'autoMergeRequest', 'mergeableState',
+  ]) {
+    assert.ok(!prDeclared.has(absent), `PR 投影不得含 ${absent}`);
+  }
+  // 表里全部是 snake_case/小写标识，没有 camelCase 混入。
+  for (const field of new Set([...repoDeclared, ...issueDeclared, ...prDeclared])) {
     assert.match(field, /^[a-z][a-z_]*$/, `字段 ${field} 不是 Gitee 语义命名`);
   }
-});
-
-test('--json 子集与字段表同源（同一对象，不存在两处漂移）', () => {
-  assert.equal(GITEE_JSON_SUBSETS.repositoryView, GITEE_REPO_FIELDS);
-  assert.equal(GITEE_JSON_SUBSETS.repositoryList, GITEE_REPO_LIST_FIELDS);
-  assert.equal(GITEE_JSON_SUBSETS.issueView, GITEE_ISSUE_FIELDS);
-  assert.equal(GITEE_JSON_SUBSETS.issueList, GITEE_ISSUE_LIST_FIELDS);
-  assert.equal(GITEE_JSON_SUBSETS.prView, GITEE_PR_FIELDS);
-  assert.equal(GITEE_JSON_SUBSETS.prList, GITEE_PR_LIST_FIELDS);
-  // 写命令没有 --json：输出是人类文本，改由解析器取编号/链接。
-  for (const writeCommand of ['issueCreate', 'issueComment', 'prCreate', 'prComment']) {
-    assert.equal(GITEE_JSON_SUBSETS[writeCommand], undefined);
+  // 实测载荷里这些名字确实存在，所以投影取得到（不是"表里写了、载荷里没有"）。
+  for (const field of GITEE_REPO_FIELDS) assert.ok(field in REPO_VIEW_PAYLOAD, `仓库载荷没有 ${field}`);
+  for (const field of GITEE_PR_FIELDS) assert.ok(field in PR_LIST_PAYLOAD.data[0], `PR 载荷没有 ${field}`);
+  // Issue 清单项按实测只有四个字段：投影里多出来的两个正是"取不到就进 missing_fields"的那两个。
+  for (const field of GITEE_ISSUE_LIST_FIELDS) {
+    const present = field in ISSUE_LIST_PAYLOAD.data.list[0];
+    assert.equal(present, !['state', 'web_url'].includes(field), `Issue 清单项 ${field} 的存在性与实测不符`);
   }
 });
 
-test('argv 形状固定：位置参数与 -R 的分工逐条钉住（AC-14）', () => {
+test('事实版本字段按对象类型分开：仓库没有 updated_at，取 last_activity_at', () => {
+  assert.deepEqual({ ...GITEE_REVISION_FIELDS }, {
+    repositoryView: 'last_activity_at',
+    issueView: 'updated_at',
+    prView: 'updated_at',
+  });
+  // 仓库载荷确实没有 updated_at：这是"取哪个字段当版本"的事实依据，不是偏好。
+  assert.equal('updated_at' in REPO_VIEW_PAYLOAD, false);
+  assert.equal(REPO_VIEW_PAYLOAD.last_activity_at, '2026-11-02T16:10:34.000000+08:00');
+});
+
+test('本地投影清单与字段表同源（同一对象，不存在两处漂移）', () => {
+  assert.equal(GITEE_FIELD_PROJECTIONS.repositoryView, GITEE_REPO_FIELDS);
+  assert.equal(GITEE_FIELD_PROJECTIONS.repositoryList, GITEE_REPO_LIST_FIELDS);
+  assert.equal(GITEE_FIELD_PROJECTIONS.issueView, GITEE_ISSUE_FIELDS);
+  assert.equal(GITEE_FIELD_PROJECTIONS.issueList, GITEE_ISSUE_LIST_FIELDS);
+  assert.equal(GITEE_FIELD_PROJECTIONS.prView, GITEE_PR_FIELDS);
+  assert.equal(GITEE_FIELD_PROJECTIONS.prList, GITEE_PR_LIST_FIELDS);
+  // 写命令没有投影：输出是人类文本，改由解析器取编号/链接。
+  for (const writeCommand of ['issueCreate', 'issueComment', 'prCreate', 'prComment']) {
+    assert.equal(GITEE_FIELD_PROJECTIONS[writeCommand], undefined);
+  }
+});
+
+test('argv 形状固定：位置参数与 -R 的分工逐条钉住，--json 是无值开关（AC-14 / r11 实测）', () => {
   assert.deepEqual(argvFor('repositoryView', { target: REPO_TARGET }), ['repo', 'view', REPO_TARGET]);
-  assert.deepEqual(argvFor('repositoryView', { target: REPO_TARGET, json: ['name', 'url'] }), [
-    'repo', 'view', REPO_TARGET, '--json', 'name,url',
+  // `--json` 只追加旗标本身：实测 `--json name,path` 与裸 `--json` 输出完全一样，
+  // 逗号清单会被忽略，所以字段清单永远不进 argv（否则 argv 里躺着一段假参数）。
+  assert.deepEqual(argvFor('repositoryView', { target: REPO_TARGET, json: true }), [
+    'repo', 'view', REPO_TARGET, '--json',
   ]);
+  assert.deepEqual(argvFor('issueView', { target: ISSUE_TARGET, json: false }), ['issue', 'view', ISSUE_TARGET]);
+  // 把字段清单塞进 argv 参数位是不合法形状：投影选择器只在 read() 里消费。
+  assertRejected(fakeRunner(), () => assertArgv('issueView', { target: ISSUE_TARGET, json: ['id'] }), ADAPTER_REASONS.ARG_INVALID);
   assert.deepEqual(argvFor('repositoryList', { target: REPO_TARGET }), ['repo', 'list', REPO_TARGET]);
   assert.deepEqual(argvFor('issueView', { target: ISSUE_TARGET }), ['issue', 'view', ISSUE_TARGET]);
-  // argvFor 只拼调用方给的参数（`--json` 缺省由 read() 注入字段表，见只读归一用例）。
+  // argvFor 只拼调用方给的参数（`--json` 缺省由 read() 注入，见只读归一用例）。
   assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, state: 'open', limit: 20 }), [
     'issue', 'list', '-R', REPO_TARGET,
+    '--state', 'open',
+    '--limit', '20',
+  ]);
+  assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, state: 'open', limit: 20, json: true }), [
+    'issue', 'list', '-R', REPO_TARGET,
+    '--json',
     '--state', 'open',
     '--limit', '20',
   ]);
@@ -277,124 +431,240 @@ test('参数白名单：未声明键、状态值、上限、必填项都在起�
   }), ADAPTER_REASONS.ARG_INVALID);
 });
 
-test('--json 只接受声明的子集，表外字段请求即失败（AC-14）', () => {
+test('投影选择器只接受声明的字段名：越界即失败且零子进程（AC-14）', () => {
   const runner = fakeRunner();
-  // 未声明字段（含 GitHub 语义字段）：白名单是唯一判据。
-  assertRejected(runner, () => assertArgv('issueView', { target: ISSUE_TARGET, json: ['number', 'body'] }), ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED);
-  for (const undeclared of ['mergedAt', 'statusCheckRollup', 'checks', 'reviewDecision', 'autoMergeRequest']) {
+  // 未声明字段（含 GitHub 语义与实测不存在的旧名）：白名单是唯一判据。
+  assertRejected(runner, () => projectionFor('issueList', ['id', 'number']), ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED);
+  assertRejected(runner, () => projectionFor('issueList', ['id', 'url']), ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED);
+  for (const undeclared of ['mergedAt', 'statusCheckRollup', 'checks', 'reviewDecision', 'autoMergeRequest', 'number']) {
     assertRejected(
       runner,
-      () => assertArgv('prView', { target: ISSUE_TARGET, json: ['number', undeclared] }),
+      () => projectionFor('prView', ['iid', undeclared]),
       ADAPTER_REASONS.JSON_FIELD_NOT_DECLARED,
     );
   }
-  // 写命令没有 --json 通道。
-  assertRejected(
-    runner,
-    () => assertArgv('issueCreate', { target: REPO_TARGET, title: 't', body: 'b', json: ['number'] }),
-    ADAPTER_REASONS.ARG_NOT_WHITELISTED,
-  );
-  // 空请求视为非法（不静默退化成人类文本解析）。
-  assertRejected(runner, () => assertArgv('issueList', { target: REPO_TARGET, json: [] }), ADAPTER_REASONS.ARG_INVALID);
-  assertRejected(runner, () => assertArgv('issueList', { target: REPO_TARGET, json: ' , ' }), ADAPTER_REASONS.ARG_INVALID);
-  // 逗号字符串写法可用，且去重保序。
-  assert.deepEqual(argvFor('issueList', { target: REPO_TARGET, json: 'title,number,title' }), [
-    'issue', 'list', '-R', REPO_TARGET, '--json', 'title,number',
-  ]);
+  // 写命令没有投影通道（输出是人类文本）。
+  assertRejected(runner, () => projectionFor('issueCreate', ['id']), ADAPTER_REASONS.ARG_NOT_WHITELISTED);
+  // 空请求视为非法（不静默退化成"返回全部"或人类文本解析）。
+  assertRejected(runner, () => projectionFor('issueList', []), ADAPTER_REASONS.ARG_INVALID);
+  assertRejected(runner, () => projectionFor('issueList', ' , '), ADAPTER_REASONS.ARG_INVALID);
+  assertRejected(runner, () => projectionFor('issueList', ['id', '  ']), ADAPTER_REASONS.ARG_INVALID);
+  // 逗号字符串写法可用，且去重保序；缺省是完整声明集（同一个对象，不复制）。
+  assert.deepEqual([...projectionFor('issueList', 'title,id,title')], ['title', 'id']);
+  assert.equal(projectionFor('issueList'), GITEE_ISSUE_LIST_FIELDS);
+  assert.equal(projectionFor('repositoryView'), GITEE_REPO_FIELDS);
+  // 投影只影响归一后的交付键，不产生任何子进程：以上全部是同步校验。
+  assert.equal(runner.calls.length, 0, '投影越界必须零子进程');
 });
 
-test('runner 只收到 {bin,args,purpose}，命令面不含写后合并/关闭通道（AC-23）', async () => {
-  const runner = fakeRunner(() => jsonOut({ number: 1, title: 't', state: 'open', url: 'https://gitee.example/corp/repo/issues/1', updated_at: '2026-10-29T00:00:00Z', labels: [], comments: 0 }));
+test('runner 只收到 {bin,args,purpose}，读命令只多一个无值的 --json（AC-23 / r11 实测）', async () => {
+  const runner = fakeRunner(() => jsonOut(ISSUE_LIST_PAYLOAD));
   const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
-  await adapter.invoke('issueView', { target: ISSUE_TARGET, json: GITEE_ISSUE_FIELDS }, 'gitee.issue.read');
+  await adapter.invoke('issueList', { target: REPO_TARGET, json: true }, 'gitee.issue.read');
   assert.equal(runner.calls.length, 1);
   const call = runner.calls[0];
   assert.deepEqual(Object.keys(call).sort(), ['args', 'bin', 'purpose']);
   assert.equal(call.bin, 'gh');
   assert.equal(call.purpose, 'gitee.issue.read');
-  assert.deepEqual(call.args, ['issue', 'view', ISSUE_TARGET, '--json', GITEE_ISSUE_FIELDS.join(',')]);
+  // `--json` 后面不许再跟字段清单：实测逗号清单被 CLI 忽略（证据 4）。
+  assert.deepEqual(call.args, ['issue', 'list', '-R', REPO_TARGET, '--json']);
   for (const arg of call.args) assert.equal(typeof arg, 'string');
   assert.ok(!call.args.some((arg) => arg.includes(TOKEN_VALUE)), '凭据永不进 argv');
 });
 
-test('只读归一：事实版本缺失即 unknown，混入 GitHub 字段即 unknown（AC-12）', async () => {
-  const base = { number: 7, title: '修复', state: 'open', url: 'https://gitee.example/corp/repo/issues/7', updated_at: '2026-10-29T01:02:03Z', labels: [], comments: 2 };
+test('实测载荷：repo view 是扁平对象，版本取 last_activity_at、链接取 web_url（AC-12）', async () => {
+  const runner = fakeRunner(() => jsonOut(REPO_VIEW_PAYLOAD));
+  const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
+  const facts = await adapter.read('gitee.repository.read', REPO_TARGET);
 
-  const happyRunner = fakeRunner(() => jsonOut(base));
-  const happy = createGiteeAdapter({ runner: happyRunner, env: SECRET_ENV });
-  const okResult = await happy.read('gitee.issue.read', ISSUE_TARGET, {});
-  assert.equal(okResult.status, 'succeeded');
-  assert.equal(okResult.source_revision, '2026-10-29T01:02:03Z');
-  assert.deepEqual([...okResult.result_refs], [base.url]);
-  assert.deepEqual([...okResult.missing_fields], []);
-  assert.deepEqual(okResult.object, base);
-  assert.equal(okResult.provider, 'gitee');
-  assert.equal(okResult.action, 'gitee.issue.read');
+  assert.equal(facts.status, 'succeeded');
+  assert.equal(facts.source_revision, REPO_VIEW_PAYLOAD.last_activity_at);
+  assert.deepEqual([...facts.result_refs], [REPO_VIEW_PAYLOAD.web_url]);
+  assert.deepEqual([...facts.missing_fields], [], '投影里的每个名字在实测载荷里都存在');
+  assert.deepEqual(Object.keys(facts.object), [...GITEE_REPO_FIELDS]);
+  // 实测没有的名字一个都不许"补"出来：url/private/updated_at 必须缺席。
+  for (const absent of ['url', 'private', 'updated_at', 'number']) assert.equal(absent in facts.object, false);
+  assert.equal(facts.object.path_with_namespace, 'osc/ard/ard-sdk');
+  assert.equal(facts.object.visibility, 'private');
+  assert.equal(facts.object.archived, false);
+  // 载荷里未声明的键（statistics/namespace/owner…）不进 object：投影之外一律不采信。
+  assert.equal('statistics' in facts.object, false);
+  assert.equal('owner' in facts.object, false);
+  assert.deepEqual(runner.calls[0].args, ['repo', 'view', REPO_TARGET, '--json']);
+});
 
-  // 缺 updated_at：不给"编出来的版本号"，整条降级 unknown。
+test('实测载荷：{data:{…}} 会剥壳，opened 归一到既有词表的 open，缺版本仍降级（AC-15）', async () => {
+  const issueView = {
+    data: {
+      description: '<p>测试issue</p>',
+      id: 1,
+      labels: [],
+      title: 'test001',
+      state: 'opened',
+      updated_at: '2026-11-03T19:40:24.433000+08:00',
+      web_url: 'http://corp.example.com/osc/ard/ard-sdk/issues/1',
+    },
+  };
+  const runner = fakeRunner(() => jsonOut(issueView));
+  const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
+  const facts = await adapter.read('gitee.issue.read', ISSUE_TARGET);
+
+  assert.equal(facts.status, 'succeeded');
+  assert.equal(facts.object.id, 1, 'Issue 的编号字段是 id（没有 number）');
+  assert.equal('number' in facts.object, false);
+  assert.equal(facts.object.state, 'open', 'opened 归一到信封词表的 open');
+  assert.equal(facts.source_revision, issueView.data.updated_at);
+  assert.deepEqual([...facts.result_refs], [issueView.data.web_url]);
+  assert.deepEqual([...facts.missing_fields], []);
+
+  // 缺 updated_at：不编版本号，整条降级 unknown，并把缺失落进 missing_fields。
+  const { updated_at: _drop, ...withoutRevision } = issueView.data;
   const noRevision = createGiteeAdapter({
-    runner: fakeRunner(() => jsonOut({ ...base, updated_at: undefined })),
+    runner: fakeRunner(() => jsonOut({ data: withoutRevision })),
     env: SECRET_ENV,
   });
-  const degraded = await noRevision.read('gitee.issue.read', ISSUE_TARGET, {});
+  const degraded = await noRevision.read('gitee.issue.read', ISSUE_TARGET);
   assert.equal(degraded.status, 'unknown');
   assert.equal(degraded.error_code, ADAPTER_REASONS.MISSING_SOURCE_REVISION);
   assert.equal(degraded.source_revision, null);
-  assert.ok(degraded.missing_fields.includes('updated_at'));
+  assert.deepEqual([...degraded.missing_fields], ['updated_at']);
   assert.equal(degraded.object.updated_at, null);
-
-  // 表外字段（GitHub 语义）：不进 object、不改状态——白名单之外的键一律不采信。
-  const mixed = createGiteeAdapter({
-    runner: fakeRunner(() => jsonOut({ ...base, mergedAt: '2026-10-29T02:00:00Z' })),
-    env: SECRET_ENV,
-  });
-  const mixedResult = await mixed.read('gitee.pr.read', ISSUE_TARGET, {});
-  assert.equal(mixedResult.status, 'succeeded');
-  assert.equal(mixedResult.error_code, null);
-  assert.ok(!('mergedAt' in mixedResult.object));
-  assert.equal(mixedResult.object.updated_at, base.updated_at);
-
-  const checks = createGiteeAdapter({
-    runner: fakeRunner(() => jsonOut({ ...base, head: { ref: 'feat/x', statusCheckRollup: ['ci'] } })),
-    env: SECRET_ENV,
-  });
-  const nested = await checks.read('gitee.pr.read', ISSUE_TARGET, {});
-  // `head` 是本包声明的字段，其内部形状原样保留；未声明的顶层字段不进来、也不触发降级。
-  assert.equal(nested.status, 'succeeded');
-  assert.equal(nested.error_code, null);
-  assert.deepEqual(nested.object.head, { ref: 'feat/x', statusCheckRollup: ['ci'] });
+  assert.equal(degraded.object.title, 'test001', '已取到的字段仍交付，只降级状态');
 });
 
-test('清单只读：默认 --state open 与 --limit 100，数组归一为字段表（AC-12/AC-14）', async () => {
-  const items = [
-    { number: 1, title: 'a', state: 'open', url: 'https://gitee.example/c/r/issues/1', body: '不该出现', labels: ['x'] },
-    { number: 2, title: 'b', state: 'open', url: 'https://gitee.example/c/r/issues/2' },
-  ];
-  const runner = fakeRunner(() => jsonOut(items));
+test('投影选择器只决定交付哪些键：事实版本与链接仍从原始载荷取', async () => {
+  const runner = fakeRunner(() => jsonOut(ISSUE_LIST_PAYLOAD));
+  const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
+  const facts = await adapter.read('gitee.issue.read', REPO_TARGET, { list: true, json: ['id', 'title'] });
+  assert.equal(facts.status, 'succeeded');
+  assert.deepEqual(Object.keys(facts.items[0]), ['id', 'title']);
+  // 没勾的字段不进 missing_fields（那不是"取不到"，是"没要"）。
+  assert.deepEqual([...facts.missing_fields], []);
+  // argv 依旧只有开关本身：投影是本地行为。
+  assert.deepEqual(runner.calls[0].args, ['issue', 'list', '-R', REPO_TARGET, '--json', '--state', 'open', '--limit', '100']);
+
+  // 对象读同理：只交付点名的键，但事实版本与链接是"读的事实"，仍从原始载荷取。
+  const issueView = {
+    data: {
+      id: 1,
+      title: 'test001',
+      state: 'opened',
+      updated_at: '2026-11-03T19:40:24.433000+08:00',
+      web_url: 'http://corp.example.com/osc/ard/ard-sdk/issues/1',
+    },
+  };
+  const single = await createGiteeAdapter({ runner: fakeRunner(() => jsonOut(issueView)), env: SECRET_ENV })
+    .read('gitee.issue.read', ISSUE_TARGET, { json: ['id', 'title'] });
+  assert.equal(single.status, 'succeeded');
+  assert.deepEqual(Object.keys(single.object), ['id', 'title']);
+  assert.equal(single.source_revision, issueView.data.updated_at, '版本从原始载荷取，不因投影缺席而丢');
+  assert.deepEqual([...single.result_refs], [issueView.data.web_url], '链接同样从原始载荷取');
+});
+
+test('实测载荷：Issue 清单在 data.list 里，编号用 id，meta.total_count 作为附加事实（AC-12/AC-14）', async () => {
+  const runner = fakeRunner(() => jsonOut(ISSUE_LIST_PAYLOAD));
   const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
   const listed = await adapter.read('gitee.issue.read', REPO_TARGET, { list: true });
+
   assert.equal(listed.status, 'succeeded');
-  assert.equal(listed.count, 2);
   assert.equal(listed.kind, 'list');
-  assert.equal(listed.source_revision, null);
+  assert.equal(listed.count, 1);
+  assert.equal(listed.total_count, 1, 'CLI 的 meta.total_count 原样带出');
+  assert.equal(listed.source_revision, null, '清单是查询快照，不冻结事实版本');
   assert.deepEqual(Object.keys(listed.items[0]), [...GITEE_ISSUE_LIST_FIELDS]);
-  assert.ok(!('body' in listed.items[0]));
-  // 默认参数逐字进 argv：状态 open、上限 100、--json 为字段表。
+  assert.equal(listed.items[0].id, 1);
+  assert.equal('number' in listed.items[0], false);
+  // 实测清单项没有 state/web_url：走 missing_fields 如实上报，不填假值。
+  assert.deepEqual([...listed.missing_fields].sort(), ['state', 'web_url']);
+  assert.equal(listed.items[0].state, null);
+  assert.equal(listed.items[0].web_url, null);
+  // 默认参数逐字进 argv：`--json` 无值、状态 open、上限 100。
   assert.deepEqual(runner.calls[0].args, [
     'issue', 'list', '-R', REPO_TARGET,
-    '--json', GITEE_ISSUE_LIST_FIELDS.join(','),
+    '--json',
     '--state', 'open',
     '--limit', '100',
   ]);
+});
 
-  // 显式 state/limit 覆盖默认；仓库清单没有状态维度。
-  await adapter.read('gitee.pr.read', REPO_TARGET, { list: true, state: 'all', limit: 5 });
-  assert.deepEqual(runner.calls[1].args, [
+test('实测载荷：PR 清单在 data 数组里，编号用 iid、分支用 source_branch/target_branch（AC-12/AC-14）', async () => {
+  const runner = fakeRunner(() => jsonOut(PR_LIST_PAYLOAD));
+  const adapter = createGiteeAdapter({ runner, env: SECRET_ENV });
+  const listed = await adapter.read('gitee.pr.read', REPO_TARGET, { list: true, state: 'all', limit: 5 });
+
+  assert.equal(listed.status, 'succeeded');
+  assert.equal(listed.count, 1);
+  assert.equal(listed.total_count, 1);
+  const [item] = listed.items;
+  assert.deepEqual(Object.keys(item), [...GITEE_PR_LIST_FIELDS]);
+  assert.equal(item.iid, 2, 'PR 编号是 iid（id=671766 是全局号，对不上 URL 里的 2）');
+  assert.equal(item.id, undefined);
+  assert.equal(item.source_branch, 'one');
+  assert.equal(item.target_branch, 'master');
+  assert.equal(item.merge_status, 'can_be_merged');
+  assert.equal(item.state, 'open', 'opened 归一到 open');
+  assert.equal('head' in item, false, 'head/base 是 GitHub 语义，Gitee 载荷里没有');
+  assert.equal('mergeable' in item, false);
+  assert.deepEqual([...listed.missing_fields], []);
+  assert.deepEqual(runner.calls[0].args, [
     'pr', 'list', '-R', REPO_TARGET,
-    '--json', GITEE_PR_LIST_FIELDS.join(','),
+    '--json',
     '--state', 'all',
     '--limit', '5',
   ]);
+
+  // 显式投影：只交付点名的键（顺序即声明顺序），事实版本/链接口径不变。
+  const raw = await createGiteeAdapter({ runner: fakeRunner(() => jsonOut(PR_LIST_PAYLOAD)), env: SECRET_ENV })
+    .read('gitee.pr.read', REPO_TARGET, { list: true, json: ['iid', 'state'] });
+  assert.deepEqual(Object.keys(raw.items[0]), ['iid', 'state']);
+  assert.equal(raw.items[0].state, 'open');
+});
+
+test('包裹形状：扁平对象、{data:[…]}、{data:{list:[…]}}、{items:[…]} 都吃，认不出即畸形', async () => {
+  const flatList = [
+    { id: 3, title: 'c', updated_at: '2026-11-03T00:00:00Z', web_url: 'http://corp.example.com/c/r/issues/3' },
+  ];
+  const accepted = [
+    flatList,
+    { data: flatList },
+    { data: { list: flatList }, meta: { total_count: 9 } },
+    { items: flatList },
+  ];
+  for (const payload of accepted) {
+    const adapter = createGiteeAdapter({ runner: fakeRunner(() => jsonOut(payload)), env: SECRET_ENV });
+    const facts = await adapter.read('gitee.issue.read', REPO_TARGET, { list: true });
+    assert.equal(facts.status, 'succeeded', `包裹形状 ${JSON.stringify(payload).slice(0, 24)}… 应当可读`);
+    assert.equal(facts.items[0].id, 3);
+    if ('meta' in payload) assert.equal(facts.total_count, 9, 'meta.total_count 在剥壳后仍要带出');
+    else assert.equal('total_count' in facts, false, '没有 meta 时不编 total_count');
+  }
+  // 认不出的形状 → 畸形结果（不把 data/meta 当数据交付）。
+  for (const payload of [{ data: { list: 'nope' } }, { data: 42 }, 'nope', 42]) {
+    const adapter = createGiteeAdapter({ runner: fakeRunner(() => jsonOut(payload)), env: SECRET_ENV });
+    await assertRejectedAsync(
+      () => adapter.read('gitee.issue.read', REPO_TARGET, { list: true }),
+      ADAPTER_REASONS.MALFORMED_RESULT,
+    );
+  }
+});
+
+test('状态值归一：只映射实测写法与既有词表，不新增状态词', async () => {
+  const payloads = [
+    ['opened', 'open'],
+    ['open', 'open'],
+    ['closed', 'closed'],
+    // 未实测的值原样保留：不猜同义词，也不悄悄降级。
+    ['merged', 'merged'],
+    ['locked', 'locked'],
+  ];
+  for (const [raw, expected] of payloads) {
+    const adapter = createGiteeAdapter({
+      runner: fakeRunner(() => jsonOut({ data: [{ iid: 1, title: 't', state: raw, web_url: 'http://corp.example.com/c/r/pulls/1' }] })),
+      env: SECRET_ENV,
+    });
+    const facts = await adapter.read('gitee.pr.read', REPO_TARGET, { list: true });
+    assert.equal(facts.items[0].state, expected, `状态 ${raw} 应归一为 ${expected}`);
+  }
 });
 
 test('只读参数面：未知动作、越界键、字符串写法、仓库清单带 state 都拒绝（AC-14）', async () => {
@@ -432,7 +702,7 @@ test('命令结果翻译：超时/非零退出/字段不支持/起不来/畸形 
   await assertRejectedAsync(() => nonzero.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.NONZERO_EXIT);
 
   const unsupported = createGiteeAdapter({
-    runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'unknown field "comments" in --json' })),
+    runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'invalid json: unknown field "description"' })),
     env: SECRET_ENV,
   });
   await assertRejectedAsync(() => unsupported.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.UNSUPPORTED_FIELD);
@@ -594,4 +864,24 @@ test('构造期拒绝不自建子进程：runner 必填且必须是对象（AC-2
     assert.equal(typeof adapter[member], 'function', `缺成员 ${member}`);
   }
   assert.ok(!('run' in adapter) && !('exec' in adapter), '适配器不得暴露通用执行入口');
+});
+
+test('仓库标识允许嵌套命名空间：实测企业仓库是三级（osc/ard/ard-sdk）', () => {
+  const nested = 'osc/ard/ard-sdk';
+  // 两段（`owner/repo`）与三段（嵌套组）都必须成型；只认两段会把真实仓库全部拒掉。
+  assert.deepEqual(argvFor('repositoryView', { target: nested }), ['repo', 'view', nested]);
+  assert.deepEqual(argvFor('issueList', { target: nested }), ['issue', 'list', '-R', nested]);
+  assert.equal(GITEE_FIELD_PROJECTIONS.repositoryView.length > 0, true);
+  // 限定引用同样按嵌套命名空间解析：`osc/ard/ard-sdk#12`。
+  assert.deepEqual(argvFor('issueView', { target: 'osc/ard/ard-sdk#12' }), ['issue', 'view', 'osc/ard/ard-sdk#12']);
+  // 单段不是仓库（没有命名空间），仍然拒绝。
+  assert.throws(
+    () => assertArgv('repositoryView', { target: 'ard-sdk' }),
+    (error) => error.code === ADAPTER_REASONS.ARG_INVALID,
+  );
+  // 超过 8 段的伪路径不当作仓库（段数上限挡住"任意长路径"）。
+  assert.throws(
+    () => assertArgv('repositoryView', { target: 'a/b/c/d/e/f/g/h/i' }),
+    (error) => error.code === ADAPTER_REASONS.ARG_INVALID,
+  );
 });

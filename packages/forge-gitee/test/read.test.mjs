@@ -94,30 +94,44 @@ function adapterService(adapter, overrides = {}) {
   };
 }
 
+/**
+ * 夹具按 2026-11-03 企业 CLI 实测字段名与包裹形状构造（不是 gh 风格猜想）：
+ * 仓库没有 `url`/`private`/`updated_at`；Issue 编号是 `id`、状态是 `opened`；清单外层是
+ * `{data:{list:[…]}, meta:{…}}`。
+ */
 const REPO_JSON = Object.freeze({
   name: 'repo',
-  path: 'group/repo',
+  path: 'repo',
+  path_with_namespace: 'group/repo',
   description: '示例仓库',
-  url: `https://${HOST}/group/repo`,
-  default_branch: 'main',
-  private: true,
-  updated_at: '2026-10-29T12:00:00+08:00',
+  default_branch: 'master',
+  visibility: 'private',
+  web_url: `http://${HOST}/group/repo`,
+  last_activity_at: '2026-10-29T12:00:00+08:00',
+  archived: false,
+  ssh_url_to_repo: `ssh://git@${HOST}:30004/group/repo.git`,
 });
 
 const ISSUE_JSON = Object.freeze({
-  number: 12,
+  id: 12,
   title: '示例 Issue',
-  state: 'open',
-  url: `https://${HOST}/group/repo/issues/12`,
+  description: '<p>示例正文</p>',
+  state: 'opened',
+  web_url: `http://${HOST}/group/repo/issues/12`,
   updated_at: '2026-10-29T12:30:00+08:00',
   labels: Object.freeze(['bug']),
-  comments: 3,
 });
 
-const ISSUE_LIST = Object.freeze([
-  { number: 12, title: '示例 Issue', state: 'open', url: `https://${HOST}/group/repo/issues/12` },
-  { number: 11, title: '另一个', state: 'open', url: `https://${HOST}/group/repo/issues/11` },
-]);
+const ISSUE_LIST = Object.freeze({
+  data: {
+    list: [
+      // 实测清单项只有 id/title/updated_at（外加 description/labels）：没有 state、没有 web_url。
+      { id: 12, title: '示例 Issue', updated_at: '2026-10-29T12:30:00+08:00' },
+      { id: 11, title: '另一个', updated_at: '2026-10-29T12:00:00+08:00' },
+    ],
+  },
+  meta: { current_page: 1, total_count: 2, total_pages: 1 },
+});
 
 function parseBody(output) {
   assert.ok(Array.isArray(output?.content), '工具返回必须带 content 数组');
@@ -142,7 +156,7 @@ test('AC-15: 只读动作与信封状态枚举固定', () => {
   assert.equal(GITEE_READ_STATUSES.includes('denied'), false, 'denied 不是读结果状态，单列');
 });
 
-test('AC-15: 仓库读信封五项齐全，事实版本取 updated_at，链接进 result_refs', async () => {
+test('AC-15: 仓库读信封五项齐全，事实版本取实测存在的 last_activity_at，链接进 result_refs', async () => {
   const runner = stubRunner(() => outcome({ stdout: JSON.stringify(REPO_JSON) }));
   const adapter = makeAdapter({ runner });
   const facts = await adapter.read('gitee.repository.read', 'group/repo');
@@ -155,13 +169,14 @@ test('AC-15: 仓库读信封五项齐全，事实版本取 updated_at，链接�
   assert.equal(envelope.action, 'gitee.repository.read');
   assert.equal(envelope.target_ref, 'group/repo');
   assert.equal(envelope.status, 'succeeded');
-  assert.equal(envelope.source_revision, '2026-10-29T12:00:00+08:00');
+  assert.equal(envelope.source_revision, REPO_JSON.last_activity_at);
   assert.match(envelope.observed_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-  assert.deepEqual([...envelope.result_refs], [`https://${HOST}/group/repo`]);
+  assert.deepEqual([...envelope.result_refs], [REPO_JSON.web_url]);
   assert.equal(envelope.error_code, null);
   assert.equal(envelope.retry_policy, 'read_recheck');
   assert.deepEqual([...envelope.missing_fields], []);
-  assert.equal(envelope.object.updated_at, '2026-10-29T12:00:00+08:00');
+  assert.equal(envelope.object.path_with_namespace, 'group/repo');
+  assert.equal(envelope.object.visibility, 'private');
   assert.equal(envelope.message, undefined);
   assert.equal('rule' in envelope, false);
   assertReadOnlyCalls(runner.calls);
@@ -177,7 +192,10 @@ test('AC-15: 清单读是查询快照 —— source_revision 为 null 仍算 suc
   assert.equal(envelope.source_revision, null, '清单不冻结事实版本');
   assert.equal(envelope.kind, 'list');
   assert.equal(envelope.count, 2);
+  assert.equal(envelope.total_count, 2, 'meta.total_count 作为附加事实带出，不进 missing_fields');
+  assert.deepEqual([...envelope.missing_fields].sort(), ['state', 'web_url'], '实测清单项没有这两个键，如实上报');
   assert.equal(envelope.items.length, 2);
+  assert.equal(envelope.items[0].id, 12, 'Issue 清单编号是 id');
   assert.ok(runner.calls[0].args.includes('--limit'));
 
   // 归一幂等：服务边界已经归一过的信封不许被二次降级（index.mjs 会再传一次）。
@@ -185,8 +203,9 @@ test('AC-15: 清单读是查询快照 —— source_revision 为 null 仍算 suc
   assert.deepEqual(again, envelope);
 });
 
-test('AC-15: 取不到 updated_at 的对象读降级 unknown，不编事实版本', async () => {
-  const { updated_at: _ignored, ...withoutRevision } = REPO_JSON;
+test('AC-15: 取不到事实版本的对象读降级 unknown，不编版本号', async () => {
+  // 仓库的版本字段是 last_activity_at（实测没有 updated_at）：两者都缺才是"取不到版本"。
+  const { last_activity_at: _ignored, ...withoutRevision } = REPO_JSON;
   const runner = stubRunner(() => outcome({ stdout: JSON.stringify(withoutRevision) }));
   const adapter = makeAdapter({ runner });
   const facts = await adapter.read('gitee.repository.read', 'group/repo');
@@ -199,8 +218,16 @@ test('AC-15: 取不到 updated_at 的对象读降级 unknown，不编事实版�
   assert.equal(envelope.object.name, 'repo', '已取到的字段仍要交付，只把状态降级');
 });
 
-test('AC-15: 表外字段（GitHub 语义）不进对象，也不把状态降级（r10 只留白名单）', async () => {
-  const mixed = { ...REPO_JSON, mergedAt: '2026-10-29T00:00:00Z' };
+test('AC-15: 表外字段（gh 风格旧名）不进对象，也不把状态降级（只留投影白名单）', async () => {
+  // `url`/`private`/`updated_at`/`nameWithOwner` 都是实测载荷里不存在的名字：
+  // 它们即使出现在输出里也不许进 object（那会让人以为"读到了 Gitee 的字段"）。
+  const mixed = {
+    ...REPO_JSON,
+    url: `http://${HOST}/group/repo`,
+    private: true,
+    updated_at: '2026-10-29T00:00:00Z',
+    nameWithOwner: 'group/repo',
+  };
   const runner = stubRunner(() => outcome({ stdout: JSON.stringify(mixed) }));
   const adapter = makeAdapter({ runner });
   const facts = await adapter.read('gitee.repository.read', 'group/repo');
@@ -208,9 +235,12 @@ test('AC-15: 表外字段（GitHub 语义）不进对象，也不把状态降级
 
   assert.equal(envelope.status, 'succeeded');
   assert.equal(envelope.error_code, null);
-  assert.equal('mergedAt' in envelope.object, false, '未声明的字段一律不采信');
+  for (const absent of ['url', 'private', 'updated_at', 'nameWithOwner']) {
+    assert.equal(absent in envelope.object, false, `未声明的字段 ${absent} 一律不采信`);
+  }
   assert.equal(envelope.object.name, 'repo');
-  assert.equal(envelope.source_revision, mixed.updated_at);
+  assert.equal(envelope.source_revision, REPO_JSON.last_activity_at);
+  assert.deepEqual([...envelope.result_refs], [REPO_JSON.web_url]);
 });
 
 test('AC-15: 输出截断 → unknown（OUTPUT_TRUNCATED），载荷标记 truncated', async () => {
@@ -304,7 +334,7 @@ test('AC-15: 主机非企业 → failed（HOST_NOT_ENTERPRISE）', async () => {
   assert.equal(publicBody.error_code, READ_REASONS.HOST_NOT_ENTERPRISE);
 
   // 情形二：结果链接指向别的主机 —— 命令执行了一次，但事实不采信。
-  const otherHostJson = { ...REPO_JSON, url: 'https://other.example/group/repo' };
+  const otherHostJson = { ...REPO_JSON, web_url: 'https://other.example/group/repo' };
   const wrongLinkRunner = stubRunner(() => outcome({ stdout: JSON.stringify(otherHostJson) }));
   const wrongLinkAdapter = makeAdapter({ runner: wrongLinkRunner, host: HOST });
   const wrongLinkBody = parseBody(await readToolDefinitions(adapterService(wrongLinkAdapter))[0]
@@ -511,12 +541,12 @@ test('AC-15: 工具把读参数原样交给服务端口（单一校验点在适�
     adapter: () => ({ describe: () => ({ host: null }) }),
   };
   const [, issue] = readToolDefinitions(service);
-  const body = parseBody(await issue.execute({ target: 'group/repo', list: true, state: 'all', limit: 5, json: ['number', 'title'] }));
+  const body = parseBody(await issue.execute({ target: 'group/repo', list: true, state: 'all', limit: 5, json: ['id', 'title'] }));
 
   assert.deepEqual(seen, {
     action: 'gitee.issue.read',
     target: 'group/repo',
-    params: { list: true, state: 'all', limit: 5, json: ['number', 'title'] },
+    params: { list: true, state: 'all', limit: 5, json: ['id', 'title'] },
   });
   assert.equal(preflights, 1);
   assert.equal(body.status, 'succeeded');
@@ -536,7 +566,7 @@ test('端到端主路径: 工具 → 装配端口 → 适配器 → 桩 CLI，�
 
   const repositoryEnvelope = parseBody(await repository.execute({ target: 'group/repo' }));
   assert.equal(repositoryEnvelope.status, 'succeeded');
-  assert.equal(repositoryEnvelope.source_revision, REPO_JSON.updated_at);
+  assert.equal(repositoryEnvelope.source_revision, REPO_JSON.last_activity_at);
   assert.equal(runner.calls.length, 1);
 
   const listEnvelope = parseBody(await issue.execute({ target: 'group/repo', list: true, limit: 2 }));
@@ -547,7 +577,7 @@ test('端到端主路径: 工具 → 装配端口 → 适配器 → 桩 CLI，�
   const singleEnvelope = parseBody(await issue.execute({ target: 'group/repo#12' }));
   assert.equal(singleEnvelope.status, 'succeeded');
   assert.equal(singleEnvelope.source_revision, ISSUE_JSON.updated_at);
-  assert.deepEqual([...singleEnvelope.result_refs], [ISSUE_JSON.url]);
+  assert.deepEqual([...singleEnvelope.result_refs], [ISSUE_JSON.web_url]);
   assert.equal(runner.calls.length, 3);
 
   // 终态核对：三次调用都是只读命令，没有写通道被触发，也没有重试。

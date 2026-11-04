@@ -240,7 +240,10 @@ function readbackObject(object) {
   });
 }
 
-const doneReadback = readbackObject({ title: '同步变更', state: 'open', comments: 1 });
+// 回读对象按实测字段名给：编号 `id`（不是 `number`）、状态 `open`（适配器已把实测的 `opened`
+// 归一，这一层拿到的是归一后的事实）；**没有**评论计数（实测 `issue list` 无该字段、`issue view`
+// 形状未实测），所以摘要里的 `comments` 只能是 null——不拿别的字段凑。
+const doneReadback = readbackObject({ id: 12, title: '同步变更', state: 'open' });
 
 test('AC-9/14 受控工具面固定 5 个（4 写 + 1 判定），顺序与命名不可随手改，且没有 argv/命令/泛化入口', () => {
   assert.deepEqual([...ACTION_STATUSES], ['done', 'failed', 'denied', 'unknown']);
@@ -365,7 +368,8 @@ test('AC-16 done = 写入成功 + 回读一致：标题对上才算做到，证�
   assert.equal(body.object_ref, 'acme/repo#12');
   assert.equal(body.readback.ok, true);
   assert.equal(body.readback.via, 'gitee.issue.read');
-  assert.equal(body.readback.comments, 1);
+  assert.equal(body.readback.state, 'open', 'opened 归一到既有词表');
+  assert.equal(body.readback.comments, null, 'Issue 载荷没有已声明的评论计数：摘要不为它编数');
   assert.equal(body.remote_calls, 2, '一次写 + 一次回读');
   assert.equal(body.evidence.provider, 'gitee');
   assert.equal(body.evidence.command, 'issueCreate');
@@ -392,6 +396,76 @@ test('AC-16 回读不一致 → unknown，绝不因为"退出码 0"记成功；�
   assert.equal(second.replay_blocked, true);
   assert.equal(second.reason, ACTION_REASONS.REPLAY_BLOCKED);
   assert.equal(harness.counters.invoke, 1, 'unknown 之后不得再写一次');
+});
+
+test('AC-16 PR 建单回读核对源分支：字段是实测的 source_branch（不是 GitHub 的 head）', async () => {
+  const invoke = createdStdout('prCreate', ({ target }) => `https://gitee.com/${target}/pulls/12`);
+
+  const matched = createHarness({
+    invoke,
+    read: readbackObject({ iid: 12, title: '同步变更', state: 'open', source_branch: 'feat/sync', target_branch: 'main' }),
+  });
+  const done = await runTool(matched.service, 'forge_gitee_pr_write', PR_CREATE);
+  assert.equal(done.status, 'done');
+  assert.equal(done.object_ref, 'acme/repo#12');
+  assert.equal(done.readback.ok, true);
+
+  // 同标题不同分支是两次交付：源分支对不上就必须 unknown（不许因为标题对就算 done）。
+  const mismatched = createHarness({
+    invoke,
+    read: readbackObject({ iid: 12, title: '同步变更', state: 'open', source_branch: 'other/branch' }),
+  });
+  const bad = await runTool(mismatched.service, 'forge_gitee_pr_write', PR_CREATE);
+  assert.equal(bad.status, 'unknown');
+  assert.equal(bad.reason, ACTION_REASONS.READBACK_MISMATCH);
+  assert.match(bad.detail, /other\/branch/);
+  assert.equal(mismatched.session.lookup(bad.idempotency_key)?.status, 'unknown', '不确定的写要落台账挡住重放');
+});
+
+test('AC-16 评论回读按对象类型取计数：PR 用 user_notes_count，Issue 没有已声明字段即 unknown', async () => {
+  const prComment = {
+    op: 'comment',
+    target: 'acme/repo!12',
+    changeId: 'CHG-2026-001',
+    body: '评论正文。',
+    confirm: { repo: 'acme/repo', object: 'acme/repo!12' },
+  };
+  const landed = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12'),
+    read: readbackObject({ iid: 12, title: '同步变更', state: 'open', user_notes_count: 2 }),
+  });
+  const published = await runTool(landed.service, 'forge_gitee_pr_write', prComment);
+  assert.equal(published.status, 'done');
+  assert.equal(published.readback.comments, 2, 'PR 的评论数取实测字段 user_notes_count');
+
+  // 计数为 0：评论没落地，转人工核对（不当作成功）。
+  const vanished = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12'),
+    read: readbackObject({ iid: 12, title: '同步变更', state: 'open', user_notes_count: 0 }),
+  });
+  const missed = await runTool(vanished.service, 'forge_gitee_pr_write', prComment);
+  assert.equal(missed.status, 'unknown');
+  assert.equal(missed.reason, ACTION_REASONS.READBACK_MISMATCH);
+
+  // Issue 评论：Issue 载荷没有已声明的计数（实测 issue list 无该字段、issue view 形状未实测），
+  // 无法核对 → unknown/readback-unavailable，不重放，也不拿别的字段凑一个数。
+  const issueComment = {
+    op: 'comment',
+    target: 'acme/repo#12',
+    changeId: 'CHG-2026-001',
+    body: '评论正文。',
+    confirm: { repo: 'acme/repo', object: 'acme/repo#12' },
+  };
+  const unverifiable = createHarness({
+    invoke: createdStdout('issueComment', () => 'https://gitee.com/acme/repo/issues/12'),
+    read: readbackObject({ id: 12, title: '同步变更', state: 'open' }),
+  });
+  const body = await runTool(unverifiable.service, 'forge_gitee_issue_write', issueComment);
+  assert.equal(body.status, 'unknown');
+  assert.equal(body.reason, ACTION_REASONS.READBACK_UNAVAILABLE);
+  assert.equal(body.readback.comments, null);
+  assert.match(body.detail, /issue list 无该字段/);
+  assert.equal(unverifiable.session.lookup(body.idempotency_key)?.status, 'unknown');
 });
 
 test('AC-16 超时 → unknown 且不再回读（可能已落地），第二次直接 replay_blocked 零子进程', async () => {
@@ -721,14 +795,15 @@ test('AC-16 动作名是策略目录的坐标：六个动作都在 gitee.* 命�
 test('AC-16 端到端主路径: 工具 → 状态机 → 门禁 → 真适配器 → 桩 CLI，跑到 done / reused / replay_blocked 终态', async () => {
   const CLOCK_ISO = '2026-10-29T00:00:00.000Z';
   const ADAPTER_ENV = { GITEE_TOKEN: `ghp_${'a'.repeat(36)}` };
+  // 字段名逐字按 2026-11-03 实测载荷：Issue 编号是 id、状态是 opened、链接是 web_url。
   const ISSUE_JSON = {
-    number: 12,
+    id: 12,
     title: '同步变更',
-    state: 'open',
-    url: 'https://gitee.example.com/acme/repo/issues/12',
+    description: '变更正文',
+    state: 'opened',
+    web_url: 'https://gitee.example.com/acme/repo/issues/12',
     updated_at: '2026-10-29T00:00:00.000Z',
     labels: [],
-    comments: 1,
   };
 
   function wire(runner) {
@@ -762,7 +837,7 @@ test('AC-16 端到端主路径: 工具 → 状态机 → 门禁 → 真适配器
     if (args[0] === 'issue' && args[1] === 'create') {
       return {
         exitCode: 0,
-        stdout: `创建成功：${ISSUE_JSON.url}`,
+        stdout: `创建成功：${ISSUE_JSON.web_url}`,
         stderr: '',
         durationMs: 1,
         timedOut: false,
