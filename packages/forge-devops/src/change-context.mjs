@@ -73,16 +73,25 @@ export const CONTEXT_STATUSES = Object.freeze(['ready', 'blocked']);
 export const RELEASE_RULE = 'first-non-empty';
 
 /**
- * 平台方言的**唯一**别名表：dop 原生字段名 → 契约键（只收录 UAT 点名的四个键，不猜名字）。
+ * 平台方言的**唯一**别名表：dop 原生字段名 → 契约键。
  * 原生命名只在本模块入口出现一次；下游（flow / 渲染 / 报告）只该看到契约 snake_case 形状。
  * `summary` 是一对多：既兜 `description`，也在没有 `title` 时兜 `title`（UAT 报告未给标题字段；
  * 同一串喂两处不影响幂等键——键用的是调用方显式 title）。
+ *
+ * 只收录**取证过**的键，不猜名字：前四个来自 UAT 报告，后四个来自 2026-11-04 对 dop 1.0.4
+ * `change view --json` 的实测形状（`docs/contracts/dop-cli-spec.md`）。缺了后四个时，真实记录的
+ * `changeType` / `created` / `subSystems` / `ReleaseInfo` 全被判成"平台没给"，卡片会据此写出
+ * 与事实相反的陈述（"平台未给 sub_systems""所有故事的 release_info 均为空"）。
  */
 export const NATIVE_ALIASES = Object.freeze({
   code: 'id',
   state: 'status',
   summary: 'description',
   userStory: 'user_stories',
+  changeType: 'type',
+  created: 'created_at',
+  subSystems: 'sub_systems',
+  ReleaseInfo: 'release_info',
 });
 
 /** `summary` 的第二落点（见 `NATIVE_ALIASES` 注释）：单列出来，免得被当成笔误删掉。 */
@@ -126,6 +135,90 @@ const isPlainObject = (value) => value !== null && typeof value === 'object' && 
 /** 关联人字段可能是字符串，也可能是 `{name, code}`，两种都读成一行文字。 */
 const who = (value) => text(value) || text(asObject(value).name) || text(asObject(value).code);
 
+/**
+ * 负责人：契约 `owner` 优先；dop 1.0.4 没有 `owner`，责任人是 `assignee`（负责人）→
+ * `createUser`（创建人）→ `manager`（经理）三级兜底。三级都取不到才算"平台没给"。
+ */
+function ownerOf(record) {
+  return text(record.owner) || who(record.assignee) || who(record.createUser) || who(record.manager);
+}
+
+/** 富文本里要解码的实体：只收这几个（其余原样保留，免得把"没解到"伪装成解过）。 */
+const HTML_ENTITIES = Object.freeze({
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+  '&#x27;': "'",
+  '&nbsp;': ' ',
+});
+
+/**
+ * 富文本 → 逐行纯文本。块级分隔（`<br>` / `</p>` / `<li>`）当换行，其余标签剥掉，实体解码。
+ *
+ * 两类行不算内容：
+ * - 只有标签没有文字的（`<p></p>`）；
+ * - **只有标题没有下文的行**（以 `：` 或 `:` 结尾），例如真实的 `storyAC` 常写成
+ *   `<p>详细规则：<br/></p>`——它是小标题而非一条可绑定的验收条件。把 `详细规则：` 编成
+ *   "验收条件第 1 条"会让交付计划逐条绑定到一句空话上，比留空更糟。
+ */
+function htmlToLines(value) {
+  const html = text(value);
+  if (html === '') return [];
+  const spaced = html
+    .replace(/<br\s*\/?>/giu, '\n')
+    .replace(/<\/(?:p|li|div|tr|h[1-6])>/giu, '\n')
+    .replace(/<li[^>]*>/giu, '\n')
+    .replace(/<[^>]+>/gu, '');
+  const decoded = spaced.replace(/&(?:amp|lt|gt|quot|#39|#x27|nbsp);/gu, (entity) => HTML_ENTITIES[entity] ?? entity);
+  return decoded
+    .split('\n')
+    .map((line) => line.replace(/[ \t\u00a0]+/gu, ' ').trim())
+    .filter((line) => line !== '')
+    .filter((line) => !/[：:]$/u.test(line));
+}
+
+/** 富文本验收条件 → 逐条（编号必须干净：空段与纯标题行都不占号）。 */
+const acceptanceItemsFromHtml = (value) =>
+  htmlToLines(value).map((entry, index) => ({ index: index + 1, text: entry }));
+
+/**
+ * 验收条件的三个落点，按"平台原始 → 平台回写"排：
+ * 1. 契约字段 `acceptance_criteria`（数组，旧 mock 形状）；
+ * 2. 故事 `storyAC`（dop 1.0.4 的真实落点，HTML）；
+ * 3. 变更级 `aiAcceptanceCriteria`（`change update --ai-ac` 的回写出处）。
+ * `source` 随条目一起返回：卡片据此说明这条验收读自哪里，不把 AI 回写冒充平台原始验收条件。
+ */
+function acceptanceCriteriaOf(record) {
+  const toItems = (list) =>
+    asArray(list)
+      .map((entry) => text(entry))
+      .filter((entry) => entry !== '')
+      .map((entry, index) => ({ index: index + 1, text: entry }));
+
+  const contract = toItems(record.acceptance_criteria);
+  if (contract.length > 0) return { items: contract, source: 'contract' };
+
+  for (const story of asArray(record.user_stories).map(asObject)) {
+    const items = acceptanceItemsFromHtml(story.story_ac ?? story.storyAC);
+    if (items.length > 0) return { items, source: 'story_ac' };
+  }
+
+  const ai = acceptanceItemsFromHtml(record.aiAcceptanceCriteria);
+  if (ai.length > 0) return { items: ai, source: 'ai_ac' };
+  return { items: [], source: null };
+}
+
+/**
+ * 平台回写的 AI 验收标准（`change update --ai-ac` 的落点）单独留一份原文：
+ * 它不顶替平台原始验收条件，但要让调用方在卡片上看见"上一次分析写了什么"，
+ * 否则复核闭环只能靠翻 `change.read` 的 raw。
+ */
+function aiAcceptanceTextOf(record) {
+  return htmlToLines(record.aiAcceptanceCriteria).join('\n');
+}
+
 const sha12 = (value) => createHash('sha256').update(value).digest('hex').slice(0, 12);
 
 /** 内容指纹要稳定：键序不同但内容相同必须给出同一串，否则每次读都像"新版本"。 */
@@ -137,17 +230,18 @@ function stableStringify(value) {
 }
 
 /**
- * `release_info` 归一：只认字段契约里的名字（snake_case 与已归一化的 camelCase 两种读法）。
- * 不吸收 wrapper 的改名（`number`/`name` 之类）——那会把契约漂移掩盖成"读到排期了"。
+ * `release_info` 归一：只认字段契约里的名字（snake_case 与已归一化的 camelCase 两种读法），外加两个
+ * **取证过**的 1.0.4 方言名（`name` 是发布名、`stage` 是发布阶段，见 `docs/contracts/dop-cli-spec.md`）。
+ * 不吸收其余改名（`number` 之类）——猜出来的键会把契约漂移掩盖成"读到排期了"。
  */
 function releaseInfoOf(story) {
   const item = asObject(story);
-  const source = asObject(item.release_info ?? item.releaseInfo);
+  const source = asObject(item.release_info ?? item.releaseInfo ?? item.ReleaseInfo);
   const value = {
     releaseNum: text(source.release_num) || text(source.releaseNum),
-    releaseName: text(source.release_name) || text(source.releaseName),
+    releaseName: text(source.release_name) || text(source.releaseName) || text(source.name),
     releaseDate: text(source.release_date) || text(source.releaseDate),
-    releaseStage: text(source.release_stage) || text(source.releaseStage),
+    releaseStage: text(source.release_stage) || text(source.releaseStage) || text(source.stage),
   };
   return Object.values(value).some((entry) => entry !== '') ? value : null;
 }
@@ -269,13 +363,20 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
     throw new ContextError(CONTEXT_REASONS.RECORD_INVALID, `sourceType 必须是 ${CHANGE_SOURCE_TYPES.join('/')}`, { sourceType });
   }
 
-  const acceptanceCriteria = asArray(record.acceptance_criteria)
-    .map((entry) => text(entry))
-    .filter((entry) => entry !== '')
-    .map((entry, index) => ({ index: index + 1, text: entry }));
+  const acceptance = acceptanceCriteriaOf(record);
+  const acceptanceCriteria = acceptance.items;
+  const aiAcceptanceCriteria = aiAcceptanceTextOf(record);
 
+  // 真实 1.0.4 的子系统项是 `{name, description}`（`name` 是 `SYS.example-sdk` 这类编号、`description`
+  // 是中文名），契约形状是 `{code, name}`：编号进 code、中文名进 name，两种形状给同一个下游形状。
   const subSystems = asArray(record.sub_systems)
-    .map((entry) => (typeof entry === 'string' ? { code: text(entry), name: '' } : { code: text(asObject(entry).code), name: text(asObject(entry).name) }))
+    .map((entry) => {
+      if (typeof entry === 'string') return { code: text(entry), name: '' };
+      const item = asObject(entry);
+      const code = text(item.code) || text(item.name);
+      const name = text(item.description) || (text(item.code) === '' ? '' : text(item.name));
+      return { code, name };
+    })
     .filter((entry) => entry.code !== '' || entry.name !== '');
 
   const userStories = asArray(record.user_stories).map((entry, index) => {
@@ -297,9 +398,15 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
   });
 
   const missingFields = [];
+  // 负责人是三级兜底的结果，不能只看 `record.owner`（真实记录里这个键根本不存在）。
+  const owner = ownerOf(record);
   // 只列"平台没给"的可选字段：`title`/`status` 上面已判为非空，永远不会出现在这里。
   for (const field of ['description', ...OPTIONAL_FIELDS]) {
     if (field === 'sub_systems' || field === 'user_stories') continue;
+    if (field === 'owner') {
+      if (owner === '') missingFields.push(field);
+      continue;
+    }
     if (text(record[field]) === '') missingFields.push(field);
   }
   if (acceptanceCriteria.length === 0) missingFields.push('acceptance_criteria');
@@ -312,10 +419,12 @@ export function normalizeChangeRecord(raw, { at = null, sourceRevision = null, s
     title: text(record.title),
     status: text(record.status),
     type: text(record.type),
-    owner: text(record.owner),
+    owner,
     description: text(record.description),
     createdAt: text(record.created_at),
     acceptanceCriteria,
+    acceptanceCriteriaSource: acceptance.source,
+    aiAcceptanceCriteria,
     subSystems,
     userStories,
     releaseInfo: firstReleaseInfo(userStories),
@@ -350,6 +459,8 @@ export function displayableChange(change) {
     description: text(item.description),
     createdAt: text(item.createdAt),
     acceptanceCriteria: asArray(item.acceptanceCriteria).map((entry) => ({ index: Number(asObject(entry).index) || 0, text: text(asObject(entry).text) })),
+    acceptanceCriteriaSource: text(item.acceptanceCriteriaSource) || null,
+    aiAcceptanceCriteria: text(item.aiAcceptanceCriteria),
     subSystems: asArray(item.subSystems).map((entry) => ({ code: text(asObject(entry).code), name: text(asObject(entry).name) })),
     userStories: asArray(item.userStories).map((entry) => {
       const story = asObject(entry);
@@ -731,10 +842,17 @@ export function renderContextCard(card) {
 
   lines.push('## 验收条件（逐条编号；交付计划必须逐条绑定）', '');
   const criteria = change === null ? [] : asArray(change.acceptanceCriteria).map(asObject);
+  const criteriaSource = change === null ? '' : text(change.acceptanceCriteriaSource);
   if (criteria.length === 0) {
     lines.push('（平台未提供 `acceptance_criteria`：不能据此制定交付计划，见"未知项"。）', '');
   } else {
+    // 来源写清楚：故事上的验收条件与 AI 回写的验收条件都能用，但读者要知道自己看的是哪一种。
+    if (criteriaSource === 'story_ac') lines.push('（来源：故事 `userStory.storyAC`，HTML 已转纯文本）', '');
+    else if (criteriaSource === 'ai_ac') lines.push('（来源：平台回写的 `aiAcceptanceCriteria`——不是平台原始验收条件，交付前需人工确认）', '');
     criteria.forEach((item) => lines.push(`${Number(item.index) || 0}. ${inline(item.text)}`));
+    // 平台回写的 AI 验收标准单独一行：它不顶替平台原始验收条件，但复核要能看见上一次分析写了什么。
+    const aiAc = change === null ? '' : text(change.aiAcceptanceCriteria);
+    if (aiAc !== '' && criteriaSource !== 'ai_ac') lines.push('', `（AI 验收标准，平台已回写，供复核：${inline(aiAc)}）`);
     lines.push('');
   }
 

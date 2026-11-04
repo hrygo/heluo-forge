@@ -1,0 +1,55 @@
+{
+  "_fixture": {
+    "sourceType": "mock",
+    "origin": "按 docs/contracts/dop-cli-spec.md §change view 的 camelCase 字段形状手工构造（字段名已脱敏），**非企业环境导出**；不得作为企业实测证据",
+    "covers": "changeType/created/subSystems(name+description)/assignee/ReleaseInfo(name+stage)/storyAC 富文本 + 审计字段齐全的完整记录"
+  },
+  "code": "ARD900001",
+  "changeType": "代码开发",
+  "team": "示例团队",
+  "state": "开发中",
+  "summary": "示例：回调幂等改造",
+  "description": "回调通知链路增加幂等键，避免重复入账。",
+  "created": "2026-11-01 09:20:11",
+  "assignee": { "name": "示例用户", "loginCode": "000000" },
+  "createUser": { "name": "示例用户", "loginCode": "000000" },
+  "manager": { "name": "示例经理", "loginCode": "000001" },
+  "subSystems": [
+    { "name": "SYS.example-sdk", "description": "示例研发平台.示例套件" },
+    { "name": "SYS.example-gateway", "description": "示例研发平台.示例网关" }
+  ],
+  "timeline": {
+    "devStart": "2026-11-01 20:46:44",
+    "devComplete": "",
+    "acceptanceStart": "",
+    "acceptanceEnd": "",
+    "regressionStart": "",
+    "regressionEnd": ""
+  },
+  "workload": { "employeeDev": 10, "employeeTest": 0, "supplierDev": 0, "supplierTest": 0 },
+  "userStory": {
+    "id": "9a1b2c3d4e5f",
+    "type": "主办故事",
+    "code": "US-900001",
+    "title": "示例：回调幂等改造",
+    "summary": "示例：回调幂等改造",
+    "category": "需求类",
+    "state": "正常",
+    "stage": "开发中",
+    "team": "示例团队",
+    "createdAt": "2026-11-01 09:19:06",
+    "planOnlineAt": "2026-11-30 00:00:00",
+    "assignee": { "name": "示例用户", "loginCode": "000000" },
+    "businessOwner": { "name": "示例用户", "loginCode": "000000" },
+    "manager": { "name": "示例经理", "loginCode": "000001" },
+    "managerDesc": "",
+    "storyAC": "<p>重复回调 10 次仅入账 1 次；<br/>幂等键缺失时拒绝入账并告警。</p><ul><li>对账任务可补偿漏单。</li></ul>",
+    "ReleaseInfo": {
+      "releaseNum": "R20261101001",
+      "releaseDate": "2026-11-30 00:00:00",
+      "name": "示例：回调幂等改造发布",
+      "stage": "已审批",
+      "state": "已审批"
+    }
+  }
+}

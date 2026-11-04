@@ -156,7 +156,7 @@ approvals:
     expires_at: '2027-11-04T10:00:00+08:00'
 ```
 
-写回的 `--help`、输出样例与 `--ai-ac` 的落点尚未取得真实样本（见「未验」）；审批台账由你自己填写，工具不代替审批。
+写回的 `--help` 与输出样例仍无企业样本；`--ai-ac` 的落点在 mock CLI 1.0.4 上实测为变更级 `aiAcceptanceCriteria`（企业侧未验，回读因此两处都认，见「未验」）；审批台账由你自己填写，工具不代替审批。
 
 ## 测试
 
@@ -184,4 +184,6 @@ node --test "packages/forge-devops/test/*.test.mjs"
 - **宿主组合**：当前插件在目标宿主版本下的 `configEditor` 写面与写后热调和未联调；配置页未走宿主表单面，改由同源路由 + profile 补丁写入。
 - **企业前提**：dop 是否随附原生 Windows 可执行文件、是否提供离线身份探针、真实安装目录分布均未知。发现规则不依赖这些；未命中时页面显示已查类别与全部候选，由用户指定位置。
 - **`change list` 扩展参数**：清单读取的主路径（`change list --json`）有适配器与离线用例；`--state` 已按 2026-11-04 的 spec 修正（`--status` 不存在），分页/搜索/team 未接入；真实输出样例仍待企业实测。
-- **`change update` 写回**：`--summary/--description/--ai-ac` 三个 flag 由用户 2026-11-04 口头给出，**没有 `--help` / 输出样例取证**；`--ai-ac` 回读按 `userStory.storyAC` 假设核对，真实落点待实测；写结果依赖回读，企业环境未联调。
+- **`change update` 写回**：`--summary/--description/--ai-ac` 三个 flag 由用户 2026-11-04 口头给出，`--help` 与输出样例仍无**企业**样本（mock CLI 1.0.4 的 `--help` 与写后回读已实测）。
+  `--ai-ac` 的落点在 mock 上实测为变更级 `aiAcceptanceCriteria`，而 UAT 形状是故事 `userStory.storyAC`；回读按「变更级优先、故事兜底」两处都认，并用 `readback.aiAc_source` 说明本次按哪一处判定。
+  企业环境真实落点仍属未验：若真实平台两处都不写，回读会判 `absent` → `unknown`（不重放），这是期望的保守行为。

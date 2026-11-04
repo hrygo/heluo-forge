@@ -7,6 +7,7 @@ import path from 'node:path';
 import { READ_ACTIONS, READ_REASONS } from '../src/read.mjs';
 import { DEVOPS_TOOLS, FLOW_ACTIONS, FLOW_TOOLS, QUERY_ACTIONS, QUERY_TOOL, buildDevopsTools } from '../src/tools.mjs';
 import { apply, FLOW_KEY, READER_KEY, SERVICE_KEY } from '../src/index.mjs';
+import { withoutDiscoveredCli } from './support/env-isolation.mjs';
 
 /**
  * 工具面契约（D 方案 + 写回）：4 个工具（typed 只读 runner / 聚合读 / 受控写 / 产物落盘）、名字→动作映射唯一真源、
@@ -422,23 +423,25 @@ test('装配：有 commands 服务时注册 devops-change 入口，teardown 一�
   assert.equal(provided.has(SERVICE_KEY), false);
 });
 
-test('装配：宿主未注入流程协作者时 apply 自建组合根；未配置运行时环境产出 blocked 卡且零调用', async () => {
-  const { registered, provided } = mountIndex();
-  assert.equal(provided.has(FLOW_KEY), true, 'apply 应把自建的流程协作者提供为 devopsFlow（D-1）');
-  assert.equal(provided.get(FLOW_KEY).issueWrite, undefined);
-  assert.equal(provided.has(READER_KEY), false, '未配置运行时环境时不提供只读适配器（可见 no-reader）');
+test('装配：宿主未注入流程协作者时 apply 自建组合根；未配置运行时环境产出 blocked 卡且零调用', () =>
+  withoutDiscoveredCli(async () => {
+    // 隔离宿主 PATH：本机装了 dop 时，"未配置"要由本用例自己造，而不是碰运气。
+    const { registered, provided } = mountIndex();
+    assert.equal(provided.has(FLOW_KEY), true, 'apply 应把自建的流程协作者提供为 devopsFlow（D-1）');
+    assert.equal(provided.get(FLOW_KEY).issueWrite, undefined);
+    assert.equal(provided.has(READER_KEY), false, '未配置运行时环境时不提供只读适配器（可见 no-reader）');
 
-  const context = parse(await registered.get(CONTEXT_TOOL).execute({ target: 'ARD123456' }));
-  assert.equal(context.ok, true, '流程面应可达：即使配置缺失也产出卡并说明原因');
-  assert.equal(context.status, 'blocked');
-  assert.equal(context.context.changeId, 'ARD123456');
-  assert.equal(context.config.dopBin, false, '配置状态只报"配没配"，不回显值');
-  assert.ok(
-    context.unknowns.some((item) => item.field === 'dop.change.view' && item.reason === 'CONFIG_MISSING'),
-    '未配置 dop 必须作为未知项写在卡里（AC-22 fail closed）',
-  );
-  assert.match(context.text, /未知项/u);
-});
+    const context = parse(await registered.get(CONTEXT_TOOL).execute({ target: 'ARD123456' }));
+    assert.equal(context.ok, true, '流程面应可达：即使配置缺失也产出卡并说明原因');
+    assert.equal(context.status, 'blocked');
+    assert.equal(context.context.changeId, 'ARD123456');
+    assert.equal(context.config.dopBin, false, '配置状态只报"配没配"，不回显值');
+    assert.ok(
+      context.unknowns.some((item) => item.field === 'dop.change.view' && item.reason === 'CONFIG_MISSING'),
+      '未配置 dop 必须作为未知项写在卡里（AC-22 fail closed）',
+    );
+    assert.match(context.text, /未知项/u);
+  }));
 
 test('装配：流程协作者就位后工具→服务→协作者逐层交下去，不写任何跨平台台账', async () => {
   const seen = [];
