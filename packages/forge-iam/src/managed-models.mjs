@@ -1,7 +1,30 @@
 import { IamError } from './errors.mjs';
+import {
+  NO_RETRY_POLICY,
+  THINKING_LEVELS,
+  normalizeGatewayBaseURL,
+  validateManagedModels,
+  parseCapacity,
+  formatCapacity,
+  buildThinkingLevelMap,
+  applyModelOptions,
+  pickDefaultModel,
+} from './model-options.mjs';
+
+export {
+  NO_RETRY_POLICY,
+  THINKING_LEVELS,
+  normalizeGatewayBaseURL,
+  validateManagedModels,
+  parseCapacity,
+  formatCapacity,
+  buildThinkingLevelMap,
+  applyModelOptions,
+  pickDefaultModel,
+};
 
 const MESSAGES = Object.freeze({
-  IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTPS 网关地址。本机测试可使用已获允许的 HTTP 地址。',
+  IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
   ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
   IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
   IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的 UAG 个人凭证。',
@@ -15,27 +38,6 @@ const MESSAGES = Object.freeze({
 });
 const error = code => new IamError(code, MESSAGES[code]);
 const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { code, message: MESSAGES[code] } } });
-
-/** Canonical OpenAI-compatible root, validated before storing or sending credentials. */
-export function normalizeGatewayBaseURL(input, allowInsecureHttp = false) {
-  let url;
-  try { url = new URL(input); } catch { throw error('IAM_GATEWAY_URL_INVALID'); }
-  if (url.username || url.password || url.search || url.hash
-    || (url.protocol !== 'https:' && !(url.protocol === 'http:' && allowInsecureHttp
-      && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) throw error('IAM_GATEWAY_URL_INVALID');
-  const pathname = url.pathname.replace(/\/+$/u, '');
-  url.pathname = pathname.endsWith('/v1') ? pathname : `${pathname}/v1`;
-  return url.href.replace(/\/$/u, '');
-}
-
-export function validateManagedModels(input, allowInsecureHttp = false) {
-  if (input === undefined || input === null) return { value: null };
-  try {
-    if (!input || typeof input !== 'object' || Array.isArray(input)
-      || Object.keys(input).some(key => key !== 'baseURL')) throw error('IAM_GATEWAY_URL_INVALID');
-    return { value: { baseURL: normalizeGatewayBaseURL(input.baseURL, allowInsecureHttp) } };
-  } catch { return { issues: [{ path: ['managedModels'], message: 'managedModels accepts a safe baseURL only; models are discovered from /v1/models' }] }; }
-}
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
   if (view?.state !== 'ready' || !view.principal || !Number.isFinite(expires(view)) || expires(view) <= Date.now()) return 'IAM_LOGIN_REQUIRED';
@@ -43,6 +45,20 @@ function permit(view) {
   return null;
 }
 const identity = view => JSON.stringify([view?.state, view?.principal, view?.gatewayCredential]);
+
+/**
+ * A stored selection maps model id → overrides. An empty object is a real
+ * value: it means "enabled, but nothing overridden".
+ */
+function normalizeSelection(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const next = {};
+  for (const [id, option] of Object.entries(value)) {
+    if (typeof id !== 'string' || id.length === 0) continue;
+    next[id] = option && typeof option === 'object' && !Array.isArray(option) ? option : {};
+  }
+  return next;
+}
 
 /** Bound discovery: no redirects, ambient credentials, arbitrary error body or stale results. */
 async function discover(connection, signal, fetcher, headers) {
@@ -66,72 +82,39 @@ async function discover(connection, signal, fetcher, headers) {
   try { body = JSON.parse(text); } catch { throw error('ENTERPRISE_MODEL_CATALOG_INVALID'); }
   if (!Array.isArray(body?.data) || body.data.length > 500) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
   const seen = new Set();
-  return body.data.map(item => {
+  const discovered = body.data.map(item => {
     if (typeof item?.id !== 'string' || !/^[\w./:-]{1,200}$/u.test(item.id) || seen.has(item.id)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
     seen.add(item.id);
     // Standard /models does not promise capacity or modality metadata.
     return { id: item.id, name: item.id, contextWindow: 32768, maxTokens: 4096, input: ['text'], inputModalities: ['text'] };
   });
+  return discovered.sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true, sensitivity: 'base' }));
 }
 
-const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
-const CAPACITY_SCALE = { k: 1000, m: 1000000 };
-
-/** Parse numeric capacity with optional K / M suffix. */
-export function parseCapacity(text) {
-  if (typeof text === 'number') return Number.isFinite(text) && text > 0 ? Math.round(text) : undefined;
-  if (typeof text !== 'string') return undefined;
-  const trimmed = text.trim();
-  if (!trimmed) return undefined;
-  const match = CAPACITY_PATTERN.exec(trimmed);
-  if (!match) return undefined;
-  const suffix = match[2]?.toLowerCase();
-  const scale = suffix === 'k' || suffix === 'm' ? CAPACITY_SCALE[suffix] : 1;
-  const scaled = Number(match[1]) * scale;
-  return Number.isFinite(scaled) && scaled > 0 ? Math.round(scaled) : undefined;
-}
-
-/** Overlay fine-grained user options onto discovered gateway models. */
-export function applyModelOptions(rawModels, options = {}) {
-  if (!Array.isArray(rawModels)) return [];
-  return rawModels.map(item => {
-    const opt = options?.[item.id] || {};
-    const contextWindow = parseCapacity(opt.contextWindow) ?? item.contextWindow ?? 32768;
-    const maxTokens = parseCapacity(opt.maxTokens) ?? item.maxTokens ?? 4096;
-    const name = typeof opt.name === 'string' && opt.name.trim() ? opt.name.trim() : (item.name || item.id);
-    const input = Array.isArray(opt.inputModalities) && opt.inputModalities.length > 0
-      ? opt.inputModalities.filter(m => m === 'text' || m === 'image')
-      : (Array.isArray(opt.input) && opt.input.length > 0 ? opt.input.filter(m => m === 'text' || m === 'image') : (item.input ?? ['text']));
-    const inputModalities = input.length > 0 ? input : ['text'];
-    const reasoningEfforts = opt.reasoningEfforts && typeof opt.reasoningEfforts === 'object' && !Array.isArray(opt.reasoningEfforts)
-      ? opt.reasoningEfforts : (item.reasoningEfforts ?? null);
-    const reasoning = Boolean(opt.reasoning || (reasoningEfforts && Object.keys(reasoningEfforts).length > 0));
-    return {
-      ...item,
-      id: item.id,
-      name,
-      contextWindow,
-      maxTokens,
-      input: inputModalities,
-      inputModalities,
-      reasoning,
-      reasoningEfforts,
-    };
-  });
-}
 
 /** Own an adapter and the public stream waterfall; never replace Host methods or settings. */
 export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch,
   requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders() }) {
   if (typeof host.on !== 'function' || typeof host.llm?.registerAdapter !== 'function') {
     const off = host.on?.('llm/stream', () => (async function* () { yield finish('ENTERPRISE_MODELS_UNAVAILABLE'); })(), { global: true });
-    return { ready: Promise.resolve(), refresh: async () => { throw error('ENTERPRISE_MODELS_UNAVAILABLE'); },
+    return {
+      ready: Promise.resolve(), refresh: async () => { throw error('ENTERPRISE_MODELS_UNAVAILABLE'); },
       getView: () => ({ managed: true, state: 'error', error: 'ENTERPRISE_MODELS_UNAVAILABLE', models: [] }),
-      dispose: async () => { off?.(); } };
+      dispose: async () => { off?.(); }
+    };
   }
   const provider = config.defaultProvider;
+  // `modelOptions` doubles as the enabled set: a key means "this person turned
+  // this model on", and its value carries the overrides (possibly none). A
+  // discovered model without a key is listed but refused for calls.
   let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null;
-  const allowed = (route, model) => route === provider && models.some(item => item.id === model);
+  let defaultModelId = null;
+  // `selectionSaved` separates "nothing stored yet" (auto-enable the default)
+  // from "stored as empty" (this person deliberately enabled no model).
+  let selectionSaved = false; let selectionError = null; let selectionWriteError = null;
+  const enabled = id => Object.hasOwn(modelOptions, id);
+  const enabledInCatalog = id => models.some(item => item.id === id);
+  const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let deadline; let timer; let disposed = false; let backend; let flight;
   const publish = () => { host.emit?.('llm/adapters-updated'); };
@@ -177,8 +160,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           const code = chunk.reason.failure.code;
           yield finish(code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
             : code === 'PERMISSION' || code === 'FORBIDDEN' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
-            : code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
-            : Object.hasOwn(MESSAGES, code ?? '') ? code : 'ENTERPRISE_GATEWAY_UNAVAILABLE'); return;
+              : code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
+                : Object.hasOwn(MESSAGES, code ?? '') ? code : 'ENTERPRISE_GATEWAY_UNAVAILABLE'); return;
         }
         yield chunk;
       }
@@ -189,9 +172,41 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (!code && request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
       yield finish(code ?? (Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code
         : cause?.code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
-        : cause?.code === 'PERMISSION' || cause?.status === 403 ? 'ENTERPRISE_GATEWAY_FORBIDDEN' : 'ENTERPRISE_GATEWAY_UNAVAILABLE'));
+          : cause?.code === 'PERMISSION' || cause?.status === 403 ? 'ENTERPRISE_GATEWAY_FORBIDDEN' : 'ENTERPRISE_GATEWAY_UNAVAILABLE'));
     }
   }
+  /** Adopt the stored selection, or remember that nothing was stored yet. */
+  async function loadSelection() {
+    if (typeof iam.readModelSelection !== 'function') { selectionSaved = true; return; }
+    try {
+      const saved = await iam.readModelSelection();
+      selectionError = null;
+      if (!saved || saved.saved !== true) { selectionSaved = false; modelOptions = {}; defaultModelId = null; return; }
+      modelOptions = normalizeSelection(saved.models);
+      defaultModelId = typeof saved.defaultModelId === 'string' ? saved.defaultModelId : null;
+      selectionSaved = true;
+    } catch (cause) {
+      // A storage read failure must not look like "nothing saved": that would
+      // silently re-enable a default the user may have turned off.
+      selectionError = cause?.code ?? 'IAM_CREDENTIALS_UNAVAILABLE';
+      selectionSaved = true;
+    }
+  }
+
+  /** Best effort: an unwritten selection still applies to this session. */
+  async function persistSelection() {
+    if (typeof iam.saveModelSelection !== 'function') return true;
+    try {
+      await iam.saveModelSelection({ models: modelOptions, defaultModelId });
+      selectionWriteError = null;
+      selectionSaved = true;
+      return true;
+    } catch (cause) {
+      selectionWriteError = cause?.code ?? 'IAM_MODEL_SELECTION_UNWRITTEN';
+      return false;
+    }
+  }
+
   async function refresh() {
     const denied = permit(sample());
     if (disposed || denied) throw error(denied ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
@@ -203,14 +218,27 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const connection = await iam.resolveGatewayConnection(); current();
       const headers = await requestHeaders(); current();
       const found = await discover(connection, AbortSignal.any([lifetime.signal, lease.signal]), fetcher, headers); current();
+      await loadSelection(); current();
       rawModels = found;
+      // First run for this person: enable one model so the panel is usable
+      // without any configuration. The admin's defaultModel wins when the
+      // gateway still offers it, otherwise the first catalogue entry (the
+      // catalogue is sorted, so "first" is stable across refreshes).
+      if (!selectionSaved && found.length > 0) {
+        const chosen = pickDefaultModel(found, config.defaultModel);
+        if (chosen) { modelOptions = { [chosen]: {} }; defaultModelId = chosen; await persistSelection(); current(); }
+      } else if (defaultModelId && !enabled(defaultModelId)) {
+        defaultModelId = Object.keys(modelOptions)[0] ?? null;
+      }
       models = applyModelOptions(rawModels, modelOptions);
-      const resolved = await createAdapter({ host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveKey: async () => {
-        current();
-        const next = await iam.resolveGatewayConnection(); current();
-        if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
-        return next.key;
-      } }); current();
+      const resolved = await createAdapter({
+        host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveKey: async () => {
+          current();
+          const next = await iam.resolveGatewayConnection(); current();
+          if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
+          return next.key;
+        }
+      }); current();
       backend = resolved; catalogState = 'ready'; catalogError = null; publish();
       return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
     }).catch(cause => {
@@ -223,47 +251,71 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     flight = { version: mine, promise: task }; return task;
   }
   const offStream = host.on('llm/stream', (request, next) => protect(request, next), { global: true });
-  const adapter = new Proxy({}, { get(_target, key) {
-    if (key === 'providerInfo') return route => ({ id: route, name: '企业模型' });
-    if (key === 'providerRetryPolicy') return () => ({ mode: 'normal', maxRetries: 0 });
-    if (key === 'listModels') return async route => {
-      if (disposed || route !== provider || permit(sample()) || !backend) return [];
-      return models.map(({ id, name, inputModalities, input }) => ({
-        provider,
-        id,
-        name: name || id,
-        inputModalities: inputModalities ?? input ?? ['text'],
-      }));
-    };
-    if (key === 'stream') return request => protect(request, options => backend.stream(options));
-    if (key === 'prepareCall') return async (route, model, signal) => {
-      sample(); const mine = version;
-      // Even a saved selection after logout reaches an actionable sign-in error.
-      if (!permit(iam.getView()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
-      const prepared = backend ? await backend.prepareCall(route, model, signal) : null;
-      return { model: prepared?.model ?? { provider: route, id: model, name: model },
-        stream: request => protect(request, options => prepared.stream(options), mine) };
-    };
-    if (key === 'resolveModel') return async (route, model, signal) => {
-      if (!permit(sample()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
-      return backend ? backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
-    };
-    return typeof backend?.[key] === 'function' ? backend[key].bind(backend) : backend?.[key];
-  } });
+  const adapter = new Proxy({}, {
+    get(_target, key) {
+      if (key === 'providerInfo') return route => ({ id: route, name: '企业模型' });
+      if (key === 'providerRetryPolicy') return () => NO_RETRY_POLICY;
+      if (key === 'listModels') return async route => {
+        if (disposed || route !== provider || permit(sample()) || !backend) return [];
+        // Only enabled models are offered. A model the person has not turned on
+        // stays in the account page's catalogue, so the picker cannot offer a
+        // model whose calls would be refused.
+        return models.filter(item => enabled(item.id)).map(({ id, name, inputModalities, input }) => ({
+          provider,
+          id,
+          name: name || id,
+          inputModalities: inputModalities ?? input ?? ['text'],
+        }));
+      };
+      if (key === 'stream') return request => protect(request, options => backend.stream(options));
+      if (key === 'prepareCall') return async (route, model, signal) => {
+        sample(); const mine = version;
+        // Even a saved selection after logout reaches an actionable sign-in error.
+        if (!permit(iam.getView()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
+        const prepared = backend
+          ? (typeof backend.prepareCall === 'function'
+            ? await backend.prepareCall(route, model, signal)
+            : { model: await backend.resolveModel(route, model, signal), stream: options => backend.stream(options) })
+          : null;
+        return {
+          model: prepared?.model ?? { provider: route, id: model, name: model },
+          stream: request => protect(request, options => (prepared ? prepared.stream(options) : backend.stream(options)), mine)
+        };
+      };
+      if (key === 'resolveModel') return async (route, model, signal) => {
+        if (!permit(sample()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
+        return backend ? backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
+      };
+      return typeof backend?.[key] === 'function' ? backend[key].bind(backend) : backend?.[key];
+    }
+  });
   const registration = host.llm.registerAdapter([provider], adapter);
-  const ready = refresh().catch(() => {});
+  const ready = refresh().catch(() => { });
   const observation = (async () => {
-    try { for await (const _view of iam.watch(lifetime.signal)) {
-      if (disposed) return;
-      const before = version; sample();
-      if ((before !== version || !backend) && !permit(iam.getView())) void refresh().catch(() => {});
-    } }
+    try {
+      for await (const _view of iam.watch(lifetime.signal)) {
+        if (disposed) return;
+        const before = version; sample();
+        if ((before !== version || !backend) && !permit(iam.getView())) void refresh().catch(() => { });
+      }
+    }
     catch { if (!disposed) { lease.abort(); rawModels = []; models = []; backend = undefined; publish(); } }
   })();
-  return { ready, refresh,
+  return {
+    ready, refresh,
     async updateModelOptions(nextOptions = {}) {
       if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
-      modelOptions = { ...modelOptions, ...(nextOptions || {}) };
+      // Before the catalogue exists every id would look "not in the catalogue",
+      // so a write here would persist an empty selection over a real one.
+      if (models.length === 0) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+      // The submitted map is the enabled set, not just an override list: an
+      // empty object enables a model with the catalogue defaults, and dropping
+      // a key disables it. Only catalogue models can be enabled.
+      const nextMap = normalizeSelection(nextOptions);
+      for (const id of Object.keys(nextMap)) if (!enabledInCatalog(id)) delete nextMap[id];
+      modelOptions = nextMap;
+      if (defaultModelId && !enabled(defaultModelId)) defaultModelId = Object.keys(modelOptions)[0] ?? null;
+      const persisted = await persistSelection();
       models = applyModelOptions(rawModels, modelOptions);
       if (backend && rawModels.length > 0) {
         try {
@@ -281,11 +333,18 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         } catch { /* keep existing backend if rebuild fails */ }
       }
       publish();
-      return { ok: true, models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
+      return { ok: true, persisted,
+        defaultModelId,
+        enabled: Object.keys(modelOptions),
+        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
     },
     getModelOptions: () => ({ ...modelOptions }),
-    getView: () => ({ managed: true, configured: true,
+    getView: () => ({
+      managed: true, configured: true,
       state: catalogState, error: catalogError,
+      defaultModelId,
+      enabled: Object.keys(modelOptions),
+      selectionError: selectionError ?? selectionWriteError,
       models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
         id,
         name,
@@ -294,13 +353,18 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         inputModalities: inputModalities ?? ['text'],
         reasoningEfforts: reasoningEfforts ?? null,
         reasoning: Boolean(reasoning),
+        // A listed model is not necessarily callable; only enabled ones are.
+        enabled: enabled(id),
+        isDefault: defaultModelId === id,
       })),
-      modelOptions: { ...modelOptions } }),
+      modelOptions: { ...modelOptions }
+    }),
     async dispose() {
       if (disposed) return;
       disposed = true; clearTimeout(timer); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
       await observation; rawModels = []; models = []; backend = undefined;
-    } };
+    }
+  };
 }
 
 /** Host-supplied SDK only: an unavailable public import closes this capability. */
@@ -311,22 +375,56 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
   ]);
   const { baseURL, models } = config.managedModels; const provider = config.defaultProvider;
   const protocol = openAICompletionsApi();
-  const catalog = models.map(({ id, name, contextWindow, maxTokens, input, inputModalities, reasoning, reasoningEfforts }) => ({
-    id, name: name || id, contextWindow: contextWindow ?? 32768, maxTokens: maxTokens ?? 4096,
-    provider, api: 'openai-completions', baseUrl: baseURL,
-    reasoning: Boolean(reasoning || (reasoningEfforts && Object.keys(reasoningEfforts).length > 0)),
-    ...(reasoningEfforts ? { reasoningEfforts } : {}),
-    input: inputModalities ?? input ?? ['text'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }));
-  const piProvider = { id: provider, name: '企业模型', baseUrl: baseURL,
+  const catalog = models.map(({ id, name, contextWindow, maxTokens, input, inputModalities, reasoning, reasoningEfforts, thinkingLevelMap, compat }) => {
+    const resolvedThinkingMap = thinkingLevelMap ?? buildThinkingLevelMap(reasoningEfforts);
+    const isReasoning = Boolean(reasoning || resolvedThinkingMap);
+    return {
+      id, name: name || id, contextWindow: contextWindow ?? 32768, maxTokens: maxTokens ?? 4096,
+      provider, api: 'openai-completions', baseUrl: baseURL,
+      reasoning: isReasoning,
+      ...(resolvedThinkingMap ? { thinkingLevelMap: resolvedThinkingMap } : {}),
+      ...(reasoningEfforts ? { reasoningEfforts } : {}),
+      input: inputModalities ?? input ?? ['text'],
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        maxTokensField: 'max_tokens',
+        ...(compat || {}),
+      },
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
+  });
+  const configuredMaxTokens = new Map();
+  for (const m of models) {
+    if (m.hasCustomMaxTokens && typeof m.maxTokens === 'number' && m.maxTokens > 0) {
+      configuredMaxTokens.set(m.id, m.maxTokens);
+    }
+  }
+  const piProvider = {
+    id: provider, name: '企业模型', baseUrl: baseURL,
     auth: { apiKey: { name: '企业个人凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
-    getModels: () => catalog, stream: (...args) => protocol.stream(...args), streamSimple: (...args) => protocol.streamSimple(...args) };
-  const profiles = new Map([[provider, { provider, displayName: '企业模型', piProvider,
+    getModels: () => catalog, stream: (...args) => protocol.stream(...args), streamSimple: (...args) => protocol.streamSimple(...args)
+  };
+  const profiles = new Map([[provider, {
+    provider, displayName: '企业模型', piProvider,
     streamIdleTimeoutMs: 60000, maxRequestImageBytes: 10 * 1024 * 1024, requestImagePixelBudget: 4096 * 4096, requestImageMaxBytes: 10 * 1024 * 1024,
-    modelErrors: new Map(), configuredMaxTokens: new Map(models.map(m => [m.id, m.maxTokens ?? 4096])),
-    retryPolicy: { mode: 'normal', maxRetries: 0 } }]]);
+    modelErrors: new Map(), configuredMaxTokens,
+    retryPolicy: NO_RETRY_POLICY
+  }]]);
   // This provider accepts only the per-request IAM-resolved key, never ambient OAuth or env credentials.
-  return new PiAiAdapter({ profiles: () => profiles, resolveApiKey: resolveKey,
-    auth: { credentials: { get: async () => undefined, list: async () => [], set: async () => { throw error('ENTERPRISE_MODELS_UNAVAILABLE'); }, delete: async () => {} },
-      authContext: { env: () => undefined } } });
+  return new PiAiAdapter({
+    profiles: () => profiles, resolveApiKey: resolveKey,
+    auth: {
+      credentials: {
+        read: async () => undefined,
+        get: async () => undefined,
+        list: async () => [],
+        write: async () => { throw error('ENTERPRISE_MODELS_UNAVAILABLE'); },
+        set: async () => { throw error('ENTERPRISE_MODELS_UNAVAILABLE'); },
+        modify: async () => undefined,
+        delete: async () => { },
+      },
+      authContext: { env: async () => undefined, fileExists: async () => false },
+    }
+  });
 }

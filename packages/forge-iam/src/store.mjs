@@ -463,3 +463,121 @@ export function createGatewayCredentialStore(credentials, options = {}) {
     },
   };
 }
+
+export const MODEL_SELECTION_KEY = 'heluo-iam/model-selection';
+const MODEL_SELECTION_VERSION = 1;
+const MODEL_SELECTION_TYPE = 'heluo-iam-model-selection';
+const MODEL_ID_PATTERN = /^[\w./:-]{1,200}$/u;
+const MAX_SELECTED_MODELS = 200;
+const THINKING_LEVEL_KEYS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+/** Keep only the override fields the runtime understands, dropping junk. */
+function sanitizeModelOption(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const next = {};
+  if (typeof input.name === 'string' && input.name.trim() && input.name.length <= 200) next.name = input.name.trim();
+  for (const field of ['contextWindow', 'maxTokens']) {
+    const value = input[field];
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) next[field] = Math.round(value);
+    else if (typeof value === 'string' && value.trim() && value.length <= 32) next[field] = value.trim();
+  }
+  if (Array.isArray(input.inputModalities)) {
+    const modes = input.inputModalities.filter(mode => mode === 'text' || mode === 'image');
+    if (modes.length > 0) next.inputModalities = [...new Set(modes)];
+  }
+  if (input.reasoningEfforts && typeof input.reasoningEfforts === 'object' && !Array.isArray(input.reasoningEfforts)) {
+    const efforts = {};
+    for (const [level, wire] of Object.entries(input.reasoningEfforts)) {
+      if (!THINKING_LEVEL_KEYS.has(level)) continue;
+      if (wire === null) efforts[level] = null;
+      else if (typeof wire === 'string' && wire.trim() && wire.length <= 64) efforts[level] = wire.trim();
+    }
+    if (Object.keys(efforts).length > 0) next.reasoningEfforts = efforts;
+  }
+  return next;
+}
+
+/** A selection is valid only as a whole; a malformed one is ignored, never migrated. */
+function parseModelSelection(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if (payload.version !== MODEL_SELECTION_VERSION || payload.type !== MODEL_SELECTION_TYPE) return null;
+  if (typeof payload.subject !== 'string' || payload.subject.length === 0) return null;
+  const source = payload.models;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+  const ids = Object.keys(source);
+  if (ids.length > MAX_SELECTED_MODELS) return null;
+  const models = {};
+  for (const id of ids) {
+    if (!MODEL_ID_PATTERN.test(id)) return null;
+    if (!source[id] || typeof source[id] !== 'object' || Array.isArray(source[id])) return null;
+    models[id] = sanitizeModelOption(source[id]);
+  }
+  const defaultModelId = typeof payload.defaultModelId === 'string' && Object.hasOwn(models, payload.defaultModelId)
+    ? payload.defaultModelId : null;
+  return { subject: payload.subject, models, defaultModelId };
+}
+
+/**
+ * Durable model selection: which catalogue models this person enabled, with
+ * the per-model overrides they saved.
+ *
+ * Unlike the gateway credential this holds no secret, so it uses the plain
+ * provider lock instead of the joint atomic transaction: last confirmed write
+ * wins, and a failed write never blocks model calls. The record is scoped to
+ * one subject; a record belonging to someone else is left untouched and simply
+ * ignored, so signing in as another person never inherits their choices.
+ */
+export function createModelSelectionStore(credentials, options = {}) {
+  assertCredentials(credentials);
+  const key = options.key ?? MODEL_SELECTION_KEY;
+
+  async function read() {
+    let record;
+    try { record = await credentials.readRecord(key); }
+    catch (error) { return { ok: false, selection: null, error }; }
+    if (record === undefined || record === null) return { ok: true, selection: null };
+    // Never rewrite or delete a record this owner does not recognise.
+    if (record.kind !== 'grant') return { ok: false, selection: null, error: new StoreError('IAM_MODEL_SELECTION_FOREIGN', 'stored record is not an IAM model selection') };
+    const selection = parseModelSelection(record.payload);
+    if (!selection) return { ok: false, selection: null, error: new StoreError('IAM_MODEL_SELECTION_INVALID', 'stored model selection is invalid') };
+    return { ok: true, selection };
+  }
+
+  async function save({ subject, models, defaultModelId } = {}) {
+    const selection = parseModelSelection({
+      version: MODEL_SELECTION_VERSION, type: MODEL_SELECTION_TYPE, subject,
+      models, defaultModelId: defaultModelId ?? null,
+    });
+    if (!selection) throw new StoreError('IAM_MODEL_SELECTION_INVALID', 'refusing to store an invalid model selection');
+    let written;
+    try {
+      written = await credentials.modifyRecord(key, async (current) => {
+        if (current !== undefined && current !== null && current.kind !== 'grant') {
+          throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing IAM record is not a grant');
+        }
+        return { kind: 'grant', payload: {
+          version: MODEL_SELECTION_VERSION, type: MODEL_SELECTION_TYPE,
+          subject: selection.subject, models: selection.models,
+          defaultModelId: selection.defaultModelId, updatedAt: new Date().toISOString(),
+        } };
+      });
+    } catch (error) {
+      if (error instanceof StoreError) throw error;
+      throw new StoreError('IAM_MODEL_SELECTION_UNWRITTEN', 'model selection was not stored', { cause: error?.code });
+    }
+    if (written === undefined || written === null) throw new StoreError('IAM_MODEL_SELECTION_UNWRITTEN', 'model selection was not stored');
+    return { ok: true, selection };
+  }
+
+  async function clear() {
+    try {
+      const record = await credentials.readRecord(key);
+      if (record === undefined || record === null) return { ok: true };
+      if (record.kind !== 'grant') return { ok: false };
+      await credentials.deleteRecord(key);
+      return { ok: true };
+    } catch { return { ok: false }; }
+  }
+
+  return { key, read, save, clear };
+}

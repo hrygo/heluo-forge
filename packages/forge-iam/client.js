@@ -194,12 +194,33 @@ window.__ModuleLoader__.load({
         to { transform: rotate(360deg); }
       }
 
+      .fiam-model-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .fiam-model-search {
+        flex: 1 1 220px;
+        min-width: 0;
+      }
+      .fiam-model-filters {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
       .fiam-model-list {
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        margin-top: 14px;
+        gap: 8px;
+        margin-top: 10px;
         margin-bottom: 14px;
+        max-height: 420px;
+        overflow-y: auto;
+        padding-right: 2px;
       }
       .fiam-model-item {
         border: 1px solid var(--dsw-alias-border-l2);
@@ -207,6 +228,7 @@ window.__ModuleLoader__.load({
         background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1));
         overflow: hidden;
         transition: border-color 0.15s ease;
+        flex-shrink: 0;
       }
       .fiam-model-item:hover {
         border-color: var(--dsw-alias-border-l3);
@@ -299,8 +321,273 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-state-business-primary);
         font-weight: 500;
       }
+
+      /* Launcher in sidebar footArea */
+      .fiam-launcher-root {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        border-radius: var(--dsw-radius-sm);
+        padding: 2px;
+      }
+      .fiam-launcher-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+        border: none;
+        background: transparent;
+        padding: 4px 6px;
+        border-radius: var(--dsw-radius-sm);
+        color: var(--dsw-alias-label-primary);
+        font: var(--dsw-font-xs-13);
+        text-align: left;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+      }
+      .fiam-launcher-btn:hover {
+        background-color: var(--dsw-alias-button-floating-hover, rgba(0,0,0,0.05));
+      }
+      .fiam-launcher-rail {
+        justify-content: center;
+        padding: 0;
+      }
+      .fiam-launcher-rail .fiam-launcher-btn {
+        justify-content: center;
+        padding: 2px;
+        flex: none;
+        width: 36px;
+        height: 36px;
+      }
+      .fiam-launcher-avatar-wrap {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+        border: 1px solid var(--dsw-alias-border-l1);
+        flex-shrink: 0;
+      }
+      .fiam-launcher-rail .fiam-launcher-avatar-wrap {
+        width: 32px;
+        height: 32px;
+        border-radius: var(--dsw-radius-md, 8px);
+      }
+      .fiam-launcher-dot {
+        position: absolute;
+        bottom: -1px;
+        right: -1px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        border: 1.5px solid var(--dsw-alias-bg-layer-1, #fff);
+        box-sizing: content-box;
+      }
+      .fiam-launcher-dot.idle {
+        background: var(--dsw-alias-label-tertiary, #9ca3af);
+      }
+      .fiam-launcher-dot.success {
+        background: var(--dsw-alias-state-success-primary, #10b981);
+      }
+      .fiam-launcher-dot.warn {
+        background: var(--dsw-alias-state-warn-primary, #f59e0b);
+      }
+      .fiam-launcher-dot.error {
+        background: var(--dsw-alias-state-error-primary, #ef4444);
+      }
+      .fiam-launcher-dot.authenticating {
+        background: var(--dsw-alias-state-business-primary, #2563eb);
+        animation: fiam-pulse 1.4s ease-in-out infinite;
+      }
+      .fiam-launcher-details {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        flex: 1;
+        line-height: 1.25;
+      }
+      .fiam-launcher-title {
+        font-weight: 600;
+        font-size: var(--dsw-font-xs-13);
+        color: var(--dsw-alias-label-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .fiam-launcher-subtitle {
+        font-size: var(--dsw-font-xxs-11, 11px);
+        color: var(--dsw-alias-label-secondary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 2px;
+      }
+      .fiam-launcher-gear {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: var(--dsw-radius-sm);
+        border: none;
+        background: transparent;
+        color: var(--dsw-alias-label-secondary);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: color 0.15s ease, background-color 0.15s ease;
+      }
+      .fiam-launcher-gear:hover {
+        background: var(--dsw-alias-button-floating-hover, rgba(0,0,0,0.05));
+        color: var(--dsw-alias-label-primary);
+      }
+      .fiam-launcher-menu {
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 2px;
+        width: 260px;
+        background: var(--dsw-alias-bg-layer-1);
+        border: 1px solid var(--dsw-alias-border-l2);
+        border-radius: var(--dsw-radius-md, 10px);
+        box-shadow: var(--dsw-elevation-prominent, 0 10px 25px -5px rgba(0, 0, 0, 0.2));
+        padding: 10px;
+        z-index: 950;
+        font: var(--dsw-font-xs-13);
+        color: var(--dsw-alias-label-primary);
+        backdrop-filter: blur(12px);
+      }
+      .fiam-launcher-rail .fiam-launcher-menu {
+        left: 48px;
+        bottom: 0;
+      }
+      .fiam-launcher-menu-section {
+        padding-bottom: 8px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid var(--dsw-alias-border-l1);
+      }
+      .fiam-launcher-menu-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: var(--dsw-font-xxs-12);
+        line-height: 1.4;
+        margin-top: 4px;
+      }
+      .fiam-launcher-menu-label {
+        color: var(--dsw-alias-label-secondary);
+      }
+      .fiam-launcher-menu-value {
+        font-weight: 500;
+        color: var(--dsw-alias-label-primary);
+        text-align: right;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .fiam-launcher-menu-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 6px 8px;
+        border: none;
+        background: transparent;
+        border-radius: var(--dsw-radius-sm);
+        color: var(--dsw-alias-label-primary);
+        font: var(--dsw-font-xs-13);
+        cursor: pointer;
+        text-align: left;
+        transition: background-color 0.15s ease;
+      }
+      .fiam-launcher-menu-item:hover {
+        background: var(--dsw-alias-button-floating-hover, rgba(0,0,0,0.05));
+      }
+      .fiam-launcher-menu-item.danger {
+        color: var(--dsw-alias-state-error-primary);
+      }
+      .fiam-launcher-menu-item.danger:hover {
+        background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+      }
     `;
     const interactionStyle = () => h('style', null, interactionStyles);
+
+    const SHIELD_PATHS = [
+      'M3751 10793 c165 -368 440 -638 868 -852 296 -149 615 -246 1162 -355 475 -95 702 -193 875 -380 331 -356 228 -865 -246 -1216 -209 -154 -436 -267 -900 -445 -918 -353 -1453 -741 -1788 -1297 -186 -309 -267 -602 -266 -963 2 -1182 1042 -2453 2746 -3354 l117 -62 128 67 c1254 657 2030 1395 2364 2246 256 655 221 1252 -104 1773 -69 112 -143 202 -134 165 187 -771 -320 -1536 -1221 -1844 -688 -235 -1270 -115 -1931 398 -566 439 -843 994 -757 1517 118 715 858 1378 1601 1434 781 60 1105 162 1651 521 626 412 1049 538 1649 491 100 -8 100 -8 143 47 245 314 275 771 64 968 -76 71 -99 75 -282 43 -211 -36 -435 -44 -589 -21 -215 32 -335 83 -568 240 -447 301 -755 361 -1553 301 -1428 -107 -2307 69 -2987 597 -35 26 -65 48 -67 48 -3 0 8 -30 25 -67z m4081 -1089 c114 -27 237 -106 357 -227 34 -36 59 -67 54 -70 -23 -14 -228 -49 -319 -54 -181 -10 -295 31 -428 154 -91 84 -164 128 -258 153 -46 12 -84 23 -86 25 -4 3 291 35 363 39 99 5 256 -5 317 -20z',
+      'M4983 9385 c-976 -330 -1784 -897 -2438 -1710 -239 -298 -237 -293 -231 -590 23 -1192 449 -2283 1186 -3036 130 -133 135 -135 55 -19 -176 256 -326 587 -400 880 -248 980 248 1944 1335 2593 271 161 546 288 995 457 424 160 587 236 749 351 377 269 364 619 -29 816 -97 49 -193 80 -444 143 -130 32 -321 84 -424 114 -103 31 -189 56 -190 56 -1 0 -75 -25 -164 -55z',
+      'M9584 7936 c-797 -536 -1540 -786 -2454 -824 l-165 -7 145 -47 c80 -26 276 -85 435 -132 752 -220 1077 -392 1348 -715 676 -806 532 -1933 -377 -2951 -66 -74 -114 -130 -106 -124 735 552 1234 1222 1540 2069 254 701 311 1390 164 1993 -65 271 -299 865 -338 861 -6 -1 -92 -56 -192 -123z',
+    ];
+
+    function IamShieldIcon({ size = 20, grayscale = false }) {
+      return h('svg', {
+        xmlns: 'http://www.w3.org/2000/svg',
+        viewBox: '0 0 320 320',
+        width: size,
+        height: size,
+        role: 'img',
+        'aria-label': 'forge-iam 精炼盘龙护盾',
+        style: grayscale ? { filter: 'grayscale(1)', opacity: 0.55 } : undefined,
+      },
+        h('defs', null,
+          h('linearGradient', { id: 'iamLauncherGradient', x1: '15%', y1: '10%', x2: '85%', y2: '90%' },
+            h('stop', { offset: '0%', stopColor: '#1D4ED8' }),
+            h('stop', { offset: '35%', stopColor: '#2563EB' }),
+            h('stop', { offset: '70%', stopColor: '#00D2FE' }),
+            h('stop', { offset: '100%', stopColor: '#00F5FF' }),
+          )
+        ),
+        h('g', { transform: 'scale(0.2551834130781499)' },
+          h('g', { transform: 'translate(0.000000,1254.000000) scale(0.100000,-0.100000)', fill: 'url(#iamLauncherGradient)' },
+            ...SHIELD_PATHS.map((d, i) => h('path', { key: i, d }))
+          )
+        )
+      );
+    }
+
+    function GearIcon({ size = 16 }) {
+      return h('svg', {
+        viewBox: '0 0 20 20',
+        width: size,
+        height: size,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.6,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+      },
+        h('circle', { cx: 10, cy: 10, r: 3 }),
+        h('path', { d: 'M16.2 12.3a1.4 1.4 0 0 0 .3 1.6l.1.1a1.6 1.6 0 1 1-2.3 2.3l-.1-.1a1.4 1.4 0 0 0-1.6-.3 1.4 1.4 0 0 0-.9 1.3V18a1.6 1.6 0 1 1-3.2 0v-.8a1.4 1.4 0 0 0-.9-1.3 1.4 1.4 0 0 0-1.6.3l-.1.1a1.6 1.6 0 1 1-2.3-2.3l.1-.1a1.4 1.4 0 0 0 .3-1.6 1.4 1.4 0 0 0-1.3-.9H2a1.6 1.6 0 1 1 0-3.2h.8a1.4 1.4 0 0 0 1.3-.9 1.4 1.4 0 0 0-.3-1.6l-.1-.1a1.6 1.6 0 1 1 2.3-2.3l.1.1a1.4 1.4 0 0 0 1.6.3 1.4 1.4 0 0 0 .9-1.3V2a1.6 1.6 0 1 1 3.2 0v.8a1.4 1.4 0 0 0 .9 1.3 1.4 1.4 0 0 0 1.6-.3l.1-.1a1.6 1.6 0 1 1 2.3 2.3l-.1.1a1.4 1.4 0 0 0-.3 1.6 1.4 1.4 0 0 0 1.3.9H18a1.6 1.6 0 1 1 0 3.2h-.8a1.4 1.4 0 0 0-1.3.9z' })
+      );
+    }
+
+    function getLauncherStatus(view) {
+      if (!view || view.state === 'signed-out' || view.state === 'unconfigured') {
+        return { kind: 'signed-out', dotClass: 'idle', label: '企业账号未登录', tooltip: '点击登录企业账号' };
+      }
+      if (view.state === 'authenticating') {
+        return { kind: 'authenticating', dotClass: 'authenticating', label: '等待登录完成', tooltip: '正在等待浏览器授权' };
+      }
+      if (view.state === 'expired' || view.state === 'error') {
+        return { kind: 'error', dotClass: 'error', label: '授权已失效', tooltip: '登录已失效，请重新登录' };
+      }
+      if (view.state === 'ready') {
+        const gw = view.gatewayCredential?.state ?? 'unconfigured';
+        if (gw === 'configured') {
+          return { kind: 'ready', dotClass: 'success', label: '企业网关就绪', tooltip: `${view.subject || '企业账号'} · 双模式凭据就绪` };
+        }
+        return { kind: 'missing-key', dotClass: 'warn', label: '待配置网关凭据', tooltip: `${view.subject || '企业账号'} · 未录入个人网关凭据` };
+      }
+      return { kind: 'unknown', dotClass: 'idle', label: '状态未知', tooltip: '企业账号' };
+    }
 
     const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
     const CAPACITY_SCALE = { k: 1000, m: 1000000 };
@@ -441,6 +728,16 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function readModelOptions() {
+      try {
+        const raw = window.localStorage.getItem('forge-iam.model-options.v1');
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+
     function writeMarker(value) {
       try {
         window.localStorage.setItem(ONBOARDING_KEY, value);
@@ -577,16 +874,447 @@ window.__ModuleLoader__.load({
       }, [enabled]);
     }
 
+    function renderAccountCard(ctx) {
+      const {
+        h, view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink,
+        state, primaryButton, button, copy,
+        login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity,
+      } = ctx;
+      return h('div', { className: 'fiam-card' },
+        h('div', { className: 'fiam-card-header' },
+          h('div', { className: 'fiam-card-title-group' },
+            h('div', { className: 'fiam-avatar' },
+              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+                h('path', { d: 'M16 17v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 15.5V17' }),
+                h('circle', { cx: 10, cy: 7, r: 3 })
+              )
+            ),
+            h('div', null,
+              h('div', { className: 'fiam-card-title' }, view.state === 'ready' && view.principal ? view.principal : '企业账号认证'),
+              h('div', { className: 'fiam-card-subtitle' }, view.state === 'ready' ? '已绑定企业 OIDC 身份' : '单点登录至企业账号'),
+            ),
+          ),
+          h('span', { className: `fiam-badge fiam-badge-${statusBadgeClass(view.state)}` },
+            h('span', { className: 'fiam-badge-dot' }),
+            label,
+          ),
+        ),
+        (view.principal || view.accessExpiresAt) ? h('div', { style: { padding: '10px 14px', background: 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.02))', borderRadius: 'var(--dsw-radius-sm)', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 4 } },
+          principal,
+          expiry,
+        ) : null,
+        missing,
+        exclusive,
+        hostError,
+        notice,
+        loginLink,
+        view.state === 'authenticating' && !state.authorizationUrl
+          ? h('div', { className: 'fiam-callout' }, '请在浏览器中完成登录；如果无法继续，请取消后重试。') : null,
+        h('div', { className: 'fiam-actions' },
+          view.canSignIn ? h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: login }, '登录企业账号') : null,
+          view.state === 'authenticating' ? h('button', { type: 'button', style: button, onClick: cancelLogin }, '取消登录') : null,
+          h('button', { type: 'button', style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
+          view.canSignOut ? h('button', { type: 'button', style: button, onClick: signOut }, '退出') : null,
+          state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
+            ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
+          h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
+        ),
+        copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
+          ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
+      );
+    }
+
+    function renderGatewayCard(ctx) {
+      const {
+        h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
+        credential, setCredential, fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
+        saveCredential, clearCredential, viewBarrier,
+      } = ctx;
+      return h('div', { className: 'fiam-card' },
+        h('div', { className: 'fiam-card-header' },
+          h('div', { className: 'fiam-card-title-group' },
+            h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent)', color: 'var(--dsw-alias-state-business-primary)' } },
+              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+                h('path', { d: 'M10 2s6 2.5 6 7c0 4.5-3.5 7.5-6 9-2.5-1.5-6-4.5-6-9 0-4.5 6-7 6-7Z' }),
+                h('path', { d: 'm7.5 10 2 2 3.5-3.5' })
+              )
+            ),
+            h('div', null,
+              h('div', { className: 'fiam-card-title' }, '模型使用凭证'),
+              h('div', { className: 'fiam-card-subtitle' }, '配置用于大模型请求的 UAG 凭证'),
+            ),
+          ),
+          h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gateway.state)}` },
+            h('span', { className: 'fiam-badge-dot' }),
+            `UAG 个人凭证：${gatewayStatus}`,
+          ),
+        ),
+        h('label', { style: fieldLabel },
+          h('span', null, '网关地址'),
+          h('input', { type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
+            value: credential.baseURL ?? gateway.baseURL ?? view.modelAccess?.baseURL ?? '',
+            placeholder: 'https://gateway.example/v1', disabled: credential.saving || viewBarrier.current.pending,
+            onChange: (event) => setCredential((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle }),
+          h('span', { style: muted }, '填写网关提供的地址；修改地址时请重新输入对应的个人 Key。'),
+        ),
+        credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? ''))
+          ? h('p', { role: 'status', style: muted }, '有未保存的更改。保存后将重新获取模型列表。') : null,
+        gatewayDetails.length ? h('div', { style: { ...muted, marginBottom: 8 } }, gatewayDetails.join(' · ')) : null,
+        storageWarning,
+        h('div', { className: 'fiam-callout' },
+          h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+            h('circle', { cx: 8, cy: 8, r: 6 }),
+            h('path', { d: 'M8 7v4m0-6h.01' })
+          ),
+          h('div', null,
+            gateway.state === 'configured'
+              ? 'UAG 个人凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
+              : gateway.state === 'unknown'
+                ? '网关凭据状态尚未确认，请刷新核实。'
+                : gateway.state === 'unconfigured'
+                  ? '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'
+                  : '请先核对现有凭证；如有疑问，请联系管理员。',
+            gateway.state === 'unconfigured' && view.gatewayConsoleUrl
+              ? h('div', { style: { marginTop: 4 } },
+                  h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据 ↗')
+                )
+              : null
+          )
+        ),
+        h('div', { style: { marginTop: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
+          h('label', { style: { ...fieldLabel, flex: '2 1 240px' } },
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, 'UAG 个人凭证'),
+            h('input', {
+              type: 'password',
+              value: credential.value,
+              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴 UAG 个人凭证',
+              'aria-label': 'UAG 个人凭证',
+              autoComplete: 'off',
+              spellCheck: false,
+              disabled: credential.saving || viewBarrier.current.pending,
+              onChange: (event) => setCredential((current) => ({ ...current, value: event.target.value })),
+              style: inputStyle,
+            })
+          ),
+          h('label', { style: { ...fieldLabel, flex: '1 1 150px' } },
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '设备标签（可选）'),
+            h('input', {
+              type: 'text',
+              value: credential.deviceLabel,
+              placeholder: '设备标签（可选）',
+              'aria-label': '设备标签',
+              maxLength: 64,
+              disabled: credential.saving || viewBarrier.current.pending,
+              onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
+              style: inputStyle,
+            })
+          ),
+        ),
+        h('div', { className: 'fiam-actions' },
+          h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: saveCredential }, credential.saving ? '正在处理…' : '保存凭据'),
+          (gateway.state !== 'unconfigured' && gateway.state !== 'unknown') || credential.value
+            ? h('button', { type: 'button', style: secondaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: clearCredential }, '清除凭据')
+            : null,
+        ),
+        credential.notice
+          ? h('div', {
+              role: 'status',
+              'aria-live': 'polite',
+              className: `fiam-notice fiam-notice-${credential.notice.includes('已保存') || credential.notice.includes('已清除') ? 'success' : 'warn'}`,
+            }, credential.notice)
+          : null,
+      );
+    }
+
+    function renderModelItem(ctx) {
+      const {
+        h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
+        resetModelOption, disableModelOption, enableModelOption, view, fieldLabel, inputStyle, secondaryButton, muted,
+      } = ctx;
+      const displayName = opt.name || model.name || model.id;
+      const contextVal = opt.contextWindow !== undefined ? opt.contextWindow : formatCapacity(model.contextWindow ?? 32768);
+      const maxTokensVal = opt.maxTokens !== undefined ? opt.maxTokens : formatCapacity(model.maxTokens ?? 4096);
+      const contextInvalid = opt.contextWindow !== undefined && String(opt.contextWindow).trim() !== '' && parseCapacity(opt.contextWindow) === undefined;
+      const maxTokensInvalid = opt.maxTokens !== undefined && String(opt.maxTokens).trim() !== '' && parseCapacity(opt.maxTokens) === undefined;
+      const currentModalities = Array.isArray(opt.inputModalities) ? opt.inputModalities : (model.inputModalities ?? ['text']);
+      const hasImage = currentModalities.includes('image');
+      const hasReasoning = Boolean(opt.reasoningEfforts && Object.keys(opt.reasoningEfforts).some(k => k !== 'off' && opt.reasoningEfforts[k]))
+        || Boolean(model.reasoningEfforts);
+      const hasCustom = Boolean(modelOptions[model.id] && Object.keys(modelOptions[model.id]).length > 0);
+      // Presence in the map is what makes a model callable; otherwise it is only
+      // listed here so it can be turned on.
+      const isEnabled = Object.hasOwn(modelOptions, model.id);
+      const isDefaultModel = view?.modelAccess?.defaultModelId === model.id;
+
+      return h('div', { key: model.id, className: 'fiam-model-item' },
+        h('div', { className: 'fiam-model-row' },
+          h('div', { className: 'fiam-model-info' },
+            h('span', { className: 'fiam-model-name' }, displayName),
+            displayName !== model.id ? h('span', { className: 'fiam-model-id' }, model.id) : null,
+            h('span', { className: 'fiam-badge fiam-badge-idle' }, `${contextVal} · 输出 ${maxTokensVal}`),
+            hasImage ? h('span', { className: 'fiam-badge fiam-badge-success' }, '视觉图片') : null,
+            hasReasoning ? h('span', { className: 'fiam-badge fiam-badge-authenticating' }, '深度推理') : null,
+            isEnabled
+              ? h('span', { className: 'fiam-badge fiam-badge-success' }, isDefaultModel ? '默认可用' : '已启用')
+              : h('span', { className: 'fiam-badge fiam-badge-idle' }, '未启用'),
+            hasCustom ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '已个性化') : null,
+          ),
+          h('button', {
+            type: 'button',
+            style: { ...secondaryButton, minHeight: 26, padding: '0 8px', fontSize: 12, flexShrink: 0 },
+            'aria-expanded': isExpanded,
+            'aria-label': `配置 ${model.id}`,
+            onClick: () => toggleModelExpand(model.id),
+          }, isExpanded ? '收起配置 ▲' : '精细配置 ▼')
+        ),
+        isExpanded
+          ? h('div', { className: 'fiam-model-advanced' },
+              h('div', { className: 'fiam-field-grid' },
+                h('label', { style: fieldLabel },
+                  h('span', { style: { fontWeight: 500, fontSize: 13 } }, '显示名称'),
+                  h('input', {
+                    type: 'text',
+                    style: inputStyle,
+                    placeholder: model.id,
+                    value: opt.name ?? '',
+                    'aria-label': `显示名称 ${idx + 1}`,
+                    onChange: (e) => updateOptionField(model.id, 'name', e.target.value),
+                  }),
+                  h('span', { style: muted }, '留空时使用模型 ID'),
+                ),
+                h('label', { style: fieldLabel },
+                  h('span', { style: { fontWeight: 500, fontSize: 13 } }, '上下文窗口 (Context Window)'),
+                  h('input', {
+                    type: 'text',
+                    style: inputStyle,
+                    placeholder: formatCapacity(model.contextWindow ?? 32768),
+                    value: opt.contextWindow ?? '',
+                    'aria-label': `上下文窗口 ${idx + 1}`,
+                    onChange: (e) => updateOptionField(model.id, 'contextWindow', e.target.value),
+                  }),
+                  h('span', { style: contextInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 } : muted },
+                    contextInvalid ? '请输入正整数或 K/M 容量值（如 128K、1M）' : '输入数字或 K/M，如 128K、256K、1M'),
+                ),
+                h('label', { style: fieldLabel },
+                  h('span', { style: { fontWeight: 500, fontSize: 13 } }, '最大输出 Token (Max Tokens)'),
+                  h('input', {
+                    type: 'text',
+                    style: inputStyle,
+                    placeholder: formatCapacity(model.maxTokens ?? 4096),
+                    value: opt.maxTokens ?? '',
+                    'aria-label': `最大输出 Token ${idx + 1}`,
+                    onChange: (e) => updateOptionField(model.id, 'maxTokens', e.target.value),
+                  }),
+                  h('span', { style: maxTokensInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 } : muted },
+                    maxTokensInvalid ? '请输入正整数或 K/M 容量值（如 8K、32K）' : '留空使用网关默认上限；支持 8K、32K、64K'),
+                ),
+              ),
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                h('span', { style: { fontWeight: 500, fontSize: 13 } }, '输入模态与能力'),
+                h('div', { className: 'fiam-checkbox-group' },
+                  h('label', { className: 'fiam-checkbox-item' },
+                    h('input', { type: 'checkbox', checked: true, disabled: true }),
+                    h('span', null, '文本 (Text)')
+                  ),
+                  h('label', { className: 'fiam-checkbox-item' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: hasImage,
+                      'aria-label': `图片输入模态 ${idx + 1}`,
+                      onChange: (e) => {
+                        const checked = e.target.checked;
+                        const next = checked ? ['text', 'image'] : ['text'];
+                        updateOptionField(model.id, 'inputModalities', next);
+                      },
+                    }),
+                    h('span', null, '图片附件 (Vision / Image)')
+                  ),
+                ),
+              ),
+              h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                h('span', { style: { fontWeight: 500, fontSize: 13 } }, '推理强度等级 (Reasoning Effort)'),
+                h('div', { className: 'fiam-reasoning-chips' },
+                  ...['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'all'].map(level => {
+                    const enabledKeys = opt.reasoningEfforts
+                      ? Object.keys(opt.reasoningEfforts).filter(k => k !== 'off' && opt.reasoningEfforts[k])
+                      : [];
+                    const activeLevel = enabledKeys.length > 1
+                      ? 'all'
+                      : (enabledKeys[0] || 'off');
+                    const isSelected = activeLevel === level;
+                    const labelMap = {
+                      off: '关闭推理 (Off)',
+                      minimal: '最省 (Minimal)',
+                      low: '轻度 (Low)',
+                      medium: '中度 (Medium)',
+                      high: '深度思考 (High)',
+                      xhigh: '更深 (XHigh)',
+                      max: '极限 (Max)',
+                      all: '多档可调 (Low/Medium/High)',
+                    };
+                    return h('button', {
+                      key: level,
+                      type: 'button',
+                      className: `fiam-chip ${isSelected ? 'fiam-chip-active' : ''}`,
+                      onClick: () => {
+                        if (level === 'off') {
+                          updateOptionField(model.id, 'reasoningEfforts', undefined);
+                        } else if (level === 'all') {
+                          updateOptionField(model.id, 'reasoningEfforts', { off: null, low: 'low', medium: 'medium', high: 'high' });
+                        } else {
+                          updateOptionField(model.id, 'reasoningEfforts', { off: null, [level]: level });
+                        }
+                      },
+                    }, labelMap[level]);
+                  })
+                ),
+                h('span', { style: muted }, '开启后在对话输入框可切换思考强度（适用于支持 reasoning_effort 的模型）'),
+              ),
+              h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 } },
+                hasCustom
+                  ? h('button', {
+                      type: 'button',
+                      style: { ...secondaryButton, minHeight: 26, fontSize: 12 },
+                      onClick: () => resetModelOption(model.id),
+                    }, '恢复默认参数')
+                  : null,
+                isEnabled
+                  ? h('button', {
+                      type: 'button',
+                      style: { ...secondaryButton, minHeight: 26, fontSize: 12 },
+                      'aria-label': `停用 ${model.id}`,
+                      onClick: () => disableModelOption(model.id),
+                    }, '停用模型')
+                  : h('button', {
+                      type: 'button',
+                      className: 'forge-iam-primary',
+                      style: { ...primaryButton, minHeight: 26, fontSize: 12 },
+                      'aria-label': `启用 ${model.id}`,
+                      onClick: () => enableModelOption(model.id),
+                    }, '启用模型')
+              )
+            )
+          : null
+      );
+    }
+
+    function renderModelsCard(ctx) {
+      const {
+        h, view, modelList, visibleModels, customModelCount, enabledCount, modelOptions, expandedModels,
+        modelQuery, setModelQuery, modelFilter, setModelFilter, toggleModelExpand, updateOptionField, resetModelOption,
+        disableModelOption, enableModelOption, saveModelOptions, refreshModels, modelSaving, modelNotice, credential, viewBarrier, gateway,
+        fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
+      } = ctx;
+      return h('section', { className: 'fiam-card', 'aria-label': '企业模型' },
+        h('div', { className: 'fiam-card-header' },
+          h('div', { className: 'fiam-card-title-group' },
+            h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent)', color: 'var(--dsw-alias-state-business-primary)' } },
+              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+                h('rect', { x: 3, y: 3, width: 14, height: 14, rx: 2 }),
+                h('path', { d: 'M7 8h6M7 12h4' })
+              )
+            ),
+            h('div', null,
+              h('div', { className: 'fiam-card-title' }, '企业模型设置'),
+              h('div', { className: 'fiam-card-subtitle' }, view.modelAccess?.configured
+                ? `网关目录同步（共 ${modelList.length} 个模型，已启用 ${enabledCount} 个${customModelCount > 0 ? `，已个性化 ${customModelCount} 个` : ''}）`
+                : '配置网关地址和凭证后自动同步可用模型'),
+            ),
+          ),
+          view.modelAccess?.state === 'ready'
+            ? h('span', { className: 'fiam-badge fiam-badge-success' },
+                h('span', { className: 'fiam-badge-dot' }),
+                `已同步 ${modelList.length} 个模型`
+              )
+            : null,
+        ),
+        h('p', { style: muted }, view.modelAccess?.configured
+          ? '企业模型目录实时通过网关 /v1/models 获取并按模型族排序。只有已启用并保存的模型才会出现在对话的模型选择里；首次同步会自动启用列表中的第一个模型，其余模型需要您手动启用。展开模型可配置显示名称、上下文窗口、最大输出 Token、图片模态与推理强度等级。'
+          : '请先在上方设置网关地址和个人 Key。保存后将自动获取授权模型。'),
+        view.modelAccess?.configured && modelList.length > 0
+          ? h('div', { className: 'fiam-model-toolbar' },
+              h('input', {
+                type: 'search',
+                className: 'fiam-model-search',
+                style: { ...inputStyle, minHeight: 32, fontSize: 13 },
+                placeholder: '搜索模型名称或 ID…',
+                'aria-label': '搜索模型',
+                value: modelQuery,
+                onChange: (e) => setModelQuery(e.target.value),
+              }),
+              h('div', { className: 'fiam-model-filters' },
+                h('button', {
+                  type: 'button',
+                  className: `fiam-chip ${modelFilter === 'all' ? 'fiam-chip-active' : ''}`,
+                  onClick: () => setModelFilter('all'),
+                }, `全部 (${modelList.length})`),
+                h('button', {
+                  type: 'button',
+                  className: `fiam-chip ${modelFilter === 'enabled' ? 'fiam-chip-active' : ''}`,
+                  onClick: () => setModelFilter('enabled'),
+                }, `已启用 (${enabledCount})`),
+                h('button', {
+                  type: 'button',
+                  className: `fiam-chip ${modelFilter === 'custom' ? 'fiam-chip-active' : ''}`,
+                  onClick: () => setModelFilter('custom'),
+                }, `已个性化 (${customModelCount})`),
+              )
+            )
+          : null,
+        view.modelAccess?.configured && modelList.length > 0
+          ? h('div', { className: 'fiam-model-list', 'aria-label': '企业预置模型' },
+              ...(visibleModels.length === 0
+                ? [h('div', { key: 'empty-filter', style: { ...muted, padding: '16px 12px', textAlign: 'center' } }, '没有匹配的模型，请调整搜索词或筛选条件。')]
+                : visibleModels.map((model, idx) => {
+                const opt = modelOptions[model.id] || {};
+                const isExpanded = Boolean(expandedModels[model.id]);
+                return renderModelItem({
+                  h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
+                  resetModelOption, disableModelOption, enableModelOption, view,
+                  fieldLabel, inputStyle, secondaryButton, muted,
+                });
+              }))
+            )
+          : null,
+        view.modelAccess?.state === 'loading' ? h('p', { role: 'status', style: muted }, '正在获取模型列表…') : null,
+        view.modelAccess?.state === 'ready' && !modelList.length
+          ? h('p', { role: 'status', style: muted }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
+        view.modelAccess?.error ? h('p', { role: 'status', style: muted }, errorNotice(view.modelAccess.error)) : null,
+        h('div', { className: 'fiam-actions' },
+          h('button', {
+            type: 'button',
+            style: secondaryButton,
+            disabled: credential.saving || modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
+            onClick: refreshModels,
+          }, credential.saving ? '正在处理…' : '刷新模型列表'),
+          h('button', {
+            type: 'button',
+            className: 'forge-iam-primary',
+            style: primaryButton,
+            disabled: modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
+            onClick: saveModelOptions,
+          }, modelSaving ? '正在保存…' : '保存模型配置'),
+        ),
+        modelNotice
+          ? h('div', {
+              role: 'status',
+              'aria-live': 'polite',
+              className: `fiam-notice fiam-notice-${modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') ? 'success' : 'warn'}`,
+            }, modelNotice)
+          : null,
+        h('p', { style: { ...muted, marginTop: 12 } }, view.state !== 'ready' ? '下一步：登录企业账号。'
+          : gateway.state !== 'configured' || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人凭证。'
+          : '保存模型精细化配置后本地立即生效。在对话窗口可直接选用各模型；实际可用权限以企业网关授权为准。'),
+      );
+    }
+
     function Panel() {
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
       const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
-      const [modelOptions, setModelOptions] = React.useState(() => {
-        try {
-          const raw = window.localStorage.getItem('forge-iam.model-options.v1');
-          return raw ? JSON.parse(raw) : {};
-        } catch { return {}; }
-      });
+      const [modelOptions, setModelOptions] = React.useState(readModelOptions());
       const [expandedModels, setExpandedModels] = React.useState({});
+      const [modelQuery, setModelQuery] = React.useState('');
+      const [modelFilter, setModelFilter] = React.useState('all');
       const [modelSaving, setModelSaving] = React.useState(false);
       const [modelNotice, setModelNotice] = React.useState(null);
 
@@ -609,13 +1337,26 @@ window.__ModuleLoader__.load({
         });
       };
 
+      // Clearing the overrides must not disable the model: it stays enabled with
+      // catalogue defaults, so "back to defaults" never silently breaks a chat.
       const resetModelOption = (id) => {
+        setModelOptions(prev => ({ ...prev, [id]: {} }));
+        setModelNotice(`已恢复 ${id} 的默认参数（仍启用），保存后生效。`);
+      };
+
+      const enableModelOption = (id) => {
+        setModelOptions(prev => (Object.hasOwn(prev, id) ? prev : { ...prev, [id]: {} }));
+        setModelNotice(`已启用 ${id}，保存后可用于对话。`);
+      };
+
+      const disableModelOption = (id) => {
         setModelOptions(prev => {
+          if (!Object.hasOwn(prev, id)) return prev;
           const next = { ...prev };
           delete next[id];
           return next;
         });
-        setModelNotice(`已恢复 ${id} 为默认配置，保存后生效。`);
+        setModelNotice(`已停用 ${id}，保存后不再出现在模型选择中。`);
       };
 
       const saveModelOptions = async () => {
@@ -629,7 +1370,9 @@ window.__ModuleLoader__.load({
             setModelNotice(errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'));
             return;
           }
-          setModelNotice('模型精细化配置已保存并生效。');
+          setModelNotice(result.body?.persisted === false
+            ? '模型配置已在本机生效，但未能写入持久存储，重启后需重新保存。'
+            : '模型精细化配置已保存并生效。');
           if (isViewCurrent(viewBarrier.current.epoch)) {
             setState(current => ({ ...current, view: result.body?.view ?? current.view }));
           }
@@ -650,6 +1393,25 @@ window.__ModuleLoader__.load({
       }, []);
       const isViewCurrent = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
 
+      // The signed-in Host owns the selection, including an explicitly empty
+      // set. A browser cache must never restore another account's old choices.
+      const optionsSync = React.useRef({ signature: null });
+      const syncModelOptions = React.useCallback(async (nextView) => {
+        const access = nextView?.modelAccess;
+        if (nextView?.state !== 'ready') {
+          optionsSync.current.signature = null;
+          setModelOptions({});
+          return;
+        }
+        if (access?.state !== 'ready' || !access.modelOptions || typeof access.modelOptions !== 'object' || Array.isArray(access.modelOptions)) return;
+        const hostOptions = access.modelOptions;
+        const signature = JSON.stringify([nextView.subject ?? nextView.principal, hostOptions]);
+        if (optionsSync.current.signature === signature) return;
+        optionsSync.current.signature = signature;
+        setModelOptions(hostOptions);
+        try { window.localStorage.setItem('forge-iam.model-options.v1', JSON.stringify(hostOptions)); } catch {}
+      }, []);
+
       const load = React.useCallback(async () => {
         if (viewBarrier.current.pending) return;
         const epoch = viewBarrier.current.epoch;
@@ -658,6 +1420,7 @@ window.__ModuleLoader__.load({
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
           if (view?.state !== 'authenticating') linkIdentity.current = null;
           setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }) }));
+          void syncModelOptions(view);
         } catch (error) {
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
           linkIdentity.current = null;
@@ -673,6 +1436,7 @@ window.__ModuleLoader__.load({
           ...current, phase: 'ready', view, error: null,
           ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
         }));
+        void syncModelOptions(view);
       }, viewBarrier);
 
       const login = async () => {
@@ -937,340 +1701,280 @@ window.__ModuleLoader__.load({
             '凭证未使用系统安全存储，请联系管理员。')
         : null;
 
-      const accountCard = h('div', { className: 'fiam-card' },
-        h('div', { className: 'fiam-card-header' },
-          h('div', { className: 'fiam-card-title-group' },
-            h('div', { className: 'fiam-avatar' },
-              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
-                h('path', { d: 'M16 17v-1.5a3.5 3.5 0 0 0-3.5-3.5h-5A3.5 3.5 0 0 0 4 15.5V17' }),
-                h('circle', { cx: 10, cy: 7, r: 3 })
-              )
-            ),
-            h('div', null,
-              h('div', { className: 'fiam-card-title' }, view.state === 'ready' && view.principal ? view.principal : '企业账号认证'),
-              h('div', { className: 'fiam-card-subtitle' }, view.state === 'ready' ? '已绑定企业 OIDC 身份' : '单点登录至企业账号'),
-            ),
-          ),
-          h('span', { className: `fiam-badge fiam-badge-${statusBadgeClass(view.state)}` },
-            h('span', { className: 'fiam-badge-dot' }),
-            label,
-          ),
-        ),
-        (view.principal || view.accessExpiresAt) ? h('div', { style: { padding: '10px 14px', background: 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.02))', borderRadius: 'var(--dsw-radius-sm)', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 4 } },
-          principal,
-          expiry,
-        ) : null,
-        missing,
-        exclusive,
-        hostError,
-        notice,
-        loginLink,
-        view.state === 'authenticating' && !state.authorizationUrl
-          ? h('div', { className: 'fiam-callout' }, '请在浏览器中完成登录；如果无法继续，请取消后重试。') : null,
-        h('div', { className: 'fiam-actions' },
-          view.canSignIn ? h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: login }, '登录企业账号') : null,
-          view.state === 'authenticating' ? h('button', { type: 'button', style: button, onClick: cancelLogin }, '取消登录') : null,
-          h('button', { type: 'button', style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
-          view.canSignOut ? h('button', { type: 'button', style: button, onClick: signOut }, '退出') : null,
-          state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
-            ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
-          h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
-        ),
-        copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
-          ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
+      const rawModelList = view.modelAccess?.models ?? [];
+      const modelList = [...rawModelList].sort((a, b) =>
+        String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' })
       );
+      const enabledCount = modelList.filter(m => Object.hasOwn(modelOptions, m.id)).length;
+      const customModelCount = modelList.filter(m => modelOptions[m.id] && Object.keys(modelOptions[m.id]).length > 0).length;
+      const normalizedQuery = modelQuery.trim().toLowerCase();
+      const visibleModels = modelList.filter(m => {
+        const opt = modelOptions[m.id] || {};
+        const hasCustom = Object.keys(opt).length > 0;
+        if (modelFilter === 'enabled' && !Object.hasOwn(modelOptions, m.id)) return false;
+        if (modelFilter === 'custom' && !hasCustom) return false;
+        if (!normalizedQuery) return true;
+        const displayName = String(opt.name || m.name || m.id).toLowerCase();
+        return String(m.id).toLowerCase().includes(normalizedQuery) || displayName.includes(normalizedQuery);
+      });
 
-      const gatewayCard = h('div', { className: 'fiam-card' },
-        h('div', { className: 'fiam-card-header' },
-          h('div', { className: 'fiam-card-title-group' },
-            h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent)', color: 'var(--dsw-alias-state-business-primary)' } },
-              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
-                h('path', { d: 'M10 2s6 2.5 6 7c0 4.5-3.5 7.5-6 9-2.5-1.5-6-4.5-6-9 0-4.5 6-7 6-7Z' }),
-                h('path', { d: 'm7.5 10 2 2 3.5-3.5' })
-              )
-            ),
-            h('div', null,
-              h('div', { className: 'fiam-card-title' }, '模型使用凭证'),
-              h('div', { className: 'fiam-card-subtitle' }, '配置用于大模型请求的 UAG 凭证'),
-            ),
-          ),
-          h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gateway.state)}` },
-            h('span', { className: 'fiam-badge-dot' }),
-            `UAG 个人凭证：${gatewayStatus}`,
-          ),
-        ),
-        h('label', { style: fieldLabel },
-          h('span', null, '网关地址'),
-          h('input', { type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
-            value: credential.baseURL ?? gateway.baseURL ?? view.modelAccess?.baseURL ?? '',
-            placeholder: 'https://gateway.example/v1', disabled: credential.saving || viewBarrier.current.pending,
-            onChange: (event) => setCredential((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle }),
-          h('span', { style: muted }, '填写网关提供的地址；修改地址时请重新输入对应的个人 Key。'),
-        ),
-        credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? ''))
-          ? h('p', { role: 'status', style: muted }, '有未保存的更改。保存后将重新获取模型列表。') : null,
-        gatewayDetails.length ? h('div', { style: { ...muted, marginBottom: 8 } }, gatewayDetails.join(' · ')) : null,
-        storageWarning,
-        h('div', { className: 'fiam-callout' },
-          h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
-            h('circle', { cx: 8, cy: 8, r: 6 }),
-            h('path', { d: 'M8 7v4m0-6h.01' })
-          ),
-          h('div', null,
-            gateway.state === 'configured'
-              ? 'UAG 个人凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
-              : gateway.state === 'unknown'
-                ? '网关凭据状态尚未确认，请刷新核实。'
-                : gateway.state === 'unconfigured'
-                  ? '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'
-                  : '请先核对现有凭证；如有疑问，请联系管理员。',
-            gateway.state === 'unconfigured' && view.gatewayConsoleUrl
-              ? h('div', { style: { marginTop: 4 } },
-                  h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据 ↗')
-                )
-              : null
-          )
-        ),
-        h('div', { style: { marginTop: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
-          h('label', { style: { ...fieldLabel, flex: '2 1 240px' } },
-            h('span', { style: { fontWeight: 500, fontSize: 13 } }, 'UAG 个人凭证'),
-            h('input', {
-              type: 'password',
-              value: credential.value,
-              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴 UAG 个人凭证',
-              'aria-label': 'UAG 个人凭证',
-              autoComplete: 'off',
-              spellCheck: false,
-              disabled: credential.saving || viewBarrier.current.pending,
-              onChange: (event) => setCredential((current) => ({ ...current, value: event.target.value })),
-              style: inputStyle,
-            })
-          ),
-          h('label', { style: { ...fieldLabel, flex: '1 1 150px' } },
-            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '设备标签（可选）'),
-            h('input', {
-              type: 'text',
-              value: credential.deviceLabel,
-              placeholder: '设备标签（可选）',
-              'aria-label': '设备标签',
-              maxLength: 64,
-              disabled: credential.saving || viewBarrier.current.pending,
-              onChange: (event) => setCredential((current) => ({ ...current, deviceLabel: event.target.value })),
-              style: inputStyle,
-            })
-          ),
-        ),
-        h('div', { className: 'fiam-actions' },
-          h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: saveCredential }, credential.saving ? '正在处理…' : '保存凭据'),
-          (gateway.state !== 'unconfigured' && gateway.state !== 'unknown') || credential.value
-            ? h('button', { type: 'button', style: secondaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: clearCredential }, '清除凭据')
-            : null,
-        ),
-        credential.notice
-          ? h('div', {
-              role: 'status',
-              'aria-live': 'polite',
-              className: `fiam-notice fiam-notice-${credential.notice.includes('已保存') || credential.notice.includes('已清除') ? 'success' : 'warn'}`,
-            }, credential.notice)
-          : null,
-      );
+      const accountCard = renderAccountCard({
+        h, view, label, muted, principal, expiry, missing, exclusive, hostError, notice, loginLink,
+        state, primaryButton, secondaryButton, button, copy, copyTools,
+        login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity,
+      });
 
-      const modelList = view.modelAccess?.models ?? [];
-      const modelsCard = h('section', { className: 'fiam-card', 'aria-label': '企业模型' },
-        h('div', { className: 'fiam-card-header' },
-          h('div', { className: 'fiam-card-title-group' },
-            h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent)', color: 'var(--dsw-alias-state-business-primary)' } },
-              h('svg', { viewBox: '0 0 20 20', width: 20, height: 20, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
-                h('rect', { x: 3, y: 3, width: 14, height: 14, rx: 2 }),
-                h('path', { d: 'M7 8h6M7 12h4' })
-              )
-            ),
-            h('div', null,
-              h('div', { className: 'fiam-card-title' }, '企业模型设置'),
-              h('div', { className: 'fiam-card-subtitle' }, view.modelAccess?.configured
-                ? `网关目录同步（共 ${modelList.length} 个模型可用）`
-                : '配置网关地址和凭证后自动同步可用模型'),
-            ),
-          ),
-          view.modelAccess?.state === 'ready'
-            ? h('span', { className: 'fiam-badge fiam-badge-success' },
-                h('span', { className: 'fiam-badge-dot' }),
-                `已同步 ${modelList.length} 个模型`
-              )
-            : null,
-        ),
-        h('p', { style: muted }, view.modelAccess?.configured
-          ? '企业模型目录实时通过网关 /v1/models 获取。您可在下方对单个模型微调上下文窗口、Token 限制以及开启图片模态，个性化配置仅保存在本地设备。'
-          : '请先在上方设置网关地址和个人 Key。保存后将自动获取授权模型。'),
-        view.modelAccess?.configured && modelList.length > 0
-          ? h('div', { className: 'fiam-model-list', 'aria-label': '企业预置模型' },
-              ...modelList.map((model, idx) => {
-                const opt = modelOptions[model.id] || {};
-                const isExpanded = Boolean(expandedModels[model.id]);
-                const displayName = opt.name || model.name || model.id;
-                const contextVal = opt.contextWindow !== undefined ? opt.contextWindow : formatCapacity(model.contextWindow ?? 32768);
-                const maxTokensVal = opt.maxTokens !== undefined ? opt.maxTokens : formatCapacity(model.maxTokens ?? 4096);
-                const currentModalities = Array.isArray(opt.inputModalities) ? opt.inputModalities : (model.inputModalities ?? ['text']);
-                const hasImage = currentModalities.includes('image');
-                const hasReasoning = Boolean(opt.reasoningEfforts && Object.keys(opt.reasoningEfforts).length > 0) || Boolean(model.reasoningEfforts);
-                const hasCustom = Boolean(modelOptions[model.id] && Object.keys(modelOptions[model.id]).length > 0);
+      const gatewayCard = renderGatewayCard({
+        h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
+        credential, setCredential, fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
+        saveCredential, clearCredential, viewBarrier,
+      });
 
-                return h('div', { key: model.id, className: 'fiam-model-item' },
-                  h('div', { className: 'fiam-model-row' },
-                    h('div', { className: 'fiam-model-info' },
-                      h('span', { className: 'fiam-model-name' }, displayName),
-                      h('span', { className: 'fiam-model-id' }, model.id),
-                      h('span', { className: 'fiam-badge' }, `${contextVal} 上下文`),
-                      hasImage ? h('span', { className: 'fiam-badge fiam-badge-success' }, '视觉图片') : null,
-                      hasReasoning ? h('span', { className: 'fiam-badge fiam-badge-authenticating' }, '深度推理') : null,
-                      hasCustom ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '已个性化') : null,
-                    ),
-                    h('button', {
-                      type: 'button',
-                      style: { ...secondaryButton, minHeight: 26, padding: '0 8px', fontSize: 12 },
-                      'aria-expanded': isExpanded,
-                      'aria-label': `配置 ${model.id}`,
-                      onClick: () => toggleModelExpand(model.id),
-                    }, isExpanded ? '收起配置 ▲' : '精细配置 ▼')
-                  ),
-                  isExpanded
-                    ? h('div', { className: 'fiam-model-advanced' },
-                        h('div', { className: 'fiam-field-grid' },
-                          h('label', { style: fieldLabel },
-                            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '显示名称'),
-                            h('input', {
-                              type: 'text',
-                              style: inputStyle,
-                              placeholder: model.id,
-                              value: opt.name ?? '',
-                              'aria-label': `显示名称 ${idx + 1}`,
-                              onChange: (e) => updateOptionField(model.id, 'name', e.target.value),
-                            }),
-                            h('span', { style: muted }, '留空时使用模型 ID'),
-                          ),
-                          h('label', { style: fieldLabel },
-                            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '上下文窗口 (Context Window)'),
-                            h('input', {
-                              type: 'text',
-                              style: inputStyle,
-                              placeholder: formatCapacity(model.contextWindow ?? 32768),
-                              value: opt.contextWindow ?? '',
-                              'aria-label': `上下文窗口 ${idx + 1}`,
-                              onChange: (e) => updateOptionField(model.id, 'contextWindow', e.target.value),
-                            }),
-                            h('span', { style: muted }, '输入数字或 K/M，如 128K、131072'),
-                          ),
-                          h('label', { style: fieldLabel },
-                            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '最大输出 Token (Max Tokens)'),
-                            h('input', {
-                              type: 'text',
-                              style: inputStyle,
-                              placeholder: formatCapacity(model.maxTokens ?? 4096),
-                              value: opt.maxTokens ?? '',
-                              'aria-label': `最大输出 Token ${idx + 1}`,
-                              onChange: (e) => updateOptionField(model.id, 'maxTokens', e.target.value),
-                            }),
-                            h('span', { style: muted }, '输入数字或 K，如 8192、8K'),
-                          ),
-                        ),
-                        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                          h('span', { style: { fontWeight: 500, fontSize: 13 } }, '输入模态与能力'),
-                          h('div', { className: 'fiam-checkbox-group' },
-                            h('label', { className: 'fiam-checkbox-item' },
-                              h('input', { type: 'checkbox', checked: true, disabled: true }),
-                              h('span', null, '文本 (Text)')
-                            ),
-                            h('label', { className: 'fiam-checkbox-item' },
-                              h('input', {
-                                type: 'checkbox',
-                                checked: hasImage,
-                                'aria-label': `图片输入模态 ${idx + 1}`,
-                                onChange: (e) => {
-                                  const checked = e.target.checked;
-                                  const next = checked ? ['text', 'image'] : ['text'];
-                                  updateOptionField(model.id, 'inputModalities', next);
-                                },
-                              }),
-                              h('span', null, '图片附件 (Vision / Image)')
-                            ),
-                          ),
-                        ),
-                        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-                          h('span', { style: { fontWeight: 500, fontSize: 13 } }, '推理强度等级 (Reasoning Effort)'),
-                          h('div', { className: 'fiam-reasoning-chips' },
-                            ...['off', 'low', 'medium', 'high'].map(level => {
-                              const activeLevel = opt.reasoningEfforts
-                                ? (Object.keys(opt.reasoningEfforts).find(k => k !== 'off') || 'off')
-                                : 'off';
-                              const isSelected = activeLevel === level;
-                              const labelMap = { off: '关闭推理 (Off)', low: '轻度 (Low)', medium: '中度 (Medium)', high: '深度思考 (High)' };
-                              return h('button', {
-                                key: level,
-                                type: 'button',
-                                className: `fiam-chip ${isSelected ? 'fiam-chip-active' : ''}`,
-                                onClick: () => {
-                                  if (level === 'off') {
-                                    updateOptionField(model.id, 'reasoningEfforts', undefined);
-                                  } else {
-                                    updateOptionField(model.id, 'reasoningEfforts', { off: null, [level]: level });
-                                  }
-                                },
-                              }, labelMap[level]);
-                            })
-                          ),
-                          h('span', { style: muted }, '适用于支持显式思考过程的模型（如 DeepSeek-R1、o1 等）'),
-                        ),
-                        h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 } },
-                          hasCustom
-                            ? h('button', {
-                                type: 'button',
-                                style: { ...secondaryButton, minHeight: 26, fontSize: 12 },
-                                onClick: () => resetModelOption(model.id),
-                              }, '恢复默认')
-                            : null
-                        )
-                      )
-                    : null
-                );
-              })
-            )
-          : null,
-        view.modelAccess?.state === 'loading' ? h('p', { role: 'status', style: muted }, '正在获取模型列表…') : null,
-        view.modelAccess?.state === 'ready' && !modelList.length
-          ? h('p', { role: 'status', style: muted }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
-        view.modelAccess?.error ? h('p', { role: 'status', style: muted }, errorNotice(view.modelAccess.error)) : null,
-        h('div', { className: 'fiam-actions' },
-          h('button', {
-            type: 'button',
-            style: secondaryButton,
-            disabled: credential.saving || modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
-            onClick: refreshModels,
-          }, credential.saving ? '正在处理…' : '刷新模型列表'),
-          h('button', {
-            type: 'button',
-            className: 'forge-iam-primary',
-            style: primaryButton,
-            disabled: modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
-            onClick: saveModelOptions,
-          }, modelSaving ? '正在保存…' : '保存模型配置'),
-        ),
-        modelNotice
-          ? h('div', {
-              role: 'status',
-              'aria-live': 'polite',
-              className: `fiam-notice fiam-notice-${modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') ? 'success' : 'warn'}`,
-            }, modelNotice)
-          : null,
-        h('p', { style: { ...muted, marginTop: 12 } }, view.state !== 'ready' ? '下一步：登录企业账号。'
-          : gateway.state !== 'configured' || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人凭证。'
-          : '保存模型精细化配置后本地立即生效。在对话窗口可直接选用各模型；实际可用权限以企业网关授权为准。'),
-      );
+      const modelsCard = renderModelsCard({
+        h, view, modelList, visibleModels, customModelCount, enabledCount, modelOptions, expandedModels,
+        modelQuery, setModelQuery, modelFilter, setModelFilter, toggleModelExpand, updateOptionField, resetModelOption,
+        disableModelOption, enableModelOption, saveModelOptions, refreshModels, modelSaving, modelNotice, credential, viewBarrier, gateway,
+        fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
+      });
 
       return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
         header,
         accountCard,
         gatewayCard,
         modelsCard,
+      );
+    }
+
+    function IamLauncherMenu(props) {
+      const { view, status, onCopyDiagnostics, onSignOut, confirmSignOut, signingOut, notice, openSettings, onClose } = props;
+      const isSignedIn = view?.state === 'ready';
+      const gwState = view?.gatewayCredential?.state ?? 'unconfigured';
+      const gwConfigured = gwState === 'configured';
+
+      let accessExpireText = '—';
+      if (typeof view?.accessExpiresInSeconds === 'number' && view.accessExpiresInSeconds > 0) {
+        const mins = Math.round(view.accessExpiresInSeconds / 60);
+        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将刷新';
+      }
+
+      return h('div', {
+        className: 'fiam-launcher-menu forge-iam-ui',
+        role: 'dialog',
+        'aria-label': '企业身份与控制台',
+        onClick: (e) => e.stopPropagation(),
+      },
+        interactionStyle(),
+        h('div', { className: 'fiam-launcher-menu-section' },
+          h('div', { style: { fontWeight: 600, fontSize: 'var(--dsw-font-xs-13)', color: 'var(--dsw-alias-label-primary)', marginBottom: 6 } }, '企业 IAM 员工身份'),
+          h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '员工工号'),
+            h('span', { className: 'fiam-launcher-menu-value' }, view?.subject || '未登录'),
+          ),
+          view?.issuer ? h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '认证中心'),
+            h('span', { className: 'fiam-launcher-menu-value', title: view.issuer }, view.issuer),
+          ) : null,
+          isSignedIn ? h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '访问令牌'),
+            h('span', { className: 'fiam-launcher-menu-value' }, accessExpireText),
+          ) : null,
+        ),
+        h('div', { className: 'fiam-launcher-menu-section' },
+          h('div', { style: { fontWeight: 600, fontSize: 'var(--dsw-font-xs-13)', color: 'var(--dsw-alias-label-primary)', marginBottom: 6 } }, 'UAG 模型网关准入'),
+          h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '个人凭据'),
+            h('span', { className: 'fiam-launcher-menu-value', style: { color: gwConfigured ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)' } },
+              gwConfigured ? '已就绪' : (GATEWAY_STATUS[gwState] || '未录入')
+            ),
+          ),
+          view?.gatewayCredential?.deviceLabel ? h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '设备标签'),
+            h('span', { className: 'fiam-launcher-menu-value' }, view.gatewayCredential.deviceLabel),
+          ) : null,
+          view?.gatewayCredential?.storageBackend ? h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '存储介质'),
+            h('span', { className: 'fiam-launcher-menu-value' }, view.gatewayCredential.storageBackend),
+          ) : null,
+        ),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+          h('button', {
+            type: 'button',
+            className: 'fiam-launcher-menu-item',
+            onClick: () => {
+              onClose();
+              if (openSettings) openSettings();
+            },
+          }, '🛠️ 前往企业账号设置'),
+          h('button', {
+            type: 'button',
+            className: 'fiam-launcher-menu-item',
+            onClick: onCopyDiagnostics,
+          }, '📋 复制脱敏诊断信息'),
+          isSignedIn ? h('button', {
+            type: 'button',
+            className: 'fiam-launcher-menu-item danger',
+            disabled: signingOut,
+            onClick: onSignOut,
+          }, confirmSignOut ? '⚠️ 确认退出当前设备？' : '🚪 安全退出当前设备') : null,
+        ),
+        notice ? h('div', {
+          role: 'status',
+          'aria-live': 'polite',
+          className: 'fiam-notice fiam-notice-success',
+          style: { marginTop: 8, width: '100%', boxSizing: 'border-box', justifyContent: 'center' },
+        }, notice) : null,
+      );
+    }
+
+    function IamLauncher(props) {
+      const { wide, settingsOpen, settingsShortcut, openSettings } = props;
+      const [view, setView] = React.useState(null);
+      const [menuOpen, setMenuOpen] = React.useState(false);
+      const [notice, setNotice] = React.useState(null);
+      const [confirmSignOut, setConfirmSignOut] = React.useState(false);
+      const [signingOut, setSigningOut] = React.useState(false);
+      const rootRef = React.useRef(null);
+
+      React.useEffect(() => {
+        let live = true;
+        fetchView()
+          .then((v) => { if (live) setView(v); })
+          .catch(() => {});
+        return () => { live = false; };
+      }, []);
+
+      useSessionPoll(true, (nextView) => setView(nextView));
+
+      React.useEffect(() => {
+        if (!menuOpen) return undefined;
+        const onDocClick = (e) => {
+          if (rootRef.current && !rootRef.current.contains(e.target)) {
+            setMenuOpen(false);
+            setConfirmSignOut(false);
+          }
+        };
+        const onKey = (e) => {
+          if (e.key === 'Escape') {
+            setMenuOpen(false);
+            setConfirmSignOut(false);
+          }
+        };
+        document.addEventListener('mousedown', onDocClick);
+        document.addEventListener('keydown', onKey);
+        return () => {
+          document.removeEventListener('mousedown', onDocClick);
+          document.removeEventListener('keydown', onKey);
+        };
+      }, [menuOpen]);
+
+      const status = getLauncherStatus(view);
+      const isSignedIn = view?.state === 'ready';
+
+      const handleMainClick = (e) => {
+        e.stopPropagation();
+        if (!isSignedIn) {
+          const popup = openLoginWindow();
+          postJson('/api/forge-iam/sign-in')
+            .then((result) => {
+              if (!result.ok) {
+                try { popup?.close(); } catch {}
+                return;
+              }
+              const authorizationUrl = result.body?.authorizationUrl ?? null;
+              navigateLoginWindow(popup, authorizationUrl);
+            })
+            .catch(() => {
+              try { popup?.close(); } catch {}
+            });
+          return;
+        }
+        setMenuOpen((current) => !current);
+        setConfirmSignOut(false);
+      };
+
+      const onCopyDiagnostics = async (e) => {
+        e?.stopPropagation();
+        const payload = diagnosticSnapshot({ phase: 'ready', view });
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+          setNotice('脱敏诊断信息已复制');
+          setTimeout(() => setNotice(null), 2500);
+        } catch {
+          setNotice('复制失败');
+          setTimeout(() => setNotice(null), 2000);
+        }
+      };
+
+      const onSignOut = async (e) => {
+        e?.stopPropagation();
+        if (!confirmSignOut) {
+          setConfirmSignOut(true);
+          return;
+        }
+        setSigningOut(true);
+        try {
+          const result = await postJson('/api/forge-iam/sign-out');
+          if (result.ok) {
+            setView(result.body?.view ?? null);
+            setMenuOpen(false);
+            setConfirmSignOut(false);
+          }
+        } catch {}
+        finally {
+          setSigningOut(false);
+        }
+      };
+
+      const rootClassName = `fiam-launcher-root forge-iam-ui${wide ? '' : ' fiam-launcher-rail'}`;
+
+      return h('div', {
+        ref: rootRef,
+        className: rootClassName,
+      },
+        interactionStyle(),
+        h('button', {
+          type: 'button',
+          className: 'fiam-launcher-btn',
+          title: status.tooltip,
+          'aria-label': status.tooltip,
+          'aria-haspopup': isSignedIn ? 'dialog' : undefined,
+          'aria-expanded': isSignedIn ? menuOpen : undefined,
+          onClick: handleMainClick,
+        },
+          h('div', { className: 'fiam-launcher-avatar-wrap' },
+            h(IamShieldIcon, { size: wide ? 18 : 20, grayscale: !isSignedIn }),
+            h('span', { className: `fiam-launcher-dot ${status.dotClass}` }),
+          ),
+          wide ? h('div', { className: 'fiam-launcher-details' },
+            h('span', { className: 'fiam-launcher-title' }, isSignedIn ? (view.subject || '企业账号') : '企业账号'),
+            h('span', { className: 'fiam-launcher-subtitle' }, status.label),
+          ) : null,
+        ),
+        wide ? h('button', {
+          type: 'button',
+          className: 'fiam-launcher-gear',
+          'aria-label': '设置',
+          'aria-keyshortcuts': settingsShortcut?.aria,
+          'aria-haspopup': 'dialog',
+          'aria-expanded': settingsOpen,
+          onClick: (e) => {
+            e.stopPropagation();
+            if (openSettings) openSettings();
+          },
+        },
+          h(GearIcon, { size: 16 }),
+        ) : null,
+        menuOpen ? h(IamLauncherMenu, {
+          view,
+          status,
+          onCopyDiagnostics,
+          onSignOut,
+          confirmSignOut,
+          signingOut,
+          notice,
+          openSettings,
+          onClose: () => setMenuOpen(false),
+        }) : null,
       );
     }
 
@@ -1392,6 +2096,60 @@ window.__ModuleLoader__.load({
         : null,
       state.notice ? h('span', { role: 'status', 'aria-live': 'polite', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
       );
+    }
+
+    function renderOnboardingStepDetail(ctx) {
+      const { h, state, setState, fieldLabel, inputStyle } = ctx;
+      if (state.step === 3 && state.view?.modelAccess?.models?.length) {
+        return h('div', { style: { marginTop: 14 } },
+          h('div', { style: { fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--dsw-alias-label-primary)' } },
+            `已连接企业网关可用模型（共 ${state.view.modelAccess.models.length} 个）：`),
+          h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 160, overflowY: 'auto' } },
+            ...[...state.view.modelAccess.models]
+              .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' }))
+              .map((m) => h('span', { key: m.id, className: 'fiam-badge fiam-badge-success' }, m.name || m.id))
+          )
+        );
+      }
+      if (state.step === 2) {
+        return h('div', { style: { marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 } },
+          h('label', { style: fieldLabel },
+            h('span', null, '网关地址'),
+            h('input', {
+              type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
+              value: state.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '',
+              placeholder: 'https://gateway.example/v1', disabled: state.saving,
+              onChange: (event) => setState((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle,
+            }),
+          ),
+          h('label', { style: fieldLabel }, 'UAG 个人凭证', h('input', {
+            type: 'password',
+            value: state.keyValue,
+            placeholder: '输入网关提供的个人 Key',
+            'aria-label': 'UAG 个人凭证',
+            autoComplete: 'off',
+            spellCheck: false,
+            disabled: state.saving,
+            onChange: (event) => setState((current) => ({ ...current, keyValue: event.target.value })),
+            style: inputStyle,
+          })),
+          h('label', { style: fieldLabel }, '设备标签（可选）', h('input', {
+            type: 'text',
+            value: state.deviceLabel,
+            placeholder: '设备标签（可选，例如 工作站-01）',
+            'aria-label': '设备标签',
+            maxLength: 64,
+            disabled: state.saving,
+            onChange: (event) => setState((current) => ({ ...current, deviceLabel: event.target.value })),
+            style: inputStyle,
+          })),
+          state.view?.gatewayConsoleUrl
+            ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据')
+            : null,
+          h('div', { style: { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' } }, '创建时建议开启隐私保护，并设置 90 天有效期。'),
+        );
+      }
+      return null;
     }
 
     function Onboarding() {
@@ -1618,50 +2376,7 @@ window.__ModuleLoader__.load({
             ...['欢迎', '登录', '凭据', '完成'].map((label, index) => h('span', { key: label, style: { flex: 1, color: index === state.step ? 'var(--dsw-alias-label-primary)' : undefined } }, label))),
           h('h2', { style: { margin: '0 0 10px', font: 'var(--dsw-font-l-20)' } }, step.title),
           h('p', { style: { margin: 0, color: 'var(--dsw-alias-label-secondary)', maxWidth: '42em' } }, step.body),
-          state.step === 3 && state.view?.modelAccess?.models?.length
-            ? h('div', { style: { marginTop: 14 } },
-                h('div', { style: { fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--dsw-alias-label-primary)' } }, '已连接企业网关可用模型：'),
-                h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
-                  ...state.view.modelAccess.models.map((m) => h('span', { key: m.id, className: 'fiam-badge fiam-badge-success' }, m.name || m.id))
-                )
-              )
-            : null,
-          state.step === 2
-          ? h('div', { style: { marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 } },
-              h('label', { style: fieldLabel },
-                h('span', null, '网关地址'),
-                h('input', { type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
-                  value: state.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '',
-                  placeholder: 'https://gateway.example/v1', disabled: state.saving,
-                  onChange: (event) => setState((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle }),
-              ),
-              h('label', { style: fieldLabel }, 'UAG 个人凭证', h('input', {
-                  type: 'password',
-                  value: state.keyValue,
-                  placeholder: '输入网关提供的个人 Key',
-                  'aria-label': 'UAG 个人凭证',
-                  autoComplete: 'off',
-                  spellCheck: false,
-                disabled: state.saving,
-                  onChange: (event) => setState((current) => ({ ...current, keyValue: event.target.value })),
-                  style: inputStyle,
-              })),
-              h('label', { style: fieldLabel }, '设备标签（可选）', h('input', {
-                  type: 'text',
-                  value: state.deviceLabel,
-                  placeholder: '设备标签（可选，例如 工作站-01）',
-                  'aria-label': '设备标签',
-                  maxLength: 64,
-                disabled: state.saving,
-                  onChange: (event) => setState((current) => ({ ...current, deviceLabel: event.target.value })),
-                  style: inputStyle,
-              })),
-                state.view?.gatewayConsoleUrl
-                  ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据')
-                  : null,
-                h('div', { style: { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' } }, '创建时建议开启隐私保护，并设置 90 天有效期。'),
-              )
-            : null,
+          renderOnboardingStepDetail({ h, state, setState, fieldLabel, inputStyle }),
           state.notice ? h('p', { role: 'status', 'aria-live': 'polite', style: { margin: '12px 0 0', color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
           state.authorizationUrl ? h('p', null, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 } },
@@ -1682,6 +2397,10 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
+        ctx.slots.inject('settings.launcher', () => ctx.slots.register({
+          name: 'settings.launcher',
+          id: 'forge-iam-launcher',
+        }, IamLauncher));
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'forge-iam',

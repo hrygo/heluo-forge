@@ -99,6 +99,7 @@ logs/
 .codex/
 .cline/
 .roo/
+.superpowers/
 *.chat
 *.prompt.tmp
 agent-transcripts/
