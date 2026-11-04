@@ -245,3 +245,22 @@ test('restoring defaults keeps a model enabled instead of silently disabling it'
   assert.deepEqual(writes.at(-1).options, { 'corp-chat': {} });
   assert.doesNotMatch(panel.text(panel.render()), /不再出现在模型选择中/);
 });
+
+test('clearing a customised input field leaves the model enabled with an empty override', async t => {
+  const writes = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({ ok: true, persisted: true, view });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  }); t.after(() => panel.close());
+  await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
+  const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
+  input('显示名称 1').props.onChange({ target: { value: 'My Chat' } });
+  input('显示名称 1').props.onChange({ target: { value: '' } });
+  await panel.findButton(panel.render(), '保存模型配置').props.onClick();
+  // Still enabled with empty object, not completely removed from options
+  assert.deepEqual(writes.at(-1).options, { 'corp-chat': {} });
+});

@@ -581,10 +581,11 @@ window.__ModuleLoader__.load({
       }
       if (view.state === 'ready') {
         const gw = view.gatewayCredential?.state ?? 'unconfigured';
+        const name = view.principal || view.subject || '企业账号';
         if (gw === 'configured') {
-          return { kind: 'ready', dotClass: 'success', label: '企业网关就绪', tooltip: `${view.subject || '企业账号'} · 双模式凭据就绪` };
+          return { kind: 'ready', dotClass: 'success', label: '企业网关就绪', tooltip: `${name} · 双模式凭据就绪` };
         }
-        return { kind: 'missing-key', dotClass: 'warn', label: '待配置网关凭据', tooltip: `${view.subject || '企业账号'} · 未录入个人网关凭据` };
+        return { kind: 'missing-key', dotClass: 'warn', label: '待配置网关凭据', tooltip: `${name} · 未录入个人网关凭据` };
       }
       return { kind: 'unknown', dotClass: 'idle', label: '状态未知', tooltip: '企业账号' };
     }
@@ -1330,10 +1331,7 @@ window.__ModuleLoader__.load({
           } else {
             modelOpt[field] = value;
           }
-          const next = { ...prev };
-          if (Object.keys(modelOpt).length === 0) delete next[id];
-          else next[id] = modelOpt;
-          return next;
+          return { ...prev, [id]: modelOpt };
         });
       };
 
@@ -1375,6 +1373,7 @@ window.__ModuleLoader__.load({
             : '模型精细化配置已保存并生效。');
           if (isViewCurrent(viewBarrier.current.epoch)) {
             setState(current => ({ ...current, view: result.body?.view ?? current.view }));
+            if (result.body?.view) void syncModelOptions(result.body.view);
           }
         } catch {
           setModelNotice('暂时无法连接服务，配置已保存在本地。');
@@ -1755,6 +1754,10 @@ window.__ModuleLoader__.load({
       if (typeof view?.accessExpiresInSeconds === 'number' && view.accessExpiresInSeconds > 0) {
         const mins = Math.round(view.accessExpiresInSeconds / 60);
         accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将刷新';
+      } else if (view?.accessExpiresAt) {
+        const remainingMs = Date.parse(view.accessExpiresAt) - Date.now();
+        const mins = Math.round(remainingMs / 60000);
+        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将刷新';
       }
 
       return h('div', {
@@ -1768,7 +1771,7 @@ window.__ModuleLoader__.load({
           h('div', { style: { fontWeight: 600, fontSize: 'var(--dsw-font-xs-13)', color: 'var(--dsw-alias-label-primary)', marginBottom: 6 } }, '企业 IAM 员工身份'),
           h('div', { className: 'fiam-launcher-menu-row' },
             h('span', { className: 'fiam-launcher-menu-label' }, '员工工号'),
-            h('span', { className: 'fiam-launcher-menu-value' }, view?.subject || '未登录'),
+            h('span', { className: 'fiam-launcher-menu-value' }, view?.principal || view?.subject || '未登录'),
           ),
           view?.issuer ? h('div', { className: 'fiam-launcher-menu-row' },
             h('span', { className: 'fiam-launcher-menu-label' }, '认证中心'),

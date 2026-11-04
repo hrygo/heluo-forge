@@ -382,3 +382,13 @@ test('an explicitly empty selection stays empty instead of re-enabling a default
   assert.deepEqual(await f.adapter.listModels('enterprise'), []);
   await assert.rejects(f.adapter.prepareCall('enterprise', 'alpha'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
 });
+
+test('a stale or disabled defaultModelId is re-assigned to an enabled catalog model', async t => {
+  const f = fixture({
+    selection: { models: { beta: {} }, defaultModelId: 'ghost-model' },
+    fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }, { id: 'beta' }] })),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().defaultModelId, 'beta');
+});

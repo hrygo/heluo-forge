@@ -1,4 +1,4 @@
-import { normalizeGatewayBaseURL } from './managed-models.mjs';
+import { normalizeGatewayBaseURL } from './model-options.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
