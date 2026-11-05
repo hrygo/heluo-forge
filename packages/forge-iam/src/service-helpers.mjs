@@ -66,6 +66,14 @@ export function nowIso(now) {
 // callback path must tolerate the same skew.
 export const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
 
+// One refresh may take this long before it must be treated as unknown; the same
+// bound applies where a pending marker's deadline is computed and where a
+// revoke call is capped.
+export const REFRESH_TIMEOUT_MS = 5000;
+
+// A background refresh that just ran must not be retried by the next sync.
+export const AUTO_REFRESH_BACKOFF_MS = 30000;
+
 export function addSeconds(now, seconds) {
   return new Date(now + seconds * 1000).toISOString();
 }

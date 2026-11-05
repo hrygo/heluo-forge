@@ -3,10 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { randomToken, refreshTokens, verifyIdToken } from './oidc.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh } from './record.mjs';
-import { grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
-
-const REFRESH_TIMEOUT_MS = 5000;
-const AUTO_REFRESH_BACKOFF_MS = 30000;
+import { grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
 
 /**
  * The single-flight refresh: one promise per provider, and every caller that

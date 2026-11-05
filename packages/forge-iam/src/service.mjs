@@ -24,9 +24,6 @@ import {
   safeMessage,
 } from './service-helpers.mjs';
 
-const REFRESH_TIMEOUT_MS = 5000;
-const AUTO_REFRESH_BACKOFF_MS = 30000;
-
 /**
  * Host-side IAM session. Login is OIDC authorization-code + PKCE against
  * configured endpoints; every unverified capability stays fail closed.

@@ -1,7 +1,7 @@
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { createView, transition } from './state.mjs';
-import { isAccessExpired, isRefreshUsable, summarizeGrant } from './record.mjs';
+import { isRefreshUsable, summarizeGrant } from './record.mjs';
 
 /**
  * Session state, owned in one place.
