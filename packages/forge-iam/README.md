@@ -2,7 +2,7 @@
 
 状态：可用（开发骨架）；生产原子存储能力未经验证，默认组合拒绝新登录和刷新，未联调、未上线。
 
-> 2026-10-22 原基线调整：模型网关使用 UAG 个人凭证（`ENTERPRISE_STATIC_KEY`），由账户/引导 UI 录入与清除；IAM 登录不再镜像 `ENTERPRISE_ACCESS_TOKEN`，现存旧引用在启动时保留；`gatewayResource` 变为可选（仅当配置时校验 grant 的 audience）。凭据探测与真实 UAG 联调仍待网关包，未联调、未上线。
+> 2026-10-22 原基线调整：模型网关使用 UAG 个人访问凭证（`ENTERPRISE_STATIC_KEY`），由账户/引导 UI 录入与清除；IAM 登录不再镜像 `ENTERPRISE_ACCESS_TOKEN`，现存旧引用在启动时保留；`gatewayResource` 变为可选（仅当配置时校验 grant 的 audience）。凭据探测与真实 UAG 联调仍待网关包，未联调、未上线。
 
 一句话：企业 IAM 独占登录插件。Host 负责 OIDC Authorization Code + PKCE、回调、刷新与撤销，Client 负责账户页和引导；生产仍依赖 IAM 回函、OS keychain 适配与真实端点联调。
 
@@ -127,4 +127,4 @@ git diff --check
 
 ## 企业模型设置闭环
 
-企业账号页统一配置网关地址与个人 Key，通过标准 `/v1/models` 获取目录；登录和凭证就绪后才能列出或调用模型。默认模型不自动改写，退出、到期及配置变化会撤销旧目录和调用代际。实现与限制见[开发指南](<docs/developer-guide.md#可配置网关与动态模型目录>)；生产原子存储、真实 IAM/UAG 和工具授权门禁不因此获得准入。
+企业账号页统一配置网关地址与个人访问凭证，通过标准 `/v1/models` 获取目录；登录和凭证就绪后才能列出或调用模型。默认模型不自动改写，退出、到期及配置变化会撤销旧目录和调用代际。实现与限制见[开发指南](<docs/developer-guide.md#可配置网关与动态模型目录>)；生产原子存储、真实 IAM/UAG 和工具授权门禁不因此获得准入。

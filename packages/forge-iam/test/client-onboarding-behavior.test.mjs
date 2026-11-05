@@ -49,7 +49,7 @@ for (const [gatewayState, notice] of [
     button('稍后配置').props.onClick();
     const text = panel.text(panel.render());
     assert.match(text, notice);
-    assert.doesNotMatch(text, /尚未保存|个人凭证已保存/);
+    assert.doesNotMatch(text, /尚未保存|个人访问凭证已保存/);
     assert.equal(writes.length, 0);
   });
 }

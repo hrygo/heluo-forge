@@ -1595,16 +1595,22 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_CONFIG_INVALID') return '企业登录设置有误，请联系管理员。';
       if (code === 'IAM_DISPOSED') return '登录服务已关闭，请刷新页面。';
       if (code === 'IAM_GRANT_CONTEXT_MISMATCH' || code === 'IAM_REFRESH_SUBJECT_MISMATCH') return '登录状态已变化，请重新登录。';
-      if (code === 'IAM_GATEWAY_KEY_INVALID') return '个人 Key 格式不正确，请完整复制网关提供的 Key 后重试。';
+      if (code === 'IAM_GATEWAY_KEY_INVALID') return '个人访问凭证格式不正确，请完整复制网关提供的凭证后重试。';
       if (code === 'IAM_GATEWAY_URL_INVALID') return '请输入有效的网关地址，例如 https://gateway.example/v1。';
-      if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED') return '网关未接受个人 Key，请核对或更换后重试。';
-      if (code === 'ENTERPRISE_GATEWAY_FORBIDDEN') return '当前账号没有模型使用权限，请联系管理员。';
-      if (code === 'ENTERPRISE_MODEL_CATALOG_INVALID') return '网关返回的模型列表无法识别，请检查网关地址。';
-      if (code === 'ENTERPRISE_GATEWAY_UNAVAILABLE' || code === 'ENTERPRISE_MODELS_UNAVAILABLE') return '暂时无法获取企业模型，请检查网关地址或稍后重试。';
-      if (code === 'ENTERPRISE_GATEWAY_REQUEST_REJECTED') return '网关拒绝了本次请求，请检查模型参数后重试。';
-      if (code === 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED') return '当前模型不支持所选思考级别，请重新选择。';
-      if (code === 'IAM_LOGIN_REQUIRED' || code === 'IAM_MODEL_CONTEXT_CHANGED') return '账号状态已变化，请重新登录后再试。';
-      if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再添加个人凭证。';
+      // Model-access texts repeat MESSAGES in src/managed-models.mjs verbatim; the panel
+      // and the host turn surface must not describe the same code two different ways.
+      if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED') return '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。';
+      if (code === 'ENTERPRISE_GATEWAY_FORBIDDEN') return '当前账号没有此模型的使用权限，请联系管理员。';
+      if (code === 'ENTERPRISE_GATEWAY_RATE_LIMIT') return '请求过于频繁，请稍后重试。';
+      if (code === 'ENTERPRISE_GATEWAY_UNAVAILABLE') return '暂时无法连接企业模型，请稍后重试。';
+      if (code === 'ENTERPRISE_GATEWAY_REQUEST_REJECTED') return '网关拒绝了本次请求，请检查所选模型是否支持当前参数。';
+      if (code === 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED') return '所选模型的推理档位不受支持，请重新选择思考级别。';
+      if (code === 'ENTERPRISE_MODEL_CATALOG_INVALID') return '网关返回的模型列表无法识别，请联系管理员检查网关。';
+      if (code === 'ENTERPRISE_MODELS_UNAVAILABLE') return '企业模型暂不可用，请联系管理员检查配置。';
+      if (code === 'ENTERPRISE_MODEL_NOT_ALLOWED') return '此模型未由企业开放，请选择企业提供的模型。';
+      if (code === 'IAM_MODEL_CONTEXT_CHANGED') return '账号或凭证已变化，请重新选择模型后再试。';
+      if (code === 'IAM_LOGIN_REQUIRED') return '企业账号已退出或登录已过期，请重新登录后再使用模型。';
+      if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再添加个人访问凭证。';
       if (code === 'IAM_GATEWAY_ATOMIC_UNVERIFIED') return '暂时无法安全地保存或清除凭证，请联系管理员。';
       if (code === 'IAM_GATEWAY_LEGACY_READ_ONLY') return '现有凭证暂时只能查看，本次没有更改。如需更换，请联系管理员。';
       if (code === 'IAM_GATEWAY_CHANGED') return '凭证已发生变化，本次没有更改。请刷新页面后核对。';
@@ -1802,7 +1808,7 @@ window.__ModuleLoader__.load({
             placeholder: 'https://gateway.example/v1', disabled: credential.saving || viewBarrier.current.pending,
             onChange: (event) => setCredential((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle
           }),
-          h('span', { style: muted }, '填写网关提供的地址；修改地址时请重新输入对应的个人 Key。'),
+          h('span', { style: muted }, '填写网关提供的地址；修改地址时请重新输入对应的个人访问凭证。'),
         ),
         hasDraftChanges
           ? h('div', { role: 'status', className: 'fiam-unsaved-banner' },
@@ -2537,7 +2543,7 @@ window.__ModuleLoader__.load({
           )
           : null,
         view.modelAccess?.state === 'ready' && !modelList.length
-          ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
+          ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人访问凭证的模型权限。') : null,
         view.modelAccess?.error && !view.modelAccess?.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(view.modelAccess.error)) : null,
         h('div', { className: 'fiam-actions' },
           h('button', {
@@ -2573,7 +2579,7 @@ window.__ModuleLoader__.load({
           }, modelNotice)
           : null,
         h('p', { style: { ...muted, marginTop: 12 } }, view.state !== 'ready' ? '下一步：登录企业账号。'
-          : gateway.state !== 'configured' || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人凭证。'
+          : gateway.state !== 'configured' || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人访问凭证。'
             : '点击“一键启用”可直接以默认参数启用并生效；展开精细配置修改参数后，点击“保存模型配置”即可在对话窗口选用。'),
       );
     }
@@ -2844,8 +2850,8 @@ window.__ModuleLoader__.load({
           if (view?.state !== 'authenticating') linkIdentity.current = null;
           setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }) }));
           setCredential((current) => {
-            if (current.notice !== '网关地址和个人 Key 已保存，正在获取模型列表。') return current;
-            if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人 Key 已保存，模型目录已同步。' };
+            if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
+            if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
             if (view?.modelAccess?.state === 'error') return { ...current, notice: errorNotice(view.modelAccess.error) };
             return current;
           });
@@ -2866,8 +2872,8 @@ window.__ModuleLoader__.load({
           ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
         }));
         setCredential((current) => {
-          if (current.notice !== '网关地址和个人 Key 已保存，正在获取模型列表。') return current;
-          if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人 Key 已保存，模型目录已同步。' };
+          if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
+          if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
           if (view?.modelAccess?.state === 'error') return { ...current, notice: errorNotice(view.modelAccess.error) };
           return current;
         });
@@ -2927,7 +2933,7 @@ window.__ModuleLoader__.load({
             return;
           }
           // The value is never stored in component state after the write.
-          setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关地址和个人 Key 已保存，正在获取模型列表。' });
+          setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关地址和个人访问凭证已保存，正在获取模型列表。' });
           if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
           setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
@@ -3622,8 +3628,8 @@ window.__ModuleLoader__.load({
             },
           }),
           state.reason === 'gateway'
-            ? (state.gateway === 'owner-mismatch' ? '个人凭证属于其他账号'
-              : state.gateway === 'invalid' ? '个人凭证信息需要检查，已保留'
+            ? (state.gateway === 'owner-mismatch' ? '个人访问凭证属于其他账号'
+              : state.gateway === 'invalid' ? '个人访问凭证信息需要检查，已保留'
                 : state.gateway === 'unknown' ? '无法确认个人访问凭证状态'
                   : '尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。')
             : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号'),
@@ -3739,7 +3745,7 @@ window.__ModuleLoader__.load({
           h('label', { style: fieldLabel }, '个人访问凭证', h('input', {
             type: 'password',
             value: state.keyValue,
-            placeholder: '输入网关提供的个人 Key',
+            placeholder: '输入网关提供的个人访问凭证',
             'aria-label': '个人访问凭证',
             autoComplete: 'off',
             spellCheck: false,
