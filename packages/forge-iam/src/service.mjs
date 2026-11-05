@@ -1158,7 +1158,12 @@ export function createIamService(rawConfig, options = {}) {
       observedPending = null;
       consumptionWitness?.invalidate();
       const consumption = beginConsumption(knownIssuer(), targetStore, credentials);
-      signInPromise = service._startSignInOnce(targetStore, credentials, consumption).finally(() => { signInPromise = null; });
+      const pending = service._startSignInOnce(targetStore, credentials, consumption);
+      // Only the attempt that still owns the slot clears it: a cancel or a newer
+      // sign-in must not be overwritten by a superseded attempt settling late.
+      const settle = () => { if (signInPromise === pending) signInPromise = null; };
+      pending.then(settle, settle);
+      signInPromise = pending;
       return signInPromise;
     },
 
@@ -1436,6 +1441,10 @@ export function createIamService(rawConfig, options = {}) {
       if (disposed) return view();
       authEpoch += 1;
       observedPending = null;
+      // A cancelled attempt no longer owns the state machine, even when it never
+      // reached `authenticating` (discovery or client-auth was still pending):
+      // leaving its promise registered would keep blocking background hydration.
+      signInPromise = null;
       if (state !== 'authenticating') return view();
       clearAttempt();
       lastGrant = null;

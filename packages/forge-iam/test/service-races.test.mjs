@@ -286,3 +286,50 @@ for (const action of ['signOut', 'dispose']) {
     }
   });
 }
+
+test('cancelling an attempt that never reached authenticating releases background hydration', async (t) => {
+  const credentials = new MemoryCredentials();
+  await seedGrant(credentials);
+  const discovery = 'https://iam.corp.example/.well-known/openid-configuration';
+  const entered = deferred();
+  const released = deferred();
+  const service = createIamService({
+    discoveryUrl: discovery,
+    clientId: configured.clientId,
+    gatewayResource: configured.gatewayResource,
+    redirectUri: configured.redirectUri,
+  }, {
+    credentials,
+    fetch: async (url) => {
+      if (String(url) !== discovery) throw new Error(`unexpected synthetic request: ${url}`);
+      entered.resolve();
+      await released.promise;
+      return Response.json({
+        issuer: configured.issuer,
+        authorization_endpoint: configured.authorizationEndpoint,
+        token_endpoint: configured.tokenEndpoint,
+        jwks_uri: configured.jwksUri,
+      });
+    },
+  });
+  t.after(() => service.dispose());
+
+  const started = service.startSignIn().then(() => 'accepted', (error) => error.code);
+  await entered.promise;
+  await service.cancelSignIn();
+  assert.equal(service.getView().state, 'signed-out');
+
+  // The cancelled attempt still owns a pending discovery request. Background
+  // hydration must not skip its store read just because that attempt exists.
+  const readGate = pauseNextRead(credentials);
+  const syncing = service.syncFromStore();
+  const first = await Promise.race([
+    syncing.then(() => 'hydration-finished', () => 'hydration-failed'),
+    readGate.entered.then(() => 'read-started'),
+  ]);
+  assert.equal(first, 'read-started');
+  readGate.release();
+  released.resolve();
+  await syncing.catch(() => {});
+  assert.equal(await started, 'IAM_ATTEMPT_CANCELLED');
+});
