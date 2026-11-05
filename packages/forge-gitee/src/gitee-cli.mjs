@@ -356,7 +356,7 @@ export function detectPersistentToken({ env = {}, readFile = defaultReadFile } =
     reason: CREDENTIAL_REASONS.PERSISTENT,
     files: Object.freeze([...hits]),
     checked: files.length,
-    next_action: '删除 CLI 配置目录里的持久令牌，改用环境变量注入（本包只读环境变量），然后重启插件',
+    next_action: '删除 CLI 配置目录里的明文令牌（如 ~/.gitee-cli/config.json），改用 gh auth login 存入系统凭据库，然后重启插件',
   });
 }
 
@@ -609,7 +609,7 @@ export function createGiteeRunner({
     const credentials = credentialStatus();
     if (credentials.enforced !== true) return;
     throw new GiteeCliError(
-      '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请改用环境变量注入后重启',
+      '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请删除该明文令牌，然后在终端运行 gh auth login 存入系统凭据库',
       {
         code: 'PERSISTENT_TOKEN',
         reason: CREDENTIAL_REASONS.PERSISTENT,

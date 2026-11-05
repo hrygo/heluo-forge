@@ -1181,7 +1181,8 @@ window.__ModuleLoader__.load({
       if (code === 'IAM_UNCONFIGURED') return '企业登录尚未设置完成，请联系管理员。';
       if (code === 'IAM_CREDENTIALS_UNAVAILABLE') return '凭据存储不可用，暂时无法登录。';
       if (code === 'IAM_CREDENTIALS_CLEAR_FAILED') return '无法清除本设备的登录信息，请联系管理员。';
-      if (code === 'IAM_REVOCATION_FAILED') return '已在此设备退出，但无法确认服务器已撤销登录。';
+      if (code === 'IAM_REVOCATION_FAILED') return '已在此设备退出：服务器拒绝了访问令牌撤销，该令牌可能仍然有效。';
+      if (code === 'IAM_REVOCATION_UNKNOWN') return '已在此设备退出，但无法确认访问令牌是否已撤销。';
       if (code === 'IAM_EXCLUSIVE_CONFLICT') return '登录设置有冲突，请联系管理员。';
       if (code === 'IAM_UNREACHABLE') return '暂时无法连接登录服务，请稍后重试。';
       if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录未能完成，请重新登录。';
@@ -1215,6 +1216,7 @@ window.__ModuleLoader__.load({
     const DIAGNOSTIC_ERRORS = new Set([
       'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_UNCONFIGURED', 'IAM_CONFIG_INVALID',
       'IAM_CREDENTIALS_UNAVAILABLE', 'IAM_CREDENTIALS_CLEAR_FAILED', 'IAM_REVOCATION_FAILED',
+      'IAM_REVOCATION_UNKNOWN',
       'IAM_EXCLUSIVE_CONFLICT', 'IAM_UNREACHABLE', 'IAM_STATE_MISMATCH', 'IAM_CALLBACK_INVALID',
       'IAM_ATTEMPT_EXPIRED', 'IAM_INVALID_GRANT', 'IAM_REAUTH_REQUIRED', 'IAM_NOT_SIGNED_IN',
       'IAM_ATTEMPT_CANCELLED', 'IAM_CALLBACK_UNAVAILABLE', 'IAM_DISPOSED',
@@ -2226,13 +2228,17 @@ window.__ModuleLoader__.load({
             return;
           }
           const view = result.body?.view ?? null;
+          // The refresh token cannot be revoked: say so instead of "signed out".
+          const signedOutNotice = result.body?.revocation === 'ok'
+            ? '已退出：访问令牌已撤销；刷新令牌无法撤销，将在服务端自然过期。'
+            : null;
           setState((current) => ({
             ...current,
             view,
             authorizationUrl: null,
             // An unconfirmed revocation must stay attributable after the local
             // session is gone; silently showing "signed out" would overclaim.
-            notice: view?.error ? errorNotice(view.error) : null,
+            notice: view?.error ? errorNotice(view.error) : signedOutNotice,
           }));
           if (result.body?.logoutUrl) window.location.assign(result.body.logoutUrl);
         } catch {

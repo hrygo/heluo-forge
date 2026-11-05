@@ -24,7 +24,7 @@ for (const failure of ['missing-source', 'missing-verifier', 'false', 'promise-t
 }
 
 for (const method of ['client_secret_basic', 'client_secret_post']) {
-  test(`actual ${method} code, V2 hydration, usable AT and authenticated revocation complete`, async (t) => {
+  test(`actual ${method} code, V2 hydration, usable AT and access-token revocation complete`, async (t) => {
     const h = await confidentialHarness(t, method);
     await signIn(h);
     const grant = await h.record();
@@ -174,15 +174,15 @@ for (const field of ['method', 'secretRef', 'secretRevision']) {
   });
 }
 
-test('source disappearance allows only previously authenticated exact-session local sign-out', async (t) => {
+test('sign-out revokes the access token without a client secret even after the source disappears', async (t) => {
   const h = await confidentialHarness(t); await signIn(h);
   const grant = structuredClone(await h.record());
   h.fixture.remove();
   const cold = createIamService(h.config, h.options); t.after(() => cold.dispose());
-  assert.equal((await cold.signOut()).revocation, 'unknown');
-  assert.deepEqual(await h.record(), grant);
-  const result = await h.service.signOut();
-  assert.equal(result.revocation, 'unknown');
+  const reads = h.fixture.counts.read;
+  assert.equal((await cold.signOut()).revocation, 'ok');
   assert.equal((await h.record()).type, 'heluo-iam-session-tombstone');
-  assert.equal(h.mock.counts.revoke, 0);
+  assert.equal(h.mock.lastRevokeAccess.set.token, grant.accessToken);
+  assert.equal(h.mock.lastRevokeAccess.set.authorization, null);
+  assert.equal(h.fixture.counts.read, reads, 'no client-secret read is needed');
 });

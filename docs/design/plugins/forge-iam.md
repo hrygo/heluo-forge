@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.20.2 |
+| 版本 | V1.21.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -283,6 +283,29 @@ flowchart TB
 - **同源管理保护**：管理 API（`/api/forge-iam/*`）必须通过宿主 `ctx.connection.requestRejection` 守卫；要求 `x-forge-iam-request: 1` 自定义请求头；凭据写入接口限制 JSON 体最大为 8 KiB。
 - **浏览器拉起**：Web 端通过用户点击预开标签页；Desktop 端现行 interim 采用 `window.open` + 兜底链接。回调页面仅返回最小纯文本/HTML 提示（“登录成功，请返回客户端”），不加载外部资源，不向页面写入 Token。
 
+#### 4.5.1 回调监听归属（#153，2026-11-05 决定：插件自建固定端口）
+
+**问题**：回调 URI 若跟随 Host 实时 `webServer` 的 origin，端口就随启动方式变化。本机核对到：`dsh web --port <port>` 可以指定端口；组合配置里的 `webserver.port` 取自 `ctx.webStartup.port ?? 3080`；桌面应用进程没有 CLI 参数，实际端口可能落在随机值（本次观察到 57291）。IAM 若按精确 URI 登记，端口一变登录就失败；改 Host 端口又超出本仓库边界。
+
+**备选**：
+
+| 方案 | 做法 | 结论 |
+|---|---|---|
+| A | 继续用 Host 实时 origin，要求用户固定 `dsh web --port` | 桌面端没有 CLI 参数，无法保证；且把 IAM 登记绑到 DSH 启动方式上 |
+| B | 扩展 DSH `webServer`，由插件注册独立监听/固定路径 | 需要改 DSH 内核或宿主接口，超出“不 fork、不打补丁”边界 |
+| C | 插件自建回环固定端口监听，只处理 `GET /iam/callback` | **采用**：不改 DSH，端口稳定，攻击面仅回环 + 单路由 |
+
+**决定（C）**：
+
+- 监听地址固定 `127.0.0.1`，只接受 `GET /iam/callback`；其他方法/路径直接 404/405，不挂静态资源、不做 CORS。
+- 端口由配置项 `callbackPort` 指定（默认值待 IAM 登记后再定）；`redirectUri` 必须与之逐字一致（`http://127.0.0.1:<callbackPort>/iam/callback`），不一致在装配期拒绝，不静默改写。
+- 端口被占用或绑定失败时 fail-closed：装配/登录前置报错并提示改端口，**不自动换端口**——换端口等于换 `redirect_uri`，会把“登录偶发失败”变成难查的运行时问题。
+- 监听只在一次登录尝试期间存在：`startSignIn()` 打开，成功、取消、超时或 dispose 关闭；不常驻，避免长期暴露本机端口。
+- 回调处理沿用现有校验：严格匹配活跃 Attempt 的 `state`、限定请求行与头大小、页面只返回最小纯文本/HTML，不写 token/code，不加载外部资源。
+- 与 Host 管理 API 完全分离：该端口不提供 `/api/forge-iam/*`，鉴权与 CSRF 守卫仍只属于 Host 的同源管理面。
+
+**未验证**：IAM 对 `redirect_uri` 是否要求精确匹配（含端口与路径）、是否允许 `http://127.0.0.1` 回环、是否允许事先登记多个端口。上述任何一条不成立，都可能要求改为登记制或走 Host 端口；在回函/联调前，C 只作为实现前提记录，不写成已联调。
+
 ### 4.6 架构选型论证：为什么不用 `authorization` flow
 
 DSH 内置的 `ctx.authorization` flow 适合“任意界面单次唤起凭据录入并提交 commit”；但 `forge-iam` 必须覆盖浏览器重定向回调、令牌后台原子轮换、主动撤销以及跨多组件的账户生命周期。Flow 的 commit 语义仅覆盖首次获取，无法优雅支撑长周期会话管理。
@@ -312,6 +335,19 @@ V1 只有一份企业级机密客户端。按 C1 全企业共用一个 `client_i
 
 未验证：企业环境实际生效时延、窗口内刷新失败的可观测性与两平台系统凭据库写入。均 BLOCKED，需企业联调与实机。
 
+### 4.8 身份画像（UserInfo，机制先行）
+
+**目的**：为后续显示工号/姓名预留一条受控路径，但 IAM 尚未确认 UserInfo 的实际字段名，因此先落机制、不落显示。
+
+- **触发**：登录换票成功、本地 grant 已写入后，取一次 `GET <userInfoEndpoint>`，带 `Authorization: Bearer <access token>`；超时上限 5 秒，只取一次、不重试、不进入刷新循环。
+- **字段映射**：`profileFields` 只接受 `workNo` / `name` 两个键，值为 UserInfo 响应里的字段名；默认空映射 `{}` 表示**不请求**。空映射既避免无谓网络请求，也保证 UI 现在不显示任何姓名。映射到位后可用 `work_no`/`pinyin`，或 `employeeNumber`/`name` 等任一常量，无需改投影代码。
+- **严格投影**：只取字符串，`trim` 后长度 1–128；空串、非字符串、嵌套对象和未知字段一律丢弃；结果冻结，不回显原始响应。
+- **降级**：端点未配置、网络失败、非 2xx、非 JSON 或字段缺失，都只让画像为 `undefined`，登录仍成功、`IamView` 不变；错误码不外泄，token 不进入结果、日志或页面。
+- **生命周期**：画像只存在内存，不落盘、不进 grant；登录成功时覆盖，退出、取消、dispose 时清空；不作为 `getPrincipal()` 的替代，也不参与鉴权。
+- **显示边界**：本版不把画像接进账户页或任何工具输出；等 IAM 回函确认字段名后再改 `profileFields` 与界面，届时补 UI/联调用例。
+
+**证据**：单测覆盖两种字段夹具、空映射不发请求、500/非法 JSON 降级、退出清空；未接真实 IAM UserInfo，字段名与响应形态仍待确认。
+
 ## 5. 接口与配置契约
 
 ### 5.1 配置项规范
@@ -329,6 +365,7 @@ V1 只有一份企业级机密客户端。按 C1 全企业共用一个 `client_i
 | `authorizationEndpoint` | string | 空 | 条件 | 显式授权端点；若与 discovery 同时配置则显式优先 |
 | `tokenEndpoint` | string | 空 | 条件 | 显式令牌换票端点 |
 | `jwksUri` | string | 空 | 条件 | 显式公钥集地址，用于 ID Token 签名校验 |
+| `userInfoEndpoint` | string | 空 | 否 | OIDC UserInfo 端点；用于登录后取工号/姓名画像。未配置且 discovery 未声明时不请求；字段映射为空时也不请求 |
 | `revocationEndpoint` | string | 空 | 否 | 按访问令牌撤销端点；IAM 提供 `GET /idp/oauth2/revokeToken?access_token=...`（非 RFC 7009，仅访问令牌，不支持刷新令牌）；未配置时退出仅作本地清理 |
 | `endSessionEndpoint` | string | 空 | 否 | RP 登出端点；`logoutMode=rp` 时必填 |
 | `scopes` | string[] | `['openid', 'profile', 'offline_access']` | 是 | 申请 Scope 列表；必须包含 `openid` |
@@ -365,6 +402,7 @@ V1 只有一份企业级机密客户端。按 C1 全企业共用一个 `client_i
 | `signOut()` | 无 | 执行退出流程，返回 `{ view, logoutUrl, revocation, revocationError? }` |
 | `resolveToken()` | 无 | 返回当前有效的 Access Token（按需触发锁外刷新）；不暴露 Refresh Token |
 | `getPrincipal()` | 无 | 返回 `{ issuer, subject }` 最小主体标识，供审计与策略使用 |
+| `getIdentityProfile()` | 无 | 返回投影后的 `{ workNo?, name? }`；字段映射为空或 UserInfo 失败时为 `undefined`，不进入 `IamView` |
 | `saveGatewayCredential(input)` | `{ key, deviceLabel }` | 联合 CAS 写入网关个人 Key 与元数据，返回 `IamView` |
 | `clearGatewayCredential()` | 无 | 联合 CAS 写入网关凭据墓碑记录，返回 `IamView` |
 | `reconcileDefaultModel()` | 无 | 宿主只读模型协调采样，返回 `{ mode: 'read-only', written: false, ... }` |
@@ -453,6 +491,7 @@ export interface IamAccount {
   getView(): Promise<IamView>;
   watch(signal: AbortSignal): AsyncIterable<IamView>;
   getPrincipal(): IamPrincipal | undefined;
+  getIdentityProfile(): { workNo?: string; name?: string } | undefined;
   setGatewayCredential(input: { value: string; label?: string }): Promise<IamView>;
   clearGatewayCredential(): Promise<IamView>;
   probeGatewayCredential(): Promise<IamView>;
@@ -772,7 +811,7 @@ flowchart TD
 ```
 
 - **撤销语义**：D1（2026-11-04）已确认按访问令牌撤销接口 `GET /idp/oauth2/revokeToken?access_token=...`：不校验调用方、以令牌自证、幂等；成功 `result=true`，失败 `result=false` + `errcode=2002`，不区分“本就无效”与“已撤销”；撤销后令牌实时作废，请求到达 IAM 立即被拒、无宽限期。
-- **与现有实现的差异**：现行 `signOut` 仍按 RFC 7009 POST 表单撤销**刷新令牌**（`token_type_hint=refresh_token`，见 `packages/forge-iam/src/service.mjs` 的 `revokeCurrent`），与企业接口的 GET + `access_token` 形态不兼容，且撤销对象正是服务端不支持撤销的 RT。改造前不得宣称本地退出已完成服务端撤销；改造时按 AT 撤销并删除该请求形态，DSH 侧尚未联调。
+- **实现状态（2026-11-05）**：`signOut` 已改为 `GET <revocationEndpoint>?access_token=…`（`packages/forge-iam/src/oidc.mjs` 的 `revokeAccessToken`），不带客户端认证，也不再发送 `token_type_hint=refresh_token`。回执按 `result=true`、`result=false`+`errcode=2002` 记为 `ok`；明确拒绝记 `failed`；超时、5xx 或无法解析记 `unknown`。登录换票失败后的清理仍保留 RFC 7009 POST，只服务该一次清理，不用于退出。本地用例覆盖三态、幂等、无 Authorization 与结果不含令牌；企业端点联调、实时性与回执仍待 G2，未联调前不写成已通过。
 - **刷新令牌不可撤销**：接口只覆盖访问令牌。本地删除刷新令牌后，服务端副本按 7300 秒自然过期。退出结果、界面与审计必须区分“访问令牌已撤销”“刷新令牌未撤销（自然过期）”“撤销结果未知”，不能整体写成“已登出”。不得把全局登出当作单授权撤销：C6 明确其作用域是浏览器会话，会牵连同会话下的其他应用。
 - **令牌传输**：撤销把令牌放在 URL 查询串，调用必须直连 HTTPS，禁止把请求 URL 写入日志、诊断、审计、错误堆栈或浏览器历史；失败只记状态与错误码，不回显令牌。
 - **Key 保护**：退出登录默认保留已配置的 `ENTERPRISE_STATIC_KEY`，避免频繁重新录入。
@@ -938,7 +977,7 @@ flowchart TD
 | 7 | 旧 0600 明文 YAML 文件安全迁移的删除时机与回滚保障 | 安全团队 | 解决升级过程中的凭据残留风险 |
 | 8 | UAG 个人凭据状态能否精确探测与深链自助开通 | 网关团队 | 影响凭据失效时的用户排障体验 |
 | 9 | IAM 与 UAG 之间 SCIM 同步的时效性（离职即时作废窗口） | 网关 + IAM | 决定员工离职后模型调用的最大潜在残留时间 |
-| 10 | 撤销实现改造与联调：把 RFC 7009 POST 撤 RT 改为 `GET ?access_token=` 撤 AT；验证回执、`errcode=2002`、实时性与日志脱敏 | 平台组 + IAM | 决定退出能否宣称服务端闭环 |
+| 10 | 撤销实现改造与联调：代码已于 2026-11-05 改为 `GET ?access_token=` 撤 AT（POST 撤 RT 仅保留换票失败清理）；企业端点回执、`errcode=2002`、实时性与日志脱敏待 G2 联调 | 平台组 + IAM | 决定退出能否宣称服务端闭环 |
 | 11 | 刷新令牌服务端不可撤销的补偿：退出文案、审计字段、异常令牌处置 | 平台组 | 决定“退出”如实呈现与残留窗口 |
 | 12 | 轮换窗口内暂停新登录、等满两分钟重试的实现与演练 | 平台组 | 决定轮换期间可用性 |
 | 13 | 刷新令牌过期边界（休眠/断网超过约 160 秒余量）的实机确认与提示 | 平台组 | 决定重登提示与体验 |

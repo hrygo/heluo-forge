@@ -275,7 +275,7 @@ test('RP-initiated logout builds the documented URL when the provider advertises
   assert.deepEqual(grantRecord(credentials), { version: 1, type: 'heluo-iam-session-tombstone' }, 'sign-out must replace the grant with a tombstone');
 });
 
-test('local logout still completes and stays attributable when revocation fails', async (t) => {
+test('local logout still completes and stays attributable when revocation is unconfirmed', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
@@ -286,10 +286,10 @@ test('local logout still completes and stays attributable when revocation fails'
   await service.handleCallback(location);
   const result = await service.signOut();
 
-  assert.equal(result.revocation, 'failed');
-  assert.equal(result.revocationError, 'IAM_HTTP_ERROR');
-  assert.equal(result.view.state, 'signed-out', 'local logout completes even when revocation fails');
-  assert.equal(result.view.error, 'IAM_REVOCATION_FAILED', 'the unconfirmed revocation stays visible');
+  assert.equal(result.revocation, 'unknown');
+  assert.equal(result.revocationError, 'IAM_REVOKE_HTTP_503');
+  assert.equal(result.view.state, 'signed-out', 'local logout completes even when revocation is unconfirmed');
+  assert.equal(result.view.error, 'IAM_REVOCATION_UNKNOWN', 'the unconfirmed revocation stays visible');
   assert.deepEqual(grantRecord(credentials), { version: 1, type: 'heluo-iam-session-tombstone' }, 'the local grant is replaced even when revocation fails');
 });
 

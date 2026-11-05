@@ -502,7 +502,9 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
         try {
           const result = await service.signOut();
-          if (result?.view?.error === 'IAM_CREDENTIALS_CLEAR_FAILED' || result?.revocation === 'unknown') {
+          // A local clear that happened is a completed sign-out; an unconfirmed
+          // revocation stays a 200 with a view error the client must show.
+          if (result?.view?.error === 'IAM_CREDENTIALS_CLEAR_FAILED') {
             return sendJson(res, 503, { ...result, logoutUrl: null, error: { code: 'IAM_CREDENTIALS_CLEAR_FAILED' } });
           }
           return sendJson(res, 200, result);

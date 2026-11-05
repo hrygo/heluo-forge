@@ -58,7 +58,7 @@ export const READ_REASONS = Object.freeze({
   MISSING_TARGET: 'MISSING_TARGET',
   /** 工具定义拿到的服务端口没有 `read()`：装配期错误，不注册哑工具。 */
   NO_READER: 'NO_READER',
-  /** 缺令牌环境变量（只在环境变量里取凭据，缺即拒）。 */
+  /** 子进程以 401/403 拒绝凭据；缺令牌不在本地拒绝，由 gh 查系统凭据库后裁决。 */
   AUTH_MISSING: 'AUTH_MISSING',
   /** CLI 配置目录存在持久令牌：安全阻断（`denied`，零子进程）。 */
   GITEE_PERSISTENT_TOKEN: 'GITEE_PERSISTENT_TOKEN',

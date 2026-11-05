@@ -192,8 +192,8 @@ test('a failed remote revocation remains visible after local sign-out', async (t
   t.after(() => panel.close());
   await panel.findButton(panel.render(), '退出').props.onClick();
   const text = panel.text(panel.render());
-  assert.match(text, /已在此设备退出，但无法确认服务器已撤销登录/);
-  assert.equal(text.split('已在此设备退出，但无法确认服务器已撤销登录').length - 1, 1);
+  assert.match(text, /已在此设备退出：服务器拒绝了访问令牌撤销/);
+  assert.equal(text.split('已在此设备退出：服务器拒绝了访问令牌撤销').length - 1, 1);
   assert.doesNotMatch(text, /synthetic-user/);
 });
 

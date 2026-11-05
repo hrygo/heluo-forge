@@ -99,8 +99,8 @@ for (const [interruption, status] of [['provider-replaced', 204], ['provider-rep
     const service = createRawIamService(config, {
       getCredentials: () => current,
       verifyAtomicStore: (candidate) => candidate === old || candidate === next,
-      fetch: async (_url, init) => {
-        revoked.push(new URLSearchParams(init.body).get('token'));
+      fetch: async (url) => {
+        revoked.push(new URL(String(url)).searchParams.get('access_token'));
         enter();
         await gate;
         return new Response(null, { status });
@@ -119,7 +119,7 @@ for (const [interruption, status] of [['provider-replaced', 204], ['provider-rep
       assert.equal(result.revocation, 'unknown');
       assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
     }
-    assert.deepEqual(revoked, ['old-user-refresh']);
+    assert.deepEqual(revoked, ['old-user-access']);
     assert.equal((await createGrantStore(old).read()).grant.subject, 'old-user');
     assert.equal((await createGrantStore(next).read()).grant.subject, 'new-user');
   });
@@ -175,14 +175,14 @@ for (const legacy of [false, true]) {
       return result;
     };
     const revoked = [];
-    const service = createIamService(config, { credentials, fetch: async (_url, init) => {
-      revoked.push(new URLSearchParams(init.body).get('token'));
+    const service = createIamService(config, { credentials, fetch: async (url) => {
+      revoked.push(new URL(String(url)).searchParams.get('access_token'));
       return new Response(null, { status: 204 });
     } });
     t.after(() => service.dispose());
     await service.signOut();
     assert.equal((await store.read()).grant?.subject, 'new-user');
-    assert.deepEqual(revoked, ['old-user-refresh']);
+    assert.deepEqual(revoked, ['old-user-access']);
   });
 
   test(`sign-out does not revoke a ${legacy ? 'legacy' : 'identified'} replacement before it acquires the lock`, async (t) => {
@@ -201,8 +201,8 @@ for (const legacy of [false, true]) {
       return value;
     };
     const revoked = [];
-    const service = createIamService(config, { credentials, fetch: async (_url, init) => {
-      revoked.push(new URLSearchParams(init.body).get('token'));
+    const service = createIamService(config, { credentials, fetch: async (url) => {
+      revoked.push(new URL(String(url)).searchParams.get('access_token'));
       return new Response(null, { status: 204 });
     } });
     t.after(() => { release(); service.dispose(); });
