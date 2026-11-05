@@ -50,3 +50,29 @@ test('listeners are registered through the state module, not a local set', () =>
   assert.match(service, /ctx\.removeListener\(listener\)/);
   assert.match(service, /ctx\.clearListeners\(\)/);
 });
+
+// U6: the credentials provider and its caches have the same single owner.
+const provider = readFileSync(new URL('../src/service-store.mjs', import.meta.url), 'utf8');
+
+test('the service keeps no writable copy of the provider state', () => {
+  for (const name of ['store', 'storeCredentials', 'storeError', 'gatewayStore', 'modelSelectionStore',
+    'gatewaySummary', 'gatewayLoadedAt', 'gatewayLoading', 'gatewayEpoch']) {
+    assert.ok(
+      !new RegExp(`let ${name}\\b`).test(service),
+      `src/service.mjs still declares "let ${name}"; the value belongs to service-store.mjs`,
+    );
+  }
+});
+
+test('the provider module owns the handles and exposes one entry point', () => {
+  assert.match(service, /import \{ createServiceStore \} from '\.\/service-store\.mjs';/);
+  assert.match(service, /const provider = createServiceStore\(\{ options \}\);/);
+  assert.match(provider, /export function createServiceStore\(\{ options \}\)/);
+  for (const fn of ['ensure', 'require', 'atomicVerified', 'assertAtomic']) {
+    assert.match(provider, new RegExp(`function ${fn}\\(`), `service-store.mjs must define ${fn}`);
+  }
+  // Revocation cleanup stays in one place: it is the branch that used to leave a
+  // stale summary behind.
+  // Revoked, reopened and failed-open all bump the epoch, so no in-flight read survives.
+  assert.equal((provider.match(/gatewayEpoch \+= 1/g) ?? []).length, 3);
+});

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.10.0 |
+| 版本 | V0.11.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -284,6 +284,8 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 
 - 新增 `service-store.mjs`，接管 §4.2 的 store 状态与 `ensure`、`require`、`atomicVerified`、`assertAtomic`、`beginConsumption`、`adoptConsumption`、`consumeWitness`；`ensureStore()` 的 22 处调用改为 `store.ensure()`。
 - 关键约束：`ensureStore()` 在「provider 被撤销」分支里对 `gatewaySummary`/`gatewayEpoch` 的清理与 `storeError` 赋值逐句保留。
+- 实现记录：`service.mjs` 1961 → 1880 行，新增 `service-store.mjs` 129 行；`provider.ensure/require/atomicVerified/assertAtomic` 保持原实现与调用顺序，撤销分支的 `gatewayEpoch += 1` 三处（撤销、重建、失败）逐句保留。
+- 守卫扩展：`service-state-structure.test.mjs` 追加两条——`service.mjs` 不得再声明九个 provider 字段、`service-store.mjs` 必须独占四个入口。
 - 完成条件：`atomic-gate`、`gateway-atomic-*`、`service-races`、`dual-process-*` 全绿。
 
 ### U7 宿主：grant 轴
