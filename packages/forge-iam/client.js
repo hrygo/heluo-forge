@@ -205,13 +205,20 @@ window.__ModuleLoader__.load({
       }
 
       .fiam-model-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: var(--dsw-alias-settings-card-fill);
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
         flex-wrap: wrap;
-        margin-top: 8px;
-        margin-bottom: 8px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        margin-top: 0;
+        margin-bottom: 6px;
+        box-shadow: 0 1px 0 var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.06));
       }
       .fiam-model-search {
         flex: 1 1 200px;
@@ -293,8 +300,7 @@ window.__ModuleLoader__.load({
         gap: 8px;
         margin-top: 6px;
         margin-bottom: 6px;
-        max-height: 480px;
-        overflow-y: auto;
+        min-height: 480px;
         padding-right: 2px;
       }
       .fiam-model-item {
@@ -1319,15 +1325,12 @@ window.__ModuleLoader__.load({
         const gw = view.gatewayCredential?.state ?? 'unconfigured';
         const name = view.principal || view.subject || '企业账号';
         if (gw === 'configured') {
-          if (view.modelAccess?.state === 'error') {
+          if (view.modelAccess?.state === 'error' && (!view.modelAccess?.models || view.modelAccess.models.length === 0)) {
             return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${errorNotice(view.modelAccess.error)}` };
-          }
-          if (view.modelAccess?.state === 'loading') {
-            return { kind: 'model-loading', dotClass: 'authenticating', label: '正在同步模型', tooltip: `${name} · 正在同步企业网关模型目录` };
           }
           const modelCount = view.modelAccess?.models?.length ?? 0;
           const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型可用` : '';
-          return { kind: 'ready', dotClass: 'success', label: '企业网关就绪', tooltip: `${name} · 双模式凭据就绪${modelSuffix}` };
+          return { kind: 'ready', dotClass: 'success', label: '企业认证有效', tooltip: `${name} · 企业认证有效${modelSuffix}` };
         }
         if (gw === 'owner-mismatch') {
           return { kind: 'owner-mismatch', dotClass: 'warn', label: '凭据账号不匹配', tooltip: `${name} · 网关凭据属于其他账号` };
@@ -1335,7 +1338,7 @@ window.__ModuleLoader__.load({
         if (gw === 'invalid') {
           return { kind: 'invalid-key', dotClass: 'warn', label: '凭据状态需核对', tooltip: `${name} · 网关凭据记录需核对` };
         }
-        return { kind: 'missing-key', dotClass: 'warn', label: '待配置网关凭据', tooltip: `${name} · 未录入个人网关凭据` };
+        return { kind: 'ready', dotClass: 'success', label: '企业认证有效', tooltip: `${name} · 待配置网关凭据` };
       }
       return { kind: 'unknown', dotClass: 'idle', label: '状态未知', tooltip: '企业账号' };
     }
@@ -1953,17 +1956,7 @@ window.__ModuleLoader__.load({
                 'aria-label': `一键启用 ${model.id}`,
                 onClick: () => enableModelWithDefaults(model.id),
               }, '一键启用')
-              : hasCustom
-                ? h('button', {
-                  type: 'button',
-                  className: 'fiam-quick-btn',
-                  style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 8px', fontSize: 12 },
-                  disabled: actionBusy,
-                  title: '恢复为默认参数并立即保存生效',
-                  'aria-label': `默认参数启用 ${model.id}`,
-                  onClick: () => enableModelWithDefaults(model.id),
-                }, '恢复默认')
-                : null,
+              : null,
             h('button', {
               type: 'button',
               style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 8px', fontSize: 12, flexShrink: 0 },
@@ -2273,16 +2266,33 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function findScrollParent(el) {
+      if (typeof window === 'undefined' || typeof document === 'undefined') return null;
+      let parent = el?.parentElement;
+      while (parent && parent !== document.body && parent !== document.documentElement) {
+        try {
+          const style = window.getComputedStyle?.(parent);
+          const overflowY = style?.overflowY;
+          if ((overflowY === 'auto' || overflowY === 'scroll') && parent.scrollHeight > parent.clientHeight) {
+            return parent;
+          }
+        } catch { }
+        parent = parent.parentElement;
+      }
+      return document.scrollingElement || document.documentElement || (typeof window !== 'undefined' ? window : null);
+    }
+
     function renderModelsCard(ctx) {
       const {
         h, view, modelList, visibleModels, customModelCount, enabledCount, modelOptions, expandedModels,
-        modelQuery, setModelQuery, modelFilter, setModelFilter, toggleModelExpand, updateOptionField, resetModelOption,
+        modelQuery, setModelQuery, modelFilter, setModelFilter, handleFilterChange, toolbarRef, toggleModelExpand, updateOptionField, resetModelOption,
         disableModelOption, enableModelOption, enableModelWithDefaults, enableAllModelsWithDefaults,
         hasUnsavedModelChanges, discardModelChanges,
         saveModelOptions, refreshModels, modelSaving, modelNotice, credential, viewBarrier, gateway,
         fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
       } = ctx;
       const unenabledCount = Math.max(0, modelList.length - enabledCount);
+      const onFilterSelect = handleFilterChange || setModelFilter;
       return h('section', { id: 'fiam-section-models', className: 'fiam-card', 'aria-label': '企业模型' },
         h('div', { className: 'fiam-card-header' },
           h('div', { className: 'fiam-card-title-group' },
@@ -2332,7 +2342,7 @@ window.__ModuleLoader__.load({
           )
           : null,
         view.modelAccess?.configured && modelList.length > 0
-          ? h('div', { className: 'fiam-model-toolbar' },
+          ? h('div', { ref: toolbarRef, className: 'fiam-model-toolbar' },
             h('div', { className: 'fiam-search-wrap' },
               h('input', {
                 type: 'search',
@@ -2358,18 +2368,13 @@ window.__ModuleLoader__.load({
                 h('button', {
                   type: 'button',
                   className: `fiam-chip ${modelFilter === 'all' ? 'fiam-chip-active' : ''}`,
-                  onClick: () => setModelFilter('all'),
+                  onClick: () => onFilterSelect('all'),
                 }, `全部 (${modelList.length})`),
                 h('button', {
                   type: 'button',
                   className: `fiam-chip ${modelFilter === 'enabled' ? 'fiam-chip-active' : ''}`,
-                  onClick: () => setModelFilter('enabled'),
+                  onClick: () => onFilterSelect('enabled'),
                 }, `已启用 (${enabledCount})`),
-                h('button', {
-                  type: 'button',
-                  className: `fiam-chip ${modelFilter === 'custom' ? 'fiam-chip-active' : ''}`,
-                  onClick: () => setModelFilter('custom'),
-                }, `已个性化 (${customModelCount})`),
               ),
               unenabledCount > 0
                 ? h('button', {
@@ -2417,7 +2422,7 @@ window.__ModuleLoader__.load({
                   ? h('button', {
                     type: 'button',
                     style: { ...secondaryButton, height: 26, minHeight: 26, padding: '0 10px', fontSize: 12 },
-                    onClick: () => { setModelFilter('all'); setModelQuery(''); },
+                    onClick: () => { onFilterSelect('all'); setModelQuery(''); },
                   }, '重置筛选条件')
                   : null,
               )]
@@ -2495,6 +2500,35 @@ window.__ModuleLoader__.load({
       const [modelSaving, setModelSaving] = React.useState(false);
       const [modelNotice, setModelNotice] = React.useState(null);
       const lastSyncedOptions = React.useRef(initialModelOptions);
+      const toolbarRef = React.useRef(null);
+
+      const handleFilterChange = (nextFilter) => {
+        if (nextFilter === modelFilter) return;
+        const toolbarEl = toolbarRef.current;
+        let rectBefore = null;
+        try {
+          rectBefore = toolbarEl?.getBoundingClientRect?.();
+        } catch { }
+        setModelFilter(nextFilter);
+        if (toolbarEl && rectBefore && typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => {
+            try {
+              const rectAfter = toolbarEl.getBoundingClientRect();
+              const diff = rectAfter.top - rectBefore.top;
+              if (Math.abs(diff) > 0.5) {
+                const scrollParent = findScrollParent(toolbarEl);
+                if (scrollParent) {
+                  if (typeof scrollParent.scrollBy === 'function') {
+                    scrollParent.scrollBy({ top: diff, behavior: 'instant' });
+                  } else if ('scrollTop' in scrollParent) {
+                    scrollParent.scrollTop += diff;
+                  }
+                }
+              }
+            } catch { }
+          });
+        }
+      };
 
       const toggleModelExpand = (id) => {
         setExpandedModels(prev => ({ ...prev, [id]: !prev[id] }));
@@ -2947,9 +2981,7 @@ window.__ModuleLoader__.load({
       const normalizedQuery = modelQuery.trim().toLowerCase();
       const visibleModels = modelList.filter(m => {
         const opt = modelOptions[m.id] || {};
-        const hasCustom = Object.keys(opt).length > 0;
         if (modelFilter === 'enabled' && !Object.hasOwn(modelOptions, m.id)) return false;
-        if (modelFilter === 'custom' && !hasCustom) return false;
         if (!normalizedQuery) return true;
         const displayName = String(opt.name || m.name || m.id).toLowerCase();
         return String(m.id).toLowerCase().includes(normalizedQuery) || displayName.includes(normalizedQuery);
@@ -2974,7 +3006,7 @@ window.__ModuleLoader__.load({
 
       const modelsCard = renderModelsCard({
         h, view, modelList, visibleModels, customModelCount, enabledCount, modelOptions, expandedModels,
-        modelQuery, setModelQuery, modelFilter, setModelFilter, toggleModelExpand, updateOptionField, resetModelOption,
+        modelQuery, setModelQuery, modelFilter, setModelFilter, handleFilterChange, toolbarRef, toggleModelExpand, updateOptionField, resetModelOption,
         disableModelOption, enableModelOption, enableModelWithDefaults, enableAllModelsWithDefaults,
         hasUnsavedModelChanges, discardModelChanges,
         saveModelOptions, refreshModels, modelSaving, modelNotice, credential, viewBarrier, gateway,
@@ -2997,16 +3029,6 @@ window.__ModuleLoader__.load({
       const gwConfigured = gwState === 'configured';
       const principalName = view?.principal || view?.subject || '未登录员工';
       const avatarInitial = String(principalName).replace(/^E/i, '').slice(0, 2).toUpperCase() || '企';
-
-      let accessExpireText = '—';
-      if (typeof view?.accessExpiresInSeconds === 'number' && view.accessExpiresInSeconds > 0) {
-        const mins = Math.round(view.accessExpiresInSeconds / 60);
-        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将自动刷新';
-      } else if (view?.accessExpiresAt) {
-        const remainingMs = Date.parse(view.accessExpiresAt) - Date.now();
-        const mins = Math.round(remainingMs / 60000);
-        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将自动刷新';
-      }
 
       // Professional Feather/Lucide-style micro SVGs
       const settingsSvg = h('svg', {
@@ -3074,22 +3096,18 @@ window.__ModuleLoader__.load({
               className: 'fiam-launcher-menu-value',
               style: view?.modelAccess?.state === 'error' ? { color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 } : undefined,
             },
-              view?.modelAccess?.state === 'ready' && Array.isArray(view?.modelAccess?.models)
+              Array.isArray(view?.modelAccess?.models) && view.modelAccess.models.length > 0
                 ? `已同步 ${view.modelAccess.models.length} 个模型`
                 : view?.modelAccess?.state === 'loading'
                   ? '正在同步…'
                   : view?.modelAccess?.state === 'error'
                     ? '同步异常'
-                    : (gwConfigured ? '待同步目录' : '待配置凭证')
+                    : (gwConfigured ? '企业模型已就绪' : '待配置凭证')
             ),
           ) : null,
           view?.gatewayCredential?.deviceLabel ? h('div', { className: 'fiam-launcher-menu-row' },
             h('span', { className: 'fiam-launcher-menu-label' }, '授权设备'),
             h('span', { className: 'fiam-launcher-menu-value' }, view.gatewayCredential.deviceLabel),
-          ) : null,
-          isSignedIn ? h('div', { className: 'fiam-launcher-menu-row' },
-            h('span', { className: 'fiam-launcher-menu-label' }, '登录会话'),
-            h('span', { className: 'fiam-launcher-menu-value' }, accessExpireText),
           ) : null,
         ),
         // Action List

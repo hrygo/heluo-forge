@@ -102,3 +102,38 @@ test('launcher closes open menu and resets sign-out confirmation when session tr
   await panel.tick();
   assert.equal(find(panel.render(), node => node.type?.name === 'IamLauncherMenu'), undefined);
 });
+
+test('launcher eliminates distracting token refresh count and shows stable active status', async t => {
+  const { mountPanel } = await import('./support/client-panel.mjs');
+  const view = {
+    state: 'ready',
+    configured: true,
+    signedIn: true,
+    principal: 'E1001',
+    accessExpiresAt: new Date(Date.now() + 120000).toISOString(),
+    gatewayCredential: { state: 'configured', deviceLabel: 'MacBook-Pro' },
+    modelAccess: { state: 'loading', models: [{ id: 'corp-chat' }] },
+  };
+  const panel = await mountPanel(async () => Response.json(view), {
+    componentId: 'forge-iam-launcher',
+    componentProps: { wide: true },
+  });
+  t.after(() => panel.close());
+  const text = panel.text(panel.render());
+  assert.match(text, /企业认证有效/);
+  assert.doesNotMatch(text, /正在同步模型/);
+
+  const find = (node, predicate) => {
+    if (!node || typeof node !== 'object') return undefined;
+    if (predicate(node)) return node;
+    for (const child of node.children ?? []) { const found = find(child, predicate); if (found) return found; }
+  };
+  find(panel.render(), node => node.type === 'button' && node.props.className === 'fiam-launcher-btn').props.onClick({ stopPropagation() {} });
+  const menu = find(panel.render(), node => node.type?.name === 'IamLauncherMenu');
+  assert.ok(menu);
+  const menuText = panel.text(menu.type(menu.props));
+
+  assert.doesNotMatch(menuText, /登录会话/);
+  assert.doesNotMatch(menuText, /分钟后刷新/);
+  assert.match(menuText, /已同步 1 个模型/);
+});

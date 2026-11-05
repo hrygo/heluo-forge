@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mountPanel } from './support/client-panel.mjs';
 import { buildThinkingLevelMap } from '../src/model-options.mjs';
+
+const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
 const view = {
   state: 'ready', canSignOut: true, principal: 'synthetic-person',
@@ -488,7 +491,6 @@ test('journey bar reflects warning state on credential mismatch and search clear
   clearBtn.props.onClick();
   assert.match(panel.text(panel.render()), /corp-chat/);
 });
-
 test('joint journey and state transitions update credential notice, journey bar, and draft reset across model discovery states', async t => {
   let polledView = {
     ...view,
@@ -535,4 +537,43 @@ test('joint journey and state transitions update credential notice, journey bar,
   await panel.tick();
   assert.match(panel.text(panel.render()), /网关地址和个人 Key 已保存，模型目录已同步/);
   assert.match(panel.text(panel.render()), /已启用 1\/1/);
+});
+
+test('model list toolbar is sticky, eliminates redundant custom tab, and aligns row actions', async t => {
+  const customView = {
+    ...view,
+    gatewayCredential: { state: 'configured', matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
+    modelAccess: {
+      configured: true,
+      baseURL: 'https://gateway.corp.example/v1',
+      state: 'ready',
+      models: [
+        { id: 'corp-chat', name: 'corp-chat' },
+        { id: 'corp-coder', name: 'corp-coder' },
+      ],
+      modelOptions: {
+        'corp-chat': { maxTokens: 32000 },
+        'corp-coder': {},
+      },
+    },
+  };
+  const panel = await mountPanel(async () => Response.json(customView));
+  t.after(() => panel.close());
+
+  assert.match(clientSource, /\.fiam-model-toolbar\s*\{[^}]*position:\s*sticky/);
+  assert.match(clientSource, /\.fiam-model-list\s*\{[^}]*min-height:\s*480px/);
+
+  const renderedText = panel.text(panel.render());
+  assert.match(renderedText, /全部 \(2\)/);
+  assert.match(renderedText, /已启用 \(2\)/);
+  assert.doesNotMatch(renderedText, /已个性化 \(/);
+
+  const buttons = nodes(panel.render()).filter(n => n.type === 'button').map(n => panel.text(n));
+  assert.ok(!buttons.includes('恢复默认'));
+
+  const enabledChip = nodes(panel.render()).find(n => n.type === 'button' && panel.text(n).includes('已启用'));
+  assert.ok(enabledChip);
+  enabledChip.props.onClick();
+  await panel.tick();
+  assert.match(panel.text(panel.render()), /corp-chat/);
 });
