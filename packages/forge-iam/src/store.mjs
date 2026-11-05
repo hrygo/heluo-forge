@@ -22,9 +22,11 @@ const GATEWAY_VERSION = 2;
 const GATEWAY_LEGACY_VERSION = 1;
 const WRITE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const valueDigest = (value) => createHash('sha256').update(value).digest('hex');
-const gatewayTombstone = () => ({ kind: GATEWAY_RECORD_KIND, payload: {
-  version: GATEWAY_VERSION, type: 'heluo-iam-gateway-tombstone', writeOperationId: randomUUID(),
-} });
+const gatewayTombstone = () => ({
+  kind: GATEWAY_RECORD_KIND, payload: {
+    version: GATEWAY_VERSION, type: 'heluo-iam-gateway-tombstone', writeOperationId: randomUUID(),
+  }
+});
 const isGatewayTombstone = (record) => record?.kind === GATEWAY_RECORD_KIND
   && Object.keys(record).length === 2 && record.payload?.version === GATEWAY_VERSION
   && record.payload.type === 'heluo-iam-gateway-tombstone'
@@ -67,7 +69,7 @@ export function createGrantStore(credentials, options = {}) {
     try {
       if (typeof options.verifyAtomicStore !== 'function') return false;
       const result = options.verifyAtomicStore(credentials);
-      if (result && typeof result.then === 'function') Promise.resolve(result).catch(() => {});
+      if (result && typeof result.then === 'function') Promise.resolve(result).catch(() => { });
       return result === true;
     } catch {
       return false;
@@ -322,7 +324,7 @@ export function createGatewayCredentialStore(credentials, options = {}) {
 
   function rejectAsync(value) {
     if (value && typeof value.then === 'function') {
-      Promise.resolve(value).catch(() => {});
+      Promise.resolve(value).catch(() => { });
       return true;
     }
     return false;
@@ -435,7 +437,8 @@ export function createGatewayCredentialStore(credentials, options = {}) {
         throw new StoreError('IAM_GATEWAY_KEY_INVALID', 'gateway credential must be uag- plus 32 hexadecimal digits');
       }
       if (!isNonEmptyString(ownerSubject)) throw new StoreError('IAM_GATEWAY_OWNER_MISSING', 'a gateway credential needs the signed-in subject');
-      const payload = { version: GATEWAY_VERSION, ownerSubject, enteredAt,
+      const payload = {
+        version: GATEWAY_VERSION, ownerSubject, enteredAt,
         writeOperationId: randomUUID(), valueDigest: valueDigest(value),
         ...(deviceLabel ? { deviceLabel } : {}), ...(suggestedExpiry ? { suggestedExpiry } : {}),
         ...(baseURL ? { baseURL } : {}),
@@ -469,7 +472,7 @@ const MODEL_SELECTION_VERSION = 1;
 const MODEL_SELECTION_TYPE = 'heluo-iam-model-selection';
 const MODEL_ID_PATTERN = /^[\w./:-]{1,200}$/u;
 const MAX_SELECTED_MODELS = 200;
-const THINKING_LEVEL_KEYS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const THINKING_LEVEL_KEYS = new Set(['off', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 /** Keep only the override fields the runtime understands, dropping junk. */
 function sanitizeModelOption(input) {
@@ -555,11 +558,13 @@ export function createModelSelectionStore(credentials, options = {}) {
         if (current !== undefined && current !== null && current.kind !== 'grant') {
           throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing IAM record is not a grant');
         }
-        return { kind: 'grant', payload: {
-          version: MODEL_SELECTION_VERSION, type: MODEL_SELECTION_TYPE,
-          subject: selection.subject, models: selection.models,
-          defaultModelId: selection.defaultModelId, updatedAt: new Date().toISOString(),
-        } };
+        return {
+          kind: 'grant', payload: {
+            version: MODEL_SELECTION_VERSION, type: MODEL_SELECTION_TYPE,
+            subject: selection.subject, models: selection.models,
+            defaultModelId: selection.defaultModelId, updatedAt: new Date().toISOString(),
+          }
+        };
       });
     } catch (error) {
       if (error instanceof StoreError) throw error;

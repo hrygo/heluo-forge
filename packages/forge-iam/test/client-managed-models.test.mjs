@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { mountPanel } from './support/client-panel.mjs';
 import { buildThinkingLevelMap } from '../src/model-options.mjs';
 
-const view = { state: 'ready', canSignOut: true, principal: 'synthetic-person',
+const view = {
+  state: 'ready', canSignOut: true, principal: 'synthetic-person',
   gatewayCredential: { state: 'configured', matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
-  modelAccess: { configured: true, state: 'ready', models: [{ id: 'corp-chat', name: 'corp-chat' }] } };
+  modelAccess: { configured: true, state: 'ready', models: [{ id: 'corp-chat', name: 'corp-chat' }] }
+};
 const nodes = node => node && typeof node === 'object' ? [node, ...(node.children ?? []).flatMap(nodes)] : [];
 
 test('account form saves gateway URL and a masked Key together and clears the draft after success', async t => {
@@ -39,8 +41,10 @@ test('refresh action uses only the Host model route and shows the returned catal
   const panel = await mountPanel(async path => {
     requests.push(path);
     if (path === '/api/forge-iam/view') return Response.json(view);
-    if (path === '/api/forge-iam/models') return Response.json({ models: [{ id: 'new-chat' }],
-      view: { ...view, modelAccess: { ...view.modelAccess, models: [{ id: 'new-chat', name: 'new-chat' }] } } });
+    if (path === '/api/forge-iam/models') return Response.json({
+      models: [{ id: 'new-chat' }],
+      view: { ...view, modelAccess: { ...view.modelAccess, models: [{ id: 'new-chat', name: 'new-chat' }] } }
+    });
     throw new Error('unexpected synthetic request');
   }); t.after(() => panel.close());
   await panel.findButton(panel.render(), '刷新模型列表').props.onClick();
@@ -190,11 +194,11 @@ test('one model can be pinned to a single reasoning level beyond the default lad
   t.after(() => panel.close());
 
   await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
-  await panel.findButton(panel.render(), '最省 (Minimal)').props.onClick();
+  await panel.findButton(panel.render(), '更深 (XHigh)').props.onClick();
   await panel.findButton(panel.render(), '保存模型配置').props.onClick();
 
   assert.equal(writes.length, 1);
-  assert.deepEqual(writes[0].options['corp-chat'].reasoningEfforts, { off: null, minimal: 'minimal' });
+  assert.deepEqual(writes[0].options['corp-chat'].reasoningEfforts, { off: null, xhigh: 'xhigh' });
   // Undeclared levels stay unsupported, so the chip row reports this one level.
   assert.equal(buildThinkingLevelMap(writes[0].options['corp-chat'].reasoningEfforts).medium, null);
 });
@@ -263,4 +267,95 @@ test('clearing a customised input field leaves the model enabled with an empty o
   await panel.findButton(panel.render(), '保存模型配置').props.onClick();
   // Still enabled with empty object, not completely removed from options
   assert.deepEqual(writes.at(-1).options, { 'corp-chat': {} });
+});
+
+test('default context window displays 200K and one-click enable immediately activates and persists a model with default parameters', async t => {
+  const writes = [];
+  const twoModels = {
+    ...view,
+    modelAccess: {
+      ...view.modelAccess,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
+      modelOptions: { 'corp-chat': {} },
+    },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({
+        ok: true, persisted: true, view: {
+          ...twoModels,
+          modelAccess: { ...twoModels.modelAccess, modelOptions: writes.at(-1).options },
+        }
+      });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await new Promise(setImmediate);
+
+  // Default context window badge is 200K and maxTokens is 64K
+  assert.match(panel.text(panel.render()), /200K · 输出 64K/);
+  // User journey bar shows 3 steps
+  assert.match(panel.text(panel.render()), /1\. 身份认证/);
+  assert.match(panel.text(panel.render()), /2\. 网关凭据/);
+  assert.match(panel.text(panel.render()), /3\. 模型启用/);
+
+  // One-click enable button on the row enables corp-coder with default parameters and persists immediately
+  const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
+  const oneClickBtn = byLabel('一键启用 corp-coder');
+  assert.ok(oneClickBtn);
+  await oneClickBtn.props.onClick();
+
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].options, { 'corp-chat': {}, 'corp-coder': {} });
+  assert.match(panel.text(panel.render()), /已采用默认参数启用 corp-coder 并生效/);
+});
+
+test('reasoning effort supports lower and upper bound selection and auto-aligns when lower > upper', async t => {
+  const writes = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({ ok: true, persisted: true, view });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+
+  await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
+  const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
+  const lowerSelect = () => byLabel('推理强度下界 1');
+  const upperSelect = () => byLabel('推理强度上界 1');
+  assert.ok(lowerSelect());
+  assert.ok(upperSelect());
+
+  // Select lower bound = low, upper bound = xhigh
+  lowerSelect().props.onChange({ target: { value: 'low' } });
+  upperSelect().props.onChange({ target: { value: 'xhigh' } });
+  assert.match(panel.text(panel.render()), /开放区间：Low → Medium → High → XHigh（共 4 档）/);
+  assert.match(panel.text(panel.render()), /深度推理 · Low~XHigh/);
+
+  await panel.findButton(panel.render(), '保存模型配置').props.onClick();
+  assert.deepEqual(writes.at(-1).options['corp-chat'].reasoningEfforts, {
+    off: null,
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+  });
+  const map = buildThinkingLevelMap(writes.at(-1).options['corp-chat'].reasoningEfforts);
+  assert.equal(map.minimal, null);
+  assert.equal(map.low, 'low');
+  assert.equal(map.medium, 'medium');
+  assert.equal(map.high, 'high');
+  assert.equal(map.xhigh, 'xhigh');
+  assert.equal(map.max, null);
+
+  // Selecting a lower bound higher than current upper bound automatically raises upper bound (never anti-human)
+  lowerSelect().props.onChange({ target: { value: 'max' } });
+  assert.equal(upperSelect().props.value, 'max');
+  assert.match(panel.text(panel.render()), /固定单档：Max/);
 });

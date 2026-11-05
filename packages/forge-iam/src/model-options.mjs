@@ -9,7 +9,10 @@ export const NO_RETRY_POLICY = Object.freeze({
   jitterRatio: 0.1,
 });
 
-export const THINKING_LEVELS = Object.freeze(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+export const THINKING_LEVELS = Object.freeze(['off', 'low', 'medium', 'high', 'xhigh', 'max']);
+export const REASONING_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+export const DEFAULT_CONTEXT_WINDOW = 200000;
+export const DEFAULT_MAX_TOKENS = 64000;
 
 const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
 const CAPACITY_SCALE = { k: 1000, m: 1000000 };
@@ -78,13 +81,71 @@ export function formatCapacity(value) {
   return String(value);
 }
 
+/**
+ * Build a contiguous reasoningEfforts map from lower and upper bounds
+ * across ['off', 'low', 'medium', 'high', 'xhigh', 'max'].
+ * Automatically normalizes reversed bounds so lower <= upper always holds.
+ */
+export function buildReasoningEffortRange(lowerBound, upperBound = lowerBound) {
+  const normLower = typeof lowerBound === 'string' ? lowerBound.trim().toLowerCase() : '';
+  const normUpper = typeof upperBound === 'string' ? upperBound.trim().toLowerCase() : normLower;
+  const startIdx = THINKING_LEVELS.indexOf(normLower);
+  const endIdx = THINKING_LEVELS.indexOf(normUpper);
+  if (startIdx < 0 && endIdx < 0) return undefined;
+  const resolvedStart = startIdx >= 0 ? startIdx : endIdx;
+  const resolvedEnd = endIdx >= 0 ? endIdx : startIdx;
+  const minIdx = Math.min(resolvedStart, resolvedEnd);
+  const maxIdx = Math.max(resolvedStart, resolvedEnd);
+  if (maxIdx === 0) return undefined;
+  const result = { off: minIdx === 0 ? 'off' : null };
+  for (let i = Math.max(1, minIdx); i <= maxIdx; i += 1) {
+    const level = THINKING_LEVELS[i];
+    result[level] = level;
+  }
+  return result;
+}
+
+/**
+ * Inspect a reasoningEfforts configuration and return its active lower/upper bounds.
+ */
+export function getReasoningEffortBounds(reasoningEfforts) {
+  if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) {
+    return { enabled: false, lower: 'off', upper: 'off', levels: [] };
+  }
+  const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
+  const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
+  const source = (typeof boundLower === 'string' || typeof boundUpper === 'string')
+    ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
+    : reasoningEfforts;
+  const activeLevels = REASONING_EFFORT_LEVELS.filter(level => {
+    const val = source[level];
+    return typeof val === 'string' && val.trim().length > 0;
+  });
+  if (activeLevels.length === 0) {
+    return { enabled: false, lower: 'off', upper: 'off', levels: [] };
+  }
+  const hasOff = typeof source.off === 'string' && source.off.trim().length > 0;
+  const levels = hasOff ? ['off', ...activeLevels] : activeLevels;
+  return {
+    enabled: true,
+    lower: levels[0],
+    upper: levels[levels.length - 1],
+    levels,
+  };
+}
+
 /** Build pi-ai thinkingLevelMap where disabled levels are explicitly null. */
 export function buildThinkingLevelMap(reasoningEfforts) {
   if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) return undefined;
-  const map = {};
+  const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
+  const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
+  const normalizedEfforts = (typeof boundLower === 'string' || typeof boundUpper === 'string')
+    ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
+    : reasoningEfforts;
+  const map = { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null };
   let hasEnabled = false;
   for (const level of THINKING_LEVELS) {
-    const val = reasoningEfforts[level];
+    const val = normalizedEfforts[level];
     if (typeof val === 'string' && val.trim()) {
       map[level] = val.trim();
       if (level !== 'off') hasEnabled = true;
@@ -102,8 +163,8 @@ export function applyModelOptions(rawModels, options = {}) {
     const opt = options?.[item.id] || {};
     const parsedContext = parseCapacity(opt.contextWindow);
     const parsedMaxTokens = parseCapacity(opt.maxTokens);
-    const contextWindow = parsedContext ?? item.contextWindow ?? 32768;
-    const maxTokens = parsedMaxTokens ?? item.maxTokens ?? 4096;
+    const contextWindow = parsedContext ?? item.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+    const maxTokens = parsedMaxTokens ?? item.maxTokens ?? DEFAULT_MAX_TOKENS;
     const hasCustomMaxTokens = parsedMaxTokens !== undefined;
     const name = typeof opt.name === 'string' && opt.name.trim() ? opt.name.trim() : (item.name || item.id);
     const input = Array.isArray(opt.inputModalities) && opt.inputModalities.length > 0
@@ -113,7 +174,12 @@ export function applyModelOptions(rawModels, options = {}) {
     const rawEfforts = opt.reasoningEfforts && typeof opt.reasoningEfforts === 'object' && !Array.isArray(opt.reasoningEfforts)
       ? opt.reasoningEfforts : (item.reasoningEfforts ?? null);
     const thinkingLevelMap = buildThinkingLevelMap(rawEfforts);
-    const reasoningEfforts = thinkingLevelMap ? rawEfforts : null;
+    const normalizedEfforts = thinkingLevelMap
+      ? ((typeof (rawEfforts?.lower ?? rawEfforts?.min) === 'string' || typeof (rawEfforts?.upper ?? rawEfforts?.max) === 'string')
+        ? buildReasoningEffortRange(rawEfforts.lower ?? rawEfforts.min, rawEfforts.upper ?? rawEfforts.max)
+        : rawEfforts)
+      : null;
+    const reasoningEfforts = normalizedEfforts;
     const reasoning = Boolean(thinkingLevelMap || opt.reasoning || item.reasoning);
     return {
       ...item,

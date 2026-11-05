@@ -4,8 +4,10 @@ import { applyModelOptions, buildThinkingLevelMap, createManagedModelRuntime, cr
 
 const configuration = { baseURL: 'https://gateway.corp.example/v1' };
 function fixture(overrides = {}) {
-  let view = { state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
-    gatewayCredential: { state: 'configured', matchesAccount: true } };
+  let view = {
+    state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
+    gatewayCredential: { state: 'configured', matchesAccount: true }
+  };
   const listeners = new Set();
   let selection = overrides.selection ?? null;
   const iam = {
@@ -34,9 +36,11 @@ function fixture(overrides = {}) {
     },
   };
   const events = []; let adapter; let guard; let calls = 0; let credential;
-  const host = { llm: { registerAdapter(routes, value) { adapter = value; return () => events.push('dispose'); } },
-    on(name, callback) { assert.equal(name, 'llm/stream'); guard = callback; return () => {}; },
-    emit(name) { events.push(name); } };
+  const host = {
+    llm: { registerAdapter(routes, value) { adapter = value; return () => events.push('dispose'); } },
+    on(name, callback) { assert.equal(name, 'llm/stream'); guard = callback; return () => { }; },
+    emit(name) { events.push(name); }
+  };
   const backend = {
     providerInfo: id => ({ id, name: '企业模型' }), providerRetryPolicy: () => undefined,
     imageRequestPricing: () => undefined, imageRequestTarget: (_p, _m, i) => i,
@@ -44,7 +48,8 @@ function fixture(overrides = {}) {
     async prepareCall(provider, model) { return { model: await this.resolveModel(provider, model), stream: o => this.stream(o) }; },
     async *stream(options) { calls++; credential = await options.resolveKey(); yield { type: 'text', text: 'ok' }; yield { type: 'finish', reason: { kind: 'stop' } }; },
   };
-  const runtime = createManagedModelRuntime({ host, iam, config: { defaultProvider: 'enterprise', managedModels: configuration },
+  const runtime = createManagedModelRuntime({
+    host, iam, config: { defaultProvider: 'enterprise', managedModels: configuration },
     fetch: async (url, init) => {
       assert.equal(url, configuration.baseURL + '/models');
       assert.equal(init.headers.authorization, 'Bearer synthetic-only');
@@ -53,14 +58,19 @@ function fixture(overrides = {}) {
     },
     requestHeaders: async () => ({}),
     ...overrides,
-    createAdapter: overrides.createAdapter ?? (async ({ resolveKey }) => new Proxy(backend, { get(target, key) {
-      if (key === 'stream') return options => target.stream({ ...options, resolveKey });
-      if (key === 'prepareCall') return async (provider, model) => ({ model: await target.resolveModel(provider, model), stream: options => target.stream({ ...options, resolveKey }) });
-      return typeof target[key] === 'function' ? target[key].bind(target) : target[key];
-    } })) });
-  return { iam, runtime, events, get adapter() { return adapter; }, get guard() { return guard; }, get calls() { return calls; }, get credential() { return credential; },
+    createAdapter: overrides.createAdapter ?? (async ({ resolveKey }) => new Proxy(backend, {
+      get(target, key) {
+        if (key === 'stream') return options => target.stream({ ...options, resolveKey });
+        if (key === 'prepareCall') return async (provider, model) => ({ model: await target.resolveModel(provider, model), stream: options => target.stream({ ...options, resolveKey }) });
+        return typeof target[key] === 'function' ? target[key].bind(target) : target[key];
+      }
+    }))
+  });
+  return {
+    iam, runtime, events, get adapter() { return adapter; }, get guard() { return guard; }, get calls() { return calls; }, get credential() { return credential; },
     get selection() { return selection; },
-    change(next) { view = { ...view, ...next }; for (const listener of [...listeners]) listener(); } };
+    change(next) { view = { ...view, ...next }; for (const listener of [...listeners]) listener(); }
+  };
 }
 const chunks = async stream => { const result = []; for await (const chunk of stream) result.push(chunk); return result; };
 const options = { provider: 'enterprise', model: 'enterprise-chat', messages: [] };
@@ -138,9 +148,9 @@ test('a discovery response arriving after logout cannot repopulate the catalogue
 
 test('model-list errors are classified without returning gateway response bodies', async t => {
   for (const [status, body, code] of [[401, 'private-body', 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'],
-    [403, 'private-body', 'ENTERPRISE_GATEWAY_FORBIDDEN'],
-    [200, '{"data":[{"id":"same"},{"id":"same"}]}', 'ENTERPRISE_MODEL_CATALOG_INVALID'],
-    [200, 'not-json-private-body', 'ENTERPRISE_MODEL_CATALOG_INVALID']]) {
+  [403, 'private-body', 'ENTERPRISE_GATEWAY_FORBIDDEN'],
+  [200, '{"data":[{"id":"same"},{"id":"same"}]}', 'ENTERPRISE_MODEL_CATALOG_INVALID'],
+  [200, 'not-json-private-body', 'ENTERPRISE_MODEL_CATALOG_INVALID']]) {
     const f = fixture({ fetch: async () => new Response(body, { status }) });
     t.after(() => f.runtime.dispose()); await f.runtime.ready;
     assert.equal(f.runtime.getView().error, code);
@@ -152,13 +162,15 @@ test('model-list errors are classified without returning gateway response bodies
 test('logout aborts a live transport and prevents a late chunk from being delivered', async t => {
   let requestSignal;
   const entered = Promise.withResolvers();
-  const f = fixture({ createAdapter: async () => ({
-    async *stream(options) {
-      requestSignal = options.signal; yield { type: 'text-delta', text: 'first' }; entered.resolve();
-      await new Promise(resolve => requestSignal.addEventListener('abort', resolve, { once: true }));
-      yield { type: 'text-delta', text: 'must-not-deliver' };
-    },
-  }) });
+  const f = fixture({
+    createAdapter: async () => ({
+      async *stream(options) {
+        requestSignal = options.signal; yield { type: 'text-delta', text: 'first' }; entered.resolve();
+        await new Promise(resolve => requestSignal.addEventListener('abort', resolve, { once: true }));
+        yield { type: 'text-delta', text: 'must-not-deliver' };
+      },
+    })
+  });
   t.after(() => f.runtime.dispose()); await f.runtime.ready;
   const iterator = f.adapter.stream(options)[Symbol.asyncIterator]();
   assert.equal((await iterator.next()).value.text, 'first');
@@ -180,9 +192,13 @@ test('a refreshed session reloads the standard catalogue and can make a new call
 
 test('transport authentication failure differs from IAM logout and does not replay', async t => {
   let dispatches = 0;
-  const f = fixture({ createAdapter: async () => ({ async *stream() {
-    dispatches++; yield { type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', message: 'private-body' } } };
-  } }) });
+  const f = fixture({
+    createAdapter: async () => ({
+      async *stream() {
+        dispatches++; yield { type: 'finish', reason: { kind: 'error', failure: { code: 'AUTH', message: 'private-body' } } };
+      }
+    })
+  });
   t.after(() => f.runtime.dispose()); await f.runtime.ready;
   const result = await chunks(f.adapter.stream(options));
   assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
@@ -236,9 +252,10 @@ test('fine-grained model options apply capacity and modality overrides to catalo
   assert.equal(view.models[0].maxTokens, 8000);
   assert.equal(view.models[0].reasoning, true);
 
-  // Resetting options clears custom overrides
+  // Resetting options clears custom overrides and restores 200K/64K default capacities
   await f.runtime.updateModelOptions({});
-  assert.equal(f.runtime.getView().models[0].contextWindow, 32768);
+  assert.equal(f.runtime.getView().models[0].contextWindow, 200000);
+  assert.equal(f.runtime.getView().models[0].maxTokens, 64000);
   assert.equal(f.runtime.getView().models[0].reasoning, false);
 });
 
@@ -280,8 +297,8 @@ test('discovery sorts models stably by id and createNativeGatewayAdapter configu
   );
 
   let capturedOptions;
-  const rawModels = [{ id: 'default-model', name: 'default-model', contextWindow: 32768, maxTokens: 4096, input: ['text'], inputModalities: ['text'] },
-    { id: 'custom-model', name: 'custom-model', contextWindow: 32768, maxTokens: 4096, input: ['text'], inputModalities: ['text'] }];
+  const rawModels = [{ id: 'default-model', name: 'default-model', contextWindow: 200000, maxTokens: 64000, input: ['text'], inputModalities: ['text'] },
+  { id: 'custom-model', name: 'custom-model', contextWindow: 200000, maxTokens: 64000, input: ['text'], inputModalities: ['text'] }];
   const overlaid = applyModelOptions(rawModels, {
     'custom-model': { maxTokens: '16K', reasoningEfforts: { off: null, high: 'high' } },
   });
@@ -293,7 +310,7 @@ test('discovery sorts models stably by id and createNativeGatewayAdapter configu
             return { PiAiAdapter: class { constructor(opts) { capturedOptions = opts; } } };
           }
           if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
-            return { openAICompletionsApi: () => ({ stream: () => {}, streamSimple: () => {} }) };
+            return { openAICompletionsApi: () => ({ stream: () => { }, streamSimple: () => { } }) };
           }
           throw new Error(`unexpected import: ${specifier}`);
         },
