@@ -158,7 +158,7 @@ flowchart TB
     subgraph Domain_Model["模型就绪协调域"]
       direction LR
       F_ModelGate["模型准入纯逻辑门禁<br/>(9 级输入纯函数判定 / 无越权拦截)"]
-      F_ModelObserve["宿主默认模型协调<br/>(严格只读采样 / 绝不篡改配置)"]
+      F_ModelObserve["宿主默认模型协调<br/>(失效安全对齐 / 绝不覆盖可用选择)"]
       F_ReadySync["就绪态跨模块透传<br/>(提供统一快照支撑网关鉴权)"]
     end
   end
@@ -839,7 +839,125 @@ flowchart TD
 
 宿主运行环境遵循**严格只读**原则：`reconcileDefaultModel()` 仅对当前 Provider 状态与选择执行纯观察采样，返回 `{ mode: 'read-only', written: false, verified: false, reason }`。
 
-真实 Host 代码绝不调用 `agentDefaultModel.saveSelection`，绝不覆写用户已有设置。真实企业模型调用拦截与授权策略由独立的 `@heluo/forge-gateway` 网关层执行。
+该观察路径不调用 `agentDefaultModel.saveSelection`。2026-11-05 起唯一的写入在企业模型运行时：DSH 新对话默认模型可证明不可用（提供方未注册、企业模型未启用或不在目录）时对齐为企业默认模型，仍可用的选择不覆写，未知按不写处理（用户确认：内网环境官方模型不可用；细则见包内开发指南“新对话默认模型对齐”）。真实企业模型调用拦截与授权策略由独立的 `@heluo/forge-gateway` 网关层执行。
+
+### 7.6 状态机全景与协同流转规范
+
+系统运行时由 4 个相互解耦但通过条件强绑定的状态机协同构成：
+
+1. **SM1: 企业身份认证状态机（IAM Session）**：管理用户 OIDC 握手、令牌有效性与生命周期；
+2. **SM2: 网关静态凭据状态机（Gateway Credential）**：管理系统钥匙串中 `ENTERPRISE_STATIC_KEY` 的持有、录入与属主一致性；
+3. **SM3: 企业模型准入与目录状态机（Managed Models & Catalog）**：管理网关模型发现、已启用模型集、首选默认模型推导与瞬态故障重试；
+4. **SM4: 宿主新会话默认模型状态机（Host Agent Default Model）**：管理 DSH 宿主层 `ctx.agentDefaultModel` 的落盘与当前会话绑定。
+
+#### 7.6.1 四层联动状态机拓扑
+
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    state "1. 身份认证状态机 (IAM Session)" as SM1 {
+        [*] --> SM1_unconfigured: 插件装载 / 配置未就绪
+        SM1_unconfigured --> SM1_signed_out: 存储就绪 / 未登录
+        SM1_signed_out --> SM1_authenticating: 触发 OIDC 登录 (startSignIn)
+        SM1_authenticating --> SM1_ready: 回调验签成功 & 换票完成
+        SM1_authenticating --> SM1_error: 认证失败 / 超时
+        SM1_error --> SM1_signed_out: 用户重试
+        SM1_ready --> SM1_expired: Access Token 过期且刷新失败
+        SM1_expired --> SM1_authenticating: 重新认证
+        SM1_ready --> SM1_signed_out: 用户主动退出 / 吊销
+    }
+
+    state "2. 网关凭据状态机 (Gateway Credential)" as SM2 {
+        [*] --> SM2_unconfigured: 初始无凭据
+        SM2_unconfigured --> SM2_configured: 钥匙串写入且属主匹配当前工号
+        SM2_configured --> SM2_mismatched: 换人登录 (属主不一致)
+        SM2_configured --> SM2_invalid: 网关鉴权 401/403
+        SM2_mismatched --> SM2_configured: 重新录入匹配凭据
+        SM2_invalid --> SM2_configured: 重新录入有效凭据
+        SM2_configured --> SM2_unconfigured: 用户主动清除网关凭证
+    }
+
+    state "3. 企业模型准入与目录状态机 (Managed Models)" as SM3 {
+        [*] --> SM3_unconfigured: 初始状态
+        SM3_unconfigured --> SM3_loading: IAM ready 且 GW configured
+        SM3_loading --> SM3_ready: 模型列表拉取成功 & 首选默认就绪 (1/32)
+        SM3_loading --> SM3_transient_error: 网关瞬态不可达 (502/503/超时)
+        SM3_transient_error --> SM3_loading: 有界指数退避重试 (2s~60s)
+        SM3_loading --> SM3_auth_error: 凭据被拒 (401/403)
+        SM3_ready --> SM3_loading: 手动刷新 / 凭据更新
+        SM3_ready --> SM3_unconfigured: IAM 登出 / 令牌过期 / 凭据移除 (原子双清)
+        SM3_auth_error --> SM3_unconfigured: 用户更新凭据
+    }
+
+    state "4. 宿主默认模型状态机 (Host Agent Default Model)" as SM4 {
+        [*] --> SM4_disabled: 初始状态 (指向官方已禁用 deepseek-account)
+        SM4_disabled --> SM4_aligned: 目录就绪触发对齐 (alignHostDefaultModel)
+        SM4_disabled --> SM4_blocked: 未对齐发消息 (报 session/model-unavailable)
+        SM4_blocked --> SM4_aligned: 目录加载就绪或设置保存
+        SM4_aligned --> SM4_session_ready: 会话绑定有效企业模型
+        SM4_aligned --> SM4_disabled: IAM 登出或模型被整体禁用
+    }
+```
+
+#### 7.6.2 新会话默认模型对齐判定流转
+
+```mermaid
+flowchart TD
+    subgraph S1["触发源 (Trigger Events)"]
+        T1["企业模型目录加载就绪<br/>(catalogState 变为 ready)"]
+        T2["用户更新已启用模型集<br/>(updateModelOptions 提交)"]
+    end
+
+    subgraph S2["前置与健康检查 (Pre-conditions)"]
+        P1{"isCurrent() 检查<br/>(未登出、无换人、Token未过期)"}
+        P2{"读取宿主当前默认模型<br/>currentSelection()"}
+    end
+
+    subgraph S3["可用性判定 (Provable Usability Gate)"]
+        U1{"当前选择是否仍可运行?<br/>(Provider已注册 且 Model在可用列表中)"}
+    end
+
+    subgraph S4["对齐与落盘决策 (Decision Actions)"]
+        A_KEPT["KEPT: 当前选择仍可用<br/>绝不覆盖，保持原样"]
+        A_UNKNOWN["UNKNOWN: 宿主读取失败/列表报错<br/>保守不写，防止误伤"]
+        A_ALIGNED["ALIGNED: 当前默认可证明不可用<br/>(如已被禁用的 deepseek-account)<br/>调用 saveSelection 对齐为企业默认模型"]
+        A_STALE["STALE: 执行中会话已发生变化<br/>中止写入，防止串号污染"]
+    end
+
+    subgraph S5["事件联动 (Event Notification)"]
+        E1["发出 llm/adapters-updated 拓扑变更事件<br/>客户端目录与会话控制器即时重新读取默认模型"]
+    end
+
+    T1 --> P1
+    T2 --> P1
+    P1 -->|通过| P2
+    P1 -->|未通过| A_STALE
+    P2 -->|读取成功且结构有效| U1
+    P2 -->|读取失败/异常| A_UNKNOWN
+    U1 -->|可用| A_KEPT
+    U1 -->|不可用| A_ALIGNED
+    A_ALIGNED --> E1
+```
+
+#### 7.6.3 状态转换与安全不变量矩阵
+
+| 状态机 | 源状态 | 触发事件 / 输入 | 守卫条件 (Guards) | 目标状态 | 伴随动作与安全不变量 |
+|---|---|---|---|---|---|
+| **SM1: IAM** | `signed-out` | 用户发起登录 | 配置完整、无冲突残留 | `authenticating` | 生成单次消费 Attempt 与 PKCE S256 Challenge，超时 300 秒 |
+| **SM1: IAM** | `authenticating` | 回调成功换票 | state 匹配、ID Token 验签通过 | `ready` | 写入 session 凭据；触发 SM3 准入评估 |
+| **SM1: IAM** | `ready` | 访问令牌超时 | 静默刷新失败且已过有效期 | `expired` | 不发模型请求；立即触发 SM3 执行 `clearCatalog()` 双清 |
+| **SM1: IAM** | `ready` | 用户点击退出 | 任意 | `signed-out` | 撤销访问令牌、写墓碑记录；内存双清，触发 SM3 清空目录 |
+| **SM2: GW** | `unconfigured` | 录入静态 Key | 格式合规且工号属主匹配 | `configured` | 写入平台钥匙串；触发 SM3 重新刷新 |
+| **SM2: GW** | `configured` | 换人登录检测 | 存储属主与当前 principal 不一致 | `mismatched-owner` | 阻断网关请求；禁止跨工号静默使用旧凭据 |
+| **SM3: 模型** | `unconfigured` | 轮询/事件感知 | `SM1===ready` 且 `SM2===configured` | `loading` | 发起网关 `/models` 发现；设置 10 秒超时硬上限 |
+| **SM3: 模型** | `loading` | 目录拉取成功 | 返回合法 JSON 模型数组 | `ready` | 首登选定第 1 个模型；串行化落盘；触发 SM4 模型对齐 |
+| **SM3: 模型** | `loading` | 网关不可达/超时 | HTTP 502/503 或网络异常 | `error` (transient) | 启动有界指数退避（2s, 5s, 15s, 30s, 60s），网络恢复自愈 |
+| **SM3: 模型** | `loading` | 凭据鉴权失败 | HTTP 401/403 | `error` (auth) | 立即终止重试，不发起额外重放，向用户清晰定位凭据问题 |
+| **SM3: 模型** | `ready` | 登出 / 令牌过期 | 任意失效事件 | `unconfigured` | **原子双清**：同步将目录置空并销毁后端，绝无幽灵 Ready 态 |
+| **SM4: 宿主** | `disabled` | 收到 SM3 ready | 宿主默认可证明不可用 | `aligned` | 调用 `saveSelection` 对齐为企业默认；发更新事件 |
+| **SM4: 宿主** | `disabled` | 未选模型直接发消息 | 宿主指向已禁用 Provider | `blocked` | 抛出 `session/model-unavailable`（对齐后彻底杜绝此路径） |
+| **SM4: 宿主** | `aligned` | 正常提问发消息 | 会话已绑定有效企业模型 | `session-ready` | 适配器取推理强度下界，流式对话正常返回 |
 
 ---
 

@@ -363,3 +363,42 @@ test('reasoning effort supports lower and upper bound selection and auto-aligns 
   assert.equal(upperSelect().props.value, 'max');
   assert.match(panel.text(panel.render()), /固定单档：Max/);
 });
+
+test('model advanced section includes in-place save button and shows top unsaved changes banner', async t => {
+  const writes = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({ ok: true, persisted: true, view });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+
+  // Expand model
+  await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
+
+  // Initially no unsaved banner
+  assert.doesNotMatch(panel.text(panel.render()), /模型配置有未保存的修改/);
+
+  // Edit model name
+  const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
+  input('显示名称 1').props.onChange({ target: { value: '智能对话 4.0' } });
+
+  // Unsaved banner is visible at top of model list
+  assert.match(panel.text(panel.render()), /模型配置有未保存的修改/);
+  // Outer capacity limit guidance is visible once models are ready
+  assert.match(panel.text(panel.render()), /上下文溢出（Context Overflow）/);
+
+  // Save via in-place button in the expanded model panel
+  const inPlaceSave = nodes(panel.render()).find(node =>
+    node.type === 'button' && node.props['aria-label'] === '保存模型配置' && node.props.className?.includes('forge-iam-primary')
+  );
+  assert.ok(inPlaceSave);
+  await inPlaceSave.props.onClick();
+
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].options['corp-chat'].name, '智能对话 4.0');
+  assert.match(panel.text(panel.render()), /模型精细化配置已保存并生效/);
+});

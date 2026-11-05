@@ -1,4 +1,5 @@
 import { IamError } from './errors.mjs';
+import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
@@ -102,9 +103,19 @@ async function discover(connection, signal, fetcher, headers) {
 }
 
 
-/** Own an adapter and the public stream waterfall; never replace Host methods or settings. */
+/** Gateway outages at start-up (network not up yet) heal without a click; credential or catalogue errors need a person. */
+const RETRYABLE = new Set(['ENTERPRISE_GATEWAY_UNAVAILABLE', 'ENTERPRISE_GATEWAY_RATE_LIMIT']);
+const RETRY_DELAYS = Object.freeze([2000, 5000, 15000, 30000, 60000]);
+const safeGet = (host, name) => { try { return host.get?.(name); } catch { return undefined; } };
+
+/**
+ * Own an adapter and the public stream waterfall. Host methods are never
+ * replaced; the only Host setting touched is the new-conversation default
+ * model, and only when it provably cannot run (see host-default-model.mjs).
+ */
 export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch,
-  requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders() }) {
+  requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders(),
+  getHostDefaultModel = () => safeGet(host, 'agentDefaultModel'), retryDelays = RETRY_DELAYS }) {
   if (typeof host.on !== 'function' || typeof host.llm?.registerAdapter !== 'function') {
     const off = host.on?.('llm/stream', () => (async function* () { yield finish('ENTERPRISE_MODELS_UNAVAILABLE'); })(), { global: true });
     return {
@@ -127,12 +138,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let deadline; let timer; let disposed = false; let backend; let flight;
+  let retryAttempt = 0; let retryTimer; let hostDefault = null; let alignment = null; let alignQueued = false;
+  let optionsChain = Promise.resolve();
   const publish = () => { host.emit?.('llm/adapters-updated'); };
+  const cancelRetry = () => { clearTimeout(retryTimer); retryTimer = undefined; };
+  // Every path that drops the backend also drops the catalogue state with it,
+  // so the account page can never say "ready" while nothing is callable.
+  function clearCatalog(state = 'unconfigured', code = null) {
+    rawModels = []; models = []; backend = undefined; catalogState = state; catalogError = code;
+  }
   function sample() {
     const view = iam.getView(); const current = `${identity(view)}:${iam.getModelAccessEpoch?.() ?? ''}`;
     if (last !== current) {
       last = current; version++; lease.abort(); lease = new AbortController();
-      rawModels = []; models = []; backend = undefined; catalogState = 'unconfigured'; catalogError = null;
+      cancelRetry(); retryAttempt = 0; hostDefault = null;
+      clearCatalog();
       modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
       publish();
     }
@@ -141,7 +161,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const nextDeadline = view?.state === 'ready' ? expires(view) : null;
     if (deadline !== nextDeadline) {
       deadline = nextDeadline; clearTimeout(timer);
-      const expire = () => { version++; lease.abort(); rawModels = []; models = []; backend = undefined; publish(); };
+      const expire = () => { version++; lease.abort(); cancelRetry(); clearCatalog(); publish(); };
       const remaining = deadline - Date.now();
       if (deadline !== null && remaining > 0) {
         timer = setTimeout(expire, Math.min(remaining, 2147483647)); timer.unref?.();
@@ -250,16 +270,53 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           return next.key;
         }
       }); current();
-      backend = resolved; catalogState = 'ready'; catalogError = null; publish();
+      backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; cancelRetry(); publish();
+      await syncHostDefault(); current();
       return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
     }).catch(cause => {
+      const code = Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
       if (mine === version && !disposed) {
-        rawModels = []; models = []; backend = undefined; catalogState = 'error';
-        catalogError = Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE'; publish();
+        clearCatalog('error', code); publish();
+        scheduleRetry(code);
       }
-      throw error(Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+      throw error(code);
     }).finally(() => { if (flight?.promise === task) flight = null; });
     flight = { version: mine, promise: task }; return task;
+  }
+
+  /** Bounded back-off for transient gateway failures; any context change cancels it. */
+  function scheduleRetry(code) {
+    if (!RETRYABLE.has(code) || retryAttempt >= retryDelays.length || retryTimer) return;
+    const mine = version;
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined;
+      if (disposed || mine !== version || permit(sample()) || backend) return;
+      void refresh().catch(() => { });
+    }, retryDelays[retryAttempt++]);
+    retryTimer.unref?.();
+  }
+
+  /** Single-flight alignment of DSH's new-conversation default; reruns once if asked again mid-flight. */
+  function syncHostDefault() {
+    if (alignment) { alignQueued = true; return alignment; }
+    const mine = version;
+    const task = Promise.resolve().then(() => alignHostDefaultModel({
+      service: getHostDefaultModel(), llm: host.llm, provider, target: defaultModelId,
+      enterpriseUsable: id => Boolean(backend) && allowed(provider, id),
+      isCurrent: () => { sample(); return !disposed && mine === version && !permit(iam.getView()); },
+    })).catch(() => HOST_DEFAULT_RESULTS.FAILED).then(result => {
+      if (!disposed && mine === version) {
+        hostDefault = result;
+        // The client catalogue re-reads the default on this event.
+        if (result === HOST_DEFAULT_RESULTS.ALIGNED) publish();
+      }
+      return result;
+    }).finally(() => {
+      if (alignment === task) alignment = null;
+      if (alignQueued && !disposed) { alignQueued = false; void syncHostDefault(); }
+    });
+    alignment = task;
+    return task;
   }
   const offStream = host.on('llm/stream', (request, next) => protect(request, next), { global: true });
   const adapter = new Proxy({}, {
@@ -310,52 +367,76 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         if ((before !== version || !backend) && !permit(iam.getView())) void refresh().catch(() => { });
       }
     }
-    catch { if (!disposed) { lease.abort(); rawModels = []; models = []; backend = undefined; publish(); } }
+    catch { if (!disposed) { lease.abort(); cancelRetry(); clearCatalog('error', 'ENTERPRISE_MODELS_UNAVAILABLE'); publish(); } }
   })();
+  /** Apply one enabled-set submission for the person who is signed in right now. */
+  async function applyOptions(nextOptions) {
+    if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+    const denied = permit(sample());
+    if (denied) throw error(denied);
+    // Before the catalogue exists every id would look "not in the catalogue",
+    // so a write here would persist an empty selection over a real one.
+    if (models.length === 0 || !backend) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+    const mine = version;
+    const stale = () => { sample(); return disposed || mine !== version || Boolean(permit(iam.getView())); };
+    // The submitted map is the enabled set, not just an override list: an
+    // empty object enables a model with the catalogue defaults, and dropping
+    // a key disables it. Only catalogue models can be enabled.
+    const nextMap = normalizeSelection(nextOptions);
+    for (const id of Object.keys(nextMap)) if (!rawModels.some(item => item.id === id)) delete nextMap[id];
+    modelOptions = nextMap;
+    if (!defaultModelId || !enabled(defaultModelId)) defaultModelId = Object.keys(modelOptions)[0] ?? null;
+    const persisted = await persistSelection();
+    // Signed out or switched account mid-save: the reset already happened;
+    // never let this person's options land in the next person's state.
+    if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    models = applyModelOptions(rawModels, modelOptions);
+    if (backend && rawModels.length > 0) {
+      try {
+        const connection = await iam.resolveGatewayConnection();
+        if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+        const resolved = await createAdapter({
+          host,
+          config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
+          resolveKey: async () => {
+            const next = await iam.resolveGatewayConnection();
+            if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
+            return next.key;
+          },
+        });
+        if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+        backend = resolved;
+      } catch (cause) {
+        if (cause?.code === 'IAM_MODEL_CONTEXT_CHANGED') throw cause;
+        /* keep existing backend if rebuild fails */
+      }
+    }
+    publish();
+    // Disabling the model DSH uses for new conversations would strand them.
+    await syncHostDefault();
+    return {
+      ok: true, persisted,
+      defaultModelId,
+      enabled: Object.keys(modelOptions),
+      models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities }))
+    };
+  }
+
   return {
     ready, refresh,
-    async updateModelOptions(nextOptions = {}) {
-      if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
-      // Before the catalogue exists every id would look "not in the catalogue",
-      // so a write here would persist an empty selection over a real one.
-      if (models.length === 0) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
-      // The submitted map is the enabled set, not just an override list: an
-      // empty object enables a model with the catalogue defaults, and dropping
-      // a key disables it. Only catalogue models can be enabled.
-      const nextMap = normalizeSelection(nextOptions);
-      for (const id of Object.keys(nextMap)) if (!enabledInCatalog(id)) delete nextMap[id];
-      modelOptions = nextMap;
-      if (!defaultModelId || !enabled(defaultModelId)) defaultModelId = Object.keys(modelOptions)[0] ?? null;
-      const persisted = await persistSelection();
-      models = applyModelOptions(rawModels, modelOptions);
-      if (backend && rawModels.length > 0) {
-        try {
-          const connection = await iam.resolveGatewayConnection();
-          const resolved = await createAdapter({
-            host,
-            config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
-            resolveKey: async () => {
-              const next = await iam.resolveGatewayConnection();
-              if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
-              return next.key;
-            },
-          });
-          backend = resolved;
-        } catch { /* keep existing backend if rebuild fails */ }
-      }
-      publish();
-      return {
-        ok: true, persisted,
-        defaultModelId,
-        enabled: Object.keys(modelOptions),
-        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities }))
-      };
+    updateModelOptions(nextOptions = {}) {
+      // Serialise saves: two quick clicks must not interleave their writes.
+      const run = optionsChain.then(() => applyOptions(nextOptions));
+      optionsChain = run.catch(() => { });
+      return run;
     },
     getModelOptions: () => ({ ...modelOptions }),
     getView: () => ({
       managed: true, configured: true,
       state: catalogState, error: catalogError,
       defaultModelId,
+      // Fixed code describing the last alignment of DSH's new-conversation default.
+      hostDefaultModel: hostDefault,
       enabled: Object.keys(modelOptions),
       selectionError: selectionError ?? selectionWriteError,
       models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
@@ -374,7 +455,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     }),
     async dispose() {
       if (disposed) return;
-      disposed = true; clearTimeout(timer); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
+      disposed = true; clearTimeout(timer); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
       await observation; rawModels = []; models = []; backend = undefined;
     }
   };

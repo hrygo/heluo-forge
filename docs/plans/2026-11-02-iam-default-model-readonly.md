@@ -6,15 +6,17 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-005 |
 | 文档名称 | IAM 默认模型只读编排实施计划 |
-| 版本 | V0.1.1 |
+| 版本 | V0.1.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-02 |
+| 最后更新 | 2026-11-05 |
 | 门禁 | 源码与隔离模拟；禁止真实模型设置写入 |
 
+> **2026-11-05 用户决定**：内网环境官方模型不可用，“真实 Host 不自动写”导致首次登录新对话报 `session/model-unavailable`。改为：DSH 新对话默认模型可证明不可用时，由企业模型运行时对齐为企业默认模型；本计划所述 `reconcileDefaultModel()` 观察路径保持只读。细则见 [forge-iam 开发指南](<../../packages/forge-iam/docs/developer-guide.md#新对话默认模型对齐>)。
+>
 > 编制依据：用户于 2026-11-02 明确选择“严格保护，真实 Host 不自动写”。同日只读 SDK 核验确认 currentSelection 没有 explicit 或明确空态，saveSelection 完整覆盖且排队，无条件提交、guard 或取消能力；记录式测试不补足这些契约。
 >
 > 关联文档：[IAM 模块设计](<../design/plugins/forge-iam.md>)、[验收清单](<../design/README.md#221-iam-离线验收清单>)、[总体架构](<../architecture/platform-architecture.md>)。
