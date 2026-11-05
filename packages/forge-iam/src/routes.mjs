@@ -48,6 +48,7 @@ const ERROR_STATUS = {
   ENTERPRISE_GATEWAY_UNAVAILABLE: 502,
   ENTERPRISE_GATEWAY_REQUEST_REJECTED: 502,
   ENTERPRISE_MODEL_REASONING_UNSUPPORTED: 400,
+  ENTERPRISE_MODEL_SYNC_CANCELLED: 409,
   IAM_GATEWAY_OWNER_MISSING: 400,
   IAM_GATEWAY_ATOMIC_UNVERIFIED: 503,
   IAM_GATEWAY_LEGACY_READ_ONLY: 409,
@@ -170,7 +171,12 @@ function sendHtml(res, status, title, body) {
 }
 
 function errorBody(error) {
-  const code = typeof error?.code === 'string' && error.code.startsWith('IAM_') ? error.code : 'IAM_INTERNAL';
+  // Model-access codes describe what the person can do next, and the panel
+  // repeats their text verbatim. Flattening them into IAM_INTERNAL made a
+  // gateway rejection, a cancelled sync and a real outage indistinguishable
+  // in the response the browser already has to act on.
+  const code = typeof error?.code === 'string' && (error.code.startsWith('IAM_') || error.code.startsWith('ENTERPRISE_'))
+    ? error.code : 'IAM_INTERNAL';
   return {
     error: {
       code,

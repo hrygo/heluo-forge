@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createIamRoutes } from '../src/routes.mjs';
+import { IamError } from '../src/errors.mjs';
 import { createIamService } from './support/trusted-service.mjs';
 import { createIamService as createUntrustedService } from '../src/service.mjs';
 import { validateConfig } from '../src/config.mjs';
@@ -599,4 +600,20 @@ test('the events route streams the same non-sensitive projection as the view', a
   const wrongMethod = await call(handler, 'POST', '/api/forge-iam/events');
   assert.equal(wrongMethod.statusCode, 405);
   assert.equal(wrongMethod.headers.allow, 'GET');
+});
+
+test('a model-access failure keeps its own code and status', async () => {
+  for (const [thrown, status, code] of [
+    [new IamError('ENTERPRISE_GATEWAY_UNAVAILABLE', '暂时无法连接企业模型，请稍后重试。'), 502, 'ENTERPRISE_GATEWAY_UNAVAILABLE'],
+    [new IamError('ENTERPRISE_MODEL_CATALOG_INVALID', '网关返回的模型列表无法识别。'), 502, 'ENTERPRISE_MODEL_CATALOG_INVALID'],
+    [new IamError('ENTERPRISE_MODEL_SYNC_CANCELLED', '模型目录同步被中断，请重试。'), 409, 'ENTERPRISE_MODEL_SYNC_CANCELLED'],
+    [new IamError('IAM_LOGIN_REQUIRED', '企业账号已退出或登录已过期，请重新登录后再使用模型。'), 401, 'IAM_LOGIN_REQUIRED'],
+    // An unexpected failure still never describes itself as a model-access code.
+    [new Error('synthetic'), 500, 'IAM_INTERNAL'],
+  ]) {
+    const handler = routes(service({ refreshGatewayModels: async () => { throw thrown; } }));
+    const hit = await call(handler, 'GET', '/api/forge-iam/models');
+    assert.equal(hit.statusCode, status);
+    assert.equal(hit.json().error.code, code);
+  }
 });

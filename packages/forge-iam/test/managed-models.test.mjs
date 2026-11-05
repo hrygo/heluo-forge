@@ -585,3 +585,85 @@ test('an expired session keeps the catalogue for the same person and gateway', a
   f.change({ state: 'signed-out', principal: null });
   assert.deepEqual(f.runtime.getView().models, []);
 });
+
+test('a catalogue refresh recovers after the token lapses on the same person', async t => {
+  let discovery = 0;
+  const f = fixture({
+    // A real fetch rejects immediately on an already-aborted signal, before any
+    // connection exists; the fixture must do the same or it hides the defect.
+    fetch: async (url, init) => {
+      if (init?.signal?.aborted) throw init.signal.reason ?? new DOMException('aborted', 'AbortError');
+      discovery += 1;
+      return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // The panel stays open past the token's deadline: the runtime cancels this
+  // identity's work and marks the session expired, without a new identity.
+  f.change({ accessExpiresAt: new Date(Date.now() - 1000).toISOString() });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(f.runtime.getView().error, 'IAM_LOGIN_REQUIRED');
+  const before = discovery;
+  // The same person's session comes back with no identity change at all. The
+  // cancellation must not outlive it: every later discovery used to abort at
+  // 0 ms and read as an unreachable gateway.
+  f.change({ accessExpiresAt: new Date(Date.now() + 60000).toISOString() });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await f.runtime.refresh();
+  const view = f.runtime.getView();
+  assert.equal(view.state, 'ready');
+  assert.equal(view.error, null);
+  assert.deepEqual(view.models.map(model => model.id), ['enterprise-chat']);
+  assert.ok(discovery > before);
+});
+
+test('a stale catalogue still retries and its countdown clears', async t => {
+  let offline = false;
+  const f = fixture({
+    retryDelays: [5],
+    fetch: async () => {
+      if (offline) throw new Error('offline');
+      return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  offline = true;
+  await f.runtime.refresh().catch(() => { });
+  const failed = f.runtime.getView();
+  assert.equal(failed.error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  assert.ok(Number.isFinite(failed.retryAt));
+  offline = false;
+  await new Promise(resolve => setTimeout(resolve, 60));
+  const recovered = f.runtime.getView();
+  // Keeping the last catalogue must not cancel the recovery of the list.
+  assert.equal(recovered.state, 'ready');
+  assert.equal(recovered.error, null);
+  assert.equal(recovered.retryAt, null);
+});
+
+test('a cancelled discovery is reported as a cancelled sync, not an unreachable gateway', async t => {
+  let failure = null;
+  const f = fixture({
+    retryDelays: [60000],
+    fetch: async () => {
+      if (failure) throw failure;
+      return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  failure = new DOMException('This operation was aborted', 'AbortError');
+  await f.runtime.refresh().catch(() => { });
+  const cancelled = f.runtime.getView();
+  assert.equal(cancelled.error, 'ENTERPRISE_MODEL_SYNC_CANCELLED');
+  // Retrying a request we cancelled ourselves repeats the cancellation.
+  assert.equal(cancelled.retryAt, null);
+  failure = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  await f.runtime.refresh().catch(() => { });
+  const timedOut = f.runtime.getView();
+  // A real timeout is still a retryable gateway failure and says so.
+  assert.equal(timedOut.error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  assert.ok(Number.isFinite(timedOut.retryAt));
+});

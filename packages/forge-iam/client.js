@@ -1607,6 +1607,7 @@ window.__ModuleLoader__.load({
       if (code === 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED') return '所选模型的推理档位不受支持，请重新选择思考级别。';
       if (code === 'ENTERPRISE_MODEL_CATALOG_INVALID') return '网关返回的模型列表无法识别，请联系管理员检查网关。';
       if (code === 'ENTERPRISE_MODELS_UNAVAILABLE') return '企业模型暂不可用，请联系管理员检查配置。';
+      if (code === 'ENTERPRISE_MODEL_SYNC_CANCELLED') return '模型目录同步被中断，请重试。';
       if (code === 'ENTERPRISE_MODEL_NOT_ALLOWED') return '此模型未由企业开放，请选择企业提供的模型。';
       if (code === 'IAM_MODEL_CONTEXT_CHANGED') return '账号或凭证已变化，请重新选择模型后再试。';
       if (code === 'IAM_LOGIN_REQUIRED') return '企业账号已退出或登录已过期，请重新登录后再使用模型。';

@@ -655,7 +655,7 @@ test('model-access errors say the same thing here as on the host turn surface', 
     'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED', 'ENTERPRISE_GATEWAY_FORBIDDEN', 'ENTERPRISE_GATEWAY_RATE_LIMIT',
     'ENTERPRISE_GATEWAY_UNAVAILABLE', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED', 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
     'ENTERPRISE_MODEL_CATALOG_INVALID', 'ENTERPRISE_MODELS_UNAVAILABLE', 'ENTERPRISE_MODEL_NOT_ALLOWED',
-    'IAM_MODEL_CONTEXT_CHANGED',
+    'ENTERPRISE_MODEL_SYNC_CANCELLED', 'IAM_MODEL_CONTEXT_CHANGED',
   ];
   for (const code of codes) {
     const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
