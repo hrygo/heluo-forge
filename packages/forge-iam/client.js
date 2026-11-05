@@ -2433,15 +2433,23 @@ window.__ModuleLoader__.load({
     // §13 模型卡
     function renderModelsCard(ctx) {
       const {
-        h, view, modelList, visibleModels, customModelCount, enabledCount, modelOptions, expandedModels,
-        modelQuery, setModelQuery, modelFilter, setModelFilter, handleFilterChange, toolbarRef, toggleModelExpand, updateOptionField, resetModelOption,
-        disableModelOption, enableModelOption, enableModelWithDefaults, enableAllModelsWithDefaults,
-        hasUnsavedModelChanges, discardModelChanges,
-        saveModelOptions, refreshModels, modelSaving, modelNotice, credential, viewBarrier, gateway,
+        h, view, catalogue, refreshModels, credential, viewBarrier, gateway,
         fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
       } = ctx;
+      // 目录数据与动作来自 useModelCatalogue；这里只解出本地名字，函数体不变。
+      const {
+        list: modelList, visible: visibleModels, enabledCount, options: modelOptions, expanded: expandedModels,
+        query: modelQuery, setQuery: setModelQuery, filter: modelFilter, setFilter: setModelFilter,
+        toolbarRef, saving: modelSaving, notice: modelNotice, unsaved: hasUnsavedModelChanges,
+      } = catalogue.data;
+      const {
+        changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
+        resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
+        enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
+        discard: discardModelChanges, save: saveModelOptions,
+      } = catalogue.actions;
       const ui = deriveSessionUi(view);
-      const catalogue = deriveModelUi(view);
+      const catalogueUi = deriveModelUi(view);
       const gatewayUi = deriveGatewayUi(gateway);
       const unenabledCount = Math.max(0, modelList.length - enabledCount);
       const onFilterSelect = handleFilterChange || setModelFilter;
@@ -2456,37 +2464,37 @@ window.__ModuleLoader__.load({
             ),
             h('div', null,
               h('div', { className: 'fiam-card-title' }, '企业模型设置'),
-              !catalogue.configured
+              !catalogueUi.configured
                 ? h('div', { className: 'fiam-card-subtitle' }, '配置网关地址和凭证后自动同步可用模型')
                 : null,
             ),
           ),
-          catalogue.ready
+          catalogueUi.ready
             ? h('span', { className: `fiam-badge fiam-badge-${modelList.length > 0 ? 'success' : 'warn'}` },
               h('span', { className: 'fiam-badge-dot' }),
               `已同步 ${modelList.length} 个模型`
             )
-            : catalogue.stale
+            : catalogueUi.stale
               ? h('span', { className: 'fiam-badge fiam-badge-warn' },
                 h('span', { className: 'fiam-badge-dot' }),
                 `已缓存 ${modelList.length} 个模型`
               )
-            : catalogue.loading
+            : catalogueUi.loading
               ? h('span', { className: 'fiam-badge fiam-badge-authenticating' },
                 h('span', { className: 'fiam-badge-dot' }),
                 '正在同步…'
               )
-              : catalogue.failed
+              : catalogueUi.failed
                 ? h('span', { className: 'fiam-badge fiam-badge-error' },
                   h('span', { className: 'fiam-badge-dot' }),
                   '同步异常'
                 )
                 : null,
         ),
-        !catalogue.configured
+        !catalogueUi.configured
           ? h('p', { style: muted }, '请先保存网关地址和个人访问凭证。')
           : null,
-        catalogue.stale
+        catalogueUi.stale
           ? h('div', {
             className: 'fiam-notice fiam-notice-warn',
             style: {
@@ -2501,7 +2509,7 @@ window.__ModuleLoader__.load({
             },
           },
             h('span', { style: { flex: '1 1 0', minWidth: 200 } },
-              `目录未更新：${errorNotice(catalogue.error)}`
+              `目录未更新：${errorNotice(catalogueUi.error)}`
               // A passed or absent retry time means the automatic chain is done;
               // pointing at the retry button or cached availability stays clear.
               + (Math.round((Number(view.modelAccess.retryAt) - Date.now()) / 1000) >= 1
@@ -2526,7 +2534,7 @@ window.__ModuleLoader__.load({
             }, credential.saving ? '正在刷新…' : '立即重试'),
           )
           : null,
-        catalogue.configured && modelList.length > 0
+        catalogueUi.configured && modelList.length > 0
           ? h('div', { className: 'fiam-callout', style: { marginTop: 6, marginBottom: 8 } },
             h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
               h('circle', { cx: 8, cy: 8, r: 6 }),
@@ -2538,7 +2546,7 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        catalogue.configured && modelList.length > 0
+        catalogueUi.configured && modelList.length > 0
           ? h('div', { ref: toolbarRef, className: 'fiam-model-toolbar' },
             h('div', { className: 'fiam-search-wrap' },
               h('input', {
@@ -2621,7 +2629,7 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        catalogue.configured && modelList.length > 0 && hasUnsavedModelChanges
+        catalogueUi.configured && modelList.length > 0 && hasUnsavedModelChanges
           ? h('div', { className: 'fiam-unsaved-banner' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存'),
@@ -2644,7 +2652,7 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        catalogue.configured && modelList.length > 0
+        catalogueUi.configured && modelList.length > 0
           ? h('div', { className: 'fiam-model-list', 'aria-label': '企业预置模型' },
             ...(visibleModels.length === 0
               ? [h('div', { key: 'empty-filter', style: { ...muted, padding: '16px 12px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 } },
@@ -2670,7 +2678,7 @@ window.__ModuleLoader__.load({
               }))
           )
           : null,
-        (catalogue.loading && modelList.length === 0)
+        (catalogueUi.loading && modelList.length === 0)
           ? h('div', { role: 'status', className: 'fiam-auth-progress' },
             h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
               h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
@@ -2678,9 +2686,9 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        catalogue.ready && !modelList.length
+        catalogueUi.ready && !modelList.length
           ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人访问凭证的模型权限。') : null,
-        catalogue.error && !catalogue.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(catalogue.error)) : null,
+        catalogueUi.error && !catalogueUi.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(catalogueUi.error)) : null,
         h('div', { className: 'fiam-actions' },
           h('button', {
             type: 'button',
@@ -2736,13 +2744,13 @@ window.__ModuleLoader__.load({
     function readCachedModels(key) { return clientStore.models.read(key); }
     function writeCachedModels(key, models) { clientStore.models.write(key, models); }
 
-    // §14 面板
-    function Panel() {
+    // §14.1 模型目录
+    // 目录缓存、参数覆盖、筛选与就地保存是一组自洽状态：只依赖 view 与 viewBarrier，
+    // 不跨到会话或凭据状态，因此单独成 hook。返回按 data/actions 分簇，供渲染入口直接接收。
+    function useModelCatalogue({ view, viewBarrier, setView }) {
       const initialModelOptions = readModelOptions();
       const [cachedModels, setCachedModels] = React.useState([]);
       const cacheKeyRef = React.useRef(null);
-      const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
-      const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
       const [modelOptions, setModelOptions] = React.useState(initialModelOptions);
       const [expandedModels, setExpandedModels] = React.useState({});
       const [modelQuery, setModelQuery] = React.useState('');
@@ -2751,40 +2759,11 @@ window.__ModuleLoader__.load({
       const [modelNotice, setModelNotice] = React.useState(null);
       const lastSyncedOptions = React.useRef(initialModelOptions);
       const toolbarRef = React.useRef(null);
+      // 与 Panel 的判定同式：做过期的应答不得回写视图。
+      const isCurrentEpoch = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
 
-      // Waking a laptop or returning to the tab is when a signed-in session is
-      // most likely to have drifted (network moved, gateway restarted). Re-read
-      // the catalogue once, throttled so a focus storm cannot hammer the gateway.
-      const wakeRef = React.useRef({ at: 0, inFlight: false });
-      const viewRef = React.useRef(state.view);
-      viewRef.current = state.view;
-      React.useEffect(() => {
-        if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
-        const kick = () => {
-          if (document.visibilityState === 'hidden') return;
-          const at = Date.now();
-          if (wakeRef.current.inFlight || at - wakeRef.current.at < 30000) return;
-          const view = viewRef.current;
-          if (!deriveSessionUi(view).ready || deriveModelUi(view).loading) return;
-          wakeRef.current.at = at;
-          wakeRef.current.inFlight = true;
-          void getJson('/api/forge-iam/models')
-            .then((result) => {
-              if (result?.ok && result.body?.view) setState((current) => ({ ...current, view: result.body.view }));
-            })
-            .catch(() => { })
-            .finally(() => { wakeRef.current.inFlight = false; });
-        };
-        document.addEventListener('visibilitychange', kick);
-        window.addEventListener('focus', kick);
-        return () => {
-          document.removeEventListener('visibilitychange', kick);
-          window.removeEventListener('focus', kick);
-        };
-      }, []);
-
-      const liveModels = state.view?.modelAccess?.models;
-      const viewCacheKey = modelCacheKey(state.view);
+      const liveModels = view?.modelAccess?.models;
+      const viewCacheKey = modelCacheKey(view);
       React.useEffect(() => {
         clientStore.models.remove(MODEL_CACHE_LEGACY);
       }, []);
@@ -2889,8 +2868,8 @@ window.__ModuleLoader__.load({
           setModelNotice(result.body?.persisted === false
             ? '模型配置已在本机生效，但未能写入持久存储，重启后需重新保存。'
             : successMessage);
-          if (isViewCurrent(viewBarrier.current.epoch)) {
-            setState(current => ({ ...current, view: result.body?.view ?? current.view }));
+          if (isCurrentEpoch(viewBarrier.current.epoch)) {
+            setView(result.body?.view);
             if (result.body?.view) void syncModelOptions(result.body.view);
           }
         } catch {
@@ -2911,7 +2890,7 @@ window.__ModuleLoader__.load({
       };
 
       const enableAllModelsWithDefaults = async () => {
-        const currentModels = state.view?.modelAccess?.models ?? [];
+        const currentModels = view?.modelAccess?.models ?? [];
         const nextOptions = { ...modelOptions };
         for (const m of currentModels) {
           if (m?.id && !Object.hasOwn(nextOptions, m.id)) {
@@ -2921,19 +2900,6 @@ window.__ModuleLoader__.load({
         setModelOptions(nextOptions);
         await persistModelOptions(nextOptions, `已采用默认参数启用全部 ${currentModels.length} 个模型并生效。`);
       };
-      const viewBarrier = React.useRef({ epoch: 0, pending: false });
-      const linkIdentity = React.useRef(null);
-      const copyRequest = React.useRef(null);
-      const copyLive = React.useRef(true);
-      const [copy, setCopy] = React.useState({ pending: false, notice: null, epoch: null, url: null });
-      React.useEffect(() => {
-        copyLive.current = true;
-        return () => { copyLive.current = false; copyRequest.current = null; };
-      }, []);
-      const isViewCurrent = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
-
-      // The signed-in Host owns the selection, including an explicitly empty
-      // set. A browser cache must never restore another account's old choices.
       const optionsSync = React.useRef({ signature: null });
       const syncModelOptions = React.useCallback(async (nextView) => {
         const access = nextView?.modelAccess;
@@ -2954,6 +2920,104 @@ window.__ModuleLoader__.load({
         writeModelOptions(hostOptions);
       }, []);
 
+      const current = view ?? {};
+      const cachedForRender = cacheKeyRef.current === viewCacheKey ? cachedModels : readCachedModels(viewCacheKey);
+      const safeCached = Array.isArray(cachedForRender) ? cachedForRender : [];
+      const rawModelList = (Array.isArray(current.modelAccess?.models) && current.modelAccess.models.length > 0)
+        ? current.modelAccess.models
+        : safeCached;
+      const modelList = [...rawModelList].sort((a, b) =>
+        String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' })
+      );
+      const enabledCount = modelList.filter(m => Object.hasOwn(modelOptions, m.id)).length;
+      const normalizedQuery = modelQuery.trim().toLowerCase();
+      const visibleModels = modelList.filter(m => {
+        const opt = modelOptions[m.id] || {};
+        if (modelFilter === 'enabled' && !Object.hasOwn(modelOptions, m.id)) return false;
+        if (!normalizedQuery) return true;
+        const displayName = String(opt.name || m.name || m.id).toLowerCase();
+        return String(m.id).toLowerCase().includes(normalizedQuery) || displayName.includes(normalizedQuery);
+      });
+
+      const hasUnsavedModelChanges = JSON.stringify(modelOptions) !== JSON.stringify(lastSyncedOptions.current);
+      function resetForSignOut() {
+        setCachedModels([]);
+        cacheKeyRef.current = null;
+        purgeModelCache();
+        setModelOptions({});
+        lastSyncedOptions.current = {};
+        optionsSync.current.signature = null;
+        setExpandedModels({});
+        setModelNotice(null);
+      }
+
+      return {
+        data: {
+          list: modelList, visible: visibleModels, enabledCount, options: modelOptions, expanded: expandedModels,
+          query: modelQuery, setQuery: setModelQuery, filter: modelFilter, setFilter: setModelFilter,
+          toolbarRef, saving: modelSaving, notice: modelNotice, unsaved: hasUnsavedModelChanges,
+        },
+        actions: {
+          changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
+          resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
+          enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
+          discard: discardModelChanges, save: saveModelOptions, syncFromView: syncModelOptions,
+          reset: resetForSignOut, clearNotice: () => setModelNotice(null), collapseAll: () => setExpandedModels({}),
+        },
+      };
+    }
+
+    // §14 面板
+    function Panel() {
+      const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
+      const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
+
+      // Waking a laptop or returning to the tab is when a signed-in session is
+      // most likely to have drifted (network moved, gateway restarted). Re-read
+      // the catalogue once, throttled so a focus storm cannot hammer the gateway.
+      const wakeRef = React.useRef({ at: 0, inFlight: false });
+      const viewRef = React.useRef(state.view);
+      viewRef.current = state.view;
+      React.useEffect(() => {
+        if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
+        const kick = () => {
+          if (document.visibilityState === 'hidden') return;
+          const at = Date.now();
+          if (wakeRef.current.inFlight || at - wakeRef.current.at < 30000) return;
+          const view = viewRef.current;
+          if (!deriveSessionUi(view).ready || deriveModelUi(view).loading) return;
+          wakeRef.current.at = at;
+          wakeRef.current.inFlight = true;
+          void getJson('/api/forge-iam/models')
+            .then((result) => {
+              if (result?.ok && result.body?.view) setState((current) => ({ ...current, view: result.body.view }));
+            })
+            .catch(() => { })
+            .finally(() => { wakeRef.current.inFlight = false; });
+        };
+        document.addEventListener('visibilitychange', kick);
+        window.addEventListener('focus', kick);
+        return () => {
+          document.removeEventListener('visibilitychange', kick);
+          window.removeEventListener('focus', kick);
+        };
+      }, []);
+
+      const viewBarrier = React.useRef({ epoch: 0, pending: false });
+      const linkIdentity = React.useRef(null);
+      const copyRequest = React.useRef(null);
+      const copyLive = React.useRef(true);
+      const [copy, setCopy] = React.useState({ pending: false, notice: null, epoch: null, url: null });
+      React.useEffect(() => {
+        copyLive.current = true;
+        return () => { copyLive.current = false; copyRequest.current = null; };
+      }, []);
+      const isViewCurrent = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
+      const setView = (next) => setState((current) => ({ ...current, view: next ?? current.view }));
+      const catalogue = useModelCatalogue({ view: state.view, viewBarrier, setView });
+
+      // The signed-in Host owns the selection, including an explicitly empty
+      // set. A browser cache must never restore another account's old choices.
       const load = React.useCallback(async () => {
         if (viewBarrier.current.pending) return;
         const epoch = viewBarrier.current.epoch;
@@ -2969,7 +3033,7 @@ window.__ModuleLoader__.load({
             if (models.failed) return { ...current, notice: errorNotice(models.error) };
             return current;
           });
-          void syncModelOptions(view);
+          void catalogue.actions.syncFromView(view);
         } catch (error) {
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
           linkIdentity.current = null;
@@ -2992,7 +3056,7 @@ window.__ModuleLoader__.load({
           if (models.failed) return { ...current, notice: errorNotice(models.error) };
           return current;
         });
-        void syncModelOptions(view);
+        void catalogue.actions.syncFromView(view);
       }, viewBarrier);
 
       const login = async () => {
@@ -3087,8 +3151,8 @@ window.__ModuleLoader__.load({
             return;
           }
           setCredential((current) => ({ ...current, saving: false, value: '', notice: '网关凭据已清除。' }));
-          setModelNotice(null);
-          setExpandedModels({});
+          catalogue.actions.clearNotice();
+          catalogue.actions.collapseAll();
           if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
           setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
@@ -3131,14 +3195,7 @@ window.__ModuleLoader__.load({
           }
           const view = result.body?.view ?? null;
           setCredential({ value: '', deviceLabel: '', saving: false, notice: null });
-          setCachedModels([]);
-          cacheKeyRef.current = null;
-          purgeModelCache();
-          setModelOptions({});
-          lastSyncedOptions.current = {};
-          optionsSync.current.signature = null;
-          setExpandedModels({});
-          setModelNotice(null);
+          catalogue.actions.reset();
           // The refresh token cannot be revoked: say so instead of "signed out".
           const signedOutNotice = result.body?.revocation === 'ok'
             ? '已退出：访问令牌已撤销；刷新令牌无法撤销，将在服务端自然过期。'
@@ -3283,27 +3340,8 @@ window.__ModuleLoader__.load({
 
       // Read the identity's cache during the render that first sees that
       // identity, so a cached list never flashes empty while the effect catches up.
-      const cachedForRender = cacheKeyRef.current === viewCacheKey ? cachedModels : readCachedModels(viewCacheKey);
-      const safeCached = Array.isArray(cachedForRender) ? cachedForRender : [];
-      const rawModelList = (Array.isArray(view.modelAccess?.models) && view.modelAccess.models.length > 0)
-        ? view.modelAccess.models
-        : safeCached;
-      const modelList = [...rawModelList].sort((a, b) =>
-        String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' })
-      );
-      const enabledCount = modelList.filter(m => Object.hasOwn(modelOptions, m.id)).length;
-      const normalizedQuery = modelQuery.trim().toLowerCase();
-      const visibleModels = modelList.filter(m => {
-        const opt = modelOptions[m.id] || {};
-        if (modelFilter === 'enabled' && !Object.hasOwn(modelOptions, m.id)) return false;
-        if (!normalizedQuery) return true;
-        const displayName = String(opt.name || m.name || m.id).toLowerCase();
-        return String(m.id).toLowerCase().includes(normalizedQuery) || displayName.includes(normalizedQuery);
-      });
-
-      const hasUnsavedModelChanges = JSON.stringify(modelOptions) !== JSON.stringify(lastSyncedOptions.current);
       const journeyBar = renderJourneyBar({
-        h, view, gateway, enabledCount, totalModels: modelList.length,
+        h, view, gateway, enabledCount: catalogue.data.enabledCount, totalModels: catalogue.data.list.length,
       });
 
       const accountCard = renderAccountCard({
@@ -3319,12 +3357,9 @@ window.__ModuleLoader__.load({
       });
 
       const modelsCard = renderModelsCard({
-        h, view, modelList, visibleModels, enabledCount, modelOptions, expandedModels,
-        modelQuery, setModelQuery, modelFilter, setModelFilter, handleFilterChange, toolbarRef, toggleModelExpand, updateOptionField, resetModelOption,
-        disableModelOption, enableModelOption, enableModelWithDefaults, enableAllModelsWithDefaults,
-        hasUnsavedModelChanges, discardModelChanges,
-        saveModelOptions, refreshModels, modelSaving, modelNotice, credential, viewBarrier, gateway,
+        h, view, refreshModels, credential, viewBarrier, gateway,
         fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
+        catalogue,
       });
 
       return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),

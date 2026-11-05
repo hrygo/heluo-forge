@@ -27,7 +27,7 @@ const RENDER_ARITY_BASELINE = {
   renderAccountCard: 26,
   renderGatewayCard: 16,
   renderModelItem: 21,
-  renderModelsCard: 34,
+  renderModelsCard: 12, // 34 → 12: 目录数据与动作整体传入（catalogue）
 };
 
 const source = readClientSource();
