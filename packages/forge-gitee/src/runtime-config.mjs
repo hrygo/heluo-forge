@@ -56,6 +56,9 @@ export const DEFAULT_AUTH_ENV = Object.freeze([]);
 export const PERSISTENT_TOKEN_POLICIES = Object.freeze(['warn', 'block']);
 export const DEFAULT_PERSISTENT_TOKEN_POLICY = 'warn';
 
+/** block 策略唯一的用户可见拦截文案：适配器预检与 CLI 拒绝共用，避免两处漂移。 */
+export const PERSISTENT_TOKEN_BLOCK_MESSAGE = '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请删除该明文令牌，然后在终端运行 gh auth login 存入系统凭据库';
+
 /** 失败原因码（TECHNICAL §8.3 固定枚举，不新增自由文本）。 */
 export const CONFIG_REASONS = Object.freeze({
   INVALID: 'GITEE_CONFIG_INVALID',

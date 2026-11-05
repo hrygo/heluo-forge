@@ -34,6 +34,7 @@ import {
   DEFAULT_AUTH_ENV,
   DEFAULT_PERSISTENT_TOKEN_POLICY,
   DEFAULT_TIMEOUT_MS,
+  PERSISTENT_TOKEN_BLOCK_MESSAGE,
   PERSISTENT_TOKEN_POLICIES,
 } from './runtime-config.mjs';
 
@@ -609,7 +610,7 @@ export function createGiteeRunner({
     const credentials = credentialStatus();
     if (credentials.enforced !== true) return;
     throw new GiteeCliError(
-      '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请删除该明文令牌，然后在终端运行 gh auth login 存入系统凭据库',
+      PERSISTENT_TOKEN_BLOCK_MESSAGE,
       {
         code: 'PERSISTENT_TOKEN',
         reason: CREDENTIAL_REASONS.PERSISTENT,
