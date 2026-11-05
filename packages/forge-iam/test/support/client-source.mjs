@@ -62,6 +62,7 @@ export function analyseClient(source) {
     violations: {
       stateReads: tally(/view\??\.state/g),
       modelStateReads: tally(/(?:modelAccess|access)\??\.state/g),
+      gatewayStateReads: tally(/(?:gatewayCredential|gateway)\??\.state/g),
       storageSites: tally(/window\.localStorage/g),
       rawResultCode: tally(/result\.body\?\.error\?\.code/g),
     },
