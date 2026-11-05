@@ -66,10 +66,10 @@
 
 ## 本地 mock
 
-测试用 OIDC server 不依赖外网：
+完整的浏览器模拟登录、网关和模型对话步骤见[本地 mock 用户流程测试](<docs/local-mock-testing.md>)。以下命令只启动测试用 OIDC server，不解除正式组合的存储门禁：
 
 ```sh
-# 打印可直接放入插件配置的 mock 端点
+# 打印 mock 端点配置（仅供隔离测试）
 node packages/forge-iam/scripts/mock-oidc.mjs
 
 # 登录/刷新/撤销端到端测试
