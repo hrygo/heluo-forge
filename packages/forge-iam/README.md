@@ -25,6 +25,22 @@
 | keychain provider | 独立包 `@heluo/forge-credentials-keychain`；生产 OS adapter 未实现；显式 0600 file backend 不获默认 IAM 原子信任 |
 | Client UI | `settings.section` 账户页、四步 onboarding、未登录横幅（不占用单占位 launcher）；登录走浏览器回调。账户页退出时清除旧视图并拒绝该操作前及操作中的迟到轮询；非 2xx 的返回视图和网络未知分别显示，不假装退出成功。此行为仅有 mock 组件测试，横幅为独立轮询，跨组件即时同步及真实 GUI 挂载仍待验证；登录请求若在退出完成后才被 Host 处理，旧响应会被丢弃，可能出现无链接的登录中状态，须取消后重试，真实宿主调度未验证。overlay 显式开启 pointer events，onboarding 完成屏不被轮询回退 |
 
+## 改动落点
+
+客户端是单个 `client.js`，边界靠分区锚点而不是文件：`grep -n "// §" client.js` 会列出全部落点，文件头有分区索引。结构守卫在 `test/client-structure.test.mjs`：状态判定、存储访问、错误解包与渲染入参的现状按「所属函数」冻结成基线，只能下调，不能新增。
+
+| 要改的东西 | 落点 |
+|---|---|
+| 登录态、徽章、旅程条口径 | `client.js` §4 状态标签、§6 网关状态与徽章、§9 错误文案 |
+| 请求、本地存储 | `client.js` §5 HTTP 封装、§8 本地存储 |
+| 账户卡、网关卡 | `client.js` §12、§12.1 |
+| 模型条目、模型卡、模型缓存 | `client.js` §12.2、§13、§13.1 |
+| 面板装配、轮询 | `client.js` §14，轮询 §11 |
+| 设置页启动器 | `client.js` §15 |
+| 未登录横幅、四步引导 | `client.js` §16、§16.2、§16.3 |
+| 宿主：配置、状态机、凭据记录 | `src/config.mjs`、`src/state.mjs`、`src/record.mjs`、`src/store.mjs` |
+| 宿主：登录、刷新、撤销 | `src/service.mjs`（按状态轴拆分后本表随各轴补齐） |
+
 ## 登录边界
 
 - 授权码 + PKCE S256；回调绑定单次 `state`/`nonce`，校验 ID Token 签名（RS256/PS256/ES256，拒绝 `none`/HS*）、issuer、audience（含多 audience 的 `azp`）、nonce、exp；`kid` 未命中时重取一次 JWKS。

@@ -23,21 +23,30 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
   let lateUpdates = 0;
   let cursor = 0;
   let nextTimer = 0;
+  // Records the hook call order of one render so that a hook moved into a
+  // branch (the classic mistake when a component is split into hooks) fails
+  // here instead of only in a real React runtime.
+  let hookSequence = null;
+  let currentSequence = null;
+  const recordHook = (name) => { if (currentSequence) currentSequence.push(name); };
   let Panel;
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
     useState(initial) {
+      recordHook('useState');
       const index = cursor++;
       if (!(index in cells)) cells[index] = initial;
       return [cells[index], (next) => { if (closed) lateUpdates++; cells[index] = typeof next === 'function' ? next(cells[index]) : next; }];
     },
     useRef(initial) {
+      recordHook('useRef');
       const index = cursor++;
       if (!(index in cells)) cells[index] = { current: initial };
       return cells[index];
     },
-    useCallback(fn) { cursor++; return fn; },
+    useCallback(fn) { recordHook('useCallback'); cursor++; return fn; },
     useEffect(fn) {
+      recordHook('useEffect');
       const index = cursor++;
       if (!(index in cells)) { cells[index] = true; effects.push(fn); }
     },
@@ -62,7 +71,15 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
     clearInterval: (id) => timers.delete(id),
   });
   assert.ok(Panel);
-  const render = () => { cursor = 0; return Panel(componentProps); };
+  const render = () => {
+    cursor = 0;
+    currentSequence = [];
+    const tree = Panel(componentProps);
+    if (hookSequence === null) hookSequence = currentSequence;
+    else assert.deepEqual(currentSequence, hookSequence, 'Panel changed its hook order between renders: a hook now runs conditionally');
+    currentSequence = null;
+    return tree;
+  };
   render();
   for (const effect of effects.splice(0)) {
     const cleanup = effect();
