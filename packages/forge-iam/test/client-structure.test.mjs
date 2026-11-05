@@ -23,6 +23,7 @@ const RAW_RESULT_CODE_BASELINE = { resultCode: 1 };
 
 // Props a render entry may still receive. The target is four named groups
 // (`{ h, ui, model, actions }`); U4 lowers every entry to it.
+// 计数含显式 key（`prop: value`），与实际入参数量一致。
 const RENDER_ARITY_BASELINE = {
   renderAccountCard: 26,
   renderGatewayCard: 16,
