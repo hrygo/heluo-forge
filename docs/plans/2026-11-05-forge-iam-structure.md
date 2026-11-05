@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.13.0 |
+| 版本 | V0.14.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -306,6 +306,8 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 
 - 新增 `service-token.mjs`：`refreshPromise` 单飞及四个随行字段、`lastBackgroundRefreshAt`、`resolveToken`（375 行整段搬运）、`getAccessToken`。
 - 关键约束：`resolveToken` 的 `useSharedRefresh`/`checkProvider` 闭包与 `finally` 里 `refreshPromise` 的复位条件不能拆散，判断顺序不改。
+- 实现记录：`service.mjs` 1540 → 1216 行，新增 `service-token.mjs` 370 行。`resolveToken` 325 行整段搬运，`getAccessToken` 改为调用模块内 `resolveToken`；服务出口保留 `resolveToken: token.resolveToken` / `getAccessToken: token.getAccessToken`。
+- 端口：`isSigningOut`、`getSessionEpoch`、`getAuthEpoch`、`clearObservation`、`beginConsumption`、`adoptConsumption`、`fetchImpl`。单飞记录的四个随行字段随模块走；`lastBackgroundRefreshAt` 以读写访问器对外，供 `syncFromStore` 的退避判定使用。
 - 完成条件：`refresh-complete-validation`、`dual-process-refresh`、`service-singleflight-regression` 全绿。
 
 ### U10 宿主：勘定轴
