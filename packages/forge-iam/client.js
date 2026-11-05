@@ -1,6 +1,12 @@
 window.__ModuleLoader__.load({
   id: '@heluo/forge-iam',
   factory(require) {
+    // 分区索引（锚点只标职责、不写行号；新增逻辑落到既有分区，跨区改动在评审里说明）
+    // 1 包装与共享常量 / 2 样式表 / 3 图标与纯工具 / 4 状态标签 / 5 HTTP 封装
+    // 6 网关状态与徽章 / 7 登录窗口 / 8 本地存储 / 9 错误文案 / 10 诊断快照
+    // 11 会话轮询 / 12 卡片与旅程条 / 13 模型卡与缓存 / 14 面板 / 15 启动器
+    // 16 未登录横幅与引导 / 17 出口
+    // §1 包装与共享常量
     const React = require('react');
     const h = React.createElement;
     const ONBOARDING_KEY = 'forge-iam.onboarding.v1';
@@ -22,6 +28,7 @@ window.__ModuleLoader__.load({
       background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)',
     };
     const fieldLabel = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, fontSize: 13 };
+    // §2 样式表（全部 CSS 走 interactionStyles）
     const interactionStyles = `
       .forge-iam-ui {
         --fiam-primary: var(--dsw-alias-state-business-primary, #2563eb);
@@ -1268,6 +1275,7 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-state-error-primary);
       }
     `;
+    // §3 图标与纯工具
     const interactionStyle = () => h('style', null, interactionStyles);
 
     const SHIELD_PATHS = [
@@ -1451,6 +1459,7 @@ window.__ModuleLoader__.load({
       }).format(date);
     }
 
+    // §4 状态标签
     const STATUS = {
       unconfigured: '企业登录尚未设置',
       'signed-out': '未登录',
@@ -1461,6 +1470,7 @@ window.__ModuleLoader__.load({
       error: '需要处理',
     };
 
+    // §5 HTTP 封装
     async function readJson(response) {
       try {
         return await response.json();
@@ -1496,6 +1506,7 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
+    // §6 网关状态与徽章
     const GATEWAY_STATUS = {
       unknown: '状态未知',
       unconfigured: '未保存',
@@ -1519,6 +1530,7 @@ window.__ModuleLoader__.load({
       return 'error';
     }
 
+    // §7 登录窗口
     function openLoginWindow() {
       try {
         const popup = window.open('', '_blank');
@@ -1550,6 +1562,7 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // §8 本地存储
     function readMarker() {
       try {
         return window.localStorage.getItem(ONBOARDING_KEY);
@@ -1577,6 +1590,7 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // §9 错误文案
     function errorNotice(code) {
       if (code === 'IAM_REQUEST_HEADER_REQUIRED') return '操作未完成，请刷新页面后重试。';
       if (code === 'IAM_UNCONFIGURED') return '企业登录尚未设置完成，请联系管理员。';
@@ -1623,6 +1637,7 @@ window.__ModuleLoader__.load({
       return '操作未完成，请重试；如仍有问题，请联系管理员。';
     }
 
+    // §10 诊断快照
     const DIAGNOSTIC_ERRORS = new Set([
       'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_UNCONFIGURED', 'IAM_CONFIG_INVALID',
       'IAM_CREDENTIALS_UNAVAILABLE', 'IAM_CREDENTIALS_CLEAR_FAILED', 'IAM_REVOCATION_FAILED',
@@ -1656,6 +1671,7 @@ window.__ModuleLoader__.load({
       };
     }
 
+    // §11 会话轮询
     function useSessionPoll(enabled, update, barrierRef) {
       const updateRef = React.useRef(update);
       updateRef.current = update;
@@ -1715,6 +1731,7 @@ window.__ModuleLoader__.load({
       }, [enabled]);
     }
 
+    // §12 卡片与旅程条
     function renderAccountCard(ctx) {
       const {
         h, view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink,
@@ -1771,6 +1788,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §12.1 网关卡
     function renderGatewayCard(ctx) {
       const {
         h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
@@ -1889,6 +1907,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §12.2 模型条目
     function renderModelItem(ctx) {
       const {
         h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
@@ -2205,6 +2224,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §12.3 旅程条
     function renderJourneyBar(ctx) {
       const { h, view, gateway, enabledCount, totalModels } = ctx;
       const step1Done = view.state === 'ready';
@@ -2283,6 +2303,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §12.4 滚动容器定位
     function findScrollParent(el) {
       if (typeof window === 'undefined' || typeof document === 'undefined') return null;
       let parent = el?.parentElement;
@@ -2299,6 +2320,7 @@ window.__ModuleLoader__.load({
       return document.scrollingElement || document.documentElement || (typeof window !== 'undefined' ? window : null);
     }
 
+    // §13 模型卡
     function renderModelsCard(ctx) {
       const {
         h, view, modelList, visibleModels, customModelCount, enabledCount, modelOptions, expandedModels,
@@ -2588,6 +2610,7 @@ window.__ModuleLoader__.load({
     // One catalogue cache per person and gateway. A shared browser profile must
     // never show another account's model list; a v1 entry has no owner, so it is
     // discarded on mount instead of being adopted by whoever signs in next.
+    // §13.1 模型缓存
     const MODEL_CACHE_PREFIX = 'forge-iam.cached-models.v2';
     const MODEL_CACHE_LEGACY = 'forge-iam.cached-models.v1';
     function modelCacheKey(view) {
@@ -2626,6 +2649,7 @@ window.__ModuleLoader__.load({
       } catch { }
     }
 
+    // §14 面板
     function Panel() {
       const initialModelOptions = readModelOptions();
       const [cachedModels, setCachedModels] = React.useState([]);
@@ -3220,6 +3244,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §15 启动器
     function IamLauncherMenu(props) {
       const { view, status, onCopyDiagnostics, onSignOut, confirmSignOut, signingOut, notice, openSettings, onClose } = props;
       const isSignedIn = view?.state === 'ready';
@@ -3517,6 +3542,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §16 未登录横幅与引导（16.1 横幅 / 16.2 步骤 / 16.3 流程）
     function SignedOutBanner() {
       const [state, setState] = React.useState({ visible: false, notice: null, view: null, authorizationUrl: null });
       const signingInRef = React.useRef(false);
@@ -3653,6 +3679,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §16.2 引导步骤详情
     function renderOnboardingStepDetail(ctx) {
       const { h, state, setState, fieldLabel, inputStyle } = ctx;
       if (state.step === 0) {
@@ -3773,6 +3800,7 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    // §16.3 引导流程
     function Onboarding() {
       const [state, setState] = React.useState({
         phase: 'loading', view: null, step: 0, notice: null, open: false,
@@ -4034,6 +4062,7 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // §17 出口（inject / apply）
     return {
       inject: ['slots'],
       apply(ctx) {
