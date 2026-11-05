@@ -6,7 +6,8 @@ import { IamError } from './errors.mjs';
 import { assertClientAuthConfigured, assertClientAuthCurrent, assertGrantAuthBinding, clientAuthContext, clientAuthDescriptor, grantAuthPin, prepareClientAuthentication } from './client-auth.mjs';
 import { createGatewayCredentialStore, createGrantStore, createModelSelectionStore, StoreError } from './store.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
-import { createView, transition } from './state.mjs';
+import { createServiceState } from './service-state.mjs';
+import { transition } from './state.mjs';
 import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { fetchUserInfo, normalizeProfileFields, projectUserInfo } from './userinfo.mjs';
@@ -67,7 +68,6 @@ export function createIamService(rawConfig, options = {}) {
   // Real apply supplies neither private function; configuration cannot unlock it.
   assertClientAuthConfigured(config, options);
   const configured = isConfigured(config).ok;
-  let exclusive = options.exclusive ?? { ok: true };
   const now = options.now ?? (() => Date.now());
   const fetchImpl = options.fetch ?? globalThis.fetch;
   // Empty by default: IAM has not confirmed field names, so no name is shown.
@@ -87,6 +87,24 @@ export function createIamService(rawConfig, options = {}) {
   let modelSelectionQueued = false;
   let modelSelectionGeneration = 0;
   let lastBackgroundRefreshAt = 0;
+
+  // Every published-state read/write goes through ctx: the state module owns
+  // the five scalars, the transition path and the listener set.
+  const ctx = createServiceState({
+    config,
+    options,
+    configured,
+    now,
+    getGatewaySummary: () => gatewaySummary,
+    getMetadataIssuer: () => metadataCache?.value.issuer ?? '',
+    scheduleReconcile: scheduleDefaultModelReconciliation,
+    clearPendingObservation: () => { observedPending = null; },
+    onFailReset: () => {
+      observedPending = null;
+      clearAttempt();
+      identityProfile = undefined;
+    },
+  });
 
   function ensureStore() {
     let credentials;
@@ -131,7 +149,7 @@ export function createIamService(rawConfig, options = {}) {
       storeCredentials = credentials;
       storeError = null;
       return store;
-    } catch (error) {
+    } catch (cause) {
       store = null;
       gatewayStore = null;
       modelSelectionStore = null;
@@ -140,7 +158,7 @@ export function createIamService(rawConfig, options = {}) {
       gatewayLoading = null;
       gatewayEpoch += 1;
       storeCredentials = null;
-      storeError = error;
+      storeError = cause;
       return null;
     }
   }
@@ -157,14 +175,11 @@ export function createIamService(rawConfig, options = {}) {
     const credentials = storeCredentials;
     const record = await target.read().catch(() => null);
     if (!record?.ok || !record.grant?.subject) return null;
-    try { assertGrantContext(record.grant, knownIssuer()); } catch { return null; }
+    try { assertGrantContext(record.grant, ctx.knownIssuer()); } catch { return null; }
     const expires = Date.parse(record.grant.accessExpiresAt);
     return { subject: record.grant.subject, credentials, expired: !Number.isFinite(expires) || expires <= now() };
   }
 
-  let state = !exclusive.ok ? 'error' : (configured ? 'signed-out' : 'unconfigured');
-  let error = exclusive.ok ? null : (exclusive.reason ?? 'exclusive-violation');
-  let lastGrant = null;
   // Non-secret provenance/pin and the last authenticated session identity only.
   let sessionAuthentication = null;
   let identityProfile;
@@ -172,7 +187,6 @@ export function createIamService(rawConfig, options = {}) {
   // A weak association prevents a discarded cached grant retaining its provider.
   const grantOwners = new WeakMap();
   let attempt = null;
-  let disposed = false;
   let refreshPromise = null;
   let refreshPromiseStore = null;
   let refreshPromiseCredentials = null;
@@ -186,20 +200,19 @@ export function createIamService(rawConfig, options = {}) {
   let observedPending = null;
   let metadataCache = null;
   let jwksCache = null;
-  const listeners = new Set();
   const stopWaiters = new Set();
   // Absent in real apply: do not inspect private binding readers without opt-in.
   const consumptionWitness = typeof options.registerWitness === 'function'
     ? createConsumptionWitness(config, options, (adopted) => {
-      recheckExclusive();
-      return !disposed && !signingOut && state === 'ready' && exclusive.ok
+      ctx.recheckExclusive();
+      return !ctx.disposed && !signingOut && ctx.state === 'ready' && ctx.exclusive.ok
         && authEpoch === adopted.binding.authEpoch && sessionEpoch === adopted.binding.sessionEpoch
         && store === adopted.binding.store && storeCredentials === adopted.binding.credentials
-        && lastGrant?.sessionInstanceId === adopted.sessionInstanceId
-        && lastGrant.issuer === adopted.issuer && lastGrant.subject === adopted.subject
-        && lastGrant.accessExpiresAt === adopted.accessExpiresAt && lastGrant.version === adopted.version
-        && lastGrant.clientId === adopted.clientId && lastGrant.resource === adopted.resource
-        && isDeepStrictEqual(lastGrant.authContext, adopted.authContext) && !isAccessExpired(lastGrant, now());
+        && ctx.lastGrant?.sessionInstanceId === adopted.sessionInstanceId
+        && ctx.lastGrant.issuer === adopted.issuer && ctx.lastGrant.subject === adopted.subject
+        && ctx.lastGrant.accessExpiresAt === adopted.accessExpiresAt && ctx.lastGrant.version === adopted.version
+        && ctx.lastGrant.clientId === adopted.clientId && ctx.lastGrant.resource === adopted.resource
+        && isDeepStrictEqual(ctx.lastGrant.authContext, adopted.authContext) && !isAccessExpired(ctx.lastGrant, now());
     }) : undefined;
 
   function beginConsumption(issuer, target, credentials, expected) {
@@ -214,80 +227,6 @@ export function createIamService(rawConfig, options = {}) {
       secretRevision: grant.authContext.secretRevision }) : undefined;
     consumptionWitness.adopt(ticket, { issuer, subject, sessionInstanceId, accessExpiresAt,
       version, clientId, resource, authContext });
-  }
-
-  function recheckExclusive() {
-    if (typeof options.recheckExclusive !== 'function') return;
-    const next = options.recheckExclusive();
-    if (next?.ok === false) {
-      observedPending = null;
-      exclusive = next;
-      error = next.reason ?? 'exclusive-violation';
-      if (state !== 'unconfigured') state = 'error';
-    }
-  }
-
-  function assertExclusive() {
-    recheckExclusive();
-    if (!exclusive.ok) {
-      throw new IamError('IAM_EXCLUSIVE_CONFLICT', 'official account service is still mounted', {
-        reason: exclusive.reason ?? 'exclusive-violation',
-      });
-    }
-  }
-
-  function view() {
-    recheckExclusive();
-    const summary = lastGrant ? summarizeGrant(lastGrant) : {};
-    // The catalogue is display state, not an authorization: keep the last known
-    // list while the session is still recoverable (a signed-in subject whose
-    // access token lapsed or whose revocation check is offline) so the panel
-    // can mark it stale instead of erasing the model list.
-    const recoverable = state === 'ready' || state === 'unreachable'
-      || (state === 'expired' && lastGrant && isRefreshUsable(lastGrant, now()));
-    return createView(state, {
-      configured,
-      missing: isConfigured(config).missing,
-      error,
-      exclusive: exclusive.ok ? 'ok' : (exclusive.reason ?? 'exclusive-violation'),
-      principal: summary.principal ?? null,
-      accessExpiresAt: summary.accessExpiresAt ?? null,
-      gatewayCredential: gatewaySummary,
-      gatewayConsoleUrl: config.gatewayConsoleUrl || null,
-      modelAccess: { ...(options.getManagedModelRuntime?.()?.getView() ?? { managed: true, state: 'unconfigured', models: [] }),
-        configured: Boolean(gatewaySummary?.baseURL || config.managedModels?.baseURL),
-        baseURL: gatewaySummary?.baseURL ?? config.managedModels?.baseURL ?? '',
-        ...(!recoverable || gatewaySummary?.state !== 'configured' || gatewaySummary?.matchesAccount !== true
-          ? { state: 'unconfigured', error: null, defaultModelId: null, enabled: [], models: [], modelOptions: {} }
-          : {}) },
-    });
-  }
-
-  function notify() {
-    const snapshot = view();
-    for (const listener of listeners) {
-      try {
-        listener(snapshot);
-      } catch {
-        // One subscriber must not corrupt a transition or starve the others.
-      }
-    }
-    scheduleDefaultModelReconciliation();
-    return snapshot;
-  }
-
-  function publish(next, nextError = null) {
-    const result = transition(state, next);
-    if (!result.ok) {
-      throw new IamError('IAM_INVALID_TRANSITION', `cannot apply ${next} from ${state}`, {
-        state,
-        event: next,
-        reason: result.reason,
-      });
-    }
-    state = result.state;
-    error = nextError;
-    return notify();
   }
 
   function clearAttempt() {
@@ -314,8 +253,8 @@ export function createIamService(rawConfig, options = {}) {
     if (config.authMode !== 'confidential') return undefined;
     const current = () => {
       if (guard) guard();
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      assertExclusive();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      ctx.assertExclusive();
       if (ensureStore() !== target || storeCredentials !== credentials) {
         throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
       }
@@ -337,25 +276,6 @@ export function createIamService(rawConfig, options = {}) {
     const current = ensureStore();
     if (current) return current;
     throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
-  }
-
-  function fail(code) {
-    observedPending = null;
-    clearAttempt();
-    lastGrant = null;
-    identityProfile = undefined;
-    error = code;
-    if (state === 'unconfigured') {
-      notify();
-      return;
-    }
-    if (state === 'authenticating') {
-      const result = transition(state, 'SIGN_IN_FAILURE');
-      if (result.ok) state = result.state;
-    } else if (state !== 'error') {
-      state = 'error';
-    }
-    notify();
   }
 
   async function metadata() {
@@ -386,7 +306,7 @@ export function createIamService(rawConfig, options = {}) {
         fetchImpl,
         timeoutMs: Math.min(config.httpTimeoutMs, 5000),
       });
-      if (disposed || authEpoch !== epoch || lastGrant !== grant) return;
+      if (ctx.disposed || authEpoch !== epoch || ctx.lastGrant !== grant) return;
       const profile = projectUserInfo(raw, profileFields);
       identityProfile = profile ? Object.freeze({ identity: grantIdentity(grant), profile }) : undefined;
     } catch {
@@ -422,20 +342,14 @@ export function createIamService(rawConfig, options = {}) {
       const keys = await jwks(uri);
       if (guard) guard();
       return verifyIdToken(token, { ...options, jwks: keys });
-    } catch (error) {
+    } catch (cause) {
       if (guard) guard();
-      if (error?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw error;
+      if (cause?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw cause;
       jwksCache = null;
       const keys = await jwks(uri);
       if (guard) guard();
       return verifyIdToken(token, { ...options, jwks: keys });
     }
-  }
-
-  // Only normalized configuration or metadata validated by this instance can
-  // bind a stored identity. Neither the grant nor discovery URL is an issuer pin.
-  function knownIssuer() {
-    return config.issuer || metadataCache?.value.issuer || '';
   }
 
   function assertGrantBinding(grant) {
@@ -542,48 +456,48 @@ export function createIamService(rawConfig, options = {}) {
   }
 
   async function syncFromStore() {
-    if (disposed || signingOut) return view();
-    if (!configured || !exclusive.ok) return view();
+    if (ctx.disposed || signingOut) return ctx.view();
+    if (!configured || !ctx.exclusive.ok) return ctx.view();
     // A user-triggered sign-in owns the state machine until its callback,
     // cancellation, or timeout; a background hydration must not clobber it.
-    if (state === 'authenticating' || signInPromise) return view();
+    if (ctx.state === 'authenticating' || signInPromise) return ctx.view();
     // Only an error created by this instance observing pending can recover.
-    const observation = state === 'error' ? observedPending : null;
-    if (state === 'error' && (!observation || error !== 'IAM_REAUTH_REQUIRED'
+    const observation = ctx.state === 'error' ? observedPending : null;
+    if (ctx.state === 'error' && (!observation || ctx.error !== 'IAM_REAUTH_REQUIRED'
       || observation.authEpoch !== authEpoch || now() >= observation.deadline)) {
       observedPending = null;
-      return view();
+      return ctx.view();
     }
-    const expectedIssuer = knownIssuer();
+    const expectedIssuer = ctx.knownIssuer();
     const syncEpoch = authEpoch;
     let publication = syncPublications;
-    let expectedGrant = lastGrant;
-    const isActive = () => !disposed && !signingOut && exclusive.ok && authEpoch === syncEpoch
-      && syncPublications === publication && lastGrant === expectedGrant
-      && (observation ? state === 'error' && error === 'IAM_REAUTH_REQUIRED'
+    let expectedGrant = ctx.lastGrant;
+    const isActive = () => !ctx.disposed && !signingOut && ctx.exclusive.ok && authEpoch === syncEpoch
+      && syncPublications === publication && ctx.lastGrant === expectedGrant
+      && (observation ? ctx.state === 'error' && ctx.error === 'IAM_REAUTH_REQUIRED'
         && observedPending === observation && now() < observation.deadline
-        : state !== 'authenticating' && state !== 'error' && !signInPromise);
+        : ctx.state !== 'authenticating' && ctx.state !== 'error' && !signInPromise);
     const published = () => {
       publication = ++syncPublications;
-      expectedGrant = lastGrant;
+      expectedGrant = ctx.lastGrant;
     };
     const discardIdentity = () => {
       // Store lookups can be rebound independently. Clear only the adopted
       // identity this sync still owns, never a later publication (even null).
-      if (expectedGrant && lastGrant === expectedGrant && grantOwners.has(expectedGrant)) {
-        lastGrant = null;
-        state = 'signed-out';
-        error = null;
+      if (expectedGrant && ctx.lastGrant === expectedGrant && grantOwners.has(expectedGrant)) {
+        ctx.lastGrant = null;
+        ctx.state = 'signed-out';
+        ctx.error = null;
         published();
-        notify();
+        ctx.notify();
       }
     };
     const targetStore = ensureStore();
-    if (!isActive()) return view();
+    if (!isActive()) return ctx.view();
     if (!targetStore || (observation && targetStore !== observation.store)) {
       if (!targetStore) discardIdentity();
       observedPending = null;
-      return view();
+      return ctx.view();
     }
     const targetCredentials = storeCredentials;
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
@@ -600,37 +514,37 @@ export function createIamService(rawConfig, options = {}) {
     };
     try {
       const record = await targetStore.read();
-      recheckExclusive();
-      if (!isCurrent()) return view();
+      ctx.recheckExclusive();
+      if (!isCurrent()) return ctx.view();
       if (!record.ok) {
         observedPending = null;
-        lastGrant = null;
-        error = 'IAM_GRANT_INVALID';
-        state = 'error';
+        ctx.lastGrant = null;
+        ctx.error = 'IAM_GRANT_INVALID';
+        ctx.state = 'error';
         published();
-        notify();
-        return view();
+        ctx.notify();
+        return ctx.view();
       }
       if (!record.grant) {
         if (observation) {
           observedPending = null;
-          return view();
+          return ctx.view();
         }
-        const changed = lastGrant !== null || state !== 'signed-out';
-        lastGrant = null;
+        const changed = ctx.lastGrant !== null || ctx.state !== 'signed-out';
+        ctx.lastGrant = null;
         published();
         if (changed) {
-          error = null;
-          state = 'signed-out';
-          notify();
+          ctx.error = null;
+          ctx.state = 'signed-out';
+          ctx.notify();
         }
-        return view();
+        return ctx.view();
       }
       assertGrantContext(record.grant, expectedIssuer);
       const authentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: () => {
         if (!isCurrent()) throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
       } });
-      if (!isCurrent()) return view();
+      if (!isCurrent()) return ctx.view();
       assertClientAuthCurrent(authentication);
       const marker = record.grant.refreshOperation;
       const identity = grantIdentity(record.grant);
@@ -639,37 +553,37 @@ export function createIamService(rawConfig, options = {}) {
         if (!marker || marker.version !== observation.version || marker.id !== observation.id
           || marker.base !== observation.base || !isDeepStrictEqual(identity, observation.identity)) {
           observedPending = null;
-          return view();
+          return ctx.view();
         }
         const sameRefresh = refreshDigest(record.grant, marker.id) === observation.refreshDigest;
-        if (marker.state === 'pending' && sameRefresh) return view();
+        if (marker.state === 'pending' && sameRefresh) return ctx.view();
         if (marker.state !== 'complete' || sameRefresh
           || isAccessExpired(record.grant, now()) || !isRefreshUsable(record.grant, now())) {
           observedPending = null;
-          return view();
+          return ctx.view();
         }
       } else if (marker?.state === 'pending') {
         observedPending = { version: marker.version, id: marker.id, base: marker.base,
           identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch, store: targetStore,
           deadline: now() + REFRESH_TIMEOUT_MS };
-        lastGrant = null;
-        state = 'error';
-        error = 'IAM_REAUTH_REQUIRED';
+        ctx.lastGrant = null;
+        ctx.state = 'error';
+        ctx.error = 'IAM_REAUTH_REQUIRED';
         published();
-        notify();
-        return view();
+        ctx.notify();
+        return ctx.view();
       }
-      const previousSubject = lastGrant?.subject ?? null;
-      const previous = `${state}|${error}|${previousSubject}`;
-      lastGrant = record.grant;
+      const previousSubject = ctx.lastGrant?.subject ?? null;
+      const previous = `${ctx.state}|${ctx.error}|${previousSubject}`;
+      ctx.lastGrant = record.grant;
       grantOwners.set(record.grant, targetStore);
       published();
       // An adopted subject changes the displayed match, not the stored key.
       if (observation || (previousSubject !== null && record.grant.subject !== previousSubject)) {
         await loadGatewayCredential({ force: true });
         if (!isCurrent()) {
-          if (lastGrant === record.grant) lastGrant = null;
-          return view();
+          if (ctx.lastGrant === record.grant) ctx.lastGrant = null;
+          return ctx.view();
         }
         assertClientAuthCurrent(authentication);
       }
@@ -678,28 +592,28 @@ export function createIamService(rawConfig, options = {}) {
       // `expired` means the access token is no longer usable, not merely inside
       // the refresh skew: a token request renews the latter, and showing "expired"
       // while the token still works would send the user through a needless login.
-      state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
-      error = null;
+      ctx.state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
+      ctx.error = null;
       adoptConsumption(consumption, record.grant);
       // With a usable refresh token an expired session is recoverable; without
       // this, the interim client would only ever offer a full re-login.
-      if (state === 'expired' && isRefreshUsable(record.grant, now())
+      if (ctx.state === 'expired' && isRefreshUsable(record.grant, now())
         && now() - lastBackgroundRefreshAt >= AUTO_REFRESH_BACKOFF_MS) {
         lastBackgroundRefreshAt = now();
         void service.resolveToken().catch(() => {});
       }
-      if (previous !== `${state}|${error}|${lastGrant.subject ?? ''}`) notify();
+      if (previous !== `${ctx.state}|${ctx.error}|${ctx.lastGrant.subject ?? ''}`) ctx.notify();
     } catch (cause) {
-      if (!isCurrent()) return view();
+      if (!isCurrent()) return ctx.view();
       observedPending = null;
-      lastGrant = null;
-      error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED'].includes(cause?.code)
+      ctx.lastGrant = null;
+      ctx.error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED'].includes(cause?.code)
         ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
-      state = 'error';
+      ctx.state = 'error';
       published();
-      notify();
+      ctx.notify();
     }
-    return view();
+    return ctx.view();
   }
 
   async function readGatewayCredential(targetGatewayStore, targetStore, isCurrent) {
@@ -717,7 +631,7 @@ export function createIamService(rawConfig, options = {}) {
     if (!record.credential) return { state: 'invalid', matchesAccount: false };
     const storage = await targetGatewayStore.describe().catch(() => null);
     if (!isCurrent()) return null;
-    const signedInSubject = lastGrant && grantOwners.get(lastGrant) === targetStore ? lastGrant.subject : null;
+    const signedInSubject = ctx.lastGrant && grantOwners.get(ctx.lastGrant) === targetStore ? ctx.lastGrant.subject : null;
     const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
     return {
       // Without a session the stored key is still "configured"; it only becomes
@@ -737,19 +651,19 @@ export function createIamService(rawConfig, options = {}) {
   }
 
   async function loadGatewayCredential({ force = false } = {}) {
-    if (disposed) return null;
+    if (ctx.disposed) return null;
     // Cache hits and singleflight reuse must belong to the live provider too.
     const targetStore = ensureStore();
-    if (disposed || !targetStore || !gatewayStore) return null;
+    if (ctx.disposed || !targetStore || !gatewayStore) return null;
     if (!force && gatewayLoadedAt > 0 && now() - gatewayLoadedAt < GATEWAY_RELOAD_MS) return gatewaySummary;
     if (gatewayLoading) return gatewayLoading;
     const targetGatewayStore = gatewayStore;
     const targetCredentials = storeCredentials;
     const epoch = gatewayEpoch;
     const isCurrent = () => {
-      if (disposed || epoch !== gatewayEpoch) return false;
+      if (ctx.disposed || epoch !== gatewayEpoch) return false;
       const current = ensureStore();
-      return !disposed && epoch === gatewayEpoch && current === targetStore
+      return !ctx.disposed && epoch === gatewayEpoch && current === targetStore
         && gatewayStore === targetGatewayStore && storeCredentials === targetCredentials;
     };
     const request = readGatewayCredential(targetGatewayStore, targetStore, isCurrent)
@@ -772,7 +686,7 @@ export function createIamService(rawConfig, options = {}) {
   }
 
   function scheduleDefaultModelReconciliation() {
-    if (disposed || !config.defaultModel.trim()) return;
+    if (ctx.disposed || !config.defaultModel.trim()) return;
     if (modelSelectionFlight) {
       modelSelectionQueued = true;
       return;
@@ -806,10 +720,10 @@ export function createIamService(rawConfig, options = {}) {
     if (!config.defaultModel.trim() || !config.defaultProvider.trim()) {
       return readonlyModelResult('default-model-unconfigured');
     }
-    if (disposed || signingOut || state !== 'ready') return readonlyModelResult('iam-not-ready');
+    if (ctx.disposed || signingOut || ctx.state !== 'ready') return readonlyModelResult('iam-not-ready');
     const targetStore = ensureStore();
     const targetCredentials = storeCredentials;
-    const grant = lastGrant;
+    const grant = ctx.lastGrant;
     if (!targetStore || !grant || grantOwners.get(grant) !== targetStore
       || isAccessExpired(grant, now())) return readonlyModelResult('iam-not-ready');
     const services = modelSelectionServices();
@@ -821,13 +735,13 @@ export function createIamService(rawConfig, options = {}) {
     const auth = authEpoch;
     const generation = modelSelectionGeneration;
     const gateway = gatewayEpoch;
-    const active = () => !disposed && !signingOut && state === 'ready' && exclusive.ok
+    const active = () => !ctx.disposed && !signingOut && ctx.state === 'ready' && ctx.exclusive.ok
       && authEpoch === auth && modelSelectionGeneration === generation && gatewayEpoch === gateway
-      && lastGrant === grant && !isAccessExpired(grant, now());
+      && ctx.lastGrant === grant && !isAccessExpired(grant, now());
     const isCurrent = () => {
       try {
         if (!active()) return false;
-        assertExclusive();
+        ctx.assertExclusive();
         if (!active() || ensureStore() !== targetStore || storeCredentials !== targetCredentials) return false;
         const current = modelSelectionServices();
         return active() && current?.binding === services.binding && current.llm === services.llm
@@ -861,12 +775,12 @@ export function createIamService(rawConfig, options = {}) {
     // requires a separate decision and does not make it safe to consume.
     await syncFromStore();
     await loadGatewayCredential({ force: true });
-    return view();
+    return ctx.view();
   }
 
   const service = {
     getView() {
-      return view();
+      return ctx.view();
     },
     getModelAccessEpoch() { return `${authEpoch}:${sessionEpoch}:${modelSelectionGeneration}`; },
 
@@ -876,10 +790,10 @@ export function createIamService(rawConfig, options = {}) {
      * accident. Use `resolveToken()` (or `getAccessToken()`) for the token.
      */
     getSession() {
-      recheckExclusive();
-      const summary = lastGrant ? summarizeGrant(lastGrant) : {};
+      ctx.recheckExclusive();
+      const summary = ctx.lastGrant ? summarizeGrant(ctx.lastGrant) : {};
       return {
-        status: state,
+        status: ctx.state,
         signedIn: summary.signedIn === true,
         principal: summary.principal
           ? { issuer: summary.issuer ?? null, subject: summary.principal }
@@ -897,7 +811,7 @@ export function createIamService(rawConfig, options = {}) {
      * IAM state machine (the managed model catalogue is the only such source).
      * Without this, subscribers keep the last frame until an unrelated event.
      */
-    notifyView() { return notify(); },
+    notifyView() { return ctx.notify(); },
     // Host-only observation; intentionally absent from routes and IamView.
     reconcileDefaultModel,
 
@@ -944,10 +858,10 @@ export function createIamService(rawConfig, options = {}) {
 
     /** Persist the enabled set. Never a token channel: only model ids and overrides. */
     async saveModelSelection({ models, defaultModelId } = {}) {
-      assertExclusive();
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      ctx.assertExclusive();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       let current = await selectionOwner();
-      if (current?.expired && lastGrant && isRefreshUsable(lastGrant, now())) {
+      if (current?.expired && ctx.lastGrant && isRefreshUsable(ctx.lastGrant, now())) {
         try {
           await service.resolveToken();
           current = await selectionOwner();
@@ -972,14 +886,14 @@ export function createIamService(rawConfig, options = {}) {
       const targetStore = requireStore();
       const targetGatewayStore = gatewayStore;
       const targetCredentials = storeCredentials;
-      const subject = lastGrant?.subject;
+      const subject = ctx.lastGrant?.subject;
       const generation = modelSelectionGeneration;
       const check = () => {
-        if (disposed || signingOut || authEpoch !== epoch || modelSelectionGeneration !== generation
-          || state !== 'ready' || !subject || lastGrant?.subject !== subject || Date.parse(lastGrant.accessExpiresAt) <= now()) {
+        if (ctx.disposed || signingOut || authEpoch !== epoch || modelSelectionGeneration !== generation
+          || ctx.state !== 'ready' || !subject || ctx.lastGrant?.subject !== subject || Date.parse(ctx.lastGrant.accessExpiresAt) <= now()) {
           throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
         }
-        assertExclusive();
+        ctx.assertExclusive();
         if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法读取个人访问凭证。');
         }
@@ -1008,15 +922,15 @@ export function createIamService(rawConfig, options = {}) {
      */
     async saveGatewayCredential({ key: value, deviceLabel, baseURL: address } = {}) {
       const baseURL = address === undefined ? undefined : normalizeGatewayBaseURL(address, config.allowInsecureHttp);
-      assertExclusive();
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      ctx.assertExclusive();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       modelSelectionGeneration += 1;
       if (!configured) {
         throw new IamError('IAM_UNCONFIGURED', safeMessage('IAM_UNCONFIGURED'), {
           missing: isConfigured(config).missing,
         });
       }
-      const expectedIssuer = knownIssuer();
+      const expectedIssuer = ctx.knownIssuer();
       const epoch = authEpoch;
       const targetStore = requireStore();
       const targetGatewayStore = gatewayStore;
@@ -1026,11 +940,11 @@ export function createIamService(rawConfig, options = {}) {
       }
       const assertCurrent = () => {
         const active = () => {
-          if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-          if (signingOut || authEpoch !== epoch || state === 'authenticating') {
+          if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+          if (signingOut || authEpoch !== epoch || ctx.state === 'authenticating') {
             throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
           }
-          assertExclusive();
+          ctx.assertExclusive();
         };
         active();
         if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
@@ -1077,13 +991,13 @@ export function createIamService(rawConfig, options = {}) {
       await loadGatewayCredential({ force: true });
       assertCurrent();
       assertClientAuthCurrent(authentication);
-      notify();
-      return view();
+      ctx.notify();
+      return ctx.view();
     },
 
     async clearGatewayCredential() {
-      assertExclusive();
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      ctx.assertExclusive();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       modelSelectionGeneration += 1;
       const targetStore = requireStore();
       const targetGatewayStore = gatewayStore;
@@ -1092,12 +1006,12 @@ export function createIamService(rawConfig, options = {}) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
       const assertCurrent = () => {
-        if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-        assertExclusive();
+        if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+        ctx.assertExclusive();
         if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
         }
-        if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+        if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       };
       assertCurrent();
       let cleared;
@@ -1113,28 +1027,28 @@ export function createIamService(rawConfig, options = {}) {
       }
       await loadGatewayCredential({ force: true });
       assertCurrent();
-      notify();
-      return view();
+      ctx.notify();
+      return ctx.view();
     },
 
     /** Minimal principal for Host policy/audit; never tokens. */
     getPrincipal() {
-      if (!lastGrant) return undefined;
-      return { issuer: lastGrant.issuer, subject: lastGrant.subject };
+      if (!ctx.lastGrant) return undefined;
+      return { issuer: ctx.lastGrant.issuer, subject: ctx.lastGrant.subject };
     },
 
     /** Projected UserInfo for future display; empty until IAM confirms fields. */
     getIdentityProfile() {
       // A profile is only valid for the grant that produced it: every path that
       // clears or replaces lastGrant hides it, without touching each call site.
-      if (!lastGrant || !identityProfile) return undefined;
-      if (!isDeepStrictEqual(identityProfile.identity, grantIdentity(lastGrant))) return undefined;
+      if (!ctx.lastGrant || !identityProfile) return undefined;
+      if (!isDeepStrictEqual(identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
       return { ...identityProfile.profile };
     },
 
     async startSignIn() {
-      assertExclusive();
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      ctx.assertExclusive();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (!configured) {
         throw new IamError('IAM_UNCONFIGURED', safeMessage('IAM_UNCONFIGURED'), {
           missing: isConfigured(config).missing,
@@ -1146,15 +1060,15 @@ export function createIamService(rawConfig, options = {}) {
       if (attempt && (attempt.targetStore !== targetStore || attempt.credentials !== credentials)) {
         authEpoch += 1;
         clearAttempt();
-        if (state === 'authenticating') {
-          state = 'signed-out';
-          error = null;
+        if (ctx.state === 'authenticating') {
+          ctx.state = 'signed-out';
+          ctx.error = null;
         }
       }
       if (!targetStore) throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       assertAtomic(targetStore, credentials);
-      if (state === 'ready') return { view: view(), authorizationUrl: null };
-      if (state === 'authenticating' && attempt) {
+      if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
+      if (ctx.state === 'authenticating' && attempt) {
         if (config.authMode === 'confidential') {
           const current = attempt; const epoch = authEpoch;
           const authentication = await prepareAuthentication(current.metadata.issuer, targetStore, credentials, { expected: current.authentication, guard: () => {
@@ -1163,13 +1077,13 @@ export function createIamService(rawConfig, options = {}) {
           } });
           assertClientAuthCurrent(authentication);
         }
-        return { view: view(), authorizationUrl: attempt.authorizationUrl };
+        return { view: ctx.view(), authorizationUrl: attempt.authorizationUrl };
       }
       if (signInPromise) return signInPromise;
       authEpoch += 1;
       observedPending = null;
       consumptionWitness?.invalidate();
-      const consumption = beginConsumption(knownIssuer(), targetStore, credentials);
+      const consumption = beginConsumption(ctx.knownIssuer(), targetStore, credentials);
       const pending = service._startSignInOnce(targetStore, credentials, consumption);
       // Only the attempt that still owns the slot clears it: a cancel or a newer
       // sign-in must not be overwritten by a superseded attempt settling late.
@@ -1181,7 +1095,7 @@ export function createIamService(rawConfig, options = {}) {
 
     async _startSignInOnce(targetStore, credentials, consumption) {
       const startEpoch = authEpoch;
-      if (state === 'unreachable') {
+      if (ctx.state === 'unreachable') {
         throw new IamError('IAM_UNREACHABLE', safeMessage('IAM_UNREACHABLE'));
       }
       let meta;
@@ -1192,7 +1106,7 @@ export function createIamService(rawConfig, options = {}) {
         const mapped = code === 'IAM_HTTP_ERROR' || code === 'IAM_DISCOVERY_INVALID' ? 'IAM_UNREACHABLE' : code;
         throw new IamError(mapped, safeMessage(mapped));
       }
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (authEpoch !== startEpoch || signingOut) {
         throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       }
@@ -1202,10 +1116,10 @@ export function createIamService(rawConfig, options = {}) {
         assertAtomic(targetStore, credentials);
       } });
       assertClientAuthCurrent(authentication);
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-      if (state === 'ready') return { view: view(), authorizationUrl: null };
-      if (!transition(state, 'SIGN_IN').ok) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+      if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
+      if (!transition(ctx.state, 'SIGN_IN').ok) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       const oauthState = randomToken(32);
       const nonce = randomToken(32);
       const pkce = createPkce();
@@ -1239,19 +1153,19 @@ export function createIamService(rawConfig, options = {}) {
         if (attempt === scheduledAttempt) {
           scheduledAttempt.expired = true;
           clearAttempt();
-          error = 'IAM_ATTEMPT_EXPIRED';
-          if (state === 'authenticating') state = 'error';
-          notify();
+          ctx.error = 'IAM_ATTEMPT_EXPIRED';
+          if (ctx.state === 'authenticating') ctx.state = 'error';
+          ctx.notify();
         }
       }, config.attemptTimeoutSeconds * 1000);
       attempt.timer.unref?.();
-      publish('SIGN_IN');
-      return { view: view(), authorizationUrl };
+      ctx.publish('SIGN_IN');
+      return { view: ctx.view(), authorizationUrl };
     },
 
     async handleCallback(rawUrl) {
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      assertExclusive();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      ctx.assertExclusive();
       let callback;
       try {
         callback = new URL(rawUrl);
@@ -1276,20 +1190,20 @@ export function createIamService(rawConfig, options = {}) {
       }
       if (now() > attempt.expiresAt) {
         clearAttempt();
-        error = 'IAM_ATTEMPT_EXPIRED';
-        if (state === 'authenticating') state = 'error';
-        notify();
+        ctx.error = 'IAM_ATTEMPT_EXPIRED';
+        if (ctx.state === 'authenticating') ctx.state = 'error';
+        ctx.notify();
         throw new IamError('IAM_ATTEMPT_EXPIRED', safeMessage('IAM_ATTEMPT_EXPIRED'));
       }
       let parsed;
       try {
         parsed = parseCallbackUrl(rawUrl);
-      } catch (error) {
-        const code = tokenErrorMessage(error);
+      } catch (cause) {
+        const code = tokenErrorMessage(cause);
         if (!attempt || !safeStateEqual(attempt.state, receivedState)) {
           throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
         }
-        if (code === 'IAM_AUTHORIZATION_ERROR') fail(code);
+        if (code === 'IAM_AUTHORIZATION_ERROR') ctx.fail(code);
         throw new IamError(code, safeMessage(code));
       }
       const { code } = parsed;
@@ -1307,15 +1221,15 @@ export function createIamService(rawConfig, options = {}) {
       const attemptEpoch = authEpoch;
       const consumption = beginConsumption(current.metadata.issuer, current.targetStore, current.credentials, current.consumption ?? null);
       const isCurrent = () => {
-        if (attempt === current && authEpoch === attemptEpoch && state === 'authenticating'
+        if (attempt === current && authEpoch === attemptEpoch && ctx.state === 'authenticating'
           && now() > current.expiresAt) {
           current.expired = true;
           clearAttempt();
-          error = 'IAM_ATTEMPT_EXPIRED';
-          state = 'error';
-          notify();
+          ctx.error = 'IAM_ATTEMPT_EXPIRED';
+          ctx.state = 'error';
+          ctx.notify();
         }
-        return attempt === current && authEpoch === attemptEpoch && state === 'authenticating';
+        return attempt === current && authEpoch === attemptEpoch && ctx.state === 'authenticating';
       };
       const interrupted = () => current.expired
         ? new IamError('IAM_ATTEMPT_EXPIRED', safeMessage('IAM_ATTEMPT_EXPIRED'))
@@ -1328,7 +1242,7 @@ export function createIamService(rawConfig, options = {}) {
       let authentication;
       const callbackGuard = () => {
         if (!isCurrent()) throw interrupted();
-        assertExclusive();
+        ctx.assertExclusive();
         assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
       };
@@ -1365,7 +1279,7 @@ export function createIamService(rawConfig, options = {}) {
         const grant = await buildGrant(token, claims, current.metadata, nowIso(now()), authentication);
         assertClientAuthCurrent(authentication);
         if (!isCurrent()) throw interrupted();
-        assertExclusive();
+        ctx.assertExclusive();
         assertAtomic(current.targetStore, current.credentials);
         intendedStore = current.targetStore;
         intendedGrant = grant;
@@ -1389,7 +1303,7 @@ export function createIamService(rawConfig, options = {}) {
         assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
         // Show any owner mismatch without changing the user's stored key.
-        lastGrant = grant;
+        ctx.lastGrant = grant;
         grantOwners.set(grant, current.targetStore);
         await loadGatewayCredential({ force: true });
         assertClientAuthCurrent(authentication);
@@ -1399,9 +1313,9 @@ export function createIamService(rawConfig, options = {}) {
         await loadIdentityProfile(grant);
         if (!isCurrent()) throw interrupted();
         clearAttempt();
-        publish('SIGN_IN_SUCCESS');
+        ctx.publish('SIGN_IN_SUCCESS');
         adoptConsumption(consumption, grant);
-        return view();
+        return ctx.view();
       } catch (cause) {
         const guardPreventedWrite = guardRejection && cause === guardRejection;
         // A late HTTP/JWKS failure is no longer authoritative after auth changed.
@@ -1413,7 +1327,7 @@ export function createIamService(rawConfig, options = {}) {
           const cleanup = await intendedStore.discardCallbackGrant(intendedGrant).catch(() => ({ ok: false }));
           if (!cleanup.ok) cleanupUnknown = true;
         }
-        if (lastGrant === intendedGrant) lastGrant = null;
+        if (ctx.lastGrant === intendedGrant) ctx.lastGrant = null;
         if (issuedToken?.refreshToken && current.metadata.revocationEndpoint) {
           try {
             const cleanupAuthentication = await prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
@@ -1431,11 +1345,11 @@ export function createIamService(rawConfig, options = {}) {
         }
         const stillCurrent = isCurrent();
         if (cleanupUnknown) {
-          if (!disposed && !signingOut && (stillCurrent || (!attempt && (state === 'signed-out' || state === 'error')))) {
+          if (!ctx.disposed && !signingOut && (stillCurrent || (!attempt && (ctx.state === 'signed-out' || ctx.state === 'error')))) {
             if (stillCurrent) clearAttempt();
-            state = 'error';
-            error = 'IAM_CREDENTIALS_CLEAR_FAILED';
-            notify();
+            ctx.state = 'error';
+            ctx.error = 'IAM_CREDENTIALS_CLEAR_FAILED';
+            ctx.notify();
           }
           throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
         }
@@ -1443,32 +1357,32 @@ export function createIamService(rawConfig, options = {}) {
           throw cause?.code === 'IAM_ATTEMPT_EXPIRED' ? cause : interrupted();
         }
         const failureCode = tokenErrorMessage(cause);
-        fail(failureCode);
+        ctx.fail(failureCode);
         throw new IamError(failureCode, safeMessage(failureCode));
       }
     },
 
     async cancelSignIn() {
       consumptionWitness?.invalidate();
-      if (disposed) return view();
+      if (ctx.disposed) return ctx.view();
       authEpoch += 1;
       observedPending = null;
       // A cancelled attempt no longer owns the state machine, even when it never
       // reached `authenticating` (discovery or client-auth was still pending):
       // leaving its promise registered would keep blocking background hydration.
       signInPromise = null;
-      if (state !== 'authenticating') return view();
+      if (ctx.state !== 'authenticating') return ctx.view();
       clearAttempt();
-      lastGrant = null;
+      ctx.lastGrant = null;
       gatewayEpoch += 1;
       gatewaySummary = null;
       gatewayLoadedAt = 0;
-      return publish('CANCEL');
+      return ctx.publish('CANCEL');
     },
 
     async signOut() {
       consumptionWitness?.invalidate();
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (signOutPromise) return signOutPromise;
       signingOut = true;
       authEpoch += 1;
@@ -1485,10 +1399,10 @@ export function createIamService(rawConfig, options = {}) {
 
     async _signOutOnce() {
       const checkDisposed = () => {
-        if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+        if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       };
       checkDisposed();
-      let expectedIssuer = knownIssuer();
+      let expectedIssuer = ctx.knownIssuer();
       if (refreshPromise) await refreshPromise.catch(() => {});
       checkDisposed();
       let grant = null;
@@ -1497,12 +1411,12 @@ export function createIamService(rawConfig, options = {}) {
       checkDisposed();
       const unknownSignOut = () => {
         checkDisposed();
-        lastGrant = null;
+        ctx.lastGrant = null;
         identityProfile = undefined;
-        error = 'IAM_CREDENTIALS_CLEAR_FAILED';
-        state = 'error';
-        notify();
-        return { view: view(), logoutUrl: null, revocation: 'unknown' };
+        ctx.error = 'IAM_CREDENTIALS_CLEAR_FAILED';
+        ctx.state = 'error';
+        ctx.notify();
+        return { view: ctx.view(), logoutUrl: null, revocation: 'unknown' };
       };
       try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       if (targetStore) {
@@ -1520,7 +1434,7 @@ export function createIamService(rawConfig, options = {}) {
       checkDisposed();
       try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
-      lastGrant = null;
+      ctx.lastGrant = null;
       let revocation = 'skipped';
       let revocationError = null;
       let meta = metadataCache?.value;
@@ -1609,13 +1523,13 @@ export function createIamService(rawConfig, options = {}) {
       // Three states stay distinct: confirmed, rejected, and unconfirmed.
       const nextError = revocation === 'failed' ? 'IAM_REVOCATION_FAILED'
         : revocation === 'unknown' ? 'IAM_REVOCATION_UNKNOWN' : null;
-      if (state !== 'unconfigured' && state !== 'signed-out') {
-        publish('SIGN_OUT', nextError);
+      if (ctx.state !== 'unconfigured' && ctx.state !== 'signed-out') {
+        ctx.publish('SIGN_OUT', nextError);
       } else {
-        error = nextError;
-        notify();
+        ctx.error = nextError;
+        ctx.notify();
       }
-      return { view: view(), logoutUrl, revocation, revocationError };
+      return { view: ctx.view(), logoutUrl, revocation, revocationError };
     },
 
     /**
@@ -1624,7 +1538,7 @@ export function createIamService(rawConfig, options = {}) {
      * to obtain it; this is not a second authorization model.
      */
     async bridgeCapability() {
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       const credentials = storeCredentials;
       if (!credentials || typeof credentials.resolve !== 'function' || typeof credentials.set !== 'function') {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
@@ -1642,12 +1556,12 @@ export function createIamService(rawConfig, options = {}) {
     },
 
     async resolveToken() {
-      assertExclusive();
-      if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      if (signingOut || state === 'authenticating') {
+      ctx.assertExclusive();
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (signingOut || ctx.state === 'authenticating') {
         throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
       }
-      const expectedIssuer = knownIssuer();
+      const expectedIssuer = ctx.knownIssuer();
       const useSharedRefresh = async (checkBefore = true) => {
         if (checkBefore && (!expectedIssuer || refreshPromiseIssuer !== expectedIssuer)) {
           throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
@@ -1659,25 +1573,25 @@ export function createIamService(rawConfig, options = {}) {
         const sharedSessionEpoch = sessionEpoch;
         const sharedAuthEpoch = authEpoch;
         const checkLifecycle = () => {
-          if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-          if (signingOut || state === 'authenticating' || sessionEpoch !== sharedSessionEpoch || authEpoch !== sharedAuthEpoch) {
+          if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+          if (signingOut || ctx.state === 'authenticating' || sessionEpoch !== sharedSessionEpoch || authEpoch !== sharedAuthEpoch) {
             throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
           }
         };
         const checkProvider = () => {
           checkLifecycle();
-          assertExclusive();
+          ctx.assertExclusive();
           checkLifecycle();
           const current = ensureStore();
           checkLifecycle();
           if (current !== sharedStore || storeCredentials !== sharedCredentials) {
             // Do not clear a newer provider's independently published session.
-            if (lastGrant && grantOwners.get(lastGrant) === sharedStore) {
-              lastGrant = null;
-              if (state === 'ready' || state === 'expired' || state === 'unreachable') {
-                state = 'error';
-                error = 'IAM_CREDENTIALS_UNAVAILABLE';
-                notify();
+            if (ctx.lastGrant && grantOwners.get(ctx.lastGrant) === sharedStore) {
+              ctx.lastGrant = null;
+              if (ctx.state === 'ready' || ctx.state === 'expired' || ctx.state === 'unreachable') {
+                ctx.state = 'error';
+                ctx.error = 'IAM_CREDENTIALS_UNAVAILABLE';
+                ctx.notify();
               }
             }
             throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
@@ -1708,31 +1622,31 @@ export function createIamService(rawConfig, options = {}) {
       const auth = authEpoch;
       const targetStore = requireStore();
       const targetCredentials = storeCredentials;
-      const grantAtStart = lastGrant;
+      const grantAtStart = ctx.lastGrant;
       const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
       let refreshing = false;
       let operationGrant = null;
       let authentication;
-      const alive = () => !disposed && !signingOut && epoch === sessionEpoch
-        && auth === authEpoch && state !== 'authenticating';
+      const alive = () => !ctx.disposed && !signingOut && epoch === sessionEpoch
+        && auth === authEpoch && ctx.state !== 'authenticating';
       const checkLifecycle = () => {
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
-        assertExclusive();
+        ctx.assertExclusive();
         if (refreshing) assertAtomic(targetStore, targetCredentials);
       };
       const checkAlive = () => { checkLifecycle(); assertClientAuthCurrent(authentication); };
       const rejectSession = (code = 'IAM_REAUTH_REQUIRED') => {
         // A late failure belongs to its original provider, not a newer session.
         const current = ensureStore();
-        if (!(code === 'IAM_NOT_SIGNED_IN' && state === 'signed-out')
+        if (!(code === 'IAM_NOT_SIGNED_IN' && ctx.state === 'signed-out')
           && alive() && current === targetStore && storeCredentials === targetCredentials
-          && (!lastGrant || lastGrant === grantAtStart
-            || (operationGrant && sameGrantIgnoringRefreshMarker(lastGrant, operationGrant)))) {
+          && (!ctx.lastGrant || ctx.lastGrant === grantAtStart
+            || (operationGrant && sameGrantIgnoringRefreshMarker(ctx.lastGrant, operationGrant)))) {
           observedPending = null;
-          lastGrant = null;
-          state = 'error';
-          error = code;
-          notify();
+          ctx.lastGrant = null;
+          ctx.state = 'error';
+          ctx.error = code;
+          ctx.notify();
         }
         throw new IamError(code, safeMessage(code));
       };
@@ -1748,13 +1662,13 @@ export function createIamService(rawConfig, options = {}) {
         if (!grant?.accessToken || grant.refreshOperation?.state === 'pending' || isAccessExpired(grant, now())) return rejectSession();
         observedPending = null;
         rememberAuthentication(authentication, grant);
-        lastGrant = grant;
+        ctx.lastGrant = grant;
         grantOwners.set(grant, targetStore);
         lastBackgroundRefreshAt = 0;
-        state = 'ready';
-        error = null;
+        ctx.state = 'ready';
+        ctx.error = null;
         adoptConsumption(consumption, grant);
-        notify();
+        ctx.notify();
         return grant.accessToken;
       };
       // Do not make signOut wait for an unrelated, possibly stalled initial read.
@@ -1762,12 +1676,12 @@ export function createIamService(rawConfig, options = {}) {
       try {
         record = await targetStore.read();
       } catch {
-        if (!alive()) throw new IamError(disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
+        if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
         return rejectSession('IAM_CREDENTIALS_UNAVAILABLE');
       }
-      if (!alive()) throw new IamError(disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
+      if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
       const currentStore = ensureStore();
-      if (!alive()) throw new IamError(disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
+      if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
       if (currentStore !== targetStore || storeCredentials !== targetCredentials) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
@@ -1801,13 +1715,13 @@ export function createIamService(rawConfig, options = {}) {
             // A pending rotation may already have consumed the refresh token.
             // Remove only the view belonging to this operation while awaiting it.
             checkAlive();
-            if ((!lastGrant || lastGrant === grantAtStart || sameGrantIgnoringRefreshMarker(lastGrant, pending))
-              && (state !== 'error' || error === 'IAM_REAUTH_REQUIRED')) {
-              lastGrant = null;
+            if ((!ctx.lastGrant || ctx.lastGrant === grantAtStart || sameGrantIgnoringRefreshMarker(ctx.lastGrant, pending))
+              && (ctx.state !== 'error' || ctx.error === 'IAM_REAUTH_REQUIRED')) {
+              ctx.lastGrant = null;
               observedPending = null;
-              state = 'error';
-              error = 'IAM_REAUTH_REQUIRED';
-              notify();
+              ctx.state = 'error';
+              ctx.error = 'IAM_REAUTH_REQUIRED';
+              ctx.notify();
             }
             const operation = pending.refreshOperation;
             const identity = grantIdentity(pending);
@@ -1987,11 +1901,11 @@ export function createIamService(rawConfig, options = {}) {
         }
       };
       const onAbort = () => stop();
-      listeners.add(listener);
+      ctx.addListener(listener);
       stopWaiters.add(stop);
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
-        yield view();
+        yield ctx.view();
         for (;;) {
           if (signal?.aborted) return;
           if (queue.length) {
@@ -2010,7 +1924,7 @@ export function createIamService(rawConfig, options = {}) {
         }
       } finally {
         stop();
-        listeners.delete(listener);
+        ctx.removeListener(listener);
         stopWaiters.delete(stop);
         signal?.removeEventListener('abort', onAbort);
       }
@@ -2018,8 +1932,8 @@ export function createIamService(rawConfig, options = {}) {
 
     async dispose() {
       consumptionWitness?.dispose();
-      if (disposed) return;
-      disposed = true;
+      if (ctx.disposed) return;
+      ctx.disposed = true;
       modelSelectionQueued = false;
       sessionEpoch += 1;
       authEpoch += 1;
@@ -2029,15 +1943,15 @@ export function createIamService(rawConfig, options = {}) {
       // caller parked forever. dispose() is lifecycle cleanup, not logout:
       // persisted credentials are cleared only by an explicit signOut() or by
       // the enterprise uninstall flow.
-      listeners.clear();
+      ctx.clearListeners();
       for (const stop of [...stopWaiters]) stop();
       stopWaiters.clear();
-      lastGrant = null;
+      ctx.lastGrant = null;
       sessionAuthentication = null;
       identityProfile = undefined;
       gatewaySummary = null;
-      state = 'signed-out';
-      error = null;
+      ctx.state = 'signed-out';
+      ctx.error = null;
       // Lifecycle cleanup only: the grant and the user's gateway credential
       // stay stored, so unload cannot silently discard them.
     },
