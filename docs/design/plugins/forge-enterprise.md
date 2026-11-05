@@ -6,17 +6,17 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.5.3 |
+| 版本 | V1.6.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-04 |
+| 最后更新 | 2026-11-05 |
 | 门禁 | G2 |
 | 模块状态 | 可用（组合骨架：官方行默认禁用 + 按需技能/条款装配；企业接入待开通） |
 
-> 编制依据：2026-10-20 依据 DSH 组合层公开语义核验——补丁层叠加在包入口列表之上；`insert` 追加行，带 `id` 的补丁覆盖既有行且 `config` 整体替换、不深合并；`group: true` 配 `name: cordis:group` 使 `config` 成为可再插入的嵌套列表；`cordis:include` 载入外部 YAML 或 JSON 入口列表；`disabled` 接受布尔、null 或按挂载时机求值的 `!!js` 表达式；`!!js` 仅在 `config` 内按插件上下文求值；`isolate` 按服务名划分实例域。2026-10-21 用户确认采用 O3「企业 IAM 独占登录」，官方登录在企业内网不可用；本包据此默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 行。**未核验**：`engines` 版本断言在挂载期的具体报错形态、`fiberPhase` 的取值集合、禁用四行后 shell/onboarding 是否完整。
+> 编制依据：2026-10-20 依据 DSH 组合层公开语义核验——补丁层叠加在包入口列表之上；`insert` 追加行，带 `id` 的补丁覆盖既有行且 `config` 整体替换、不深合并；`group: true` 配 `name: cordis:group` 使 `config` 成为可再插入的嵌套列表；`cordis:include` 载入外部 YAML 或 JSON 入口列表；`disabled` 接受布尔、null 或按挂载时机求值的 `!!js` 表达式；`!!js` 仅在 `config` 内按插件上下文求值；`isolate` 按服务名划分实例域。2026-10-21 用户确认采用 O3「企业 IAM 独占登录」，官方登录在企业内网不可用；本包据此默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 行。**未核验**：`engines` 版本断言在挂载期的具体报错形态、`fiberPhase` 的取值集合、禁用官方行后 shell/onboarding 是否完整。
 >
 > 关联文档：[总体架构](../../architecture/platform-architecture.md)、[设计索引](../README.md)、[IAM 接入](forge-iam.md)、[策略与审计](forge-policy.md)、[双模式凭据](../credential-modes.md)。
 
@@ -26,9 +26,9 @@
 
 边界：它组合 `@heluo/forge-*` 与上游插件，不实现其中任何一个；它决定默认值与禁用项，不决定策略内容与契约字段。
 
-O3 的组成之一是**默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 四行**，使企业 IAM 成为唯一登录。官方登录在企业内网不可用，保留它只会制造一个坏掉的入口，并留下公网模型旁路。
+O3 的组成之一是**默认禁用官方账号、官方模型、官方 API Key、官方账户 UI、通用模型配置与自由模型设置六行**，以及官方明文凭据提供方一行，使企业 IAM 成为唯一登录，并让 `DEEPSEEK_API_KEY` 与自填网关都不构成旁路。官方登录在企业内网不可用，保留它只会制造一个坏掉的入口，并留下公网模型旁路。
 
-还缺四件事才能进实现：版本断言的报错形态实测、角色 preset 的粒度确认、禁用四行后 shell/onboarding 的实测、默认禁用清单的业务确认。
+还缺四件事才能进实现：版本断言的报错形态实测、角色 preset 的粒度确认、禁用官方行后 shell/onboarding 的实测、默认禁用清单的业务确认。
 
 ### 1.1 专用访问目标的组合约束
 
@@ -124,7 +124,7 @@ insert:
 
 ### 5.1 官方行默认禁用
 
-O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下行；企业包用独立的 `insert:` 行挂载（§5.1.2），不复用被禁用的官方行 id，也不覆盖成员的 `config`。除四个官方登录/模型/账户行外，官方本地凭据提供方 `credentials`（0600 明文 YAML）同样默认禁用：它保留在组合里只加 `disabled: true`，出现在 dump 中属正常，禁用不等于删除。
+O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下行；企业包用独立的 `insert:` 行挂载（§5.1.2），不复用被禁用的官方行 id，也不覆盖成员的 `config`。禁用范围是六个官方行——官方账号 `deepseek-account`、官方账户 UI `ui-settings-account`、官方模型两条路 `llm-deepseek-account` 与 `llm-deepseek`、通用模型配置 `llm-pi-ai`、自由模型设置 `ui-settings-models`——再加官方本地凭据提供方 `credentials`（0600 明文 YAML）。`credentials` 保留在组合里只加 `disabled: true`，出现在 dump 中属正常，禁用不等于删除。
 
 ```yaml title="默认禁用官方登录/模型（示意）"
 - id: deepseek-account
@@ -134,6 +134,10 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 - id: llm-deepseek
   disabled: true
 - id: ui-settings-account
+  disabled: true
+- id: llm-pi-ai
+  disabled: true
+- id: ui-settings-models
   disabled: true
 ```
 
@@ -171,6 +175,14 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
 **边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**2026-10-26 现行口径**：SDD 移出 `insert:` 后，dump 级断言以三行为准（`bundle-patch.test.mjs`），上表四行仅为历史记录。
+
+#### 5.1.3 企业模型配置入口收敛（2026-11-04）
+
+默认禁用范围在四个登录/模型/账户行之外，加入通用模型配置 `llm-pi-ai` 与自由模型设置 `ui-settings-models`，共六个官方行，另加 `credentials` 一行。`packages/forge-enterprise/src/reflow.mjs` 的 `OFFICIAL_ROWS` 与 `packages/forge-enterprise/test/bundle-patch.test.mjs` 同步断言这七行；缺席与禁用保持区分，不以隐藏导航代替执行门禁。
+
+企业账号页承担网关地址与个人 Key 配置，模型经标准 `/v1/models` 动态获取，不设独立的自由模型设置入口。模型调用由 IAM 内受控适配器与全局模型流事件检查，细节见 [IAM 设计 §13](<forge-iam.md#13-企业模型设置与执行闭环代拟>)。
+
+本轮证据限于补丁内容与离线用例：扩至七行后的组合层完整性、升级回灌与双端 GUI 未复测，不能写成生产或企业联调结论。
 
 ### 5.2 按需企业 Skill 与规范条款加载
 
@@ -349,7 +361,7 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
-| 组合 | 禁用四行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |
+| 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |
 | 端到端 | 双端各完成一次挂载、官方入口不可见与整体禁用 | 手工 + 脚本 |
 
 ## 11. 打包、升级与回退
@@ -398,8 +410,8 @@ flowchart TD
 | 挂载期版本断言的报错形态 | 平台组（实测） | 第 8 节失败语义 |
 | `fiberPhase` 的取值与用途 | 平台组（实测） | 观测字段 |
 | 角色 preset 的粒度（按职能还是按部门） | 平台组、PMO | 第 5 节 `rolePreset` |
-| 官方四行 row id 在 desktop/web 的一致性 | 平台组（实测） | 第 5.1 节禁用补丁 |
-| 禁用四行后 shell/onboarding 是否完整 | 平台组（实测） | O3 是否可在不修改核心的前提下成立 |
+| 官方行 row id 在 desktop/web 的一致性 | 平台组（实测） | 第 5.1 节禁用补丁 |
+| 禁用官方行后 shell/onboarding 是否完整 | 平台组（实测） | O3 是否可在不修改核心的前提下成立 |
 | 若禁用破坏 shell，是否接受最小核心补丁 | 用户、平台组 | 与“不 fork”非目标冲突 |
 | 默认禁用清单是否还有未识别的官方旁路 | 安全、平台组 | 第 5.1 节默认值 |
 | 旧官方 grant 与旧默认模型的迁移/清理 | 平台组、安全 | 升级体验与残留身份 |
@@ -416,7 +428,3 @@ flowchart TD
 | 把策略内容也放进本包 | 一处配置 | 与策略包职责重叠，审计边界模糊 | 不采用 |
 
 以上五项都不影响主链路；若后续确认增益，再单独评估并更新本设计。
-
-## 10. 企业模型配置入口收敛（代拟）
-
-2026-11-04 按用户授权，在已有五行禁用项外增加 `llm-pi-ai` 与 `ui-settings-models`。企业账号页承担网关地址及个人 Key 配置，通过 `/v1/models` 获取模型；不创建独立自由模型设置。七行均纳入回灌检查，缺席与禁用保持区分；不以隐藏导航代替执行门禁，模型调用由 IAM 内受控适配器及全局模型流事件检查，细节见 [IAM 设计 §13](<forge-iam.md#13-企业模型设置与执行闭环代拟>)。不改写旧五行实验的历史证据，不将本地验证扩大为双端或生产证明。
