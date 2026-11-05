@@ -115,7 +115,7 @@ const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name)
  */
 export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch,
   requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders(),
-  getHostDefaultModel = () => safeGet(host, 'agentDefaultModel'), retryDelays = RETRY_DELAYS }) {
+  getHostDefaultModel = () => safeGet(host, 'agentDefaultModel'), retryDelays = RETRY_DELAYS, onChange }) {
   if (typeof host.on !== 'function' || typeof host.llm?.registerAdapter !== 'function') {
     const off = host.on?.('llm/stream', () => (async function* () { yield finish('ENTERPRISE_MODELS_UNAVAILABLE'); })(), { global: true });
     return {
@@ -142,7 +142,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   let optionsChain = Promise.resolve();
   let inSample = false;
   let observedVersion = 0;
-  const publish = () => { host.emit?.('llm/adapters-updated'); };
+  // `host.emit` reaches SDK listeners; `onChange` reaches this plugin's own
+  // view subscribers, which the catalogue changes without an IAM transition.
+  const publish = () => { host.emit?.('llm/adapters-updated'); onChange?.(); };
   const cancelRetry = () => { clearTimeout(retryTimer); retryTimer = undefined; };
   // Every path that drops the backend also drops the catalogue state with it,
   // so the account page can never say "ready" while nothing is callable.
@@ -258,7 +260,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const denied = permit(sample());
     if (disposed || denied) throw error(denied ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     if (flight?.version === version) return flight.promise;
-    const mine = version;
+    let mine = version;
     catalogState = 'loading'; catalogError = null;
     const current = () => { sample(); if (disposed || mine !== version || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED'); };
     const task = Promise.resolve().then(async () => {
@@ -274,7 +276,17 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // catalogue is sorted, so "first" is stable across refreshes).
       if (!selectionSaved && found.length > 0) {
         const chosen = pickDefaultModel(found, config.defaultModel);
-        if (chosen) { modelOptions = { [chosen]: {} }; defaultModelId = chosen; await persistSelection(); current(); }
+        if (chosen) {
+          modelOptions = { [chosen]: {} }; defaultModelId = chosen;
+          await persistSelection();
+          // That write bumps the selection generation. It is our own change, so
+          // adopt it; treating it as foreign aborted the first sync after login
+          // and left the catalogue in "loading" until another view arrived.
+          sample();
+          mine = version;
+          if (flight?.promise === task) flight = { version: mine, promise: task };
+          current();
+        }
       } else if (!defaultModelId || !enabled(defaultModelId) || !found.some(m => m.id === defaultModelId)) {
         defaultModelId = found.find(m => enabled(m.id))?.id ?? Object.keys(modelOptions)[0] ?? null;
       }

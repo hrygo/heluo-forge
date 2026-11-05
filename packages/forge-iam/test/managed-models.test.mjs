@@ -10,6 +10,7 @@ function fixture(overrides = {}) {
   };
   const listeners = new Set();
   let selection = overrides.selection ?? null;
+  let selectionGeneration = 0;
   const iam = {
     getView: () => structuredClone(view),
     async readModelSelection() {
@@ -18,9 +19,11 @@ function fixture(overrides = {}) {
         : { subject: 'person-a', saved: false, models: {}, defaultModelId: null };
     },
     async saveModelSelection(next) {
+      selectionGeneration += 1;
       selection = { models: structuredClone(next.models ?? {}), defaultModelId: next.defaultModelId ?? null };
       return { subject: 'person-a', ...structuredClone(selection) };
     },
+    getModelAccessEpoch: () => String(selectionGeneration),
     async resolveGatewayConnection() { return { baseURL: configuration.baseURL, key: 'synthetic-only', generation: 'one' }; },
     async *watch(signal) {
       yield structuredClone(view);
@@ -458,4 +461,28 @@ test('getView synchronously clears ghost ready state when session signs out or g
   assert.deepEqual(viewAfterSignOut.models, []);
   assert.deepEqual(viewAfterSignOut.enabled, []);
   assert.equal(viewAfterSignOut.defaultModelId, null);
+});
+
+test('catalogue transitions notify the plugin view channel, not only the SDK event', async t => {
+  let changes = 0;
+  const f = fixture({ onChange: () => { changes += 1; } });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // A catalogue flip without an IAM transition must reach view subscribers.
+  assert.ok(changes >= 1);
+  // One view notification per adapters-updated emission: neither drops nor loops.
+  assert.equal(changes, f.events.filter(event => event === 'llm/adapters-updated').length);
+  assert.equal(f.runtime.getView().state, 'ready');
+});
+
+test('the first-run default write does not abort the sync it belongs to', async t => {
+  let discovery = 0;
+  const f = fixture({ fetch: async () => { discovery += 1; return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] })); } });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().state, 'ready');
+  // The selection write bumps the access epoch; if the flight treated that as
+  // foreign it would need a second discovery round and flash "error".
+  assert.equal(discovery, 1);
+  assert.deepEqual(f.runtime.getModelOptions(), { 'enterprise-chat': {} });
 });

@@ -140,9 +140,16 @@ export function apply(ctx, rawConfig = {}) {
           iam: service,
           config: result.value,
           getHostDefaultModel,
+          // The catalogue flips loading → ready/error without any IAM
+          // transition. Push a view frame so subscribers do not keep a stale
+          // "syncing" snapshot until some unrelated event arrives.
+          onChange: () => { service.notifyView(); },
         });
         managedRuntime = runtime;
-        const release = async () => { if (managedRuntime === runtime) managedRuntime = undefined; await runtime.dispose(); };
+        const release = async () => {
+          if (managedRuntime === runtime) managedRuntime = undefined;
+          await runtime.dispose();
+        };
         host.effect(() => release, 'forge-iam-managed-models');
         return release;
       });
