@@ -41,21 +41,39 @@ export function analyseClient(source) {
     const match = /^ {4}\/\/ §(\d+(?:\.\d+)?) (.+)$/.exec(line);
     if (match) anchors.push({ name: match[1], title: match[2], line: index + 1 });
   });
+  // 只数调用点上「直接传给函数」的键：嵌套对象里的键属于分组内部，不算入参。
   const renderParams = {};
   lines.forEach((line, index) => {
     const entry = /render([A-Za-z0-9_]+)\(\{/.exec(line);
     if (!entry) return;
+    let depth = 1;
+    let quote = null;
+    let buffer = '';
     const keys = [];
-    for (let cursor = index; cursor < Math.min(lines.length, index + 30); cursor += 1) {
-      const text = lines[cursor];
-      const body = cursor === index ? text.slice(entry.index + entry[0].length) : text;
-      const closed = body.includes('})');
-      const chunk = closed ? body.slice(0, body.lastIndexOf('})')) : body;
-      keys.push(...chunk.split(',')
-        .map(key => key.trim())
-        .map(key => (key.includes(':') ? key.slice(0, key.indexOf(':')).trim() : key))
-        .filter(key => /^[A-Za-z_$][\w$]*$/.test(key)));
-      if (closed) break;
+    const flush = () => {
+      const segment = buffer.trim();
+      buffer = '';
+      if (!segment) return;
+      const cut = segment.indexOf(':');
+      const key = (cut === -1 ? segment : segment.slice(0, cut)).trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(key)) keys.push(key);
+    };
+    for (let cursor = index; cursor < lines.length; cursor += 1) {
+      const text = cursor === index ? lines[cursor].slice(entry.index + entry[0].length) : lines[cursor];
+      for (let at = 0; at < text.length; at += 1) {
+        const ch = text[at];
+        if (quote) {
+          if (ch === quote && text[at - 1] !== '\\') quote = null;
+          continue;
+        }
+        if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+        if (ch === '{' || ch === '[' || ch === '(') depth += 1;
+        else if (ch === '}' || ch === ']' || ch === ')') {
+          depth -= 1;
+          if (depth === 0) { flush(); cursor = lines.length; break; }
+        } else if (ch === ',' && depth === 1) { flush(); continue; }
+        if (depth >= 1) buffer += ch;
+      }
     }
     renderParams['render' + entry[1]] = keys;
   });
