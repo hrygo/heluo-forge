@@ -13,6 +13,7 @@ node scripts/probe/run-host-probe.mjs
 - 需要本机已安装目标 DSH，`dsh` 在 PATH 上（或用 `DSH_BIN` 指定可执行文件）。
 - 默认在 `sdk` profile 上叠加一层临时 patch（`DSH_HOST_PROBE_PROFILE` 可改）；
   该 profile 是 stdio JSON-RPC 应用，stdin 关闭即退出，因此不需要模型，也不需要交互。
+- 驱动为每次运行创建独立 `DSH_HOME`，避免读取用户 profile；正式组合补丁原样用于配置对照，运行时通过独立测试覆盖层替换为内存凭据夹具并关闭未安装的企业插件。该夹具不证明生产凭据能力。
 - 驱动脚本用管道**保持 stdin 打开**，等探针写出拟定结果后再关闭 stdin。实测：stdin 立即 EOF 时
   宿主会在探针跑到一半开始卸载，晚到的注册与派发报 `cannot create effect on inactive context`，
   报告随机少项；保持 stdin 后同一份探针连续复跑稳定（本项为探针自身的生命周期修正，不是被测行为）。

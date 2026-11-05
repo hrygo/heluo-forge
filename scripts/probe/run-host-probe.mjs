@@ -32,6 +32,8 @@ const harness = String(version.stdout ?? '').trim();
 
 const dir = mkdtempSync(join(tmpdir(), 'forge-host-probe-'));
 const out = join(dir, 'probe-raw.json');
+// Keep user profiles and plugins out of both the probe run and its config comparisons.
+const probeEnv = { ...process.env, DSH_HOME: join(dir, 'dsh-home') };
 const patch = join(dir, 'probe.patch.yml');
 const policyPackage = resolve(here, '../../packages/forge-policy/src/index.mjs');
 const bundlePatch = resolve(here, '../../packages/forge-enterprise/cordis.patch.yml');
@@ -48,7 +50,7 @@ try {
 const gatewayCatalog = [
   "{ action: 'probe.read', kind: 'read', target: 'probe-target', enabled: true }",
   "{ action: 'probe.write', kind: 'write', target: 'probe-target' }",
-  "{ action: 'probe.confirm', kind: 'confirm', target: 'probe-target', enabled: true }",
+  "{ action: 'probe.confirm', kind: 'confirm', target: 'probe-target' }",
   "{ action: 'probe.fs.read', kind: 'read', target: 'file', enabled: true, path: 'path' }",
 ];
 writeFileSync(
@@ -88,7 +90,22 @@ writeFileSync(
 // 官方行禁用来自企业组合包自身的补丁文件（不是探针里的副本），基线对照可关掉这一层。
 const disableOfficial = process.env.DSH_HOST_PROBE_DISABLE_OFFICIAL !== '0';
 const patchArgs = disableOfficial ? ['--patch', patch, '--patch', bundlePatch] : ['--patch', patch];
-const command = `${dsh} --profile ${profile} ${patchArgs.join(' ')}`;
+// The real bundle inserts production plugins that are not installed in this probe
+// profile. Keep its official-row patch, but replace only the runtime credential
+// provider with a synthetic in-memory fixture. The unmodified bundle is still
+// used for the independent --dump-config comparisons below.
+const fixtureModule = join(dir, 'credentials-fixture.mjs');
+const credentialsPackage = pathToFileURL(resolve(here, '../../packages/forge-credentials-keychain/src/index.mjs')).href;
+writeFileSync(fixtureModule, `import { apply as mount, createMemoryBackend } from ${JSON.stringify(credentialsPackage)};\nexport const name = 'probe-credentials';\nexport function apply(ctx) { return mount(ctx, { backend: createMemoryBackend(), allowEphemeral: true }); }\n`);
+const fixturePatch = join(dir, 'runtime-fixture.patch.yml');
+writeFileSync(fixturePatch, [
+  '- id: heluo-credentials-keychain', '  disabled: true',
+  '- id: heluo-policy', '  disabled: true',
+  '- id: heluo-iam', '  disabled: true',
+  '- insert:', '    - id: probe-credentials', `      name: '${pathToFileURL(fixtureModule).href}'`, '',
+].join('\n'));
+const runtimeArgs = disableOfficial ? [...patchArgs, '--patch', fixturePatch] : patchArgs;
+const command = `${dsh} --profile ${profile} ${runtimeArgs.join(' ')}`;
 console.log(`probe: ${harness} | node ${process.version} | ${process.platform}-${process.arch}`);
 console.log(`probe: ${command}  (cwd ${dir})`);
 
@@ -97,11 +114,11 @@ const TIMEOUT_MS = 180_000;
 
 /** 保持 stdin 打开直到探针写出结果，再让宿主退出。 */
 async function runHarness() {
-  const child = spawn(dsh, ['--profile', profile, ...patchArgs], {
+  const child = spawn(dsh, ['--profile', profile, ...runtimeArgs], {
     cwd: dir,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
-      ...process.env,
+      ...probeEnv,
       DSH_HOST_PROBE_PATHS: JSON.stringify({ protectedDir, aliasLink, aliasReady }),
       DSH_HOST_PROBE_DIR: dir,
       DSH_HOST_PROBE_OUT: out,
@@ -144,8 +161,8 @@ const run = await runHarness();
 // 官方行清单与回灌检测同源：多份副本会静默漏掉新增行（#125 的 credentials）。
 const { detectOfficialRowReflow, OFFICIAL_ROWS, rowsFromDump } = await import('../../packages/forge-enterprise/src/reflow.mjs');
 const officialIds = [...OFFICIAL_ROWS];
-const dumpBase = spawnSync(dsh, ['--profile', profile, '--dump-config'], { encoding: 'utf8' });
-const dumpPatched = spawnSync(dsh, ['--profile', profile, ...patchArgs, '--dump-config'], { encoding: 'utf8' });
+const dumpBase = spawnSync(dsh, ['--profile', profile, '--dump-config'], { encoding: 'utf8', env: probeEnv });
+const dumpPatched = spawnSync(dsh, ['--profile', profile, ...patchArgs, '--dump-config'], { encoding: 'utf8', env: probeEnv });
 const baseText = String(dumpBase.stdout ?? '');
 const patchedText = String(dumpPatched.stdout ?? '');
 const patchedWarnings = String(dumpPatched.stderr ?? '');

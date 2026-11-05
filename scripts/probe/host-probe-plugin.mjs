@@ -51,13 +51,14 @@ function probeTool(toolName, body) {
 
 /** A minimal session stand-in good enough for the approval service's documented reads. */
 function stubSession() {
-  const events = [{ type: 'turn/start' }];
+  const events = [{ seq: 0, type: 'turn/start' }];
   return {
     get seq() {
       return events.length;
     },
     eventAt: (seq) => events[seq],
-    append: (type, data) => events.push({ type, data }),
+    snapshotEvents: (start = 0, end = events.length) => events.slice(start, end),
+    append: (type, data) => { const event = { seq: events.length, type, data }; events.push(event); return event; },
   };
 }
 
@@ -86,7 +87,8 @@ export function apply(ctx) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         seq += 1;
         try {
-          const result = await ctx.tools.execute({ callId: `probe-${seq}`, name: toolName, arguments: args, signal });
+          const batch = await ctx.tools.execute({ calls: [{ id: `probe-${seq}`, name: toolName, arguments: JSON.stringify(args) }], signal });
+          const result = batch.results[0]?.result;
           return { isError: result?.isError === true, text: textOf(result), error: errorOf(result) };
         } catch (error) {
           const message = String(error?.message ?? error);
@@ -94,7 +96,7 @@ export function apply(ctx) {
             await new Promise((resolve) => setTimeout(resolve, 20));
             continue;
           }
-          return { threw: message };
+          return { threw: message, cause: String(error?.cause?.stack ?? error?.cause ?? '') };
         }
       }
       return { threw: 'unreachable' };
@@ -1038,7 +1040,7 @@ export function apply(ctx) {
           facts.childBashHidden = ctx.tools.get('bash', childAgent) === undefined;
           const bodyBefore = bodyCalls.body;
           try {
-            const result = await childCtx.tools.execute({ callId: 'probe-subagent-dispatch-1', name: 'probe_body', arguments: {}, signal });
+            const result = (await childCtx.tools.execute({ calls: [{ id: 'probe-subagent-dispatch-1', name: 'probe_body', arguments: '{}' }], signal })).results[0]?.result;
             facts.childDispatch = { isError: result?.isError === true, text: textOf(result) };
           } catch (error) {
             facts.childDispatch = { threw: String(error?.message ?? error) };
@@ -1048,7 +1050,7 @@ export function apply(ctx) {
           // 父作用域对**全局**工具注册的 guard 是否管到子作用域：用 bash 派发实测（结果如实记录）。
           const disposeBashGuard = ctx.tools.guard((exec) => (exec.name === 'bash' ? 'probe-child-bash-guard' : undefined));
           try {
-            const bashResult = await childCtx.tools.execute({ callId: 'probe-subagent-dispatch-2', name: 'bash', arguments: { command: 'true' }, signal });
+            const bashResult = (await childCtx.tools.execute({ calls: [{ id: 'probe-subagent-dispatch-2', name: 'bash', arguments: JSON.stringify({ command: 'true' }) }], signal })).results[0]?.result;
             facts.childBashDispatch = { isError: bashResult?.isError === true, text: textOf(bashResult).slice(0, 160) };
           } catch (error) {
             facts.childBashDispatch = { threw: String(error?.message ?? error).slice(0, 160) };
