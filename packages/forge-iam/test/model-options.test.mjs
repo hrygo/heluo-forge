@@ -3,10 +3,15 @@ import assert from 'node:assert/strict';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
+  REASONING_EFFORT_LEVELS,
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_TOKENS,
   normalizeGatewayBaseURL,
   validateManagedModels,
   parseCapacity,
   formatCapacity,
+  buildReasoningEffortRange,
+  getReasoningEffortBounds,
   buildThinkingLevelMap,
   applyModelOptions,
 } from '../src/model-options.mjs';
@@ -103,10 +108,14 @@ test('buildThinkingLevelMap correctly maps levels and disables unused with null'
   assert.equal(map.minimal, null);
 });
 
-test('applyModelOptions overlays custom options on raw model lists', () => {
+test('applyModelOptions overlays custom options on raw model lists and defaults to 200K context window and 64K maxTokens', () => {
+  assert.deepEqual(THINKING_LEVELS, ['off', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(DEFAULT_CONTEXT_WINDOW, 200000);
+  assert.equal(DEFAULT_MAX_TOKENS, 64000);
   const raw = [
-    { id: 'model-a', name: 'Raw A', contextWindow: 32768, maxTokens: 4096, input: ['text'] },
+    { id: 'model-a', name: 'Raw A', input: ['text'] },
     { id: 'model-b', name: 'Raw B', contextWindow: 65536, maxTokens: 8192, input: ['text'] },
+    { id: 'model-c', name: 'Raw C', input: ['text'] },
   ];
   const options = {
     'model-a': {
@@ -116,10 +125,11 @@ test('applyModelOptions overlays custom options on raw model lists', () => {
       inputModalities: ['text', 'image'],
       reasoningEfforts: { low: 'low', medium: 'medium', high: 'high' },
     },
+    'model-c': {},
   };
 
   const overlaid = applyModelOptions(raw, options);
-  assert.equal(overlaid.length, 2);
+  assert.equal(overlaid.length, 3);
 
   // Model A customized
   assert.equal(overlaid[0].name, 'Custom A');
@@ -132,11 +142,77 @@ test('applyModelOptions overlays custom options on raw model lists', () => {
   assert.equal(overlaid[0].thinkingLevelMap.low, 'low');
   assert.equal(overlaid[0].thinkingLevelMap.off, null);
 
-  // Model B untouched
+  // Model B untouched with explicit raw capacity
   assert.equal(overlaid[1].name, 'Raw B');
   assert.equal(overlaid[1].contextWindow, 65536);
   assert.equal(overlaid[1].maxTokens, 8192);
   assert.equal(overlaid[1].hasCustomMaxTokens, false);
   assert.deepEqual(overlaid[1].inputModalities, ['text']);
   assert.equal(overlaid[1].reasoning, false);
+
+  // Model C uses 200K context window and 64K maxTokens default
+  assert.equal(overlaid[2].contextWindow, 200000);
+  assert.equal(overlaid[2].maxTokens, 64000);
+  assert.equal(formatCapacity(overlaid[2].contextWindow), '200K');
+  assert.equal(formatCapacity(overlaid[2].maxTokens), '64K');
+});
+
+test('buildReasoningEffortRange and getReasoningEffortBounds support lower and upper bound selection', () => {
+  assert.deepEqual(REASONING_EFFORT_LEVELS, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(buildReasoningEffortRange('off', 'off'), undefined);
+  assert.equal(buildReasoningEffortRange('', ''), undefined);
+
+  // Contiguous range from low to xhigh
+  const range = buildReasoningEffortRange('low', 'xhigh');
+  assert.deepEqual(range, {
+    off: null,
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+  });
+  const bounds = getReasoningEffortBounds(range);
+  assert.deepEqual(bounds, {
+    enabled: true,
+    lower: 'low',
+    upper: 'xhigh',
+    levels: ['low', 'medium', 'high', 'xhigh'],
+  });
+
+  // Range starting from off to high
+  const withOff = buildReasoningEffortRange('off', 'high');
+  assert.deepEqual(withOff, {
+    off: 'off',
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+  });
+  assert.deepEqual(getReasoningEffortBounds(withOff), {
+    enabled: true,
+    lower: 'off',
+    upper: 'high',
+    levels: ['off', 'low', 'medium', 'high'],
+  });
+
+  // Reversed bounds are automatically normalized
+  const reversed = buildReasoningEffortRange('max', 'medium');
+  assert.deepEqual(reversed, {
+    off: null,
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+    max: 'max',
+  });
+
+  // Shorthand { lower, upper } in buildThinkingLevelMap pins minimal to null
+  const thinkingMap = buildThinkingLevelMap({ lower: 'low', upper: 'medium' });
+  assert.deepEqual(thinkingMap, {
+    off: null,
+    minimal: null,
+    low: 'low',
+    medium: 'medium',
+    high: null,
+    xhigh: null,
+    max: null,
+  });
 });

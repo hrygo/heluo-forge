@@ -2,10 +2,15 @@ import { IamError } from './errors.mjs';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
+  REASONING_EFFORT_LEVELS,
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_TOKENS,
   normalizeGatewayBaseURL,
   validateManagedModels,
   parseCapacity,
   formatCapacity,
+  buildReasoningEffortRange,
+  getReasoningEffortBounds,
   buildThinkingLevelMap,
   applyModelOptions,
   pickDefaultModel,
@@ -14,10 +19,15 @@ import {
 export {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
+  REASONING_EFFORT_LEVELS,
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_TOKENS,
   normalizeGatewayBaseURL,
   validateManagedModels,
   parseCapacity,
   formatCapacity,
+  buildReasoningEffortRange,
+  getReasoningEffortBounds,
   buildThinkingLevelMap,
   applyModelOptions,
   pickDefaultModel,
@@ -85,8 +95,8 @@ async function discover(connection, signal, fetcher, headers) {
   const discovered = body.data.map(item => {
     if (typeof item?.id !== 'string' || !/^[\w./:-]{1,200}$/u.test(item.id) || seen.has(item.id)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
     seen.add(item.id);
-    // Standard /models does not promise capacity or modality metadata.
-    return { id: item.id, name: item.id, contextWindow: 32768, maxTokens: 4096, input: ['text'], inputModalities: ['text'] };
+    // Standard /models does not promise capacity or modality metadata; use default capacity baselines.
+    return { id: item.id, name: item.id, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS, input: ['text'], inputModalities: ['text'] };
   });
   return discovered.sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true, sensitivity: 'base' }));
 }
@@ -334,10 +344,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         } catch { /* keep existing backend if rebuild fails */ }
       }
       publish();
-      return { ok: true, persisted,
+      return {
+        ok: true, persisted,
         defaultModelId,
         enabled: Object.keys(modelOptions),
-        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
+        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities }))
+      };
     },
     getModelOptions: () => ({ ...modelOptions }),
     getView: () => ({
@@ -349,8 +361,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
         id,
         name,
-        contextWindow: contextWindow ?? 32768,
-        maxTokens: maxTokens ?? 4096,
+        contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+        maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
         inputModalities: inputModalities ?? ['text'],
         reasoningEfforts: reasoningEfforts ?? null,
         reasoning: Boolean(reasoning),
@@ -380,7 +392,7 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
     const resolvedThinkingMap = thinkingLevelMap ?? buildThinkingLevelMap(reasoningEfforts);
     const isReasoning = Boolean(reasoning || resolvedThinkingMap);
     return {
-      id, name: name || id, contextWindow: contextWindow ?? 32768, maxTokens: maxTokens ?? 4096,
+      id, name: name || id, contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW, maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
       provider, api: 'openai-completions', baseUrl: baseURL,
       reasoning: isReasoning,
       ...(resolvedThinkingMap ? { thinkingLevelMap: resolvedThinkingMap } : {}),
