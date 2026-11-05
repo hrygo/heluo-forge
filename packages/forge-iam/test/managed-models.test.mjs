@@ -468,10 +468,10 @@ test('catalogue transitions notify the plugin view channel, not only the SDK eve
   const f = fixture({ onChange: () => { changes += 1; } });
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
-  // A catalogue flip without an IAM transition must reach view subscribers.
+  // A catalogue flip without an IAM transition must reach view subscribers,
+  // and never more often than the change it describes.
   assert.ok(changes >= 1);
-  // One view notification per adapters-updated emission: neither drops nor loops.
-  assert.equal(changes, f.events.filter(event => event === 'llm/adapters-updated').length);
+  assert.ok(changes <= f.events.filter(event => event === 'llm/adapters-updated').length);
   assert.equal(f.runtime.getView().state, 'ready');
 });
 
@@ -485,4 +485,22 @@ test('the first-run default write does not abort the sync it belongs to', async 
   // foreign it would need a second discovery round and flash "error".
   assert.equal(discovery, 1);
   assert.deepEqual(f.runtime.getModelOptions(), { 'enterprise-chat': {} });
+});
+
+test('a repeated catalogue failure is published once, not once per refresh', async t => {
+  let changes = 0; let discovery = 0;
+  const f = fixture({
+    fetch: async () => { discovery += 1; return new Response('{"error":"denied"}', { status: 401 }); },
+    onChange: () => { changes += 1; },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().state, 'error');
+  const published = changes;
+  await f.runtime.refresh().catch(() => { });
+  await f.runtime.refresh().catch(() => { });
+  // Each frame this notification produced would re-enter the observer loop:
+  // an unchanged failure must stay silent or one bad gateway spins forever.
+  assert.equal(changes, published);
+  assert.ok(discovery >= 3);
 });
