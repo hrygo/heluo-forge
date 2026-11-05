@@ -1507,6 +1507,10 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
+    // 响应里的错误码只有一个读取口：调用方判断 result.ok 即可，不要再自己解包。
+    function resultCode(result) { return result.body?.error?.code ?? 'IAM_REQUEST_FAILED'; }
+    function resultNotice(result) { return errorNotice(resultCode(result)); }
+
     // §6 网关状态与徽章
     const GATEWAY_STATUS = {
       unknown: '状态未知',
@@ -2808,7 +2812,7 @@ window.__ModuleLoader__.load({
           writeModelOptions(nextOptions);
           const result = await putJson('/api/forge-iam/models', { options: nextOptions });
           if (!result.ok) {
-            setModelNotice(errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'));
+            setModelNotice(resultNotice(result));
             return;
           }
           lastSyncedOptions.current = nextOptions;
@@ -2934,7 +2938,7 @@ window.__ModuleLoader__.load({
           }
           if (!result.ok) {
             try { popup?.close(); } catch { /* already closed */ }
-            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            setState((current) => ({ ...current, notice: resultNotice(result) }));
             return;
           }
           const view = result.body?.view ?? null;
@@ -2966,7 +2970,7 @@ window.__ModuleLoader__.load({
             setCredential((current) => ({
               ...current,
               saving: false,
-              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+              notice: resultNotice(result),
             }));
             return;
           }
@@ -2988,7 +2992,7 @@ window.__ModuleLoader__.load({
           setCredential((current) => ({
             ...current, saving: false, notice: result.ok
               ? `模型列表已更新，共 ${result.body?.models?.length ?? 0} 个模型。`
-              : errorNotice(result.body?.error?.code)
+              : resultNotice(result)
           }));
           if (result.ok) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch { if (isViewCurrent(epoch)) setCredential((current) => ({ ...current, notice: '暂时无法获取模型列表，请稍后重试。' })); }
@@ -3005,7 +3009,7 @@ window.__ModuleLoader__.load({
             setCredential((current) => ({
               ...current,
               saving: false,
-              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+              notice: resultNotice(result),
             }));
             return;
           }
@@ -3026,7 +3030,7 @@ window.__ModuleLoader__.load({
           const result = await postJson('/api/forge-iam/cancel');
           if (!isViewCurrent(epoch)) return;
           if (!result.ok) {
-            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            setState((current) => ({ ...current, notice: resultNotice(result) }));
             return;
           }
           setState((current) => ({ ...current, view: result.body?.view ?? null, authorizationUrl: null, notice: null }));
@@ -3048,7 +3052,7 @@ window.__ModuleLoader__.load({
               ...current,
               view: result.body?.view ?? null,
               authorizationUrl: null,
-              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+              notice: resultNotice(result),
             }));
             return;
           }
@@ -3489,7 +3493,7 @@ window.__ModuleLoader__.load({
             purgeModelCache();
           } else {
             setConfirmSignOut(false);
-            setNotice(errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'));
+            setNotice(resultNotice(result));
             setTimeout(() => setNotice(null), 3000);
           }
         } catch {
@@ -3610,7 +3614,7 @@ window.__ModuleLoader__.load({
           const result = await postJson('/api/forge-iam/sign-in');
           if (!result.ok) {
             try { popup?.close(); } catch { /* already closed */ }
-            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            setState((current) => ({ ...current, notice: resultNotice(result) }));
             return;
           }
           const view = result.body?.view;
@@ -3637,7 +3641,7 @@ window.__ModuleLoader__.load({
         try {
           const result = await postJson('/api/forge-iam/cancel');
           if (!result.ok) {
-            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            setState((current) => ({ ...current, notice: resultNotice(result) }));
             return;
           }
           const view = result.body?.view ?? null;
@@ -3909,7 +3913,7 @@ window.__ModuleLoader__.load({
           const result = await postJson('/api/forge-iam/sign-in');
           if (!result.ok) {
             try { popup?.close(); } catch { /* already closed */ }
-            setState((current) => ({ ...current, notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED') }));
+            setState((current) => ({ ...current, notice: resultNotice(result) }));
             return;
           }
           const view = result.body?.view;
@@ -3950,7 +3954,7 @@ window.__ModuleLoader__.load({
             setState((current) => ({
               ...current,
               saving: false,
-              notice: errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'),
+              notice: resultNotice(result),
             }));
             return;
           }

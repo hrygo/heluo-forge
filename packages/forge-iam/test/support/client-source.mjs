@@ -58,7 +58,7 @@ export function analyseClient(source) {
     violations: {
       stateComparisons: tally(/view\??\.state ===/),
       storageSites: tally(/window\.localStorage/),
-      rawErrorUnwrap: tally(/errorNotice\(result\.body\?\.error\?\.code/),
+      rawResultCode: tally(/result\.body\?\.error\?\.code/),
     },
     renderParams,
   };
