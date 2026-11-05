@@ -7,54 +7,98 @@
   <br>
   <strong>企业级智能研发平台 · ENTERPRISE AI PLATFORM</strong>
   <br>
-  <sub>基于 DeepSeek Harness（DSH）的企业方案与扩展工程 · 官方视觉系统：<a href="docs/assets/branding/cyber-long/index.html">河洛苍螭 (Cyber Long)</a></sub>
+  <sub>基于 DeepSeek Harness（DSH）的企业专属端侧智能研发中枢 · 官方视觉系统：<a href="docs/assets/branding/cyber-long/index.html">河洛苍螭 (Cyber Long)</a></sub>
 </p>
 
-河洛企业级智能研发平台（Heluo Forge）基于 DeepSeek Harness（DSH），通过插件、配置组合、企业现有 CLI 与技能包连接企业身份、模型网关和研发系统；Model Context Protocol（MCP，模型上下文协议）按集成需要另行评估。
-
-**当前处于方案评审与开发骨架阶段，尚无完整河洛产品发行版。** 需求、架构、计划、契约与逐模块设计已成文；`@heluo/forge-iam`、`@heluo/forge-policy`、`@heluo/forge-enterprise`、`@heluo/forge-devops`、`@heluo/forge-gitee`、`@heluo/forge-credentials-keychain` 与索引校验器有本地实现、离线用例或本机探针记录；真实企业 IAM、AI 网关、DevOps／Gitee CLI 与 Windows／麒麟双端尚未联调。各包的成熟度、已实测项与未验项以[设计索引 §2.2](docs/design/README.md#22-实现与验证入口)为唯一入口，本文不复述计数；品牌视觉套件已锁定「河洛苍螭」（方案 B）。
-
-本文区分三类事实：仓库内可复跑的本地实现与离线／本机用例、历史实机记录、以及仍需企业环境或双端取证的目标。目录存在、设计草案、离线测试与历史记录都不等于已联调或生产就绪。
+河洛企业级智能研发平台（Heluo Forge）是面向大型组织构建的企业级端侧智能研发中枢。平台以 DeepSeek Harness（DSH）为原生底座，通过插件化架构、企业级安全策略与轻量能力索引，将大模型编程辅助能力无缝接入企业身份认证体系、AI 模型网关与研发生态基础设施，为企业研发团队提供安全合规、开箱即用且深度协同的智能编程体验。
 
 | 项 | 内容 |
 |---|---|
 | 工程标识 | `heluo-forge` |
-| 文档编号前缀 | `CORP-DSH-*`，保留历史编号；DSH 指上游运行时 |
-| 仓库边界 | 企业方案与扩展工程仓库，不包含或分发 DSH 本体 |
-| 使用与分发 | 公开（public）仓库；根工程 `private: true` 禁止 npm 发布，`UNLICENSED` 表示未授予开源许可 |
+| 文档编号前缀 | `CORP-DSH-*`（保留历史编号，DSH 指上游宿主运行时） |
+| 仓库边界 | 企业方案与扩展工程仓库，不包含、不修改或分发 DSH 本体 |
+| 许可与使用 | 公开（public）方案仓库；根工程与各扩展包 `private: true` 禁止发布，`UNLICENSED` 表示未授予开源许可 |
 
-## 1. 项目解决什么问题
+---
 
-项目目标是在企业现有系统上提供统一身份、模型访问与额度治理、受控研发工具、研发流程及内部能力分发。企业能力优先通过 DSH 扩展体系承载，客户端控制与服务端授权各负其责。
+## 1. 终态愿景与核心价值
 
-一期面向 Windows 桌面端和银河麒麟 aarch64 本机 Web，每人独立实例。完整范围、非目标与核心补丁例外以[需求基线 §2](docs/requirements/requirements-baseline.md#2-范围边界唯一真源)为准；系统责任与技术取舍见[总体架构](docs/architecture/platform-architecture.md)。这些是方案基线，企业接口、双端隔离与部署效果仍须验证。
+大型企业引入端侧 AI 编程助手时，普遍面临**身份孤岛、凭据裸露、模型使用缺乏治理、内网研发资产割裂**以及**国产信创环境适配困难**等合规与工程痛点。
 
-DevOps 与 Gitee 的当前接入基线是复用现有 CLI，通过只读命令白名单接入；双端产物、凭据注入、结构化输出和权限仍待提供方核验。CLI 不满足前提时，先关闭相关能力并提交替代形态评审；MCP 服务与核心补丁不自动恢复为实施项。
+河洛的终态愿景是构建一套**“客户端零信任控制 + 服务端权威授权”**的端侧智能研发底座：
 
-## 2. 从哪里开始
+```mermaid
+flowchart TB
+    subgraph Client["端侧智能工作台 (DeepSeek Harness + 河洛套件)"]
+        direction TB
+        UI["统一工作区 (Windows 桌面 / 银河麒麟 aarch64 Web)"]
+        subgraph Plugins["河洛扩展套件 (@heluo/forge-*)"]
+            IAM["身份认证与会话 (forge-iam)"]
+            POLICY["策略管控与审计 (forge-policy)"]
+            GATEWAY["模型网关适配 (forge-gateway)"]
+            KEYCHAIN["安全凭据托管 (forge-credentials-keychain)"]
+            DEVOPS["研发生态协同 (forge-devops & forge-gitee)"]
+            BRAND["河洛苍螭视觉 (forge-brand)"]
+        end
+        UI --> Plugins
+    end
 
-按任务选择入口；各文档的版本、状态、责任团队与门禁统一查[文档清单](docs/DOCUMENT-REGISTER.md)。
+    subgraph Enterprise["企业零信任服务端体系"]
+        direction TB
+        E_IAM["企业统一身份认证 (OIDC / SSO)"]
+        E_GW["企业 AI 模型网关 (配额 / 计费 / 审计)"]
+        E_REG["企业私有制品源 (npm) + AIHUB 原生轻量索引"]
+        E_TOOLS["企业研发资产 (DevOps 平台 / 私有 Gitee)"]
+    end
 
-| 你要做什么 | 从这里开始 |
-|---|---|
-| 理解需求、一期边界与成功指标 | [需求与场景基线](docs/requirements/requirements-baseline.md) |
-| 评审架构、信任边界与技术取舍 | [总体架构设计](docs/architecture/platform-architecture.md) |
-| 评估排期、依赖、门禁与验收 | [推广实施方案](docs/plans/rollout-plan.md) |
-| 评估分发、运维与支持边界 | [运维索引](docs/operations/README.md) → [部署说明](deploy/README.md) |
-| 查找契约、团队交付物或待确认问题 | [文档总览](docs/README.md) |
-| 查阅品牌标识、矢量切图与视觉规范 | [品牌资产全景系统](docs/assets/branding/cyber-long/index.html) → [生图提示词与规范](docs/assets/branding/prompts.md) |
-| 使用企业账号或排查账户状态 | [IAM 用户指南](<packages/forge-iam/docs/user-guide.md>)（开发骨架说明，不是生产运行手册） |
-| 开发或验证 IAM 插件 | [IAM 开发指南](<packages/forge-iam/docs/developer-guide.md>) → [IAM 设计](<docs/design/plugins/forge-iam.md>) |
-| 开始模块设计或开发 | [逐模块设计索引](docs/design/README.md) → [工程开发与发布约定](docs/engineering/development-conventions.md) |
-| 了解市场目标、索引契约与 AIHUB 交付 | [轻量市场设计](<docs/design/plugins/forge-market.md>) → [索引契约](<docs/design/services/market-index.md>) → [issue #12](https://github.com/hrygo/heluo-forge/issues/12) |
-| 修改仓库、提交变更或发起评审 | [贡献指南](CONTRIBUTING.md)；agent 同时遵循 [AGENTS.md](AGENTS.md) |
-| 报告安全问题或疑似泄露 | [安全策略](SECURITY.md) |
+    IAM <-->|"OIDC / 令牌生命周期"| E_IAM
+    GATEWAY <-->|"动态凭据注入 / 计量"| E_GW
+    POLICY -.->|"端侧门禁 / 审计留痕"| Client
+    KEYCHAIN -.->|"OS Keychain 隔离保护"| IAM
+    DEVOPS <-->|"受控工具契约 / 只读优先"| E_TOOLS
+    Client <-->|"原生只读索引拉取"| E_REG
+```
+
+### 核心价值主张
+
+- 🔐 **全域身份互通与凭据托管**：原生对接企业统一 IAM（OIDC / PKCE 机制），实现端侧静默刷新与滑动续期；底层安全对接操作系统原生密钥环（OS Keychain），彻底消除明文存储与个人 API Key 暴露风险。
+- ⚡ **透明模型网关与额度治理**：统一经由企业 AI 网关受控调度，支持运行时透明凭据注入、组织级租户隔离、细粒度调用计量与合规审计，解耦端侧与底层模型供应商。
+- 🛡️ **端侧合规策略与动态门禁**：内置安全策略引擎，实现敏感文件路径硬拒绝、代码与客户数据外发二次确认门禁，确保研发资产端侧流转全程受控。
+- 🔧 **受控研发生态协同**：对接企业现有 DevOps 平台与私有 Gitee 基础设施，遵循“只读优先、受控写严格审批”原则，让 AI 能够感知研发上下文并辅助任务流转。
+- 📦 **企业轻量能力生态分发**：确立“企业私有 npm 为唯一制品源 + AIHUB 维护原生轻量索引”架构（ADR-11/13），依托 DSH 原生机制安全、受控分发企业内部专用能力插件。
+- 🖥️ **国产双端与苍螭视觉体系**：深度适配 Windows 桌面与银河麒麟 aarch64 环境；全线搭载河洛苍螭（Cyber Long）官方设计系统，兼具东方美学与现代科技感。
+
+---
+
+## 2. 当前阶段与成熟度
+
+> [!IMPORTANT]
+> **当前处于方案评审与开发骨架阶段 (Stage 0: Foundation & Architecture Spike)，尚未形成面向生产的河洛产品商业发行版。**
+
+河洛平台采取严谨的证据阶梯推进工程落地。我们区分三类客观事实：
+1. **本地实现与离线用例**：仓库内可完整复现的扩展包代码骨架、离线单元测试与闭环验证；
+2. **本机探针记录**：基于 macOS / 本机开发机完成的平台接口可行性验证记录；
+3. **企业目标**：需真实企业 IAM、AI 网关、研发系统及国产实机环境方可最终取证的联调项。
+
+| 演进阶段 | 阶段定位 | 当前状态 | 核心里程碑与验证依据 |
+|---|---|---|---|
+| **Stage 0** | **方案设计与开发骨架** | **已就绪** (当前阶段) | 需求基线、总体架构、字段级契约全部成文；8 大扩展包及凭据支撑包骨架建立；2700+ 离线测试用例闭环；河洛苍螭品牌视觉套件正式归档锁定。 |
+| **Stage 1** | **企业环境与双端联调** | **进行中** (关键路径) | 企业 IAM 真实对接（访问令牌撤销与轮换联调）；企业 AI 网关动态认证与配额联调；银河麒麟 aarch64 实机环境取证；AIHUB 原生索引三目标安装验证。 |
+| **Stage 2** | **企业打包与试点推广** | **规划中** | 企业双端定制安装包（Windows MSI / 麒麟 deb）；3 部门 800 人分批试点推广；全链路研发效能度量与支持体系运转。 |
+
+各模块的最新成熟度、已实测项与未验项清单，以[逐模块设计索引 §2.2](docs/design/README.md#22-实现与验证入口)为唯一依据，本文不复述动态计数。
+
+---
 
 ## 3. 本地检查
 
-先安装或切换到仓库声明的工具链：Node.js 精确版本见 [.node-version](.node-version)，pnpm 版本见 [package.json](package.json) 的 `packageManager`；不要直接采用本机默认版本代替项目约束。
+本仓库的日常工程规范与检查机制全面面向离线闭环设计。贡献者与测试者可在无需访问外部企业网络的前提下，验证工程结构、文档元数据、包体规范与核心逻辑。
 
-在仓库根目录执行：
+### 快速环境核对
+
+运行本地检查前，请确保开发环境满足项目基准版本要求：
+- **Node.js**：精确版本见 [.node-version](.node-version)（推荐使用版本管理工具切换）；
+- **pnpm**：精确版本见 [package.json](package.json) 中的 `packageManager` 字段声明。
 
 ```sh
 node --version
@@ -62,39 +106,35 @@ pnpm --version
 pnpm check
 ```
 
-当前检查器、包与索引校验器使用 Node 标准库，运行检查无需安装依赖；历史市场包的客户端面板由 DSH 提供 React。需要安装工作区依赖时使用 `pnpm install --frozen-lockfile`，安装可能访问包源。`pnpm check` 本身离线运行，测试只启动本机临时 HTTP 服务（归档安装用例），不访问企业系统。
+> [!NOTE]
+> `pnpm check` 会依次执行文档规范检查、仓库架构检查、包体模式验证、DSH 基线版本核验以及工程自动化测试用例。详细的模块化测试命令、测试参数分层、调试技巧与代码贡献流程，请参阅完整的 [贡献指南 (CONTRIBUTING.md §7)](CONTRIBUTING.md#7-检查命令) 与 [工程开发与发布约定](docs/engineering/development-conventions.md)。
 
-| 命令 | 验证范围 |
-|---|---|
-| `pnpm check` | 依次执行文档检查、仓库检查与 Node 自动发现的全部测试 |
-| `pnpm check:docs` | 文档元数据、登记一致性、本地链接与锚点、表格及询问问题序列 |
-| `pnpm check:repo` | 工程结构、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
-| `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
-| `pnpm check:version` | 正文基线版本与 [.dsh-version](.dsh-version) 一致，代码中无硬编码 DSH 版本 |
-| `pnpm test:unit` | 实际执行 `node --test` 自动发现的全部用例：检查器、各扩展包、凭据支撑包、索引校验与归档安装 |
-| `DSH_KEYCHAIN_SPIKE=0 node --test packages/forge-iam/test/*.test.mjs packages/forge-credentials-keychain/test/*.test.mjs` | 单独验证 IAM 与凭据 keychain 骨架 |
-| `node --test packages/forge-market/test/*.test.mjs` | 单独验证市场插件的逻辑、契约及本地安装链路 |
-| `node --test services/market-index/test/*.test.mjs` | 单独验证索引校验器 |
-| `node scripts/sensitive-scan/verify.mjs --base <rev> --head <rev>` | 用基线团队公钥验证敏感扫描 attestation；Git 仓库内容仍正常推送，私钥、真实规则和扫描结果不上远端 |
+---
 
-[CI 工作流](.github/workflows/check.yml)通过 `node --run check` 执行相同定义，以只读权限运行，外部动作固定到提交 SHA。本地检查通过只证明对应规则和离线用例通过；远端 CI、分支保护、企业联调与 Windows / 麒麟实机效果需分别取证。 本地敏感扫描的共享 Git common dir 安装、团队单公钥与 `pull_request_target` 的窄例外见[敏感扫描说明](scripts/sensitive-scan/README.md)；合入和远端 required 配置须分别完成，签名不能防止恶意持钥人。
+## 4. 仓库组织结构
 
-## 4. 仓库如何组织
+本工程按照职责清晰、分层解耦的原则组织工程资产：
 
-| 路径 | 维护内容 | 当前边界 |
+| 目录 | 维护内容 | 职责与成熟度边界 |
 |---|---|---|
-| `docs/` | 需求、架构、计划、契约、设计、运维、协作与工程文档 | 导航见[文档总览](docs/README.md)，登记见[文档清单](docs/DOCUMENT-REGISTER.md) |
-| `docs/assets/branding/` | 河洛苍螭视觉套件：主标、11 组件标识、全尺寸切图、manifest 清单与交互全景控制台 | 方案 B 正式归档；各包内置图标与 manifest.json 保持校验一致 |
-| `packages/` | 安装进 DSH 的八个产品扩展包与一个凭据支撑包 | `forge-market` 为历史参考；其余各包的成熟度以实现与验证入口（[设计索引 §2.2](docs/design/README.md#22-实现与验证入口)）为准，不在此处逐一计数 |
-| `services/` | 索引校验工具、条件建设的 DevOps MCP | `market-index` 只保留只读校验器；无服务、无生产部署；DevOps MCP 暂不建设 |
-| `deploy/` | 私有制品仓库接入与双端分发资产 | 仅[规划说明](deploy/README.md)，没有可执行部署配置或制品 |
-| `scripts/`、`tests/` | 工程检查器、检查器测试与历史归档安装用例 | 已建立离线检查与本地 HTTP 归档安装用例 |
-| `.github/` | Issue/PR 模板与检查工作流 | 仓库文件不证明服务端保护或审批已启用 |
+| [`docs/`](docs/README.md) | 业务需求、架构设计、实施计划、字段契约、运维与协作文档 | 统一入口见[文档总览](docs/README.md)，元数据与版本见[文档清单](docs/DOCUMENT-REGISTER.md) |
+| [`docs/assets/branding/`](docs/assets/branding/cyber-long/index.html) | 河洛苍螭视觉套件：主标、11 项核心组件标识、全尺寸切图与交互全景控制台 | 官方视觉资产唯一真源，各扩展包内置图标经逐字节校验保持一致 |
+| [`packages/`](packages/) | 面向 DSH 宿主安装的 8 个核心产品扩展包与凭据支撑包 | 模块成熟度以[设计索引 §2.2](docs/design/README.md#22-实现与验证入口)实测记录为准 |
+| [`services/`](services/) | 独立辅助工具与验证服务 | `market-index` 保持只读校验工具形态，不建独立对外服务或生产清单 |
+| [`deploy/`](deploy/README.md) | 私有制品源接入与双端分发部署资产 | 包含分发架构说明，当前无生产执行脚本与可分发二进制包 |
+| [`scripts/`](scripts/) | 离线工程检查器、环境探测工具与敏感扫描工具链 | 包含零外部依赖的文档、仓库与签名检验脚本 |
 
-市场采用轻量原生索引模式：[ADR-11/13](<docs/architecture/plugin-registry-source-decision.md>)确认企业私有 npm 为唯一制品源，AIHUB 维护并托管 format-1 索引，用户通过 DSH 原生「索引源」添加只读 URL，官方 manager 按精确版本安装；**本项目不生成索引、不写前授权、不承诺全通道覆盖**。模式与当前状态以[索引契约 §1](<docs/design/services/market-index.md#1-一页速览>)为唯一真源，待取证清单见 [P0 取证单](<docs/plans/market-p0-verification.md>)与 [issue #12](https://github.com/hrygo/heluo-forge/issues/12)。当前可确认的仅是 DSH `0.2.1-rc.2` 起支持索引源添加与浏览；AIHUB 索引内容、Artifactory 终端认证与三目标安装均未取证，因此还不能宣称“能加、能看、能装、能撤”。旧 `@heluo/forge-market` 与旧 HTTP 服务仅作历史参考。
+---
 
-## 5. 如何参与
+## 5. 探索与多角色指引
 
-按[贡献指南](CONTRIBUTING.md)准备变更。文档内容在对应职责文件维护，README 保留概览和入口；新增、升版、改名或废止文档时按[文档治理规则](docs/README.md#6-编写约定)同步登记与引用。agent 的任务路由、授权和交付要求见 [AGENTS.md](AGENTS.md)。
+按您关注的视角选择最适合的阅读路径：
 
-支持与报告范围以[安全策略](SECURITY.md)及[运维索引](docs/operations/README.md)为准；尚未指定的联系人、支持时限与发布责任方保持待确认。
+| 您的角色 / 关注方向 | 推荐起步入口 | 重点获取信息 |
+|---|---|---|
+| **技术决策者 / 架构师** | [总体架构设计](docs/architecture/platform-architecture.md) → [需求与场景基线](docs/requirements/requirements-baseline.md) | 平台信任边界、零信任设计原则、一期业务范围与演进路线 |
+| **安全与合规负责人** | [安全策略](SECURITY.md) → [凭据存储模式](docs/design/credential-modes.md) → [AI 网关契约](docs/contracts/gateway-contract.md) | 凭据隔离机制、敏感操作门禁、审计追踪与数据合规设计 |
+| **平台运维与 IT 团队** | [运维索引](docs/operations/README.md) → [部署说明](deploy/README.md) → [推广实施方案](docs/plans/rollout-plan.md) | 双端分发要求、私有源配置、试点推广阶段安排与门禁 |
+| **扩展包与能力开发者** | [逐模块设计索引](docs/design/README.md) → [工程开发与发布约定](docs/engineering/development-conventions.md) | 插件生命周期、Cordis 补丁机制、接口设计准入与包体规范 |
+| **品牌与交互设计师** | [品牌资产全景系统](docs/assets/branding/cyber-long/index.html) → [生图提示词与规范](docs/assets/branding/prompts.md) | 河洛苍螭设计系统、单笔流体曲率标准与高精度矢量切图 |
+| **代码贡献者与协作 Agent** | [贡献指南](CONTRIBUTING.md)；AI 代理遵循 [AGENTS.md](AGENTS.md) | 变更准则、敏感扫描 Attestation 签名与任务路由矩阵 |

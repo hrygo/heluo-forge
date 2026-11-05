@@ -60,9 +60,22 @@
 
 ## 7. 检查命令
 
-常用命令与覆盖范围见 [README 的本地检查](README.md#3-本地检查)，可执行定义以 [package.json](package.json) 为准。包级、契约、集成与端到端测试按[测试分层约定](docs/engineering/development-conventions.md)分别执行。
+本地常用检查命令与验证范围如下表所示，可执行定义以 [package.json](package.json) 为准。包级、契约、集成与端到端测试按[测试分层约定](docs/engineering/development-conventions.md)分别执行。
 
-`pnpm check` 还包含 `node scripts/dsh-version.mjs check`（单独入口为 `pnpm check:version`）：它要求正文声明的 DSH 版本位置与 `.dsh-version` 一致，并禁止代码与脚本硬编码版本；改动文档里的 DSH 版本表述或包清单的 `engines.dsh` 后，`pnpm check` 会因这一项失败，需要按[版本规则](docs/README.md#6-编写约定)同步。
+| 命令 | 验证范围 |
+|---|---|
+| `pnpm check` | 依次执行文档检查、仓库检查与 Node 自动发现的全部测试 |
+| `pnpm check:docs` | 文档元数据、登记一致性、本地链接与锚点、表格及询问问题序列 |
+| `pnpm check:repo` | 工程结构、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
+| `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
+| `pnpm check:version` | 正文基线版本与 [.dsh-version](.dsh-version) 一致，代码中无硬编码 DSH 版本 |
+| `pnpm test:unit` | 实际执行 `node --test` 自动发现的全部用例：检查器、各扩展包、凭据支撑包、索引校验与归档安装 |
+| `DSH_KEYCHAIN_SPIKE=0 node --test packages/forge-iam/test/*.test.mjs packages/forge-credentials-keychain/test/*.test.mjs` | 单独验证 IAM 与凭据 keychain 骨架 |
+| `node --test packages/forge-market/test/*.test.mjs` | 单独验证市场插件的逻辑、契约及本地安装链路 |
+| `node --test services/market-index/test/*.test.mjs` | 单独验证索引校验器 |
+| `node scripts/sensitive-scan/verify.mjs --base <rev> --head <rev>` | 用基线团队公钥验证敏感扫描 attestation；Git 仓库内容仍正常推送，私钥、真实规则和扫描结果不上远端 |
+
+`pnpm check` 还包含 `node scripts/dsh-version.mjs check`（单独入口为 `pnpm check:version`）：它要求正文声明的 DSH 版本位置与 [.dsh-version](.dsh-version) 一致，并禁止代码与脚本硬编码版本；改动文档里的 DSH 版本表述或包清单的 `engines.dsh` 后，`pnpm check` 会因这一项失败，需要按[版本规则](docs/README.md#6-编写约定)同步。
 
 检查器本身也要改：新增规则时补充失败样例，避免“看起来通过”。
 
