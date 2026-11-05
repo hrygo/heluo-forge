@@ -20,15 +20,8 @@ const STATE_COMPARISON_BASELINE = {
   SignedOutBanner: 5,
 };
 
-const STORAGE_BASELINE = {
-  Panel: 4,
-  purgeModelCache: 3,
-  readCachedModels: 1,
-  readMarker: 1,
-  readModelOptions: 1,
-  writeCachedModels: 1,
-  writeMarker: 1,
-};
+// Storage is centralised: every access lives in createClientStore().
+const STORAGE_BASELINE = { createClientStore: 5 };
 
 const RAW_ERROR_UNWRAP_BASELINE = {
   IamLauncher: 1,
@@ -69,11 +62,11 @@ test('state comparisons only shrink: no new view.state literal checks', () => {
   );
 });
 
-test('storage access only shrink: localStorage stays in the storage helpers', () => {
+test('storage access stays inside createClientStore()', () => {
   assert.deepEqual(
     analysed.violations.storageSites,
     STORAGE_BASELINE,
-    'access localStorage through createClientStore() instead of touching window.localStorage',
+    'touch storage only inside createClientStore(): use clientStore.marker/modelOptions/models elsewhere',
   );
 });
 
