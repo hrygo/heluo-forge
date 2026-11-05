@@ -23,12 +23,16 @@ export function analyseClient(source) {
     }
     return '<top>';
   };
+  // Counts occurrences (not lines) per enclosing function and ignores comments,
+  // so a guard cannot be satisfied by mentioning the pattern in prose.
   const tally = (pattern) => {
     const counts = {};
     lines.forEach((line, index) => {
-      if (!pattern.test(line) || /typeof /.test(line)) return;
+      if (/^\s*(\/\/|\*)/.test(line)) return;
+      const matches = line.match(pattern);
+      if (!matches) return;
       const owner = enclosing(index);
-      counts[owner] = (counts[owner] ?? 0) + 1;
+      counts[owner] = (counts[owner] ?? 0) + matches.length;
     });
     return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
   };
@@ -56,9 +60,9 @@ export function analyseClient(source) {
     lines,
     anchors,
     violations: {
-      stateComparisons: tally(/view\??\.state ===/),
-      storageSites: tally(/window\.localStorage/),
-      rawResultCode: tally(/result\.body\?\.error\?\.code/),
+      stateReads: tally(/view\??\.state/g),
+      storageSites: tally(/window\.localStorage/g),
+      rawResultCode: tally(/result\.body\?\.error\?\.code/g),
     },
     renderParams,
   };

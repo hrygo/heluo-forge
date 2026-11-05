@@ -1329,19 +1329,20 @@ window.__ModuleLoader__.load({
     }
 
     function getLauncherStatus(view) {
-      if (!view || view.state === 'signed-out' || view.state === 'unconfigured') {
+      const ui = deriveSessionUi(view);
+      if (!view || ui.signedOut || ui.unconfigured) {
         return { kind: 'signed-out', dotClass: 'idle', label: '企业账号未登录', tooltip: '点击登录企业账号' };
       }
-      if (view.state === 'authenticating') {
+      if (ui.authenticating) {
         return { kind: 'authenticating', dotClass: 'authenticating', label: '等待登录完成', tooltip: '正在等待浏览器授权' };
       }
-      if (view.state === 'unreachable') {
+      if (ui.unreachable) {
         return { kind: 'unreachable', dotClass: 'warn', label: '连接登录受阻', tooltip: '暂时无法连接登录服务，现有授权保留至到期' };
       }
-      if (view.state === 'expired' || view.state === 'error') {
+      if (ui.expired || ui.failed) {
         return { kind: 'error', dotClass: 'error', label: '授权已失效', tooltip: '登录已失效，请重新登录' };
       }
-      if (view.state === 'ready') {
+      if (ui.ready) {
         const gw = view.gatewayCredential?.state ?? 'unconfigured';
         const name = view.principal || view.subject || '企业账号';
         if (gw === 'configured') {
@@ -1470,6 +1471,23 @@ window.__ModuleLoader__.load({
       unreachable: '暂时无法连接登录服务',
       error: '需要处理',
     };
+
+    // §4.1 会话状态派生
+    // view.state 只在这里读一次：其余代码用布尔量判断，新增状态时只改这里。
+    function deriveSessionUi(view) {
+      const state = typeof view?.state === 'string' ? view.state : null;
+      return {
+        state,
+        known: state !== null && Object.hasOwn(STATUS, state),
+        ready: state === 'ready',
+        authenticating: state === 'authenticating',
+        signedOut: state === 'signed-out',
+        expired: state === 'expired',
+        unreachable: state === 'unreachable',
+        failed: state === 'error',
+        unconfigured: state === 'unconfigured',
+      };
+    }
 
     // §5 HTTP 封装
     async function readJson(response) {
@@ -1700,11 +1718,12 @@ window.__ModuleLoader__.load({
     // Build a new scalar object: the original view/state may contain private data.
     function diagnosticSnapshot(state) {
       const view = state.view;
+      const session = deriveSessionUi(view);
       const code = view?.error ?? state.error;
       return {
         format: 'forge-iam-diagnostic', version: 1,
         pagePhase: ['loading', 'ready', 'error'].includes(state.phase) ? state.phase : 'unknown',
-        iamState: typeof view?.state === 'string' && Object.hasOwn(STATUS, view.state) ? view.state : 'unknown',
+        iamState: session.known ? session.state : 'unknown',
         configured: typeof view?.configured === 'boolean' ? view.configured : null,
         signedIn: typeof view?.signedIn === 'boolean' ? view.signedIn : null,
         exclusive: view?.exclusive === 'ok' ? 'ok' : typeof view?.exclusive === 'string' && view.exclusive ? 'not-ok' : 'unknown',
@@ -1781,6 +1800,7 @@ window.__ModuleLoader__.load({
         state, primaryButton, button, copy,
         login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity,
       } = ctx;
+      const ui = deriveSessionUi(view);
       return h('div', { id: 'fiam-section-account', className: 'fiam-card' },
         h('div', { className: 'fiam-card-header' },
           h('div', { className: 'fiam-card-title-group' },
@@ -1791,11 +1811,11 @@ window.__ModuleLoader__.load({
               )
             ),
             h('div', null,
-              h('div', { className: 'fiam-card-title' }, view.state === 'ready' && view.principal ? view.principal : '企业账号认证'),
-              h('div', { className: 'fiam-card-subtitle' }, view.state === 'ready' ? '已绑定企业 OIDC 身份' : '单点登录至企业账号'),
+              h('div', { className: 'fiam-card-title' }, ui.ready && view.principal ? view.principal : '企业账号认证'),
+              h('div', { className: 'fiam-card-subtitle' }, ui.ready ? '已绑定企业 OIDC 身份' : '单点登录至企业账号'),
             ),
           ),
-          h('span', { className: `fiam-badge fiam-badge-${statusBadgeClass(view.state)}` },
+          h('span', { className: `fiam-badge fiam-badge-${statusBadgeClass(ui.state)}` },
             h('span', { className: 'fiam-badge-dot' }),
             label,
           ),
@@ -1808,7 +1828,7 @@ window.__ModuleLoader__.load({
         exclusive,
         hostError,
         notice,
-        view.state === 'authenticating'
+        ui.authenticating
           ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
             h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 10 } },
               h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
@@ -1819,10 +1839,10 @@ window.__ModuleLoader__.load({
           : loginLink,
         h('div', { className: 'fiam-actions' },
           view.canSignIn ? h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: login }, '登录企业账号') : null,
-          view.state === 'authenticating' ? h('button', { type: 'button', style: button, onClick: cancelLogin }, '取消登录') : null,
+          ui.authenticating ? h('button', { type: 'button', style: button, onClick: cancelLogin }, '取消登录') : null,
           h('button', { type: 'button', style: button, disabled: viewBarrier.current.pending, onClick: load }, '刷新'),
           view.canSignOut ? h('button', { type: 'button', style: button, onClick: signOut }, '退出') : null,
-          state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
+          deriveSessionUi(state.view).authenticating && linkIdentity.current && state.authorizationUrl === linkIdentity.current
             ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
           h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
         ),
@@ -2270,8 +2290,9 @@ window.__ModuleLoader__.load({
     // §12.3 旅程条
     function renderJourneyBar(ctx) {
       const { h, view, gateway, enabledCount, totalModels } = ctx;
-      const step1Done = view.state === 'ready';
-      const step1Warn = view.state === 'expired' || view.state === 'error' || view.state === 'unconfigured' || view.state === 'unreachable';
+      const ui = deriveSessionUi(view);
+      const step1Done = ui.ready;
+      const step1Warn = ui.expired || ui.failed || ui.unconfigured || ui.unreachable;
       const step2Done = step1Done && gateway.state === 'configured' && gateway.matchesAccount !== false;
       const step2Warn = step1Done && (gateway.state === 'owner-mismatch' || gateway.state === 'invalid' || gateway.state === 'unknown');
       const modelState = view.modelAccess?.state;
@@ -2283,7 +2304,7 @@ window.__ModuleLoader__.load({
           num: '1',
           title: '身份',
           targetId: 'fiam-section-account',
-          status: step1Done ? '已认证' : (view.state === 'authenticating' ? '认证中' : (view.state === 'unconfigured' ? '待配置登录' : (view.state === 'unreachable' ? '连接受阻' : (step1Warn ? '需重新登录' : '待认证')))),
+          status: step1Done ? '已认证' : (ui.authenticating ? '认证中' : (ui.unconfigured ? '待配置登录' : (ui.unreachable ? '连接受阻' : (step1Warn ? '需重新登录' : '待认证')))),
           done: step1Done,
           warn: step1Warn,
           active: !step1Done && !step1Warn,
@@ -2373,6 +2394,7 @@ window.__ModuleLoader__.load({
         saveModelOptions, refreshModels, modelSaving, modelNotice, credential, viewBarrier, gateway,
         fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
       } = ctx;
+      const ui = deriveSessionUi(view);
       const unenabledCount = Math.max(0, modelList.length - enabledCount);
       const onFilterSelect = handleFilterChange || setModelFilter;
       return h('section', { id: 'fiam-section-models', className: 'fiam-card', 'aria-label': '企业模型' },
@@ -2527,7 +2549,7 @@ window.__ModuleLoader__.load({
                   alignItems: 'center',
                   gap: 4,
                 },
-                disabled: credential.saving || modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
+                disabled: credential.saving || modelSaving || viewBarrier.current.pending || !ui.ready || gateway.state !== 'configured',
                 title: '从企业网关重新同步最新模型目录',
                 'aria-label': '刷新模型目录',
                 onClick: refreshModels,
@@ -2615,14 +2637,14 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             style: secondaryButton,
-            disabled: credential.saving || modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
+            disabled: credential.saving || modelSaving || viewBarrier.current.pending || !ui.ready || gateway.state !== 'configured',
             onClick: refreshModels,
           }, credential.saving ? '正在处理…' : '刷新模型列表'),
           h('button', {
             type: 'button',
             className: 'forge-iam-primary',
             style: primaryButton,
-            disabled: modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
+            disabled: modelSaving || viewBarrier.current.pending || !ui.ready || gateway.state !== 'configured',
             onClick: saveModelOptions,
           }, modelSaving ? '正在保存…' : '保存模型配置'),
           hasUnsavedModelChanges
@@ -2644,7 +2666,7 @@ window.__ModuleLoader__.load({
             className: `fiam-notice fiam-notice-${modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') ? 'success' : 'warn'}`,
           }, modelNotice)
           : null,
-        h('p', { style: { ...muted, marginTop: 12 } }, view.state !== 'ready' ? '下一步：登录企业账号。'
+        h('p', { style: { ...muted, marginTop: 12 } }, !ui.ready ? '下一步：登录企业账号。'
           : gateway.state !== 'configured' || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人访问凭证。'
             : '点击“一键启用”可直接以默认参数启用并生效；展开精细配置修改参数后，点击“保存模型配置”即可在对话窗口选用。'),
       );
@@ -2695,7 +2717,7 @@ window.__ModuleLoader__.load({
           const at = Date.now();
           if (wakeRef.current.inFlight || at - wakeRef.current.at < 30000) return;
           const view = viewRef.current;
-          if (view?.state !== 'ready' || view?.modelAccess?.state === 'loading') return;
+          if (!deriveSessionUi(view).ready || view?.modelAccess?.state === 'loading') return;
           wakeRef.current.at = at;
           wakeRef.current.inFlight = true;
           void getJson('/api/forge-iam/models')
@@ -2889,8 +2911,8 @@ window.__ModuleLoader__.load({
         try {
           const view = await fetchView();
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
-          if (view?.state !== 'authenticating') linkIdentity.current = null;
-          setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }) }));
+          if (!deriveSessionUi(view).authenticating) linkIdentity.current = null;
+          setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }) }));
           setCredential((current) => {
             if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
             if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
@@ -2908,10 +2930,10 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { load(); }, [load]);
       useSessionPoll(true, (view) => {
         // Invalidate before enqueueing React state, not only on the next render.
-        if (view?.state !== 'authenticating') linkIdentity.current = null;
+        if (!deriveSessionUi(view).authenticating) linkIdentity.current = null;
         setState((current) => ({
           ...current, phase: 'ready', view, error: null,
-          ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
+          ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }),
         }));
         setCredential((current) => {
           if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
@@ -2943,7 +2965,7 @@ window.__ModuleLoader__.load({
           }
           const view = result.body?.view ?? null;
           const authorizationUrl = result.body?.authorizationUrl ?? null;
-          linkIdentity.current = view?.state === 'authenticating' && typeof authorizationUrl === 'string' && authorizationUrl.trim() ? authorizationUrl : null;
+          linkIdentity.current = deriveSessionUi(view).authenticating && typeof authorizationUrl === 'string' && authorizationUrl.trim() ? authorizationUrl : null;
           navigateLoginWindow(popup, authorizationUrl);
           setState((current) => ({ ...current, view, authorizationUrl, notice: null }));
         } catch {
@@ -3117,7 +3139,7 @@ window.__ModuleLoader__.load({
       };
       const copyLink = () => {
         const url = linkIdentity.current;
-        if (!url || url !== state.authorizationUrl || state.view?.state !== 'authenticating') return;
+        if (!url || url !== state.authorizationUrl || !deriveSessionUi(state.view).authenticating) return;
         return copyText(url, url);
       };
       const copyDiagnostic = () => copyText(JSON.stringify(diagnosticSnapshot(state)));
@@ -3130,7 +3152,7 @@ window.__ModuleLoader__.load({
         h('div', { style: { ...muted, marginTop: 4 } }, '管理企业账号和个人访问凭证'),
       );
       const copyTools = h('div', { className: 'fiam-actions' },
-        state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
+        deriveSessionUi(state.view).authenticating && linkIdentity.current && state.authorizationUrl === linkIdentity.current
           ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
         h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
         copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
@@ -3176,7 +3198,8 @@ window.__ModuleLoader__.load({
       }
 
       const view = state.view ?? {};
-      const label = STATUS[view.state] ?? '未知状态';
+      const session = deriveSessionUi(state.view);
+      const label = session.known ? STATUS[session.state] : '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
@@ -3264,7 +3287,7 @@ window.__ModuleLoader__.load({
     // §15 启动器
     function IamLauncherMenu(props) {
       const { view, status, onCopyDiagnostics, onSignOut, confirmSignOut, signingOut, notice, openSettings, onClose } = props;
-      const isSignedIn = view?.state === 'ready';
+      const isSignedIn = deriveSessionUi(view).ready;
       const gwState = view?.gatewayCredential?.state ?? 'unconfigured';
       const gwConfigured = gwState === 'configured';
       const principalName = view?.principal || view?.subject || '未登录员工';
@@ -3432,7 +3455,7 @@ window.__ModuleLoader__.load({
       }, [menuOpen]);
 
       const status = getLauncherStatus(view);
-      const isSignedIn = view?.state === 'ready';
+      const isSignedIn = deriveSessionUi(view).ready;
 
       const handleMainClick = (e) => {
         e.stopPropagation();
@@ -3566,7 +3589,8 @@ window.__ModuleLoader__.load({
 
       const bannerFor = (view) => {
         if (!view) return { visible: true, reason: 'signed-out', sessionState: null };
-        if (view.state !== 'ready') return { visible: true, reason: 'signed-out', sessionState: view.state };
+        const ui = deriveSessionUi(view);
+        if (!ui.ready) return { visible: true, reason: 'signed-out', sessionState: ui.state };
         const gateway = view.gatewayCredential?.state ?? 'unconfigured';
         return gateway === 'configured'
           ? { visible: false, reason: null, gateway, sessionState: 'ready' }
@@ -3598,10 +3622,10 @@ window.__ModuleLoader__.load({
         ...current,
         view,
         ...bannerFor(view),
-        ...(view?.state === 'authenticating' ? {} : {
+        ...(deriveSessionUi(view).authenticating ? {} : {
           authorizationUrl: null,
-          ...(current.view?.state === 'authenticating'
-            ? { notice: view?.state === 'error' ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : null }
+          ...(deriveSessionUi(current.view).authenticating
+            ? { notice: deriveSessionUi(view).failed ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : null }
             : {}),
         }),
       })));
@@ -3625,7 +3649,7 @@ window.__ModuleLoader__.load({
             ...bannerFor(view),
             view,
             authorizationUrl,
-            notice: view?.state === 'authenticating'
+            notice: deriveSessionUi(view).authenticating
               ? (popup ? '浏览器已打开，等待登录完成。' : '浏览器被拦截，请使用下方链接继续。')
               : null,
           }));
@@ -3686,7 +3710,7 @@ window.__ModuleLoader__.load({
         state.reason !== 'gateway' && state.view?.canSignIn
           ? h('button', { type: 'button', className: 'forge-iam-primary', style: { ...primaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: login }, '登录')
           : null,
-        state.view?.state === 'authenticating'
+        deriveSessionUi(state.view).authenticating
           ? h('button', { type: 'button', style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: cancelLogin }, '取消')
           : null,
         state.authorizationUrl
@@ -3724,7 +3748,7 @@ window.__ModuleLoader__.load({
             ),
             h('span', null, '授权全程在系统默认安全浏览器中进行，DeepSeek Harness 不收集或存储您的企业账号密码。'),
           ),
-          state.view?.state === 'authenticating'
+          deriveSessionUi(state.view).authenticating
             ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
               h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
                 h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
@@ -3741,8 +3765,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'fiam-onboarding-summary' },
             h('div', { className: 'fiam-onboarding-summary-row' },
               h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '企业身份认证'),
-              h('span', { className: `fiam-badge fiam-badge-${state.view?.state === 'ready' ? 'success' : 'warn'}` },
-                state.view?.state === 'ready' ? (state.view.principal || '已认证') : '待登录'
+              h('span', { className: `fiam-badge fiam-badge-${deriveSessionUi(state.view).ready ? 'success' : 'warn'}` },
+                deriveSessionUi(state.view).ready ? (state.view.principal || '已认证') : '待登录'
               ),
             ),
             h('div', { className: 'fiam-onboarding-summary-row' },
@@ -3860,7 +3884,7 @@ window.__ModuleLoader__.load({
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-      }, [state.open, state.step, state.view?.state]);
+      }, [state.open, state.step, deriveSessionUi(state.view).state]);
 
       React.useEffect(() => {
         let live = true;
@@ -3871,7 +3895,7 @@ window.__ModuleLoader__.load({
           fetchView()
             .then((view) => {
               if (!live) return;
-              setState((current) => ({ ...current, phase: 'ready', view, step: 0, notice: null, open: view.state === 'signed-out', authorizationUrl: null }));
+              setState((current) => ({ ...current, phase: 'ready', view, step: 0, notice: null, open: deriveSessionUi(view).signedOut, authorizationUrl: null }));
             })
             .catch(() => {
               if (!live) return;
@@ -3888,19 +3912,19 @@ window.__ModuleLoader__.load({
       useSessionPoll(true, (view) => setState((current) => (!current.open ? current : {
         ...current,
         view,
-        ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
+        ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }),
         // Advance to the success step once, then keep the user's final screen:
         // a later identical `ready` poll must not pull them back from "完成".
         // Advance into the credential step once. When this account already has a
         // matching key, skip straight to "完成"; a later identical poll must not
         // pull the user back out of the final screen.
-        ...(view.state === 'ready' && current.step < 2
+        ...(deriveSessionUi(view).ready && current.step < 2
           ? { step: view.gatewayCredential?.state === 'configured' ? 3 : 2, authorizationUrl: null, notice: null }
           : {}),
-        ...(current.step === 2 && view.state !== 'ready'
-          ? { step: 1, authorizationUrl: null, notice: view.state === 'error' ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : '登录状态已变化，请重新登录企业账号。' }
+        ...(current.step === 2 && !deriveSessionUi(view).ready
+          ? { step: 1, authorizationUrl: null, notice: deriveSessionUi(view).failed ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : '登录状态已变化，请重新登录企业账号。' }
           : {}),
-        ...(view.state === 'error' ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
+        ...(deriveSessionUi(view).failed ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
       })));
 
       if (!state.open) return null;
@@ -3921,11 +3945,11 @@ window.__ModuleLoader__.load({
           setState((current) => ({
             ...current,
             view,
-            step: view?.state === 'ready'
+            step: deriveSessionUi(view).ready
               ? (view.gatewayCredential?.state === 'configured' ? 3 : 2)
               : current.step,
             authorizationUrl: result.body?.authorizationUrl,
-            notice: view?.state === 'ready' ? null : '浏览器已打开；若被拦截，请使用下方链接。',
+            notice: deriveSessionUi(view).ready ? null : '浏览器已打开；若被拦截，请使用下方链接。',
           }));
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
@@ -3981,12 +4005,12 @@ window.__ModuleLoader__.load({
 
       const gatewayState = state.view?.gatewayCredential?.state ?? 'unknown';
       const completionTitle = gatewayState === 'configured'
-        ? (state.view?.state === 'ready' ? '准备就绪' : '请先登录企业账号')
+        ? (deriveSessionUi(state.view).ready ? '准备就绪' : '请先登录企业账号')
         : gatewayState === 'unconfigured'
-          ? (state.view?.state === 'ready' ? '登录完成，尚未配置凭据' : '尚未保存个人访问凭证')
+          ? (deriveSessionUi(state.view).ready ? '登录完成，尚未配置凭据' : '尚未保存个人访问凭证')
           : '请检查凭证状态';
       const completionBody = gatewayState === 'configured'
-        ? (state.view?.state === 'ready'
+        ? (deriveSessionUi(state.view).ready
           ? '个人访问凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
           : '个人访问凭证已保存。请前往“设置 → 企业账号”登录后继续。')
         : gatewayState === 'unconfigured'
@@ -4021,7 +4045,7 @@ window.__ModuleLoader__.load({
           primary: '完成',
           // Without a configured credential the model is not usable; record the
           // skip rather than claiming onboarding completed.
-          onPrimary: () => close(state.view?.state === 'ready' && gatewayState === 'configured' ? 'done' : 'skipped'),
+          onPrimary: () => close(deriveSessionUi(state.view).ready && gatewayState === 'configured' ? 'done' : 'skipped'),
         },
       ];
       const step = steps[state.step] ?? steps[0];
