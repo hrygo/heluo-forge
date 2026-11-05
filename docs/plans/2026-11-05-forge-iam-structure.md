@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.19.0 |
+| 版本 | V0.20.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -344,6 +344,8 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 
 - 落点：`readModelSelection`/`saveModelSelection` → `service-model-selection.mjs`；其余四个 → `service-gateway.mjs`。两者已持有对应 store 与 epoch，方法搬过去不需要新端口，只需把 `provider` 与 `ctx` 已注入的端口用上。
 - 完成后 `service.mjs` 只保留转发与 `watch`/`dispose`/`getView` 等出口，再补守卫 3 的静态断言（`transition(`、`publish(`、`ensure(`、`require(`、`assertExclusive(` 均不得出现在 `service.mjs`）。
+- 实现记录：六个方法已迁出。`service.mjs` 601 → 419 行；`service-model-selection.mjs` 增 `readSelection`/`saveSelection`（端口 `resolveToken`），`service-gateway.mjs` 增 `resolveConnection`/`saveCredential`/`clearCredential`/`refreshModels`（端口 `configured`、`getAuthEpoch`、`isSigningOut`、`resolveToken`、`bumpGeneration`、`getManagedModelRuntime`）。`selection.generation += 1` 由外部写入改为模块内 `bumpGeneration()` 端口，选型代际不再被两个模块各写一次。
+- 守卫 3 已补齐：`service.mjs` 不得出现 `transition(`、`assertExclusive(`、`.ensure(`、`.require(`、`.publish(`；`src/service-*.mjs` 之间不得互相 import（`service-helpers` 除外，它是叶子）。
 - 完成条件：`gateway-credential-*`、`model-selection-*`、`service-races` 全绿；`node --run check` 全绿。
 
 ## 6. 关键实现说明

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 // U5 of docs/plans/2026-11-05-forge-iam-structure.md: the published session
 // state has one owner. `src/service-state.mjs` declares and mutates it;
@@ -218,4 +218,23 @@ test('sign-out registers its promise before doing any work', () => {
   assert.ok(registered > 0 && returned > registered, 'the flight must be registered before it is returned');
   // Unknown cleanup must never be reported as a clean exit.
   assert.match(signout, /revocation: 'unknown'/);
+});
+
+// U13: service.mjs is an assembly point, not a place where session work happens.
+test('the service makes no store, state or transition call of its own', () => {
+  for (const call of ['transition(', 'assertExclusive(', '.ensure(', '.require(', '.publish(']) {
+    assert.ok(!service.includes(call), `src/service.mjs still calls ${call} directly: move it to the owning module`);
+  }
+  // …and its axes only reach each other through the ports passed in by the
+  // assembly point, never by importing a sibling.
+  const axisModules = readdirSync(new URL('../src/', import.meta.url))
+    .filter(name => name.startsWith('service-') && name.endsWith('.mjs') && name !== 'service-helpers.mjs');
+  assert.ok(axisModules.length >= 9, `expected the axis modules to exist, found ${axisModules.join(', ')}`);
+  for (const name of axisModules) {
+    const source = readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf8');
+    const siblings = [...source.matchAll(/from '\.\/(service-[a-z-]+)\.mjs'/g)]
+      .map(match => match[1])
+      .filter(target => target !== 'service-helpers');
+    assert.deepEqual(siblings, [], `src/${name} imports a sibling axis: ${siblings.join(', ')}`);
+  }
 });
