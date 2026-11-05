@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.15.0 |
+| 版本 | V0.16.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -321,6 +321,7 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 ### U11 宿主：登录、回调与退出轴
 
 - 新增 `service-signin.mjs`（`startSignIn`、`_startSignInOnce`、`cancelSignIn`、`handleCallback`、`clearAttempt`）与 `service-signout.mjs`（`signOut`、`_signOutOnce`、`bridgeCapability`）；收敛 `service.mjs` 为装配入口。
+- 实现记录（登录半轴）：`service.mjs` 1068 → 759 行，新增 `service-signin.mjs` 374 行。`attempt` 对象与 `clearAttempt` 随模块走，`service.mjs` 的 `clearAttempt()` 改为转发；`signInPromise`、`authEpoch`、`observedPending`、消费票据仍由 `service.mjs` 持有，经 `getSignInPromise`/`setSignInPromise`/`bumpAuthEpoch`/`clearObservation`/`invalidateConsumption`/`beginConsumption`/`adoptConsumption` 端口读写。
 - 关键约束：只做搬运与前缀改写，不改判断顺序——`handleCallback` 的锁内复查（attempt、epoch、到期、store 身份、`sessionInstanceId`）与条件墓碑、`_signOutOnce` 的清理顺序与「清理未知不等于退出成功」。
 - 完成条件：`signout-*`、`rp-logout-issuer-context`、`issuer-context-policy`、`lifecycle` 全绿；28 项导出面逐项一致。
 

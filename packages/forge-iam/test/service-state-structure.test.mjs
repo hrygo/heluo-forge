@@ -173,3 +173,27 @@ test('the reconciler publishes through ports, never by reaching into the state',
   // The observation identity comparison must read the field, not call the port.
   assert.ok(!/observation\.getAuthEpoch\(/.test(reconcile), 'observation.authEpoch is a field, not a port call');
 });
+
+// U11a: the sign-in attempt is owned by one module, exactly once at a time.
+const signin = readFileSync(new URL('../src/service-signin.mjs', import.meta.url), 'utf8');
+
+test('the service keeps no copy of the attempt or its promise', () => {
+  assert.ok(!/let attempt\b/.test(service), 'src/service.mjs must not declare the attempt');
+  assert.match(service, /const signin = createSignIn\(\{/);
+  assert.match(service, /startSignIn: signin\.startSignIn,/);
+  assert.match(service, /handleCallback: signin\.handleCallback,/);
+  assert.match(service, /cancelSignIn: signin\.cancelSignIn,/);
+  assert.match(service, /function clearAttempt\(\) \{ signin\.clearAttempt\(\); \}/);
+});
+
+test('the attempt records the verifier it will check the callback against', () => {
+  assert.match(signin, /export function createSignIn\(env\)/);
+  assert.match(signin, /let attempt = null;/);
+  for (const field of ['verifier', 'nonce', 'redirectUri', 'expiresAt']) {
+    assert.match(signin, new RegExp(`${field}:`), `the attempt must record ${field}`);
+  }
+  // A second attempt replaces the first only through clearAttempt, which also
+  // cancels its timer.
+  assert.match(signin, /function clearAttempt\(\)/);
+  assert.match(signin, /clearTimeout\(attempt\.timer\)/);
+});
