@@ -649,6 +649,22 @@ test('a cached catalogue is scoped to one person and gateway', async t => {
   assert.doesNotMatch(text, /model-of-a/);
 });
 
+test('a rejected request and an unsupported level are explained where they surface', async t => {
+  for (const [code, text] of [
+    ['ENTERPRISE_GATEWAY_REQUEST_REJECTED', /网关拒绝了本次请求/],
+    ['ENTERPRISE_MODEL_REASONING_UNSUPPORTED', /不支持所选思考级别/],
+  ]) {
+    const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
+    const panel = await mountPanel(async path => {
+      if (path === '/api/forge-iam/view') return Response.json(failed);
+      if (path === '/api/forge-iam/models') return Response.json({ models: [], view: failed });
+      throw new Error(`unexpected synthetic request: ${path}`);
+    });
+    t.after(() => panel.close());
+    assert.match(panel.text(panel.render()), text, `${code} must explain itself in the panel`);
+  }
+});
+
 test('a stale catalogue is shown with its retry time instead of a blank panel', async t => {
   const requests = [];
   const stale = {
