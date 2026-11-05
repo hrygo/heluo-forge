@@ -137,7 +137,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const enabledInCatalog = id => models.some(item => item.id === id);
   const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
   const lifetime = new AbortController();
-  let lease = new AbortController(); let version = 0; let last; let deadline; let timer; let disposed = false; let backend; let flight;
+  let lease = new AbortController(); let version = 0; let last; let lastId; let deadline; let timer; let disposed = false; let backend; let flight;
   let retryAttempt = 0; let retryTimer; let hostDefault = null; let alignment = null; let alignQueued = false;
   let optionsChain = Promise.resolve();
   const publish = () => { host.emit?.('llm/adapters-updated'); };
@@ -148,13 +148,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     rawModels = []; models = []; backend = undefined; catalogState = state; catalogError = code;
   }
   function sample() {
-    const view = iam.getView(); const current = `${identity(view)}:${iam.getModelAccessEpoch?.() ?? ''}`;
+    const view = iam.getView();
+    const currentId = identity(view);
+    const current = `${currentId}:${iam.getModelAccessEpoch?.() ?? ''}`;
     if (last !== current) {
-      last = current; version++; lease.abort(); lease = new AbortController();
-      cancelRetry(); retryAttempt = 0; hostDefault = null;
-      clearCatalog();
-      modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
-      publish();
+      const idChanged = lastId !== currentId;
+      last = current;
+      lastId = currentId;
+      version++;
+      if (idChanged) {
+        lease.abort(); lease = new AbortController();
+        cancelRetry(); retryAttempt = 0; hostDefault = null;
+        clearCatalog();
+        modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
+        publish();
+      }
     }
     // A successful same-session IAM refresh changes the deadline, not the
     // gateway configuration. Keep valid prepared calls and update cancellation.
@@ -377,8 +385,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     // Before the catalogue exists every id would look "not in the catalogue",
     // so a write here would persist an empty selection over a real one.
     if (models.length === 0 || !backend) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
-    const mine = version;
-    const stale = () => { sample(); return disposed || mine !== version || Boolean(permit(iam.getView())); };
+    const activeId = identity(iam.getView());
+    const stale = () => { sample(); return disposed || identity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
     // The submitted map is the enabled set, not just an override list: an
     // empty object enables a model with the catalogue defaults, and dropping
     // a key disables it. Only catalogue models can be enabled.

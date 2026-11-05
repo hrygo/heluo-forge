@@ -251,7 +251,7 @@ export function createIamService(rawConfig, options = {}) {
       modelAccess: { ...(options.getManagedModelRuntime?.()?.getView() ?? { managed: true, state: 'unconfigured', models: [] }),
         configured: Boolean(gatewaySummary?.baseURL || config.managedModels?.baseURL),
         baseURL: gatewaySummary?.baseURL ?? config.managedModels?.baseURL ?? '',
-        ...(state !== 'ready' || gatewaySummary?.matchesAccount !== true ? { models: [] } : {}) },
+        ...((state !== 'ready' && !(state === 'expired' && lastGrant && isRefreshUsable(lastGrant, now()))) || gatewaySummary?.matchesAccount !== true ? { models: [] } : {}) },
     });
   }
 
@@ -930,7 +930,15 @@ export function createIamService(rawConfig, options = {}) {
     async saveModelSelection({ models, defaultModelId } = {}) {
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      const current = await selectionOwner();
+      let current = await selectionOwner();
+      if (current?.expired && lastGrant && isRefreshUsable(lastGrant, now())) {
+        try {
+          await service.resolveToken();
+          current = await selectionOwner();
+        } catch {
+          // keep expired status if refresh fails
+        }
+      }
       if (!current || current.expired) throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
       const target = ensureStore() ? modelSelectionStore : null;
       if (!target || storeCredentials !== current.credentials) {

@@ -422,6 +422,9 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
       }
 
       if (url.pathname === '/api/forge-iam/models') {
+        if (typeof service.resolveToken === 'function') {
+          await service.resolveToken().catch(() => {});
+        }
         if (req.method === 'GET') {
           try { return sendJson(res, 200, { ...(await service.refreshGatewayModels()), view: service.getView() }); }
           catch (error) { return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error)); }

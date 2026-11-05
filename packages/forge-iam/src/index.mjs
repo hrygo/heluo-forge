@@ -33,9 +33,17 @@ export function apply(ctx, rawConfig = {}) {
     throw new IamError('IAM_HOST_UNAVAILABLE', 'ctx.effect is required to own the IAM lifecycle');
   }
 
+  const getContextService = (name) => {
+    try {
+      return ctx?.[name] ?? (typeof ctx?.get === 'function' ? ctx.get(name) : undefined);
+    } catch {
+      return undefined;
+    }
+  };
+
   let credentials;
   try {
-    credentials = typeof ctx.get === 'function' ? ctx.get('credentials') : undefined;
+    credentials = getContextService('credentials');
   } catch {
     credentials = undefined;
   }
@@ -46,23 +54,19 @@ export function apply(ctx, rawConfig = {}) {
     exclusive: checkExclusive(ctx, result.value),
     recheckExclusive: () => checkExclusive(ctx, result.value),
     credentials,
-    getCredentials: () => {
-      try {
-        return typeof ctx.get === 'function' ? ctx.get('credentials') : undefined;
-      } catch {
-        return undefined;
-      }
-    },
+    getCredentials: () => getContextService('credentials'),
     getManagedModelRuntime: () => managedRuntime,
     getModelSelectionServices: () => {
       try {
-        return modelServices && ctx.get?.('llm') === modelServices.llm
-          && ctx.get?.('agentDefaultModel') === modelServices.agentDefaultModel ? modelServices : undefined;
+        const currentLlm = getContextService('llm');
+        const currentAdm = getContextService('agentDefaultModel');
+        return modelServices && currentLlm === modelServices.llm
+          && currentAdm === modelServices.agentDefaultModel ? modelServices : undefined;
       } catch { return undefined; }
     },
     getOrigin: () => {
       try {
-        return ctx.get?.('webServer')?.getOrigin?.();
+        return getContextService('webServer')?.getOrigin?.();
       } catch {
         return undefined;
       }
@@ -168,13 +172,7 @@ export function apply(ctx, rawConfig = {}) {
           callbackPath: result.value.redirectPath,
           getOrigin: () => host.webServer.getOrigin?.(),
           getBridgeSecret: () => service.bridgeCapability().catch(() => undefined),
-          getConnection: () => {
-            try {
-              return ctx.get?.('connection');
-            } catch {
-              return undefined;
-            }
-          },
+          getConnection: () => getContextService('connection'),
         });
         const offApi = host.webServer.register({
           kind: 'prefix',
