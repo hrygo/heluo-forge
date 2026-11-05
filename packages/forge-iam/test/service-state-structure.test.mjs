@@ -76,3 +76,29 @@ test('the provider module owns the handles and exposes one entry point', () => {
   // Revoked, reopened and failed-open all bump the epoch, so no in-flight read survives.
   assert.equal((provider.match(/gatewayEpoch \+= 1/g) ?? []).length, 3);
 });
+
+// U7: grants and the protocol caches have the same single owner.
+const grant = readFileSync(new URL('../src/service-grant.mjs', import.meta.url), 'utf8');
+
+test('the service keeps no writable copy of the grant caches', () => {
+  for (const name of ['metadataCache', 'jwksCache', 'identityProfile', 'grantOwners']) {
+    assert.ok(
+      !new RegExp(`(let|const) ${name}\\b`).test(service),
+      `src/service.mjs still declares "${name}"; the value belongs to service-grant.mjs`,
+    );
+  }
+  // Ownership of a grant is only ever decided by the module that mints it.
+  assert.ok(!/grantOwners\.(get|set|has)\(/.test(service), 'src/service.mjs must not reach into the owner map');
+});
+
+test('the grant module owns binding, context and protocol caches', () => {
+  assert.match(service, /const grants = createServiceGrant\(\{/);
+  assert.match(grant, /export function createServiceGrant\(env\)/);
+  for (const fn of ['prepareAuthentication', 'rememberAuthentication', 'metadata', 'jwks', 'verifyWithJwks',
+    'grantFromToken', 'buildGrant', 'assertGrantBinding', 'assertGrantContext', 'redirectUri', 'loadIdentityProfile']) {
+    assert.match(grant, new RegExp(`function ${fn}\\(`), `service-grant.mjs must define ${fn}`);
+  }
+  for (const api of ['own', 'ownerOf', 'had', 'clearProfile', 'cachedIssuer']) {
+    assert.match(grant, new RegExp(`${api}[,(]`), `service-grant.mjs must expose ${api}`);
+  }
+});
