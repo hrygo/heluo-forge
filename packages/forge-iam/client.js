@@ -420,33 +420,112 @@ window.__ModuleLoader__.load({
         flex-wrap: wrap;
       }
       .fiam-journey-bar {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-        gap: 8px;
-        margin-bottom: 4px;
-      }
-      .fiam-journey-step {
+        position: relative;
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 8px;
+        gap: 0;
+        margin-bottom: 8px;
+        padding: 6px;
+        border-radius: var(--dsw-radius-lg, 12px);
+        background: var(--dsw-alias-bg-layer-1);
+        border: 0.5px solid var(--dsw-alias-border-l3);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+      }
+      .fiam-journey-step {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+        min-width: 0;
         padding: 8px 12px;
-        border-radius: var(--dsw-radius-md);
-        border: 0.5px solid var(--dsw-alias-border-l4);
-        background: var(--dsw-alias-settings-card-fill);
-        font-size: var(--dsw-font-xxs-12);
-        color: var(--dsw-alias-label-secondary);
+        border-radius: var(--dsw-radius-md, 8px);
+        border: 1px solid transparent;
+        background: transparent;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .fiam-journey-step + .fiam-journey-step {
+        margin-left: 4px;
       }
       .fiam-journey-step-done {
-        border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 28%, var(--dsw-alias-border-l4));
+        background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 5%, transparent);
       }
       .fiam-journey-step-active {
-        border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 40%, var(--dsw-alias-border-l3));
-        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 4%, var(--dsw-alias-settings-card-fill));
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, var(--dsw-alias-bg-layer-1));
+        border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 30%, transparent);
+        box-shadow: 0 2px 8px color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+      }
+      .fiam-journey-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        font-size: 11px;
+        font-weight: 700;
+        transition: all 0.2s ease;
+      }
+      .fiam-journey-icon-done {
+        background: var(--dsw-alias-state-success-primary);
+        color: #fff;
+        box-shadow: 0 2px 6px color-mix(in srgb, var(--dsw-alias-state-success-primary) 35%, transparent);
+      }
+      .fiam-journey-icon-active {
+        background: var(--dsw-alias-state-business-primary);
+        color: #fff;
+        box-shadow: 0 2px 6px color-mix(in srgb, var(--dsw-alias-state-business-primary) 35%, transparent);
+      }
+      .fiam-journey-icon-idle {
+        background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.05));
+        color: var(--dsw-alias-label-tertiary);
+        border: 0.5px solid var(--dsw-alias-border-l3);
+      }
+      .fiam-journey-content {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 6px;
+        flex: 1;
+        min-width: 0;
       }
       .fiam-journey-title {
+        font-size: 13px;
         font-weight: 600;
+        letter-spacing: -0.01em;
         color: var(--dsw-alias-label-primary);
+        white-space: nowrap;
+      }
+      .fiam-journey-pill {
+        font-size: 11px;
+        font-weight: 500;
+        padding: 2px 8px;
+        border-radius: 9999px;
+        line-height: 1.3;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .fiam-journey-pill-done {
+        color: var(--dsw-alias-state-success-primary);
+        background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);
+      }
+      .fiam-journey-pill-active {
+        color: var(--dsw-alias-state-business-primary);
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+      }
+      .fiam-journey-pill-idle {
+        color: var(--dsw-alias-label-tertiary);
+        background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 8%, transparent);
+      }
+      .fiam-journey-arrow {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--dsw-alias-label-tertiary);
+        opacity: 0.45;
+        flex-shrink: 0;
+        margin: 0 -2px;
       }
       .fiam-model-row-actions {
         display: inline-flex;
@@ -1622,32 +1701,59 @@ window.__ModuleLoader__.load({
       const step3Done = step2Done && view.modelAccess?.state === 'ready' && enabledCount > 0;
       const steps = [
         {
-          title: '1. 身份认证',
+          num: '1',
+          title: '身份',
           status: step1Done ? '已认证' : (view.state === 'authenticating' ? '认证中' : '待认证'),
           done: step1Done,
           active: !step1Done,
         },
         {
-          title: '2. 网关凭据',
+          num: '2',
+          title: '凭据',
           status: step2Done ? '已就绪' : '待配置',
           done: step2Done,
           active: step1Done && !step2Done,
         },
         {
-          title: '3. 模型启用',
+          num: '3',
+          title: '模型',
           status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step2Done ? '待启用' : '待解锁'),
           done: step3Done,
           active: step2Done && !step3Done,
         },
       ];
-      return h('div', { className: 'fiam-journey-bar', role: 'region', 'aria-label': '模型接入进度' },
-        ...steps.map((s) => h('div', {
+
+      const checkIcon = h('svg', {
+        viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 2.2, strokeLinecap: 'round', strokeLinejoin: 'round',
+      }, h('path', { d: 'M3.5 8.5l3 3 6-6' }));
+
+      const chevronIcon = h('svg', {
+        viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round',
+      }, h('path', { d: 'M6 3.5l4.5 4.5L6 12.5' }));
+
+      const children = [];
+      steps.forEach((s, idx) => {
+        if (idx > 0) {
+          children.push(h('div', { key: `sep-${idx}`, className: 'fiam-journey-arrow', 'aria-hidden': 'true' }, chevronIcon));
+        }
+        const stateClass = s.done ? 'done' : (s.active ? 'active' : 'idle');
+        children.push(h('div', {
           key: s.title,
-          className: `fiam-journey-step${s.done ? ' fiam-journey-step-done' : ''}${s.active ? ' fiam-journey-step-active' : ''}`,
+          className: `fiam-journey-step fiam-journey-step-${stateClass}`,
         },
-          h('span', { className: 'fiam-journey-title' }, s.title),
-          h('span', { className: `fiam-badge fiam-badge-${s.done ? 'success' : (s.active ? 'authenticating' : 'idle')}` }, s.status),
-        ))
+          h('div', {
+            className: `fiam-journey-icon fiam-journey-icon-${stateClass}`,
+            'aria-hidden': 'true',
+          }, s.done ? checkIcon : s.num),
+          h('div', { className: 'fiam-journey-content' },
+            h('span', { className: 'fiam-journey-title' }, s.title),
+            h('span', { className: `fiam-journey-pill fiam-journey-pill-${stateClass}` }, s.status),
+          ),
+        ));
+      });
+
+      return h('div', { className: 'fiam-journey-bar', role: 'region', 'aria-label': '模型接入进度' },
+        ...children
       );
     }
 

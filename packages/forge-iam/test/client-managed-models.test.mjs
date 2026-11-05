@@ -297,10 +297,12 @@ test('default context window displays 200K and one-click enable immediately acti
 
   // Default context window badge is 200K and maxTokens is 64K
   assert.match(panel.text(panel.render()), /200K · 输出 64K/);
-  // User journey bar shows 3 steps
-  assert.match(panel.text(panel.render()), /1\. 身份认证/);
-  assert.match(panel.text(panel.render()), /2\. 网关凭据/);
-  assert.match(panel.text(panel.render()), /3\. 模型启用/);
+  // User journey bar shows 3 steps with concise titles: 身份, 凭据, 模型
+  assert.match(panel.text(panel.render()), /身份/);
+  assert.match(panel.text(panel.render()), /凭据/);
+  assert.match(panel.text(panel.render()), /模型/);
+  assert.match(panel.text(panel.render()), /已认证/);
+  assert.match(panel.text(panel.render()), /已就绪/);
 
   // One-click enable button on the row enables corp-coder with default parameters and persists immediately
   const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
