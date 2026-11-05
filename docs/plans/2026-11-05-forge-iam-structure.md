@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.18.0 |
+| 版本 | V0.19.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -335,6 +335,16 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 - 实现记录：模块 README 新增「Host 分轴模块」表（10 行，含各轴拥有的状态与职责边界）与客户端四段 ↔ 锚点区间表；改动落点表补齐 9 行宿主轴。开发约定新增 §4.1「宿主按轴、客户端按段」。IAM 详细设计与开发指南各补一句指向模块 README。
 - 与计划的偏差：根 README 不加结构约定——[AGENTS.md §1](<../../AGENTS.md>) 规定根 README 是产品宣传页，禁止写入检查器规则与开发手册内容；该约定改放[开发约定 §4.1](<../engineering/development-conventions.md#41-结构约定宿主按轴客户端按段>)。
 - 完成条件：`node --run check` 全绿；`git diff --check` 无输出。
+
+### U13 宿主：网关与选型的写入口（评审第 3 轮发现）
+
+`service.mjs` 仍留有六个薄壳方法直接做存储工作：`readModelSelection`、`saveModelSelection`（`provider.ensure()` + 选型 store）、`resolveGatewayConnection`、`saveGatewayCredential`、`clearGatewayCredential`、`refreshGatewayModels`（`provider.require()` + 锁内复查）。共约 200 行、8 处 `provider.ensure()/require()`、6 处 `ctx.assertExclusive()`。
+
+这违反 §6.3 守卫 3 的本意（聚合入口不做业务判定），也是 M1 的最后一块：改网关凭据写入要横跨 `service.mjs` 与 `service-gateway.mjs` 两处。
+
+- 落点：`readModelSelection`/`saveModelSelection` → `service-model-selection.mjs`；其余四个 → `service-gateway.mjs`。两者已持有对应 store 与 epoch，方法搬过去不需要新端口，只需把 `provider` 与 `ctx` 已注入的端口用上。
+- 完成后 `service.mjs` 只保留转发与 `watch`/`dispose`/`getView` 等出口，再补守卫 3 的静态断言（`transition(`、`publish(`、`ensure(`、`require(`、`assertExclusive(` 均不得出现在 `service.mjs`）。
+- 完成条件：`gateway-credential-*`、`model-selection-*`、`service-races` 全绿；`node --run check` 全绿。
 
 ## 6. 关键实现说明
 
