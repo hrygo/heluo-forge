@@ -1,5 +1,4 @@
 import { normalizeGatewayBaseURL } from './managed-models.mjs';
-import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
@@ -13,14 +12,11 @@ import { createServiceGateway } from './service-gateway.mjs';
 import { createTokenResolver } from './service-token.mjs';
 import { createReconciler } from './service-reconcile.mjs';
 import { createSignIn } from './service-signin.mjs';
+import { createSignOut } from './service-signout.mjs';
 import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { normalizeProfileFields } from './userinfo.mjs';
-import {
-  revokeAccessToken,
-} from './oidc.mjs';
-
 import {
   grantIdentity,
   nowIso,
@@ -104,7 +100,7 @@ export function createIamService(rawConfig, options = {}) {
     grants,
     now,
     getAuthEpoch: () => authEpoch,
-    isSigningOut: () => signingOut,
+    isSigningOut: () => signout.signingOut,
     getLoadGateway: () => (opts) => gateway.load(opts),
   });
 
@@ -121,12 +117,28 @@ export function createIamService(rawConfig, options = {}) {
     grants,
     now,
     fetchImpl,
-    isSigningOut: () => signingOut,
+    isSigningOut: () => signout.signingOut,
     getSessionEpoch: () => sessionEpoch,
     getAuthEpoch: () => authEpoch,
     clearObservation: () => { observedPending = null; },
     beginConsumption,
     adoptConsumption,
+  });
+
+  // Sign-out: owns the flight and the "signing out" flag other axes read.
+  const signout = createSignOut({
+    config,
+    ctx,
+    provider,
+    grants,
+    gateway,
+    token,
+    now,
+    fetchImpl,
+    bumpAuthEpoch: () => { authEpoch += 1; },
+    clearObservation: () => { observedPending = null; },
+    clearAttempt,
+    invalidateConsumption: () => consumptionWitness?.invalidate(),
   });
 
   // The reconciler owns every background adoption. It is created after the
@@ -140,7 +152,7 @@ export function createIamService(rawConfig, options = {}) {
     now,
     configured,
     hasSignInAttempt: () => Boolean(signInPromise),
-    isSigningOut: () => signingOut,
+    isSigningOut: () => signout.signingOut,
     getAuthEpoch: () => authEpoch,
     getObservation: () => observedPending,
     setObservation: (next) => { observedPending = next; },
@@ -163,7 +175,7 @@ export function createIamService(rawConfig, options = {}) {
     token,
     now,
     fetchImpl,
-    isSigningOut: () => signingOut,
+    isSigningOut: () => signout.signingOut,
     getAuthEpoch: () => authEpoch,
     bumpAuthEpoch: () => { authEpoch += 1; },
     clearObservation: () => { observedPending = null; },
@@ -177,8 +189,6 @@ export function createIamService(rawConfig, options = {}) {
   // Sign-in/out lifetimes: one attempt at a time, and an epoch pair that makes
   // a response belonging to a replaced session unable to publish.
   let signInPromise = null;
-  let signOutPromise = null;
-  let signingOut = false;
   let sessionEpoch = 0;
   let authEpoch = 0;
   let syncPublications = 0;
@@ -188,7 +198,7 @@ export function createIamService(rawConfig, options = {}) {
   const consumptionWitness = typeof options.registerWitness === 'function'
     ? createConsumptionWitness(config, options, (adopted) => {
       ctx.recheckExclusive();
-      return !ctx.disposed && !signingOut && ctx.state === 'ready' && ctx.exclusive.ok
+      return !ctx.disposed && !signout.signingOut && ctx.state === 'ready' && ctx.exclusive.ok
         && authEpoch === adopted.binding.authEpoch && sessionEpoch === adopted.binding.sessionEpoch
         && provider.store === adopted.binding.store && provider.storeCredentials === adopted.binding.credentials
         && ctx.lastGrant?.sessionInstanceId === adopted.sessionInstanceId
@@ -337,7 +347,7 @@ export function createIamService(rawConfig, options = {}) {
       const subject = ctx.lastGrant?.subject;
       const generation = selection.generation;
       const check = () => {
-        if (ctx.disposed || signingOut || authEpoch !== epoch || selection.generation !== generation
+        if (ctx.disposed || signout.signingOut || authEpoch !== epoch || selection.generation !== generation
           || ctx.state !== 'ready' || !subject || ctx.lastGrant?.subject !== subject || Date.parse(ctx.lastGrant.accessExpiresAt) <= now()) {
           throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
         }
@@ -389,7 +399,7 @@ export function createIamService(rawConfig, options = {}) {
       const assertCurrent = () => {
         const active = () => {
           if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-          if (signingOut || authEpoch !== epoch || ctx.state === 'authenticating') {
+          if (signout.signingOut || authEpoch !== epoch || ctx.state === 'authenticating') {
             throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
           }
           ctx.assertExclusive();
@@ -494,181 +504,24 @@ export function createIamService(rawConfig, options = {}) {
       return { ...grants.identityProfile.profile };
     },
 
+    /** Sign-out owns its flight and cleanup order. */
+    signOut: signout.signOut,
+    _signOutOnce: signout.signOutOnce,
+    bridgeCapability: signout.bridgeCapability,
+
     /** Sign-in attempt and its callback live in service-signin.mjs. */
     startSignIn: signin.startSignIn,
     _startSignInOnce: signin.signInOnce,
     handleCallback: signin.handleCallback,
     cancelSignIn: signin.cancelSignIn,
 
-    async signOut() {
-      consumptionWitness?.invalidate();
-      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      if (signOutPromise) return signOutPromise;
-      signingOut = true;
-      authEpoch += 1;
-      observedPending = null;
-      clearAttempt();
-      // Register before running any work: provider checks and notifications can
-      // synchronously reenter signOut. All callers observe the final outcome.
-      signOutPromise = Promise.resolve().then(() => service._signOutOnce()).finally(() => {
-        signingOut = false;
-        signOutPromise = null;
-      });
-      return signOutPromise;
-    },
 
-    async _signOutOnce() {
-      const checkDisposed = () => {
-        if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      };
-      checkDisposed();
-      let expectedIssuer = ctx.knownIssuer();
-      if (token.inFlight) await token.inFlight.catch(() => {});
-      checkDisposed();
-      let grant = null;
-      const targetStore = provider.ensure();
-      const targetCredentials = provider.storeCredentials;
-      checkDisposed();
-      const unknownSignOut = () => {
-        checkDisposed();
-        ctx.lastGrant = null;
-        grants.clearProfile();
-        ctx.error = 'IAM_CREDENTIALS_CLEAR_FAILED';
-        ctx.state = 'error';
-        ctx.notify();
-        return { view: ctx.view(), logoutUrl: null, revocation: 'unknown' };
-      };
-      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-      if (targetStore) {
-        const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
-        if (!record.ok) return unknownSignOut();
-        try {
-          // Do not let a provider mutate nested fields of the captured snapshot.
-          grant = structuredClone(record.grant);
-          // Explicit logout may establish issuer context through discovery below;
-          // its initial client/resource check must not trust the grant's issuer.
-          grants.assertGrantBinding(grant);
-          if (config.issuer) grants.assertGrantContext(grant, expectedIssuer);
-        } catch { return unknownSignOut(); }
-      }
-      checkDisposed();
-      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-      checkDisposed();
-      ctx.lastGrant = null;
-      let revocation = 'skipped';
-      let revocationError = null;
-      let meta = grants.metadataCache;
-      let revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
-      if (grant && config.discoveryUrl && (!revocationEndpoint || !config.issuer)) {
-        try {
-          meta = await grants.metadata();
-          revocationEndpoint = meta.revocationEndpoint ?? config.revocationEndpoint;
-        } catch {
-          // An explicit endpoint cannot authenticate an otherwise unbound issuer.
-          if (!config.issuer) return unknownSignOut();
-          revocationEndpoint = undefined;
-        }
-      }
-      expectedIssuer = meta?.issuer || expectedIssuer;
-      try { grants.assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
-      checkDisposed();
-      // A locally authenticated session must not clear a grant that another
-      // process replaced; the check needs no client secret.
-      if (ctx.sessionAuthentication && grant
-        && (ctx.sessionAuthentication.credentials !== targetCredentials
-          || !isDeepStrictEqual(ctx.sessionAuthentication.identity, grantIdentity(grant)))) {
-        return unknownSignOut();
-      }
-      // D1 (2026-11-04): revoke the local access token with a GET that carries
-      // the token itself and no client authentication. A missing client secret
-      // must not stop sign-out, and the refresh token cannot be revoked here.
-      const revokeCurrent = async (current) => {
-        checkDisposed();
-        provider.assertAtomic(targetStore, targetCredentials);
-        checkDisposed();
-        grants.assertGrantContext(current, expectedIssuer);
-        grant = current;
-        if (revocationEndpoint && current?.accessToken) {
-          const outcome = await revokeAccessToken({
-            revocationEndpoint,
-            accessToken: current.accessToken,
-            fetchImpl,
-            timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
-          });
-          revocation = outcome.state;
-          if (outcome.code) revocationError = outcome.code;
-        }
-      };
-      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-      checkDisposed();
-      const cleared = targetStore
-        ? await targetStore.signOutSnapshot(grant, async (current) => {
-          await revokeCurrent(current);
-          checkDisposed();
-          provider.assertAtomic(targetStore, targetCredentials);
-          checkDisposed();
-        })
-        : { ok: false };
-      checkDisposed();
-      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-      if (!cleared.ok || !['cleared', 'absent'].includes(cleared.decision)) return unknownSignOut();
-      checkDisposed();
-      // Sign-out keeps the gateway credential, but the summary must stop
-      // claiming it matches the (now absent) session.
-      await gateway.load({ force: true });
-      checkDisposed();
-      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-      checkDisposed();
-      let logoutUrl = null;
-      if (config.logoutMode === 'rp' && grant?.idToken) {
-        try {
-          const meta = grants.metadataCache ?? await grants.metadata();
-          const endSessionEndpoint = meta.endSessionEndpoint ?? config.endSessionEndpoint;
-          if (endSessionEndpoint) {
-            const url = new URL(endSessionEndpoint);
-            url.searchParams.set('client_id', config.clientId);
-            if (grant?.idToken) url.searchParams.set('id_token_hint', grant.idToken);
-            if (config.postLogoutRedirectUri) url.searchParams.set('post_logout_redirect_uri', config.postLogoutRedirectUri);
-            logoutUrl = url.href;
-          }
-        } catch {
-          logoutUrl = null;
-        }
-      }
-      checkDisposed();
-      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-      checkDisposed();
-      ctx.sessionAuthentication = null;
-      grants.clearProfile();
-      // Three states stay distinct: confirmed, rejected, and unconfirmed.
-      const nextError = revocation === 'failed' ? 'IAM_REVOCATION_FAILED'
-        : revocation === 'unknown' ? 'IAM_REVOCATION_UNKNOWN' : null;
-      if (ctx.state !== 'unconfigured' && ctx.state !== 'signed-out') {
-        ctx.publish('SIGN_OUT', nextError);
-      } else {
-        ctx.error = nextError;
-        ctx.notify();
-      }
-      return { view: ctx.view(), logoutUrl, revocation, revocationError };
-    },
 
     /**
      * Read (or lazily mint) the loopback bridge capability. The value lives in
      * the credential store, so a caller must already be able to read that store
      * to obtain it; this is not a second authorization model.
      */
-    async bridgeCapability() {
-      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      const credentials = provider.storeCredentials;
-      if (!credentials || typeof credentials.resolve !== 'function' || typeof credentials.set !== 'function') {
-        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
-      }
-      const existing = await credentials.resolve(BRIDGE_REF);
-      if (typeof existing?.value === 'string' && existing.value.length > 0) return existing.value;
-      const secret = randomBytes(32).toString('base64url');
-      await credentials.set(BRIDGE_REF, secret);
-      return secret;
-    },
 
 
     async *watch(signal) {

@@ -197,3 +197,25 @@ test('the attempt records the verifier it will check the callback against', () =
   assert.match(signin, /function clearAttempt\(\)/);
   assert.match(signin, /clearTimeout\(attempt\.timer\)/);
 });
+
+// U11b: sign-out is one registered flight; its flag is read elsewhere by port.
+const signout = readFileSync(new URL('../src/service-signout.mjs', import.meta.url), 'utf8');
+
+test('the service keeps no copy of the sign-out flight', () => {
+  for (const name of ['signOutPromise', 'signingOut']) {
+    assert.ok(!new RegExp(`let ${name}\\b`).test(service), `src/service.mjs still declares "let ${name}"`);
+  }
+  assert.match(service, /const signout = createSignOut\(\{/);
+  assert.match(service, /signOut: signout\.signOut,/);
+  assert.match(service, /isSigningOut: \(\) => signout\.signingOut,/);
+});
+
+test('sign-out registers its promise before doing any work', () => {
+  assert.match(signout, /export function createSignOut\(env\)/);
+  const body = signout.slice(signout.indexOf('async function signOut()'));
+  const registered = body.indexOf('signOutPromise = Promise.resolve()');
+  const returned = body.lastIndexOf('return signOutPromise');
+  assert.ok(registered > 0 && returned > registered, 'the flight must be registered before it is returned');
+  // Unknown cleanup must never be reported as a clean exit.
+  assert.match(signout, /revocation: 'unknown'/);
+});
