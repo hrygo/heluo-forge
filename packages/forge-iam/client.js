@@ -1652,50 +1652,62 @@ window.__ModuleLoader__.load({
     function writeModelOptions(next) { clientStore.modelOptions.write(next); }
 
     // §9 错误文案
+    // 错误码 → 用户文案。与宿主 MESSAGES（src/managed-models.mjs）同码同句，
+    // 由 test/client-error-text.test.mjs 双向比对：宿主新增错误码时这里必须补齐。
+    // 用无原型对象承载：码来自服务端，不能让 Object.prototype 上的键被当成文案。
+    const ERROR_NOTICE = Object.freeze(Object.assign(Object.create(null), {
+      // 会话与登录
+      IAM_REQUEST_HEADER_REQUIRED: '操作未完成，请刷新页面后重试。',
+      IAM_UNCONFIGURED: '企业登录尚未设置完成，请联系管理员。',
+      IAM_CREDENTIALS_UNAVAILABLE: '凭据存储不可用，暂时无法登录。',
+      IAM_CREDENTIALS_CLEAR_FAILED: '无法清除本设备的登录信息，请联系管理员。',
+      IAM_REVOCATION_FAILED: '已在此设备退出：服务器拒绝了访问令牌撤销，该令牌可能仍然有效。',
+      IAM_REVOCATION_UNKNOWN: '已在此设备退出，但无法确认访问令牌是否已撤销。',
+      IAM_EXCLUSIVE_CONFLICT: '登录设置有冲突，请联系管理员。',
+      IAM_UNREACHABLE: '暂时无法连接登录服务，请稍后重试。',
+      IAM_STATE_MISMATCH: '登录未能完成，请重新登录。',
+      IAM_CALLBACK_INVALID: '登录未能完成，请重新登录。',
+      IAM_ATTEMPT_EXPIRED: '登录尝试已过期，请重新登录。',
+      IAM_INVALID_GRANT: '登录已失效，请重新登录。',
+      IAM_REAUTH_REQUIRED: '登录已失效，请重新登录。',
+      IAM_NOT_SIGNED_IN: '请先登录企业账号。',
+      IAM_ATTEMPT_CANCELLED: '登录已取消，请重新登录。',
+      IAM_CALLBACK_UNAVAILABLE: '登录服务暂不可用，请刷新页面后重试。',
+      IAM_CONFIG_INVALID: '企业登录设置有误，请联系管理员。',
+      IAM_DISPOSED: '登录服务已关闭，请刷新页面。',
+      IAM_GRANT_CONTEXT_MISMATCH: '登录状态已变化，请重新登录。',
+      IAM_REFRESH_SUBJECT_MISMATCH: '登录状态已变化，请重新登录。',
+      IAM_GATEWAY_KEY_INVALID: '个人访问凭证格式不正确，请完整复制网关提供的凭证后重试。',
+      IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
+      // 模型门禁与网关：与宿主 MESSAGES 同码同句
+      ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
+      ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
+      ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',
+      ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
+      ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。',
+      ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
+      ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
+      ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
+      ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
+      ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
+      IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
+      IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
+      IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
+      IAM_GATEWAY_OWNER_MISSING: '请先登录企业账号，再添加个人访问凭证。',
+      IAM_GATEWAY_ATOMIC_UNVERIFIED: '暂时无法安全地保存或清除凭证，请联系管理员。',
+      IAM_GATEWAY_LEGACY_READ_ONLY: '现有凭证暂时只能查看，本次没有更改。如需更换，请联系管理员。',
+      IAM_GATEWAY_CHANGED: '凭证已发生变化，本次没有更改。请刷新页面后核对。',
+      IAM_GATEWAY_WRITE_UNKNOWN: '无法确认凭证是否已更改。请刷新页面查看状态，暂时不要重复操作。',
+      IAM_REQUEST_INVALID: '请求内容无效，请重试。',
+      IAM_REQUEST_TOO_LARGE: '请求过大，请检查粘贴内容。',
+      IAM_UNAUTHENTICATED: '页面会话不可用，请刷新页面后重试。',
+      IAM_CONNECTION_UNAVAILABLE: '页面会话不可用，请刷新页面后重试。',
+      IAM_METHOD_NOT_ALLOWED: '请求不受支持，请刷新页面。',
+      IAM_NOT_FOUND: '请求不受支持，请刷新页面。',
+    }));
+    // 未列举的码用同一句兜底，不把原始错误码抛给用户。
     function errorNotice(code) {
-      if (code === 'IAM_REQUEST_HEADER_REQUIRED') return '操作未完成，请刷新页面后重试。';
-      if (code === 'IAM_UNCONFIGURED') return '企业登录尚未设置完成，请联系管理员。';
-      if (code === 'IAM_CREDENTIALS_UNAVAILABLE') return '凭据存储不可用，暂时无法登录。';
-      if (code === 'IAM_CREDENTIALS_CLEAR_FAILED') return '无法清除本设备的登录信息，请联系管理员。';
-      if (code === 'IAM_REVOCATION_FAILED') return '已在此设备退出：服务器拒绝了访问令牌撤销，该令牌可能仍然有效。';
-      if (code === 'IAM_REVOCATION_UNKNOWN') return '已在此设备退出，但无法确认访问令牌是否已撤销。';
-      if (code === 'IAM_EXCLUSIVE_CONFLICT') return '登录设置有冲突，请联系管理员。';
-      if (code === 'IAM_UNREACHABLE') return '暂时无法连接登录服务，请稍后重试。';
-      if (code === 'IAM_STATE_MISMATCH' || code === 'IAM_CALLBACK_INVALID') return '登录未能完成，请重新登录。';
-      if (code === 'IAM_ATTEMPT_EXPIRED') return '登录尝试已过期，请重新登录。';
-      if (code === 'IAM_INVALID_GRANT' || code === 'IAM_REAUTH_REQUIRED') return '登录已失效，请重新登录。';
-      if (code === 'IAM_NOT_SIGNED_IN') return '请先登录企业账号。';
-      if (code === 'IAM_ATTEMPT_CANCELLED') return '登录已取消，请重新登录。';
-      if (code === 'IAM_CALLBACK_UNAVAILABLE') return '登录服务暂不可用，请刷新页面后重试。';
-      if (code === 'IAM_CONFIG_INVALID') return '企业登录设置有误，请联系管理员。';
-      if (code === 'IAM_DISPOSED') return '登录服务已关闭，请刷新页面。';
-      if (code === 'IAM_GRANT_CONTEXT_MISMATCH' || code === 'IAM_REFRESH_SUBJECT_MISMATCH') return '登录状态已变化，请重新登录。';
-      if (code === 'IAM_GATEWAY_KEY_INVALID') return '个人访问凭证格式不正确，请完整复制网关提供的凭证后重试。';
-      if (code === 'IAM_GATEWAY_URL_INVALID') return '请输入有效的网关地址，例如 https://gateway.example/v1。';
-      // Model-access texts repeat MESSAGES in src/managed-models.mjs verbatim; the panel
-      // and the host turn surface must not describe the same code two different ways.
-      if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED') return '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。';
-      if (code === 'ENTERPRISE_GATEWAY_FORBIDDEN') return '当前账号没有此模型的使用权限，请联系管理员。';
-      if (code === 'ENTERPRISE_GATEWAY_RATE_LIMIT') return '请求过于频繁，请稍后重试。';
-      if (code === 'ENTERPRISE_GATEWAY_UNAVAILABLE') return '暂时无法连接企业模型，请稍后重试。';
-      if (code === 'ENTERPRISE_GATEWAY_REQUEST_REJECTED') return '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。';
-      if (code === 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED') return '所选模型的推理档位不受支持，请重新选择思考级别。';
-      if (code === 'ENTERPRISE_MODEL_CATALOG_INVALID') return '网关返回的模型列表无法识别，请联系管理员检查网关。';
-      if (code === 'ENTERPRISE_MODELS_UNAVAILABLE') return '企业模型暂不可用，请联系管理员检查配置。';
-      if (code === 'ENTERPRISE_MODEL_SYNC_CANCELLED') return '模型目录同步被中断，请重试。';
-      if (code === 'ENTERPRISE_MODEL_NOT_ALLOWED') return '此模型未由企业开放，请选择企业提供的模型。';
-      if (code === 'IAM_MODEL_CONTEXT_CHANGED') return '账号或凭证已变化，请重新选择模型后再试。';
-      if (code === 'IAM_LOGIN_REQUIRED') return '企业账号已退出或登录已过期，请重新登录后再使用模型。';
-      if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再添加个人访问凭证。';
-      if (code === 'IAM_GATEWAY_ATOMIC_UNVERIFIED') return '暂时无法安全地保存或清除凭证，请联系管理员。';
-      if (code === 'IAM_GATEWAY_LEGACY_READ_ONLY') return '现有凭证暂时只能查看，本次没有更改。如需更换，请联系管理员。';
-      if (code === 'IAM_GATEWAY_CHANGED') return '凭证已发生变化，本次没有更改。请刷新页面后核对。';
-      if (code === 'IAM_GATEWAY_WRITE_UNKNOWN') return '无法确认凭证是否已更改。请刷新页面查看状态，暂时不要重复操作。';
-      if (code === 'IAM_REQUEST_INVALID') return '请求内容无效，请重试。';
-      if (code === 'IAM_REQUEST_TOO_LARGE') return '请求过大，请检查粘贴内容。';
-      if (code === 'IAM_UNAUTHENTICATED' || code === 'IAM_CONNECTION_UNAVAILABLE') return '页面会话不可用，请刷新页面后重试。';
-      if (code === 'IAM_METHOD_NOT_ALLOWED' || code === 'IAM_NOT_FOUND') return '请求不受支持，请刷新页面。';
-      return '操作未完成，请重试；如仍有问题，请联系管理员。';
+      return ERROR_NOTICE[code] ?? '操作未完成，请重试；如仍有问题，请联系管理员。';
     }
 
     // §10 诊断快照

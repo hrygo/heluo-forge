@@ -651,13 +651,9 @@ test('a cached catalogue is scoped to one person and gateway', async t => {
 });
 
 test('model-access errors say the same thing here as on the host turn surface', async t => {
-  const codes = [
-    'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED', 'ENTERPRISE_GATEWAY_FORBIDDEN', 'ENTERPRISE_GATEWAY_RATE_LIMIT',
-    'ENTERPRISE_GATEWAY_UNAVAILABLE', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED', 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
-    'ENTERPRISE_MODEL_CATALOG_INVALID', 'ENTERPRISE_MODELS_UNAVAILABLE', 'ENTERPRISE_MODEL_NOT_ALLOWED',
-    'ENTERPRISE_MODEL_SYNC_CANCELLED', 'IAM_MODEL_CONTEXT_CHANGED',
-  ];
-  for (const code of codes) {
+  // Bilateral: every code the host can put on a model-access error must render the
+  // same sentence in the panel, so the two surfaces cannot drift apart code by code.
+  for (const code of Object.keys(MESSAGES)) {
     const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
     const panel = await mountPanel(async path => {
       if (path === '/api/forge-iam/view') return Response.json(failed);
