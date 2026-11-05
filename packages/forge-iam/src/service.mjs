@@ -3,35 +3,28 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
-import { assertClientAuthConfigured, assertClientAuthCurrent, clientAuthDescriptor } from './client-auth.mjs';
+import { assertClientAuthConfigured, assertClientAuthCurrent } from './client-auth.mjs';
 import { StoreError } from './store.mjs';
-import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
+import { isAccessExpired, isRefreshUsable, summarizeGrant } from './record.mjs';
 import { createServiceState } from './service-state.mjs';
 import { createServiceGrant } from './service-grant.mjs';
 import { createModelSelection } from './service-model-selection.mjs';
 import { createServiceGateway } from './service-gateway.mjs';
 import { createTokenResolver } from './service-token.mjs';
 import { createReconciler } from './service-reconcile.mjs';
+import { createSignIn } from './service-signin.mjs';
 import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { normalizeProfileFields } from './userinfo.mjs';
 import {
-  buildAuthorizationUrl,
-  createPkce,
-  exchangeCode,
-  parseCallbackUrl,
-  randomToken,
   revokeAccessToken,
-  revokeToken,
-  safeStateEqual,
 } from './oidc.mjs';
 
 import {
   grantIdentity,
   nowIso,
   addSeconds,
-  tokenErrorMessage,
   safeMessage,
 } from './service-helpers.mjs';
 
@@ -158,9 +151,31 @@ export function createIamService(rawConfig, options = {}) {
     resolveToken: () => service.resolveToken(),
   });
 
+  // Sign-in/out attempt state: the attempt object is the only owner of its
+  // verifier and nonce, so it lives in the module that consumes the callback.
+  const signin = createSignIn({
+    config,
+    configured,
+    ctx,
+    provider,
+    grants,
+    gateway,
+    token,
+    now,
+    fetchImpl,
+    isSigningOut: () => signingOut,
+    getAuthEpoch: () => authEpoch,
+    bumpAuthEpoch: () => { authEpoch += 1; },
+    clearObservation: () => { observedPending = null; },
+    getSignInPromise: () => signInPromise,
+    setSignInPromise: (next) => { signInPromise = next; },
+    invalidateConsumption: () => consumptionWitness?.invalidate(),
+    beginConsumption,
+    adoptConsumption,
+  });
+
   // Sign-in/out lifetimes: one attempt at a time, and an epoch pair that makes
   // a response belonging to a replaced session unable to publish.
-  let attempt = null;
   let signInPromise = null;
   let signOutPromise = null;
   let signingOut = false;
@@ -197,13 +212,9 @@ export function createIamService(rawConfig, options = {}) {
       version, clientId, resource, authContext });
   }
 
-  function clearAttempt() {
-    if (attempt?.timer) clearTimeout(attempt.timer);
-    attempt = null;
-  }
-
-
-
+  // The attempt timer is owned by the sign-in module; cancelling an attempt is
+  // its job, so this only forwards.
+  function clearAttempt() { signin.clearAttempt(); }
 
   /**
    * Verify an ID token, retrying once on a missing `kid`: the IdP may have
@@ -483,339 +494,11 @@ export function createIamService(rawConfig, options = {}) {
       return { ...grants.identityProfile.profile };
     },
 
-    async startSignIn() {
-      ctx.assertExclusive();
-      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      if (!configured) {
-        throw new IamError('IAM_UNCONFIGURED', safeMessage('IAM_UNCONFIGURED'), {
-          missing: isConfigured(config).missing,
-        });
-      }
-      if (signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-      const targetStore = provider.ensure();
-      const credentials = provider.storeCredentials;
-      if (attempt && (attempt.targetStore !== targetStore || attempt.credentials !== credentials)) {
-        authEpoch += 1;
-        clearAttempt();
-        if (ctx.state === 'authenticating') {
-          ctx.state = 'signed-out';
-          ctx.error = null;
-        }
-      }
-      if (!targetStore) throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
-      provider.assertAtomic(targetStore, credentials);
-      if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
-      if (ctx.state === 'authenticating' && attempt) {
-        if (config.authMode === 'confidential') {
-          const current = attempt; const epoch = authEpoch;
-          const authentication = await grants.prepareAuthentication(current.metadata.issuer, targetStore, credentials, { expected: current.authentication, guard: () => {
-            if (attempt !== current || epoch !== authEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-            provider.assertAtomic(targetStore, credentials);
-          } });
-          assertClientAuthCurrent(authentication);
-        }
-        return { view: ctx.view(), authorizationUrl: attempt.authorizationUrl };
-      }
-      if (signInPromise) return signInPromise;
-      authEpoch += 1;
-      observedPending = null;
-      consumptionWitness?.invalidate();
-      const consumption = beginConsumption(ctx.knownIssuer(), targetStore, credentials);
-      const pending = service._startSignInOnce(targetStore, credentials, consumption);
-      // Only the attempt that still owns the slot clears it: a cancel or a newer
-      // sign-in must not be overwritten by a superseded attempt settling late.
-      const settle = () => { if (signInPromise === pending) signInPromise = null; };
-      pending.then(settle, settle);
-      signInPromise = pending;
-      return signInPromise;
-    },
-
-    async _startSignInOnce(targetStore, credentials, consumption) {
-      const startEpoch = authEpoch;
-      if (ctx.state === 'unreachable') {
-        throw new IamError('IAM_UNREACHABLE', safeMessage('IAM_UNREACHABLE'));
-      }
-      let meta;
-      try {
-        meta = await grants.metadata();
-      } catch (err) {
-        const code = tokenErrorMessage(err);
-        const mapped = code === 'IAM_HTTP_ERROR' || code === 'IAM_DISCOVERY_INVALID' ? 'IAM_UNREACHABLE' : code;
-        throw new IamError(mapped, safeMessage(mapped));
-      }
-      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      if (authEpoch !== startEpoch || signingOut) {
-        throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-      }
-      provider.assertAtomic(targetStore, credentials);
-      const authentication = await grants.prepareAuthentication(meta.issuer, targetStore, credentials, { expected: null, guard: () => {
-        if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-        provider.assertAtomic(targetStore, credentials);
-      } });
-      assertClientAuthCurrent(authentication);
-      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-      if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
-      if (!transition(ctx.state, 'SIGN_IN').ok) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-      const oauthState = randomToken(32);
-      const nonce = randomToken(32);
-      const pkce = createPkce();
-      const callbackUri = grants.redirectUri();
-      const authorizationUrl = buildAuthorizationUrl({
-        authorizationEndpoint: meta.authorizationEndpoint,
-        clientId: config.clientId,
-        redirectUri: callbackUri,
-        scopes: config.scopes,
-        state: oauthState,
-        nonce,
-        codeChallenge: pkce.challenge,
-        resource: config.gatewayResource,
-      });
-      if (attempt) clearAttempt();
-      attempt = {
-        state: oauthState,
-        nonce,
-        verifier: pkce.verifier,
-        redirectUri: callbackUri,
-        authorizationUrl,
-        metadata: meta,
-        targetStore,
-        credentials,
-        authentication: clientAuthDescriptor(authentication),
-        consumption,
-        expiresAt: now() + config.attemptTimeoutSeconds * 1000,
-      };
-      const scheduledAttempt = attempt;
-      attempt.timer = setTimeout(() => {
-        if (attempt === scheduledAttempt) {
-          scheduledAttempt.expired = true;
-          clearAttempt();
-          ctx.error = 'IAM_ATTEMPT_EXPIRED';
-          if (ctx.state === 'authenticating') ctx.state = 'error';
-          ctx.notify();
-        }
-      }, config.attemptTimeoutSeconds * 1000);
-      attempt.timer.unref?.();
-      ctx.publish('SIGN_IN');
-      return { view: ctx.view(), authorizationUrl };
-    },
-
-    async handleCallback(rawUrl) {
-      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      ctx.assertExclusive();
-      let callback;
-      try {
-        callback = new URL(rawUrl);
-      } catch {
-        throw new IamError('IAM_CALLBACK_INVALID', safeMessage('IAM_CALLBACK_INVALID'));
-      }
-      const receivedState = callback.searchParams.get('state');
-      if (!attempt || !safeStateEqual(attempt.state, receivedState)) {
-        throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
-      }
-      const expected = new URL(attempt.redirectUri);
-      if (callback.origin !== expected.origin || callback.pathname !== expected.pathname
-        || callback.username || callback.password || callback.hash) {
-        throw new IamError('IAM_CALLBACK_INVALID', safeMessage('IAM_CALLBACK_INVALID'));
-      }
-      if (attempt.processing) {
-        throw new IamError('IAM_ATTEMPT_IN_PROGRESS', safeMessage('IAM_ATTEMPT_IN_PROGRESS'));
-      }
-      const issuers = callback.searchParams.getAll('iss');
-      if (issuers.length === 1 && issuers[0] && issuers[0] !== attempt.metadata.issuer) {
-        throw new IamError('IAM_CALLBACK_ISSUER', safeMessage('IAM_CALLBACK_ISSUER'));
-      }
-      if (now() > attempt.expiresAt) {
-        clearAttempt();
-        ctx.error = 'IAM_ATTEMPT_EXPIRED';
-        if (ctx.state === 'authenticating') ctx.state = 'error';
-        ctx.notify();
-        throw new IamError('IAM_ATTEMPT_EXPIRED', safeMessage('IAM_ATTEMPT_EXPIRED'));
-      }
-      let parsed;
-      try {
-        parsed = parseCallbackUrl(rawUrl);
-      } catch (cause) {
-        const code = tokenErrorMessage(cause);
-        if (!attempt || !safeStateEqual(attempt.state, receivedState)) {
-          throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
-        }
-        if (code === 'IAM_AUTHORIZATION_ERROR') ctx.fail(code);
-        throw new IamError(code, safeMessage(code));
-      }
-      const { code } = parsed;
-      if (!attempt || !safeStateEqual(attempt.state, receivedState)) {
-        throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
-      }
-      const current = attempt;
-      provider.assertAtomic(current.targetStore, current.credentials);
-      if (parsed.iss !== undefined && parsed.iss !== current.metadata.issuer) {
-        throw new IamError('IAM_CALLBACK_ISSUER', safeMessage('IAM_CALLBACK_ISSUER'));
-      }
-      // Claim the attempt synchronously before the first await. A replay must
-      // never consume the same authorization code or interfere with its owner.
-      current.processing = true;
-      const attemptEpoch = authEpoch;
-      const consumption = beginConsumption(current.metadata.issuer, current.targetStore, current.credentials, current.consumption ?? null);
-      const isCurrent = () => {
-        if (attempt === current && authEpoch === attemptEpoch && ctx.state === 'authenticating'
-          && now() > current.expiresAt) {
-          current.expired = true;
-          clearAttempt();
-          ctx.error = 'IAM_ATTEMPT_EXPIRED';
-          ctx.state = 'error';
-          ctx.notify();
-        }
-        return attempt === current && authEpoch === attemptEpoch && ctx.state === 'authenticating';
-      };
-      const interrupted = () => current.expired
-        ? new IamError('IAM_ATTEMPT_EXPIRED', safeMessage('IAM_ATTEMPT_EXPIRED'))
-        : new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-      let issuedToken;
-      let intendedGrant;
-      let intendedStore;
-      let writeUnconfirmed = false;
-      let guardRejection;
-      let authentication;
-      const callbackGuard = () => {
-        if (!isCurrent()) throw interrupted();
-        ctx.assertExclusive();
-        provider.assertAtomic(current.targetStore, current.credentials);
-        if (!isCurrent()) throw interrupted();
-      };
-      try {
-        authentication = await grants.prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
-        callbackGuard();
-        const token = await exchangeCode({
-          tokenEndpoint: current.metadata.tokenEndpoint,
-          code,
-          codeVerifier: current.verifier,
-          clientAuthentication: authentication,
-          redirectUri: current.redirectUri,
-          clientId: config.clientId,
-          resource: config.gatewayResource,
-          fetchImpl,
-          timeoutMs: config.httpTimeoutMs,
-        });
-        issuedToken = token;
-        assertClientAuthCurrent(authentication);
-        callbackGuard();
-        provider.assertAtomic(current.targetStore, current.credentials);
-        if (!token.idToken) {
-          throw new IamError('IAM_ID_TOKEN_INVALID', safeMessage('IAM_ID_TOKEN_INVALID'));
-        }
-        const claims = await grants.verifyWithJwks(token.idToken, {
-          uri: current.metadata.jwksUri,
-          issuer: current.metadata.issuer,
-          clientId: config.clientId,
-          nonce: current.nonce,
-          guard: () => { callbackGuard(); assertClientAuthCurrent(authentication); },
-          accessToken: token.accessToken,
-        });
-        assertClientAuthCurrent(authentication);
-        const grant = await grants.buildGrant(token, claims, current.metadata, nowIso(now()), authentication);
-        assertClientAuthCurrent(authentication);
-        if (!isCurrent()) throw interrupted();
-        ctx.assertExclusive();
-        provider.assertAtomic(current.targetStore, current.credentials);
-        intendedStore = current.targetStore;
-        intendedGrant = grant;
-        writeUnconfirmed = true;
-        const written = await intendedStore.write(grant, {
-          guard: () => {
-            provider.assertAtomic(current.targetStore, current.credentials);
-            try { assertClientAuthCurrent(authentication); } catch (cause) { guardRejection = cause; throw cause; }
-            if (!isCurrent()) {
-              guardRejection = interrupted();
-              throw guardRejection;
-            }
-            return true;
-          },
-        });
-        if (!isDeepStrictEqual(written.record, { kind: 'grant', payload: grant })) {
-          throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
-        }
-        writeUnconfirmed = false;
-        assertClientAuthCurrent(authentication);
-        provider.assertAtomic(current.targetStore, current.credentials);
-        if (!isCurrent()) throw interrupted();
-        // Show any owner mismatch without changing the user's stored key.
-        ctx.lastGrant = grant;
-        grants.own(grant, current.targetStore);
-        await gateway.load({ force: true });
-        assertClientAuthCurrent(authentication);
-        provider.assertAtomic(current.targetStore, current.credentials);
-        if (!isCurrent()) throw interrupted();
-        grants.rememberAuthentication(authentication, grant);
-        await grants.loadIdentityProfile(grant);
-        if (!isCurrent()) throw interrupted();
-        clearAttempt();
-        ctx.publish('SIGN_IN_SUCCESS');
-        adoptConsumption(consumption, grant);
-        return ctx.view();
-      } catch (cause) {
-        const guardPreventedWrite = guardRejection && cause === guardRejection;
-        // A late HTTP/JWKS failure is no longer authoritative after auth changed.
-        if (authentication && isCurrent()) {
-          try { assertClientAuthCurrent(authentication); } catch (currentCause) { cause = currentCause; }
-        }
-        let cleanupUnknown = Boolean(writeUnconfirmed && !guardPreventedWrite);
-        if (intendedStore && intendedGrant && !guardPreventedWrite) {
-          const cleanup = await intendedStore.discardCallbackGrant(intendedGrant).catch(() => ({ ok: false }));
-          if (!cleanup.ok) cleanupUnknown = true;
-        }
-        if (ctx.lastGrant === intendedGrant) ctx.lastGrant = null;
-        if (issuedToken?.refreshToken && current.metadata.revocationEndpoint) {
-          try {
-            const cleanupAuthentication = await grants.prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
-            await revokeToken({
-              revocationEndpoint: current.metadata.revocationEndpoint,
-              token: issuedToken.refreshToken,
-              clientAuthentication: cleanupAuthentication,
-              tokenTypeHint: 'refresh_token',
-              clientId: config.clientId,
-              fetchImpl,
-              timeoutMs: config.httpTimeoutMs,
-            });
-            assertClientAuthCurrent(cleanupAuthentication);
-          } catch { /* no new source, no unauthenticated fallback or retry */ }
-        }
-        const stillCurrent = isCurrent();
-        if (cleanupUnknown) {
-          if (!ctx.disposed && !signingOut && (stillCurrent || (!attempt && (ctx.state === 'signed-out' || ctx.state === 'error')))) {
-            if (stillCurrent) clearAttempt();
-            ctx.state = 'error';
-            ctx.error = 'IAM_CREDENTIALS_CLEAR_FAILED';
-            ctx.notify();
-          }
-          throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
-        }
-        if (!stillCurrent || cause?.code === 'IAM_ATTEMPT_CANCELLED' || cause?.code === 'IAM_ATTEMPT_EXPIRED') {
-          throw cause?.code === 'IAM_ATTEMPT_EXPIRED' ? cause : interrupted();
-        }
-        const failureCode = tokenErrorMessage(cause);
-        ctx.fail(failureCode);
-        throw new IamError(failureCode, safeMessage(failureCode));
-      }
-    },
-
-    async cancelSignIn() {
-      consumptionWitness?.invalidate();
-      if (ctx.disposed) return ctx.view();
-      authEpoch += 1;
-      observedPending = null;
-      // A cancelled attempt no longer owns the state machine, even when it never
-      // reached `authenticating` (discovery or client-auth was still pending):
-      // leaving its promise registered would keep blocking background hydration.
-      signInPromise = null;
-      if (ctx.state !== 'authenticating') return ctx.view();
-      clearAttempt();
-      ctx.lastGrant = null;
-      provider.gatewayEpoch += 1;
-      provider.gatewaySummary = null;
-      provider.gatewayLoadedAt = 0;
-      return ctx.publish('CANCEL');
-    },
+    /** Sign-in attempt and its callback live in service-signin.mjs. */
+    startSignIn: signin.startSignIn,
+    _startSignInOnce: signin.signInOnce,
+    handleCallback: signin.handleCallback,
+    cancelSignIn: signin.cancelSignIn,
 
     async signOut() {
       consumptionWitness?.invalidate();
