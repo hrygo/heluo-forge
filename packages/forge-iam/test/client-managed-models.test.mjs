@@ -650,6 +650,7 @@ test('a cached catalogue is scoped to one person and gateway', async t => {
 });
 
 test('a stale catalogue is shown with its retry time instead of a blank panel', async t => {
+  const requests = [];
   const stale = {
     ...view,
     modelAccess: {
@@ -658,7 +659,12 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
       models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
     },
   };
-  const panel = await mountPanel(async () => Response.json(stale));
+  const panel = await mountPanel(async (path) => {
+    requests.push(path);
+    if (path === '/api/forge-iam/view') return Response.json(stale);
+    if (path === '/api/forge-iam/models') return Response.json({ models: [{ id: 'corp-chat' }], view });
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
   t.after(() => panel.close());
   const text = panel.text(panel.render());
   assert.match(text, /已缓存 2 个模型/);
@@ -669,4 +675,15 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
   assert.match(text, /目录待刷新/);
   // The reason is explained once, not twice.
   assert.equal(text.split('暂时无法获取企业模型').length - 1, 1);
+
+  // In-notice retry button triggers models refresh immediately without scrolling to bottom
+  const retryBtn = panel.findButton(panel.render(), '立即重试');
+  assert.ok(retryBtn, 'stale notice must provide an immediate retry button');
+  await retryBtn.props.onClick();
+  assert.ok(requests.includes('/api/forge-iam/models'));
+
+  // Sticky toolbar refresh button also triggers models refresh
+  const toolbarRefreshBtn = panel.findButton(panel.render(), '刷新目录');
+  assert.ok(toolbarRefreshBtn, 'toolbar must provide a quick refresh button');
+  await toolbarRefreshBtn.props.onClick();
 });

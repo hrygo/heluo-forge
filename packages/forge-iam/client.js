@@ -200,6 +200,9 @@ window.__ModuleLoader__.load({
         border-radius: 50%;
         animation: fiam-spin 0.8s linear infinite;
       }
+      .fiam-spin {
+        animation: fiam-spin 0.8s linear infinite;
+      }
       @keyframes fiam-spin {
         to { transform: rotate(360deg); }
       }
@@ -2340,14 +2343,43 @@ window.__ModuleLoader__.load({
           ? h('p', { style: muted }, '请先保存网关地址和个人访问凭证。')
           : null,
         view.modelAccess?.stale
-          ? h('div', { className: 'fiam-notice fiam-notice-warn', style: { marginTop: 8, width: '100%', boxSizing: 'border-box' } },
-            h('span', null,
+          ? h('div', {
+            className: 'fiam-notice fiam-notice-warn',
+            style: {
+              marginTop: 8,
+              width: '100%',
+              boxSizing: 'border-box',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              flexWrap: 'wrap',
+            },
+          },
+            h('span', { style: { flex: '1 1 0', minWidth: 200 } },
               `目录未更新：${errorNotice(view.modelAccess.error)}`
               // A passed or absent retry time means the automatic chain is done;
-              // pointing at the existing refresh button stays true either way.
+              // pointing at the retry button or cached availability stays clear.
               + (Math.round((Number(view.modelAccess.retryAt) - Date.now()) / 1000) >= 1
                 ? ` 约 ${Math.round((Number(view.modelAccess.retryAt) - Date.now()) / 1000)} 秒后自动重试。`
-                : ' 可点击「刷新模型列表」重试。')),
+                : '（已加载本地缓存模型，可继续使用）。')),
+            h('button', {
+              type: 'button',
+              className: 'fiam-quick-btn',
+              style: {
+                ...secondaryButton,
+                minHeight: 24,
+                height: 24,
+                padding: '0 8px',
+                fontSize: 12,
+                flexShrink: 0,
+                background: 'transparent',
+                borderColor: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, transparent)',
+                color: 'var(--dsw-alias-state-warn-primary)',
+              },
+              disabled: credential.saving || modelSaving || viewBarrier.current.pending,
+              onClick: refreshModels,
+            }, credential.saving ? '正在刷新…' : '立即重试'),
           )
           : null,
         view.modelAccess?.configured && modelList.length > 0
@@ -2408,6 +2440,40 @@ window.__ModuleLoader__.load({
                   onClick: enableAllModelsWithDefaults,
                 }, `全部默认启用 (${unenabledCount})`)
                 : null,
+              h('button', {
+                type: 'button',
+                className: 'fiam-quick-btn',
+                style: {
+                  ...secondaryButton,
+                  minHeight: 28,
+                  height: 28,
+                  padding: '0 8px',
+                  fontSize: 12,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                },
+                disabled: credential.saving || modelSaving || viewBarrier.current.pending || view.state !== 'ready' || gateway.state !== 'configured',
+                title: '从企业网关重新同步最新模型目录',
+                'aria-label': '刷新模型目录',
+                onClick: refreshModels,
+              },
+                h('svg', {
+                  key: 'refresh-icon',
+                  viewBox: '0 0 16 16',
+                  width: 12,
+                  height: 12,
+                  fill: 'none',
+                  stroke: 'currentColor',
+                  strokeWidth: 1.6,
+                  className: credential.saving ? 'fiam-spin' : '',
+                  style: { flexShrink: 0 },
+                },
+                  h('path', { d: 'M13.5 8a5.5 5.5 0 1 1-1.6-3.9l1.6-1.6' }),
+                  h('path', { d: 'M13.5 2.5v4h-4' })
+                ),
+                credential.saving ? '正在刷新…' : '刷新目录',
+              ),
             )
           )
           : null,
