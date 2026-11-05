@@ -286,7 +286,7 @@ DSH_WEB_ORIGIN=http://127.0.0.1:<dsh-port> node packages/forge-iam/scripts/mock-
 
 ## 默认模型判定与写入结果
 
-Host 已接入严格只读编排：可选绑定 llm 与 agentDefaultModel，在 IAM 就绪、网关状态变更和 llm/adapters-updated 时合并观察。defaultModel 为空时不注册模型注入，也不调用私有 SDK getter；缺 SDK、不满足 ready、凭据不匹配或选择无法证明时保守返回。观察只调用 listProviders/currentSelection，不读 saveSelection 属性、不发模型请求、不做额外 discovery。所有现有选择和 reasoningEffort 都保留，没有配置或私有注入可以解锁保存。
+Host 已接入严格只读编排：可选绑定 llm 与 agentDefaultModel，在 IAM 就绪、网关状态变更和 llm/adapters-updated 时合并观察。defaultModel 为空时不注册模型注入，也不调用私有 SDK getter；缺 SDK、不满足 ready、凭据不匹配或选择无法证明时保守返回。观察只调用 listProviders/currentSelection，不读 saveSelection 属性、不发模型请求、不做额外 discovery。所有现有选择和 reasoningEffort 都保留，没有配置或私有注入可以解锁保存。该路径仍只读；唯一的写入在企业模型运行时，见下文“新对话默认模型对齐”。
 
 `reconcileDefaultModel()` 仅为本包 Host 协调方法，不是 DSH 新增 SDK API 或 Remote/HTTP 接口。返回冻结的 `{ mode: 'read-only', written: false, verified: false, reason }`；reason 为固定代码，不带主体、原始选择、Key、令牌或 SDK 异常。结果没有放行含义，不证明目标模型存在、凭据有效、当前人员/用途或服务端权限。
 
@@ -307,7 +307,19 @@ Host 已接入严格只读编排：可选绑定 llm 与 agentDefaultModel，在 
 
 为兼容现有原因码，`selection-write-failed` 仍表示写入调用报错，不表示设置必然未变。 调用方应使用 `written === false` 判断未调用，不能用 `!written` 将 `null` 误当作可安全重试的未写入。SDK 异常与不一致回读的原文不进入 notes；结果对象仍含调用方模型标识，不能未经筛选当作脱敏诊断导出。
 
-2026-11-02 只读 SDK 核验确认：`currentSelection()` 的声明始终返回 provider/model 对象，没有 explicit 或已定义的空态；`saveSelection(next)` 是完整选择覆盖，省略 reasoningEffort 会清除该设置。保存按提交顺序排队，没有比较快照、同步 guard 或取消接口，无配置 editor 时可不改设置而正常返回。因此不能把 null/undefined/双方空串或 provider 暂时未注册直接解释为“用户没有显式选择”，也不能承诺写前检查能撤回已排队的保存。用户已选择真实 Host 严格只读，禁止自动保存且完整保留现有设置；只读编排已按禁写边界接线。不把临时 fixture 的空态、显式标记或条件回调当 SDK 能力，真实自动保存待可靠空态、条件提交与另行授权。
+2026-11-02 只读 SDK 核验确认：`currentSelection()` 的声明始终返回 provider/model 对象，没有 explicit 或已定义的空态；`saveSelection(next)` 是完整选择覆盖，省略 reasoningEffort 会清除该设置。保存按提交顺序排队，没有比较快照、同步 guard 或取消接口，无配置 editor 时可不改设置而正常返回。因此不能把 null/undefined/双方空串或 provider 暂时未注册直接解释为“用户没有显式选择”，也不能承诺写前检查能撤回已排队的保存。用户已选择真实 Host 严格只读，禁止自动保存且完整保留现有设置；只读编排已按禁写边界接线。不把临时 fixture 的空态、显式标记或条件回调当 SDK 能力。
+
+### 新对话默认模型对齐
+
+2026-11-05 用户确认：内网环境官方模型不可用，企业补丁禁用官方行后 DSH 的出厂默认模型必然失效，首次登录直接发消息会得到 `session/model-unavailable`。因此由企业模型运行时（`src/managed-models.mjs` 调用 `src/host-default-model.mjs`）在目录就绪和启用集保存后对齐一次：
+
+- 只在当前默认**可证明不可用**时写：提供方未注册；或是企业提供方但模型未启用、不在目录；或已注册提供方的 `listModels` 结果不含该模型。
+- `currentSelection()` 读不出、返回异步值、`listModels` 抛错均按未知处理，不写。仍可用的选择（含非企业提供方）一律保留。
+- 写入目标为 `{ provider: 企业提供方, model: defaultModelId }`，不带 reasoningEffort，由适配器取该模型推理强度下界。
+- 写前复查 IAM 会话代际与准入；单飞，进行中再次触发只补跑一次；失败不重试、不补偿。对齐成功后发出 `llm/adapters-updated`，让客户端目录重新读取默认值。
+- 结果以固定代码暴露在 `modelAccess.hostDefaultModel`：`aligned` / `kept` / `no-target` / `unsupported` / `unknown` / `stale` / `failed`，不含选择原文、主体或 SDK 异常。
+
+SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩小竞态窗口，不能撤回已排队的保存。
 
 ## 限制与生产门禁
 

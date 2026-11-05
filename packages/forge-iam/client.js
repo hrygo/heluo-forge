@@ -208,10 +208,10 @@ window.__ModuleLoader__.load({
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 10px;
+        gap: 12px;
         flex-wrap: wrap;
-        margin-top: 6px;
-        margin-bottom: 6px;
+        margin-top: 8px;
+        margin-bottom: 8px;
       }
       .fiam-model-search {
         flex: 1 1 200px;
@@ -229,6 +229,12 @@ window.__ModuleLoader__.load({
       .fiam-model-search:focus {
         border-color: var(--dsw-alias-state-business-primary);
         outline: none;
+      }
+      .fiam-model-toolbar-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
       }
       .fiam-model-filters {
         display: inline-flex;
@@ -261,6 +267,26 @@ window.__ModuleLoader__.load({
         font-weight: 500;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
       }
+      .fiam-batch-btn {
+        border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 30%, var(--dsw-alias-border-l3)) !important;
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, var(--dsw-alias-bg-layer-1)) !important;
+        color: var(--dsw-alias-state-business-primary) !important;
+        font-weight: 500;
+      }
+      .fiam-batch-btn:hover {
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 15%, var(--dsw-alias-bg-layer-1)) !important;
+      }
+      .fiam-unsaved-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 12px;
+        margin: 4px 0 8px 0;
+        border-radius: var(--dsw-radius-md, 8px);
+        background: color-mix(in srgb, var(--dsw-alias-state-warning-primary, #e6a23c) 10%, var(--dsw-alias-bg-layer-1));
+        border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-warning-primary, #e6a23c) 35%, transparent);
+      }
       .fiam-model-list {
         display: flex;
         flex-direction: column;
@@ -289,17 +315,22 @@ window.__ModuleLoader__.load({
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 8px 12px;
-        gap: 10px;
-        min-height: 40px;
+        padding: 9px 12px;
+        gap: 12px;
+        min-height: 48px;
       }
       .fiam-model-info {
         display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
+        flex-direction: column;
+        gap: 5px;
         min-width: 0;
         flex: 1;
+      }
+      .fiam-model-header-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
       }
       .fiam-model-dot {
         width: 8px;
@@ -315,10 +346,20 @@ window.__ModuleLoader__.load({
         background: var(--dsw-alias-label-dimmed, var(--dsw-alias-border-l3));
       }
       .fiam-model-name {
-        font-weight: 500;
+        font-weight: 600;
         font-size: var(--dsw-font-xs-13);
         color: var(--dsw-alias-label-primary);
         line-height: 20px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 360px;
+      }
+      .fiam-model-meta-line {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
       }
       .fiam-model-id {
         font-family: var(--ds-font-family-code, monospace);
@@ -330,17 +371,28 @@ window.__ModuleLoader__.load({
         line-height: 16px;
       }
       .fiam-model-advanced {
-        padding: 12px 14px;
+        padding: 14px 16px;
         border-top: 0.5px solid var(--dsw-alias-border-l2);
         background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-module-platform));
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 14px;
       }
-      .fiam-field-grid {
+      .fiam-field-full {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .fiam-field-grid-spec {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 14px;
+      }
+      .fiam-field-col {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        min-width: 0;
       }
       .fiam-field-title {
         font-size: 12px;
@@ -411,12 +463,24 @@ window.__ModuleLoader__.load({
       }
       .fiam-model-advanced-actions {
         display: flex;
-        justify-content: flex-end;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-top: 4px;
+        padding-top: 10px;
+        border-top: 0.5px solid var(--dsw-alias-border-l3);
+        flex-wrap: wrap;
+      }
+      .fiam-model-actions-left {
+        display: flex;
         align-items: center;
         gap: 8px;
-        margin-top: 4px;
-        padding-top: 8px;
-        border-top: 0.5px solid var(--dsw-alias-border-l3);
+        flex-wrap: wrap;
+      }
+      .fiam-model-actions-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         flex-wrap: wrap;
       }
       .fiam-journey-bar {
@@ -1463,6 +1527,7 @@ window.__ModuleLoader__.load({
       const {
         h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
         resetModelOption, disableModelOption, enableModelOption, enableModelWithDefaults,
+        saveModelOptions,
         modelSaving, viewBarrier, view, fieldLabel, inputStyle, primaryButton, secondaryButton, muted,
       } = ctx;
       const displayName = opt.name || model.name || model.id;
@@ -1495,16 +1560,20 @@ window.__ModuleLoader__.load({
       return h('div', { key: model.id, className: `fiam-model-item${isExpanded ? ' fiam-model-item-expanded' : ''}` },
         h('div', { className: 'fiam-model-row' },
           h('div', { className: 'fiam-model-info' },
-            h('span', { className: `fiam-model-dot ${isEnabled ? 'fiam-model-dot-enabled' : 'fiam-model-dot-disabled'}` }),
-            h('span', { className: 'fiam-model-name' }, displayName),
-            displayName !== model.id ? h('span', { className: 'fiam-model-id' }, model.id) : null,
-            h('span', { className: 'fiam-badge fiam-badge-idle' }, `${contextVal} · 输出 ${maxTokensVal}`),
-            hasImage ? h('span', { className: 'fiam-badge fiam-badge-success' }, '视觉图片') : null,
-            hasReasoning ? h('span', { className: 'fiam-badge fiam-badge-authenticating' }, reasoningBadgeText) : null,
-            isEnabled
-              ? h('span', { className: 'fiam-badge fiam-badge-success' }, isDefaultModel ? '默认可用' : '已启用')
-              : h('span', { className: 'fiam-badge fiam-badge-idle' }, '未启用'),
-            hasCustom ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '已个性化') : null,
+            h('div', { className: 'fiam-model-header-line' },
+              h('span', { className: `fiam-model-dot ${isEnabled ? 'fiam-model-dot-enabled' : 'fiam-model-dot-disabled'}` }),
+              h('span', { className: 'fiam-model-name', title: `${displayName} (${model.id})` }, displayName),
+              isEnabled
+                ? h('span', { className: 'fiam-badge fiam-badge-success' }, isDefaultModel ? '默认可用' : '已启用')
+                : h('span', { className: 'fiam-badge fiam-badge-idle' }, '未启用'),
+            ),
+            h('div', { className: 'fiam-model-meta-line' },
+              h('span', { className: 'fiam-badge fiam-badge-idle' }, `${contextVal} · 输出 ${maxTokensVal}`),
+              hasImage ? h('span', { className: 'fiam-badge fiam-badge-success' }, '视觉图片') : null,
+              hasReasoning ? h('span', { className: 'fiam-badge fiam-badge-authenticating' }, reasoningBadgeText) : null,
+              hasCustom ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '已个性化') : null,
+              displayName !== model.id ? h('span', { className: 'fiam-model-id' }, model.id) : null,
+            ),
           ),
           h('div', { className: 'fiam-model-row-actions' },
             !isEnabled
@@ -1526,7 +1595,7 @@ window.__ModuleLoader__.load({
                   title: '恢复为默认参数并立即保存生效',
                   'aria-label': `默认参数启用 ${model.id}`,
                   onClick: () => enableModelWithDefaults(model.id),
-                }, '默认参数启用')
+                }, '恢复默认')
                 : null,
             h('button', {
               type: 'button',
@@ -1539,9 +1608,12 @@ window.__ModuleLoader__.load({
         ),
         isExpanded
           ? h('div', { className: 'fiam-model-advanced' },
-            h('div', { className: 'fiam-field-grid' },
+            h('div', { className: 'fiam-field-full' },
               h('label', { style: fieldLabel },
-                h('span', { className: 'fiam-field-title' }, '显示名称'),
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
+                  h('span', { className: 'fiam-field-title' }, '显示名称'),
+                  h('span', { className: 'fiam-field-hint', style: muted }, '留空时使用模型 ID'),
+                ),
                 h('input', {
                   type: 'text',
                   style: inputStyle,
@@ -1550,10 +1622,15 @@ window.__ModuleLoader__.load({
                   'aria-label': `显示名称 ${idx + 1}`,
                   onChange: (e) => updateOptionField(model.id, 'name', e.target.value),
                 }),
-                h('span', { className: 'fiam-field-hint', style: muted }, '留空时使用模型 ID'),
               ),
-              h('label', { style: fieldLabel },
-                h('span', { className: 'fiam-field-title' }, '上下文窗口 (Context Window)'),
+            ),
+            h('div', { className: 'fiam-field-grid-spec' },
+              h('label', { className: 'fiam-field-col', style: fieldLabel },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
+                  h('span', { className: 'fiam-field-title' }, '上下文窗口 (Context Window)'),
+                  h('span', { className: 'fiam-field-hint', style: contextInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
+                    contextInvalid ? '请输入正整数或 K/M 容量值（如 128K、200K、1M）' : '默认 200K；支持输入数字或 K/M，如 128K、200K、1M'),
+                ),
                 h('input', {
                   type: 'text',
                   style: inputStyle,
@@ -1574,11 +1651,13 @@ window.__ModuleLoader__.load({
                     }, preset === '200K' ? '200K (默认)' : preset);
                   })
                 ),
-                h('span', { className: 'fiam-field-hint', style: contextInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
-                  contextInvalid ? '请输入正整数或 K/M 容量值（如 128K、200K、1M）' : '默认 200K；支持输入数字或 K/M，如 128K、200K、1M'),
               ),
-              h('label', { style: fieldLabel },
-                h('span', { className: 'fiam-field-title' }, '最大输出 Token (Max Tokens)'),
+              h('label', { className: 'fiam-field-col', style: fieldLabel },
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
+                  h('span', { className: 'fiam-field-title' }, '最大输出 Token (Max Tokens)'),
+                  h('span', { className: 'fiam-field-hint', style: maxTokensInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
+                    maxTokensInvalid ? '请输入正整数或 K/M 容量值（如 8K、32K、64K）' : '默认 64K；留空使用默认上限，支持 8K、32K、64K、128K'),
+                ),
                 h('input', {
                   type: 'text',
                   style: inputStyle,
@@ -1599,8 +1678,6 @@ window.__ModuleLoader__.load({
                     }, preset === '64K' ? '64K (默认)' : preset);
                   })
                 ),
-                h('span', { className: 'fiam-field-hint', style: maxTokensInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
-                  maxTokensInvalid ? '请输入正整数或 K/M 容量值（如 8K、32K、64K）' : '默认 64K；留空使用默认上限，支持 8K、32K、64K、128K'),
               ),
             ),
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
@@ -1689,36 +1766,47 @@ window.__ModuleLoader__.load({
               h('span', { className: 'fiam-field-hint', style: muted }, '仅需指定推理强度下界与上界；若下界高于上界将自动对齐。对话中默认保留您上次所选强度，初次未选择时自动采用下界最低强度。'),
             ),
             h('div', { className: 'fiam-model-advanced-actions' },
-              !isEnabled || hasCustom
-                ? h('button', {
+              h('div', { className: 'fiam-model-actions-left' },
+                hasCustom
+                  ? h('button', {
+                    type: 'button',
+                    style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
+                    disabled: actionBusy,
+                    onClick: () => resetModelOption(model.id),
+                  }, '恢复默认参数')
+                  : null,
+                isEnabled
+                  ? h('button', {
+                    type: 'button',
+                    style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
+                    disabled: actionBusy,
+                    'aria-label': `停用 ${model.id}`,
+                    onClick: () => disableModelOption(model.id),
+                  }, '停用模型')
+                  : h('button', {
+                    type: 'button',
+                    style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
+                    disabled: actionBusy,
+                    'aria-label': `启用 ${model.id}`,
+                    onClick: () => enableModelOption(model.id),
+                  }, '启用模型')
+              ),
+              h('div', { className: 'fiam-model-actions-right' },
+                h('button', {
                   type: 'button',
                   style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
                   disabled: actionBusy,
-                  'aria-label': `采用默认参数启用 ${model.id}`,
-                  onClick: () => enableModelWithDefaults(model.id),
-                }, '一键采用默认参数启用')
-                : null,
-              hasCustom
-                ? h('button', {
-                  type: 'button',
-                  style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
-                  onClick: () => resetModelOption(model.id),
-                }, '恢复默认参数')
-                : null,
-              isEnabled
-                ? h('button', {
-                  type: 'button',
-                  style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
-                  'aria-label': `停用 ${model.id}`,
-                  onClick: () => disableModelOption(model.id),
-                }, '停用模型')
-                : h('button', {
+                  onClick: () => toggleModelExpand(model.id),
+                }, '收起'),
+                h('button', {
                   type: 'button',
                   className: 'forge-iam-primary',
-                  style: { ...primaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
-                  'aria-label': `启用 ${model.id}`,
-                  onClick: () => enableModelOption(model.id),
-                }, '启用模型')
+                  style: { ...primaryButton, height: 28, minHeight: 28, padding: '0 12px', fontSize: 12 },
+                  disabled: actionBusy,
+                  'aria-label': `保存模型配置`,
+                  onClick: () => saveModelOptions(),
+                }, modelSaving ? '正在保存…' : '保存模型配置')
+              )
             )
           )
           : null
@@ -1822,8 +1910,20 @@ window.__ModuleLoader__.load({
             : null,
         ),
         h('p', { style: muted }, view.modelAccess?.configured
-          ? '企业模型目录实时通过网关 /v1/models 获取并按模型族排序。首次同步自动启用列表首个模型；您可以点击模型行的“一键启用”采用默认参数立即启用任意模型，或展开“精细配置”调整容量、视觉模态与推理强度上下界。'
+          ? '企业模型已与网关目录保持同步。您可以点击列表中的“一键启用”快速使用推荐参数，或展开“精细配置”自定义容量规格、视觉支持与深度思考档位。'
           : '请先在上方设置网关地址和个人 Key。保存后将自动获取授权模型。'),
+        view.modelAccess?.configured && modelList.length > 0
+          ? h('div', { className: 'fiam-callout', style: { marginTop: 6, marginBottom: 8 } },
+            h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+              h('circle', { cx: 8, cy: 8, r: 6 }),
+              h('path', { d: 'M8 7v4m0-6h.01' })
+            ),
+            h('div', null,
+              h('strong', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, '参数配置提示：'),
+              '不同模型的处理能力各不相同，上下文窗口与单次最大输出应不高于内部约定的规格上限；若配置超出模型实际支持能力，可能导致上下文溢出（Context Overflow）、内容截断或网关拒绝调用。'
+            )
+          )
+          : null,
         view.modelAccess?.configured && modelList.length > 0
           ? h('div', { className: 'fiam-model-toolbar' },
             h('input', {
@@ -1835,7 +1935,7 @@ window.__ModuleLoader__.load({
               value: modelQuery,
               onChange: (e) => setModelQuery(e.target.value),
             }),
-            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+            h('div', { className: 'fiam-model-toolbar-controls' },
               h('div', { className: 'fiam-model-filters' },
                 h('button', {
                   type: 'button',
@@ -1856,13 +1956,37 @@ window.__ModuleLoader__.load({
               unenabledCount > 0
                 ? h('button', {
                   type: 'button',
-                  className: 'fiam-quick-btn',
+                  className: 'fiam-quick-btn fiam-batch-btn',
                   style: { ...secondaryButton, minHeight: 28, height: 28, padding: '0 10px', fontSize: 12 },
                   disabled: modelSaving || viewBarrier.current.pending,
+                  title: '以推荐默认参数一次性启用全部未开启的模型',
                   'aria-label': '全部默认启用',
                   onClick: enableAllModelsWithDefaults,
                 }, `全部默认启用 (${unenabledCount})`)
                 : null,
+            )
+          )
+          : null,
+        view.modelAccess?.configured && modelList.length > 0 && hasUnsavedModelChanges
+          ? h('div', { className: 'fiam-unsaved-banner' },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存'),
+              h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } }, '模型配置有未保存的修改'),
+            ),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+              h('button', {
+                type: 'button',
+                className: 'forge-iam-primary',
+                style: { ...primaryButton, height: 26, minHeight: 26, padding: '0 10px', fontSize: 12 },
+                disabled: modelSaving || viewBarrier.current.pending,
+                onClick: saveModelOptions,
+              }, modelSaving ? '正在保存…' : '保存模型配置'),
+              h('button', {
+                type: 'button',
+                style: { ...secondaryButton, height: 26, minHeight: 26, padding: '0 10px', fontSize: 12 },
+                disabled: modelSaving || viewBarrier.current.pending,
+                onClick: discardModelChanges,
+              }, '放弃修改'),
             )
           )
           : null,
@@ -1885,6 +2009,7 @@ window.__ModuleLoader__.load({
                 return renderModelItem({
                   h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
                   resetModelOption, disableModelOption, enableModelOption, enableModelWithDefaults,
+                  saveModelOptions,
                   modelSaving, viewBarrier, view,
                   fieldLabel, inputStyle, primaryButton, secondaryButton, muted,
                 });

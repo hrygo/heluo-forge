@@ -56,7 +56,7 @@
 | CORP-DSH-PLAN-002 | 插件市场 P0 接入取证单 | [plans/market-p0-verification.md](<plans/market-p0-verification.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-PLAN-003 | 已关闭任务修复验收台账 | [plans/fix-acceptance-ledger.md](<plans/fix-acceptance-ledger.md>) | V0.1.0 | 草案（代拟，待负责人确认） | 平台组（代拟） | — |
 | CORP-DSH-PLAN-004 | IAM 网关联合变更实施计划 | [plans/2026-11-02-iam-gateway-atomic.md](<plans/2026-11-02-iam-gateway-atomic.md>) | V0.1.1 | 草案 | 平台组（代拟） | 本地模拟验收；不授予生产能力 |
-| CORP-DSH-PLAN-005 | IAM 默认模型只读编排实施计划 | [plans/2026-11-02-iam-default-model-readonly.md](<plans/2026-11-02-iam-default-model-readonly.md>) | V0.1.1 | 草案 | 平台组（代拟） | 源码与隔离模拟；禁止真实模型设置写入 |
+| CORP-DSH-PLAN-005 | IAM 默认模型只读编排实施计划 | [plans/2026-11-02-iam-default-model-readonly.md](<plans/2026-11-02-iam-default-model-readonly.md>) | V0.1.2 | 草案 | 平台组（代拟） | 源码与隔离模拟；禁止真实模型设置写入 |
 | CORP-DSH-PLAN-006 | IAM 机密客户端隔离开发实施计划 | [plans/2026-11-02-iam-confidential-isolated.md](<plans/2026-11-02-iam-confidential-isolated.md>) | V0.2.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；真实来源与生产关闭 |
 | CORP-DSH-PLAN-007 | IAM 模型与工具隔离消费实施计划 | [plans/2026-11-02-iam-consumer-isolated.md](<plans/2026-11-02-iam-consumer-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 完整 source/mock 设计已获用户批准；不动真实环境 |
 | CORP-DSH-PLAN-008 | IAM 下一阶段收尾计划 | [plans/2026-11-03-iam-mock-closeout.md](<plans/2026-11-03-iam-mock-closeout.md>) | V0.6.0 | 草案 | 平台组（代拟） | 最小订阅source/mock已实现并定向验收；真实注册、真实Client接线与probe不开放 |
