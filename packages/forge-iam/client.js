@@ -737,30 +737,85 @@ window.__ModuleLoader__.load({
         left: 0;
         right: 0;
         width: auto;
-        min-width: 0;
+        min-width: 250px;
         max-width: 100%;
         box-sizing: border-box;
         background: var(--dsw-alias-bg-layer-1);
-        border: 0.5px solid var(--dsw-alias-border-l2);
-        border-radius: var(--dsw-radius-md, 10px);
-        box-shadow: var(--dsw-elevation-prominent, 0 10px 25px -5px rgba(0, 0, 0, 0.2));
-        padding: 10px;
+        border: 0.5px solid var(--dsw-alias-border-l3);
+        border-radius: var(--dsw-radius-xl, 14px);
+        box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.16), 0 4px 12px rgba(0, 0, 0, 0.08);
+        padding: 12px;
         z-index: 950;
         font: var(--dsw-font-xs-13);
         color: var(--dsw-alias-label-primary);
-        backdrop-filter: blur(12px);
+        backdrop-filter: blur(20px);
       }
       .fiam-launcher-rail .fiam-launcher-menu {
         left: calc(100% + 10px);
         right: auto;
         bottom: 0;
-        width: 240px;
-        max-width: 260px;
+        width: 260px;
+        max-width: 280px;
+      }
+      .fiam-launcher-menu-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding-bottom: 10px;
+        margin-bottom: 10px;
+        border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+      }
+      .fiam-launcher-menu-avatar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+        color: var(--dsw-alias-state-business-primary);
+        font-weight: 700;
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+      .fiam-launcher-menu-userinfo {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+        flex: 1;
+      }
+      .fiam-launcher-menu-username {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--dsw-alias-label-primary);
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .fiam-launcher-menu-subtitle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: var(--dsw-alias-label-tertiary);
+        line-height: 1.2;
+      }
+      .fiam-launcher-card-section {
+        background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.02));
+        border: 0.5px solid var(--dsw-alias-border-l4, rgba(0, 0, 0, 0.06));
+        border-radius: var(--dsw-radius-md, 8px);
+        padding: 8px 10px;
+        margin-bottom: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
       .fiam-launcher-menu-section {
         padding-bottom: 8px;
         margin-bottom: 8px;
-        border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+        border-bottom: 0.5px solid var(--dsw-alias-border-l3);
       }
       .fiam-launcher-menu-row {
         display: flex;
@@ -769,7 +824,6 @@ window.__ModuleLoader__.load({
         gap: 8px;
         font-size: var(--dsw-font-xxs-12);
         line-height: 1.4;
-        margin-top: 4px;
         min-width: 0;
       }
       .fiam-launcher-menu-label {
@@ -789,13 +843,13 @@ window.__ModuleLoader__.load({
       .fiam-launcher-menu-item {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
         width: 100%;
         box-sizing: border-box;
-        padding: 6px 8px;
+        padding: 8px 10px;
         border: none;
         background: transparent;
-        border-radius: var(--dsw-radius-sm);
+        border-radius: var(--dsw-radius-sm, 6px);
         color: var(--dsw-alias-label-primary);
         font: var(--dsw-font-xs-13);
         cursor: pointer;
@@ -803,7 +857,7 @@ window.__ModuleLoader__.load({
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        transition: background-color 0.15s ease;
+        transition: all 0.15s ease;
       }
       .fiam-launcher-menu-item:hover {
         background: var(--dsw-alias-button-floating-hover, rgba(0,0,0,0.05));
@@ -813,6 +867,18 @@ window.__ModuleLoader__.load({
       }
       .fiam-launcher-menu-item.danger:hover {
         background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+      }
+      .fiam-launcher-item-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        color: var(--dsw-alias-label-secondary);
+        flex-shrink: 0;
+      }
+      .fiam-launcher-menu-item.danger .fiam-launcher-item-icon {
+        color: var(--dsw-alias-state-error-primary);
       }
     `;
     const interactionStyle = () => h('style', null, interactionStyles);
@@ -2389,16 +2455,46 @@ window.__ModuleLoader__.load({
       const isSignedIn = view?.state === 'ready';
       const gwState = view?.gatewayCredential?.state ?? 'unconfigured';
       const gwConfigured = gwState === 'configured';
+      const principalName = view?.principal || view?.subject || '未登录员工';
+      const avatarInitial = String(principalName).replace(/^E/i, '').slice(0, 2).toUpperCase() || '企';
 
       let accessExpireText = '—';
       if (typeof view?.accessExpiresInSeconds === 'number' && view.accessExpiresInSeconds > 0) {
         const mins = Math.round(view.accessExpiresInSeconds / 60);
-        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将刷新';
+        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将自动刷新';
       } else if (view?.accessExpiresAt) {
         const remainingMs = Date.parse(view.accessExpiresAt) - Date.now();
         const mins = Math.round(remainingMs / 60000);
-        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将刷新';
+        accessExpireText = mins > 0 ? `约 ${mins} 分钟后刷新` : '即将自动刷新';
       }
+
+      // Professional Feather/Lucide-style micro SVGs
+      const settingsSvg = h('svg', {
+        viewBox: '0 0 16 16', width: 15, height: 15, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', className: 'fiam-launcher-item-icon',
+      },
+        h('circle', { cx: 8, cy: 8, r: 2.5 }),
+        h('path', { d: 'M13.2 9.8l-.9-.5c-.1-.1-.2-.2-.2-.4.1-.4.1-.7 0-1.1 0-.2.1-.3.2-.4l.9-.5c.4-.2.5-.7.3-1.1l-.8-1.4c-.2-.4-.7-.5-1.1-.3l-.9.5c-.2.1-.3.1-.5 0-.3-.2-.7-.4-1.1-.5-.2 0-.3-.2-.3-.3l-.1-1c0-.4-.4-.8-.9-.8H6.8c-.5 0-.9.4-.9.8l-.1 1c0 .2-.1.3-.3.3-.4.1-.8.3-1.1.5-.2.1-.3.1-.5 0l-.9-.5c-.4-.2-.9-.1-1.1.3l-.8 1.4c-.2.4-.1.9.3 1.1l.9.5c.1.1.2.2.2.4 0 .4-.1.7 0 1.1 0 .2-.1.3-.2.4l-.9.5c-.4.2-.5.7-.3 1.1l.8 1.4c.2.4.7.5 1.1.3l.9-.5c.2-.1.3-.1.5 0 .3.2.7.4 1.1.5.2 0 .3.2.3.3l.1 1c0 .4.4.8.9.8h1.6c.5 0 .9-.4.9-.8l.1-1c0-.2.1-.3.3-.3.4-.1.8-.3 1.1-.5.2-.1.3-.1.5 0l.9.5c.4.2.9.1 1.1-.3l.8-1.4c.2-.4.1-.9-.3-1.1z' })
+      );
+
+      const copySvg = h('svg', {
+        viewBox: '0 0 16 16', width: 15, height: 15, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', className: 'fiam-launcher-item-icon',
+      },
+        h('rect', { x: 5.5, y: 5.5, width: 8, height: 8, rx: 1.5 }),
+        h('path', { d: 'M3.5 10.5h-1a1 1 0 01-1-1v-6a1 1 0 011-1h6a1 1 0 011 1v1' })
+      );
+
+      const logoutSvg = h('svg', {
+        viewBox: '0 0 16 16', width: 15, height: 15, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', className: 'fiam-launcher-item-icon',
+      },
+        h('path', { d: 'M6 13.5H3.5a1.5 1.5 0 01-1.5-1.5V4a1.5 1.5 0 011.5-1.5H6' }),
+        h('path', { d: 'M10.5 11l3-3-3-3M13.5 8H6' })
+      );
+
+      const dotSvg = (color) => h('span', {
+        style: {
+          display: 'inline-block', width: 6, height: 6, borderRadius: '50%', backgroundColor: color, flexShrink: 0,
+        },
+      });
 
       return h('div', {
         className: 'fiam-launcher-menu forge-iam-ui',
@@ -2407,39 +2503,42 @@ window.__ModuleLoader__.load({
         onClick: (e) => e.stopPropagation(),
       },
         interactionStyle(),
-        h('div', { className: 'fiam-launcher-menu-section' },
-          h('div', { style: { fontWeight: 600, fontSize: 'var(--dsw-font-xs-13)', color: 'var(--dsw-alias-label-primary)', marginBottom: 6 } }, '企业 IAM 员工身份'),
-          h('div', { className: 'fiam-launcher-menu-row' },
-            h('span', { className: 'fiam-launcher-menu-label' }, '员工工号'),
-            h('span', { className: 'fiam-launcher-menu-value' }, view?.principal || view?.subject || '未登录'),
+        // Refined User Card Header
+        h('div', { className: 'fiam-launcher-menu-header' },
+          h('div', { className: 'fiam-launcher-menu-avatar' }, avatarInitial),
+          h('div', { className: 'fiam-launcher-menu-userinfo' },
+            h('div', { className: 'fiam-launcher-menu-username', title: principalName }, principalName),
+            h('div', { className: 'fiam-launcher-menu-subtitle' },
+              dotSvg(isSignedIn ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-label-tertiary)'),
+              h('span', null, isSignedIn ? '企业认证有效' : '未登录企业账号'),
+            ),
           ),
-          view?.issuer ? h('div', { className: 'fiam-launcher-menu-row' },
-            h('span', { className: 'fiam-launcher-menu-label' }, '认证中心'),
-            h('span', { className: 'fiam-launcher-menu-value', title: view.issuer }, view.issuer),
-          ) : null,
-          isSignedIn ? h('div', { className: 'fiam-launcher-menu-row' },
-            h('span', { className: 'fiam-launcher-menu-label' }, '访问令牌'),
-            h('span', { className: 'fiam-launcher-menu-value' }, accessExpireText),
-          ) : null,
         ),
-        h('div', { className: 'fiam-launcher-menu-section' },
-          h('div', { style: { fontWeight: 600, fontSize: 'var(--dsw-font-xs-13)', color: 'var(--dsw-alias-label-primary)', marginBottom: 6 } }, 'UAG 模型网关准入'),
+        // Grouped State Overview Section
+        h('div', { className: 'fiam-launcher-card-section' },
           h('div', { className: 'fiam-launcher-menu-row' },
-            h('span', { className: 'fiam-launcher-menu-label' }, '个人凭据'),
-            h('span', { className: 'fiam-launcher-menu-value', style: { color: gwConfigured ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)' } },
+            h('span', { className: 'fiam-launcher-menu-label' }, '网关凭证'),
+            h('span', {
+              className: 'fiam-launcher-menu-value',
+              style: {
+                color: gwConfigured ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-warn-primary)',
+                fontWeight: 600,
+              },
+            },
               gwConfigured ? '已就绪' : (GATEWAY_STATUS[gwState] || '未录入')
             ),
           ),
           view?.gatewayCredential?.deviceLabel ? h('div', { className: 'fiam-launcher-menu-row' },
-            h('span', { className: 'fiam-launcher-menu-label' }, '设备标签'),
+            h('span', { className: 'fiam-launcher-menu-label' }, '授权设备'),
             h('span', { className: 'fiam-launcher-menu-value' }, view.gatewayCredential.deviceLabel),
           ) : null,
-          view?.gatewayCredential?.storageBackend ? h('div', { className: 'fiam-launcher-menu-row' },
-            h('span', { className: 'fiam-launcher-menu-label' }, '存储介质'),
-            h('span', { className: 'fiam-launcher-menu-value' }, view.gatewayCredential.storageBackend),
+          isSignedIn ? h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '登录会话'),
+            h('span', { className: 'fiam-launcher-menu-value' }, accessExpireText),
           ) : null,
         ),
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+        // Action List
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 } },
           h('button', {
             type: 'button',
             className: 'fiam-launcher-menu-item',
@@ -2447,18 +2546,18 @@ window.__ModuleLoader__.load({
               onClose();
               if (openSettings) openSettings();
             },
-          }, '🛠️ 前往企业账号设置'),
+          }, settingsSvg, h('span', null, '进入企业设置')),
           h('button', {
             type: 'button',
             className: 'fiam-launcher-menu-item',
             onClick: onCopyDiagnostics,
-          }, '📋 复制脱敏诊断信息'),
+          }, copySvg, h('span', null, '复制排障诊断信息')),
           isSignedIn ? h('button', {
             type: 'button',
             className: 'fiam-launcher-menu-item danger',
             disabled: signingOut,
             onClick: onSignOut,
-          }, confirmSignOut ? '⚠️ 确认退出当前设备？' : '🚪 安全退出当前设备') : null,
+          }, logoutSvg, h('span', null, confirmSignOut ? '确认退出登录？' : '退出当前账号')) : null,
         ),
         notice ? h('div', {
           role: 'status',
