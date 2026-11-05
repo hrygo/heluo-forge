@@ -2702,6 +2702,8 @@ window.__ModuleLoader__.load({
             return;
           }
           setCredential((current) => ({ ...current, saving: false, value: '', notice: '网关凭据已清除。' }));
+          setModelNotice(null);
+          setExpandedModels({});
           if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
         } catch {
           setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
@@ -2743,6 +2745,12 @@ window.__ModuleLoader__.load({
             return;
           }
           const view = result.body?.view ?? null;
+          setCredential({ value: '', deviceLabel: '', saving: false, notice: null });
+          setModelOptions({});
+          lastSyncedOptions.current = {};
+          optionsSync.current.signature = null;
+          setExpandedModels({});
+          setModelNotice(null);
           // The refresh token cannot be revoked: say so instead of "signed out".
           const signedOutNotice = result.body?.revocation === 'ok'
             ? '已退出：访问令牌已撤销；刷新令牌无法撤销，将在服务端自然过期。'
@@ -3055,7 +3063,7 @@ window.__ModuleLoader__.load({
         notice ? h('div', {
           role: 'status',
           'aria-live': 'polite',
-          className: 'fiam-notice fiam-notice-success',
+          className: `fiam-notice ${/失败|无法|请/.test(notice) ? 'fiam-notice-warn' : 'fiam-notice-success'}`,
           style: { marginTop: 8, width: '100%', boxSizing: 'border-box', justifyContent: 'center' },
         }, notice) : null,
       );
@@ -3069,6 +3077,7 @@ window.__ModuleLoader__.load({
       const [confirmSignOut, setConfirmSignOut] = React.useState(false);
       const [signingOut, setSigningOut] = React.useState(false);
       const rootRef = React.useRef(null);
+      const signingInRef = React.useRef(false);
 
       React.useEffect(() => {
         let live = true;
@@ -3078,7 +3087,13 @@ window.__ModuleLoader__.load({
         return () => { live = false; };
       }, []);
 
-      useSessionPoll(true, (nextView) => setView(nextView));
+      useSessionPoll(true, (nextView) => {
+        setView(nextView);
+        if (nextView?.state !== 'ready') {
+          setMenuOpen(false);
+          setConfirmSignOut(false);
+        }
+      });
 
       React.useEffect(() => {
         if (!menuOpen) return undefined;
@@ -3108,6 +3123,8 @@ window.__ModuleLoader__.load({
       const handleMainClick = (e) => {
         e.stopPropagation();
         if (!isSignedIn) {
+          if (signingInRef.current) return;
+          signingInRef.current = true;
           const popup = openLoginWindow();
           postJson('/api/forge-iam/sign-in')
             .then((result) => {
@@ -3115,11 +3132,15 @@ window.__ModuleLoader__.load({
                 try { popup?.close(); } catch { }
                 return;
               }
+              if (result.body?.view) setView(result.body.view);
               const authorizationUrl = result.body?.authorizationUrl ?? null;
               navigateLoginWindow(popup, authorizationUrl);
             })
             .catch(() => {
               try { popup?.close(); } catch { }
+            })
+            .finally(() => {
+              signingInRef.current = false;
             });
           return;
         }
@@ -3153,8 +3174,16 @@ window.__ModuleLoader__.load({
             setView(result.body?.view ?? null);
             setMenuOpen(false);
             setConfirmSignOut(false);
+          } else {
+            setConfirmSignOut(false);
+            setNotice(errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'));
+            setTimeout(() => setNotice(null), 3000);
           }
-        } catch { }
+        } catch {
+          setConfirmSignOut(false);
+          setNotice('暂时无法连接服务，请稍后重试。');
+          setTimeout(() => setNotice(null), 3000);
+        }
         finally {
           setSigningOut(false);
         }
@@ -3215,6 +3244,7 @@ window.__ModuleLoader__.load({
 
     function SignedOutBanner() {
       const [state, setState] = React.useState({ visible: false, notice: null, view: null, authorizationUrl: null });
+      const signingInRef = React.useRef(false);
 
       const bannerFor = (view) => {
         if (!view) return { visible: true, reason: 'signed-out', sessionState: null };
@@ -3250,10 +3280,17 @@ window.__ModuleLoader__.load({
         ...current,
         view,
         ...bannerFor(view),
-        ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
+        ...(view?.state === 'authenticating' ? {} : {
+          authorizationUrl: null,
+          ...(current.view?.state === 'authenticating'
+            ? { notice: view?.state === 'error' ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : null }
+            : {}),
+        }),
       })));
 
       const login = async () => {
+        if (signingInRef.current) return;
+        signingInRef.current = true;
         const popup = openLoginWindow();
         try {
           const result = await postJson('/api/forge-iam/sign-in');
@@ -3277,6 +3314,8 @@ window.__ModuleLoader__.load({
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
           setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
+        } finally {
+          signingInRef.current = false;
         }
       };
 
@@ -3453,6 +3492,7 @@ window.__ModuleLoader__.load({
         authorizationUrl: null, keyValue: '', deviceLabel: '', saving: false,
       });
       const savingRef = React.useRef(false);
+      const signingInRef = React.useRef(false);
 
       const close = async (marker) => {
         if (savingRef.current) return;
@@ -3513,9 +3553,10 @@ window.__ModuleLoader__.load({
         return () => { live = false; if (timer) clearTimeout(timer); };
       }, []);
 
-      useSessionPoll(state.open, (view) => setState((current) => ({
+      useSessionPoll(true, (view) => setState((current) => (!current.open ? current : {
         ...current,
         view,
+        ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
         // Advance to the success step once, then keep the user's final screen:
         // a later identical `ready` poll must not pull them back from "完成".
         // Advance into the credential step once. When this account already has a
@@ -3524,12 +3565,17 @@ window.__ModuleLoader__.load({
         ...(view.state === 'ready' && current.step < 2
           ? { step: view.gatewayCredential?.state === 'configured' ? 3 : 2, authorizationUrl: null, notice: null }
           : {}),
+        ...(current.step === 2 && view.state !== 'ready'
+          ? { step: 1, authorizationUrl: null, notice: view.state === 'error' ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : '登录状态已变化，请重新登录企业账号。' }
+          : {}),
         ...(view.state === 'error' ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
       })));
 
       if (!state.open) return null;
 
       const startLogin = async () => {
+        if (signingInRef.current) return;
+        signingInRef.current = true;
         const popup = openLoginWindow();
         try {
           const result = await postJson('/api/forge-iam/sign-in');
@@ -3552,6 +3598,8 @@ window.__ModuleLoader__.load({
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
           setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
+        } finally {
+          signingInRef.current = false;
         }
       };
 

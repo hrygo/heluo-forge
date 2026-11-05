@@ -140,6 +140,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   let lease = new AbortController(); let version = 0; let last; let lastId; let deadline; let timer; let disposed = false; let backend; let flight;
   let retryAttempt = 0; let retryTimer; let hostDefault = null; let alignment = null; let alignQueued = false;
   let optionsChain = Promise.resolve();
+  let inSample = false;
+  let observedVersion = 0;
   const publish = () => { host.emit?.('llm/adapters-updated'); };
   const cancelRetry = () => { clearTimeout(retryTimer); retryTimer = undefined; };
   // Every path that drops the backend also drops the catalogue state with it,
@@ -148,34 +150,40 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     rawModels = []; models = []; backend = undefined; catalogState = state; catalogError = code;
   }
   function sample() {
-    const view = iam.getView();
-    const currentId = identity(view);
-    const current = `${currentId}:${iam.getModelAccessEpoch?.() ?? ''}`;
-    if (last !== current) {
-      const idChanged = lastId !== currentId;
-      last = current;
-      lastId = currentId;
-      version++;
-      if (idChanged) {
-        lease.abort(); lease = new AbortController();
-        cancelRetry(); retryAttempt = 0; hostDefault = null;
-        clearCatalog();
-        modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
-        publish();
+    if (inSample) return null;
+    inSample = true;
+    try {
+      const view = iam.getView();
+      const currentId = identity(view);
+      const current = `${currentId}:${iam.getModelAccessEpoch?.() ?? ''}`;
+      if (last !== current) {
+        const idChanged = lastId !== currentId;
+        last = current;
+        lastId = currentId;
+        version++;
+        if (idChanged) {
+          lease.abort(); lease = new AbortController();
+          cancelRetry(); retryAttempt = 0; hostDefault = null;
+          clearCatalog();
+          modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
+          publish();
+        }
       }
+      // A successful same-session IAM refresh changes the deadline, not the
+      // gateway configuration. Keep valid prepared calls and update cancellation.
+      const nextDeadline = view?.state === 'ready' ? expires(view) : null;
+      if (deadline !== nextDeadline) {
+        deadline = nextDeadline; clearTimeout(timer);
+        const expire = () => { version++; lease.abort(); cancelRetry(); clearCatalog(); publish(); };
+        const remaining = deadline - Date.now();
+        if (deadline !== null && remaining > 0) {
+          timer = setTimeout(expire, Math.min(remaining, 2147483647)); timer.unref?.();
+        } else if (deadline !== null) expire();
+      }
+      return view;
+    } finally {
+      inSample = false;
     }
-    // A successful same-session IAM refresh changes the deadline, not the
-    // gateway configuration. Keep valid prepared calls and update cancellation.
-    const nextDeadline = view?.state === 'ready' ? expires(view) : null;
-    if (deadline !== nextDeadline) {
-      deadline = nextDeadline; clearTimeout(timer);
-      const expire = () => { version++; lease.abort(); cancelRetry(); clearCatalog(); publish(); };
-      const remaining = deadline - Date.now();
-      if (deadline !== null && remaining > 0) {
-        timer = setTimeout(expire, Math.min(remaining, 2147483647)); timer.unref?.();
-      } else if (deadline !== null) expire();
-    }
-    return view;
   }
   function refusal(request, captured) {
     const denied = permit(sample());
@@ -251,6 +259,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (disposed || denied) throw error(denied ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     if (flight?.version === version) return flight.promise;
     const mine = version;
+    catalogState = 'loading'; catalogError = null;
     const current = () => { sample(); if (disposed || mine !== version || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED'); };
     const task = Promise.resolve().then(async () => {
       catalogState = 'loading'; catalogError = null;
@@ -370,12 +379,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   });
   const registration = host.llm.registerAdapter([provider], adapter);
   const ready = refresh().catch(() => { });
+  observedVersion = version;
   const observation = (async () => {
     try {
       for await (const _view of iam.watch(lifetime.signal)) {
         if (disposed) return;
-        const before = version; sample();
-        if ((before !== version || !backend) && !permit(iam.getView())) void refresh().catch(() => { });
+        sample();
+        const changed = observedVersion !== version;
+        observedVersion = version;
+        if ((changed || !backend) && !permit(iam.getView())) void refresh().catch(() => { });
       }
     }
     catch { if (!disposed) { lease.abort(); cancelRetry(); clearCatalog('error', 'ENTERPRISE_MODELS_UNAVAILABLE'); publish(); } }
@@ -443,28 +455,31 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       return run;
     },
     getModelOptions: () => ({ ...modelOptions }),
-    getView: () => ({
-      managed: true, configured: true,
-      state: catalogState, error: catalogError,
-      defaultModelId,
-      // Fixed code describing the last alignment of DSH's new-conversation default.
-      hostDefaultModel: hostDefault,
-      enabled: Object.keys(modelOptions),
-      selectionError: selectionError ?? selectionWriteError,
-      models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
-        id,
-        name,
-        contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-        maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-        inputModalities: inputModalities ?? ['text'],
-        reasoningEfforts: reasoningEfforts ?? null,
-        reasoning: Boolean(reasoning),
-        // A listed model is not necessarily callable; only enabled ones are.
-        enabled: enabled(id),
-        isDefault: defaultModelId === id,
-      })),
-      modelOptions: { ...modelOptions }
-    }),
+    getView: () => {
+      if (!inSample && !disposed) sample();
+      return {
+        managed: true, configured: true,
+        state: catalogState, error: catalogError,
+        defaultModelId,
+        // Fixed code describing the last alignment of DSH's new-conversation default.
+        hostDefaultModel: hostDefault,
+        enabled: Object.keys(modelOptions),
+        selectionError: selectionError ?? selectionWriteError,
+        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
+          id,
+          name,
+          contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+          maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+          inputModalities: inputModalities ?? ['text'],
+          reasoningEfforts: reasoningEfforts ?? null,
+          reasoning: Boolean(reasoning),
+          // A listed model is not necessarily callable; only enabled ones are.
+          enabled: enabled(id),
+          isDefault: defaultModelId === id,
+        })),
+        modelOptions: { ...modelOptions }
+      };
+    },
     async dispose() {
       if (disposed) return;
       disposed = true; clearTimeout(timer); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();

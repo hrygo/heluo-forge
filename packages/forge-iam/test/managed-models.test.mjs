@@ -444,3 +444,18 @@ test('a new model selection epoch keeps the active gateway usable for new calls'
   const result = await chunks(prepared.stream(options));
   assert.equal(result[0].text, 'ok');
 });
+
+test('getView synchronously clears ghost ready state when session signs out or gateway credential is cleared', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  assert.equal(f.runtime.getView().state, 'ready');
+  assert.equal(f.runtime.getView().models.length, 1);
+
+  // Synchronously mutate IAM view without waiting for async watch() microtask
+  f.change({ state: 'signed-out', principal: null });
+  const viewAfterSignOut = f.runtime.getView();
+  assert.equal(viewAfterSignOut.state, 'unconfigured');
+  assert.equal(viewAfterSignOut.error, null);
+  assert.deepEqual(viewAfterSignOut.models, []);
+  assert.deepEqual(viewAfterSignOut.enabled, []);
+  assert.equal(viewAfterSignOut.defaultModelId, null);
+});
