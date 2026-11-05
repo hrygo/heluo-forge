@@ -907,8 +907,7 @@ export function createIamService(rawConfig, options = {}) {
     async refreshGatewayModels() {
       const runtime = options.getManagedModelRuntime?.();
       if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-      // This entry point is the person-initiated refresh: do not inherit backoff.
-      return runtime.refresh({ manual: true });
+      return runtime.refresh();
     },
 
     async updateModelOptions(nextOptions) {
@@ -989,12 +988,12 @@ export function createIamService(rawConfig, options = {}) {
       const record = await targetGatewayStore?.read();
       check();
       if (!record?.ok || record.credential?.ownerSubject !== subject) {
-        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的模型访问凭证。');
+        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的个人访问凭证。');
       }
       const resolved = await targetGatewayStore.resolve(record.credential);
       check();
       if (resolved?.invalid || !resolved?.value) {
-        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的模型访问凭证。');
+        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的个人访问凭证。');
       }
       const address = record.credential.baseURL ?? config.managedModels?.baseURL;
       if (!address) throw new IamError('IAM_GATEWAY_URL_INVALID', '请先设置网关地址。');

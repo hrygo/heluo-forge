@@ -26,14 +26,14 @@ test('account form saves gateway URL and a masked Key together and clears the dr
   const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
   assert.equal(input('网关地址').props.value, view.gatewayCredential.baseURL);
   input('网关地址').props.onChange({ target: { value: 'https://next-gateway.corp.example/v1' } });
-  input('模型访问凭证').props.onChange({ target: { value: 'synthetic-ui-key' } });
-  assert.equal(input('模型访问凭证').props.type, 'password');
+  input('个人访问凭证').props.onChange({ target: { value: 'synthetic-ui-key' } });
+  assert.equal(input('个人访问凭证').props.type, 'password');
   assert.match(panel.text(panel.render()), /有未保存的更改/);
   await panel.findButton(panel.render(), '保存凭据').props.onClick();
   assert.equal(writes.length, 1);
   assert.equal(writes[0].baseURL, 'https://next-gateway.corp.example/v1');
   assert.equal(writes[0].key, 'synthetic-ui-key');
-  assert.equal(input('模型访问凭证').props.value, '');
+  assert.equal(input('个人访问凭证').props.value, '');
   assert.equal(input('网关地址').props.value, writes[0].baseURL);
   assert.match(panel.text(panel.render()), /已保存/);
   assert.doesNotMatch(panel.text(panel.render()), /有未保存的更改|synthetic-ui-key/);
@@ -123,7 +123,7 @@ test('panel orders account, credential, and model cards and supports sorting and
   const fullText = panel.text(panel.render());
   // User journey section order: Account -> Gateway Credential -> Model Settings
   const accountIdx = fullText.indexOf('已绑定企业 OIDC 身份');
-  const gatewayIdx = fullText.indexOf('配置模型访问凭证');
+  const gatewayIdx = fullText.indexOf('填写企业 AI 网关签发的个人访问凭证。');
   const modelsIdx = fullText.indexOf('企业模型设置');
   assert.ok(accountIdx >= 0 && accountIdx < gatewayIdx);
   assert.ok(gatewayIdx < modelsIdx);
@@ -512,12 +512,12 @@ test('joint journey and state transitions update credential notice, journey bar,
   });
   t.after(() => panel.close());
 
-  const keyInput = nodes(panel.render()).find(node => node.props['aria-label'] === '模型访问凭证');
+  const keyInput = nodes(panel.render()).find(node => node.props['aria-label'] === '个人访问凭证');
   keyInput.props.onChange({ target: { value: 'draft-key-value' } });
   const resetDraftBtn = panel.findButton(panel.render(), '重置输入');
   assert.ok(resetDraftBtn);
   resetDraftBtn.props.onClick();
-  assert.equal(nodes(panel.render()).find(node => node.props['aria-label'] === '模型访问凭证').props.value, '');
+  assert.equal(nodes(panel.render()).find(node => node.props['aria-label'] === '个人访问凭证').props.value, '');
 
   keyInput.props.onChange({ target: { value: 'uag-00000000000000000000000000000000' } });
   await panel.findButton(panel.render(), '保存凭据').props.onClick();
@@ -663,4 +663,8 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
   assert.match(text, /目录未更新/);
   assert.match(text, /秒后自动重试/);
   assert.match(text, /corp-chat/);
+  // The journey step and the card call it the same thing.
+  assert.match(text, /目录待刷新/);
+  // The reason is explained once, not twice.
+  assert.equal(text.split('暂时无法获取企业模型').length - 1, 1);
 });

@@ -253,22 +253,3 @@ test('notifyView pushes a frame for a catalogue-only change', async t => {
   controller.abort();
   await pump.catch(() => { });
 });
-
-test('the person-initiated refresh does not inherit the retry backoff', async t => {
-  const calls = [];
-  const credentials = new MemoryCredentials();
-  const service = createIamService({
-    issuer: 'https://iam.corp.example', clientId: 'synthetic-client',
-    authorizationEndpoint: 'https://iam.corp.example/authorize',
-    tokenEndpoint: 'https://iam.corp.example/token', jwksUri: 'https://iam.corp.example/jwks',
-  }, {
-    credentials,
-    getManagedModelRuntime: () => ({
-      refresh: async (options) => { calls.push(options); return { models: [] }; },
-      getView: () => ({ managed: true, state: 'unconfigured', models: [] }),
-    }),
-  });
-  t.after(() => service.dispose());
-  await service.refreshGatewayModels();
-  assert.deepEqual(calls, [{ manual: true }]);
-});

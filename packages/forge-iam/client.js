@@ -1329,7 +1329,7 @@ window.__ModuleLoader__.load({
             return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${errorNotice(view.modelAccess.error)}` };
           }
           const modelCount = view.modelAccess?.models?.length ?? 0;
-          const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型可用` : '';
+          const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型${view.modelAccess?.stale ? '待刷新' : '可用'}` : '';
           return { kind: 'ready', dotClass: 'success', label: '企业认证有效', tooltip: `${name} · 企业认证有效${modelSuffix}` };
         }
         if (gw === 'owner-mismatch') {
@@ -1768,13 +1768,13 @@ window.__ModuleLoader__.load({
               )
             ),
             h('div', null,
-              h('div', { className: 'fiam-card-title' }, '模型使用凭证'),
-              h('div', { className: 'fiam-card-subtitle' }, '配置模型访问凭证'),
+              h('div', { className: 'fiam-card-title' }, '个人访问凭证'),
+              h('div', { className: 'fiam-card-subtitle' }, '填写企业 AI 网关签发的个人访问凭证。'),
             ),
           ),
           h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gateway.state)}` },
             h('span', { className: 'fiam-badge-dot' }),
-            `模型访问凭证：${gatewayStatus}`,
+            `个人访问凭证：${gatewayStatus}`,
           ),
         ),
         gatewayDetails.length ? h('div', { className: 'fiam-meta-grid' },
@@ -1811,27 +1811,27 @@ window.__ModuleLoader__.load({
           ),
           h('div', null,
             gateway.state === 'configured'
-              ? '模型访问凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
+              ? '个人访问凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
               : gateway.state === 'unknown'
                 ? '网关凭据状态尚未确认，请刷新核实。'
                 : gateway.state === 'unconfigured'
-                  ? '到凭证管理页面为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'
+                  ? '在企业 AI 网关创建个人访问凭证，然后粘贴到下方。'
                   : '请先核对现有凭证；如有疑问，请联系管理员。',
             gateway.state === 'unconfigured' && view.gatewayConsoleUrl
               ? h('div', { style: { marginTop: 4 } },
-                h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开凭证管理页面创建凭据 ↗')
+                h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '前往企业 AI 网关创建凭证 ↗')
               )
               : null
           )
         ),
         h('div', { style: { marginTop: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
           h('label', { style: { ...fieldLabel, flex: '2 1 240px' } },
-            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '模型访问凭证'),
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '个人访问凭证'),
             h('input', {
               type: 'password',
               value: credential.value,
-              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴模型访问凭证',
-              'aria-label': '模型访问凭证',
+              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴个人访问凭证',
+              'aria-label': '个人访问凭证',
               autoComplete: 'off',
               spellCheck: false,
               disabled: credential.saving || viewBarrier.current.pending,
@@ -2218,7 +2218,7 @@ window.__ModuleLoader__.load({
           num: '3',
           title: '模型',
           targetId: 'fiam-section-models',
-          status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step3Loading ? '同步中…' : (modelState === 'error' ? '同步异常' : (modelState === 'ready' && totalModels === 0 ? '无可用模型' : (step2Done ? '待启用' : '待解锁')))),
+          status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step3Loading ? '同步中…' : (modelState === 'error' ? (view.modelAccess?.stale ? '目录待刷新' : '同步异常') : (modelState === 'ready' && totalModels === 0 ? '无可用模型' : (step2Done ? '待启用' : '待解锁')))),
           done: step3Done,
           warn: step3Warn,
           active: step2Done && !step3Done && !step3Warn,
@@ -2329,20 +2329,17 @@ window.__ModuleLoader__.load({
                 : null,
         ),
         !view.modelAccess?.configured
-          ? h('p', { style: muted }, '请先保存网关地址和模型访问凭证。')
+          ? h('p', { style: muted }, '请先保存网关地址和个人访问凭证。')
           : null,
         view.modelAccess?.stale
           ? h('div', { className: 'fiam-notice fiam-notice-warn', style: { marginTop: 8, width: '100%', boxSizing: 'border-box' } },
-            h('span', null, `目录未更新：${errorNotice(view.modelAccess.error)}${(() => {
-              const at = Number(view.modelAccess.retryAt);
-              if (!Number.isFinite(at)) return '';
-              const seconds = Math.round((at - Date.now()) / 1000);
-              if (seconds <= 1) return ' 正在重试。';
-              return ` 约 ${seconds} 秒后自动重试。`;
-            })()}`),
-            view.modelAccess?.retryAt
-              ? null
-              : h('button', { type: 'button', className: 'fiam-link', onClick: refreshModels, style: { marginLeft: 8 } }, '立即重试'),
+            h('span', null,
+              `目录未更新：${errorNotice(view.modelAccess.error)}`
+              // A passed or absent retry time means the automatic chain is done;
+              // pointing at the existing refresh button stays true either way.
+              + (Math.round((Number(view.modelAccess.retryAt) - Date.now()) / 1000) >= 1
+                ? ` 约 ${Math.round((Number(view.modelAccess.retryAt) - Date.now()) / 1000)} 秒后自动重试。`
+                : ' 可点击「刷新模型列表」重试。')),
           )
           : null,
         view.modelAccess?.configured && modelList.length > 0
@@ -2465,7 +2462,7 @@ window.__ModuleLoader__.load({
           : null,
         view.modelAccess?.state === 'ready' && !modelList.length
           ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
-        view.modelAccess?.error ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(view.modelAccess.error)) : null,
+        view.modelAccess?.error && !view.modelAccess?.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(view.modelAccess.error)) : null,
         h('div', { className: 'fiam-actions' },
           h('button', {
             type: 'button',
@@ -2836,7 +2833,7 @@ window.__ModuleLoader__.load({
         const epoch = viewBarrier.current.epoch;
         const value = credential.value.trim();
         if (!value) {
-          setCredential((current) => ({ ...current, notice: '请输入模型访问凭证。' }));
+          setCredential((current) => ({ ...current, notice: '请输入个人访问凭证。' }));
           return;
         }
         setCredential((current) => ({ ...current, saving: true, notice: null }));
@@ -3006,7 +3003,7 @@ window.__ModuleLoader__.load({
       const muted = { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' };
       const header = h('div', { style: { marginBottom: 16 } },
         h('div', { style: { font: 'var(--dsw-font-m-18)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '企业账号'),
-        h('div', { style: { ...muted, marginTop: 4 } }, '管理企业统一身份登录与模型使用凭证'),
+        h('div', { style: { ...muted, marginTop: 4 } }, '管理企业账号和个人访问凭证'),
       );
       const copyTools = h('div', { className: 'fiam-actions' },
         state.view?.state === 'authenticating' && linkIdentity.current && state.authorizationUrl === linkIdentity.current
@@ -3551,14 +3548,14 @@ window.__ModuleLoader__.load({
           state.reason === 'gateway'
             ? (state.gateway === 'owner-mismatch' ? '个人凭证属于其他账号'
               : state.gateway === 'invalid' ? '个人凭证信息需要检查，已保留'
-                : state.gateway === 'unknown' ? '无法确认模型访问凭证状态'
-                  : '无法使用模型：尚未保存模型访问凭证')
+                : state.gateway === 'unknown' ? '无法确认个人访问凭证状态'
+                  : '尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。')
             : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号'),
         ),
         state.reason === 'gateway'
           ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid' || state.gateway === 'unknown'
             ? '到“设置 → 企业账号”核对现有记录'
-            : '到“设置 → 企业账号”录入模型访问凭证')
+            : '到“设置 → 企业账号”录入个人访问凭证')
           : null,
         state.reason !== 'gateway' && state.view?.canSignIn
           ? h('button', { type: 'button', className: 'forge-iam-primary', style: { ...primaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: login }, '登录')
@@ -3583,7 +3580,7 @@ window.__ModuleLoader__.load({
           ),
           h('div', { className: 'fiam-onboarding-preview-row' },
             h('span', { className: 'fiam-onboarding-preview-num' }, '2'),
-            h('span', null, '添加模型访问凭证'),
+            h('span', null, '添加个人访问凭证'),
           ),
           h('div', { className: 'fiam-onboarding-preview-row' },
             h('span', { className: 'fiam-onboarding-preview-num' }, '3'),
@@ -3622,7 +3619,7 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { className: 'fiam-onboarding-summary-row' },
-              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '模型访问凭证'),
+              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '个人访问凭证'),
               h('span', { className: `fiam-badge fiam-badge-${gwState === 'configured' ? 'success' : 'warn'}` },
                 GATEWAY_STATUS[gwState] ?? '待核实'
               ),
@@ -3663,11 +3660,11 @@ window.__ModuleLoader__.load({
               onChange: (event) => setState((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle,
             }),
           ),
-          h('label', { style: fieldLabel }, '模型访问凭证', h('input', {
+          h('label', { style: fieldLabel }, '个人访问凭证', h('input', {
             type: 'password',
             value: state.keyValue,
             placeholder: '输入网关提供的个人 Key',
-            'aria-label': '模型访问凭证',
+            'aria-label': '个人访问凭证',
             autoComplete: 'off',
             spellCheck: false,
             disabled: state.saving,
@@ -3685,7 +3682,7 @@ window.__ModuleLoader__.load({
             style: inputStyle,
           })),
           state.view?.gatewayConsoleUrl
-            ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开凭证管理页面创建凭据')
+            ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '前往企业 AI 网关创建凭证')
             : null,
           h('div', { style: { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' } }, '创建时建议开启隐私保护，并设置 90 天有效期。'),
         );
@@ -3814,7 +3811,7 @@ window.__ModuleLoader__.load({
         if (savingRef.current) return;
         const value = state.keyValue.trim();
         if (!value) {
-          setState((current) => ({ ...current, notice: '请输入模型访问凭证。' }));
+          setState((current) => ({ ...current, notice: '请输入个人访问凭证。' }));
           return;
         }
         savingRef.current = true;
@@ -3858,14 +3855,14 @@ window.__ModuleLoader__.load({
       const completionTitle = gatewayState === 'configured'
         ? (state.view?.state === 'ready' ? '准备就绪' : '请先登录企业账号')
         : gatewayState === 'unconfigured'
-          ? (state.view?.state === 'ready' ? '登录完成，尚未配置凭据' : '尚未保存模型访问凭证')
+          ? (state.view?.state === 'ready' ? '登录完成，尚未配置凭据' : '尚未保存个人访问凭证')
           : '请检查凭证状态';
       const completionBody = gatewayState === 'configured'
         ? (state.view?.state === 'ready'
-          ? '模型访问凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
-          : '模型访问凭证已保存。请前往“设置 → 企业账号”登录后继续。')
+          ? '个人访问凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
+          : '个人访问凭证已保存。请前往“设置 → 企业账号”登录后继续。')
         : gatewayState === 'unconfigured'
-          ? '模型访问凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并配置凭证。'
+          ? '个人访问凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并配置凭证。'
           : gatewayState === 'owner-mismatch'
             ? '现有凭证属于其他账号，已为你保留。请前往“设置 → 企业账号”核对。'
             : gatewayState === 'invalid'
@@ -3885,8 +3882,8 @@ window.__ModuleLoader__.load({
           onPrimary: startLogin,
         },
         {
-          title: '添加模型访问凭证',
-          body: '使用企业模型还需要模型访问凭证。请在凭证管理页面为这台设备创建凭证，然后粘贴到下方。',
+          title: '添加个人访问凭证',
+          body: '在企业 AI 网关创建个人访问凭证，然后粘贴到下方。',
           primary: '保存并继续',
           onPrimary: saveCredential,
         },

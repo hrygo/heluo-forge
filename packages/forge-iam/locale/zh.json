@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "企业统一认证",
-    "description": "使用企业 IAM 账号登录 DeepSeek Harness；模型调用使用模型访问凭证。"
+    "description": "使用企业账号登录，并通过企业 AI 网关访问已授权的模型。"
   }
 }

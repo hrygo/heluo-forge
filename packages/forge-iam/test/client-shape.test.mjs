@@ -35,7 +35,7 @@ test('the client registers the settings section, launcher, signed-out banner and
   assert.match(client, /尚未登录企业账号/);
   assert.match(client, /forge-iam-banner/);
   assert.match(client, /forge-iam\.onboarding\.v1/);
-  for (const title of ['欢迎使用企业版', '登录企业账号', '添加模型访问凭证', '准备就绪']) {
+  for (const title of ['欢迎使用企业版', '登录企业账号', '添加个人访问凭证', '准备就绪']) {
     assert.match(client, new RegExp(title));
   }
   assert.match(client, /close\('skipped'\)/);
@@ -47,7 +47,7 @@ test('the client registers the settings section, launcher, signed-out banner and
 
 test('the client distinguishes an unconfigured model credential from sign-out', async () => {
   const client = await read('client.js');
-  assert.match(client, /无法使用模型：尚未保存模型访问凭证/);
+  assert.match(client, /尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。/);
   assert.doesNotMatch(client, /UAG/, 'user-facing client copy should use a familiar credential name');
   assert.match(client, /gatewayCredential/);
   // The credential value is submitted once and never rendered back.
