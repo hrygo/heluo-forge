@@ -41,6 +41,7 @@ export const MESSAGES = Object.freeze({
   IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
   ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
   ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
+  ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
   IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
   ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
   ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
@@ -159,6 +160,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const publish = () => {
     host.emit?.('llm/adapters-updated');
     const signature = [catalogState, catalogError ?? '', defaultModelId ?? '', hostDefault ?? '',
+      String(retryAt ?? ''),
       Object.keys(modelOptions).sort().join(','),
       models.map(model => `${model.id}:${model.enabled ? 1 : 0}`).join(',')].join('|');
     if (signature === published) return;
@@ -166,6 +168,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     onChange?.();
   };
   const cancelRetry = () => { clearTimeout(retryTimer); retryTimer = undefined; retryAt = null; };
+  // A lease aborted for an identity that is still the current one is a
+  // cancelled epoch, not a logout. Every use is gated by permit(), so a session
+  // that recovers on the same person must get a live signal back: a cancelled
+  // lease left in place fails every later discovery at 0 ms, before any socket
+  // opens, and reads as an unreachable gateway even though nothing was sent.
+  const renewLease = () => { if (lease.signal.aborted) lease = new AbortController(); return lease; };
   // Every path that drops the backend also drops the catalogue state with it,
   // so the account page can never say "ready" while nothing is callable.
   function clearCatalog(state = 'unconfigured', code = null) {
@@ -227,7 +235,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     let code = refusal(request, captured);
     if (code) { yield finish(code); return; }
     const mine = version;
-    const signal = AbortSignal.any([lifetime.signal, lease.signal, ...(request.signal ? [request.signal] : [])]);
+    const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
     try {
       for await (const chunk of dispatch({ ...request, signal })) {
         code = refusal(request, mine);
@@ -300,7 +308,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       catalogState = 'loading'; catalogError = null;
       const connection = await iam.resolveGatewayConnection(); current();
       const headers = await requestHeaders(); current();
-      const found = await discover(connection, AbortSignal.any([lifetime.signal, lease.signal]), fetcher, headers); current();
+      const found = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
       await loadSelection(); current();
       rawModels = found;
       // First run for this person: enable one model so the panel is usable
@@ -340,7 +348,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       await syncHostDefault(); current();
       return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
     }).catch(cause => {
-      const code = Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
+      // Our own cancellation is not a gateway outage. Telling the person to
+      // check the gateway address after we stopped the request ourselves sends
+      // them to the wrong place, and scheduling a retry for it would repeat the
+      // same cancellation.
+      const code = cause?.name === 'AbortError' ? 'ENTERPRISE_MODEL_SYNC_CANCELLED'
+        : Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
       if (mine === version && !disposed) {
         markFailed(code);
         // A failure we will never retry must not leave the old adapter reachable:
@@ -363,7 +376,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     retryAt = Date.now() + retryDelays[retryAttempt];
     retryTimer = setTimeout(() => {
       retryTimer = undefined; retryAt = null;
-      if (disposed || mine !== version || permit(sample()) || backend) return;
+      // The countdown ending is itself a visible change: publish it before the
+      // next attempt, or the panel keeps a time that has already passed.
+      publish();
+      // A stale catalogue still has its adapter, and that is exactly when the
+      // list matters: keeping the old backend must not cancel its recovery.
+      if (disposed || mine !== version || permit(sample())) return;
       void refresh().catch(() => { });
     }, retryDelays[retryAttempt++]);
     retryTimer.unref?.();
