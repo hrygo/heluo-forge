@@ -1,0 +1,362 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600" viewBox="0 0 1000 600" role="img" aria-label="河洛企业级智能研发平台总体架构图">
+  <defs>
+    <style>
+      .f-sans {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      .f-mono {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+      .node-title {
+        font-size: 13px;
+        font-weight: 700;
+        fill: #0f172a;
+      }
+      .node-sub {
+        font-size: 10.5px;
+        font-weight: 500;
+        fill: #64748b;
+      }
+      .seam-txt {
+        font-size: 11px;
+        font-weight: 600;
+        fill: #1e3a8a;
+      }
+      .proto-txt {
+        font-size: 10px;
+        font-weight: 600;
+        fill: #0f766e;
+      }
+    </style>
+
+    <filter id="shadow-sm" x="-4%" y="-4%" width="108%" height="112%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.045"/>
+    </filter>
+    <filter id="shadow-pill" x="-8%" y="-12%" width="116%" height="130%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#0f172a" flood-opacity="0.06"/>
+    </filter>
+
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+    <linearGradient id="dsh-bus" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#eff6ff"/>
+      <stop offset="50%" stop-color="#e0f2fe"/>
+      <stop offset="100%" stop-color="#eff6ff"/>
+    </linearGradient>
+    <linearGradient id="ent-zone" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f0fdf4"/>
+      <stop offset="50%" stop-color="#ecfdf5"/>
+      <stop offset="100%" stop-color="#f0fdf4"/>
+    </linearGradient>
+
+    <!-- 纤巧挺拔的开放式 Chevron 箭头 -->
+    <marker id="chev-blue" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 2 1.8 L 7.5 5 L 2 8.2" fill="none" stroke="#3b82f6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="chev-teal" viewBox="0 0 10 10" refX="7.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M 2 1.8 L 7.5 5 L 2 8.2" fill="none" stroke="#0d9488" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <!-- 1. 整体专业浅色画布 -->
+  <rect x="2" y="2" width="996" height="596" rx="16" fill="url(#bg-grad)" stroke="#cbd5e1" stroke-width="1.5"/>
+
+  <!-- 左侧四层结构导航侧栏 -->
+  <g class="f-sans" filter="url(#shadow-sm)">
+    <rect x="20" y="20" width="96" height="80" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+    <rect x="20" y="20" width="6" height="80" rx="3" fill="#0284c7"/>
+    <text x="71" y="55" text-anchor="middle" class="node-title">终端入口</text>
+    <text x="71" y="73" text-anchor="middle" class="node-sub">每人一套实例</text>
+
+    <rect x="20" y="122" width="96" height="84" rx="10" fill="#ffffff" stroke="#93c5fd" stroke-width="1"/>
+    <rect x="20" y="122" width="6" height="84" rx="3" fill="#2563eb"/>
+    <text x="71" y="159" text-anchor="middle" class="node-title">DSH 宿主</text>
+    <text x="71" y="177" text-anchor="middle" class="node-sub">核心不改·Seam</text>
+
+    <rect x="20" y="228" width="96" height="148" rx="10" fill="#ffffff" stroke="#99f6e4" stroke-width="1"/>
+    <rect x="20" y="228" width="6" height="148" rx="3" fill="#0d9488"/>
+    <text x="71" y="296" text-anchor="middle" class="node-title">河洛扩展</text>
+    <text x="71" y="314" text-anchor="middle" class="node-sub">插件与企业语义</text>
+
+    <rect x="20" y="395" width="96" height="28" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="68" y="413" text-anchor="middle" font-size="10.5" font-weight="700" fill="#475569">零信任授权边界</text>
+
+    <rect x="20" y="442" width="96" height="136" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1"/>
+    <rect x="20" y="442" width="6" height="136" rx="3" fill="#059669"/>
+    <text x="71" y="504" text-anchor="middle" class="node-title">企业平台</text>
+    <text x="71" y="522" text-anchor="middle" class="node-sub">服务端权威控制</text>
+  </g>
+
+  <!-- ======================= LAYER 1: 双端客户端 (x=132..980) ======================= -->
+  <g class="f-sans" filter="url(#shadow-sm)">
+    <rect x="132" y="20" width="848" height="80" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.2"/>
+
+    <!-- Windows Desktop 节点 (center=308) -->
+    <g transform="translate(152, 30)">
+      <rect width="312" height="60" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="18" y="12" width="36" height="24" rx="4" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.8"/>
+      <line x1="30" y1="36" x2="42" y2="36" stroke="#0284c7" stroke-width="1.8"/>
+      <line x1="36" y1="36" x2="36" y2="44" stroke="#0284c7" stroke-width="1.8"/>
+      <line x1="26" y1="44" x2="46" y2="44" stroke="#0284c7" stroke-width="1.8" stroke-linecap="round"/>
+      <text x="70" y="27" class="node-title">Windows 桌面端</text>
+      <text x="70" y="44" class="node-sub f-mono">DSH Desktop Client</text>
+    </g>
+
+    <!-- 中间桥接徽章 -->
+    <rect x="484" y="45" width="140" height="30" rx="15" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="554" y="64" text-anchor="middle" class="node-sub" fill="#334155">同一插件组合 · 双端适配</text>
+
+    <!-- 银河麒麟 Web 节点 (center=800) -->
+    <g transform="translate(644, 30)">
+      <rect width="312" height="60" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="18" y="13" width="36" height="32" rx="4" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.8"/>
+      <line x1="18" y1="21" x2="54" y2="21" stroke="#0284c7" stroke-width="1.5"/>
+      <polyline points="26,28 31,32 26,36" fill="none" stroke="#0284c7" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="34" y1="36" x2="42" y2="36" stroke="#0284c7" stroke-width="1.6" stroke-linecap="round"/>
+      <text x="70" y="27" class="node-title">银河麒麟 aarch64</text>
+      <text x="70" y="44" class="node-sub f-mono">Browser + dsh web</text>
+    </g>
+  </g>
+
+  <!-- ======================= LAYER 2: DSH 运行时总线 (5 列对齐: 226, 390, 554, 718, 882) ======================= -->
+  <g class="f-sans" filter="url(#shadow-sm)">
+    <rect x="132" y="122" width="848" height="84" rx="12" fill="url(#dsh-bus)" stroke="#93c5fd" stroke-width="1.5"/>
+
+    <text x="152" y="145" font-size="13" font-weight="700" fill="#1e3a8a">DeepSeek Harness (DSH) 宿主运行时底座</text>
+    <rect x="424" y="130" width="188" height="20" rx="10" fill="#dbeafe" stroke="#93c5fd" stroke-width="1"/>
+    <text x="518" y="144" text-anchor="middle" font-size="10.5" font-weight="600" fill="#1d4ed8">不改上游内核 · 公开 Seam 挂载点</text>
+
+    <!-- 5 个对齐 Seam 插槽块 (width=148, gap=16) -->
+    <g transform="translate(152, 158)">
+      <rect width="148" height="36" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+      <circle cx="13" cy="18" r="3.8" fill="#0284c7"/>
+      <text x="82" y="22" text-anchor="middle" class="seam-txt f-mono">auth / credentials</text>
+    </g>
+    <g transform="translate(316, 158)">
+      <rect width="148" height="36" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+      <circle cx="18" cy="18" r="4" fill="#4f46e5"/>
+      <text x="80" y="22" text-anchor="middle" class="seam-txt f-mono">llm / models</text>
+    </g>
+    <g transform="translate(480, 158)">
+      <rect width="148" height="36" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+      <circle cx="18" cy="18" r="4" fill="#7c3aed"/>
+      <text x="80" y="22" text-anchor="middle" class="seam-txt f-mono">tools.guard</text>
+    </g>
+    <g transform="translate(644, 158)">
+      <rect width="148" height="36" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+      <circle cx="18" cy="18" r="4" fill="#d97706"/>
+      <text x="80" y="22" text-anchor="middle" class="seam-txt f-mono">skills / cli</text>
+    </g>
+    <g transform="translate(808, 158)">
+      <rect width="148" height="36" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+      <circle cx="18" cy="18" r="4" fill="#059669"/>
+      <text x="80" y="22" text-anchor="middle" class="seam-txt f-mono">pluginManager</text>
+    </g>
+  </g>
+
+  <!-- ======================= LAYER 3: 河洛扩展插件层 (5 列对齐: 226, 390, 554, 718, 882) ======================= -->
+  <g class="f-sans" filter="url(#shadow-sm)">
+    <rect x="132" y="228" width="848" height="148" rx="12" fill="#ffffff" stroke="#99f6e4" stroke-width="1.5"/>
+
+    <!-- 顶栏：组合编排横幅 -->
+    <rect x="152" y="238" width="804" height="24" rx="6" fill="#f0fdfa" stroke="#ccfbf1" stroke-width="1"/>
+    <text x="554" y="254" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0f766e">
+      @heluo/forge-enterprise 组合编排 (cordis.patch.yml · 各能力独立开关 · 搭载 forge-brand 河洛苍螭视觉)
+    </text>
+
+    <!-- 列 1 (x=152..300, center=226): forge-iam + keychain -->
+    <g transform="translate(152, 270)">
+      <rect width="148" height="94" rx="10" fill="#f8fafc" stroke="#bae6fd" stroke-width="1.2"/>
+      <circle cx="58" cy="24" r="14" fill="#e0f2fe"/>
+      <path d="M 58 14 L 66 17.5 V 24 C 66 29.5 58 33 58 33 C 58 33 50 29.5 50 24 V 17.5 Z" fill="none" stroke="#0284c7" stroke-width="1.7"/>
+      <circle cx="90" cy="24" r="14" fill="#ccfbf1"/>
+      <circle cx="86.5" cy="24" r="4.2" fill="none" stroke="#0d9488" stroke-width="1.7"/>
+      <path d="M 91 24 H 98 M 95 24 V 27.5 M 98 24 V 27.5" stroke="#0d9488" stroke-width="1.6" stroke-linecap="round"/>
+      <text x="74" y="56" text-anchor="middle" class="node-title f-mono">iam + keychain</text>
+      <text x="74" y="73" text-anchor="middle" class="node-sub">统一登录与密钥环托管</text>
+      <text x="74" y="87" text-anchor="middle" font-size="9.5" font-weight="600" fill="#0284c7">OS Keychain 零明文</text>
+    </g>
+
+    <!-- 列 2 (x=316..464, center=390): forge-gateway -->
+    <g transform="translate(316, 270)">
+      <rect width="148" height="94" rx="10" fill="#f8fafc" stroke="#c7d2fe" stroke-width="1.2"/>
+      <circle cx="74" cy="24" r="14" fill="#e0e7ff"/>
+      <rect x="67" y="17" width="14" height="14" rx="3" fill="none" stroke="#4f46e5" stroke-width="1.7"/>
+      <path d="M 71 14 V 17 M 77 14 V 17 M 71 31 V 34 M 77 31 V 34 M 64 21 H 67 M 64 27 H 67 M 81 21 H 84 M 81 27 H 84" stroke="#4f46e5" stroke-width="1.5" stroke-linecap="round"/>
+      <text x="74" y="56" text-anchor="middle" class="node-title f-mono">forge-gateway</text>
+      <text x="74" y="73" text-anchor="middle" class="node-sub">企业模型网关接入</text>
+      <text x="74" y="87" text-anchor="middle" font-size="9.5" font-weight="600" fill="#4f46e5">动态凭据 · 额度感知</text>
+    </g>
+
+    <!-- 列 3 (x=480..628, center=554): forge-policy -->
+    <g transform="translate(480, 270)">
+      <rect width="148" height="94" rx="10" fill="#f8fafc" stroke="#ddd6fe" stroke-width="1.2"/>
+      <circle cx="74" cy="24" r="14" fill="#ede9fe"/>
+      <rect x="67" y="23" width="14" height="10" rx="2" fill="none" stroke="#7c3aed" stroke-width="1.7"/>
+      <path d="M 70 23 V 19.5 C 70 17 78 17 78 19.5 V 23" fill="none" stroke="#7c3aed" stroke-width="1.7"/>
+      <text x="74" y="56" text-anchor="middle" class="node-title f-mono">forge-policy</text>
+      <text x="74" y="73" text-anchor="middle" class="node-sub">安全策略与合规门禁</text>
+      <text x="74" y="87" text-anchor="middle" font-size="9.5" font-weight="600" fill="#7c3aed">路径保护 · 外发确认</text>
+    </g>
+
+    <!-- 列 4 (x=644..792, center=718): devops / gitee -->
+    <g transform="translate(644, 270)">
+      <rect width="148" height="94" rx="10" fill="#f8fafc" stroke="#fde68a" stroke-width="1.2"/>
+      <circle cx="74" cy="24" r="14" fill="#fef3c7"/>
+      <circle cx="69" cy="18.5" r="2.5" fill="none" stroke="#d97706" stroke-width="1.7"/>
+      <circle cx="69" cy="29.5" r="2.5" fill="none" stroke="#d97706" stroke-width="1.7"/>
+      <circle cx="80" cy="24" r="2.5" fill="none" stroke="#d97706" stroke-width="1.7"/>
+      <path d="M 69 21 V 27 M 71.5 19.5 L 77.5 23" fill="none" stroke="#d97706" stroke-width="1.6"/>
+      <text x="74" y="56" text-anchor="middle" class="node-title f-mono">devops / gitee</text>
+      <text x="74" y="73" text-anchor="middle" class="node-sub">受控 CLI 与研发流</text>
+      <text x="74" y="87" text-anchor="middle" font-size="9.5" font-weight="600" fill="#d97706">只读基线 · Teamflow</text>
+    </g>
+
+    <!-- 列 5 (x=808..956, center=882): market-index -->
+    <g transform="translate(808, 270)">
+      <rect width="148" height="94" rx="10" fill="#f8fafc" stroke="#a7f3d0" stroke-width="1.2"/>
+      <circle cx="74" cy="24" r="14" fill="#d1fae5"/>
+      <rect x="66.5" y="16.5" width="6.5" height="6.5" rx="1.5" fill="none" stroke="#059669" stroke-width="1.6"/>
+      <rect x="75" y="16.5" width="6.5" height="6.5" rx="1.5" fill="none" stroke="#059669" stroke-width="1.6"/>
+      <rect x="66.5" y="25" width="6.5" height="6.5" rx="1.5" fill="none" stroke="#059669" stroke-width="1.6"/>
+      <rect x="75" y="25" width="6.5" height="6.5" rx="1.5" fill="none" stroke="#059669" stroke-width="1.6"/>
+      <text x="74" y="56" text-anchor="middle" class="node-title f-mono">market-index</text>
+      <text x="74" y="73" text-anchor="middle" class="node-sub">轻量原生索引接入</text>
+      <text x="74" y="87" text-anchor="middle" font-size="9.5" font-weight="600" fill="#059669">只读校验 · 精确安装</text>
+    </g>
+  </g>
+
+  <!-- ======================= LAYER 4: 企业平台生态底座 (5 列对齐: 226, 390, 554, 718, 882) ======================= -->
+  <g class="f-sans" filter="url(#shadow-sm)">
+    <rect x="132" y="442" width="848" height="136" rx="12" fill="url(#ent-zone)" stroke="#86efac" stroke-width="1.5"/>
+
+    <!-- 平台 1 (x=152..300, center=226): 企业 IAM -->
+    <g transform="translate(152, 456)">
+      <rect width="148" height="106" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="14" y="14" width="32" height="32" rx="8" fill="#e0f2fe"/>
+      <path d="M 22 36 V 34 C 22 31 26 29 30 29 C 34 29 38 31 38 34 V 36" fill="none" stroke="#0284c7" stroke-width="1.8" stroke-linecap="round"/>
+      <circle cx="30" cy="23" r="4" fill="none" stroke="#0284c7" stroke-width="1.8"/>
+      <text x="54" y="28" class="node-title">企业 IAM</text>
+      <text x="54" y="44" class="node-sub">OAuth / OIDC</text>
+      <rect x="14" y="64" width="120" height="26" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="74" y="81" text-anchor="middle" class="node-sub">身份鉴权 · 令牌撤销</text>
+    </g>
+
+    <!-- 平台 2 (x=316..464, center=390): 企业 AI 网关 -->
+    <g transform="translate(316, 456)">
+      <rect width="148" height="106" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="14" y="14" width="32" height="32" rx="8" fill="#e0e7ff"/>
+      <polygon points="30,19 40,25 40,35 30,41 20,35 20,25" fill="none" stroke="#4f46e5" stroke-width="1.8"/>
+      <circle cx="30" cy="30" r="3" fill="#4f46e5"/>
+      <text x="54" y="28" class="node-title">企业 AI 网关</text>
+      <text x="54" y="44" class="node-sub">私有化模型集群</text>
+      <rect x="14" y="64" width="120" height="26" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="74" y="81" text-anchor="middle" class="node-sub">模型路由 · 预算限流</text>
+    </g>
+
+    <!-- 平台 3 (x=480..628, center=554): 安全与观测平台 -->
+    <g transform="translate(480, 456)">
+      <rect width="148" height="106" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="14" y="14" width="32" height="32" rx="8" fill="#ede9fe"/>
+      <polyline points="20,34 26,28 31,32 39,22" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="54" y="28" class="node-title">安全与观测</text>
+      <text x="54" y="44" class="node-sub">OTel Collector</text>
+      <rect x="14" y="64" width="120" height="26" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="74" y="81" text-anchor="middle" class="node-sub">决策审计 · 调用留痕</text>
+    </g>
+
+    <!-- 平台 4 (x=644..792, center=718): 研发工程平台 -->
+    <g transform="translate(644, 456)">
+      <rect width="148" height="106" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="14" y="14" width="32" height="32" rx="8" fill="#fef3c7"/>
+      <rect x="21" y="21" width="18" height="18" rx="3" fill="none" stroke="#d97706" stroke-width="1.8"/>
+      <line x1="25" y1="27" x2="35" y2="27" stroke="#d97706" stroke-width="1.6"/>
+      <line x1="25" y1="33" x2="32" y2="33" stroke="#d97706" stroke-width="1.6"/>
+      <text x="54" y="28" class="node-title">研发工程平台</text>
+      <text x="54" y="44" class="node-sub">DevOps / Gitee</text>
+      <rect x="14" y="64" width="120" height="26" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="74" y="81" text-anchor="middle" class="node-sub">变更/Issue · 代码库</text>
+    </g>
+
+    <!-- 平台 5 (x=808..956, center=882): 制品与索引 -->
+    <g transform="translate(808, 456)">
+      <rect width="148" height="106" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="14" y="14" width="32" height="32" rx="8" fill="#d1fae5"/>
+      <path d="M 30 20 L 40 25 V 35 L 30 40 L 20 35 V 25 Z" fill="none" stroke="#059669" stroke-width="1.8" stroke-linejoin="round"/>
+      <polyline points="20,25 30,30 40,25" fill="none" stroke="#059669" stroke-width="1.5"/>
+      <line x1="30" y1="30" x2="30" y2="40" stroke="#059669" stroke-width="1.5"/>
+      <text x="54" y="28" class="node-title">制品与索引</text>
+      <text x="54" y="44" class="node-sub">npm / AIHUB</text>
+      <rect x="14" y="64" width="120" height="26" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+      <text x="74" y="81" text-anchor="middle" class="node-sub">唯一源 · 版本策展</text>
+    </g>
+  </g>
+
+  <!-- ======================= 顶层：5 列全垂直贯通优雅连接线 ======================= -->
+  <g class="f-sans">
+    <!-- 1) L1 -> L2 连接线 -->
+    <line x1="308" y1="90" x2="308" y2="120" stroke="#3b82f6" stroke-width="1.6" marker-end="url(#chev-blue)"/>
+    <circle cx="308" cy="90" r="3" fill="#ffffff" stroke="#3b82f6" stroke-width="1.6"/>
+
+    <line x1="800" y1="90" x2="800" y2="120" stroke="#3b82f6" stroke-width="1.6" marker-end="url(#chev-blue)"/>
+    <circle cx="800" cy="90" r="3" fill="#ffffff" stroke="#3b82f6" stroke-width="1.6"/>
+
+    <!-- 2) L2 <-> L3 Seam 挂载线 (5 列中心: 226, 390, 554, 718, 882) -->
+    <g stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="2.5,2.5">
+      <line x1="226" y1="194" x2="226" y2="228"/>
+      <line x1="390" y1="194" x2="390" y2="228"/>
+      <line x1="554" y1="194" x2="554" y2="228"/>
+      <line x1="718" y1="194" x2="718" y2="228"/>
+      <line x1="882" y1="194" x2="882" y2="228"/>
+    </g>
+    <g fill="#ffffff" stroke="#3b82f6" stroke-width="1.5">
+      <circle cx="226" cy="194" r="2.8"/><circle cx="226" cy="228" r="2.8" stroke="#0d9488"/>
+      <circle cx="390" cy="194" r="2.8"/><circle cx="390" cy="228" r="2.8" stroke="#0d9488"/>
+      <circle cx="554" cy="194" r="2.8"/><circle cx="554" cy="228" r="2.8" stroke="#0d9488"/>
+      <circle cx="718" cy="194" r="2.8"/><circle cx="718" cy="228" r="2.8" stroke="#0d9488"/>
+      <circle cx="882" cy="194" r="2.8"/><circle cx="882" cy="228" r="2.8" stroke="#0d9488"/>
+    </g>
+
+    <!-- 3) 零信任安全边界虚线 -->
+    <line x1="132" y1="409" x2="980" y2="409" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,5"/>
+
+    <!-- 4) L3 <-> L4 5 列 100% 笔直垂直通道 (226, 390, 554, 718, 882) -->
+    <!-- 列 1: IAM (226) -->
+    <line x1="226" y1="366" x2="226" y2="453" stroke="#0d9488" stroke-width="1.6" marker-start="url(#chev-teal)" marker-end="url(#chev-teal)"/>
+    <g filter="url(#shadow-pill)">
+      <rect x="176" y="398" width="100" height="22" rx="11" fill="#ffffff" stroke="#99f6e4" stroke-width="1.2"/>
+      <text x="226" y="413" text-anchor="middle" class="proto-txt">OAuth / OIDC</text>
+    </g>
+
+    <!-- 列 2: Gateway (390) -->
+    <line x1="390" y1="366" x2="390" y2="453" stroke="#0d9488" stroke-width="1.6" marker-start="url(#chev-teal)" marker-end="url(#chev-teal)"/>
+    <g filter="url(#shadow-pill)">
+      <rect x="338" y="398" width="104" height="22" rx="11" fill="#ffffff" stroke="#99f6e4" stroke-width="1.2"/>
+      <text x="390" y="413" text-anchor="middle" class="proto-txt">令牌 / 模型路由</text>
+    </g>
+
+    <!-- 列 3: Policy -> OTel (554) -->
+    <line x1="554" y1="364" x2="554" y2="453" stroke="#0d9488" stroke-width="1.6" marker-end="url(#chev-teal)"/>
+    <circle cx="554" cy="364" r="2.8" fill="#ffffff" stroke="#0d9488" stroke-width="1.5"/>
+    <g filter="url(#shadow-pill)">
+      <rect x="504" y="398" width="100" height="22" rx="11" fill="#ffffff" stroke="#99f6e4" stroke-width="1.2"/>
+      <text x="554" y="413" text-anchor="middle" class="proto-txt">OTel 决策审计</text>
+    </g>
+
+    <!-- 列 4: DevOps/Gitee (718) -->
+    <line x1="718" y1="366" x2="718" y2="453" stroke="#0d9488" stroke-width="1.6" marker-start="url(#chev-teal)" marker-end="url(#chev-teal)"/>
+    <g filter="url(#shadow-pill)">
+      <rect x="668" y="398" width="100" height="22" rx="11" fill="#ffffff" stroke="#99f6e4" stroke-width="1.2"/>
+      <text x="718" y="413" text-anchor="middle" class="proto-txt">只读 CLI 契约</text>
+    </g>
+
+    <!-- 列 5: Market Index (882) -->
+    <line x1="882" y1="366" x2="882" y2="453" stroke="#0d9488" stroke-width="1.6" marker-start="url(#chev-teal)" marker-end="url(#chev-teal)"/>
+    <g filter="url(#shadow-pill)">
+      <rect x="830" y="398" width="104" height="22" rx="11" fill="#ffffff" stroke="#99f6e4" stroke-width="1.2"/>
+      <text x="882" y="413" text-anchor="middle" class="proto-txt">format-1 / npm</text>
+    </g>
+  </g>
+</svg>

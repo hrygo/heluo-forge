@@ -21,43 +21,13 @@
 
 ---
 
-## 1. 终态愿景与核心价值
+## 1. 愿景与核心价值
 
-大型企业引入端侧 AI 编程助手时，普遍面临**身份孤岛、凭据裸露、模型使用缺乏治理、内网研发资产割裂**以及**国产信创环境适配困难**等合规与工程痛点。
+大型企业落地端侧 AI 编程助手，既需要融入内网既有的**身份认证、模型网关、DevOps 与代码资产**，又面临**凭据裸露、调用失控、研发上下文割裂**以及 **Windows 与国产银河麒麟双端适配**等现实挑战。
 
-河洛的终态愿景是构建一套**“客户端零信任控制 + 服务端权威授权”**的端侧智能研发底座：
+河洛坚持“**核心不改，能力全插件**”的工程路线：以 DeepSeek Harness（DSH）为原生宿主底座，充分借助 DSH 开放的插件扩展机制（`auth / credentials`、`llm`、`tools.guard`、`skills / cli` 与 `pluginManager` 原生索引源），将端侧工作台无缝连接并拓展至企业各类核心平台，构建一套“**客户端零信任控制 + 服务端权威授权**”协同的智能研发底座：
 
-```mermaid
-flowchart TB
-    subgraph Client["端侧智能工作台 (DeepSeek Harness + 河洛套件)"]
-        direction TB
-        UI["统一工作区 (Windows 桌面 / 银河麒麟 aarch64 Web)"]
-        subgraph Plugins["河洛扩展套件 (@heluo/forge-*)"]
-            IAM["身份认证与会话 (forge-iam)"]
-            POLICY["策略管控与审计 (forge-policy)"]
-            GATEWAY["模型网关适配 (forge-gateway)"]
-            KEYCHAIN["安全凭据托管 (forge-credentials-keychain)"]
-            DEVOPS["研发生态协同 (forge-devops & forge-gitee)"]
-            BRAND["河洛苍螭视觉 (forge-brand)"]
-        end
-        UI --> Plugins
-    end
-
-    subgraph Enterprise["企业零信任服务端体系"]
-        direction TB
-        E_IAM["企业统一身份认证 (OIDC / SSO)"]
-        E_GW["企业 AI 模型网关 (配额 / 计费 / 审计)"]
-        E_REG["企业私有制品源 (npm) + AIHUB 原生轻量索引"]
-        E_TOOLS["企业研发资产 (DevOps 平台 / 私有 Gitee)"]
-    end
-
-    IAM <-->|"OIDC / 令牌生命周期"| E_IAM
-    GATEWAY <-->|"动态凭据注入 / 计量"| E_GW
-    POLICY -.->|"端侧门禁 / 审计留痕"| Client
-    KEYCHAIN -.->|"OS Keychain 隔离保护"| IAM
-    DEVOPS <-->|"受控工具契约 / 只读优先"| E_TOOLS
-    Client <-->|"原生只读索引拉取"| E_REG
-```
+![河洛企业级智能研发平台终态架构全景](docs/assets/architecture-overview.svg)
 
 ### 核心价值主张
 
@@ -84,7 +54,7 @@ flowchart TB
 |---|---|---|---|
 | **Stage 0** | **方案设计与开发骨架** | **已就绪** (当前阶段) | 需求基线、总体架构、字段级契约全部成文；8 大扩展包及凭据支撑包骨架建立；2700+ 离线测试用例闭环；河洛苍螭品牌视觉套件正式归档锁定。 |
 | **Stage 1** | **企业环境与双端联调** | **进行中** (关键路径) | 企业 IAM 真实对接（访问令牌撤销与轮换联调）；企业 AI 网关动态认证与配额联调；银河麒麟 aarch64 实机环境取证；AIHUB 原生索引三目标安装验证。 |
-| **Stage 2** | **企业打包与试点推广** | **规划中** | 企业双端定制安装包（Windows MSI / 麒麟 deb）；3 部门 800 人分批试点推广；全链路研发效能度量与支持体系运转。 |
+| **Stage 2** | **企业打包与试点推广** | **规划中** | 企业双端定制安装包（Windows MSI / 麒麟 deb）；分批试点推广与效果验证；全链路研发效能度量与支持体系运转。 |
 
 各模块的最新成熟度、已实测项与未验项清单，以[逐模块设计索引 §2.2](docs/design/README.md#22-实现与验证入口)为唯一依据，本文不复述动态计数。
 
