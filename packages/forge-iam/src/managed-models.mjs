@@ -144,7 +144,19 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   let observedVersion = 0;
   // `host.emit` reaches SDK listeners; `onChange` reaches this plugin's own
   // view subscribers, which the catalogue changes without an IAM transition.
-  const publish = () => { host.emit?.('llm/adapters-updated'); onChange?.(); };
+  // Only a real change is forwarded: a repeated failure publishes the same
+  // view, and each forwarded frame re-enters the observation loop, so an
+  // unconditional callback turns one failing gateway into an endless refresh.
+  let published = '';
+  const publish = () => {
+    host.emit?.('llm/adapters-updated');
+    const signature = [catalogState, catalogError ?? '', defaultModelId ?? '', hostDefault ?? '',
+      Object.keys(modelOptions).sort().join(','),
+      models.map(model => `${model.id}:${model.enabled ? 1 : 0}`).join(',')].join('|');
+    if (signature === published) return;
+    published = signature;
+    onChange?.();
+  };
   const cancelRetry = () => { clearTimeout(retryTimer); retryTimer = undefined; };
   // Every path that drops the backend also drops the catalogue state with it,
   // so the account page can never say "ready" while nothing is callable.
