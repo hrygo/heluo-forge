@@ -433,3 +433,31 @@ test('model advanced section uses concise interactive help buttons and eliminate
   assert.ok(popovers.some(p => p.children?.some(c => typeof c === 'string' && c.includes('最大上下文容量'))));
   assert.ok(popovers.some(p => p.children?.some(c => typeof c === 'string' && c.includes('深度思考档位'))));
 });
+
+test('model list row visually weakens secondary metadata and avoids heavy idle badges', async t => {
+  const twoModels = { ...view, modelAccess: { ...view.modelAccess, models: [{ id: 'corp-chat' }, { id: 'corp-vision' }] } };
+  const panel = await mountPanel(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+
+  const rendered = panel.render();
+  const allNodes = nodes(rendered);
+
+  // Enabled model shows a crisp green badge
+  const successBadges = allNodes.filter(node => node.props.className?.includes('fiam-badge-success'));
+  assert.ok(successBadges.length >= 1);
+
+  // Secondary specs use clean text elements, not heavy idle badges
+  const idleBadges = allNodes.filter(node => node.props.className === 'fiam-badge fiam-badge-idle');
+  assert.equal(idleBadges.length, 0);
+
+  // Initially neither is enabled in options, so both display unenabled meta status
+  const metaStatus = allNodes.filter(node => node.props.className === 'fiam-model-meta-status');
+  assert.equal(metaStatus.length, 2);
+  assert.equal(metaStatus[0].children?.[0], '未启用');
+
+  const metaSpecs = allNodes.filter(node => node.props.className === 'fiam-model-meta-spec');
+  assert.equal(metaSpecs.length, 2);
+});

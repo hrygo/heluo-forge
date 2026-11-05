@@ -315,48 +315,50 @@ window.__ModuleLoader__.load({
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 10px 14px;
+        padding: 9px 12px;
         gap: 12px;
-        min-height: 52px;
+        min-height: 46px;
       }
       .fiam-model-info {
         display: flex;
         flex-direction: column;
-        gap: 5px;
+        gap: 3px;
         min-width: 0;
         flex: 1 1 auto;
       }
       .fiam-model-header-line {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 7px;
         min-width: 0;
         flex-wrap: nowrap;
       }
       .fiam-model-dot {
-        width: 8px;
-        height: 8px;
+        width: 7px;
+        height: 7px;
         border-radius: 50%;
         flex-shrink: 0;
         display: inline-block;
       }
       .fiam-model-dot-enabled {
         background: var(--dsw-alias-state-success-primary);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-success-primary) 18%, transparent);
       }
       .fiam-model-dot-disabled {
         background: var(--dsw-alias-label-dimmed, var(--dsw-alias-border-l3));
       }
       .fiam-model-name {
         font-weight: 600;
-        font-size: var(--dsw-font-xs-13);
+        font-size: 13px;
         color: var(--dsw-alias-label-primary);
-        line-height: 20px;
+        line-height: 19px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
         min-width: 0;
         flex: 0 1 auto;
-        max-width: 320px;
+        max-width: 380px;
+        letter-spacing: -0.01em;
       }
       .fiam-model-header-line .fiam-badge {
         flex-shrink: 0;
@@ -365,23 +367,32 @@ window.__ModuleLoader__.load({
       .fiam-model-meta-line {
         display: flex;
         align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
+        gap: 5px;
+        flex-wrap: nowrap;
         min-width: 0;
+        line-height: 16px;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .fiam-model-meta-line .fiam-badge,
-      .fiam-model-meta-line .fiam-model-id {
-        flex-shrink: 0;
-        white-space: nowrap;
-      }
-      .fiam-model-id {
-        font-family: var(--ds-font-family-code, monospace);
+      .fiam-model-meta-status,
+      .fiam-model-meta-spec,
+      .fiam-model-meta-item,
+      .fiam-model-meta-id {
         font-size: 11px;
         color: var(--dsw-alias-label-tertiary);
-        background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04));
-        padding: 1px 6px;
-        border-radius: var(--dsw-radius-xs, 4px);
-        line-height: 16px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .fiam-model-meta-sep {
+        color: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.18));
+        font-size: 10px;
+        line-height: 1;
+        user-select: none;
+        flex-shrink: 0;
+      }
+      .fiam-model-meta-id {
+        font-family: var(--ds-font-family-code, monospace);
+        opacity: 0.8;
       }
       .fiam-model-advanced {
         padding: 12px 14px;
@@ -1671,14 +1682,21 @@ window.__ModuleLoader__.load({
               h('span', { className: 'fiam-model-name', title: `${displayName} (${model.id})` }, displayName),
               isEnabled
                 ? h('span', { className: 'fiam-badge fiam-badge-success' }, isDefaultModel ? '默认可用' : '已启用')
-                : h('span', { className: 'fiam-badge fiam-badge-idle' }, '未启用'),
+                : null,
+              hasCustom
+                ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '已个性化')
+                : null,
             ),
             h('div', { className: 'fiam-model-meta-line' },
-              h('span', { className: 'fiam-badge fiam-badge-idle' }, `${contextVal} · 输出 ${maxTokensVal}`),
-              hasImage ? h('span', { className: 'fiam-badge fiam-badge-success' }, '视觉图片') : null,
-              hasReasoning ? h('span', { className: 'fiam-badge fiam-badge-authenticating' }, reasoningBadgeText) : null,
-              hasCustom ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '已个性化') : null,
-              displayName !== model.id ? h('span', { className: 'fiam-model-id' }, model.id) : null,
+              !isEnabled ? h('span', { className: 'fiam-model-meta-status' }, '未启用') : null,
+              !isEnabled ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
+              h('span', { className: 'fiam-model-meta-spec' }, `${contextVal} · 输出 ${maxTokensVal}`),
+              hasImage ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
+              hasImage ? h('span', { className: 'fiam-model-meta-item' }, '视觉图片') : null,
+              hasReasoning ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
+              hasReasoning ? h('span', { className: 'fiam-model-meta-item' }, reasoningBadgeText) : null,
+              displayName !== model.id ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
+              displayName !== model.id ? h('span', { className: 'fiam-model-meta-id' }, model.id) : null,
             ),
           ),
           h('div', { className: 'fiam-model-row-actions' },
