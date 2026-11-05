@@ -78,3 +78,12 @@ test('the client stays one loadable module', () => {
   assert.match(source, /ctx\.slots\.inject\('settings\.section'/, 'the panel slot registration must stay');
   assert.match(source, /ctx\.slots\.inject\('settings\.launcher'/, 'the launcher slot registration must stay');
 });
+
+test('error texts are one table, not a branch chain', () => {
+  assert.match(
+    source,
+    /const ERROR_NOTICE = Object\.freeze\(Object\.assign\(Object\.create\(null\), \{/,
+    'ERROR_NOTICE must stay a frozen prototype-less table',
+  );
+  assert.doesNotMatch(source, /if \(code === '/, 'add a row to ERROR_NOTICE instead of another if-branch');
+});
