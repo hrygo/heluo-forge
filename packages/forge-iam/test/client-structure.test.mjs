@@ -23,12 +23,8 @@ const STATE_COMPARISON_BASELINE = {
 // Storage is centralised: every access lives in createClientStore().
 const STORAGE_BASELINE = { createClientStore: 5 };
 
-const RAW_ERROR_UNWRAP_BASELINE = {
-  IamLauncher: 1,
-  Onboarding: 2,
-  Panel: 7,
-  SignedOutBanner: 2,
-};
+// One reader: resultCode(). Everything else asks resultNotice(result).
+const RAW_RESULT_CODE_BASELINE = { resultCode: 1 };
 
 // Props a render entry may still receive. The target is four named groups
 // (`{ h, ui, model, actions }`); U4 lowers every entry to it.
@@ -70,11 +66,11 @@ test('storage access stays inside createClientStore()', () => {
   );
 });
 
-test('error unwrapping only shrink: no new errorNotice(result.body?.error?.code) site', () => {
+test('responses are unwrapped in one place: resultCode()', () => {
   assert.deepEqual(
-    analysed.violations.rawErrorUnwrap,
-    RAW_ERROR_UNWRAP_BASELINE,
-    'unwrap responses with expectOk(result) instead of reading result.body?.error?.code at the call site',
+    analysed.violations.rawResultCode,
+    RAW_RESULT_CODE_BASELINE,
+    'read a response code through resultNotice(result)/resultCode(result) instead of result.body?.error?.code',
   );
 });
 
