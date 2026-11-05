@@ -28,7 +28,7 @@ const RENDER_ARITY_BASELINE = {
   renderAccountCard: 3, // { h, ui, actions }
   renderGatewayCard: 3, // { h, ui, actions }
   renderJourneyBar: 3, // { h, ui, model }
-  renderModelItem: 16, // 待拆：条目仍按扁平字段接收
+  renderModelItem: 3, // { h, item, actions }
   renderModelsCard: 4, // { h, ui, model, actions }
 };
 

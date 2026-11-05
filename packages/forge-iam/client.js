@@ -2018,12 +2018,12 @@ window.__ModuleLoader__.load({
 
     // §12.2 模型条目
     function renderModelItem(ctx) {
+      const { h, item, actions } = ctx;
+      const { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view } = item;
       const {
-        h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
-        resetModelOption, disableModelOption, enableModelOption, enableModelWithDefaults,
-        saveModelOptions,
-        modelSaving, viewBarrier, view,
-      } = ctx;
+        toggleModelExpand, updateOptionField, resetModelOption, disableModelOption,
+        enableModelOption, enableModelWithDefaults, saveModelOptions,
+      } = actions;
 
 
 
@@ -2672,10 +2672,12 @@ window.__ModuleLoader__.load({
                 const opt = modelOptions[model.id] || {};
                 const isExpanded = Boolean(expandedModels[model.id]);
                 return renderModelItem({
-                  h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
-                  resetModelOption, disableModelOption, enableModelOption, enableModelWithDefaults,
-                  saveModelOptions,
-                  modelSaving, viewBarrier, view,
+                  h,
+                  item: { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view },
+                  actions: {
+                    toggleModelExpand, updateOptionField, resetModelOption, disableModelOption,
+                    enableModelOption, enableModelWithDefaults, saveModelOptions,
+                  },
                 });
               }))
           )
