@@ -34,8 +34,8 @@
 | `src/service-state.mjs` | `state`、`error`、`lastGrant`、`sessionAuthentication`、`disposed`、`exclusive`、监听器集合 | 唯一的状态写入路径、`view()` 投影与 `notify()` 发布 |
 | `src/service-store.mjs` | 凭据 provider、凭据缓存、网关 store、选型 store、网关摘要与 epoch | provider 解析、原子性断言、网关摘要缓存与 epoch 递增 |
 | `src/service-grant.mjs` | `metadataCache`、`jwksCache`、`identityProfile`、grant 归属表 | 协议缓存、登录/刷新/回调的绑定与校验、身份投影 |
-| `src/service-model-selection.mjs` | 选型单飞、排队标志、选型代际 | 默认模型勘定与其单飞；只经端口反向读网关 |
-| `src/service-gateway.mjs` | 网关凭据摘要、加载时间、加载单飞、网关 epoch | 网关凭据摘要的读取与失效；变更时通知选型 |
+| `src/service-model-selection.mjs` | 选型单飞、排队标志、选型代际、选型读写 | 默认模型勘定与其单飞、选型记录的读与写；只经端口反向读网关 |
+| `src/service-gateway.mjs` | 网关凭据摘要、加载时间、加载单飞、网关 epoch | 网关凭据的读取、解析、保存与清除，摘要失效；变更时通知选型 |
 | `src/service-token.mjs` | 刷新单飞及其 store/credentials/issuer/认证描述符、后台刷新退避 | `resolveToken` 与 `getAccessToken` 的完整刷新路径 |
 | `src/service-reconcile.mjs` | 无（经端口读写观测标志与发布计数） | 记录到视图的勘定：`syncFromStore`、`hydrate` |
 | `src/service-signin.mjs` | 登录 attempt 及其计时器 | `startSignIn`、回调、取消，含 verifier/nonce 的归属 |
@@ -76,8 +76,8 @@
 | 宿主：状态判定与发布 | `src/service-state.mjs` |
 | 宿主：凭据 provider 与缓存 | `src/service-store.mjs` |
 | 宿主：协议缓存、绑定校验 | `src/service-grant.mjs` |
-| 宿主：网关凭据摘要 | `src/service-gateway.mjs` |
-| 宿主：默认模型勘定 | `src/service-model-selection.mjs` |
+| 宿主：网关凭据读写与摘要 | `src/service-gateway.mjs` |
+| 宿主：默认模型勘定与选型读写 | `src/service-model-selection.mjs` |
 
 ## 登录边界
 

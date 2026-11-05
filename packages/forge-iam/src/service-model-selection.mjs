@@ -1,5 +1,6 @@
+import { IamError } from './errors.mjs';
 import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
-import { isAccessExpired } from './record.mjs';
+import { isAccessExpired, isRefreshUsable } from './record.mjs';
 
 /**
  * The durable default-model selection and its single-flight reconciliation.
@@ -11,7 +12,7 @@ import { isAccessExpired } from './record.mjs';
  * failure handling, so a read-only observation can never discard a grant.
  */
 export function createModelSelection(env) {
-  const { config, options, ctx, provider, grants, now, getAuthEpoch, isSigningOut, getLoadGateway } = env;
+  const { config, options, ctx, provider, grants, now, getAuthEpoch, isSigningOut, getLoadGateway, resolveToken } = env;
 
   let flight = null;
   let queued = false;
@@ -111,6 +112,49 @@ export function createModelSelection(env) {
     flight = { promise: request };
     return request;
   }
+  /**
+   * Durable selection for the signed-in person. The record is bound to one
+   * subject, so another person's saved choice is never adopted: it reads as
+   * "nothing saved" and the runtime starts from the catalogue.
+   */
+  async function readSelection() {
+    const current = await owner();
+    if (!current) return { subject: null, saved: false, models: {}, defaultModelId: null };
+    const target = provider.ensure() ? provider.modelSelectionStore : null;
+    if (!target || provider.storeCredentials !== current.credentials) {
+      return { subject: current.subject, saved: false, models: {}, defaultModelId: null };
+    }
+    const record = await target.read();
+    if (!record.ok || !record.selection || record.selection.subject !== current.subject) {
+      // Nothing stored for this subject (or the record belongs to someone else
+      // or is unreadable): the caller decides the first-run default.
+      return { subject: current.subject, saved: false, models: {}, defaultModelId: null };
+    }
+    return { subject: current.subject, saved: true, models: record.selection.models, defaultModelId: record.selection.defaultModelId };
+  }
+
+  /** Persist the enabled set. Never a token channel: only model ids and overrides. */
+  async function saveSelection({ models, defaultModelId } = {}) {
+    ctx.assertExclusive();
+    if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+    let current = await owner();
+    if (current?.expired && ctx.lastGrant && isRefreshUsable(ctx.lastGrant, now())) {
+      try {
+        await resolveToken();
+        current = await owner();
+      } catch {
+        // keep expired status if refresh fails
+      }
+    }
+    if (!current || current.expired) throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
+    const target = provider.ensure() ? provider.modelSelectionStore : null;
+    if (!target || provider.storeCredentials !== current.credentials) {
+      throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法写入模型设置。');
+    }
+    const saved = await target.save({ subject: current.subject, models, defaultModelId });
+    return saved.selection;
+  }
+
   return {
     get inFlight() { return Boolean(flight); },
     get generation() { return generation; },
@@ -118,6 +162,8 @@ export function createModelSelection(env) {
     clearQueue() { queued = false; },
     owner,
     services,
+    readSelection,
+    saveSelection,
     schedule,
     reconcile,
   };
