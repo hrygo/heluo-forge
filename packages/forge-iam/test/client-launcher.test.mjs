@@ -50,3 +50,23 @@ test('launcher diagnostics exclude account identifiers, URLs and device labels',
   assert.doesNotMatch(copied, /private-person|private.example|private-device/);
   assert.equal(JSON.parse(copied).iamState, 'ready');
 });
+
+test('launcher displays principal in wide mode and distinguishes owner-mismatch and model counts', async t => {
+  const { mountPanel } = await import('./support/client-panel.mjs');
+  const view = {
+    state: 'ready',
+    configured: true,
+    signedIn: true,
+    principal: 'E90210',
+    gatewayCredential: { state: 'owner-mismatch', deviceLabel: 'MacBook-Pro' },
+    modelAccess: { state: 'ready', models: [{ id: 'corp-chat' }, { id: 'corp-coder' }] },
+  };
+  const panel = await mountPanel(async () => Response.json(view), {
+    componentId: 'forge-iam-launcher',
+    componentProps: { wide: true },
+  });
+  t.after(() => panel.close());
+  const text = panel.text(panel.render());
+  assert.match(text, /E90210/);
+  assert.match(text, /凭据账号不匹配/);
+});
