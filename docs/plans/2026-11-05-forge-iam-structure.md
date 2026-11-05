@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.12.0 |
+| 版本 | V0.13.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -298,6 +298,8 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 ### U8 宿主：网关与选型轴
 
 - 新增 `service-gateway.mjs`（网关凭据读写与校验）与 `service-model-selection.mjs`（`selectionOwner`、`modelSelectionFlight`/`Queued`/`Generation`、`scheduleDefaultModelReconciliation`、`reconcileDefaultModel`、选型读写与 `getModelAccessEpoch`）。
+- 实现记录：`service.mjs` 1690 → 1540 行，新增 `service-gateway.mjs` 85 行、`service-model-selection.mjs` 124 行。依赖单向：gateway → selection（`selection.schedule()` 与 `selection.inFlight`），selection 反向只经注入的 `getLoadGateway` 端口，故两模块不互相 import。
+- `service.mjs` 保留 `readGatewayCredential`/`loadGatewayCredential` 的服务出口，指向 `gateway.read`/`gateway.load`。
 - 完成条件：`gateway-atomic-*`、`credential-*`、`model-selection-*`、`host-default-model`、`cli-session` 全绿。
 
 ### U9 宿主：令牌刷新轴
