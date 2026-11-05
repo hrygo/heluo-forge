@@ -563,6 +563,8 @@ test('model list toolbar is sticky, eliminates redundant custom tab, and aligns 
 
   assert.match(clientSource, /\.fiam-model-toolbar\s*\{[^}]*position:\s*sticky/);
   assert.match(clientSource, /\.fiam-model-list\s*\{[^}]*min-height:\s*480px/);
+  assert.match(clientSource, /\.fiam-model-item\.fiam-model-item-expanded\s*\{[^}]*margin-bottom:\s*14px/);
+  assert.match(clientSource, /\.fiam-model-item\.fiam-model-item-expanded\s*\{[^}]*box-shadow:/);
 
   const renderedText = panel.text(panel.render());
   assert.match(renderedText, /全部 \(2\)/);
