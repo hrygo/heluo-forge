@@ -51,7 +51,10 @@ export function analyseClient(source) {
       const body = cursor === index ? text.slice(entry.index + entry[0].length) : text;
       const closed = body.includes('})');
       const chunk = closed ? body.slice(0, body.lastIndexOf('})')) : body;
-      keys.push(...chunk.split(',').map(key => key.trim()).filter(key => /^[A-Za-z_$][\w$]*$/.test(key)));
+      keys.push(...chunk.split(',')
+        .map(key => key.trim())
+        .map(key => (key.includes(':') ? key.slice(0, key.indexOf(':')).trim() : key))
+        .filter(key => /^[A-Za-z_$][\w$]*$/.test(key)));
       if (closed) break;
     }
     renderParams['render' + entry[1]] = keys;

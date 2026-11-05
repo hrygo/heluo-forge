@@ -2967,10 +2967,115 @@ window.__ModuleLoader__.load({
       };
     }
 
+    // §14.2 凭据表单
+    // 凭据草稿、保存、清除与目录刷新是一组动作：写入后回写视图、并让目录重新同步。
+    // 两个端口是显式的：setView（回写视图）与 catalogue（清除目录提示与展开状态）。
+    function useCredentialForm({ view, viewBarrier, setView, catalogue }) {
+      const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
+      const isCurrentEpoch = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
+      const pendingNotice = '网关地址和个人访问凭证已保存，正在获取模型列表。';
+      // 卸载后不再回写状态：与 copy 的 liveness 同式，但由本 hook 自己持有。
+      const live = React.useRef(true);
+      React.useEffect(() => {
+        live.current = true;
+        return () => { live.current = false; };
+      }, []);
+
+      // 保存后目录同步完成时，把「正在获取」换成结果；其余提示原样保留。
+      function noteModelsSynced(nextView) {
+        setCredential((current) => {
+          if (current.notice !== pendingNotice) return current;
+          const models = deriveModelUi(nextView);
+          if (models.ready) return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
+          if (models.failed) return { ...current, notice: errorNotice(models.error) };
+          return current;
+        });
+      }
+
+      const saveCredential = async () => {
+        if (viewBarrier.current.pending) return;
+        const epoch = viewBarrier.current.epoch;
+        const value = credential.value.trim();
+        if (!value) {
+          setCredential((current) => ({ ...current, notice: '请输入个人访问凭证。' }));
+          return;
+        }
+        setCredential((current) => ({ ...current, saving: true, notice: null }));
+        try {
+          const result = await putJson('/api/forge-iam/credential', {
+            key: value, deviceLabel: credential.deviceLabel.trim(),
+            baseURL: (credential.baseURL ?? view?.gatewayCredential?.baseURL ?? view?.modelAccess?.baseURL ?? '').trim()
+          });
+          if (!result.ok) {
+            setCredential((current) => ({
+              ...current,
+              saving: false,
+              notice: resultNotice(result),
+            }));
+            return;
+          }
+          // The value is never stored in component state after the write.
+          setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关地址和个人访问凭证已保存，正在获取模型列表。' });
+          if (isCurrentEpoch(epoch)) setView(result.body?.view);
+        } catch {
+          setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
+        }
+      };
+
+      const refreshModels = async () => {
+        if (viewBarrier.current.pending || credential.saving) return;
+        const epoch = viewBarrier.current.epoch;
+        setCredential((current) => ({ ...current, saving: true, notice: null }));
+        try {
+          const result = await getJson('/api/forge-iam/models');
+          if (!isCurrentEpoch(epoch)) return;
+          setCredential((current) => ({
+            ...current, saving: false, notice: result.ok
+              ? `模型列表已更新，共 ${result.body?.models?.length ?? 0} 个模型。`
+              : resultNotice(result)
+          }));
+          if (result.ok) setView(result.body?.view);
+        } catch { if (isCurrentEpoch(epoch)) setCredential((current) => ({ ...current, notice: '暂时无法获取模型列表，请稍后重试。' })); }
+        finally { if (live.current) setCredential((current) => ({ ...current, saving: false })); }
+      };
+
+      const clearCredential = async () => {
+        if (viewBarrier.current.pending) return;
+        const epoch = viewBarrier.current.epoch;
+        setCredential((current) => ({ ...current, saving: true, notice: null }));
+        try {
+          const result = await deleteJson('/api/forge-iam/credential');
+          if (!result.ok) {
+            setCredential((current) => ({
+              ...current,
+              saving: false,
+              notice: resultNotice(result),
+            }));
+            return;
+          }
+          setCredential((current) => ({ ...current, saving: false, value: '', notice: '网关凭据已清除。' }));
+          catalogue.actions.clearNotice();
+          catalogue.actions.collapseAll();
+          if (isCurrentEpoch(epoch)) setView(result.body?.view);
+        } catch {
+          setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
+        }
+      };
+
+
+      return {
+        credential,
+        setCredential,
+        save: saveCredential,
+        refresh: refreshModels,
+        clear: clearCredential,
+        noteModelsSynced,
+      };
+    }
+
     // §14 面板
     function Panel() {
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
-      const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
 
       // Waking a laptop or returning to the tab is when a signed-in session is
       // most likely to have drifted (network moved, gateway restarted). Re-read
@@ -3015,6 +3120,7 @@ window.__ModuleLoader__.load({
       const isViewCurrent = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
       const setView = (next) => setState((current) => ({ ...current, view: next ?? current.view }));
       const catalogue = useModelCatalogue({ view: state.view, viewBarrier, setView });
+      const form = useCredentialForm({ view: state.view, viewBarrier, setView, catalogue });
 
       // The signed-in Host owns the selection, including an explicitly empty
       // set. A browser cache must never restore another account's old choices.
@@ -3026,13 +3132,7 @@ window.__ModuleLoader__.load({
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
           if (!deriveSessionUi(view).authenticating) linkIdentity.current = null;
           setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }) }));
-          setCredential((current) => {
-            if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
-            const models = deriveModelUi(view);
-            if (models.ready) return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
-            if (models.failed) return { ...current, notice: errorNotice(models.error) };
-            return current;
-          });
+          form.noteModelsSynced(view);
           void catalogue.actions.syncFromView(view);
         } catch (error) {
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
@@ -3049,13 +3149,7 @@ window.__ModuleLoader__.load({
           ...current, phase: 'ready', view, error: null,
           ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }),
         }));
-        setCredential((current) => {
-          if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
-          const models = deriveModelUi(view);
-          if (models.ready) return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
-          if (models.failed) return { ...current, notice: errorNotice(models.error) };
-          return current;
-        });
+        form.noteModelsSynced(view);
         void catalogue.actions.syncFromView(view);
       }, viewBarrier);
 
@@ -3086,76 +3180,6 @@ window.__ModuleLoader__.load({
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
           if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
-        }
-      };
-
-      const saveCredential = async () => {
-        if (viewBarrier.current.pending) return;
-        const epoch = viewBarrier.current.epoch;
-        const value = credential.value.trim();
-        if (!value) {
-          setCredential((current) => ({ ...current, notice: '请输入个人访问凭证。' }));
-          return;
-        }
-        setCredential((current) => ({ ...current, saving: true, notice: null }));
-        try {
-          const result = await putJson('/api/forge-iam/credential', {
-            key: value, deviceLabel: credential.deviceLabel.trim(),
-            baseURL: (credential.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '').trim()
-          });
-          if (!result.ok) {
-            setCredential((current) => ({
-              ...current,
-              saving: false,
-              notice: resultNotice(result),
-            }));
-            return;
-          }
-          // The value is never stored in component state after the write.
-          setCredential({ value: '', deviceLabel: credential.deviceLabel, saving: false, notice: '网关地址和个人访问凭证已保存，正在获取模型列表。' });
-          if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
-        } catch {
-          setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
-        }
-      };
-
-      const refreshModels = async () => {
-        if (viewBarrier.current.pending || credential.saving) return;
-        const epoch = viewBarrier.current.epoch;
-        setCredential((current) => ({ ...current, saving: true, notice: null }));
-        try {
-          const result = await getJson('/api/forge-iam/models');
-          if (!isViewCurrent(epoch)) return;
-          setCredential((current) => ({
-            ...current, saving: false, notice: result.ok
-              ? `模型列表已更新，共 ${result.body?.models?.length ?? 0} 个模型。`
-              : resultNotice(result)
-          }));
-          if (result.ok) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
-        } catch { if (isViewCurrent(epoch)) setCredential((current) => ({ ...current, notice: '暂时无法获取模型列表，请稍后重试。' })); }
-        finally { if (copyLive.current) setCredential((current) => ({ ...current, saving: false })); }
-      };
-
-      const clearCredential = async () => {
-        if (viewBarrier.current.pending) return;
-        const epoch = viewBarrier.current.epoch;
-        setCredential((current) => ({ ...current, saving: true, notice: null }));
-        try {
-          const result = await deleteJson('/api/forge-iam/credential');
-          if (!result.ok) {
-            setCredential((current) => ({
-              ...current,
-              saving: false,
-              notice: resultNotice(result),
-            }));
-            return;
-          }
-          setCredential((current) => ({ ...current, saving: false, value: '', notice: '网关凭据已清除。' }));
-          catalogue.actions.clearNotice();
-          catalogue.actions.collapseAll();
-          if (isViewCurrent(epoch)) setState((current) => ({ ...current, view: result.body?.view ?? current.view }));
-        } catch {
-          setCredential((current) => ({ ...current, saving: false, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -3194,7 +3218,7 @@ window.__ModuleLoader__.load({
             return;
           }
           const view = result.body?.view ?? null;
-          setCredential({ value: '', deviceLabel: '', saving: false, notice: null });
+          form.setCredential({ value: '', deviceLabel: '', saving: false, notice: null });
           catalogue.actions.reset();
           // The refresh token cannot be revoked: say so instead of "signed out".
           const signedOutNotice = result.body?.revocation === 'ok'
@@ -3352,12 +3376,13 @@ window.__ModuleLoader__.load({
 
       const gatewayCard = renderGatewayCard({
         h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
-        credential, setCredential, fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
-        saveCredential, clearCredential, viewBarrier,
+        credential: form.credential, setCredential: form.setCredential,
+        fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
+        saveCredential: form.save, clearCredential: form.clear, viewBarrier,
       });
 
       const modelsCard = renderModelsCard({
-        h, view, refreshModels, credential, viewBarrier, gateway,
+        h, view, refreshModels: form.refresh, credential: form.credential, viewBarrier, gateway,
         fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
         catalogue,
       });
