@@ -1346,11 +1346,12 @@ window.__ModuleLoader__.load({
         const gw = view.gatewayCredential?.state ?? 'unconfigured';
         const name = view.principal || view.subject || '企业账号';
         if (gw === 'configured') {
-          if (view.modelAccess?.state === 'error' && (!view.modelAccess?.models || view.modelAccess.models.length === 0)) {
-            return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${errorNotice(view.modelAccess.error)}` };
+          const catalogue = deriveModelUi(view);
+          if (catalogue.failed && catalogue.models.length === 0) {
+            return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${errorNotice(catalogue.error)}` };
           }
-          const modelCount = view.modelAccess?.models?.length ?? 0;
-          const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型${view.modelAccess?.stale ? '待刷新' : '可用'}` : '';
+          const modelCount = catalogue.models.length;
+          const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型${catalogue.stale ? '待刷新' : '可用'}` : '';
           return { kind: 'ready', dotClass: 'success', label: '企业认证有效', tooltip: `${name} · 企业认证有效${modelSuffix}` };
         }
         if (gw === 'owner-mismatch') {
@@ -1486,6 +1487,23 @@ window.__ModuleLoader__.load({
         unreachable: state === 'unreachable',
         failed: state === 'error',
         unconfigured: state === 'unconfigured',
+      };
+    }
+
+    // §4.2 模型目录派生
+    // modelAccess.state 与 stale/configured 只在这里读；调用方用布尔量组合。
+    function deriveModelUi(view) {
+      const access = view?.modelAccess;
+      const state = typeof access?.state === 'string' ? access.state : null;
+      return {
+        state,
+        configured: access?.configured === true,
+        ready: state === 'ready',
+        loading: state === 'loading',
+        failed: state === 'error',
+        stale: access?.stale === true,
+        models: Array.isArray(access?.models) ? access.models : [],
+        error: access?.error ?? null,
       };
     }
 
@@ -2307,10 +2325,10 @@ window.__ModuleLoader__.load({
       const step1Warn = ui.expired || ui.failed || ui.unconfigured || ui.unreachable;
       const step2Done = step1Done && gateway.state === 'configured' && gateway.matchesAccount !== false;
       const step2Warn = step1Done && (gateway.state === 'owner-mismatch' || gateway.state === 'invalid' || gateway.state === 'unknown');
-      const modelState = view.modelAccess?.state;
-      const step3Loading = step2Done && modelState === 'loading';
-      const step3Warn = step2Done && (modelState === 'error' || (modelState === 'ready' && totalModels === 0));
-      const step3Done = step2Done && modelState === 'ready' && enabledCount > 0;
+      const catalogue = deriveModelUi(view);
+      const step3Loading = step2Done && catalogue.loading;
+      const step3Warn = step2Done && (catalogue.failed || (catalogue.ready && totalModels === 0));
+      const step3Done = step2Done && catalogue.ready && enabledCount > 0;
       const steps = [
         {
           num: '1',
@@ -2334,7 +2352,7 @@ window.__ModuleLoader__.load({
           num: '3',
           title: '模型',
           targetId: 'fiam-section-models',
-          status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step3Loading ? '同步中…' : (modelState === 'error' ? (view.modelAccess?.stale ? '目录待刷新' : '同步异常') : (modelState === 'ready' && totalModels === 0 ? '无可用模型' : (step2Done ? '待启用' : '待解锁')))),
+          status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step3Loading ? '同步中…' : (catalogue.failed ? (catalogue.stale ? '目录待刷新' : '同步异常') : (catalogue.ready && totalModels === 0 ? '无可用模型' : (step2Done ? '待启用' : '待解锁')))),
           done: step3Done,
           warn: step3Warn,
           active: step2Done && !step3Done && !step3Warn,
@@ -2407,6 +2425,7 @@ window.__ModuleLoader__.load({
         fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
       } = ctx;
       const ui = deriveSessionUi(view);
+      const catalogue = deriveModelUi(view);
       const unenabledCount = Math.max(0, modelList.length - enabledCount);
       const onFilterSelect = handleFilterChange || setModelFilter;
       return h('section', { id: 'fiam-section-models', className: 'fiam-card', 'aria-label': '企业模型' },
@@ -2420,37 +2439,37 @@ window.__ModuleLoader__.load({
             ),
             h('div', null,
               h('div', { className: 'fiam-card-title' }, '企业模型设置'),
-              !view.modelAccess?.configured
+              !catalogue.configured
                 ? h('div', { className: 'fiam-card-subtitle' }, '配置网关地址和凭证后自动同步可用模型')
                 : null,
             ),
           ),
-          view.modelAccess?.state === 'ready'
+          catalogue.ready
             ? h('span', { className: `fiam-badge fiam-badge-${modelList.length > 0 ? 'success' : 'warn'}` },
               h('span', { className: 'fiam-badge-dot' }),
               `已同步 ${modelList.length} 个模型`
             )
-            : view.modelAccess?.stale
+            : catalogue.stale
               ? h('span', { className: 'fiam-badge fiam-badge-warn' },
                 h('span', { className: 'fiam-badge-dot' }),
                 `已缓存 ${modelList.length} 个模型`
               )
-            : view.modelAccess?.state === 'loading'
+            : catalogue.loading
               ? h('span', { className: 'fiam-badge fiam-badge-authenticating' },
                 h('span', { className: 'fiam-badge-dot' }),
                 '正在同步…'
               )
-              : view.modelAccess?.state === 'error'
+              : catalogue.failed
                 ? h('span', { className: 'fiam-badge fiam-badge-error' },
                   h('span', { className: 'fiam-badge-dot' }),
                   '同步异常'
                 )
                 : null,
         ),
-        !view.modelAccess?.configured
+        !catalogue.configured
           ? h('p', { style: muted }, '请先保存网关地址和个人访问凭证。')
           : null,
-        view.modelAccess?.stale
+        catalogue.stale
           ? h('div', {
             className: 'fiam-notice fiam-notice-warn',
             style: {
@@ -2465,7 +2484,7 @@ window.__ModuleLoader__.load({
             },
           },
             h('span', { style: { flex: '1 1 0', minWidth: 200 } },
-              `目录未更新：${errorNotice(view.modelAccess.error)}`
+              `目录未更新：${errorNotice(catalogue.error)}`
               // A passed or absent retry time means the automatic chain is done;
               // pointing at the retry button or cached availability stays clear.
               + (Math.round((Number(view.modelAccess.retryAt) - Date.now()) / 1000) >= 1
@@ -2490,7 +2509,7 @@ window.__ModuleLoader__.load({
             }, credential.saving ? '正在刷新…' : '立即重试'),
           )
           : null,
-        view.modelAccess?.configured && modelList.length > 0
+        catalogue.configured && modelList.length > 0
           ? h('div', { className: 'fiam-callout', style: { marginTop: 6, marginBottom: 8 } },
             h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
               h('circle', { cx: 8, cy: 8, r: 6 }),
@@ -2502,7 +2521,7 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        view.modelAccess?.configured && modelList.length > 0
+        catalogue.configured && modelList.length > 0
           ? h('div', { ref: toolbarRef, className: 'fiam-model-toolbar' },
             h('div', { className: 'fiam-search-wrap' },
               h('input', {
@@ -2585,7 +2604,7 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        view.modelAccess?.configured && modelList.length > 0 && hasUnsavedModelChanges
+        catalogue.configured && modelList.length > 0 && hasUnsavedModelChanges
           ? h('div', { className: 'fiam-unsaved-banner' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存'),
@@ -2608,7 +2627,7 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        view.modelAccess?.configured && modelList.length > 0
+        catalogue.configured && modelList.length > 0
           ? h('div', { className: 'fiam-model-list', 'aria-label': '企业预置模型' },
             ...(visibleModels.length === 0
               ? [h('div', { key: 'empty-filter', style: { ...muted, padding: '16px 12px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 } },
@@ -2634,7 +2653,7 @@ window.__ModuleLoader__.load({
               }))
           )
           : null,
-        (view.modelAccess?.state === 'loading' && modelList.length === 0)
+        (catalogue.loading && modelList.length === 0)
           ? h('div', { role: 'status', className: 'fiam-auth-progress' },
             h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
               h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
@@ -2642,9 +2661,9 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
-        view.modelAccess?.state === 'ready' && !modelList.length
+        catalogue.ready && !modelList.length
           ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人访问凭证的模型权限。') : null,
-        view.modelAccess?.error && !view.modelAccess?.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(view.modelAccess.error)) : null,
+        catalogue.error && !catalogue.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(catalogue.error)) : null,
         h('div', { className: 'fiam-actions' },
           h('button', {
             type: 'button',
@@ -2729,7 +2748,7 @@ window.__ModuleLoader__.load({
           const at = Date.now();
           if (wakeRef.current.inFlight || at - wakeRef.current.at < 30000) return;
           const view = viewRef.current;
-          if (!deriveSessionUi(view).ready || view?.modelAccess?.state === 'loading') return;
+          if (!deriveSessionUi(view).ready || deriveModelUi(view).loading) return;
           wakeRef.current.at = at;
           wakeRef.current.inFlight = true;
           void getJson('/api/forge-iam/models')
@@ -2901,13 +2920,14 @@ window.__ModuleLoader__.load({
       const optionsSync = React.useRef({ signature: null });
       const syncModelOptions = React.useCallback(async (nextView) => {
         const access = nextView?.modelAccess;
-        if (nextView?.state !== 'ready') {
+        const catalogue = deriveModelUi(nextView);
+        if (!deriveSessionUi(nextView).ready) {
           optionsSync.current.signature = null;
           lastSyncedOptions.current = {};
           setModelOptions({});
           return;
         }
-        if (access?.state !== 'ready' || !access.modelOptions || typeof access.modelOptions !== 'object' || Array.isArray(access.modelOptions)) return;
+        if (!catalogue.ready || !access.modelOptions || typeof access.modelOptions !== 'object' || Array.isArray(access.modelOptions)) return;
         const hostOptions = access.modelOptions;
         const signature = JSON.stringify([nextView.subject ?? nextView.principal, hostOptions]);
         if (optionsSync.current.signature === signature) return;
@@ -2927,8 +2947,9 @@ window.__ModuleLoader__.load({
           setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }) }));
           setCredential((current) => {
             if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
-            if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
-            if (view?.modelAccess?.state === 'error') return { ...current, notice: errorNotice(view.modelAccess.error) };
+            const models = deriveModelUi(view);
+            if (models.ready) return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
+            if (models.failed) return { ...current, notice: errorNotice(models.error) };
             return current;
           });
           void syncModelOptions(view);
@@ -2949,8 +2970,9 @@ window.__ModuleLoader__.load({
         }));
         setCredential((current) => {
           if (current.notice !== '网关地址和个人访问凭证已保存，正在获取模型列表。') return current;
-          if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
-          if (view?.modelAccess?.state === 'error') return { ...current, notice: errorNotice(view.modelAccess.error) };
+          const models = deriveModelUi(view);
+          if (models.ready) return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
+          if (models.failed) return { ...current, notice: errorNotice(models.error) };
           return current;
         });
         void syncModelOptions(view);
@@ -3301,6 +3323,7 @@ window.__ModuleLoader__.load({
       const { view, status, onCopyDiagnostics, onSignOut, confirmSignOut, signingOut, notice, openSettings, onClose } = props;
       const isSignedIn = deriveSessionUi(view).ready;
       const gwState = view?.gatewayCredential?.state ?? 'unconfigured';
+      const models = deriveModelUi(view);
       const gwConfigured = gwState === 'configured';
       const principalName = view?.principal || view?.subject || '未登录员工';
       const avatarInitial = String(principalName).replace(/^E/i, '').slice(0, 2).toUpperCase() || '企';
@@ -3369,15 +3392,15 @@ window.__ModuleLoader__.load({
             h('span', { className: 'fiam-launcher-menu-label' }, '企业模型'),
             h('span', {
               className: 'fiam-launcher-menu-value',
-              style: view?.modelAccess?.state === 'error' ? { color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 } : undefined,
+              style: models.failed ? { color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 } : undefined,
             },
-              Array.isArray(view?.modelAccess?.models) && view.modelAccess.models.length > 0
-                ? (view.modelAccess.stale
-                  ? `已缓存 ${view.modelAccess.models.length} 个模型（待刷新）`
-                  : `已同步 ${view.modelAccess.models.length} 个模型`)
-                : view?.modelAccess?.state === 'loading'
+              models.models.length > 0
+                ? (models.stale
+                  ? `已缓存 ${models.models.length} 个模型（待刷新）`
+                  : `已同步 ${models.models.length} 个模型`)
+                : models.loading
                   ? '正在同步…'
-                  : view?.modelAccess?.state === 'error'
+                  : models.failed
                     ? '同步异常'
                     : (gwConfigured ? '企业模型已就绪' : '待配置凭证')
             ),
@@ -3788,7 +3811,7 @@ window.__ModuleLoader__.load({
               ),
             ),
           ),
-          gwState === 'configured' && state.view?.modelAccess?.state === 'loading'
+          gwState === 'configured' && deriveModelUi(state.view).loading
             ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
               h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
                 h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
@@ -3796,8 +3819,8 @@ window.__ModuleLoader__.load({
               )
             )
             : null,
-          gwState === 'configured' && state.view?.modelAccess?.error
-            ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, errorNotice(state.view.modelAccess.error))
+          gwState === 'configured' && deriveModelUi(state.view).error
+            ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, errorNotice(deriveModelUi(state.view).error))
             : null,
           models.length > 0
             ? h('div', null,
