@@ -155,3 +155,21 @@ test('the refresh flight records the provider it started on', () => {
   // One flight at a time: a second caller joins instead of starting its own.
   assert.match(token, /if \(refreshPromise\) return useSharedRefresh\(\);/);
 });
+
+// U10: the background reconciler owns adoption; the state module still owns state.
+const reconcile = readFileSync(new URL('../src/service-reconcile.mjs', import.meta.url), 'utf8');
+
+test('the reconciler is the only background writer of the session', () => {
+  assert.match(service, /const reconcile = createReconciler\(\{/);
+  assert.match(service, /hydrate: reconcile\.hydrate,/);
+  assert.match(service, /syncFromStore: reconcile\.syncFromStore,/);
+  assert.ok(!/async function syncFromStore\(/.test(service), 'src/service.mjs must not keep its own syncFromStore');
+  assert.match(reconcile, /export function createReconciler\(env\)/);
+});
+
+test('the reconciler publishes through ports, never by reaching into the state', () => {
+  assert.match(reconcile, /setObservation\(/);
+  assert.match(reconcile, /bumpPublications\(\)/);
+  // The observation identity comparison must read the field, not call the port.
+  assert.ok(!/observation\.getAuthEpoch\(/.test(reconcile), 'observation.authEpoch is a field, not a port call');
+});
