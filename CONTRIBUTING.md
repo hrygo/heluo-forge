@@ -14,6 +14,8 @@
 
 当前可直接执行 `pnpm check`，无需安装依赖；需要安装工作区依赖时使用 `pnpm install --frozen-lockfile`。先核对版本，环境不符时记录验证限制，不修改项目约束来消除告警。
 
+新克隆的仓库默认没有敏感扫描钩子，而 PR 会校验提交签名，所以准备环境时要先安装。完整包从授权保管人处按受控渠道取得，再按[团队完整分发包安装说明](<scripts/sensitive-scan/TEAM-FULL-INSTALL.md>)安装团队完整分发：安装器先校验包内 Ed25519 私钥与团队公钥匹配、正式规则有效，再把脚本、私钥与规则放进 Git common dir，并在 Git 选定的路径安装 `commit-msg` 钩子。解压目录按密钥材料级别保管，不要自行生成个人密钥，也不要改用 legacy 的 `sensitive:scan` / `sensitive:install`（规则格式与路径不同，不能满足远端 v2 验签）。独立 clone 各需安装，默认共享 hook 配置下 linked worktree 共用同一套安装。安装后的自检、权限要求与生效限制见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。
+
 ## 2. 选择变更入口
 
 | 任务 | 先确认 |
@@ -28,7 +30,7 @@
 2. 确认范围及内容归属。新模块先设计，契约字段先改对应契约；重大未决选择保留待确认，不代替团队批准。
 3. 需要创建分支时从适当基线建立短分支，常规命名见[开发约定](docs/engineering/development-conventions.md)；agent 宿主明确规定前缀时遵循宿主要求，不擅自切换已有工作分支。
 4. 修改文件并同步受影响的登记与引用；移动文件使用 `git mv`，同一变更更新全部引用。
-5. 运行 `pnpm check` 与 `git diff --check`，审阅最终 diff；前者已包含自动发现的历史市场包契约、索引校验与归档安装用例。变更需要企业接口或实机证据时另行验证，已有完整有效测试不重复运行。失败须修复或明确阻塞，不能以跳过宣称通过。
+5. 运行 `pnpm check` 与 `git diff --check`，审阅最终 diff；前者已包含自动发现的历史市场包契约、索引校验与归档安装用例。推送前再运行 `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD`，结果必须全部 verified；不跑就推，PR 上的 `sensitive-attestation-verify` 会直接变红，即使代码本身没有问题。提交经钩子签名后不要 amend、rebase、reset，也不要让其他会话改写这条分支的父提交：签名绑定钩子扫描时的基线 tree，父提交被换掉后会出现 `parent-tree does not match`，需要重新扫描并签名，步骤见[敏感扫描说明](<scripts/sensitive-scan/README.md>)；确需改历史时先与维护者确认重签范围。变更需要企业接口或实机证据时另行验证，已有完整有效测试不重复运行。失败须修复或明确阻塞，不能以跳过宣称通过。
 6. 在相应授权范围内提交或发起 PR，一次提交只做一件事。按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)填写关联依据、验证结果、未验项与风险；本地编辑完成不自动触发推送、合并或发布。
 
 推送与发布分开：合并到 `main` 不自动发布任何包。
@@ -38,6 +40,7 @@
 - 类型：`feat:`、`fix:`、`docs:`、`refactor:`、`test:`、`chore:`。
 - 摘要写“改了什么”，正文写“为什么”，不写“按用户要求”。
 - 不把格式化、重命名与行为变更混在同一提交。
+- 消息不要以 `#` 开头：钩子用 `git stripspace --strip-comments` 规整消息，整段以 `#` 起头的正文会被静默删除；引用 issue 写成 `issue #125` 这种内联形式。
 
 ## 5. 文档规则
 
@@ -59,16 +62,19 @@
 
 常用命令与覆盖范围见 [README 的本地检查](README.md#3-本地检查)，可执行定义以 [package.json](package.json) 为准。包级、契约、集成与端到端测试按[测试分层约定](docs/engineering/development-conventions.md)分别执行。
 
+`pnpm check` 还包含 `node scripts/dsh-version.mjs check`（单独入口为 `pnpm check:version`）：它要求正文声明的 DSH 版本位置与 `.dsh-version` 一致，并禁止代码与脚本硬编码版本；改动文档里的 DSH 版本表述或包清单的 `engines.dsh` 后，`pnpm check` 会因这一项失败，需要按[版本规则](docs/README.md#6-编写约定)同步。
+
 检查器本身也要改：新增规则时补充失败样例，避免“看起来通过”。
 
 ### 7.1 GitHub Actions
 
 [检查工作流](.github/workflows/check.yml)保留 `check / verify` 门禁：`main` 推送、PR、合并队列的 `checks_requested` 和手动运行均执行全量检查。不使用路径过滤，文档与图片变更也会接受跨文件链接、登记和仓库规则检查，避免必需检查因跳过触发而一直等待。
 
-- 单个 `ubuntu-24.04` job，超时 5 分钟；相同工作流、事件与 PR/分支的新运行取消过期运行，手动运行与 PR/推送互不取消。
+- `verify` job 在单个 `ubuntu-24.04` 上运行，超时 5 分钟；相同工作流、事件与 PR/分支的新运行取消过期运行，手动运行与 PR/推送互不取消。另有 `sensitive-scan` 矩阵 job（`ubuntu-24.04`、`macos-14`、`windows-2022`，超时 10 分钟）只跑敏感扫描 hook 与扫描器的可移植性用例，与 `verify` 刻意分开，矩阵稳定前不设为必需检查。
 - Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test` 自动发现工程、包与集成测试。
 - 当前检查无第三方依赖，不安装 pnpm 或依赖、不读写包缓存、不拆矩阵。引入第三方依赖时，须同步配置固定 pnpm、`pnpm install --frozen-lockfile` 和按锁文件索引的 pnpm store 缓存，再按实测耗时评估拆分；不缓存 `node_modules`。
 - 工作流只授予 `contents: read`，检出不保留凭据、深度为 1；Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
+- PR 另由 [sensitive-attestation](.github/workflows/sensitive-attestation.yml) 以 `pull_request_target` 从基线读取团队公钥验签，不 checkout 也不执行 PR 代码，权限同为 `contents: read`。它的 required 配置与部署状态不在本文件断言，实测与上线步骤见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。
 - 仓库管理员可将 `verify` 设为必需检查；本地修改不代表已启用远端规则、合并队列或 Dependabot，也不代表远端 CI 已通过。
 
 依据核验日期为 2026-10-21：[GitHub 安全建议](https://docs.github.com/en/actions/reference/security/secure-use)、[事件与合并队列](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#merge_group)、[并发控制](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)、[Dependabot 配置](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)，以及 [checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 与 [setup-node v7.1.0](https://github.com/actions/setup-node/releases/tag/v7.1.0) 的发布说明与输入声明。官方 Actions 使用 Node 24 runtime；应用检查仍使用 `.node-version` 固定的版本。工作流依赖锁文件当前属于[公开预览](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)，本仓库继续采用已有的完整 SHA 固定策略。
