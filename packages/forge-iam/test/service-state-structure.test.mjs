@@ -133,3 +133,25 @@ test('selection keeps one flight, one queue flag and its own generation', () => 
   }
   assert.equal((selection.match(/queued = true/g) ?? []).length, 2);
 });
+
+// U9: the refresh flight owns its own lifetime.
+const token = readFileSync(new URL('../src/service-token.mjs', import.meta.url), 'utf8');
+
+test('the service keeps no writable copy of the refresh flight', () => {
+  for (const name of ['refreshPromise', 'refreshPromiseStore', 'refreshPromiseCredentials',
+    'refreshPromiseIssuer', 'refreshPromiseAuthentication', 'lastBackgroundRefreshAt']) {
+    assert.ok(!new RegExp(`let ${name}\\b`).test(service), `src/service.mjs still declares "let ${name}"`);
+  }
+  assert.match(service, /const token = createTokenResolver\(\{/);
+  assert.match(service, /resolveToken: token\.resolveToken,/);
+  assert.match(service, /getAccessToken: token\.getAccessToken,/);
+});
+
+test('the refresh flight records the provider it started on', () => {
+  assert.match(token, /export function createTokenResolver\(env\)/);
+  for (const name of ['refreshPromiseStore', 'refreshPromiseCredentials', 'refreshPromiseIssuer', 'refreshPromiseAuthentication']) {
+    assert.match(token, new RegExp(`let ${name} = null`), `service-token.mjs must record ${name}`);
+  }
+  // One flight at a time: a second caller joins instead of starting its own.
+  assert.match(token, /if \(refreshPromise\) return useSharedRefresh\(\);/);
+});
