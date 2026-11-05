@@ -46,8 +46,15 @@ const MESSAGES = Object.freeze({
   ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
   ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',
   ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
+  ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查所选模型是否支持当前参数。',
 });
 const error = code => new IamError(code, MESSAGES[code]);
+/** Map an upstream HTTP status so a rejected request never reads as "cannot connect". */
+const gatewayCode = status => status === 401 ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
+  : status === 403 ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
+    : status === 429 ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
+      : typeof status === 'number' && status >= 400 && status < 500 ? 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'
+        : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
 const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { code, message: MESSAGES[code] } } });
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
@@ -77,8 +84,7 @@ async function discover(connection, signal, fetcher, headers) {
     headers: { ...headers, authorization: `Bearer ${connection.key}`, accept: 'application/json' },
     redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
   });
-  if (!response.ok) throw error(response.status === 401 ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
-    : response.status === 403 ? 'ENTERPRISE_GATEWAY_FORBIDDEN' : 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  if (!response.ok) throw error(gatewayCode(response.status));
   let text = '';
   if (response.body) {
     const decoder = new TextDecoder(); let size = 0;
@@ -241,7 +247,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (!code && request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
       yield finish(code ?? (Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code
         : cause?.code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
-          : cause?.code === 'PERMISSION' || cause?.status === 403 ? 'ENTERPRISE_GATEWAY_FORBIDDEN' : 'ENTERPRISE_GATEWAY_UNAVAILABLE'));
+          : cause?.code === 'PERMISSION' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
+            : typeof cause?.status === 'number' ? gatewayCode(cause.status) : 'ENTERPRISE_GATEWAY_UNAVAILABLE'));
     }
   }
   /** Adopt the stored selection, or remember that nothing was stored yet. */

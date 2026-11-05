@@ -104,6 +104,11 @@ test('buildThinkingLevelMap correctly maps levels and disables unused with null'
   assert.equal(map.low, 'low');
   assert.equal(map.high, 'high');
   assert.equal(map.off, null);
+
+  // "off" never becomes a wire value: omission is how an OpenAI-compatible request means it.
+  const withOff = buildThinkingLevelMap({ off: 'off', low: 'low' });
+  assert.equal(withOff.off, null);
+  assert.equal(withOff.low, 'low');
   assert.equal(map.medium, null);
   assert.equal(map.minimal, null);
 });
@@ -223,6 +228,7 @@ test('default thinking range is off through high and explicit options take prece
     { id: 'supplied', reasoningEfforts: { low: 'low', xhigh: 'xhigh' } },
   ], { custom: { reasoningEfforts: { high: 'high' } }, disabled: { reasoningEfforts: { off: 'off' } } });
   assert.deepEqual(defaultModel.reasoningEfforts, { off: 'off', low: 'low', medium: 'medium', high: 'high' });
+  assert.equal(defaultModel.thinkingLevelMap.off, null);
   assert.equal(defaultModel.thinkingLevelMap.xhigh, null);
   assert.deepEqual(customModel.reasoningEfforts, { high: 'high' });
   assert.equal(disabledModel.reasoning, false);

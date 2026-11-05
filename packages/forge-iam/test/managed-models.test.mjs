@@ -152,6 +152,9 @@ test('a discovery response arriving after logout cannot repopulate the catalogue
 test('model-list errors are classified without returning gateway response bodies', async t => {
   for (const [status, body, code] of [[401, 'private-body', 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'],
   [403, 'private-body', 'ENTERPRISE_GATEWAY_FORBIDDEN'],
+  [429, 'private-body', 'ENTERPRISE_GATEWAY_RATE_LIMIT'],
+  [400, 'private-body', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'],
+  [404, 'private-body', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'],
   [200, '{"data":[{"id":"same"},{"id":"same"}]}', 'ENTERPRISE_MODEL_CATALOG_INVALID'],
   [200, 'not-json-private-body', 'ENTERPRISE_MODEL_CATALOG_INVALID']]) {
     const f = fixture({ fetch: async () => new Response(body, { status }) });
@@ -206,6 +209,20 @@ test('transport authentication failure differs from IAM logout and does not repl
   const result = await chunks(f.adapter.stream(options));
   assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
   assert.equal(JSON.stringify(result).includes('private-body'), false); assert.equal(dispatches, 1);
+});
+
+test('a rejected request is not reported as an unreachable gateway', async t => {
+  for (const [status, code] of [[400, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], [404, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], [429, 'ENTERPRISE_GATEWAY_RATE_LIMIT'], [503, 'ENTERPRISE_GATEWAY_UNAVAILABLE']]) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { throw Object.assign(new Error('private-body'), { status }); }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, code);
+    assert.equal(JSON.stringify(result).includes('private-body'), false);
+  }
 });
 
 function credentialURL() {
