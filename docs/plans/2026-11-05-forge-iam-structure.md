@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.20.0 |
+| 版本 | V0.21.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -423,7 +423,9 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 | 敏感扫描（推送前） | `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD` | 全部 verified |
 | 行为抽查 | §7 末行的冒烟清单 | 控制台无报错、交互与拆分前一致；结果写进交付说明 |
 
-未执行项须单列：本文只完成分析与计划；未安装测试插件、未实机验收、未推送。
+实测结果（2026-11-06，本 worktree）：`node --run check` 2754 用例、2753 通过、1 跳过、0 失败，`docs: ok`；IAM 包 1239 用例全绿，结构守卫 20 条；`view.state ===` 1 处（映射函数内）、`window.localStorage` 5 处（全部在 `createClientStore`）、`errorNotice(result.body?.error?.code` 0 处；`Panel` 137 行（低于预期的 150–200，只做装配）；`git diff --check` 无输出；28 项导出面逐项一致由既有契约用例覆盖。
+
+未执行项须单列：未安装测试插件、未实机验收、未推送。
 
 ## 9. 风险与注意事项
 
