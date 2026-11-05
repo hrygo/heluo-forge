@@ -402,3 +402,34 @@ test('model advanced section includes in-place save button and shows top unsaved
   assert.equal(writes[0].options['corp-chat'].name, '智能对话 4.0');
   assert.match(panel.text(panel.render()), /模型精细化配置已保存并生效/);
 });
+
+test('model advanced section uses concise interactive help buttons and eliminates redundant static hint texts', async t => {
+  const panel = await mountPanel(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+
+  // Expand model
+  await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
+
+  const rendered = panel.render();
+  const allNodes = nodes(rendered);
+
+  // Redundant long prose hints are eliminated from static surface
+  const renderedText = panel.text(rendered);
+  assert.doesNotMatch(renderedText, /留空时使用模型 ID/);
+  assert.doesNotMatch(renderedText, /默认 200K，建议不高于模型内部上限/);
+  assert.doesNotMatch(renderedText, /默认 64K，单次响应最大生成 Token/);
+  assert.doesNotMatch(renderedText, /仅需指定推理强度下界与上界；若下界高于上界将自动对齐/);
+
+  // Interactive help tips exist with popovers and accessible labels
+  const helpButtons = allNodes.filter(node => node.type === 'button' && node.props.className === 'fiam-help-btn');
+  assert.equal(helpButtons.length, 5);
+
+  const popovers = allNodes.filter(node => node.props.className === 'fiam-help-popover');
+  assert.equal(popovers.length, 5);
+  assert.ok(popovers.some(p => p.children?.some(c => typeof c === 'string' && c.includes('模型原生 ID'))));
+  assert.ok(popovers.some(p => p.children?.some(c => typeof c === 'string' && c.includes('最大上下文容量'))));
+  assert.ok(popovers.some(p => p.children?.some(c => typeof c === 'string' && c.includes('深度思考档位'))));
+});

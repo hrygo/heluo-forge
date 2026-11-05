@@ -424,6 +424,77 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-label-secondary);
         line-height: 18px;
       }
+      .fiam-help-wrap {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        vertical-align: middle;
+      }
+      .fiam-help-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        border: 1px solid var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.15));
+        background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04));
+        color: var(--dsw-alias-label-tertiary, #888);
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 0;
+        margin-left: 5px;
+        cursor: help;
+        transition: all 0.15s ease;
+        user-select: none;
+        box-sizing: border-box;
+      }
+      .fiam-help-btn:hover,
+      .fiam-help-btn:focus-visible {
+        color: var(--dsw-alias-state-business-primary, #1890ff);
+        border-color: var(--dsw-alias-state-business-primary, #1890ff);
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+        outline: none;
+      }
+      .fiam-help-popover {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: -8px;
+        width: max-content;
+        max-width: 260px;
+        padding: 6px 10px;
+        border-radius: var(--dsw-radius-sm, 6px);
+        background: var(--dsw-alias-bg-layer-1, #24292f);
+        color: var(--dsw-alias-label-primary, #fff);
+        font-size: 11px;
+        font-weight: 400;
+        line-height: 1.45;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+        border: 0.5px solid var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.15));
+        pointer-events: none;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.15s ease, transform 0.15s ease;
+        z-index: 100;
+        white-space: normal;
+        text-align: left;
+      }
+      .fiam-help-popover::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 12px;
+        border-width: 4px;
+        border-style: solid;
+        border-color: var(--dsw-alias-bg-layer-1, #24292f) transparent transparent transparent;
+      }
+      .fiam-help-wrap:hover .fiam-help-popover,
+      .fiam-help-wrap:focus-within .fiam-help-popover {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(-2px);
+      }
       .fiam-checkbox-group {
         display: flex;
         align-items: center;
@@ -1548,6 +1619,23 @@ window.__ModuleLoader__.load({
         saveModelOptions,
         modelSaving, viewBarrier, view, fieldLabel, inputStyle, primaryButton, secondaryButton, muted,
       } = ctx;
+
+      function renderHelpTip(text, ariaLabel) {
+        return h('span', { className: 'fiam-help-wrap' },
+          h('button', {
+            type: 'button',
+            className: 'fiam-help-btn',
+            'aria-label': ariaLabel || text,
+            title: text,
+            onClick: (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            },
+          }, '?'),
+          h('span', { className: 'fiam-help-popover', role: 'tooltip' }, text)
+        );
+      }
+
       const displayName = opt.name || model.name || model.id;
       const defaultContextStr = formatCapacity(model.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
       const defaultMaxTokensStr = formatCapacity(model.maxTokens ?? DEFAULT_MAX_TOKENS);
@@ -1628,9 +1716,9 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'fiam-model-advanced' },
             h('div', { className: 'fiam-field-full' },
               h('label', { style: fieldLabel },
-                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
+                h('div', { style: { display: 'flex', alignItems: 'center', marginBottom: 4 } },
                   h('span', { className: 'fiam-field-title' }, '显示名称'),
-                  h('span', { className: 'fiam-field-hint', style: muted }, '留空时使用模型 ID'),
+                  renderHelpTip('模型在对话中展示的友好名称。留空时默认使用模型原生 ID。', `显示名称提示 ${idx + 1}`),
                 ),
                 h('input', {
                   type: 'text',
@@ -1644,10 +1732,14 @@ window.__ModuleLoader__.load({
             ),
             h('div', { className: 'fiam-field-grid-spec' },
               h('label', { className: 'fiam-field-col', style: fieldLabel },
-                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
-                  h('span', { className: 'fiam-field-title' }, '上下文窗口 (Context Window)'),
-                  h('span', { className: 'fiam-field-hint', style: contextInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
-                    contextInvalid ? '请输入合法容量值（如 128K、200K、1M）' : '默认 200K，建议不高于模型内部上限'),
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+                  h('div', { style: { display: 'flex', alignItems: 'center' } },
+                    h('span', { className: 'fiam-field-title' }, '上下文窗口'),
+                    renderHelpTip('单次请求允许的最大上下文容量。默认 200K，支持输入数字或 K/M（如 128K、200K、1M）。建议不高于内部约定的规格上限，避免超限溢出。', `上下文窗口提示 ${idx + 1}`),
+                  ),
+                  contextInvalid
+                    ? h('span', { className: 'fiam-field-hint', style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } }, '请输入合法容量值（如 128K、200K、1M）')
+                    : null,
                 ),
                 h('input', {
                   type: 'text',
@@ -1672,10 +1764,14 @@ window.__ModuleLoader__.load({
                 ),
               ),
               h('label', { className: 'fiam-field-col', style: fieldLabel },
-                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
-                  h('span', { className: 'fiam-field-title' }, '最大输出 Token (Max Tokens)'),
-                  h('span', { className: 'fiam-field-hint', style: maxTokensInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
-                    maxTokensInvalid ? '请输入合法容量值（如 16K、64K）' : '默认 64K，单次响应最大生成 Token'),
+                h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 } },
+                  h('div', { style: { display: 'flex', alignItems: 'center' } },
+                    h('span', { className: 'fiam-field-title' }, '单次最大输出'),
+                    renderHelpTip('模型单次回复生成的最大 Token 数量。默认 64K，支持输入数字或 K/M（如 16K、32K、64K）。建议不高于内部约定的规格上限。', `单次最大输出提示 ${idx + 1}`),
+                  ),
+                  maxTokensInvalid
+                    ? h('span', { className: 'fiam-field-hint', style: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } }, '请输入合法容量值（如 16K、64K）')
+                    : null,
                 ),
                 h('input', {
                   type: 'text',
@@ -1701,7 +1797,10 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-              h('span', { className: 'fiam-field-section-title' }, '输入模态与能力'),
+              h('div', { style: { display: 'flex', alignItems: 'center' } },
+                h('span', { className: 'fiam-field-section-title' }, '输入模态'),
+                renderHelpTip('勾选模型支持的多模态输入能力。文本默认开启，图片按需勾选。', `输入模态提示 ${idx + 1}`),
+              ),
               h('div', { className: 'fiam-checkbox-group' },
                 h('label', { className: 'fiam-checkbox-item' },
                   h('input', { type: 'checkbox', checked: true, disabled: true }),
@@ -1723,7 +1822,10 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-              h('span', { className: 'fiam-field-section-title' }, '推理强度上下界 (Reasoning Effort Bounds)'),
+              h('div', { style: { display: 'flex', alignItems: 'center' } },
+                h('span', { className: 'fiam-field-section-title' }, '深度推理上下界'),
+                renderHelpTip('设置深度思考档位的下界与上界。若下界高于上界将自动对齐；初次未选择时默认采用下界最低档。', `深度推理提示 ${idx + 1}`),
+              ),
               h('div', { className: 'fiam-reasoning-bounds' },
                 h('label', { style: fieldLabel },
                   h('span', { className: 'fiam-field-title' }, '推理强度下界 (最低档)'),
@@ -1783,7 +1885,6 @@ window.__ModuleLoader__.load({
                   onClick: () => updateOptionField(model.id, 'reasoningEfforts', undefined),
                 }, '关闭推理') : null,
               ),
-              h('span', { className: 'fiam-field-hint', style: muted }, '仅需指定推理强度下界与上界；若下界高于上界将自动对齐。对话中默认保留您上次所选强度，初次未选择时自动采用下界最低强度。'),
             ),
             h('div', { className: 'fiam-model-advanced-actions' },
               h('div', { className: 'fiam-model-actions-left' },
