@@ -10,6 +10,8 @@ import { analyseClient, readClientSource } from './support/client-source.mjs';
 // docs/plans/2026-11-05-forge-iam-structure.md); never raise one.
 // view.state is read in exactly one place: the derivation.
 const STATE_READ_BASELINE = { deriveSessionUi: 2 };
+// modelAccess.state too; a local `access` alias counts, so the guard cannot be dodged.
+const MODEL_STATE_READ_BASELINE = { deriveModelUi: 2 };
 
 // Storage is centralised: every access lives in createClientStore().
 const STORAGE_BASELINE = { createClientStore: 5 };
@@ -46,6 +48,14 @@ test('view.state is read only by deriveSessionUi()', () => {
     analysed.violations.stateReads,
     STATE_READ_BASELINE,
     'read a derived flag (deriveSessionUi(view).ready) instead of touching view.state here',
+  );
+});
+
+test('modelAccess.state is read only by deriveModelUi()', () => {
+  assert.deepEqual(
+    analysed.violations.modelStateReads,
+    MODEL_STATE_READ_BASELINE,
+    'read a derived flag (deriveModelUi(view).ready) instead of modelAccess.state here',
   );
 });
 
