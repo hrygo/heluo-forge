@@ -576,27 +576,27 @@ window.__ModuleLoader__.load({
         font-weight: 500;
       }
       .fiam-reasoning-bounds {
-        display: flex;
-        align-items: flex-end;
-        gap: 10px;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
         margin-top: 4px;
-        padding: 8px 10px;
-        border-radius: var(--dsw-radius-md);
+        padding: 10px 12px;
+        border-radius: var(--dsw-radius-md, 8px);
         background: var(--dsw-alias-bg-layer-1);
         border: 0.5px solid var(--dsw-alias-border-l4);
       }
       .fiam-select {
         box-sizing: border-box;
-        height: 30px;
-        min-width: 148px;
-        padding: 0 8px;
+        height: 32px;
+        width: 100%;
+        min-width: 0;
+        padding: 0 10px;
         border: 0.5px solid var(--dsw-alias-border-l3);
         border-radius: var(--dsw-radius-sm, 6px);
         background: var(--dsw-alias-bg-layer-1);
         color: var(--dsw-alias-label-primary);
         font: inherit;
-        font-size: 12px;
+        font-size: 13px;
         cursor: pointer;
       }
       .fiam-select:focus {
@@ -1624,50 +1624,9 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
-              h('span', { className: 'fiam-field-section-title' }, '推理强度等级与上下界 (Reasoning Effort)'),
-              h('div', { className: 'fiam-reasoning-chips' },
-                ...['off', 'low', 'medium', 'high', 'xhigh', 'max', 'all', 'full'].map(level => {
-                  const isSingle = reasoningBounds.enabled && reasoningBounds.levels.length === 1;
-                  const isStandardRange = reasoningBounds.enabled
-                    && reasoningBounds.lower === 'low'
-                    && reasoningBounds.upper === 'high'
-                    && reasoningBounds.levels.length === 3;
-                  const isFullRange = reasoningBounds.enabled
-                    && reasoningBounds.lower === 'low'
-                    && reasoningBounds.upper === 'max'
-                    && reasoningBounds.levels.length === REASONING_EFFORT_LEVELS.length;
-                  const isSelected = level === 'off'
-                    ? !reasoningBounds.enabled
-                    : level === 'all'
-                      ? isStandardRange
-                      : level === 'full'
-                        ? isFullRange
-                        : (isSingle && reasoningBounds.levels[0] === level);
-                  const labelMap = {
-                    ...REASONING_LEVEL_LABELS,
-                    all: '多档可调 (Low/Medium/High)',
-                    full: '全量区间 (Low~Max)',
-                  };
-                  return h('button', {
-                    key: level,
-                    type: 'button',
-                    className: `fiam-chip ${isSelected ? 'fiam-chip-active' : ''}`,
-                    onClick: () => {
-                      if (level === 'off') {
-                        updateOptionField(model.id, 'reasoningEfforts', undefined);
-                      } else if (level === 'all') {
-                        updateOptionField(model.id, 'reasoningEfforts', buildReasoningEffortRange('low', 'high'));
-                      } else if (level === 'full') {
-                        updateOptionField(model.id, 'reasoningEfforts', buildReasoningEffortRange('low', 'max'));
-                      } else {
-                        updateOptionField(model.id, 'reasoningEfforts', { off: null, [level]: level });
-                      }
-                    },
-                  }, labelMap[level]);
-                })
-              ),
+              h('span', { className: 'fiam-field-section-title' }, '推理强度上下界 (Reasoning Effort Bounds)'),
               h('div', { className: 'fiam-reasoning-bounds' },
-                h('label', { style: { ...fieldLabel, flex: '1 1 150px' } },
+                h('label', { style: fieldLabel },
                   h('span', { className: 'fiam-field-title' }, '推理强度下界 (最低档)'),
                   h('select', {
                     className: 'fiam-select',
@@ -1689,7 +1648,7 @@ window.__ModuleLoader__.load({
                     ...THINKING_LEVELS.map(lv => h('option', { key: lv, value: lv }, REASONING_LEVEL_LABELS[lv])),
                   ),
                 ),
-                h('label', { style: { ...fieldLabel, flex: '1 1 150px' } },
+                h('label', { style: fieldLabel },
                   h('span', { className: 'fiam-field-title' }, '推理强度上界 (最高档)'),
                   h('select', {
                     className: 'fiam-select',
@@ -1711,17 +1670,21 @@ window.__ModuleLoader__.load({
                     ...THINKING_LEVELS.map(lv => h('option', { key: lv, value: lv }, REASONING_LEVEL_LABELS[lv])),
                   ),
                 ),
-                h('div', { style: { flex: '2 1 200px', minWidth: 0, paddingBottom: 4 } },
-                  h('div', { className: 'fiam-field-title' }, '当前生效范围'),
-                  h('div', { style: { ...muted, color: reasoningBounds.enabled ? 'var(--dsw-alias-state-business-primary)' : undefined, fontWeight: reasoningBounds.enabled ? 500 : 400 } },
-                    reasoningBounds.enabled
-                      ? (reasoningBounds.lower === reasoningBounds.upper
-                        ? `固定单档：${REASONING_LEVEL_SHORT[reasoningBounds.lower]}`
-                        : `开放区间：${reasoningBounds.levels.map(l => REASONING_LEVEL_SHORT[l]).join(' → ')}（共 ${reasoningBounds.levels.length} 档）`)
-                      : '未开启推理强度调节（使用模型默认策略）'),
-                ),
               ),
-              h('span', { className: 'fiam-field-hint', style: muted }, '支持快捷档位或自由选择推理强度上下界；当所选下界高于上界时自动对齐，开启后在对话输入框可按区间切换思考强度。'),
+              h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginTop: 2 } },
+                h('span', { style: { ...muted, color: reasoningBounds.enabled ? 'var(--dsw-alias-state-business-primary)' : undefined, fontWeight: reasoningBounds.enabled ? 500 : 400 } },
+                  reasoningBounds.enabled
+                    ? (reasoningBounds.lower === reasoningBounds.upper
+                      ? `当前生效：固定单档：${REASONING_LEVEL_SHORT[reasoningBounds.lower]}`
+                      : `当前生效：开放区间：${reasoningBounds.levels.map(l => REASONING_LEVEL_SHORT[l]).join(' → ')}（共 ${reasoningBounds.levels.length} 档，未选择时默认 ${REASONING_LEVEL_SHORT[reasoningBounds.lower]}）`)
+                    : '当前生效：未开启推理强度（关闭思考，使用标准直出）'),
+                reasoningBounds.enabled ? h('button', {
+                  type: 'button',
+                  style: { ...secondaryButton, height: 22, minHeight: 22, padding: '0 8px', fontSize: 11 },
+                  onClick: () => updateOptionField(model.id, 'reasoningEfforts', undefined),
+                }, '关闭推理') : null,
+              ),
+              h('span', { className: 'fiam-field-hint', style: muted }, '仅需指定推理强度下界与上界；若下界高于上界将自动对齐。对话中默认保留您上次所选强度，初次未选择时自动采用下界最低强度。'),
             ),
             h('div', { className: 'fiam-model-advanced-actions' },
               !isEnabled || hasCustom
@@ -2315,7 +2278,7 @@ window.__ModuleLoader__.load({
       };
       const copyDiagnostic = () => copyText(JSON.stringify(diagnosticSnapshot(state)));
 
-      const box = { padding: '0 0 24px', maxWidth: 680, color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
+      const box = { padding: '0 0 24px', maxWidth: 720, width: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
       const button = secondaryButton;
       const muted = { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' };
       const header = h('div', { style: { marginBottom: 16 } },

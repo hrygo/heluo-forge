@@ -194,7 +194,9 @@ test('one model can be pinned to a single reasoning level beyond the default lad
   t.after(() => panel.close());
 
   await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
-  await panel.findButton(panel.render(), '更深 (XHigh)').props.onClick();
+  const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
+  byLabel('推理强度下界 1').props.onChange({ target: { value: 'xhigh' } });
+  byLabel('推理强度上界 1').props.onChange({ target: { value: 'xhigh' } });
   await panel.findButton(panel.render(), '保存模型配置').props.onClick();
 
   assert.equal(writes.length, 1);
@@ -337,7 +339,7 @@ test('reasoning effort supports lower and upper bound selection and auto-aligns 
   // Select lower bound = low, upper bound = xhigh
   lowerSelect().props.onChange({ target: { value: 'low' } });
   upperSelect().props.onChange({ target: { value: 'xhigh' } });
-  assert.match(panel.text(panel.render()), /开放区间：Low → Medium → High → XHigh（共 4 档）/);
+  assert.match(panel.text(panel.render()), /当前生效：开放区间：Low → Medium → High → XHigh（共 4 档/);
   assert.match(panel.text(panel.render()), /深度推理 · Low~XHigh/);
 
   await panel.findButton(panel.render(), '保存模型配置').props.onClick();
