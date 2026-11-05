@@ -137,3 +137,29 @@ test('launcher eliminates distracting token refresh count and shows stable activ
   assert.doesNotMatch(menuText, /分钟后刷新/);
   assert.match(menuText, /已同步 1 个模型/);
 });
+
+test('launcher names an unreachable sign-in and an empty-catalogue sync failure', async t => {
+  const { mountPanel } = await import('./support/client-panel.mjs');
+  const base = { configured: true, signedIn: true, principal: 'E1001', gatewayCredential: { state: 'configured' } };
+  const unreachable = await mountPanel(async () => Response.json({ ...base, state: 'unreachable' }), {
+    componentId: 'forge-iam-launcher', componentProps: { wide: true },
+  });
+  t.after(() => unreachable.close());
+  assert.match(unreachable.text(unreachable.render()), /连接登录受阻/);
+
+  const failing = await mountPanel(async () => Response.json({
+    ...base, state: 'ready',
+    modelAccess: { state: 'error', error: 'ENTERPRISE_GATEWAY_UNAVAILABLE', models: [] },
+  }), { componentId: 'forge-iam-launcher', componentProps: { wide: true } });
+  t.after(() => failing.close());
+  const find = (node, predicate) => {
+    if (!node || typeof node !== 'object') return undefined;
+    if (predicate(node)) return node;
+    for (const child of node.children ?? []) { const found = find(child, predicate); if (found) return found; }
+  };
+  const text = failing.text(failing.render());
+  assert.match(text, /模型同步异常/);
+  find(failing.render(), node => node.type === 'button' && node.props.className === 'fiam-launcher-btn').props.onClick({ stopPropagation() {} });
+  const menu = find(failing.render(), node => node.type?.name === 'IamLauncherMenu');
+  assert.match(failing.text(menu.type(menu.props)), /同步异常/);
+});

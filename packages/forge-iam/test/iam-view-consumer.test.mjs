@@ -230,3 +230,26 @@ test('an asynchronous mount plus the actual factory and mock IdP delivers the re
   assert.equal(mount.openHandles(), 0);
   await waitFor(() => service.getView().state === 'ready');
 });
+test('notifyView pushes a frame for a catalogue-only change', async t => {
+  const credentials = new MemoryCredentials();
+  let catalog = { managed: true, state: 'loading', models: [] };
+  const service = createIamService({
+    issuer: 'https://iam.corp.example', clientId: 'synthetic-client',
+    authorizationEndpoint: 'https://iam.corp.example/authorize',
+    tokenEndpoint: 'https://iam.corp.example/token', jwksUri: 'https://iam.corp.example/jwks',
+  }, { credentials, getManagedModelRuntime: () => ({ getView: () => catalog }) });
+  t.after(() => service.dispose());
+  const controller = new AbortController();
+  const frames = [];
+  const pump = (async () => { for await (const view of service.watch(controller.signal)) frames.push(view); })();
+  await waitFor(() => frames.length === 1);
+  // Only the managed catalogue moved here: no IAM transition precedes this call.
+  catalog = { managed: true, state: 'ready', models: [{ id: 'corp-chat' }] };
+  service.notifyView();
+  await waitFor(() => frames.length === 2);
+  // A freshly evaluated snapshot reaches subscribers instead of the stale one.
+  assert.notStrictEqual(frames[1], frames[0]);
+  assert.equal(frames[1].modelAccess.models.length, 0);
+  controller.abort();
+  await pump.catch(() => { });
+});

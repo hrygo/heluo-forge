@@ -886,6 +886,12 @@ export function createIamService(rawConfig, options = {}) {
     hydrate,
     syncFromStore,
     loadGatewayCredential,
+    /**
+     * Host-only: push the current view after a change that never touched the
+     * IAM state machine (the managed model catalogue is the only such source).
+     * Without this, subscribers keep the last frame until an unrelated event.
+     */
+    notifyView() { return notify(); },
     // Host-only observation; intentionally absent from routes and IamView.
     reconcileDefaultModel,
 
