@@ -335,6 +335,7 @@ export function createIamService(rawConfig, options = {}) {
     observedPending = null;
     clearAttempt();
     lastGrant = null;
+    identityProfile = undefined;
     error = code;
     if (state === 'unconfigured') {
       notify();
@@ -378,7 +379,8 @@ export function createIamService(rawConfig, options = {}) {
         timeoutMs: Math.min(config.httpTimeoutMs, 5000),
       });
       if (disposed || authEpoch !== epoch || lastGrant !== grant) return;
-      identityProfile = projectUserInfo(raw, profileFields);
+      const profile = projectUserInfo(raw, profileFields);
+      identityProfile = profile ? Object.freeze({ identity: grantIdentity(grant), profile }) : undefined;
     } catch {
       // UserInfo is enrichment only: login stays successful without it.
       identityProfile = undefined;
@@ -1109,7 +1111,11 @@ export function createIamService(rawConfig, options = {}) {
 
     /** Projected UserInfo for future display; empty until IAM confirms fields. */
     getIdentityProfile() {
-      return identityProfile ? { ...identityProfile } : undefined;
+      // A profile is only valid for the grant that produced it: every path that
+      // clears or replaces lastGrant hides it, without touching each call site.
+      if (!lastGrant || !identityProfile) return undefined;
+      if (!isDeepStrictEqual(identityProfile.identity, grantIdentity(lastGrant))) return undefined;
+      return { ...identityProfile.profile };
     },
 
     async startSignIn() {
@@ -1467,6 +1473,7 @@ export function createIamService(rawConfig, options = {}) {
       const unknownSignOut = () => {
         checkDisposed();
         lastGrant = null;
+        identityProfile = undefined;
         error = 'IAM_CREDENTIALS_CLEAR_FAILED';
         state = 'error';
         notify();

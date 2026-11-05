@@ -460,7 +460,8 @@ export async function revokeAccessToken({ revocationEndpoint, accessToken, fetch
   if (payload?.result === true) return { state: 'ok' };
   if (payload?.result === false) {
     // 2002 means the token is already unusable; revocation is idempotent.
-    return payload.errcode === 2002
+    // The provider's JSON type is not part of the contract: accept 2002 or "2002".
+    return Number(payload.errcode) === 2002
       ? { state: 'ok', code: 'IAM_REVOKE_ALREADY_INVALID' }
       : { state: 'failed', code: 'IAM_REVOKE_REJECTED' };
   }

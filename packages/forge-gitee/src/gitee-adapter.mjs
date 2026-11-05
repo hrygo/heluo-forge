@@ -41,6 +41,7 @@
 
 import {
   DEFAULT_PERSISTENT_TOKEN_POLICY,
+  PERSISTENT_TOKEN_BLOCK_MESSAGE,
   PERSISTENT_TOKEN_POLICIES,
 } from './runtime-config.mjs';
 
@@ -895,7 +896,7 @@ export function createGiteeAdapter({
         ...base,
         ok: false,
         reason: ADAPTER_REASONS.GITEE_PERSISTENT_TOKEN,
-        message: '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请删除该明文令牌，然后在终端运行 gh auth login 存入系统凭据库',
+        message: PERSISTENT_TOKEN_BLOCK_MESSAGE,
         tokenSource: tokens.length === 0 ? 'none' : 'env',
       });
     }

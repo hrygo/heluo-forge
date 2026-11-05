@@ -99,3 +99,20 @@ test('malformed UserInfo JSON degrades and sign-out clears the profile', async (
   await service.signOut();
   assert.equal(service.getIdentityProfile(), undefined);
 });
+
+test('profile never outlives the grant that produced it', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), {
+    credentials,
+    profileFields: { workNo: 'work_no' },
+  });
+  t.after(() => service.dispose());
+  await signIn(service);
+  assert.deepEqual(service.getIdentityProfile(), { workNo: '10001234' });
+  await credentials.deleteRecord('heluo-iam/session');
+  await service.syncFromStore();
+  assert.equal(service.getView().state, 'signed-out');
+  assert.equal(service.getIdentityProfile(), undefined, 'a stale profile must not survive its grant');
+});

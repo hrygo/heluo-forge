@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-010 |
 | 文档名称 | Gitee 接入详细设计 |
-| 版本 | V0.4.0 |
+| 版本 | V0.4.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -176,7 +176,7 @@ flowchart LR
   D -->|是| F{持久令牌且策略 block}
   F -->|是| G[denied: GITEE_PERSISTENT_TOKEN]
   F -->|否| P{preflight 其他项}
-  P -->|不满足| Q[failed: SPAWN_FAILED 等]
+  P -->|不满足| Q[failed: 配置/预检]
   P -->|通过| H{argv 白名单与禁项}
   H -->|否| I[failed: ARG_/FORBIDDEN_]
   H -->|是| J[唯一出口 execFile, shell:false, 超时, 1MiB]
