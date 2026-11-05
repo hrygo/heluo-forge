@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.7.0 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -255,10 +255,12 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 
 ### U3 客户端 SRP：`Panel` 三 hook + `renderShell`
 
-- 抽 `useSessionView`（轮询、唤醒与聚焦限流刷新、`viewBarrier`/`linkIdentity`）、`useModelCatalogue({ view, setView, io })`（目录、缓存键、筛选、展开、就地保存、未保存判定）、`useCredentialForm({ view, setView, io })`（草稿、保存、清除）。
-- 两个跨簇耦合必须显式保留：身份变化作废目录（`viewBarrier` + `linkIdentity`）、保存后回写视图（`persistModelOptions` → `setView`）。
-- `Panel` 只做装配与 `renderShell` 调用；hook 只返回状态与动作，不返回元素。
-- 完成条件：`Panel` 降至约 150–200 行；hook 序列守卫通过；行为与契约测试全绿。
+- 三个 hook 按数据归属切：`useModelCatalogue({ view, viewBarrier, setView })`（缓存键、参数覆盖、筛选、展开、就地保存）、`useCredentialForm({ view, viewBarrier, setView, catalogue })`（草稿、保存、清除、目录刷新）、`useSessionView({ state, setState, viewBarrier, catalogue, form })`（加载、轮询、唤醒限流、登录/取消、退出、复制通道）。
+- 调用顺序即依赖方向：`catalogue` → `form` → `session`。会话视图由 `Panel` 持有并传入（单一写者），所以后两个 hook 只出动作与状态，不回写别人的状态。
+- 跨簇写入只用两种显式端口：`setView`（回写视图）、以及 hook 参数里点名的合作者（`catalogue` / `form`）。不再有隐式的闭包共享。
+- 两个跨簇耦合按原样保留：保存成功回写视图（`setView`）、退出时清目录与展开态（`catalogue.actions.reset`）。
+- `renderShell` 不再单独抽：hook 抽完后 `Panel` 只剩装配（137 行），再拆一层只增加调用跳转，不减少耦合。
+- 完成条件：`Panel` 降至约 150–200 行（实测 137）；hook 序列守卫通过；行为与契约测试全绿。
 
 ### U4 客户端 ISP：render 入参分簇
 
@@ -426,6 +428,7 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 | D-3 宿主拆分范围 | 负责人 2026-11-05 确认：一次做完 §4.2 的全部 9 个轴 | U5–U11；不保留双模型中间态 |
 | D-4 实施顺序 | 负责人 2026-11-05 指示按最高 ROI 排序 | 客户端低成本项前置，最敏感的三个宿主轴后置（§4.6） |
 | D-5 内部质量判据 | 负责人 2026-11-05 要求：不拆文件也要符合 DRY/SOLID | 落为 §1.6 判据、§4.7 整改清单与 U1–U4；由标记区与契约守卫强制执行 |
+| D-6 `Panel` 的切法落地 | 实施时改为三步：先目录、再凭据、最后会话；`renderShell` 并入 `Panel` | 会话视图归 `Panel` 持有，避免 hook 之间用可变端口互相引用；`Panel` 从 600 行降到 137 行 |
 
 ## 附录 A 客户端片段装配器（仅当触发条件成立）
 
