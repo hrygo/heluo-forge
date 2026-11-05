@@ -614,6 +614,10 @@ window.__ModuleLoader__.load({
         border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 30%, transparent);
         box-shadow: 0 2px 8px color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
       }
+      .fiam-journey-step-warn {
+        background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, var(--dsw-alias-bg-layer-1));
+        border-color: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 32%, transparent);
+      }
       .fiam-journey-icon {
         display: flex;
         align-items: center;
@@ -635,6 +639,11 @@ window.__ModuleLoader__.load({
         background: var(--dsw-alias-state-business-primary);
         color: #fff;
         box-shadow: 0 2px 6px color-mix(in srgb, var(--dsw-alias-state-business-primary) 35%, transparent);
+      }
+      .fiam-journey-icon-warn {
+        background: var(--dsw-alias-state-warn-primary);
+        color: #fff;
+        box-shadow: 0 2px 6px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 35%, transparent);
       }
       .fiam-journey-icon-idle {
         background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.05));
@@ -673,6 +682,10 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-state-business-primary);
         background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
       }
+      .fiam-journey-pill-warn {
+        color: var(--dsw-alias-state-warn-primary);
+        background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+      }
       .fiam-journey-pill-idle {
         color: var(--dsw-alias-label-tertiary);
         background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 8%, transparent);
@@ -685,6 +698,199 @@ window.__ModuleLoader__.load({
         opacity: 0.45;
         flex-shrink: 0;
         margin: 0 -2px;
+      }
+      .fiam-meta-grid {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 16px;
+        padding: 10px 14px;
+        background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.02)));
+        border: 0.5px solid var(--dsw-alias-border-l4);
+        border-radius: var(--dsw-radius-md, 8px);
+      }
+      .fiam-meta-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: var(--dsw-font-xxs-12);
+        color: var(--dsw-alias-label-secondary);
+        line-height: 18px;
+        min-width: 0;
+      }
+      .fiam-auth-progress {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: var(--dsw-radius-md, 8px);
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, var(--dsw-alias-bg-layer-1));
+        border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 26%, transparent);
+        font-size: var(--dsw-font-xxs-12);
+        color: var(--dsw-alias-label-primary);
+      }
+      .fiam-search-wrap {
+        position: relative;
+        flex: 1 1 200px;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+      }
+      .fiam-search-wrap .fiam-model-search {
+        width: 100%;
+        padding-right: 28px;
+      }
+      .fiam-search-clear {
+        position: absolute;
+        right: 6px;
+        width: 20px;
+        height: 20px;
+        border: none;
+        border-radius: 50%;
+        background: transparent;
+        color: var(--dsw-alias-label-tertiary);
+        font-size: 13px;
+        line-height: 1;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .fiam-search-clear:hover {
+        color: var(--dsw-alias-label-primary);
+        background: var(--dsw-alias-interactive-bg-hover);
+      }
+      .fiam-banner {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 900;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        box-sizing: border-box;
+        max-width: calc(100vw - 24px);
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: var(--dsw-alias-bg-layer-1);
+        border: 1px solid var(--dsw-alias-border-l2);
+        color: var(--dsw-alias-label-primary);
+        box-shadow: var(--dsw-elevation-prominent);
+        font: var(--dsw-font-xs-13);
+        backdrop-filter: blur(16px);
+      }
+      .fiam-onboarding-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .fiam-onboarding-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--dsw-alias-label-primary);
+      }
+      .fiam-onboarding-stepper {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin-bottom: 22px;
+      }
+      .fiam-onboarding-step-item {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .fiam-onboarding-step-bar {
+        height: 4px;
+        border-radius: 999px;
+        background: var(--dsw-alias-border-l3);
+        transition: background-color 0.2s ease;
+      }
+      .fiam-onboarding-step-bar.done {
+        background: var(--dsw-alias-state-success-primary);
+      }
+      .fiam-onboarding-step-bar.active {
+        background: var(--dsw-alias-button-primary-fill);
+      }
+      .fiam-onboarding-step-label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: var(--dsw-font-xxs-12);
+        color: var(--dsw-alias-label-tertiary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .fiam-onboarding-step-label.active {
+        color: var(--dsw-alias-label-primary);
+        font-weight: 600;
+      }
+      .fiam-onboarding-step-label.done {
+        color: var(--dsw-alias-state-success-primary);
+        font-weight: 500;
+      }
+      .fiam-onboarding-preview {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: var(--dsw-radius-md, 8px);
+        background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.02));
+        border: 0.5px solid var(--dsw-alias-border-l3);
+      }
+      .fiam-onboarding-preview-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: var(--dsw-font-xxs-12);
+        color: var(--dsw-alias-label-secondary);
+        line-height: 18px;
+      }
+      .fiam-onboarding-preview-num {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+        color: var(--dsw-alias-state-business-primary);
+        font-size: 11px;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .fiam-onboarding-summary {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: var(--dsw-radius-md, 8px);
+        background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.02));
+        border: 0.5px solid var(--dsw-alias-border-l3);
+      }
+      .fiam-onboarding-summary-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: var(--dsw-font-xxs-12);
+        line-height: 18px;
       }
       .fiam-model-row-actions {
         display: inline-flex;
@@ -1110,7 +1316,15 @@ window.__ModuleLoader__.load({
         const gw = view.gatewayCredential?.state ?? 'unconfigured';
         const name = view.principal || view.subject || '企业账号';
         if (gw === 'configured') {
-          return { kind: 'ready', dotClass: 'success', label: '企业网关就绪', tooltip: `${name} · 双模式凭据就绪` };
+          const modelCount = view.modelAccess?.models?.length ?? 0;
+          const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型可用` : '';
+          return { kind: 'ready', dotClass: 'success', label: '企业网关就绪', tooltip: `${name} · 双模式凭据就绪${modelSuffix}` };
+        }
+        if (gw === 'owner-mismatch') {
+          return { kind: 'owner-mismatch', dotClass: 'warn', label: '凭据账号不匹配', tooltip: `${name} · 网关凭据属于其他账号` };
+        }
+        if (gw === 'invalid') {
+          return { kind: 'invalid-key', dotClass: 'warn', label: '凭据状态需核对', tooltip: `${name} · 网关凭据记录需核对` };
         }
         return { kind: 'missing-key', dotClass: 'warn', label: '待配置网关凭据', tooltip: `${name} · 未录入个人网关凭据` };
       }
@@ -1475,7 +1689,7 @@ window.__ModuleLoader__.load({
         state, primaryButton, button, copy,
         login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity,
       } = ctx;
-      return h('div', { className: 'fiam-card' },
+      return h('div', { id: 'fiam-section-account', className: 'fiam-card' },
         h('div', { className: 'fiam-card-header' },
           h('div', { className: 'fiam-card-title-group' },
             h('div', { className: 'fiam-avatar' },
@@ -1494,17 +1708,23 @@ window.__ModuleLoader__.load({
             label,
           ),
         ),
-        (view.principal || view.accessExpiresAt) ? h('div', { style: { padding: '10px 14px', background: 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.02))', borderRadius: 'var(--dsw-radius-sm)', marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 4 } },
-          principal,
-          expiry,
+        (view.principal || view.accessExpiresAt) ? h('div', { className: 'fiam-meta-grid' },
+          principal ? h('div', { className: 'fiam-meta-item' }, principal) : null,
+          expiry ? h('div', { className: 'fiam-meta-item' }, expiry) : null,
         ) : null,
         missing,
         exclusive,
         hostError,
         notice,
-        loginLink,
-        view.state === 'authenticating' && !state.authorizationUrl
-          ? h('div', { className: 'fiam-callout' }, '请在浏览器中完成登录；如果无法继续，请取消后重试。') : null,
+        view.state === 'authenticating'
+          ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
+            h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 10 } },
+              h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
+              h('span', null, state.authorizationUrl ? '已唤起浏览器授权页，请在浏览器中完成企业登录。' : '请在浏览器中完成登录；如果无法继续，请取消后重试。'),
+            ),
+            loginLink,
+          )
+          : loginLink,
         h('div', { className: 'fiam-actions' },
           view.canSignIn ? h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: login }, '登录企业账号') : null,
           view.state === 'authenticating' ? h('button', { type: 'button', style: button, onClick: cancelLogin }, '取消登录') : null,
@@ -1525,7 +1745,8 @@ window.__ModuleLoader__.load({
         credential, setCredential, fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
         saveCredential, clearCredential, viewBarrier,
       } = ctx;
-      return h('div', { className: 'fiam-card' },
+      const hasDraftChanges = Boolean(credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? '')));
+      return h('div', { id: 'fiam-section-gateway', className: 'fiam-card' },
         h('div', { className: 'fiam-card-header' },
           h('div', { className: 'fiam-card-title-group' },
             h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent)', color: 'var(--dsw-alias-state-business-primary)' } },
@@ -1544,8 +1765,12 @@ window.__ModuleLoader__.load({
             `UAG 个人凭证：${gatewayStatus}`,
           ),
         ),
+        gatewayDetails.length ? h('div', { className: 'fiam-meta-grid' },
+          ...gatewayDetails.map((item, idx) => h('span', { key: idx, className: 'fiam-meta-item' }, item))
+        ) : null,
+        storageWarning,
         h('label', { style: fieldLabel },
-          h('span', null, '网关地址'),
+          h('span', { style: { fontWeight: 500, fontSize: 13 } }, '网关地址'),
           h('input', {
             type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
             value: credential.baseURL ?? gateway.baseURL ?? view.modelAccess?.baseURL ?? '',
@@ -1554,10 +1779,13 @@ window.__ModuleLoader__.load({
           }),
           h('span', { style: muted }, '填写网关提供的地址；修改地址时请重新输入对应的个人 Key。'),
         ),
-        credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? ''))
-          ? h('p', { role: 'status', style: muted }, '有未保存的更改。保存后将重新获取模型列表。') : null,
-        gatewayDetails.length ? h('div', { style: { ...muted, marginBottom: 8 } }, gatewayDetails.join(' · ')) : null,
-        storageWarning,
+        hasDraftChanges
+          ? h('div', { role: 'status', className: 'fiam-unsaved-banner' },
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存'),
+              h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } }, '有未保存的更改。保存后将重新获取模型列表。'),
+            )
+          ) : null,
         h('div', { className: 'fiam-callout' },
           h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
             h('circle', { cx: 8, cy: 8, r: 6 }),
@@ -1955,28 +2183,33 @@ window.__ModuleLoader__.load({
     function renderJourneyBar(ctx) {
       const { h, view, gateway, enabledCount, totalModels } = ctx;
       const step1Done = view.state === 'ready';
+      const step1Warn = view.state === 'expired' || view.state === 'error';
       const step2Done = step1Done && gateway.state === 'configured' && gateway.matchesAccount !== false;
+      const step2Warn = step1Done && (gateway.state === 'owner-mismatch' || gateway.state === 'invalid');
       const step3Done = step2Done && view.modelAccess?.state === 'ready' && enabledCount > 0;
       const steps = [
         {
           num: '1',
           title: '身份',
-          status: step1Done ? '已认证' : (view.state === 'authenticating' ? '认证中' : '待认证'),
+          status: step1Done ? '已认证' : (view.state === 'authenticating' ? '认证中' : (step1Warn ? '需重新登录' : '待认证')),
           done: step1Done,
-          active: !step1Done,
+          warn: step1Warn,
+          active: !step1Done && !step1Warn,
         },
         {
           num: '2',
           title: '凭据',
-          status: step2Done ? '已就绪' : '待配置',
+          status: step2Done ? '已就绪' : (step2Warn ? '需核对' : '待配置'),
           done: step2Done,
-          active: step1Done && !step2Done,
+          warn: step2Warn,
+          active: step1Done && !step2Done && !step2Warn,
         },
         {
           num: '3',
           title: '模型',
           status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step2Done ? '待启用' : '待解锁'),
           done: step3Done,
+          warn: false,
           active: step2Done && !step3Done,
         },
       ];
@@ -1994,7 +2227,7 @@ window.__ModuleLoader__.load({
         if (idx > 0) {
           children.push(h('div', { key: `sep-${idx}`, className: 'fiam-journey-arrow', 'aria-hidden': 'true' }, chevronIcon));
         }
-        const stateClass = s.done ? 'done' : (s.active ? 'active' : 'idle');
+        const stateClass = s.done ? 'done' : (s.warn ? 'warn' : (s.active ? 'active' : 'idle'));
         children.push(h('div', {
           key: s.title,
           className: `fiam-journey-step fiam-journey-step-${stateClass}`,
@@ -2025,7 +2258,7 @@ window.__ModuleLoader__.load({
         fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
       } = ctx;
       const unenabledCount = Math.max(0, modelList.length - enabledCount);
-      return h('section', { className: 'fiam-card', 'aria-label': '企业模型' },
+      return h('section', { id: 'fiam-section-models', className: 'fiam-card', 'aria-label': '企业模型' },
         h('div', { className: 'fiam-card-header' },
           h('div', { className: 'fiam-card-title-group' },
             h('div', { className: 'fiam-avatar', style: { background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent)', color: 'var(--dsw-alias-state-business-primary)' } },
@@ -2065,15 +2298,26 @@ window.__ModuleLoader__.load({
           : null,
         view.modelAccess?.configured && modelList.length > 0
           ? h('div', { className: 'fiam-model-toolbar' },
-            h('input', {
-              type: 'search',
-              className: 'fiam-model-search',
-              style: { ...inputStyle, minHeight: 32, fontSize: 13 },
-              placeholder: '搜索模型名称或 ID…',
-              'aria-label': '搜索模型',
-              value: modelQuery,
-              onChange: (e) => setModelQuery(e.target.value),
-            }),
+            h('div', { className: 'fiam-search-wrap' },
+              h('input', {
+                type: 'search',
+                className: 'fiam-model-search',
+                style: { ...inputStyle, minHeight: 32, fontSize: 13 },
+                placeholder: '搜索模型名称或 ID…',
+                'aria-label': '搜索模型',
+                value: modelQuery,
+                onChange: (e) => setModelQuery(e.target.value),
+              }),
+              modelQuery.trim() !== ''
+                ? h('button', {
+                  type: 'button',
+                  className: 'fiam-search-clear',
+                  'aria-label': '清除搜索',
+                  title: '清除搜索关键词',
+                  onClick: () => setModelQuery(''),
+                }, '×')
+                : null,
+            ),
             h('div', { className: 'fiam-model-toolbar-controls' },
               h('div', { className: 'fiam-model-filters' },
                 h('button', {
@@ -2155,7 +2399,14 @@ window.__ModuleLoader__.load({
               }))
           )
           : null,
-        view.modelAccess?.state === 'loading' ? h('p', { role: 'status', style: muted }, '正在获取模型列表…') : null,
+        view.modelAccess?.state === 'loading'
+          ? h('div', { role: 'status', className: 'fiam-auth-progress' },
+            h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+              h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
+              h('span', null, '正在获取模型列表…'),
+            )
+          )
+          : null,
         view.modelAccess?.state === 'ready' && !modelList.length
           ? h('p', { role: 'status', style: muted }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
         view.modelAccess?.error ? h('p', { role: 'status', style: muted }, errorNotice(view.modelAccess.error)) : null,
@@ -2590,13 +2841,14 @@ window.__ModuleLoader__.load({
                 h('div', { style: { fontWeight: 600, fontSize: 15, marginBottom: 4 } }, '无法读取登录状态。'),
                 h('div', { style: muted }, errorNotice(state.error)),
                 h('div', { className: 'fiam-actions', style: { marginTop: 14 } },
-                  h('button', { type: 'button', style: primaryButton, onClick: load }, '重试'),
+                  h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: load }, '重试'),
                   h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
-                )
+                ),
+                copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
+                  ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
               )
             )
           ),
-          copyTools,
         );
       }
 
@@ -2761,6 +3013,14 @@ window.__ModuleLoader__.load({
               gwConfigured ? '已就绪' : (GATEWAY_STATUS[gwState] || '未录入')
             ),
           ),
+          isSignedIn ? h('div', { className: 'fiam-launcher-menu-row' },
+            h('span', { className: 'fiam-launcher-menu-label' }, '企业模型'),
+            h('span', { className: 'fiam-launcher-menu-value' },
+              view?.modelAccess?.state === 'ready' && Array.isArray(view?.modelAccess?.models)
+                ? `已同步 ${view.modelAccess.models.length} 个模型`
+                : (gwConfigured ? '待同步目录' : '待配置凭证')
+            ),
+          ) : null,
           view?.gatewayCredential?.deviceLabel ? h('div', { className: 'fiam-launcher-menu-row' },
             h('span', { className: 'fiam-launcher-menu-label' }, '授权设备'),
             h('span', { className: 'fiam-launcher-menu-value' }, view.gatewayCredential.deviceLabel),
@@ -2921,7 +3181,7 @@ window.__ModuleLoader__.load({
             h('span', { className: `fiam-launcher-dot ${status.dotClass}` }),
           ),
           wide ? h('div', { className: 'fiam-launcher-details' },
-            h('span', { className: 'fiam-launcher-title' }, isSignedIn ? (view.subject || '企业账号') : '企业账号'),
+            h('span', { className: 'fiam-launcher-title' }, isSignedIn ? (view.principal || view.subject || '企业账号') : '企业账号'),
             h('span', { className: 'fiam-launcher-subtitle' }, status.label),
           ) : null,
         ),
@@ -3035,20 +3295,25 @@ window.__ModuleLoader__.load({
       };
 
       if (!state.visible) return null;
+      const dotColor = state.reason === 'gateway'
+        ? 'var(--dsw-alias-state-warn-primary)'
+        : state.sessionState === 'authenticating'
+          ? 'var(--dsw-alias-state-business-primary)'
+          : (state.sessionState === 'expired' || state.sessionState === 'error')
+            ? 'var(--dsw-alias-state-error-primary)'
+            : 'var(--dsw-alias-label-tertiary)';
       return h('div', {
-        className: 'forge-iam-ui',
-        style: {
-          position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 900,
-          pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 8,
-          boxSizing: 'border-box', maxWidth: 'calc(100vw - 24px)',
-          padding: '6px 14px', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-1)',
-          border: '1px solid var(--dsw-alias-border-l2)',
-          color: 'var(--dsw-alias-label-primary)', boxShadow: 'var(--dsw-elevation-prominent)', font: 'var(--dsw-font-xs-13)',
-        },
+        className: 'fiam-banner forge-iam-ui',
       },
         interactionStyle(),
-        h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } },
-          h('span', { className: 'fiam-badge-dot', style: { background: state.reason === 'gateway' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-tertiary)' } }),
+        h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 500 } },
+          h('span', {
+            className: 'fiam-badge-dot',
+            style: {
+              background: dotColor,
+              ...(state.sessionState === 'authenticating' ? { animation: 'fiam-pulse 1.4s ease-in-out infinite' } : {}),
+            },
+          }),
           state.reason === 'gateway'
             ? (state.gateway === 'owner-mismatch' ? '个人凭证属于其他账号'
               : state.gateway === 'invalid' ? '个人凭证信息需要检查，已保留'
@@ -3061,35 +3326,90 @@ window.__ModuleLoader__.load({
             : '到“设置 → 企业账号”录入 UAG 个人凭证')
           : null,
         state.reason !== 'gateway' && state.view?.canSignIn
-          ? h('button', { type: 'button', style: { ...secondaryButton, minHeight: 28, padding: '0 10px' }, onClick: login }, '登录')
+          ? h('button', { type: 'button', className: 'forge-iam-primary', style: { ...primaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: login }, '登录')
           : null,
         state.view?.state === 'authenticating'
-          ? h('button', { type: 'button', style: { ...secondaryButton, minHeight: 28, padding: '0 10px' }, onClick: cancelLogin }, '取消')
+          ? h('button', { type: 'button', style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: cancelLogin }, '取消')
           : null,
         state.authorizationUrl
-          ? h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer', style: { color: 'inherit' } }, '打开登录页')
+          ? h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer', style: { fontSize: 12, fontWeight: 500 } }, '打开登录页')
           : null,
-        state.notice ? h('span', { role: 'status', 'aria-live': 'polite', style: { color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
+        state.notice ? h('span', { role: 'status', 'aria-live': 'polite', style: { color: 'var(--dsw-alias-state-warn-primary)', fontSize: 12 } }, state.notice) : null,
       );
     }
 
     function renderOnboardingStepDetail(ctx) {
       const { h, state, setState, fieldLabel, inputStyle } = ctx;
-      if (state.step === 3 && state.view?.modelAccess?.models?.length) {
-        return h('div', { style: { marginTop: 14 } },
-          h('div', { style: { fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--dsw-alias-label-primary)' } },
-            `已连接企业网关可用模型（共 ${state.view.modelAccess.models.length} 个）：`),
-          h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 160, overflowY: 'auto' } },
-            ...[...state.view.modelAccess.models]
-              .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' }))
-              .map((m) => h('span', { key: m.id, className: 'fiam-badge fiam-badge-success' }, m.name || m.id))
-          )
+      if (state.step === 0) {
+        return h('div', { className: 'fiam-onboarding-preview' },
+          h('div', { className: 'fiam-onboarding-preview-row' },
+            h('span', { className: 'fiam-onboarding-preview-num' }, '1'),
+            h('span', null, '使用系统浏览器完成企业统一身份（OIDC + PKCE）认证'),
+          ),
+          h('div', { className: 'fiam-onboarding-preview-row' },
+            h('span', { className: 'fiam-onboarding-preview-num' }, '2'),
+            h('span', null, '绑定本机专属 UAG 个人凭证，物理隔离身份令牌与调用密钥'),
+          ),
+          h('div', { className: 'fiam-onboarding-preview-row' },
+            h('span', { className: 'fiam-onboarding-preview-num' }, '3'),
+            h('span', null, '自动同步企业预置模型目录并启用对话能力'),
+          ),
+        );
+      }
+      if (state.step === 1) {
+        return h('div', { style: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 } },
+          h('div', { className: 'fiam-callout', style: { marginTop: 0 } },
+            h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+              h('path', { d: 'M8 1.5s5 2 5 5.8c0 3.8-2.9 6.3-5 7.7-2.1-1.4-5-3.9-5-7.7 0-3.8 5-5.8 5-5.8Z' }),
+              h('path', { d: 'm6 8.2 1.5 1.5 3-3' })
+            ),
+            h('span', null, '授权全程在系统默认安全浏览器中进行，DeepSeek Harness 不收集或存储您的企业账号密码。'),
+          ),
+          state.view?.state === 'authenticating'
+            ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
+              h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+                h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
+                h('span', null, '正在等待浏览器完成企业身份授权…'),
+              )
+            )
+            : null,
+        );
+      }
+      if (state.step === 3) {
+        const gwState = state.view?.gatewayCredential?.state ?? 'unknown';
+        const models = state.view?.modelAccess?.models ?? [];
+        return h('div', { style: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 } },
+          h('div', { className: 'fiam-onboarding-summary' },
+            h('div', { className: 'fiam-onboarding-summary-row' },
+              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '企业身份认证'),
+              h('span', { className: `fiam-badge fiam-badge-${state.view?.state === 'ready' ? 'success' : 'warn'}` },
+                state.view?.state === 'ready' ? (state.view.principal || '已认证') : '待登录'
+              ),
+            ),
+            h('div', { className: 'fiam-onboarding-summary-row' },
+              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, 'UAG 个人凭证'),
+              h('span', { className: `fiam-badge fiam-badge-${gwState === 'configured' ? 'success' : 'warn'}` },
+                GATEWAY_STATUS[gwState] ?? '待核实'
+              ),
+            ),
+          ),
+          models.length > 0
+            ? h('div', null,
+              h('div', { style: { fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--dsw-alias-label-primary)' } },
+                `已连接企业网关可用模型（共 ${models.length} 个）：`),
+              h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 160, overflowY: 'auto' } },
+                ...[...models]
+                  .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' }))
+                  .map((m) => h('span', { key: m.id, className: 'fiam-badge fiam-badge-success' }, m.name || m.id))
+              )
+            )
+            : null,
         );
       }
       if (state.step === 2) {
         return h('div', { style: { marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 } },
           h('label', { style: fieldLabel },
-            h('span', null, '网关地址'),
+            h('span', { style: { fontWeight: 500 } }, '网关地址'),
             h('input', {
               type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
               value: state.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '',
@@ -3341,21 +3661,27 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'forge-iam-ui', style: overlay, role: 'presentation' }, interactionStyle(),
         h('div', { ref: dialogRef, tabIndex: -1, style: card, role: 'dialog', 'aria-modal': 'true', 'aria-label': step.title },
-          h('div', { style: { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-strong-12)' } }, `步骤 ${state.step + 1} / 4`),
-          h('div', { 'aria-hidden': 'true', style: { display: 'flex', gap: 6, marginTop: 10, marginBottom: 24 } },
-            ...steps.map((_, index) => h('span', {
-              key: index, style: {
-                height: 3, flex: 1, borderRadius: 'var(--dsw-radius-xs)',
-                background: index <= state.step ? 'var(--dsw-alias-button-primary-fill)' : 'var(--dsw-alias-border-l3)',
-              }
-            }))),
-          h('div', { 'aria-hidden': 'true', style: { display: 'flex', gap: 6, marginTop: -16, marginBottom: 20, color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' } },
-            ...['欢迎', '登录', '凭据', '完成'].map((label, index) => h('span', { key: label, style: { flex: 1, color: index === state.step ? 'var(--dsw-alias-label-primary)' : undefined } }, label))),
+          h('div', { className: 'fiam-onboarding-header' },
+            h('div', { className: 'fiam-onboarding-brand' },
+              h(IamShieldIcon, { size: 18 }),
+              h('span', null, '企业统一身份与网关向导'),
+            ),
+            h('span', { className: 'fiam-badge fiam-badge-authenticating' }, `步骤 ${state.step + 1} / 4`),
+          ),
+          h('div', { className: 'fiam-onboarding-stepper', 'aria-hidden': 'true' },
+            ...['欢迎', '登录', '凭据', '完成'].map((label, index) => {
+              const stateCls = index < state.step ? 'done' : (index === state.step ? 'active' : '');
+              return h('div', { key: label, className: 'fiam-onboarding-step-item' },
+                h('div', { className: `fiam-onboarding-step-bar ${stateCls}` }),
+                h('span', { className: `fiam-onboarding-step-label ${stateCls}` }, `${index + 1}. ${label}`),
+              );
+            })
+          ),
           h('h2', { style: { margin: '0 0 10px', font: 'var(--dsw-font-l-20)' } }, step.title),
           h('p', { style: { margin: 0, color: 'var(--dsw-alias-label-secondary)', maxWidth: '42em' } }, step.body),
           renderOnboardingStepDetail({ h, state, setState, fieldLabel, inputStyle }),
           state.notice ? h('p', { role: 'status', 'aria-live': 'polite', style: { margin: '12px 0 0', color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
-          state.authorizationUrl ? h('p', null, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
+          state.authorizationUrl ? h('p', { style: { marginTop: 10 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 } },
             h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, disabled: state.saving, onClick: step.onPrimary }, state.saving ? '正在保存…' : step.primary),
             state.step < 3

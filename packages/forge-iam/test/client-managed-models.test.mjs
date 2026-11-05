@@ -461,3 +461,30 @@ test('model list row visually weakens secondary metadata and avoids heavy idle b
   const metaSpecs = allNodes.filter(node => node.props.className === 'fiam-model-meta-spec');
   assert.equal(metaSpecs.length, 2);
 });
+
+test('journey bar reflects warning state on credential mismatch and search clear button resets query', async t => {
+  const mismatchView = {
+    ...view,
+    gatewayCredential: { state: 'owner-mismatch', matchesAccount: false },
+    modelAccess: {
+      configured: true,
+      state: 'ready',
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-vision', name: 'corp-vision' }],
+    },
+  };
+  const panel = await mountPanel(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(mismatchView);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+
+  assert.match(panel.text(panel.render()), /需核对/);
+  const searchInput = nodes(panel.render()).find(node => node.props['aria-label'] === '搜索模型');
+  searchInput.props.onChange({ target: { value: 'vision' } });
+  assert.doesNotMatch(panel.text(panel.render()), /corp-chat/);
+
+  const clearBtn = nodes(panel.render()).find(node => node.props['aria-label'] === '清除搜索');
+  assert.ok(clearBtn);
+  clearBtn.props.onClick();
+  assert.match(panel.text(panel.render()), /corp-chat/);
+});

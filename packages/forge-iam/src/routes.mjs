@@ -77,6 +77,7 @@ function sendHtml(res, status, title, body) {
   const symbol = success
     ? '<path d="m5 12 4.5 4.5L19 7"/>'
     : '<path d="M12 7v6m0 4h.01"/>';
+  const badgeText = success ? '企业统一认证 · 已完成' : '企业统一认证 · 未完成';
   const instruction = success ? '回到应用继续操作。' : '回到应用后重新尝试登录。';
   res.end(`<!doctype html>
 <html lang="zh-CN">
@@ -88,15 +89,17 @@ function sendHtml(res, status, title, body) {
   <style>
     :root {
       color-scheme: light dark;
-      --dsw-alias-bg-base: #fff;
+      --dsw-alias-bg-base: #f8fafc;
       --dsw-alias-bg-layer-1: #fff;
       --dsw-alias-label-primary: #0f1115;
       --dsw-alias-label-secondary: #61666b;
-      --dsw-alias-border-l2: #0000001a;
+      --dsw-alias-border-l2: #00000014;
+      --dsw-alias-state-business-primary: #2563eb;
+      --dsw-alias-state-success-primary: #10b981;
       --dsw-alias-state-success-tertiary: #e6faed;
       --dsw-alias-state-error-primary: #ec1313;
       --dsw-radius-lg: 16px;
-      --dsw-elevation-panel: 0 0 0 .5px #00000029, 0 3px 8px 0 #00000008, 0 0 16px 0 #00000005;
+      --dsw-elevation-panel: 0 0 0 .5px #0000001f, 0 12px 32px -4px #00000012, 0 4px 12px 0 #00000008;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -105,9 +108,11 @@ function sendHtml(res, status, title, body) {
         --dsw-alias-label-primary: #f9fafb;
         --dsw-alias-label-secondary: #cfd3d6;
         --dsw-alias-border-l2: #ffffff1f;
+        --dsw-alias-state-business-primary: #3b82f6;
+        --dsw-alias-state-success-primary: #34d399;
         --dsw-alias-state-success-tertiary: #233c2c;
         --dsw-alias-state-error-primary: #f25a5a;
-        --dsw-elevation-panel: 0 0 0 .5px #fff3, 0 3px 8px 0 #00000008, 0 0 16px 0 #00000005;
+        --dsw-elevation-panel: 0 0 0 .5px #fff3, 0 12px 32px -4px #00000040, 0 4px 12px 0 #00000020;
       }
     }
     * { box-sizing: border-box; }
@@ -118,26 +123,42 @@ function sendHtml(res, status, title, body) {
       font: 14px/22px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
     }
     main {
-      width: min(100%, 480px); padding: 40px;
+      width: min(100%, 460px); padding: 36px 36px 32px;
       border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-layer-1);
       box-shadow: var(--dsw-elevation-panel);
     }
+    .top {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
     .status {
       display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%;
-      background: var(--dsw-alias-state-success-tertiary); color: var(--dsw-alias-label-primary);
+      background: var(--dsw-alias-state-success-tertiary); color: var(--dsw-alias-state-success-primary);
     }
     .status.error { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-state-error-primary); box-shadow: 0 0 0 1px var(--dsw-alias-border-l2); }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 500; color: var(--dsw-alias-label-secondary);
+      border: 1px solid var(--dsw-alias-border-l2);
+    }
     svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    h1 { margin: 24px 0 8px; font-size: 24px; line-height: 32px; letter-spacing: -.02em; }
+    h1 { margin: 20px 0 8px; font-size: 22px; line-height: 30px; letter-spacing: -.02em; }
     p { margin: 0; color: var(--dsw-alias-label-secondary); }
-    .next { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--dsw-alias-border-l2); }
-    .next strong { display: block; margin-bottom: 4px; color: var(--dsw-alias-label-primary); }
+    .next {
+      margin-top: 28px; padding: 14px 16px; border-radius: 10px;
+      background: color-mix(in srgb, var(--dsw-alias-label-primary) 4%, transparent);
+      border: 1px solid var(--dsw-alias-border-l2);
+    }
+    .next strong { display: block; margin-bottom: 4px; color: var(--dsw-alias-label-primary); font-size: 13px; }
+    .next p { font-size: 13px; line-height: 20px; }
     @media (max-width: 480px) { body { padding: 16px; } main { padding: 28px 24px; } }
   </style>
 </head>
 <body>
   <main>
-    <div class="status${success ? '' : ' error'}" aria-hidden="true"><svg viewBox="0 0 24 24">${symbol}</svg></div>
+    <div class="top">
+      <div class="status${success ? '' : ' error'}" aria-hidden="true"><svg viewBox="0 0 24 24">${symbol}</svg></div>
+      <span class="pill">${badgeText}</span>
+    </div>
     <h1>${title}</h1>
     <p>${body}</p>
     <div class="next"><strong>返回 DeepSeek Harness</strong><p>${instruction}此页面可以关闭。</p></div>
