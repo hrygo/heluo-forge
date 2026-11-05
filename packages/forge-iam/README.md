@@ -25,9 +25,39 @@
 | keychain provider | 独立包 `@heluo/forge-credentials-keychain`；生产 OS adapter 未实现；显式 0600 file backend 不获默认 IAM 原子信任 |
 | Client UI | `settings.section` 账户页、四步 onboarding、未登录横幅（不占用单占位 launcher）；登录走浏览器回调。账户页退出时清除旧视图并拒绝该操作前及操作中的迟到轮询；非 2xx 的返回视图和网络未知分别显示，不假装退出成功。此行为仅有 mock 组件测试，横幅为独立轮询，跨组件即时同步及真实 GUI 挂载仍待验证；登录请求若在退出完成后才被 Host 处理，旧响应会被丢弃，可能出现无链接的登录中状态，须取消后重试，真实宿主调度未验证。overlay 显式开启 pointer events，onboarding 完成屏不被轮询回退 |
 
+## Host 分轴模块
+
+`src/service.mjs` 只做装配与服务出口，内部状态按轴分给下列模块。每个模块只有一份可写状态，跨模块读写一律经工厂参数（端口）而非直接取用；依赖方向由 `test/service-state-structure.test.mjs` 冻结。
+
+| 模块 | 拥有的状态 | 职责边界 |
+|---|---|---|
+| `src/service-state.mjs` | `state`、`error`、`lastGrant`、`sessionAuthentication`、`disposed`、`exclusive`、监听器集合 | 唯一的状态写入路径、`view()` 投影与 `notify()` 发布 |
+| `src/service-store.mjs` | 凭据 provider、凭据缓存、网关 store、选型 store、网关摘要与 epoch | provider 解析、原子性断言、网关摘要缓存与 epoch 递增 |
+| `src/service-grant.mjs` | `metadataCache`、`jwksCache`、`identityProfile`、grant 归属表 | 协议缓存、登录/刷新/回调的绑定与校验、身份投影 |
+| `src/service-model-selection.mjs` | 选型单飞、排队标志、选型代际 | 默认模型勘定与其单飞；只经端口反向读网关 |
+| `src/service-gateway.mjs` | 网关凭据摘要、加载时间、加载单飞、网关 epoch | 网关凭据摘要的读取与失效；变更时通知选型 |
+| `src/service-token.mjs` | 刷新单飞及其 store/credentials/issuer/认证描述符、后台刷新退避 | `resolveToken` 与 `getAccessToken` 的完整刷新路径 |
+| `src/service-reconcile.mjs` | 无（经端口读写观测标志与发布计数） | 记录到视图的勘定：`syncFromStore`、`hydrate` |
+| `src/service-signin.mjs` | 登录 attempt 及其计时器 | `startSignIn`、回调、取消，含 verifier/nonce 的归属 |
+| `src/service-signout.mjs` | 退出单飞、`signingOut` 标志 | `signOut`、清理、桥接凭据 |
+| `src/service-helpers.mjs` | 无 | 纯函数与共享常量（时间、身份比较、错误码映射） |
+
+**改动落点**：状态判定改 `service-state.mjs`；协议与校验改 `service-grant.mjs`；刷新改 `service-token.mjs`；勘定改 `service-reconcile.mjs`；登录/回调改 `service-signin.mjs`；退出改 `service-signout.mjs`；网关与默认模型改 `service-gateway.mjs`、`service-model-selection.mjs`。`service.mjs` 只在新增轴或改装配顺序时动。
+
 ## 改动落点
 
 客户端是单个 `client.js`，边界靠分区锚点而不是文件：`grep -n "// §" client.js` 会列出全部落点，文件头有分区索引。结构守卫在 `test/client-structure.test.mjs`：状态判定、存储访问、错误解包与渲染入参的现状按「所属函数」冻结成基线，只能下调，不能新增。
+
+四段结构由锚点区间体现，段间单向依赖：
+
+| 段 | 锚点 | 允许依赖 |
+|---|---|---|
+| 纯函数与常量 | §1–§3、§4 状态标签、§9 错误文案 | 无 |
+| IO 边界 | §5 HTTP 封装、§8 本地存储 | 纯函数段 |
+| 状态所有权 | §7 登录窗口、§10 诊断快照、§11 会话轮询、§13 模型缓存 | 上两段 |
+| 视图与出口 | §6 网关状态、§12 卡片、§12.1–§12.4、§13.1、§14 面板、§15 启动器、§16 横幅与引导、§17 出口 | 以上各段 |
+
+守卫不按行号定位段（行号会随编辑漂移），而是按「符号归属」判：状态字面量只允许出现在 `deriveSessionUi`/`deriveModelUi`，`localStorage` 只允许出现在 `createClientStore`，错误码解包只允许出现在 `resultNotice`/`resultCode`，`render*` 的解构键 ≤4 且 ⊆ `{h, ui, model, actions}`。任一函数多读一格状态或多收一个参数都会失败，因此这些基线只能下调。
 
 | 要改的东西 | 落点 |
 |---|---|
@@ -39,7 +69,15 @@
 | 设置页启动器 | `client.js` §15 |
 | 未登录横幅、四步引导 | `client.js` §16、§16.2、§16.3 |
 | 宿主：配置、状态机、凭据记录 | `src/config.mjs`、`src/state.mjs`、`src/record.mjs`、`src/store.mjs` |
-| 宿主：登录、刷新、撤销 | `src/service.mjs`（按状态轴拆分后本表随各轴补齐） |
+| 宿主：登录、回调、取消 | `src/service-signin.mjs` |
+| 宿主：刷新、令牌读取 | `src/service-token.mjs` |
+| 宿主：退出、清理、桥接凭据 | `src/service-signout.mjs` |
+| 宿主：记录到视图的勘定 | `src/service-reconcile.mjs` |
+| 宿主：状态判定与发布 | `src/service-state.mjs` |
+| 宿主：凭据 provider 与缓存 | `src/service-store.mjs` |
+| 宿主：协议缓存、绑定校验 | `src/service-grant.mjs` |
+| 宿主：网关凭据摘要 | `src/service-gateway.mjs` |
+| 宿主：默认模型勘定 | `src/service-model-selection.mjs` |
 
 ## 登录边界
 

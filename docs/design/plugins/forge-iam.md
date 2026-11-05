@@ -512,6 +512,9 @@ flowchart TD
 
 #### 7.2.1 端到端核心时序
 
+`service.mjs` 在此图中代表整个 Host 服务：它只是装配入口，会话状态、协议校验、刷新、勘定、登录与退出分别由 `src/service-*.mjs` 承担，模块与职责对应见[模块 README](../../../packages/forge-iam/README.md#host-分轴模块)。
+
+
 ```mermaid
 sequenceDiagram
   autonumber
