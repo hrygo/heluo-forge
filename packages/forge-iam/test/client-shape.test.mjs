@@ -81,7 +81,7 @@ test('the banner polls for the component lifetime instead of while visible', asy
 
 test('a repeated ready poll cannot pull onboarding back from the final step', async () => {
   const client = await read('client.js');
-  assert.match(client, /view\.state === 'ready' && current\.step < 2/);
+  assert.match(client, /deriveSessionUi\(view\)\.ready && current\.step < 2/);
 });
 
 test('the client follows host theme tokens instead of private fallbacks', async () => {

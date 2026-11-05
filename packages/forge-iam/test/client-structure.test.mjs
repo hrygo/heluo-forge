@@ -8,17 +8,8 @@ import { analyseClient, readClientSource } from './support/client-source.mjs';
 // lines is free while moving a violation into a new function fails the guard.
 // Lower a baseline only inside the unit that removes the violation (U2-U4 in
 // docs/plans/2026-11-05-forge-iam-structure.md); never raise one.
-const STATE_COMPARISON_BASELINE = {
-  getLauncherStatus: 5,
-  IamLauncher: 1,
-  IamLauncherMenu: 1,
-  Onboarding: 11,
-  Panel: 3,
-  renderAccountCard: 5,
-  renderJourneyBar: 3,
-  renderOnboardingStepDetail: 3,
-  SignedOutBanner: 5,
-};
+// view.state is read in exactly one place: the derivation.
+const STATE_READ_BASELINE = { deriveSessionUi: 2 };
 
 // Storage is centralised: every access lives in createClientStore().
 const STORAGE_BASELINE = { createClientStore: 5 };
@@ -50,11 +41,11 @@ test('every responsibility has an anchor and the index covers the file', () => {
   assert.match(source, /\/\/ 1 包装与共享常量 \/ 2 样式表/, 'the header index must list the sections');
 });
 
-test('state comparisons only shrink: no new view.state literal checks', () => {
+test('view.state is read only by deriveSessionUi()', () => {
   assert.deepEqual(
-    analysed.violations.stateComparisons,
-    STATE_COMPARISON_BASELINE,
-    'a state comparison appeared in a new place: derive a flag with deriveSessionUi/deriveModelUi instead of comparing view.state here',
+    analysed.violations.stateReads,
+    STATE_READ_BASELINE,
+    'read a derived flag (deriveSessionUi(view).ready) instead of touching view.state here',
   );
 });
 
