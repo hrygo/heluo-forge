@@ -225,6 +225,20 @@ test('a rejected request is not reported as an unreachable gateway', async t => 
   }
 });
 
+test('a request the gateway rejects is not reported as an unreachable gateway', async t => {
+  for (const [chunkCode, code] of [['INVALID_REQUEST', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], ['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT']]) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { yield { type: 'finish', reason: { kind: 'error', failure: { code: chunkCode, message: 'private-body' } } }; }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, code);
+    assert.equal(JSON.stringify(result).includes('private-body'), false);
+  }
+});
+
 test('an unsupported reasoning level names the level instead of the network', async t => {
   const f = fixture({
     createAdapter: async () => ({

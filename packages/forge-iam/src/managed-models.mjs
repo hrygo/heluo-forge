@@ -237,7 +237,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           yield finish(code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
             : code === 'PERMISSION' || code === 'FORBIDDEN' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
               : code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
-                : Object.hasOwn(MESSAGES, code ?? '') ? code : 'ENTERPRISE_GATEWAY_UNAVAILABLE'); return;
+                // pi-ai turns an HTTP error into a finish chunk, and its classifier
+                // reports every 400 as INVALID_REQUEST, so a rejected request never
+                // reaches the thrown-error branch that reads the status.
+                : code === 'INVALID_REQUEST' ? 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'
+                  : Object.hasOwn(MESSAGES, code ?? '') ? code : 'ENTERPRISE_GATEWAY_UNAVAILABLE'); return;
         }
         yield chunk;
       }
