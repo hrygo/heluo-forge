@@ -8,17 +8,16 @@ import { StoreError } from './store.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
 import { createServiceState } from './service-state.mjs';
 import { createServiceGrant } from './service-grant.mjs';
+import { createModelSelection } from './service-model-selection.mjs';
+import { createServiceGateway } from './service-gateway.mjs';
 import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
-import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { normalizeProfileFields } from './userinfo.mjs';
 import {
   buildAuthorizationUrl,
   createPkce,
   exchangeCode,
-  fetchJson,
-  loadMetadata,
   parseCallbackUrl,
   randomToken,
   refreshTokens,
@@ -40,7 +39,6 @@ import {
 } from './service-helpers.mjs';
 
 const REFRESH_TIMEOUT_MS = 5000;
-const GATEWAY_RELOAD_MS = 5000;
 const AUTO_REFRESH_BACKOFF_MS = 30000;
 
 /**
@@ -70,9 +68,6 @@ export function createIamService(rawConfig, options = {}) {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   // Empty by default: IAM has not confirmed field names, so no name is shown.
   const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
-  let modelSelectionFlight = null;
-  let modelSelectionQueued = false;
-  let modelSelectionGeneration = 0;
   let lastBackgroundRefreshAt = 0;
 
   // Credentials provider handles and their caches live in one module.
@@ -87,7 +82,7 @@ export function createIamService(rawConfig, options = {}) {
     now,
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
-    scheduleReconcile: scheduleDefaultModelReconciliation,
+    scheduleReconcile: () => selection.schedule(),
     clearPendingObservation: () => { observedPending = null; },
     onFailReset: () => {
       observedPending = null;
@@ -110,23 +105,30 @@ export function createIamService(rawConfig, options = {}) {
   });
 
 
+  // Default-model selection: created before the gateway module because the
+  // gateway's change hook calls into it; the gateway read is a lazy port.
+  const selection = createModelSelection({
+    config,
+    options,
+    ctx,
+    provider,
+    grants,
+    now,
+    getAuthEpoch: () => authEpoch,
+    isSigningOut: () => signingOut,
+    getLoadGateway: () => (opts) => gateway.load(opts),
+  });
+
+  // Gateway credential reads: created after selection because its change hook
+  // schedules reconciliation; the reverse edge is the lazy port above.
+  const gateway = createServiceGateway({ config, ctx, provider, grants, now, selection });
+
   /**
    * Resolve the subject that owns a person's durable model settings. The grant
    * is read back from the provider instead of trusting a cached copy: an
    * account or provider change must not let one person's selection be read or
    * written under another's name.
    */
-  async function selectionOwner() {
-    const target = provider.ensure();
-    if (!target) return null;
-    const credentials = provider.storeCredentials;
-    const record = await target.read().catch(() => null);
-    if (!record?.ok || !record.grant?.subject) return null;
-    try { grants.assertGrantContext(record.grant, ctx.knownIssuer()); } catch { return null; }
-    const expires = Date.parse(record.grant.accessExpiresAt);
-    return { subject: record.grant.subject, credentials, expired: !Number.isFinite(expires) || expires <= now() };
-  }
-
   // Non-secret provenance/pin and the last authenticated session identity only.
   let refreshPromiseAuthentication = null;
   let attempt = null;
@@ -307,7 +309,7 @@ export function createIamService(rawConfig, options = {}) {
       published();
       // An adopted subject changes the displayed match, not the stored key.
       if (observation || (previousSubject !== null && record.grant.subject !== previousSubject)) {
-        await loadGatewayCredential({ force: true });
+        await gateway.load({ force: true });
         if (!isCurrent()) {
           if (ctx.lastGrant === record.grant) ctx.lastGrant = null;
           return ctx.view();
@@ -343,165 +345,12 @@ export function createIamService(rawConfig, options = {}) {
     return ctx.view();
   }
 
-  async function readGatewayCredential(targetGatewayStore, targetStore, isCurrent) {
-    if (!isCurrent()) return null;
-    const record = await targetGatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
-    if (!isCurrent()) return null;
-    if (!record.ok) return { state: 'invalid' };
-    const resolved = await targetGatewayStore.resolve(record.credential).catch(() => undefined);
-    if (!isCurrent()) return null;
-    const credential = record.credential ?? {};
-    if (resolved?.invalid) return { state: 'invalid' };
-    if (!resolved?.value) return { state: 'unconfigured' };
-    // A keychain value without metadata is still unattributable. This status is
-    // informational; it does not prevent another consumer resolving the ref.
-    if (!record.credential) return { state: 'invalid', matchesAccount: false };
-    const storage = await targetGatewayStore.describe().catch(() => null);
-    if (!isCurrent()) return null;
-    const signedInSubject = ctx.lastGrant && grants.ownerOf(ctx.lastGrant) === targetStore ? ctx.lastGrant.subject : null;
-    const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
-    return {
-      // Without a session the stored key is still "configured"; it only becomes
-      // a mismatch once a different subject is known.
-      state: !signedInSubject || matchesAccount ? 'configured' : 'owner-mismatch',
-      ownerSubject: credential.ownerSubject ?? null,
-      baseURL: credential.baseURL ?? config.managedModels?.baseURL ?? null,
-      generation: credential.writeOperationId ?? null,
-      deviceLabel: credential.deviceLabel ?? null,
-      enteredAt: credential.enteredAt ?? null,
-      suggestedExpiry: credential.suggestedExpiry ?? null,
-      // 'keychain' is the only source that keeps the value out of plaintext
-      // files; the account page warns for the dev/pilot fallbacks.
-      storage: storage?.configured ? (storage.source ?? null) : null,
-      matchesAccount,
-    };
-  }
-
-  async function loadGatewayCredential({ force = false } = {}) {
-    if (ctx.disposed) return null;
-    // Cache hits and singleflight reuse must belong to the live provider too.
-    const targetStore = provider.ensure();
-    if (ctx.disposed || !targetStore || !provider.gatewayStore) return null;
-    if (!force && provider.gatewayLoadedAt > 0 && now() - provider.gatewayLoadedAt < GATEWAY_RELOAD_MS) return provider.gatewaySummary;
-    if (provider.gatewayLoading) return provider.gatewayLoading;
-    const targetGatewayStore = provider.gatewayStore;
-    const targetCredentials = provider.storeCredentials;
-    const epoch = provider.gatewayEpoch;
-    const isCurrent = () => {
-      if (ctx.disposed || epoch !== provider.gatewayEpoch) return false;
-      const current = provider.ensure();
-      return !ctx.disposed && epoch === provider.gatewayEpoch && current === targetStore
-        && provider.gatewayStore === targetGatewayStore && provider.storeCredentials === targetCredentials;
-    };
-    const request = readGatewayCredential(targetGatewayStore, targetStore, isCurrent)
-      .then((summary) => {
-        if (!isCurrent()) return null;
-        const changed = !isDeepStrictEqual(provider.gatewaySummary, summary);
-        provider.gatewaySummary = summary;
-        provider.gatewayLoadedAt = now();
-        // Own forced reads do not feed back into another observation.
-        if (changed && !modelSelectionFlight) scheduleDefaultModelReconciliation();
-        return summary;
-      })
-      .catch(() => {
-        if (isCurrent()) { provider.gatewaySummary = null; provider.gatewayLoadedAt = 0; }
-        return null;
-      })
-      .finally(() => { if (provider.gatewayLoading === request) provider.gatewayLoading = null; });
-    provider.gatewayLoading = request;
-    return request;
-  }
-
-  function scheduleDefaultModelReconciliation() {
-    if (ctx.disposed || !config.defaultModel.trim()) return;
-    if (modelSelectionFlight) {
-      modelSelectionQueued = true;
-      return;
-    }
-    // Deliberately detached from login/callback failure handling. A read-only
-    // model observation must never discard a grant or revoke a token.
-    void reconcileDefaultModel().catch(() => {});
-  }
-
   // The private composition getter keeps one binding object per scoped lifetime.
-  function modelSelectionServices() {
-    try {
-      if (typeof options.getModelSelectionServices !== 'function') return undefined;
-      const binding = options.getModelSelectionServices();
-      if (binding && typeof binding.then === 'function') {
-        Promise.resolve(binding).catch(() => {});
-        return undefined;
-      }
-      if (!binding || typeof binding !== 'object') return undefined;
-      // Retain the binding identity too: an injected scope may be removed and
-      // rebound with the same two SDK instances while an old read is pending.
-      const llm = binding.llm;
-      const agentDefaultModel = binding.agentDefaultModel;
-      return llm && agentDefaultModel ? { binding, llm, agentDefaultModel } : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  async function reconcileDefaultModel() {
-    if (!config.defaultModel.trim() || !config.defaultProvider.trim()) {
-      return readonlyModelResult('default-model-unconfigured');
-    }
-    if (ctx.disposed || signingOut || ctx.state !== 'ready') return readonlyModelResult('iam-not-ready');
-    const targetStore = provider.ensure();
-    const targetCredentials = provider.storeCredentials;
-    const grant = ctx.lastGrant;
-    if (!targetStore || !grant || grants.ownerOf(grant) !== targetStore
-      || isAccessExpired(grant, now())) return readonlyModelResult('iam-not-ready');
-    const services = modelSelectionServices();
-    if (!services) return readonlyModelResult('model-services-unavailable');
-    if (modelSelectionFlight) {
-      modelSelectionQueued = true;
-      return modelSelectionFlight.promise;
-    }
-    const auth = authEpoch;
-    const generation = modelSelectionGeneration;
-    const gateway = provider.gatewayEpoch;
-    const active = () => !ctx.disposed && !signingOut && ctx.state === 'ready' && ctx.exclusive.ok
-      && authEpoch === auth && modelSelectionGeneration === generation && provider.gatewayEpoch === gateway
-      && ctx.lastGrant === grant && !isAccessExpired(grant, now());
-    const isCurrent = () => {
-      try {
-        if (!active()) return false;
-        ctx.assertExclusive();
-        if (!active() || provider.ensure() !== targetStore || provider.storeCredentials !== targetCredentials) return false;
-        const current = modelSelectionServices();
-        return active() && current?.binding === services.binding && current.llm === services.llm
-          && current.agentDefaultModel === services.agentDefaultModel;
-      } catch { return false; }
-    };
-    const request = Promise.resolve().then(async () => {
-      if (!isCurrent()) return readonlyModelResult('model-context-changed');
-      const summary = await loadGatewayCredential({ force: true });
-      if (!isCurrent()) return readonlyModelResult('model-context-changed');
-      if (summary?.state !== 'configured' || summary.matchesAccount !== true) {
-        return readonlyModelResult('gateway-credential-unavailable');
-      }
-      return inspectReadonlyModelSelection(services, {
-        provider: config.defaultProvider, model: config.defaultModel,
-      }, isCurrent);
-    }).catch(() => readonlyModelResult(isCurrent() ? 'model-read-failed' : 'model-context-changed'))
-      .finally(() => {
-        if (modelSelectionFlight?.promise !== request) return;
-        modelSelectionFlight = null;
-        const queued = modelSelectionQueued;
-        modelSelectionQueued = false;
-        if (queued) scheduleDefaultModelReconciliation();
-      });
-    modelSelectionFlight = { promise: request };
-    return request;
-  }
-
   async function hydrate() {
     // Preserve any pre-existing legacy reference; its migration or deletion
     // requires a separate decision and does not make it safe to consume.
     await syncFromStore();
-    await loadGatewayCredential({ force: true });
+    await gateway.load({ force: true });
     return ctx.view();
   }
 
@@ -509,7 +358,7 @@ export function createIamService(rawConfig, options = {}) {
     getView() {
       return ctx.view();
     },
-    getModelAccessEpoch() { return `${authEpoch}:${sessionEpoch}:${modelSelectionGeneration}`; },
+    getModelAccessEpoch() { return `${authEpoch}:${sessionEpoch}:${selection.generation}`; },
 
     /**
      * Identity and freshness only. Never a token, verifier or ID token: this is
@@ -532,7 +381,7 @@ export function createIamService(rawConfig, options = {}) {
 
     hydrate,
     syncFromStore,
-    loadGatewayCredential,
+    loadGatewayCredential: gateway.load,
     /**
      * Host-only: push the current view after a change that never touched the
      * IAM state machine (the managed model catalogue is the only such source).
@@ -540,7 +389,7 @@ export function createIamService(rawConfig, options = {}) {
      */
     notifyView() { return ctx.notify(); },
     // Host-only observation; intentionally absent from routes and IamView.
-    reconcileDefaultModel,
+    reconcileDefaultModel: selection.reconcile,
 
     /** Host-only request credential; never exposed by management routes or IamView. */
     async resolveGatewayCredential() { return (await service.resolveGatewayConnection()).key; },
@@ -568,7 +417,7 @@ export function createIamService(rawConfig, options = {}) {
      * reads as "nothing saved" and the runtime starts from the catalogue.
      */
     async readModelSelection() {
-      const current = await selectionOwner();
+      const current = await selection.owner();
       if (!current) return { subject: null, saved: false, models: {}, defaultModelId: null };
       const target = provider.ensure() ? provider.modelSelectionStore : null;
       if (!target || provider.storeCredentials !== current.credentials) {
@@ -587,11 +436,11 @@ export function createIamService(rawConfig, options = {}) {
     async saveModelSelection({ models, defaultModelId } = {}) {
       ctx.assertExclusive();
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      let current = await selectionOwner();
+      let current = await selection.owner();
       if (current?.expired && ctx.lastGrant && isRefreshUsable(ctx.lastGrant, now())) {
         try {
           await service.resolveToken();
-          current = await selectionOwner();
+          current = await selection.owner();
         } catch {
           // keep expired status if refresh fails
         }
@@ -614,9 +463,9 @@ export function createIamService(rawConfig, options = {}) {
       const targetGatewayStore = provider.gatewayStore;
       const targetCredentials = provider.storeCredentials;
       const subject = ctx.lastGrant?.subject;
-      const generation = modelSelectionGeneration;
+      const generation = selection.generation;
       const check = () => {
-        if (ctx.disposed || signingOut || authEpoch !== epoch || modelSelectionGeneration !== generation
+        if (ctx.disposed || signingOut || authEpoch !== epoch || selection.generation !== generation
           || ctx.state !== 'ready' || !subject || ctx.lastGrant?.subject !== subject || Date.parse(ctx.lastGrant.accessExpiresAt) <= now()) {
           throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
         }
@@ -651,7 +500,7 @@ export function createIamService(rawConfig, options = {}) {
       const baseURL = address === undefined ? undefined : normalizeGatewayBaseURL(address, config.allowInsecureHttp);
       ctx.assertExclusive();
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      modelSelectionGeneration += 1;
+      selection.generation += 1;
       if (!configured) {
         throw new IamError('IAM_UNCONFIGURED', safeMessage('IAM_UNCONFIGURED'), {
           missing: isConfigured(config).missing,
@@ -715,7 +564,7 @@ export function createIamService(rawConfig, options = {}) {
       // A post-commit lifecycle change does not roll back a confirmed transaction.
       assertCurrent();
       assertClientAuthCurrent(authentication);
-      await loadGatewayCredential({ force: true });
+      await gateway.load({ force: true });
       assertCurrent();
       assertClientAuthCurrent(authentication);
       ctx.notify();
@@ -725,7 +574,7 @@ export function createIamService(rawConfig, options = {}) {
     async clearGatewayCredential() {
       ctx.assertExclusive();
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      modelSelectionGeneration += 1;
+      selection.generation += 1;
       const targetStore = provider.require();
       const targetGatewayStore = provider.gatewayStore;
       const targetCredentials = provider.storeCredentials;
@@ -752,7 +601,7 @@ export function createIamService(rawConfig, options = {}) {
       if (!cleared.ok) {
         throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
       }
-      await loadGatewayCredential({ force: true });
+      await gateway.load({ force: true });
       assertCurrent();
       ctx.notify();
       return ctx.view();
@@ -1032,7 +881,7 @@ export function createIamService(rawConfig, options = {}) {
         // Show any owner mismatch without changing the user's stored key.
         ctx.lastGrant = grant;
         grants.own(grant, current.targetStore);
-        await loadGatewayCredential({ force: true });
+        await gateway.load({ force: true });
         assertClientAuthCurrent(authentication);
         provider.assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
@@ -1222,7 +1071,7 @@ export function createIamService(rawConfig, options = {}) {
       checkDisposed();
       // Sign-out keeps the gateway credential, but the summary must stop
       // claiming it matches the (now absent) session.
-      await loadGatewayCredential({ force: true });
+      await gateway.load({ force: true });
       checkDisposed();
       try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
@@ -1661,7 +1510,7 @@ export function createIamService(rawConfig, options = {}) {
       consumptionWitness?.dispose();
       if (ctx.disposed) return;
       ctx.disposed = true;
-      modelSelectionQueued = false;
+      selection.clearQueue();
       sessionEpoch += 1;
       authEpoch += 1;
       observedPending = null;

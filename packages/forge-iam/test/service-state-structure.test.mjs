@@ -102,3 +102,34 @@ test('the grant module owns binding, context and protocol caches', () => {
     assert.match(grant, new RegExp(`${api}[,(]`), `service-grant.mjs must expose ${api}`);
   }
 });
+
+// U8: gateway credential display state and the default-model flight.
+const gateway = readFileSync(new URL('../src/service-gateway.mjs', import.meta.url), 'utf8');
+const selection = readFileSync(new URL('../src/service-model-selection.mjs', import.meta.url), 'utf8');
+
+test('the service keeps no writable copy of the selection or gateway flights', () => {
+  for (const name of ['modelSelectionFlight', 'modelSelectionQueued', 'modelSelectionGeneration']) {
+    assert.ok(!new RegExp(`let ${name}\\b`).test(service), `src/service.mjs still declares "let ${name}"`);
+  }
+  assert.match(service, /const selection = createModelSelection\(\{/);
+  assert.match(service, /const gateway = createServiceGateway\(\{/);
+});
+
+test('the gateway owns the credential cache and depends on selection one way', () => {
+  for (const fn of ['read', 'load']) {
+    assert.match(gateway, new RegExp(`function ${fn}\\(`), `service-gateway.mjs must define ${fn}`);
+  }
+  // The change hook is the only edge into selection; selection reaches back only
+  // through the injected loader.
+  assert.match(gateway, /selection\.schedule\(\)/);
+  assert.ok(!/from '\.\/service-gateway\.mjs'/.test(selection), 'selection must not import the gateway');
+  assert.match(selection, /getLoadGateway/);
+});
+
+test('selection keeps one flight, one queue flag and its own generation', () => {
+  assert.match(selection, /export function createModelSelection\(env\)/);
+  for (const fn of ['owner', 'services', 'schedule', 'reconcile']) {
+    assert.match(selection, new RegExp(`function ${fn}\\(`), `service-model-selection.mjs must define ${fn}`);
+  }
+  assert.equal((selection.match(/queued = true/g) ?? []).length, 2);
+});
