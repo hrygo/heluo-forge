@@ -38,7 +38,7 @@ const MESSAGES = Object.freeze({
   IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
   ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
   IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
-  IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的 UAG 个人凭证。',
+  IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的模型访问凭证。',
   ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
   ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
   IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
@@ -55,7 +55,7 @@ function permit(view) {
   if (view.gatewayCredential?.state !== 'configured' || view.gatewayCredential.matchesAccount !== true) return 'IAM_GATEWAY_CREDENTIAL_REQUIRED';
   return null;
 }
-const identity = view => JSON.stringify([view?.state, view?.principal, view?.gatewayCredential]);
+const identity = view => JSON.stringify([view?.principal, view?.gatewayCredential]);
 
 /**
  * A stored selection maps model id → overrides. An empty object is a real
@@ -138,7 +138,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let deadline; let timer; let disposed = false; let backend; let flight;
-  let retryAttempt = 0; let retryTimer; let hostDefault = null; let alignment = null; let alignQueued = false;
+  let retryAttempt = 0; let retryTimer; let retryAt = null; let syncedAt = null;
+  let hostDefault = null; let alignment = null; let alignQueued = false;
   let optionsChain = Promise.resolve();
   let inSample = false;
   let observedVersion = 0;
@@ -157,11 +158,18 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     published = signature;
     onChange?.();
   };
-  const cancelRetry = () => { clearTimeout(retryTimer); retryTimer = undefined; };
+  const cancelRetry = () => { clearTimeout(retryTimer); retryTimer = undefined; retryAt = null; };
   // Every path that drops the backend also drops the catalogue state with it,
   // so the account page can never say "ready" while nothing is callable.
   function clearCatalog(state = 'unconfigured', code = null) {
     rawModels = []; models = []; backend = undefined; catalogState = state; catalogError = code;
+    retryAt = null; syncedAt = null;
+  }
+  // A transient failure keeps the last catalogue and its adapter: the panel
+  // shows the last known list with a stale marker instead of going blank, and
+  // a discovery blip does not kill a call that was already prepared.
+  function markFailed(code) {
+    catalogState = 'error'; catalogError = code;
   }
   function sample() {
     if (inSample) return null;
@@ -188,7 +196,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const nextDeadline = view?.state === 'ready' ? expires(view) : null;
       if (deadline !== nextDeadline) {
         deadline = nextDeadline; clearTimeout(timer);
-        const expire = () => { version++; lease.abort(); cancelRetry(); clearCatalog(); publish(); };
+        const expire = () => { version++; lease.abort(); cancelRetry(); markFailed('IAM_LOGIN_REQUIRED'); publish(); };
         const remaining = deadline - Date.now();
         if (deadline !== null && remaining > 0) {
           timer = setTimeout(expire, Math.min(remaining, 2147483647)); timer.unref?.();
@@ -268,7 +276,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     }
   }
 
-  async function refresh() {
+  async function refresh({ manual = false } = {}) {
+    // A person pressing refresh must not wait for the transient-failure backoff.
+    if (manual) { retryAttempt = 0; cancelRetry(); }
     const denied = permit(sample());
     if (disposed || denied) throw error(denied ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     if (flight?.version === version) return flight.promise;
@@ -314,14 +324,17 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           return next.key;
         }
       }); current();
-      backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; cancelRetry(); publish();
+      backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; cancelRetry();
+      syncedAt = Date.now(); publish();
       await syncHostDefault(); current();
       return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
     }).catch(cause => {
       const code = Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
       if (mine === version && !disposed) {
-        clearCatalog('error', code); publish();
+        markFailed(code);
+        // Advertise the retry time before the frame that carries it.
         scheduleRetry(code);
+        publish();
       }
       throw error(code);
     }).finally(() => { if (flight?.promise === task) flight = null; });
@@ -332,8 +345,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   function scheduleRetry(code) {
     if (!RETRYABLE.has(code) || retryAttempt >= retryDelays.length || retryTimer) return;
     const mine = version;
+    retryAt = Date.now() + retryDelays[retryAttempt];
     retryTimer = setTimeout(() => {
-      retryTimer = undefined;
+      retryTimer = undefined; retryAt = null;
       if (disposed || mine !== version || permit(sample()) || backend) return;
       void refresh().catch(() => { });
     }, retryDelays[retryAttempt++]);
@@ -414,7 +428,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         if ((changed || !backend) && !permit(iam.getView())) void refresh().catch(() => { });
       }
     }
-    catch { if (!disposed) { lease.abort(); cancelRetry(); clearCatalog('error', 'ENTERPRISE_MODELS_UNAVAILABLE'); publish(); } }
+    catch { if (!disposed) { lease.abort(); cancelRetry(); markFailed('ENTERPRISE_MODELS_UNAVAILABLE'); publish(); } }
   })();
   /** Apply one enabled-set submission for the person who is signed in right now. */
   async function applyOptions(nextOptions) {
@@ -484,6 +498,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       return {
         managed: true, configured: true,
         state: catalogState, error: catalogError,
+        // Freshness: `stale` means the list is the last known catalogue and the
+        // gateway could not be reached since; `retryAt` is the next automatic
+        // attempt (absent when the failure is not retryable).
+        stale: catalogState === 'error' && models.length > 0,
+        retryAt, syncedAt,
         defaultModelId,
         // Fixed code describing the last alignment of DSH's new-conversation default.
         hostDefaultModel: hostDefault,

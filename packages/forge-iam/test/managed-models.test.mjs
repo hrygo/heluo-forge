@@ -259,7 +259,8 @@ test('fine-grained model options apply capacity and modality overrides to catalo
   await f.runtime.updateModelOptions({});
   assert.equal(f.runtime.getView().models[0].contextWindow, 200000);
   assert.equal(f.runtime.getView().models[0].maxTokens, 64000);
-  assert.equal(f.runtime.getView().models[0].reasoning, false);
+  assert.equal(f.runtime.getView().models[0].reasoning, true);
+  assert.deepEqual(f.runtime.getView().models[0].reasoningEfforts, { off: 'off', low: 'low', medium: 'medium', high: 'high' });
 });
 
 test('providerRetryPolicy returns complete ResolvedNormalRetryPolicy with retryableCodes array', async t => {
@@ -503,4 +504,60 @@ test('a repeated catalogue failure is published once, not once per refresh', asy
   // an unchanged failure must stay silent or one bad gateway spins forever.
   assert.equal(changes, published);
   assert.ok(discovery >= 3);
+});
+
+test('a transient failure keeps the last catalogue and advertises its retry', async t => {
+  let offline = false;
+  const f = fixture({
+    fetch: async () => {
+      if (offline) throw new Error('offline');
+      return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const fresh = f.runtime.getView();
+  assert.equal(fresh.state, 'ready');
+  assert.equal(fresh.stale, false);
+  assert.ok(Number.isFinite(fresh.syncedAt));
+
+  offline = true;
+  await f.runtime.refresh().catch(() => { });
+  const stale = f.runtime.getView();
+  assert.equal(stale.state, 'error');
+  assert.equal(stale.stale, true);
+  // The list survives: a blank panel is worse than a marked-stale one.
+  assert.deepEqual(stale.models.map(model => model.id), ['enterprise-chat']);
+  assert.ok(Number.isFinite(stale.retryAt));
+});
+
+test('a manual refresh ignores the retry backoff', async t => {
+  let offline = true;
+  const f = fixture({
+    fetch: async () => {
+      if (offline) throw new Error('offline');
+      return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().state, 'error');
+  offline = false;
+  const started = Date.now();
+  await f.runtime.refresh({ manual: true });
+  assert.equal(f.runtime.getView().state, 'ready');
+  // A person pressing refresh must not wait for the pending 2s first backoff.
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('an expired session keeps the catalogue for the same person and gateway', async t => {
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.deepEqual(f.runtime.getView().models.map(model => model.id), ['enterprise-chat']);
+  f.change({ state: 'expired' });
+  // Same person, same gateway: the display list is not erased by a lapsed token.
+  assert.deepEqual(f.runtime.getView().models.map(model => model.id), ['enterprise-chat']);
+  f.change({ state: 'signed-out', principal: null });
+  assert.deepEqual(f.runtime.getView().models, []);
 });

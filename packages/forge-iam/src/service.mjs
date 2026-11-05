@@ -239,6 +239,12 @@ export function createIamService(rawConfig, options = {}) {
   function view() {
     recheckExclusive();
     const summary = lastGrant ? summarizeGrant(lastGrant) : {};
+    // The catalogue is display state, not an authorization: keep the last known
+    // list while the session is still recoverable (a signed-in subject whose
+    // access token lapsed or whose revocation check is offline) so the panel
+    // can mark it stale instead of erasing the model list.
+    const recoverable = state === 'ready' || state === 'unreachable'
+      || (state === 'expired' && lastGrant && isRefreshUsable(lastGrant, now()));
     return createView(state, {
       configured,
       missing: isConfigured(config).missing,
@@ -251,7 +257,7 @@ export function createIamService(rawConfig, options = {}) {
       modelAccess: { ...(options.getManagedModelRuntime?.()?.getView() ?? { managed: true, state: 'unconfigured', models: [] }),
         configured: Boolean(gatewaySummary?.baseURL || config.managedModels?.baseURL),
         baseURL: gatewaySummary?.baseURL ?? config.managedModels?.baseURL ?? '',
-        ...((state !== 'ready' && !(state === 'expired' && lastGrant && isRefreshUsable(lastGrant, now()))) || gatewaySummary?.state !== 'configured' || gatewaySummary?.matchesAccount !== true
+        ...(!recoverable || gatewaySummary?.state !== 'configured' || gatewaySummary?.matchesAccount !== true
           ? { state: 'unconfigured', error: null, defaultModelId: null, enabled: [], models: [], modelOptions: {} }
           : {}) },
     });
@@ -901,7 +907,8 @@ export function createIamService(rawConfig, options = {}) {
     async refreshGatewayModels() {
       const runtime = options.getManagedModelRuntime?.();
       if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
-      return runtime.refresh();
+      // This entry point is the person-initiated refresh: do not inherit backoff.
+      return runtime.refresh({ manual: true });
     },
 
     async updateModelOptions(nextOptions) {
@@ -982,12 +989,12 @@ export function createIamService(rawConfig, options = {}) {
       const record = await targetGatewayStore?.read();
       check();
       if (!record?.ok || record.credential?.ownerSubject !== subject) {
-        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的 UAG 个人凭证。');
+        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的模型访问凭证。');
       }
       const resolved = await targetGatewayStore.resolve(record.credential);
       check();
       if (resolved?.invalid || !resolved?.value) {
-        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的 UAG 个人凭证。');
+        throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的模型访问凭证。');
       }
       const address = record.credential.baseURL ?? config.managedModels?.baseURL;
       if (!address) throw new IamError('IAM_GATEWAY_URL_INVALID', '请先设置网关地址。');

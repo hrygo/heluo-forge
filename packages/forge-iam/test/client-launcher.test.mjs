@@ -163,3 +163,35 @@ test('launcher names an unreachable sign-in and an empty-catalogue sync failure'
   const menu = find(failing.render(), node => node.type?.name === 'IamLauncherMenu');
   assert.match(failing.text(menu.type(menu.props)), /同步异常/);
 });
+
+test('launcher sign-out clears the cached catalogue for that person', async t => {
+  const { mountPanel } = await import('./support/client-panel.mjs');
+  const key = 'forge-iam.cached-models.v2:E1001:https://gateway.corp.example/v1';
+  const view = {
+    state: 'ready', configured: true, signedIn: true, principal: 'E1001',
+    gatewayCredential: { state: 'configured', matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
+    modelAccess: { configured: true, state: 'ready', models: [{ id: 'corp-chat' }] },
+  };
+  const panel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/sign-out') {
+      return Response.json({ view: { state: 'signed-out', configured: true, signedIn: false } });
+    }
+    return Response.json(view);
+  }, {
+    storage: { [key]: JSON.stringify([{ id: 'corp-chat' }]) },
+    componentId: 'forge-iam-launcher', componentProps: { wide: true },
+  });
+  t.after(() => panel.close());
+  const find = (node, predicate) => {
+    if (!node || typeof node !== 'object') return undefined;
+    if (predicate(node)) return node;
+    for (const child of node.children ?? []) { const found = find(child, predicate); if (found) return found; }
+  };
+  find(panel.render(), node => node.type === 'button' && node.props.className === 'fiam-launcher-btn').props.onClick({ stopPropagation() { } });
+  let menu = find(panel.render(), node => node.type?.name === 'IamLauncherMenu');
+  await menu.props.onSignOut({ stopPropagation() { } });
+  menu = find(panel.render(), node => node.type?.name === 'IamLauncherMenu');
+  await menu.props.onSignOut({ stopPropagation() { } });
+  // The shortcut people actually use must leave no other identity's list behind.
+  assert.equal(panel.storage.has(key), false);
+});

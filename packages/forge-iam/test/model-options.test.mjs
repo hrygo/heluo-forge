@@ -148,7 +148,7 @@ test('applyModelOptions overlays custom options on raw model lists and defaults 
   assert.equal(overlaid[1].maxTokens, 8192);
   assert.equal(overlaid[1].hasCustomMaxTokens, false);
   assert.deepEqual(overlaid[1].inputModalities, ['text']);
-  assert.equal(overlaid[1].reasoning, false);
+  assert.equal(overlaid[1].reasoning, true);
 
   // Model C uses 200K context window and 64K maxTokens default
   assert.equal(overlaid[2].contextWindow, 200000);
@@ -215,4 +215,17 @@ test('buildReasoningEffortRange and getReasoningEffortBounds support lower and u
     xhigh: null,
     max: null,
   });
+});
+
+test('default thinking range is off through high and explicit options take precedence', () => {
+  const [defaultModel, customModel, disabledModel, suppliedModel] = applyModelOptions([
+    { id: 'default' }, { id: 'custom' }, { id: 'disabled', reasoning: true },
+    { id: 'supplied', reasoningEfforts: { low: 'low', xhigh: 'xhigh' } },
+  ], { custom: { reasoningEfforts: { high: 'high' } }, disabled: { reasoningEfforts: { off: 'off' } } });
+  assert.deepEqual(defaultModel.reasoningEfforts, { off: 'off', low: 'low', medium: 'medium', high: 'high' });
+  assert.equal(defaultModel.thinkingLevelMap.xhigh, null);
+  assert.deepEqual(customModel.reasoningEfforts, { high: 'high' });
+  assert.equal(disabledModel.reasoning, false);
+  assert.equal(disabledModel.thinkingLevelMap, undefined);
+  assert.deepEqual(suppliedModel.reasoningEfforts, { low: 'low', xhigh: 'xhigh' });
 });
