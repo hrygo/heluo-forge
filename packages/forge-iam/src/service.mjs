@@ -45,6 +45,15 @@ export function createIamService(rawConfig, options = {}) {
   // Empty by default: IAM has not confirmed field names, so no name is shown.
   const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
 
+  // Sign-in/out lifetimes: one attempt at a time, and an epoch pair that makes
+  // a response belonging to a replaced session unable to publish.
+  let signInPromise = null;
+  let sessionEpoch = 0;
+  let authEpoch = 0;
+  let syncPublications = 0;
+  let observedPending = null;
+  const stopWaiters = new Set();
+
   // Credentials provider handles and their caches live in one module.
   const provider = createServiceStore({ options });
 
@@ -190,14 +199,6 @@ export function createIamService(rawConfig, options = {}) {
     adoptConsumption,
   });
 
-  // Sign-in/out lifetimes: one attempt at a time, and an epoch pair that makes
-  // a response belonging to a replaced session unable to publish.
-  let signInPromise = null;
-  let sessionEpoch = 0;
-  let authEpoch = 0;
-  let syncPublications = 0;
-  let observedPending = null;
-  const stopWaiters = new Set();
   // Absent in real apply: do not inspect private binding readers without opt-in.
   const consumptionWitness = typeof options.registerWitness === 'function'
     ? createConsumptionWitness(config, options, (adopted) => {
