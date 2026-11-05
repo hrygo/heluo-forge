@@ -246,11 +246,12 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 
 ### U2 客户端 DRY：状态映射、IO 边界、错误映射
 
-- 新增 `deriveSessionUi` / `deriveModelUi`：把 `Panel` 与其它组件的状态判定收敛为具名布尔；先加函数、再逐组件替换，一处一提交内完成、每处跑行为测试。
-- 新增 `createClientStore()`：`marker`（引导/trace）、`modelOptions`、`modelCache` 三个命名空间，替换 12 处 `window.localStorage`。
-- 新增 `expectOk` 与 `noticeFor`：替换 12 处错误解包与 11 处 `!result.ok` 分支。
-- 关键约束：映射函数只表达「已存在的判定」，不得合并语义或改变分支顺序；`view.state === 'authenticating'` 与 `state.phase === 'loading'` 是两件事，不得并成一个标志。替换必须逐处进行，禁止一次性正则替换。
-- 完成条件：行为测试与契约测试断言未改且全绿；`node scripts` 守卫确认三处标记区外无残留；`Panel` 行数下降约 60 行。
+- 新增 `deriveSessionUi` / `deriveModelUi` / `deriveGatewayUi`：会话状态、模型目录状态、凭据状态各自只在一个派生函数里读，其余组件用布尔量组合；`deriveGatewayUi(credential, fallback)` 的 fallback 由调用点决定，不合并「未确认」与「待配置」。
+- 新增 `createClientStore()`：`marker`、`modelOptions`、`models`（读/写/删/按前缀清理）三个命名空间，替换 12 处 `window.localStorage`。
+- 新增 `resultCode` / `resultNotice`：12 处 `errorNotice(result.body?.error?.code ?? …)` 收成一句。`if (!result.ok)` 属于控制流，保留原地——用抛错式的 `expectOk` 会把 11 个处理器的状态更新改写成 try/catch，超出 DRY 的范围。
+- `errorNotice` 的 45 个分支改为 `ERROR_NOTICE` 冻结表（无原型对象），并补齐宿主有、客户端缺的 `IAM_GATEWAY_CREDENTIAL_REQUIRED`；面板文案用例遍历宿主 `MESSAGES` 全量比对。
+- 关键约束：映射函数只表达「已存在的判定」，不得合并语义或改变分支顺序；`view.state === 'authenticating'` 与 `state.phase === 'loading'` 是两件事，不得并成一个标志。
+- 完成条件：行为测试与契约测试断言未改且全绿（仅两处跟随改写的源码断言）；结构守卫把「`view.state` / `modelAccess.state` / `gateway.state` 读取」分别压到各自的派生函数、「存储访问」压到 `createClientStore`、「响应错误码解包」压到 `resultCode`、「错误文案只有表」；`client.js` 行数不作为判据（本单元净增约 130 行）。
 
 ### U3 客户端 SRP：`Panel` 三 hook + `renderShell`
 
