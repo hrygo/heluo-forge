@@ -34,6 +34,8 @@ export function createServiceState(env) {
   let state = !exclusive.ok ? 'error' : (configured ? 'signed-out' : 'unconfigured');
   let error = exclusive.ok ? null : (exclusive.reason ?? 'exclusive-violation');
   let lastGrant = null;
+  // Non-secret provenance/pin and the last authenticated session identity only.
+  let sessionAuthentication = null;
   let disposed = false;
   const listeners = new Set();
 
@@ -144,6 +146,8 @@ export function createServiceState(env) {
     set error(next) { error = next; },
     get lastGrant() { return lastGrant; },
     set lastGrant(next) { lastGrant = next; },
+    get sessionAuthentication() { return sessionAuthentication; },
+    set sessionAuthentication(next) { sessionAuthentication = next; },
     get disposed() { return disposed; },
     set disposed(next) { disposed = next; },
     get exclusive() { return exclusive; },

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.11.0 |
+| 版本 | V0.12.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -291,6 +291,8 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 ### U7 宿主：grant 轴
 
 - 新增 `service-grant.mjs`：`grantOwners`、`metadataCache`、`jwksCache`、`identityProfile` 与 `prepareAuthentication`、`rememberAuthentication`、`metadata`、`jwks`、`verifyWithJwks`、`grantFromToken`、`buildGrant`、`assertGrantBinding`、`assertGrantContext`、`redirectUri`、`loadIdentityProfile`、`clearProfile`。
+- 实现记录：`service.mjs` 1880 → 1690 行，新增 `service-grant.mjs` 249 行。`sessionAuthentication` 按 §4.2 并入 `service-state.mjs`；`grantOwners` 以 `own`/`ownerOf`/`had` 三个方法对外，service 不再持有弱映射；`ID_TOKEN_CLOCK_SKEW_SECONDS` 移入 `service-helpers.mjs` 由两处共用。
+- 两个 `metadataCache?.value ?? await metadata()` 调用点保留「先读缓存、再取新」的语义，不改成无条件 `metadata()`，否则离线路由（退出、回调）会多一次网络请求。
 - 完成条件：`login`、`oidc`、`security-matrix`、`client-auth-*`、`userinfo`、`revoke-access-token` 全绿。
 
 ### U8 宿主：网关与选型轴

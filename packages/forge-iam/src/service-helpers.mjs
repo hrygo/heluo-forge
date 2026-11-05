@@ -62,6 +62,10 @@ export function nowIso(now) {
   return new Date(now).toISOString();
 }
 
+// ID tokens are minted by another clock; both the verification path and the
+// callback path must tolerate the same skew.
+export const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
+
 export function addSeconds(now, seconds) {
   return new Date(now + seconds * 1000).toISOString();
 }

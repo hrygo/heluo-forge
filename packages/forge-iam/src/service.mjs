@@ -3,17 +3,17 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
-import { assertClientAuthConfigured, assertClientAuthCurrent, assertGrantAuthBinding, clientAuthContext, clientAuthDescriptor, grantAuthPin, prepareClientAuthentication } from './client-auth.mjs';
+import { assertClientAuthConfigured, assertClientAuthCurrent, clientAuthDescriptor } from './client-auth.mjs';
 import { StoreError } from './store.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
 import { createServiceState } from './service-state.mjs';
+import { createServiceGrant } from './service-grant.mjs';
 import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
-import { fetchUserInfo, normalizeProfileFields, projectUserInfo } from './userinfo.mjs';
+import { normalizeProfileFields } from './userinfo.mjs';
 import {
-  OidcError,
   buildAuthorizationUrl,
   createPkce,
   exchangeCode,
@@ -29,7 +29,7 @@ import {
 } from './oidc.mjs';
 
 import {
-  canonicalRecord,
+  ID_TOKEN_CLOCK_SKEW_SECONDS,
   refreshBaseId,
   sameGrantIgnoringRefreshMarker,
   grantIdentity,
@@ -39,10 +39,7 @@ import {
   safeMessage,
 } from './service-helpers.mjs';
 
-const METADATA_TTL_MS = 5 * 60 * 1000;
-const JWKS_TTL_MS = 5 * 60 * 1000;
 const REFRESH_TIMEOUT_MS = 5000;
-const ID_TOKEN_CLOCK_SKEW_SECONDS = 60;
 const GATEWAY_RELOAD_MS = 5000;
 const AUTO_REFRESH_BACKOFF_MS = 30000;
 
@@ -89,14 +86,27 @@ export function createIamService(rawConfig, options = {}) {
     configured,
     now,
     getGatewaySummary: () => provider.gatewaySummary,
-    getMetadataIssuer: () => metadataCache?.value.issuer ?? '',
+    getMetadataIssuer: () => grants.cachedIssuer(),
     scheduleReconcile: scheduleDefaultModelReconciliation,
     clearPendingObservation: () => { observedPending = null; },
     onFailReset: () => {
       observedPending = null;
       clearAttempt();
-      identityProfile = undefined;
+      grants.clearProfile();
     },
+  });
+
+  // Grants and the protocol caches: created after ctx because it depends on it,
+  // and referenced lazily from ctx (issuer lookup) so the cycle stays a port.
+  const grants = createServiceGrant({
+    config,
+    options,
+    now,
+    fetchImpl,
+    profileFields,
+    state: ctx,
+    provider,
+    getAuthEpoch: () => authEpoch,
   });
 
 
@@ -112,17 +122,13 @@ export function createIamService(rawConfig, options = {}) {
     const credentials = provider.storeCredentials;
     const record = await target.read().catch(() => null);
     if (!record?.ok || !record.grant?.subject) return null;
-    try { assertGrantContext(record.grant, ctx.knownIssuer()); } catch { return null; }
+    try { grants.assertGrantContext(record.grant, ctx.knownIssuer()); } catch { return null; }
     const expires = Date.parse(record.grant.accessExpiresAt);
     return { subject: record.grant.subject, credentials, expired: !Number.isFinite(expires) || expires <= now() };
   }
 
   // Non-secret provenance/pin and the last authenticated session identity only.
-  let sessionAuthentication = null;
-  let identityProfile;
   let refreshPromiseAuthentication = null;
-  // A weak association prevents a discarded cached grant retaining its provider.
-  const grantOwners = new WeakMap();
   let attempt = null;
   let refreshPromise = null;
   let refreshPromiseStore = null;
@@ -135,8 +141,6 @@ export function createIamService(rawConfig, options = {}) {
   let authEpoch = 0;
   let syncPublications = 0;
   let observedPending = null;
-  let metadataCache = null;
-  let jwksCache = null;
   const stopWaiters = new Set();
   // Absent in real apply: do not inspect private binding readers without opt-in.
   const consumptionWitness = typeof options.registerWitness === 'function'
@@ -173,207 +177,11 @@ export function createIamService(rawConfig, options = {}) {
 
 
 
-  async function prepareAuthentication(issuer, target, credentials, { grant, expected = sessionAuthentication, guard } = {}) {
-    if (config.authMode !== 'confidential') return undefined;
-    const current = () => {
-      if (guard) guard();
-      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      ctx.assertExclusive();
-      if (provider.ensure() !== target || provider.storeCredentials !== credentials) {
-        throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
-      }
-      if (guard) guard();
-      return true;
-    };
-    current();
-    const operation = await prepareClientAuthentication(config, options, { issuer, credentials,
-      expectedPin: grantAuthPin(grant) ?? expected?.pin, expectedProvenance: expected?.provenance, guard: current });
-    assertClientAuthCurrent(operation);
-    return operation;
-  }
-
-  function rememberAuthentication(operation, grant) {
-    if (operation) sessionAuthentication = Object.freeze({ ...clientAuthDescriptor(operation), identity: grantIdentity(grant), credentials: provider.storeCredentials });
-  }
-
-
-  async function metadata() {
-    const current = now();
-    if (metadataCache && current - metadataCache.loadedAt < METADATA_TTL_MS) {
-      return metadataCache.value;
-    }
-    const value = await loadMetadata(config, {
-      fetchImpl,
-      timeoutMs: config.httpTimeoutMs,
-      allowInsecureHttp: config.allowInsecureHttp === true,
-    });
-    metadataCache = { value, loadedAt: current };
-    return value;
-  }
-
-  async function loadIdentityProfile(grant) {
-    if (Object.keys(profileFields).length === 0) return;
-    identityProfile = undefined;
-    const epoch = authEpoch;
-    try {
-      const meta = metadataCache?.value ?? await metadata();
-      const endpoint = meta?.userInfoEndpoint;
-      if (!endpoint) return;
-      const raw = await fetchUserInfo({
-        userInfoEndpoint: endpoint,
-        accessToken: grant.accessToken,
-        fetchImpl,
-        timeoutMs: Math.min(config.httpTimeoutMs, 5000),
-      });
-      if (ctx.disposed || authEpoch !== epoch || ctx.lastGrant !== grant) return;
-      const profile = projectUserInfo(raw, profileFields);
-      identityProfile = profile ? Object.freeze({ identity: grantIdentity(grant), profile }) : undefined;
-    } catch {
-      // UserInfo is enrichment only: login stays successful without it.
-      identityProfile = undefined;
-    }
-  }
-
-  async function jwks(uri) {
-    const current = now();
-    if (jwksCache && jwksCache.uri === uri && current - jwksCache.loadedAt < JWKS_TTL_MS) {
-      return jwksCache.value;
-    }
-    const value = await fetchJson(uri, { fetchImpl, timeoutMs: config.httpTimeoutMs });
-    jwksCache = { uri, value, loadedAt: current };
-    return value;
-  }
 
   /**
    * Verify an ID token, retrying once on a missing `kid`: the IdP may have
    * rotated keys after this process cached the JWKS document.
    */
-  async function verifyWithJwks(token, { uri, issuer, clientId, nonce, accessToken, guard }) {
-    const options = {
-      issuer,
-      clientId,
-      accessToken,
-      skewSeconds: ID_TOKEN_CLOCK_SKEW_SECONDS,
-      now: now(),
-      ...(nonce === undefined ? {} : { nonce }),
-    };
-    try {
-      const keys = await jwks(uri);
-      if (guard) guard();
-      return verifyIdToken(token, { ...options, jwks: keys });
-    } catch (cause) {
-      if (guard) guard();
-      if (cause?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw cause;
-      jwksCache = null;
-      const keys = await jwks(uri);
-      if (guard) guard();
-      return verifyIdToken(token, { ...options, jwks: keys });
-    }
-  }
-
-  function assertGrantBinding(grant) {
-    if (!grant) return;
-    assertGrantAuthBinding(config, grant);
-    const wrongClient = grant.clientId !== config.clientId;
-    // V1 login carries no gateway audience; only compare when one is configured
-    // so grants stored before the split keep working.
-    const wrongResource = Boolean(config.gatewayResource) && grant.resource !== config.gatewayResource;
-    if (wrongClient || wrongResource) {
-      throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
-    }
-  }
-
-  function assertGrantContext(grant, expectedIssuer) {
-    if (!grant) return;
-    assertGrantBinding(grant);
-    if (!expectedIssuer || grant.issuer !== expectedIssuer) {
-      throw new IamError('IAM_GRANT_CONTEXT_MISMATCH', safeMessage('IAM_GRANT_CONTEXT_MISMATCH'));
-    }
-  }
-
-  function redirectUri() {
-    if (config.redirectUri) {
-      let parsed;
-      try {
-        parsed = new URL(config.redirectUri);
-      } catch {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must be an absolute URL');
-      }
-      if (parsed.pathname !== config.redirectPath) {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri path must equal redirectPath');
-      }
-      let live;
-      try {
-        live = options.getOrigin?.();
-      } catch {
-        live = undefined;
-      }
-      if (live && parsed.origin !== new URL(live).origin) {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri origin must equal the live web server origin');
-      }
-      return parsed.href;
-    }
-    let origin;
-    try {
-      origin = options.getOrigin?.();
-    } catch {
-      origin = undefined;
-    }
-    if (!origin) {
-      throw new IamError('IAM_CALLBACK_UNAVAILABLE', safeMessage('IAM_CALLBACK_UNAVAILABLE'));
-    }
-    try {
-      return new URL(config.redirectPath, origin).href;
-    } catch {
-      throw new IamError('IAM_CALLBACK_UNAVAILABLE', safeMessage('IAM_CALLBACK_UNAVAILABLE'));
-    }
-  }
-
-  function grantFromToken(previous, token, issuer, obtainedAt) {
-    const refreshToken = token.refreshToken ?? previous?.refreshToken;
-    if (!refreshToken) {
-      throw new IamError('IAM_REFRESH_TOKEN_MISSING', safeMessage('IAM_REFRESH_TOKEN_MISSING'));
-    }
-    return {
-      version: previous?.version ?? 1,
-      ...(previous?.authContext ? { authContext: { ...previous.authContext } } : {}),
-      issuer,
-      subject: previous?.subject ?? null,
-      clientId: config.clientId,
-      refreshToken,
-      scope: token.scope ?? previous?.scope ?? config.scopes.join(' '),
-      ...(config.gatewayResource ? { resource: config.gatewayResource } : {}),
-      obtainedAt: previous?.obtainedAt ?? obtainedAt,
-      ...(previous && Object.hasOwn(previous, 'sessionInstanceId') ? { sessionInstanceId: previous.sessionInstanceId } : {}),
-      accessToken: token.accessToken,
-      accessExpiresAt: addSeconds(now(), token.expiresIn),
-      ...(token.refreshExpiresIn ? { refreshExpiresAt: addSeconds(now(), token.refreshExpiresIn) } : previous?.refreshExpiresAt ? { refreshExpiresAt: previous.refreshExpiresAt } : {}),
-      ...(token.idToken ? { idToken: token.idToken } : previous?.idToken ? { idToken: previous.idToken } : {}),
-    };
-  }
-
-  async function buildGrant(token, claims, meta, obtainedAt, authentication) {
-    if (!token.refreshToken) {
-      throw new IamError('IAM_REFRESH_TOKEN_MISSING', safeMessage('IAM_REFRESH_TOKEN_MISSING'));
-    }
-    return {
-      version: authentication ? 2 : 1,
-      ...(authentication ? { authContext: clientAuthContext(authentication.pin) } : {}),
-      issuer: meta.issuer,
-      subject: claims.sub,
-      sessionInstanceId: randomToken(32),
-      clientId: config.clientId,
-      refreshToken: token.refreshToken,
-      scope: token.scope ?? config.scopes.join(' '),
-      ...(config.gatewayResource ? { resource: config.gatewayResource } : {}),
-      obtainedAt,
-      accessToken: token.accessToken,
-      accessExpiresAt: addSeconds(now(), token.expiresIn),
-      ...(token.refreshExpiresIn ? { refreshExpiresAt: addSeconds(now(), token.refreshExpiresIn) } : {}),
-      ...(config.logoutMode === 'rp' && token.idToken ? { idToken: token.idToken } : {}),
-    };
-  }
-
   async function syncFromStore() {
     if (ctx.disposed || signingOut) return ctx.view();
     if (!configured || !ctx.exclusive.ok) return ctx.view();
@@ -403,7 +211,7 @@ export function createIamService(rawConfig, options = {}) {
     const discardIdentity = () => {
       // Store lookups can be rebound independently. Clear only the adopted
       // identity this sync still owns, never a later publication (even null).
-      if (expectedGrant && ctx.lastGrant === expectedGrant && grantOwners.has(expectedGrant)) {
+      if (expectedGrant && ctx.lastGrant === expectedGrant && grants.had(expectedGrant)) {
         ctx.lastGrant = null;
         ctx.state = 'signed-out';
         ctx.error = null;
@@ -459,8 +267,8 @@ export function createIamService(rawConfig, options = {}) {
         }
         return ctx.view();
       }
-      assertGrantContext(record.grant, expectedIssuer);
-      const authentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: () => {
+      grants.assertGrantContext(record.grant, expectedIssuer);
+      const authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: () => {
         if (!isCurrent()) throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
       } });
       if (!isCurrent()) return ctx.view();
@@ -495,7 +303,7 @@ export function createIamService(rawConfig, options = {}) {
       const previousSubject = ctx.lastGrant?.subject ?? null;
       const previous = `${ctx.state}|${ctx.error}|${previousSubject}`;
       ctx.lastGrant = record.grant;
-      grantOwners.set(record.grant, targetStore);
+      grants.own(record.grant, targetStore);
       published();
       // An adopted subject changes the displayed match, not the stored key.
       if (observation || (previousSubject !== null && record.grant.subject !== previousSubject)) {
@@ -506,7 +314,7 @@ export function createIamService(rawConfig, options = {}) {
         }
         assertClientAuthCurrent(authentication);
       }
-      rememberAuthentication(authentication, record.grant);
+      grants.rememberAuthentication(authentication, record.grant);
       if (observation) observedPending = null;
       // `expired` means the access token is no longer usable, not merely inside
       // the refresh skew: a token request renews the latter, and showing "expired"
@@ -550,7 +358,7 @@ export function createIamService(rawConfig, options = {}) {
     if (!record.credential) return { state: 'invalid', matchesAccount: false };
     const storage = await targetGatewayStore.describe().catch(() => null);
     if (!isCurrent()) return null;
-    const signedInSubject = ctx.lastGrant && grantOwners.get(ctx.lastGrant) === targetStore ? ctx.lastGrant.subject : null;
+    const signedInSubject = ctx.lastGrant && grants.ownerOf(ctx.lastGrant) === targetStore ? ctx.lastGrant.subject : null;
     const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
     return {
       // Without a session the stored key is still "configured"; it only becomes
@@ -643,7 +451,7 @@ export function createIamService(rawConfig, options = {}) {
     const targetStore = provider.ensure();
     const targetCredentials = provider.storeCredentials;
     const grant = ctx.lastGrant;
-    if (!targetStore || !grant || grantOwners.get(grant) !== targetStore
+    if (!targetStore || !grant || grants.ownerOf(grant) !== targetStore
       || isAccessExpired(grant, now())) return readonlyModelResult('iam-not-ready');
     const services = modelSelectionServices();
     if (!services) return readonlyModelResult('model-services-unavailable');
@@ -876,8 +684,8 @@ export function createIamService(rawConfig, options = {}) {
       const record = await targetStore.read().catch(() => null);
       assertCurrent();
       if (!record?.ok) throw new IamError('IAM_GRANT_INVALID', safeMessage('IAM_GRANT_INVALID'));
-      assertGrantContext(record.grant, expectedIssuer);
-      const authentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: assertCurrent });
+      grants.assertGrantContext(record.grant, expectedIssuer);
+      const authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: assertCurrent });
       assertCurrent();
       const subject = record.grant?.subject;
       if (!subject) {
@@ -960,9 +768,9 @@ export function createIamService(rawConfig, options = {}) {
     getIdentityProfile() {
       // A profile is only valid for the grant that produced it: every path that
       // clears or replaces lastGrant hides it, without touching each call site.
-      if (!ctx.lastGrant || !identityProfile) return undefined;
-      if (!isDeepStrictEqual(identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
-      return { ...identityProfile.profile };
+      if (!ctx.lastGrant || !grants.identityProfile) return undefined;
+      if (!isDeepStrictEqual(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
+      return { ...grants.identityProfile.profile };
     },
 
     async startSignIn() {
@@ -990,7 +798,7 @@ export function createIamService(rawConfig, options = {}) {
       if (ctx.state === 'authenticating' && attempt) {
         if (config.authMode === 'confidential') {
           const current = attempt; const epoch = authEpoch;
-          const authentication = await prepareAuthentication(current.metadata.issuer, targetStore, credentials, { expected: current.authentication, guard: () => {
+          const authentication = await grants.prepareAuthentication(current.metadata.issuer, targetStore, credentials, { expected: current.authentication, guard: () => {
             if (attempt !== current || epoch !== authEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
             provider.assertAtomic(targetStore, credentials);
           } });
@@ -1019,7 +827,7 @@ export function createIamService(rawConfig, options = {}) {
       }
       let meta;
       try {
-        meta = await metadata();
+        meta = await grants.metadata();
       } catch (err) {
         const code = tokenErrorMessage(err);
         const mapped = code === 'IAM_HTTP_ERROR' || code === 'IAM_DISCOVERY_INVALID' ? 'IAM_UNREACHABLE' : code;
@@ -1030,7 +838,7 @@ export function createIamService(rawConfig, options = {}) {
         throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       }
       provider.assertAtomic(targetStore, credentials);
-      const authentication = await prepareAuthentication(meta.issuer, targetStore, credentials, { expected: null, guard: () => {
+      const authentication = await grants.prepareAuthentication(meta.issuer, targetStore, credentials, { expected: null, guard: () => {
         if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
         provider.assertAtomic(targetStore, credentials);
       } });
@@ -1042,7 +850,7 @@ export function createIamService(rawConfig, options = {}) {
       const oauthState = randomToken(32);
       const nonce = randomToken(32);
       const pkce = createPkce();
-      const callbackUri = redirectUri();
+      const callbackUri = grants.redirectUri();
       const authorizationUrl = buildAuthorizationUrl({
         authorizationEndpoint: meta.authorizationEndpoint,
         clientId: config.clientId,
@@ -1166,7 +974,7 @@ export function createIamService(rawConfig, options = {}) {
         if (!isCurrent()) throw interrupted();
       };
       try {
-        authentication = await prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
+        authentication = await grants.prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
         callbackGuard();
         const token = await exchangeCode({
           tokenEndpoint: current.metadata.tokenEndpoint,
@@ -1186,7 +994,7 @@ export function createIamService(rawConfig, options = {}) {
         if (!token.idToken) {
           throw new IamError('IAM_ID_TOKEN_INVALID', safeMessage('IAM_ID_TOKEN_INVALID'));
         }
-        const claims = await verifyWithJwks(token.idToken, {
+        const claims = await grants.verifyWithJwks(token.idToken, {
           uri: current.metadata.jwksUri,
           issuer: current.metadata.issuer,
           clientId: config.clientId,
@@ -1195,7 +1003,7 @@ export function createIamService(rawConfig, options = {}) {
           accessToken: token.accessToken,
         });
         assertClientAuthCurrent(authentication);
-        const grant = await buildGrant(token, claims, current.metadata, nowIso(now()), authentication);
+        const grant = await grants.buildGrant(token, claims, current.metadata, nowIso(now()), authentication);
         assertClientAuthCurrent(authentication);
         if (!isCurrent()) throw interrupted();
         ctx.assertExclusive();
@@ -1223,13 +1031,13 @@ export function createIamService(rawConfig, options = {}) {
         if (!isCurrent()) throw interrupted();
         // Show any owner mismatch without changing the user's stored key.
         ctx.lastGrant = grant;
-        grantOwners.set(grant, current.targetStore);
+        grants.own(grant, current.targetStore);
         await loadGatewayCredential({ force: true });
         assertClientAuthCurrent(authentication);
         provider.assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
-        rememberAuthentication(authentication, grant);
-        await loadIdentityProfile(grant);
+        grants.rememberAuthentication(authentication, grant);
+        await grants.loadIdentityProfile(grant);
         if (!isCurrent()) throw interrupted();
         clearAttempt();
         ctx.publish('SIGN_IN_SUCCESS');
@@ -1249,7 +1057,7 @@ export function createIamService(rawConfig, options = {}) {
         if (ctx.lastGrant === intendedGrant) ctx.lastGrant = null;
         if (issuedToken?.refreshToken && current.metadata.revocationEndpoint) {
           try {
-            const cleanupAuthentication = await prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
+            const cleanupAuthentication = await grants.prepareAuthentication(current.metadata.issuer, current.targetStore, current.credentials, { expected: current.authentication, guard: callbackGuard });
             await revokeToken({
               revocationEndpoint: current.metadata.revocationEndpoint,
               token: issuedToken.refreshToken,
@@ -1331,7 +1139,7 @@ export function createIamService(rawConfig, options = {}) {
       const unknownSignOut = () => {
         checkDisposed();
         ctx.lastGrant = null;
-        identityProfile = undefined;
+        grants.clearProfile();
         ctx.error = 'IAM_CREDENTIALS_CLEAR_FAILED';
         ctx.state = 'error';
         ctx.notify();
@@ -1346,8 +1154,8 @@ export function createIamService(rawConfig, options = {}) {
           grant = structuredClone(record.grant);
           // Explicit logout may establish issuer context through discovery below;
           // its initial client/resource check must not trust the grant's issuer.
-          assertGrantBinding(grant);
-          if (config.issuer) assertGrantContext(grant, expectedIssuer);
+          grants.assertGrantBinding(grant);
+          if (config.issuer) grants.assertGrantContext(grant, expectedIssuer);
         } catch { return unknownSignOut(); }
       }
       checkDisposed();
@@ -1356,11 +1164,11 @@ export function createIamService(rawConfig, options = {}) {
       ctx.lastGrant = null;
       let revocation = 'skipped';
       let revocationError = null;
-      let meta = metadataCache?.value;
+      let meta = grants.metadataCache;
       let revocationEndpoint = meta?.revocationEndpoint ?? config.revocationEndpoint;
       if (grant && config.discoveryUrl && (!revocationEndpoint || !config.issuer)) {
         try {
-          meta = await metadata();
+          meta = await grants.metadata();
           revocationEndpoint = meta.revocationEndpoint ?? config.revocationEndpoint;
         } catch {
           // An explicit endpoint cannot authenticate an otherwise unbound issuer.
@@ -1369,13 +1177,13 @@ export function createIamService(rawConfig, options = {}) {
         }
       }
       expectedIssuer = meta?.issuer || expectedIssuer;
-      try { assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
+      try { grants.assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
       checkDisposed();
       // A locally authenticated session must not clear a grant that another
       // process replaced; the check needs no client secret.
-      if (sessionAuthentication && grant
-        && (sessionAuthentication.credentials !== targetCredentials
-          || !isDeepStrictEqual(sessionAuthentication.identity, grantIdentity(grant)))) {
+      if (ctx.sessionAuthentication && grant
+        && (ctx.sessionAuthentication.credentials !== targetCredentials
+          || !isDeepStrictEqual(ctx.sessionAuthentication.identity, grantIdentity(grant)))) {
         return unknownSignOut();
       }
       // D1 (2026-11-04): revoke the local access token with a GET that carries
@@ -1385,7 +1193,7 @@ export function createIamService(rawConfig, options = {}) {
         checkDisposed();
         provider.assertAtomic(targetStore, targetCredentials);
         checkDisposed();
-        assertGrantContext(current, expectedIssuer);
+        grants.assertGrantContext(current, expectedIssuer);
         grant = current;
         if (revocationEndpoint && current?.accessToken) {
           const outcome = await revokeAccessToken({
@@ -1421,7 +1229,7 @@ export function createIamService(rawConfig, options = {}) {
       let logoutUrl = null;
       if (config.logoutMode === 'rp' && grant?.idToken) {
         try {
-          const meta = metadataCache?.value ?? await metadata();
+          const meta = grants.metadataCache ?? await grants.metadata();
           const endSessionEndpoint = meta.endSessionEndpoint ?? config.endSessionEndpoint;
           if (endSessionEndpoint) {
             const url = new URL(endSessionEndpoint);
@@ -1437,8 +1245,8 @@ export function createIamService(rawConfig, options = {}) {
       checkDisposed();
       try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
-      sessionAuthentication = null;
-      identityProfile = undefined;
+      ctx.sessionAuthentication = null;
+      grants.clearProfile();
       // Three states stay distinct: confirmed, rejected, and unconfirmed.
       const nextError = revocation === 'failed' ? 'IAM_REVOCATION_FAILED'
         : revocation === 'unknown' ? 'IAM_REVOCATION_UNKNOWN' : null;
@@ -1505,7 +1313,7 @@ export function createIamService(rawConfig, options = {}) {
           checkLifecycle();
           if (current !== sharedStore || provider.storeCredentials !== sharedCredentials) {
             // Do not clear a newer provider's independently published session.
-            if (ctx.lastGrant && grantOwners.get(ctx.lastGrant) === sharedStore) {
+            if (ctx.lastGrant && grants.ownerOf(ctx.lastGrant) === sharedStore) {
               ctx.lastGrant = null;
               if (ctx.state === 'ready' || ctx.state === 'expired' || ctx.state === 'unreachable') {
                 ctx.state = 'error';
@@ -1523,14 +1331,14 @@ export function createIamService(rawConfig, options = {}) {
             const latest = await sharedStore.read();
             checkProvider();
             if (!latest.ok || !latest.grant) throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session is not signed in');
-            assertGrantContext(latest.grant, expectedIssuer);
-            authentication = await prepareAuthentication(expectedIssuer, sharedStore, sharedCredentials, { grant: latest.grant, expected: sharedAuthentication?.value ?? sessionAuthentication, guard: checkProvider });
+            grants.assertGrantContext(latest.grant, expectedIssuer);
+            authentication = await grants.prepareAuthentication(expectedIssuer, sharedStore, sharedCredentials, { grant: latest.grant, expected: sharedAuthentication?.value ?? ctx.sessionAuthentication, guard: checkProvider });
           }
         }
         const token = await shared;
         checkProvider();
         if (config.authMode === 'confidential' && !authentication) {
-          authentication = await prepareAuthentication(expectedIssuer, sharedStore, sharedCredentials, { expected: sharedAuthentication?.value, guard: checkProvider });
+          authentication = await grants.prepareAuthentication(expectedIssuer, sharedStore, sharedCredentials, { expected: sharedAuthentication?.value, guard: checkProvider });
         }
         assertClientAuthCurrent(authentication);
         checkProvider();
@@ -1577,12 +1385,12 @@ export function createIamService(rawConfig, options = {}) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
         }
         checkAlive();
-        assertGrantContext(grant, expectedIssuer);
+        grants.assertGrantContext(grant, expectedIssuer);
         if (!grant?.accessToken || grant.refreshOperation?.state === 'pending' || isAccessExpired(grant, now())) return rejectSession();
         observedPending = null;
-        rememberAuthentication(authentication, grant);
+        grants.rememberAuthentication(authentication, grant);
         ctx.lastGrant = grant;
-        grantOwners.set(grant, targetStore);
+        grants.own(grant, targetStore);
         lastBackgroundRefreshAt = 0;
         ctx.state = 'ready';
         ctx.error = null;
@@ -1616,9 +1424,9 @@ export function createIamService(rawConfig, options = {}) {
           if (!record.ok) return rejectSession('IAM_INVALID_GRANT');
           if (!record.grant) return rejectSession('IAM_NOT_SIGNED_IN');
           operationGrant = record.grant;
-          assertGrantContext(record.grant, expectedIssuer);
+          grants.assertGrantContext(record.grant, expectedIssuer);
           const initial = record.grant;
-          authentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
+          authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
           checkAlive();
           flightAuthentication.value = clientAuthDescriptor(authentication);
           if (initial.refreshOperation?.state !== 'pending' && !shouldRefresh(initial, now(), config.refreshSkewSeconds)) {
@@ -1667,7 +1475,7 @@ export function createIamService(rawConfig, options = {}) {
               }
               checkAlive();
               if (latest === timeout || remaining() <= 0 || !latest.ok || !latest.grant) return rejectSession();
-              assertGrantContext(latest.grant, expectedIssuer);
+              grants.assertGrantContext(latest.grant, expectedIssuer);
               const marker = latest.grant.refreshOperation;
               const latestIdentity = grantIdentity(latest.grant);
               if (!marker || marker.version !== operation.version || marker.id !== operation.id || marker.base !== operation.base
@@ -1684,10 +1492,10 @@ export function createIamService(rawConfig, options = {}) {
           if (initial.refreshOperation?.state === 'pending') return await waitFor(initial);
 
           // Preload metadata before claiming, never while a record lock is held.
-          const meta = metadataCache?.value ?? await metadata();
+          const meta = grants.metadataCache ?? await grants.metadata();
           checkAlive();
-          assertGrantContext(initial, meta.issuer);
-          const keys = await jwks(meta.jwksUri);
+          grants.assertGrantContext(initial, meta.issuer);
+          const keys = await grants.jwks(meta.jwksUri);
           checkAlive();
           const operationId = randomToken(32);
           const operation = { version: 1, state: 'pending', id: operationId, base: refreshBaseId(initial, operationId) };
@@ -1696,7 +1504,7 @@ export function createIamService(rawConfig, options = {}) {
           const claim = await targetStore.mutate((current) => {
             checkAlive();
             if (!current) return undefined;
-            assertGrantContext(current, meta.issuer);
+            grants.assertGrantContext(current, meta.issuer);
             if (current.refreshOperation?.state === 'pending' || !isDeepStrictEqual(current, initial)) return undefined;
             if (!shouldRefresh(current, now(), config.refreshSkewSeconds) || !isRefreshUsable(current, now())) return undefined;
             claimed = true;
@@ -1732,7 +1540,7 @@ export function createIamService(rawConfig, options = {}) {
           // an exception or ambiguous result can never authorize the POST.
           if (!isDeepStrictEqual(claimedRecord, { ...claimedGrant, refreshOperation: operation })) return rejectSession();
           // Re-read the original pin for this POST, outside the provider lock.
-          authentication = await prepareAuthentication(meta.issuer, targetStore, targetCredentials, { grant: initial, expected: flightAuthentication.value, guard: checkLifecycle });
+          authentication = await grants.prepareAuthentication(meta.issuer, targetStore, targetCredentials, { grant: initial, expected: flightAuthentication.value, guard: checkLifecycle });
           checkAlive();
           const token = await refreshTokens({
             tokenEndpoint: meta.tokenEndpoint,
@@ -1756,14 +1564,14 @@ export function createIamService(rawConfig, options = {}) {
               claims = verifyIdToken(token.idToken, { ...verifyOptions, jwks: keys });
             } catch (cause) {
               if (cause?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw cause;
-              claims = await verifyWithJwks(token.idToken, { uri: meta.jwksUri, ...verifyOptions, guard: checkAlive });
+              claims = await grants.verifyWithJwks(token.idToken, { uri: meta.jwksUri, ...verifyOptions, guard: checkAlive });
             }
           }
           checkAlive();
           if (claims && claims.sub !== claimedGrant.subject) {
             throw new IamError('IAM_REFRESH_SUBJECT_MISMATCH', safeMessage('IAM_REFRESH_SUBJECT_MISMATCH'));
           }
-          const next = grantFromToken(claimedGrant, token, meta.issuer, nowIso(now()));
+          const next = grants.grantFromToken(claimedGrant, token, meta.issuer, nowIso(now()));
           if (claims) next.subject = claims.sub;
           next.refreshOperation = { ...operation, state: 'complete' };
           checkAlive();
@@ -1866,8 +1674,8 @@ export function createIamService(rawConfig, options = {}) {
       for (const stop of [...stopWaiters]) stop();
       stopWaiters.clear();
       ctx.lastGrant = null;
-      sessionAuthentication = null;
-      identityProfile = undefined;
+      ctx.sessionAuthentication = null;
+      grants.clearProfile();
       provider.gatewaySummary = null;
       ctx.state = 'signed-out';
       ctx.error = null;
