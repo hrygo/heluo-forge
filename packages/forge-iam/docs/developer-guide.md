@@ -82,7 +82,7 @@ public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 auth
 
 ### Host 服务
 
-[服务工厂](<../src/service.mjs>)为 `createIamService(config, options)`；插件将返回对象注册为 `ctx.iam`。以下均为现行接口，不是未来 Remote 定义。
+[服务工厂](<../src/service.mjs>)为 `createIamService(config, options)`；插件将返回对象注册为 `ctx.iam`。`service.mjs` 是唯一装配入口，内部按轴分给 `src/service-*.mjs`，各轴的状态归属与改动落点见[模块 README](<../README.md#host-分轴模块>)。以下均为现行接口，不是未来 Remote 定义。
 
 | 方法 | 返回与用途 |
 |---|---|
