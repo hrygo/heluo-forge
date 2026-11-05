@@ -4,9 +4,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { assertClientAuthConfigured, assertClientAuthCurrent, assertGrantAuthBinding, clientAuthContext, clientAuthDescriptor, grantAuthPin, prepareClientAuthentication } from './client-auth.mjs';
-import { createGatewayCredentialStore, createGrantStore, createModelSelectionStore, StoreError } from './store.mjs';
+import { StoreError } from './store.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from './record.mjs';
 import { createServiceState } from './service-state.mjs';
+import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
@@ -72,21 +73,13 @@ export function createIamService(rawConfig, options = {}) {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   // Empty by default: IAM has not confirmed field names, so no name is shown.
   const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
-  let store = null;
-  let storeCredentials = null;
-  let storeError = null;
-  let gatewayStore = null;
-  let modelSelectionStore = null;
-  let gatewaySummary = null;
-  let gatewayLoadedAt = 0;
-  let gatewayLoading = null;
-  // Bumped whenever the credentials provider changes, so an in-flight read from
-  // the previous provider cannot repopulate the summary after revocation.
-  let gatewayEpoch = 0;
   let modelSelectionFlight = null;
   let modelSelectionQueued = false;
   let modelSelectionGeneration = 0;
   let lastBackgroundRefreshAt = 0;
+
+  // Credentials provider handles and their caches live in one module.
+  const provider = createServiceStore({ options });
 
   // Every published-state read/write goes through ctx: the state module owns
   // the five scalars, the transition path and the listener set.
@@ -95,7 +88,7 @@ export function createIamService(rawConfig, options = {}) {
     options,
     configured,
     now,
-    getGatewaySummary: () => gatewaySummary,
+    getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => metadataCache?.value.issuer ?? '',
     scheduleReconcile: scheduleDefaultModelReconciliation,
     clearPendingObservation: () => { observedPending = null; },
@@ -106,62 +99,6 @@ export function createIamService(rawConfig, options = {}) {
     },
   });
 
-  function ensureStore() {
-    let credentials;
-    try {
-      credentials = typeof options.getCredentials === 'function'
-        ? options.getCredentials()
-        : options.credentials;
-    } catch {
-      credentials = undefined;
-    }
-    if (!credentials) {
-      // The provider fiber was revoked: never keep reading gateway state (and
-      // possibly resolving the secret) through the previous provider.
-      store = null;
-      gatewayStore = null;
-      modelSelectionStore = null;
-      gatewaySummary = null;
-      gatewayLoading = null;
-      gatewayLoadedAt = 0;
-      gatewayEpoch += 1;
-      storeCredentials = null;
-      storeError = new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
-      return null;
-    }
-    if (store && storeCredentials === credentials) return store;
-    try {
-      let targetStore;
-      targetStore = createGrantStore(credentials, { verifyAtomicStore: (instance) => {
-        try { assertAtomic(targetStore, instance); return true; } catch { return false; }
-      } });
-      store = targetStore;
-      gatewayStore = createGatewayCredentialStore(credentials, {
-        getGatewayAtomicStore: options.getGatewayAtomicStore,
-        verifyGatewayAtomicStore: options.verifyGatewayAtomicStore,
-      });
-      // No secret and no joint transaction: the plain provider lock is enough.
-      modelSelectionStore = createModelSelectionStore(credentials);
-      gatewaySummary = null;
-      gatewayLoadedAt = 0;
-      gatewayLoading = null;
-      gatewayEpoch += 1;
-      storeCredentials = credentials;
-      storeError = null;
-      return store;
-    } catch (cause) {
-      store = null;
-      gatewayStore = null;
-      modelSelectionStore = null;
-      gatewaySummary = null;
-      gatewayLoadedAt = 0;
-      gatewayLoading = null;
-      gatewayEpoch += 1;
-      storeCredentials = null;
-      storeError = cause;
-      return null;
-    }
-  }
 
   /**
    * Resolve the subject that owns a person's durable model settings. The grant
@@ -170,9 +107,9 @@ export function createIamService(rawConfig, options = {}) {
    * written under another's name.
    */
   async function selectionOwner() {
-    const target = ensureStore();
+    const target = provider.ensure();
     if (!target) return null;
-    const credentials = storeCredentials;
+    const credentials = provider.storeCredentials;
     const record = await target.read().catch(() => null);
     if (!record?.ok || !record.grant?.subject) return null;
     try { assertGrantContext(record.grant, ctx.knownIssuer()); } catch { return null; }
@@ -207,7 +144,7 @@ export function createIamService(rawConfig, options = {}) {
       ctx.recheckExclusive();
       return !ctx.disposed && !signingOut && ctx.state === 'ready' && ctx.exclusive.ok
         && authEpoch === adopted.binding.authEpoch && sessionEpoch === adopted.binding.sessionEpoch
-        && store === adopted.binding.store && storeCredentials === adopted.binding.credentials
+        && provider.store === adopted.binding.store && provider.storeCredentials === adopted.binding.credentials
         && ctx.lastGrant?.sessionInstanceId === adopted.sessionInstanceId
         && ctx.lastGrant.issuer === adopted.issuer && ctx.lastGrant.subject === adopted.subject
         && ctx.lastGrant.accessExpiresAt === adopted.accessExpiresAt && ctx.lastGrant.version === adopted.version
@@ -234,20 +171,7 @@ export function createIamService(rawConfig, options = {}) {
     attempt = null;
   }
 
-  function atomicVerified(credentials) {
-    try {
-      if (!credentials || typeof options.verifyAtomicStore !== 'function') return false;
-      const value = options.verifyAtomicStore(credentials);
-      if (value && typeof value.then === 'function') Promise.resolve(value).catch(() => {});
-      return value === true;
-    } catch { return false; }
-  }
 
-  function assertAtomic(target, credentials) {
-    if (ensureStore() !== target || storeCredentials !== credentials || !atomicVerified(credentials)) {
-      throw new IamError('IAM_ATOMIC_STORE_UNVERIFIED', safeMessage('IAM_ATOMIC_STORE_UNVERIFIED'));
-    }
-  }
 
   async function prepareAuthentication(issuer, target, credentials, { grant, expected = sessionAuthentication, guard } = {}) {
     if (config.authMode !== 'confidential') return undefined;
@@ -255,7 +179,7 @@ export function createIamService(rawConfig, options = {}) {
       if (guard) guard();
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       ctx.assertExclusive();
-      if (ensureStore() !== target || storeCredentials !== credentials) {
+      if (provider.ensure() !== target || provider.storeCredentials !== credentials) {
         throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
       }
       if (guard) guard();
@@ -269,14 +193,9 @@ export function createIamService(rawConfig, options = {}) {
   }
 
   function rememberAuthentication(operation, grant) {
-    if (operation) sessionAuthentication = Object.freeze({ ...clientAuthDescriptor(operation), identity: grantIdentity(grant), credentials: storeCredentials });
+    if (operation) sessionAuthentication = Object.freeze({ ...clientAuthDescriptor(operation), identity: grantIdentity(grant), credentials: provider.storeCredentials });
   }
 
-  function requireStore() {
-    const current = ensureStore();
-    if (current) return current;
-    throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
-  }
 
   async function metadata() {
     const current = now();
@@ -492,22 +411,22 @@ export function createIamService(rawConfig, options = {}) {
         ctx.notify();
       }
     };
-    const targetStore = ensureStore();
+    const targetStore = provider.ensure();
     if (!isActive()) return ctx.view();
     if (!targetStore || (observation && targetStore !== observation.store)) {
       if (!targetStore) discardIdentity();
       observedPending = null;
       return ctx.view();
     }
-    const targetCredentials = storeCredentials;
+    const targetCredentials = provider.storeCredentials;
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
     // Re-read the live provider after each await; the lookup itself may also
     // synchronously dispose this service or start a newer auth operation.
     const isCurrent = () => {
       if (!isActive()) return false;
-      const currentStore = ensureStore();
+      const currentStore = provider.ensure();
       if (!isActive()) return false;
-      if (currentStore === targetStore && storeCredentials === targetCredentials) return true;
+      if (currentStore === targetStore && provider.storeCredentials === targetCredentials) return true;
       discardIdentity();
       if (observation && observedPending === observation) observedPending = null;
       return false;
@@ -653,35 +572,35 @@ export function createIamService(rawConfig, options = {}) {
   async function loadGatewayCredential({ force = false } = {}) {
     if (ctx.disposed) return null;
     // Cache hits and singleflight reuse must belong to the live provider too.
-    const targetStore = ensureStore();
-    if (ctx.disposed || !targetStore || !gatewayStore) return null;
-    if (!force && gatewayLoadedAt > 0 && now() - gatewayLoadedAt < GATEWAY_RELOAD_MS) return gatewaySummary;
-    if (gatewayLoading) return gatewayLoading;
-    const targetGatewayStore = gatewayStore;
-    const targetCredentials = storeCredentials;
-    const epoch = gatewayEpoch;
+    const targetStore = provider.ensure();
+    if (ctx.disposed || !targetStore || !provider.gatewayStore) return null;
+    if (!force && provider.gatewayLoadedAt > 0 && now() - provider.gatewayLoadedAt < GATEWAY_RELOAD_MS) return provider.gatewaySummary;
+    if (provider.gatewayLoading) return provider.gatewayLoading;
+    const targetGatewayStore = provider.gatewayStore;
+    const targetCredentials = provider.storeCredentials;
+    const epoch = provider.gatewayEpoch;
     const isCurrent = () => {
-      if (ctx.disposed || epoch !== gatewayEpoch) return false;
-      const current = ensureStore();
-      return !ctx.disposed && epoch === gatewayEpoch && current === targetStore
-        && gatewayStore === targetGatewayStore && storeCredentials === targetCredentials;
+      if (ctx.disposed || epoch !== provider.gatewayEpoch) return false;
+      const current = provider.ensure();
+      return !ctx.disposed && epoch === provider.gatewayEpoch && current === targetStore
+        && provider.gatewayStore === targetGatewayStore && provider.storeCredentials === targetCredentials;
     };
     const request = readGatewayCredential(targetGatewayStore, targetStore, isCurrent)
       .then((summary) => {
         if (!isCurrent()) return null;
-        const changed = !isDeepStrictEqual(gatewaySummary, summary);
-        gatewaySummary = summary;
-        gatewayLoadedAt = now();
+        const changed = !isDeepStrictEqual(provider.gatewaySummary, summary);
+        provider.gatewaySummary = summary;
+        provider.gatewayLoadedAt = now();
         // Own forced reads do not feed back into another observation.
         if (changed && !modelSelectionFlight) scheduleDefaultModelReconciliation();
         return summary;
       })
       .catch(() => {
-        if (isCurrent()) { gatewaySummary = null; gatewayLoadedAt = 0; }
+        if (isCurrent()) { provider.gatewaySummary = null; provider.gatewayLoadedAt = 0; }
         return null;
       })
-      .finally(() => { if (gatewayLoading === request) gatewayLoading = null; });
-    gatewayLoading = request;
+      .finally(() => { if (provider.gatewayLoading === request) provider.gatewayLoading = null; });
+    provider.gatewayLoading = request;
     return request;
   }
 
@@ -721,8 +640,8 @@ export function createIamService(rawConfig, options = {}) {
       return readonlyModelResult('default-model-unconfigured');
     }
     if (ctx.disposed || signingOut || ctx.state !== 'ready') return readonlyModelResult('iam-not-ready');
-    const targetStore = ensureStore();
-    const targetCredentials = storeCredentials;
+    const targetStore = provider.ensure();
+    const targetCredentials = provider.storeCredentials;
     const grant = ctx.lastGrant;
     if (!targetStore || !grant || grantOwners.get(grant) !== targetStore
       || isAccessExpired(grant, now())) return readonlyModelResult('iam-not-ready');
@@ -734,15 +653,15 @@ export function createIamService(rawConfig, options = {}) {
     }
     const auth = authEpoch;
     const generation = modelSelectionGeneration;
-    const gateway = gatewayEpoch;
+    const gateway = provider.gatewayEpoch;
     const active = () => !ctx.disposed && !signingOut && ctx.state === 'ready' && ctx.exclusive.ok
-      && authEpoch === auth && modelSelectionGeneration === generation && gatewayEpoch === gateway
+      && authEpoch === auth && modelSelectionGeneration === generation && provider.gatewayEpoch === gateway
       && ctx.lastGrant === grant && !isAccessExpired(grant, now());
     const isCurrent = () => {
       try {
         if (!active()) return false;
         ctx.assertExclusive();
-        if (!active() || ensureStore() !== targetStore || storeCredentials !== targetCredentials) return false;
+        if (!active() || provider.ensure() !== targetStore || provider.storeCredentials !== targetCredentials) return false;
         const current = modelSelectionServices();
         return active() && current?.binding === services.binding && current.llm === services.llm
           && current.agentDefaultModel === services.agentDefaultModel;
@@ -843,8 +762,8 @@ export function createIamService(rawConfig, options = {}) {
     async readModelSelection() {
       const current = await selectionOwner();
       if (!current) return { subject: null, saved: false, models: {}, defaultModelId: null };
-      const target = ensureStore() ? modelSelectionStore : null;
-      if (!target || storeCredentials !== current.credentials) {
+      const target = provider.ensure() ? provider.modelSelectionStore : null;
+      if (!target || provider.storeCredentials !== current.credentials) {
         return { subject: current.subject, saved: false, models: {}, defaultModelId: null };
       }
       const record = await target.read();
@@ -870,8 +789,8 @@ export function createIamService(rawConfig, options = {}) {
         }
       }
       if (!current || current.expired) throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
-      const target = ensureStore() ? modelSelectionStore : null;
-      if (!target || storeCredentials !== current.credentials) {
+      const target = provider.ensure() ? provider.modelSelectionStore : null;
+      if (!target || provider.storeCredentials !== current.credentials) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法写入模型设置。');
       }
       const saved = await target.save({ subject: current.subject, models, defaultModelId });
@@ -883,9 +802,9 @@ export function createIamService(rawConfig, options = {}) {
       // V1 sends only the personal Key to UAG; the IAM token never leaves this method.
       await service.resolveToken();
       const epoch = authEpoch;
-      const targetStore = requireStore();
-      const targetGatewayStore = gatewayStore;
-      const targetCredentials = storeCredentials;
+      const targetStore = provider.require();
+      const targetGatewayStore = provider.gatewayStore;
+      const targetCredentials = provider.storeCredentials;
       const subject = ctx.lastGrant?.subject;
       const generation = modelSelectionGeneration;
       const check = () => {
@@ -894,7 +813,7 @@ export function createIamService(rawConfig, options = {}) {
           throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
         }
         ctx.assertExclusive();
-        if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
+        if (provider.ensure() !== targetStore || provider.gatewayStore !== targetGatewayStore || provider.storeCredentials !== targetCredentials) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法读取个人访问凭证。');
         }
       };
@@ -932,9 +851,9 @@ export function createIamService(rawConfig, options = {}) {
       }
       const expectedIssuer = ctx.knownIssuer();
       const epoch = authEpoch;
-      const targetStore = requireStore();
-      const targetGatewayStore = gatewayStore;
-      const targetCredentials = storeCredentials;
+      const targetStore = provider.require();
+      const targetGatewayStore = provider.gatewayStore;
+      const targetCredentials = provider.storeCredentials;
       if (!targetGatewayStore) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
@@ -947,7 +866,7 @@ export function createIamService(rawConfig, options = {}) {
           ctx.assertExclusive();
         };
         active();
-        if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
+        if (provider.ensure() !== targetStore || provider.gatewayStore !== targetGatewayStore || provider.storeCredentials !== targetCredentials) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
         }
         active();
@@ -999,16 +918,16 @@ export function createIamService(rawConfig, options = {}) {
       ctx.assertExclusive();
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       modelSelectionGeneration += 1;
-      const targetStore = requireStore();
-      const targetGatewayStore = gatewayStore;
-      const targetCredentials = storeCredentials;
+      const targetStore = provider.require();
+      const targetGatewayStore = provider.gatewayStore;
+      const targetCredentials = provider.storeCredentials;
       if (!targetGatewayStore) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
       const assertCurrent = () => {
         if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
         ctx.assertExclusive();
-        if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
+        if (provider.ensure() !== targetStore || provider.gatewayStore !== targetGatewayStore || provider.storeCredentials !== targetCredentials) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
         }
         if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
@@ -1055,8 +974,8 @@ export function createIamService(rawConfig, options = {}) {
         });
       }
       if (signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-      const targetStore = ensureStore();
-      const credentials = storeCredentials;
+      const targetStore = provider.ensure();
+      const credentials = provider.storeCredentials;
       if (attempt && (attempt.targetStore !== targetStore || attempt.credentials !== credentials)) {
         authEpoch += 1;
         clearAttempt();
@@ -1066,14 +985,14 @@ export function createIamService(rawConfig, options = {}) {
         }
       }
       if (!targetStore) throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
-      assertAtomic(targetStore, credentials);
+      provider.assertAtomic(targetStore, credentials);
       if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
       if (ctx.state === 'authenticating' && attempt) {
         if (config.authMode === 'confidential') {
           const current = attempt; const epoch = authEpoch;
           const authentication = await prepareAuthentication(current.metadata.issuer, targetStore, credentials, { expected: current.authentication, guard: () => {
             if (attempt !== current || epoch !== authEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-            assertAtomic(targetStore, credentials);
+            provider.assertAtomic(targetStore, credentials);
           } });
           assertClientAuthCurrent(authentication);
         }
@@ -1110,10 +1029,10 @@ export function createIamService(rawConfig, options = {}) {
       if (authEpoch !== startEpoch || signingOut) {
         throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       }
-      assertAtomic(targetStore, credentials);
+      provider.assertAtomic(targetStore, credentials);
       const authentication = await prepareAuthentication(meta.issuer, targetStore, credentials, { expected: null, guard: () => {
         if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
-        assertAtomic(targetStore, credentials);
+        provider.assertAtomic(targetStore, credentials);
       } });
       assertClientAuthCurrent(authentication);
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
@@ -1211,7 +1130,7 @@ export function createIamService(rawConfig, options = {}) {
         throw new IamError('IAM_STATE_MISMATCH', safeMessage('IAM_STATE_MISMATCH'));
       }
       const current = attempt;
-      assertAtomic(current.targetStore, current.credentials);
+      provider.assertAtomic(current.targetStore, current.credentials);
       if (parsed.iss !== undefined && parsed.iss !== current.metadata.issuer) {
         throw new IamError('IAM_CALLBACK_ISSUER', safeMessage('IAM_CALLBACK_ISSUER'));
       }
@@ -1243,7 +1162,7 @@ export function createIamService(rawConfig, options = {}) {
       const callbackGuard = () => {
         if (!isCurrent()) throw interrupted();
         ctx.assertExclusive();
-        assertAtomic(current.targetStore, current.credentials);
+        provider.assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
       };
       try {
@@ -1263,7 +1182,7 @@ export function createIamService(rawConfig, options = {}) {
         issuedToken = token;
         assertClientAuthCurrent(authentication);
         callbackGuard();
-        assertAtomic(current.targetStore, current.credentials);
+        provider.assertAtomic(current.targetStore, current.credentials);
         if (!token.idToken) {
           throw new IamError('IAM_ID_TOKEN_INVALID', safeMessage('IAM_ID_TOKEN_INVALID'));
         }
@@ -1280,13 +1199,13 @@ export function createIamService(rawConfig, options = {}) {
         assertClientAuthCurrent(authentication);
         if (!isCurrent()) throw interrupted();
         ctx.assertExclusive();
-        assertAtomic(current.targetStore, current.credentials);
+        provider.assertAtomic(current.targetStore, current.credentials);
         intendedStore = current.targetStore;
         intendedGrant = grant;
         writeUnconfirmed = true;
         const written = await intendedStore.write(grant, {
           guard: () => {
-            assertAtomic(current.targetStore, current.credentials);
+            provider.assertAtomic(current.targetStore, current.credentials);
             try { assertClientAuthCurrent(authentication); } catch (cause) { guardRejection = cause; throw cause; }
             if (!isCurrent()) {
               guardRejection = interrupted();
@@ -1300,14 +1219,14 @@ export function createIamService(rawConfig, options = {}) {
         }
         writeUnconfirmed = false;
         assertClientAuthCurrent(authentication);
-        assertAtomic(current.targetStore, current.credentials);
+        provider.assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
         // Show any owner mismatch without changing the user's stored key.
         ctx.lastGrant = grant;
         grantOwners.set(grant, current.targetStore);
         await loadGatewayCredential({ force: true });
         assertClientAuthCurrent(authentication);
-        assertAtomic(current.targetStore, current.credentials);
+        provider.assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
         rememberAuthentication(authentication, grant);
         await loadIdentityProfile(grant);
@@ -1374,9 +1293,9 @@ export function createIamService(rawConfig, options = {}) {
       if (ctx.state !== 'authenticating') return ctx.view();
       clearAttempt();
       ctx.lastGrant = null;
-      gatewayEpoch += 1;
-      gatewaySummary = null;
-      gatewayLoadedAt = 0;
+      provider.gatewayEpoch += 1;
+      provider.gatewaySummary = null;
+      provider.gatewayLoadedAt = 0;
       return ctx.publish('CANCEL');
     },
 
@@ -1406,8 +1325,8 @@ export function createIamService(rawConfig, options = {}) {
       if (refreshPromise) await refreshPromise.catch(() => {});
       checkDisposed();
       let grant = null;
-      const targetStore = ensureStore();
-      const targetCredentials = storeCredentials;
+      const targetStore = provider.ensure();
+      const targetCredentials = provider.storeCredentials;
       checkDisposed();
       const unknownSignOut = () => {
         checkDisposed();
@@ -1418,7 +1337,7 @@ export function createIamService(rawConfig, options = {}) {
         ctx.notify();
         return { view: ctx.view(), logoutUrl: null, revocation: 'unknown' };
       };
-      try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       if (targetStore) {
         const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
         if (!record.ok) return unknownSignOut();
@@ -1432,7 +1351,7 @@ export function createIamService(rawConfig, options = {}) {
         } catch { return unknownSignOut(); }
       }
       checkDisposed();
-      try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
       ctx.lastGrant = null;
       let revocation = 'skipped';
@@ -1464,7 +1383,7 @@ export function createIamService(rawConfig, options = {}) {
       // must not stop sign-out, and the refresh token cannot be revoked here.
       const revokeCurrent = async (current) => {
         checkDisposed();
-        assertAtomic(targetStore, targetCredentials);
+        provider.assertAtomic(targetStore, targetCredentials);
         checkDisposed();
         assertGrantContext(current, expectedIssuer);
         grant = current;
@@ -1479,25 +1398,25 @@ export function createIamService(rawConfig, options = {}) {
           if (outcome.code) revocationError = outcome.code;
         }
       };
-      try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
       const cleared = targetStore
         ? await targetStore.signOutSnapshot(grant, async (current) => {
           await revokeCurrent(current);
           checkDisposed();
-          assertAtomic(targetStore, targetCredentials);
+          provider.assertAtomic(targetStore, targetCredentials);
           checkDisposed();
         })
         : { ok: false };
       checkDisposed();
-      try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       if (!cleared.ok || !['cleared', 'absent'].includes(cleared.decision)) return unknownSignOut();
       checkDisposed();
       // Sign-out keeps the gateway credential, but the summary must stop
       // claiming it matches the (now absent) session.
       await loadGatewayCredential({ force: true });
       checkDisposed();
-      try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
       let logoutUrl = null;
       if (config.logoutMode === 'rp' && grant?.idToken) {
@@ -1516,7 +1435,7 @@ export function createIamService(rawConfig, options = {}) {
         }
       }
       checkDisposed();
-      try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
+      try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
       sessionAuthentication = null;
       identityProfile = undefined;
@@ -1539,7 +1458,7 @@ export function createIamService(rawConfig, options = {}) {
      */
     async bridgeCapability() {
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
-      const credentials = storeCredentials;
+      const credentials = provider.storeCredentials;
       if (!credentials || typeof credentials.resolve !== 'function' || typeof credentials.set !== 'function') {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
@@ -1582,9 +1501,9 @@ export function createIamService(rawConfig, options = {}) {
           checkLifecycle();
           ctx.assertExclusive();
           checkLifecycle();
-          const current = ensureStore();
+          const current = provider.ensure();
           checkLifecycle();
-          if (current !== sharedStore || storeCredentials !== sharedCredentials) {
+          if (current !== sharedStore || provider.storeCredentials !== sharedCredentials) {
             // Do not clear a newer provider's independently published session.
             if (ctx.lastGrant && grantOwners.get(ctx.lastGrant) === sharedStore) {
               ctx.lastGrant = null;
@@ -1620,8 +1539,8 @@ export function createIamService(rawConfig, options = {}) {
       if (refreshPromise) return useSharedRefresh();
       const epoch = sessionEpoch;
       const auth = authEpoch;
-      const targetStore = requireStore();
-      const targetCredentials = storeCredentials;
+      const targetStore = provider.require();
+      const targetCredentials = provider.storeCredentials;
       const grantAtStart = ctx.lastGrant;
       const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
       let refreshing = false;
@@ -1632,14 +1551,14 @@ export function createIamService(rawConfig, options = {}) {
       const checkLifecycle = () => {
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         ctx.assertExclusive();
-        if (refreshing) assertAtomic(targetStore, targetCredentials);
+        if (refreshing) provider.assertAtomic(targetStore, targetCredentials);
       };
       const checkAlive = () => { checkLifecycle(); assertClientAuthCurrent(authentication); };
       const rejectSession = (code = 'IAM_REAUTH_REQUIRED') => {
         // A late failure belongs to its original provider, not a newer session.
-        const current = ensureStore();
+        const current = provider.ensure();
         if (!(code === 'IAM_NOT_SIGNED_IN' && ctx.state === 'signed-out')
-          && alive() && current === targetStore && storeCredentials === targetCredentials
+          && alive() && current === targetStore && provider.storeCredentials === targetCredentials
           && (!ctx.lastGrant || ctx.lastGrant === grantAtStart
             || (operationGrant && sameGrantIgnoringRefreshMarker(ctx.lastGrant, operationGrant)))) {
           observedPending = null;
@@ -1654,7 +1573,7 @@ export function createIamService(rawConfig, options = {}) {
         checkAlive();
         // A read from a revoked/replaced provider must not authorize a token.
         // This identity check does not claim the provider has atomic storage.
-        if (ensureStore() !== targetStore || storeCredentials !== targetCredentials) {
+        if (provider.ensure() !== targetStore || provider.storeCredentials !== targetCredentials) {
           throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
         }
         checkAlive();
@@ -1680,9 +1599,9 @@ export function createIamService(rawConfig, options = {}) {
         return rejectSession('IAM_CREDENTIALS_UNAVAILABLE');
       }
       if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
-      const currentStore = ensureStore();
+      const currentStore = provider.ensure();
       if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
-      if (currentStore !== targetStore || storeCredentials !== targetCredentials) {
+      if (currentStore !== targetStore || provider.storeCredentials !== targetCredentials) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
       if (refreshPromise) return useSharedRefresh();
@@ -1949,7 +1868,7 @@ export function createIamService(rawConfig, options = {}) {
       ctx.lastGrant = null;
       sessionAuthentication = null;
       identityProfile = undefined;
-      gatewaySummary = null;
+      provider.gatewaySummary = null;
       ctx.state = 'signed-out';
       ctx.error = null;
       // Lifecycle cleanup only: the grant and the user's gateway credential
