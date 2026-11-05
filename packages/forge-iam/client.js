@@ -1466,14 +1466,15 @@ window.__ModuleLoader__.load({
     }
 
     // §4 状态标签
+    // 一张表同时给出文案与徽章等级：新增状态只改这里，标签与徽章不会各改一处。
     const STATUS = {
-      unconfigured: '企业登录尚未设置',
-      'signed-out': '未登录',
-      authenticating: '等待浏览器登录',
-      ready: '已登录',
-      expired: '授权已过期',
-      unreachable: '暂时无法连接登录服务',
-      error: '需要处理',
+      unconfigured: { label: '企业登录尚未设置', badge: 'warn' },
+      'signed-out': { label: '未登录', badge: 'idle' },
+      authenticating: { label: '等待浏览器登录', badge: 'authenticating' },
+      ready: { label: '已登录', badge: 'success' },
+      expired: { label: '授权已过期', badge: 'warn' },
+      unreachable: { label: '暂时无法连接登录服务', badge: 'error' },
+      error: { label: '需要处理', badge: 'error' },
     };
 
     // §4.1 会话状态派生
@@ -1552,12 +1553,16 @@ window.__ModuleLoader__.load({
 
     // §6 网关状态与徽章
     const GATEWAY_STATUS = {
-      unknown: '状态未知',
-      unconfigured: '未保存',
-      configured: '已保存',
-      'owner-mismatch': '属于其他账号，请核对记录',
-      invalid: '记录不一致，已保留',
+      unknown: { label: '状态未知', badge: 'warn' },
+      unconfigured: { label: '未保存', badge: 'idle' },
+      configured: { label: '已保存', badge: 'success' },
+      'owner-mismatch': { label: '属于其他账号，请核对记录', badge: 'error' },
+      invalid: { label: '记录不一致，已保留', badge: 'error' },
     };
+    const statusLabel = state => (STATUS[state] ? STATUS[state].label : '未知状态');
+    const statusBadge = state => (STATUS[state] ? STATUS[state].badge : 'error');
+    const gatewayLabel = (state, fallback) => (GATEWAY_STATUS[state] ? GATEWAY_STATUS[state].label : fallback);
+    const gatewayBadge = state => (GATEWAY_STATUS[state] ? GATEWAY_STATUS[state].badge : 'error');
 
     // §6.1 网关凭据派生
     // 凭据状态只在这里读；fallback 由调用点决定（未确认用 unknown、待配置用 unconfigured）。
@@ -1573,20 +1578,6 @@ window.__ModuleLoader__.load({
       };
     }
 
-    function statusBadgeClass(state) {
-      if (state === 'ready') return 'success';
-      if (state === 'signed-out') return 'idle';
-      if (state === 'authenticating') return 'authenticating';
-      if (state === 'expired' || state === 'unconfigured') return 'warn';
-      return 'error';
-    }
-
-    function gatewayBadgeClass(state) {
-      if (state === 'configured') return 'success';
-      if (state === 'unconfigured') return 'idle';
-      if (state === 'unknown') return 'warn';
-      return 'error';
-    }
 
     // §7 登录窗口
     function openLoginWindow() {
@@ -1862,7 +1853,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'fiam-card-subtitle' }, ui.ready ? '已绑定企业 OIDC 身份' : '单点登录至企业账号'),
             ),
           ),
-          h('span', { className: `fiam-badge fiam-badge-${statusBadgeClass(ui.state)}` },
+          h('span', { className: `fiam-badge fiam-badge-${statusBadge(ui.state)}` },
             h('span', { className: 'fiam-badge-dot' }),
             label,
           ),
@@ -1919,7 +1910,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'fiam-card-subtitle' }, '填写企业 AI 网关签发的个人访问凭证。'),
             ),
           ),
-          h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gatewayUi.state)}` },
+          h('span', { className: `fiam-badge fiam-badge-${gatewayBadge(gatewayUi.state)}` },
             h('span', { className: 'fiam-badge-dot' }),
             `个人访问凭证：${gatewayStatus}`,
           ),
@@ -3346,7 +3337,7 @@ window.__ModuleLoader__.load({
 
       const view = state.view ?? {};
       const sessionUi = deriveSessionUi(state.view);
-      const label = sessionUi.known ? STATUS[sessionUi.state] : '未知状态';
+      const label = sessionUi.known ? statusLabel(sessionUi.state) : '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
@@ -3366,7 +3357,7 @@ window.__ModuleLoader__.load({
 
       const gateway = view.gatewayCredential ?? { state: 'unknown' };
       const gatewayUi = deriveGatewayUi(gateway);
-      const gatewayStatus = GATEWAY_STATUS[gatewayUi.state] ?? '状态未知';
+      const gatewayStatus = gatewayLabel(gatewayUi.state, '状态未知');
       const gatewayDetails = [
         gateway.deviceLabel ? `设备：${gateway.deviceLabel}` : null,
         gateway.enteredAt ? `录入：${formatTime(gateway.enteredAt)}` : null,
@@ -3485,7 +3476,7 @@ window.__ModuleLoader__.load({
                 fontWeight: 600,
               },
             },
-              gwConfigured ? '已就绪' : (GATEWAY_STATUS[gwState] || '未录入')
+              gwConfigured ? '已就绪' : (GATEWAY_STATUS[gwState] ? gatewayLabel(gwState) : '未录入')
             ),
           ),
           isSignedIn ? h('div', { className: 'fiam-launcher-menu-row' },
@@ -3908,7 +3899,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'fiam-onboarding-summary-row' },
               h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '个人访问凭证'),
               h('span', { className: `fiam-badge fiam-badge-${gatewayUi.configured ? 'success' : 'warn'}` },
-                GATEWAY_STATUS[gwState] ?? '待核实'
+                gatewayLabel(gwState, '待核实')
               ),
             ),
           ),
