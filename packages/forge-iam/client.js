@@ -3073,13 +3073,12 @@ window.__ModuleLoader__.load({
       };
     }
 
-    // §14 面板
-    function Panel() {
-      const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
+    // §14.3 会话视图
+    // 会话视图由 Panel 持有（单一写者），这里只提供动作与复制通道：加载、轮询、
+    // 登录/取消、退出，以及「复制登录链接 / 复制问题信息」。
+    function useSessionView({ state, setState, viewBarrier, catalogue, form }) {
+      const isCurrentEpoch = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
 
-      // Waking a laptop or returning to the tab is when a signed-in session is
-      // most likely to have drifted (network moved, gateway restarted). Re-read
-      // the catalogue once, throttled so a focus storm cannot hammer the gateway.
       const wakeRef = React.useRef({ at: 0, inFlight: false });
       const viewRef = React.useRef(state.view);
       viewRef.current = state.view;
@@ -3108,7 +3107,6 @@ window.__ModuleLoader__.load({
         };
       }, []);
 
-      const viewBarrier = React.useRef({ epoch: 0, pending: false });
       const linkIdentity = React.useRef(null);
       const copyRequest = React.useRef(null);
       const copyLive = React.useRef(true);
@@ -3117,13 +3115,7 @@ window.__ModuleLoader__.load({
         copyLive.current = true;
         return () => { copyLive.current = false; copyRequest.current = null; };
       }, []);
-      const isViewCurrent = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
-      const setView = (next) => setState((current) => ({ ...current, view: next ?? current.view }));
-      const catalogue = useModelCatalogue({ view: state.view, viewBarrier, setView });
-      const form = useCredentialForm({ view: state.view, viewBarrier, setView, catalogue });
 
-      // The signed-in Host owns the selection, including an explicitly empty
-      // set. A browser cache must never restore another account's old choices.
       const load = React.useCallback(async () => {
         if (viewBarrier.current.pending) return;
         const epoch = viewBarrier.current.epoch;
@@ -3163,7 +3155,7 @@ window.__ModuleLoader__.load({
         const popup = openLoginWindow();
         try {
           const result = await postJson('/api/forge-iam/sign-in');
-          if (!isViewCurrent(epoch)) {
+          if (!isCurrentEpoch(epoch)) {
             try { popup?.close(); } catch { /* already closed */ }
             return;
           }
@@ -3179,7 +3171,7 @@ window.__ModuleLoader__.load({
           setState((current) => ({ ...current, view, authorizationUrl, notice: null }));
         } catch {
           try { popup?.close(); } catch { /* already closed */ }
-          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
+          if (isCurrentEpoch(epoch)) setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -3189,14 +3181,14 @@ window.__ModuleLoader__.load({
         const epoch = viewBarrier.current.epoch;
         try {
           const result = await postJson('/api/forge-iam/cancel');
-          if (!isViewCurrent(epoch)) return;
+          if (!isCurrentEpoch(epoch)) return;
           if (!result.ok) {
             setState((current) => ({ ...current, notice: resultNotice(result) }));
             return;
           }
           setState((current) => ({ ...current, view: result.body?.view ?? null, authorizationUrl: null, notice: null }));
         } catch {
-          if (isViewCurrent(epoch)) setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
+          if (isCurrentEpoch(epoch)) setState((current) => ({ ...current, notice: '暂时无法连接服务，请稍后重试。' }));
         }
       };
 
@@ -3245,7 +3237,7 @@ window.__ModuleLoader__.load({
         if (!copyLive.current || viewBarrier.current.pending || copyRequest.current) return;
         const request = {};
         const epoch = viewBarrier.current.epoch;
-        const isCurrent = () => copyLive.current && isViewCurrent(epoch)
+        const isCurrent = () => copyLive.current && isCurrentEpoch(epoch)
           && (!url || linkIdentity.current === url);
         copyRequest.current = request;
         setCopy({ pending: true, notice: null, epoch, url });
@@ -3276,6 +3268,27 @@ window.__ModuleLoader__.load({
       };
       const copyDiagnostic = () => copyText(JSON.stringify(diagnosticSnapshot(state)));
 
+
+      return {
+        linkIdentity, copy, load, login, cancelLogin, signOut, copyText, copyLink, copyDiagnostic, isViewCurrent: isCurrentEpoch,
+      };
+    }
+
+    // §14 面板
+    function Panel() {
+      const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
+
+      // Waking a laptop or returning to the tab is when a signed-in session is
+      // most likely to have drifted (network moved, gateway restarted). Re-read
+      // the catalogue once, throttled so a focus storm cannot hammer the gateway.
+      const viewBarrier = React.useRef({ epoch: 0, pending: false });
+      const setView = (next) => setState((current) => ({ ...current, view: next ?? current.view }));
+      const catalogue = useModelCatalogue({ view: state.view, viewBarrier, setView });
+      const form = useCredentialForm({ view: state.view, viewBarrier, setView, catalogue });
+      const session = useSessionView({ state, setState, viewBarrier, catalogue, form });
+
+      // The signed-in Host owns the selection, including an explicitly empty
+      // set. A browser cache must never restore another account's old choices.
       const box = { padding: '0 0 24px', maxWidth: 720, width: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
       const button = secondaryButton;
       const muted = { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' };
@@ -3284,11 +3297,11 @@ window.__ModuleLoader__.load({
         h('div', { style: { ...muted, marginTop: 4 } }, '管理企业账号和个人访问凭证'),
       );
       const copyTools = h('div', { className: 'fiam-actions' },
-        deriveSessionUi(state.view).authenticating && linkIdentity.current && state.authorizationUrl === linkIdentity.current
-          ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
-        h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
-        copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
-          ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
+        deriveSessionUi(state.view).authenticating && session.linkIdentity.current && state.authorizationUrl === session.linkIdentity.current
+          ? h('button', { type: 'button', style: button, disabled: session.copy.pending || viewBarrier.current.pending, onClick: session.copyLink }, '复制登录链接') : null,
+        h('button', { type: 'button', style: button, disabled: session.copy.pending || viewBarrier.current.pending, onClick: session.copyDiagnostic }, '复制问题信息'),
+        session.copy.notice && session.isViewCurrent(session.copy.epoch) && (!session.copy.url || session.copy.url === session.linkIdentity.current)
+          ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, session.copy.notice) : null,
       );
 
       if (state.phase === 'loading') {
@@ -3318,11 +3331,11 @@ window.__ModuleLoader__.load({
                 h('div', { style: { fontWeight: 600, fontSize: 15, marginBottom: 4 } }, '无法读取登录状态。'),
                 h('div', { style: muted }, errorNotice(state.error)),
                 h('div', { className: 'fiam-actions', style: { marginTop: 14 } },
-                  h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: load }, '重试'),
-                  h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
+                  h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: session.load }, '重试'),
+                  h('button', { type: 'button', style: button, disabled: session.copy.pending || viewBarrier.current.pending, onClick: session.copyDiagnostic }, '复制问题信息'),
                 ),
-                copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
-                  ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
+                session.copy.notice && session.isViewCurrent(session.copy.epoch) && (!session.copy.url || session.copy.url === session.linkIdentity.current)
+                  ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, session.copy.notice) : null,
               )
             )
           ),
@@ -3330,8 +3343,8 @@ window.__ModuleLoader__.load({
       }
 
       const view = state.view ?? {};
-      const session = deriveSessionUi(state.view);
-      const label = session.known ? STATUS[session.state] : '未知状态';
+      const sessionUi = deriveSessionUi(state.view);
+      const label = sessionUi.known ? STATUS[sessionUi.state] : '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
@@ -3370,8 +3383,10 @@ window.__ModuleLoader__.load({
 
       const accountCard = renderAccountCard({
         h, view, label, muted, principal, expiry, missing, exclusive, hostError, notice, loginLink,
-        state, primaryButton, secondaryButton, button, copy, copyTools,
-        login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity,
+        state, primaryButton, secondaryButton, button, copy: session.copy, copyTools,
+        login: session.login, cancelLogin: session.cancelLogin, load: session.load, signOut: session.signOut,
+        copyLink: session.copyLink, copyDiagnostic: session.copyDiagnostic, isViewCurrent: session.isViewCurrent,
+        viewBarrier, linkIdentity: session.linkIdentity,
       });
 
       const gatewayCard = renderGatewayCard({
