@@ -34,14 +34,18 @@ export async function startMockOidc({
   dropRefreshResponse = false,
 } = {}) {
   // Mutable at runtime so a test can flip a fault between two worker runs.
-  const control = { refreshDelayMs, dropRefreshResponse };
+  const control = { refreshDelayMs, dropRefreshResponse, revokeAccessMode: 'ok', revokeAccessDelayMs: 0, userInfoMode: 'ok' };
+  let lastUserInfo = null;
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'test-key-1', use: 'sig', alg: 'RS256' };
   const codes = new Map();
   const refreshTokens = new Map();
   const revoked = new Set();
-  const counts = { discovery: 0, authorize: 0, jwks: 0, token: 0, refresh: 0, revoke: 0 };
+  const counts = { discovery: 0, authorize: 0, jwks: 0, token: 0, refresh: 0, revoke: 0, revokeAccess: 0, revokePost: 0, userInfo: 0 };
   let accessCounter = 0;
+  const accessTokens = new Map();
+  /** Last GET revocation observed, so tests can prove shape and redaction. */
+  const lastRevokeAccess = { set: null };
   let issuer;
   const component = (value) => new URLSearchParams([['', value]]).toString().slice(1);
   const authenticated = (req, form) => {
@@ -63,11 +67,26 @@ export async function startMockOidc({
           token_endpoint: `${issuer}/token`,
           jwks_uri: `${issuer}/jwks`,
           revocation_endpoint: `${issuer}/revoke`,
+          userinfo_endpoint: `${issuer}/userinfo`,
         });
       }
       if (url.pathname === '/jwks') {
         counts.jwks += 1;
         return json(res, 200, { keys: [jwk] });
+      }
+      if (url.pathname === '/userinfo' && req.method === 'GET') {
+        counts.userInfo += 1;
+        const authorization = req.headers.authorization ?? null;
+        lastUserInfo = { authorization };
+        if (control.userInfoMode === 'http500') { res.writeHead(500); res.end(); return; }
+        if (control.userInfoMode === 'malformed') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('not-json'); return; }
+        const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+        if (!accessTokens.has(token)) { res.writeHead(401); res.end(); return; }
+        const { subject } = accessTokens.get(token);
+        return json(res, 200, {
+          sub: subject, work_no: '10001234', pinyin: 'Zhang San',
+          employeeNumber: '10001234', name: 'Zhang San',
+        });
       }
       if (url.pathname === '/authorize') {
         counts.authorize += 1;
@@ -104,6 +123,7 @@ export async function startMockOidc({
           const access = `access-${++accessCounter}`;
           const refresh = `refresh-${randomUUID()}`;
           refreshTokens.set(refresh, { subject });
+          accessTokens.set(access, { subject });
           return json(res, 200, {
             access_token: access,
             token_type: 'Bearer',
@@ -136,8 +156,31 @@ export async function startMockOidc({
         }
         return json(res, 400, { error: 'unsupported_grant_type' });
       }
+      if (url.pathname === '/revoke' && req.method === 'GET') {
+        counts.revoke += 1;
+        counts.revokeAccess += 1;
+        const token = url.searchParams.get('access_token');
+        lastRevokeAccess.set = {
+          token,
+          authorization: req.headers.authorization ?? null,
+          contentType: req.headers['content-type'] ?? null,
+        };
+        const mode = control.revokeAccessMode;
+        if (mode === 'delay') await new Promise((r) => setTimeout(r, control.revokeAccessDelayMs ?? 200));
+        if (mode === 'http500') return json(res, 500, { result: false });
+        if (mode === 'http400') return json(res, 400, { result: false });
+        if (!token) return json(res, 200, { result: false, errcode: 2001 });
+        if (mode === 'already-invalid' || revoked.has(token)) {
+          return json(res, 200, { result: false, errcode: 2002 });
+        }
+        if (mode === 'rejected') return json(res, 200, { result: false, errcode: 2001 });
+        if (mode === 'unconfirmed') return json(res, 200, { ok: true });
+        revoked.add(token);
+        return json(res, 200, { result: true });
+      }
       if (url.pathname === '/revoke' && req.method === 'POST') {
         counts.revoke += 1;
+        counts.revokePost += 1;
         const form = await parseBody(req);
         if (!authenticated(req, form)) return json(res, 400, { error: 'invalid_client' });
         const token = form.get('token');
@@ -182,8 +225,11 @@ export async function startMockOidc({
       revocationEndpoint: `${issuer}/revoke`,
     },
     refreshTokens,
+    accessTokens,
+    get lastUserInfo() { return lastUserInfo; },
     revoked,
     counts,
+    lastRevokeAccess,
     control,
     async close() {
       await new Promise((resolve) => server.close(resolve));

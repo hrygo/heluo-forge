@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-010 |
 | 文档名称 | Gitee 接入详细设计 |
-| 版本 | V0.3.1 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
+| 最后更新 | 2026-11-05 |
 | 门禁 | G1 |
 | 模块状态 | 可用（离线用例全绿；企业 CLI 未联调，见 §12） |
 
@@ -42,7 +42,7 @@
 - 只读查询仓库、Issue、PR，命令面固定到 argv 动词，参数与 `--json` 子集白名单。
 - 复用 `gh` 的命令与参数习惯，降低学习与维护成本。
 - 本地 git 只做两件事：按 `[变更号]` 规则提交、推送既有提交（另有 `head`/`branch` 两条只读）；不提供任意命令入口。
-- 凭据只经环境变量注入，不落在 CLI 自己的配置文件里；输出按令牌值脱敏。
+- 凭据优先由 `gh` 从系统凭据库（服务名 `gitee-cli-go`）读取；`authEnv` 只是无桌面凭据库或 CI 的兜底注入通道。本包不写 CLI 配置文件，输出按令牌值脱敏。
 - 与 DevOps 接入共用同一套策略门禁与审计字段，但**语义分表**，不互相回退。
 - 结果为可判定状态：`succeeded`/`failed`/`partial`/`unknown`（读）与 `done`/`failed`/`denied`/`unknown`（写）。
 - 装得上、退得掉：单安装单元 + 精确回滚步骤写在装之前。
@@ -68,7 +68,7 @@
 | `gh` 兼容 CLI | 工具 | 由 Gitee 团队提供 | `SPAWN_FAILED` 明确失败；`preflight()` 不猜路径 |
 | `@heluo/forge-policy` | 包 | `workspace:*`（安装单元闭包成真版本） | 装配期抛 `GITEE_POLICY_UNAVAILABLE`，不降级只读 |
 | 宿主 `tools` 服务 | 服务 | `engines.dsh: >=0.2.1-rc.2` | 装配期抛 `GITEE_HOST_UNAVAILABLE` |
-| 令牌环境变量 | 环境 | `authEnv` 默认空（不注入任何变量），需要时点名多个 | 缺令牌不拒绝：`ok:true`、`tokenSource:'none'`；只有 CLI 自报凭据不足才 `AUTH_MISSING`（零子进程判定） |
+| 令牌环境变量 | 环境 | `authEnv` 默认空（不注入任何变量），需要时点名多个 | 缺令牌不拒绝：`ok:true`、`tokenSource:'none'`；`AUTH_MISSING` 由子进程 401/403 归一，有子进程且可能已产生副作用 |
 
 ## 4. 扩展形态与边界
 
@@ -90,7 +90,7 @@
 | `cliPath` | string | `gh` | 否 | 可执行文件名/路径；拒绝 `scheme://`、控制字符与 `.cmd`/`.bat`/`.ps1`/`.com`/`.vbs` 包装脚本 |
 | `host` | string | 空（无默认） | 否 | 企业 Gitee 主机名（可带端口）；拒绝协议前缀、路径与 userinfo。r10 起**不再必填**；2026-11-04 起**仅用于诊断与企业域校验**——本 CLI 没有 `--host` 参数，主机实际取自它自己的 `~/.gitee-cli/config.json` 的 `base_url`，本包不拼进 argv 也不注入环境 |
 | `timeoutMs` | number | `20000` | 否 | 1000–600000 的整数；超时按"可能已执行"降级 `unknown` |
-| `authEnv` | string[] | `[]` | 否 | 最多 8 个变量名；按序取第一个有值项。为空即匿名读（`tokenSource: 'none'`，**不阻断**） |
+| `authEnv` | string[] | `[]` | 否 | 最多 8 个变量名；按序取第一个有值项。为空只表示本插件不注入变量：`GITEE_TOKEN` 仍在子进程环境白名单内，`gh` 还会查系统凭据库；`tokenSource: 'none'` 是客户端观测值，不等于未认证（**不阻断**） |
 | `persistentToken` | `'warn' \| 'block'` | `'warn'` | 否 | CLI 配置目录含持久令牌时的策略：`warn` 只提示并从执行环境剥离，`block` 才拒绝执行（合规场景保留） |
 
 `validateGiteeConfig()` 是补丁层、宿主 `ConfigStandard` 与 `resolveGiteeConfig()` 的唯一口径：未知键拒绝、非法值按未配置处理并进 `missing`（不静默放行）。`missing` 只收"提供了但非法"的键——r10 之后**空配置是合法状态**：`preflight()` 返回 `{ok: true, provider: 'gitee', tokenSource: 'none', mayHaveSideEffect: false}`，读若因未鉴权被服务端拒绝，如实降级为 `AUTH_MISSING`/`failed`，而不是在客户端假装"没令牌也能读"。`describeGiteeConfig()` 只输出枚举、数字与变量名，路径只留文件名。
@@ -149,10 +149,10 @@
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
-| 访问令牌 | 只从环境变量注入（`authEnv` 名单，按序取首个有值项）；不写 CLI 配置文件 | 随调用 | 名单为空即匿名读（`tokenSource: 'none'`，**不阻断**）；服务端拒绝时如实降级 `AUTH_MISSING`，零子进程 |
+| 访问令牌 | 优先由 `gh` 从系统凭据库读取；`authEnv` 名单按序取首个有值项，只作兜底注入；本包不写 CLI 配置文件 | 随调用 | 名单为空只表示不注入；`gh` 仍查系统凭据库。服务端拒绝时如实降级 `AUTH_MISSING`（有子进程，可能已产生副作用） |
 | 命令与参数 | 审计记录动作、目标与结论；令牌与绝对路径不留 | 90 天（策略侧口径） | 不影响执行（审计舱缺失时策略按 `POLICY_*` 拒绝，见补丁层注释） |
 | 查询结果 | 会话内使用；输出按令牌值脱敏后再返回 | 单次 | 失败即降级为信封，丢弃部分结果 |
-| CLI 配置目录 | 装配期探测持久令牌；默认**告警**并从执行环境剥离，`persistentToken: 'block'` 才阻断（`GITEE_PERSISTENT_TOKEN`，`denied`） | 每次装配 | 告警后照常执行；`block` 模式拒绝并提示清理后改用环境变量 |
+| CLI 配置目录 | 装配期探测持久令牌；默认**告警**并从执行环境剥离，`persistentToken: 'block'` 才阻断（`GITEE_PERSISTENT_TOKEN`，`denied`） | 每次装配 | 告警后照常执行；`block` 模式拒绝并提示删除明文令牌后改用 `gh auth login` |
 | 幂等台账 | 进程内 `Map`（TTL 6 小时），**不落盘** | 进程生命周期 | 跨进程不复用，避免误判"已建单" |
 
 `gh` 习惯把令牌写进自己的配置目录。r10 起默认不再因此拒绝执行（企业里该文件常常只读且没有可用环境变量，阻断会把"本来能用的环境"变成不可用）：默认 `warn` 只提示并从执行环境剥离令牌，合规场景把 `persistentToken` 设为 `block` 恢复硬拒绝。
@@ -173,9 +173,11 @@ flowchart LR
   B -->|否| C[不存在该工具]
   B -->|是| D{策略目录已登记且启用}
   D -->|否| E[denied: unregistered/disabled]
-  D -->|是| F{持久令牌/凭据齐全}
-  F -->|否| G[denied: persistent/API auth missing]
-  F -->|是| H{argv 白名单与禁项}
+  D -->|是| F{持久令牌且策略 block}
+  F -->|是| G[denied: GITEE_PERSISTENT_TOKEN]
+  F -->|否| P{preflight 其他项}
+  P -->|不满足| Q[failed: SPAWN_FAILED 等]
+  P -->|通过| H{argv 白名单与禁项}
   H -->|否| I[failed: ARG_/FORBIDDEN_]
   H -->|是| J[唯一出口 execFile, shell:false, 超时, 1MiB]
   J --> K{退出码与输出}
@@ -195,8 +197,8 @@ flowchart LR
 | 场景 | 行为 | 用户可见结果 | 是否可重试 |
 |---|---|---|---|
 | CLI 未安装/起不来 | `preflight()` 失败，`SPAWN_FAILED` | 明确报错（不含绝对路径） | 安装后重试 |
-| 令牌缺失或过期 | 拒绝，零子进程 | `AUTH_MISSING` + `missing` 清单 | 配好环境变量后重试 |
-| CLI 配置目录含持久令牌 | 阻断 | `GITEE_PERSISTENT_TOKEN`（`denied`） | 清理后重试 |
+| 令牌缺失或过期 | 照常执行，由 `gh` 与服务端裁决 | `AUTH_MISSING`（服务端 401/403）或 CLI 非零退出 | 终端运行 `gh auth login`；无桌面凭据库或 CI 才用 `authEnv` |
+| CLI 配置目录含持久令牌 | 默认 `warn` 照常执行；`persistentToken: 'block'` 才阻断 | `GITEE_PERSISTENT_TOKEN`（`denied`，仅 block） | 删除明文令牌后运行 `gh auth login` |
 | 主机不是企业地址 | 拒绝 | `HOST_NOT_ENTERPRISE` | 修配置后重试 |
 | 动作未登记（默认写） | 拒绝，适配器 0 调用 | `denied` + `rule: unregistered-action` | 范围批准后追加目录 |
 | 参数越界/禁项 | 拒绝，零子进程 | `ARG_NOT_WHITELISTED`/`FORBIDDEN_ARGV` | 改成白名单内调用 |

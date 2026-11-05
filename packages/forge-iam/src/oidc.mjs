@@ -317,6 +317,7 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
   const jwksUri = config.jwksUri || document.jwks_uri;
   const revocationEndpoint = config.revocationEndpoint || document.revocation_endpoint;
   const endSessionEndpoint = config.endSessionEndpoint || document.end_session_endpoint;
+  const userInfoEndpoint = config.userInfoEndpoint || document.userinfo_endpoint;
 
   requireString(issuer, 'issuer');
   requireString(authorizationEndpoint, 'authorizationEndpoint');
@@ -332,6 +333,9 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
   const logoutUrl = endSessionEndpoint
     ? assertSafeEndpoint(endSessionEndpoint, 'endSessionEndpoint', allowInsecureHttp)
     : undefined;
+  const userInfoUrl = userInfoEndpoint
+    ? assertSafeEndpoint(userInfoEndpoint, 'userInfoEndpoint', allowInsecureHttp)
+    : undefined;
 
   return {
     issuer,
@@ -340,6 +344,7 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
     jwksUri: jwksUrl.href,
     revocationEndpoint: revokeUrl?.href,
     endSessionEndpoint: logoutUrl?.href,
+    userInfoEndpoint: userInfoUrl?.href,
   };
 }
 
@@ -408,6 +413,58 @@ export async function refreshTokens({ tokenEndpoint, refreshToken, clientId, res
 export async function revokeToken({ revocationEndpoint, token, tokenTypeHint = 'refresh_token', clientId, fetchImpl, timeoutMs, signal, clientAuthentication }) {
   const form = new URLSearchParams({ token, token_type_hint: tokenTypeHint });
   return postForm(revocationEndpoint, form, { clientId, clientAuthentication, fetchImpl, timeoutMs, signal, ignoreBody: true });
+}
+
+/**
+ * Revoke one access token through the provider's token-as-credential endpoint
+ * (D1, 2026-11-04): `GET <revocationEndpoint>?access_token=…`, no client
+ * authentication, idempotent. Returns a three-way state instead of throwing so
+ * sign-out can report "revoked", "failed" or "unconfirmed" without inventing a
+ * success. The token stays in the query string, so no caller may log the URL.
+ *
+ * @returns {Promise<{state: 'ok'|'failed'|'unknown', code?: string}>}
+ */
+export async function revokeAccessToken({ revocationEndpoint, accessToken, fetchImpl = globalThis.fetch, timeoutMs = 5000, signal }) {
+  if (typeof fetchImpl !== 'function') return { state: 'unknown', code: 'IAM_HTTP_UNAVAILABLE' };
+  if (typeof accessToken !== 'string' || accessToken.length === 0) {
+    return { state: 'failed', code: 'IAM_REVOKE_TOKEN_MISSING' };
+  }
+  let endpoint;
+  try {
+    endpoint = new URL(revocationEndpoint);
+    endpoint.searchParams.set('access_token', accessToken);
+  } catch {
+    return { state: 'failed', code: 'IAM_REVOKE_ENDPOINT_INVALID' };
+  }
+  const signals = [AbortSignal.timeout(timeoutMs)];
+  if (signal) signals.push(signal);
+  let response;
+  try {
+    response = await fetchImpl(endpoint.href, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      redirect: 'error',
+      signal: AbortSignal.any(signals),
+    });
+  } catch {
+    return { state: 'unknown', code: 'IAM_REVOKE_UNREACHABLE' };
+  }
+  let payload = null;
+  try { payload = await response.json(); } catch { payload = null; }
+  if (!response.ok) {
+    return {
+      state: response.status >= 500 || response.status === 429 ? 'unknown' : 'failed',
+      code: `IAM_REVOKE_HTTP_${response.status}`,
+    };
+  }
+  if (payload?.result === true) return { state: 'ok' };
+  if (payload?.result === false) {
+    // 2002 means the token is already unusable; revocation is idempotent.
+    return payload.errcode === 2002
+      ? { state: 'ok', code: 'IAM_REVOKE_ALREADY_INVALID' }
+      : { state: 'failed', code: 'IAM_REVOKE_REJECTED' };
+  }
+  return { state: 'unknown', code: 'IAM_REVOKE_UNCONFIRMED' };
 }
 
 export function safeStateEqual(expected, received) {

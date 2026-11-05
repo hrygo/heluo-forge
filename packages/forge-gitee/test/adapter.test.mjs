@@ -839,12 +839,14 @@ test('失败信息脱敏：stderr 里的令牌不回到消息与 detail（AC-22�
   assert.ok(!JSON.stringify(error.detail).includes(TOKEN_VALUE));
 });
 
-test('服务端拒绝凭据 → AUTH_MISSING（不再笼统报命令失败），文案指向 authEnv', async () => {
+test('服务端拒绝凭据 → AUTH_MISSING（不再笼统报命令失败），文案指向 gh auth login', async () => {
   const runner = fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'HTTP 401 Unauthorized' }));
   const adapter = createGiteeAdapter({ runner, env: EMPTY_ENV });
   const error = await assertRejectedAsync(() => adapter.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.AUTH_MISSING);
   assert.match(error.message, /401/);
+  assert.match(error.message, /gh auth login/);
   assert.match(error.message, /authEnv/);
+  assert.doesNotMatch(error.message, /必须在 authEnv 点名变量/);
   assert.equal(error.detail.mayHaveSideEffect, true);
 });
 
@@ -887,6 +889,8 @@ test('preflight 零子进程：缺令牌仍可读、落盘凭据按策略告警�
   const blockedResult = blocked.preflight();
   assert.equal(blockedResult.ok, false);
   assert.equal(blockedResult.reason, ADAPTER_REASONS.GITEE_PERSISTENT_TOKEN);
+  assert.match(blockedResult.message, /gh auth login/);
+  assert.doesNotMatch(blockedResult.message, /改用环境变量注入/);
   assert.equal(runner.calls.length, 0, 'preflight 永不起子进程');
 });
 
@@ -993,4 +997,23 @@ test('仓库标识允许嵌套命名空间：实测企业仓库是三级（osc/a
     () => assertArgv('repositoryView', { target: 'a/b/c/d/e/f/g/h/i' }),
     (error) => error.code === ADAPTER_REASONS.ARG_INVALID,
   );
+});
+
+test('两处凭据失败文案都指向 gh auth login，不再要求必须在 authEnv 点名变量', async () => {
+  const blocked = createGiteeAdapter({
+    runner: fakeRunner(),
+    env: EMPTY_ENV,
+    persistentTokenProbe: () => true,
+    persistentTokenPolicy: 'block',
+  }).preflight();
+  assert.match(blocked.message, /gh auth login/);
+  assert.doesNotMatch(blocked.message, /必须在 authEnv|改用环境变量注入/);
+
+  const runner = fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'HTTP 403 Forbidden' }));
+  const error = await assertRejectedAsync(
+    () => createGiteeAdapter({ runner, env: EMPTY_ENV }).read('gitee.issue.read', ISSUE_TARGET, {}),
+    ADAPTER_REASONS.AUTH_MISSING,
+  );
+  assert.match(error.message, /gh auth login/);
+  assert.doesNotMatch(error.message, /必须在 authEnv|改用环境变量注入/);
 });

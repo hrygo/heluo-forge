@@ -31,14 +31,14 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 ## 配置
 
-五个扁平键，全部可选，来自补丁层的 `config:`（本轮不做配置页）。配置里没有存令牌的字段——凭据由本包经环境变量注入（本 CLI 自己还可以走系统凭据管理器，那不经过本包）；**空配置也是合法状态**。
+五个扁平键，全部可选，来自补丁层的 `config:`（本轮不做配置页）。配置里没有存令牌的字段——凭据主路径是 `gh` 自己的系统凭据库（服务名 `gitee-cli-go`），先在终端运行一次 `gh auth login`；`authEnv` 只是无桌面凭据库或 CI 的兜底注入通道。**空配置也是合法状态**。
 
 | 键 | 默认 | 约束 | 说明 |
 |---|---|---|---|
 | `cliPath` | `gh` | 可执行文件名/路径；拒绝 `scheme://`、控制字符、`.cmd`/`.bat`/`.ps1`/`.com`/`.vbs` 包装脚本 | 企业已确认 CLI 名为 `gh`；配置值只决定"起哪个程序"，不改变命令面 |
 | `host` | 空（无默认） | 主机名（可带端口），拒绝协议前缀、路径与 userinfo | r10 起**不必填**：不配即不做企业域断言；配了非企业主机仍以 `HOST_NOT_ENTERPRISE` 拒绝。**只用于诊断与企业域校验**：它不是 CLI 参数也不是环境变量，CLI 的主机来自它自己的 `~/.gitee-cli/config.json` 的 `base_url`（规格 §1.1/§1.5） |
 | `timeoutMs` | `20000` | `1000`–`600000` 的整数 | 单次 CLI 调用超时；超时按"可能已执行"降级 `unknown`，不重放 |
-| `authEnv` | `[]` | 最多 8 个变量名（`[A-Za-z_][A-Za-z0-9_]*`） | 额外凭据变量名清单。不点名时 `preflight()` 返回 `tokenSource: 'none'`；本 CLI 自己的 `GITEE_TOKEN` 是子进程白名单里的**唯一**凭据例外、不点名也会继承，其它凭据变量仍只经这里显式注入；服务端拒绝时如实降级 `AUTH_MISSING`，不阻断装配 |
+| `authEnv` | `[]` | 最多 8 个变量名（`[A-Za-z_][A-Za-z0-9_]*`） | 兜底凭据变量名清单。不点名时 `preflight()` 返回 `tokenSource: 'none'`，这**不代表未认证**：`gh` 仍会查系统凭据库；`GITEE_TOKEN` 是子进程白名单里的唯一凭据例外、不点名也会继承，其它凭据变量仍只经这里显式注入。服务端 401/403 时如实降级 `AUTH_MISSING`（有子进程），不阻断装配 |
 | `persistentToken` | `'warn'` | `'warn'` \| `'block'` | CLI 配置目录含持久令牌时的策略：候选含 `~/.gitee-cli/config.json`（JSON 里 `token` 非空即命中）与 `gh` 兼容的 `hosts.yml` 等；`warn` 只提示，`block` 才拒绝执行（合规场景保留） |
 
 `describeGiteeConfig()` 只输出枚举、数字与环境变量**名**（路径只留文件名），返回值里不存在令牌值；`validateGiteeConfig()` 是补丁层、宿主 `ConfigStandard` 与 `resolve` 的唯一口径，未知键直接拒绝，`missing` 只收"提供了但非法"的键。
@@ -86,7 +86,7 @@ argv 按 2026-11-03 实测的规格 `docs/contracts/gh-cli-spec.md` 逐条对齐
 - 策略是硬依赖：`policy` 服务缺失、或三个 `gitee.*` 只读动作未登记/未启用，`apply()` 直接抛可读错误（`GITEE_POLICY_UNAVAILABLE` / `GITEE_ACTION_UNREGISTERED`，`missing` 列全），**不降级成"无策略只读"**。判定与 git push 不在这一断言内：缺 `gitee.delivery.judge`/`gitee.git.push` 时挂载照常成功，只有对应工具降级为 `denied`（读动作的 fail-closed 不因它们放宽）。
 - 补丁层预置 **6 条 `kind: read` 目录（本包 3 读 + 1 只读判定 + 2 条 devops 的变更读 `change.read`/`change.list`，与 devops 补丁层逐字相同）、0 条 write**：`gitee.delivery.judge` 随包登记，`target` 逐字 `change`，`egress: 'allow'` 是**必需项**而非风格——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 会被编译成默认 `confirm`，无审批台账时判定永远拿不到 `done`。五个受控写（`gitee.issue.write`/`gitee.pr.write`/`gitee.review.publish`/`gitee.review.record`/`gitee.git.push`）靠"不登记"实现默认禁用，而不是运行期开关；要开写须由所属 profile 显式追加动作（写/确认类还需审批台账条目）。`gitee.git.push` 进 `CONFIRM_REQUIRED_ACTIONS`：登记后还要 `confirm{repo,object}` 逐字匹配。第 5、6 条 `change.read`/`change.list` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**——目录是并集，装谁都不缺自己那条。
 - 审计舱用内存 sink（`allowNonDurable: true`），属**联调/试点级**证据，记录随进程退出丢失；生产须注入持久 sink 并去掉该开关。
-- 凭据只从环境变量来：本 CLI 只认 `GITEE_TOKEN` 或系统凭据管理器（keyring service `gitee-cli-go`，规格 §1.3），所以 `GITEE_TOKEN` 是子进程环境白名单里的**唯一**凭据例外、不点名 `authEnv` 也会继承；其它凭据变量仍只经 `authEnv` 显式注入，配置里没有存令牌的字段。CLI 配置目录存在持久令牌时默认**告警**（`persistentToken: 'block'` 才以 `GITEE_PERSISTENT_TOKEN` 拒绝、零子进程），自检覆盖 `~/.gitee-cli/config.json` 与 `gh` 兼容的 `hosts.yml` 等布局，结果只回文件名与下一步、不回显令牌值；子进程输出按令牌值脱敏后再返回。
+- 凭据主路径是 `gh` 的系统凭据库（keyring service `gitee-cli-go`，规格 §1.3）：用户在终端运行一次 `gh auth login`，插件不代跑、不代填 `-t`（会进 `ps` 与命令审计）。`GITEE_TOKEN` 是子进程环境白名单里的**唯一**凭据例外、不点名 `authEnv` 也会继承；其它凭据变量仍只经 `authEnv` 显式注入，配置里没有存令牌的字段。`authEnv` 只用于无桌面凭据库或 CI。CLI 配置目录存在持久令牌时默认**告警**（`persistentToken: 'block'` 才以 `GITEE_PERSISTENT_TOKEN` 拒绝、零子进程），自检覆盖 `~/.gitee-cli/config.json` 与 `gh` 兼容的 `hosts.yml` 等布局，结果只回文件名与下一步、不回显令牌值；子进程输出按令牌值脱敏后再返回。
 - 唯一的子进程出口是 `src/gitee-cli.mjs`：`execFile` + `shell: false` + 超时 + 单流 1 MiB 上限；`run()` 发 gitee CLI，`runGit()` 发本机 git（只叠加 `GIT_TERMINAL_PROMPT=0` 与 `cwd`），共用同一套白名单/超时/截断/脱敏，入参只接受 `{bin|args, purpose, cwd}` 这几键，没有"把整条命令当字符串"的通道。
 
 ## 共存形态（与 `@heluo/forge-devops`）

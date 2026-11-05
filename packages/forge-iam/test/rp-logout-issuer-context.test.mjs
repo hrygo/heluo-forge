@@ -78,14 +78,15 @@ async function fixture(t, { discoveredIssuer = issuerA, discoveryFails = false,
         });
       }
       for (const [issuer, endpoint] of [[issuerA, 'revoke-a'], [issuerB, 'revoke-b']]) {
-        if (target === `${issuer}/revoke`) {
-          const form = new URLSearchParams(init.body);
+        if (target.startsWith(`${issuer}/revoke`)) {
+          const parsed = new URL(target);
           // Assertion output contains only flags, never URL query strings or tokens.
           requests.push({ endpoint, method: init.method,
-            tokenMatches: form.get('token') === refreshToken,
-            clientMatches: form.get('client_id') === clientId,
-            hintMatches: form.get('token_type_hint') === 'refresh_token' });
-          return new Response(null, { status: 200 });
+            tokenMatches: parsed.searchParams.get('access_token') === 'synthetic-access',
+            clientMatches: parsed.searchParams.has('client_id'),
+            hintMatches: parsed.searchParams.has('token_type_hint'),
+            authorization: init.headers?.authorization ?? null });
+          return Response.json({ result: true });
         }
       }
       throw new Error('unexpected injected mock request');
@@ -145,7 +146,8 @@ for (const redirect of [undefined, 'https://app.corp.example/signed-out']) {
     assert.equal(f.requests.filter((request) => request.endpoint === 'revoke-a').length, 1);
     assert.equal(f.requests.filter((request) => request.endpoint === 'revoke-b').length, 0);
     const revoke = f.requests.find((request) => request.endpoint === 'revoke-a');
-    assert.equal(revoke.method === 'POST' && revoke.tokenMatches && revoke.clientMatches && revoke.hintMatches, true);
+    assert.equal(revoke.method === 'GET' && revoke.tokenMatches && revoke.authorization === null
+      && revoke.clientMatches === false && revoke.hintMatches === false, true);
   });
 }
 

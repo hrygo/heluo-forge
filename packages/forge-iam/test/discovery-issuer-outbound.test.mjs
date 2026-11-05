@@ -41,11 +41,14 @@ async function fixture(t, discoveredIssuer, overrides = {}, discoveryFails = fal
   const requests = [];
   const fetch = async (url, init = {}) => {
     const target = String(url);
+    const parsed = new URL(target);
     const form = new URLSearchParams(init.body);
     // Keep only synthetic-token equality flags, never token values in assertion output.
     requests.push({
       url: target, method: init.method ?? 'GET', clientId: form.get('client_id'),
       grantType: form.get('grant_type'), tokenTypeHint: form.get('token_type_hint'),
+      authorization: init.headers?.authorization ?? null,
+      accessTokenMatches: parsed.searchParams.get('access_token') === initial.payload.accessToken,
       oldRefresh: form.get('refresh_token') === initial.payload.refreshToken
         || form.get('token') === initial.payload.refreshToken,
     });
@@ -60,6 +63,7 @@ async function fixture(t, discoveredIssuer, overrides = {}, discoveryFails = fal
       access_token: 'synthetic-new-access', refresh_token: 'synthetic-rotated-refresh',
       token_type: 'Bearer', expires_in: 3600,
     });
+    if (target.startsWith(`${discoveredIssuer}/revoke`) && init.method === 'GET') return Response.json({ result: true });
     if (target === `${discoveredIssuer}/revoke` && init.method === 'POST') return new Response(null, { status: 200 });
     throw new Error('unexpected injected mock request');
   };
@@ -153,20 +157,22 @@ test('discovery-only matching issuer refresh accepts a rotated refresh token aft
   });
 });
 
-test('discovery-only matching issuer signOut accepts empty 200 revocation and clears the grant', async (t) => {
+test('discovery-only matching issuer signOut revokes the access token with a GET and clears the grant', async (t) => {
   const f = await fixture(t, issuerA);
   const result = await f.service.signOut();
-  const [request] = posts(f, issuerA, 'revoke');
+  const [request] = f.requests.filter((entry) => entry.url.startsWith(`${issuerA}/revoke`));
   assert.deepEqual({
     discoveryLoaded: discoveryLoaded(f),
+    revocationGets: f.requests.filter((entry) => entry.url.startsWith(`${issuerA}/revoke`)).length,
     revocationPosts: posts(f, issuerA, 'revoke').length,
-    correctForm: request?.oldRefresh && request.clientId === config.clientId && request.tokenTypeHint === 'refresh_token',
+    correctForm: request?.method === 'GET' && request.accessTokenMatches === true
+      && request.authorization === null && request.clientId === null && request.tokenTypeHint === null,
     revocation: result.revocation,
     grantCleared: (await f.store.read()).grant === null,
     state: result.view.state,
     error: result.view.error,
   }, {
-    discoveryLoaded: true, revocationPosts: 1, correctForm: true,
+    discoveryLoaded: true, revocationGets: 1, revocationPosts: 0, correctForm: true,
     revocation: 'ok', grantCleared: true, state: 'signed-out', error: null,
   });
 });

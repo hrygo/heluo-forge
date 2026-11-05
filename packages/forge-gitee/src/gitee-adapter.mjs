@@ -895,7 +895,7 @@ export function createGiteeAdapter({
         ...base,
         ok: false,
         reason: ADAPTER_REASONS.GITEE_PERSISTENT_TOKEN,
-        message: '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请改用环境变量注入后重启',
+        message: '检测到 CLI 配置目录存在持久令牌：当前策略为 block，已停止执行；请删除该明文令牌，然后在终端运行 gh auth login 存入系统凭据库',
         tokenSource: tokens.length === 0 ? 'none' : 'env',
       });
     }
@@ -903,8 +903,8 @@ export function createGiteeAdapter({
       // 缺令牌是提示不是拒绝：命令照常发，受限仓库由 CLI 自己的非零退出说明原因。
       // 落盘凭据（warn）同时存在时也要说出来，否则告警会被"无凭据"掩盖。
       const noTokenGuide = authNames.length === 0
-        ? '未配置凭据变量（authEnv 为空）：只读命令照常执行，受限仓库会由 CLI 的非零退出说明'
-        : `未在环境里找到 ${authNames.join('|')}：只读命令照常执行，受限仓库会由 CLI 的非零退出说明`;
+        ? '本进程未注入凭据变量：gh 会自行查系统凭据库，未登录时由 CLI 的非零退出说明；只读命令照常执行'
+        : `未在环境里找到 ${authNames.join('|')}：gh 仍会查系统凭据库，只读命令照常执行，受限仓库由 CLI 的非零退出说明`;
       return Object.freeze({
         ...base,
         ok: true,
@@ -961,7 +961,7 @@ export function createGiteeAdapter({
       const code = unsupported
         ? ADAPTER_REASONS.UNSUPPORTED_FIELD
         : (spawned ? (authRefused ? ADAPTER_REASONS.AUTH_MISSING : ADAPTER_REASONS.NONZERO_EXIT) : ADAPTER_REASONS.SPAWN_FAILED);
-      const hint = authRefused ? '（服务端拒绝了当前凭据：私有仓库请在 authEnv 点名令牌变量后重启）' : '';
+      const hint = authRefused ? '（服务端拒绝了当前凭据：请在终端运行 gh auth login 重新登录；无桌面凭据库或 CI 环境才用 authEnv 注入）' : '';
       fail(
         code,
         `${label} 失败（${spawned ? `退出码 ${outcome.exitCode}` : '未启动'}）${line === '' ? '' : `：${line}`}${hint}`,

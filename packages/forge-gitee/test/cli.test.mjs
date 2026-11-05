@@ -399,7 +399,7 @@ test('detectPersistentToken：~/.gitee-cli/config.json 的 token 也被检出（
   assert.equal(result.blocked, true, '只扫 YAML 会让这个令牌永远检测不到');
   assert.equal(result.reason, 'GITEE_PERSISTENT_TOKEN');
   assert.deepEqual(result.files, [giteeConfig], '只回文件名');
-  assert.match(result.next_action, /环境变量/);
+  assert.match(result.next_action, /gh auth login/);
   assert.equal(JSON.stringify(result).includes(TOKEN_VALUE), false, 'AC-22：不回显令牌值');
 
   // `"token": ""` 等于"没设置"（规格 §1.5 只存被显式 set 过的键）：不能当成命中。
@@ -454,7 +454,7 @@ test('detectPersistentToken：命中落盘令牌时只报文件名与下一步�
   assert.equal(result.blocked, true);
   assert.equal(result.reason, 'GITEE_PERSISTENT_TOKEN');
   assert.deepEqual(result.files, [`${HOME_FIXTURE}/.config/gh/hosts.yml`]);
-  assert.match(result.next_action, /环境变量/);
+  assert.match(result.next_action, /gh auth login/);
   assert.equal(JSON.stringify(result).includes(TOKEN_VALUE), false, 'AC-22：不回显令牌值');
 });
 
@@ -497,7 +497,7 @@ test('落盘令牌 + block 策略：run()/runGit() 都抛 GITEE_PERSISTENT_TOKEN
         assert.equal(error.reason, 'GITEE_PERSISTENT_TOKEN');
         assert.equal(error.status, 'denied');
         assert.equal(error.detail.policy, 'block');
-        assert.match(error.message, /环境变量/);
+        assert.match(error.message, /gh auth login/);
         assert.equal(JSON.stringify(error.detail).includes(OTHER_TOKEN), false);
         assert.equal(error.message.includes(OTHER_TOKEN), false);
         return true;

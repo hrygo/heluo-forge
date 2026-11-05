@@ -9,6 +9,7 @@ import { isAccessExpired, isRefreshUsable, shouldRefresh, summarizeGrant } from 
 import { createView, transition } from './state.mjs';
 import { inspectReadonlyModelSelection, readonlyModelResult } from './model-selection-host.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
+import { fetchUserInfo, normalizeProfileFields, projectUserInfo } from './userinfo.mjs';
 import {
   OidcError,
   buildAuthorizationUrl,
@@ -19,6 +20,7 @@ import {
   parseCallbackUrl,
   randomToken,
   refreshTokens,
+  revokeAccessToken,
   revokeToken,
   safeStateEqual,
   verifyIdToken,
@@ -68,6 +70,8 @@ export function createIamService(rawConfig, options = {}) {
   let exclusive = options.exclusive ?? { ok: true };
   const now = options.now ?? (() => Date.now());
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  // Empty by default: IAM has not confirmed field names, so no name is shown.
+  const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
   let store = null;
   let storeCredentials = null;
   let storeError = null;
@@ -163,6 +167,7 @@ export function createIamService(rawConfig, options = {}) {
   let lastGrant = null;
   // Non-secret provenance/pin and the last authenticated session identity only.
   let sessionAuthentication = null;
+  let identityProfile;
   let refreshPromiseAuthentication = null;
   // A weak association prevents a discarded cached grant retaining its provider.
   const grantOwners = new WeakMap();
@@ -356,6 +361,28 @@ export function createIamService(rawConfig, options = {}) {
     });
     metadataCache = { value, loadedAt: current };
     return value;
+  }
+
+  async function loadIdentityProfile(grant) {
+    if (Object.keys(profileFields).length === 0) return;
+    identityProfile = undefined;
+    const epoch = authEpoch;
+    try {
+      const meta = metadataCache?.value ?? await metadata();
+      const endpoint = meta?.userInfoEndpoint;
+      if (!endpoint) return;
+      const raw = await fetchUserInfo({
+        userInfoEndpoint: endpoint,
+        accessToken: grant.accessToken,
+        fetchImpl,
+        timeoutMs: Math.min(config.httpTimeoutMs, 5000),
+      });
+      if (disposed || authEpoch !== epoch || lastGrant !== grant) return;
+      identityProfile = projectUserInfo(raw, profileFields);
+    } catch {
+      // UserInfo is enrichment only: login stays successful without it.
+      identityProfile = undefined;
+    }
   }
 
   async function jwks(uri) {
@@ -1072,6 +1099,11 @@ export function createIamService(rawConfig, options = {}) {
       return { issuer: lastGrant.issuer, subject: lastGrant.subject };
     },
 
+    /** Projected UserInfo for future display; empty until IAM confirms fields. */
+    getIdentityProfile() {
+      return identityProfile ? { ...identityProfile } : undefined;
+    },
+
     async startSignIn() {
       assertExclusive();
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
@@ -1329,6 +1361,8 @@ export function createIamService(rawConfig, options = {}) {
         assertAtomic(current.targetStore, current.credentials);
         if (!isCurrent()) throw interrupted();
         rememberAuthentication(authentication, grant);
+        await loadIdentityProfile(grant);
+        if (!isCurrent()) throw interrupted();
         clearAttempt();
         publish('SIGN_IN_SUCCESS');
         adoptConsumption(consumption, grant);
@@ -1419,7 +1453,6 @@ export function createIamService(rawConfig, options = {}) {
       if (refreshPromise) await refreshPromise.catch(() => {});
       checkDisposed();
       let grant = null;
-      const previouslyAuthenticated = sessionAuthentication;
       const targetStore = ensureStore();
       const targetCredentials = storeCredentials;
       checkDisposed();
@@ -1465,40 +1498,31 @@ export function createIamService(rawConfig, options = {}) {
       expectedIssuer = meta?.issuer || expectedIssuer;
       try { assertGrantContext(grant, expectedIssuer); } catch { return unknownSignOut(); }
       checkDisposed();
-      let logoutAuthentication;
-      if (config.authMode === 'confidential' && grant) {
-        try {
-          logoutAuthentication = await prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant, guard: () => { checkDisposed(); assertAtomic(targetStore, targetCredentials); } });
-        } catch (cause) {
-          if (!previouslyAuthenticated || previouslyAuthenticated.credentials !== targetCredentials
-            || !isDeepStrictEqual(previouslyAuthenticated.identity, grantIdentity(grant))) return unknownSignOut();
-          revocation = 'unknown';
-          revocationError = tokenErrorMessage(cause);
-        }
+      // A locally authenticated session must not clear a grant that another
+      // process replaced; the check needs no client secret.
+      if (sessionAuthentication && grant
+        && (sessionAuthentication.credentials !== targetCredentials
+          || !isDeepStrictEqual(sessionAuthentication.identity, grantIdentity(grant)))) {
+        return unknownSignOut();
       }
+      // D1 (2026-11-04): revoke the local access token with a GET that carries
+      // the token itself and no client authentication. A missing client secret
+      // must not stop sign-out, and the refresh token cannot be revoked here.
       const revokeCurrent = async (current) => {
         checkDisposed();
         assertAtomic(targetStore, targetCredentials);
         checkDisposed();
         assertGrantContext(current, expectedIssuer);
         grant = current;
-        if (revocationEndpoint && current?.refreshToken && (config.authMode !== 'confidential' || logoutAuthentication)) {
-          try {
-            await revokeToken({
-              revocationEndpoint,
-              token: current.refreshToken,
-              clientAuthentication: logoutAuthentication,
-              tokenTypeHint: 'refresh_token',
-              clientId: config.clientId,
-              fetchImpl,
-              timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
-            });
-            assertClientAuthCurrent(logoutAuthentication);
-            revocation = 'ok';
-          } catch (cause) {
-            revocation = config.authMode === 'confidential' && cause?.code?.startsWith('IAM_CLIENT_AUTH_') ? 'unknown' : 'failed';
-            revocationError = tokenErrorMessage(cause);
-          }
+        if (revocationEndpoint && current?.accessToken) {
+          const outcome = await revokeAccessToken({
+            revocationEndpoint,
+            accessToken: current.accessToken,
+            fetchImpl,
+            timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
+          });
+          revocation = outcome.state;
+          if (outcome.code) revocationError = outcome.code;
         }
       };
       try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
@@ -1541,7 +1565,10 @@ export function createIamService(rawConfig, options = {}) {
       try { assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
       checkDisposed();
       sessionAuthentication = null;
-      const nextError = revocation === 'failed' || revocation === 'unknown' ? 'IAM_REVOCATION_FAILED' : null;
+      identityProfile = undefined;
+      // Three states stay distinct: confirmed, rejected, and unconfirmed.
+      const nextError = revocation === 'failed' ? 'IAM_REVOCATION_FAILED'
+        : revocation === 'unknown' ? 'IAM_REVOCATION_UNKNOWN' : null;
       if (state !== 'unconfigured' && state !== 'signed-out') {
         publish('SIGN_OUT', nextError);
       } else {
@@ -1966,6 +1993,7 @@ export function createIamService(rawConfig, options = {}) {
       stopWaiters.clear();
       lastGrant = null;
       sessionAuthentication = null;
+      identityProfile = undefined;
       gatewaySummary = null;
       state = 'signed-out';
       error = null;

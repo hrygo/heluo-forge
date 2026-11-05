@@ -211,7 +211,7 @@ Host 为登录尝试生成 state、nonce 和 PKCE S256；授权码只兑换一�
 
 ### 退出与卸载
 
-显式退出先使本实例登录尝试失效。对受信存储，退出读取完整 grant 快照，核验可用 metadata 的 issuer，再在同记录锁内比较且拒绝 pending/替换记录，尽力撤销该 refresh token，写固定逻辑墓碑并核对回执。配置未显式 issuer 时，单独配置撤销地址不能代替发行者绑定；须先解析当前 discovery，issuer 不匹配或无法取得该上下文时保留持久 grant、报告 unknown，不向另一 issuer 发送旧 RT。撤销 HTTP 请求最多 5 秒，不表示整个退出 I/O 有界。
+显式退出先使本实例登录尝试失效。对受信存储，退出读取完整 grant 快照，核验可用 metadata 的 issuer，再在同记录锁内比较且拒绝 pending/替换记录，按 D1 以 `GET <revocationEndpoint>?access_token=…` 撤销访问令牌（不带客户端认证），写固定逻辑墓碑并核对回执。回执三态：`result=true` 或 `result=false`+`errcode=2002` 记 ok，明确拒绝记 failed，超时/5xx/无法解析记 unknown。刷新令牌不随之撤销，只能自然过期；登录换票失败后的 RFC 7009 POST 清理是另一条路径，不用于退出。配置未显式 issuer 时，单独配置撤销地址不能代替发行者绑定；须先解析当前 discovery，issuer 不匹配或无法取得该上下文时保留持久 grant、报告 unknown。撤销 HTTP 请求最多 5 秒，不表示整个退出 I/O 有界。
 
 未验证 provider 的退出不修改持久记录、不发撤销请求，只清运行时会话并报告 `IAM_CREDENTIALS_CLEAR_FAILED`、`revocation: 'unknown'`；重启仍可能恢复。存储异常、mutator 未执行、提交/回执不确定均不报告成功。撤销失败不回滚已完成的本地逻辑清理；撤销成功响应也不证明当前授权及所有刷新后代被撤销。用户侧三类结果见[退出说明](<user-guide.md#退出的三类结果>)。
 
