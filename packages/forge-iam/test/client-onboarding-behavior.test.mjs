@@ -96,3 +96,35 @@ test('a pending credential save cannot be repeated or skipped', async (t) => {
   await Promise.all([saving, duplicate]);
   assert.match(panel.text(panel.render()), /准备就绪/);
 });
+
+test('onboarding clears stale authorization link on timeout and returns from step 2 to step 1 on session loss', async (t) => {
+  let polledView = { state: 'signed-out', canSignIn: true };
+  const panel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/view') return Response.json(polledView);
+    if (path === '/api/forge-iam/sign-in') {
+      return Response.json({
+        view: { state: 'authenticating', canSignIn: false },
+        authorizationUrl: 'https://idp.corp.example/authorize?state=1',
+      });
+    }
+    throw new Error(`unexpected request: ${path}`);
+  }, { componentId: 'forge-iam-onboarding' });
+  t.after(() => panel.close());
+  const button = (name) => panel.findButton(panel.render(), name);
+  button('开始').props.onClick();
+  await button('登录').props.onClick();
+  assert.match(panel.text(panel.render()), /点此继续登录/);
+
+  polledView = { state: 'error', error: 'IAM_ATTEMPT_EXPIRED', canSignIn: true };
+  await panel.tick();
+  assert.doesNotMatch(panel.text(panel.render()), /点此继续登录/);
+
+  polledView = ready;
+  await panel.tick();
+  assert.match(panel.text(panel.render()), /添加 UAG 个人凭证/);
+
+  polledView = { state: 'signed-out', canSignIn: true };
+  await panel.tick();
+  assert.match(panel.text(panel.render()), /登录企业账号/);
+  assert.match(panel.text(panel.render()), /登录状态已变化，请重新登录企业账号/);
+});

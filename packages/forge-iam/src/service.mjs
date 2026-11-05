@@ -251,7 +251,9 @@ export function createIamService(rawConfig, options = {}) {
       modelAccess: { ...(options.getManagedModelRuntime?.()?.getView() ?? { managed: true, state: 'unconfigured', models: [] }),
         configured: Boolean(gatewaySummary?.baseURL || config.managedModels?.baseURL),
         baseURL: gatewaySummary?.baseURL ?? config.managedModels?.baseURL ?? '',
-        ...((state !== 'ready' && !(state === 'expired' && lastGrant && isRefreshUsable(lastGrant, now()))) || gatewaySummary?.matchesAccount !== true ? { models: [] } : {}) },
+        ...((state !== 'ready' && !(state === 'expired' && lastGrant && isRefreshUsable(lastGrant, now()))) || gatewaySummary?.state !== 'configured' || gatewaySummary?.matchesAccount !== true
+          ? { state: 'unconfigured', error: null, defaultModelId: null, enabled: [], models: [], modelOptions: {} }
+          : {}) },
     });
   }
 
@@ -538,7 +540,7 @@ export function createIamService(rawConfig, options = {}) {
     if (!configured || !exclusive.ok) return view();
     // A user-triggered sign-in owns the state machine until its callback,
     // cancellation, or timeout; a background hydration must not clobber it.
-    if (state === 'authenticating') return view();
+    if (state === 'authenticating' || signInPromise) return view();
     // Only an error created by this instance observing pending can recover.
     const observation = state === 'error' ? observedPending : null;
     if (state === 'error' && (!observation || error !== 'IAM_REAUTH_REQUIRED'
@@ -554,7 +556,7 @@ export function createIamService(rawConfig, options = {}) {
       && syncPublications === publication && lastGrant === expectedGrant
       && (observation ? state === 'error' && error === 'IAM_REAUTH_REQUIRED'
         && observedPending === observation && now() < observation.deadline
-        : state !== 'authenticating' && state !== 'error');
+        : state !== 'authenticating' && state !== 'error' && !signInPromise);
     const published = () => {
       publication = ++syncPublications;
       expectedGrant = lastGrant;
@@ -1185,6 +1187,8 @@ export function createIamService(rawConfig, options = {}) {
       assertClientAuthCurrent(authentication);
       if (disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
       if (authEpoch !== startEpoch || signingOut) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+      if (state === 'ready') return { view: view(), authorizationUrl: null };
+      if (!transition(state, 'SIGN_IN').ok) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
       const oauthState = randomToken(32);
       const nonce = randomToken(32);
       const pkce = createPkce();

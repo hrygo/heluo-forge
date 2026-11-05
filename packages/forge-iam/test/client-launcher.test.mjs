@@ -70,3 +70,35 @@ test('launcher displays principal in wide mode and distinguishes owner-mismatch 
   assert.match(text, /E90210/);
   assert.match(text, /凭据账号不匹配/);
 });
+
+test('launcher closes open menu and resets sign-out confirmation when session transitions away from ready', async t => {
+  const { mountPanel } = await import('./support/client-panel.mjs');
+  let currentView = {
+    state: 'ready',
+    configured: true,
+    signedIn: true,
+    principal: 'E90210',
+    gatewayCredential: { state: 'configured' },
+    modelAccess: { state: 'ready', models: [{ id: 'corp-chat' }] },
+  };
+  const panel = await mountPanel(async () => Response.json(currentView), {
+    componentId: 'forge-iam-launcher',
+    componentProps: { wide: true },
+  });
+  t.after(() => panel.close());
+  const find = (node, predicate) => {
+    if (!node || typeof node !== 'object') return undefined;
+    if (predicate(node)) return node;
+    for (const child of node.children ?? []) { const found = find(child, predicate); if (found) return found; }
+  };
+  find(panel.render(), node => node.type === 'button' && node.props.className === 'fiam-launcher-btn').props.onClick({ stopPropagation() {} });
+  let menu = find(panel.render(), node => node.type?.name === 'IamLauncherMenu');
+  assert.ok(menu);
+  await menu.props.onSignOut({ stopPropagation() {} });
+  menu = find(panel.render(), node => node.type?.name === 'IamLauncherMenu');
+  assert.equal(menu.props.confirmSignOut, true);
+
+  currentView = { state: 'signed-out', configured: true, signedIn: false, gatewayCredential: { state: 'unconfigured' } };
+  await panel.tick();
+  assert.equal(find(panel.render(), node => node.type?.name === 'IamLauncherMenu'), undefined);
+});
