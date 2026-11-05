@@ -1699,7 +1699,8 @@ export function createIamService(rawConfig, options = {}) {
       const rejectSession = (code = 'IAM_REAUTH_REQUIRED') => {
         // A late failure belongs to its original provider, not a newer session.
         const current = ensureStore();
-        if (alive() && current === targetStore && storeCredentials === targetCredentials
+        if (!(code === 'IAM_NOT_SIGNED_IN' && state === 'signed-out')
+          && alive() && current === targetStore && storeCredentials === targetCredentials
           && (!lastGrant || lastGrant === grantAtStart
             || (operationGrant && sameGrantIgnoringRefreshMarker(lastGrant, operationGrant)))) {
           observedPending = null;

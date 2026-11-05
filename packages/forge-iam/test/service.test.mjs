@@ -143,6 +143,8 @@ test('token resolution without a grant fails closed', async () => {
     () => service.resolveToken(),
     (error) => error.code === 'IAM_NOT_SIGNED_IN',
   );
+  assert.equal(service.getView().state, 'signed-out');
+  assert.equal(service.getView().error, null);
 });
 
 test('sign-out from signed-out is a no-op; cancel outside an attempt is a no-op', async () => {
@@ -670,4 +672,27 @@ test('a revoked credentials provider stops serving gateway state', async () => {
   await service.loadGatewayCredential({ force: true });
   view = service.getView();
   assert.equal(view.gatewayCredential, null);
+});
+
+
+test('management routes use scoped connection and callback origin from injected host', async () => {
+  const ctx = fakeContext();
+  const registered = new Map();
+  let checked = 0;
+  const connection = { requestRejection() { checked++; return undefined; } };
+  const webServer = { getOrigin: () => 'http://127.0.0.1:23456', register(route) { registered.set(route.path, route.handler); return () => registered.delete(route.path); } };
+  ctx.inject = (deps, callback) => {
+    if (deps.includes('webServer')) return callback({ webServer, connection, inject(names, handler) { return names.includes('connection') ? handler({ connection }) : () => {}; } });
+    if (deps.includes('connection')) return callback({ connection });
+    return () => {};
+  };
+  const dispose = apply(ctx, { ...configured, redirectUri: undefined });
+  const handler = registered.get('/api/forge-iam');
+  assert.ok(handler);
+  let body = ''; const response = { setHeader() {}, end(value) { body = value; } };
+  await handler({ url: '/api/forge-iam/view', method: 'GET', headers: {} }, response);
+  assert.equal(response.statusCode, 200);
+  assert.ok(checked > 0);
+  assert.equal(JSON.parse(body).state, 'signed-out');
+  await dispose();
 });

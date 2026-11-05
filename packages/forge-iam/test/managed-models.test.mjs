@@ -436,3 +436,11 @@ test('syncDefaultModel explicitly triggers default alignment and safeGet retriev
   await f.runtime.syncDefaultModel();
   assert.equal(alignedTarget, 'enterprise:alpha');
 });
+
+test('a new model selection epoch keeps the active gateway usable for new calls', async t => {
+  const f = fixture(); t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  f.iam.getModelAccessEpoch = () => 'new-selection';
+  const prepared = await f.adapter.prepareCall(options.provider, options.model);
+  const result = await chunks(prepared.stream(options));
+  assert.equal(result[0].text, 'ok');
+});
