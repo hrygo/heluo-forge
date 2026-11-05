@@ -34,7 +34,7 @@ export {
   pickDefaultModel,
 };
 
-const MESSAGES = Object.freeze({
+export const MESSAGES = Object.freeze({
   IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
   ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
   IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
@@ -42,7 +42,7 @@ const MESSAGES = Object.freeze({
   ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
   ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
   IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
-  ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人凭证，请在“设置 → 企业账号”检查或更换凭证。',
+  ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
   ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
   ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',
   ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
@@ -583,7 +583,7 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
   }
   const piProvider = {
     id: provider, name: '企业模型', baseUrl: baseURL,
-    auth: { apiKey: { name: '企业个人凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
+    auth: { apiKey: { name: '企业个人访问凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
     getModels: () => catalog, stream: (...args) => protocol.stream(...args), streamSimple: (...args) => protocol.streamSimple(...args)
   };
   const profiles = new Map([[provider, {

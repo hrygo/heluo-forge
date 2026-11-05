@@ -981,7 +981,7 @@ export function createIamService(rawConfig, options = {}) {
         }
         assertExclusive();
         if (ensureStore() !== targetStore || gatewayStore !== targetGatewayStore || storeCredentials !== targetCredentials) {
-          throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法读取个人凭证。');
+          throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法读取个人访问凭证。');
         }
       };
       check();

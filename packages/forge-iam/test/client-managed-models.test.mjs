@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { mountPanel } from './support/client-panel.mjs';
 import { buildThinkingLevelMap } from '../src/model-options.mjs';
+import { MESSAGES } from '../src/managed-models.mjs';
 
 const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
@@ -521,7 +522,7 @@ test('joint journey and state transitions update credential notice, journey bar,
 
   keyInput.props.onChange({ target: { value: 'uag-00000000000000000000000000000000' } });
   await panel.findButton(panel.render(), '保存凭据').props.onClick();
-  assert.match(panel.text(panel.render()), /网关地址和个人 Key 已保存，正在获取模型列表/);
+  assert.match(panel.text(panel.render()), /网关地址和个人访问凭证已保存，正在获取模型列表/);
   assert.match(panel.text(panel.render()), /同步中…/);
 
   polledView = {
@@ -536,7 +537,7 @@ test('joint journey and state transitions update credential notice, journey bar,
     },
   };
   await panel.tick();
-  assert.match(panel.text(panel.render()), /网关地址和个人 Key 已保存，模型目录已同步/);
+  assert.match(panel.text(panel.render()), /网关地址和个人访问凭证已保存，模型目录已同步/);
   assert.match(panel.text(panel.render()), /已启用 1\/1/);
 });
 
@@ -649,10 +650,30 @@ test('a cached catalogue is scoped to one person and gateway', async t => {
   assert.doesNotMatch(text, /model-of-a/);
 });
 
+test('model-access errors say the same thing here as on the host turn surface', async t => {
+  const codes = [
+    'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED', 'ENTERPRISE_GATEWAY_FORBIDDEN', 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+    'ENTERPRISE_GATEWAY_UNAVAILABLE', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED', 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
+    'ENTERPRISE_MODEL_CATALOG_INVALID', 'ENTERPRISE_MODELS_UNAVAILABLE', 'ENTERPRISE_MODEL_NOT_ALLOWED',
+    'IAM_MODEL_CONTEXT_CHANGED',
+  ];
+  for (const code of codes) {
+    const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
+    const panel = await mountPanel(async path => {
+      if (path === '/api/forge-iam/view') return Response.json(failed);
+      if (path === '/api/forge-iam/models') return Response.json({ models: [], view: failed });
+      throw new Error(`unexpected synthetic request: ${path}`);
+    });
+    t.after(() => panel.close());
+    assert.ok(MESSAGES[code], `${code} must have a host message`);
+    assert.ok(panel.text(panel.render()).includes(MESSAGES[code]), `${code} must repeat the host message in the panel`);
+  }
+});
+
 test('a rejected request and an unsupported level are explained where they surface', async t => {
   for (const [code, text] of [
     ['ENTERPRISE_GATEWAY_REQUEST_REJECTED', /网关拒绝了本次请求/],
-    ['ENTERPRISE_MODEL_REASONING_UNSUPPORTED', /不支持所选思考级别/],
+    ['ENTERPRISE_MODEL_REASONING_UNSUPPORTED', /推理档位不受支持/],
   ]) {
     const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
     const panel = await mountPanel(async path => {
@@ -690,7 +711,7 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
   // The journey step and the card call it the same thing.
   assert.match(text, /目录待刷新/);
   // The reason is explained once, not twice.
-  assert.equal(text.split('暂时无法获取企业模型').length - 1, 1);
+  assert.equal(text.split('暂时无法连接企业模型').length - 1, 1);
 
   // In-notice retry button triggers models refresh immediately without scrolling to bottom
   const retryBtn = panel.findButton(panel.render(), '立即重试');
