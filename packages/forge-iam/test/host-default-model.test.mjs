@@ -225,3 +225,41 @@ test('a transient gateway outage at start-up heals with bounded retries; a rejec
   assert.equal(rejected, 1);
   assert.equal(g.runtime.getView().error, 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
 });
+
+test('a rejected credential keeps the catalogue but closes the model surface', async t => {
+  let calls = 0;
+  const f = runtimeFixture({
+    hostSelection: { provider: 'enterprise', model: 'alpha' },
+    fetch: async () => (calls++ === 0
+      ? new Response(JSON.stringify({ data: [{ id: 'alpha' }] }))
+      : new Response('', { status: 401 })),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await f.runtime.refresh().catch(() => { });
+  const view = f.runtime.getView();
+  assert.equal(view.error, 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
+  // The list is display state: it survives the rejection …
+  assert.deepEqual(view.models.map(model => model.id), ['alpha']);
+  assert.equal(view.stale, true);
+  // … but the surface is closed, so a call cannot reach the gateway again.
+  assert.deepEqual(await f.listModels('enterprise'), []);
+});
+
+test('a transient failure keeps the model surface open', async t => {
+  let calls = 0;
+  const f = runtimeFixture({
+    hostSelection: { provider: 'enterprise', model: 'alpha' },
+    fetch: async () => (calls++ === 0
+      ? new Response(JSON.stringify({ data: [{ id: 'alpha' }] }))
+      : new Response('', { status: 503 })),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await f.runtime.refresh().catch(() => { });
+  const view = f.runtime.getView();
+  assert.equal(view.state, 'error');
+  assert.equal(view.stale, true);
+  // A discovery blip must not disconnect a working adapter.
+  assert.deepEqual((await f.listModels('enterprise')).map(model => model.id), ['alpha']);
+});

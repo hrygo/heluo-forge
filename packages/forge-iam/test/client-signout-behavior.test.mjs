@@ -94,7 +94,7 @@ for (const [state, label] of [
   test(`account page reports credential state ${state} without guessing`, async (t) => {
     const panel = await mountPanel(async () => Response.json({ ...ready, gatewayCredential: { state } }));
     t.after(() => panel.close());
-    assert.ok(panel.text(panel.render()).includes(`模型访问凭证：${label}`));
+    assert.ok(panel.text(panel.render()).includes(`个人访问凭证：${label}`));
   });
 }
 
@@ -109,7 +109,7 @@ test('a poll during sign-out cannot restore ready or start a duplicate sign-out'
   });
   t.after(() => { post.resolve(Response.json({ view: failed }, { status: 503 })); panel.close(); });
   let tree = panel.render();
-  assert.match(panel.text(tree), /模型访问凭证：已保存/);
+  assert.match(panel.text(tree), /个人访问凭证：已保存/);
   const button = panel.findButton(tree, '退出');
   assert.ok(button);
   const first = button.props.onClick();
@@ -118,8 +118,8 @@ test('a poll during sign-out cannot restore ready or start a duplicate sign-out'
   await panel.tick();
   tree = panel.render();
   assert.doesNotMatch(panel.text(tree), /已登录|synthetic-user/);
-  assert.match(panel.text(tree), /模型访问凭证：状态未知/);
-  assert.doesNotMatch(panel.text(tree), /模型访问凭证：未保存/);
+  assert.match(panel.text(tree), /个人访问凭证：状态未知/);
+  assert.doesNotMatch(panel.text(tree), /个人访问凭证：未保存/);
   assert.equal(panel.findButton(tree, '刷新').props.disabled, true);
   assert.equal(panel.findButton(tree, '保存凭据').props.disabled, true);
   post.resolve(Response.json({ view: failed, error: { code: 'IAM_CREDENTIALS_CLEAR_FAILED' } }, { status: 503 }));

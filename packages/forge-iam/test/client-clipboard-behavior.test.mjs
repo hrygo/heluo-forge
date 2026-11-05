@@ -45,7 +45,7 @@ test('diagnostic is a fixed scalar projection and excludes all private fields an
     principal: secret, issuer: secret, clientId: secret, resource: secret, accessExpiresAt: secret,
     authorizationUrl: secret, accessToken: secret, refreshToken: secret, idToken: secret,
     gatewayConsoleUrl: secret, missing: [secret, secret], gatewayCredential: { state: 'configured', deviceLabel: secret, ownerSubject: secret, storage: secret }, extra: secret } });
-  const input = nodes(f.render()).find((node) => node.props['aria-label'] === '模型访问凭证');
+  const input = nodes(f.render()).find((node) => node.props['aria-label'] === '个人访问凭证');
   input.props.onChange({ target: { value: secret } });
   const before = f.requests.length;
   assert.equal(f.button('复制问题信息').props.type, 'button');

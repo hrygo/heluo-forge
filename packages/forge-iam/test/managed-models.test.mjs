@@ -531,25 +531,6 @@ test('a transient failure keeps the last catalogue and advertises its retry', as
   assert.ok(Number.isFinite(stale.retryAt));
 });
 
-test('a manual refresh ignores the retry backoff', async t => {
-  let offline = true;
-  const f = fixture({
-    fetch: async () => {
-      if (offline) throw new Error('offline');
-      return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
-    },
-  });
-  t.after(() => f.runtime.dispose());
-  await f.runtime.ready;
-  assert.equal(f.runtime.getView().state, 'error');
-  offline = false;
-  const started = Date.now();
-  await f.runtime.refresh({ manual: true });
-  assert.equal(f.runtime.getView().state, 'ready');
-  // A person pressing refresh must not wait for the pending 2s first backoff.
-  assert.ok(Date.now() - started < 1000);
-});
-
 test('an expired session keeps the catalogue for the same person and gateway', async t => {
   const f = fixture();
   t.after(() => f.runtime.dispose());

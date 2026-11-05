@@ -38,7 +38,7 @@ const MESSAGES = Object.freeze({
   IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
   ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
   IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
-  IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的模型访问凭证。',
+  IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
   ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
   ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
   IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
@@ -276,9 +276,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     }
   }
 
-  async function refresh({ manual = false } = {}) {
-    // A person pressing refresh must not wait for the transient-failure backoff.
-    if (manual) { retryAttempt = 0; cancelRetry(); }
+  async function refresh() {
     const denied = permit(sample());
     if (disposed || denied) throw error(denied ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
     if (flight?.version === version) return flight.promise;
@@ -332,6 +330,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const code = Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
       if (mine === version && !disposed) {
         markFailed(code);
+        // A failure we will never retry must not leave the old adapter reachable:
+        // keep the list for display, but make every call fail fast with this code
+        // instead of reaching the gateway once per message.
+        if (!RETRYABLE.has(code)) backend = undefined;
         // Advertise the retry time before the frame that carries it.
         scheduleRetry(code);
         publish();
