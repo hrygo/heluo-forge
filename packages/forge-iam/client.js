@@ -1602,6 +1602,7 @@ window.__ModuleLoader__.load({
       if (code === 'ENTERPRISE_MODEL_CATALOG_INVALID') return '网关返回的模型列表无法识别，请检查网关地址。';
       if (code === 'ENTERPRISE_GATEWAY_UNAVAILABLE' || code === 'ENTERPRISE_MODELS_UNAVAILABLE') return '暂时无法获取企业模型，请检查网关地址或稍后重试。';
       if (code === 'ENTERPRISE_GATEWAY_REQUEST_REJECTED') return '网关拒绝了本次请求，请检查模型参数后重试。';
+      if (code === 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED') return '当前模型不支持所选思考级别，请重新选择。';
       if (code === 'IAM_LOGIN_REQUIRED' || code === 'IAM_MODEL_CONTEXT_CHANGED') return '账号状态已变化，请重新登录后再试。';
       if (code === 'IAM_GATEWAY_OWNER_MISSING') return '请先登录企业账号，再添加个人凭证。';
       if (code === 'IAM_GATEWAY_ATOMIC_UNVERIFIED') return '暂时无法安全地保存或清除凭证，请联系管理员。';

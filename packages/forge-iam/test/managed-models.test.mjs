@@ -225,6 +225,18 @@ test('a rejected request is not reported as an unreachable gateway', async t => 
   }
 });
 
+test('an unsupported reasoning level names the level instead of the network', async t => {
+  const f = fixture({
+    createAdapter: async () => ({
+      async *stream() { throw Object.assign(new Error('private-body'), { code: 'UNSUPPORTED_REASONING_EFFORT' }); }
+    })
+  });
+  t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  const result = await chunks(f.adapter.stream(options));
+  assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED');
+  assert.equal(JSON.stringify(result).includes('private-body'), false);
+});
+
 function credentialURL() {
   const url = new URL('https://gateway.corp.example/v1');
   url.username = 'synthetic-user'; url.password = 'synthetic-password';
