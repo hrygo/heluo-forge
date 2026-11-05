@@ -146,9 +146,12 @@ export function buildThinkingLevelMap(reasoningEfforts) {
   let hasEnabled = false;
   for (const level of THINKING_LEVELS) {
     const val = normalizedEfforts[level];
-    if (typeof val === 'string' && val.trim()) {
+    // "off" has no OpenAI-compatible wire value: a request means it by omitting
+    // reasoning_effort, and pi-ai forwards thinkingLevelMap.off whenever no level is
+    // named, so a string here would send `reasoning_effort: "off"` and draw a 400.
+    if (level !== 'off' && typeof val === 'string' && val.trim()) {
       map[level] = val.trim();
-      if (level !== 'off') hasEnabled = true;
+      hasEnabled = true;
     } else {
       map[level] = null;
     }
