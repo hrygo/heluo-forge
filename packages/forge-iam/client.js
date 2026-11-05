@@ -29,6 +29,9 @@ window.__ModuleLoader__.load({
       background: 'var(--dsw-alias-button-primary-fill)', color: 'var(--dsw-alias-label-primary-foreground)',
     };
     const fieldLabel = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, fontSize: 13 };
+    // 界面常量不随数据变化，模块级直接引用；不作为渲染入参传递。
+    const muted = { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' };
+    const button = secondaryButton;
     // §2 样式表（全部 CSS 走 interactionStyles）
     const interactionStyles = `
       .forge-iam-ui {
@@ -1841,7 +1844,7 @@ window.__ModuleLoader__.load({
     function renderAccountCard(ctx) {
       const {
         h, view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink,
-        state, primaryButton, button, copy,
+        state, copy,
         login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity,
       } = ctx;
       const ui = deriveSessionUi(view);
@@ -1899,7 +1902,7 @@ window.__ModuleLoader__.load({
     function renderGatewayCard(ctx) {
       const {
         h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
-        credential, setCredential, fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
+        credential, setCredential,
         saveCredential, clearCredential, viewBarrier,
       } = ctx;
       const gatewayUi = deriveGatewayUi(gateway);
@@ -2021,24 +2024,10 @@ window.__ModuleLoader__.load({
         h, model, idx, isExpanded, opt, modelOptions, toggleModelExpand, updateOptionField,
         resetModelOption, disableModelOption, enableModelOption, enableModelWithDefaults,
         saveModelOptions,
-        modelSaving, viewBarrier, view, fieldLabel, inputStyle, primaryButton, secondaryButton, muted,
+        modelSaving, viewBarrier, view,
       } = ctx;
 
-      function renderHelpTip(text, ariaLabel) {
-        return h('span', { className: 'fiam-help-wrap' },
-          h('button', {
-            type: 'button',
-            className: 'fiam-help-btn',
-            'aria-label': ariaLabel || text,
-            title: text,
-            onClick: (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            },
-          }, '?'),
-          h('span', { className: 'fiam-help-popover', role: 'tooltip' }, text)
-        );
-      }
+
 
       const displayName = opt.name || model.name || model.id;
       const defaultContextStr = formatCapacity(model.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
@@ -2430,6 +2419,23 @@ window.__ModuleLoader__.load({
       return document.scrollingElement || document.documentElement || (typeof window !== 'undefined' ? window : null);
     }
 
+    // §12.5 帮助提示：与具体条目无关，提到文件级只定义一次。
+    function renderHelpTip(text, ariaLabel) {
+      return h('span', { className: 'fiam-help-wrap' },
+        h('button', {
+          type: 'button',
+          className: 'fiam-help-btn',
+          'aria-label': ariaLabel || text,
+          title: text,
+          onClick: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          },
+        }, '?'),
+        h('span', { className: 'fiam-help-popover', role: 'tooltip' }, text)
+      );
+    }
+
     // §13 模型卡
     function renderModelsCard(ctx) {
       const {
@@ -2673,7 +2679,6 @@ window.__ModuleLoader__.load({
                   resetModelOption, disableModelOption, enableModelOption, enableModelWithDefaults,
                   saveModelOptions,
                   modelSaving, viewBarrier, view,
-                  fieldLabel, inputStyle, primaryButton, secondaryButton, muted,
                 });
               }))
           )
@@ -3290,8 +3295,6 @@ window.__ModuleLoader__.load({
       // The signed-in Host owns the selection, including an explicitly empty
       // set. A browser cache must never restore another account's old choices.
       const box = { padding: '0 0 24px', maxWidth: 720, width: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
-      const button = secondaryButton;
-      const muted = { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' };
       const header = h('div', { style: { marginBottom: 16 } },
         h('div', { style: { font: 'var(--dsw-font-m-18)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '企业账号'),
         h('div', { style: { ...muted, marginTop: 4 } }, '管理企业账号和个人访问凭证'),
@@ -3382,8 +3385,8 @@ window.__ModuleLoader__.load({
       });
 
       const accountCard = renderAccountCard({
-        h, view, label, muted, principal, expiry, missing, exclusive, hostError, notice, loginLink,
-        state, primaryButton, secondaryButton, button, copy: session.copy, copyTools,
+        h, view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink,
+        state, copy: session.copy, copyTools,
         login: session.login, cancelLogin: session.cancelLogin, load: session.load, signOut: session.signOut,
         copyLink: session.copyLink, copyDiagnostic: session.copyDiagnostic, isViewCurrent: session.isViewCurrent,
         viewBarrier, linkIdentity: session.linkIdentity,
@@ -3392,13 +3395,11 @@ window.__ModuleLoader__.load({
       const gatewayCard = renderGatewayCard({
         h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
         credential: form.credential, setCredential: form.setCredential,
-        fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
         saveCredential: form.save, clearCredential: form.clear, viewBarrier,
       });
 
       const modelsCard = renderModelsCard({
         h, view, refreshModels: form.refresh, credential: form.credential, viewBarrier, gateway,
-        fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
         catalogue,
       });
 
@@ -3851,7 +3852,7 @@ window.__ModuleLoader__.load({
 
     // §16.2 引导步骤详情
     function renderOnboardingStepDetail(ctx) {
-      const { h, state, setState, fieldLabel, inputStyle } = ctx;
+      const { h, state, setState } = ctx;
       if (state.step === 0) {
         return h('div', { className: 'fiam-onboarding-preview' },
           h('div', { className: 'fiam-onboarding-preview-row' },
@@ -4214,7 +4215,7 @@ window.__ModuleLoader__.load({
           ),
           h('h2', { style: { margin: '0 0 10px', font: 'var(--dsw-font-l-20)' } }, step.title),
           h('p', { style: { margin: 0, color: 'var(--dsw-alias-label-secondary)', maxWidth: '42em' } }, step.body),
-          renderOnboardingStepDetail({ h, state, setState, fieldLabel, inputStyle }),
+          renderOnboardingStepDetail({ h, state, setState }),
           state.notice ? h('p', { role: 'status', 'aria-live': 'polite', style: { margin: '12px 0 0', color: 'var(--dsw-alias-state-warn-primary)' } }, state.notice) : null,
           state.authorizationUrl ? h('p', { style: { marginTop: 10 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 } },
