@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -22,4 +24,21 @@ test('host probe: target DSH honours the documented tool-pipeline semantics with
   assert.equal(run.status, 0, `host probe failed (exit ${run.status}):\n${output}`);
   assert.match(output, /\d+\/\d+ checks passed/, 'host probe must report a check summary');
   assert.doesNotMatch(output, /^FAIL /m, 'no host probe check may fail');
+});
+
+test('host probe: ignores unrelated DSH_HOME profile patches', { skip }, () => {
+  const home = mkdtempSync(join(tmpdir(), 'forge-host-probe-home-'));
+  try {
+    const profileDir = join(home, 'profiles', 'sdk');
+    mkdirSync(profileDir, { recursive: true });
+    writeFileSync(join(profileDir, 'cordis.patch.yml'), '- insert:\n    - id: unrelated-broken-plugin\n      name: definitely-not-an-installed-plugin\n');
+    const env = { ...process.env, DSH_HOME: home };
+    const dump = spawnSync(dsh, ['--profile', 'sdk', '--dump-config'], { encoding: 'utf8', env });
+    assert.match(dump.stdout, /unrelated-broken-plugin/, 'fixture must actually pollute the host profile');
+    const run = spawnSync(process.execPath, [runner], { encoding: 'utf8', timeout: 300_000, env });
+    assert.equal(run.status, 0, `probe must not inherit the unrelated profile:\n${run.stdout}\n${run.stderr}`);
+    assert.match(run.stdout, /\d+\/\d+ checks passed/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
