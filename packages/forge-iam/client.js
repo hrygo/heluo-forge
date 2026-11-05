@@ -315,22 +315,23 @@ window.__ModuleLoader__.load({
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 9px 12px;
+        padding: 10px 14px;
         gap: 12px;
-        min-height: 48px;
+        min-height: 52px;
       }
       .fiam-model-info {
         display: flex;
         flex-direction: column;
         gap: 5px;
         min-width: 0;
-        flex: 1;
+        flex: 1 1 auto;
       }
       .fiam-model-header-line {
         display: flex;
         align-items: center;
         gap: 8px;
         min-width: 0;
+        flex-wrap: nowrap;
       }
       .fiam-model-dot {
         width: 8px;
@@ -353,13 +354,25 @@ window.__ModuleLoader__.load({
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 360px;
+        min-width: 0;
+        flex: 0 1 auto;
+        max-width: 320px;
+      }
+      .fiam-model-header-line .fiam-badge {
+        flex-shrink: 0;
+        white-space: nowrap;
       }
       .fiam-model-meta-line {
         display: flex;
         align-items: center;
         gap: 6px;
         flex-wrap: wrap;
+        min-width: 0;
+      }
+      .fiam-model-meta-line .fiam-badge,
+      .fiam-model-meta-line .fiam-model-id {
+        flex-shrink: 0;
+        white-space: nowrap;
       }
       .fiam-model-id {
         font-family: var(--ds-font-family-code, monospace);
@@ -371,7 +384,7 @@ window.__ModuleLoader__.load({
         line-height: 16px;
       }
       .fiam-model-advanced {
-        padding: 14px 16px;
+        padding: 12px 14px;
         border-top: 0.5px solid var(--dsw-alias-border-l2);
         background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-module-platform));
         display: flex;
@@ -612,14 +625,16 @@ window.__ModuleLoader__.load({
         flex-shrink: 0;
       }
       .fiam-capacity-presets {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex-wrap: wrap;
-        margin-top: 2px;
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 5px;
+        margin-top: 4px;
       }
       .fiam-preset-pill {
-        padding: 1px 7px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2px 2px;
         border-radius: var(--dsw-radius-xs, 4px);
         font-size: 11px;
         line-height: 16px;
@@ -628,6 +643,9 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-label-secondary);
         cursor: pointer;
         transition: all 0.12s ease;
+        white-space: nowrap;
+        min-width: 0;
+        text-align: center;
       }
       .fiam-preset-pill:hover {
         border-color: var(--dsw-alias-border-l2);
@@ -1629,7 +1647,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
                   h('span', { className: 'fiam-field-title' }, '上下文窗口 (Context Window)'),
                   h('span', { className: 'fiam-field-hint', style: contextInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
-                    contextInvalid ? '请输入正整数或 K/M 容量值（如 128K、200K、1M）' : '默认 200K；支持输入数字或 K/M，如 128K、200K、1M'),
+                    contextInvalid ? '请输入合法容量值（如 128K、200K、1M）' : '默认 200K，建议不高于模型内部上限'),
                 ),
                 h('input', {
                   type: 'text',
@@ -1647,8 +1665,9 @@ window.__ModuleLoader__.load({
                       type: 'button',
                       className: `fiam-preset-pill ${active ? 'fiam-preset-pill-active' : ''}`,
                       'aria-label': `上下文预设 ${preset} ${idx + 1}`,
+                      title: `预设上下文规格：${preset}${preset === defaultContextStr ? '（推荐默认）' : ''}`,
                       onClick: () => updateOptionField(model.id, 'contextWindow', preset === defaultContextStr ? undefined : preset),
-                    }, preset === '200K' ? '200K (默认)' : preset);
+                    }, preset);
                   })
                 ),
               ),
@@ -1656,7 +1675,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 } },
                   h('span', { className: 'fiam-field-title' }, '最大输出 Token (Max Tokens)'),
                   h('span', { className: 'fiam-field-hint', style: maxTokensInvalid ? { color: 'var(--dsw-alias-state-error-primary)', fontSize: 11 } : muted },
-                    maxTokensInvalid ? '请输入正整数或 K/M 容量值（如 8K、32K、64K）' : '默认 64K；留空使用默认上限，支持 8K、32K、64K、128K'),
+                    maxTokensInvalid ? '请输入合法容量值（如 16K、64K）' : '默认 64K，单次响应最大生成 Token'),
                 ),
                 h('input', {
                   type: 'text',
@@ -1674,8 +1693,9 @@ window.__ModuleLoader__.load({
                       type: 'button',
                       className: `fiam-preset-pill ${active ? 'fiam-preset-pill-active' : ''}`,
                       'aria-label': `输出上限预设 ${preset} ${idx + 1}`,
+                      title: `预设最大输出：${preset}${preset === defaultMaxTokensStr ? '（推荐默认）' : ''}`,
                       onClick: () => updateOptionField(model.id, 'maxTokens', preset === defaultMaxTokensStr ? undefined : preset),
-                    }, preset === '64K' ? '64K (默认)' : preset);
+                    }, preset);
                   })
                 ),
               ),

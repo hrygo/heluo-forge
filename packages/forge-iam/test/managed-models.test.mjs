@@ -409,3 +409,30 @@ test('a stale or disabled defaultModelId is re-assigned to an enabled catalog mo
   await f.runtime.ready;
   assert.equal(f.runtime.getView().defaultModelId, 'beta');
 });
+
+test('syncDefaultModel explicitly triggers default alignment and safeGet retrieves host property', async t => {
+  let alignedTarget = null;
+  const agentDefaultModel = {
+    currentSelection: () => ({ provider: 'deepseek-account', model: 'deepseek-chat' }),
+    saveSelection: async ({ provider, model }) => { alignedTarget = `${provider}:${model}`; },
+  };
+  const host = {
+    agentDefaultModel,
+    llm: {
+      registerAdapter() { return () => {}; },
+      listProviders: () => [{ id: 'enterprise', name: '企业模型' }],
+      listModels: async () => [{ provider: 'enterprise', id: 'alpha', name: 'alpha' }],
+    },
+    on(name, cb) { return () => {}; },
+    emit() {},
+  };
+  const f = fixture({
+    host,
+    fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }] })),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(typeof f.runtime.syncDefaultModel, 'function');
+  await f.runtime.syncDefaultModel();
+  assert.equal(alignedTarget, 'enterprise:alpha');
+});

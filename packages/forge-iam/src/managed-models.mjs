@@ -106,7 +106,7 @@ async function discover(connection, signal, fetcher, headers) {
 /** Gateway outages at start-up (network not up yet) heal without a click; credential or catalogue errors need a person. */
 const RETRYABLE = new Set(['ENTERPRISE_GATEWAY_UNAVAILABLE', 'ENTERPRISE_GATEWAY_RATE_LIMIT']);
 const RETRY_DELAYS = Object.freeze([2000, 5000, 15000, 30000, 60000]);
-const safeGet = (host, name) => { try { return host.get?.(name); } catch { return undefined; } };
+const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name); } catch { return undefined; } };
 
 /**
  * Own an adapter and the public stream waterfall. Host methods are never
@@ -424,6 +424,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
 
   return {
     ready, refresh,
+    syncDefaultModel: () => syncHostDefault(),
     updateModelOptions(nextOptions = {}) {
       // Serialise saves: two quick clicks must not interleave their writes.
       const run = optionsChain.then(() => applyOptions(nextOptions));

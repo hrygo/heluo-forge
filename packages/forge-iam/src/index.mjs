@@ -79,6 +79,9 @@ export function apply(ctx, rawConfig = {}) {
     if (tornDown) return;
     tornDown = true;
     modelServices = undefined;
+    agentDefaultModelService = undefined;
+    if (typeof offAgentDefaultModel === 'function') offAgentDefaultModel();
+    else offAgentDefaultModel?.dispose?.();
     if (typeof offManagedModels === 'function') await offManagedModels();
     else await offManagedModels?.dispose?.();
     await service.dispose();
@@ -93,13 +96,46 @@ export function apply(ctx, rawConfig = {}) {
   let offWebServer;
   let offModelServices;
   let offManagedModels;
+  let offAgentDefaultModel;
+  let agentDefaultModelService;
 
   ctx.effect(() => {
     disposeProvide = ctx.provide('iam', service);
     if (typeof ctx.inject === 'function') {
+      try {
+        offAgentDefaultModel = ctx.inject(['agentDefaultModel'], (agentHost) => {
+          if (tornDown) return;
+          agentDefaultModelService = agentHost.agentDefaultModel;
+          if (managedRuntime?.syncDefaultModel) {
+            void managedRuntime.syncDefaultModel().catch(() => {});
+          }
+          return () => {
+            if (agentDefaultModelService === agentHost.agentDefaultModel) agentDefaultModelService = undefined;
+          };
+        });
+      } catch {
+        // agentDefaultModel is optional in reduced host environments
+      }
       offManagedModels = ctx.inject(['llm'], (host) => {
         if (tornDown) return;
-        const runtime = createManagedModelRuntime({ host, iam: service, config: result.value });
+        const getHostDefaultModel = () => {
+          try {
+            return agentDefaultModelService
+              ?? host?.agentDefaultModel
+              ?? ctx?.agentDefaultModel
+              ?? modelServices?.agentDefaultModel
+              ?? host?.get?.('agentDefaultModel')
+              ?? ctx?.get?.('agentDefaultModel');
+          } catch {
+            return undefined;
+          }
+        };
+        const runtime = createManagedModelRuntime({
+          host,
+          iam: service,
+          config: result.value,
+          getHostDefaultModel,
+        });
         managedRuntime = runtime;
         const release = async () => { if (managedRuntime === runtime) managedRuntime = undefined; await runtime.dispose(); };
         host.effect(() => release, 'forge-iam-managed-models');
