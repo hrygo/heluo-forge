@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-009 |
 | 文档名称 | SDD 退出实施计划 |
-| 版本 | V0.2.0 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 项目负责人（Agent 代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
-| 门禁 | 待用户授权实施；退役前完成调用方盘点与回退演练 |
+| 最后更新 | 2026-11-05 |
+| 门禁 | 方案 A 已授权；步骤 1／2／4 已执行，制品演练与发布／回退待另行授权 |
 
 > 编制依据：用户 2026-11-03 最终确认的[需求基线 §2.3](../requirements/requirements-baseline.md#23-issue-交付模型与受控研发目标需求已确认)、[Issue 交付调整方案](../requirements/issue-delivery-adjustment-proposal.md)（V1.0.0 生效）及[SDD 兼容与退役设计](../design/plugins/forge-sdd.md)（DESIGN-008，V0.6.0）。2026-11-03 在本机对仓库、包清单、CI 工作流与已安装 profile 作静态核对，并复跑 `packages/forge-sdd` 用例 27 例；未做企业 CI、真实安装或外部 caller 取证。
 

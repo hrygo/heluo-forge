@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.63.6 |
+| 版本 | V1.63.7 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,14 +19,14 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.6 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.39.3 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.37.5 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.7 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.40.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.38.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.1 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.21.1 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
-| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.5.3 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.6.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V0.4.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-007 | 企业插件市场（轻量原生索引模式） | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V2.2.3 | 评审稿 | 平台组（代拟） | G1 索引接入；G2 三目标安装 |
@@ -60,7 +60,7 @@
 | CORP-DSH-PLAN-006 | IAM 机密客户端隔离开发实施计划 | [plans/2026-11-02-iam-confidential-isolated.md](<plans/2026-11-02-iam-confidential-isolated.md>) | V0.2.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；真实来源与生产关闭 |
 | CORP-DSH-PLAN-007 | IAM 模型与工具隔离消费实施计划 | [plans/2026-11-02-iam-consumer-isolated.md](<plans/2026-11-02-iam-consumer-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 完整 source/mock 设计已获用户批准；不动真实环境 |
 | CORP-DSH-PLAN-008 | IAM 下一阶段收尾计划 | [plans/2026-11-03-iam-mock-closeout.md](<plans/2026-11-03-iam-mock-closeout.md>) | V0.6.0 | 草案 | 平台组（代拟） | 最小订阅source/mock已实现并定向验收；真实注册、真实Client接线与probe不开放 |
-| CORP-DSH-PLAN-009 | SDD 退出实施计划 | [plans/2026-11-03-sdd-retirement-implementation.md](<plans/2026-11-03-sdd-retirement-implementation.md>) | V0.2.0 | 草案 | 项目负责人（代拟） | 待用户授权实施；退役前完成调用方盘点与回退演练 |
+| CORP-DSH-PLAN-009 | SDD 退出实施计划 | [plans/2026-11-03-sdd-retirement-implementation.md](<plans/2026-11-03-sdd-retirement-implementation.md>) | V0.2.1 | 草案 | 项目负责人（代拟） | 方案 A 已授权；步骤 1／2／4 已执行，制品演练与发布／回退待另行授权 |
 | CORP-DSH-PLAN-010 | 多端凭据存储实现与验收方案 | [plans/2026-11-03-credential-multiplatform.md](<plans/2026-11-03-credential-multiplatform.md>) | V0.6.1 | 草案 | 平台组（代拟） | A 已实现并在本机 macOS 取证（组合探针 18/18）；B 原生样机已实现、仅合成用例；G1 枚举/容量/事务/可信装配未关闭；G2 Windows/UOS/麒麟未验 |
 | CORP-DSH-PLAN-011 | IAM 相关 Issue 整体实施计划 | [plans/2026-11-04-iam-issues-implementation.md](<plans/2026-11-04-iam-issues-implementation.md>) | V0.2.1 | 草案 | 平台组（代拟） | 仓库内工作项按里程碑实施；硬件与外部接口依赖项保持 BLOCKED |
 | CORP-DSH-PLAN-012 | IAM 双端验收矩阵（Windows / 麒麟） | [plans/2026-11-04-iam-dual-platform-acceptance.md](<plans/2026-11-04-iam-dual-platform-acceptance.md>) | V0.2.1 | 草案 | 平台组（代拟） | 远程 macbook 与 megacube 已做首次部署复验；完整验收仍待目标环境与 IAM 账号 |
