@@ -3,10 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertClientAuthCurrent } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
 import { isAccessExpired, isRefreshUsable } from './record.mjs';
-import { grantIdentity, safeMessage } from './service-helpers.mjs';
-
-const REFRESH_TIMEOUT_MS = 5000;
-const AUTO_REFRESH_BACKOFF_MS = 30000;
+import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
 
 /**
  * The reconciler between the stored record and the live view.

@@ -2,11 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { revokeAccessToken } from './oidc.mjs';
-import { StoreError } from './store.mjs';
-import { grantIdentity, safeMessage } from './service-helpers.mjs';
+import { grantIdentity, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
 
 const BRIDGE_REF = 'iam.bridge.capability';
-const REFRESH_TIMEOUT_MS = 5000;
 
 /**
  * Sign-out: one flight, registered before any work runs so that a provider that
