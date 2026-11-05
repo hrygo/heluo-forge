@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-014 |
 | 文档名称 | forge-iam 结构整改实施计划 |
-| 版本 | V0.14.0 |
+| 版本 | V0.15.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
@@ -313,6 +313,9 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 ### U10 宿主：勘定轴
 
 - 新增 `service-reconcile.mjs`：`syncFromStore`（160 行整段搬运，不重排）、`hydrate`、30 秒后台退避与待定语义。
+- 实现记录：`service.mjs` 1216 → 1068 行，新增 `service-reconcile.mjs` 195 行。`syncFromStore`（160 行）与 `hydrate` 整段搬运。
+- 端口分两类：只读环境（`ctx`/`provider`/`grants`/`gateway`/`token`/`now`/`configured`）与状态端口（`getAuthEpoch`/`getObservation`/`setObservation`/`getPublications`/`bumpPublications`/`hasSignInAttempt`/`isSigningOut`/`beginConsumption`/`adoptConsumption`/`resolveToken`）。`observedPending` 与 `syncPublications` 的变量仍归 `service.mjs`，模块只经访问器读写，单一归属不变。
+- 搬运中把 `observation.authEpoch` 误改成 `observation.getAuthEpoch()`（字段访问被当成裸标识符替换），由 `dual-process-refresh` 的 pending 用例暴露；守卫补了这条断言。
 - 完成条件：`sync-provider-replacement`、`dual-process-refresh`、`lifecycle` 全绿。
 
 ### U11 宿主：登录、回调与退出轴

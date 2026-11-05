@@ -1,5 +1,5 @@
 import { normalizeGatewayBaseURL } from './managed-models.mjs';
-import { createHmac, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
@@ -11,6 +11,7 @@ import { createServiceGrant } from './service-grant.mjs';
 import { createModelSelection } from './service-model-selection.mjs';
 import { createServiceGateway } from './service-gateway.mjs';
 import { createTokenResolver } from './service-token.mjs';
+import { createReconciler } from './service-reconcile.mjs';
 import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
@@ -135,12 +136,30 @@ export function createIamService(rawConfig, options = {}) {
     adoptConsumption,
   });
 
-  /**
-   * Resolve the subject that owns a person's durable model settings. The grant
-   * is read back from the provider instead of trusting a cached copy: an
-   * account or provider change must not let one person's selection be read or
-   * written under another's name.
-   */
+  // The reconciler owns every background adoption. It is created after the
+  // modules it reads and publishes through.
+  const reconcile = createReconciler({
+    ctx,
+    provider,
+    grants,
+    gateway,
+    token,
+    now,
+    configured,
+    hasSignInAttempt: () => Boolean(signInPromise),
+    isSigningOut: () => signingOut,
+    getAuthEpoch: () => authEpoch,
+    getObservation: () => observedPending,
+    setObservation: (next) => { observedPending = next; },
+    getPublications: () => syncPublications,
+    bumpPublications: () => ++syncPublications,
+    beginConsumption,
+    adoptConsumption,
+    resolveToken: () => service.resolveToken(),
+  });
+
+  // Sign-in/out lifetimes: one attempt at a time, and an epoch pair that makes
+  // a response belonging to a replaced session unable to publish.
   let attempt = null;
   let signInPromise = null;
   let signOutPromise = null;
@@ -190,175 +209,8 @@ export function createIamService(rawConfig, options = {}) {
    * Verify an ID token, retrying once on a missing `kid`: the IdP may have
    * rotated keys after this process cached the JWKS document.
    */
-  async function syncFromStore() {
-    if (ctx.disposed || signingOut) return ctx.view();
-    if (!configured || !ctx.exclusive.ok) return ctx.view();
-    // A user-triggered sign-in owns the state machine until its callback,
-    // cancellation, or timeout; a background hydration must not clobber it.
-    if (ctx.state === 'authenticating' || signInPromise) return ctx.view();
-    // Only an error created by this instance observing pending can recover.
-    const observation = ctx.state === 'error' ? observedPending : null;
-    if (ctx.state === 'error' && (!observation || ctx.error !== 'IAM_REAUTH_REQUIRED'
-      || observation.authEpoch !== authEpoch || now() >= observation.deadline)) {
-      observedPending = null;
-      return ctx.view();
-    }
-    const expectedIssuer = ctx.knownIssuer();
-    const syncEpoch = authEpoch;
-    let publication = syncPublications;
-    let expectedGrant = ctx.lastGrant;
-    const isActive = () => !ctx.disposed && !signingOut && ctx.exclusive.ok && authEpoch === syncEpoch
-      && syncPublications === publication && ctx.lastGrant === expectedGrant
-      && (observation ? ctx.state === 'error' && ctx.error === 'IAM_REAUTH_REQUIRED'
-        && observedPending === observation && now() < observation.deadline
-        : ctx.state !== 'authenticating' && ctx.state !== 'error' && !signInPromise);
-    const published = () => {
-      publication = ++syncPublications;
-      expectedGrant = ctx.lastGrant;
-    };
-    const discardIdentity = () => {
-      // Store lookups can be rebound independently. Clear only the adopted
-      // identity this sync still owns, never a later publication (even null).
-      if (expectedGrant && ctx.lastGrant === expectedGrant && grants.had(expectedGrant)) {
-        ctx.lastGrant = null;
-        ctx.state = 'signed-out';
-        ctx.error = null;
-        published();
-        ctx.notify();
-      }
-    };
-    const targetStore = provider.ensure();
-    if (!isActive()) return ctx.view();
-    if (!targetStore || (observation && targetStore !== observation.store)) {
-      if (!targetStore) discardIdentity();
-      observedPending = null;
-      return ctx.view();
-    }
-    const targetCredentials = provider.storeCredentials;
-    const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
-    // Re-read the live provider after each await; the lookup itself may also
-    // synchronously dispose this service or start a newer auth operation.
-    const isCurrent = () => {
-      if (!isActive()) return false;
-      const currentStore = provider.ensure();
-      if (!isActive()) return false;
-      if (currentStore === targetStore && provider.storeCredentials === targetCredentials) return true;
-      discardIdentity();
-      if (observation && observedPending === observation) observedPending = null;
-      return false;
-    };
-    try {
-      const record = await targetStore.read();
-      ctx.recheckExclusive();
-      if (!isCurrent()) return ctx.view();
-      if (!record.ok) {
-        observedPending = null;
-        ctx.lastGrant = null;
-        ctx.error = 'IAM_GRANT_INVALID';
-        ctx.state = 'error';
-        published();
-        ctx.notify();
-        return ctx.view();
-      }
-      if (!record.grant) {
-        if (observation) {
-          observedPending = null;
-          return ctx.view();
-        }
-        const changed = ctx.lastGrant !== null || ctx.state !== 'signed-out';
-        ctx.lastGrant = null;
-        published();
-        if (changed) {
-          ctx.error = null;
-          ctx.state = 'signed-out';
-          ctx.notify();
-        }
-        return ctx.view();
-      }
-      grants.assertGrantContext(record.grant, expectedIssuer);
-      const authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: () => {
-        if (!isCurrent()) throw new IamError('IAM_CLIENT_AUTH_CHANGED', safeMessage('IAM_CLIENT_AUTH_CHANGED'));
-      } });
-      if (!isCurrent()) return ctx.view();
-      assertClientAuthCurrent(authentication);
-      const marker = record.grant.refreshOperation;
-      const identity = grantIdentity(record.grant);
-      const refreshDigest = (grant, id) => createHmac('sha256', id).update(grant.refreshToken).digest('base64url');
-      if (observation) {
-        if (!marker || marker.version !== observation.version || marker.id !== observation.id
-          || marker.base !== observation.base || !isDeepStrictEqual(identity, observation.identity)) {
-          observedPending = null;
-          return ctx.view();
-        }
-        const sameRefresh = refreshDigest(record.grant, marker.id) === observation.refreshDigest;
-        if (marker.state === 'pending' && sameRefresh) return ctx.view();
-        if (marker.state !== 'complete' || sameRefresh
-          || isAccessExpired(record.grant, now()) || !isRefreshUsable(record.grant, now())) {
-          observedPending = null;
-          return ctx.view();
-        }
-      } else if (marker?.state === 'pending') {
-        observedPending = { version: marker.version, id: marker.id, base: marker.base,
-          identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch, store: targetStore,
-          deadline: now() + REFRESH_TIMEOUT_MS };
-        ctx.lastGrant = null;
-        ctx.state = 'error';
-        ctx.error = 'IAM_REAUTH_REQUIRED';
-        published();
-        ctx.notify();
-        return ctx.view();
-      }
-      const previousSubject = ctx.lastGrant?.subject ?? null;
-      const previous = `${ctx.state}|${ctx.error}|${previousSubject}`;
-      ctx.lastGrant = record.grant;
-      grants.own(record.grant, targetStore);
-      published();
-      // An adopted subject changes the displayed match, not the stored key.
-      if (observation || (previousSubject !== null && record.grant.subject !== previousSubject)) {
-        await gateway.load({ force: true });
-        if (!isCurrent()) {
-          if (ctx.lastGrant === record.grant) ctx.lastGrant = null;
-          return ctx.view();
-        }
-        assertClientAuthCurrent(authentication);
-      }
-      grants.rememberAuthentication(authentication, record.grant);
-      if (observation) observedPending = null;
-      // `expired` means the access token is no longer usable, not merely inside
-      // the refresh skew: a token request renews the latter, and showing "expired"
-      // while the token still works would send the user through a needless login.
-      ctx.state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
-      ctx.error = null;
-      adoptConsumption(consumption, record.grant);
-      // With a usable refresh token an expired session is recoverable; without
-      // this, the interim client would only ever offer a full re-login.
-      if (ctx.state === 'expired' && isRefreshUsable(record.grant, now())
-        && now() - token.lastBackgroundRefreshAt >= AUTO_REFRESH_BACKOFF_MS) {
-        token.lastBackgroundRefreshAt = now();
-        void service.resolveToken().catch(() => {});
-      }
-      if (previous !== `${ctx.state}|${ctx.error}|${ctx.lastGrant.subject ?? ''}`) ctx.notify();
-    } catch (cause) {
-      if (!isCurrent()) return ctx.view();
-      observedPending = null;
-      ctx.lastGrant = null;
-      ctx.error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED'].includes(cause?.code)
-        ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
-      ctx.state = 'error';
-      published();
-      ctx.notify();
-    }
-    return ctx.view();
-  }
 
   // The private composition getter keeps one binding object per scoped lifetime.
-  async function hydrate() {
-    // Preserve any pre-existing legacy reference; its migration or deletion
-    // requires a separate decision and does not make it safe to consume.
-    await syncFromStore();
-    await gateway.load({ force: true });
-    return ctx.view();
-  }
 
   const service = {
     getView() {
@@ -385,8 +237,8 @@ export function createIamService(rawConfig, options = {}) {
       };
     },
 
-    hydrate,
-    syncFromStore,
+    hydrate: reconcile.hydrate,
+    syncFromStore: reconcile.syncFromStore,
     loadGatewayCredential: gateway.load,
     /**
      * Host-only: push the current view after a change that never touched the
