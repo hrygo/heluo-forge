@@ -272,9 +272,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       models = applyModelOptions(rawModels, modelOptions);
       const resolved = await createAdapter({
         host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveKey: async () => {
-          current();
-          const next = await iam.resolveGatewayConnection(); current();
-          if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
+          const before = sample();
+          const requestVersion = version;
+          if (disposed || permit(before)) throw error('IAM_MODEL_CONTEXT_CHANGED');
+          const next = await iam.resolveGatewayConnection();
+          const after = sample();
+          if (disposed || permit(after) || requestVersion !== version || next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
           return next.key;
         }
       }); current();

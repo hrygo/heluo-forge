@@ -48,6 +48,8 @@ export function apply(ctx, rawConfig = {}) {
     credentials = undefined;
   }
 
+  let currentWebServer;
+  let currentConnection;
   let modelServices;
   let managedRuntime;
   const service = createIamService(result.value, {
@@ -64,13 +66,7 @@ export function apply(ctx, rawConfig = {}) {
           && currentAdm === modelServices.agentDefaultModel ? modelServices : undefined;
       } catch { return undefined; }
     },
-    getOrigin: () => {
-      try {
-        return getContextService('webServer')?.getOrigin?.();
-      } catch {
-        return undefined;
-      }
-    },
+    getOrigin: () => currentWebServer?.getOrigin?.(),
   });
 
   // Cordis runs a normal function plugin with `new`, so a returned cleanup is
@@ -82,6 +78,10 @@ export function apply(ctx, rawConfig = {}) {
   const teardown = async () => {
     if (tornDown) return;
     tornDown = true;
+    currentWebServer = undefined;
+    currentConnection = undefined;
+    if (typeof offConnection === 'function') offConnection();
+    else await offConnection?.dispose?.();
     modelServices = undefined;
     agentDefaultModelService = undefined;
     if (typeof offAgentDefaultModel === 'function') offAgentDefaultModel();
@@ -98,6 +98,7 @@ export function apply(ctx, rawConfig = {}) {
 
   let disposeProvide;
   let offWebServer;
+  let offConnection;
   let offModelServices;
   let offManagedModels;
   let offAgentDefaultModel;
@@ -167,12 +168,19 @@ export function apply(ctx, rawConfig = {}) {
     // is a GET route; state/PKCE bind it to the Host attempt. The management
     // API is additionally gated by DSH Connection authentication.
     if (typeof ctx.inject === 'function') {
+      offConnection = ctx.inject(['connection'], (host) => {
+        const binding = host.connection;
+        currentConnection = binding;
+        return () => { if (currentConnection === binding) currentConnection = undefined; };
+      });
       offWebServer = ctx.inject(['webServer'], (host) => {
+        const binding = host.webServer;
+        currentWebServer = binding;
         const routes = createIamRoutes(service, {
           callbackPath: result.value.redirectPath,
           getOrigin: () => host.webServer.getOrigin?.(),
           getBridgeSecret: () => service.bridgeCapability().catch(() => undefined),
-          getConnection: () => getContextService('connection'),
+          getConnection: () => currentConnection,
         });
         const offApi = host.webServer.register({
           kind: 'prefix',
@@ -187,6 +195,7 @@ export function apply(ctx, rawConfig = {}) {
         return () => {
           offApi?.();
           offCallback?.();
+          if (currentWebServer === binding) currentWebServer = undefined;
         };
       });
     }
