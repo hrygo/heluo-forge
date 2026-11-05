@@ -1603,7 +1603,7 @@ window.__ModuleLoader__.load({
       if (code === 'ENTERPRISE_GATEWAY_FORBIDDEN') return '当前账号没有此模型的使用权限，请联系管理员。';
       if (code === 'ENTERPRISE_GATEWAY_RATE_LIMIT') return '请求过于频繁，请稍后重试。';
       if (code === 'ENTERPRISE_GATEWAY_UNAVAILABLE') return '暂时无法连接企业模型，请稍后重试。';
-      if (code === 'ENTERPRISE_GATEWAY_REQUEST_REJECTED') return '网关拒绝了本次请求，请检查所选模型是否支持当前参数。';
+      if (code === 'ENTERPRISE_GATEWAY_REQUEST_REJECTED') return '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。';
       if (code === 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED') return '所选模型的推理档位不受支持，请重新选择思考级别。';
       if (code === 'ENTERPRISE_MODEL_CATALOG_INVALID') return '网关返回的模型列表无法识别，请联系管理员检查网关。';
       if (code === 'ENTERPRISE_MODELS_UNAVAILABLE') return '企业模型暂不可用，请联系管理员检查配置。';
