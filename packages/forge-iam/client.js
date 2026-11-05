@@ -1929,9 +1929,6 @@ window.__ModuleLoader__.load({
               isEnabled
                 ? h('span', { className: 'fiam-badge fiam-badge-success' }, isDefaultModel ? '默认可用' : '已启用')
                 : null,
-              hasCustom
-                ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '已个性化')
-                : null,
             ),
             h('div', { className: 'fiam-model-meta-line' },
               !isEnabled ? h('span', { className: 'fiam-model-meta-status' }, '未启用') : null,
@@ -2305,7 +2302,7 @@ window.__ModuleLoader__.load({
             h('div', null,
               h('div', { className: 'fiam-card-title' }, '企业模型设置'),
               h('div', { className: 'fiam-card-subtitle' }, view.modelAccess?.configured
-                ? `网关目录同步（共 ${modelList.length} 个模型，已启用 ${enabledCount} 个${customModelCount > 0 ? `，已个性化 ${customModelCount} 个` : ''} · 默认 200K 上下文）`
+                ? `网关目录同步（共 ${modelList.length} 个模型，已启用 ${enabledCount} 个 · 默认 200K 上下文）`
                 : '配置网关地址和凭证后自动同步可用模型'),
             ),
           ),
@@ -2439,7 +2436,7 @@ window.__ModuleLoader__.load({
               }))
           )
           : null,
-        view.modelAccess?.state === 'loading'
+        (view.modelAccess?.state === 'loading' && modelList.length === 0)
           ? h('div', { role: 'status', className: 'fiam-auth-progress' },
             h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
               h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
@@ -2489,8 +2486,27 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function readCachedModels() {
+      try {
+        const raw = window.localStorage.getItem('forge-iam.cached-models.v1');
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function writeCachedModels(models) {
+      try {
+        if (Array.isArray(models) && models.length > 0) {
+          window.localStorage.setItem('forge-iam.cached-models.v1', JSON.stringify(models));
+        }
+      } catch { }
+    }
+
     function Panel() {
       const initialModelOptions = readModelOptions();
+      const [cachedModels, setCachedModels] = React.useState(readCachedModels());
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
       const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
       const [modelOptions, setModelOptions] = React.useState(initialModelOptions);
@@ -2501,6 +2517,14 @@ window.__ModuleLoader__.load({
       const [modelNotice, setModelNotice] = React.useState(null);
       const lastSyncedOptions = React.useRef(initialModelOptions);
       const toolbarRef = React.useRef(null);
+
+      const liveModels = state.view?.modelAccess?.models;
+      React.useEffect(() => {
+        if (Array.isArray(liveModels) && liveModels.length > 0) {
+          setCachedModels(liveModels);
+          writeCachedModels(liveModels);
+        }
+      }, [liveModels]);
 
       const handleFilterChange = (nextFilter) => {
         if (nextFilter === modelFilter) return;
@@ -2827,6 +2851,8 @@ window.__ModuleLoader__.load({
           }
           const view = result.body?.view ?? null;
           setCredential({ value: '', deviceLabel: '', saving: false, notice: null });
+          setCachedModels([]);
+          try { window.localStorage.removeItem('forge-iam.cached-models.v1'); } catch { }
           setModelOptions({});
           lastSyncedOptions.current = {};
           optionsSync.current.signature = null;
@@ -2972,12 +2998,14 @@ window.__ModuleLoader__.load({
           '凭证未使用系统安全存储，请联系管理员。')
         : null;
 
-      const rawModelList = view.modelAccess?.models ?? [];
+      const safeCached = Array.isArray(cachedModels) ? cachedModels : [];
+      const rawModelList = (Array.isArray(view.modelAccess?.models) && view.modelAccess.models.length > 0)
+        ? view.modelAccess.models
+        : safeCached;
       const modelList = [...rawModelList].sort((a, b) =>
         String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' })
       );
       const enabledCount = modelList.filter(m => Object.hasOwn(modelOptions, m.id)).length;
-      const customModelCount = modelList.filter(m => modelOptions[m.id] && Object.keys(modelOptions[m.id]).length > 0).length;
       const normalizedQuery = modelQuery.trim().toLowerCase();
       const visibleModels = modelList.filter(m => {
         const opt = modelOptions[m.id] || {};
@@ -3005,7 +3033,7 @@ window.__ModuleLoader__.load({
       });
 
       const modelsCard = renderModelsCard({
-        h, view, modelList, visibleModels, customModelCount, enabledCount, modelOptions, expandedModels,
+        h, view, modelList, visibleModels, enabledCount, modelOptions, expandedModels,
         modelQuery, setModelQuery, modelFilter, setModelFilter, handleFilterChange, toolbarRef, toggleModelExpand, updateOptionField, resetModelOption,
         disableModelOption, enableModelOption, enableModelWithDefaults, enableAllModelsWithDefaults,
         hasUnsavedModelChanges, discardModelChanges,
