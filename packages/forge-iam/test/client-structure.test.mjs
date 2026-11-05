@@ -25,10 +25,11 @@ const RAW_RESULT_CODE_BASELINE = { resultCode: 1 };
 // (`{ h, ui, model, actions }`); U4 lowers every entry to it.
 // 计数含显式 key（`prop: value`），与实际入参数量一致。
 const RENDER_ARITY_BASELINE = {
-  renderAccountCard: 22, // 26 → 22: 界面常量改为模块级引用，不再作为入参
-  renderGatewayCard: 11, // 16 → 11
-  renderModelItem: 16, // 21 → 16
-  renderModelsCard: 7, // 34 → 12 → 7
+  renderAccountCard: 3, // { h, ui, actions }
+  renderGatewayCard: 3, // { h, ui, actions }
+  renderJourneyBar: 3, // { h, ui, model }
+  renderModelItem: 16, // 待拆：条目仍按扁平字段接收
+  renderModelsCard: 4, // { h, ui, model, actions }
 };
 
 const source = readClientSource();

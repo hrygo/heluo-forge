@@ -1842,11 +1842,11 @@ window.__ModuleLoader__.load({
 
     // §12 卡片与旅程条
     function renderAccountCard(ctx) {
+      const { h, ui: input, actions } = ctx;
       const {
-        h, view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink,
-        state, copy,
-        login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity,
-      } = ctx;
+        view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink, state, copy, copyTools,
+      } = input;
+      const { login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity } = actions;
       const ui = deriveSessionUi(view);
       return h('div', { id: 'fiam-section-account', className: 'fiam-card' },
         h('div', { className: 'fiam-card-header' },
@@ -1900,11 +1900,9 @@ window.__ModuleLoader__.load({
 
     // §12.1 网关卡
     function renderGatewayCard(ctx) {
-      const {
-        h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
-        credential, setCredential,
-        saveCredential, clearCredential, viewBarrier,
-      } = ctx;
+      const { h, ui: input, actions } = ctx;
+      const { view, gateway, gatewayStatus, gatewayDetails, storageWarning, credential } = input;
+      const { setCredential, saveCredential, clearCredential, viewBarrier } = actions;
       const gatewayUi = deriveGatewayUi(gateway);
       const hasDraftChanges = Boolean(credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? '')));
       return h('div', { id: 'fiam-section-gateway', className: 'fiam-card' },
@@ -2323,7 +2321,8 @@ window.__ModuleLoader__.load({
 
     // §12.3 旅程条
     function renderJourneyBar(ctx) {
-      const { h, view, gateway, enabledCount, totalModels } = ctx;
+      const { h, ui: input, model } = ctx;
+      const { view, gateway } = input;
       const ui = deriveSessionUi(view);
       const gatewayUi = deriveGatewayUi(gateway);
       const catalogue = deriveModelUi(view);
@@ -2332,8 +2331,8 @@ window.__ModuleLoader__.load({
       const step2Done = step1Done && gatewayUi.configured && gateway.matchesAccount !== false;
       const step2Warn = step1Done && (gatewayUi.ownerMismatch || gatewayUi.invalid || gatewayUi.unknown);
       const step3Loading = step2Done && catalogue.loading;
-      const step3Warn = step2Done && (catalogue.failed || (catalogue.ready && totalModels === 0));
-      const step3Done = step2Done && catalogue.ready && enabledCount > 0;
+      const step3Warn = step2Done && (catalogue.failed || (catalogue.ready && model.totalModels === 0));
+      const step3Done = step2Done && catalogue.ready && model.enabledCount > 0;
       const steps = [
         {
           num: '1',
@@ -2357,7 +2356,7 @@ window.__ModuleLoader__.load({
           num: '3',
           title: '模型',
           targetId: 'fiam-section-models',
-          status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step3Loading ? '同步中…' : (catalogue.failed ? (catalogue.stale ? '目录待刷新' : '同步异常') : (catalogue.ready && totalModels === 0 ? '无可用模型' : (step2Done ? '待启用' : '待解锁')))),
+          status: step3Done ? `已启用 ${model.enabledCount}/${model.totalModels}` : (step3Loading ? '同步中…' : (catalogue.failed ? (catalogue.stale ? '目录待刷新' : '同步异常') : (catalogue.ready && model.totalModels === 0 ? '无可用模型' : (step2Done ? '待启用' : '待解锁')))),
           done: step3Done,
           warn: step3Warn,
           active: step2Done && !step3Done && !step3Warn,
@@ -2438,22 +2437,20 @@ window.__ModuleLoader__.load({
 
     // §13 模型卡
     function renderModelsCard(ctx) {
-      const {
-        h, view, catalogue, refreshModels, credential, viewBarrier, gateway,
-        fieldLabel, inputStyle, secondaryButton, primaryButton, muted,
-      } = ctx;
-      // 目录数据与动作来自 useModelCatalogue；这里只解出本地名字，函数体不变。
+      const { h, ui: input, model, actions } = ctx;
+      const { view, credential, viewBarrier, gateway } = input;
+      // 目录数据在 model、目录动作在 actions；这里只解出本地名字，函数体不变。
       const {
         list: modelList, visible: visibleModels, enabledCount, options: modelOptions, expanded: expandedModels,
         query: modelQuery, setQuery: setModelQuery, filter: modelFilter, setFilter: setModelFilter,
         toolbarRef, saving: modelSaving, notice: modelNotice, unsaved: hasUnsavedModelChanges,
-      } = catalogue.data;
+      } = model;
       const {
         changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
         resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
         enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
-        discard: discardModelChanges, save: saveModelOptions,
-      } = catalogue.actions;
+        discard: discardModelChanges, save: saveModelOptions, refresh: refreshModels,
+      } = actions;
       const ui = deriveSessionUi(view);
       const catalogueUi = deriveModelUi(view);
       const gatewayUi = deriveGatewayUi(gateway);
@@ -3381,26 +3378,32 @@ window.__ModuleLoader__.load({
       // Read the identity's cache during the render that first sees that
       // identity, so a cached list never flashes empty while the effect catches up.
       const journeyBar = renderJourneyBar({
-        h, view, gateway, enabledCount: catalogue.data.enabledCount, totalModels: catalogue.data.list.length,
+        h,
+        ui: { view, gateway },
+        model: { enabledCount: catalogue.data.enabledCount, totalModels: catalogue.data.list.length },
       });
 
       const accountCard = renderAccountCard({
-        h, view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink,
-        state, copy: session.copy, copyTools,
-        login: session.login, cancelLogin: session.cancelLogin, load: session.load, signOut: session.signOut,
-        copyLink: session.copyLink, copyDiagnostic: session.copyDiagnostic, isViewCurrent: session.isViewCurrent,
-        viewBarrier, linkIdentity: session.linkIdentity,
+        h,
+        ui: { view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink, state, copy: session.copy, copyTools },
+        actions: {
+          login: session.login, cancelLogin: session.cancelLogin, load: session.load, signOut: session.signOut,
+          copyLink: session.copyLink, copyDiagnostic: session.copyDiagnostic, isViewCurrent: session.isViewCurrent,
+          viewBarrier, linkIdentity: session.linkIdentity,
+        },
       });
 
       const gatewayCard = renderGatewayCard({
-        h, view, gateway, gatewayStatus, gatewayDetails, storageWarning,
-        credential: form.credential, setCredential: form.setCredential,
-        saveCredential: form.save, clearCredential: form.clear, viewBarrier,
+        h,
+        ui: { view, gateway, gatewayStatus, gatewayDetails, storageWarning, credential: form.credential },
+        actions: { setCredential: form.setCredential, saveCredential: form.save, clearCredential: form.clear, viewBarrier },
       });
 
       const modelsCard = renderModelsCard({
-        h, view, refreshModels: form.refresh, credential: form.credential, viewBarrier, gateway,
-        catalogue,
+        h,
+        ui: { view, credential: form.credential, viewBarrier, gateway },
+        model: catalogue.data,
+        actions: { ...catalogue.actions, refresh: form.refresh },
       });
 
       return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
