@@ -1,6 +1,6 @@
 # AGENTS.md — Heluo Forge agent 工作约定
 
-> 适用范围：仓库根目录及全部子目录。版本：V1.12；最后更新：2026-11-04。
+> 适用范围：仓库根目录及全部子目录。版本：V1.13；最后更新：2026-11-05。
 >
 > 职责：agent 的任务路由、授权差异、修改与验收要求（职责边界见[文档总览 §2.1](docs/README.md#21-仓库入口职责)）。项目状态、契约字段、文档元数据规范与命令细节留在各自正文，本文件只保留会改变 agent 行为的约束和入口。系统、开发者与当前用户指令优先；与公共约定重叠处从其规定，本文件只写差异。
 
@@ -45,6 +45,7 @@
 - 品牌资产唯一真源为 `docs/assets/branding/cyber-long/`；扩展包内置图标（如 `packages/forge-iam/icon.svg`）须与对应组件标识保持逐字节一致并经 `package-shape` 测试核验。
 - bundle 使用 `cordis.patch.yml`，各项能力独立配置、可单独禁用；安全依赖失效时的行为遵循设计与契约，不以“可禁用”绕过授权或安全门禁。
 - 文档按[文档总览 §6](docs/README.md#6-编写约定)与对应[模块模板](docs/templates/design-template.md)/[通用模板](docs/templates/_template.md)编写；改名或移动用 `git mv`，同一变更更新全库引用、登记与索引摘要。
+- 根目录文档按受众分工改写：README 面向外部读者与新加入者（项目是什么、当前成熟度、入口与本地检查），CONTRIBUTING 面向贡献者（环境准备、变更与评审流程），SECURITY 面向报告者（范围、渠道与响应承诺），本文件面向 agent（路由、授权与验收）。内部执行过程、agent 规则和未公开的协作细节不进 README；职责边界以[文档总览 §2.1](docs/README.md#21-仓库入口职责)为准。
 - 创建或改写 Issue（包括通过 CLI/API 创建）时，面向接手人先说清问题或目标、影响、要做的事及如何判断完成；中文为主，首次解释必要缩写，一句只表达一个主要判断。按事项类型选用 [.github 的 Issue 模板](.github/ISSUE_TEMPLATE/)，不适用时灵活调整；详细方案和通用规则引用权威资料，不重复堆砌。保留本项特有的安全边界、验收条件与待确认项，区分事实、方案和未验证内容；缺信息标待确认，不虚构。
 - 提交消息不要用 `#` 起头：sensitive-scan 钩子用 `git stripspace --strip-comments` 规整消息，`#` 起头的内容会被整段删除，正文因此缺句且不易察觉；引用 issue 写成 `issue #125` 这种内联写法。
 - 提交签名绑定消息、树与父提交树，签名后不要 amend、rebase、reset，也不要让别的会话改写这条分支的父提交。确需改历史时按父链顺序逐条重建并重签：`git read-tree <sha>^{tree}` + `git checkout-index -a -f`，让 HEAD 停在它的新父提交上，用 `scripts/sensitive-scan/team-commit-msg.mjs` 签名，再 `git commit-tree -p <新父>`；只重签末端或逐条 cherry-pick 都会留下失配的证明。

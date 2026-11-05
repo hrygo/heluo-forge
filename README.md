@@ -12,9 +12,9 @@
 
 河洛企业级智能研发平台（Heluo Forge）基于 DeepSeek Harness（DSH），通过插件、配置组合、企业现有 CLI 与技能包连接企业身份、模型网关和研发系统；Model Context Protocol（MCP，模型上下文协议）按集成需要另行评估。
 
-**当前处于方案评审与开发骨架阶段，尚无完整河洛产品发行版。** 企业插件市场改用 DSH 原生「索引源」：AI 开发者平台（AIHUB）维护并托管 format-1 索引，原生市场浏览、官方 manager 从企业 npm 安装；`services/market-index` 只保留只读索引校验器。`@heluo/forge-market` 与旧 HTTP 服务为历史参考，不属目标；`@heluo/forge-iam` 与 `@heluo/forge-credentials-keychain` 为开发骨架（本地 mock OIDC 端到端测试与 keychain fallback 已建立，真实 IAM 与 OS keychain 未联调），品牌视觉套件已全面切换并锁定为「河洛苍螭」（方案 B），各扩展包与 DevOps MCP 的成熟度、已实测项与未验项以实现与验证入口为准，不在此处计数。企业联调、三目标安装与发行版尚未完成。
+**当前处于方案评审与开发骨架阶段，尚无完整河洛产品发行版。** 需求、架构、计划、契约与逐模块设计已成文；`@heluo/forge-iam`、`@heluo/forge-policy`、`@heluo/forge-enterprise`、`@heluo/forge-devops`、`@heluo/forge-gitee`、`@heluo/forge-credentials-keychain` 与索引校验器有本地实现、离线用例或本机探针记录；真实企业 IAM、AI 网关、DevOps／Gitee CLI 与 Windows／麒麟双端尚未联调。各包的成熟度、已实测项与未验项以[设计索引 §2.2](docs/design/README.md#22-实现与验证入口)为唯一入口，本文不复述计数；品牌视觉套件已锁定「河洛苍螭」（方案 B）。
 
-现状核对日期：2026-10-23（历史快照）；2026-11-03 本轮仅同步用户最终确认的 Issue 交付决定与文档治理，未重新执行企业联调、安装／移除或源码整改。以下区分仓库实现、历史实机记录与待验证目标，不以目录或设计草案证明上线能力。
+本文区分三类事实：仓库内可复跑的本地实现与离线／本机用例、历史实机记录、以及仍需企业环境或双端取证的目标。目录存在、设计草案、离线测试与历史记录都不等于已联调或生产就绪。
 
 | 项 | 内容 |
 |---|---|
@@ -40,6 +40,7 @@ DevOps 与 Gitee 的当前接入基线是复用现有 CLI，通过只读命令�
 | 理解需求、一期边界与成功指标 | [需求与场景基线](docs/requirements/requirements-baseline.md) |
 | 评审架构、信任边界与技术取舍 | [总体架构设计](docs/architecture/platform-architecture.md) |
 | 评估排期、依赖、门禁与验收 | [推广实施方案](docs/plans/rollout-plan.md) |
+| 评估分发、运维与支持边界 | [运维索引](docs/operations/README.md) → [部署说明](deploy/README.md) |
 | 查找契约、团队交付物或待确认问题 | [文档总览](docs/README.md) |
 | 查阅品牌标识、矢量切图与视觉规范 | [品牌资产全景系统](docs/assets/branding/cyber-long/index.html) → [生图提示词与规范](docs/assets/branding/prompts.md) |
 | 使用企业账号或排查账户状态 | [IAM 用户指南](<packages/forge-iam/docs/user-guide.md>)（开发骨架说明，不是生产运行手册） |
@@ -48,8 +49,6 @@ DevOps 与 Gitee 的当前接入基线是复用现有 CLI，通过只读命令�
 | 了解市场目标、索引契约与 AIHUB 交付 | [轻量市场设计](<docs/design/plugins/forge-market.md>) → [索引契约](<docs/design/services/market-index.md>) → [issue #12](https://github.com/hrygo/heluo-forge/issues/12) |
 | 修改仓库、提交变更或发起评审 | [贡献指南](CONTRIBUTING.md)；agent 同时遵循 [AGENTS.md](AGENTS.md) |
 | 报告安全问题或疑似泄露 | [安全策略](SECURITY.md) |
-
-市场方案见[轻量市场设计](<docs/design/plugins/forge-market.md>)、[索引契约](<docs/design/services/market-index.md>)和[ADR-11/13](<docs/architecture/plugin-registry-source-decision.md>)：AIHUB 维护并托管 format-1 索引，用户添加只读 URL，原生市场浏览并由官方 manager 安装精确版本；不建生成器、市场服务、写前授权或 CI 发布链路。旧 `@heluo/forge-market` 与 `market-index` HTTP 服务仅作历史参考。企业审核/批准、AIHUB 索引与三目标安装仍待完成。
 
 ## 3. 本地检查
 
@@ -71,7 +70,8 @@ pnpm check
 | `pnpm check:docs` | 文档元数据、登记一致性、本地链接与锚点、表格及询问问题序列 |
 | `pnpm check:repo` | 工程结构、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
 | `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
-| `pnpm test:unit` | 当前实际执行 `node --test`，包含检查器、IAM 与 keychain 骨架、历史市场包契约、索引校验与归档安装用例 |
+| `pnpm check:version` | 正文基线版本与 [.dsh-version](.dsh-version) 一致，代码中无硬编码 DSH 版本 |
+| `pnpm test:unit` | 实际执行 `node --test` 自动发现的全部用例：检查器、各扩展包、凭据支撑包、索引校验与归档安装 |
 | `DSH_KEYCHAIN_SPIKE=0 node --test packages/forge-iam/test/*.test.mjs packages/forge-credentials-keychain/test/*.test.mjs` | 单独验证 IAM 与凭据 keychain 骨架 |
 | `node --test packages/forge-market/test/*.test.mjs` | 单独验证市场插件的逻辑、契约及本地安装链路 |
 | `node --test services/market-index/test/*.test.mjs` | 单独验证索引校验器 |
@@ -85,24 +85,13 @@ pnpm check
 |---|---|---|
 | `docs/` | 需求、架构、计划、契约、设计、运维、协作与工程文档 | 导航见[文档总览](docs/README.md)，登记见[文档清单](docs/DOCUMENT-REGISTER.md) |
 | `docs/assets/branding/` | 河洛苍螭视觉套件：主标、11 组件标识、全尺寸切图、manifest 清单与交互全景控制台 | 方案 B 正式归档；各包内置图标与 manifest.json 保持校验一致 |
-| `packages/` | 安装进 DSH 的九个产品扩展入口与一个凭据支撑包 | `forge-market` 为历史参考；其余各包的成熟度以实现与验证入口（[设计索引 §2.2](docs/design/README.md#22-实现与验证入口)）为准，不在此处逐一计数 |
+| `packages/` | 安装进 DSH 的八个产品扩展包与一个凭据支撑包 | `forge-market` 为历史参考；其余各包的成熟度以实现与验证入口（[设计索引 §2.2](docs/design/README.md#22-实现与验证入口)）为准，不在此处逐一计数 |
 | `services/` | 索引校验工具、条件建设的 DevOps MCP | `market-index` 只保留只读校验器；无服务、无生产部署；DevOps MCP 暂不建设 |
 | `deploy/` | 私有制品仓库接入与双端分发资产 | 仅[规划说明](deploy/README.md)，没有可执行部署配置或制品 |
 | `scripts/`、`tests/` | 工程检查器、检查器测试与历史归档安装用例 | 已建立离线检查与本地 HTTP 归档安装用例 |
 | `.github/` | Issue/PR 模板与检查工作流 | 仓库文件不证明服务端保护或审批已启用 |
 
-市场采用轻量原生索引模式。[ADR-11/13](<docs/architecture/plugin-registry-source-decision.md>)已确认企业私有 npm 为唯一制品源；AIHUB 维护并托管 format-1 索引，用户通过 DSH 原生「索引源」添加只读 URL，官方 manager 按精确版本安装。**本项目不生成索引、不写前授权、不承诺全通道覆盖**；索引 URL、JSON、Artifactory 终端认证与三目标安装仍待 AIHUB 与实机取证（[issue #12](https://github.com/hrygo/heluo-forge/issues/12)、[P0 取证单](<docs/plans/market-p0-verification.md>)）。旧插件与 HTTP 服务仅作历史参考，不属目标链路。
-
-当前市场能力与验证边界：
-
-| 对象 | 现状 | 缺口 |
-|---|---|---|
-| DSH 原生市场 | `0.2.1-rc.2` 支持索引源添加与浏览 | AIHUB URL、三目标安装未验 |
-| AIHUB 索引 | issue #12 已建，内容未交付 | format-1、更新/撤回 SLA |
-| 企业 Artifactory | 唯一制品源、同版不可变已确认 | 终端 `.npmrc` 与内网 HTTP 拉包未验 |
-| 历史参考 | `packages/forge-market`、旧 HTTP 服务 | 不属目标，仅追溯 |
-
-索引契约与只读校验器见[services/market-index](services/market-index/README.md)；目标是“能加、能看、能装、能撤”，不以本地测试替代三目标实机。
+市场采用轻量原生索引模式：[ADR-11/13](<docs/architecture/plugin-registry-source-decision.md>)确认企业私有 npm 为唯一制品源，AIHUB 维护并托管 format-1 索引，用户通过 DSH 原生「索引源」添加只读 URL，官方 manager 按精确版本安装；**本项目不生成索引、不写前授权、不承诺全通道覆盖**。模式与当前状态以[索引契约 §1](<docs/design/services/market-index.md#1-一页速览>)为唯一真源，待取证清单见 [P0 取证单](<docs/plans/market-p0-verification.md>)与 [issue #12](https://github.com/hrygo/heluo-forge/issues/12)。当前可确认的仅是 DSH `0.2.1-rc.2` 起支持索引源添加与浏览；AIHUB 索引内容、Artifactory 终端认证与三目标安装均未取证，因此还不能宣称“能加、能看、能装、能撤”。旧 `@heluo/forge-market` 与旧 HTTP 服务仅作历史参考。
 
 ## 5. 如何参与
 
