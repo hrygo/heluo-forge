@@ -47,6 +47,7 @@ const MESSAGES = Object.freeze({
   ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',
   ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
   ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查所选模型是否支持当前参数。',
+  ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
 });
 const error = code => new IamError(code, MESSAGES[code]);
 /** Map an upstream HTTP status so a rejected request never reads as "cannot connect". */
@@ -248,7 +249,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       yield finish(code ?? (Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code
         : cause?.code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
           : cause?.code === 'PERMISSION' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
-            : typeof cause?.status === 'number' ? gatewayCode(cause.status) : 'ENTERPRISE_GATEWAY_UNAVAILABLE'));
+            : cause?.code === 'UNSUPPORTED_REASONING_EFFORT' ? 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED'
+              : typeof cause?.status === 'number' ? gatewayCode(cause.status) : 'ENTERPRISE_GATEWAY_UNAVAILABLE'));
     }
   }
   /** Adopt the stored selection, or remember that nothing was stored yet. */
