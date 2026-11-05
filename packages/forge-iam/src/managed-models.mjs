@@ -390,6 +390,8 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
   const protocol = openAICompletionsApi();
   const catalog = models.map(({ id, name, contextWindow, maxTokens, input, inputModalities, reasoning, reasoningEfforts, thinkingLevelMap, compat }) => {
     const resolvedThinkingMap = thinkingLevelMap ?? buildThinkingLevelMap(reasoningEfforts);
+    const bounds = getReasoningEffortBounds(reasoningEfforts ?? resolvedThinkingMap);
+    const defaultEffort = bounds.enabled && bounds.levels.length > 0 ? bounds.levels[0] : undefined;
     const isReasoning = Boolean(reasoning || resolvedThinkingMap);
     return {
       id, name: name || id, contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW, maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
