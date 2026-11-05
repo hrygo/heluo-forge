@@ -13,6 +13,8 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
   // tests must be able to seed and inspect it instead of relying on absence.
   const persisted = new Map(Object.entries(storage ?? {}));
   const localStorage = {
+    get length() { return persisted.size; },
+    key: index => [...persisted.keys()][index] ?? null,
     getItem: key => persisted.has(key) ? persisted.get(key) : null,
     setItem: (key, value) => { persisted.set(key, String(value)); },
     removeItem: (key) => { persisted.delete(key); },

@@ -26,14 +26,14 @@ test('account form saves gateway URL and a masked Key together and clears the dr
   const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
   assert.equal(input('网关地址').props.value, view.gatewayCredential.baseURL);
   input('网关地址').props.onChange({ target: { value: 'https://next-gateway.corp.example/v1' } });
-  input('UAG 个人凭证').props.onChange({ target: { value: 'synthetic-ui-key' } });
-  assert.equal(input('UAG 个人凭证').props.type, 'password');
+  input('模型访问凭证').props.onChange({ target: { value: 'synthetic-ui-key' } });
+  assert.equal(input('模型访问凭证').props.type, 'password');
   assert.match(panel.text(panel.render()), /有未保存的更改/);
   await panel.findButton(panel.render(), '保存凭据').props.onClick();
   assert.equal(writes.length, 1);
   assert.equal(writes[0].baseURL, 'https://next-gateway.corp.example/v1');
   assert.equal(writes[0].key, 'synthetic-ui-key');
-  assert.equal(input('UAG 个人凭证').props.value, '');
+  assert.equal(input('模型访问凭证').props.value, '');
   assert.equal(input('网关地址').props.value, writes[0].baseURL);
   assert.match(panel.text(panel.render()), /已保存/);
   assert.doesNotMatch(panel.text(panel.render()), /有未保存的更改|synthetic-ui-key/);
@@ -123,7 +123,7 @@ test('panel orders account, credential, and model cards and supports sorting and
   const fullText = panel.text(panel.render());
   // User journey section order: Account -> Gateway Credential -> Model Settings
   const accountIdx = fullText.indexOf('已绑定企业 OIDC 身份');
-  const gatewayIdx = fullText.indexOf('配置用于大模型请求的 UAG 凭证');
+  const gatewayIdx = fullText.indexOf('配置模型访问凭证');
   const modelsIdx = fullText.indexOf('企业模型设置');
   assert.ok(accountIdx >= 0 && accountIdx < gatewayIdx);
   assert.ok(gatewayIdx < modelsIdx);
@@ -391,8 +391,9 @@ test('model advanced section includes in-place save button and shows top unsaved
 
   // Unsaved banner is visible at top of model list
   assert.match(panel.text(panel.render()), /模型配置有未保存的修改/);
-  // Outer capacity limit guidance is visible once models are ready
-  assert.match(panel.text(panel.render()), /上下文溢出（Context Overflow）/);
+  assert.doesNotMatch(panel.text(panel.render()), /网关目录同步（共|企业模型已与网关目录保持同步/);
+  // Capacity guidance remains visible once models are ready.
+  assert.match(panel.text(panel.render()), /上下文长度和最大输出不要超过模型支持的上限/);
 
   // Save via in-place button in the expanded model panel
   const inPlaceSave = nodes(panel.render()).find(node =>
@@ -511,12 +512,12 @@ test('joint journey and state transitions update credential notice, journey bar,
   });
   t.after(() => panel.close());
 
-  const keyInput = nodes(panel.render()).find(node => node.props['aria-label'] === 'UAG 个人凭证');
+  const keyInput = nodes(panel.render()).find(node => node.props['aria-label'] === '模型访问凭证');
   keyInput.props.onChange({ target: { value: 'draft-key-value' } });
   const resetDraftBtn = panel.findButton(panel.render(), '重置输入');
   assert.ok(resetDraftBtn);
   resetDraftBtn.props.onClick();
-  assert.equal(nodes(panel.render()).find(node => node.props['aria-label'] === 'UAG 个人凭证').props.value, '');
+  assert.equal(nodes(panel.render()).find(node => node.props['aria-label'] === '模型访问凭证').props.value, '');
 
   keyInput.props.onChange({ target: { value: 'uag-00000000000000000000000000000000' } });
   await panel.findButton(panel.render(), '保存凭据').props.onClick();
@@ -580,7 +581,10 @@ test('model list toolbar is sticky, eliminates redundant custom tab, and aligns 
 
 test('model list leverages cached models during background loading and eliminates all customized badges', async t => {
   const storage = {
-    'forge-iam.cached-models.v1': JSON.stringify([{ id: 'cached-deepseek', name: 'cached-deepseek' }]),
+    [`forge-iam.cached-models.v2:${view.principal}:${view.gatewayCredential.baseURL}`]:
+      JSON.stringify([{ id: 'cached-deepseek', name: 'cached-deepseek' }]),
+    // An ownerless v1 entry from an older build must not be adopted.
+    'forge-iam.cached-models.v1': JSON.stringify([{ id: 'legacy-other-tenant', name: 'legacy-other-tenant' }]),
     'forge-iam.model-options.v1': JSON.stringify({ 'cached-deepseek': { maxTokens: 16000 } }),
   };
   const loadingView = {
@@ -594,5 +598,69 @@ test('model list leverages cached models during background loading and eliminate
   const renderedText = panel.text(panel.render());
   assert.doesNotMatch(renderedText, /正在获取模型列表…/);
   assert.match(renderedText, /cached-deepseek/);
+  assert.doesNotMatch(renderedText, /legacy-other-tenant/);
   assert.doesNotMatch(renderedText, /已个性化/);
+});
+
+
+test('default reasoning range can be disabled and saved explicitly', async t => {
+  const writes = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({ ok: true, persisted: true, view });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
+  const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
+  assert.equal(input('推理强度下界 1').props.value, 'off');
+  assert.equal(input('推理强度上界 1').props.value, 'high');
+  await panel.findButton(panel.render(), '关闭推理').props.onClick();
+  assert.equal(input('推理强度上界 1').props.value, 'off');
+  await panel.findButton(panel.render(), '保存模型配置').props.onClick();
+  assert.deepEqual(writes.at(-1).options['corp-chat'].reasoningEfforts, { off: 'off' });
+});
+
+test('a cached catalogue is scoped to one person and gateway', async t => {
+  const key = person => `forge-iam.cached-models.v2:${person}:https://gateway.corp.example/v1`;
+  const first = { ...view, principal: 'person-a', modelAccess: { configured: true, state: 'loading', models: [] } };
+  const panel = await mountPanel(async () => Response.json(first), {
+    storage: { [key('person-a')]: JSON.stringify([{ id: 'model-of-a' }]) },
+  });
+  t.after(() => panel.close());
+  assert.match(panel.text(panel.render()), /model-of-a/);
+
+  // The same browser signs in as another person: the old list must not survive.
+  const second = { ...view, principal: 'person-b', modelAccess: { configured: true, state: 'loading', models: [] } };
+  const panel2 = await mountPanel(async () => Response.json(second), {
+    storage: {
+      [key('person-a')]: JSON.stringify([{ id: 'model-of-a' }]),
+      [key('person-b')]: JSON.stringify([{ id: 'model-of-b' }]),
+    },
+  });
+  t.after(() => panel2.close());
+  const text = panel2.text(panel2.render());
+  assert.match(text, /model-of-b/);
+  assert.doesNotMatch(text, /model-of-a/);
+});
+
+test('a stale catalogue is shown with its retry time instead of a blank panel', async t => {
+  const stale = {
+    ...view,
+    modelAccess: {
+      configured: true, state: 'error', error: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+      stale: true, retryAt: Date.now() + 15000,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
+    },
+  };
+  const panel = await mountPanel(async () => Response.json(stale));
+  t.after(() => panel.close());
+  const text = panel.text(panel.render());
+  assert.match(text, /已缓存 2 个模型/);
+  assert.match(text, /目录未更新/);
+  assert.match(text, /秒后自动重试/);
+  assert.match(text, /corp-chat/);
 });

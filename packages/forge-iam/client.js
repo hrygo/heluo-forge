@@ -1769,12 +1769,12 @@ window.__ModuleLoader__.load({
             ),
             h('div', null,
               h('div', { className: 'fiam-card-title' }, '模型使用凭证'),
-              h('div', { className: 'fiam-card-subtitle' }, '配置用于大模型请求的 UAG 凭证'),
+              h('div', { className: 'fiam-card-subtitle' }, '配置模型访问凭证'),
             ),
           ),
           h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gateway.state)}` },
             h('span', { className: 'fiam-badge-dot' }),
-            `UAG 个人凭证：${gatewayStatus}`,
+            `模型访问凭证：${gatewayStatus}`,
           ),
         ),
         gatewayDetails.length ? h('div', { className: 'fiam-meta-grid' },
@@ -1811,27 +1811,27 @@ window.__ModuleLoader__.load({
           ),
           h('div', null,
             gateway.state === 'configured'
-              ? 'UAG 个人凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
+              ? '模型访问凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
               : gateway.state === 'unknown'
                 ? '网关凭据状态尚未确认，请刷新核实。'
                 : gateway.state === 'unconfigured'
-                  ? '到 UAG 控制台为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'
+                  ? '到凭证管理页面为这台设备创建个人凭证（名称建议包含设备名，有效期建议 90 天），粘贴到下方。'
                   : '请先核对现有凭证；如有疑问，请联系管理员。',
             gateway.state === 'unconfigured' && view.gatewayConsoleUrl
               ? h('div', { style: { marginTop: 4 } },
-                h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据 ↗')
+                h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开凭证管理页面创建凭据 ↗')
               )
               : null
           )
         ),
         h('div', { style: { marginTop: 14, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' } },
           h('label', { style: { ...fieldLabel, flex: '2 1 240px' } },
-            h('span', { style: { fontWeight: 500, fontSize: 13 } }, 'UAG 个人凭证'),
+            h('span', { style: { fontWeight: 500, fontSize: 13 } }, '模型访问凭证'),
             h('input', {
               type: 'password',
               value: credential.value,
-              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴 UAG 个人凭证',
-              'aria-label': 'UAG 个人凭证',
+              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴模型访问凭证',
+              'aria-label': '模型访问凭证',
               autoComplete: 'off',
               spellCheck: false,
               disabled: credential.saving || viewBarrier.current.pending,
@@ -1906,7 +1906,7 @@ window.__ModuleLoader__.load({
       const maxTokensInvalid = opt.maxTokens !== undefined && String(opt.maxTokens).trim() !== '' && parseCapacity(opt.maxTokens) === undefined;
       const currentModalities = Array.isArray(opt.inputModalities) ? opt.inputModalities : (model.inputModalities ?? ['text']);
       const hasImage = currentModalities.includes('image');
-      const reasoningBounds = getReasoningEffortBounds(opt.reasoningEfforts ?? model.reasoningEfforts);
+      const reasoningBounds = getReasoningEffortBounds(opt.reasoningEfforts ?? model.reasoningEfforts ?? buildReasoningEffortRange('off', 'high'));
       const hasReasoning = reasoningBounds.enabled || Boolean(model.reasoning);
       const reasoningBadgeText = reasoningBounds.enabled
         ? (reasoningBounds.lower === reasoningBounds.upper
@@ -2088,7 +2088,7 @@ window.__ModuleLoader__.load({
                       const nextLower = e.target.value;
                       const currentUpper = reasoningBounds.enabled ? reasoningBounds.upper : nextLower;
                       if (nextLower === 'off' && currentUpper === 'off') {
-                        updateOptionField(model.id, 'reasoningEfforts', undefined);
+                        updateOptionField(model.id, 'reasoningEfforts', { off: 'off' });
                         return;
                       }
                       const lowerIdx = THINKING_LEVELS.indexOf(nextLower);
@@ -2109,7 +2109,7 @@ window.__ModuleLoader__.load({
                     onChange: (e) => {
                       const nextUpper = e.target.value;
                       if (nextUpper === 'off') {
-                        updateOptionField(model.id, 'reasoningEfforts', undefined);
+                        updateOptionField(model.id, 'reasoningEfforts', { off: 'off' });
                         return;
                       }
                       const currentLower = reasoningBounds.enabled ? reasoningBounds.lower : nextUpper;
@@ -2133,7 +2133,7 @@ window.__ModuleLoader__.load({
                 reasoningBounds.enabled ? h('button', {
                   type: 'button',
                   style: { ...secondaryButton, height: 22, minHeight: 22, padding: '0 8px', fontSize: 11 },
-                  onClick: () => updateOptionField(model.id, 'reasoningEfforts', undefined),
+                  onClick: () => updateOptionField(model.id, 'reasoningEfforts', { off: 'off' }),
                 }, '关闭推理') : null,
               ),
             ),
@@ -2301,9 +2301,9 @@ window.__ModuleLoader__.load({
             ),
             h('div', null,
               h('div', { className: 'fiam-card-title' }, '企业模型设置'),
-              h('div', { className: 'fiam-card-subtitle' }, view.modelAccess?.configured
-                ? `网关目录同步（共 ${modelList.length} 个模型，已启用 ${enabledCount} 个 · 默认 200K 上下文）`
-                : '配置网关地址和凭证后自动同步可用模型'),
+              !view.modelAccess?.configured
+                ? h('div', { className: 'fiam-card-subtitle' }, '配置网关地址和凭证后自动同步可用模型')
+                : null,
             ),
           ),
           view.modelAccess?.state === 'ready'
@@ -2311,6 +2311,11 @@ window.__ModuleLoader__.load({
               h('span', { className: 'fiam-badge-dot' }),
               `已同步 ${modelList.length} 个模型`
             )
+            : view.modelAccess?.stale
+              ? h('span', { className: 'fiam-badge fiam-badge-warn' },
+                h('span', { className: 'fiam-badge-dot' }),
+                `已缓存 ${modelList.length} 个模型`
+              )
             : view.modelAccess?.state === 'loading'
               ? h('span', { className: 'fiam-badge fiam-badge-authenticating' },
                 h('span', { className: 'fiam-badge-dot' }),
@@ -2323,9 +2328,23 @@ window.__ModuleLoader__.load({
                 )
                 : null,
         ),
-        h('p', { style: muted }, view.modelAccess?.configured
-          ? '企业模型已与网关目录保持同步。您可以点击列表中的“一键启用”快速使用推荐参数，或展开“精细配置”自定义容量规格、视觉支持与深度思考档位。'
-          : '请先在上方设置网关地址和个人 Key。保存后将自动获取授权模型。'),
+        !view.modelAccess?.configured
+          ? h('p', { style: muted }, '请先保存网关地址和模型访问凭证。')
+          : null,
+        view.modelAccess?.stale
+          ? h('div', { className: 'fiam-notice fiam-notice-warn', style: { marginTop: 8, width: '100%', boxSizing: 'border-box' } },
+            h('span', null, `目录未更新：${errorNotice(view.modelAccess.error)}${(() => {
+              const at = Number(view.modelAccess.retryAt);
+              if (!Number.isFinite(at)) return '';
+              const seconds = Math.round((at - Date.now()) / 1000);
+              if (seconds <= 1) return ' 正在重试。';
+              return ` 约 ${seconds} 秒后自动重试。`;
+            })()}`),
+            view.modelAccess?.retryAt
+              ? null
+              : h('button', { type: 'button', className: 'fiam-link', onClick: refreshModels, style: { marginLeft: 8 } }, '立即重试'),
+          )
+          : null,
         view.modelAccess?.configured && modelList.length > 0
           ? h('div', { className: 'fiam-callout', style: { marginTop: 6, marginBottom: 8 } },
             h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
@@ -2334,7 +2353,7 @@ window.__ModuleLoader__.load({
             ),
             h('div', null,
               h('strong', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, '参数配置提示：'),
-              '不同模型的处理能力各不相同，上下文窗口与单次最大输出应不高于内部约定的规格上限；若配置超出模型实际支持能力，可能导致上下文溢出（Context Overflow）、内容截断或网关拒绝调用。'
+              '上下文长度和最大输出不要超过模型支持的上限，否则可能导致内容截断或调用失败。'
             )
           )
           : null,
@@ -2486,9 +2505,31 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function readCachedModels() {
+    // One catalogue cache per person and gateway. A shared browser profile must
+    // never show another account's model list; a v1 entry has no owner, so it is
+    // discarded on mount instead of being adopted by whoever signs in next.
+    const MODEL_CACHE_PREFIX = 'forge-iam.cached-models.v2';
+    const MODEL_CACHE_LEGACY = 'forge-iam.cached-models.v1';
+    function modelCacheKey(view) {
+      const owner = typeof view?.principal === 'string' ? view.principal.trim() : '';
+      const baseURL = view?.gatewayCredential?.baseURL ?? view?.modelAccess?.baseURL ?? '';
+      if (!owner || !baseURL) return null;
+      return `${MODEL_CACHE_PREFIX}:${owner}:${baseURL}`;
+    }
+    function purgeModelCache() {
       try {
-        const raw = window.localStorage.getItem('forge-iam.cached-models.v1');
+        const stale = [];
+        for (let index = 0; index < window.localStorage.length; index += 1) {
+          const key = window.localStorage.key(index);
+          if (key && (key === MODEL_CACHE_LEGACY || key.startsWith(MODEL_CACHE_PREFIX))) stale.push(key);
+        }
+        for (const key of stale) window.localStorage.removeItem(key);
+      } catch { }
+    }
+    function readCachedModels(key) {
+      if (!key) return [];
+      try {
+        const raw = window.localStorage.getItem(key);
         const parsed = raw ? JSON.parse(raw) : [];
         return Array.isArray(parsed) ? parsed : [];
       } catch {
@@ -2496,17 +2537,19 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function writeCachedModels(models) {
+    function writeCachedModels(key, models) {
+      if (!key) return;
       try {
         if (Array.isArray(models) && models.length > 0) {
-          window.localStorage.setItem('forge-iam.cached-models.v1', JSON.stringify(models));
+          window.localStorage.setItem(key, JSON.stringify(models));
         }
       } catch { }
     }
 
     function Panel() {
       const initialModelOptions = readModelOptions();
-      const [cachedModels, setCachedModels] = React.useState(readCachedModels());
+      const [cachedModels, setCachedModels] = React.useState([]);
+      const cacheKeyRef = React.useRef(null);
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
       const [credential, setCredential] = React.useState({ value: '', deviceLabel: '', saving: false, notice: null });
       const [modelOptions, setModelOptions] = React.useState(initialModelOptions);
@@ -2518,11 +2561,54 @@ window.__ModuleLoader__.load({
       const lastSyncedOptions = React.useRef(initialModelOptions);
       const toolbarRef = React.useRef(null);
 
+      // Waking a laptop or returning to the tab is when a signed-in session is
+      // most likely to have drifted (network moved, gateway restarted). Re-read
+      // the catalogue once, throttled so a focus storm cannot hammer the gateway.
+      const wakeRef = React.useRef({ at: 0, inFlight: false });
+      const viewRef = React.useRef(state.view);
+      viewRef.current = state.view;
+      React.useEffect(() => {
+        if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
+        const kick = () => {
+          if (document.visibilityState === 'hidden') return;
+          const at = Date.now();
+          if (wakeRef.current.inFlight || at - wakeRef.current.at < 30000) return;
+          const view = viewRef.current;
+          if (view?.state !== 'ready' || view?.modelAccess?.state === 'loading') return;
+          wakeRef.current.at = at;
+          wakeRef.current.inFlight = true;
+          void getJson('/api/forge-iam/models')
+            .then((result) => {
+              if (result?.ok && result.body?.view) setState((current) => ({ ...current, view: result.body.view }));
+            })
+            .catch(() => { })
+            .finally(() => { wakeRef.current.inFlight = false; });
+        };
+        document.addEventListener('visibilitychange', kick);
+        window.addEventListener('focus', kick);
+        return () => {
+          document.removeEventListener('visibilitychange', kick);
+          window.removeEventListener('focus', kick);
+        };
+      }, []);
+
       const liveModels = state.view?.modelAccess?.models;
+      const viewCacheKey = modelCacheKey(state.view);
+      React.useEffect(() => {
+        try { window.localStorage.removeItem(MODEL_CACHE_LEGACY); } catch { }
+      }, []);
+      React.useEffect(() => {
+        if (cacheKeyRef.current === viewCacheKey) return;
+        const previous = cacheKeyRef.current;
+        cacheKeyRef.current = viewCacheKey;
+        // Drop the previous identity's list the moment the person or gateway changes.
+        if (previous && previous !== viewCacheKey) { try { window.localStorage.removeItem(previous); } catch { } }
+        setCachedModels(readCachedModels(viewCacheKey));
+      }, [viewCacheKey]);
       React.useEffect(() => {
         if (Array.isArray(liveModels) && liveModels.length > 0) {
           setCachedModels(liveModels);
-          writeCachedModels(liveModels);
+          writeCachedModels(cacheKeyRef.current, liveModels);
         }
       }, [liveModels]);
 
@@ -2750,7 +2836,7 @@ window.__ModuleLoader__.load({
         const epoch = viewBarrier.current.epoch;
         const value = credential.value.trim();
         if (!value) {
-          setCredential((current) => ({ ...current, notice: '请输入 UAG 个人凭证。' }));
+          setCredential((current) => ({ ...current, notice: '请输入模型访问凭证。' }));
           return;
         }
         setCredential((current) => ({ ...current, saving: true, notice: null }));
@@ -2852,7 +2938,8 @@ window.__ModuleLoader__.load({
           const view = result.body?.view ?? null;
           setCredential({ value: '', deviceLabel: '', saving: false, notice: null });
           setCachedModels([]);
-          try { window.localStorage.removeItem('forge-iam.cached-models.v1'); } catch { }
+          cacheKeyRef.current = null;
+          purgeModelCache();
           setModelOptions({});
           lastSyncedOptions.current = {};
           optionsSync.current.signature = null;
@@ -2998,7 +3085,10 @@ window.__ModuleLoader__.load({
           '凭证未使用系统安全存储，请联系管理员。')
         : null;
 
-      const safeCached = Array.isArray(cachedModels) ? cachedModels : [];
+      // Read the identity's cache during the render that first sees that
+      // identity, so a cached list never flashes empty while the effect catches up.
+      const cachedForRender = cacheKeyRef.current === viewCacheKey ? cachedModels : readCachedModels(viewCacheKey);
+      const safeCached = Array.isArray(cachedForRender) ? cachedForRender : [];
       const rawModelList = (Array.isArray(view.modelAccess?.models) && view.modelAccess.models.length > 0)
         ? view.modelAccess.models
         : safeCached;
@@ -3125,7 +3215,9 @@ window.__ModuleLoader__.load({
               style: view?.modelAccess?.state === 'error' ? { color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 } : undefined,
             },
               Array.isArray(view?.modelAccess?.models) && view.modelAccess.models.length > 0
-                ? `已同步 ${view.modelAccess.models.length} 个模型`
+                ? (view.modelAccess.stale
+                  ? `已缓存 ${view.modelAccess.models.length} 个模型（待刷新）`
+                  : `已同步 ${view.modelAccess.models.length} 个模型`)
                 : view?.modelAccess?.state === 'loading'
                   ? '正在同步…'
                   : view?.modelAccess?.state === 'error'
@@ -3274,6 +3366,9 @@ window.__ModuleLoader__.load({
             setView(result.body?.view ?? null);
             setMenuOpen(false);
             setConfirmSignOut(false);
+            // The catalogue cache is per person; a launcher sign-out is the
+            // shortcut people use, so it must clear it exactly like the panel's.
+            purgeModelCache();
           } else {
             setConfirmSignOut(false);
             setNotice(errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'));
@@ -3456,14 +3551,14 @@ window.__ModuleLoader__.load({
           state.reason === 'gateway'
             ? (state.gateway === 'owner-mismatch' ? '个人凭证属于其他账号'
               : state.gateway === 'invalid' ? '个人凭证信息需要检查，已保留'
-                : state.gateway === 'unknown' ? '无法确认 UAG 个人凭证状态'
-                  : '无法使用模型：尚未保存 UAG 个人凭证')
+                : state.gateway === 'unknown' ? '无法确认模型访问凭证状态'
+                  : '无法使用模型：尚未保存模型访问凭证')
             : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号'),
         ),
         state.reason === 'gateway'
           ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid' || state.gateway === 'unknown'
             ? '到“设置 → 企业账号”核对现有记录'
-            : '到“设置 → 企业账号”录入 UAG 个人凭证')
+            : '到“设置 → 企业账号”录入模型访问凭证')
           : null,
         state.reason !== 'gateway' && state.view?.canSignIn
           ? h('button', { type: 'button', className: 'forge-iam-primary', style: { ...primaryButton, minHeight: 26, height: 26, padding: '0 10px', fontSize: 12 }, onClick: login }, '登录')
@@ -3484,15 +3579,15 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'fiam-onboarding-preview' },
           h('div', { className: 'fiam-onboarding-preview-row' },
             h('span', { className: 'fiam-onboarding-preview-num' }, '1'),
-            h('span', null, '使用系统浏览器完成企业统一身份（OIDC + PKCE）认证'),
+            h('span', null, '在浏览器中登录企业账号'),
           ),
           h('div', { className: 'fiam-onboarding-preview-row' },
             h('span', { className: 'fiam-onboarding-preview-num' }, '2'),
-            h('span', null, '绑定本机专属 UAG 个人凭证，物理隔离身份令牌与调用密钥'),
+            h('span', null, '添加模型访问凭证'),
           ),
           h('div', { className: 'fiam-onboarding-preview-row' },
             h('span', { className: 'fiam-onboarding-preview-num' }, '3'),
-            h('span', null, '自动同步企业预置模型目录并启用对话能力'),
+            h('span', null, '同步可用模型并开始对话'),
           ),
         );
       }
@@ -3527,7 +3622,7 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { className: 'fiam-onboarding-summary-row' },
-              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, 'UAG 个人凭证'),
+              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '模型访问凭证'),
               h('span', { className: `fiam-badge fiam-badge-${gwState === 'configured' ? 'success' : 'warn'}` },
                 GATEWAY_STATUS[gwState] ?? '待核实'
               ),
@@ -3568,11 +3663,11 @@ window.__ModuleLoader__.load({
               onChange: (event) => setState((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle,
             }),
           ),
-          h('label', { style: fieldLabel }, 'UAG 个人凭证', h('input', {
+          h('label', { style: fieldLabel }, '模型访问凭证', h('input', {
             type: 'password',
             value: state.keyValue,
             placeholder: '输入网关提供的个人 Key',
-            'aria-label': 'UAG 个人凭证',
+            'aria-label': '模型访问凭证',
             autoComplete: 'off',
             spellCheck: false,
             disabled: state.saving,
@@ -3590,7 +3685,7 @@ window.__ModuleLoader__.load({
             style: inputStyle,
           })),
           state.view?.gatewayConsoleUrl
-            ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开 UAG 控制台创建凭据')
+            ? h('a', { href: state.view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '打开凭证管理页面创建凭据')
             : null,
           h('div', { style: { color: 'var(--dsw-alias-label-secondary)', font: 'var(--dsw-font-xxs-12)' } }, '创建时建议开启隐私保护，并设置 90 天有效期。'),
         );
@@ -3719,7 +3814,7 @@ window.__ModuleLoader__.load({
         if (savingRef.current) return;
         const value = state.keyValue.trim();
         if (!value) {
-          setState((current) => ({ ...current, notice: '请输入 UAG 个人凭证。' }));
+          setState((current) => ({ ...current, notice: '请输入模型访问凭证。' }));
           return;
         }
         savingRef.current = true;
@@ -3763,14 +3858,14 @@ window.__ModuleLoader__.load({
       const completionTitle = gatewayState === 'configured'
         ? (state.view?.state === 'ready' ? '准备就绪' : '请先登录企业账号')
         : gatewayState === 'unconfigured'
-          ? (state.view?.state === 'ready' ? '登录完成，尚未配置凭据' : '尚未保存 UAG 个人凭证')
+          ? (state.view?.state === 'ready' ? '登录完成，尚未配置凭据' : '尚未保存模型访问凭证')
           : '请检查凭证状态';
       const completionBody = gatewayState === 'configured'
         ? (state.view?.state === 'ready'
-          ? 'UAG 个人凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
-          : 'UAG 个人凭证已保存。请前往“设置 → 企业账号”登录后继续。')
+          ? '模型访问凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
+          : '模型访问凭证已保存。请前往“设置 → 企业账号”登录后继续。')
         : gatewayState === 'unconfigured'
-          ? 'UAG 个人凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并配置凭证。'
+          ? '模型访问凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并配置凭证。'
           : gatewayState === 'owner-mismatch'
             ? '现有凭证属于其他账号，已为你保留。请前往“设置 → 企业账号”核对。'
             : gatewayState === 'invalid'
@@ -3790,8 +3885,8 @@ window.__ModuleLoader__.load({
           onPrimary: startLogin,
         },
         {
-          title: '添加 UAG 个人凭证',
-          body: '使用企业模型还需要 UAG 个人凭证。请在 UAG 控制台为这台设备创建凭证，然后粘贴到下方。',
+          title: '添加模型访问凭证',
+          body: '使用企业模型还需要模型访问凭证。请在凭证管理页面为这台设备创建凭证，然后粘贴到下方。',
           primary: '保存并继续',
           onPrimary: saveCredential,
         },

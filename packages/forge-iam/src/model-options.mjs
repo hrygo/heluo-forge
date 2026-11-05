@@ -171,8 +171,9 @@ export function applyModelOptions(rawModels, options = {}) {
       ? opt.inputModalities.filter(m => m === 'text' || m === 'image')
       : (Array.isArray(opt.input) && opt.input.length > 0 ? opt.input.filter(m => m === 'text' || m === 'image') : (item.input ?? ['text']));
     const inputModalities = input.length > 0 ? input : ['text'];
-    const rawEfforts = opt.reasoningEfforts && typeof opt.reasoningEfforts === 'object' && !Array.isArray(opt.reasoningEfforts)
-      ? opt.reasoningEfforts : (item.reasoningEfforts ?? null);
+    const hasExplicitEfforts = Boolean(opt.reasoningEfforts && typeof opt.reasoningEfforts === 'object' && !Array.isArray(opt.reasoningEfforts));
+    const rawEfforts = hasExplicitEfforts
+      ? opt.reasoningEfforts : (item.reasoningEfforts ?? buildReasoningEffortRange('off', 'high'));
     const thinkingLevelMap = buildThinkingLevelMap(rawEfforts);
     const normalizedEfforts = thinkingLevelMap
       ? ((typeof (rawEfforts?.lower ?? rawEfforts?.min) === 'string' || typeof (rawEfforts?.upper ?? rawEfforts?.max) === 'string')
@@ -180,7 +181,7 @@ export function applyModelOptions(rawModels, options = {}) {
         : rawEfforts)
       : null;
     const reasoningEfforts = normalizedEfforts;
-    const reasoning = Boolean(thinkingLevelMap || opt.reasoning || item.reasoning);
+    const reasoning = Boolean(thinkingLevelMap || (!hasExplicitEfforts && (opt.reasoning || item.reasoning)));
     return {
       ...item,
       id: item.id,

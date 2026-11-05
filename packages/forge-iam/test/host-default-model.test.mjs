@@ -129,6 +129,7 @@ function runtimeFixture({ hostSelection, catalog = ['zeta', 'alpha'], fetch, ret
   });
   return {
     runtime, events, saves: s.saves, get stored() { return stored; },
+    listModels: route => host.llm.listModels(route),
     holdSaves() { let release; hold = new Promise(resolve => { release = resolve; }); return () => { hold = null; release(); }; },
     change(next) { view = { ...view, ...next }; for (const listener of [...listeners]) listener(); },
   };
@@ -186,7 +187,7 @@ test('saves are serialised: the last submission wins', async t => {
   assert.deepEqual(f.runtime.getView().enabled, ['beta']);
 });
 
-test('expiry clears the catalogue state together with the backend', async t => {
+test('expiry keeps the catalogue for display while closing the model surface', async t => {
   const f = runtimeFixture({ hostSelection: { provider: 'enterprise', model: 'alpha' } });
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
@@ -195,7 +196,12 @@ test('expiry clears the catalogue state together with the backend', async t => {
   await tick();
   const view = f.runtime.getView();
   assert.notEqual(view.state, 'ready');
-  assert.deepEqual(view.models, []);
+  // The list survives for display, marked stale …
+  assert.deepEqual(view.models.map(model => model.id), ['alpha', 'zeta']);
+  assert.equal(view.stale, true);
+  assert.equal(view.error, 'IAM_LOGIN_REQUIRED');
+  // … and the model surface itself is closed.
+  assert.deepEqual(await f.listModels('enterprise'), []);
 });
 
 test('a transient gateway outage at start-up heals with bounded retries; a rejected credential does not retry', async t => {
