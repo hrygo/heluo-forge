@@ -10,6 +10,7 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
     const ONBOARDING_KEY = 'forge-iam.onboarding.v1';
+    const MODEL_OPTIONS_KEY = 'forge-iam.model-options.v1';
     const REQUEST_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json' };
     // Use the host palette so the embedded controls follow light and dark themes.
     const inputStyle = {
@@ -1563,32 +1564,70 @@ window.__ModuleLoader__.load({
     }
 
     // §8 本地存储
-    function readMarker() {
-      try {
-        return window.localStorage.getItem(ONBOARDING_KEY);
-      } catch {
-        return null;
-      }
+    // 键名、序列化与失败兜底都收在这里，其余代码不直接访问浏览器存储。
+    // 存储不可用（硬化环境）时读操作给默认值、写操作静默跳过，会话保持可用且不回落到文件。
+    function createClientStore() {
+      const read = (key) => {
+        try { return window.localStorage.getItem(key); } catch { return null; }
+      };
+      const write = (key, value) => {
+        try { window.localStorage.setItem(key, value); } catch { /* 存储不可用时静默跳过 */ }
+      };
+      const remove = (key) => {
+        try { window.localStorage.removeItem(key); } catch { /* 同上 */ }
+      };
+      const readObject = (key, fallback) => {
+        try {
+          const parsed = JSON.parse(read(key) ?? 'null');
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+        } catch {
+          return fallback;
+        }
+      };
+      return {
+        marker: {
+          read: () => read(ONBOARDING_KEY),
+          write: (value) => write(ONBOARDING_KEY, value),
+        },
+        modelOptions: {
+          read: () => readObject(MODEL_OPTIONS_KEY, {}),
+          write: (next) => write(MODEL_OPTIONS_KEY, JSON.stringify(next)),
+        },
+        models: {
+          read(key) {
+            if (!key) return [];
+            try {
+              const parsed = JSON.parse(read(key) ?? '[]');
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          },
+          write(key, models) {
+            if (!key) return;
+            if (Array.isArray(models) && models.length > 0) write(key, JSON.stringify(models));
+          },
+          remove,
+          // 清掉旧版条目与全部 v2 条目：换账号或网关后不得把上一个身份的目录留给下一个人。
+          purge(prefix, legacy) {
+            try {
+              const stale = [];
+              for (let index = 0; index < window.localStorage.length; index += 1) {
+                const key = window.localStorage.key(index);
+                if (key && (key === legacy || key.startsWith(prefix))) stale.push(key);
+              }
+              for (const key of stale) remove(key);
+            } catch { /* 同上 */ }
+          },
+        },
+      };
     }
+    const clientStore = createClientStore();
 
-    function readModelOptions() {
-      try {
-        const raw = window.localStorage.getItem('forge-iam.model-options.v1');
-        const parsed = raw ? JSON.parse(raw) : {};
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-      } catch {
-        return {};
-      }
-    }
-
-    function writeMarker(value) {
-      try {
-        window.localStorage.setItem(ONBOARDING_KEY, value);
-      } catch {
-        // Storage may be unavailable in a hardened profile; keep the session
-        // usable without falling back to a file.
-      }
-    }
+    function readMarker() { return clientStore.marker.read(); }
+    function writeMarker(value) { clientStore.marker.write(value); }
+    function readModelOptions() { return clientStore.modelOptions.read(); }
+    function writeModelOptions(next) { clientStore.modelOptions.write(next); }
 
     // §9 错误文案
     function errorNotice(code) {
@@ -2619,35 +2658,9 @@ window.__ModuleLoader__.load({
       if (!owner || !baseURL) return null;
       return `${MODEL_CACHE_PREFIX}:${owner}:${baseURL}`;
     }
-    function purgeModelCache() {
-      try {
-        const stale = [];
-        for (let index = 0; index < window.localStorage.length; index += 1) {
-          const key = window.localStorage.key(index);
-          if (key && (key === MODEL_CACHE_LEGACY || key.startsWith(MODEL_CACHE_PREFIX))) stale.push(key);
-        }
-        for (const key of stale) window.localStorage.removeItem(key);
-      } catch { }
-    }
-    function readCachedModels(key) {
-      if (!key) return [];
-      try {
-        const raw = window.localStorage.getItem(key);
-        const parsed = raw ? JSON.parse(raw) : [];
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    }
-
-    function writeCachedModels(key, models) {
-      if (!key) return;
-      try {
-        if (Array.isArray(models) && models.length > 0) {
-          window.localStorage.setItem(key, JSON.stringify(models));
-        }
-      } catch { }
-    }
+    function purgeModelCache() { clientStore.models.purge(MODEL_CACHE_PREFIX, MODEL_CACHE_LEGACY); }
+    function readCachedModels(key) { return clientStore.models.read(key); }
+    function writeCachedModels(key, models) { clientStore.models.write(key, models); }
 
     // §14 面板
     function Panel() {
@@ -2699,14 +2712,14 @@ window.__ModuleLoader__.load({
       const liveModels = state.view?.modelAccess?.models;
       const viewCacheKey = modelCacheKey(state.view);
       React.useEffect(() => {
-        try { window.localStorage.removeItem(MODEL_CACHE_LEGACY); } catch { }
+        clientStore.models.remove(MODEL_CACHE_LEGACY);
       }, []);
       React.useEffect(() => {
         if (cacheKeyRef.current === viewCacheKey) return;
         const previous = cacheKeyRef.current;
         cacheKeyRef.current = viewCacheKey;
         // Drop the previous identity's list the moment the person or gateway changes.
-        if (previous && previous !== viewCacheKey) { try { window.localStorage.removeItem(previous); } catch { } }
+        if (previous && previous !== viewCacheKey) clientStore.models.remove(previous);
         setCachedModels(readCachedModels(viewCacheKey));
       }, [viewCacheKey]);
       React.useEffect(() => {
@@ -2792,7 +2805,7 @@ window.__ModuleLoader__.load({
         setModelSaving(true);
         setModelNotice(null);
         try {
-          try { window.localStorage.setItem('forge-iam.model-options.v1', JSON.stringify(nextOptions)); } catch { }
+          writeModelOptions(nextOptions);
           const result = await putJson('/api/forge-iam/models', { options: nextOptions });
           if (!result.ok) {
             setModelNotice(errorNotice(result.body?.error?.code ?? 'IAM_REQUEST_FAILED'));
@@ -2863,7 +2876,7 @@ window.__ModuleLoader__.load({
         optionsSync.current.signature = signature;
         lastSyncedOptions.current = hostOptions;
         setModelOptions(hostOptions);
-        try { window.localStorage.setItem('forge-iam.model-options.v1', JSON.stringify(hostOptions)); } catch { }
+        writeModelOptions(hostOptions);
       }, []);
 
       const load = React.useCallback(async () => {
