@@ -1343,9 +1343,9 @@ window.__ModuleLoader__.load({
         return { kind: 'error', dotClass: 'error', label: '授权已失效', tooltip: '登录已失效，请重新登录' };
       }
       if (ui.ready) {
-        const gw = view.gatewayCredential?.state ?? 'unconfigured';
+        const gw = deriveGatewayUi(view.gatewayCredential, 'unconfigured');
         const name = view.principal || view.subject || '企业账号';
-        if (gw === 'configured') {
+        if (gw.configured) {
           const catalogue = deriveModelUi(view);
           if (catalogue.failed && catalogue.models.length === 0) {
             return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${errorNotice(catalogue.error)}` };
@@ -1354,10 +1354,10 @@ window.__ModuleLoader__.load({
           const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型${catalogue.stale ? '待刷新' : '可用'}` : '';
           return { kind: 'ready', dotClass: 'success', label: '企业认证有效', tooltip: `${name} · 企业认证有效${modelSuffix}` };
         }
-        if (gw === 'owner-mismatch') {
+        if (gw.ownerMismatch) {
           return { kind: 'owner-mismatch', dotClass: 'warn', label: '凭据账号不匹配', tooltip: `${name} · 网关凭据属于其他账号` };
         }
-        if (gw === 'invalid') {
+        if (gw.invalid) {
           return { kind: 'invalid-key', dotClass: 'warn', label: '凭据状态需核对', tooltip: `${name} · 网关凭据记录需核对` };
         }
         return { kind: 'ready', dotClass: 'success', label: '企业认证有效', tooltip: `${name} · 待配置网关凭据` };
@@ -1555,6 +1555,20 @@ window.__ModuleLoader__.load({
       'owner-mismatch': '属于其他账号，请核对记录',
       invalid: '记录不一致，已保留',
     };
+
+    // §6.1 网关凭据派生
+    // 凭据状态只在这里读；fallback 由调用点决定（未确认用 unknown、待配置用 unconfigured）。
+    function deriveGatewayUi(credential, fallback = 'unknown') {
+      const state = typeof credential?.state === 'string' && Object.hasOwn(GATEWAY_STATUS, credential.state) ? credential.state : fallback;
+      return {
+        state,
+        configured: state === 'configured',
+        unconfigured: state === 'unconfigured',
+        unknown: state === 'unknown',
+        ownerMismatch: state === 'owner-mismatch',
+        invalid: state === 'invalid',
+      };
+    }
 
     function statusBadgeClass(state) {
       if (state === 'ready') return 'success';
@@ -1757,7 +1771,7 @@ window.__ModuleLoader__.load({
         configured: typeof view?.configured === 'boolean' ? view.configured : null,
         signedIn: typeof view?.signedIn === 'boolean' ? view.signedIn : null,
         exclusive: view?.exclusive === 'ok' ? 'ok' : typeof view?.exclusive === 'string' && view.exclusive ? 'not-ok' : 'unknown',
-        gatewayState: typeof view?.gatewayCredential?.state === 'string' && Object.hasOwn(GATEWAY_STATUS, view.gatewayCredential.state) ? view.gatewayCredential.state : 'unknown',
+        gatewayState: deriveGatewayUi(view?.gatewayCredential).state,
         errorCode: code == null ? null : DIAGNOSTIC_ERRORS.has(code) ? code : 'unknown',
         missingConfigCount: Array.isArray(view?.missing) ? view.missing.length : null,
       };
@@ -1888,6 +1902,7 @@ window.__ModuleLoader__.load({
         credential, setCredential, fieldLabel, inputStyle, muted, primaryButton, secondaryButton,
         saveCredential, clearCredential, viewBarrier,
       } = ctx;
+      const gatewayUi = deriveGatewayUi(gateway);
       const hasDraftChanges = Boolean(credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? '')));
       return h('div', { id: 'fiam-section-gateway', className: 'fiam-card' },
         h('div', { className: 'fiam-card-header' },
@@ -1903,7 +1918,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'fiam-card-subtitle' }, '填写企业 AI 网关签发的个人访问凭证。'),
             ),
           ),
-          h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gateway.state)}` },
+          h('span', { className: `fiam-badge fiam-badge-${gatewayBadgeClass(gatewayUi.state)}` },
             h('span', { className: 'fiam-badge-dot' }),
             `个人访问凭证：${gatewayStatus}`,
           ),
@@ -1941,14 +1956,14 @@ window.__ModuleLoader__.load({
             h('path', { d: 'M8 7v4m0-6h.01' })
           ),
           h('div', null,
-            gateway.state === 'configured'
+            gatewayUi.configured
               ? '个人访问凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
-              : gateway.state === 'unknown'
+              : gatewayUi.unknown
                 ? '网关凭据状态尚未确认，请刷新核实。'
-                : gateway.state === 'unconfigured'
+                : gatewayUi.unconfigured
                   ? '在企业 AI 网关创建个人访问凭证，然后粘贴到下方。'
                   : '请先核对现有凭证；如有疑问，请联系管理员。',
-            gateway.state === 'unconfigured' && view.gatewayConsoleUrl
+            gatewayUi.unconfigured && view.gatewayConsoleUrl
               ? h('div', { style: { marginTop: 4 } },
                 h('a', { href: view.gatewayConsoleUrl, target: '_blank', rel: 'noreferrer' }, '前往企业 AI 网关创建凭证 ↗')
               )
@@ -1961,7 +1976,7 @@ window.__ModuleLoader__.load({
             h('input', {
               type: 'password',
               value: credential.value,
-              placeholder: gateway.state === 'configured' ? '已保存，输入新凭证可更换' : '粘贴个人访问凭证',
+              placeholder: gatewayUi.configured ? '已保存，输入新凭证可更换' : '粘贴个人访问凭证',
               'aria-label': '个人访问凭证',
               autoComplete: 'off',
               spellCheck: false,
@@ -1986,7 +2001,7 @@ window.__ModuleLoader__.load({
         ),
         h('div', { className: 'fiam-actions' },
           h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: saveCredential }, credential.saving ? '正在处理…' : '保存凭据'),
-          (gateway.state !== 'unconfigured' && gateway.state !== 'unknown') || credential.value
+          (!gatewayUi.unconfigured && !gatewayUi.unknown) || credential.value
             ? h('button', { type: 'button', style: secondaryButton, disabled: credential.saving || viewBarrier.current.pending, onClick: clearCredential }, '清除凭据')
             : null,
         ),
@@ -2321,11 +2336,12 @@ window.__ModuleLoader__.load({
     function renderJourneyBar(ctx) {
       const { h, view, gateway, enabledCount, totalModels } = ctx;
       const ui = deriveSessionUi(view);
+      const gatewayUi = deriveGatewayUi(gateway);
+      const catalogue = deriveModelUi(view);
       const step1Done = ui.ready;
       const step1Warn = ui.expired || ui.failed || ui.unconfigured || ui.unreachable;
-      const step2Done = step1Done && gateway.state === 'configured' && gateway.matchesAccount !== false;
-      const step2Warn = step1Done && (gateway.state === 'owner-mismatch' || gateway.state === 'invalid' || gateway.state === 'unknown');
-      const catalogue = deriveModelUi(view);
+      const step2Done = step1Done && gatewayUi.configured && gateway.matchesAccount !== false;
+      const step2Warn = step1Done && (gatewayUi.ownerMismatch || gatewayUi.invalid || gatewayUi.unknown);
       const step3Loading = step2Done && catalogue.loading;
       const step3Warn = step2Done && (catalogue.failed || (catalogue.ready && totalModels === 0));
       const step3Done = step2Done && catalogue.ready && enabledCount > 0;
@@ -2426,6 +2442,7 @@ window.__ModuleLoader__.load({
       } = ctx;
       const ui = deriveSessionUi(view);
       const catalogue = deriveModelUi(view);
+      const gatewayUi = deriveGatewayUi(gateway);
       const unenabledCount = Math.max(0, modelList.length - enabledCount);
       const onFilterSelect = handleFilterChange || setModelFilter;
       return h('section', { id: 'fiam-section-models', className: 'fiam-card', 'aria-label': '企业模型' },
@@ -2580,7 +2597,7 @@ window.__ModuleLoader__.load({
                   alignItems: 'center',
                   gap: 4,
                 },
-                disabled: credential.saving || modelSaving || viewBarrier.current.pending || !ui.ready || gateway.state !== 'configured',
+                disabled: credential.saving || modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
                 title: '从企业网关重新同步最新模型目录',
                 'aria-label': '刷新模型目录',
                 onClick: refreshModels,
@@ -2668,14 +2685,14 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             style: secondaryButton,
-            disabled: credential.saving || modelSaving || viewBarrier.current.pending || !ui.ready || gateway.state !== 'configured',
+            disabled: credential.saving || modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
             onClick: refreshModels,
           }, credential.saving ? '正在处理…' : '刷新模型列表'),
           h('button', {
             type: 'button',
             className: 'forge-iam-primary',
             style: primaryButton,
-            disabled: modelSaving || viewBarrier.current.pending || !ui.ready || gateway.state !== 'configured',
+            disabled: modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
             onClick: saveModelOptions,
           }, modelSaving ? '正在保存…' : '保存模型配置'),
           hasUnsavedModelChanges
@@ -2698,7 +2715,7 @@ window.__ModuleLoader__.load({
           }, modelNotice)
           : null,
         h('p', { style: { ...muted, marginTop: 12 } }, !ui.ready ? '下一步：登录企业账号。'
-          : gateway.state !== 'configured' || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人访问凭证。'
+          : !gatewayUi.configured || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人访问凭证。'
             : '点击“一键启用”可直接以默认参数启用并生效；展开精细配置修改参数后，点击“保存模型配置”即可在对话窗口选用。'),
       );
     }
@@ -3252,13 +3269,14 @@ window.__ModuleLoader__.load({
         : null;
 
       const gateway = view.gatewayCredential ?? { state: 'unknown' };
-      const gatewayStatus = GATEWAY_STATUS[gateway.state] ?? '状态未知';
+      const gatewayUi = deriveGatewayUi(gateway);
+      const gatewayStatus = GATEWAY_STATUS[gatewayUi.state] ?? '状态未知';
       const gatewayDetails = [
         gateway.deviceLabel ? `设备：${gateway.deviceLabel}` : null,
         gateway.enteredAt ? `录入：${formatTime(gateway.enteredAt)}` : null,
         gateway.suggestedExpiry ? `建议到期：${gateway.suggestedExpiry}` : null,
       ].filter(Boolean);
-      const storageWarning = gateway.state === 'configured' && gateway.storage && gateway.storage !== 'keychain'
+      const storageWarning = gatewayUi.configured && gateway.storage && gateway.storage !== 'keychain'
         ? h('div', { className: 'fiam-notice fiam-notice-warn' },
           '凭证未使用系统安全存储，请联系管理员。')
         : null;
@@ -3322,9 +3340,10 @@ window.__ModuleLoader__.load({
     function IamLauncherMenu(props) {
       const { view, status, onCopyDiagnostics, onSignOut, confirmSignOut, signingOut, notice, openSettings, onClose } = props;
       const isSignedIn = deriveSessionUi(view).ready;
-      const gwState = view?.gatewayCredential?.state ?? 'unconfigured';
+      const gatewayUi = deriveGatewayUi(view?.gatewayCredential, 'unconfigured');
+      const gwState = gatewayUi.state;
       const models = deriveModelUi(view);
-      const gwConfigured = gwState === 'configured';
+      const gwConfigured = gatewayUi.configured;
       const principalName = view?.principal || view?.subject || '未登录员工';
       const avatarInitial = String(principalName).replace(/^E/i, '').slice(0, 2).toUpperCase() || '企';
 
@@ -3626,8 +3645,8 @@ window.__ModuleLoader__.load({
         if (!view) return { visible: true, reason: 'signed-out', sessionState: null };
         const ui = deriveSessionUi(view);
         if (!ui.ready) return { visible: true, reason: 'signed-out', sessionState: ui.state };
-        const gateway = view.gatewayCredential?.state ?? 'unconfigured';
-        return gateway === 'configured'
+        const gateway = deriveGatewayUi(view.gatewayCredential, 'unconfigured');
+        return gateway.configured
           ? { visible: false, reason: null, gateway, sessionState: 'ready' }
           : { visible: true, reason: 'gateway', gateway, sessionState: 'ready' };
       };
@@ -3731,14 +3750,14 @@ window.__ModuleLoader__.load({
             },
           }),
           state.reason === 'gateway'
-            ? (state.gateway === 'owner-mismatch' ? '个人访问凭证属于其他账号'
-              : state.gateway === 'invalid' ? '个人访问凭证信息需要检查，已保留'
-                : state.gateway === 'unknown' ? '无法确认个人访问凭证状态'
+            ? (state.gateway.ownerMismatch ? '个人访问凭证属于其他账号'
+              : state.gateway.invalid ? '个人访问凭证信息需要检查，已保留'
+                : state.gateway.unknown ? '无法确认个人访问凭证状态'
                   : '尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。')
             : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号'),
         ),
         state.reason === 'gateway'
-          ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid' || state.gateway === 'unknown'
+          ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway.ownerMismatch || state.gateway.invalid || state.gateway.unknown
             ? '到“设置 → 企业账号”核对现有记录'
             : '到“设置 → 企业账号”录入个人访问凭证')
           : null,
@@ -3794,7 +3813,8 @@ window.__ModuleLoader__.load({
         );
       }
       if (state.step === 3) {
-        const gwState = state.view?.gatewayCredential?.state ?? 'unknown';
+        const gatewayUi = deriveGatewayUi(state.view?.gatewayCredential);
+      const gwState = gatewayUi.state;
         const models = state.view?.modelAccess?.models ?? [];
         return h('div', { style: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 } },
           h('div', { className: 'fiam-onboarding-summary' },
@@ -3806,12 +3826,12 @@ window.__ModuleLoader__.load({
             ),
             h('div', { className: 'fiam-onboarding-summary-row' },
               h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '个人访问凭证'),
-              h('span', { className: `fiam-badge fiam-badge-${gwState === 'configured' ? 'success' : 'warn'}` },
+              h('span', { className: `fiam-badge fiam-badge-${gatewayUi.configured ? 'success' : 'warn'}` },
                 GATEWAY_STATUS[gwState] ?? '待核实'
               ),
             ),
           ),
-          gwState === 'configured' && deriveModelUi(state.view).loading
+          gatewayUi.configured && deriveModelUi(state.view).loading
             ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
               h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
                 h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
@@ -3819,7 +3839,7 @@ window.__ModuleLoader__.load({
               )
             )
             : null,
-          gwState === 'configured' && deriveModelUi(state.view).error
+          gatewayUi.configured && deriveModelUi(state.view).error
             ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, errorNotice(deriveModelUi(state.view).error))
             : null,
           models.length > 0
@@ -3954,7 +3974,7 @@ window.__ModuleLoader__.load({
         // matching key, skip straight to "完成"; a later identical poll must not
         // pull the user back out of the final screen.
         ...(deriveSessionUi(view).ready && current.step < 2
-          ? { step: view.gatewayCredential?.state === 'configured' ? 3 : 2, authorizationUrl: null, notice: null }
+          ? { step: deriveGatewayUi(view.gatewayCredential).configured ? 3 : 2, authorizationUrl: null, notice: null }
           : {}),
         ...(current.step === 2 && !deriveSessionUi(view).ready
           ? { step: 1, authorizationUrl: null, notice: deriveSessionUi(view).failed ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : '登录状态已变化，请重新登录企业账号。' }
@@ -3981,7 +4001,7 @@ window.__ModuleLoader__.load({
             ...current,
             view,
             step: deriveSessionUi(view).ready
-              ? (view.gatewayCredential?.state === 'configured' ? 3 : 2)
+              ? (deriveGatewayUi(view.gatewayCredential).configured ? 3 : 2)
               : current.step,
             authorizationUrl: result.body?.authorizationUrl,
             notice: deriveSessionUi(view).ready ? null : '浏览器已打开；若被拦截，请使用下方链接。',
@@ -4038,21 +4058,22 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const gatewayState = state.view?.gatewayCredential?.state ?? 'unknown';
-      const completionTitle = gatewayState === 'configured'
+      const gatewayUi = deriveGatewayUi(state.view?.gatewayCredential);
+      const gatewayState = gatewayUi.state;
+      const completionTitle = gatewayUi.configured
         ? (deriveSessionUi(state.view).ready ? '准备就绪' : '请先登录企业账号')
-        : gatewayState === 'unconfigured'
+        : gatewayUi.unconfigured
           ? (deriveSessionUi(state.view).ready ? '登录完成，尚未配置凭据' : '尚未保存个人访问凭证')
           : '请检查凭证状态';
-      const completionBody = gatewayState === 'configured'
+      const completionBody = gatewayUi.configured
         ? (deriveSessionUi(state.view).ready
           ? '个人访问凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
           : '个人访问凭证已保存。请前往“设置 → 企业账号”登录后继续。')
-        : gatewayState === 'unconfigured'
+        : gatewayUi.unconfigured
           ? '个人访问凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并配置凭证。'
-          : gatewayState === 'owner-mismatch'
+          : gatewayUi.ownerMismatch
             ? '现有凭证属于其他账号，已为你保留。请前往“设置 → 企业账号”核对。'
-            : gatewayState === 'invalid'
+            : gatewayUi.invalid
               ? '现有凭证信息需要检查，已为你保留。请前往“设置 → 企业账号”核对。'
               : '无法确认凭证是否已保存。请前往“设置 → 企业账号”刷新后查看。';
       const steps = [
@@ -4080,7 +4101,7 @@ window.__ModuleLoader__.load({
           primary: '完成',
           // Without a configured credential the model is not usable; record the
           // skip rather than claiming onboarding completed.
-          onPrimary: () => close(deriveSessionUi(state.view).ready && gatewayState === 'configured' ? 'done' : 'skipped'),
+          onPrimary: () => close(deriveSessionUi(state.view).ready && gatewayUi.configured ? 'done' : 'skipped'),
         },
       ];
       const step = steps[state.step] ?? steps[0];

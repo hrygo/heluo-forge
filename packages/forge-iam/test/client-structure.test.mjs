@@ -12,6 +12,8 @@ import { analyseClient, readClientSource } from './support/client-source.mjs';
 const STATE_READ_BASELINE = { deriveSessionUi: 2 };
 // modelAccess.state too; a local `access` alias counts, so the guard cannot be dodged.
 const MODEL_STATE_READ_BASELINE = { deriveModelUi: 2 };
+// Credential state is never read directly: deriveGatewayUi(credential) owns it.
+const GATEWAY_STATE_READ_BASELINE = {};
 
 // Storage is centralised: every access lives in createClientStore().
 const STORAGE_BASELINE = { createClientStore: 5 };
@@ -56,6 +58,14 @@ test('modelAccess.state is read only by deriveModelUi()', () => {
     analysed.violations.modelStateReads,
     MODEL_STATE_READ_BASELINE,
     'read a derived flag (deriveModelUi(view).ready) instead of modelAccess.state here',
+  );
+});
+
+test('credential state is read only through deriveGatewayUi()', () => {
+  assert.deepEqual(
+    analysed.violations.gatewayStateReads,
+    GATEWAY_STATE_READ_BASELINE,
+    'call deriveGatewayUi(credential).configured instead of comparing gateway.state here',
   );
 });
 
