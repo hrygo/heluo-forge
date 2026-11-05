@@ -577,3 +577,22 @@ test('model list toolbar is sticky, eliminates redundant custom tab, and aligns 
   await panel.tick();
   assert.match(panel.text(panel.render()), /corp-chat/);
 });
+
+test('model list leverages cached models during background loading and eliminates all customized badges', async t => {
+  const storage = {
+    'forge-iam.cached-models.v1': JSON.stringify([{ id: 'cached-deepseek', name: 'cached-deepseek' }]),
+    'forge-iam.model-options.v1': JSON.stringify({ 'cached-deepseek': { maxTokens: 16000 } }),
+  };
+  const loadingView = {
+    ...view,
+    gatewayCredential: { state: 'configured', matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
+    modelAccess: { configured: true, state: 'loading', models: [] },
+  };
+  const panel = await mountPanel(async () => Response.json(loadingView), { storage });
+  t.after(() => panel.close());
+
+  const renderedText = panel.text(panel.render());
+  assert.doesNotMatch(renderedText, /正在获取模型列表…/);
+  assert.match(renderedText, /cached-deepseek/);
+  assert.doesNotMatch(renderedText, /已个性化/);
+});
