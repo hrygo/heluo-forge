@@ -1309,6 +1309,9 @@ window.__ModuleLoader__.load({
       if (view.state === 'authenticating') {
         return { kind: 'authenticating', dotClass: 'authenticating', label: '等待登录完成', tooltip: '正在等待浏览器授权' };
       }
+      if (view.state === 'unreachable') {
+        return { kind: 'unreachable', dotClass: 'warn', label: '连接登录受阻', tooltip: '暂时无法连接登录服务，现有授权保留至到期' };
+      }
       if (view.state === 'expired' || view.state === 'error') {
         return { kind: 'error', dotClass: 'error', label: '授权已失效', tooltip: '登录已失效，请重新登录' };
       }
@@ -1316,6 +1319,12 @@ window.__ModuleLoader__.load({
         const gw = view.gatewayCredential?.state ?? 'unconfigured';
         const name = view.principal || view.subject || '企业账号';
         if (gw === 'configured') {
+          if (view.modelAccess?.state === 'error') {
+            return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${errorNotice(view.modelAccess.error)}` };
+          }
+          if (view.modelAccess?.state === 'loading') {
+            return { kind: 'model-loading', dotClass: 'authenticating', label: '正在同步模型', tooltip: `${name} · 正在同步企业网关模型目录` };
+          }
           const modelCount = view.modelAccess?.models?.length ?? 0;
           const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型可用` : '';
           return { kind: 'ready', dotClass: 'success', label: '企业网关就绪', tooltip: `${name} · 双模式凭据就绪${modelSuffix}` };
@@ -1784,7 +1793,13 @@ window.__ModuleLoader__.load({
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
               h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存'),
               h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-label-primary)' } }, '有未保存的更改。保存后将重新获取模型列表。'),
-            )
+            ),
+            h('button', {
+              type: 'button',
+              style: { ...secondaryButton, height: 26, minHeight: 26, padding: '0 10px', fontSize: 12 },
+              disabled: credential.saving || viewBarrier.current.pending,
+              onClick: () => setCredential((current) => ({ ...current, value: '', baseURL: undefined })),
+            }, '重置输入'),
           ) : null,
         h('div', { className: 'fiam-callout' },
           h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
@@ -2183,15 +2198,19 @@ window.__ModuleLoader__.load({
     function renderJourneyBar(ctx) {
       const { h, view, gateway, enabledCount, totalModels } = ctx;
       const step1Done = view.state === 'ready';
-      const step1Warn = view.state === 'expired' || view.state === 'error';
+      const step1Warn = view.state === 'expired' || view.state === 'error' || view.state === 'unconfigured' || view.state === 'unreachable';
       const step2Done = step1Done && gateway.state === 'configured' && gateway.matchesAccount !== false;
-      const step2Warn = step1Done && (gateway.state === 'owner-mismatch' || gateway.state === 'invalid');
-      const step3Done = step2Done && view.modelAccess?.state === 'ready' && enabledCount > 0;
+      const step2Warn = step1Done && (gateway.state === 'owner-mismatch' || gateway.state === 'invalid' || gateway.state === 'unknown');
+      const modelState = view.modelAccess?.state;
+      const step3Loading = step2Done && modelState === 'loading';
+      const step3Warn = step2Done && (modelState === 'error' || (modelState === 'ready' && totalModels === 0));
+      const step3Done = step2Done && modelState === 'ready' && enabledCount > 0;
       const steps = [
         {
           num: '1',
           title: '身份',
-          status: step1Done ? '已认证' : (view.state === 'authenticating' ? '认证中' : (step1Warn ? '需重新登录' : '待认证')),
+          targetId: 'fiam-section-account',
+          status: step1Done ? '已认证' : (view.state === 'authenticating' ? '认证中' : (view.state === 'unconfigured' ? '待配置登录' : (view.state === 'unreachable' ? '连接受阻' : (step1Warn ? '需重新登录' : '待认证')))),
           done: step1Done,
           warn: step1Warn,
           active: !step1Done && !step1Warn,
@@ -2199,6 +2218,7 @@ window.__ModuleLoader__.load({
         {
           num: '2',
           title: '凭据',
+          targetId: 'fiam-section-gateway',
           status: step2Done ? '已就绪' : (step2Warn ? '需核对' : '待配置'),
           done: step2Done,
           warn: step2Warn,
@@ -2207,10 +2227,11 @@ window.__ModuleLoader__.load({
         {
           num: '3',
           title: '模型',
-          status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step2Done ? '待启用' : '待解锁'),
+          targetId: 'fiam-section-models',
+          status: step3Done ? `已启用 ${enabledCount}/${totalModels}` : (step3Loading ? '同步中…' : (modelState === 'error' ? '同步异常' : (modelState === 'ready' && totalModels === 0 ? '无可用模型' : (step2Done ? '待启用' : '待解锁')))),
           done: step3Done,
-          warn: false,
-          active: step2Done && !step3Done,
+          warn: step3Warn,
+          active: step2Done && !step3Done && !step3Warn,
         },
       ];
 
@@ -2231,6 +2252,10 @@ window.__ModuleLoader__.load({
         children.push(h('div', {
           key: s.title,
           className: `fiam-journey-step fiam-journey-step-${stateClass}`,
+          style: { cursor: 'pointer' },
+          onClick: () => {
+            try { document?.getElementById?.(s.targetId)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); } catch { }
+          },
         },
           h('div', {
             className: `fiam-journey-icon fiam-journey-icon-${stateClass}`,
@@ -2275,11 +2300,21 @@ window.__ModuleLoader__.load({
             ),
           ),
           view.modelAccess?.state === 'ready'
-            ? h('span', { className: 'fiam-badge fiam-badge-success' },
+            ? h('span', { className: `fiam-badge fiam-badge-${modelList.length > 0 ? 'success' : 'warn'}` },
               h('span', { className: 'fiam-badge-dot' }),
               `已同步 ${modelList.length} 个模型`
             )
-            : null,
+            : view.modelAccess?.state === 'loading'
+              ? h('span', { className: 'fiam-badge fiam-badge-authenticating' },
+                h('span', { className: 'fiam-badge-dot' }),
+                '正在同步…'
+              )
+              : view.modelAccess?.state === 'error'
+                ? h('span', { className: 'fiam-badge fiam-badge-error' },
+                  h('span', { className: 'fiam-badge-dot' }),
+                  '同步异常'
+                )
+                : null,
         ),
         h('p', { style: muted }, view.modelAccess?.configured
           ? '企业模型已与网关目录保持同步。您可以点击列表中的“一键启用”快速使用推荐参数，或展开“精细配置”自定义容量规格、视觉支持与深度思考档位。'
@@ -2408,8 +2443,8 @@ window.__ModuleLoader__.load({
           )
           : null,
         view.modelAccess?.state === 'ready' && !modelList.length
-          ? h('p', { role: 'status', style: muted }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
-        view.modelAccess?.error ? h('p', { role: 'status', style: muted }, errorNotice(view.modelAccess.error)) : null,
+          ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人 Key 的模型权限。') : null,
+        view.modelAccess?.error ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(view.modelAccess.error)) : null,
         h('div', { className: 'fiam-actions' },
           h('button', {
             type: 'button',
@@ -2591,6 +2626,12 @@ window.__ModuleLoader__.load({
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
           if (view?.state !== 'authenticating') linkIdentity.current = null;
           setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }) }));
+          setCredential((current) => {
+            if (current.notice !== '网关地址和个人 Key 已保存，正在获取模型列表。') return current;
+            if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人 Key 已保存，模型目录已同步。' };
+            if (view?.modelAccess?.state === 'error') return { ...current, notice: errorNotice(view.modelAccess.error) };
+            return current;
+          });
           void syncModelOptions(view);
         } catch (error) {
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
@@ -2607,6 +2648,12 @@ window.__ModuleLoader__.load({
           ...current, phase: 'ready', view, error: null,
           ...(view?.state === 'authenticating' ? {} : { authorizationUrl: null }),
         }));
+        setCredential((current) => {
+          if (current.notice !== '网关地址和个人 Key 已保存，正在获取模型列表。') return current;
+          if (view?.modelAccess?.state === 'ready') return { ...current, notice: '网关地址和个人 Key 已保存，模型目录已同步。' };
+          if (view?.modelAccess?.state === 'error') return { ...current, notice: errorNotice(view.modelAccess.error) };
+          return current;
+        });
         void syncModelOptions(view);
       }, viewBarrier);
 
@@ -3023,10 +3070,17 @@ window.__ModuleLoader__.load({
           ),
           isSignedIn ? h('div', { className: 'fiam-launcher-menu-row' },
             h('span', { className: 'fiam-launcher-menu-label' }, '企业模型'),
-            h('span', { className: 'fiam-launcher-menu-value' },
+            h('span', {
+              className: 'fiam-launcher-menu-value',
+              style: view?.modelAccess?.state === 'error' ? { color: 'var(--dsw-alias-state-warn-primary)', fontWeight: 600 } : undefined,
+            },
               view?.modelAccess?.state === 'ready' && Array.isArray(view?.modelAccess?.models)
                 ? `已同步 ${view.modelAccess.models.length} 个模型`
-                : (gwConfigured ? '待同步目录' : '待配置凭证')
+                : view?.modelAccess?.state === 'loading'
+                  ? '正在同步…'
+                  : view?.modelAccess?.state === 'error'
+                    ? '同步异常'
+                    : (gwConfigured ? '待同步目录' : '待配置凭证')
             ),
           ) : null,
           view?.gatewayCredential?.deviceLabel ? h('div', { className: 'fiam-launcher-menu-row' },
@@ -3356,11 +3410,12 @@ window.__ModuleLoader__.load({
           state.reason === 'gateway'
             ? (state.gateway === 'owner-mismatch' ? '个人凭证属于其他账号'
               : state.gateway === 'invalid' ? '个人凭证信息需要检查，已保留'
-                : '无法使用模型：尚未保存 UAG 个人凭证')
+                : state.gateway === 'unknown' ? '无法确认 UAG 个人凭证状态'
+                  : '无法使用模型：尚未保存 UAG 个人凭证')
             : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号'),
         ),
         state.reason === 'gateway'
-          ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid'
+          ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway === 'owner-mismatch' || state.gateway === 'invalid' || state.gateway === 'unknown'
             ? '到“设置 → 企业账号”核对现有记录'
             : '到“设置 → 企业账号”录入 UAG 个人凭证')
           : null,
@@ -3432,6 +3487,17 @@ window.__ModuleLoader__.load({
               ),
             ),
           ),
+          gwState === 'configured' && state.view?.modelAccess?.state === 'loading'
+            ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
+              h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
+                h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
+                h('span', null, '正在同步企业网关可用模型…'),
+              )
+            )
+            : null,
+          gwState === 'configured' && state.view?.modelAccess?.error
+            ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, errorNotice(state.view.modelAccess.error))
+            : null,
           models.length > 0
             ? h('div', null,
               h('div', { style: { fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--dsw-alias-label-primary)' } },

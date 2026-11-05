@@ -488,3 +488,51 @@ test('journey bar reflects warning state on credential mismatch and search clear
   clearBtn.props.onClick();
   assert.match(panel.text(panel.render()), /corp-chat/);
 });
+
+test('joint journey and state transitions update credential notice, journey bar, and draft reset across model discovery states', async t => {
+  let polledView = {
+    ...view,
+    gatewayCredential: { state: 'unconfigured', baseURL: 'https://gateway.corp.example/v1' },
+    modelAccess: { configured: true, baseURL: 'https://gateway.corp.example/v1', state: 'unconfigured', models: [] },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(polledView);
+    if (path === '/api/forge-iam/credential' && init?.method === 'PUT') {
+      polledView = {
+        ...view,
+        gatewayCredential: { state: 'configured', matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
+        modelAccess: { configured: true, baseURL: 'https://gateway.corp.example/v1', state: 'loading', models: [] },
+      };
+      return Response.json({ view: polledView });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+
+  const keyInput = nodes(panel.render()).find(node => node.props['aria-label'] === 'UAG 个人凭证');
+  keyInput.props.onChange({ target: { value: 'draft-key-value' } });
+  const resetDraftBtn = panel.findButton(panel.render(), '重置输入');
+  assert.ok(resetDraftBtn);
+  resetDraftBtn.props.onClick();
+  assert.equal(nodes(panel.render()).find(node => node.props['aria-label'] === 'UAG 个人凭证').props.value, '');
+
+  keyInput.props.onChange({ target: { value: 'uag-00000000000000000000000000000000' } });
+  await panel.findButton(panel.render(), '保存凭据').props.onClick();
+  assert.match(panel.text(panel.render()), /网关地址和个人 Key 已保存，正在获取模型列表/);
+  assert.match(panel.text(panel.render()), /同步中…/);
+
+  polledView = {
+    ...view,
+    gatewayCredential: { state: 'configured', matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
+    modelAccess: {
+      configured: true,
+      baseURL: 'https://gateway.corp.example/v1',
+      state: 'ready',
+      models: [{ id: 'corp-chat', name: 'corp-chat' }],
+      modelOptions: { 'corp-chat': {} },
+    },
+  };
+  await panel.tick();
+  assert.match(panel.text(panel.render()), /网关地址和个人 Key 已保存，模型目录已同步/);
+  assert.match(panel.text(panel.render()), /已启用 1\/1/);
+});
