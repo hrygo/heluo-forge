@@ -13,7 +13,7 @@
 - **平台写回只有一个入口**：`forge_devops_change_update`（`change.clarification.write`）固定 argv `change update <code> [--summary|--description|--ai-ac]`，不做 argv 透传；`confirm{object}` 与目标逐字一致、目标必须是会话已读到的变更；结果以 `change view` 回读为准（done/failed/unknown），退出码 0 不算成功、未知不重放；默认关闭，登记 enabled 还须有效审批台账。
 - **只读面是枚举式薄 runner**（D 方案，2026-11-03 用户确认）：一个只读工具按枚举动作（`change.read` / `change.list`）分发，每个动作有自己的参数 schema；新增只读子命令走"取证真实 flag → 加枚举与 schema"，绝不引入自由 argv / 通用 `run`。清单 `target` 固定 `@me`（策略要求非空 target）；`facts.raw` 只进当前受权会话，不落指标/审计/产物。产物落盘的 `clarify` / `plan` 只接受结构化 `data`、由纯函数机检并生成正文，手写 `body` 不能绕过。
 - **证据纪律**：任何"已实测/已验证"的结论必须写明命令、时间、宿主版本、目标对象与**来源类型（mock 实测 / 企业实测）**；mock 结论不得写成企业已联调。Teamflow run 的归属只看宿主 journal 的 `workspacePath` 是否落在授权 worktree 内（真实路径比较）：归属由 `agent.session.header.cwd` 决定、`productRoot` 不改变归属；`stateRoot`/`commitRoot` 在 0.3.2/0.3.3 宿主不提供，记 `unknown`、**不得作为失败项或阻断项**（2026-11-06 判据，取代 r13 AC-9/G0 口径，见 `docs/teamflow/20261106-r1-journal-root-alignment/TECH-CHANGE.md`）。
-- **验证基线**：仓库根 `pnpm check` + `git diff --check`；新增或修改包必须带离线测试并进入 `node --test` 自动发现范围，tarball 清单复用 `scripts/check-bundle-tarballs.mjs`。
+- **验证基线**：仓库根 `pnpm check` + `git diff --check`；新增或修改包必须带离线测试并进入 `node --test` 自动发现范围，tarball 清单复用 `scripts/check-bundle-tarballs.mjs`；发布产物以 `node scripts/build-enterprise-bundle.mjs <dir>` 生成 tarball + `bundle-manifest.json` + `SHA256SUMS`（`/artifacts/` 已忽略），再以 `pnpm verify:bundle <tarball>` 离线核验（exit 0/1/2、首个差异即失败、结构规则与 manifest 逐项比对）；`tests/host-probe.test.mjs` 按 `.dsh-version` 做宿主版本门控——`dsh --version` 不等于目标时两例 skip 并在文案中写明实际版本、目标版本与 K-1 原因，`DSH_BIN` 仍可指定、`DSH_HOST_PROBE_FORCE=1` 强制复跑，断言不得删除或弱化。
 
 ## 待办
 

@@ -218,6 +218,13 @@ try {
 }
 
 console.log(`probe: ${report.probe} on ${report.harness} (node ${report.env?.node}, ${report.env?.platform})`);
+// K-1 根因取证：报告里附加的 `ctx.tools.execute()` 返回形状，打印一行便于复跑命令直接比对。
+const shape = report.dispatchShape;
+console.log(
+  shape === null || shape === undefined
+    ? 'probe: ctx.tools.execute shape unrecorded'
+    : `probe: ctx.tools.execute shape kind=${shape.kind} keys=[${(shape.keys ?? []).join(',')}] resultsLength=${shape.resultsLength ?? 'n/a'}${shape.threw ? ` threw=${shape.threw}` : ''}`,
+);
 for (const check of report.checks ?? []) {
   console.log(`${check.ok ? 'ok  ' : 'FAIL'} ${check.id}`);
   if (!check.ok) console.log(`     ${JSON.stringify(check.detail)}`);
