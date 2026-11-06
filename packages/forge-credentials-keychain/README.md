@@ -35,7 +35,7 @@
 
 ## 开发/试点覆盖层（非生产）
 
-企业组合只挂本包，并已禁用官方 `credentials` 行。本机没有审核过的 OS 适配器时，`apply` 抛 `KEYCHAIN_UNAVAILABLE` 并拒绝挂载，属于预期的 fail closed，不是缺陷。
+企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序因此落到 `createPlatformBackend()`，而它在所有平台都返回不可用：`apply` 抛 `KEYCHAIN_UNAVAILABLE` 并拒绝挂载，属于预期的 fail closed，不是缺陷，也不是某个平台的兼容问题。
 
 开发/试点需要可用凭据时，在 profile 上再叠一层补丁，显式启用文件后端：
 
@@ -46,11 +46,25 @@
     allowInsecureFile: true
 ```
 
+Windows 开发机用同一层补丁，把路径换成该机器上真实的绝对路径（正斜杠，目录同样须在任何 git 工作树之外；开发机上通常落在用户主目录下的 `.dsh/forge-dev/`）：
+
+```yaml
+- id: heluo-credentials-keychain
+  config:
+    service: heluo-forge-dev
+    accountPrefix: iam
+    filePath: 'D:/forge-dev/credentials.dev.json'
+    allowInsecureFile: true
+```
+
+覆盖层替换整个 `config`，不按字段深合并：`service` 与 `accountPrefix` 不写就回落到 `heluo-forge` / `iam` 默认值，需要非默认命名空间时在这一层写全。
+
 约束：
 
 - 路径放在仓库外，POSIX 权限 `0600`，只放开发/试点账号，不复用生产 IAM 会话。
 - `allowInsecureFile` 不得进入企业默认补丁；启用时 `apply` 会打印 non-production 告警。
 - 要回到生产形态，删掉这层补丁即可，不需要改默认组合。
+- Windows 上该文件是明文，`chmod 0600` 只是 best-effort，不会设置 NTFS ACL；实际保护来自 `%USERPROFILE%` 继承的权限。共享机器不放开发账号，目录不上网络盘——跨进程锁是本地文件锁。
 
 ## 不可用于生产
 
