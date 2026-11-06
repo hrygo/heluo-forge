@@ -59,26 +59,54 @@ function selectedTargets() {
   return manifest.targets;
 }
 
+/**
+ * Pure layout check: every delivery target has a staged addon whose bytes match
+ * the lock file, a license next to it, and no recorded or on-disk entry claims a
+ * target the manifest does not deliver. Returns problems instead of throwing so
+ * the CLI and the tests share one rule set.
+ */
+export function verifyStagedLayout({ root, targets, checksums }) {
+  const problems = [];
+  const recorded = checksums.files ?? {};
+  const claimed = new Set();
+  for (const target of targets) {
+    const addonRelative = `${target.triple}/keyring.node`;
+    const licenseRelative = `${target.triple}/LICENSE.third-party.md`;
+    claimed.add(addonRelative);
+    const expected = recorded[addonRelative];
+    if (expected === undefined) {
+      problems.push(`${addonRelative}: not recorded in CHECKSUMS.json`);
+      continue;
+    }
+    if (expected.version !== target.version) {
+      problems.push(`${addonRelative}: recorded version ${expected.version} but the lock file pins ${target.version}`);
+    }
+    if (expected.license !== target.license) {
+      problems.push(`${addonRelative}: recorded license ${expected.license} but the lock file declares ${target.license}`);
+    }
+    const addon = join(root, addonRelative);
+    if (!existsSync(addon)) {
+      problems.push(`${addonRelative}: staged file is missing`);
+      continue;
+    }
+    const bytes = readFileSync(addon);
+    if (bytes.length !== expected.bytes) problems.push(`${addonRelative}: size mismatch (${bytes.length} != ${expected.bytes})`);
+    if (sha256(bytes) !== expected.sha256) problems.push(`${addonRelative}: sha256 mismatch`);
+    if (!existsSync(join(root, licenseRelative))) problems.push(`${licenseRelative}: license is missing`);
+  }
+  for (const relative of Object.keys(recorded)) {
+    if (!claimed.has(relative)) problems.push(`${relative}: recorded but no delivery target claims it`);
+  }
+  const known = new Set(targets.map((target) => target.triple));
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory() && !known.has(entry.name)) problems.push(`${entry.name}/: unknown target directory`);
+  }
+  return problems;
+}
+
 function verifyStaged(targets) {
   if (!existsSync(checksumPath)) fail('CHECKSUMS.json is missing; run without --check to stage the addons');
-  const recorded = readJson(checksumPath);
-  const problems = [];
-  for (const target of targets) {
-    const relative = `${target.triple}/keyring.node`;
-    const expected = recorded.files?.[relative];
-    if (expected === undefined) {
-      problems.push(`${relative}: not recorded in CHECKSUMS.json`);
-      continue;
-    }
-    const absolute = join(nativeRoot, relative);
-    if (!existsSync(absolute)) {
-      problems.push(`${relative}: staged file is missing`);
-      continue;
-    }
-    const bytes = readFileSync(absolute);
-    if (sha256(bytes) !== expected.sha256) problems.push(`${relative}: sha256 mismatch`);
-    if (bytes.length !== expected.bytes) problems.push(`${relative}: size mismatch`);
-  }
+  const problems = verifyStagedLayout({ root: nativeRoot, targets, checksums: readJson(checksumPath) });
   if (problems.length > 0) fail(problems.join('; '));
   return `verified ${targets.length} staged addon(s)`;
 }
@@ -153,9 +181,11 @@ function main() {
   if (readdirSync(nativeRoot).length === 0) fail('nothing staged');
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }
