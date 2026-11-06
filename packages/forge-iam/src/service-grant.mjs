@@ -146,14 +146,25 @@ export function createServiceGrant(env) {
   }
 
   function redirectUri() {
-    // A registered fixed port outranks the live host origin: the host port may
-    // change between launches, and IAM refuses any other callback address.
-    const fixedOrigin = config.callbackPort > 0 ? `http://127.0.0.1:${config.callbackPort}` : undefined;
-    if (fixedOrigin) {
-      const failure = options.getCallbackFailure?.();
-      // Never fall back to the host origin: a port conflict is a refusal, not
-      // permission to use an address that was not registered.
-      if (failure) throw failure;
+    // With a loopback listener the origin is published only after the bind, and
+    // a sign-in binds before asking for the URL. An empty value here means the
+    // listener is not up, so there is no address to send the browser to.
+    const loopback = options.getCallbackOrigin?.();
+    if (loopback) {
+      if (!config.redirectUri) return `${loopback}${config.redirectPath}`;
+      let parsed;
+      try {
+        parsed = new URL(config.redirectUri);
+      } catch {
+        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must be an absolute URL');
+      }
+      if (parsed.pathname !== config.redirectPath) {
+        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri path must equal redirectPath');
+      }
+      if (parsed.origin !== loopback) {
+        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must equal the live loopback callback origin');
+      }
+      return parsed.href;
     }
     if (config.redirectUri) {
       let parsed;
@@ -164,12 +175,6 @@ export function createServiceGrant(env) {
       }
       if (parsed.pathname !== config.redirectPath) {
         throw new IamError('IAM_CONFIG_INVALID', 'redirectUri path must equal redirectPath');
-      }
-      if (fixedOrigin) {
-        if (parsed.origin !== fixedOrigin) {
-          throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must equal the fixed callback origin');
-        }
-        return parsed.href;
       }
       let live;
       try {
@@ -182,7 +187,6 @@ export function createServiceGrant(env) {
       }
       return parsed.href;
     }
-    if (fixedOrigin) return `${fixedOrigin}${config.redirectPath}`;
     let origin;
     try {
       origin = options.getOrigin?.();

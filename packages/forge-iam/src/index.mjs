@@ -1,5 +1,5 @@
 import { createManagedModelRuntime } from './managed-models.mjs';
-import { startCallbackListener } from './callback-listener.mjs';
+import { createCallbackManager } from './callback-listener.mjs';
 import { Config, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { checkExclusive } from './exclusive.mjs';
@@ -53,9 +53,6 @@ export function apply(ctx, rawConfig = {}) {
   let currentConnection;
   let modelServices;
   let managedRuntime;
-  // Set when the fixed callback port cannot be bound. Every sign-in reads it
-  // and refuses; the plugin never falls back to the host's random port.
-  let callbackFailure;
   const service = createIamService(result.value, {
     exclusive: checkExclusive(ctx, result.value),
     recheckExclusive: () => checkExclusive(ctx, result.value),
@@ -71,26 +68,25 @@ export function apply(ctx, rawConfig = {}) {
       } catch { return undefined; }
     },
     getOrigin: () => currentWebServer?.getOrigin?.(),
-    getCallbackFailure: () => callbackFailure,
-    getCallbackReady: () => callbackListener?.ready,
+    openCallback: () => callbackManager?.ensure(),
+    closeCallback: () => callbackManager?.release(),
+    getCallbackOrigin: () => callbackManager?.origin,
   });
 
-  // A configured callbackPort replaces the host-registered callback with a
-  // listener the plugin owns, on loopback only. The host port may change
-  // between launches; the registered redirect URI must not.
-  let callbackListener;
-  if (result.value.callbackPort > 0) {
-    const fixedOrigin = `http://127.0.0.1:${result.value.callbackPort}`;
-    const fixedRoutes = createIamRoutes(service, {
+  // With callbackPort set the plugin owns the callback: a loopback listener that
+  // exists only while an attempt is open. The host port may change between
+  // launches and its origin is never used for the redirect.
+  let callbackManager;
+  if (typeof result.value.callbackPort === 'number') {
+    const loopbackRoutes = createIamRoutes(service, {
       callbackPath: result.value.redirectPath,
-      getOrigin: () => fixedOrigin,
+      getOrigin: () => callbackManager?.origin,
     });
-    callbackListener = startCallbackListener({
+    callbackManager = createCallbackManager({
       port: result.value.callbackPort,
-      origin: fixedOrigin,
+      address: result.value.callbackAddress,
       path: result.value.redirectPath,
-      handler: fixedRoutes,
-      onFailure: (error) => { callbackFailure = error; },
+      handler: loopbackRoutes,
     });
   }
 
@@ -106,7 +102,7 @@ export function apply(ctx, rawConfig = {}) {
     // Dispose first: a sign-in waiting on the callback bind must observe the
     // service as gone, not receive a URL for a listener that is about to close.
     await service.dispose();
-    await callbackListener?.close();
+    await callbackManager?.close();
     currentWebServer = undefined;
     currentConnection = undefined;
     if (typeof offConnection === 'function') offConnection();
@@ -224,7 +220,7 @@ export function apply(ctx, rawConfig = {}) {
         });
         // A fixed-port listener owns the callback; registering it here too
         // would expose a second address IAM never registered.
-        const offCallback = result.value.callbackPort > 0 ? undefined : host.webServer.register({
+        const offCallback = callbackManager ? undefined : host.webServer.register({
           kind: 'exact',
           path: result.value.redirectPath,
           handler: routes,

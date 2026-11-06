@@ -1,10 +1,12 @@
-// Fixed loopback callback listener for the OIDC redirect.
+// Plugin-owned loopback callback listener for the OIDC redirect.
 //
-// IAM matches the registered redirect URI byte for byte, and the host web
-// server's port can change between launches. With `callbackPort` set the plugin
-// binds the port itself: loopback only, one exact path, no fallback to the host
-// port. Binding is asynchronous, so the failure is recorded here and every
-// sign-in reads it before producing a redirect URI.
+// IAM accepts any port on a loopback redirect URI, so the listener takes an
+// OS-assigned port by default and stays bound only while a sign-in attempt is
+// open. `callbackPort` can pin a port instead, for an authorization server that
+// still insists on a pre-registered value.
+//
+// Binding is asynchronous and the port is only known afterwards, so the origin
+// is published on the listening event; the request gate reads it lazily.
 import { createServer } from 'node:http';
 import { IamError } from './errors.mjs';
 
@@ -23,8 +25,9 @@ export function isLoopbackAddress(address) {
 }
 
 /**
- * Refuse a peer that is not loopback. The listener already binds 127.0.0.1, so
- * this is the second line of defence and the rule a future proxy must keep.
+ * Refuse a peer that is not loopback. The listener already binds a loopback
+ * address, so this is the second line of defence and the rule a future proxy
+ * must keep.
  *
  * @returns {boolean} true when the request was rejected
  */
@@ -37,20 +40,32 @@ export function rejectNonLoopbackPeer(req, res) {
 }
 
 /**
+ * Build the origin for a loopback bind. IPv6 literals need brackets in a URL,
+ * and the best current practice names the address instead of `localhost`.
+ *
+ * @param {string} address
+ * @param {number} port
+ * @returns {string}
+ */
+export function loopbackOrigin(address, port) {
+  const host = address.includes(':') ? `[${address}]` : address;
+  return `http://${host}:${port}`;
+}
+
+/**
  * The request gate in front of the callback: loopback peer, exact path, then
  * the shared IAM route handler. Exported so the gate can be tested without a
- * socket; the listener binds 127.0.0.1 as the first line of defence.
+ * socket; the listener binds a loopback address as the first line of defence.
  */
 export function createCallbackRequestHandler({ origin, path, handler }) {
   const expectedHost = new URL(origin).host;
   return (req, res) => {
     try {
       if (rejectNonLoopbackPeer(req, res)) return;
-      // DNS rebinding: a page on another origin can still aim a request at
-      // 127.0.0.1, but it cannot make the browser send this Host header. The
-      // registered redirect URI fixes the host, so a mismatch is never part of
-      // a legitimate sign-in.
-      if (req.headers?.host !== expectedHost) {
+      // DNS rebinding: a page on another origin can still aim a request at the
+      // loopback address, but it cannot make the browser send this Host header.
+      const host = req.headers?.host;
+      if (host !== expectedHost) {
         res.statusCode = 403;
         res.setHeader('content-type', 'text/plain; charset=utf-8');
         res.end('callback host is not the registered redirect host');
@@ -74,24 +89,39 @@ export function createCallbackRequestHandler({ origin, path, handler }) {
 }
 
 /**
- * Start the fixed callback listener.
+ * Start the callback listener on a loopback address.
  *
  * `ready` resolves to `undefined` once bound, or to the IamError once binding
- * fails. A failed bind never retries another port.
+ * fails. A failed bind never retries another port; the caller may try another
+ * address family instead.
+ *
+ * `release()` drains: it stops accepting and lets the in-flight callback
+ * response finish, which is what an attempt ending needs. `close()` cuts every
+ * socket, which is what teardown needs.
  *
  * @param {{
- *   port: number,
- *   origin: string,
+ *   port?: number,
+ *   address?: string,
  *   path: string,
  *   handler: (req: object, res: object) => unknown,
  *   onFailure?: (error: IamError) => void,
  * }} input
  */
-export function startCallbackListener({ port, origin, path, handler, onFailure } = {}) {
+export function startCallbackListener({ port = 0, address = '127.0.0.1', path, handler, onFailure } = {}) {
   let failure;
+  let origin;
   let closed = false;
   let settle = () => {};
-  const server = createServer(createCallbackRequestHandler({ origin, path, handler }));
+  const server = createServer((req, res) => {
+    // A request cannot arrive before `listening`, but a socket accepted during
+    // shutdown could; refuse rather than guess an origin.
+    if (!origin) {
+      res.statusCode = 503;
+      res.end();
+      return;
+    }
+    createCallbackRequestHandler({ origin, path, handler })(req, res);
+  });
 
   const ready = new Promise((resolve) => {
     // Whoever settles first wins: a bind result, or a teardown that abandons
@@ -101,38 +131,114 @@ export function startCallbackListener({ port, origin, path, handler, onFailure }
       settle = () => {};
       resolve(result);
     };
-    server.once('listening', () => settle(undefined));
+    server.once('listening', () => {
+      const bound = server.address();
+      origin = loopbackOrigin(address, bound.port);
+      settle(undefined);
+    });
     server.once('error', (error) => {
       const reason = error?.code ?? 'EADDRNOTAVAIL';
       failure = new IamError(
         reason === 'EADDRINUSE' ? 'IAM_CALLBACK_PORT_UNAVAILABLE' : 'IAM_CALLBACK_BIND_FAILED',
-        `callback port ${port} is unavailable (${reason}); free the port or register a different one`,
-        { port, reason },
+        `callback address ${address}:${port} is unavailable (${reason}); free the port or let the system assign one`,
+        { port, address, reason },
       );
       onFailure?.(failure);
       settle(failure);
     });
   });
-  server.listen(port, '127.0.0.1');
+  server.listen(port, address);
+
+  const shutdown = (cut) => new Promise((resolve) => {
+    if (closed) return resolve();
+    closed = true;
+    settle(failure ?? new IamError(
+      'IAM_CALLBACK_BIND_FAILED',
+      `callback listener on ${address}:${port} was closed before it started listening`,
+      { port, address },
+    ));
+    server.close(() => resolve());
+    // Draining must keep the response that is being written; teardown must not
+    // wait on a browser that never closes its socket.
+    if (cut) server.closeAllConnections?.();
+  });
 
   return {
-    origin,
-    port,
+    get origin() { return origin; },
+    get port() { return server.address()?.port ?? port; },
+    address,
     server,
     ready,
     get failure() { return failure; },
-    /** Idempotent; returns after the listening socket is released. */
-    close: () => new Promise((resolve) => {
-      if (closed) return resolve();
-      closed = true;
-      settle(failure ?? new IamError(
-        'IAM_CALLBACK_BIND_FAILED',
-        `callback listener on port ${port} was closed before it started listening`,
-        { port },
-      ));
-      server.close(() => resolve());
-      // Close keep-alive sockets so a test or an unload does not wait on them.
-      server.closeAllConnections?.();
+    /** Idempotent; stops accepting and lets the in-flight response finish. */
+    release: () => shutdown(false),
+    /** Idempotent; stops accepting and drops every open socket. */
+    close: () => shutdown(true),
+  };
+}
+/**
+ * Binds the callback listener only while an attempt needs it.
+ *
+ * `ensure()` returns the origin of the live listener, binding first if there is
+ * none. `release()` drains the current listener: the attempt is over, but the
+ * response being written must still reach the browser. `close()` cuts it and is
+ * only used on teardown.
+ *
+ * With `address: 'auto'` the IPv4 loopback is tried first, then IPv6, and only
+ * an unavailable address family justifies the second try.
+ *
+ * @param {{
+ *   port?: number,
+ *   address?: 'auto' | '127.0.0.1' | '::1',
+ *   path: string,
+ *   handler: (req: object, res: object) => unknown,
+ * }} input
+ */
+export function createCallbackManager({ port = 0, address = 'auto', path, handler } = {}) {
+  const candidates = address === 'auto' ? ['127.0.0.1', '::1'] : [address];
+  let listener;
+  let chain = Promise.resolve();
+
+  async function bind() {
+    let failure;
+    for (const candidate of candidates) {
+      const attempt = startCallbackListener({ port, address: candidate, path, handler });
+      const outcome = await attempt.ready;
+      if (!outcome) {
+        listener = attempt;
+        return attempt.origin;
+      }
+      await attempt.release();
+      failure = outcome;
+      const familyMissing = outcome.code === 'IAM_CALLBACK_BIND_FAILED'
+        && ['EADDRNOTAVAIL', 'EAFNOSUPPORT'].includes(outcome.details?.reason);
+      if (!familyMissing) throw outcome;
+    }
+    throw failure;
+  }
+
+  function serial(run) {
+    const next = chain.then(run);
+    chain = next.then(() => {}, () => {});
+    return next;
+  }
+
+  return {
+    get origin() { return listener?.origin; },
+    get port() { return listener?.port; },
+    ensure: () => serial(async () => {
+      if (listener) return listener.origin;
+      return bind();
+    }),
+    release: () => serial(async () => {
+      const current = listener;
+      listener = undefined;
+      if (current) await current.release();
+    }),
+    close: () => serial(async () => {
+      const current = listener;
+      listener = undefined;
+      if (current) await current.close();
     }),
   };
 }

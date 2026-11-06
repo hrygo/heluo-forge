@@ -18,13 +18,17 @@ import { transition } from './state.mjs';
 export function createSignIn(env) {
   const {
     config, configured, ctx, provider, grants, gateway, token, now, fetchImpl,
-    awaitCallbackReady, isSigningOut, getAuthEpoch, bumpAuthEpoch, clearObservation,
+    openCallback, closeCallback, isSigningOut, getAuthEpoch, bumpAuthEpoch, clearObservation,
     getSignInPromise, setSignInPromise, invalidateConsumption, beginConsumption, adoptConsumption,
   } = env;
 
   let attempt = null;
 
   function clearAttempt() {
+    // Every terminal transition of an attempt passes here: success, expiry,
+    // cancellation, a replaced provider or a sign-out. The loopback listener
+    // lives exactly as long as the attempt, so this is also where it drains.
+    closeCallback?.();
     if (!attempt) return;
     if (attempt.timer) clearTimeout(attempt.timer);
     attempt = null;
@@ -103,30 +107,51 @@ export function createSignIn(env) {
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     if (getAuthEpoch() !== startEpoch || isSigningOut()) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
     if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
-    // A fixed callback port must be bound before its URL leaves the Host. The
-    // binding above is already frozen; a failed bind resolves here and
-    // redirectUri() refuses. Every await re-checks the same guards.
-    await awaitCallbackReady?.();
+    // A stale attempt must be dropped before the new bind: clearing it releases
+    // the listener, and doing that afterwards would release the new one.
+    if (attempt) clearAttempt();
+    // The callback listener exists only while an attempt is open, so it binds
+    // here: a failed bind refuses the sign-in before any URL is produced. Every
+    // await re-checks the same guards.
+    try {
+      await openCallback?.();
+    } catch (error) {
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      throw error;
+    }
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     if (getAuthEpoch() !== startEpoch || isSigningOut()) {
+      closeCallback?.();
       throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
     }
-    if (!transition(ctx.state, 'SIGN_IN').ok) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+    if (!transition(ctx.state, 'SIGN_IN').ok) {
+      closeCallback?.();
+      throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+    }
     const oauthState = randomToken(32);
     const nonce = randomToken(32);
     const pkce = createPkce();
-    const callbackUri = grants.redirectUri();
-    const authorizationUrl = buildAuthorizationUrl({
-      authorizationEndpoint: meta.authorizationEndpoint,
-      clientId: config.clientId,
-      redirectUri: callbackUri,
-      scopes: config.scopes,
-      state: oauthState,
-      nonce,
-      codeChallenge: pkce.challenge,
-      resource: config.gatewayResource,
-    });
-    if (attempt) clearAttempt();
+    let callbackUri;
+    let authorizationUrl;
+    try {
+      callbackUri = grants.redirectUri();
+      authorizationUrl = buildAuthorizationUrl({
+        authorizationEndpoint: meta.authorizationEndpoint,
+        clientId: config.clientId,
+        redirectUri: callbackUri,
+        scopes: config.scopes,
+        state: oauthState,
+        nonce,
+        codeChallenge: pkce.challenge,
+        resource: config.gatewayResource,
+      });
+    } catch (error) {
+      // No attempt owns the listener yet, so unwind both the bind and the state
+      // transition here; otherwise the port stays open with nothing to close it.
+      closeCallback?.();
+      if (transition(ctx.state, 'CANCEL').ok) ctx.notify();
+      throw error;
+    }
     attempt = {
       state: oauthState,
       nonce,
