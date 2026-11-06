@@ -38,9 +38,11 @@ jobs:
       - name: Check documents, repository and tests
         run: node --run check
 
-  # Real hosts for every delivered platform-arch. The unit matrix injects the
+  # Real hosts for the native platform-arch pairs. The unit matrix injects the
   # native module so it can run on one host; this job proves the same read
-  # paths on each actual OS/arch pair, including the macOS encrypted store.
+  # paths on actual Linux/Windows OS-arch pairs. macOS is verified on the
+  # maintainer's machines (arm64 local/SSH); the encrypted store has no CI
+  # runner dependency.
   device-matrix:
     name: device ${{ matrix.name }}
     strategy:
@@ -51,8 +53,6 @@ jobs:
           - { name: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64 }
           - { name: win32-x64, os: windows-2022, platform: win32, arch: x64 }
           - { name: win32-arm64, os: windows-11-arm, platform: win32, arch: arm64 }
-          - { name: darwin-arm64, os: macos-26, platform: darwin, arch: arm64 }
-          - { name: darwin-x64, os: macos-26-intel, platform: darwin, arch: x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     defaults:

@@ -63,7 +63,7 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 | HTTP 令牌 | `POST /api/forge-iam/token` | 同上，含请求头门禁 |
 | CLI 端到端 | `heluo-forge auth whoami / token` | macOS 加密存储真机用例；Windows/Linux 由 CI 按真实平台覆盖 |
 
-矩阵用例：`node --test packages/forge-iam/test/read-paths-matrix.test.mjs`。CI 的 `device` job 在六台真实 runner 上复跑同一批读取路径与凭据后端用例：`ubuntu-24.04`、`ubuntu-24.04-arm`、`windows-2022`、`windows-11-arm`、`macos-26`、`macos-26-intel`；每台先断言 `process.platform`/`process.arch`，再执行测试。CLI 的 macOS 端到端用例在 `packages/forge-iam/test/cli-session.test.mjs`（仅 darwin 运行）。
+矩阵用例：`node --test packages/forge-iam/test/read-paths-matrix.test.mjs`。CI 的 `device` job 在四台真实 runner 上复跑同一批读取路径与凭据后端用例：`ubuntu-24.04`、`ubuntu-24.04-arm`、`windows-2022`、`windows-11-arm`；每台先断言 `process.platform`/`process.arch`，再执行测试。macOS 不进 CI，由维护机（arm64 本机与 SSH）保障。CLI 的 macOS 端到端用例在 `packages/forge-iam/test/cli-session.test.mjs`（仅 darwin 运行）。
 
 平台交付形状：
 
