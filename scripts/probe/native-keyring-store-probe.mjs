@@ -10,10 +10,22 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createNativeKeyringBackend, nativeAddonPath, nativeTargetFor, windowsRuntimeStatus } from '../../packages/forge-credentials-keychain/src/native-keyring.mjs';
 
-const PACKAGE_ENTRY = new URL('../../packages/forge-credentials-keychain/src/index.mjs', import.meta.url).href;
+/** Default entry: the package in this checkout. `--package <dir>` points elsewhere. */
+const DEFAULT_PACKAGE_DIR = fileURLToPath(new URL('../../packages/forge-credentials-keychain', import.meta.url));
+
+/**
+ * Load the adapter surface from a package directory, so the same probe works
+ * from the repository and from an installed product that only ships `src` and
+ * `vendor`.
+ */
+async function loadPackage(packageDir) {
+  const entry = pathToFileURL(resolve(packageDir, 'src/index.mjs')).href;
+  const module = await import(entry);
+  return { entry, module };
+}
 
 /** A value that is obviously synthetic in a store dump, and never printed. */
 function syntheticValue(label) {
@@ -32,11 +44,11 @@ function describeError(error) {
  * value reached the OS store rather than an in-process cache. The child loads
  * the same package by absolute URL, so it resolves the same staged addon.
  */
-function childRead({ key, service, timeoutMs = 30_000 }) {
+function childRead({ entry, key, service, timeoutMs = 30_000 }) {
   const script = `
     const key = ${JSON.stringify(key)};
     const service = ${JSON.stringify(service)};
-    import(${JSON.stringify(PACKAGE_ENTRY)}).then(async (module) => {
+    import(${JSON.stringify(entry)}).then(async (module) => {
       const backend = module.createNativeKeyringBackend({ service, platform: process.platform });
       const value = await backend.get(key);
       process.stdout.write(JSON.stringify({ ok: true, found: value !== undefined, value }));
@@ -73,7 +85,8 @@ function childRead({ key, service, timeoutMs = 30_000 }) {
  *   key: string,
  *   enumeration?: boolean,
  *   keep?: boolean,
- *   readFromChild?: (input: { key: string, service: string }) => { ok: boolean, found?: boolean, value?: string, code?: string, message?: string },
+ *   readFromChild?: (input: { entry: string, key: string, service: string }) => { ok: boolean, found?: boolean, value?: string, code?: string, message?: string },
+ *   entry?: string,
  * }} options
  */
 export async function runStoreProbe(options) {
@@ -83,6 +96,7 @@ export async function runStoreProbe(options) {
   // runs; the default run is self-cleaning.
   const keep = options.keep === true;
   const readFromChild = options.readFromChild ?? childRead;
+  const entry = options.entry;
   const steps = [];
 
   const step = async (name, run) => {
@@ -124,7 +138,7 @@ export async function runStoreProbe(options) {
   });
 
   await step('cross-process-read', async () => {
-    const result = readFromChild({ key, service });
+    const result = readFromChild({ entry, key, service });
     if (result.ok !== true) {
       const error = new Error(result.message ?? 'child read failed');
       if (typeof result.code === 'string') error.code = result.code;
@@ -175,6 +189,7 @@ function usage() {
     'usage: node scripts/probe/native-keyring-store-probe.mjs [options]',
     '',
     '  --service <name>      keyring service namespace (default: heluo-forge)',
+    '  --package <dir>       package directory to load (default: this checkout)',
     '  --key <name>          absolute backend key (default: <service>/probe/<random>)',
     '  --enumeration         also exercise findCredentials',
     '  --keep                leave the entry behind (reboot/persistence check)',
@@ -185,8 +200,8 @@ function usage() {
   ].join('\n');
 }
 
-function parseArgs(argv) {
-  const options = { service: 'heluo-forge', key: undefined, enumeration: false, json: false, keep: false, mode: 'run' };
+export function parseArgs(argv) {
+  const options = { service: 'heluo-forge', key: undefined, enumeration: false, json: false, keep: false, mode: 'run', packageDir: undefined };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') return { help: true };
@@ -196,6 +211,7 @@ function parseArgs(argv) {
     else if (arg === '--cleanup') options.mode = 'cleanup';
     else if (arg === '--json') options.json = true;
     else if (arg === '--service') { options.service = argv[index += 1]; }
+    else if (arg === '--package') { options.packageDir = argv[index += 1]; }
     else if (arg === '--key') { options.key = argv[index += 1]; }
     else return { error: `unknown argument: ${arg}` };
   }
@@ -215,6 +231,15 @@ async function main() {
   const { options } = parsed;
   const platform = process.platform;
   const arch = process.arch;
+  let loaded;
+  try {
+    loaded = await loadPackage(options.packageDir ?? DEFAULT_PACKAGE_DIR);
+  } catch (error) {
+    process.stderr.write(`cannot load the credentials package: ${error.message}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: false, stage: 'package', error: describeError(error) }, null, 2)}\n`);
+    return 2;
+  }
+  const { createNativeKeyringBackend, nativeAddonPath, nativeTargetFor, windowsRuntimeStatus } = loaded.module;
   const triple = nativeTargetFor(platform, arch);
   const addon = nativeAddonPath(platform, arch);
   const environment = {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { KeychainBackendError } from '../packages/forge-credentials-keychain/src/backend.mjs';
-import { runStoreProbe } from '../scripts/probe/native-keyring-store-probe.mjs';
+import { parseArgs, runStoreProbe } from '../scripts/probe/native-keyring-store-probe.mjs';
 
 /** A backend over one shared Map, mirroring the contract the probe assumes. */
 function memoryBackend(store = new Map(), overrides = {}) {
@@ -118,4 +118,12 @@ test('keep mode leaves the entry for a reboot check and skips deletion', async (
   assert.equal(report.ok, true);
   assert.deepEqual(report.steps.map((step) => step.name), ['read-absent', 'write-read', 'overwrite-read', 'cross-process-read']);
   assert.equal(store.has(KEY), true, 'keep mode must not delete the entry');
+});
+
+test('the CLI accepts a package directory and rejects unknown flags', () => {
+  const parsed = parseArgs(['--package', '/opt/forge/node_modules/@heluo/forge-credentials-keychain', '--enumeration']);
+  assert.equal(parsed.options.packageDir, '/opt/forge/node_modules/@heluo/forge-credentials-keychain');
+  assert.equal(parsed.options.enumeration, true);
+  assert.match(parseArgs(['--nope']).error, /unknown argument/u);
+  assert.equal(parseArgs(['--help']).help, true);
 });

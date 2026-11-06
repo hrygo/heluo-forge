@@ -297,6 +297,7 @@ A/B 新 probe 完成后再登记可执行命令，必须记录 SDK 来源、实�
 原生存储探针（目标机执行，不挂载宿主、不联网、不打印存储值）：
 
 ```sh
+# 仓库检出中运行；只有制品时加 --package <安装目录>/node_modules/@heluo/forge-credentials-keychain
 node scripts/probe/native-keyring-store-probe.mjs --enumeration
 ```
 
