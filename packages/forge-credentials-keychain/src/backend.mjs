@@ -130,6 +130,10 @@ async function assertPrivateKeyFile(path) {
     if (error?.code === 'ENOENT') return;
     throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'credential key file cannot be inspected');
   }
+  // Windows reports synthetic modes and has no POSIX uid; the macOS backend is
+  // the only production user of this path, but the contract tests run on every
+  // CI platform, so the POSIX checks are applied where they are meaningful.
+  if (process.platform === 'win32') return;
   if ((info.mode & 0o777) !== KEY_MODE) {
     throw new KeychainBackendError(
       'KEYCHAIN_KEY_PERMISSIONS',

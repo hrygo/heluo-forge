@@ -50,9 +50,11 @@ test('the document is ciphertext at rest and the key file is 0600', async () => 
     const raw = await readFile(path, 'utf8');
     assert.equal(raw.includes('do-not-store-me-in-plaintext'), false);
     assert.match(raw, /"alg":"aes-256-gcm"/u);
-    assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
-    assert.equal((await stat(path)).mode & 0o777, 0o600);
-    assert.equal((await stat(directory)).mode & 0o777, 0o700);
+    if (process.platform !== 'win32') {
+      assert.equal((await stat(keyPath)).mode & 0o777, 0o600);
+      assert.equal((await stat(path)).mode & 0o777, 0o600);
+      assert.equal((await stat(directory)).mode & 0o777, 0o700);
+    }
   } finally {
     await cleanup();
   }
@@ -77,7 +79,7 @@ test('a modified document is rejected instead of read as empty', async () => {
   }
 });
 
-test('a key file with wider permissions fails closed', async () => {
+test('a key file with wider permissions fails closed', { skip: process.platform === 'win32' && 'POSIX modes are not meaningful on Windows' }, async () => {
   const { path, keyPath, cleanup } = await fixture();
   try {
     const backend = createFileBackend({ path, keyPath });
@@ -146,7 +148,7 @@ test('a second process writes through the same encrypted document', async () => 
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
     assert.equal(child.status, 0, child.stderr);
     assert.equal(await createFileBackend({ path, keyPath }).get('iam/token'), 'from-child');
-    assert.equal((await stat(directory)).mode & 0o777, 0o700);
+    if (process.platform !== 'win32') assert.equal((await stat(directory)).mode & 0o777, 0o700);
   } finally {
     await cleanup();
   }
