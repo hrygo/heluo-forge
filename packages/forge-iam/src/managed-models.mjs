@@ -58,6 +58,17 @@ const gatewayCode = status => status === 401 ? 'ENTERPRISE_GATEWAY_CREDENTIAL_RE
       : typeof status === 'number' && status >= 400 && status < 500 ? 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'
         : 'ENTERPRISE_GATEWAY_UNAVAILABLE';
 const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { code, message: MESSAGES[code] } } });
+// Model SDKs disagree on where the HTTP status lives: a plain `status` here, an
+// AI SDK `statusCode` there, wrapped one level deeper when the transport retries.
+// Reading only `status` reported a 429 quota rejection as "cannot connect".
+const STATUS_KEYS = ['status', 'statusCode', 'response.status', 'cause.status', 'cause.statusCode'];
+const statusOf = (cause) => {
+  for (const key of STATUS_KEYS) {
+    const value = key.split('.').reduce((cursor, name) => (cursor == null ? undefined : cursor[name]), cause);
+    if (typeof value === 'number') return value;
+  }
+  return undefined;
+};
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
   if (view?.state !== 'ready' || !view.principal || !Number.isFinite(expires(view)) || expires(view) <= Date.now()) return 'IAM_LOGIN_REQUIRED';
@@ -258,11 +269,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     } catch (cause) {
       code = refusal(request, mine);
       if (!code && request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
+      const status = statusOf(cause);
       yield finish(code ?? (Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code
         : cause?.code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
-          : cause?.code === 'PERMISSION' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
-            : cause?.code === 'UNSUPPORTED_REASONING_EFFORT' ? 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED'
-              : typeof cause?.status === 'number' ? gatewayCode(cause.status) : 'ENTERPRISE_GATEWAY_UNAVAILABLE'));
+          : cause?.code === 'PERMISSION' || cause?.code === 'FORBIDDEN' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
+            : cause?.code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
+              : cause?.code === 'INVALID_REQUEST' ? 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'
+                : cause?.code === 'UNSUPPORTED_REASONING_EFFORT' ? 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED'
+                  : status === undefined ? 'ENTERPRISE_GATEWAY_UNAVAILABLE' : gatewayCode(status)));
     }
   }
   /** Adopt the stored selection, or remember that nothing was stored yet. */
