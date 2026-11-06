@@ -37,7 +37,9 @@ function configFor(mock, overrides = {}) {
 
 function send(port, { method = 'GET', path = '/', headers = {} } = {}) {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, method, path, headers }, (res) => {
+    // A fresh socket per call: a pooled keep-alive socket would report the
+    // server's close as a hang-up instead of the refused connect we assert.
+    const req = httpRequest({ host: '127.0.0.1', port, method, path, headers, agent: false }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve({
