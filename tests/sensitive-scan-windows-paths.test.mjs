@@ -49,7 +49,7 @@ test('Windows 8.3 aliases enforce ignored and tracked secret checks', { skip: pr
     const privateDir = join(pkg, 'private');
     const publicDir = join(pkg, '.github', 'sensitive-scan');
     for (const item of [repo, scripts, privateDir, publicDir]) mkdirSync(item, { recursive: true });
-    for (const name of ['lib.mjs', 'team-full-install.mjs', 'team-commit-msg.mjs', 'team-scan.mjs']) {
+    for (const name of ['lib.mjs', 'team-full-install.mjs', 'team-commit-msg.mjs', 'team-scan.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs']) {
       cpSync(new URL(`../scripts/sensitive-scan/${name}`, import.meta.url), join(scripts, name));
     }
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');

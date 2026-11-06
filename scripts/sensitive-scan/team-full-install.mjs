@@ -7,11 +7,32 @@ import { gitOutput, keyIdFromPublicKey, loadKeyPair } from './lib.mjs';
 import { loadRules, scanText } from './team-scan.mjs';
 
 const MARKER = '# managed by heluo-sensitive-scan complete distribution';
-const KNOWN_V1 = {
-  'lib.mjs': '9973e15ad4b9ce7077e2c18bd0b334cad6055fbd534ade422b380101dff9dcc8',
-  'team-commit-msg.mjs': '1dcdf2b1ff8da88f7366d7b67568037a27363749b5e4e9e62e60253e2eafb54a',
-  'team-scan.mjs': '761ad1e8fb517e589505884113bc3f9194d46b96be985860d2899ed647c1c90b',
+// Program sources shipped by earlier releases. An upgrade may replace exactly
+// these byte sequences and nothing else, so a tampered or unknown install stops.
+const KNOWN_PREVIOUS = {
+  'lib.mjs': [
+    '9973e15ad4b9ce7077e2c18bd0b334cad6055fbd534ade422b380101dff9dcc8',
+    '8c152380e12f52684bea98422b4df0c798636b9ac4356ddfe9c6d4bf26363a8a',
+  ],
+  'team-commit-msg.mjs': [
+    '1dcdf2b1ff8da88f7366d7b67568037a27363749b5e4e9e62e60253e2eafb54a',
+    '7919278942540def195b753c7a58d693448f0a2024be1108f2dc062ea9996776',
+    'ebe250a4a94302f0aea44937d1ae8fcd1fc7aa331a21927cd0d6342e084aef0c',
+  ],
+  'team-scan.mjs': [
+    '761ad1e8fb517e589505884113bc3f9194d46b96be985860d2899ed647c1c90b',
+  ],
 };
+// Hooks this distribution owns. Each receives Git's argument as "$1" and keeps
+// standard input connected, which post-rewrite reads its rewrite map from.
+const HOOKS = [
+  { name: 'commit-msg', script: 'team-commit-msg.mjs' },
+  { name: 'post-rewrite', script: 'team-post-rewrite.mjs' },
+];
+// Files a previous release installed. New package files may be absent from a
+// complete older installation, so only this set decides whether it is complete.
+const PREVIOUS_SCRIPTS = ['lib.mjs', 'team-scan.mjs', 'team-commit-msg.mjs'];
+const SHARED_SCRIPTS = [...PREVIOUS_SCRIPTS, 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs'];
 const packageRoot = resolve(import.meta.dirname, '../..');
 const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 function statIfPresent(path) {
@@ -110,17 +131,19 @@ function checkCommonDir(common, root) {
   } catch (error) {
     if (error.status !== 128 || !String(error.stderr).includes('not a git repository')) throw error;
   }
-  let expected;
+  const expected = new Map(HOOKS.map((hook) => [hook.name, undefined]));
   for (const tree of worktrees) {
     const local = { ...options, cwd: tree };
     let configured;
     try { configured = execFileSync('git', ['config', '--path', '--get', 'core.hooksPath'], local).trim(); }
     catch (error) { if (error.status !== 1) throw error; }
     if (configured !== undefined && !isAbsolute(configured)) throw new Error('core.hooksPath must be absolute');
-    const hook = resolve(tree, execFileSync('git', ['rev-parse', '--git-path', 'hooks/commit-msg'], local).trim());
-    const actual = effectivePath(hook);
-    if (expected !== undefined && expected !== actual) throw new Error('worktrees do not share a commit-msg hook');
-    expected = actual;
+    for (const hook of HOOKS) {
+      const hookPath = effectivePath(resolve(tree, execFileSync('git', ['rev-parse', '--git-path', `hooks/${hook.name}`], local).trim()));
+      const seen = expected.get(hook.name);
+      if (seen !== undefined && seen !== hookPath) throw new Error(`worktrees do not share a ${hook.name} hook`);
+      expected.set(hook.name, hookPath);
+    }
   }
   return expected;
 }
@@ -230,20 +253,23 @@ function assertSafeSource(stat, path, label) {
   if (lstatSync(commonPath).isSymbolicLink()) throw new Error('unsafe Git common directory');
   checkParents(commonPath);
   const common = realpathSync.native(commonPath);
-  const expectedHook = checkCommonDir(common, root);
+  const expectedHooks = checkCommonDir(common, root);
   const shared = resolve(common, 'heluo-sensitive-scan');
-  const hook = resolve(root, gitOutput(['rev-parse', '--git-path', 'hooks/commit-msg'], { cwd: root }).trim());
-  if (effectivePath(hook) !== expectedHook) throw new Error('Git hook selection differs from worktree configuration');
+  const hooks = HOOKS.map(({ name, script }) => {
+    const path = resolve(root, gitOutput(['rev-parse', '--git-path', `hooks/${name}`], { cwd: root }).trim());
+    if (effectivePath(path) !== expectedHooks.get(name)) throw new Error(`${name} hook selection differs from worktree configuration`);
+    return { name, script, path, stat: statIfPresent(path) };
+  });
   const keyPath = normalizeRepoAlias(resolve(process.env.SENSITIVE_SCAN_KEY_FILE || resolve(shared, 'private/device-key.pem')), root);
   const rulesPath = normalizeRepoAlias(resolve(process.env.SENSITIVE_SCAN_RULES || resolve(shared, 'private/rules.json')), root);
-  const sharedFiles = ['lib.mjs', 'team-scan.mjs', 'team-commit-msg.mjs'].map((name) => {
+  const sharedFiles = SHARED_SCRIPTS.map((name) => {
     const source = resolve(import.meta.dirname, name);
     checkParents(source);
     assertSafeSource(lstatSync(source), source, `package script ${name}`);
     return { path: resolve(shared, 'scripts', name), data: readFileSync(source), label: `script ${name}` };
   });
   checkParents(resolve(shared, 'scripts/file'));
-  checkParents(hook);
+  for (const item of hooks) checkParents(item.path);
   for (const path of [shared, resolve(shared, 'private'), resolve(shared, 'scripts')]) {
     const stat = statIfPresent(path);
     if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o077)))) {
@@ -255,15 +281,16 @@ function assertSafeSource(stat, path, label) {
   if (effectivePath(keyPath) === effectivePath(rulesPath)) throw new Error('key and rules destinations must differ');
 
   const node = quote(process.execPath.replace(/\\/g, '/'));
-  const scanner = quote(resolve(shared, 'scripts/team-commit-msg.mjs').replace(/\\/g, '/'));
-  const shim = `#!/bin/sh\n${MARKER}\nexec ${node} ${scanner} "$1"\n`;
-  const hookStat = statIfPresent(hook);
-  if (hookStat && (!hookStat.isFile() || hookStat.isSymbolicLink() || readFileSync(hook, 'utf8') !== shim)) {
-    throw new Error('existing commit-msg hook differs; not modified');
-  }
-  if (hookStat && process.platform !== 'win32') {
-    if (!(hookStat.mode & 0o111)) throw new Error('existing commit-msg hook is not executable');
-    accessSync(hook, constants.X_OK);
+  for (const item of hooks) {
+    const script = quote(resolve(shared, 'scripts', item.script).replace(/\\/g, '/'));
+    item.shim = `#!/bin/sh\n${MARKER}\nexec ${node} ${script} "$1"\n`;
+    if (item.stat && (!item.stat.isFile() || item.stat.isSymbolicLink() || readFileSync(item.path, 'utf8') !== item.shim)) {
+      throw new Error(`existing ${item.name} hook differs; not modified`);
+    }
+    if (item.stat && process.platform !== 'win32') {
+      if (!(item.stat.mode & 0o111)) throw new Error(`existing ${item.name} hook is not executable`);
+      accessSync(item.path, constants.X_OK);
+    }
   }
 
   const sourceKeyPath = resolve(packageRoot, 'private/device-key.pem');
@@ -309,13 +336,16 @@ function assertSafeSource(stat, path, label) {
     file.old = old;
     if (!old.equals(file.data)) {
       const hash = createHash('sha256').update(old).digest('hex');
-      if (!upgrade || hash !== KNOWN_V1[basename(file.path)]) throw new Error(`existing ${file.label} differs or is not a known v1 file; not modified`);
+      if (!upgrade || !KNOWN_PREVIOUS[basename(file.path)]?.includes(hash)) throw new Error(`existing ${file.label} differs or is not a known previous release; not modified`);
       changes.push({ ...file, old });
     }
   }
   if (haveKey) loadKeyPair(keyPath);
-  if (upgrade && (hookStat || haveKey || haveRules || sharedFiles.some((file) => file.exists)) &&
-      (!haveKey || !haveRules || !hookStat || sharedFiles.some((file) => !file.exists))) {
+  // A previous release installed the key, the rules and one commit-msg hook.
+  // Missing package files that did not exist then are an addition, not damage.
+  const previousComplete = haveKey && haveRules && hooks.some((item) => item.name === 'commit-msg' && item.stat) &&
+    PREVIOUS_SCRIPTS.every((name) => sharedFiles.some((file) => basename(file.path) === name && file.exists));
+  if (upgrade && (hooks.some((item) => item.stat) || haveKey || haveRules || sharedFiles.some((file) => file.exists)) && !previousComplete) {
     throw new Error('upgrade requires a complete existing installation');
   }
   if (changes.length) {
@@ -349,13 +379,15 @@ function assertSafeSource(stat, path, label) {
   for (const file of sharedFiles) if (!file.exists) createPrivateFile(file.path, file.data);
   if (!haveKey) createPrivateFile(keyPath, sourceKey);
   if (!haveRules) createPrivateFile(rulesPath, sourceRules);
-  if (!hookStat) {
-    mkdirSync(dirname(hook), { recursive: true });
-    const fd = openSync(hook, 'wx', 0o700);
-    try { writeFileSync(fd, shim, 'utf8'); if (process.platform !== 'win32') fchmodSync(fd, 0o700); } finally { closeSync(fd); }
-    if (process.platform !== 'win32') accessSync(hook, constants.X_OK);
+  for (const item of hooks) {
+    if (item.stat) continue;
+    mkdirSync(dirname(item.path), { recursive: true });
+    const fd = openSync(item.path, 'wx', 0o700);
+    try { writeFileSync(fd, item.shim, 'utf8'); if (process.platform !== 'win32') fchmodSync(fd, 0o700); } finally { closeSync(fd); }
+    if (process.platform !== 'win32') accessSync(item.path, constants.X_OK);
   }
-  console.log(`sensitive-scan: ${hookStat ? 'already installed' : 'installed'} ${hook}`);
+  const installed = hooks.every((item) => item.stat) ? 'already installed' : 'installed';
+  console.log(`sensitive-scan: ${installed} ${hooks.map((item) => item.path).join(', ')}`);
   console.log(`team public key SHA-256: ${keyIdFromPublicKey(packagedPublic)}`);
   console.log('The hook uses installed shared scripts; keep the Node executable in a trusted location.');
   console.log('Protect the extracted private directory and remove it manually after confirming installation.');

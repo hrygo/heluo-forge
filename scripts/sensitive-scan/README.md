@@ -13,7 +13,7 @@ Use the controlled complete distribution and follow [TEAM-FULL-INSTALL.md](TEAM-
 It includes the existing team key and rules; its unencrypted ZIP and extracted
 copies are sensitive key material. Do not create individual developer keys.
 The installer places scripts, private key and rules in the Git common dir and
-installs the Git-selected hook; linked worktrees ordinarily share that setup,
+installs both Git-selected hooks; linked worktrees ordinarily share that setup,
 while independent clones each need installation. Existing different hooks or
 files are not overwritten. Check the installation guide for permission requirements (`umask 022`,
 or the explicit `--allow-group-writable` opt-in), plus path, worktree and platform limitations; later Git configuration can bypass the hook.
@@ -21,7 +21,8 @@ or the explicit `--allow-group-writable` opt-in), plus path, worktree and platfo
 A valid signature proves only that a holder of the shared private key signed a
 v2 statement bound to the commit tree, the scanned baseline HEAD tree, normalized
 commit message and trailer metadata. It does not prove the hook ran, the scanner was unmodified, or the rules were
-correct or effective. A malicious or compromised key holder can sign a false
+correct or effective. A squash or merge commit created by the hosting service is
+covered by its tree alone; no signature covers its rewritten message. A malicious or compromised key holder can sign a false
 statement; this is not a defense against them, and individual holders cannot be
 identified or revoked using the shared key. The v2 trailer and signed payload do
 not contain a rules fingerprint; scanner ID, time and nonce are informational.
@@ -45,9 +46,11 @@ checks or branch rules.
 2. Test a correctly signed PR and an unsigned or incorrectly signed PR. Only
    after verifying the results, configure the one new required context
    `sensitive-attestation-verify`; keep the existing `verify` check separately.
-   Require up-to-date branches and linear history, disable squash and merge
-   commits, and use rebase merging. These are administrator actions, not effects
-   of installing the package.
+   Require up-to-date branches. The required check inspects only the PR's own
+   commits, so squash and rebase merges are both supported; a server-created
+   commit on the base branch is accepted by the audit path only through the tree
+   binding below. These are administrator actions, not effects of installing the
+   package.
 3. The `pull_request_target` workflow checks out trusted base code, fetches PR
    Git objects and verifies the event head; it does not check out or execute PR
    code, reads no secrets and uses read-only contents permission. Protect workflow
@@ -64,14 +67,24 @@ The team hook signs v2 with the actual scanned baseline HEAD tree. The verifier
 reads the public key from `--base`, rejects v1 and requires exactly one parent;
 it checks that the parent's tree matches the signed baseline tree, as well as
 the signature, commit tree and message. Root and merge commits cannot be signed
-by the team hook; empty ranges are rejected. A changed baseline tree after rebase
-requires a fresh scan and signature. Ordinary amend also requires a fresh scan
-and signature: its final parent tree normally differs from the HEAD tree scanned
-by the hook, so a trailer produced during that amend is rejected. Rewriting the
-committer or a conflict-free rebase can retain the signature only when the signed
-baseline tree, commit tree and message remain unchanged. Tree binding does not
-prevent races during scanning or forgery by a key holder. Unscannable content is
-blocked by the local hook unless explicitly excluded in local rules; see the
+by the team hook; empty ranges are rejected.
+
+`git commit --amend` and `git rebase` replay commits, which invalidates the
+parent-tree binding, so both fire the `post-rewrite` hook. It re-scans every
+replayed commit against its real parent tree, refreshes the trailer and moves the
+branch once the whole chain signed; no manual re-sign loop is needed. A replayed
+commit whose content no longer passes the scan stays unsigned and is reported by
+count, so the verifier still fails closed. `git cherry-pick` fires neither hook:
+re-sign a picked commit by amending it with the installed hooks active.
+
+Add `--allow-server-merge` when auditing a base branch that received a web squash
+or merge. A commit without a trailer is accepted only when its subject ends in
+`(#N)` or starts with `Merge pull request #N` and its tree is identical to the
+attested tree of `refs/pull/N/head`; the rewritten message of such a commit is not
+covered by any signature. The required check verifies `base..head`, which never
+contains a server-created commit, so it does not need this flag. Tree binding does
+not prevent races during scanning or forgery by a key holder. Unscannable content
+is blocked by the local hook unless explicitly excluded in local rules; see the
 installation guide for supported file types and limitations.
 
 The older `sensitive:scan` and `sensitive:install` CLI entries use the legacy v1

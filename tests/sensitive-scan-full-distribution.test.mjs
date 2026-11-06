@@ -27,7 +27,7 @@ function setup() {
   const privateDir = join(pkg, 'private');
   const publicDir = join(pkg, '.github/sensitive-scan');
   for (const d of [repo, scriptDir, privateDir, publicDir]) mkdirSync(d, { recursive: true });
-  for (const f of ['lib.mjs', 'team-full-install.mjs', 'team-scan.mjs', 'team-commit-msg.mjs']) cpSync(join(SOURCE, f), join(scriptDir, f));
+  for (const f of ['lib.mjs', 'team-full-install.mjs', 'team-scan.mjs', 'team-commit-msg.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs']) cpSync(join(SOURCE, f), join(scriptDir, f));
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const key = privateKey.export({ type: 'pkcs8', format: 'pem' });
   const pub = publicKey.export({ type: 'spki', format: 'pem' });
@@ -77,6 +77,35 @@ test('complete package installs its own key and real-schema rules, then signs', 
     const blocked = run('git', ['commit', '-q', '-m', 'bad'], { cwd: f.repo, env: f.env });
     assert.notEqual(blocked.status, 0);
     assert.doesNotMatch(blocked.stderr, /SYNTHETIC_TEAM_TERM/);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('installed post-rewrite hook re-signs a rebased branch', () => {
+  const f = setup();
+  try {
+    assert.equal(f.install().status, 0);
+    const shim = readFileSync(join(f.repo, '.git/hooks/post-rewrite'), 'utf8');
+    assert.match(shim, /team-post-rewrite\.mjs/u);
+    const main = ok('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: f.repo, env: f.env });
+    ok('git', ['checkout', '-qb', 'topic'], { cwd: f.repo, env: f.env });
+    for (const [name, text] of [['a.txt', 'a\n'], ['b.txt', 'b\n']]) {
+      writeFileSync(join(f.repo, name), text);
+      ok('git', ['add', name], { cwd: f.repo, env: f.env });
+      ok('git', ['commit', '-qm', `add ${name}`], { cwd: f.repo, env: f.env });
+    }
+    ok('git', ['checkout', '-q', main], { cwd: f.repo, env: f.env });
+    writeFileSync(join(f.repo, 'moved.txt'), 'moved\n');
+    ok('git', ['add', 'moved.txt'], { cwd: f.repo, env: f.env });
+    ok('git', ['commit', '-qm', 'advance base'], { cwd: f.repo, env: f.env });
+    ok('git', ['checkout', '-q', 'topic'], { cwd: f.repo, env: f.env });
+    const rebase = run('git', ['rebase', main], { cwd: f.repo, env: f.env });
+    assert.equal(rebase.status, 0, rebase.stderr);
+    assert.match(rebase.stderr, /re-signed 2 commit\(s\) after rewrite/u);
+    for (const sha of ok('git', ['rev-list', `${main}..topic`], { cwd: f.repo, env: f.env }).split('\n').filter(Boolean)) {
+      const { fields } = parseTrailer(ok('git', ['show', '-s', '--format=%B', sha], { cwd: f.repo, env: f.env }));
+      assert.equal(fields.tree, ok('git', ['rev-parse', `${sha}^{tree}`], { cwd: f.repo, env: f.env }));
+      assert.equal(fields.parenttree, ok('git', ['rev-parse', `${sha}^^{tree}`], { cwd: f.repo, env: f.env }));
+    }
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
 
