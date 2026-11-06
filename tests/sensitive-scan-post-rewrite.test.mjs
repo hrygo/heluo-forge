@@ -134,3 +134,19 @@ test('rewritten sensitive content is never signed and never echoed', t => {
   assert.equal(f.git(['show', '-s', '--format=%B', 'HEAD']), 'unsigned');
   assert.equal(f.git(['rev-parse', 'HEAD']), sha);
 });
+
+test('the documented cherry-pick flow signs against the real parent', t => {
+  const f = setup(t);
+  f.git(['commit', '--allow-empty', '-qm', 'base']);
+  f.installHooks();
+  f.git(['checkout', '-qb', 'side']);
+  const picked = f.commit('hotfix.txt', 'hotfix\n', 'fix: hotfix');
+  f.git(['checkout', '-q', 'main']);
+  f.commit('other.txt', 'other\n', 'other work');
+  f.git(['cherry-pick', '-n', picked]);
+  f.git(['commit', '-q', '-C', picked]);
+  const { fields } = parseTrailer(f.git(['show', '-s', '--format=%B', 'HEAD']));
+  assert.equal(fields.version, 'v2');
+  assert.equal(fields.tree, f.git(['rev-parse', 'HEAD^{tree}']));
+  assert.equal(fields.parenttree, f.git(['rev-parse', 'HEAD^^{tree}']));
+});
