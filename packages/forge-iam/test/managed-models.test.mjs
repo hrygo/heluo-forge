@@ -212,21 +212,104 @@ test('transport authentication failure differs from IAM logout and does not repl
 });
 
 test('a rejected request is not reported as an unreachable gateway', async t => {
+  // The status sits in a different place per SDK: plain `status`, an AI SDK
+  // `statusCode`, a response object, or one level deeper after a transport retry.
+  const shapes = status => [
+    { status },
+    { statusCode: status },
+    { response: { status } },
+    { cause: { statusCode: status } },
+  ];
   for (const [status, code] of [[400, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], [404, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], [429, 'ENTERPRISE_GATEWAY_RATE_LIMIT'], [503, 'ENTERPRISE_GATEWAY_UNAVAILABLE']]) {
+    for (const shape of shapes(status)) {
+      const f = fixture({
+        createAdapter: async () => ({
+          async *stream() { throw Object.assign(new Error('private-body'), shape); }
+        })
+      });
+      t.after(() => f.runtime.dispose()); await f.runtime.ready;
+      const result = await chunks(f.adapter.stream(options));
+      assert.equal(result.at(-1).reason.failure.code, code, JSON.stringify(shape));
+      assert.equal(JSON.stringify(result).includes('private-body'), false);
+    }
+  }
+});
+
+test('a rate limit or exhausted quota reported as an error code is not reported as an unreachable gateway', async t => {
+  for (const [thrownCode, code] of [['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT'], ['QUOTA', 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED']]) {
     const f = fixture({
       createAdapter: async () => ({
-        async *stream() { throw Object.assign(new Error('private-body'), { status }); }
+        async *stream() { throw Object.assign(new Error('private-body'), { code: thrownCode }); }
       })
     });
     t.after(() => f.runtime.dispose()); await f.runtime.ready;
     const result = await chunks(f.adapter.stream(options));
-    assert.equal(result.at(-1).reason.failure.code, code);
+    assert.equal(result.at(-1).reason.failure.code, code, thrownCode);
+  }
+});
+
+test('an unrecognised failure is neither called unreachable nor rejected', async t => {
+  // A gateway swap or SDK upgrade can introduce a code this build never saw.
+  // Guessing "cannot connect" sent the user to check a network that was fine.
+  for (const shape of [{}, { status: 'not-a-number' }, { cause: {} }, { code: 'SOMETHING_NEW' }, { code: 'UNKNOWN' }]) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { throw Object.assign(new Error('private-body'), shape); }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CALL_FAILED', JSON.stringify(shape));
+  }
+});
+
+test('only evidence of unreachability is reported as an unreachable gateway', async t => {
+  for (const shape of [
+    Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }),
+    { code: 'NETWORK' },
+    { code: 'TIMEOUT' },
+    { code: 'SERVER_ERROR' },
+    { statusCode: 503 },
+  ]) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { throw Object.assign(new Error('private-body'), shape); }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE', JSON.stringify(shape));
+  }
+});
+
+test('a gateway error body decides the class when the code table cannot', async t => {
+  // Shapes seen in the wild: OpenAI `error.code`, RFC 9457 `type`, LiteLLM
+  // router cooldowns, and a body embedded in the error message.
+  const cases = [
+    [{ statusCode: 429, responseBody: '{"error":{"code":"insufficient_quota"}}' }, 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'],
+    [{ statusCode: 429, responseBody: '{"error":{"type":"rate_limit_exceeded"}}' }, 'ENTERPRISE_GATEWAY_RATE_LIMIT'],
+    [{ statusCode: 429, message: '429: {"code":"model_cooldown","last_upstream_error":"x"}' }, 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'],
+    [{ message: '400: {"error":{"code":"context_length_exceeded"}}' }, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'],
+    [{ responseBody: '{"type":"https://example.test/problems/quota-exceeded"}' }, 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'],
+    [{ code: 'SOMETHING_NEW', statusCode: 503 }, 'ENTERPRISE_GATEWAY_UNAVAILABLE'],
+    [{ code: 'SOMETHING_NEW', responseBody: '{"error":{"code":"never_seen_before"}}' }, 'ENTERPRISE_GATEWAY_CALL_FAILED'],
+  ];
+  for (const [shape, code] of cases) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { throw Object.assign(new Error('private-body'), shape); }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, code, JSON.stringify(shape));
+    assert.equal(JSON.stringify(result).includes('insufficient_quota'), false);
     assert.equal(JSON.stringify(result).includes('private-body'), false);
   }
 });
 
 test('a request the gateway rejects is not reported as an unreachable gateway', async t => {
-  for (const [chunkCode, code] of [['INVALID_REQUEST', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], ['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT']]) {
+  for (const [chunkCode, code] of [['INVALID_REQUEST', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], ['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT'], ['QUOTA', 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED']]) {
     const f = fixture({
       createAdapter: async () => ({
         async *stream() { yield { type: 'finish', reason: { kind: 'error', failure: { code: chunkCode, message: 'private-body' } } }; }
