@@ -261,6 +261,7 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 - **枚举**：Windows 走 `CredEnumerateW`，过滤串 `*.{service}`，account 取 `UserName`；Linux 按属性 `service` 搜索、account 取 `username`（`keyring-node` 2.1.2 `src/entry.rs`）。Windows 的后缀过滤会带回同后缀的他人条目，Linux 静默跳过缺 `username` 的条目。
 - **上限与编码**：Windows account ≤ 513 字节（UTF-8 计）、blob ≤ 2560 字节（UTF-16LE 计），超限由上游返回 `TooLong`；Linux 无库级上限（`src/utils.rs`）。
 - **失败模式**：Windows 命中集合中任一凭据 blob 奇数长或非法 UTF-16 时，整次枚举抛错且不返回部分结果。
+- **平台默认值**：Windows 未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境 + 漫游配置下凭据随用户配置文件漫游；Linux 写入集合 `default`，集合锁定时读失败而不是返回空。绑定未暴露 `persistence` 与解锁流程，这两项只能作为部署前提记录，不能在本包内改变（`src/store.rs`、`src/cred.rs`）。
 
 据此在无真机条件下已确定并实现：枚举按调用方前缀过滤、丢弃不可作 key 的 account、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝而非依赖平台报错。仍须目标机确认的只有运行态事实：真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
 
@@ -299,6 +300,14 @@ node scripts/probe/native-keyring-store-probe.mjs --enumeration
 ```
 
 输出 JSON 记录平台、triple、addon 路径与逐项结论，作为 §8 矩阵“字符串读写删与枚举”一行的原始证据归档；非目标平台以退出码 2 结束属于预期，不记为缺陷。
+
+目标机取证顺序（每台机各跑一次，结果贴进 issue #182）：
+
+1. `node scripts/fetch-native-keyring.mjs --check` 确认随包产物与校验和一致；
+2. `node scripts/probe/native-keyring-store-probe.mjs --enumeration` 记录读写删、跨进程与枚举命中集合；
+3. 重启后重跑第 2 步的 `--key` 指向同一键，确认值仍在（探针默认每次随机键，持久性检查需显式指定）；
+4. 同一 OS 的另一个用户账户下重跑，确认读不到第 2 步的键；
+5. 记录 `cmdkey /list`（Windows）或 `secret-tool search service heluo-forge`（Linux）的可见性与权限位。
 
 ## 8. D：验收矩阵与证据
 

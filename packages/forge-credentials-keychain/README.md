@@ -45,6 +45,17 @@
 
 本包据此确定行为：枚举默认关闭；开启后按调用方前缀过滤，并丢弃无法作为 key 的 account（空串、控制字符），不因他人条目失败整个扫描；上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上限：Windows account ≤ 513 字节（UTF-8）、blob ≤ 2560 字节（UTF-16LE）；Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
 
+## 平台默认行为
+
+上游绑定没有暴露全部平台参数，下列默认值直接决定部署语义，按源码确认（`windows-native-keyring-store` 1.1.0 `src/store.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`）：
+
+| 平台 | 默认值 | 含义 | 本包能否改变 |
+|---|---|---|---|
+| Windows | `CRED_PERSIST_ENTERPRISE` | 域环境且启用漫游配置时，凭据随用户配置文件漫游到其他计算机 | 不能：绑定只暴露 `target` 修饰符，未暴露 `persistence` |
+| Linux | 集合 `default`（通常是 `login`），条目属性 `service`/`username` | 集合锁定时读取失败并报错，不返回空值；本包不实现解锁交互 | 不能：只固定 `linux.store = secret-service`，不控制解锁 |
+
+Windows 的持久性默认值属于部署决策：若要求凭据只留在本机，当前绑定无法表达，需要换实现或申请上游参数，不能在本包内伪装成本地持久。
+
 ## 错误码
 
 | 错误码 | 触发条件 | 是否已写盘 |
