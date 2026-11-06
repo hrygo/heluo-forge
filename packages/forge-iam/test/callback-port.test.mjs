@@ -372,6 +372,17 @@ test('callback listener: IPv6 loopback uses a bracketed origin', async (t) => {
   assert.match(listener.origin, /^http:\/\/\[::1\]:\d+$/);
   assert.equal(loopbackOrigin('::1', 8080), 'http://[::1]:8080');
   assert.equal(loopbackOrigin('127.0.0.1', 8080), 'http://127.0.0.1:8080');
+
+  // A real request on ::1 must pass the loopback peer check and the Host check.
+  const host = new URL(listener.origin).host;
+  const port = Number(new URL(listener.origin).port);
+  const response = await new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '::1', port, path: '/iam/callback', headers: { host }, agent: false },
+      (res) => { res.resume(); resolve({ status: res.statusCode }); });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(response.status, 200);
 });
 
 test('callback manager: ensure is idempotent and release drains', async (t) => {
