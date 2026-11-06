@@ -74,15 +74,19 @@ parent-tree binding, so both fire the `post-rewrite` hook. It re-scans every
 replayed commit against its real parent tree, refreshes the trailer and moves the
 branch once the whole chain signed; no manual re-sign loop is needed. A replayed
 commit whose content no longer passes the scan stays unsigned and is reported by
-count, so the verifier still fails closed. `git cherry-pick` fires neither hook:
-re-sign a picked commit by amending it with the installed hooks active.
+count, so the verifier still fails closed. `git cherry-pick` runs neither hook:
+use `git cherry-pick -n <commit>` followed by `git commit -C <commit>`, which
+stages the change and lets `commit-msg` sign it against the real parent.
 
 Add `--allow-server-merge` when auditing a base branch that received a web squash
 or merge. A commit without a trailer is accepted only when its subject ends in
 `(#N)` or starts with `Merge pull request #N` and its tree is identical to the
 attested tree of `refs/pull/N/head`; the rewritten message of such a commit is not
 covered by any signature. The required check verifies `base..head`, which never
-contains a server-created commit, so it does not need this flag. Tree binding does
+contains a server-created commit, so it does not need this flag. Both server
+merge strategies preserve the attestation only while the PR branch is up to date:
+replaying the branch onto a newer base recomputes its tree, so branch protection
+must require branches to be up to date before merging. Tree binding does
 not prevent races during scanning or forgery by a key holder. Unscannable content
 is blocked by the local hook unless explicitly excluded in local rules; see the
 installation guide for supported file types and limitations.

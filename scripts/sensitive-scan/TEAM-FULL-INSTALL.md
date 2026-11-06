@@ -87,15 +87,15 @@ b8d63d50c82fee19b3b39f0acd2723494ede9b3309e502a1f262b084628b299b
 
 本地 hook 使用包内的现有正式规则：提交信息和暂存文件路径会扫描；普通 UTF-8 文本默认检查新增／修改行，UTF-16 文本保守地扫描全文件；设置 `DSH_HOOK_FULL=1` 时检查整份暂存文本；`.xlsx`、`.xlsm` 和 `.xltx` 检查工作簿包中的 XML 和关系文件文本；包含无法扫描的宏、图片或嵌入对象等二进制内容时会阻断，而不是声称已扫描其内容。现有允许项和忽略路径保留。未忽略的未知二进制、过大或不可读取内容会阻断签名。发现敏感项只在本地提示，不向 GitHub 上传规则或命中详情；正常 Git 源码推送仍会把提交的文件送到远端。
 
-团队 hook 的 v2 签名绑定实际扫描基线 HEAD tree；远端要求提交恰有一个父提交，且父提交 tree 与签名基线一致，并拒绝 v1。root 和 merge 提交不签名。`post-rewrite` hook 在 `git commit --amend` 和 `git rebase` 后按提交的真实父树重新扫描并重签每个被重放的提交，整条链签名完成后才移动分支，开发者无需手工重签。重放后内容不再通过扫描的提交保持未签名，hook 只报告数量，远端验签仍失败关闭。`git cherry-pick` 不触发这两个 hook，需在钩子生效的工作树中 amend 该提交以重签。这不能防止扫描过程中的竞态。
+团队 hook 的 v2 签名绑定实际扫描基线 HEAD tree；远端要求提交恰有一个父提交，且父提交 tree 与签名基线一致，并拒绝 v1。root 和 merge 提交不签名。`post-rewrite` hook 在 `git commit --amend` 和 `git rebase` 后按提交的真实父树重新扫描并重签每个被重放的提交，整条链签名完成后才移动分支，开发者无需手工重签。重放后内容不再通过扫描的提交保持未签名，hook 只报告数量，远端验签仍失败关闭。`git cherry-pick` 不触发这两个 hook：改用 `git cherry-pick -n <提交>` 暂存改动，再用 `git commit -C <提交>` 提交，让 `commit-msg` 按真实父提交扫描并签名；直接 cherry-pick 会保留原 trailer，tree 不一致会被远端拒绝。这不能防止扫描过程中的竞态。
 
-网页 squash 或 merge 由服务端生成提交，本地 hook 无法介入；该提交消息不经扫描也不被签名。此类提交仅在 tree 与已验证 PR head 的 tree 完全一致时，才被带 `--allow-server-merge` 的审计命令接受；required 检查只验证 PR 自身提交，不受合并策略影响。
+网页 squash 或 merge 由服务端生成提交，本地 hook 无法介入；该提交消息不经扫描也不被签名。此类提交仅在 tree 与已验证 PR head 的 tree 完全一致时，才被带 `--allow-server-merge` 的审计命令接受；required 检查只验证 PR 自身提交，不受合并策略影响。两种服务端合并都只在 PR 分支已跟上 base 时保住签名：重放到更新的 base 会重算 tree，因此分支保护必须开启 Require branches to be up to date。
 
 这是 Git hook，不是对 DSH 插件安装的直接证明。后续 Git 配置覆盖或 `git commit --no-verify` 可绕过本地 hook；团队共享私钥的持有人也能自行签名。只有 GitHub 验签工作流和公钥合入基线、测试通过并设为 required 后，才有远端验签合并门禁作为兜底；当前包本身不会更改 GitHub 设置，也不能防止共享私钥持有人自行签名。
 
 ## 管理员上线和轮换
 
-先在受控渠道分发完整包，确认团队配置；将单公钥验签代码及公钥经 review 合入 PR 基线，实测有效签名通过、缺失/错误签名失败，再将 `sensitive-attestation-verify` 设为 required，并保持分支最新；网页 squash 与 rebase 合并均可使用，服务端提交按 tree 绑定核对。安装包不自动启用这些设置。团队私钥泄露或需撤销持有人时，由保管人安排全员密钥轮换并重签在途 PR；共享密钥无法单独撤销一个成员。
+先在受控渠道分发完整包，确认团队配置；将单公钥验签代码及公钥经 review 合入 PR 基线，实测有效签名通过、缺失/错误签名失败，再将 `sensitive-attestation-verify` 设为 required，并开启 Require branches to be up to date before merging；网页 squash 与 rebase 合并均可使用，服务端提交按 tree 绑定核对。安装包不自动启用这些设置。团队私钥泄露或需撤销持有人时，由保管人安排全员密钥轮换并重签在途 PR；共享密钥无法单独撤销一个成员。
 
 此前完整包在本机 macOS / Node 24 上验证；新版 v2 包及升级路径须另行验收，Windows、Linux、银河麒麟和图形 Git 客户端也须各自实机验收。仓库实现和 GitHub 门禁的部署状态以实际 PR 与分支保护为准。
 
