@@ -50,12 +50,17 @@
 
 | 平台 | 前提 | 校验方式 |
 |---|---|---|
-| Windows 10/11 x64 | Microsoft Visual C++ 2015-2022 Redistributable (x64)：addon 直接导入 `VCRUNTIME140.dll`（UCRT 由系统自带） | 挂载前检查 `%SystemRoot%\System32\vcruntime140.dll`，缺失即 `KEYCHAIN_UNAVAILABLE` 并指名安装项；探针报告的 `windowsRuntime` 记录同一判断 |
+| Windows 10/11 x64 与 Windows 11 on ARM | Microsoft Visual C++ 2015-2022 Redistributable：addon 直接导入 `VCRUNTIME140.dll`（UCRT 由系统自带）；arm64 进程需装 arm64 版本，模拟层下的 x64 进程装 x64 版本 | 挂载前检查 `%SystemRoot%\System32\vcruntime140.dll`，缺失即 `KEYCHAIN_UNAVAILABLE` 并指名安装项；探针报告的 `windowsRuntime` 记录同一判断 |
 | UOS 20 amd64 | glibc ≥ 2.15（产物导入的符号版本最高为 `GLIBC_2.15`） | `strings vendor/linux-x64-gnu/keyring.node \| grep GLIBC_` |
 | 银河麒麟 aarch64 | glibc ≥ 2.17（最高为 `GLIBC_2.17`） | `strings vendor/linux-arm64-gnu/keyring.node \| grep GLIBC_` |
-| macOS arm64 | 无额外运行库；钥匙串 ACL 绑定代码签名，升级或未签名构建首次访问可能弹系统授权框 | 目标机记录弹窗行为与签名身份 |
+| macOS arm64 / x64 | 无额外运行库；钥匙串 ACL 绑定代码签名，升级或未签名构建首次访问可能弹系统授权框 | 目标机记录弹窗行为与签名身份 |
 
 这两个 glibc 下限低于对应发行版基线，不构成额外部署要求；Windows 的 VC++ 运行库则需要在镜像或安装脚本中显式保证，缺它时加载失败与凭据逻辑无关。
+
+除运行库外，系统凭据库还要求**已解锁的桌面会话**。2026-11-06 在两台机器上实测：
+
+- macOS：SSH 会话或未解锁的登录钥匙串写入报 `User interaction is not allowed`，包内归一为 `KEYCHAIN_OPERATION_FAILED`；同机 Apple `security add-generic-password` 报同一错误，属环境限制而非适配器缺陷。DSH 需运行在该用户已解锁的图形会话中；远程运维无法替代本机解锁。
+- Linux（Ubuntu 24.04 aarch64）：桌面会话只有 `session` 集合、没有默认集合时写入报 `Secret Service: no result found`；用隔离的 `dbus-run-session` + `gnome-keyring-daemon` 建立并解锁 `login` 集合后，同一份产物读写、覆盖、跨进程、枚举、删除全部通过。
 
 ## 平台默认行为
 
