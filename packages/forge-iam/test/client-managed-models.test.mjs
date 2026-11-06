@@ -720,3 +720,197 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
   assert.ok(toolbarRefreshBtn, 'toolbar must provide a quick refresh button');
   await toolbarRefreshBtn.props.onClick();
 });
+
+test('the row-level disable button stops an enabled model without expanding its panel', async t => {
+  const writes = [];
+  const twoModels = {
+    ...view,
+    modelAccess: {
+      ...view.modelAccess,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
+      modelOptions: { 'corp-chat': {}, 'corp-coder': {} },
+      defaultModelId: 'corp-coder',
+    },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({
+        ok: true, persisted: true,
+        view: { ...twoModels, modelAccess: { ...twoModels.modelAccess, modelOptions: writes.at(-1).options } },
+      });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await new Promise(setImmediate);
+
+  // The action is reachable while every panel is collapsed: no "精细配置 ▼" click here.
+  assert.match(panel.text(panel.render()), /精细配置 ▼/);
+  const button = nodes(panel.render()).find(node => node.props['aria-label'] === '一键停用 corp-chat');
+  assert.ok(button);
+  assert.equal(button.props.disabled, false);
+  await button.props.onClick();
+
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].options, { 'corp-coder': {} });
+  assert.match(panel.text(panel.render()), /已停用 corp-chat 并生效/);
+  // The row flips to the disabled state, which is the only place the panel renders 一键启用.
+  assert.match(panel.text(panel.render()), /一键启用/);
+});
+
+test('disabling the model DSH uses for new conversations announces the automatic switch', async t => {
+  const writes = [];
+  const twoModels = {
+    ...view,
+    modelAccess: {
+      ...view.modelAccess,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
+      modelOptions: { 'corp-chat': {}, 'corp-coder': {} },
+      defaultModelId: 'corp-chat',
+    },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      // The Host recomputes the default inside the same submission (SM3/SM4).
+      return Response.json({
+        ok: true, persisted: true,
+        view: {
+          ...twoModels,
+          modelAccess: { ...twoModels.modelAccess, modelOptions: writes.at(-1).options, defaultModelId: 'corp-coder' },
+        },
+      });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await new Promise(setImmediate);
+
+  const button = nodes(panel.render()).find(node => node.props['aria-label'] === '一键停用 corp-chat');
+  assert.match(button.props.title, /默认模型会自动切换/);
+  await button.props.onClick();
+
+  assert.deepEqual(writes[0].options, { 'corp-coder': {} });
+  assert.match(panel.text(panel.render()), /默认模型已自动切换到其他已启用模型/);
+  // The surviving model carries the default badge after the response view lands.
+  assert.match(panel.text(panel.render()), /默认可用/);
+});
+
+test('disabling the last enabled model submits an empty set and states the consequence', async t => {
+  const writes = [];
+  const oneModel = {
+    ...view,
+    modelAccess: {
+      ...view.modelAccess,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }],
+      modelOptions: { 'corp-chat': {} },
+      defaultModelId: 'corp-chat',
+    },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(oneModel);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({
+        ok: true, persisted: true,
+        view: { ...oneModel, modelAccess: { ...oneModel.modelAccess, modelOptions: {}, defaultModelId: null } },
+      });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await new Promise(setImmediate);
+
+  const lastButton = nodes(panel.render()).find(node => node.props['aria-label'] === '一键停用 corp-chat');
+  assert.match(lastButton.props.title, /最后一个已启用模型/);
+  await lastButton.props.onClick();
+
+  assert.deepEqual(writes[0].options, {});
+  assert.match(panel.text(panel.render()), /当前没有已启用模型，新对话将无法选择企业模型/);
+  assert.match(panel.text(panel.render()), /未启用/);
+});
+
+test('the row-level disable saves unrelated unsaved edits in the same submission and says so', async t => {
+  const writes = [];
+  const twoModels = {
+    ...view,
+    modelAccess: {
+      ...view.modelAccess,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
+      modelOptions: { 'corp-chat': {}, 'corp-coder': {} },
+      defaultModelId: 'corp-coder',
+    },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({
+        ok: true, persisted: true,
+        view: { ...twoModels, modelAccess: { ...twoModels.modelAccess, modelOptions: writes.at(-1).options } },
+      });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await new Promise(setImmediate);
+
+  // Leave an unrelated draft edit on another model, then disable from the row.
+  await nodes(panel.render()).find(node => node.props['aria-label'] === '配置 corp-coder').props.onClick();
+  const nameInput = () => nodes(panel.render()).find(node => node.props['aria-label'] === '显示名称 2');
+  nameInput().props.onChange({ target: { value: '内部编码助手' } });
+  assert.match(panel.text(panel.render()), /待保存模型配置变更/);
+
+  await nodes(panel.render()).find(node => node.props['aria-label'] === '一键停用 corp-chat').props.onClick();
+
+  assert.equal(writes.length, 1);
+  assert.deepEqual(Object.keys(writes[0].options), ['corp-coder']);
+  assert.equal(writes[0].options['corp-coder'].name, '内部编码助手');
+  assert.match(panel.text(panel.render()), /已停用 corp-chat，其他未保存的修改一并生效/);
+  assert.doesNotMatch(panel.text(panel.render()), /待保存模型配置变更/);
+});
+
+test('the row flips to the disabled state while the disable is still saving', async t => {
+  const writes = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const twoModels = {
+    ...view,
+    modelAccess: {
+      ...view.modelAccess,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
+      modelOptions: { 'corp-chat': {}, 'corp-coder': {} },
+      defaultModelId: 'corp-coder',
+    },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      await gate;
+      return Response.json({
+        ok: true, persisted: true,
+        view: { ...twoModels, modelAccess: { ...twoModels.modelAccess, modelOptions: writes.at(-1).options } },
+      });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await new Promise(setImmediate);
+
+  void nodes(panel.render()).find(node => node.props['aria-label'] === '一键停用 corp-chat').props.onClick();
+  await new Promise(setImmediate);
+  // The row flips to the disabled state before the write settles, so the disable
+  // action is not reachable again while the PUT is in flight.
+  assert.equal(nodes(panel.render()).find(node => node.props['aria-label'] === '一键停用 corp-chat'), undefined);
+  assert.match(panel.text(panel.render()), /未启用/);
+  release();
+  await new Promise(setImmediate);
+
+  // One click, one write: a repeat cannot interleave a second submission.
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].options, { 'corp-coder': {} });
+});

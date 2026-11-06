@@ -2013,7 +2013,7 @@ window.__ModuleLoader__.load({
       const { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view } = item;
       const {
         toggleModelExpand, updateOptionField, resetModelOption, disableModelOption,
-        enableModelOption, enableModelWithDefaults, saveModelOptions,
+        enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions,
       } = actions;
 
 
@@ -2068,6 +2068,20 @@ window.__ModuleLoader__.load({
             ),
           ),
           h('div', { className: 'fiam-model-row-actions' },
+            isEnabled
+              ? h('button', {
+                type: 'button',
+                style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 8px', fontSize: 12, flexShrink: 0 },
+                disabled: actionBusy,
+                title: Object.keys(modelOptions).length === 1
+                  ? `停用后立即生效；这是最后一个已启用模型，停用后新对话将无法选择企业模型`
+                  : isDefaultModel
+                    ? `停用后立即生效，不再出现在对话模型选择中；默认模型会自动切换到其他已启用模型`
+                    : `停用后立即生效，不再出现在对话模型选择中`,
+                'aria-label': `一键停用 ${model.id}`,
+                onClick: () => disableModelWithSave(model.id),
+              }, '停用')
+              : null,
             !isEnabled
               ? h('button', {
                 type: 'button',
@@ -2440,6 +2454,7 @@ window.__ModuleLoader__.load({
         changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
         resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
         enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
+        disableWithSave: disableModelWithSave,
         discard: discardModelChanges, save: saveModelOptions, refresh: refreshModels,
       } = actions;
       const ui = deriveSessionUi(view);
@@ -2667,7 +2682,7 @@ window.__ModuleLoader__.load({
                   item: { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view },
                   actions: {
                     toggleModelExpand, updateOptionField, resetModelOption, disableModelOption,
-                    enableModelOption, enableModelWithDefaults, saveModelOptions,
+                    enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions,
                   },
                 });
               }))
@@ -2843,6 +2858,33 @@ window.__ModuleLoader__.load({
         setModelNotice(`已停用 ${id}，保存后不再出现在模型选择中。`);
       };
 
+      // 面板里的「停用模型」只改草稿，必须再点保存才生效。列表行上的「停用」没有面板可展开，
+      // 所以与「一键启用」对称：改完草稿立即提交整份启用集合。
+      // 状态机上的三个后果都在这条路径上处理：
+      // - 一次 PUT 提交的是整份集合，其他未保存的修改会一并生效，提示里如实说明；
+      // - 停用的是默认模型时，宿主在同一次提交里重算默认模型并同步宿主默认（SM4），
+      //   这里只负责把结果说清楚；
+      // - 停用最后一个模型会提交空集合，SM3 允许（设计 §13.1），SM4 回到未对齐状态，
+      //   因此提示必须点明「新对话将无法选择企业模型」。
+      const disableModelWithSave = async (id) => {
+        if (!Object.hasOwn(modelOptions, id)) return;
+        if (modelSaving || viewBarrier.current.pending) return;
+        const nextOptions = { ...modelOptions };
+        delete nextOptions[id];
+        const wasDefault = view?.modelAccess?.defaultModelId === id;
+        const dirty = JSON.stringify(modelOptions) !== JSON.stringify(lastSyncedOptions.current);
+        const remaining = Object.keys(nextOptions).length;
+        const notice = remaining === 0
+          ? `已停用 ${id}，当前没有已启用模型，新对话将无法选择企业模型（可随时一键启用）。`
+          : wasDefault
+            ? `已停用 ${id}，默认模型已自动切换到其他已启用模型。`
+            : dirty
+              ? `已停用 ${id}，其他未保存的修改一并生效。`
+              : `已停用 ${id} 并生效。`;
+        setModelOptions(nextOptions);
+        await persistModelOptions(nextOptions, notice);
+      };
+
       const discardModelChanges = () => {
         setModelOptions(lastSyncedOptions.current);
         setModelNotice('已放弃未保存的模型配置修改。');
@@ -2956,6 +2998,7 @@ window.__ModuleLoader__.load({
           changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
           resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
           enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
+          disableWithSave: disableModelWithSave,
           discard: discardModelChanges, save: saveModelOptions, syncFromView: syncModelOptions,
           reset: resetForSignOut, clearNotice: () => setModelNotice(null), collapseAll: () => setExpandedModels({}),
         },
