@@ -63,7 +63,7 @@
 | 编号 | 交付物 | 文件 | 必须先回答 |
 |---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V2.0.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 当前人员与用途、A/B 候选、应用受控开通、IP、五分钟撤权/单授权退出及 C1/C4；能力待核验，不以历史 key-auth 调通代替 |
+| CORP-DSH-GW-001 | AI 网关契约（V2.1.0） | [gateway-contract.md](<contracts/gateway-contract.md>) | 明确路线 B 双因子凭据协同（Key + IAM-JWT）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
 | CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
