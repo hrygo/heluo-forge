@@ -32,17 +32,6 @@
       "addon": "keyring.linux-arm64-gnu.node",
       "integrity": "sha512-PM+SAcl/yGzgGbeeCsKrnlG4T5DBIDjmDqtKm5an1bJz0o0gwSzR3BMiXf04JenkcqascZpdcIReoEvLj0cvCw==",
       "license": "MIT"
-    },
-    {
-      "triple": "darwin-arm64",
-      "platform": "darwin",
-      "arch": "arm64",
-      "source": "@napi-rs/keyring-darwin-arm64",
-      "version": "2.1.2",
-      "addon": "keyring.darwin-arm64.node",
-      "integrity": "sha512-vsInUWUzWS6/WzR/TFNwmdtmwKWjnnR8TOpvZ/pjjxDAkJB/waz37PWzp2b8AFcw1aCcq2aQ7k2vvbLQy8pTrw==",
-      "license": "MIT",
-      "delivery": "dev"
     }
   ]
 }

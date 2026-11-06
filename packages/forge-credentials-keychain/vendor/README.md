@@ -20,8 +20,8 @@
 | `linux-x64-gnu/` | linux-x64 | UOS 20 amd64 |
 | `linux-arm64-gnu/` | linux-arm64 | 银河麒麟 aarch64 |
 
-未列出的组合（含 `darwin-arm64`）不属于交付目标；`darwin-arm64` 仅供本机开发时手工
-暂存，已被 `.gitignore` 排除，不进发布包。
+未列出的组合不属于交付目标：`darwin-arm64` 只在本机做加载器实验时手工暂存，不进仓库、
+不进发布包。
 
 ## 为什么不用 npm 依赖
 
@@ -34,7 +34,6 @@
 ```sh
 node scripts/fetch-native-keyring.mjs            # 暂存三个交付目标
 node scripts/fetch-native-keyring.mjs --check    # 只校验 CHECKSUMS.json 与文件一致
-node scripts/fetch-native-keyring.mjs --with-dev # 额外暂存 darwin-arm64（仅本机）
 ```
 
 下载的每个 tarball 都会与 `scripts/native-keyring.json` 中的 integrity 比对，不一致立即

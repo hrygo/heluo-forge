@@ -15,7 +15,7 @@
  * `scripts/native-keyring.json`; a mismatch aborts before anything is written.
  *
  * Usage:
- *   node scripts/fetch-native-keyring.mjs [--with-dev] [--check] [--registry <url>]
+ *   node scripts/fetch-native-keyring.mjs [--check] [--registry <url>]
  *
  * `--check` writes nothing and verifies the staged files against
  * `native/CHECKSUMS.json` (used by the release checks).
@@ -41,7 +41,6 @@ const option = (name, fallback) => {
 };
 
 const registry = option('--registry', process.env.HELUO_NATIVE_REGISTRY ?? DEFAULT_REGISTRY);
-const withDev = flag('--with-dev');
 const checkOnly = flag('--check');
 
 const sha512 = (buffer) => `sha512-${createHash('sha512').update(buffer).digest('base64')}`;
@@ -57,14 +56,14 @@ function readJson(path) {
 function selectedTargets() {
   const manifest = readJson(manifestPath);
   if (manifest.package !== '@napi-rs/keyring') fail('unexpected package in manifest');
-  return manifest.targets.filter((target) => target.delivery !== 'dev' || withDev);
+  return manifest.targets;
 }
 
 function verifyStaged(targets) {
   if (!existsSync(checksumPath)) fail('CHECKSUMS.json is missing; run without --check to stage the addons');
   const recorded = readJson(checksumPath);
   const problems = [];
-  for (const target of targets.filter((item) => item.delivery !== 'dev')) {
+  for (const target of targets) {
     const relative = `${target.triple}/keyring.node`;
     const expected = recorded.files?.[relative];
     if (expected === undefined) {
@@ -119,14 +118,14 @@ function stageTarget(target) {
     const licenseSource = join(extracted, 'package', 'LICENSE.third-party.md');
     if (existsSync(licenseSource)) copyFileSync(licenseSource, join(nativeRoot, target.triple, 'LICENSE.third-party.md'));
     const bytes = readFileSync(addonTarget);
-    return { relative: `${target.triple}/keyring.node`, sha256: sha256(bytes), bytes: bytes.length, source: target.source, version: target.version, license: target.license, integrity: target.integrity, delivery: target.delivery };
+    return { relative: `${target.triple}/keyring.node`, sha256: sha256(bytes), bytes: bytes.length, source: target.source, version: target.version, license: target.license, integrity: target.integrity };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
 function writeChecksums(entries) {
-  const files = Object.fromEntries(entries.filter((entry) => entry.delivery !== 'dev').map((entry) => [entry.relative, entry]).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const files = Object.fromEntries(entries.map((entry) => [entry.relative, entry]).sort(([a], [b]) => (a < b ? -1 : 1)));
   const document = {
     package: '@napi-rs/keyring',
     version: readJson(manifestPath).version,
