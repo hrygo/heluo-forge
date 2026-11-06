@@ -141,6 +141,28 @@ function stubListener(outcomes) {
   return { start, tried };
 }
 
+test('callbackAddress: the derived URI always carries an accepted prefix', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const checked = validateConfig(configFor(mock, { callbackPort: 0 }));
+  assert.ok('value' in checked, JSON.stringify(checked.issues));
+  const { service, manager } = loopbackService(checked.value);
+  t.after(() => manager.close());
+
+  const started = await service.startSignIn();
+  const redirect = new URL(started.authorizationUrl).searchParams.get('redirect_uri');
+  // IAM accepts only http://127.0.0.1: and http://127.0.0.1/ (https too). A
+  // host suffix such as 127.0.0.1.evil.com or a neighbour such as 127.0.0.10
+  // fails that rule, so the derived URI must stop at the literal host.
+  assert.match(redirect, /^http:\/\/127\.0\.0\.1[:/]/);
+  assert.doesNotMatch(redirect, /^http:\/\/127\.0\.0\.1[^:/]/, 'no host suffix may follow the literal');
+  assert.equal(new URL(redirect).hostname, '127.0.0.1');
+
+  // The IPv6 fallback does not sit under that prefix: it only works once IAM
+  // registers http://[::1].
+  assert.doesNotMatch('http://[::1]:17890/iam/callback', /^http:\/\/127\.0\.0\.1[:/]/);
+});
+
 test('callbackAddress: auto falls back to IPv6 only when the family is missing', async () => {
   const missing = stubListener({ '127.0.0.1': 'EADDRNOTAVAIL' });
   const manager = createCallbackManager({
