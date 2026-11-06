@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.21.3 |
+| 版本 | V1.22.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-05 |
+| 最后更新 | 2026-11-06 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（设计阶段；实现与验证见设计索引 §2.2） |
 
@@ -250,7 +250,23 @@ flowchart TB
 
 ### 4.5 回调与浏览器交互规范
 
-- **回调端点生成**：由 Host 基于当前 `webServer` 的实际 Origin 与配置的 `redirectPath`（默认 `/iam/callback`）动态构造，不信任客户端上报的来源；
+#### 4.5.1 回调监听归属
+
+生产形态由插件自建回环监听，端口取 IAM 预登记值；宿主 `webServer` 的端口变化不影响回调地址。
+
+| 项 | 终态口径 |
+|---|---|
+| 监听 | `callbackPort` 取 1024–65535；插件在 `127.0.0.1` 上监听，只接受 `GET <redirectPath>`（默认 `/iam/callback`）；登录发起前等待绑定结果 |
+| 精确匹配 | `redirectUri` 必须逐字节等于 `http://127.0.0.1:<callbackPort><redirectPath>`；不一致在装配期以 `IAM_CONFIG_INVALID` 拒绝 |
+| 端口冲突 | 绑定失败记 `IAM_CALLBACK_PORT_UNAVAILABLE`，登录发起即被拒；不回落宿主端口，不改写 `redirect_uri` |
+| 单端口 | 一次登录只用一个已登记端口；换端口需改配置并重启 |
+| 拒绝面 | 非回环对端、Host 不等于登记主机（DNS 重绑定）、非 GET、路径不等（含后缀）均拒绝 |
+| 兼容形态 | `callbackPort` 为 0 时沿用宿主实时 Origin，仅用于开发与兼容，不满足精确登记要求 |
+
+配置固定端口后，回调不再注册到宿主 `webServer`；管理 API 仍留在宿主。
+
+#### 4.5.2 回调校验与响应
+
 - **回调只读与校验**：回调接口仅支持 `GET` 方法，严格校验 `state` 匹配当前活跃 Attempt；换票 POST 请求携带 `code_verifier` 由服务端直接验票，Verifier 绝不暴露于 URL；
 - **同源管理守卫**：所有 `/api/forge-iam/*` 管理端点受宿主 `ctx.connection.requestRejection` 守卫保护，严格校验 `x-forge-iam-request: 1` 标头，写入请求体限制最大 8 KiB；
 - **回调完成响应**：回调成功后仅返回纯文本/极简 HTML 页面（“登录成功，请返回客户端”），不向页面写入任何 Token 凭据。
@@ -288,7 +304,8 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `revocationEndpoint` | string | 空 | 否 | 访问令牌撤销端点（`GET /idp/oauth2/revokeToken?access_token=...`） |
 | `scopes` | string[] | `['openid', 'profile', 'offline_access']` | 是 | 申请授权范围，必须显式包含 `openid` |
 | `redirectPath` | string | `/iam/callback` | 否 | 本机 Loopback 回调绝对路径 |
-| `redirectUri` | string | 空 | 否 | 显式回调 URI；非 loopback 必须采用 HTTPS |
+| `callbackPort` | number | `0` | 否 | 0 沿用宿主 Origin（开发/兼容）；1024–65535 由插件在 `127.0.0.1` 自建监听，即 IAM 预登记端口 |
+| `redirectUri` | string | 空 | 否 | 显式回调 URI；配置固定端口时必须等于 `http://127.0.0.1:<callbackPort><redirectPath>`；非 loopback 必须采用 HTTPS |
 | `gatewayConsoleUrl` | string | 空 | 否 | UAG 网关个人访问凭证控制台链接，仅用于界面指引 |
 | `defaultProvider` | string | `enterprise` | 否 | 企业模型提供方标识 |
 | `defaultModel` | string | 空 | 否 | 企业首选默认模型标识 |
@@ -891,7 +908,7 @@ flowchart TD
 | 12 | Secret 轮换窗口期暂停新登录与等待两分钟重试逻辑实机演练 | 平台组 | 验证轮换期间客户端调度的稳定性 |
 | 13 | 刷新令牌滑动续期临界点（休眠/断网超过余量）的实机确认 | 平台组 | 明确自然过期后的用户端重新认证提示体验 |
 | 14 | UserInfo 工号与姓名标准声明字段最终口径对齐 | IAM 团队 | 统一账户页展示名与审计主体显示名 |
-| 15 | 回调端口登记形态（固定端口与动态分配）在生产环境的最终确定 | IAM 团队 + 平台组 | 确定重定向 URL 端口白名单规则与负向用例 |
+| 15 | 回调端口登记：固定 `callbackPort` 与 IAM 预登记的 `redirect_uri` 对齐 | IAM 团队 | 取得端口登记回执，并用真实 IAM 验证相似路径与未登记端口的拒绝用例 |
 
 ### 12.2 已审定不采用的设计选项
 
