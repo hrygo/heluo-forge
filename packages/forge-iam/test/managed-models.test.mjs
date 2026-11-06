@@ -248,8 +248,29 @@ test('a rate limit or exhausted quota reported as an error code is not reported 
   }
 });
 
-test('an unreachable gateway is still reported when no status can be read', async t => {
-  for (const shape of [{}, { status: 'not-a-number' }, { cause: {} }]) {
+test('an unrecognised failure is neither called unreachable nor rejected', async t => {
+  // A gateway swap or SDK upgrade can introduce a code this build never saw.
+  // Guessing "cannot connect" sent the user to check a network that was fine.
+  for (const shape of [{}, { status: 'not-a-number' }, { cause: {} }, { code: 'SOMETHING_NEW' }, { code: 'UNKNOWN' }]) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { throw Object.assign(new Error('private-body'), shape); }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CALL_FAILED', JSON.stringify(shape));
+  }
+});
+
+test('only evidence of unreachability is reported as an unreachable gateway', async t => {
+  for (const shape of [
+    Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }),
+    { code: 'NETWORK' },
+    { code: 'TIMEOUT' },
+    { code: 'SERVER_ERROR' },
+    { statusCode: 503 },
+  ]) {
     const f = fixture({
       createAdapter: async () => ({
         async *stream() { throw Object.assign(new Error('private-body'), shape); }
