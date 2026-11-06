@@ -10,6 +10,11 @@
 import { createServer } from 'node:http';
 import { IamError } from './errors.mjs';
 
+// A release waits for the callback response it just produced, but nothing else.
+// A local client that connects and never completes its request must not hold
+// the port, the next bind or the unload behind it.
+const RELEASE_GRACE_MS = 1000;
+
 /**
  * True only for loopback peers. IPv4-mapped IPv6 addresses are unwrapped first,
  * and the whole 127/8 block counts because the kernel may report any of it.
@@ -104,23 +109,23 @@ export function createCallbackRequestHandler({ origin, path, handler }) {
  *   address?: string,
  *   path: string,
  *   handler: (req: object, res: object) => unknown,
- *   onFailure?: (error: IamError) => void,
  * }} input
  */
-export function startCallbackListener({ port = 0, address = '127.0.0.1', path, handler, onFailure } = {}) {
+export function startCallbackListener({ port = 0, address = '127.0.0.1', path, handler } = {}) {
   let failure;
   let origin;
-  let closed = false;
+  let gate;
+  let closing;
   let settle = () => {};
   const server = createServer((req, res) => {
     // A request cannot arrive before `listening`, but a socket accepted during
     // shutdown could; refuse rather than guess an origin.
-    if (!origin) {
+    if (!gate) {
       res.statusCode = 503;
       res.end();
       return;
     }
-    createCallbackRequestHandler({ origin, path, handler })(req, res);
+    gate(req, res);
   });
 
   const ready = new Promise((resolve) => {
@@ -132,8 +137,8 @@ export function startCallbackListener({ port = 0, address = '127.0.0.1', path, h
       resolve(result);
     };
     server.once('listening', () => {
-      const bound = server.address();
-      origin = loopbackOrigin(address, bound.port);
+      origin = loopbackOrigin(address, server.address().port);
+      gate = createCallbackRequestHandler({ origin, path, handler });
       settle(undefined);
     });
     server.once('error', (error) => {
@@ -143,25 +148,32 @@ export function startCallbackListener({ port = 0, address = '127.0.0.1', path, h
         `callback address ${address}:${port} is unavailable (${reason}); free the port or let the system assign one`,
         { port, address, reason },
       );
-      onFailure?.(failure);
       settle(failure);
     });
   });
   server.listen(port, address);
 
-  const shutdown = (cut) => new Promise((resolve) => {
-    if (closed) return resolve();
-    closed = true;
+  const shutdown = (cut) => {
+    // Teardown escalates even when a release is already draining.
+    if (cut) server.closeAllConnections?.();
+    if (closing) return closing;
     settle(failure ?? new IamError(
       'IAM_CALLBACK_BIND_FAILED',
       `callback listener on ${address}:${port} was closed before it started listening`,
       { port, address },
     ));
-    server.close(() => resolve());
-    // Draining must keep the response that is being written; teardown must not
-    // wait on a browser that never closes its socket.
-    if (cut) server.closeAllConnections?.();
-  });
+    closing = new Promise((resolve) => {
+      // Draining keeps the response that is being written; the grace timer then
+      // drops whatever refused to finish, so the port cannot stay held.
+      const grace = setTimeout(() => server.closeAllConnections?.(), RELEASE_GRACE_MS);
+      grace.unref?.();
+      server.close(() => {
+        clearTimeout(grace);
+        resolve();
+      });
+    });
+    return closing;
+  };
 
   return {
     get origin() { return origin; },
