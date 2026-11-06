@@ -91,9 +91,11 @@ function defaultLoad(platform = process.platform, arch = process.arch) {
   }
   const addon = nativeAddonPath(platform, arch);
   if (!existsSync(addon)) {
+    // Same operator contract as the generic unavailable backend: say why, say
+    // how to fix it, and name the only non-production escape hatch.
     throw new KeychainBackendError(
       'KEYCHAIN_UNAVAILABLE',
-      `staged addon for ${triple} is missing; run node scripts/fetch-native-keyring.mjs (no plaintext fallback is performed)`,
+      `staged addon for ${triple} is missing; run node scripts/fetch-native-keyring.mjs before building. This profile fails closed with no plaintext fallback; a non-production profile may use the documented development override (filePath + allowInsecureFile).`,
     );
   }
   try {

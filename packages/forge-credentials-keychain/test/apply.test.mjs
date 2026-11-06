@@ -83,15 +83,22 @@ test('apply fails closed when the platform backend is unavailable', () => {
   );
 });
 
-test('the unavailable error names the unimplemented adapter and the development override', () => {
+test('the unavailable error names the reason and the development override', () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, {}),
     (error) => {
+      // Default composition never mounts a backend. On a platform with a staged
+      // addon the failure is the unvetted gate; everywhere else it is the
+      // unavailable backend. Both must be distinguishable from "misconfigured"
+      // and both must name their own escape hatch.
+      if (error.code === 'KEYCHAIN_UNVETTED_ADAPTER_REFUSED') {
+        assert.match(error.message, /allowUnvettedPlatformAdapter/u);
+        return true;
+      }
       assert.equal(error.code, 'KEYCHAIN_UNAVAILABLE');
-      // The operator must be able to tell "not implemented" apart from
-      // "misconfigured", and find the non-production escape hatch.
-      assert.match(error.message, /not implemented on this platform/u);
+      assert.match(error.message, /(not implemented on this platform|staged addon for [a-z0-9-]+ is missing)/u);
+      // The operator must be able to find the non-production escape hatch.
       assert.match(error.message, /fails closed/u);
       assert.match(error.message, /filePath/u);
       assert.match(error.message, /allowInsecureFile/u);
