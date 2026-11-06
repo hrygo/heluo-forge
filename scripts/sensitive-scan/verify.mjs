@@ -88,6 +88,11 @@ function verifyCommit(sha, publicKey, options = {}) {
   const commit = parseCommit(sha);
   const parsed = parseTrailer(commit.message);
   if (!parsed) {
+    // A merge commit can never carry an attestation, so name it as such instead
+    // of reporting a missing trailer, which reads like an ordinary unsigned commit.
+    if (commit.parents.length > 1 && !options.allowServerMerge) {
+      throw new Error('merge commit on this branch cannot be attested; run git rebase instead of merging');
+    }
     if (!options.allowServerMerge) throw new Error('missing Sensitive-Scan trailer');
     verifyServerCreated(commit, publicKey);
     return 'server-created';

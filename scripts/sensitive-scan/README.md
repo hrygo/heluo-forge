@@ -69,7 +69,8 @@ The team hook signs v2 with the actual scanned baseline HEAD tree. The verifier
 reads the public key from `--base`, rejects v1 and requires exactly one parent;
 it checks that the parent's tree matches the signed baseline tree, as well as
 the signature, commit tree and message. Root and merge commits cannot be signed
-by the team hook; empty ranges are rejected.
+by the team hook; empty ranges are rejected, and a merge commit on the branch is
+reported as such instead of as a missing trailer.
 
 `git commit --amend` and `git rebase` replay commits, which invalidates the
 parent-tree binding, so both fire the `post-rewrite` hook. It re-scans every

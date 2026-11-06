@@ -63,6 +63,17 @@ test('a squash commit is accepted only when its tree matches the attested head',
   assert.match(allowed.stdout, /1 commit\(s\) verified \(1 server-created\)/u);
 });
 
+test('a merge commit on the branch is named as such, not as a missing trailer', t => {
+  const f = fixture(t);
+  const branchTree = f.tree('change.txt', 'change\n');
+  const head = f.commit(branchTree, [f.base], f.v2(branchTree, f.baseTree));
+  const merged = f.commit(f.baseTree, [head, f.base], 'Merge branch main into topic\n');
+  const result = f.verify(merged);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /merge commit on this branch cannot be attested/u);
+  assert.match(result.stderr, /git rebase/u);
+});
+
 test('a server merge commit is accepted through the same tree binding', t => {
   const f = fixture(t);
   const prTree = f.tree('change.txt', 'change\n');
