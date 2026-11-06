@@ -40,8 +40,10 @@ const NATIVE_KEYRING_MODULE = '@napi-rs/keyring';
 /** platform-arch → upstream prebuilt triple; anything else stays fail closed. */
 const NATIVE_TARGETS = new Map([
   ['win32-x64', 'win32-x64-msvc'],
+  ['win32-arm64', 'win32-arm64-msvc'],
   ['linux-x64', 'linux-x64-gnu'],
   ['linux-arm64', 'linux-arm64-gnu'],
+  ['darwin-arm64', 'darwin-arm64'],
 ]);
 
 /** Windows CREDENTIALW blob limit; UTF-16LE means at most half as many code units. */

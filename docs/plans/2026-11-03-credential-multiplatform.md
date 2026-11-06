@@ -44,7 +44,7 @@ A 可先推进；B 只能作为显式 opt-in 样机。**C 未通过，D 不开�
 | Windows 桌面 | Windows 10 amd64 | `win32-x64-msvc` | 必须通过 G2 |
 | UOS 本机 Web | 统信 UOS 20 amd64 | `linux-x64-gnu` | 必须通过 G2，不是按需项 |
 | 麒麟本机 Web | 银河麒麟 aarch64 | `linux-arm64-gnu` | 必须通过 G2，不能用 Ubuntu 代替 |
-| macOS 开发回归 | macOS arm64 | `darwin-arm64` | 单列开发证据，不计作第三交付目标；交付另走范围评审 |
+| macOS 开发回归 | macOS Apple Silicon（arm64） | `darwin-arm64` | 适配器随包交付并单独记录证据；macOS 客户端不在本期产品范围（[需求基线 §2](<../requirements/requirements-baseline.md#2-范围边界唯一真源>) N2），不并入三目标 G2 |
 
 Node 与 pnpm 使用仓库固定版本；不顺带升级 [.dsh-version](<../../.dsh-version>)、兼容下限或平台范围。
 
@@ -61,7 +61,7 @@ Node 与 pnpm 使用仓库固定版本；不顺带升级 [.dsh-version](<../../.
 | 7 | 默认补丁插入 keychain，却未禁用官方 `credentials` 行 | [组合补丁](<../../packages/forge-enterprise/cordis.patch.yml>) | 两个提供方可被启用；provider 内的先挂载检查不能覆盖后挂载方 |
 | 8 | IAM 的 `findLegacyRecords()` 有枚举代码，未找到生产调用方 | [store](<../../packages/forge-iam/src/store.mjs>) | 不能因此删除 `listRecords` 契约；其他消费者仍可使用 |
 | 9 | `createPlatformBackend()` 目前始终返回 unavailable | [backend](<../../packages/forge-credentials-keychain/src/backend.mjs>) | 生产原生适配器并未实现；provider 不主动降级，默认组合却可能仍激活 local |
-| 10 | 首版制品要求 Windows / UOS / 麒麟三目标自包含；macOS 不在一期交付范围 | [需求基线](<../requirements/requirements-baseline.md>) | 必须补 UOS；macOS 验证不能顶替 |
+| 10 | 首版制品自包含：随包携带 `win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64`、`darwin-arm64` 五个 addon；G2 仍按 Windows / UOS / 麒麟三目标判定，macOS 只作开发回归记录 | [需求基线](<../requirements/requirements-baseline.md>) | 必须补 UOS；macOS 证据不能顶替任一 G2 目标 |
 | 11 | #125 报告 Linux aarch64 默认组合启动后 local 接管，创建 161 B 明文 YAML，含 `secret` 字段 | [#125](https://github.com/hrygo/heluo-forge/issues/125)，DSH rc.3；本轮未复现 | 明文提供方可达且发生写盘；不能仅凭大小与字段断定企业 AT/RT 已落盘 |
 | 12 | #125 报告文件后端先注册成功后，local 后挂载撞名 | 同一报告；mock 单测与真实组合不同 | 必须验证激活时序与实际 owner，不能依赖 YAML 行顺序 |
 | 13 | 已安装 rc.5 的 Connection 会将 `client-connection/browser-session` 随机签名 secret 写入 credentials；launch token 另存于进程内 | 已安装 `dsh-client-connection`、`dsh-credentials-local` 读码，非本仓库文件 | 启动产生的 `secret` 可能是宿主浏览器认证材料；不得把风险写成已取证的企业令牌泄漏 |
@@ -262,6 +262,8 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 - **上限与编码**：Windows account ≤ 513 字节（UTF-8 计）、blob ≤ 2560 字节（UTF-16LE 计），超限由上游返回 `TooLong`；Linux 无库级上限（`src/utils.rs`）。
 - **失败模式**：Windows 命中集合中任一凭据 blob 奇数长或非法 UTF-16 时，整次枚举抛错且不返回部分结果。
 - **平台默认值**：Windows 未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境 + 漫游配置下凭据随用户配置文件漫游；Linux 写入集合 `default`，集合锁定时读失败而不是返回空。绑定未暴露 `persistence` 与解锁流程，这两项只能作为部署前提记录，不能在本包内改变（`src/store.rs`、`src/cred.rs`）。
+- **本机实测（2026-11-06，darwin-arm64）**：`scripts/probe/native-keyring-store-probe.mjs --enumeration` 7/7 通过——读写、覆盖、跨进程可见、枚举命中集合、删除与幂等删除，探针条目已删除。这是 macOS 存储层证据，不是 Windows/UOS/麒麟 证据；未签名 Node 与非签名 DSH 产物下的钥匙串授权提示仍待记录。
+- **macOS 语义**：条目是通用密码，属性 `svce = service`、`acct = account`，两者都不可为空（空值在 Keychain API 里是通配）；枚举按 `svce` 搜索，缺 `svce`/`acct` 的条目被跳过，无命中返回空集；默认域是用户钥匙串（`MacKeychainDomain::User`，通常是 `login`），持久性 `UntilDelete`；读取他人创建且 ACL 未授权的条目会触发系统提示（`apple-native-keyring-store` 1.0.2 `src/keychain.rs`）。
 - **加载前提**：Windows 产物直接导入 `VCRUNTIME140.dll`，缺 Microsoft Visual C++ 2015-2022 Redistributable 时 `require` 报“找不到模块”，与凭据逻辑无关；Linux 产物导入的符号版本最高为 x64 `GLIBC_2.15`、arm64 `GLIBC_2.17`，均低于 UOS 20 与麒麟的发行版基线。适配器在 Windows 上先探测该 DLL，缺失即以 `KEYCHAIN_UNAVAILABLE` 说明安装项。
 
 据此在无真机条件下已确定并实现：枚举按调用方前缀过滤、丢弃不可作 key 的 account、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝而非依赖平台报错。仍须目标机确认的只有运行态事实：真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
@@ -276,7 +278,7 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 - [ ] **B3**：按 §6 构建原生资源闭包；用最终安装产物完成分平台合成探针。
 - [ ] **C**：关闭 §9 的 G1 关键项，回写设计、契约与冻结文件表，经评审后才实现生产事务与可信装配。
 - [ ] **D1**：通过 [atomic-gate](<../../packages/forge-iam/test/atomic-gate.test.mjs>)、[网关事务回归](<../../packages/forge-iam/test/gateway-atomic-transactions.test.mjs>)及真实双进程故障注入，再做 IAM/网关联调。
-- [ ] **D2**：同一最终 tgz 完成 Windows / UOS / 麒麟 G2；macOS 另列。同步证据、登记与相关 issue，未经门禁不发布、不扩试点。
+- [ ] **D2**：同一最终 tgz 完成 Windows / UOS / 麒麟 G2；macOS 另有开发回归记录且不参与该判定。同步证据、登记与相关 issue，未经门禁不发布、不扩试点。
 
 工作量仅作工程预算：A 约 **1–2 人日**，B 的接口样机与候选验证约 **2–3 人日**；合计 **3–5 人日不含制品闭包扩展、目标机等待、C/D 与评审**。原先 8.5 人日不能作为完整生产交付承诺：长 grant、严格枚举、生产事务和可信装配尚未定型，C1 结束后须按冻结设计重新估算。没有证据时不补一个“系统命令 + 索引再加 2–3 日”的回退报价。
 
@@ -329,7 +331,7 @@ node scripts/probe/native-keyring-store-probe.mjs --enumeration
 | 升级、回退、卸载 | 待验 | 待验 | 待验 | 组合恢复且数据未被静默迁移/删除；权限/ACL 变化有记录，不能把 dump 无残留当作凭据删除 |
 | IAM/网关业务闭环 | 待验 | 待验 | 待验 | 登录、刷新、退出、网关 CAS 与真实执行入口均按既有契约验收，不以账户页 ready 代替 |
 
-macOS 使用同样的开发用合成探针，另记 GUI/SSH/CLI/签名应用、锁定和升级行为；其成功或失败不决定三目标 G2。
+macOS 用同一套开发探针，另记签名应用与非签名 Node 的钥匙串访问差异、锁定与升级行为；其成功或失败不决定三目标 G2。矩阵的 macOS 列在 macOS 取证启动时补入，当前不预先填“待验”占位。
 
 历史可用证据仅为 §2 的 macOS 加载/GUI 成功路径、SSH 写入拒绝与组合卸载恢复；#125 Linux 属于外部报告。本轮只读审查没有重跑这些实机动作。正式证据保存在团队受控位置并登记引用；日志只含非秘密元数据，不记录 AT/RT、Key、密码、完整 grant、secret 摘要或真实用户数据。
 

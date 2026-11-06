@@ -12,19 +12,20 @@
 | 固定方式 | `scripts/native-keyring.json` 记录版本与 tarball integrity，`CHECKSUMS.json` 记录落地文件的 sha256 |
 | 生成工具 | `scripts/fetch-native-keyring.mjs` |
 | integrity 交叉核对 | 三个 tarball 的 sha512 与 `registry.npmjs.org` 元数据一致（2026-11-06 核对） |
-| 对象头校验 | 按 triple 校验 PE/AMD64、ELF/x86-64、ELF/AArch64，防止清单钉错架构 |
-| 外部依赖 | Windows 需 `VCRUNTIME140.dll`（VC++ 2015-2022 运行库）；Linux 只需 glibc ≥ 2.15（x64）/ 2.17（arm64） |
+| 对象头校验 | 按 triple 校验 PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64、Mach-O/arm64，防止清单钉错架构 |
+| 外部依赖 | Windows 需 `VCRUNTIME140.dll`（VC++ 2015-2022 运行库）；Linux 只需 glibc ≥ 2.15（x64）/ 2.17（arm64）；macOS 无额外依赖 |
 
 ## 交付映射
 
 | 目录 | platform-arch | 目标环境 |
 |---|---|---|
 | `win32-x64-msvc/` | win32-x64 | Windows 10/11 x64 |
+| `win32-arm64-msvc/` | win32-arm64 | Windows 11 on ARM |
 | `linux-x64-gnu/` | linux-x64 | UOS 20 amd64 |
 | `linux-arm64-gnu/` | linux-arm64 | 银河麒麟 aarch64 |
+| `darwin-arm64/` | darwin-arm64 | macOS Apple Silicon |
 
-未列出的组合不属于交付目标：`darwin-arm64` 只在本机做加载器实验时手工暂存，不进仓库、
-不进发布包。
+未列出的组合不属于交付目标：`darwin-x64`（Intel Mac）没有交付机器，Rosetta 下按不可用处理。
 
 ## 为什么不用 npm 依赖
 

@@ -4,6 +4,15 @@
   "generatedBy": "scripts/fetch-native-keyring.mjs",
   "note": "sha256 of the staged addons; re-run the fetch script instead of editing this file",
   "files": {
+    "darwin-arm64/keyring.node": {
+      "relative": "darwin-arm64/keyring.node",
+      "sha256": "1bc4c418c70021050fc052a1f5f60e0da1526ff0b952840f25e691624a4c483e",
+      "bytes": 540944,
+      "source": "@napi-rs/keyring-darwin-arm64",
+      "version": "2.1.2",
+      "license": "MIT",
+      "integrity": "sha512-vsInUWUzWS6/WzR/TFNwmdtmwKWjnnR8TOpvZ/pjjxDAkJB/waz37PWzp2b8AFcw1aCcq2aQ7k2vvbLQy8pTrw=="
+    },
     "linux-arm64-gnu/keyring.node": {
       "relative": "linux-arm64-gnu/keyring.node",
       "sha256": "ffc7534f4c121ca739a80927b7942261859de42e740f2f9c2ea1fe60ae5d7183",
@@ -21,6 +30,15 @@
       "version": "2.1.2",
       "license": "MIT",
       "integrity": "sha512-Fj5TmTnl2oriuCT5DDEYlhgxYes20uGfgOg10LK9PyPVsI8/PQ1m8I4rq/4A5hkrMtY7wvFb70YmX/yPHDYWvQ=="
+    },
+    "win32-arm64-msvc/keyring.node": {
+      "relative": "win32-arm64-msvc/keyring.node",
+      "sha256": "873574791d0a41998706a8de1ebd821026b10846630586be4fa440c92f1ef608",
+      "bytes": 1661440,
+      "source": "@napi-rs/keyring-win32-arm64-msvc",
+      "version": "2.1.2",
+      "license": "MIT",
+      "integrity": "sha512-kBq80ZZfjXoa5wHG9kgAVhYYjaPOLgHh5ngt7r1ftwFXPXDPXKH7oM2r2j2Q64cs0pVtmodVtn5Q9e6xCwzQUQ=="
     },
     "win32-x64-msvc/keyring.node": {
       "relative": "win32-x64-msvc/keyring.node",
