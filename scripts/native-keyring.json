@@ -32,6 +32,36 @@
       "addon": "keyring.linux-arm64-gnu.node",
       "integrity": "sha512-PM+SAcl/yGzgGbeeCsKrnlG4T5DBIDjmDqtKm5an1bJz0o0gwSzR3BMiXf04JenkcqascZpdcIReoEvLj0cvCw==",
       "license": "MIT"
+    },
+    {
+      "triple": "win32-arm64-msvc",
+      "platform": "win32",
+      "arch": "arm64",
+      "source": "@napi-rs/keyring-win32-arm64-msvc",
+      "version": "2.1.2",
+      "addon": "keyring.win32-arm64-msvc.node",
+      "integrity": "sha512-kBq80ZZfjXoa5wHG9kgAVhYYjaPOLgHh5ngt7r1ftwFXPXDPXKH7oM2r2j2Q64cs0pVtmodVtn5Q9e6xCwzQUQ==",
+      "license": "MIT"
+    },
+    {
+      "triple": "darwin-arm64",
+      "platform": "darwin",
+      "arch": "arm64",
+      "source": "@napi-rs/keyring-darwin-arm64",
+      "version": "2.1.2",
+      "addon": "keyring.darwin-arm64.node",
+      "integrity": "sha512-vsInUWUzWS6/WzR/TFNwmdtmwKWjnnR8TOpvZ/pjjxDAkJB/waz37PWzp2b8AFcw1aCcq2aQ7k2vvbLQy8pTrw==",
+      "license": "MIT"
+    },
+    {
+      "triple": "darwin-x64",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "@napi-rs/keyring-darwin-x64",
+      "version": "2.1.2",
+      "addon": "keyring.darwin-x64.node",
+      "integrity": "sha512-wQihYroaQ3r++R6u5c9Gj0TCw1l1F53LCb5aLOXfVvT4DsnDnpe7p7VGYo4/33bLe0iqVevtAj+ET3yKCtOlJQ==",
+      "license": "MIT"
     }
   ]
 }

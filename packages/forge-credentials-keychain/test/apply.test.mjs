@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { outsideRepositoryTmp } from './support/tmp.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
-import { apply, Config, KeychainProviderError, validateConfig } from '../src/index.mjs';
+import { apply, Config, KeychainProviderError, nativeAddonPath, validateConfig } from '../src/index.mjs';
 
 function fakeContext(existing = undefined, events = undefined) {
   const provided = new Map();
@@ -79,7 +79,12 @@ test('apply fails closed when the platform backend is unavailable', () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, {}),
-    (error) => error.code === 'KEYCHAIN_UNAVAILABLE',
+    (error) => {
+      // Hosts with a staged addon stop at the unvetted gate; hosts without one
+      // stop at the unavailable backend. Neither may mount anything.
+      assert.ok(error.code === 'KEYCHAIN_UNAVAILABLE' || error.code === 'KEYCHAIN_UNVETTED_ADAPTER_REFUSED', error.code);
+      return true;
+    },
   );
 });
 
@@ -279,7 +284,12 @@ test('native-keyring is accepted by config but still requires the unvetted opt-i
   assert.equal(ctx.provided.size, 0);
 });
 
-test('an allowed native adapter without the module fails closed instead of writing a file', () => {
+const hostAddon = nativeAddonPath(process.platform, process.arch);
+test('an allowed native adapter without the module fails closed instead of writing a file', {
+  // On a host whose own triple is staged the module is present and the mount
+  // succeeds; the missing-addon path is covered on CI and other hosts.
+  skip: hostAddon !== undefined && existsSync(hostAddon) && 'this host has a staged addon',
+}, () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, { platformAdapter: 'native-keyring', allowUnvettedPlatformAdapter: true }),

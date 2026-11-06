@@ -1,6 +1,6 @@
 # 预编译凭据适配器（native addon）
 
-本目录只存放三平台预编译产物与校验清单，不含源码，也不参与编译。运行时由
+本目录只存放六组合预编译产物与校验清单，不含源码，也不参与编译。运行时由
 `src/native-keyring.mjs` 按 `platform-arch` 选择对应文件，经绝对路径加载。
 
 ## 来源与许可
@@ -11,20 +11,22 @@
 | 许可 | MIT，随文件附 `LICENSE.third-party.md` |
 | 固定方式 | `scripts/native-keyring.json` 记录版本与 tarball integrity，`CHECKSUMS.json` 记录落地文件的 sha256 |
 | 生成工具 | `scripts/fetch-native-keyring.mjs` |
-| integrity 交叉核对 | 三个 tarball 的 sha512 与 `registry.npmjs.org` 元数据一致（2026-11-06 核对） |
-| 对象头校验 | 按 triple 校验 PE/AMD64、ELF/x86-64、ELF/AArch64，防止清单钉错架构 |
-| 外部依赖 | Windows 需 `VCRUNTIME140.dll`（VC++ 2015-2022 运行库）；Linux 只需 glibc ≥ 2.15（x64）/ 2.17（arm64） |
+| integrity 交叉核对 | 六个 tarball 的 sha512 与 `registry.npmjs.org` 元数据一致（2026-11-06 核对） |
+| 对象头校验 | 按 triple 校验 PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64、Mach-O/arm64、Mach-O/x86_64，防止清单钉错架构 |
+| 外部依赖 | Windows 需 `VCRUNTIME140.dll`（VC++ 2015-2022 运行库）；Linux 只需 glibc ≥ 2.15（x64）/ 2.17（arm64）；macOS 无额外依赖 |
 
 ## 交付映射
 
 | 目录 | platform-arch | 目标环境 |
 |---|---|---|
 | `win32-x64-msvc/` | win32-x64 | Windows 10/11 x64 |
+| `win32-arm64-msvc/` | win32-arm64 | Windows 11 on ARM |
 | `linux-x64-gnu/` | linux-x64 | UOS 20 amd64 |
 | `linux-arm64-gnu/` | linux-arm64 | 银河麒麟 aarch64 |
+| `darwin-arm64/` | darwin-arm64 | macOS Apple Silicon |
+| `darwin-x64/` | darwin-x64 | macOS Intel 与 Rosetta 下的 x64 Node |
 
-未列出的组合不属于交付目标：`darwin-arm64` 只在本机做加载器实验时手工暂存，不进仓库、
-不进发布包。
+未列出的组合不属于交付目标；`linux-x64-musl` 等上游存在的其他产物不随包分发，映射不到即按不可用处理。
 
 ## 为什么不用 npm 依赖
 
@@ -35,7 +37,7 @@
 ## 重新生成与校验
 
 ```sh
-node scripts/fetch-native-keyring.mjs            # 暂存三个交付目标
+node scripts/fetch-native-keyring.mjs            # 暂存六个交付目标
 node scripts/fetch-native-keyring.mjs --check    # 只校验 CHECKSUMS.json 与文件一致
 ```
 

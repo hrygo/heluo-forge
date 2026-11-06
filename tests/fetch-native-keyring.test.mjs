@@ -21,12 +21,18 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
  * mix-up is detectable without shipping a real 2 MB addon into the test tree.
  */
 function fakeBinary(triple) {
-  if (triple === 'win32-x64-msvc') {
+  if (triple.startsWith('win32-')) {
     const bytes = Buffer.alloc(0x80);
     bytes.writeUInt16LE(0x5a4d, 0);
     bytes.writeUInt32LE(0x40, 0x3c);
     bytes.writeUInt32BE(0x50450000, 0x40);
-    bytes.writeUInt16LE(0x8664, 0x44);
+    bytes.writeUInt16LE(triple.includes('arm64') ? 0xaa64 : 0x8664, 0x44);
+    return bytes;
+  }
+  if (triple.startsWith('darwin-')) {
+    const bytes = Buffer.alloc(32);
+    bytes.writeUInt32LE(0xfeedfacf, 0);
+    bytes.writeUInt32LE(triple.includes('arm64') ? 0x0100000c : 0x01000007, 4);
     return bytes;
   }
   const machine = triple === 'linux-arm64-gnu' ? 183 : 62;
@@ -82,6 +88,12 @@ for (const [label, mutate, expected] of [
     layout.checksums.files['linux-x64-gnu/keyring.node'] = { ...layout.checksums.files['linux-x64-gnu/keyring.node'], sha256: sha256(bytes), bytes: bytes.length };
     writeFileSync(join(layout.root, 'linux-x64-gnu', 'keyring.node'), bytes);
   }, /linux-x64-gnu\/keyring\.node: ELF machine 183 does not match ELF\/x86-64/u],
+  ['a Mach-O object with the x86_64 cputype under the arm64 triple', (layout) => {
+    const bytes = fakeBinary('darwin-arm64');
+    bytes.writeUInt32LE(0x01000007, 4);
+    layout.checksums.files['darwin-arm64/keyring.node'] = { ...layout.checksums.files['darwin-arm64/keyring.node'], sha256: sha256(bytes), bytes: bytes.length };
+    writeFileSync(join(layout.root, 'darwin-arm64', 'keyring.node'), bytes);
+  }, /darwin-arm64\/keyring\.node: Mach-O cputype 0x1000007 does not match Mach-O\/arm64/u],
   ['a text file where an object is expected', (layout) => {
     const bytes = Buffer.from('definitely not a binary');
     layout.checksums.files['linux-x64-gnu/keyring.node'] = { ...layout.checksums.files['linux-x64-gnu/keyring.node'], sha256: sha256(bytes), bytes: bytes.length };
@@ -89,7 +101,7 @@ for (const [label, mutate, expected] of [
   }, /linux-x64-gnu\/keyring\.node: not an ELF object/u],
   ['version drift', (layout) => { layout.checksums.files['linux-x64-gnu/keyring.node'].version = '2.0.0'; }, /recorded version 2\.0\.0/u],
   ['license drift', (layout) => { layout.checksums.files['linux-x64-gnu/keyring.node'].license = 'Apache-2.0'; }, /recorded license Apache-2\.0/u],
-  ['unclaimed record', (layout) => { layout.checksums.files['win32-arm64-msvc/keyring.node'] = layout.checksums.files['win32-x64-msvc/keyring.node']; }, /win32-arm64-msvc\/keyring\.node: recorded but no delivery target claims it/u],
+  ['unclaimed record', (layout) => { layout.checksums.files['freebsd-x64/keyring.node'] = layout.checksums.files['win32-x64-msvc/keyring.node']; }, /freebsd-x64\/keyring\.node: recorded but no delivery target claims it/u],
 ]) {
   test(`staging rejects ${label}`, (t) => {
     const layout = staging(t);
@@ -105,6 +117,6 @@ test('staging rejects a missing staging directory', (t) => {
 });
 
 test('staging rejects an arch directory the manifest does not deliver', (t) => {
-  const layout = staging(t, { triples: ['win32-arm64-msvc'] });
-  assert.match(verifyStagedLayout(layout).join('; '), /win32-arm64-msvc\/: unknown target directory/u);
+  const layout = staging(t, { triples: ['freebsd-x64'] });
+  assert.match(verifyStagedLayout(layout).join('; '), /freebsd-x64\/: unknown target directory/u);
 });

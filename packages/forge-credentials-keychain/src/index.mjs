@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { KeychainBackendError, createFileBackend, createPlatformBackend } from './backend.mjs';
+import { KeychainBackendError, createFileBackend, createPlatformBackend, createUnavailableBackend } from './backend.mjs';
 import { createNativeKeyringBackend, nativeTargetFor } from './native-keyring.mjs';
 import { createSecurityCliBackend } from './security-cli.mjs';
 import { createKeychainProvider, KeychainProviderError } from './provider.mjs';
@@ -209,9 +209,19 @@ const NATIVE_ADAPTER_VETTED = false;
  * @param {{ platform?: string, arch?: string, service?: string, enumeration?: string, vetted?: boolean }} [options]
  */
 export function resolvePlatformBackend(options = {}) {
+  const explicit = options.platform !== undefined || options.arch !== undefined;
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
-  if (nativeTargetFor(platform, arch) === undefined) return createPlatformBackend();
+  if (nativeTargetFor(platform, arch) === undefined) {
+    // An explicitly requested platform-arch must never resolve against this
+    // host: on a machine that has an addon that would silently mount the wrong
+    // architecture. Only the host default (no explicit arguments) may ask the
+    // host's platform backend.
+    if (!explicit) return createPlatformBackend();
+    return createUnavailableBackend(
+      `OS keychain adapter is not implemented for ${platform}-${arch}; this profile fails closed. Use a reviewed backend for production, or the documented development override (filePath + allowInsecureFile) in a non-production profile`,
+    );
+  }
   return createNativeKeyringBackend({
     service: options.service,
     platform,

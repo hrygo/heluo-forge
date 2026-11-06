@@ -70,8 +70,11 @@ function selectedTargets() {
 /** Expected object format and machine type for each delivered triple. */
 const BINARY_LAYOUT = new Map([
   ['win32-x64-msvc', { format: 'pe', machine: 0x8664, name: 'PE/AMD64' }],
+  ['win32-arm64-msvc', { format: 'pe', machine: 0xaa64, name: 'PE/ARM64' }],
   ['linux-x64-gnu', { format: 'elf', machine: 62, name: 'ELF/x86-64' }],
   ['linux-arm64-gnu', { format: 'elf', machine: 183, name: 'ELF/AArch64' }],
+  ['darwin-arm64', { format: 'macho', machine: 0x0100000c, name: 'Mach-O/arm64' }],
+  ['darwin-x64', { format: 'macho', machine: 0x01000007, name: 'Mach-O/x86_64' }],
 ]);
 
 /**
@@ -87,6 +90,12 @@ function describeBinaryMismatch(bytes, triple) {
     if (bytes.length < 20 || bytes.readUInt32BE(0) !== 0x7f454c46) return `not an ELF object (expected ${expected.name})`;
     const machine = bytes.readUInt16LE(18);
     if (machine !== expected.machine) return `ELF machine ${machine} does not match ${expected.name}`;
+    return undefined;
+  }
+  if (expected.format === 'macho') {
+    if (bytes.length < 8 || bytes.readUInt32LE(0) !== 0xfeedfacf) return `not a 64-bit Mach-O object (expected ${expected.name})`;
+    const cpuType = bytes.readUInt32LE(4);
+    if (cpuType !== expected.machine) return `Mach-O cputype 0x${cpuType.toString(16)} does not match ${expected.name}`;
     return undefined;
   }
   if (bytes.length < 0x40 || bytes.readUInt16LE(0) !== 0x5a4d) return `not a PE object (expected ${expected.name})`;

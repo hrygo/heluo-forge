@@ -45,6 +45,7 @@ function describeError(error) {
  * the same package by absolute URL, so it resolves the same staged addon.
  */
 function childRead({ entry, key, service, timeoutMs = 30_000 }) {
+  if (typeof entry !== 'string') throw new Error('childRead needs the package entry URL');
   const script = `
     const key = ${JSON.stringify(key)};
     const service = ${JSON.stringify(service)};
@@ -289,7 +290,14 @@ async function main() {
       return 1;
     }
   }
-  const report = await runStoreProbe({ backend, service: options.service, key, enumeration: options.enumeration, keep: options.keep });
+  const report = await runStoreProbe({
+    backend,
+    entry: loaded.entry,
+    service: options.service,
+    key,
+    enumeration: options.enumeration,
+    keep: options.keep,
+  });
   process.stdout.write(`${JSON.stringify({ ...report, environment }, null, 2)}\n`);
   if (options.json !== true) {
     for (const item of report.steps) {

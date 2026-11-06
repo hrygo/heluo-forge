@@ -31,10 +31,13 @@ const fakeLoad = () => ({ Entry: FakeEntry, AsyncEntry: FakeEntry });
 
 test('platform-arch maps to a delivery triple, and only those', () => {
   assert.equal(nativeTargetFor('win32', 'x64'), 'win32-x64-msvc');
+  assert.equal(nativeTargetFor('win32', 'arm64'), 'win32-arm64-msvc');
   assert.equal(nativeTargetFor('linux', 'x64'), 'linux-x64-gnu');
   assert.equal(nativeTargetFor('linux', 'arm64'), 'linux-arm64-gnu');
+  assert.equal(nativeTargetFor('darwin', 'arm64'), 'darwin-arm64');
+  assert.equal(nativeTargetFor('darwin', 'x64'), 'darwin-x64');
   // Not delivery targets: never a triple, never a silent downgrade.
-  for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'arm64'], ['linux', 'ia32'], ['freebsd', 'x64']]) {
+  for (const [platform, arch] of [['win32', 'ia32'], ['linux', 'ia32'], ['linux', 'riscv64'], ['freebsd', 'x64']]) {
     assert.equal(nativeTargetFor(platform, arch), undefined, `${platform}-${arch} must stay unmapped`);
     assert.equal(nativeAddonPath(platform, arch), undefined);
   }
@@ -47,12 +50,12 @@ test('a staged addon resolves to this package, not to node_modules', () => {
   assert.doesNotMatch(addon, /node_modules/u);
 });
 
-test('an unsupported platform still gets the unavailable backend', () => {
-  const backend = resolvePlatformBackend({ platform: 'darwin', arch: 'arm64' });
+test('an unmapped platform-arch still gets the unavailable backend', () => {
+  const backend = resolvePlatformBackend({ platform: 'freebsd', arch: 'x64' });
   assert.equal(backend.available, false);
-  assert.match(backend.reason, /not implemented on this platform \(darwin\)|fails closed/u);
-  // The explicit platform backend keeps its fail-closed contract.
-  assert.equal(createPlatformBackend().available, false);
+  assert.match(backend.reason, /not implemented for freebsd-x64|fails closed/u);
+  // Even where this host has a staged addon, an explicit pair never borrows it.
+  assert.equal(resolvePlatformBackend({ platform: 'linux', arch: 'ia32' }).available, false);
 });
 
 test('a supported platform selects the native backend, unvetted until evidence lands', () => {
@@ -93,9 +96,12 @@ test('enumeration stays refused until it is verified per platform', async () => 
   assert.deepEqual(await optedIn.list('iam/'), ['iam/token']);
 });
 
-test('the lock file names exactly the three delivery addons', () => {
+test('the lock file names exactly the delivery addons', () => {
   const recorded = Object.keys(checksums.files ?? {});
-  assert.deepEqual(recorded.sort(), ['linux-arm64-gnu/keyring.node', 'linux-x64-gnu/keyring.node', 'win32-x64-msvc/keyring.node']);
+  const expected = JSON.parse(readFileSync(join(packageRoot, '../../scripts/native-keyring.json'), 'utf8'))
+    .targets.map((target) => `${target.triple}/keyring.node`)
+    .sort();
+  assert.deepEqual(recorded.sort(), expected);
   for (const [relative, expected] of Object.entries(checksums.files)) {
     const absolute = join(nativeRoot, relative);
     // A clean clone carries the lock file but not the addons: staging is a build
@@ -107,6 +113,9 @@ test('the lock file names exactly the three delivery addons', () => {
     assert.equal(expected.version, '2.1.2');
     assert.equal(expected.license, 'MIT');
   }
-  // No development-only addon may be recorded as a delivery target.
-  assert.equal(recorded.some((path) => path.startsWith('darwin-')), false);
+  // Every recorded file belongs to a mapped triple; nothing stray is shipped.
+  const manifest = JSON.parse(readFileSync(join(packageRoot, '../../scripts/native-keyring.json'), 'utf8'));
+  for (const target of manifest.targets) {
+    assert.equal(nativeTargetFor(target.platform, target.arch), target.triple, `${target.triple} must be mapped`);
+  }
 });
