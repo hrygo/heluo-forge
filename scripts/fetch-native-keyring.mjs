@@ -66,6 +66,39 @@ function selectedTargets() {
  * target the manifest does not deliver. Returns problems instead of throwing so
  * the CLI and the tests share one rule set.
  */
+
+/** Expected object format and machine type for each delivered triple. */
+const BINARY_LAYOUT = new Map([
+  ['win32-x64-msvc', { format: 'pe', machine: 0x8664, name: 'PE/AMD64' }],
+  ['linux-x64-gnu', { format: 'elf', machine: 62, name: 'ELF/x86-64' }],
+  ['linux-arm64-gnu', { format: 'elf', machine: 183, name: 'ELF/AArch64' }],
+]);
+
+/**
+ * Check that a staged file is the architecture it claims to be. A hash match
+ * only proves "the file pinned in the lock was copied"; it says nothing about
+ * whether someone pinned the wrong tarball, so the object header is checked
+ * independently.
+ */
+function describeBinaryMismatch(bytes, triple) {
+  const expected = BINARY_LAYOUT.get(triple);
+  if (expected === undefined) return 'no expected binary layout is defined';
+  if (expected.format === 'elf') {
+    if (bytes.length < 20 || bytes.readUInt32BE(0) !== 0x7f454c46) return `not an ELF object (expected ${expected.name})`;
+    const machine = bytes.readUInt16LE(18);
+    if (machine !== expected.machine) return `ELF machine ${machine} does not match ${expected.name}`;
+    return undefined;
+  }
+  if (bytes.length < 0x40 || bytes.readUInt16LE(0) !== 0x5a4d) return `not a PE object (expected ${expected.name})`;
+  const peOffset = bytes.readUInt32LE(0x3c);
+  if (peOffset + 6 > bytes.length || bytes.readUInt32BE(peOffset) !== 0x50450000) {
+    return `PE signature missing (expected ${expected.name})`;
+  }
+  const machine = bytes.readUInt16LE(peOffset + 4);
+  if (machine !== expected.machine) return `PE machine 0x${machine.toString(16)} does not match ${expected.name}`;
+  return undefined;
+}
+
 export function verifyStagedLayout({ root, targets, checksums }) {
   const problems = [];
   const recorded = checksums.files ?? {};
@@ -94,6 +127,8 @@ export function verifyStagedLayout({ root, targets, checksums }) {
     const bytes = readFileSync(addon);
     if (bytes.length !== expected.bytes) problems.push(`${addonRelative}: size mismatch (${bytes.length} != ${expected.bytes})`);
     if (sha256(bytes) !== expected.sha256) problems.push(`${addonRelative}: sha256 mismatch`);
+    const mismatch = describeBinaryMismatch(bytes, target.triple);
+    if (mismatch !== undefined) problems.push(`${addonRelative}: ${mismatch}`);
     if (!existsSync(join(root, licenseRelative))) problems.push(`${licenseRelative}: license is missing`);
   }
   for (const relative of Object.keys(recorded)) {

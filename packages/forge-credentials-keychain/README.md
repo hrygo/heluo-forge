@@ -77,7 +77,8 @@ node scripts/fetch-native-keyring.mjs --check    # 校验 CHECKSUMS.json 与文�
 ```
 
 `vendor/CHECKSUMS.json` 记录每个 addon 的 sha256、字节数、来源包与版本；下载的 tarball 与清单
-integrity 不一致时立即中止且不写入任何文件。`darwin-arm64` 不属于交付目标，只在本机开发时用
+integrity 不一致时立即中止且不写入任何文件。`--check` 不只比对哈希：它还按 triple 校验对象头
+（PE/AMD64、ELF/x86-64、ELF/AArch64），清单里钉错架构会被拒绝。`darwin-arm64` 不属于交付目标，只在本机开发时用
 `--with-dev` 暂存，且被 `.gitignore` 排除。细节见 `vendor/README.md`。
 
 ## 开发/试点覆盖层（非生产）
