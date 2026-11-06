@@ -130,7 +130,7 @@ test('the Windows runtime probe reports exactly which DLL is missing', () => {
     { ok: false, missing: ['vcruntime140.dll'] },
   );
   assert.deepEqual(
-    windowsRuntimeStatus({ systemRoot: undefined, exists: () => true }),
+    windowsRuntimeStatus({ systemRoot: '', exists: () => true }),
     { ok: false, missing: ['vcruntime140.dll'], reason: 'SystemRoot is not set' },
   );
 });

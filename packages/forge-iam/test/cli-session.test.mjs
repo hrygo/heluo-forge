@@ -7,10 +7,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createFileBackend, createKeychainProvider } from '@heluo/forge-credentials-keychain';
 import { accessTokenOf, SESSION_RECORD_KEY, sessionFromRecord } from '../src/cli-session.mjs';
@@ -94,6 +94,28 @@ test('heluo-forge auth token fails with a distinct exit code when the token expi
     assert.equal(String(error.stdout), '');
     return true;
   });
+});
+
+test('auth whoami reads the macOS encrypted store through the platform backend', { skip: process.platform !== 'darwin' && 'macOS encrypted store only' }, async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'forge-iam-cli-home-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: home };
+  delete env.HELUO_FORGE_CREDENTIALS_FILE;
+  delete env.HELUO_FORGE_ALLOW_UNVETTED;
+  const keychain = pathToFileURL(fileURLToPath(new URL('../../forge-credentials-keychain/src/index.mjs', import.meta.url))).href;
+  const seed = [
+    `import { createPlatformBackend, createKeychainProvider } from ${JSON.stringify(keychain)};`,
+    'const provider = createKeychainProvider(createPlatformBackend());',
+    `await provider.modifyRecord(${JSON.stringify(SESSION_RECORD_KEY)}, async () => (${JSON.stringify(grant())}));`,
+  ].join('\n');
+  await run(process.execPath, ['--input-type=module', '-e', seed], { env });
+
+  const whoami = await run(process.execPath, [BIN, 'auth', 'whoami', '--json'], { env });
+  const session = JSON.parse(whoami.stdout);
+  assert.equal(session.principal.subject, 'E1001');
+
+  const token = await run(process.execPath, [BIN, 'auth', 'token'], { env });
+  assert.equal(token.stdout.trim(), 'placeholder-access-token');
 });
 
 test('heluo-forge auth whoami reports a signed-out store without inventing identity', async (t) => {

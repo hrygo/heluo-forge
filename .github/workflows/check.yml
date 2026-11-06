@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Cancel stale PR runs, but never cancel a main-branch run mid-flight.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -37,6 +38,51 @@ jobs:
       # All checks currently use Node built-ins; avoid dependency installation and cache overhead.
       - name: Check documents, repository and tests
         run: node --run check
+
+  # Real hosts for the native platform-arch pairs. The unit matrix injects the
+  # native module so it can run on one host; this job proves the same read
+  # paths on actual Linux/Windows OS-arch pairs. macOS is verified on the
+  # maintainer's machines (arm64 local/SSH); the encrypted store has no CI
+  # runner dependency.
+  device-matrix:
+    name: credentials compatibility (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-24.04, platform: linux, arch: x64 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64 }
+          - { name: win32-x64, os: windows-2022, platform: win32, arch: x64 }
+          - { name: win32-arm64, os: windows-11-arm, platform: win32, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Link workspace packages
+        run: node scripts/link-workspace.mjs
+      - name: Assert the runner is the expected platform-arch
+        run: >-
+          node -e "const [p,a]=process.argv.slice(1);
+          if (process.platform!==p||process.arch!==a)
+          { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
+          ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: Keychain backends on this host
+        run: node --test packages/forge-credentials-keychain/test/*.test.mjs
+      - name: Read paths on this host
+        run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs
 
   # Local hook and scanner portability. This job is intentionally separate from
   # the required verify job; make it required only after the matrix is stable.
@@ -76,7 +122,7 @@ jobs:
   # availability, port reuse and shutdown). This job runs just that test file on
   # Windows; the full suite stays on the required verify job.
   forge-iam-callback:
-    name: forge-iam callback (${{ matrix.os }})
+    name: forge-iam callback port (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:

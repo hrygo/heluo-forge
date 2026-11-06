@@ -21,6 +21,14 @@
 bash scripts/probe/run-iam-local-uat.sh
 ```
 
+非交互自检（验证打包、注入与宿主启动仍匹配当前 `HEAD`）：
+
+```sh
+IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
+```
+
+脚本先检查 `node`、`npm`、`python3`、`git`、`tar` 与 `dsh`；Node 与仓库 `.node-version` 不一致时给出警告。`SMOKE OK` 表示入口 `/health` 返回 200，脚本随即停掉宿主与模拟 IAM。
+
 终端会打印两行：测试入口，以及本次的回调端口形态（系统分配或固定值）。在本机浏览器打开入口；宿主尚未就绪时稍等并刷新。入口只监听 `127.0.0.1`，跳转地址中的一次性访问参数属于本地会话信息，不要分享。另开终端可检查 `curl -i http://127.0.0.1:48389/health`；若自定义了入口端口，替换其中的 `48389`。`200` 表示宿主已给出访问入口。
 
 ## 手动验证
@@ -39,6 +47,30 @@ bash scripts/probe/run-iam-local-uat.sh
 
 - **端口被占用时拒绝登录**：先用 `node -e "require('node:net').createServer().listen(17890,'127.0.0.1')"` 占住 `17890`，再用 `IAM_UAT_CALLBACK_PORT=17890 bash scripts/probe/run-iam-local-uat.sh` 启动。点击登录应立即提示“登录回调端口被占用，暂时无法登录”，不跳转、不改用宿主端口（`48388`）。
 - **尝试过期后回调失效**：回调尝试默认在 `attemptTimeoutSeconds`（300 秒）后过期，监听也随之关闭。手工验证需要等待，通常交给单元用例覆盖，不必在 UAT 里空等。
+
+## 读取路径矩阵（2026-11-06）
+
+存储读取不是单条路径，也不是单平台成立就算完成。当前覆盖：
+
+| 读取路径 | 入口 | 覆盖方式 |
+|---|---|---|
+| Provider 读取 | `createKeychainProvider(...).readRecord()` | 6 个 `platform-arch` 全覆盖（Windows/Linux 注入原生模块，macOS 临时加密目录） |
+| 身份投影 | `sessionFromRecord()`（`auth whoami` 的数据源） | 同上 |
+| 访问令牌投影 | `accessTokenOf()`（`auth token` 的数据源） | 同上 |
+| 独立读取器重开 | 新建 provider 读取同一 store | 同上 |
+| Host 服务读取 | `ctx.iam.getSession()` / `getAccessToken()` | 6 个 `platform-arch` 全覆盖，store 由各平台后端提供 |
+| HTTP 身份 | `GET /api/forge-iam/session` | 同上，经真实路由处理 |
+| HTTP 令牌 | `POST /api/forge-iam/token` | 同上，含请求头门禁 |
+| CLI 端到端 | `heluo-forge auth whoami / token` | macOS 加密存储真机用例；Windows/Linux 由 CI 按真实平台覆盖 |
+
+矩阵用例：`node --test packages/forge-iam/test/read-paths-matrix.test.mjs`。CI 的 `credentials compatibility` job 在四台真实 runner 上复跑同一批读取路径与凭据后端用例：`ubuntu-24.04`、`ubuntu-24.04-arm`、`windows-2022`、`windows-11-arm`；每台先断言 `process.platform`/`process.arch`，再执行测试。macOS 不进 CI，由维护机（arm64 本机与 SSH）保障。CLI 的 macOS 端到端用例在 `packages/forge-iam/test/cli-session.test.mjs`（仅 darwin 运行）。
+
+平台交付形状：
+
+- Windows x64/arm64、Linux x64/arm64：`@napi-rs/keyring` 2.1.2 原生 addon；未取证前 `unvetted`，CLI 与插件一样拒绝，`HELUO_FORGE_ALLOW_UNVETTED=1` 仅用于本地验证。
+- macOS arm64/x64：应用层加密文档（AES-256-GCM + 0600 密钥），不经过 `unvetted` 开关，SSH 会话可用。
+
+CLI 默认走与插件相同的 `createPlatformBackend()`；`HELUO_FORGE_CREDENTIALS_FILE` 仍是显式开发用明文覆盖，不用于生产。
 
 ## 自动验证与排障
 
