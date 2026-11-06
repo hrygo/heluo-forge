@@ -22,6 +22,7 @@
 //     so a module that only exports `Entry` keeps working.
 
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { KeychainBackendError, NAMESPACE_PATTERN } from './backend.mjs';
@@ -53,6 +54,31 @@ const WINDOWS_BLOB_LIMIT_BYTES = 2560;
  * surfacing a platform error.
  */
 const WINDOWS_KEY_LIMIT_BYTES = 513;
+
+/**
+ * DLL the Windows addon imports besides the always-present UCRT
+ * (`api-ms-win-crt-*`). A machine without the Visual C++ 2015-2022
+ * redistributable fails `require` with "the specified module could not be
+ * found", which reads like a packaging bug; checking first turns it into an
+ * actionable message and a distinct report field.
+ */
+const WINDOWS_RUNTIME_DLLS = ['vcruntime140.dll'];
+
+/**
+ * Whether the Windows C++ runtime the addon links against is installed.
+ * Pure over its inputs so the check is unit-testable on any host.
+ *
+ * @param {{ platform?: string, systemRoot?: string, exists?: (path: string) => boolean }} [options]
+ */
+export function windowsRuntimeStatus(options = {}) {
+  const systemRoot = options.systemRoot ?? process.env.SystemRoot;
+  const exists = options.exists ?? existsSync;
+  if (systemRoot === undefined || systemRoot === '') {
+    return { ok: false, missing: [...WINDOWS_RUNTIME_DLLS], reason: 'SystemRoot is not set' };
+  }
+  const missing = WINDOWS_RUNTIME_DLLS.filter((name) => !exists(join(systemRoot, 'System32', name)));
+  return missing.length === 0 ? { ok: true, missing: [] } : { ok: false, missing };
+}
 
 function assertService(service) {
   if (typeof service !== 'string' || !NAMESPACE_PATTERN.test(service)) {
@@ -96,6 +122,15 @@ function defaultLoad(platform = process.platform, arch = process.arch) {
       'KEYCHAIN_UNAVAILABLE',
       `this package ships no vetted addon for ${platform}-${arch}; no plaintext fallback is performed`,
     );
+  }
+  if (platform === 'win32') {
+    const runtime = windowsRuntimeStatus();
+    if (runtime.ok !== true) {
+      throw new KeychainBackendError(
+        'KEYCHAIN_UNAVAILABLE',
+        `the Windows credential addon needs the Microsoft Visual C++ 2015-2022 Redistributable (x64); missing ${runtime.missing.join(', ')}. Install it, then retry; no plaintext fallback is performed.`,
+      );
+    }
   }
   const addon = nativeAddonPath(platform, arch);
   if (!existsSync(addon)) {
@@ -377,4 +412,4 @@ export function createNativeKeyringBackend(options = {}) {
   return backend;
 }
 
-export { NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES };
+export { NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES, WINDOWS_RUNTIME_DLLS };

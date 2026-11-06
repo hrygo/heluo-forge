@@ -262,6 +262,7 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 - **上限与编码**：Windows account ≤ 513 字节（UTF-8 计）、blob ≤ 2560 字节（UTF-16LE 计），超限由上游返回 `TooLong`；Linux 无库级上限（`src/utils.rs`）。
 - **失败模式**：Windows 命中集合中任一凭据 blob 奇数长或非法 UTF-16 时，整次枚举抛错且不返回部分结果。
 - **平台默认值**：Windows 未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境 + 漫游配置下凭据随用户配置文件漫游；Linux 写入集合 `default`，集合锁定时读失败而不是返回空。绑定未暴露 `persistence` 与解锁流程，这两项只能作为部署前提记录，不能在本包内改变（`src/store.rs`、`src/cred.rs`）。
+- **加载前提**：Windows 产物直接导入 `VCRUNTIME140.dll`，缺 Microsoft Visual C++ 2015-2022 Redistributable 时 `require` 报“找不到模块”，与凭据逻辑无关；Linux 产物导入的符号版本最高为 x64 `GLIBC_2.15`、arm64 `GLIBC_2.17`，均低于 UOS 20 与麒麟的发行版基线。适配器在 Windows 上先探测该 DLL，缺失即以 `KEYCHAIN_UNAVAILABLE` 说明安装项。
 
 据此在无真机条件下已确定并实现：枚举按调用方前缀过滤、丢弃不可作 key 的 account、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝而非依赖平台报错。仍须目标机确认的只有运行态事实：真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
 

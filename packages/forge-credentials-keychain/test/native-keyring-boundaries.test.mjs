@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createNativeKeyringBackend } from '../src/native-keyring.mjs';
+import { createNativeKeyringBackend, windowsRuntimeStatus } from '../src/native-keyring.mjs';
 
 /**
  * The fake module mirrors the semantics documented from the upstream sources
@@ -120,5 +120,28 @@ test('the Windows blob limit counts UTF-16LE bytes, so astral characters cost fo
   await assert.rejects(
     () => native.set('heluo-forge/iam/ref/A', emoji.repeat(641)),
     (error) => error.code === 'KEYCHAIN_VALUE_TOO_LARGE',
+  );
+});
+
+test('the Windows runtime probe reports exactly which DLL is missing', () => {
+  assert.deepEqual(windowsRuntimeStatus({ systemRoot: 'C:/Windows', exists: () => true }), { ok: true, missing: [] });
+  assert.deepEqual(
+    windowsRuntimeStatus({ systemRoot: 'C:/Windows', exists: (path) => !path.endsWith('vcruntime140.dll') }),
+    { ok: false, missing: ['vcruntime140.dll'] },
+  );
+  assert.deepEqual(
+    windowsRuntimeStatus({ systemRoot: undefined, exists: () => true }),
+    { ok: false, missing: ['vcruntime140.dll'], reason: 'SystemRoot is not set' },
+  );
+});
+
+test('a Windows host without the C++ runtime fails with an actionable message', { skip: process.platform === 'win32' }, async () => {
+  // On a real Windows host SystemRoot is set and the runtime is usually present,
+  // so this branch is only deterministic where the check must fail.
+  await assert.rejects(
+    async () => createNativeKeyringBackend({ platform: 'win32', arch: 'x64', service: 'heluo-forge' }).get('heluo-forge/iam/ref/A'),
+    (error) => error.code === 'KEYCHAIN_UNAVAILABLE'
+      && /Visual C\+\+ 2015-2022 Redistributable/u.test(error.message)
+      && /vcruntime140\.dll/u.test(error.message),
   );
 });

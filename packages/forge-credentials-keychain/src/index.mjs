@@ -9,7 +9,7 @@ export const name = 'forge-credentials-keychain';
 export const inject = [];
 
 export { createFileBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, KeychainBackendError } from './backend.mjs';
-export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, nativeAddonPath, nativeTargetFor, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES } from './native-keyring.mjs';
+export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, nativeAddonPath, nativeTargetFor, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES, WINDOWS_RUNTIME_DLLS, windowsRuntimeStatus } from './native-keyring.mjs';
 export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
 export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 export { isMigratableKey, KeychainMigrationError, migrateLegacyFileToKeychain, MIGRATION_REASONS, redactSecrets } from './migrate.mjs';

@@ -11,7 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createNativeKeyringBackend, nativeAddonPath, nativeTargetFor } from '../../packages/forge-credentials-keychain/src/native-keyring.mjs';
+import { createNativeKeyringBackend, nativeAddonPath, nativeTargetFor, windowsRuntimeStatus } from '../../packages/forge-credentials-keychain/src/native-keyring.mjs';
 
 const PACKAGE_ENTRY = new URL('../../packages/forge-credentials-keychain/src/index.mjs', import.meta.url).href;
 
@@ -210,6 +210,9 @@ async function main() {
     triple: triple ?? null,
     addon: addon ?? null,
     node: process.version,
+    // Prerequisite evidence: a missing C++ runtime is the most common reason a
+    // Windows load fails, and it is invisible in the credential store itself.
+    ...(platform === 'win32' ? { windowsRuntime: windowsRuntimeStatus() } : {}),
   };
   if (triple === undefined) {
     process.stderr.write(`this host has no staged addon mapping (${platform}-${arch}); run on a target machine\n`);

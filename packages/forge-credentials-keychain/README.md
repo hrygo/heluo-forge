@@ -45,6 +45,16 @@
 
 本包据此确定行为：枚举默认关闭；开启后按调用方前缀过滤，并丢弃无法作为 key 的 account（空串、控制字符），不因他人条目失败整个扫描；上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上限：Windows account ≤ 513 字节（UTF-8）、blob ≤ 2560 字节（UTF-16LE）；Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
 
+## 运行前提
+
+| 平台 | 前提 | 校验方式 |
+|---|---|---|
+| Windows 10/11 x64 | Microsoft Visual C++ 2015-2022 Redistributable (x64)：addon 直接导入 `VCRUNTIME140.dll`（UCRT 由系统自带） | 挂载前检查 `%SystemRoot%\System32\vcruntime140.dll`，缺失即 `KEYCHAIN_UNAVAILABLE` 并指名安装项；探针报告的 `windowsRuntime` 记录同一判断 |
+| UOS 20 amd64 | glibc ≥ 2.15（产物导入的符号版本最高为 `GLIBC_2.15`） | `strings vendor/linux-x64-gnu/keyring.node \| grep GLIBC_` |
+| 银河麒麟 aarch64 | glibc ≥ 2.17（最高为 `GLIBC_2.17`） | `strings vendor/linux-arm64-gnu/keyring.node \| grep GLIBC_` |
+
+这两个 glibc 下限低于对应发行版基线，不构成额外部署要求；Windows 的 VC++ 运行库则需要在镜像或安装脚本中显式保证，缺它时加载失败与凭据逻辑无关。
+
 ## 平台默认行为
 
 上游绑定没有暴露全部平台参数，下列默认值直接决定部署语义，按源码确认（`windows-native-keyring-store` 1.1.0 `src/store.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`）：
