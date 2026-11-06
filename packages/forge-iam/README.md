@@ -84,7 +84,7 @@
 - 授权码 + PKCE S256；回调绑定单次 `state`/`nonce`，校验 ID Token 签名（RS256/PS256/ES256，拒绝 `none`/HS*）、issuer、audience（含多 audience 的 `azp`）、nonce、exp；`kid` 未命中时重取一次 JWKS。
 - token 交换与刷新只由 Host 发起；Client 只拿到授权 URL 和非敏感 `IamView`。
 - 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；不得为站点根或以 `/` 结尾（DSH 路由是不带尾斜杠的绝对路径）。`redirectUri` 的 path 必须与之一致，非 loopback 必须 HTTPS，生产值必须与 IAM 预注册的精确 URI 匹配。
-- 生产形态配置 `callbackPort`（1024–65535）：插件在 `127.0.0.1` 自建监听，回调地址固定为 `http://127.0.0.1:<callbackPort>/iam/callback`，不再随宿主端口漂移。端口被占用时登录直接失败并报 `IAM_CALLBACK_PORT_UNAVAILABLE`，不回落宿主端口。`callbackPort` 为 0 时沿用宿主 Origin，仅用于开发。
+- 生产形态配置 `callbackPort: 0`：插件自建回环监听，端口由系统分配，回调地址在登录发起时才确定，监听也只在这次尝试期间存在（RFC 8252 §8.3）。需要固定端口时填 1024–65535；绑定失败直接拒登录并报 `IAM_CALLBACK_PORT_UNAVAILABLE`，不回落宿主端口。省略 `callbackPort` 时沿用宿主 Origin，仅用于开发。`callbackAddress` 默认 `auto`（先 IPv4 后 IPv6）。
 - 默认只允许 HTTPS；`allowInsecureHttp: true` 也只放行 loopback（`localhost`/`127.0.0.1`/`::1`）上的 HTTP。
 - 显式端点齐全时不再强制拉取 `discoveryUrl`；只有 issuer/authorize/token/JWKS 缺项时才用 discovery 补齐。
 - 新取得的 IAM access token 保存在 GrantRecord 与内存，不再写 `ENTERPRISE_ACCESS_TOKEN`；启动也不自动删除已有旧引用。保留不等于阻止消费：若旧配置或其他组件继续解析该引用，可能构成绕行，须在实际执行入口阻断并另定受授权的遗留处理。模型调用侧原基线指向 `ENTERPRISE_STATIC_KEY`；该消费方尚未随本仓库交付，当前没有接线可测。

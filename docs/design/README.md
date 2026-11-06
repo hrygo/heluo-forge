@@ -73,7 +73,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | 能力 | 验收入口 | 当前边界或待闭合项 |
 |---|---|---|
 | 配置与 OIDC 登录 | `config`、`login`、`oidc`、`security-matrix` 及 [错误字段脱敏](<../../packages/forge-iam/test/oidc-error-redaction.test.mjs>) | 普通apply仍为public + 强制S256；实际私有测试工厂已支持机密Basic/Post，见下行。HTTP error只保留精确标准码，不带任意error原文；合法invalid_grant及成功业务数据保持。生产secret来源/生命周期仍未接 |
-| 固定回调端口 | [callback-port](<../../packages/forge-iam/test/callback-port.test.mjs>) | `callbackPort` 固定 `127.0.0.1` 监听，`redirect_uri` 逐字节相等；端口占用记 `IAM_CALLBACK_PORT_UNAVAILABLE` 并拒登录，不回落宿主端口。mock 下经固定端口完成授权→回调→换票；`apply` 同步、绑定异步，登录发起时等待绑定结果，失败即拒；IAM 侧端口登记与真实端点联调未验 |
+| 回环回调监听 | [callback-port](<../../packages/forge-iam/test/callback-port.test.mjs>) | 插件自建回环监听，端口由系统分配（也可固定），只在登录尝试期间存在；`redirect_uri` 逐字节相等，Host 与路径精确，端口占用记 `IAM_CALLBACK_PORT_UNAVAILABLE` 并拒登录。mock 下完成授权→回调→换票；IPv6 回环本地可绑定，IAM 是否接受 `[::1]` 未验 |
 | 机密认证基础与隔离服务 | [配置](<../../packages/forge-iam/test/client-auth-config.test.mjs>)、[来源](<../../packages/forge-iam/test/client-auth-source.test.mjs>)、[HTTP](<../../packages/forge-iam/test/client-auth-transport.test.mjs>)及[格式/跨模式](<../../packages/forge-iam/test/client-auth-record.test.mjs>)、[实际服务](<../../packages/forge-iam/test/client-auth-service.test.mjs>)、[生命周期](<../../packages/forge-iam/test/client-auth-lifecycle.test.mjs>)、[刷新](<../../packages/forge-iam/test/client-auth-refresh.test.mjs>) | 独立认可的具体来源驱动实际Basic/Post code/refresh/revoke、V2恢复与清理；V1/V2和完整authContext严格隔离，来源/代际变化拒绝旧操作，未知不重发。public不采用或盲删V2；普通apply没有生产secret adapter，隔离闭环不等于正式能力 |
 | 管理 API 认证 | `routes` 测试 | 仅 Connection 同步返回 undefined 时放行；异常结果拒绝且 service 零调用 |
 | 会话同步与 provider 归属 | `provider-replacement-read`、`sync-provider-replacement` 测试 | 同步前后复查 provider，以本地采纳版本和身份快照保护结果；旧读取/错误不覆盖新会话或新确认的空状态，替换仅清本次仍持有的旧身份。`getView/getPrincipal` 只读缓存，不提供即时撤权检查 |
