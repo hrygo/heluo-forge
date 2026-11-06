@@ -22,6 +22,18 @@ const textOf = (result) =>
 const okValue = (label) => ({ text: `${label} ran` });
 const errorOf = (result) => (result?.error === undefined ? undefined : { code: result.error.code, message: result.error.message });
 
+/**
+ * K-1 根因取证：只读记录 `ctx.tools.execute()` 的返回形状（additive，不影响任何断言）。
+ * 文档契约期望 `{ results: [...] }`；若宿主返回数组或其他形状，`batch.results[0]`
+ * 就会以 "Cannot read properties of undefined (reading '0')" 失败。
+ */
+function describeDispatchShape(batch) {
+  const kind = Array.isArray(batch) ? 'array' : batch === null ? 'null' : typeof batch;
+  const keys = batch !== null && typeof batch === 'object' ? Object.keys(batch) : [];
+  const results = batch?.results;
+  return { kind, keys, resultsLength: Array.isArray(results) ? results.length : null, threw: null };
+}
+
 const parentAgentOf = (handle) => handle?.agent ?? handle;
 
 function probeTool(toolName, body) {
@@ -69,6 +81,7 @@ export function apply(ctx) {
 
   const checks = [];
   const blocked = [];
+  let dispatchShape = null;
   const step = async (id, run) => {
     try {
       const { ok, detail } = await run();
@@ -88,6 +101,7 @@ export function apply(ctx) {
         seq += 1;
         try {
           const batch = await ctx.tools.execute({ calls: [{ id: `probe-${seq}`, name: toolName, arguments: JSON.stringify(args) }], signal });
+          if (dispatchShape === null) dispatchShape = describeDispatchShape(batch);
           const result = batch.results[0]?.result;
           return { isError: result?.isError === true, text: textOf(result), error: errorOf(result) };
         } catch (error) {
@@ -95,6 +109,9 @@ export function apply(ctx) {
           if (attempt === 0 && message.includes('inactive context')) {
             await new Promise((resolve) => setTimeout(resolve, 20));
             continue;
+          }
+          if (dispatchShape === null) {
+            dispatchShape = { kind: 'threw', keys: [], resultsLength: null, threw: message };
           }
           return { threw: message, cause: String(error?.cause?.stack ?? error?.cause ?? '') };
         }
@@ -1168,6 +1185,7 @@ export function apply(ctx) {
       env: { node: process.version, platform: `${process.platform}-${process.arch}` },
       checks,
       blocked,
+      dispatchShape,
       failed,
       passed: checks.length - failed,
     };

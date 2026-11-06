@@ -6,17 +6,27 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { readDshVersion } from '../scripts/lib/dsh-version.mjs';
+import { hostProbeGate } from '../scripts/lib/host-probe-gate.mjs';
+
 const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, '..');
 const runner = resolve(here, '../scripts/probe/run-host-probe.mjs');
 
 const dsh = process.env.DSH_BIN ?? 'dsh';
+const target = readDshVersion(root);
 const version = spawnSync(dsh, ['--version'], { encoding: 'utf8' });
-const skip =
-  version.error === undefined
-    ? false
-    : `目标 DSH 不在本机 PATH（${version.error.message}）；宿主探针只在装有目标版本的环境运行`;
+// K-1：探针只在目标宿主（.dsh-version）上有判定意义；版本不符时按 PRD AC-13 显式 skip，
+// 文案写明实际/目标版本与原因。DSH_HOST_PROBE_FORCE=1 可强制复跑，断言本身不因门控变化。
+const gate = hostProbeGate({
+  actual: version.stdout,
+  target,
+  force: process.env.DSH_HOST_PROBE_FORCE === '1',
+  error: version.error,
+});
 
-test('host probe: target DSH honours the documented tool-pipeline semantics without DSH_HOME', { skip }, () => {
+test('host probe: target DSH honours the documented tool-pipeline semantics without DSH_HOME', (t) => {
+  if (gate.skip) return t.skip(gate.reason);
   const env = { ...process.env };
   delete env.DSH_HOME;
   const run = spawnSync(process.execPath, [runner], { encoding: 'utf8', timeout: 300_000, env });
@@ -26,7 +36,8 @@ test('host probe: target DSH honours the documented tool-pipeline semantics with
   assert.doesNotMatch(output, /^FAIL /m, 'no host probe check may fail');
 });
 
-test('host probe: ignores unrelated DSH_HOME profile patches', { skip }, () => {
+test('host probe: ignores unrelated DSH_HOME profile patches', (t) => {
+  if (gate.skip) return t.skip(gate.reason);
   const home = mkdtempSync(join(tmpdir(), 'forge-host-probe-home-'));
   try {
     const profileDir = join(home, 'profiles', 'sdk');

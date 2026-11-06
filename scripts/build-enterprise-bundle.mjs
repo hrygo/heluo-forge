@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /** #37 / ADR-12: close workspace dependencies at build time, never at the terminal. */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readBundleEntries } from './lib/bundle-archive.mjs';
+import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
 import { auditReleaseClosure, auditTarball, npmExecutable, parsePackOutput } from './lib/bundle-rules.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -128,11 +131,89 @@ export function buildEnterpriseBundle(options = {}) {
   return buildBundle({ ...options, entry: DEFAULT_ENTRY });
 }
 
+const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+/** Build host identity only: no absolute paths, no hostname, no timestamps. */
+function readToolchain() {
+  let npm = 'unknown';
+  try {
+    npm = execFileSync(npmExecutable(), ['--version'], { encoding: 'utf8' }).trim();
+  } catch {
+    npm = 'unknown';
+  }
+  return { node: process.version, npm };
+}
+
+/** Write one sidecar without ever exposing a half-written file at its final name. */
+function writeAtomic(target, text, created) {
+  if (existsSync(target)) fail(`refusing to replace existing artifact ${basename(target)}`);
+  const pending = join(dirname(target), `.${basename(target)}.${process.pid}.${Date.now().toString(36)}.tmp`);
+  writeFileSync(pending, text, { flag: 'wx' });
+  try {
+    renameSync(pending, target);
+  } catch (error) {
+    rmSync(pending, { force: true });
+    throw error;
+  }
+  created.push(target);
+}
+
+/**
+ * Write `bundle-manifest.json` (generated from the tarball's own bytes) and
+ * `SHA256SUMS` next to the finished tarball, both atomically. A failure removes
+ * whatever this call already created, so the release directory never ends up
+ * with a sidecar describing a tarball that was rolled back.
+ */
+export function writeBundleArtifacts({ destination, tarballPath, entry, members, entries } = {}) {
+  const directory = resolve(destination);
+  const tarball = resolve(tarballPath);
+  const bytes = readFileSync(tarball);
+  const manifest = createBundleManifest({
+    entry: { name: entry?.name, version: entry?.version },
+    // `members` from buildBundle lists dependencies only; the manifest declares
+    // every shipped package, the entry umbrella included (6 for the enterprise set).
+    members: { ...members, [entry?.name]: entry?.version },
+    tarball: { name: basename(tarball), sha256: digest(bytes), bytes: bytes.length },
+    entries,
+    toolchain: readToolchain(),
+  });
+  const manifestText = serializeBundleManifest(manifest);
+  const sumsText = serializeSha256Sums([
+    { sha256: manifest.tarball.sha256, name: manifest.tarball.name },
+    { sha256: digest(Buffer.from(manifestText, 'utf8')), name: 'bundle-manifest.json' },
+  ]);
+  const manifestPath = join(directory, 'bundle-manifest.json');
+  const sumsPath = join(directory, 'SHA256SUMS');
+  const created = [];
+  try {
+    writeAtomic(manifestPath, manifestText, created);
+    writeAtomic(sumsPath, sumsText, created);
+  } catch (error) {
+    for (const path of created.splice(0)) rmSync(path, { force: true });
+    throw error;
+  }
+  return { manifestPath, sumsPath };
+}
+
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  let tarball;
   try {
     const result = buildEnterpriseBundle({ destination: process.argv[2] });
-    console.log(JSON.stringify({ tarball: result.tarball, version: result.manifest.version, members: result.members, files: result.packed.length }, null, 2));
+    tarball = result.tarball;
+    const bytes = readFileSync(tarball);
+    const entries = readBundleEntries(tarball);
+    const sidecar = writeBundleArtifacts({
+      destination: dirname(tarball),
+      tarballPath: tarball,
+      entry: { name: result.manifest.name, version: result.manifest.version },
+      members: result.members,
+      entries,
+    });
+    console.log(JSON.stringify({ tarball, version: result.manifest.version, members: result.members, files: result.packed.length, sha256: digest(bytes), manifest: sidecar.manifestPath, sums: sidecar.sumsPath }, null, 2));
   } catch (error) {
+    // A sidecar failure means this invocation's tarball must not survive: the
+    // artifact is only publishable together with its manifest and sums.
+    if (tarball !== undefined) rmSync(tarball, { force: true });
     console.error(error.message);
     process.exitCode = 1;
   }

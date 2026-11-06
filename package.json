@@ -22,6 +22,7 @@
     "sensitive:keygen": "node scripts/sensitive-scan/keygen.mjs",
     "sensitive:verify": "node scripts/sensitive-scan/verify.mjs",
     "build:enterprise": "node scripts/build-enterprise-bundle.mjs",
+    "verify:bundle": "node scripts/verify-enterprise-bundle.mjs",
     "uninstall:devops": "node scripts/uninstall-devops.mjs"
   }
 }

@@ -45,6 +45,9 @@ coverage/
 *.tsbuildinfo
 output/
 
+# Release artifacts (tarball + bundle-manifest.json + SHA256SUMS live together)
+/artifacts/
+
 # Temporary and generated files
 *.tmp
 *.temp
