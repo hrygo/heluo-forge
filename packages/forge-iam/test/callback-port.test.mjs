@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer as createNetServer } from 'node:net';
+import { createServer as createNetServer, connect as netConnect } from 'node:net';
 import { request as httpRequest } from 'node:http';
 import { apply } from '../src/index.mjs';
 import { validateConfig } from '../src/config.mjs';
@@ -479,6 +479,39 @@ test('callback listener: IPv6 loopback uses a bracketed origin', async (t) => {
     req.end();
   });
   assert.equal(response.status, 200);
+});
+
+test('callback listener: a client that never completes cannot hold the port', async (t) => {
+  const manager = createCallbackManager({
+    port: 0,
+    path: '/iam/callback',
+    // The bug this covers: a half-finished request used to keep server.close()
+    // pending, and every later bind queued behind it.
+    handler: () => {},
+  });
+  t.after(() => manager.close());
+  await manager.ensure();
+  const origin = manager.origin;
+  const port = Number(new URL(origin).port);
+
+  // A complete request reaches the handler, which never answers: the connection
+  // is active, so plain server.close() would wait for it.
+  const pending = new Promise((resolve) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path: '/iam/callback', headers: { host: new URL(origin).host }, agent: false });
+    req.on('error', () => resolve('closed'));
+    req.on('response', (res) => { res.resume(); resolve('responded'); });
+    req.end();
+  });
+  await delay(30);
+
+  const started = Date.now();
+  await manager.release();
+  const elapsed = Date.now() - started;
+  assert.equal(await pending, 'closed', 'the grace timer drops the stuck request');
+  assert.ok(elapsed < 3000, `release took ${elapsed}ms with a stuck request`);
+  assert.ok(elapsed >= 500, `release returned in ${elapsed}ms, before the grace window`);
+
+  await assert.rejects(() => send(port, { path: '/iam/callback' }), refused);
 });
 
 test('callback manager: ensure is idempotent and release drains', async (t) => {
