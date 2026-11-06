@@ -43,7 +43,7 @@ function setup(t) {
   git(['remote', 'add', 'origin', remote]);
   mkdirSync(join(repo, '.github/sensitive-scan'), { recursive: true });
   writeFileSync(join(repo, '.github/sensitive-scan/team-public-key.pub'), keys.publicKey.export({ type: 'spki', format: 'pem' }));
-  for (const [name, script] of [['commit-msg', 'team-commit-msg.mjs'], ['pre-push', 'team-pre-push.mjs']]) {
+  for (const [name, script] of [['commit-msg', 'team-commit-msg.mjs'], ['post-rewrite', 'team-post-rewrite.mjs'], ['pre-push', 'team-pre-push.mjs']]) {
     const path = join(repo, '.git/hooks', name);
     writeFileSync(path, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(SOURCE, script))} "$1"\n`);
     chmodSync(path, 0o755);
@@ -91,6 +91,25 @@ test('push of an unsigned commit is blocked without echoing content', t => {
   assert.match(push.stderr, /missing Sensitive-Scan trailer/u);
   assert.doesNotMatch(push.stderr, /SYNTHETICWORD/u);
   assert.notEqual(f.spawn(['rev-parse', '--verify', 'origin/leaky']).status, 0);
+});
+
+test('a branch replayed onto a newer base still pushes', t => {
+  const f = setup(t);
+  baseline(f);
+  f.git(['checkout', '-qb', 'feat']);
+  f.commit('feat.txt', 'fine\n', 'feat');
+  assert.equal(f.push(['origin', 'feat']).status, 0);
+  // The base branch advances with a server-created squash commit: no trailer,
+  // and it is published, so it must not be re-checked when feat is replayed.
+  f.git(['checkout', '-q', 'main']);
+  writeFileSync(join(f.repo, 'squashed.txt'), 'squashed\n');
+  f.git(['add', 'squashed.txt']);
+  f.git(['commit', '-q', '--no-verify', '-m', 'squashed feature (#1)']);
+  assert.equal(f.push(['--no-verify', 'origin', 'main']).status, 0);
+  f.git(['checkout', '-q', 'feat']);
+  f.git(['rebase', 'main']);
+  const push = f.push(['origin', 'feat', '--force']);
+  assert.equal(push.status, 0, push.stderr);
 });
 
 test('tag pushes are not verified', t => {

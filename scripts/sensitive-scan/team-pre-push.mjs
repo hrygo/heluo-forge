@@ -26,10 +26,7 @@ function pushedBranches(input) {
   return branches;
 }
 
-function baseFor(branch) {
-  // An existing remote ref gives the exact set of commits this push adds; a new
-  // branch is compared against the same baseline the pull-request check uses.
-  if (branch.remoteSha && !ZERO.test(branch.remoteSha)) return branch.remoteSha;
+function publishedBase() {
   for (const candidate of ['origin/main', 'origin/HEAD', 'main']) {
     try {
       return gitOutput(['rev-parse', '--verify', `${candidate}^{commit}`]).trim();
@@ -38,6 +35,23 @@ function baseFor(branch) {
     }
   }
   return '';
+}
+
+function baseFor(branch) {
+  // Replaying a branch onto a newer base brings already-published commits into
+  // "<remote tip>..<head>", where they look like missing attestations. The merge
+  // base with the base branch keeps only what this branch actually delivers; a
+  // push of the base branch itself is measured against its own remote tip.
+  const published = publishedBase();
+  if (published && branch.name !== 'main') {
+    try {
+      return gitOutput(['merge-base', published, branch.localSha]).trim();
+    } catch {
+      // Fall back to the remote tip below.
+    }
+  }
+  if (branch.remoteSha && !ZERO.test(branch.remoteSha)) return branch.remoteSha;
+  return published;
 }
 
 function rejected(branch) {
