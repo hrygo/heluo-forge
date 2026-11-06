@@ -35,7 +35,7 @@ const HOOKS = [
 // Files a previous release installed. New package files may be absent from a
 // complete older installation, so only this set decides whether it is complete.
 const PREVIOUS_SCRIPTS = ['lib.mjs', 'team-scan.mjs', 'team-commit-msg.mjs'];
-const SHARED_SCRIPTS = [...PREVIOUS_SCRIPTS, 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs', 'team-pre-push.mjs'];
+const SHARED_SCRIPTS = [...PREVIOUS_SCRIPTS, 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs', 'team-pre-push.mjs', 'verify.mjs'];
 const packageRoot = resolve(import.meta.dirname, '../..');
 const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 function statIfPresent(path) {
