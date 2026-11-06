@@ -107,6 +107,9 @@ logs/
 *.prompt.tmp
 agent-transcripts/
 
+# Parallel agent worktrees (local checkouts, never committed)
+.worktrees/
+
 # Knowledge graph and local indexes
 .codebase-memory/
 
