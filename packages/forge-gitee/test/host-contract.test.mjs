@@ -16,13 +16,15 @@ import { test } from 'node:test';
 import { writeToolDefinitions } from '../src/gitee-actions.mjs';
 import { gitToolDefinitions } from '../src/gitee-git.mjs';
 import { readToolDefinitions } from '../src/gitee-read.mjs';
+import { snapshotToolDefinitions } from '../src/gitee-snapshot.mjs';
 import { assertHostToolDefinition, hostSchemaViolations } from './helpers/fake-host.mjs';
 
 /**
- * 十个工具的最小装配：只提供端口形状，不触达子进程。
+ * 十一个工具的最小装配：只提供端口形状，不触达子进程。
  *
- * 不给 `git`：git 工具的定义期不解析端口（`gitPort(service)` 在执行期才取），所以 stub 只需
- * 保证"声明期不碰执行器"——这本身也是接口约定（工具层永不直接持有 runner）。
+ * 不给 `git`：git 工具的定义期不解析端口（`gitPort(service)` 在执行期才取）；快照工具同理
+ * （`service.snapshot(cwd)` 在 `execute` 里才取），所以 stub 只需保证"声明期不碰执行器"——
+ * 这本身也是接口约定（工具层永不直接持有 runner）。
  */
 const stubService = Object.fromEntries(
   ['execute', 'invoke', 'preflight', 'adapter', 'session', 'read'].map((member) => [member, async () => ({})]),
@@ -31,12 +33,13 @@ const stubService = Object.fromEntries(
 const allDefinitions = () => [
   ...readToolDefinitions(stubService),
   ...writeToolDefinitions(stubService),
+  ...snapshotToolDefinitions(stubService),
   ...gitToolDefinitions(stubService),
 ];
 
-test('D-1: 10 个工具全部满足宿主 register() 判据（output.render 是函数 + schema 只用支持子集）', () => {
+test('D-1: 11 个工具全部满足宿主 register() 判据（output.render 是函数 + schema 只用支持子集）', () => {
   const definitions = allDefinitions();
-  assert.equal(definitions.length, 10, '3 读 + 5 受控写/判定 + 2 git');
+  assert.equal(definitions.length, 11, '3 读 + 5 受控写/判定 + 1 快照 + 2 git');
   for (const definition of definitions) {
     assert.doesNotThrow(() => assertHostToolDefinition(definition), `${definition.name} 不满足宿主工具契约`);
     assert.deepEqual(hostSchemaViolations(definition.parameters, 'parameters'), [], `${definition.name} 的参数面越界`);
@@ -49,6 +52,7 @@ test('D-1: 10 个工具全部满足宿主 register() 判据（output.render 是�
     'forge_gitee_review_publish',
     'forge_gitee_review_record',
     'forge_gitee_delivery_gate',
+    'forge_gitee_delivery_snapshot',
     'forge_gitee_git_commit',
     'forge_gitee_git_push',
   ]);

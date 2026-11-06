@@ -210,7 +210,7 @@ test('AC-6: 配置非法在挂载期拒绝，错误里只带字段与原因', ()
   assert.match(JSON.stringify(thrown.detail.issues), /nope/u, '要能定位到出错字段');
 });
 
-test('AC-1/AC-7: 真实补丁层可装配——10 个工具按固定顺序注册，卸载后干净', async () => {
+test('AC-1/AC-7: 真实补丁层可装配——11 个工具按固定顺序注册，卸载后干净', async () => {
   const rows = await readPatch(PATCH_FILE);
   assert.equal(rows.length, 2, '分发补丁层只插两行（策略 + 本插件），不多插别的东西');
   const [policyRow, pluginRow] = rows;

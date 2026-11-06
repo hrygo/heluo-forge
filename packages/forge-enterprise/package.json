@@ -12,23 +12,36 @@
   },
   "dependencies": {
     "@heluo/forge-credentials-keychain": "workspace:*",
-    "@heluo/forge-policy": "workspace:*",
-    "@heluo/forge-iam": "workspace:*"
+    "@heluo/forge-devops": "workspace:*",
+    "@heluo/forge-gitee": "workspace:*",
+    "@heluo/forge-iam": "workspace:*",
+    "@heluo/forge-policy": "workspace:*"
   },
   "bundledDependencies": [
     "@heluo/forge-credentials-keychain",
-    "@heluo/forge-policy",
-    "@heluo/forge-iam"
+    "@heluo/forge-devops",
+    "@heluo/forge-gitee",
+    "@heluo/forge-iam",
+    "@heluo/forge-policy"
   ],
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
+    "./package.json": "./package.json",
     "./skills": "./src/skills.mjs",
     "./switches": "./src/switches.mjs",
-    "./reflow": "./src/reflow.mjs"
+    "./reflow": "./src/reflow.mjs",
+    "./issue-delivery-skill": "./src/issue-delivery-skill.mjs",
+    "./issue-delivery-skill/locale/*.json": "./locale/*.json",
+    "./issue-delivery-skill/icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "src",
+    "skills",
+    "locale",
+    "icon.svg",
     "cordis.patch.yml",
     "README.md"
   ],

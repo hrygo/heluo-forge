@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildEnterpriseBundle } from '../build-enterprise-bundle.mjs';
 import { auditReleaseClosure, npmExecutable, parsePatchLayer } from '../lib/bundle-rules.mjs';
@@ -73,21 +73,110 @@ async function activateInstalled(label, host) {
     await ctx.plugin(SystemPrompt, {}).await();
     await ctx.plugin(Tools, {}).await();
     await ctx.plugin(Loader, { baseUrl: pathToFileURL(join(installedPath, 'cordis.patch.yml')).href }).await();
+    // 正式企业研发 Skill 入口声明 `inject: ['skills']`：真实宿主里该服务由 Skill 能力提供，
+    // 这个最小夹具没有它。给一份"只记录注册"的最小服务，入口才能真正进入 ACTIVE，并顺带
+    // 证明"装上就有入口可枚举"（AC-1）——而不是被 inject 挡在 PENDING 冒充通过或冒充失败。
+    const skillProviders = new Map();
+    ctx.provide('skills', {
+      registerProvider: (create) => {
+        const provider = create();
+        skillProviders.set(provider.name, provider);
+        return () => skillProviders.delete(provider.name);
+      },
+      register: (entry) => {
+        const at = skillProviders.size;
+        skillProviders.set(`direct-${at}-${entry?.name ?? 'unknown'}`, entry);
+        return () => skillProviders.delete(`direct-${at}-${entry?.name ?? 'unknown'}`);
+      },
+    });
     const resolved = [];
     for (const row of patch.inserted) {
       const entry = installedRequire.resolve(row.name);
       const memberPath = relative(installedPath, entry);
       if (memberPath.startsWith('..') || isAbsolute(memberPath)) throw new Error(`member escaped installed tarball: ${row.name}`);
       resolved.push({ name: row.name, entry: memberPath });
+      // 行配置必须**照抄补丁里的 config**：策略目录就在 heluo-policy 行里，
+      // 用 {} 顶替会让 Gitee/DevOps 的只读面在装配期被策略门禁拒掉——那不是包坏了，
+      // 是夹具没把组合装对。只有凭据后端与策略审计是显式本地夹具（内存实现，非企业 IAM 证据）。
       const config = row.name === '@heluo/forge-credentials-keychain'
-        ? { backend: (await import(pathToFileURL(entry).href)).createMemoryBackend(), allowEphemeral: true }
-        : {};
+        ? { ...(row.config ?? {}), backend: (await import(pathToFileURL(entry).href)).createMemoryBackend(), allowEphemeral: true }
+        : row.name === '@heluo/forge-policy'
+          ? { catalog: catalogFromPatch(readFileSync(join(bundleDir, 'cordis.patch.yml'), 'utf8')), audit: { sink: 'memory', allowNonDurable: true } }
+          : (row.config ?? {});
       ids.push(await ctx.loader.create({ id: row.id, name: row.name, config }));
     }
     await ctx.loader.await();
-    const phases = ids.map((id) => ({ id, phase: ctx.loader.resolve(id).fiber?.state }));
-    const mounted = ['credentials', 'policy', 'iam'].every((key) => ctx.get(key) !== undefined);
+    // D-3：装上的是**六行**组合（凭据/策略/IAM/Skill/DevOps/Gitee），不是四行加两个包名。
+    record(
+      `${label}-patch-mounts-six-members`,
+      patch.inserted.length === 6 && new Set(patch.inserted.map((row) => row.id)).size === 6 && resolved.length === 6,
+      { ids: patch.inserted.map((row) => row.id) },
+    );
+    // 失败行要给出**原因**：只报 phase=3 的探针会把"配置被拒"和"依赖缺失"混成一句话。
+    const phases = [];
+    for (const id of ids) {
+      const fiber = ctx.loader.resolve(id).fiber;
+      let error;
+      if (fiber !== undefined && fiber.state !== 2) {
+        try {
+          await fiber.await();
+        } catch (failure) {
+          error = failure?.message ?? String(failure);
+        }
+      }
+      phases.push({ id, phase: fiber?.state, ...(error === undefined ? {} : { error }) });
+    }
+    const mounted = ['credentials', 'policy', 'iam', 'devops', 'gitee'].every((key) => ctx.get(key) !== undefined);
     record(`${label}-real-loader-instantiates-members`, mounted && phases.every((entry) => entry.phase === 2 /* FiberState.ACTIVE (const enum in the installed SDK) */), { resolved, phases, fixture: 'memory credentials; no real identity, keychain or network' });
+    // AC-1：装上之后 Skill 入口必须**可枚举**（摘要 + 按需正文），而不是"装上了却静默无入口"。
+    const skillProvider = skillProviders.get('enterprise-clauses');
+    const listed = skillProvider === undefined ? [] : await skillProvider.list();
+    const skillBody = skillProvider === undefined ? undefined : await skillProvider.get('enterprise-issue-delivery');
+    record(
+      `${label}-issue-delivery-skill-discoverable`,
+      listed.length === 1
+        && listed[0].name === 'enterprise-issue-delivery'
+        && listed[0].invocation?.modelInvocable === false
+        && typeof skillBody?.content === 'string'
+        && skillBody.content.includes('单 Issue 可信待验收交付'),
+      { providers: [...skillProviders.keys()], listed: listed.map((entry) => ({ name: entry.name, invocation: entry.invocation })) },
+    );
+    // D-1：候选把宿主校验的字段带齐（source/rank/provider/locator），并按需给正文路径；
+    // 发现面不含正文——正文只在 `get()` 时取，避免一次装配把全部条款读进上下文。
+    // 每项都按 AC-2 的判据逐条核对，而不是只看第一条。
+    const candidate = listed.length === 1 ? listed[0] : undefined;
+    if (label === 'install') {
+      record(
+        'installed-skill-candidate-shape',
+        listed.length === 1
+          && listed.every((entry) => typeof entry.source === 'string' && entry.source.length > 0
+            && entry.resourceBase?.kind === 'directory'
+            && typeof entry.resourceBase.path === 'string'
+            && entry.resourceBase.path === join(installedPath, 'skills', 'issue-delivery')
+            && !('content' in entry)
+            && typeof entry.invocation?.modelInvocable === 'boolean'
+            && typeof entry.invocation?.userInvocable === 'boolean')
+          && candidate.source === 'bundled'
+          && candidate.rank === 600
+          && candidate.provider === 'enterprise-clauses'
+          && candidate.locator?.clause === 'issue-delivery'
+          && typeof candidate.path === 'string'
+          && candidate.path.endsWith(`${sep}SKILL.md`)
+          && existsSync(candidate.path),
+        { candidate: candidate === undefined ? null : { ...candidate, metadata: undefined } },
+      );
+    }
+    // 宿主拿 list() 的候选直接 get()：不要求调用方自己拆 name/locator；正文与按名取一致。
+    const byCandidate = skillProvider === undefined || candidate === undefined ? undefined : await skillProvider.get(candidate);
+    if (label === 'install') {
+      record(
+        'installed-skill-get-by-candidate',
+        typeof byCandidate?.content === 'string'
+          && byCandidate.content === skillBody?.content
+          && byCandidate.content.includes('单 Issue 可信待验收交付'),
+        { bytes: byCandidate?.content?.length ?? 0 },
+      );
+    }
     if (label === 'install') {
       const installed = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8'));
       const members = [...Object.keys(installed.dependencies ?? {}), ...(installed.bundledDependencies ?? [])];
@@ -99,12 +188,33 @@ async function activateInstalled(label, host) {
     // Removing actual Loader rows must own and remove registrations, not merely files.
     for (const id of ids.reverse()) ctx.loader.remove(id);
     await ctx.loader.await();
-    unloaded = ['credentials', 'policy', 'iam'].every((key) => ctx.get(key) === undefined);
+    unloaded = ['credentials', 'policy', 'iam', 'devops', 'gitee'].every((key) => ctx.get(key) === undefined);
     record(`${label}-loader-unload-clears-registrations`, unloaded);
+    record(`${label}-loader-unload-clears-skill-providers`, skillProviders.size === 0, { providers: [...skillProviders.keys()] });
   } finally {
     await ctx.fiber.dispose();
   }
   if (!unloaded) throw new Error(`${label}: lifecycle cleanup was not proven`);
+}
+
+/**
+ * 补丁行配置只重建 `heluo-policy` 的策略目录：它是 Gitee/DevOps 装配期的硬依赖，
+ * 而 `parsePatchLayer` 只读 id/name。从**安装后的**补丁文本取值，避免把目录写死在
+ * 夹具里、与真实组合悄悄漂移。审计 sink 仍是内存夹具（不落盘、不对接企业审计）。
+ */
+function catalogFromPatch(text) {
+  const catalog = [];
+  for (const line of text.split('\n')) {
+    const flow = line.match(/^\s*- \{ (?<body>.+) \}\s*$/u);
+    if (flow === null) continue;
+    const entry = {};
+    for (const [, key, quoted, raw] of flow.groups.body.matchAll(/([A-Za-z_][\w-]*):\s*(?:'([^']*)'|([^,}]+))/gu)) {
+      const plain = raw?.trim();
+      entry[key] = quoted ?? (plain === 'true' ? true : plain === 'false' ? false : Number.isNaN(Number(plain)) ? plain : Number(plain));
+    }
+    if (typeof entry.action === 'string') catalog.push(entry);
+  }
+  return catalog;
 }
 
 function dump(patch) {
@@ -154,6 +264,27 @@ try {
   const patchedRows = rows(patched.stdout ?? '');
   const present = officialRows.filter((id) => baselineRows.has(id));
   record('installed-patch-disables-official-rows', base.status === 0 && patched.status === 0 && present.length > 0 && present.every((id) => patchedRows.get(id) === true && baselineRows.get(id) === false), { present, absent: officialRows.filter((id) => !baselineRows.has(id)), note: 'dump proves composition only; absent rows are NOT disabled' });
+  // §6.3：三层同装只留**一份**策略行，目录等于六条并集——对着 dump 的合成结果判，
+  // 不是读补丁文本猜。`isolate` 一旦出现，同 id 就会被拆成两个实例，必须在门禁里失败。
+  // 补丁层自己的分段头是 `# == <cordis.patch.yml>`；带 `, patched by <path>` 的是被本补丁
+  // 改写的官方 bundle 头，两者都以补丁文件名结尾，必须区分。
+  const patchedLines = (patched.stdout ?? '').split('\n');
+  const sectionAt = patchedLines.reduce((found, line, index) => (line.startsWith('# == ') && line.includes('cordis.patch.yml') && !line.includes('patched by') ? index : found), -1);
+  const sectionEnd = sectionAt < 0 ? -1 : patchedLines.findIndex((line, index) => index > sectionAt && line.startsWith('# == '));
+  const section = sectionAt < 0 ? '' : patchedLines.slice(sectionAt, sectionEnd < 0 ? patchedLines.length : sectionEnd).join('\n');
+  const rowCount = (id) => (section.match(new RegExp(`^-\\s*id:\\s*${id}\\s*$`, 'gmu')) ?? []).length;
+  const actions = [...section.matchAll(/^\s*-\s*action:\s*([\w.]+)\s*$/gmu)].map((match) => match[1]);
+  const expectedActions = ['change.read', 'change.list', 'gitee.repository.read', 'gitee.issue.read', 'gitee.pr.read', 'gitee.delivery.judge'];
+  record(
+    'installed-patch-policy-union',
+    patched.status === 0
+      && rowCount('heluo-policy') === 1
+      && actions.join() === expectedActions.join()
+      && rowCount('forge-devops') === 1
+      && rowCount('heluo-gitee') === 1
+      && !/isolate/u.test(section),
+    { policyRows: rowCount('heluo-policy'), actions, devopsRows: rowCount('forge-devops'), giteeRows: rowCount('heluo-gitee') },
+  );
   await activateInstalled('install', host);
   const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });
   npm(['install', upgraded.tarball]);

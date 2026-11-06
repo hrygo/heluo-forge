@@ -40,8 +40,8 @@ const UNION_ACTIONS = Object.freeze([
   'gitee.pr.read',
   'gitee.delivery.judge',
 ]);
-/** 本包工具面（r10）：3 读 + 4 受控写 + 1 判定 + 2 git = 10。 */
-const GITEE_TOOL_COUNT = 10;
+/** 本包工具面（r12）：3 读 + 4 受控写 + 1 判定 + 1 快照 + 2 git = 11。 */
+const GITEE_TOOL_COUNT = 11;
 /** devops 工具面 4 个（等价假插件按同一数量开工具）。 */
 const DEVOPS_EQUIVALENT_TOOLS = Object.freeze(
   Array.from({ length: 4 }, (_, index) => `forge_devops_equivalent_${index + 1}`),
@@ -158,7 +158,7 @@ test('形态 B: 叠加两层——同 id 覆盖后只有一个策略实例，14 
     assert.ok(host.policyIn(undefined) !== undefined, `${label}：root 域必须有唯一的策略实例`);
     assert.equal(host.policyIn('gitee'), undefined, `${label}：不得再有第二份策略实例`);
 
-    assert.equal(host.toolNames().length, TOTAL_TOOL_COUNT, `${label}：工具面应为 4 + 10 = 14`);
+    assert.equal(host.toolNames().length, TOTAL_TOOL_COUNT, `${label}：工具面应为 4 + 11 = 15`);
     assert.deepEqual(
       [...host.toolNames()].sort(),
       [...DEVOPS_EQUIVALENT_TOOLS, ...GITEE_TOOLS].sort(),

@@ -150,7 +150,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行与官方 `credentials` 行；现行 `insert:` 段挂载三个有 Host 职责的企业插件（`insert:` 段见 §5.1.2）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
+补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行与官方 `credentials` 行；现行 `insert:` 段挂载五个有 Host 职责的企业插件（凭据/策略/IAM/DevOps/Gitee）＋本包自己的 Skill 子路径入口（`insert:` 段见 §5.1.2）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -163,9 +163,9 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-`insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
+`insert:` 段挂五个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`、`@heluo/forge-devops`、`@heluo/forge-gitee`，外加本包的 Skill 子路径入口 `@heluo/forge-enterprise/issue-delivery-skill`。DevOps 与 Gitee 两行在 r13 进闭包，条目内显式写 `config: {}`：行配置缺席时 `ConfigStandard` 会拒、loader 只把该行静默跳过（装上却没有读面，比报错更难查）。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
 
-本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行三行口径以补丁文件与 `bundle-patch.test.mjs` 为准）：
+本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行六行口径以补丁文件、`bundle-patch.test.mjs` 与安装演练 `run-bundle-install-rehearsal.mjs` 为准）：
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -174,7 +174,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | 确定性 | 同上跑两次 `cmp` | 两次输出逐字节相同 |
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
-**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**2026-10-26 现行口径**：SDD 移出 `insert:` 后，dump 级断言以三行为准（`bundle-patch.test.mjs`），上表四行仅为历史记录。
+**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**2026-11-05 现行口径（r13）**：`insert:` 共六行——凭据、策略、IAM、DevOps、Gitee 与 Skill 子路径入口；dump 级断言以 `bundle-patch.test.mjs`（6 行、三项成员清单）与安装演练的 `install-patch-mounts-six-members` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
 
 #### 5.1.3 企业模型配置入口收敛（2026-11-04）
 
@@ -213,6 +213,20 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | `desktop` | **NOT RUN** | — | 本机不可 dump（由应用独占管理） |
 
 补丁后新增的行是 `heluo-credentials-keychain`、`heluo-policy`、`heluo-iam`、`heluo-sdd`（企业包自身能力，不是误伤；2026-10-24 实测形态，2026-10-26 起 SDD 行已移除，现行见 §5.1.2）。
+
+#### 5.2.2 交付 Skill 的宿主候选契约（r12/r13）
+
+宿主 `SkillRegistry` 的判据是硬性契约：候选必须带**非空字符串** `source`、**有限数** `rank`、`provider` 等于注册名、非空 `description` 与两个布尔 `invocation`；`list()` 交出的候选会被原样喂给 `get()`。r12 只补了懒加载路径，候选缺 `source/rank/resourceBase`，宿主在 `register` 阶段就抛 `returned skill "…" with a non-string source`，按名取正文时又因 `get()` 只认字符串而返回 `undefined`。现行契约：
+
+| 项 | 值 / 行为 |
+|---|---|
+| 候选字段 | `name: enterprise-issue-delivery`、`description`、`whenToUse`、`invocation { modelInvocable:false, userInvocable:true }`、`source: 'bundled'`、`rank: 600`（与宿主 `BUNDLED_SKILL_RANK` 同值；本仓库不 import 宿主包）、`provider: 'enterprise-clauses'`、`locator: { clause: 'issue-delivery' }` |
+| 资源定位 | `resourceBase: { kind: 'directory', path: <包内>/skills/issue-delivery }`（精确到正文所在目录，`references/*.md` 才解析得对）与 `path: <包内>/skills/issue-delivery/SKILL.md`；`list()` 结果**不含** `content`，正文只在 `get()` 时读一次文件 |
+| 取正文 | `get()` 同时接受 skill 名（`enterprise-issue-delivery`）、条款 id（`issue-delivery`）与宿主候选对象（`locator.clause` 优先、其次 `name`）；未命中返回 `undefined`，由宿主报「skill not found」，不伪造正文 |
+| 幂等装配 | 模块级 `WeakMap<ctx, Map<prefix, teardown>>`：同一 `ctx` + 同一 `prefix` 重复 `apply` 直接返回已有 teardown、**不再** `registerProvider`（宿主对重名 provider 抛 `a skill provider named "…" is already registered`）；不同 prefix 允许并存；teardown 先删表再 dispose，重复 dispose 不抛 |
+| 语义 | 只注册 Skill 资源，不注册业务工具、不启动 run、不写用户目录；每次 `get` 读一次文件，不缓存正文 |
+
+证据（2026-11-05，DSH 0.2.1-rc.5 真实宿主）：r12 原检查器 `qa-r12-skill-host.mjs` 复跑 **ALL PASS**（可枚举、摘要无正文、`resourceBase` 指向包内 `skills/issue-delivery`、`get(candidate)` 与 `get(name)` 同正文、重名不再触发）；安装演练新增 `installed-skill-candidate-shape` / `installed-skill-get-by-candidate` / `install-loader-unload-clears-skill-providers`（隔离 `DSH_HOME`、离线 tarball）；单元用例 `issue-delivery-skill.test.mjs`（候选契约、重复 apply 幂等、卸载后重装）。**未验**：真实企业条款来源（由企业提供）、真实企业 profile 的整链装配；以上均为本地隔离环境结论，不写成企业联调。
 
 边界：这是**组合层**事实（行是否保留、是否启用、有无激活告警），不是界面功能验证——"设置页/模型选择真的能用"仍需一次真实桌面运行，`desktop` profile 也未在两台机器上 dump 成功。
 
@@ -361,6 +375,9 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
+| 装配（r13） | 装好的补丁层六行 insert、三层策略行合成**一份**且目录等于六条并集、无 `isolate`、官方行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
+| Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-enterprise/test/issue-delivery-skill.test.mjs` |
+| 制品清单 | 最终 tarball 含 `skills/issue-delivery/**`、`locale/*.json`、`icon.svg`，闭包无 `workspace:/file:/link:` | `node scripts/check-bundle-tarballs.mjs` |
 | 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |
 | 端到端 | 双端各完成一次挂载、官方入口不可见与整体禁用 | 手工 + 脚本 |
 

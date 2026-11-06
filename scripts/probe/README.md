@@ -113,6 +113,34 @@ node scripts/probe/run-keychain-spike.mjs
   `list()` 报 `KEYCHAIN_LIST_UNSUPPORTED` 而不是返回空表。
 - **不代表生产**：Windows 凭据管理器与 UOS/麒麟 Secret Service 适配器、`@napi-rs/keyring` 产物仍待目标平台核验。
 
+## Teamflow 证据探针（r13，只读）
+
+两件互不依赖的小事：九类场景矩阵的**夹具断言**与 journal 的**工作区归属**。两者都不调用模型、
+不创建 run、不连宿主；所有结论都写进报告表格或退出码，供 QA 复跑。
+
+```sh
+node scripts/probe/run-teamflow-scenario-matrix.mjs            # 9 行表骨架，真实宿主列固定 NOT RUN
+node scripts/probe/run-teamflow-scenario-matrix.mjs --report <qa-report.md>
+node scripts/probe/check-teamflow-journal-roots.mjs --journal <journal.json> --root <授权 worktree>
+```
+
+- 矩阵：默认对 `packages/forge-enterprise/skills/**` 与既有团队流用例做静态断言，逐条核对
+  9 类场景应当存在的守则；任一守则缺失即非零退出（证明表不是恒绿）。`--report` 校验 QA 报告里的
+  同一张表：列齐、`来源类型` 合法（`local-execution`/`host-execution`/`fixture`/`NOT RUN`），
+  真实宿主列不是 `NOT RUN` 时必须带命令与时间。真实列只能写 `NOT RUN` 或带证据的实测，不能与夹具列混写。
+- journal 根一致性：`classifyJournalRoots({authorizedRoot, journal})` 的**唯一判据是 `workspacePath`**
+  （真实路径归一后须位于授权 worktree 内），结果只有 `aligned`/`mismatch` 两态：`workspacePath` 越界
+  或缺失即 `mismatch`（退出码 1）；没有 journal 时打印 `journal-roots: NOT RUN (no journal)` 并退出 0——
+  缺证不等于失败，也不等于通过。`stateRoot`/`commitRoot` **只作观测**：0.3.2/0.3.3 宿主不提供这两个字段，
+  取值按 `missing`/`within`/`outside` 披露到 stderr（缺失打 `journal-roots: stateRoot unknown (host does not
+  provide)`），**任何情况下都不翻状态、不改退出码**；`unknown` 不再是终态。
+- 退出码：`0` = `aligned`（或无 `--journal` 的 `NOT RUN`）；`1` = `mismatch`；`2` = 用法错误或 journal
+  不可读。journal 里的字段假定为绝对路径，相对路径按当前 cwd 解析，探针不额外裁决。
+- `tests/teamflow-evidence-tools.test.mjs` 对 journal 部分覆盖六类用例：`workspacePath` 落在授权
+  worktree 内 → `aligned`；仅观测字段越界 → 仍旧 `aligned` 且退出 0；`workspacePath` 指向主工作目录 →
+  `mismatch`；`workspacePath` 缺失 → `mismatch` 且退出 1；无 journal → CLI 打印 `NOT RUN` 并退出 0；
+  用法与 IO 错误 → 退出 2。矩阵部分仍是表格纪律的正反例，与 journal 用例互不共用代码。
+
 ## 边界
 
 - 只证明**宿主钩子语义**。企业侧证据（真实 IAM、真实 Gitee/DevOps 权限、

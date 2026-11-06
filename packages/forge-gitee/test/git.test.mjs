@@ -387,8 +387,8 @@ test('工具：push 参数不合法时不问策略、零子进程', async () => 
 
 /* ------------------------------------------------------------ 注册表 */
 
-test('注册表：固定 10 个（3 读 → 4 写 → 1 判定 → 2 git），5 条策略写含 push', () => {
-  assert.equal(GITEE_TOOLS.length, 10);
+test('注册表：固定 11 个（3 读 → 4 写 → 1 判定 → 1 快照 → 2 git），5 条策略写含 push', () => {
+  assert.equal(GITEE_TOOLS.length, 11);
   assert.deepEqual(GITEE_TOOLS.slice(-2), [GITEE_GIT_TOOLS.COMMIT, GITEE_GIT_TOOLS.PUSH]);
   assert.deepEqual([...GITEE_POLICY_WRITE_TOOLS], [...GITEE_WRITE_TOOLS, GITEE_GIT_TOOLS.PUSH]);
   assert.equal(GITEE_POLICY_WRITE_TOOLS.length, 5);
@@ -402,10 +402,11 @@ test('注册表：固定 10 个（3 读 → 4 写 → 1 判定 → 2 git），5 
     adapter: () => ({ read: async () => ({}) }),
     session: () => ({}),
     git: () => ({ commit: async () => ({}), push: async () => ({}) }),
+    snapshot: async () => ({ status: 'succeeded' }),
   };
   const definitions = buildGiteeTools(stub);
   assert.deepEqual(definitions.map((definition) => definition.name), [...GITEE_TOOLS]);
-  assert.equal(definitions.length, 10);
+  assert.equal(definitions.length, 11);
   const toolDefinitions = gitToolDefinitions(stub);
   assert.deepEqual(toolDefinitions.map((definition) => definition.name), [GITEE_GIT_TOOLS.COMMIT, GITEE_GIT_TOOLS.PUSH]);
   for (const definition of toolDefinitions) {

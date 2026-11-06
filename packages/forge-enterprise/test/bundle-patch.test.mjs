@@ -57,24 +57,39 @@ test('the bundle mounts exactly the implemented enterprise packages', async () =
       ['heluo-credentials-keychain', '@heluo/forge-credentials-keychain'],
       ['heluo-policy', '@heluo/forge-policy'],
       ['heluo-iam', '@heluo/forge-iam'],
+      // r12：正式企业研发 Skill 是本包自己的子路径入口，不是第四个包（所以上面的
+      // "逐个包校验"要按包名归一后再查清单）。
+      ['heluo-issue-delivery-skill', '@heluo/forge-enterprise/issue-delivery-skill'],
+      // r13：研发读面与交付判定进闭包。缺这两行时组合"装上了却没有 Issue/变更可读"（r12 D-3）。
+      ['forge-devops', '@heluo/forge-devops'],
+      ['heluo-gitee', '@heluo/forge-gitee'],
     ],
-    '插入行只能是真正的三个Host插件；SDD保留CLI，不伪装插件',
+    '插入行 = 五个真正的 Host 插件 + 本包的 Skill 子路径入口；SDD 保留 CLI，不伪装插件',
   );
   assert.doesNotMatch(text, /^\s*name: '@heluo\/forge-market'$/mu, '历史市场包不挂（AC5）；注释里提到它不算挂载');
-  assert.doesNotMatch(text, /^( {4})- id: (enterprise|forge)-/mu, '禁用段不复制企业行，只覆写官方行');
+  // 只认**顶层**禁用段：insert 里的 `    - id: forge-devops` 是合法企业行，不能被这条反面断言误伤。
+  assert.doesNotMatch(text, /^- id: (enterprise|forge)-/mu, '禁用段不复制企业行，只覆写官方行');
   assert.match(text, /DEEPSEEK_API_KEY/, '文件需说明 API Key 傍路这条核验依据');
 });
 
 test('every inserted package exists, is private, and has a manifest', async () => {
   const text = await read('cordis.patch.yml');
   const names = [...text.matchAll(/^ {6}name: '([^']+)'$/gmu)].map((m) => m[1]);
-  assert.equal(names.length, 3);
+  assert.equal(names.length, 6);
   for (const name of names) {
-    const dir = join(here, '..', name.replace('@heluo/', ''));
+    // `@heluo/<pkg>/<subpath>` 与 `@heluo/<pkg>` 指向同一个 workspace 包：包名取第二段。
+    const segments = name.split('/');
+    const packageName = segments.slice(0, 2).join('/');
+    const dir = join(here, '..', segments[1]);
     const manifest = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'));
-    assert.equal(manifest.name, name, `${name} 的清单名必须与插入行一致`);
+    assert.equal(manifest.name, packageName, `${name} 的清单名必须与插入行一致`);
     assert.equal(manifest.private, true, `${name} 必须是私有包`);
     assert.ok(manifest.engines?.dsh, `${name} 必须声明 engines.dsh`);
+    if (segments.length > 2) {
+      // 子路径入口必须真的在 exports 里，否则装上却解析不到（静默无入口）。
+      const subpath = `./${segments.slice(2).join('/')}`;
+      assert.equal(typeof manifest.exports?.[subpath], 'string', `${name} 的子路径 ${subpath} 必须出现在 exports`);
+    }
   }
 });
 
@@ -83,6 +98,6 @@ test('the README states the current bundle status honestly', async () => {
   assert.match(text, /状态：可用（组合骨架/);
   assert.match(text, /cordis\.patch\.yml/);
   assert.match(text, /官方行禁用层已实现/);
-  assert.match(text, /insert:[^|]*三个 Host 插件/);
+  assert.match(text, /insert:[^|]*五个 Host 插件/);
   assert.match(text, /运行时模型面与企业环境接入未实现/);
 });

@@ -12,7 +12,7 @@
 - **平台写动作按门禁已覆盖范围默认开放**（建 Issue、审查评论、PR 关联；变更内容回写自 2026-11-04 起由 `change update --summary/--description/--ai-ac` 实现，默认不登记即拒绝、登记 enabled 需审批台账，写前须先读该变更、写后回读），未覆盖或无权限时状态可见为 `denied`，绝不静默跳过；状态只允许 `done` / `failed` / `denied` / `unknown`（扩展 `skipped` / `blocked` / `stale`），只用退出码 0 不算成功，`unknown` 不自动重放；同一变更重复执行幂等。合并 PR、关闭 Issue、`dop change done`、CI 触发、部署/回滚与审批永不在动作白名单内。
 - **平台写回只有一个入口**：`forge_devops_change_update`（`change.clarification.write`）固定 argv `change update <code> [--summary|--description|--ai-ac]`，不做 argv 透传；`confirm{object}` 与目标逐字一致、目标必须是会话已读到的变更；结果以 `change view` 回读为准（done/failed/unknown），退出码 0 不算成功、未知不重放；默认关闭，登记 enabled 还须有效审批台账。
 - **只读面是枚举式薄 runner**（D 方案，2026-11-03 用户确认）：一个只读工具按枚举动作（`change.read` / `change.list`）分发，每个动作有自己的参数 schema；新增只读子命令走"取证真实 flag → 加枚举与 schema"，绝不引入自由 argv / 通用 `run`。清单 `target` 固定 `@me`（策略要求非空 target）；`facts.raw` 只进当前受权会话，不落指标/审计/产物。产物落盘的 `clarify` / `plan` 只接受结构化 `data`、由纯函数机检并生成正文，手写 `body` 不能绕过。
-- **证据纪律**：任何"已实测/已验证"的结论必须写明命令、时间、宿主版本、目标对象与**来源类型（mock 实测 / 企业实测）**；mock 结论不得写成企业已联调。
+- **证据纪律**：任何"已实测/已验证"的结论必须写明命令、时间、宿主版本、目标对象与**来源类型（mock 实测 / 企业实测）**；mock 结论不得写成企业已联调。Teamflow run 的归属只看宿主 journal 的 `workspacePath` 是否落在授权 worktree 内（真实路径比较）：归属由 `agent.session.header.cwd` 决定、`productRoot` 不改变归属；`stateRoot`/`commitRoot` 在 0.3.2/0.3.3 宿主不提供，记 `unknown`、**不得作为失败项或阻断项**（2026-11-06 判据，取代 r13 AC-9/G0 口径，见 `docs/teamflow/20261106-r1-journal-root-alignment/TECH-CHANGE.md`）。
 - **验证基线**：仓库根 `pnpm check` + `git diff --check`；新增或修改包必须带离线测试并进入 `node --test` 自动发现范围，tarball 清单复用 `scripts/check-bundle-tarballs.mjs`。
 
 ## 待办
@@ -21,5 +21,5 @@
 - profile `web` 现存 2026-10-28 的手工 `file://` UAT 段（`forge-policy` / `heluo-uat-reader` / `forge-devops`）待被正式安装替代；替换时同步删除该段并在回滚时原样恢复。
 - 宿主版本双轨（仓库目标 `.dsh-version` `0.2.1-rc.3`，本机已装 `0.2.1-rc.2`）：目标版本上的装载证据仍为 `NOT RUN`，升级宿主后补跑。
 - r3 配置页三处人工补测仍 `NOT RUN`：Windows 实机零配置（AC-1/2）、真实浏览器点击走查（AC-6/7）、真实 web profile 重启（AC-8，需先删 2026-10-28 手工 `file://` UAT 段）。`dist/` 内 `UAT-WINDOWS.md` 与旧 tarball 是 r3 前构建产物，勿作为新版本分发。
-- gitee（`@heluo/forge-gitee`）人工补测：真实 `web` profile 按 PRD §10.3 装入并回读 `dependencies`/`bundles`、真实会话内 10 个 `forge_gitee_*` 工具枚举（含 `git_commit`/`git_push`）；企业 Gitee CLI 与 `--json` 字段联调、Windows/麒麟 aarch64、真实凭据持久化仍 `NOT RUN`。forge-gitee 内同源的两段仓库假设与不解包 `data.list` 尚未修，须另开一单，勿与 devops 侧共用一次取证。
+- gitee（`@heluo/forge-gitee`）人工补测：真实 `web` profile 按 PRD §10.3 装入并回读 `dependencies`/`bundles`、真实会话内 11 个 `forge_gitee_*` 工具枚举（含只读版本快照 `delivery_snapshot`、`git_commit`/`git_push`）；企业 Gitee CLI 与 `--json` 字段联调、Windows/麒麟 aarch64、真实凭据持久化仍 `NOT RUN`。forge-gitee 内同源的两段仓库假设与不解包 `data.list` 尚未修，须另开一单，勿与 devops 侧共用一次取证。
 - **r8 遗留的入口形态副本**：`packages/forge-gitee/src/runtime-config.mjs:66-100` 仍自带 `WRAPPER_SUFFIXES` 与包装脚本拒收，gitee 侧 `cliPath` 在 Windows 上仍拒 `.cmd`/无后缀 shim，与 devops r8 的「存在且普通文件 + 运行期归因」口径不一致（r8 `TECHNICAL.md` R1）；跨包 import 源码被仓库约定禁止，须作为独立需求修，不夹带进 devops 需求。

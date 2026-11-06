@@ -21,6 +21,12 @@ importers:
       '@heluo/forge-credentials-keychain':
         specifier: workspace:*
         version: link:../forge-credentials-keychain
+      '@heluo/forge-devops':
+        specifier: workspace:*
+        version: link:../forge-devops
+      '@heluo/forge-gitee':
+        specifier: workspace:*
+        version: link:../forge-gitee
       '@heluo/forge-iam':
         specifier: workspace:*
         version: link:../forge-iam

@@ -3,11 +3,11 @@
 # 本文件承载两件事：
 #   1. O3 要求的"官方行默认禁用"（实测：`dsh --patch` 的覆写层会给命中行加上
 #      `disabled: true`；命中不到的 id 会警告 `patch: entry "<id>" not found` 后跳过）。
-#   2. 企业组合的最小挂载：`insert:` 段把三个有真实 Host 职责的企业插件挂进 profile；SDD 仅作为库/CLI 随制品交付。
+#   2. 企业组合的最小挂载：`insert:` 段把五个有真实 Host 职责的企业插件挂进 profile；SDD 仅作为库/CLI 随制品交付。
 #      历史市场包 `@heluo/forge-market` 按设计不挂（它不属于轻量原生索引模式的目标）。
 #
-# 插入行的范围以"包已有清单、源码与测试"为准；网关、Gitee、品牌仍只有 README
-#（DevOps 已落地只读查询 + 门禁骨架，企业 CLI 未联调），不预建指向未实现包的入口。
+# 插入行的范围以"包已有清单、源码与测试"为准；网关与品牌仍只有 README，
+# 不预建指向未实现包的入口。DevOps 与 Gitee 自 r13 起随组合一起装上（企业 CLI 仍未联调）。
 #
 # 用法：dsh --profile web --patch <该文件>
 # 复核：dsh --profile web --patch <该文件> --dump-config | grep -A2 "id: heluo-"
@@ -63,3 +63,18 @@
           allowNonDurable: true
     - id: heluo-iam
       name: '@heluo/forge-iam'
+    # 正式企业研发 Skill（r12）：只注册随包分发的 Skill 资源，不注册业务工具、不启动 run。
+    # 与 heluo-iam 同属"能装上就有入口"的一部分：id 固定，靠 id 折叠而不是行序。
+    # 没有 Skill 服务时 Loader 按 inject 不激活该行；缺资源时装配期报错，不静默半装。
+    - id: heluo-issue-delivery-skill
+      name: '@heluo/forge-enterprise/issue-delivery-skill'
+    # 研发读面与交付判定（r13）：企业组合缺了这两行，安装后只有 Skill、没有可读的 Issue/
+    # 变更与快照，"可信待验收交付"根本跑不起来（r12 的 D-3 就是这个缺口）。
+    # 两行都写 `config: {}` 而不是省略：行配置缺席时 `ConfigStandard` 会拒，loader 只把该行
+    # 静默跳过——装上了却没有读面，比报错更难查。
+    - id: forge-devops
+      name: '@heluo/forge-devops'
+      config: {}
+    - id: heluo-gitee
+      name: '@heluo/forge-gitee'
+      config: {}

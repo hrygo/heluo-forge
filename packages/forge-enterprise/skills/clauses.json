@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "clauses": [
+    {
+      "id": "issue-delivery",
+      "title": "单 Issue 可信待验收交付",
+      "level": "hard",
+      "status": "active",
+      "owner": "forge-enterprise",
+      "summary": "一个 Issue 对应一份可追溯到实际代码版本的待验收交付；Skill 只补企业语义与证据边界，原生 Teamflow 唯一执行。",
+      "appliesTo": [
+        { "system": "teamflow", "versions": [] },
+        { "system": "gitee", "versions": [] },
+        { "system": "devops", "versions": [] }
+      ],
+      "body": "issue-delivery/SKILL.md",
+      "references": [
+        "forge_gitee_delivery_snapshot",
+        "forge_gitee_issue_read",
+        "forge_devops_change_context",
+        "teamflow_start",
+        "teamflow_status",
+        "teamflow_resume"
+      ],
+      "key": "issue-delivery",
+      "decision": "handoff-required"
+    }
+  ]
+}

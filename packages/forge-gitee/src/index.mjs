@@ -51,6 +51,7 @@ import { createGiteeGitAdapter } from './gitee-git.mjs';
 import { GITEE_PLATFORM, createGiteeGuard } from './gitee-guard.mjs';
 import { GITEE_READ_ACTIONS, normalizeGiteeReadResult } from './gitee-read.mjs';
 import { createGiteeSession } from './gitee-session.mjs';
+import { createGiteeSnapshotReader } from './gitee-snapshot.mjs';
 import { GITEE_TOOLS, GITEE_WRITE_TOOLS, buildGiteeTools } from './gitee-tools.mjs';
 import {
   ConfigStandard,
@@ -196,7 +197,7 @@ function denialError(reason, message, detail) {
   return error;
 }
 
-function createService({ ctx, policy, adapter, gitAdapter, guard, session, config }) {
+function createService({ ctx, policy, adapter, gitAdapter, guard, session, config, snapshot }) {
   let status = 'ready';
   let callSeq = 0;
   const nextCallId = (kind) => {
@@ -259,6 +260,11 @@ function createService({ ctx, policy, adapter, gitAdapter, guard, session, confi
     // 本地 git 命令面：工具层只拿端口（`git().commit()` / `git().push()`），永不直接持有
     // runner；push 的准入仍由 `guard.execute` 按动作 `gitee.git.push` 裁决。
     git: () => gitAdapter,
+    // 只读代码版本快照：纯本地、零远端、零写。目录由工具层从真实调用上下文解析后传入，
+    // 服务不缓存、不回落进程 cwd；装配缺失时工具层据此返回 failed，而不是编一个版本。
+    snapshot: (cwd) => (typeof snapshot === 'function'
+      ? snapshot(cwd)
+      : Promise.resolve(Object.freeze({ status: 'failed', reason: 'GIT_SNAPSHOT_NO_WORKSPACE', message: 'gitee 服务没有装配快照读取器：不生成代码版本', next: '在已授权的工作区内重新发起调用；调用根不可信时不生成版本。', observedAt: null }))),
     guard: () => guard,
     session: () => session,
     dispose: () => {
@@ -332,8 +338,25 @@ export function apply(ctx, rawConfig = {}) {
   });
   const guard = createGiteeGuard({ policy });
   const session = createGiteeSession();
+  // 快照读取器与 git 适配器共用同一个出口（`runner.runGit`）：本模块不自己起子进程，
+  // 也不接受外部注入的目录。装配失败不阻断整个插件——工具层会返回 failed 而不是编版本。
+  let snapshotReader;
+  try {
+    snapshotReader = createGiteeSnapshotReader({ runner });
+  } catch {
+    snapshotReader = undefined;
+  }
 
-  const service = createService({ ctx, policy, adapter, gitAdapter, guard, session, config });
+  const service = createService({
+    ctx,
+    policy,
+    adapter,
+    gitAdapter,
+    guard,
+    session,
+    config,
+    snapshot: typeof snapshotReader?.read === 'function' ? (cwd) => snapshotReader.read(cwd) : undefined,
+  });
 
   let tools;
   try {
@@ -401,4 +424,5 @@ export * from './gitee-read.mjs';
 export * from './gitee-guard.mjs';
 export * from './gitee-session.mjs';
 export * from './gitee-actions.mjs';
+export * from './gitee-snapshot.mjs';
 export * from './gitee-tools.mjs';

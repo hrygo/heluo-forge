@@ -22,7 +22,13 @@ for (const profile of profiles) {
     assert.match(output, /install-v1-with-patch-and-workspace-intact/);
     assert.match(output, /installed-patch-disables-official-rows/);
     assert.match(output, /installed-final-tarball-closure/);
+    // r13/D-3：装上的是六行组合，且 Skill 候选本身满足宿主校验、能按候选取正文、卸载后 provider 清空。
+    assert.match(output, /install-patch-mounts-six-members/);
     assert.match(output, /install-real-loader-instantiates-members/);
+    assert.match(output, /installed-skill-candidate-shape/);
+    assert.match(output, /installed-skill-get-by-candidate/);
+    assert.match(output, /installed-patch-policy-union/);
+    assert.match(output, /install-loader-unload-clears-skill-providers/);
     assert.match(output, /legacy-sdd-member-retired/);
     assert.match(output, /upgrade-real-loader-instantiates-members/);
     assert.match(output, /rollback-real-loader-instantiates-members/);

@@ -16,7 +16,7 @@
 | 门禁 | G1 |
 | 模块状态 | 可用（离线用例全绿；企业 CLI 未联调，见 §12） |
 
-> 编制依据：2026-10-20 依据两点事实——Gitee 侧已有完全兼容 `gh` 的 CLI；架构 P7 要求复用既有资产。据此以 CLI 为接入形态，并去掉原方案中 `mcp-gitee` 缺少 `linux-arm64` 资产导致的交叉编译风险。2026-10-29 按实现反写：`packages/forge-gitee` 的 13 个源模块、10 个工具与离线用例已落地，本版把命令面、配置、失败模式与共存形态改成**可执行的事实**。2026-11-03（r10）按「按平台切库」收敛：本包升为 Gitee 侧唯一实现，新增提交信息单源 `src/git-message.mjs` 与本地 git 命令面 `src/gitee-git.mjs`；devops 退回 dop 四工具并删除 gh 侧七个模块——提交信息校验与关闭就绪判定不再各写一份。**仍未核验**：该 CLI 在银河麒麟 aarch64 上的产物、凭据注入方式、`--json` 输出稳定性、真实企业实例联调。
+> 编制依据：2026-10-20 依据两点事实——Gitee 侧已有完全兼容 `gh` 的 CLI；架构 P7 要求复用既有资产。据此以 CLI 为接入形态，并去掉原方案中 `mcp-gitee` 缺少 `linux-arm64` 资产导致的交叉编译风险。2026-10-29 按实现反写：`packages/forge-gitee` 的 14 个源模块、11 个工具与离线用例已落地，本版把命令面、配置、失败模式与共存形态改成**可执行的事实**。2026-11-03（r10）按「按平台切库」收敛：本包升为 Gitee 侧唯一实现，新增提交信息单源 `src/git-message.mjs` 与本地 git 命令面 `src/gitee-git.mjs`；devops 退回 dop 四工具并删除 gh 侧七个模块——提交信息校验与关闭就绪判定不再各写一份。2026-11-03（r12）增 `src/gitee-snapshot.mjs` 只读版本快照 `forge_gitee_delivery_snapshot`：只经 `runGit` 出口、argv 写死、不接受调用方目录，用 `contentId` 表达「验的是哪一份代码」；截断/超时/未支持形态/采样期间有写入者时一律 `unknown`。**仍未核验**：该 CLI 在银河麒麟 aarch64 上的产物、凭据注入方式、`--json` 输出稳定性、真实企业实例联调。
 >
 > 关联文档：[总体架构 §7.3](../../architecture/platform-architecture.md)、[实施计划](../../plans/rollout-plan.md) P1-4、[策略与审计](forge-policy.md)、[DevOps 接入详细设计](forge-devops.md)（同形不同语义的另一侧）。
 
@@ -74,12 +74,12 @@
 
 | 项 | 内容 |
 |---|---|
-| 形态 | 工具面接入：10 个具名工具 + 固定命令面 + 策略门禁（无独立服务端、无常驻进程、无前端） |
+| 形态 | 工具面接入：11 个具名工具 + 固定命令面 + 策略门禁（无独立服务端、无常驻进程、无前端） |
 | 运行位置 | 本机 Host；唯一子进程出口 `src/gitee-cli.mjs`（gitee CLI 与 git **共用**：`run()` / `runGit()`，`shell: false`、固定 argv、超时、1 MiB 截断、凭据脱敏都在这一处） |
 | 分层 | 出口（`gitee-cli`）→ 适配器（`gitee-adapter`/`gitee-git`）→ 语义（`gitee-read`/`gitee-actions`/`gitee-review`/`gitee-delivery`/`git-message`）→ 门禁（`gitee-guard`）→ 注册（`gitee-tools`）→ 装配（`index`），另有 `runtime-config`/`gitee-session` |
 | 使用的 seam 或服务 | `tools`（注册）、`policy`（目录 + 审计 + `executeAction`）；不写 `tools` 映射到策略（重复准入与重复审计） |
 | 不修改的核心 | 无；不导入 `forge-devops` 任何源码 |
-| 装配顺序 | 配置校验 → 宿主能力 → 策略 → 读目录自检 → 配置解析（读环境变量）→ runner → gitee adapter / git adapter → guard → session → service → 工具定义 → `provide`（`gitee`/`giteeAdapter`/`giteeGit`）→ 注册 10 个工具 → `effect` 清理 |
+| 装配顺序 | 配置校验 → 宿主能力 → 策略 → 读目录自检 → 配置解析（读环境变量）→ runner → gitee adapter / git adapter → guard → session → service → 工具定义 → `provide`（`gitee`/`giteeAdapter`/`giteeGit`）→ 注册 11 个工具 → `effect` 清理 |
 
 ## 5. 接口与配置
 
@@ -157,7 +157,7 @@
 
 `gh` 习惯把令牌写进自己的配置目录。r10 起默认不再因此拒绝执行（企业里该文件常常只读且没有可用环境变量，阻断会把"本来能用的环境"变成不可用）：默认 `warn` 只提示并从执行环境剥离令牌，合规场景把 `persistentToken` 设为 `block` 恢复硬拒绝。
 
-策略目录：补丁层预置 **5 条 `kind: read`（本包 3 读 + 1 只读判定 + 1 条 devops 的 `change.read`，与 devops 补丁层逐字相同）、0 条 write**，对应工具面 **10 个 = 3 读 + 1 只读判定 + 4 受控写 + 2 git**。本包四条是读动作 `gitee.repository.read`/`gitee.issue.read`/`gitee.pr.read`（`target` 分别为 `repository`/`issue`/`pull-request`）与 `gitee.delivery.judge`：后者只判定不执行，`target` 逐字 `change`，`egress: 'allow'` 为必需项——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 时编译成默认 `confirm`，无审批台账即永远拿不到 `done`；`kind: read` 让它不进审批台账，判定返回体 `executed` 恒 `false`、`remote_calls` 恒 `0`。第 5 条 `change.read` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**：目录是并集，装谁都不缺自己那条。
+策略目录：补丁层预置 **5 条 `kind: read`（本包 3 读 + 1 只读判定 + 1 条 devops 的 `change.read`，与 devops 补丁层逐字相同）、0 条 write**，对应工具面 **11 个 = 3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git**。版本快照 `forge_gitee_delivery_snapshot` 是本地只读动作、不进策略目录（它只读工作区版本，不碰远端也不写文件），因此不改变上面的读目录条数。本包四条是读动作 `gitee.repository.read`/`gitee.issue.read`/`gitee.pr.read`（`target` 分别为 `repository`/`issue`/`pull-request`）与 `gitee.delivery.judge`：后者只判定不执行，`target` 逐字 `change`，`egress: 'allow'` 为必需项——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 时编译成默认 `confirm`，无审批台账即永远拿不到 `done`；`kind: read` 让它不进审批台账，判定返回体 `executed` 恒 `false`、`remote_calls` 恒 `0`。第 5 条 `change.read` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**：目录是并集，装谁都不缺自己那条。
 
 **五个**受控写（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record`、`gitee.git.push`）靠"不登记"实现默认禁用：未登记即 `denied`（`unregistered-action`）且适配器 0 次调用。开写须由所属 profile 显式追加动作，写/确认类还需审批台账条目；默认分发层不替任何人预置授权。`gitee.git.push` 是唯一新增动作，进 `CONFIRM_REQUIRED_ACTIONS`——远端写一律要 `confirm{repo,object}` 逐字匹配。
 
@@ -169,7 +169,7 @@
 
 ```mermaid
 flowchart LR
-  A[模型请求] --> B{工具名在 10 个之内}
+  A[模型请求] --> B{工具名在 11 个之内}
   B -->|否| C[不存在该工具]
   B -->|是| D{策略目录已登记且启用}
   D -->|否| E[denied: unregistered/disabled]
@@ -241,7 +241,7 @@ flowchart LR
 
 | 形态 | 结果 | 建议 |
 |---|---|---|
-| 只装一个 | 6 条并集目录 + 自己的插件行；本包工具 10 个，目录里除自己四条外还有两条 devops 的变更读（多几条读不会放行任何写） | **推荐** |
+| 只装一个 | 6 条并集目录 + 自己的插件行；本包工具 11 个，目录里除自己四条外还有两条 devops 的变更读（多几条读不会放行任何写） | **推荐** |
 | 同 profile 叠加两层（默认） | 两行同 `id`，loader 留下**唯一**一个策略实例；两处目录逐字相同，幸存者不取决于装配顺序；14 个工具全枚举、0 行激活失败 | **默认可行**（不改配置） |
 | 单边改过目录再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按未登记 `GITEE_ACTION_UNREGISTERED` fail closed，先挂载方工具仍在 | 不采用（门禁会红） |
 | 想回到 r4 的隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
