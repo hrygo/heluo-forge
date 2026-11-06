@@ -155,7 +155,7 @@ test('every read path works on every delivered platform-arch', async (t) => {
     const platformProvider = createKeychainProvider(backendFor(platform, arch, directory), { service: 'heluo-forge', accountPrefix: 'iam' });
     await platformProvider.modifyRecord(SESSION_RECORD_KEY, async () => seeded);
     const service = createIamService(config, { credentials: platformProvider });
-    await service.syncFromStore?.();
+    await service.syncFromStore();
     const sessionRead = service.getSession();
     assert.equal(sessionRead.signedIn, true, `${platform}-${arch} getSession`);
     assert.equal(sessionRead.principal.subject, 'E1001', `${platform}-${arch} getSession principal`);

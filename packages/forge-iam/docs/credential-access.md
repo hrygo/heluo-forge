@@ -116,6 +116,8 @@ curl -s -X POST http://127.0.0.1:49196/api/forge-iam/token \
   -H 'x-forge-iam-request: 1'
 ```
 
+存储后端按平台解析：Windows/Linux 用 `@napi-rs/keyring` 原生 addon（未取证时组合层与 CLI 都拒绝，`HELUO_FORGE_ALLOW_UNVETTED=1` 仅限本地验证），macOS 用应用层加密文档，不经过 `unvetted` 开关。CLI 默认走与插件相同的 `createPlatformBackend()`；`HELUO_FORGE_CREDENTIALS_FILE` 只是显式开发用明文覆盖。
+
 两点说明：
 
 - 这两个接口走 DSH 自己的浏览器鉴权，**普通终端进程进不来**（没有那个凭据）。所以命令行工具请走 §3.1。
