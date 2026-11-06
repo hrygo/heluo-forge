@@ -44,7 +44,7 @@ jobs:
   # maintainer's machines (arm64 local/SSH); the encrypted store has no CI
   # runner dependency.
   device-matrix:
-    name: device ${{ matrix.name }}
+    name: credentials compatibility (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
@@ -121,7 +121,7 @@ jobs:
   # availability, port reuse and shutdown). This job runs just that test file on
   # Windows; the full suite stays on the required verify job.
   forge-iam-callback:
-    name: forge-iam callback (${{ matrix.os }})
+    name: forge-iam callback port (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
