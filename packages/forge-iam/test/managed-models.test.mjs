@@ -212,16 +212,50 @@ test('transport authentication failure differs from IAM logout and does not repl
 });
 
 test('a rejected request is not reported as an unreachable gateway', async t => {
+  // The status sits in a different place per SDK: plain `status`, an AI SDK
+  // `statusCode`, a response object, or one level deeper after a transport retry.
+  const shapes = status => [
+    { status },
+    { statusCode: status },
+    { response: { status } },
+    { cause: { statusCode: status } },
+  ];
   for (const [status, code] of [[400, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], [404, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], [429, 'ENTERPRISE_GATEWAY_RATE_LIMIT'], [503, 'ENTERPRISE_GATEWAY_UNAVAILABLE']]) {
+    for (const shape of shapes(status)) {
+      const f = fixture({
+        createAdapter: async () => ({
+          async *stream() { throw Object.assign(new Error('private-body'), shape); }
+        })
+      });
+      t.after(() => f.runtime.dispose()); await f.runtime.ready;
+      const result = await chunks(f.adapter.stream(options));
+      assert.equal(result.at(-1).reason.failure.code, code, JSON.stringify(shape));
+      assert.equal(JSON.stringify(result).includes('private-body'), false);
+    }
+  }
+});
+
+test('a rate limit reported as an error code is not reported as an unreachable gateway', async t => {
+  const f = fixture({
+    createAdapter: async () => ({
+      async *stream() { throw Object.assign(new Error('private-body'), { code: 'RATE_LIMIT' }); }
+    })
+  });
+  t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  const result = await chunks(f.adapter.stream(options));
+  assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_RATE_LIMIT');
+});
+
+test('an unreachable gateway is still reported when no status can be read', async t => {
+  for (const shape of [{}, { status: 'not-a-number' }, { cause: {} }]) {
     const f = fixture({
       createAdapter: async () => ({
-        async *stream() { throw Object.assign(new Error('private-body'), { status }); }
+        async *stream() { throw Object.assign(new Error('private-body'), shape); }
       })
     });
     t.after(() => f.runtime.dispose()); await f.runtime.ready;
     const result = await chunks(f.adapter.stream(options));
-    assert.equal(result.at(-1).reason.failure.code, code);
-    assert.equal(JSON.stringify(result).includes('private-body'), false);
+    assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE', JSON.stringify(shape));
   }
 });
 
