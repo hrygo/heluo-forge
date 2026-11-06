@@ -70,6 +70,8 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
+      - name: Link workspace packages
+        run: node scripts/link-workspace.mjs
       - name: Assert the runner is the expected platform-arch
         run: >-
           node -e "const [p,a]=process.argv.slice(1);
