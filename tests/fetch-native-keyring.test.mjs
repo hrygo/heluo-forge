@@ -62,6 +62,12 @@ for (const [label, mutate, expected] of [
   });
 }
 
+test('staging rejects a missing staging directory', (t) => {
+  const layout = staging(t);
+  rmSync(layout.root, { recursive: true, force: true });
+  assert.match(verifyStagedLayout(layout).join('; '), /staging directory is missing/u);
+});
+
 test('staging rejects an arch directory the manifest does not deliver', (t) => {
   const layout = staging(t, { triples: ['win32-arm64-msvc'] });
   assert.match(verifyStagedLayout(layout).join('; '), /win32-arm64-msvc\/: unknown target directory/u);

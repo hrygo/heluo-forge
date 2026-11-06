@@ -26,6 +26,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { npmExecutable } from './lib/bundle-rules.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = join(repo, 'scripts/native-keyring.json');
@@ -68,6 +69,7 @@ function selectedTargets() {
 export function verifyStagedLayout({ root, targets, checksums }) {
   const problems = [];
   const recorded = checksums.files ?? {};
+  if (!existsSync(root)) return [`${root}: staging directory is missing`];
   const claimed = new Set();
   for (const target of targets) {
     const addonRelative = `${target.triple}/keyring.node`;
@@ -113,7 +115,7 @@ function verifyStaged(targets) {
 
 function packSignedSource(target, workDir) {
   const spec = `${target.source}@${target.version}`;
-  const stdout = execFileSync('npm', ['pack', spec, '--json', '--pack-destination', workDir, `--registry=${registry}`], {
+  const stdout = execFileSync(npmExecutable(), ['pack', spec, '--json', '--pack-destination', workDir, `--registry=${registry}`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });

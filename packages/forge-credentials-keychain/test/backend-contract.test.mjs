@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createFileBackend, createMemoryBackend } from '../packages/forge-credentials-keychain/src/backend.mjs';
-import { createNativeKeyringBackend } from '../packages/forge-credentials-keychain/src/index.mjs';
-import { outsideRepositoryTmpAsync } from '../packages/forge-credentials-keychain/test/support/tmp.mjs';
+import { createFileBackend, createMemoryBackend } from '../src/backend.mjs';
+import { createNativeKeyringBackend } from '../src/index.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 const KEY = 'heluo-forge/iam/ref/ENTERPRISE_ACCESS_TOKEN';
 const OTHER = 'heluo-forge/iam/ref/ENTERPRISE_STATIC_KEY';

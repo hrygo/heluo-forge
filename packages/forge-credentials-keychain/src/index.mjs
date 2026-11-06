@@ -49,7 +49,7 @@ function warnNonProduction(ctx, backend) {
   const notice = backend?.requiresExplicitOptIn === true
     ? 'credentials: 非生产凭据后端（明文文件）已启用；仅限开发/试点，不得用于生产'
     : backend?.unvetted === true
-      ? 'credentials: 非审核平台适配器已启用；仅限本地实验，不得用于生产'
+      ? 'credentials: 未取证的原生凭据适配器已启用；仅限试点，不得用于生产'
       : backend?.durable === false && backend?.available !== false
         ? 'credentials: 临时内存凭据后端已启用；进程退出即失效'
         : undefined;

@@ -11,6 +11,7 @@
 | 许可 | MIT，随文件附 `LICENSE.third-party.md` |
 | 固定方式 | `scripts/native-keyring.json` 记录版本与 tarball integrity，`CHECKSUMS.json` 记录落地文件的 sha256 |
 | 生成工具 | `scripts/fetch-native-keyring.mjs` |
+| integrity 交叉核对 | 三个 tarball 的 sha512 与 `registry.npmjs.org` 元数据一致（2026-11-06 核对） |
 
 ## 交付映射
 
