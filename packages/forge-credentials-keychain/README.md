@@ -34,6 +34,17 @@
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
 - 生产必须使用 Windows 凭据管理器或麒麟/UOS Secret Service 的审核实现；file backend 与 macOS spike 适配器都不是生产方案。三平台 addon 已随包分发，但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。
 
+## 枚举与边界（依上游源码调研）
+
+依据 `@napi-rs/keyring` 2.1.2 及其锁定的 `keyring-core` 1.0.1、`windows-native-keyring-store` 1.1.0、`dbus-secret-service-keyring-store` 1.0.1 源码：
+
+| 平台 | 写入形态 | 枚举检索键 | account 来源 | 已知失败模式 |
+|---|---|---|---|---|
+| Windows | target 为 `{account}.{service}`，blob 为 UTF-16LE | `CredEnumerateW` 过滤 `*.{service}`，按 target 后缀匹配，也会扫到同后缀的他人条目 | 凭据的 `UserName` | 命中集合里任一凭据 blob 为奇数长或非法 UTF-16 时，整次枚举抛错（`Not a valid utf16 blob`），不返回部分结果 |
+| Linux | Secret Service 条目，属性含 `service`、`username` | 按属性 `service` 搜索 | 属性 `username` | 缺 `username` 属性的条目被上游静默跳过；集合锁定时搜索失败 |
+
+本包据此确定行为：枚举默认关闭；开启后按调用方前缀过滤，并丢弃无法作为 key 的 account（空串、控制字符），不因他人条目失败整个扫描；上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上限：Windows account ≤ 513 字节（UTF-8）、blob ≤ 2560 字节（UTF-16LE）；Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
+
 ## 错误码
 
 | 错误码 | 触发条件 | 是否已写盘 |
@@ -41,8 +52,9 @@
 | `KEYCHAIN_UNAVAILABLE` | 该 platform-arch 无对应 addon、addon 缺失或加载失败、后端整体不可用 | 否 |
 | `KEYCHAIN_UNVETTED_ADAPTER_REFUSED` | 适配器未取证且未显式 `allowUnvettedPlatformAdapter` | 否 |
 | `KEYCHAIN_LIST_UNSUPPORTED` | 枚举未开启，或该平台枚举未验证 | 否 |
-| `KEYCHAIN_VALUE_EMPTY` / `KEYCHAIN_VALUE_TOO_LARGE` | 空值；Windows 超过 2560 B（UTF-16LE 计） | 否 |
-| `KEYCHAIN_KEY_INVALID` | backend key 为空或不合命名空间文法 | 否 |
+| `KEYCHAIN_VALUE_EMPTY` / `KEYCHAIN_VALUE_INVALID` / `KEYCHAIN_VALUE_TOO_LARGE` | 空值；非字符串或含孤立代理项；Windows 超过 2560 B（UTF-16LE 计） | 否 |
+| `KEYCHAIN_KEY_INVALID` | backend key 为空、含控制字符或不合命名空间文法 | 否 |
+| `KEYCHAIN_KEY_TOO_LONG` | Windows account 超过 513 字节（UTF-8） | 否 |
 | `KEYCHAIN_OPERATION_FAILED` | 存储返回非字符串、枚举形状异常、删除后条目仍可读 | 删除分支可能已部分生效 |
 | `KEYCHAIN_EPHEMERAL_REFUSED` / `KEYCHAIN_INSECURE_FILE_REFUSED` | 临时后端或明文文件后端未显式允许 | 否 |
 | `KEYCHAIN_LOCK_TIMEOUT` | 文件后端跨进程锁等待超时 | 否 |

@@ -253,6 +253,17 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 
 若资源导入或平台 API 需改变既有闭包政策，先修改对应设计并评审；不能退回“现场 pnpm 自动装平台包”作为临时发布路线。
 
+### 6.1 上游语义调研
+
+目标机之外可以先确定为事实的部分来自上游源码（`@napi-rs/keyring` 2.1.2 及其锁定版本）：
+
+- **写入形态**：Windows 凭据 target 为 `{account}.{service}`，password 以 UTF-16LE 存入 blob；Linux 为 Secret Service 条目，属性含 `service`、`username`（`windows-native-keyring-store` 1.1.0 `src/cred.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`）。
+- **枚举**：Windows 走 `CredEnumerateW`，过滤串 `*.{service}`，account 取 `UserName`；Linux 按属性 `service` 搜索、account 取 `username`（`keyring-node` 2.1.2 `src/entry.rs`）。Windows 的后缀过滤会带回同后缀的他人条目，Linux 静默跳过缺 `username` 的条目。
+- **上限与编码**：Windows account ≤ 513 字节（UTF-8 计）、blob ≤ 2560 字节（UTF-16LE 计），超限由上游返回 `TooLong`；Linux 无库级上限（`src/utils.rs`）。
+- **失败模式**：Windows 命中集合中任一凭据 blob 奇数长或非法 UTF-16 时，整次枚举抛错且不返回部分结果。
+
+据此在无真机条件下已确定并实现：枚举按调用方前缀过滤、丢弃不可作 key 的 account、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝而非依赖平台报错。仍须目标机确认的只有运行态事实：真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
+
 ## 7. 执行清单、估算与命令
 
 ### 7.1 顺序与交付判据
