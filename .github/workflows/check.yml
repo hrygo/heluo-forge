@@ -40,12 +40,17 @@ jobs:
 
   # Local hook and scanner portability. This job is intentionally separate from
   # the required verify job; make it required only after the matrix is stable.
+  # The matrix keeps only the platforms whose code paths differ: Ubuntu covers
+  # the POSIX branches, Windows covers the win32 branches (8.3 aliases, `icase`
+  # pathspecs, backslash normalisation). macOS ran the same POSIX branches with
+  # the same skips as Ubuntu, so it added no coverage while being the least
+  # reliably provisioned runner.
   sensitive-scan:
     name: sensitive-scan (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        os: [ubuntu-24.04, windows-2022]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     defaults:
