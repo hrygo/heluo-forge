@@ -43,10 +43,11 @@ node '<工具目录>/scripts/sensitive-scan/team-full-install.mjs' --repo '<项�
     ├── team-attest.mjs
     ├── team-commit-msg.mjs
     ├── team-post-rewrite.mjs
-    └── team-pre-push.mjs
+    ├── team-pre-push.mjs
+    └── verify.mjs
 ```
 
-在默认共享 hook 配置下，同一 clone 的 linked worktrees 共用此安装；hook 被 Git 调用时从当前工作树解析实际 common dir 并扫描当前工作树的暂存内容。安装器只核对安装时已有的工作树；新建 worktree 后须在该工作树执行 `git rev-parse --git-path hooks/commit-msg` 和 `git rev-parse --git-path hooks/post-rewrite`，确认实际路径指向已安装的共享 hook。后续的 `includeIf.gitdir`、worktree 专属配置、环境变量或其他 Git 配置覆盖可能让 Git 不调用共享 hook，程序无法强制覆盖这些配置。安装器拒绝相对 `core.hooksPath`，并检查已有工作树是否对两个 hook 都选用同一路径；可使用安全的绝对共享路径。common dir 不得位于任何工作树的普通可跟踪目录，正常的工作树直属 `.git` 元数据目录除外。对于外置 `--separate-git-dir`，若 Git 将元数据目录列为主工作树且存在 linked worktree，安装和运行会因无法确认真实主工作树而失败关闭；需由维护者调整 Git 布局。独立 clone 各需安装；如果不同 clone 共用 `core.hooksPath`，已有不同 hook 会被拒绝，须由维护者协调。安装器不改写未知的 `pre-commit`：若旧入口通过 worktree 私有 git-dir 查找 `dsh-hooks`，应由维护者迁移至 common-dir，不能关闭或绕过原 hook。
+在默认共享 hook 配置下，同一 clone 的 linked worktrees 共用此安装；hook 被 Git 调用时从当前工作树解析实际 common dir 并扫描当前工作树的暂存内容。安装器只核对安装时已有的工作树；新建 worktree 后须在该工作树执行 `git rev-parse --git-path hooks/commit-msg` 和 `git rev-parse --git-path hooks/post-rewrite`，确认实际路径指向已安装的共享 hook。后续的 `includeIf.gitdir`、worktree 专属配置、环境变量或其他 Git 配置覆盖可能让 Git 不调用共享 hook，程序无法强制覆盖这些配置。安装器拒绝相对 `core.hooksPath`，并检查已有工作树是否对三个 hook 都选用同一路径；可使用安全的绝对共享路径。common dir 不得位于任何工作树的普通可跟踪目录，正常的工作树直属 `.git` 元数据目录除外。对于外置 `--separate-git-dir`，若 Git 将元数据目录列为主工作树且存在 linked worktree，安装和运行会因无法确认真实主工作树而失败关闭；需由维护者调整 Git 布局。独立 clone 各需安装；如果不同 clone 共用 `core.hooksPath`，已有不同 hook 会被拒绝，须由维护者协调。安装器不改写未知的 `pre-commit`：若旧入口通过 worktree 私有 git-dir 查找 `dsh-hooks`，应由维护者迁移至 common-dir，不能关闭或绕过原 hook。
 
 若已有不同的密钥、规则或 hook，常规安装停止且不覆盖；完全相同且权限安全的配置可重复安装。此前安装过完整包 v1 的成员需要使用新版完整包升级，见下节；不要自行覆盖已有脚本或未知 hook，也不要替换密钥和规则。旧 `sensitive:scan` / `sensitive:install` 使用不同的规则格式和路径，属于 legacy v1，不能满足团队 v2 远端验签；旧安装器拒绝覆盖团队 hook。可通过 `SENSITIVE_SCAN_KEY_FILE`、`SENSITIVE_SCAN_RULES` 指定对应文件；这两个环境变量必须使用绝对路径，并且同时对安装器、Git 和图形 Git 客户端生效。`XDG_CONFIG_HOME` 不改变此完整包的默认位置。目标仓库内的覆盖路径同样必须被忽略且未跟踪，不能经过符号链接或不安全目录；不得放在其他 Git 工作树中。Windows 原生 Node 需使用 Windows 原生路径。
 
@@ -68,7 +69,7 @@ macOS / Linux / 银河麒麟：
 node '<工具目录>/scripts/sensitive-scan/team-full-install.mjs' --repo '<项目仓库>' --upgrade-known-v1
 ```
 
-此显式升级仅接受完整的已知旧版安装（完整包 v1 或此前发布的版本），或中断后由已知旧版与新版包中完全一致的程序组成的混合状态；已有 hook、私钥和规则必须与安装包匹配。旧版没有的文件（如 `team-guard.mjs`、`team-post-rewrite.mjs`）按新增文件写入，不视为安装不完整。安装器将发生变化的公开源码备份到 Git common dir 内 `heluo-sensitive-scan/backups/`，再逐个原子替换程序；不覆盖规则、私钥或未知 hook。安装器把该仓库的 `pull.rebase` 置为 `true`（已有显式设置不改），使 `git pull` 只做 rebase，配合 `post-rewrite` 自动重签，避免分支上出现无法签名的合并提交。升级同时安装新增的 `post-rewrite` 和 `pre-push` hook；这些路径已有不同 hook 时安装停止且不改动任何文件。既有钩子若只是记录的解释器路径不同（换过 Node 版本或工具链），升级会改写为当前解释器，其余内容必须完全一致。替换不是整体事务，中断后先暂停提交，再使用相同命令重试；若检查失败，联系维护者检查备份，不要强行覆盖。旧 v1 签名会被 v2 远端验签拒绝；升级后按下节检查 v2 trailer，已签名的在途 v1 提交须重新扫描和签名。
+此显式升级仅接受完整的已知旧版安装（完整包 v1 或此前发布的版本），或中断后由已知旧版与新版包中完全一致的程序组成的混合状态；已有 hook、私钥和规则必须与安装包匹配。旧版没有的文件（如 `team-guard.mjs`、`team-post-rewrite.mjs`、`team-pre-push.mjs`、`verify.mjs`）按新增文件写入，不视为安装不完整。`verify.mjs` 随钩子一并安装，`pre-push` 直接调用它做推送前校验。安装器将发生变化的公开源码备份到 Git common dir 内 `heluo-sensitive-scan/backups/`，再逐个原子替换程序；不覆盖规则、私钥或未知 hook。安装器把该仓库的 `pull.rebase` 置为 `true`（已有显式设置不改），使 `git pull` 只做 rebase，配合 `post-rewrite` 自动重签，避免分支上出现无法签名的合并提交。升级同时安装新增的 `post-rewrite` 和 `pre-push` hook；这些路径已有不同 hook 时安装停止且不改动任何文件。既有钩子若只是记录的解释器路径不同（换过 Node 版本或工具链），升级会改写为当前解释器，其余内容必须完全一致。替换不是整体事务，中断后先暂停提交，再使用相同命令重试；若检查失败，联系维护者检查备份，不要强行覆盖。旧 v1 签名会被 v2 远端验签拒绝；升级后按下节检查 v2 trailer，已签名的在途 v1 提交须重新扫描和签名。
 
 ## 安装完成后
 

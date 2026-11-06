@@ -27,7 +27,7 @@ function setup() {
   const privateDir = join(pkg, 'private');
   const publicDir = join(pkg, '.github/sensitive-scan');
   for (const d of [repo, scriptDir, privateDir, publicDir]) mkdirSync(d, { recursive: true });
-  for (const f of ['lib.mjs', 'team-full-install.mjs', 'team-scan.mjs', 'team-commit-msg.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs', 'team-pre-push.mjs']) cpSync(join(SOURCE, f), join(scriptDir, f));
+  for (const f of ['lib.mjs', 'team-full-install.mjs', 'team-scan.mjs', 'team-commit-msg.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs', 'team-pre-push.mjs', 'verify.mjs']) cpSync(join(SOURCE, f), join(scriptDir, f));
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const key = privateKey.export({ type: 'pkcs8', format: 'pem' });
   const pub = publicKey.export({ type: 'spki', format: 'pem' });
@@ -92,6 +92,27 @@ test('installer makes rebase the default pull strategy and keeps an explicit cho
     assert.equal(g.install().status, 0);
     assert.equal(ok('git', ['config', '--local', '--get', 'pull.rebase'], { cwd: g.repo, env: g.env }), 'false');
   } finally { rmSync(g.dir, { recursive: true, force: true }); }
+});
+
+test('installed pre-push hook refuses an unsigned branch before it leaves the machine', () => {
+  const f = setup();
+  try {
+    assert.equal(f.install().status, 0);
+    const remote = join(f.dir, 'remote.git');
+    ok('git', ['init', '-q', '--bare', remote]);
+    ok('git', ['checkout', '-qb', 'topic'], { cwd: f.repo, env: f.env });
+    writeFileSync(join(f.repo, 'signed.txt'), 'fine\n');
+    ok('git', ['add', 'signed.txt'], { cwd: f.repo, env: f.env });
+    ok('git', ['commit', '-qm', 'signed work'], { cwd: f.repo, env: f.env });
+    ok('git', ['push', '-q', remote, 'topic'], { cwd: f.repo, env: f.env });
+    writeFileSync(join(f.repo, 'unsigned.txt'), 'fine\n');
+    ok('git', ['add', 'unsigned.txt'], { cwd: f.repo, env: f.env });
+    ok('git', ['commit', '--no-verify', '-qm', 'unsigned work'], { cwd: f.repo, env: f.env });
+    const push = run('git', ['push', remote, 'topic'], { cwd: f.repo, env: f.env });
+    assert.notEqual(push.status, 0);
+    assert.match(push.stderr, /push blocked/u);
+    assert.match(push.stderr, /missing Sensitive-Scan trailer/u);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test('installed post-rewrite hook re-signs a rebased branch', () => {
