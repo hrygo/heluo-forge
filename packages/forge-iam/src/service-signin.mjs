@@ -18,7 +18,7 @@ import { transition } from './state.mjs';
 export function createSignIn(env) {
   const {
     config, configured, ctx, provider, grants, gateway, token, now, fetchImpl,
-    isSigningOut, getAuthEpoch, bumpAuthEpoch, clearObservation,
+    awaitCallbackReady, isSigningOut, getAuthEpoch, bumpAuthEpoch, clearObservation,
     getSignInPromise, setSignInPromise, invalidateConsumption, beginConsumption, adoptConsumption,
   } = env;
 
@@ -103,6 +103,14 @@ export function createSignIn(env) {
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     if (getAuthEpoch() !== startEpoch || isSigningOut()) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
     if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
+    // A fixed callback port must be bound before its URL leaves the Host. The
+    // binding above is already frozen; a failed bind resolves here and
+    // redirectUri() refuses. Every await re-checks the same guards.
+    await awaitCallbackReady?.();
+    if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+    if (getAuthEpoch() !== startEpoch || isSigningOut()) {
+      throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+    }
     if (!transition(ctx.state, 'SIGN_IN').ok) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
     const oauthState = randomToken(32);
     const nonce = randomToken(32);

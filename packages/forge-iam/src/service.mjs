@@ -188,6 +188,7 @@ export function createIamService(rawConfig, options = {}) {
     token,
     now,
     fetchImpl,
+    awaitCallbackReady: options.getCallbackReady,
     isSigningOut: () => signout.signingOut,
     getAuthEpoch: () => authEpoch,
     bumpAuthEpoch: () => { authEpoch += 1; },
