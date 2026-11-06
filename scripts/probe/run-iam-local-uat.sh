@@ -3,6 +3,7 @@
 # IAM_UAT_SMOKE=1 starts the same stack, waits for /health, prints SMOKE OK and
 # exits; it is the non-interactive check that the harness still matches HEAD.
 set -eu
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { printf '需在仓库内运行（脚本用 git archive HEAD 打包）\n' >&2; exit 2; }
 for tool in node npm python3 git tar; do
   command -v "$tool" >/dev/null 2>&1 || { printf '缺少 %s，无法启动本地 UAT\n' "$tool" >&2; exit 2; }
 done
@@ -99,6 +100,7 @@ server.listen(entryPort, '127.0.0.1', () => {
       if (Date.now() > deadline) {
         clearInterval(timer);
         console.error('SMOKE TIMEOUT：宿主未在 120 秒内就绪');
+        server.close();
         child.kill('SIGTERM');
         await mock.close();
         process.exit(1);
