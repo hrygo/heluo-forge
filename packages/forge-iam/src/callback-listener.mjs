@@ -184,17 +184,20 @@ export function startCallbackListener({ port = 0, address = '127.0.0.1', path, h
  * response being written must still reach the browser. `close()` cuts it and is
  * only used on teardown.
  *
- * With `address: 'auto'` the IPv4 loopback is tried first, then IPv6, and only
- * an unavailable address family justifies the second try.
+ * The default is `auto`: the IPv4 loopback is always tried first, because that
+ * is the prefix IAM registers, and IPv6 is only tried when the IPv4 loopback
+ * does not exist on this host. Both IPv6 options need IAM to register
+ * `http://[::1]` as well.
  *
  * @param {{
  *   port?: number,
  *   address?: 'auto' | '127.0.0.1' | '::1',
  *   path: string,
  *   handler: (req: object, res: object) => unknown,
+ *   startListener?: typeof startCallbackListener,
  * }} input
  */
-export function createCallbackManager({ port = 0, address = 'auto', path, handler } = {}) {
+export function createCallbackManager({ port = 0, address = 'auto', path, handler, startListener = startCallbackListener } = {}) {
   const candidates = address === 'auto' ? ['127.0.0.1', '::1'] : [address];
   let listener;
   let chain = Promise.resolve();
@@ -202,7 +205,7 @@ export function createCallbackManager({ port = 0, address = 'auto', path, handle
   async function bind() {
     let failure;
     for (const candidate of candidates) {
-      const attempt = startCallbackListener({ port, address: candidate, path, handler });
+      const attempt = startListener({ port, address: candidate, path, handler });
       const outcome = await attempt.ready;
       if (!outcome) {
         listener = attempt;
