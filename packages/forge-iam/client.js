@@ -2017,7 +2017,7 @@ window.__ModuleLoader__.load({
       const { h, item, actions } = ctx;
       const { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view } = item;
       const {
-        toggleModelExpand, updateOptionField, resetModelOption, disableModelOption,
+        toggleModelExpand, updateOptionField, commitOptionField, commitOptionFieldOnBlur, resetModelOption, disableModelOption,
         enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions,
       } = actions;
 
@@ -2122,6 +2122,7 @@ window.__ModuleLoader__.load({
                   value: opt.name ?? '',
                   'aria-label': `显示名称 ${idx + 1}`,
                   onChange: (e) => updateOptionField(model.id, 'name', e.target.value),
+                  onBlur: (e) => commitOptionFieldOnBlur(model.id, 'name', e.target.value),
                 }),
               ),
             ),
@@ -2143,6 +2144,7 @@ window.__ModuleLoader__.load({
                   value: opt.contextWindow ?? '',
                   'aria-label': `上下文窗口 ${idx + 1}`,
                   onChange: (e) => updateOptionField(model.id, 'contextWindow', e.target.value),
+                  onBlur: (e) => commitOptionFieldOnBlur(model.id, 'contextWindow', e.target.value),
                 }),
                 h('div', { className: 'fiam-capacity-presets' },
                   ...['64K', '128K', '200K', '256K', '1M'].map(preset => {
@@ -2153,7 +2155,7 @@ window.__ModuleLoader__.load({
                       className: `fiam-preset-pill ${active ? 'fiam-preset-pill-active' : ''}`,
                       'aria-label': `上下文预设 ${preset} ${idx + 1}`,
                       title: `预设上下文规格：${preset}${preset === defaultContextStr ? '（推荐默认）' : ''}`,
-                      onClick: () => updateOptionField(model.id, 'contextWindow', preset === defaultContextStr ? undefined : preset),
+                      onClick: () => commitOptionField(model.id, 'contextWindow', preset === defaultContextStr ? undefined : preset),
                     }, preset);
                   })
                 ),
@@ -2175,6 +2177,7 @@ window.__ModuleLoader__.load({
                   value: opt.maxTokens ?? '',
                   'aria-label': `最大输出 Token ${idx + 1}`,
                   onChange: (e) => updateOptionField(model.id, 'maxTokens', e.target.value),
+                  onBlur: (e) => commitOptionFieldOnBlur(model.id, 'maxTokens', e.target.value),
                 }),
                 h('div', { className: 'fiam-capacity-presets' },
                   ...['8K', '16K', '32K', '64K', '128K'].map(preset => {
@@ -2185,7 +2188,7 @@ window.__ModuleLoader__.load({
                       className: `fiam-preset-pill ${active ? 'fiam-preset-pill-active' : ''}`,
                       'aria-label': `输出上限预设 ${preset} ${idx + 1}`,
                       title: `预设最大输出：${preset}${preset === defaultMaxTokensStr ? '（推荐默认）' : ''}`,
-                      onClick: () => updateOptionField(model.id, 'maxTokens', preset === defaultMaxTokensStr ? undefined : preset),
+                      onClick: () => commitOptionField(model.id, 'maxTokens', preset === defaultMaxTokensStr ? undefined : preset),
                     }, preset);
                   })
                 ),
@@ -2209,7 +2212,7 @@ window.__ModuleLoader__.load({
                     onChange: (e) => {
                       const checked = e.target.checked;
                       const next = checked ? ['text', 'image'] : ['text'];
-                      updateOptionField(model.id, 'inputModalities', next);
+                      return commitOptionField(model.id, 'inputModalities', next);
                     },
                   }),
                   h('span', null, '图片附件 (Vision / Image)')
@@ -2232,13 +2235,12 @@ window.__ModuleLoader__.load({
                       const nextLower = e.target.value;
                       const currentUpper = reasoningBounds.enabled ? reasoningBounds.upper : nextLower;
                       if (nextLower === 'off' && currentUpper === 'off') {
-                        updateOptionField(model.id, 'reasoningEfforts', { off: 'off' });
-                        return;
+                        return commitOptionField(model.id, 'reasoningEfforts', { off: 'off' });
                       }
                       const lowerIdx = THINKING_LEVELS.indexOf(nextLower);
                       const upperIdx = THINKING_LEVELS.indexOf(currentUpper);
                       const resolvedUpper = upperIdx >= lowerIdx ? currentUpper : nextLower;
-                      updateOptionField(model.id, 'reasoningEfforts', buildReasoningEffortRange(nextLower, resolvedUpper));
+                      return commitOptionField(model.id, 'reasoningEfforts', buildReasoningEffortRange(nextLower, resolvedUpper));
                     },
                   },
                     ...THINKING_LEVELS.map(lv => h('option', { key: lv, value: lv }, REASONING_LEVEL_LABELS[lv])),
@@ -2253,14 +2255,13 @@ window.__ModuleLoader__.load({
                     onChange: (e) => {
                       const nextUpper = e.target.value;
                       if (nextUpper === 'off') {
-                        updateOptionField(model.id, 'reasoningEfforts', { off: 'off' });
-                        return;
+                        return commitOptionField(model.id, 'reasoningEfforts', { off: 'off' });
                       }
                       const currentLower = reasoningBounds.enabled ? reasoningBounds.lower : nextUpper;
                       const lowerIdx = THINKING_LEVELS.indexOf(currentLower);
                       const upperIdx = THINKING_LEVELS.indexOf(nextUpper);
                       const resolvedLower = lowerIdx >= 0 && lowerIdx <= upperIdx ? currentLower : nextUpper;
-                      updateOptionField(model.id, 'reasoningEfforts', buildReasoningEffortRange(resolvedLower, nextUpper));
+                      return commitOptionField(model.id, 'reasoningEfforts', buildReasoningEffortRange(resolvedLower, nextUpper));
                     },
                   },
                     ...THINKING_LEVELS.map(lv => h('option', { key: lv, value: lv }, REASONING_LEVEL_LABELS[lv])),
@@ -2277,7 +2278,7 @@ window.__ModuleLoader__.load({
                 reasoningBounds.enabled ? h('button', {
                   type: 'button',
                   style: { ...secondaryButton, height: 22, minHeight: 22, padding: '0 8px', fontSize: 11 },
-                  onClick: () => updateOptionField(model.id, 'reasoningEfforts', { off: 'off' }),
+                  onClick: () => commitOptionField(model.id, 'reasoningEfforts', { off: 'off' }),
                 }, '关闭推理') : null,
               ),
             ),
@@ -2457,6 +2458,7 @@ window.__ModuleLoader__.load({
       } = model;
       const {
         changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
+        commitField: commitOptionField, commitFieldOnBlur: commitOptionFieldOnBlur,
         resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
         enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
         disableWithSave: disableModelWithSave,
@@ -2686,7 +2688,7 @@ window.__ModuleLoader__.load({
                   h,
                   item: { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view },
                   actions: {
-                    toggleModelExpand, updateOptionField, resetModelOption, disableModelOption,
+                    toggleModelExpand, updateOptionField, commitOptionField, commitOptionFieldOnBlur, resetModelOption, disableModelOption,
                     enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions,
                   },
                 });
@@ -2773,6 +2775,13 @@ window.__ModuleLoader__.load({
       const [modelSaving, setModelSaving] = React.useState(false);
       const [modelNotice, setModelNotice] = React.useState(null);
       const lastSyncedOptions = React.useRef(initialModelOptions);
+      // 草稿的最新值：事件回调里读它，避免闭包里拿到上一帧的状态。
+      const optionsRef = React.useRef(initialModelOptions);
+      // 串行队列：一次 PUT 提交整份启用集，后改的不能被先到的应答覆盖。
+      const saveQueue = React.useRef({ busy: false, next: null });
+      React.useEffect(() => { optionsRef.current = modelOptions; }, [modelOptions]);
+      // 事件回调可能先于 effect 触发，写入时同步刷新镜像。
+      const applyModelOptions = (next) => { optionsRef.current = next; setModelOptions(next); };
       const toolbarRef = React.useRef(null);
       // 与 Panel 的判定同式：做过期的应答不得回写视图。
       const isCurrentEpoch = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
@@ -2829,38 +2838,65 @@ window.__ModuleLoader__.load({
         setExpandedModels(prev => ({ ...prev, [id]: !prev[id] }));
       };
 
+      const withOptionField = (options, id, field, value) => {
+        const modelOpt = { ...(options[id] || {}) };
+        if (value === undefined || value === '') {
+          delete modelOpt[field];
+        } else {
+          modelOpt[field] = value;
+        }
+        return { ...options, [id]: modelOpt };
+      };
+
+      // 文本输入只改草稿，失焦时才提交：逐字保存会把一次输入拆成十几个请求。
       const updateOptionField = (id, field, value) => {
-        setModelOptions(prev => {
-          const modelOpt = { ...(prev[id] || {}) };
-          if (value === undefined || value === '') {
-            delete modelOpt[field];
-          } else {
-            modelOpt[field] = value;
-          }
-          return { ...prev, [id]: modelOpt };
-        });
+        applyModelOptions(withOptionField(optionsRef.current, id, field, value));
+      };
+
+      // 离散控件（预设、勾选、档位）一次选定即提交，不需要再点保存。
+      const commitOptionField = (id, field, value) => {
+        const next = withOptionField(optionsRef.current, id, field, value);
+        applyModelOptions(next);
+        return persistModelOptions(next, '模型配置已自动保存并生效。');
+      };
+
+      // 失焦提交：值没变就不发请求，避免点进点出各写一次。
+      const commitOptionFieldOnBlur = (id, field, value) => {
+        const next = withOptionField(optionsRef.current, id, field, value);
+        if ((next[id]?.[field] ?? undefined) === (lastSyncedOptions.current?.[id]?.[field] ?? undefined)) return;
+        applyModelOptions(next);
+        return persistModelOptions(next, '模型配置已自动保存并生效。');
       };
 
       // Clearing the overrides must not disable the model: it stays enabled with
       // catalogue defaults, so "back to defaults" never silently breaks a chat.
       const resetModelOption = (id) => {
-        setModelOptions(prev => ({ ...prev, [id]: {} }));
-        setModelNotice(`已恢复 ${id} 的默认参数（仍启用），保存后生效。`);
+        const next = { ...optionsRef.current, [id]: {} };
+        applyModelOptions(next);
+        return persistModelOptions(next, `已恢复 ${id} 的默认参数（仍启用）。`);
       };
 
       const enableModelOption = (id) => {
-        setModelOptions(prev => (Object.hasOwn(prev, id) ? prev : { ...prev, [id]: {} }));
-        setModelNotice(`已启用 ${id}，保存后可用于对话。`);
+        if (Object.hasOwn(optionsRef.current, id)) return;
+        const next = { ...optionsRef.current, [id]: {} };
+        applyModelOptions(next);
+        return persistModelOptions(next, `已启用 ${id}。`);
       };
 
       const disableModelOption = (id) => {
-        setModelOptions(prev => {
-          if (!Object.hasOwn(prev, id)) return prev;
-          const next = { ...prev };
-          delete next[id];
-          return next;
-        });
-        setModelNotice(`已停用 ${id}，保存后不再出现在模型选择中。`);
+        const current = optionsRef.current;
+        if (!Object.hasOwn(current, id)) return;
+        const next = { ...current };
+        delete next[id];
+        const remaining = Object.keys(next).length;
+        const wasDefault = view?.modelAccess?.defaultModelId === id;
+        const notice = remaining === 0
+          ? `已停用 ${id}，当前没有已启用模型，新对话将无法选择企业模型（可随时一键启用）。`
+          : wasDefault
+            ? `已停用 ${id}，默认模型已自动切换到其他已启用模型。`
+            : `已停用 ${id}。`;
+        applyModelOptions(next);
+        return persistModelOptions(next, notice);
       };
 
       // 面板里的「停用模型」只改草稿，必须再点保存才生效。列表行上的「停用」没有面板可展开，
@@ -2886,19 +2922,21 @@ window.__ModuleLoader__.load({
             : dirty
               ? `已停用 ${id}，其他未保存的修改一并生效。`
               : `已停用 ${id} 并生效。`;
-        setModelOptions(nextOptions);
+        applyModelOptions(nextOptions);
         await persistModelOptions(nextOptions, notice);
       };
 
       const discardModelChanges = () => {
-        setModelOptions(lastSyncedOptions.current);
+        applyModelOptions(lastSyncedOptions.current);
         setModelNotice('已放弃未保存的模型配置修改。');
       };
 
-      const persistModelOptions = async (nextOptions, successMessage = '模型精细化配置已保存并生效。') => {
-        if (viewBarrier.current.pending || modelSaving) return;
-        setModelSaving(true);
-        setModelNotice(null);
+      // 一份 PUT 只提交整份启用集；队列保证「后改的」不会被「先发的」应答覆盖。
+      const sendModelOptions = async (nextOptions, successMessage) => {
+        if (viewBarrier.current.pending) {
+          setModelNotice('登录状态已变化，本次模型配置未保存；刷新后请重新设置。');
+          return;
+        }
         try {
           writeModelOptions(nextOptions);
           const result = await putJson('/api/forge-iam/models', { options: nextOptions });
@@ -2916,18 +2954,43 @@ window.__ModuleLoader__.load({
           }
         } catch {
           setModelNotice('暂时无法连接服务，配置已保存在本地。');
-        } finally {
-          setModelSaving(false);
         }
       };
 
+      const persistModelOptions = (nextOptions, successMessage = '模型精细化配置已保存并生效。') => {
+        const queue = saveQueue.current;
+        let settle;
+        const job = { options: nextOptions, message: successMessage, done: new Promise(resolve => { settle = resolve; }) };
+        // 被后来者覆盖的旧任务视为已完成，等待它的一方不会挂住。
+        if (queue.next) queue.next.settle();
+        job.settle = settle;
+        queue.next = job;
+        if (queue.busy) return job.done;
+        queue.busy = true;
+        setModelSaving(true);
+        void (async () => {
+          try {
+            while (queue.next) {
+              const current = queue.next;
+              queue.next = null;
+              await sendModelOptions(current.options, current.message);
+              current.settle();
+            }
+          } finally {
+            queue.busy = false;
+            setModelSaving(false);
+          }
+        })();
+        return job.done;
+      };
+
       const saveModelOptions = async () => {
-        await persistModelOptions(modelOptions, '模型精细化配置已保存并生效。');
+        await persistModelOptions(optionsRef.current, '模型精细化配置已保存并生效。');
       };
 
       const enableModelWithDefaults = async (id) => {
         const nextOptions = { ...modelOptions, [id]: {} };
-        setModelOptions(nextOptions);
+        applyModelOptions(nextOptions);
         await persistModelOptions(nextOptions, `已采用默认参数启用 ${id} 并生效。`);
       };
 
@@ -2939,7 +3002,7 @@ window.__ModuleLoader__.load({
             nextOptions[m.id] = {};
           }
         }
-        setModelOptions(nextOptions);
+        applyModelOptions(nextOptions);
         await persistModelOptions(nextOptions, `已采用默认参数启用全部 ${currentModels.length} 个模型并生效。`);
       };
       const optionsSync = React.useRef({ signature: null });
@@ -2949,7 +3012,7 @@ window.__ModuleLoader__.load({
         if (!deriveSessionUi(nextView).ready) {
           optionsSync.current.signature = null;
           lastSyncedOptions.current = {};
-          setModelOptions({});
+          applyModelOptions({});
           return;
         }
         if (!catalogue.ready || !access.modelOptions || typeof access.modelOptions !== 'object' || Array.isArray(access.modelOptions)) return;
@@ -2958,7 +3021,7 @@ window.__ModuleLoader__.load({
         if (optionsSync.current.signature === signature) return;
         optionsSync.current.signature = signature;
         lastSyncedOptions.current = hostOptions;
-        setModelOptions(hostOptions);
+        applyModelOptions(hostOptions);
         writeModelOptions(hostOptions);
       }, []);
 
@@ -2986,7 +3049,7 @@ window.__ModuleLoader__.load({
         setCachedModels([]);
         cacheKeyRef.current = null;
         purgeModelCache();
-        setModelOptions({});
+        applyModelOptions({});
         lastSyncedOptions.current = {};
         optionsSync.current.signature = null;
         setExpandedModels({});
@@ -3001,6 +3064,7 @@ window.__ModuleLoader__.load({
         },
         actions: {
           changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
+          commitField: commitOptionField, commitFieldOnBlur: commitOptionFieldOnBlur,
           resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
           enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
           disableWithSave: disableModelWithSave,
