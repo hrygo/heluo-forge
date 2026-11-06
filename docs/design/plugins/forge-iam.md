@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.22.0 |
+| 版本 | V1.23.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -799,9 +799,71 @@ flowchart TD
 | 账号被企业禁用 / 403 | 停止模型调用，保留可归因安全错误 | 提示“账号权限不足或已被企业禁用” | 否，联系企业管理员 |
 | 网关接口返回 401 | 网关凭据失效，不刷新 IAM 会话，不自动重放 | 提示“网关凭据无效，请前往 UAG 控制台核查” | 否，重新录入个人访问凭证 |
 | 网关接口返回 403 | 策略拒绝访问指定模型或资源 | 提示“无权调用该模型，请联系管理员分配配额” | 否，联系企业管理员 |
-| 网关接口返回 429 | 不自动重发请求，解析并展示退避窗口 | 提示“请求超出速率限制，请于 X 秒后重试” | 是，到达限制时间后重试 |
+| 网关接口返回 429（限流） | 不自动重发请求 | 提示“请求过于频繁，请稍后重试” | 是，稍后重试 |
+| 网关接口返回 429（额度或路由冷却） | 不自动重发请求，按响应体 `code` 区分 | 提示“所选模型的额度已用尽，请更换模型或联系管理员” | 否，改用其他模型或补足额度 |
 | 官方账号服务残留 | `checkExclusive` 报错，拒绝进入 ready | 提示“企业组合配置异常：官方账号服务未禁用” | 否，需修复部署配置 |
 | 凭据存储不可写/损坏 | 拒绝就绪，保持文件原始内容不变 | 提示“凭据安全存储异常，请检查文件权限” | 否，需排查宿主权限 |
+
+
+### 8.1 网关失败分类与换网关适配
+
+企业模型调用的失败归类与具体网关实现解耦：分类只读取调用失败对象上的证据，不依赖某一厂商的错误词汇。实现位于 `packages/forge-iam/src/gateway-failure.mjs`，`managed-models.mjs` 在流内 `finish` 块与抛出异常两条路径上共用同一分类入口。
+
+#### 8.1.1 分类顺序
+
+| 顺序 | 证据来源 | 覆盖的典型形态 | 命中后的结论 |
+|---|---|---|---|
+| 1 | 插件自身错误码 | `finish` 块或异常已带 `ENTERPRISE_*` 码 | 直接放行，不二次归类 |
+| 2 | 模型层错误码 | `QUOTA`、`RATE_LIMIT`、`FreeUsageLimitError`、`RateLimitError` | 查 `LAYER_CODES` |
+| 3 | 响应体词表 | OpenAI `error.code`／`error.type`、RFC 9457 `type`（取末段）、路由冷却码（`model_cooldown`） | 查 `BODY_CODES` |
+| 4 | HTTP 状态码 | `status`、`statusCode`、`response.status`、`cause.*` | 401/403/429/4xx/5xx 分别归类 |
+| 5 | socket 错误码 | `ECONNREFUSED`、`ENOTFOUND`、`ETIMEDOUT` 等 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
+| 6 | 兜底 | 以上均无 | `ENTERPRISE_GATEWAY_CALL_FAILED` |
+
+响应体来源按 `responseBody`、`data`、`body`、`cause.responseBody` 依次尝试，并兼容模型层把响应体前缀进错误消息的形态（`429: {"code":…}`）。解析失败或超过 8 KiB 时放弃解析，不影响后续层级。
+
+#### 8.1.2 用户可见码表
+
+| 错误码 | 触发条件 | HTTP | 用户可见文案 |
+|---|---|---|---|
+| `ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED` | 401、`invalid_api_key`、`AUTH` | 401 | 网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。 |
+| `ENTERPRISE_GATEWAY_FORBIDDEN` | 403、`permission_error`、`PERMISSION` | 403 | 当前账号没有此模型的使用权限，请联系管理员。 |
+| `ENTERPRISE_GATEWAY_RATE_LIMIT` | 429 且无额度类证据、`rate_limit_exceeded`、`RATE_LIMIT` | 429 | 请求过于频繁，请稍后重试。 |
+| `ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED` | `insufficient_quota`、`model_cooldown`、`FreeUsageLimitError`、`QUOTA` | 429 | 所选模型的额度已用尽，请更换模型或联系管理员。 |
+| `ENTERPRISE_GATEWAY_REQUEST_REJECTED` | 其余 4xx、`context_length_exceeded`、`INVALID_REQUEST` | 502 | 网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。 |
+| `ENTERPRISE_GATEWAY_UNAVAILABLE` | 5xx、`NETWORK`、`TIMEOUT`、`OVERLOADED`、socket 错误 | 502 | 暂时无法连接企业模型，请稍后重试。 |
+| `ENTERPRISE_GATEWAY_CALL_FAILED` | 无可识别证据的失败 | 502 | 本次请求未完成，请重试；持续失败请联系管理员。 |
+
+`ENTERPRISE_GATEWAY_UNAVAILABLE` 是唯一可断言“不可达”的码，仅在响应为 5xx 或存在 socket 级错误时产生；其余未知情况一律归入 `ENTERPRISE_GATEWAY_CALL_FAILED`，避免把额度或参数问题误报为网络故障。
+
+#### 8.1.3 换网关适配流程
+
+1. **取样**：在目标网关触发一次失败，取回响应体或模型层错误码。
+2. **定位**：对照 §8.1.1 判断应命中的层级。若只命中第 4 层且语义不符，说明响应体词表缺少该网关的词汇。
+3. **补表**：在 `LAYER_CODES` 或 `BODY_CODES` 增加一行映射（键为归一化形式：小写并去除分隔符），值是已登记的 `ENTERPRISE_*` 码。
+4. **补用例**：在 `packages/forge-iam/test/gateway-failure.test.mjs` 增加一条正向断言；该用例会同时校验表键可命中、值已登记。
+
+新增映射只改数据，不改分类流程。若某网关返回 4xx/5xx 却无可用词表，分类会落到状态码对应层级，语义按 HTTP 定义解释，不额外猜测。
+
+#### 8.1.4 不变量
+
+以下约束由 `gateway-failure.test.mjs` 的表驱动用例强制，任何一条被破坏都会失败：
+
+1. 两个码表的键必须已经归一化，否则永远无法命中；
+2. 两个码表与自身码集合的值必须是 `MESSAGES` 中已登记的错误码；
+3. 每个词表项都必须能通过一次失败对象命中；
+4. 无证据的失败不得归类为 `ENTERPRISE_GATEWAY_UNAVAILABLE`；
+5. 响应体只参与归类，不进入用户可见文案、日志或诊断快照。
+
+#### 8.1.5 重试边界
+
+目录同步的后台退避只覆盖 `ENTERPRISE_GATEWAY_UNAVAILABLE` 与 `ENTERPRISE_GATEWAY_RATE_LIMIT`；`QUOTA_EXHAUSTED` 与 `CALL_FAILED` 不参与自动重试，避免在额度耗尽或原因未知时反复撞击网关。
+
+#### 8.1.6 已知限制
+
+1. 响应体不含可识别词汇时只能按 HTTP 状态归类：429 将统一报为限流，无法区分额度与瞬时限流。
+2. 厂商新增错误词汇需要显式补表；遗漏时落到第 6 层，语义中性但不精确。
+3. 进一步提升精度依赖网关在响应体中给出机器可读原因码，属网关侧契约，客户端无法单方面解决。
 
 ---
 
