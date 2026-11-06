@@ -74,28 +74,92 @@ const statusOf = (cause) => {
   }
   return undefined;
 };
-// The model layer's codes are a moving target: a gateway swap or an SDK upgrade
-// can introduce one this table has never seen. Map what is known, then fall back
-// on evidence (status, then socket error) instead of assuming "unreachable".
-const CODE_MAP = Object.freeze({
-  AUTH: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
-  PERMISSION: 'ENTERPRISE_GATEWAY_FORBIDDEN',
-  FORBIDDEN: 'ENTERPRISE_GATEWAY_FORBIDDEN',
-  QUOTA: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
-  RATE_LIMIT: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
-  INVALID_REQUEST: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
-  UNSUPPORTED_REASONING_EFFORT: 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
-  NETWORK: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
-  TIMEOUT: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
-  OVERLOADED: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
-  SERVER_ERROR: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+// Classification is evidence-first: a gateway or SDK swap can introduce codes no
+// table knows, so every layer below may answer, and only real evidence may claim
+// unreachability.
+// 1. codes the model layer emits (camelCase or snake_case, squashed for lookup)
+const LAYER_CODES = Object.freeze({
+  auth: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+  authenticationerror: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+  permission: 'ENTERPRISE_GATEWAY_FORBIDDEN',
+  permissionerror: 'ENTERPRISE_GATEWAY_FORBIDDEN',
+  forbidden: 'ENTERPRISE_GATEWAY_FORBIDDEN',
+  quota: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  ratelimit: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+  ratelimiterror: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+  invalidrequest: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  unsupportedreasoningeffort: 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
+  network: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  networkerror: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  timeout: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  overloaded: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  servererror: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  apierror: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  serviceunavailable: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
 });
-// Only a socket-level failure justifies claiming the gateway cannot be reached.
+// 2. vocabularies found in gateway error bodies: OpenAI `error.code`/`error.type`,
+//    RFC 9457 `type` (last URI segment), LiteLLM router cooldowns.
+const BODY_CODES = Object.freeze({
+  invalidapikey: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+  invalidapikeyerror: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+  authenticationerror: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+  unauthorized: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+  permissionerror: 'ENTERPRISE_GATEWAY_FORBIDDEN',
+  forbidden: 'ENTERPRISE_GATEWAY_FORBIDDEN',
+  insufficientquota: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  quotaexceeded: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  billinghardlimitreached: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  organizationusagelimitexceeded: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  organizationspendlimitexceeded: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  freeusagelimiterror: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  modelcooldown: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  ratelimitexceeded: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+  ratelimiterror: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+  toomanyrequests: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+  contextlengthexceeded: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  invalidrequesterror: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  invalidrequest: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  badrequest: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  api_error: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  servererror: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  overloaded: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  serviceunavailable: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+});
+const squash = (value) => typeof value === 'string' ? value.toLowerCase().replace(/[^a-z0-9]+/g, '') : '';
+// 3. only a socket-level failure justifies claiming the gateway cannot be reached.
 const UNREACHABLE_SYSCALLS = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
+const parseBody = (text) => {
+  if (typeof text !== 'string' || text.length === 0 || text.length > 8192) return undefined;
+  const start = text.indexOf('{');
+  if (start < 0) return undefined;
+  const attempt = (slice) => { try { return JSON.parse(slice); } catch { return undefined; } };
+  return attempt(text.slice(start)) ?? attempt(text.slice(start, text.lastIndexOf('}') + 1));
+};
+const embeddedBody = (failure) => {
+  const direct = failure?.responseBody ?? failure?.data ?? failure?.body ?? failure?.cause?.responseBody;
+  if (direct && typeof direct === 'object') return direct;
+  if (typeof direct === 'string') return parseBody(direct);
+  // The model layer sometimes prefixes the body: `429: {"error":{...}}`.
+  return parseBody(typeof failure?.message === 'string' ? failure.message : '');
+};
+const bodyTokens = (failure) => {
+  const body = embeddedBody(failure);
+  if (!body || typeof body !== 'object') return [];
+  const inner = body.error && typeof body.error === 'object' ? body.error : {};
+  return [inner.code, inner.type, body.code, body.type, body.status, body.error]
+    .filter(value => typeof value === 'string');
+};
 const classifyFailure = (failure) => {
-  const code = typeof failure?.code === 'string' ? failure.code : undefined;
-  if (code && Object.hasOwn(CODE_MAP, code)) return CODE_MAP[code];
-  if (code && Object.hasOwn(MESSAGES, code)) return code;
+  const raw = typeof failure?.code === 'string' ? failure.code : undefined;
+  if (raw && Object.hasOwn(MESSAGES, raw)) return raw;
+  const layer = LAYER_CODES[squash(raw)];
+  if (layer) return layer;
+  for (const token of bodyTokens(failure)) {
+    const key = squash(token);
+    const tail = squash(token.split('/').pop());
+    if (Object.hasOwn(BODY_CODES, key)) return BODY_CODES[key];
+    if (Object.hasOwn(BODY_CODES, tail)) return BODY_CODES[tail];
+  }
   const status = statusOf(failure);
   if (status !== undefined) return gatewayCode(status);
   const syscall = failure?.cause?.code ?? failure?.errno;
