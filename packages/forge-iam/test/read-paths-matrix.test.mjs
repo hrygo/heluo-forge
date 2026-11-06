@@ -159,6 +159,7 @@ test('every read path works on every delivered platform-arch', async (t) => {
     const sessionRead = service.getSession();
     assert.equal(sessionRead.signedIn, true, `${platform}-${arch} getSession`);
     assert.equal(sessionRead.principal.subject, 'E1001', `${platform}-${arch} getSession principal`);
+    assert.doesNotMatch(JSON.stringify(sessionRead), /placeholder-access-token|placeholder-refresh-token/u, `${platform}-${arch} session has no token`);
     assert.equal(typeof (await service.getAccessToken()), 'string', `${platform}-${arch} getAccessToken`);
 
     // 6. HTTP reads: GET /api/forge-iam/session and POST /api/forge-iam/token
@@ -169,6 +170,7 @@ test('every read path works on every delivered platform-arch', async (t) => {
     const httpSession = await callRoute(handler, 'GET', '/api/forge-iam/session');
     assert.equal(httpSession.statusCode, 200, `${platform}-${arch} GET session`);
     assert.equal(httpSession.json().principal.subject, 'E1001', `${platform}-${arch} GET session body`);
+    assert.doesNotMatch(httpSession.text(), /placeholder-access-token|placeholder-refresh-token/u, `${platform}-${arch} HTTP session has no token`);
     const httpToken = await callRoute(handler, 'POST', '/api/forge-iam/token', { 'x-forge-iam-request': '1', 'content-type': 'application/json' });
     assert.equal(httpToken.statusCode, 200, `${platform}-${arch} POST token`);
     assert.equal(typeof httpToken.json().token, 'string', `${platform}-${arch} POST token body`);
