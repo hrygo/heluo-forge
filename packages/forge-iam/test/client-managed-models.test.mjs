@@ -81,16 +81,12 @@ test('fine-grained model options can be edited, expanded, and saved to the model
   assert.ok(input('最大输出 Token 1'));
   assert.ok(input('图片输入模态 1'));
 
-  // Edit fields
+  // Edit fields: text stays a draft, the modality checkbox commits at once and
+  // carries the draft with it, so no separate save click is needed.
   input('显示名称 1').props.onChange({ target: { value: '企业定制模型' } });
   input('上下文窗口 1').props.onChange({ target: { value: '128K' } });
   input('最大输出 Token 1').props.onChange({ target: { value: '8K' } });
-  input('图片输入模态 1').props.onChange({ target: { checked: true } });
-
-  // Save options
-  const saveBtn = panel.findButton(panel.render(), '保存模型配置');
-  assert.ok(saveBtn);
-  await saveBtn.props.onClick();
+  await input('图片输入模态 1').props.onChange({ target: { checked: true } });
 
   assert.equal(modelWrites.length, 1);
   assert.deepEqual(modelWrites[0].options['corp-chat'], {
@@ -99,7 +95,7 @@ test('fine-grained model options can be edited, expanded, and saved to the model
     maxTokens: '8K',
     inputModalities: ['text', 'image'],
   });
-  assert.match(panel.text(panel.render()), /模型精细化配置已保存并生效/);
+  assert.match(panel.text(panel.render()), /模型配置已自动保存并生效/);
 });
 
 test('panel orders account, credential, and model cards and supports sorting and searching models', async t => {
@@ -199,14 +195,13 @@ test('one model can be pinned to a single reasoning level beyond the default lad
 
   await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
   const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
-  byLabel('推理强度下界 1').props.onChange({ target: { value: 'xhigh' } });
-  byLabel('推理强度上界 1').props.onChange({ target: { value: 'xhigh' } });
-  await panel.findButton(panel.render(), '保存模型配置').props.onClick();
+  await byLabel('推理强度下界 1').props.onChange({ target: { value: 'xhigh' } });
+  await byLabel('推理强度上界 1').props.onChange({ target: { value: 'xhigh' } });
 
-  assert.equal(writes.length, 1);
-  assert.deepEqual(writes[0].options['corp-chat'].reasoningEfforts, { off: null, xhigh: 'xhigh' });
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes.at(-1).options['corp-chat'].reasoningEfforts, { off: null, xhigh: 'xhigh' });
   // Undeclared levels stay unsupported, so the chip row reports this one level.
-  assert.equal(buildThinkingLevelMap(writes[0].options['corp-chat'].reasoningEfforts).medium, null);
+  assert.equal(buildThinkingLevelMap(writes.at(-1).options['corp-chat'].reasoningEfforts).medium, null);
 });
 
 test('a model that was never enabled is offered for enabling and saved as an empty override', async t => {
@@ -341,12 +336,11 @@ test('reasoning effort supports lower and upper bound selection and auto-aligns 
   assert.ok(upperSelect());
 
   // Select lower bound = low, upper bound = xhigh
-  lowerSelect().props.onChange({ target: { value: 'low' } });
-  upperSelect().props.onChange({ target: { value: 'xhigh' } });
+  await lowerSelect().props.onChange({ target: { value: 'low' } });
+  await upperSelect().props.onChange({ target: { value: 'xhigh' } });
   assert.match(panel.text(panel.render()), /当前生效：开放区间：Low → Medium → High → XHigh（共 4 档/);
   assert.match(panel.text(panel.render()), /深度推理 · Low~XHigh/);
 
-  await panel.findButton(panel.render(), '保存模型配置').props.onClick();
   assert.deepEqual(writes.at(-1).options['corp-chat'].reasoningEfforts, {
     off: null,
     low: 'low',
@@ -913,4 +907,100 @@ test('the row flips to the disabled state while the disable is still saving', as
   // One click, one write: a repeat cannot interleave a second submission.
   assert.equal(writes.length, 1);
   assert.deepEqual(writes[0].options, { 'corp-coder': {} });
+});
+
+test('enabling and disabling in the panel saves at once, without a save click', async t => {
+  const writes = [];
+  const twoModels = {
+    ...view,
+    modelAccess: {
+      ...view.modelAccess,
+      models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-vision', name: 'corp-vision' }],
+      modelOptions: { 'corp-chat': {} },
+    },
+  };
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({ ok: true, persisted: true, view: twoModels });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await new Promise(setImmediate);
+  const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
+
+  await byLabel('配置 corp-vision').props.onClick();
+  await byLabel('启用 corp-vision').props.onClick();
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].options, { 'corp-chat': {}, 'corp-vision': {} });
+  assert.match(panel.text(panel.render()), /已启用 corp-vision/);
+
+  await byLabel('停用 corp-vision').props.onClick();
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes[1].options, { 'corp-chat': {} });
+  assert.match(panel.text(panel.render()), /已停用 corp-vision/);
+});
+
+test('a text field writes once on blur and stays quiet when the value did not change', async t => {
+  const writes = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      return Response.json({ ok: true, persisted: true, view });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
+  const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
+
+  input('显示名称 1').props.onChange({ target: { value: '智能对话' } });
+  await new Promise(setImmediate);
+  assert.equal(writes.length, 0, 'typing alone must not issue one request per keystroke');
+
+  await input('显示名称 1').props.onBlur({ target: { value: '智能对话' } });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].options['corp-chat'].name, '智能对话');
+
+  await input('显示名称 1').props.onBlur({ target: { value: '智能对话' } });
+  assert.equal(writes.length, 1, 'blurring again without an edit must not write');
+});
+
+test('a change made while a save is in flight is queued and wins', async t => {
+  const writes = [];
+  const releases = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
+      writes.push(JSON.parse(init.body));
+      await new Promise(resolve => releases.push(resolve));
+      return Response.json({ ok: true, persisted: true, view });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+  await panel.findButton(panel.render(), '精细配置 ▼').props.onClick();
+  const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
+
+  void byLabel('上下文预设 128K 1').props.onClick();
+  await new Promise(setImmediate);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].options['corp-chat'].contextWindow, '128K');
+
+  // Second edit lands while the first PUT is still open: it must not be dropped
+  // and it must not overtake the response that is already in flight.
+  void byLabel('上下文预设 1M 1').props.onClick();
+  await new Promise(setImmediate);
+  assert.equal(writes.length, 1, 'one write at a time');
+
+  releases[0]();
+  await new Promise(setImmediate);
+  assert.equal(writes.length, 2);
+  assert.equal(writes[1].options['corp-chat'].contextWindow, '1M');
+  releases[1]();
+  await new Promise(setImmediate);
+  assert.match(panel.text(panel.render()), /模型配置已自动保存并生效/);
 });
