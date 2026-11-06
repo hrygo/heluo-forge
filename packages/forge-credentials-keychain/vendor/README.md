@@ -1,6 +1,6 @@
 # 预编译凭据适配器（native addon）
 
-本目录只存放六组合预编译产物与校验清单，不含源码，也不参与编译。运行时由
+本目录只存放四组合预编译产物与校验清单，不含源码，也不参与编译。运行时由
 `src/native-keyring.mjs` 按 `platform-arch` 选择对应文件，经绝对路径加载。
 
 ## 来源与许可
@@ -11,9 +11,9 @@
 | 许可 | MIT，随文件附 `LICENSE.third-party.md` |
 | 固定方式 | `scripts/native-keyring.json` 记录版本与 tarball integrity，`CHECKSUMS.json` 记录落地文件的 sha256 |
 | 生成工具 | `scripts/fetch-native-keyring.mjs` |
-| integrity 交叉核对 | 六个 tarball 的 sha512 与 `registry.npmjs.org` 元数据一致（2026-11-06 核对） |
-| 对象头校验 | 按 triple 校验 PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64、Mach-O/arm64、Mach-O/x86_64，防止清单钉错架构 |
-| 外部依赖 | Windows 需 `VCRUNTIME140.dll`（VC++ 2015-2022 运行库）；Linux 只需 glibc ≥ 2.15（x64）/ 2.17（arm64）；macOS 无额外依赖 |
+| integrity 交叉核对 | 四个 tarball 的 sha512 与 `registry.npmjs.org` 元数据一致（2026-11-06 核对） |
+| 对象头校验 | 按 triple 校验 PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64，防止清单钉错架构 |
+| 外部依赖 | Windows 需 `VCRUNTIME140.dll`（VC++ 2015-2022 运行库）；Linux 只需 glibc ≥ 2.15（x64）/ 2.17（arm64） |
 
 ## 交付映射
 
@@ -23,8 +23,6 @@
 | `win32-arm64-msvc/` | win32-arm64 | Windows 11 on ARM |
 | `linux-x64-gnu/` | linux-x64 | UOS 20 amd64 |
 | `linux-arm64-gnu/` | linux-arm64 | 银河麒麟 aarch64 |
-| `darwin-arm64/` | darwin-arm64 | macOS Apple Silicon |
-| `darwin-x64/` | darwin-x64 | macOS Intel 与 Rosetta 下的 x64 Node |
 
 未列出的组合不属于交付目标；`linux-x64-musl` 等上游存在的其他产物不随包分发，映射不到即按不可用处理。
 
@@ -37,7 +35,7 @@
 ## 重新生成与校验
 
 ```sh
-node scripts/fetch-native-keyring.mjs            # 暂存六个交付目标
+node scripts/fetch-native-keyring.mjs            # 暂存四个交付目标
 node scripts/fetch-native-keyring.mjs --check    # 只校验 CHECKSUMS.json 与文件一致
 ```
 
@@ -48,4 +46,5 @@ node scripts/fetch-native-keyring.mjs --check    # 只校验 CHECKSUMS.json 与�
 ## 安全边界
 
 addon 以当前用户身份调用系统凭据库。它能保证凭据落在系统凭据库而不是明文文件；
-**不能**阻止同一用户下的其他进程读取同一条目。该边界在包 README 与设计文档中同样写明。
+**不能**阻止同一用户下的其他进程读取同一条目。macOS 不使用本目录的 addon，其存储边界
+见包 README 的「macOS 存储边界」。

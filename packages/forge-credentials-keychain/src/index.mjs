@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { KeychainBackendError, createFileBackend, createPlatformBackend, createUnavailableBackend } from './backend.mjs';
+import { KeychainBackendError, createFileBackend, createMacosBackend, createPlatformBackend, createUnavailableBackend } from './backend.mjs';
 import { createNativeKeyringBackend, nativeTargetFor } from './native-keyring.mjs';
 import { createSecurityCliBackend } from './security-cli.mjs';
 import { createKeychainProvider, KeychainProviderError } from './provider.mjs';
@@ -8,7 +8,7 @@ import { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 export const name = 'forge-credentials-keychain';
 export const inject = [];
 
-export { createFileBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, KeychainBackendError } from './backend.mjs';
+export { createFileBackend, createMacosBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, KeychainBackendError } from './backend.mjs';
 export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, nativeAddonPath, nativeTargetFor, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES, WINDOWS_RUNTIME_DLLS, windowsRuntimeStatus } from './native-keyring.mjs';
 export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
 export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
@@ -212,6 +212,10 @@ export function resolvePlatformBackend(options = {}) {
   const explicit = options.platform !== undefined || options.arch !== undefined;
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
+  // macOS has no signing identity by decision, so the login keychain is not
+  // usable: its item ACL is bound to the caller's code signature. The macOS
+  // backend is an application-level encrypted document instead.
+  if (platform === 'darwin') return createMacosBackend(options.storeDirectory === undefined ? {} : { directory: options.storeDirectory });
   if (nativeTargetFor(platform, arch) === undefined) {
     // An explicitly requested platform-arch must never resolve against this
     // host: on a machine that has an addon that would silently mount the wrong
@@ -322,7 +326,7 @@ export function apply(ctx, rawConfig = {}) {
   if (backend.requiresExplicitOptIn === true && result.value.allowInsecureFile !== true) {
     throw new KeychainProviderError(
       'KEYCHAIN_INSECURE_FILE_REFUSED',
-      'file backend requires allowInsecureFile=true; production must use an OS keychain',
+      'file backend requires allowInsecureFile=true; production must use an OS keychain or the macOS encrypted document backend',
     );
   }
   warnNonProduction(ctx, backend);

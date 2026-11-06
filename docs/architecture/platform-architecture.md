@@ -38,7 +38,7 @@
 | 研发流程 | oh-my-sdd 式重流程 | Issue 承载交付要求，Skill 提供企业语义，Teamflow 唯一执行；规格与设计按需 |
 | 分发与治理 | 无 | 私有市场、版本门禁、可回滚 |
 
-**非目标**：多人共享单实例（多租户）、自建推理服务、替换 DevOps 平台、macOS 客户端、白标发行与公网暴露（完整范围边界以[需求与场景基线](../requirements/requirements-baseline.md) §2 为唯一真源）。
+**非目标**：多人共享单实例（多租户）、自建推理服务、替换 DevOps 平台、macOS 系统钥匙串与 Developer ID 代码签名、白标发行与公网暴露（完整范围边界以[需求与场景基线](../requirements/requirements-baseline.md) §2 为唯一真源）。
 
 ### 1.1 项目级判断与证据状态
 
