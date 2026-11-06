@@ -8,18 +8,23 @@ process.env.GIT_NO_REPLACE_OBJECTS = '1';
 export const TEAM_PUBLIC_KEY_PATH = '.github/sensitive-scan/team-public-key.pub';
 
 function usage() {
-  return `usage: node scripts/sensitive-scan/verify.mjs --base <rev> --head <rev>
+  return `usage: node scripts/sensitive-scan/verify.mjs --base <rev> --head <rev> [--allow-server-merge]
 
 Verifies signed tree and message bindings using the one team public key from
---base. No source files or local sensitive rules are scanned by this command.`;
+--base. No source files or local sensitive rules are scanned by this command.
+
+--allow-server-merge accepts a commit without a trailer only when its tree is
+identical to an attested pull-request head, which is what a web squash or merge
+leaves on the base branch. Its message is not covered by that attestation.`;
 }
 
 function parseArgs(argv) {
-  const args = { base: '', head: '' };
+  const args = { base: '', head: '', allowServerMerge: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--base') args.base = argv[++index] ?? '';
     else if (value === '--head') args.head = argv[++index] ?? '';
+    else if (value === '--allow-server-merge') args.allowServerMerge = true;
     else if (value === '--help' || value === '-h') args.help = true;
     else throw new Error(`unknown argument: ${value}`);
   }
@@ -54,11 +59,40 @@ function parseCommit(sha) {
   return { tree, parents, message: raw.slice(separator + 2) };
 }
 
-function verifyCommit(sha, publicKey) {
+/**
+ * A web squash or merge produces a commit no local hook ever saw. Its content is
+ * still covered: the tree equals the tree of the attested pull-request head, so
+ * only the message lacks a signature. Anything else stays rejected.
+ */
+function verifyServerCreated(commit, publicKey) {
+  const subject = commit.message.split('\n')[0];
+  const match = /\(#(\d+)\)\s*$/.exec(subject) ?? /^Merge pull request #(\d+)\b/.exec(subject);
+  if (!match) throw new Error('untrailered commit is not a pull-request merge');
+  const number = match[1];
+  let head = '';
+  for (const ref of [`refs/pull/${number}/head`, `refs/remotes/pull/${number}/head`, `refs/remotes/origin/pr/${number}/head`]) {
+    try {
+      head = gitOutput(['rev-parse', '--verify', `${ref}^{commit}`]).trim();
+      break;
+    } catch {
+      // Try the next conventional location for a fetched pull-request head.
+    }
+  }
+  if (!head) throw new Error(`no local ref for pull request #${number}; fetch refs/pull/${number}/head first`);
+  const headCommit = parseCommit(head);
+  if (headCommit.tree !== commit.tree) throw new Error('pull request head tree does not match the merge result');
+  verifyCommit(head, publicKey);
+}
+
+function verifyCommit(sha, publicKey, options = {}) {
   const commit = parseCommit(sha);
-  if (commit.parents.length !== 1) throw new Error('exactly one parent commit is required');
   const parsed = parseTrailer(commit.message);
-  if (!parsed) throw new Error('missing Sensitive-Scan trailer');
+  if (!parsed) {
+    if (!options.allowServerMerge) throw new Error('missing Sensitive-Scan trailer');
+    verifyServerCreated(commit, publicKey);
+    return 'server-created';
+  }
+  if (commit.parents.length !== 1) throw new Error('exactly one parent commit is required');
   const { fields, body } = parsed;
   if (fields.version !== 'v2') throw new Error('v2 attestation required');
   if (!body.trim()) throw new Error('empty commit message body');
@@ -74,6 +108,7 @@ function verifyCommit(sha, publicKey) {
   }
   const parentTree = gitOutput(['rev-parse', `${commit.parents[0]}^{tree}`]).trim();
   if (fields.parenttree !== parentTree) throw new Error('attestation parent-tree does not match parent commit tree');
+  return 'attested';
 }
 
 try {
@@ -87,9 +122,10 @@ try {
   const commits = gitOutput(['rev-list', '--reverse', `${args.base}..${args.head}`]).split('\n').filter(Boolean);
   if (commits.length === 0) throw new Error(`no commits in ${args.base}..${args.head}`);
   const failures = [];
+  const kinds = [];
   for (const sha of commits) {
     try {
-      verifyCommit(sha, publicKey);
+      kinds.push(verifyCommit(sha, publicKey, { allowServerMerge: args.allowServerMerge }));
     } catch (error) {
       failures.push(`${sha.slice(0, 12)}: ${error.message}`);
     }
@@ -99,7 +135,8 @@ try {
     for (const failure of failures) console.error(`- ${failure}`);
     process.exit(1);
   }
-  console.log(`sensitive-attestation: ${commits.length} commit(s) verified`);
+  const server = kinds.filter((kind) => kind === 'server-created').length;
+  console.log(`sensitive-attestation: ${commits.length} commit(s) verified${server ? ` (${server} server-created)` : ''}`);
 } catch (error) {
   console.error(`sensitive-attestation: ${error.message}`);
   process.exit(1);

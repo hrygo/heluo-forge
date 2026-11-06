@@ -21,7 +21,7 @@ function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'managed-upgrade-'));
   const repo = join(dir, 'repo'), pkg = join(dir, 'package'), scripts = join(pkg, 'scripts/sensitive-scan');
   for (const d of [repo, scripts, join(pkg, 'private'), join(pkg, '.github/sensitive-scan')]) mkdirSync(d, { recursive: true });
-  cpSync(join(source, 'team-full-install.mjs'), join(scripts, 'team-full-install.mjs'));
+  for (const name of ['team-full-install.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs']) cpSync(join(source, name), join(scripts, name));
   for (const name of Object.keys(HASHES)) {
     const content = readFileSync(join(OLD, name));
     assert.equal(createHash('sha256').update(content).digest('hex'), HASHES[name]);

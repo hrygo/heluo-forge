@@ -103,11 +103,11 @@
   - 本工程配置了 `sensitive-scan` 钩子，底层会使用 `git stripspace --strip-comments` 规整提交信息；
   - **以 `#` 开头的内容会被整段当成注释静默删除**，导致提交说明正文严重残缺；
   - 引用 Issue 时统一采用内联语法，如 `issue #12` 或 `ref: issue #37`。
-- **提交签名不可变性**：
+- **提交签名与历史改写**：
   - 提交签名（Attestation）强绑定提交信息、树哈希（Tree SHA）与父提交树（Parent-Tree SHA）；
-  - **本地签名后，严禁随意执行 `git commit --amend`、`git rebase` 或 `git reset`**；
-  - 严禁在另一个并行会话中改写当前分支的父提交。若父提交发生变更，会导致 PR 远端验签出现 `parent-tree does not match` 致命红灯；
-  - 确需改写历史时，必须按父链顺序逐条重新签名。
+  - 已安装的 `post-rewrite` 钩子在 `git commit --amend`、`git rebase` 后按真实父树自动重扫重签，整条链签名完成后才移动分支；`git reset` 不触发重签，`git cherry-pick` 不触发任何钩子，两者仍需人工确认或补救；
+  - 严禁在另一个并行会话中改写当前分支的父提交。并行改写会让自动重签基于过期父链，PR 远端验签出现 `parent-tree does not match` 致命红灯；
+  - 网页 squash / merge 生成的服务端提交不被签名，其内容凭据仅为 tree 与已验证 PR head 一致，提交信息格式须按仓库约定维护。
 
 ---
 
