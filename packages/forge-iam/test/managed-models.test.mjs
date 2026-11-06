@@ -282,6 +282,32 @@ test('only evidence of unreachability is reported as an unreachable gateway', as
   }
 });
 
+test('a gateway error body decides the class when the code table cannot', async t => {
+  // Shapes seen in the wild: OpenAI `error.code`, RFC 9457 `type`, LiteLLM
+  // router cooldowns, and a body embedded in the error message.
+  const cases = [
+    [{ statusCode: 429, responseBody: '{"error":{"code":"insufficient_quota"}}' }, 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'],
+    [{ statusCode: 429, responseBody: '{"error":{"type":"rate_limit_exceeded"}}' }, 'ENTERPRISE_GATEWAY_RATE_LIMIT'],
+    [{ statusCode: 429, message: '429: {"code":"model_cooldown","last_upstream_error":"x"}' }, 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'],
+    [{ message: '400: {"error":{"code":"context_length_exceeded"}}' }, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'],
+    [{ responseBody: '{"type":"https://example.test/problems/quota-exceeded"}' }, 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'],
+    [{ code: 'SOMETHING_NEW', statusCode: 503 }, 'ENTERPRISE_GATEWAY_UNAVAILABLE'],
+    [{ code: 'SOMETHING_NEW', responseBody: '{"error":{"code":"never_seen_before"}}' }, 'ENTERPRISE_GATEWAY_CALL_FAILED'],
+  ];
+  for (const [shape, code] of cases) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { throw Object.assign(new Error('private-body'), shape); }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, code, JSON.stringify(shape));
+    assert.equal(JSON.stringify(result).includes('insufficient_quota'), false);
+    assert.equal(JSON.stringify(result).includes('private-body'), false);
+  }
+});
+
 test('a request the gateway rejects is not reported as an unreachable gateway', async t => {
   for (const [chunkCode, code] of [['INVALID_REQUEST', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], ['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT'], ['QUOTA', 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED']]) {
     const f = fixture({
