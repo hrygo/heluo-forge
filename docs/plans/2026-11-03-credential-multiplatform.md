@@ -292,6 +292,14 @@ git diff --check
 
 A/B 新 probe 完成后再登记可执行命令，必须记录 SDK 来源、实际 DSH/Node 版本、profile、制品哈希、命名空间、用例结果与退出状态。不把尚不存在的 runner 写成已可复跑，也不把 `DSH_KEYCHAIN_SPIKE=0` 的离线检查说成原生验收。
 
+原生存储探针（目标机执行，不挂载宿主、不联网、不打印存储值）：
+
+```sh
+node scripts/probe/native-keyring-store-probe.mjs --enumeration
+```
+
+输出 JSON 记录平台、triple、addon 路径与逐项结论，作为 §8 矩阵“字符串读写删与枚举”一行的原始证据归档；非目标平台以退出码 2 结束属于预期，不记为缺陷。
+
 ## 8. D：验收矩阵与证据
 
 下表均为**待实施判据，尚未通过**；不把历史文件覆盖试验混入生产矩阵。
