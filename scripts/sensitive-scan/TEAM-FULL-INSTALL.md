@@ -7,7 +7,7 @@
 1. 从授权保管人通过受控渠道取得未加密的完整包，并在独立可信渠道核对包的 SHA-256。
 2. 安装 Node.js **24.x** 和 Git；使用标准 ZIP 解压工具。在终端确认 `node --version` 和 `git --version`。本包不需 npm/pnpm 安装依赖。
 3. 将包解压到**仓库外、由当前用户或可信管理员控制且其他人不可写的私有目录**。解压会产生明文私钥和规则；不要在公共可写或未经批准的共享／同步目录解压。不要把整个解压目录放入项目工作树。
-4. 在 Git 仓库确认 `git rev-parse --git-path hooks/commit-msg` 与 `git rev-parse --git-path hooks/post-rewrite`。如果已存在不同的 `commit-msg` 或 `post-rewrite`，安装器会拒绝覆盖，也不会自动串联。联系维护者先整合既有 hook。其他 hook 不会被改动。Linked worktrees 或共享 `core.hooksPath` 可能共用同一个 hook，安装前确认影响范围。
+4. 在 Git 仓库确认 `git rev-parse --git-path hooks/commit-msg`、`git rev-parse --git-path hooks/post-rewrite` 与 `git rev-parse --git-path hooks/pre-push`。这三个路径已有不同内容时，安装器会拒绝覆盖，也不会自动串联。联系维护者先整合既有 hook。其他 hook 不会被改动。Linked worktrees 或共享 `core.hooksPath` 可能共用同一个 hook，安装前确认影响范围。
 
 ## 安装
 
@@ -29,7 +29,7 @@ git --version
 node '<工具目录>/scripts/sensitive-scan/team-full-install.mjs' --repo '<项目仓库>'
 ```
 
-安装器会验证包中的 Ed25519 私钥与团队公钥匹配、验证正式规则，再将脚本、密钥及规则安装到 Git common dir，并在 Git 选定的路径安装 `commit-msg` 和 `post-rewrite`。使用 `git rev-parse --git-common-dir` 查看当前仓库的 common dir；默认结构如下，不需要在工作树添加忽略规则：
+安装器会验证包中的 Ed25519 私钥与团队公钥匹配、验证正式规则，再将脚本、密钥及规则安装到 Git common dir，并在 Git 选定的路径安装 `commit-msg`、`post-rewrite` 和 `pre-push`。使用 `git rev-parse --git-common-dir` 查看当前仓库的 common dir；默认结构如下，不需要在工作树添加忽略规则：
 
 ```text
 <git-common-dir>/heluo-sensitive-scan/
@@ -42,7 +42,8 @@ node '<工具目录>/scripts/sensitive-scan/team-full-install.mjs' --repo '<项�
     ├── team-guard.mjs
     ├── team-attest.mjs
     ├── team-commit-msg.mjs
-    └── team-post-rewrite.mjs
+    ├── team-post-rewrite.mjs
+    └── team-pre-push.mjs
 ```
 
 在默认共享 hook 配置下，同一 clone 的 linked worktrees 共用此安装；hook 被 Git 调用时从当前工作树解析实际 common dir 并扫描当前工作树的暂存内容。安装器只核对安装时已有的工作树；新建 worktree 后须在该工作树执行 `git rev-parse --git-path hooks/commit-msg` 和 `git rev-parse --git-path hooks/post-rewrite`，确认实际路径指向已安装的共享 hook。后续的 `includeIf.gitdir`、worktree 专属配置、环境变量或其他 Git 配置覆盖可能让 Git 不调用共享 hook，程序无法强制覆盖这些配置。安装器拒绝相对 `core.hooksPath`，并检查已有工作树是否对两个 hook 都选用同一路径；可使用安全的绝对共享路径。common dir 不得位于任何工作树的普通可跟踪目录，正常的工作树直属 `.git` 元数据目录除外。对于外置 `--separate-git-dir`，若 Git 将元数据目录列为主工作树且存在 linked worktree，安装和运行会因无法确认真实主工作树而失败关闭；需由维护者调整 Git 布局。独立 clone 各需安装；如果不同 clone 共用 `core.hooksPath`，已有不同 hook 会被拒绝，须由维护者协调。安装器不改写未知的 `pre-commit`：若旧入口通过 worktree 私有 git-dir 查找 `dsh-hooks`，应由维护者迁移至 common-dir，不能关闭或绕过原 hook。
@@ -67,7 +68,7 @@ macOS / Linux / 银河麒麟：
 node '<工具目录>/scripts/sensitive-scan/team-full-install.mjs' --repo '<项目仓库>' --upgrade-known-v1
 ```
 
-此显式升级仅接受完整的已知旧版安装（完整包 v1 或此前发布的版本），或中断后由已知旧版与新版包中完全一致的程序组成的混合状态；已有 hook、私钥和规则必须与安装包匹配。旧版没有的文件（如 `team-guard.mjs`、`team-post-rewrite.mjs`）按新增文件写入，不视为安装不完整。安装器将发生变化的公开源码备份到 Git common dir 内 `heluo-sensitive-scan/backups/`，再逐个原子替换程序；不覆盖规则、私钥或未知 hook。升级同时安装 `post-rewrite` hook；若该路径已有不同 hook，安装停止且不改动任何文件。替换不是整体事务，中断后先暂停提交，再使用相同命令重试；若检查失败，联系维护者检查备份，不要强行覆盖。旧 v1 签名会被 v2 远端验签拒绝；升级后按下节检查 v2 trailer，已签名的在途 v1 提交须重新扫描和签名。
+此显式升级仅接受完整的已知旧版安装（完整包 v1 或此前发布的版本），或中断后由已知旧版与新版包中完全一致的程序组成的混合状态；已有 hook、私钥和规则必须与安装包匹配。旧版没有的文件（如 `team-guard.mjs`、`team-post-rewrite.mjs`）按新增文件写入，不视为安装不完整。安装器将发生变化的公开源码备份到 Git common dir 内 `heluo-sensitive-scan/backups/`，再逐个原子替换程序；不覆盖规则、私钥或未知 hook。升级同时安装新增的 `post-rewrite` 和 `pre-push` hook；这些路径已有不同 hook 时安装停止且不改动任何文件。既有钩子若只是记录的解释器路径不同（换过 Node 版本或工具链），升级会改写为当前解释器，其余内容必须完全一致。替换不是整体事务，中断后先暂停提交，再使用相同命令重试；若检查失败，联系维护者检查备份，不要强行覆盖。旧 v1 签名会被 v2 远端验签拒绝；升级后按下节检查 v2 trailer，已签名的在途 v1 提交须重新扫描和签名。
 
 ## 安装完成后
 
@@ -87,7 +88,7 @@ b8d63d50c82fee19b3b39f0acd2723494ede9b3309e502a1f262b084628b299b
 
 本地 hook 使用包内的现有正式规则：提交信息和暂存文件路径会扫描；普通 UTF-8 文本默认检查新增／修改行，UTF-16 文本保守地扫描全文件；设置 `DSH_HOOK_FULL=1` 时检查整份暂存文本；`.xlsx`、`.xlsm` 和 `.xltx` 检查工作簿包中的 XML 和关系文件文本；包含无法扫描的宏、图片或嵌入对象等二进制内容时会阻断，而不是声称已扫描其内容。现有允许项和忽略路径保留。未忽略的未知二进制、过大或不可读取内容会阻断签名。发现敏感项只在本地提示，不向 GitHub 上传规则或命中详情；正常 Git 源码推送仍会把提交的文件送到远端。
 
-团队 hook 的 v2 签名绑定实际扫描基线 HEAD tree；远端要求提交恰有一个父提交，且父提交 tree 与签名基线一致，并拒绝 v1。root 和 merge 提交不签名。`post-rewrite` hook 在 `git commit --amend` 和 `git rebase` 后按提交的真实父树重新扫描并重签每个被重放的提交，整条链签名完成后才移动分支，开发者无需手工重签。重放后内容不再通过扫描的提交保持未签名，hook 只报告数量，远端验签仍失败关闭。`git cherry-pick` 不触发这两个 hook：改用 `git cherry-pick -n <提交>` 暂存改动，再用 `git commit -C <提交>` 提交，让 `commit-msg` 按真实父提交扫描并签名；直接 cherry-pick 会保留原 trailer，tree 不一致会被远端拒绝。这不能防止扫描过程中的竞态。
+团队 hook 的 v2 签名绑定实际扫描基线 HEAD tree；远端要求提交恰有一个父提交，且父提交 tree 与签名基线一致，并拒绝 v1。root 和 merge 提交不签名。`post-rewrite` hook 在 `git commit --amend` 和 `git rebase` 后按提交的真实父树重新扫描并重签每个被重放的提交，整条链签名完成后才移动分支，开发者无需手工重签。重放后内容不再通过扫描的提交保持未签名，hook 只报告数量，远端验签仍失败关闭。`pre-push` hook 在推送前用同一验签器检查本次推送新增的提交，任何一条会被远端拒绝就中止推送，因此 `--no-verify` 造出的提交或分支上的合并提交在离开本机前就会被拦下；标签推送和分支删除不检查，仓库首次推送没有可比基线。`git cherry-pick` 不触发前两个 hook：改用 `git cherry-pick -n <提交>` 暂存改动，再用 `git commit -C <提交>` 提交，让 `commit-msg` 按真实父提交扫描并签名；直接 cherry-pick 会保留原 trailer，tree 不一致会被远端拒绝。这不能防止扫描过程中的竞态。
 
 网页 squash 或 merge 由服务端生成提交，本地 hook 无法介入；该提交消息不经扫描也不被签名。此类提交仅在 tree 与已验证 PR head 的 tree 完全一致时，才被带 `--allow-server-merge` 的审计命令接受；required 检查只验证 PR 自身提交，不受合并策略影响。两种服务端合并都只在 PR 分支已跟上 base 时保住签名：重放到更新的 base 会重算 tree，因此分支保护必须开启 Require branches to be up to date。
 

@@ -7,6 +7,8 @@ import { gitOutput, keyIdFromPublicKey, loadKeyPair } from './lib.mjs';
 import { loadRules, scanText } from './team-scan.mjs';
 
 const MARKER = '# managed by heluo-sensitive-scan complete distribution';
+// Our shim, with the recorded interpreter path captured; only that path may differ.
+const OWN_SHIM = /^#!\/bin\/sh\n# managed by heluo-sensitive-scan complete distribution\nexec '[^'\n]+' '([^'\n]+)' "\$1"\n$/;
 // Program sources shipped by earlier releases. An upgrade may replace exactly
 // these byte sequences and nothing else, so a tampered or unknown install stops.
 const KNOWN_PREVIOUS = {
@@ -28,11 +30,12 @@ const KNOWN_PREVIOUS = {
 const HOOKS = [
   { name: 'commit-msg', script: 'team-commit-msg.mjs' },
   { name: 'post-rewrite', script: 'team-post-rewrite.mjs' },
+  { name: 'pre-push', script: 'team-pre-push.mjs' },
 ];
 // Files a previous release installed. New package files may be absent from a
 // complete older installation, so only this set decides whether it is complete.
 const PREVIOUS_SCRIPTS = ['lib.mjs', 'team-scan.mjs', 'team-commit-msg.mjs'];
-const SHARED_SCRIPTS = [...PREVIOUS_SCRIPTS, 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs'];
+const SHARED_SCRIPTS = [...PREVIOUS_SCRIPTS, 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs', 'team-pre-push.mjs'];
 const packageRoot = resolve(import.meta.dirname, '../..');
 const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 function statIfPresent(path) {
@@ -282,10 +285,16 @@ function assertSafeSource(stat, path, label) {
 
   const node = quote(process.execPath.replace(/\\/g, '/'));
   for (const item of hooks) {
-    const script = quote(resolve(shared, 'scripts', item.script).replace(/\\/g, '/'));
-    item.shim = `#!/bin/sh\n${MARKER}\nexec ${node} ${script} "$1"\n`;
-    if (item.stat && (!item.stat.isFile() || item.stat.isSymbolicLink() || readFileSync(item.path, 'utf8') !== item.shim)) {
-      throw new Error(`existing ${item.name} hook differs; not modified`);
+    const script = resolve(shared, 'scripts', item.script).replace(/\\/g, '/');
+    item.shim = `#!/bin/sh\n${MARKER}\nexec ${node} ${quote(script)} "$1"\n`;
+    if (!item.stat) continue;
+    const existing = readFileSync(item.path, 'utf8');
+    if (!item.stat.isFile() || item.stat.isSymbolicLink() || existing !== item.shim) {
+      // An upgrade may run under a different Node executable than the one recorded
+      // in this shim; the hook is still ours, so rewriting it saves a manual edit.
+      const own = OWN_SHIM.exec(existing);
+      if (!upgrade || !own || own[1] !== script) throw new Error(`existing ${item.name} hook differs; not modified`);
+      item.rewrite = true;
     }
     if (item.stat && process.platform !== 'win32') {
       if (!(item.stat.mode & 0o111)) throw new Error(`existing ${item.name} hook is not executable`);
@@ -380,13 +389,21 @@ function assertSafeSource(stat, path, label) {
   if (!haveKey) createPrivateFile(keyPath, sourceKey);
   if (!haveRules) createPrivateFile(rulesPath, sourceRules);
   for (const item of hooks) {
-    if (item.stat) continue;
+    if (item.stat && !item.rewrite) continue;
     mkdirSync(dirname(item.path), { recursive: true });
-    const fd = openSync(item.path, 'wx', 0o700);
-    try { writeFileSync(fd, item.shim, 'utf8'); if (process.platform !== 'win32') fchmodSync(fd, 0o700); } finally { closeSync(fd); }
+    if (item.rewrite) {
+      // "wx" would refuse the existing path, so replace our own hook in one step.
+      const temporary = resolve(dirname(item.path), `.hook-${randomBytes(16).toString('hex')}`);
+      writeFileSync(temporary, item.shim, { mode: 0o700 });
+      if (process.platform !== 'win32') chmodSync(temporary, 0o700);
+      renameSync(temporary, item.path);
+    } else {
+      const fd = openSync(item.path, 'wx', 0o700);
+      try { writeFileSync(fd, item.shim, 'utf8'); if (process.platform !== 'win32') fchmodSync(fd, 0o700); } finally { closeSync(fd); }
+    }
     if (process.platform !== 'win32') accessSync(item.path, constants.X_OK);
   }
-  const installed = hooks.every((item) => item.stat) ? 'already installed' : 'installed';
+  const installed = hooks.some((item) => !item.stat || item.rewrite) ? 'installed' : 'already installed';
   console.log(`sensitive-scan: ${installed} ${hooks.map((item) => item.path).join(', ')}`);
   console.log(`team public key SHA-256: ${keyIdFromPublicKey(packagedPublic)}`);
   console.log('The hook uses installed shared scripts; keep the Node executable in a trusted location.');

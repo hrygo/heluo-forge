@@ -1,9 +1,11 @@
 # Team sensitive-scan attestation
 
 This change provides a local scan and a remote signature verifier using one team
-Ed25519 key pair. The Git `commit-msg` hook scans staged changes and the commit
-message; GitHub verifies signed commit trailers using the public key from the PR
-base. Git repository contents are pushed normally. The shared private key, real
+Ed25519 key pair. Three Git hooks implement the local side: `commit-msg` scans
+staged changes and the commit message, `post-rewrite` re-signs the commits that
+`git commit --amend` or `git rebase` replay, and `pre-push` checks the commits a
+push would add. GitHub verifies signed commit trailers using the public key from
+the PR base. Git repository contents are pushed normally. The shared private key, real
 rules and scan results must not be committed or uploaded to the remote service.
 The verifier does not scan files or receive the real rules or findings.
 
@@ -13,7 +15,7 @@ Use the controlled complete distribution and follow [TEAM-FULL-INSTALL.md](TEAM-
 It includes the existing team key and rules; its unencrypted ZIP and extracted
 copies are sensitive key material. Do not create individual developer keys.
 The installer places scripts, private key and rules in the Git common dir and
-installs both Git-selected hooks; linked worktrees ordinarily share that setup,
+installs all three Git-selected hooks; linked worktrees ordinarily share that setup,
 while independent clones each need installation. Existing different hooks or
 files are not overwritten. Check the installation guide for permission requirements (`umask 022`,
 or the explicit `--allow-group-writable` opt-in), plus path, worktree and platform limitations; later Git configuration can bypass the hook.
@@ -74,7 +76,14 @@ parent-tree binding, so both fire the `post-rewrite` hook. It re-scans every
 replayed commit against its real parent tree, refreshes the trailer and moves the
 branch once the whole chain signed; no manual re-sign loop is needed. A replayed
 commit whose content no longer passes the scan stays unsigned and is reported by
-count, so the verifier still fails closed. `git cherry-pick` runs neither hook:
+count, so the verifier still fails closed.
+
+The `pre-push` hook applies the same verifier to the commits a push would add and
+refuses the push when any of them would fail the required check, so a commit made
+with `--no-verify` or a merge commit on the branch is caught before it reaches the
+remote. It compares an existing remote ref, and otherwise `origin/main`; a
+repository's first push has nothing to check. Tags and branch deletions are not
+verified. `git cherry-pick` runs neither hook:
 use `git cherry-pick -n <commit>` followed by `git commit -C <commit>`, which
 stages the change and lets `commit-msg` sign it against the real parent.
 
