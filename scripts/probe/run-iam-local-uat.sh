@@ -45,13 +45,16 @@ const root = process.env.IAM_UAT_ROOT;
 const hostPort = Number(process.env.IAM_UAT_HOST_PORT || 48388);
 const entryPort = Number(process.env.IAM_UAT_ENTRY_PORT || 48389);
 const gateway = process.env.IAM_UAT_GATEWAY || 'http://127.0.0.1:8317/v1';
+// 0 表示由系统分配回环端口，与 IAM 登记的前缀 http://127.0.0.1: 一致；固定值用于验证端口被占用时的拒绝路径。
+const callbackPort = process.env.IAM_UAT_CALLBACK_PORT === undefined || process.env.IAM_UAT_CALLBACK_PORT === '' ? 0 : Number(process.env.IAM_UAT_CALLBACK_PORT);
 for (const port of [hostPort, entryPort]) { if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口必须是 1–65535 的整数'); }
+if (!Number.isInteger(callbackPort) || (callbackPort !== 0 && (callbackPort < 1024 || callbackPort > 65535))) throw new Error('IAM_UAT_CALLBACK_PORT 必须是 0 或 1024–65535 的整数');
 if (hostPort === entryPort) throw new Error('宿主端口和入口端口不能相同');
 const gatewayUrl = new URL(gateway);
 if (gatewayUrl.protocol !== 'http:' || gatewayUrl.hostname !== '127.0.0.1' || gatewayUrl.username || gatewayUrl.password || gatewayUrl.search || gatewayUrl.hash || !gatewayUrl.pathname.endsWith('/v1')) throw new Error('测试网关必须是本机 127.0.0.1 的 HTTP /v1 地址');
 const { startMockOidc } = await import(pathToFileURL(`${root}/source/packages/forge-iam/test/support/mock-oidc.mjs`));
 const mock = await startMockOidc({ clientId: 'isolated-uat', accessTtl: 120 });
-await writeFile(`${root}/dsh/profiles/uat/cordis.patch.yml`, `- id: heluo-credentials-keychain\n  disabled: false\n- id: heluo-iam\n  config:\n    clientId: isolated-uat\n    issuer: ${mock.issuer}\n    authorizationEndpoint: ${mock.issuer}/authorize\n    tokenEndpoint: ${mock.issuer}/token\n    jwksUri: ${mock.issuer}/jwks\n    revocationEndpoint: ${mock.issuer}/revoke\n    allowInsecureHttp: true\n    refreshSkewSeconds: 30\n    managedModels:\n      baseURL: ${JSON.stringify(gateway)}\n`);
+await writeFile(`${root}/dsh/profiles/uat/cordis.patch.yml`, `- id: heluo-credentials-keychain\n  disabled: false\n- id: heluo-iam\n  config:\n    clientId: isolated-uat\n    callbackPort: ${callbackPort}\n    issuer: ${mock.issuer}\n    authorizationEndpoint: ${mock.issuer}/authorize\n    tokenEndpoint: ${mock.issuer}/token\n    jwksUri: ${mock.issuer}/jwks\n    revocationEndpoint: ${mock.issuer}/revoke\n    allowInsecureHttp: true\n    refreshSkewSeconds: 30\n    managedModels:\n      baseURL: ${JSON.stringify(gateway)}\n`);
 const child = spawn(process.env.DSH_BIN || 'dsh', ['--profile', 'uat', '--host', '127.0.0.1', '--port', String(hostPort), '--no-open'], { cwd: `${root}/workspace`, env: { ...process.env, DSH_HOME: `${root}/dsh` }, stdio: ['ignore', 'pipe', 'pipe'] });
 let launchUrl; let buffer = ''; let warnings = '';
 child.stdout.on('data', chunk => { buffer += chunk.toString(); const match = buffer.match(/dsh web: (http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+)/); if (match) { launchUrl = match[1]; buffer = ''; } if (buffer.length > 16384) buffer = buffer.slice(-16384); });
@@ -66,7 +69,10 @@ const server = createServer((req, res) => {
   res.writeHead(303, { location: launchUrl }).end();
 });
 server.on('error', async error => { console.error('无法启动入口：', error.message); child.kill('SIGTERM'); await mock.close(); process.exit(1); });
-server.listen(entryPort, '127.0.0.1', () => console.log(`测试入口：http://127.0.0.1:${entryPort}/`));
+server.listen(entryPort, '127.0.0.1', () => {
+  console.log(`测试入口：http://127.0.0.1:${entryPort}/`);
+  console.log(callbackPort === 0 ? '回调端口：系统分配（只在该次登录期间监听）' : `回调端口：固定 ${callbackPort}`);
+});
 async function stop() { server.close(); child.kill('SIGTERM'); await mock.close(); process.exit(0); }
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
 JS
