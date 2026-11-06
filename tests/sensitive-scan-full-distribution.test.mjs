@@ -27,7 +27,7 @@ function setup() {
   const privateDir = join(pkg, 'private');
   const publicDir = join(pkg, '.github/sensitive-scan');
   for (const d of [repo, scriptDir, privateDir, publicDir]) mkdirSync(d, { recursive: true });
-  for (const f of ['lib.mjs', 'team-full-install.mjs', 'team-scan.mjs', 'team-commit-msg.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs']) cpSync(join(SOURCE, f), join(scriptDir, f));
+  for (const f of ['lib.mjs', 'team-full-install.mjs', 'team-scan.mjs', 'team-commit-msg.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs', 'team-pre-push.mjs']) cpSync(join(SOURCE, f), join(scriptDir, f));
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const key = privateKey.export({ type: 'pkcs8', format: 'pem' });
   const pub = publicKey.export({ type: 'spki', format: 'pem' });
@@ -78,6 +78,20 @@ test('complete package installs its own key and real-schema rules, then signs', 
     assert.notEqual(blocked.status, 0);
     assert.doesNotMatch(blocked.stderr, /SYNTHETIC_TEAM_TERM/);
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('installer makes rebase the default pull strategy and keeps an explicit choice', () => {
+  const f = setup();
+  try {
+    assert.equal(f.install().status, 0);
+    assert.equal(ok('git', ['config', '--local', '--get', 'pull.rebase'], { cwd: f.repo, env: f.env }), 'true');
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  const g = setup();
+  try {
+    ok('git', ['config', '--local', 'pull.rebase', 'false'], { cwd: g.repo, env: g.env });
+    assert.equal(g.install().status, 0);
+    assert.equal(ok('git', ['config', '--local', '--get', 'pull.rebase'], { cwd: g.repo, env: g.env }), 'false');
+  } finally { rmSync(g.dir, { recursive: true, force: true }); }
 });
 
 test('installed post-rewrite hook re-signs a rebased branch', () => {

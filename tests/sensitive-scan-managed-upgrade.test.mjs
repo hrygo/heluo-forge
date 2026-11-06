@@ -21,7 +21,7 @@ function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'managed-upgrade-'));
   const repo = join(dir, 'repo'), pkg = join(dir, 'package'), scripts = join(pkg, 'scripts/sensitive-scan');
   for (const d of [repo, scripts, join(pkg, 'private'), join(pkg, '.github/sensitive-scan')]) mkdirSync(d, { recursive: true });
-  for (const name of ['team-full-install.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs']) cpSync(join(source, name), join(scripts, name));
+  for (const name of ['team-full-install.mjs', 'team-guard.mjs', 'team-attest.mjs', 'team-post-rewrite.mjs', 'team-pre-push.mjs']) cpSync(join(source, name), join(scripts, name));
   for (const name of Object.keys(HASHES)) {
     const content = readFileSync(join(OLD, name));
     assert.equal(createHash('sha256').update(content).digest('hex'), HASHES[name]);
@@ -117,6 +117,17 @@ test('missing script in a partially upgraded installation is not recreated', () 
     assert.deepEqual(['scripts/lib.mjs', 'scripts/team-scan.mjs', 'private/device-key.pem', 'private/rules.json'].map(name => readFileSync(join(f.shared, name)).toString('base64')), before);
     assert.deepEqual(readFileSync(f.hook), hook);
     assert.equal(existsSync(join(f.shared, 'backups')), false);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test('an upgrade rewrites a shim that records another node executable', () => {
+  const f = setup();
+  try {
+    const shim = readFileSync(f.hook, 'utf8');
+    writeFileSync(f.hook, shim.replace(/^exec '[^']+'/u, "exec '/opt/other-node/bin/node'"));
+    const result = f.install('--upgrade-known-v1');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(f.hook, 'utf8'), shim);
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
 
