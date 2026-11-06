@@ -15,7 +15,7 @@ Use the controlled complete distribution and follow [TEAM-FULL-INSTALL.md](TEAM-
 It includes the existing team key and rules; its unencrypted ZIP and extracted
 copies are sensitive key material. Do not create individual developer keys.
 The installer places scripts, private key and rules in the Git common dir and
-installs all three Git-selected hooks; linked worktrees ordinarily share that setup,
+installs all three Git-selected hooks and sets `pull.rebase` unless it is already configured; linked worktrees ordinarily share that setup,
 while independent clones each need installation. Existing different hooks or
 files are not overwritten. Check the installation guide for permission requirements (`umask 022`,
 or the explicit `--allow-group-writable` opt-in), plus path, worktree and platform limitations; later Git configuration can bypass the hook.

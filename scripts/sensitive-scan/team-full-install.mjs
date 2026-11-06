@@ -403,6 +403,14 @@ function assertSafeSource(stat, path, label) {
     }
     if (process.platform !== 'win32') accessSync(item.path, constants.X_OK);
   }
+  // A merge commit on a branch can never be attested, so rebase becomes the
+  // default for this repository; an explicit setting is left untouched.
+  try {
+    gitOutput(['config', '--local', '--get', 'pull.rebase'], { cwd: root });
+  } catch {
+    gitOutput(['config', '--local', 'pull.rebase', 'true'], { cwd: root });
+    console.log('sensitive-scan: set pull.rebase=true so git pull never creates a merge commit');
+  }
   const installed = hooks.some((item) => !item.stat || item.rewrite) ? 'installed' : 'already installed';
   console.log(`sensitive-scan: ${installed} ${hooks.map((item) => item.path).join(', ')}`);
   console.log(`team public key SHA-256: ${keyIdFromPublicKey(packagedPublic)}`);

@@ -80,6 +80,20 @@ test('complete package installs its own key and real-schema rules, then signs', 
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+test('installer makes rebase the default pull strategy and keeps an explicit choice', () => {
+  const f = setup();
+  try {
+    assert.equal(f.install().status, 0);
+    assert.equal(ok('git', ['config', '--local', '--get', 'pull.rebase'], { cwd: f.repo, env: f.env }), 'true');
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  const g = setup();
+  try {
+    ok('git', ['config', '--local', 'pull.rebase', 'false'], { cwd: g.repo, env: g.env });
+    assert.equal(g.install().status, 0);
+    assert.equal(ok('git', ['config', '--local', '--get', 'pull.rebase'], { cwd: g.repo, env: g.env }), 'false');
+  } finally { rmSync(g.dir, { recursive: true, force: true }); }
+});
+
 test('installed post-rewrite hook re-signs a rebased branch', () => {
   const f = setup();
   try {
