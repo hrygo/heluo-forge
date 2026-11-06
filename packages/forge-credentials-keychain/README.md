@@ -34,6 +34,19 @@
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
 - 生产必须使用 Windows 凭据管理器或麒麟/UOS Secret Service 的审核实现；file backend 与 macOS spike 适配器都不是生产方案。三平台 addon 已随包分发，但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。
 
+## 错误码
+
+| 错误码 | 触发条件 | 是否已写盘 |
+|---|---|---|
+| `KEYCHAIN_UNAVAILABLE` | 该 platform-arch 无对应 addon、addon 缺失或加载失败、后端整体不可用 | 否 |
+| `KEYCHAIN_UNVETTED_ADAPTER_REFUSED` | 适配器未取证且未显式 `allowUnvettedPlatformAdapter` | 否 |
+| `KEYCHAIN_LIST_UNSUPPORTED` | 枚举未开启，或该平台枚举未验证 | 否 |
+| `KEYCHAIN_VALUE_EMPTY` / `KEYCHAIN_VALUE_TOO_LARGE` | 空值；Windows 超过 2560 B（UTF-16LE 计） | 否 |
+| `KEYCHAIN_KEY_INVALID` | backend key 为空或不合命名空间文法 | 否 |
+| `KEYCHAIN_OPERATION_FAILED` | 存储返回非字符串、枚举形状异常、删除后条目仍可读 | 删除分支可能已部分生效 |
+| `KEYCHAIN_EPHEMERAL_REFUSED` / `KEYCHAIN_INSECURE_FILE_REFUSED` | 临时后端或明文文件后端未显式允许 | 否 |
+| `KEYCHAIN_LOCK_TIMEOUT` | 文件后端跨进程锁等待超时 | 否 |
+
 ## 预编译 addon 的暂存与校验
 
 `vendor/` 存放三平台预编译产物，运行时按 `platform-arch` 选文件：
@@ -57,7 +70,7 @@ integrity 不一致时立即中止且不写入任何文件。`darwin-arm64` 不�
 
 ## 开发/试点覆盖层（非生产）
 
-企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序因此落到 `createPlatformBackend()`，而它在所有平台都返回不可用：`apply` 抛 `KEYCHAIN_UNAVAILABLE` 并拒绝挂载，属于预期的 fail closed，不是缺陷，也不是某个平台的兼容问题。
+企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序落到 `resolvePlatformBackend()`：`win32-x64`、`linux-x64`、`linux-arm64` 解析到随包的预编译 addon，其余组合返回不可用 backend。三平台尚未实机取证，addon 按 `unvetted` 处理，挂载需 `allowUnvettedPlatformAdapter: true`，否则 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；未映射平台抛 `KEYCHAIN_UNAVAILABLE`。两者都是预期的 fail closed，不是某个平台的兼容缺陷。
 
 开发/试点需要可用凭据时，在 profile 上再叠一层补丁，显式启用文件后端：
 
