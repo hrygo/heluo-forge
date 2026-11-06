@@ -34,8 +34,7 @@ test('platform-arch maps to a delivery triple, and only those', () => {
   assert.equal(nativeTargetFor('win32', 'arm64'), 'win32-arm64-msvc');
   assert.equal(nativeTargetFor('linux', 'x64'), 'linux-x64-gnu');
   assert.equal(nativeTargetFor('linux', 'arm64'), 'linux-arm64-gnu');
-  assert.equal(nativeTargetFor('darwin', 'arm64'), 'darwin-arm64');
-  assert.equal(nativeTargetFor('darwin', 'x64'), 'darwin-x64');
+
   // Not delivery targets: never a triple, never a silent downgrade.
   for (const [platform, arch] of [['win32', 'ia32'], ['linux', 'ia32'], ['linux', 'riscv64'], ['freebsd', 'x64']]) {
     assert.equal(nativeTargetFor(platform, arch), undefined, `${platform}-${arch} must stay unmapped`);
@@ -48,6 +47,17 @@ test('a staged addon resolves to this package, not to node_modules', () => {
   assert.ok(addon.endsWith(join('vendor', 'win32-x64-msvc', 'keyring.node')), addon);
   assert.ok(addon.startsWith(packageRoot), 'the addon must live inside the installed package');
   assert.doesNotMatch(addon, /node_modules/u);
+});
+
+test('macOS resolves to the encrypted document backend, not the keychain', () => {
+  for (const arch of ['arm64', 'x64']) {
+    const backend = resolvePlatformBackend({ platform: 'darwin', arch });
+    assert.equal(backend.available, true);
+    assert.equal(backend.kind, 'file-encrypted');
+    assert.equal(backend.encrypted, true);
+    assert.equal(backend.durable, true);
+    assert.equal(nativeTargetFor('darwin', arch), undefined);
+  }
 });
 
 test('an unmapped platform-arch still gets the unavailable backend', () => {

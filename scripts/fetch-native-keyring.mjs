@@ -73,8 +73,6 @@ const BINARY_LAYOUT = new Map([
   ['win32-arm64-msvc', { format: 'pe', machine: 0xaa64, name: 'PE/ARM64' }],
   ['linux-x64-gnu', { format: 'elf', machine: 62, name: 'ELF/x86-64' }],
   ['linux-arm64-gnu', { format: 'elf', machine: 183, name: 'ELF/AArch64' }],
-  ['darwin-arm64', { format: 'macho', machine: 0x0100000c, name: 'Mach-O/arm64' }],
-  ['darwin-x64', { format: 'macho', machine: 0x01000007, name: 'Mach-O/x86_64' }],
 ]);
 
 /**

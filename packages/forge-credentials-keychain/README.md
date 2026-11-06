@@ -1,15 +1,15 @@
 # @heluo/forge-credentials-keychain
 
-状态：可用（开发骨架；已用 macOS Security CLI 在真实系统钥匙串上跑通 backend 契约、失败语义与旧 0600 迁移演练（仅副本），该适配器**非生产**且需显式 opt-in；`@napi-rs/keyring` 2.1.2 的六组合预编译 addon（win32-x64、win32-arm64、linux-x64、linux-arm64、darwin-arm64、darwin-x64）随包暂存并按 platform-arch 解析，Windows/UOS/麒麟/macOS 适配器因此可挂载；darwin-arm64 的存储层已于 2026-11-06 在本机实测（探针 7/7：读写、覆盖、跨进程、枚举、删除幂等，无残留），其余组合**未在目标机取证**，`unvetted` 全局开关因此保持关闭；本地 0600 file backend 仅显式开发/试点）。
+状态：可用（开发骨架）。`@napi-rs/keyring` 2.1.2 的四个预编译 addon（win32-x64、win32-arm64、linux-x64、linux-arm64）随包暂存并按 platform-arch 解析，Windows/UOS/麒麟适配器因此可挂载；macOS 不使用 addon，也不使用系统钥匙串，而是走应用层加密文档后端（AES-256-GCM，密钥 0600），因此不依赖代码签名、不要求图形会话。四个 addon 组合**未在目标机取证**，`unvetted` 全局开关保持关闭；macOS 加密后端已于 2026-11-06 在本机与一台远程 Apple Silicon Mac 的 SSH 会话中分别实测 7/7。本地 0600 明文 file backend 仅显式开发/试点。
 
-一句话：`ctx.credentials` 的 keychain provider 骨架。提供 backend 契约、内存/不可用/显式 0600 file backend、记录/引用读写与进程内单键锁；Windows 凭据管理器、macOS 钥匙串与麒麟/UOS Secret Service 由 `vendor/` 下的预编译 addon 接入，macOS 存储层已本机取证，其余目标机待取证。
+一句话：`ctx.credentials` 的 keychain provider。提供 backend 契约、内存/不可用/显式 0600 file backend、macOS 加密文档后端、记录/引用读写与进程内单键锁；Windows 凭据管理器与麒麟/UOS Secret Service 由 `vendor/` 下的预编译 addon 接入，macOS 由应用层加密文档接入，四组 addon 待目标机取证。
 
 ## 当前实现
 
 | 项 | 状态 |
 |---|---|
 | 形态 | 替换 `ctx.credentials` 的 provider 插件 |
-| backend | 内存、不可用、显式 0600 file（含跨进程事务锁）、macOS Security CLI spike、`vendor/` 下六组合预编译 addon（除内存外都需 `allowUnvettedPlatformAdapter: true`）；生产级取证待目标机 |
+| backend | 内存、不可用、显式 0600 file（含跨进程事务锁）、macOS 加密文档（AES-256-GCM + 0600 密钥，含同一文档锁）、`vendor/` 下四组合预编译 addon（原生 addon 需 `allowUnvettedPlatformAdapter: true`）；生产级取证待目标机 |
 | provider | `resolve / describe / set / unset / readRecord / describeRecord / listRecords / modifyRecord / deleteRecord` |
 | 迁移 | `migrateLegacyFileToKeychain()` 暂时 fail closed：不读取旧文件、不访问目标、不复制也不删除；`legacyRetained: null` 表示未核实旧文件是否存在。跨进程互斥和源文件隔离契约核验前不可迁移 |
 | 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed；只有锁记录的 PID 确已不存在时才用原子 rename 回收，存活进程持有的锁不会被顶替；OS backend 未实现 |
@@ -22,17 +22,28 @@
 
 ## backend 选择
 
-- `resolvePlatformBackend()` 是默认解析：`win32-x64` / `win32-arm64` / `linux-x64` / `linux-arm64` / `darwin-arm64` / `darwin-x64` 映射到 `vendor/` 下对应 addon，其余组合返回不可用 backend；显式指定的 platform-arch 不会被本机架构顶替，任何分支都不会落到明文。
-- `createPlatformBackend()` 固定返回不可用，是上述“其余组合”的兜底，也用于断言不存在静默降级。
+- `resolvePlatformBackend()` 是默认解析：`win32-x64` / `win32-arm64` / `linux-x64` / `linux-arm64` 映射到 `vendor/` 下对应 addon；`darwin-arm64` / `darwin-x64` 映射到 macOS 加密文档后端；其余组合返回不可用 backend。显式指定的 platform-arch 不会被本机架构顶替，任何分支都不会落到明文。
+- `createPlatformBackend()` 在 macOS 返回加密文档后端，在其余未映射平台返回不可用 backend，是上述“其余组合”的兜底，也用于断言不存在静默降级。
+- `createMacosBackend({ directory })` 是 macOS 的生产存储：`~/Library/Application Support/HeluoForge/credentials.json`（0600）以 AES-256-GCM 加密，密钥为同目录 `credentials.key`（32 B 随机，0600，首次使用时生成）。目录 0700；密钥文件权限不是 0600、所有者不是当前用户、或文档无法通过认证标签校验时一律拒绝，不回退明文。枚举由 `listEntries()` 支持，不需要显式开关。
 - `createMemoryBackend()` 只用于测试/开发，默认拒绝，需 `allowEphemeral: true`。
 - `createFileBackend({ path })` 是显式 0600 明文 fallback，默认拒绝，需 `allowInsecureFile: true`；文件权限在 POSIX 上校验为 `0600`。
-- `createSecurityCliBackend()` 是 macOS Security CLI 的**验证用**适配器：口令经 stdin 双次输入写入、不进 argv；`list()` 直接报 `KEYCHAIN_LIST_UNSUPPORTED`（不把"读不到"伪装成"没有记录"）；`secretTransport: 'argv'` 需显式 `allowArgvSecret: true`。
+- `createSecurityCliBackend()` 是 macOS Security CLI 的**验证用**适配器，不参与生产路径：口令经 stdin 双次输入写入、不进 argv；`list()` 直接报 `KEYCHAIN_LIST_UNSUPPORTED`（不把"读不到"伪装成"没有记录"）；`secretTransport: 'argv'` 需显式 `allowArgvSecret: true`。它用于对照系统钥匙串行为，不随 macOS 生产后端启用。
 - 组合层启用该适配器还要 `allowUnvettedPlatformAdapter: true`，否则挂载即 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`。
 - `createNativeKeyringBackend({ service, load })` 包装 `@napi-rs/keyring` 2.1.2 的预编译 addon，按 `platform-arch` 以**绝对路径**加载本包 `vendor/<triple>/keyring.node`，不走 `node_modules` 解析，本包也不声明该依赖；`load` 仅用于测试注入；backend key 原样作为 account，`getPassword()` 的 `null` 归一为 `undefined`，Linux 每个 Entry 固定 `{ linux: { store: 'secret-service' } }`（拒绝 keyutils 回退），Windows 按 UTF-16LE 字节拒绝超过 2560 B 的值。它不导出 `transaction()`、不自报跨进程锁，因此 provider 不会声称原子能力；`durable: true` 是对 OS 钥匙串持久性的假设，Linux Secret Service 集合是否跨重启保留未在目标平台验证。枚举默认显式 `KEYCHAIN_LIST_UNSUPPORTED`，只有 `allowUnverifiedEnumeration: true` 才走 `findCredentials`（Windows 过滤语法与 macOS 静默跳过不可读条目的差异仍未核验）。
 - 该样机的枚举默认不可用：`listRecords()` 报 `KEYCHAIN_LIST_UNSUPPORTED`，而不是返回空表；只有显式 `allowUnverifiedEnumeration: true` 才使用 `findCredentials`，且各平台的过滤/编码差异仍未核验。没有它，IAM 拿不到 `listRecords`，写路径仍应保持关闭。
 - 实测（2026-10-24，darwin-arm64）：未命中条目退出码 44；`add-generic-password -U` 覆盖同名条目；删除幂等；spike 过程无明文文件、测试条目已清理。复跑：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过）。
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
-- 生产必须使用 Windows 凭据管理器、macOS 钥匙串或麒麟/UOS Secret Service 的审核实现；file backend 与 macOS `security` CLI spike 都不是生产方案。六组合 addon 已随包分发，但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。
+- 生产必须使用 Windows 凭据管理器、麒麟/UOS Secret Service 或 macOS 加密文档的审核实现；file backend 与 macOS `security` CLI spike 都不是生产方案。四组合 addon 已随包分发，但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。macOS 加密后端不经过该开关。
+
+## macOS 存储边界
+
+macOS 不提供“免签名且无需交互”的系统凭据库：钥匙串条目 ACL 绑定调用方的代码签名，未签名构建每次重建都会变成新身份，SSH/后台会话还触达不到登录钥匙串。一期不提供 Developer ID 签名，因此 macOS 使用应用层加密文档：
+
+- 数据文件 `~/Library/Application Support/HeluoForge/credentials.json`：AES-256-GCM，随机 96 位 IV，认证标签覆盖密文，AAD 绑定文件路径
+- 密钥文件同目录 `credentials.key`：32 字节随机，0600；目录 0700；两者所有者必须是当前用户
+- 跨进程写入共用同一文档锁与 fsync 原子替换，失败不会留下明文临时文件
+
+它保护**静态数据与离线副本**：只拿到文档、没有密钥文件时无法解密。它**不提供按应用隔离**：同一用户下的进程可以读取密钥并解密，与 0600 文件同级。需要按应用隔离只能回到“带稳定签名的系统钥匙串”，该形态不在本包的一期范围。
 
 ## 枚举与边界（依上游源码调研）
 
@@ -42,9 +53,9 @@
 |---|---|---|---|---|
 | Windows | target 为 `{account}.{service}`，blob 为 UTF-16LE | `CredEnumerateW` 过滤 `*.{service}`，按 target 后缀匹配，也会扫到同后缀的他人条目 | 凭据的 `UserName` | 命中集合里任一凭据 blob 为奇数长或非法 UTF-16 时，整次枚举抛错（`Not a valid utf16 blob`），不返回部分结果 |
 | Linux | Secret Service 条目，属性含 `service`、`username` | 按属性 `service` 搜索 | 属性 `username` | 缺 `username` 属性的条目被上游静默跳过；集合锁定时搜索失败 |
-| macOS | 通用密码条目，属性 `svce = service`、`acct = account`（两者都不可为空，空值在 Keychain API 里是通配） | 按 `svce` 属性搜索，可选 `acct` | 属性 `acct` | 缺 `svce` 或 `acct` 的条目被跳过；无命中返回空集而非错误；读取他人创建且 ACL 未授权的条目会触发系统提示 |
+| macOS | 应用层加密文档：AES-256-GCM，密钥 0600 同目录保存 | 整篇文档解密后按 key 前缀过滤 | 文档内的 key 原样 | 密钥权限放宽、密钥与文档不匹配或文档被篡改时显式报错，不回退明文 |
 
-本包据此确定行为：枚举默认关闭；开启后按调用方前缀过滤，并丢弃无法作为 key 的 account（空串、控制字符），不因他人条目失败整个扫描；上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上限：Windows account ≤ 513 字节（UTF-8）、blob ≤ 2560 字节（UTF-16LE）；Linux 与 macOS 无库级大小上限，Linux 实际受 D-Bus 报文大小约束。
+本包据此确定行为：原生后端的枚举默认关闭，`allowUnverifiedEnumeration: true` 才走 `findCredentials`，并按调用方前缀过滤、丢弃无法作为 key 的 account（空串、控制字符），不因他人条目失败整个扫描；macOS 加密文档后端由 `listEntries()` 直接枚举，不需要该开关。上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上限：Windows account ≤ 513 字节（UTF-8）、blob ≤ 2560 字节（UTF-16LE）；Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
 
 ## 运行前提
 
@@ -53,24 +64,24 @@
 | Windows 10/11 x64 与 Windows 11 on ARM | Microsoft Visual C++ 2015-2022 Redistributable：addon 直接导入 `VCRUNTIME140.dll`（UCRT 由系统自带）；arm64 进程需装 arm64 版本，模拟层下的 x64 进程装 x64 版本 | 挂载前检查 `%SystemRoot%\System32\vcruntime140.dll`，缺失即 `KEYCHAIN_UNAVAILABLE` 并指名安装项；探针报告的 `windowsRuntime` 记录同一判断 |
 | UOS 20 amd64 | glibc ≥ 2.15（产物导入的符号版本最高为 `GLIBC_2.15`） | `strings vendor/linux-x64-gnu/keyring.node \| grep GLIBC_` |
 | 银河麒麟 aarch64 | glibc ≥ 2.17（最高为 `GLIBC_2.17`） | `strings vendor/linux-arm64-gnu/keyring.node \| grep GLIBC_` |
-| macOS arm64 / x64 | 无额外运行库；钥匙串 ACL 绑定代码签名，升级或未签名构建首次访问可能弹系统授权框 | 目标机记录弹窗行为与签名身份 |
+| macOS arm64 / x64 | 无额外运行库；不需要代码签名，也不需要图形会话 | 目录 0700、数据与密钥文件 0600 由探针与单元测试覆盖 |
 
 这两个 glibc 下限低于对应发行版基线，不构成额外部署要求；Windows 的 VC++ 运行库则需要在镜像或安装脚本中显式保证，缺它时加载失败与凭据逻辑无关。
 
 除运行库外，系统凭据库还要求进程位于该用户的**图形登录会话**，并且默认集合已创建、已解锁。2026-11-06 实测：
 
-- macOS：SSH 会话访问登录钥匙串被系统拒绝，写入报 `User interaction is not allowed`（包内归一为 `KEYCHAIN_OPERATION_FAILED`）；同机 `security add-generic-password` 报同一错误，而自建钥匙串在同一条 SSH 会话里可正常读写，说明限制在登录钥匙串与会话归属，不是适配器缺陷。把同一份产物放进该用户图形会话（经 `launchctl bootstrap gui/<uid>` 的 LaunchAgent）后，读写、覆盖、跨进程、枚举、删除 **7/7 通过**。
+- macOS 不使用系统钥匙串，因此没有会话前提：2026-11-06 在本机图形会话与一台远程 Apple Silicon Mac 的 SSH 会话中（Node v24.21.0，无签名产物），探针均 7/7 通过，覆盖读写、覆盖、跨进程可见、枚举命中、删除与幂等删除。
 - Linux（Ubuntu 24.04 aarch64）：桌面会话只有 `session` 集合、没有默认集合时写入报 `Secret Service: no result found`；用隔离的 `dbus-run-session` + `gnome-keyring-daemon` 建立并解锁 `login` 集合后，同一份产物 7/7 通过。
 
 ## 平台默认行为
 
-上游绑定没有暴露全部平台参数，下列默认值直接决定部署语义，按源码确认（`windows-native-keyring-store` 1.1.0 `src/store.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`、`apple-native-keyring-store` 1.0.2 `src/keychain.rs`）：
+Windows/Linux 的默认值来自上游绑定源码（`windows-native-keyring-store` 1.1.0 `src/store.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`）；macOS 行是本包自己的存储契约，与钥匙串绑定无关：
 
 | 平台 | 默认值 | 含义 | 本包能否改变 |
 |---|---|---|---|
 | Windows | `CRED_PERSIST_ENTERPRISE` | 域环境且启用漫游配置时，凭据随用户配置文件漫游到其他计算机 | 不能：绑定只暴露 `target` 修饰符，未暴露 `persistence` |
 | Linux | 集合 `default`（通常是 `login`），条目属性 `service`/`username` | 集合锁定时读取失败并报错，不返回空值；本包不实现解锁交互 | 不能：只固定 `linux.store = secret-service`，不控制解锁 |
-| macOS | 用户钥匙串（`MacKeychainDomain::User`，通常是 `login`），持久性 `UntilDelete` | 条目在删除前一直有效，不随会话过期；搜索范围就是这个钥匙串 | 不能：绑定未暴露 domain 选择 |
+| macOS | 文档 `~/Library/Application Support/HeluoForge/credentials.json`，AES-256-GCM，密钥 0600 | 条目在删除前一直有效；跨进程共享同一文档，锁与 fsync 保护写入 | 可以：路径与密钥位置由本包决定 |
 
 Windows 的持久性默认值属于部署决策：若要求凭据只留在本机，当前绑定无法表达，需要换实现或申请上游参数，不能在本包内伪装成本地持久。
 
@@ -82,7 +93,9 @@ Windows 的持久性默认值属于部署决策：若要求凭据只留在本机
 | `KEYCHAIN_UNVETTED_ADAPTER_REFUSED` | 适配器未取证且未显式 `allowUnvettedPlatformAdapter` | 否 |
 | `KEYCHAIN_LIST_UNSUPPORTED` | 枚举未开启，或该平台枚举未验证 | 否 |
 | `KEYCHAIN_VALUE_EMPTY` / `KEYCHAIN_VALUE_INVALID` / `KEYCHAIN_VALUE_TOO_LARGE` | 空值；非字符串或含孤立代理项；Windows 超过 2560 B（UTF-16LE 计） | 否 |
-| `KEYCHAIN_KEY_INVALID` | backend key 为空、含控制字符或不合命名空间文法 | 否 |
+| `KEYCHAIN_KEY_INVALID` | backend key 为空、含控制字符或不合命名空间文法；或密钥文件不是 32 字节 | 否 |
+| `KEYCHAIN_KEY_PERMISSIONS` | 密钥文件权限不是 0600 或所有者不是当前用户 | 否 |
+| `KEYCHAIN_FILE_TAMPERED` | 加密文档无法通过认证标签校验（被修改或密钥不匹配） | 否 |
 | `KEYCHAIN_KEY_TOO_LONG` | Windows account 超过 513 字节（UTF-8） | 否 |
 | `KEYCHAIN_OPERATION_FAILED` | 存储返回非字符串、枚举形状异常、删除后条目仍可读 | 删除分支可能已部分生效 |
 | `KEYCHAIN_EPHEMERAL_REFUSED` / `KEYCHAIN_INSECURE_FILE_REFUSED` | 临时后端或明文文件后端未显式允许 | 否 |
@@ -90,7 +103,7 @@ Windows 的持久性默认值属于部署决策：若要求凭据只留在本机
 
 ## 预编译 addon 的暂存与校验
 
-`vendor/` 存放六组合预编译产物，运行时按 `platform-arch` 选文件：
+`vendor/` 存放四组合预编译产物，运行时按 `platform-arch` 选文件（macOS 不使用 addon）：
 
 | 目录 | 目标 |
 |---|---|
@@ -98,24 +111,21 @@ Windows 的持久性默认值属于部署决策：若要求凭据只留在本机
 | `win32-arm64-msvc/` | Windows 11 on ARM（原生 arm64 Node） |
 | `linux-x64-gnu/` | UOS 20 amd64 |
 | `linux-arm64-gnu/` | 银河麒麟 aarch64 |
-| `darwin-arm64/` | macOS Apple Silicon |
-| `darwin-x64/` | macOS Intel（含 Rosetta 下的 x64 Node） |
 
 暂存与校验都用同一份清单（`scripts/native-keyring.json` 固定版本与 tarball integrity）：
 
 ```sh
-node scripts/fetch-native-keyring.mjs            # 三种目标
+node scripts/fetch-native-keyring.mjs            # 四个目标
 node scripts/fetch-native-keyring.mjs --check    # 校验 CHECKSUMS.json 与文件一致
 ```
 
 `vendor/CHECKSUMS.json` 记录每个 addon 的 sha256、字节数、来源包与版本；下载的 tarball 与清单
 integrity 不一致时立即中止且不写入任何文件。`--check` 不只比对哈希：它还按 triple 校验对象头
-（PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64、Mach-O/arm64、Mach-O/x86_64），清单里钉错架构会被拒绝。
-Rosetta 下 `process.arch` 是 `x64`，选的是 `darwin-x64` 产物；两者都随包分发，不会串用。细节见 `vendor/README.md`。
+（PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64），清单里钉错架构会被拒绝。细节见 `vendor/README.md`。
 
 ## 开发/试点覆盖层（非生产）
 
-企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序落到 `resolvePlatformBackend()`：`win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64`、`darwin-arm64`、`darwin-x64` 解析到随包的预编译 addon，其余组合返回不可用 backend。六组合中仅 darwin-arm64 有本机探针证据，其余未实机取证，addon 按 `unvetted` 处理，挂载需 `allowUnvettedPlatformAdapter: true`，否则 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；未映射平台抛 `KEYCHAIN_UNAVAILABLE`。两者都是预期的 fail closed，不是某个平台的兼容缺陷。
+企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序落到 `resolvePlatformBackend()`：`win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64` 解析到随包的预编译 addon，`darwin-arm64`、`darwin-x64` 解析到 macOS 加密文档后端，其余组合返回不可用 backend。四个 addon 组合未实机取证，按 `unvetted` 处理，挂载需 `allowUnvettedPlatformAdapter: true`，否则 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；未映射平台抛 `KEYCHAIN_UNAVAILABLE`。两者都是预期的 fail closed，不是某个平台的兼容缺陷。
 
 开发/试点需要可用凭据时，在 profile 上再叠一层补丁，显式启用文件后端：
 

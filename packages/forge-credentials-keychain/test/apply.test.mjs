@@ -75,7 +75,7 @@ test('a plaintext file backend without explicit approval is refused', () => {
   );
 });
 
-test('apply fails closed when the platform backend is unavailable', () => {
+test('apply fails closed when the platform backend is unavailable', { skip: process.platform === 'darwin' && 'macOS now mounts the encrypted document backend' }, () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, {}),
@@ -88,7 +88,7 @@ test('apply fails closed when the platform backend is unavailable', () => {
   );
 });
 
-test('the unavailable error names the reason and the development override', () => {
+test('the unavailable error names the reason and the development override', { skip: process.platform === 'darwin' && 'macOS now mounts the encrypted document backend' }, () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, {}),

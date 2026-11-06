@@ -44,13 +44,16 @@ function describeError(error) {
  * value reached the OS store rather than an in-process cache. The child loads
  * the same package by absolute URL, so it resolves the same staged addon.
  */
-function childRead({ entry, key, service, timeoutMs = 30_000 }) {
+function childRead({ entry, key, service, platformBackend = false, timeoutMs = 30_000 }) {
   if (typeof entry !== 'string') throw new Error('childRead needs the package entry URL');
+  const construct = platformBackend
+    ? 'module.createPlatformBackend()'
+    : 'module.createNativeKeyringBackend({ service, platform: process.platform })';
   const script = `
     const key = ${JSON.stringify(key)};
     const service = ${JSON.stringify(service)};
     import(${JSON.stringify(entry)}).then(async (module) => {
-      const backend = module.createNativeKeyringBackend({ service, platform: process.platform });
+      const backend = ${construct};
       const value = await backend.get(key);
       process.stdout.write(JSON.stringify({ ok: true, found: value !== undefined, value }));
     }).catch((error) => {
@@ -92,6 +95,7 @@ function childRead({ entry, key, service, timeoutMs = 30_000 }) {
  */
 export async function runStoreProbe(options) {
   const { backend, service, key } = options;
+  const platformBackend = options.platformBackend === true;
   const enumeration = options.enumeration === true;
   // `keep` leaves the entry behind so a reboot can be sandwiched between two
   // runs; the default run is self-cleaning.
@@ -139,7 +143,7 @@ export async function runStoreProbe(options) {
   });
 
   await step('cross-process-read', async () => {
-    const result = readFromChild({ entry, key, service });
+    const result = readFromChild({ entry, key, service, platformBackend });
     if (result.ok !== true) {
       const error = new Error(result.message ?? 'child read failed');
       if (typeof result.code === 'string') error.code = result.code;
@@ -191,6 +195,7 @@ function usage() {
     '',
     '  --service <name>      keyring service namespace (default: heluo-forge)',
     '  --package <dir>       package directory to load (default: this checkout)',
+    '  --platform            use the host platform backend instead of the addon',
     '  --key <name>          absolute backend key (default: <service>/probe/<random>)',
     '  --enumeration         also exercise findCredentials',
     '  --keep                leave the entry behind (reboot/persistence check)',
@@ -202,7 +207,7 @@ function usage() {
 }
 
 export function parseArgs(argv) {
-  const options = { service: 'heluo-forge', key: undefined, enumeration: false, json: false, keep: false, mode: 'run', packageDir: undefined };
+  const options = { service: 'heluo-forge', key: undefined, enumeration: false, json: false, keep: false, mode: 'run', packageDir: undefined, platformBackend: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') return { help: true };
@@ -211,6 +216,7 @@ export function parseArgs(argv) {
     else if (arg === '--expect-present') options.mode = 'expect-present';
     else if (arg === '--cleanup') options.mode = 'cleanup';
     else if (arg === '--json') options.json = true;
+    else if (arg === '--platform') options.platformBackend = true;
     else if (arg === '--service') { options.service = argv[index += 1]; }
     else if (arg === '--package') { options.packageDir = argv[index += 1]; }
     else if (arg === '--key') { options.key = argv[index += 1]; }
@@ -240,7 +246,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify({ ok: false, stage: 'package', error: describeError(error) }, null, 2)}\n`);
     return 2;
   }
-  const { createNativeKeyringBackend, nativeAddonPath, nativeTargetFor, windowsRuntimeStatus } = loaded.module;
+  const { createNativeKeyringBackend, createPlatformBackend, nativeAddonPath, nativeTargetFor, windowsRuntimeStatus } = loaded.module;
   const triple = nativeTargetFor(platform, arch);
   const addon = nativeAddonPath(platform, arch);
   const environment = {
@@ -253,7 +259,7 @@ async function main() {
     // Windows load fails, and it is invisible in the credential store itself.
     ...(platform === 'win32' ? { windowsRuntime: windowsRuntimeStatus() } : {}),
   };
-  if (triple === undefined) {
+  if (!options.platformBackend && triple === undefined) {
     process.stderr.write(`this host has no staged addon mapping (${platform}-${arch}); run on a target machine\n`);
     process.stdout.write(`${JSON.stringify({ ok: false, stage: 'environment', environment }, null, 2)}\n`);
     return 2;
@@ -261,7 +267,9 @@ async function main() {
 
   let backend;
   try {
-    backend = createNativeKeyringBackend({ service: options.service, platform, arch, enumeration: options.enumeration ? 'find-credentials' : 'unsupported' });
+    backend = options.platformBackend
+      ? createPlatformBackend()
+      : createNativeKeyringBackend({ service: options.service, platform, arch, enumeration: options.enumeration ? 'find-credentials' : 'unsupported' });
   } catch (error) {
     process.stdout.write(`${JSON.stringify({ ok: false, stage: 'construct', environment, error: describeError(error) }, null, 2)}\n`);
     return 2;
@@ -291,6 +299,7 @@ async function main() {
     }
   }
   const report = await runStoreProbe({
+    platformBackend: options.platformBackend,
     backend,
     entry: loaded.entry,
     service: options.service,

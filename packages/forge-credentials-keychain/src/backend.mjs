@@ -5,9 +5,10 @@
 // A backend MAY expose transaction(key, fn) to make read-modify-write atomic
 // across processes; the provider uses it instead of a plain get/set sequence.
 
-import { chmod, mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { chmod, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
+import { homedir } from 'node:os';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 /**
@@ -93,10 +94,127 @@ export function createUnavailableBackend(reason = 'OS keychain adapter is not im
   };
 }
 
+/**
+ * macOS path. Apple's keychain binds an item's ACL to the code signature of the
+ * calling application, so an unsigned build is rejected (or prompts) and a
+ * rebuild changes the identity again. macOS is delivered without a signing
+ * identity, so the platform backend is an application-level encrypted document
+ * instead of the login keychain: same file backend, AES-256-GCM at rest, key in
+ * a 0600 file next to it. The guarantee is user-level isolation, not the
+ * per-application isolation of a code-signed keychain.
+ */
+export function createMacosBackend({ directory } = {}) {
+  const root = directory ?? join(homedir(), 'Library', 'Application Support', 'HeluoForge');
+  return createFileBackend({
+    path: join(root, 'credentials.json'),
+    keyPath: join(root, 'credentials.key'),
+  });
+}
+
 export function createPlatformBackend() {
+  if (process.platform === 'darwin') return createMacosBackend();
   return createUnavailableBackend(
     `OS keychain adapter is not implemented on this platform (${process.platform}); this profile fails closed. Use a reviewed backend for production, or the documented development override (filePath + allowInsecureFile) in a non-production profile`,
   );
+}
+
+const KEY_BYTES = 32;
+const KEY_MODE = 0o600;
+const CIPHER = 'aes-256-gcm';
+
+async function assertPrivateKeyFile(path) {
+  let info;
+  try {
+    info = await stat(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'credential key file cannot be inspected');
+  }
+  // Windows reports synthetic modes and has no POSIX uid; the macOS backend is
+  // the only production user of this path, but the contract tests run on every
+  // CI platform, so the POSIX checks are applied where they are meaningful.
+  if (process.platform === 'win32') return;
+  if ((info.mode & 0o777) !== KEY_MODE) {
+    throw new KeychainBackendError(
+      'KEYCHAIN_KEY_PERMISSIONS',
+      `credential key file must be mode 0600, found ${(info.mode & 0o777).toString(8)}; refusing to use it`,
+    );
+  }
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new KeychainBackendError('KEYCHAIN_KEY_PERMISSIONS', 'credential key file belongs to another user; refusing to use it');
+  }
+}
+
+/** Read the AES key, creating it with 0600 on first use. */
+async function readOrCreateKey(keyPath) {
+  try {
+    const raw = await readFile(keyPath, 'utf8');
+    const key = Buffer.from(raw.trim(), 'base64');
+    if (key.length !== KEY_BYTES) {
+      throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'credential key file does not hold a 32-byte key');
+    }
+    await assertPrivateKeyFile(keyPath);
+    return key;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  await mkdir(dirname(keyPath), { recursive: true, mode: 0o700 });
+  const key = randomBytes(KEY_BYTES);
+  try {
+    const created = await open(keyPath, 'wx', KEY_MODE);
+    try {
+      await created.writeFile(`${key.toString('base64')}\n`, 'utf8');
+      await created.sync();
+    } finally {
+      await created.close().catch(() => {});
+    }
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    // Another process created the key between our read and our exclusive
+    // create. Use its key: returning the local candidate would decrypt with a
+    // key the document was never written with.
+    const raw = await readFile(keyPath, 'utf8');
+    const existing = Buffer.from(raw.trim(), 'base64');
+    if (existing.length !== KEY_BYTES) {
+      throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'credential key file does not hold a 32-byte key');
+    }
+    await assertPrivateKeyFile(keyPath);
+    return existing;
+  }
+  await chmod(keyPath, KEY_MODE).catch(() => {});
+  await assertPrivateKeyFile(keyPath);
+  return key;
+}
+
+function encryptDocument(key, path, text) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(CIPHER, key, iv, { authTagLength: 16 });
+  cipher.setAAD(Buffer.from(`heluo-forge:${path}`));
+  const data = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  return JSON.stringify({
+    version: 1,
+    alg: CIPHER,
+    iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+    data: data.toString('base64'),
+  });
+}
+
+function decryptDocument(key, path, envelope) {
+  if (envelope.alg !== CIPHER || typeof envelope.iv !== 'string' || typeof envelope.tag !== 'string' || typeof envelope.data !== 'string') {
+    throw new KeychainBackendError('KEYCHAIN_FILE_CORRUPT', 'encrypted credential document has an unsupported shape');
+  }
+  try {
+    const decipher = createDecipheriv(CIPHER, key, Buffer.from(envelope.iv, 'base64'), { authTagLength: 16 });
+    decipher.setAAD(Buffer.from(`heluo-forge:${path}`));
+    decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(envelope.data, 'base64')), decipher.final()]).toString('utf8');
+  } catch {
+    throw new KeychainBackendError(
+      'KEYCHAIN_FILE_TAMPERED',
+      'encrypted credential document cannot be decrypted with the stored key; it was modified or the key does not match',
+    );
+  }
 }
 
 /**
@@ -170,17 +288,31 @@ async function withFileLock(path, fn, timeoutMs) {
  * production keychain: callers must opt in with allowInsecureFile=true and
  * accept that the file is plaintext at rest.
  */
-export function createFileBackend({ path, mode = 0o600, lockTimeoutMs = 10000 } = {}) {
+export function createFileBackend({ path, mode = 0o600, lockTimeoutMs = 10000, keyPath } = {}) {
   if (typeof path !== 'string' || path.length === 0 || !isAbsolute(path)) {
     throw new KeychainBackendError('KEYCHAIN_PATH_REQUIRED', 'file backend requires an absolute path');
+  }
+  const encrypted = keyPath !== undefined;
+  if (encrypted && (typeof keyPath !== 'string' || keyPath.length === 0 || !isAbsolute(keyPath))) {
+    throw new KeychainBackendError('KEYCHAIN_KEY_REQUIRED', 'encrypted file backend requires an absolute keyPath');
   }
   async function load() {
     // Reads do not take the document lock. Each operation must own its Map
     // from the start, not just copy shared mutable state after an await.
     const data = new Map();
     try {
-      const raw = await readFile(path, 'utf8');
+      let raw = await readFile(path, 'utf8');
       await chmod(path, mode).catch(() => {});
+      if (encrypted) {
+        const envelope = JSON.parse(raw);
+        if (envelope === null || typeof envelope !== 'object' || envelope.alg === undefined) {
+          throw new KeychainBackendError(
+            'KEYCHAIN_FILE_CORRUPT',
+            'a plaintext credential document exists where an encrypted one is expected; refusing to read it',
+          );
+        }
+        raw = decryptDocument(await readOrCreateKey(keyPath), path, envelope);
+      }
       const parsed = JSON.parse(raw);
       if (parsed === null || typeof parsed !== 'object' || parsed.version !== 1 || parsed.entries === null || typeof parsed.entries !== 'object') {
         throw new KeychainBackendError('KEYCHAIN_FILE_CORRUPT', 'keychain file has an unsupported shape');
@@ -202,7 +334,8 @@ export function createFileBackend({ path, mode = 0o600, lockTimeoutMs = 10000 } 
   async function persist(entries) {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-    const payload = JSON.stringify({ version: 1, entries: Object.fromEntries(entries) });
+    const document = JSON.stringify({ version: 1, entries: Object.fromEntries(entries) });
+    const payload = encrypted ? encryptDocument(await readOrCreateKey(keyPath), path, document) : document;
     try {
       // fsync before rename: without it a power loss can leave the new name
       // pointing at an empty or truncated document, which would lose every
@@ -245,11 +378,12 @@ export function createFileBackend({ path, mode = 0o600, lockTimeoutMs = 10000 } 
   }
 
   return {
-    kind: 'file',
+    kind: encrypted ? 'file-encrypted' : 'file',
     available: true,
     durable: true,
     secure: false,
-    requiresExplicitOptIn: true,
+    encrypted,
+    requiresExplicitOptIn: !encrypted,
     async get(key) { return (await load()).get(key); },
     async set(key, value) {
       await withFileLock(path, async () => {

@@ -158,7 +158,7 @@ node scripts/probe/check-teamflow-journal-roots.mjs --journal <journal.json> --r
 ## 原生凭据存储探针（issue #182）
 
 ```sh
-node scripts/probe/native-keyring-store-probe.mjs [--service <名>] [--package <目录>] [--enumeration] [--json]
+node scripts/probe/native-keyring-store-probe.mjs [--service <名>] [--package <目录>] [--platform] [--enumeration] [--json]
 ```
 
 在目标机上直接对 OS 存储执行读、写、覆盖、跨进程读、删除与幂等删除，输出 JSON 供
@@ -173,4 +173,7 @@ issue #182 归档。它不挂载 DSH profile、不联网、不打印存储值；
 只装了制品、没有仓库检出时，用 `--package` 指向安装目录里的包（如
 `.../node_modules/@heluo/forge-credentials-keychain`），探针与它的子进程都从该目录加载。
 
-非交付平台（如 macOS）以 `stage: environment` 退出码 2 结束，这是预期行为。
+`--platform` 改为使用宿主的平台后端，而不是 addon 映射：macOS 上即应用层加密文档后端
+（AES-256-GCM + 0600 密钥），因此 macOS 不要求签名、不要求图形会话，SSH 会话也能直接跑。
+不带 `--platform` 且宿主没有 addon 映射（macOS、未列入的平台）时以 `stage: environment`
+退出码 2 结束，这是预期行为。

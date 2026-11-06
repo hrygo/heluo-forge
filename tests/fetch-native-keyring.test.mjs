@@ -29,12 +29,6 @@ function fakeBinary(triple) {
     bytes.writeUInt16LE(triple.includes('arm64') ? 0xaa64 : 0x8664, 0x44);
     return bytes;
   }
-  if (triple.startsWith('darwin-')) {
-    const bytes = Buffer.alloc(32);
-    bytes.writeUInt32LE(0xfeedfacf, 0);
-    bytes.writeUInt32LE(triple.includes('arm64') ? 0x0100000c : 0x01000007, 4);
-    return bytes;
-  }
   const machine = triple === 'linux-arm64-gnu' ? 183 : 62;
   const bytes = Buffer.alloc(64);
   bytes.writeUInt32BE(0x7f454c46, 0);
@@ -88,12 +82,6 @@ for (const [label, mutate, expected] of [
     layout.checksums.files['linux-x64-gnu/keyring.node'] = { ...layout.checksums.files['linux-x64-gnu/keyring.node'], sha256: sha256(bytes), bytes: bytes.length };
     writeFileSync(join(layout.root, 'linux-x64-gnu', 'keyring.node'), bytes);
   }, /linux-x64-gnu\/keyring\.node: ELF machine 183 does not match ELF\/x86-64/u],
-  ['a Mach-O object with the x86_64 cputype under the arm64 triple', (layout) => {
-    const bytes = fakeBinary('darwin-arm64');
-    bytes.writeUInt32LE(0x01000007, 4);
-    layout.checksums.files['darwin-arm64/keyring.node'] = { ...layout.checksums.files['darwin-arm64/keyring.node'], sha256: sha256(bytes), bytes: bytes.length };
-    writeFileSync(join(layout.root, 'darwin-arm64', 'keyring.node'), bytes);
-  }, /darwin-arm64\/keyring\.node: Mach-O cputype 0x1000007 does not match Mach-O\/arm64/u],
   ['a text file where an object is expected', (layout) => {
     const bytes = Buffer.from('definitely not a binary');
     layout.checksums.files['linux-x64-gnu/keyring.node'] = { ...layout.checksums.files['linux-x64-gnu/keyring.node'], sha256: sha256(bytes), bytes: bytes.length };

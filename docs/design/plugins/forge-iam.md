@@ -175,7 +175,7 @@ flowchart TB
       direction LR
       F_AtomicCheck["单记录原子信任门禁<br/>(verifyAtomicStore 强校验)"]
       F_GatewayCAS["双键联合 CAS 提交<br/>(GatewayAtomicStore 条件写入)"]
-      F_Keychain["OS Keychain 适配演进<br/>(Windows / macOS / Linux 钥匙串)"]
+      F_Keychain["凭据存储适配演进<br/>(Windows Credential Manager / Linux Secret Service / macOS 加密文档)"]
     end
   end
 
@@ -493,12 +493,12 @@ DSH 凭据存储 (ctx.credentials)
 
 ### 6.3 存储后端与 OS Keychain 演进策略
 
-1. **安全底线**：生产环境必须依托操作系统原生钥匙串（Windows Credential Manager、macOS Keychain、Linux Secret Service）实现凭据受控加密，拒绝明文 YAML 存储；
+1. **安全底线**：生产环境不得明文存储凭据。Windows 使用 Credential Manager，Linux 使用 Secret Service，macOS 使用应用层加密文档（AES-256-GCM、密钥 0600，见[凭据包说明](../../../packages/forge-credentials-keychain/README.md#macos-存储边界)）。macOS 不使用系统钥匙串：一期不提供 Developer ID 签名，钥匙串 ACL 绑定调用方身份，未签名构建与后台会话不可用。
 2. **Fail-Closed 约束**：当系统钥匙串服务不可用时，系统严格执行 Fail-Closed 阻断，严禁未经显式安全授权静默回退至不安全的未加密明文介质；
 3. **防并发篡改**：凭据读写与 CAS 联合提交必须具备跨进程互斥保护，防止崩溃或多进程并发导致的数据撕裂；
-4. **后端落地形态**：Windows x64/arm64、Linux x64 GNU、Linux arm64 GNU、macOS arm64/x64 使用固定版本的预编译 addon，以发布资源随 `@heluo/forge-credentials-keychain` 分发，按 `platform-arch` 以相对本包的绝对路径加载；终端不编译、不解析平台包，宿主制品保持自包含。未列入映射的平台（含 macOS）返回不可用后端，加载器不提供任何明文分支；
+4. **后端落地形态**：Windows x64/arm64、Linux x64 GNU、Linux arm64 GNU 使用固定版本的预编译 addon，以发布资源随 `@heluo/forge-credentials-keychain` 分发，按 `platform-arch` 以相对本包的绝对路径加载；terminal 不编译、不解析平台包，宿主制品保持自包含。macOS arm64/x64 不加载 addon，解析层直接进入应用层加密文档后端。未列入映射的平台返回不可用后端，加载器不提供任何明文分支；
 5. **平台持久性**：Windows 绑定未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境且启用漫游配置时凭据随用户配置文件漫游；绑定未暴露 `persistence`，本工程无法改写。是否接受这一默认值属业务决策：要求凭据只留本机的场景需要更换实现或申请上游参数，不能在本包内伪装成本地持久；
-6. **准入状态**：六组合产物已随包分发；darwin-arm64 存储层已本机取证，其余目标机尚未取证，后端按 `unvetted` 拒绝默认挂载，组合层需显式 `allowUnvettedPlatformAdapter`。取证覆盖读、写、删、失效、跨进程与重启后保留，通过后由单一开关转为默认可用；取证前枚举保持 `KEYCHAIN_LIST_UNSUPPORTED`，不返回空表，IAM 写路径据此继续关闭。
+6. **准入状态**：四组合 addon 已随包分发，目标机尚未取证，按 `unvetted` 拒绝默认挂载，组合层需显式 `allowUnvettedPlatformAdapter`。macOS 加密文档后端不经过该开关，已在本机与远程 Apple Silicon Mac 的 SSH 会话中各 7/7 通过；其剩余证据是重启后复读与密钥权限负例的实机记录。取证覆盖读、写、删、失效、跨进程与重启后保留，通过后由单一开关转为默认可用；取证前原生枚举保持 `KEYCHAIN_LIST_UNSUPPORTED`，不返回空表，IAM 写路径据此继续关闭。
 
 ### 6.4 网关联合变更当前原型
 
