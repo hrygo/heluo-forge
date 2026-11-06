@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.40.0 |
+| 版本 | V1.40.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -50,7 +50,7 @@
 | `contracts/` | 外部系统字段级契约与明确标注的私有隔离草案 | [AI 网关契约](<contracts/gateway-contract.md>)；[IAM 消费隔离草案](<contracts/iam-consumer-isolated.md>)（source/mock见证/许可/合成工具与模型已分段验收；根联合已实现，本地验收已完成，真实准入未开放）；[IAM 只读订阅隔离草案](<contracts/iam-view-observer-isolated.md>)（私有source/mock接缝已验收；真实注册关闭） | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
 | `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 发函人、各接入团队 |
-| `engineering/` | 仓库结构、开发测试与发布约定 | [工程结构设计](<engineering/repository-structure-design.md>) | 工程负责人、维护者 |
+| `engineering/` | 仓库结构、开发测试与发布约定、插件跨包规范 | [工程结构设计](<engineering/repository-structure-design.md>) | 工程负责人、维护者 |
 | `templates/` | 受控文档与模块设计模板 | [_template.md](<templates/_template.md>) | 全体撰写人 |
 | `assets/` | 可离线打开的 HTML 图解与品牌资产 | [认证流程图解](<assets/enterprise-authentication-flow.html>)；品牌见[品牌全景](<assets/branding/cyber-long/index.html>)与[生图规范](<assets/branding/prompts.md>) | 评审与对接人员 |
 
@@ -93,6 +93,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 网关新问询 | [DSH 和应用 Agent 调用 AI 网关补充问询函](collaboration/gateway-confirmation-letter.md) | 先说明定制化 DeepSeek Harness 与应用自动调用两类场景，再按 CONF-GW-09—20 询问是否支持；正文面向网关团队；跨函问题对应与协调放在内部说明 §3.1，回函处置见 §3.2；已发出，2026-10-27 收到解答 v1.2，第二轮待发出 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
+| 插件规范 | [DSH 插件高阶规范](<engineering/dsh-plugin-conventions.md>) | 插件装载形态、分轴与单写者、准入与失败模型、错误码契约、状态机与单一真源 |
 | 逐模块设计 | [设计索引](<design/README.md>) | 各扩展包与两个独立服务的详细设计状态与路径（含实现与验证入口） |
 | Issue 交付调整方案 | [Issue 交付单元与研发职责调整方案](requirements/issue-delivery-adjustment-proposal.md) | 2026-11-03 用户已最终确认交付模型与四项取舍；基线为唯一范围真源，本文记录决定、落实顺序与 Agent 验证事项；SDD 已于 2026-11-03 全量退役 |
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
