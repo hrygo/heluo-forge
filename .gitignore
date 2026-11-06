@@ -116,3 +116,6 @@ test-results/
 playwright-report/
 *.patch
 *.diff
+
+# Staged native addons: produced by scripts/fetch-native-keyring.mjs, never committed
+packages/forge-credentials-keychain/vendor/*/

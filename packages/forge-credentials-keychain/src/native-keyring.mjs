@@ -21,11 +21,27 @@
 //     preferred when present; `await` on the synchronous surface is a no-op,
 //     so a module that only exports `Entry` keeps working.
 
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { KeychainBackendError, NAMESPACE_PATTERN } from './backend.mjs';
 
-/** Platform packages are resolved by name; this module never installs them. */
-const DEFAULT_MODULE = '@napi-rs/keyring';
+/**
+ * Upstream package the staged addons come from. The addons themselves are
+ * release resources under `native/<triple>/`, staged by
+ * `scripts/fetch-native-keyring.mjs`; this package never declares the upstream
+ * package as a dependency, because the enterprise bundle refuses external
+ * runtime dependencies and the terminal must never resolve a platform package
+ * at install time.
+ */
+const NATIVE_KEYRING_MODULE = '@napi-rs/keyring';
+
+/** platform-arch → upstream prebuilt triple; anything else stays fail closed. */
+const NATIVE_TARGETS = new Map([
+  ['win32-x64', 'win32-x64-msvc'],
+  ['linux-x64', 'linux-x64-gnu'],
+  ['linux-arm64', 'linux-arm64-gnu'],
+]);
 
 /** Windows CREDENTIALW blob limit; UTF-16LE means at most half as many code units. */
 const WINDOWS_BLOB_LIMIT_BYTES = 2560;
@@ -41,16 +57,51 @@ function assertService(service) {
 }
 
 /**
- * Load the native module lazily so importing this file never needs it, and
- * resolve from this package rather than the process working directory.
+ * The staged triple for a platform-arch pair, or `undefined` when this package
+ * ships no vetted addon for it. Undefined is not an error here: the caller must
+ * fall back to the explicitly unavailable backend, never to plaintext.
  */
-function defaultLoad(moduleName) {
+export function nativeTargetFor(platform = process.platform, arch = process.arch) {
+  return NATIVE_TARGETS.get(`${platform}-${arch}`);
+}
+
+/** Absolute path of the staged addon, or `undefined` for an unsupported pair. */
+export function nativeAddonPath(platform = process.platform, arch = process.arch) {
+  const triple = nativeTargetFor(platform, arch);
+  if (triple === undefined) return undefined;
+  return fileURLToPath(new URL(`../vendor/${triple}/keyring.node`, import.meta.url));
+}
+
+/**
+ * Load the staged addon from this package's own `native/` directory.
+ *
+ * Resolving by path instead of by package name is deliberate: a name lookup
+ * would walk up into whatever `node_modules` the host happens to have, which is
+ * exactly the "terminal resolves a platform package" behaviour the release
+ * rules forbid. A missing file is a mount-time failure with an actionable
+ * message, not a silent downgrade.
+ */
+function defaultLoad(platform = process.platform, arch = process.arch) {
+  const triple = nativeTargetFor(platform, arch);
+  if (triple === undefined) {
+    throw new KeychainBackendError(
+      'KEYCHAIN_UNAVAILABLE',
+      `this package ships no vetted addon for ${platform}-${arch}; no plaintext fallback is performed`,
+    );
+  }
+  const addon = nativeAddonPath(platform, arch);
+  if (!existsSync(addon)) {
+    throw new KeychainBackendError(
+      'KEYCHAIN_UNAVAILABLE',
+      `staged addon for ${triple} is missing; run node scripts/fetch-native-keyring.mjs (no plaintext fallback is performed)`,
+    );
+  }
   try {
-    return createRequire(import.meta.url)(moduleName);
+    return createRequire(import.meta.url)(addon);
   } catch {
     throw new KeychainBackendError(
       'KEYCHAIN_UNAVAILABLE',
-      `native keyring module ${moduleName} cannot be loaded; no plaintext fallback is performed`,
+      `staged addon for ${triple} cannot be loaded; no plaintext fallback is performed`,
     );
   }
 }
@@ -109,7 +160,10 @@ export function createNativeKeyringBackend(options = {}) {
   if (enumeration !== 'unsupported' && enumeration !== 'find-credentials') {
     throw new KeychainBackendError('KEYCHAIN_ENUMERATION_INVALID', "enumeration must be 'unsupported' or 'find-credentials'");
   }
-  const loader = options.load ?? (() => defaultLoad(DEFAULT_MODULE));
+  // `vetted` stays false until the target machine evidence exists; the
+  // provider then refuses to mount without an explicit opt-in.
+  const vetted = options.vetted === true;
+  const loader = options.load ?? (() => defaultLoad(platform, options.arch ?? process.arch));
   let module;
 
   function store() {
@@ -192,8 +246,8 @@ export function createNativeKeyringBackend(options = {}) {
     kind: 'native-keyring',
     available: true,
     durable: true,
-    unvetted: true,
-    production: false,
+    unvetted: !vetted,
+    production: vetted,
     service,
     enumeration,
     // No `transaction`, no `crossProcessLock`: the provider must not advertise
@@ -258,4 +312,4 @@ export function createNativeKeyringBackend(options = {}) {
   return backend;
 }
 
-export { DEFAULT_MODULE as NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES };
+export { NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES };

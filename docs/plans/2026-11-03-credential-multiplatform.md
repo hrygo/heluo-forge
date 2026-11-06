@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-010 |
 | 文档名称 | 多端凭据存储实现与验收方案 |
-| 版本 | V0.6.1 |
+| 版本 | V0.6.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
+| 最后更新 | 2026-11-06 |
 | 门禁 | A 已实现（本机 macOS 取证）；B 样机已实现（仅合成用例）；G1 关键存储能力待关闭；G2 三目标未验 |
 | 文档层级 | L2 实施计划；范围由需求基线承担，接口与存储决策先回写对应设计再实施 |
 
@@ -237,16 +237,19 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 
 ## 6. 自包含制品路线
 
-**选择构建期闭合原生资源，不让终端解析 keyring 的 optionalDependencies。**企业 npm 有镜像不等于终端制品已自包含。
+**选择构建期闭合原生资源，不让终端解析 keyring 的 optionalDependencies。** 企业 npm 有镜像不等于终端制品已自包含。
 
-当前 [构建器](<../../scripts/build-enterprise-bundle.mjs>)拒绝 peer/optional 和外部运行依赖；[闭包审计](<../../scripts/lib/bundle-rules.mjs>)与[负向测试](<../../tests/bundle-build.test.mjs>)锁定这一政策。实施需增加有边界的资源导入，不宽泛放开外部依赖。
+现行闭包政策不变：构建器拒绝 peer/optional 与任何非 `@heluo/forge-*` 的运行依赖，闭包审计与负向测试锁定该政策。原生 addon 以发布资源随包分发，因此三条约束同时满足：终端不编译、不联网、不解析外部包。
 
-1. 新增原生资源锁定清单，逐项记录来源包、精确版本、tarball integrity、提取资源哈希、平台/架构/libc、许可与 Rust 依赖清单；构建输入来自受控缓存，缺资源即失败。获取公网源与企业发布仍由既有制品流程承担，本仓库不新建发布后台。
-2. 构建器在 staging 中将**原版平台二进制与许可证**放入凭据包的 `vendor/` 资源目录。最小受控 loader 按 OS/架构/libc 选相对路径，直接加载对应 `.node`；核对导出与固定版本 API。终端不需要加载未随包交付的官方 JS wrapper、不访问全局包，也不自动选择 WASI/其他 backend。
-3. Windows x64、Linux x64 GNU、Linux arm64 GNU 是必选资源；macOS arm64 仅为开发回归资源，不扩大交付承诺。不能在开发 Mac 打包时只把本机平台复制进最终包。
-4. 修改构建器、源码/释放目录/tarball 审计与包 `files` 处理，覆盖新 vendor 资源；新增“缺目标、错哈希、混版本、符号链接、路径穿越、错误架构、丢许可证、额外外部依赖”负例。不得因加原生资源删除原有拒绝测试。
-5. 最终安装单元仍是同一个自包含 tgz；不携带未闭合的 `workspace:`、外部运行依赖、终端可选依赖或安装钩子。用空缓存、禁止联网与 `--ignore-scripts` 安装，再从安装产物启动真实宿主，不以源码目录的 require 成功代替。
-6. 在三台目标机核验 glibc/系统依赖与实际加载；Linux 静态 libdbus 及其许可按发布资源核对，不能把 GNU 包存在写成兼容所有 UOS/麒麟镜像。macOS 在实际签名应用上下文验载，不能用独立 bundled Node 的失败替代。
+落点（`packages/forge-credentials-keychain`）：
+
+1. 锁定清单 [scripts/native-keyring.json](<../../scripts/native-keyring.json>) 固定上游包、精确版本与每个 tarball 的 integrity；`vendor/CHECKSUMS.json` 记录落地文件的 sha256、字节数、来源包与许可。
+2. [scripts/fetch-native-keyring.mjs](<../../scripts/fetch-native-keyring.mjs>) 按清单下载、校验 integrity、暂存到 `vendor/<triple>/keyring.node` 并写校验和；任何一项不符立即中止且不写文件，`--check` 只校验不下载。
+3. 二进制不进入 Git：提交钩子拒绝二进制与大文件，`vendor/*/` 已由 [.gitignore](<../../.gitignore>) 排除。干净克隆保留清单与校验和、跳过字节比对；发布构建要求三个目标全部就位，缺一个即失败。
+4. 加载器 `src/native-keyring.mjs` 用 `nativeTargetFor()` 映射 `platform-arch`，按**相对本包的绝对路径**加载，不做 `node_modules` 解析；未列入映射的组合（含 macOS）返回不可用 backend，任何分支都不落到明文。
+5. 启用分两步：`NATIVE_ADAPTER_VETTED` 为 `false` 时挂载需要 `allowUnvettedPlatformAdapter: true`；目标机完成读、写、删、失效、跨进程与重启后保留的记录后置为 `true`，此后无需平台相关配置。
+
+负例覆盖：缺目标、错哈希、混版本、错误架构、丢许可证、额外外部依赖，以及“映射表被改成默认放开时用例必须失败”。新增测试不得删除既有拒绝用例。
 
 若资源导入或平台 API 需改变既有闭包政策，先修改对应设计并评审；不能退回“现场 pnpm 自动装平台包”作为临时发布路线。
 
