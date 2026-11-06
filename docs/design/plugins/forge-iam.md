@@ -497,7 +497,8 @@ DSH 凭据存储 (ctx.credentials)
 2. **Fail-Closed 约束**：当系统钥匙串服务不可用时，系统严格执行 Fail-Closed 阻断，严禁未经显式安全授权静默回退至不安全的未加密明文介质；
 3. **防并发篡改**：凭据读写与 CAS 联合提交必须具备跨进程互斥保护，防止崩溃或多进程并发导致的数据撕裂；
 4. **后端落地形态**：Windows x64、Linux x64 GNU、Linux arm64 GNU 使用固定版本的预编译 addon，以发布资源随 `@heluo/forge-credentials-keychain` 分发，按 `platform-arch` 以相对本包的绝对路径加载；终端不编译、不解析平台包，宿主制品保持自包含。未列入映射的平台（含 macOS）返回不可用后端，加载器不提供任何明文分支；
-5. **准入状态**：三平台产物已随包分发但尚未在目标机取证，后端按 `unvetted` 拒绝默认挂载，组合层需显式 `allowUnvettedPlatformAdapter`。取证覆盖读、写、删、失效、跨进程与重启后保留，通过后由单一开关转为默认可用；取证前枚举保持 `KEYCHAIN_LIST_UNSUPPORTED`，不返回空表，IAM 写路径据此继续关闭。
+5. **平台持久性**：Windows 绑定未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境且启用漫游配置时凭据随用户配置文件漫游；绑定未暴露 `persistence`，本工程无法改写。是否接受这一默认值属业务决策：要求凭据只留本机的场景需要更换实现或申请上游参数，不能在本包内伪装成本地持久；
+6. **准入状态**：三平台产物已随包分发但尚未在目标机取证，后端按 `unvetted` 拒绝默认挂载，组合层需显式 `allowUnvettedPlatformAdapter`。取证覆盖读、写、删、失效、跨进程与重启后保留，通过后由单一开关转为默认可用；取证前枚举保持 `KEYCHAIN_LIST_UNSUPPORTED`，不返回空表，IAM 写路径据此继续关闭。
 
 ### 6.4 网关联合变更当前原型
 
