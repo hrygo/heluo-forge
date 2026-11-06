@@ -96,6 +96,102 @@ test('callbackPort: 0 binds an OS-assigned loopback port for the attempt', async
   assert.notEqual(new URL(manager.origin).port, '9');
 });
 
+test('callbackAddress: auto keeps IPv4 first and the prefix IAM registers', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const checked = validateConfig(configFor(mock, { callbackPort: 0 }));
+  assert.ok('value' in checked, JSON.stringify(checked.issues));
+  const { service, manager } = loopbackService(checked.value);
+  t.after(() => manager.close());
+
+  const started = await service.startSignIn();
+  const redirect = new URL(started.authorizationUrl).searchParams.get('redirect_uri');
+  assert.ok(redirect.startsWith('http://127.0.0.1:'), redirect);
+  assert.equal(new URL(redirect).hostname, '127.0.0.1', 'localhost or [::1] would miss the registered prefix');
+});
+
+/** A listener stub: each address either binds or fails with a given code. */
+function stubListener(outcomes) {
+  const tried = [];
+  const start = ({ address, port }) => {
+    tried.push(address);
+    const outcome = outcomes[address];
+    if (!outcome) {
+      return {
+        address,
+        port,
+        origin: `http://${address}:${port}`,
+        ready: Promise.resolve(undefined),
+        release: async () => {},
+        close: async () => {},
+      };
+    }
+    const error = Object.assign(new Error(outcome), { code: outcome });
+    error.code = outcome === 'EADDRINUSE' ? 'IAM_CALLBACK_PORT_UNAVAILABLE' : 'IAM_CALLBACK_BIND_FAILED';
+    error.details = { reason: outcome, address, port };
+    return {
+      address,
+      port,
+      origin: undefined,
+      ready: Promise.resolve(error),
+      release: async () => {},
+      close: async () => {},
+    };
+  };
+  return { start, tried };
+}
+
+test('callbackAddress: auto falls back to IPv6 only when the family is missing', async () => {
+  const missing = stubListener({ '127.0.0.1': 'EADDRNOTAVAIL' });
+  const manager = createCallbackManager({
+    port: 0, path: '/iam/callback', handler: () => {}, startListener: missing.start,
+  });
+  const origin = await manager.ensure();
+  assert.deepEqual(missing.tried, ['127.0.0.1', '::1']);
+  assert.match(origin, /^http:\/\/[\[\]::1]+:/);
+  await manager.close();
+
+  // A taken port is a real refusal: switching address family would send the
+  // browser somewhere that was never registered.
+  const taken = stubListener({ '127.0.0.1': 'EADDRINUSE' });
+  const pinned = createCallbackManager({
+    port: 17890, path: '/iam/callback', handler: () => {}, startListener: taken.start,
+  });
+  await assert.rejects(pinned.ensure(), { code: 'IAM_CALLBACK_PORT_UNAVAILABLE' });
+  assert.deepEqual(taken.tried, ['127.0.0.1']);
+
+  // The same rule holds for a pinned port that is simply not available.
+  const unavailable = stubListener({ '127.0.0.1': 'EADDRNOTAVAIL', '::1': 'EADDRNOTAVAIL' });
+  const both = createCallbackManager({
+    port: 17891, path: '/iam/callback', handler: () => {}, startListener: unavailable.start,
+  });
+  await assert.rejects(both.ensure(), { code: 'IAM_CALLBACK_BIND_FAILED' });
+  assert.deepEqual(unavailable.tried, ['127.0.0.1', '::1']);
+});
+
+test('callbackAddress: an explicit address never tries the other family', async () => {
+  const stub = stubListener({ '127.0.0.1': 'EADDRINUSE' });
+  const manager = createCallbackManager({
+    port: 17892, address: '127.0.0.1', path: '/iam/callback', handler: () => {}, startListener: stub.start,
+  });
+  await assert.rejects(manager.ensure(), { code: 'IAM_CALLBACK_PORT_UNAVAILABLE' });
+  assert.deepEqual(stub.tried, ['127.0.0.1']);
+});
+
+test('callbackAddress: the default binds the prefix IAM registers', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const checked = validateConfig(configFor(mock, { callbackPort: 0 }));
+  assert.ok('value' in checked, JSON.stringify(checked.issues));
+  const { service, manager } = loopbackService(checked.value);
+  t.after(() => manager.close());
+
+  const started = await service.startSignIn();
+  const redirect = new URL(started.authorizationUrl).searchParams.get('redirect_uri');
+  assert.ok(redirect.startsWith('http://127.0.0.1:'), redirect);
+  assert.equal(new URL(redirect).hostname, '127.0.0.1', 'localhost or [::1] would miss the registered prefix');
+});
+
 test('callbackPort: a pinned port is used verbatim', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());

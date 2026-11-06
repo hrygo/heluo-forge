@@ -30,7 +30,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `scopes` | `openid profile offline_access` 数组 | 必须包含 `openid`。 |
 | `redirectPath` | `/iam/callback` | 绝对路径；不能为根路径、带尾斜杠或占用 `/api/forge-iam` 前缀。 |
 | `callbackPort` | 空 | 省略时沿用宿主 `webServer` 的实时 Origin，仅用于开发与兼容；`0` 由系统分配回环端口；1024–65535 固定该端口。插件自建监听，只在登录尝试期间存在，绑定失败即拒登录，不回落。 |
-| `callbackAddress` | `auto` | `auto` 先试 `127.0.0.1` 再试 `::1`；也可固定其中之一。IPv6 的回调地址写作 `http://[::1]:<port><redirectPath>`。仅与 `callbackPort` 同时生效。 |
+| `callbackAddress` | `auto` | 始终先试 `127.0.0.1`（与 IAM 登记的前缀一致），只有该地址族在本机不可用时才退到 `::1`；端口占用不触发切换。也可固定 `127.0.0.1` 或 `::1`。IPv6 需 IAM 额外登记 `http://[::1]`，回调地址写作 `http://[::1]:<port><redirectPath>`。仅与 `callbackPort` 同时生效。 |
 | `redirectUri` | 空 | 可省略，由宿主 Origin 或回环监听的实时地址推导；固定端口时必须逐字节等于 `http://<callbackAddress>:<callbackPort><redirectPath>`，系统分配端口时不允许设置。显式 URI 的 path 必须与 `redirectPath` 相同，无 query/fragment。 |
 | `postLogoutRedirectUri` | 空 | 可选的 RP 登出回跳 URI。 |
 | `gatewayResource` | 空 | 可选的授权/令牌请求 resource 与 grant 上下文约束；不证明已实现网关目标授权。 |
