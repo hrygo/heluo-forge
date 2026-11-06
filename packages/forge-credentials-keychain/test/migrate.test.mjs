@@ -34,7 +34,7 @@ test('混合命名空间内容和权限不被修改', async (t) => {
   await chmod(path, 0o640);
   assertClosed(await migrateLegacyFileToKeychain({ legacyPath: path, backend: createMemoryBackend() }));
   assert.equal(await readFile(path, 'utf8'), raw);
-  assert.equal((await stat(path)).mode & 0o777, 0o640);
+  if (process.platform !== 'win32') assert.equal((await stat(path)).mode & 0o777, 0o640);
 });
 
 test('未经验证的事务不访问目标或删除器', async (t) => {
