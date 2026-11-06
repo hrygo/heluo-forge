@@ -29,7 +29,8 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `endSessionEndpoint` | 空 | `logoutMode=rp` 时配置校验要求提供。 |
 | `scopes` | `openid profile offline_access` 数组 | 必须包含 `openid`。 |
 | `redirectPath` | `/iam/callback` | 绝对路径；不能为根路径、带尾斜杠或占用 `/api/forge-iam` 前缀。 |
-| `redirectUri` | 空 | 可省略，由 Host 的 webServer origin 推导；显式 URI 的 path 必须与 `redirectPath` 相同，无 query/fragment。 |
+| `callbackPort` | `0` | 0 表示沿用宿主 `webServer` 的实时 Origin，仅用于开发与兼容；1024–65535 表示插件在 `127.0.0.1` 自建监听，该端口即 IAM 预登记端口，绑定失败即拒登录，不回落。 |
+| `redirectUri` | 空 | 可省略，由宿主 Origin 或 `callbackPort` 推导；配置固定端口时必须逐字节等于 `http://127.0.0.1:<callbackPort><redirectPath>`。显式 URI 的 path 必须与 `redirectPath` 相同，无 query/fragment。 |
 | `postLogoutRedirectUri` | 空 | 可选的 RP 登出回跳 URI。 |
 | `gatewayResource` | 空 | 可选的授权/令牌请求 resource 与 grant 上下文约束；不证明已实现网关目标授权。 |
 | `gatewayConsoleUrl` | 空 | 网关控制台引导链接，不参与鉴权。 |
