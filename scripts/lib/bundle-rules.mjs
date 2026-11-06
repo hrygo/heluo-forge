@@ -190,10 +190,15 @@ function checkPatchLayer(label, base, pkg, known, errors) {
       errors.push(`bundle: ${label}/${PATCH_FILE} insert row ${entry.id} must declare a package name`);
       continue;
     }
-    if (!known.has(entry.name)) {
+    // 自身子路径入口（如 `@heluo/forge-enterprise/issue-delivery-skill`）指向本包，不是新包：
+    // 只要它在 exports 里、且它指向的目录就是本包，就按"本包成员"处理。
+    const selfSubpath = typeof pkg.name === 'string'
+      && entry.name.startsWith(`${pkg.name}/`)
+      && Object.prototype.hasOwnProperty.call(pkg.exports ?? {}, `./${entry.name.slice(pkg.name.length + 1)}`);
+    if (!known.has(entry.name) && !selfSubpath) {
       errors.push(`bundle: ${label}/${PATCH_FILE} inserts ${entry.name}, which is not a workspace package`);
     }
-    if (entry.name !== pkg.name && known.has(entry.name) && pkg.dependencies?.[entry.name] === undefined) {
+    if (entry.name !== pkg.name && !selfSubpath && known.has(entry.name) && pkg.dependencies?.[entry.name] === undefined) {
       errors.push(`bundle: ${label}/${PATCH_FILE} inserts ${entry.name} without a declared build-time dependency`);
     }
     if (entry.name === MARKET_PACKAGE && pkg.name !== MARKET_PACKAGE) {
@@ -361,7 +366,14 @@ export function auditReleaseClosure(base, { allowInstalledBinLinks = false } = {
     const patch = pkg.dsh?.bundle?.patch;
     if (typeof patch === 'string' && existsSync(join(dir, patch))) {
       for (const row of parsePatchLayer(readFileSync(join(dir, patch), 'utf8')).inserted) {
-        if (row.name !== pkg.name && pkg.dependencies?.[row.name] === undefined) errors.push(`bundle: release patch inserts undeclared member ${row.name}`);
+        // 自身子路径入口（`@heluo/forge-enterprise/issue-delivery-skill`）也是"本包的成员"：
+        // 它由 exports 声明、随同一个 tarball 发行，不引入任何依赖。
+        const selfSubpath = typeof row.name === 'string'
+          && row.name.startsWith(`${pkg.name}/`)
+          && Object.prototype.hasOwnProperty.call(pkg.exports ?? {}, `./${row.name.slice(pkg.name.length + 1)}`);
+        if (row.name !== pkg.name && !selfSubpath && pkg.dependencies?.[row.name] === undefined) {
+          errors.push(`bundle: release patch inserts undeclared member ${row.name}`);
+        }
       }
     }
   };

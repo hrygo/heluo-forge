@@ -5,7 +5,7 @@
  * 上下文开销。加载不写仓库、不建 Issue、不做"合规通过"结论；模型不能自动冒用企业入口。
  */
 import { readFileSync } from 'node:fs';
-import { isAbsolute, join, normalize, sep } from 'node:path';
+import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
 export class EnterpriseSkillError extends Error {
   constructor(message, code, details = undefined) {
@@ -18,6 +18,13 @@ export class EnterpriseSkillError extends Error {
 
 const LEVELS = new Set(['hard', 'advice']);
 const STATUSES = new Set(['active', 'expired']);
+
+/**
+ * 随包分发的 provider 的标准优先级，与宿主 `BUNDLED_SKILL_RANK` 同值（rc.5 `dsh-skill`
+ * lib/index.js:23）。写死而不 import 宿主包：本模块在离线用例里也要能装载，且这个数字是
+ * 宿主公开的稳定契约，升级时由契约测试比对。
+ */
+const BUNDLED_SKILL_RANK = 600;
 
 function readText(path) {
   try {
@@ -40,7 +47,21 @@ function resolveClausePath(clause, pack) {
   if (normalized === '..' || normalized.startsWith(`..${sep}`) || normalized.includes(`${sep}..${sep}`)) {
     throw new EnterpriseSkillError(`clause body "${raw}" escapes the pack root`, 'ENTERPRISE_PATH_TRAVERSAL', { path: raw });
   }
-  return join(pack.root, normalized);
+  return { path: join(pack.root, normalized), bodyPath: normalized };
+}
+
+/**
+ * 宿主 `resourceBase`（rc.5 渲染为 “Base directory for this skill: <path>”）。
+ *
+ * 必须精确到**正文所在目录**：provider 传 `skills/` 还会让 `references/*.md` 这类相对
+ * 引用解析到 `skills/references/`，正文里的按需读取路径就全错。
+ *
+ * @param {string} root clause pack 的根目录
+ * @param {string} bodyPath 相对根目录的正文路径
+ * @returns {{kind: 'directory', path: string}}
+ */
+export function resourceBaseOf(root, bodyPath) {
+  return Object.freeze({ kind: 'directory', path: dirname(resolve(root, bodyPath)) });
 }
 
 /**
@@ -88,8 +109,8 @@ export function loadClausePack(input) {
         throw new EnterpriseSkillError(`clause "${id}" appliesTo needs a system`, 'ENTERPRISE_CLAUSE_INVALID', { id });
       }
     }
-    const bodyPath = resolveClausePath(clause, { root });
-    const body = readText(bodyPath);
+    const located = resolveClausePath(clause, { root });
+    const body = readText(located.path);
     if (body === undefined) {
       throw new EnterpriseSkillError(`clause "${id}" body "${clause.body}" is missing`, 'ENTERPRISE_CLAUSE_BODY_MISSING', { id, path: clause.body });
     }
@@ -103,6 +124,7 @@ export function loadClausePack(input) {
       appliesTo: Object.freeze(appliesTo.map((target) => Object.freeze({ system: target.system, versions: Object.freeze(target.versions ?? []) }))),
       references: Object.freeze(clause.references ?? []),
       body,
+      bodyPath: located.bodyPath,
       bytes: Buffer.byteLength(body, 'utf8'),
       key: clause.key ?? id,
       decision: clause.decision,
@@ -188,9 +210,9 @@ export function selectClauses({ pack, systems = [], budgetTokens }) {
  * Registration performs no writes and never claims compliance.
  *
  * @param {{skills: object}} ctx host context providing `skills`
- * @param {{selection: object, namePrefix?: string, invocation?: object}} input
+ * @param {{selection: object, namePrefix?: string, invocation?: object, root?: string}} input
  */
-export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterprise', invocation }) {
+export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterprise', invocation, root }) {
   const skills = ctx?.skills;
   if (skills === undefined || typeof skills.register !== 'function') {
     throw new EnterpriseSkillError('host has no skills service to register enterprise skills on', 'ENTERPRISE_HOST_UNAVAILABLE');
@@ -207,8 +229,13 @@ export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterpr
       description: clause.summary.length > 0 ? clause.summary : clause.title,
       whenToUse: `当任务涉及 ${clause.appliesTo.map((target) => target.system).join('、') || '企业规范'} 时按需加载；由用户显式触发`,
       content: clause.body,
+      // rc.5 的 `register()` 自己不补 `source`，而随后的 `get()` 校验它必须是字符串；
+      // 直接注册读到的来源就是 `custom`（既有契约测试钉住这个值，不借这次改动改语义）。
       source: 'custom',
       invocation: policy,
+      ...(typeof root === 'string' && root.length > 0 && typeof clause.bodyPath === 'string'
+        ? { resourceBase: resourceBaseOf(root, clause.bodyPath), path: resolve(root, clause.bodyPath) }
+        : {}),
       metadata: { owner: clause.owner, level: clause.level, references: clause.references },
     });
     registered.push({ id: clause.id, name, dispose });
@@ -234,9 +261,9 @@ export function registerEnterpriseSkills(ctx, { selection, namePrefix = 'enterpr
  * Provider-path availability on newer hosts is NOT RUN here.
  *
  * @param {{skills: object}} ctx host context providing `skills`
- * @param {{selection: object, namePrefix?: string, invocation?: object}} input
+ * @param {{selection: object, namePrefix?: string, invocation?: object, root?: string}} input
  */
-export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix = 'enterprise', invocation } = {}) {
+export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix = 'enterprise', invocation, root } = {}) {
   const skills = ctx?.skills;
   if (skills === undefined || typeof skills.registerProvider !== 'function') {
     throw new EnterpriseSkillError('host has no skills provider entry for enterprise skills', 'ENTERPRISE_PROVIDER_UNAVAILABLE');
@@ -248,23 +275,41 @@ export function registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix
   const providerName = `${namePrefix}-clauses`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
   const skillName = (clause) => `${namePrefix}-${clause.id}`.toLowerCase().replace(/[^a-z0-9-]/gu, '-');
   const byName = new Map(selection.hard.map((clause) => [skillName(clause), clause]));
-  const summaryOf = (clause) => ({
+  const byClauseId = new Map(selection.hard.map((clause) => [clause.id, clause]));
+  const hasRoot = typeof root === 'string' && root.length > 0;
+  // 发现面与正文面共用同一个候选构造：宿主拿 `list()` 的候选去 `get()`，
+  // 两处字段一旦分叉，`get(候选)` 就会按另一个名字查不到正文（r12 的 D-2）。
+  const candidateFor = (clause) => ({
     name: skillName(clause),
     description: clause.summary.length > 0 ? clause.summary : clause.title,
     whenToUse: `当任务涉及 ${clause.appliesTo.map((target) => target.system).join('、') || '企业规范'} 时按需加载；由用户显式触发`,
     provider: providerName,
-    rank: 0,
-    locator: { clause: clause.id },
+    // 宿主 `validateCandidate` 的硬要求：source 非空字符串、rank 有限数、provider 与注册名一致。
+    // 这份 Skill 随包分发，用 `bundled` + 宿主 `BUNDLED_SKILL_RANK`（600）；rank 写 0 会
+    // 让它和运行时注册的 Skill 抢同一个优先级槽，发现顺序就不再由宿主策略决定。
+    source: 'bundled',
+    rank: BUNDLED_SKILL_RANK,
     invocation: policy,
+    locator: { clause: clause.id },
+    ...(hasRoot && typeof clause.bodyPath === 'string'
+      ? { resourceBase: resourceBaseOf(root, clause.bodyPath), path: resolve(root, clause.bodyPath) }
+      : {}),
     metadata: { owner: clause.owner, level: clause.level, references: clause.references },
   });
+  const clauseOf = (request) => {
+    // 宿主 `get()` 交来的是 **candidate**；历史调用方直接传 name 字符串。两种都要认，
+    // 未命中一律返回 undefined，交给宿主报 `SKILL_NOT_FOUND`，不抛自己的错误类型。
+    const key = typeof request === 'string' ? request : request?.locator?.clause ?? request?.name;
+    if (typeof key !== 'string' || key.length === 0) return undefined;
+    return byName.get(key) ?? byClauseId.get(key);
+  };
   const dispose = skills.registerProvider(() => ({
     name: providerName,
-    list: async () => [...byName.values()].map(summaryOf),
-    get: async (name) => {
-      const clause = byName.get(name);
+    list: async () => [...byName.values()].map(candidateFor),
+    get: async (request) => {
+      const clause = clauseOf(request);
       if (clause === undefined) return undefined;
-      return { ...summaryOf(clause), content: clause.body };
+      return { ...candidateFor(clause), content: clause.body };
     },
   }));
   return Object.freeze({
@@ -302,8 +347,8 @@ export function assembleEnterpriseSkills(ctx, { root, pack, systems = [], budget
   // body) is the fallback for hosts without a provider entry. Either way the
   // discovery face carries summaries only.
   const registration = typeof ctx?.skills?.registerProvider === 'function'
-    ? registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix, invocation })
-    : registerEnterpriseSkills(ctx, { selection, namePrefix, invocation });
+    ? registerEnterpriseSkillsViaProvider(ctx, { selection, namePrefix, invocation, root: loaded.root })
+    : registerEnterpriseSkills(ctx, { selection, namePrefix, invocation, root: loaded.root });
   const bodies = new Map(selection.selected.map((clause) => [clause.id, clause.body]));
   return Object.freeze({
     version: loaded.version,

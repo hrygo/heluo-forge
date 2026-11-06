@@ -281,7 +281,7 @@ test('AC-8: 目录缺 judge 时仍可挂载，判定降级 denied', async () => 
     pluginConfig: pluginRow.config,
   });
   assert.equal(mounted.ok, true, `判定缺失不得阻塞挂载：${mounted.error?.message ?? ''}`);
-  assert.deepEqual(host.toolNames(), [...GITEE_TOOLS], '10 个工具照旧注册（工具面不随目录条数变）');
+  assert.deepEqual(host.toolNames(), [...GITEE_TOOLS], '11 个工具照旧注册（工具面不随目录条数变）');
 
   const { body } = await invokeTool(host, 'forge_gitee_delivery_gate', DELIVERY_CALL);
   assert.equal(body?.status, 'denied', `判定未登记时必须 denied（实际：${body?.status}）`);
@@ -353,11 +353,11 @@ test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（
   }
   assert.ok(layers.length >= 2, '至少本包与 forge-devops 各有补丁层');
 
-  let insertsGitee = 0;
+  const inserting = [];
   for (const { package: packageName, rows } of layers) {
     const giteeRow = rows.find((row) => row.name === '@heluo/forge-gitee');
     if (giteeRow === undefined) continue;
-    insertsGitee += 1;
+    inserting.push(packageName);
     const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
     assert.ok(policyRow !== undefined, `${packageName} 插入 gitee 却没有自带策略行`);
     // 只要求 3 条 gitee 只读目录：AC-8 明确"缺 judge 不阻塞挂载"，所以这里不能把判定算进门槛；
@@ -373,5 +373,8 @@ test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（
     assert.equal(typeof giteeRow.config, 'object', `${packageName} 的 gitee 行缺显式 config`);
     assert.equal(giteeRow.config === null, false);
   }
-  assert.equal(insertsGitee, 1, '当前只有本包插入 gitee（devops 的补丁层不得偷偷插入本包）');
+  // r13 起企业组合自带 gitee 行与目录（见 forge-enterprise 的 cordis.patch.yml），
+  // 所以允许且只允许「本包 + forge-enterprise」两层插入；devops 仍不得偷偷插入。
+  assert.deepEqual(inserting.sort(), ['forge-enterprise', 'forge-gitee'], '只有本包与企业组合插入 gitee');
+  assert.ok(!inserting.includes('forge-devops'), 'devops 的补丁层不得偷偷插入本包');
 });

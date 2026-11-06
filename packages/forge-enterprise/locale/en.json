@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Enterprise Issue Delivery",
+    "description": "User-invoked enterprise workflow for turning one Gitee issue into a version-bound delivery candidate: verifies the unique change and repository, hands execution to native Teamflow, and binds local validation plus an independent read-only review to the actual code version. Requires the DevOps/Gitee plugins, the native Teamflow toolset and an authorized worktree."
+  }
+}
