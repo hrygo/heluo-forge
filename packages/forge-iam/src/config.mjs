@@ -28,6 +28,7 @@ export const CONFIG_FIELDS = [
   'scopes',
   'redirectPath',
   'callbackPort',
+  'callbackAddress',
   'postLogoutRedirectUri',
   'redirectUri',
   'gatewayResource',
@@ -75,7 +76,6 @@ const DEFAULTS = {
   clientId: '',
   scopes: ['openid', 'profile', 'offline_access'],
   redirectPath: '/iam/callback',
-  callbackPort: 0,
   postLogoutRedirectUri: '',
   redirectUri: '',
   gatewayResource: '',
@@ -198,21 +198,33 @@ export function validateConfig(input) {
     }
   }
 
-  const callbackPort = source.callbackPort;
-  if (callbackPort !== undefined && callbackPort !== null) {
-    // 0 means "keep using the host web server's origin"; a registered port is
-    // always an explicit choice between 1024 and 65535.
-    if (!Number.isInteger(callbackPort) || (callbackPort !== 0 && (callbackPort < 1024 || callbackPort > 65535))) {
-      issues.push(issue('callbackPort', 'callbackPort must be 0 or an integer between 1024 and 65535'));
+  // Absent means the host web server keeps the callback. 0 asks the plugin to
+  // bind a loopback listener on an OS-assigned port, which is what IAM accepts
+  // and what the native-app best practice recommends; 1024-65535 pins the port
+  // for an authorization server that still needs a pre-registered value.
+  if (source.callbackPort !== undefined && source.callbackPort !== null) {
+    if (!Number.isInteger(source.callbackPort)
+      || (source.callbackPort !== 0 && (source.callbackPort < 1024 || source.callbackPort > 65535))) {
+      issues.push(issue('callbackPort', 'callbackPort must be 0 (OS-assigned) or an integer between 1024 and 65535'));
     } else {
-      value.callbackPort = callbackPort;
+      value.callbackPort = source.callbackPort;
     }
   }
 
-  // A fixed port makes the registered redirect URI a derived value, not a
-  // preference: any other spelling would be refused by IAM's exact match.
-  const fixedRedirect = value.callbackPort > 0
-    ? `http://127.0.0.1:${value.callbackPort}${value.redirectPath}`
+  if (source.callbackAddress !== undefined && source.callbackAddress !== null) {
+    if (!['auto', '127.0.0.1', '::1'].includes(source.callbackAddress)) {
+      issues.push(issue('callbackAddress', "callbackAddress must be 'auto', '127.0.0.1' or '::1'"));
+    } else {
+      value.callbackAddress = source.callbackAddress;
+    }
+  }
+
+  // A pinned port makes the redirect URI a derived value, not a preference.
+  // An OS-assigned port cannot appear in config at all: it is only known after
+  // binding, so an explicit redirectUri would be stale.
+  const pinnedPort = typeof value.callbackPort === 'number' && value.callbackPort > 0;
+  const fixedRedirect = pinnedPort
+    ? `http://${value.callbackAddress === '::1' ? '[::1]' : '127.0.0.1'}:${value.callbackPort}${value.redirectPath}`
     : '';
 
   if (value.redirectUri) {
@@ -228,6 +240,8 @@ export function validateConfig(input) {
       issues.push(issue('redirectUri', 'redirectUri path must equal redirectPath and carry no query or fragment'));
     } else if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
       issues.push(issue('redirectUri', 'redirectUri must use HTTPS unless it is loopback'));
+    } else if (value.callbackPort === 0) {
+      issues.push(issue('redirectUri', 'redirectUri cannot be set when callbackPort is 0: the port is assigned at run time'));
     } else if (fixedRedirect && value.redirectUri !== fixedRedirect) {
       issues.push(issue('redirectUri', `redirectUri must equal ${fixedRedirect} when callbackPort is set`));
     }
