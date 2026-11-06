@@ -284,7 +284,12 @@ test('native-keyring is accepted by config but still requires the unvetted opt-i
   assert.equal(ctx.provided.size, 0);
 });
 
-test('an allowed native adapter without the module fails closed instead of writing a file', { skip: existsSync(nativeAddonPath(process.platform, process.arch)) && 'this host has a staged addon; the missing-addon path is covered on CI' }, () => {
+const hostAddon = nativeAddonPath(process.platform, process.arch);
+test('an allowed native adapter without the module fails closed instead of writing a file', {
+  // On a host whose own triple is staged the module is present and the mount
+  // succeeds; the missing-addon path is covered on CI and other hosts.
+  skip: hostAddon !== undefined && existsSync(hostAddon) && 'this host has a staged addon',
+}, () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, { platformAdapter: 'native-keyring', allowUnvettedPlatformAdapter: true }),

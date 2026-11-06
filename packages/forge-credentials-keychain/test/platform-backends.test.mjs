@@ -35,8 +35,9 @@ test('platform-arch maps to a delivery triple, and only those', () => {
   assert.equal(nativeTargetFor('linux', 'x64'), 'linux-x64-gnu');
   assert.equal(nativeTargetFor('linux', 'arm64'), 'linux-arm64-gnu');
   assert.equal(nativeTargetFor('darwin', 'arm64'), 'darwin-arm64');
+  assert.equal(nativeTargetFor('darwin', 'x64'), 'darwin-x64');
   // Not delivery targets: never a triple, never a silent downgrade.
-  for (const [platform, arch] of [['darwin', 'x64'], ['win32', 'ia32'], ['linux', 'ia32'], ['freebsd', 'x64']]) {
+  for (const [platform, arch] of [['win32', 'ia32'], ['linux', 'ia32'], ['linux', 'riscv64'], ['freebsd', 'x64']]) {
     assert.equal(nativeTargetFor(platform, arch), undefined, `${platform}-${arch} must stay unmapped`);
     assert.equal(nativeAddonPath(platform, arch), undefined);
   }
@@ -50,9 +51,9 @@ test('a staged addon resolves to this package, not to node_modules', () => {
 });
 
 test('an unmapped platform-arch still gets the unavailable backend', () => {
-  const backend = resolvePlatformBackend({ platform: 'darwin', arch: 'x64' });
+  const backend = resolvePlatformBackend({ platform: 'freebsd', arch: 'x64' });
   assert.equal(backend.available, false);
-  assert.match(backend.reason, /not implemented for darwin-x64|fails closed/u);
+  assert.match(backend.reason, /not implemented for freebsd-x64|fails closed/u);
   // Even where this host has a staged addon, an explicit pair never borrows it.
   assert.equal(resolvePlatformBackend({ platform: 'linux', arch: 'ia32' }).available, false);
 });
@@ -113,5 +114,8 @@ test('the lock file names exactly the delivery addons', () => {
     assert.equal(expected.license, 'MIT');
   }
   // Every recorded file belongs to a mapped triple; nothing stray is shipped.
-  for (const relative of recorded) assert.equal(nativeTargetFor(...relative.split('/')[0].split('-').slice(0, 2)), relative.split('/')[0]);
+  const manifest = JSON.parse(readFileSync(join(packageRoot, '../../scripts/native-keyring.json'), 'utf8'));
+  for (const target of manifest.targets) {
+    assert.equal(nativeTargetFor(target.platform, target.arch), target.triple, `${target.triple} must be mapped`);
+  }
 });

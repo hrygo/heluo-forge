@@ -44,7 +44,7 @@ A 可先推进；B 只能作为显式 opt-in 样机。**C 未通过，D 不开�
 | Windows 桌面 | Windows 10 amd64 | `win32-x64-msvc` | 必须通过 G2 |
 | UOS 本机 Web | 统信 UOS 20 amd64 | `linux-x64-gnu` | 必须通过 G2，不是按需项 |
 | 麒麟本机 Web | 银河麒麟 aarch64 | `linux-arm64-gnu` | 必须通过 G2，不能用 Ubuntu 代替 |
-| macOS 开发回归 | macOS Apple Silicon（arm64） | `darwin-arm64` | 适配器随包交付并单独记录证据；macOS 客户端不在本期产品范围（[需求基线 §2](<../requirements/requirements-baseline.md#2-范围边界唯一真源>) N2），不并入三目标 G2 |
+| macOS 开发回归 | macOS Apple Silicon 与 Intel（arm64 / x64） | `darwin-arm64`、`darwin-x64` | 适配器随包交付并单独记录证据；macOS 客户端不在本期产品范围（[需求基线 §2](<../requirements/requirements-baseline.md#2-范围边界唯一真源>) N2），不并入三目标 G2 |
 
 Node 与 pnpm 使用仓库固定版本；不顺带升级 [.dsh-version](<../../.dsh-version>)、兼容下限或平台范围。
 
@@ -61,7 +61,7 @@ Node 与 pnpm 使用仓库固定版本；不顺带升级 [.dsh-version](<../../.
 | 7 | 默认补丁插入 keychain，却未禁用官方 `credentials` 行 | [组合补丁](<../../packages/forge-enterprise/cordis.patch.yml>) | 两个提供方可被启用；provider 内的先挂载检查不能覆盖后挂载方 |
 | 8 | IAM 的 `findLegacyRecords()` 有枚举代码，未找到生产调用方 | [store](<../../packages/forge-iam/src/store.mjs>) | 不能因此删除 `listRecords` 契约；其他消费者仍可使用 |
 | 9 | `createPlatformBackend()` 目前始终返回 unavailable | [backend](<../../packages/forge-credentials-keychain/src/backend.mjs>) | 生产原生适配器并未实现；provider 不主动降级，默认组合却可能仍激活 local |
-| 10 | 首版制品自包含：随包携带 `win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64`、`darwin-arm64` 五个 addon；G2 仍按 Windows / UOS / 麒麟三目标判定，macOS 只作开发回归记录 | [需求基线](<../requirements/requirements-baseline.md>) | 必须补 UOS；macOS 证据不能顶替任一 G2 目标 |
+| 10 | 首版制品自包含：随包携带 `win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64`、`darwin-arm64`、`darwin-x64` 六个 addon；G2 仍按 Windows / UOS / 麒麟三目标判定，macOS 只作开发回归记录 | [需求基线](<../requirements/requirements-baseline.md>) | 必须补 UOS；macOS 证据不能顶替任一 G2 目标 |
 | 11 | #125 报告 Linux aarch64 默认组合启动后 local 接管，创建 161 B 明文 YAML，含 `secret` 字段 | [#125](https://github.com/hrygo/heluo-forge/issues/125)，DSH rc.3；本轮未复现 | 明文提供方可达且发生写盘；不能仅凭大小与字段断定企业 AT/RT 已落盘 |
 | 12 | #125 报告文件后端先注册成功后，local 后挂载撞名 | 同一报告；mock 单测与真实组合不同 | 必须验证激活时序与实际 owner，不能依赖 YAML 行顺序 |
 | 13 | 已安装 rc.5 的 Connection 会将 `client-connection/browser-session` 随机签名 secret 写入 credentials；launch token 另存于进程内 | 已安装 `dsh-client-connection`、`dsh-credentials-local` 读码，非本仓库文件 | 启动产生的 `secret` 可能是宿主浏览器认证材料；不得把风险写成已取证的企业令牌泄漏 |

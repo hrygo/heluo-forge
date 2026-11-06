@@ -44,6 +44,7 @@ const NATIVE_TARGETS = new Map([
   ['linux-x64', 'linux-x64-gnu'],
   ['linux-arm64', 'linux-arm64-gnu'],
   ['darwin-arm64', 'darwin-arm64'],
+  ['darwin-x64', 'darwin-x64'],
 ]);
 
 /** Windows CREDENTIALW blob limit; UTF-16LE means at most half as many code units. */

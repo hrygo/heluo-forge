@@ -13,6 +13,15 @@
       "license": "MIT",
       "integrity": "sha512-vsInUWUzWS6/WzR/TFNwmdtmwKWjnnR8TOpvZ/pjjxDAkJB/waz37PWzp2b8AFcw1aCcq2aQ7k2vvbLQy8pTrw=="
     },
+    "darwin-x64/keyring.node": {
+      "relative": "darwin-x64/keyring.node",
+      "sha256": "637cf3b8f2f502176029464781ffee9ab1c80406a0392a3f29fdd1429f58d500",
+      "bytes": 565040,
+      "source": "@napi-rs/keyring-darwin-x64",
+      "version": "2.1.2",
+      "license": "MIT",
+      "integrity": "sha512-wQihYroaQ3r++R6u5c9Gj0TCw1l1F53LCb5aLOXfVvT4DsnDnpe7p7VGYo4/33bLe0iqVevtAj+ET3yKCtOlJQ=="
+    },
     "linux-arm64-gnu/keyring.node": {
       "relative": "linux-arm64-gnu/keyring.node",
       "sha256": "ffc7534f4c121ca739a80927b7942261859de42e740f2f9c2ea1fe60ae5d7183",
