@@ -17,6 +17,8 @@ export const SAFE_MESSAGES = Object.freeze({
   IAM_GATEWAY_WRITE_UNKNOWN: 'gateway credential write outcome is unknown; no automatic retry was attempted',
   IAM_CREDENTIALS_CLEAR_FAILED: 'credential storage could not be cleared',
   IAM_CALLBACK_UNAVAILABLE: 'IAM callback origin is unavailable',
+  IAM_CALLBACK_PORT_UNAVAILABLE: 'the registered IAM callback port is not available',
+  IAM_CALLBACK_BIND_FAILED: 'the IAM callback listener could not start',
   IAM_UNREACHABLE: 'IAM endpoint is unreachable',
   IAM_INVALID_GRANT: 'IAM authorization is no longer valid',
   IAM_REAUTH_REQUIRED: 'IAM sign-in is required again',

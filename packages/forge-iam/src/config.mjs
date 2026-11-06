@@ -27,6 +27,7 @@ export const CONFIG_FIELDS = [
   'clientId',
   'scopes',
   'redirectPath',
+  'callbackPort',
   'postLogoutRedirectUri',
   'redirectUri',
   'gatewayResource',
@@ -74,6 +75,7 @@ const DEFAULTS = {
   clientId: '',
   scopes: ['openid', 'profile', 'offline_access'],
   redirectPath: '/iam/callback',
+  callbackPort: 0,
   postLogoutRedirectUri: '',
   redirectUri: '',
   gatewayResource: '',
@@ -196,6 +198,23 @@ export function validateConfig(input) {
     }
   }
 
+  const callbackPort = source.callbackPort;
+  if (callbackPort !== undefined && callbackPort !== null) {
+    // 0 means "keep using the host web server's origin"; a registered port is
+    // always an explicit choice between 1024 and 65535.
+    if (!Number.isInteger(callbackPort) || (callbackPort !== 0 && (callbackPort < 1024 || callbackPort > 65535))) {
+      issues.push(issue('callbackPort', 'callbackPort must be 0 or an integer between 1024 and 65535'));
+    } else {
+      value.callbackPort = callbackPort;
+    }
+  }
+
+  // A fixed port makes the registered redirect URI a derived value, not a
+  // preference: any other spelling would be refused by IAM's exact match.
+  const fixedRedirect = value.callbackPort > 0
+    ? `http://127.0.0.1:${value.callbackPort}${value.redirectPath}`
+    : '';
+
   if (value.redirectUri) {
     let parsed;
     try {
@@ -209,6 +228,8 @@ export function validateConfig(input) {
       issues.push(issue('redirectUri', 'redirectUri path must equal redirectPath and carry no query or fragment'));
     } else if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
       issues.push(issue('redirectUri', 'redirectUri must use HTTPS unless it is loopback'));
+    } else if (fixedRedirect && value.redirectUri !== fixedRedirect) {
+      issues.push(issue('redirectUri', `redirectUri must equal ${fixedRedirect} when callbackPort is set`));
     }
   }
 

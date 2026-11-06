@@ -1,4 +1,5 @@
 import { createManagedModelRuntime } from './managed-models.mjs';
+import { startCallbackListener } from './callback-listener.mjs';
 import { Config, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { checkExclusive } from './exclusive.mjs';
@@ -52,6 +53,9 @@ export function apply(ctx, rawConfig = {}) {
   let currentConnection;
   let modelServices;
   let managedRuntime;
+  // Set when the fixed callback port cannot be bound. Every sign-in reads it
+  // and refuses; the plugin never falls back to the host's random port.
+  let callbackFailure;
   const service = createIamService(result.value, {
     exclusive: checkExclusive(ctx, result.value),
     recheckExclusive: () => checkExclusive(ctx, result.value),
@@ -67,7 +71,28 @@ export function apply(ctx, rawConfig = {}) {
       } catch { return undefined; }
     },
     getOrigin: () => currentWebServer?.getOrigin?.(),
+    getCallbackFailure: () => callbackFailure,
+    getCallbackReady: () => callbackListener?.ready,
   });
+
+  // A configured callbackPort replaces the host-registered callback with a
+  // listener the plugin owns, on loopback only. The host port may change
+  // between launches; the registered redirect URI must not.
+  let callbackListener;
+  if (result.value.callbackPort > 0) {
+    const fixedOrigin = `http://127.0.0.1:${result.value.callbackPort}`;
+    const fixedRoutes = createIamRoutes(service, {
+      callbackPath: result.value.redirectPath,
+      getOrigin: () => fixedOrigin,
+    });
+    callbackListener = startCallbackListener({
+      port: result.value.callbackPort,
+      origin: fixedOrigin,
+      path: result.value.redirectPath,
+      handler: fixedRoutes,
+      onFailure: (error) => { callbackFailure = error; },
+    });
+  }
 
   // Cordis runs a normal function plugin with `new`, so a returned cleanup is
   // not collected as an effect (only `Service.init` is). Register teardown as
@@ -78,6 +103,10 @@ export function apply(ctx, rawConfig = {}) {
   const teardown = async () => {
     if (tornDown) return;
     tornDown = true;
+    // Dispose first: a sign-in waiting on the callback bind must observe the
+    // service as gone, not receive a URL for a listener that is about to close.
+    await service.dispose();
+    await callbackListener?.close();
     currentWebServer = undefined;
     currentConnection = undefined;
     if (typeof offConnection === 'function') offConnection();
@@ -88,7 +117,6 @@ export function apply(ctx, rawConfig = {}) {
     else offAgentDefaultModel?.dispose?.();
     if (typeof offManagedModels === 'function') await offManagedModels();
     else await offManagedModels?.dispose?.();
-    await service.dispose();
     if (typeof offModelServices === 'function') offModelServices();
     else await offModelServices?.dispose?.();
     if (typeof offWebServer === 'function') offWebServer();
@@ -194,7 +222,9 @@ export function apply(ctx, rawConfig = {}) {
           path: '/api/forge-iam',
           handler: routes,
         });
-        const offCallback = host.webServer.register({
+        // A fixed-port listener owns the callback; registering it here too
+        // would expose a second address IAM never registered.
+        const offCallback = result.value.callbackPort > 0 ? undefined : host.webServer.register({
           kind: 'exact',
           path: result.value.redirectPath,
           handler: routes,
