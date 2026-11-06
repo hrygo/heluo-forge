@@ -46,6 +46,9 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
   ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
   ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',
+  // The model layer reports an exhausted quota (429 quota / model cooldown) as
+  // its own code; without a mapping it fell through to "cannot connect".
+  ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED: '所选模型的额度已用尽，请更换模型或联系管理员。',
   ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
   ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。',
   ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
@@ -255,6 +258,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           const code = chunk.reason.failure.code;
           yield finish(code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
             : code === 'PERMISSION' || code === 'FORBIDDEN' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
+              : code === 'QUOTA' ? 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'
               : code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
                 // pi-ai turns an HTTP error into a finish chunk, and its classifier
                 // reports every 400 as INVALID_REQUEST, so a rejected request never
@@ -273,6 +277,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       yield finish(code ?? (Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code
         : cause?.code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
           : cause?.code === 'PERMISSION' || cause?.code === 'FORBIDDEN' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
+            : cause?.code === 'QUOTA' ? 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'
             : cause?.code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
               : cause?.code === 'INVALID_REQUEST' ? 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'
                 : cause?.code === 'UNSUPPORTED_REASONING_EFFORT' ? 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED'

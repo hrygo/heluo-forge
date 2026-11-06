@@ -235,15 +235,17 @@ test('a rejected request is not reported as an unreachable gateway', async t => 
   }
 });
 
-test('a rate limit reported as an error code is not reported as an unreachable gateway', async t => {
-  const f = fixture({
-    createAdapter: async () => ({
-      async *stream() { throw Object.assign(new Error('private-body'), { code: 'RATE_LIMIT' }); }
-    })
-  });
-  t.after(() => f.runtime.dispose()); await f.runtime.ready;
-  const result = await chunks(f.adapter.stream(options));
-  assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_RATE_LIMIT');
+test('a rate limit or exhausted quota reported as an error code is not reported as an unreachable gateway', async t => {
+  for (const [thrownCode, code] of [['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT'], ['QUOTA', 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED']]) {
+    const f = fixture({
+      createAdapter: async () => ({
+        async *stream() { throw Object.assign(new Error('private-body'), { code: thrownCode }); }
+      })
+    });
+    t.after(() => f.runtime.dispose()); await f.runtime.ready;
+    const result = await chunks(f.adapter.stream(options));
+    assert.equal(result.at(-1).reason.failure.code, code, thrownCode);
+  }
 });
 
 test('an unreachable gateway is still reported when no status can be read', async t => {
@@ -260,7 +262,7 @@ test('an unreachable gateway is still reported when no status can be read', asyn
 });
 
 test('a request the gateway rejects is not reported as an unreachable gateway', async t => {
-  for (const [chunkCode, code] of [['INVALID_REQUEST', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], ['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT']]) {
+  for (const [chunkCode, code] of [['INVALID_REQUEST', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'], ['RATE_LIMIT', 'ENTERPRISE_GATEWAY_RATE_LIMIT'], ['QUOTA', 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED']]) {
     const f = fixture({
       createAdapter: async () => ({
         async *stream() { yield { type: 'finish', reason: { kind: 'error', failure: { code: chunkCode, message: 'private-body' } } }; }
