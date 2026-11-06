@@ -57,10 +57,10 @@
 
 这两个 glibc 下限低于对应发行版基线，不构成额外部署要求；Windows 的 VC++ 运行库则需要在镜像或安装脚本中显式保证，缺它时加载失败与凭据逻辑无关。
 
-除运行库外，系统凭据库还要求**已解锁的桌面会话**。2026-11-06 在两台机器上实测：
+除运行库外，系统凭据库还要求进程位于该用户的**图形登录会话**，并且默认集合已创建、已解锁。2026-11-06 实测：
 
-- macOS：SSH 会话或未解锁的登录钥匙串写入报 `User interaction is not allowed`，包内归一为 `KEYCHAIN_OPERATION_FAILED`；同机 Apple `security add-generic-password` 报同一错误，属环境限制而非适配器缺陷。DSH 需运行在该用户已解锁的图形会话中；远程运维无法替代本机解锁。
-- Linux（Ubuntu 24.04 aarch64）：桌面会话只有 `session` 集合、没有默认集合时写入报 `Secret Service: no result found`；用隔离的 `dbus-run-session` + `gnome-keyring-daemon` 建立并解锁 `login` 集合后，同一份产物读写、覆盖、跨进程、枚举、删除全部通过。
+- macOS：SSH 会话访问登录钥匙串被系统拒绝，写入报 `User interaction is not allowed`（包内归一为 `KEYCHAIN_OPERATION_FAILED`）；同机 `security add-generic-password` 报同一错误，而自建钥匙串在同一条 SSH 会话里可正常读写，说明限制在登录钥匙串与会话归属，不是适配器缺陷。把同一份产物放进该用户图形会话（经 `launchctl bootstrap gui/<uid>` 的 LaunchAgent）后，读写、覆盖、跨进程、枚举、删除 **7/7 通过**。
+- Linux（Ubuntu 24.04 aarch64）：桌面会话只有 `session` 集合、没有默认集合时写入报 `Secret Service: no result found`；用隔离的 `dbus-run-session` + `gnome-keyring-daemon` 建立并解锁 `login` 集合后，同一份产物 7/7 通过。
 
 ## 平台默认行为
 
