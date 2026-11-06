@@ -86,7 +86,10 @@ covered by any signature. The required check verifies `base..head`, which never
 contains a server-created commit, so it does not need this flag. Both server
 merge strategies preserve the attestation only while the PR branch is up to date:
 replaying the branch onto a newer base recomputes its tree, so branch protection
-must require branches to be up to date before merging. Tree binding does
+must require branches to be up to date before merging. Set the default squash
+commit title to the pull request title and its message to blank: the `(#N)`
+suffix is how the audit path finds the attested head, and an empty body keeps
+signed trailers out of a message no signature covers. Tree binding does
 not prevent races during scanning or forgery by a key holder. Unscannable content
 is blocked by the local hook unless explicitly excluded in local rules; see the
 installation guide for supported file types and limitations.

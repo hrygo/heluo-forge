@@ -95,7 +95,7 @@ b8d63d50c82fee19b3b39f0acd2723494ede9b3309e502a1f262b084628b299b
 
 ## 管理员上线和轮换
 
-先在受控渠道分发完整包，确认团队配置；将单公钥验签代码及公钥经 review 合入 PR 基线，实测有效签名通过、缺失/错误签名失败，再将 `sensitive-attestation-verify` 设为 required，并开启 Require branches to be up to date before merging；网页 squash 与 rebase 合并均可使用，服务端提交按 tree 绑定核对。安装包不自动启用这些设置。团队私钥泄露或需撤销持有人时，由保管人安排全员密钥轮换并重签在途 PR；共享密钥无法单独撤销一个成员。
+先在受控渠道分发完整包，确认团队配置；将单公钥验签代码及公钥经 review 合入 PR 基线，实测有效签名通过、缺失/错误签名失败，再将 `sensitive-attestation-verify` 设为 required，并开启 Require branches to be up to date before merging；网页 squash 与 rebase 合并均可使用，服务端提交按 tree 绑定核对。仓库的 squash 默认提交标题取 Pull request title、正文取空：标题末尾的 `(#N)` 是审计定位 PR head 的唯一线索，正文为空则不会把已签名提交的 trailer 原文拼进未签名的消息里。安装包不自动启用这些设置。团队私钥泄露或需撤销持有人时，由保管人安排全员密钥轮换并重签在途 PR；共享密钥无法单独撤销一个成员。
 
 此前完整包在本机 macOS / Node 24 上验证；新版 v2 包及升级路径须另行验收，Windows、Linux、银河麒麟和图形 Git 客户端也须各自实机验收。仓库实现和 GitHub 门禁的部署状态以实际 PR 与分支保护为准。
 
