@@ -17,8 +17,9 @@ const USAGE = `用法：
   HELUO_FORGE_IAM_URL                 运行中的 DSH 地址（如 http://127.0.0.1:49196）；设置后
                                       auth token 经 loopback 桥向 Host 取，过期也能拿到新票
   HELUO_FORGE_CREDENTIALS_FILE        明文文件后端路径（仅开发/试点）
-  HELUO_FORGE_KEYCHAIN_SERVICE        钥匙串 service，默认 heluo-forge
-  HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX 钥匙串 account 前缀，默认 iam
+  HELUO_FORGE_KEYCHAIN_SERVICE        凭据 service，默认 heluo-forge
+  HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX 凭据 account 前缀，默认 iam
+  HELUO_FORGE_ALLOW_UNVETTED=1        允许读取尚未取证的原生适配器（仅本地验证）
 `;
 
 function fail(code, message, json) {
@@ -31,18 +32,30 @@ async function openReader() {
   try {
     keychain = await import('@heluo/forge-credentials-keychain');
   } catch {
-    return undefined;
+    return { error: { code: 'IAM_CREDENTIALS_UNAVAILABLE', message: '缺少 @heluo/forge-credentials-keychain，无法读取凭据' } };
   }
   const service = process.env.HELUO_FORGE_KEYCHAIN_SERVICE || 'heluo-forge';
   const accountPrefix = process.env.HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX || 'iam';
   const file = process.env.HELUO_FORGE_CREDENTIALS_FILE;
   try {
-    const backend = file
-      ? keychain.createFileBackend({ path: file })
-      : keychain.createNativeKeyringBackend({ service, enumeration: 'unsupported' });
-    return keychain.createKeychainProvider(backend, { service, accountPrefix });
-  } catch {
-    return undefined;
+    // Default to the same resolver the product uses: Windows/Linux native
+    // keyring, macOS encrypted document. The plaintext file backend stays an
+    // explicit development override.
+    const backend = file ? keychain.createFileBackend({ path: file }) : keychain.createPlatformBackend();
+    if (backend.available === false) {
+      return { error: { code: 'IAM_CREDENTIALS_UNAVAILABLE', message: backend.reason ?? '当前平台没有可用的凭据后端' } };
+    }
+    if (backend.unvetted === true && process.env.HELUO_FORGE_ALLOW_UNVETTED !== '1') {
+      return {
+        error: {
+          code: 'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
+          message: '原生凭据适配器尚未在目标机取证；设置 HELUO_FORGE_ALLOW_UNVETTED=1 仅用于本地验证',
+        },
+      };
+    }
+    return { provider: keychain.createKeychainProvider(backend, { service, accountPrefix }) };
+  } catch (error) {
+    return { error: { code: error?.code ?? 'IAM_CREDENTIALS_UNAVAILABLE', message: error?.message ?? '凭据后端初始化失败' } };
   }
 }
 
@@ -79,11 +92,12 @@ async function main(argv) {
     return EXIT.USAGE;
   }
 
-  const reader = await openReader();
-  if (!reader) {
-    fail('IAM_CREDENTIALS_UNAVAILABLE', '没有可用的凭据后端：配置 HELUO_FORGE_CREDENTIALS_FILE 或安装原生钥匙串模块', json);
+  const opened = await openReader();
+  if (opened.error) {
+    fail(opened.error.code, opened.error.message, json);
     return EXIT.UNAVAILABLE;
   }
+  const reader = opened.provider;
 
   let record;
   try {

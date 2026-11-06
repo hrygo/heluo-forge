@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # Isolated local UAT only; never use test trust injections in production.
+# IAM_UAT_SMOKE=1 starts the same stack, waits for /health, prints SMOKE OK and
+# exits; it is the non-interactive check that the harness still matches HEAD.
 set -eu
+for tool in node npm python3 git tar; do
+  command -v "$tool" >/dev/null 2>&1 || { printf '缺少 %s，无法启动本地 UAT\n' "$tool" >&2; exit 2; }
+done
+DSH_CMD="${DSH_BIN:-dsh}"
+command -v "$DSH_CMD" >/dev/null 2>&1 || { printf '找不到 DSH（%s）；把 dsh 放进 PATH 或设置 DSH_BIN\n' "$DSH_CMD" >&2; exit 2; }
+want_node="$(cat .node-version 2>/dev/null || true)"
+have_node="$(node -p 'process.versions.node')"
+if [ -n "$want_node" ] && [ "$want_node" != "$have_node" ]; then
+  printf '警告：Node %s 与仓库 .node-version（%s）不一致；结果需注明运行时\n' "$have_node" "$want_node" >&2
+fi
+printf '环境：Node %s，DSH %s\n' "$have_node" "$("$DSH_CMD" --version 2>/dev/null | head -1)"
 export IAM_UAT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/heluo-iam-uat.XXXXXXXX")"
 mkdir -p "$IAM_UAT_ROOT/source" "$IAM_UAT_ROOT/artifacts" "$IAM_UAT_ROOT/workspace" "$IAM_UAT_ROOT/dsh/profiles/uat"
 git archive HEAD | tar -x -C "$IAM_UAT_ROOT/source"
@@ -72,6 +85,26 @@ server.on('error', async error => { console.error('无法启动入口：', error
 server.listen(entryPort, '127.0.0.1', () => {
   console.log(`测试入口：http://127.0.0.1:${entryPort}/`);
   console.log(callbackPort === 0 ? '回调端口：系统分配（只在该次登录期间监听）' : `回调端口：固定 ${callbackPort}`);
+  if (process.env.IAM_UAT_SMOKE === '1') {
+    const deadline = Date.now() + 120_000;
+    const timer = setInterval(async () => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${entryPort}/health`);
+        if (response.ok) {
+          clearInterval(timer);
+          console.log('SMOKE OK');
+          await stop();
+        }
+      } catch {}
+      if (Date.now() > deadline) {
+        clearInterval(timer);
+        console.error('SMOKE TIMEOUT：宿主未在 120 秒内就绪');
+        child.kill('SIGTERM');
+        await mock.close();
+        process.exit(1);
+      }
+    }, 1000);
+  }
 });
 async function stop() { server.close(); child.kill('SIGTERM'); await mock.close(); process.exit(0); }
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
