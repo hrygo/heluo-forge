@@ -51,6 +51,8 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED: '所选模型的额度已用尽，请更换模型或联系管理员。',
   ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
   ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。',
+  // Neither rejected nor provably unreachable: say so instead of guessing.
+  ENTERPRISE_GATEWAY_CALL_FAILED: '本次请求未完成，请重试；持续失败请联系管理员。',
   ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
 });
 const error = code => new IamError(code, MESSAGES[code]);
@@ -71,6 +73,34 @@ const statusOf = (cause) => {
     if (typeof value === 'number') return value;
   }
   return undefined;
+};
+// The model layer's codes are a moving target: a gateway swap or an SDK upgrade
+// can introduce one this table has never seen. Map what is known, then fall back
+// on evidence (status, then socket error) instead of assuming "unreachable".
+const CODE_MAP = Object.freeze({
+  AUTH: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+  PERMISSION: 'ENTERPRISE_GATEWAY_FORBIDDEN',
+  FORBIDDEN: 'ENTERPRISE_GATEWAY_FORBIDDEN',
+  QUOTA: 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
+  RATE_LIMIT: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+  INVALID_REQUEST: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  UNSUPPORTED_REASONING_EFFORT: 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
+  NETWORK: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  TIMEOUT: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  OVERLOADED: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  SERVER_ERROR: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+});
+// Only a socket-level failure justifies claiming the gateway cannot be reached.
+const UNREACHABLE_SYSCALLS = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
+const classifyFailure = (failure) => {
+  const code = typeof failure?.code === 'string' ? failure.code : undefined;
+  if (code && Object.hasOwn(CODE_MAP, code)) return CODE_MAP[code];
+  if (code && Object.hasOwn(MESSAGES, code)) return code;
+  const status = statusOf(failure);
+  if (status !== undefined) return gatewayCode(status);
+  const syscall = failure?.cause?.code ?? failure?.errno;
+  if (typeof syscall === 'string' && UNREACHABLE_SYSCALLS.has(syscall)) return 'ENTERPRISE_GATEWAY_UNAVAILABLE';
+  return 'ENTERPRISE_GATEWAY_CALL_FAILED';
 };
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
@@ -255,16 +285,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         code = refusal(request, mine);
         if (code) { yield finish(code); return; }
         if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
-          const code = chunk.reason.failure.code;
-          yield finish(code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
-            : code === 'PERMISSION' || code === 'FORBIDDEN' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
-              : code === 'QUOTA' ? 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'
-              : code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
-                // pi-ai turns an HTTP error into a finish chunk, and its classifier
-                // reports every 400 as INVALID_REQUEST, so a rejected request never
-                // reaches the thrown-error branch that reads the status.
-                : code === 'INVALID_REQUEST' ? 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'
-                  : Object.hasOwn(MESSAGES, code ?? '') ? code : 'ENTERPRISE_GATEWAY_UNAVAILABLE'); return;
+          // The model layer turns an HTTP error into a finish chunk, so the code
+          // arrives here without ever passing through the thrown-error branch.
+          yield finish(classifyFailure(chunk.reason.failure)); return;
         }
         yield chunk;
       }
@@ -273,15 +296,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     } catch (cause) {
       code = refusal(request, mine);
       if (!code && request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-      const status = statusOf(cause);
-      yield finish(code ?? (Object.hasOwn(MESSAGES, cause?.code ?? '') ? cause.code
-        : cause?.code === 'AUTH' ? 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'
-          : cause?.code === 'PERMISSION' || cause?.code === 'FORBIDDEN' ? 'ENTERPRISE_GATEWAY_FORBIDDEN'
-            : cause?.code === 'QUOTA' ? 'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED'
-            : cause?.code === 'RATE_LIMIT' ? 'ENTERPRISE_GATEWAY_RATE_LIMIT'
-              : cause?.code === 'INVALID_REQUEST' ? 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'
-                : cause?.code === 'UNSUPPORTED_REASONING_EFFORT' ? 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED'
-                  : status === undefined ? 'ENTERPRISE_GATEWAY_UNAVAILABLE' : gatewayCode(status)));
+      yield finish(code ?? classifyFailure(cause));
     }
   }
   /** Adopt the stored selection, or remember that nothing was stored yet. */
