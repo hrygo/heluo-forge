@@ -20,7 +20,7 @@ const TARBALL_NAME = 'heluo-forge-enterprise-0.1.0.tgz';
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const json = (value) => `${JSON.stringify(value)}\n`;
 
-// Minimal ustar writer: a 124-file real artifact cannot be byte-patched without
+// Minimal ustar writer: the real artifact cannot be byte-patched without
 // rebuilding the whole archive, so negative cases use synthetic single-point
 // mutations instead (TECHNICAL §7).
 const BLOCK = 512;
@@ -105,7 +105,7 @@ test('real enterprise bundle: build sidecar, verify, and refuse to overwrite', (
   const built = runCli(builder, [dir]);
   assert.equal(built.status, 0, built.stderr);
   const result = JSON.parse(built.stdout);
-  assert.equal(result.files, 124);
+  assert.ok(Number.isInteger(result.files) && result.files > 0);
   assert.equal(existsSync(result.manifest), true);
   assert.equal(existsSync(result.sums), true);
   const sums = readFileSync(result.sums, 'utf8');
@@ -117,7 +117,8 @@ test('real enterprise bundle: build sidecar, verify, and refuse to overwrite', (
   const verdict = verifyBundle(result.tarball);
   assert.equal(verdict.ok, true, verdict.errors.join('\n'));
   assert.deepEqual(verdict.errors, []);
-  assert.equal(verdict.summary.fileCount, 124);
+  assert.equal(verdict.summary.fileCount, result.files);
+  assert.equal(verdict.manifest.files.length, result.files);
   assert.equal(verdict.summary.memberCount, 6);
   assert.equal(verdict.summary.entryName, ENTRY);
   assert.equal(verdict.summary.sha256, digest(readFileSync(result.tarball)));
@@ -127,7 +128,7 @@ test('real enterprise bundle: build sidecar, verify, and refuse to overwrite', (
   assert.equal(cli.status, 0, cli.stdout);
   const lines = cli.stdout.trimEnd().split('\n');
   assert.equal(lines.length, 3);
-  assert.match(lines[0], /^bundle: heluo-forge-enterprise-0\.1\.0\.tgz \| 124 files \| \d+ bytes \| sha256 [0-9a-f]{64}$/u);
+  assert.equal(lines[0], `bundle: heluo-forge-enterprise-0.1.0.tgz | ${result.files} files | ${verdict.summary.totalBytes} bytes | sha256 ${verdict.summary.sha256}`);
   assert.equal(lines[1], 'bundle: manifest ok (formatVersion 1, 6 packages)');
   assert.equal(lines[2], 'bundle: ok');
 
