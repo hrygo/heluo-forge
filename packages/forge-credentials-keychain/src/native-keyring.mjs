@@ -21,14 +21,64 @@
 //     preferred when present; `await` on the synchronous surface is a no-op,
 //     so a module that only exports `Entry` keeps working.
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { KeychainBackendError, NAMESPACE_PATTERN } from './backend.mjs';
 
-/** Platform packages are resolved by name; this module never installs them. */
-const DEFAULT_MODULE = '@napi-rs/keyring';
+/**
+ * Upstream package the staged addons come from. The addons themselves are
+ * release resources under `native/<triple>/`, staged by
+ * `scripts/fetch-native-keyring.mjs`; this package never declares the upstream
+ * package as a dependency, because the enterprise bundle refuses external
+ * runtime dependencies and the terminal must never resolve a platform package
+ * at install time.
+ */
+const NATIVE_KEYRING_MODULE = '@napi-rs/keyring';
+
+/** platform-arch → upstream prebuilt triple; anything else stays fail closed. */
+const NATIVE_TARGETS = new Map([
+  ['win32-x64', 'win32-x64-msvc'],
+  ['linux-x64', 'linux-x64-gnu'],
+  ['linux-arm64', 'linux-arm64-gnu'],
+]);
 
 /** Windows CREDENTIALW blob limit; UTF-16LE means at most half as many code units. */
 const WINDOWS_BLOB_LIMIT_BYTES = 2560;
+
+/**
+ * Windows credential account limit (`CRED_MAX_USERNAME_LENGTH`). The upstream
+ * store compares the UTF-8 byte length of the account before writing, so the
+ * guard here uses the same unit to fail early with a stable code instead of
+ * surfacing a platform error.
+ */
+const WINDOWS_KEY_LIMIT_BYTES = 513;
+
+/**
+ * DLL the Windows addon imports besides the always-present UCRT
+ * (`api-ms-win-crt-*`). A machine without the Visual C++ 2015-2022
+ * redistributable fails `require` with "the specified module could not be
+ * found", which reads like a packaging bug; checking first turns it into an
+ * actionable message and a distinct report field.
+ */
+const WINDOWS_RUNTIME_DLLS = ['vcruntime140.dll'];
+
+/**
+ * Whether the Windows C++ runtime the addon links against is installed.
+ * Pure over its inputs so the check is unit-testable on any host.
+ *
+ * @param {{ platform?: string, systemRoot?: string, exists?: (path: string) => boolean }} [options]
+ */
+export function windowsRuntimeStatus(options = {}) {
+  const systemRoot = options.systemRoot ?? process.env.SystemRoot;
+  const exists = options.exists ?? existsSync;
+  if (systemRoot === undefined || systemRoot === '') {
+    return { ok: false, missing: [...WINDOWS_RUNTIME_DLLS], reason: 'SystemRoot is not set' };
+  }
+  const missing = WINDOWS_RUNTIME_DLLS.filter((name) => !exists(join(systemRoot, 'System32', name)));
+  return missing.length === 0 ? { ok: true, missing: [] } : { ok: false, missing };
+}
 
 function assertService(service) {
   if (typeof service !== 'string' || !NAMESPACE_PATTERN.test(service)) {
@@ -41,16 +91,62 @@ function assertService(service) {
 }
 
 /**
- * Load the native module lazily so importing this file never needs it, and
- * resolve from this package rather than the process working directory.
+ * The staged triple for a platform-arch pair, or `undefined` when this package
+ * ships no vetted addon for it. Undefined is not an error here: the caller must
+ * fall back to the explicitly unavailable backend, never to plaintext.
  */
-function defaultLoad(moduleName) {
+export function nativeTargetFor(platform = process.platform, arch = process.arch) {
+  return NATIVE_TARGETS.get(`${platform}-${arch}`);
+}
+
+/** Absolute path of the staged addon, or `undefined` for an unsupported pair. */
+export function nativeAddonPath(platform = process.platform, arch = process.arch) {
+  const triple = nativeTargetFor(platform, arch);
+  if (triple === undefined) return undefined;
+  return fileURLToPath(new URL(`../vendor/${triple}/keyring.node`, import.meta.url));
+}
+
+/**
+ * Load the staged addon from this package's own `native/` directory.
+ *
+ * Resolving by path instead of by package name is deliberate: a name lookup
+ * would walk up into whatever `node_modules` the host happens to have, which is
+ * exactly the "terminal resolves a platform package" behaviour the release
+ * rules forbid. A missing file is a mount-time failure with an actionable
+ * message, not a silent downgrade.
+ */
+function defaultLoad(platform = process.platform, arch = process.arch) {
+  const triple = nativeTargetFor(platform, arch);
+  if (triple === undefined) {
+    throw new KeychainBackendError(
+      'KEYCHAIN_UNAVAILABLE',
+      `this package ships no vetted addon for ${platform}-${arch}; no plaintext fallback is performed`,
+    );
+  }
+  if (platform === 'win32') {
+    const runtime = windowsRuntimeStatus();
+    if (runtime.ok !== true) {
+      throw new KeychainBackendError(
+        'KEYCHAIN_UNAVAILABLE',
+        `the Windows credential addon needs the Microsoft Visual C++ 2015-2022 Redistributable (x64); missing ${runtime.missing.join(', ')}. Install it, then retry; no plaintext fallback is performed.`,
+      );
+    }
+  }
+  const addon = nativeAddonPath(platform, arch);
+  if (!existsSync(addon)) {
+    // Same operator contract as the generic unavailable backend: say why, say
+    // how to fix it, and name the only non-production escape hatch.
+    throw new KeychainBackendError(
+      'KEYCHAIN_UNAVAILABLE',
+      `staged addon for ${triple} is missing; run node scripts/fetch-native-keyring.mjs before building. This profile fails closed with no plaintext fallback; a non-production profile may use the documented development override (filePath + allowInsecureFile).`,
+    );
+  }
   try {
-    return createRequire(import.meta.url)(moduleName);
+    return createRequire(import.meta.url)(addon);
   } catch {
     throw new KeychainBackendError(
       'KEYCHAIN_UNAVAILABLE',
-      `native keyring module ${moduleName} cannot be loaded; no plaintext fallback is performed`,
+      `staged addon for ${triple} cannot be loaded; no plaintext fallback is performed`,
     );
   }
 }
@@ -78,9 +174,36 @@ function entryOptionsFor(platform) {
   return platform === 'linux' ? { linux: { store: 'secret-service' } } : undefined;
 }
 
+function assertKey(platform, key) {
+  if (typeof key !== 'string' || key.length === 0) {
+    throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'backend key must be a non-empty string');
+  }
+  // A NUL would terminate the native target string early, so the read would
+  // address a different credential than the write; control characters are
+  // never part of a legitimate key.
+  if (/[\u0000-\u001f\u007f]/u.test(key)) {
+    throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'backend key must not contain control characters');
+  }
+  if (platform === 'win32' && Buffer.byteLength(key, 'utf8') > WINDOWS_KEY_LIMIT_BYTES) {
+    throw new KeychainBackendError(
+      'KEYCHAIN_KEY_TOO_LONG',
+      `backend key exceeds the Windows credential account limit (${Buffer.byteLength(key, 'utf8')} > ${WINDOWS_KEY_LIMIT_BYTES} bytes)`,
+    );
+  }
+  return key;
+}
+
 function assertStorable(platform, value) {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (typeof value !== 'string') {
+    throw new KeychainBackendError('KEYCHAIN_VALUE_INVALID', 'native keyring only stores strings');
+  }
+  if (value.length === 0) {
     throw new KeychainBackendError('KEYCHAIN_VALUE_EMPTY', 'refusing to store an empty credential');
+  }
+  // Both target platforms transport the value as UTF (UTF-16LE through the
+  // Windows blob, UTF-8 through D-Bus), so a lone surrogate has no encoding.
+  if (!value.isWellFormed()) {
+    throw new KeychainBackendError('KEYCHAIN_VALUE_INVALID', 'credential value is not well-formed Unicode (lone surrogate)');
   }
   if (platform === 'win32') {
     // Report sizes only: the value itself must never reach a log or an error.
@@ -92,6 +215,17 @@ function assertStorable(platform, value) {
       );
     }
   }
+}
+
+/**
+ * Upstream errors carry no stable code across platforms (napi turns them into
+ * plain `Error`s), so they are normalized here: the operation is named, the
+ * platform message is kept for diagnosis, and nothing else from the store is
+ * copied into the error.
+ */
+function describeStoreError(error) {
+  const raw = typeof error?.message === 'string' ? error.message : String(error);
+  return raw.replace(/\s+/gu, ' ').trim().slice(0, 240) || 'no diagnostic message';
 }
 
 /**
@@ -109,7 +243,10 @@ export function createNativeKeyringBackend(options = {}) {
   if (enumeration !== 'unsupported' && enumeration !== 'find-credentials') {
     throw new KeychainBackendError('KEYCHAIN_ENUMERATION_INVALID', "enumeration must be 'unsupported' or 'find-credentials'");
   }
-  const loader = options.load ?? (() => defaultLoad(DEFAULT_MODULE));
+  // `vetted` stays false until the target machine evidence exists; the
+  // provider then refuses to mount without an explicit opt-in.
+  const vetted = options.vetted === true;
+  const loader = options.load ?? (() => defaultLoad(platform, options.arch ?? process.arch));
   let module;
 
   function store() {
@@ -145,12 +282,19 @@ export function createNativeKeyringBackend(options = {}) {
 
   /** One entry per key, always pinned to the reviewed Linux store. */
   function entry(key) {
-    if (typeof key !== 'string' || key.length === 0) {
-      throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'backend key must be a non-empty string');
-    }
+    assertKey(platform, key);
     const Entry = EntryClass();
     const bag = entryOptionsFor(platform);
     return bag === undefined ? new Entry(service, key) : new Entry(service, key, bag);
+  }
+
+  async function call(operation, run) {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof KeychainBackendError) throw error;
+      throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', `native keyring ${operation} failed: ${describeStoreError(error)}`);
+    }
   }
 
   async function enumerate(prefix) {
@@ -171,7 +315,16 @@ export function createNativeKeyringBackend(options = {}) {
       throw new KeychainBackendError('KEYCHAIN_LIST_UNSUPPORTED', 'native keyring does not export findCredentials');
     }
     // Errors propagate: a locked or unreachable store must not look empty.
-    const found = await list.call(loaded, service);
+    //
+    // Researched upstream semantics (keyring-node 2.1.2, keyring-core 1.0.1,
+    // windows-native-keyring-store 1.1.0, dbus-secret-service-keyring-store
+    // 1.0.1): Windows enumerates by the target suffix `*.<service>` and reads
+    // `UserName` as the account, so foreign credentials whose target ends with
+    // the service name are returned too; Linux searches the `service`
+    // attribute and reads the `username` attribute, skipping items without it.
+    // Both surfaces are therefore filtered here by the requested prefix, and
+    // accounts that cannot be keys are dropped instead of failing the scan.
+    const found = await call('enumeration', () => list.call(loaded, service));
     if (!Array.isArray(found)) {
       throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration did not return a list');
     }
@@ -181,6 +334,7 @@ export function createNativeKeyringBackend(options = {}) {
       if (typeof account !== 'string') {
         throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration returned an entry without an account');
       }
+      if (account.length === 0 || /[\u0000-\u001f\u007f]/u.test(account)) continue;
       if (!account.startsWith(prefix)) continue;
       const password = item?.password;
       entries.push(typeof password === 'string' ? { key: account, value: password } : { key: account });
@@ -192,15 +346,15 @@ export function createNativeKeyringBackend(options = {}) {
     kind: 'native-keyring',
     available: true,
     durable: true,
-    unvetted: true,
-    production: false,
+    unvetted: !vetted,
+    production: vetted,
     service,
     enumeration,
     // No `transaction`, no `crossProcessLock`: the provider must not advertise
     // read-modify-write atomicity that this module does not provide.
 
     async get(key) {
-      const value = await entry(key).getPassword();
+      const value = await call('read', () => entry(key).getPassword());
       // 2.1.2 returns null when absent; the provider only understands undefined.
       if (value === null || value === undefined) return undefined;
       if (typeof value !== 'string') {
@@ -211,7 +365,7 @@ export function createNativeKeyringBackend(options = {}) {
 
     async set(key, value) {
       assertStorable(platform, value);
-      await entry(key).setPassword(value);
+      await call('write', () => entry(key).setPassword(value));
     },
 
     async delete(key) {
@@ -219,9 +373,9 @@ export function createNativeKeyringBackend(options = {}) {
       // nothing was there, and rejects when removal failed. Do not take `false`
       // on faith: if the store still answers a value afterwards, the credential
       // survived and the caller must not believe it was deleted.
-      const deleted = await entry(key).deletePassword();
+      const deleted = await call('delete', () => entry(key).deletePassword());
       if (deleted !== true) {
-        const survivor = await entry(key).getPassword();
+        const survivor = await call('read', () => entry(key).getPassword());
         if (survivor !== null && survivor !== undefined) {
           throw new KeychainBackendError(
             'KEYCHAIN_OPERATION_FAILED',
@@ -258,4 +412,4 @@ export function createNativeKeyringBackend(options = {}) {
   return backend;
 }
 
-export { DEFAULT_MODULE as NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES };
+export { NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES, WINDOWS_RUNTIME_DLLS };

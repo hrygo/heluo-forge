@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-010 |
 | 文档名称 | 多端凭据存储实现与验收方案 |
-| 版本 | V0.6.1 |
+| 版本 | V0.6.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
+| 最后更新 | 2026-11-06 |
 | 门禁 | A 已实现（本机 macOS 取证）；B 样机已实现（仅合成用例）；G1 关键存储能力待关闭；G2 三目标未验 |
 | 文档层级 | L2 实施计划；范围由需求基线承担，接口与存储决策先回写对应设计再实施 |
 
@@ -237,18 +237,34 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 
 ## 6. 自包含制品路线
 
-**选择构建期闭合原生资源，不让终端解析 keyring 的 optionalDependencies。**企业 npm 有镜像不等于终端制品已自包含。
+**选择构建期闭合原生资源，不让终端解析 keyring 的 optionalDependencies。** 企业 npm 有镜像不等于终端制品已自包含。
 
-当前 [构建器](<../../scripts/build-enterprise-bundle.mjs>)拒绝 peer/optional 和外部运行依赖；[闭包审计](<../../scripts/lib/bundle-rules.mjs>)与[负向测试](<../../tests/bundle-build.test.mjs>)锁定这一政策。实施需增加有边界的资源导入，不宽泛放开外部依赖。
+现行闭包政策不变：构建器拒绝 peer/optional 与任何非 `@heluo/forge-*` 的运行依赖，闭包审计与负向测试锁定该政策。原生 addon 以发布资源随包分发，因此三条约束同时满足：终端不编译、不联网、不解析外部包。
 
-1. 新增原生资源锁定清单，逐项记录来源包、精确版本、tarball integrity、提取资源哈希、平台/架构/libc、许可与 Rust 依赖清单；构建输入来自受控缓存，缺资源即失败。获取公网源与企业发布仍由既有制品流程承担，本仓库不新建发布后台。
-2. 构建器在 staging 中将**原版平台二进制与许可证**放入凭据包的 `vendor/` 资源目录。最小受控 loader 按 OS/架构/libc 选相对路径，直接加载对应 `.node`；核对导出与固定版本 API。终端不需要加载未随包交付的官方 JS wrapper、不访问全局包，也不自动选择 WASI/其他 backend。
-3. Windows x64、Linux x64 GNU、Linux arm64 GNU 是必选资源；macOS arm64 仅为开发回归资源，不扩大交付承诺。不能在开发 Mac 打包时只把本机平台复制进最终包。
-4. 修改构建器、源码/释放目录/tarball 审计与包 `files` 处理，覆盖新 vendor 资源；新增“缺目标、错哈希、混版本、符号链接、路径穿越、错误架构、丢许可证、额外外部依赖”负例。不得因加原生资源删除原有拒绝测试。
-5. 最终安装单元仍是同一个自包含 tgz；不携带未闭合的 `workspace:`、外部运行依赖、终端可选依赖或安装钩子。用空缓存、禁止联网与 `--ignore-scripts` 安装，再从安装产物启动真实宿主，不以源码目录的 require 成功代替。
-6. 在三台目标机核验 glibc/系统依赖与实际加载；Linux 静态 libdbus 及其许可按发布资源核对，不能把 GNU 包存在写成兼容所有 UOS/麒麟镜像。macOS 在实际签名应用上下文验载，不能用独立 bundled Node 的失败替代。
+落点（`packages/forge-credentials-keychain`）：
+
+1. 锁定清单 [scripts/native-keyring.json](<../../scripts/native-keyring.json>) 固定上游包、精确版本与每个 tarball 的 integrity；`vendor/CHECKSUMS.json` 记录落地文件的 sha256、字节数、来源包与许可。
+2. [scripts/fetch-native-keyring.mjs](<../../scripts/fetch-native-keyring.mjs>) 按清单下载、校验 integrity、暂存到 `vendor/<triple>/keyring.node` 并写校验和；任何一项不符立即中止且不写文件，`--check` 只校验不下载。
+3. 二进制不进入 Git：提交钩子拒绝二进制与大文件，`vendor/*/` 已由 [.gitignore](<../../.gitignore>) 排除。干净克隆保留清单与校验和、跳过字节比对；发布打包前必须先暂存并跑 `--check`，三个目标全部就位才出制品。离线检查器不要求原生产物，避免 CI 依赖网络。
+4. 加载器 `src/native-keyring.mjs` 用 `nativeTargetFor()` 映射 `platform-arch`，按**相对本包的绝对路径**加载，不做 `node_modules` 解析；未列入映射的组合（含 macOS）返回不可用 backend，任何分支都不落到明文。
+5. 启用分两步：`NATIVE_ADAPTER_VETTED` 为 `false` 时挂载需要 `allowUnvettedPlatformAdapter: true`；目标机完成读、写、删、失效、跨进程与重启后保留的记录后置为 `true`，此后无需平台相关配置。
+
+负例覆盖：缺目标、错哈希、混版本、错误架构、丢许可证、额外外部依赖，以及“映射表被改成默认放开时用例必须失败”。新增测试不得删除既有拒绝用例。
 
 若资源导入或平台 API 需改变既有闭包政策，先修改对应设计并评审；不能退回“现场 pnpm 自动装平台包”作为临时发布路线。
+
+### 6.1 上游语义调研
+
+目标机之外可以先确定为事实的部分来自上游源码（`@napi-rs/keyring` 2.1.2 及其锁定版本）：
+
+- **写入形态**：Windows 凭据 target 为 `{account}.{service}`，password 以 UTF-16LE 存入 blob；Linux 为 Secret Service 条目，属性含 `service`、`username`（`windows-native-keyring-store` 1.1.0 `src/cred.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`）。
+- **枚举**：Windows 走 `CredEnumerateW`，过滤串 `*.{service}`，account 取 `UserName`；Linux 按属性 `service` 搜索、account 取 `username`（`keyring-node` 2.1.2 `src/entry.rs`）。Windows 的后缀过滤会带回同后缀的他人条目，Linux 静默跳过缺 `username` 的条目。
+- **上限与编码**：Windows account ≤ 513 字节（UTF-8 计）、blob ≤ 2560 字节（UTF-16LE 计），超限由上游返回 `TooLong`；Linux 无库级上限（`src/utils.rs`）。
+- **失败模式**：Windows 命中集合中任一凭据 blob 奇数长或非法 UTF-16 时，整次枚举抛错且不返回部分结果。
+- **平台默认值**：Windows 未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境 + 漫游配置下凭据随用户配置文件漫游；Linux 写入集合 `default`，集合锁定时读失败而不是返回空。绑定未暴露 `persistence` 与解锁流程，这两项只能作为部署前提记录，不能在本包内改变（`src/store.rs`、`src/cred.rs`）。
+- **加载前提**：Windows 产物直接导入 `VCRUNTIME140.dll`，缺 Microsoft Visual C++ 2015-2022 Redistributable 时 `require` 报“找不到模块”，与凭据逻辑无关；Linux 产物导入的符号版本最高为 x64 `GLIBC_2.15`、arm64 `GLIBC_2.17`，均低于 UOS 20 与麒麟的发行版基线。适配器在 Windows 上先探测该 DLL，缺失即以 `KEYCHAIN_UNAVAILABLE` 说明安装项。
+
+据此在无真机条件下已确定并实现：枚举按调用方前缀过滤、丢弃不可作 key 的 account、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝而非依赖平台报错。仍须目标机确认的只有运行态事实：真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
 
 ## 7. 执行清单、估算与命令
 
@@ -277,6 +293,23 @@ git diff --check
 ```
 
 A/B 新 probe 完成后再登记可执行命令，必须记录 SDK 来源、实际 DSH/Node 版本、profile、制品哈希、命名空间、用例结果与退出状态。不把尚不存在的 runner 写成已可复跑，也不把 `DSH_KEYCHAIN_SPIKE=0` 的离线检查说成原生验收。
+
+原生存储探针（目标机执行，不挂载宿主、不联网、不打印存储值）：
+
+```sh
+# 仓库检出中运行；只有制品时加 --package <安装目录>/node_modules/@heluo/forge-credentials-keychain
+node scripts/probe/native-keyring-store-probe.mjs --enumeration
+```
+
+输出 JSON 记录平台、triple、addon 路径与逐项结论，作为 §8 矩阵“字符串读写删与枚举”一行的原始证据归档；非目标平台以退出码 2 结束属于预期，不记为缺陷。
+
+目标机取证顺序（每台机各跑一次，结果贴进 issue #182）：
+
+1. `node scripts/fetch-native-keyring.mjs --check` 确认随包产物与校验和一致；
+2. `node scripts/probe/native-keyring-store-probe.mjs --enumeration --keep` 记录读写、跨进程与枚举命中集合，并留下探针键；
+3. 重启后用 `--key <上一步的键> --expect-present` 复读，确认值仍在；
+4. 同一 OS 的另一个用户账户下 `--expect-present` 应为“读不到”（退出码 1），这就是隔离性的期望结果；
+5. 用 `--key <键> --cleanup` 清除，并记录 `cmdkey /list`（Windows）或 `secret-tool search service heluo-forge`（Linux）的可见性与权限位。
 
 ## 8. D：验收矩阵与证据
 

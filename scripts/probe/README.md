@@ -154,3 +154,23 @@ node scripts/probe/check-teamflow-journal-roots.mjs --journal <journal.json> --r
 - 尚未覆盖：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 确切范围。
   这些在对应设计的未决事项里保留并注明截止门禁。
 - 探针插件只在探针 profile 内挂载，不写入任何用户 profile，也不改宿主代码。
+
+## 原生凭据存储探针（issue #182）
+
+```sh
+node scripts/probe/native-keyring-store-probe.mjs [--service <名>] [--package <目录>] [--enumeration] [--json]
+```
+
+在目标机上直接对 OS 存储执行读、写、覆盖、跨进程读、删除与幂等删除，输出 JSON 供
+issue #182 归档。它不挂载 DSH profile、不联网、不打印存储值；探针键每次随机，跑完自行
+删除。`--enumeration` 额外调用 `findCredentials` 并报告命中集合大小，用来确认 Windows
+的后缀过滤实际带回了哪些条目。
+
+重启后的持久性用三段式：首次 `--keep` 留下键并记录 `key`，重启后用
+`--key <该键> --expect-present` 复读，再用 `--key <该键> --cleanup` 清除。换一个 OS
+用户跑 `--expect-present` 应当是“读不到”（退出码 1），这正是隔离性的期望结果。
+
+只装了制品、没有仓库检出时，用 `--package` 指向安装目录里的包（如
+`.../node_modules/@heluo/forge-credentials-keychain`），探针与它的子进程都从该目录加载。
+
+非交付平台（如 macOS）以 `stage: environment` 退出码 2 结束，这是预期行为。

@@ -1,0 +1,37 @@
+{
+  "package": "@napi-rs/keyring",
+  "version": "2.1.2",
+  "comment": "Pinned upstream prebuilt addons. Integrity values are the registry tarball digests for 2.1.2; regenerate with scripts/fetch-native-keyring.mjs and never hand-edit.",
+  "targets": [
+    {
+      "triple": "win32-x64-msvc",
+      "platform": "win32",
+      "arch": "x64",
+      "source": "@napi-rs/keyring-win32-x64-msvc",
+      "version": "2.1.2",
+      "addon": "keyring.win32-x64-msvc.node",
+      "integrity": "sha512-yQtFdfuwqM0ezKlYO6r2n44in2LGzd4MC679Ddhvojip3t1hn+q/4I+gJU+cIJQVd5FAZSKNrK4tGfew3UTpAQ==",
+      "license": "MIT"
+    },
+    {
+      "triple": "linux-x64-gnu",
+      "platform": "linux",
+      "arch": "x64",
+      "source": "@napi-rs/keyring-linux-x64-gnu",
+      "version": "2.1.2",
+      "addon": "keyring.linux-x64-gnu.node",
+      "integrity": "sha512-Fj5TmTnl2oriuCT5DDEYlhgxYes20uGfgOg10LK9PyPVsI8/PQ1m8I4rq/4A5hkrMtY7wvFb70YmX/yPHDYWvQ==",
+      "license": "MIT"
+    },
+    {
+      "triple": "linux-arm64-gnu",
+      "platform": "linux",
+      "arch": "arm64",
+      "source": "@napi-rs/keyring-linux-arm64-gnu",
+      "version": "2.1.2",
+      "addon": "keyring.linux-arm64-gnu.node",
+      "integrity": "sha512-PM+SAcl/yGzgGbeeCsKrnlG4T5DBIDjmDqtKm5an1bJz0o0gwSzR3BMiXf04JenkcqascZpdcIReoEvLj0cvCw==",
+      "license": "MIT"
+    }
+  ]
+}

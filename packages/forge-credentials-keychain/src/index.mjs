@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { KeychainBackendError, createFileBackend, createPlatformBackend } from './backend.mjs';
-import { createNativeKeyringBackend } from './native-keyring.mjs';
+import { createNativeKeyringBackend, nativeTargetFor } from './native-keyring.mjs';
 import { createSecurityCliBackend } from './security-cli.mjs';
 import { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 
@@ -9,7 +9,7 @@ export const name = 'forge-credentials-keychain';
 export const inject = [];
 
 export { createFileBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, KeychainBackendError } from './backend.mjs';
-export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, WINDOWS_BLOB_LIMIT_BYTES } from './native-keyring.mjs';
+export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, nativeAddonPath, nativeTargetFor, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES, WINDOWS_RUNTIME_DLLS, windowsRuntimeStatus } from './native-keyring.mjs';
 export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
 export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
 export { isMigratableKey, KeychainMigrationError, migrateLegacyFileToKeychain, MIGRATION_REASONS, redactSecrets } from './migrate.mjs';
@@ -49,7 +49,7 @@ function warnNonProduction(ctx, backend) {
   const notice = backend?.requiresExplicitOptIn === true
     ? 'credentials: 非生产凭据后端（明文文件）已启用；仅限开发/试点，不得用于生产'
     : backend?.unvetted === true
-      ? 'credentials: 非审核平台适配器已启用；仅限本地实验，不得用于生产'
+      ? 'credentials: 未取证的原生凭据适配器已启用；仅限试点，不得用于生产'
       : backend?.durable === false && backend?.available !== false
         ? 'credentials: 临时内存凭据后端已启用；进程退出即失效'
         : undefined;
@@ -193,6 +193,35 @@ export function validateConfig(input = {}) {
   return issues.length ? { issues } : { value };
 }
 
+/**
+ * Whether the staged native addon is treated as vetted. It stays `false` until
+ * the target-machine evidence exists (issue #182 P4); while false the provider
+ * refuses to mount it without `allowUnvettedPlatformAdapter: true`. Flipping
+ * this flag is the release step, and it must ship together with that evidence.
+ */
+const NATIVE_ADAPTER_VETTED = false;
+
+/**
+ * Pick the default backend for this platform without weakening fail closed:
+ * a platform-arch with a staged addon gets the native backend, everything else
+ * keeps the explicitly unavailable backend. No branch here can reach plaintext.
+ *
+ * @param {{ platform?: string, arch?: string, service?: string, enumeration?: string, vetted?: boolean }} [options]
+ */
+export function resolvePlatformBackend(options = {}) {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  if (nativeTargetFor(platform, arch) === undefined) return createPlatformBackend();
+  return createNativeKeyringBackend({
+    service: options.service,
+    platform,
+    arch,
+    load: options.load,
+    vetted: options.vetted ?? NATIVE_ADAPTER_VETTED,
+    enumeration: options.enumeration === 'find-credentials' ? 'find-credentials' : 'unsupported',
+  });
+}
+
 export const Config = {
   '~standard': {
     version: 1,
@@ -255,7 +284,10 @@ export function apply(ctx, rawConfig = {}) {
           })
           : result.value.filePath
             ? (assertFileOutsideRepository(result.value.filePath), createFileBackend({ path: result.value.filePath }))
-            : createPlatformBackend());
+            : resolvePlatformBackend({
+              service: result.value.service,
+              enumeration: result.value.allowUnverifiedEnumeration === true ? 'find-credentials' : 'unsupported',
+            }));
   } catch (error) {
     // A backend that cannot be constructed is a mount failure, never a reason
     // to try a different (plaintext) backend.
