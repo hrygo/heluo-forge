@@ -267,7 +267,7 @@ flowchart TB
 
 启用 `callbackPort` 后，回调不再注册到宿主 `webServer`；管理 API 仍留在宿主。
 
-平台差异集中在套接字语义上：Windows 的端口占用与关闭时序与 POSIX 不同，`check.yml` 的 `forge-iam callback` 作业在 `windows-2022` 与 `ubuntu-24.04` 上跑同一组回调用例。绑定回环地址不触发 Windows 防火墙提示这一点尚未实机确认。
+平台差异集中在套接字语义上。`check.yml` 的 `forge-iam callback` 作业在 `ubuntu-24.04` 与 `windows-2022` 上跑同一组回调用例，覆盖随机端口绑定、固定端口被占用时拒绝、排空关闭与 IPv6 回环真实请求；两平台均通过，Windows 上端口占用同样触发 `EADDRINUSE`。绑定回环地址是否触发 Windows 防火墙提示尚未实机确认。
 
 #### 4.5.2 回调校验与响应
 
