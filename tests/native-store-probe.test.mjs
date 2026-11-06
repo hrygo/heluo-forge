@@ -104,3 +104,18 @@ test('a child that cannot see the entry fails instead of silently passing', asyn
   assert.equal(step.ok, false);
   assert.match(step.error.message, /could not see the entry/u);
 });
+
+test('keep mode leaves the entry for a reboot check and skips deletion', async () => {
+  const store = new Map();
+  const report = await runStoreProbe({
+    backend: memoryBackend(store),
+    service: 'heluo-forge',
+    key: KEY,
+    keep: true,
+    readFromChild: ({ key }) => ({ ok: true, found: store.has(key), value: store.get(key) }),
+  });
+  assert.equal(report.keep, true);
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.steps.map((step) => step.name), ['read-absent', 'write-read', 'overwrite-read', 'cross-process-read']);
+  assert.equal(store.has(KEY), true, 'keep mode must not delete the entry');
+});

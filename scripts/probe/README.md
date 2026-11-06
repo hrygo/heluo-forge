@@ -166,5 +166,8 @@ issue #182 归档。它不挂载 DSH profile、不联网、不打印存储值；
 删除。`--enumeration` 额外调用 `findCredentials` 并报告命中集合大小，用来确认 Windows
 的后缀过滤实际带回了哪些条目。
 
-非交付平台（如 macOS）以 `stage: environment` 退出码 2 结束，这是预期行为。重启后保留、
-失效与清除需要人工在两次运行之间重启，按 PLAN-010 §8 记录。
+重启后的持久性用三段式：首次 `--keep` 留下键并记录 `key`，重启后用
+`--key <该键> --expect-present` 复读，再用 `--key <该键> --cleanup` 清除。换一个 OS
+用户跑 `--expect-present` 应当是“读不到”（退出码 1），这正是隔离性的期望结果。
+
+非交付平台（如 macOS）以 `stage: environment` 退出码 2 结束，这是预期行为。

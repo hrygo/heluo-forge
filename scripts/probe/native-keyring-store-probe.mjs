@@ -72,12 +72,16 @@ function childRead({ key, service, timeoutMs = 30_000 }) {
  *   service: string,
  *   key: string,
  *   enumeration?: boolean,
+ *   keep?: boolean,
  *   readFromChild?: (input: { key: string, service: string }) => { ok: boolean, found?: boolean, value?: string, code?: string, message?: string },
  * }} options
  */
 export async function runStoreProbe(options) {
   const { backend, service, key } = options;
   const enumeration = options.enumeration === true;
+  // `keep` leaves the entry behind so a reboot can be sandwiched between two
+  // runs; the default run is self-cleaning.
+  const keep = options.keep === true;
   const readFromChild = options.readFromChild ?? childRead;
   const steps = [];
 
@@ -144,21 +148,24 @@ export async function runStoreProbe(options) {
     });
   }
 
-  await step('delete', async () => {
-    await backend.delete(key);
-    const value = await backend.get(key);
-    if (value !== undefined) throw fail('entry still readable after delete');
-  });
+  if (!keep) {
+    await step('delete', async () => {
+      await backend.delete(key);
+      const value = await backend.get(key);
+      if (value !== undefined) throw fail('entry still readable after delete');
+    });
 
-  await step('delete-idempotent', async () => {
-    await backend.delete(key);
-  });
+    await step('delete-idempotent', async () => {
+      await backend.delete(key);
+    });
+  }
 
   return {
     ok: steps.every((item) => item.ok === true),
     key,
     service,
     enumeration,
+    keep,
     steps,
   };
 }
@@ -170,17 +177,23 @@ function usage() {
     '  --service <name>      keyring service namespace (default: heluo-forge)',
     '  --key <name>          absolute backend key (default: <service>/probe/<random>)',
     '  --enumeration         also exercise findCredentials',
+    '  --keep                leave the entry behind (reboot/persistence check)',
+    '  --expect-present      check that --key is readable; writes nothing',
+    '  --cleanup             delete --key and nothing else',
     '  --json                print only the JSON report',
     '  --help                print this message',
   ].join('\n');
 }
 
 function parseArgs(argv) {
-  const options = { service: 'heluo-forge', key: undefined, enumeration: false, json: false };
+  const options = { service: 'heluo-forge', key: undefined, enumeration: false, json: false, keep: false, mode: 'run' };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') return { help: true };
     if (arg === '--enumeration') options.enumeration = true;
+    else if (arg === '--keep') options.keep = true;
+    else if (arg === '--expect-present') options.mode = 'expect-present';
+    else if (arg === '--cleanup') options.mode = 'cleanup';
     else if (arg === '--json') options.json = true;
     else if (arg === '--service') { options.service = argv[index += 1]; }
     else if (arg === '--key') { options.key = argv[index += 1]; }
@@ -228,8 +241,30 @@ async function main() {
     return 2;
   }
 
+  if (options.mode !== 'run' && options.key === undefined) {
+    process.stderr.write(`--${options.mode} requires --key <name>\n`);
+    return 64;
+  }
   const key = options.key ?? `${options.service}/probe/${randomBytes(8).toString('hex')}`;
-  const report = await runStoreProbe({ backend, service: options.service, key, enumeration: options.enumeration });
+  if (options.mode !== 'run') {
+    // Single-shot modes exist so a reboot (or a different OS user) can be put
+    // between two runs without the probe's own cleanup hiding the answer.
+    try {
+      if (options.mode === 'expect-present') {
+        const value = await backend.get(key);
+        const present = value !== undefined;
+        process.stdout.write(`${JSON.stringify({ ok: present, mode: options.mode, key, present, environment }, null, 2)}\n`);
+        return present ? 0 : 1;
+      }
+      await backend.delete(key);
+      process.stdout.write(`${JSON.stringify({ ok: true, mode: options.mode, key, deleted: true, environment }, null, 2)}\n`);
+      return 0;
+    } catch (error) {
+      process.stdout.write(`${JSON.stringify({ ok: false, mode: options.mode, key, error: describeError(error), environment }, null, 2)}\n`);
+      return 1;
+    }
+  }
+  const report = await runStoreProbe({ backend, service: options.service, key, enumeration: options.enumeration, keep: options.keep });
   process.stdout.write(`${JSON.stringify({ ...report, environment }, null, 2)}\n`);
   if (options.json !== true) {
     for (const item of report.steps) {

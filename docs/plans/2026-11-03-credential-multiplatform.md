@@ -305,10 +305,10 @@ node scripts/probe/native-keyring-store-probe.mjs --enumeration
 目标机取证顺序（每台机各跑一次，结果贴进 issue #182）：
 
 1. `node scripts/fetch-native-keyring.mjs --check` 确认随包产物与校验和一致；
-2. `node scripts/probe/native-keyring-store-probe.mjs --enumeration` 记录读写删、跨进程与枚举命中集合；
-3. 重启后重跑第 2 步的 `--key` 指向同一键，确认值仍在（探针默认每次随机键，持久性检查需显式指定）；
-4. 同一 OS 的另一个用户账户下重跑，确认读不到第 2 步的键；
-5. 记录 `cmdkey /list`（Windows）或 `secret-tool search service heluo-forge`（Linux）的可见性与权限位。
+2. `node scripts/probe/native-keyring-store-probe.mjs --enumeration --keep` 记录读写、跨进程与枚举命中集合，并留下探针键；
+3. 重启后用 `--key <上一步的键> --expect-present` 复读，确认值仍在；
+4. 同一 OS 的另一个用户账户下 `--expect-present` 应为“读不到”（退出码 1），这就是隔离性的期望结果；
+5. 用 `--key <键> --cleanup` 清除，并记录 `cmdkey /list`（Windows）或 `secret-tool search service heluo-forge`（Linux）的可见性与权限位。
 
 ## 8. D：验收矩阵与证据
 
