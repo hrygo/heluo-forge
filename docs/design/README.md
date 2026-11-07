@@ -6,18 +6,18 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.38.0 |
+| 版本 | V0.38.3 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-05 |
+| 最后更新 | 2026-11-07 |
 | 门禁 | — |
 
 ## 1. 结论
 
-本索引管八个 DSH 产品扩展包、一个凭据支撑包、原生插件市场与两个独立服务入口（SDD 已于 2026-11-03 退役删除，保留历史记录）。市场的模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。除市场为评审稿外，其余设计仍为草案；设计状态、代码实现与上线准入分别判断。2026-10-23 ADR-16 将个人访问目标调整为当前人员与 DSH 用途校验，A 纯令牌 / B Key＋令牌待选；应用访问受控开通，五分钟撤权与当前授权退出待核验。原 Key-only 实现状态不因此改写为新能力已完成。 2026-10-28 IAM 回函复核：厂商 6.0.3/6.3 不支持公共客户端/PKCE，V1 生产形态改为机密客户端 + 系统钥匙串；forge-iam 设计已记录该目标，代码迁移未完成。 2026-11-03 IAM 团队书面答复 C1—C11：单 client_id、secret 人工轮换且旧 AT 不随轮换作废、登出作用于浏览器会话、刷新后旧 AT 实时作废、重用仅拒绝本次刷新。2026-11-04 D1—D3 答复：按访问令牌撤销接口（仅 AT、令牌自证、幂等、实时）、轮换窗口内仅旧值有效、刷新令牌滑动续期且无绝对期限；默认退出改为撤销 AT + 本地删除、不调用全局登出，真实联调未开始。
+本索引管八个 DSH 产品扩展包、一个凭据支撑包、原生插件市场与两个独立服务入口（SDD 已于 2026-11-03 退役删除，保留历史记录）。市场的模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。除市场为评审稿外，其余设计仍为草案；设计状态、代码实现与上线准入分别判断。2026-10-23 ADR-16 将个人访问目标调整为当前人员与 DSH 用途校验，个人访问路线 B（Key＋令牌）已选定，路线 A 保留为比较背景；应用访问受控开通，五分钟撤权与当前授权退出待核验。原 Key-only 实现状态不因此改写为新能力已完成。 2026-10-28 IAM 回函复核：厂商 6.0.3/6.3 不支持公共客户端/PKCE，V1 生产形态改为机密客户端 + 系统钥匙串；forge-iam 设计已记录该目标，代码迁移未完成。 2026-11-03 IAM 团队书面答复 C1—C11：单 client_id、secret 人工轮换且旧 AT 不随轮换作废、登出作用于浏览器会话、刷新后旧 AT 实时作废、重用仅拒绝本次刷新。2026-11-04 D1—D3 答复：按访问令牌撤销接口（仅 AT、令牌自证、幂等、实时）、轮换窗口内仅旧值有效、刷新令牌滑动续期且无绝对期限；默认退出改为撤销 AT + 本地删除、不调用全局登出，真实联调未开始。
 
 详细设计使用[模块设计模板](../templates/design-template.md)，外部字段级契约仍以[契约目录](../contracts/gateway-contract.md)为唯一真源，设计只引用不复制。
 
@@ -28,7 +28,7 @@
 | `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型写入接线（写前独立复查、绝不覆盖显式企业选择）、禁用插件/独占冲突 fail closed 实测已落地；新对话默认模型在可证明不可用时对齐为企业默认模型（离线测试覆盖，未实机）；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`/v1/models` 动态目录、七行禁用与回灌检查）本地实现，见 §2.2.1；Remote/watch 未实现） | IAM 回函、机密客户端迁移与 secret 托管、OS keychain adapter、官方行运行时模型面、真实联调、UAG 凭据探测 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（guard、异步确认、必要审计与命令共用屏障已实测；既有 32 项宿主探针中的辅助函数调用不等于真实恢复、分叉、子 Agent 的授权承接；确认/委托纯 API 与可信运行时接线分开验收） | 审批注册与超时、`$DSH_HOME` 范围（子 Agent 模型自决调用与策略×沙箱叠加顺序已实测，见下方证据） |
 | `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（策略为硬依赖，无只读降级；市场不插入历史插件行；按需技能/条款装配、包体闭包检查、五类开关声明与判定、官方行回灌检测已实现；官方行禁用（2026-10-24 实测四个登录/模型行加明文凭据行；2026-11-04 扩至六个官方行加明文凭据行，扩行后组合层未复测）与装/升/退/卸演练已实测；真机 `dsh plugin` profile 级安装、rc.2→rc.3 升级循环与回退/卸载残留、四层组合层序与 `--from-default-profile` 整体替换已实测；企业能力行按最小挂载挂凭据/策略/IAM 三插件（SDD 已于 2026-11-03 退役，补丁 `insert:` 段仅三插件行） | 版本断言报错形态、`fiberPhase`、双端、企业索引源键名、`ai-publish`/`human-review` 业务行（未落地故 `blocked`）、角色 preset 粒度、`desktop` profile |
-| `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（目标路线待选） | 当前身份/用途、A/B 承载、应用/IP、五分钟及单授权退出、C4 等效策略与容量联调 |
+| `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（路线 B 已选定） | 当前身份/用途、B 双因子承载、应用/IP、五分钟及单授权退出、C4 策略与容量联调；模块仍为规划入口，无清单、源码或测试 |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
 | `@heluo/forge-devops` | CLI 接入（工具面） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案（2026-11-04：只讲 dop 变更流程，四个工具（只读 runner `change.read`/`change.list`、上下文卡、受控写回 `change update`、产物落盘含 clarify・plan 机检）、配置四键（`dopBin`/`dopEndpoint`/`sourceType`/`timeoutMs`）；仓库/Issue/PR 事实由 `forge-gitee` 唯一负责） | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验 |
 | `@heluo/forge-gitee` | CLI 接入（工具面） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案（2026-11-03 r10：11 个 `forge_gitee_*` 工具 = 3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git（`git commit` 为本地动作、`git push` 为远端写默认拒绝；版本快照只读工作区 `contentId`）、14 个源模块与离线用例已落地，见 §2.2；`gitee.*` 动作命名空间与 `GITEE_*` 白名单字段子集、判定随包登记（`target: change`、`egress: allow`）、唯一 `execFile` 出口（gitee CLI 与 git 共用 `run()`/`runGit()`）、幂等台账、`review.md` 与关闭条件判定已实现） | aarch64 产物、鉴权注入与 `--json` 字段稳定性（企业 CLI 未联调）；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验 |
@@ -39,7 +39,7 @@
 
 ### 2.1 跨模块设计
 
-网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V0.4.0 评审稿；A/B 候选均待核验，不是运行时二选一回落）。
+网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V1.0.1 评审稿；采用路线 B 双因子协同，与应用凭据构成两类运行态，非运行时二选一回落；适配层 V1 由 `forge-iam` 受控模型运行时承载，`forge-gateway` 保留配置与抽离目标；上游规范未冻结）。
 
 DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识（UA）方案设计](client-identification.md)（CORP-DSH-DESIGN-015，V0.2.0 草案；需求方决定使用 DSH 默认 UA，由网关按关键字匹配，不改写 UA；候选关键字、网关能力和代理链路待确认）。
 
@@ -97,7 +97,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | 机密客户端与 secret 生命周期 | 已确认管理员预置隔离基线；[设计](<iam-confidential-isolated.md>)与[字段契约](<../contracts/iam-client-auth-isolated.md>)定义 code/refresh/revoke 与来源失效边界；实际隔离服务已接入 | 独立建造审阅无重要剩余问题，用户已批准完整 source/mock 设计，[实施计划](<../plans/2026-11-02-iam-confidential-isolated.md>)已登记，实际 Basic/Post、V2 生产/恢复、共享刷新 pin 与 cleanup 已接入，54项新服务用例和851项必要合并通过，最终冻结验收见计划。真实来源不开启；供应商 Basic/Post、存储与生产生命周期仍待 G1，不能把 fixture 写成正式能力。2026-11-03 IAM 答复确认单 client_id、人工轮换与缓存两分钟生效；轮换不作废旧 AT、刷新必带 secret，撤销/登出接口未确认。 |
 | 模型与工具执行入口 | SDK 形状接缝的本地必要条件拒绝、下游零调用与失效交错；[DESIGN-017](<iam-consumer-isolated.md>)与[IAM-003](<../contracts/iam-consumer-isolated.md>)为已批准的私有source/mock设计 | 用户已批准完整“假账号、假模型、假工具、不动真实环境” source/mock 设计。实际工厂会话见证A已实现并通过57新例/760项必要合并，peer与代表性变异已关闭；按[PLAN-007](<../plans/2026-11-02-iam-consumer-isolated.md>)已验收B局部许可算法（62新例/210项policy回归及独立变异），C合成工具/命令已验收（31新例/241回归及独立变异），D合成模型已验收（29新例/270项policy回归，含最终错误桥修复与独立复核）；E根16项实际IAM联合已验收（含不同issuer/person整体替换），分段/联合独立审阅已关闭；Root最终完整检查1889总项、1887通过、0失败/取消、2平台跳过、exit0。首次discovery ready不补见证票，不开放真实调用。不能随 IAM 卸载撤闸，也不能以缓存 ready 代替人员/用途授权；真实 provider/action 与授权契约独立待核。 |
 
-Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍按模块准入单独处理。网关 A/B 与既有 P0 原生 Key 路线存在待收口事项，不由本清单替责任方裁决生产授权。
+Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍按模块准入单独处理。网关路线 B 与既有 P0 原生 Key 路线的能力差距按[网关契约 §4.1.2](../contracts/gateway-contract.md#412-阶段能力矩阵)的阶段判据收口，不由本清单替责任方裁决生产授权。
 
 2026-11-02 的剩余边界盘点将“能够模拟”与“协议已经决定”分开：
 
