@@ -91,6 +91,8 @@ logs/
 .claude.json
 .cursor/
 .workbuddy-ai/
+# WorkBuddy local workspace state (memory logs, session data) - never committed
+.workbuddy/
 .cursorrules.local
 .aider*
 .opencode/
