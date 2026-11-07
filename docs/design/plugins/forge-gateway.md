@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-005 |
 | 文档名称 | 模型网关接入详细设计 |
-| 版本 | V1.0.0 |
+| 版本 | V1.0.1 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -20,13 +20,15 @@
 
 > 编制依据：2026-10-22 对已安装 DSH 包核验；企业级 AI 网关技术规范 V2.1（正式评审稿，文件状态「正在修改」，审核与批准待定）作为建设标准输入，受管个人助手采用**路线 B（长效凭据 + 实时 IAM 身份令牌双因子凭据协同）**，该路线已由[需求基线](../../requirements/requirements-baseline.md)选定，并确立客户端 `baseUrl` 解耦架构、17 个标准服务路由、SSE 保活心跳过滤与统一错误码处理。本设计为设计层面定稿，不表示已实现、已联调或已批准；上游规范仍在修改，接入契约未冻结，模块实现状态见[设计索引 §2.2](../README.md#22-实现与验证入口)。
 >
-> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md)（CORP-DSH-GW-001 V2.1.0）、[总体架构 ADR-16](../../architecture/platform-architecture.md)、[网关凭据双模式设计](../credential-modes.md)（CORP-DSH-DESIGN-001 V1.0.0）、[客户端标识设计](../client-identification.md)。
+> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md)（CORP-DSH-GW-001 V2.1.1）、[总体架构 ADR-16](../../architecture/platform-architecture.md)、[网关凭据双模式设计](../credential-modes.md)（CORP-DSH-DESIGN-001 V1.0.1）、[客户端标识设计](../client-identification.md)。
 
 ## 1. 结论
 
 本接入模块负责河洛客户端与企业级 AI 网关目标契约的端到端协议对齐与适配，属规划中的能力，当前无清单、源码或测试。核心确立两大设计基准：
 1. **客户端 `baseUrl` 彻底解耦**：设置面板暴露可配置的网关根路径（由部署配置注入，示例占位符 `https://ai-gateway.corp.example/aig/v1`），业务代码严禁硬编码 `/aig/v1`，全量 API 基于 `${baseUrl}/chat/completions`、`${baseUrl}/models` 等相对路径拼接，确保开发者本地代理（cliproxyapi / mock 等）与生产网关能够无缝切换。MCP 与 Agent 端点使用独立协议族前缀，不由该 `baseUrl` 拼接。
 2. **双因子凭据协同注入与错误分流**：请求拦截器自动装配长效个人凭据（`Authorization: Bearer uag-sk-u-...`）与 IAM 身份令牌（`X-IAM-Token: <JWT>`），正确过滤网关 15 秒 SSE 心跳注释行，并实现网关标准化错误码（如 `401 invalid_iam_token` 停止请求并引导重新登录、`403 iam_token_mismatch` 阻断告警）的精细化处置。
+
+V1 的双因子注入、错误分流与 SSE 容错由 `forge-iam` 的受控模型运行时承载；本包保持配置与文档入口，并作为后续抽离目标，不重复注册模型适配器。
 
 ## 2. 目标与边界
 
@@ -38,19 +40,19 @@
   - 动态模型目录与能力/合规元数据（`capabilities` / `compliance`）解析。
 - **非职责**：网关服务端配置下发、算力资源池调度以及底座模型权重生命周期管理。
 
+端点清单描述网关对外协议面。客户端 V1 实现 `${baseUrl}/chat/completions` 与 `${baseUrl}/models`；`/quota` 与其余端点随对应管控面开放再接入。
+
 ## 3. 架构设计与请求拦截
 
 ### 3.1 客户端 `baseUrl` 路由体系
 
-客户端支持通过图形化设置面板或环境变量配置网关基地址：
+客户端不引入独立配置 schema，网关地址、凭据引用与超时分别由现有配置、系统凭据库与宿主模型运行时承担：
 
-```typescript
-export interface GatewayConfig {
-  baseUrl: string; // 由部署配置注入；示例占位符 'https://ai-gateway.corp.example/aig/v1'
-  apiKeyRef: string; // 引用存储于本地安全存储中的长效凭据标识
-  timeoutMs: number; // 请求超时时间，默认 120000ms
-}
-```
+| 配置项 | 位置 | 约束 |
+|---|---|---|
+| 网关基地址 | 部署配置（`managedModels.baseURL`）或凭据记录 | 原样使用，只裁尾斜杠；不补写或改写版本段 |
+| 长效凭据 | 系统凭据库中的不透明引用 | 不落配置明文，不进视图、日志或错误体 |
+| 请求超时 | 宿主模型运行时 | 由宿主统一控制；长思考场景另行核验 |
 
 核心端点调用必须基于 `${baseUrl}` 相对组装，全量 17 个端点见[网关契约 §4.4](../../contracts/gateway-contract.md)：
 - 对话生成：`${baseUrl}/chat/completions`、`${baseUrl}/responses`、`${baseUrl}/messages`
@@ -72,11 +74,13 @@ Host: ai-gateway.corp.example
 Authorization: Bearer uag-sk-u-<user_credential_token>
 X-IAM-Token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImlhbXNzbyJ9...
 X-Consumer-Type: personal
-User-Agent: Heluo-Client/0.4.0 (macOS; arm64)
+User-Agent: deepseek-harness/<version>（宿主默认，客户端不改写）
 X-Request-Id: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
 X-Trace-Id: 4bf92f3577b34da6a3ce929d0e0e4736
 Content-Type: application/json
 ```
+
+请求头由宿主适配器在每次请求时组装：`Authorization` 走凭据解析钩子，`X-Consumer-Type` 为固定值，`X-IAM-Token` 取当前会话令牌。宿主适配器的每请求头注入点、令牌取值时序与保留名（`user-agent` 属宿主所有）须按实现准入核验，不以静态部署头冒充动态令牌。
 
 ## 4. 流式传输与心跳保活处理
 
@@ -90,6 +94,8 @@ Content-Type: application/json
 - 读取到每行文本后，若首字符为 `:`（ASCII 0x3A），则判定为 W3C 标准保活心跳帧，直接跳过并丢弃，不触发后续 JSON 解析。
 - 仅当行首为 `data: ` 时，截取载荷解析实际增量 Delta。
 - 读取到 `data: [DONE]` 时，正常终结当前流式迭代器。
+
+传输层由宿主 OpenAI 兼容协议解析，注释行不产生增量事件。客户端流空闲超时是否受心跳帧影响须以含心跳的流式用例实测；心跳保活只作用于网络链路，不替代请求级截止时间。
 
 ## 5. 错误分类与状态机
 
@@ -110,6 +116,7 @@ flowchart TD
 
 以下为联调判据，非已达成的实机结论；未取得企业环境联调证据前一律标记待验。
 
-1. **本地代理模式验证**：在配置界面将 `baseUrl` 设置为 `http://127.0.0.1:8080/v1`，使用本地代理成功拦截请求，路径中不出现多余的 `/aig/v1` 前缀重叠。
+1. **本地代理模式验证**：在配置界面将 `baseUrl` 设置为 `http://127.0.0.1:8080/v1`，使用本地代理成功拦截请求，路径中不出现多余的 `/aig/v1` 前缀重叠；另以不含 `/v1` 的根路径（如 `http://127.0.0.1:8080`）验证不被补写。
 2. **双凭据协同验证**：联调时使用合法凭据与 IAM 登录态发起对话；故意携带过期身份令牌时，适配层应停止请求并引导重新登录，不自动重试。该判据以网关契约 4.1.2 的能力齐备后阶段为前提。
 3. **心跳行压力验证**：在模型首字长思考（TTFT > 30s）期间，前端平稳接收 15s 心跳注释行，控制台不报 JSON 解析异常。
+4. **错误分流验证**：分别构造 `budget_exhausted` 与 `rpm_limit_exceeded`，前者展示 `reset_at` 且不重试，后者按 `Retry-After` 退避且不超过 3 次；`iam_token_mismatch` 不落入权限不足文案。

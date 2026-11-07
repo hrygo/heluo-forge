@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.40.3 |
+| 版本 | V1.40.4 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -63,7 +63,7 @@
 | 编号 | 交付物 | 文件 | 必须先回答 |
 |---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V2.1.0，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 个人访问采用路线 B 双因子凭据协同（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；含阶段能力矩阵，上游规范仍在修改，能力待联调 |
+| CORP-DSH-GW-001 | AI 网关契约（V2.1.1，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 个人访问采用路线 B 双因子凭据协同（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；含阶段能力矩阵，上游规范仍在修改，能力待联调 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
 | CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
