@@ -491,6 +491,52 @@ test('discovery sorts models stably by id and createNativeGatewayAdapter configu
   assert.equal(capturedOptions.profiles().get('enterprise').streamIdleTimeoutMs, 300000);
 });
 
+test('the native adapter injects the current IAM token at call time and keeps it out of the catalogue', async () => {
+  let capturedOptions; let captured;
+  const protocol = {
+    stream: (model, context, options) => { captured = options; },
+    streamSimple: (model, context, options) => { captured = options; },
+  };
+  let token = 'iam-token-1';
+  await createNativeGatewayAdapter({
+    host: {
+      loader: {
+        async import(specifier) {
+          if (specifier === '@deepseek-ai/dsh-llm-pi-ai') {
+            return { PiAiAdapter: class { constructor(opts) { capturedOptions = opts; } } };
+          }
+          if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
+            return { openAICompletionsApi: () => protocol };
+          }
+          throw new Error(`unexpected import: ${specifier}`);
+        },
+      },
+    },
+    config: {
+      defaultProvider: 'enterprise',
+      managedModels: {
+        baseURL: 'https://gw.example/v1',
+        models: applyModelOptions([{ id: 'm1', contextWindow: 200000, maxTokens: 64000, input: ['text'] }], {}),
+      },
+    },
+    resolveKey: async () => 'synthetic-only',
+    resolveIamToken: async () => token,
+  });
+  const profile = capturedOptions.profiles().get('enterprise');
+  await capturedOptions.resolveApiKey('enterprise', profile);
+  profile.piProvider.streamSimple('m1', {}, { headers: { 'x-base': '1' } });
+  assert.equal(captured.headers['X-IAM-Token'], 'iam-token-1');
+  assert.equal(captured.headers['X-Consumer-Type'], 'personal');
+  assert.equal(captured.headers['x-base'], '1');
+  assert.equal(captured.headers.Authorization, undefined);
+  token = 'iam-token-2';
+  await capturedOptions.resolveApiKey('enterprise', profile);
+  profile.piProvider.stream('m1', {}, undefined);
+  assert.equal(captured.headers['X-IAM-Token'], 'iam-token-2');
+  assert.equal(captured.headers['X-Consumer-Type'], 'personal');
+  assert.equal(JSON.stringify(profile.piProvider.getModels()).includes('iam-token'), false);
+});
+
 test('first run enables and persists one catalogue model without any user input', async t => {
   const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: [{ id: 'zeta' }, { id: 'alpha' }] })) });
   t.after(() => f.runtime.dispose());
