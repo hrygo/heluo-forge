@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.40.2 |
+| 版本 | V1.40.3 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -63,7 +63,7 @@
 | 编号 | 交付物 | 文件 | 必须先回答 |
 |---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V2.1.0，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 以路线 B 双因子凭据协同为建设目标（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；上游规范仍在修改，能力待联调 |
+| CORP-DSH-GW-001 | AI 网关契约（V2.1.0，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 个人访问采用路线 B 双因子凭据协同（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；含阶段能力矩阵，上游规范仍在修改，能力待联调 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
 | CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
@@ -89,7 +89,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | Gitee 市场专题问询 | [私有化 Gitee 内部插件源码接入问询函](<collaboration/gitee-market-clarification.md>) | 仅内部定制源码group/repo/commit、权限与来源证据；npm同步/下载归企业仓库方，不代发或代表批准 |
 | IAM 登录与权限专题问询 | [IAM 原函及本轮补充确认](<collaboration/iam-confirmation-letter.md#9-本轮补充确认正文代拟未发送>) | 补充正文先列业务需求、原函覆盖与待确认问题；原 21 项及已有答复保留；面向 IAM 团队补充产品依据，共同事项由实施团队协调汇总；未发送 |
 | IAM 接入方案确认 | [DSH 研发助手接入企业 IAM 确认函](<collaboration/iam-access-confirmation.md>) | IAM 团队 2026-11-03 已逐项书面答复 C1—C11，2026-11-04 补充答复 D1—D3：按访问令牌撤销（仅 AT，刷新令牌不可撤销）、轮换窗口内仅旧值有效、刷新令牌滑动续期；默认退出不调用全局登出，DSH 侧联调未开始 |
-| 专用访问评审 | [DSH 与 Agent 模型网关认证方案](architecture/gateway-identity-review.md) | 需求方已确认；比较纯令牌/Key＋令牌，能力及路线待核验，技术审核/批准待定 |
+| 专用访问评审 | [DSH 与 Agent 模型网关认证方案](architecture/gateway-identity-review.md) | 需求方已确认；路线 B 已选定，保留纯令牌路线的比较证据与决策背景；能力待联调，技术审核/批准待定 |
 | 网关新问询 | [DSH 和应用 Agent 调用 AI 网关补充问询函](collaboration/gateway-confirmation-letter.md) | 先说明定制化 DeepSeek Harness 与应用自动调用两类场景，再按 CONF-GW-09—20 询问是否支持；正文面向网关团队；跨函问题对应与协调放在内部说明 §3.1，回函处置见 §3.2；已发出，2026-10-27 收到解答 v1.2，第二轮待发出 |
 | 仓库结构 | [工程仓库结构与长期迭代设计](<engineering/repository-structure-design.md>) | 目录、模块边界、迁移与私有市场分层；已批准实施，业务能力仍按门禁验证 |
 | 开发约定 | [工程开发与发布约定](<engineering/development-conventions.md>) | 分支、提交、测试分层、版本与发布边界 |
@@ -110,7 +110,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 1. [需求与场景基线](<requirements/requirements-baseline.md>) §1–§6：先定范围、人群与指标。
 2. [总体架构设计](<architecture/platform-architecture.md>) §1–§7：原则、总体架构、插件形态与五个领域。
 3. [推广实施方案](<plans/rollout-plan.md>) §4–§8：关键路径、验收、风险与试点运行。
-4. [AI 网关契约](<contracts/gateway-contract.md>) §4：当前人员、用途、候选凭据、生命周期、预算与错误语义。
+4. [AI 网关契约](<contracts/gateway-contract.md>) §4：当前人员、用途、路线 B 凭据、阶段能力判据、生命周期、预算与错误语义。
 5. [设计索引](<design/README.md>) 与[开发约定](<engineering/development-conventions.md>)：进入实现前的模块边界与工程规则。
 6. [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) §4：按收件团队选择正文，填写联系人、期限与署名后转发。
 
