@@ -148,7 +148,7 @@
 2. **领域扩展与管理路由**：
    - `POST ${baseUrl}/credentials/self-service/issue`：凭据自助申请端点。
    - `POST ${baseUrl}/credentials/self-service/rotate`：凭据自助轮换端点。
-   - `POST / GET / DELETE /aig/mcp/v1/{server_name}/mcp`：MCP 统一代理端点。
+   - `POST /aig/mcp/v1/{server_name}/mcp`：MCP Streamable HTTP 统一代理端点；存量协议版本的 GET / DELETE 按上游规范过渡条款执行。
    - `GET /aig/agents/v1/{agent_id}/card`：智能体元数据卡片。
    - `POST / GET /aig/agents/v1/{agent_id}/tasks`：智能体任务调用与状态查询。
 
