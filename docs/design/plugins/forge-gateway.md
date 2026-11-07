@@ -6,85 +6,117 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-005 |
 | 文档名称 | 模型网关接入详细设计 |
-| 版本 | V0.4.0 |
-| 文档状态 | 草案 |
+| 版本 | V1.0.1 |
+| 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-28 |
+| 最后更新 | 2026-11-07 |
 | 门禁 | G2 |
 | 模块状态 | 规划 |
+| 适用范围 | 网关目标接入的协议对齐与适配设计；不含模块实现、代码与企业联调结论 |
+| 裁决记录 | 2026-11-07 由项目最终裁决人确认采用路线 B 作为目标形态并确认本设计为设计层面定稿；该确认不代替审核与批准，也不代表模块已实现 |
 
-> 编制依据：2026-10-22 对已安装 DSH 包做字符串级核验：`dsh-llm`、`dsh-llm-pi-ai`、`dsh-llm-retry`、`dsh-llm-deepseek`、`dsh-settings`、`dsh-client-ui-settings-models`；凭据以引用方式解析。UAG 行为依据网关团队同日分析稿（基线 `dev/2.2.1`，非承诺），未联调。**未核验**：`dsh-llm-retry` 的可配置项与重试边界、流式取消的传播方式、`llm-pi-ai` 对 `apikey` 头的支持方式。
+> 编制依据：2026-10-22 对已安装 DSH 包核验；企业级 AI 网关技术规范 V2.1（正式评审稿，文件状态「正在修改」，审核与批准待定）作为建设标准输入，受管个人助手采用**路线 B（长效凭据 + 实时 IAM 身份令牌双因子凭据协同）**，该路线已由[需求基线](../../requirements/requirements-baseline.md)选定，并确立客户端 `baseUrl` 解耦架构、17 个标准服务路由、SSE 保活心跳过滤与统一错误码处理。本设计为设计层面定稿，不表示已实现、已联调或已批准；上游规范仍在修改，接入契约未冻结，模块实现状态见[设计索引 §2.2](../README.md#22-实现与验证入口)。
 >
-> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md) §4—§5、[总体架构 §7.2](../../architecture/platform-architecture.md)、[个人凭证接入设计](../../architecture/gateway-static-key-option.md)、[网关凭据双模式设计](../credential-modes.md)。
+> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md)（CORP-DSH-GW-001 V2.1.1）、[总体架构 ADR-16](../../architecture/platform-architecture.md)、[网关凭据双模式设计](../credential-modes.md)（CORP-DSH-DESIGN-001 V1.0.1）、[客户端标识设计](../client-identification.md)。
 
 ## 1. 结论
 
-2026-10-23 起，个人模型访问需当前人员身份及 DSH 用途，A 纯令牌 / B Key＋令牌尚待能力与成本评审。原“配置一把 Key 即可”的设计不再满足目标；不据既有凭据引用断言无须适配。需求见[需求基线 §4.6](../../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求)，取舍见[评审稿](../../architecture/gateway-identity-review.md)。本轮只更新文档，无新增实现或实测。
+本接入模块负责河洛客户端与企业级 AI 网关目标契约的端到端协议对齐与适配，属规划中的能力，当前无清单、源码或测试。核心确立两大设计基准：
+1. **客户端 `baseUrl` 彻底解耦**：设置面板暴露可配置的网关根路径（由部署配置注入，示例占位符 `https://ai-gateway.corp.example/aig/v1`），业务代码严禁硬编码 `/aig/v1`，全量 API 基于 `${baseUrl}/chat/completions`、`${baseUrl}/models` 等相对路径拼接，确保开发者本地代理（cliproxyapi / mock 等）与生产网关能够无缝切换。MCP 与 Agent 端点使用独立协议族前缀，不由该 `baseUrl` 拼接。
+2. **双因子凭据协同注入与错误分流**：请求拦截器自动装配长效个人凭据（`Authorization: Bearer uag-sk-u-...`）与 IAM 身份令牌（`X-IAM-Token: <JWT>`），正确过滤网关 15 秒 SSE 心跳注释行，并实现网关标准化错误码（如 `401 invalid_iam_token` 停止请求并引导重新登录、`403 iam_token_mismatch` 阻断告警）的精细化处置。
+
+V1 的双因子注入、错误分流与 SSE 容错由 `forge-iam` 的受控模型运行时承载；本包保持配置与文档入口，并作为后续抽离目标，不重复注册模型适配器。
 
 ## 2. 目标与边界
 
-项目范围引用[需求基线 §2](../../requirements/requirements-baseline.md#2-范围边界唯一真源)。本接入负责模型调用的凭据取用、用途元数据、服务端错误提示、流式取消及安全重试；模型、预算、网络规则与最终授权归网关。应用 Agent 受控开通由网关负责，不在本包建设应用管理系统。
+- **范围与职责**：
+  - 客户端设置面板网关 `baseUrl` 配置项及模型白名单展示。
+  - 模型请求拦截器中的双凭据与元数据请求头透明组装。
+  - W3C SSE 流式传输中保活注释行（`: ping - <timestamp>\n\n`）的跳过与容错解析。
+  - 网关 V2.1 标准错误码与 HTTP 状态码的映射及状态机处置。
+  - 动态模型目录与能力/合规元数据（`capabilities` / `compliance`）解析。
+- **非职责**：网关服务端配置下发、算力资源池调度以及底座模型权重生命周期管理。
 
-## 3. 需求与依赖
+端点清单描述网关对外协议面。客户端 V1 实现 `${baseUrl}/chat/completions` 与 `${baseUrl}/models`；`/quota` 与其余端点随对应管控面开放再接入。
 
-| 需求/验收 | 目标 | 未满足时 |
+## 3. 架构设计与请求拦截
+
+### 3.1 客户端 `baseUrl` 路由体系
+
+客户端不引入独立配置 schema，网关地址、凭据引用与超时分别由现有配置、系统凭据库与宿主模型运行时承担：
+
+| 配置项 | 位置 | 约束 |
 |---|---|---|
-| REQ-01/02/03，A1/A2/A3/A14 | 当前人员、目标授权、用途及五分钟生命周期 | 不开放相应调用 |
-| REQ-04/05，A3 | 成员/团队预算、可靠错误分类、结果未知不重放 | 不能以静默换模型或换凭据兜底 |
-| REQ-16，A13，C1/C4 | 稳定归因、机构内上游、两路线正文关闭 | 未验证不得准入 |
+| 网关基地址 | 部署配置（`managedModels.baseURL`）或凭据记录 | 原样使用，只裁尾斜杠；不补写或改写版本段 |
+| 长效凭据 | 系统凭据库中的不透明引用 | 不落配置明文，不进视图、日志或错误体 |
+| 请求超时 | 宿主模型运行时 | 由宿主统一控制；长思考场景另行核验 |
 
-依赖 IAM 与网关正式确认、实际 DSH seam、重试插件边界及双端实机。`llm-pi-ai` 的引用解析是已有依据；双凭据承载、目标 AT 取用、流式取消传播和协议元数据尚未验证。
+核心端点调用必须基于 `${baseUrl}` 相对组装，全量 17 个端点见[网关契约 §4.4](../../contracts/gateway-contract.md)：
+- 对话生成：`${baseUrl}/chat/completions`、`${baseUrl}/responses`、`${baseUrl}/messages`
+- 向量与精排：`${baseUrl}/embeddings`、`${baseUrl}/rerank`
+- 多模态：`${baseUrl}/audio/transcriptions`、`${baseUrl}/audio/speech`、`${baseUrl}/images/generations`、`${baseUrl}/moderations`
+- 批量任务：`${baseUrl}/batches`、`${baseUrl}/batches/{batch_id}`
+- 动态模型目录：`${baseUrl}/models`
+- 配额查询：`${baseUrl}/quota`
+- 凭据自服务申领与轮换：`${baseUrl}/credentials/self-service/issue`、`${baseUrl}/credentials/self-service/rotate`
+- MCP 与 Agent 端点：`/aig/mcp/v1/{server_name}/mcp`、`/aig/agents/v1/{agent_id}/card`、`/aig/agents/v1/{agent_id}/tasks`（独立前缀）
 
-## 4. 扩展形态与边界
+### 3.2 双凭据请求拦截器装配
 
-优先复用现有模型提供者命名空间、设置、凭据服务和配置 bundle；只有确有缺口且范围获准时做最小适配。当前不选择新 adapter、不修改核心。IAM 接入负责会话与用户状态，本接入在请求时消费选定路线所需授权；最终授权与 owner 比较在网关。
+在发起 HTTP 请求时，拦截器自动注入标准头集合：
 
-## 5. 接口与配置
+```http
+POST ${baseUrl}/chat/completions HTTP/1.1
+Host: ai-gateway.corp.example
+Authorization: Bearer uag-sk-u-<user_credential_token>
+X-IAM-Token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImlhbXNzbyJ9...
+X-Consumer-Type: personal
+User-Agent: deepseek-harness/<version>（宿主默认，客户端不改写）
+X-Request-Id: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
+X-Trace-Id: 4bf92f3577b34da6a3ce929d0e0e4736
+Content-Type: application/json
+```
 
-字段契约见[网关契约 §4](../../contracts/gateway-contract.md#4-契约)，不在此复制未冻结的新字段。A 发送网关目标 Access Token，B 必须同时承载 AT 与本人 Key；不能两个 provider 二选一或自动 fallback。具体头、资源名与配置 schema 待确认。
+请求头由宿主适配器在每次请求时组装：`Authorization` 走凭据解析钩子，`X-Consumer-Type` 为固定值，`X-IAM-Token` 取当前会话令牌。宿主适配器的每请求头注入点、令牌取值时序与保留名（`user-agent` 属宿主所有）须按实现准入核验，不以静态部署头冒充动态令牌。
 
-旧设计的 `gateway.credentialRef=ENTERPRISE_STATIC_KEY`、`apiKeyEnv` 只表达静态 Key 取用，不作为当前路线的完整配置。`baseUrl`/模型白名单/请求截止时间/重试策略仍需对照实际 DSH schema 核验，不将示意值当作已生效配置。控制台 URL 只供用户导航，不参与授权。
+## 4. 流式传输与心跳保活处理
 
-## 6. 权限、凭据与数据
+网关为规避企业反向代理与防火墙 60 秒空闲断开限制，在流式传输期间每隔 15 秒下发注释行：
 
-- 秘密从受保护凭据服务取得，不落配置明文、上下文、日志或异常文本；IAM 刷新不能覆盖 Key。
-- 个人路径同时判断人员、用途、模型/预算和来源；B 另需服务端 Key owner 一致。客户端 `ownerSubject` 不能证明所有权。
-- 采用 DSH 默认 UA、由网关按关键字匹配以降低误用；规则和网关能力待确认，不由插件改写 UA。可选诊断头不作为放行前提，不采集硬件标识，也不作为计费主体或撤销权限；详见[客户端标识设计](../client-identification.md)。
-- 有 Key 时开启 `privacy_mode`；纯令牌需无 Key 等效策略，两侧日志抽验 C4。只记录允许的调用元数据。
+```text
+: ping - 1730937600\n\n
+```
 
-## 7. 调用与退出流程
+客户端 SSE 解析器实现严格规范：
+- 读取到每行文本后，若首字符为 `:`（ASCII 0x3A），则判定为 W3C 标准保活心跳帧，直接跳过并丢弃，不触发后续 JSON 解析。
+- 仅当行首为 `data: ` 时，截取载荷解析实际增量 Delta。
+- 读取到 `data: [DONE]` 时，正常终结当前流式迭代器。
 
-登录与网关开通就绪 → 请求时解析所选路线授权 → 网关检查身份/用途/模型/预算/来源 → 模型流式输出 → 按网关结果归集计量。新模型请求（含工具循环）每次重新判断；不得缓存一次成功为长期放行。
+传输层由宿主 OpenAI 兼容协议解析，注释行不产生增量事件。客户端流空闲超时是否受心跳帧影响须以含心跳的流式用例实测；心跳保活只作用于网络链路，不替代请求级截止时间。
 
-退出本地立即停止、清会话与副本并取消本地在途连接。服务端接受当前授权撤销后五分钟内，已发及窗口内新发 AT、所有刷新后代均不能续用；其他设备、全局 SSO、应用 Agent 默认不受影响。离线退出显示服务端未确认。已接收流可到既有截止时间，不承诺本地断开等于上游停止或零计费。
+## 5. 错误分类与状态机
 
-## 8. 失败模式
+适配器层对网关标准响应进行解析分流：
 
-| 事件 | 客户端处置 | 必须核验的服务端边界 |
-|---|---|---|
-| 身份或可选 Key 无效 | 停止并按可信错误类别引导；不把所有 401 一律归为重建 Key | 当前身份、owner 与目标资源校验 |
-| 用途/IP/模型拒绝 | 展示申请/处理入口，不静默换路 | 所有路由/认证头覆盖 |
-| 预算或限流 429 | 预算不自动重试，限流按已确认退避；不换模型 | 现有 reset_at/Retry-After 与所选路线语义 |
-| IAM/验证/状态不可用 | 只有能证明有效授权和五分钟上限时才继续，否则拒绝 | 最坏缓存、容差及传播延迟，无裸 Key 回落 |
-| 网络/超时/5xx/已输出 | 无法证明未执行不自动重放 | 内部重试、流式计费及取消语义 |
+```mermaid
+flowchart TD
+    Req[发起到网关的模型请求] --> Resp{响应状态码}
+    Resp -->|200 OK| Stream[正常流式/全量接收]
+    Resp -->|401 invalid_iam_token| Login[停止请求并引导重新登录 IAM]
+    Resp -->|401 credential_revoked| Wipe[抹除本地密钥并终止]
+    Resp -->|403 iam_token_mismatch| AlertMismatch[提示工号与凭据不匹配并阻断]
+    Resp -->|429 budget_exhausted| ShowBudget[提取 reset_at 提示额度用尽]
+    Resp -->|429/503 带 Retry-After| Backoff[按 Retry-After 指数退避重试]
+```
 
-更新凭据与重发模型请求分开判断，不以新令牌已取得为重放依据。
+## 6. 验收与联调要求
 
-## 9. 可观测性
+以下为联调判据，非已达成的实机结论；未取得企业环境联调证据前一律标记待验。
 
-诊断仅记录允许的状态类别、版本、请求关联、模型、耗时及用途验证结果；不记录 Key、token、正文或硬件标识。稳定人员/应用、团队与责任归属以网关可信记录为准，实例原值的保留与脱敏策略待安全确认。
-
-## 10. 测试矩阵
-
-沿用[评审稿 §7](../../architecture/gateway-identity-review.md#7-验收细化)，归属 A1/A2/A3/A13/A14。重点验证 A 无 Key 等效授权，或 B A 身份＋B Key 拒绝、缺一拒绝；用途全入口；IP 信任链；多节点五分钟与当前授权/刷新后代；跨设备隔离；离线/故障/流式及日志。计划不等于执行结果。
-
-## 11. 打包、升级与回退
-
-在提供方确认和 DSH seam 核验后冻结配置及最小适配范围，再按设计准入进入实现。原 Key-only 配置不能作为满足本轮要求的回退路径；安全条件失效时关闭相应调用。独立能力可继续，保留用户数据，不自动发包。
-
-## 12. 未决事项
-
-由[网关新函](../../collaboration/gateway-confirmation-letter.md)追踪 CONF-GW-09—20，由[IAM 原函 §8](../../collaboration/iam-confirmation-letter.md#8-本轮需求覆盖评估与补充确认清单平台内部)追踪原问题补充。需确认目标 AT/人员映射、A/B 策略等效与承载、用途识别、单授权退出及五分钟、来源规则、应用权限/90 天、C4/计量/容量及成本；G1 冻结契约，G2 联调后开放。
+1. **本地代理模式验证**：在配置界面将 `baseUrl` 设置为 `http://127.0.0.1:8080/v1`，使用本地代理成功拦截请求，路径中不出现多余的 `/aig/v1` 前缀重叠；另以不含 `/v1` 的根路径（如 `http://127.0.0.1:8080`）验证不被补写。
+2. **双凭据协同验证**：联调时使用合法凭据与 IAM 登录态发起对话；故意携带过期身份令牌时，适配层应停止请求并引导重新登录，不自动重试。该判据以网关契约 4.1.2 的能力齐备后阶段为前提。
+3. **心跳行压力验证**：在模型首字长思考（TTFT > 30s）期间，前端平稳接收 15s 心跳注释行，控制台不报 JSON 解析异常。
+4. **错误分流验证**：分别构造 `budget_exhausted` 与 `rpm_limit_exceeded`，前者展示 `reset_at` 且不重试，后者按 `Retry-After` 退避且不超过 3 次；`iam_token_mismatch` 不落入权限不足文案。
