@@ -1705,7 +1705,7 @@ window.__ModuleLoader__.load({
       IAM_DISPOSED: '登录服务已关闭，请刷新页面。',
       IAM_GRANT_CONTEXT_MISMATCH: '登录状态已变化，请重新登录。',
       IAM_REFRESH_SUBJECT_MISMATCH: '登录状态已变化，请重新登录。',
-      IAM_GATEWAY_KEY_INVALID: '个人访问凭证格式不正确，请完整复制网关提供的凭证后重试。',
+      IAM_GATEWAY_KEY_INVALID: '个人访问凭证无法保存，请重新粘贴网关提供的凭证。',
       IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
       // 模型门禁与网关：与宿主 MESSAGES 同码同句
       ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
