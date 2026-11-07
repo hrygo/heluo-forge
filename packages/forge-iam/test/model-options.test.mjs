@@ -25,16 +25,20 @@ test('NO_RETRY_POLICY complies with ResolvedNormalRetryPolicy contract', () => {
   assert.ok(Object.isFrozen(NO_RETRY_POLICY.retryableCodes));
 });
 
-test('normalizeGatewayBaseURL allows all HTTP and HTTPS addresses with OpenAI-compatible path suffix', () => {
+test('normalizeGatewayBaseURL keeps the path verbatim and limits plain HTTP to loopback or an explicit opt-in', () => {
   assert.equal(normalizeGatewayBaseURL('https://gateway.example/v1'), 'https://gateway.example/v1');
-  assert.equal(normalizeGatewayBaseURL('https://gateway.example'), 'https://gateway.example/v1');
-  assert.equal(normalizeGatewayBaseURL('https://gateway.example///'), 'https://gateway.example/v1');
+  assert.equal(normalizeGatewayBaseURL('https://gateway.example'), 'https://gateway.example');
+  assert.equal(normalizeGatewayBaseURL('https://gateway.example///'), 'https://gateway.example');
+  assert.equal(normalizeGatewayBaseURL('https://gateway.example/aig/v1/'), 'https://gateway.example/aig/v1');
 
-  // All HTTP addresses are permitted
-  assert.equal(normalizeGatewayBaseURL('http://127.0.0.1:8080'), 'http://127.0.0.1:8080/v1');
+  // Loopback stays reachable over plain HTTP; anything else needs the opt-in.
+  assert.equal(normalizeGatewayBaseURL('http://127.0.0.1:8080'), 'http://127.0.0.1:8080');
   assert.equal(normalizeGatewayBaseURL('http://localhost:3000/v1'), 'http://localhost:3000/v1');
-  assert.equal(normalizeGatewayBaseURL('http://example.com/v1'), 'http://example.com/v1');
-  assert.equal(normalizeGatewayBaseURL('http://192.0.2.10:8000'), 'http://192.0.2.10:8000/v1');
+  assert.equal(normalizeGatewayBaseURL('http://[::1]:9000'), 'http://[::1]:9000');
+  assert.throws(() => normalizeGatewayBaseURL('http://example.com/v1'), /回环/u);
+  assert.throws(() => normalizeGatewayBaseURL('http://192.0.2.10:8000'));
+  assert.equal(normalizeGatewayBaseURL('http://example.com/v1', true), 'http://example.com/v1');
+  assert.equal(normalizeGatewayBaseURL('http://192.0.2.10:8000', true), 'http://192.0.2.10:8000');
 
   // Rejects embedded credentials, search, hash, or non-http(s) protocols
   const credentialUrl = new URL('https://gateway.example/v1');
@@ -52,12 +56,14 @@ test('validateManagedModels handles empty and valid configuration objects', () =
   assert.deepEqual(validateManagedModels(null), { value: null });
   assert.deepEqual(validateManagedModels(undefined), { value: null });
   assert.deepEqual(validateManagedModels({ baseURL: 'https://gateway.corp.example' }), {
-    value: { baseURL: 'https://gateway.corp.example/v1' },
+    value: { baseURL: 'https://gateway.corp.example' },
   });
-  assert.deepEqual(validateManagedModels({ baseURL: 'http://corp.example' }), {
-    value: { baseURL: 'http://corp.example/v1' },
+  assert.deepEqual(validateManagedModels({ baseURL: 'http://corp.example' }, true), {
+    value: { baseURL: 'http://corp.example' },
   });
 
+  const insecure = validateManagedModels({ baseURL: 'http://corp.example' });
+  assert.ok(Array.isArray(insecure.issues));
   const invalid = validateManagedModels({ baseURL: 'ftp://corp.example' });
   assert.ok(Array.isArray(invalid.issues));
   assert.equal(invalid.issues[0].path[0], 'managedModels');
