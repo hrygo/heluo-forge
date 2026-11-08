@@ -463,6 +463,9 @@ test('discovery sorts models stably by id and createNativeGatewayAdapter configu
   assert.equal(customEntry.compat.supportsStore, false);
   assert.equal(customEntry.compat.supportsDeveloperRole, false);
   assert.equal(customEntry.compat.maxTokensField, 'max_tokens');
+  // Heartbeats never become events, so the profile cannot rely on them to keep
+  // a slow first token alive; the bound matches the host default.
+  assert.equal(capturedOptions.profiles().get('enterprise').streamIdleTimeoutMs, 300000);
 });
 
 test('first run enables and persists one catalogue model without any user input', async t => {
