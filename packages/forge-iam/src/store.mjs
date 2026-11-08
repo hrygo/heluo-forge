@@ -1,4 +1,4 @@
-import { normalizeGatewayBaseURL } from './model-options.mjs';
+import { isModelId, normalizeGatewayBaseURL } from './model-options.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
@@ -468,7 +468,6 @@ export function createGatewayCredentialStore(credentials, options = {}) {
 export const MODEL_SELECTION_KEY = 'heluo-iam/model-selection';
 const MODEL_SELECTION_VERSION = 1;
 const MODEL_SELECTION_TYPE = 'heluo-iam-model-selection';
-const MODEL_ID_PATTERN = /^[\w./:-]{1,200}$/u;
 const MAX_SELECTED_MODELS = 200;
 const THINKING_LEVEL_KEYS = new Set(['off', 'low', 'medium', 'high', 'xhigh', 'max']);
 
@@ -509,7 +508,7 @@ function parseModelSelection(payload) {
   if (ids.length > MAX_SELECTED_MODELS) return null;
   const models = {};
   for (const id of ids) {
-    if (!MODEL_ID_PATTERN.test(id)) return null;
+    if (!isModelId(id)) return null;
     if (!source[id] || typeof source[id] !== 'object' || Array.isArray(source[id])) return null;
     models[id] = sanitizeModelOption(source[id]);
   }
