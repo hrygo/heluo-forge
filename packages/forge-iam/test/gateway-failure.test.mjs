@@ -71,3 +71,27 @@ test('only socket evidence is called unreachable', () => {
   }
   assert.equal(classifyFailure({ code: 'SOMETHING_NEW' }), 'ENTERPRISE_GATEWAY_CALL_FAILED');
 });
+
+test('the V2.1 vocabulary maps to distinct local codes and outranks the status', () => {
+  const cases = {
+    invalid_api_key: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
+    invalid_iam_token: 'ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED',
+    credential_revoked: 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED',
+    credential_suspended: 'ENTERPRISE_GATEWAY_CREDENTIAL_SUSPENDED',
+    iam_token_mismatch: 'ENTERPRISE_GATEWAY_IDENTITY_MISMATCH',
+    model_not_allowed: 'ENTERPRISE_MODEL_NOT_ALLOWED',
+    client_not_recognized: 'ENTERPRISE_GATEWAY_CLIENT_NOT_RECOGNIZED',
+    budget_exhausted: 'ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED',
+    rpm_limit_exceeded: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+    tpm_limit_exceeded: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
+    gateway_overloaded: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
+  };
+  for (const [wire, code] of Object.entries(cases)) {
+    assert.equal(classifyFailure({ responseBody: JSON.stringify({ error: { code: wire } }) }), code, wire);
+  }
+  // The body code must win: a 401 carrying invalid_iam_token is not a bad key,
+  // and a 403 carrying iam_token_mismatch is not a model permission problem.
+  assert.equal(classifyFailure({ status: 401, responseBody: JSON.stringify({ error: { code: 'invalid_iam_token' } }) }), 'ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED');
+  assert.equal(classifyFailure({ status: 403, responseBody: JSON.stringify({ error: { code: 'iam_token_mismatch' } }) }), 'ENTERPRISE_GATEWAY_IDENTITY_MISMATCH');
+  assert.equal(classifyFailure({ status: 429, responseBody: JSON.stringify({ error: { code: 'budget_exhausted' } }) }), 'ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED');
+});

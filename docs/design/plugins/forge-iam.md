@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.24.2 |
+| 版本 | V1.24.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -831,9 +831,16 @@ flowchart TD
 | 错误码 | 触发条件 | HTTP | 用户可见文案 |
 |---|---|---|---|
 | `ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED` | 401、`invalid_api_key`、`AUTH` | 401 | 网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。 |
+| `ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED` | `invalid_iam_token`、401 且无凭据类证据 | 401 | 企业身份令牌已失效，请重新登录后再试。 |
+| `ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED` | `credential_revoked` | 401 | 个人访问凭证已被回收，请联系管理员重新申领。 |
 | `ENTERPRISE_GATEWAY_FORBIDDEN` | 403、`permission_error`、`PERMISSION` | 403 | 当前账号没有此模型的使用权限，请联系管理员。 |
-| `ENTERPRISE_GATEWAY_RATE_LIMIT` | 429 且无额度类证据、`rate_limit_exceeded`、`RATE_LIMIT` | 429 | 请求过于频繁，请稍后重试。 |
+| `ENTERPRISE_GATEWAY_CREDENTIAL_SUSPENDED` | `credential_suspended` | 403 | 个人访问凭证已被暂停，请联系管理员。 |
+| `ENTERPRISE_GATEWAY_IDENTITY_MISMATCH` | `iam_token_mismatch` | 403 | 登录身份与凭证绑定账号不一致，请重新登录后重试。 |
+| `ENTERPRISE_GATEWAY_CLIENT_NOT_RECOGNIZED` | `client_not_recognized` | 403 | 当前客户端的标识未被企业网关识别，请升级客户端或联系管理员核准。 |
+| `ENTERPRISE_MODEL_NOT_ALLOWED` | `model_not_allowed`、本地门禁拒绝 | 403 | 此模型未由企业开放，请选择企业提供的模型。 |
+| `ENTERPRISE_GATEWAY_RATE_LIMIT` | 429 且无额度类证据、`rate_limit_exceeded`、`rpm_limit_exceeded`、`tpm_limit_exceeded`、`RATE_LIMIT` | 429 | 请求过于频繁，请稍后重试。 |
 | `ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED` | `insufficient_quota`、`model_cooldown`、`FreeUsageLimitError`、`QUOTA` | 429 | 所选模型的额度已用尽，请更换模型或联系管理员。 |
+| `ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED` | `budget_exhausted` | 429 | 所选模型的预算已用尽，请联系管理员或更换模型。 |
 | `ENTERPRISE_GATEWAY_REQUEST_REJECTED` | 其余 4xx、`context_length_exceeded`、`INVALID_REQUEST` | 502 | 网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。 |
 | `ENTERPRISE_GATEWAY_UNAVAILABLE` | 5xx、`NETWORK`、`TIMEOUT`、`OVERLOADED`、socket 错误 | 502 | 暂时无法连接企业模型，请稍后重试。 |
 | `ENTERPRISE_GATEWAY_CALL_FAILED` | 无可识别证据的失败 | 502 | 本次请求未完成，请重试；持续失败请联系管理员。 |
