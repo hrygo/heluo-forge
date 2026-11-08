@@ -211,6 +211,29 @@ test('transport authentication failure differs from IAM logout and does not repl
   assert.equal(JSON.stringify(result).includes('private-body'), false); assert.equal(dispatches, 1);
 });
 
+test('a revoked credential is remembered and never replayed', async t => {
+  let dispatches = 0; let fetches = 0;
+  const f = fixture({
+    fetch: async () => { fetches++; return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] })); },
+    createAdapter: async () => ({
+      async *stream() {
+        dispatches++;
+        yield { type: 'finish', reason: { kind: 'error', failure: { status: 401, responseBody: JSON.stringify({ error: { code: 'credential_revoked' } }) } } };
+      }
+    })
+  });
+  t.after(() => f.runtime.dispose()); await f.runtime.ready;
+  const first = await chunks(f.adapter.stream(options));
+  assert.equal(first.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+  const second = await chunks(f.adapter.stream(options));
+  assert.equal(second.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+  assert.equal(dispatches, 1);
+  const fetched = fetches;
+  await f.runtime.refresh().catch(() => { }); await tick();
+  assert.equal(fetches, fetched);
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+});
+
 test('a rejected request is not reported as an unreachable gateway', async t => {
   // The status sits in a different place per SDK: plain `status`, an AI SDK
   // `statusCode`, a response object, or one level deeper after a transport retry.
