@@ -144,6 +144,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // this model on", and its value carries the overrides (possibly none). A
   // discovered model without a key is listed but refused for calls.
   let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null;
+  // A gateway-scoped revocation sticks until the identity, address or stored key
+  // changes. Erasing the stored key needs the joint atomic adapter and stays
+  // fail-closed (ADR-19); this mark only stops replay.
+  let revokedCredential = false;
   let defaultModelId = null;
   // `selectionSaved` separates "nothing stored yet" (auto-enable the default)
   // from "stored as empty" (this person deliberately enabled no model).
@@ -205,6 +209,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         last = current;
         lastId = currentId;
         version++;
+        revokedCredential = false;
         if (idChanged) {
           lease.abort(); lease = new AbortController();
           cancelRetry(); retryAttempt = 0; hostDefault = null;
@@ -235,9 +240,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (denied) return denied;
     if (captured !== undefined && captured !== version) return 'IAM_MODEL_CONTEXT_CHANGED';
     if (!backend) return catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
+    if (revokedCredential) return 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED';
     if (!allowed(request.provider, request.model)) return 'ENTERPRISE_MODEL_NOT_ALLOWED';
     return null;
   }
+  // Remember a revocation so no later call spends another round trip on it.
+  const record = code => {
+    if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED') revokedCredential = true;
+    return code;
+  };
   async function* protect(request, dispatch, captured) {
     let code = refusal(request, captured);
     if (code) { yield finish(code); return; }
@@ -250,7 +261,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
           // The model layer turns an HTTP error into a finish chunk, so the code
           // arrives here without ever passing through the thrown-error branch.
-          yield finish(classifyFailure(chunk.reason.failure)); return;
+          yield finish(record(classifyFailure(chunk.reason.failure))); return;
         }
         yield chunk;
       }
@@ -259,7 +270,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     } catch (cause) {
       code = refusal(request, mine);
       if (!code && request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-      yield finish(code ?? classifyFailure(cause));
+      yield finish(record(code ?? classifyFailure(cause)));
     }
   }
   /** Adopt the stored selection, or remember that nothing was stored yet. */
@@ -304,6 +315,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const task = Promise.resolve().then(async () => {
       catalogState = 'loading'; catalogError = null;
       const connection = await iam.resolveGatewayConnection(); current();
+      // A revoked credential must not reach the gateway again; the mark clears
+      // only when the identity, address or stored key changes.
+      if (revokedCredential) throw error('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
       const headers = await requestHeaders(); current();
       const found = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
       await loadSelection(); current();
