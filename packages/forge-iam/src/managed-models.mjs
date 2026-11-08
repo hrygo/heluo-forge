@@ -601,9 +601,13 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
     auth: { apiKey: { name: '企业个人访问凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
     getModels: () => catalog, stream: (...args) => protocol.stream(...args), streamSimple: (...args) => protocol.streamSimple(...args)
   };
+  // The gateway keeps the socket alive with `: ping` comments every 15s, but the
+  // host watchdog counts parsed events and a comment never becomes one: only the
+  // first body byte produces `start`. A 60s bound therefore aborted a slow first
+  // token while the link was healthy. Match the host default instead.
   const profiles = new Map([[provider, {
     provider, displayName: '企业模型', piProvider,
-    streamIdleTimeoutMs: 60000, maxRequestImageBytes: 10 * 1024 * 1024, requestImagePixelBudget: 4096 * 4096, requestImageMaxBytes: 10 * 1024 * 1024,
+    streamIdleTimeoutMs: 300000, maxRequestImageBytes: 10 * 1024 * 1024, requestImagePixelBudget: 4096 * 4096, requestImageMaxBytes: 10 * 1024 * 1024,
     modelErrors: new Map(), configuredMaxTokens,
     retryPolicy: NO_RETRY_POLICY
   }]]);

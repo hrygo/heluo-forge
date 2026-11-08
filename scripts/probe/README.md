@@ -177,3 +177,19 @@ issue #182 归档。它不挂载 DSH profile、不联网、不打印存储值；
 （AES-256-GCM + 0600 密钥），因此 macOS 不要求签名、不要求图形会话，SSH 会话也能直接跑。
 不带 `--platform` 且宿主没有 addon 映射（macOS、未列入的平台）时以 `stage: environment`
 退出码 2 结束，这是预期行为。
+
+## SSE 心跳与空闲看门狗（#203）
+
+```sh
+node scripts/probe/sse-heartbeat-probe.mjs --heartbeat-ms 15000 --first-token-ms 70000
+```
+
+本地起一个只回 SSE 的 HTTP 服务：按 `--heartbeat-ms` 下发 `: ping` 注释行，按
+`--first-token-ms` 才发第一个 `data:` 增量，然后把这条流交给宿主同款 pi-ai 解析器。
+输出 JSON 列出每个解析事件的到达时间、首字之前的全部事件，以及 `leakedContent`
+（首字之前出现的内容增量数，应为 0）。
+
+用途是回答“心跳是否给空闲看门狗续命”。实测结论：注释行不产生解析事件，只有首个
+响应字节会产生一次 `start`；因此宿主的 `streamIdleTimeoutMs` 不能把心跳当作存活信号。
+`--pi-ai` 或 `PI_AI_DIR` 可指向宿主安装的 `@earendil-works/pi-ai`，默认取
+`$DSH_HOME/profiles/node_modules/...`。
