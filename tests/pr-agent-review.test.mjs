@@ -92,12 +92,18 @@ test('a blocking recommendation requests changes on the reviewed commit', async 
     assert.equal(post?.url, '/repos/corp/example/pulls/42/reviews');
     assert.equal(post.body.event, 'REQUEST_CHANGES');
     assert.equal(post.body.commit_id, head);
+    assert.match(post.body.body, /洛神（PR-Agent）/u);
     assert.match(post.body.body, /PR-Agent/u);
     assert.match(post.body.body, /src\/example\.js/u);
     assert.match(post.body.body, /The result is wrong\./u);
     assert.doesNotMatch(post.body.body, /@someone/u);
     assert.match(post.body.body, /\/review/u);
   });
+});
+
+test('the workflow and check display the 洛神 name', () => {
+  assert.match(workflow, /^name: 洛神 \(PR-Agent\)$/mu);
+  assert.match(workflow, /^    name: 洛神 \(ubuntu-x64\)$/mu);
 });
 
 for (const recommendation of ['no_concerns_found', 'needs_review']) {

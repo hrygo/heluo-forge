@@ -1,4 +1,4 @@
-name: pr-agent
+name: 洛神 (PR-Agent)
 
 # Automated PR review through PR-Agent (https://github.com/The-PR-Agent/pr-agent).
 # The Action reads the pull request through the GitHub API and sends only the
@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   review:
-    name: pr-agent (ubuntu-x64)
+    name: 洛神 (ubuntu-x64)
     # Skip: bot senders (PR-Agent's own comments would loop), draft PRs (the
     # `ready_for_review` event covers promotion), fork PRs (see header), plain
     # issue comments, and comment commands from accounts without write access.
@@ -190,7 +190,7 @@ jobs:
           const security = clean(review.security_concerns);
           if (security && !/^(no|none)$/i.test(security)) issues.push(`- 安全问题: ${security}`);
           const body = [
-            'PR-Agent 发现合并前必须修复的问题。',
+            '洛神（PR-Agent）发现合并前必须修复的问题。',
             '',
             ...(issues.length ? issues : ['请参阅 PR-Agent 的审查评论。']),
             '',
