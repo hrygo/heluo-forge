@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /** #37 / ADR-12: close workspace dependencies at build time, never at the terminal. */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,7 +9,7 @@ import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
 import { auditReleaseClosure, auditTarball, execNpm, parsePackOutput } from './lib/bundle-rules.mjs';
-import { auditStagedNativeResources, describeNativeFindings, nativeFetchHint } from './lib/native-resources.mjs';
+import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS, nativeFetchHint } from './lib/native-resources.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const readManifest = (dir) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
@@ -58,6 +57,7 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
   const output = destination === undefined ? mkdtempSync(join(tmpdir(), 'forge-bundle-artifact-')) : resolve(destination);
   const members = new Map();
   const sources = new Map();
+  const nativeRecords = [];
   let pendingOutput;
   try {
     for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
@@ -89,6 +89,8 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
         // closed, and only point at the fetch script when fetching would help.
         const findings = auditStagedNativeResources({ dir: source, label: name, releaseFiles: manifest.files });
         if (findings.length > 0) fail(`${name}: ${describeNativeFindings(findings)}.${nativeFetchHint(findings)}`);
+        const record = join(source, NATIVE_CHECKSUMS);
+        if (existsSync(record)) nativeRecords.push({ name, content: readFileSync(record) });
       }
       mkdirSync(target, { recursive: true });
       for (const resource of new Set([...manifest.files, 'README.md'])) {
@@ -131,6 +133,23 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     if (errors.length > 0) fail(errors.join('; '));
     const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
     if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
+    if (requireNativeResources && nativeRecords.length > 0) {
+      // npm may exclude files after preflight. Judge the archive's actual bytes
+      // against the staged record before creating anything in the destination.
+      const files = new Map(readBundleEntries(join(packedDir, tarballs[0]), { withContent: true }).map((item) => [item.path, item.content]));
+      for (const { name, content } of nativeRecords) {
+        const vendorPrefix = `${name === entry ? '' : `node_modules/${name}/`}vendor/`;
+        const packedRecord = files.get(`${vendorPrefix}CHECKSUMS.json`);
+        if (packedRecord === undefined || !packedRecord.equals(content)) fail(`${name}: packed vendor/CHECKSUMS.json is missing or differs from the staged record`);
+        const findings = auditPackagedNativeResources({
+          label: name,
+          content,
+          read: (relative) => files.get(`${vendorPrefix}${relative}`),
+          list: () => [...files.keys()].filter((path) => path.startsWith(vendorPrefix)).map((path) => path.slice(vendorPrefix.length)),
+        });
+        if (findings.length > 0) fail(`${name}: packed ${describeNativeFindings(findings)}`);
+      }
+    }
     mkdirSync(output, { recursive: true });
     const tarball = join(output, tarballs[0]);
     if (existsSync(tarball)) fail(`refusing to replace existing artifact ${basename(tarball)}`);

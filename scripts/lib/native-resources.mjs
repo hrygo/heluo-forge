@@ -20,11 +20,14 @@
  * only the second one lets the artifact gate see anything at all.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Archive-relative position of the record inside the shipping package. */
 export const NATIVE_CHECKSUMS = 'vendor/CHECKSUMS.json';
+
+/** This package requires a record even when the entire vendor directory is absent. */
+export const NATIVE_KEYCHAIN_PACKAGE = '@heluo/forge-credentials-keychain';
 
 /** Third-party license that must travel with every staged addon. */
 export const NATIVE_LICENSE = 'LICENSE.third-party.md';
@@ -35,7 +38,7 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const RECORDED = /^[^/\\]+\/[^/\\]+$/u;
 
 /** Findings that a `fetch-native-keyring.mjs` run can resolve. */
-const FETCHABLE = new Set(['missing', 'size', 'sha256', 'license']);
+const FETCHABLE = new Set(['missing', 'size', 'sha256', 'license', 'license-size', 'license-sha256']);
 
 const fail = (message) => {
   throw new Error(`native resources: ${message}`);
@@ -69,7 +72,13 @@ export function parseNativeChecksums(text, options = {}) {
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) fail(`${label}: ${relative} must be an object`);
     if (typeof entry.sha256 !== 'string' || !SHA256.test(entry.sha256)) fail(`${label}: ${relative} needs a lowercase sha256`);
     if (!Number.isInteger(entry.bytes) || entry.bytes <= 0) fail(`${label}: ${relative} needs a positive byte count`);
+    if (typeof entry.licenseSha256 !== 'string' || !SHA256.test(entry.licenseSha256)) fail(`${label}: ${relative} needs a lowercase license sha256`);
+    if (!Number.isInteger(entry.licenseBytes) || entry.licenseBytes <= 0) fail(`${label}: ${relative} needs a positive license byte count`);
     if (entry.relative !== undefined && entry.relative !== relative) fail(`${label}: ${relative} records a different relative path`);
+    const sameTriple = Object.keys(records).find((path) => path.split('/')[0] === relative.split('/')[0]);
+    if (sameTriple !== undefined && (records[sameTriple].licenseSha256 !== entry.licenseSha256 || records[sameTriple].licenseBytes !== entry.licenseBytes)) {
+      fail(`${label}: ${relative} has inconsistent license metadata`);
+    }
     records[relative] = entry;
   }
   return { records, triples: triplesOf(records) };
@@ -84,14 +93,15 @@ function triplesOf(records) {
  * Audit a record set against a byte source.
  *
  * @param {{
- *   records: Record<string, { sha256: string, bytes: number }>,
+ *   records: Record<string, { sha256: string, bytes: number, licenseSha256: string, licenseBytes: number }>,
  *   read: (relative: string) => Buffer | undefined,
+ *   list?: () => string[],
  *   requireLicense?: boolean,
  * }} options
  * @returns {Array<{ kind: string, relative?: string, triple?: string, expected?: number, actual?: number }>}
  *   findings; empty means the record set is satisfied
  */
-export function auditNativeRecords({ records, read, requireLicense = true }) {
+export function auditNativeRecords({ records, read, list = () => [], requireLicense = true }) {
   const findings = [];
   const relatives = Object.keys(records).sort();
   if (relatives.length === 0) return [{ kind: 'empty' }];
@@ -106,9 +116,21 @@ export function auditNativeRecords({ records, read, requireLicense = true }) {
     const actual = createHash('sha256').update(bytes).digest('hex');
     if (actual !== expected.sha256) findings.push({ kind: 'sha256', relative, expected: expected.sha256, actual });
   }
+  for (const relative of list().sort()) {
+    if (relative.endsWith('.node') && !Object.hasOwn(records, relative)) findings.push({ kind: 'unrecorded', relative });
+  }
   if (requireLicense) {
     for (const triple of triplesOf(records)) {
-      if (read(`${triple}/${NATIVE_LICENSE}`) === undefined) findings.push({ kind: 'license', triple });
+      const relative = `${triple}/${NATIVE_LICENSE}`;
+      const bytes = read(relative);
+      if (bytes === undefined) {
+        findings.push({ kind: 'license', triple });
+        continue;
+      }
+      const expected = records[relatives.find((path) => path.startsWith(`${triple}/`))];
+      if (bytes.length !== expected.licenseBytes) findings.push({ kind: 'license-size', relative, expected: expected.licenseBytes, actual: bytes.length });
+      const actual = createHash('sha256').update(bytes).digest('hex');
+      if (actual !== expected.licenseSha256) findings.push({ kind: 'license-sha256', relative, expected: expected.licenseSha256, actual });
     }
   }
   return findings;
@@ -127,12 +149,15 @@ export function describeNativeFindings(findings) {
   if (of('empty').length > 0) parts.push('CHECKSUMS.json declares no native resource, so an empty vendor directory would look satisfied');
   if (of('undeclared').length > 0) parts.push('vendor/ is not part of the release files, so neither the record nor its addons ship; add "vendor" to files');
   if (of('vendor-only').length > 0) parts.push('vendor/ ships without CHECKSUMS.json; it cannot be audited');
+  if (of('record-missing').length > 0) parts.push('vendor/CHECKSUMS.json is missing from the keychain package');
   const missing = of('missing').map((finding) => finding.relative);
   if (missing.length > 0) parts.push(`${missing.length} recorded file(s) missing: ${missing.join(', ')}`);
   const licenses = of('license').map((finding) => finding.triple);
   if (licenses.length > 0) parts.push(`${licenses.length} addon license(s) missing: ${licenses.join(', ')}`);
-  for (const finding of of('size')) parts.push(`${finding.relative}: ${finding.actual} bytes, recorded ${finding.expected}`);
-  for (const finding of of('sha256')) parts.push(`${finding.relative}: sha256 ${finding.actual} does not match the recorded ${finding.expected}`);
+  const unrecorded = of('unrecorded').map((finding) => finding.relative);
+  if (unrecorded.length > 0) parts.push(`${unrecorded.length} unrecorded native file(s): ${unrecorded.join(', ')}`);
+  for (const finding of [...of('size'), ...of('license-size')]) parts.push(`${finding.relative}: ${finding.actual} bytes, recorded ${finding.expected}`);
+  for (const finding of [...of('sha256'), ...of('license-sha256')]) parts.push(`${finding.relative}: sha256 ${finding.actual} does not match the recorded ${finding.expected}`);
   return parts.join('; ');
 }
 
@@ -157,15 +182,21 @@ export function auditStagedNativeResources({ dir, label, releaseFiles }) {
   if (!existsSync(checksums)) {
     // A `vendor/` directory without the record cannot be audited, and shipping it
     // would hand the terminal an unverifiable directory. Refuse instead of guessing.
-    return existsSync(join(dir, 'vendor')) ? [{ kind: 'vendor-only' }] : [];
+    if (existsSync(join(dir, 'vendor'))) return [{ kind: 'vendor-only' }];
+    return label === NATIVE_KEYCHAIN_PACKAGE ? [{ kind: 'record-missing' }] : [];
   }
   // The record and the addons are only worth auditing when the build would
   // actually copy them: a record left out of `files` is invisible to the
   // artifact gate, which is the exact blind spot issue #216 exposed.
-  const ships = releaseFiles.some((entry) => entry === 'vendor' || entry === 'vendor/' || entry === NATIVE_CHECKSUMS);
+  const ships = releaseFiles.some((entry) => entry === 'vendor' || entry === 'vendor/');
   const { records } = parseNativeChecksums(readFileSync(checksums, 'utf8'), { label: `${label} ${NATIVE_CHECKSUMS}` });
+  const list = (relative = '') => readdirSync(join(dir, 'vendor', relative), { withFileTypes: true }).flatMap((entry) => {
+    const path = relative === '' ? entry.name : `${relative}/${entry.name}`;
+    return entry.isDirectory() ? list(path) : entry.isFile() ? [path] : [];
+  });
   const findings = auditNativeRecords({
     records,
+    list,
     read: (relative) => {
       const path = join(dir, 'vendor', relative);
       return existsSync(path) ? readFileSync(path) : undefined;
@@ -182,9 +213,9 @@ export function auditStagedNativeResources({ dir, label, releaseFiles }) {
  * @param {{ label: string, content: Buffer, read: (relative: string) => Buffer | undefined }} options
  * @returns {ReturnType<typeof auditNativeRecords>}
  */
-export function auditPackagedNativeResources({ label, content, read }) {
+export function auditPackagedNativeResources({ label, content, read, list }) {
   const { records } = parseNativeChecksums(content.toString('utf8'), { label });
-  return auditNativeRecords({ records, read });
+  return auditNativeRecords({ records, read, list });
 }
 
 /**

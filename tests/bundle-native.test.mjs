@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildBundle } from '../scripts/build-enterprise-bundle.mjs';
 import { auditStagedNativeResources, parseNativeChecksums } from '../scripts/lib/native-resources.mjs';
 import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
-import { createReleaseTree, ENTRY, MEMBER, TRIPLES } from './fixtures/release-tree.mjs';
+import { createReleaseTree, ENTRY, MEMBER, put, TRIPLES } from './fixtures/release-tree.mjs';
 
 /**
  * Issue #216 regression cover.
@@ -31,7 +31,7 @@ const release = (t, options = {}) => createReleaseTree(t, options);
 
 test('a fully staged release packs four addons and verifies', (t) => {
   const { root, vendorDir, member } = release(t);
-  assert.deepEqual(auditStagedNativeResources({ dir: vendorDir, label: MEMBER, releaseFiles: member.files }), []);
+  assert.deepEqual(auditStagedNativeResources({ dir: dirname(vendorDir), label: MEMBER, releaseFiles: member.files }), []);
   const result = buildBundle({ root, entry: ENTRY, destination: join(root, 'release') });
   for (const triple of TRIPLES) {
     assert.ok(
@@ -99,6 +99,38 @@ test('a record the release files do not carry is refused', (t) => {
   assert.equal(existsSync(destination), false);
 });
 
+test('declaring only the record does not satisfy the release build', (t) => {
+  const { root } = release(t, { memberFiles: ['src', 'vendor/CHECKSUMS.json', 'README.md'] });
+  const destination = join(root, 'release');
+  assert.throws(
+    () => buildBundle({ root, entry: ENTRY, destination }),
+    /vendor\/ is not part of the release files/u,
+  );
+  assert.equal(existsSync(destination), false);
+});
+
+for (const [ignored, expected] of [
+  ['*.node', /packed 4 recorded file\(s\) missing/u],
+  ['CHECKSUMS.json', /packed vendor\/CHECKSUMS\.json is missing/u],
+]) {
+  test(`the build refuses an archive when npm excludes ${ignored}`, (t) => {
+    const { root, vendor } = release(t);
+    put(root, `${vendor}/.npmignore`, `${ignored}\n`);
+    const destination = join(root, 'release');
+    assert.throws(() => buildBundle({ root, entry: ENTRY, destination }), expected);
+    assert.equal(existsSync(destination), false);
+  });
+}
+
+test('the keychain package cannot build when its entire vendor directory is missing', (t) => {
+  const { root, vendorDir } = release(t, { memberFiles: ['src', 'README.md'] });
+  rmSync(vendorDir, { recursive: true });
+  assert.throws(
+    () => buildBundle({ root, entry: ENTRY, destination: join(root, 'release') }),
+    /vendor\/CHECKSUMS\.json.*missing/u,
+  );
+});
+
 test('tampered addon bytes fail the release build', (t) => {
   const { root } = release(t, { tamper: 'linux-x64-gnu' });
   assert.throws(
@@ -129,6 +161,14 @@ test('the verifier rejects a structurally built artifact that lacks the addons',
   assert.equal(verdict.errors.length, 1, verdict.errors.join('\n'));
   assert.match(verdict.errors[0], /vendor\/CHECKSUMS\.json: 4 recorded file\(s\) missing: .*keyring\.node/u);
   assert.match(verdict.errors[0], /4 addon license\(s\) missing/u);
+});
+
+test('the verifier rejects a keychain package without its native resource record', (t) => {
+  const { root } = release(t, { memberFiles: ['src', 'README.md'] });
+  const result = buildBundle({ root, entry: ENTRY, destination: join(root, 'release'), requireNativeResources: false });
+  const verdict = verifyBundle(result.tarball);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.errors.join('\n'), /forge-credentials-keychain\/vendor\/CHECKSUMS\.json.*missing/u);
 });
 
 test('the verifier rejects an artifact whose addon bytes were replaced', (t) => {
@@ -188,6 +228,36 @@ test('an addon without its third-party license is refused', (t) => {
   );
 });
 
+for (const [label, license] of [['empty', ''], ['tampered', 'BAD\n']]) {
+  test(`a third-party license that is ${label} fails both build and artifact verification`, (t) => {
+    const { root, vendorDir } = release(t);
+    writeFileSync(join(vendorDir, 'win32-arm64-msvc/LICENSE.third-party.md'), license);
+    assert.throws(
+      () => buildBundle({ root, entry: ENTRY, destination: join(root, 'refused') }),
+      /win32-arm64-msvc\/LICENSE\.third-party\.md:.*(?:bytes|sha256)/u,
+    );
+    const result = buildBundle({ root, entry: ENTRY, destination: join(root, 'structural'), requireNativeResources: false });
+    const verdict = verifyBundle(result.tarball);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.errors.join('\n'), /win32-arm64-msvc\/LICENSE\.third-party\.md:.*(?:bytes|sha256)/u);
+  });
+}
+
+for (const relative of ['linux-x64-musl/keyring.node', 'linux-x64-gnu/other.node']) {
+  test(`an unrecorded native addon ${relative} is refused`, (t) => {
+    const { root, vendor } = release(t);
+    put(root, `${vendor}/${relative}`, 'unrecorded binary');
+    assert.throws(
+      () => buildBundle({ root, entry: ENTRY, destination: join(root, 'refused') }),
+      /unrecorded native file/u,
+    );
+    const result = buildBundle({ root, entry: ENTRY, destination: join(root, 'structural'), requireNativeResources: false });
+    const verdict = verifyBundle(result.tarball);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.errors.join('\n'), /unrecorded native file/u);
+  });
+}
+
 for (const [label, text, expected] of [
   ['invalid JSON', '{', /not valid JSON/u],
   ['missing files object', '{"package":"@napi-rs/keyring"}', /files must be an object/u],
@@ -196,6 +266,8 @@ for (const [label, text, expected] of [
   ['bare file name', '{"files":{"keyring.node":{"sha256":"' + 'a'.repeat(64) + '","bytes":1}}}', /unsafe recorded path/u],
   ['bad digest', '{"files":{"linux-x64-gnu/keyring.node":{"sha256":"ABC","bytes":1}}}', /needs a lowercase sha256/u],
   ['zero bytes', '{"files":{"linux-x64-gnu/keyring.node":{"sha256":"' + 'a'.repeat(64) + '","bytes":0}}}', /needs a positive byte count/u],
+  ['missing license digest', '{"files":{"linux-x64-gnu/keyring.node":{"sha256":"' + 'a'.repeat(64) + '","bytes":1}}}', /needs a lowercase license sha256/u],
+  ['zero license bytes', '{"files":{"linux-x64-gnu/keyring.node":{"sha256":"' + 'a'.repeat(64) + '","bytes":1,"licenseSha256":"' + 'b'.repeat(64) + '","licenseBytes":0}}}', /needs a positive license byte count/u],
 ]) {
   test(`the record parser rejects ${label}`, () => {
     assert.throws(() => parseNativeChecksums(text, { label: 'fixture' }), expected);

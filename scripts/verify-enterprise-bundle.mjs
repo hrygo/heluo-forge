@@ -12,7 +12,7 @@ import { basename, dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readBundleEntries, summarizeBundle } from './lib/bundle-archive.mjs';
 import { createBundleManifest, diffBundleManifest, parseBundleManifest } from './lib/bundle-manifest.mjs';
-import { auditPackagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS } from './lib/native-resources.mjs';
+import { auditPackagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS, NATIVE_KEYCHAIN_PACKAGE } from './lib/native-resources.mjs';
 
 const MANIFEST_FILE = 'bundle-manifest.json';
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
@@ -67,7 +67,7 @@ function inspectBundle(entries) {
   // the only check that can reject an artifact built elsewhere, because it reads
   // nothing but the archive bytes.
   for (const entry of entries) {
-    if (!entry.path.endsWith(NATIVE_CHECKSUMS)) continue;
+    if (entry.path !== NATIVE_CHECKSUMS && !entry.path.endsWith(`/${NATIVE_CHECKSUMS}`)) continue;
     const vendorPrefix = entry.path.slice(0, entry.path.length - 'CHECKSUMS.json'.length);
     const label = shown(entry.path);
     try {
@@ -75,12 +75,18 @@ function inspectBundle(entries) {
         label,
         content: entry.content,
         read: (relative) => files.get(`${vendorPrefix}${relative}`)?.content,
+        list: () => [...files.keys()].filter((path) => path.startsWith(vendorPrefix)).map((path) => path.slice(vendorPrefix.length)),
       });
       if (findings.length > 0) errors.push(`${label}: ${describeNativeFindings(findings)}`);
     } catch (error) {
       // A defective record is an artifact verdict, not a usage error: keep the
       // "inspectBundle returns error lines" invariant so the CLI exits 1.
       errors.push(`${label}: ${String(error.message).replace(/^native resources: /u, '').replace(`${label}: `, '')}`);
+    }
+  }
+  for (const { dir, pkg } of manifests) {
+    if (pkg?.name === NATIVE_KEYCHAIN_PACKAGE && !files.has(`${dir}${NATIVE_CHECKSUMS}`)) {
+      errors.push(`${shown(`${dir}${NATIVE_CHECKSUMS}`)}: required native resource record missing`);
     }
   }
   for (const { dir, label, pkg } of manifests) {

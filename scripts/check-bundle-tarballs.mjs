@@ -5,7 +5,6 @@
 // `workspace:*`，直接审计只会得到 unclosed runtime dependency。
 // 不联网、不安装，把实际文件列表与模式位交给 auditTarball。用 npm 而不是 pnpm：
 // 而 pack 的文件选择与模式位正是 npm 的实现语义。
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';

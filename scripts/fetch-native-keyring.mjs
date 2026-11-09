@@ -18,9 +18,8 @@
  *   node scripts/fetch-native-keyring.mjs [--check] [--registry <url>]
  *
  * `--check` writes nothing and verifies the staged files against
- * `native/CHECKSUMS.json` (used by the release checks).
+ * `vendor/CHECKSUMS.json` (used by the release checks).
  */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -146,7 +145,14 @@ export function verifyStagedLayout({ root, targets, checksums }) {
     if (sha256(bytes) !== expected.sha256) problems.push(`${addonRelative}: sha256 mismatch`);
     const mismatch = describeBinaryMismatch(bytes, target.triple);
     if (mismatch !== undefined) problems.push(`${addonRelative}: ${mismatch}`);
-    if (!existsSync(join(root, licenseRelative))) problems.push(`${licenseRelative}: license is missing`);
+    const license = join(root, licenseRelative);
+    if (!existsSync(license)) {
+      problems.push(`${licenseRelative}: license is missing`);
+    } else {
+      const licenseBytes = readFileSync(license);
+      if (licenseBytes.length !== expected.licenseBytes) problems.push(`${licenseRelative}: size mismatch (${licenseBytes.length} != ${expected.licenseBytes})`);
+      if (sha256(licenseBytes) !== expected.licenseSha256) problems.push(`${licenseRelative}: sha256 mismatch`);
+    }
   }
   for (const relative of Object.keys(recorded)) {
     if (!claimed.has(relative)) problems.push(`${relative}: recorded but no delivery target claims it`);
@@ -165,6 +171,14 @@ function verifyStaged(targets) {
   return `verified ${targets.length} staged addon(s)`;
 }
 
+/** Check the archive itself, not a digest supplied alongside staged files. */
+export function verifySourceArchive(target, bytes) {
+  const actual = sha512(bytes);
+  if (actual !== target.integrity) {
+    fail(`${target.source}@${target.version}: integrity mismatch\n  expected ${target.integrity}\n  actual   ${actual}`);
+  }
+}
+
 function packSignedSource(target, workDir) {
   const spec = `${target.source}@${target.version}`;
   const stdout = execNpm(['pack', spec, '--json', '--pack-destination', workDir, `--registry=${registry}`], {
@@ -178,10 +192,7 @@ function packSignedSource(target, workDir) {
   if (typeof filename !== 'string') fail(`npm pack returned no filename for ${spec}`);
   const tarball = join(workDir, filename);
   const bytes = readFileSync(tarball);
-  const actual = sha512(bytes);
-  if (actual !== target.integrity) {
-    fail(`${spec}: integrity mismatch\n  expected ${target.integrity}\n  actual   ${actual}`);
-  }
+  verifySourceArchive(target, bytes);
   return { tarball, bytes };
 }
 
@@ -196,13 +207,14 @@ function stageTarget(target) {
     // readBundleEntries normalises npm's `package/` prefix away.
     const addonBytes = entries.get(target.addon);
     if (addonBytes === undefined) fail(`${target.source}: tarball does not contain ${target.addon}`);
+    const licenseBytes = entries.get('LICENSE.third-party.md');
+    if (licenseBytes === undefined || licenseBytes.length === 0) fail(`${target.source}: tarball has no non-empty third-party license`);
     const addonTarget = join(nativeRoot, target.triple, 'keyring.node');
     mkdirSync(dirname(addonTarget), { recursive: true });
     writeFileSync(addonTarget, addonBytes);
-    const licenseBytes = entries.get('LICENSE.third-party.md');
-    if (licenseBytes !== undefined) writeFileSync(join(nativeRoot, target.triple, 'LICENSE.third-party.md'), licenseBytes);
+    writeFileSync(join(nativeRoot, target.triple, 'LICENSE.third-party.md'), licenseBytes);
     const bytes = readFileSync(addonTarget);
-    return { relative: `${target.triple}/keyring.node`, sha256: sha256(bytes), bytes: bytes.length, source: target.source, version: target.version, license: target.license, integrity: target.integrity };
+    return { relative: `${target.triple}/keyring.node`, sha256: sha256(bytes), bytes: bytes.length, licenseSha256: sha256(licenseBytes), licenseBytes: licenseBytes.length, source: target.source, version: target.version, license: target.license, integrity: target.integrity };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -214,7 +226,7 @@ function writeChecksums(entries) {
     package: '@napi-rs/keyring',
     version: readJson(manifestPath).version,
     generatedBy: 'scripts/fetch-native-keyring.mjs',
-    note: 'sha256 of the staged addons; re-run the fetch script instead of editing this file',
+    note: 'sha256 of the staged addons and licenses; re-run the fetch script instead of editing this file',
     files,
   };
   writeFileSync(checksumPath, `${JSON.stringify(document, null, 2)}\n`);

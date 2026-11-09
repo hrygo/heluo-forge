@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-016 |
 | 文档名称 | 企业包原生 addon 缺失修复实施计划 |
-| 版本 | V0.2.0 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -74,11 +74,11 @@
 
 在 [build-enterprise-bundle.mjs](../../scripts/build-enterprise-bundle.mjs) 的打包容忍度之前加一道发布前置：
 
-- 新增 [scripts/lib/native-resources.mjs](../../scripts/lib/native-resources.mjs)：`parseNativeChecksums` 拒绝空记录、含 `.`/`..` 的路径、非小写 sha256 与非正字节数；`auditNativeRecords({ records, read })` 返回结构化结论（`missing`/`size`/`sha256`/`license`/`empty`），`describeNativeFindings` 只负责分组措辞——判定与措辞分开，构建、核验与测试共用同一份判定。
-- `auditStagedNativeResources({ dir, label, releaseFiles })` 对成员目录求值：先要求 `vendor/` 在发布文件集内（否则报 `undeclared`），再逐条要求 `vendor/<relative>` 存在、字节数一致、`sha256` 一致，每个 triple 另需 `LICENSE.third-party.md`；有 `vendor/` 却无记录也拒绝。
+- 新增 [scripts/lib/native-resources.mjs](../../scripts/lib/native-resources.mjs)：`parseNativeChecksums` 拒绝空记录、含 `.`/`..` 的路径、非小写 sha256 与非正字节数；记录同时包含各 addon 与许可证的摘要和长度。`auditNativeRecords` 返回结构化结论，`describeNativeFindings` 只负责分组措辞，构建、核验与测试共用同一份判定。
+- `auditStagedNativeResources({ dir, label, releaseFiles })` 对成员目录求值：先要求完整 `vendor/` 在发布文件集内，再逐条校验 addon 与 `LICENSE.third-party.md` 的字节数和 sha256，并拒绝未记录的 `.node` 文件；凭据包缺少记录或整个目录时也拒绝。
 - `releaseFiles` 把「记录必须随包」变成构建期判据：只校验磁盘会让「记录在仓库、不在产物」重新成为盲区——产物侧只有拿到记录才有东西可判。
-- 前置位置：`visit()` 进入即校验、`npm pack` 之前；失败走既有 `fail()`，即"抛错不产制品"，目标目录也不会被创建。
-- 失败消息给成员名、triple、缺失项，并在末尾给 `node scripts/fetch-native-keyring.mjs`；不使用"未知错误"。
+- 前置位置：`visit()` 进入即校验；`npm pack` 后再次读取归档，将实际记录及字节与暂存记录比对，排除 npm 忽略文件造成的遗漏。任一阶段失败均不产制品，目标目录不会被创建。
+- 失败消息给成员名、triple 与具体问题；暂存能修复的缺失或字节不符附 `node scripts/fetch-native-keyring.mjs` 提示。
 - `buildBundle` 新增 `requireNativeResources`（默认 `true`）；发布路径没有环境变量或命令行逃生。工作区由可选的 `--root <dir>` 选择，用于对 fixture 树跑同一个入口——它换的是树，不是判据。
 - [check-bundle-tarballs.mjs](../../scripts/check-bundle-tarballs.mjs) 以结构化模式调用（`requireNativeResources: false`），保持现有"离线、不要求原生产物"的定位，并由产物侧判据兜住。
 
@@ -86,11 +86,11 @@
 
 在 [verify-enterprise-bundle.mjs](../../scripts/verify-enterprise-bundle.mjs) 的 `inspectBundle` 内新增 `auditPackagedNativeResources({ label, content, read })` 调用：
 
-- 扫描归档内每个以 `vendor/CHECKSUMS.json` 结尾的条目（含嵌套成员），用该条目的 `content` 解析清单，再通过 `read` 从同目录取 `vendor/<relative>`；每个包只产生一条汇总错误，避免干净检出时同一路径重复八次。
+- 扫描归档内每个以 `vendor/CHECKSUMS.json` 结尾的条目（含嵌套成员），用该条目的 `content` 解析清单，再通过 `read` 从同目录取 `vendor/<relative>`；每个包的字节差异汇总为一条错误。凭据包自身即使整个 `vendor/` 缺失也必须报错。
 - 记录损坏（解析失败）折成错误行而不是抛出：`inspectBundle` 的不变式是「只返回错误行」，据此 CLI 才给出 `exit 1` 的产物判决，而不是 `exit 2` 的用法错误。
 - CLI 新增 `--json`：一次输出 `{ok, tarball, files, bytes, sha256, entry, members, toolchain, errors}`，退出码仍是 `0`/`1`/`2`；发布脚本与证据归档按 JSON 分支，不再抓文本。
 - 复用归档里已有的 `entry.content`，不引入解压落盘。
-- 语义变更：现存 0.1.0 归档将由此判为失败。这是预期结果，需在提交说明与登记行里写明，避免被当成回归。
+- 旧归档缺少 addon，或其记录缺少许可证摘要与字节数时，核验失败；须按锁文件重新暂存并构建。
 
 ### 5.3 反例与变异（对应 R3、R4）
 
@@ -144,17 +144,17 @@ node --test tests/bundle-native.test.mjs
 ## 7. 边界：不做什么
 
 - 不把 addon 提交进 Git（每版本约 9.5 MB，且提交钩子对不可扫描二进制是硬停，只能靠放行规则绕过）。
-- 不让 `node --run check` 联网或安装依赖；网络只属于发布机的暂存步骤。
+- 不让 `node --run check` 联网或安装依赖；发布暂存与原生钥匙串 CI 作业可访问上游包源。
 - 不因"可禁用"放宽 `unvetted` 默认拒绝，不在企业补丁里塞 `allowUnvettedPlatformAdapter`。
 - 不删除既有 fail-closed 用例；不把"缺 addon"从负例改成跳过。
-- 规则的作用域是"任何随包携带 `vendor/CHECKSUMS.json` 的成员"（当前仅凭据包）。其他包若引入同名记录，即自动接受同一约束；这不是通用 vendor 目录检查器。
-- 结构化模式（`requireNativeResources: false`）只保留给离线 `check-bundle-tarballs`，不对外暴露成发布开关；发布路径没有环境变量逃生。
+- 规则覆盖随包携带 `vendor/CHECKSUMS.json` 的成员；凭据包还强制要求记录存在。其他包若引入同名记录，即自动接受同一约束；这不是通用 vendor 目录检查器。
+- 结构化模式（`requireNativeResources: false`）用于离线 `check-bundle-tarballs` 与安装排练，不对外暴露成发布开关；排练证据明确标记原生资源未经核验。
 
 ## 8. 待确认事项
 
 | 编号 | 事项 | 结论（2026-11-09） |
 |---|---|---|
-| D1 | 发布门禁落在允许联网的发布 job，还是人工发布清单 | 取人工清单：构建期硬失败 + RUNBOOK S2.0，不新增联网 CI job |
+| D1 | 发布门禁落在允许联网的发布 job，还是人工发布清单 | 初始取人工清单：构建期硬失败 + RUNBOOK S2.0；后续新增原生钥匙串 CI 作业，见 R8 |
 | D2 | 产物期校验设为阻断（现存归档转红） | 已采纳：旧归档 `128 files` 产物被判 8 条错误、`exit 1` |
 | D3 | 二进制是否永久不入库 | 保持不入库；`vendor/<triple>/` 仍由 `.gitignore` 排除 |
 | D4 | 试点覆盖层是否随运行手册给出 | 已写入 RUNBOOK S2 与包 README，默认仍是拒绝挂载 |
@@ -197,8 +197,14 @@ node --test tests/bundle-native.test.mjs
 | R8 | CI 一直只验结构：`verify` 无 addon 字节，`device-matrix` 注入原生模块，两者都不加载 `keyring.node` | 新增 `native-keychain` 作业，2026-11-09 四个 runner 全绿：linux-x64/linux-arm64 构建出 `140 files` / `12230489` / `86b5bc…42f7`（与本机逐字节相同），安装后 addon 与记录一致；win32-x64/win32-arm64 打包凭据包后安装，四个 addon 一致。四者均 `store probe: 6 steps ok`（read-absent、write-read、overwrite-read、cross-process-read、delete、delete-idempotent），真实 triple 为 `linux-x64-gnu`、`linux-arm64-gnu`、`win32-x64-msvc`、`win32-arm64-msvc` |
 | R9 | CI 存在与 `verify` 重复的矩阵腿，且同一平台被两个作业各占一台 runner | TAP 点名确认 keychain 包测试、`callback-port`、`sensitive-scan` 均在根目录 `node --test` 内，先删三条重复腿（14 → 11，零覆盖损失），再把 `device-matrix` 的平台单测折进 `native-keychain` 的前置步骤（单测先于任何网络访问，注册表故障不掩盖平台信号）：每平台一台 runner，14 → 8 个作业 |
 | R9 | 真实钥匙串作业不在必需检查里 | 暂存加 `actions/cache`（键为锁文件哈希，命中仍先过 `--check`），四个 `native keychain (*)` 加入 `main` 必需检查；`verify` 的结构性绿灯不再能单独放行缺件产物 |
+| R10 | 目标覆盖面只到 4 条主干腿，macOS 与「缺依赖企业机」没有 CI 证据 | 补 `document backend (macos-15)` / `(macos-15-intel)`（macOS 无 addon，驱动加密文档后端，断言 `triple`/`addon` 为空）、`native keychain (linux-x64)` 内的 `no-store refusal`（无 session bus 时六步全部 `KEYCHAIN_OPERATION_FAILED`，随后装上 Secret Service 后同一 job 六步全过），以及前进兼容腿 `(linux-x64, ubuntu-26.04)`、`(win32-x64, windows-2025)`。主干四腿与两条 macOS 腿为必需检查，前进兼容腿不必需 |
+| R10 | 拒绝用例首版假设错误 | ubuntu-24.04 镜像自带 libsecret，addon 能加载，拒绝落在第一次存储操作（D-Bus 不可用），JSON 无顶层 `error`；断言改为从顶层与失败 step 两处收集 `code`，并以合成 JSON 验证构造期、操作期、意外成功三条路径 |
+| R11 | PR 审查：缓存可同时覆盖记录与二进制，暂存又可重写错误提交的记录 | CI 改为缓存 npm 来源包，每次按锁文件验证 tarball 后提取，并以 `git diff --exit-code` 比对生成记录；冷缓存和热缓存离线重暂存均已本机验证 |
+| R11 | PR 审查：只声明记录、整个 `vendor/` 缺失、npm 排除文件、许可证损坏或存在未记录 addon 时门禁有盲区 | 构建前置与打包后归档双重核验，凭据包强制带记录；记录新增许可证摘要与长度，独立核验同时拒绝未记录的 `.node` 文件 |
+| R11 | 负向判据变异 | 在隔离副本中分别短路发布文件集、构建/归档缺记录、打包字节、许可证摘要、未记录 addon、来源包 integrity、缓存目录和提交记录比对，共 9 项均被用例检出 |
+| R11 | 排练证据与 CI 凭据 | 结构化安装排练标注原生资源未经核验；macOS 后端作业不持久化 checkout 凭据 |
 | R8 | 该作业第一次跑出了三个平台缺陷 | ①`npm.cmd` 不能经 `execFile` 启动（Node 命令注入修复）→ 改为用 `process.execPath` 跑 npm CLI 脚本；②GNU tar 把 `C:\...` 当远端主机 → 改用 `readBundleEntries` 内存解包；③release 闭包要求 bin 带 `+x`，Windows 检出无法表达 → 企业 tarball 仍只在 POSIX 产出，Windows 腿改测凭据包 |
-| 复盘 | 首次 PR CI `verify` 失败 | 四条既有用例以“在干净检出里成功构建真实仓库”为前提，正是被本次判据否定的事实：两条 CLI 用例改用 fixture 工作区（新增 CLI `--root`），安装排练探针改为显式结构化构建并记录 `nativeResources: absent` |
+| 复盘 | 首次 PR CI `verify` 失败 | 四条既有用例以“在干净检出里成功构建真实仓库”为前提，正是被本次判据否定的事实：两条 CLI 用例改用 fixture 工作区（新增 CLI `--root`），安装排练探针改为显式结构化构建；原生资源状态的后续修正见 R11 |
 
 未被本机实测覆盖、仍需目标机证据的部分：Windows/麒麟/UOS 上 addon 的实际加载与读写（需要 `allowUnvettedPlatformAdapter: true` 的试点覆盖层与 Visual C++ 运行库），以及 #182 要求的失效、跨进程与重启后保留取证。
 

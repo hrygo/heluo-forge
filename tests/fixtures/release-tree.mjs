@@ -80,10 +80,13 @@ export function createReleaseTree(t, options = {}) {
   const files = {};
   for (const triple of triples) {
     const bytes = addonBytes(triple);
+    const licenseBytes = Buffer.from('MIT\n');
     files[`${triple}/keyring.node`] = {
       relative: `${triple}/keyring.node`,
       sha256: sha256(bytes),
       bytes: bytes.length,
+      licenseSha256: sha256(licenseBytes),
+      licenseBytes: licenseBytes.length,
       source: `@napi-rs/keyring-${triple}`,
       version: '2.1.2',
       license: 'MIT',

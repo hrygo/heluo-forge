@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.63.17 |
+| 版本 | V1.63.18 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,7 +19,7 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.17 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.18 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.40.4 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.38.4 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
@@ -67,12 +67,12 @@
 | CORP-DSH-PLAN-013 | IAM 侧边栏页脚企业账号启动器实施计划 | [plans/2026-11-04-iam-launcher.md](<plans/2026-11-04-iam-launcher.md>) | V0.1.0 | 草案 | 平台组（代拟） | 待负责人评审；覆盖 settings.launcher 挂载与盘龙盾徽头像 |
 | CORP-DSH-PLAN-014 | forge-iam 结构整改实施计划 | [plans/2026-11-05-forge-iam-structure.md](<plans/2026-11-05-forge-iam-structure.md>) | V0.22.0 | 草案 | 平台组（代拟） | 待评审 |
 | CORP-DSH-PLAN-015 | DevOps 插件阶段总结与交接 | [plans/2026-11-04-devops-plugin-stage-handoff.md](<plans/2026-11-04-devops-plugin-stage-handoff.md>) | V0.1.1 | 草案 | 平台组（代拟） | 只读面已对真实 dop 平台跑通、写回仅一次同值 no-op；Gitee 侧与企业 CLI 未联调，全部 NOT RUN |
-| CORP-DSH-PLAN-016 | 企业包原生 addon 缺失修复实施计划 | [plans/2026-11-09-enterprise-bundle-native-addon.md](<plans/2026-11-09-enterprise-bundle-native-addon.md>) | V0.2.0 | 草案 | 平台组（代拟） | 构建期前置与产物期字节校验已实现并本机实测（含变异证明）；目标机实机取证仍按 #182 另行关闭 |
+| CORP-DSH-PLAN-016 | 企业包原生 addon 缺失修复实施计划 | [plans/2026-11-09-enterprise-bundle-native-addon.md](<plans/2026-11-09-enterprise-bundle-native-addon.md>) | V0.2.1 | 草案 | 平台组（代拟） | 构建期前置与产物期字节校验已实现并本机实测（含变异证明）；目标机实机取证仍按 #182 另行关闭 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.0.2 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.1 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.1.1 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.1 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
-| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.6.8 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
+| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.6.9 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-ENG-003 | DSH 插件高阶规范 | [engineering/dsh-plugin-conventions.md](<engineering/dsh-plugin-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 每个新插件准入时对照复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.13.4 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
 | CORP-DSH-CONF-002 | 私有化 Gitee 内部插件源码接入问询函 | [collaboration/gitee-market-clarification.md](<collaboration/gitee-market-clarification.md>) | V0.3.0 | 草案 | 平台组（代拟）；Gitee 团队回函 | G1 源码接口联调前；G2 开放前确认运行事项 |

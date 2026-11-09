@@ -3,7 +3,7 @@
 
 **适用**：`@heluo/forge-enterprise` 企业组合包（tarball + `bundle-manifest.json` + `SHA256SUMS`）在**企业内网目标机**上的安装、装载核对、功能抽查、升级/回退、卸载与证据归档。
 **基线**：`docs/teamflow/20261106-r2/PRD.md`（AC-5～AC-9）、`TECHNICAL.md` §2.4/§5.3、`AC-EVIDENCE-TEMPLATE.md`、`HOST-PROBE-DISPOSITION.md`。
-**版本**：v2.1 · 2026-11-09（代拟）。**状态**：S0–S2、S5（离线部分）、S8（本机可执行部分）已本机实测；S3、S4（真实安装面）、S6、S7 及全部目标 rc.3 专属项按实际执行回填，当前记 `NOT RUN`。v2 增补原生 addon 的发布前暂存（S2.0）与产物侧逐条核对（S1.6）；v2.1 把整包 SHA/字节数改为「本机示例 + 本目录自校验」口径，并在记账里要求写入 Node/npm 版本——整包 SHA 随包内容与工具链变化，跨环境不作判据。
+**版本**：v2.2 · 2026-11-09（代拟）。**状态**：S0–S2、S5（离线部分）、S8（本机可执行部分）已本机实测；S3、S4（真实安装面）、S6、S7 及全部目标 rc.3 专属项按实际执行回填，当前记 `NOT RUN`。整包 SHA 和字节数以本目录自校验为准，并记录 Node/npm 版本；包内容与工具链不同时不以示例值作为判据。
 
 > **本手册不替代证据表**。每条命令执行后必须写入 `AC-EVIDENCE-TEMPLATE.md` 的明细块与汇总表；手册只提供“命令 + 预期 + 退出码 + 失败分支 + 取证环境”。
 
@@ -263,7 +263,7 @@
   ```
 - **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，第二条输出 `4`）：`vendor/` 下恰好 10 条——`CHECKSUMS.json`、`README.md`，以及 `win32-x64-msvc`、`win32-arm64-msvc`、`linux-x64-gnu`、`linux-arm64-gnu` 各自的 `keyring.node` 与 `LICENSE.third-party.md`。
 - **退出码**：`0`；`grep -c` 计数为 `0` 时退出码 `1`（**本步正是靠这个 1 发现 issue #216 的缺陷形态**）。
-- **失败分支**：`keyring.node` < 4 或 `vendor/` 少于 10 条 → `FAIL`，停止本段。企业组合已禁用官方 `credentials` 行，缺 addon 时 profile 会在挂载期 `KEYCHAIN_UNAVAILABLE` 整体启动中止；不得用“目标机再补文件”绕过，退回打包负责人重做 S2。`verify:bundle` 会同时给出 `vendor/CHECKSUMS.json: <n> recorded file(s) missing: <triple>/keyring.node` 与 `addon license(s) missing` 的汇总行，两处结果必须一致。
+- **失败分支**：`keyring.node` < 4 或 `vendor/` 少于 10 条 → `FAIL`，停止本段。企业组合已禁用官方 `credentials` 行，缺 addon 时 profile 会在挂载期 `KEYCHAIN_UNAVAILABLE` 整体启动中止；不得用“目标机再补文件”绕过，退回打包负责人重做 S2。`verify:bundle` 对记录缺失、记录缺少许可证摘要、addon 或许可证的缺失与字节不符分别报错；须结合具体错误定位，不能仅以文件计数代替字节校验。
 - **记账**：证据ID `E-AC02-06`；粘贴两条命令的原文输出。
 
 ---
@@ -286,10 +286,10 @@
   node scripts/fetch-native-keyring.mjs
   ```
   预期四行 `staged <triple>/keyring.node (<bytes> bytes)`，末行 `native keyring: 4 addon(s) under packages/forge-credentials-keychain/vendor; registry <url>`。
-- **退出码**：`0`；缺文件、哈希或对象头不符 → `1`。
+- **退出码**：`0`；缺文件、addon 或许可证的长度与哈希不符、对象头不符 → `1`。
 - **失败分支**：
   - `staged file is missing` → 先执行上面的暂存命令；网络不可达 → `BLOCKED`（阻塞点：发布机无法获取固定版本 addon），**不得**跳过本步直接 S2.1（会得到缺 addon 的坏产物，构建现在也会拒绝）；
-  - `integrity mismatch` / `sha256 mismatch` / `recorded ... does not match the lock file` → `FAIL`：上游制品或记录漂移，保留输出并回报，**不得**手改 `CHECKSUMS.json`。
+  - `integrity mismatch` / `sha256 mismatch` / `recorded ... does not match the lock file` → `FAIL`：上游制品或记录漂移，保留输出并回报，**不得**手改 `CHECKSUMS.json`；记录缺少许可证摘要时按锁文件重新暂存并重新构建。
 - **记账**：证据ID `E-AC01-07`。
 
 ### S2.1 重建第一次

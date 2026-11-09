@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { verifyStagedLayout } from '../scripts/fetch-native-keyring.mjs';
+import { verifySourceArchive, verifyStagedLayout } from '../scripts/fetch-native-keyring.mjs';
 
 const lock = JSON.parse(
   (await import('node:fs')).readFileSync(
@@ -15,6 +15,13 @@ const lock = JSON.parse(
 );
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+test('source archive bytes must match the lock even when their metadata is unchanged', () => {
+  const original = Buffer.from('pinned upstream archive');
+  const target = { source: '@napi-rs/keyring-example', version: '2.1.2', integrity: `sha512-${createHash('sha512').update(original).digest('base64')}` };
+  assert.doesNotThrow(() => verifySourceArchive(target, original));
+  assert.throws(() => verifySourceArchive(target, Buffer.from('tampered upstream archive')), /integrity mismatch/u);
+});
 
 /**
  * Minimal object files: only the header fields the verifier reads, so a target
@@ -50,6 +57,8 @@ function staging(t, { addons = {}, checksums, triples } = {}) {
     files[`${target.triple}/keyring.node`] = {
       sha256: sha256(bytes),
       bytes: bytes.length,
+      licenseSha256: sha256(license),
+      licenseBytes: license.length,
       source: target.source,
       version: target.version,
       license: target.license,
@@ -70,6 +79,7 @@ test('a complete staging tree has no problems', (t) => {
 for (const [label, mutate, expected] of [
   ['missing addon', (layout) => rmSync(join(layout.root, 'linux-x64-gnu', 'keyring.node')), /linux-x64-gnu\/keyring\.node: staged file is missing/u],
   ['missing license', (layout) => rmSync(join(layout.root, 'win32-x64-msvc', 'LICENSE.third-party.md')), /win32-x64-msvc\/LICENSE\.third-party\.md: license is missing/u],
+  ['corrupted license', (layout) => writeFileSync(join(layout.root, 'win32-x64-msvc', 'LICENSE.third-party.md'), 'tampered'), /win32-x64-msvc\/LICENSE\.third-party\.md: (size|sha256) mismatch/u],
   ['corrupted bytes', (layout) => writeFileSync(join(layout.root, 'linux-arm64-gnu', 'keyring.node'), 'tampered'), /linux-arm64-gnu\/keyring\.node: (size|sha256) mismatch/u],
   ['a PE object under the win32 triple with the ARM64 machine type', (layout) => {
     const bytes = fakeBinary('win32-x64-msvc');
