@@ -16,8 +16,6 @@ const GATEWAY_RECORD_KIND = 'grant';
 /** V0.3.x releases mirrored the IAM access token here; V1 no longer writes it. */
 export const LEGACY_TOKEN_REF = 'ENTERPRISE_ACCESS_TOKEN';
 
-/** UAG personal credentials are `uag-` plus 128 bits of lowercase hex. */
-const GATEWAY_VALUE_PATTERN = /^uag-[0-9a-f]{32}$/i;
 const GATEWAY_VERSION = 2;
 const GATEWAY_LEGACY_VERSION = 1;
 const WRITE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -359,7 +357,7 @@ export function createGatewayCredentialStore(credentials, options = {}) {
     if (pair.record?.kind !== GATEWAY_RECORD_KIND) throw readOnly();
     const parsed = parseGatewayCredential(pair.record.payload);
     if (!parsed.ok || parsed.value.version !== GATEWAY_VERSION
-      || typeof pair.value !== 'string' || !GATEWAY_VALUE_PATTERN.test(pair.value)
+      || !isNonEmptyString(pair.value)
       || parsed.value.valueDigest !== valueDigest(pair.value)) throw readOnly();
   }
 
@@ -433,8 +431,8 @@ export function createGatewayCredentialStore(credentials, options = {}) {
         ? { value: resolved.value, source: resolved.source ?? null } : undefined;
     },
     async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry, baseURL }, { guard } = {}) {
-      if (typeof value !== 'string' || (baseURL ? !/^[\x21-\x7e]{1,4096}$/u.test(value) : !GATEWAY_VALUE_PATTERN.test(value))) {
-        throw new StoreError('IAM_GATEWAY_KEY_INVALID', 'gateway credential must be uag- plus 32 hexadecimal digits');
+      if (!isNonEmptyString(value)) {
+        throw new StoreError('IAM_GATEWAY_KEY_INVALID', 'gateway credential must be a non-empty string');
       }
       if (!isNonEmptyString(ownerSubject)) throw new StoreError('IAM_GATEWAY_OWNER_MISSING', 'a gateway credential needs the signed-in subject');
       const payload = {

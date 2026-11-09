@@ -299,16 +299,46 @@ test('saving a gateway credential atomically writes its value and bound V2 owner
   assert.deepEqual(await store.resolve(), { value: gatewayValue, source: 'keychain' });
 });
 
-test('a malformed gateway credential is rejected before any write', async () => {
+test('an empty gateway credential is rejected before any write', async () => {
   const atomic = createAtomicGatewayFixture();
   const { credentials } = atomic;
   const store = createGatewayCredentialStore(credentials, atomic.options);
   await assert.rejects(
-    () => store.save({ value: 'not-a-uag-key', ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
+    () => store.save({ value: '', ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' }),
     (error) => error instanceof StoreError && error.code === 'IAM_GATEWAY_KEY_INVALID',
   );
   assert.equal(credentials.refs.size, 0);
   assert.equal(credentials.records.size, 0);
+});
+
+test('a V2.1-format credential saves and can be replaced without an address', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  const first = `uag-sk-u-${'A'.repeat(43)}`;
+  const second = `uag-sk-a-${'B'.repeat(43)}`;
+  await store.save({ value: first, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+  assert.equal(atomic.credentials.refs.get(GATEWAY_REF), first);
+  const replaced = await store.save({ value: second, ownerSubject: 'E1001', enteredAt: '2030-01-02T00:00:00.000Z' });
+  assert.equal(replaced.ok, true);
+  assert.equal(atomic.credentials.refs.get(GATEWAY_REF), second);
+  assert.deepEqual(await store.resolve(), { value: second, source: 'keychain' });
+});
+
+test('a V2.1-format credential clears without tripping the legacy guard', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  await store.save({ value: `uag-sk-u-${'C'.repeat(43)}`, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+  assert.equal((await store.clear()).ok, true);
+  assert.equal(atomic.credentials.refs.has(GATEWAY_REF), false);
+});
+
+test('credential values are opaque: punctuation, spaces and non-ASCII are stored verbatim', async () => {
+  const atomic = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
+  for (const value of ['gpt-4o@2024 key', '凭据-示例', `uag-sk-u-${'Z'.repeat(43)}`]) {
+    await store.save({ value, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+    assert.deepEqual(await store.resolve(), { value, source: 'keychain' });
+  }
 });
 
 test('a gateway credential needs the signed-in subject', async () => {
