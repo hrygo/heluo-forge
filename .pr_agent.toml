@@ -34,6 +34,8 @@ repo_context_files = ["AGENTS.md", "CONTRIBUTING.md"]
 require_tests_review = true
 require_security_review = true
 require_risk_assessment = true
+# Use the structured recommendation when publishing a formal GitHub review.
+require_merge_recommendation = true
 # Update one review comment per PR instead of posting a new comment per run.
 persistent_comment = true
 num_max_findings = 4
