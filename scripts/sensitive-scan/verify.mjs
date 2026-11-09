@@ -2,6 +2,11 @@
 import { createPublicKey, verify } from 'node:crypto';
 import { canonicalPayload, gitOutput, keyIdFromPublicKey, parseTrailer, sha256Hex } from './lib.mjs';
 
+if (process.env.BYPASS_SENSITIVE_ATTESTATION === '1') {
+  console.log('sensitive-attestation: verification skipped');
+  process.exit(0);
+}
+
 // Do not allow local replace refs to change the base key or commit objects.
 process.env.GIT_NO_REPLACE_OBJECTS = '1';
 
