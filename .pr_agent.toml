@@ -28,6 +28,13 @@ response_language = "zh-CN"
 # context, so review findings cite rules the repository already enforces.
 repo_context_files = ["AGENTS.md", "CONTRIBUTING.md"]
 
+[github_action_config]
+# A push reruns the full review, including for merge and bot commits.
+handle_push_trigger = true
+push_commands = ["/review"]
+push_trigger_ignore_bot_commits = false
+push_trigger_ignore_merge_commits = false
+
 [pr_reviewer]
 # The two review axes this repository keeps failing on: behavior changes
 # without tests, and credentials or host paths in committed text.
@@ -38,6 +45,8 @@ require_risk_assessment = true
 require_merge_recommendation = true
 # Update one review comment per PR instead of posting a new comment per run.
 persistent_comment = true
+# Record finding identities and completeness for safe automatic dismissal.
+persistent_finding_state = true
 num_max_findings = 4
 extra_instructions = """
 按仓库 AGENTS.md、CONTRIBUTING.md 与 docs/README.md 的约定评审，重点检查：
