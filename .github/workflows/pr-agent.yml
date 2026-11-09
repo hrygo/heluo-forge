@@ -69,11 +69,16 @@ jobs:
           # Go rejects requests without a session header and asks clients to
           # identify themselves instead of using a generic SDK User-Agent.
           LITELLM__EXTRA_HEADERS: '{"x-opencode-session":"pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}","User-Agent":"pr-agent/0.50.0"}'
-          # Bootstrap default only: a run triggered while `.pr_agent.toml` is not
-          # yet on the base branch would otherwise use PR-Agent's built-in model,
-          # which this gateway does not serve. Once the file is on `main` its
-          # [config] model wins.
+          # Bootstrap mirror of `.pr_agent.toml` [config]: a run triggered while
+          # that file is not yet on the base branch would otherwise fall back to
+          # PR-Agent's built-in model, which this gateway does not serve, and the
+          # model is absent from both PR-Agent's token table and LiteLLM's
+          # metadata, so the token budget must be supplied explicitly or every
+          # tool aborts before it calls the model. Once the file is on `main` its
+          # values win; keep the two in sync when changing either.
           CONFIG__MODEL: "openai/muse-spark-1.3-contributor"
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "120000"
+          CONFIG__MAX_MODEL_TOKENS: "120000"
           # Describe and review on PR open; code suggestions stay on demand
           # (`/improve`) so a review stays a single LLM call.
           github_action_config.auto_describe: "true"
