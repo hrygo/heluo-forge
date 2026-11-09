@@ -17,16 +17,28 @@ export const DEFAULT_MAX_TOKENS = 64000;
 const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
 const CAPACITY_SCALE = { k: 1000, m: 1000000 };
 
-/** Canonical OpenAI-compatible root, validated before storing or sending credentials. */
-export function normalizeGatewayBaseURL(input, _allowInsecureHttp = false) {
+/** Host the local machine reaches without leaving the box. */
+function isLoopbackHost(hostname) {
+  return hostname === 'localhost' || hostname === '::1' || hostname === '[::1]'
+    || /^127(?:\.\d{1,3}){3}$/u.test(hostname);
+}
+
+/**
+ * Validate an OpenAI-compatible root. The path is kept as the operator entered
+ * it: a gateway that serves under `/v1` must be given `/v1`, and nothing is
+ * appended. Plain HTTP is loopback-only until the deployment opts in.
+ */
+export function normalizeGatewayBaseURL(input, allowInsecureHttp = false) {
   let url;
   try { url = new URL(input); } catch { throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。'); }
   if (url.username || url.password || url.search || url.hash
     || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
     throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。');
   }
-  const pathname = url.pathname.replace(/\/+$/u, '');
-  url.pathname = pathname.endsWith('/v1') ? pathname : `${pathname}/v1`;
+  if (url.protocol === 'http:' && allowInsecureHttp !== true && !isLoopbackHost(url.hostname)) {
+    throw new IamError('IAM_GATEWAY_URL_INVALID', '明文 HTTP 仅限本机回环地址，其他地址请使用 HTTPS。');
+  }
+  url.pathname = url.pathname.replace(/\/+$/u, '');
   return url.href.replace(/\/$/u, '');
 }
 

@@ -265,7 +265,7 @@ test('gateway address and an opaque compatible Key commit together and remain Ho
   const key = 'synthetic-compatible-key';
   await f.service.saveGatewayCredential({ key, baseURL: 'https://gateway.corp.example/' });
   const connection = await f.service.resolveGatewayConnection();
-  assert.equal(connection.baseURL, 'https://gateway.corp.example/v1'); assert.equal(connection.key, key);
+  assert.equal(connection.baseURL, 'https://gateway.corp.example'); assert.equal(connection.key, key);
   assert.equal(f.service.getView().gatewayCredential.baseURL, connection.baseURL);
   assert.equal(JSON.stringify(f.service.getView()).includes(key), false);
   const before = f.pair();
