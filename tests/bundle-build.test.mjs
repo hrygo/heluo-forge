@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { buildBundle, buildEnterpriseBundle } from '../scripts/build-enterprise-bundle.mjs';
-import { auditReleaseClosure, auditTarball, npmExecutable } from '../scripts/lib/bundle-rules.mjs';
+import { auditReleaseClosure, auditTarball, execNpm } from '../scripts/lib/bundle-rules.mjs';
 
 // These fixtures test packaging failures only; the real product tarball and
 // real installed Loader are exercised by bundle-install-rehearsal.test.mjs.
@@ -45,7 +45,7 @@ test('build closes workspace dependencies, is reproducible, and installs offline
   assert.deepEqual(auditTarball({ label: 'fixture', manifest: first.manifest, packed: first.packed }), []);
   const project = join(root, 'clean-project');
   put(project, 'package.json', { name: 'clean-fixture', private: true });
-  execFileSync(npmExecutable(), ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=http://127.0.0.1:9', `--cache=${join(root, 'empty-cache')}`, first.tarball], { cwd: project, stdio: 'pipe' });
+  execNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--registry=http://127.0.0.1:9', `--cache=${join(root, 'empty-cache')}`, first.tarball], { cwd: project, stdio: 'pipe' });
   assert.deepEqual(auditReleaseClosure(join(project, 'node_modules/@heluo/forge-enterprise')), []);
   assert.throws(() => buildEnterpriseBundle({ root, destination: join(root, 'one') }), /refusing to replace existing artifact/u);
   assert.deepEqual(readdirSync(join(root, 'one')), ['heluo-forge-enterprise-0.1.0.tgz']);

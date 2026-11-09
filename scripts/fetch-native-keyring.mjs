@@ -26,7 +26,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { npmExecutable } from './lib/bundle-rules.mjs';
+import { execNpm } from './lib/bundle-rules.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = join(repo, 'scripts/native-keyring.json');
@@ -166,7 +166,7 @@ function verifyStaged(targets) {
 
 function packSignedSource(target, workDir) {
   const spec = `${target.source}@${target.version}`;
-  const stdout = execFileSync(npmExecutable(), ['pack', spec, '--json', '--pack-destination', workDir, `--registry=${registry}`], {
+  const stdout = execNpm(['pack', spec, '--json', '--pack-destination', workDir, `--registry=${registry}`], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });

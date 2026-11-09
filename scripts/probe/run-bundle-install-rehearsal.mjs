@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildEnterpriseBundle } from '../build-enterprise-bundle.mjs';
-import { auditReleaseClosure, npmExecutable, parsePatchLayer } from '../lib/bundle-rules.mjs';
+import { auditReleaseClosure, execNpm, parsePatchLayer } from '../lib/bundle-rules.mjs';
 import { resolveDshProbeHost } from '../lib/dsh-probe-runtime.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -44,7 +44,7 @@ const record = (id, ok, detail = {}) => {
 const isolatedEnv = { ...process.env, DSH_HOME: join(dir, 'dsh-home'), npm_config_cache: join(dir, 'npm-cache'), npm_config_userconfig: join(dir, 'empty-npmrc'), npm_config_registry: 'http://127.0.0.1:9' };
 delete isolatedEnv.DSH_PROFILE;
 delete isolatedEnv.DSH_PROFILE_DIR;
-const npm = (args) => execFileSync(npmExecutable(), ['--offline', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], { cwd: project, env: isolatedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const npm = (args) => execNpm(['--offline', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], { cwd: project, env: isolatedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const bundleDir = join(project, 'node_modules', '@heluo', 'forge-enterprise');
 const intact = () => readFileSync(join(project, 'user-file.txt'), 'utf8') === 'user-workspace-marker\n' && readFileSync(join(project, 'user-notes', 'notes.md'), 'utf8') === '# 用户笔记\n';
 const statusAtStart = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
@@ -240,7 +240,7 @@ try {
   const version = spawnSync(dsh, ['--version'], { env: isolatedEnv, encoding: 'utf8' });
   if (version.status !== 0) throw new Error(`DSH unavailable: ${version.error?.message ?? version.stderr}`);
   evidence.env.dshVersion = version.stdout.trim();
-  evidence.env.npmVersion = execFileSync(npmExecutable(), ['--version'], { encoding: 'utf8' }).trim();
+  evidence.env.npmVersion = execNpm(['--version'], { encoding: 'utf8' }).trim();
   evidence.env.sourceHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
   evidence.env.sourceState = 'uncommitted shared implementation; git HEAD is not a release commit';
   evidence.env.targetVersion = readFileSync(join(repo, '.dsh-version'), 'utf8').trim();

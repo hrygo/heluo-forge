@@ -11,7 +11,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildBundle } from './build-enterprise-bundle.mjs';
 
-import { auditTarball, npmExecutable, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditTarball, execNpm, npmLaunch, parsePackOutput } from './lib/bundle-rules.mjs';
 
 const root = resolve(process.argv[2] ?? process.cwd());
 
@@ -35,9 +35,11 @@ for (const group of ['packages', 'services']) {
   }
 }
 
-const npm = npmExecutable();
 const errors = [];
 let packedFiles = 0;
+// Keep the resolved command in failure messages: platform shims and the CLI
+// script differ, and that difference matters when a pack fails on one host.
+const npm = npmLaunch().command;
 for (const target of targets) {
   if (target.manifest === null) {
     errors.push(`bundle: ${target.label}/package.json is not valid JSON`);
@@ -58,7 +60,7 @@ for (const target of targets) {
       if (dirname(artifactDir) === tmpdir() && basename(artifactDir).startsWith('forge-bundle-artifact-')) rmSync(artifactDir, { recursive: true, force: true });
       continue;
     }
-    const output = execFileSync(npm, ['pack', '--dry-run', '--json'], {
+    const output = execNpm(['pack', '--dry-run', '--json'], {
       cwd: target.dir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -68,7 +70,7 @@ for (const target of targets) {
       // Report which npm produced the unparsable output instead of guessing: the
       // shape differs between npm major versions and between "npm not found on
       // PATH" and "npm printed a notice first".
-      const version = execFileSync(npm, ['--version'], {
+      const version = execNpm(['--version'], {
         cwd: target.dir,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],

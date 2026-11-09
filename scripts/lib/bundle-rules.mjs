@@ -5,6 +5,7 @@
 // 归属：AGENTS.md §4（包间用 workspace: 引用、不跨包导入源码路径、先满足设计准入再建清单）
 // 与 docs/design/plugins/forge-enterprise.md §5.3/§11（组合与包体闭包、AC4/AC5）。
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -454,6 +455,37 @@ export function npmExecutable(execPath = process.execPath, exists = existsSync) 
     if (exists(candidate)) return candidate;
   }
   return 'npm';
+}
+
+/**
+ * How to start the npm that belongs to this Node.
+ *
+ * Windows cannot execute `npm.cmd` through execFile without a shell — Node
+ * refuses `.cmd` spawns — and a shell would re-split paths that contain spaces.
+ * Every official Node build ships the CLI script next to the binary, so running
+ * that file with `process.execPath` keeps the same Node and npm version with no
+ * shell in the middle. `npmExecutable` stays the fallback for layouts without it.
+ *
+ * @param {string} [execPath] `process.execPath`
+ * @param {(path: string) => boolean} [exists]
+ * @returns {{command: string, prefix: string[]}}
+ */
+export function npmLaunch(execPath = process.execPath, exists = existsSync) {
+  const dir = dirname(execPath);
+  const candidates = [
+    join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(dir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  for (const candidate of candidates) {
+    if (exists(candidate)) return { command: execPath, prefix: [candidate] };
+  }
+  return { command: npmExecutable(execPath, exists), prefix: [] };
+}
+
+/** Run npm from the Node that runs this check, with npm's own CLI arguments. */
+export function execNpm(args, options = {}) {
+  const { command, prefix } = npmLaunch();
+  return execFileSync(command, [...prefix, ...args], options);
 }
 
 export function parsePackOutput(text) {

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
-import { auditReleaseClosure, auditTarball, npmExecutable, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditReleaseClosure, auditTarball, execNpm, parsePackOutput } from './lib/bundle-rules.mjs';
 import { auditStagedNativeResources, describeNativeFindings, nativeFetchHint } from './lib/native-resources.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -116,7 +116,7 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     if (closureErrors.length > 0) fail(closureErrors.join('; '));
     const packedDir = join(work, 'packed');
     mkdirSync(packedDir);
-    const stdout = execFileSync(npmExecutable(), ['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = execNpm(['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const packed = parsePackOutput(stdout);
     if (packed === null) fail('npm returned no packed file list');
     const errors = auditTarball({ label: manifest.name, manifest, packed });
@@ -157,7 +157,7 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 function readToolchain() {
   let npm = 'unknown';
   try {
-    npm = execFileSync(npmExecutable(), ['--version'], { encoding: 'utf8' }).trim();
+    npm = execNpm(['--version'], { encoding: 'utf8' }).trim();
   } catch {
     npm = 'unknown';
   }
