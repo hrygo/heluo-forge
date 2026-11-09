@@ -40,7 +40,7 @@ test('the native CI policy catches restoring the staged record or skipping stagi
 });
 
 test('the macOS document-backend job does not retain checkout credentials', () => {
-  const job = /  document-backend:\n([\s\S]*?)(?=\n  [a-z][a-z-]+:\n|$)/u.exec(workflow)?.[1] ?? '';
+  const job = /  document-macos-15:\n([\s\S]*?)(?=\n  [a-z][a-z0-9-]+:\n|$)/u.exec(workflow)?.[1] ?? '';
   const checkoutWithoutCredentials = /uses: actions\/checkout@[a-f0-9]+[^\n]*\n\s+with:\n\s+persist-credentials: false/u;
   assert.match(job, checkoutWithoutCredentials);
   assert.doesNotMatch(job.replace('persist-credentials: false', 'persist-credentials: true'), checkoutWithoutCredentials);
