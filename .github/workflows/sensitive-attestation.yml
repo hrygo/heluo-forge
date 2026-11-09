@@ -19,6 +19,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Keeps its historical context name on purpose: `pull_request_target` loads
+  # this workflow from the base branch, so a rename only takes effect after the
+  # rename lands — while branch protection would immediately look for a context
+  # nothing reports. Renaming therefore needs two steps: merge the rename with
+  # this name still required, then switch the required context.
   sensitive-attestation-verify:
     name: sensitive-attestation-verify
     runs-on: ubuntu-24.04

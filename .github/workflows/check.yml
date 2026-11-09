@@ -16,8 +16,13 @@ concurrency:
   # Cancel stale PR runs, but never cancel a main-branch run mid-flight.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Job display names follow one rule: `<subject> (<platform-pair>)`, subject in
+# lowercase words, hyphens only inside the pair. The subject names what the job
+# certifies, not the tool it uses, so the required-check list states its own
+# coverage: `verify (ubuntu-x64)`, `native keychain (win32-arm64)`, ...
 jobs:
   verify:
+    name: verify (ubuntu-x64)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
@@ -167,7 +172,7 @@ jobs:
   # Windows leg is what buys coverage — 8.3 aliases, `icase` pathspecs and
   # backslash normalisation have no POSIX equivalent.
   sensitive-scan:
-    name: sensitive-scan (windows-2022)
+    name: sensitive scan (win32-x64)
     runs-on: windows-2022
     timeout-minutes: 10
     defaults:
@@ -196,7 +201,7 @@ jobs:
   # this test on ubuntu-24.04. The Windows leg is what proves the socket
   # semantics that differ (address-family availability, port reuse, shutdown).
   forge-iam-callback:
-    name: forge-iam callback port (windows-2022)
+    name: iam callback (win32-x64)
     runs-on: windows-2022
     timeout-minutes: 5
     defaults:
