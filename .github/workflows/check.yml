@@ -168,12 +168,18 @@ jobs:
             exit 1
           fi
           node -e "
+            // The refusal can surface at two layers: a missing addon/library
+            // aborts construction (top-level error), while a present library on
+            // a host without a session bus fails the first store operation
+            // (per-step error). Both are fail-closed; neither may be a crash.
             const r = require('./node_modules/.forge-ci/probe-nostore.json');
+            const failed = (r.steps ?? []).filter((s) => s.ok !== true);
+            const allowed = ['KEYCHAIN_UNAVAILABLE', 'KEYCHAIN_OPERATION_FAILED'];
+            const codes = [r.error?.code, ...failed.map((s) => s.error?.code)].filter(Boolean);
             if (r.ok !== false) { console.error('probe did not report a refusal'); process.exit(1); }
-            if (r.environment?.triple !== 'linux-x64-gnu') { console.error('unexpected host', r.environment); process.exit(1); }
-            const code = r.error?.code ?? '';
-            if (!['KEYCHAIN_UNAVAILABLE', 'KEYCHAIN_OPERATION_FAILED'].includes(code)) { console.error('unexpected refusal', JSON.stringify(r.error)); process.exit(1); }
-            console.log('no-store refusal:', code);
+            if (r.environment?.triple !== 'linux-x64-gnu') { console.error('unexpected host', JSON.stringify(r.environment)); process.exit(1); }
+            if (!codes.some((code) => allowed.includes(code))) { console.error('refusal carried no typed code', JSON.stringify(r)); process.exit(1); }
+            console.log('no-store refusal:', codes.join(','), '| failed steps:', failed.map((s) => s.name).join(',') || '(construction)');
           "
       - name: Drive the addon against the OS store
         run: |
