@@ -39,59 +39,12 @@ jobs:
       - name: Check documents, repository and tests
         run: node --run check
 
-  # Real hosts for the native platform-arch pairs. The unit matrix injects the
-  # native module so it can run on one host; this job proves the same read
-  # paths on actual Linux/Windows OS-arch pairs. The ubuntu-24.04 x64 leg is
-  # intentionally absent: `verify` already runs these exact test files on that
-  # host, so repeating it only spends a runner. macOS is verified on the
-  # maintainer's machines (arm64 local/SSH); the encrypted store has no CI
-  # runner dependency.
-  device-matrix:
-    name: credentials compatibility (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64 }
-          - { name: win32-x64, os: windows-2022, platform: win32, arch: x64 }
-          - { name: win32-arm64, os: windows-11-arm, platform: win32, arch: arm64 }
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-          show-progress: false
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-          package-manager-cache: false
-      - name: Link workspace packages
-        run: node scripts/link-workspace.mjs
-      - name: Assert the runner is the expected platform-arch
-        run: >-
-          node -e "const [p,a]=process.argv.slice(1);
-          if (process.platform!==p||process.arch!==a)
-          { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
-          ${{ matrix.platform }} ${{ matrix.arch }}
-      - name: Keychain backends on this host
-        run: node --test packages/forge-credentials-keychain/test/*.test.mjs
-      - name: Read paths on this host
-        run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs
-
-  # Real credential-store acceptance. The offline `verify` job can only judge a
-  # byte-less structural tarball, and `device-matrix` runs the unit suites with
-  # an injected native module — neither ever loads the shipped `keyring.node`.
-  # This job stages the pinned addons on the runner, builds the actual tarball,
-  # installs it offline, and drives the addon through write/read/delete and
-  # cross-process visibility against the OS store. Linux needs a Secret Service
-  # provider (gnome-keyring over a session bus); Windows uses Credential Manager.
+  # One job per platform-arch pair: the platform unit suites first, then the
+  # real addon against the real OS store. One runner per pair instead of two,
+  # and the ordered steps still name the layer that failed. The ubuntu-24.04
+  # x64 pair is carried by `verify`, which runs these exact test files on that
+  # host; macOS has no addon (encrypted-document backend) and is verified on
+  # the maintainer's machines.
   native-keychain:
     name: native keychain (${{ matrix.name }})
     strategy:
@@ -132,6 +85,15 @@ jobs:
       # transport, not a trusted source. The cache is keyed by that lock file and
       # still goes through `--check`, so a poisoned or stale entry is re-fetched
       # instead of trusted — and a cache hit keeps this job offline.
+      # These two suites are the platform half of this job. They run before any
+      # network access, so a registry failure cannot hide the platform signal:
+      # the steps above stay green and the failing step names the cause. They
+      # exercise the injected-module branches (blob limits, unvetted refusal,
+      # mingw paths, socket semantics) that the real-store probe does not reach.
+      - name: Keychain backends on this host
+        run: node --test packages/forge-credentials-keychain/test/*.test.mjs
+      - name: Read paths on this host
+        run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs
       - name: Restore the staged addons
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
