@@ -85,8 +85,16 @@ test('invalid input is refused instead of partially stored', async () => {
   const credentials = new MemoryCredentials();
   const store = createModelSelectionStore(credentials);
   await assert.rejects(store.save({ subject: '', models: {}, defaultModelId: null }), { code: 'IAM_MODEL_SELECTION_INVALID' });
-  await assert.rejects(store.save({ subject: 'person-a', models: { 'bad id!': {} } }), { code: 'IAM_MODEL_SELECTION_INVALID' });
+  await assert.rejects(store.save({ subject: 'person-a', models: { '': {} } }), { code: 'IAM_MODEL_SELECTION_INVALID' });
   assert.equal(credentials.records.has(MODEL_SELECTION_KEY), false);
+});
+
+test('a selection keeps opaque model identifiers', async () => {
+  const credentials = new MemoryCredentials();
+  const store = createModelSelectionStore(credentials);
+  await store.save({ subject: 'person-a', models: { 'gpt-4o@2024-08-06': {}, '模型-1': {} }, defaultModelId: 'gpt-4o@2024-08-06' });
+  const read = await store.read();
+  assert.deepEqual(Object.keys(read.selection.models).sort(), ['gpt-4o@2024-08-06', '模型-1']);
 });
 
 test('unknown override fields are dropped when the selection is stored', async () => {

@@ -166,6 +166,48 @@ test('model-list errors are classified without returning gateway response bodies
   }
 });
 
+test('catalogue identifiers are opaque, not a narrowed charset', async () => {
+  const data = [{ id: 'gpt-4o@2024-08-06' }, { id: '模型-1' }, { id: 'claude-3-5-sonnet+v2' }];
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data })) });
+  try {
+    await f.runtime.ready;
+    const ids = f.runtime.getView().models.map(model => model.id);
+    assert.deepEqual(ids.sort(), data.map(entry => entry.id).sort());
+  } finally {
+    await f.runtime.dispose();
+  }
+});
+
+test('over-limit entries are truncated and counted instead of rejected', async () => {
+  const ids = Array.from({ length: 504 }, (_, index) => `bulk-${String(index).padStart(3, '0')}`);
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: ids.map(id => ({ id })) })) });
+  try {
+    await f.runtime.ready;
+    const view = f.runtime.getView();
+    assert.equal(view.catalogTruncated, 4);
+    assert.deepEqual(view.models.map(model => model.id), ids.slice(0, 500));
+  } finally {
+    await f.runtime.dispose();
+  }
+});
+
+test('the retained subset does not depend on the gateway response order', async () => {
+  const ids = Array.from({ length: 503 }, (_, index) => `model-${String(index).padStart(4, '0')}`);
+  const read = async data => {
+    const f = fixture({ fetch: async () => new Response(JSON.stringify({ data })) });
+    try {
+      await f.runtime.ready;
+      return f.runtime.getView().models.map(model => model.id);
+    } finally {
+      await f.runtime.dispose();
+    }
+  };
+  const ascending = await read(ids.map(id => ({ id })));
+  const descending = await read([...ids].reverse().map(id => ({ id })));
+  assert.deepEqual(descending, ascending);
+  assert.deepEqual(ascending, ids.slice(0, 500));
+});
+
 test('logout aborts a live transport and prevents a late chunk from being delivered', async t => {
   let requestSignal;
   const entered = Promise.withResolvers();

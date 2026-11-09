@@ -7,6 +7,8 @@ import {
   REASONING_EFFORT_LEVELS,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
+  isModelId,
+  MAX_MODEL_ID_LENGTH,
   normalizeGatewayBaseURL,
   validateManagedModels,
   parseCapacity,
@@ -24,6 +26,8 @@ export {
   REASONING_EFFORT_LEVELS,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
+  isModelId,
+  MAX_MODEL_ID_LENGTH,
   normalizeGatewayBaseURL,
   validateManagedModels,
   parseCapacity,
@@ -81,11 +85,13 @@ function normalizeSelection(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const next = {};
   for (const [id, option] of Object.entries(value)) {
-    if (typeof id !== 'string' || id.length === 0) continue;
+    if (!isModelId(id)) continue;
     next[id] = option && typeof option === 'object' && !Array.isArray(option) ? option : {};
   }
   return next;
 }
+
+const CATALOG_ENTRY_LIMIT = 500;
 
 /** Bound discovery: no redirects, ambient credentials, arbitrary error body or stale results. */
 async function discover(connection, signal, fetcher, headers) {
@@ -106,15 +112,23 @@ async function discover(connection, signal, fetcher, headers) {
   } else text = await response.text();
   let body;
   try { body = JSON.parse(text); } catch { throw error('ENTERPRISE_MODEL_CATALOG_INVALID'); }
-  if (!Array.isArray(body?.data) || body.data.length > 500) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
+  if (!Array.isArray(body?.data)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
+  // The cap is a defensive bound, not a validity rule: extra entries are
+  // dropped and reported, while a malformed or duplicate entry still fails the
+  // whole catalogue so a truncated-but-broken list never replaces a good one.
   const seen = new Set();
   const discovered = body.data.map(item => {
-    if (typeof item?.id !== 'string' || !/^[\w./:-]{1,200}$/u.test(item.id) || seen.has(item.id)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
+    if (!isModelId(item?.id) || seen.has(item.id)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
     seen.add(item.id);
     // Standard /models does not promise capacity or modality metadata; use default capacity baselines.
     return { id: item.id, name: item.id, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS, input: ['text'], inputModalities: ['text'] };
   });
-  return discovered.sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true, sensitivity: 'base' }));
+  // Sort before trimming: the retained subset must not depend on the order the
+  // gateway happened to answer in, or an already enabled model could vanish
+  // between refreshes once the catalogue exceeds the defensive bound.
+  const sorted = discovered.sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true, sensitivity: 'base' }));
+  const truncated = Math.max(0, sorted.length - CATALOG_ENTRY_LIMIT);
+  return { models: truncated > 0 ? sorted.slice(0, CATALOG_ENTRY_LIMIT) : sorted, truncated };
 }
 
 
@@ -146,7 +160,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // `modelOptions` doubles as the enabled set: a key means "this person turned
   // this model on", and its value carries the overrides (possibly none). A
   // discovered model without a key is listed but refused for calls.
-  let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null;
+  let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null; let catalogTruncated = 0;
   // A gateway-scoped revocation sticks until the identity, address or stored key
   // changes. Erasing the stored key needs the joint atomic adapter and stays
   // fail-closed (ADR-19); this mark only stops replay.
@@ -325,7 +339,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // header to inference calls. If the gateway ever guards /models with
       // X-IAM-Token too, this is the call site that must grow the same merge.
       const headers = await requestHeaders(); current();
-      const found = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
+      const { models: found, truncated } = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
+      catalogTruncated = truncated;
       await loadSelection(); current();
       rawModels = found;
       // First run for this person: enable one model so the panel is usable
@@ -363,7 +378,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; cancelRetry();
       syncedAt = Date.now(); publish();
       await syncHostDefault(); current();
-      return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })) };
+      return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
     }).catch(cause => {
       // Our own cancellation is not a gateway outage. Telling the person to
       // check the gateway address after we stopped the request ourselves sends
@@ -549,6 +564,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       return {
         managed: true, configured: true,
         state: catalogState, error: catalogError,
+        ...(catalogTruncated > 0 ? { catalogTruncated } : {}),
         // Freshness: `stale` means the list is the last known catalogue and the
         // gateway could not be reached since; `retryAt` is the next automatic
         // attempt (absent when the failure is not retryable).

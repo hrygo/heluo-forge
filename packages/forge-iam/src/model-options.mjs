@@ -13,6 +13,11 @@ export const THINKING_LEVELS = Object.freeze(['off', 'low', 'medium', 'high', 'x
 export const REASONING_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const DEFAULT_CONTEXT_WINDOW = 200000;
 export const DEFAULT_MAX_TOKENS = 64000;
+export const MAX_MODEL_ID_LENGTH = 200;
+
+/** A catalogue identifier is opaque apart from its length; do not narrow the charset. */
+export const isModelId = value => typeof value === 'string'
+  && value.length > 0 && value.length <= MAX_MODEL_ID_LENGTH;
 
 const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
 const CAPACITY_SCALE = { k: 1000, m: 1000000 };
