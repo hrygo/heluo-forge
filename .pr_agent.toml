@@ -1,0 +1,54 @@
+# PR-Agent settings for hrygo/heluo-forge.
+#
+# The GitHub Action loads this file from the pull request's base branch, so a
+# change here applies to new PRs only after it reaches `main`. Only overrides
+# are listed; the full default set lives in
+# pr_agent/settings/configuration.toml of the PR-Agent release pinned in
+# .github/workflows/pr-agent.yml.
+#
+# Model: OpenCode Go (subscription), `muse-spark-1.3-contributor`. The Go
+# gateway requires `x-opencode-session` and a client-identifying User-Agent on
+# every request, and its endpoint is host-only in PR-Agent terms (a repository
+# settings file must not choose where requests go), so the endpoint, key and
+# headers are set in the workflow's env instead.
+
+[config]
+model = "openai/muse-spark-1.3-contributor"
+# Same gateway and key; used only when the primary model rejects or times out.
+fallback_models = ["openai/deepseek-v4.1-flash"]
+# The model is absent from PR-Agent's token table. Both caps are raised past
+# the 32K default: a single PR here (native addon work) reaches ~57K tokens and
+# the default pruned 15 files out of the review. The model accepts 1M context;
+# 120K keeps a whole normal PR in view at roughly $0.02 per review.
+custom_model_max_tokens = 120000
+max_model_tokens = 120000
+# Project documents and PR discussion are written in Chinese.
+response_language = "zh-CN"
+# Read the agent and contributor conventions from the base branch as prompt
+# context, so review findings cite rules the repository already enforces.
+repo_context_files = ["AGENTS.md", "CONTRIBUTING.md"]
+
+[pr_reviewer]
+# The two review axes this repository keeps failing on: behavior changes
+# without tests, and credentials or host paths in committed text.
+require_tests_review = true
+require_security_review = true
+require_risk_assessment = true
+# Update one review comment per PR instead of posting a new comment per run.
+persistent_comment = true
+num_max_findings = 4
+extra_instructions = """
+按仓库 AGENTS.md、CONTRIBUTING.md 与 docs/README.md 的约定评审，重点检查：
+- 文档类改动是否同步 docs/DOCUMENT-REGISTER.md 的登记与正文元数据、版本号、链接与锚点。
+- 工作流与脚本改动：`uses:` 是否固定 40 位提交 SHA，是否声明最小 `permissions`，是否误用 `pull_request_target`，是否在无凭据的 fork 事件上依赖 secrets。
+- 是否引入真实凭据、内网主机地址、本机绝对路径或真实个人数据；示例是否使用 `corp.example` 一类占位值。
+- 新增扩展包是否先有设计登记，清单是否含 `engines.dsh`、`private: true` 与可运行的 `test` 入口。
+- 行为变更是否带正反向测试；检查器规则变更是否附带会失败的样例。
+- 提交说明与文档是否采用终态语态，避免“按用户要求修改”一类过程叙事。
+只报告能定位到文件与行的问题，不复述已通过的检查，不推测未读到的外部环境状态。
+"""
+
+[pr_description]
+# Keep the author's PR body as written and post the generated summary as a
+# comment, so the repository's PR template stays the authoritative record.
+publish_description_as_comment = true
