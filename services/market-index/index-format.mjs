@@ -261,7 +261,7 @@ function versions(value, path, options) {
       seen.add(entry.version);
       return entry;
     })
-    .sort((left, right) => compareSemver(right.version, left.version));
+    .sort((left, right) => compareSemver(left.version, left.version));
 }
 
 function plugin(value, path, index, indexUrl, options) {
