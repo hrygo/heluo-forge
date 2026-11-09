@@ -19,7 +19,9 @@ concurrency:
 # Job display names follow one rule: `<subject> (<platform-pair>)`, subject in
 # lowercase words, hyphens only inside the pair. The subject names what the job
 # certifies, not the tool it uses, so the required-check list states its own
-# coverage: `verify (ubuntu-x64)`, `native keychain (win32-arm64)`, ...
+# coverage: `verify (ubuntu-x64)`, `native keychain (win32-arm64)`, ... When a
+# leg is not the canonical image for its pair, the qualifier appends the image:
+# `native keychain (win32-x64, windows-2025)`.
 jobs:
   verify:
     name: verify (ubuntu-x64)
@@ -60,6 +62,11 @@ jobs:
           - { name: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64, store: secret-service }
           - { name: win32-x64, os: windows-2022, platform: win32, arch: x64, store: credential-manager }
           - { name: win32-arm64, os: windows-11-arm, platform: win32, arch: arm64, store: credential-manager }
+          # Forward compatibility: the qualifier adds the image when a leg is
+          # not the canonical one for its pair. These two are not required
+          # checks — they answer "does the next OS release still work?".
+          - { name: 'linux-x64, ubuntu-26.04', os: ubuntu-26.04, platform: linux, arch: x64, store: secret-service }
+          - { name: 'win32-x64, windows-2025', os: windows-2025, platform: win32, arch: x64, store: credential-manager }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     defaults:
@@ -147,6 +154,27 @@ jobs:
           fi
           echo "FORGE_CI_PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
           node -e "const fs=require('fs'),path=require('path'),crypto=require('crypto');const root=process.argv[1];const rec=JSON.parse(fs.readFileSync(path.join(root,'vendor/CHECKSUMS.json'),'utf8'));for(const [rel,m] of Object.entries(rec.files)){const b=fs.readFileSync(path.join(root,'vendor',rel));const h=crypto.createHash('sha256').update(b).digest('hex');if(h!==m.sha256||b.length!==m.bytes)throw new Error(rel)}console.log('installed addons match the record:',Object.keys(rec.files).length)" "$PACKAGE"
+      # Before the store exists: this runner has no session bus and no libsecret
+      # until the step below installs them, which is the state of an enterprise
+      # host that never had a secret service. The probe must return a typed
+      # refusal, not crash and not fall back to plaintext.
+      - name: Refuse a store that is not there
+        if: matrix.name == 'linux-x64'
+        run: |
+          set -euo pipefail
+          if node scripts/probe/native-keyring-store-probe.mjs --package "$FORGE_CI_PACKAGE" --json > node_modules/.forge-ci/probe-nostore.json; then
+            echo 'expected no secret service on this runner, but the probe succeeded' >&2
+            cat node_modules/.forge-ci/probe-nostore.json >&2
+            exit 1
+          fi
+          node -e "
+            const r = require('./node_modules/.forge-ci/probe-nostore.json');
+            if (r.ok !== false) { console.error('probe did not report a refusal'); process.exit(1); }
+            if (r.environment?.triple !== 'linux-x64-gnu') { console.error('unexpected host', r.environment); process.exit(1); }
+            const code = r.error?.code ?? '';
+            if (!['KEYCHAIN_UNAVAILABLE', 'KEYCHAIN_OPERATION_FAILED'].includes(code)) { console.error('unexpected refusal', JSON.stringify(r.error)); process.exit(1); }
+            console.log('no-store refusal:', code);
+          "
       - name: Drive the addon against the OS store
         run: |
           set -euo pipefail
@@ -160,17 +188,50 @@ jobs:
           fi
           node -e "const r=require('./node_modules/.forge-ci/probe.json'); const steps=r.steps??[]; for(const s of steps) console.log(s.ok?'ok  ':'FAIL', s.name); if(r.ok!==true){console.error(JSON.stringify({stage:r.stage??null,error:r.error??null,failed:steps.filter(s=>s.ok!==true)})); process.exit(1)} console.log('store probe:', steps.length, 'steps ok on', r.environment.platform+'-'+r.environment.arch, 'addon', r.environment.triple)"
 
-  # Local hook and scanner portability. This job is intentionally separate from
-  # the required verify job; make it required only after the matrix is stable.
-  # The matrix keeps only the platforms whose code paths differ: Ubuntu covers
-  # the POSIX branches, Windows covers the win32 branches (8.3 aliases, `icase`
-  # pathspecs, backslash normalisation). macOS ran the same POSIX branches with
-  # the same skips as Ubuntu, so it added no coverage while being the least
-  # reliably provisioned runner.
-  # Windows only: the POSIX branches of these suites already run inside
-  # `verify` on ubuntu-24.04, so the ubuntu leg duplicated it. Keeping the
-  # Windows leg is what buys coverage — 8.3 aliases, `icase` pathspecs and
-  # backslash normalisation have no POSIX equivalent.
+  # macOS has no addon: its production backend is an application-level
+  # encrypted document, so this job drives that backend directly instead of a
+  # native store. Both architectures run because the file backend is the whole
+  # macOS story and the images ship different macOS versions.
+  document-backend:
+    name: document backend (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-15, os: macos-15, platform: darwin, arch: arm64 }
+          - { name: macos-15-intel, os: macos-15-intel, platform: darwin, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: Link workspace packages
+        run: node scripts/link-workspace.mjs
+      - name: Assert the runner is the expected platform-arch
+        run: node -e "const [p,a]=process.argv.slice(1); if (process.platform!==p||process.arch!==a) { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }" ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: Drive the encrypted document backend
+        run: |
+          set -euo pipefail
+          mkdir -p node_modules/.forge-ci
+          node scripts/probe/native-keyring-store-probe.mjs --package packages/forge-credentials-keychain --platform --json > node_modules/.forge-ci/probe-document.json
+          node -e "
+            const r = require('./node_modules/.forge-ci/probe-document.json');
+            for (const s of r.steps ?? []) console.log(s.ok ? 'ok  ' : 'FAIL', s.name);
+            if (r.ok !== true) { console.error(JSON.stringify({ stage: r.stage ?? null, error: r.error ?? null })); process.exit(1); }
+            if (r.environment.triple !== null || r.environment.addon !== null) { console.error('macOS must not resolve an addon', r.environment); process.exit(1); }
+            console.log('document backend:', (r.steps ?? []).length, 'steps ok on', r.environment.platform + '-' + r.environment.arch);
+          "
+  # Local hook and scanner portability. Windows only: the POSIX branches of
+  # these suites already run inside `verify` on ubuntu-24.04, so the ubuntu leg
+  # duplicated it; 8.3 aliases, `icase` pathspecs and backslash normalisation
+  # have no POSIX equivalent. Not required yet — make it required once stable.
   sensitive-scan:
     name: sensitive scan (win32-x64)
     runs-on: windows-2022
@@ -193,10 +254,6 @@ jobs:
       - name: Run portable sensitive-scan tests
         run: node --test tests/sensitive-scan.test.mjs tests/sensitive-scan-team.test.mjs tests/sensitive-scan-full-distribution.test.mjs tests/sensitive-scan-parent-tree.test.mjs tests/sensitive-scan-legacy-install.test.mjs tests/sensitive-scan-managed-upgrade.test.mjs tests/sensitive-scan-windows-paths.test.mjs tests/sensitive-scan-post-rewrite.test.mjs tests/sensitive-scan-server-merge.test.mjs tests/sensitive-scan-pre-push.test.mjs
 
-  # The loopback callback listener is the only code here that depends on socket
-  # semantics, and those differ between POSIX and Windows (address-family
-  # availability, port reuse and shutdown). This job runs just that test file on
-  # Windows; the full suite stays on the required verify job.
   # Windows only, for the same reason as sensitive-scan: `verify` already runs
   # this test on ubuntu-24.04. The Windows leg is what proves the socket
   # semantics that differ (address-family availability, port reuse, shutdown).
