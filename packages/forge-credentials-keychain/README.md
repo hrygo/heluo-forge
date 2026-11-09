@@ -1,6 +1,6 @@
 # @heluo/forge-credentials-keychain
 
-状态：可用（开发骨架）。`@napi-rs/keyring` 2.1.2 的四个预编译 addon（win32-x64、win32-arm64、linux-x64、linux-arm64）随包暂存并按 platform-arch 解析，Windows/UOS/麒麟适配器因此可挂载；macOS 不使用 addon，也不使用系统钥匙串，而是走应用层加密文档后端（AES-256-GCM，密钥 0600），因此不依赖代码签名、不要求图形会话。四个 addon 组合**未在目标机取证**，`unvetted` 全局开关保持关闭；macOS 加密后端已于 2026-11-06 在本机与一台远程 Apple Silicon Mac 的 SSH 会话中分别实测 7/7。本地 0600 明文 file backend 仅显式开发/试点。
+状态：可用（开发骨架）。`@napi-rs/keyring` 2.1.2 的四个预编译 addon（win32-x64、win32-arm64、linux-x64、linux-arm64）在发布前暂存后随包分发（缺失时构建与产物核验均硬失败），运行时按 platform-arch 解析，Windows/UOS/麒麟适配器因此可挂载；macOS 不使用 addon，也不使用系统钥匙串，而是走应用层加密文档后端（AES-256-GCM，密钥 0600），因此不依赖代码签名、不要求图形会话。四个 addon 组合**未在目标机取证**，`unvetted` 全局开关保持关闭；macOS 加密后端已于 2026-11-06 在本机与一台远程 Apple Silicon Mac 的 SSH 会话中分别实测 7/7。本地 0600 明文 file backend 仅显式开发/试点。
 
 一句话：`ctx.credentials` 的 keychain provider。提供 backend 契约、内存/不可用/显式 0600 file backend、macOS 加密文档后端、记录/引用读写与进程内单键锁；Windows 凭据管理器与麒麟/UOS Secret Service 由 `vendor/` 下的预编译 addon 接入，macOS 由应用层加密文档接入，四组 addon 待目标机取证。
 
@@ -33,7 +33,7 @@
 - 该样机的枚举默认不可用：`listRecords()` 报 `KEYCHAIN_LIST_UNSUPPORTED`，而不是返回空表；只有显式 `allowUnverifiedEnumeration: true` 才使用 `findCredentials`，且各平台的过滤/编码差异仍未核验。没有它，IAM 拿不到 `listRecords`，写路径仍应保持关闭。
 - 实测（2026-10-24，darwin-arm64）：未命中条目退出码 44；`add-generic-password -U` 覆盖同名条目；删除幂等；spike 过程无明文文件、测试条目已清理。复跑：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过）。
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
-- 生产必须使用 Windows 凭据管理器、麒麟/UOS Secret Service 或 macOS 加密文档的审核实现；file backend 与 macOS `security` CLI spike 都不是生产方案。四组合 addon 已随包分发，但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。macOS 加密后端不经过该开关。
+- 生产必须使用 Windows 凭据管理器、麒麟/UOS Secret Service 或 macOS 加密文档的审核实现；file backend 与 macOS `security` CLI spike 都不是生产方案。四组合 addon 由发布前暂存随包分发，构建期前置（记录必须列在 `files` 内且逐条满足）与产物期字节校验都按 `CHECKSUMS.json` 硬失败；但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。macOS 加密后端不经过该开关。
 
 ## macOS 存储边界
 
@@ -119,13 +119,21 @@ node scripts/fetch-native-keyring.mjs            # 四个目标
 node scripts/fetch-native-keyring.mjs --check    # 校验 CHECKSUMS.json 与文件一致
 ```
 
-`vendor/CHECKSUMS.json` 记录每个 addon 的 sha256、字节数、来源包与版本；下载的 tarball 与清单
-integrity 不一致时立即中止且不写入任何文件。`--check` 不只比对哈希：它还按 triple 校验对象头
-（PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64），清单里钉错架构会被拒绝。细节见 `vendor/README.md`。
+`vendor/CHECKSUMS.json` 记录每个 addon 的 sha256、字节数、来源包与版本，也是"发布必须带哪些文件"的
+唯一真源：企业包构建在打包前按它逐条校验暂存目录（缺文件、字节数或 sha256 不符即非零退出、不产制品），
+`verify-enterprise-bundle` 在产物一侧再按归档字节复核同一份记录。下载的 tarball 与清单 integrity
+不一致时立即中止且不写入任何文件。`--check` 不只比对哈希：它还按 triple 校验对象头
+（PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64）与记录中的 `version`/`license`/`source`/`integrity`，
+清单里钉错架构或与锁文件漂移都会被拒绝。细节见 `vendor/README.md`。
+
+干净检出没有 addon 字节，`--check` 跑不了，所以另有一条**只用文档**的一致性检查常驻 CI：提交的
+`vendor/CHECKSUMS.json` 必须与 `scripts/native-keyring.json` 在 triple 集合、`source`、`integrity`、
+`version`、`license` 上完全一致。手改记录、或只升级了锁文件却忘了重新暂存，会在普通 `pnpm check` 上直接红，
+不再等到发布机。
 
 ## 开发/试点覆盖层（非生产）
 
-企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序落到 `resolvePlatformBackend()`：`win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64` 解析到随包的预编译 addon，`darwin-arm64`、`darwin-x64` 解析到 macOS 加密文档后端，其余组合返回不可用 backend。四个 addon 组合未实机取证，按 `unvetted` 处理，挂载需 `allowUnvettedPlatformAdapter: true`，否则 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；未映射平台抛 `KEYCHAIN_UNAVAILABLE`。两者都是预期的 fail closed，不是某个平台的兼容缺陷。
+企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序落到 `resolvePlatformBackend()`：`win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64` 解析到随包的预编译 addon（随包由构建期前置保证），`darwin-arm64`、`darwin-x64` 解析到 macOS 加密文档后端，其余组合返回不可用 backend。四个 addon 组合未实机取证，按 `unvetted` 处理，挂载需 `allowUnvettedPlatformAdapter: true`，否则 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；未映射平台抛 `KEYCHAIN_UNAVAILABLE`。两者都是预期的 fail closed，不是某个平台的兼容缺陷。
 
 开发/试点需要可用凭据时，在 profile 上再叠一层补丁，显式启用文件后端：
 
