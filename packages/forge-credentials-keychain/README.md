@@ -133,7 +133,7 @@ node scripts/fetch-native-keyring.mjs --check    # 校验 CHECKSUMS.json 与文�
 
 ## 开发/试点覆盖层（非生产）
 
-企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序落到 `resolvePlatformBackend()`：`win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64` 解析到随包的预编译 addon（随包由构建期前置保证），`darwin-arm64`、`darwin-x64` 解析到 macOS 加密文档后端，其余组合返回不可用 backend。四个 addon 组合未实机取证，按 `unvetted` 处理，挂载需 `allowUnvettedPlatformAdapter: true`，否则 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；未映射平台抛 `KEYCHAIN_UNAVAILABLE`。两者都是预期的 fail closed，不是某个平台的兼容缺陷。
+企业组合只挂本包，并已禁用官方 `credentials` 行。企业默认补丁不给该行任何 `config`，选择顺序落到 `resolvePlatformBackend()`：`win32-x64`、`win32-arm64`、`linux-x64`、`linux-arm64` 解析到随包的预编译 addon（随包由构建期前置保证），`darwin-arm64`、`darwin-x64` 解析到 macOS 加密文档后端，其余组合返回不可用 backend。四个 addon 组合已在 CI 的四个真机 runner（`native-keychain` 作业）上完成写/读/改/删/跨进程验收（Windows 凭据管理器、Linux Secret Service），但目标机与桌面发行版仍未取证，故仍按 `unvetted` 处理，挂载需 `allowUnvettedPlatformAdapter: true`，否则 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；未映射平台抛 `KEYCHAIN_UNAVAILABLE`。两者都是预期的 fail closed，不是某个平台的兼容缺陷。
 
 开发/试点需要可用凭据时，在 profile 上再叠一层补丁，显式启用文件后端：
 

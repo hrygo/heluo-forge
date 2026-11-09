@@ -177,7 +177,7 @@ node --test tests/bundle-native.test.mjs
 |---|---|---|
 | R1 | 干净快照 `node scripts/build-enterprise-bundle.mjs <out>` | `exit 1`，一行汇总 `4 recorded file(s) missing: …` 与 `4 addon license(s) missing: …`，并给出 `fetch-native-keyring.mjs`；`<out>` 未被创建 |
 | R2 | 对旧坏产物（`128 files`、`bd8367…`）执行 `verify-enterprise-bundle` | `exit 1`，一条汇总 `vendor/CHECKSUMS.json: 4 recorded file(s) missing …; 4 addon license(s) missing …` |
-| R2 | 暂存后构建并核验 | `136 files`、`12031149` 字节、`sha256 029adc…e2c2`（仅含本次改动的树）；并入 `main` 39477b5 后为 `140 files`、`12230299` 字节、`sha256 3acd59…e165`；两次均 `bundle: ok`，归档内 `vendor/` 10 条、`keyring.node` 4 个 |
+| R2 | 暂存后构建并核验 | `136 files`、`12031149` 字节、`sha256 029adc…e2c2`（仅含本次改动的树）；并入 `main` 39477b5 后为 `140 files`、`12230489` 字节、`sha256 86b5bc…42f7`；两次均 `bundle: ok`，归档内 `vendor/` 10 条、`keyring.node` 4 个 |
 | R4 | 干净快照 `check-bundle-tarballs` | `bundles: 7 packed, 313 files`、`bundles: ok`（结构化模式，保持离线；`305` 为 rebase 到 main 之前的树） |
 | R3 | `node --test tests/bundle-native.test.mjs` | 19 通过、0 失败 |
 | R3 | 变异：`auditNativeRecords` 直接返回空 | 8 条用例转红（判定确实生效） |
@@ -193,8 +193,9 @@ node --test tests/bundle-native.test.mjs
 | R6 | 审查发现：记录路径可含 `..`、消息重复八次、夹具三份拷贝 | 路径按段拒绝、消息按包汇总（干净检出 1 行）、夹具收敛到 `tests/fixtures/release-tree.mjs` |
 | R7 | 干净检出补门禁：记录 ↔ 锁文件一致性 | `tests/native-records.test.mjs` 7 通过；短路该判定后 5 条转红 |
 | R7 | 打包 E2E：映射 ↔ 产物路径闭合 | `bundle-native` 20 通过（新增一条按 `nativeTargetFor` 反推四组路径） |
-| R7 | `verify:bundle --json` | 真实产物输出 `140 files` / `12230299` / `3acd59…e165`、退出码 0；篡改产物输出 `ok:false` 与首错、退出码 1 |
-| R8 | CI 一直只验结构：`verify` 无 addon 字节，`device-matrix` 注入原生模块，两者都不加载 `keyring.node` | 新增 `native-keychain` 作业：四个真机 runner 上暂存、构建、离线安装并跑存储探针，输出 `ok`/六步明细；macOS 文档后端不在其中（无 addon） |
+| R7 | `verify:bundle --json` | 真实产物输出 `140 files` / `12230489` / `86b5bc…42f7`、退出码 0；篡改产物输出 `ok:false` 与首错、退出码 1 |
+| R8 | CI 一直只验结构：`verify` 无 addon 字节，`device-matrix` 注入原生模块，两者都不加载 `keyring.node` | 新增 `native-keychain` 作业，2026-11-09 四个 runner 全绿：linux-x64/linux-arm64 构建出 `140 files` / `12230489` / `86b5bc…42f7`（与本机逐字节相同），安装后 addon 与记录一致；win32-x64/win32-arm64 打包凭据包后安装，四个 addon 一致。四者均 `store probe: 6 steps ok`（read-absent、write-read、overwrite-read、cross-process-read、delete、delete-idempotent），真实 triple 为 `linux-x64-gnu`、`linux-arm64-gnu`、`win32-x64-msvc`、`win32-arm64-msvc` |
+| R8 | 该作业第一次跑出了三个平台缺陷 | ①`npm.cmd` 不能经 `execFile` 启动（Node 命令注入修复）→ 改为用 `process.execPath` 跑 npm CLI 脚本；②GNU tar 把 `C:\...` 当远端主机 → 改用 `readBundleEntries` 内存解包；③release 闭包要求 bin 带 `+x`，Windows 检出无法表达 → 企业 tarball 仍只在 POSIX 产出，Windows 腿改测凭据包 |
 | 复盘 | 首次 PR CI `verify` 失败 | 四条既有用例以“在干净检出里成功构建真实仓库”为前提，正是被本次判据否定的事实：两条 CLI 用例改用 fixture 工作区（新增 CLI `--root`），安装排练探针改为显式结构化构建并记录 `nativeResources: absent` |
 
 未被本机实测覆盖、仍需目标机证据的部分：Windows/麒麟/UOS 上 addon 的实际加载与读写（需要 `allowUnvettedPlatformAdapter: true` 的试点覆盖层与 Visual C++ 运行库），以及 #182 要求的失效、跨进程与重启后保留取证。

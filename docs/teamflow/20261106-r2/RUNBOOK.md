@@ -169,9 +169,9 @@
   ```text
   -rw-r--r--  ...  186     ... SHA256SUMS
   -rw-r--r--  ...  29403   ... bundle-manifest.json
-  -rw-r--r--  ...  4849013 ... heluo-forge-enterprise-0.1.0.tgz
-  3acd599016d185319b2183ba41b1f83508e98ebf1fd396a28493291d0a9fe165  heluo-forge-enterprise-0.1.0.tgz
-  086994fc05e45591a4e0d4251243b5ebbf65daf0b3ba9c02123e93a76f7c344d  bundle-manifest.json
+  -rw-r--r--  ...  4849086 ... heluo-forge-enterprise-0.1.0.tgz
+  86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7  heluo-forge-enterprise-0.1.0.tgz
+  5c251873fa9b0f66e6cee25fc72e9425da0a8b57c25cd747f1b47d1f4aa6df1d  bundle-manifest.json
   ```
 - **退出码**：`0`。
 - **失败分支**：缺任一文件 → `FAIL`，停止本段（不得用 `verify:bundle` 无 manifest 模式冒充完整核验，也不得自行生成 sidecar 后宣称通过）。
@@ -205,7 +205,7 @@
   ```
 - **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，退出码 `0`；数值为本机示例，判据是与同目录 `SHA256SUMS` 自洽）：
   ```text
-  bundle: heluo-forge-enterprise-0.1.0.tgz | 140 files | 12230299 bytes | sha256 3acd599016d185319b2183ba41b1f83508e98ebf1fd396a28493291d0a9fe165
+  bundle: heluo-forge-enterprise-0.1.0.tgz | 140 files | 12230489 bytes | sha256 86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7
   bundle: manifest ok (formatVersion 1, 6 packages)
   bundle: ok
   ```
@@ -226,7 +226,7 @@
   ```
 - **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，退出码 `0`）：
   ```text
-  bundle: heluo-forge-enterprise-0.1.0.tgz | 140 files | 12230299 bytes | sha256 3acd599016d185319b2183ba41b1f83508e98ebf1fd396a28493291d0a9fe165
+  bundle: heluo-forge-enterprise-0.1.0.tgz | 140 files | 12230489 bytes | sha256 86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7
   bundle: manifest not provided; structure rules only
   bundle: ok
   ```
@@ -301,7 +301,7 @@
 - **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，`<outdir>-a` = `artifacts/release-a`，退出码 `0`，已按 S2.0 暂存；测得于 `main` 39477b5；数值为本机示例）：
   ```text
   "files": 140,
-  "sha256": "3acd599016d185319b2183ba41b1f83508e98ebf1fd396a28493291d0a9fe165",
+  "sha256": "86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7",
   "manifest": "<workspace>/artifacts/release-a/bundle-manifest.json",
   "sums": "<workspace>/artifacts/release-a/SHA256SUMS"
   ```
