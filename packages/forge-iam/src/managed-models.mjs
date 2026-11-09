@@ -140,6 +140,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
   }
   const provider = config.defaultProvider;
+  // The host asks for the key on every call; resolving the IAM token at the
+  // same point keeps both factors from one session snapshot.
+  const resolveIamToken = typeof iam.getAccessToken === 'function' ? () => iam.getAccessToken() : undefined;
   // `modelOptions` doubles as the enabled set: a key means "this person turned
   // this model on", and its value carries the overrides (possibly none). A
   // discovered model without a key is listed but refused for calls.
@@ -318,6 +321,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // A revoked credential must not reach the gateway again; the mark clears
       // only when the identity, address or stored key changes.
       if (revokedCredential) throw error('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+      // Discovery stays single-factor on purpose: the contract scopes the dual
+      // header to inference calls. If the gateway ever guards /models with
+      // X-IAM-Token too, this is the call site that must grow the same merge.
       const headers = await requestHeaders(); current();
       const found = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
       await loadSelection(); current();
@@ -344,7 +350,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       }
       models = applyModelOptions(rawModels, modelOptions);
       const resolved = await createAdapter({
-        host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveKey: async () => {
+        host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveIamToken, resolveKey: async () => {
           const before = sample();
           const requestVersion = version;
           if (disposed || permit(before)) throw error('IAM_MODEL_CONTEXT_CHANGED');
@@ -503,6 +509,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         const resolved = await createAdapter({
           host,
           config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
+          resolveIamToken,
           resolveKey: async () => {
             const next = await iam.resolveGatewayConnection();
             if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
@@ -576,7 +583,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
 }
 
 /** Host-supplied SDK only: an unavailable public import closes this capability. */
-export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
+export async function createNativeGatewayAdapter({ host, config, resolveKey, resolveIamToken }) {
   const load = specifier => host.loader.import(specifier);
   const [{ PiAiAdapter }, { openAICompletionsApi }] = await Promise.all([
     load('@deepseek-ai/dsh-llm-pi-ai'), load('@earendil-works/pi-ai/api/openai-completions.lazy'),
@@ -610,10 +617,28 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
       configuredMaxTokens.set(m.id, m.maxTokens);
     }
   }
+  // pi-ai reads `options.headers` synchronously while building a request, so an
+  // async token lookup inside `stream` would arrive after the headers are
+  // consumed. The host asks for the key on every call, which gives exactly one
+  // resolution per request; the token resolved there is reused by the headers
+  // below. A parallel call may therefore see the newer token, which is still
+  // valid: rotation never invalidates the previous token while it is unexpired.
+  let iamToken = null;
+  const resolveApiKey = async (...args) => {
+    const key = await resolveKey(...args);
+    if (typeof resolveIamToken === 'function') iamToken = await resolveIamToken();
+    return key;
+  };
+  const withIamHeaders = (options) => {
+    if (typeof iamToken !== 'string' || iamToken.length === 0) return options;
+    return { ...options, headers: { ...(options?.headers ?? {}), 'X-IAM-Token': iamToken, 'X-Consumer-Type': 'personal' } };
+  };
   const piProvider = {
     id: provider, name: '企业模型', baseUrl: baseURL,
     auth: { apiKey: { name: '企业个人访问凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
-    getModels: () => catalog, stream: (...args) => protocol.stream(...args), streamSimple: (...args) => protocol.streamSimple(...args)
+    getModels: () => catalog,
+    stream: (model, context, options) => protocol.stream(model, context, withIamHeaders(options)),
+    streamSimple: (model, context, options) => protocol.streamSimple(model, context, withIamHeaders(options))
   };
   // The gateway keeps the socket alive with `: ping` comments every 15s, but the
   // host watchdog counts parsed events and a comment never becomes one: only the
@@ -627,7 +652,7 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
   }]]);
   // This provider accepts only the per-request IAM-resolved key, never ambient OAuth or env credentials.
   return new PiAiAdapter({
-    profiles: () => profiles, resolveApiKey: resolveKey,
+    profiles: () => profiles, resolveApiKey,
     auth: {
       credentials: {
         read: async () => undefined,

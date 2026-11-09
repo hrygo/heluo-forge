@@ -98,7 +98,8 @@ export function createServiceGateway(env) {
 
   async function resolveConnection() {
     // Refresh and validate the current grant through the existing authoritative path.
-    // V1 sends only the personal Key to UAG; the IAM token never leaves this method.
+    // This returns only the personal Key; the IAM token has its own per-request
+    // resolver and never passes through this return value.
     await resolveToken();
     const epoch = getAuthEpoch();
     const targetStore = provider.require();
