@@ -197,14 +197,16 @@ test('卸载：路由与工具一起撤干净', async () => {
  * 落盘凭据自检用真的 `detectPersistentToken()`（`process.env` + 默认读文件），
  * 所以这里给它一个临时 `GH_CONFIG_DIR`，而不是改探针——探针被改过，测的就不是装配现场了。
  */
-function withPersistentTokenFile(callback) {
+async function withPersistentTokenFile(callback) {
   const dir = mkdtempSync(join(tmpdir(), 'forge-gitee-cred-'));
   // 用明显的占位值：真令牌样例会被仓库的凭据扫描拦下，而探针只判「有没有值」。
   writeFileSync(join(dir, 'hosts.yml'), 'hosts:\n  gitee.com:\n    oauth_token: fixture-placeholder\n');
   const previous = process.env.GH_CONFIG_DIR;
   process.env.GH_CONFIG_DIR = dir;
   try {
-    return callback();
+    // 回调是 async：必须 await，否则 finally 会在回调体真正跑起来前就还原环境、
+    // 删掉临时 hosts.yml，测试变成在 CI 干净环境里"没有落盘令牌"的假绿。
+    return await callback();
   } finally {
     if (previous === undefined) delete process.env.GH_CONFIG_DIR;
     else process.env.GH_CONFIG_DIR = previous;
