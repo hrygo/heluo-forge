@@ -60,7 +60,7 @@ import { createGiteeGitAdapter } from './gitee-git.mjs';
 import { GITEE_PLATFORM, createGiteeGuard } from './gitee-guard.mjs';
 import { GITEE_READ_ACTIONS, normalizeGiteeReadResult } from './gitee-read.mjs';
 import { createGiteeSession } from './gitee-session.mjs';
-import { createGiteeSnapshotReader } from './gitee-snapshot.mjs';
+import { SNAPSHOT_REASONS, createGiteeSnapshotReader } from './gitee-snapshot.mjs';
 import { GITEE_TOOLS, GITEE_WRITE_TOOLS, buildGiteeTools } from './gitee-tools.mjs';
 import {
   ConfigStandard,
@@ -329,6 +329,32 @@ function createService({ ctx, policy, current, session, access, routeOf, refresh
     return faces;
   }
 
+  /**
+   * 代码版本快照（只读，PR #215 复审 P1）：runner 必须取**当前**读面——`buildFaces()` 每次
+   * 重建都会换一份，装配期缓存一份会让保存后的快照仍走旧配置；读面被降级时如实报不可用，
+   * 不去猜目录、也不拿旧读面凑版本。
+   */
+  async function snapshot(directory) {
+    const unavailable = Object.freeze({
+      status: 'failed',
+      reason: SNAPSHOT_REASONS.NO_WORKSPACE,
+      message: 'Gitee 读面不可用：不生成代码版本',
+      next: '到「设置 → Gitee」确认配置可用后重试。',
+      observedAt: Date.now(),
+    });
+    let face;
+    try {
+      face = live();
+    } catch {
+      return unavailable;
+    }
+    try {
+      return await createGiteeSnapshotReader({ runner: face.runner }).read(directory);
+    } catch {
+      return unavailable;
+    }
+  }
+
   async function read(request = {}) {
     if (status !== 'ready') {
       throw denialError(GITEE_REASONS.STATUS_DISPOSED, 'gitee 服务已卸载，不再执行只读查询');
@@ -402,6 +428,8 @@ function createService({ ctx, policy, current, session, access, routeOf, refresh
     },
     preflight: () => live().adapter.preflight(),
     read,
+    // 工具层只拿 `snapshot(cwd)`；容器（runner）由服务自己按当前读面取，永不外泄。
+    snapshot: (directory) => snapshot(directory),
     execute,
     write: execute,
     invoke: (command, params, purpose) => live().adapter.invoke(command, params, purpose),
@@ -505,15 +533,6 @@ export function apply(ctx, rawConfig = {}) {
     return typeof dir === 'string' && dir.trim() !== '' ? dir : undefined;
   };
   const session = createGiteeSession();
-  // 快照读取器与 git 适配器共用同一个出口（`runner.runGit`）：本模块不自己起子进程，
-  // 也不接受外部注入的目录。装配失败不阻断整个插件——工具层会返回 failed 而不是编版本。
-  let snapshotReader;
-  try {
-    snapshotReader = createGiteeSnapshotReader({ runner });
-  } catch {
-    snapshotReader = undefined;
-  }
-
   // 路由状态必须在 service 之前声明：`configStatus()` 经闭包读它，而路由要到 provide 之后才挂。
   let routeState = 'no-webserver';
 
