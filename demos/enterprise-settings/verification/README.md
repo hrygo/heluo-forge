@@ -20,6 +20,16 @@
 4. **公共配置仍需正式闭环**：预置参数与个人覆盖分层、校验/保存/应用/检查分别呈现；复用插件真实配置读写，保留未知配置。Demo 的维护视角不是真实管理权限，不能直接上线。
 5. **Mock 注入只用于临时副本**：默认生产装配的原子存储/安全准入门禁不因本次演示解除。真实 IAM、Keychain、企业 CLI 与双端验证仍未执行。
 
+## 补注：禁用插件与网关访问（2026-11-09）
+
+把通用插件行标成 `disabled: true` 容易被误读成“网关访问被关闭”。下列语义以当前装配与宿主行为为准。
+
+1. **`llm-pi-ai` 的 `disabled: true` 只关闭实例与提供方路由**：它不卸载 `@deepseek-ai/dsh-llm-pi-ai` 包，也不阻断网络。IAM 受管模型仍由宿主加载该包的 `PiAiAdapter`（`packages/forge-iam/src/managed-models.mjs:604` 动态 `load`），包缺失时受管模型不可用。`ui-settings-models` 关闭的是通用模型配置入口，不是模型运行时。
+2. **OpenAI 兼容网关经 IAM 受管网关路径接入**：本地 CLIProxyAPI 等兼容网关可在 IAM 侧登记，但原通用模型配置入口不再可用；仍需 IAM 登录、可信凭据存储、网关凭证与模型启用四项条件同时成立。
+3. **本验证补丁不是开箱可对话证据**：`iam-review.patch.yml` 的 IAM 行 `config: {}` 为空，凭据来自隔离内存 provider，不能证明默认组合可登录、可对话或可联通生产。默认组合的登录与刷新仍受原子存储信任门禁约束：`packages/forge-iam/src/index.mjs:56-74` 的生产装配未传 `verifyAtomicStore`，`packages/forge-iam/src/service-store.mjs:83-96` 的 `atomicVerified`/`assertAtomic` 因此拒绝写入并抛 `IAM_ATOMIC_STORE_UNVERIFIED`；网关 Key 联合写入另有 `IAM_GATEWAY_ATOMIC_UNVERIFIED`（`packages/forge-iam/src/store.mjs:341`）。
+4. **模拟探针只证明装配可跑**：`scripts/probe/run-iam-managed-models-probe.mjs` 在未挂通用插件行的宿主上通过模型目录与一轮对话，用的是已安装包的 `PiAiAdapter` 与 Mock IAM/网关；它不等于完整 profile，也不等于真实 CLIProxyAPI 或企业网关联调通过。
+5. **令牌流向按主线核对**：`main` 的推理请求会向所配置网关发送 `X-IAM-Token`（与 `X-Consumer-Type: personal` 一起由 `packages/forge-iam/src/managed-models.mjs:650` 注入）。本分支已线性重放到 `6b092b0` 之上，头部实现与主线一致；本地联调仍使用 Mock IAM，真实企业网关的令牌校验与失败分支未验证。
+
 ## 资产取舍
 
 后续统一使用协作者维护的 UAT 脚本。此目录的 `iam-review.patch.yml` 和 `scripts/probe/iam-review-memory-credentials.mjs` 是排查旧版本问题的临时装配，仅用来复现未配置/安全拒绝；不作为推荐部署或生产组合，不需要安装到日常 profile。原 Demo 保持独立的虚构数据交互演示，本轮没有将其改为生产认证 UI。

@@ -1,4 +1,10 @@
 # Isolated local verification only. No production endpoints or credentials.
+#
+# `disabled: true` below closes DSH plugin instances and their provider routes;
+# it neither uninstalls `@deepseek-ai/dsh-llm-pi-ai` nor blocks network access.
+# IAM managed models still load that package's PiAiAdapter at runtime, and an
+# empty `config: {}` plus isolated memory credentials is not evidence of a
+# production-ready login. See README.md「补注：禁用插件与网关访问」.
 # Invoke with a fresh, explicitly isolated DSH_HOME and the shipped web profile.
 - id: deepseek-account
   disabled: true
