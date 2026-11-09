@@ -22,10 +22,11 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { execNpm } from './lib/bundle-rules.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -188,16 +189,18 @@ function stageTarget(target) {
   const work = mkdtempSync(join(tmpdir(), 'forge-native-keyring-'));
   try {
     const { tarball } = packSignedSource(target, work);
-    const extracted = join(work, 'unpack');
-    mkdirSync(extracted, { recursive: true });
-    execFileSync('tar', ['-xzf', tarball, '-C', extracted]);
-    const addonSource = join(extracted, 'package', target.addon);
-    if (!existsSync(addonSource)) fail(`${target.source}: tarball does not contain ${target.addon}`);
+    // Unpack with the repository's own ustar reader: GNU tar treats `C:\...` as
+    // a remote host, so shelling out to `tar` fails on Windows while this path
+    // works on every host and leaves no temp directory to clean up.
+    const entries = new Map(readBundleEntries(tarball, { withContent: true }).map((entry) => [entry.path, entry.content]));
+    // readBundleEntries normalises npm's `package/` prefix away.
+    const addonBytes = entries.get(target.addon);
+    if (addonBytes === undefined) fail(`${target.source}: tarball does not contain ${target.addon}`);
     const addonTarget = join(nativeRoot, target.triple, 'keyring.node');
     mkdirSync(dirname(addonTarget), { recursive: true });
-    copyFileSync(addonSource, addonTarget);
-    const licenseSource = join(extracted, 'package', 'LICENSE.third-party.md');
-    if (existsSync(licenseSource)) copyFileSync(licenseSource, join(nativeRoot, target.triple, 'LICENSE.third-party.md'));
+    writeFileSync(addonTarget, addonBytes);
+    const licenseBytes = entries.get('LICENSE.third-party.md');
+    if (licenseBytes !== undefined) writeFileSync(join(nativeRoot, target.triple, 'LICENSE.third-party.md'), licenseBytes);
     const bytes = readFileSync(addonTarget);
     return { relative: `${target.triple}/keyring.node`, sha256: sha256(bytes), bytes: bytes.length, source: target.source, version: target.version, license: target.license, integrity: target.integrity };
   } finally {
