@@ -2412,9 +2412,18 @@ window.__ModuleLoader__.load({
         const stateClass = s.done ? 'done' : (s.warn ? 'warn' : (s.active ? 'active' : 'idle'));
         children.push(h('div', {
           key: s.title,
+          // 步骤是入口，不是装饰：纯键盘用户也要能打开对应的卡片，所以给它按钮语义、
+          // 停在 Tab 顺序里，并接受 Enter/空格（PR #215 复审 P2）。
+          role: 'button',
+          tabIndex: 0,
           className: `fiam-journey-step fiam-journey-step-${stateClass}`,
           style: { cursor: 'pointer' },
           onClick: () => {
+            if (typeof onNavigateStep === 'function') onNavigateStep(s.targetId);
+          },
+          onKeyDown: (event) => {
+            if (event?.key !== 'Enter' && event?.key !== ' ' && event?.key !== 'Spacebar') return;
+            event.preventDefault?.();
             if (typeof onNavigateStep === 'function') onNavigateStep(s.targetId);
           },
         },
@@ -3581,17 +3590,19 @@ window.__ModuleLoader__.load({
         actions: { ...catalogue.actions, refresh: form.refresh },
       });
 
-      // 折叠开关只在「确实可以收起」时出现：已登录、或正有用例要看的回执时不提供它。
-      const personalFold = sessionUi.ready || credentialFeedback
+      // 收起/展开入口在未登录时必须一直在：回执可见时卡片会临时展开，但入口不能跟着消失，
+      // 否则纯键盘用户就没有可操作的对象去拿回模型卡（PR #215 复审 P2）。
+      const foldLabel = revealPersonal ? '收起个人设置' : (personalShown ? '查看模型设置' : '登录后可配置');
+      const personalFold = sessionUi.ready
         ? null
         : h('button', {
           type: 'button',
           className: 'fiam-personal-fold',
           style: { ...button, width: '100%', justifyContent: 'space-between' },
-          'aria-expanded': revealPersonal,
+          'aria-expanded': personalShown,
           onClick: () => setRevealPersonal((current) => !current),
         },
-          revealPersonal ? '收起个人设置' : '登录后可配置',
+          foldLabel,
         );
 
       const diagnosticFold = h('details', { className: 'fiam-details fiam-diagnostic' },

@@ -51,11 +51,60 @@ test('保存凭据途中会话过期：失败回执仍留在可见区，不需�
   await saving;
   await new Promise(setImmediate);
 
-  const seen = unfolded(panel.render());
-  assert.match(seen, /暂时无法安全地保存或清除凭证，请联系管理员。/,
+  let tree = panel.render();
+  assert.match(unfolded(tree), /暂时无法安全地保存或清除凭证，请联系管理员。/,
     '保存失败的回执必须在可见区；藏在折叠里等于没提示');
-  assert.equal(panel.findButton(panel.render(), '登录后可配置'), undefined,
-    '回执可见时不该再让用户去展开折叠');
+
+  // 回执可见时不能把展开/收起入口一起拿掉：那是键盘用户唯一的操作对象。
+  const toggle = panel.findButton(tree, '查看模型设置');
+  assert.ok(toggle, '回执可见时仍需保留可操作的展开入口');
+  assert.equal(toggle.props['aria-expanded'], true, '回执让凭据卡临时展开，入口要如实反映');
+
+  toggle.props.onClick();
+  tree = panel.render();
+  assert.equal(panel.findButton(tree, '收起个人设置').props['aria-expanded'], true);
+  assert.match(panel.text(tree), /企业模型设置/, '展开后模型卡必须挂载');
+
+  panel.findButton(tree, '收起个人设置').props.onClick();
+  tree = panel.render();
+  assert.equal(panel.findButton(tree, '查看模型设置').props['aria-expanded'], true,
+    '再收起时凭据卡仍因回执可见，入口回到「查看模型设置」');
+  assert.doesNotMatch(panel.text(tree), /企业模型设置/, '收起后模型卡不挂载');
+});
+
+test('回执可见时步骤条可用键盘打开模型卡', async (t) => {
+  let resolvePut;
+  let view = ready;
+  const panel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/view') return Response.json(view);
+    if (path === '/api/forge-iam/credential') {
+      return new Promise((resolve) => {
+        resolvePut = () => resolve(Response.json({ error: { code: 'IAM_GATEWAY_ATOMIC_UNVERIFIED' } }, { status: 503 }));
+      });
+    }
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => panel.close());
+
+  const input = () => walk(panel.render()).find((node) => node.props['aria-label'] === '个人访问凭证');
+  input().props.onChange({ target: { value: 'synthetic-ui-key' } });
+  const saving = panel.findButton(panel.render(), '保存凭据').props.onClick();
+  await new Promise(setImmediate);
+  view = expired;
+  await panel.findButton(panel.render(), '刷新').props.onClick();
+  resolvePut();
+  await saving;
+  await new Promise(setImmediate);
+
+  const step = walk(panel.render()).find((node) =>
+    String(node.props?.className ?? '').includes('fiam-journey-step') && flat(node).includes('模型'));
+  assert.ok(step, 'missing the 模型 journey step');
+  assert.equal(step.props.role, 'button', '步骤要暴露按钮语义');
+  assert.equal(step.props.tabIndex, 0, '步骤要停在 Tab 顺序里');
+  step.props.onKeyDown({ key: 'Enter', preventDefault() {} });
+  const tree = panel.render();
+  assert.match(panel.text(tree), /企业模型设置/, '按 Enter 应打开模型卡，而不是什么都不发生');
+  assert.ok(panel.findButton(tree, '收起个人设置'));
 });
 
 test('回执看过之后仍可折叠：不把「操作进行中」当成永久展开', async (t) => {
