@@ -134,7 +134,12 @@ jobs:
           set -euo pipefail
           node scripts/fetch-native-keyring.mjs
           node scripts/fetch-native-keyring.mjs --check
+      # The release closure requires POSIX mode bits on bin entry points, which a
+      # Windows checkout cannot carry; the enterprise tarball is produced on
+      # macOS/Linux only. Windows still proves the addon bytes by packing the
+      # credentials package itself and installing that tarball below.
       - name: Build the release artifact and verify its bytes
+        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           mkdir -p node_modules/.forge-ci
@@ -143,18 +148,30 @@ jobs:
           node scripts/verify-enterprise-bundle.mjs node_modules/.forge-ci/bundle/*.tgz \
             --manifest node_modules/.forge-ci/bundle/bundle-manifest.json --json > node_modules/.forge-ci/verify.json
           node -e "const v=require('./node_modules/.forge-ci/verify.json'); if(v.ok!==true){console.error(v.errors.join('\n')); process.exit(1)} console.log('artifact:', v.files, 'files,', v.bytes, 'bytes,', v.sha256)"
+      - name: Pack the credentials package
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          mkdir -p node_modules/.forge-ci/bundle
+          rm -f node_modules/.forge-ci/bundle/*.tgz
+          node --input-type=module -e "import { execNpm } from './scripts/lib/bundle-rules.mjs'; execNpm(['pack', './packages/forge-credentials-keychain', '--ignore-scripts', '--pack-destination', 'node_modules/.forge-ci/bundle'], { stdio: 'inherit' });"
       - name: Install the artifact offline
         run: |
           set -euo pipefail
           rm -rf node_modules/.forge-ci/install
           mkdir -p node_modules/.forge-ci/install
-          npm install --offline --ignore-scripts --no-audit --no-fund --prefix node_modules/.forge-ci/install node_modules/.forge-ci/bundle/*.tgz
-          PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-credentials-keychain
+          node --input-type=module -e "import { execNpm } from './scripts/lib/bundle-rules.mjs'; execNpm(['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', 'node_modules/.forge-ci/install', ...process.argv.slice(1)], { stdio: 'inherit' });" node_modules/.forge-ci/bundle/*.tgz
+          if [ -d node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise ]; then
+            PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-credentials-keychain
+          else
+            PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-credentials-keychain
+          fi
+          echo "FORGE_CI_PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
           node -e "const fs=require('fs'),path=require('path'),crypto=require('crypto');const root=process.argv[1];const rec=JSON.parse(fs.readFileSync(path.join(root,'vendor/CHECKSUMS.json'),'utf8'));for(const [rel,m] of Object.entries(rec.files)){const b=fs.readFileSync(path.join(root,'vendor',rel));const h=crypto.createHash('sha256').update(b).digest('hex');if(h!==m.sha256||b.length!==m.bytes)throw new Error(rel)}console.log('installed addons match the record:',Object.keys(rec.files).length)" "$PACKAGE"
       - name: Drive the addon against the OS store
         run: |
           set -euo pipefail
-          PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-credentials-keychain
+          PACKAGE="$FORGE_CI_PACKAGE"
           if [ "${{ matrix.store }}" = "secret-service" ]; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq gnome-keyring libsecret-1-0 dbus-x11
