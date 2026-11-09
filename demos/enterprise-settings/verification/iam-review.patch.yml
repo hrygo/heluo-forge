@@ -1,0 +1,26 @@
+# Isolated local verification only. No production endpoints or credentials.
+# Invoke with a fresh, explicitly isolated DSH_HOME and the shipped web profile.
+- id: deepseek-account
+  disabled: true
+- id: ui-settings-account
+  disabled: true
+- id: llm-deepseek-account
+  disabled: true
+- id: llm-deepseek
+  disabled: true
+- id: llm-pi-ai
+  disabled: true
+- id: ui-settings-models
+  disabled: true
+- id: credentials
+  disabled: true
+- insert:
+    - id: review-memory-credentials
+      name: '../../../scripts/probe/iam-review-memory-credentials.mjs'
+    - id: review-heluo-iam
+      name: '../../../packages/forge-iam/src/index.mjs'
+      inject:
+        - connection
+      config: {}
+    - id: review-enterprise-settings-demo
+      name: '../index.js'

@@ -1,0 +1,4 @@
+- insert:
+    - id: heluo-enterprise-settings-demo
+      name: '@local/heluo-enterprise-settings-demo'
+      config: {}
