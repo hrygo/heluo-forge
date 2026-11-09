@@ -146,11 +146,11 @@ test('tarball checker consumes a built umbrella rather than its unresolved sourc
 test('build CLI emits the final artifact and refuses replacing it', (t) => {
   const root = fixture(t);
   const builder = fileURLToPath(new URL('../scripts/build-enterprise-bundle.mjs', import.meta.url));
-  const output = execFileSync(process.execPath, [builder, join(root, 'cli-release')], { encoding: 'utf8' });
+  const output = execFileSync(process.execPath, [builder, '--root', root, join(root, 'cli-release')], { encoding: 'utf8' });
   const result = JSON.parse(output);
   assert.ok(existsSync(result.tarball));
   assert.ok(!Object.hasOwn(result.members, '@heluo/forge-sdd'));
-  assert.throws(() => execFileSync(process.execPath, [builder, join(root, 'cli-release')], { stdio: 'pipe' }), (error) => error.status === 1 && /refusing to replace/u.test(error.stderr));
+  assert.throws(() => execFileSync(process.execPath, [builder, '--root', root, join(root, 'cli-release')], { stdio: 'pipe' }), (error) => error.status === 1 && /refusing to replace/u.test(error.stderr));
 });
 
 test('packed closure rejects omitted payloads and unclosed dependencies including peers/kernel', () => {

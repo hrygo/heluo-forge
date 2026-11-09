@@ -11,14 +11,21 @@ import { buildEnterpriseBundle } from '../scripts/build-enterprise-bundle.mjs';
 import { readBundleEntries, summarizeBundle } from '../scripts/lib/bundle-archive.mjs';
 import { createBundleManifest, diffBundleManifest, parseBundleManifest, serializeBundleManifest, serializeSha256Sums } from '../scripts/lib/bundle-manifest.mjs';
 import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
+import { createReleaseTree, ENTRY } from './fixtures/release-tree.mjs';
 
 const builder = fileURLToPath(new URL('../scripts/build-enterprise-bundle.mjs', import.meta.url));
 const verifier = fileURLToPath(new URL('../scripts/verify-enterprise-bundle.mjs', import.meta.url));
-const ENTRY = '@heluo/forge-enterprise';
 const TARBALL_NAME = 'heluo-forge-enterprise-0.1.0.tgz';
 
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const json = (value) => `${JSON.stringify(value)}\n`;
+/**
+ * The CLI tests used to build the real workspace. A clean checkout must now
+ * refuse that (issue #216), so they build a staged fixture instead and keep
+ * asserting the sidecar/refusal contract through the same entry point. The real
+ * six-package closure is still packed and audited by `check-bundle-tarballs`.
+ */
+const releaseTree = (t) => createReleaseTree(t, { triples: ['linux-x64-gnu'] });
 
 // Minimal ustar writer: the real artifact cannot be byte-patched without
 // rebuilding the whole archive, so negative cases use synthetic single-point
@@ -99,10 +106,12 @@ function runCli(script, args) {
   }
 }
 
-test('real enterprise bundle: build sidecar, verify, and refuse to overwrite', (t) => {
+test('staged release tree: build sidecar, verify, and refuse to overwrite', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'forge-verify-real-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const built = runCli(builder, [dir]);
+  const tree = releaseTree(t);
+  const build = (destination) => runCli(builder, ['--root', tree.root, destination]);
+  const built = build(dir);
   assert.equal(built.status, 0, built.stderr);
   const result = JSON.parse(built.stdout);
   assert.ok(Number.isInteger(result.files) && result.files > 0);
@@ -119,7 +128,7 @@ test('real enterprise bundle: build sidecar, verify, and refuse to overwrite', (
   assert.deepEqual(verdict.errors, []);
   assert.equal(verdict.summary.fileCount, result.files);
   assert.equal(verdict.manifest.files.length, result.files);
-  assert.equal(verdict.summary.memberCount, 6);
+  assert.equal(verdict.summary.memberCount, 2);
   assert.equal(verdict.summary.entryName, ENTRY);
   assert.equal(verdict.summary.sha256, digest(readFileSync(result.tarball)));
   assert.equal(verdict.manifest.formatVersion, 1);
@@ -129,12 +138,12 @@ test('real enterprise bundle: build sidecar, verify, and refuse to overwrite', (
   const lines = cli.stdout.trimEnd().split('\n');
   assert.equal(lines.length, 3);
   assert.equal(lines[0], `bundle: heluo-forge-enterprise-0.1.0.tgz | ${result.files} files | ${verdict.summary.totalBytes} bytes | sha256 ${verdict.summary.sha256}`);
-  assert.equal(lines[1], 'bundle: manifest ok (formatVersion 1, 6 packages)');
+  assert.equal(lines[1], 'bundle: manifest ok (formatVersion 1, 2 packages)');
   assert.equal(lines[2], 'bundle: ok');
 
   // Second build into the same directory: refused, and the first sidecar is untouched.
   const manifestBefore = readFileSync(result.manifest, 'utf8');
-  const again = runCli(builder, [dir]);
+  const again = build(dir);
   assert.equal(again.status, 1);
   assert.match(again.stderr, /refusing to replace existing artifact/u);
   assert.equal(readFileSync(result.manifest, 'utf8'), manifestBefore);
@@ -145,10 +154,11 @@ test('real enterprise bundle: build sidecar, verify, and refuse to overwrite', (
 test('a sidecar failure rolls the tarball back and leaves no partial artifact', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'forge-verify-rollback-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const tree = releaseTree(t);
   // A leftover SHA256SUMS makes the second sidecar write fail after the first
   // one already landed; the build must not leave either of them behind.
   writeFileSync(join(dir, 'SHA256SUMS'), 'preserved\n');
-  const built = runCli(builder, [dir]);
+  const built = runCli(builder, ['--root', tree.root, dir]);
   assert.equal(built.status, 1);
   assert.match(built.stderr, /refusing to replace existing artifact SHA256SUMS/u);
   assert.deepEqual(readdirSync(dir), ['SHA256SUMS']);
@@ -291,4 +301,33 @@ test('verifier CLI uses exit codes 0/1/2 as documented', (t) => {
   const lines = failed.stdout.trimEnd().split('\n');
   assert.match(lines.at(-1), /^bundle: failed with \d+ error\(s\); first: package\/README\.md: (sha256|size) mismatch/u);
   assert.ok(!/\n\s+at /u.test(failed.stdout), 'no stack traces on the CLI surface');
+});
+
+test('the verifier CLI emits one machine-readable verdict with --json', (t) => {
+  const fixture = artifact(t);
+  const okRun = runCli(verifier, [fixture.tarballPath, '--json']);
+  assert.equal(okRun.status, 0);
+  const verdict = JSON.parse(okRun.stdout);
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.tarball, 'heluo-forge-enterprise-0.1.0.tgz');
+  assert.ok(verdict.files > 0 && verdict.bytes > 0);
+  assert.match(verdict.sha256, /^[0-9a-f]{64}$/u);
+  assert.equal(verdict.entry.name, ENTRY);
+  assert.deepEqual(verdict.errors, []);
+  assert.equal(verdict.members['@heluo/forge-member'], '0.1.0');
+  assert.equal(verdict.members['@heluo/forge-enterprise'], '0.1.0');
+
+  // A failing artifact still gives a parseable verdict and exit 1, because the
+  // release script must be able to branch on the verdict, not on message text.
+  writeFileSync(fixture.tarballPath, tarStream(fixture.files.map((file) => (file.name === 'package/README.md' ? { ...file, body: '# tampered\n' } : file))));
+  const failedRun = runCli(verifier, [fixture.tarballPath, '--json']);
+  assert.equal(failedRun.status, 1);
+  const failedVerdict = JSON.parse(failedRun.stdout);
+  assert.equal(failedVerdict.ok, false);
+  assert.ok(failedVerdict.errors.length > 0);
+  assert.match(failedVerdict.errors[0], /package\/README\.md: (sha256|size) mismatch/u);
+
+  // Usage errors stay exit 2 and stay on the text surface.
+  assert.equal(runCli(verifier, ['--json']).status, 2);
+  assert.equal(runCli(verifier, [fixture.tarballPath, '--json', fixture.tarballPath]).status, 2);
 });

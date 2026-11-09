@@ -46,7 +46,12 @@ for (const target of targets) {
   let packed;
   try {
     if (Object.keys(target.manifest.dependencies ?? {}).length > 0) {
-      const result = buildBundle({ root, entry: target.manifest.name });
+      // Structural mode: this checker must stay offline and must not require the
+      // staged native addons (issue #216). The release path enforces them in
+      // build-enterprise-bundle.mjs and verify-enterprise-bundle.mjs; the
+      // "missing addon must fail the release build" rule is covered by
+      // tests/bundle-native.test.mjs.
+      const result = buildBundle({ root, entry: target.manifest.name, requireNativeResources: false });
       packedFiles += result.packed.length;
       errors.push(...auditTarball({ label: target.label, manifest: result.manifest, packed: result.packed }));
       const artifactDir = dirname(result.tarball);

@@ -12,10 +12,11 @@ import { basename, dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readBundleEntries, summarizeBundle } from './lib/bundle-archive.mjs';
 import { createBundleManifest, diffBundleManifest, parseBundleManifest } from './lib/bundle-manifest.mjs';
+import { auditPackagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS } from './lib/native-resources.mjs';
 
 const MANIFEST_FILE = 'bundle-manifest.json';
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
-const USAGE = 'usage: node scripts/verify-enterprise-bundle.mjs <tarball> [--manifest <json>]';
+const USAGE = 'usage: node scripts/verify-enterprise-bundle.mjs <tarball> [--manifest <json>] [--json]';
 
 const shown = (path) => `package/${path}`;
 const stripPrefix = (message, prefix) => String(message).replace(new RegExp(`^${prefix}`, 'u'), '');
@@ -61,6 +62,26 @@ function inspectBundle(entries) {
   }
   for (const entry of entries) {
     if (/(?:^|\/)(?:test|tests)\//u.test(entry.path) || /\.test\.[cm]?js$/u.test(entry.path)) errors.push(`${shown(entry.path)}: must not ship tests`);
+  }
+  // Issue #216: a package that records native resources must ship them. This is
+  // the only check that can reject an artifact built elsewhere, because it reads
+  // nothing but the archive bytes.
+  for (const entry of entries) {
+    if (!entry.path.endsWith(NATIVE_CHECKSUMS)) continue;
+    const vendorPrefix = entry.path.slice(0, entry.path.length - 'CHECKSUMS.json'.length);
+    const label = shown(entry.path);
+    try {
+      const findings = auditPackagedNativeResources({
+        label,
+        content: entry.content,
+        read: (relative) => files.get(`${vendorPrefix}${relative}`)?.content,
+      });
+      if (findings.length > 0) errors.push(`${label}: ${describeNativeFindings(findings)}`);
+    } catch (error) {
+      // A defective record is an artifact verdict, not a usage error: keep the
+      // "inspectBundle returns error lines" invariant so the CLI exits 1.
+      errors.push(`${label}: ${String(error.message).replace(/^native resources: /u, '').replace(`${label}: `, '')}`);
+    }
   }
   for (const { dir, label, pkg } of manifests) {
     if (pkg === null) continue;
@@ -152,18 +173,21 @@ function parseArguments(argv) {
   const args = [...argv];
   let tarball;
   let manifestPath;
+  let json = false;
   while (args.length > 0) {
     const arg = args.shift();
     if (arg === '--manifest') {
       manifestPath = args.shift();
       if (manifestPath === undefined || manifestPath === '') return null;
+    } else if (arg === '--json') {
+      json = true;
     } else if (arg.startsWith('--') || tarball !== undefined) {
       return null;
     } else {
       tarball = arg;
     }
   }
-  return tarball === undefined || tarball === '' ? null : { tarball, manifestPath };
+  return tarball === undefined || tarball === '' ? null : { tarball, manifestPath, json };
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -175,16 +199,33 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
     try {
       const result = verifyBundle(parsed.tarball, parsed.manifestPath === undefined ? {} : { manifestPath: parsed.manifestPath });
       const { summary } = result;
-      console.log(`bundle: ${basename(resolve(parsed.tarball))} | ${summary.fileCount} files | ${summary.totalBytes} bytes | sha256 ${summary.sha256}`);
-      if (result.manifest !== null) console.log(`bundle: manifest ok (formatVersion ${result.manifest.formatVersion}, ${Object.keys(result.manifest.members).length} packages)`);
-      else if (result.errors.some((error) => error.startsWith(`${MANIFEST_FILE}:`))) console.log('bundle: manifest invalid');
-      else console.log('bundle: manifest not provided; structure rules only');
-      if (result.ok) {
-        console.log('bundle: ok');
+      if (parsed.json) {
+        // One machine-readable verdict for release scripts and evidence capture;
+        // the exit code keeps the same 0/1/2 meaning as the text surface.
+        console.log(JSON.stringify({
+          ok: result.ok,
+          tarball: basename(resolve(parsed.tarball)),
+          files: summary.fileCount,
+          bytes: summary.totalBytes,
+          sha256: summary.sha256,
+          entry: { name: summary.entryName, version: summary.entryVersion },
+          members: result.manifest === null ? null : result.manifest.members,
+          toolchain: result.manifest === null ? null : result.manifest.toolchain,
+          errors: result.errors,
+        }, null, 2));
+        if (!result.ok) process.exitCode = 1;
       } else {
-        for (const error of result.errors) console.log(`bundle: ${error}`);
-        console.log(`bundle: failed with ${result.errors.length} error(s); first: ${result.errors[0]}`);
-        process.exitCode = 1;
+        console.log(`bundle: ${basename(resolve(parsed.tarball))} | ${summary.fileCount} files | ${summary.totalBytes} bytes | sha256 ${summary.sha256}`);
+        if (result.manifest !== null) console.log(`bundle: manifest ok (formatVersion ${result.manifest.formatVersion}, ${Object.keys(result.manifest.members).length} packages)`);
+        else if (result.errors.some((error) => error.startsWith(`${MANIFEST_FILE}:`))) console.log('bundle: manifest invalid');
+        else console.log('bundle: manifest not provided; structure rules only');
+        if (result.ok) {
+          console.log('bundle: ok');
+        } else {
+          for (const error of result.errors) console.log(`bundle: ${error}`);
+          console.log(`bundle: failed with ${result.errors.length} error(s); first: ${result.errors[0]}`);
+          process.exitCode = 1;
+        }
       }
     } catch (error) {
       // Unreadable tarball / manifest is a usage problem (exit 2), not a verdict.
