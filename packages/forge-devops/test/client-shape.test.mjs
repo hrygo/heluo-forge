@@ -1158,7 +1158,8 @@ test('DESIGN §6：回执一句话覆盖四种保存态，不出现「应用」�
   // ② 已生效 / ③ 未生效 / ④ 响应无 applied = 未知。
   const cases = [
     [{ ok: true }, 'receipt.saved', undefined],
-    [{ ok: false, reason: 'CLI_CONFIG_INVALID' }, 'receipt.notApplied', { reason: 'CLI_CONFIG_INVALID' }],
+    [{ ok: false, reason: 'CLI_CONFIG_INVALID' }, 'receipt.notApplied', { reason: 'receipt.reason.configInvalid' }],
+    [{ ok: false, reason: 'CLI_REBUILD_FAILED' }, 'receipt.notApplied', { reason: 'receipt.reason.rebuildFailed' }],
     [undefined, 'receipt.appliedUnknown', undefined],
   ];
   for (const [applied, key, params] of cases) {
@@ -1172,7 +1173,9 @@ test('DESIGN §6：回执一句话覆盖四种保存态，不出现「应用」�
       await page.change(page.inputWithValue(PATH_DOP), PATH_NEW);
       await page.blur(page.inputWithValue(PATH_NEW));
       await page.click(page.byClass('fdv-primary')[0]);
-      assert.ok(page.text().includes(tZh(key, params)), `回执应显示「${tZh(key, params)}」`);
+      const shown = tZh(key, params ? { reason: tZh(params.reason) } : undefined);
+      assert.ok(page.text().includes(shown), `回执应显示「${shown}」`);
+      assert.ok(!/CLI_[A-Z_]+/u.test(page.text()), '回执不得把原因码直接印给用户');
       assert.equal(page.byClass('fdv-primary').length, 1, '回执区只有一个主按钮（保存）');
     } finally {
       stub.restore();
@@ -1267,4 +1270,14 @@ test('DESIGN §6：检查 = 一次只读重扫（?refresh=1），全程不发写
   } finally {
     stub.restore();
   }
+});
+
+test('超时行说清单位：按毫秒填，默认值示例与提示一致', () => {
+  // 回归：输入框只写「20 秒（默认）」，实际要填毫秒，填 30 被判非法。
+  const zh = tZh('field.timeoutMs');
+  assert.match(zh, /毫秒/u, `字段名要带单位：${zh}`);
+  assert.match(tZh('field.timeoutMs.hint'), /20000/u, '提示要给出毫秒示例');
+  assert.match(tZh('field.timeoutMs.default'), /^20000/u, `默认值示例要用毫秒：${tZh('field.timeoutMs.default')}`);
+  assert.match(en['field.timeoutMs'], /ms/u);
+  assert.match(en['field.timeoutMs.default'], /^20000/u);
 });

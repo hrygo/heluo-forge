@@ -685,3 +685,11 @@ test('本机覆盖取服务端投影 layers.override：仅继承层命中不误�
     `投影不可用时空数组不能被读成「无本机覆盖」：${unavailable.rowDetail('tools')}`,
   );
 });
+
+test('成员行用词齐全：屏上不出现 readiness. 原样键（本机覆盖曾被漏掉）', async (t) => {
+  // 回归：成员行键名改过一次，当时只改了键名、没补字典，屏上直接印出 readiness.row.device。
+  const page = await mount(t, { responses: [...three(), ok(devopsSnapshot())] });
+  const rendered = [page.text(), page.rowDetail('identity'), page.rowDetail('tools')].join('\n');
+  assert.ok(!/readiness\.[A-Za-z]/u.test(rendered), `屏上出现未翻译的键：${rendered.match(/readiness\.[A-Za-z.]+/u)}`);
+  assert.ok(page.rowDetail('tools').includes('本机覆盖'), page.rowDetail('tools'));
+});

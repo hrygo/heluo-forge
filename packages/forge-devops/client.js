@@ -344,10 +344,10 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': '覆盖环境变量',
       'candidates.summary': '另有 {n} 个候选',
       'candidates.current': '当前生效',
-      'field.timeoutMs': '命令超时',
-      'field.timeoutMs.hint': '命令超过这个时间就判失败',
-      'field.timeoutMs.default': '20 秒（默认）',
-      'field.timeoutMs.seconds': '{seconds} 秒',
+      'field.timeoutMs': '命令超时（毫秒）',
+      'field.timeoutMs.hint': '命令超过这个时间就判失败；按毫秒填，20 秒就是 20000',
+      'field.timeoutMs.default': '20000（20 秒，默认）',
+      'field.timeoutMs.seconds': '{ms}（{seconds} 秒）',
       'field.timeoutMs.millis': '{ms} 毫秒',
       'error.notFound': '找不到这个文件',
       'error.pathLength': '路径太长（上限 4096 个字符），请确认没有粘进整段日志',
@@ -367,6 +367,9 @@ window.__ModuleLoader__.load({
       'receipt.unsaved': '未保存',
       'receipt.saved': '已保存 · 已生效',
       'receipt.notApplied': '已保存 · 未生效（{reason}）',
+      'receipt.reason.rebuildFailed': '命令面未按新配置重建，请检查企业端点与命令行入口',
+      'receipt.reason.configInvalid': '配置不合法，请检查填写的值',
+      'receipt.reason.unknown': '原因未知',
       'receipt.unverified': '已保存 · 生效状态未知（{reason}）',
       'receipt.reason.apply-unverified': '宿主已注入流程/读取器，无法确认新配置已生效',
       'receipt.cleared': '已保存 · 已清除（本机暂无可用命令行入口）',
@@ -378,6 +381,7 @@ window.__ModuleLoader__.load({
       'readiness.title': '企业研发',
       'readiness.row.identity': '身份与 Key',
       'readiness.row.tools': '本机工具',
+      'readiness.row.device': '本机覆盖',
       'readiness.row.key': '网关 Key',
       'readiness.row.devops': 'DevOps',
       'readiness.row.gitee': 'Gitee',
@@ -525,10 +529,10 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': 'overrides environment',
       'candidates.summary': '{n} more candidate',
       'candidates.current': 'active',
-      'field.timeoutMs': 'Command timeout',
-      'field.timeoutMs.hint': 'A command fails when it runs longer than this',
-      'field.timeoutMs.default': '20 s (default)',
-      'field.timeoutMs.seconds': '{seconds} s',
+      'field.timeoutMs': 'Command timeout (ms)',
+      'field.timeoutMs.hint': 'A command fails after this long. Milliseconds: 20 s = 20000',
+      'field.timeoutMs.default': '20000 (20 s, default)',
+      'field.timeoutMs.seconds': '{ms} ({seconds} s)',
       'field.timeoutMs.millis': '{ms} ms',
       'error.notFound': 'That file does not exist',
       'error.pathLength': 'Path is too long (4096 chars max); check you did not paste a log block',
@@ -549,6 +553,9 @@ window.__ModuleLoader__.load({
       'receipt.unsaved': 'unsaved',
       'receipt.saved': 'saved · in effect',
       'receipt.notApplied': 'saved · not in effect ({reason})',
+      'receipt.reason.rebuildFailed': 'the command face was not rebuilt from the new configuration; check the endpoint and CLI entry',
+      'receipt.reason.configInvalid': 'the configuration is invalid; check the values you entered',
+      'receipt.reason.unknown': 'unknown reason',
       'receipt.unverified': 'saved · effect unknown ({reason})',
       'receipt.reason.apply-unverified': 'host-provided flow/reader; cannot confirm the new configuration is in effect',
       'receipt.cleared': 'saved · cleared (no CLI entry available on this host)',
@@ -559,6 +566,7 @@ window.__ModuleLoader__.load({
       'readiness.title': 'Enterprise R&D',
       'readiness.row.identity': 'Identity & Key',
       'readiness.row.tools': 'Local tools',
+      'readiness.row.device': 'Local override',
       'readiness.row.key': 'Gateway key',
       'readiness.row.devops': 'DevOps',
       'readiness.row.gitee': 'Gitee',
@@ -1998,7 +2006,7 @@ window.__ModuleLoader__.load({
         if (!Number.isFinite(value) || value <= 0) return t('field.timeoutMs.default');
         if (originOf(field) !== 'config' && value === 20000) return t('field.timeoutMs.default');
         return value % 1000 === 0
-          ? t('field.timeoutMs.seconds', { seconds: value / 1000 })
+          ? t('field.timeoutMs.seconds', { ms: value, seconds: value / 1000 })
           : t('field.timeoutMs.millis', { ms: value });
       }
 
@@ -2090,7 +2098,13 @@ window.__ModuleLoader__.load({
         if (applied.reason === 'CLI_APPLY_UNVERIFIED') {
           return t('receipt.unverified', { reason: t('receipt.reason.apply-unverified') });
         }
-        return t('receipt.notApplied', { reason: applied.reason ?? t('receipt.appliedUnknown') });
+        // 原因码只给排查用，不上屏：页面只说人能看懂的那部分。
+        const plain = applied.reason === 'CLI_REBUILD_FAILED'
+          ? t('receipt.reason.rebuildFailed')
+          : applied.reason === 'CLI_CONFIG_INVALID'
+            ? t('receipt.reason.configInvalid')
+            : t('receipt.reason.unknown');
+        return t('receipt.notApplied', { reason: plain });
       })();
 
       children.push(
