@@ -31,8 +31,8 @@
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-007 | 企业插件市场（轻量原生索引模式） | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V2.2.3 | 评审稿 | 平台组（代拟） | G1 索引接入；G2 三目标安装 |
 | CORP-DSH-DESIGN-008 | SDD 兼容与退役设计 | [design/plugins/forge-sdd.md](<design/plugins/forge-sdd.md>) | V0.7.0 | 已废止 | 平台组（代拟） | 已退役：包删除，企业依赖与 bin 移除；无在库交付 |
-| CORP-DSH-DESIGN-009 | DevOps 接入详细设计 | [design/plugins/forge-devops.md](<design/plugins/forge-devops.md>) | V0.6.0 | 草案 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.4.1 | 草案 | 平台组（代拟） | G1 |
+| CORP-DSH-DESIGN-009 | DevOps 接入详细设计 | [design/plugins/forge-devops.md](<design/plugins/forge-devops.md>) | V0.7.0 | 草案 | 平台组（代拟） | G1 |
+| CORP-DSH-DESIGN-010 | Gitee 接入详细设计 | [design/plugins/forge-gitee.md](<design/plugins/forge-gitee.md>) | V0.5.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-011 | DevOps MCP 服务详细设计 | [design/services/devops-mcp.md](<design/services/devops-mcp.md>) | V0.1.3 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-012 | 插件索引契约（format-1 / AIHUB 交付） | [design/services/market-index.md](<design/services/market-index.md>) | V2.0.1 | 评审稿 | 平台组（代拟） | G1 索引契约；G2 三目标安装 |
 | CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.4.2 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
