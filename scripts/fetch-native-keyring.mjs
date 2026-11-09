@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Stage the pinned @napi-rs/keyring prebuilt addons into
- * `packages/forge-credentials-keychain/native/<triple>/`.
+ * `packages/forge-credentials-keychain/vendor/<triple>/`.
  *
  * Why this exists instead of an `optionalDependencies` entry:
  * `scripts/build-enterprise-bundle.mjs` refuses any member that declares
@@ -125,6 +125,15 @@ export function verifyStagedLayout({ root, targets, checksums }) {
     }
     if (expected.license !== target.license) {
       problems.push(`${addonRelative}: recorded license ${expected.license} but the lock file declares ${target.license}`);
+    }
+    // The tarball digest is what actually pins the bytes upstream; a record that
+    // drifted from the lock file would otherwise still pass every hash check,
+    // because the recorded sha256 is the only thing the comparison uses.
+    if (expected.source !== target.source) {
+      problems.push(`${addonRelative}: recorded source ${expected.source} but the lock file pins ${target.source}`);
+    }
+    if (expected.integrity !== target.integrity) {
+      problems.push(`${addonRelative}: recorded integrity does not match the lock file; re-run the fetch script instead of editing the record`);
     }
     const addon = join(root, addonRelative);
     if (!existsSync(addon)) {

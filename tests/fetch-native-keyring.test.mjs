@@ -90,6 +90,8 @@ for (const [label, mutate, expected] of [
   ['version drift', (layout) => { layout.checksums.files['linux-x64-gnu/keyring.node'].version = '2.0.0'; }, /recorded version 2\.0\.0/u],
   ['license drift', (layout) => { layout.checksums.files['linux-x64-gnu/keyring.node'].license = 'Apache-2.0'; }, /recorded license Apache-2\.0/u],
   ['unclaimed record', (layout) => { layout.checksums.files['freebsd-x64/keyring.node'] = layout.checksums.files['win32-x64-msvc/keyring.node']; }, /freebsd-x64\/keyring\.node: recorded but no delivery target claims it/u],
+  ['integrity drift against the lock file', (layout) => { layout.checksums.files['linux-x64-gnu/keyring.node'].integrity = 'sha512-drifted'; }, /linux-x64-gnu\/keyring\.node: recorded integrity does not match the lock file/u],
+  ['source drift against the lock file', (layout) => { layout.checksums.files['win32-x64-msvc/keyring.node'].source = '@napi-rs/keyring-win32-ia32-msvc'; }, /win32-x64-msvc\/keyring\.node: recorded source .* but the lock file pins/u],
 ]) {
   test(`staging rejects ${label}`, (t) => {
     const layout = staging(t);
