@@ -47,12 +47,14 @@ jobs:
     # `ready_for_review` event covers promotion), fork PRs (see header), plain
     # issue comments, and comment commands from accounts without write access.
     if: >-
-      github.event.sender.type != 'Bot' &&
-      (github.event_name == 'issue_comment'
-        ? github.event.issue.pull_request != null &&
-          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-        : github.event.pull_request.draft == false &&
-          github.event.pull_request.head.repo.full_name == github.repository)
+      github.event.sender.type != 'Bot' && (
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request != null &&
+         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.draft == false &&
+         github.event.pull_request.head.repo.full_name == github.repository)
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
