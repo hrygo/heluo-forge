@@ -130,6 +130,8 @@ test('常量表：字段与 ENV_KEYS 同键，五种 origin 各有中文标签�
     'CLI_CONFIG_UNAVAILABLE',
     // r9：刷新重建读面失败的**细因**（只出现在 detail.reason，工具信封仍以 NO_READER 失败）。
     'CLI_REBUILD_FAILED',
+    // r16：保存回执细因——写成功但运行面归宿主，无法证明已采用（只出现在 applied.reason）。
+    'CLI_APPLY_UNVERIFIED',
   ]);
   // origin 文案只有一份：五个枚举值必须一一对应，页面 Tag / 指引 / 状态面共用它。
   assert.deepEqual(Object.keys(CLI_ORIGIN_LABELS).sort(), Object.values(CLI_ORIGINS).sort());
@@ -252,6 +254,20 @@ test('deriveSourceType：dop 就绪即 enterprise，否则一律 mock（AC-7/AC-
   // 容错：入参不是 entries 形状时宁可少标，绝不在装配期抛错。
   assert.equal(deriveSourceType(null), 'mock');
   assert.equal(deriveSourceType({}), 'mock');
+});
+
+/**
+ * 同一事实的两种投影（PR #215 review）：合并态 entries 的路径字段叫 `value`，
+ * `cli-access` 快照里叫 `path`。装配层拿快照推导来源，只认 `value` 就会把装好的机器
+ * 也判成 mock。两条路径必须同结论。
+ */
+test('deriveSourceType：快照 entries 的 dopBin.path 也算就绪（不只认 value）', () => {
+  assert.equal(deriveSourceType({ dopBin: { origin: CLI_ORIGINS.DISCOVERED, path: DISC_DOP } }), 'enterprise');
+  assert.equal(deriveSourceType({ dopBin: { origin: CLI_ORIGINS.CONFIG, path: CONF_DOP } }), 'enterprise');
+  assert.equal(deriveSourceType({ dopBin: { origin: CLI_ORIGINS.ENV, path: ENV_DOP } }), 'enterprise');
+  assert.equal(deriveSourceType({ dopBin: { origin: CLI_ORIGINS.DISCOVERED, path: '' } }), 'mock');
+  assert.equal(deriveSourceType({ dopBin: { origin: CLI_ORIGINS.DEFAULT, path: DISC_DOP } }), 'mock');
+  assert.equal(deriveSourceType({ dopBin: { origin: CLI_ORIGINS.DISCOVERED } }), 'mock');
 });
 
 test('推导落 default 槽位、显式声明优先：配置 > 环境变量 > 推导（AC-7 三种覆盖态）', () => {

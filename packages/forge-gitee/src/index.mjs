@@ -45,6 +45,15 @@
  * | `adapter()` / `guard()` / `session()` / `git()` | 只给同包内工具定义用的装配件（幂等台账是进程内 Map，不落盘） |
  * | `git()` | 本地 git 命令面（`commit` 是本地动作、`push` 走受控动作 `gitee.git.push`）；工具层只拿端口，不持 runner |
  */
+import {
+  GITEE_CONFIG_KEYS,
+  GITEE_ENTRY_ID,
+  GITEE_ORIGINS,
+  GITEE_PAGE_HINT,
+  GITEE_REBUILD_REASON,
+  createGiteeAccess,
+} from './config-access.mjs';
+import { GITEE_API_PREFIX, GITEE_CONFIG_ROUTE, createGiteeApi, toNodeRoute } from './http.mjs';
 import { createGiteeAdapter } from './gitee-adapter.mjs';
 import { createGiteeRunner, detectPersistentToken } from './gitee-cli.mjs';
 import { createGiteeGitAdapter } from './gitee-git.mjs';
@@ -91,6 +100,11 @@ export const GITEE_REASONS = Object.freeze({
   STATUS_DISPOSED: 'GITEE_STATUS_DISPOSED',
   /** 只读调用被策略拒绝（工具层据此给出 `status:'denied'` 的统一信封）。 */
   POLICY_DENIED: 'POLICY_DENIED',
+  /**
+   * 配置已落盘、读面重建失败（AC-8）：保存与应用是两个结论，页面必须能分开说。
+   * 这个码只出现在 `saveGiteeConfig()` 的 `applied.reason` 里，不改变保存本身的成功。
+   */
+  REBUILD_FAILED: GITEE_REBUILD_REASON,
 });
 
 /** 装配期错误：带原因码，宿主记 `did not activate` 时能看出到底缺什么。 */
@@ -197,7 +211,105 @@ function denialError(reason, message, detail) {
   return error;
 }
 
-function createService({ ctx, policy, adapter, gitAdapter, guard, session, config, snapshot }) {
+/**
+ * 快照 → 运行时配置（TECHNICAL §3.3 的"重新合并"）。
+ *
+ * 取的是**生效值**而不是某一层：读面只关心"最终用什么路径/超时"，层信息归页面（AC-4）。
+ * `origin === 'unset'` 的键跳过——把"没有本机覆盖"当成"显式设成空"，会让默认值失去意义。
+ */
+function mergedRuntimeOf(snapshot) {
+  const fields = snapshot !== null && typeof snapshot === 'object' ? snapshot.entries : null;
+  if (fields === null || typeof fields !== 'object') return null;
+  const merged = {};
+  let count = 0;
+  for (const field of GITEE_CONFIG_KEYS) {
+    const item = fields[field];
+    if (item === null || typeof item !== 'object') continue;
+    if (item.origin === undefined || item.origin === null || item.origin === GITEE_ORIGINS.UNSET) continue;
+    const value = typeof item.path === 'string' ? item.path : item.value;
+    if (value === null || value === undefined || value === '') continue;
+    merged[field] = value;
+    count += 1;
+  }
+  return count === 0 ? null : Object.freeze(merged);
+}
+
+/**
+ * 快照 → 运行时配置，**非法配置一律失败**（fail-closed）。
+ *
+ * `validateGiteeConfig()` 只要有一项不合法就整层不返回 `value`，`buildSnapshot()` 的
+ * `entries[*].value` 于是退化成内置默认值。若拿这份"全默认投影"去重建读面，一个非法的
+ * `timeoutMs` 就能把继承层的 `persistentToken: 'block'` 悄悄洗成默认的 `'warn'`——配置错的
+ * 后果被隐藏，安全策略反而被放宽。这里把"配置非法"直接当装配失败：宁可关掉读面（可见
+ * `GITEE_REBUILD_FAILED`），也不接受一份没有效力的配置。
+ */
+function runtimeConfigOf(snapshot) {
+  if (snapshot !== null && typeof snapshot === 'object' && snapshot.reason === GITEE_REASONS.CONFIG_INVALID) {
+    throw mountError(
+      GITEE_REASONS.CONFIG_INVALID,
+      `gitee 配置不合法 · 请到「${GITEE_PAGE_HINT}」修正后刷新`,
+      { next: GITEE_PAGE_HINT },
+    );
+  }
+  return mergedRuntimeOf(snapshot);
+}
+
+/**
+ * 装配面（TECHNICAL §3.3）：一次 `buildFaces()` 产出一份**可整体替换**的读面。
+ *
+ * 五个依赖里除了 `policy` 都与配置有关：`cliPath` / `host` / `timeoutMs` / `authEnv` /
+ * `persistentToken` 变了，就必须重新构造 runner 与两个适配器。`service` 是 `provide` 出去的
+ * 稳定对象、不能换，所以 service 一律经 `current()` 取值——**不许**在 `apply` 顶部解构这五个
+ * 变量：解构出来的引用会永远指向装配那一刻的旧配置，AC-9 的"保存后立刻生效"就是这样失效的。
+ */
+function buildFaces({ policy, resolved }) {
+  const runner = createGiteeRunner({
+    env: process.env,
+    timeoutMs: resolved.timeoutMs,
+    // 用配置里的凭据变量名做脱敏（不是默认那一个）：换了 authEnv 也照样抹掉输出里的令牌。
+    authEnv: resolved.authEnv,
+    // 落盘凭据的处置策略归配置层（缺省 'warn'）：'block' 只留给合规场景。
+    persistentTokenPolicy: resolved.persistentToken,
+  });
+  let git;
+  try {
+    // git 与 gitee CLI 共用同一个出口：适配器只要 runner（`runGit`），不自己起子进程。
+    // 这里的 cwd 只是**兜底**：每次调用由 `resolveGitCwd` 现算会话工作目录并覆盖它。
+    // 宿主进程的 cwd 是启动目录（npx 目录、快捷方式、家目录都可能），不能当仓库用。
+    git = createGiteeGitAdapter({ runner, cwd: resolved.gitCwd });
+  } catch (error) {
+    throw mountError(
+      GITEE_REASONS.TOOLS_UNAVAILABLE,
+      `gitee git 命令面无法装配：${error?.message ?? error}`,
+      { error },
+    );
+  }
+  const adapter = createGiteeAdapter({
+    runner,
+    cliPath: resolved.cliPath,
+    host: resolved.host,
+    authEnv: resolved.authEnv,
+    env: process.env,
+    // 落盘凭据自检（AC-22）在装配期注入：CLI 配置目录里有持久令牌时动作层必须阻断，
+    // 而不是只靠适配器单测覆盖。
+    persistentTokenProbe: () => detectPersistentToken({ env: process.env }).blocked,
+    persistentTokenPolicy: resolved.persistentToken,
+  });
+  const guard = createGiteeGuard({ policy });
+  return Object.freeze({ resolved, runner, adapter, guard, git });
+}
+
+/**
+ * @param {object} options
+ * @param {object} options.ctx 宿主上下文
+ * @param {object} options.policy 策略服务
+ * @param {() => object|null} options.current 当前读面（`null` = 已降级，调用一律 fail-closed）
+ * @param {object} options.session 幂等台账（与配置无关，装配期建一次）
+ * @param {object} options.access `createGiteeAccess()` 的返回值
+ * @param {() => string} options.routeOf 路由状态（`registered` / `no-webserver` / `conflict`）
+ * @param {(options:{refresh:boolean}) => object} options.refreshSnapshot 重建读面并回快照
+ */
+function createService({ ctx, policy, current, session, access, routeOf, refreshSnapshot }) {
   let status = 'ready';
   let callSeq = 0;
   const nextCallId = (kind) => {
@@ -205,10 +317,23 @@ function createService({ ctx, policy, adapter, gitAdapter, guard, session, confi
     return `gitee-${kind}-${callSeq}`;
   };
 
+  /** 取当前读面；已降级时给可见错误，而不是拿旧配置继续跑（那是伪证据）。 */
+  function live() {
+    const faces = current();
+    if (faces === null) {
+      throw denialError(
+        GITEE_REASONS.REBUILD_FAILED,
+        'Gitee 读面不可用：配置已保存但重建失败，请修正配置后刷新',
+      );
+    }
+    return faces;
+  }
+
   async function read(request = {}) {
     if (status !== 'ready') {
       throw denialError(GITEE_REASONS.STATUS_DISPOSED, 'gitee 服务已卸载，不再执行只读查询');
     }
+    const { adapter } = live();
     const action = typeof request.action === 'string' ? request.action : '';
     const target = typeof request.target === 'string' ? request.target.trim() : '';
     const admitted = await policy.executeAction(
@@ -235,7 +360,7 @@ function createService({ ctx, policy, adapter, gitAdapter, guard, session, confi
       throw deniedForDisposed();
     }
     // 门禁唯一准入点：参数原样交给 guard，入口不重解释、不补默认、不重试。
-    return guard.execute(request);
+    return live().guard.execute(request);
   }
 
   function deniedForDisposed() {
@@ -250,22 +375,41 @@ function createService({ ctx, policy, adapter, gitAdapter, guard, session, confi
     // 会让调用方与文档口径继续对不上（AC-3）。
     writeTools: () => [...GITEE_WRITE_TOOLS],
     status: () => status,
-    describe: () => describeGiteeConfig(config),
-    preflight: () => adapter.preflight(),
+    describe: () => access.describe().text,
+    // 配置面（T1）：状态只出枚举与布尔位，快照才出值（且只经同源 GET）。
+    configStatus: () => {
+      const described = access.describe();
+      const degraded = current() === null;
+      return Object.freeze({
+        ...described,
+        ready: degraded ? false : described.ready,
+        reason: degraded ? GITEE_REASONS.REBUILD_FAILED : described.reason,
+        route: routeOf(),
+      });
+    },
+    configSnapshot: (snapshotOptions = {}) =>
+      snapshotOptions?.refresh === true ? refreshSnapshot(snapshotOptions) : access.snapshot(snapshotOptions),
+    saveGiteeConfig: async (saveOptions = {}) => {
+      const result = await access.save(saveOptions);
+      // 保存成功 ≠ 运行时已应用（AC-8）：重建失败只降级 `applied`，不改写保存结论。
+      if (result === null || typeof result !== 'object' || result.ok !== true) return result;
+      try {
+        refreshSnapshot({ refresh: true });
+        return { ...result, applied: Object.freeze({ ok: true }) };
+      } catch {
+        return { ...result, applied: Object.freeze({ ok: false, reason: GITEE_REBUILD_REASON }) };
+      }
+    },
+    preflight: () => live().adapter.preflight(),
     read,
     execute,
     write: execute,
-    invoke: (command, params, purpose) => adapter.invoke(command, params, purpose),
-    adapter: () => adapter,
+    invoke: (command, params, purpose) => live().adapter.invoke(command, params, purpose),
+    adapter: () => live().adapter,
     // 本地 git 命令面：工具层只拿端口（`git().commit()` / `git().push()`），永不直接持有
     // runner；push 的准入仍由 `guard.execute` 按动作 `gitee.git.push` 裁决。
-    git: () => gitAdapter,
-    // 只读代码版本快照：纯本地、零远端、零写。目录由工具层从真实调用上下文解析后传入，
-    // 服务不缓存、不回落进程 cwd；装配缺失时工具层据此返回 failed，而不是编一个版本。
-    snapshot: (cwd) => (typeof snapshot === 'function'
-      ? snapshot(cwd)
-      : Promise.resolve(Object.freeze({ status: 'failed', reason: 'GIT_SNAPSHOT_NO_WORKSPACE', message: 'gitee 服务没有装配快照读取器：不生成代码版本', next: '在已授权的工作区内重新发起调用；调用根不可信时不生成版本。', observedAt: null }))),
-    guard: () => guard,
+    git: () => live().git,
+    guard: () => live().guard,
     session: () => session,
     dispose: () => {
       if (status === 'ready') status = 'disposed';
@@ -288,27 +432,62 @@ export function apply(ctx, rawConfig = {}) {
 
   // 解析只做"读配置 + 读环境变量"，不起子进程、不回显凭据内容。
   const resolved = resolveGiteeConfig({ config, env: process.env });
-  const runner = createGiteeRunner({
+
+  // 配置面（T1）：`configEditor` 是可选服务——没有它也能读，只是不可写（页面降级为只读）。
+  const configEditor = typeof ctx.get === 'function' ? ctx.get('configEditor') : undefined;
+  const access = createGiteeAccess({
+    config,
     env: process.env,
-    timeoutMs: resolved.timeoutMs,
-    // 用配置里的凭据变量名做脱敏（不是默认那一个）：换了 authEnv 也照样抹掉输出里的令牌。
-    authEnv: resolved.authEnv,
-    // 落盘凭据的处置策略归配置层（缺省 'warn'）：'block' 只留给合规场景。
-    persistentTokenPolicy: resolved.persistentToken,
+    configEditor: configEditor === null || typeof configEditor !== 'object' ? null : configEditor,
+    entryId: GITEE_ENTRY_ID,
   });
-  let gitAdapter;
-  try {
-    // git 与 gitee CLI 共用同一个出口：适配器只要 runner（`runGit`），不自己起子进程。
-    // 这里的 cwd 只是**兜底**：每次调用由 `resolveGitCwd` 现算会话工作目录并覆盖它。
-    // 宿主进程的 cwd 是启动目录（npx 目录、快捷方式、家目录都可能），不能当仓库用。
-    gitAdapter = createGiteeGitAdapter({ runner, cwd: resolved.gitCwd });
-  } catch (error) {
-    throw mountError(
-      GITEE_REASONS.TOOLS_UNAVAILABLE,
-      `gitee git 命令面无法装配：${error?.message ?? error}`,
-      { error },
-    );
+
+  /**
+   * 装配期读面：**必须**从 `access` 的合并态算起，不能直接用 loader 交给 `apply` 的那份
+   * `config`——那是补丁行自己的 `config:`，公共参数层（bundle 层）与本机覆盖层都在
+   * `configEditor` 里。只读 `config` 会让"页面上明明配了路径"在运行期仍走默认值（AC-9）。
+   */
+  // 生效层非法时这里就抛出 `GITEE_CONFIG_INVALID`：装上了却用默认值跑，是更坏的失败。
+  const initialConfig = runtimeConfigOf(access.snapshot()) ?? config;
+  let faces = buildFaces({
+    policy,
+    resolved: initialConfig === config ? resolved : resolveGiteeConfig({ config: initialConfig, env: process.env }),
+  });
+
+  /** 重建读面：`refresh` 让 access 重读磁盘并重新合并，再重建 runner / 两个适配器 / 门禁。 */
+  function rebuildFaces() {
+    const merged = runtimeConfigOf(access.snapshot({ refresh: true }));
+    const next = resolveGiteeConfig({ config: merged ?? {}, env: process.env });
+    const previous = faces;
+    faces = buildFaces({ policy, resolved: next });
+    return previous;
   }
+
+  /** 重建失败的**明确不可用**态：不保留"上次看起来还行"的旧读面、不猜路径。 */
+  function degradeFaces() {
+    faces = null;
+  }
+
+  /**
+   * 刷新单点（AC-9）：`?refresh=1`、`configSnapshot({refresh:true})`、保存后的重建全走这里。
+   * 重建成功才回快照；失败则降级并抛出，由调用方决定是 503 还是 `applied.ok=false`。
+   */
+  function refreshSnapshot(snapshotOptions = {}) {
+    if (snapshotOptions?.refresh !== true) return access.snapshot(snapshotOptions);
+    try {
+      rebuildFaces();
+    } catch {
+      degradeFaces();
+      throw mountError(
+        GITEE_REASONS.REBUILD_FAILED,
+        `刷新失败 · 请到「${GITEE_PAGE_HINT}」重试`,
+        { reason: GITEE_REBUILD_REASON, next: GITEE_PAGE_HINT },
+      );
+    }
+    // 响应读的是重建后的合并态：与随后工具调用看到的是同一份。
+    return access.snapshot();
+  }
+
   /**
    * 按次解析 git 的仓库目录：取**调用方会话**的工作目录，而不是宿主进程目录。
    *
@@ -325,18 +504,6 @@ export function apply(ctx, rawConfig = {}) {
     const dir = directories.get(agent.session);
     return typeof dir === 'string' && dir.trim() !== '' ? dir : undefined;
   };
-  const adapter = createGiteeAdapter({
-    runner,
-    cliPath: resolved.cliPath,
-    host: resolved.host,
-    authEnv: resolved.authEnv,
-    env: process.env,
-    // 落盘凭据自检（AC-22）在装配期注入：CLI 配置目录里有持久令牌时动作层必须阻断，
-    // 而不是只靠适配器单测覆盖。
-    persistentTokenProbe: () => detectPersistentToken({ env: process.env }).blocked,
-    persistentTokenPolicy: resolved.persistentToken,
-  });
-  const guard = createGiteeGuard({ policy });
   const session = createGiteeSession();
   // 快照读取器与 git 适配器共用同一个出口（`runner.runGit`）：本模块不自己起子进程，
   // 也不接受外部注入的目录。装配失败不阻断整个插件——工具层会返回 failed 而不是编版本。
@@ -347,15 +514,17 @@ export function apply(ctx, rawConfig = {}) {
     snapshotReader = undefined;
   }
 
+  // 路由状态必须在 service 之前声明：`configStatus()` 经闭包读它，而路由要到 provide 之后才挂。
+  let routeState = 'no-webserver';
+
   const service = createService({
     ctx,
     policy,
-    adapter,
-    gitAdapter,
-    guard,
+    current: () => faces,
     session,
-    config,
-    snapshot: typeof snapshotReader?.read === 'function' ? (cwd) => snapshotReader.read(cwd) : undefined,
+    access,
+    routeOf: () => routeState,
+    refreshSnapshot,
   });
 
   let tools;
@@ -369,10 +538,23 @@ export function apply(ctx, rawConfig = {}) {
     );
   }
 
+  /**
+   * `ADAPTER_KEY` 给的是**稳定门面**，不是某一版适配器：读面换页后消费者不能继续拿旧
+   * `cliPath`。六个成员与 `createGiteeAdapter()` 的端口一一对应，全部转发到当前读面。
+   */
+  const adapterFacade = Object.freeze({
+    provider: GITEE_PLATFORM,
+    logicalName: faces.adapter.logicalName,
+    preflight: () => service.preflight(),
+    invoke: (command, params, purpose) => service.invoke(command, params, purpose),
+    read: (action, target, params) => service.adapter().read(action, target, params),
+    describe: () => service.adapter().describe(),
+  });
+
   const disposeService = ctx.provide(SERVICE_KEY, service);
   let disposeAdapter;
   try {
-    disposeAdapter = ctx.provide(ADAPTER_KEY, adapter);
+    disposeAdapter = ctx.provide(ADAPTER_KEY, adapterFacade);
   } catch (error) {
     disposeService?.();
     throw mountError(GITEE_REASONS.TOOLS_UNAVAILABLE, `gitee 适配器无法提供服务：${error?.message ?? error}`, { error });
@@ -395,11 +577,56 @@ export function apply(ctx, rawConfig = {}) {
     );
   }
 
+  /**
+   * 同源配置端点（TECHNICAL §3.2）：`webServer` 是可选服务——没有就保持 `no-webserver`
+   * （页面按"不可用"降级），**不**因此拒绝挂载工具面。注册冲突同理只影响页面。
+   */
+  const giteeApi = createGiteeApi({
+    // 端点走 service 的保存端口，而不是 `access.save`：只有 service 知道"写成功后要重建读面"，
+    // 也才有 `applied` 可透传（AC-8：保存 / 应用 / 检查是三个独立结论）。
+    access: {
+      revision: () => access.revision(),
+      snapshot: (request) => access.snapshot(request),
+      describe: () => access.describe(),
+      save: (options) => service.saveGiteeConfig(options),
+    },
+    snapshot: (request) => refreshSnapshot({ refresh: request?.refresh === true }),
+  });
+  const giteeRoute = toNodeRoute(giteeApi);
+  let disposeRoute = null;
+  let routeMounted = false;
+  function mountConfigRoute(scope) {
+    if (routeMounted) return;
+    const server = (scope ?? ctx)?.get?.('webServer');
+    if (server === null || server === undefined || typeof server.register !== 'function') {
+      routeState = 'no-webserver';
+      return;
+    }
+    routeMounted = true;
+    try {
+      disposeRoute = server.register({
+        kind: 'prefix',
+        path: GITEE_API_PREFIX,
+        handler: giteeRoute,
+        description: 'Gitee 配置面（同源读写）',
+      }) ?? null;
+      routeState = 'registered';
+    } catch {
+      // 另一条补丁层已经占了这个前缀：页面不可用，但工具面照常。
+      routeState = 'conflict';
+    }
+  }
+  mountConfigRoute(ctx);
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], (host) => mountConfigRoute(host));
+  }
+
   let disposed = false;
   const teardown = () => {
     if (disposed) return;
     disposed = true;
     for (const dispose of disposers.splice(0).reverse()) dispose?.();
+    disposeRoute?.();
     disposeAdapter?.();
     disposeService?.();
     service.dispose();
@@ -417,6 +644,8 @@ export function apply(ctx, rawConfig = {}) {
  * 是显式导出，始终优先于星号导出。
  */
 export * from './runtime-config.mjs';
+export * from './config-access.mjs';
+export * from './http.mjs';
 export * from './gitee-cli.mjs';
 export * from './gitee-git.mjs';
 export * from './gitee-adapter.mjs';

@@ -6,6 +6,7 @@ import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
 import { auditReleaseClosure, auditTarball, npmExecutable, parsePackOutput } from './lib/bundle-rules.mjs';
@@ -34,6 +35,9 @@ function copyResource(source, target) {
 /** 默认安装单元：企业组合包。 */
 export const DEFAULT_ENTRY = '@heluo/forge-enterprise';
 
+/** 宿主 peer 白名单（再导出，便于用例与文档引用同一份定义）。 */
+export { HOST_PEERS };
+
 /**
  * Build a self-contained npm tarball for one workspace entry, using only explicitly
  * declared workspace resources. `entry` is the package that becomes the tarball root:
@@ -58,9 +62,10 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
       const manifest = readManifest(source);
       if (members.has(name)) return;
       members.set(name, manifest.version);
-      for (const field of ['peerDependencies', 'optionalDependencies']) {
-        if (Object.keys(manifest[field] ?? {}).length > 0) fail(`${name} has unclosed ${field}`);
-      }
+      // 宿主 peer（浏览器半只 require('react')）允许留在清单里，其余 peer 与
+      // optionalDependencies 仍算"没闭合"：终端装出来的东西必须自洽（TECHNICAL §9）。
+      const peerErrors = peerDependencyErrors(name, manifest, { prefix: '' });
+      if (peerErrors.length > 0) fail(peerErrors.join('; '));
       for (const lifecycle of ['preinstall', 'install', 'postinstall', 'prepare']) {
         if (manifest.scripts?.[lifecycle] !== undefined) fail(`${name} has install-time script ${lifecycle}`);
       }

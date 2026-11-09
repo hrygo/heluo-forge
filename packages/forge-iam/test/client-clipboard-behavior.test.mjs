@@ -10,6 +10,15 @@ const deferred = () => Promise.withResolvers();
 const settle = () => new Promise(setImmediate);
 const nodes = (node) => node && typeof node === 'object' ? [node, ...(node.children ?? []).flatMap(nodes)] : [];
 
+// Text a reader sees with every <details> collapsed: the body of a fold is
+// hidden, so an acknowledgement rendered inside one is not visible.
+const unfolded = (node) => {
+  if (typeof node === 'string') return node;
+  if (!node || typeof node !== 'object') return '';
+  if (node.type === 'details') return '';
+  return (node.children ?? []).map(unfolded).join('');
+};
+
 async function fixture(t, { view = signedOut, navigator, fetchView, write = async () => {}, loginView = authenticating } = {}) {
   const requests = [];
   const writes = [];
@@ -45,6 +54,9 @@ test('diagnostic is a fixed scalar projection and excludes all private fields an
     principal: secret, issuer: secret, clientId: secret, resource: secret, accessExpiresAt: secret,
     authorizationUrl: secret, accessToken: secret, refreshToken: secret, idToken: secret,
     gatewayConsoleUrl: secret, missing: [secret, secret], gatewayCredential: { state: 'configured', deviceLabel: secret, ownerSubject: secret, storage: secret }, extra: secret } });
+  // The credential step is folded while signed out; a draft can still be typed
+  // once the reader opens it.
+  f.button('登录后可配置').props.onClick();
   const input = nodes(f.render()).find((node) => node.props['aria-label'] === '个人访问凭证');
   input.props.onChange({ target: { value: secret } });
   const before = f.requests.length;
@@ -163,6 +175,7 @@ test('new explicit login invalidates an older diagnostic acknowledgement', async
 
 test('local gateway recording does not claim live model integration', async (t) => {
   const f = await fixture(t, { view: { ...signedOut, gatewayCredential: { state: 'configured' } } });
+  f.button('登录后可配置').props.onClick();
   assert.match(f.text(f.render()), /保存凭证不代表模型已连接或可用/);
   assert.doesNotMatch(f.text(f.render()), /模型调用使用该凭据|Key 不会进入 UI/);
 });
@@ -230,4 +243,37 @@ test('an arbitrary exclusive reason is reduced to a constant, not exported', asy
   await f.button('复制问题信息').props.onClick();
   assert.equal(JSON.parse(f.writes[0]).exclusive, 'not-ok');
   assert.doesNotMatch(f.writes[0], /synthetic-private/);
+});
+
+test('link copy acknowledgement is visible in the account card while 诊断 stays collapsed', async (t) => {
+  const f = await fixture(t);
+  await f.login();
+  const tree = f.render();
+  const diagnostics = nodes(tree).find((node) => node.type === 'details' && f.text(node).startsWith('诊断'));
+  assert.ok(diagnostics, 'missing the 诊断 fold');
+  assert.notEqual(diagnostics.props.open, true, '诊断 must stay collapsed by default');
+  const account = () => nodes(f.render()).find((node) => node.props?.id === 'fiam-section-account');
+  assert.ok(account(), 'missing the account card');
+
+  await f.button('复制登录链接').props.onClick();
+  assert.match(unfolded(account()), /登录链接已复制，请勿转发给他人。/,
+    'the acknowledgement must be visible without opening 诊断');
+  const status = nodes(account()).find((node) => node.props?.role === 'status');
+  assert.ok(status, 'the account-card acknowledgement must be a live region');
+  const after = f.render();
+  const folded = nodes(after).find((node) => node.type === 'details' && f.text(node).startsWith('诊断'));
+  assert.doesNotMatch(f.text(folded), /登录链接已复制|未确认复制/,
+    'the link acknowledgement must not be stashed behind the diagnostic fold');
+});
+
+test('rejected link copy reports 未确认复制 in the visible account card', async (t) => {
+  const f = await fixture(t, { write: () => Promise.reject(new Error(secret)) });
+  await f.login();
+  await f.button('复制登录链接').props.onClick();
+  await settle();
+  const account = nodes(f.render()).find((node) => node.props?.id === 'fiam-section-account');
+  assert.ok(account);
+  assert.match(unfolded(account), /未确认复制，请检查浏览器剪贴板权限；页面内容已保留。/,
+    'a failed copy must be visible without opening 诊断');
+  assert.doesNotMatch(f.text(f.render()), /synthetic-private/);
 });

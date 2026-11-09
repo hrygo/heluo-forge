@@ -199,8 +199,8 @@ export const CODE_ALLOWED = [
   { re: /^scripts\/lib\/dsh-version\.mjs$/, only: null },
 ];
 
-/** 包与服务清单：只放行 engines.dsh 的值。 */
-const MANIFEST_RE = /^(?:packages|services)\/[^/]+\/package\.json$/;
+/** 包、服务与独立演示清单：只放行 engines.dsh 的值，不放行固定依赖。 */
+const MANIFEST_RE = /^(?:packages|services|demos)\/[^/]+\/package\.json$/;
 
 /**
  * 测试夹具里有意写死的版本字面量（模拟旧宿主或第三方包形状），登记原因后可放行，

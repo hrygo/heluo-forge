@@ -50,6 +50,18 @@ window.__ModuleLoader__.load({
       .forge-iam-ui input:focus { outline: none; border-color: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 15%, transparent); }
       .forge-iam-ui :is(button, a):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
       .forge-iam-ui :is(button, input):disabled { cursor: not-allowed; opacity: .55; }
+      .fiam-personal-fold {
+        box-sizing: border-box; width: 100%; height: auto; min-height: 40px; margin-top: 12px;
+        display: flex; align-items: center; justify-content: flex-start;
+        padding: 10px 16px; font: var(--dsw-font-s-14); text-align: left;
+        color: var(--dsw-alias-label-primary);
+        background: var(--dsw-alias-settings-card-fill);
+        border: 0.5px dashed var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);
+      }
+      .fiam-details { margin-top: 8px; font: var(--dsw-font-xxs-12); color: var(--dsw-alias-label-secondary); }
+      .fiam-details > summary { cursor: pointer; padding: 2px 0; }
+      .fiam-details > summary:hover { color: var(--dsw-alias-label-primary); }
+      .fiam-issues { display: flex; flex-direction: column; gap: 6px; }
       @media (prefers-reduced-motion: reduce) { .forge-iam-ui button:active { transform: none; } }
 
       .fiam-card {
@@ -1553,7 +1565,7 @@ window.__ModuleLoader__.load({
 
     // §6 网关状态与徽章
     const GATEWAY_STATUS = {
-      unknown: { label: '状态未知', badge: 'warn' },
+      unknown: { label: '凭据状态尚未确认', badge: 'warn' },
       unconfigured: { label: '未保存', badge: 'idle' },
       configured: { label: '已保存', badge: 'success' },
       'owner-mismatch': { label: '属于其他账号，请核对记录', badge: 'error' },
@@ -1690,6 +1702,10 @@ window.__ModuleLoader__.load({
       IAM_REVOCATION_FAILED: '已在此设备退出：服务器拒绝了访问令牌撤销，该令牌可能仍然有效。',
       IAM_REVOCATION_UNKNOWN: '已在此设备退出，但无法确认访问令牌是否已撤销。',
       IAM_EXCLUSIVE_CONFLICT: '登录设置有冲突，请联系管理员。',
+      // 视图接口把独占配置冲突作为原始原因（不带 IAM_ 前缀）回传，同一
+      // 条件必须与问题清单同句，不能落到兜底文案再显示一遍。
+      'exclusive-violation': '登录设置有冲突，请联系管理员。',
+      'exclusive-check-unavailable': '暂时无法确认登录设置是否与其他插件冲突，请稍后重试。',
       IAM_UNREACHABLE: '暂时无法连接登录服务，请稍后重试。',
       IAM_STATE_MISMATCH: '登录未能完成，请重新登录。',
       IAM_CALLBACK_INVALID: '登录未能完成，请重新登录。',
@@ -1846,7 +1862,7 @@ window.__ModuleLoader__.load({
     function renderAccountCard(ctx) {
       const { h, ui: input, actions } = ctx;
       const {
-        view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink, state, copy, copyTools,
+        view, label, principal, expiry, missing, issues, exclusive, hostError, notice, loginLink, state, copy, copyTools,
       } = input;
       const { login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity } = actions;
       const ui = deriveSessionUi(view);
@@ -1873,8 +1889,7 @@ window.__ModuleLoader__.load({
           principal ? h('div', { className: 'fiam-meta-item' }, principal) : null,
           expiry ? h('div', { className: 'fiam-meta-item' }, expiry) : null,
         ) : null,
-        missing,
-        exclusive,
+        issues,
         hostError,
         notice,
         ui.authenticating
@@ -1893,9 +1908,10 @@ window.__ModuleLoader__.load({
           view.canSignOut ? h('button', { type: 'button', style: button, onClick: signOut }, '退出') : null,
           deriveSessionUi(state.view).authenticating && linkIdentity.current && state.authorizationUrl === linkIdentity.current
             ? h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyLink }, '复制登录链接') : null,
-          h('button', { type: 'button', style: button, disabled: copy.pending || viewBarrier.current.pending, onClick: copyDiagnostic }, '复制问题信息'),
         ),
-        copy.notice && isViewCurrent(copy.epoch) && (!copy.url || copy.url === linkIdentity.current)
+        // The account card owns the link-copy feedback; the acknowledgement must
+        // be visible while 诊断 is collapsed, not only after opening it.
+        copy.notice && copy.url && isViewCurrent(copy.epoch) && copy.url === linkIdentity.current
           ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, copy.notice) : null,
       );
     }
@@ -1962,7 +1978,7 @@ window.__ModuleLoader__.load({
             gatewayUi.configured
               ? '个人访问凭证已保存且不会显示。保存凭证不代表模型已连接或可用。'
               : gatewayUi.unknown
-                ? '网关凭据状态尚未确认，请刷新核实。'
+                ? '请刷新核实；若仍无法确认，请重新保存个人访问凭证。'
                 : gatewayUi.unconfigured
                   ? '在企业 AI 网关创建个人访问凭证，然后粘贴到下方。'
                   : '请先核对现有凭证；如有疑问，请联系管理员。',
@@ -2339,7 +2355,7 @@ window.__ModuleLoader__.load({
     // §12.3 旅程条
     function renderJourneyBar(ctx) {
       const { h, ui: input, model } = ctx;
-      const { view, gateway } = input;
+      const { view, gateway, onNavigateStep } = input;
       const ui = deriveSessionUi(view);
       const gatewayUi = deriveGatewayUi(gateway);
       const catalogue = deriveModelUi(view);
@@ -2399,14 +2415,14 @@ window.__ModuleLoader__.load({
           className: `fiam-journey-step fiam-journey-step-${stateClass}`,
           style: { cursor: 'pointer' },
           onClick: () => {
-            try { document?.getElementById?.(s.targetId)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); } catch { }
+            if (typeof onNavigateStep === 'function') onNavigateStep(s.targetId);
           },
         },
           h('div', {
             className: `fiam-journey-icon fiam-journey-icon-${stateClass}`,
             'aria-hidden': 'true',
           }, s.done ? checkIcon : s.num),
-          h('div', { className: 'fiam-journey-content' },
+          h('div', { className: 'fiam-journey-content', 'aria-current': s.active ? 'step' : undefined },
             h('span', { className: 'fiam-journey-title' }, s.title),
             h('span', { className: `fiam-journey-pill fiam-journey-pill-${stateClass}` }, s.status),
           ),
@@ -2745,9 +2761,8 @@ window.__ModuleLoader__.load({
             className: `fiam-notice fiam-notice-${modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') ? 'success' : 'warn'}`,
           }, modelNotice)
           : null,
-        h('p', { style: { ...muted, marginTop: 12 } }, !ui.ready ? '下一步：登录企业账号。'
-          : !gatewayUi.configured || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人访问凭证。'
-            : '点击“一键启用”可直接以默认参数启用并生效；展开精细配置修改参数后，点击“保存模型配置”即可在对话窗口选用。'),
+        h('p', { style: { ...muted, marginTop: 12 } }, !gatewayUi.configured || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人凭证。'
+          : '点击“一键启用”可直接以默认参数启用并生效；展开精细配置修改参数后，点击“保存模型配置”即可在对话窗口选用。'),
       );
     }
 
@@ -2780,6 +2795,10 @@ window.__ModuleLoader__.load({
       const [modelFilter, setModelFilter] = React.useState('all');
       const [modelSaving, setModelSaving] = React.useState(false);
       const [modelNotice, setModelNotice] = React.useState(null);
+      // DESIGN §4: signed out, only the login step is expanded. The other two
+      // steps stay unmounted until the reader asks for them, so a signed-out
+      // panel cannot offer actions that need a session.
+      const [revealPersonal, setRevealPersonal] = React.useState(false);
       const lastSyncedOptions = React.useRef(initialModelOptions);
       // 草稿的最新值：事件回调里读它，避免闭包里拿到上一帧的状态。
       const optionsRef = React.useRef(initialModelOptions);
@@ -3067,6 +3086,7 @@ window.__ModuleLoader__.load({
           list: modelList, visible: visibleModels, enabledCount, options: modelOptions, expanded: expandedModels,
           query: modelQuery, setQuery: setModelQuery, filter: modelFilter, setFilter: setModelFilter,
           toolbarRef, saving: modelSaving, notice: modelNotice, unsaved: hasUnsavedModelChanges,
+          revealPersonal, setRevealPersonal,
         },
         actions: {
           changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
@@ -3406,6 +3426,7 @@ window.__ModuleLoader__.load({
       const header = h('div', { style: { marginBottom: 16 } },
         h('div', { style: { font: 'var(--dsw-font-m-18)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '企业账号'),
         h('div', { style: { ...muted, marginTop: 4 } }, '管理企业账号和个人访问凭证'),
+        h('p', { style: { ...muted, marginTop: 4 } }, '登录只建立身份，不代表已获得业务写权限。'),
       );
       const copyTools = h('div', { className: 'fiam-actions' },
         deriveSessionUi(state.view).authenticating && session.linkIdentity.current && state.authorizationUrl === session.linkIdentity.current
@@ -3459,15 +3480,32 @@ window.__ModuleLoader__.load({
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
+      // One issue per priority: a conflict hides the weaker "not set up yet"
+      // lines; the rest stay in a fold so nothing is silently dropped.
+      const conflictIssue = view.exclusive && view.exclusive !== 'ok'
+        ? h('div', { className: 'fiam-notice fiam-notice-error' }, '登录设置有冲突，请联系管理员。') : null;
+      const incompleteIssue = Array.isArray(view.missing) && view.missing.length
+        ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。') : null;
+      const unsetIssue = sessionUi.state === 'unconfigured' || view.configured === false
+        ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录尚未设置，请联系管理员。') : null;
+      const issueList = [conflictIssue, incompleteIssue, unsetIssue].filter(Boolean);
+      const issues = issueList.length === 0 ? null : h('div', { className: 'fiam-issues' },
+        issueList[0],
+        issueList.length > 1
+          ? h('details', { className: 'fiam-details' }, h('summary', null, '查看全部问题'), ...issueList.slice(1))
+          : null,
+      );
       const principal = view.principal ? h('div', { style: muted }, `账号标识：${view.principal}`) : null;
       const expiry = view.accessExpiresAt ? h('div', { style: muted }, `当前访问授权到期：${formatTime(view.accessExpiresAt)}`) : null;
-      const exclusive = view.exclusive && view.exclusive !== 'ok'
-        ? h('div', { className: 'fiam-notice fiam-notice-error' }, '登录设置有冲突，请联系管理员。')
+      // The server reports the exclusive-config conflict twice: as the issue
+      // reason and as view.error. Render the issue line only, so the page does
+      // not also show a generic 操作未完成 for a condition already explained.
+      const hostErrorText = view.error ? errorNotice(view.error) : null;
+      const hostErrorDuplicatesIssue = Boolean(conflictIssue) && hostErrorText === '登录设置有冲突，请联系管理员。';
+      const hostError = hostErrorText && !hostErrorDuplicatesIssue
+        ? h('div', { className: 'fiam-notice fiam-notice-error' }, hostErrorText)
         : null;
-      const hostError = view.error
-        ? h('div', { className: 'fiam-notice fiam-notice-error' }, errorNotice(view.error))
-        : null;
-      const notice = state.notice && (!view.error || state.notice !== errorNotice(view.error))
+      const notice = state.notice && (!hostErrorText || state.notice !== hostErrorText)
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, state.notice) : null;
       const loginLink = state.authorizationUrl
         ? h('div', { style: { marginTop: 8 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录'))
@@ -3475,7 +3513,7 @@ window.__ModuleLoader__.load({
 
       const gateway = view.gatewayCredential ?? { state: 'unknown' };
       const gatewayUi = deriveGatewayUi(gateway);
-      const gatewayStatus = gatewayLabel(gatewayUi.state, '状态未知');
+      const gatewayStatus = gatewayLabel(gatewayUi.state, '凭据状态尚未确认');
       const gatewayDetails = [
         gateway.deviceLabel ? `设备：${gateway.deviceLabel}` : null,
         gateway.enteredAt ? `录入：${formatTime(gateway.enteredAt)}` : null,
@@ -3488,15 +3526,37 @@ window.__ModuleLoader__.load({
 
       // Read the identity's cache during the render that first sees that
       // identity, so a cached list never flashes empty while the effect catches up.
+      const revealPersonal = catalogue.data.revealPersonal;
+      const setRevealPersonal = catalogue.data.setRevealPersonal;
+      const personalVisible = sessionUi.ready || revealPersonal;
+      // The journey bar points at the cards below. While signed out the personal
+      // steps are folded (DESIGN §4), so their cards are not mounted: a click
+      // must open the fold first and scroll only once the card exists, instead
+      // of silently scrolling to nothing.
+      const navigateStep = (targetId) => {
+        let target = null;
+        try { target = document?.getElementById?.(targetId) ?? null; } catch { }
+        const scroll = () => {
+          try { document?.getElementById?.(targetId)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); } catch { }
+        };
+        if (target) { scroll(); return; }
+        if (targetId !== 'fiam-section-account' && !personalVisible) {
+          setRevealPersonal(true);
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(scroll);
+          else if (typeof setTimeout === 'function') setTimeout(scroll, 0);
+          return;
+        }
+        scroll();
+      };
       const journeyBar = renderJourneyBar({
         h,
-        ui: { view, gateway },
+        ui: { view, gateway, onNavigateStep: navigateStep },
         model: { enabledCount: catalogue.data.enabledCount, totalModels: catalogue.data.list.length },
       });
 
       const accountCard = renderAccountCard({
         h,
-        ui: { view, label, principal, expiry, missing, exclusive, hostError, notice, loginLink, state, copy: session.copy, copyTools },
+        ui: { view, label, principal, expiry, missing, issues, hostError, notice, loginLink, state, copy: session.copy, copyTools },
         actions: {
           login: session.login, cancelLogin: session.cancelLogin, load: session.load, signOut: session.signOut,
           copyLink: session.copyLink, copyDiagnostic: session.copyDiagnostic, isViewCurrent: session.isViewCurrent,
@@ -3517,12 +3577,37 @@ window.__ModuleLoader__.load({
         actions: { ...catalogue.actions, refresh: form.refresh },
       });
 
+      const personalFold = sessionUi.ready
+        ? null
+        : h('button', {
+          type: 'button',
+          className: 'fiam-personal-fold',
+          style: { ...button, width: '100%', justifyContent: 'space-between' },
+          'aria-expanded': revealPersonal,
+          onClick: () => setRevealPersonal((current) => !current),
+        },
+          revealPersonal ? '收起个人设置' : '登录后可配置',
+        );
+
+      const diagnosticFold = h('details', { className: 'fiam-details fiam-diagnostic' },
+        h('summary', null, '诊断'),
+        h('div', { className: 'fiam-actions', style: { marginTop: 8 } },
+          h('button', { type: 'button', style: button, disabled: session.copy.pending || viewBarrier.current.pending, onClick: session.copyDiagnostic }, '复制问题信息'),
+        ),
+        // Only the diagnostic copy's own acknowledgement belongs here; the
+        // account card renders the link copy's feedback in its visible area.
+        session.copy.notice && !session.copy.url && session.isViewCurrent(session.copy.epoch)
+          ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, session.copy.notice) : null,
+      );
+
       return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
         header,
         journeyBar,
         accountCard,
-        gatewayCard,
-        modelsCard,
+        personalFold,
+        personalVisible ? gatewayCard : null,
+        personalVisible ? modelsCard : null,
+        diagnosticFold,
       );
     }
 

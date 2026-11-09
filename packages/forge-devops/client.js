@@ -66,6 +66,94 @@ window.__ModuleLoader__.load({
     const TIMEOUT_MAX = 600000;
 
     /* ------------------------------------------------------------------ *
+     * r15「企业研发」汇总面（AC-2 / AC-3 / AC-10）                        *
+     * ------------------------------------------------------------------ */
+
+    /** 汇总面读的三个同源端点：一个失败只影响自己那一行（AC-2 的四组反例）。 */
+    const READINESS_ENDPOINTS = Object.freeze({
+      iam: '/api/forge-iam/view',
+      devops: CLI_ENDPOINT,
+      gitee: '/api/forge-gitee/config',
+    });
+    /**
+     * 状态词表（r16 契约的唯一一份）：身份七态（含"退出未确认"）、配置三态、Key 三态、
+     * 检查六态都从这里取词，页面任何位置都不许再写字面量"已登录/未配置/通过"。词表键 = `readiness.state.*`。
+     */
+    const READINESS_STATES = Object.freeze({
+      signedIn: 'signedIn',
+      signedOut: 'signedOut',
+      signedOutUnknown: 'signedOutUnknown',
+      authenticating: 'authenticating',
+      expired: 'expired',
+      unreachable: 'unreachable',
+      unknown: 'unknown',
+      missing: 'missing',
+      unconfigured: 'unconfigured',
+      configured: 'configured',
+      keyUnverified: 'keyUnverified',
+      keyVerified: 'keyVerified',
+      unchecked: 'unchecked',
+      checking: 'checking',
+      pass: 'pass',
+      fail: 'fail',
+      stale: 'stale',
+    });
+    /**
+     * 身份端点 `state` → 状态词。**未列出的一律"退出未确认"**：既不是"已登录"，也不许画成
+     * "未登录"——把"不知道"画成"没登录"会诱导用户重复登录，正是 AC-3 的反面目标。
+     * 端点整体不可用时才回落到 `sourceState`（404 = 未安装 / 0 = 不可达）。
+     */
+    const IAM_STATE_OF = Object.freeze({
+      ready: READINESS_STATES.signedIn,
+      'signed-out': READINESS_STATES.signedOut,
+      unconfigured: READINESS_STATES.signedOut,
+      authenticating: READINESS_STATES.authenticating,
+      expired: READINESS_STATES.expired,
+      unreachable: READINESS_STATES.unreachable,
+      error: READINESS_STATES.signedOutUnknown,
+    });
+    /** 身份导航：分区 id 与宿主可能提供的两个切换方法（只做能力探测，不猜路由）。 */
+    const SECTION_FORGE_IAM = 'forge-iam';
+    const NAV_METHODS = Object.freeze(['openSection', 'selectSection']);
+    /** 四层证据与三态/依据：与服务端 `src/readiness.mjs` 逐字一致（`tests/ui-contract` 守）。 */
+    const EVIDENCE_LAYERS = Object.freeze(['file', 'executable', 'target', 'readonly']);
+    const EVIDENCE_STATES = Object.freeze({ pass: 'pass', fail: 'fail', notRun: 'not-run' });
+    const EVIDENCE_BASIS_OF = Object.freeze({
+      'filesystem-stat': 'filesystemStat',
+      'config-shape': 'configShape',
+      'policy-admission': 'policyAdmission',
+    });
+    const EVIDENCE_REASONS = Object.freeze([
+      'no-dop-bin',
+      'path-resolution-required',
+      'file-not-found',
+      'is-directory',
+      'not-executable',
+      'source-type-unknown',
+      'policy-unavailable',
+      'policy-denied',
+      'confirmation-required',
+      'no-evidence',
+    ]);
+    const READINESS_SOURCE_TYPES = Object.freeze(['local-diagnostic', 'fixture', 'enterprise-evidence', 'unknown']);
+    /** 检查子原因（AC-10）：只认这四个码，其它一律"未知"。 */
+    const CHECK_REASON_OF = Object.freeze({
+      NO_CLI: 'noCli',
+      ENTRY_NOT_EXECUTABLE: 'notExecutable',
+      ENDPOINT_UNREACHABLE: 'unreachable',
+      POLICY_DENIED: 'policyDenied',
+    });
+    /**
+     * 汇总面固定两条行（DESIGN §3）：每行是若干成员的聚合，成员只在详情里出现。
+     * 行的顺序、标签与 `data-group` 一起构成对外契约，渲染与断言共用这张表。
+     */
+    const READINESS_GROUPS = Object.freeze(['identity', 'tools']);
+    const READINESS_GROUP_MEMBERS = Object.freeze({
+      identity: Object.freeze(['identity', 'key']),
+      tools: Object.freeze(['device', 'devops', 'gitee']),
+    });
+
+    /* ------------------------------------------------------------------ *
      * 度量常量（DESIGN §5.2 与 §0.6；组件内部不再出现裸数字）             *
      * ------------------------------------------------------------------ */
 
@@ -85,6 +173,7 @@ window.__ModuleLoader__.load({
       labelSize: 13,
       labelWeight: 500,
       labelLine: 20,
+      layerLabelWidth: 88,
       headGap: 6,
       inputHeight: 34,
       inputGap: 6,
@@ -157,7 +246,7 @@ window.__ModuleLoader__.load({
 .fdv-tag-ok{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent)}
 .fdv-scalar{box-sizing:border-box;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
 .fdv-scalar-input{width:${METRICS.scalarInputWidth}px;max-width:100%;font-variant-numeric:tabular-nums}
-.fdv-footer{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px}
+.fdv-footer{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px}
 .fdv-note{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-note-error{color:var(--dsw-alias-state-error-primary)}
 .fdv-note-action{margin-left:${METRICS.statusGap}px}
@@ -170,6 +259,44 @@ window.__ModuleLoader__.load({
 .fdv-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
 .fdv-unavailable-body{margin:${METRICS.headGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-unavailable-env{display:block;margin-top:4px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:${METRICS.codeSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
+.fdv-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.candidatePadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-row-main{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:1;min-width:0}
+.fdv-row-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px}
+.fdv-summary-row{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin:${METRICS.statusGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-summary-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.fdv-row-label{flex:none;width:112px;font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fdv-row-state{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-row-detail{min-width:0;overflow-wrap:anywhere}
+.fdv-next{min-width:0;overflow-wrap:anywhere}
+.fdv-details{flex-basis:100%;margin:0 0 0 112px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-detail-line{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;min-width:0}
+.fdv-detail-label{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
+.fdv-detail-text{min-width:0;overflow-wrap:anywhere}
+.fdv-details-body .fdv-details{margin:0}
+.fdv-details-body .fdv-check{margin:${METRICS.headGap}px 0 0;padding-top:0;border-top:0}
+.fdv-summary{cursor:pointer;color:var(--dsw-alias-label-secondary);list-style:none}
+.fdv-summary::-webkit-details-marker{display:none}
+.fdv-summary:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:${METRICS.radiusSm}}
+.fdv-details-body{display:flex;flex-direction:column;gap:2px;margin-top:${METRICS.headGap}px;padding-left:${METRICS.statusPadX}px;border-left:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-layer-line{display:flex;gap:${METRICS.statusGap}px}
+.fdv-layer-label{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
+.fdv-layer-value{min-width:0;overflow-wrap:anywhere}
+.fdv-check{flex-basis:100%;margin:${METRICS.headGap}px 0 0 112px;padding:${METRICS.fieldPadY}px 0 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:${METRICS.headGap}px ${METRICS.statusPadX}px}
+.fdv-check-item{display:flex;gap:${METRICS.headGap}px;min-width:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-check-label{flex:none;color:var(--dsw-alias-label-secondary)}
+.fdv-check-value{min-width:0;overflow-wrap:anywhere}
+.fdv-evidence{display:flex;flex-direction:column;gap:2px;margin:${METRICS.headGap}px 0 0;padding:0;list-style:none;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-evidence-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px}
+.fdv-evidence-layer{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
+.fdv-evidence-reason{min-width:0;overflow-wrap:anywhere}
+.fdv-evidence-basis{min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fdv-check-footer{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
+.fdv-receipt{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.groupGapTop}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fdv-receipt{flex:1 1 100%}
+.fdv-receipt-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-left:auto}
+.fdv-receipt-hint{flex:0 0 100%;margin:2px 0 0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));overflow-wrap:anywhere}
+.fdv-disclaimer{margin:${METRICS.footerGapTop}px 0 0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .fdv-skeleton{display:flex;flex-direction:column;margin-top:${METRICS.groupGapTop}px}
 .fdv-skeleton-group{height:${METRICS.groupLine}px;margin:0 0 ${METRICS.groupGapBottom}px;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
 .fdv-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
@@ -185,25 +312,24 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
 
     const zh = {
-      nav: '企业 DevOps',
-      title: '企业 DevOps',
-      intro: '插件会自己找 dop；只有找不到时才需要你指定位置。',
-      'status.ready': '只读面 ready · {summary}',
-      'status.summary': 'dop {dop}',
+      nav: 'DevOps',
+      title: 'DevOps',
+      intro: '插件会自己找 dop；只有找不到时才需要指定。',
+      'status.ready': 'dop 已自动找到',
       'status.checking': '正在检测命令行位置',
       'status.unchanged': '位置未变',
       'status.missing': '未找到 {cli} · 已查 PATH、候选目录、环境变量',
-      'status.unavailable': '只读面不可用 · {reason}',
-      'action.rediscover': '重新自动发现',
-      'action.rediscover.busy': '检测中…',
-      'action.takeOver': '改为手动指定',
-      'action.reset': '重置为自动发现',
+      'status.unavailable': '配置面不可用 · {reason}',
+      'action.takeOver': '改为手动',
+      'action.reset': '重新自动发现',
       'action.refresh': '刷新',
+      'action.check': '检查',
+      'action.check.busy': '检查中…',
       'entry.dop': 'dop 可执行文件',
       'entry.placeholder': '粘贴 {tool} 的完整路径',
       'entry.placeholder.reset': '保存后自动发现',
-      'entry.hint.discovered': '自动发现命中 · 另有 {n} 个候选',
-      'entry.hint.discovered.single': '自动发现命中',
+      'entry.hint.discovered': '已自动找到 · 另有 {n} 个候选',
+      'entry.hint.discovered.single': '已自动找到',
       'entry.hint.env': '来自环境变量 · 在此保存将覆盖它',
       'entry.hint.config': '已手动指定 · 清空即回落自动发现',
       'entry.hint.missing': '未找到 · 已查 PATH、候选目录、环境变量',
@@ -218,9 +344,11 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': '覆盖环境变量',
       'candidates.summary': '另有 {n} 个候选',
       'candidates.current': '当前生效',
-      'field.timeoutMs': '超时（毫秒）',
-      'field.timeoutMs.hint': '1000–600000，默认 20000',
-      'section.commandline': '命令行入口与超时',
+      'field.timeoutMs': '命令超时',
+      'field.timeoutMs.hint': '命令超过这个时间就判失败',
+      'field.timeoutMs.default': '20 秒（默认）',
+      'field.timeoutMs.seconds': '{seconds} 秒',
+      'field.timeoutMs.millis': '{ms} 毫秒',
       'error.notFound': '找不到这个文件',
       'error.pathLength': '路径太长（上限 4096 个字符），请确认没有粘进整段日志',
       'error.timeout': '请输入 1000–600000 之间的整数（毫秒）',
@@ -228,7 +356,6 @@ window.__ModuleLoader__.load({
       load: '正在读取命令行位置',
       save: '保存',
       saving: '保存中…',
-      saved: '已保存',
       'saveFailed': '保存失败：{reason}',
       saveFailedStale: '配置已被其它窗口改动 · 刷新后重试',
       'unavailable.title': '这里暂时不能保存',
@@ -236,23 +363,149 @@ window.__ModuleLoader__.load({
       'unavailable.envHint': '可以改用环境变量：',
       'unavailable.envDop': 'FORGE_DEVOPS_DOP_BIN  dop 可执行文件',
       'unavailable.readme': '详见 packages/forge-devops/README.md',
+      'receipt.check': '检查：{state}',
+      'receipt.unsaved': '未保存',
+      'receipt.saved': '已保存 · 已生效',
+      'receipt.notApplied': '已保存 · 未生效（{reason}）',
+      'receipt.unverified': '已保存 · 生效状态未知（{reason}）',
+      'receipt.reason.apply-unverified': '宿主已注入流程/读取器，无法确认新配置已生效',
+      'receipt.cleared': '已保存 · 已清除（本机暂无可用命令行入口）',
+      'receipt.appliedUnknown': '已保存 · 生效状态未知',
+      'receipt.saveHint': '保存：写入本机覆盖，服务端会立即按新配置重建。',
+      'receipt.checkHint': '检查：重新发现配置并重建读面；不执行 CLI、不请求企业端点，也不改动数据。',
+      'check.at': '{state} · {time}',
+      'readiness.nav': '企业研发',
+      'readiness.title': '企业研发',
+      'readiness.row.identity': '身份与 Key',
+      'readiness.row.tools': '本机工具',
+      'readiness.row.key': '网关 Key',
+      'readiness.row.devops': 'DevOps',
+      'readiness.row.gitee': 'Gitee',
+      'readiness.summary.pending': '待处理',
+      'readiness.summary.ready': '可以开始',
+      'readiness.summary.hint': '先处理身份与 Key',
+      'readiness.key.unconfigured': '未配置个人 Key',
+      'readiness.key.unverified': 'Key 未验证',
+      'readiness.key.verified': 'Key 已验证',
+      'readiness.tools.dop.ready': 'dop 已找到',
+      'readiness.tools.dop.missing': 'dop 未找到',
+      'readiness.tools.gitee.unconfigured': 'Gitee 未配置',
+      'readiness.tools.gitee.ready': 'Gitee 已配置',
+      'readiness.detail.title': '详情',
+      'readiness.detail.public': '公共参数：企业分发，本机不可改',
+      'readiness.detail.write': '写权限：由企业侧判定，本页不判断',
+      'readiness.footer': '本页只显示本机可见性，不代表业务授权。公共参数由企业分发；写权限由企业侧判定，本页不判断。',
+      'readiness.state.signedIn': '已登录',
+      'readiness.state.signedOut': '未登录',
+      'readiness.state.signedOutUnknown': '退出未确认',
+      'readiness.state.authenticating': '登录中',
+      'readiness.state.expired': '过期',
+      'readiness.state.unreachable': '不可达',
+      'readiness.state.unknown': '未知',
+      'readiness.state.missing': '未安装',
+      'readiness.state.unconfigured': '未配置',
+      'readiness.state.configured': '已配置',
+      'readiness.state.keyUnverified': '已配置·未验证',
+      'readiness.state.keyVerified': '已验证',
+      'readiness.state.unchecked': '未检查',
+      'readiness.state.checking': '检查中',
+      'readiness.state.pass': '通过',
+      'readiness.state.fail': '失败',
+      'readiness.state.stale': '已过期',
+      'readiness.reason.noCli': '未配置命令行入口',
+      'readiness.reason.notExecutable': '入口不可执行',
+      'readiness.reason.unreachable': '目标不可达',
+      'readiness.reason.policyDenied': '只读被拒',
+      'readiness.key.reason.ownerMismatch': '凭据属于其他账号',
+      'readiness.key.reason.notConfigured': '尚未写入网关凭据',
+      'readiness.key.reason.invalid': '凭据记录不可读',
+      'readiness.key.reason.modelUnavailable': '模型访问未就绪',
+      'readiness.key.reason.unknown': '无法判定',
+      'readiness.key.reason.notInstalled': '账号插件未安装',
+      'readiness.next.signIn': '前往企业账号登录',
+      'readiness.next.signingIn': '返回账号页等待登录完成',
+      'readiness.next.signedIn': '身份已就绪，可继续核对网关 Key',
+      'readiness.next.expired': '登录已过期，需要重新登录',
+      'readiness.next.unreachable': '账号服务不可达，请稍后重试',
+      'readiness.next.unconfirmed': '请到企业账号页核对是否已退出',
+      'readiness.next.missingPlugin': '安装企业账号插件后再查看',
+      'readiness.next.keyConfigure': '到企业账号页写入网关凭据',
+      'readiness.next.keyVerify': '到企业账号页验证网关凭据',
+      'readiness.next.check': '重新发现配置并重建读面',
+      'readiness.next.refresh': '刷新后重试',
+      'readiness.next.giteeBlocked': '未获批准的只读探测，本页不发起请求',
+      'readiness.action.openAccount': '前往企业账号',
+      'readiness.nav.guide': '设置 → 企业账号',
+      'readiness.check.item.revision': '基准',
+      'readiness.check.item.time': '检查时间',
+      'readiness.check.item.object': '对象',
+      'readiness.check.item.sourceType': '来源类型',
+      'readiness.check.sourceType.local-diagnostic': '本地诊断',
+      'readiness.check.sourceType.fixture': '夹具',
+      'readiness.check.sourceType.enterprise-evidence': '企业真实证据',
+      'readiness.check.sourceType.unknown': '未知',
+      'readiness.evidence.layer.file': '文件存在',
+      'readiness.evidence.layer.executable': '可启动',
+      'readiness.evidence.layer.target': '目标可识别',
+      'readiness.evidence.layer.readonly': '只读可访问',
+      'readiness.evidence.state.pass': '通过',
+      'readiness.evidence.state.fail': '未通过',
+      'readiness.evidence.state.notRun': '未执行',
+      'readiness.evidence.basis.filesystemStat': '文件系统只读探测',
+      'readiness.evidence.basis.configShape': '配置形状',
+      'readiness.evidence.basis.policyAdmission': '策略准入（未发起真实请求）',
+      'readiness.evidence.reason.no-dop-bin': '未配置命令行入口',
+      'readiness.evidence.reason.path-resolution-required': '需要可解析的完整路径',
+      'readiness.evidence.reason.file-not-found': '路径不存在或不是普通文件',
+      'readiness.evidence.reason.is-directory': '路径是目录',
+      'readiness.evidence.reason.not-executable': '入口不可执行',
+      'readiness.evidence.reason.source-type-unknown': '来源类型无法判定',
+      'readiness.evidence.reason.policy-unavailable': '策略不可用',
+      'readiness.evidence.reason.policy-denied': '策略拒绝只读',
+      'readiness.evidence.reason.confirmation-required': '需要确认',
+      'readiness.evidence.reason.no-evidence': '无可复核证据',
+      'readiness.layers.title': '三层来源',
+      'readiness.layers.inherited': '公共参数',
+      'readiness.layers.override': '本机覆盖',
+      'readiness.layers.effective': '最终生效',
+      'readiness.layers.origin': '生效来源',
+      'readiness.plugin.unknown': '版本未知',
+      'readiness.layers.reason.LAYERS_UNAVAILABLE': '无法读取条目，三层来源未知',
+      'readiness.layers.reason.INHERITED_EMPTY': '公共参数层为空',
+      'readiness.layers.reason.OVERRIDE_EMPTY': '本机覆盖层为空',
+      'readiness.layers.reason.NO_REVISION': '缺少 revision，无法确认最终生效',
+      'readiness.origin.config': '配置',
+      'readiness.origin.env': '环境变量',
+      'readiness.origin.discovered': '自动发现',
+      'readiness.origin.default': '默认',
+      'readiness.origin.unset': '未配置',
+      'readiness.origin.unknown': '未知',
+      'readiness.local.none': '无本机覆盖',
+      'readiness.local.keys': '本机覆盖：{keys}',
+      'readiness.local.unknown': '未提供',
+      'readiness.gitee.notExecuted': '未执行 · 未获批准的只读探测，本页不发起请求',
+      'readiness.loading': '正在读取…',
+      'readiness.failed': '无法读取（{reason}）',
+      'readiness.action.check': '检查 DevOps',
+      'readiness.action.check.busy': '检查中…',
+      'readiness.action.checkGitee': '检查 Gitee',
+      'readiness.action.refresh': '刷新',
     };
 
     const en = {
-      nav: 'Enterprise DevOps',
-      title: 'Enterprise DevOps',
+      nav: 'DevOps',
+      title: 'DevOps',
       intro: 'The plugin locates dop by itself; you only point at a path when it fails.',
-      'status.ready': 'Reader ready · {summary}',
-      'status.summary': 'dop {dop}',
+      'status.ready': 'dop found automatically',
       'status.checking': 'Detecting command-line locations',
       'status.unchanged': 'locations unchanged',
       'status.missing': '{cli} not found · searched PATH, candidate folders, environment',
-      'status.unavailable': 'Reader unavailable · {reason}',
-      'action.rediscover': 'Rediscover',
-      'action.rediscover.busy': 'Detecting…',
+      'status.unavailable': 'Configuration unavailable · {reason}',
       'action.takeOver': 'Set manually',
-      'action.reset': 'Reset to autodiscovery',
+      'action.reset': 'Rediscover',
       'action.refresh': 'Refresh',
+      'action.check': 'Check',
+      'action.check.busy': 'Checking…',
       'entry.dop': 'dop executable',
       'entry.placeholder': 'Paste the full path to {tool}',
       'entry.placeholder.reset': 'Resolved on save',
@@ -272,9 +525,11 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': 'overrides environment',
       'candidates.summary': '{n} more candidate',
       'candidates.current': 'active',
-      'field.timeoutMs': 'Timeout (ms)',
-      'field.timeoutMs.hint': '1000–600000, default 20000',
-      'section.commandline': 'Command-line entries and timeout',
+      'field.timeoutMs': 'Command timeout',
+      'field.timeoutMs.hint': 'A command fails when it runs longer than this',
+      'field.timeoutMs.default': '20 s (default)',
+      'field.timeoutMs.seconds': '{seconds} s',
+      'field.timeoutMs.millis': '{ms} ms',
       'error.notFound': 'That file does not exist',
       'error.pathLength': 'Path is too long (4096 chars max); check you did not paste a log block',
       'error.timeout': 'Enter an integer between 1000 and 600000 (ms)',
@@ -282,7 +537,6 @@ window.__ModuleLoader__.load({
       load: 'Reading command-line locations',
       save: 'Save',
       saving: 'Saving…',
-      saved: 'Saved',
       'saveFailed': 'Save failed: {reason}',
       saveFailedStale: 'Changed in another window · refresh and retry',
       'unavailable.title': 'Saving is unavailable here',
@@ -290,6 +544,133 @@ window.__ModuleLoader__.load({
       'unavailable.envHint': 'Environment variables still work:',
       'unavailable.envDop': 'FORGE_DEVOPS_DOP_BIN  dop executable',
       'unavailable.readme': 'See packages/forge-devops/README.md',
+      'receipt.check': 'Check: {state}',
+      'check.at': '{state} · {time}',
+      'receipt.unsaved': 'unsaved',
+      'receipt.saved': 'saved · in effect',
+      'receipt.notApplied': 'saved · not in effect ({reason})',
+      'receipt.unverified': 'saved · effect unknown ({reason})',
+      'receipt.reason.apply-unverified': 'host-provided flow/reader; cannot confirm the new configuration is in effect',
+      'receipt.cleared': 'saved · cleared (no CLI entry available on this host)',
+      'receipt.appliedUnknown': 'saved · effect unknown',
+      'receipt.saveHint': 'Save: writes the local override; the server rebuilds from the new configuration immediately.',
+      'receipt.checkHint': 'Check: re-discovers configuration and rebuilds the read path; runs no CLI, calls no configured endpoint, and changes nothing.',
+      'readiness.nav': 'Enterprise R&D',
+      'readiness.title': 'Enterprise R&D',
+      'readiness.row.identity': 'Identity & Key',
+      'readiness.row.tools': 'Local tools',
+      'readiness.row.key': 'Gateway key',
+      'readiness.row.devops': 'DevOps',
+      'readiness.row.gitee': 'Gitee',
+      'readiness.summary.pending': 'pending',
+      'readiness.summary.ready': 'ready to start',
+      'readiness.summary.hint': 'start with Identity & Key',
+      'readiness.key.unconfigured': 'no personal key configured',
+      'readiness.key.unverified': 'key unverified',
+      'readiness.key.verified': 'key verified',
+      'readiness.tools.dop.ready': 'dop found',
+      'readiness.tools.dop.missing': 'dop not found',
+      'readiness.tools.gitee.unconfigured': 'Gitee not configured',
+      'readiness.tools.gitee.ready': 'Gitee configured',
+      'readiness.detail.title': 'Details',
+      'readiness.detail.public': 'Shared settings: distributed by the enterprise; cannot be changed here',
+      'readiness.detail.write': 'Write access: decided by the enterprise; this page does not judge it',
+      'readiness.footer': 'This page shows local visibility only; it does not represent business authorization. Shared settings are distributed by the enterprise; write access is decided by the enterprise and not judged here.',
+      'readiness.state.signedIn': 'signed in',
+      'readiness.state.signedOut': 'not signed in',
+      'readiness.state.signedOutUnknown': 'sign-out unconfirmed',
+      'readiness.state.authenticating': 'signing in',
+      'readiness.state.expired': 'expired',
+      'readiness.state.unreachable': 'unreachable',
+      'readiness.state.unknown': 'unknown',
+      'readiness.state.missing': 'not installed',
+      'readiness.state.unconfigured': 'not configured',
+      'readiness.state.configured': 'configured',
+      'readiness.state.keyUnverified': 'configured · unverified',
+      'readiness.state.keyVerified': 'verified',
+      'readiness.state.unchecked': 'not checked',
+      'readiness.state.checking': 'checking',
+      'readiness.state.pass': 'passed',
+      'readiness.state.fail': 'failed',
+      'readiness.state.stale': 'stale',
+      'readiness.reason.noCli': 'no command-line entry configured',
+      'readiness.reason.notExecutable': 'entry is not executable',
+      'readiness.reason.unreachable': 'target unreachable',
+      'readiness.reason.policyDenied': 'read denied by policy',
+      'readiness.key.reason.ownerMismatch': 'credential belongs to another account',
+      'readiness.key.reason.notConfigured': 'no gateway credential written yet',
+      'readiness.key.reason.invalid': 'credential record unreadable',
+      'readiness.key.reason.modelUnavailable': 'model access not ready',
+      'readiness.key.reason.unknown': 'cannot determine',
+      'readiness.key.reason.notInstalled': 'account plugin not installed',
+      'readiness.next.signIn': 'Open the enterprise account page to sign in',
+      'readiness.next.signingIn': 'Return to the account page and wait for sign-in to finish',
+      'readiness.next.signedIn': 'Identity is ready; verify the gateway key next',
+      'readiness.next.expired': 'Sign-in expired; sign in again',
+      'readiness.next.unreachable': 'Account service unreachable; retry later',
+      'readiness.next.unconfirmed': 'Check the enterprise account page to confirm sign-out',
+      'readiness.next.missingPlugin': 'Install the enterprise account plugin first',
+      'readiness.next.keyConfigure': 'Write the gateway credential on the account page',
+      'readiness.next.keyVerify': 'Verify the gateway credential on the account page',
+      'readiness.next.check': 'Re-discover configuration and rebuild the read path',
+      'readiness.next.refresh': 'Refresh and retry',
+      'readiness.next.giteeBlocked': 'No approved read-only probe; this page sends no request',
+      'readiness.action.openAccount': 'Open enterprise account',
+      'readiness.nav.guide': 'Settings → Enterprise account',
+      'readiness.check.item.revision': 'Baseline',
+      'readiness.check.item.time': 'Checked at',
+      'readiness.check.item.object': 'Object',
+      'readiness.check.item.sourceType': 'Source type',
+      'readiness.check.sourceType.local-diagnostic': 'local diagnostic',
+      'readiness.check.sourceType.fixture': 'fixture',
+      'readiness.check.sourceType.enterprise-evidence': 'enterprise evidence',
+      'readiness.check.sourceType.unknown': 'unknown',
+      'readiness.evidence.layer.file': 'file exists',
+      'readiness.evidence.layer.executable': 'launchable',
+      'readiness.evidence.layer.target': 'target recognizable',
+      'readiness.evidence.layer.readonly': 'read-only reachable',
+      'readiness.evidence.state.pass': 'passed',
+      'readiness.evidence.state.fail': 'failed',
+      'readiness.evidence.state.notRun': 'not run',
+      'readiness.evidence.basis.filesystemStat': 'filesystem read-only probe',
+      'readiness.evidence.basis.configShape': 'config shape',
+      'readiness.evidence.basis.policyAdmission': 'policy admission (no real request sent)',
+      'readiness.evidence.reason.no-dop-bin': 'no command-line entry configured',
+      'readiness.evidence.reason.path-resolution-required': 'a resolvable full path is required',
+      'readiness.evidence.reason.file-not-found': 'path missing or not a regular file',
+      'readiness.evidence.reason.is-directory': 'path is a directory',
+      'readiness.evidence.reason.not-executable': 'entry is not executable',
+      'readiness.evidence.reason.source-type-unknown': 'source type cannot be determined',
+      'readiness.evidence.reason.policy-unavailable': 'policy unavailable',
+      'readiness.evidence.reason.policy-denied': 'read-only denied by policy',
+      'readiness.evidence.reason.confirmation-required': 'confirmation required',
+      'readiness.evidence.reason.no-evidence': 'no verifiable evidence',
+      'readiness.layers.title': 'Layer sources',
+      'readiness.layers.inherited': 'shared settings',
+      'readiness.layers.override': 'local override',
+      'readiness.layers.effective': 'effective',
+      'readiness.layers.origin': 'effective source',
+      'readiness.plugin.unknown': 'version unknown',
+      'readiness.layers.reason.LAYERS_UNAVAILABLE': 'entry unreadable; layer sources unknown',
+      'readiness.layers.reason.INHERITED_EMPTY': 'shared-settings layer is empty',
+      'readiness.layers.reason.OVERRIDE_EMPTY': 'local-override layer is empty',
+      'readiness.layers.reason.NO_REVISION': 'revision missing; effective layer unconfirmed',
+      'readiness.origin.config': 'config',
+      'readiness.origin.env': 'environment variable',
+      'readiness.origin.discovered': 'discovered',
+      'readiness.origin.default': 'default',
+      'readiness.origin.unset': 'not configured',
+      'readiness.origin.unknown': 'unknown',
+      'readiness.local.none': 'no local override',
+      'readiness.local.keys': 'local overrides: {keys}',
+      'readiness.local.unknown': 'not provided',
+      'readiness.gitee.notExecuted': 'Not run · no approved read-only probe; this page sends no request',
+      'readiness.loading': 'Reading…',
+      'readiness.failed': 'Cannot read ({reason})',
+      'readiness.action.check': 'Check DevOps',
+      'readiness.action.check.busy': 'Checking…',
+      'readiness.action.checkGitee': 'Check Gitee',
+      'readiness.action.refresh': 'Refresh',
     };
 
     /* ------------------------------------------------------------------ *
@@ -353,6 +734,21 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    /** 解析 JSON 响应体；非 JSON / 空体一律 null（不抛，调用方只看 `ok` 与 `code`）。 */
+    async function readJsonBody(response) {
+      try {
+        return await response.json();
+      } catch {
+        return null;
+      }
+    }
+
+    /**
+     * `?refresh=1` 的唯一拼法（AC-10）：只有「检查」动作会走到这里。
+     * 两处调用（DevOps 分区刷新、企业研发的检查行）共用一份，避免两处字符串各自漂移。
+     */
+    const refreshUrl = () => `${CLI_ENDPOINT}?refresh=1`;
+
     /**
      * 配置层压过环境变量时是否额外提示。
      * `overrides` 是 `cli-config.mjs` 里 `entryOf()` 既有的字段（被本层压过的下层数组）；
@@ -377,26 +773,22 @@ window.__ModuleLoader__.load({
 
     /** 小标签：来源、覆盖关系、当前生效项。 */
     function Tag(props) {
-      return h('span', { className: `fdv-tag fdv-tag-${props.tone ?? 'quiet'}` }, props.text);
+      // `text` 与 children 两种写法都要认：readiness 面板用 children 传状态词，
+      // 早先这里只读 `props.text`，结果每行只画出一个空标签（屏上一排灰块）。
+      // 回归用例：test/readiness-section.test.mjs「状态标签必须有字」。
+      const label = props.text ?? props.children;
+      return h('span', { className: `fdv-tag fdv-tag-${props.tone ?? 'quiet'}` }, label);
     }
 
     /** 状态行：唯一结论 + 全页唯一全局动作（重新自动发现）。 */
     function StatusLine(props) {
-      const { t, tone, text, busy, onRediscover } = props;
+      const { tone, text } = props;
+      // 状态行只讲「现在怎样」一句话；重新发现已由回执区的「检查」承担，不再挂第二个按钮。
       return h(
         'div',
         { className: `fdv-status fdv-status-${tone}` },
         h('span', { className: 'fdv-dot', 'aria-hidden': 'true' }),
         h('span', { className: 'fdv-status-text', role: 'status', 'aria-live': 'polite', title: text }, text),
-        h(
-          'span',
-          { className: 'fdv-status-actions' },
-          h(
-            'button',
-            { type: 'button', className: 'fdv-link', onClick: onRediscover, disabled: busy === true },
-            busy === true ? t('action.rediscover.busy') : t('action.rediscover'),
-          ),
-        ),
       );
     }
 
@@ -572,6 +964,756 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ *
+     * r15「企业研发」汇总面（AC-2 / AC-3 / AC-10）                        *
+     * ------------------------------------------------------------------ */
+
+    /** 读一个同源端点：任何失败都收敛成 `{ok:false,status}`，绝不抛（一行坏掉不牵连其它行）。 */
+    async function readSource(url) {
+      try {
+        const response = await fetch(url, { headers: READ_HEADERS, cache: 'no-store' });
+        const body = await readJsonBody(response);
+        return { ok: response.ok, status: response.status, body };
+      } catch {
+        return { ok: false, status: 0, body: null };
+      }
+    }
+
+    /** 端点不可用时的状态词：404 = 未安装（AC-7），其它 = 不可达。 */
+    function sourceState(source) {
+      if (source.ok) return null;
+      return source.status === 404 ? READINESS_STATES.missing : READINESS_STATES.unreachable;
+    }
+
+    function isObject(value) {
+      return value !== null && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    /**
+     * 身份状态（AC-3）：未列出的 state 一律「退出未确认」，绝不回落成未登录/未知。
+     * 回落等于把"不知道"说成"知道"，正是本需求要消灭的假绿灯。
+     */
+    function iamStateOf(source) {
+      if (!source.ok) return sourceState(source);
+      const state = source.body?.state;
+      return Object.prototype.hasOwnProperty.call(IAM_STATE_OF, state) ? IAM_STATE_OF[state] : READINESS_STATES.signedOutUnknown;
+    }
+
+    /** 网关 Key（AC-2）：三条同时成立才算已验证，其余已配置一律「已配置·未验证」。 */
+    function keyStateOf(source) {
+      if (!source.ok) return source.status === 404 ? READINESS_STATES.missing : READINESS_STATES.unknown;
+      const gateway = isObject(source.body?.gatewayCredential) ? source.body.gatewayCredential : null;
+      if (!gateway) return READINESS_STATES.unknown;
+      if (gateway.state === 'unconfigured') return READINESS_STATES.unconfigured;
+      const verified = gateway.state === 'configured'
+        && gateway.matchesAccount === true
+        && source.body?.modelAccess?.state === 'ready';
+      return verified ? READINESS_STATES.keyVerified : READINESS_STATES.keyUnverified;
+    }
+
+    /** Key 行的原因键：只读白名单里的三个字段，不碰凭据正文。 */
+    function keyReasonKey(source, state) {
+      if (state === READINESS_STATES.missing) return 'readiness.key.reason.notInstalled';
+      if (state === READINESS_STATES.unconfigured) return 'readiness.key.reason.notConfigured';
+      const gateway = isObject(source.body?.gatewayCredential) ? source.body.gatewayCredential : null;
+      if (!gateway) return 'readiness.key.reason.unknown';
+      if (gateway.state === 'invalid') return 'readiness.key.reason.invalid';
+      if (gateway.matchesAccount === false) return 'readiness.key.reason.ownerMismatch';
+      if (gateway.state !== 'configured') return 'readiness.key.reason.invalid';
+      if (source.body?.modelAccess?.state !== 'ready') return 'readiness.key.reason.modelUnavailable';
+      return 'readiness.key.reason.unknown';
+    }
+
+    /** 证据原因只认白名单里的十个码，其它一律「无可复核证据」。 */
+    function evidenceReasonOf(reason) {
+      return EVIDENCE_REASONS.includes(reason) ? reason : 'no-evidence';
+    }
+
+    /** 结论由四层证据唯一决定：客户端不采信服务端 verdict（证据才是事实）。 */
+    function verdictOfEvidence(evidence) {
+      const failed = evidence.find((item) => item.state === EVIDENCE_STATES.fail);
+      if (failed) return { verdict: 'fail', blockedBy: failed.id, reason: failed.reason };
+      const pending = evidence.find((item) => item.state === EVIDENCE_STATES.notRun);
+      if (pending) return { verdict: 'incomplete', blockedBy: pending.id, reason: pending.reason };
+      return { verdict: 'pass', blockedBy: null, reason: null };
+    }
+
+    /** 服务端 readiness 视图归一：contract/object/evidence 三者不符即「无证据」。 */
+    function readinessOf(body) {
+      const view = isObject(body?.readiness) ? body.readiness : null;
+      if (!view || view.contract !== 1 || view.object !== 'devops') return null;
+      if (!Array.isArray(view.evidence) || view.evidence.length !== EVIDENCE_LAYERS.length) return null;
+      const evidence = EVIDENCE_LAYERS.map((id) => {
+        const item = view.evidence.find((candidate) => candidate?.id === id);
+        const state = Object.values(EVIDENCE_STATES).includes(item?.state) ? item.state : EVIDENCE_STATES.notRun;
+        return {
+          id,
+          state,
+          reason: state === EVIDENCE_STATES.pass ? null : evidenceReasonOf(item?.reason),
+          basis: EVIDENCE_BASIS_OF[item?.basis] ?? null,
+        };
+      });
+      return {
+        at: typeof view.at === 'string' ? view.at : null,
+        revision: typeof view.revision === 'string' ? view.revision : null,
+        sourceType: READINESS_SOURCE_TYPES.includes(view.sourceType) ? view.sourceType : 'unknown',
+        plugin: isObject(view.plugin) && typeof view.plugin.name === 'string'
+          ? { name: view.plugin.name, version: typeof view.plugin.version === 'string' ? view.plugin.version : null }
+          : null,
+        layers: isObject(view.layers) ? view.layers : null,
+        evidence,
+        ...verdictOfEvidence(evidence),
+      };
+    }
+
+    function layerListOf(value) {
+      return Array.isArray(value) ? value.filter((key) => typeof key === 'string') : null;
+    }
+
+    /** DevOps 三层来源：服务端只给键名，客户端不再二次推断。 */
+    function devopsLayersOf(body) {
+      const layers = isObject(body?.layers) ? body.layers : null;
+      if (!layers) {
+        return { inherited: null, override: null, effective: null, revision: null, missing: ['LAYERS_UNAVAILABLE'] };
+      }
+      const inherited = layerListOf(layers.inherited);
+      const override = layerListOf(layers.override);
+      const effective = inherited && override ? [...new Set([...inherited, ...override])].sort() : null;
+      const revision = typeof body?.revision === 'string' ? body.revision : null;
+      const missing = new Set(Array.isArray(layers.missing) ? layers.missing.filter((code) => typeof code === 'string') : []);
+      if (inherited && inherited.length === 0) missing.add('INHERITED_EMPTY');
+      if (override && override.length === 0) missing.add('OVERRIDE_EMPTY');
+      if (!revision) missing.add('NO_REVISION');
+      return { inherited, override, effective, revision, missing: [...missing] };
+    }
+
+    /** Gitee 三层来源：服务端给的是三层"值"，客户端只投影键名（值永不进渲染）。 */
+    function giteeLayersOf(body) {
+      const entries = isObject(body?.entries) ? body.entries : null;
+      if (!entries) {
+        return { inherited: null, override: null, effective: null, revision: null, missing: ['LAYERS_UNAVAILABLE'] };
+      }
+      const inherited = [];
+      const override = [];
+      for (const field of Object.keys(entries)) {
+        const entry = isObject(entries[field]) ? entries[field] : {};
+        if (entry.inherited !== null && entry.inherited !== undefined) inherited.push(field);
+        if (entry.override !== null && entry.override !== undefined) override.push(field);
+      }
+      inherited.sort();
+      override.sort();
+      const effective = [...new Set([...inherited, ...override])].sort();
+      const revision = typeof body?.revision === 'string' ? body.revision : null;
+      const missing = [];
+      if (inherited.length === 0) missing.push('INHERITED_EMPTY');
+      if (override.length === 0) missing.push('OVERRIDE_EMPTY');
+      if (!revision) missing.push('NO_REVISION');
+      return { inherited, override, effective, revision, missing };
+    }
+
+    /** 生效来源枚举：内部 origin 值收敛成六个可显示枚举（未知不猜成默认）。 */
+    function originKeyOf(origin) {
+      switch (origin) {
+        case 'config': return 'config';
+        case 'env': return 'env';
+        case 'discovered': return 'discovered';
+        case 'default': return 'default';
+        case 'missing': return 'unset';
+        default: return 'unknown';
+      }
+    }
+
+    function pad2(value) {
+      return String(value).padStart(2, '0');
+    }
+
+    /** 检查时间只显示到秒的本地时间（不引日期库，也不显示原始 ISO 串）。 */
+    function formatTime(value) {
+      const date = new Date(value);
+      if (!value || Number.isNaN(date.getTime())) return '—';
+      return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+    }
+
+    function shortRevision(value) {
+      return typeof value === 'string' && value.length > 0 ? value.slice(0, 8) : '—';
+    }
+
+    /** 三源全失败时只显示类别：不可达 / 未安装 / 失败，不暴露底层错误文本。 */
+    function failureCategory(sources) {
+      if (sources.every((source) => source.status === 0)) return READINESS_STATES.unreachable;
+      if (sources.every((source) => source.status === 404)) return READINESS_STATES.missing;
+      return READINESS_STATES.fail;
+    }
+
+    function toneOf(state) {
+      if (state === READINESS_STATES.configured || state === READINESS_STATES.signedIn || state === READINESS_STATES.keyVerified || state === READINESS_STATES.pass) return 'ok';
+      if (state === READINESS_STATES.fail || state === READINESS_STATES.missing || state === READINESS_STATES.expired
+        || state === READINESS_STATES.signedOutUnknown || state === READINESS_STATES.keyUnverified) return 'warn';
+      return 'quiet';
+    }
+
+    /**
+     * 设置面板分区「企业研发」：七行汇总本机可见性（AC-1/2/3/4/6）。
+     *
+     * 五条不许越过的线：
+     *   1. 三源并行读，任一失败只改自己那行（四组反例各断言另一行不变）；
+     *   2. 只列**键名**与来源枚举，不显示任何配置值、路径或 endpoint（AC-12）；
+     *   3. `?refresh=1` 只由「检查 DevOps」触发，且只打 DevOps 端点；
+     *   4. 固定声明「本页只汇总本机可见性，不代表业务授权」恒在场；
+     *   5. 迟到的旧回包整包丢弃（readSeq / checkSeq 双令牌），不让旧绿灯复活。
+     */
+    function ReadinessSection(props) {
+      const t = props.t;
+      const navigate = typeof props.navigate === 'function' ? props.navigate : null;
+      const [reading, setReading] = React.useState({ mode: 'loading', sources: null, reason: null });
+      const [check, setCheck] = React.useState({
+        state: READINESS_STATES.unchecked,
+        at: null,
+        basis: null,
+        verdict: null,
+        reason: null,
+        evidence: null,
+        sourceType: null,
+      });
+      const [busy, setBusy] = React.useState(false);
+
+      const mounted = React.useRef(true);
+      const readSeq = React.useRef(0);
+      const checkSeq = React.useRef(0);
+      // 回包落定时必须比较"此刻最新"的读面与检查结论，而不是请求发起时的闭包快照：
+      // 刷新与检查交错时，闭包会让旧结论对着另一代读面继续显示通过（P2）。
+      const readingRef = React.useRef(reading);
+      const checkRef = React.useRef(check);
+      // 请求发起序号：服务端按请求到达顺序构建读面，序号大即读面新。
+      const requestSeq = React.useRef(0);
+      // 当前显示的 DevOps 读面由哪一次请求建立；`?refresh=1` 与三源刷新共用这一序。
+      const devopsFaceSeq = React.useRef(0);
+
+      function commitReading(next) {
+        const value = typeof next === 'function' ? next(readingRef.current) : next;
+        readingRef.current = value;
+        setReading(value);
+      }
+
+      function commitCheck(next) {
+        const value = typeof next === 'function' ? next(checkRef.current) : next;
+        checkRef.current = value;
+        setCheck(value);
+      }
+
+      React.useEffect(() => {
+        mounted.current = true;
+        return () => {
+          mounted.current = false;
+        };
+      }, []);
+
+      React.useEffect(() => {
+        void load();
+      }, []);
+
+      async function load() {
+        const token = readSeq.current + 1;
+        readSeq.current = token;
+        const seq = requestSeq.current + 1;
+        requestSeq.current = seq;
+        const previous = readingRef.current.sources;
+        commitReading({ mode: previous ? 'refreshing' : 'loading', sources: previous, reason: null });
+        const [iam, devops, gitee] = await Promise.all([
+          readSource(READINESS_ENDPOINTS.iam),
+          readSource(READINESS_ENDPOINTS.devops),
+          readSource(READINESS_ENDPOINTS.gitee),
+        ]);
+        if (!mounted.current || token !== readSeq.current) return;
+        const fetched = { iam, devops, gitee };
+        const sources = [iam, devops, gitee];
+        const allFailed = sources.every((source) => !source.ok);
+        if (allFailed && previous) {
+          // 刷新失败保留旧表：一次网络抖动不该把已有事实擦成空白。
+          commitReading({ mode: 'ready', sources: readingRef.current.sources ?? previous, reason: failureCategory(sources) });
+          return;
+        }
+        // 发起得更晚的请求（如本次刷新在途时落地的检查）读面更新，不能被更早发出的回包退回旧代。
+        const keepCheckedFace = devopsFaceSeq.current > seq && readingRef.current.sources !== null;
+        const applied = keepCheckedFace
+          ? { ...fetched, devops: readingRef.current.sources.devops ?? devops }
+          : fetched;
+        if (!keepCheckedFace && applied.devops.ok) devopsFaceSeq.current = seq;
+        commitReading({ mode: 'ready', sources: applied, reason: allFailed ? failureCategory(sources) : null });
+        // 读面换代即让旧检查结论过期；回到旧 revision 也不自动复活（AC-9）。
+        const latest = checkRef.current;
+        const nextRevision = applied.devops.ok && typeof applied.devops.body?.revision === 'string' ? applied.devops.body.revision : null;
+        if (latest.basis && nextRevision && latest.basis !== nextRevision && latest.state !== READINESS_STATES.stale) {
+          commitCheck({ ...latest, state: READINESS_STATES.stale });
+        }
+      }
+
+      /** 生效来源：只出"键名: 来源枚举"，不出任何值。 */
+      function originsOf(snapshot) {
+        const entries = isObject(snapshot?.entries) ? snapshot.entries : {};
+        return Object.keys(entries)
+          .filter((field) => typeof entries[field]?.origin === 'string')
+          .map((field) => `${field}: ${t(`readiness.origin.${originKeyOf(entries[field].origin)}`)}`);
+      }
+
+      /**
+       * 本机覆盖：只认服务端 layers 投影，不从合并后的 entries.origin 反推。
+       * 任一来源没有提供投影时返回 null（未知），由调用方显示「未提供」，不猜。
+       */
+      function localOverrides(devops, gitee) {
+        // `LAYERS_UNAVAILABLE` 说明服务端也拿不到配置层，此时空数组不是"没有覆盖"，而是"不知道"。
+        const projected = (layers) => (layers.missing.includes('LAYERS_UNAVAILABLE') ? null : layers.override);
+        const lists = [projected(devopsLayersOf(devops.body)), projected(giteeLayersOf(gitee.body))];
+        if (lists.some((list) => list === null)) return null;
+        return [...new Set(lists.flat())].sort();
+      }
+
+      /** Key 的说明位：只讲"有没有、验没验"；具体原因留给详情。 */
+      function keyPhrase(iam, keyState) {
+        if (keyState === READINESS_STATES.keyVerified) return t('readiness.key.verified');
+        if (keyState === READINESS_STATES.keyUnverified) return t('readiness.key.unverified');
+        if (keyState === READINESS_STATES.unconfigured) return t('readiness.key.unconfigured');
+        return t(keyReasonKey(iam, keyState));
+      }
+
+      function dopPhrase(state) {
+        return state === READINESS_STATES.configured ? t('readiness.tools.dop.ready') : t('readiness.tools.dop.missing');
+      }
+
+      function giteePhrase(state) {
+        return state === READINESS_STATES.configured ? t('readiness.tools.gitee.ready') : t('readiness.tools.gitee.unconfigured');
+      }
+
+      function memberTable() {
+        const sources = reading.sources ?? {};
+        const iam = sources.iam ?? { ok: false, status: 0, body: null };
+        const devops = sources.devops ?? { ok: false, status: 0, body: null };
+        const gitee = sources.gitee ?? { ok: false, status: 0, body: null };
+        const overrides = localOverrides(devops, gitee);
+        const identityState = iamStateOf(iam);
+        const keyState = keyStateOf(iam);
+        const devopsState = devops.ok
+          ? (devops.body?.ready === true ? READINESS_STATES.configured : READINESS_STATES.unconfigured)
+          : sourceState(devops);
+        const giteeState = gitee.ok
+          ? (gitee.body?.ready === true ? READINESS_STATES.configured : READINESS_STATES.unconfigured)
+          : sourceState(gitee);
+        const devopsView = readinessOf(devops.body);
+
+        const identityNext = (() => {
+          switch (identityState) {
+            case READINESS_STATES.signedOut: return { kind: 'navigate', key: 'readiness.next.signIn' };
+            case READINESS_STATES.signedIn: return { kind: 'navigate', key: 'readiness.next.signedIn' };
+            case READINESS_STATES.authenticating: return { kind: 'text', key: 'readiness.next.signingIn' };
+            case READINESS_STATES.expired: return { kind: 'navigate', key: 'readiness.next.expired' };
+            case READINESS_STATES.unreachable: return { kind: 'button', key: 'readiness.next.unreachable', label: 'readiness.action.refresh', onClick: () => void load() };
+            case READINESS_STATES.signedOutUnknown: return { kind: 'navigate', key: 'readiness.next.unconfirmed' };
+            case READINESS_STATES.missing: return { kind: 'text', key: 'readiness.next.missingPlugin' };
+            default: return { kind: 'text', key: 'readiness.next.refresh' };
+          }
+        })();
+
+        return {
+          identity: {
+            id: 'identity',
+            state: identityState,
+            detail: null,
+            phrase: t(`readiness.state.${identityState}`),
+            next: identityNext,
+          },
+          key: {
+            id: 'key',
+            state: keyState,
+            detail: keyState === READINESS_STATES.keyVerified ? null : t(keyReasonKey(iam, keyState)),
+            phrase: keyPhrase(iam, keyState),
+            next: keyState === READINESS_STATES.keyUnverified || keyState === READINESS_STATES.unconfigured
+              ? { kind: 'navigate', key: keyState === READINESS_STATES.unconfigured ? 'readiness.next.keyConfigure' : 'readiness.next.keyVerify' }
+              : keyState === READINESS_STATES.missing
+                ? { kind: 'text', key: 'readiness.next.missingPlugin' }
+                : { kind: 'none', key: null },
+          },
+          device: {
+            id: 'device',
+            state: overrides === null
+              ? READINESS_STATES.unknown
+              : overrides.length > 0 ? READINESS_STATES.configured : READINESS_STATES.unconfigured,
+            detail: overrides === null
+              ? t('readiness.local.unknown')
+              : overrides.length > 0
+                ? t('readiness.local.keys', { keys: overrides.join('、') })
+                : t('readiness.local.none'),
+            phrase: null,
+            next: { kind: 'none', key: null },
+          },
+          devops: {
+            id: 'devops',
+            state: devopsState,
+            detail: devops.ok ? null : t(`readiness.state.${sourceState(devops)}`),
+            phrase: dopPhrase(devopsState),
+            next: { kind: 'text', key: 'readiness.next.check' },
+            layers: devopsLayersOf(devops.body),
+            plugin: devopsView?.plugin ?? (isObject(devops.body?.plugin) ? devops.body.plugin : null),
+            origins: originsOf(devops.body),
+          },
+          gitee: {
+            id: 'gitee',
+            state: giteeState,
+            detail: gitee.ok ? null : t(`readiness.state.${sourceState(gitee)}`),
+            phrase: giteePhrase(giteeState),
+            next: { kind: 'text', key: 'readiness.next.giteeBlocked' },
+            layers: giteeLayersOf(gitee.body),
+            plugin: isObject(gitee.body?.plugin) ? gitee.body.plugin : null,
+            origins: originsOf(gitee.body),
+          },
+        };
+      }
+
+      /** 组状态取成员最差 tone（warn > quiet > ok，同 tone 取靠前成员）。 */
+      const TONE_RANK = { warn: 2, quiet: 1, ok: 0 };
+      function worstTone(list) {
+        let worst = null;
+        for (const member of list) {
+          const tone = toneOf(member.state);
+          if (worst === null || TONE_RANK[tone] > TONE_RANK[worst]) worst = tone;
+        }
+        return worst ?? 'quiet';
+      }
+
+      function groupTable(members) {
+        const devops = members.devops;
+        return {
+          identity: {
+            id: 'identity',
+            tone: worstTone([members.identity, members.key]),
+            state: members.identity.state,
+            detail: members.key.phrase,
+            next: members.identity.next,
+          },
+          tools: {
+            id: 'tools',
+            tone: worstTone([members.device, devops, members.gitee]),
+            state: devops.state,
+            detail: `${devops.phrase} · ${members.gitee.phrase}`,
+            next: null,
+          },
+        };
+      }
+
+      function summaryOf(members) {
+        const pending = [];
+        if (members.identity.state !== READINESS_STATES.signedIn) pending.push(members.identity);
+        if (members.key.state !== READINESS_STATES.keyVerified) pending.push(members.key);
+        if (members.devops.state !== READINESS_STATES.configured) pending.push(members.devops);
+        if (members.gitee.state !== READINESS_STATES.configured) pending.push(members.gitee);
+        if (pending.length === 0) return `✅ ${t('readiness.summary.ready')}`;
+        if (pending.length === 1) return `⚠ 1 项${t('readiness.summary.pending')} · ${pending[0].phrase}`;
+        return `⚠ ${pending.length} 项${t('readiness.summary.pending')} · ${t('readiness.summary.hint')}`;
+      }
+
+      /** 检查：只打 DevOps 端点，且只有它带 `?refresh=1`（AC-4）。 */
+      async function runCheck() {
+        const token = checkSeq.current + 1;
+        checkSeq.current = token;
+        const seq = requestSeq.current + 1;
+        requestSeq.current = seq;
+        setBusy(true);
+        commitCheck({
+          state: READINESS_STATES.checking,
+          at: null,
+          basis: null,
+          verdict: null,
+          reason: null,
+          evidence: null,
+          sourceType: null,
+        });
+        const result = await readSource(refreshUrl());
+        if (!mounted.current || token !== checkSeq.current) return;
+        setBusy(false);
+        const at = new Date().toISOString();
+        if (!result.ok) {
+          const code = CHECK_REASON_OF[errorCode(result.body) ?? ''] ?? null;
+          commitCheck({
+            state: result.status === 0 ? READINESS_STATES.unknown : READINESS_STATES.fail,
+            at,
+            basis: null,
+            verdict: null,
+            reason: code ? `readiness.reason.${code}` : null,
+            evidence: null,
+            sourceType: null,
+          });
+          return;
+        }
+        // 同一次响应既是检查结论也是来源快照：先同步读面，汇总才不会继续写"dop 未找到"（P2）。
+        syncDevopsSource(result, seq);
+        const view = readinessOf(result.body);
+        const basis = typeof result.body?.revision === 'string' ? result.body.revision : null;
+        if (!view) {
+          commitCheck({
+            state: READINESS_STATES.unknown,
+            at,
+            basis,
+            verdict: null,
+            reason: 'readiness.evidence.reason.no-evidence',
+            evidence: null,
+            sourceType: null,
+          });
+          return;
+        }
+        commitCheck({
+          state: view.verdict === 'pass' ? READINESS_STATES.pass : view.verdict === 'fail' ? READINESS_STATES.fail : READINESS_STATES.unknown,
+          at,
+          basis: basis ?? view.revision,
+          verdict: view.verdict,
+          reason: view.reason ? `readiness.evidence.reason.${view.reason}` : null,
+          evidence: view.evidence,
+          sourceType: view.sourceType,
+        });
+      }
+
+      /** 把检查重建后的 DevOps 读面并入来源快照；首屏未就绪时由 load 统一上屏。 */
+      function syncDevopsSource(result, seq) {
+        const latest = readingRef.current;
+        if (!latest.sources || !result.ok) return;
+        devopsFaceSeq.current = seq;
+        commitReading({
+          mode: latest.mode,
+          sources: { ...latest.sources, devops: result },
+        });
+      }
+
+      function checkDetailOf(value) {
+        // D-1：未检查是一行状态，不能与检查结果的「未执行」同词（四层证据另有「未执行」）。
+        if (value.state === READINESS_STATES.unchecked) return t('readiness.state.unchecked');
+        const state = t(`readiness.state.${value.state}`);
+        if (value.state === READINESS_STATES.checking) return `${state} · ${t('readiness.next.check')}`;
+        const time = value.at ? formatTime(value.at) : '—';
+        if (value.reason) return `${state} · ${t(value.reason)} · ${time}`;
+        return t('check.at', { state, time });
+      }
+
+      function evidenceNode(item) {
+        const stateKey = item.state === EVIDENCE_STATES.notRun ? 'notRun' : item.state;
+        return h(
+          'li',
+          { className: 'fdv-evidence-row', key: item.id },
+          h('span', { className: 'fdv-evidence-layer' }, t(`readiness.evidence.layer.${item.id}`)),
+          h(Tag, { tone: item.state === EVIDENCE_STATES.pass ? 'ok' : item.state === EVIDENCE_STATES.fail ? 'warn' : 'quiet' }, t(`readiness.evidence.state.${stateKey}`)),
+          item.reason && item.state !== EVIDENCE_STATES.pass
+            ? h('span', { className: 'fdv-evidence-reason' }, t(`readiness.evidence.reason.${item.reason}`))
+            : null,
+          item.basis ? h('span', { className: 'fdv-evidence-basis' }, t(`readiness.evidence.basis.${item.basis}`)) : null,
+        );
+      }
+
+      function checkPanel() {
+        const items = [
+          ['readiness.check.item.revision', check.basis ? shortRevision(check.basis) : t('readiness.state.unknown')],
+          ['readiness.check.item.time', check.at ? formatTime(check.at) : '—'],
+          ['readiness.check.item.object', 'DevOps'],
+          ['readiness.check.item.sourceType', check.sourceType
+            ? t(`readiness.check.sourceType.${check.sourceType}`)
+            : t('readiness.check.sourceType.unknown')],
+        ];
+        const evidence = check.evidence ?? EVIDENCE_LAYERS.map((id) => ({
+          id,
+          state: EVIDENCE_STATES.notRun,
+          reason: 'no-evidence',
+          basis: null,
+        }));
+        return h(
+          'div',
+          { className: 'fdv-check', key: 'check' },
+          h('div', { className: 'fdv-check-grid' }, items.map(([labelKey, value]) =>
+            h('div', { className: 'fdv-check-item', key: labelKey },
+              h('span', { className: 'fdv-check-label' }, t(labelKey)),
+              h('span', { className: 'fdv-check-value' }, value)))),
+          h('ul', { className: 'fdv-evidence' }, evidence.map(evidenceNode)),
+          h(
+            'div',
+            { className: 'fdv-check-footer' },
+            h(
+              'span',
+              { className: 'fdv-note', role: 'status', 'aria-live': 'polite' },
+              `${t('receipt.check', { state: checkDetailOf(check) })}`,
+            ),
+          ),
+        );
+      }
+
+      function layersNode(row) {
+        const layers = row.layers;
+        const keyList = (list) => (list === null ? t('readiness.origin.unknown') : list.length === 0 ? '—' : list.join('、'));
+        const plugin = row.plugin;
+        return h(
+          'details',
+          { className: 'fdv-details', key: `${row.id}-layers` },
+          h('summary', { className: 'fdv-summary' }, t('readiness.layers.title')),
+          h(
+            'div',
+            { className: 'fdv-details-body' },
+            row.origins && row.origins.length > 0
+              ? h('div', { className: 'fdv-layer-line' },
+                h('span', { className: 'fdv-layer-label' }, t('readiness.layers.origin')),
+                h('span', { className: 'fdv-layer-value' }, row.origins.join('、')))
+              : null,
+            h('div', { className: 'fdv-layer-line' },
+              h('span', { className: 'fdv-layer-label' }, t('readiness.layers.inherited')),
+              h('span', { className: 'fdv-layer-value' }, keyList(layers.inherited))),
+            h('div', { className: 'fdv-layer-line' },
+              h('span', { className: 'fdv-layer-label' }, t('readiness.layers.override')),
+              h('span', { className: 'fdv-layer-value' }, keyList(layers.override))),
+            h('div', { className: 'fdv-layer-line' },
+              h('span', { className: 'fdv-layer-label' }, t('readiness.layers.effective')),
+              h('span', { className: 'fdv-layer-value' }, `${keyList(layers.effective)}${layers.revision ? ` · ${shortRevision(layers.revision)}` : ''}`)),
+            plugin && typeof plugin.name === 'string'
+              ? h('div', { className: 'fdv-layer-line' },
+                h('span', { className: 'fdv-layer-label' }, t(`readiness.row.${row.id}`)),
+                h('span', { className: 'fdv-layer-value' }, `${plugin.name} · ${typeof plugin.version === 'string' ? plugin.version : t('readiness.plugin.unknown')}`))
+              : null,
+            layers.missing.length > 0
+              ? h('div', { className: 'fdv-layer-line' },
+                h('span', { className: 'fdv-layer-label' }, t('readiness.layers.title')),
+                h('span', { className: 'fdv-layer-value' }, layers.missing.map((code) => t(`readiness.layers.reason.${code}`)).join('；')))
+              : null,
+          ),
+        );
+      }
+
+      function detailLine(text, key) {
+        return h('span', { className: 'fdv-detail-text', key }, text);
+      }
+
+      /** 详情成员：三层来源、插件名与版本、检查四项与四层证据都挂在这里。 */
+      function memberNode(member) {
+        const nextText = member.next && member.next.kind !== 'none'
+          ? `${t(member.next.key)}${member.next.kind === 'text' ? '' : ` · ${t('readiness.nav.guide')}`}`
+          : null;
+        return h(
+          'div',
+          { className: 'fdv-detail-line', key: member.id, 'data-member': member.id },
+          h('span', { className: 'fdv-detail-label' }, t(`readiness.row.${member.id}`)),
+          h(Tag, { tone: toneOf(member.state) }, t(`readiness.state.${member.state}`)),
+          member.detail ? h('span', { className: 'fdv-detail-text' }, member.detail) : null,
+          nextText && member.id !== 'identity' ? h('span', { className: 'fdv-next' }, nextText) : null,
+          member.layers ? layersNode(member) : null,
+          member.id === 'devops' ? checkPanel() : null,
+          member.id === 'gitee' ? h('span', { className: 'fdv-next' }, t('readiness.gitee.notExecuted')) : null,
+        );
+      }
+
+      function detailsNode(groupId, members) {
+        const body = [];
+        if (groupId === 'identity') body.push(detailLine(t('readiness.detail.public'), 'public'));
+        for (const member of READINESS_GROUP_MEMBERS[groupId].map((id) => members[id])) {
+          body.push(memberNode(member));
+        }
+        if (groupId === 'identity' && members.identity.next && members.identity.next.kind !== 'none') {
+          body.push(detailLine(
+            `${t(members.identity.next.key)}${members.identity.next.kind === 'text' ? '' : ` · ${t('readiness.nav.guide')}`}`,
+            'identity-next',
+          ));
+        }
+        if (groupId === 'tools') body.push(detailLine(t('readiness.detail.write'), 'write'));
+        return h(
+          'details',
+          { className: 'fdv-details', key: 'details' },
+          h('summary', { className: 'fdv-summary' }, t('readiness.detail.title')),
+          h('div', { className: 'fdv-details-body' }, body),
+        );
+      }
+
+      /** 身份组：可导航时给按钮，不可达时保留「重新检查」并把账号页文字入口留在详情。 */
+      function identityActions(group) {
+        const next = group.next;
+        if (!next) return null;
+        if (next.kind === 'navigate' && navigate) {
+          return h(
+            'button',
+            { type: 'button', className: 'fdv-link', key: 'account', onClick: () => navigate(SECTION_FORGE_IAM) },
+            t('readiness.action.openAccount'),
+          );
+        }
+        if (next.kind === 'button') {
+          return h(
+            'button',
+            { type: 'button', className: 'fdv-link', key: 'retry', disabled: busy, onClick: next.onClick },
+            t(next.label),
+          );
+        }
+        return null;
+      }
+
+      function toolsActions() {
+        return [
+          h(
+            'button',
+            { type: 'button', className: 'fdv-link', key: 'check', disabled: busy, onClick: () => void runCheck() },
+            busy ? t('readiness.action.check.busy') : t('readiness.action.check'),
+          ),
+          h(
+            'button',
+            { type: 'button', className: 'fdv-link', key: 'gitee', disabled: true, title: t('readiness.gitee.notExecuted') },
+            t('readiness.action.checkGitee'),
+          ),
+        ];
+      }
+
+      if (reading.mode === 'loading' && !reading.sources) {
+        return h(
+          'div',
+          { className: 'fdv-root' },
+          h('div', { className: 'fdv-title' }, t('readiness.title')),
+          h(Skeleton, { key: 'skeleton' }),
+          h('p', { className: 'fdv-note', role: 'status', 'aria-live': 'polite' }, t('readiness.loading')),
+        );
+      }
+
+      const members = memberTable();
+      const groups = groupTable(members);
+
+      const rowNode = (groupId) => {
+        const group = groups[groupId];
+        return h(
+          'div',
+          { className: 'fdv-row', key: groupId, 'data-group': groupId },
+          h('span', { className: 'fdv-row-label' }, t(`readiness.row.${groupId}`)),
+          h(
+            'div',
+            { className: 'fdv-row-main' },
+            h(
+              'span',
+              { className: 'fdv-row-state' },
+              h(Tag, { tone: group.tone }, t(`readiness.state.${group.state}`)),
+              h('span', { className: 'fdv-row-detail' }, ` · ${group.detail}`),
+            ),
+            h('span', { className: 'fdv-row-actions' }, groupId === 'identity' ? identityActions(group) : toolsActions()),
+          ),
+          detailsNode(groupId, members),
+        );
+      };
+
+      return h(
+        'div',
+        { className: 'fdv-root', 'aria-busy': reading.mode === 'refreshing' ? 'true' : undefined },
+        h('div', { className: 'fdv-title' }, t('readiness.title')),
+        h(
+          'div',
+          { className: 'fdv-summary-row' },
+          h('span', { className: 'fdv-summary-text', role: 'status', 'aria-live': 'polite' }, summaryOf(members)),
+          h(
+            'button',
+            { type: 'button', className: 'fdv-link', disabled: busy, onClick: () => void load() },
+            t('readiness.action.refresh'),
+          ),
+        ),
+        h('div', { className: 'fdv-group' }, READINESS_GROUPS.map(rowNode)),
+        reading.reason
+          ? h('p', { className: 'fdv-note fdv-note-error', role: 'status' }, t('readiness.failed', { reason: t(`readiness.state.${reading.reason}`) }))
+          : null,
+        h('p', { className: 'fdv-footer fdv-disclaimer', key: 'footer' }, t('readiness.footer')),
+      );
+    }
+
+    /* ------------------------------------------------------------------ *
      * 页面编排                                                            *
      * ------------------------------------------------------------------ */
 
@@ -589,6 +1731,9 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = React.useState({});
       const [expanded, setExpanded] = React.useState({});
       const [steady, setSteady] = React.useState(false);
+      // 回执只讲一句：保存成功与否，以及服务端是否声明生效（缺 `applied` 就是「未知」）。
+      const [receipt, setReceipt] = React.useState(null);
+      const [checkedAt, setCheckedAt] = React.useState(null);
 
       const mounted = React.useRef(true);
       const snapshotRef = React.useRef(null);
@@ -664,7 +1809,7 @@ window.__ModuleLoader__.load({
 
       async function readCli(refresh) {
         try {
-          const response = await fetch(refresh ? `${CLI_ENDPOINT}?refresh=1` : CLI_ENDPOINT, {
+          const response = await fetch(refresh ? refreshUrl() : CLI_ENDPOINT, {
             headers: READ_HEADERS,
             cache: 'no-store',
           });
@@ -701,6 +1846,8 @@ window.__ModuleLoader__.load({
         if (!mounted.current) return;
         applySnapshot(snapshot);
         setSteady(refresh && unchanged);
+        if (refresh) setCheckedAt(new Date().toISOString());
+        setReceipt(null);
         setNotice(null);
       }
 
@@ -710,6 +1857,7 @@ window.__ModuleLoader__.load({
         setStaged((prev) => ({ ...prev, [field]: current }));
         setEditing((prev) => ({ ...prev, [field]: true }));
         setErrors((prev) => omit(prev, field));
+        setReceipt(null);
         setNotice(null);
       }
 
@@ -717,6 +1865,7 @@ window.__ModuleLoader__.load({
         setStaged((prev) => ({ ...prev, [field]: null }));
         setEditing((prev) => ({ ...prev, [field]: false }));
         setErrors((prev) => omit(prev, field));
+        setReceipt(null);
         setNotice(null);
       }
 
@@ -728,6 +1877,7 @@ window.__ModuleLoader__.load({
           const key = validateField(field, value);
           return key ? { ...prev, [field]: t(key) } : omit(prev, field);
         });
+        setReceipt(null);
         setNotice(null);
       }
 
@@ -784,7 +1934,9 @@ window.__ModuleLoader__.load({
             setEditing({});
             setExpanded({});
             setErrors({});
-            setNotice({ kind: 'saved', text: t('saved') });
+            // 只记录服务端给的 `applied`：没有这个键就是"未知"，页面不替它编一个"已生效"。
+            setReceipt({ applied: body.applied ?? null });
+            setNotice(null);
             return;
           }
           const failure = errorCode(body) ?? `HTTP ${response.status}`;
@@ -834,14 +1986,23 @@ window.__ModuleLoader__.load({
         if (!snapshot || snapshot.ready !== true) {
           return { tone: 'missing', text: t('status.missing', { cli: 'dop' }) };
         }
-        const summary = t('status.summary', { dop: t(`origin.${originOf('dopBin')}`) });
-        const text = t('status.ready', { summary });
+        const text = t('status.ready');
         return { tone: 'ready', text: steady ? `${text} · ${t('status.unchanged')}` : text };
       }
 
       const status = statusView();
 
-      /** 超时行（第二行）：值来自 staged，生效值走 placeholder（`20000` 是既有默认值的兜底占位）。 */
+      /** 超时按人类单位展示（字段值仍是毫秒）：20000 → 「20 秒（默认）」，覆盖值 → 「45 秒」。 */
+      function timeoutText(field, ms) {
+        const value = Number(ms);
+        if (!Number.isFinite(value) || value <= 0) return t('field.timeoutMs.default');
+        if (originOf(field) !== 'config' && value === 20000) return t('field.timeoutMs.default');
+        return value % 1000 === 0
+          ? t('field.timeoutMs.seconds', { seconds: value / 1000 })
+          : t('field.timeoutMs.millis', { ms: value });
+      }
+
+      /** 超时行（第二行）：值来自 staged，生效值走 placeholder。 */
       function timeoutField() {
         const field = 'timeoutMs';
         const entry = entries[field] ?? {};
@@ -853,7 +2014,7 @@ window.__ModuleLoader__.load({
           field,
           label: t('field.timeoutMs'),
           hint: t('field.timeoutMs.hint'),
-          placeholder: live || '20000',
+          placeholder: timeoutText(field, live),
           value: stagedValue,
           error: errors[field] ?? null,
           locked,
@@ -866,16 +2027,7 @@ window.__ModuleLoader__.load({
       const children = [
         h('h2', { className: 'fdv-title', key: 'title' }, t('title')),
         h('p', { className: 'fdv-intro', key: 'intro' }, t('intro')),
-        h(StatusLine, {
-          key: 'status',
-          t,
-          tone: status.tone,
-          text: status.text,
-          busy: phase === 'checking',
-          onRediscover: () => {
-            if (phase !== 'checking') void load(true);
-          },
-        }),
+        h(StatusLine, { key: 'status', t, tone: status.tone, text: status.text }),
       ];
 
       if (view.mode === 'loading') {
@@ -891,7 +2043,6 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'fdv-root' }, children);
       }
 
-      children.push(h('div', { className: 'fdv-group', key: 'group-entries' }, t('section.commandline')));
       children.push(
         h(
           'div',
@@ -925,6 +2076,23 @@ window.__ModuleLoader__.load({
       children.push(timeoutField());
 
       const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict') ? ' fdv-note-error' : '';
+      /** 回执一句：保存态优先，其次才是失败原因；不再为「应用」单开一行假状态。 */
+      const receiptSentence = (() => {
+        if (notice) return notice.text;
+        if (phase === 'saving') return t('saving');
+        if (dirty) return t('receipt.unsaved');
+        if (!receipt) return '';
+        const applied = receipt.applied;
+        if (applied === null || typeof applied !== 'object') return t('receipt.appliedUnknown');
+        // 三态：已生效 / 合法清除（本机已无入口，不再说「已生效」）/ 其余按原因。
+        if (applied.ok === true) return applied.active === false ? t('receipt.cleared') : t('receipt.saved');
+        // 「宿主注入、无法确认」是未知，不是未生效：DESIGN §6 第四态，不复用 notApplied。
+        if (applied.reason === 'CLI_APPLY_UNVERIFIED') {
+          return t('receipt.unverified', { reason: t('receipt.reason.apply-unverified') });
+        }
+        return t('receipt.notApplied', { reason: applied.reason ?? t('receipt.appliedUnknown') });
+      })();
+
       children.push(
         locked
           ? h(UnavailableNote, { key: 'unavailable', t })
@@ -932,27 +2100,58 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'fdv-footer', key: 'footer' },
               h(
-                'span',
-                { className: `fdv-note${noteTone}`, role: 'status', 'aria-live': 'polite' },
-                notice ? notice.text : '',
-                notice && notice.refresh
-                  ? h(
-                      'button',
-                      { type: 'button', className: 'fdv-link fdv-note-action', onClick: () => void load(true) },
-                      t('action.refresh'),
-                    )
-                  : null,
+                'div',
+                { className: 'fdv-receipt', key: 'receipt' },
+                h(
+                  'span',
+                  { className: `fdv-note${noteTone}`, role: 'status', 'aria-live': 'polite' },
+                  receiptSentence,
+                  notice && notice.refresh
+                    ? h(
+                        'button',
+                        { type: 'button', className: 'fdv-link fdv-note-action', onClick: () => void load(true) },
+                        t('action.refresh'),
+                      )
+                    : null,
+                ),
+                h(
+                  'span',
+                  { className: 'fdv-receipt-actions' },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'fdv-link',
+                      disabled: phase === 'checking',
+                      onClick: () => {
+                        if (phase !== 'checking') void load(true);
+                      },
+                    },
+                    phase === 'checking' ? t('action.check.busy') : t('action.check'),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'fdv-primary',
+                      disabled: !dirty || phase === 'saving',
+                      onClick: () => void save(),
+                    },
+                    phase === 'saving' ? t('saving') : t('save'),
+                  ),
+                ),
               ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'fdv-primary',
-                  disabled: !dirty || phase === 'saving',
-                  onClick: () => void save(),
-                },
-                phase === 'saving' ? t('saving') : t('save'),
-              ),
+              h('p', { className: 'fdv-receipt-hint', key: 'saveHint' }, t('receipt.saveHint')),
+              h('p', { className: 'fdv-receipt-hint', key: 'checkHint' }, t('receipt.checkHint')),
+              checkedAt
+                ? h(
+                    'p',
+                    { className: 'fdv-receipt-hint', key: 'checkResult', role: 'status' },
+                    t('receipt.check', {
+                      state: `${snapshot && snapshot.ready === true ? t('status.ready') : t('status.missing', { cli: 'dop' })} · ${formatTime(checkedAt)}`,
+                    }),
+                  )
+                : null,
             ),
       );
 
@@ -985,8 +2184,42 @@ window.__ModuleLoader__.load({
       return () => tag.remove();
     }
 
+    /**
+     * 宿主设置页的分区切换能力探测（AC-1）：能探测到才给按钮，探测不到就退回文字指引。
+     * 宿主 API 未在真实环境核验（NOT RUN-7），所以只做能力探测，不猜路由、不伪造跳转。
+     */
+    function sectionNavigatorOf(ctx) {
+      const candidates = [];
+      try {
+        // 两种入口都得在 try 内：Cordis 对未在 `inject` 声明的服务不返回 undefined，
+        // 而是直接抛 `cannot get property "settings" without inject`。r16 GUI 装载时
+        // `ctx.settings` 那一句曾落在 try 外，异常逃到 apply，整条客户端判 failed，
+        // 宿主随即拒绝启动 Web UI（用例外置：test/client-inject.test.mjs）。
+        const service = typeof ctx.get === 'function' ? ctx.get('settings') : null;
+        if (service && typeof service === 'object') candidates.push(service);
+        if (ctx.settings && typeof ctx.settings === 'object') candidates.push(ctx.settings);
+      } catch {
+        // 探测失败按"没有该能力"处理，不影响分区注册。
+      }
+      for (const service of candidates) {
+        for (const method of NAV_METHODS) {
+          if (typeof service[method] === 'function') {
+            return (id) => {
+              try {
+                service[method](id);
+              } catch {
+                // 导航失败不能把面板打崩：按钮点击是尽力而为。
+              }
+            };
+          }
+        }
+      }
+      return null;
+    }
+
     function apply(ctx) {
       const t = ctx.locale.bind(NS);
+      const navigate = sectionNavigatorOf(ctx);
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'forge-devops: copy');
       ctx.effect(() => ensureStyle(), 'forge-devops: styles');
       // `settings.section` 由父条目（settings 壳 → settings-general 的 `slots.inject` 回调）声明，
@@ -1005,17 +2238,36 @@ window.__ModuleLoader__.load({
                 order: 60,
                 label: () => t('nav'),
                 locale: NS,
-                inject: () => ({ t }),
+                inject: () => ({ t, navigate }),
               },
               DevopsSection,
             ),
           ),
         'forge-devops: settings section',
       );
+      // r15「企业研发」分区（order 29，排在 `forge-iam` 的 30 之前）：同一个 client 承载两个分区，
+      // 各自独立注册——任一注册失败不牵连另一个（两个 effect 标签分开，测试按标签断言）。
+      ctx.effect(
+        () =>
+          ctx.slots.inject('settings.section', () =>
+            ctx.slots.register(
+              {
+                name: 'settings.section',
+                id: 'devops-readiness',
+                order: 29,
+                label: () => t('readiness.nav'),
+                locale: NS,
+                inject: () => ({ t, navigate }),
+              },
+              ReadinessSection,
+            ),
+          ),
+        'forge-devops: readiness section',
+      );
     }
 
     const inject = ['slots', 'locale'];
 
-    return { apply, inject, DevopsSection, CliEntryField, StatusLine, CandidateList };
+    return { apply, inject, DevopsSection, ReadinessSection, CliEntryField, StatusLine, CandidateList };
   },
 });

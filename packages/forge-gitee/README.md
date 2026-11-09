@@ -9,7 +9,7 @@
 | 不负责 | 不重写 Gitee API，不自建 MCP，不做 arm64 交叉编译，不执行 `checkout`/`merge`/`rebase`/`tag`/`revert`，不合并/关闭/发版，不把个人凭据写入仓库或模型上下文 |
 | 衔接点 | `tools` + `policy` 两个注入服务；策略目录与审计由 `@heluo/forge-policy` 提供；唯一子进程出口 `src/gitee-cli.mjs`（gitee CLI 与本机 git 共用） |
 | 详细设计 | [DESIGN-010](../../docs/design/plugins/forge-gitee.md) |
-| 实现状态 | `package.json`、`src/`（14 模块）、`test/`（见[测试](#测试)）、`cordis.patch.yml` 已落地 |
+| 实现状态 | `package.json`、`src/`（15 模块）、`client.js`（设置页「Gitee」）、`test/`（见[测试](#测试)）、`cordis.patch.yml` 已落地；r15 新增三层读面（`src/config-access.mjs`）与配置端点（`src/http.mjs`），**设置页实机渲染未验** |
 
 `GITEE_PLATFORM='gitee'` 是本包唯一的平台声明，落在每个信封与返回体上。仓库 / Issue / PR 的事实只有这一份实现：`@heluo/forge-devops` 退回 dop 变更流程四工具，`change_context` 的承建仓库段改为外部指引（`REPO_FACTS_EXTERNAL` → `forge_gitee_repository_read` / `forge_gitee_issue_read`）。字段只有白名单一套（`GITEE_FIELD_PROJECTIONS`），而且名字是**实测来的**：2026-11-03 在企业机器上取到 `repo view`/`issue list`/`pr list` 三段真实输出，据此把 gh 风格的猜测全部换掉（仓库没有 `url`/`private`/`updated_at`，PR 编号是 `iid`、Issue 是 `id`，链接是 `web_url`），`mergedAt`/`statusCheckRollup`/`reviewDecision` 这类 GitHub 语义名字与实测不存在的旧名一律不在表里，请求即拒绝、返回不进对象。同时实测确认 `--json` 是**无值开关**（`--json name,path` 与裸 `--json` 输出逐字相同），所以字段清单只做**本地投影**、不进 argv；响应按 `{data:{list:[…]}}`/`{data:[…]}`/扁平对象剥壳，`pr list` 空结果的 `{"message":"No pull requests found."}` 解成 0 条、不报畸形。没有独立的黑名单，也没有「结果来自别的 provider」这类原因码——本包只服务 Gitee 一个平台，那类事实不存在。两个包不共享源码，只共享不变量与契约测试。
 
@@ -27,11 +27,11 @@ dsh plugin --profile web add dist/r7/heluo-forge-gitee-0.1.0.tgz
 dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 ```
 
-清单要点：`engines.dsh: >=0.2.1-rc.2`；`main`/`exports` 指向 `src/*.mjs`（无编译产物、无 `lib/`）；`files` 白名单只含 `src`、`cordis.patch.yml`、`README.md`；`dependencies` 只有 `@heluo/forge-policy`（源码 `workspace:*`，安装单元闭包成真版本并进 `bundledDependencies`）。
+清单要点：`engines.dsh: >=0.2.1-rc.2`；`main`/`exports` 指向 `src/*.mjs`（无编译产物、无 `lib/`），另有 `exports['./client'] = './client.js'` 供宿主 Web 外壳装载；`files` 白名单只含 `src`、`client.js`、`cordis.patch.yml`、`README.md`；`dependencies` 只有 `@heluo/forge-policy`（源码 `workspace:*`，安装单元闭包成真版本并进 `bundledDependencies`）；`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`；`peerDependencies = {react:'>=18'}` 且 `peerDependenciesMeta.react.optional = true`——react 由宿主提供，构建期 `HOST_PEERS` 规则允许它留在清单里但不进闭包、不进 tarball。
 
 ## 配置
 
-五个扁平键，全部可选，来自补丁层的 `config:`（本轮不做配置页）。配置里没有存令牌的字段——凭据主路径是 `gh` 自己的系统凭据库（服务名 `gitee-cli-go`），先在终端运行一次 `gh auth login`；`authEnv` 只是无桌面凭据库或 CI 的兜底注入通道。**空配置也是合法状态**。
+五个扁平键，全部可选，来自补丁层的 `config:`（r15 起也可在设置页改其中两项，见[设置页](#设置页企业-giteer15)）。配置里没有存令牌的字段——凭据主路径是 `gh` 自己的系统凭据库（服务名 `gitee-cli-go`），先在终端运行一次 `gh auth login`；`authEnv` 只是无桌面凭据库或 CI 的兜底注入通道。**空配置也是合法状态**。
 
 | 键 | 默认 | 约束 | 说明 |
 |---|---|---|---|
@@ -43,7 +43,25 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 `describeGiteeConfig()` 只输出枚举、数字与环境变量**名**（路径只留文件名），返回值里不存在令牌值；`validateGiteeConfig()` 是补丁层、宿主 `ConfigStandard` 与 `resolve` 的唯一口径，未知键直接拒绝，`missing` 只收"提供了但非法"的键。
 
-## 工具面（11 个，顺序与命名固定）
+## 设置页（Gitee，r15）
+
+进入路径两次点击：首页 → 左下「设置」→ 侧栏「Gitee」。分区 id `gitee`、order 50，由本包 `client.js` 提供（`settings.section` 槽，`ctx.slots.inject` 两段式挂载；`ensureStyle` 返回 disposer）。
+
+页面是**一张五行三列的表**：每行一个配置键，三列分别是「公共参数」（补丁层/企业下发的值）、「本机覆盖」（这台机器在页面上改过的值）、「最终生效」。只有两项可编辑：
+
+| 行 | 可编辑 | 说明 |
+|---|---|---|
+| 命令行入口（`cliPath`） | 是 | 输入框里是**当前生效值**；「改为手动指定」把草稿变成覆盖，「恢复继承」在保存时删除本键的本机覆盖（先说明这一后果）。本页不判后缀，运行期失败会说明原因 |
+| 超时（`timeoutMs`） | 是 | 毫秒，`1000`–`600000`；留空提交 `null` 即删键回落到默认 |
+| 主机（`host`） | 否 | 只显示来源；值不在本页显示（它会进企业域校验，但不是凭据） |
+| 凭据变量名（`authEnv`） | 否 | 只显示**允许的变量名**，不显示值 |
+| 持久化策略（`persistentToken`） | 否 | 显示 `warn`/`block`，本页不修改 |
+
+交互要点：保存只提交**改过的**已知键 + 服务端快照里的 `revision`；`revision` 过期回 409 并**保留草稿**（不静默丢弃）；字段非法回 422 时逐字段聚焦、写盘 0 次；保存成功但运行时没应用上，回执写「已保存；未应用」并给出原因，不假装生效。页面**没有**「检查」按钮——本包没有获批的只读探测，披露块里恒显示「未执行」，也不发 `?refresh=1`（该参数只属于 devops 分区的 DevOps 行）。写入面不可用（profile 没挂配置面）时整页降级为只读并给环境变量出口，而不是渲染一个存不进去的表单。
+
+服务端契约：`GET /api/forge-gitee/config` 返回 `{revision, plugin, writable, ready, reason, guidance, editable, missing, entries, host, readAt}`；`POST` 同路径要求 `x-forge-gitee-request: 1`、体只认 `{revision, fields}`、超 64 KiB 回 413，状态码映射 409 冲突 / 422 非法 / 503 不可用，成功体带 `applied`。写成功后单点重建读面（`rebuildFaces()`），页面配的 `cliPath` 立刻用于运行期，不需要重启。
+
+## 工具面（10 个，顺序与命名固定）
 
 | 工具 | 参数 | 策略动作 | 默认 |
 |---|---|---|---|
@@ -118,7 +136,7 @@ argv 按 2026-11-03 实测的规格 `docs/contracts/gh-cli-spec.md` 逐条对齐
 node --test "packages/forge-gitee/test/*.test.mjs"
 ```
 
-覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；3 读 + 1 判定可用、四个写与 push denied；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 15 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：11 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、`GITEE_TOKEN` 白名单唯一例外、持久令牌 warn/block 与 `~/.gitee-cli/config.json` 检出、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（三段真实载荷当夹具：字段投影、`--json` 无值开关、argv 形状（单对象命令的编号 + `-R`、纯数字 target、`repo list` 无位置参数）、`--state` 按命令分表、空 PR 列表解包、`iid`/`id`、`opened` 归一、`meta.total_count`；禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封、四类降级与两个读工具的 state enum）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写默认 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 未登记即 `denied`）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
+覆盖（条数以实跑为准）：`entry.test.mjs`（根名入口、装载安全、注入面、清单形状，含 r15 的 `dsh.client`/`exports['./client']`/peer react）、`config-access.test.mjs`（三层读面：`origin` 口径、`inherited`/`override`/`value` 三列、409 栅栏 editor 0 次、422 写盘 0 次、未知键拒绝、等值保存不写、`null` 删键只动本键、写后回读不一致降级、`describe()` 不含值）、`http.test.mjs`（端点常量逐字、`no-store`/`nosniff`/`x-forge-gitee-at`、无 CORS、预检头与体形状 400、超 64 KiB 413、`applied` 透传、409/422/503 映射、`toNodeRoute` 404/405/HEAD/尾斜杠）、`faces-rebuild.test.mjs`（保存即生效、`?refresh=1` 是唯一重建入口、路由挂载与 `applied`、无 webServer 降级、卸载撤路由）、`client-shape.test.mjs`（浏览器半真执行：Loader 装载、effect 标签、分区 id/order、真渲染三列同屏、主机与凭据值不出现在文本里、只发 1 次 GET）、`patch-mount.test.mjs`（解析分发补丁层 → 真实装配策略 + 插件；3 读 + 1 判定可用、四个写与 push denied；空目录反向）、`coexistence.test.mjs`（单装本包 / 单装 devops / 双向叠加唯一实例 14 工具 / 目录单边漂移反证 / 并层与卸载归零）、`host-contract.test.mjs`（镜像宿主 `register()` 判据：10 个定义的 `output.render` 与参数 schema 子集，含"删掉 output 即报错"的反证）、`config.test.mjs`（5 键校验、未知键拒绝、空配置合法、描述脱敏）、`cli.test.mjs`（三键入参、`shell:false`、超时、1 MiB 截断、脱敏、`GITEE_TOKEN` 白名单唯一例外、持久令牌 warn/block 与 `~/.gitee-cli/config.json` 检出、`runGit` 的 `GIT_TERMINAL_PROMPT=0` 与 `cwd`）、`adapter.test.mjs`（三段真实载荷当夹具：字段投影、`--json` 无值开关、argv 形状（单对象命令的编号 + `-R`、纯数字 target、`repo list` 无位置参数）、`--state` 按命令分表、空 PR 列表解包、`iid`/`id`、`opened` 归一、`meta.total_count`；禁项、src 零 `GH_` 标识）、`read.test.mjs`（信封、四类降级与两个读工具的 state enum）、`actions.test.mjs`（四状态矩阵、回读一致才 `done`、四个受控写默认 `denied` 且 0 调用、判定随包可用且 `executed` 恒 `false`）、`git-message.test.mjs`（首行 `[变更号]` 格式矩阵与五个原因码）、`gitee-git.test.mjs`（固定 argv 表、非法动词/参数拒绝、commit 本地执行、push 未登记即 `denied`）、`session.test.mjs`（幂等键前 16 位、命中 `reused`、`unknown` 不重放）、`review.test.mjs`（四段与模型名、AI/人工分栏、`stale` 派生、人工自填拒绝、脱敏阻断）、`delivery.test.mjs`（提交信息 `[变更号]` 格式矩阵、关闭四项含 `unknown`、白名单无 close/merge）。安装单元侧在仓库根：`tests/bundle-gitee.test.mjs`（`buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、产物补丁层含判定条目）与 `tests/plugin-patch-layers.test.mjs`（两处策略行同 id、目录逐字相同、无 `isolate`、无派生的策略行 id 残留）。2026-10-29 实跑：包内 171 例、仓库根安装单元侧 8 例，全部通过、无跳过（该数字为 r4 轮实测；r10 增删模块后的条数与结果以本需求 QA 实测为准）。
 
 ## 证据表（r4 轮，2026-10-29）
 
@@ -140,6 +158,7 @@ node --test "packages/forge-gitee/test/*.test.mjs"
 3. **真实 profile 装入与重启（AC-8）与回滚执行（AC-10）**：`dsh plugin add` 之后的重启、`--dump-config` 复核、装后回读 profile 清单与工具面在真实会话里可见，需工作区外写权限，归主流程执行。本包提供的是：AC-10 要求的**卸载步骤已在上面[回滚](#回滚)一节装之前写明**（含复核命令），AC-8 所需的补丁层解析与装配证据见 `test/patch-mount.test.mjs`；**执行与回读均未做**，不记为已验证。
 4. **真实凭据与审计落账**：内存审计舱的联调级证据；持久 sink、审批台账与写动作开闸均属范围批准后才验证。
 5. **宿主 rc.3**：本机为 rc.2，`engines.dsh` 声明 `>=0.2.1-rc.2`，rc.3 未复跑。
+6. **设置页实机（r15）**：`client.js` 的装载、分区注册、渲染与三层读面由 `test/client-shape.test.mjs`、`scripts/check-client-module.mjs` 与 `tests/ui-contract.test.mjs` 离线覆盖（假 Loader / 假 React / 假 fetch），**没有在真实 Web 外壳里点开过**；`heluo-r15-uat` 独立 profile 的装入、`--dump-config` 复核与回滚未执行（计划与证据核对用 `node scripts/uat-profile.mjs --plan|--verify`，执行归主流程）。
 
 ## 边界
 

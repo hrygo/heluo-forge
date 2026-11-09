@@ -243,18 +243,20 @@ test('页面两键规则与服务端保存期判定在矩阵上等值（无 page
   );
 });
 
-test('双语文案与规则同源：超时说明与错误句都写清 1000–600000，入口指引不再要求找 .exe', () => {
-  // 文案是用户唯一可见的规则说明：边界只写在代码里，用户仍会填 999 或 12.5。
-  for (const [key, what] of [
-    ['field.timeoutMs.hint', '说明'],
-    ['error.timeout', '错误句'],
-  ]) {
-    const hits = [...SOURCE.matchAll(new RegExp(`'${key}':\\s*'([^']+)'`, 'gu'))].map((hit) => hit[1]);
-    assert.equal(hits.length, 2, `缺文案 ${key}（应为 zh/en 各一条，实际 ${hits.length} 条）`);
-    for (const text of hits) {
-      assert.ok(text.includes('1000'), `${key} 的${what}必须写明 1000 下界，否则用户无法自查：${text}`);
-      assert.ok(text.includes('600000'), `${key} 的${what}必须写明 600000 上界，否则用户无法自查：${text}`);
-    }
+test('双语文案与规则同源：错误句写清 1000–600000，默认值改由占位说明，入口指引不再要求找 .exe', () => {
+  // 边界只在用户真的填错时讲：错误句仍必须写清上下界，用户才能自查。
+  const errorTexts = [...SOURCE.matchAll(/'error\.timeout':\s*'([^']+)'/gu)].map((hit) => hit[1]);
+  assert.equal(errorTexts.length, 2, `缺文案 error.timeout（应为 zh/en 各一条，实际 ${errorTexts.length} 条）`);
+  for (const text of errorTexts) {
+    assert.ok(text.includes('1000'), `error.timeout 必须写明 1000 下界，否则用户无法自查：${text}`);
+    assert.ok(text.includes('600000'), `error.timeout 必须写明 600000 上界，否则用户无法自查：${text}`);
+  }
+  // 常驻说明改成一句白话（默认值单独显示），不再重复区间数字。
+  const hints = [...SOURCE.matchAll(/'field\.timeoutMs\.hint':\s*'([^']+)'/gu)].map((hit) => hit[1]);
+  assert.equal(hints.length, 2, `缺文案 field.timeoutMs.hint（应为 zh/en 各一条，实际 ${hints.length} 条）`);
+  for (const text of hints) {
+    assert.ok(!text.includes('1000') && !text.includes('600000'), `页面说明不再重复区间数字：${text}`);
+    assert.ok(text.length > 0, '页面说明不得为空');
   }
   // 「去掉 .exe」只动用户可见文案：指引句按字段插值工具名，且不再让用户去挑 .exe 文件。
   const helps = [...SOURCE.matchAll(/'entry\.hint\.help':\s*'([^']+)'/gu)].map((hit) => hit[1]);

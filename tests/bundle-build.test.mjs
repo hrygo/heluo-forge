@@ -53,6 +53,28 @@ test('build closes workspace dependencies, is reproducible, and installs offline
   assert.equal(upgrade.manifest.version, '0.1.1');
 });
 
+test('host peer（react）留在清单里但不进包，非宿主 peer 与未标 optional 仍被拒绝', (t) => {
+  const root = fixture(t, { peerDependencies: { react: '>=18' }, peerDependenciesMeta: { react: { optional: true } } });
+  const built = buildEnterpriseBundle({ root, destination: join(root, 'host-peer') });
+  assert.deepEqual(built.manifest.peerDependencies, { react: '>=18' });
+  assert.deepEqual(built.manifest.peerDependenciesMeta, { react: { optional: true } });
+  assert.equal(built.packed.some((file) => file.path.startsWith('node_modules/react/')), false, '宿主 peer 不得进包');
+  assert.equal(built.manifest.bundledDependencies.includes('react'), false, '宿主 peer 不得进 bundledDependencies');
+  assert.deepEqual(auditTarball({ label: 'fixture', manifest: built.manifest, packed: built.packed }), []);
+});
+
+for (const [label, overrides, expected] of [
+  ['host peer without optional meta', { peerDependencies: { react: '>=18' } }, /must be declared optional/u],
+  ['host peer with workspace protocol', { peerDependencies: { react: 'workspace:*' }, peerDependenciesMeta: { react: { optional: true } } }, /must be a semver range/u],
+  ['host peer with wildcard range', { peerDependencies: { react: '*' }, peerDependenciesMeta: { react: { optional: true } } }, /must be a semver range/u],
+  ['non-host peer marked optional', { peerDependencies: { lodash: '^4.17.21' }, peerDependenciesMeta: { lodash: { optional: true } } }, /unclosed peerDependencies/u],
+]) test(`build refuses ${label} without publishing a partial tarball`, (t) => {
+  const root = fixture(t, overrides);
+  const destination = join(root, 'release');
+  assert.throws(() => buildEnterpriseBundle({ root, destination }), expected);
+  assert.equal(existsSync(destination), false, '失败时不得留下产物目录');
+});
+
 for (const [label, overrides, expected] of [
   ['external runtime dependency', { dependencies: { external: '^1.0.0' } }, /unclosed runtime dependency/u],
   ['missing member', { dependencies: { '@heluo/forge-missing': 'workspace:*' } }, /missing workspace member/u],

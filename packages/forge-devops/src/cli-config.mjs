@@ -64,6 +64,10 @@ export const CLI_ORIGINS = Object.freeze({
  * 前四码是**保存与发现**的对外词表；`REBUILD_FAILED`（r9）只作**细因**出现在
  * `detail.reason`（刷新重建读面失败），工具信封仍以 `NO_READER` 失败——原因码不加码，
  * 页面按错误码展示，不把它当成第五种保存失败。
+ *
+ * `APPLY_UNVERIFIED`（r16）是**保存回执**里的细因：写成功了，但运行面归属宿主注入的
+ * flow/reader，本层无法证明新值已被采用。它同样不是保存失败码（`result.ok` 仍为 true），
+ * 只出现在 `applied.reason`，页面应按 `receipt.reason.apply-unverified` 显示。
  */
 export const CLI_REASONS = Object.freeze({
   NOT_FOUND: 'CLI_NOT_FOUND',
@@ -71,6 +75,7 @@ export const CLI_REASONS = Object.freeze({
   CONFLICT: 'CLI_CONFIG_CONFLICT',
   UNAVAILABLE: 'CLI_CONFIG_UNAVAILABLE',
   REBUILD_FAILED: 'CLI_REBUILD_FAILED',
+  APPLY_UNVERIFIED: 'CLI_APPLY_UNVERIFIED',
 });
 
 /**
@@ -268,6 +273,17 @@ function resolveField(field, sources, invalid) {
 }
 
 /**
+ * 同一事实的两种投影（r16 / PR #215 review）：
+ * 合并态 entries 用 `value` 承载路径；`cli-access` 快照的路径字段（`PATH_FIELDS`）叫 `path`。
+ * 两种形状都认，避免装配层拿快照推导时恒读空。
+ */
+function entryValueOf(entry) {
+  if (!isPlainObject(entry)) return '';
+  if (typeof entry.value === 'string') return entry.value;
+  return typeof entry.path === 'string' ? entry.path : '';
+}
+
+/**
  * 入口"解析到可直接执行的文件"：有值且来源是显式/发现。
  *
  * `default`（`runtime-config.mjs` 的基线缺省）不算就绪——装配期不做 PATH 探测，
@@ -276,7 +292,7 @@ function resolveField(field, sources, invalid) {
  */
 function entryReady(entry) {
   if (!isPlainObject(entry)) return false;
-  if (typeof entry.value !== 'string' || entry.value === '') return false;
+  if (entryValueOf(entry) === '') return false;
   return (
     entry.origin === CLI_ORIGINS.CONFIG ||
     entry.origin === CLI_ORIGINS.ENV ||
