@@ -3529,6 +3529,10 @@ window.__ModuleLoader__.load({
       const revealPersonal = catalogue.data.revealPersonal;
       const setRevealPersonal = catalogue.data.setRevealPersonal;
       const personalVisible = sessionUi.ready || revealPersonal;
+      // 保存凭据途中、或回执还没被看到时，个人区不能因为会话过期而收起：卡片一卸载，
+      // 失败提示就落在看不见的地方（PR #215 复审 P2）。回执真实可见优先于折叠。
+      const credentialFeedback = Boolean(form.credential.saving || form.credential.notice);
+      const personalShown = personalVisible || credentialFeedback;
       // The journey bar points at the cards below. While signed out the personal
       // steps are folded (DESIGN §4), so their cards are not mounted: a click
       // must open the fold first and scroll only once the card exists, instead
@@ -3577,7 +3581,8 @@ window.__ModuleLoader__.load({
         actions: { ...catalogue.actions, refresh: form.refresh },
       });
 
-      const personalFold = sessionUi.ready
+      // 折叠开关只在「确实可以收起」时出现：已登录、或正有用例要看的回执时不提供它。
+      const personalFold = sessionUi.ready || credentialFeedback
         ? null
         : h('button', {
           type: 'button',
@@ -3605,7 +3610,7 @@ window.__ModuleLoader__.load({
         journeyBar,
         accountCard,
         personalFold,
-        personalVisible ? gatewayCard : null,
+        personalShown ? gatewayCard : null,
         personalVisible ? modelsCard : null,
         diagnosticFold,
       );
