@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.6.9 |
+| 版本 | V0.6.10 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-09 |
+| 最后更新 | 2026-11-10 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：2026-10-20 核对仓库结构、`package.json`、`pnpm-workspace.yaml`、`scripts/check-*.mjs` 与 `.github/workflows/check.yml` 的实际内容；工具链实测为 Node.js 24.21.0、pnpm 11.28.5。未执行远端 CI，也未发布任何包。
@@ -94,8 +94,9 @@
 - `check:tarballs` 校验真实 tarball 内容与模式位。
 - `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。
 - CI 使用 `.github/workflows/check.yml` 的 `verify (ubuntu-x64)` job 执行 `node --run check`，是全量离线检查与全部用例的唯一执行点；默认 `contents: read`，外部动作固定到完整提交 SHA，常规检查不使用 `pull_request_target`。触发与依赖策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
+- `classify changes (ubuntu-x64)` 以 PR merge-base 到 head 的完整差异分类；PR 事件基线为 head 祖先，且仅修改或删除 `docs/` 中普通 Markdown 与根 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时允许跳过平台作业。新增或重命名文件、非便携路径、分类不能确认、文件类型或模式异常、混合其他路径、事件基线前移时全跑；分类作业失败或输出无效时 `verify` 失败。该比较只反映触发事件的基线快照，是否要求合并前同步最新 `main` 由分支保护决定。`main` 推送、合并队列和手动运行全跑。跨平台必需检查使用固定 job 和原有显示名称，避免整组矩阵被跳过时缺失检查上下文；分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
 - 平台专属作业只保留代码路径真正不同的平台：`sensitive scan (win32-x64)` 与 `iam callback (win32-x64)` 覆盖 8.3 短名、`icase` pathspec、反斜杠归一化与 socket 语义，其 POSIX 分支已由 `verify (ubuntu-x64)` 覆盖，故不再单设 Ubuntu 腿；后续稳定后再评估是否设为 required。
-- `native keychain (<平台对>)` 每腿先跑平台单测，再暂存锁定版本的 addon、构建/打包、离线安装并驱动真实系统存储（写/读/改/跨进程/删）。四条主干腿（`linux-x64`、`linux-arm64`、`win32-x64`、`win32-arm64`）为 `main` 的必需检查，`verify` 的结构性绿灯不能单独放行缺件产物。作业缓存 npm 来源包，每次按锁文件验证 tarball、检查 addon 与许可证字节，并确认生成的记录与 Git 检出一致。
+- `native keychain (<平台对>)` 在需要平台验证时先跑平台单测，再暂存锁定版本的 addon、构建/打包、离线安装并驱动真实系统存储（写/读/改/跨进程/删）。四条主干腿（`linux-x64`、`linux-arm64`、`win32-x64`、`win32-arm64`）保留 `main` 的必需检查名称；涉及代码或制品的变更不能仅凭 `verify` 的结构性绿灯放行缺件产物。作业缓存 npm 来源包，每次按锁文件验证 tarball、检查 addon 与许可证字节，并确认生成的记录与 Git 检出一致。
 - `native keychain (linux-x64)` 腿在装真实存储之前先跑一次 `no-store refusal`：缺库时探针返回构造期的 `KEYCHAIN_UNAVAILABLE`，缺少 session bus 时返回操作期的 `KEYCHAIN_OPERATION_FAILED`，不得崩溃或退化成明文。
 - `document backend (macos-15)`、`document backend (macos-15-intel)` 覆盖 macOS 的生产路径：该平台没有 addon，平台后端是应用级加密文档，探针用 `--platform` 直接驱动文件后端，并要求 `triple`/`addon` 为空以证明没有误用原生模块；两条腿同为必需检查。
 - 前进兼容腿 `native keychain (linux-x64, ubuntu-26.04)` 与 `native keychain (win32-x64, windows-2025)` 各自跑完整链路，用于回答「下一个 OS 版本还能不能用」，不作为必需检查：镜像换代本身不该阻塞无关改动。

@@ -23,14 +23,64 @@ concurrency:
 # leg is not the canonical image for its pair, the qualifier appends the image:
 # `native keychain (win32-x64, windows-2025)`.
 jobs:
+  changes:
+    name: classify changes (ubuntu-x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run_platforms: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
+    steps:
+      - name: Run all platforms for non-PR events
+        id: full
+        if: github.event_name != 'pull_request'
+        run: echo 'run_platforms=true' >> "$GITHUB_OUTPUT"
+      - name: Checkout complete history for the change comparison
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          show-progress: false
+      - name: Set up Node.js
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Classify changed paths
+        id: classify
+        if: github.event_name == 'pull_request'
+        run: node scripts/ci-classify-changes.mjs
+      - name: Validate platform decision
+        env:
+          RUN_PLATFORMS: ${{ steps.classify.outputs.run_platforms || steps.full.outputs.run_platforms }}
+        run: |
+          case "$RUN_PLATFORMS" in
+            true|false) ;;
+            *) echo 'Invalid platform decision.' >&2; exit 1 ;;
+          esac
+
   verify:
     name: verify (ubuntu-x64)
+    needs: changes
+    # A failed classification must fail this required check, not turn it into
+    # a successful skipped job. Cancellation must still stop the workflow.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
       run:
         shell: bash
     steps:
+      - name: Validate change classification
+        env:
+          CLASSIFICATION_RESULT: ${{ needs.changes.result }}
+          RUN_PLATFORMS: ${{ needs.changes.outputs.run_platforms }}
+        run: |
+          if [[ "$CLASSIFICATION_RESULT" != 'success' ]] || [[ "$RUN_PLATFORMS" != 'true' && "$RUN_PLATFORMS" != 'false' ]]; then
+            echo 'Change classification failed or produced an invalid result.' >&2
+            exit 1
+          fi
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,33 +96,24 @@ jobs:
       - name: Check documents, repository and tests
         run: node --run check
 
-  # One job per platform-arch pair: the platform unit suites first, then the
-  # real addon against the real OS store. One runner per pair instead of two,
-  # and the ordered steps still name the layer that failed. The ubuntu-24.04
-  # x64 pair is carried by `verify`, which runs these exact test files on that
-  # host; macOS has no addon (encrypted-document backend) and is verified on
-  # the maintainer's machines.
-  native-keychain:
-    name: native keychain (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux-x64, os: ubuntu-24.04, platform: linux, arch: x64, store: secret-service }
-          - { name: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64, store: secret-service }
-          - { name: win32-x64, os: windows-2022, platform: win32, arch: x64, store: credential-manager }
-          - { name: win32-arm64, os: windows-11-arm, platform: win32, arch: arm64, store: credential-manager }
-          # Forward compatibility: the qualifier adds the image when a leg is
-          # not the canonical one for its pair. These two are not required
-          # checks — they answer "does the next OS release still work?".
-          - { name: 'linux-x64, ubuntu-26.04', os: ubuntu-26.04, platform: linux, arch: x64, store: secret-service }
-          - { name: 'win32-x64, windows-2025', os: windows-2025, platform: win32, arch: x64, store: credential-manager }
-    runs-on: ${{ matrix.os }}
+  # Fixed jobs preserve each required check name when a job is skipped. A job
+  # condition on the whole matrix is evaluated before the matrix is expanded.
+  # The shared steps still exercise each real platform and its addon/store.
+  native-linux-x64:
+    name: native keychain (linux-x64)
+    needs: changes
+    if: &run_platforms ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_platforms != 'false') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    defaults:
+    env:
+      FORGE_CI_NAME: linux-x64
+      FORGE_CI_PLATFORM: linux
+      FORGE_CI_ARCH: x64
+      FORGE_CI_STORE: secret-service
+    defaults: &bash_defaults
       run:
         shell: bash
-    steps:
+    steps: &native_steps
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,7 +132,7 @@ jobs:
           node -e "const [p,a]=process.argv.slice(1);
           if (process.platform!==p||process.arch!==a)
           { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
-          ${{ matrix.platform }} ${{ matrix.arch }}
+          "$FORGE_CI_PLATFORM" "$FORGE_CI_ARCH"
       # These two suites are the platform half of this job. They run before any
       # network access, so a registry failure cannot hide the platform signal:
       # the steps above stay green and the failing step names the cause. They
@@ -156,7 +197,7 @@ jobs:
       # host that never had a secret service. The probe must return a typed
       # refusal, not crash and not fall back to plaintext.
       - name: Refuse a store that is not there
-        if: matrix.name == 'linux-x64'
+        if: env.FORGE_CI_NAME == 'linux-x64'
         run: |
           set -euo pipefail
           if node scripts/probe/native-keyring-store-probe.mjs --package "$FORGE_CI_PACKAGE" --json > node_modules/.forge-ci/probe-nostore.json; then
@@ -182,7 +223,7 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE="$FORGE_CI_PACKAGE"
-          if [ "${{ matrix.store }}" = "secret-service" ]; then
+          if [ "$FORGE_CI_STORE" = "secret-service" ]; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq gnome-keyring libsecret-1-0 dbus-x11
             dbus-run-session -- bash -c "echo -n ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1 || true; sleep 1; node scripts/probe/native-keyring-store-probe.mjs --package '$PACKAGE' --json > node_modules/.forge-ci/probe.json"
@@ -191,24 +232,92 @@ jobs:
           fi
           node -e "const r=require('./node_modules/.forge-ci/probe.json'); const steps=r.steps??[]; for(const s of steps) console.log(s.ok?'ok  ':'FAIL', s.name); if(r.ok!==true){console.error(JSON.stringify({stage:r.stage??null,error:r.error??null,failed:steps.filter(s=>s.ok!==true)})); process.exit(1)} console.log('store probe:', steps.length, 'steps ok on', r.environment.platform+'-'+r.environment.arch, 'addon', r.environment.triple)"
 
+  native-linux-arm64:
+    name: native keychain (linux-arm64)
+    needs: changes
+    if: *run_platforms
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    env:
+      FORGE_CI_NAME: linux-arm64
+      FORGE_CI_PLATFORM: linux
+      FORGE_CI_ARCH: arm64
+      FORGE_CI_STORE: secret-service
+    defaults: *bash_defaults
+    steps: *native_steps
+
+  native-win32-x64:
+    name: native keychain (win32-x64)
+    needs: changes
+    if: *run_platforms
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      FORGE_CI_NAME: win32-x64
+      FORGE_CI_PLATFORM: win32
+      FORGE_CI_ARCH: x64
+      FORGE_CI_STORE: credential-manager
+    defaults: *bash_defaults
+    steps: *native_steps
+
+  native-win32-arm64:
+    name: native keychain (win32-arm64)
+    needs: changes
+    if: *run_platforms
+    runs-on: windows-11-arm
+    timeout-minutes: 15
+    env:
+      FORGE_CI_NAME: win32-arm64
+      FORGE_CI_PLATFORM: win32
+      FORGE_CI_ARCH: arm64
+      FORGE_CI_STORE: credential-manager
+    defaults: *bash_defaults
+    steps: *native_steps
+
+  # Forward-compatibility jobs are not required checks.
+  native-linux-x64-next:
+    name: native keychain (linux-x64, ubuntu-26.04)
+    needs: changes
+    if: *run_platforms
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    env:
+      FORGE_CI_NAME: 'linux-x64, ubuntu-26.04'
+      FORGE_CI_PLATFORM: linux
+      FORGE_CI_ARCH: x64
+      FORGE_CI_STORE: secret-service
+    defaults: *bash_defaults
+    steps: *native_steps
+
+  native-win32-x64-next:
+    name: native keychain (win32-x64, windows-2025)
+    needs: changes
+    if: *run_platforms
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      FORGE_CI_NAME: 'win32-x64, windows-2025'
+      FORGE_CI_PLATFORM: win32
+      FORGE_CI_ARCH: x64
+      FORGE_CI_STORE: credential-manager
+    defaults: *bash_defaults
+    steps: *native_steps
+
   # macOS has no addon: its production backend is an application-level
   # encrypted document, so this job drives that backend directly instead of a
   # native store. Both architectures run because the file backend is the whole
   # macOS story and the images ship different macOS versions.
-  document-backend:
-    name: document backend (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: macos-15, os: macos-15, platform: darwin, arch: arm64 }
-          - { name: macos-15-intel, os: macos-15-intel, platform: darwin, arch: x64 }
-    runs-on: ${{ matrix.os }}
+  document-macos-15:
+    name: document backend (macos-15)
+    needs: changes
+    if: *run_platforms
+    runs-on: macos-15
     timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
-    steps:
+    env:
+      FORGE_CI_PLATFORM: darwin
+      FORGE_CI_ARCH: arm64
+    defaults: *bash_defaults
+    steps: &document_steps
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,7 +332,7 @@ jobs:
       - name: Link workspace packages
         run: node scripts/link-workspace.mjs
       - name: Assert the runner is the expected platform-arch
-        run: node -e "const [p,a]=process.argv.slice(1); if (process.platform!==p||process.arch!==a) { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }" ${{ matrix.platform }} ${{ matrix.arch }}
+        run: node -e "const [p,a]=process.argv.slice(1); if (process.platform!==p||process.arch!==a) { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }" "$FORGE_CI_PLATFORM" "$FORGE_CI_ARCH"
       - name: Drive the encrypted document backend
         run: |
           set -euo pipefail
@@ -236,12 +345,26 @@ jobs:
             if (r.environment.triple !== null || r.environment.addon !== null) { console.error('macOS must not resolve an addon', r.environment); process.exit(1); }
             console.log('document backend:', (r.steps ?? []).length, 'steps ok on', r.environment.platform + '-' + r.environment.arch);
           "
+
+  document-macos-15-intel:
+    name: document backend (macos-15-intel)
+    needs: changes
+    if: *run_platforms
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    env:
+      FORGE_CI_PLATFORM: darwin
+      FORGE_CI_ARCH: x64
+    defaults: *bash_defaults
+    steps: *document_steps
   # Local hook and scanner portability. Windows only: the POSIX branches of
   # these suites already run inside `verify` on ubuntu-24.04, so the ubuntu leg
   # duplicated it; 8.3 aliases, `icase` pathspecs and backslash normalisation
   # have no POSIX equivalent. Not required yet — make it required once stable.
   sensitive-scan:
     name: sensitive scan (win32-x64)
+    needs: changes
+    if: *run_platforms
     runs-on: windows-2022
     timeout-minutes: 10
     defaults:
@@ -267,6 +390,8 @@ jobs:
   # semantics that differ (address-family availability, port reuse, shutdown).
   forge-iam-callback:
     name: iam callback (win32-x64)
+    needs: changes
+    if: *run_platforms
     runs-on: windows-2022
     timeout-minutes: 5
     defaults:
