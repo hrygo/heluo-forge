@@ -50,6 +50,12 @@ export const MESSAGES = Object.freeze({
   // The model layer reports an exhausted quota (429 quota / model cooldown) as
   // its own code; without a mapping it fell through to "cannot connect".
   ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED: '所选模型的额度已用尽，请更换模型或联系管理员。',
+  ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED: '企业身份令牌已失效，请重新登录后再试。',
+  ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED: '个人访问凭证已被回收，请联系管理员重新申领。',
+  ENTERPRISE_GATEWAY_CREDENTIAL_SUSPENDED: '个人访问凭证已被暂停，请联系管理员。',
+  ENTERPRISE_GATEWAY_IDENTITY_MISMATCH: '登录身份与凭证绑定账号不一致，请重新登录后重试。',
+  ENTERPRISE_GATEWAY_CLIENT_NOT_RECOGNIZED: '当前客户端的标识未被企业网关识别，请升级客户端或联系管理员核准。',
+  ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED: '所选模型的预算已用尽，请联系管理员或更换模型。',
   ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
   ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。',
   // Neither rejected nor provably unreachable: say so instead of guessing.
@@ -138,6 +144,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // this model on", and its value carries the overrides (possibly none). A
   // discovered model without a key is listed but refused for calls.
   let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null;
+  // A gateway-scoped revocation sticks until the identity, address or stored key
+  // changes. Erasing the stored key needs the joint atomic adapter and stays
+  // fail-closed (ADR-19); this mark only stops replay.
+  let revokedCredential = false;
   let defaultModelId = null;
   // `selectionSaved` separates "nothing stored yet" (auto-enable the default)
   // from "stored as empty" (this person deliberately enabled no model).
@@ -199,6 +209,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         last = current;
         lastId = currentId;
         version++;
+        revokedCredential = false;
         if (idChanged) {
           lease.abort(); lease = new AbortController();
           cancelRetry(); retryAttempt = 0; hostDefault = null;
@@ -229,9 +240,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (denied) return denied;
     if (captured !== undefined && captured !== version) return 'IAM_MODEL_CONTEXT_CHANGED';
     if (!backend) return catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
+    if (revokedCredential) return 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED';
     if (!allowed(request.provider, request.model)) return 'ENTERPRISE_MODEL_NOT_ALLOWED';
     return null;
   }
+  // Remember a revocation so no later call spends another round trip on it.
+  const record = code => {
+    if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED') revokedCredential = true;
+    return code;
+  };
   async function* protect(request, dispatch, captured) {
     let code = refusal(request, captured);
     if (code) { yield finish(code); return; }
@@ -244,7 +261,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
           // The model layer turns an HTTP error into a finish chunk, so the code
           // arrives here without ever passing through the thrown-error branch.
-          yield finish(classifyFailure(chunk.reason.failure)); return;
+          yield finish(record(classifyFailure(chunk.reason.failure))); return;
         }
         yield chunk;
       }
@@ -253,7 +270,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     } catch (cause) {
       code = refusal(request, mine);
       if (!code && request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-      yield finish(code ?? classifyFailure(cause));
+      yield finish(record(code ?? classifyFailure(cause)));
     }
   }
   /** Adopt the stored selection, or remember that nothing was stored yet. */
@@ -298,6 +315,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const task = Promise.resolve().then(async () => {
       catalogState = 'loading'; catalogError = null;
       const connection = await iam.resolveGatewayConnection(); current();
+      // A revoked credential must not reach the gateway again; the mark clears
+      // only when the identity, address or stored key changes.
+      if (revokedCredential) throw error('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
       const headers = await requestHeaders(); current();
       const found = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
       await loadSelection(); current();
@@ -595,9 +615,13 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey }) {
     auth: { apiKey: { name: '企业个人访问凭证', resolve: async ({ credential }) => ({ auth: { apiKey: credential?.key }, source: 'enterprise' }) } },
     getModels: () => catalog, stream: (...args) => protocol.stream(...args), streamSimple: (...args) => protocol.streamSimple(...args)
   };
+  // The gateway keeps the socket alive with `: ping` comments every 15s, but the
+  // host watchdog counts parsed events and a comment never becomes one: only the
+  // first body byte produces `start`. A 60s bound therefore aborted a slow first
+  // token while the link was healthy. Match the host default instead.
   const profiles = new Map([[provider, {
     provider, displayName: '企业模型', piProvider,
-    streamIdleTimeoutMs: 60000, maxRequestImageBytes: 10 * 1024 * 1024, requestImagePixelBudget: 4096 * 4096, requestImageMaxBytes: 10 * 1024 * 1024,
+    streamIdleTimeoutMs: 300000, maxRequestImageBytes: 10 * 1024 * 1024, requestImagePixelBudget: 4096 * 4096, requestImageMaxBytes: 10 * 1024 * 1024,
     modelErrors: new Map(), configuredMaxTokens,
     retryPolicy: NO_RETRY_POLICY
   }]]);
