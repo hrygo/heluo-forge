@@ -15,6 +15,9 @@ importers:
       '@heluo/forge-policy':
         specifier: workspace:*
         version: link:../forge-policy
+      react:
+        specifier: '>=18'
+        version: 19.3.1
 
   packages/forge-enterprise:
     dependencies:
@@ -39,6 +42,9 @@ importers:
       '@heluo/forge-policy':
         specifier: workspace:*
         version: link:../forge-policy
+      react:
+        specifier: '>=18'
+        version: 19.3.1
 
   packages/forge-iam:
     dependencies:
@@ -49,3 +55,13 @@ importers:
   packages/forge-market: {}
 
   packages/forge-policy: {}
+
+packages:
+
+  react@19.3.1:
+    resolution: {integrity: sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==}
+    engines: {node: '>=0.10.0'}
+
+snapshots:
+
+  react@19.3.1: {}

@@ -184,15 +184,19 @@ function parseBody(rawBody) {
  * @param {(options: {refresh: boolean}) => object} [options.snapshot]
  *   读快照的**注入源**（r9）：给了它就由它决定 `refresh` 怎么实现（装配层传 `refreshSnapshot()`），
  *   路由不再知道"重建读面"这件事；不给则退回 `access.snapshot()`（既有行为不变）。
+ * @param {(options: {revision: string, fields: object}) => Promise<object>} [options.save]
+ *   保存的**注入源**（r15）：装配层传 `service.saveCliConfig()`——只有它能给出 `applied`
+ *   （"写进文件"与"运行时用上了"是两个结论）。不给则退回 `access.save()`。
  * @param {() => number} [options.now] 时钟：只用于响应头 `x-forge-devops-at`（诊断用）
  * @returns {{handleGet: (request?: object) => object, handlePost: (request?: object) => Promise<object>}}
  */
 export function createCliApi(options = {}) {
-  const { access = null, snapshot = null, now = Date.now } = options ?? {};
+  const { access = null, snapshot = null, save = null, now = Date.now } = options ?? {};
   const clock = typeof now === 'function' ? now : Date.now;
   const source = typeof snapshot === 'function' ? snapshot : null;
   const canRead = source !== null || (isPlainObject(access) && typeof access.snapshot === 'function');
-  const canSave = isPlainObject(access) && typeof access.save === 'function';
+  const saver = typeof save === 'function' ? save : isPlainObject(access) && typeof access.save === 'function' ? access.save.bind(access) : null;
+  const canSave = saver !== null;
   const readSnapshot = source !== null ? source : (request) => access.snapshot(request);
 
   function stamp() {
@@ -267,13 +271,15 @@ export function createCliApi(options = {}) {
 
     let result;
     try {
-      result = await access.save({ revision: payload.revision ?? '', fields: payload.fields ?? {} });
+      result = await saver({ revision: payload.revision ?? '', fields: payload.fields ?? {} });
     } catch {
       return fail(503, CLI_REASONS.UNAVAILABLE, '写入配置失败，请检查 profile 权限');
     }
 
     if (isPlainObject(result) && result.ok === true && result.snapshot) {
-      return ok({ ok: true, snapshot: result.snapshot }, stamp());
+      // `applied` 原样透传（§3.4）：没有就**不带**这个键，不编一个"已应用"出来。
+      const body = isPlainObject(result.applied) ? { ok: true, snapshot: result.snapshot, applied: result.applied } : { ok: true, snapshot: result.snapshot };
+      return ok(body, stamp());
     }
     const code = isPlainObject(result) && typeof result.code === 'string' ? result.code : CLI_REASONS.UNAVAILABLE;
     const status = STATUS_BY_CODE[code] ?? 500;

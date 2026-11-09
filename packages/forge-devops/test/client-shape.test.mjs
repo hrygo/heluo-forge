@@ -84,13 +84,14 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
     'CandidateList',
     'CliEntryField',
     'DevopsSection',
+    'ReadinessSection',
     'StatusLine',
     'apply',
     'inject',
   ].sort());
   assert.deepEqual(CLIENT.module.inject, ['slots', 'locale'], 'inject 缺一项宿主就不装配客户端半');
   assert.equal(typeof CLIENT.module.apply, 'function');
-  for (const name of ['DevopsSection', 'CliEntryField', 'StatusLine', 'CandidateList']) {
+  for (const name of ['DevopsSection', 'ReadinessSection', 'CliEntryField', 'StatusLine', 'CandidateList']) {
     assert.equal(typeof CLIENT.module[name], 'function', `${name} 必须是可渲染的组件函数`);
   }
   // 段控件随「事实来源」一起下线：导出面不允许留一个没人能填的控件（页面收窄到三键）。
@@ -109,7 +110,7 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
  * 假 ctx：effect 立即执行并记录；`slots` 模拟宿主「父条目声明槽位 → 子条目 inject 回调」的语义。
  * `declareSlot: false` 复现冷启动最坏时序：本插件 apply 时父条目还没声明该槽位。
  */
-function createFakeCtx({ declareSlot = true } = {}) {
+function createFakeCtx({ declareSlot = true, services = {} } = {}) {
   const effects = [];
   const slots = [];
   const locales = [];
@@ -122,6 +123,8 @@ function createFakeCtx({ declareSlot = true } = {}) {
     for (const callback of pending) callback();
   };
   const ctx = {
+    // 与 cordis 同语义的服务查询：没有对应服务时返回 undefined（r16 导航能力探测依赖它）。
+    get: (name) => services[name] ?? undefined,
     // 与 cordis `_execute` 同语义的 effect 返回值校验：只收 函数(disposer) / null /
     // Promise / 可迭代；普通对象（例如浏览器里的 `<style>` 元素）抛 `Invalid effect`。
     // 离线 Node 无 document 走 null 分支，浏览器分支由下方「Invalid effect 回归」用例补。
@@ -183,8 +186,10 @@ function applyToFakeCtx(module, options) {
 const APPLIED = applyToFakeCtx(CLIENT.module);
 
 test('挂在 settings.section/devops（order 60，label 走 i18n 键）', () => {
-  assert.equal(APPLIED.slots.length, 1, '只注册一个分区');
-  const [{ meta, component }] = APPLIED.slots;
+  assert.equal(APPLIED.slots.length, 2, 'r15 起本 client 承载两个分区：企业 DevOps 与企业研发');
+  const devopsSlot = APPLIED.slots.find((slot) => slot.meta.id === 'devops');
+  assert.ok(devopsSlot, '必须注册 id=devops 的分区');
+  const { meta, component } = devopsSlot;
   assert.equal(meta.name, 'settings.section', 'AC-6：首页→设置→本页 = 两次点击，只能落在 settings.section');
   assert.equal(meta.id, 'devops', 'id 与分区标识同源，改名会让用户的既有书签路径漂移');
   assert.equal(meta.order, 60, 'order 60：排在宿主内建分区之后、调试分区之前');
@@ -196,12 +201,58 @@ test('挂在 settings.section/devops（order 60，label 走 i18n 键）', () => 
   assert.equal(typeof injected?.t, 'function', '组件通过 inject 拿到绑定命名空间的 t()');
 });
 
+test('r15：企业研发分区 id=devops-readiness / order 29（排在 forge-iam 的 30 之前）', () => {
+  const readiness = APPLIED.slots.find((slot) => slot.meta.id === 'devops-readiness');
+  assert.ok(readiness, '必须注册 id=devops-readiness 的分区');
+  assert.equal(readiness.meta.name, 'settings.section', '仍是同一个槽位');
+  assert.equal(readiness.meta.order, 29, 'order 29：企业研发排在 forge-iam(30) 之前');
+  assert.equal(readiness.meta.locale, 'devops', '复用 devops 命名空间（同一 client 提供）');
+  assert.equal(readiness.component, CLIENT.module.ReadinessSection, '渲染 ReadinessSection');
+  assert.ok(String(readiness.meta.label()).length > 0, 'label 走 readiness.nav，不能为空');
+  // 四分区 id/order 唯一（与 forge-iam / gitee 一起构成固定分区表，§4.1）。
+  const orders = APPLIED.slots.map((slot) => slot.meta.order);
+  assert.deepEqual(orders, [...new Set(orders)], 'order 不得重复');
+});
+
+test('r16：两分区 inject 都带 navigate，企业研发固定两行、成员按组固定（AC-1/AC-2）', () => {
+  for (const id of ['devops', 'devops-readiness']) {
+    const slot = APPLIED.slots.find((entry) => entry.meta.id === id);
+    assert.ok(slot, `缺少分区 ${id}`);
+    const injected = typeof slot.meta.inject === 'function' ? slot.meta.inject() : slot.meta.inject;
+    assert.equal(typeof injected?.t, 'function', `${id} 仍要拿到 t()`);
+    assert.ok(Object.prototype.hasOwnProperty.call(injected, 'navigate'), `${id} 必须把 navigate 交给组件`);
+  }
+  const groups = SOURCE.match(/const READINESS_GROUPS = Object\.freeze\(\[([^\]]+)\]\)/u);
+  assert.ok(groups, 'client.js 必须声明 READINESS_GROUPS');
+  assert.deepEqual(
+    groups[1].split(',').map((value) => value.trim().replaceAll("'", '')),
+    ['identity', 'tools'],
+    'DESIGN §3：七行收成两条固定行',
+  );
+  const members = SOURCE.match(/identity: Object\.freeze\(\[([^\]]+)\]\),\s*tools: Object\.freeze\(\[([^\]]+)\]\)/u);
+  assert.ok(members, 'client.js 必须声明 READINESS_GROUP_MEMBERS');
+  assert.deepEqual(members[1].split(',').map((value) => value.trim().replaceAll("'", '')), ['identity', 'key']);
+  assert.deepEqual(members[2].split(',').map((value) => value.trim().replaceAll("'", '')), ['device', 'devops', 'gitee']);
+});
+
+test('r16：探测到 settings.openSection 时 navigate 可用，探测不到时降级为 null（AC-1）', () => {
+  const calls = [];
+  const fake = applyToFakeCtx(CLIENT.module, { services: { settings: { openSection: (id) => calls.push(id) } } });
+  const slot = fake.slots.find((entry) => entry.meta.id === 'devops-readiness');
+  const navigate = slot.meta.inject().navigate;
+  assert.equal(typeof navigate, 'function', '宿主提供 openSection 时必须给出导航函数');
+  navigate('forge-iam');
+  assert.deepEqual(calls, ['forge-iam'], '导航参数只能是分区 id');
+  const fallback = APPLIED.slots.find((entry) => entry.meta.id === 'devops-readiness').meta.inject();
+  assert.equal(fallback.navigate, null, '探测不到导航能力时必须是 null，组件才会降级成文字');
+});
+
 test('装配注册双语字典与样式，且 effect 可整体回收', () => {
   assert.equal(APPLIED.locales.length, 1, '只注册一个命名空间');
   const [{ namespace, dictionaries }] = APPLIED.locales;
   assert.equal(namespace, 'devops');
   assert.deepEqual(Object.keys(dictionaries).sort(), ['en', 'zh']);
-  assert.equal(APPLIED.effects.length, 3, '三条 effect：字典、样式、分区注册');
+  assert.equal(APPLIED.effects.length, 4, '四条 effect：字典、样式、企业 DevOps 分区、企业研发分区');
   for (const effect of APPLIED.effects) {
     assert.equal(typeof effect.label, 'string', '每条 effect 都要有可读标签（宿主 hook 列表里能定位）');
   }
@@ -277,7 +328,7 @@ test('槽位晚于 apply 声明时不得抛错，声明后分区仍挂上（D-2 
   const late = applyToFakeCtx(CLIENT.module, { declareSlot: false });
   assert.equal(late.slots.length, 0, '槽位未声明时不得假装注册成功（那是宿主直接抛错的前一步）');
   late.declare('settings.section');
-  assert.equal(late.slots.length, 1, '槽位声明后必须补挂上，否则配置页在冷启动时序下消失');
+  assert.equal(late.slots.length, 2, '槽位声明后必须补挂上，否则两个分区在冷启动时序下都消失');
   assert.equal(late.slots[0].meta.id, 'devops');
   assert.equal(late.slots[0].component, CLIENT.module.DevopsSection);
 });
@@ -295,7 +346,7 @@ test('分区注册一律经 slots.inject 等声明，禁止裸 register（D-2 �
   const registers = SOURCE.match(/ctx\.slots\.register\(/gu) ?? [];
   const injectIndex = SOURCE.search(/ctx\.slots\.inject\(\s*'settings\.section'/u);
   const registerIndex = SOURCE.search(/ctx\.slots\.register\(/u);
-  assert.equal(registers.length, 1, '分区只注册一次');
+  assert.equal(registers.length, 2, '两个分区各注册一次（企业 DevOps / 企业研发）');
   assert.ok(injectIndex >= 0 && injectIndex < registerIndex, 'register 必须写在 inject 的等待回调里');
 });
 
@@ -308,7 +359,9 @@ test('端点：GET+POST /api/forge-devops/cli，刷新参只在 GET 上', () => 
   const fetches = [...SOURCE.matchAll(/fetch\(([^;]{0,120}?),\s*\{/gs)].map((match) => match[1].trim());
   assert.ok(fetches.length > 0, '页面必须至少一处 fetch（读或写）');
   for (const url of fetches) {
-    assert.match(url, /CLI_ENDPOINT/u, `所有请求都必须基于同一个端点常量，实际：${url}`);
+    // r15：读三源的 `readSource(url)` 把 url 作为形参传进来（不是字面量），
+    // 因此这里只要求"要么基于 CLI_ENDPOINT，要么是 readSource 的 url 形参"。
+    assert.ok(/CLI_ENDPOINT/u.test(url) || url === 'url', `所有请求都必须基于端点常量，实际：${url}`);
     assert.ok(!url.includes('http://') && !url.includes('https://'), '只允许同源相对路径，不得外连');
   }
   // 只有「刷新」才带 refresh=1，且必须是 GET（AC-4：工具调用不触发扫描，只有页面刷新会重扫）。
@@ -379,11 +432,15 @@ test('zh/en 键集完全一致、占位符一致（少一条就是界面上出�
     'candidates.current',
     'field.timeoutMs',
     'field.timeoutMs.hint',
-    'section.commandline',
+    'field.timeoutMs.default',
+    'action.check',
     'error.pathLength',
     'error.timeout',
     'error.load',
-    'saved',
+    'receipt.unsaved',
+    'receipt.saved',
+    'receipt.saveHint',
+    'receipt.checkHint',
     'saveFailed',
     'saveFailedStale',
     'unavailable.title',
@@ -409,16 +466,21 @@ test('英文文案不含中文（漏译会混排）', () => {
 
 test('页面文案零命中旧显示名与隐藏字段词（收窄后不得残留说明）', () => {
   // 页面只问「入口在哪、超时多少」：事实来源改由后端推导，所以页面上不该再出现
-  // 服务地址 / gh 组织 / 事实来源 / mock / enterprise / .exe 任何一处（DESIGN §2.3）。
-  const forbidden = /dop 服务地址|gh 组织|事实来源|\bmock\b|\benterprise\b|\.exe/u;
+  // 服务地址 / gh 组织 / 事实来源 / mock / .exe 任何一处（DESIGN §2.3）。
+  // r16 起「企业账号 / 企业真实证据」是契约里的正式名词，只允许出现在 readiness.* 文案里。
+  const forbidden = /dop 服务地址|gh 组织|事实来源|\bmock\b|\.exe/u;
   for (const [locale, dict] of [['zh', zh], ['en', en]]) {
     const hits = Object.keys(dict).filter((key) => forbidden.test(dict[key]));
     assert.deepEqual(hits, [], `${locale} 里仍有旧字段/旧显示名文案：${hits.join(', ')}`);
+    const enterpriseHits = Object.keys(dict).filter(
+      (key) => /enterprise/iu.test(dict[key]) && !key.startsWith('readiness.') && key !== 'nav' && key !== 'title',
+    );
+    assert.deepEqual(enterpriseHits, [], `${locale} 把「企业」用在了 readiness 之外的文案：${enterpriseHits.join(', ')}`);
   }
   // 显示名与进入路径同源改名：「企业 DevOps」，中英一处两边都改。
-  assert.equal(zh.nav, '企业 DevOps');
+  assert.equal(zh.nav, 'DevOps');
   assert.equal(zh.title, zh.nav, 'nav 与 title 必须同句，否则侧栏与页头两个名字');
-  assert.equal(en.nav, 'Enterprise DevOps');
+  assert.equal(en.nav, 'DevOps');
   // 隐藏两键的文案整组删除：留着就是给不可见字段写说明。
   for (const key of ['field.dopEndpoint', 'field.dopEndpoint.hint', 'field.sourceType', 'field.sourceType.hint', 'error.endpoint', 'error.source', 'section.connection']) {
     assert.ok(!Object.prototype.hasOwnProperty.call(zh, key), `隐藏键文案 ${key} 必须删除（页面不持有不可见字段）`);
@@ -851,7 +913,7 @@ test('E2E 两行一列：dop 入口 / 超时，隐藏两键零 DOM、零段控�
     assert.deepEqual(ids, ['fdv-dopBin', 'fdv-timeoutMs'], `页面只渲染两行，实际 ${ids.join(',')}`);
     assert.equal(page.byClass('fdv-card').length, 1, '只剩 dop 入口卡');
     assert.equal(page.byClass('fdv-scalar').length, 1, '超时是第二行、页面唯一的标量行');
-    assert.equal(page.byClass('fdv-group').length, 1, '只有一个分组标题（「连接与身份」整组已下线）');
+    assert.equal(page.byClass('fdv-group').length, 0, '分组标题整组下线（两行各自讲自己的事）');
     assert.equal(page.byClass('fdv-track').length, 0, '段控件随隐藏键下线（页面没有 .fdv-track）');
 
     // ② 隐藏两键：连 DOM 都不进——不是灰显、不是折叠（收窄后页面无权展示它们）。
@@ -921,7 +983,7 @@ test('E2E 只读首页 → 改为手动指定（预填）→ 保存提交 {revis
     assert.ok(sentFields.every((key) => ['dopBin', 'timeoutMs'].includes(key)), `保存体只允许两键，实际 ${sentFields.join(',')}`);
 
     // ⑤ 终态：回填服务端新快照，提示已保存，保存键回落禁用。
-    assert.ok(page.text().includes(tZh('saved')), '保存后必须给出成功反馈');
+    assert.ok(page.text().includes(tZh('receipt.appliedUnknown')), '保存成功但响应无 applied：回执说「已保存 · 生效状态未知」');
     assert.ok(page.inputWithValue(PATH_NEW), '保存后显示服务端回填的新值');
     assert.equal(page.inputWithValue(PATH_NEW).props.readOnly, false, '配置层条目保存后仍可编辑（能再改）');
     assert.equal(page.byClass('fdv-primary')[0].props.disabled, true, '保存完成后回到未改动状态');
@@ -975,7 +1037,7 @@ test('E2E 入口后缀不再被页面拦截：.cmd / 无后缀失焦无红字且
     assert.equal(stub.calls.length, 4);
     assert.equal(stub.calls[3].init.method, 'POST');
     assert.deepEqual(JSON.parse(stub.calls[3].init.body), { revision: 'rev-1', fields: { dopBin: PATH_NEW } });
-    assert.ok(page.text().includes(tZh('saved')), '拿到新快照后必须给出保存成功反馈');
+    assert.ok(page.text().includes(tZh('receipt.appliedUnknown')), '拿到新快照后仍按「已保存 · 生效状态未知」反馈');
     assert.equal(page.inputWithValue(PATH_NEW).props.value, PATH_NEW, '保存后显示服务端回填的新值');
     assert.equal(page.byClass('fdv-primary')[0].props.disabled, true, '保存完成后回到未改动状态');
   } finally {
@@ -1001,7 +1063,7 @@ test('E2E 找不到原生入口时可填；写面缺失整页降级只读但字�
     assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-dopEndpoint').length, 0, '隐藏键 dopEndpoint 不得有输入框');
     assert.equal(page.findAll((node) => String(node.props.id ?? '') === 'fdv-sourceType').length, 0, '隐藏键 sourceType 不得有输入框');
     // 超时行未改过时把生效值镜像进 placeholder（留空 = 不覆盖该层）。
-    const timeoutInput = page.inputWithPlaceholder('20000');
+    const timeoutInput = page.inputWithPlaceholder(tZh('field.timeoutMs.default'));
     assert.equal(timeoutInput.props.readOnly, false, '超时是页面可编辑的一行');
     assert.ok(page.text().includes(tZh('origin.missing')));
   } finally {
@@ -1017,7 +1079,7 @@ test('E2E 找不到原生入口时可填；写面缺失整页降级只读但字�
     assert.equal(page.byClass('fdv-primary').length, 0, '降级态不渲染保存键（不能给假按钮）');
     assert.equal(page.inputWithValue(PATH_DOP).props.readOnly, true, '降级态字段仍只读可见');
     // 降级时第二行（超时）把生效值镜像进 value（placeholder 不可复制），且用 readOnly 而非 disabled。
-    const lockedTimeout = page.inputWithValue('20000');
+    const lockedTimeout = page.inputWithValue(tZh('field.timeoutMs.default'));
     assert.equal(lockedTimeout.props.readOnly, true, '降级态标量行只读但可聚焦复制');
     assert.equal(lockedTimeout.props.disabled, undefined, '不得用 disabled（无法聚焦/复制）');
     assert.equal(page.inputs().length, 2, '降级态仍是两行，不会因为只读而多出隐藏字段');
@@ -1076,4 +1138,146 @@ test('E2E 多候选可展开：自动发现命中首个，另 N 个折在链上�
   } finally {
     stub.restore();
   }
+});
+
+test('DESIGN §6：回执一句话覆盖四种保存态，不出现「应用」假状态', async () => {
+  // ① 有未保存改动：回执就是「未保存」。
+  {
+    const stub = stubFetch({ body: snapshotOf() });
+    try {
+      const page = createPage();
+      await page.settle();
+      await page.click(page.buttonsByText(tZh('action.takeOver'))[0]);
+      assert.ok(page.text().includes(tZh('receipt.unsaved')), '改动后回执应为「未保存」');
+      assert.ok(!page.text().includes('应用：'), '不得再出现「应用：…」这一行');
+    } finally {
+      stub.restore();
+    }
+  }
+
+  // ② 已生效 / ③ 未生效 / ④ 响应无 applied = 未知。
+  const cases = [
+    [{ ok: true }, 'receipt.saved', undefined],
+    [{ ok: false, reason: 'CLI_CONFIG_INVALID' }, 'receipt.notApplied', { reason: 'receipt.reason.configInvalid' }],
+    [{ ok: false, reason: 'CLI_REBUILD_FAILED' }, 'receipt.notApplied', { reason: 'receipt.reason.rebuildFailed' }],
+    [undefined, 'receipt.appliedUnknown', undefined],
+  ];
+  for (const [applied, key, params] of cases) {
+    const body = { ok: true, snapshot: snapshotOf({ dopBin: { origin: 'config', path: PATH_NEW, candidates: [] } }, 'rev-2') };
+    if (applied !== undefined) body.applied = applied;
+    const stub = stubFetch({ body: snapshotOf() }, { body });
+    try {
+      const page = createPage();
+      await page.settle();
+      await page.click(page.buttonsByText(tZh('action.takeOver'))[0]);
+      await page.change(page.inputWithValue(PATH_DOP), PATH_NEW);
+      await page.blur(page.inputWithValue(PATH_NEW));
+      await page.click(page.byClass('fdv-primary')[0]);
+      const shown = tZh(key, params ? { reason: tZh(params.reason) } : undefined);
+      assert.ok(page.text().includes(shown), `回执应显示「${shown}」`);
+      assert.ok(!/CLI_[A-Z_]+/u.test(page.text()), '回执不得把原因码直接印给用户');
+      assert.equal(page.byClass('fdv-primary').length, 1, '回执区只有一个主按钮（保存）');
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('回执：宿主注入不可确认时给本地化原因，合法清除不冒充「已生效」', async () => {
+  // r15 §3.4 三态（2026-11-09 服务端新增）：`CLI_APPLY_UNVERIFIED` 不得以裸码上屏；
+  // `{ ok: true, active: false }` 是「合法清除最后一个入口」，不能沿用「已保存 · 已生效」。
+  const cases = [
+    [
+      { ok: false, reason: 'CLI_APPLY_UNVERIFIED' },
+      tZh('receipt.unverified', { reason: tZh('receipt.reason.apply-unverified') }),
+      // 「无法确认」不是「未生效」：不得同时给出更硬的结论。
+      '未生效',
+    ],
+    [{ ok: true, active: false }, tZh('receipt.cleared'), null],
+  ];
+  for (const [applied, expected, absent] of cases) {
+    const body = {
+      ok: true,
+      snapshot: snapshotOf({ dopBin: { origin: 'config', path: PATH_NEW, candidates: [] } }, 'rev-2'),
+      applied,
+    };
+    const stub = stubFetch({ body: snapshotOf() }, { body });
+    try {
+      const page = createPage();
+      await page.settle();
+      await page.click(page.buttonsByText(tZh('action.takeOver'))[0]);
+      await page.change(page.inputWithValue(PATH_DOP), PATH_NEW);
+      await page.blur(page.inputWithValue(PATH_NEW));
+      await page.click(page.byClass('fdv-primary')[0]);
+      const text = page.text();
+      assert.ok(text.includes(expected), `回执应显示「${expected}」，实际：${text}`);
+      assert.ok(!text.includes('CLI_APPLY_UNVERIFIED'), '回执不得把服务端裸码直接塞给用户');
+      if (absent) assert.ok(!text.includes(absent), `宿主注入不可确认时不得说「${absent}」：${text}`);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('DESIGN §6：页脚只剩回执与两行小字，来源行/只读面/区间/自动发现命中都已下线', async () => {
+  const body = {
+    ...snapshotOf(),
+    ready: true,
+    plugin: { name: '@heluo/forge-devops', version: '0.1.0' },
+    readAt: '2026-11-09T02:00:00.000Z',
+  };
+  const stub = stubFetch({ body });
+  try {
+    const page = createPage();
+    await page.settle();
+    const text = page.text();
+    assert.ok(text.includes(tZh('receipt.saveHint')), '第一行小字：保存会重建读面');
+    assert.ok(text.includes(tZh('receipt.checkHint')), '第二行小字：检查只读');
+    assert.ok(!text.includes('分区由'), '来源页脚（分区由 … 提供 · 读取于 …）必须删除');
+    assert.ok(!text.includes('只读面'), '不得再出现「只读面 ready」');
+    assert.ok(!/1000[–-]600000/u.test(text), '超时区间不占页面（契约留在服务端校验）');
+    assert.ok(!text.includes('自动发现命中'), '「自动发现命中」已改为「已自动找到」');
+    assert.equal(page.byClass('fdv-status-actions').length, 0, '状态行不再带独立按钮');
+    assert.ok(text.includes(tZh('status.ready')), '状态行只说「dop 已自动找到」');
+    assert.equal(page.byClass('fdv-toggle').length, 0, '没有段控件/开关');
+  } finally {
+    stub.restore();
+  }
+});
+
+test('DESIGN §6：两行小字各占一行——页脚必须换行，小字不能挤在按钮右侧（2026-11-09 上屏回归）', () => {
+  // 实机回归：页脚是 display:flex 单行，两个 <p> 小字被排到 [检查][保存] 右边，
+  // 1400px 下挤成一行长句，读起来像一句没标点的说明。
+  const footer = SOURCE.match(/\.fdv-footer\{([^\n]*)\}/u)?.[1];
+  assert.ok(footer !== undefined, '找不到 .fdv-footer 规则');
+  assert.match(footer, /flex-wrap:wrap/u, '页脚必须允许换行');
+  const hint = SOURCE.match(/\.fdv-receipt-hint\{([^\n]*)\}/u)?.[1];
+  assert.ok(hint !== undefined, '找不到 .fdv-receipt-hint 规则');
+  assert.match(hint, /flex:0 0 100%/u, '小字必须独占一行');
+});
+
+test('DESIGN §6：检查 = 一次只读重扫（?refresh=1），全程不发写请求', async () => {
+  const stub = stubFetch({ body: { ...snapshotOf(), ready: true } }, { body: { ...snapshotOf(), ready: true } });
+  try {
+    const page = createPage();
+    await page.settle();
+    await page.click(page.button(tZh('action.check')));
+    assert.equal(stub.calls.length, 2, '检查只多一次请求');
+    assert.ok(stub.calls[1].url.includes('?refresh=1'), '只有检查带 refresh=1');
+    assert.equal(stub.calls[1].init.method ?? 'GET', 'GET');
+    assert.ok(!stub.calls.some((call) => call.init.method === 'POST'), '检查不得触发写请求');
+    assert.ok(page.text().includes(tZh('receipt.check', { state: `${tZh('status.ready')} · ` })), '检查后有结果文案');
+  } finally {
+    stub.restore();
+  }
+});
+
+test('超时行说清单位：按毫秒填，默认值示例与提示一致', () => {
+  // 回归：输入框只写「20 秒（默认）」，实际要填毫秒，填 30 被判非法。
+  const zh = tZh('field.timeoutMs');
+  assert.match(zh, /毫秒/u, `字段名要带单位：${zh}`);
+  assert.match(tZh('field.timeoutMs.hint'), /20000/u, '提示要给出毫秒示例');
+  assert.match(tZh('field.timeoutMs.default'), /^20000/u, `默认值示例要用毫秒：${tZh('field.timeoutMs.default')}`);
+  assert.match(en['field.timeoutMs'], /ms/u);
+  assert.match(en['field.timeoutMs.default'], /^20000/u);
 });

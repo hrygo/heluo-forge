@@ -13,6 +13,14 @@
   "dependencies": {
     "@heluo/forge-policy": "workspace:*"
   },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",

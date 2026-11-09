@@ -14,6 +14,43 @@ const KERNEL_PACKAGE = '@deepseek-ai/dsh';
 const MARKET_PACKAGE = '@heluo/forge-market';
 const PATCH_FILE = 'cordis.patch.yml';
 
+/**
+ * 允许出现在发布物里的 peer：由宿主（DSH Web 外壳）提供的运行时。
+ * 浏览器半只 `require('react')`，把它写进 peer 是为了让装错环境时立刻报错，
+ * 而不是在页面里炸成 `Cannot find module`。
+ */
+export const HOST_PEERS = new Set(['react']);
+
+/** 允许的 peer 版本范围：具体 semver 范围（`>=18`、`^18.2.0`、`~18.2.0`），不接受 `workspace:`、`*`、URL 或本地路径。 */
+const HOST_PEER_RANGE = /^(?:\^|~|>=)?\s?\d+(?:\.\d+){0,2}$/u;
+
+/**
+ * 发布物的 peer 规则（TECHNICAL §9）：只有宿主 peer 可以留在清单里，
+ * 且必须同时满足三条——键在白名单、`peerDependenciesMeta[key].optional === true`、
+ * 值是具体 semver 范围（禁 `workspace:*`）。peer 不进闭包、不进 `bundledDependencies`、
+ * 不出现在 tarball 的 `node_modules/` 里；其余情形保持原有 `unclosed peerDependencies` 文案。
+ */
+export function peerDependencyErrors(label, pkg, { prefix = 'bundle: ' } = {}) {
+  const errors = [];
+  const peers = Object.entries(pkg.peerDependencies ?? {});
+  const meta = pkg.peerDependenciesMeta ?? {};
+  for (const [dep, spec] of peers) {
+    if (!HOST_PEERS.has(dep)) {
+      errors.push(`${prefix}${label} has unclosed peerDependencies`);
+      continue;
+    }
+    if (meta?.[dep]?.optional !== true) {
+      errors.push(`${prefix}${label} peer ${dep} must be declared optional in peerDependenciesMeta`);
+      continue;
+    }
+    if (typeof spec !== 'string' || spec.startsWith('workspace:') || !HOST_PEER_RANGE.test(spec.trim())) {
+      errors.push(`${prefix}${label} peer ${dep} must be a semver range (got ${JSON.stringify(spec)})`);
+    }
+  }
+  if (Object.keys(pkg.optionalDependencies ?? {}).length > 0) errors.push(`${prefix}${label} has unclosed optionalDependencies`);
+  return errors;
+}
+
 function walkFiles(dir, out = []) {
   let entries = [];
   try {
@@ -273,6 +310,10 @@ export function auditTarball({ label, manifest, packed }) {
     }
   }
   for (const field of ['peerDependencies', 'optionalDependencies']) {
+    if (field === 'peerDependencies') {
+      errors.push(...peerDependencyErrors(`${label} tarball`, manifest));
+      continue;
+    }
     if (Object.keys(manifest[field] ?? {}).length > 0) errors.push(`bundle: ${label} tarball has unclosed ${field}`);
   }
   for (const name of bundled) {
@@ -346,9 +387,7 @@ export function auditReleaseClosure(base, { allowInstalledBinLinks = false } = {
     checkFileList(`release ${pkg.name}`, dir, pkg, errors);
     checkEntryPoints(`release ${pkg.name}`, dir, pkg, errors);
     const bundled = new Set(pkg.bundledDependencies ?? []);
-    for (const field of ['peerDependencies', 'optionalDependencies']) {
-      if (Object.keys(pkg[field] ?? {}).length > 0) errors.push(`bundle: release ${pkg.name} has unclosed ${field}`);
-    }
+    errors.push(...peerDependencyErrors(pkg.name, pkg, { prefix: 'bundle: release ' }));
     for (const [name, spec] of Object.entries(pkg.dependencies ?? {})) {
       const member = join(rootModules, name);
       if (!name.startsWith('@heluo/forge-') || typeof spec !== 'string' || !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u.test(spec)) {

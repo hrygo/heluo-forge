@@ -65,7 +65,9 @@ test('安装单元把 workspace 依赖闭包成真版本，产物里只有一个
     assert.equal(manifest.name, '@heluo/forge-gitee');
     assert.match(manifest.dependencies['@heluo/forge-policy'], /^\d+\.\d+\.\d+$/u, '安装单元必须是真版本');
     assert.deepEqual(manifest.bundledDependencies, ['@heluo/forge-policy'], '闭包成员必须声明为 bundled');
-    assert.equal(manifest.peerDependencies, undefined);
+    assert.deepEqual(manifest.peerDependencies, { react: '>=18' }, '宿主 peer 原样保留（不进闭包）');
+    assert.deepEqual(manifest.peerDependenciesMeta, { react: { optional: true } }, '宿主 peer 必须是 optional');
+    assert.equal(artifact.has('package/node_modules/react/package.json'), false, '宿主 peer 不得进包');
     assert.equal(manifest.devDependencies, undefined);
     assert.ok(artifact.has('package/node_modules/@heluo/forge-policy/package.json'), '被闭包成员必须真的进包');
     assert.equal(JSON.stringify(manifest).includes('workspace:'), false, '产物里不许残留 workspace 协议');
@@ -81,7 +83,9 @@ test('分发内容就是产物内容：源码、补丁层与 README，无测试�
   assert.match(source.engines.dsh, /^>=\d+\.\d+\.\d+-rc\.\d+$/u);
   assert.equal(source.dsh.bundle.patch, './cordis.patch.yml');
   assert.ok(existsSync(join(packageDir, 'cordis.patch.yml')));
-  assert.deepEqual(source.files, ['src', 'cordis.patch.yml', 'README.md']);
+  assert.deepEqual(source.files, ['src', 'client.js', 'cordis.patch.yml', 'README.md']);
+  assert.equal(source.dsh.client.platform, 'web', '浏览器半要声明 dsh.client');
+  assert.ok(existsSync(join(packageDir, 'client.js')));
 
   // 入口文件必须落在 files 白名单里，否则装上就是"清单指向不存在的文件"。
   const declared = [source.main, ...Object.values(source.exports ?? {})];

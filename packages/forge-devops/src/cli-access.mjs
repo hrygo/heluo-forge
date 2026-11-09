@@ -33,6 +33,7 @@ import {
   resolveCliAccess,
 } from './cli-config.mjs';
 import { discoverCli } from './cli-discovery.mjs';
+import { projectLayers } from './readiness.mjs';
 
 /** 默认条目 id：与 `cordis.patch.yml` 的 insert `name` / 清单 `name` 同源。 */
 export const DEFAULT_ENTRY_ID = 'forge-devops';
@@ -242,10 +243,13 @@ export function createCliAccess(options = {}) {
     }
     return Object.freeze({
       revision: row === null ? null : hashLayer(row.override),
+      // 三层来源只出**键名**（r16 / AC-6）：值仍在 entries 里按字段投影，绝不在这里复制第二份。
+      layers: projectLayers(row),
       writable: writableOf(row),
       ready: access.ready === true,
       reason: typeof access.reason === 'string' ? access.reason : null,
       guidance: typeof access.guidance === 'string' ? access.guidance : '',
+      readAt: new Date(clock()).toISOString(),
       entries: Object.freeze(entries),
       host: Object.freeze({ platform: resolvedPlatform, arch: process.arch, node: process.version }),
     });
@@ -268,6 +272,19 @@ export function createCliAccess(options = {}) {
 
   function describe() {
     return describeCliAccess(access);
+  }
+
+  /**
+   * 只读访问器：给装配层投影 readiness 用的**当次**两层行（不缓存、不重算合并）。
+   * 返回值只含 `{inherited, override}` 两个原始层，键名投影由 `readiness.projectLayers` 单点完成。
+   */
+  function rowForReadiness() {
+    const row = readRow();
+    if (row === null) return null;
+    return Object.freeze({
+      inherited: isPlainObject(row.inherited) ? row.inherited : {},
+      override: isPlainObject(row.override) ? row.override : {},
+    });
   }
 
   /**
@@ -339,5 +356,5 @@ export function createCliAccess(options = {}) {
     return { ok: true, snapshot: buildSnapshot(after) };
   }
 
-  return Object.freeze({ entryId, revision, snapshot, describe, save });
+  return Object.freeze({ entryId, revision, snapshot, describe, rowForReadiness, save });
 }

@@ -22,19 +22,61 @@ const textOf = (result) =>
 const okValue = (label) => ({ text: `${label} ran` });
 const errorOf = (result) => (result?.error === undefined ? undefined : { code: result.error.code, message: result.error.message });
 
+const parentAgentOf = (handle) => handle?.agent ?? handle;
+
 /**
- * K-1 根因取证：只读记录 `ctx.tools.execute()` 的返回形状（additive，不影响任何断言）。
- * 文档契约期望 `{ results: [...] }`；若宿主返回数组或其他形状，`batch.results[0]`
- * 就会以 "Cannot read properties of undefined (reading '0')" 失败。
+ * 最小批次派发（AC-7）：宿主 `tools.execute` 收的是**批次输入**
+ * `{ calls: [{ id, name, arguments }], signal }`，返回已结算批次
+ * `{ results: [{ callId, result }], additionalContexts, concluded }`。
+ *
+ * 依据（应用内置宿主构建，只读核对 app.asar 内实现，2026-11-09；版本见该内置清单）：
+ * - `@deepseek-ai/dsh-tools/lib/index.js`：`ToolsService.execute(input)` 把整个
+ *   `input` 交给 `selectExecutor(input.agent).execute(input)`，不存在单调用重载。
+ * - `@deepseek-ai/dsh-tools/lib/types/batch.js`：`executeToolBatch` 解构
+ *   `{ calls: toolCalls, signal, ... }` 后直接 `toolCalls.map(block => ...)`；
+ *   `block` 是 `{ id, name, arguments }`，`arguments` 走 `parseArguments`（字符串形态）。
+ * - 结算结果 `this.results.push({ callId: block.id, result })`，于是解包是
+ *   `results.find(item => item.callId === id).result`；单对象入参会在这里
+ *   抛 `TypeError: Cannot read properties of undefined (reading 'map')`。
+ *
+ * 导出它是为了让 `tests/host-probe.test.mjs` 用严格替身断言形状：替身拒绝单对象，
+ * 只有真正发出单元素 `calls` 批次并通过 `results` 取回匹配项才算通过。
+ *
+ * @param {{tools:{execute:Function}}} ctx 宿主上下文（探针或子代理的上下文均可）
+ * @param {string} toolName 目标工具名
+ * @param {object} [args] 工具参数（宿主批式契约要求 JSON 字符串）
+ * @param {{signal?:AbortSignal, callId?:string}} [options] 调用标识与中止信号
+ * @returns {Promise<{isError:boolean,text:string,error?:object,shape:object}>}
  */
-function describeDispatchShape(batch) {
-  const kind = Array.isArray(batch) ? 'array' : batch === null ? 'null' : typeof batch;
-  const keys = batch !== null && typeof batch === 'object' ? Object.keys(batch) : [];
-  const results = batch?.results;
-  return { kind, keys, resultsLength: Array.isArray(results) ? results.length : null, threw: null };
+export async function dispatchTool(ctx, toolName, args = {}, options = {}) {
+  const { signal, callId } = options ?? {};
+  const id = typeof callId === 'string' && callId !== '' ? callId : `probe-${toolName}`;
+  const batch = await ctx.tools.execute({
+    calls: [{ id, name: toolName, arguments: JSON.stringify(args ?? {}) }],
+    signal,
+  });
+  const results = Array.isArray(batch?.results) ? batch.results : [];
+  const entry = results.find((item) => item?.callId === id) ?? results[0];
+  if (entry === undefined) {
+    throw new Error(`tools.execute returned no result for ${id} (results: ${results.length})`);
+  }
+  const result = entry.result;
+  return {
+    isError: result?.isError === true,
+    text: textOf(result),
+    error: errorOf(result),
+    shape: describeDispatchShape(batch),
+  };
 }
 
-const parentAgentOf = (handle) => handle?.agent ?? handle;
+/** 只读记录返回形状，写进 `probe-raw.json` 作为契约证据（additive，不参与判定）。 */
+function describeDispatchShape(batch) {
+  return {
+    kind: batch === null ? 'null' : Array.isArray(batch) ? 'array' : typeof batch,
+    keys: batch !== null && typeof batch === 'object' ? Object.keys(batch) : [],
+    resultsLength: Array.isArray(batch?.results) ? batch.results.length : null,
+  };
+}
 
 function probeTool(toolName, body) {
   return {
@@ -100,18 +142,14 @@ export function apply(ctx) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         seq += 1;
         try {
-          const batch = await ctx.tools.execute({ calls: [{ id: `probe-${seq}`, name: toolName, arguments: JSON.stringify(args) }], signal });
-          if (dispatchShape === null) dispatchShape = describeDispatchShape(batch);
-          const result = batch.results[0]?.result;
-          return { isError: result?.isError === true, text: textOf(result), error: errorOf(result) };
+          const dispatched = await dispatchTool(ctx, toolName, args, { signal, callId: `probe-${seq}` });
+          if (dispatchShape === null) dispatchShape = dispatched.shape;
+          return dispatched;
         } catch (error) {
           const message = String(error?.message ?? error);
           if (attempt === 0 && message.includes('inactive context')) {
             await new Promise((resolve) => setTimeout(resolve, 20));
             continue;
-          }
-          if (dispatchShape === null) {
-            dispatchShape = { kind: 'threw', keys: [], resultsLength: null, threw: message };
           }
           return { threw: message, cause: String(error?.cause?.stack ?? error?.cause ?? '') };
         }
@@ -1057,8 +1095,8 @@ export function apply(ctx) {
           facts.childBashHidden = ctx.tools.get('bash', childAgent) === undefined;
           const bodyBefore = bodyCalls.body;
           try {
-            const result = (await childCtx.tools.execute({ calls: [{ id: 'probe-subagent-dispatch-1', name: 'probe_body', arguments: '{}' }], signal })).results[0]?.result;
-            facts.childDispatch = { isError: result?.isError === true, text: textOf(result) };
+            const result = await dispatchTool(childCtx, 'probe_body', {}, { signal, callId: 'probe-subagent-dispatch-1' });
+            facts.childDispatch = { isError: result.isError, text: result.text };
           } catch (error) {
             facts.childDispatch = { threw: String(error?.message ?? error) };
           }
@@ -1067,8 +1105,8 @@ export function apply(ctx) {
           // 父作用域对**全局**工具注册的 guard 是否管到子作用域：用 bash 派发实测（结果如实记录）。
           const disposeBashGuard = ctx.tools.guard((exec) => (exec.name === 'bash' ? 'probe-child-bash-guard' : undefined));
           try {
-            const bashResult = (await childCtx.tools.execute({ calls: [{ id: 'probe-subagent-dispatch-2', name: 'bash', arguments: JSON.stringify({ command: 'true' }) }], signal })).results[0]?.result;
-            facts.childBashDispatch = { isError: bashResult?.isError === true, text: textOf(bashResult).slice(0, 160) };
+            const bashResult = await dispatchTool(childCtx, 'bash', { command: 'true' }, { signal, callId: 'probe-subagent-dispatch-2' });
+            facts.childBashDispatch = { isError: bashResult.isError, text: bashResult.text.slice(0, 160) };
           } catch (error) {
             facts.childBashDispatch = { threw: String(error?.message ?? error).slice(0, 160) };
           }

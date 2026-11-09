@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-009 |
 | 文档名称 | DevOps 接入详细设计 |
-| 版本 | V0.6.0 |
+| 版本 | V0.7.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
+| 最后更新 | 2026-11-06 |
 | 门禁 | G1 |
 | 模块状态 | 可用（四个工具：只读 runner（`change.read` / `change.list`）、上下文卡、受控写回（`change update`）、产物落盘（含 clarify/plan 机检）；写回默认关闭，企业 dop CLI 未联调，见设计索引 §2.2） |
 
@@ -21,6 +21,8 @@
 > 2026-11-04 用户提供 dop 1.x 的写回参数：`change update <code> --summary/--description/--ai-ac`，用于 Agent 完成变更内容分析后回写标题、描述与验收标准。据此新增受控写工具 `forge_devops_change_update`（默认关闭，登记 enabled 需审批台账；写后回读）；命令 `--help` 与输出样例尚未取证，`--ai-ac` 的落点按回读假设处理。
 >
 > 2026-11-03 用户确认 D 方案（typed read runner）：只读面从「按能力切 4 个工具」改为「1 个枚举动作的 runner + 上下文卡 + 产物落盘」，删除恒 `denied` 的澄清写工具；`clarify` / `plan` 产物改由纯函数机检后生成正文。本版只调整工具面与校验口径，未新增企业 CLI 实测；`change list` 的真实 flag（含 `--status`）与双平台产物仍待核验。
+>
+> 2026-11-06（r15）补设置页两件事：①本包新增「企业研发」分区（`client.js`，id `devops-readiness`、order 29），汇总企业身份/公共参数/本机配置/DevOps/Gitee/业务写权限六行，只做本机可见性汇总，固定声明"不代表业务授权"；②保存回执区分"已保存；运行时已应用"与"已保存；未应用"，`saveCliConfig` 在写成功后重建读面并回 `applied`，端点原样透传。既有 `devops` 分区（id `devops`、order 60）只加页脚来源行与三行回执，字段面、请求契约与 id/order 均不变。**仍未核验**：`heluo-r15-uat` 独立 profile 的装入与回滚（计划与证据核对见 `scripts/uat-profile.mjs`）。
 >
 > 关联文档：[总体架构 §7.3](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md) REQ-12、[策略与审计](forge-policy.md)。
 
@@ -114,6 +116,23 @@
 
 **target 不是可选项**：策略条目对任何动作都要求非空 target；清单的 `target` 固定为 `@me`，不是省略。产物落盘用的变更号来自入口绑定或一次成功读取（`change.read` 成功、`change.context` 返回 `ready`），不再要求必须先跑命令入口。
 
+### 5.2 设置页（r15）
+
+本包在设置页承载**两个**分区，都由包内 `client.js` 提供（`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`）：
+
+| 分区 | id | order | 职责 |
+|---|---|---|---|
+| 企业研发 | `devops-readiness` | 29 | 汇总六行本机可见性：企业身份（`/api/forge-iam/view` 的 state 映射为已登录/未登录/登录中/过期/不可达/未知）、公共参数（恒「未知」，无可核验的公共维护权限与接口）、本机配置（devops 与 gitee 快照里 `origin==='config'` 的**键名**）、DevOps（快照 `ready` + `dopBin` 来源）、Gitee（快照 `ready`）、业务写权限（恒「未知」） |
+| 企业 DevOps | `devops` | 60 | 既有字段面（`dopBin`/`timeoutMs`）不变，只加页脚来源行与三行回执 |
+
+三条边界：
+
+- **只汇总、不授权**：分区顶部固定声明「本页只汇总本机可见性，不代表业务授权」；六行里没有一行能推出另一行（四组反例由 `tests/ui-contract.test.mjs` 与包内用例逐组断言另一行不变）。本机配置行只列键名，不列值。
+- **只有 DevOps 行能检查**：`GET /api/forge-devops/cli?refresh=1` 是唯一会重新扫描的动作，且只由「检查 DevOps」触发（`refreshUrl()` 一处拼出，`?refresh=1` 在客户端只出现一次）。检查态六种：未检查/检查中/通过/失败/未知/已过期，子原因 `NO_CLI`→未配置、`ENTRY_NOT_EXECUTABLE`→不可执行、`ENDPOINT_UNREACHABLE`→目标不可达、`POLICY_DENIED`→只读被拒。Gitee 行恒「未执行」并写明"未获批准的只读探测，本页不发起请求"。
+- **三态互不覆盖**：保存回执三行（保存 / 应用 / 检查）各自独立；`applied` 来自 POST 成功体的 `applied` 字段，缺失即「未知」，不由前端推断。r16 起 `applied` 表达四种可判定的结论，不再拿「合并态相等」冒充应用：`{ok:true}`＝本层正在使用且新值确实进了运行时；`{ok:true, active:false}`＝最后一个 CLI 入口被正常清除（无 CLI 是合法状态，不报失败）；`{ok:false, reason:'CLI_APPLY_UNVERIFIED'}`＝运行面归属宿主注入的 flow/reader，写成功但本层无法证明新值被采用；`{ok:false, reason:'CLI_REBUILD_FAILED'}`＝重建抛错或读面立不起来（`degradeFaces()`）。页脚来源行读快照里的 `plugin`（服务端从 `package.json` 投影）与 `readAt`，浏览器半不读 `package.json`；本机覆盖只看快照投影的 `layers.override`，不拿合并后的 `config` 反推（`layers` 不可用时显示「未提供」）。
+
+服务端契约：`GET /api/forge-devops/cli` 的快照增 `plugin:{name,version}` 与 `editable:['dopBin','timeoutMs']`；`POST /api/forge-devops/cli` 成功体为 `{ok:true, snapshot, applied?}`——`applied` 有才带、原样透传。`saveCliConfig` 写成功后重算读面，只有运行时合并态里真的出现新值才回 `applied:{ok:true}`；清除最后一个入口回 `applied:{ok:true, active:false}`；运行面被宿主注入时回 `applied:{ok:false, reason:'CLI_APPLY_UNVERIFIED'}`；重建抛错或读面立不起来则 `degradeFaces()` 并回 `applied:{ok:false, reason:'CLI_REBUILD_FAILED'}`（"已保存"这个结论不变）。「检查」只走 `?refresh=1` 重新发现配置并重建读面，不执行 CLI、不请求企业端点；检查与刷新共用单调请求代次，更早发起的回包不能覆盖更晚建立的读面。
+
 ## 6. 权限、凭据与数据
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
@@ -169,6 +188,7 @@ flowchart TD
 | 单元 | 白名单、参数脱敏、输出解析 | `node --test` |
 | 契约 | 枚举动作、每动作参数 schema、写回 confirm/绑定/回读三态、`body`/`data` 互斥、clarify/plan 机检 | `node --test` |
 | 集成 | 未授权、超时、非 JSON 三类 | 本地仿 CLI |
+| 设置页（r15） | 两个分区的 id/order 与两段式挂载、九种状态词、六行互不推导、`?refresh=1` 只由检查触发、保存/应用/检查三行互不覆盖、`applied` 透传与 `CLI_REBUILD_FAILED` 降级 | `node --test "packages/forge-devops/test/*.test.mjs"`（`client-shape.test.mjs`、`save-applied.test.mjs`）、`node scripts/check-client-module.mjs packages/forge-devops/client.js`、`node --test tests/ui-contract.test.mjs` |
 | 端到端 | 双端各完成一次只读查询 | 手工 |
 
 离线用例还覆盖：两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 透传、归一失败只记 `normalize_error`、clarify 零选项与 plan 缺验证方式被拒且不落盘。
@@ -176,6 +196,8 @@ flowchart TD
 ## 11. 打包、升级与回退
 
 形态为配置与技能资产，不新增常驻进程；CLI 由 DevOps 团队分发与升级。
+
+浏览器半（r15）：`exports['./client'] = './client.js'`、`files` 含 `client.js`、`peerDependencies = {react:'>=18'}` 且 `peerDependenciesMeta.react.optional = true`（react 由宿主 Web 外壳提供，不进闭包、不进 tarball）。版本投影：`src/index.mjs` 读自己的 `package.json` 注入快照的 `plugin`，页面只用服务端给的值。
 
 升级：命令面只增不删；删除命令视为能力收缩，需说明。
 

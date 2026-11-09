@@ -1,0 +1,29 @@
+{
+  "name": "@local/heluo-enterprise-settings-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated in-memory enterprise settings interaction demo; no real connections or permissions",
+  "engines": { "dsh": ">=0.2.1-rc.5" },
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./model": "./model.mjs",
+    "./view": "./view.js",
+    "./build": "./build.mjs",
+    "./model.test.mjs": "./model.test.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./README.md": "./README.md",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js", "client.js", "model.mjs", "view.js", "build.mjs", "model.test.mjs",
+    "cordis.patch.yml", "README.md", "locale/*.json", "icon.svg"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "immediately": true, "inject": ["slots", "locale"] }
+  }
+}

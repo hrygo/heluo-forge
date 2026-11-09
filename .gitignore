@@ -44,6 +44,8 @@ coverage/
 .turbo/
 *.tsbuildinfo
 output/
+artifacts/
+tarballs/
 
 # Release artifacts (tarball + bundle-manifest.json + SHA256SUMS live together)
 /artifacts/

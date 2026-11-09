@@ -1,0 +1,154 @@
+// r15 企业 IAM UI 的跨包契约（TECHNICAL §4.1/§10）。
+//
+// 浏览器半不经过打包器，两端各写一份常量，最容易悄悄漂移：改了一侧的端点、
+// 忘了另一侧，页面就会 404 而单元测试全绿。这里把"必须逐字一致"的几处钉死：
+//   1. 两个浏览器半都能被 Loader 装进页面（真执行，见 scripts/check-client-module.mjs）；
+//   2. 分区 id/order 唯一且与设计表一致（29 企业研发 / 50 企业 Gitee / 60 企业 DevOps）；
+//   3. 挂载一律两段式 `slots.inject('settings.section', ...)`，name 逐字；
+//   4. 客户端端点/请求头常量与各自 `src/http.mjs` 的导出逐字一致；
+//   5. `?refresh=1` 只有一处拼法，且只在 devops 客户端（Gitee 分区不发探测请求）。
+
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+
+import { CLI_ROUTE_PATH, CLI_REQUEST_HEADER } from '../packages/forge-devops/src/http.mjs';
+import { GITEE_CONFIG_ROUTE, GITEE_REQUEST_HEADER } from '../packages/forge-gitee/src/http.mjs';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const read = (relative) => readFileSync(join(root, relative), 'utf8');
+const CLIENTS = ['packages/forge-gitee/client.js', 'packages/forge-devops/client.js'];
+
+const EXPECTED_SECTIONS = [
+  { id: 'devops-readiness', order: 29 },
+  { id: 'gitee', order: 50 },
+  { id: 'devops', order: 60 },
+];
+
+function loadClientModules() {
+  const stdout = execFileSync(process.execPath, [join(root, 'scripts/check-client-module.mjs'), ...CLIENTS], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  return JSON.parse(stdout);
+}
+
+test('两个浏览器半都能被 Loader 装载：导出 apply/inject，注册 settings.section', () => {
+  const report = loadClientModules();
+  assert.equal(report.failed, 0, 'scripts/check-client-module.mjs 必须全部通过');
+  assert.equal(report.checked.length, 2);
+  for (const entry of report.checked) {
+    assert.match(entry.id, /^@heluo\/forge-(gitee|devops)$/u, `${entry.file} 的 loader id 不对`);
+    assert.ok(entry.sections.length >= 1, `${entry.file} 没有注册任何分区`);
+    for (const section of entry.sections) {
+      assert.equal(section.name, 'settings.section', `${entry.file} 必须注册到 settings.section`);
+      assert.equal(section.component, true, `${section.id} 必须带组件`);
+    }
+  }
+});
+
+test('分区 id 与 order 与设计表逐字一致，且互不重复（AC-13）', () => {
+  const report = loadClientModules();
+  const sections = report.checked.flatMap((entry) => entry.sections.map((section) => ({ ...section, file: entry.file })));
+  assert.deepEqual(
+    sections.map(({ id, order }) => ({ id, order })).sort((left, right) => left.order - right.order),
+    EXPECTED_SECTIONS,
+  );
+  assert.equal(new Set(sections.map((section) => section.id)).size, sections.length, '分区 id 不得重复');
+  assert.equal(new Set(sections.map((section) => section.order)).size, sections.length, '分区 order 不得重复');
+  // 企业身份分区属于 forge-iam（order 30），r15 不得新增第二个身份入口。
+  assert.equal(sections.some((section) => section.id === 'forge-iam'), false, '不得注册第二个企业身份分区');
+});
+
+test('挂载一律两段式 slots.inject，不在 apply 里直接 register（AC-16）', () => {
+  for (const file of CLIENTS) {
+    const source = read(file);
+    assert.ok(source.includes("ctx.slots.inject('settings.section'"), `${file} 必须两段式挂载 settings.section`);
+    assert.ok(source.includes("name: 'settings.section'"), `${file} 的注册项 name 必须逐字为 settings.section`);
+    assert.equal(/ctx\.slots\.register\(\s*['"]/u.test(source), false, `${file} 不得直接 register 槽位名`);
+    assert.equal(/id:\s*['"]forge-iam['"]/u.test(source), false, `${file} 不得注册第二个企业身份入口`);
+  }
+});
+
+test('客户端端点与请求头常量与各自 src/http.mjs 逐字一致（AC-11）', () => {
+  const gitee = read('packages/forge-gitee/client.js');
+  assert.ok(gitee.includes(`const CLI_ENDPOINT = '${GITEE_CONFIG_ROUTE}';`), 'Gitee 客户端端点必须等于 GITEE_CONFIG_ROUTE');
+  assert.ok(gitee.includes(`const REQUEST_HEADER = '${GITEE_REQUEST_HEADER}';`), 'Gitee 客户端请求头必须等于 GITEE_REQUEST_HEADER');
+
+  const devops = read('packages/forge-devops/client.js');
+  assert.ok(devops.includes(`const CLI_ENDPOINT = '${CLI_ROUTE_PATH}';`), 'DevOps 客户端端点必须等于 CLI_ROUTE_PATH');
+  assert.ok(devops.includes(`'${CLI_REQUEST_HEADER}': '1'`), 'DevOps 客户端请求头必须等于 CLI_REQUEST_HEADER');
+});
+
+test('?refresh=1 只有一处拼法，且只在 devops 客户端（AC-10）', () => {
+  const devops = read('packages/forge-devops/client.js');
+  const occurrences = devops.split('`${CLI_ENDPOINT}?refresh=1`').length - 1;
+  assert.equal(occurrences, 1, '?refresh=1 只能由 refreshUrl() 一处拼出');
+  assert.ok(devops.includes('const refreshUrl = () =>'), 'refreshUrl 必须是唯一入口');
+
+  const gitee = read('packages/forge-gitee/client.js');
+  assert.equal(gitee.includes('`${CLI_ENDPOINT}?refresh=1`'), false, 'Gitee 分区不得发起任何探测请求');
+});
+
+test('Gitee 客户端不读 package.json（版本由服务端快照投影）', () => {
+  for (const file of CLIENTS) {
+    const source = read(file);
+    // 只查"真的去读文件"的写法：注释里提到 package.json 不算。
+    assert.equal(/require\(\s*['"][^'"]*package\.json/u.test(source), false, `${file} 不得在浏览器半 require package.json`);
+    assert.equal(/from\s+['"][^'"]*package\.json['"]/u.test(source), false, `${file} 不得在浏览器半 import package.json`);
+    assert.equal(/readFileSync|node:fs/u.test(source), false, `${file} 不得在浏览器半访问文件系统`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// r16：就绪面板的跨层契约（AC-4/AC-6）。四层证据、来源类型、三层来源的键名
+// 在 src/readiness.mjs 与浏览器半各写一份，改了一侧忘了另一侧，页面就会把
+// 枚举当未知渲染——所以这里逐字比对常量，而不是只看"有没有 readiness 字样"。
+// ---------------------------------------------------------------------------
+
+import {
+  EVIDENCE_LAYERS,
+  EVIDENCE_REASONS,
+  EVIDENCE_STATES,
+  READINESS_SOURCE_TYPES,
+} from '../packages/forge-devops/src/readiness.mjs';
+
+const EVIDENCE_STATE_KEYS = ['pass', 'fail', 'notRun'];
+
+test('r16：客户端四层证据 / 来源类型 / 证据原因与 src/readiness.mjs 常量逐字一致', () => {
+  const devops = read('packages/forge-devops/client.js');
+  for (const layer of EVIDENCE_LAYERS) {
+    assert.ok(devops.includes(`'readiness.evidence.layer.${layer}'`), `缺四层证据文案：${layer}`);
+  }
+  assert.deepEqual(EVIDENCE_LAYERS, ['file', 'executable', 'target', 'readonly'], '四层顺序是契约，不得重排');
+  for (const sourceType of READINESS_SOURCE_TYPES) {
+    assert.ok(devops.includes(`'readiness.check.sourceType.${sourceType}'`), `缺来源类型文案：${sourceType}`);
+  }
+  for (const reason of Object.values(EVIDENCE_REASONS)) {
+    assert.ok(devops.includes(`'readiness.evidence.reason.${reason}'`), `缺证据原因文案：${reason}`);
+  }
+  for (const key of EVIDENCE_STATE_KEYS) {
+    assert.ok(devops.includes(`'readiness.evidence.state.${key}'`), `缺证据状态文案：${key}`);
+  }
+  assert.deepEqual(Object.values(EVIDENCE_STATES), ['pass', 'fail', 'not-run'], '证据状态三值固定');
+});
+
+test('r16：三层来源键名两侧同源（AC-6）', () => {
+  const devops = read('packages/forge-devops/client.js');
+  for (const key of ['layers.title', 'layers.inherited', 'layers.override', 'layers.effective', 'layers.origin']) {
+    assert.ok(devops.includes(`'readiness.${key}'`), `缺三层来源文案：${key}`);
+  }
+  const access = read('packages/forge-devops/src/cli-access.mjs');
+  assert.ok(access.includes('layers: projectLayers(row)'), 'DevOps 快照必须投影 layers 键名');
+  assert.ok(access.includes('readAt:'), 'DevOps 快照必须带 readAt');
+});
+
+test('r16：Gitee 分区不发就绪探测，也不重复实现四项/四层（AC-4）', () => {
+  const gitee = read('packages/forge-gitee/client.js');
+  assert.equal(gitee.includes('readiness.evidence'), false, 'Gitee 分区不实现四层证据');
+  assert.equal(gitee.includes('/api/forge-iam/view'), false, 'Gitee 分区不读企业身份');
+  assert.equal(gitee.includes('检查 Gitee'), false, 'Gitee 分区没有自己的检查按钮');
+});

@@ -22,6 +22,7 @@
  *   缺失、晚到或端点已被占用都只降级（页面只读 / 无端点），绝不塌掉装配与工具面；
  * - 未命中时只读面仍以 `NO_READER` 失败（原因码不加码），细因与页面指引放 `detail`。
  */
+import { readFileSync, statSync } from 'node:fs';
 import {
   assertReadRequest,
   DevopsReadError,
@@ -35,10 +36,44 @@ import { displayableChange, normalizeChangeRecord } from './change-context.mjs';
 import { commandFaceStatus, registerEntry } from './entry.mjs';
 import { createDevopsFlow } from './flow.mjs';
 import { createPolicyGuard } from './policy-guard.mjs';
-import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS } from './cli-config.mjs';
+import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS, deriveSourceType } from './cli-config.mjs';
 import { createCliAccess } from './cli-access.mjs';
+import { buildReadiness } from './readiness.mjs';
 import { CLI_API_PREFIX, createCliApi, toNodeRoute } from './http.mjs';
 import { ConfigStandard } from './runtime-config.mjs';
+
+/**
+ * 本包自己的版本投影（TECHNICAL §3.5）：读自己的 `package.json`，**只**用来给页面页脚显示
+ * "分区由谁提供"。读不到就回落占位，不因为一条页脚文案让整条 entry 不激活。
+ */
+export const DEVOPS_PLUGIN = (() => {
+  try {
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    return Object.freeze({
+      name: typeof manifest.name === 'string' ? manifest.name : '@heluo/forge-devops',
+      version: typeof manifest.version === 'string' ? manifest.version : '0.0.0',
+    });
+  } catch {
+    return Object.freeze({ name: '@heluo/forge-devops', version: '0.0.0' });
+  }
+})();
+
+/** 页面可写的两个键（与 `CLI_FIELDS` 的页面子集一致，供客户端不做第二套判断）。 */
+const CLI_EDITABLE_FIELDS = Object.freeze(['dopBin', 'timeoutMs']);
+
+/**
+ * 给页面用的快照投影：在 `cli-access` 的快照之上加"谁提供的 / 哪几个键可写"。
+ * 两者都是**装配事实**，不是配置值，所以放在投影里而不是塞进快照本体（避免页面把
+ * "插件版本"误当配置项）。
+ */
+function projectSnapshot(snapshot) {
+  if (snapshot === null || typeof snapshot !== 'object') return snapshot;
+  return Object.freeze({
+    ...snapshot,
+    plugin: DEVOPS_PLUGIN,
+    editable: CLI_EDITABLE_FIELDS,
+  });
+}
 
 export const name = 'forge-devops';
 
@@ -343,6 +378,30 @@ export function apply(ctx, rawConfig = {}) {
   };
   syncFaces();
 
+  /**
+   * 就绪视图单点（r16 / D-4）：所有对外快照都经这里加一份 `readiness`。
+   *
+   * 只读诊断：`statSync` 只判文件形态，`admit` 只问策略准入（`policy-guard.admit` 结构上
+   * 不发起下游调用），两者都不产生网络请求、不写配置。装配在闭包里算，页面无法用参数改变证据。
+   */
+  const withReadiness = (snapshot) => {
+    const projected = projectSnapshot(snapshot);
+    if (projected === null || typeof projected !== 'object') return projected;
+    const entries = projected.entries !== null && typeof projected.entries === 'object' ? projected.entries : {};
+    return Object.freeze({
+      ...projected,
+      readiness: buildReadiness({
+        snapshot: projected,
+        row: access.rowForReadiness(),
+        sourceType: deriveSourceType(entries),
+        plugin: DEVOPS_PLUGIN,
+        platform: projected.host?.platform ?? process.platform,
+        statSync,
+        admit: (request) => guard.admit(request),
+      }),
+    });
+  };
+
   // 命令面是可选的：宿主没装 commands 时不算故障，但状态必须可见。
   const entryStatus = commandFaceStatus(ctx);
   let callSeq = 0;
@@ -394,7 +453,9 @@ export function apply(ctx, rawConfig = {}) {
   const cliApi = createCliApi({
     access,
     // 刷新与工具侧共用同一个单点（AC-6）：路由不再自己调 `access.snapshot({refresh})`。
-    snapshot: ({ refresh } = {}) => (refresh === true ? refreshSnapshot() : access.snapshot()),
+    snapshot: ({ refresh } = {}) => withReadiness(refresh === true ? refreshSnapshot() : access.snapshot()),
+    // 保存走 service 端口：只有它知道"写成功后要重建读面"，也才有 `applied` 可透传（§3.4）。
+    save: (options) => service.saveCliConfig(options),
   });
   const cliRoute = toNodeRoute(cliApi);
   let routeState = 'no-webserver';
@@ -441,6 +502,43 @@ export function apply(ctx, rawConfig = {}) {
     return flow[method](input);
   };
 
+  /**
+   * 保存回执：`snapshot` 一律带就绪投影；`applied` 单独表达"运行面是否真的用上了"。
+   * 形状保持最小：已应用是精确的 `{ok:true}`，页面按它选文案。
+   */
+  const savedReply = (result, applied) => ({
+    ...result,
+    snapshot: withReadiness(result.snapshot),
+    applied,
+  });
+
+  /**
+   * 判定"已保存的新值是否真的在运行面生效"（r16 / PR #215 review §3.4）。
+   *
+   * - 宿主注入 flow/reader：运行面不由本层重建，任何"相等"都证明不了它采用了新值，
+   *   报 `APPLY_UNVERIFIED`（`ok:false` 但**不降级**——宿主的读面还在正常服务）。
+   * - 合并态为空：区分"合法清除最后一个入口"（NOT_FOUND，属正常不可用）与
+   *   "配置存在但读不出来"（INVALID，写成功、未生效，原因在配置）。
+   * - 合并态非空：只有本层流程在用（`configured`）且写入的每个值都出现，才算已应用。
+   */
+  const appliedOf = (next, fields) => {
+    if (ownedFlow === false || isReaderLike(injectedReader)) {
+      return { ok: false, reason: CLI_REASONS.APPLY_UNVERIFIED };
+    }
+    if (next.cliConfig === null) {
+      const reason = access.describe().reason;
+      if (reason === CLI_REASONS.NOT_FOUND) return { ok: true, active: false };
+      if (reason === CLI_REASONS.INVALID) return { ok: false, reason: CLI_REASONS.INVALID };
+      return { ok: false, reason: CLI_REASONS.REBUILD_FAILED };
+    }
+    const merged = next.cliConfig;
+    const matches = Object.entries(fields ?? {}).every(
+      ([key, value]) => value === null || String(merged[key] ?? '') === String(value),
+    );
+    if (next.configured === true && matches) return { ok: true };
+    return { ok: false, reason: CLI_REASONS.REBUILD_FAILED };
+  };
+
   const service = {
     /** 只读动作清单（写动作永不出现在这里）。 */
     readActions: () => [...READ_ACTIONS],
@@ -463,13 +561,33 @@ export function apply(ctx, rawConfig = {}) {
         route: routeState,
       }),
     /** 配置页快照（含命中路径）：只给同源 GET 路由与页面，不进工具信封、不进日志（AC-10）。 */
-    cliSnapshot: ({ refresh } = {}) => (refresh === true ? refreshSnapshot() : access.snapshot()),
-    /** 保存配置：revision 栅栏、字段校验、写后回读都在 `cli-access`（本层不重算、不猜默认值）。 */
+    cliSnapshot: ({ refresh } = {}) => withReadiness(refresh === true ? refreshSnapshot() : access.snapshot()),
+    /**
+     * 保存配置：revision 栅栏、字段校验、写后回读都在 `cli-access`（本层不重算、不猜默认值）。
+     *
+     * 写成功之后的"应用了没有"是三态（r16 / PR #215 review §3.4）：
+     * ① 运行面确是本层重建的流程 → 合并态里真的出现新值才算已应用；
+     * ② 运行面归属宿主注入的 flow/reader → 无法验证，如实报 `APPLY_UNVERIFIED`，既不谎报已生效，
+     *    也不降级宿主仍在使用的读面；
+     * ③ 最后一个 CLI 入口被合法清除 → 运行时明确"没有入口"，是有意的不可用，不是重建故障。
+     * 合并态相等本身只说明"配置层是这个值"，不足以证明 ①。
+     */
     saveCliConfig: async ({ revision, fields } = {}) => {
       const result = await access.save({ revision, fields });
+      if (result?.ok !== true) return result;
       // 写成功即重算读面（AC-8「保存后立刻生效」）：重建包内那份流程，注入的那份不碰。
-      if (result?.ok === true) syncFaces({ rebuild: true });
-      return result;
+      // 重建失败**不能**吞掉"已保存"这个结论，也不能谎报"已应用"：两者分开报（§3.4）。
+      let next = null;
+      try {
+        next = syncFaces({ rebuild: true });
+      } catch {
+        degradeFaces();
+        return savedReply(result, { ok: false, reason: CLI_REASONS.REBUILD_FAILED });
+      }
+      const applied = appliedOf(next, fields);
+      // 只有"确实重建失败"才降级；合法清除与宿主注入都不是本层能修的重建故障。
+      if (applied.ok === false && applied.reason === CLI_REASONS.REBUILD_FAILED) degradeFaces();
+      return savedReply(result, applied);
     },
     /** 页面「重新发现」：走刷新单点（发现 → 重建读面 → 同源出响应；工具调用仍不触发扫描，AC-4）。 */
     rediscover: () => refreshSnapshot(),

@@ -148,6 +148,24 @@ test('listCodeOccurrences：src 里的硬编码被拒，清单与夹具例外被
   }
 });
 
+test('演示包仅放行 engines.dsh 声明，依赖与运行代码的固定版本仍拒绝', () => {
+  const root = fixtureRoot();
+  try {
+    mkdirSync(join(root, 'demos/settings'), { recursive: true });
+    writeFileSync(join(root, 'demos/settings/package.json'), JSON.stringify({
+      engines: { dsh: `>=${BASELINE}` },
+      dependencies: { '@deepseek-ai/dsh-core': sibling(BASELINE) },
+    }, null, 2));
+    writeFileSync(join(root, 'demos/settings/client.js'), `const dshVersion = '${BASELINE}';\n`);
+    const rows = listCodeOccurrences(root, BASELINE);
+    assert.equal(rows.find(row => row.file.endsWith('package.json') && row.version === BASELINE)?.kind, 'code-allowed');
+    assert.equal(rows.find(row => row.file.endsWith('package.json') && row.version === sibling(BASELINE))?.kind, 'code-forbidden');
+    assert.equal(rows.find(row => row.file.endsWith('client.js'))?.kind, 'code-forbidden');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('listCodeOccurrences：忽略区与嵌套检出不计入受管源码', () => {
   const root = fixtureRoot();
   try {

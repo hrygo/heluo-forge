@@ -59,7 +59,12 @@ test('AC-1: 清单声明可被宿主编排的入口（根名 + 主入口 + 补�
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.main, './src/index.mjs');
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
-  assert.equal(pkg.dsh?.client, undefined, '本轮无前端，不得声明 client 入口');
+  // r15 起本包自带设置页分区（Gitee）：client 入口与 devops 同形，键集不多不少。
+  assert.deepEqual(pkg.dsh?.client, {
+    platform: 'web',
+    immediately: true,
+    inject: ['slots', 'locale'],
+  });
 
   // 指向的补丁层必须真的存在（宿主解析不到就是一个不生效的层）。
   const patchText = await readFile(PATCH_FILE, 'utf8');
@@ -77,7 +82,12 @@ test('AC-1: exports 与 files 白名单互相自洽（没有声明了却打不�
   const targets = [];
   for (const [key, target] of Object.entries(exportsMap)) {
     assert.equal(typeof target, 'string', `exports["${key}"] 必须是字符串入口`);
-    assert.ok(target.startsWith('./src/'), `exports["${key}"] 必须指向本包 src`);
+    // `./client` 是浏览器半（TECHNICAL §9 指定 `./client.js`），其余入口一律落在本包 src。
+    if (key === './client') {
+      assert.equal(target, './client.js');
+    } else {
+      assert.ok(target.startsWith('./src/'), `exports["${key}"] 必须指向本包 src`);
+    }
     await readFile(new URL(`../${target.slice(2)}`, import.meta.url), 'utf8');
     targets.push(target);
   }
@@ -100,7 +110,8 @@ test('AC-4: 依赖面只有策略包，且不引入宿主私有包（src 计数�
   const pkg = await manifest();
   assert.deepEqual(Object.keys(pkg.dependencies ?? {}), ['@heluo/forge-policy']);
   assert.equal(pkg.dependencies['@heluo/forge-policy'], 'workspace:*', '包间用 workspace:，由构建期闭包成真版本');
-  assert.equal(pkg.peerDependencies, undefined, '本轮不需要 peer（README 已写明硬依赖策略包）');
+  assert.deepEqual(pkg.peerDependencies, { react: '>=18' }, 'UI 半只需要宿主提供的 react，且必须是语义版本范围');
+  assert.deepEqual(pkg.peerDependenciesMeta, { react: { optional: true } }, 'peer 必须 optional：宿主不装 react 时服务端半仍要能加载');
   assert.equal(pkg.optionalDependencies, undefined);
 
   // 安装期脚本一律不带（构建闭包会直接拒绝）。

@@ -87,7 +87,7 @@ async function mountPanel(fetch) {
 for (const [state, label] of [
   ['configured', '已保存'],
   ['unconfigured', '未保存'],
-  ['unknown', '状态未知'],
+  ['unknown', '凭据状态尚未确认'],
   ['owner-mismatch', '属于其他账号，请核对记录'],
   ['invalid', '记录不一致，已保留'],
 ]) {
@@ -118,9 +118,13 @@ test('a poll during sign-out cannot restore ready or start a duplicate sign-out'
   await panel.tick();
   tree = panel.render();
   assert.doesNotMatch(panel.text(tree), /已登录|synthetic-user/);
-  assert.match(panel.text(tree), /个人访问凭证：状态未知/);
-  assert.doesNotMatch(panel.text(tree), /个人访问凭证：未保存/);
   assert.equal(panel.findButton(tree, '刷新').props.disabled, true);
+  // The credential step folds while signed out; opening it must not change the
+  // pending sign-out guard.
+  panel.findButton(tree, '登录后可配置').props.onClick();
+  tree = panel.render();
+  assert.match(panel.text(tree), /个人访问凭证：凭据状态尚未确认/);
+  assert.doesNotMatch(panel.text(tree), /个人访问凭证：未保存/);
   assert.equal(panel.findButton(tree, '保存凭据').props.disabled, true);
   post.resolve(Response.json({ view: failed, error: { code: 'IAM_CREDENTIALS_CLEAR_FAILED' } }, { status: 503 }));
   await first;

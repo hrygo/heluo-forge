@@ -47,6 +47,25 @@ dsh --profile web --dump-config | grep -A2 "id: forge-devops"
 
 保存成功后读面立即按新配置重建（无需重启）；写进 profile 补丁的值重启后仍然有效。**发现结果不回写配置**：换机器或改 PATH 后点「重新自动发现」即可跟随，页面不会把自动发现的等值写盘。当前 profile 没有挂载配置面（`settings` / `config-editor`）时，页面降级为只读并给出环境变量出口，而不是渲染一个存不进去的表单。
 
+### 企业研发（`设置 → 企业研发`，r15 新增）
+
+本包在设置页还有第二个分区：id `devops-readiness`、order 29。它**只汇总本机可见性**，页面顶部固定声明「本页只汇总本机可见性，不代表业务授权」。六行各读各的源，一行失败只影响自己：
+
+| 行 | 事实来源 | 状态 |
+|---|---|---|
+| 企业身份 | `GET /api/forge-iam/view` 的 `state` | 已登录 / 未登录 / 登录中 / 过期 / 不可达 / 未知；未装该插件即「未安装」 |
+| 公共参数 | 无 | 恒「未知」——尚无可核验的公共维护权限与接口 |
+| 本机配置 | devops 与 gitee 快照里 `origin === 'config'` 的**键名** | 列出键名，不列值 |
+| DevOps | 本包快照的 `ready` 与 `dopBin` 的来源 | 已配置 / 未配置 / 未安装（不写"通过"） |
+| Gitee | gitee 快照的 `ready` | 已配置 / 未配置 / 未安装 |
+| 业务写权限 | 无 | 恒「未知」——本页不判断授权 |
+
+只有 DevOps 行可以检查：「检查 DevOps」打 `GET /api/forge-devops/cli?refresh=1`（**唯一**会重新扫描的动作，`?refresh=1` 在客户端只拼一次）。检查态六种：未检查 / 检查中 / 通过 / 失败 / 未知 / 已过期，并带基准短号与时间；子原因是 `NO_CLI`（未配置）、`ENTRY_NOT_EXECUTABLE`（不可执行）、`ENDPOINT_UNREACHABLE`（目标不可达）、`POLICY_DENIED`（只读被拒）。Gitee 行恒「未执行」并写明未获批准的只读探测本页不发起请求。检查不写配置。
+
+### 保存回执与来源页脚（r15）
+
+`devops` 分区保存后显示三行互不覆盖的回执：**保存**（已保存 / 未保存）、**应用**（运行时已应用 / 未应用 / 未知）、**检查**（未检查 / 上次检查时间）。应用这一行读 POST 成功体里的 `applied`：`saveCliConfig` 写成功后重算读面，只有运行时合并态里真的出现了新值才回 `{ok:true}`；重建抛错或读面立不起来则降级并回 `{ok:false, reason:'CLI_REBUILD_FAILED'}`——此时"已保存"仍成立，但页面不会假装生效。页脚一行「分区由 @heluo/forge-devops <version> 提供 · 读取于 <时间>」，版本与时刻都来自服务端快照（`plugin` / `readAt`），浏览器半不读 `package.json`。
+
 ### 配置项（配置页 / 环境变量 / 后端推导）
 
 四个键名与代码同源（`CLI_FIELDS`，camelCase），页面标签、环境变量与工具失败文案指向同一句指引「设置 → 企业 DevOps」。四项按**设置方式**分三档：
@@ -115,7 +134,7 @@ fail closed 语义不变，但文案改成人话：只读工具仍以 `NO_READER
 
 ## 安装单元与策略门禁（20261028-r1）
 
-单个包就是完整安装单元：清单声明 `dsh.bundle.patch: ./cordis.patch.yml`、`files` 带补丁层与 `client.js`，并把 `@heluo/forge-policy` 声明为包依赖（`workspace:*`），使"只装 devops"也能挂载。补丁层**先插策略、后插 devops**，两行都用包根名——策略先行是硬依赖，顺序错了按 fail-closed 拒绝挂载。若同一 profile 已 apply `@heluo/forge-enterprise` 的补丁层（其中已插策略），仍可叠加本层：两层策略行同 `id`、目录逐字相同，loader 按 id 折叠为一个条目（后写入的 `config` 覆盖先前的，不是重复挂载两份策略实例），幸存目录不取决于装配顺序。
+单个包就是完整安装单元：清单声明 `dsh.bundle.patch: ./cordis.patch.yml`、`files` 带补丁层与 `client.js`、`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`，并把 `@heluo/forge-policy` 声明为包依赖（`workspace:*`），使"只装 devops"也能挂载。r15 起清单另带 `peerDependencies = {react:'>=18'}` 与 `peerDependenciesMeta.react.optional = true`：react 由宿主 Web 外壳提供，构建期的 `HOST_PEERS` 规则允许它留在清单里但不进闭包、不进 `bundledDependencies`、不出现在 tarball 的 `node_modules/` 里。补丁层**先插策略、后插 devops**，两行都用包根名——策略先行是硬依赖，顺序错了按 fail-closed 拒绝挂载。若同一 profile 已 apply `@heluo/forge-enterprise` 的补丁层（其中已插策略），仍可叠加本层：两层策略行同 `id`、目录逐字相同，loader 按 id 折叠为一个条目（后写入的 `config` 覆盖先前的，不是重复挂载两份策略实例），幸存目录不取决于装配顺序。
 
 策略行必须自带非空的 `config.catalog` 才会挂载成功：策略缺省目录是空表，devops 校验"两条读动作已登记且 `enabled`"随即以 `POLICY_ACTION_UNREGISTERED` 拒绝挂载（2026-10-28 第 2 轮 QA 的 N-1：包能装进 profile，但宿主启动时报 `1 entry did not activate`，加载路径挂住）。补丁层因此预置**6 条只读动作的并集**——本包的两条（`change.read` `target: change`、`change.list` `target: changes`）加 `@heluo/forge-gitee` 的四条（`gitee.repository.read` / `gitee.issue.read` / `gitee.pr.read` / `gitee.delivery.judge`，`target` 分别为 `repository` / `issue` / `pull-request` / `change`）；这条策略行与 gitee 补丁层的那条 **id 相同、目录逐字相同**，同装时 loader 按 id 覆盖、只留一个实例（r10 起不再写 `isolate`）。写动作不预置，因为策略要求 enabled 的写/确认动作带审批台账条目，属单独的范围批准。同时必须显式配置 `config.audit`：策略无可用审计舱时对每个动作都拒绝（`POLICY_AUDIT_UNAVAILABLE`；内存舱未声明 `allowNonDurable` 时是 `POLICY_AUDIT_NOT_DURABLE`），只补目录不补审计仍是"装上不可用"。补丁层给的是内存审计舱，属**联调/试点级**证据，生产须在 profile 注入持久 sink 并去掉 `allowNonDurable`。补丁层也不写 `tools` 映射：devops 自己每次读/写都调 `policy.executeAction`，宿主层再映射会重复准入与重复审计，未映射的宿主工具按策略自身的 out-of-scope 语义放行。以上配置由 `test/patch-mount.test.mjs` 固化为门禁：解析分发出去的补丁层，用其中配置真实装配策略 + devops（4 个工具、读经门禁放行、审计记录落账），并全仓扫描任何插入 `@heluo/forge-devops` 的补丁层。
 
@@ -164,9 +183,11 @@ approvals:
 node --test "packages/forge-devops/test/*.test.mjs"
 ```
 
-覆盖（`node --test` 全量，条数以实跑为准）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、未启动（`exitCode: null`）按入口形态归因并保留 `detail.spawnFailed`、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载（插件服务与工具注册）无残留、配置校验；工具侧另有：只注册四个工具、参数用 `target` 且必填、写回的 confirm/字段/未知三态、两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 与 `command` 透传、clarify 零选项与 plan 缺验证方式被拒且不落盘、`body`/`data` 互斥、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；组合根侧（`flow.test.mjs`）：配置齐全时产出 `ready` 卡（dop 一次固定 argv）、未配置时 `blocked` 卡 + 零调用、无写端口、非法变更号早退；目录绑定侧（`policy-binding.test.mjs`）：空目录/漏映射/未开放/无目录/无 admission 入口拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝、调用方自带 `role` 不进入 admission 身份。CLI 配置面另有：`entry-form.test.mjs`（入口形态单点：win32 的 `.exe` / 无后缀 / `.cmd` / `.ps1` / `.bat` / `.com` 六形态都能直接执行，POSIX 仍要执行位、仍不选包装脚本）、`failure-face.test.mjs`（spawn 失败面单点：读信封、写动作结果与变更卡片三出口同口径，只给 `reason` / 失败类别 / `next`，零路径、零 errno、零原始报错）、`cli-discovery.test.mjs`（名字表 6 项、`.exe` 优先排序、`rejected` 恒空、执行位、PATH 去重与展开、目录上限、假时钟截止；Windows 规则靠注入平台与假文件系统覆盖，真机属未验）、`cli-config.test.mjs`（三层优先级矩阵、事实来源推导四态、来源语义、脱敏零命中、逐字段报错）、`cli-access.test.mjs`（快照/刷新/revision 栅栏/保存四路径）、`cli-http.test.mjs`（GET/POST 状态码、请求头、`no-store`、错误体形状、`?refresh=1` 在响应前完成发现→重合并→重建读面）、`client-shape.test.mjs`（页面骨架的静态契约、两键渲染与文案零命中）、`delivery-selfcheck.test.mjs`（全仓安全扫描：发现层零子进程、客户端不打印路径，以及 4 个工具 / 4 个配置键 / 无 gh 残留的清单自检）。
+覆盖（`node --test` 全量，条数以实跑为准）：未登记动作拒绝且不触碰适配器、缺目标拒绝、无适配器 fail closed、只给退出码不算成功、未启动（`exitCode: null`）按入口形态归因并保留 `detail.spawnFailed`、缺来源版本降级、事实齐全时的规整结果、策略缺失不挂载、卸载（插件服务与工具注册）无残留、配置校验；工具侧另有：只注册四个工具、参数用 `target` 且必填、写回的 confirm/字段/未知三态、两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 与 `command` 透传、clarify 零选项与 plan 缺验证方式被拒且不落盘、`body`/`data` 互斥、无适配器时可见拒绝、退出码不算成功、卸载移除工具注册；组合根侧（`flow.test.mjs`）：配置齐全时产出 `ready` 卡（dop 一次固定 argv）、未配置时 `blocked` 卡 + 零调用、无写端口、非法变更号早退；目录绑定侧（`policy-binding.test.mjs`）：空目录/漏映射/未开放/无目录/无 admission 入口拒绝挂载、承认时恰好一次适配器调用、策略拒绝时适配器零调用且工具面可见拒绝、调用方自带 `role` 不进入 admission 身份。CLI 配置面另有：`entry-form.test.mjs`（入口形态单点：win32 的 `.exe` / 无后缀 / `.cmd` / `.ps1` / `.bat` / `.com` 六形态都能直接执行，POSIX 仍要执行位、仍不选包装脚本）、`failure-face.test.mjs`（spawn 失败面单点：读信封、写动作结果与变更卡片三出口同口径，只给 `reason` / 失败类别 / `next`，零路径、零 errno、零原始报错）、`cli-discovery.test.mjs`（名字表 6 项、`.exe` 优先排序、`rejected` 恒空、执行位、PATH 去重与展开、目录上限、假时钟截止；Windows 规则靠注入平台与假文件系统覆盖，真机属未验）、`cli-config.test.mjs`（三层优先级矩阵、事实来源推导四态、来源语义、脱敏零命中、逐字段报错）、`cli-access.test.mjs`（快照/刷新/revision 栅栏/保存四路径）、`cli-http.test.mjs`（GET/POST 状态码、请求头、`no-store`、错误体形状、`?refresh=1` 在响应前完成发现→重合并→重建读面）、`client-shape.test.mjs`（页面骨架的静态契约：两个分区 id/order、两键渲染与文案零命中、r15 的 `devops-readiness` 槽）、`save-applied.test.mjs`（r15：写成功后 `applied:{ok:true}` + 快照 `plugin`/`editable`；重建失败降级为 `{ok:false,reason:'CLI_REBUILD_FAILED'}` 且 `status()==='no-reader'`；端点 GET 带投影、POST 原样透传 `applied`）、`delivery-selfcheck.test.mjs`（全仓安全扫描：发现层零子进程、客户端不打印路径，以及 4 个工具 / 4 个配置键 / 无 gh 残留的清单自检）。
 
 仓库根另有卸载命令的离线用例：`node --test tests/patch-layer-blocks.test.mjs tests/uninstall-devops.test.mjs`——补丁层按缩进块精确删条目（缩进更深的同名 `- id:` 不命中）、重复执行幂等、无 `dsh` 时只清理并打印下一步、stdout 零绝对路径。
+
+r15 的设置页另有仓库根级校验：`node scripts/check-client-module.mjs packages/forge-devops/client.js`（用假 Loader / 假 React 真跑 `apply`，检查导出面、两个分区与 effect 返回值）、`node --test tests/ui-contract.test.mjs`（四个分区 id/order 唯一、两客户端都走两段式挂载、端点常量与 `src/http.mjs` 逐字一致、`?refresh=1` 只出现一次）、`node --test tests/bundle-build.test.mjs tests/bundle-gitee.test.mjs`（`HOST_PEERS` 放行 react 但不进包，四条拒绝路径）；实机装入与回滚的计划、证据核对用 `node scripts/uat-profile.mjs --plan|--verify`。
 
 ## 边界
 
