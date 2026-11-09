@@ -151,6 +151,11 @@ test('the workflow runs result handling even when the action produced no output'
   assert.match(workflow, /GITHUB_ACTION_CONFIG__ENABLE_OUTPUT: "true"/u);
 });
 
+test('the workflow preserves the PR description before base settings are available', () => {
+  const action = workflow.split('      - name: Run PR-Agent\n')[1]?.split('\n      - name: ')[0] ?? '';
+  assert.match(action, /PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"/u);
+});
+
 test('a changed head or base prevents a stale request for changes', async () => {
   await withGitHub(async ({ state, env }) => {
     const revision = await capture(env);
