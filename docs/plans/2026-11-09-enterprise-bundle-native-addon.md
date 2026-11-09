@@ -195,6 +195,8 @@ node --test tests/bundle-native.test.mjs
 | R7 | 打包 E2E：映射 ↔ 产物路径闭合 | `bundle-native` 20 通过（新增一条按 `nativeTargetFor` 反推四组路径） |
 | R7 | `verify:bundle --json` | 真实产物输出 `140 files` / `12230489` / `86b5bc…42f7`、退出码 0；篡改产物输出 `ok:false` 与首错、退出码 1 |
 | R8 | CI 一直只验结构：`verify` 无 addon 字节，`device-matrix` 注入原生模块，两者都不加载 `keyring.node` | 新增 `native-keychain` 作业，2026-11-09 四个 runner 全绿：linux-x64/linux-arm64 构建出 `140 files` / `12230489` / `86b5bc…42f7`（与本机逐字节相同），安装后 addon 与记录一致；win32-x64/win32-arm64 打包凭据包后安装，四个 addon 一致。四者均 `store probe: 6 steps ok`（read-absent、write-read、overwrite-read、cross-process-read、delete、delete-idempotent），真实 triple 为 `linux-x64-gnu`、`linux-arm64-gnu`、`win32-x64-msvc`、`win32-arm64-msvc` |
+| R9 | CI 存在与 `verify` 重复的矩阵腿 | TAP 点名确认 keychain 包测试、`callback-port`、`sensitive-scan` 均在根目录 `node --test` 内，故删除 `device-matrix` 的 linux-x64 腿及另两个作业的 ubuntu 腿：14 → 11 个作业，零覆盖损失；Windows 腿全部保留 |
+| R9 | 真实钥匙串作业不在必需检查里 | 暂存加 `actions/cache`（键为锁文件哈希，命中仍先过 `--check`），四个 `native keychain (*)` 加入 `main` 必需检查；`verify` 的结构性绿灯不再能单独放行缺件产物 |
 | R8 | 该作业第一次跑出了三个平台缺陷 | ①`npm.cmd` 不能经 `execFile` 启动（Node 命令注入修复）→ 改为用 `process.execPath` 跑 npm CLI 脚本；②GNU tar 把 `C:\...` 当远端主机 → 改用 `readBundleEntries` 内存解包；③release 闭包要求 bin 带 `+x`，Windows 检出无法表达 → 企业 tarball 仍只在 POSIX 产出，Windows 腿改测凭据包 |
 | 复盘 | 首次 PR CI `verify` 失败 | 四条既有用例以“在干净检出里成功构建真实仓库”为前提，正是被本次判据否定的事实：两条 CLI 用例改用 fixture 工作区（新增 CLI `--root`），安装排练探针改为显式结构化构建并记录 `nativeResources: absent` |
 
