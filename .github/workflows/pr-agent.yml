@@ -22,10 +22,8 @@ name: 洛神 (PR-Agent)
 
 on:
   pull_request:
-    # `synchronize` is intentionally absent: re-reviewing every push is opt-in
-    # via `github_action_config.handle_push_trigger` in `.pr_agent.toml`, and it
-    # also requires adding `synchronize` below.
-    types: [opened, reopened, ready_for_review, review_requested]
+    # Synchronize is enabled only for the isolated review dismissal probe.
+    types: [opened, reopened, ready_for_review, review_requested, synchronize]
   issue_comment:
     types: [created]
 
@@ -37,6 +35,27 @@ permissions:
   pull-requests: write
 
 jobs:
+  dismissal-probe:
+    if: github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.event.pull_request.number == 218
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Probe dismissal permission
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          const response = await fetch(`${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}/pulls/218/reviews/5829369646/dismissals`, {
+            method: 'PUT',
+            headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${process.env.GH_TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: 'Permission probe: the deliberately introduced test defect has been removed.' }),
+          });
+          const body = await response.json();
+          console.log(`HTTP status: ${response.status}; review state: ${body.state ?? 'unavailable'}`);
+          if (!response.ok) process.exitCode = 1;
+          NODE
+
   review:
     name: 洛神 (ubuntu-x64)
     # Skip: bot senders (PR-Agent's own comments would loop), draft PRs (the
@@ -48,6 +67,7 @@ jobs:
          github.event.issue.pull_request != null &&
          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
         (github.event_name == 'pull_request' &&
+         github.event.action != 'synchronize' &&
          github.event.pull_request.draft == false &&
          github.event.pull_request.head.repo.full_name == github.repository)
       )
