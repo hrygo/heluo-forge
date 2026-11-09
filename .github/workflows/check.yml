@@ -84,6 +84,86 @@ jobs:
       - name: Read paths on this host
         run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs
 
+  # Real credential-store acceptance. The offline `verify` job can only judge a
+  # byte-less structural tarball, and `device-matrix` runs the unit suites with
+  # an injected native module — neither ever loads the shipped `keyring.node`.
+  # This job stages the pinned addons on the runner, builds the actual tarball,
+  # installs it offline, and drives the addon through write/read/delete and
+  # cross-process visibility against the OS store. Linux needs a Secret Service
+  # provider (gnome-keyring over a session bus); Windows uses Credential Manager.
+  native-keychain:
+    name: native keychain (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-24.04, platform: linux, arch: x64, store: secret-service }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, platform: linux, arch: arm64, store: secret-service }
+          - { name: win32-x64, os: windows-2022, platform: win32, arch: x64, store: credential-manager }
+          - { name: win32-arm64, os: windows-11-arm, platform: win32, arch: arm64, store: credential-manager }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          show-progress: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Link workspace packages
+        run: node scripts/link-workspace.mjs
+      - name: Assert the runner is the expected platform-arch
+        run: >-
+          node -e "const [p,a]=process.argv.slice(1);
+          if (process.platform!==p||process.arch!==a)
+          { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
+          ${{ matrix.platform }} ${{ matrix.arch }}
+      # The addons never enter Git: the lock file pins the registry integrity and
+      # `--check` re-verifies the staged objects, so the network is only a
+      # transport, not a trusted source.
+      - name: Stage the pinned addons
+        run: |
+          set -euo pipefail
+          node scripts/fetch-native-keyring.mjs
+          node scripts/fetch-native-keyring.mjs --check
+      - name: Build the release artifact and verify its bytes
+        run: |
+          set -euo pipefail
+          mkdir -p node_modules/.forge-ci
+          rm -rf node_modules/.forge-ci/bundle
+          node scripts/build-enterprise-bundle.mjs node_modules/.forge-ci/bundle > node_modules/.forge-ci/build.json
+          node scripts/verify-enterprise-bundle.mjs node_modules/.forge-ci/bundle/*.tgz \
+            --manifest node_modules/.forge-ci/bundle/bundle-manifest.json --json > node_modules/.forge-ci/verify.json
+          node -e "const v=require('./node_modules/.forge-ci/verify.json'); if(v.ok!==true){console.error(v.errors.join('\n')); process.exit(1)} console.log('artifact:', v.files, 'files,', v.bytes, 'bytes,', v.sha256)"
+      - name: Install the artifact offline
+        run: |
+          set -euo pipefail
+          rm -rf node_modules/.forge-ci/install
+          mkdir -p node_modules/.forge-ci/install
+          npm install --offline --ignore-scripts --no-audit --no-fund --prefix node_modules/.forge-ci/install node_modules/.forge-ci/bundle/*.tgz
+          PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-credentials-keychain
+          node -e "const fs=require('fs'),path=require('path'),crypto=require('crypto');const root=process.argv[1];const rec=JSON.parse(fs.readFileSync(path.join(root,'vendor/CHECKSUMS.json'),'utf8'));for(const [rel,m] of Object.entries(rec.files)){const b=fs.readFileSync(path.join(root,'vendor',rel));const h=crypto.createHash('sha256').update(b).digest('hex');if(h!==m.sha256||b.length!==m.bytes)throw new Error(rel)}console.log('installed addons match the record:',Object.keys(rec.files).length)" "$PACKAGE"
+      - name: Drive the addon against the OS store
+        run: |
+          set -euo pipefail
+          PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-enterprise/node_modules/@heluo/forge-credentials-keychain
+          if [ "${{ matrix.store }}" = "secret-service" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq gnome-keyring libsecret-1-0 dbus-x11
+            dbus-run-session -- bash -c "echo -n ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1 || true; sleep 1; node scripts/probe/native-keyring-store-probe.mjs --package '$PACKAGE' --json > node_modules/.forge-ci/probe.json"
+          else
+            node scripts/probe/native-keyring-store-probe.mjs --package "$PACKAGE" --json > node_modules/.forge-ci/probe.json
+          fi
+          node -e "const r=require('./node_modules/.forge-ci/probe.json'); const steps=r.steps??[]; for(const s of steps) console.log(s.ok?'ok  ':'FAIL', s.name); if(r.ok!==true){console.error(JSON.stringify({stage:r.stage??null,error:r.error??null,failed:steps.filter(s=>s.ok!==true)})); process.exit(1)} console.log('store probe:', steps.length, 'steps ok on', r.environment.platform+'-'+r.environment.arch, 'addon', r.environment.triple)"
+
   # Local hook and scanner portability. This job is intentionally separate from
   # the required verify job; make it required only after the matrix is stable.
   # The matrix keeps only the platforms whose code paths differ: Ubuntu covers

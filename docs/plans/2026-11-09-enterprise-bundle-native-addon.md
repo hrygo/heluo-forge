@@ -105,6 +105,7 @@
 | 记录 ↔ 锁文件 | 仓库提交的 `CHECKSUMS.json` 与 `scripts/native-keyring.json` | 无需 addon 字节即可判定：triple 集合、`source`、`integrity`、`version`、`license` 全等；任一侧多/少一个 triple 都红 |
 | 映射 ↔ 产物 | 四组 platform-arch 经 `nativeTargetFor` 反推 | 产物中确实存在该 triple 的 `vendor/<triple>/keyring.node` |
 | CLI 机器可读 | `verify:bundle --json` | 通过/失败都给可解析 JSON，退出码与文本界面一致 |
+| CI 真实存取 | `native-keychain` 作业（win32/linux × x64/arm64 真机 runner） | 暂存 → 构建真实产物 → 离线安装 → 探针写/读/改/删/跨进程；`ok:true` 才算过（Linux 需 gnome-keyring 与 session bus） |
 | 目录空壳 | `vendor/` 只有清单与说明 | 构建失败；归档核验失败 |
 
 变异记录（实施完成时写入手工验证记录，不写进文档流水）：注释掉 5.1 的断言后"缺一"用例必须红；注释掉 5.2 的比对后"篡改"用例必须红。
@@ -193,6 +194,7 @@ node --test tests/bundle-native.test.mjs
 | R7 | 干净检出补门禁：记录 ↔ 锁文件一致性 | `tests/native-records.test.mjs` 7 通过；短路该判定后 5 条转红 |
 | R7 | 打包 E2E：映射 ↔ 产物路径闭合 | `bundle-native` 20 通过（新增一条按 `nativeTargetFor` 反推四组路径） |
 | R7 | `verify:bundle --json` | 真实产物输出 `140 files` / `12230299` / `3acd59…e165`、退出码 0；篡改产物输出 `ok:false` 与首错、退出码 1 |
+| R8 | CI 一直只验结构：`verify` 无 addon 字节，`device-matrix` 注入原生模块，两者都不加载 `keyring.node` | 新增 `native-keychain` 作业：四个真机 runner 上暂存、构建、离线安装并跑存储探针，输出 `ok`/六步明细；macOS 文档后端不在其中（无 addon） |
 | 复盘 | 首次 PR CI `verify` 失败 | 四条既有用例以“在干净检出里成功构建真实仓库”为前提，正是被本次判据否定的事实：两条 CLI 用例改用 fixture 工作区（新增 CLI `--root`），安装排练探针改为显式结构化构建并记录 `nativeResources: absent` |
 
 未被本机实测覆盖、仍需目标机证据的部分：Windows/麒麟/UOS 上 addon 的实际加载与读写（需要 `allowUnvettedPlatformAdapter: true` 的试点覆盖层与 Visual C++ 运行库），以及 #182 要求的失效、跨进程与重启后保留取证。
