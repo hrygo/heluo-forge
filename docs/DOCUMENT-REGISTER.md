@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.63.20 |
+| 版本 | V1.64.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,8 +19,8 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.63.20 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.40.4 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.64.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.40.5 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.39.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V1.0.1 | 评审稿 | 平台组（代拟） | G1 |
@@ -52,6 +52,7 @@
 | CORP-DSH-ARCH-003 | 企业插件市场调研与落地建议 | [architecture/plugin-market-research.md](<architecture/plugin-market-research.md>) | V0.3.1 | 草案 | 平台组（代拟） | 历史取证保留；来源与控制面建议由 ADR-11/13 替代 |
 | CORP-DSH-ARCH-004 | 插件市场决策：企业 Artifactory + AIHUB 原生索引 | [architecture/plugin-registry-source-decision.md](<architecture/plugin-registry-source-decision.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | 正式技术方案；G1 接入与发行基线核验，G2 安装开放验证 |
 | CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [architecture/gateway-identity-review.md](architecture/gateway-identity-review.md) | V1.2.0 | 评审稿 | 平台组（代拟） | G0 认领与路线评估；G1 契约；G2 联调与安全准入 |
+| CORP-DSH-ARCH-006 | 公版插件、企业私有包与完整 DSH 安装方案 | [architecture/public-enterprise-bundle.md](<architecture/public-enterprise-bundle.md>) | V0.4.0 | 草案 | 平台组（代拟） | 完整方案待用户确认；企业接口与目标平台待实测 |
 | CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V4.2.3 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-PLAN-002 | 插件市场 P0 接入取证单 | [plans/market-p0-verification.md](<plans/market-p0-verification.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-PLAN-003 | 已关闭任务修复验收台账 | [plans/fix-acceptance-ledger.md](<plans/fix-acceptance-ledger.md>) | V0.1.0 | 草案（代拟，待负责人确认） | 平台组（代拟） | — |
