@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-010 |
 | 文档名称 | 多端凭据存储实现与验收方案 |
-| 版本 | V0.6.4 |
+| 版本 | V0.6.5 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -266,9 +266,9 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 - **macOS 存储语义**：文档 `~/Library/Application Support/HeluoForge/credentials.json` 以 AES-256-GCM 加密，密钥为同目录 0600 文件；目录 0700；密钥权限或所有者不符、认证标签校验失败时显式报错，不回退明文。枚举由整篇解密后按 key 前缀过滤，不依赖系统枚举差异。
 - **加载前提**：Windows 产物直接导入 `VCRUNTIME140.dll`，缺 Microsoft Visual C++ 2015-2022 Redistributable 时 `require` 报“找不到模块”，与凭据逻辑无关；Linux 产物导入的符号版本最高为 x64 `GLIBC_2.15`、arm64 `GLIBC_2.17`，均低于 UOS 20 与麒麟的发行版基线。适配器在 Windows 上先探测该 DLL，缺失即以 `KEYCHAIN_UNAVAILABLE` 说明安装项。
 
-Windows 新格式保留原始 account，并在内部 service 中加入原始 service 与 key 的精确字节摘要，避免大小写不同的键落到同一 target。单键操作先检查旧格式，存在即 `KEYCHAIN_LEGACY_RECORD`，不迁移或删除；枚举按调用方 key 前缀取候选，再逐键检查旧目标并回读当前 service 的新目标。绑定的 `withTarget` 在 Windows 构造时会写入空占位凭据，因此该路径不使用它。旧版与新版并发操作仍无跨进程互斥。
+Windows 新格式保留原始 account，并在内部 service 中加入原始 service 与 key 的精确字节摘要，避免大小写不同的键落到同一 target。单键操作先检查旧格式，存在即 `KEYCHAIN_LEGACY_RECORD`，不迁移或删除；枚举按调用方 key 前缀取候选，再逐键检查旧目标并核对当前 service 的新目标和值。绑定不返回 target，因此候选无法唯一核验时拒绝整次枚举，其他 service 的同前缀记录也可能造成拒绝；枚举与逐键回读没有跨进程快照。绑定的 `withTarget` 在 Windows 构造时会写入空占位凭据，因此该路径不使用它。旧版与新版并发操作仍无跨进程互斥。
 
-**2026-11-10 本地验证**：Parallels Windows 11 ARM64 虚拟机上，Node v24.21.0 的合成数据探针完成标准 7/7、大小写区分、service 区分、旧新记录共存保护和删除清理。512 字节 ASCII account 在旧格式与新格式均可写，513 字节均被系统以错误 1734 拒绝，故上游的 513 字节检查不保证目标机写入成功。跨用户隔离未运行；Windows x64、企业 Windows 目标机、UOS 与麒麟未由本次验证覆盖。该记录不关闭 G1/G2，也不改变适配器默认门禁。
+**2026-11-10 本地验证**：Parallels Windows 11 ARM64 虚拟机上，Node v24.21.0 的合成数据探针完成标准 7/7、大小写区分、service 区分、旧新记录共存保护和删除清理。枚举修复版复验标准 7/7，并覆盖旧目标分割歧义、account 元数据被修改、跨 service 候选阻断与合成条目清理，新增边界检查 6/6。512 字节 ASCII account 在旧格式与新格式均可写，513 字节均被系统以错误 1734 拒绝，故上游的 513 字节检查不保证目标机写入成功。跨用户隔离未运行；Windows x64、企业 Windows 目标机、UOS 与麒麟未由本次验证覆盖。该记录不关闭 G1/G2，也不改变适配器默认门禁。
 
 已实现的共性边界包括按调用方前缀过滤、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝。Linux 丢弃不可作 key 的 account；Windows 对无法辨认的候选显式失败。仍须目标机确认真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
 

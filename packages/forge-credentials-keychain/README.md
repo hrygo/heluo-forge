@@ -51,13 +51,13 @@ macOS 不提供“免签名且无需交互”的系统凭据库：钥匙串条�
 
 | 平台 | 写入形态 | 枚举检索键 | account 来源 | 已知失败模式 |
 |---|---|---|---|---|
-| Windows | account 为原始 key；target 为 `{account}.~heluo-forge-v1-{service 摘要}-{key 摘要}`，blob 为 UTF-16LE；旧目标为 `{account}.{service}` | `CredEnumerateW` 按调用方 key 前缀取得候选 account，再逐键检查旧目标并回读当前 service 的新目标 | 凭据的 `UserName` | 候选可能包含其他 service；上游不返回目标名，候选 blob 为奇数长或非法 UTF-16 时整次枚举抛错，不返回部分结果 |
+| Windows | account 为原始 key；target 为 `{account}.~heluo-forge-v1-{service 摘要}-{key 摘要}`，blob 为 UTF-16LE；旧目标为 `{account}.{service}` | `CredEnumerateW` 按调用方 key 前缀取得候选 account，再逐键检查旧目标并回读当前 service 的新目标 | 凭据的 `UserName` | 上游不返回目标名；其他 service 的同前缀条目、含糊的 account 或不匹配的值会阻断枚举，非法 blob 也会使整次枚举失败 |
 | Linux | Secret Service 条目，属性含 `service`、`username` | 按属性 `service` 搜索 | 属性 `username` | 缺 `username` 属性的条目被上游静默跳过；集合锁定时搜索失败 |
 | macOS | 应用层加密文档：AES-256-GCM，密钥 0600 同目录保存 | 整篇文档解密后按 key 前缀过滤 | 文档内的 key 原样 | 密钥权限放宽、密钥与文档不匹配或文档被篡改时显式报错，不回退明文 |
 
-原生后端的枚举默认关闭，`allowUnverifiedEnumeration: true` 才走 `findCredentials`。Windows 枚举只将本 service 的新目标回读结果作为输出；候选中有本 service 的旧记录或无法辨认的 account 时显式失败，不静默漏报。Windows 的调用方前缀若含 `*`，返回 `KEYCHAIN_LIST_UNSUPPORTED`；Windows key 与前缀还须为完整 Unicode。Linux 丢弃不能作为 key 的空 account 与含控制字符的 account。macOS 加密文档后端由 `listEntries()` 直接枚举，不需要该开关。上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上游检查的 Windows account 上限为 513 字节（UTF-8）、blob 上限为 2560 字节（UTF-16LE）；实际系统还可能拒绝上游检查允许的账户名：本地 Windows 11 ARM64 虚拟机的合成测试中，512 字节 ASCII account 可写，513 字节以 Windows 错误 1734 拒绝，旧格式与新格式一致。Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
+原生后端的枚举默认关闭，`allowUnverifiedEnumeration: true` 才走 `findCredentials`。Windows 枚举逐个核对候选 account、旧目标及本 service 新目标的值，仅返回通过核验的结果；重复 account、无法对应的新目标或值不一致时以 `KEYCHAIN_OPERATION_FAILED` 拒绝整次枚举。其他 service 即使使用不同 account，只要目标前缀命中，也可能阻断枚举；单键读写仍按 service 隔离。结果按大小写敏感前缀过滤；非 ASCII 前缀仅大小写不同而无法确认 Windows 比较语义时拒绝枚举。Windows 的调用方前缀若含 `*`，返回 `KEYCHAIN_LIST_UNSUPPORTED`；Windows key 与前缀还须为完整 Unicode。Linux 丢弃不能作为 key 的空 account 与含控制字符的 account。macOS 加密文档后端由 `listEntries()` 直接枚举，不需要该开关。上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上游检查的 Windows account 上限为 513 字节（UTF-8）、blob 上限为 2560 字节（UTF-16LE）；实际系统还可能拒绝上游检查允许的账户名：本地 Windows 11 ARM64 虚拟机的合成测试中，512 字节 ASCII account 可写，513 字节以 Windows 错误 1734 拒绝，旧格式与新格式一致。Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
 
-Windows 构造目标时使用普通 `Entry`，不使用 2.1.2 的 `withTarget`：后者在 Windows 构造期间会写入空占位凭据。旧格式检测与新目标操作之间没有跨进程锁，旧版与新版不得并发修改同一凭据；如需迁移或回退，须先停止相关进程并保留旧数据。
+Windows 构造目标时使用普通 `Entry`，不使用 2.1.2 的 `withTarget`：后者在 Windows 构造期间会写入空占位凭据。枚举与逐键回读没有跨进程快照或锁，并发写入和外部修改可能导致结果不一致；旧格式检测与新目标操作之间也没有跨进程锁，旧版与新版不得并发修改同一凭据。如需迁移或回退，须先停止相关进程并保留旧数据。
 
 ## 运行前提
 

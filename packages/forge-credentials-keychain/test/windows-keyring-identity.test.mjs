@@ -95,8 +95,11 @@ test('Windows service names differing only by case do not share a target', async
   await lower.set(key, 'synthetic-lower');
   assert.equal(await upper.get(key), 'synthetic-upper');
   assert.equal(await lower.get(key), 'synthetic-lower');
+  await assert.rejects(() => upper.list(key), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+  await assert.rejects(() => lower.list(key), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+  await lower.delete(key);
   assert.deepEqual(await upper.list(key), [key]);
-  assert.deepEqual(await lower.list(key), [key]);
+  assert.equal(await lower.get(key), undefined);
 });
 
 test('Windows legacy records are preserved and never mistaken for new-format data', async () => {
@@ -154,14 +157,93 @@ test('a legacy record that appears beside a new record blocks access without mod
   assert.deepEqual([...store.records.values()].map(({ password }) => password).sort(), ['synthetic-legacy', 'synthetic-new']);
 });
 
-test('a different service with the same account does not contaminate listing', async () => {
+test('a different service with the same account blocks listing without changing either value', async () => {
   const store = windowsStore();
   const backend = createBackend(store);
   const key = 'namespace/key';
   await backend.set(key, 'synthetic-owned');
   await new store.Entry('foreign-service', key).setPassword('synthetic-foreign');
-  assert.deepEqual(await backend.listEntries('namespace/'), [{ key, value: 'synthetic-owned' }]);
+  await assert.rejects(() => backend.listEntries('namespace/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+  assert.equal(await backend.get(key), 'synthetic-owned');
   assert.equal(await new store.Entry('foreign-service', key).getPassword(), 'synthetic-foreign');
+});
+
+test('Windows listing refuses an ambiguous legacy target split across service and account', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store, 'x.svc');
+  await new store.Entry('svc', 'namespace/foo.x').setPassword('synthetic-legacy');
+
+  await assert.rejects(() => backend.get('namespace/foo'), (error) => error.code === 'KEYCHAIN_LEGACY_RECORD');
+  await assert.rejects(() => backend.list('namespace/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+});
+
+test('Windows listing refuses a changed account even when it matches the requested prefix', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store);
+  await backend.set('namespace/key', 'synthetic-value');
+  [...store.records.values()][0].account = 'namespace/other';
+
+  assert.equal(await backend.get('namespace/key'), 'synthetic-value');
+  await assert.rejects(() => backend.list('namespace/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+});
+
+test('Windows listing refuses a candidate whose account does not match the requested prefix', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store);
+  await backend.set('namespace/key', 'synthetic-value');
+  [...store.records.values()][0].account = 'other/key';
+
+  assert.equal(await backend.get('namespace/key'), 'synthetic-value');
+  await assert.rejects(() => backend.list('namespace/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+});
+
+test('Windows listing refuses duplicate accounts across services even when values match', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store);
+  await backend.set('namespace/key', 'synthetic-value');
+  await new store.Entry('foreign-service', 'namespace/key').setPassword('synthetic-value');
+
+  await assert.rejects(() => backend.list('namespace/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+});
+
+test('Windows listing refuses a foreign account with the same prefix', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store);
+  await backend.set('namespace/own', 'synthetic-owned');
+  await new store.Entry('foreign-service', 'namespace/other').setPassword('synthetic-foreign');
+
+  await assert.rejects(() => backend.list('namespace/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+  assert.equal(await backend.get('namespace/own'), 'synthetic-owned');
+});
+
+test('Windows listing checks the enumerated value against its exact target without exposing it', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store);
+  await backend.set('namespace/key', 'synthetic-owned');
+  const list = store.findCredentialsAsync;
+  store.findCredentialsAsync = async (...args) => (await list(...args)).map((item) => ({ ...item, password: 'synthetic-other' }));
+
+  await assert.rejects(() => backend.list('namespace/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED'
+    && !error.message.includes('synthetic-owned') && !error.message.includes('synthetic-other'));
+  assert.equal(await backend.get('namespace/key'), 'synthetic-owned');
+});
+
+test('Windows listing accepts an ASCII case-only filter match but returns case-sensitive results', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store);
+  await backend.set('namespace/Alpha', 'synthetic-value');
+  await backend.set('namespace/中文', 'synthetic-unicode');
+  assert.deepEqual(await backend.list('namespace/alpha'), []);
+  assert.deepEqual(await backend.list('namespace/Alpha'), ['namespace/Alpha']);
+  assert.deepEqual(await backend.list('NAMESPACE/'), []);
+});
+
+test('Windows listing rejects non-ASCII case-only candidates when the filter equivalence is uncertain', async () => {
+  const store = windowsStore();
+  const backend = createBackend(store);
+  await backend.set('nÄme/key', 'synthetic-value');
+  await assert.rejects(() => backend.list('näme/'), (error) => error.code === 'KEYCHAIN_OPERATION_FAILED');
+  assert.deepEqual(await backend.list('nÄme/'), ['nÄme/key']);
 });
 
 test('Windows listing reads its own target and refuses invalid account metadata', async () => {

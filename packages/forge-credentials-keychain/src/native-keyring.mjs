@@ -349,10 +349,10 @@ export function createNativeKeyringBackend(options = {}) {
       throw new KeychainBackendError('KEYCHAIN_LIST_UNSUPPORTED', 'native keyring does not export findCredentials');
     }
     // The binding exposes account and password but not the target name. On
-    // Windows the target starts with the account, so enumerate candidate
-    // accounts by prefix and then re-read this service's exact target. Other
-    // services may return the same account; their enumerated values are never
-    // trusted or returned. Linux searches by its service attribute.
+    // Windows the target starts with the account. Verify every candidate
+    // against this service's exact target before returning anything: without
+    // target names, foreign or altered entries cannot safely be filtered out.
+    // Linux searches by its service attribute.
     const found = await call('enumeration', () => platform === 'win32'
       ? list.call(loaded, service, `${prefix}*`)
       : list.call(loaded, service));
@@ -373,19 +373,28 @@ export function createNativeKeyringBackend(options = {}) {
         continue;
       }
       if (platform === 'win32') {
-        if (seen.has(account)) continue;
-        seen.add(account);
-        assertKey(platform, account);
-        // Check legacy before the case-sensitive prefix test: the OS filter is
-        // case-insensitive and an old account may alias the requested prefix.
-        await refuseLegacy(account);
-        if (!account.startsWith(prefix)) continue;
-        const value = await call('read', () => entry(account).getPassword());
-        if (value === null || value === undefined) continue;
-        if (typeof value !== 'string') {
-          throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'Windows credential enumeration returned a non-string value');
+        if (!account.isWellFormed() || Buffer.byteLength(account, 'utf8') > WINDOWS_KEY_LIMIT_BYTES || seen.has(account)) {
+          throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'Windows credential enumeration returned an ambiguous account');
         }
-        entries.push({ key: account, value });
+        seen.add(account);
+        // Windows filters targets case-insensitively. An exact prefix or an
+        // ASCII case-only match can be checked locally; for other Unicode
+        // case differences, do not guess at the OS comparison semantics.
+        const exactPrefix = account.startsWith(prefix);
+        const candidatePrefix = account.slice(0, prefix.length);
+        const asciiPrefixMatch = /^[\x20-\x7e]+$/u.test(candidatePrefix) && /^[\x20-\x7e]+$/u.test(prefix)
+          && candidatePrefix.toLowerCase() === prefix.toLowerCase();
+        if (!exactPrefix && !asciiPrefixMatch) {
+          throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'Windows credential enumeration returned an ambiguous account');
+        }
+        // Check legacy and the exact target even for case-only matches before
+        // filtering the output; a candidate must never silently disappear.
+        await refuseLegacy(account);
+        const value = await call('read', () => entry(account).getPassword());
+        if (typeof value !== 'string' || typeof item?.password !== 'string' || item.password !== value) {
+          throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'Windows credential enumeration could not verify a candidate');
+        }
+        if (exactPrefix) entries.push({ key: account, value });
         continue;
       }
       if (!account.startsWith(prefix)) continue;
