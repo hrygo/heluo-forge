@@ -61,11 +61,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-        run: |
+        run: &capture_revision |
           node --input-type=module <<'NODE'
           import { appendFile } from 'node:fs/promises';
 
-          const { GH_TOKEN, GITHUB_API_URL, GITHUB_OUTPUT, GITHUB_REPOSITORY, PR_NUMBER } = process.env;
+          const { GH_TOKEN, GITHUB_API_URL, GITHUB_OUTPUT, GITHUB_REPOSITORY, PR_NUMBER, EXPECTED_HEAD, EXPECTED_BASE_REF } = process.env;
           if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '')) throw new Error('Invalid PR number');
           const response = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}`, {
             headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` },
@@ -79,6 +79,9 @@ jobs:
               typeof baseRef !== 'string' || !baseRef || /[\u0000-\u0020\u007f]/u.test(baseRef) ||
               pr.base?.repo?.full_name !== GITHUB_REPOSITORY) {
             throw new Error('Invalid PR revision');
+          }
+          if ((EXPECTED_HEAD && head !== EXPECTED_HEAD) || (EXPECTED_BASE_REF && baseRef !== EXPECTED_BASE_REF)) {
+            throw new Error('PR revision changed before retry');
           }
           // The PR's base.sha can remain at the merge base after the target branch advances.
           const baseResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/${encodeURIComponent(baseRef)}`, {
@@ -98,7 +101,7 @@ jobs:
       - name: Run PR-Agent
         id: pr_agent
         uses: the-pr-agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b # v0.50.0
-        env:
+        env: &pr_agent_env
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # OpenCode Go gateway. The endpoint and headers are host-only in
           # PR-Agent, so they belong here and not in `.pr_agent.toml`.
@@ -142,6 +145,7 @@ jobs:
       # The model's review stays advisory. A maintainer decides whether any
       # finding merits a formal request or whether an existing request is resolved.
       - name: Validate PR-Agent review
+        id: validation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -156,11 +160,14 @@ jobs:
           REVIEWED_BASE: ${{ steps.revision.outputs.base }}
           REVIEWED_BASE_REF: ${{ steps.revision.outputs.base_ref }}
           REVIEW_STARTED_AT: ${{ steps.revision.outputs.started }}
-        run: |
+          PR_AGENT_ALLOW_RETRY: "true"
+        run: &validate_review |
           node --input-type=module <<'NODE'
+          import { appendFile } from 'node:fs/promises';
+
           const { GH_TOKEN, GITHUB_API_URL, GITHUB_REPOSITORY, PR_NUMBER, EVENT_NAME, EVENT_ACTION, COMMENT_BODY,
             PR_TITLE, PR_CREATED_AT, PR_UPDATED_AT, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEWED_BASE_REF,
-            REVIEW_STARTED_AT } = process.env;
+            REVIEW_STARTED_AT, PR_AGENT_ALLOW_RETRY, PR_AGENT_CHECK_REFRESH, GITHUB_OUTPUT } = process.env;
           if (!REVIEW_RESULT) {
             // Match the upstream ignored-title and incremental-review skips.
             const ignoredTitle = /^\[Auto\]/.test(PR_TITLE ?? '');
@@ -168,21 +175,24 @@ jobs:
             const incremental = EVENT_NAME === 'issue_comment' && /^\s*\/review\s+-i(?:\s|$)/i.test(COMMENT_BODY ?? '');
             const expected = !ignoredTitle && ((EVENT_NAME === 'pull_request' && !initialRequest) ||
               (EVENT_NAME === 'issue_comment' && !incremental && /^\s*\/review(?:\s|$)/i.test(COMMENT_BODY ?? '')));
-            if (expected) throw new Error('PR-Agent did not produce structured review output');
-            if (incremental && !ignoredTitle) {
-              console.log('::warning::Incremental review produced no structured output; check whether PR-Agent skipped unchanged files.');
+            if (!expected) {
+              if (incremental && !ignoredTitle) {
+                console.log('::warning::Incremental review produced no structured output; check whether PR-Agent skipped unchanged files.');
+              }
+              process.exit(0);
             }
-            process.exit(0);
           }
-          let review;
-          try {
-            review = JSON.parse(REVIEW_RESULT);
-          } catch {
-            throw new Error('PR-Agent review output is not valid JSON');
-          }
-          const recommendation = typeof review?.merge_recommendation === 'string' ? review.merge_recommendation.trim() : '';
-          if (!['changes_required', 'needs_review', 'no_concerns_found'].includes(recommendation)) {
-            throw new Error('PR-Agent review recommendation is missing or unknown');
+          if (REVIEW_RESULT) {
+            let review;
+            try {
+              review = JSON.parse(REVIEW_RESULT);
+            } catch {
+              throw new Error('PR-Agent review output is not valid JSON');
+            }
+            const recommendation = typeof review?.merge_recommendation === 'string' ? review.merge_recommendation.trim() : '';
+            if (!['changes_required', 'needs_review', 'no_concerns_found'].includes(recommendation)) {
+              throw new Error('PR-Agent review recommendation is missing or unknown');
+            }
           }
           if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '') ||
               ![REVIEWED_HEAD, REVIEWED_BASE].every((sha) => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha)) ||
@@ -214,11 +224,34 @@ jobs:
               throw new Error('Invalid target branch revision');
             }
             if (reference.object.sha !== REVIEWED_BASE) {
+              if (PR_AGENT_ALLOW_RETRY === 'true') {
+                await appendFile(GITHUB_OUTPUT, 'retry=true\n');
+                console.log('::warning::Target branch advanced during review; retrying the PR-Agent run.');
+                process.exit(0);
+              }
               throw new Error('PR revision changed during review; summary and review may need to be refreshed');
             }
+            return pr;
           }
-          await verifyRevision();
-          if (EVENT_NAME === 'pull_request' && EVENT_ACTION === 'synchronize') {
+          const pr = await verifyRevision();
+          if (!REVIEW_RESULT) {
+            if (pr.changed_files === 0) {
+              const comparisonUrl = `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/compare/${REVIEWED_BASE}...${REVIEWED_HEAD}?per_page=1`;
+              const response = await fetch(comparisonUrl, { headers, signal: AbortSignal.timeout(15000) });
+              if (!response.ok) throw new Error(`Cannot verify PR comparison (HTTP ${response.status})`);
+              const comparison = await response.json();
+              if (comparison.base_commit?.sha !== REVIEWED_BASE || !Array.isArray(comparison.files) ||
+                  !['ahead', 'behind', 'diverged', 'identical'].includes(comparison.status)) {
+                throw new Error('Invalid PR comparison');
+              }
+              if (comparison.files.length) throw new Error('PR-Agent did not produce structured review output');
+              await verifyRevision();
+              console.log('Skipping structured review: the pull request has no changed files.');
+              process.exit(0);
+            }
+            throw new Error('PR-Agent did not produce structured review output');
+          }
+          if (EVENT_NAME === 'pull_request' && (EVENT_ACTION === 'synchronize' || PR_AGENT_CHECK_REFRESH === 'true')) {
             const started = Date.parse(REVIEW_STARTED_AT ?? '');
             if (!Number.isFinite(started)) throw new Error('Invalid PR-Agent run start time');
             const markers = new Set(['<!-- pr-agent:describe:persistent -->', '<!-- pr-agent:review:full -->']);
@@ -245,3 +278,40 @@ jobs:
           }
           console.log('PR-Agent review is advisory; formal review decisions require a maintainer.');
           NODE
+
+      # A base-only change does not produce a PR synchronize event. Retry once
+      # in the same job so PR-Agent refreshes its persistent comments.
+      - name: Capture refreshed PR revision
+        id: retry_revision
+        if: ${{ steps.validation.outputs.retry == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EXPECTED_HEAD: ${{ steps.revision.outputs.head }}
+          EXPECTED_BASE_REF: ${{ steps.revision.outputs.base_ref }}
+        run: *capture_revision
+
+      - name: Retry PR-Agent
+        id: pr_agent_retry
+        if: ${{ steps.validation.outputs.retry == 'true' }}
+        uses: the-pr-agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b # v0.50.0
+        env: *pr_agent_env
+
+      - name: Validate refreshed PR-Agent review
+        if: ${{ steps.validation.outputs.retry == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
+          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+          PR_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
+          REVIEW_RESULT: ${{ steps.pr_agent_retry.outputs.review }}
+          REVIEWED_HEAD: ${{ steps.retry_revision.outputs.head }}
+          REVIEWED_BASE: ${{ steps.retry_revision.outputs.base }}
+          REVIEWED_BASE_REF: ${{ steps.retry_revision.outputs.base_ref }}
+          REVIEW_STARTED_AT: ${{ steps.retry_revision.outputs.started }}
+          PR_AGENT_CHECK_REFRESH: "true"
+        run: *validate_review
