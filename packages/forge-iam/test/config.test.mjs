@@ -40,16 +40,13 @@ test('explicit endpoints can replace discovery', () => {
   assert.equal(isConfigured(result.value).ok, true);
 });
 
-test('legacy allowInsecureHttp is ignored while existing HTTP profiles remain valid', () => {
-  assert.equal(CONFIG_FIELDS.includes('allowInsecureHttp'), false);
-  for (const allowInsecureHttp of [undefined, false, true]) {
-    const result = validateConfig({
-      allowInsecureHttp,
-      managedModels: { baseURL: 'http://gateway.corp.example/v1/' },
-    });
-    assert.equal(result.value?.managedModels.baseURL, 'http://gateway.corp.example/v1');
-    assert.equal(Object.hasOwn(result.value, 'allowInsecureHttp'), false);
-  }
+test('unknown profile keys are ignored during normalization', () => {
+  const result = validateConfig({
+    futureProfileOption: { enabled: true },
+    managedModels: { baseURL: 'http://gateway.corp.example/v1/' },
+  });
+  assert.equal(result.value?.managedModels.baseURL, 'http://gateway.corp.example/v1');
+  assert.equal(Object.hasOwn(result.value, 'futureProfileOption'), false);
 });
 
 test('missing endpoints stay unconfigured instead of falling back', () => {
