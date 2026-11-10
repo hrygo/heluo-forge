@@ -57,15 +57,35 @@ export function createSignIn(env) {
     provider.assertAtomic(targetStore, credentials);
     if (ctx.state === 'ready') return { view: ctx.view(), authorizationUrl: null };
     if (ctx.state === 'authenticating' && attempt) {
+      const current = attempt;
+      const epoch = getAuthEpoch();
+      const assertCurrent = () => {
+        if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+        if (attempt !== current || epoch !== getAuthEpoch() || isSigningOut()) {
+          throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+        }
+      };
       if (config.authMode === 'confidential') {
-        const current = attempt; const epoch = getAuthEpoch();
         const authentication = await grants.prepareAuthentication(current.metadata.issuer, targetStore, credentials, { expected: current.authentication, guard: () => {
-          if (attempt !== current || epoch !== getAuthEpoch() || isSigningOut()) throw new IamError('IAM_ATTEMPT_CANCELLED', 'IAM sign-in was cancelled');
+          assertCurrent();
           provider.assertAtomic(targetStore, credentials);
         } });
         assertClientAuthCurrent(authentication);
       }
-      return { view: ctx.view(), authorizationUrl: attempt.authorizationUrl };
+      let redirectUri;
+      try {
+        redirectUri = grants.redirectUri();
+      } catch (error) {
+        assertCurrent();
+        await cancelSignIn();
+        throw error;
+      }
+      assertCurrent();
+      if (redirectUri !== current.redirectUri) {
+        await cancelSignIn();
+        throw new IamError('IAM_CALLBACK_UNAVAILABLE', safeMessage('IAM_CALLBACK_UNAVAILABLE'));
+      }
+      return { view: ctx.view(), authorizationUrl: current.authorizationUrl };
     }
     if (getSignInPromise()) return getSignInPromise();
     bumpAuthEpoch();

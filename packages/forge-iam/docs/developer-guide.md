@@ -42,6 +42,8 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `logoutMode` | `local` | `local` 尽力撤销并本地退出；`rp` 还可生成浏览器登出 URL，不保证单授权或全局 SSO 生命周期闭环。 |
 | `requireExclusive` | `true` | 发现官方账号服务残留时拒绝就绪和相关操作。 |
 
+登录时必须取得可用的实时回调 Origin：省略 `callbackPort` 时取宿主 `webServer` Origin，配置后取已绑定回环监听的 Origin，两者不互相回落。即使显式配置 `redirectUri`，其 Origin 也必须与所选实时 Origin 相等；不相等以 `IAM_CONFIG_INVALID` 拒绝。所选 Origin 缺失、获取异常或不是有效 HTTP(S) 地址时，以 `IAM_CALLBACK_UNAVAILABLE` 拒绝登录，不生成授权链接。复用进行中的登录链接前重新检查回调地址；来源失效或变更时取消原尝试，旧回调不得继续使用。
+
 含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
 
 显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。协议端点和网关地址接受 HTTP 或 HTTPS；HTTP 不提供传输加密或端点身份认证，令牌、客户端 secret、网关 Key 与业务内容可能被窃取或篡改，OIDC 公钥经 HTTP 获取时签名校验也不能防止网络替换公钥。回调须符合 IAM 登记规则；这里没有已验证的生产配置模板。

@@ -195,6 +195,7 @@ test('an asynchronous mount plus the actual factory and mock IdP delivers the re
   }, {
     getCredentials: () => credentials,
     getCredentialsBindingScope: () => marker,
+    getOrigin: () => 'http://127.0.0.1:4567',
     verifyAtomicStore: (candidate) => candidate === credentials,
   });
   t.after(() => service.dispose());

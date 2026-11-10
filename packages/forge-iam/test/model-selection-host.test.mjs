@@ -315,6 +315,7 @@ for (const failure of ['list', 'current', 'list-getter', 'current-getter']) {
     let revocations = 0;
     const service = createIamService({ ...config, revocationEndpoint: `${config.issuer}/revoke` }, {
       credentials, now: () => clock, verifyAtomicStore: (candidate) => candidate === credentials,
+      getOrigin: () => 'http://127.0.0.1:9',
       getModelSelectionServices: () => sdk,
       fetch: async (url) => {
         if (String(url) === config.jwksUri) return Response.json({ keys: [jwk] });

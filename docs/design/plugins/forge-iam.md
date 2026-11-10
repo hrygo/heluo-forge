@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.26.0 |
+| 版本 | V1.27.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -252,7 +252,7 @@ flowchart TB
 
 #### 4.5.1 回调监听归属
 
-授权码回调由插件自建回环监听接收，端口由操作系统分配；宿主 `webServer` 的端口变化不影响回调地址。
+配置 `callbackPort` 时，授权码回调由插件自建回环监听接收，端口可由操作系统分配或固定；宿主 `webServer` 的端口变化不影响回调地址。省略该配置时使用宿主回调，作为开发与兼容形态。
 
 | 项 | 终态口径 |
 |---|---|
@@ -261,9 +261,9 @@ flowchart TB
 | 生命周期 | 监听随登录尝试建立，尝试结束（成功、取消、超时、签出、provider 更换）即停止接受连接；不常驻 |
 | 地址族 | `callbackAddress` 默认 `auto`：始终先试 IPv4 回环，仅当本机没有 IPv4 回环时才试 IPv6；也可固定 `127.0.0.1` 或 `::1`。IPv6 需另登记前缀 `http://[::1]`，地址写作 `http://[::1]:<port><redirectPath>` |
 | 校验归属 | 服务端只接受两种前缀：`http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；其他写法非法。主机被字面量约束，端口与路径自由。插件只使用自己绑定的回环地址，Host 必须等于实际监听主机、路径必须逐字节相等、对端必须是回环 |
-| 显式 URI | 显式 `redirectUri` 只在固定端口下允许，且必须逐字节相等，否则以 `IAM_CONFIG_INVALID` 拒绝 |
+| 显式 URI | 配置 `callbackPort` 时，仅固定端口允许显式 `redirectUri`，且必须与固定回环地址逐字节相等；省略 `callbackPort` 时可使用宿主回调 URI。显式 URI 必须与所选实时回调 Origin 同源，不符以 `IAM_CONFIG_INVALID` 拒绝 |
 | 端口冲突 | 绑定失败记 `IAM_CALLBACK_PORT_UNAVAILABLE`，登录发起即拒；不回落宿主端口，不改写 `redirect_uri`。地址族只在 `EADDRNOTAVAIL`／`EAFNOSUPPORT` 时切换，端口占用不切换 |
-| 兼容形态 | 省略 `callbackPort` 时沿用宿主实时 Origin，仅用于开发与兼容 |
+| Origin 来源 | 省略 `callbackPort` 时取宿主实时 Origin；配置后取已绑定回环监听的实时 Origin，二者不互相回落。所选 Origin 缺失、获取异常或不是有效 HTTP(S) 地址时，以 `IAM_CALLBACK_UNAVAILABLE` 拒绝登录，不生成授权链接。复用登录链接前重新核验地址，来源失效或变更时取消旧尝试 |
 
 启用 `callbackPort` 后，回调不再注册到宿主 `webServer`；管理 API 仍留在宿主。
 
@@ -310,7 +310,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `redirectPath` | string | `/iam/callback` | 否 | 本机 Loopback 回调绝对路径 |
 | `callbackPort` | number | 空 | 否 | 省略时沿用宿主 Origin（开发/兼容）；`0` 由系统分配回环端口；1024–65535 固定该端口 |
 | `callbackAddress` | string | `auto` | 否 | `auto` 始终先试 `127.0.0.1`，仅在该地址族不可用时退到 `::1`；也可固定其中之一。IPv6 需 IAM 额外登记 `http://[::1]` |
-| `redirectUri` | string | 空 | 否 | 显式 HTTP(S) 回调 URI；固定端口时必须等于 `http://<callbackAddress>:<callbackPort><redirectPath>`，系统分配端口时不可设置；省略 `callbackPort` 时可使用宿主地址 |
+| `redirectUri` | string | 空 | 否 | 显式 HTTP(S) 回调 URI，Origin 必须匹配所选实时回调 Origin；固定端口时必须等于 `http://<callbackAddress>:<callbackPort><redirectPath>`，系统分配端口时不可设置；省略 `callbackPort` 时可使用宿主地址 |
 | `gatewayConsoleUrl` | string | 空 | 否 | UAG 网关个人访问凭证控制台链接，仅用于界面指引 |
 | `defaultProvider` | string | `enterprise` | 否 | 企业模型提供方标识 |
 | `defaultModel` | string | 空 | 否 | 企业首选默认模型标识 |

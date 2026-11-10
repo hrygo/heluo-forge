@@ -48,6 +48,7 @@ let clock = Date.now(); let runtime;
 const config = validateConfig({ ...mock.endpoints, clientId: mock.clientId,
   redirectUri: 'http://127.0.0.1:9/iam/callback', refreshSkewSeconds: 1 }).value;
 const iam = createIamService(config, { credentials: fixture.credentials, ...fixture.options,
+  getOrigin: () => 'http://127.0.0.1:9',
   now: () => clock, getManagedModelRuntime: () => runtime });
 const collect = async stream => { const values = []; for await (const value of stream) values.push(value); return values; };
 const request = { provider: 'enterprise', model: 'synthetic-chat', messages: [{ role: 'user', content: [{ type: 'text', text: '模拟测试' }] }] };

@@ -9,7 +9,7 @@ import {
   prepareClientAuthentication,
 } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
-import { parseRedirectUri } from './http-url.mjs';
+import { parseHttpUrl, parseRedirectUri } from './http-url.mjs';
 import { addSeconds, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, safeMessage } from './service-helpers.mjs';
 
 const METADATA_TTL_MS = 5 * 60 * 1000;
@@ -149,42 +149,29 @@ export function createServiceGrant(env) {
     // With a loopback listener the origin is published only after the bind, and
     // a sign-in binds before asking for the URL. An empty value here means the
     // listener is not up, so there is no address to send the browser to.
-    const loopback = options.getCallbackOrigin?.();
-    if (loopback && !config.redirectUri) return `${loopback}${config.redirectPath}`;
-    if (config.redirectUri) {
-      const { url: parsed, error } = parseRedirectUri(config.redirectUri, config.redirectPath);
-      if (error) throw new IamError('IAM_CONFIG_INVALID', error);
-      if (loopback) {
-        if (parsed.origin !== loopback) {
-          throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must equal the live loopback callback origin');
-        }
-        return parsed.href;
-      }
-      let live;
-      try {
-        live = options.getOrigin?.();
-      } catch {
-        live = undefined;
-      }
-      if (live && parsed.origin !== new URL(live).origin) {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri origin must equal the live web server origin');
-      }
-      return parsed.href;
-    }
-    let origin;
+    const redirect = config.redirectUri ? parseRedirectUri(config.redirectUri, config.redirectPath) : undefined;
+    if (redirect?.error) throw new IamError('IAM_CONFIG_INVALID', redirect.error);
+    const useLoopback = typeof config.callbackPort === 'number';
+    let live;
     try {
-      origin = options.getOrigin?.();
+      live = useLoopback ? options.getCallbackOrigin?.() : options.getOrigin?.();
     } catch {
-      origin = undefined;
+      live = undefined;
     }
+    const origin = parseHttpUrl(live);
     if (!origin) {
       throw new IamError('IAM_CALLBACK_UNAVAILABLE', safeMessage('IAM_CALLBACK_UNAVAILABLE'));
     }
-    try {
-      return new URL(config.redirectPath, origin).href;
-    } catch {
-      throw new IamError('IAM_CALLBACK_UNAVAILABLE', safeMessage('IAM_CALLBACK_UNAVAILABLE'));
+    if (redirect) {
+      if (redirect.url.origin !== origin.origin) {
+        const message = useLoopback
+          ? 'redirectUri must equal the live loopback callback origin'
+          : 'redirectUri origin must equal the live web server origin';
+        throw new IamError('IAM_CONFIG_INVALID', message);
+      }
+      return redirect.url.href;
     }
+    return new URL(config.redirectPath, origin).href;
   }
 
   function grantFromToken(previous, token, issuer, obtainedAt) {

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { createIamService } from './support/trusted-service.mjs';
+import { createIamService as createRawIamService } from '../src/service.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { createGrantStore } from '../src/store.mjs';
 import { seedLegacyGateway } from './support/atomic-gateway.mjs';
@@ -680,6 +681,129 @@ test('a configured redirect URI must match the live web origin', async (t) => {
     (error) => error.code === 'IAM_CONFIG_INVALID',
   );
 });
+
+test('sign-in refuses to create an authorization URL when the host origin is unavailable', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  for (const options of [
+    {},
+    { getOrigin: () => undefined },
+    { getOrigin: () => { throw new Error('synthetic missing host'); } },
+    { getOrigin: () => 'not-an-origin' },
+  ]) {
+    const credentials = new MemoryCredentials();
+    const service = createRawIamService(configFor(mock), {
+      credentials,
+      verifyAtomicStore: (candidate) => candidate === credentials,
+      ...options,
+    });
+    t.after(() => service.dispose());
+    await assert.rejects(() => service.startSignIn(), { code: 'IAM_CALLBACK_UNAVAILABLE' });
+    assert.notEqual(service.getView().state, 'authenticating');
+  }
+});
+
+for (const [scenario, changedOrigin, derivedRedirect, expectedCode] of [
+  ['disappears', undefined, false, 'IAM_CALLBACK_UNAVAILABLE'],
+  ['changes', 'http://127.0.0.1:9999', false, 'IAM_CONFIG_INVALID'],
+  ['becomes invalid', 'not-an-origin', false, 'IAM_CALLBACK_UNAVAILABLE'],
+  ['getter throws', new Error('synthetic missing host'), false, 'IAM_CALLBACK_UNAVAILABLE'],
+  ['changes for a derived redirect', 'http://127.0.0.1:9999', true, 'IAM_CALLBACK_UNAVAILABLE'],
+]) {
+  test(`cached authorization URL is rejected when the host origin ${scenario}`, async (t) => {
+    const mock = await startMockOidc();
+    t.after(() => mock.close());
+    const credentials = new MemoryCredentials();
+    const originalOrigin = 'http://127.0.0.1:4567';
+    let origin = originalOrigin;
+    const service = createRawIamService(configFor(mock, derivedRedirect ? { redirectUri: undefined } : {}), {
+      credentials,
+      verifyAtomicStore: (candidate) => candidate === credentials,
+      getOrigin: () => { if (origin instanceof Error) throw origin; return origin; },
+    });
+    t.after(() => service.dispose());
+
+    const first = await authorize(service);
+    origin = changedOrigin;
+    await assert.rejects(() => service.startSignIn(), { code: expectedCode });
+    assert.notEqual(service.getView().state, 'authenticating');
+    await assert.rejects(() => service.handleCallback(first.location), { code: 'IAM_STATE_MISMATCH' });
+
+    origin = originalOrigin;
+    const retry = await authorize(service);
+    assert.notEqual(retry.started.authorizationUrl, first.started.authorizationUrl);
+    await assert.rejects(() => service.handleCallback(first.location), { code: 'IAM_STATE_MISMATCH' });
+    assert.equal((await service.handleCallback(retry.location)).state, 'ready');
+  });
+}
+
+test('reentrant origin getter cancellation rejects the cached authorization URL', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  let service;
+  let cancelOnRead = false;
+  let cancellation;
+  service = createRawIamService(configFor(mock), {
+    credentials,
+    verifyAtomicStore: (candidate) => candidate === credentials,
+    getOrigin: () => {
+      if (cancelOnRead) {
+        cancelOnRead = false;
+        cancellation = service.cancelSignIn();
+      }
+      return 'http://127.0.0.1:4567';
+    },
+  });
+  t.after(() => service.dispose());
+
+  const first = await authorize(service);
+  cancelOnRead = true;
+  await assert.rejects(() => service.startSignIn(), { code: 'IAM_ATTEMPT_CANCELLED' });
+  await cancellation;
+  assert.equal(service.getView().state, 'signed-out');
+  await assert.rejects(() => service.handleCallback(first.location), { code: 'IAM_STATE_MISMATCH' });
+});
+
+for (const failure of ['undefined', 'throw']) {
+  test(`reentrant origin getter ${failure} cannot cancel a replacement login`, async (t) => {
+    const mock = await startMockOidc();
+    t.after(() => mock.close());
+    const credentials = new MemoryCredentials();
+    let service;
+    let replaceOnRead = false;
+    let cancellation;
+    let replacement;
+    service = createRawIamService(configFor(mock), {
+      credentials,
+      verifyAtomicStore: (candidate) => candidate === credentials,
+      getOrigin: () => {
+        if (replaceOnRead) {
+          replaceOnRead = false;
+          cancellation = service.cancelSignIn();
+          replacement = service.startSignIn();
+          replacement.catch(() => {});
+          if (failure === 'throw') throw new Error('synthetic missing host');
+          return undefined;
+        }
+        return 'http://127.0.0.1:4567';
+      },
+    });
+    t.after(() => service.dispose());
+
+    const first = await authorize(service);
+    replaceOnRead = true;
+    await assert.rejects(() => service.startSignIn());
+    await cancellation;
+    const next = await replacement;
+    assert.equal(next.view.state, 'authenticating');
+    assert.notEqual(next.authorizationUrl, first.started.authorizationUrl);
+    await assert.rejects(() => service.handleCallback(first.location), { code: 'IAM_STATE_MISMATCH' });
+    const response = await fetch(next.authorizationUrl, { redirect: 'manual' });
+    assert.equal(response.status, 302);
+    assert.equal((await service.handleCallback(response.headers.get('location'))).state, 'ready');
+  });
+}
 
 test('cancel during the token exchange discards the late grant', async (t) => {
   const mock = await startMockOidc();

@@ -7,7 +7,14 @@ export function createIamService(config, options = {}) {
   if (fixture === undefined) {
     try { fixture = options.getCredentials?.(); } catch { fixture = undefined; }
   }
+  // This isolated fixture has no host. Do not replace an explicit host or a
+  // loopback callback provider, including intentionally unavailable ones.
+  const redirectUri = config?.redirectUri;
+  const fixtureOrigin = redirectUri && config?.callbackPort == null && !Object.hasOwn(options, 'getCallbackOrigin')
+    ? { getOrigin: () => new URL(redirectUri).origin }
+    : {};
   return createService(config, {
+    ...fixtureOrigin,
     ...options,
     verifyAtomicStore: (candidate) => candidate === fixture && fixture !== undefined,
   });
