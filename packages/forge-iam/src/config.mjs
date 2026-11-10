@@ -88,6 +88,7 @@ const DEFAULTS = {
   httpTimeoutMs: 10000,
   logoutMode: 'local',
   requireExclusive: true,
+  // Retained for existing profiles; HTTP(S) endpoint validation no longer uses it.
   allowInsecureHttp: false,
 };
 
@@ -97,10 +98,6 @@ function issue(path, message) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isLoopbackHost(hostname) {
-  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]' || hostname === '::1';
 }
 
 /**
@@ -238,8 +235,6 @@ export function validateConfig(input) {
       issues.push(issue('redirectUri', 'redirectUri must be an absolute http(s) URL'));
     } else if (parsed.pathname !== value.redirectPath || parsed.search || parsed.hash) {
       issues.push(issue('redirectUri', 'redirectUri path must equal redirectPath and carry no query or fragment'));
-    } else if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
-      issues.push(issue('redirectUri', 'redirectUri must use HTTPS unless it is loopback'));
     } else if (value.callbackPort === 0) {
       issues.push(issue('redirectUri', 'redirectUri cannot be set when callbackPort is 0: the port is assigned at run time'));
     } else if (fixedRedirect && value.redirectUri !== fixedRedirect) {
@@ -256,8 +251,6 @@ export function validateConfig(input) {
     }
     if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
       issues.push(issue('postLogoutRedirectUri', 'postLogoutRedirectUri must be an absolute http(s) URL'));
-    } else if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname)) {
-      issues.push(issue('postLogoutRedirectUri', 'postLogoutRedirectUri must use HTTPS unless it is loopback'));
     }
   }
 
@@ -312,7 +305,7 @@ export function validateConfig(input) {
     issues.push(issue('endSessionEndpoint', 'RP-initiated logout requires endSessionEndpoint'));
   }
 
-  const managed = validateManagedModels(source.managedModels, value.allowInsecureHttp);
+  const managed = validateManagedModels(source.managedModels);
   if (managed.issues) issues.push(...managed.issues);
   else value.managedModels = managed.value;
   if (value.managedModels && !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(value.defaultProvider)) {

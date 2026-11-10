@@ -40,6 +40,17 @@ test('explicit endpoints can replace discovery', () => {
   assert.equal(isConfigured(result.value).ok, true);
 });
 
+test('HTTP gateway configuration does not depend on the legacy allowInsecureHttp flag', () => {
+  for (const allowInsecureHttp of [undefined, false, true]) {
+    const result = validateConfig({
+      allowInsecureHttp,
+      managedModels: { baseURL: 'http://gateway.corp.example/v1/' },
+    });
+    assert.equal(result.value?.managedModels.baseURL, 'http://gateway.corp.example/v1');
+    assert.equal(result.value?.allowInsecureHttp, allowInsecureHttp ?? false);
+  }
+});
+
 test('missing endpoints stay unconfigured instead of falling back', () => {
   const result = validateConfig({ clientId: 'dsh-desktop', gatewayResource: 'https://gateway.corp.example' });
   assert.ok('value' in result);
@@ -111,10 +122,12 @@ test('an absolute redirectUri matching redirectPath is accepted', () => {
   assert.equal(result.value.redirectUri, 'https://app.example/iam/callback');
 });
 
-test('non-loopback redirectUri cannot use plaintext HTTP', () => {
+test('a non-loopback redirectUri may use HTTP with the configured callback path', () => {
   const result = validateConfig({ redirectUri: 'http://app.example/iam/callback' });
-  assert.equal('issues' in result, true);
-  assert.equal(result.issues.some((issue) => issue.path.includes('redirectUri')), true);
+  assert.equal(result.value?.redirectUri, 'http://app.example/iam/callback');
+  for (const redirectUri of ['ftp://app.example/iam/callback', 'http://app.example/other', 'http://app.example/iam/callback?code=x']) {
+    assert.ok(validateConfig({ redirectUri }).issues?.some((issue) => issue.path.includes('redirectUri')));
+  }
 });
 
 test('RP logout requires an end-session endpoint', () => {
@@ -159,13 +172,13 @@ test('the callback path cannot overlap the authenticated management API', () => 
   }
 });
 
-test('a post-logout redirect must be an absolute non-loopback HTTP(S) or loopback URL', () => {
+test('a post-logout redirect must be an absolute HTTP(S) URL', () => {
   assert.ok('value' in validateConfig({ postLogoutRedirectUri: 'https://app.corp.example/bye' }));
   assert.ok('value' in validateConfig({ postLogoutRedirectUri: 'http://127.0.0.1:3080/bye' }));
-  const remoteHttp = validateConfig({ postLogoutRedirectUri: 'http://app.corp.example/bye' });
-  assert.ok('issues' in remoteHttp);
+  assert.ok('value' in validateConfig({ postLogoutRedirectUri: 'http://app.corp.example/bye' }));
   const relative = validateConfig({ postLogoutRedirectUri: '/bye' });
   assert.ok('issues' in relative);
+  assert.ok('issues' in validateConfig({ postLogoutRedirectUri: 'ftp://app.corp.example/bye' }));
 });
 
 test('redirectPath rejects the site root and trailing slashes', () => {

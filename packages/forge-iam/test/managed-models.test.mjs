@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { applyModelOptions, buildThinkingLevelMap, createManagedModelRuntime, createNativeGatewayAdapter, validateManagedModels } from '../src/managed-models.mjs';
 
 const configuration = { baseURL: 'https://gateway.corp.example/v1' };
-function fixture(overrides = {}) {
+function fixture({ gatewayBaseURL = configuration.baseURL, ...overrides } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true }
@@ -24,7 +24,7 @@ function fixture(overrides = {}) {
       return { subject: 'person-a', ...structuredClone(selection) };
     },
     getModelAccessEpoch: () => String(selectionGeneration),
-    async resolveGatewayConnection() { return { baseURL: configuration.baseURL, key: 'synthetic-only', generation: 'one' }; },
+    async resolveGatewayConnection() { return { baseURL: gatewayBaseURL, key: 'synthetic-only', generation: 'one' }; },
     async *watch(signal) {
       yield structuredClone(view);
       while (!signal.aborted) {
@@ -52,9 +52,9 @@ function fixture(overrides = {}) {
     async *stream(options) { calls++; credential = await options.resolveKey(); yield { type: 'text', text: 'ok' }; yield { type: 'finish', reason: { kind: 'stop' } }; },
   };
   const runtime = createManagedModelRuntime({
-    host, iam, config: { defaultProvider: 'enterprise', managedModels: configuration },
+    host, iam, config: { defaultProvider: 'enterprise', managedModels: { baseURL: gatewayBaseURL } },
     fetch: async (url, init) => {
-      assert.equal(url, configuration.baseURL + '/models');
+      assert.equal(url, gatewayBaseURL + '/models');
       assert.equal(init.headers.authorization, 'Bearer synthetic-only');
       assert.equal(init.redirect, 'error');
       return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
@@ -79,9 +79,9 @@ const chunks = async stream => { const result = []; for await (const chunk of st
 const options = { provider: 'enterprise', model: 'enterprise-chat', messages: [] };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-test('managed gateway configuration keeps plain HTTP on loopback and needs an opt-in elsewhere', () => {
+test('managed gateway configuration accepts HTTP on any host and rejects invalid addresses', () => {
   assert.equal(validateManagedModels(configuration).issues, undefined);
-  assert.ok(validateManagedModels({ ...configuration, baseURL: 'http://gateway.corp.example/v1' }).issues);
+  assert.equal(validateManagedModels({ ...configuration, baseURL: 'http://gateway.corp.example/v1' }).issues, undefined);
   assert.equal(validateManagedModels({ ...configuration, baseURL: 'http://gateway.corp.example/v1' }, true).issues, undefined);
   assert.equal(validateManagedModels({ ...configuration, baseURL: 'http://127.0.0.1:8000/v1' }).issues, undefined);
   for (const candidate of [
@@ -100,6 +100,17 @@ test('login advertises approved models; request takes account credential, not a 
   const prepared = await f.adapter.prepareCall(options.provider, options.model);
   const result = await chunks(prepared.stream(options));
   assert.equal(result[0].text, 'ok'); assert.equal(f.calls, 1); assert.equal(f.credential, 'synthetic-only');
+});
+
+test('a remote HTTP gateway fetches the model catalogue and prepares an authorized call', async t => {
+  const f = fixture({ gatewayBaseURL: 'http://gateway.corp.example/v1' });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.deepEqual((await f.adapter.listModels('enterprise')).map(m => m.id), ['enterprise-chat']);
+  const prepared = await f.adapter.prepareCall(options.provider, options.model);
+  const result = await chunks(prepared.stream(options));
+  assert.equal(result[0].text, 'ok');
+  assert.equal(f.credential, 'synthetic-only');
 });
 
 test('logout hides models and denies prepared calls with login message without invoking transport', async t => {

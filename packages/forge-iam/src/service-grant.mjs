@@ -63,7 +63,6 @@ export function createServiceGrant(env) {
     const value = await loadMetadata(config, {
       fetchImpl,
       timeoutMs: config.httpTimeoutMs,
-      allowInsecureHttp: config.allowInsecureHttp === true,
     });
     metadataCache = { value, loadedAt: current };
     return value;

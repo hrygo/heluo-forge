@@ -22,39 +22,30 @@ export const isModelId = value => typeof value === 'string'
 const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
 const CAPACITY_SCALE = { k: 1000, m: 1000000 };
 
-/** Host the local machine reaches without leaving the box. */
-function isLoopbackHost(hostname) {
-  return hostname === 'localhost' || hostname === '::1' || hostname === '[::1]'
-    || /^127(?:\.\d{1,3}){3}$/u.test(hostname);
-}
-
 /**
  * Validate an OpenAI-compatible root. The path is kept as the operator entered
  * it: a gateway that serves under `/v1` must be given `/v1`, and nothing is
- * appended. Plain HTTP is loopback-only until the deployment opts in.
+ * appended. HTTP and HTTPS are accepted for any host.
  */
-export function normalizeGatewayBaseURL(input, allowInsecureHttp = false) {
+export function normalizeGatewayBaseURL(input) {
   let url;
   try { url = new URL(input); } catch { throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。'); }
   if (url.username || url.password || url.search || url.hash
     || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
     throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。');
   }
-  if (url.protocol === 'http:' && allowInsecureHttp !== true && !isLoopbackHost(url.hostname)) {
-    throw new IamError('IAM_GATEWAY_URL_INVALID', '明文 HTTP 仅限本机回环地址，其他地址请使用 HTTPS。');
-  }
   url.pathname = url.pathname.replace(/\/+$/u, '');
   return url.href.replace(/\/$/u, '');
 }
 
-export function validateManagedModels(input, allowInsecureHttp = false) {
+export function validateManagedModels(input) {
   if (input === undefined || input === null) return { value: null };
   try {
     if (!input || typeof input !== 'object' || Array.isArray(input)
       || Object.keys(input).some(key => key !== 'baseURL')) {
       throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。');
     }
-    return { value: { baseURL: normalizeGatewayBaseURL(input.baseURL, allowInsecureHttp) } };
+    return { value: { baseURL: normalizeGatewayBaseURL(input.baseURL) } };
   } catch {
     return { issues: [{ path: ['managedModels'], message: 'managedModels accepts a safe baseURL only; models are discovered from /v1/models' }] };
   }

@@ -289,7 +289,7 @@ function parseGatewayCredential(payload) {
     }
   }
   if (payload.baseURL !== undefined) {
-    try { if (normalizeGatewayBaseURL(payload.baseURL, true) !== payload.baseURL) errors.push('invalid gateway address'); }
+    try { if (normalizeGatewayBaseURL(payload.baseURL) !== payload.baseURL) errors.push('invalid gateway address'); }
     catch { errors.push('invalid gateway address'); }
   }
   if (payload.version === GATEWAY_VERSION) {

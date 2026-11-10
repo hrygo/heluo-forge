@@ -54,11 +54,11 @@ test('a callback write committed then reported failed is tombstoned and cannot h
   assert.notEqual((await restored.hydrate()).state, 'ready');
 });
 
-test('authorization-code + PKCE completes and stores only a validated grant', async (t) => {
+test('authorization-code + PKCE completes over HTTP without opt-in and stores only a validated grant', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock), { credentials });
+  const service = createIamService(configFor(mock, { allowInsecureHttp: false }), { credentials });
   const { location } = await authorize(service);
   const view = await service.handleCallback(location);
   assert.equal(view.state, 'ready');

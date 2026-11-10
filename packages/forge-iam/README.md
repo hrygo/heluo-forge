@@ -83,9 +83,9 @@
 
 - 授权码 + PKCE S256；回调绑定单次 `state`/`nonce`，校验 ID Token 签名（RS256/PS256/ES256，拒绝 `none`/HS*）、issuer、audience（含多 audience 的 `azp`）、nonce、exp；`kid` 未命中时重取一次 JWKS。
 - token 交换与刷新只由 Host 发起；Client 只拿到授权 URL 和非敏感 `IamView`。
-- 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；不得为站点根或以 `/` 结尾（DSH 路由是不带尾斜杠的绝对路径）。`redirectUri` 的 path 必须与之一致，非 loopback 必须 HTTPS，生产值必须与 IAM 预注册的精确 URI 匹配。
+- 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；不得为站点根或以 `/` 结尾（DSH 路由是不带尾斜杠的绝对路径）。`redirectUri` 的 path 必须与之一致，生产值须符合 IAM 的登记规则。
 - 生产形态配置 `callbackPort: 0`：插件自建回环监听，端口由系统分配，回调地址在登录发起时才确定，监听也只在这次尝试期间存在（RFC 8252 §8.3）。需要固定端口时填 1024–65535；绑定失败直接拒登录并报 `IAM_CALLBACK_PORT_UNAVAILABLE`，不回落宿主端口。省略 `callbackPort` 时沿用宿主 Origin，仅用于开发。`callbackAddress` 默认 `auto`，始终先试 `127.0.0.1`，只在该地址族不可用时退到 `::1`；IPv6 需另行登记前缀 `http://[::1]`。
-- 默认只允许 HTTPS；`allowInsecureHttp: true` 也只放行 loopback（`localhost`/`127.0.0.1`/`::1`）上的 HTTP。
+- IAM 协议端点和网关地址接受 HTTP 或 HTTPS；`allowInsecureHttp` 保留作旧配置兼容，不再影响地址校验。HTTP 不提供传输加密或端点身份认证，会暴露令牌、Key 和请求内容。
 - 显式端点齐全时不再强制拉取 `discoveryUrl`；只有 issuer/authorize/token/JWKS 缺项时才用 discovery 补齐。
 - 新取得的 IAM access token 保存在 GrantRecord 与内存，不再写 `ENTERPRISE_ACCESS_TOKEN`；启动也不自动删除已有旧引用。保留不等于阻止消费：若旧配置或其他组件继续解析该引用，可能构成绕行，须在实际执行入口阻断并另定受授权的遗留处理。模型调用侧原基线指向 `ENTERPRISE_STATIC_KEY`；该消费方尚未随本仓库交付，当前没有接线可测。
 - 网关凭据值写入 `ENTERPRISE_STATIC_KEY`，录入人和设备标签写入独立记录 `heluo-iam/gateway-credential`。A/B 选路前，换账号、启动恢复、共享会话同步、回调或取消均不自动删除现存值及元数据；用户仍可显式替换或清除。显式保存发生失败时仍受现有存储实现的失败处理和非原子写入限制。
@@ -141,8 +141,7 @@ node --test packages/forge-iam/test/login.test.mjs
   "jwksUri": "http://127.0.0.1:<port>/jwks",
   "revocationEndpoint": "http://127.0.0.1:<port>/revoke",
   "clientId": "dsh-desktop",
-  "redirectUri": "http://127.0.0.1:<dsh-port>/iam/callback",
-  "allowInsecureHttp": true
+  "redirectUri": "http://127.0.0.1:<dsh-port>/iam/callback"
 }
 ```
 
@@ -155,7 +154,7 @@ node --test packages/forge-iam/test/login.test.mjs
 }
 ```
 
-**不要把上述 mock 或 file backend 配置用于生产。** 生产必须使用已审核的 OS keychain adapter 和 IAM 预注册的 HTTPS 回调。
+**不要把上述 mock 或 file backend 配置用于生产。** 生产必须使用已审核的 OS keychain adapter 和符合 IAM 登记规则的回调地址。
 
 ## 测试
 

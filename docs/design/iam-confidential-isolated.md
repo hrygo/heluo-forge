@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-016 |
 | 文档名称 | IAM 机密客户端隔离开发设计 |
-| 版本 | V0.3.0 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-02 |
+| 最后更新 | 2026-11-10 |
 | 门禁 | 用户已批准完整 source/mock 设计；不开放真实来源与生产 |
 
 > 编制依据：用户于 2026-11-02 选择管理员预置的隔离开发基线，并批准完整设计进入 source/mock 实施；同日只读 Inspect 核验 credentials 契约。设计的隔离服务实现已接入；本地验证不代表正式团队审批或供应商支持。
@@ -69,7 +69,7 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 
 ## 4. 网络与失败边界
 
-三条后端 POST 及 cleanup 共用一种编码路径，保持当前 safeEndpoint、redirect:error、TLS/显式 loopback 测试例外、超时、取消、资源与精确回调限制。构造的 Basic header、Post body 和 snapshot 只在操作局部保留；不进入错误或制品。
+三条后端 POST 及 cleanup 共用一种编码路径，保持 HTTP(S) 端点校验、redirect:error、超时、取消、资源与精确回调限制。HTTP 不提供传输加密或端点身份认证，机密客户端 secret 和令牌可能被窃取或篡改。构造的 Basic header、Post body 和 snapshot 只在操作局部保留；不进入错误或制品。
 
 所有可观察边界同时核对：当前 getter 的 source 身份、独立 verifier 字面 true、原 snapshot 仍为 current、私有副本与原数据一致、mode/method/issuer/client/ref/revision、credentials/store、现有认证/操作代际。local 失效错误不得被网络 catch 误包装为 IAM_UNREACHABLE。来源异常与任意 HTTP error 原文不输出；合法 invalid_grant 的既有分类保留。
 

@@ -24,7 +24,7 @@
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.38.4 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V1.0.1 | 评审稿 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.24.3 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
+| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.25.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.6.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V1.0.1 | 评审稿 | 平台组（代拟） | G2 |
@@ -38,9 +38,9 @@
 | CORP-DSH-DESIGN-013 | 企业研发全流程能力面设计 | [design/plugins/forge-devops-lifecycle.md](<design/plugins/forge-devops-lifecycle.md>) | V0.4.2 | 草案 | 平台组（代拟） | G1 查询核验；G2 受控写另行准入 |
 | CORP-DSH-DESIGN-014 | 跨模块冲突收口 | [design/conflict-resolution.md](<design/conflict-resolution.md>) | V0.3.1 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-015 | DSH 客户端标识（UA）方案设计 | [design/client-identification.md](<design/client-identification.md>) | V0.2.0 | 草案 | 平台组（代拟） | G1 接入契约 |
-| CORP-DSH-DESIGN-016 | IAM 机密客户端隔离开发设计 | [design/iam-confidential-isolated.md](<design/iam-confidential-isolated.md>) | V0.3.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；不开放真实来源与生产 |
+| CORP-DSH-DESIGN-016 | IAM 机密客户端隔离开发设计 | [design/iam-confidential-isolated.md](<design/iam-confidential-isolated.md>) | V0.4.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；不开放真实来源与生产 |
 | CORP-DSH-DESIGN-017 | IAM 模型与工具隔离消费设计 | [design/iam-consumer-isolated.md](<design/iam-consumer-isolated.md>) | V0.7.0 | 草案 | 平台组（代拟） | 用户已批准完整 source/mock 设计；真实环境关闭，A/B/C/D分段已验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
-| CORP-DSH-IAM-002 | IAM 机密客户端隔离开发契约 | [contracts/iam-client-auth-isolated.md](<contracts/iam-client-auth-isolated.md>) | V0.4.1 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；生产 G1 未关闭 |
+| CORP-DSH-IAM-002 | IAM 机密客户端隔离开发契约 | [contracts/iam-client-auth-isolated.md](<contracts/iam-client-auth-isolated.md>) | V0.5.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；生产 G1 未关闭 |
 | CORP-DSH-IAM-003 | IAM 模型与工具隔离消费契约草案 | [contracts/iam-consumer-isolated.md](<contracts/iam-consumer-isolated.md>) | V0.7.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；见证/许可/合成工具与模型已分段验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
 | CORP-DSH-IAM-004 | IAM 只读状态订阅隔离契约 | [contracts/iam-view-observer-isolated.md](<contracts/iam-view-observer-isolated.md>) | V0.3.0 | 草案 | 平台组（代拟） | 私有接缝已实现并定向验收；真实注册关闭 |
 | CORP-DSH-CLI-001 | dop CLI 接口规格（1.0.4） | [contracts/dop-cli-spec.md](<contracts/dop-cli-spec.md>) | V0.1.0 | 草案 | 平台组（代拟） | G1 接口事实 |
@@ -79,7 +79,7 @@
 | CORP-DSH-CONF-003 | 插件市场企业接入问询函（P0） | 已废止 | — | 废止 | 平台组 | 内容已吸收至 DESIGN-007/012 及 P0 取证单，问询草案已废止删除 |
 | CORP-DSH-CONF-004 | IAM 统一登录与权限接入问询函 | [collaboration/iam-confirmation-letter.md](<collaboration/iam-confirmation-letter.md>) | V0.6.5 | 草案 | 平台组（代拟）；IAM 团队答复；实施协调汇总 | G0 方向与认领；G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-CONF-005 | DSH 和应用 Agent 调用 AI 网关补充问询函 | [collaboration/gateway-confirmation-letter.md](collaboration/gateway-confirmation-letter.md) | V0.5.0 | 草案 | 平台组（代拟）；网关团队答复；实施协调汇总 | G0 认领与能力评估；G1 契约；G2 联调准入 |
-| CORP-DSH-CONF-006 | DSH 研发助手接入企业 IAM 确认函 | [collaboration/iam-access-confirmation.md](<collaboration/iam-access-confirmation.md>) | V0.6.0 | 草案 | 平台组（代拟）；IAM 团队确认；实施协调汇总 | G1 身份登录与令牌闭环；G2 撤销与登出联动 |
+| CORP-DSH-CONF-006 | DSH 研发助手接入企业 IAM 确认函 | [collaboration/iam-access-confirmation.md](<collaboration/iam-access-confirmation.md>) | V0.7.0 | 草案 | 平台组（代拟）；IAM 团队确认；实施协调汇总 | G1 身份登录与令牌闭环；G2 撤销与登出联动 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | — | 待启动 | 平台组 | G0 前置验证；G2 安装与隔离 |
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |

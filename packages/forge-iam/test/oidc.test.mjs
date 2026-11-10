@@ -221,26 +221,21 @@ test('authorization URL carries PKCE, state, nonce and resource', () => {
   assert.equal(url.searchParams.get('scope'), 'openid offline_access');
 });
 
-test('metadata requires allowInsecureHttp even for loopback HTTP', async () => {
-  await assert.rejects(
-    () => loadMetadata({
-      issuer: 'http://iam.example', authorizationEndpoint: 'http://iam.example/authorize',
-      tokenEndpoint: 'http://iam.example/token', jwksUri: 'http://iam.example/jwks',
-    }),
-    (error) => error.code === 'IAM_CONFIG_INVALID',
-  );
-  await assert.rejects(
-    () => loadMetadata({
-      issuer: 'http://127.0.0.1:9', authorizationEndpoint: 'http://127.0.0.1:9/authorize',
-      tokenEndpoint: 'http://127.0.0.1:9/token', jwksUri: 'http://127.0.0.1:9/jwks',
-    }),
-    (error) => error.code === 'IAM_CONFIG_INVALID',
-  );
-  const meta = await loadMetadata({
-    issuer: 'http://127.0.0.1:9', authorizationEndpoint: 'http://127.0.0.1:9/authorize',
-    tokenEndpoint: 'http://127.0.0.1:9/token', jwksUri: 'http://127.0.0.1:9/jwks',
-  }, { allowInsecureHttp: true });
-  assert.equal(meta.issuer, 'http://127.0.0.1:9');
+test('metadata accepts explicit HTTP endpoints on loopback and remote hosts without an opt-in', async () => {
+  for (const origin of ['http://127.0.0.1:9', 'http://iam.corp.example']) {
+    const meta = await loadMetadata({
+      issuer: origin, authorizationEndpoint: `${origin}/authorize`, tokenEndpoint: `${origin}/token`,
+      jwksUri: `${origin}/jwks`, revocationEndpoint: `${origin}/revoke`,
+      endSessionEndpoint: `${origin}/logout`, userInfoEndpoint: `${origin}/userinfo`,
+    });
+    assert.equal(meta.issuer, origin);
+    assert.equal(meta.authorizationEndpoint, `${origin}/authorize`);
+    assert.equal(meta.tokenEndpoint, `${origin}/token`);
+    assert.equal(meta.jwksUri, `${origin}/jwks`);
+    assert.equal(meta.revocationEndpoint, `${origin}/revoke`);
+    assert.equal(meta.endSessionEndpoint, `${origin}/logout`);
+    assert.equal(meta.userInfoEndpoint, `${origin}/userinfo`);
+  }
 });
 
 test('revocation accepts an empty 200 response', async () => {
@@ -387,21 +382,27 @@ test('a complete explicit configuration does not depend on discovery', async () 
   assert.equal(metadata.tokenEndpoint, 'https://iam.example/token');
 });
 
-test('allowInsecureHttp only permits loopback, never a remote host', async () => {
+test('metadata discovery accepts remote HTTP while rejecting non-HTTP endpoint schemes', async () => {
   const config = {
     issuer: 'http://iam.corp.example',
     authorizationEndpoint: 'http://iam.corp.example/authorize',
     tokenEndpoint: 'http://iam.corp.example/token',
     jwksUri: 'http://iam.corp.example/jwks',
   };
-  await assert.rejects(() => loadMetadata(config, { allowInsecureHttp: true }),
+  const discoveryUrl = 'http://iam.corp.example/.well-known/openid-configuration';
+  const metadata = await loadMetadata({ discoveryUrl }, {
+    fetchImpl: async (url) => {
+      assert.equal(url.href, discoveryUrl);
+      return Response.json({ issuer: config.issuer, authorization_endpoint: config.authorizationEndpoint,
+        token_endpoint: config.tokenEndpoint, jwks_uri: config.jwksUri });
+    },
+  });
+  assert.equal(metadata.issuer, config.issuer);
+  assert.equal(metadata.tokenEndpoint, config.tokenEndpoint);
+  for (const field of ['issuer', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri', 'revocationEndpoint', 'endSessionEndpoint', 'userInfoEndpoint']) {
+    await assert.rejects(() => loadMetadata({ ...config, [field]: 'ftp://iam.corp.example/resource' }),
+      (error) => error.code === 'IAM_CONFIG_INVALID', field);
+  }
+  await assert.rejects(() => loadMetadata({ discoveryUrl: 'ftp://iam.corp.example/discovery' }),
     (error) => error.code === 'IAM_CONFIG_INVALID');
-  const loopback = await loadMetadata({
-    ...config,
-    issuer: 'http://127.0.0.1:8080',
-    authorizationEndpoint: 'http://127.0.0.1:8080/authorize',
-    tokenEndpoint: 'http://127.0.0.1:8080/token',
-    jwksUri: 'http://127.0.0.1:8080/jwks',
-  }, { allowInsecureHttp: true });
-  assert.equal(loopback.issuer, 'http://127.0.0.1:8080');
 });
