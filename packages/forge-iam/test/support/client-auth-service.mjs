@@ -11,7 +11,7 @@ export async function confidentialHarness(t, method = 'client_secret_basic', { c
   t.after(() => mock.close());
   const fixture = createClientSecretFixture(credentials, { issuer: mock.issuer, clientId: mock.clientId, method, value });
   const config = { ...mock.endpoints, ...fixture.config, redirectUri: 'http://127.0.0.1:4567/iam/callback',
-    allowInsecureHttp: true, httpTimeoutMs: 2000, ...extraConfig };
+    httpTimeoutMs: 2000, ...extraConfig };
   const options = { ...fixture.options, verifyAtomicStore: (candidate) => candidate === credentials, ...extraOptions };
   const service = createIamService(config, options);
   t.after(() => service.dispose());

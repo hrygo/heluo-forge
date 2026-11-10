@@ -111,7 +111,7 @@ test('a failed callback from a cancelled attempt cannot cancel its replacement',
   const entered = deferred();
   const release = deferred();
   let firstExchange = true;
-  const service = createIamService({ ...configured, ...mock.endpoints, allowInsecureHttp: true }, {
+  const service = createIamService({ ...configured, ...mock.endpoints }, {
     credentials: new MemoryCredentials(),
     fetch: async (url, init) => {
       if (String(url).endsWith('/token') && firstExchange) {
@@ -186,7 +186,7 @@ test('a cancelled callback cannot delete a newer stored session', async (t) => {
     await release.promise;
     return written;
   };
-  const service = createIamService({ ...configured, ...mock.endpoints, allowInsecureHttp: true }, { credentials });
+  const service = createIamService({ ...configured, ...mock.endpoints }, { credentials });
   t.after(() => service.dispose());
   t.after(() => release.resolve());
   const started = await service.startSignIn();
@@ -244,7 +244,7 @@ test('callback cleanup waits while a newer identified login wins the record lock
     if (key === 'heluo-iam/gateway-credential') { gatewayEntered.resolve(); await releaseGateway.promise; }
     return read(key);
   };
-  const service = createIamService({ ...configured, ...mock.endpoints, allowInsecureHttp: true }, { credentials });
+  const service = createIamService({ ...configured, ...mock.endpoints }, { credentials });
   const started = await service.startSignIn();
   const authorized = await fetch(started.authorizationUrl, { redirect: 'manual' });
   const pending = service.handleCallback(authorized.headers.get('location')).catch((error) => error);

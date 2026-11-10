@@ -33,7 +33,7 @@ async function harness(t, mode = 'public', extra = {}) {
   const binder = providerBinder(credentials);
   const fixture = method ? createClientSecretFixture(credentials, { issuer: mock.issuer, clientId: mock.clientId, method, value }) : undefined;
   const config = { ...mock.endpoints, clientId: mock.clientId, ...fixture?.config,
-    redirectUri: 'http://127.0.0.1:4567/iam/callback', allowInsecureHttp: true, ...extra.config };
+    redirectUri: 'http://127.0.0.1:4567/iam/callback', ...extra.config };
   let source;
   let registeredIam;
   let unregistered = 0;

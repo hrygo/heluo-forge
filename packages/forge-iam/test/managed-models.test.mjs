@@ -82,7 +82,6 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 test('managed gateway configuration accepts HTTP on any host and rejects invalid addresses', () => {
   assert.equal(validateManagedModels(configuration).issues, undefined);
   assert.equal(validateManagedModels({ ...configuration, baseURL: 'http://gateway.corp.example/v1' }).issues, undefined);
-  assert.equal(validateManagedModels({ ...configuration, baseURL: 'http://gateway.corp.example/v1' }, true).issues, undefined);
   assert.equal(validateManagedModels({ ...configuration, baseURL: 'http://127.0.0.1:8000/v1' }).issues, undefined);
   for (const candidate of [
     { ...configuration, baseURL: credentialURL() },

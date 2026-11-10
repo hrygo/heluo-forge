@@ -9,6 +9,7 @@ import {
   prepareClientAuthentication,
 } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
+import { parseRedirectUri } from './http-url.mjs';
 import { addSeconds, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, safeMessage } from './service-helpers.mjs';
 
 const METADATA_TTL_MS = 5 * 60 * 1000;
@@ -149,31 +150,15 @@ export function createServiceGrant(env) {
     // a sign-in binds before asking for the URL. An empty value here means the
     // listener is not up, so there is no address to send the browser to.
     const loopback = options.getCallbackOrigin?.();
-    if (loopback) {
-      if (!config.redirectUri) return `${loopback}${config.redirectPath}`;
-      let parsed;
-      try {
-        parsed = new URL(config.redirectUri);
-      } catch {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must be an absolute URL');
-      }
-      if (parsed.pathname !== config.redirectPath) {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri path must equal redirectPath');
-      }
-      if (parsed.origin !== loopback) {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must equal the live loopback callback origin');
-      }
-      return parsed.href;
-    }
+    if (loopback && !config.redirectUri) return `${loopback}${config.redirectPath}`;
     if (config.redirectUri) {
-      let parsed;
-      try {
-        parsed = new URL(config.redirectUri);
-      } catch {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must be an absolute URL');
-      }
-      if (parsed.pathname !== config.redirectPath) {
-        throw new IamError('IAM_CONFIG_INVALID', 'redirectUri path must equal redirectPath');
+      const { url: parsed, error } = parseRedirectUri(config.redirectUri, config.redirectPath);
+      if (error) throw new IamError('IAM_CONFIG_INVALID', error);
+      if (loopback) {
+        if (parsed.origin !== loopback) {
+          throw new IamError('IAM_CONFIG_INVALID', 'redirectUri must equal the live loopback callback origin');
+        }
+        return parsed.href;
       }
       let live;
       try {

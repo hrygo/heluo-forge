@@ -1,4 +1,4 @@
-import { IamError } from './errors.mjs';
+import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
 import { classifyFailure, gatewayCode } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import {
@@ -40,7 +40,7 @@ export {
 };
 
 export const MESSAGES = Object.freeze({
-  IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
+  IAM_GATEWAY_URL_INVALID: IAM_GATEWAY_URL_INVALID_MESSAGE,
   ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
   IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
   IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',

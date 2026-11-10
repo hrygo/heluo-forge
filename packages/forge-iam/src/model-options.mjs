@@ -1,4 +1,5 @@
-import { IamError } from './errors.mjs';
+import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
+import { hasQueryOrFragment, parseHttpUrl } from './http-url.mjs';
 
 export const NO_RETRY_POLICY = Object.freeze({
   mode: 'normal',
@@ -28,11 +29,9 @@ const CAPACITY_SCALE = { k: 1000, m: 1000000 };
  * appended. HTTP and HTTPS are accepted for any host.
  */
 export function normalizeGatewayBaseURL(input) {
-  let url;
-  try { url = new URL(input); } catch { throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。'); }
-  if (url.username || url.password || url.search || url.hash
-    || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
-    throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。');
+  const url = parseHttpUrl(input);
+  if (!url || url.username || url.password || hasQueryOrFragment(url)) {
+    throw new IamError('IAM_GATEWAY_URL_INVALID', IAM_GATEWAY_URL_INVALID_MESSAGE);
   }
   url.pathname = url.pathname.replace(/\/+$/u, '');
   return url.href.replace(/\/$/u, '');
@@ -40,14 +39,19 @@ export function normalizeGatewayBaseURL(input) {
 
 export function validateManagedModels(input) {
   if (input === undefined || input === null) return { value: null };
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).some(key => key !== 'baseURL')) {
+    return { issues: [{ path: ['managedModels'], message: 'managedModels must contain only baseURL' }] };
+  }
+  const address = input.baseURL;
+  if (address === undefined || address === null || address === '') {
+    return { issues: [{ path: ['managedModels', 'baseURL'], message: 'managedModels.baseURL is required' }] };
+  }
   try {
-    if (!input || typeof input !== 'object' || Array.isArray(input)
-      || Object.keys(input).some(key => key !== 'baseURL')) {
-      throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。');
-    }
-    return { value: { baseURL: normalizeGatewayBaseURL(input.baseURL) } };
-  } catch {
-    return { issues: [{ path: ['managedModels'], message: 'managedModels accepts a safe baseURL only; models are discovered from /v1/models' }] };
+    return { value: { baseURL: normalizeGatewayBaseURL(address) } };
+  } catch (error) {
+    if (!(error instanceof IamError) || error.code !== 'IAM_GATEWAY_URL_INVALID') throw error;
+    return { issues: [{ path: ['managedModels', 'baseURL'], message: 'managedModels.baseURL must be an absolute HTTP or HTTPS URL without credentials, query or fragment' }] };
   }
 }
 

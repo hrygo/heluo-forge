@@ -1,4 +1,5 @@
-import { validateManagedModels } from './managed-models.mjs';
+import { validateManagedModels } from './model-options.mjs';
+import { parseHttpUrl, parseRedirectUri } from './http-url.mjs';
 
 // Cordis 用 standard-schema 校验插件配置：Config['~standard'].validate(config)
 // 必须同步返回 { value } 或 { issues }。这里不依赖外部校验库，保持包骨架可在
@@ -41,7 +42,6 @@ export const CONFIG_FIELDS = [
   'httpTimeoutMs',
   'logoutMode',
   'requireExclusive',
-  'allowInsecureHttp',
 ];
 
 const STRING_FIELDS = [
@@ -88,8 +88,6 @@ const DEFAULTS = {
   httpTimeoutMs: 10000,
   logoutMode: 'local',
   requireExclusive: true,
-  // Retained for existing profiles; HTTP(S) endpoint validation no longer uses it.
-  allowInsecureHttp: false,
 };
 
 function issue(path, message) {
@@ -225,16 +223,9 @@ export function validateConfig(input) {
     : '';
 
   if (value.redirectUri) {
-    let parsed;
-    try {
-      parsed = new URL(value.redirectUri);
-    } catch {
-      parsed = null;
-    }
-    if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
-      issues.push(issue('redirectUri', 'redirectUri must be an absolute http(s) URL'));
-    } else if (parsed.pathname !== value.redirectPath || parsed.search || parsed.hash) {
-      issues.push(issue('redirectUri', 'redirectUri path must equal redirectPath and carry no query or fragment'));
+    const { error } = parseRedirectUri(value.redirectUri, value.redirectPath);
+    if (error) {
+      issues.push(issue('redirectUri', error));
     } else if (value.callbackPort === 0) {
       issues.push(issue('redirectUri', 'redirectUri cannot be set when callbackPort is 0: the port is assigned at run time'));
     } else if (fixedRedirect && value.redirectUri !== fixedRedirect) {
@@ -243,26 +234,14 @@ export function validateConfig(input) {
   }
 
   if (value.postLogoutRedirectUri) {
-    let parsed;
-    try {
-      parsed = new URL(value.postLogoutRedirectUri);
-    } catch {
-      parsed = null;
-    }
-    if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
-      issues.push(issue('postLogoutRedirectUri', 'postLogoutRedirectUri must be an absolute http(s) URL'));
+    if (!parseHttpUrl(value.postLogoutRedirectUri)) {
+      issues.push(issue('postLogoutRedirectUri', 'postLogoutRedirectUri must be an absolute HTTP or HTTPS URL'));
     }
   }
 
   if (value.gatewayConsoleUrl) {
-    let parsed;
-    try {
-      parsed = new URL(value.gatewayConsoleUrl);
-    } catch {
-      parsed = null;
-    }
-    if (!parsed || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
-      issues.push(issue('gatewayConsoleUrl', 'gatewayConsoleUrl must be an absolute http(s) URL'));
+    if (!parseHttpUrl(value.gatewayConsoleUrl)) {
+      issues.push(issue('gatewayConsoleUrl', 'gatewayConsoleUrl must be an absolute HTTP or HTTPS URL'));
     }
   }
 
@@ -282,14 +261,6 @@ export function validateConfig(input) {
       issues.push(issue('logoutMode', 'logoutMode must be local or rp'));
     } else {
       value.logoutMode = source.logoutMode;
-    }
-  }
-
-  if (source.allowInsecureHttp !== undefined && source.allowInsecureHttp !== null) {
-    if (typeof source.allowInsecureHttp !== 'boolean') {
-      issues.push(issue('allowInsecureHttp', 'allowInsecureHttp must be a boolean'));
-    } else {
-      value.allowInsecureHttp = source.allowInsecureHttp;
     }
   }
 

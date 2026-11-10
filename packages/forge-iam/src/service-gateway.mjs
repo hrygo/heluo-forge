@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertClientAuthCurrent } from './client-auth.mjs';
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
-import { normalizeGatewayBaseURL } from './managed-models.mjs';
+import { normalizeGatewayBaseURL } from './model-options.mjs';
 import { StoreError } from './store.mjs';
 import { addSeconds, nowIso, safeMessage } from './service-helpers.mjs';
 

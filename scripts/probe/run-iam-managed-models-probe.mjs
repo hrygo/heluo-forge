@@ -46,7 +46,7 @@ const baseURL = `http://127.0.0.1:${gateway.address().port}/v1`;
 const mock = await startMockOidc({ accessTtl: 5 }); const fixture = createAtomicGatewayFixture();
 let clock = Date.now(); let runtime;
 const config = validateConfig({ ...mock.endpoints, clientId: mock.clientId,
-  allowInsecureHttp: true, redirectUri: 'http://127.0.0.1:9/iam/callback', refreshSkewSeconds: 1 }).value;
+  redirectUri: 'http://127.0.0.1:9/iam/callback', refreshSkewSeconds: 1 }).value;
 const iam = createIamService(config, { credentials: fixture.credentials, ...fixture.options,
   now: () => clock, getManagedModelRuntime: () => runtime });
 const collect = async stream => { const values = []; for await (const value of stream) values.push(value); return values; };

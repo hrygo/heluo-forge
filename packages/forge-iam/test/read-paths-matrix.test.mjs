@@ -87,7 +87,6 @@ async function signedInRecord(t) {
     clientId: mock.clientId,
     gatewayResource: 'https://gateway.corp.example',
     redirectUri: 'http://127.0.0.1:4567/iam/callback',
-    allowInsecureHttp: true,
     refreshSkewSeconds: 60,
     attemptTimeoutSeconds: 30,
     httpTimeoutMs: 5000,

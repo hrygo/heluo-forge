@@ -14,7 +14,6 @@ function configFor(mock, overrides = {}) {
     clientId: mock.clientId,
     gatewayResource: 'https://gateway.corp.example',
     redirectUri: 'http://127.0.0.1:4567/iam/callback',
-    allowInsecureHttp: true,
     refreshSkewSeconds: 60,
     attemptTimeoutSeconds: 30,
     httpTimeoutMs: 5000,
@@ -58,7 +57,7 @@ test('authorization-code + PKCE completes over HTTP without opt-in and stores on
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock, { allowInsecureHttp: false }), { credentials });
+  const service = createIamService(configFor(mock), { credentials });
   const { location } = await authorize(service);
   const view = await service.handleCallback(location);
   assert.equal(view.state, 'ready');
@@ -652,7 +651,6 @@ test('cancelling while discovery is pending aborts the sign-in', async (t) => {
     clientId: mock.clientId,
     discoveryUrl: `${mock.issuer}/.well-known/openid-configuration`,
     redirectUri: 'http://127.0.0.1:4567/iam/callback',
-    allowInsecureHttp: true,
   }).value, {
     credentials: new MemoryCredentials(),
     fetch: async (url, init) => {
@@ -719,7 +717,6 @@ test('concurrent startSignIn calls share one attempt', async (t) => {
     clientId: mock.clientId,
     discoveryUrl: `${mock.issuer}/.well-known/openid-configuration`,
     redirectUri: 'http://127.0.0.1:4567/iam/callback',
-    allowInsecureHttp: true,
   }).value, {
     credentials: new MemoryCredentials(),
     fetch: async (url, init) => {

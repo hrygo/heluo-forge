@@ -8,7 +8,7 @@ const config = {
   issuer: 'https://iam.example', authorizationEndpoint: 'https://iam.example/authorize',
   tokenEndpoint: 'https://iam.example/token', jwksUri: 'https://iam.example/jwks',
   clientId: 'test', redirectUri: 'http://127.0.0.1:4567/iam/callback',
-  allowInsecureHttp: true, refreshSkewSeconds: 0,
+  refreshSkewSeconds: 0,
 };
 
 test('a new caller cannot reuse a token promise after the provider changes', async (t) => {

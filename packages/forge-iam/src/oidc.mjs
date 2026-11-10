@@ -7,6 +7,7 @@ import {
   verify as verifySignature,
 } from 'node:crypto';
 import { assertClientAuthCurrent, buildClientAuthRequest } from './client-auth.mjs';
+import { parseHttpUrl } from './http-url.mjs';
 
 export class OidcError extends Error {
   constructor(code, message, details = {}) {
@@ -210,15 +211,10 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, accessToke
   return claims;
 }
 
-function assertSafeEndpoint(value, name) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new OidcError('IAM_CONFIG_INVALID', `${name} is not a valid URL`);
-  }
-  if (url.protocol === 'https:' || url.protocol === 'http:') return url;
-  throw new OidcError('IAM_CONFIG_INVALID', `${name} must use HTTP or HTTPS`);
+function assertHttpEndpoint(value, name) {
+  const url = parseHttpUrl(value);
+  if (url) return url;
+  throw new OidcError('IAM_CONFIG_INVALID', `${name} must be an absolute HTTP or HTTPS URL`);
 }
 
 function requireString(value, name) {
@@ -292,7 +288,7 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal } = {}
   const needsDiscovery = Boolean(config.discoveryUrl)
     && (!config.issuer || !config.authorizationEndpoint || !config.tokenEndpoint || !config.jwksUri);
   if (needsDiscovery) {
-    const discoveryUrl = assertSafeEndpoint(config.discoveryUrl, 'discoveryUrl');
+    const discoveryUrl = assertHttpEndpoint(config.discoveryUrl, 'discoveryUrl');
     document = await fetchJson(discoveryUrl, { fetchImpl, timeoutMs, signal });
     if (document === null || typeof document !== 'object') {
       throw new OidcError('IAM_DISCOVERY_INVALID', 'discovery document must be an object');
@@ -314,18 +310,18 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal } = {}
   requireString(authorizationEndpoint, 'authorizationEndpoint');
   requireString(tokenEndpoint, 'tokenEndpoint');
   requireString(jwksUri, 'jwksUri');
-  assertSafeEndpoint(issuer, 'issuer');
-  const authorizeUrl = assertSafeEndpoint(authorizationEndpoint, 'authorizationEndpoint');
-  const tokenUrl = assertSafeEndpoint(tokenEndpoint, 'tokenEndpoint');
-  const jwksUrl = assertSafeEndpoint(jwksUri, 'jwksUri');
+  assertHttpEndpoint(issuer, 'issuer');
+  const authorizeUrl = assertHttpEndpoint(authorizationEndpoint, 'authorizationEndpoint');
+  const tokenUrl = assertHttpEndpoint(tokenEndpoint, 'tokenEndpoint');
+  const jwksUrl = assertHttpEndpoint(jwksUri, 'jwksUri');
   const revokeUrl = revocationEndpoint
-    ? assertSafeEndpoint(revocationEndpoint, 'revocationEndpoint')
+    ? assertHttpEndpoint(revocationEndpoint, 'revocationEndpoint')
     : undefined;
   const logoutUrl = endSessionEndpoint
-    ? assertSafeEndpoint(endSessionEndpoint, 'endSessionEndpoint')
+    ? assertHttpEndpoint(endSessionEndpoint, 'endSessionEndpoint')
     : undefined;
   const userInfoUrl = userInfoEndpoint
-    ? assertSafeEndpoint(userInfoEndpoint, 'userInfoEndpoint')
+    ? assertHttpEndpoint(userInfoEndpoint, 'userInfoEndpoint')
     : undefined;
 
   return {

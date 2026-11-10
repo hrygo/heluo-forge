@@ -37,8 +37,6 @@ test('normalizeGatewayBaseURL keeps the path verbatim and accepts HTTP for any h
   assert.equal(normalizeGatewayBaseURL('http://example.com/v1'), 'http://example.com/v1');
   assert.equal(normalizeGatewayBaseURL('http://192.0.2.10:8000'), 'http://192.0.2.10:8000');
   assert.equal(normalizeGatewayBaseURL('http://[2001:db8::1]:8000/v1/'), 'http://[2001:db8::1]:8000/v1');
-  assert.equal(normalizeGatewayBaseURL('http://example.com/v1', true), 'http://example.com/v1');
-  assert.equal(normalizeGatewayBaseURL('http://192.0.2.10:8000', true), 'http://192.0.2.10:8000');
 
   // Rejects embedded credentials, search, hash, or non-http(s) protocols
   const credentialUrl = new URL('https://gateway.example/v1');
@@ -47,6 +45,9 @@ test('normalizeGatewayBaseURL keeps the path verbatim and accepts HTTP for any h
   assert.throws(() => normalizeGatewayBaseURL(credentialUrl));
   assert.throws(() => normalizeGatewayBaseURL('https://gateway.example/v1?token=123'));
   assert.throws(() => normalizeGatewayBaseURL('https://gateway.example/v1#hash'));
+  assert.throws(() => normalizeGatewayBaseURL('https://gateway.example/v1?'));
+  assert.throws(() => normalizeGatewayBaseURL('https://gateway.example/v1#'));
+  assert.equal(normalizeGatewayBaseURL('https://gateway.example/a%3Fb%23c'), 'https://gateway.example/a%3Fb%23c');
   assert.throws(() => normalizeGatewayBaseURL('ftp://gateway.example'));
   assert.throws(() => normalizeGatewayBaseURL('ws://gateway.example'));
   assert.throws(() => normalizeGatewayBaseURL('not-a-url'));
@@ -58,16 +59,25 @@ test('validateManagedModels handles empty and valid configuration objects', () =
   assert.deepEqual(validateManagedModels({ baseURL: 'https://gateway.corp.example' }), {
     value: { baseURL: 'https://gateway.corp.example' },
   });
-  assert.deepEqual(validateManagedModels({ baseURL: 'http://corp.example' }, true), {
-    value: { baseURL: 'http://corp.example' },
-  });
-
   assert.deepEqual(validateManagedModels({ baseURL: 'http://corp.example' }), {
     value: { baseURL: 'http://corp.example' },
   });
   const invalid = validateManagedModels({ baseURL: 'ftp://corp.example' });
   assert.ok(Array.isArray(invalid.issues));
   assert.equal(invalid.issues[0].path[0], 'managedModels');
+});
+
+test('validateManagedModels points to the invalid field', () => {
+  assert.deepEqual(validateManagedModels({}).issues[0].path, ['managedModels', 'baseURL']);
+  assert.match(validateManagedModels({}).issues[0].message, /required/u);
+  assert.deepEqual(validateManagedModels({ baseURL: 'ftp://corp.example' }).issues[0].path, ['managedModels', 'baseURL']);
+  assert.doesNotMatch(validateManagedModels({ baseURL: 'ftp://corp.example' }).issues[0].message, /\/v1\/models/u);
+  assert.deepEqual(validateManagedModels({ baseURL: 'https://corp.example', other: true }).issues[0].path, ['managedModels']);
+});
+
+test('validateManagedModels propagates unexpected exceptions', () => {
+  const cause = new TypeError('synthetic unexpected getter failure');
+  assert.throws(() => validateManagedModels({ get baseURL() { throw cause; } }), error => error === cause);
 });
 
 test('parseCapacity handles numeric and string representations (K / M / pure numbers)', () => {

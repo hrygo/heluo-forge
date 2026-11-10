@@ -85,7 +85,7 @@
 - token 交换与刷新只由 Host 发起；Client 只拿到授权 URL 和非敏感 `IamView`。
 - 回调路径默认 `/iam/callback`，由 `redirectPath` 注册；不得为站点根或以 `/` 结尾（DSH 路由是不带尾斜杠的绝对路径）。`redirectUri` 的 path 必须与之一致，生产值须符合 IAM 的登记规则。
 - 生产形态配置 `callbackPort: 0`：插件自建回环监听，端口由系统分配，回调地址在登录发起时才确定，监听也只在这次尝试期间存在（RFC 8252 §8.3）。需要固定端口时填 1024–65535；绑定失败直接拒登录并报 `IAM_CALLBACK_PORT_UNAVAILABLE`，不回落宿主端口。省略 `callbackPort` 时沿用宿主 Origin，仅用于开发。`callbackAddress` 默认 `auto`，始终先试 `127.0.0.1`，只在该地址族不可用时退到 `::1`；IPv6 需另行登记前缀 `http://[::1]`。
-- IAM 协议端点和网关地址接受 HTTP 或 HTTPS；`allowInsecureHttp` 保留作旧配置兼容，不再影响地址校验。HTTP 不提供传输加密或端点身份认证，会暴露令牌、Key 和请求内容。
+- IAM 协议端点和网关地址接受 HTTP 或 HTTPS；含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用，该项按未知键忽略且不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。HTTP 不提供传输加密或端点身份认证，会暴露令牌、Key 和请求内容。
 - 显式端点齐全时不再强制拉取 `discoveryUrl`；只有 issuer/authorize/token/JWKS 缺项时才用 discovery 补齐。
 - 新取得的 IAM access token 保存在 GrantRecord 与内存，不再写 `ENTERPRISE_ACCESS_TOKEN`；启动也不自动删除已有旧引用。保留不等于阻止消费：若旧配置或其他组件继续解析该引用，可能构成绕行，须在实际执行入口阻断并另定受授权的遗留处理。模型调用侧原基线指向 `ENTERPRISE_STATIC_KEY`；该消费方尚未随本仓库交付，当前没有接线可测。
 - 网关凭据值写入 `ENTERPRISE_STATIC_KEY`，录入人和设备标签写入独立记录 `heluo-iam/gateway-credential`。A/B 选路前，换账号、启动恢复、共享会话同步、回调或取消均不自动删除现存值及元数据；用户仍可显式替换或清除。显式保存发生失败时仍受现有存储实现的失败处理和非原子写入限制。
@@ -181,4 +181,4 @@ git diff --check
 
 ## 企业模型设置闭环
 
-企业账号页统一配置网关地址与个人访问凭证，通过标准 `/v1/models` 获取目录；登录和凭证就绪后才能列出或调用模型。默认模型不自动改写，退出、到期及配置变化会撤销旧目录和调用代际。实现与限制见[开发指南](<docs/developer-guide.md#可配置网关与动态模型目录>)；生产原子存储、真实 IAM/UAG 和工具授权门禁不因此获得准入。
+企业账号页统一配置网关地址与个人访问凭证，通过 `${baseURL}/models` 获取目录；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。登录和凭证就绪后才能列出或调用模型。默认模型不自动改写，退出、到期及配置变化会撤销旧目录和调用代际。实现与限制见[开发指南](<docs/developer-guide.md#可配置网关与动态模型目录>)；生产原子存储、真实 IAM/UAG 和工具授权门禁不因此获得准入。

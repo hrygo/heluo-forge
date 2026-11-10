@@ -12,7 +12,7 @@ test('normalizes defaults without inventing IAM endpoints', () => {
   assert.equal(result.value.refreshSkewSeconds, 60);
   assert.equal(result.value.attemptTimeoutSeconds, 300);
   assert.equal(result.value.httpTimeoutMs, 10000);
-  assert.equal(result.value.allowInsecureHttp, false);
+  assert.equal(Object.hasOwn(result.value, 'allowInsecureHttp'), false);
   assert.equal(result.value.issuer, '');
   assert.equal(isConfigured(result.value).ok, false);
 });
@@ -40,14 +40,15 @@ test('explicit endpoints can replace discovery', () => {
   assert.equal(isConfigured(result.value).ok, true);
 });
 
-test('HTTP gateway configuration does not depend on the legacy allowInsecureHttp flag', () => {
+test('legacy allowInsecureHttp is ignored while existing HTTP profiles remain valid', () => {
+  assert.equal(CONFIG_FIELDS.includes('allowInsecureHttp'), false);
   for (const allowInsecureHttp of [undefined, false, true]) {
     const result = validateConfig({
       allowInsecureHttp,
       managedModels: { baseURL: 'http://gateway.corp.example/v1/' },
     });
     assert.equal(result.value?.managedModels.baseURL, 'http://gateway.corp.example/v1');
-    assert.equal(result.value?.allowInsecureHttp, allowInsecureHttp ?? false);
+    assert.equal(Object.hasOwn(result.value, 'allowInsecureHttp'), false);
   }
 });
 

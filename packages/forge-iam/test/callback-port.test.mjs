@@ -28,7 +28,6 @@ function configFor(mock, overrides = {}) {
     ...mock.endpoints,
     clientId: mock.clientId,
     gatewayResource: 'https://gateway.corp.example',
-    allowInsecureHttp: true,
     refreshSkewSeconds: 60,
     attemptTimeoutSeconds: 30,
     httpTimeoutMs: 5000,
