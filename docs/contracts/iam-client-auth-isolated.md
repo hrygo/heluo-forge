@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-IAM-002 |
 | 文档名称 | IAM 机密客户端隔离开发契约 |
-| 版本 | V0.4.1 |
+| 版本 | V0.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
+| 最后更新 | 2026-11-10 |
 | 门禁 | 用户已批准 source/mock 设计；真实来源关闭，生产 G1 未关闭 |
 
 > 编制依据：用户于 2026-11-02 选择管理员预置的隔离基线并批准完整设计进入 source/mock 实施。本契约定义本包的配置、私有组合参数和记录格式。实际隔离服务已接入 Basic/Post 的 code/refresh/revoke、V2 会话、共享刷新与 cleanup，不代表 SDK 新增接口、供应商能力或生产批准。
@@ -72,7 +72,7 @@ verifyClientSecretSource?: (
 | client_secret_basic | Basic；clientId、secret 分别 form-urlencoded 后以冒号连接，再 UTF-8/Base64 | 不放 client_id/client_secret 认证参数 |
 | client_secret_post | 无 | URLSearchParams 编码 client_id/client_secret |
 
-共享纯构造函数供 code、refresh、revoke 及失败 cleanup 使用。secret 不进授权 URL、重定向或日志；Basic 编码串也视为秘密。保留 safeEndpoint、TLS/显式 loopback 模拟例外、redirect:error、超时、取消和现有资源/回调上下文。POST 是显式兼容选项，不是推荐默认；不得自动 Basic↔Post 切换、无认证降级或重试。
+共享纯构造函数供 code、refresh、revoke 及失败 cleanup 使用。secret 不进授权 URL、重定向或日志；Basic 编码串也视为秘密。端点接受 HTTP(S)，保留 redirect:error、超时、取消和现有资源/回调上下文；HTTP 不提供传输加密或端点身份认证，secret 与令牌可能被窃取或篡改。POST 是显式兼容选项，不是推荐默认；不得自动 Basic↔Post 切换、无认证降级或重试。
 
 依 [RFC 7009 §2.1](<https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1>)，有客户端凭据时撤销也认证；真实 IAM 的方法、token/revoke 能否采用同一选择仍待供应商确认。本地 fixture 接受某方法不证明真实端点接受。
 

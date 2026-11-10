@@ -21,7 +21,7 @@ function deferred() {
 }
 
 function createService(credentials, options = {}) {
-  return createIamService(config, { credentials, verifyAtomicStore: () => true, ...options });
+  return createIamService(config, { credentials, getOrigin: () => 'http://127.0.0.1:4567', verifyAtomicStore: () => true, ...options });
 }
 
 async function seed(credentials) {

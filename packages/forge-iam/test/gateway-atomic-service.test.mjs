@@ -273,6 +273,18 @@ test('gateway address and an opaque compatible Key commit together and remain Ho
   assertUnchanged(f, before);
 });
 
+test('a remote HTTP gateway address is stored and resolved without an opt-in', async t => {
+  const f = await setup(t, { grantAtomic: true });
+  await f.service.hydrate();
+  const key = 'synthetic-compatible-key';
+  await f.service.saveGatewayCredential({ key, baseURL: 'http://gateway.corp.example/v1/' });
+  const connection = await f.service.resolveGatewayConnection();
+  assert.equal(connection.baseURL, 'http://gateway.corp.example/v1');
+  assert.equal(connection.key, key);
+  assert.equal(f.service.getView().gatewayCredential.baseURL, connection.baseURL);
+  assert.equal(JSON.stringify(f.service.getView()).includes(key), false);
+});
+
 function credentialURL() {
   const url = new URL('https://gateway.corp.example/v1');
   url.username = 'synthetic-user'; url.password = 'synthetic-password';

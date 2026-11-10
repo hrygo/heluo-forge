@@ -1,4 +1,5 @@
-import { IamError } from './errors.mjs';
+import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
+import { hasQueryOrFragment, parseHttpUrl } from './http-url.mjs';
 
 export const NO_RETRY_POLICY = Object.freeze({
   mode: 'normal',
@@ -22,41 +23,35 @@ export const isModelId = value => typeof value === 'string'
 const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
 const CAPACITY_SCALE = { k: 1000, m: 1000000 };
 
-/** Host the local machine reaches without leaving the box. */
-function isLoopbackHost(hostname) {
-  return hostname === 'localhost' || hostname === '::1' || hostname === '[::1]'
-    || /^127(?:\.\d{1,3}){3}$/u.test(hostname);
-}
-
 /**
  * Validate an OpenAI-compatible root. The path is kept as the operator entered
  * it: a gateway that serves under `/v1` must be given `/v1`, and nothing is
- * appended. Plain HTTP is loopback-only until the deployment opts in.
+ * appended. HTTP and HTTPS are accepted for any host.
  */
-export function normalizeGatewayBaseURL(input, allowInsecureHttp = false) {
-  let url;
-  try { url = new URL(input); } catch { throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。'); }
-  if (url.username || url.password || url.search || url.hash
-    || (url.protocol !== 'https:' && url.protocol !== 'http:')) {
-    throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。');
-  }
-  if (url.protocol === 'http:' && allowInsecureHttp !== true && !isLoopbackHost(url.hostname)) {
-    throw new IamError('IAM_GATEWAY_URL_INVALID', '明文 HTTP 仅限本机回环地址，其他地址请使用 HTTPS。');
+export function normalizeGatewayBaseURL(input) {
+  const url = parseHttpUrl(input);
+  if (!url || url.username || url.password || hasQueryOrFragment(url)) {
+    throw new IamError('IAM_GATEWAY_URL_INVALID', IAM_GATEWAY_URL_INVALID_MESSAGE);
   }
   url.pathname = url.pathname.replace(/\/+$/u, '');
   return url.href.replace(/\/$/u, '');
 }
 
-export function validateManagedModels(input, allowInsecureHttp = false) {
+export function validateManagedModels(input) {
   if (input === undefined || input === null) return { value: null };
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).some(key => key !== 'baseURL')) {
+    return { issues: [{ path: ['managedModels'], message: 'managedModels must contain only baseURL' }] };
+  }
+  const address = input.baseURL;
+  if (address === undefined || address === null || address === '') {
+    return { issues: [{ path: ['managedModels', 'baseURL'], message: 'managedModels.baseURL is required' }] };
+  }
   try {
-    if (!input || typeof input !== 'object' || Array.isArray(input)
-      || Object.keys(input).some(key => key !== 'baseURL')) {
-      throw new IamError('IAM_GATEWAY_URL_INVALID', '请输入有效的 HTTP 或 HTTPS 网关地址。');
-    }
-    return { value: { baseURL: normalizeGatewayBaseURL(input.baseURL, allowInsecureHttp) } };
-  } catch {
-    return { issues: [{ path: ['managedModels'], message: 'managedModels accepts a safe baseURL only; models are discovered from /v1/models' }] };
+    return { value: { baseURL: normalizeGatewayBaseURL(address) } };
+  } catch (error) {
+    if (!(error instanceof IamError) || error.code !== 'IAM_GATEWAY_URL_INVALID') throw error;
+    return { issues: [{ path: ['managedModels', 'baseURL'], message: 'managedModels.baseURL must be an absolute HTTP or HTTPS URL without credentials, query or fragment' }] };
   }
 }
 

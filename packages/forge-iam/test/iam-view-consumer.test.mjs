@@ -191,10 +191,11 @@ test('an asynchronous mount plus the actual factory and mock IdP delivers the re
   const marker = Object.freeze({});
   const service = createIamService({
     ...mock.endpoints, clientId: mock.clientId,
-    redirectUri: 'http://127.0.0.1:4567/iam/callback', allowInsecureHttp: true, httpTimeoutMs: 2000,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback', httpTimeoutMs: 2000,
   }, {
     getCredentials: () => credentials,
     getCredentialsBindingScope: () => marker,
+    getOrigin: () => 'http://127.0.0.1:4567',
     verifyAtomicStore: (candidate) => candidate === credentials,
   });
   t.after(() => service.dispose());

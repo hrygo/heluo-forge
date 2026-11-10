@@ -98,9 +98,10 @@ export async function jointFixture(t, { confidential = false, beforeTool, modelS
     return () => { if (registration === entry) { registration = undefined; offered.clear(); counts.unregistered++; } };
   }
   const config = { ...mock.endpoints, clientId: mock.clientId, ...secret?.config,
-    redirectUri: 'http://127.0.0.1:4567/iam/callback', allowInsecureHttp: true, httpTimeoutMs: 2000 };
+    redirectUri: 'http://127.0.0.1:4567/iam/callback', httpTimeoutMs: 2000 };
   const iam = createIamService(config, { ...secret?.options,
     getCredentials: binder.getCredentials, getCredentialsBindingScope: binder.getCredentialsBindingScope,
+    getOrigin: () => 'http://127.0.0.1:4567',
     verifyAtomicStore: (candidate) => candidate === credentials,
     verifyWitnessBindings(candidate, source, scope, readers) {
       const common = binder.accepts(candidate, readers) && Object.isFrozen(scope) && Object.isFrozen(readers)

@@ -4,7 +4,7 @@ import { createIamService } from '../src/service.mjs';
 import { createGrantStore } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 
-const config = { issuer: 'https://iam.example', authorizationEndpoint: 'https://iam.example/authorize', tokenEndpoint: 'https://iam.example/token', jwksUri: 'https://iam.example/jwks', clientId: 'test', redirectUri: 'http://127.0.0.1:4567/iam/callback', allowInsecureHttp: true, refreshSkewSeconds: 7200 };
+const config = { issuer: 'https://iam.example', authorizationEndpoint: 'https://iam.example/authorize', tokenEndpoint: 'https://iam.example/token', jwksUri: 'https://iam.example/jwks', clientId: 'test', redirectUri: 'http://127.0.0.1:4567/iam/callback', refreshSkewSeconds: 7200 };
 const grant = { version: 1, issuer: 'https://iam.example', subject: 'subject', clientId: 'test', refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid', obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(), sessionInstanceId: Buffer.alloc(32, 1).toString('base64url') };
 
 function fake() {

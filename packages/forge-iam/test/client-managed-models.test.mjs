@@ -26,13 +26,13 @@ test('account form saves gateway URL and a masked Key together and clears the dr
   }); t.after(() => panel.close());
   const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
   assert.equal(input('网关地址').props.value, view.gatewayCredential.baseURL);
-  input('网关地址').props.onChange({ target: { value: 'https://next-gateway.corp.example/v1' } });
+  input('网关地址').props.onChange({ target: { value: 'http://next-gateway.corp.example/v1' } });
   input('个人访问凭证').props.onChange({ target: { value: 'synthetic-ui-key' } });
   assert.equal(input('个人访问凭证').props.type, 'password');
   assert.match(panel.text(panel.render()), /有未保存的更改/);
   await panel.findButton(panel.render(), '保存凭据').props.onClick();
   assert.equal(writes.length, 1);
-  assert.equal(writes[0].baseURL, 'https://next-gateway.corp.example/v1');
+  assert.equal(writes[0].baseURL, 'http://next-gateway.corp.example/v1');
   assert.equal(writes[0].key, 'synthetic-ui-key');
   assert.equal(input('个人访问凭证').props.value, '');
   assert.equal(input('网关地址').props.value, writes[0].baseURL);

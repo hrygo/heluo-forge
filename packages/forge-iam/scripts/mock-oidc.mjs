@@ -10,7 +10,6 @@ const config = {
   clientId: mock.clientId,
   gatewayResource: 'https://gateway.corp.example',
   redirectUri: `${process.env.DSH_WEB_ORIGIN ?? 'http://127.0.0.1:4567'}/iam/callback`,
-  allowInsecureHttp: true,
 };
 
 console.log(JSON.stringify(config, null, 2));

@@ -111,6 +111,7 @@ for (const fail of [false, true]) {
     await seed(credentials);
     const service = createIamService(config, {
       now: () => now, credentials, verifyAtomicStore: (candidate) => candidate === credentials,
+      getOrigin: () => 'http://127.0.0.1:4567',
       fetch: async () => { throw new Error('unexpected network access'); },
     });
     const gate = pauseRead(credentials, fail);

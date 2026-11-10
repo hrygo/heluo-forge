@@ -28,7 +28,6 @@ function configFor(mock, overrides = {}) {
     ...mock.endpoints,
     clientId: mock.clientId,
     gatewayResource: 'https://gateway.corp.example',
-    allowInsecureHttp: true,
     refreshSkewSeconds: 60,
     attemptTimeoutSeconds: 30,
     httpTimeoutMs: 5000,
@@ -320,6 +319,98 @@ test('callbackPort: the next sign-in rebinds after a release', async (t) => {
     'the new attempt uses the new bind',
   );
   assert.ok(first, 'the first attempt did bind');
+});
+
+test('callbackPort: an unavailable bound origin releases the listener and permits a retry', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const port = await freePort();
+  const checked = validateConfig(configFor(mock, { callbackPort: port, callbackAddress: '127.0.0.1' }));
+  assert.ok('value' in checked, JSON.stringify(checked.issues));
+
+  let manager;
+  let unavailable = true;
+  let boundOrigin;
+  let release;
+  let closeCalls = 0;
+  const service = createIamService(checked.value, {
+    credentials: new MemoryCredentials(),
+    getOrigin: () => 'http://127.0.0.1:9',
+    openCallback: async () => { boundOrigin = await manager.ensure(); },
+    getCallbackOrigin: () => unavailable ? undefined : manager.origin,
+    closeCallback: () => { closeCalls += 1; release = manager.release(); return release; },
+  });
+  manager = createCallbackManager({
+    port,
+    address: '127.0.0.1',
+    path: checked.value.redirectPath,
+    handler: (_req, res) => { res.statusCode = 204; res.end(); },
+  });
+  t.after(async () => { await service.dispose(); await manager.close(); });
+
+  await assert.rejects(() => service.startSignIn(), { code: 'IAM_CALLBACK_UNAVAILABLE' });
+  assert.equal(boundOrigin, `http://127.0.0.1:${port}`, 'the listener bound before the origin lookup failed');
+  assert.equal(closeCalls, 1, 'the failed sign-in requested listener cleanup');
+  await release;
+  assert.equal(manager.origin, undefined);
+  assert.equal(service.getView().state, 'signed-out');
+  await assert.rejects(() => send(port, { path: '/iam/callback' }), refused);
+
+  unavailable = false;
+  const retry = await service.startSignIn();
+  assert.equal(manager.origin, boundOrigin);
+  assert.equal(new URL(retry.authorizationUrl).searchParams.get('redirect_uri'), `${boundOrigin}/iam/callback`);
+  assert.equal(retry.view.state, 'authenticating');
+  assert.equal((await send(port, { path: '/iam/callback' })).status, 204);
+});
+
+test('callbackPort: reentrant cancellation cannot return the cached authorization URL', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const checked = validateConfig(configFor(mock, { callbackPort: 0, callbackAddress: '127.0.0.1' }));
+  assert.ok('value' in checked, JSON.stringify(checked.issues));
+
+  let manager;
+  let service;
+  let release;
+  let cancelDuringOrigin = false;
+  service = createIamService(checked.value, {
+    credentials: new MemoryCredentials(),
+    openCallback: () => manager.ensure(),
+    closeCallback: () => { release = manager.release(); return release; },
+    getCallbackOrigin: () => {
+      const origin = manager.origin;
+      if (cancelDuringOrigin) {
+        cancelDuringOrigin = false;
+        void service.cancelSignIn();
+      }
+      return origin;
+    },
+  });
+  manager = createCallbackManager({
+    port: 0,
+    address: '127.0.0.1',
+    path: checked.value.redirectPath,
+    handler: (_req, res) => { res.statusCode = 204; res.end(); },
+  });
+  t.after(async () => { await service.dispose(); await manager.close(); });
+
+  const first = await service.startSignIn();
+  const authorization = new URL(first.authorizationUrl);
+  const callback = new URL(authorization.searchParams.get('redirect_uri'));
+  callback.searchParams.set('state', authorization.searchParams.get('state'));
+  callback.searchParams.set('code', 'synthetic');
+  const port = Number(callback.port);
+  assert.equal((await service.startSignIn()).authorizationUrl, first.authorizationUrl);
+
+  cancelDuringOrigin = true;
+  await assert.rejects(() => service.startSignIn(), { code: 'IAM_ATTEMPT_CANCELLED' });
+  assert.ok(release, 'cancellation requested listener cleanup');
+  await release;
+  assert.equal(manager.origin, undefined);
+  assert.equal(service.getView().state, 'signed-out');
+  await assert.rejects(() => service.handleCallback(callback.href), { code: 'IAM_STATE_MISMATCH' });
+  await assert.rejects(() => send(port, { path: '/iam/callback' }), refused);
 });
 
 test('callbackPort: a taken pinned port refuses the sign-in and never falls back', async (t) => {

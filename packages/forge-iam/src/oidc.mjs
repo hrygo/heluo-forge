@@ -7,6 +7,7 @@ import {
   verify as verifySignature,
 } from 'node:crypto';
 import { assertClientAuthCurrent, buildClientAuthRequest } from './client-auth.mjs';
+import { parseHttpUrl } from './http-url.mjs';
 
 export class OidcError extends Error {
   constructor(code, message, details = {}) {
@@ -210,24 +211,10 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, accessToke
   return claims;
 }
 
-function assertSafeEndpoint(value, name, allowInsecureHttp) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new OidcError('IAM_CONFIG_INVALID', `${name} is not a valid URL`);
-  }
-  if (url.protocol === 'https:') return url;
-  // Plain HTTP is only for a local mock/loopback deployment; allowing it to an
-  // arbitrary host would put the authorization code, PKCE verifier and tokens
-  // on the wire in cleartext.
-  if (url.protocol === 'http:' && allowInsecureHttp === true && isLoopbackHost(url.hostname)) return url;
-  throw new OidcError('IAM_CONFIG_INVALID', `${name} must use HTTPS (plain HTTP is only allowed on loopback with allowInsecureHttp)`);
-}
-
-function isLoopbackHost(hostname) {
-  const host = hostname.startsWith('[') ? hostname.slice(1, -1) : hostname;
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+function assertHttpEndpoint(value, name) {
+  const url = parseHttpUrl(value);
+  if (url) return url;
+  throw new OidcError('IAM_CONFIG_INVALID', `${name} must be an absolute HTTP or HTTPS URL`);
 }
 
 function requireString(value, name) {
@@ -293,7 +280,7 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
  * Resolve discovery metadata, letting explicit config fields win over the
  * document. The issuer is required because ID-token validation must bind it.
  */
-export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allowInsecureHttp = false } = {}) {
+export async function loadMetadata(config, { fetchImpl, timeoutMs, signal } = {}) {
   let document = {};
   // Discovery is a fallback for missing explicit fields. When every endpoint and
   // the issuer are configured, a discovery fetch must not gate sign-in: a broken
@@ -301,7 +288,7 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
   const needsDiscovery = Boolean(config.discoveryUrl)
     && (!config.issuer || !config.authorizationEndpoint || !config.tokenEndpoint || !config.jwksUri);
   if (needsDiscovery) {
-    const discoveryUrl = assertSafeEndpoint(config.discoveryUrl, 'discoveryUrl', allowInsecureHttp);
+    const discoveryUrl = assertHttpEndpoint(config.discoveryUrl, 'discoveryUrl');
     document = await fetchJson(discoveryUrl, { fetchImpl, timeoutMs, signal });
     if (document === null || typeof document !== 'object') {
       throw new OidcError('IAM_DISCOVERY_INVALID', 'discovery document must be an object');
@@ -323,18 +310,18 @@ export async function loadMetadata(config, { fetchImpl, timeoutMs, signal, allow
   requireString(authorizationEndpoint, 'authorizationEndpoint');
   requireString(tokenEndpoint, 'tokenEndpoint');
   requireString(jwksUri, 'jwksUri');
-  assertSafeEndpoint(issuer, 'issuer', allowInsecureHttp);
-  const authorizeUrl = assertSafeEndpoint(authorizationEndpoint, 'authorizationEndpoint', allowInsecureHttp);
-  const tokenUrl = assertSafeEndpoint(tokenEndpoint, 'tokenEndpoint', allowInsecureHttp);
-  const jwksUrl = assertSafeEndpoint(jwksUri, 'jwksUri', allowInsecureHttp);
+  assertHttpEndpoint(issuer, 'issuer');
+  const authorizeUrl = assertHttpEndpoint(authorizationEndpoint, 'authorizationEndpoint');
+  const tokenUrl = assertHttpEndpoint(tokenEndpoint, 'tokenEndpoint');
+  const jwksUrl = assertHttpEndpoint(jwksUri, 'jwksUri');
   const revokeUrl = revocationEndpoint
-    ? assertSafeEndpoint(revocationEndpoint, 'revocationEndpoint', allowInsecureHttp)
+    ? assertHttpEndpoint(revocationEndpoint, 'revocationEndpoint')
     : undefined;
   const logoutUrl = endSessionEndpoint
-    ? assertSafeEndpoint(endSessionEndpoint, 'endSessionEndpoint', allowInsecureHttp)
+    ? assertHttpEndpoint(endSessionEndpoint, 'endSessionEndpoint')
     : undefined;
   const userInfoUrl = userInfoEndpoint
-    ? assertSafeEndpoint(userInfoEndpoint, 'userInfoEndpoint', allowInsecureHttp)
+    ? assertHttpEndpoint(userInfoEndpoint, 'userInfoEndpoint')
     : undefined;
 
   return {

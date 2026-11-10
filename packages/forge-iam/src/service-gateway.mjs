@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertClientAuthCurrent } from './client-auth.mjs';
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
-import { normalizeGatewayBaseURL } from './managed-models.mjs';
+import { normalizeGatewayBaseURL } from './model-options.mjs';
 import { StoreError } from './store.mjs';
 import { addSeconds, nowIso, safeMessage } from './service-helpers.mjs';
 
@@ -130,12 +130,12 @@ export function createServiceGateway(env) {
     }
     const address = record.credential.baseURL ?? config.managedModels?.baseURL;
     if (!address) throw new IamError('IAM_GATEWAY_URL_INVALID', '请先设置网关地址。');
-    const baseURL = normalizeGatewayBaseURL(address, config.allowInsecureHttp);
+    const baseURL = normalizeGatewayBaseURL(address);
     return { key: resolved.value, baseURL, generation: record.credential.writeOperationId ?? null };
   }
 
   async function saveCredential({ key: value, deviceLabel, baseURL: address } = {}) {
-    const baseURL = address === undefined ? undefined : normalizeGatewayBaseURL(address, config.allowInsecureHttp);
+    const baseURL = address === undefined ? undefined : normalizeGatewayBaseURL(address);
     ctx.assertExclusive();
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     bumpGeneration();

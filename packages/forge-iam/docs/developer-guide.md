@@ -41,9 +41,12 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `httpTimeoutMs` | `10000` | 协议请求超时参数；刷新与退出撤销请求取该值和 5000ms 的较小值，不是整个操作总时限。 |
 | `logoutMode` | `local` | `local` 尽力撤销并本地退出；`rp` 还可生成浏览器登出 URL，不保证单授权或全局 SSO 生命周期闭环。 |
 | `requireExclusive` | `true` | 发现官方账号服务残留时拒绝就绪和相关操作。 |
-| `allowInsecureHttp` | `false` | 仅测试可开启；也只允许 loopback 上的 HTTP。 |
 
-显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。协议端点默认要求 HTTPS；开启 `allowInsecureHttp` 也仅放行 `localhost`、`127.0.0.1` 或 `::1`。生产回调必须与 IAM 预注册的精确 URI 一致；这里没有已验证的生产配置模板。
+登录时必须取得可用的实时回调 Origin：省略 `callbackPort` 时取宿主 `webServer` Origin，配置后取已绑定回环监听的 Origin，两者不互相回落。即使显式配置 `redirectUri`，其 Origin 也必须与所选实时 Origin 相等；不相等以 `IAM_CONFIG_INVALID` 拒绝。所选 Origin 缺失、获取异常或不是有效 HTTP(S) 地址时，以 `IAM_CALLBACK_UNAVAILABLE` 拒绝登录，不生成授权链接。复用进行中的登录链接前重新检查回调地址；来源失效或变更时取消原尝试，旧回调不得继续使用。
+
+含旧配置项 `allowInsecureHttp` 的有效 profile 仍可使用；该项按未知键忽略，不出现在规范化结果中。新配置不得设置该项，调用方不得依赖其开关行为。
+
+显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。协议端点和网关地址接受 HTTP 或 HTTPS；HTTP 不提供传输加密或端点身份认证，令牌、客户端 secret、网关 Key 与业务内容可能被窃取或篡改，OIDC 公钥经 HTTP 获取时签名校验也不能防止网络替换公钥。回调须符合 IAM 登记规则；这里没有已验证的生产配置模板。
 
 所有模式强制 PKCE S256，不能关闭。实际服务已接入隔离 confidential 的授权码、刷新、有效 AT、V2 恢复、认证撤销与回调清理；仅具体受信 source/credentials/精确 binding 的独立认可才允许。真实 apply 不传 getClientSecretSource/verifyClientSecretSource；缺失、伪造或异步认可在构造或使用前拒绝，不发送带凭据 POST。配置通过不等于真实来源可用。
 
@@ -281,8 +284,7 @@ DSH_WEB_ORIGIN=http://127.0.0.1:<dsh-port> node packages/forge-iam/scripts/mock-
   "jwksUri": "http://127.0.0.1:<mock-port>/jwks",
   "revocationEndpoint": "http://127.0.0.1:<mock-port>/revoke",
   "clientId": "dsh-desktop",
-  "redirectUri": "http://127.0.0.1:<dsh-port>/iam/callback",
-  "allowInsecureHttp": true
+  "redirectUri": "http://127.0.0.1:<dsh-port>/iam/callback"
 }
 ```
 
@@ -347,7 +349,7 @@ SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩�
 
 新增同源 `GET /api/forge-iam/models`，在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。该入口是用户主动刷新，直接发起一次目录同步。`modelAccess` 提供目录 `state`、`error`、`stale`、`retryAt`、`syncedAt`、`models` 及已保存地址；`stale` 表示列表仍是上次成功目录、网关此后未连上，`retryAt` 是下一次自动重试时间（不可重试的失败为空），`syncedAt` 是最近一次成功时间。它不是网关授权证明：调用仍按 `permit()` 与启用集合裁决。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际，每次通过 `resolveToken()` 复查会话及 Key owner，异步读取后复查生命周期；令牌不发往网关。
 
-[模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方与目录外模型。目录请求带宿主 `attributionHeaders()`，只请求标准 `/v1/models`，禁用重定向、限制响应大小与数量、去重校验 ID。同步失败保留上次目录并标记 `stale`：可重试的失败（连接、超时、限流）同时保留适配器，按 2/5/15/30/60 秒退避；不可重试的失败（凭证被拒、目录非法）保留目录但关闭模型调用表面，避免每次调用都打到网关再失败；身份或网关变化、显式退出才清空。地址/Key/身份变化、显式退出与令牌到期撤销旧代际；本地在途流收到 abort，迟到目录和内容不交付。展示用目录不随访问令牌过期清空：同一主体与网关下保留列表并以 `stale` 标注，调用仍被 `IAM_LOGIN_REQUIRED` 拒绝直到会话恢复。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 `200000`（`200K`）上下文窗口与 `64000`（`64K`）最大输出本地容量默认值，不宣称为网关实际上限。
+[模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方与目录外模型。目录请求带宿主 `attributionHeaders()`，只请求 `${baseURL}/models`，禁用重定向、限制响应大小与数量、去重校验 ID；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。同步失败保留上次目录并标记 `stale`：可重试的失败（连接、超时、限流）同时保留适配器，按 2/5/15/30/60 秒退避；不可重试的失败（凭证被拒、目录非法）保留目录但关闭模型调用表面，避免每次调用都打到网关再失败；身份或网关变化、显式退出才清空。地址/Key/身份变化、显式退出与令牌到期撤销旧代际；本地在途流收到 abort，迟到目录和内容不交付。展示用目录不随访问令牌过期清空：同一主体与网关下保留列表并以 `stale` 标注，调用仍被 `IAM_LOGIN_REQUIRED` 拒绝直到会话恢复。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 `200000`（`200K`）上下文窗口与 `64000`（`64K`）最大输出本地容量默认值，不宣称为网关实际上限。
 
 宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务。默认模型保持严格只读，不自动保存。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出，不自动重放失败请求。
 

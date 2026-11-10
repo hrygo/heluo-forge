@@ -12,7 +12,6 @@ function configFor(mock, overrides = {}) {
     userInfoEndpoint: `${mock.issuer}/userinfo`,
     clientId: mock.clientId,
     redirectUri: 'http://127.0.0.1:4567/iam/callback',
-    allowInsecureHttp: true,
     refreshSkewSeconds: 60,
     attemptTimeoutSeconds: 30,
     httpTimeoutMs: 5000,

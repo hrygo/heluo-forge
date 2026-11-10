@@ -8,7 +8,7 @@ const config = {
   issuer: 'https://iam.example', authorizationEndpoint: 'https://iam.example/authorize',
   tokenEndpoint: 'https://iam.example/token', jwksUri: 'https://iam.example/jwks',
   revocationEndpoint: 'https://iam.example/revoke', clientId: 'test',
-  redirectUri: 'http://127.0.0.1:4567/iam/callback', allowInsecureHttp: true,
+  redirectUri: 'http://127.0.0.1:4567/iam/callback',
   refreshSkewSeconds: 7200,
 };
 

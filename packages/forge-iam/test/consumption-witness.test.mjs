@@ -33,12 +33,13 @@ async function harness(t, mode = 'public', extra = {}) {
   const binder = providerBinder(credentials);
   const fixture = method ? createClientSecretFixture(credentials, { issuer: mock.issuer, clientId: mock.clientId, method, value }) : undefined;
   const config = { ...mock.endpoints, clientId: mock.clientId, ...fixture?.config,
-    redirectUri: 'http://127.0.0.1:4567/iam/callback', allowInsecureHttp: true, ...extra.config };
+    redirectUri: 'http://127.0.0.1:4567/iam/callback', ...extra.config };
   let source;
   let registeredIam;
   let unregistered = 0;
   const options = { ...fixture?.options, getCredentials: binder.getCredentials,
     getCredentialsBindingScope: binder.getCredentialsBindingScope,
+    getOrigin: () => 'http://127.0.0.1:4567',
     verifyAtomicStore: (candidate) => candidate === credentials,
     verifyWitnessBindings(candidate, secretSource, scope, readers) {
       const common = binder.accepts(candidate, readers) && Object.isFrozen(scope) && Object.isFrozen(readers)
@@ -287,7 +288,7 @@ test('old V1 without session identity may restore existing public semantics but 
 
 test('missing witness opt-in never probes private binding getter properties in ordinary service paths', async (t) => {
   const h = await harness(t);
-  const options = { credentials: h.credentials, verifyAtomicStore: (candidate) => candidate === h.credentials };
+  const options = { credentials: h.credentials, getOrigin: () => 'http://127.0.0.1:4567', verifyAtomicStore: (candidate) => candidate === h.credentials };
   for (const key of ['getCredentialsBindingScope', 'getClientSecretBindingScope', 'verifyWitnessBindings']) {
     Object.defineProperty(options, key, { get() { assert.fail(`ordinary path probed ${key}`); } });
   }

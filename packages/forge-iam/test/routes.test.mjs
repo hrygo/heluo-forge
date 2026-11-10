@@ -96,7 +96,7 @@ test('callback route passes the live origin and exact path to the real service',
   const origin = 'http://127.0.0.1:4567';
   const config = validateConfig({
     ...mock.endpoints, clientId: mock.clientId,
-    redirectUri: `${origin}/iam/callback`, allowInsecureHttp: true,
+    redirectUri: `${origin}/iam/callback`,
   }).value;
   const iam = createIamService(config, { credentials, getOrigin: () => origin });
   const handler = routes(iam, { getOrigin: () => origin });
