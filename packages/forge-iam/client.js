@@ -1951,10 +1951,10 @@ window.__ModuleLoader__.load({
           h('input', {
             type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
             value: credential.baseURL ?? gateway.baseURL ?? view.modelAccess?.baseURL ?? '',
-            placeholder: 'https://gateway.example/v1', disabled: credential.saving || viewBarrier.current.pending,
+            placeholder: 'https://gateway.example', disabled: credential.saving || viewBarrier.current.pending,
             onChange: (event) => setCredential((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle
           }),
-          h('span', { style: muted }, '填写网关提供的地址；修改地址时请重新输入对应的个人访问凭证。'),
+          h('span', { style: muted }, '按网关提供的完整地址填写，包括所需的路径；修改地址时请重新输入对应的个人访问凭证。'),
         ),
         hasDraftChanges
           ? h('div', { role: 'status', className: 'fiam-unsaved-banner' },
@@ -4153,10 +4153,11 @@ window.__ModuleLoader__.load({
             h('input', {
               type: 'url', 'aria-label': '网关地址', autoComplete: 'off',
               value: state.baseURL ?? state.view?.gatewayCredential?.baseURL ?? state.view?.modelAccess?.baseURL ?? '',
-              placeholder: 'https://gateway.example/v1', disabled: state.saving,
+              placeholder: 'https://gateway.example', disabled: state.saving,
               onChange: (event) => setState((current) => ({ ...current, baseURL: event.target.value })), style: inputStyle,
             }),
           ),
+          h('span', { style: muted }, '按网关提供的完整地址填写，包括所需的路径。'),
           h('label', { style: fieldLabel }, '个人访问凭证', h('input', {
             type: 'password',
             value: state.keyValue,
