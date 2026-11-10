@@ -22,7 +22,10 @@ function stepScript(name) {
 
 async function withGitHub(run) {
   const state = {
-    pr: { state: 'open', head: { sha: head, repo: { full_name: 'corp/example' } }, base: { sha: base } },
+    pr: { state: 'open', head: { sha: head, repo: { full_name: 'corp/example' } }, base: { sha: base, ref: 'main', repo: { full_name: 'corp/example' } } },
+    refs: { main: base },
+    refStatus: 200,
+    refResponse: undefined,
     requests: [],
     postStatus: 200,
     dismissStatus: 200,
@@ -34,6 +37,7 @@ async function withGitHub(run) {
     headAfterPost: undefined,
     headAfterReviewList: undefined,
     headAfterCommentList: undefined,
+    baseAfterCommentList: undefined,
     headAfterDismiss: undefined,
   };
   const server = createServer(async (request, response) => {
@@ -47,12 +51,17 @@ async function withGitHub(run) {
     const page = Number(url.searchParams.get('page') ?? '1');
     if (request.method === 'GET' && path === '/repos/corp/example/pulls/42') {
       response.end(JSON.stringify(state.pr));
+    } else if (request.method === 'GET' && path.startsWith('/repos/corp/example/git/ref/heads/')) {
+      const ref = decodeURIComponent(path.slice('/repos/corp/example/git/ref/heads/'.length));
+      response.statusCode = state.refStatus === 200 && !(ref in state.refs) ? 404 : state.refStatus;
+      response.end(JSON.stringify(state.refResponse ?? { ref: `refs/heads/${ref}`, object: { type: 'commit', sha: state.refs[ref] } }));
     } else if (request.method === 'GET' && path === '/repos/corp/example/pulls/42/reviews') {
       response.end(JSON.stringify(state.reviews.slice((page - 1) * 100, page * 100)));
       if (state.headAfterReviewList) state.pr.head.sha = state.headAfterReviewList;
     } else if (request.method === 'GET' && path === '/repos/corp/example/issues/42/comments') {
       response.end(JSON.stringify(state.comments.slice((page - 1) * 100, page * 100)));
       if (state.headAfterCommentList) state.pr.head.sha = state.headAfterCommentList;
+      if (state.baseAfterCommentList) state.refs.main = state.baseAfterCommentList;
     } else if (request.method === 'GET' && /^\/repos\/corp\/example\/actions\/runs\/\d+\/jobs$/u.test(path)) {
       const runId = path.split('/').at(-2);
       const jobs = state.jobs[runId] ?? [];
@@ -111,7 +120,10 @@ async function execute(name, env) {
 async function capture(env) {
   await execute('Capture PR revision', env);
   const output = await readFile(env.GITHUB_OUTPUT, 'utf8');
-  return Object.fromEntries(output.trim().split('\n').map((line) => line.split('=')));
+  return Object.fromEntries(output.trim().split('\n').map((line) => {
+    const separator = line.indexOf('=');
+    return [line.slice(0, separator), line.slice(separator + 1)];
+  }));
 }
 
 async function submit(env, revision, review) {
@@ -120,6 +132,7 @@ async function submit(env, revision, review) {
     REVIEW_RESULT: review,
     REVIEWED_HEAD: revision.head,
     REVIEWED_BASE: revision.base,
+    REVIEWED_BASE_REF: revision.base_ref,
     REVIEW_STARTED_AT: revision.started,
   });
 }
@@ -247,9 +260,96 @@ test('a changed head or base reports an out-of-date review', async () => {
     state.pr.head.sha = 'c'.repeat(40);
     await assert.rejects(submit(env, revision, '{"merge_recommendation":"changes_required"}'));
     state.pr.head.sha = head;
-    state.pr.base.sha = 'd'.repeat(40);
+    state.refs.main = 'd'.repeat(40);
     await assert.rejects(submit(env, revision, '{"merge_recommendation":"changes_required"}'));
     assert.equal(state.requests.filter((request) => request.method === 'POST').length, 0);
+  });
+});
+
+test('capture uses the current branch tip when the PR base SHA is stale', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.pr.base.sha = 'c'.repeat(40);
+    const revision = await capture(env);
+    assert.equal(revision.base, base);
+    assert.equal(revision.base_ref, 'main');
+    state.pr.base.sha = 'd'.repeat(40);
+    await submit(env, revision, '{"merge_recommendation":"no_concerns_found"}');
+  });
+});
+
+test('a target branch advance is detected even when the PR base SHA is unchanged', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    state.refs.main = 'd'.repeat(40);
+    await assert.rejects(submit(env, revision, '{"merge_recommendation":"no_concerns_found"}'), /PR revision changed during review/u);
+    assert.equal(state.pr.base.sha, base);
+  });
+});
+
+test('retargeting to another branch with the same SHA invalidates a review', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    state.pr.base.ref = 'release';
+    state.refs.release = base;
+    await assert.rejects(submit(env, revision, '{"merge_recommendation":"no_concerns_found"}'), /PR revision changed during review/u);
+  });
+});
+
+test('target branch names with slashes and equals signs are captured safely', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.pr.base.ref = 'release/candidate=1';
+    state.refs[state.pr.base.ref] = base;
+    const revision = await capture(env);
+    assert.equal(revision.base_ref, state.pr.base.ref);
+    assert.equal(revision.base, base);
+    await submit(env, revision, '{"merge_recommendation":"no_concerns_found"}');
+  });
+});
+
+test('missing, unreadable or invalid target branch references fail closed', async () => {
+  await withGitHub(async ({ state, env }) => {
+    for (const status of [403, 404, 500]) {
+      state.refStatus = status;
+      await assert.rejects(capture(env));
+    }
+    state.refStatus = 200;
+    state.refs.main = 'invalid-sha';
+    await assert.rejects(capture(env));
+    state.refs.main = base;
+    for (const reference of [
+      { ref: 'refs/heads/other', object: { type: 'commit', sha: base } },
+      { ref: 'refs/heads/main', object: { type: 'tag', sha: base } },
+      { ref: 'refs/heads/main', object: {} },
+    ]) {
+      state.refResponse = reference;
+      await assert.rejects(capture(env));
+    }
+    state.refResponse = undefined;
+    state.pr.base.ref = 'main\ninvalid';
+    await assert.rejects(capture(env));
+    state.pr.base.ref = 'main';
+    state.pr.base.repo.full_name = 'other/repository';
+    await assert.rejects(capture(env));
+  });
+});
+
+test('an unreadable target branch during review fails closed', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    state.refStatus = 403;
+    await assert.rejects(submit(env, revision, '{"merge_recommendation":"no_concerns_found"}'), /Cannot verify target branch \(HTTP 403\)/u);
+  });
+});
+
+test('a target branch advance while checking synchronized comments invalidates the review', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const updatedAt = new Date(Date.now() + 1000).toISOString();
+    for (const marker of ['pr-agent:describe:persistent', 'pr-agent:review:full']) {
+      state.comments.push({ user: { login: 'github-actions[bot]' }, updated_at: updatedAt, body: `<!-- ${marker} -->` });
+    }
+    state.baseAfterCommentList = 'd'.repeat(40);
+    await assert.rejects(submit({ ...env, EVENT_ACTION: 'synchronize' }, revision, '{"merge_recommendation":"no_concerns_found"}'), /PR revision changed during review/u);
   });
 });
 
