@@ -161,6 +161,10 @@ function writeChecksum(header) {
  * 在 Unix 侧看起来"bin 不可执行"。这里按字节改头部而不是另起一套打包器：条目内容、
  * 顺序、大小与 pax 记录都不动，只把 `mode` 字段和校验和改对。
  *
+ * `normalizePath` 会剥掉 ustar 头里的 `package/` 前缀，所以比对的是相对包根的路径；为了
+ * 不把前缀约定写死在调用方，头部原始路径也参与比对。声明了却一个条目都没匹配到（路径
+ * 拼错、包被 pack 排除）直接报错，避免"补位静默无操作、Unix 侧照旧拒绝"。
+ *
  * @param {Uint8Array} source gzip 字节
  * @param {Set<string>} executablePaths 相对包根的路径
  * @returns {Buffer} 新的 gzip 字节
@@ -174,6 +178,7 @@ export function withExecutableModes(source, executablePaths) {
     fail('not a gzip stream');
   }
   const patched = Buffer.from(tar);
+  const missing = new Set(executablePaths);
   let offset = 0;
   let pax = {};
   let changed = 0;
@@ -197,16 +202,25 @@ export function withExecutableModes(source, executablePaths) {
       continue;
     }
     if (typeflag !== '0') fail(`unsupported type "${typeflag}" ("${name}")`);
-    const entryPath = normalizePath(pax.path ?? (prefix === '' ? name : `${prefix}/${name}`));
+    const rawPath = pax.path ?? (prefix === '' ? name : `${prefix}/${name}`);
+    const entryPath = normalizePath(rawPath);
     pax = {};
     const mode = readOctal(header, 100, 8, 'mode');
-    if (executablePaths.has(entryPath) && (mode & 0o100) === 0) {
+    const declared = executablePaths.has(entryPath) || executablePaths.has(rawPath);
+    if (!declared) {
+      offset = bodyStart + padded(size);
+      continue;
+    }
+    missing.delete(entryPath);
+    missing.delete(rawPath);
+    if ((mode & 0o100) === 0) {
       writeOctal(header, 100, 8, 0o755);
       writeChecksum(header);
       changed += 1;
     }
     offset = bodyStart + padded(size);
   }
+  if (missing.size > 0) fail(`tar archive has no entry for declared executable ${[...missing].join(', ')}`);
   if (changed === 0) return Buffer.from(source);
   return gzipSync(patched);
 }
