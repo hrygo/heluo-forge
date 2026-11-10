@@ -248,7 +248,7 @@
   ℹ pass 8
   ℹ fail 0
   ```
-- **预期关键行**（取证环境：`E-TARGET`，未执行）：`tests 8 / pass 8 / fail 0`，退出码 `0`。
+- **预期关键行**（取证环境：`E-TARGET`，未执行）：全部用例通过、`fail 0`，退出码 `0`；用例总数以当前测试输出为准。
 - **退出码**：`0` 全绿；非 0 → `FAIL`。
 - **失败分支**：任一用例失败 → `FAIL`，停止本段：说明核验器本身不可信，**不得**继续用 S1.3 的结果宣称产物通过；回报打包负责人。
 - **手工篡改旁证**（可选，执行后必须还原）：对 tarball 副本改 1 字节后重跑 S1.3，预期 `exit 1` 且首错形如 `package/…/client.js: sha256 mismatch (manifest <a> vs tarball <b>)`；本机 2026-11-06 实测该形态为 `bundle: failed with 3 error(s); first: package/node_modules/@heluo/forge-devops/client.js: sha256 mismatch (…)`（含 tarball sha/bytes 连带差异）。**只改副本**，原产物不动。
@@ -383,6 +383,20 @@
 ## 3. 安装（S3）
 
 > 本段起为**真实 profile 操作**。本机（`E-LOCAL`）按 PRD §8 纪律**不**把企业包装入真实 profile，故 S3–S7 的实装命令在本机一律 `NOT RUN`（原因类别 `权限`），其可离线验证的等价面由 S5.1/S5.2 承担；目标机执行后回填 `目标机实测`。
+
+### S3.0 原生凭据适配器试点前提
+
+Windows/Linux 的原生适配器仍属未审核样机。企业默认补丁不启用试点开关，挂载时会以 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED` 拒绝；addon 已随包不代表 profile 可以直接启动或具备生产资格。仅在非生产试点 profile 上，确认接受该限制后，叠加独立补丁：
+
+```yaml
+- id: heluo-credentials-keychain
+  config:
+    allowUnvettedPlatformAdapter: true
+```
+
+覆盖层替换整个 `config`，不会逐字段合并；若需非默认 `service` 或 `accountPrefix`，须在此层一并写全。试点结束后移除此覆盖层，即恢复默认拒绝；不得改企业默认补丁或重新启用官方明文凭据行。此开关只允许试点取证，不表示适配器已审核或可用于生产。
+
+Windows 目标机须具备 Microsoft Visual C++ 2015–2022 Redistributable；Linux 目标机须有可用的 Secret Service 会话和集合，且系统运行库满足对应 addon 要求，详见[凭据包平台前提](../../../packages/forge-credentials-keychain/README.md)。目标机的加载、读写及重启后持久性仍须实测并按实际结果记账；缺少前提时停止依赖该适配器的步骤，不以 CI 结果替代目标机证据。
 
 ### S3.1 前置：`dsh plugin` 的 pnpm 转发可用
 
@@ -877,6 +891,10 @@
 | 篡改副本 1 字节后 `pnpm verify:bundle <tmp> --manifest <json>` | PASS | E-LOCAL | 2026-11-06 | exit 1，`failed with 3 error(s); first: …/client.js: sha256 mismatch` |
 | `pnpm verify:bundle <tgz> --manifest <不存在>` | PASS | E-LOCAL | 2026-11-06 | exit 2，`bundle: ENOENT: …` |
 | `node --test tests/bundle-verify.test.mjs` | PASS | E-LOCAL | 2026-11-06 | `tests 8 / pass 8 / fail 0`，exit 0 |
+| `tar -tzf <outdir>/heluo-forge-enterprise-0.1.0.tgz \| grep 'vendor/' \| sort` | NOT RUN | E-TARGET | — | 原因：平台；目标机按 S1.6 记账 |
+| `tar -tzf <outdir>/heluo-forge-enterprise-0.1.0.tgz \| grep -c 'vendor/.*keyring.node'` | NOT RUN | E-TARGET | — | 原因：平台；目标机按 S1.6 记账 |
+| `node scripts/fetch-native-keyring.mjs --check` | NOT RUN | E-TARGET | — | 原因：平台；目标机构建前按 S2.0 记账 |
+| `node scripts/fetch-native-keyring.mjs` | NOT RUN | E-TARGET | — | 原因：平台；需要暂存时按 S2.0 记账 |
 | `pnpm build:enterprise artifacts/release-a` | PASS | E-LOCAL | 2026-11-06 | exit 0，`files: 124`，`sha256 c756e6…3cc5`，写出 manifest+sums |
 | `pnpm build:enterprise artifacts/release-b` | PASS | E-LOCAL | 2026-11-06 | exit 0，`sha256` 与 release-a **相同** |
 | `diff <a>/bundle-manifest.json <b>/bundle-manifest.json` | PASS | E-LOCAL | 2026-11-06 | 无输出，exit 0（两次构建逐字节相同） |
