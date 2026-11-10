@@ -35,17 +35,18 @@ const PLATFORMS = [
 function fakeNativeModule() {
   const entries = new Map();
   class Entry {
-    constructor(_service, account, _options) {
+    constructor(service, account, _options) {
       this.account = account;
+      this.id = service.startsWith('~heluo-forge-v1-') ? `${service}\u0000${account}` : account;
     }
     getPassword() {
-      return entries.has(this.account) ? entries.get(this.account) : null;
+      return entries.has(this.id) ? entries.get(this.id) : null;
     }
     setPassword(value) {
-      entries.set(this.account, value);
+      entries.set(this.id, value);
     }
     deletePassword() {
-      return entries.delete(this.account);
+      return entries.delete(this.id);
     }
   }
   return { Entry };

@@ -78,12 +78,13 @@ const nativeStore = new Map();
 class FakeEntry {
   constructor(service, key) {
     this.id = `${service}\u0000${key}`;
+    this.account = key;
   }
   async getPassword() {
-    return nativeStore.get(this.id) ?? null;
+    return nativeStore.get(this.id)?.password ?? null;
   }
   async setPassword(value) {
-    nativeStore.set(this.id, value);
+    nativeStore.set(this.id, { account: this.account, password: value });
   }
   async deletePassword() {
     return nativeStore.delete(this.id);
@@ -92,10 +93,12 @@ class FakeEntry {
 const fakeModule = {
   Entry: FakeEntry,
   AsyncEntry: FakeEntry,
-  findCredentialsAsync: async (service) =>
+  findCredentialsAsync: async (service, filter) =>
     [...nativeStore.entries()]
-      .filter(([id]) => id.startsWith(`${service}\u0000`))
-      .map(([id, password]) => ({ account: id.slice(service.length + 1), password })),
+      .filter(([id, credential]) => filter === undefined
+        ? id.startsWith(`${service}\u0000`)
+        : credential.account.toLowerCase().startsWith(filter.slice(0, -1).toLowerCase()))
+      .map(([, credential]) => credential),
 };
 
 await runContract('native backend', {

@@ -6,17 +6,17 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-010 |
 | 文档名称 | 多端凭据存储实现与验收方案 |
-| 版本 | V0.6.3 |
+| 版本 | V0.6.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-06 |
+| 最后更新 | 2026-11-10 |
 | 门禁 | A 已实现；B 样机已实现（仅合成用例）；macOS 加密后端已本机与远程 SSH 取证；G1 关键存储能力待关闭；G2 目标未验 |
 | 文档层级 | L2 实施计划；范围由需求基线承担，接口与存储决策先回写对应设计再实施 |
 
-> 编制依据：2026-11-03 的 macOS 开发机与远程 Mac 安装试验、[#125](https://github.com/hrygo/heluo-forge/issues/125) 的 Linux 报告，以及同日对本仓库、已安装 DSH `0.2.1-rc.5`、`@napi-rs/keyring` **2.1.2** 发布元数据与固定提交源码的只读核对。目标 DSH 版本以根 [.dsh-version](<../../.dsh-version>) 为准；rc.5 读码不替代目标版本实测。Windows、UOS、麒麟尚无本方案的原生适配器实机证据。历史试验、读码与推断分别列出，不作为生产批准。
+> 编制依据：2026-11-03 的 macOS 开发机与远程 Mac 安装试验、[#125](https://github.com/hrygo/heluo-forge/issues/125) 的 Linux 报告，以及同日对本仓库、已安装 DSH `0.2.1-rc.5`、`@napi-rs/keyring` **2.1.2** 发布元数据与固定提交源码的只读核对。目标 DSH 版本以根 [.dsh-version](<../../.dsh-version>) 为准；rc.5 读码不替代目标版本实测。Windows ARM64 本地虚拟机有合成数据验证；Windows、UOS、麒麟尚无企业目标机完整验收证据。历史试验、读码与推断分别列出，不作为生产批准。
 >
 > 关联文档：[需求与场景基线](<../requirements/requirements-baseline.md>)、[总体架构](<../architecture/platform-architecture.md>)、[IAM 接入设计](<../design/plugins/forge-iam.md>)、[企业组合设计](<../design/plugins/forge-enterprise.md>)、[凭据包说明](<../../packages/forge-credentials-keychain/README.md>)、[IAM 联合变更计划](<2026-11-02-iam-gateway-atomic.md>)、[文档清单](<../DOCUMENT-REGISTER.md>)。
 
@@ -257,7 +257,7 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 
 目标机之外可以先确定为事实的部分来自上游源码（`@napi-rs/keyring` 2.1.2 及其锁定版本）：
 
-- **写入形态**：Windows 凭据 target 为 `{account}.{service}`，password 以 UTF-16LE 存入 blob；Linux 为 Secret Service 条目，属性含 `service`、`username`（`windows-native-keyring-store` 1.1.0 `src/cred.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`）。
+- **上游默认写入形态**：Windows 凭据 target 为 `{account}.{service}`，password 以 UTF-16LE 存入 blob；Linux 为 Secret Service 条目，属性含 `service`、`username`（`windows-native-keyring-store` 1.1.0 `src/cred.rs`、`dbus-secret-service-keyring-store` 1.0.1 `src/cred.rs`）。
 - **枚举**：Windows 走 `CredEnumerateW`，过滤串 `*.{service}`，account 取 `UserName`；Linux 按属性 `service` 搜索、account 取 `username`（`keyring-node` 2.1.2 `src/entry.rs`）。Windows 的后缀过滤会带回同后缀的他人条目，Linux 静默跳过缺 `username` 的条目。
 - **上限与编码**：Windows account ≤ 513 字节（UTF-8 计）、blob ≤ 2560 字节（UTF-16LE 计），超限由上游返回 `TooLong`；Linux 无库级上限（`src/utils.rs`）。
 - **失败模式**：Windows 命中集合中任一凭据 blob 奇数长或非法 UTF-16 时，整次枚举抛错且不返回部分结果。
@@ -266,7 +266,11 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 - **macOS 存储语义**：文档 `~/Library/Application Support/HeluoForge/credentials.json` 以 AES-256-GCM 加密，密钥为同目录 0600 文件；目录 0700；密钥权限或所有者不符、认证标签校验失败时显式报错，不回退明文。枚举由整篇解密后按 key 前缀过滤，不依赖系统枚举差异。
 - **加载前提**：Windows 产物直接导入 `VCRUNTIME140.dll`，缺 Microsoft Visual C++ 2015-2022 Redistributable 时 `require` 报“找不到模块”，与凭据逻辑无关；Linux 产物导入的符号版本最高为 x64 `GLIBC_2.15`、arm64 `GLIBC_2.17`，均低于 UOS 20 与麒麟的发行版基线。适配器在 Windows 上先探测该 DLL，缺失即以 `KEYCHAIN_UNAVAILABLE` 说明安装项。
 
-据此在无真机条件下已确定并实现：枚举按调用方前缀过滤、丢弃不可作 key 的 account、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝而非依赖平台报错。仍须目标机确认的只有运行态事实：真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
+Windows 新格式保留原始 account，并在内部 service 中加入原始 service 与 key 的精确字节摘要，避免大小写不同的键落到同一 target。单键操作先检查旧格式，存在即 `KEYCHAIN_LEGACY_RECORD`，不迁移或删除；枚举按调用方 key 前缀取候选，再逐键检查旧目标并回读当前 service 的新目标。绑定的 `withTarget` 在 Windows 构造时会写入空占位凭据，因此该路径不使用它。旧版与新版并发操作仍无跨进程互斥。
+
+**2026-11-10 本地验证**：Parallels Windows 11 ARM64 虚拟机上，Node v24.21.0 的合成数据探针完成标准 7/7、大小写区分、service 区分、旧新记录共存保护和删除清理。512 字节 ASCII account 在旧格式与新格式均可写，513 字节均被系统以错误 1734 拒绝，故上游的 513 字节检查不保证目标机写入成功。跨用户隔离未运行；Windows x64、企业 Windows 目标机、UOS 与麒麟未由本次验证覆盖。该记录不关闭 G1/G2，也不改变适配器默认门禁。
+
+已实现的共性边界包括按调用方前缀过滤、把上游无码错误归一为 `KEYCHAIN_OPERATION_FAILED`、按上述上限提前拒绝。Linux 丢弃不可作 key 的 account；Windows 对无法辨认的候选显式失败。仍须目标机确认真实集合中的持久性、跨进程与重启后可见性、枚举过滤的实际命中集合，以及安全软件拦截时的错误形态。
 
 ## 7. 执行清单、估算与命令
 

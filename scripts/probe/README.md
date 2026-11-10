@@ -163,8 +163,8 @@ node scripts/probe/native-keyring-store-probe.mjs [--service <名>] [--package <
 
 在目标机上直接对 OS 存储执行读、写、覆盖、跨进程读、删除与幂等删除，输出 JSON 供
 issue #182 归档。它不挂载 DSH profile、不联网、不打印存储值；探针键每次随机，跑完自行
-删除。`--enumeration` 额外调用 `findCredentials` 并报告命中集合大小，用来确认 Windows
-的后缀过滤实际带回了哪些条目。
+删除。`--enumeration` 通过 backend 枚举该探针前缀并报告命中数量。Windows 会先按 key
+前缀查找候选，再回读当前 service 的新目标；候选中的旧格式记录会阻断枚举。
 
 重启后的持久性用三段式：首次 `--keep` 留下键并记录 `key`，重启后用
 `--key <该键> --expect-present` 复读，再用 `--key <该键> --cleanup` 清除。换一个 OS

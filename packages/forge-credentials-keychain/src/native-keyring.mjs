@@ -13,8 +13,8 @@
 //     items), so the default is an explicit "unsupported" error rather than an
 //     empty list. Callers that accept that risk must pass
 //     `enumeration: 'find-credentials'`.
-//   - Keys are stored verbatim as the full backend key, so the provider's
-//     namespace prefixes and any other owner's records keep their meaning.
+//   - The full backend key remains the account. Windows uses a separate,
+//     case-stable target; ambiguous legacy targets are refused, not migrated.
 //   - Every call awaits the class the module exports: `AsyncEntry` does the
 //     store round-trip off the JS thread, while the synchronous `Entry` blocks
 //     the host event loop for the whole D-Bus / Security call. Async is
@@ -22,6 +22,7 @@
 //     so a module that only exports `Entry` keeps working.
 
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -55,6 +56,15 @@ const WINDOWS_BLOB_LIMIT_BYTES = 2560;
  * surfacing a platform error.
  */
 const WINDOWS_KEY_LIMIT_BYTES = 513;
+
+// Windows target names compare case-insensitively. The default builder uses
+// `${account}.${service}`: keep the original account for enumeration and put
+// exact-byte hashes in an internal service to distinguish case variants. `~`
+// is outside the public service grammar and this suffix contains no dot, so a
+// new target cannot equal any legacy target, even with dots inside the key.
+// Do not use `withTarget`: 2.1.2 writes an empty credential on construction.
+const windowsDigest = (value) => createHash('sha256').update(value, 'utf8').digest('hex');
+const windowsService = (service, key) => `~heluo-forge-v1-${windowsDigest(service)}-${windowsDigest(key)}`;
 
 /**
  * DLL the Windows addon imports besides the always-present UCRT
@@ -129,7 +139,7 @@ function defaultLoad(platform = process.platform, arch = process.arch) {
     if (runtime.ok !== true) {
       throw new KeychainBackendError(
         'KEYCHAIN_UNAVAILABLE',
-        `the Windows credential addon needs the Microsoft Visual C++ 2015-2022 Redistributable (x64); missing ${runtime.missing.join(', ')}. Install it, then retry; no plaintext fallback is performed.`,
+        `the Windows credential addon needs the Microsoft Visual C++ 2015-2022 Redistributable (${arch}); missing ${runtime.missing.join(', ')}. Install it, then retry; no plaintext fallback is performed.`,
       );
     }
   }
@@ -184,6 +194,9 @@ function assertKey(platform, key) {
   // never part of a legitimate key.
   if (/[\u0000-\u001f\u007f]/u.test(key)) {
     throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'backend key must not contain control characters');
+  }
+  if (platform === 'win32' && !key.isWellFormed()) {
+    throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'Windows backend key must be well-formed Unicode');
   }
   if (platform === 'win32' && Buffer.byteLength(key, 'utf8') > WINDOWS_KEY_LIMIT_BYTES) {
     throw new KeychainBackendError(
@@ -285,6 +298,7 @@ export function createNativeKeyringBackend(options = {}) {
   function entry(key) {
     assertKey(platform, key);
     const Entry = EntryClass();
+    if (platform === 'win32') return new Entry(windowsService(service, key), key);
     const bag = entryOptionsFor(platform);
     return bag === undefined ? new Entry(service, key) : new Entry(service, key, bag);
   }
@@ -298,9 +312,28 @@ export function createNativeKeyringBackend(options = {}) {
     }
   }
 
+  async function refuseLegacy(key) {
+    if (platform !== 'win32') return;
+    assertKey(platform, key);
+    const Entry = EntryClass();
+    const value = await call('legacy read', () => new Entry(service, key).getPassword());
+    if (value !== null && value !== undefined) {
+      throw new KeychainBackendError(
+        'KEYCHAIN_LEGACY_RECORD',
+        'a legacy Windows credential may be ambiguous; it is retained and requires explicit migration or re-entry under a fresh service',
+      );
+    }
+  }
+
   async function enumerate(prefix) {
     if (typeof prefix !== 'string' || prefix.length === 0) {
       throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'list requires a non-empty prefix');
+    }
+    if (platform === 'win32' && (!prefix.isWellFormed() || /[\u0000-\u001f\u007f]/u.test(prefix))) {
+      throw new KeychainBackendError('KEYCHAIN_KEY_INVALID', 'Windows list prefix must be well-formed and contain no control characters');
+    }
+    if (platform === 'win32' && prefix.includes('*')) {
+      throw new KeychainBackendError('KEYCHAIN_LIST_UNSUPPORTED', 'Windows cannot safely enumerate a prefix containing a wildcard');
     }
     if (enumeration === 'unsupported') {
       throw new KeychainBackendError(
@@ -315,27 +348,46 @@ export function createNativeKeyringBackend(options = {}) {
     if (typeof list !== 'function') {
       throw new KeychainBackendError('KEYCHAIN_LIST_UNSUPPORTED', 'native keyring does not export findCredentials');
     }
-    // Errors propagate: a locked or unreachable store must not look empty.
-    //
-    // Researched upstream semantics (keyring-node 2.1.2, keyring-core 1.0.1,
-    // windows-native-keyring-store 1.1.0, dbus-secret-service-keyring-store
-    // 1.0.1): Windows enumerates by the target suffix `*.<service>` and reads
-    // `UserName` as the account, so foreign credentials whose target ends with
-    // the service name are returned too; Linux searches the `service`
-    // attribute and reads the `username` attribute, skipping items without it.
-    // Both surfaces are therefore filtered here by the requested prefix, and
-    // accounts that cannot be keys are dropped instead of failing the scan.
-    const found = await call('enumeration', () => list.call(loaded, service));
+    // The binding exposes account and password but not the target name. On
+    // Windows the target starts with the account, so enumerate candidate
+    // accounts by prefix and then re-read this service's exact target. Other
+    // services may return the same account; their enumerated values are never
+    // trusted or returned. Linux searches by its service attribute.
+    const found = await call('enumeration', () => platform === 'win32'
+      ? list.call(loaded, service, `${prefix}*`)
+      : list.call(loaded, service));
     if (!Array.isArray(found)) {
       throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration did not return a list');
     }
     const entries = [];
+    const seen = new Set();
     for (const item of found) {
       const account = item?.account;
       if (typeof account !== 'string') {
         throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'native keyring enumeration returned an entry without an account');
       }
-      if (account.length === 0 || /[\u0000-\u001f\u007f]/u.test(account)) continue;
+      if (account.length === 0 || /[\u0000-\u001f\u007f]/u.test(account)) {
+        if (platform === 'win32') {
+          throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'Windows credential enumeration returned an invalid account');
+        }
+        continue;
+      }
+      if (platform === 'win32') {
+        if (seen.has(account)) continue;
+        seen.add(account);
+        assertKey(platform, account);
+        // Check legacy before the case-sensitive prefix test: the OS filter is
+        // case-insensitive and an old account may alias the requested prefix.
+        await refuseLegacy(account);
+        if (!account.startsWith(prefix)) continue;
+        const value = await call('read', () => entry(account).getPassword());
+        if (value === null || value === undefined) continue;
+        if (typeof value !== 'string') {
+          throw new KeychainBackendError('KEYCHAIN_OPERATION_FAILED', 'Windows credential enumeration returned a non-string value');
+        }
+        entries.push({ key: account, value });
+        continue;
+      }
       if (!account.startsWith(prefix)) continue;
       const password = item?.password;
       entries.push(typeof password === 'string' ? { key: account, value: password } : { key: account });
@@ -355,6 +407,7 @@ export function createNativeKeyringBackend(options = {}) {
     // read-modify-write atomicity that this module does not provide.
 
     async get(key) {
+      await refuseLegacy(key);
       const value = await call('read', () => entry(key).getPassword());
       // 2.1.2 returns null when absent; the provider only understands undefined.
       if (value === null || value === undefined) return undefined;
@@ -366,10 +419,12 @@ export function createNativeKeyringBackend(options = {}) {
 
     async set(key, value) {
       assertStorable(platform, value);
+      await refuseLegacy(key);
       await call('write', () => entry(key).setPassword(value));
     },
 
     async delete(key) {
+      await refuseLegacy(key);
       // `deletePassword` resolves true when something was removed, false when
       // nothing was there, and rejects when removal failed. Do not take `false`
       // on faith: if the store still answers a value afterwards, the credential
@@ -392,8 +447,8 @@ export function createNativeKeyringBackend(options = {}) {
     },
 
     async listEntries(prefix) {
-      // The native enumeration already carries both halves, so the provider can
-      // decode every record without one store round-trip per record.
+      // Linux enumeration carries both halves. Windows re-reads each candidate
+      // from this service's exact target before returning its value.
       return enumerate(prefix);
     },
 

@@ -10,6 +10,7 @@ import { createKeychainProvider } from '../src/provider.mjs';
  */
 function fakeModule({ initial = new Map(), credentials, failOn, getPasswordValue } = {}) {
   const entries = new Map(initial);
+  const targeted = new Map();
   const created = [];
   class Entry {
     constructor(service, account, options) {
@@ -17,20 +18,23 @@ function fakeModule({ initial = new Map(), credentials, failOn, getPasswordValue
       this.service = service;
       this.account = account;
       this.options = options;
+      this.targeted = service.startsWith('~heluo-forge-v1-');
+      this.id = this.targeted ? `${service}\u0000${account}` : account;
       created.push({ service, account, options });
     }
     getPassword() {
       if (failOn === 'get') throw new Error('synthetic store locked');
       if (getPasswordValue !== undefined) return getPasswordValue;
-      return entries.has(this.account) ? entries.get(this.account) : null;
+      const values = this.targeted ? targeted : entries;
+      return values.has(this.id) ? values.get(this.id) : null;
     }
     setPassword(value) {
       if (failOn === 'set') throw new Error('synthetic store denied');
-      entries.set(this.account, value);
+      (this.targeted ? targeted : entries).set(this.id, value);
     }
     deletePassword() {
       if (failOn === 'delete') throw new Error('synthetic store denied');
-      return entries.delete(this.account);
+      return (this.targeted ? targeted : entries).delete(this.id);
     }
   }
   const module = { Entry };

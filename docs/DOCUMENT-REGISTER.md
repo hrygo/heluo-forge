@@ -62,7 +62,7 @@
 | CORP-DSH-PLAN-007 | IAM 模型与工具隔离消费实施计划 | [plans/2026-11-02-iam-consumer-isolated.md](<plans/2026-11-02-iam-consumer-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 完整 source/mock 设计已获用户批准；不动真实环境 |
 | CORP-DSH-PLAN-008 | IAM 下一阶段收尾计划 | [plans/2026-11-03-iam-mock-closeout.md](<plans/2026-11-03-iam-mock-closeout.md>) | V0.6.0 | 草案 | 平台组（代拟） | 最小订阅source/mock已实现并定向验收；真实注册、真实Client接线与probe不开放 |
 | CORP-DSH-PLAN-009 | SDD 退出实施计划 | [plans/2026-11-03-sdd-retirement-implementation.md](<plans/2026-11-03-sdd-retirement-implementation.md>) | V0.2.1 | 草案 | 项目负责人（代拟） | 方案 A 已授权；步骤 1／2／4 已执行，制品演练与发布／回退待另行授权 |
-| CORP-DSH-PLAN-010 | 多端凭据存储实现与验收方案 | [plans/2026-11-03-credential-multiplatform.md](<plans/2026-11-03-credential-multiplatform.md>) | V0.6.3 | 草案 | 平台组（代拟） | A 已实现并在本机 macOS 取证（组合探针 18/18）；B 原生样机已实现、仅合成用例；G1 枚举/容量/事务/可信装配未关闭；G2 Windows/UOS/麒麟未验 |
+| CORP-DSH-PLAN-010 | 多端凭据存储实现与验收方案 | [plans/2026-11-03-credential-multiplatform.md](<plans/2026-11-03-credential-multiplatform.md>) | V0.6.4 | 草案 | 平台组（代拟） | A 已实现并在本机 macOS 取证（组合探针 18/18）；B 原生样机含 Windows ARM64 虚拟机合成数据验证；G1 枚举/容量/事务/可信装配未关闭；G2 企业目标机未完成 |
 | CORP-DSH-PLAN-011 | IAM 相关 Issue 整体实施计划 | [plans/2026-11-04-iam-issues-implementation.md](<plans/2026-11-04-iam-issues-implementation.md>) | V0.2.1 | 草案 | 平台组（代拟） | 仓库内工作项按里程碑实施；硬件与外部接口依赖项保持 BLOCKED |
 | CORP-DSH-PLAN-012 | IAM 双端验收矩阵（Windows / 麒麟） | [plans/2026-11-04-iam-dual-platform-acceptance.md](<plans/2026-11-04-iam-dual-platform-acceptance.md>) | V0.2.1 | 草案 | 平台组（代拟） | 远程 macbook 与 megacube 已做首次部署复验；完整验收仍待目标环境与 IAM 账号 |
 | CORP-DSH-PLAN-013 | IAM 侧边栏页脚企业账号启动器实施计划 | [plans/2026-11-04-iam-launcher.md](<plans/2026-11-04-iam-launcher.md>) | V0.1.0 | 草案 | 平台组（代拟） | 待负责人评审；覆盖 settings.launcher 挂载与盘龙盾徽头像 |
