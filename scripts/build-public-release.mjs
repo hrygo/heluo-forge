@@ -4,7 +4,7 @@
  *
  * Builds one cross-platform plugin tarball from a tagged clean checkout, refuses
  * to publish it unless it is configuration-neutral and license-declared, and
- * bundles the exact maker/installer toolchain the private flow requires.
+ * bundles the exact maker/initializer toolchain the private flow requires.
  *
  * The output directory is a delivery directory, never a source of truth: every
  * digest in `release-manifest.json` is recomputed from the bytes written here.
@@ -111,8 +111,7 @@ function releaseToolFiles(root) {
     'scripts/verify-enterprise-bundle.mjs',
     'scripts/build-public-release.mjs',
     'scripts/make-private-bundle.mjs',
-    'scripts/assemble-full-installer.mjs',
-    'scripts/verify-full-installer.mjs',
+    'scripts/init-enterprise-plugin.mjs',
     'scripts/fetch-native-keyring.mjs',
     'scripts/native-keyring.json',
   ];
@@ -138,7 +137,7 @@ function sourceGate(root, tracked) {
  *
  * @param {{root?: string, toolRoot?: string, output: string, tag?: string, license?: string,
  *   allowDirty?: boolean, includeSource?: boolean}} input
- * `toolRoot` is where the maker/installer toolchain is read from; it defaults to
+ * `toolRoot` is where the maker/initializer toolchain is read from; it defaults to
  * the built checkout but tests (and a release captain assembling tools from a
  * separate verified tree) can point it elsewhere. It is never shipped as source.
  */

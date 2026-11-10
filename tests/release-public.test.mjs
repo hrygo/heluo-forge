@@ -132,6 +132,16 @@ test('builds a configuration-neutral public release from a tagged checkout', (t)
     true,
     tools.map((entry) => entry.path).join(', '),
   );
+  assert.equal(
+    tools.some((entry) => entry.path === 'toolchain/scripts/init-enterprise-plugin.mjs'),
+    true,
+    'the employee-side initializer must ship with the toolchain',
+  );
+  assert.equal(
+    tools.some((entry) => /full-installer\.mjs$/u.test(entry.path)),
+    false,
+    'the retired full-installer assembler must not ship',
+  );
   assert.equal(tools.every((entry) => entry.path.startsWith('toolchain/')), true);
 });
 

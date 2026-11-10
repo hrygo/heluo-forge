@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-016 |
 | 文档名称 | IAM 机密客户端隔离开发设计 |
-| 版本 | V0.4.0 |
+| 版本 | V0.4.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -15,6 +15,8 @@
 | 最后更新 | 2026-11-10 |
 | 门禁 | 用户已批准完整 source/mock 设计；不开放真实来源与生产 |
 
+> 适用范围：企业交付采用公开客户端 + PKCE S256，本机密客户端路径不启用、不进入本期验收；本文只保留可选隔离路径的设计与证据。
+>
 > 编制依据：用户于 2026-11-02 选择管理员预置的隔离开发基线，并批准完整设计进入 source/mock 实施；同日只读 Inspect 核验 credentials 契约。设计的隔离服务实现已接入；本地验证不代表正式团队审批或供应商支持。
 >
 > 关联文档：[字段与错误契约](<../contracts/iam-client-auth-isolated.md>)、[现行 IAM 模块](<plugins/forge-iam.md>)、[需求基线](<../requirements/requirements-baseline.md>)、[开发约定](<../engineering/development-conventions.md>)。
