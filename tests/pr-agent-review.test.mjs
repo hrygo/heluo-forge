@@ -22,10 +22,12 @@ function stepScript(name) {
 
 async function withGitHub(run) {
   const state = {
-    pr: { state: 'open', head: { sha: head, repo: { full_name: 'corp/example' } }, base: { sha: base, ref: 'main', repo: { full_name: 'corp/example' } } },
+    pr: { state: 'open', changed_files: 1, head: { sha: head, repo: { full_name: 'corp/example' } }, base: { sha: base, ref: 'main', repo: { full_name: 'corp/example' } } },
     refs: { main: base },
     refStatus: 200,
     refResponse: undefined,
+    compareStatus: 200,
+    compareResponse: undefined,
     requests: [],
     postStatus: 200,
     dismissStatus: 200,
@@ -55,6 +57,9 @@ async function withGitHub(run) {
       const ref = decodeURIComponent(path.slice('/repos/corp/example/git/ref/heads/'.length));
       response.statusCode = state.refStatus === 200 && !(ref in state.refs) ? 404 : state.refStatus;
       response.end(JSON.stringify(state.refResponse ?? { ref: `refs/heads/${ref}`, object: { type: 'commit', sha: state.refs[ref] } }));
+    } else if (request.method === 'GET' && /^\/repos\/corp\/example\/compare\/[a-f0-9]{40}\.\.\.[a-f0-9]{40}$/u.test(path)) {
+      response.statusCode = state.compareStatus;
+      response.end(JSON.stringify(state.compareResponse ?? { status: 'ahead', base_commit: { sha: path.split('/').at(-1).split('...')[0] }, files: [] }));
     } else if (request.method === 'GET' && path === '/repos/corp/example/pulls/42/reviews') {
       response.end(JSON.stringify(state.reviews.slice((page - 1) * 100, page * 100)));
       if (state.headAfterReviewList) state.pr.head.sha = state.headAfterReviewList;
@@ -231,6 +236,43 @@ test('missing output fails only when a review was expected', async () => {
   });
 });
 
+test('an empty pull request may finish without structured review output', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.pr.changed_files = 0;
+    const revision = await capture(env);
+    const result = await submit(env, revision, '');
+    assert.match(result.stdout, /no changed files/iu);
+    assert.equal(state.requests.some((request) => request.method !== 'GET'), false);
+  });
+});
+
+test('empty-review output requires a verified empty diff and an unchanged target', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    for (const count of [1, null, undefined, '0']) {
+      state.pr.changed_files = count;
+      await assert.rejects(submit(env, revision, ''), /did not produce structured review output/u);
+    }
+    state.pr.changed_files = 0;
+    state.refStatus = 403;
+    await assert.rejects(submit(env, revision, ''), /Cannot verify target branch \(HTTP 403\)/u);
+  });
+});
+
+test('an empty PR file count must agree with an exact commit comparison', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.pr.changed_files = 0;
+    const revision = await capture(env);
+    state.compareResponse = { status: 'ahead', base_commit: { sha: base }, files: [{ filename: 'src/changed.js' }] };
+    await assert.rejects(submit(env, revision, ''), /did not produce structured review output/u);
+    state.compareResponse = { status: 'ahead', base_commit: { sha: base } };
+    await assert.rejects(submit(env, revision, ''), /Invalid PR comparison/u);
+    state.compareResponse = undefined;
+    state.compareStatus = 403;
+    await assert.rejects(submit(env, revision, ''), /Cannot verify PR comparison \(HTTP 403\)/u);
+  });
+});
+
 test('initial duplicate requests and unrelated comments cannot cancel an active review', () => {
   assert.doesNotMatch(workflow, /^concurrency:/mu);
   const concurrency = /\n    concurrency:\n([\s\S]*?)(?=\n    [a-z-]+:)/u.exec(workflow)?.[1] ?? '';
@@ -283,6 +325,57 @@ test('a target branch advance is detected even when the PR base SHA is unchanged
     state.refs.main = 'd'.repeat(40);
     await assert.rejects(submit(env, revision, '{"merge_recommendation":"no_concerns_found"}'), /PR revision changed during review/u);
     assert.equal(state.pr.base.sha, base);
+  });
+});
+
+test('an advancing target causes a bounded automatic refresh of the review', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const oldRevision = await capture(env);
+    const newBase = 'd'.repeat(40);
+    state.refs.main = newBase;
+    const output = '{"merge_recommendation":"no_concerns_found"}';
+    await submit({ ...env, PR_AGENT_ALLOW_RETRY: 'true' }, oldRevision, output);
+    assert.match(await readFile(env.GITHUB_OUTPUT, 'utf8'), /^retry=true$/mu);
+    const newRevision = await capture(env);
+    assert.equal(newRevision.base, newBase);
+    await submit(env, newRevision, output);
+    state.refs.main = 'e'.repeat(40);
+    await assert.rejects(submit(env, newRevision, output), /PR revision changed during review/u);
+  });
+});
+
+test('the workflow retries once with the same pinned PR-Agent and validates the new revision', () => {
+  const retry = workflow.split('      - name: Retry PR-Agent\n')[1]?.split('\n      - name: ')[0] ?? '';
+  assert.match(retry, /if: \$\{\{ steps\.validation\.outputs\.retry == 'true' \}\}/u);
+  assert.match(retry, /uses: the-pr-agent\/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b/u);
+  const recheck = workflow.split('      - name: Validate refreshed PR-Agent review\n')[1]?.split('\n      - name: ')[0] ?? '';
+  assert.match(recheck, /steps\.retry_revision\.outputs\.base/u);
+  assert.match(recheck, /steps\.pr_agent_retry\.outputs\.review/u);
+});
+
+test('retry never follows a changed head or retargeted PR', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const expected = { ...env, EXPECTED_HEAD: revision.head, EXPECTED_BASE_REF: revision.base_ref };
+    state.pr.head.sha = 'c'.repeat(40);
+    await assert.rejects(capture(expected), /PR revision changed before retry/u);
+    state.pr.head.sha = head;
+    state.pr.base.ref = 'release';
+    state.refs.release = base;
+    await assert.rejects(capture(expected), /PR revision changed before retry/u);
+  });
+});
+
+test('a retried pull request must refresh both persistent comments', async () => {
+  await withGitHub(async ({ state, env }) => {
+    const revision = await capture(env);
+    const output = '{"merge_recommendation":"no_concerns_found"}';
+    await assert.rejects(submit({ ...env, PR_AGENT_CHECK_REFRESH: 'true' }, revision, output), /summary and review were not both refreshed/u);
+    const updated = new Date(Date.now() + 1000).toISOString();
+    state.comments.push(...['pr-agent:describe:persistent', 'pr-agent:review:full'].map((marker) => ({
+      user: { login: 'github-actions[bot]' }, updated_at: updated, body: `<!-- ${marker} -->`,
+    })));
+    await submit({ ...env, PR_AGENT_CHECK_REFRESH: 'true' }, revision, output);
   });
 });
 
