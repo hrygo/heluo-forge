@@ -74,11 +74,25 @@ jobs:
           if (!response.ok) throw new Error(`Cannot read PR revision (HTTP ${response.status})`);
           const pr = await response.json();
           const head = pr.head?.sha;
-          const base = pr.base?.sha;
-          if (![head, base].every((sha) => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha))) {
+          const baseRef = pr.base?.ref;
+          if (typeof head !== 'string' || !/^[a-f0-9]{40}$/.test(head) ||
+              typeof baseRef !== 'string' || !baseRef || /[\u0000-\u0020\u007f]/u.test(baseRef) ||
+              pr.base?.repo?.full_name !== GITHUB_REPOSITORY) {
             throw new Error('Invalid PR revision');
           }
-          await appendFile(GITHUB_OUTPUT, `head=${head}\nbase=${base}\nstarted=${new Date().toISOString()}\n`);
+          // The PR's base.sha can remain at the merge base after the target branch advances.
+          const baseResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/${encodeURIComponent(baseRef)}`, {
+            headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!baseResponse.ok) throw new Error(`Cannot read target branch (HTTP ${baseResponse.status})`);
+          const reference = await baseResponse.json();
+          const base = reference.object?.sha;
+          if (reference.ref !== `refs/heads/${baseRef}` || reference.object?.type !== 'commit' ||
+              typeof base !== 'string' || !/^[a-f0-9]{40}$/.test(base)) {
+            throw new Error('Invalid target branch revision');
+          }
+          await appendFile(GITHUB_OUTPUT, `head=${head}\nbase=${base}\nbase_ref=${baseRef}\nstarted=${new Date().toISOString()}\n`);
           NODE
 
       - name: Run PR-Agent
@@ -140,11 +154,13 @@ jobs:
           REVIEW_RESULT: ${{ steps.pr_agent.outputs.review }}
           REVIEWED_HEAD: ${{ steps.revision.outputs.head }}
           REVIEWED_BASE: ${{ steps.revision.outputs.base }}
+          REVIEWED_BASE_REF: ${{ steps.revision.outputs.base_ref }}
           REVIEW_STARTED_AT: ${{ steps.revision.outputs.started }}
         run: |
           node --input-type=module <<'NODE'
           const { GH_TOKEN, GITHUB_API_URL, GITHUB_REPOSITORY, PR_NUMBER, EVENT_NAME, EVENT_ACTION, COMMENT_BODY,
-            PR_TITLE, PR_CREATED_AT, PR_UPDATED_AT, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEW_STARTED_AT } = process.env;
+            PR_TITLE, PR_CREATED_AT, PR_UPDATED_AT, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEWED_BASE_REF,
+            REVIEW_STARTED_AT } = process.env;
           if (!REVIEW_RESULT) {
             // Match the upstream ignored-title and incremental-review skips.
             const ignoredTitle = /^\[Auto\]/.test(PR_TITLE ?? '');
@@ -169,7 +185,8 @@ jobs:
             throw new Error('PR-Agent review recommendation is missing or unknown');
           }
           if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '') ||
-              ![REVIEWED_HEAD, REVIEWED_BASE].every((sha) => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha))) {
+              ![REVIEWED_HEAD, REVIEWED_BASE].every((sha) => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha)) ||
+              typeof REVIEWED_BASE_REF !== 'string' || !REVIEWED_BASE_REF || /[\u0000-\u0020\u007f]/u.test(REVIEWED_BASE_REF)) {
             throw new Error('Invalid reviewed PR revision');
           }
           const url = `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}`;
@@ -182,7 +199,21 @@ jobs:
               console.log('Skipping a fork or deleted head repository');
               process.exit(0);
             }
-            if (pr.state !== 'open' || pr.head?.sha !== REVIEWED_HEAD || pr.base?.sha !== REVIEWED_BASE) {
+            if (pr.state !== 'open' || pr.head?.sha !== REVIEWED_HEAD || pr.base?.ref !== REVIEWED_BASE_REF ||
+                pr.base?.repo?.full_name !== GITHUB_REPOSITORY) {
+              throw new Error('PR revision changed during review; summary and review may need to be refreshed');
+            }
+            const baseResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git/ref/heads/${encodeURIComponent(REVIEWED_BASE_REF)}`, {
+              headers,
+              signal: AbortSignal.timeout(15000),
+            });
+            if (!baseResponse.ok) throw new Error(`Cannot verify target branch (HTTP ${baseResponse.status})`);
+            const reference = await baseResponse.json();
+            if (reference.ref !== `refs/heads/${REVIEWED_BASE_REF}` || reference.object?.type !== 'commit' ||
+                typeof reference.object?.sha !== 'string' || !/^[a-f0-9]{40}$/.test(reference.object.sha)) {
+              throw new Error('Invalid target branch revision');
+            }
+            if (reference.object.sha !== REVIEWED_BASE) {
               throw new Error('PR revision changed during review; summary and review may need to be refreshed');
             }
           }
