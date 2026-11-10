@@ -9,7 +9,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { buildBundle } from '../scripts/build-enterprise-bundle.mjs';
-import { auditTarball, npmExecutable, parsePackOutput } from '../scripts/lib/bundle-rules.mjs';
+import { auditTarball, npmLaunch, parsePackOutput } from '../scripts/lib/bundle-rules.mjs';
 
 // 归属：docs/teamflow/20261029-r4-forge-gitee PRD AC-2 / AC-3 / AC-5（安装单元闭包、分发白名单、
 // 产物与工作区一致）与 AC-24 / AC-25（证据与登记是交付物的一部分）。
@@ -98,7 +98,8 @@ test('分发内容就是产物内容：源码、补丁层与 README，无测试�
     );
   }
 
-  const dryRun = spawnSync(npmExecutable(), ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+  const npm = npmLaunch();
+  const dryRun = spawnSync(npm.command, [...npm.prefix, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: packageDir,
     encoding: 'utf8',
   });

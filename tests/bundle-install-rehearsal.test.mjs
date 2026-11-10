@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,11 @@ const skip = dshReady && enabled ? false : `needs ${dsh} on PATH and npm (or DSH
 // Installation layout (desktop ASAR or Node CLI) and runtime profile are
 // independent. Exercise both built-in profiles for whichever host was selected.
 const profiles = process.env.DSH_HOST_PROBE_PROFILE ? [process.env.DSH_HOST_PROBE_PROFILE] : ['sdk', 'web'];
+
+test('structural rehearsal evidence does not claim the native resources were verified', () => {
+  const source = readFileSync(script, 'utf8');
+  assert.match(source, /nativeResources: 'not verified \(structural rehearsal build; not a release artifact\)'/u);
+});
 
 for (const profile of profiles) {
   test(`the bundle install/upgrade/uninstall/rollback rehearsal passes (${profile})`, { skip, timeout: 300_000 }, () => {

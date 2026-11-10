@@ -9,7 +9,7 @@
 |---|---|
 | 上游 | `@napi-rs/keyring` 2.1.2（keyring-rs 的 N-API 绑定） |
 | 许可 | MIT，随文件附 `LICENSE.third-party.md` |
-| 固定方式 | `scripts/native-keyring.json` 记录版本与 tarball integrity，`CHECKSUMS.json` 记录落地文件的 sha256 |
+| 固定方式 | `scripts/native-keyring.json` 记录版本与 tarball integrity，`CHECKSUMS.json` 记录 addon 和许可证的字节数与 sha256 |
 | 生成工具 | `scripts/fetch-native-keyring.mjs` |
 | integrity 交叉核对 | 四个 tarball 的 sha512 与 `registry.npmjs.org` 元数据一致（2026-11-06 核对） |
 | 对象头校验 | 按 triple 校验 PE/AMD64、PE/ARM64、ELF/x86-64、ELF/AArch64，防止清单钉错架构 |
@@ -39,9 +39,12 @@ node scripts/fetch-native-keyring.mjs            # 暂存四个交付目标
 node scripts/fetch-native-keyring.mjs --check    # 只校验 CHECKSUMS.json 与文件一致
 ```
 
-下载的每个 tarball 都会与 `scripts/native-keyring.json` 中的 integrity 比对，不一致立即
-中止且不写入任何文件。升级版本时同步修改版本号、integrity 与 `CHECKSUMS.json`，并重新
-跑实机取证，不得只改版本号。
+每个 tarball 解包前都会与 `scripts/native-keyring.json` 中的 integrity 比对，不一致即中止，
+已完成的其他目标可能仍保留在暂存目录。升级版本时同步修改版本号、integrity 与
+`CHECKSUMS.json`，并重新跑实机取证，不得只改版本号。
+
+记录须包含每个 addon 和许可证的字节数与摘要；缺少许可证摘要的旧记录不能通过当前校验，
+应按锁文件重新暂存并重新构建制品。
 
 ## 安全边界
 

@@ -3,7 +3,7 @@
 
 **适用**：`@heluo/forge-enterprise` 企业组合包（tarball + `bundle-manifest.json` + `SHA256SUMS`）在**企业内网目标机**上的安装、装载核对、功能抽查、升级/回退、卸载与证据归档。
 **基线**：`docs/teamflow/20261106-r2/PRD.md`（AC-5～AC-9）、`TECHNICAL.md` §2.4/§5.3、`AC-EVIDENCE-TEMPLATE.md`、`HOST-PROBE-DISPOSITION.md`。
-**版本**：v1 · 2026-11-06（代拟）。**状态**：S0–S2、S5（离线部分）、S8（本机可执行部分）已本机实测；S3、S4（真实安装面）、S6、S7 及全部目标 rc.3 专属项按实际执行回填，当前记 `NOT RUN`。
+**版本**：v2.2 · 2026-11-09（代拟）。**状态**：S0–S2、S5（离线部分）、S8（本机可执行部分）已本机实测；S3、S4（真实安装面）、S6、S7 及全部目标 rc.3 专属项按实际执行回填，当前记 `NOT RUN`。整包 SHA 和字节数以本目录自校验为准，并记录 Node/npm 版本；包内容与工具链不同时不以示例值作为判据。
 
 > **本手册不替代证据表**。每条命令执行后必须写入 `AC-EVIDENCE-TEMPLATE.md` 的明细块与汇总表；手册只提供“命令 + 预期 + 退出码 + 失败分支 + 取证环境”。
 
@@ -163,19 +163,19 @@
 
 - **命令**：
   ```sh
-  ls -l <outdir> && cat <outdir>/SHA256SUMS
+  ls -l <outdir> && cat <outdir>/SHA256SUMS && node --version && npm --version
   ```
-- **预期关键行**（取证环境：`E-LOCAL`，2026-11-06 实测，`<outdir>` = `artifacts/release-a`）：
+- **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，`<outdir>` = `artifacts/release-a`，含四组合 addon；下例仅为本机示例，字节数/SHA 随包内容与工具链变化）：
   ```text
-  -rw-r--r--  ...  186  ...  SHA256SUMS
-  -rw-r--r--  ...  25757 ... bundle-manifest.json
-  -rw-r--r--  ...  517348 ... heluo-forge-enterprise-0.1.0.tgz
-  c756e61e79a4f0ea62018d5c3eb87bb537d83a4623b15ab3069b478e9d153cc5  heluo-forge-enterprise-0.1.0.tgz
-  689936caaeaf73e7cee2e9391cfd295130457eecb40ebfb8b7ff9c24332e40f6  bundle-manifest.json
+  -rw-r--r--  ...  186     ... SHA256SUMS
+  -rw-r--r--  ...  29403   ... bundle-manifest.json
+  -rw-r--r--  ...  4849086 ... heluo-forge-enterprise-0.1.0.tgz
+  86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7  heluo-forge-enterprise-0.1.0.tgz
+  5c251873fa9b0f66e6cee25fc72e9425da0a8b57c25cd747f1b47d1f4aa6df1d  bundle-manifest.json
   ```
 - **退出码**：`0`。
 - **失败分支**：缺任一文件 → `FAIL`，停止本段（不得用 `verify:bundle` 无 manifest 模式冒充完整核验，也不得自行生成 sidecar 后宣称通过）。
-- **记账**：证据ID `E-AC02-02`；把两行 `SHA256SUMS` 原文粘进明细块。
+- **记账**：证据ID `E-AC02-02`；把两行 `SHA256SUMS` 原文与 `node --version`/`npm --version` 粘进明细块。整包 SHA 只用于本目录自洽与同工具链复现，不与手册示例逐字比对。
 
 ### S1.2 归档哈希自校验（GNU 两空格格式）
 
@@ -203,13 +203,14 @@
   ```sh
   pnpm verify:bundle <outdir>/heluo-forge-enterprise-0.1.0.tgz --manifest <outdir>/bundle-manifest.json
   ```
-- **预期关键行**（取证环境：`E-LOCAL`，2026-11-06 实测，退出码 `0`）：
+- **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，退出码 `0`；数值为本机示例，判据是与同目录 `SHA256SUMS` 自洽）：
   ```text
-  bundle: heluo-forge-enterprise-0.1.0.tgz | 124 files | 1694126 bytes | sha256 c756e61e79a4f0ea62018d5c3eb87bb537d83a4623b15ab3069b478e9d153cc5
+  bundle: heluo-forge-enterprise-0.1.0.tgz | 140 files | 12230489 bytes | sha256 86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7
   bundle: manifest ok (formatVersion 1, 6 packages)
   bundle: ok
   ```
-- **预期关键行**（取证环境：`E-TARGET`，未执行）：三行结构相同；`124 files`、`6 packages` 与 tarball 名/版本必须与交付清单逐字一致，`sha256` 与 `SHA256SUMS` 首行一致。
+- **机器可读旁路（可选）**：同一判据可加 `--json`，一次取全 ok / files / bytes / sha256 / entry / members / toolchain / errors 八个字段，退出码不变；证据要求按 JSON 归档时用它，不要靠解析文本输出拼字段。
+- **预期关键行**（取证环境：`E-TARGET`，未执行）：三行结构相同；`files` 数与 `packages` 数必须与交付清单一致（文件数含四组合 addon 与许可证；缺 addon 的坏产物实测为 `128 files`，见 S1.6），`sha256` 必须与**本目录** `SHA256SUMS` 首行一致；不与手册示例值比对。
 - **退出码**：`0` 一致（PASS）；`1` 存在差异或结构违规（FAIL）；`2` 用法/读取错误（FAIL 但先修命令）。
 - **失败分支**：
   - `1` 且首行差异为 `<path>: sha256 mismatch` → `FAIL`，**停止 S1 及后续安装**；保留 tarball+manifest 原件，转 S8 归档首错行；不得重打包后继续（重打包会掩盖来源问题）。
@@ -223,12 +224,13 @@
   ```sh
   pnpm verify:bundle <outdir>/heluo-forge-enterprise-0.1.0.tgz
   ```
-- **预期关键行**（取证环境：`E-LOCAL`，2026-11-06 实测，退出码 `0`）：
+- **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，退出码 `0`）：
   ```text
-  bundle: heluo-forge-enterprise-0.1.0.tgz | 124 files | 1694126 bytes | sha256 c756e61e79a4f0ea62018d5c3eb87bb537d83a4623b15ab3069b478e9d153cc5
+  bundle: heluo-forge-enterprise-0.1.0.tgz | 140 files | 12230489 bytes | sha256 86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7
   bundle: manifest not provided; structure rules only
   bundle: ok
   ```
+  （同上：数值为本机示例，判据是结构规则与退出码。）
 - **退出码**：`0` / `1` / `2`（含义同 S1.3）。
 - **失败分支**：与 S1.3 同，但**本条通过不能单独关闭 AC-2**（无 manifest 不校验逐文件哈希），备注必须写「仅结构规则」。
 - **记账**：证据ID `E-AC02-05`。
@@ -252,11 +254,43 @@
 - **手工篡改旁证**（可选，执行后必须还原）：对 tarball 副本改 1 字节后重跑 S1.3，预期 `exit 1` 且首错形如 `package/…/client.js: sha256 mismatch (manifest <a> vs tarball <b>)`；本机 2026-11-06 实测该形态为 `bundle: failed with 3 error(s); first: package/node_modules/@heluo/forge-devops/client.js: sha256 mismatch (…)`（含 tarball sha/bytes 连带差异）。**只改副本**，原产物不动。
 - **记账**：证据ID `E-AC03-01`（六负测）/`E-AC03-02`（手工篡改）。
 
+### S1.6 原生 addon 随包齐全性（产物侧，独立于构建）
+
+- **命令**：
+  ```sh
+  tar -tzf <outdir>/heluo-forge-enterprise-0.1.0.tgz | grep 'vendor/' | sort
+  tar -tzf <outdir>/heluo-forge-enterprise-0.1.0.tgz | grep -c 'vendor/.*keyring.node'
+  ```
+- **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，第二条输出 `4`）：`vendor/` 下恰好 10 条——`CHECKSUMS.json`、`README.md`，以及 `win32-x64-msvc`、`win32-arm64-msvc`、`linux-x64-gnu`、`linux-arm64-gnu` 各自的 `keyring.node` 与 `LICENSE.third-party.md`。
+- **退出码**：`0`；`grep -c` 计数为 `0` 时退出码 `1`（**本步正是靠这个 1 发现 issue #216 的缺陷形态**）。
+- **失败分支**：`keyring.node` < 4 或 `vendor/` 少于 10 条 → `FAIL`，停止本段。企业组合已禁用官方 `credentials` 行，缺 addon 时 profile 会在挂载期 `KEYCHAIN_UNAVAILABLE` 整体启动中止；不得用“目标机再补文件”绕过，退回打包负责人重做 S2。`verify:bundle` 对记录缺失、记录缺少许可证摘要、addon 或许可证的缺失与字节不符分别报错；须结合具体错误定位，不能仅以文件计数代替字节校验。
+- **记账**：证据ID `E-AC02-06`；粘贴两条命令的原文输出。
+
 ---
 
 ## 2. 目标机重建与比对（S2）
 
 > 目的：证明“交付的字节”能在目标工具链上重建。**同一工具链**才比较 tarball 字节 SHA-256；跨工具链（本机 v24.13.0 → 目标 v24.15.0）只比较**逐文件** sha256 与 manifest 结构。
+
+### S2.0 原生 addon 暂存与前置校验（构建前必做）
+
+> 四组合 addon 不入 Git（`vendor/<triple>/` 已被 `.gitignore` 忽略），干净检出必须先在**发布机**暂存。构建期已强制同一判据：缺任一条目时 `pnpm build:enterprise` 直接非零退出、不产制品（issue #216 的修复点一）。
+
+- **命令**：
+  ```sh
+  node scripts/fetch-native-keyring.mjs --check
+  ```
+- **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，退出码 `0`）：`native keyring: verified 4 staged addon(s)`
+- **首次或上游版本变化时**（需网络；内网可用 `HELUO_NATIVE_REGISTRY` 指向镜像）：
+  ```sh
+  node scripts/fetch-native-keyring.mjs
+  ```
+  预期四行 `staged <triple>/keyring.node (<bytes> bytes)`，末行 `native keyring: 4 addon(s) under packages/forge-credentials-keychain/vendor; registry <url>`。
+- **退出码**：`0`；缺文件、addon 或许可证的长度与哈希不符、对象头不符 → `1`。
+- **失败分支**：
+  - `staged file is missing` → 先执行上面的暂存命令；网络不可达 → `BLOCKED`（阻塞点：发布机无法获取固定版本 addon），**不得**跳过本步直接 S2.1（会得到缺 addon 的坏产物，构建现在也会拒绝）；
+  - `integrity mismatch` / `sha256 mismatch` / `recorded ... does not match the lock file` → `FAIL`：上游制品或记录漂移，保留输出并回报，**不得**手改 `CHECKSUMS.json`；记录缺少许可证摘要时按锁文件重新暂存并重新构建。
+- **记账**：证据ID `E-AC01-07`。
 
 ### S2.1 重建第一次
 
@@ -264,10 +298,10 @@
   ```sh
   pnpm build:enterprise <outdir>-a
   ```
-- **预期关键行**（取证环境：`E-LOCAL`，2026-11-06 实测，`<outdir>-a` = `artifacts/release-a`，退出码 `0`）：
+- **预期关键行**（取证环境：`E-LOCAL`，2026-11-09 实测，`<outdir>-a` = `artifacts/release-a`，退出码 `0`，已按 S2.0 暂存；测得于 `main` 39477b5；数值为本机示例）：
   ```text
-  "files": 124,
-  "sha256": "c756e61e79a4f0ea62018d5c3eb87bb537d83a4623b15ab3069b478e9d153cc5",
+  "files": 140,
+  "sha256": "86b5bc09885f8097b9c3a934d48db70b25c77596e27745e496ab86e461ef42f7",
   "manifest": "<workspace>/artifacts/release-a/bundle-manifest.json",
   "sums": "<workspace>/artifacts/release-a/SHA256SUMS"
   ```
@@ -276,6 +310,8 @@
 - **退出码**：`0`；`1` 目标目录已有同名产物或 pack 失败；`2` 参数错误。
 - **失败分支**：
   - `refusing to replace existing artifact`（exit 1）→ 换新目录重跑（**不要**删已有产物；若需清理只删本次新建的空目录）；
+  - 输出 `<package>: <n> recorded file(s) missing: <triple>/keyring.node`（exit 1）→ 未完成 S2.0 暂存；回到 S2.0 补齐后重跑，**不得**用任何方式伪造或跳过该前置；
+  - 输出 `<package>: vendor/ is not part of the release files …`（exit 1）→ 该包的 `files` 漏了 `vendor`，记录与 addon 都不会进包；补回后重跑，**不得**靠改 `CHECKSUMS.json` 绕过；
   - `npm pack` 失败 → `FAIL`，停止本段，保留完整输出（registry 不可达属预期内：构建用 `--offline`）；
   - 目标目录不可写 → `BLOCKED`（阻塞点：目录权限）。
 - **记账**：证据ID `E-AC01-03`；明细块写 `files`、`sha256`、退出码与 Node/npm/pnpm 版本。
@@ -286,7 +322,7 @@
   ```sh
   pnpm build:enterprise <outdir>-b
   ```
-- **预期关键行**（取证环境：`E-LOCAL`，2026-11-06 实测，两次 `sha256` 相同）：`"sha256"` 与 S2.1 逐字相同（本机 `c756e6…3cc5`），`"files": 124`。
+- **预期关键行**（取证环境：`E-LOCAL`，2026-11-06 实测，两次 `sha256` 相同）：`"sha256"` 与 S2.1 逐字相同（同一工具链、同一内容下这是判据；跨工具链见 S2.3），`"files"` 与 S2.1 相同。
 - **预期关键行**（取证环境：`E-TARGET`，未执行）：同工具链下两次 SHA-256 相同；不同则 `FAIL`。
 - **退出码**：`0`。
 - **失败分支**：两次 SHA-256 不同 → `FAIL`，停止 S2 与后续安装（不可复现的产物不能作为验收对象），归档两份 manifest 供定位。
@@ -303,8 +339,8 @@
   ```sh
   node -e "const fs=require('fs');const a=JSON.parse(fs.readFileSync('<outdir>-a/bundle-manifest.json','utf8'));const b=JSON.parse(fs.readFileSync('<delivered>/bundle-manifest.json','utf8'));const m=new Map(b.files.map(f=>[f.path,f.sha256]));const d=a.files.filter(f=>m.get(f.path)!==f.sha256);console.log('differing files:',d.length,'of',a.files.length);d.slice(0,5).forEach(f=>console.log(f.path))"
   ```
-- **预期关键行**（取证环境：`E-LOCAL`，本机两次构建实测。跨工具链差异在**目标机**执行后回填）：`differing files: 0 of 124`
-- **预期关键行**（取证环境：`E-TARGET`，未执行）：`differing files: 0 of 124`；若 >0，逐条列出 path 并判 `FAIL`（内容漂移），仅 `toolchain`/`tarball` 字段差异不算失败。
+- **预期关键行**（取证环境：`E-LOCAL`，本机两次构建实测。跨工具链差异在**目标机**执行后回填）：`differing files: 0 of 140`
+- **预期关键行**（取证环境：`E-TARGET`，未执行）：`differing files: 0 of 140`；若 >0，逐条列出 path 并判 `FAIL`（内容漂移），仅 `toolchain`/`tarball` 字段差异不算失败。
 - **退出码**：`0`。
 - **失败分支**：逐文件差异 >0 → `FAIL`，停止安装；差异只出现在 `toolchain`（node/npm 版本）→ **不算失败**，备注记「跨工具链，字节不比较」。
 - **记账**：证据ID `E-AC01-05`。

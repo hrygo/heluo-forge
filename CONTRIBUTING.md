@@ -81,16 +81,18 @@
 
 ### 7.1 GitHub Actions
 
-[检查工作流](.github/workflows/check.yml)保留 `check / verify` 门禁：`main` 推送、PR、合并队列的 `checks_requested` 和手动运行均执行全量检查。不使用路径过滤，文档与图片变更也会接受跨文件链接、登记和仓库规则检查，避免必需检查因跳过触发而一直等待。
+[检查工作流](.github/workflows/check.yml)在 `main` 推送、PR、合并队列的 `checks_requested` 和手动运行时触发，不在工作流入口使用路径过滤。PR 的事件基线为 head 祖先，且仅修改或删除 `docs/` 下普通 Markdown 文件或根目录的 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时跳过跨平台作业；文档链接、登记、仓库规则和全部离线测试仍由 `verify` 执行。新增或重命名文件、混合或未知路径、非便携路径、文件类型和模式异常、事件基线前移或无法完整比较时全跑；`main` 推送、合并队列和手动运行也全跑。
 
-- `verify` job 在单个 `ubuntu-24.04` 上运行，超时 5 分钟；相同工作流、事件与 PR/分支的新运行取消过期运行，手动运行与 PR/推送互不取消。另有 `sensitive-scan` 矩阵 job（`ubuntu-24.04`、`macos-14`、`windows-2022`，超时 10 分钟）只跑敏感扫描 hook 与扫描器的可移植性用例，与 `verify` 刻意分开，矩阵稳定前不设为必需检查。
+- `verify (ubuntu-x64)` 在 `ubuntu-24.04` 上运行完整离线检查，超时 5 分钟；分类作业失败或结果无效时，该必需检查失败。同一 PR 的新运行取消过期运行。`native keychain` 固定作业覆盖 Linux 与 Windows 的 x64/arm64，`document backend` 固定作业覆盖 macOS 两种架构；Windows 的敏感扫描和回调端口测试另有平台作业。
 - Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test` 自动发现工程、包与集成测试。
-- 当前检查无第三方依赖，不安装 pnpm 或依赖、不读写包缓存、不拆矩阵。引入第三方依赖时，须同步配置固定 pnpm、`pnpm install --frozen-lockfile` 和按锁文件索引的 pnpm store 缓存，再按实测耗时评估拆分；不缓存 `node_modules`。
-- 工作流只授予 `contents: read`，检出不保留凭据、深度为 1；Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
+- `verify` 不安装 pnpm 或项目依赖，也不读取包缓存。原生钥匙串作业使用 npm 缓存加速来源包下载，每次仍按锁文件验证 tarball 并核对提交的暂存记录；Linux 作业另安装系统存储依赖。工作流不缓存 `node_modules`。
+- 工作流只授予 `contents: read`，检出不保留凭据；分类作业检出完整历史以比较 PR 的基线与 head，其余作业检出深度为 1。Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
 - PR 另由 [sensitive-attestation](.github/workflows/sensitive-attestation.yml) 以 `pull_request_target` 从基线读取团队公钥验签，不 checkout 也不执行 PR 代码，权限同为 `contents: read`。它的 required 配置与部署状态不在本文件断言，实测与上线步骤见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。
-- 仓库管理员可将 `verify` 设为必需检查；本地修改不代表已启用远端规则、合并队列或 Dependabot，也不代表远端 CI 已通过。
+- 本地修改不代表远端必需检查、合并队列或 Dependabot 已启用，也不代表远端 CI 已通过。
 
 依据核验日期为 2026-10-21：[GitHub 安全建议](https://docs.github.com/en/actions/reference/security/secure-use)、[事件与合并队列](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#merge_group)、[并发控制](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)、[Dependabot 配置](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)，以及 [checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 与 [setup-node v7.1.0](https://github.com/actions/setup-node/releases/tag/v7.1.0) 的发布说明与输入声明。官方 Actions 使用 Node 24 runtime；应用检查仍使用 `.node-version` 固定的版本。工作流依赖锁文件当前属于[公开预览](https://docs.github.com/en/actions/concepts/security/workflow-dependency-lockfiles)，本仓库继续采用已有的完整 SHA 固定策略。
+
+条件作业和必需检查的依据核验日期为 2026-11-10：[GitHub 必需检查排障](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)与 [YAML 锚点和别名](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#yaml-anchors-and-aliases)。
 
 ## 8. 安全
 

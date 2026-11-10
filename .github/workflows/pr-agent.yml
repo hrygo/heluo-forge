@@ -1,0 +1,398 @@
+name: 洛神 (PR-Agent)
+
+# Automated PR review through PR-Agent (https://github.com/The-PR-Agent/pr-agent).
+# The Action reads the pull request through the GitHub API and sends only the
+# diff, the PR metadata and the declared repo-context files to the model; it
+# never checks out or executes PR code, so there is no `actions/checkout` step.
+#
+# One-time setup per repository:
+#   1. Settings > Secrets and variables > Actions > New repository secret:
+#      `OPENCODE_GO_API_KEY` = the OpenCode Go subscription key (opencode.ai).
+#   2. Merge this workflow and `.pr_agent.toml` to `main`. The Action loads its
+#      settings from the PR's base branch, so neither file applies to existing
+#      PRs until it reaches `main`.
+# Manual commands in a PR comment: `/describe`, `/review`, `/improve`,
+# `/ask "<question>"`. Comments are only obeyed from owner, member or
+# collaborator accounts.
+#
+# Fork PRs are skipped on purpose: `pull_request` from a fork receives neither
+# repository secrets nor a writable token, and the repository's workflow rules
+# forbid running PR-triggered jobs with base-context secrets. Revisiting that
+# needs a design decision.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, review_requested, synchronize]
+  issue_comment:
+    types: [created]
+
+# `issues: write` and `pull-requests: write` are the minimum needed to publish
+# review comments and labels. Actions read verifies the originating workflow.
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    name: 洛神 (ubuntu-x64)
+    # Skip bot comments (which could loop), draft and fork PRs, plain issue
+    # comments, and comment commands from accounts without write access.
+    # A bot push to a same-repository PR is still eligible for a full review.
+    if: >-
+      (
+        (github.event_name == 'issue_comment' &&
+         github.event.sender.type != 'Bot' &&
+         github.event.issue.pull_request != null &&
+         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+        (github.event_name == 'pull_request' &&
+         (github.event.sender.type != 'Bot' || github.event.action == 'synchronize') &&
+         github.event.pull_request.draft == false &&
+         github.event.pull_request.head.repo.full_name == github.repository)
+      )
+    concurrency:
+      # All comments containing /review share the review group, even with
+      # leading whitespace. Comment events wait; newer PR pushes cancel runs.
+      group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && (github.event.sender.type == 'Bot' || !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) || !contains(github.event.comment.body, '/review')) && 'other-comment' || github.event.action == 'review_requested' && github.event.pull_request.created_at != '' && github.event.pull_request.created_at == github.event.pull_request.updated_at && 'initial-request' || 'review' }}
+      cancel-in-progress: ${{ github.event_name != 'issue_comment' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Capture PR revision
+        id: revision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFile } from 'node:fs/promises';
+
+          const { GH_TOKEN, GITHUB_API_URL, GITHUB_OUTPUT, GITHUB_REPOSITORY, PR_NUMBER } = process.env;
+          if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '')) throw new Error('Invalid PR number');
+          const response = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}`, {
+            headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!response.ok) throw new Error(`Cannot read PR revision (HTTP ${response.status})`);
+          const pr = await response.json();
+          const head = pr.head?.sha;
+          const base = pr.base?.sha;
+          if (![head, base].every((sha) => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha))) {
+            throw new Error('Invalid PR revision');
+          }
+          await appendFile(GITHUB_OUTPUT, `head=${head}\nbase=${base}\nstarted=${new Date().toISOString()}\n`);
+          NODE
+
+      - name: Run PR-Agent
+        id: pr_agent
+        uses: the-pr-agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b # v0.50.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OpenCode Go gateway. The endpoint and headers are host-only in
+          # PR-Agent, so they belong here and not in `.pr_agent.toml`.
+          OPENAI__KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENAI__API_BASE: "https://opencode.ai/inference/go/openai/v1"
+          # Go rejects requests without a session header and asks clients to
+          # identify themselves instead of using a generic SDK User-Agent.
+          LITELLM__EXTRA_HEADERS: '{"x-opencode-session":"pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}","User-Agent":"pr-agent/0.50.0"}'
+          # Bootstrap mirror of `.pr_agent.toml` [config]: a run triggered while
+          # that file is not yet on the base branch would otherwise fall back to
+          # PR-Agent's built-in model, which this gateway does not serve, and the
+          # model is absent from both PR-Agent's token table and LiteLLM's
+          # metadata, so the token budget must be supplied explicitly or every
+          # tool aborts before it calls the model. Environment values take
+          # precedence; keep the two in sync when changing either.
+          CONFIG__MODEL: "openai/muse-spark-1.3-contributor"
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "120000"
+          CONFIG__MAX_MODEL_TOKENS: "120000"
+          # Expose structured review data and request the same recommendation
+          # before the base branch has received the repository settings.
+          GITHUB_ACTION_CONFIG__ENABLE_OUTPUT: "true"
+          PR_REVIEWER__REQUIRE_MERGE_RECOMMENDATION: "true"
+          PR_REVIEWER__REQUIRE_SECURITY_REVIEW: "true"
+          PR_REVIEWER__PERSISTENT_COMMENT: "true"
+          PR_REVIEWER__PERSISTENT_FINDING_STATE: "true"
+          # Review the complete PR after every eligible push, including merge
+          # and bot commits, before the base branch has repository settings.
+          GITHUB_ACTION_CONFIG__HANDLE_PUSH_TRIGGER: "true"
+          GITHUB_ACTION_CONFIG__PUSH_COMMANDS: '["/review"]'
+          GITHUB_ACTION_CONFIG__PUSH_TRIGGER_IGNORE_BOT_COMMITS: "false"
+          GITHUB_ACTION_CONFIG__PUSH_TRIGGER_IGNORE_MERGE_COMMITS: "false"
+          # Preserve the original PR description before repository settings exist.
+          PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"
+          # Describe and review on PR open; code suggestions stay on demand
+          # (`/improve`) so a review stays a single LLM call.
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_review: "true"
+          github_action_config.auto_improve: "false"
+
+      - name: Update requested changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          PR_TITLE: ${{ github.event.pull_request.title || github.event.issue.title }}
+          PR_CREATED_AT: ${{ github.event.pull_request.created_at }}
+          PR_UPDATED_AT: ${{ github.event.pull_request.updated_at }}
+          REVIEW_RESULT: ${{ steps.pr_agent.outputs.review }}
+          REVIEWED_HEAD: ${{ steps.revision.outputs.head }}
+          REVIEWED_BASE: ${{ steps.revision.outputs.base }}
+          REVIEW_STARTED_AT: ${{ steps.revision.outputs.started }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+
+          const { GH_TOKEN, GITHUB_API_URL, GITHUB_REPOSITORY, PR_NUMBER, EVENT_NAME, EVENT_ACTION, COMMENT_BODY,
+            PR_TITLE, PR_CREATED_AT, PR_UPDATED_AT, REVIEW_RESULT, REVIEWED_HEAD, REVIEWED_BASE, REVIEW_STARTED_AT,
+            GITHUB_RUN_ID } = process.env;
+          if (!REVIEW_RESULT) {
+            // Match the upstream default ignored-title rule, initial request
+            // deduplication and the no-new-files incremental review skip.
+            const ignoredTitle = /^\[Auto\]/.test(PR_TITLE ?? '');
+            const initialRequest = EVENT_ACTION === 'review_requested' && PR_CREATED_AT && PR_CREATED_AT === PR_UPDATED_AT;
+            const incremental = EVENT_NAME === 'issue_comment' && /^\s*\/review\s+-i(?:\s|$)/i.test(COMMENT_BODY ?? '');
+            const expected = !ignoredTitle && ((EVENT_NAME === 'pull_request' && !initialRequest) ||
+              (EVENT_NAME === 'issue_comment' && !incremental && /^\s*\/review(?:\s|$)/i.test(COMMENT_BODY ?? '')));
+            if (expected) throw new Error('PR-Agent did not produce structured review output');
+            if (incremental && !ignoredTitle) {
+              console.log('::warning::Incremental review produced no structured output; check whether PR-Agent skipped unchanged files.');
+            }
+            process.exit(0);
+          }
+          let review;
+          try {
+            review = JSON.parse(REVIEW_RESULT);
+          } catch {
+            throw new Error('PR-Agent review output is not valid JSON');
+          }
+          const recommendation = typeof review?.merge_recommendation === 'string' ? review.merge_recommendation.trim() : '';
+          if (recommendation === 'needs_review') process.exit(0);
+          if (!['changes_required', 'no_concerns_found'].includes(recommendation)) {
+            throw new Error('PR-Agent review recommendation is missing or unknown');
+          }
+          const manualFullReview = EVENT_NAME === 'issue_comment' && /^\s*\/review\s*$/iu.test(COMMENT_BODY ?? '');
+          // Incremental and customized commands cannot prove complete coverage.
+          if (recommendation === 'no_concerns_found' && !manualFullReview &&
+              (EVENT_NAME !== 'pull_request' || EVENT_ACTION !== 'synchronize')) process.exit(0);
+          if (!/^[1-9][0-9]*$/.test(PR_NUMBER ?? '') ||
+              ![REVIEWED_HEAD, REVIEWED_BASE].every((sha) => typeof sha === 'string' && /^[a-f0-9]{40}$/.test(sha))) {
+            throw new Error('Invalid reviewed PR revision');
+          }
+          const url = `${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}`;
+          const headers = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${GH_TOKEN}` };
+          async function verifyRevision() {
+            const response = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+            if (!response.ok) throw new Error(`Cannot verify PR revision (HTTP ${response.status})`);
+            const pr = await response.json();
+            if (pr.head?.repo?.full_name !== GITHUB_REPOSITORY) {
+              console.log('Skipping a fork or deleted head repository');
+              process.exit(0);
+            }
+            if (pr.state !== 'open' || pr.head?.sha !== REVIEWED_HEAD || pr.base?.sha !== REVIEWED_BASE) {
+              throw new Error('PR revision changed during review; no further review changes will be made');
+            }
+          }
+          await verifyRevision();
+          const noSecurity = (value) => typeof value === 'string' &&
+            /^(?:no(?:ne)?(?:\s+(?:security\s+)?(?:issues?|concerns?|risks?)(?:\s+(?:found|identified|detected))?)?|无(?:安全(?:问题|风险|隐患|顾虑))?|未发现(?:任何)?(?:安全)?(?:问题|风险|隐患)?)[\s.!。！]*$/iu.test(value.trim());
+
+          if (recommendation === 'no_concerns_found') {
+            // The structured recommendation alone does not establish that old
+            // findings were covered. Require the current full-review state too.
+            if (!Array.isArray(review.key_issues_to_review) || review.key_issues_to_review.length || !noSecurity(review.security_concerns) ||
+                !Number.isFinite(Date.parse(REVIEW_STARTED_AT ?? ''))) {
+              console.log('::warning::Review evidence is incomplete or inconsistent; keeping prior requests for changes.');
+              process.exit(0);
+            }
+            async function pages(path) {
+              const items = [];
+              for (let page = 1; page <= 100; page++) {
+                const response = await fetch(`${path}?per_page=100&page=${page}`, {
+                  headers, signal: AbortSignal.timeout(15000),
+                });
+                if (!response.ok) throw new Error(`Cannot read PR review evidence (HTTP ${response.status})`);
+                const batch = await response.json();
+                if (!Array.isArray(batch)) throw new Error('Invalid PR review evidence');
+                items.push(...batch);
+                if (batch.length < 100) return items;
+              }
+              throw new Error('PR review evidence exceeds the pagination limit');
+            }
+            const reviews = await pages(`${url}/reviews`);
+            const candidates = reviews.filter((item) =>
+              item?.user?.login === 'github-actions[bot]' && item.state === 'CHANGES_REQUESTED' &&
+              typeof item.body === 'string' && item.body.includes('<!-- heluo-forge-pr-agent-review:v1'));
+            if (!candidates.length) process.exit(0);
+            const comments = await pages(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments`);
+            const stateComments = comments.filter((item) =>
+              item?.user?.login === 'github-actions[bot]' && typeof item.body === 'string' &&
+              item.body.includes('<!-- pr-agent:review:full -->') && item.body.includes('<!-- pr-agent-review-state'));
+            if (stateComments.length !== 1 ||
+                !(Date.parse(stateComments[0].updated_at) > Date.parse(REVIEW_STARTED_AT))) {
+              console.log('::warning::Current full-review state is unavailable; keeping prior requests for changes.');
+              process.exit(0);
+            }
+            const stateBody = stateComments[0].body;
+            const stateMarkers = [...stateBody.matchAll(/<!-- pr-agent-review-state:v1\n([^\n]+)\n-->/gu)];
+            if (stateMarkers.length !== 1 || stateBody.split('<!-- pr-agent-review-state').length !== 2) {
+              console.log('::warning::Invalid full-review state; keeping prior requests for changes.');
+              process.exit(0);
+            }
+            let findingState;
+            try { findingState = JSON.parse(stateMarkers[0][1]); } catch { findingState = null; }
+            const lastRun = findingState?.last_run;
+            const findings = findingState?.findings;
+            if (findingState?.schema_version !== 1 || !Array.isArray(findings) || !findings.length ||
+                findings.some((item) => item?.state !== 'RESOLVED' || !/^[a-f0-9]{12}$/.test(item?.finding_id ?? '')) ||
+                new Set(findings.map((item) => item.finding_id)).size !== findings.length ||
+                lastRun?.kind !== 'full' || lastRun.complete !== true || lastRun.head_sha !== REVIEWED_HEAD ||
+                !Array.isArray(lastRun.excluded_files) || lastRun.excluded_files.length) {
+              console.log('::warning::Prior findings are not all resolved by a complete current review.');
+              process.exit(0);
+            }
+            const resolved = new Set(findings.map((item) => item.finding_id));
+            for (const candidate of candidates) {
+              const markers = [...candidate.body.matchAll(/<!-- heluo-forge-pr-agent-review:v1\n([^\n]+)\n-->/gu)];
+              if (markers.length !== 1 || candidate.body.split('<!-- heluo-forge-pr-agent-review:').length !== 2) continue;
+              let metadata;
+              try { metadata = JSON.parse(markers[0][1]); } catch { continue; }
+              if (metadata?.version !== 1 || !/^[1-9][0-9]*$/.test(metadata.run_id ?? '') ||
+                  !/^[a-f0-9]{40}$/.test(metadata.head ?? '') || !/^[a-f0-9]{40}$/.test(metadata.base ?? '') ||
+                  metadata.head !== candidate.commit_id || metadata.head === REVIEWED_HEAD ||
+                  metadata.security_tracked !== true ||
+                  !Number.isSafeInteger(candidate.id) || candidate.id <= 0 ||
+                  !Array.isArray(metadata.finding_ids) || !metadata.finding_ids.length ||
+                  metadata.finding_ids.some((id) => !resolved.has(id))) continue;
+              // github-actions[bot] is shared by workflows; verify that the
+              // recorded run was this PR-Agent workflow on the reviewed head.
+              const sourceResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${metadata.run_id}`, {
+                headers, signal: AbortSignal.timeout(15000),
+              });
+              if (!sourceResponse.ok) throw new Error(`Cannot verify review origin (HTTP ${sourceResponse.status})`);
+              const source = await sourceResponse.json();
+              if (source?.id !== Number(metadata.run_id) || !['pull_request', 'issue_comment'].includes(source.event) ||
+                  !(source.path === '.github/workflows/pr-agent.yml' || source.path?.startsWith('.github/workflows/pr-agent.yml@')) ||
+                  source.status !== 'completed' ||
+                  source.conclusion !== 'success' ||
+                  (source.event === 'pull_request' && source.head_sha !== metadata.head) ||
+                  source.repository?.full_name !== GITHUB_REPOSITORY || source.head_repository?.full_name !== GITHUB_REPOSITORY ||
+                  !Array.isArray(source.pull_requests) ||
+                  (source.pull_requests.length > 0 && !source.pull_requests.some((pr) => pr.number === Number(PR_NUMBER)))) continue;
+              // A run ID in a review body can be copied. The completed run's
+              // job log binds the exact GitHub review ID to that run.
+              const jobsResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${metadata.run_id}/jobs?per_page=100&page=1`, {
+                headers, signal: AbortSignal.timeout(15000),
+              });
+              if (!jobsResponse.ok) throw new Error(`Cannot verify review job (HTTP ${jobsResponse.status})`);
+              const jobs = await jobsResponse.json();
+              if (!Array.isArray(jobs?.jobs) || jobs.total_count !== jobs.jobs.length) continue;
+              const matchingJobs = jobs.jobs.filter((job) => job?.name === '洛神 (ubuntu-x64)' &&
+                job.run_id === Number(metadata.run_id) && job.status === 'completed' && job.conclusion === 'success' &&
+                Number.isSafeInteger(job.id) && job.id > 0);
+              if (matchingJobs.length !== 1) continue;
+              const logResponse = await fetch(`${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/jobs/${matchingJobs[0].id}/logs`, {
+                headers, signal: AbortSignal.timeout(15000),
+              });
+              if (!logResponse.ok) throw new Error(`Cannot verify review job log (HTTP ${logResponse.status})`);
+              const log = await logResponse.text();
+              const evidence = `HELUO_PR_AGENT_REVIEW_V1 ${metadata.run_id} ${PR_NUMBER} ${candidate.id} ${metadata.head} ${metadata.base}`;
+              if (log.length > 10_000_000 || !log.split('\n').some((line) => line.trim().endsWith(evidence))) continue;
+              await verifyRevision();
+              const dismissal = await fetch(`${url}/reviews/${candidate.id}/dismissals`, {
+                method: 'PUT',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: `洛神已对提交 ${REVIEWED_HEAD} 完成完整复审，未发现阻断问题；自动解除本次审查。` }),
+                signal: AbortSignal.timeout(15000),
+              });
+              if (!dismissal.ok) throw new Error(`Cannot dismiss PR-Agent review (HTTP ${dismissal.status})`);
+              const dismissed = await dismissal.json();
+              if (dismissed.state !== 'DISMISSED' || dismissed.id !== candidate.id) {
+                throw new Error('GitHub returned an unexpected dismissal state');
+              }
+              await verifyRevision();
+              console.log(`Dismissed tracked PR-Agent review ${candidate.id}`);
+            }
+            process.exit(0);
+          }
+          // Preserve the findings in this review even if the persistent agent
+          // comment is replaced by a subsequent review. Do not notify users
+          // mentioned in model-generated text.
+          const clean = (value) => typeof value === 'string'
+            ? value.replace(/\s+/gu, ' ').replaceAll('@', '@\u200b').replace(/[<>`]/gu, '').trim().slice(0, 1000) : '';
+          const issues = (Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : []).slice(0, 4)
+            .map((issue) => {
+              const title = clean(issue?.issue_header) || '问题';
+              const file = clean(issue?.relevant_file);
+              const line = Number.isSafeInteger(issue?.start_line) && issue.start_line > 0 ? `:${issue.start_line}` : '';
+              const detail = clean(issue?.issue_content);
+              return `- ${title}${file ? ` (${file}${line})` : ''}${detail ? `: ${detail}` : ''}`;
+            });
+          const security = clean(review.security_concerns);
+          if (security && !/^(no|none)$/i.test(security)) issues.push(`- 安全问题: ${security}`);
+          // Use PR-Agent's version-1 finding fingerprints to bind a formal
+          // review to the findings that a later full review must resolve.
+          function findingId(issue) {
+            if (typeof issue?.relevant_file !== 'string' || typeof issue?.issue_content !== 'string') return null;
+            const path = issue.relevant_file.trim().replace(/^`+|`+$/gu, '').replace(/^\/+/u, '');
+            const content = issue.issue_content.trim().replace(/```[ \t]*suggestion\b/giu, '```text');
+            let title = typeof issue.issue_header === 'string' ? issue.issue_header.trim() : '';
+            if (title.toLowerCase() === 'possible bug') title = 'Possible Issue';
+            if (!path || !content) return null;
+            const findingBody = title ? `**${title}**\n\n${content}` : content;
+            const normalized = findingBody.replace(/\s+/gu, ' ').toLowerCase();
+            return createHash('sha256').update(`${path}|${normalized}`).digest('hex').slice(0, 12);
+          }
+          const reviewIssues = Array.isArray(review.key_issues_to_review) ? review.key_issues_to_review : [];
+          const findingIds = reviewIssues.map(findingId);
+          const normalizeText = (value) => typeof value === 'string'
+            ? value.replace(/`/gu, '').replace(/\s+/gu, ' ').trim().toLowerCase() : '';
+          const securityText = normalizeText(review.security_concerns);
+          // A separate free-text security concern is not in PR-Agent's finding
+          // state. Only accept it when the complete text is in a tracked issue.
+          const securityTracked = noSecurity(review.security_concerns) ||
+            (securityText.length >= 8 && reviewIssues.some((issue) => normalizeText(issue?.issue_content).includes(securityText)));
+          const fullReview = EVENT_NAME === 'pull_request' || manualFullReview;
+          const tracked = fullReview && /^[1-9][0-9]*$/.test(GITHUB_RUN_ID ?? '') &&
+            securityTracked && findingIds.length > 0 && findingIds.every(Boolean);
+          const metadata = tracked ? {
+            version: 1, run_id: GITHUB_RUN_ID, head: REVIEWED_HEAD, base: REVIEWED_BASE,
+            security_tracked: true, finding_ids: [...new Set(findingIds)],
+          } : null;
+          const body = [
+            '洛神（PR-Agent）发现合并前必须修复的问题。',
+            '',
+            ...(issues.length ? issues : ['请参阅 PR-Agent 的审查评论。']),
+            '',
+            `审查提交: ${REVIEWED_HEAD}`,
+            '推送修复后洛神会自动复审；也可运行 `/review`，未能确认时请由维护者解除请求。',
+            ...(metadata ? ['', `<!-- heluo-forge-pr-agent-review:v1\n${JSON.stringify(metadata)}\n-->`] : []),
+          ].join('\n');
+          const response = await fetch(`${url}/reviews`, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event: 'REQUEST_CHANGES',
+              commit_id: REVIEWED_HEAD,
+              body,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+          if (!response.ok) throw new Error(`Cannot request changes (HTTP ${response.status})`);
+          const submitted = await response.json();
+          if (submitted.state !== 'CHANGES_REQUESTED' || submitted.commit_id !== REVIEWED_HEAD ||
+              !Number.isSafeInteger(submitted.id) || submitted.id <= 0) {
+            throw new Error('GitHub returned an unexpected review state or commit');
+          }
+          const after = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+          if (!after.ok) throw new Error(`Review submitted, but PR revision could not be rechecked (HTTP ${after.status})`);
+          const latest = await after.json();
+          if (latest.state !== 'open' || latest.head?.repo?.full_name !== GITHUB_REPOSITORY ||
+              latest.head?.sha !== REVIEWED_HEAD || latest.base?.sha !== REVIEWED_BASE) {
+            throw new Error('Review was submitted for an earlier PR revision; manual review or dismissal is required');
+          }
+          if (metadata) console.log(`HELUO_PR_AGENT_REVIEW_V1 ${GITHUB_RUN_ID} ${PR_NUMBER} ${submitted.id} ${REVIEWED_HEAD} ${REVIEWED_BASE}`);
+          console.log('Requested changes for the reviewed commit');
+          NODE

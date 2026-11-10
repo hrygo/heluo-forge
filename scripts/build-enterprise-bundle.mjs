@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 /** #37 / ADR-12: close workspace dependencies at build time, never at the terminal. */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
-import { auditReleaseClosure, auditTarball, npmExecutable, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditReleaseClosure, auditTarball, execNpm, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS, nativeFetchHint } from './lib/native-resources.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const readManifest = (dir) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
@@ -43,13 +43,21 @@ export { HOST_PEERS };
  * declared workspace resources. `entry` is the package that becomes the tarball root:
  * the enterprise umbrella and single-install units (e.g. devops) share this one
  * closure-building path, so neither can ship a `workspace:` reference.
+ *
+ * `requireNativeResources` is the issue #216 gate: any member that ships a
+ * `vendor/CHECKSUMS.json` must have every recorded addon staged and byte-exact
+ * before `npm pack` runs, so a clean checkout cannot produce an artifact that
+ * lacks the native keyring adapter. Only the offline structural audit
+ * (`check-bundle-tarballs`, `requireNativeResources: false`) may skip it, and
+ * `verify-enterprise-bundle.mjs` independently rejects such an artifact.
  */
-export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, version } = {}) {
+export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, version, requireNativeResources = true } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'forge-bundle-build-'));
   const stage = join(work, 'package');
   const output = destination === undefined ? mkdtempSync(join(tmpdir(), 'forge-bundle-artifact-')) : resolve(destination);
   const members = new Map();
   const sources = new Map();
+  const nativeRecords = [];
   let pendingOutput;
   try {
     for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
@@ -75,6 +83,15 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
         if (!sources.has(dep)) fail(`missing workspace member ${dep}`);
       }
       if (!Array.isArray(manifest.files) || manifest.files.length === 0) fail(`${name} must declare release files`);
+      if (requireNativeResources) {
+        // Before anything is copied: a release that ships a package with declared
+        // native resources must carry the record and all of its bytes. Fail
+        // closed, and only point at the fetch script when fetching would help.
+        const findings = auditStagedNativeResources({ dir: source, label: name, releaseFiles: manifest.files });
+        if (findings.length > 0) fail(`${name}: ${describeNativeFindings(findings)}.${nativeFetchHint(findings)}`);
+        const record = join(source, NATIVE_CHECKSUMS);
+        if (existsSync(record)) nativeRecords.push({ name, content: readFileSync(record) });
+      }
       mkdirSync(target, { recursive: true });
       for (const resource of new Set([...manifest.files, 'README.md'])) {
         if (typeof resource !== 'string' || isAbsolute(resource) || resource.split('/').some((part) => ['..', 'node_modules', 'test', 'tests', 'coverage', '.git'].includes(part)) || /[*?\\]/u.test(resource)) fail(`${name} has unsafe release resource ${resource}`);
@@ -101,7 +118,7 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     if (closureErrors.length > 0) fail(closureErrors.join('; '));
     const packedDir = join(work, 'packed');
     mkdirSync(packedDir);
-    const stdout = execFileSync(npmExecutable(), ['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = execNpm(['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const packed = parsePackOutput(stdout);
     if (packed === null) fail('npm returned no packed file list');
     const errors = auditTarball({ label: manifest.name, manifest, packed });
@@ -116,6 +133,23 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     if (errors.length > 0) fail(errors.join('; '));
     const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
     if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
+    if (requireNativeResources && nativeRecords.length > 0) {
+      // npm may exclude files after preflight. Judge the archive's actual bytes
+      // against the staged record before creating anything in the destination.
+      const files = new Map(readBundleEntries(join(packedDir, tarballs[0]), { withContent: true }).map((item) => [item.path, item.content]));
+      for (const { name, content } of nativeRecords) {
+        const vendorPrefix = `${name === entry ? '' : `node_modules/${name}/`}vendor/`;
+        const packedRecord = files.get(`${vendorPrefix}CHECKSUMS.json`);
+        if (packedRecord === undefined || !packedRecord.equals(content)) fail(`${name}: packed vendor/CHECKSUMS.json is missing or differs from the staged record`);
+        const findings = auditPackagedNativeResources({
+          label: name,
+          content,
+          read: (relative) => files.get(`${vendorPrefix}${relative}`),
+          list: () => [...files.keys()].filter((path) => path.startsWith(vendorPrefix)).map((path) => path.slice(vendorPrefix.length)),
+        });
+        if (findings.length > 0) fail(`${name}: packed ${describeNativeFindings(findings)}`);
+      }
+    }
     mkdirSync(output, { recursive: true });
     const tarball = join(output, tarballs[0]);
     if (existsSync(tarball)) fail(`refusing to replace existing artifact ${basename(tarball)}`);
@@ -142,7 +176,7 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 function readToolchain() {
   let npm = 'unknown';
   try {
-    npm = execFileSync(npmExecutable(), ['--version'], { encoding: 'utf8' }).trim();
+    npm = execNpm(['--version'], { encoding: 'utf8' }).trim();
   } catch {
     npm = 'unknown';
   }
@@ -200,10 +234,36 @@ export function writeBundleArtifacts({ destination, tarballPath, entry, members,
   return { manifestPath, sumsPath };
 }
 
+/**
+ * CLI arguments: `[--root <dir>] [destination]`.
+ *
+ * `--root` selects the workspace to build; it exists so a fixture workspace can
+ * exercise this exact entry point (sidecars, refusal paths, exit codes) without
+ * touching the real tree. It does not disable any rule: the native-resource
+ * preflight and every tarball audit still run against whatever root is selected.
+ */
+function parseArguments(argv) {
+  let root;
+  let destination;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--root') {
+      root = argv[index + 1];
+      index += 1;
+      if (root === undefined) throw new Error('--root needs a directory');
+      continue;
+    }
+    if (destination !== undefined) throw new Error(`unexpected argument ${argument}`);
+    destination = argument;
+  }
+  return { root, destination };
+}
+
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let tarball;
   try {
-    const result = buildEnterpriseBundle({ destination: process.argv[2] });
+    const { root, destination } = parseArguments(process.argv.slice(2));
+    const result = buildEnterpriseBundle({ root, destination });
     tarball = result.tarball;
     const bytes = readFileSync(tarball);
     const entries = readBundleEntries(tarball);

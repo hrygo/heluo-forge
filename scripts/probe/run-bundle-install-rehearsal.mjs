@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildEnterpriseBundle } from '../build-enterprise-bundle.mjs';
-import { auditReleaseClosure, npmExecutable, parsePatchLayer } from '../lib/bundle-rules.mjs';
+import { auditReleaseClosure, execNpm, parsePatchLayer } from '../lib/bundle-rules.mjs';
 import { resolveDshProbeHost } from '../lib/dsh-probe-runtime.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -44,7 +44,7 @@ const record = (id, ok, detail = {}) => {
 const isolatedEnv = { ...process.env, DSH_HOME: join(dir, 'dsh-home'), npm_config_cache: join(dir, 'npm-cache'), npm_config_userconfig: join(dir, 'empty-npmrc'), npm_config_registry: 'http://127.0.0.1:9' };
 delete isolatedEnv.DSH_PROFILE;
 delete isolatedEnv.DSH_PROFILE_DIR;
-const npm = (args) => execFileSync(npmExecutable(), ['--offline', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], { cwd: project, env: isolatedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const npm = (args) => execNpm(['--offline', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], { cwd: project, env: isolatedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const bundleDir = join(project, 'node_modules', '@heluo', 'forge-enterprise');
 const intact = () => readFileSync(join(project, 'user-file.txt'), 'utf8') === 'user-workspace-marker\n' && readFileSync(join(project, 'user-notes', 'notes.md'), 'utf8') === '# 用户笔记\n';
 const statusAtStart = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
@@ -240,7 +240,7 @@ try {
   const version = spawnSync(dsh, ['--version'], { env: isolatedEnv, encoding: 'utf8' });
   if (version.status !== 0) throw new Error(`DSH unavailable: ${version.error?.message ?? version.stderr}`);
   evidence.env.dshVersion = version.stdout.trim();
-  evidence.env.npmVersion = execFileSync(npmExecutable(), ['--version'], { encoding: 'utf8' }).trim();
+  evidence.env.npmVersion = execNpm(['--version'], { encoding: 'utf8' }).trim();
   evidence.env.sourceHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
   evidence.env.sourceState = 'uncommitted shared implementation; git HEAD is not a release commit';
   evidence.env.targetVersion = readFileSync(join(repo, '.dsh-version'), 'utf8').trim();
@@ -251,8 +251,18 @@ try {
   evidence.env.targetVerified = toolsManifest.version === evidence.env.targetVersion;
   evidence.env.targetStatus = evidence.env.targetVerified ? 'tested' : 'NOT RUN: installed SDK differs from target baseline';
   record('dsh-available', true, evidence.env);
-  const first = buildEnterpriseBundle({ destination: join(dir, 'pack-v1') });
-  evidence.artifact = { sha256: sha256(first.tarball), members: first.members, files: first.packed.length, version: first.manifest.version };
+  // This rehearsal proves install/upgrade/uninstall/composition, not native
+  // backends. A clean checkout has no staged addons (they never enter Git), so
+  // the rehearsal builds structurally and says so: the release gate lives in the
+  // default build path and the artifact gate in verify-enterprise-bundle.
+  const first = buildEnterpriseBundle({ destination: join(dir, 'pack-v1'), requireNativeResources: false });
+  evidence.artifact = {
+    sha256: sha256(first.tarball),
+    members: first.members,
+    files: first.packed.length,
+    version: first.manifest.version,
+    nativeResources: 'not verified (structural rehearsal build; not a release artifact)',
+  };
   npm(['install', first.tarball]);
   const installed = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8'));
   record('install-v1-with-patch-and-workspace-intact', installed.version === first.manifest.version && intact());
@@ -286,7 +296,7 @@ try {
     { policyRows: rowCount('heluo-policy'), actions, devopsRows: rowCount('forge-devops'), giteeRows: rowCount('heluo-gitee') },
   );
   await activateInstalled('install', host);
-  const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });
+  const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1', requireNativeResources: false });
   npm(['install', upgraded.tarball]);
   await activateInstalled('upgrade', host);
   record('upgrade-to-0.1.1-keeps-composition-and-workspace', JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).version === '0.1.1' && intact());

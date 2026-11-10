@@ -47,7 +47,8 @@ checks or branch rules.
    independent trusted channel.
 2. Test a correctly signed PR and an unsigned or incorrectly signed PR. Only
    after verifying the results, configure the one new required context
-   `sensitive-attestation-verify`; keep the existing `verify` check separately.
+   `sensitive-attestation-verify`; keep the existing `verify (ubuntu-x64)` check
+   separately.
    Require up-to-date branches. The required check inspects only the PR's own
    commits, so squash and rebase merges are both supported; a server-created
    commit on the base branch is accepted by the audit path only through the tree
