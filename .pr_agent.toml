@@ -1,7 +1,7 @@
 # PR-Agent settings for hrygo/heluo-forge.
 #
 # The GitHub Action loads this file from the pull request's base branch, so a
-# change here applies to new PRs only after it reaches `main`. Only overrides
+# change here applies on later runs after it reaches the PR's base branch. Only overrides
 # are listed; the full default set lives in
 # pr_agent/settings/configuration.toml of the PR-Agent release pinned in
 # .github/workflows/pr-agent.yml.
@@ -29,9 +29,9 @@ response_language = "zh-CN"
 repo_context_files = ["AGENTS.md", "CONTRIBUTING.md"]
 
 [github_action_config]
-# A push reruns the full review, including for merge and bot commits.
+# A push refreshes the summary and full review, including merge and bot commits.
 handle_push_trigger = true
-push_commands = ["/review"]
+push_commands = ["/describe", "/review"]
 push_trigger_ignore_bot_commits = false
 push_trigger_ignore_merge_commits = false
 
@@ -41,25 +41,31 @@ push_trigger_ignore_merge_commits = false
 require_tests_review = true
 require_security_review = true
 require_risk_assessment = true
-# Use the structured recommendation when publishing a formal GitHub review.
+# Recommendations are advisory and do not create or dismiss formal reviews.
 require_merge_recommendation = true
+# A reference to a larger or completed issue is not a promise to finish it here.
+# The PR description still provides the scope; full ticket bodies are not fetched.
+require_ticket_analysis_review = false
 # Update one review comment per PR instead of posting a new comment per run.
 persistent_comment = true
-# Record finding identities and completeness for safe automatic dismissal.
-persistent_finding_state = true
+# Disappearance from an AI review alone does not prove an old finding was fixed.
+persistent_finding_state = false
+final_update_message = false
 num_max_findings = 4
 extra_instructions = """
 按仓库 AGENTS.md、CONTRIBUTING.md 与 docs/README.md 的约定评审，重点检查：
+- 以 PR 描述明确承诺的范围为准；仅作背景引用的工单或已完成事项不得列为本 PR 未满足的要求。
 - 文档类改动是否同步 docs/DOCUMENT-REGISTER.md 的登记与正文元数据、版本号、链接与锚点。
 - 工作流与脚本改动：`uses:` 是否固定 40 位提交 SHA，是否声明最小 `permissions`，是否误用 `pull_request_target`，是否在无凭据的 fork 事件上依赖 secrets。
 - 是否引入真实凭据、内网主机地址、本机绝对路径或真实个人数据；示例是否使用 `corp.example` 一类占位值。
 - 新增扩展包是否先有设计登记，清单是否含 `engines.dsh`、`private: true` 与可运行的 `test` 入口。
 - 行为变更是否带正反向测试；检查器规则变更是否附带会失败的样例。
 - 提交说明与文档是否采用终态语态，避免“按用户要求修改”一类过程叙事。
-只报告能定位到文件与行的问题，不复述已通过的检查，不推测未读到的外部环境状态。
+只报告能定位到文件与行的问题；未读到的代码或外部状态只可标为待人工核实，不得当作已确认缺陷；不复述已通过的检查。
 """
 
 [pr_description]
 # Keep the author's PR body as written and post the generated summary as a
 # comment, so the repository's PR template stays the authoritative record.
 publish_description_as_comment = true
+publish_description_as_comment_persistent = true
