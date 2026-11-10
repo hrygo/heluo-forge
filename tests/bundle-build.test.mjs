@@ -103,7 +103,9 @@ test('buildBundle 以指定安装单元为根闭包构建，默认入口仍是�
   assert.equal(umbrella.manifest.dependencies['@heluo/forge-member'], '0.1.0');
 });
 
-test('build refuses source symlinks and accidentally declared test/cache resources', (t) => {
+// 标准 Windows 账号没有创建符号链接的权限（需管理员或开发者模式），夹具造不出来；
+// 该规则本身仍由 POSIX 侧的用例守住。
+test('build refuses source symlinks and accidentally declared test/cache resources', { skip: process.platform === 'win32' }, (t) => {
   const root = fixture(t);
   const source = join(root, 'packages/forge-member/src');
   symlinkSync(join(source, 'index.mjs'), join(source, 'linked.mjs'));
@@ -113,7 +115,9 @@ test('build refuses source symlinks and accidentally declared test/cache resourc
   assert.throws(() => buildEnterpriseBundle({ root, destination: join(root, 'release') }), /non-release resource: test/u);
 });
 
-test('release audits reject missing/wrong member, workspace references, undeclared inserts, and source links', (t) => {
+// 该用例末尾要用符号链接验证"发布目录不得含链接"，Windows 标准账号造不出来；
+// 其余规则仍由同一用例在 POSIX 上守住。
+test('release audits reject missing/wrong member, workspace references, undeclared inserts, and source links', { skip: process.platform === 'win32' }, (t) => {
   const root = fixture(t);
   const released = join(root, 'release');
   const member = { name: '@heluo/forge-member', version: '0.2.0', main: './src/missing.mjs', files: ['src'] };

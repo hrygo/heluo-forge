@@ -10,6 +10,46 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { dirname, join } from 'node:path';
 
 const LIFECYCLE_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'];
+
+// 可执行位不是所有文件系统都保存：Windows 上 `statSync().mode & 0o100` 恒为 0，`npm pack`
+// 也只能把 bin 打成 0644，于是"bin 不可执行"在这类平台上既测不准也修不掉。Git 索引却
+// 把 +x 记成 100755，这个记录随提交在各平台一致。索引里查不到（未跟踪、已解包的
+// 发布目录、没有 git）时返回 null，按"无法判定"处理，不据此报错。
+const POSIX_MODE_FILESYSTEM = process.platform !== 'win32';
+
+function gitIndexExecutable(base, relPath) {
+  if (POSIX_MODE_FILESYSTEM) return null;
+  try {
+    const out = execFileSync('git', ['-C', base, 'ls-files', '-s', '--', relPath], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const mode = out.trim().split(/\s+/u)[0];
+    if (mode === undefined || mode.length === 0) return null;
+    return (Number.parseInt(mode, 8) & 0o100) !== 0;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 版本库索引里记着 +x 的文件集合（路径相对 `base`）。不是仓库、没有 git 或当前
+ * 平台文件系统本身就保存该位时返回 null，调用方据此跳过而不是误报。
+ */
+export function gitExecutablePaths(base) {
+  if (POSIX_MODE_FILESYSTEM) return null;
+  try {
+    // `git -C <子目录> ls-files` 输出的路径本身就相对该目录，不再按仓库根裁剪。
+    const out = execFileSync('git', ['-C', base, 'ls-files', '-s'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const set = new Set();
+    for (const line of out.split('\n')) {
+      const parts = line.trim().split(/\s+/u);
+      if (parts.length < 4) continue;
+      if ((Number.parseInt(parts[0], 8) & 0o100) === 0) continue;
+      set.add(parts.slice(3).join(' '));
+    }
+    return set;
+  } catch {
+    return null;
+  }
+}
 const DEP_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'];
 const KERNEL_PACKAGE = '@deepseek-ai/dsh';
 const MARKET_PACKAGE = '@heluo/forge-market';
@@ -166,8 +206,16 @@ function checkEntryPoints(label, base, pkg, errors) {
     requireTarget(target, `bin.${name}`);
     if (typeof target === 'string' && !target.includes('*')) {
       const full = join(base, target);
-      if (existsSync(full) && (statSync(full).mode & 0o100) === 0) {
-        errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
+      if (!existsSync(full)) continue;
+      if (POSIX_MODE_FILESYSTEM) {
+        if ((statSync(full).mode & 0o100) === 0) {
+          errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
+        }
+        continue;
+      }
+      const indexed = gitIndexExecutable(base, target);
+      if (indexed === false) {
+        errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable (git index records it without +x)`);
       }
     }
   }
@@ -294,9 +342,11 @@ export function checkBundleClosure(root, errors) {
  * 真实 tarball 闭包核验（#37 AC4）：把 `npm pack --dry-run --json` 的结果与清单对照。
  * 只看"包装出来的东西"，不重复静态规则；模式位来自 pack 的实际输出。
  *
- * @param {{label: string, manifest: Record<string, any>, packed: Array<{path: string, mode?: number}>}} input
+ * @param {{label: string, manifest: Record<string, any>, packed: Array<{path: string, mode?: number}>, executablePaths?: Set<string> | null}} input
+ *   `executablePaths`: 不保存 POSIX 位的平台上，版本库索引里带 +x 的相对路径集合（见 `gitExecutablePaths`）；
+ *   传入时用它判定 bin，而不是 pack 输出里恒为 0644 的模式位。
  */
-export function auditTarball({ label, manifest, packed }) {
+export function auditTarball({ label, manifest, packed, executablePaths = null }) {
   const errors = [];
   const paths = new Map();
   for (const entry of packed) {
@@ -354,9 +404,19 @@ export function auditTarball({ label, manifest, packed }) {
   for (const [name, target] of Object.entries(manifest.bin ?? {})) {
     requirePacked(target, `bin.${name}`);
     if (typeof target === 'string' && !target.includes('*')) {
-      const mode = paths.get(target.replace(/^\.\//u, ''));
+      const relative = target.replace(/^\.\//u, '');
+      if (executablePaths !== null) {
+        if (!executablePaths.has(relative)) {
+          errors.push(`bundle: ${label} tarball bin.${name} ${target} is not executable (git index records it without +x)`);
+        }
+        continue;
+      }
+      const mode = paths.get(relative);
       if (typeof mode === 'number' && (mode & 0o100) === 0) {
         errors.push(`bundle: ${label} tarball bin.${name} ${target} is not executable (mode ${(mode & 0o777).toString(8)})`);
+      } else if (!POSIX_MODE_FILESYSTEM) {
+        // 没有索引依据、平台又不保存该位：无法判定，跳过而不是把 0644 当成缺陷。
+        continue;
       }
     }
   }

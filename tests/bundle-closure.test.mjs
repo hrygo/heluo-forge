@@ -259,7 +259,11 @@ test('tarball audit refuses non-executable bins and shipped test files', () => {
     { path: 'test/cli.test.mjs', mode: 0o644 },
   ];
   const errors = auditTarball({ label: 'packages/forge-sample', manifest, packed });
-  assert.ok(errors.some((error) => error.includes('bin.forge-sample ./src/cli.mjs is not executable (mode 644)')), errors.join('\n'));
+  // 不保存 POSIX 位的平台（Windows）上 pack 只能写出 0644，又没给索引依据时这一条按
+  // "无法判定"跳过；其余规则与平台无关，照常断言。
+  if (process.platform !== 'win32') {
+    assert.ok(errors.some((error) => error.includes('bin.forge-sample ./src/cli.mjs is not executable (mode 644)')), errors.join('\n'));
+  }
   assert.ok(errors.some((error) => error.includes('must not ship src/gate.test.mjs')), errors.join('\n'));
   assert.ok(errors.some((error) => error.includes('must not ship coverage/lcov.info')), errors.join('\n'));
   assert.ok(errors.some((error) => error.includes('must not ship pnpm-lock.yaml')), errors.join('\n'));
@@ -280,7 +284,9 @@ test('tarball audit keeps locale pairs together', () => {
   assert.ok(errors.some((error) => error.includes('missing locale/zh.json')), errors.join('\n'));
 });
 
-test('bin targets must be executable in the working tree', () => {
+// NTFS 不保存 POSIX 可执行位，chmod 在该平台上造不出"可执行"，这条用例只在保存该位的
+// 文件系统上有意义；Windows 侧的判据改由版本库索引提供（见 gitIndexExecutable）。
+test('bin targets must be executable in the working tree', { skip: process.platform === 'win32' }, () => {
   withFixture((root) => {
     addPackage(root, 'forge-sample', { bin: { 'forge-sample': './src/cli.mjs' } });
     write(root, 'packages/forge-sample/src/cli.mjs', '#!/usr/bin/env node\n');
@@ -337,7 +343,9 @@ test('parsePackOutput accepts both the object (npm 12) and array (npm 11) shapes
   assert.deepEqual(parsePackOutput(`npm notice creating\n${npm11}\n`), files);
 });
 
-test('npmExecutable prefers the npm that ships with the running node', () => {
+// 夹具用 POSIX 路径字面量；Windows 上 join() 会改写分隔符，断言的是"挑同目录 npm"
+// 这一行为，与平台无关，故只在 POSIX 上跑。
+test('npmExecutable prefers the npm that ships with the running node', { skip: process.platform === 'win32' }, () => {
   const execPath = '/opt/node24/bin/node';
   assert.equal(npmExecutable(execPath, (path) => path === '/opt/node24/bin/npm'), '/opt/node24/bin/npm');
   assert.equal(npmExecutable(execPath, () => false), 'npm');
