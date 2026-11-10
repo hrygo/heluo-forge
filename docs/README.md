@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.40.4 |
+| 版本 | V1.40.5 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-07 |
+| 最后更新 | 2026-11-10 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -83,6 +83,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 |---|---|---|
 | 跨团队回函 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 原七域及专项子函路由；本轮网关新函、IAM 原函补充（含 2026-10-28 三项必要确认答复，见 IAM 专项函 §4.5.8）；回函核验后写契约，不自动准入 |
 | 市场方案 | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>) | 评审稿；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；不等企业批准或上线 |
+| 公版与企业包 | [公版插件、企业私有包与完整 DSH 安装方案](<architecture/public-enterprise-bundle.md>) | 草案；企业接口和各目标平台待实测 |
 | AIHUB 索引交付 | [issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 外部交付 issue：URL、format-1、registry、更新/撤回时限、三目标联调；作为验收跟踪，不替代企业批准 |
 | 市场来源与索引 | [企业 Artifactory + AIHUB 原生索引决策](<architecture/plugin-registry-source-decision.md>) | ADR-11/13 已确认唯一制品源与轻量索引；市场模式与当前状态见[索引契约 §1](<design/services/market-index.md#1-一页速览>)；索引交付、三目标安装与全通道边界仍需验 |
 | 市场调研 | [企业插件市场调研与落地建议](<architecture/plugin-market-research.md>) | 保留社区/官方证据；原Gitee制品和复杂审批控制面建议已由ADR-11替代 |
