@@ -49,6 +49,41 @@ export function apply(ctx, rawConfig = {}) {
     credentials = undefined;
   }
 
+  // The atomic-store verdict and the joint adapter come from a separate host
+  // service owned by the credentials plugin, not from the provider's own
+  // fields. A plain ctx.credentials impostor cannot satisfy the gate unless it
+  // also mounts that service, and both disappear together on unload.
+  const trustedJointStore = () => {
+    try {
+      return getContextService('iam-atomic-store');
+    } catch {
+      return undefined;
+    }
+  };
+  const verifyAtomicStore = (instance) => {
+    try {
+      const trust = trustedJointStore();
+      return trust !== undefined && trust.verify(instance) === true;
+    } catch {
+      return false;
+    }
+  };
+  const getGatewayAtomicStore = (instance) => {
+    const trust = trustedJointStore();
+    if (trust === undefined || trust.verify(instance) !== true) {
+      throw new IamError('IAM_GATEWAY_ATOMIC_UNVERIFIED', 'no trusted joint store is bound to this credentials instance');
+    }
+    return trust.adapter();
+  };
+  const verifyGatewayAtomicStore = (instance, adapter) => {
+    try {
+      const trust = trustedJointStore();
+      return trust !== undefined && trust.verify(instance) === true && adapter === trust.adapter();
+    } catch {
+      return false;
+    }
+  };
+
   let currentWebServer;
   let currentConnection;
   let modelServices;
@@ -58,6 +93,9 @@ export function apply(ctx, rawConfig = {}) {
     recheckExclusive: () => checkExclusive(ctx, result.value),
     credentials,
     getCredentials: () => getContextService('credentials'),
+    verifyAtomicStore,
+    getGatewayAtomicStore,
+    verifyGatewayAtomicStore,
     getManagedModelRuntime: () => managedRuntime,
     getModelSelectionServices: () => {
       try {

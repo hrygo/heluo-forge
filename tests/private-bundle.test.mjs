@@ -299,25 +299,22 @@ test('issuer without discovery or explicit endpoints is rejected at package time
   assert.equal(buildConfig(complete).iam.discoveryUrl, 'https://iam.corp.example/.well-known/openid-configuration');
 });
 
-test('the unvetted native adapter is injected only when explicitly enabled', () => {
-  const enabled = buildConfig(parseEnvConfig([...ENV, 'HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=true'].join('\n')));
-  assert.equal(enabled.keychain.allowUnvettedPlatformAdapter, true);
-  assert.equal(enabled.keys.includes('keychain.allowUnvettedPlatformAdapter'), true);
+test('the credentials row carries no adapter config: the platform store is the default', () => {
+  const config = buildConfig(parseEnvConfig(ENV.join('\n')));
+  assert.equal(config.keys.some((key) => key.startsWith('keychain.')), false);
   const built = buildPrivateTarball({
     entries: readBundleEntries(publicTarball(), { withContent: true }),
     version: '0.2.0',
-    config: enabled,
+    config,
     baseSha256: 'a'.repeat(64),
   });
-  assert.match(built.patch, /id: heluo-credentials-keychain\n {6}name: '@heluo\/forge-credentials-keychain'\n {6}config:\n {8}allowUnvettedPlatformAdapter: true/u);
-  const disabled = buildConfig(parseEnvConfig(ENV.join('\n')));
-  const plain = buildPrivateTarball({
-    entries: readBundleEntries(publicTarball(), { withContent: true }),
-    version: '0.2.0',
-    config: disabled,
-    baseSha256: 'a'.repeat(64),
-  });
-  assert.equal(/allowUnvettedPlatformAdapter/u.test(plain.patch), false);
+  assert.match(built.patch, /id: heluo-credentials-keychain/u, 'the credentials provider must still be composed');
+  assert.equal(/allowUnvettedPlatformAdapter|platformAdapter/u.test(built.patch), false, 'no adapter opt-in may leak into the bundle');
+  // The retired key must fail loudly instead of silently changing nothing.
+  assert.throws(
+    () => parseEnvConfig([...ENV, 'HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=true'].join('\n')),
+    (error) => error.code === 'CONFIG_UNKNOWN_KEY',
+  );
 });
 
 test('public input must be configuration-neutral before the maker touches it', (t) => {

@@ -18,9 +18,9 @@
 7. Gitee host：没有企业 Gitee 就跳过，不写空键。
 8. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
 9. 输出目录：仓库外、不存在或为空。
-10. Windows/Linux 目标：确认 `HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=true` 已写入；否则安装后向导会提示“凭据存储不可用”。macOS 不写该行。
+10. 凭据存储：Windows 与 macOS 使用插件内置的加密文档后端，`.env` 不需要任何相关配置；Linux 目标没有可用凭据后端，安装后向导会提示“凭据存储不可用”，交付前向使用方说明。
 
-答案写入临时文件，内网 http 时追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`，Windows/Linux 追加 `HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=true`：
+答案写入临时文件，内网 http 时追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`：
 
 ```sh
 umask 077

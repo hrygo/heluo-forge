@@ -504,7 +504,7 @@ DSH 凭据存储 (ctx.credentials)
 3. **防并发篡改**：凭据读写与 CAS 联合提交必须具备跨进程互斥保护，防止崩溃或多进程并发导致的数据撕裂；
 4. **后端落地形态**：Windows x64/arm64、Linux x64 GNU、Linux arm64 GNU 使用固定版本的预编译 addon，以发布资源随 `@heluo/forge-credentials-keychain` 分发，按 `platform-arch` 以相对本包的绝对路径加载；terminal 不编译、不解析平台包，宿主制品保持自包含。macOS arm64/x64 不加载 addon，解析层直接进入应用层加密文档后端。未列入映射的平台返回不可用后端，加载器不提供任何明文分支；
 5. **平台持久性**：Windows 绑定未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境且启用漫游配置时凭据随用户配置文件漫游；绑定未暴露 `persistence`，本工程无法改写。是否接受这一默认值属业务决策：要求凭据只留本机的场景需要更换实现或申请上游参数，不能在本包内伪装成本地持久；
-6. **准入状态**：四组合 addon 已随包分发，目标机尚未取证，按 `unvetted` 拒绝默认挂载，组合层需显式 `allowUnvettedPlatformAdapter`。macOS 加密文档后端不经过该开关，已在本机与远程 Apple Silicon Mac 的 SSH 会话中各 7/7 通过；其剩余证据是重启后复读与密钥权限负例的实机记录。取证覆盖读、写、删、失效、跨进程与重启后保留，通过后由单一开关转为默认可用；取证前原生枚举保持 `KEYCHAIN_LIST_UNSUPPORTED`，不返回空表，IAM 写路径据此继续关闭。
+6. **准入状态**：Windows 与 macOS 的凭据存储是应用层加密文档后端，同一文档内完成记录/引用联合提交，不经过 `unvetted` 开关；macOS 已在本机与远程 Apple Silicon Mac 的 SSH 会话中各 7/7 通过。四组合原生 addon 已随包分发但目标机尚未取证，保持 `unvetted` 拒绝默认挂载，枚举在取证前保持 `KEYCHAIN_LIST_UNSUPPORTED`、不返回空表。Linux 目标没有可用凭据后端，登录按 fail closed 关闭。
 
 ### 6.4 网关联合变更当前原型
 

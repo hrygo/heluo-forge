@@ -86,19 +86,10 @@ export const GITEE_ENV_MAP = Object.freeze({
   HELUO_GITEE_PERSISTENT_TOKEN: 'persistentToken',
 });
 
-/**
- * The native keychain adapter is an unvetted pilot path on Windows/Linux; the
- * plugin refuses to mount it without an explicit opt-in. Without this key the
- * enterprise wizard shows "credential storage unavailable" after install.
- */
-export const KEYCHAIN_ENV_MAP = Object.freeze({
-  HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER: 'allowUnvettedPlatformAdapter',
-});
-
 /** Secret-bearing names are recognized so the maker can refuse them explicitly. */
 export const SECRET_ENV_KEYS = Object.freeze(['HELUO_IAM_CLIENT_SECRET', 'HELUO_IAM_CLIENT_SECRET_FILE']);
 
-const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...Object.keys(KEYCHAIN_ENV_MAP), ...SECRET_ENV_KEYS]);
+const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...SECRET_ENV_KEYS]);
 const INTEGER_KEYS = new Set(['HELUO_IAM_CALLBACK_PORT', 'HELUO_GITEE_TIMEOUT_MS']);
 const BOOLEAN_KEYS = new Set(['HELUO_IAM_ALLOW_INSECURE_HTTP']);
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
@@ -182,7 +173,6 @@ export function buildConfig(entries) {
   const allowInsecureHttp = byKey.get('HELUO_IAM_ALLOW_INSECURE_HTTP') === 'true';
   const iam = {};
   const gitee = {};
-  const keychain = {};
   const problems = [];
   const put = (target, key, value) => {
     if (value !== undefined && value !== '') target[key] = value;
@@ -235,12 +225,6 @@ export function buildConfig(entries) {
     put(gitee, field, raw);
   }
 
-  const unvetted = byKey.get('HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER');
-  if (unvetted !== undefined) {
-    if (unvetted !== 'true' && unvetted !== 'false') problems.push('HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER must be true or false');
-    else keychain.allowUnvettedPlatformAdapter = unvetted === 'true';
-  }
-
   const mode = iam.authMode ?? 'public';
   if (!['public', 'confidential'].includes(mode)) problems.push('HELUO_IAM_AUTH_MODE must be public or confidential');
   if (mode === 'public') {
@@ -271,11 +255,9 @@ export function buildConfig(entries) {
   return {
     iam,
     gitee,
-    keychain,
     keys: [
       ...Object.keys(iam).map((key) => `iam.${key}`),
       ...Object.keys(gitee).map((key) => `gitee.${key}`),
-      ...Object.keys(keychain).map((key) => `keychain.${key}`),
     ].sort(),
   };
 }
@@ -452,9 +434,6 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
 
   let patch = injectPatchConfig(patchEntry.content.toString('utf8'), 'heluo-iam', config.iam);
   patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
-  if (Object.keys(config.keychain ?? {}).length > 0) {
-    patch = injectPatchConfig(patch, 'heluo-credentials-keychain', config.keychain);
-  }
   const manifest = { ...root, version };
   // The manifest is generated after the version bump, so its member map must
   // match the rewritten package.json rather than the public base version.

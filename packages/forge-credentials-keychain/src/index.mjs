@@ -3,7 +3,8 @@ import { dirname, join, resolve } from 'node:path';
 import { KeychainBackendError, createFileBackend, createMacosBackend, createPlatformBackend, createUnavailableBackend } from './backend.mjs';
 import { createNativeKeyringBackend, nativeTargetFor } from './native-keyring.mjs';
 import { createSecurityCliBackend } from './security-cli.mjs';
-import { createKeychainProvider, KeychainProviderError } from './provider.mjs';
+import { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
+import { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
 
 export const name = 'forge-credentials-keychain';
 export const inject = [];
@@ -11,7 +12,8 @@ export const inject = [];
 export { createFileBackend, createMacosBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, createWindowsBackend, KeychainBackendError } from './backend.mjs';
 export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, nativeAddonPath, nativeTargetFor, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES, WINDOWS_RUNTIME_DLLS, windowsRuntimeStatus } from './native-keyring.mjs';
 export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
-export { createKeychainProvider, KeychainProviderError } from './provider.mjs';
+export { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
+export { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
 export { isMigratableKey, KeychainMigrationError, migrateLegacyFileToKeychain, MIGRATION_REASONS, redactSecrets } from './migrate.mjs';
 
 const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
@@ -350,8 +352,24 @@ export function apply(ctx, rawConfig = {}) {
   // not collected as an effect. Register teardown explicitly: unload must
   // unprovide ctx.credentials and close the backend even for the default
   // (non-Cordis) call path that invokes the returned function directly.
+  // A trusted composition may only commit record+ref jointly through an
+  // adapter bound to this exact provider instance. The trust object is a
+  // separate host service, so a credentials impostor has to mount it too, and
+  // it disappears together with the provider on unload.
+  let jointStore;
+  try {
+    jointStore = createJointStore(backend, namespacePrefixes(result.value));
+  } catch {
+    jointStore = undefined;
+  }
+  const trust = jointStore === undefined ? undefined : Object.freeze({
+    verify: (candidate) => candidate === provider,
+    adapter: () => jointStore,
+  });
+
   let closed = false;
   let disposeProvide;
+  let disposeTrust;
   const teardown = async () => {
     if (closed) return;
     closed = true;
@@ -360,11 +378,13 @@ export function apply(ctx, rawConfig = {}) {
     } finally {
       // Unprovide even when the backend fails to close: leaving a provider that
       // points at a half-closed backend behind is worse than the close error.
+      disposeTrust?.();
       disposeProvide?.();
     }
   };
   ctx.effect(() => {
     disposeProvide = ctx.provide('credentials', provider);
+    if (trust) disposeTrust = ctx.provide(JOINT_STORE_SERVICE, trust);
     return teardown;
   }, 'forge-credentials-keychain');
   return teardown;
