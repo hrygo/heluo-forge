@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.39.0 |
+| 版本 | V0.39.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -127,7 +127,7 @@ Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍
 | DevOps MCP 服务 | `services/devops-mcp/` | [services/devops-mcp.md](services/devops-mcp.md) | 条件建设，当前不建设 | CLI 前提不成立时先评审形态变更、范围与成本，批准后才启动 |
 | 索引契约与校验 | `services/market-index/` | [services/market-index.md](services/market-index.md) | 评审稿；只读校验器可用 | AIHUB 索引 URL/JSON/更新 SLA、Artifactory 终端认证与三目标安装待验 |
 
-[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)已确认企业 npm 唯一源与 AIHUB 原生索引；007/012 为评审稿，不以文档定版代表准入。本项目不建生成器、服务、写前授权或全通道强制；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。部署与运维边界见[部署说明](../../deploy/README.md)。
+[ADR-11/13](<../architecture/plugin-registry-source-decision.md>)已确认企业 npm 为唯一 npm 源与 AIHUB 原生索引；企业私版也可经内部文件交付；007/012 为评审稿，不以文档定版代表准入。本项目不建生成器、服务、写前授权或全通道强制；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。部署与运维边界见[部署说明](../../deploy/README.md)。
 
 ## 4. 设计顺序
 

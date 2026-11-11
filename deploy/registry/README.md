@@ -2,7 +2,7 @@
 
 状态：轻量模式评审稿；AIHUB 索引、企业接入与三目标安装仍待 G1/G2 核验。
 
-[ADR-11/13](<../../docs/architecture/plugin-registry-source-decision.md>)确定企业私有 npm 为唯一插件制品源；AI 开发者平台（AIHUB）维护并托管 format-1 索引，DSH 原生「索引源」添加只读 URL，官方 `pluginManager` + pnpm 安装。首版索引只放自包含、Windows 10 amd64／统信 UOS 20 amd64／银河麒麟 aarch64 三目标通用的稳定版。
+[ADR-11/13](<../../docs/architecture/plugin-registry-source-decision.md>)确定企业私有 npm 为唯一 npm 制品源；企业私版可另经授权的内部文件交付；AI 开发者平台（AIHUB）维护并托管 format-1 索引，DSH 原生「索引源」添加只读 URL，官方 `pluginManager` + pnpm 安装。首版索引只放自包含、Windows 10 amd64／统信 UOS 20 amd64／银河麒麟 aarch64 三目标通用的稳定版。
 
 本仓库不自研 registry、不生成索引、不写前授权，也不把方案写成全通道白名单已验证。字段与验收见[索引契约](<../../docs/design/services/market-index.md>)、[轻量市场设计](<../../docs/design/plugins/forge-market.md>)与 [issue #12](https://github.com/hrygo/heluo-forge/issues/12)。
 
