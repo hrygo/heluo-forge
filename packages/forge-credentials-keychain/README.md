@@ -22,7 +22,7 @@
 
 ## backend 选择
 
-- `resolvePlatformBackend()` 是默认解析：`win32-x64` / `win32-arm64` / `linux-x64` / `linux-arm64` 映射到 `vendor/` 下对应 addon；`darwin-arm64` / `darwin-x64` 映射到 macOS 加密文档后端；其余组合返回不可用 backend。显式指定的 platform-arch 不会被本机架构顶替，任何分支都不会落到明文。
+- `resolvePlatformBackend()` 是默认解析：`win32-*` 与 `darwin-*` 映射到加密文档后端（Windows 根目录 `%LOCALAPPDATA%\\HeluoForge`）；`linux-x64` / `linux-arm64` 映射到 `vendor/` 下对应 addon，仍未取证、需显式开关；其余组合返回不可用 backend。显式指定的 platform-arch 不会被本机架构顶替，任何分支都不会落到明文。
 - `createPlatformBackend()` 在 macOS 与 Windows 返回加密文档后端（Windows 根目录为 `%LOCALAPPDATA%\\HeluoForge`），在其余未映射平台返回不可用 backend，是上述“其余组合”的兜底，也用于断言不存在静默降级。
 - `createMacosBackend({ directory })` 是 macOS 的生产存储：`~/Library/Application Support/HeluoForge/credentials.json`（0600）以 AES-256-GCM 加密，密钥为同目录 `credentials.key`（32 B 随机，0600，首次使用时生成）。目录 0700；密钥文件权限不是 0600、所有者不是当前用户、或文档无法通过认证标签校验时一律拒绝，不回退明文。枚举由 `listEntries()` 支持，不需要显式开关。
 - `createMemoryBackend()` 只用于测试/开发，默认拒绝，需 `allowEphemeral: true`。
