@@ -196,6 +196,10 @@ if not defined PROFILE (
   exit /b 2
 )
 echo [heluo] profile=%PROFILE%
+if not exist "%SystemRoot%\\System32\\vcruntime140.dll" (
+  echo [heluo] WARNING: Microsoft Visual C++ 2015-2022 Redistributable is missing.
+  echo [heluo] The enterprise credential store cannot start until it is installed.
+)
 where node >nul 2>nul
 if errorlevel 1 if exist "%ProgramFiles%\\nodejs\\node.exe" set "PATH=%ProgramFiles%\\nodejs;%PATH%"
 where node >nul 2>nul
@@ -259,6 +263,7 @@ dsh plugin --profile <desktop|web> remove @heluo/forge-enterprise
 - Windows 提示 Node.js was not found：先安装 Node.js LTS，再重跑本文件。
 - 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。先确认 DSH 已完全退出，再重跑；也可用 dsh plugin --profile <desktop|web> list 检查。
 - 页面仍提示「企业登录尚未设置」：本包已包含管理员配置，先确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员，不要自行修改配置。
+- 页面提示「凭据存储不可用」：Windows/Linux 需要本包启用原生凭据适配器，并且 Windows 需安装 Microsoft Visual C++ 2015-2022 Redistributable；缺运行库时重启 DSH 后仍会报同一错误。
 - 企业内网地址使用 HTTP 时，登录令牌与个人 Key 会明文传输，请只在可信内网使用。
 
 ## 不要做

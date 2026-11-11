@@ -42,6 +42,8 @@ function patchText({ iamConfig = '', giteeConfig = '' } = {}) {
   return [
     '# fixture composition',
     '- insert:',
+    '    - id: heluo-credentials-keychain',
+    "      name: '@heluo/forge-credentials-keychain'",
     '    - id: heluo-iam',
     "      name: '@heluo/forge-iam'",
     ...(iam === '' ? [] : iam.split('\n')),
@@ -297,6 +299,27 @@ test('issuer without discovery or explicit endpoints is rejected at package time
   assert.equal(buildConfig(complete).iam.discoveryUrl, 'https://iam.corp.example/.well-known/openid-configuration');
 });
 
+test('the unvetted native adapter is injected only when explicitly enabled', () => {
+  const enabled = buildConfig(parseEnvConfig([...ENV, 'HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=true'].join('\n')));
+  assert.equal(enabled.keychain.allowUnvettedPlatformAdapter, true);
+  assert.equal(enabled.keys.includes('keychain.allowUnvettedPlatformAdapter'), true);
+  const built = buildPrivateTarball({
+    entries: readBundleEntries(publicTarball(), { withContent: true }),
+    version: '0.2.0',
+    config: enabled,
+    baseSha256: 'a'.repeat(64),
+  });
+  assert.match(built.patch, /id: heluo-credentials-keychain\n {6}name: '@heluo\/forge-credentials-keychain'\n {6}config:\n {8}allowUnvettedPlatformAdapter: true/u);
+  const disabled = buildConfig(parseEnvConfig(ENV.join('\n')));
+  const plain = buildPrivateTarball({
+    entries: readBundleEntries(publicTarball(), { withContent: true }),
+    version: '0.2.0',
+    config: disabled,
+    baseSha256: 'a'.repeat(64),
+  });
+  assert.equal(/allowUnvettedPlatformAdapter/u.test(plain.patch), false);
+});
+
 test('public input must be configuration-neutral before the maker touches it', (t) => {
   const root = temp(t);
   const dirty = publicTarball({ patch: patchText({ iamConfig: '        issuer: "https://iam.corp.example",\n' }) });
@@ -321,5 +344,5 @@ test('patch injection keeps every other composition line intact', () => {
   const patch = built.patch;
   assert.match(patch, /id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}/u);
   assert.match(patch, /id: heluo-gitee\n {6}name: '@heluo\/forge-gitee'\n {6}config:\n {8}host: "https:\/\/gitee\.corp\.example"/u);
-  assert.equal((patch.match(/- id: /gu) ?? []).length, 3);
+  assert.equal((patch.match(/- id: /gu) ?? []).length, 4);
 });

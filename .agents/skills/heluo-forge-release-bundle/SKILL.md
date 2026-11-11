@@ -41,6 +41,7 @@ description: 供打包人员通过问答收集企业 IAM/网关配置，在 macO
 | 网关 baseURL | 是 | — | `https://` 绝对地址，通常以 `/v1` 结尾；内网 http 需显式安全确认 |
 | IAM Discovery URL | 是 | issuer + `/.well-known/openid-configuration` | 绝对地址；打包前实际 GET 到 200 且 issuer 一致。缺失或不可达会导致插件运行时“企业登录尚未设置”，maker 会直接拒绝 |
 | 内网 HTTP opt-in | 否 | 空 | 仅当打包人员确认接受明文传输风险时写 `true` |
+| 原生凭据适配器 opt-in | 否 | 空 | Windows/Linux 目标必须写 `HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=true`，否则插件挂载失败、向导显示“凭据存储不可用”；macOS 不需要 |
 | 回调端口 | 否 | `17321` | 1024–65535 整数 |
 | 回调地址 | 否 | `127.0.0.1` | IPv4 回环或主机名 |
 | Gitee host | 否 | 空 | 企业 Gitee 的 `https://` 地址；没有就跳过 |
@@ -63,6 +64,7 @@ HELUO_IAM_CALLBACK_ADDRESS=<address>
 HELUO_IAM_MANAGED_MODELS_BASE_URL=<gateway baseURL>
 HELUO_IAM_DEFAULT_PROVIDER=<provider id>
 HELUO_IAM_ALLOW_INSECURE_HTTP=<true 仅内网 http 且已确认>
+HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=<true Windows/Linux 目标；macOS 删除该行>
 HELUO_GITEE_HOST=<gitee host>
 ENV
 ```
@@ -108,6 +110,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 | `PUBLIC_DIGEST_MISMATCH` | 停止。重新取得公版与可信摘要，不猜测文件 |
 | `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续，报告命中的类别 |
 | `CONFIG_*` | 按字段回显修正；未知键不写入。出现 `IAM login is incomplete` 时补 Discovery URL（或 issuer + 三个端点），不要删掉 issuer 绕过 |
+| 安装后向导显示“凭据存储不可用” | Windows/Linux 未启用原生凭据适配器：补 `HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER=true` 重打包；Windows 还需 VC++ 2015-2022 运行库 |
 | `BUNDLE_SECRET_EMBED_UNSUPPORTED` | 企业采用 public+PKCE，不应有 secret；删掉密钥行或停止 |
 | `OUTPUT_*` | 换仓库外的新目录；不要删除已有文件 |
 | `VERIFY_FAILED` | 制作或清单不一致，保留现场并报告错误行，不手工改清单 |
