@@ -29,7 +29,7 @@
 - `createFileBackend({ path })` 是显式 0600 明文 fallback，默认拒绝，需 `allowInsecureFile: true`；文件权限在 POSIX 上校验为 `0600`。
 - `createSecurityCliBackend()` 是 macOS Security CLI 的**验证用**适配器，不参与生产路径：口令经 stdin 双次输入写入、不进 argv；`list()` 直接报 `KEYCHAIN_LIST_UNSUPPORTED`（不把"读不到"伪装成"没有记录"）；`secretTransport: 'argv'` 需显式 `allowArgvSecret: true`。它用于对照系统钥匙串行为，不随 macOS 生产后端启用。
 - 组合层启用该适配器还要 `allowUnvettedPlatformAdapter: true`，否则挂载即 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`。
-- `createNativeKeyringBackend({ service, load })` 包装 `@napi-rs/keyring` 2.1.2 的预编译 addon，按 `platform-arch` 以**绝对路径**加载本包 `vendor/<triple>/keyring.node`，不走 `node_modules` 解析，本包也不声明该依赖；`load` 仅用于测试注入；backend key 原样作为 account，`getPassword()` 的 `null` 归一为 `undefined`，Linux 每个 Entry 固定 `{ linux: { store: 'secret-service' } }`（拒绝 keyutils 回退），Windows 按 UTF-16LE 字节拒绝超过 2560 B 的值。它不导出 `transaction()`、不自报跨进程锁，因此 provider 不会声称原子能力；`durable: true` 是对 OS 钥匙串持久性的假设，Linux Secret Service 集合是否跨重启保留未在目标平台验证。枚举默认显式 `KEYCHAIN_LIST_UNSUPPORTED`，只有 `allowUnverifiedEnumeration: true` 才走 `findCredentials`（Windows 过滤语法与 macOS 静默跳过不可读条目的差异仍未核验）。
+- `createNativeKeyringBackend({ service, load })` 包装 `@napi-rs/keyring` 2.1.2 的预编译 addon，按 `platform-arch` 以**绝对路径**加载本包 `vendor/<triple>/keyring.node`，不走 `node_modules` 解析，本包也不声明该依赖；`load` 仅用于测试注入；backend key 原样作为 account，`getPassword()` 的 `null` 归一为 `undefined`，Linux 每个 Entry 固定 `{ linux: { store: 'secret-service' } }`（拒绝 keyutils 回退），Windows 按 UTF-16LE 字节拒绝超过 2560 B 的值。Windows 新目标名以 service 与 key 的精确字节摘要区分大小写；读写删前检测同键旧格式，命中即 `KEYCHAIN_LEGACY_RECORD`，不返回旧值、不迁移、不删除。要重新录入可使用新的 service；旧数据迁移另行处理。它不导出 `transaction()`、不自报跨进程锁，因此 provider 不会声称原子能力；`durable: true` 是对 OS 钥匙串持久性的假设，Linux Secret Service 集合是否跨重启保留未在目标平台验证。枚举默认显式 `KEYCHAIN_LIST_UNSUPPORTED`，只有 `allowUnverifiedEnumeration: true` 才走 `findCredentials`。
 - 该样机的枚举默认不可用：`listRecords()` 报 `KEYCHAIN_LIST_UNSUPPORTED`，而不是返回空表；只有显式 `allowUnverifiedEnumeration: true` 才使用 `findCredentials`，且各平台的过滤/编码差异仍未核验。没有它，IAM 拿不到 `listRecords`，写路径仍应保持关闭。
 - 实测（2026-10-24，darwin-arm64）：未命中条目退出码 44；`add-generic-password -U` 覆盖同名条目；删除幂等；spike 过程无明文文件、测试条目已清理。复跑：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过）。
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
@@ -51,11 +51,13 @@ macOS 不提供“免签名且无需交互”的系统凭据库：钥匙串条�
 
 | 平台 | 写入形态 | 枚举检索键 | account 来源 | 已知失败模式 |
 |---|---|---|---|---|
-| Windows | target 为 `{account}.{service}`，blob 为 UTF-16LE | `CredEnumerateW` 过滤 `*.{service}`，按 target 后缀匹配，也会扫到同后缀的他人条目 | 凭据的 `UserName` | 命中集合里任一凭据 blob 为奇数长或非法 UTF-16 时，整次枚举抛错（`Not a valid utf16 blob`），不返回部分结果 |
+| Windows | account 为原始 key；target 为 `{account}.~heluo-forge-v1-{service 摘要}-{key 摘要}`，blob 为 UTF-16LE；旧目标为 `{account}.{service}` | `CredEnumerateW` 按调用方 key 前缀取得候选 account，再逐键检查旧目标并回读当前 service 的新目标 | 凭据的 `UserName` | 上游不返回目标名；其他 service 的同前缀条目、含糊的 account 或不匹配的值会阻断枚举，非法 blob 也会使整次枚举失败 |
 | Linux | Secret Service 条目，属性含 `service`、`username` | 按属性 `service` 搜索 | 属性 `username` | 缺 `username` 属性的条目被上游静默跳过；集合锁定时搜索失败 |
 | macOS | 应用层加密文档：AES-256-GCM，密钥 0600 同目录保存 | 整篇文档解密后按 key 前缀过滤 | 文档内的 key 原样 | 密钥权限放宽、密钥与文档不匹配或文档被篡改时显式报错，不回退明文 |
 
-本包据此确定行为：原生后端的枚举默认关闭，`allowUnverifiedEnumeration: true` 才走 `findCredentials`，并按调用方前缀过滤、丢弃无法作为 key 的 account（空串、控制字符），不因他人条目失败整个扫描；macOS 加密文档后端由 `listEntries()` 直接枚举，不需要该开关。上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上限：Windows account ≤ 513 字节（UTF-8）、blob ≤ 2560 字节（UTF-16LE）；Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
+原生后端的枚举默认关闭，`allowUnverifiedEnumeration: true` 才走 `findCredentials`。Windows 枚举逐个核对候选 account、旧目标及本 service 新目标的值，仅返回通过核验的结果；重复 account、无法对应的新目标或值不一致时以 `KEYCHAIN_OPERATION_FAILED` 拒绝整次枚举。其他 service 即使使用不同 account，只要目标前缀命中，也可能阻断枚举；单键读写仍按 service 隔离。结果按大小写敏感前缀过滤；非 ASCII 前缀仅大小写不同而无法确认 Windows 比较语义时拒绝枚举。Windows 的调用方前缀若含 `*`，返回 `KEYCHAIN_LIST_UNSUPPORTED`；Windows key 与前缀还须为完整 Unicode。Linux 丢弃不能作为 key 的空 account 与含控制字符的 account。macOS 加密文档后端由 `listEntries()` 直接枚举，不需要该开关。上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上游检查的 Windows account 上限为 513 字节（UTF-8）、blob 上限为 2560 字节（UTF-16LE）；实际系统还可能拒绝上游检查允许的账户名：本地 Windows 11 ARM64 虚拟机的合成测试中，512 字节 ASCII account 可写，513 字节以 Windows 错误 1734 拒绝，旧格式与新格式一致。Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
+
+Windows 构造目标时使用普通 `Entry`，不使用 2.1.2 的 `withTarget`：后者在 Windows 构造期间会写入空占位凭据。枚举与逐键回读没有跨进程快照或锁，并发写入和外部修改可能导致结果不一致；旧格式检测与新目标操作之间也没有跨进程锁，旧版与新版不得并发修改同一凭据。如需迁移或回退，须先停止相关进程并保留旧数据。
 
 ## 运行前提
 
@@ -91,9 +93,10 @@ Windows 的持久性默认值属于部署决策：若要求凭据只留在本机
 |---|---|---|
 | `KEYCHAIN_UNAVAILABLE` | 该 platform-arch 无对应 addon、addon 缺失或加载失败、后端整体不可用 | 否 |
 | `KEYCHAIN_UNVETTED_ADAPTER_REFUSED` | 适配器未取证且未显式 `allowUnvettedPlatformAdapter` | 否 |
-| `KEYCHAIN_LIST_UNSUPPORTED` | 枚举未开启，或该平台枚举未验证 | 否 |
+| `KEYCHAIN_LIST_UNSUPPORTED` | 枚举未开启，或该平台枚举未验证，或 Windows 枚举前缀含 `*` | 否 |
+| `KEYCHAIN_LEGACY_RECORD` | Windows 同键旧格式记录存在，或枚举发现相关旧记录 | 否，旧记录保留 |
 | `KEYCHAIN_VALUE_EMPTY` / `KEYCHAIN_VALUE_INVALID` / `KEYCHAIN_VALUE_TOO_LARGE` | 空值；非字符串或含孤立代理项；Windows 超过 2560 B（UTF-16LE 计） | 否 |
-| `KEYCHAIN_KEY_INVALID` | backend key 为空、含控制字符或不合命名空间文法；或密钥文件不是 32 字节 | 否 |
+| `KEYCHAIN_KEY_INVALID` | backend key 为空、含控制字符或不合命名空间文法；Windows key 或枚举前缀不是完整 Unicode；或密钥文件不是 32 字节 | 否 |
 | `KEYCHAIN_KEY_PERMISSIONS` | 密钥文件权限不是 0600 或所有者不是当前用户 | 否 |
 | `KEYCHAIN_FILE_TAMPERED` | 加密文档无法通过认证标签校验（被修改或密钥不匹配） | 否 |
 | `KEYCHAIN_KEY_TOO_LONG` | Windows account 超过 513 字节（UTF-8） | 否 |

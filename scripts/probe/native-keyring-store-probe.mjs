@@ -161,8 +161,7 @@ export async function runStoreProbe(options) {
       const found = await list.call(backend, key.slice(0, key.lastIndexOf('/') + 1));
       const keys = Array.isArray(found) ? found.map((item) => (typeof item === 'string' ? item : item?.key)) : [];
       if (!keys.includes(key)) throw fail('enumeration did not include the probed key');
-      // Foreign accounts are expected on Windows (target suffix filter); report
-      // the count so the target-machine record can show the actual hit set.
+      // Count only keys the backend attributes to this service and prefix.
       return { matched: keys.length, includesProbeKey: true };
     });
   }

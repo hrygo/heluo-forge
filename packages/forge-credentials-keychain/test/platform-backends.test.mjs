@@ -95,7 +95,11 @@ test('enumeration stays refused until it is verified per platform', async () => 
   const backend = resolvePlatformBackend({ platform: 'win32', arch: 'x64', load: fakeLoad, service: 'heluo-forge-test' });
   await assert.rejects(() => backend.list('iam/'), (error) => error.code === 'KEYCHAIN_LIST_UNSUPPORTED');
 
-  const listing = () => ({ Entry: FakeEntry, AsyncEntry: FakeEntry, findCredentialsAsync: async () => [{ account: 'iam/token', password: 'synthetic-value' }] });
+  const listing = () => ({
+    Entry: FakeEntry,
+    AsyncEntry: FakeEntry,
+    findCredentialsAsync: async () => [{ account: 'iam/token', password: 'synthetic-value' }],
+  });
   const optedIn = resolvePlatformBackend({
     platform: 'win32',
     arch: 'x64',
@@ -103,6 +107,7 @@ test('enumeration stays refused until it is verified per platform', async () => 
     service: 'heluo-forge-test',
     enumeration: 'find-credentials',
   });
+  await optedIn.set('iam/token', 'synthetic-value');
   assert.deepEqual(await optedIn.list('iam/'), ['iam/token']);
 });
 

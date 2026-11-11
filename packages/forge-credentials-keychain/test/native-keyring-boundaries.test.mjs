@@ -15,17 +15,18 @@ function fakeModule({ found = [], failSet, failGet, failList } = {}) {
     constructor(service, account) {
       this.service = service;
       this.account = account;
+      this.id = `${service}\u0000${account}`;
     }
     async getPassword() {
       if (failGet !== undefined) throw failGet;
-      return store.get(`${this.service}\u0000${this.account}`) ?? null;
+      return store.get(this.id) ?? null;
     }
     async setPassword(value) {
       if (failSet !== undefined) throw failSet;
-      store.set(`${this.service}\u0000${this.account}`, value);
+      store.set(this.id, value);
     }
     async deletePassword() {
-      return store.delete(`${this.service}\u0000${this.account}`);
+      return store.delete(this.id);
     }
   }
   return {
@@ -42,6 +43,7 @@ const backend = (options = {}) => createNativeKeyringBackend({ platform: 'win32'
 
 test('enumeration drops accounts that cannot be keys instead of failing the scan', async () => {
   const native = backend({
+    platform: 'linux',
     enumeration: 'find-credentials',
     load: () => fakeModule({
       found: [
