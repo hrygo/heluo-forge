@@ -13,7 +13,7 @@ description: 供打包人员通过问答收集企业 IAM/网关配置，在 macO
 ## 角色
 
 - **打包人员**：与本 Skill 对话，提供企业地址与版本，执行确认。
-- **员工**：只收到最终 zip，按 `安装说明.md` 三步安装，不接触企业配置和制作命令。
+- **员工**：只收到最终 zip，按 `INSTALL.md` 三步安装，不接触企业配置和制作命令。
 - Skill 只服务打包人员，不要求安装用户填写任何企业字段。
 
 ## 不可让步的边界
@@ -25,6 +25,7 @@ description: 供打包人员通过问答收集企业 IAM/网关配置，在 macO
 - 密钥、令牌、`client_secret` 不属于本交付；出现即停止（工具会报 `BUNDLE_SECRET_EMBED_UNSUPPORTED`）。
 - 输出目录必须在仓库外；缺字段、摘要不符、目录已存在或用户取消时安全失败，不覆盖、不留半成品。
 - 官方 DSH 宿主原样使用：交付包不重签、不公证、不修改官方载荷，只安装企业插件。
+- 企业地址默认只接受 HTTPS。确需内网 HTTP 时，必须先说明令牌与个人 Key 会明文传输，取得打包人员明确确认后才写 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
 - 运行期挂载只能在宿主「设置 → 插件」确认；工具输出 `mounted=unknown` 是正常的，不得写成挂载证据。
 
 ## 问答协议
@@ -35,9 +36,10 @@ description: 供打包人员通过问答收集企业 IAM/网关配置，在 macO
 |---|---|---|---|
 | 公版 `.tgz` 路径 | 是 | — | 存在、文件名含版本 |
 | 公版 SHA-256 | 是 | — | 64 位 hex，与本地文件一致；来源可信 |
-| IAM issuer | 是 | — | `https://` 绝对地址；无 query/fragment |
+| IAM issuer | 是 | — | `https://` 绝对地址；无 query/fragment；内网 http 需显式安全确认 |
 | IAM client_id | 是 | — | 非空，不含空白 |
-| 网关 baseURL | 是 | — | `https://` 绝对地址，通常以 `/v1` 结尾 |
+| 网关 baseURL | 是 | — | `https://` 绝对地址，通常以 `/v1` 结尾；内网 http 需显式安全确认 |
+| 内网 HTTP opt-in | 否 | 空 | 仅当打包人员确认接受明文传输风险时写 `true` |
 | 回调端口 | 否 | `17321` | 1024–65535 整数 |
 | 回调地址 | 否 | `127.0.0.1` | IPv4 回环或主机名 |
 | Gitee host | 否 | 空 | 企业 Gitee 的 `https://` 地址；没有就跳过 |
@@ -58,6 +60,7 @@ HELUO_IAM_CALLBACK_PORT=<port>
 HELUO_IAM_CALLBACK_ADDRESS=<address>
 HELUO_IAM_MANAGED_MODELS_BASE_URL=<gateway baseURL>
 HELUO_IAM_DEFAULT_PROVIDER=<provider id>
+HELUO_IAM_ALLOW_INSECURE_HTTP=<true 仅内网 http 且已确认>
 HELUO_GITEE_HOST=<gitee host>
 ENV
 ```
@@ -90,7 +93,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 
 - `enterprise-plugin/` — 私版 `.tgz`、`private-release.json`、`bundle-manifest.json`；
 - `installer/` — `init-enterprise-plugin.mjs` 与 macOS/Windows/Linux 启动器；
-- `安装说明.md` — 安装前、安装、安装后、回滚；
+- `INSTALL.md` — 安装前、安装、安装后、回滚；
 - `SHA256SUMS` — 整包校验和。
 
 员工只需：官方渠道装 DSH → 启动一次并完全退出 → 运行对应启动器 → 重启并登录，首次登录录入个人网关 Key。

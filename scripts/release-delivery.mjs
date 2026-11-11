@@ -6,7 +6,7 @@
  *
  *   - `enterprise-plugin/` — the private plugin tarball, sidecar, manifest, sums
  *   - `installer/`         — the init CLI and per-OS launchers
- *   - `安装说明.md`         — the employee-facing three-step guide
+ *   - `INSTALL.md`            — the employee-facing three-step guide
  *   - `SHA256SUMS`         — every file in the package
  *
  * The maker's confirmation stays intact: the first run prints a redacted plan
@@ -314,7 +314,7 @@ export function buildDelivery(input) {
       writeFileSync(path, launcher.body);
       chmodSync(path, 0o755);
     }
-    writeFileSync(join(staging, '安装说明.md'), EMPLOYEE_GUIDE);
+    writeFileSync(join(staging, 'INSTALL.md'), EMPLOYEE_GUIDE);
 
     const files = [];
     const walk = (directory) => {

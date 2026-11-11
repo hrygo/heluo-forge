@@ -137,7 +137,7 @@ export function parseEnvConfig(text) {
   return entries;
 }
 
-function isHttpUrl(value, { allowLoopbackHttp = false } = {}) {
+function isHttpUrl(value, { allowInsecureHttp = false } = {}) {
   let url;
   try {
     url = new URL(value);
@@ -146,7 +146,7 @@ function isHttpUrl(value, { allowLoopbackHttp = false } = {}) {
   }
   if (url.username !== '' || url.password !== '' || url.hash !== '' || url.search !== '') return false;
   if (url.protocol === 'https:') return true;
-  return url.protocol === 'http:' && allowLoopbackHttp && LOOPBACK.has(url.hostname);
+  return url.protocol === 'http:' && allowInsecureHttp;
 }
 
 /**
@@ -183,7 +183,7 @@ export function buildConfig(entries) {
       continue;
     }
     if (envKey === 'HELUO_IAM_MANAGED_MODELS_BASE_URL') {
-      if (!isHttpUrl(raw, { allowLoopbackHttp: allowInsecureHttp })) problems.push(`${envKey} must be an https URL (http only for loopback when insecure HTTP is allowed)`);
+      if (!isHttpUrl(raw, { allowInsecureHttp })) problems.push(`${envKey} must be an https URL, or http with HELUO_IAM_ALLOW_INSECURE_HTTP=true`);
       else iam.managedModels = { baseURL: raw.replace(/\/+$/u, '') };
       continue;
     }
@@ -224,7 +224,7 @@ export function buildConfig(entries) {
   for (const field of ['issuer', 'discoveryUrl', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri', 'revocationEndpoint', 'endSessionEndpoint', 'userInfoEndpoint', 'gatewayConsoleUrl']) {
     const value = iam[field];
     if (value === undefined) continue;
-    if (!isHttpUrl(value, { allowLoopbackHttp: allowInsecureHttp })) problems.push(`HELUO_IAM_${field.replace(/[A-Z]/gu, (letter) => `_${letter}`).toUpperCase()} must be an https URL without userinfo/query/hash`);
+    if (!isHttpUrl(value, { allowInsecureHttp })) problems.push(`HELUO_IAM_${field.replace(/[A-Z]/gu, (letter) => `_${letter}`).toUpperCase()} must be an https URL (or http with HELUO_IAM_ALLOW_INSECURE_HTTP=true) without userinfo/query/hash`);
   }
   if (iam.gatewayResource !== undefined && (typeof iam.gatewayResource !== 'string' || iam.gatewayResource.trim() === '')) problems.push('HELUO_IAM_GATEWAY_RESOURCE must be a non-empty string');
   if (iam.redirectPath !== undefined && !iam.redirectPath.startsWith('/')) problems.push('HELUO_IAM_REDIRECT_PATH must start with /');

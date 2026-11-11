@@ -255,6 +255,28 @@ test('confidential authentication fails closed until the secret source exists', 
   assert.match(error.message, /not supported by this maker yet/u);
 });
 
+test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
+  const entries = (extra = []) => parseEnvConfig([
+    'HELUO_IAM_AUTH_MODE=public',
+    'HELUO_IAM_ISSUER=http://40.20.50.187/esc-sso/oidc',
+    'HELUO_IAM_CLIENT_ID=DSH',
+    'HELUO_IAM_SCOPES=openid profile offline_access',
+    'HELUO_IAM_CALLBACK_PORT=17321',
+    'HELUO_IAM_CALLBACK_ADDRESS=127.0.0.1',
+    'HELUO_IAM_MANAGED_MODELS_BASE_URL=http://40.19.92.194:9080/aig-coding/v1',
+    'HELUO_IAM_DEFAULT_PROVIDER=zy-coding',
+    ...extra,
+  ].join('\n'));
+  assert.throws(
+    () => buildConfig(entries()),
+    (error) => error.code === 'CONFIG_INVALID' && /HELUO_IAM_ALLOW_INSECURE_HTTP=true/u.test(error.message),
+  );
+  const config = buildConfig(entries(['HELUO_IAM_ALLOW_INSECURE_HTTP=true']));
+  assert.equal(config.iam.issuer, 'http://40.20.50.187/esc-sso/oidc');
+  assert.equal(config.iam.managedModels.baseURL, 'http://40.19.92.194:9080/aig-coding/v1');
+  assert.equal(config.iam.allowInsecureHttp, true);
+});
+
 test('public input must be configuration-neutral before the maker touches it', (t) => {
   const root = temp(t);
   const dirty = publicTarball({ patch: patchText({ iamConfig: '        issuer: "https://iam.corp.example",\n' }) });

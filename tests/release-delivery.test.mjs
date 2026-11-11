@@ -140,13 +140,13 @@ test('builder writes the employee package and a zip', (t) => {
     'installer/install-macos.command',
     'installer/install-linux.sh',
     'installer/install-windows.cmd',
-    '安装说明.md',
+    'INSTALL.md',
     'SHA256SUMS',
   ]) {
     assert.equal(existsSync(join(output, path)), true, `${path} is missing`);
   }
   assert.equal(existsSync(`${output}.zip`), true);
-  const guide = readFileSync(join(output, '安装说明.md'), 'utf8');
+  const guide = readFileSync(join(output, 'INSTALL.md'), 'utf8');
   assert.match(guide, /install-macos\.command/u);
   assert.match(guide, /mounted=unknown/u);
   const launcher = readFileSync(join(output, 'installer', 'install-macos.command'), 'utf8');
