@@ -38,20 +38,20 @@ issue #222 的边界已改为「公版插件、企业私版与官方 DSH 轻量�
 ### 3.2 初始化脚本契约
 
 ```
-node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web>
-  [--sha256 <hex>] [--dsh <path>] [--dry-run] [--json]
+node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|auto>
+  [--sha256 <hex>] [--dsh <path>] [--install-host] [--host-version <ver>] [--dry-run] [--json]
 ```
 
 | 环节 | 契约 |
 |---|---|
-| 预检 | `--release` 目录须含 `private-release.json` 与同名 tgz；摘要取 `--sha256`（优先）或 sidecar；摘要不符、缺 sidecar、缺 `dsh`、`--profile` 缺失或非 desktop/web 一律 fail-closed（退出 1），不猜 profile。Windows 接受原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：后者解析出 JS 入口后用 node 执行，不经过 shell；解析失败同样按缺 `dsh` 处理 |
-| 安装 | 唯一写入口 `dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、`shell:false`、固定 argv），不直接改 profile 文件、不改 `plugin_manager` 权限 |
+| 预检 | `--release` 目录须含 `private-release.json` 与同名 tgz；摘要取 `--sha256`（优先）或 sidecar；摘要不符、缺 sidecar、缺 `dsh` 且未启用 `--install-host`、`--profile` 缺失或非法一律 fail-closed（退出 1）。Windows 接受原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：后者解析出 JS 入口后用 node 执行，不经过 shell；解析失败同样按缺 `dsh` 处理 |
+| 安装 | 缺 dsh 时以 `npm install -g @deepseek-ai/dsh@<锁定版本>` 安装；缺 web profile 时以 `dsh --profile web --dump-config` 创建模板。唯一插件写入口 `dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、`shell:false`、固定 argv），不直接改 profile 文件、不改 `plugin_manager` 权限 |
 | 幂等 | 已装同名同版本 → 0 且零写入；已装不同版本 → 停止并打印升级/回退命令，不自动升级 |
 | 核验 | L1：dsh 退出 0；L2：`dsh --profile <p> --dump-config` 含 `@heluo/forge-enterprise` 且 profile `dependencies`/`dsh.profile.bundles` 对齐；L3 运行期挂载**不在脚本内断言**，输出 `mounted=unknown` 并指引启动宿主查设置页 |
 | 失败面 | 分类 + 下一步（宿主未安装 / profile 未初始化 / 摘要不符等），不回显凭据或配置值，不把失败写成成功 |
-| 不做 | 不启动或重启宿主、不创建 profile、不覆盖对话/工作区/非企业设置/个人凭据、不编辑第三方补丁条目、不删除用户文件 |
+| 不做 | 不启动或重启宿主、不创建 desktop profile（Electron 独占）、不覆盖对话/工作区/非企业设置/个人凭据、不编辑第三方补丁条目、不删除用户文件 |
 
-`--dry-run` 只打印将执行的命令与核验点；`--json` 输出同一结论的结构化版本。Desktop 首启初始化、Web profile、离线 tgz 安装等真实宿主行为属主 agent 实测项，脚本只覆盖结构与命令编排。
+`--dry-run` 只打印将执行的命令与核验点；`--json` 输出同一结论的结构化版本。`--profile auto` 优先复用已有 desktop/web，缺失时创建 web；`--install-host` 只缺 dsh 时触发 npm 安装。Desktop 首启初始化、真实 npm 安装与离线 tgz 安装等宿主行为仍需实测。
 
 ### 3.3 工具链与技能收敛
 
@@ -92,7 +92,7 @@ node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desk
 
 1. 路线已选候选 2（官方渠道 + 企业初始化）；若改候选 1（内部成套交付官方宿主），只需在交付清单增加宿主来源/许可/摘要与再分发结论，init 脚本不变。
 2. init 脚本为**单文件自包含**（仅 `node:` 内置模块），随私版交付目录分发，不依赖源码工作区；若改为共享 `scripts/lib` 打包分发，则需同步发布工具链清单、导入路径与测试。
-3. `--profile` 必填（desktop/web），不自动探测；若要求自动探测，需定义默认值表、多 profile 冲突与 Desktop 首启前提。
+3. `--profile auto` 已支持：复用已有 profile，缺失时创建 web；Desktop 仍须先启动 Electron 应用创建 profile。
 4. 摘要信任默认 sidecar、`--sha256` 覆盖；若要求强制独立摘要，`--sha256` 改必填。
 5. IAM `authMode=public` 基线与 secret 相关文档同步属 #222 工作项 2，不在本单；本单只保持制作器不写入任何 secret 的现状。
 6. 六平台真实环境验收归 #123；本单只做离线结构、自动化与命令编排。

@@ -211,6 +211,21 @@ export const TEST_FIXTURE_EXCEPTIONS = {
     '合成清单夹具，复刻真实 engines/dependencies 形状；版本仅作样例，断言的是闭包规则而非基线版本。',
 };
 
+/**
+ * 代码里有意写死的版本字面量（交付包内置的默认值等），登记版本与原因后放行；
+ * 与夹具例外一样单独列出，不静默放行，升级基线时必须同步。
+ */
+export const CODE_LITERAL_EXCEPTIONS = {
+  'scripts/init-enterprise-plugin.mjs': {
+    versions: Object.freeze(['0.2.1-rc.5']),
+    reason: '交付包内置的官方宿主 npm 安装默认版本；可用 --host-version 覆盖，升级基线时同步。',
+  },
+  'tests/init-enterprise-plugin.test.mjs': {
+    versions: Object.freeze(['0.2.1-rc.5']),
+    reason: '断言安装命令钉住的默认宿主版本；与 init 脚本的显式例外同源。',
+  },
+};
+
 function manifestEnginesTokens(abs) {
   try {
     const manifest = JSON.parse(readFileSync(abs, 'utf8'));
@@ -325,7 +340,10 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
       for (const match of line.matchAll(SEMVER_IN_TEXT)) {
         if (!dshVersionInLine(match[0], line, baseline, { allowReleaseLine: true })) continue;
         let kind;
+        const literalNote = CODE_LITERAL_EXCEPTIONS[rel] ?? null;
+        const literalAllowed = literalNote !== null && literalNote.versions.includes(match[0]);
         if (manifestTokens) kind = manifestTokens.has(match[0]) ? 'code-allowed' : 'code-forbidden';
+        else if (literalAllowed) kind = 'code-exception';
         else if (allowed) kind = fixtureNote ? 'fixture-exception' : 'code-allowed';
         else kind = 'code-forbidden';
         found.push({
@@ -333,7 +351,7 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
           line: index + 1,
           version: match[0],
           kind,
-          reason: fixtureNote,
+          reason: kind === 'code-exception' ? literalNote.reason : fixtureNote,
           text: line.trim().slice(0, 160),
         });
       }

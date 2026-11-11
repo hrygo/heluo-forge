@@ -139,42 +139,32 @@ function installerSource(toolRoot) {
 
 const LAUNCHERS = {
   'install-macos.command': `#!/bin/sh
-# 双击运行：把企业插件装入已初始化的官方 DSH profile。
+# 双击运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
-DSH_HOME="\${DSH_HOME:-$HOME/.dsh}"
-if [ -f "$DSH_HOME/profiles/desktop/package.json" ]; then
-  PROFILE=desktop
-elif [ -f "$DSH_HOME/profiles/web/package.json" ]; then
-  PROFILE=web
-else
-  echo "未找到已初始化的 desktop/web profile：请先启动一次官方 DSH 并完全退出。" >&2
-  exit 2
+if ! command -v node >/dev/null 2>&1; then
+  echo "未找到 Node.js：请先安装 Node.js LTS（自带 npm），再运行本脚本。" >&2
+  exit 3
 fi
 HASH=$(/usr/bin/shasum -a 256 "$ROOT/enterprise-plugin"/*.tgz | cut -d' ' -f1)
-exec /usr/bin/env node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile "$PROFILE" --sha256 "$HASH" "$@"
+exec /usr/bin/env node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile auto --install-host --sha256 "$HASH" "$@"
 `,
   'install-linux.sh': `#!/bin/sh
-# 终端运行：把企业插件装入已初始化的官方 DSH profile。
+# 终端运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
-DSH_HOME="\${DSH_HOME:-$HOME/.dsh}"
-if [ -f "$DSH_HOME/profiles/desktop/package.json" ]; then
-  PROFILE=desktop
-elif [ -f "$DSH_HOME/profiles/web/package.json" ]; then
-  PROFILE=web
-else
-  echo "未找到已初始化的 desktop/web profile：请先启动一次官方 DSH 并完全退出。" >&2
-  exit 2
+if ! command -v node >/dev/null 2>&1; then
+  echo "未找到 Node.js：请先安装 Node.js LTS（自带 npm），再运行本脚本。" >&2
+  exit 3
 fi
 if command -v sha256sum >/dev/null 2>&1; then
   HASH=$(sha256sum "$ROOT/enterprise-plugin"/*.tgz | cut -d' ' -f1)
 else
   HASH=$(shasum -a 256 "$ROOT/enterprise-plugin"/*.tgz | cut -d' ' -f1)
 fi
-exec node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile "$PROFILE" --sha256 "$HASH" "$@"
+exec node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile auto --install-host --sha256 "$HASH" "$@"
 `,
   'install-windows.cmd': `@echo off
 chcp 65001 >nul
@@ -185,17 +175,6 @@ set "LOG=%TEMP%\\heluo-enterprise-install.log"
 if not defined DSH_HOME set "DSH_HOME=%USERPROFILE%\\.dsh"
 echo [heluo] Enterprise plugin installer
 echo [heluo] DSH_HOME=%DSH_HOME%
-set "PROFILE="
-if exist "%DSH_HOME%\\profiles\\desktop\\package.json" set "PROFILE=desktop"
-if not defined PROFILE if exist "%DSH_HOME%\\profiles\\web\\package.json" set "PROFILE=web"
-if not defined PROFILE (
-  echo [heluo] ERROR: no initialized desktop/web profile under "%DSH_HOME%".
-  echo [heluo] Start the official DSH once, quit it completely, then run this file again.
-  echo [heluo] If DSH stores its data elsewhere, set DSH_HOME and retry.
-  pause
-  exit /b 2
-)
-echo [heluo] profile=%PROFILE%
 if not exist "%SystemRoot%\\System32\\vcruntime140.dll" (
   echo [heluo] WARNING: Microsoft Visual C++ 2015-2022 Redistributable is missing.
   echo [heluo] The enterprise credential store cannot start until it is installed.
@@ -210,30 +189,24 @@ if errorlevel 1 (
   exit /b 3
 )
 where dsh >nul 2>nul
-if not errorlevel 1 goto dsh_found
-where dsh.cmd >nul 2>nul
-if not errorlevel 1 goto dsh_found
-echo [heluo] ERROR: dsh was not found on PATH.
-echo [heluo] Install the official DSH first: the native installer or a global npm install.
-echo [heluo] Then run this file again.
-pause
-exit /b 4
-:dsh_found
-echo [heluo] Installing into profile %PROFILE% ...
-node "%HERE%init-enterprise-plugin.mjs" --release "%ROOT%\\enterprise-plugin" --profile "%PROFILE%" > "%LOG%" 2>&1
+if errorlevel 1 where dsh.cmd >nul 2>nul
+if errorlevel 1 (
+  echo [heluo] dsh was not found on PATH; it will be installed with npm now.
+)
+echo [heluo] Preparing the official DSH and installing the plugin ...
+node "%HERE%init-enterprise-plugin.mjs" --release "%ROOT%\\enterprise-plugin" --profile auto --install-host > "%LOG%" 2>&1
 set "CODE=%ERRORLEVEL%"
 type "%LOG%"
 echo.
 if "%CODE%"=="0" (
   echo [heluo] OK: plugin installed and verified locally.
-  echo [heluo] Restart DSH, then open Settings -^> Plugins to confirm it is loaded.
+  echo [heluo] Start DSH, then open Settings -^> Plugins to confirm it is loaded.
 ) else (
   echo [heluo] FAILED with exit code %CODE%.
   echo [heluo] Log: %LOG%
   echo [heluo] Send this window or the log to your administrator.
 )
 pause
-exit /b %CODE%
 `,
 };
 
@@ -243,8 +216,11 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 
 ## 安装前
 
-1. 从官方渠道安装 DeepSeek Harness（Desktop 或 Web），并**启动一次**完成 profile 初始化。
-2. 完全退出 DSH（Windows 关闭托盘，macOS 用“退出”而不是关闭窗口）。
+只需要安装 **Node.js LTS**（自带 npm）。DSH 可以已经装好，也可以完全不装：
+启动脚本发现缺少官方 DSH 时，会用 npm 自动安装并在本机创建 web profile。
+
+> 如果你使用的是官方 Desktop 应用，请先启动一次 Desktop 并完全退出，
+> 让 Desktop 自己创建 desktop profile；启动脚本会优先安装到它里面。
 
 ## 安装（任选当前系统）
 
@@ -252,12 +228,13 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 - Windows：双击 installer/install-windows.cmd。
 - 麒麟 / Linux：终端执行 sh installer/install-linux.sh。
 
-脚本会自动找到已初始化的 profile、校验插件摘要，并只执行一次
-dsh plugin add。看到 mounted=unknown 是正常的：运行期挂载需要在下一步确认。
+脚本会依次完成：检查 Node.js → 检查/安装官方 DSH → 创建或选择 profile →
+校验插件摘要 → 只执行一次 dsh plugin add → 读回配置确认插件已登记。
+看到 mounted=unknown 是正常的：运行期挂载需要在下一步确认。
 
 ## 安装后
 
-1. 重新启动 DSH。
+1. 启动 DSH：运行 dsh web（浏览器打开本机地址），或打开 Desktop。
 2. 在「设置 → 插件」确认 @heluo/forge-enterprise 已加载。
 3. 按企业身份登录，首次登录时录入**你个人**的网关 Key；Key 不随交付包分发。
 
@@ -271,10 +248,11 @@ dsh plugin --profile <desktop|web> remove @heluo/forge-enterprise
 
 - Windows 双击后窗口一闪而过：右键该文件 → 属性 → 勾选“解除锁定”，或在命令提示符里手动运行。日志位于 %TEMP%\\heluo-enterprise-install.log。
 - Windows 提示 Node.js was not found：先安装 Node.js LTS，再重跑本文件。
-- Windows 提示未找到可用的 dsh：npm 全局安装的 dsh.cmd/.bat 已被支持，脚本会解析 shim 后直接用 node 运行；若仍失败，确认 where dsh 能找到，或在管理员帮助下用 --dsh 指向 dsh.cmd。原生安装的 dsh.exe 同样可用。
-- 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。先确认 DSH 已完全退出，再重跑；也可用 dsh plugin --profile <desktop|web> list 检查。
-- 页面仍提示「企业登录尚未设置」：本包已包含管理员配置，先确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员，不要自行修改配置。
-- 页面提示「凭据存储不可用」：Windows/Linux 需要本包启用原生凭据适配器，并且 Windows 需安装 Microsoft Visual C++ 2015-2022 Redistributable；缺运行库时重启 DSH 后仍会报同一错误。
+- 提示 dsh 安装失败：确认 npm 可用且能访问企业允许的 registry；也可由管理员先手工安装官方 DSH，再重跑本文件。
+- Windows 提示与原生凭据适配器相关：npm 全局安装的 dsh.cmd/.bat 已被支持，脚本会解析 shim 后直接用 node 运行。
+- 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。确认安装脚本输出的 profile 与随后启动的 DSH profile 一致。
+- 页面仍提示「企业登录尚未设置」：确认安装脚本输出 loginReady 或已包含管理员配置，并确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员。
+- 页面提示「凭据存储不可用」：Windows/Linux 需要本包启用原生凭据适配器，并且 Windows 需安装 Microsoft Visual C++ 2015-2022 Redistributable。
 - 企业内网地址使用 HTTP 时，登录令牌与个人 Key 会明文传输，请只在可信内网使用。
 
 ## 不要做

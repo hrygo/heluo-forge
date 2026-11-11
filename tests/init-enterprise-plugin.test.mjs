@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,6 +130,80 @@ test('parseArgs 接受完整参数并归一化摘要大小写', () => {
   assert.equal(options.json, true);
   assert.deepEqual(PROFILE_NAMES, ['desktop', 'web']);
   assert.deepEqual(parseArgs(['--profile=web', '--release=/r']).profile, 'web');
+  const auto = parseArgs(['--release', '/r', '--profile', 'auto', '--install-host', '--host-version', '0.2.2-rc.1']);
+  assert.equal(auto.profile, 'auto');
+  assert.equal(auto.installHost, true);
+  assert.equal(auto.hostVersion, '0.2.2-rc.1');
+  assert.equal(parseArgs(['--release', '/r', '--profile', 'auto']).installHost, false);
+});
+
+test('runInit --profile auto --install-host：装宿主、建 web profile、装插件', async (t) => {
+  const root = tempRoot(t);
+  const { dir } = writeRelease(root);
+  const bin = join(root, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const npm = join(bin, 'npm');
+  writeFileSync(npm, '#!/bin/sh\nexit 0\n');
+  chmodSync(npm, 0o755);
+  const dshPath = join(bin, 'dsh');
+  const dshHome = join(root, 'home', '.dsh');
+  const profileDir = join(dshHome, 'profiles', 'web');
+  const calls = [];
+  const exec = async (command, args) => {
+    calls.push({ command, args });
+    if (command === npm) {
+      writeFileSync(dshPath, '#!/bin/sh\nexit 0\n');
+      chmodSync(dshPath, 0o755);
+      return { code: 0, stdout: 'installed', stderr: '' };
+    }
+    if (args[0] === 'plugin') {
+      const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
+      manifest.dependencies = { ...(manifest.dependencies ?? {}), [ENTRY_PACKAGE]: `file:${args[4]}` };
+      manifest.dsh = { profile: { bundles: [ENTRY_PACKAGE] } };
+      writeFileSync(join(profileDir, 'package.json'), JSON.stringify(manifest));
+      const installed = join(profileDir, 'node_modules', ...ENTRY_PACKAGE.split('/'));
+      mkdirSync(installed, { recursive: true });
+      writeFileSync(join(installed, 'package.json'), JSON.stringify({ name: ENTRY_PACKAGE, version: '0.1.0' }));
+      return { code: 0, stdout: 'added', stderr: '' };
+    }
+    if (!existsSync(join(profileDir, 'package.json'))) {
+      mkdirSync(profileDir, { recursive: true });
+      writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+        name: 'dsh-profile-web',
+        private: true,
+        dsh: { profile: { bundles: [] } },
+        dependencies: {},
+      }));
+    }
+    return { code: 0, stdout: JSON.stringify({ plugins: [{ name: ENTRY_PACKAGE }] }), stderr: '' };
+  };
+  const outcome = await runInit({
+    argv: ['--release', dir, '--profile', 'auto', '--install-host', '--json'],
+    env: { PATH: bin, DSH_HOME: dshHome },
+    home: join(root, 'home'),
+    exec,
+  });
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'installed');
+  assert.equal(outcome.result.profile, 'web');
+  assert.equal(outcome.result.verified.dumpConfig, true);
+  assert.ok(calls.some((call) => call.command === npm && call.args.includes('@deepseek-ai/dsh@0.2.1-rc.5')));
+  assert.ok(calls.some((call) => call.command === dshPath && call.args.join(' ') === '--profile web --dump-config'));
+  assert.ok(calls.some((call) => call.command === dshPath && call.args[0] === 'plugin'));
+});
+
+test('runInit 对缺失的 desktop profile 仍 fail closed', async (t) => {
+  const root = tempRoot(t);
+  const { dir } = writeRelease(root);
+  const dshPath = writeDsh(root);
+  const outcome = await runInit({
+    argv: ['--release', dir, '--profile', 'desktop', '--dsh', dshPath],
+    env: {},
+    home: join(root, 'home'),
+    exec: fakeExec({ profileDir: join(root, 'home', '.dsh', 'profiles', 'desktop') }).exec,
+  });
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'PROFILE_MISSING');
 });
 
 test('parseArgs 对缺参、未知参数、非法 profile 与非法摘要 fail-closed', () => {

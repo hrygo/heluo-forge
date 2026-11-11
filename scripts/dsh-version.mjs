@@ -57,7 +57,7 @@ function report() {
     for (const row of rows) console.log(`  ${row.file}:${row.line}  ${row.version}  ${row.text}`);
   }
   console.log(`\n代码/脚本出现 ${code.length} 处（扫描面：全仓，排除 docs/ 与依赖/产物目录）：`);
-  const codeTitles = { 'fixture-exception': '夹具例外（登记原因，不随基线更新）' };
+  const codeTitles = { 'fixture-exception': '夹具例外（登记原因，不随基线更新）', 'code-exception': '代码例外（登记原因，不随基线更新）' };
   for (const [kind, rows] of groupByKind(code)) {
     console.log(`\n[${codeTitles[kind] ?? kind}] ${rows.length} 处`);
     for (const row of rows) {
@@ -124,6 +124,9 @@ function check() {
   for (const line of floorsCheck.warnings) console.log(`version: 提示 ${line}`);
   for (const row of code.filter((item) => item.kind === 'fixture-exception')) {
     console.log(`version: 夹具例外 ${row.file}:${row.line}（${row.reason}）`);
+  }
+  for (const row of code.filter((item) => item.kind === 'code-exception')) {
+    console.log(`version: 代码例外 ${row.file}:${row.line}（${row.reason}）`);
   }
 }
 

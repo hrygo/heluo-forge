@@ -182,10 +182,11 @@ test('builder writes the employee package and a zip', (t) => {
   assert.match(guide, /mounted=unknown/u);
   const launcher = readFileSync(join(output, 'installer', 'install-macos.command'), 'utf8');
   assert.match(launcher, /--release "\$ROOT\/enterprise-plugin"/u);
-  assert.match(launcher, /--profile "\$PROFILE"/u);
+  assert.match(launcher, /--profile auto --install-host/u);
   const windows = readFileSync(join(output, 'installer', 'install-windows.cmd'), 'utf8');
   assert.match(windows, /\r\n/u, 'Windows launcher must use CRLF line endings');
   assert.match(windows, /where node/u);
+  assert.match(windows, /--profile auto --install-host/u);
   assert.match(windows, /heluo-enterprise-install\.log/u);
   assert.match(windows, /DSH_HOME/u);
   assert.match(guide, /解除锁定/u);

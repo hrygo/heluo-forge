@@ -29,8 +29,13 @@ import { fileURLToPath } from 'node:url';
 /** 本插件在 profile 中的包名；与私版清单、补丁层同源。 */
 export const ENTRY_PACKAGE = '@heluo/forge-enterprise';
 
-/** 受支持的目标 profile；显式必填，不自动探测。 */
+/** 受支持的目标 profile；`auto` 表示按已有 profile 选择，缺失时创建 web。 */
 export const PROFILE_NAMES = Object.freeze(['desktop', 'web']);
+export const PROFILE_CHOICES = Object.freeze(['desktop', 'web', 'auto']);
+
+/** 官方宿主 npm 包名与默认安装版本；版本可用 `--host-version` 覆盖。 */
+export const HOST_PACKAGE = '@deepseek-ai/dsh';
+export const DEFAULT_HOST_VERSION = '0.2.1-rc.5';
 
 /** 私版交付 sidecar 的 schema；与 `scripts/lib/private-bundle.mjs` 同源。 */
 export const RELEASE_SCHEMA = 'heluo-private-release/1';
@@ -41,17 +46,23 @@ export const METADATA_FILE = 'private-release.json';
 /** pnpm 安装依赖可能较慢，安装步骤超时给足；核验是只读组合，无需那么久。 */
 export const INSTALL_TIMEOUT_MS = 300_000;
 export const VERIFY_TIMEOUT_MS = 120_000;
+/** npm 全局安装宿主可能拉取整棵依赖树，给更长的超时。 */
+export const HOST_INSTALL_TIMEOUT_MS = 600_000;
 
 const SHA256 = /^[0-9a-f]{64}$/u;
+const HOST_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/u;
 
 export const USAGE = [
-  '用法：node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web>',
-  '        [--sha256 <hex>] [--dsh <path>] [--dry-run] [--json]',
+  '用法：node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desktop|web|auto>',
+  '        [--sha256 <hex>] [--dsh <path>] [--install-host] [--host-version <ver>]',
+  '        [--dry-run] [--json]',
   '',
   '  --release <目录>   私版交付目录（须含 private-release.json 与同名 tgz）',
-  '  --profile <名>     desktop 或 web（必填，不自动探测）',
+  '  --profile <名>     desktop、web 或 auto（auto：已有 desktop/web 优先，都没有则创建 web）',
   '  --sha256 <hex>     独立摘要口径；缺省读 private-release.json（自证）',
   '  --dsh <path>       指定 dsh（原生可执行文件或 npm 的 .cmd/.bat shim）；缺省在 PATH 查找',
+  '  --install-host     找不到 dsh 时用 npm 全局安装官方宿主（需要 npm 与网络）',
+  '  --host-version <v> 安装宿主时锁定的版本；缺省 ' + DEFAULT_HOST_VERSION,
   '  --dry-run          只打印将执行的命令与核验点，不写入',
   '  --json             输出同一结论的结构化版本',
 ].join('\n');
@@ -108,7 +119,7 @@ export function shimEntryOf(shimPath) {
 }
 
 /**
- * 把 dsh 路径解析成可 `execFile(shell:false)` 的调用描述：
+ * 把命令路径解析成可 `execFile(shell:false)` 的调用描述：
  * - 原生 `.exe`（Windows）或 POSIX 可执行文件：直接执行；
  * - Windows `.cmd`/`.bat` shim：解析出 JS 入口，用当前 node 直接执行；
  * 解析失败返回 null（fail closed，不引入 shell 引号风险）。
@@ -117,7 +128,7 @@ export function shimEntryOf(shimPath) {
  * @param {NodeJS.Platform} [platform]
  * @returns {{bin: string, prefix: string[]}|null}
  */
-export function resolveDshLaunch(path, platform = process.platform) {
+export function resolveCommandLaunch(path, platform = process.platform) {
   if (!isExecutableFile(path, platform)) return null;
   if (platform !== 'win32') return { bin: path, prefix: [] };
   if (path.toLowerCase().endsWith('.exe')) return { bin: path, prefix: [] };
@@ -126,13 +137,18 @@ export function resolveDshLaunch(path, platform = process.platform) {
   return { bin: process.execPath, prefix: [entry] };
 }
 
+/** dsh 专用别名；保留旧导出，行为与 `resolveCommandLaunch` 相同。 */
+export function resolveDshLaunch(path, platform = process.platform) {
+  return resolveCommandLaunch(path, platform);
+}
+
 /**
  * 解析参数。值可以是 `--flag value` 或 `--flag=value`；`--profile` 的取值在解析期校验，
- * 缺失或非 desktop/web 直接 fail-closed，不猜 profile。
+ * 缺失或非 desktop/web/auto 直接 fail-closed，不猜 profile。
  *
  * @param {string[]} argv
  * @returns {{release?: string, profile?: string, sha256?: string, dsh?: string,
- *   dryRun: boolean, json: boolean, help: boolean}}
+ *   installHost: boolean, hostVersion: string, dryRun: boolean, json: boolean, help: boolean}}
  */
 export function parseArgs(argv) {
   const options = {
@@ -140,6 +156,8 @@ export function parseArgs(argv) {
     profile: undefined,
     sha256: undefined,
     dsh: undefined,
+    installHost: false,
+    hostVersion: DEFAULT_HOST_VERSION,
     dryRun: false,
     json: false,
     help: false,
@@ -149,6 +167,7 @@ export function parseArgs(argv) {
     ['--profile', 'profile'],
     ['--sha256', 'sha256'],
     ['--dsh', 'dsh'],
+    ['--host-version', 'hostVersion'],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -162,6 +181,10 @@ export function parseArgs(argv) {
     }
     if (arg === '--json') {
       options.json = true;
+      continue;
+    }
+    if (arg === '--install-host') {
+      options.installHost = true;
       continue;
     }
     const separator = arg.indexOf('=');
@@ -184,10 +207,13 @@ export function parseArgs(argv) {
     throw new InitError('BAD_ARGUMENT', 'init: 缺少 --release <交付目录>', '先提供含 private-release.json 与同名 tgz 的交付目录。');
   }
   if (options.profile === undefined) {
-    throw new InitError('BAD_ARGUMENT', 'init: 缺少 --profile <desktop|web>', '用 --profile desktop 或 --profile web 指定目标 profile；脚本不自动探测。');
+    throw new InitError('BAD_ARGUMENT', 'init: 缺少 --profile <desktop|web|auto>', '用 --profile auto 自动选择/创建 web profile，或显式指定 desktop/web。');
   }
-  if (!PROFILE_NAMES.includes(options.profile)) {
-    throw new InitError('PROFILE_INVALID', `init: 不支持的 profile「${options.profile}」`, '只接受 desktop 或 web；脚本不创建 profile。');
+  if (!PROFILE_CHOICES.includes(options.profile)) {
+    throw new InitError('PROFILE_INVALID', `init: 不支持的 profile「${options.profile}」`, '只接受 desktop、web 或 auto。');
+  }
+  if (!HOST_VERSION.test(options.hostVersion)) {
+    throw new InitError('HOST_VERSION_INVALID', `init: --host-version 不是合法版本号「${options.hostVersion}」`, '传入纯版本号（如 0.2.1-rc.5），不要带包名或路径。');
   }
   if (options.sha256 !== undefined) {
     if (!SHA256.test(options.sha256.toLowerCase())) {
@@ -210,24 +236,29 @@ export function dshHomeOf(env = {}, home = homedir()) {
 }
 
 /**
- * 在 PATH 里找 dsh。Windows 依次尝试 `.exe`、`.cmd`、`.bat`；`.cmd`/`.bat` 只在能解析出
- * 真实 JS 入口时才算可用。POSIX 直接找 `dsh`。
+ * 在 PATH 里找命令。Windows 依次尝试 `.exe`、`.cmd`、`.bat`；`.cmd`/`.bat` 只在能解析出
+ * 真实 JS 入口时才算可用。POSIX 直接找同名可执行文件。
  *
  * @returns {{path: string, bin: string, prefix: string[]}|null}
  */
-export function locateDshLaunch(env = {}, platform = process.platform) {
+export function locateCommandLaunch(name, env = {}, platform = process.platform) {
   const value = env.PATH ?? env.Path ?? env.path ?? '';
   if (typeof value !== 'string' || value.length === 0) return null;
   const extensions = platform === 'win32' ? WINDOWS_DSH_EXTENSIONS : [''];
   for (const directory of value.split(delimiter)) {
     if (directory.length === 0) continue;
     for (const extension of extensions) {
-      const candidate = join(directory, `dsh${extension}`);
-      const launch = resolveDshLaunch(candidate, platform);
+      const candidate = join(directory, `${name}${extension}`);
+      const launch = resolveCommandLaunch(candidate, platform);
       if (launch !== null) return { path: candidate, ...launch };
     }
   }
   return null;
+}
+
+/** dsh 专用别名；保留旧导出。 */
+export function locateDshLaunch(env = {}, platform = process.platform) {
+  return locateCommandLaunch('dsh', env, platform);
 }
 
 /**
@@ -237,6 +268,33 @@ export function locateDshLaunch(env = {}, platform = process.platform) {
  */
 export function locateDsh(env = {}, platform = process.platform) {
   return locateDshLaunch(env, platform)?.path ?? null;
+}
+
+/** profile 是否已由宿主初始化（存在 package.json）。 */
+export function profileExists(name, { env = {}, home = homedir() } = {}) {
+  return existsSync(join(dshHomeOf(env, home), 'profiles', name, 'package.json'));
+}
+
+/** 已有 profile 优先 desktop、再 web；都没有返回 null。 */
+export function existingProfileName({ env = {}, home = homedir() } = {}) {
+  for (const name of PROFILE_NAMES) {
+    if (profileExists(name, { env, home })) return name;
+  }
+  return null;
+}
+
+/**
+ * 在 npm 全局 prefix 里找命令。npm 安装后当前进程的 PATH 可能还没刷新，这里补一条
+ * 不依赖 PATH 的查找路径。
+ */
+export function commandInNpmPrefix(name, prefix, platform = process.platform) {
+  const binDir = platform === 'win32' ? prefix : join(prefix, 'bin');
+  const extensions = platform === 'win32' ? WINDOWS_DSH_EXTENSIONS : [''];
+  for (const extension of extensions) {
+    const launch = resolveCommandLaunch(join(binDir, `${name}${extension}`), platform);
+    if (launch !== null) return { path: join(binDir, `${name}${extension}`), ...launch };
+  }
+  return null;
 }
 
 /**
@@ -385,7 +443,7 @@ async function runStep(exec, launch, args, timeout, failureCode) {
   try {
     result = await exec(launch.bin, [...launch.prefix, ...args], { timeout, shell: false });
   } catch (error) {
-    const reason = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
+    const reason = typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN');
     throw new InitError(failureCode, `init: 调用 dsh 失败（${reason}）`, '确认 --dsh 指向可用的 dsh（原生可执行文件或 npm 的 dsh.cmd）、宿主未在升级中，再重跑。');
   }
   return {
@@ -393,6 +451,65 @@ async function runStep(exec, launch, args, timeout, failureCode) {
     stdout: String(result?.stdout ?? ''),
     stderr: String(result?.stderr ?? ''),
   };
+}
+
+/**
+ * 用 npm 全局安装官方宿主；安装后先在 PATH 找，再查 npm 全局 prefix，避免当前进程
+ * PATH 未刷新导致“装了却找不到”。
+ *
+ * @returns {Promise<{path: string, bin: string, prefix: string[]}>}
+ */
+async function installHost({ exec, env, platform, version, lines }) {
+  const npm = locateCommandLaunch('npm', env, platform);
+  if (npm === null) {
+    throw new InitError(
+      'HOST_INSTALL_FAILED',
+      'init: 未找到 npm，无法自动安装官方宿主',
+      '先安装 Node.js（自带 npm）并确保 npm 在 PATH；或从官方渠道安装 DSH 后重跑。',
+    );
+  }
+  const spec = `${HOST_PACKAGE}@${version}`;
+  lines.push(`宿主：未找到 dsh，执行 npm install -g ${spec}`);
+  const result = await runStep(exec, npm, ['install', '-g', spec], HOST_INSTALL_TIMEOUT_MS, 'HOST_INSTALL_FAILED');
+  if (result.code !== 0) {
+    throw new InitError(
+      'HOST_INSTALL_FAILED',
+      `init: npm install -g ${spec} 失败（退出码 ${result.code}）`,
+      '检查网络与 npm registry 配置；或从官方渠道安装 DSH 后重跑。',
+    );
+  }
+  const fromPath = locateDshLaunch(env, platform);
+  if (fromPath !== null) {
+    lines.push(`宿主：已安装并定位到 ${fromPath.path}`);
+    return fromPath;
+  }
+  const prefixResult = await runStep(exec, npm, ['prefix', '-g'], 60_000, 'HOST_INSTALL_FAILED');
+  const prefix = prefixResult.stdout.split(/\r?\n/u).filter((line) => line.trim() !== '').pop();
+  if (prefix !== undefined) {
+    const fromPrefix = commandInNpmPrefix('dsh', prefix.trim(), platform);
+    if (fromPrefix !== null) {
+      lines.push(`宿主：已安装并定位到 ${fromPrefix.path}`);
+      return fromPrefix;
+    }
+  }
+  throw new InitError(
+    'HOST_INSTALL_FAILED',
+    'init: npm 安装完成但找不到 dsh 入口',
+    '确认 npm 全局 bin 目录在 PATH；或运行 npm prefix -g 后手工把其 bin 目录加入 PATH，再重跑。',
+  );
+}
+
+/** 用官方宿主的 `--dump-config` 创建 shipped web profile 模板；不启动服务。 */
+async function createWebProfile({ exec, launch, lines }) {
+  const result = await runStep(exec, launch, ['--profile', 'web', '--dump-config'], VERIFY_TIMEOUT_MS, 'PROFILE_CREATE_FAILED');
+  if (result.code !== 0) {
+    throw new InitError(
+      'PROFILE_CREATE_FAILED',
+      `init: 创建 web profile 失败（dsh --dump-config 退出码 ${result.code}）`,
+      '确认宿主安装完整、DSH_HOME 可写后重跑；脚本不会覆盖已有 profile。',
+    );
+  }
+  lines.push('profile：已用官方宿主创建 web profile 模板（--dump-config，未启动服务）');
 }
 
 async function verifyInstall({ exec, launch, profile, lines }) {
@@ -450,11 +567,11 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
         '确认制品未损坏，或从可信渠道重新取得摘要；不按 sidecar 自证放行。',
       );
     }
-    const profile = inspectProfile({ profile: options.profile, env, home });
-
-    let launch;
+    const platform = process.platform;
+    let launch = null;
+    let plannedHostInstall = false;
     if (options.dsh !== undefined) {
-      launch = resolveDshLaunch(resolve(options.dsh));
+      launch = resolveCommandLaunch(resolve(options.dsh), platform);
       if (launch === null) {
         throw new InitError(
           'DSH_MISSING',
@@ -463,14 +580,45 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
         );
       }
     } else {
-      launch = locateDshLaunch(env);
-      if (launch === null) {
+      launch = locateDshLaunch(env, platform);
+      if (launch === null && options.installHost && !options.dryRun) {
+        launch = await installHost({ exec: resolveExec(exec), env, platform, version: options.hostVersion, lines });
+      } else if (launch === null && options.installHost) {
+        plannedHostInstall = true;
+      } else if (launch === null) {
         throw new InitError(
           'DSH_MISSING',
           'init: 未在 PATH 找到可用的 dsh',
-          '从官方渠道安装 DSH（原生安装，或 npm 全局安装后的 dsh.cmd）并确保 dsh 在 PATH；也可用 --dsh 指定原生可执行文件或 shim。',
+          '加 --install-host 让脚本用 npm 安装官方宿主；或从官方渠道安装 DSH（原生安装，或 npm 全局安装后的 dsh.cmd）并确保 dsh 在 PATH。',
         );
       }
+    }
+
+    let profileName = options.profile;
+    if (profileName === 'auto') profileName = existingProfileName({ env, home }) ?? 'web';
+    let profile;
+    let plannedProfileCreate = false;
+    if (profileExists(profileName, { env, home })) {
+      profile = inspectProfile({ profile: profileName, env, home });
+    } else if (profileName === 'desktop') {
+      throw new InitError(
+        'PROFILE_MISSING',
+        'init: profile「desktop」尚未初始化（缺少 profiles/desktop/package.json）',
+        'Desktop profile 由官方 Electron 应用独占创建：先启动一次官方 DeepSeek Harness Desktop 并完全退出，再重跑本脚本。',
+      );
+    } else if (options.dryRun || launch === null) {
+      plannedProfileCreate = true;
+      const dshHome = dshHomeOf(env, home);
+      profile = {
+        name: profileName,
+        dir: join(dshHome, 'profiles', profileName),
+        manifestPath: join(dshHome, 'profiles', profileName, 'package.json'),
+        manifest: {},
+        dshHome,
+      };
+    } else {
+      await createWebProfile({ exec: resolveExec(exec), launch, lines });
+      profile = inspectProfile({ profile: profileName, env, home });
     }
 
     const command = ['plugin', '--profile', profile.name, 'add', release.tarballPath];
@@ -493,6 +641,12 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
 
     const installed = installedVersionOf(profile);
     const declared = profile.manifest?.dependencies?.[ENTRY_PACKAGE] !== undefined;
+    if (plannedHostInstall) {
+      lines.push(`dry-run：未找到 dsh，将执行 npm install -g ${HOST_PACKAGE}@${options.hostVersion}`);
+    }
+    if (plannedProfileCreate) {
+      lines.push(`dry-run：profiles/${profile.name} 不存在，将执行 dsh --profile ${profile.name} --dump-config 创建模板`);
+    }
     if (declared || installed !== null) {
       if (installed === null) {
         throw new InitError(

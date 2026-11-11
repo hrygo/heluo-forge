@@ -100,7 +100,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 - `INSTALL.md` — 安装前、安装、安装后、回滚；
 - `SHA256SUMS` — 整包校验和。
 
-员工只需：官方渠道装 DSH → 启动一次并完全退出 → 运行对应启动器 → 重启并登录，首次登录录入个人网关 Key。
+员工只需安装 Node.js LTS 并运行对应启动器：缺官方 DSH 时启动器用 npm 自动安装并创建 web profile，再安装插件；使用 Desktop 应用时先启动一次让 Electron 创建 profile。登录后首次录入个人网关 Key。
 
 ## 失败处理
 

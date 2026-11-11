@@ -58,10 +58,12 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。
 
 ## 5. 员工安装
 
-1. 官方渠道安装 DeepSeek Harness，启动一次完成 profile 初始化，然后完全退出。
+1. 员工机器只需有 Node.js LTS（自带 npm）。DSH 可以已安装，也可以完全没装。
 2. macOS 双击 `installer/install-macos.command`；Windows 双击 `installer/install-windows.cmd`；麒麟/Linux 运行 `sh installer/install-linux.sh`。
-3. 启动器自动选择已初始化的 desktop/web profile，校验插件摘要，并只调用 `dsh plugin --profile <p> add <tgz>`。
-4. 重启 DSH，在「设置 → 插件」确认已加载；登录后录入个人网关 Key。
+3. 启动器会：检查 Node.js → 缺 dsh 时执行 `npm install -g @deepseek-ai/dsh@<锁定版本>` → 用 `dsh --profile web --dump-config` 创建 web profile（若已有 desktop/web 则复用）→ 校验插件摘要 → 只调用 `dsh plugin --profile <p> add <tgz>`。
+4. 启动 DSH（`dsh web` 或 Desktop），在「设置 → 插件」确认已加载；登录后录入个人网关 Key。
+
+官方 Desktop 应用用户仍需先启动一次 Desktop，让 Electron 创建 desktop profile；启动器会优先复用它。
 
 脚本回显 `mounted=unknown` 是预期行为：运行期挂载只能在宿主内确认。
 
