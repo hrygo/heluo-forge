@@ -11,7 +11,7 @@
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
 2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
-3. Discovery URL：默认取 `issuer + /.well-known/openid-configuration`，必须实际可达且 issuer 一致；不确定时让管理员提供。
+3. Discovery URL：默认取 `issuer + /.well-known/openid-configuration`，先用 curl 实际请求一次，要求 200 且 `issuer` 字段与配置一致；不确定时让管理员提供。
 4. client_id：企业的公开客户端 ID，不是员工个人标识。
 5. 网关 baseURL：企业模型网关地址，通常以 `/v1` 结尾；用于 `managedModels.baseURL`，http 同上需显式确认。
 6. 回调端口与地址：默认 `17321` / `127.0.0.1`；端口需与 IAM 注册一致。
@@ -30,7 +30,7 @@ config="$(mktemp -t heluo-enterprise.XXXXXX.env)"
 
 ## 3. 预览与确认
 
-1. 运行 `release-delivery --dry-run`，只回显公版摘要、版本、输出目录、配置键名、平台列表与 `planDigest`。
+1. 运行 `release-delivery --dry-run`，只回显公版摘要、版本、输出目录、配置键名、`loginReady`、平台列表与 `planDigest`；`loginReady` 不是 `true` 就停止，不得生成交付包。
 2. 把键名、版本、摘要前缀交给打包人员核对；确认企业地址与其预期一致。
 3. 用回显的摘要前缀（至少 8 位）重跑并带 `--confirm`；换制品、配置或版本必须重新预览。
 4. 成功后删除临时配置文件。

@@ -64,6 +64,7 @@ function fixture(t) {
     [
       'HELUO_IAM_AUTH_MODE=public',
       'HELUO_IAM_ISSUER=https://iam.corp.example',
+      'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
       'HELUO_IAM_CLIENT_ID=test-client',
       'HELUO_IAM_SCOPES=openid profile',
       'HELUO_IAM_CALLBACK_PORT=17321',
@@ -103,10 +104,40 @@ test('dry-run prints the redacted plan and writes nothing', (t) => {
   assert.equal(result.written, false);
   assert.equal(result.plan.configValues, 'redacted');
   assert.equal(result.plan.configKeys.includes('iam.issuer'), true);
+  assert.equal(result.plan.loginReady, true);
   assert.equal(JSON.stringify(result.plan).includes('iam.corp.example'), false);
   assert.equal(existsSync(output), false);
   assert.equal(existsSync(`${output}.zip`), false);
   assert.match(result.digest, /^[0-9a-f]{64}$/u);
+});
+
+test('a package without complete IAM login config is refused before writing', (t) => {
+  const { root, publicPath, sha256 } = fixture(t);
+  const configPath = join(root, 'incomplete.env');
+  writeFileSync(
+    configPath,
+    [
+      'HELUO_IAM_AUTH_MODE=public',
+      'HELUO_IAM_ISSUER=https://iam.corp.example',
+      'HELUO_IAM_CLIENT_ID=test-client',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(configPath, 0o600);
+  const output = join(root, 'delivery');
+  expectCode(
+    () => buildDelivery({
+      publicPath,
+      publicSha256: sha256,
+      configPath,
+      version: '0.1.0-corp.1',
+      output,
+      toolRoot: TOOL_ROOT,
+      dryRun: true,
+    }),
+    'CONFIG_INVALID',
+  );
+  assert.equal(existsSync(output), false);
 });
 
 test('builder writes the employee package and a zip', (t) => {

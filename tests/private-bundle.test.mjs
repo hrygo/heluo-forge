@@ -259,6 +259,7 @@ test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
   const entries = (extra = []) => parseEnvConfig([
     'HELUO_IAM_AUTH_MODE=public',
     'HELUO_IAM_ISSUER=http://40.20.50.187/esc-sso/oidc',
+    'HELUO_IAM_DISCOVERY_URL=http://40.20.50.187/esc-sso/oidc/.well-known/openid-configuration',
     'HELUO_IAM_CLIENT_ID=DSH',
     'HELUO_IAM_SCOPES=openid profile offline_access',
     'HELUO_IAM_CALLBACK_PORT=17321',
@@ -275,6 +276,25 @@ test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
   assert.equal(config.iam.issuer, 'http://40.20.50.187/esc-sso/oidc');
   assert.equal(config.iam.managedModels.baseURL, 'http://40.19.92.194:9080/aig-coding/v1');
   assert.equal(config.iam.allowInsecureHttp, true);
+});
+
+test('issuer without discovery or explicit endpoints is rejected at package time', () => {
+  const entries = parseEnvConfig([
+    'HELUO_IAM_AUTH_MODE=public',
+    'HELUO_IAM_ISSUER=https://iam.corp.example',
+    'HELUO_IAM_CLIENT_ID=test-client',
+  ].join('\n'));
+  assert.throws(
+    () => buildConfig(entries),
+    (error) => error.code === 'CONFIG_INVALID' && /IAM login is incomplete/u.test(error.message),
+  );
+  const complete = parseEnvConfig([
+    'HELUO_IAM_AUTH_MODE=public',
+    'HELUO_IAM_ISSUER=https://iam.corp.example',
+    'HELUO_IAM_DISCOVERY_URL=https://iam.corp.example/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=test-client',
+  ].join('\n'));
+  assert.equal(buildConfig(complete).iam.discoveryUrl, 'https://iam.corp.example/.well-known/openid-configuration');
 });
 
 test('public input must be configuration-neutral before the maker touches it', (t) => {

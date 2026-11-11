@@ -95,6 +95,20 @@ const BOOLEAN_KEYS = new Set(['HELUO_IAM_ALLOW_INSECURE_HTTP']);
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
 /** Parse one `.env` file strictly. No `export`, no escapes, no continuation lines. */
+/**
+ * Mirror of `isConfigured` in packages/forge-iam/src/config.mjs: the maker must
+ * reject a release that the plugin would treat as unconfigured. Keep the two in
+ * step; a package that installs but cannot start enterprise login is a failed
+ * delivery, not a success.
+ */
+export function isLoginConfigured(iam) {
+  if (typeof iam?.clientId !== 'string' || iam.clientId.trim() === '') return false;
+  if (typeof iam.discoveryUrl === 'string' && iam.discoveryUrl.trim() !== '') return true;
+  return ['issuer', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri'].every(
+    (key) => typeof iam[key] === 'string' && iam[key].trim() !== '',
+  );
+}
+
 export function parseEnvConfig(text) {
   if (typeof text !== 'string') fail('CONFIG_INVALID', 'configuration must be text');
   const entries = [];
@@ -234,6 +248,9 @@ export function buildConfig(entries) {
     problems.push('HELUO_IAM_DEFAULT_PROVIDER must be an exact route ID when managed models are configured');
   }
   if (problems.length > 0) fail('CONFIG_INVALID', `configuration is invalid:\n- ${problems.join('\n- ')}`);
+  if (!isLoginConfigured(iam)) {
+    fail('CONFIG_INVALID', 'configuration is invalid:\n- IAM login is incomplete: set HELUO_IAM_DISCOVERY_URL (preferred) or all of HELUO_IAM_ISSUER, HELUO_IAM_AUTHORIZATION_ENDPOINT, HELUO_IAM_TOKEN_ENDPOINT and HELUO_IAM_JWKS_URI');
+  }
 
   return {
     iam,

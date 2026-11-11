@@ -38,6 +38,7 @@ import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import {
   buildConfig,
   inspectPublicTarball,
+  isLoginConfigured,
   makePrivateBundle,
   parseEnvConfig,
   planDigest,
@@ -310,6 +311,7 @@ export function buildDelivery(input) {
     archive: `${output}.zip`,
     configKeys: config.keys,
     configValues: 'redacted',
+    loginReady: isLoginConfigured(config.iam),
     platforms: [...SUPPORTED_PLATFORMS],
     planDigest: digest,
   };
@@ -418,6 +420,7 @@ async function main() {
       verified: result.verified,
     },
     configKeys: result.configKeys,
+    loginReady: result.plan.loginReady,
     planDigest: result.digest,
   };
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
