@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Isolated local UAT: the copy runs the real composition and the real atomic
-# store gate; only the identity provider and the store directory are isolated.
+# Isolated local UAT. 副本里挂的是正式的两个插件：凭据插件按 storeDirectory 建
+# 应用层加密文档后端，并在挂载时提供 iam-atomic-store 受信服务；IAM 只认该服务
+# 的结论，联合提交、跨进程锁与 fail closed 都按生产语义运行。被替换的只有身份
+# 提供方（模拟 IAM）与存储目录。
+# 这里不再需要任何适配器开关：企业补丁不注入 platformAdapter /
+# allowUnvettedPlatformAdapter，HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER 已退役，
+# 旧 .env 残留该键会以 CONFIG_UNKNOWN_KEY 明确失败。
 # IAM_UAT_SMOKE=1 starts the same stack, waits for /health, prints SMOKE OK and
 # exits; it is the non-interactive check that the harness still matches HEAD.
 set -eu

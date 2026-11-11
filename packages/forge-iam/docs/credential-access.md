@@ -116,7 +116,7 @@ curl -s -X POST http://127.0.0.1:49196/api/forge-iam/token \
   -H 'x-forge-iam-request: 1'
 ```
 
-存储后端按平台解析：Windows/Linux 用 `@napi-rs/keyring` 原生 addon（未取证时组合层与 CLI 都拒绝，`HELUO_FORGE_ALLOW_UNVETTED=1` 仅限本地验证），macOS 用应用层加密文档，不经过 `unvetted` 开关。CLI 默认走与插件相同的 `createPlatformBackend()`；`HELUO_FORGE_CREDENTIALS_FILE` 只是显式开发用明文覆盖。
+存储后端按平台解析：Windows 与 macOS 都是应用层加密文档——Windows 在 `%LOCALAPPDATA%\HeluoForge`，macOS 在 `~/Library/Application Support/HeluoForge`——同一文档内完成记录/引用联合提交并自带跨进程 `O_EXCL` 锁；Linux 目标没有可用后端，CLI 与插件都按 fail closed 关闭。四组合原生 addon 随包分发但未取证，只有显式选择才会被用到（插件用 `platformAdapter: native-keyring`，CLI 用 `HELUO_FORGE_ALLOW_UNVETTED=1`）。CLI 默认走 `createPlatformBackend()`，解析结果与插件一致；`HELUO_FORGE_CREDENTIALS_FILE` 只是显式开发用明文覆盖。
 
 两点说明：
 

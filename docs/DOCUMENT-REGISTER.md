@@ -88,7 +88,7 @@
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | — | 待启动 | PMO | G2 |
 | CORP-DSH-UAT-001 | 企业插件内网验收交接说明 | [operations/enterprise-uat-2026-11/README.md](<operations/enterprise-uat-2026-11/README.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
 | CORP-DSH-UAT-002 | 企业插件安装与启动 | [operations/enterprise-uat-2026-11/安装与启动.md](<operations/enterprise-uat-2026-11/安装与启动.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
-| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
+| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.2 | 草案 | 平台组（代拟） | 实机验收 |
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | — | 待启动 | IAM 团队 | G0 方向及 P0 联调；G1 接入契约；G2 生产运行流程 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | — | 待启动 | 安全 + 平台组 | G2 |
 | CORP-DSH-DEVOPS-001 | DevOps 接入 | 待创建 | — | 待启动 | DevOps 团队 | G1 查询契约；G2 受控写批准/验证与运行参数，未准入不开放 |

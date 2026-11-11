@@ -67,10 +67,11 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 
 平台交付形状：
 
-- Windows x64/arm64、Linux x64/arm64：`@napi-rs/keyring` 2.1.2 原生 addon；未取证前 `unvetted`，CLI 与插件一样拒绝，`HELUO_FORGE_ALLOW_UNVETTED=1` 仅用于本地验证。
+- Windows x64/arm64：应用层加密文档（`%LOCALAPPDATA%\HeluoForge`），与 macOS 同一条路径，不经过 `unvetted` 开关。
+- Linux x64/arm64：没有可用后端，按 fail closed 关闭；`@napi-rs/keyring` 2.1.2 原生 addon 随包分发但未取证，需显式选择才会用到（插件 `platformAdapter: native-keyring`，CLI `HELUO_FORGE_ALLOW_UNVETTED=1`）。
 - macOS arm64/x64：应用层加密文档（AES-256-GCM + 0600 密钥），不经过 `unvetted` 开关，SSH 会话可用。
 
-CLI 默认走与插件相同的 `createPlatformBackend()`；`HELUO_FORGE_CREDENTIALS_FILE` 仍是显式开发用明文覆盖，不用于生产。
+CLI 默认走 `createPlatformBackend()`，解析结果与插件一致；`HELUO_FORGE_CREDENTIALS_FILE` 仍是显式开发用明文覆盖，不用于生产。
 
 ## 自动验证与排障
 
