@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -393,6 +393,16 @@ test('runInit --json 失败只回结构化结论', async () => {
   assert.equal(outcome.result.ok, false);
   assert.equal(outcome.result.error.code, 'BAD_ARGUMENT');
   assert.equal(typeof outcome.result.error.next, 'string');
+});
+
+test('通过符号链接调用时仍执行入口，而不是静默退出', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'forge-init-symlink-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const link = join(root, 'init-link.mjs');
+  symlinkSync(SCRIPT, link);
+  const help = spawnSync(process.execPath, [link, '--help'], { encoding: 'utf8' });
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /用法：node scripts\/init-enterprise-plugin\.mjs/u);
 });
 
 test('CLI：--help 退出 0；无参 --json 退出 1 且可解析', () => {
