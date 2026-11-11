@@ -44,6 +44,7 @@ import {
   planDigest,
   PrivateBundleError,
   SUPPORTED_PLATFORMS,
+  verifyDiscovery,
 } from './lib/private-bundle.mjs';
 import { sha256 } from './lib/release-support.mjs';
 
@@ -63,6 +64,7 @@ function parseArguments(argv) {
     confirm: undefined,
     toolRoot: undefined,
     dryRun: false,
+    skipDiscoveryCheck: false,
     json: false,
   };
   const valued = new Map([
@@ -91,6 +93,10 @@ function parseArguments(argv) {
       options.json = true;
       continue;
     }
+    if (argument === '--skip-discovery-check') {
+      options.skipDiscoveryCheck = true;
+      continue;
+    }
     fail('BAD_ARGUMENT', `unknown argument ${argument}`);
   }
   for (const [flag, key] of [
@@ -105,7 +111,7 @@ function parseArguments(argv) {
   return options;
 }
 
-function readConfig(configPath) {
+export function readDeliveryConfig(configPath) {
   const stats = statSync(configPath);
   if ((stats.mode & 0o077) !== 0) {
     fail('CONFIG_PERMISSIONS', `configuration file permissions are too broad (mode ${(stats.mode & 0o777).toString(8)}); run chmod 600`);
@@ -219,8 +225,9 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 只需要安装 **Node.js LTS**（自带 npm）。DSH 可以已经装好，也可以完全不装：
 启动脚本发现缺少官方 DSH 时，会用 npm 自动安装并在本机创建 web profile。
 
-> 如果你使用的是官方 Desktop 应用，请先启动一次 Desktop 并完全退出，
-> 让 Desktop 自己创建 desktop profile；启动脚本会优先安装到它里面。
+> 官方 Desktop 应用由 Electron 独占 desktop profile，命令行无法管理它
+> （当前锁定版实测：profile "desktop" is managed exclusively by the Electron application）。
+> 请用 dsh web 形态运行本启动器；Desktop 用户需在应用内的插件设置中安装。
 
 ## 安装（任选当前系统）
 
@@ -283,7 +290,7 @@ export function buildDelivery(input) {
   }
   const toolRoot = resolve(input.toolRoot ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
   const installer = installerSource(toolRoot);
-  const { config } = readConfig(resolve(input.configPath));
+  const { config } = readDeliveryConfig(resolve(input.configPath));
   const digest = planDigest({
     publicSha256: publicInfo.sha256,
     version: input.version,
@@ -306,6 +313,7 @@ export function buildDelivery(input) {
     configKeys: config.keys,
     configValues: 'redacted',
     loginReady: isLoginConfigured(config.iam),
+    discovery: input.discovery ?? { checked: false, reason: 'not-run' },
     platforms: [...SUPPORTED_PLATFORMS],
     planDigest: digest,
   };
@@ -383,6 +391,10 @@ export function buildDelivery(input) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
+  const { config } = readDeliveryConfig(resolve(options.configPath));
+  const discovery = options.skipDiscoveryCheck
+    ? { checked: false, reason: 'skipped by --skip-discovery-check' }
+    : await verifyDiscovery(config.iam);
   const result = buildDelivery({
     publicPath: options.publicPath,
     publicSha256: options.publicSha256,
@@ -392,6 +404,7 @@ async function main() {
     toolRoot: options.toolRoot,
     dryRun: options.dryRun,
     confirm: options.confirm,
+    discovery,
   });
   if (options.dryRun) {
     console.error(JSON.stringify(result.plan, null, 2));
@@ -415,6 +428,7 @@ async function main() {
     },
     configKeys: result.configKeys,
     loginReady: result.plan.loginReady,
+    discovery: result.plan.discovery,
     planDigest: result.digest,
   };
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);

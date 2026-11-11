@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.5.4 |
+| 版本 | V0.5.6 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -102,7 +102,7 @@ Skill 引导助手逐项收集公版摘要、企业版本、IAM issuer 与 clien
 
 官方 DSH 由可核验渠道获取，记录版本、来源、目标架构和摘要。企业插件包继续通过私有 npm / AIHUB 或内部文件交付；公开 Release 不代为提供官方宿主。
 
-企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 负责向打包人员逐项收集企业字段、展示脱敏确认页并调用该命令。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
+企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 负责向打包人员逐项收集企业字段、展示脱敏确认页并调用该命令。制作器在写盘前自动请求 IAM Discovery：要求 HTTP 200、文档 `issuer` 与配置一致、`authorization_endpoint`/`token_endpoint`/`jwks_uri` 齐全且与显式配置一致；网络确实不可达时只能显式 `--skip-discovery-check`，该跳过项作为未验证证据报告。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
 
 miniceM 对比并选择以下两条候选：
 
@@ -110,6 +110,20 @@ miniceM 对比并选择以下两条候选：
 |---|---|---|
 | A：企业内成套提供 | 取得原样官方宿主、企业插件及简明步骤或初始化脚本，按指引完成安装集成 | 宿主与插件一起管理便于线下交付；须核验官方二进制和第三方组件的企业内再分发许可、版本与更新责任 |
 | B：官方渠道加企业初始化 | 从官方渠道取得并安装宿主，再执行企业脚本或按简明步骤集成插件 | 无需随企业材料分发宿主；需核验终端取得官方宿主的实际途径，以及不同系统的脚本、权限和离线依赖 |
+
+| 维度 | A：企业内成套提供 | B：官方渠道加企业初始化 |
+|---|---|---|
+| 员工操作步数 | 解压企业材料 → 运行启动器（host 与插件同包）→ 重启登录；未含 Node.js 安装步骤 | 安装 Node.js LTS（如缺）→ 运行启动器（缺宿主时 npm 自动安装、缺 profile 时自动创建）→ 重启登录；macOS web 已实测，Desktop 未实测 |
+| 管理员/受限角色 | 需管理员分发宿主、运行依赖与更新，受限角色依赖受管预置 | 员工可自助安装插件；受限角色是否允许 `dsh plugin` 与 npm 安装须实测，不放宽 `plugin_manager` |
+| 平台宿主与运行依赖 | 每个目标需准备并核验宿主、Node/Electron 依赖与架构；六目标当前仅 macOS arm64 有本地证据 | 宿主由官方渠道按平台提供；npm 自动安装需要可用的官方 registry 或企业镜像，麒麟/Windows 离线场景未实测 |
+| 离线依赖 | 可在内网分发完整材料，但宿主与依赖需随包校验 | 终端无公网时需要企业镜像或预置宿主；启动器未内置离线宿主包，离线路径未实测 |
+| 更新与回退 | 需同时管理宿主与插件版本；回退由企业包控制 | 宿主更新由官方渠道负责；插件回退需重新安装旧版，启动器对版本冲突 fail closed、不自动升降 |
+| 用户数据保留 | 取决于安装位置；当前启动器不改 profile 数据，未做保留测试 | 当前启动器不改用户 profile/数据，未做保留测试；卸载与恢复按 #123 |
+| 许可与再分发 | 必须取得官方宿主及第三方组件的企业内再分发许可，结论未出 | 不随企业材料分发宿主，许可风险较低；官方制品来源与版本须可核验 |
+| 签名与系统信任 | 不重签；外层材料完整性不等于上游签名，Gatekeeper/SmartScreen 未验证 | 同左；宿主走官方签名载荷，企业插件为未签名 npm 包 |
+| 实现与维护成本 | 需维护宿主版本组合、安装包与更新通道；人日待测 | 已实现启动器与 npm 安装、web profile 创建；后续主要跟随官方版本与 npm 可用性；人日待测 |
+
+路线选择：**候选 B**。依据是 issue #222 明确优先低成本集成、官方载荷原样、不新增宿主再分发；A 保留为内网离线成套交付的替代方案，使用前补宿主许可、平台组合与更新责任结论。miniceM 的最终确认记录仍待补于 issue #222。
 
 两条路线都不要求重新签名、公证或新增双击安装器；不修改上游签名载荷，集成到宿主支持的 profile 或插件位置。企业内部不连接公网的终端可由授权人员提前取得所需官方制品；不假定必须由终端直接联网。若任何候选要求修改已签名宿主，不能沿用原签名或默认增加重签，须记录缺口并重新评估。
 
@@ -121,7 +135,7 @@ miniceM 对比并选择以下两条候选：
 
 ### 4.3 安装、首启与更新
 
-集成使用目标 DSH 版本支持的插件管理和 profile 机制，不以插件文件存在代替实际挂载。锁定版 [Desktop 官方文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/README.md>)给出的插件管理顺序是：首次启动并初始化 Desktop profile、完全退出、通过 `dsh plugin --profile desktop add <package>` 安装、重新启动。该流程是轻量集成候选，实际命令入口、离线文件安装、权限和不同目标版本仍须验证；Web 使用独立 profile。现有用户 profile、对话、工作区、非企业设置和个人凭据均须保留；覆盖层使企业必需配置失效时，保留原文件、报告冲突并使受保护能力 fail closed。
+集成使用目标 DSH 版本支持的插件管理和 profile 机制，不以插件文件存在代替实际挂载。锁定版 [Desktop 官方文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/README.md>)给出的插件管理顺序是：首次启动并初始化 Desktop profile、完全退出、通过 `dsh plugin --profile desktop add <package>` 安装、重新启动。**2026-11-11 本机在 npm 安装的 dsh 0.2.1-rc.5 上复核：CLI 对任何 `--profile desktop` 调用（含 `--dump-config` 与 `plugin add`）都直接报 `profile "desktop" is managed exclusively by the Electron application`，该顺序在当前公开 CLI 上不可执行**；因此启动器不再自动选择 Desktop，只检测到 Desktop profile 时以 `DESKTOP_PROFILE_UNSUPPORTED` 明确拒绝，提示改用 web 形态或在 Desktop 应用内插件设置安装。Desktop 内的实际安装路径、权限与运行期挂载仍待官方能力或目标版本支持后实测。现有用户 profile、对话、工作区、非企业设置和个人凭据均须保留；覆盖层使企业必需配置失效时，保留原文件、报告冲突并使受保护能力 fail closed。
 
 Web 目标只监听本机回环；回环本身不证明多用户隔离。[锁定版 Web 文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/bundle/web-app/README.md>)说明启动 URL 包含进程凭据，`printUrl: false` 可阻止输出该行；是否能配合浏览器启动和重复入口安全使用仍须验证。会话隔离、并发、重启、端口冲突及令牌泄露均需检查；令牌不得进入其他用户可读的日志或输出。目标终端禁公网、更新与恢复行为和系统卸载数据保留均按 #123 在实际环境验证。
 

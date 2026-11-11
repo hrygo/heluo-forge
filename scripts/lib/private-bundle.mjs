@@ -109,6 +109,69 @@ export function isLoginConfigured(iam) {
   );
 }
 
+export const DISCOVERY_TIMEOUT_MS = 15_000;
+
+/**
+ * Fetch the IAM Discovery document and check that it agrees with the enterprise
+ * config the maker is about to bake into the private bundle. A package that
+ * installs but cannot complete login is a failed delivery, so this runs before
+ * anything is written. Offline packagers must opt out explicitly.
+ */
+export async function verifyDiscovery(iam, { fetchImpl = globalThis.fetch, timeoutMs = DISCOVERY_TIMEOUT_MS } = {}) {
+  if (typeof iam?.discoveryUrl !== 'string' || iam.discoveryUrl.trim() === '') {
+    return { checked: false, reason: 'no-discovery-url' };
+  }
+  if (typeof fetchImpl !== 'function') {
+    fail('DISCOVERY_UNAVAILABLE', 'this Node.js runtime has no fetch; upgrade Node.js or pass --skip-discovery-check');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetchImpl(iam.discoveryUrl, {
+      headers: { accept: 'application/json' },
+      redirect: 'error',
+      signal: controller.signal,
+    });
+  } catch (error) {
+    const aborted = error?.name === 'AbortError';
+    const reason = aborted ? `timed out after ${timeoutMs} ms` : String(error?.cause?.code ?? error?.message ?? error);
+    fail('DISCOVERY_UNREACHABLE', `cannot fetch ${iam.discoveryUrl}: ${reason}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) fail('DISCOVERY_HTTP', `discovery endpoint returned HTTP ${response.status}`);
+  let document;
+  try {
+    document = await response.json();
+  } catch {
+    fail('DISCOVERY_INVALID', 'discovery response is not valid JSON');
+  }
+  if (typeof document?.issuer !== 'string' || document.issuer.trim() === '') {
+    fail('DISCOVERY_INVALID', 'discovery document has no issuer');
+  }
+  const sameUrl = (left, right) => left.replace(/\/+$/u, '') === right.replace(/\/+$/u, '');
+  if (typeof iam.issuer === 'string' && iam.issuer.trim() !== '' && !sameUrl(document.issuer, iam.issuer)) {
+    fail('DISCOVERY_ISSUER_MISMATCH', `discovery issuer ${document.issuer} does not match configured issuer ${iam.issuer}`);
+  }
+  const endpoints = {};
+  for (const key of ['authorization_endpoint', 'token_endpoint', 'jwks_uri']) {
+    const value = document[key];
+    if (typeof value !== 'string' || value.trim() === '') fail('DISCOVERY_INVALID', `discovery document has no ${key}`);
+    if (!isHttpUrl(value, { allowInsecureHttp: iam.allowInsecureHttp === true })) {
+      fail('DISCOVERY_INVALID', `${key} is not an allowed URL: ${value}`);
+    }
+    endpoints[key] = value;
+  }
+  const mapping = { authorizationEndpoint: 'authorization_endpoint', tokenEndpoint: 'token_endpoint', jwksUri: 'jwks_uri' };
+  for (const [field, key] of Object.entries(mapping)) {
+    if (typeof iam[field] === 'string' && !sameUrl(iam[field], endpoints[key])) {
+      fail('DISCOVERY_ENDPOINT_MISMATCH', `configured ${field} does not match discovery ${key}`);
+    }
+  }
+  return { checked: true, issuer: document.issuer, endpoints };
+}
+
 export function parseEnvConfig(text) {
   if (typeof text !== 'string') fail('CONFIG_INVALID', 'configuration must be text');
   const entries = [];

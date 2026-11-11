@@ -25,13 +25,14 @@ import {
   planDigest,
   PrivateBundleError,
   SUPPORTED_PLATFORMS,
+  verifyDiscovery,
 } from './lib/private-bundle.mjs';
 import { assertOutsideDirectory } from './lib/release-support.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function parseArguments(argv) {
-  const options = { repoRoot: repo, confirm: undefined, json: false };
+  const options = { repoRoot: repo, confirm: undefined, json: false, skipDiscoveryCheck: false };
   const valued = new Map([
     ['--public', 'publicPath'],
     ['--public-sha256', 'publicSha256'],
@@ -45,6 +46,10 @@ function parseArguments(argv) {
     const argument = argv[index];
     if (argument === '--json') {
       options.json = true;
+      continue;
+    }
+    if (argument === '--skip-discovery-check') {
+      options.skipDiscoveryCheck = true;
       continue;
     }
     const field = valued.get(argument);
@@ -92,6 +97,9 @@ async function main() {
   }
   const entries = parseEnvConfig(readFileSync(configPath, 'utf8'));
   const config = buildConfig(entries);
+  const discovery = options.skipDiscoveryCheck
+    ? { checked: false, reason: 'skipped by --skip-discovery-check' }
+    : await verifyDiscovery(config.iam);
   const digest = planDigest({ publicSha256: options.publicSha256, version: options.version, config, platforms: SUPPORTED_PLATFORMS });
   const redacted = {
     public: { path: publicPath, sha256: options.publicSha256, version: publicInfo.version, name: publicInfo.name, files: publicInfo.files },
@@ -99,6 +107,7 @@ async function main() {
     output,
     configKeys: config.keys,
     configValues: 'redacted',
+    discovery,
     platforms: SUPPORTED_PLATFORMS,
     planDigest: digest,
   };

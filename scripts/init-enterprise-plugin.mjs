@@ -277,7 +277,10 @@ export function profileExists(name, { env = {}, home = homedir() } = {}) {
 
 /** 已有 profile 优先 desktop、再 web；都没有返回 null。 */
 export function existingProfileName({ env = {}, home = homedir() } = {}) {
-  for (const name of PROFILE_NAMES) {
+  // Prefer web: official dsh 0.2.1-rc.5 refuses to manage the Electron profile
+  // from the CLI ("profile \"desktop\" is managed exclusively by the Electron
+  // application"), so auto-selecting desktop would only produce a late failure.
+  for (const name of ['web', 'desktop']) {
     if (profileExists(name, { env, home })) return name;
   }
   return null;
@@ -595,7 +598,17 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     }
 
     let profileName = options.profile;
-    if (profileName === 'auto') profileName = existingProfileName({ env, home }) ?? 'web';
+    if (profileName === 'auto') {
+      const existing = existingProfileName({ env, home });
+      if (existing === 'desktop') {
+        throw new InitError(
+          'DESKTOP_PROFILE_UNSUPPORTED',
+          'init: 只找到 Desktop profile，而官方 dsh 拒绝由命令行管理 desktop profile（managed exclusively by the Electron application）',
+          '请在 Desktop 应用的插件设置中安装企业插件，或改用 web 形态；本脚本不会改动 Electron 管理的 profile。',
+        );
+      }
+      profileName = existing ?? 'web';
+    }
     let profile;
     let plannedProfileCreate = false;
     if (profileExists(profileName, { env, home })) {

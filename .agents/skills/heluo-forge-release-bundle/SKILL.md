@@ -39,7 +39,7 @@ description: 供打包人员通过问答收集企业 IAM/网关配置，在 macO
 | IAM issuer | 是 | — | `https://` 绝对地址；无 query/fragment；内网 http 需显式安全确认 |
 | IAM client_id | 是 | — | 非空，不含空白 |
 | 网关 baseURL | 是 | — | `https://` 绝对地址，通常以 `/v1` 结尾；内网 http 需显式安全确认 |
-| IAM Discovery URL | 是 | issuer + `/.well-known/openid-configuration` | 绝对地址；打包前实际 GET 到 200 且 issuer 一致。缺失或不可达会导致插件运行时“企业登录尚未设置”，maker 会直接拒绝 |
+| IAM Discovery URL | 是 | issuer + `/.well-known/openid-configuration` | 绝对地址。maker 会自动 GET：要求 200、`issuer` 与配置一致、三个端点齐全；缺失或不可达会直接拒绝。确认网络确实不可达时才加 `--skip-discovery-check` 并在报告里写明 |
 | 内网 HTTP opt-in | 否 | 空 | 仅当打包人员确认接受明文传输风险时写 `true` |
 | 凭据存储 | 否 | 空 | Windows 与 macOS 使用内置加密文档后端，不需要任何 opt-in；Linux 目标没有可用的凭据后端，向导会显示“凭据存储不可用”，属预期 |
 | 回调端口 | 否 | `17321` | 1024–65535 整数 |
@@ -72,7 +72,7 @@ ENV
 
 ## 生成与交付
 
-1. 先预览（不写盘），把回显的键名、版本、摘要前缀给打包人员核对。**必须确认 `loginReady: true`**——键名齐全不等于登录配置完整：
+1. 先预览（不写盘），把回显的键名、版本、摘要前缀给打包人员核对。**必须确认 `loginReady: true` 且 `discovery.checked: true`**——键名齐全不等于登录配置完整：
 
 ```sh
 node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
@@ -99,7 +99,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 - `INSTALL.md` — 安装前、安装、安装后、回滚；
 - `SHA256SUMS` — 整包校验和。
 
-员工只需安装 Node.js LTS 并运行对应启动器：缺官方 DSH 时启动器用 npm 自动安装并创建 web profile，再安装插件；使用 Desktop 应用时先启动一次让 Electron 创建 profile。登录后首次录入个人网关 Key。
+员工只需安装 Node.js LTS 并运行对应启动器：缺官方 DSH 时启动器用 npm 自动安装并创建 web profile，再安装插件。官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法安装（0.2.1-rc.5 实测）；Desktop 用户需在应用内插件设置中安装，启动器在只有 Desktop profile 时明确拒绝。登录后首次录入个人网关 Key。
 
 ## 失败处理
 
@@ -109,6 +109,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 | `PUBLIC_DIGEST_MISMATCH` | 停止。重新取得公版与可信摘要，不猜测文件 |
 | `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续，报告命中的类别 |
 | `CONFIG_*` | 按字段回显修正；未知键不写入。出现 `IAM login is incomplete` 时补 Discovery URL（或 issuer + 三个端点），不要删掉 issuer 绕过 |
+| `DISCOVERY_*` | 打包机到 IAM 的网络不可达，或 Discovery 文档与配置不一致（issuer/端点）。先修网络或配置；确实只能离线制作时才用 `--skip-discovery-check`，并在报告里列为未验证项 |
 | 安装后向导显示“凭据存储不可用” | Windows/macOS：检查 `%LOCALAPPDATA%\HeluoForge`（macOS 为 `~/Library/Application Support/HeluoForge`）的目录权限、磁盘空间与密钥文件是否被篡改；Linux：没有可用凭据后端，属预期 |
 | `BUNDLE_SECRET_EMBED_UNSUPPORTED` | 企业采用 public+PKCE，不应有 secret；删掉密钥行或停止 |
 | `OUTPUT_*` | 换仓库外的新目录；不要删除已有文件 |

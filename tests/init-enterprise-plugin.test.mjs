@@ -192,6 +192,22 @@ test('runInit --profile auto --install-host：装宿主、建 web profile、装�
   assert.ok(calls.some((call) => call.command === dshPath && call.args[0] === 'plugin'));
 });
 
+test('runInit --profile auto 在只有 Desktop profile 时明确拒绝，不误选', async (t) => {
+  const root = tempRoot(t);
+  const { dir } = writeRelease(root);
+  const dshPath = writeDsh(root);
+  writeProfile(root, { profile: 'desktop' });
+  const outcome = await runInit({
+    argv: ['--release', dir, '--profile', 'auto', '--dsh', dshPath, '--json'],
+    env: {},
+    home: join(root, 'home'),
+    exec: fakeExec({ profileDir: join(root, 'home', '.dsh', 'profiles', 'desktop') }).exec,
+  });
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'DESKTOP_PROFILE_UNSUPPORTED');
+  assert.match(outcome.result.error.next, /Desktop/u);
+});
+
 test('runInit 对缺失的 desktop profile 仍 fail closed', async (t) => {
   const root = tempRoot(t);
   const { dir } = writeRelease(root);

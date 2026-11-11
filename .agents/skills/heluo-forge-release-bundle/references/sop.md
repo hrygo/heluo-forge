@@ -11,7 +11,7 @@
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
 2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
-3. Discovery URL：默认取 `issuer + /.well-known/openid-configuration`，先用 curl 实际请求一次，要求 200 且 `issuer` 字段与配置一致；不确定时让管理员提供。
+3. Discovery URL：默认取 `issuer + /.well-known/openid-configuration`。maker 会自动请求，要求 200、`issuer` 与配置一致、`authorization_endpoint`/`token_endpoint`/`jwks_uri` 齐全；不确定时让管理员提供。只有打包机确实无法访问 IAM 时才加 `--skip-discovery-check`，并在交付报告里注明该检查未执行。
 4. client_id：企业的公开客户端 ID，不是员工个人标识。
 5. 网关 baseURL：企业模型网关地址，通常以 `/v1` 结尾；用于 `managedModels.baseURL`，http 同上需显式确认。
 6. 回调端口与地址：默认 `17321` / `127.0.0.1`；端口需与 IAM 注册一致。
@@ -31,7 +31,7 @@ config="$(mktemp -t heluo-enterprise.XXXXXX.env)"
 
 ## 3. 预览与确认
 
-1. 运行 `release-delivery --dry-run`，只回显公版摘要、版本、输出目录、配置键名、`loginReady`、平台列表与 `planDigest`；`loginReady` 不是 `true` 就停止，不得生成交付包。
+1. 运行 `release-delivery --dry-run`，只回显公版摘要、版本、输出目录、配置键名、`loginReady`、`discovery`、平台列表与 `planDigest`；`loginReady` 不是 `true` 或 `discovery.checked` 不是 `true`（除非显式跳过）就停止，不得生成交付包。
 2. 把键名、版本、摘要前缀交给打包人员核对；确认企业地址与其预期一致。
 3. 用回显的摘要前缀（至少 8 位）重跑并带 `--confirm`；换制品、配置或版本必须重新预览。
 4. 成功后删除临时配置文件。
@@ -63,7 +63,7 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。
 3. 启动器会：检查 Node.js → 缺 dsh 时执行 `npm install -g @deepseek-ai/dsh@<锁定版本>` → 用 `dsh --profile web --dump-config` 创建 web profile（若已有 desktop/web 则复用）→ 校验插件摘要 → 只调用 `dsh plugin --profile <p> add <tgz>`。
 4. 启动 DSH（`dsh web` 或 Desktop），在「设置 → 插件」确认已加载；登录后录入个人网关 Key。
 
-官方 Desktop 应用用户仍需先启动一次 Desktop，让 Electron 创建 desktop profile；启动器会优先复用它。
+官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法管理（0.2.1-rc.5 实测）；仅检测到 Desktop profile 时启动器会报 `DESKTOP_PROFILE_UNSUPPORTED`，应在应用内插件设置中安装，不要改 Electron 的 profile。
 
 脚本回显 `mounted=unknown` 是预期行为：运行期挂载只能在宿主内确认。
 
