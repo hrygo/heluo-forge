@@ -14,6 +14,7 @@ import test from 'node:test';
 
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
+import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
 import {
   buildConfig,
   buildPrivateTarball,
@@ -130,6 +131,8 @@ test('maker changes only the patch, the version and its own metadata', (t) => {
   const metadata = JSON.parse(after.find((entry) => entry.path === 'heluo-private-release.json').content.toString('utf8'));
   assert.equal(metadata.config.secretEmbedded, false);
   assert.equal(JSON.stringify(metadata).includes('corp.example'), false, 'metadata must not copy configuration values');
+  const verified = verifyBundle(result.tarball, { manifestPath: join(output, 'bundle-manifest.json') });
+  assert.equal(verified.ok, true, verified.errors.join('\n'));
   const sidecar = JSON.parse(readFileSync(join(output, 'private-release.json'), 'utf8'));
   assert.equal(sidecar.tarball.sha256, result.sha256);
   assert.match(readFileSync(join(output, 'SHA256SUMS'), 'utf8'), new RegExp(result.sha256, 'u'));

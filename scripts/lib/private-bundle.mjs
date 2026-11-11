@@ -414,6 +414,9 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   let patch = injectPatchConfig(patchEntry.content.toString('utf8'), 'heluo-iam', config.iam);
   patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
   const manifest = { ...root, version };
+  // The manifest is generated after the version bump, so its member map must
+  // match the rewritten package.json rather than the public base version.
+  const releaseMembers = { ...members, [root.name]: version };
   const metadata = {
     schema: PRIVATE_SCHEMA,
     entry: { name: root.name, version },
@@ -436,7 +439,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     if (!entries.some((entry) => entry.path === path)) files.push({ path, body, mode: 0o644 });
   }
   const tar = writeBundleTarball(files);
-  return { tar, patch, manifest, metadata, changed, members, files };
+  return { tar, patch, manifest, metadata, changed, members: releaseMembers, files };
 }
 
 /**
