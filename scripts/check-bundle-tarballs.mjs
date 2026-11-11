@@ -10,7 +10,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildBundle } from './build-enterprise-bundle.mjs';
 
-import { auditTarball, execNpm, gitExecutablePaths, npmLaunch, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditTarball, execNpm, gitIndexedModes, npmLaunch, parsePackOutput } from './lib/bundle-rules.mjs';
 
 const root = resolve(process.argv[2] ?? process.cwd());
 
@@ -54,7 +54,7 @@ for (const target of targets) {
       // tests/bundle-native.test.mjs.
       const result = buildBundle({ root, entry: target.manifest.name, requireNativeResources: false });
       packedFiles += result.packed.length;
-      errors.push(...auditTarball({ label: target.label, manifest: result.manifest, packed: result.packed, executablePaths: gitExecutablePaths(target.dir) }));
+      errors.push(...auditTarball({ label: target.label, manifest: result.manifest, packed: result.packed, indexModes: gitIndexedModes(target.dir) }));
       const artifactDir = dirname(result.tarball);
       if (dirname(artifactDir) === tmpdir() && basename(artifactDir).startsWith('forge-bundle-artifact-')) rmSync(artifactDir, { recursive: true, force: true });
       continue;
@@ -83,7 +83,7 @@ for (const target of targets) {
     continue;
   }
   packedFiles += packed.length;
-  errors.push(...auditTarball({ label: target.label, manifest: target.manifest, packed, executablePaths: gitExecutablePaths(target.dir) }));
+  errors.push(...auditTarball({ label: target.label, manifest: target.manifest, packed, indexModes: gitIndexedModes(target.dir) }));
 }
 
 console.log(`bundles: ${targets.length} packed, ${packedFiles} files`);

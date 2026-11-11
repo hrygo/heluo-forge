@@ -285,7 +285,7 @@ test('tarball audit keeps locale pairs together', () => {
 });
 
 // NTFS 不保存 POSIX 可执行位，chmod 在该平台上造不出"可执行"，这条用例只在保存该位的
-// 文件系统上有意义；Windows 侧的判据改由版本库索引提供（见 gitIndexExecutable）。
+// 文件系统上有意义；Windows 侧的判据改由版本库索引提供（见 gitIndexedModes）。
 test('bin targets must be executable in the working tree', { skip: process.platform === 'win32' }, () => {
   withFixture((root) => {
     addPackage(root, 'forge-sample', { bin: { 'forge-sample': './src/cli.mjs' } });

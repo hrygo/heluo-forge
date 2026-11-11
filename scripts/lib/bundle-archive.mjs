@@ -161,9 +161,13 @@ function writeChecksum(header) {
  * 在 Unix 侧看起来"bin 不可执行"。这里按字节改头部而不是另起一套打包器：条目内容、
  * 顺序、大小与 pax 记录都不动，只把 `mode` 字段和校验和改对。
  *
- * `normalizePath` 会剥掉 ustar 头里的 `package/` 前缀，所以比对的是相对包根的路径；为了
- * 不把前缀约定写死在调用方，头部原始路径也参与比对。声明了却一个条目都没匹配到（路径
- * 拼错、包被 pack 排除）直接报错，避免"补位静默无操作、Unix 侧照旧拒绝"。
+ * 声明的路径是相对包根的（`bin/heluo-forge.mjs`），而 tar 头里的条目带 `package/` 前缀。
+ * 这里只在**一套坐标系**里比对：把声明项换算成"预期的头部原始路径" `package/<声明>`，
+ * 再与头部路径逐字相等。不要反过来去剥前缀——剥完之后 `package/bin/cli.mjs` 这种普通
+ * 文件会和声明成 `./package/bin/cli.mjs` 的入口撞成同一条路径，把无关文件误改 0755。
+ *
+ * 声明了却一个条目都没匹配到（路径拼错、包被 pack 排除）直接报错，避免"补位静默无操作、
+ * Unix 侧照旧拒绝"。
  *
  * @param {Uint8Array} source gzip 字节
  * @param {Set<string>} executablePaths 相对包根的路径
@@ -178,7 +182,12 @@ export function withExecutableModes(source, executablePaths) {
     fail('not a gzip stream');
   }
   const patched = Buffer.from(tar);
-  const missing = new Set(executablePaths);
+  // 预期的头部原始路径 -> 清单里声明的包根相对路径（用于报错时给人看）。
+  const pending = new Map();
+  for (const value of executablePaths) {
+    const declared = String(value).replace(/^\.\//u, '');
+    pending.set(`package/${declared}`, declared);
+  }
   let offset = 0;
   let pax = {};
   let changed = 0;
@@ -203,16 +212,13 @@ export function withExecutableModes(source, executablePaths) {
     }
     if (typeflag !== '0') fail(`unsupported type "${typeflag}" ("${name}")`);
     const rawPath = pax.path ?? (prefix === '' ? name : `${prefix}/${name}`);
-    const entryPath = normalizePath(rawPath);
     pax = {};
     const mode = readOctal(header, 100, 8, 'mode');
-    const declared = executablePaths.has(entryPath) || executablePaths.has(rawPath);
-    if (!declared) {
+    if (!pending.has(rawPath)) {
       offset = bodyStart + padded(size);
       continue;
     }
-    missing.delete(entryPath);
-    missing.delete(rawPath);
+    pending.delete(rawPath);
     if ((mode & 0o100) === 0) {
       writeOctal(header, 100, 8, 0o755);
       writeChecksum(header);
@@ -220,7 +226,7 @@ export function withExecutableModes(source, executablePaths) {
     }
     offset = bodyStart + padded(size);
   }
-  if (missing.size > 0) fail(`tar archive has no entry for declared executable ${[...missing].join(', ')}`);
+  if (pending.size > 0) fail(`tar archive has no entry for declared executable ${[...pending.values()].join(', ')}`);
   if (changed === 0) return Buffer.from(source);
   return gzipSync(patched);
 }

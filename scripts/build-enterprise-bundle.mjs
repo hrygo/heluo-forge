@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { executableTargets, readBundleEntries, withExecutableModes } from './lib/bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
-import { auditReleaseClosure, auditTarball, execNpm, gitExecutablePaths, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditReleaseClosure, auditTarball, execNpm, gitIndexedModes, parsePackOutput } from './lib/bundle-rules.mjs';
 import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS, nativeFetchHint } from './lib/native-resources.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -121,14 +121,14 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     const stdout = execNpm(['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const packed = parsePackOutput(stdout);
     if (packed === null) fail('npm returned no packed file list');
-    const errors = auditTarball({ label: manifest.name, manifest, packed, executablePaths: gitExecutablePaths(sources.get(manifest.name)) });
+    const errors = auditTarball({ label: manifest.name, manifest, packed, indexModes: gitIndexedModes(sources.get(manifest.name)) });
     for (const name of members.keys()) {
       if (name === manifest.name) continue;
       const prefix = `node_modules/${name}/`;
       const member = readManifest(join(stage, 'node_modules', name));
       // Graph identity/version closure was checked above; audit each member's
       // actual packed resources too, including exports, locale and bin mode.
-      errors.push(...auditTarball({ label: name, manifest: { ...member, dependencies: {}, bundledDependencies: [] }, packed: packed.filter((entry) => entry.path.startsWith(prefix)).map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) })), executablePaths: gitExecutablePaths(sources.get(name)) }));
+      errors.push(...auditTarball({ label: name, manifest: { ...member, dependencies: {}, bundledDependencies: [] }, packed: packed.filter((entry) => entry.path.startsWith(prefix)).map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) })), indexModes: gitIndexedModes(sources.get(name)) }));
     }
     if (errors.length > 0) fail(errors.join('; '));
     const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
