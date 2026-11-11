@@ -23,7 +23,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** 本插件在 profile 中的包名；与私版清单、补丁层同源。 */
@@ -51,7 +51,7 @@ export const USAGE = [
   '  --release <目录>   私版交付目录（须含 private-release.json 与同名 tgz）',
   '  --profile <名>     desktop 或 web（必填，不自动探测）',
   '  --sha256 <hex>     独立摘要口径；缺省读 private-release.json（自证）',
-  '  --dsh <path>       指定 dsh 可执行文件；缺省在 PATH 查找',
+  '  --dsh <path>       指定 dsh（原生可执行文件或 npm 的 .cmd/.bat shim）；缺省在 PATH 查找',
   '  --dry-run          只打印将执行的命令与核验点，不写入',
   '  --json             输出同一结论的结构化版本',
 ].join('\n');
@@ -66,24 +66,64 @@ export class InitError extends Error {
   }
 }
 
-function isExecutableFile(path) {
+function isExecutableFile(path, platform = process.platform) {
   try {
     const stats = statSync(path);
     if (!stats.isFile()) return false;
-    return process.platform === 'win32' ? true : (stats.mode & 0o111) !== 0;
+    return platform === 'win32' ? true : (stats.mode & 0o111) !== 0;
   } catch {
     return false;
   }
 }
 
+/** Windows 上 dsh 可能的入口形态；`.cmd`/`.bat` 会解析成 node + JS 入口，不经过 shell。 */
+const WINDOWS_DSH_EXTENSIONS = Object.freeze(['.exe', '.cmd', '.bat']);
+
 /**
- * `shell:false` 起不来的 `.cmd` / `.ps1` / `.bat` shim 一律按「未找到 dsh」处理：
- * Windows 只接受原生 `.exe`，与卸载命令的探测口径保持一致。
+ * npm 全局安装生成的 Windows shim（`dsh.cmd`）用 `%dp0%\node_modules\...\bin\*.js`
+ * 指回真实入口。这里只提取该 `.js` 路径；解析不出返回 null，不猜、不回落到 `cmd.exe`。
+ *
+ * @param {string} shimPath
+ * @returns {string|null} 入口 JS 的绝对路径
  */
-function isRunnableDsh(path) {
-  if (!isExecutableFile(path)) return false;
-  if (process.platform === 'win32' && !path.toLowerCase().endsWith('.exe')) return false;
-  return true;
+export function shimEntryOf(shimPath) {
+  let text;
+  try {
+    text = readFileSync(shimPath, 'utf8');
+  } catch {
+    return null;
+  }
+  for (const pattern of [
+    /"(%dp0%|%~dp0)\\([^"\r\n]+?\.js)"/iu,
+    /(%dp0%|%~dp0)\\([^\s"\r\n]+?\.js)/iu,
+  ]) {
+    const match = pattern.exec(text);
+    if (match === null) continue;
+    const relative = match[2].replace(/\\/gu, '/');
+    if (relative.includes('..')) continue;
+    const entry = join(dirname(shimPath), relative);
+    if (existsSync(entry)) return entry;
+  }
+  return null;
+}
+
+/**
+ * 把 dsh 路径解析成可 `execFile(shell:false)` 的调用描述：
+ * - 原生 `.exe`（Windows）或 POSIX 可执行文件：直接执行；
+ * - Windows `.cmd`/`.bat` shim：解析出 JS 入口，用当前 node 直接执行；
+ * 解析失败返回 null（fail closed，不引入 shell 引号风险）。
+ *
+ * @param {string} path
+ * @param {NodeJS.Platform} [platform]
+ * @returns {{bin: string, prefix: string[]}|null}
+ */
+export function resolveDshLaunch(path, platform = process.platform) {
+  if (!isExecutableFile(path, platform)) return null;
+  if (platform !== 'win32') return { bin: path, prefix: [] };
+  if (path.toLowerCase().endsWith('.exe')) return { bin: path, prefix: [] };
+  const entry = shimEntryOf(path);
+  if (entry === null) return null;
+  return { bin: process.execPath, prefix: [entry] };
 }
 
 /**
@@ -170,23 +210,33 @@ export function dshHomeOf(env = {}, home = homedir()) {
 }
 
 /**
- * 在 PATH 里找 dsh。Windows 只认 `dsh.exe`（`execFile` + `shell:false` 起不了 `.cmd`
- * 与 `.ps1`），其它平台直接用 `dsh`。
+ * 在 PATH 里找 dsh。Windows 依次尝试 `.exe`、`.cmd`、`.bat`；`.cmd`/`.bat` 只在能解析出
+ * 真实 JS 入口时才算可用。POSIX 直接找 `dsh`。
  *
- * @returns {string|null} 第一个可执行文件；找不到返回 null。
+ * @returns {{path: string, bin: string, prefix: string[]}|null}
  */
-export function locateDsh(env = {}) {
+export function locateDshLaunch(env = {}, platform = process.platform) {
   const value = env.PATH ?? env.Path ?? env.path ?? '';
   if (typeof value !== 'string' || value.length === 0) return null;
-  const extensions = process.platform === 'win32' ? ['.exe'] : [''];
+  const extensions = platform === 'win32' ? WINDOWS_DSH_EXTENSIONS : [''];
   for (const directory of value.split(delimiter)) {
     if (directory.length === 0) continue;
     for (const extension of extensions) {
       const candidate = join(directory, `dsh${extension}`);
-      if (isRunnableDsh(candidate)) return candidate;
+      const launch = resolveDshLaunch(candidate, platform);
+      if (launch !== null) return { path: candidate, ...launch };
     }
   }
   return null;
+}
+
+/**
+ * 在 PATH 里找 dsh，返回入口路径；找不到返回 null。
+ *
+ * @returns {string|null}
+ */
+export function locateDsh(env = {}, platform = process.platform) {
+  return locateDshLaunch(env, platform)?.path ?? null;
 }
 
 /**
@@ -330,13 +380,13 @@ function defaultExec() {
 
 const resolveExec = (exec) => (typeof exec === 'function' ? exec : defaultExec());
 
-async function runStep(exec, bin, args, timeout, failureCode) {
+async function runStep(exec, launch, args, timeout, failureCode) {
   let result;
   try {
-    result = await exec(bin, args, { timeout, shell: false });
+    result = await exec(launch.bin, [...launch.prefix, ...args], { timeout, shell: false });
   } catch (error) {
     const reason = typeof error?.code === 'string' ? error.code : 'UNKNOWN';
-    throw new InitError(failureCode, `init: 调用 dsh 失败（${reason}）`, '确认 --dsh 指向原生可执行文件、宿主未在升级中，再重跑。');
+    throw new InitError(failureCode, `init: 调用 dsh 失败（${reason}）`, '确认 --dsh 指向可用的 dsh（原生可执行文件或 npm 的 dsh.cmd）、宿主未在升级中，再重跑。');
   }
   return {
     code: typeof result?.code === 'number' ? result.code : 1,
@@ -345,8 +395,8 @@ async function runStep(exec, bin, args, timeout, failureCode) {
   };
 }
 
-async function verifyInstall({ exec, dshPath, profile, lines }) {
-  const result = await runStep(exec, dshPath, ['--profile', profile.name, '--dump-config'], VERIFY_TIMEOUT_MS, 'VERIFY_FAILED');
+async function verifyInstall({ exec, launch, profile, lines }) {
+  const result = await runStep(exec, launch, ['--profile', profile.name, '--dump-config'], VERIFY_TIMEOUT_MS, 'VERIFY_FAILED');
   if (result.code !== 0) {
     throw new InitError(
       'VERIFY_FAILED',
@@ -402,23 +452,23 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     }
     const profile = inspectProfile({ profile: options.profile, env, home });
 
-    let dshPath;
+    let launch;
     if (options.dsh !== undefined) {
-      dshPath = resolve(options.dsh);
-      if (!isRunnableDsh(dshPath)) {
+      launch = resolveDshLaunch(resolve(options.dsh));
+      if (launch === null) {
         throw new InitError(
           'DSH_MISSING',
-          `init: --dsh 指向的文件不可执行或不适用于当前平台（${options.dsh}）`,
-          '指向官方安装的原生 dsh 可执行文件；Windows 上不接受 .cmd/.ps1 shim（shell:false 无法启动）。',
+          `init: --dsh 指向的文件不可执行或无法解析（${options.dsh}）`,
+          '指向官方安装的 dsh：原生可执行文件，或 npm 全局安装的 dsh.cmd/.bat；脚本会把 shim 解析成 node + JS 入口，不通过 shell 启动。',
         );
       }
     } else {
-      dshPath = locateDsh(env);
-      if (dshPath === null) {
+      launch = locateDshLaunch(env);
+      if (launch === null) {
         throw new InitError(
           'DSH_MISSING',
-          'init: 未在 PATH 找到 dsh 可执行文件',
-          '从官方渠道安装 DSH 并确保 dsh 在 PATH；或用 --dsh 指向原生可执行文件。',
+          'init: 未在 PATH 找到可用的 dsh',
+          '从官方渠道安装 DSH（原生安装，或 npm 全局安装后的 dsh.cmd）并确保 dsh 在 PATH；也可用 --dsh 指定原生可执行文件或 shim。',
         );
       }
     }
@@ -464,7 +514,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
         lines.push(...verificationPoints(profile));
         return { code: 0, lines, warnings, result: { ...base, status: 'dry-run', command, verified: null } };
       }
-      const verification = await verifyInstall({ exec: resolveExec(exec), dshPath, profile, lines });
+      const verification = await verifyInstall({ exec: resolveExec(exec), launch, profile, lines });
       lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
       lines.push(`下一步：启动官方 DSH（${profile.name} profile），在设置页确认 ${ENTRY_PACKAGE} 已加载。`);
       return { code: 0, lines, warnings, result: { ...base, status: 'already-installed', command, verified: verification.verified } };
@@ -478,7 +528,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     }
 
     const cli = resolveExec(exec);
-    const install = await runStep(cli, dshPath, command, INSTALL_TIMEOUT_MS, 'INSTALL_FAILED');
+    const install = await runStep(cli, launch, command, INSTALL_TIMEOUT_MS, 'INSTALL_FAILED');
     if (install.code !== 0) {
       throw new InitError(
         'INSTALL_FAILED',
@@ -487,7 +537,7 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       );
     }
     lines.push('安装：dsh 退出码 0');
-    const verification = await verifyInstall({ exec: cli, dshPath, profile, lines });
+    const verification = await verifyInstall({ exec: cli, launch, profile, lines });
     lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
     lines.push(`下一步：启动官方 DSH（${profile.name} profile），在设置页确认 ${ENTRY_PACKAGE} 已加载。`);
     return { code: 0, lines, warnings, result: { ...base, status: 'installed', command, verified: verification.verified } };

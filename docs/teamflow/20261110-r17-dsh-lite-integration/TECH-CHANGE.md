@@ -44,7 +44,7 @@ node scripts/init-enterprise-plugin.mjs --release <交付目录> --profile <desk
 
 | 环节 | 契约 |
 |---|---|
-| 预检 | `--release` 目录须含 `private-release.json` 与同名 tgz；摘要取 `--sha256`（优先）或 sidecar；摘要不符、缺 sidecar、缺 `dsh`、`--profile` 缺失或非 desktop/web 一律 fail-closed（退出 1），不猜 profile |
+| 预检 | `--release` 目录须含 `private-release.json` 与同名 tgz；摘要取 `--sha256`（优先）或 sidecar；摘要不符、缺 sidecar、缺 `dsh`、`--profile` 缺失或非 desktop/web 一律 fail-closed（退出 1），不猜 profile。Windows 接受原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：后者解析出 JS 入口后用 node 执行，不经过 shell；解析失败同样按缺 `dsh` 处理 |
 | 安装 | 唯一写入口 `dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、`shell:false`、固定 argv），不直接改 profile 文件、不改 `plugin_manager` 权限 |
 | 幂等 | 已装同名同版本 → 0 且零写入；已装不同版本 → 停止并打印升级/回退命令，不自动升级 |
 | 核验 | L1：dsh 退出 0；L2：`dsh --profile <p> --dump-config` 含 `@heluo/forge-enterprise` 且 profile `dependencies`/`dsh.profile.bundles` 对齐；L3 运行期挂载**不在脚本内断言**，输出 `mounted=unknown` 并指引启动宿主查设置页 |

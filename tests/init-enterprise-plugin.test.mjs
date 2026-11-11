@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -15,10 +15,13 @@ import {
   dshHomeOf,
   inspectProfile,
   locateDsh,
+  locateDshLaunch,
   parseArgs,
   readPrivateRelease,
+  resolveDshLaunch,
   runInit,
   sha256File,
+  shimEntryOf,
 } from '../scripts/init-enterprise-plugin.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/init-enterprise-plugin.mjs', import.meta.url));
@@ -166,6 +169,59 @@ test('locateDsh 只接受可执行文件，空 PATH 返回 null', (t) => {
     writeFileSync(join(bin, 'dsh.cmd'), 'rem shim');
     assert.notEqual(locateDsh({ PATH: bin }), join(bin, 'dsh.cmd'));
   }
+});
+
+test('resolveDshLaunch 解析 npm 的 dsh.cmd，用 node 直接运行 JS 入口', (t) => {
+  const root = tempRoot(t);
+  const bin = join(root, 'bin');
+  const entry = join(bin, 'node_modules', '@deepseek', 'harness', 'bin', 'dsh.js');
+  mkdirSync(dirname(entry), { recursive: true });
+  writeFileSync(entry, '// dsh entry\n');
+  const shim = join(bin, 'dsh.cmd');
+  writeFileSync(shim, [
+    '@ECHO off',
+    'SETLOCAL',
+    'CALL :find_dp0',
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@deepseek\\harness\\bin\\dsh.js" %*',
+  ].join('\r\n'));
+
+  assert.equal(shimEntryOf(shim), entry);
+  assert.deepEqual(resolveDshLaunch(shim, 'win32'), { bin: process.execPath, prefix: [entry] });
+
+  const located = locateDshLaunch({ PATH: bin }, 'win32');
+  assert.equal(located.path, shim);
+  assert.deepEqual({ bin: located.bin, prefix: located.prefix }, { bin: process.execPath, prefix: [entry] });
+});
+
+test('resolveDshLaunch 对不可解析、越界或非文件 shim fail closed', (t) => {
+  const root = tempRoot(t);
+  const bin = join(root, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const outside = join(root, 'outside.js');
+  writeFileSync(outside, '// outside\n');
+
+  const unparsable = join(bin, 'dsh.cmd');
+  writeFileSync(unparsable, 'rem shim without a JS target');
+  assert.equal(shimEntryOf(unparsable), null);
+  assert.equal(resolveDshLaunch(unparsable, 'win32'), null);
+
+  const traversal = join(bin, 'dsh.bat');
+  writeFileSync(traversal, '"%dp0%\\..\\outside.js" %*');
+  assert.equal(shimEntryOf(traversal), null);
+  assert.equal(resolveDshLaunch(traversal, 'win32'), null);
+
+  assert.equal(resolveDshLaunch(join(bin, 'missing.cmd'), 'win32'), null);
+});
+
+test('resolveDshLaunch 与 locateDsh 对原生 .exe 保持直接执行，且不跨平台误判', (t) => {
+  const root = tempRoot(t);
+  const bin = join(root, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const exe = join(bin, 'dsh.exe');
+  writeFileSync(exe, 'MZ');
+  assert.deepEqual(resolveDshLaunch(exe, 'win32'), { bin: exe, prefix: [] });
+  assert.deepEqual(resolveDshLaunch(exe, 'linux'), null);
+  assert.equal(locateDsh({ PATH: bin }, 'win32'), exe);
 });
 
 test('sha256File 输出 hex 小写', (t) => {

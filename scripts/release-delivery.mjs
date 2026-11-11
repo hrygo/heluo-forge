@@ -209,6 +209,16 @@ if errorlevel 1 (
   pause
   exit /b 3
 )
+where dsh >nul 2>nul
+if not errorlevel 1 goto dsh_found
+where dsh.cmd >nul 2>nul
+if not errorlevel 1 goto dsh_found
+echo [heluo] ERROR: dsh was not found on PATH.
+echo [heluo] Install the official DSH first: the native installer or a global npm install.
+echo [heluo] Then run this file again.
+pause
+exit /b 4
+:dsh_found
 echo [heluo] Installing into profile %PROFILE% ...
 node "%HERE%init-enterprise-plugin.mjs" --release "%ROOT%\\enterprise-plugin" --profile "%PROFILE%" > "%LOG%" 2>&1
 set "CODE=%ERRORLEVEL%"
@@ -261,6 +271,7 @@ dsh plugin --profile <desktop|web> remove @heluo/forge-enterprise
 
 - Windows 双击后窗口一闪而过：右键该文件 → 属性 → 勾选“解除锁定”，或在命令提示符里手动运行。日志位于 %TEMP%\\heluo-enterprise-install.log。
 - Windows 提示 Node.js was not found：先安装 Node.js LTS，再重跑本文件。
+- Windows 提示未找到可用的 dsh：npm 全局安装的 dsh.cmd/.bat 已被支持，脚本会解析 shim 后直接用 node 运行；若仍失败，确认 where dsh 能找到，或在管理员帮助下用 --dsh 指向 dsh.cmd。原生安装的 dsh.exe 同样可用。
 - 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。先确认 DSH 已完全退出，再重跑；也可用 dsh plugin --profile <desktop|web> list 检查。
 - 页面仍提示「企业登录尚未设置」：本包已包含管理员配置，先确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员，不要自行修改配置。
 - 页面提示「凭据存储不可用」：Windows/Linux 需要本包启用原生凭据适配器，并且 Windows 需安装 Microsoft Visual C++ 2015-2022 Redistributable；缺运行库时重启 DSH 后仍会报同一错误。
