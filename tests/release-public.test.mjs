@@ -133,6 +133,11 @@ test('builds a configuration-neutral public release from a tagged checkout', (t)
     tools.map((entry) => entry.path).join(', '),
   );
   assert.equal(
+    tools.some((entry) => entry.path === 'toolchain/scripts/release-delivery.mjs'),
+    true,
+    'the packager delivery builder must ship with the toolchain',
+  );
+  assert.equal(
     tools.some((entry) => entry.path === 'toolchain/scripts/init-enterprise-plugin.mjs'),
     true,
     'the employee-side initializer must ship with the toolchain',

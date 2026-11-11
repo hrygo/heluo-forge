@@ -112,6 +112,7 @@ function releaseToolFiles(root) {
     'scripts/build-public-release.mjs',
     'scripts/make-private-bundle.mjs',
     'scripts/init-enterprise-plugin.mjs',
+    'scripts/release-delivery.mjs',
     'scripts/fetch-native-keyring.mjs',
     'scripts/native-keyring.json',
   ];

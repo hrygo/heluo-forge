@@ -1,42 +1,90 @@
-# 私版发布包制作与员工端初始化 SOP
+# 打包人员问答与企业 DSH 交付 SOP
 
-## 1. 预检
+## 1. 开始前
 
-- 从发布页或独立可信渠道取得公版制品摘要，与本地文件比对；不要信任制品旁边的 `SHA256SUMS`。
-- 确认 `.env` 位于仓库之外且仅当前用户可读（例如 `chmod 600`），键名与工具声明的配置表一致。
-- 确认输出目录位于仓库之外且不存在；已存在时换目录，不覆盖、不合并。
-- 确认版本号与公版制品一致，不把测试版本写进企业交付。
+- 公版 `.tgz` 已下载；SHA-256 来自发布页或另一条可信渠道，不采用制品同目录的 `SHA256SUMS`。
+- 打包人员能提供：企业 IAM issuer、client_id、网关 baseURL、回调端口/地址、Gitee host（可选）、交付版本号。
+- 输出目录在仓库之外，且不存在或为空；磁盘空间足够。
+- 企业采用公开客户端 + PKCE，**没有** `client_secret`；要求提供 secret 时说明企业方案不适用并停止。
 
-## 2. 确认流程
+## 2. 问答（逐项确认）
 
-1. 第一次运行不带 `--confirm`，只让工具回显将写入的配置键、版本与摘要前缀。
-2. 人工核对回显与预期一致后，用回显的摘要前缀重跑并带上 `--confirm`（至少 8 位，工具通常提示前 16 位）。
-3. 确认只对本次输入有效；换制品、换配置或换版本都必须重新确认。
+1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
+2. IAM issuer：必须是 `https://` 绝对地址，不带 query/fragment。
+3. client_id：企业的公开客户端 ID，不是员工个人标识。
+4. 网关 baseURL：企业模型网关地址，通常以 `/v1` 结尾；用于 `managedModels.baseURL`。
+5. 回调端口与地址：默认 `17321` / `127.0.0.1`；端口需与 IAM 注册一致。
+6. Gitee host：没有企业 Gitee 就跳过，不写空键。
+7. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
+8. 输出目录：仓库外、不存在或为空。
 
-## 3. 员工端初始化
+答案写入临时文件：
 
-1. 交付目录只含私版 `.tgz`、`private-release.json` 与 `scripts/init-enterprise-plugin.mjs`；宿主安装包由员工从官方渠道取得。
-2. 员工机先从官方渠道安装 DSH；`desktop` profile 需先启动一次 Desktop 完成初始化并完全退出。
-3. 先跑 `node scripts/init-enterprise-plugin.mjs --release <dir> --profile <p> --dry-run`，核对将执行的命令与核验点。
-4. 正式执行时用 `--sha256 <hex>` 提供独立摘要；脚本唯一的写入面是 `dsh plugin --profile <p> add <tgz 绝对路径>`。
-5. 脚本回显 L1 退出码与 L2 `--dump-config` 注册结论；运行期挂载只输出 `mounted=unknown`，由员工启动宿主后在「设置 → 插件」确认。
-6. 已装同版本时脚本零写入；异版本时停止并给出 remove 后重装的命令，不自动升级或降级。
+```sh
+umask 077
+config="$(mktemp -t heluo-enterprise.XXXXXX.env)"
+```
 
-## 4. 允许的输出
+写入键值后 `chmod 600`；不要把值放进 `--issuer` 之类的命令行参数，也不要写进仓库、报告或聊天记录。
 
-- 可以出现：配置键名、profile 名、版本号、摘要前缀、成功或失败结论。
-- 不得出现：配置值、密钥、令牌、完整 `.env` 内容、本机绝对路径与未经脱敏的工具原始错误。
+## 3. 预览与确认
 
-## 5. 失败处理
+1. 运行 `release-delivery --dry-run`，只回显公版摘要、版本、输出目录、配置键名、平台列表与 `planDigest`。
+2. 把键名、版本、摘要前缀交给打包人员核对；确认企业地址与其预期一致。
+3. 用回显的摘要前缀（至少 8 位）重跑并带 `--confirm`；换制品、配置或版本必须重新预览。
+4. 成功后删除临时配置文件。
 
-- 摘要不匹配、缺字段、未知键、输出目录已存在或确认前缀不符：立即停止，保留现有产物不动。
-- 初始化失败按脚本回显分类处理：sidecar/制品缺失、摘要不符、profile 未初始化、缺 dsh、版本冲突、安装失败、核验失败；不手工编辑 profile 文件。
-- 版本冲突时先 `dsh plugin --profile <p> remove <包名>` 再重跑，不绕过脚本直接改 `dependencies`。
-- 制作失败时删除本次新建的临时目录，不留下会被误当作正式制品的半成品。
+## 4. 交付物结构
 
-## 6. 应保留的证据
+```
+heluo-enterprise-release-<version>/
+  enterprise-plugin/
+    heluo-forge-enterprise-<version>.tgz
+    private-release.json
+    bundle-manifest.json
+    SHA256SUMS
+  installer/
+    init-enterprise-plugin.mjs
+    install-macos.command
+    install-linux.sh
+    install-windows.cmd
+  安装说明.md
+  SHA256SUMS
+```
 
-- 公版制品文件名、摘要与来源渠道。
-- `.env` 的键名清单（只列键名，不含值）与权限检查结果。
-- 工具回显的确认摘要前缀、最终制品摘要与文件清单。
-- 初始化回显：profile、插件版本、`--sha256` 来源、L1/L2 结论与 `mounted=unknown`，以及员工在设置页的挂载确认。
+zip 与目录同名；zip 的 SHA-256 作为交付摘要。
+
+## 5. 员工安装
+
+1. 官方渠道安装 DeepSeek Harness，启动一次完成 profile 初始化，然后完全退出。
+2. macOS 双击 `installer/install-macos.command`；Windows 双击 `installer/install-windows.cmd`；麒麟/Linux 运行 `sh installer/install-linux.sh`。
+3. 启动器自动选择已初始化的 desktop/web profile，校验插件摘要，并只调用 `dsh plugin --profile <p> add <tgz>`。
+4. 重启 DSH，在「设置 → 插件」确认已加载；登录后录入个人网关 Key。
+
+脚本回显 `mounted=unknown` 是预期行为：运行期挂载只能在宿主内确认。
+
+## 6. 允许的输出与证据
+
+- 可以出现：配置键名、profile 名、版本号、摘要前缀、成功/失败结论、文件清单。
+- 不得出现：配置值、密钥、令牌、完整 `.env`、本机绝对路径、未脱敏的原始错误。
+- 应保留：公版文件名/摘要/来源、临时配置的键名与权限检查、确认摘要前缀、私版与 zip 摘要、员工安装回显与设置页确认结果。
+- 企业内实测记录：宿主版本与架构、Desktop/Web profile、是否离线、升级/回退、数据保留、员工步数。
+
+## 7. 失败处理
+
+| 回显 | 处理 |
+|---|---|
+| `CONFIRM_REQUIRED` / `CONFIRM_MISMATCH` | 重新预览，重新确认；不复用旧摘要 |
+| `PUBLIC_MISSING` / `PUBLIC_DIGEST_MISMATCH` | 停止，重新获取公版与可信摘要 |
+| `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续并报告类别 |
+| `CONFIG_INVALID` / `CONFIG_UNKNOWN_KEY` | 按字段修正；未知键不写入 |
+| `CONFIG_PERMISSIONS` | `chmod 600` 后重试 |
+| `BUNDLE_SECRET_EMBED_UNSUPPORTED` | 删除 secret 行；企业方案不应有共享密钥 |
+| `OUTPUT_INSIDE_REPO` / `OUTPUT_EXISTS` | 换仓库外的新目录；不删除或覆盖已有文件 |
+| `VERIFY_FAILED` | 保留现场，报告错误行；不手工改清单或重新打包绕过 |
+
+## 8. 边界
+
+- 官方 DSH 宿主原样使用；不重签、不公证、不修改官方载荷。
+- 本交付只供企业内部使用，不对外分发。
+- 真实 IAM 登录、PKCE、回调、个人 Key、运行期挂载、六平台与企业网络属于企业实测项，本地工具通过不代表企业联调完成。
