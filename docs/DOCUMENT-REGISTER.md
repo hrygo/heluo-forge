@@ -52,7 +52,7 @@
 | CORP-DSH-ARCH-003 | 企业插件市场调研与落地建议 | [architecture/plugin-market-research.md](<architecture/plugin-market-research.md>) | V0.3.1 | 草案 | 平台组（代拟） | 历史取证保留；来源与控制面建议由 ADR-11/13 替代 |
 | CORP-DSH-ARCH-004 | 插件市场决策：企业 Artifactory + AIHUB 原生索引 | [architecture/plugin-registry-source-decision.md](<architecture/plugin-registry-source-decision.md>) | V2.0.1 | 评审稿 | 平台组（代拟） | 正式技术方案；G1 接入与发行基线核验，G2 安装开放验证 |
 | CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [architecture/gateway-identity-review.md](architecture/gateway-identity-review.md) | V1.2.0 | 评审稿 | 平台组（代拟） | G0 认领与路线评估；G1 契约；G2 联调与安全准入 |
-| CORP-DSH-ARCH-006 | 公版插件、企业私有包与官方 DSH 轻量集成方案 | [architecture/public-enterprise-bundle.md](<architecture/public-enterprise-bundle.md>) | V0.5.6 | 草案 | 平台组（代拟） | 启动器自动准备宿主/web profile；制作器自动校验 IAM Discovery；dsh 0.2.1-rc.5 拒绝 CLI 管理 Desktop profile 已实测；企业 IAM/宿主目标平台待实测 |
+| CORP-DSH-ARCH-006 | 公版插件、企业私有包与官方 DSH 轻量集成方案 | [architecture/public-enterprise-bundle.md](<architecture/public-enterprise-bundle.md>) | V0.5.7 | 草案 | 平台组（代拟） | 启动器自动准备宿主/web profile；制作器自动校验 IAM Discovery；dsh 0.2.1-rc.5 拒绝 CLI 管理 Desktop profile 已实测；企业 IAM/宿主目标平台待实测 |
 | CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V4.2.4 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-PLAN-002 | 插件市场 P0 接入取证单 | [plans/market-p0-verification.md](<plans/market-p0-verification.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-PLAN-003 | 已关闭任务修复验收台账 | [plans/fix-acceptance-ledger.md](<plans/fix-acceptance-ledger.md>) | V0.1.0 | 草案（代拟，待负责人确认） | 平台组（代拟） | — |
