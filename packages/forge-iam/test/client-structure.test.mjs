@@ -109,3 +109,10 @@ test('error texts are one table, not a branch chain', () => {
   );
   assert.doesNotMatch(source, /if \(code === '/, 'add a row to ERROR_NOTICE instead of another if-branch');
 });
+
+test('a deterministic storage gate is not advertised as a retryable failure', () => {
+  const row = /IAM_ATOMIC_STORE_UNVERIFIED: '([^']+)'/u.exec(source);
+  assert.ok(row, 'IAM_ATOMIC_STORE_UNVERIFIED must not fall back to the generic notice');
+  assert.doesNotMatch(row[1], /请重试/u, 'an implementation gap must not invite a retry');
+  assert.match(row[1], /联系管理员/u, 'the notice must name who can actually fix it');
+});

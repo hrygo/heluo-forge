@@ -1747,6 +1747,9 @@ window.__ModuleLoader__.load({
       IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
       IAM_GATEWAY_OWNER_MISSING: '请先登录企业账号，再添加个人访问凭证。',
       IAM_GATEWAY_ATOMIC_UNVERIFIED: '暂时无法安全地保存或清除凭证，请联系管理员。',
+      // 未匹配文案时这句会退到兜底「操作未完成，请重试」，把可复现的实现缺口说成
+      // 临时故障，用户只会反复点。此码表示当前构建没有可信原子存储，重试无用。
+      IAM_ATOMIC_STORE_UNVERIFIED: '当前版本不支持在本机保存企业登录状态，重试无法解决；请联系管理员获取可登录的版本。',
       IAM_GATEWAY_LEGACY_READ_ONLY: '现有凭证暂时只能查看，本次没有更改。如需更换，请联系管理员。',
       IAM_GATEWAY_CHANGED: '凭证已发生变化，本次没有更改。请刷新页面后核对。',
       IAM_GATEWAY_WRITE_UNKNOWN: '无法确认凭证是否已更改。请刷新页面查看状态，暂时不要重复操作。',
