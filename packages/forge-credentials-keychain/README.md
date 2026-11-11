@@ -15,7 +15,7 @@
 | 并发 | 进程内单键串行；加密文档后端（macOS/Windows）与明文 file backend 都用本地 O_EXCL 文档锁，锁内读取独立快照，争用超时 fail closed；只有锁记录的 PID 确已不存在时才用原子 rename 回收，存活进程持有的锁不会被顶替。`snapshot(scope)` 与 `compareAndSwap(scope, expected, next, guard)` 在同一文档、同一把锁内完成比较、单次同步 guard 与两键写入，一次 fsync+rename 是唯一提交点；guard 拒绝或快照过期时零写入，异步 guard 直接拒绝。原生 OS backend 不提供联合提交 |
 | 记录 | `api-key` / `grant` JSON；损坏记录显式报错，不静默当作空 |
 | 生命周期 | 清理登记为 `ctx.effect`（Cordis 4 不收集普通 `function apply` 的返回值）；卸载时撤销 `ctx.credentials` 并 `close` backend |
-| 配置 | `Config` 归一化幂等：缺省 `filePath` 为空串表示“不启用 file backend”，可被框架二次校验接受 |
+| 配置 | `Config` 归一化幂等：缺省 `filePath` 与 `storeDirectory` 为空串，分别表示“不启用 file backend”“用平台默认目录”；两者都只接受非空字符串 |
 | 事件 | 按 seam 要求逐个监听器隔离并记录失败；同步抛错不截断后续监听器，异步拒绝不产生未处理 rejection |
 | 组合 | 企业补丁已默认禁用 `dsh-credentials-local`（只禁用、不删除该行）；检测到已有 `credentials` 时本插件拒绝挂载，不静默接管 |
 | 安全 | 空值拒绝；不落日志；不可用/临时/不安全 backend 默认 fail closed |
@@ -24,6 +24,7 @@
 
 - `resolvePlatformBackend()` 是默认解析：`win32-*` 与 `darwin-*` 映射到加密文档后端（Windows 根目录 `%LOCALAPPDATA%\\HeluoForge`）；`linux-x64` / `linux-arm64` 映射到 `vendor/` 下对应 addon，仍未取证、需显式开关；其余组合返回不可用 backend。显式指定的 platform-arch 不会被本机架构顶替，任何分支都不会落到明文。
 - `createPlatformBackend()` 在 macOS 与 Windows 返回加密文档后端（Windows 根目录为 `%LOCALAPPDATA%\\HeluoForge`），在其余未映射平台返回不可用 backend，是上述“其余组合”的兜底，也用于断言不存在静默降级。
+- `storeDirectory` 把加密文档后端指到固定目录（隔离 UAT 与需要固定路径的部署用它），缺省时用平台默认位置；它不影响选择哪一类后端。
 - `createMacosBackend({ directory })` 是 macOS 的生产存储：`~/Library/Application Support/HeluoForge/credentials.json`（0600）以 AES-256-GCM 加密，密钥为同目录 `credentials.key`（32 B 随机，0600，首次使用时生成）。目录 0700；密钥文件权限不是 0600、所有者不是当前用户、或文档无法通过认证标签校验时一律拒绝，不回退明文。枚举由 `listEntries()` 支持，不需要显式开关。
 - `createMemoryBackend()` 只用于测试/开发，默认拒绝，需 `allowEphemeral: true`。
 - `createFileBackend({ path })` 是显式 0600 明文 fallback，默认拒绝，需 `allowInsecureFile: true`；文件权限在 POSIX 上校验为 `0600`。
