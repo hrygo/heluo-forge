@@ -32,6 +32,9 @@ export async function startMockOidc({
   // client never learns the new value.
   refreshDelayMs = 0,
   dropRefreshResponse = false,
+  // Bind a routable interface so a second machine (VM) can run the real flow.
+  host = '127.0.0.1',
+  port = 0,
 } = {}) {
   // Mutable at runtime so a test can flip a fault between two worker runs.
   const control = { refreshDelayMs, dropRefreshResponse, revokeAccessMode: 'ok', revokeAccessDelayMs: 0, userInfoMode: 'ok' };
@@ -195,9 +198,9 @@ export async function startMockOidc({
     }
   });
 
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise((resolve) => server.listen(port, host, resolve));
   const address = server.address();
-  issuer = `http://127.0.0.1:${address.port}`;
+  issuer = `http://${host}:${address.port}`;
 
   function signIdToken({ nonce, subject: sub = subject }) {
     const now = Math.floor(Date.now() / 1000);
