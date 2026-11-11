@@ -176,22 +176,49 @@ fi
 exec node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-plugin" --profile "$PROFILE" --sha256 "$HASH" "$@"
 `,
   'install-windows.cmd': `@echo off
-setlocal
-rem 双击运行：把企业插件装入已初始化的官方 DSH profile。
+chcp 65001 >nul
+setlocal EnableExtensions
 set "HERE=%~dp0"
 for %%I in ("%HERE%..") do set "ROOT=%%~fI"
+set "LOG=%TEMP%\\heluo-enterprise-install.log"
 if not defined DSH_HOME set "DSH_HOME=%USERPROFILE%\\.dsh"
-if exist "%DSH_HOME%\\profiles\\desktop\\package.json" (
-  set "PROFILE=desktop"
-) else if exist "%DSH_HOME%\\profiles\\web\\package.json" (
-  set "PROFILE=web"
-) else (
-  echo 未找到已初始化的 desktop/web profile：请先启动一次官方 DSH 并完全退出。
+echo [heluo] Enterprise plugin installer
+echo [heluo] DSH_HOME=%DSH_HOME%
+set "PROFILE="
+if exist "%DSH_HOME%\\profiles\\desktop\\package.json" set "PROFILE=desktop"
+if not defined PROFILE if exist "%DSH_HOME%\\profiles\\web\\package.json" set "PROFILE=web"
+if not defined PROFILE (
+  echo [heluo] ERROR: no initialized desktop/web profile under "%DSH_HOME%".
+  echo [heluo] Start the official DSH once, quit it completely, then run this file again.
+  echo [heluo] If DSH stores its data elsewhere, set DSH_HOME and retry.
   pause
   exit /b 2
 )
-node "%HERE%${INSTALLER_SCRIPT}" --release "%ROOT%\\enterprise-plugin" --profile "%PROFILE%" %*
+echo [heluo] profile=%PROFILE%
+where node >nul 2>nul
+if errorlevel 1 if exist "%ProgramFiles%\\nodejs\\node.exe" set "PATH=%ProgramFiles%\\nodejs;%PATH%"
+where node >nul 2>nul
+if errorlevel 1 (
+  echo [heluo] ERROR: Node.js was not found on PATH.
+  echo [heluo] Install Node.js LTS first, then run this file again.
+  pause
+  exit /b 3
+)
+echo [heluo] Installing into profile %PROFILE% ...
+node "%HERE%init-enterprise-plugin.mjs" --release "%ROOT%\\enterprise-plugin" --profile "%PROFILE%" > "%LOG%" 2>&1
+set "CODE=%ERRORLEVEL%"
+type "%LOG%"
+echo.
+if "%CODE%"=="0" (
+  echo [heluo] OK: plugin installed and verified locally.
+  echo [heluo] Restart DSH, then open Settings -^> Plugins to confirm it is loaded.
+) else (
+  echo [heluo] FAILED with exit code %CODE%.
+  echo [heluo] Log: %LOG%
+  echo [heluo] Send this window or the log to your administrator.
+)
 pause
+exit /b %CODE%
 `,
 };
 
@@ -206,26 +233,32 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 
 ## 安装（任选当前系统）
 
-- macOS：双击 \`installer/install-macos.command\`。若被 Gatekeeper 拦截，右键 → 打开。
-- Windows：双击 \`installer/install-windows.cmd\`。
-- 麒麟 / Linux：终端执行 \`sh installer/install-linux.sh\`。
+- macOS：双击 installer/install-macos.command。若被 Gatekeeper 拦截，右键 → 打开。
+- Windows：双击 installer/install-windows.cmd。
+- 麒麟 / Linux：终端执行 sh installer/install-linux.sh。
 
 脚本会自动找到已初始化的 profile、校验插件摘要，并只执行一次
-\`dsh plugin add\`。看到 \`mounted=unknown\` 是正常的：运行期挂载需要在下一步确认。
+dsh plugin add。看到 mounted=unknown 是正常的：运行期挂载需要在下一步确认。
 
 ## 安装后
 
 1. 重新启动 DSH。
-2. 在「设置 → 插件」确认 \`@heluo/forge-enterprise\` 已加载。
+2. 在「设置 → 插件」确认 @heluo/forge-enterprise 已加载。
 3. 按企业身份登录，首次登录时录入**你个人**的网关 Key；Key 不随交付包分发。
 
 ## 回滚
 
-\`\`\`
 dsh plugin --profile <desktop|web> remove @heluo/forge-enterprise
-\`\`\`
 
 卸载插件不会删除对话、工作区或个人凭据。
+
+## 常见问题
+
+- Windows 双击后窗口一闪而过：右键该文件 → 属性 → 勾选“解除锁定”，或在命令提示符里手动运行。日志位于 %TEMP%\\heluo-enterprise-install.log。
+- Windows 提示 Node.js was not found：先安装 Node.js LTS，再重跑本文件。
+- 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。先确认 DSH 已完全退出，再重跑；也可用 dsh plugin --profile <desktop|web> list 检查。
+- 页面仍提示「企业登录尚未设置」：本包已包含管理员配置，先确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员，不要自行修改配置。
+- 企业内网地址使用 HTTP 时，登录令牌与个人 Key 会明文传输，请只在可信内网使用。
 
 ## 不要做
 
@@ -311,7 +344,8 @@ export function buildDelivery(input) {
     cpSync(installer, join(installerDir, INSTALLER_SCRIPT));
     for (const launcher of launcherFiles()) {
       const path = join(installerDir, launcher.name);
-      writeFileSync(path, launcher.body);
+      const body = launcher.name.endsWith('.cmd') ? launcher.body.replace(/\n/gu, '\r\n') : launcher.body;
+      writeFileSync(path, body);
       chmodSync(path, 0o755);
     }
     writeFileSync(join(staging, 'INSTALL.md'), EMPLOYEE_GUIDE);

@@ -39,6 +39,7 @@ description: 供打包人员通过问答收集企业 IAM/网关配置，在 macO
 | IAM issuer | 是 | — | `https://` 绝对地址；无 query/fragment；内网 http 需显式安全确认 |
 | IAM client_id | 是 | — | 非空，不含空白 |
 | 网关 baseURL | 是 | — | `https://` 绝对地址，通常以 `/v1` 结尾；内网 http 需显式安全确认 |
+| IAM Discovery URL | 是 | issuer + `/.well-known/openid-configuration` | 绝对地址；必须能取到 issuer 一致的 discovery 文档 |
 | 内网 HTTP opt-in | 否 | 空 | 仅当打包人员确认接受明文传输风险时写 `true` |
 | 回调端口 | 否 | `17321` | 1024–65535 整数 |
 | 回调地址 | 否 | `127.0.0.1` | IPv4 回环或主机名 |
@@ -54,6 +55,7 @@ config="$(mktemp -t heluo-enterprise.XXXXXX.env)"
 cat > "$config" <<'ENV'
 HELUO_IAM_AUTH_MODE=public
 HELUO_IAM_ISSUER=<issuer>
+HELUO_IAM_DISCOVERY_URL=<discovery url>
 HELUO_IAM_CLIENT_ID=<client_id>
 HELUO_IAM_SCOPES=openid profile offline_access
 HELUO_IAM_CALLBACK_PORT=<port>

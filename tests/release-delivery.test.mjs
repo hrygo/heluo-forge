@@ -152,6 +152,12 @@ test('builder writes the employee package and a zip', (t) => {
   const launcher = readFileSync(join(output, 'installer', 'install-macos.command'), 'utf8');
   assert.match(launcher, /--release "\$ROOT\/enterprise-plugin"/u);
   assert.match(launcher, /--profile "\$PROFILE"/u);
+  const windows = readFileSync(join(output, 'installer', 'install-windows.cmd'), 'utf8');
+  assert.match(windows, /\r\n/u, 'Windows launcher must use CRLF line endings');
+  assert.match(windows, /where node/u);
+  assert.match(windows, /heluo-enterprise-install\.log/u);
+  assert.match(windows, /DSH_HOME/u);
+  assert.match(guide, /解除锁定/u);
   const sums = readFileSync(join(output, 'SHA256SUMS'), 'utf8');
   assert.match(sums, /enterprise-plugin\/heluo-forge-enterprise-0\.1\.0-corp\.1\.tgz/u);
   assert.equal(sums.includes('config.example'), false);

@@ -11,12 +11,13 @@
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
 2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
-3. client_id：企业的公开客户端 ID，不是员工个人标识。
-4. 网关 baseURL：企业模型网关地址，通常以 `/v1` 结尾；用于 `managedModels.baseURL`，http 同上需显式确认。
-5. 回调端口与地址：默认 `17321` / `127.0.0.1`；端口需与 IAM 注册一致。
-6. Gitee host：没有企业 Gitee 就跳过，不写空键。
-7. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
-8. 输出目录：仓库外、不存在或为空。
+3. Discovery URL：默认取 `issuer + /.well-known/openid-configuration`，必须实际可达且 issuer 一致；不确定时让管理员提供。
+4. client_id：企业的公开客户端 ID，不是员工个人标识。
+5. 网关 baseURL：企业模型网关地址，通常以 `/v1` 结尾；用于 `managedModels.baseURL`，http 同上需显式确认。
+6. 回调端口与地址：默认 `17321` / `127.0.0.1`；端口需与 IAM 注册一致。
+7. Gitee host：没有企业 Gitee 就跳过，不写空键。
+8. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
+9. 输出目录：仓库外、不存在或为空。
 
 答案写入临时文件，内网 http 时追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`：
 
