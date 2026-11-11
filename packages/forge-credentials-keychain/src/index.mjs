@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { KeychainBackendError, createFileBackend, createMacosBackend, createPlatformBackend, createUnavailableBackend } from './backend.mjs';
+import { KeychainBackendError, createFileBackend, createMacosBackend, createPlatformBackend, createUnavailableBackend, createWindowsBackend } from './backend.mjs';
 import { createNativeKeyringBackend, nativeTargetFor } from './native-keyring.mjs';
 import { createSecurityCliBackend } from './security-cli.mjs';
 import { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
@@ -218,6 +218,11 @@ export function resolvePlatformBackend(options = {}) {
   // usable: its item ACL is bound to the caller's code signature. The macOS
   // backend is an application-level encrypted document instead.
   if (platform === 'darwin') return createMacosBackend(options.storeDirectory === undefined ? {} : { directory: options.storeDirectory });
+  // The Windows Credential Manager only overwrites a value: it cannot express
+  // the compare-then-commit the sign-in gate requires. Windows therefore uses
+  // the same application-level encrypted document as macOS; the native adapter
+  // stays an explicit, unvetted opt-in (`platformAdapter: native-keyring`).
+  if (platform === 'win32') return createWindowsBackend(options.storeDirectory === undefined ? {} : { directory: options.storeDirectory });
   if (nativeTargetFor(platform, arch) === undefined) {
     // An explicitly requested platform-arch must never resolve against this
     // host: on a machine that has an addon that would silently mount the wrong

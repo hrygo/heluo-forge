@@ -68,8 +68,19 @@ test('an unmapped platform-arch still gets the unavailable backend', () => {
   assert.equal(resolvePlatformBackend({ platform: 'linux', arch: 'ia32' }).available, false);
 });
 
-test('a supported platform selects the native backend, unvetted until evidence lands', () => {
+test('Windows defaults to the encrypted document: the OS store cannot expose a joint commit', () => {
   const backend = resolvePlatformBackend({ platform: 'win32', arch: 'x64', load: fakeLoad, service: 'heluo-forge-test' });
+  assert.equal(backend.kind, 'file-encrypted');
+  assert.equal(backend.encrypted, true);
+  assert.equal(typeof backend.snapshot, 'function');
+  assert.equal(typeof backend.compareAndSwap, 'function');
+  // An explicit platform-arch request must not silently borrow the host store.
+  const explicit = resolvePlatformBackend({ platform: 'win32', arch: 'arm64', load: fakeLoad, service: 'heluo-forge-test', storeDirectory: '/tmp/heluo-forge-explicit' });
+  assert.equal(explicit.kind, 'file-encrypted');
+});
+
+test('a supported platform selects the native backend, unvetted until evidence lands', () => {
+  const backend = resolvePlatformBackend({ platform: 'linux', arch: 'x64', load: fakeLoad, service: 'heluo-forge-test' });
   assert.equal(backend.kind, 'native-keyring');
   assert.equal(backend.available, true);
   assert.equal(backend.durable, true);
@@ -92,7 +103,7 @@ test('the native backend reaches the injected store end to end', async () => {
 });
 
 test('enumeration stays refused until it is verified per platform', async () => {
-  const backend = resolvePlatformBackend({ platform: 'win32', arch: 'x64', load: fakeLoad, service: 'heluo-forge-test' });
+  const backend = resolvePlatformBackend({ platform: 'linux', arch: 'x64', load: fakeLoad, service: 'heluo-forge-test' });
   await assert.rejects(() => backend.list('iam/'), (error) => error.code === 'KEYCHAIN_LIST_UNSUPPORTED');
 
   const listing = () => ({
@@ -101,7 +112,7 @@ test('enumeration stays refused until it is verified per platform', async () => 
     findCredentialsAsync: async () => [{ account: 'iam/token', password: 'synthetic-value' }],
   });
   const optedIn = resolvePlatformBackend({
-    platform: 'win32',
+    platform: 'linux',
     arch: 'x64',
     load: listing,
     service: 'heluo-forge-test',
