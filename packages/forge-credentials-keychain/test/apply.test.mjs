@@ -329,3 +329,10 @@ test('a plaintext document inside a git work tree is refused at mount', async ()
   assert.equal(okContext.provided.has('credentials'), true);
   await dispose();
 });
+
+test('storeDirectory is validated and carried into the platform backend', () => {
+  assert.equal(validateConfig({}).value.storeDirectory, '');
+  assert.equal(validateConfig({ storeDirectory: '/tmp/heluo-uat' }).value.storeDirectory, '/tmp/heluo-uat');
+  const invalid = validateConfig({ storeDirectory: 42 });
+  assert.ok(invalid.issues.some((issue) => issue.path[0] === 'storeDirectory'));
+});

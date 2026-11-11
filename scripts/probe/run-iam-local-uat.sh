@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Isolated local UAT only; never use test trust injections in production.
+# Isolated local UAT: the copy runs the real composition and the real atomic
+# store gate; only the identity provider and the store directory are isolated.
 # IAM_UAT_SMOKE=1 starts the same stack, waits for /health, prints SMOKE OK and
 # exits; it is the non-interactive check that the harness still matches HEAD.
 set -eu
@@ -34,22 +35,6 @@ profile = {'name': 'heluo-isolated-uat', 'private': True, 'dsh': {'profile': {'b
 (p / 'cordis.yml').write_text('[]\n')
 PY
 npm install --ignore-scripts --no-audit --no-fund --prefix "$IAM_UAT_ROOT/dsh/profiles/uat"
-python3 - <<'PY'
-import json, os
-from pathlib import Path
-r = Path(os.environ['IAM_UAT_ROOT']); base = r / 'dsh/profiles/uat/node_modules/@heluo/forge-enterprise/node_modules/@heluo'
-iam = base / 'forge-iam'; credentials = base / 'forge-credentials-keychain'
-for p in (iam, credentials):
-    manifest = json.loads((p / 'package.json').read_text())
-    manifest['main'] = './src/index.uat.mjs'; manifest['exports']['.'] = './src/index.uat.mjs'
-    (p / 'package.json').write_text(json.dumps(manifest, indent=2) + '\n')
-s = (iam / 'src/index.mjs').read_text(); old = "from './service.mjs'"
-if old not in s: raise SystemExit('IAM 入口已变化，请检查测试注入适配方式')
-(iam / 'src/index.uat.mjs').write_text(s.replace(old, "from './uat-service.mjs'"))
-fixture = (r / 'source/packages/forge-iam/test/support/atomic-gateway.mjs').as_uri()
-(iam / 'src/uat-service.mjs').write_text("import {createIamService as createActual} from './service.mjs';\nimport {createAtomicGatewayFixture} from " + json.dumps(fixture) + ";\nexport function createIamService(config, options = {}) { const fixture = createAtomicGatewayFixture(); return createActual(config, {...options, credentials: fixture.credentials, getCredentials: () => fixture.credentials, verifyAtomicStore: candidate => candidate === fixture.credentials, ...fixture.options}); }\n")
-(credentials / 'src/index.uat.mjs').write_text("import {apply as applyActual, createMemoryBackend} from './index.mjs';\nexport const name = 'forge-credentials-keychain-uat';\nexport const inject = [];\nexport function apply(ctx) { return applyActual(ctx, {backend: createMemoryBackend(), allowEphemeral: true}); }\n")
-PY
 cat > "$IAM_UAT_ROOT/serve.mjs" <<'JS'
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -68,7 +53,7 @@ const gatewayUrl = new URL(gateway);
 if (gatewayUrl.protocol !== 'http:' || gatewayUrl.hostname !== '127.0.0.1' || gatewayUrl.username || gatewayUrl.password || gatewayUrl.search || gatewayUrl.hash || !gatewayUrl.pathname.endsWith('/v1')) throw new Error('测试网关必须是本机 127.0.0.1 的 HTTP /v1 地址');
 const { startMockOidc } = await import(pathToFileURL(`${root}/source/packages/forge-iam/test/support/mock-oidc.mjs`));
 const mock = await startMockOidc({ clientId: 'isolated-uat', accessTtl: 120 });
-await writeFile(`${root}/dsh/profiles/uat/cordis.patch.yml`, `- id: heluo-credentials-keychain\n  disabled: false\n- id: heluo-iam\n  config:\n    clientId: isolated-uat\n    callbackPort: ${callbackPort}\n    issuer: ${mock.issuer}\n    authorizationEndpoint: ${mock.issuer}/authorize\n    tokenEndpoint: ${mock.issuer}/token\n    jwksUri: ${mock.issuer}/jwks\n    revocationEndpoint: ${mock.issuer}/revoke\n    refreshSkewSeconds: 30\n    managedModels:\n      baseURL: ${JSON.stringify(gateway)}\n`);
+await writeFile(`${root}/dsh/profiles/uat/cordis.patch.yml`, `- id: heluo-credentials-keychain\n  config:\n    storeDirectory: ${root}/dsh/credentials\n- id: heluo-iam\n  config:\n    clientId: isolated-uat\n    callbackPort: ${callbackPort}\n    issuer: ${mock.issuer}\n    authorizationEndpoint: ${mock.issuer}/authorize\n    tokenEndpoint: ${mock.issuer}/token\n    jwksUri: ${mock.issuer}/jwks\n    revocationEndpoint: ${mock.issuer}/revoke\n    refreshSkewSeconds: 30\n    managedModels:\n      baseURL: ${JSON.stringify(gateway)}\n`);
 const child = spawn(process.env.DSH_BIN || 'dsh', ['--profile', 'uat', '--host', '127.0.0.1', '--port', String(hostPort), '--no-open'], { cwd: `${root}/workspace`, env: { ...process.env, DSH_HOME: `${root}/dsh` }, stdio: ['ignore', 'pipe', 'pipe'] });
 let launchUrl; let buffer = ''; let warnings = '';
 child.stdout.on('data', chunk => { buffer += chunk.toString(); const match = buffer.match(/dsh web: (http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+)/); if (match) { launchUrl = match[1]; buffer = ''; } if (buffer.length > 16384) buffer = buffer.slice(-16384); });

@@ -124,6 +124,7 @@ export function validateConfig(input = {}) {
     allowUnverifiedEnumeration: false,
     platformAdapter: undefined,
     filePath: '',
+    storeDirectory: '',
     backend: undefined,
   };
 
@@ -141,6 +142,14 @@ export function validateConfig(input = {}) {
       issues.push({ path: ['filePath'], message: 'filePath must be a non-empty string' });
     } else {
       value.filePath = input.filePath;
+    }
+  }
+
+  if (input.storeDirectory !== undefined && input.storeDirectory !== null && input.storeDirectory !== '') {
+    if (typeof input.storeDirectory !== 'string' || input.storeDirectory.trim().length === 0) {
+      issues.push({ path: ['storeDirectory'], message: 'storeDirectory must be a non-empty string' });
+    } else {
+      value.storeDirectory = input.storeDirectory;
     }
   }
 
@@ -308,6 +317,7 @@ export function apply(ctx, rawConfig = {}) {
             : resolvePlatformBackend({
               service: result.value.service,
               enumeration: result.value.allowUnverifiedEnumeration === true ? 'find-credentials' : 'unsupported',
+              ...(result.value.storeDirectory ? { storeDirectory: result.value.storeDirectory } : {}),
             }));
   } catch (error) {
     // A backend that cannot be constructed is a mount failure, never a reason
