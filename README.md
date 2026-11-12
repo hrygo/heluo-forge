@@ -2,111 +2,107 @@
 
 <p align="center">
   <a href="docs/assets/branding/cyber-long/index.html">
-    <img src="docs/assets/branding/cyber-long/primary/app-icon.png" alt="河洛 / Heluo Forge 官方主标（河洛苍螭）" width="128" height="128">
+    <img src="docs/assets/branding/cyber-long/primary/app-icon.png" alt="河洛 / Heluo Forge 官方主标：河洛苍螭" width="128" height="128">
   </a>
   <br>
-  <strong>企业级智能研发平台 · ENTERPRISE AI PLATFORM</strong>
+  <strong>企业级智能研发平台 × 智能个人助理</strong>
   <br>
-  <sub>基于 DeepSeek Harness（DSH）的企业专属端侧智能研发中枢 · 官方视觉系统：<a href="docs/assets/branding/cyber-long/index.html">河洛苍螭 (Cyber Long)</a></sub>
+  <sub>以一个工作入口，连接研发任务、个人工作与企业能力。</sub>
 </p>
 
-河洛企业级智能研发平台（Heluo Forge）是面向大型组织构建的企业级端侧智能研发中枢。平台以 DeepSeek Harness（DSH）为原生底座，通过插件化架构、企业级安全策略与轻量能力索引，将大模型编程辅助能力无缝接入企业身份认证体系、AI 模型网关与研发生态基础设施，为企业研发团队提供安全合规、开箱即用且深度协同的智能编程体验。
+河洛（Heluo Forge）面向企业员工，将**企业级智能研发平台**与**智能个人助理**融为一体。在一个以 DeepSeek Harness（DSH）为宿主的个人工作环境里，衔接需求、代码与交付，也连接邮件、沟通、办公和专业协作。
 
-| 项 | 内容 |
+河洛通过扩展复用企业已有的身份、模型和业务系统，让个人工作体验与企业的权限、数据和治理要求相衔接。每位员工使用自己的工作环境，各项能力遵循实际用户授权和接入系统的权限。
+
+[了解产品方向](#产品方向) · [查看产品路线图](#产品路线图) · [阅读项目文档](#了解更多)
+
+---
+
+## 产品方向
+
+从一项需求开始，助手可以协助梳理 Issue 和代码；需要处理往来时，查找相关邮件；讨论结束后，整理员工主动选择的聊天文字；遇到跨领域问题，再选择合适的专家协助。研发任务与日常工作在同一工作环境中衔接。
+
+### 让研发工作更连贯
+
+从理解需求和 Issue、查询研发上下文，到代码编写、验证和交付，河洛让智能助手围绕实际工作组织上下文。DevOps 与 Gitee 扩展对接企业已有研发工具，Skill 提供企业语义，Teamflow 承接工作流执行。
+
+研发系统接入以**只读查询为现有能力基线**。受控写是已确认的研发目标，默认关闭，实际开放取决于具体动作的范围、用户授权、服务端权限、安全策略和验证结果。
+
+### 让个人助理理解持续工作
+
+个人助理也面向研发以外的企业工作：通过自然语言整理信息、延续任务，并按员工的选择使用与本人有关的上下文。
+
+个人记忆方向基于 Hindsight，规划让员工配置记忆采集、查看和管理自己的记忆，并在允许时供助理使用。员工对记忆的选择以及个人内容的访问边界，是这一体验的重要组成部分。
+
+### 让邮件融入工作流
+
+智能邮件提供本地邮件工作台与 Coremail 接入，支持邮件检索、待办与知识整理、巡检和日报；**dsh-mail** 将邮件入口和使用说明带入 DSH。员工可以在授权范围内查询邮件、准备草稿，并在人工批准后发送 Agent 草稿。
+
+### 让沟通与远程交办自然衔接
+
+河洛探索两条互相独立的企业 IM 体验：
+
+- **企业 IM 聊天**：在 DSH 中与同事单聊或群聊，优先探索与企业现有 IM 互通；员工可主动选择有权查看的聊天文字，生成仅本人可见的个人总结。
+- **远程交办桌面助理**：员工通过企业 IM 中的智能助手，向本人授权的桌面 DSH 交办任务，并在 IM 中查看进展、确认请求和结果。
+
+OA 方向则关注员工在授权范围内查看和整理办公信息。上述接入的具体能力以目标系统接口、用户授权与验证结果为准。
+
+### 让专业能力按需协作
+
+遇到跨领域工作时，河洛希望让员工发现并选择有权调用的专家智能体，由个人助理发起委派并综合结果。专家目录、任务状态与结果来源依托对应服务，调用遵循员工授权与接入规则。
+
+### 以企业边界支撑个人体验
+
+河洛在个人工作便利性与企业要求之间建立清晰边界：企业身份、模型访问与业务系统权限按各自实际能力核验；涉及敏感数据或有影响的操作，遵循适用的用户确认与企业规则。客户端的提示或登录状态不代替服务端授权。
+
+企业组合、凭据存储和策略审计为扩展提供基础能力。
+
+### 让企业能力更容易发现
+
+**AIHUB** 面向员工提供企业 **MCP、Skills、CLI 和插件**的浏览与获取门户。**Nacos AI 注册中心**承担 MCP 服务的注册与发现，以及 Skills 的注册与获取，让员工在授权范围内按需使用企业能力。
+
+插件分发方向复用 AIHUB 提供的索引与 DSH 原生插件市场，让员工按需发现和安装企业提供的能力。
+
+---
+
+## 产品路线图
+
+以下路线图展示用户体验和当前进展，**不是发布日期或先后顺序承诺**。实际交付范围以[需求与场景基线](docs/requirements/requirements-baseline.md#2-范围边界唯一真源)及后续确认结果为准。
+
+| 方向 | 希望带来的体验 | 当前进展 |
+|---|---|---|
+| **研发工作** | 在个人工作环境中衔接需求、Issue、代码、验证和交付。 | DevOps、Gitee 等扩展已有部分本地实现；企业 CLI 与目标终端仍需验证。[实现与验证入口](docs/design/README.md#22-实现与验证入口) |
+| **企业身份与治理** | 使用企业身份和模型，按既有权限与策略访问工作工具。 | 身份、凭据、策略及企业组合已有部分本地实现；企业 IAM、网关与目标环境需分别验证。 |
+| **AIHUB 能力门户** | 在一个门户浏览和获取企业 MCP、Skills、CLI 和插件。 | 产品方向已明确；各资源来源、用户权限与 DSH 接入按企业实际能力验证。 |
+| **Nacos AI 注册中心** | 注册、发现 MCP 服务，注册和获取 Skills。 | Nacos 提供相应注册中心能力；企业版本、权限及实际接入需分别核验。 |
+| **插件发现与分发** | 通过熟悉的 DSH 入口发现和安装企业提供的扩展。 | 原生市场、AIHUB 索引与企业制品源的接入方向已有设计；实际企业接入待验证。[市场设计](docs/design/plugins/forge-market.md) |
+| **企业技能** | 发现适用的企业 Skill，按需安装并在工作中使用。 | 通过企业 Nacos 发现、安装及原生加载 Skill 为待评估方向。[企业技能跟踪](https://github.com/hrygo/heluo-forge/issues/97) |
+| **智能邮件** | 查找邮件、整理信息和准备草稿，按人工批准规则处理 Agent 草稿发送。 | dsh-mail 将邮件入口带入 DSH；实际使用取决于安装和邮箱授权。[邮件接入跟踪](https://github.com/hrygo/heluo-forge/issues/155) |
+| **个人记忆** | 员工选择记忆的采集和使用方式，让助理更好地延续工作。 | Hindsight 与 DSH 接入为产品方案草案；身份、记忆访问与数据处理边界待设计和核验。[个人记忆跟踪](https://github.com/hrygo/heluo-forge/issues/264) |
+| **企业 IM 聊天** | 在 DSH 中与同事沟通，并对主动选择的聊天文字生成个人总结。 | [企业聊天方案](docs/requirements/enterprise-collaboration-chat-proposal.md)为草案，优先探索现有企业 IM 互通；接口和权限待核验。 |
+| **IM 远程交办** | 在企业 IM 中向本人桌面助理交办任务，查看进展、确认请求和结果。 | [跨端任务协同](https://github.com/hrygo/heluo-forge/issues/240)为待确认方向；身份绑定、桌面接入和任务反馈待验证。 |
+| **OA 办公** | 在授权范围内查看办公信息，并请助理协助阅读和整理。 | [OA 接入](https://github.com/hrygo/heluo-forge/issues/241)为候选方向；首期场景、接口与权限待确认。 |
+| **专家智能体** | 发现并选择合适的专家，向其委派任务并使用结果。 | [专家产品需求](docs/requirements/delegra-experts-prd.md)为草案；Delegra、员工授权与宿主接入待确认或验证。 |
+| **目标环境与试点** | 在 Windows、macOS 及麒麟、统信 UOS 等国产 Linux 环境中获得连贯、可控的工作体验。 | 安装、企业接入与实际使用需在各目标环境分别验证；试点以验收结果为前提。 |
+
+## 当前进展
+
+河洛已形成企业研发场景的需求、架构与模块设计，身份、凭据、策略、企业组合和研发工具等已有部分本地实现与验证。智能邮件通过 dsh-mail 融入工作环境；记忆、企业沟通、跨端协同及专家智能体等方向已有产品方案或跟踪议题。
+
+各模块的实际实现、验证环境与接入边界以[逐模块设计索引](docs/design/README.md#22-实现与验证入口)及对应方案为准。
+
+---
+
+## 了解更多
+
+| 我想了解 | 从这里开始 |
 |---|---|
-| 工程标识 | `heluo-forge` |
-| 文档编号前缀 | `CORP-DSH-*`（保留历史编号，DSH 指上游宿主运行时） |
-| 仓库边界 | 企业方案与扩展工程仓库，不包含、不修改或分发 DSH 本体 |
-| 许可与使用 | 公开（public）方案仓库；根工程与各扩展包 `private: true` 禁止发布，`UNLICENSED` 表示未授予开源许可 |
+| 产品当前范围和企业研发场景 | [需求与场景基线](docs/requirements/requirements-baseline.md) |
+| 架构、企业接入与安全边界 | [总体架构](docs/architecture/platform-architecture.md) · [安全说明](SECURITY.md) |
+| 已实现什么、验证到哪里 | [实现与验证入口](docs/design/README.md#22-实现与验证入口) |
+| 企业能力门户与注册中心 | [插件市场设计](docs/design/plugins/forge-market.md) · [企业 Skill 跟踪](https://github.com/hrygo/heluo-forge/issues/97) · [Nacos MCP Registry](https://nacos.io/en/docs/latest/manual/user/ai/mcp-registry/) · [Nacos Skill Registry](https://nacos.io/en/docs/v3.2/manual/user/ai/skill-registry/) |
+| 员工个人助理的产品方向 | [邮件](https://github.com/hrygo/heluo-forge/issues/155) · [个人记忆](https://github.com/hrygo/heluo-forge/issues/264) · [企业聊天](docs/requirements/enterprise-collaboration-chat-proposal.md) · [IM 远程交办](https://github.com/hrygo/heluo-forge/issues/240) · [OA](https://github.com/hrygo/heluo-forge/issues/241) · [专家智能体](docs/requirements/delegra-experts-prd.md) |
+| 交付、部署与贡献 | [部署说明](deploy/README.md) · [贡献指南](CONTRIBUTING.md) · [文档总览](docs/README.md) |
+| 河洛的视觉形象 | [河洛苍螭品牌全景](docs/assets/branding/cyber-long/index.html) |
 
-银河麒麟使用 Web 端时，推荐使用新版 Chrome 或 Chromium；浏览器兼容性与实测范围见[客户端说明](deploy/clients/README.md#web-浏览器)。
-
----
-
-## 1. 愿景与核心价值
-
-大型企业落地端侧 AI 编程助手，既需要融入内网既有的**身份认证、模型网关、DevOps 与代码资产**，又面临**凭据裸露、调用失控、研发上下文割裂**以及 **Windows 与国产银河麒麟双端适配**等现实挑战。
-
-河洛坚持“**核心不改，能力全插件**”的工程路线：以 DeepSeek Harness（DSH）为原生宿主底座，充分借助 DSH 开放的插件扩展机制（`auth / credentials`、`llm`、`tools.guard`、`skills / cli` 与 `pluginManager` 原生索引源），将端侧工作台无缝连接并拓展至企业各类核心平台，构建一套“**客户端零信任控制 + 服务端权威授权**”协同的智能研发底座：
-
-![河洛企业级智能研发平台终态架构全景](docs/assets/architecture-overview.svg)
-
-### 核心价值主张
-
-- 🔐 **全域身份互通与凭据托管**：原生对接企业统一 IAM（OIDC / PKCE 机制），实现端侧静默刷新与滑动续期；底层安全对接操作系统原生密钥环（OS Keychain），彻底消除明文存储与个人 API Key 暴露风险。
-- ⚡ **透明模型网关与额度治理**：统一经由企业 AI 网关受控调度，支持运行时透明凭据注入、组织级租户隔离、细粒度调用计量与合规审计，解耦端侧与底层模型供应商。
-- 🛡️ **端侧合规策略与动态门禁**：内置安全策略引擎，实现敏感文件路径硬拒绝、代码与客户数据外发二次确认门禁，确保研发资产端侧流转全程受控。
-- 🔧 **受控研发生态协同**：对接企业现有 DevOps 平台与私有 Gitee 基础设施，遵循“只读优先、受控写严格审批”原则，让 AI 能够感知研发上下文并辅助任务流转。
-- 📦 **企业轻量能力生态分发**：确立“企业私有 npm 为唯一制品源 + AIHUB 维护原生轻量索引”架构（ADR-11/13），依托 DSH 原生机制安全、受控分发企业内部专用能力插件。
-- 🖥️ **国产双端与苍螭视觉体系**：深度适配 Windows 桌面与银河麒麟 aarch64 环境；全线搭载河洛苍螭（Cyber Long）官方设计系统，兼具东方美学与现代科技感。
-
----
-
-## 2. 当前阶段与成熟度
-
-> [!IMPORTANT]
-> **当前处于方案评审与开发骨架阶段 (Stage 0: Foundation & Architecture Spike)，尚未形成面向生产的河洛产品商业发行版。**
-
-河洛平台采取严谨的证据阶梯推进工程落地。我们区分三类客观事实：
-1. **本地实现与离线用例**：仓库内可完整复现的扩展包代码骨架、离线单元测试与闭环验证；
-2. **本机探针记录**：基于 macOS / 本机开发机完成的平台接口可行性验证记录；
-3. **企业目标**：需真实企业 IAM、AI 网关、研发系统及国产实机环境方可最终取证的联调项。
-
-| 演进阶段 | 阶段定位 | 当前状态 | 核心里程碑与验证依据 |
-|---|---|---|---|
-| **Stage 0** | **方案设计与开发骨架** | **已就绪** (当前阶段) | 需求基线、总体架构、字段级契约全部成文；8 大扩展包及凭据支撑包骨架建立；2700+ 离线测试用例闭环；河洛苍螭品牌视觉套件正式归档锁定。 |
-| **Stage 1** | **企业环境与双端联调** | **进行中** (关键路径) | 企业 IAM 真实对接（访问令牌撤销与轮换联调）；企业 AI 网关动态认证与配额联调；银河麒麟 aarch64 实机环境取证；AIHUB 原生索引三目标安装验证。 |
-| **Stage 2** | **企业打包与试点推广** | **规划中** | 企业双端定制安装包（Windows MSI / 麒麟 deb）；分批试点推广与效果验证；全链路研发效能度量与支持体系运转。 |
-
-各模块的最新成熟度、已实测项与未验项清单，以[逐模块设计索引 §2.2](docs/design/README.md#22-实现与验证入口)为唯一依据，本文不复述动态计数。
-
----
-
-## 3. 本地检查
-
-本仓库的日常工程规范与检查机制全面面向离线闭环设计。贡献者与测试者可在无需访问外部企业网络的前提下，验证工程结构、文档元数据、包体规范与核心逻辑。
-
-### 快速环境核对
-
-运行本地检查前，请确保开发环境满足项目基准版本要求：
-- **Node.js**：精确版本见 [.node-version](.node-version)（推荐使用版本管理工具切换）；
-- **pnpm**：精确版本见 [package.json](package.json) 中的 `packageManager` 字段声明。
-
-```sh
-node --version
-pnpm --version
-pnpm check
-```
-
-> [!NOTE]
-> `pnpm check` 会依次执行文档规范检查、仓库架构检查、包体模式验证、DSH 基线版本核验以及工程自动化测试用例。详细的模块化测试命令、测试参数分层、调试技巧与代码贡献流程，请参阅完整的 [贡献指南 (CONTRIBUTING.md §7)](CONTRIBUTING.md#7-检查命令) 与 [工程开发与发布约定](docs/engineering/development-conventions.md)。
-
----
-
-## 4. 仓库组织结构
-
-本工程按照职责清晰、分层解耦的原则组织工程资产：
-
-| 目录 | 维护内容 | 职责与成熟度边界 |
-|---|---|---|
-| [`docs/`](docs/README.md) | 业务需求、架构设计、实施计划、字段契约、运维与协作文档 | 统一入口见[文档总览](docs/README.md)，元数据与版本见[文档清单](docs/DOCUMENT-REGISTER.md) |
-| [`docs/assets/branding/`](docs/assets/branding/cyber-long/index.html) | 河洛苍螭视觉套件：主标、11 项核心组件标识、全尺寸切图与交互全景控制台 | 官方视觉资产唯一真源，各扩展包内置图标经逐字节校验保持一致 |
-| [`packages/`](packages/) | 面向 DSH 宿主安装的 8 个核心产品扩展包与凭据支撑包 | 模块成熟度以[设计索引 §2.2](docs/design/README.md#22-实现与验证入口)实测记录为准 |
-| [`services/`](services/) | 独立辅助工具与验证服务 | `market-index` 保持只读校验工具形态，不建独立对外服务或生产清单 |
-| [`deploy/`](deploy/README.md) | 私有制品源接入与双端分发部署资产 | 包含分发架构说明，当前无生产执行脚本与可分发二进制包 |
-| [`scripts/`](scripts/) | 离线工程检查器、环境探测工具与敏感扫描工具链 | 包含零外部依赖的文档、仓库与签名检验脚本 |
-
----
-
-## 5. 探索与多角色指引
-
-按您关注的视角选择最适合的阅读路径：
-
-| 您的角色 / 关注方向 | 推荐起步入口 | 重点获取信息 |
-|---|---|---|
-| **技术决策者 / 架构师** | [总体架构设计](docs/architecture/platform-architecture.md) → [需求与场景基线](docs/requirements/requirements-baseline.md) | 平台信任边界、零信任设计原则、一期业务范围与演进路线 |
-| **安全与合规负责人** | [安全策略](SECURITY.md) → [凭据存储模式](docs/design/credential-modes.md) → [AI 网关契约](docs/contracts/gateway-contract.md) | 凭据隔离机制、敏感操作门禁、审计追踪与数据合规设计 |
-| **平台运维与 IT 团队** | [运维索引](docs/operations/README.md) → [部署说明](deploy/README.md) → [推广实施方案](docs/plans/rollout-plan.md) | 双端分发要求、私有源配置、试点推广阶段安排与门禁 |
-| **扩展包与能力开发者** | [逐模块设计索引](docs/design/README.md) → [工程开发与发布约定](docs/engineering/development-conventions.md) | 插件生命周期、Cordis 补丁机制、接口设计准入与包体规范 |
-| **品牌与交互设计师** | [品牌资产全景系统](docs/assets/branding/cyber-long/index.html) → [生图提示词与规范](docs/assets/branding/prompts.md) | 河洛苍螭设计系统、单笔流体曲率标准与高精度矢量切图 |
-| **代码贡献者与协作 Agent** | [贡献指南](CONTRIBUTING.md)；AI 代理遵循 [AGENTS.md](AGENTS.md) | 变更准则、敏感扫描 Attestation 签名与任务路由矩阵 |
+本仓库存放河洛的方案与扩展工程，基于 DSH 构建，不修改 DSH 本体。仓库使用 `UNLICENSED`，未授予开源许可；根工程与扩展包的 `private: true` 用于防止发布到 npm，具体使用和交付以适用许可及企业要求为准。

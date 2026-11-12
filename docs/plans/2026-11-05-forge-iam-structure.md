@@ -330,7 +330,7 @@ issue 原标准是「拆分后 `client.js`（或其对等生成物）≤ 1200 �
 ### U12 文档、登记与最终验收
 
 - 模块 README：模块表按轴分列；补「客户端四段与契约」「改动落点表」。
-- [开发约定](<../engineering/development-conventions.md>) 与根 [README](<../../README.md#3-本地检查>) 补一段「宿主按轴拆模块、客户端单文件四段 + 标记区守卫」的约定，`pnpm check` 定义不变。
+- [开发约定](<../engineering/development-conventions.md>) 与根 [README](<../../README.md>) 补一段「宿主按轴拆模块、客户端单文件四段 + 标记区守卫」的约定，`pnpm check` 定义不变。
 - 核对 [IAM 接入详细设计](<../design/plugins/forge-iam.md>) 与 [开发指南](<../../packages/forge-iam/docs/developer-guide.md>) 中指向 `service.mjs`/`client.js` 的表述：两者仍是入口，只补一句「内部按轴/四段组织，落点见模块 README」。
 - 实现记录：模块 README 新增「Host 分轴模块」表（10 行，含各轴拥有的状态与职责边界）与客户端四段 ↔ 锚点区间表；改动落点表补齐 9 行宿主轴。开发约定新增 §4.1「宿主按轴、客户端按段」。IAM 详细设计与开发指南各补一句指向模块 README。
 - 与计划的偏差：根 README 不加结构约定——[AGENTS.md §1](<../../AGENTS.md>) 规定根 README 是产品宣传页，禁止写入检查器规则与开发手册内容；该约定改放[开发约定 §4.1](<../engineering/development-conventions.md#41-结构约定宿主按轴客户端按段>)。
