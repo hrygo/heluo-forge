@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-017 |
 | 文档名称 | 凭据存储整洁架构实施方案 |
-| 版本 | V0.2.0 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -24,7 +24,7 @@
 
 存储层按整洁架构分为实体、用例、端口、适配器、框架四层，依赖只向内。字段值在写入前统一加密，加密实现为适配器层的装饰器，用例与实体不感知。
 
-- **做**：值级 AES-256-GCM 信封；`keyring` 多密钥与轮换；`Backend`、`Cipher`、`KeyProvider` 端口；SQLite 后端；CLI、插件方法、同源 HTTP、桥接 HTTP 四个面统一到同一用例层。
+- **做**：值级 AES-256-GCM 信封；`keyring` 多密钥与轮换；`Backend`、`Cipher`、`KeyProvider` 端口；SQLite 后端；CLI、插件方法、同源 HTTP、桥接 HTTP 四个面读取同一底层会话，对齐可比较的身份、令牌与错误语义。
 - **不做**：旧整文档格式读取、数据迁移、双读回退、回退到旧后端；按应用隔离；跨机同步。
 - **删除**：整文档加密路径、迁移模块、CLI 自建 provider 的分支逻辑。
 
@@ -104,12 +104,14 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 | 面 | 入口 | 内容 | 鉴权 |
 |---|---|---|---|
-| CLI | `heluo-forge auth token`、`whoami --json` | 令牌、工号 | 本机用户 |
-| 插件方法 | `ctx.iam.getSession()`、`getAccessToken()` | 身份；会话不含令牌 | 宿主内 |
-| 同源 HTTP | `GET /api/forge-iam/session`、`POST /api/forge-iam/token` | 同上 | 浏览器会话 |
-| 桥接 HTTP | `POST /api/forge-iam/bridge/token` | 令牌 | 能力值 |
+| CLI | `heluo-forge auth token`、`whoami --json` | 令牌为 stdout 单行纯文本；身份为不含令牌的 JSON | 本机用户；可选经桥接取令牌 |
+| 插件方法 | `ctx.iam.getSession()`、`getAccessToken()` | 身份快照不含令牌；令牌返回字符串 | 宿主内 |
+| 同源 HTTP | `GET /api/forge-iam/session`、`POST /api/forge-iam/token` | 身份为 JSON；令牌为 `{ token, expiresAt }` | Connection 守卫；令牌请求另需同源意图 Header |
+| 桥接 HTTP | `POST /api/forge-iam/bridge/token` | `{ token, expiresAt }` | loopback 与 Bearer 能力值 |
 
-四条约束：面只做鉴权与编解码；四个面共用错误码与返回形状；新增面不改存储；CLI 调本包导出的 reader，不自建 provider。
+同一稳定会话在相应准入条件成立时，各身份读取入口返回同一身份，四个入口返回同一令牌；未登录、无效 grant 与凭据解密等可比较的共同失败保持一致的错误码，各入口保留自身输出封装、鉴权错误和退出码。CLI 调本包导出的 reader，不自建 provider；离线 CLI 只读本地会话，不刷新，只有 Host 可刷新。
+
+Host 还校验 grant 与当前配置的 `issuer`、`clientId` 和已配置 `resource`。离线 CLI 不持有 Host 当前配置，不能完成这项核验；需要确认该上下文一致时必须经 Host 桥接。Host 会话是内存快照，离线令牌在到期前 30 秒即拒绝；比较时需排除刷新或快照同步带来的时序差异。
 
 ## 6. 扩展点
 
@@ -118,11 +120,13 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | 新存储后端 | 实现 `Backend`，跑契约套件，注册名字 | 用例、API、密文格式 |
 | 新加密算法 | 实现 `Cipher`，注册 `alg` 编号 | 存储与 API |
 | 新密钥来源 | 实现 `KeyProvider`，文件、钥匙串或 KMS | 加密与存储 |
-| 新接入面 | 薄适配器调同一用例 | 存储与加密 |
+| 新接入面 | 复用既有会话与令牌语义 | 存储与加密 |
 
 后端能力不靠自报：注册表只列出通过契约套件的实现，`capabilities()` 由测试证明。
 
 契约套件至少覆盖三类结果：普通读写、两键联合提交的原子性、以及缺少联合提交的后端被拒绝。网关写只允许落在通过联合提交原子性用例的后端上，其余一律拒绝，不做静默降级。
+
+非规范底层键和损坏记录的原始写入等额外测试输入不属于共同 provider 契约；SQLite 与内存后端在这些输入上的行为不要求一致。
 
 ## 7. 实施步骤
 
@@ -130,8 +134,8 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 |---|---|---|
 | 1 | 抽实体、端口与用例；删除旧格式与迁移模块 | 新增用例测试全绿，删除后无悬空引用 |
 | 2 | 加密装饰层接入，`keyring` 落地 | 往返、篡改、AAD 错位用例通过 |
-| 3 | SQLite 后端与契约套件 | sqlite 与内存后端行为一致 |
-| 4 | 四个接入面统一到用例层 | 形状与错误码一致 |
+| 3 | SQLite 后端与契约套件 | 共同 provider 契约内有效输入及错误语义一致 |
+| 4 | 四个接入面读取同一会话 | 可比较的身份、令牌与错误语义一致；保留各自封装、鉴权与刷新边界 |
 | 5 | 三平台与 Electron 取证 | 记录写入验收清单 |
 
 第 1 步即删旧路径，不留兼容分支。加密未生效前不得写库。
@@ -143,7 +147,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | 单元 | 往返、AAD 错位、篡改、截断、未知 `kid`、密钥文件 0644 拒绝 |
 | 属性 | 任意字节往返；空值被拒绝 |
 | 集成 | 契约套件跑 sqlite 与内存后端；联合提交注入失败后两键均不可见；缺联合提交的后端被拒绝；崩溃后重开 |
-| 接口 | 四个面同一输入得到同一形状与错误码 |
+| 接口 | 真实 CLI 子进程、Host 与两条 HTTP 路径对照身份、令牌及共同失败；验证各自封装和鉴权，仅 Host 刷新；发行者等运行配置经 Host 核验 |
 | 冷启动 | 新进程直接读取 session 与网关引用，不需要先验状态 |
 | 轮换 | 旧 `kid` 仍可解；移除后返回 `CRED_KEY_UNAVAILABLE` |
 | 安全 | 库、`-wal`、`-shm` 扫描固定 32 字节标记，结果为空 |

@@ -18,10 +18,11 @@ function ownerOf(kind, value) {
   if (kind === 'ref') return '';
   let record;
   try { record = JSON.parse(value); } catch { throw error('CRED_STORE_INVALID', 'invalid credential record'); }
-  const owner = record?.payload?.subject ?? record?.payload?.ownerSubject ?? '';
-  if (typeof owner !== 'string') throw error('CRED_STORE_INVALID', 'invalid credential owner');
-  assertWellFormed(owner);
-  return owner;
+  const subject = record?.payload?.subject;
+  const fallback = record?.payload?.ownerSubject;
+  if (typeof subject === 'string' && subject.isWellFormed()) return subject;
+  if (typeof fallback === 'string' && fallback.isWellFormed()) return fallback;
+  return '';
 }
 
 /** Encrypt values while depending only on the supplied storage, cipher and key ports. */

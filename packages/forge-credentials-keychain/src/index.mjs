@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { capabilities, createRegisteredBackend } from './backend-registry.mjs';
+import { createDefaultBackend } from './backend-registry.mjs';
 import { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
 import { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
 import { selectDefaultStoreDirectory } from './default-store-directory.mjs';
@@ -178,7 +178,7 @@ function storeDirectory(directory) {
 
 /** Open only the read operations needed by offline CLI clients. */
 export async function openCredentialReader({ directory, service, accountPrefix } = {}) {
-  const backend = createRegisteredBackend('sqlite', { directory: storeDirectory(directory), readOnly: true });
+  const { backend } = createDefaultBackend({ directory: storeDirectory(directory), readOnly: true });
   const provider = createKeychainProvider(backend, { service, accountPrefix });
   return Object.freeze({
     readRecord: (key) => provider.readRecord(key),
@@ -229,7 +229,8 @@ export function apply(ctx, rawConfig = {}) {
   if (!builtinBackend && result.value.allowEphemeral !== true) {
     throw new KeychainProviderError('KEYCHAIN_EPHEMERAL_REFUSED', 'an injected test backend requires allowEphemeral=true');
   }
-  const backend = result.value.backend ?? createRegisteredBackend('sqlite', { directory: storeDirectory(result.value.storeDirectory) });
+  const registered = builtinBackend ? createDefaultBackend({ directory: storeDirectory(result.value.storeDirectory) }) : undefined;
+  const backend = registered?.backend ?? result.value.backend;
   if (backend.available === false) {
     throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', backend.reason ?? 'keychain backend is unavailable');
   }
@@ -266,7 +267,7 @@ export function apply(ctx, rawConfig = {}) {
   // it disappears together with the provider on unload.
   // Only the registered, built-in implementation is eligible for the trust
   // service. An injected backend cannot grant itself trust by exposing methods.
-  const registeredCapabilities = builtinBackend ? capabilities('sqlite') : undefined;
+  const registeredCapabilities = registered?.capabilities;
   const jointStore = registeredCapabilities?.crossProcessLock === true && registeredCapabilities?.jointAtomic === true
     ? createJointStore(backend, namespacePrefixes(result.value)) : undefined;
   const trust = jointStore === undefined ? undefined : Object.freeze({

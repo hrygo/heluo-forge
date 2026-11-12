@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { cp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { capabilities, createRegisteredBackend } from '../src/backend-registry.mjs';
 import { apply, openCredentialReader } from '../src/index.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
@@ -26,6 +28,99 @@ function context() {
     provide(name, value) { provided.set(name, value); return () => provided.delete(name); },
     effect(fn) { return fn(); } };
 }
+
+// The test changes only the isolated registry; the real Host and reader are
+// copied unchanged. This synthetic SQLite wrapper selects a separate directory
+// so selecting the old default cannot accidentally satisfy the test.
+async function withSyntheticDefault(t, provenCapabilities, { omitJointMethods = false, selectedName = 'synthetic' } = {}) {
+  const root = await outsideRepositoryTmpAsync('forge-registry-synthetic-');
+  const own = ownDirectory(t, root);
+  const src = join(root, 'src');
+  await cp(new URL('../src/', import.meta.url), src, { recursive: true });
+  const registryPath = join(src, 'backend-registry.mjs');
+  const registry = await readFile(registryPath, 'utf8');
+  const defaultSelection = /^const DEFAULT_BACKEND = ['"][^'"]+['"];$/gm;
+  const registrations = 'const BACKENDS = Object.freeze({\n';
+  assert.equal([...registry.matchAll(defaultSelection)].length, 1, 'one default selection in registry');
+  assert.equal(registry.split(registrations).length, 2, 'one registration table');
+  const synthetic = `  synthetic: Object.freeze({
+    create: (options) => {
+      syntheticCalls.push(options.readOnly === true);
+      const store = createCredentialStore({ ...options, directory: join(options.directory, 'synthetic') });
+      return { ...store,
+        ${omitJointMethods ? 'snapshot: undefined, compareAndSwap: undefined,' : ''}
+        capabilities: () => ({ crossProcessLock: true, jointAtomic: true }),
+      };
+    },
+    capabilities: Object.freeze(${JSON.stringify(provenCapabilities)}),
+  }),
+`;
+  await writeFile(registryPath, `import { join } from 'node:path';\nexport const syntheticCalls = [];\n${registry
+    .replace(defaultSelection, `const DEFAULT_BACKEND = ${JSON.stringify(selectedName)};`)
+    .replace(registrations, registrations + synthetic)}`);
+  const api = await import(pathToFileURL(join(src, 'index.mjs')).href);
+  const { syntheticCalls } = await import(pathToFileURL(registryPath).href);
+  return { ...api, root, own, syntheticCalls };
+}
+
+test('a second registered default is selected by both Host and reader with its proven capabilities', async (t) => {
+  const isolated = await withSyntheticDefault(t, { crossProcessLock: true, jointAtomic: true });
+  const directory = join(isolated.root, 'data');
+  const ctx = context();
+  const dispose = isolated.apply(ctx, { storeDirectory: directory });
+  isolated.own(dispose);
+  const provider = ctx.provided.get('credentials');
+  const trust = ctx.provided.get('iam-atomic-store');
+  assert.equal(trust.verify(provider), true);
+  assert.equal(trust.verify({}), false);
+  await provider.set('TEST', 'synthetic');
+  assert.deepEqual(await trust.adapter().snapshot({ recordKey: 'gateway/config', ref: 'TEST' }), {
+    record: undefined, value: 'synthetic',
+  });
+  assert.equal(existsSync(join(directory, 'synthetic', 'credentials.sqlite')), true);
+  assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
+  const reader = await isolated.openCredentialReader({ directory });
+  isolated.own(() => reader.close());
+  assert.equal((await reader.resolve('TEST')).value, 'synthetic');
+  assert.deepEqual(isolated.syntheticCalls, [false, true]);
+});
+
+for (const proven of [
+  { crossProcessLock: false, jointAtomic: true },
+  { crossProcessLock: true, jointAtomic: false },
+]) {
+  test(`registered backend without ${proven.crossProcessLock ? 'joint atomicity' : 'cross-process lock'} receives no trust even if it self-reports both`, async (t) => {
+    const isolated = await withSyntheticDefault(t, proven);
+    const directory = join(isolated.root, 'data');
+    const ctx = context();
+    const dispose = isolated.apply(ctx, { storeDirectory: directory });
+    isolated.own(dispose);
+    assert.equal(ctx.provided.has('iam-atomic-store'), false);
+    await ctx.provided.get('credentials').set('TEST', 'synthetic');
+    const reader = await isolated.openCredentialReader({ directory });
+    isolated.own(() => reader.close());
+    assert.equal((await reader.resolve('TEST')).value, 'synthetic');
+  });
+}
+
+test('missing joint backend methods do not produce a trusted adapter', async (t) => {
+  const isolated = await withSyntheticDefault(t, { crossProcessLock: true, jointAtomic: true }, { omitJointMethods: true });
+  const ctx = context();
+  const dispose = isolated.apply(ctx, { storeDirectory: join(isolated.root, 'data') });
+  isolated.own(dispose);
+  assert.equal(ctx.provided.has('iam-atomic-store'), false);
+  await ctx.provided.get('credentials').set('TEST', 'synthetic');
+});
+
+test('an unregistered default fails before Host or reader publishes a provider', async (t) => {
+  const isolated = await withSyntheticDefault(t, { crossProcessLock: true, jointAtomic: true }, { selectedName: 'unknown' });
+  const directory = join(isolated.root, 'data');
+  const ctx = context();
+  assert.throws(() => isolated.apply(ctx, { storeDirectory: directory }), { code: 'CRED_BACKEND_UNREGISTERED' });
+  assert.equal(ctx.provided.size, 0);
+  await assert.rejects(isolated.openCredentialReader({ directory }), { code: 'CRED_BACKEND_UNREGISTERED' });
+  assert.equal(existsSync(directory), false);
+});
 
 test('registry exposes only immutable tested sqlite capabilities', async (t) => {
   assert.deepEqual(capabilities('sqlite'), { crossProcessLock: true, jointAtomic: true });

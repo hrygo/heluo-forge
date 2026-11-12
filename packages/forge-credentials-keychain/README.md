@@ -4,7 +4,7 @@
 
 ## 存储与安全边界
 
-每个 `ref` 和 `record` 的值先使用 AES-256-GCM 单独加密，再写入 `credentials.sqlite`。每次写入使用随机 IV；认证数据绑定种类、完整存储键、属主和 `kid`。属主以明文列保存，属主或密文被篡改时返回 `CRED_DECRYPT_FAILED`；缺少对应密钥时返回 `CRED_KEY_UNAVAILABLE`。
+每个 `ref` 和 `record` 的值先使用 AES-256-GCM 单独加密，再写入 `credentials.sqlite`。每次写入使用随机 IV；认证数据绑定种类、完整存储键、属主和 `kid`。记录 `payload` 中可用的字符串 `subject` 或 `ownerSubject` 会作为属主以明文列保存，这些字段不得放置令牌等秘密。属主或密文被篡改时返回 `CRED_DECRYPT_FAILED`；缺少对应密钥时返回 `CRED_KEY_UNAVAILABLE`。
 
 以所选存储目录为 `D`，新建存储的数据库为 `D/credentials.sqlite`，密钥文件为同级目录中的 `D.keys/keyring.json`。已有 SQLite 存储若使用 `D/keyring.json`，继续在原位置读取和更新，不自动迁移；两个位置的 keyring 同时存在时拒绝使用，不自动选择或覆盖。keyring 中的 Base64 是编码，密钥本身没有再加密。在支持 POSIX 权限的平台，新布局的两个目录必须为 `0700`，数据库和密钥文件必须为 `0600` 且属于当前用户；权限不符时拒绝使用。代码不检查扩展 ACL；Windows 的 mode 位也不能证明 NTFS ACL，实际隔离依赖文件系统和目标机权限配置，尚未实机验证。同账户进程可以读取密钥，分目录不提供按应用隔离。没有对应密钥或其备份时，密文不可恢复。
 
