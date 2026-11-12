@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,6 +85,25 @@ test('CLI identifies a store directory conflict without exposing paths or unknow
       return true;
     });
   }
+});
+
+test('real CLI reports a conflicting key directory without exposing its path', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'forge-cli-path-conflict-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, 'store');
+  await mkdir(`${directory}.keys`, { mode: 0o700 });
+  await writeFile(join(`${directory}.keys`, 'credentials.sqlite'), 'synthetic', { mode: 0o600 });
+  const env = { ...process.env, NODE_NO_WARNINGS: '1', HELUO_FORGE_STORE_DIRECTORY: directory,
+    HELUO_FORGE_KEYCHAIN_SERVICE: 'heluo-forge', HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX: 'iam' };
+  await assert.rejects(run(process.execPath, [bin, 'auth', 'whoami', '--json'], { env }), (error) => {
+    assert.equal(error.code, 4);
+    assert.equal(error.stdout, '');
+    const result = JSON.parse(error.stderr).error;
+    assert.equal(result.code, 'CRED_STORE_PATH_CONFLICT');
+    assert.match(result.message, /存储目录.*存在冲突/);
+    assert.equal(error.stderr.includes(root), false);
+    return true;
+  });
 });
 
 test('bridge retains Host access and capability and closes reader', async (t) => {

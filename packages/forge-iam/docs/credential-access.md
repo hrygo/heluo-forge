@@ -270,7 +270,7 @@ HELUO_FORGE_STORE_DIRECTORY='<隔离目录>/dsh/credentials' \
 | `IAM_REAUTH_REQUIRED` | 退出码 3 / HTTP 401 | 令牌过期、临近过期或刷新结果不可用，按会话状态处理 |
 | `IAM_INVALID_GRANT` | 退出码 3 / HTTP 401 | 会话记录无效或退出结果未确认，需重新登录 |
 | `IAM_CREDENTIALS_UNAVAILABLE` | 退出码 4 / HTTP 503 | 凭据后端不可用或 CLI 会话回读核验失败 |
-| `CRED_STORE_PATH_CONFLICT` | 退出码 4 | 存储目录位于 Git 工作区内、与其他目录重叠或存在用途冲突 |
+| `CRED_STORE_PATH_CONFLICT` | 退出码 4 | 凭据后端发现目录重叠或用途冲突；存储路径位于 Git 工作区内也会被拒绝，并可能映射为 `IAM_CREDENTIALS_UNAVAILABLE` |
 | `IAM_BRIDGE_UNAUTHORIZED` | HTTP 401 | 桥能力值不对 |
 | `IAM_BRIDGE_FORBIDDEN` | HTTP 403 | 非本机来源 |
 | `IAM_REQUEST_HEADER_REQUIRED` | HTTP 403 | 缺 `x-forge-iam-request: 1` |
