@@ -314,7 +314,7 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 
 | 命令 | 结果 |
 |---|---|
-| `node --test`（`packages/forge-iam`） | 1564 通过、0 失败（新增 17 项：`iam-call-recovery` 14 项、`gateway-failure` 3 项） |
+| `node --test`（`packages/forge-iam`） | 1568 通过、0 失败（新增 21 项：`iam-call-recovery` 18 项、`gateway-failure` 3 项） |
 | `node scripts/check-docs.mjs` | `docs: ok`（157 文件、1048 表格、1226 本地链接、165 片段、46 受控文档） |
 | `node scripts/check-repo.mjs` | 通过 |
 | `node scripts/dsh-version.mjs check` | 通过 |
@@ -329,6 +329,8 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 | `sameBinding` 恒真（不再比较地址与主体） | `iam-call-recovery`：地址变化重建并重试、重建失败返回具体码、prepared call 重新准备 |
 | 移除派发前重建与一次重试 | 同上三项 |
 | 移除内部码→用户码映射 | `gateway-failure`：映射完备性、已知码不落兜底、用户码直通；`iam-call-recovery`：主体变化、IAM 令牌失败、凭据存储失败、映射日志 |
+| 中止边界退回凭据整对象（保存 Key 即中止） | `iam-call-recovery`：re-saving the key does not interrupt an answer already in progress |
+| 会话可继续条件退回“续期令牌必须可用” | `iam-call-recovery`：a still-valid access token keeps the key resolvable after its refresh token expired |
 
 ### 12.4 未验证项
 
@@ -336,3 +338,14 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 - 企业真实 IAM 与网关未联调：结论来自离线用例与本地 mock。
 - 宿主是否实际输出 `iam` 调试日志未在真机确认。
 - 跨进程写入仍为最终一致，仅保证首个请求自愈。
+
+### 12.5 审查修正
+
+实现 PR 的自动审查提出两处缺陷，已修正并补用例：
+
+| 缺陷 | 影响 | 修正 | 用例 |
+|---|---|---|---|
+| 保存 Key 会中止进行中的回答 | `sample()` 以凭据整对象计算身份并据此中止租约，同地址换 Key（写入代次变化）会切断已开始的流 | 中止边界改为授权身份（主体 + 凭据状态），凭据写入代次只触发目录重建 | `re-saving the key does not interrupt an answer already in progress` |
+| 刷新令牌过期但访问令牌仍有效时会话被拒 | `resolveConnection()` 以续期令牌可用为前置，提前把仍可用的会话判为未登录 | 会话可继续条件改为访问令牌或刷新令牌任一有效，仅两者都过期才拒绝 | `a still-valid access token keeps the key resolvable after its refresh token expired`、`a session with both factors expired is not a usable session` |
+
+另补一条形状守卫用例：绑定变化若以 `finish` 分块（而非抛出）送达，按用户码映射且不重试（`a transport that reports the binding change as a finish chunk is not retried`）。

@@ -81,6 +81,10 @@ function permit(view) {
   return null;
 }
 const identity = view => JSON.stringify([view?.principal, view?.gatewayCredential]);
+// Who may still stream. A re-saved Key at the same address moves `identity`
+// (the catalogue must be rebuilt) but not this: an answer already in progress
+// survives it. Losing the account or the credential does abort the answer.
+const authorizationId = view => JSON.stringify([view?.principal, view?.gatewayCredential?.state ?? null]);
 // The binding the adapter was built for. The key generation is only the write
 // version of the stored credential: re-saving the same key at the same address
 // must not count as a context change, while an address or owner change must.
@@ -185,7 +189,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const enabledInCatalog = id => models.some(item => item.id === id);
   const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
   const lifetime = new AbortController();
-  let lease = new AbortController(); let version = 0; let last; let lastId; let deadline; let timer; let disposed = false; let backend; let flight;
+  let lease = new AbortController(); let version = 0; let last; let lastId; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
   // Bounded compensation for a refresh that lost its race to a context change:
   // one rebuild per version, never more than REBUILD_ATTEMPT_LIMIT in a row.
   let rebuildAttempts = 0; let rebuiltVersion = -1;
@@ -236,6 +240,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const view = iam.getView();
       const currentId = identity(view);
       const current = `${currentId}:${iam.getModelAccessEpoch?.() ?? ''}`;
+      const currentAuthorization = authorizationId(view);
+      if (lastAuthorization !== currentAuthorization) {
+        lastAuthorization = currentAuthorization;
+        lease.abort(); lease = new AbortController();
+      }
       if (last !== current) {
         const idChanged = lastId !== currentId;
         last = current;
@@ -243,7 +252,6 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         version++;
         revokedCredential = false;
         if (idChanged) {
-          lease.abort(); lease = new AbortController();
           cancelRetry(); retryAttempt = 0; hostDefault = null;
           clearCatalog();
           modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;

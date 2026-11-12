@@ -3,7 +3,7 @@ import { assertClientAuthCurrent } from './client-auth.mjs';
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { normalizeGatewayBaseURL } from './model-options.mjs';
-import { isRefreshUsable } from './record.mjs';
+import { isAccessExpired, isRefreshUsable } from './record.mjs';
 import { StoreError } from './store.mjs';
 import { addSeconds, nowIso, safeMessage } from './service-helpers.mjs';
 
@@ -113,12 +113,15 @@ export function createServiceGateway(env) {
     const subject = ctx.lastGrant?.subject;
     const generation = selection.generation;
     const check = () => {
-      // A session is continuable while its refresh token is: an expired access
-      // token is refreshed by the token resolver before the request is sent.
+      // A session is continuable while either factor still works: a valid
+      // access token serves the request as-is, and a valid refresh token is
+      // renewed by the token resolver before the request is sent. Only a dead
+      // session (both expired) is rejected here.
       const grant = ctx.lastGrant;
+      const continuable = Boolean(grant) && (isRefreshUsable(grant, now()) || !isAccessExpired(grant, now()));
       if (ctx.disposed || isSigningOut() || getAuthEpoch() !== epoch || selection.generation !== generation
         || !['ready', 'expired'].includes(ctx.state) || !subject || !grant || grant.subject !== subject
-        || !isRefreshUsable(grant, now())) {
+        || !continuable) {
         throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
       }
       ctx.assertExclusive();

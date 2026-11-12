@@ -20,7 +20,7 @@ const options = { provider: 'enterprise', model: 'enterprise-chat', messages: []
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
-function fixture({ tokenFailure = null, logFailure } = {}) {
+function fixture({ tokenFailure = null, logFailure, finishFailureCode = null } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -33,6 +33,7 @@ function fixture({ tokenFailure = null, logFailure } = {}) {
   let holdDiscovery = null;
   let releaseChunk = null;
   let failAfterFirstChunk = false;
+  let lastSignal = null;
   const iam = {
     getView: () => structuredClone(view),
     readModelSelection: async () => ({
@@ -66,15 +67,31 @@ function fixture({ tokenFailure = null, logFailure } = {}) {
   };
   const createAdapter = async ({ resolveKey, resolveIamToken }) => {
     builds += 1;
-    const dispatch = async function* () {
+    const dispatch = async function* (callOptions = {}) {
+      lastSignal = callOptions.signal ?? null;
       attempts += 1;
       // The host asks for the key while building the request: a failure here
       // means nothing was sent, which is what makes the retry safe.
       const key = await resolveKey();
       if (typeof resolveIamToken === 'function') await resolveIamToken();
+      if (finishFailureCode) {
+        // The shipped adapter reports transport failures as a finish chunk, not
+        // only as a throw: both shapes must land on the same user code.
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: finishFailureCode, message: 'synthetic transport failure' } } };
+        return;
+      }
       requests += 1; credential = key;
       yield { type: 'text-delta', text: 'first' };
-      if (releaseChunk) await releaseChunk.promise;
+      if (releaseChunk) {
+        // The transport follows the request signal: an aborted request ends
+        // here, exactly like a socket that is torn down.
+        await new Promise((resolve, reject) => {
+          const signal = callOptions.signal;
+          const abort = () => reject(Object.assign(new Error('transport aborted'), { name: 'AbortError' }));
+          signal?.addEventListener('abort', abort, { once: true });
+          releaseChunk.promise.then(() => { signal?.removeEventListener('abort', abort); resolve(); });
+        });
+      }
       if (failAfterFirstChunk) throw new IamError('IAM_GATEWAY_BINDING_CHANGED', 'synthetic mid-stream binding change', { retryable: true });
       yield { type: 'finish', reason: { kind: 'stop' } };
     };
@@ -82,8 +99,8 @@ function fixture({ tokenFailure = null, logFailure } = {}) {
       providerInfo: id => ({ id, name: '企业模型' }),
       providerRetryPolicy: () => undefined,
       resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
-      prepareCall: async (provider, model) => ({ model: { provider, id: model, name: model }, stream: () => dispatch() }),
-      stream: () => dispatch(),
+      prepareCall: async (provider, model) => ({ model: { provider, id: model, name: model }, stream: callOptions => dispatch(callOptions) }),
+      stream: callOptions => dispatch(callOptions),
     };
   };
   const runtime = createManagedModelRuntime({
@@ -103,8 +120,9 @@ function fixture({ tokenFailure = null, logFailure } = {}) {
   return {
     iam, runtime, get adapter() { return adapter; }, get guard() { return guard; }, get builds() { return builds; },
     get attempts() { return attempts; }, get requests() { return requests; },
-    get discover() { return discover; }, get credential() { return credential; },
+    get discover() { return discover; }, get credential() { return credential; }, get lastSignal() { return lastSignal; },
     setConnection(next) { connection = { ...connection, ...next }; },
+    setCredential(next) { view = { ...view, gatewayCredential: { ...view.gatewayCredential, ...next } }; },
     setEpoch(next) { epoch = next; },
     failMovedGateway(next = true) { movedGatewayDown = next; },
     holdNextDiscovery() { holdDiscovery = Promise.withResolvers(); return holdDiscovery; },
@@ -139,6 +157,28 @@ test('a re-saved key at the same address is adopted without rebuilding the adapt
   assert.equal(f.credential, 'key-2', 'the call must use the new key');
   assert.equal(f.builds, 1, 'a key swap is not an address change');
   assert.equal(f.attempts, 2);
+});
+
+test('re-saving the key does not interrupt an answer already in progress', async t => {
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const release = f.holdChunks();
+  const stream = f.adapter.stream(options);
+  const iterator = stream[Symbol.asyncIterator]();
+  assert.equal((await iterator.next()).value.text, 'first');
+  // Same address, same person, new key write: the catalogue is rebuilt in the
+  // background, but the transport of the answer already in flight survives.
+  f.setCredential({ generation: 'gen-2', enteredAt: new Date().toISOString() });
+  f.setConnection({ key: 'key-2', generation: 'gen-2' });
+  f.change({});
+  await tick();
+  release.resolve();
+  const rest = [];
+  for (let step = await iterator.next(); !step.done; step = await iterator.next()) rest.push(step.value);
+  assert.equal(finishOf(rest).kind, 'stop', 'a Key save must not cut the answer');
+  assert.equal(f.lastSignal?.aborted, false, 'the in-flight transport keeps its signal');
+  assert.equal(f.requests, 1);
 });
 
 test('an address change rebuilds once and retries the dispatch once', async t => {
@@ -302,9 +342,19 @@ test('a refresh voided by a context change rebuilds for the version that is curr
   assert.ok(f.builds > buildsAtStart, 'a rebuild happened for the current version');
 });
 
+test('a transport that reports the binding change as a finish chunk is not retried', async t => {
+  const f = fixture({ finishFailureCode: 'IAM_GATEWAY_BINDING_CHANGED' });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const result = await chunks(f.adapter.stream(options));
+  assert.equal(failureOf(result), 'IAM_MODEL_CONTEXT_CHANGED');
+  assert.equal(f.attempts, 1, 'the retry budget only covers the thrown path');
+  assert.equal(f.requests, 0);
+});
+
 // --- service layer: the key no longer waits on a token refresh -------------
 
-async function sessionFixture(t, { accessOffsetMs = 600_000, tokenOutage = false } = {}) {
+async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3_600_000, tokenOutage = false } = {}) {
   const oidc = await startMockOidc({ accessTtl: 600 });
   t.after(() => oidc.close());
   const atomic = createAtomicGatewayFixture();
@@ -314,7 +364,7 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, tokenOutage = false
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer,
     subject: 'E1001', clientId: oidc.clientId, refreshToken: 'refresh-a', accessToken: 'access-a', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + accessOffsetMs).toISOString(),
-    refreshExpiresAt: new Date(clock + 3_600_000).toISOString(),
+    refreshExpiresAt: new Date(clock + refreshOffsetMs).toISOString(),
   });
   seedGateway(atomic.credentials, {
     value: 'uag-synthetic-key', baseURL: GATEWAY, ownerSubject: 'E1001',
@@ -353,4 +403,18 @@ test('a token refresh failure is reported by the token layer, not by the key lay
   const connection = await f.service.resolveGatewayConnection();
   assert.equal(connection.key, f.key, 'the key does not inherit the token outage');
   await assert.rejects(f.service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+});
+
+test('a still-valid access token keeps the key resolvable after its refresh token expired', async t => {
+  // The two factors decay independently: with access valid, the request can be
+  // served as-is even though renewing the session is no longer possible.
+  const f = await sessionFixture(t, { accessOffsetMs: 600_000, refreshOffsetMs: -1_000 });
+  const connection = await f.service.resolveGatewayConnection();
+  assert.equal(connection.key, f.key);
+  assert.equal(f.oidc.counts.refresh, 0, 'a valid access token needs no refresh');
+});
+
+test('a session with both factors expired is not a usable session', async t => {
+  const f = await sessionFixture(t, { accessOffsetMs: -1_000, refreshOffsetMs: -1_000 });
+  await assert.rejects(f.service.resolveGatewayConnection(), { code: 'IAM_NOT_SIGNED_IN' });
 });
