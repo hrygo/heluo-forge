@@ -76,6 +76,19 @@ test('signed in expands all three steps and highlights the current one', async (
   assert.match(flat(current[0]), /^模型/);
 });
 
+test('file-backed credentials do not expose storage implementation details', async (t) => {
+  const { panel } = await fixture(t, { ...ready, gatewayCredential: { ...ready.gatewayCredential, storage: 'file' } });
+  const tree = panel.render();
+  const text = panel.text(tree);
+  assert.doesNotMatch(text, /凭据保存在本地文件中，保护方式取决于当前配置。/);
+  assert.doesNotMatch(text, /凭证未使用系统安全存储，请联系管理员。/);
+});
+
+test('other non-keychain storage still displays the security warning', async (t) => {
+  const { panel } = await fixture(t, { ...ready, gatewayCredential: { ...ready.gatewayCredential, storage: 'memory' } });
+  assert.match(panel.text(panel.render()), /凭证未使用系统安全存储，请联系管理员。/);
+});
+
 test('the issue list shows only the highest-priority issue and folds the rest', async (t) => {
   const broken = {
     ...signedOut, state: 'unconfigured', configured: false, canSignIn: false,

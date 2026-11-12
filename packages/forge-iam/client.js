@@ -3579,9 +3579,8 @@ window.__ModuleLoader__.load({
         gateway.enteredAt ? `录入：${formatTime(gateway.enteredAt)}` : null,
         gateway.suggestedExpiry ? `建议到期：${gateway.suggestedExpiry}` : null,
       ].filter(Boolean);
-      const storageWarning = gatewayUi.configured && gateway.storage && gateway.storage !== 'keychain'
-        ? h('div', { className: 'fiam-notice fiam-notice-warn' },
-          '凭证未使用系统安全存储，请联系管理员。')
+      const storageWarning = gatewayUi.configured && gateway.storage && gateway.storage !== 'keychain' && gateway.storage !== 'file'
+        ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '凭证未使用系统安全存储，请联系管理员。')
         : null;
 
       // Read the identity's cache during the render that first sees that
