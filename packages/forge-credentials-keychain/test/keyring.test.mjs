@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { readFileSync, writeFileSync, chmodSync, unlinkSync, rmSync, symlinkSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, chmodSync, unlinkSync, rmSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -34,6 +34,52 @@ test('initialization persists independent 32-byte keys without replacing existin
   assert.deepEqual(createFileKeyProvider({ path }).byId('k2'), provider.byId('k2'));
   provider.add('__proto__');
   assert.equal(provider.byId('__proto__').length, 32);
+});
+
+test('competing initialization reports the existing keyring and preserves the winner', (t) => {
+  const { path, provider } = fixture(t);
+  const winner = createFileKeyProvider({ path });
+  const original = fs.linkSync;
+  let raced = false;
+  try {
+    fs.linkSync = (from, to) => {
+      if (to === path && !raced) {
+        raced = true;
+        winner.initialize('winner');
+      }
+      return original(from, to);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => provider.initialize('loser'), { code: 'CRED_KEY_EXISTS' });
+    assert.equal(raced, true);
+    assert.equal(winner.active().kid, 'winner');
+    assert.deepEqual(readdirSync(dirname(path)), ['keyring.json']);
+  } finally {
+    fs.linkSync = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('a temporary file collision is not reported as an existing keyring', (t) => {
+  const { path, provider } = fixture(t);
+  const original = fs.openSync;
+  let collisions = 0;
+  try {
+    fs.openSync = (target, flags, ...args) => {
+      if (flags === 'wx') {
+        collisions += 1;
+        throw Object.assign(new Error('synthetic temporary collision'), { code: 'EEXIST' });
+      }
+      return original(target, flags, ...args);
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => provider.initialize('k1'), { code: 'EEXIST' });
+    assert.equal(collisions, 1);
+    assert.throws(() => readFileSync(path), { code: 'ENOENT' });
+  } finally {
+    fs.openSync = original;
+    syncBuiltinESMExports();
+  }
 });
 
 test('missing file is not created by reads or add', (t) => {

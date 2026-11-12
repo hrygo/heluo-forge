@@ -93,7 +93,11 @@ function writeAtomic(path, doc, create) {
     fd = undefined;
     if (create) {
       // Hard-link creation fails if the destination already exists; it cannot replace it.
-      linkSync(temporary, path);
+      try { linkSync(temporary, path); }
+      catch (error) {
+        if (error?.code === 'EEXIST') throw failure('CRED_KEY_EXISTS', 'keyring already exists');
+        throw error;
+      }
     } else {
       renameSync(temporary, path);
       created = false;

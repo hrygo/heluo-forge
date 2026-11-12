@@ -18,6 +18,7 @@ import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
 import { validateConfig } from '../packages/forge-iam/src/config.mjs';
 import {
+  assertIamValidatorMatches,
   buildConfig,
   buildPrivateTarball,
   inspectPublicTarball,
@@ -83,6 +84,39 @@ test('maker rejects a public bundle with a different or missing IAM validator', 
     expectCode(() => makePrivateBundle({ publicPath: path, expectedSha256: createHash('sha256').update(bytes).digest('hex'), configPath: writeConfig(root, ENV), version: '0.2.0', output: join(root, 'out') }), 'IAM_VALIDATOR_MISMATCH');
     assert.equal(existsSync(join(root, 'out')), false);
   }
+});
+
+test('IAM validator comparison accepts LF and CRLF without accepting changed bytes', (t) => {
+  const root = temp(t);
+  const config = readFileSync(new URL('../packages/forge-iam/src/config.mjs', import.meta.url));
+  const crlf = Buffer.from(config.toString('utf8').replace(/\r?\n/gu, '\r\n'));
+  const publicPath = join(root, 'public-crlf.tgz');
+  writeFileSync(publicPath, publicTarball({ validatorOverride: crlf }));
+  const inspected = inspectPublicTarball(publicPath);
+  const output = join(root, 'private');
+  makePrivateBundle({ publicPath, expectedSha256: inspected.sha256, configPath: writeConfig(root, ENV), version: '0.2.0', output });
+  assert.equal(existsSync(output), true);
+
+  const localDirectory = join(root, 'tool', 'packages', 'forge-iam', 'src');
+  mkdirSync(localDirectory, { recursive: true });
+  const entries = readBundleEntries(publicTarball(), { withContent: true });
+  for (const name of ['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']) {
+    const source = readFileSync(new URL(`../packages/forge-iam/src/${name}`, import.meta.url), 'utf8');
+    writeFileSync(join(localDirectory, name), source.replace(/\r?\n/gu, '\r\n'));
+  }
+  assert.doesNotThrow(() => assertIamValidatorMatches(entries, { toolRoot: join(root, 'tool') }));
+  writeFileSync(join(localDirectory, 'config.mjs'), Buffer.concat([crlf, Buffer.from('\n// changed')]));
+  assert.throws(() => assertIamValidatorMatches(entries, { toolRoot: join(root, 'tool') }), (error) => {
+    assert.equal(error.code, 'IAM_VALIDATOR_MISMATCH');
+    assert.match(error.message, /config\.mjs/u);
+    assert.equal(error.message.includes(root), false);
+    return true;
+  });
+  const invalidBytes = entries.map((entry) => entry.path.endsWith('/config.mjs')
+    ? { ...entry, content: Buffer.from([0x80, 0x0a]) }
+    : entry);
+  writeFileSync(join(localDirectory, 'config.mjs'), Buffer.from([0x81, 0x0d, 0x0a]));
+  expectCode(() => assertIamValidatorMatches(invalidBytes, { toolRoot: join(root, 'tool') }), 'IAM_VALIDATOR_MISMATCH');
 });
 
 function writeConfig(root, lines) {

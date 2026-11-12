@@ -518,6 +518,12 @@ function membersOf(entries) {
   return { root, members };
 }
 
+// Preserve all bytes except CRLF versus LF, which has the same JavaScript
+// meaning but may differ between a standalone toolchain and its public bundle.
+function normalizeValidatorNewlines(content) {
+  return Buffer.from(content.toString('latin1').replace(/\r\n/gu, '\n'), 'latin1');
+}
+
 /** Bind the maker's validation code to the runtime inside the public artifact. */
 export function assertIamValidatorMatches(entries, { toolRoot } = {}) {
   for (const name of IAM_VALIDATOR_MODULES) {
@@ -529,10 +535,11 @@ export function assertIamValidatorMatches(entries, { toolRoot } = {}) {
     try {
       expected = readFileSync(path);
     } catch {
-      fail('IAM_VALIDATOR_MISMATCH', 'IAM runtime validator is unavailable; use the toolchain paired with the public release');
+      fail('IAM_VALIDATOR_MISMATCH', `IAM runtime validator ${name} is unavailable; use the toolchain paired with the public release`);
     }
-    if (!entry?.content || !expected.equals(entry.content)) {
-      fail('IAM_VALIDATOR_MISMATCH', 'IAM runtime validator differs from the public bundle; use the toolchain paired with the public release');
+    if (!entry?.content || (!expected.equals(entry.content)
+      && !normalizeValidatorNewlines(expected).equals(normalizeValidatorNewlines(entry.content)))) {
+      fail('IAM_VALIDATOR_MISMATCH', `IAM runtime validator ${name} differs from the public bundle; use the toolchain paired with the public release`);
     }
   }
 }

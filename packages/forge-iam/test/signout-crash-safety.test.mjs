@@ -26,6 +26,32 @@ test('interrupted revoke leaves a durable pending grant that cannot be observed 
   assert.equal(calls, 1);
 });
 
+test('a repeated finish mutator fails closed without replaying revoke', async () => {
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials, options);
+  await store.write(grant);
+  const modify = credentials.modifyRecord.bind(credentials);
+  let phase = 0;
+  let finishCalls = 0;
+  let revocations = 0;
+  credentials.modifyRecord = async (key, mutate) => {
+    if (++phase !== 2) return modify(key, mutate);
+    return modify(key, async (current) => {
+      finishCalls += 1;
+      await mutate(current);
+      finishCalls += 1;
+      return mutate(current);
+    });
+  };
+
+  assert.deepEqual(await store.signOutSnapshot(grant, async () => { revocations++; }), { ok: false });
+  assert.equal(finishCalls, 2);
+  assert.equal(revocations, 1);
+  assert.equal((await credentials.readRecord(GRANT_KEY)).payload.signOutOperation.state, 'pending');
+  assert.deepEqual(await store.signOutSnapshot(grant, async () => { revocations++; }), { ok: true, decision: 'pending' });
+  assert.equal(revocations, 1);
+});
+
 test('late replacement survives completion of an older sign-out', async () => {
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials, options);

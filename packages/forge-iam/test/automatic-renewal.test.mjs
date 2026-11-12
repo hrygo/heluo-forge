@@ -111,6 +111,86 @@ test('successive rotations remain usable when the issuer omits the new refresh-t
   assert.equal(service.getView().state, 'ready');
 });
 
+test('hydration renews a refresh-only grant without a token request', async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  await createGrantStore(credentials).write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date().toISOString(),
+    refreshExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/token') && init?.method === 'POST') {
+        entered.resolve();
+        await release.promise;
+      }
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { release.resolve(); await service.dispose(); await oidc.close(); });
+  assert.equal((await service.hydrate()).state, 'expired');
+  let timer;
+  await Promise.race([entered.promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('background refresh did not start')), 3000);
+  })]).finally(() => clearTimeout(timer));
+  release.resolve();
+  const timeout = Date.now() + 3000;
+  while (service.getView().state !== 'ready' && Date.now() < timeout) await delay(20);
+  assert.equal(oidc.counts.refresh, 1);
+  assert.equal(service.getView().state, 'ready');
+});
+
+test('a failed refresh claim is shared and can be retried after storage recovers', { timeout: 5000 }, async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  let clock = Date.now();
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  const store = createGrantStore(credentials);
+  await store.write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
+    obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 120_000).toISOString(),
+  });
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback', refreshSkewSeconds: 60 }, { credentials, now: () => clock });
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  t.after(async () => { release.resolve(); await service.dispose(); await oidc.close(); });
+  assert.equal((await service.hydrate()).state, 'ready');
+  clock += 100_000;
+  const modify = credentials.modifyRecord.bind(credentials);
+  let claims = 0;
+  credentials.modifyRecord = async () => {
+    claims += 1;
+    entered.resolve();
+    await release.promise;
+    throw Object.assign(new Error('synthetic lock timeout'), { code: 'CRED_LOCK_TIMEOUT' });
+  };
+  const first = service.getAccessToken();
+  await entered.promise;
+  const second = service.getAccessToken();
+  const pending = Promise.allSettled([first, second]);
+  release.resolve();
+  const results = await pending;
+  assert.equal(claims, 1);
+  assert.deepEqual(results.map((result) => result.status), ['rejected', 'rejected']);
+  assert.equal(results[0].reason.code, 'IAM_REAUTH_REQUIRED');
+  assert.ok(results[0].reason === results[1].reason, 'both callers share the failed flight');
+  assert.equal((await store.read()).grant.refreshOperation, undefined);
+  assert.equal(oidc.counts.refresh, 0);
+
+  credentials.modifyRecord = modify;
+  assert.equal(typeof await service.getAccessToken(), 'string');
+  assert.equal(oidc.counts.refresh, 1);
+  assert.equal(service.getView().state, 'ready');
+});
+
 test('a refresh token that expires first is renewed before its own deadline', async (t) => {
   const oidc = await startMockOidc({ accessTtl: 30 });
   const credentials = new MemoryCredentials();
