@@ -3,6 +3,7 @@
 ## 1. 开始前
 
 - 公版 `.tgz` 已下载；SHA-256 来自发布页或另一条可信渠道，不采用制品同目录的 `SHA256SUMS`。
+- 使用与公版配套的制作工具链；工具检查其 IAM 校验模块与公版内的运行时逐字节一致。
 - 打包人员能提供：企业 IAM issuer、client_id、Discovery 或显式授权/token/JWKS 端点、访问令牌撤销端点、网关 baseURL 和 provider、回调地址（端口默认随机）、Gitee host（可选）、交付版本号。
 - 输出目录在仓库之外，且不存在或为空；磁盘空间足够。
 - 企业交付采用公开客户端 + PKCE S256，不使用 `client_secret`。用户确认企业 IAM 支持该方式；真实登录、刷新与回调仍须在企业环境验证。制作器不接收 secret 或个人 Key。
@@ -36,8 +37,8 @@ chmod 600 "$config"
 
 ## 3. 预览与确认
 
-1. 运行 `release-delivery --dry-run`，确认 `loginReady` 为 `true`；配置 Discovery 且未主动跳过检查时确认 `discovery.checked` 为 `true`。只提供显式端点或主动跳过检查时，`discovery.checked` 为 `false`，须另行核验并记录。该结果不验证网关、撤销端点或完整的运行时配置。
-2. 预检结果和部分错误可能回显 issuer、端点或本地路径，制作输出按企业敏感信息保护；对外报告先人工脱敏。把键名、版本、摘要前缀交给打包人员核对，确认企业地址与预期一致。
+1. 运行 `release-delivery --dry-run`，确认 `loginReady` 和 `gatewayConfigured` 均为 `true`；配置 Discovery 且未主动跳过检查时确认 `discovery.checked` 为 `true`。`revocationConfigured` 标识显式配置；Discovery 成功时 `discovery.revocationEndpoint` 为 `configured`、`discovered` 或 `missing`。只提供显式端点或主动跳过检查时 `discovery.checked` 为 `false`，须另行核验并记录。静态校验不验证网关连通或 D1 协议兼容。
+2. Discovery 输出和错误不回显企业地址；预览及交付回执仍含本地路径，制作输出按企业敏感信息保护，对外报告先人工脱敏。把键名、版本、摘要前缀交给打包人员核对，并在配置文件或企业受控渠道确认地址。
 3. 用回显的摘要前缀（至少 8 位）重跑并带 `--confirm`；换制品、配置或版本必须重新预览。
 4. 保留专用配置供后续复用，是否处置由文件所有者决定。
 
@@ -75,7 +76,7 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。
 ## 6. 允许的输出与证据
 
 - 脱敏报告可以出现配置键名、profile 名、版本号、摘要前缀、成功/失败结论、文件清单。
-- 脱敏报告不得包含配置值、密钥、令牌、完整 `.env`、本机绝对路径或未脱敏的原始错误；原始制作输出可能包含企业地址和路径，不能直接作为脱敏报告。
+- 脱敏报告不得包含配置值、密钥、令牌、完整 `.env`、本机绝对路径或未脱敏的原始错误；原始制作输出仍可能包含路径，不能直接作为脱敏报告。
 - 应保留：公版文件名/摘要/来源、配置的键名与权限检查、确认摘要前缀、私版与 zip 摘要、员工安装回显与设置页确认结果。
 - 企业内实测记录：宿主版本与架构、Desktop/Web profile、是否离线、升级/回退、数据保留、员工步数。
 
@@ -88,6 +89,8 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。
 | `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续并报告类别 |
 | `CONFIG_INVALID` / `CONFIG_UNKNOWN_KEY` | 按字段修正；未知键不写入 |
 | `CONFIG_PERMISSIONS` | `chmod 600` 后重试 |
+| `CONFIG_UNREADABLE` | 检查配置文件是否存在及可读，不在共享报告中复制文件路径 |
+| `IAM_VALIDATOR_MISMATCH` | 换用与公版配套的工具链，重新核对来源与摘要 |
 | `BUNDLE_SECRET_EMBED_UNSUPPORTED` | 不使用含 secret 的配置；修正专用 `.env` 后重新预览 |
 | `OUTPUT_INSIDE_REPO` / `OUTPUT_EXISTS` | 换仓库外的新目录；不删除或覆盖已有文件 |
 | `VERIFY_FAILED` | 保留现场，报告错误行；不手工改清单或重新打包绕过 |

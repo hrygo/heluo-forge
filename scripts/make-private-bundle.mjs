@@ -12,7 +12,6 @@
  * downloaded, not necessarily this checkout. `--config` must live outside the
  * repository (default root: this script's repository) and be mode 0600.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
@@ -24,6 +23,7 @@ import {
   parseEnvConfig,
   planDigest,
   PrivateBundleError,
+  readConfigFile,
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
@@ -95,7 +95,7 @@ async function main() {
   if (publicInfo.problems.length > 0) {
     throw new PrivateBundleError('PUBLIC_UNSAFE', `public input failed preflight:\n- ${publicInfo.problems.join('\n- ')}`);
   }
-  const entries = parseEnvConfig(readFileSync(configPath, 'utf8'));
+  const entries = parseEnvConfig(readConfigFile(configPath));
   const config = buildConfig(entries);
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }

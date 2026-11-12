@@ -20,8 +20,9 @@ description: 供打包人员收集企业 IAM/网关配置，在 macOS 上生成�
 
 - 使用仓库外、不提交的专用 `.env` 文件（`umask 077`，权限 600）；可供后续打包复用，不自动删除或覆盖。
 - IAM 和网关地址等允许的配置会写入私版插件的 `cordis.patch.yml`，交付对象可见；完整 `.env`、密钥和令牌不进入交付物。配置值不作为命令行参数。
-- 当前制作器的 Discovery 预检结果及部分错误会回显 issuer 和端点地址。制作输出按企业敏感信息保护，分享报告前人工脱敏；不能声称制作器已对这些地址自动脱敏。
+- Discovery 预检结果与错误只显示状态、字段名和受限错误码，不回显 issuer、端点或网络异常原文。预览与交付回执仍包含本地路径；分享报告前人工脱敏。
 - 公版摘要必须来自发布页或另一条可信渠道，不信任制品旁边的 `SHA256SUMS`。
+- 制作器核对工具链与公版中的 IAM 配置校验模块；不一致时使用该公版配套的工具链，不能跳过检查。
 - 禁止全局文本替换；只允许工具声明的配置注入位置。
 - 密钥、令牌、`client_secret` 不属于本交付；发现即停止。原始 `HELUO_IAM_CLIENT_SECRET` 和 `HELUO_IAM_CLIENT_SECRET_FILE` 键会报 `BUNDLE_SECRET_EMBED_UNSUPPORTED`，未知键会被拒绝。
 - 输出目录必须在仓库外；缺字段、摘要不符、目录已存在或用户取消时安全失败，不覆盖、不留半成品。
@@ -83,7 +84,7 @@ chmod 600 "$config"
 
 ## 生成与交付
 
-1. 先预览（不写盘），把脱敏后的键名、版本、摘要前缀给打包人员核对。确认 `loginReady: true`；配置 Discovery 且未主动跳过检查时还须确认 `discovery.checked: true`。只提供显式端点或主动跳过检查时 `discovery.checked` 为 `false`，须另行核验端点并记录限制。`loginReady` 只检查登录字段齐备，不能证明网关、撤销端点或运行时配置有效：
+1. 先预览（不写盘），把脱敏后的键名、版本、摘要前缀给打包人员核对。确认 `loginReady: true` 和 `gatewayConfigured: true`；配置 Discovery 且未主动跳过检查时还须确认 `discovery.checked: true`。`revocationConfigured` 标识是否显式配置撤销端点；Discovery 成功时 `discovery.revocationEndpoint` 标识 `configured`、`discovered` 或 `missing`。只提供显式端点或主动跳过检查时 `discovery.checked` 为 `false`，须另行核验端点并记录限制。预检复用 IAM 运行时配置校验，但不证明网关可用、撤销协议兼容或企业登录成功：
 
 ```sh
 node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
@@ -120,6 +121,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 | `PUBLIC_DIGEST_MISMATCH` | 停止。重新取得公版与可信摘要，不猜测文件 |
 | `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续，报告命中的类别 |
 | `CONFIG_*` | 按字段回显修正；未知键不写入。出现 `IAM login is incomplete` 时补 Discovery URL（或 issuer + 三个端点），不要删掉 issuer 绕过 |
+| `IAM_VALIDATOR_MISMATCH` | 公版与制作工具链中的 IAM 校验模块不一致或缺失；使用配套版本并重新核对来源与摘要 |
 | `DISCOVERY_*` | 打包机到 IAM 的网络不可达，或 Discovery 文档与配置不一致（issuer/端点）。先修网络或配置；确实只能离线制作时才用 `--skip-discovery-check`，并在报告里列为未验证项 |
 | 安装后向导显示“凭据存储不可用” | 检查目标平台的 SQLite、目录权限、磁盘空间与配套 keyring；目标平台行为须实测，不以平台名称推定后端不可用 |
 | `BUNDLE_SECRET_EMBED_UNSUPPORTED` | public + PKCE 不使用 `client_secret`；不要把密钥写入配置或交付物，修正专用配置后重新预览 |

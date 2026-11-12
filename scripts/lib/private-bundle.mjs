@@ -20,6 +20,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { isConfigured, validateConfig } from '../../packages/forge-iam/src/config.mjs';
 
 import { readBundleEntries } from './bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './bundle-manifest.mjs';
@@ -31,6 +32,7 @@ export const PRIVATE_METADATA_FILE = 'heluo-private-release.json';
 export const TOOL_NAME = 'heluo-forge-release-tools';
 export const TOOL_VERSION = '1.0.0';
 export const SUPPORTED_PLATFORMS = Object.freeze(['windows-x64', 'windows-arm64', 'linux-x64', 'linux-arm64', 'macos-x64', 'macos-arm64']);
+export const IAM_VALIDATOR_MODULES = Object.freeze(['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']);
 
 export class PrivateBundleError extends Error {
   constructor(code, message, details = undefined) {
@@ -107,10 +109,8 @@ const CALLBACK_ADDRESSES = new Set(['auto', '127.0.0.1', '::1']);
  */
 export function isLoginConfigured(iam) {
   if (typeof iam?.clientId !== 'string' || iam.clientId.trim() === '') return false;
-  if (typeof iam.discoveryUrl === 'string' && iam.discoveryUrl.trim() !== '') return true;
-  return ['issuer', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri'].every(
-    (key) => typeof iam[key] === 'string' && iam[key].trim() !== '',
-  );
+  const validated = validateConfig(iam);
+  return !validated.issues && isConfigured(validated.value).ok;
 }
 
 export const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -138,9 +138,15 @@ export async function verifyDiscovery(iam, { fetchImpl = globalThis.fetch, timeo
       signal: controller.signal,
     });
   } catch (error) {
-    const aborted = error?.name === 'AbortError';
-    const reason = aborted ? `timed out after ${timeoutMs} ms` : String(error?.cause?.code ?? error?.message ?? error);
-    fail('DISCOVERY_UNREACHABLE', `cannot fetch ${iam.discoveryUrl}: ${reason}`);
+    const safeCodes = new Set([
+      'ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+      'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
+      'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+      'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_TLS_CERT_ALTNAME_INVALID',
+    ]);
+    const code = error?.cause?.code;
+    const reason = error?.name === 'AbortError' ? 'timed out' : (safeCodes.has(code) ? code : 'network request failed');
+    fail('DISCOVERY_UNREACHABLE', `discovery request failed: ${reason}`);
   } finally {
     clearTimeout(timer);
   }
@@ -154,26 +160,34 @@ export async function verifyDiscovery(iam, { fetchImpl = globalThis.fetch, timeo
   if (typeof document?.issuer !== 'string' || document.issuer.trim() === '') {
     fail('DISCOVERY_INVALID', 'discovery document has no issuer');
   }
-  const sameUrl = (left, right) => left.replace(/\/+$/u, '') === right.replace(/\/+$/u, '');
-  if (typeof iam.issuer === 'string' && iam.issuer.trim() !== '' && !sameUrl(document.issuer, iam.issuer)) {
-    fail('DISCOVERY_ISSUER_MISMATCH', `discovery issuer ${document.issuer} does not match configured issuer ${iam.issuer}`);
+  if (!isHttpUrl(document.issuer, { allowInsecureHttp: iam.allowInsecureHttp === true })) {
+    fail('DISCOVERY_INVALID', 'discovery issuer is not an allowed URL');
+  }
+  if (typeof iam.issuer === 'string' && iam.issuer.trim() !== '' && document.issuer !== iam.issuer) {
+    fail('DISCOVERY_ISSUER_MISMATCH', 'discovery issuer does not exactly match the configured issuer');
   }
   const endpoints = {};
   for (const key of ['authorization_endpoint', 'token_endpoint', 'jwks_uri']) {
     const value = document[key];
     if (typeof value !== 'string' || value.trim() === '') fail('DISCOVERY_INVALID', `discovery document has no ${key}`);
     if (!isHttpUrl(value, { allowInsecureHttp: iam.allowInsecureHttp === true })) {
-      fail('DISCOVERY_INVALID', `${key} is not an allowed URL: ${value}`);
+      fail('DISCOVERY_INVALID', `${key} is not an allowed URL`);
     }
     endpoints[key] = value;
   }
   const mapping = { authorizationEndpoint: 'authorization_endpoint', tokenEndpoint: 'token_endpoint', jwksUri: 'jwks_uri' };
   for (const [field, key] of Object.entries(mapping)) {
-    if (typeof iam[field] === 'string' && !sameUrl(iam[field], endpoints[key])) {
+    if (typeof iam[field] === 'string' && iam[field] !== endpoints[key]) {
       fail('DISCOVERY_ENDPOINT_MISMATCH', `configured ${field} does not match discovery ${key}`);
     }
   }
-  return { checked: true, issuer: document.issuer, endpoints };
+  for (const [field, key] of Object.entries({ revocationEndpoint: 'revocation_endpoint', endSessionEndpoint: 'end_session_endpoint', userInfoEndpoint: 'userinfo_endpoint' })) {
+    if (!iam[field] && document[key] && !isHttpUrl(document[key], { allowInsecureHttp: iam.allowInsecureHttp === true })) {
+      fail('DISCOVERY_INVALID', `${key} is not an allowed URL`);
+    }
+  }
+  const revocationEndpoint = iam.revocationEndpoint ? 'configured' : (document.revocation_endpoint ? 'discovered' : 'missing');
+  return { checked: true, revocationEndpoint };
 }
 
 export function parseEnvConfig(text) {
@@ -191,7 +205,7 @@ export function parseEnvConfig(text) {
     if (equals <= 0) fail('CONFIG_INVALID', `.env line ${index + 1}: expected KEY=VALUE`);
     const key = trimmed.slice(0, equals).trim();
     let value = trimmed.slice(equals + 1).trim();
-    if (!/^[A-Z][A-Z0-9_]*$/u.test(key)) fail('CONFIG_INVALID', `.env line ${index + 1}: invalid key name "${key}"`);
+    if (!/^[A-Z][A-Z0-9_]*$/u.test(key)) fail('CONFIG_INVALID', `.env line ${index + 1}: invalid key name`);
     if (seen.has(key)) fail('CONFIG_INVALID', `.env line ${index + 1}: duplicate key "${key}"`);
     seen.add(key);
     if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
@@ -321,6 +335,14 @@ export function buildConfig(entries) {
   }
   if (iam.managedModels !== undefined && (typeof iam.defaultProvider !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(iam.defaultProvider))) {
     problems.push('HELUO_IAM_DEFAULT_PROVIDER must be an exact route ID when managed models are configured');
+  }
+  // Run the actual IAM schema shipped with this toolchain; do not mirror its
+  // evolving scopes, callback and managed-model constraints in a second schema.
+  // Report only known field names, never issue messages that may contain values.
+  const runtime = validateConfig(iam);
+  if (runtime.issues) {
+    const fields = new Set(runtime.issues.map((item) => item.path?.[0]).filter((field) => Object.values(IAM_ENV_MAP).includes(field)));
+    problems.push(`IAM runtime validation rejected ${fields.size > 0 ? [...fields].sort().join(', ') : 'configuration'}`);
   }
   if (problems.length > 0) fail('CONFIG_INVALID', `configuration is invalid:\n- ${problems.join('\n- ')}`);
   if (!isLoginConfigured(iam)) {
@@ -453,13 +475,22 @@ export function assertNeutralPatch(text) {
   return problems;
 }
 
-function readConfigFile(path) {
-  const stat = statSync(path);
+export function readConfigFile(path) {
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch {
+    fail('CONFIG_UNREADABLE', 'cannot read configuration file; check that it exists and is accessible');
+  }
   if (!stat.isFile()) fail('CONFIG_INVALID', 'configuration path must be a regular file');
   if ((stat.mode & 0o077) !== 0) {
     fail('CONFIG_PERMISSIONS', `configuration file permissions are too broad (mode ${(stat.mode & 0o777).toString(8)}); run chmod 600`);
   }
-  return readFileSync(path, 'utf8');
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    fail('CONFIG_UNREADABLE', 'cannot read configuration file; check that it exists and is accessible');
+  }
 }
 
 function membersOf(entries) {
@@ -487,6 +518,25 @@ function membersOf(entries) {
   return { root, members };
 }
 
+/** Bind the maker's validation code to the runtime inside the public artifact. */
+export function assertIamValidatorMatches(entries, { toolRoot } = {}) {
+  for (const name of IAM_VALIDATOR_MODULES) {
+    const entry = entries.find((item) => item.path === `node_modules/@heluo/forge-iam/src/${name}`);
+    const path = toolRoot === undefined
+      ? new URL(`../../packages/forge-iam/src/${name}`, import.meta.url)
+      : join(toolRoot, 'packages/forge-iam/src', name);
+    let expected;
+    try {
+      expected = readFileSync(path);
+    } catch {
+      fail('IAM_VALIDATOR_MISMATCH', 'IAM runtime validator is unavailable; use the toolchain paired with the public release');
+    }
+    if (!entry?.content || !expected.equals(entry.content)) {
+      fail('IAM_VALIDATOR_MISMATCH', 'IAM runtime validator differs from the public bundle; use the toolchain paired with the public release');
+    }
+  }
+}
+
 /**
  * Build the private tarball bytes from public entries.
  *
@@ -499,6 +549,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   }
   const { root, members } = membersOf(entries);
   if (root.name !== '@heluo/forge-enterprise') fail('PUBLIC_TARBALL_INVALID', `unexpected entry package "${root.name}"`);
+  assertIamValidatorMatches(entries);
   if (requireVersionChange && version === root.version) {
     fail('VERSION_UNCHANGED', `private version must differ from the public version ${root.version}: same name+version must mean the same bytes`);
   }
@@ -507,7 +558,11 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const neutral = assertNeutralPatch(patchEntry.content.toString('utf8'));
   if (neutral.length > 0) fail('PUBLIC_TARBALL_INVALID', `public tarball is not configuration-neutral: ${neutral.join('; ')}`);
 
-  let patch = injectPatchConfig(patchEntry.content.toString('utf8'), 'heluo-iam', config.iam);
+  const runtimeIam = { ...config.iam };
+  // The opt-in controls packaging and Discovery validation only. The runtime
+  // ignores this field, so emitting it would falsely imply a runtime guard.
+  delete runtimeIam.allowInsecureHttp;
+  let patch = injectPatchConfig(patchEntry.content.toString('utf8'), 'heluo-iam', runtimeIam);
   patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
   const manifest = { ...root, version };
   // The manifest is generated after the version bump, so its member map must
@@ -655,6 +710,7 @@ export function inspectPublicTarball(publicPath) {
   const bytes = readFileSync(publicPath);
   const entries = readBundleEntries(bytes, { withContent: true });
   const { root } = membersOf(entries);
+  assertIamValidatorMatches(entries);
   const patch = entries.find((entry) => entry.path === 'cordis.patch.yml');
   const problems = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
   if (patch !== undefined) problems.push(...assertNeutralPatch(patch.content.toString('utf8')));

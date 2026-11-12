@@ -22,7 +22,7 @@ import { buildBundle, writeBundleArtifacts } from './build-enterprise-bundle.mjs
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { writeBundleTarball } from './lib/bundle-write.mjs';
-import { TOOL_NAME, TOOL_VERSION, assertNeutralPatch } from './lib/private-bundle.mjs';
+import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch } from './lib/private-bundle.mjs';
 import { scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
 
 export const PUBLIC_RELEASE_SCHEMA = 'heluo-public-release/1';
@@ -117,6 +117,10 @@ function releaseToolFiles(root) {
   const files = roots.filter((path) => existsSync(join(root, path)));
   files.push(...listFiles(root, 'scripts/lib', (path) => path.endsWith('.mjs')));
   files.push(...listFiles(root, '.agents/skills/heluo-forge-release-bundle'));
+  // The maker invokes the same config validator as the IAM runtime. Include
+  // its complete local import closure so the released toolchain stays standalone.
+  files.push(...IAM_VALIDATOR_MODULES
+    .map((name) => `packages/forge-iam/src/${name}`));
   for (const path of files) {
     if (!existsSync(join(root, path))) fail('TOOLS_INCOMPLETE', `release toolchain is missing ${path}`);
   }
@@ -176,6 +180,7 @@ export function buildPublicRelease(input) {
     if (patch === undefined) fail('ARTIFACT_INVALID', 'public tarball has no cordis.patch.yml');
     const neutral = assertNeutralPatch(patch.content.toString('utf8'));
     if (neutral.length > 0) fail('ARTIFACT_NOT_NEUTRAL', `public tarball carries enterprise configuration:\n- ${neutral.join('\n- ')}`);
+    assertIamValidatorMatches(entries, { toolRoot });
     const scan = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
     if (scan.length > 0) fail('ARTIFACT_SENSITIVE', `public tarball failed the sensitive scan:\n- ${scan.join('\n- ')}`);
 
