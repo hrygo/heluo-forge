@@ -1803,6 +1803,10 @@ window.__ModuleLoader__.load({
       ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
       ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
       IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
+      IAM_GATEWAY_BINDING_CHANGED: '网关地址或账号已变化，请重新选择模型后再试。',
+      // 认证服务与凭据存储在请求发出前失败：说清楚能做什么，不暴露内部模块名。
+      ENTERPRISE_IAM_UNAVAILABLE: '企业认证服务暂不可达，请稍后重试。',
+      ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: '凭据安全存储暂不可用，请检查系统密钥环或联系管理员。',
       IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
       IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
       IAM_GATEWAY_OWNER_MISSING: '请先登录企业账号，再添加个人访问凭证。',

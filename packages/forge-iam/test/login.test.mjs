@@ -1013,7 +1013,7 @@ test('a rotated signing key is retried once instead of failing the login', async
   assert.equal(jwksCalls, 2);
 });
 
-for (const expired of [false, true]) test(`a prefetch failure before a refresh claim rejects without serving the ${expired ? 'expired' : 'valid'} access token`, async (t) => {
+for (const expired of [false, true]) test(`a prefetch failure before a refresh claim ${expired ? 'rejects an expired access token' : 'serves the still-valid access token'}`, async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
@@ -1039,7 +1039,9 @@ for (const expired of [false, true]) test(`a prefetch failure before a refresh c
   });
   await gated.hydrate();
   if (expired) clock = Date.parse(before.payload.accessExpiresAt) + 1;
-  await assert.rejects(gated.resolveToken(), { code: 'IAM_UNREACHABLE' });
+  if (expired) await assert.rejects(gated.resolveToken(), { code: 'IAM_UNREACHABLE' });
+  else assert.equal(await gated.resolveToken(), before.payload.accessToken,
+    'an unexpired access token keeps the conversation usable while renewal backs off');
   assert.equal(prefetchFailures, 1);
   assert.equal(refreshPosts, 0, 'prefetch failure precedes any refresh POST attempt');
   assert.equal(mock.counts.token, beforeRequests, 'prefetch failure precedes the refresh POST');

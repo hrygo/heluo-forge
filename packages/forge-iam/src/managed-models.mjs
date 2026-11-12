@@ -1,5 +1,5 @@
 import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
-import { classifyFailure, gatewayCode } from './gateway-failure.mjs';
+import { failureCode, gatewayCode } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import {
   NO_RETRY_POLICY,
@@ -48,6 +48,11 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
   ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
   IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
+  IAM_GATEWAY_BINDING_CHANGED: '网关地址或账号已变化，请重新选择模型后再试。',
+  // The IAM service and the credential store fail before a request is sent;
+  // they answer with what the person can do, not with an internal module name.
+  ENTERPRISE_IAM_UNAVAILABLE: '企业认证服务暂不可达，请稍后重试。',
+  ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: '凭据安全存储暂不可用，请检查系统密钥环或联系管理员。',
   ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
   ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
   ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',
@@ -76,6 +81,13 @@ function permit(view) {
   return null;
 }
 const identity = view => JSON.stringify([view?.principal, view?.gatewayCredential]);
+// The binding the adapter was built for. The key generation is only the write
+// version of the stored credential: re-saving the same key at the same address
+// must not count as a context change, while an address or owner change must.
+const sameBinding = (bound, next) => bound?.baseURL === next?.baseURL
+  && (bound?.subject ?? null) === (next?.subject ?? null);
+const BINDING_RECOVERY_MS = 5000;
+const REBUILD_ATTEMPT_LIMIT = 3;
 
 /**
  * A stored selection maps model id → overrides. An empty object is a real
@@ -142,7 +154,7 @@ const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name)
  * replaced; the only Host setting touched is the new-conversation default
  * model, and only when it provably cannot run (see host-default-model.mjs).
  */
-export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch,
+export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch, logFailure,
   requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders(),
   getHostDefaultModel = () => safeGet(host, 'agentDefaultModel'), retryDelays = RETRY_DELAYS, onChange }) {
   if (typeof host.on !== 'function' || typeof host.llm?.registerAdapter !== 'function') {
@@ -174,6 +186,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let deadline; let timer; let disposed = false; let backend; let flight;
+  // Bounded compensation for a refresh that lost its race to a context change:
+  // one rebuild per version, never more than REBUILD_ATTEMPT_LIMIT in a row.
+  let rebuildAttempts = 0; let rebuiltVersion = -1;
   let retryAttempt = 0; let retryTimer; let retryAt = null; let syncedAt = null;
   let hostDefault = null; let alignment = null; let alignQueued = false;
   let optionsChain = Promise.resolve();
@@ -251,6 +266,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       inSample = false;
     }
   }
+  /** Answered before a stream starts: the call must still belong to this context. */
   function refusal(request, captured) {
     const denied = permit(sample());
     if (disposed) return 'ENTERPRISE_MODELS_UNAVAILABLE';
@@ -261,33 +277,102 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (!allowed(request.provider, request.model)) return 'ENTERPRISE_MODEL_NOT_ALLOWED';
     return null;
   }
+  /**
+   * Answered once a stream is running. Turning a model off, saving a key or
+   * switching the selection is a configuration change, not a revocation: the
+   * answer already being generated keeps its authorization. Losing the account,
+   * the credential or the session is what aborts it.
+   */
+  function authorizationRefusal(subject) {
+    const view = sample();
+    const denied = permit(view);
+    if (disposed) return 'ENTERPRISE_MODELS_UNAVAILABLE';
+    if (denied) return denied;
+    if (revokedCredential) return 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED';
+    if (subject !== undefined && view?.principal !== subject) return 'IAM_LOGIN_REQUIRED';
+    return null;
+  }
   // Remember a revocation so no later call spends another round trip on it.
   const record = code => {
     if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED') revokedCredential = true;
     return code;
   };
-  async function* protect(request, dispatch, captured) {
-    let code = refusal(request, captured);
-    if (code) { yield finish(code); return; }
-    const mine = version;
-    const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
+  // The failure object's shape stays { code, message }: the client renders that
+  // shape and its contract types it exactly. The internal code is diagnosis, so
+  // it goes to the host log instead of widening what every consumer parses.
+  const noteMapped = (cause, code) => {
+    const detailCode = cause?.code;
+    if (typeof detailCode !== 'string' || detailCode === code) return;
+    try { logFailure?.(detailCode, code); } catch { /* diagnostics never change the answer */ }
+  };
+  /**
+   * Rebuild the catalogue behind a binding change, waiting no longer than a
+   * request would: a stalled recovery must not hang the answer.
+   */
+  async function rebuildBinding() {
+    let timer;
     try {
-      for await (const chunk of dispatch({ ...request, signal })) {
-        code = refusal(request, mine);
-        if (code) { yield finish(code); return; }
-        if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
-          // The model layer turns an HTTP error into a finish chunk, so the code
-          // arrives here without ever passing through the thrown-error branch.
-          yield finish(record(classifyFailure(chunk.reason.failure))); return;
-        }
-        yield chunk;
+      return await Promise.race([
+        refresh(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(error('ENTERPRISE_GATEWAY_UNAVAILABLE')), BINDING_RECOVERY_MS);
+          timer.unref?.();
+        }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+  async function* protect(request, dispatch, captured, redispatch, preparedSubject) {
+    let code = refusal(request, captured);
+    // A prepared call that outlived its selection is re-prepared when it still
+    // belongs to this person: the model is still callable, only the context
+    // generation moved. A different account is not recoverable by re-preparing.
+    if (code === 'IAM_MODEL_CONTEXT_CHANGED') {
+      const moved = preparedSubject !== undefined && iam.getView()?.principal !== preparedSubject;
+      if (moved) code = 'IAM_LOGIN_REQUIRED';
+      else if (redispatch) {
+        try { await redispatch(); captured = version; code = refusal(request, captured); }
+        catch (cause) { yield finish(record(failureCode(cause))); return; }
       }
-      code = refusal(request, mine);
-      if (code) yield finish(code);
-    } catch (cause) {
-      code = refusal(request, mine);
-      if (!code && request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
-      yield finish(record(code ?? classifyFailure(cause)));
+    }
+    if (code) { yield finish(code); return; }
+    const subject = iam.getView()?.principal;
+    const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
+    let emitted = false; let retried = false;
+    for (;;) {
+      try {
+        for await (const chunk of dispatch({ ...request, signal })) {
+          code = authorizationRefusal(subject);
+          if (code) { yield finish(code); return; }
+          if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
+            // The model layer turns an HTTP error into a finish chunk, so the code
+            // arrives here without ever passing through the thrown-error branch.
+            const mapped = record(failureCode(chunk.reason.failure));
+            noteMapped(chunk.reason.failure, mapped);
+            yield finish(mapped); return;
+          }
+          emitted = true;
+          yield chunk;
+        }
+        code = authorizationRefusal(subject);
+        if (code) yield finish(code);
+        return;
+      } catch (cause) {
+        if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
+        const authorization = authorizationRefusal(subject);
+        code = authorization ?? failureCode(cause);
+        // Retry only before the first chunk leaves: after emission a second
+        // dispatch would deliver the same answer twice. The failure must be the
+        // plugin's own binding change (not a mapped user code), and the budget
+        // is one attempt.
+        if (!authorization && !emitted && !retried && cause?.code === 'IAM_GATEWAY_BINDING_CHANGED') {
+          retried = true;
+          try { await rebuildBinding(); if (redispatch) await redispatch(); continue; }
+          catch (next) { yield finish(record(failureCode(next))); return; }
+        }
+        noteMapped(cause, code);
+        yield finish(record(code));
+        return;
+      }
     }
   }
   /** Adopt the stored selection, or remember that nothing was stored yet. */
@@ -320,6 +405,30 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       selectionWriteError = cause?.code ?? 'IAM_MODEL_SELECTION_UNWRITTEN';
       return false;
     }
+  }
+
+  /**
+   * One key resolver for every adapter this runtime builds. It compares the
+   * binding the adapter was created for, not the key's write generation: saving
+   * a different key at the same address is adopted on the next call, while an
+   * address or owner change asks for a rebuild instead of silently reusing the
+   * old transport.
+   */
+  function createKeyResolver(connection) {
+    const bound = { baseURL: connection.baseURL, subject: connection.subject ?? null };
+    return async () => {
+      const before = sample();
+      const requestVersion = version;
+      if (disposed || permit(before)) throw error('IAM_MODEL_CONTEXT_CHANGED');
+      const next = await iam.resolveGatewayConnection();
+      const after = sample();
+      if (disposed || permit(after) || requestVersion !== version) throw error('IAM_MODEL_CONTEXT_CHANGED');
+      // A different owner is a different session, not a transport to rebuild:
+      // replaying the call under another principal would cross a subject line.
+      if ((bound.subject ?? null) !== (next.subject ?? null)) throw error('IAM_LOGIN_REQUIRED');
+      if (!sameBinding(bound, next)) throw new IamError('IAM_GATEWAY_BINDING_CHANGED', MESSAGES.IAM_GATEWAY_BINDING_CHANGED, { retryable: true });
+      return next.key;
+    };
   }
 
   async function refresh() {
@@ -365,17 +474,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       }
       models = applyModelOptions(rawModels, modelOptions);
       const resolved = await createAdapter({
-        host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveIamToken, resolveKey: async () => {
-          const before = sample();
-          const requestVersion = version;
-          if (disposed || permit(before)) throw error('IAM_MODEL_CONTEXT_CHANGED');
-          const next = await iam.resolveGatewayConnection();
-          const after = sample();
-          if (disposed || permit(after) || requestVersion !== version || next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
-          return next.key;
-        }
+        host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveIamToken, resolveKey: createKeyResolver(connection),
       }); current();
-      backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; cancelRetry();
+      backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
       syncedAt = Date.now(); publish();
       await syncHostDefault(); current();
       return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
@@ -395,10 +496,32 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         // Advertise the retry time before the frame that carries it.
         scheduleRetry(code);
         publish();
+      } else if (!disposed && mine !== version && code === 'IAM_MODEL_CONTEXT_CHANGED') {
+        // This refresh was voided by a context change that already happened. The
+        // old backend is still installed for the previous version, so the new
+        // version would keep failing on a stale adapter; rebuild it once.
+        scheduleVersionRebuild();
       }
       throw error(code);
     }).finally(() => { if (flight?.promise === task) flight = null; });
     flight = { version: mine, promise: task }; return task;
+  }
+
+  /**
+   * A refresh that lost its race to a context change is void for the version it
+   * started under. Rebuild once for the version that is current now, bounded so
+   * a flapping context cannot turn recovery into a rebuild loop.
+   */
+  function scheduleVersionRebuild() {
+    if (disposed || rebuildAttempts >= REBUILD_ATTEMPT_LIMIT) return;
+    const target = version;
+    if (rebuiltVersion === target) return;
+    rebuiltVersion = target; rebuildAttempts += 1;
+    const timer = setTimeout(() => {
+      if (disposed || version !== target || permit(sample())) return;
+      void refresh().catch(() => { });
+    }, 0);
+    timer.unref?.();
   }
 
   /** Bounded back-off for transient gateway failures; any context change cancels it. */
@@ -461,16 +584,22 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (key === 'stream') return request => protect(request, options => backend.stream(options));
       if (key === 'prepareCall') return async (route, model, signal) => {
         sample(); const mine = version;
+        const subject = iam.getView()?.principal;
         // Even a saved selection after logout reaches an actionable sign-in error.
         if (!permit(iam.getView()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
-        const prepared = backend
+        const prepare = async () => backend
           ? (typeof backend.prepareCall === 'function'
             ? await backend.prepareCall(route, model, signal)
             : { model: await backend.resolveModel(route, model, signal), stream: options => backend.stream(options) })
           : null;
+        let prepared = await prepare();
         return {
           model: prepared?.model ?? { provider: route, id: model, name: model },
-          stream: request => protect(request, options => (prepared ? prepared.stream(options) : backend.stream(options)), mine)
+          // A binding change inside the answer rebuilds the catalogue; the
+          // prepared call must be rebuilt too, or the retry would replay it
+          // against the adapter that just failed.
+          stream: request => protect(request, options => (prepared ? prepared.stream(options) : backend.stream(options)),
+            mine, async () => { prepared = await prepare(); }, subject)
         };
       };
       if (key === 'resolveModel') return async (route, model, signal) => {
@@ -525,11 +654,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           host,
           config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
           resolveIamToken,
-          resolveKey: async () => {
-            const next = await iam.resolveGatewayConnection();
-            if (next.baseURL !== connection.baseURL || next.generation !== connection.generation) throw error('IAM_MODEL_CONTEXT_CHANGED');
-            return next.key;
-          },
+          resolveKey: createKeyResolver(connection),
         });
         if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
         backend = resolved;

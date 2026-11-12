@@ -424,7 +424,7 @@ test('an unrelated view notification cannot shorten the preflight retry delay', 
   });
   t.after(async () => { await service.dispose(); await oidc.close(); });
   await service.hydrate();
-  await assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+  assert.equal(await service.getAccessToken(), 'synthetic-access');
   assert.equal(service.getView().state, 'ready');
   service.notifyView();
   await delay(1250);
@@ -534,7 +534,7 @@ test('a discovery outage after the cache expires does not claim or consume the r
   await service.getAccessToken();
   const previous = structuredClone((await store.read()).grant);
   clock += 541_000;
-  await assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+  assert.equal(await service.getAccessToken(), previous.accessToken, 'a still-valid access token is served while discovery backs off');
   assert.equal(oidc.counts.refresh, 1, 'the failed preflight made no refresh POST');
   assert.deepEqual((await store.read()).grant, previous);
   assert.equal(service.getView().state, 'ready');
