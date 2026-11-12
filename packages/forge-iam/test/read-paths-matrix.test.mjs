@@ -47,6 +47,7 @@ async function signedInRecord(t) {
   }).value;
   const credentials = new MemoryCredentials();
   const service = createIamService(config, { credentials });
+  t.after(() => service.dispose());
   const started = await service.startSignIn();
   const response = await fetch(started.authorizationUrl, { redirect: 'manual' });
   await service.handleCallback(response.headers.get('location'));
@@ -81,10 +82,19 @@ test('all read surfaces use the same sqlite session on the current host', async 
     const platform = process.platform;
     const arch = process.arch;
     const directory = await mkdtemp(join(tmpdir(), 'forge-read-sqlite-'));
-    t.after(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
+    const cleanup = [];
+    t.after(async () => {
+      const errors = [];
+      for (const close of cleanup.reverse()) {
+        try { await close(); } catch (error) { errors.push(error); }
+      }
+      if (errors.length) throw new AggregateError(errors, 'failed to close SQLite test resources');
+      await rm(directory, { recursive: true, force: true });
+    });
     const backend = createCredentialStore({ directory });
     assert.equal(backend.available, true, `${platform}-${arch} backend`);
     const provider = createKeychainProvider(backend, { service: 'heluo-forge', accountPrefix: 'iam' });
+    cleanup.push(() => provider.close());
     await provider.modifyRecord(SESSION_RECORD_KEY, async () => grant);
 
     // 1. raw provider read (the host-side path)
@@ -103,14 +113,16 @@ test('all read surfaces use the same sqlite session on the current host', async 
 
     // 4. second reader instance, as a separate process would open it
     const fresh = createKeychainProvider(createCredentialStore({ directory }), { service: 'heluo-forge', accountPrefix: 'iam' });
+    cleanup.push(() => fresh.close());
     const again = await fresh.readRecord(SESSION_RECORD_KEY);
     assert.equal(again.payload.subject, 'E1001', `${platform}-${arch} reopen`);
 
     // 5. host service reads: getSession() and getAccessToken()
     const platformProvider = createKeychainProvider(createCredentialStore({ directory }), { service: 'heluo-forge', accountPrefix: 'iam' });
+    cleanup.push(() => platformProvider.close());
     await platformProvider.modifyRecord(SESSION_RECORD_KEY, async () => seeded);
     const service = createIamService(config, { credentials: platformProvider });
-    t.after(async () => { await service.dispose(); await provider.close(); await fresh.close(); await platformProvider.close(); });
+    cleanup.push(() => service.dispose());
     await service.syncFromStore();
     const sessionRead = service.getSession();
     assert.deepEqual(sessionFromRecord(await platformProvider.readRecord(SESSION_RECORD_KEY)), sessionRead, `${platform}-${arch} CLI and host session`);

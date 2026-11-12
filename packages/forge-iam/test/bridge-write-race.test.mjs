@@ -16,12 +16,21 @@ const recordKey = 'heluo-iam/bridge-capability';
 
 async function fixture(t, wrapAdapter) {
   const directory = await mkdtemp(join(tmpdir(), 'forge-bridge-race-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const cleanups = [];
+  const own = (cleanup) => cleanups.push(cleanup);
+  t.after(async () => {
+    const errors = [];
+    while (cleanups.length) {
+      try { await cleanups.pop()(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
+    await rm(directory, { recursive: true, force: true });
+  });
   const backend = createCredentialStore({ directory });
   const first = createKeychainProvider(backend);
+  own(() => first.close());
   const second = createKeychainProvider(createCredentialStore({ directory }));
-  t.after(() => first.close());
-  t.after(() => second.close());
+  own(() => second.close());
   // Ensure the database exists before both providers are used.
   await first.modifyRecord('heluo-iam/test-seed', () => ({ kind: 'grant', payload: { version: 1 } }));
   const actual = createJointStore(backend, namespacePrefixes());
@@ -32,8 +41,8 @@ async function fixture(t, wrapAdapter) {
     getGatewayAtomicStore: (value) => value === first ? adapter : undefined,
     verifyGatewayAtomicStore: (value, candidate) => value === first && candidate === adapter,
   });
-  t.after(() => service.dispose());
-  return { first, second, service, adapter };
+  own(() => service.dispose());
+  return { first, second, service, adapter, own };
 }
 
 test('a concurrent ref creation is preserved when bridge initialization races it', async (t) => {
@@ -73,7 +82,7 @@ for (const interruption of ['dispose service', 'replace provider']) test(`${inte
   const started = new Promise((resolve) => { entered = resolve; });
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  const { first, second, adapter } = await fixture(t, (actual) => ({
+  const { first, second, adapter, own } = await fixture(t, (actual) => ({
     ...actual,
     async compareAndSwap(...args) {
       entered();
@@ -87,7 +96,8 @@ for (const interruption of ['dispose service', 'replace provider']) test(`${inte
     getGatewayAtomicStore: () => adapter,
     verifyGatewayAtomicStore: (value, candidate) => value === current && candidate === adapter,
   });
-  t.after(() => service.dispose());
+  own(() => service.dispose());
+  own(() => release());
   const modifyRecord = first.modifyRecord.bind(first);
   first.modifyRecord = (key, mutate) => modifyRecord(key, async (current) => {
     const next = await mutate(current);
@@ -138,7 +148,7 @@ test('a repeated commit guard is rejected and its transaction rolls back', async
 });
 
 test('single-record trust alone cannot authorize a bridge joint write', async (t) => {
-  const { first, second, adapter } = await fixture(t);
+  const { first, second, adapter, own } = await fixture(t);
   for (const verifyGatewayAtomicStore of [() => false, () => Promise.resolve(true)]) {
     const service = createIamService(config, {
       credentials: first,
@@ -146,7 +156,7 @@ test('single-record trust alone cannot authorize a bridge joint write', async (t
       getGatewayAtomicStore: () => adapter,
       verifyGatewayAtomicStore,
     });
-    t.after(() => service.dispose());
+    own(() => service.dispose());
     await assert.rejects(service.bridgeCapability());
   }
   assert.equal((await second.readRecord(recordKey)) === undefined, true);
