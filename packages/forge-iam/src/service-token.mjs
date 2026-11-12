@@ -83,7 +83,13 @@ export function createTokenResolver(env) {
     const identity = grantIdentity(grant);
     const targetStore = grants.ownerOf(grant);
     const targetCredentials = provider.storeCredentials;
-    if (!targetStore || provider.store !== targetStore || !targetCredentials) {
+    const trustedProvider = () => targetStore && targetCredentials
+      && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials
+      && provider.atomicVerified(targetCredentials)
+      && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials;
+    if (!trustedProvider() || ctx.lastGrant !== grant || ctx.disposed || isSigningOut()
+      || ctx.state !== (recovering ? 'expired' : 'ready')
+      || getAuthEpoch() !== auth || getSessionEpoch() !== session) {
       cancelRenewal();
       return;
     }
@@ -128,7 +134,7 @@ export function createTokenResolver(env) {
           && isDeepStrictEqual(grantIdentity(current), identity);
       };
       if (!stillCurrent()) return;
-      if (provider.ensure() !== targetStore || provider.storeCredentials !== targetCredentials || !stillCurrent()) return;
+      if (!trustedProvider() || !stillCurrent()) return;
       if (now() < scheduled.runAt) { scheduleRenewal({ retry }); return; }
       void resolveToken(scheduled).catch((cause) => {
         if (cause?.code === 'IAM_UNREACHABLE') scheduleRenewal({ retry: true });
@@ -518,6 +524,9 @@ export function createTokenResolver(env) {
         if (staleBackground && cause === staleBackground) throw cause;
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         try { checkAlive(); } catch (currentCause) { cause = currentCause; }
+        // Revoked trust before a claim cannot have consumed the refresh token.
+        // Retain the session until a newly bound trusted provider can resume it.
+        if (!refreshWriteAttempted && cause?.code === 'IAM_ATOMIC_STORE_UNVERIFIED') throw cause;
         // The callback never ran, and the closed gate prevents a late callback
         // from producing a write candidate. Retry only the same adopted session;
         // keep the existing error contract for callers of this failed flight.

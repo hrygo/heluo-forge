@@ -177,7 +177,9 @@ export function createReconciler(env) {
       // With a usable refresh token an expired session is recoverable; without
       // this, the interim client would only ever offer a full re-login.
       if (ctx.state === 'expired' && isRefreshUsable(record.grant, now())
-        && now() - token.lastBackgroundRefreshAt >= AUTO_REFRESH_BACKOFF_MS) {
+        && now() - token.lastBackgroundRefreshAt >= AUTO_REFRESH_BACKOFF_MS
+        && provider.atomicVerified(targetCredentials)) {
+        if (!isCurrent()) return ctx.view();
         token.lastBackgroundRefreshAt = now();
         void resolveToken().catch(() => {});
       }
