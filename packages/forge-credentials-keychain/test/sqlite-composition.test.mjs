@@ -8,6 +8,19 @@ import test from 'node:test';
 import { apply, openCredentialReader, validateConfig } from '../src/index.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
 
+function ownDirectory(t, directory) {
+  const cleanups = [];
+  t.after(async () => {
+    const errors = [];
+    while (cleanups.length) {
+      try { await cleanups.pop()(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
+    await rm(directory, { recursive: true, force: true });
+  });
+  return (cleanup) => cleanups.push(cleanup);
+}
+
 function context() {
   const provided = new Map();
   return {
@@ -20,14 +33,15 @@ function context() {
 
 test('plugin and read-only reader use the same namespace and durable store', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'heluo-credentials-composition-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const own = ownDirectory(t, directory);
   const ctx = context();
   const dispose = apply(ctx, { storeDirectory: directory });
-  t.after(dispose);
+  own(dispose);
   const credentials = ctx.provided.get('credentials');
   await credentials.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: { subject: 'E1001' } }));
   await credentials.set('ENTERPRISE_STATIC_KEY', 'synthetic-key');
   const reader = await openCredentialReader({ directory });
+  own(() => reader.close());
   assert.deepEqual(await reader.readRecord('heluo-iam/session'), { kind: 'grant', payload: { subject: 'E1001' } });
   assert.deepEqual(await reader.resolve('ENTERPRISE_STATIC_KEY'), { value: 'synthetic-key', source: 'file' });
   assert.deepEqual(await credentials.describe('ENTERPRISE_STATIC_KEY'), { configured: true, source: 'file', writable: true });
@@ -37,7 +51,7 @@ test('plugin and read-only reader use the same namespace and durable store', asy
   await reader.close();
 });
 
-test('a backend cannot grant itself trust by claiming atomic capabilities', async () => {
+test('a backend cannot grant itself trust by claiming atomic capabilities', async (t) => {
   const ctx = context();
   const backend = Object.assign(createMemoryBackend(), {
     durable: true,
@@ -46,6 +60,7 @@ test('a backend cannot grant itself trust by claiming atomic capabilities', asyn
     compareAndSwap: async () => ({ ok: true }),
   });
   const dispose = apply(ctx, { backend, allowEphemeral: true });
+  t.after(dispose);
   assert.equal(ctx.provided.has('iam-atomic-store'), false);
   await dispose();
 });
@@ -59,9 +74,10 @@ test('legacy backend configuration is rejected instead of silently changing its 
 
 test('CLI reopens the same sqlite session in a fresh process without changing it', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'heluo-cli-sqlite-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const own = ownDirectory(t, directory);
   const ctx = context();
   const dispose = apply(ctx, { storeDirectory: directory });
+  own(dispose);
   const credentials = ctx.provided.get('credentials');
   await credentials.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: {
     version: 1, clientId: 'fixture', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z',

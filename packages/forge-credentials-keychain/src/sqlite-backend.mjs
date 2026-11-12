@@ -30,6 +30,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
   let closed = false;
   let closing = false;
   let closePromise;
+  let pendingInitialization;
   const operations = new Set();
   const committed = new Set();
   const fingerprint = (token) => createHash('sha256').update(token).digest('hex').slice(0, 32);
@@ -44,6 +45,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
   }
   function open(create = false) {
     if (closed || closing) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
+    if (pendingInitialization) throw error('CRED_KEY_UNAVAILABLE', 'credential store initialization is incomplete');
     if (db) return true;
     for (const legacy of ['credentials.json', 'credentials.key']) {
       if (existsSync(join(directory, legacy))) throw error('CRED_LEGACY_STORE', 'legacy credential store exists');
@@ -73,7 +75,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         const token = randomBytes(16).toString('hex');
         transaction(() => putMeta('lock', JSON.stringify({ pid: process.pid, token: fingerprint(token) })), true);
         keyProvider.initialize('k1');
-        transaction(() => { assertToken(token); putMeta('active', 'k1'); db.prepare("DELETE FROM meta WHERE key='lock'").run(); }, true);
+        pendingInitialization = token;
       } else {
         if (db.prepare('PRAGMA user_version').get().user_version !== 1) throw error('CRED_STORE_UNAVAILABLE', 'unknown credential store format');
         db.prepare('SELECT id,kind,owner,envelope,kid,revision,updated_at FROM secret LIMIT 0').all();
@@ -163,6 +165,13 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
   // Unknown markers are preserved. An already initialized store may proceed
   // only after its database schema and active key have both been verified.
   async function openForWrite() {
+    if (pendingInitialization) {
+      const deadline = Date.now() + lockTimeoutMs;
+      while (pendingInitialization) {
+        if (Date.now() >= deadline) throw error('CRED_LOCK_TIMEOUT', 'credential initialization is busy');
+        await sleep(10);
+      }
+    }
     if (db) return;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     safePath(directory, 'directory', 0o700);
@@ -204,6 +213,21 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
           if (!existing || (e.errcode !== 5 && e.errcode !== 6)) throw e;
           if (Date.now() >= deadline) throw error('CRED_LOCK_TIMEOUT', 'credential store is busy');
           await sleep(10);
+        }
+      }
+      if (pendingInitialization) {
+        const token = pendingInitialization;
+        try {
+          // The keyring is created exactly once. Wait for exclusive admission
+          // before activating it, so readers cannot make COMMIT fail busy.
+          await commit(token, () => putMeta('active', 'k1'));
+          committed.delete(token);
+          pendingInitialization = undefined;
+        } catch (cause) {
+          try { db.close(); } catch {}
+          db = undefined;
+          pendingInitialization = undefined;
+          throw cause;
         }
       }
     } finally {

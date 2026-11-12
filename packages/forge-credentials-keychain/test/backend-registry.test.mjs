@@ -7,6 +7,19 @@ import { capabilities, createRegisteredBackend } from '../src/backend-registry.m
 import { apply, openCredentialReader } from '../src/index.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
 
+function ownDirectory(t, directory) {
+  const cleanups = [];
+  t.after(async () => {
+    const errors = [];
+    while (cleanups.length) {
+      try { await cleanups.pop()(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
+    await rm(directory, { recursive: true, force: true });
+  });
+  return (cleanup) => cleanups.push(cleanup);
+}
+
 function context() {
   const provided = new Map();
   return { provided, get: (name) => provided.get(name),
@@ -22,9 +35,9 @@ test('registry exposes only immutable tested sqlite capabilities', async (t) => 
     assert.throws(() => createRegisteredBackend(name, {}), { code: 'CRED_BACKEND_UNREGISTERED' });
   }
   const directory = await mkdtemp(join(tmpdir(), 'forge-registry-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const own = ownDirectory(t, directory);
   const backend = createRegisteredBackend('sqlite', { directory });
-  t.after(() => backend.close());
+  own(() => backend.close());
   const key = 'heluo-forge/iam/ref/TEST';
   await backend.set(key, 'synthetic');
   assert.equal(await backend.get(key), 'synthetic');
@@ -32,15 +45,15 @@ test('registry exposes only immutable tested sqlite capabilities', async (t) => 
 
 test('host grants trust only to registered sqlite, not an injected capability impostor', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'forge-registry-host-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const own = ownDirectory(t, directory);
   const builtin = context();
   const dispose = apply(builtin, { storeDirectory: directory });
-  t.after(dispose);
+  own(dispose);
   const provider = builtin.provided.get('credentials');
   assert.equal(builtin.provided.get('iam-atomic-store').verify(provider), true);
   await provider.set('TEST', 'synthetic');
   const reader = await openCredentialReader({ directory });
-  t.after(() => reader.close());
+  own(() => reader.close());
   assert.equal((await reader.resolve('TEST')).value, 'synthetic');
   const injected = context();
   const backend = Object.assign(createMemoryBackend(), {
@@ -48,7 +61,7 @@ test('host grants trust only to registered sqlite, not an injected capability im
     transaction: async () => {}, snapshot: async () => ({}), compareAndSwap: async () => ({ ok: true }),
   });
   const close = apply(injected, { backend, allowEphemeral: true });
-  t.after(close);
+  own(close);
   assert.equal(injected.provided.has('iam-atomic-store'), false);
 });
 
@@ -56,9 +69,9 @@ test('registered sqlite serializes writes across live processes', { timeout: 100
   const { spawn } = await import('node:child_process');
   const { once } = await import('node:events');
   const directory = await mkdtemp(join(tmpdir(), 'forge-registry-lock-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const own = ownDirectory(t, directory);
   const backend = createRegisteredBackend('sqlite', { directory, lockTimeoutMs: 3000 });
-  t.after(() => backend.close());
+  own(() => backend.close());
   const key = 'heluo-forge/iam/ref/TEST';
   await backend.set(key, 'initial');
   let release;
@@ -66,13 +79,21 @@ test('registered sqlite serializes writes across live processes', { timeout: 100
   const held = new Promise((resolve) => { entered = resolve; });
   const gate = new Promise((resolve) => { release = resolve; });
   const first = backend.transaction(key, async (tx) => { entered(); await gate; tx.set('first'); });
+  const firstResult = first.then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  own(async () => { release(); const result = await firstResult; if (!result.ok) throw result.error; });
   await held;
   const registry = new URL('../src/backend-registry.mjs', import.meta.url).href;
   const code = `import { createRegisteredBackend } from ${JSON.stringify(registry)};
 const store = createRegisteredBackend('sqlite', { directory: process.argv[1], lockTimeoutMs: 3000 });
 process.send('trying'); await store.set(${JSON.stringify(key)}, 'second'); process.send('committed'); await store.close();`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', code, directory], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-  t.after(() => { release(); if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  const childClosed = once(child, 'close').then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  own(async () => {
+    release();
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    const result = await childClosed;
+    if (!result.ok) throw result.error;
+  });
   assert.equal((await once(child, 'message', { signal: AbortSignal.timeout(3000) }))[0], 'trying');
   let committed = false;
   child.on('message', (message) => { if (message === 'committed') committed = true; });

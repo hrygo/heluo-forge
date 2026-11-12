@@ -54,13 +54,26 @@ function activeSession(record) {
   return classifySessionRecord(record).state === 'active';
 }
 
+function bridgeReadableSession(record) {
+  const session = classifySessionRecord(record);
+  return session.state === 'active' || (session.state === 'pending' && session.operation === 'refresh'
+    && typeof record.payload.sessionInstanceId === 'string');
+}
+
 function sameSession(before, after) {
-  if (!activeSession(before) || !activeSession(after)) return false;
+  if (!bridgeReadableSession(before) || !activeSession(after)) return false;
   if (isDeepStrictEqual(before, after)) return true;
   const left = validateGrant(before.payload);
   const right = validateGrant(after.payload);
   if (!left.ok || !right.ok || typeof left.value.sessionInstanceId !== 'string'
     || left.value.sessionInstanceId !== right.value.sessionInstanceId) return false;
+  const pending = left.value.refreshOperation;
+  if (pending?.state === 'pending') {
+    const completed = right.value.refreshOperation;
+    if (completed?.state !== 'complete' || completed.version !== pending.version
+      || completed.id !== pending.id || completed.base !== pending.base
+      || left.value.refreshToken === right.value.refreshToken) return false;
+  }
   return isDeepStrictEqual(grantIdentity(left.value), grantIdentity(right.value));
 }
 
@@ -138,7 +151,7 @@ async function main(argv) {
 
     const hostUrl = process.env.HELUO_FORGE_IAM_URL;
     if (typeof hostUrl === 'string' && hostUrl.length > 0) {
-      if (!activeSession(record)) {
+      if (!bridgeReadableSession(record)) {
         const code = accessTokenOf(record).code;
         fail(code, '当前没有可用的访问令牌', json);
         return code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.REAUTH_REQUIRED;

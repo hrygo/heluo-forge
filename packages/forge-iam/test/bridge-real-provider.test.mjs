@@ -1,19 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { promisify } from 'node:util';
 import { createCredentialStore, createJointStore, createKeychainProvider, namespacePrefixes } from '@heluo/forge-credentials-keychain';
 import { BRIDGE_REF } from '../src/bridge.mjs';
 import { apply } from '../src/index.mjs';
 import { createIamService as createService } from '../src/service.mjs';
+import { refreshBaseId } from '../src/service-helpers.mjs';
 
-const run = promisify(execFile);
 const bin = fileURLToPath(new URL('../bin/heluo-forge.mjs', import.meta.url));
 const config = {
   issuer: 'https://iam.corp.example', authorizationEndpoint: 'https://iam.corp.example/authorize',
@@ -26,15 +25,79 @@ const grant = { kind: 'grant', payload: {
   obtainedAt: '2026-01-01T00:00:00.000Z', accessExpiresAt: '2099-01-01T00:00:00.000Z',
 } };
 
+function ownDirectories(t, directory) {
+  const cleanups = [];
+  const directories = [directory];
+  t.after(async () => {
+    const errors = [];
+    while (cleanups.length) {
+      try { await cleanups.pop()(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
+    for (const path of directories.reverse()) {
+      try { await rm(path, { recursive: true, force: true }); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'test directory cleanup failed');
+  });
+  return { own: (cleanup) => cleanups.push(cleanup), addDirectory: (path) => directories.push(path) };
+}
+
+function ownChild(own, child) {
+  const closed = new Promise((resolve) => {
+    let error;
+    child.once('error', (cause) => { error = cause; });
+    child.once('close', (code, signal) => resolve({ code, signal, error }));
+  });
+  own(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    const result = await closed;
+    if (result.error) throw result.error;
+  });
+  return closed;
+}
+
+function startCli(own, directory, url) {
+  const child = spawn(process.execPath, [bin, 'auth', 'token'], {
+    env: { HELUO_FORGE_STORE_DIRECTORY: directory, HELUO_FORGE_IAM_URL: url },
+    stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+  const closed = ownChild(own, child);
+  return { closed, stdout: () => stdout, stderr: () => stderr };
+}
+
+function createRouteServer(own, handler) {
+  const errors = [];
+  const server = createServer((req, res) => {
+    Promise.resolve(handler(req, res)).catch((error) => { errors.push(error); res.destroy(); });
+  });
+  own(async () => {
+    if (server.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    if (errors.length) throw new AggregateError(errors, 'test route failed');
+  });
+  return server;
+}
+
+async function listen(server) {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
+  });
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'forge-bridge-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const { own, addDirectory } = ownDirectories(t, directory);
   const backend = createCredentialStore({ directory });
   const provider = createKeychainProvider(backend);
   const adapter = createJointStore(backend, namespacePrefixes());
-  t.after(() => provider.close());
+  own(() => provider.close());
   await provider.modifyRecord('heluo-iam/session', () => grant);
-  return { directory, provider, adapter };
+  return { directory, provider, adapter, own, addDirectory };
 }
 
 function serviceFor(provider, adapter) {
@@ -66,7 +129,7 @@ function host(provider, adapter) {
   };
   const dispose = apply(ctx, config);
   const handler = registered.find((route) => route.kind === 'prefix').handler;
-  return { handler, dispose };
+  return { handler, dispose, service: provided.iam };
 }
 
 async function waitForCapability(provider) {
@@ -80,31 +143,82 @@ async function waitForCapability(provider) {
 }
 
 test('fresh Host initializes the shared capability before a real CLI bridge request', async (t) => {
-  const { directory, provider, adapter } = await fixture(t);
+  const { directory, provider, adapter, own } = await fixture(t);
   const app = host(provider, adapter);
-  t.after(() => app.dispose());
-  const server = createServer((req, res) => { void app.handler(req, res); });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
+  own(() => app.dispose());
+  const server = createRouteServer(own, app.handler);
+  const url = await listen(server);
   await waitForCapability(provider);
-  const url = `http://127.0.0.1:${server.address().port}`;
   const rejected = await fetch(`${url}/api/forge-iam/bridge/token`, { method: 'POST', headers: { authorization: 'Bearer invalid' } });
   assert.equal(rejected.status, 401);
-  const result = await run(process.execPath, [bin, 'auth', 'token'], {
-    env: { HELUO_FORGE_STORE_DIRECTORY: directory, HELUO_FORGE_IAM_URL: url }, timeout: 5000,
+  const cli = startCli(own, directory, url);
+  const result = await cli.closed;
+  if (result.error) throw result.error;
+  assert.equal(result.code, 0, cli.stderr());
+  assert.equal(cli.stdout(), 'synthetic-access\n');
+  assert.equal(cli.stderr(), '');
+});
+
+test('CLI waits through the same pending refresh and outputs only the rotated Host token', { timeout: 10_000 }, async (t) => {
+  const { directory, provider, adapter, own } = await fixture(t);
+  const app = host(provider, adapter);
+  own(() => app.dispose());
+  await app.service.hydrate();
+  await waitForCapability(provider);
+
+  const writer = createKeychainProvider(createCredentialStore({ directory }));
+  own(() => writer.close());
+  const initial = { ...grant.payload, sessionInstanceId: Buffer.alloc(32, 1).toString('base64url') };
+  const id = Buffer.alloc(32, 2).toString('base64url');
+  const operation = { version: 1, state: 'pending', id, base: refreshBaseId(initial, id) };
+  const pending = { kind: 'grant', payload: { ...initial, refreshOperation: operation } };
+  await writer.modifyRecord('heluo-iam/session', () => pending);
+
+  let requested = false;
+  let pendingReads = 0;
+  let observed;
+  const observedPending = new Promise((resolve) => { observed = resolve; });
+  const readRecord = provider.readRecord.bind(provider);
+  provider.readRecord = async (key) => {
+    const value = await readRecord(key);
+    if (requested && key === 'heluo-iam/session' && value?.payload?.refreshOperation?.state === 'pending') {
+      if (++pendingReads === 2) observed();
+    }
+    return value;
+  };
+  const server = createRouteServer(own, (req, res) => {
+    if (req.url === '/api/forge-iam/bridge/token') requested = true;
+    return app.handler(req, res);
   });
-  assert.equal(result.stdout, 'synthetic-access\n');
-  assert.equal(result.stderr, '');
+  const url = await listen(server);
+  const cli = startCli(own, directory, url);
+  await Promise.race([
+    observedPending,
+    cli.closed.then((result) => { throw new Error(`CLI exited before Host observed pending: ${result.code ?? result.signal}`); }),
+  ]);
+  assert.equal(cli.stdout(), '');
+  assert.equal(app.service.getView().error, 'IAM_REAUTH_REQUIRED');
+
+  await writer.modifyRecord('heluo-iam/session', (current) => {
+    assert.deepEqual(current, pending);
+    return { kind: 'grant', payload: { ...initial, refreshToken: 'synthetic-rotated-refresh',
+      accessToken: 'synthetic-rotated-access', refreshOperation: { ...operation, state: 'complete' } } };
+  });
+  const result = await cli.closed;
+  if (result.error) throw result.error;
+  assert.equal(result.code, 0, cli.stderr());
+  assert.equal(cli.stdout(), 'synthetic-rotated-access\n');
+  assert.equal(cli.stderr(), '');
 });
 
 test('concurrent Host instances initialize one capability in the shared store', async (t) => {
-  const { directory, provider: first, adapter: firstAdapter } = await fixture(t);
+  const { directory, provider: first, adapter: firstAdapter, own } = await fixture(t);
   const secondBackend = createCredentialStore({ directory });
   const second = createKeychainProvider(secondBackend);
   const secondAdapter = createJointStore(secondBackend, namespacePrefixes());
-  t.after(() => second.close());
+  own(() => second.close());
   const services = [serviceFor(first, firstAdapter), serviceFor(second, secondAdapter)];
-  t.after(async () => { for (const service of services) await service.dispose(); });
+  for (const service of services) own(() => service.dispose());
   const values = await Promise.all(services.flatMap((service) => [service.bridgeCapability(), service.bridgeCapability()]));
   assert.equal(new Set(values).size, 1);
   assert.equal((await first.resolve(BRIDGE_REF)).value, values[0]);
@@ -112,7 +226,7 @@ test('concurrent Host instances initialize one capability in the shared store', 
 });
 
 test('separate Host processes converge after both observe an empty ref', { timeout: 10_000 }, async (t) => {
-  const { directory, provider } = await fixture(t);
+  const { directory, provider, own } = await fixture(t);
   const credentialModule = import.meta.resolve('@heluo/forge-credentials-keychain');
   const serviceModule = new URL('../src/service.mjs', import.meta.url).href;
   const source = `
@@ -153,34 +267,50 @@ test('separate Host processes converge after both observe an empty ref', { timeo
     const child = spawn(process.execPath, ['--input-type=module', '-e', source, directory], {
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { NODE_NO_WARNINGS: '1' },
     });
-    t.after(() => { if (child.exitCode === null) child.kill(); });
-    const wait = (type) => new Promise((resolve, reject) => {
-      const onMessage = (message) => { if (message.type === type) { child.off('message', onMessage); resolve(message); } };
+    const closed = ownChild(own, child);
+    const wait = (type) => new Promise((resolve) => {
+      const onMessage = (message) => {
+        if (message.type === type || message.type === 'failed') {
+          child.off('message', onMessage);
+          resolve(message.type === type ? { value: message } : { error: new Error(`bridge worker failed before ${type}`) });
+        }
+      };
       child.on('message', onMessage);
-      child.once('exit', (code) => reject(new Error(`bridge worker exited before ${type}: ${code}`)));
-      child.once('error', reject);
+      closed.then((result) => {
+        child.off('message', onMessage);
+        resolve({ error: result.error ?? new Error(`bridge worker exited before ${type}: ${result.code}`) });
+      });
     });
-    return { child, ready: wait('ready'), read: wait('read'), done: wait('done') };
+    return { child, closed, ready: wait('ready'), read: wait('read'), done: wait('done') };
+  }
+  async function waitAll(workers, type) {
+    const results = await Promise.all(workers.map((item) => item[type]));
+    for (const result of results) if (result.error) throw result.error;
+    return results.map((result) => result.value);
   }
   const workers = [worker(), worker()];
-  await Promise.all(workers.map((item) => item.ready));
+  await waitAll(workers, 'ready');
   workers.forEach((item) => item.child.send('start'));
-  await Promise.all(workers.map((item) => item.read));
+  await waitAll(workers, 'read');
   workers.forEach((item) => item.child.send('release'));
-  const values = await Promise.all(workers.map((item) => item.done));
+  const values = await waitAll(workers, 'done');
   assert.equal(values[0].digest, values[1].digest);
   assert.ok((await provider.resolve(BRIDGE_REF))?.value);
+  for (const result of await Promise.all(workers.map((item) => item.closed))) {
+    if (result.error) throw result.error;
+    assert.equal(result.code, 0);
+  }
 });
 
 test('a failed joint creation leaves neither value; a later invocation can create it', async (t) => {
-  const { provider, adapter: actual } = await fixture(t);
+  const { provider, adapter: actual, own } = await fixture(t);
   let fail = true;
   const adapter = { ...actual, compareAndSwap(...args) {
     if (fail) throw new Error('synthetic write failure');
     return actual.compareAndSwap(...args);
   } };
   const service = serviceFor(provider, adapter);
-  t.after(() => service.dispose());
+  own(() => service.dispose());
   await assert.rejects(service.bridgeCapability());
   assert.equal(await provider.resolve(BRIDGE_REF), undefined);
   assert.equal((await provider.readRecord('heluo-iam/bridge-capability')) === undefined, true);
@@ -195,13 +325,13 @@ test('a failed joint creation leaves neither value; a later invocation can creat
 
 for (const interruption of ['replace provider', 'dispose service']) {
   test(`bridge initialization stops if callers ${interruption} during a read`, async (t) => {
-    const { provider: first, adapter: firstAdapter } = await fixture(t);
+    const { provider: first, adapter: firstAdapter, own, addDirectory } = await fixture(t);
     const secondDirectory = await mkdtemp(join(tmpdir(), 'forge-bridge-replacement-'));
-    t.after(() => rm(secondDirectory, { recursive: true, force: true }));
+    addDirectory(secondDirectory);
     const secondBackend = createCredentialStore({ directory: secondDirectory });
     const second = createKeychainProvider(secondBackend);
     const secondAdapter = createJointStore(secondBackend, namespacePrefixes());
-    t.after(() => second.close());
+    own(() => second.close());
     let current = first;
     let entered; const started = new Promise((resolve) => { entered = resolve; });
     let release; const gate = new Promise((resolve) => { release = resolve; });
@@ -216,8 +346,13 @@ for (const interruption of ['replace provider', 'dispose service']) {
       getGatewayAtomicStore: adapterFor,
       verifyGatewayAtomicStore: (value, adapter) => value === current && adapter === adapterFor(value),
     });
-    t.after(() => service.dispose());
+    own(() => service.dispose());
     const pending = service.bridgeCapability();
+    const outcome = pending.then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+    own(async () => {
+      release();
+      if ((await outcome).ok) throw new Error('interrupted bridge initialization unexpectedly succeeded');
+    });
     await started;
     if (interruption === 'replace provider') current = second;
     else await service.dispose();
@@ -233,9 +368,9 @@ for (const interruption of ['replace provider', 'dispose service']) {
 }
 
 test('an untrusted or unavailable provider does not authorize the bridge', async (t) => {
-  const { provider } = await fixture(t);
+  const { provider, own } = await fixture(t);
   const service = createService(config, { credentials: provider, verifyAtomicStore: () => false });
-  t.after(() => service.dispose());
+  own(() => service.dispose());
   await assert.rejects(service.bridgeCapability());
   assert.equal(await provider.resolve(BRIDGE_REF), undefined);
 });

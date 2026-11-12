@@ -13,22 +13,34 @@ const scope = { recordKey, ref };
 const record = { kind: 'grant', payload: { version: 2, ownerSubject: 'E1001' } };
 const marker = 'secret-marker-0123456789abcdefghi';
 
-async function fixture(t, options = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'heluo-sqlite-test-'));
-  const store = createCredentialStore({ directory, ...options });
+function ownDirectory(t, directory) {
+  const cleanups = [];
   t.after(async () => {
-    await store.close();
+    const errors = [];
+    while (cleanups.length) {
+      try { await cleanups.pop()(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
     await rm(directory, { recursive: true, force: true });
   });
-  return { directory, store };
+  return (cleanup) => cleanups.push(cleanup);
+}
+
+async function fixture(t, options = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'heluo-sqlite-test-'));
+  const own = ownDirectory(t, directory);
+  const store = createCredentialStore({ directory, ...options });
+  own(() => store.close());
+  return { directory, store, own };
 }
 
 test('values are individually encrypted and survive a new reader without plaintext in sqlite files', async (t) => {
-  const { directory, store } = await fixture(t);
+  const { directory, store, own } = await fixture(t);
   await store.set(ref, marker);
   await store.set(recordKey, JSON.stringify(record));
   assert.equal(await store.get(ref), marker);
   const reader = createCredentialStore({ directory, readOnly: true });
+  own(() => reader.close());
   assert.equal(await reader.get(ref), marker);
   assert.equal(await reader.get(recordKey), JSON.stringify(record));
   await reader.close();
@@ -65,25 +77,29 @@ test('the second database write failing rolls back the complete joint commit', a
   await store.set('heluo-forge/iam/ref/UNRELATED', 'seed');
   const empty = await store.snapshot(scope);
   const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
-  db.exec("CREATE TRIGGER fail_second BEFORE INSERT ON secret WHEN new.kind = 'ref' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END");
-  await assert.rejects(store.compareAndSwap(scope, empty, { record, value: marker }, () => true));
-  assert.deepEqual(await store.snapshot(scope), empty);
-  db.close();
+  try {
+    db.exec("CREATE TRIGGER fail_second BEFORE INSERT ON secret WHEN new.kind = 'ref' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END");
+    await assert.rejects(store.compareAndSwap(scope, empty, { record, value: marker }, () => true));
+    assert.deepEqual(await store.snapshot(scope), empty);
+  } finally {
+    db.close();
+  }
 });
 
 test('owner tampering fails authentication and does not return the old value', async (t) => {
   const { directory, store } = await fixture(t);
   await store.set(recordKey, JSON.stringify(record));
   const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
-  db.prepare('UPDATE secret SET owner = ? WHERE id = ?').run('E1002', recordKey);
-  db.close();
+  try { db.prepare('UPDATE secret SET owner = ? WHERE id = ?').run('E1002', recordKey); }
+  finally { db.close(); }
   await assert.rejects(store.get(recordKey), (error) => error.code === 'CRED_DECRYPT_FAILED');
 });
 
 test('async record mutation does not hold a sqlite transaction and another writer waits', async (t) => {
-  const { directory, store } = await fixture(t, { lockTimeoutMs: 1500 });
+  const { directory, store, own } = await fixture(t, { lockTimeoutMs: 1500 });
   await store.set(ref, 'before');
   const other = createCredentialStore({ directory, lockTimeoutMs: 1500 });
+  own(() => other.close());
   let release;
   let entered;
   const waiting = new Promise((resolve) => { entered = resolve; });
@@ -94,10 +110,20 @@ test('async record mutation does not hold a sqlite transaction and another write
     await gate;
     tx.set('after');
   });
+  const transactionResult = transaction.then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  let second;
+  let secondResult;
+  own(async () => {
+    release();
+    const results = await Promise.all([transactionResult, ...(secondResult ? [secondResult] : [])]);
+    const errors = results.filter((result) => !result.ok).map((result) => result.error);
+    if (errors.length) throw new AggregateError(errors, 'test mutation cleanup failed');
+  });
   await waiting;
   assert.equal(await other.get(ref), 'before');
   let secondFinished = false;
-  const second = other.set(ref, 'last').then(() => { secondFinished = true; });
+  second = other.set(ref, 'last').then(() => { secondFinished = true; });
+  secondResult = second.then(() => ({ ok: true }), (error) => ({ ok: false, error }));
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(secondFinished, false);
   release();
@@ -108,7 +134,7 @@ test('async record mutation does not hold a sqlite transaction and another write
 });
 
 test('close waits for an in-flight mutation and releases its lock before reopening', async (t) => {
-  const { directory, store } = await fixture(t, { lockTimeoutMs: 100 });
+  const { directory, store, own } = await fixture(t, { lockTimeoutMs: 100 });
   await store.set(ref, 'before');
   let enter;
   let release;
@@ -119,6 +145,8 @@ test('close waits for an in-flight mutation and releases its lock before reopeni
     await gate;
     tx.set('after');
   });
+  const mutationResult = mutation.then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  own(async () => { release(); const result = await mutationResult; if (!result.ok) throw result.error; });
   await entered;
   let finished = false;
   const closing = store.close().then(() => { finished = true; });
@@ -130,7 +158,7 @@ test('close waits for an in-flight mutation and releases its lock before reopeni
   assert.equal(results[0].status, 'fulfilled', results[0].reason?.stack);
   assert.equal(results[1].status, 'fulfilled', results[1].reason?.stack);
   const reopened = createCredentialStore({ directory, lockTimeoutMs: 100 });
-  t.after(() => reopened.close());
+  own(() => reopened.close());
   assert.equal(await reopened.get(ref), 'after');
   await reopened.set(ref, 'reopened');
   assert.equal(await reopened.get(ref), 'reopened');
@@ -138,10 +166,11 @@ test('close waits for an in-flight mutation and releases its lock before reopeni
 
 test('missing keyring or legacy document is rejected without replacing existing data', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'heluo-sqlite-legacy-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const own = ownDirectory(t, directory);
   const legacy = join(directory, 'credentials.json');
   writeFileSync(legacy, 'legacy-test-data');
   const store = createCredentialStore({ directory });
+  own(() => store.close());
   await assert.rejects(store.get(ref), (error) => error.code === 'CRED_LEGACY_STORE');
   assert.equal(readFileSync(legacy, 'utf8'), 'legacy-test-data');
   assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
@@ -248,7 +277,7 @@ test('rotation changes only future writes while older kid remains readable', asy
 });
 
 test('removing an old key after rotation leaves new-key values readable across restart', async (t) => {
-  const { directory, store } = await fixture(t);
+  const { directory, store, own } = await fixture(t);
   await store.set(ref, 'old-key-value');
   await store.rotate('k2');
   await store.set(recordKey, JSON.stringify(record));
@@ -258,7 +287,7 @@ test('removing an old key after rotation leaves new-key values readable across r
   delete keyring.keys.k1;
   writeFileSync(keyPath, JSON.stringify(keyring));
   const reopened = createCredentialStore({ directory });
-  t.after(() => reopened.close());
+  own(() => reopened.close());
   assert.equal(await reopened.get(recordKey), JSON.stringify(record));
   await assert.rejects(reopened.get(ref), (error) => error.code === 'CRED_KEY_UNAVAILABLE');
 });
@@ -266,7 +295,7 @@ test('removing an old key after rotation leaves new-key values readable across r
 test('dead process lock is recovered without claiming its unfinished mutation succeeded', async (t) => {
   const { spawn } = await import('node:child_process');
   const { once } = await import('node:events');
-  const { directory, store } = await fixture(t, { lockTimeoutMs: 2000 });
+  const { directory, store, own } = await fixture(t, { lockTimeoutMs: 2000 });
   await store.set(ref, 'committed');
   const moduleUrl = new URL('../src/credential-store.mjs', import.meta.url).href;
   const source = `import { createCredentialStore } from ${JSON.stringify(moduleUrl)};
@@ -275,7 +304,12 @@ test('dead process lock is recovered without claiming its unfinished mutation su
       tx.set('not-committed'); process.send('locked'); await new Promise(() => {});
     });`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', source, directory], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  const childClosed = once(child, 'close').then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  own(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    const result = await childClosed;
+    if (!result.ok) throw result.error;
+  });
   assert.equal((await once(child, 'message'))[0], 'locked');
   child.kill('SIGKILL');
   await once(child, 'exit');
@@ -288,25 +322,29 @@ test('live or malformed persistent locks time out without being stolen', async (
   const { directory, store } = await fixture(t, { lockTimeoutMs: 30 });
   await store.set(ref, 'original');
   const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
-  const lock = db.prepare("INSERT INTO meta(key,value) VALUES('lock',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
-  for (const value of [JSON.stringify({ pid: process.pid, token: 'a'.repeat(32) }), '{broken']) {
-    lock.run(value);
-    await assert.rejects(store.set(ref, 'changed'), (error) => error.code === 'CRED_LOCK_TIMEOUT');
-    assert.equal(await store.get(ref), 'original');
-    assert.equal(db.prepare("SELECT value FROM meta WHERE key='lock'").get().value, value);
+  try {
+    const lock = db.prepare("INSERT INTO meta(key,value) VALUES('lock',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    for (const value of [JSON.stringify({ pid: process.pid, token: 'a'.repeat(32) }), '{broken']) {
+      lock.run(value);
+      await assert.rejects(store.set(ref, 'changed'), (error) => error.code === 'CRED_LOCK_TIMEOUT');
+      assert.equal(await store.get(ref), 'original');
+      assert.equal(db.prepare("SELECT value FROM meta WHERE key='lock'").get().value, value);
+    }
+    db.prepare("DELETE FROM meta WHERE key='lock'").run();
+  } finally {
+    db.close();
   }
-  db.prepare("DELETE FROM meta WHERE key='lock'").run();
-  db.close();
 });
 
 test('missing keyring after database creation never causes regeneration', async (t) => {
   const { unlinkSync } = await import('node:fs');
-  const { directory, store } = await fixture(t);
+  const { directory, store, own } = await fixture(t);
   await store.set(ref, marker);
   await store.close();
   const keyPath = join(directory, 'keyring.json');
   unlinkSync(keyPath);
   const replacement = createCredentialStore({ directory });
+  own(() => replacement.close());
   await assert.rejects(replacement.get(ref), (error) => error.code === 'CRED_KEY_UNAVAILABLE');
   assert.equal(existsSync(keyPath), false);
   await replacement.close();
@@ -314,18 +352,20 @@ test('missing keyring after database creation never causes regeneration', async 
 
 test('POSIX rejects unsafe directory and database modes without repairing them', { skip: process.platform === 'win32' }, async (t) => {
   const { chmodSync, statSync } = await import('node:fs');
-  const { directory, store } = await fixture(t);
+  const { directory, store, own } = await fixture(t);
   await store.set(ref, 'original');
   await store.close();
   const path = join(directory, 'credentials.sqlite');
   chmodSync(path, 0o644);
   const unsafeFile = createCredentialStore({ directory });
+  own(() => unsafeFile.close());
   await assert.rejects(unsafeFile.get(ref), (error) => error.code === 'CRED_STORE_PERMISSIONS');
   assert.equal(statSync(path).mode & 0o777, 0o644);
   await unsafeFile.close();
   chmodSync(path, 0o600);
   chmodSync(directory, 0o755);
   const unsafeDir = createCredentialStore({ directory });
+  own(() => unsafeDir.close());
   await assert.rejects(unsafeDir.get(ref), (error) => error.code === 'CRED_STORE_PERMISSIONS');
   assert.equal(statSync(directory).mode & 0o777, 0o755);
   await unsafeDir.close();

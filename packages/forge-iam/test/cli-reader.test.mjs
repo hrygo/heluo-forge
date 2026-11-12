@@ -153,7 +153,8 @@ test('bridge capability read preserves safe storage error and closes reader', as
 
 
 test('bridge refuses a pending sign-out before contacting Host', async (t) => {
-  const pending = { ...grant, payload: { ...grant.payload, signOutOperation: { state: 'pending' } } };
+  const pending = { ...grant, payload: { ...grant.payload,
+    signOutOperation: { version: 1, state: 'pending', id: Buffer.alloc(32, 2).toString('base64url') } } };
   const f = await fixture(t, { TEST_RECORD: JSON.stringify(pending) });
   let calls = 0;
   const server = createServer((_req, res) => { calls++; res.end(JSON.stringify({ token: 'synthetic-stale' })); });
@@ -162,6 +163,57 @@ test('bridge refuses a pending sign-out before contacting Host', async (t) => {
   f.env.HELUO_FORGE_IAM_URL = `http://127.0.0.1:${server.address().port}`;
   await assert.rejects(f.cli('token'), (error) => error.stdout === '' && error.code !== 0);
   assert.equal(calls, 0);
+});
+
+test('bridge may observe a pending refresh, but only returns its completed current session', async (t) => {
+  const marker = { version: 1, state: 'pending', id: Buffer.alloc(32, 3).toString('base64url'), base: Buffer.alloc(32, 4).toString('base64url') };
+  const before = { kind: 'grant', payload: { ...grant.payload, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
+    accessToken: 'synthetic-old', refreshToken: 'synthetic-old-refresh', refreshOperation: marker } };
+  const completed = { kind: 'grant', payload: { ...before.payload, accessToken: 'synthetic-new', refreshToken: 'synthetic-new-refresh',
+    refreshOperation: { ...marker, state: 'complete' } } };
+  let requests = 0;
+  let hostToken = 'synthetic-new';
+  const server = createServer((_req, res) => {
+    requests++;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ token: hostToken }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const offline = await fixture(t, { TEST_RECORD: JSON.stringify(before) });
+  await assert.rejects(offline.cli('token'), (error) => error.code === 3 && error.stdout === '');
+  assert.equal(requests, 0);
+
+  const success = await fixture(t, { TEST_RECORD: JSON.stringify(before), TEST_RECORD_AFTER: JSON.stringify(completed) });
+  success.env.HELUO_FORGE_IAM_URL = `http://127.0.0.1:${server.address().port}`;
+  assert.equal((await success.cli('token')).stdout, 'synthetic-new\n');
+  assert.equal(requests, 1);
+
+  const missingIdentity = { ...before, payload: { ...before.payload } };
+  delete missingIdentity.payload.sessionInstanceId;
+  const unbound = await fixture(t, { TEST_RECORD: JSON.stringify(missingIdentity) });
+  unbound.env.HELUO_FORGE_IAM_URL = success.env.HELUO_FORGE_IAM_URL;
+  await assert.rejects(unbound.cli('token'), (error) => error.code !== 0 && error.stdout === '');
+  assert.equal(requests, 1);
+
+  for (const [name, latest] of [
+    ['still pending', before],
+    ['different refresh', { ...completed, payload: { ...completed.payload, refreshOperation: { ...completed.payload.refreshOperation, id: Buffer.alloc(32, 8).toString('base64url') } } }],
+    ['different refresh base', { ...completed, payload: { ...completed.payload, refreshOperation: { ...completed.payload.refreshOperation, base: Buffer.alloc(32, 6).toString('base64url') } } }],
+    ['unchanged refresh token', { ...completed, payload: { ...completed.payload, refreshToken: before.payload.refreshToken } }],
+    ['changed session', { ...completed, payload: { ...completed.payload, sessionInstanceId: Buffer.alloc(32, 9).toString('base64url') } }],
+    ['pending sign-out', { ...completed, payload: { ...completed.payload, signOutOperation: { version: 1, state: 'pending', id: Buffer.alloc(32, 2).toString('base64url') } } }],
+  ]) await t.test(name, async (t) => {
+    const f = await fixture(t, { TEST_RECORD: JSON.stringify(before), TEST_RECORD_AFTER: JSON.stringify(latest) });
+    f.env.HELUO_FORGE_IAM_URL = success.env.HELUO_FORGE_IAM_URL;
+    await assert.rejects(f.cli('token'), (error) => error.code !== 0 && error.stdout === '');
+  });
+
+  hostToken = 'synthetic-old';
+  const stale = await fixture(t, { TEST_RECORD: JSON.stringify(before), TEST_RECORD_AFTER: JSON.stringify(completed) });
+  stale.env.HELUO_FORGE_IAM_URL = success.env.HELUO_FORGE_IAM_URL;
+  await assert.rejects(stale.cli('token'), (error) => error.code !== 0 && error.stdout === '');
 });
 
 test('bridge rechecks stored session before returning Host token', async (t) => {
