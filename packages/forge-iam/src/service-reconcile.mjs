@@ -128,6 +128,17 @@ export function createReconciler(env) {
           return ctx.view();
         }
       } else if (marker?.state === 'pending') {
+        const ownFlight = token.ownedPendingFlight(targetStore, targetCredentials, record.grant);
+        if (ownFlight) {
+          // Avoid presenting our own in-progress rotation as a sign-out. Wait
+          // only a bounded time; an unconfirmed operation still fails closed.
+          let timer;
+          const finished = await Promise.race([
+            ownFlight.then(() => true, () => true),
+            new Promise((resolve) => { timer = setTimeout(() => resolve(false), REFRESH_TIMEOUT_MS); }),
+          ]).finally(() => clearTimeout(timer));
+          if (!isCurrent() || finished) return ctx.view();
+        }
         setObservation({ version: marker.version, id: marker.id, base: marker.base,
           identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch: getAuthEpoch(), store: targetStore,
           deadline: now() + REFRESH_TIMEOUT_MS });
@@ -139,6 +150,8 @@ export function createReconciler(env) {
         return ctx.view();
       }
       const previousSubject = ctx.lastGrant?.subject ?? null;
+      const previousExpiry = ctx.lastGrant?.accessExpiresAt ?? null;
+      const previousRefreshExpiry = ctx.lastGrant?.refreshExpiresAt ?? null;
       const previous = `${ctx.state}|${ctx.error}|${previousSubject}`;
       ctx.lastGrant = record.grant;
       grants.own(record.grant, targetStore);
@@ -167,7 +180,9 @@ export function createReconciler(env) {
         token.lastBackgroundRefreshAt = now();
         void resolveToken().catch(() => {});
       }
-      if (previous !== `${ctx.state}|${ctx.error}|${ctx.lastGrant.subject ?? ''}`) ctx.notify();
+      if (previous !== `${ctx.state}|${ctx.error}|${ctx.lastGrant.subject ?? ''}`
+        || previousExpiry !== (ctx.lastGrant.accessExpiresAt ?? null)
+        || previousRefreshExpiry !== (ctx.lastGrant.refreshExpiresAt ?? null)) ctx.notify();
     } catch (cause) {
       if (!isCurrent()) return ctx.view();
       setObservation(null);

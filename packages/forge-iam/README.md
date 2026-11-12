@@ -36,7 +36,7 @@
 | `src/service-grant.mjs` | `metadataCache`、`jwksCache`、`identityProfile`、grant 归属表 | 协议缓存、登录/刷新/回调的绑定与校验、身份投影 |
 | `src/service-model-selection.mjs` | 选型单飞、排队标志、选型代际、选型读写 | 默认模型勘定与其单飞、选型记录的读与写；只经端口反向读网关 |
 | `src/service-gateway.mjs` | 网关凭据摘要、加载时间、加载单飞、网关 epoch | 网关凭据的读取、解析、保存与清除，摘要失效；变更时通知选型 |
-| `src/service-token.mjs` | 刷新单飞及其 store/credentials/issuer/认证描述符、后台刷新退避 | `resolveToken` 与 `getAccessToken` 的完整刷新路径 |
+| `src/service-token.mjs` | 刷新单飞及其 store/credentials/issuer/认证描述符、Host 续期计时器与退避 | `resolveToken` 与 `getAccessToken` 的完整刷新路径 |
 | `src/service-reconcile.mjs` | 无（经端口读写观测标志与发布计数） | 记录到视图的勘定：`syncFromStore`、`hydrate` |
 | `src/service-signin.mjs` | 登录 attempt 及其计时器 | `startSignIn`、回调、取消，含 verifier/nonce 的归属 |
 | `src/service-signout.mjs` | 退出单飞、`signingOut` 标志 | `signOut`、清理、桥接凭据 |
@@ -90,7 +90,7 @@
 - 显式端点齐全时不再强制拉取 `discoveryUrl`；只有 issuer/authorize/token/JWKS 缺项时才用 discovery 补齐。
 - 新取得的 IAM access token 保存在 GrantRecord 与内存，不再写 `ENTERPRISE_ACCESS_TOKEN`；启动也不自动删除已有旧引用。保留不等于阻止消费：若旧配置或其他组件继续解析该引用，可能构成绕行，须在实际执行入口阻断并另定受授权的遗留处理。模型调用侧原基线指向 `ENTERPRISE_STATIC_KEY`；该消费方尚未随本仓库交付，当前没有接线可测。
 - 网关凭据值写入 `ENTERPRISE_STATIC_KEY`，录入人和设备标签写入独立记录 `heluo-iam/gateway-credential`。A/B 选路前，换账号、启动恢复、共享会话同步、回调或取消均不自动删除现存值及元数据；用户仍可显式替换或清除。显式保存发生失败时仍受现有存储实现的失败处理和非原子写入限制。
-- 登录/刷新失败不伪造 ready；刷新请求结果不确定或 `invalid_grant` 时保留 pending、要求重新登录，不再清理记录或返回旧 access token。普通无标记且可刷新的过期会话仍可由 `/view` 轮询触发后台刷新。无需刷新的令牌读取在采用 grant 前复查 provider 实例；读取期间 provider 被替换或撤销时拒绝返回旧令牌。这不覆盖所有状态同步或 provider 生命周期交错，也不证明真实执行门禁。
+- Host 运行时在访问令牌或已知刷新令牌到期前调度续期，复用现有单飞与原子提交；Host 停止、设备休眠或断网期间不能保证续期。续期前的网络检查失败且尚未写入 pending 时，保留仍有效的登录并退避重试；刷新请求结果不确定或 `invalid_grant` 时保留 pending、要求重新登录，不返回旧 access token。普通无标记且可刷新的过期会话仍可由 `/view` 轮询触发后台刷新。无需刷新的令牌读取在采用 grant 前复查 provider 实例；读取期间 provider 被替换或撤销时拒绝返回旧令牌。这不覆盖所有状态同步或 provider 生命周期交错，也不证明真实执行门禁。
 - 局部竞态设计：登录回调写 grant 时，在 `credentials.modifyRecord` 的锁内 mutator 同步复查本进程 attempt、epoch 和到期状态；失效则抛出取消或过期错误，拒绝写入，不能将未写入当成成功。这样针对旧回调等待锁期间本进程取消并完成新登录的时序，避免旧回调进入锁后覆盖新 grant。
 - 回调清理增量实现（#106，仅限本地合成验证）：新回调 grant 使用随机 32 字节 canonical base64url `sessionInstanceId`，刷新 pending/complete 保持不变；该标识仅用于记录匹配，不是认证凭据。旧 V1 无标识仍可读，但不能被回调清理安全归属。回调写入前记住目标 store 和 grant，失败或取消时使用一次 `modifyRecord`，锁内核对标识和固定上下文，仅对自己的记录写入固定、无敏感信息的 `{version: 1, type: 'heluo-iam-session-tombstone'}`（`kind: grant`）；严格墓碑读取与 mutate 视为空，新登录可覆盖，物理记录仍存在。坏记录、无标识或提交结果不确定均按清理未知处理，不得报告成功；只尽力撤销该回调自己的 refresh token。
 - 此机制依赖所有参与者和 provider 提供可靠的同记录跨进程原子锁及提交确认；无此能力或旧客户端混跑仍不安全。写操作异常后仍可能迟到提交，无法仅凭清理或回读自证闭环；远端撤销未验证，不保证多键事务或会话整体线性一致。

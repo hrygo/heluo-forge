@@ -157,11 +157,18 @@ export function isAccessExpired(grant, now = Date.now()) {
   return Number.isNaN(expires) || expires <= now;
 }
 
+/** The earlier known usable deadline is the last chance to renew the session. */
+export function renewalDeadline(grant, now = Date.now()) {
+  const access = Date.parse(grant?.accessExpiresAt);
+  const refresh = Date.parse(grant?.refreshExpiresAt);
+  return Number.isFinite(refresh) && refresh > now ? Math.min(access, refresh) : access;
+}
+
 export function shouldRefresh(grant, now = Date.now(), skewSeconds = 60) {
   if (!grant?.accessToken || !grant?.accessExpiresAt) return true;
-  const expires = Date.parse(grant.accessExpiresAt);
-  if (Number.isNaN(expires)) return true;
-  return expires - skewSeconds * 1000 <= now;
+  const deadline = renewalDeadline(grant, now);
+  if (!Number.isFinite(deadline)) return true;
+  return deadline - skewSeconds * 1000 <= now;
 }
 
 export function isRefreshUsable(grant, now = Date.now()) {

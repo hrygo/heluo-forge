@@ -82,6 +82,10 @@ test('expiry and refresh decisions use the configured skew', () => {
   assert.equal(isAccessExpired(value, Date.parse('2030-01-01T00:06:00.000Z')), true);
   assert.equal(isRefreshUsable(value, now), true);
   assert.equal(isRefreshUsable(grant({ refreshExpiresAt: '2029-12-31T00:00:00.000Z' }), now), false);
+  assert.equal(shouldRefresh(grant({ refreshExpiresAt: '2030-01-01T00:00:30.000Z' }), now, 60), true);
+  // An already-expired refresh token cannot be renewed; a still-valid access
+  // token remains usable until its own refresh window.
+  assert.equal(shouldRefresh(grant({ refreshExpiresAt: '2029-12-31T23:59:00.000Z' }), now, 60), false);
 });
 
 test('a grant without an access token is treated as expired and in need of refresh', () => {

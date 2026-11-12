@@ -68,6 +68,7 @@ export function createIamService(rawConfig, options = {}) {
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
     scheduleReconcile: () => selection.schedule(),
+    scheduleRenewal: () => token.scheduleRenewal(),
     clearPendingObservation: () => { observedPending = null; },
     onFailReset: () => {
       observedPending = null;
@@ -391,6 +392,7 @@ clearGatewayCredential: gateway.clearCredential,
       consumptionWitness?.dispose();
       if (ctx.disposed) return;
       ctx.disposed = true;
+      token.cancelRenewal();
       selection.clearQueue();
       sessionEpoch += 1;
       authEpoch += 1;

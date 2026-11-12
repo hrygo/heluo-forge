@@ -3,8 +3,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { credentialReadError } from './error-contract.mjs';
 import { randomToken, refreshTokens, verifyIdToken } from './oidc.mjs';
-import { isAccessExpired, isRefreshUsable, shouldRefresh } from './record.mjs';
-import { grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
+import { isAccessExpired, isRefreshUsable, renewalDeadline, shouldRefresh } from './record.mjs';
+import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
 
 /**
  * The single-flight refresh: one promise per provider, and every caller that
@@ -25,7 +25,62 @@ export function createTokenResolver(env) {
   let refreshPromiseCredentials = null;
   let refreshPromiseIssuer = null;
   let refreshPromiseAuthentication = null;
+  let refreshPromisePending = null;
   let lastBackgroundRefreshAt = 0;
+  let renewal = null;
+
+  function cancelRenewal() {
+    if (renewal) clearTimeout(renewal.timer);
+    renewal = null;
+  }
+
+  // Only the exact pending record this Host is currently writing can be
+  // joined. A different process's pending record remains unconfirmed.
+  function ownedPendingFlight(store, credentials, grant) {
+    return refreshPromise && refreshPromisePending?.store === store
+      && refreshPromisePending.credentials === credentials
+      && isDeepStrictEqual(refreshPromisePending.grant, grant) ? refreshPromise : null;
+  }
+
+  // The Host owns the timer; the callback enters the existing single-flight
+  // resolver and therefore uses the same provider and rotation checks.
+  function scheduleRenewal({ retry = false } = {}) {
+    const grant = ctx.lastGrant;
+    const currentTime = now();
+    const expiry = renewalDeadline(grant, currentTime);
+    if (ctx.disposed || ctx.state !== 'ready' || isSigningOut() || !grant
+      || grant.refreshOperation?.state === 'pending' || !isRefreshUsable(grant, currentTime)
+      || !Number.isFinite(expiry) || expiry <= currentTime) {
+      cancelRenewal();
+      return;
+    }
+    const auth = getAuthEpoch();
+    const session = getSessionEpoch();
+    const identity = grantIdentity(grant);
+    const remaining = expiry - currentTime;
+    const lead = Math.min(config.refreshSkewSeconds * 1000, Math.floor(remaining / 2));
+    const delay = retry ? Math.min(AUTO_REFRESH_BACKOFF_MS, Math.max(1000, Math.floor(remaining / 2))) : remaining - lead;
+    if (renewal && renewal.expiry === expiry && renewal.auth === auth && renewal.session === session
+      && isDeepStrictEqual(renewal.identity, identity) && renewal.runAt <= currentTime + delay) return;
+    cancelRenewal();
+    if (delay >= remaining && retry) return;
+    const scheduled = { expiry, auth, session, identity, runAt: currentTime + delay, timer: null };
+    renewal = scheduled;
+    scheduled.timer = setTimeout(() => {
+      if (renewal !== scheduled) return;
+      renewal = null;
+      const current = ctx.lastGrant;
+      if (ctx.disposed || ctx.state !== 'ready' || isSigningOut() || !current
+        || getAuthEpoch() !== auth || getSessionEpoch() !== session
+        || renewalDeadline(current, now()) !== expiry
+        || !isDeepStrictEqual(grantIdentity(current), identity)) return;
+      if (now() < scheduled.runAt) { scheduleRenewal({ retry }); return; }
+      void resolveToken().catch((cause) => {
+        if (cause?.code === 'IAM_UNREACHABLE') scheduleRenewal({ retry: true });
+      });
+    }, Math.min(delay, 2_147_483_647));
+    scheduled.timer.unref?.();
+  }
 
     async function resolveToken() {
     ctx.assertExclusive();
@@ -97,6 +152,7 @@ export function createTokenResolver(env) {
     const grantAtStart = ctx.lastGrant;
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
     let refreshing = false;
+    let refreshWriteAttempted = false;
     let operationGrant = null;
     let authentication;
     const alive = () => !ctx.disposed && !isSigningOut() && epoch === getSessionEpoch()
@@ -245,8 +301,11 @@ export function createTokenResolver(env) {
         checkAlive();
         const operationId = randomToken(32);
         const operation = { version: 1, state: 'pending', id: operationId, base: refreshBaseId(initial, operationId) };
+        refreshPromisePending = { store: targetStore, credentials: targetCredentials,
+          grant: { ...initial, refreshOperation: operation } };
         let claimed = false;
         let claimedGrant = null;
+        refreshWriteAttempted = true;
         const claim = await targetStore.mutate((current) => {
           checkAlive();
           if (!current) return undefined;
@@ -335,6 +394,13 @@ export function createTokenResolver(env) {
       } catch (cause) {
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         try { checkAlive(); } catch (currentCause) { cause = currentCause; }
+        // An unreachable metadata/JWKS endpoint before any pending write did
+        // not consume the refresh token. Keep the still-valid adopted session;
+        // the caller gets an error and the Host may retry this preflight.
+        if (!refreshWriteAttempted && cause?.code === 'IAM_UNREACHABLE'
+          && ctx.state === 'ready' && ctx.lastGrant && !isAccessExpired(ctx.lastGrant, now())
+          && isDeepStrictEqual(ctx.lastGrant, operationGrant)
+          && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials) throw cause;
         if (['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_CHANGED', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)) {
           return rejectSession(cause.code);
         }
@@ -349,6 +415,7 @@ export function createTokenResolver(env) {
       refreshPromiseStore = null;
       refreshPromiseCredentials = null;
       refreshPromiseIssuer = null;
+      refreshPromisePending = null;
     });
     refreshPromise = flight;
     return useSharedRefresh(false);
@@ -362,6 +429,9 @@ export function createTokenResolver(env) {
   return {
     resolveToken,
     getAccessToken,
+    scheduleRenewal,
+    cancelRenewal,
+    ownedPendingFlight,
     get inFlight() { return refreshPromise; },
     get lastBackgroundRefreshAt() { return lastBackgroundRefreshAt; },
     set lastBackgroundRefreshAt(next) { lastBackgroundRefreshAt = next; },

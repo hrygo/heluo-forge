@@ -15,7 +15,8 @@ import { isRefreshUsable, summarizeGrant } from './record.mjs';
  *
  * Ordering is part of the contract: `view()` reads the gateway summary before
  * asking the managed-model runtime, `notify()` calls the reconciliation trigger
- * after every listener, and `fail()` notifies once per branch.
+ * after every listener, then updates the renewal schedule; `fail()` notifies
+ * once per branch.
  */
 export function createServiceState(env) {
   const {
@@ -26,6 +27,7 @@ export function createServiceState(env) {
     getGatewaySummary,
     getMetadataIssuer,
     scheduleReconcile,
+    scheduleRenewal,
     clearPendingObservation,
     onFailReset,
   } = env;
@@ -99,6 +101,7 @@ export function createServiceState(env) {
       }
     }
     scheduleReconcile();
+    scheduleRenewal?.();
     return snapshot;
   }
 

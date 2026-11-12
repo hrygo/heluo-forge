@@ -192,7 +192,9 @@ export function createServiceGrant(env) {
       ...(previous && Object.hasOwn(previous, 'sessionInstanceId') ? { sessionInstanceId: previous.sessionInstanceId } : {}),
       accessToken: token.accessToken,
       accessExpiresAt: addSeconds(now(), token.expiresIn),
-      ...(token.refreshExpiresIn ? { refreshExpiresAt: addSeconds(now(), token.refreshExpiresIn) } : previous?.refreshExpiresAt ? { refreshExpiresAt: previous.refreshExpiresAt } : {}),
+      // A rotated refresh token has its own lifetime. If the response omits it,
+      // the old token's deadline says nothing about the new one.
+      ...(token.refreshExpiresIn ? { refreshExpiresAt: addSeconds(now(), token.refreshExpiresIn) } : {}),
       ...(token.idToken ? { idToken: token.idToken } : previous?.idToken ? { idToken: previous.idToken } : {}),
     };
   }

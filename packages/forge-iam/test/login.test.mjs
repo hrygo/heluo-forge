@@ -994,7 +994,7 @@ test('a rotated signing key is retried once instead of failing the login', async
   assert.equal(jwksCalls, 2);
 });
 
-test('a prefetch failure before a refresh claim does not send a POST or serve the old access token', async (t) => {
+for (const expired of [false, true]) test(`a prefetch failure before a refresh claim rejects without serving the ${expired ? 'expired' : 'valid'} access token`, async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
@@ -1005,8 +1005,10 @@ test('a prefetch failure before a refresh claim does not send a POST or serve th
   const beforeRequests = mock.counts.token;
   let prefetchFailures = 0;
   let refreshPosts = 0;
+  let clock = Date.now();
   const gated = createIamService(configFor(mock, { refreshSkewSeconds: 7200 }), {
     credentials,
+    now: () => clock,
     fetch: async (url, init) => {
       if (String(url).endsWith('/token') && init?.method === 'POST') refreshPosts += 1;
       if (String(url).endsWith('/jwks')) {
@@ -1017,13 +1019,15 @@ test('a prefetch failure before a refresh claim does not send a POST or serve th
     },
   });
   await gated.hydrate();
-  await assert.rejects(gated.resolveToken(), { code: 'IAM_REAUTH_REQUIRED' });
+  if (expired) clock = Date.parse(before.payload.accessExpiresAt) + 1;
+  await assert.rejects(gated.resolveToken(), { code: expired ? 'IAM_REAUTH_REQUIRED' : 'IAM_UNREACHABLE' });
   assert.equal(prefetchFailures, 1);
   assert.equal(refreshPosts, 0, 'prefetch failure precedes any refresh POST attempt');
   assert.equal(mock.counts.token, beforeRequests, 'prefetch failure precedes the refresh POST');
   assert.deepEqual(await credentials.readRecord('heluo-iam/session'), before);
   assert.equal(before.payload.refreshOperation, undefined);
-  assert.notEqual(gated.getView().state, 'ready');
+  if (expired) assert.notEqual(gated.getView().state, 'ready');
+  else assert.equal(gated.getView().state, 'ready');
 });
 
 test('a lost refresh response leaves pending and cannot resend the token request', async (t) => {
