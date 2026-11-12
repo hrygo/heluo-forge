@@ -45,3 +45,11 @@ test('fetches current PR body with read-only API for fork and Dependabot events'
   await assert.rejects(checkPullRequest({ event: { number: 42 }, ref: 'refs/pull/43/merge', repository: 'owner/repo', apiUrl: 'https://api.github.com', token: 'test', fetcher }));
   await assert.rejects(checkPullRequest({ event: { number: 42 }, ref: 'refs/pull/42/merge', repository: 'owner/repo', apiUrl: 'https://api.github.com', token: 'test', fetcher: async () => ({ ok: false, status: 403 }) }));
 });
+
+test('ignores list-fenced examples and respects comment and fence order', async () => {
+  assert.equal(await validateIssueReference('- ```markdown\n  Closes #12\n  ```', issue), false);
+  assert.equal(await validateIssueReference('1. ~~~html\n   <!-- unfinished\n   ~~~\n\nPart of #12', issue), true);
+  assert.equal(await validateIssueReference('<!--\n```\n-->\nCloses #12', issue), true);
+  assert.equal(await validateIssueReference('~~~ <!--\nexample\n~~~\nPart of #12', issue), true);
+  assert.equal(await validateIssueReference('- ```\n  Closes #12\n  ```\nPart of #12', issue), true);
+});

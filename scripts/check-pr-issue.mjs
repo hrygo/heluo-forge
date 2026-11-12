@@ -2,15 +2,35 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 export async function validateIssueReference(body, lookup) {
-  const visible = (body ?? '').replace(/<!--[\s\S]*?(?:-->|$)/gu, '');
   const numbers = [];
   let fence = null;
-  for (const line of visible.split(/\r?\n/u)) {
-    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+  let inComment = false;
+  for (const rawLine of (body ?? '').split(/\r?\n/u)) {
+    // A comment marker inside a fenced example is literal text.
     if (fence) {
-      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && /^\s*$/u.test(marker[2])) fence = null;
+      const close = /^ *(`{3,}|~{3,})[ \t]*$/u.exec(rawLine);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
       continue;
     }
+    const opening = !inComment && /^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?(`{3,}|~{3,})[^\n]*$/u.exec(rawLine);
+    if (opening) { fence = opening[1]; continue; }
+    let line = '';
+    let remaining = rawLine;
+    while (remaining) {
+      if (inComment) {
+        const end = remaining.indexOf('-->');
+        if (end < 0) break;
+        inComment = false;
+        remaining = remaining.slice(end + 3);
+      } else {
+        const start = remaining.indexOf('<!--');
+        if (start < 0) { line += remaining; break; }
+        line += remaining.slice(0, start);
+        remaining = remaining.slice(start + 4);
+        inComment = true;
+      }
+    }
+    const marker = /^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?(`{3,}|~{3,})[^\n]*$/u.exec(line);
     if (marker) { fence = marker[1]; continue; }
     const match = /^ {0,3}(?:[-*] +)?(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?|part of)[ \t]*:?[ \t]+#([1-9]\d*)[ \t]*$/iu.exec(line);
     if (match) numbers.push(match[1]);
