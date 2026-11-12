@@ -280,4 +280,4 @@ HELUO_FORGE_STORE_DIRECTORY='<隔离目录>/dsh/credentials' \
 
 **验证边界**：CLI 与 HTTP 的合成测试不代表真实 DSH 宿主或企业 IAM 已联调。相关设计说明见[开发者指南](<developer-guide.md>)。
 
-**入口**：本手册的常驻页是 [issue #147](https://github.com/hrygo/heluo-forge/issues/147)（置顶、不关闭）。与本文不符之处请在该页留言，附命令、退出码、平台与版本。
+**入口**：本手册的常驻页是 [issue #260](https://github.com/hrygo/heluo-forge/issues/260)（置顶、不关闭）。与本文不符之处请在该页留言，附命令、退出码、平台与版本。

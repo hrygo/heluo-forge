@@ -114,4 +114,4 @@ node scripts/probe/run-iam-managed-models-probe.mjs
 
 如需复现未提交的源码修改，先通过项目正常流程形成可供测试的提交或单独准备可审阅快照；本指南不会擅自打包其他会话的未提交改动。
 
-**入口**：[issue #147](https://github.com/hrygo/heluo-forge/issues/147) 提供凭据接入与本地 UAT 的常驻导航。与本指南不符之处请在该页留言，附命令、平台与版本。
+**入口**：[issue #260](https://github.com/hrygo/heluo-forge/issues/260) 提供凭据接入与本地 UAT 的常驻导航。与本指南不符之处请在该页留言，附命令、平台与版本。
