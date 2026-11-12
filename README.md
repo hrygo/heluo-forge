@@ -69,21 +69,50 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 
 以下路线图展示用户体验和当前进展，**不是发布日期或先后顺序承诺**。实际交付范围以[需求与场景基线](docs/requirements/requirements-baseline.md#2-范围边界唯一真源)及后续确认结果为准。
 
-| 方向 | 希望带来的体验 | 当前进展 |
-|---|---|---|
-| **研发工作** | 在个人工作环境中衔接需求、Issue、代码、验证和交付。 | DevOps、Gitee 等扩展已有部分本地实现；企业 CLI 与目标终端仍需验证。[实现与验证入口](docs/design/README.md#22-实现与验证入口) |
-| **企业身份与治理** | 使用企业身份和模型，按既有权限与策略访问工作工具。 | 身份、凭据、策略及企业组合已有部分本地实现；企业 IAM、网关与目标环境需分别验证。 |
-| **AIHUB 能力门户** | 在一个门户浏览和获取企业 MCP、Skills、CLI 和插件。 | 产品方向已明确；各资源来源、用户权限与 DSH 接入按企业实际能力验证。 |
-| **Nacos AI 注册中心** | 注册、发现 MCP 服务，注册和获取 Skills。 | Nacos 提供相应注册中心能力；企业版本、权限及实际接入需分别核验。 |
-| **插件发现与分发** | 通过熟悉的 DSH 入口发现和安装企业提供的扩展。 | 原生市场、AIHUB 索引与企业制品源的接入方向已有设计；实际企业接入待验证。[市场设计](docs/design/plugins/forge-market.md) |
-| **企业技能** | 发现适用的企业 Skill，按需安装并在工作中使用。 | 通过企业 Nacos 发现、安装及原生加载 Skill 为待评估方向。[企业技能跟踪](https://github.com/hrygo/heluo-forge/issues/97) |
-| **智能邮件** | 查找邮件、整理信息和准备草稿，按人工批准规则处理 Agent 草稿发送。 | dsh-mail 将邮件入口带入 DSH；实际使用取决于安装和邮箱授权。[邮件接入跟踪](https://github.com/hrygo/heluo-forge/issues/155) |
-| **个人记忆** | 员工选择记忆的采集和使用方式，让助理更好地延续工作。 | Hindsight 与 DSH 接入为产品方案草案；身份、记忆访问与数据处理边界待设计和核验。[个人记忆跟踪](https://github.com/hrygo/heluo-forge/issues/264) |
-| **企业 IM 聊天** | 在 DSH 中与同事沟通，并对主动选择的聊天文字生成个人总结。 | [企业聊天方案](docs/requirements/enterprise-collaboration-chat-proposal.md)为草案，优先探索现有企业 IM 互通；接口和权限待核验。 |
-| **IM 远程交办** | 在企业 IM 中向本人桌面助理交办任务，查看进展、确认请求和结果。 | [跨端任务协同](https://github.com/hrygo/heluo-forge/issues/240)为待确认方向；身份绑定、桌面接入和任务反馈待验证。 |
-| **OA 办公** | 在授权范围内查看办公信息，并请助理协助阅读和整理。 | [OA 接入](https://github.com/hrygo/heluo-forge/issues/241)为候选方向；首期场景、接口与权限待确认。 |
-| **专家智能体** | 发现并选择合适的专家，向其委派任务并使用结果。 | [专家产品需求](docs/requirements/delegra-experts-prd.md)为草案；Delegra、员工授权与宿主接入待确认或验证。 |
-| **目标环境与试点** | 在 Windows、macOS 及麒麟、统信 UOS 等国产 Linux 环境中获得连贯、可控的工作体验。 | 安装、企业接入与实际使用需在各目标环境分别验证；试点以验收结果为前提。 |
+### 研发与平台能力
+
+- **研发工作**：在个人工作环境中衔接需求、Issue、代码、验证和交付。<br>
+  进展：DevOps、Gitee 等扩展已有部分本地实现；企业 CLI 与目标终端仍需验证。[实现与验证入口](docs/design/README.md#22-实现与验证入口)
+
+- **企业身份与治理**：使用企业身份和模型，按既有权限与策略访问工作工具。<br>
+  进展：身份、凭据、策略及企业组合已有部分本地实现；企业 IAM、网关与目标环境需分别验证。
+
+- **AIHUB 能力门户**：在一个门户浏览和获取企业 MCP、Skills、CLI 和插件。<br>
+  进展：产品方向已明确；各资源来源、用户权限与 DSH 接入按企业实际能力验证。
+
+- **Nacos AI 注册中心**：注册、发现 MCP 服务，注册和获取 Skills。<br>
+  进展：Nacos 提供相应注册中心能力；企业版本、权限及实际接入需分别核验。
+
+- **插件发现与分发**：通过熟悉的 DSH 入口发现和安装企业提供的扩展。<br>
+  进展：原生市场、AIHUB 索引与企业制品源的接入方向已有设计；实际企业接入待验证。[市场设计](docs/design/plugins/forge-market.md)
+
+- **企业技能**：发现适用的企业 Skill，按需安装并在工作中使用。<br>
+  进展：通过企业 Nacos 发现、安装及原生加载 Skill 为待评估方向。[企业技能跟踪](https://github.com/hrygo/heluo-forge/issues/97)
+
+### 个人助理与协作
+
+- **智能邮件**：查找邮件、整理信息和准备草稿，按人工批准规则处理 Agent 草稿发送。<br>
+  进展：dsh-mail 将邮件入口带入 DSH；实际使用取决于安装和邮箱授权。[邮件接入跟踪](https://github.com/hrygo/heluo-forge/issues/155)
+
+- **个人记忆**：员工选择记忆的采集和使用方式，让助理更好地延续工作。<br>
+  进展：Hindsight 与 DSH 接入为产品方案草案；身份、记忆访问与数据处理边界待设计和核验。[个人记忆跟踪](https://github.com/hrygo/heluo-forge/issues/264)
+
+- **企业 IM 聊天**：在 DSH 中与同事沟通，并对主动选择的聊天文字生成个人总结。<br>
+  进展：[企业聊天方案](docs/requirements/enterprise-collaboration-chat-proposal.md)为草案，优先探索现有企业 IM 互通；接口和权限待核验。
+
+- **IM 远程交办**：在企业 IM 中向本人桌面助理交办任务，查看进展、确认请求和结果。<br>
+  进展：[跨端任务协同](https://github.com/hrygo/heluo-forge/issues/240)为待确认方向；身份绑定、桌面接入和任务反馈待验证。
+
+- **OA 办公**：在授权范围内查看办公信息，并请助理协助阅读和整理。<br>
+  进展：[OA 接入](https://github.com/hrygo/heluo-forge/issues/241)为候选方向；首期场景、接口与权限待确认。
+
+- **专家智能体**：发现并选择合适的专家，向其委派任务并使用结果。<br>
+  进展：[专家产品需求](docs/requirements/delegra-experts-prd.md)为草案；Delegra、员工授权与宿主接入待确认或验证。
+
+### 目标环境与落地
+
+- **目标环境与试点**：在 Windows、macOS 及麒麟、统信 UOS 等国产 Linux 环境中获得连贯、可控的工作体验。<br>
+  进展：安装、企业接入与实际使用需在各目标环境分别验证；试点以验收结果为前提。
 
 ## 当前进展
 
