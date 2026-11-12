@@ -483,7 +483,7 @@ export interface IamView {
 
 - **单一映射**：内部键 `user_id`/`user_name`/`work_no` 默认映射上表三声明（配置 `userInfoEndpoint` 即生效）；宿主可用 `profileFields` 覆盖，显式传空对象表示不请求、不投影。不维护猜测性回退链。
 - **严格投影**：只取命中映射的字符串值，去空白、限长；`sub`、`authTime` 等其余声明整体丢弃。
-- **失败降级**：端点不可达、401/5xx、超时（5 秒上限）、JSON 非法或字段缺失均只丢弃投影，不影响登录就绪；投影随 grant 失效（登出、刷新换票、会话失效）即时清空。
+- **失败降级**：端点不可达、401/5xx、超时（5 秒上限）、JSON 非法或字段缺失均只丢弃投影，不影响登录就绪；投影随会话失效（登出、会话失效、重新登录）即时清空。访问令牌刷新**不**清空投影：刷新保留同一 `grantIdentity`（同一会话同一主体），identity 保持稳定，刷新路径亦不重新请求 UserInfo。
 - **令牌传递**：`userInfoTokenTransport` 配置 `header`（默认，标准 OIDC `Authorization: Bearer`）或 `query`（企业 IAM profile 端点实测要求 `?access_token=`）；令牌经 URL 传递时严禁进入日志与诊断数据。
 - **PII 边界**：投影仅进入视图 `identity` 与 `GET /api/forge-iam/session` 的 `identity` 字段；审计主体保持 `iss`/`sub`（或其哈希），姓名与工号不进入审计、模型执行请求与日志。
 

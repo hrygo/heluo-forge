@@ -310,10 +310,12 @@ clearGatewayCredential: gateway.clearCredential,
       return { issuer: ctx.lastGrant.issuer, subject: ctx.lastGrant.subject };
     },
 
-    /** Projected UserInfo for future display; empty until IAM confirms fields. */
+    /** Projected UserInfo for display; hidden whenever the owning session is gone. */
     getIdentityProfile() {
-      // A profile is only valid for the grant that produced it: every path that
-      // clears or replaces lastGrant hides it, without touching each call site.
+      // The profile is bound to the session that produced it: the identity
+      // comparison hides it on sign-out, session loss, and re-login, while a
+      // token refresh preserves grantIdentity and keeps it visible — without
+      // touching each call site.
       if (!ctx.lastGrant || !grants.identityProfile) return undefined;
       if (!isDeepStrictEqual(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
       return { ...grants.identityProfile.profile };
