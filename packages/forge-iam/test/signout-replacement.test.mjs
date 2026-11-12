@@ -167,7 +167,7 @@ for (const legacy of [false, true]) {
   test(`sign-out cannot delete a later ${legacy ? 'legacy' : 'identified'} login after its locked operation`, async (t) => {
     const credentials = new MemoryCredentials();
     const store = createGrantStore(credentials);
-    const old = grant('old-user', 1, legacy);
+    const old = grant('old-user', 1);
     const replacement = grant('new-user', 2, legacy);
     await store.write(old);
     const originalModify = credentials.modifyRecord.bind(credentials);
@@ -187,14 +187,15 @@ for (const legacy of [false, true]) {
     } });
     t.after(() => service.dispose());
     await service.signOut();
-    assert.equal((await store.read()).grant?.subject, 'new-user');
+    assert.deepEqual(await credentials.readRecord(GRANT_KEY), { kind: 'grant', payload: replacement });
+    assert.equal((await store.read()).ok, !legacy);
     assert.deepEqual(revoked, ['old-user-access']);
   });
 
   test(`sign-out does not revoke a ${legacy ? 'legacy' : 'identified'} replacement before it acquires the lock`, async (t) => {
     const credentials = new MemoryCredentials();
     const store = createGrantStore(credentials);
-    await store.write(grant('old-user', 1, legacy));
+    await store.write(grant('old-user', 1));
     let enter;
     let release;
     const entered = new Promise((resolve) => { enter = resolve; });
@@ -214,12 +215,15 @@ for (const legacy of [false, true]) {
     t.after(() => { release(); service.dispose(); });
     const signOut = service.signOut();
     await Promise.race([entered, signOut.then(() => { throw new Error('sign-out completed before the gate'); })]);
-    await store.write(grant('new-user', 2, legacy));
+    const replacement = grant('new-user', 2, legacy);
+    if (legacy) await credentials.modifyRecord(GRANT_KEY, () => ({ kind: 'grant', payload: replacement }));
+    else await store.write(replacement);
     release();
     const result = await signOut;
     assert.equal(result.revocation, 'unknown');
     assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
-    assert.equal((await store.read()).grant?.subject, 'new-user');
+    assert.deepEqual(await credentials.readRecord(GRANT_KEY), { kind: 'grant', payload: replacement });
+    assert.equal((await store.read()).ok, !legacy);
     assert.deepEqual(revoked, []);
   });
 }

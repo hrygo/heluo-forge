@@ -20,7 +20,7 @@ const config = {
   clientId: 'fixture', redirectUri: 'http://127.0.0.1:4567/iam/callback',
 };
 const grant = { kind: 'grant', payload: {
-  version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+  version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
   refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
   obtainedAt: '2026-01-01T00:00:00.000Z', accessExpiresAt: '2099-01-01T00:00:00.000Z',
 } };
@@ -188,27 +188,29 @@ test('Host and CLI share a custom store with a separate sibling key directory', 
   }
 });
 
-test('Host and CLI continue to use a legacy SQLite keyring in place', async (t) => {
+test('Host and CLI reject a legacy SQLite keyring without changing either file', async (t) => {
   const { directory, provider: original, own } = await fixture(t);
   await original.close();
   await rename(join(`${directory}.keys`, 'keyring.json'), join(directory, 'keyring.json'));
   await rmdir(`${directory}.keys`);
+  const database = await readFile(join(directory, 'credentials.sqlite'));
+  const keyring = await readFile(join(directory, 'keyring.json'));
 
   const backend = createCredentialStore({ directory });
   const provider = createKeychainProvider(backend);
   const adapter = createJointStore(backend, namespacePrefixes());
   own(() => provider.close());
-  const app = host(provider, adapter);
-  own(() => app.dispose());
-  const server = createRouteServer(own, app.handler);
-  const url = await listen(server);
-  await waitForCapability(provider);
-  const cli = startCli(own, directory, url);
+  const service = serviceFor(provider, adapter);
+  own(() => service.dispose());
+  assert.notEqual((await service.hydrate()).state, 'ready');
+  await assert.rejects(provider.readRecord('heluo-iam/session'), { code: 'CRED_LEGACY_STORE' });
+  const cli = startCli(own, directory, 'http://127.0.0.1:9');
   const result = await cli.closed;
   if (result.error) throw result.error;
-  assert.equal(result.code, 0, cli.stderr());
-  assert.equal(cli.stdout(), 'synthetic-access\n');
-  assert.equal(cli.stderr(), '');
+  assert.notEqual(result.code, 0, cli.stderr());
+  assert.equal(cli.stdout(), '');
+  assert.deepEqual(await readFile(join(directory, 'credentials.sqlite')), database);
+  assert.deepEqual(await readFile(join(directory, 'keyring.json')), keyring);
   assert.equal((await stat(join(directory, 'keyring.json'))).isFile(), true);
   await assert.rejects(stat(`${directory}.keys`), { code: 'ENOENT' });
 });
@@ -227,13 +229,15 @@ test('Host rejects a same-kid key mismatch before writing bridge capability', as
   bytes[0] ^= 1;
   wrong.keys.k2 = bytes.toString('base64');
   await writeFile(keyPath, JSON.stringify(wrong), { mode: 0o600 });
-  // The existing k1 session is readable; the failure must come from the k2
-  // binding check on the attempted write, not from an earlier session read.
-  assert.deepEqual(await provider.readRecord('heluo-iam/session'), grant);
+  // The active key binding is authenticated before any session is read.
+  await assert.rejects(provider.readRecord('heluo-iam/session'), { code: 'CRED_DECRYPT_FAILED' });
 
   const failures = [];
   const observed = Object.freeze({
-    snapshot: (...args) => adapter.snapshot(...args),
+    async snapshot(...args) {
+      try { return await adapter.snapshot(...args); }
+      catch (error) { failures.push(error); throw error; }
+    },
     async compareAndSwap(...args) {
       try { return await adapter.compareAndSwap(...args); }
       catch (error) { failures.push(error); throw error; }
@@ -246,7 +250,7 @@ test('Host rejects a same-kid key mismatch before writing bridge capability', as
     assert.doesNotMatch(error.message, /synthetic-access|synthetic-refresh/u);
     return true;
   });
-  assert.ok(failures.length > 0, 'the real joint write must reach the storage gate');
+  assert.ok(failures.length > 0, 'the joint store must reject the wrong key binding');
   assert.ok(failures.every((error) => error.code === 'CRED_DECRYPT_FAILED'));
 
   await writeFile(keyPath, original, { mode: 0o600 });
@@ -309,7 +313,7 @@ test('CLI waits through the same pending refresh and outputs only the rotated Ho
   assert.equal(cli.stderr(), '');
 });
 
-test('legacy V1 pending refresh returns the rotated token through real Host and CLI', { timeout: 10_000 }, async (t) => {
+test('identified V1 pending refresh returns the rotated token through real Host and CLI', { timeout: 10_000 }, async (t) => {
   const { directory, provider, adapter, own } = await fixture(t);
   const app = host(provider, adapter);
   own(() => app.dispose());
@@ -362,7 +366,7 @@ test('legacy V1 pending refresh returns the rotated token through real Host and 
   assert.equal(cli.stderr(), '');
 });
 
-for (const resource of ['https://gateway.corp.example', null]) test(`legacy V1 Host refresh rejects changed identity after removing resource ${String(resource)}`, { timeout: 10_000 }, async (t) => {
+for (const resource of ['https://gateway.corp.example', null]) test(`identified V1 Host refresh rejects changed identity after removing resource ${String(resource)}`, { timeout: 10_000 }, async (t) => {
   const { directory, provider, adapter, own } = await fixture(t);
   const initial = { ...grant.payload, resource, accessExpiresAt: '2020-01-01T00:00:00.000Z' };
 

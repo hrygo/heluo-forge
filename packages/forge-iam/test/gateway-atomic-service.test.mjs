@@ -6,7 +6,7 @@ import { createIamService } from '../src/service.mjs';
 import { createIamRoutes } from '../src/routes.mjs';
 import { IamError } from '../src/errors.mjs';
 import { createGrantStore, GATEWAY_REF } from '../src/store.mjs';
-import { createAtomicGatewayFixture, gatewayAtomicOptions, seedLegacyGateway } from './support/atomic-gateway.mjs';
+import { createAtomicGatewayFixture, gatewayAtomicOptions, seedGateway, seedLegacyGateway } from './support/atomic-gateway.mjs';
 import { mountPanel } from './support/client-panel.mjs';
 
 const now = Date.parse('2030-01-01T00:00:00.000Z');
@@ -26,7 +26,7 @@ const errorStatus = {
 async function setup(t, { capability = true, grantAtomic = false, signedIn = true, options = {}, fixture = createAtomicGatewayFixture() } = {}) {
   const { credentials } = fixture;
   if (signedIn) await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, clientId: config.clientId, subject: 'synthetic-subject',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, clientId: config.clientId, subject: 'synthetic-subject',
     accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh', scope: 'openid',
     obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: new Date(now + 3600000).toISOString(),
   });
@@ -90,11 +90,11 @@ test('a capability bound to another credentials object cannot enable gateway wri
   assert.equal(other.adapter.commits, 0);
 });
 
-test('V1 gateway data remains readable and immutable even with the exact joint capability', async (t) => {
+test('V1 gateway data is unavailable and immutable even with the exact joint capability', async (t) => {
   const f = await setup(t);
   seedLegacyGateway(f.credentials, { value: input.key, ownerSubject: 'synthetic-subject', enteredAt: new Date(now).toISOString() });
   const before = f.pair();
-  assert.equal((await f.service.loadGatewayCredential({ force: true })).state, 'configured');
+  assert.equal((await f.service.loadGatewayCredential({ force: true })).state, 'invalid');
   for (const operation of [() => f.service.saveGatewayCredential(input), () => f.service.clearGatewayCredential()]) {
     await assert.rejects(operation(), { code: 'IAM_GATEWAY_LEGACY_READ_ONLY' });
   }
@@ -256,7 +256,7 @@ test('Host model credential read requires a current grant and matching account; 
 test('Host credential read does not adopt a different account or an orphan key', async t => {
   const f = await setup(t, { grantAtomic: true });
   await f.service.hydrate();
-  seedLegacyGateway(f.credentials, { value: input.key, ownerSubject: 'another-person', enteredAt: new Date(now).toISOString() });
+  seedGateway(f.credentials, { value: input.key, ownerSubject: 'another-person', enteredAt: new Date(now).toISOString() });
   await assert.rejects(f.service.resolveGatewayCredential(), { code: 'IAM_GATEWAY_CREDENTIAL_REQUIRED' });
 });
 

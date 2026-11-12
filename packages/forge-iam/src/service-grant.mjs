@@ -189,7 +189,7 @@ export function createServiceGrant(env) {
       scope: token.scope ?? previous?.scope ?? config.scopes.join(' '),
       ...(config.gatewayResource ? { resource: config.gatewayResource } : {}),
       obtainedAt: previous?.obtainedAt ?? obtainedAt,
-      ...(previous && Object.hasOwn(previous, 'sessionInstanceId') ? { sessionInstanceId: previous.sessionInstanceId } : {}),
+      sessionInstanceId: previous.sessionInstanceId,
       accessToken: token.accessToken,
       accessExpiresAt: addSeconds(now(), token.expiresIn),
       // A rotated refresh token has its own lifetime. If the response omits it,

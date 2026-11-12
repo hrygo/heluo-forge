@@ -274,14 +274,14 @@ test('expiry is checked synchronously, and no clock rollback revives the old wit
   assert.equal(h.source.capture(), undefined);
 });
 
-test('old V1 without session identity may restore existing public semantics but gets no witness or migration', async (t) => {
+test('V1 without session identity is not restored and is left unchanged', async (t) => {
   const h = await harness(t); await signIn(h);
   const record = h.credentials.records.get('heluo-iam/session');
   delete record.payload.sessionInstanceId;
   const before = structuredClone(record);
   const restored = createIamService(h.config, h.options); t.after(() => restored.dispose());
   await restored.hydrate();
-  assert.equal(restored.getView().state, 'ready');
+  assert.equal(restored.getView().state, 'error');
   assert.equal(h.source.capture(), undefined);
   assert.deepEqual(h.credentials.records.get('heluo-iam/session'), before);
 });

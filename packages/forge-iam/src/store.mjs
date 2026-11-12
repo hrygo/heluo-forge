@@ -15,7 +15,6 @@ const GATEWAY_RECORD_KIND = 'grant';
 export const LEGACY_TOKEN_REF = 'ENTERPRISE_ACCESS_TOKEN';
 
 const GATEWAY_VERSION = 2;
-const GATEWAY_LEGACY_VERSION = 1;
 const WRITE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const valueDigest = (value) => createHash('sha256').update(value).digest('hex');
 const gatewayTombstone = () => ({
@@ -103,6 +102,9 @@ export function createGrantStore(credentials, options = {}) {
         }
         if (current !== undefined && current !== null && current.kind !== 'grant') {
           throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing IAM record is not a grant');
+        }
+        if (current != null && !isTombstone(current) && !parseGrant(current.payload).ok) {
+          throw new StoreError('IAM_GRANT_INVALID', 'existing IAM grant cannot be replaced');
         }
         return { kind: 'grant', payload: validation.value };
       });
@@ -295,7 +297,7 @@ function parseGatewayCredential(payload) {
     return { ok: false, errors: ['gateway credential must be an object'] };
   }
   const errors = [];
-  if (![GATEWAY_LEGACY_VERSION, GATEWAY_VERSION].includes(payload.version)) errors.push('unsupported gateway credential version');
+  if (payload.version !== GATEWAY_VERSION) errors.push('unsupported gateway credential version');
   for (const field of ['ownerSubject', 'enteredAt']) {
     if (!isNonEmptyString(payload[field])) errors.push(`gateway credential ${field} must be a non-empty string`);
   }
@@ -440,11 +442,22 @@ export function createGatewayCredentialStore(credentials, options = {}) {
   return {
     key, ref, read,
     async resolve(credential) {
+      if (credential == null) return undefined;
+      let expected;
+      try { expected = structuredClone(credential); } catch { return { invalid: true }; }
+      if (!parseGatewayCredential(expected).ok) return { invalid: true };
+      const current = await read();
+      if (!current.ok || !current.credential || !isDeepStrictEqual(current.credential, expected)) return { invalid: true };
       const resolved = await credentials.resolve(ref);
-      if (credential?.version === GATEWAY_VERSION && (!isNonEmptyString(resolved?.value)
-        || valueDigest(resolved.value) !== credential.valueDigest)) return { invalid: true };
-      return resolved && isNonEmptyString(resolved.value)
-        ? { value: resolved.value, source: resolved.source ?? null } : undefined;
+      const value = resolved?.value;
+      const source = resolved?.source ?? null;
+      if (!isNonEmptyString(value) || valueDigest(value) !== expected.valueDigest) return { invalid: true };
+      const confirmed = await read();
+      try {
+        if (!confirmed.ok || !confirmed.credential || !isDeepStrictEqual(confirmed.credential, expected)
+          || !isDeepStrictEqual(credential, expected)) return { invalid: true };
+      } catch { return { invalid: true }; }
+      return { value, source };
     },
     async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry, baseURL }, { guard } = {}) {
       if (!isNonEmptyString(value)) {

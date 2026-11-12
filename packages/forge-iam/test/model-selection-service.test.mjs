@@ -14,7 +14,7 @@ const config = {
 async function setup(t, { subject = 'synthetic-subject', expiresAt = new Date(now + 3600000).toISOString() } = {}) {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, clientId: config.clientId, subject,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, clientId: config.clientId, subject,
     accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh', scope: 'openid',
     obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: expiresAt,
   });
@@ -40,7 +40,7 @@ test('another person’s stored selection reads as unsaved and is never rewritte
   const before = structuredClone(f.credentials.records.get(MODEL_SELECTION_KEY));
   // Swap the bound grant to a different person under the same provider.
   await createGrantStore(f.credentials).write({
-    version: 1, issuer: config.issuer, clientId: config.clientId, subject: 'synthetic-other',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, clientId: config.clientId, subject: 'synthetic-other',
     accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh', scope: 'openid',
     obtainedAt: new Date(now - 60000).toISOString(), accessExpiresAt: new Date(now + 3600000).toISOString(),
   });

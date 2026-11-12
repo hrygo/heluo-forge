@@ -25,7 +25,7 @@ test('a Host adopts a completed rotation from another Host without a view poll',
   const oldDeadline = now + 4000;
   const store = createGrantStore(credentials);
   await store.write({
-    version: 1, issuer, subject: 'E1001', clientId: 'dsh', scope: 'openid',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer, subject: 'E1001', clientId: 'dsh', scope: 'openid',
     refreshToken: 'refresh-a', accessToken: 'access-a',
     obtainedAt: new Date(now).toISOString(),
     accessExpiresAt: new Date(oldDeadline).toISOString(),
@@ -87,7 +87,7 @@ for (const change of ['base', 'identity']) {
     const deadline = now + 2500;
     const store = createGrantStore(credentials);
     await store.write({
-      version: 1, issuer, subject: 'E1001', clientId: 'dsh', scope: 'openid',
+      version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer, subject: 'E1001', clientId: 'dsh', scope: 'openid',
       refreshToken: 'refresh-a', accessToken: 'access-a',
       obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(deadline).toISOString(),
       refreshExpiresAt: new Date(now + 60_000).toISOString(),
@@ -143,7 +143,7 @@ test('a completed rotation cannot overwrite a newer local session during client 
   const deadline = now + 3000;
   const store = createGrantStore(credentials);
   const original = {
-    version: 2, issuer, subject: 'E1001', clientId: 'dsh', scope: 'openid',
+    version: 2, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer, subject: 'E1001', clientId: 'dsh', scope: 'openid',
     refreshToken: 'refresh-a', accessToken: 'access-a',
     obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(deadline).toISOString(),
     refreshExpiresAt: new Date(now + 60_000).toISOString(),

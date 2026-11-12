@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.40.2 |
+| 版本 | V0.41.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -39,7 +39,7 @@
 
 ### 2.1 跨模块设计
 
-网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V1.0.3 评审稿；采用路线 B 双因子协同，与应用凭据构成两类运行态，非运行时二选一回落；适配层 V1 由 `forge-iam` 受控模型运行时承载，`forge-gateway` 保留配置与抽离目标；上游规范未冻结）。
+网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V2.0.0 评审稿；采用路线 B 双因子协同，与应用凭据构成两类运行态，非运行时二选一回落；适配层 V1 由 `forge-iam` 受控模型运行时承载，`forge-gateway` 保留配置与抽离目标；上游规范未冻结）。
 
 DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识（UA）方案设计](client-identification.md)（CORP-DSH-DESIGN-015，V0.2.0 草案；需求方决定使用 DSH 默认 UA，由网关按关键字匹配，不改写 UA；候选关键字、网关能力和代理链路待确认）。
 
@@ -55,8 +55,8 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 
 | 模块 | 当前实现 | 验证边界 |
 |---|---|---|
-| [forge-iam](../../packages/forge-iam/README.md) | Host + Client 开发骨架；内置 SQLite 组合绑定单记录信任与网关联合 adapter，刷新和退出以 pending 状态及条件提交处理；旧网关格式只读保留，不自动迁移 | 本机合成测试不证明目标平台耐久提交、企业 IAM/UAG、真实授权或工具入口；未知 provider 不获写入信任，退出及远端撤销未知不报告成功。墓碑不等于物理删除；Client 走 interim route |
-| [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | SQLite 值级 AES-256-GCM、版本化 keyring、跨进程逻辑锁与单记录/双键条件提交；内存后端仅供测试；旧存储保留且不读取 | 2026-11-12 在 macOS arm64、Node 24.21.0 使用临时合成数据通过凭据包离线测试、CLI 重开与子进程中断测试；Windows、麒麟、Electron 及企业环境未实机验证，不代表生产准入 |
+| [forge-iam](../../packages/forge-iam/README.md) | Host + Client 开发骨架；内置 SQLite 组合绑定单记录信任与网关联合 adapter，刷新和退出以 pending 状态及条件提交处理；旧网关 V1 不被采用，凭据保留且不覆盖，异常记录不自动修复 | 本机合成测试不证明目标平台耐久提交、企业 IAM/UAG、真实授权或工具入口；未知 provider 不获写入信任，退出及远端撤销未知不报告成功。墓碑不等于物理删除；Client 走 interim route |
+| [forge-credentials-keychain](../../packages/forge-credentials-keychain/README.md) | SQLite 值级 AES-256-GCM、版本化 keyring、跨进程逻辑锁与单记录/双键条件提交；内存后端仅供测试；旧布局及未绑定旧库保留且拒绝访问 | 2026-11-12 在 macOS arm64、Node 24.21.0 使用临时合成数据通过凭据包离线测试、CLI 重开与子进程中断测试；Windows、麒麟、Electron 及企业环境未实机验证，不代表生产准入 |
 | [forge-market](../../packages/forge-market/README.md) | 历史参考包：十个工具、Host 路由、面板、归档安装链路；不属轻量模式目标 | 离线测试保留；不得作为原生索引链路的实现证据 |
 | [market-index](../../services/market-index/README.md) | 只读 format-1 索引校验器；无服务、无生成器 | 13 项离线测试通过；未验证 AIHUB 真实索引或企业安装 |
 | [forge-policy](../../packages/forge-policy/README.md) | Host 策略门禁骨架：受控动作目录、`tools.guard` 单调硬拒绝、`tools/pre-execute` 待确认动作、受保护路径与 `$DSH_HOME` 硬拒绝、命令面同一判定、决策审计前置；10 个源文件 | 2026-10-26 `node --test packages/forge-policy/test/*.test.mjs` 141 例通过、无跳过；10 源文件原生覆盖率（行/分支/函数）96.01%/90.70%/94.44%；必要审计另有 65 例聚焦测试及 rc.2 实际组件独立复核 6 项通过；目标 rc.3 尚未复跑（D1 写动作登记负测：12 条登记动作默认全部被拒、执行体零调用；批准台账负测：`enabled` 的写/确认动作没有有效台账条目就拒绝挂载、过期条目不足以开放、台账动作不匹配不算批准、只读不受约束，见设计 §5.1.2）；宿主探针（`scripts/probe/run-host-probe.mjs`）已实测 guard 拒绝零副作用、异步 pre-execute、子 Agent 作用域 guard 继承与父视图 `restrict` 不继承、门禁合成查询与受保护路径拒绝。模型门禁探针（`scripts/probe/model-guard-probe.mjs`）已实测**模型自决调用不会绕开门禁**：`unregistered-action`/`action-disabled`/`target-required` 三种模式各以会话记录中的 `tool/call`+`tool/result` 为据、副作用为零，并以不挂策略的正向对照证明模型确实会调用；同时暴露目录只认调用参数 `target`、真实工具（`bash` 的 `command`、`fs` 的 `path`）无法放行的缺口（见设计 §9.2.2）。沙箱叠加顺序探针（`scripts/probe/sandbox-order-probe.mjs`）已实测**策略门禁先于沙箱执行器判定**（策略拒绝归因不带沙箱信号、目标在沙箱允许区内也不产生副作用；越界写由操作系统级拒绝），见设计 §9.2.3。委托路径面（`delegate` 模式：父模型调用 `subagent`、子 Agent 的 9 次 bash 调用全部被拦、零副作用）亦已实测，**委托不能绕开门禁**。**未完成/未测**：默认企业工具自动绑定、运行时批准范围复验、可信 principal/真实会话恢复与分叉承接仍须单独整改验收；企业环境、双端实机及目标 rc.3 未验，不以纯函数或旧探针泛化 |
@@ -80,8 +80,8 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | 刷新与重启恢复 | `dual-process-refresh`、`refresh-complete-validation`、`service-singleflight-regression` 测试 | pending/complete 协议依赖受信原子后端；内置 SQLite 组合已接入，本机离线验证不代表目标平台与企业联调通过 |
 | 条件退出及远端撤销结果 | `signout-pending`、`signout-replacement`、`routes` 及 [RP 行为保护](<../../packages/forge-iam/test/rp-logout-issuer-context.test.mjs>) | 清理未知不等于退出成功；墓碑不是物理删除，成功撤销响应不证明后代授权已终结。合法 RP 配置要求显式退出地址且优先于 discovery；迟到 metadata 不替换该地址，六项内存回归保护现有行为，不是漏洞修复 |
 | 账户恢复、取消及退出交错 | `client-signout-behavior` 测试 | 真实 Client 源码的模拟渲染与受控交付；不证明跨入口/跨进程排序 |
-| 网关凭据读写与归属 | [未受信拒绝](<../../packages/forge-iam/test/gateway-atomic-policy.test.mjs>)、[联合条件提交](<../../packages/forge-iam/test/gateway-atomic-transactions.test.mjs>)、[服务集成](<../../packages/forge-iam/test/gateway-atomic-service.test.mjs>)、[SQLite 存储](<../../packages/forge-credentials-keychain/test/sqlite-store.test.mjs>)及 `gateway-provider-context`、`store`、`service` | 内置 SQLite adapter 提供双键条件提交；门禁不满足时保存/清除拒绝，V1、orphan 和不一致 pair 只读不迁移。离线测试覆盖快照 CAS、guard、墓碑和失败回滚；不证明跨进程 grant 授权、目标机耐久提交或真实调用 |
-| discovery-only 的旧会话绑定 | [issuer-context-policy](<../../packages/forge-iam/test/issuer-context-policy.test.mjs>)、[discovery-issuer-outbound](<../../packages/forge-iam/test/discovery-issuer-outbound.test.mjs>) | 不为恢复补齐未知 issuer 而启动探测；无明确 pin 或本实例已验证上下文时拒绝采用旧身份、AT 及主体，保留记录。显式 pin 匹配的旧 V1 仍可读；异步操作与共享刷新固定 issuer，错误出口不发送旧 RT |
+| 网关凭据读写与归属 | [未受信拒绝](<../../packages/forge-iam/test/gateway-atomic-policy.test.mjs>)、[联合条件提交](<../../packages/forge-iam/test/gateway-atomic-transactions.test.mjs>)、[服务集成](<../../packages/forge-iam/test/gateway-atomic-service.test.mjs>)、[SQLite 存储](<../../packages/forge-credentials-keychain/test/sqlite-store.test.mjs>)及 `gateway-provider-context`、`store`、`service` | 内置 SQLite adapter 提供双键条件提交；门禁不满足时保存/清除拒绝，旧网关 V1 不被采用，凭据保留且不覆盖；orphan 和不一致 pair 保留且不自动迁移。离线测试覆盖快照 CAS、guard、墓碑和失败回滚；不证明跨进程 grant 授权、目标机耐久提交或真实调用 |
+| discovery-only 的旧会话绑定 | [issuer-context-policy](<../../packages/forge-iam/test/issuer-context-policy.test.mjs>)、[discovery-issuer-outbound](<../../packages/forge-iam/test/discovery-issuer-outbound.test.mjs>) | 不为恢复补齐未知 issuer 而启动探测；无明确 pin 或本实例已验证上下文时拒绝采用旧身份、AT 及主体，保留记录。带 `sessionInstanceId` 且与显式 pin 匹配的公共 V1 可读；缺少该标识的会话拒绝采用；异步操作与共享刷新固定 issuer，错误出口不发送旧 RT |
 | 用户自助信息 | [client-clipboard-behavior](<../../packages/forge-iam/test/client-clipboard-behavior.test.mjs>)、Client 与随包指南测试 | 账户页可主动复制已取得的登录链接和最小白名单诊断；不额外联网、不导出身份或凭据。异步结果受页面代际/链接身份/生命周期保护；不代替真实浏览器权限或原生剪贴板验收 |
 | 模型只读编排与隔离适配 | [实际 Host 编排](<../../packages/forge-iam/test/model-selection-host.test.mjs>)、`model-gate`、`model-selection` 及 [outcome 回归](<../../packages/forge-iam/test/model-selection-outcome.test.mjs>) | 真实 apply/服务加模拟 SDK 验证严格只读、保存 getter 零访问、原选择不变、单飞与解绑、异步旧结果失效及模型错误不清 OIDC grant。只复用纯判定，不应用切换；记录式 sink 写入保持独立，异常用 written:null 标示未知。SDK无明确空态/条件保存；另有隔离执行组合证据见下表，真实人员/用途授权仍未接线 |
 | 企业模型运行时与动态目录 | [managed-models](<../../packages/forge-iam/test/managed-models.test.mjs>)、[组合探针](<../../scripts/probe/run-iam-managed-models-probe.mjs>) | 企业账号页配置网关地址与个人 Key，`${baseURL}/models` 动态目录接入公开适配器和执行门禁；七行禁用与回灌检查覆盖通用模型与自由配置页。探针只用模拟 IAM／UAG 与合成内存存储：生产认证与存储、真实企业授权、工具入口和双端 GUI 未验 |

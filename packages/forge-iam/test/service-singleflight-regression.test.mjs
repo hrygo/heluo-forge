@@ -26,7 +26,7 @@ function createService(credentials, options = {}) {
 
 async function seed(credentials) {
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, subject: 'synthetic', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic', clientId: config.clientId,
     resource: config.gatewayResource, scope: 'openid', obtainedAt: new Date().toISOString(),
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access',
     accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),

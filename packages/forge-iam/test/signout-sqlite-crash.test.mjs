@@ -10,7 +10,7 @@ import { accessTokenOf } from '../src/cli-session.mjs';
 import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 
 const grant = {
-  version: 1, issuer: 'https://iam.corp.example', subject: 'synthetic-old-user', clientId: 'test',
+  version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: 'https://iam.corp.example', subject: 'synthetic-old-user', clientId: 'test',
   refreshToken: 'synthetic-old-refresh', accessToken: 'synthetic-old-access', scope: 'openid',
   obtainedAt: '2026-01-01T00:00:00.000Z', accessExpiresAt: '2099-01-01T00:00:00.000Z',
 };

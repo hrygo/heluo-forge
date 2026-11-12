@@ -16,6 +16,6 @@ export function createCredentialStore({ directory, readOnly = false, lockTimeout
   const keys = createStoreKeyProvider(keyPaths);
   const cipher = createAesGcmCipher(keys);
   const backend = createSqliteBackend({ directory: keyPaths.directory, readOnly, keyProvider: keys, lockTimeoutMs, keyPaths });
-  const integrity = createKeyAuthentication({ backend, cipher, keys });
+  const integrity = createKeyAuthentication({ backend, keys });
   return createEncryptedAdapter({ backend, cipher, keys, integrity, kind: 'sqlite', durable: true });
 }

@@ -65,7 +65,7 @@ function trustedStore(credentials) {
 
 async function seed(credentials, { subject = 'E1001', expired = true, accessInMs } = {}) {
   const now = Date.now();
-  const grant = { version: 1, issuer, subject, clientId: 'dsh', scope: 'openid',
+  const grant = { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer, subject, clientId: 'dsh', scope: 'openid',
     refreshToken: `refresh-${subject}`, accessToken: `access-${subject}`,
     obtainedAt: new Date(now - 60_000).toISOString(),
     accessExpiresAt: new Date(now + (accessInMs ?? (expired ? -1000 : 120_000))).toISOString(),

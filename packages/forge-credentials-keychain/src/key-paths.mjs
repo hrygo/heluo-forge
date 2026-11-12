@@ -76,8 +76,8 @@ export function createKeyPaths(input) {
     }
     const old = data && stat(legacy);
     const current = keys && stat(separate);
-    if (old && current) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
-    return old ? legacy : current ? separate : undefined;
+    if (old) throw error('CRED_LEGACY_STORE', 'legacy credential keyring exists');
+    return current ? separate : undefined;
   }
 
   function prepareNew() {

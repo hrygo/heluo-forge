@@ -50,13 +50,12 @@ test('only literal true from a synchronous verifier authorizes exact instance', 
   }
 });
 
-test('untrusted existing non-refreshing V1 access remains readable', async () => {
+test('untrusted existing identified V1 access remains readable', async () => {
   const credentials = fake();
-  const { sessionInstanceId, ...legacy } = grant;
-  await createGrantStore(credentials).write(legacy);
+  await createGrantStore(credentials).write(grant);
   const service = createIamService({ ...config, refreshSkewSeconds: 0 }, { credentials });
   assert.equal((await service.hydrate()).state, 'ready');
-  assert.equal(await service.resolveToken(), legacy.accessToken);
+  assert.equal(await service.resolveToken(), grant.accessToken);
 });
 
 test('provider replacement after read prevents refresh claim or post', async () => {

@@ -19,7 +19,7 @@ const config = {
 
 function grant() {
   const now = Date.now();
-  return { version: 1, issuer, subject: 'synthetic-user', clientId: config.clientId,
+  return { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer, subject: 'synthetic-user', clientId: config.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + 4000).toISOString(),
     refreshExpiresAt: new Date(now + 20_000).toISOString() };

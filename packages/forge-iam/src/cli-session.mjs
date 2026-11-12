@@ -21,8 +21,7 @@ export function classifySessionRecord(record) {
 
 function canBridge(session) {
   if (session.state === 'active') return true;
-  return session.state === 'pending' && session.operation === 'refresh'
-    && (typeof session.grant.sessionInstanceId === 'string' || session.grant.version === 1);
+  return session.state === 'pending' && session.operation === 'refresh';
 }
 
 /** A pending refresh can only be consumed through the Host, never offline. */
@@ -48,17 +47,10 @@ export function isSameBridgeSession(before, after) {
   const left = previous.grant;
   const right = current.grant;
   if (!isDeepStrictEqual(grantIdentity(left), grantIdentity(right))) return false;
-  if (typeof left.sessionInstanceId === 'string') {
-    return previous.state !== 'pending' || completesObservedRefresh(left, right);
-  }
-
-  // Legacy V1 has no session instance. Associate a changed record with the
-  // observed refresh; this does not establish protection against ABA or writers
-  // with the same storage permissions.
-  if (left.version !== 1 || right.refreshOperation?.state !== 'complete'
-    || left.refreshToken === right.refreshToken) return false;
   if (previous.state === 'pending') return completesObservedRefresh(left, right);
-  return right.refreshOperation.base === refreshBaseId(left, right.refreshOperation.id);
+  if (left.refreshToken === right.refreshToken) return true;
+  return right.refreshOperation?.state === 'complete'
+    && right.refreshOperation.base === refreshBaseId(left, right.refreshOperation.id);
 }
 
 /** Project a validated grant without returning tokens. */

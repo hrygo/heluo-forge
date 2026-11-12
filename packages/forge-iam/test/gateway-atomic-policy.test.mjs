@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { createGatewayCredentialStore, GATEWAY_RECORD_KEY, GATEWAY_REF } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
@@ -69,15 +70,17 @@ for (const operation of ['save', 'clear']) {
   });
 }
 
-test('reading a V1 legacy record remains possible and does not stamp or migrate it', async () => {
+test('legacy gateway metadata and values cannot be read or replaced', async () => {
   const f = fixture();
   const store = createGatewayCredentialStore(f.credentials);
   const result = await store.read();
-  assert.equal(result.ok, true);
-  assert.equal(result.credential.version, 1);
-  assert.equal(result.credential.ownerSubject, 'synthetic-user');
-  assert.equal((await store.resolve()).value === originalValue, true);
-  assert.equal(Object.hasOwn(result.credential, 'writeOperationId'), false);
+  assert.equal(result.ok, false);
+  const legacy = (await f.credentials.readRecord(GATEWAY_RECORD_KEY)).payload;
+  const forged = { ...legacy, version: 2, writeOperationId: '123e4567-e89b-42d3-a456-426614174000',
+    valueDigest: createHash('sha256').update(originalValue).digest('hex') };
+  for (const supplied of [undefined, null, {}, legacy, forged]) {
+    assert.equal((await store.resolve(supplied))?.value, undefined);
+  }
   assert.deepEqual(f.mutations, []);
   assert.equal(f.unchanged(), true);
 });

@@ -100,11 +100,11 @@ export async function currentToken() {
 
 `whoami` 能读取存储时返回 0，未登录、已过期或记录状态为错误也是 0；判断登录态请同时查看 JSON 里的 `status` 和 `signedIn`。存储缺失、数据库或密钥文件损坏或无法访问时返回 4，stdout 为空，错误在 stderr。
 
-`CRED_STORE_PATH_CONFLICT` 表示存在多个候选存储目录。核对后，为 Host 的 `storeDirectory` 与 CLI 的 `HELUO_FORGE_STORE_DIRECTORY` 明确选择同一目录；此选择不会自动合并或迁移现有数据。
+Host 的 `storeDirectory` 与 CLI 的 `HELUO_FORGE_STORE_DIRECTORY` 应指向同一目录。Linux 默认使用当前 XDG 目录，不回退旧默认目录，也不自动合并或迁移数据。
 
 另一个坑：`auth token` 失败时 **stdout 是空的**，错误在 stderr。所以不要用 stdout 非空来判断成功——看退出码。
 
-设置 `HELUO_FORGE_IAM_URL` 后，CLI 通过本机 Host 获取令牌；Host 核验 issuer 信任上下文，遇到正在进行的刷新时等待该操作，CLI 只接受回读后确认属于同一会话、同一次刷新且与当前存储一致的令牌。无 `sessionInstanceId` 的旧 V1 可通过刷新操作标记或完整原记录绑定核验，不迁移存储。退出进行中、结果未确认或回读不匹配时不返回令牌。未设置 Host 地址时，CLI 不等待刷新，也不返回刷新中的旧令牌。
+设置 `HELUO_FORGE_IAM_URL` 后，CLI 通过本机 Host 获取令牌；Host 核验 issuer 信任上下文，遇到正在进行的刷新时等待该操作，CLI 只接受回读后确认属于同一会话、同一次刷新且与当前存储一致的令牌。缺少 `sessionInstanceId` 的会话不被采用。退出进行中、结果未确认或回读不匹配时不返回令牌。未设置 Host 地址时，CLI 不等待刷新，也不返回刷新中的旧令牌。
 
 ### 3.2 你的工具跑在 DSH 里（插件/同源页面）→ 用 HTTP
 
@@ -120,7 +120,7 @@ curl -s -X POST http://127.0.0.1:49196/api/forge-iam/token \
   -H 'x-forge-iam-request: 1'
 ```
 
-CLI 与插件读取相同的 SQLite 值级加密存储，目录由凭据包统一解析；隔离测试可设置 `HELUO_FORGE_STORE_DIRECTORY`，与插件的 `storeDirectory` 对应。以该目录为 `D`，新存储的数据库在 `D/credentials.sqlite`，密钥在同级 `D.keys/keyring.json`，不需要单独配置密钥目录。已有 SQLite 的 `D/keyring.json` 继续原地使用，不自动迁移；两处 keyring 同时存在或已有数据库缺失密钥时拒绝使用。读取不会创建存储或刷新令牌；旧 `credentials.json` 和 `credentials.key` 不读取、不迁移。停用相关进程后的备份恢复、权限边界及目标平台实测状态见[凭据包说明](../../forge-credentials-keychain/README.md)。
+CLI 与插件读取相同的 SQLite 值级加密存储，目录由凭据包统一解析；隔离测试可设置 `HELUO_FORGE_STORE_DIRECTORY`，与插件的 `storeDirectory` 对应。以该目录为 `D`，新存储的数据库在 `D/credentials.sqlite`，密钥在同级 `D.keys/keyring.json`，不需要单独配置密钥目录。发现旧位置 `D/keyring.json`、已有数据库缺失密钥或密钥绑定时拒绝使用，保留原物且不自动迁移、绑定或重建。读取不会创建存储或刷新令牌；旧 `credentials.json` 和 `credentials.key` 不读取、不迁移。停用相关进程后的备份恢复、权限边界及目标平台实测状态见[凭据包说明](../../forge-credentials-keychain/README.md)。
 
 两点说明：
 
@@ -193,7 +193,7 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `HELUO_FORGE_STORE_DIRECTORY` | 平台用户目录 | 指向与 Host 相同的存储目录；密钥目录由此确定，支持原有 SQLite 同目录 keyring |
+| `HELUO_FORGE_STORE_DIRECTORY` | 平台用户目录 | 指向与 Host 相同的存储目录；密钥目录由此确定，旧同目录 keyring 不兼容 |
 | `HELUO_FORGE_IAM_URL` | 未设置 | 使用 `127.0.0.1` 或 `[::1]` 的 HTTP(S) 地址连接 Host 桥；不跟随重定向 |
 | `HELUO_FORGE_KEYCHAIN_SERVICE` | `heluo-forge` | 凭据命名空间的 service |
 | `HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX` | `iam` | 凭据命名空间的账号前缀 |
@@ -206,7 +206,7 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 | `IAM_REAUTH_REQUIRED` | 退出码 3 / HTTP 401 | 令牌过期，需重新登录 |
 | `IAM_INVALID_GRANT` | 退出码 3 / HTTP 401 | 会话记录无效或退出结果未确认，需重新登录 |
 | `IAM_CREDENTIALS_UNAVAILABLE` | 退出码 4 / HTTP 503 | 凭据后端不可用或 CLI 会话回读核验失败 |
-| `CRED_STORE_PATH_CONFLICT` | 退出码 4 | 多个候选凭据存储目录同时存在 |
+| `CRED_STORE_PATH_CONFLICT` | 退出码 4 | 存储目录位于 Git 工作区内、与其他目录重叠或存在用途冲突 |
 | `IAM_BRIDGE_UNAUTHORIZED` | HTTP 401 | 桥能力值不对 |
 | `IAM_BRIDGE_FORBIDDEN` | HTTP 403 | 非本机来源 |
 | `IAM_REQUEST_HEADER_REQUIRED` | HTTP 403 | 缺 `x-forge-iam-request: 1` |

@@ -82,7 +82,8 @@ test('CLI reopens the same sqlite session in a fresh process without changing it
   own(dispose);
   const credentials = ctx.provided.get('credentials');
   await credentials.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: {
-    version: 1, clientId: 'fixture', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 1).toString('base64url'),
+    clientId: 'fixture', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z',
     subject: 'E1001', issuer: 'https://iam.corp.example', refreshToken: 'synthetic-refresh',
     accessToken: 'synthetic-access-token', accessExpiresAt: '2099-01-01T00:00:00.000Z',
   } }));

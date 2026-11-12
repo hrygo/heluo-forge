@@ -5,7 +5,7 @@ import { createIamService } from './support/trusted-service.mjs';
 import { createIamService as createRawIamService } from '../src/service.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { createGrantStore } from '../src/store.mjs';
-import { seedLegacyGateway } from './support/atomic-gateway.mjs';
+import { seedGateway } from './support/atomic-gateway.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 
@@ -69,6 +69,25 @@ test('authorization-code + PKCE completes over HTTP without opt-in and stores on
   assert.equal(record.payload.idToken, undefined);
   // V1 no longer derives a model credential from the IAM access token.
   assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+});
+
+test('a login callback cannot overwrite a legacy session written during authorization', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), { credentials });
+  t.after(() => service.dispose());
+  const { location } = await authorize(service);
+  const legacy = { kind: 'grant', payload: {
+    version: 1, issuer: mock.issuer, clientId: mock.clientId, subject: 'old-user',
+    scope: 'openid', obtainedAt: '2030-01-01T00:00:00.000Z', refreshToken: 'old-refresh',
+    accessToken: 'old-access', accessExpiresAt: '2099-01-01T00:00:00.000Z',
+  } };
+  await credentials.modifyRecord('heluo-iam/session', () => legacy);
+  await assert.rejects(service.handleCallback(location));
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), legacy);
+  assert.notEqual(service.getView().state, 'ready');
+  assert.equal(mock.counts.refresh, 0);
 });
 
 test('resolveToken refreshes a near-expiry access token and rotates the refresh token', async (t) => {
@@ -482,7 +501,7 @@ test('callback preserves another account’s gateway value and metadata', async 
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
   const value = `uag-${'a'.repeat(32)}`;
-  seedLegacyGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
+  seedGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
   const before = structuredClone(await credentials.readRecord('heluo-iam/gateway-credential'));
   const service = createIamService(configFor(mock), { credentials });
   const { location } = await authorize(service);
@@ -508,7 +527,7 @@ test('cancel during gateway read preserves its value and metadata and discards t
   }
   const credentials = new DelayedGatewayCredentials();
   const value = `uag-${'b'.repeat(32)}`;
-  seedLegacyGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
+  seedGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
   const before = structuredClone(credentials.records.get('heluo-iam/gateway-credential'));
   const service = createIamService(configFor(mock), { credentials });
   const { location } = await authorize(service);

@@ -3,7 +3,7 @@ import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstat
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { initialKeyBinding } from './key-auth.mjs';
+import { initialKeyBinding, validateKeyBinding } from './key-auth.mjs';
 import { assertOutsideRepository, createKeyPaths } from './key-paths.mjs';
 
 const error = (code, message) => Object.assign(new Error(message), { code });
@@ -67,6 +67,12 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     try { const result = fn(); db.exec('COMMIT'); return result; }
     catch (e) { try { db.exec('ROLLBACK'); } catch {} throw e; }
   }
+  function validateBinding() {
+    const active = meta('active');
+    if (typeof active !== 'string' || !keyProvider.byId(active)) throw error('CRED_KEY_UNAVAILABLE', 'credential key is unavailable');
+    const used = db.prepare('SELECT DISTINCT kid FROM secret').all().map((row) => row.kid);
+    validateKeyBinding(meta('key_auth'), active, used, keyProvider);
+  }
   function open(create = false) {
     // Admitted operations may still need to open or retry while close drains them.
     if (closed) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
@@ -75,10 +81,16 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     const keyPresent = keyExists();
     if (db) {
       if (!keyPresent) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
+      validateBinding();
       return true;
     }
     for (const legacy of ['credentials.json', 'credentials.key']) {
-      if (existsSync(join(directory, legacy))) throw error('CRED_LEGACY_STORE', 'legacy credential store exists');
+      try { lstatSync(join(directory, legacy)); }
+      catch (cause) {
+        if (cause.code === 'ENOENT') continue;
+        throw error(cause.code, 'legacy credential store could not be inspected');
+      }
+      throw error('CRED_LEGACY_STORE', 'legacy credential store exists');
     }
     if (!existsSync(directory)) {
       if (keyPresent) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
@@ -115,8 +127,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
       } else {
         if (db.prepare('PRAGMA user_version').get().user_version !== 1) throw error('CRED_STORE_UNAVAILABLE', 'unknown credential store format');
         db.prepare('SELECT id,kind,owner,envelope,kid,revision,updated_at FROM secret LIMIT 0').all();
-        const active = meta('active');
-        if (typeof active !== 'string' || !keyProvider.byId(active)) throw error('CRED_KEY_UNAVAILABLE', 'credential key is unavailable');
+        validateBinding();
       }
     } catch (e) { if (db) { try { db.close(); } catch {} db = undefined; } throw e; }
     return true;

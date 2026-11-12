@@ -15,6 +15,7 @@ const now = Date.parse('2030-01-01T00:00:00.000Z');
 function grant(overrides = {}) {
   return {
     version: GRANT_VERSION,
+    sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
     issuer: 'https://iam.corp.example',
     subject: 'E1001',
     clientId: 'dsh-desktop',
@@ -65,10 +66,13 @@ test('parseGrant accepts JSON and rejects corrupt payloads', () => {
   assert.match(broken.errors[0], /JSON/);
 });
 
-test('session instance id is optional for legacy grants but canonical 32-byte base64url when present', () => {
+test('session instance id is required and canonical 32-byte base64url', () => {
   assert.equal(parseGrant(grant()).ok, true);
   const valid = Buffer.alloc(32, 7).toString('base64url');
   assert.equal(parseGrant(grant({ sessionInstanceId: valid })).ok, true);
+  const withoutId = grant();
+  delete withoutId.sessionInstanceId;
+  assert.equal(parseGrant(withoutId).ok, false);
   for (const id of [undefined, null, '', 'A'.repeat(42), 'A'.repeat(42) + 'B', valid + '=', 42]) {
     assert.equal(parseGrant(grant({ sessionInstanceId: id })).ok, false, String(id));
   }

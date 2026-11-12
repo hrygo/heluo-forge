@@ -15,7 +15,7 @@ function serialize(entries) {
 }
 
 function parse(value) {
-  if (value === undefined) return Object.create(null);
+  if (value === undefined) throw error('CRED_LEGACY_STORE', 'credential key binding is missing');
   let doc;
   try { doc = JSON.parse(value); } catch { throw error('CRED_DECRYPT_FAILED', 'credential authentication failed'); }
   if (!doc || typeof doc !== 'object' || Array.isArray(doc) || Object.keys(doc).sort().join(',') !== 'keys,v'
@@ -37,36 +37,37 @@ export function initialKeyBinding(keys, kid) {
   return serialize({ [kid]: proof(keys, kid) });
 }
 
-/** Validate known keys and authenticate every row for any previously unbound key. */
-export function createKeyAuthentication({ backend, cipher, keys }) {
+function checkProof(kid, expected, key) {
+  const actual = createHmac('sha256', key).update('HeluoForge credential key binding v1\0').update(kid).digest();
+  if (!timingSafeEqual(Buffer.from(expected, 'base64'), actual)) {
+    throw error('CRED_DECRYPT_FAILED', 'credential authentication failed');
+  }
+}
+
+/** Existing stores must already contain a binding for every referenced key. */
+export function validateKeyBinding(value, active, used, keys, { requireAll = false } = {}) {
+  const entries = parse(value);
+  if (typeof active !== 'string' || !Object.hasOwn(entries, active)
+      || used.some((kid) => !Object.hasOwn(entries, kid))) {
+    throw error('CRED_DECRYPT_FAILED', 'credential key binding is incomplete');
+  }
+  for (const [kid, expected] of Object.entries(entries)) {
+    const key = keys.byId(kid);
+    if (key === undefined && kid !== active && !requireAll) continue;
+    if (!Buffer.isBuffer(key) || key.length !== 32) throw error('CRED_KEY_UNAVAILABLE', 'credential key is unavailable');
+    checkProof(kid, expected, key);
+  }
+  return entries;
+}
+
+/** Validate known keys without adopting or changing previously unbound stores. */
+export function createKeyAuthentication({ backend, keys }) {
   function inspect() {
-    const entries = parse(backend.keyAuth());
-    for (const [kid, expected] of Object.entries(entries)) {
-      const actual = proof(keys, kid);
-      if (!timingSafeEqual(Buffer.from(expected, 'base64'), Buffer.from(actual, 'base64'))) {
-        throw error('CRED_DECRYPT_FAILED', 'credential authentication failed');
-      }
-    }
-    const used = backend.keyIds();
-    const unbound = new Set(used.filter((kid) => !Object.hasOwn(entries, kid)));
-    if (unbound.size) {
-      for (const row of backend.list()) {
-        if (!unbound.has(row.kid)) continue;
-        const value = cipher.open({ kind: row.kind, id: row.id, owner: row.owner, kid: row.kid, envelope: row.envelope });
-        if (!Buffer.from(value.toString('utf8'), 'utf8').equals(value)) throw error('CRED_DECRYPT_FAILED', 'credential decryption failed');
-      }
-      for (const kid of unbound) entries[kid] = proof(keys, kid);
-    }
-    const active = backend.active();
-    if (!Object.hasOwn(entries, active)) entries[active] = proof(keys, active);
-    return serialize(entries);
+    validateKeyBinding(backend.keyAuth(), backend.active(), backend.keyIds(), keys, { requireAll: true });
   }
   return Object.freeze({
     verify: inspect,
-    ensure() {
-      const binding = inspect();
-      if (backend.keyAuth() !== binding) backend.setKeyAuth(binding);
-    },
+    ensure: inspect,
     bind(kid) {
       const entries = parse(backend.keyAuth());
       entries[kid] = proof(keys, kid);

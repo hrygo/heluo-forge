@@ -5,7 +5,7 @@ import { accessTokenOf, sessionFromRecord } from '../src/cli-session.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { validateGrant } from '../src/record.mjs';
 
-const grant = { version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'test',
+const grant = { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'test',
   refreshToken: 'placeholder-refresh', accessToken: 'placeholder-access', scope: 'openid',
   obtainedAt: '2026-01-01T00:00:00.000Z', accessExpiresAt: '2099-01-01T00:00:00.000Z' };
 const options = { verifyAtomicStore: () => true };

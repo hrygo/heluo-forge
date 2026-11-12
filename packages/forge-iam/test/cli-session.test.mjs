@@ -9,7 +9,7 @@ function grant(overrides = {}) {
   return {
     kind: 'grant',
     payload: {
-      version: 1, clientId: 'fixture', obtainedAt: '2026-01-01T00:00:00.000Z',
+      version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), clientId: 'fixture', obtainedAt: '2026-01-01T00:00:00.000Z',
       issuer: 'https://iam.corp.example',
       subject: 'E1001',
       scope: 'openid profile',
@@ -105,7 +105,7 @@ test('absent and tombstoned records remain signed out while validated sign-out p
 });
 
 
-test('bridge readability admits legacy V1 refresh pending but fences sign-out and invalid records', () => {
+test('bridge readability admits identified refresh pending but fences sign-out and invalid records', () => {
   const id = Buffer.alloc(32, 1).toString('base64url');
   const original = grant();
   const operation = { version: 1, state: 'pending', id, base: refreshBaseId(original.payload, id) };
@@ -115,10 +115,10 @@ test('bridge readability admits legacy V1 refresh pending but fences sign-out an
   const v2 = grant({ version: 2, authContext: { mode: 'confidential', method: 'client_secret_basic',
     secretRef: 'fixture-secret-ref', secretRevision: 'fixture-revision' }, refreshOperation: operation });
   assert.deepEqual(classifySessionRecord(v2), { state: 'pending', operation: 'refresh' });
-  assert.equal(isBridgeReadableSession(v2), false);
+  assert.equal(isBridgeReadableSession(v2), true);
 });
 
-test('bridge associates a legacy pending refresh only with the same completed rotation', () => {
+test('bridge associates an identified pending refresh only with the same completed rotation', () => {
   const original = grant();
   const id = Buffer.alloc(32, 2).toString('base64url');
   const other = Buffer.alloc(32, 3).toString('base64url');
@@ -134,7 +134,7 @@ test('bridge associates a legacy pending refresh only with the same completed ro
   ]) assert.equal(isSameBridgeSession(pending, changed), false);
 });
 
-test('bridge associates a legacy active grant with a rotation based on its full original record', () => {
+test('bridge associates an active grant only with the same session identity', () => {
   const previous = { version: 1, state: 'complete', id: Buffer.alloc(32, 4).toString('base64url'), base: Buffer.alloc(32, 5).toString('base64url') };
   const before = grant({ refreshOperation: previous });
   const id = Buffer.alloc(32, 6).toString('base64url');
@@ -142,6 +142,8 @@ test('bridge associates a legacy active grant with a rotation based on its full 
   const after = grant({ ...before.payload, accessToken: 'rotated-access', refreshToken: 'rotated-refresh', refreshOperation: marker });
   assert.equal(isSameBridgeSession(before, before), true);
   assert.equal(isSameBridgeSession(before, after), true);
+  const otherSession = grant({ ...after.payload, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') });
+  assert.equal(isSameBridgeSession(before, otherSession), false);
   const wrongBase = grant({ ...after.payload, refreshOperation: { ...marker, base: Buffer.alloc(32, 7).toString('base64url') } });
   assert.equal(isSameBridgeSession(before, wrongBase), false);
 });

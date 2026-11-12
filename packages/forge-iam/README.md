@@ -93,7 +93,7 @@
 - Host 运行时在访问令牌或已知刷新令牌到期前调度续期，复用现有单飞与原子提交；Host 停止、设备休眠或断网期间不能保证续期。尚未写入 pending 时，如 Discovery 或 JWKS 预检发生网络故障、HTTP 408、429 或 5xx，保留未失效的刷新授权并退避重试。获取刷新写锁超时且回调尚未进入时，使该次回调失效，并对未变的可刷新会话退避重试；本次调用仍返回 `IAM_REAUTH_REQUIRED`。超时时回调已进入，或提交结果未知时，失败关闭。过期的访问令牌不返回。刷新请求结果不确定或 `invalid_grant` 时保留 pending、要求重新登录，不返回旧 access token。普通无标记且可刷新的过期会话可在后台恢复。无需刷新的令牌读取在采用 grant 前复查 provider 实例；读取期间 provider 被替换或撤销时拒绝返回旧令牌。这不覆盖所有状态同步或 provider 生命周期交错，也不证明真实执行门禁。
 - Host 启动或凭据服务重新绑定后，凭据与对应的原子存储信任均就绪时恢复已有会话并安排续期；信任暂不可用时不启动后台刷新，重新绑定后继续恢复。刷新写入结果未知时仍保持失败关闭。
 - 局部竞态设计：登录回调写 grant 时，在 `credentials.modifyRecord` 的锁内 mutator 同步复查本进程 attempt、epoch 和到期状态；失效则抛出取消或过期错误，拒绝写入，不能将未写入当成成功。这样针对旧回调等待锁期间本进程取消并完成新登录的时序，避免旧回调进入锁后覆盖新 grant。
-- 回调清理增量实现（#106，仅限本地合成验证）：新回调 grant 使用随机 32 字节 canonical base64url `sessionInstanceId`，刷新 pending/complete 保持不变；该标识仅用于记录匹配，不是认证凭据。旧 V1 无标识仍可读，但不能被回调清理安全归属。回调写入前记住目标 store 和 grant，失败或取消时使用一次 `modifyRecord`，锁内核对标识和固定上下文，仅对自己的记录写入固定、无敏感信息的 `{version: 1, type: 'heluo-iam-session-tombstone'}`（`kind: grant`）；严格墓碑读取与 mutate 视为空，新登录可覆盖，物理记录仍存在。坏记录、无标识或提交结果不确定均按清理未知处理，不得报告成功；只尽力撤销该回调自己的 refresh token。
+- 回调清理增量实现（#106，仅限本地合成验证）：新回调 grant 使用随机 32 字节 canonical base64url `sessionInstanceId`，刷新 pending/complete 保持不变；该标识仅用于记录匹配，不是认证凭据。缺少该标识的旧会话不被采用。回调写入前记住目标 store 和 grant，失败或取消时使用一次 `modifyRecord`，锁内核对标识和固定上下文，仅对自己的记录写入固定、无敏感信息的 `{version: 1, type: 'heluo-iam-session-tombstone'}`（`kind: grant`）；严格墓碑读取与 mutate 视为空，新登录可覆盖，物理记录仍存在。坏记录、无标识或提交结果不确定均按清理未知处理，不得报告成功；只尽力撤销该回调自己的 refresh token。
 - 此机制依赖所有参与者和 provider 提供可靠的同记录跨进程原子锁及提交确认；无此能力或旧客户端混跑仍不安全。写操作异常后仍可能迟到提交，无法仅凭清理或回读自证闭环；远端撤销未验证，不保证多键事务或会话整体线性一致。
 - 可信 provider 的退出先核对完整 grant 并持久化随机 `signOutOperation` pending，然后在锁外撤销当前 access token；确认后再次条件比对并写墓碑。撤销失败、未知或进程中断时保留 pending，旧令牌不可读取或重发；迟到的退出不会清除新登录。网关凭据保留；合成测试不证明真实远端授权及刷新后代撤销。
 - 插件卸载只释放订阅、attempt 与内存状态，但不撤销也不删除 GrantRecord 与网关凭据；下次启动 `hydrate` 恢复。显式 `signOut` 在可信原子存储上撤销当前 access token 并逻辑清除 IAM 记录，墓碑不等于物理删除。
@@ -107,13 +107,13 @@
 
 内置 SQLite 凭据组合提供绑定当前 provider 实例的 `iam-atomic-store`；IAM 的 `apply` 通过该服务验证单记录操作并取得独立的网关联合 adapter。注入的测试 backend 不获得信任，缺失、异常、Promise 或非 `true` 的验证结果均拒绝受保护操作。provider 自报的 `crossProcessLock`、`durable`、`kind`、`transaction` 不是可信证据，也不得从用户配置、环境变量或客户端推导。该绑定不是同权 JS 隔离边界：同权代码仍可直接访问底层存储或自行注入服务。未知 provider 的旧有效 grant 可能只读恢复；退出不修改持久记录或发送撤销，并报告结果未知。跨平台原子性、提交确认和企业环境仍待实机验证。
 
-登录 URL、换码、写入、回调清理及刷新 claim、发送和提交前复核身份与声明；异步边界和锁内 guard 复核，防止新 provider 冒充原实例。provider 执行 mutator 后、实际提交前替换或迟到提交无法由调用方检查撤销，安全仍依赖可信组合协调替换及 provider 的提交语义；未知提交不宣称成功。旧 V1 读兼容保留；不宣称 signOut、网关消费或多键事务安全。
+登录 URL、换码、写入、回调清理及刷新 claim、发送和提交前复核身份与声明；异步边界和锁内 guard 复核，防止新 provider 冒充原实例。provider 执行 mutator 后、实际提交前替换或迟到提交无法由调用方检查撤销，安全仍依赖可信组合协调替换及 provider 的提交语义；未知提交不宣称成功。公共客户端使用带 `sessionInstanceId` 的 V1，会话缺少该标识时拒绝采用；不宣称 signOut、网关消费或多键事务安全。
 
 ## 刷新防重放增量设计（#106，待验证）
 
 本地 write-ahead 协议针对 refresh token 轮换后响应丢失：在向 IdP 发送请求**之前**，对同一 grant 记录执行短暂 `modifyRecord`，写入随机唯一操作标记 `refreshOperation`（严格限定版本、状态、标识和绑定原记录的随机盐摘要），只有 provider 确认该写入成功才发送请求。请求与响应校验均在锁外进行；成功后第二次短事务核对完整 pending 记录，将结果与同操作的 `complete` 标记一并提交，避免迟到的旧刷新覆盖新登录，并让等待者识别属于原记录的完成结果。`waitFor` 等待阶段使用单调时钟的 5 秒截止时间，轮询 sleep 不超过剩余预算，只有无副作用的读取使用 `Promise.race` 限制等待；超时不会取消底层 I/O，迟到的 resolve/reject 不得改变 view 或产生未处理拒绝。读取完成及采纳前重新检查截止时间和生命周期。等待者绑定观察到的 pending 的 issuer、clientId、resource、subject、obtainedAt 与原 refresh token；complete 必须具有相同 version/id/base、相同身份、不同 refresh token 和未过期 access token，未知或损坏记录 fail closed。进入等待前首次读取、claim 和写入不竞速也不属于等待时限；不宣称 `signOut` 的所有 I/O 有界。该校验拒绝误写和另一授权，但不提供对有 store 写权限者的防篡改保证。超时、崩溃或响应不确定时不得接管、重发同一 refresh token，也不得返回旧 access token 或显示 ready；保留 pending 并要求重新登录。观察到 pending 的视图进入 error；仅本实例明确观察到 pending 时，内存保存该操作的 version、id、base、原会话身份、refresh token 摘要与 authEpoch，并在按本地时钟计算的 5 秒观察窗口内允许普通轮询恢复：读取的合法 complete 必须匹配该操作和会话、refresh token 已变化，且通过配置上下文及 access/refresh 有效期检查，且本地生命周期未变。仍为 pending 时继续 fail closed；标记或会话改变、读取错误、超时、其他错误、退出、卸载或新登录尝试均不得借此恢复，也不隐式采用其他会话。该读取后的状态只是本地视图，不是服务端认证或强一致证明，读取之后记录仍可能被并发替换。显式解析另按其现有规则处理。首次写入 pending 的 commit 抛错或未确认时不发送请求。若第二次 commit 已实际成功但响应或通知失败，发起方不能确认结果，其他实例仍可能读到已提交的 complete；不可声称所有实例均必然重登。成功响应缺少新 refresh token 或返回原值时保留 pending、要求重新登录；在 IAM 明确确认其他安全语义前不复用原令牌。重新登录通过既有授权路径替换记录，不在刷新失败时以读后删除清理记录。
 
-无标记的旧 grant 可由遵守协议的新进程在事务内受控升级；未知版本、状态或损坏标记必须 fail closed。保障以前提为所有参与者遵守此协议、`modifyRecord` 在同一记录上提供真实跨进程原子排他及可靠的提交确认。旧版本进程、无锁 provider 或非原子写入不享有此保障；本地文件及 IdP 均为测试替身，生产后端和企业 IdP 尚未验证。退出与回调的条件墓碑实现和适用限制见上文；这些增量不证明多键事务、远端撤销或跨进程会话整体线性一致。
+无刷新操作标记且带 `sessionInstanceId` 的有效 grant 可由遵守协议的进程在事务内声明刷新；未知版本、状态或损坏标记必须 fail closed。保障以前提为所有参与者遵守此协议、`modifyRecord` 在同一记录上提供真实跨进程原子排他及可靠的提交确认。旧版本进程、无锁 provider 或非原子写入不享有此保障；本地文件及 IdP 均为测试替身，生产后端和企业 IdP 尚未验证。退出与回调的条件墓碑实现和适用限制见上文；这些增量不证明多键事务、远端撤销或跨进程会话整体线性一致。
 
 ## 组合顺序
 

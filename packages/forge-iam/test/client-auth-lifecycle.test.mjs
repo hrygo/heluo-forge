@@ -56,7 +56,7 @@ for (const point of ['json', 'jwks', 'commit-entry', 'commit-receipt', 'gateway'
       if (target && point === 'commit-receipt') await gate.pause();
       return result;
     };
-    if (point === 'gateway') credentials.resolve = async () => { await gate.pause(); return undefined; };
+    if (point === 'gateway') credentials.describe = async () => { await gate.pause(); return { configured: false, writable: true }; };
     const h = await confidentialHarness(t, 'client_secret_basic', { credentials, fetch: async (url, init) => {
       const response = await fetch(url, init);
       if (point === 'jwks' && String(url).endsWith('/jwks')) await gate.pause();

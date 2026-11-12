@@ -50,6 +50,7 @@ async function seedGrant(credentials) {
     kind: 'grant',
     payload: {
       version: 1,
+      sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
       issuer: configured.issuer,
       subject: 'E1001',
       clientId: configured.clientId,

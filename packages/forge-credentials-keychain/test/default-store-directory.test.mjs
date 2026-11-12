@@ -6,7 +6,6 @@ import { mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/pro
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createAesGcmCipher } from '../src/cipher.mjs';
-import { createCredentialStore } from '../src/credential-store.mjs';
 import { selectDefaultStoreDirectory } from '../src/default-store-directory.mjs';
 import { createFileKeyProvider } from '../src/keyring.mjs';
 import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
@@ -52,42 +51,22 @@ test('Linux selects XDG for a new store and ignores unset, empty and relative va
   assert.equal(existsSync(f.next), false);
 });
 
-test('an old same-directory store remains writable and readable across processes without migration', async (t) => {
+test('an old default store is left intact while XDG is selected', async (t) => {
   const f = await fixture(t);
   const key = 'heluo-forge/iam/ref/TEST';
   await createLegacyStore(f.old, key);
   const keyringBefore = await readFile(path.join(f.old, 'keyring.json'));
   const databaseBefore = await readFile(path.join(f.old, 'credentials.sqlite'));
   const selected = selectDefaultStoreDirectory(f.options);
-  assert.equal(selected, f.old);
-  const reader = createCredentialStore({ directory: selected, readOnly: true });
-  try { assert.equal(await reader.get(key), 'synthetic-value'); }
-  finally { await reader.close(); }
+  assert.equal(selected, f.next);
   assert.deepEqual(await readFile(path.join(f.old, 'keyring.json')), keyringBefore);
   assert.deepEqual(await readFile(path.join(f.old, 'credentials.sqlite')), databaseBefore);
   assert.equal(existsSync(f.next), false);
   assert.equal(existsSync(`${f.old}.keys`), false);
 
-  const writer = createCredentialStore({ directory: selected });
-  try { await writer.set(key, 'legacy-updated'); }
-  finally { await writer.close(); }
-  const entry = new URL('../src/credential-store.mjs', import.meta.url).href;
-  const script = `import assert from 'node:assert/strict';
-    import { createCredentialStore } from ${JSON.stringify(entry)};
-    const store = createCredentialStore({ directory: ${JSON.stringify(selected)}, readOnly: true });
-    try { assert.equal(await store.get(${JSON.stringify(key)}), 'legacy-updated'); }
-    finally { await store.close(); }`;
-  execFileSync(process.execPath, ['--input-type=module', '-e', script], {
-    env: { HOME: f.home, USERPROFILE: f.home,
-      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) },
-    timeout: 10000,
-  });
-  assert.deepEqual(await readFile(path.join(f.old, 'keyring.json')), keyringBefore);
-  assert.equal(existsSync(`${f.old}.keys`), false);
-  assert.equal(existsSync(f.next), false);
 });
 
-test('an empty or incomplete old directory is preserved without creating another store', async (t) => {
+test('an empty or incomplete old directory is preserved while XDG is selected', async (t) => {
   const f = await fixture(t);
   for (const [name, file] of [
     ['empty', undefined], ['database', 'credentials.sqlite'], ['keyring', 'keyring.json'],
@@ -100,7 +79,7 @@ test('an empty or incomplete old directory is preserved without creating another
     const next = path.join(dataHome, 'HeluoForge');
     await mkdir(old, { recursive: true });
     if (file) await writeFile(path.join(old, file), 'synthetic-incomplete');
-    assert.equal(selectDefaultStoreDirectory({ platform: 'linux', home, xdgDataHome: dataHome }), old);
+    assert.equal(selectDefaultStoreDirectory({ platform: 'linux', home, xdgDataHome: dataHome }), next);
     if (file) assert.equal(await readFile(path.join(old, file), 'utf8'), 'synthetic-incomplete');
     assert.equal(existsSync(next), false);
   });
@@ -115,12 +94,12 @@ test('an existing XDG store is selected when the old directory is absent', async
   assert.equal(existsSync(f.old), false);
 });
 
-test('distinct existing old and XDG directories fail closed, including empty directories', async (t) => {
+test('existing old and XDG directories do not change the selected XDG directory', async (t) => {
   const f = await fixture(t);
   await mkdir(f.old, { recursive: true });
   await mkdir(f.next, { recursive: true });
   await writeFile(path.join(f.old, 'credentials.key'), 'synthetic-legacy');
-  assert.throws(() => selectDefaultStoreDirectory(f.options), { code: 'CRED_STORE_PATH_CONFLICT' });
+  assert.equal(selectDefaultStoreDirectory(f.options), f.next);
   assert.equal(await readFile(path.join(f.old, 'credentials.key'), 'utf8'), 'synthetic-legacy');
   assert.deepEqual(await readdir(f.next), []);
 });
@@ -132,25 +111,7 @@ test('the same normalized path is not a conflict', async (t) => {
   assert.equal(selectDefaultStoreDirectory({ ...f.options, xdgDataHome }), f.old);
 });
 
-test('two names for the same existing directory are not a conflict', async (t) => {
-  const f = await fixture(t);
-  const sameDirectory = { dev: 1, ino: 42, isDirectory: () => true };
-  assert.equal(selectDefaultStoreDirectory({ ...f.options, inspect: () => sameDirectory }), f.old);
-});
-
-test('directory inspection errors are not treated as absence', async (t) => {
-  const f = await fixture(t);
-  for (const failingPath of [f.old, f.next]) {
-    const denied = Object.assign(new Error('synthetic denied'), { code: 'EACCES' });
-    const inspect = (target) => {
-      if (target === failingPath) throw denied;
-      throw Object.assign(new Error('synthetic absent'), { code: 'ENOENT' });
-    };
-    assert.throws(() => selectDefaultStoreDirectory({ ...f.options, inspect }), (error) => error === denied);
-  }
-});
-
-test('Host and reader refuse conflicting defaults but accept explicit directory overrides', async (t) => {
+test('Host and reader select XDG even when the old directory exists and accept explicit overrides', async (t) => {
   const f = await fixture(t);
   const explicit = path.join(f.root, 'explicit');
   await mkdir(f.old, { recursive: true });
@@ -159,13 +120,15 @@ test('Host and reader refuse conflicting defaults but accept explicit directory 
   const script = `import assert from 'node:assert/strict';
     Object.defineProperty(process, 'platform', { value: 'linux' });
     const { apply, defaultStoreDirectory, openCredentialReader } = await import(${JSON.stringify(entry)});
-    assert.throws(() => defaultStoreDirectory(), { code: 'CRED_STORE_PATH_CONFLICT' });
-    await assert.rejects(openCredentialReader(), { code: 'CRED_STORE_PATH_CONFLICT' });
+    assert.equal(defaultStoreDirectory(), ${JSON.stringify(f.next)});
+    const defaultReader = await openCredentialReader();
+    await defaultReader.close();
     const services = new Map();
     const ctx = { get: (name) => services.get(name),
       provide(name, value) { services.set(name, value); return () => services.delete(name); },
       effect(fn) { return fn(); } };
-    assert.throws(() => apply(ctx, {}), { code: 'CRED_STORE_PATH_CONFLICT' });
+    const disposeDefault = apply(ctx, {});
+    await disposeDefault();
     const dispose = apply(ctx, { storeDirectory: ${JSON.stringify(explicit)} });
     const reader = await openCredentialReader({ directory: ${JSON.stringify(explicit)} });
     await reader.close();

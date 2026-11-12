@@ -27,14 +27,16 @@ export function createServiceGateway(env) {
     const record = await targetGatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
     if (!isCurrent()) return null;
     if (!record.ok) return { state: 'invalid' };
+    if (!record.credential) {
+      const storage = await targetGatewayStore.describe().catch(() => null);
+      if (!isCurrent()) return null;
+      return storage?.configured ? { state: 'invalid', matchesAccount: false } : { state: 'unconfigured' };
+    }
     const resolved = await targetGatewayStore.resolve(record.credential).catch(() => undefined);
     if (!isCurrent()) return null;
-    const credential = record.credential ?? {};
+    const credential = record.credential;
     if (resolved?.invalid) return { state: 'invalid' };
     if (!resolved?.value) return { state: 'unconfigured' };
-    // A keychain value without metadata is still unattributable. This status is
-    // informational; it does not prevent another consumer resolving the ref.
-    if (!record.credential) return { state: 'invalid', matchesAccount: false };
     const storage = await targetGatewayStore.describe().catch(() => null);
     if (!isCurrent()) return null;
     const signedInSubject = ctx.lastGrant && grants.ownerOf(ctx.lastGrant) === targetStore ? ctx.lastGrant.subject : null;

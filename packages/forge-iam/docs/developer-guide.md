@@ -56,7 +56,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 
 机密测试由实际服务工厂与 localhost mock IdP 驱动，不只是检查请求 helper。测试组合独立认可精确 credentials/source/issuer-clientId-ref-method；source、getter、verifier 或 revision 变化后，旧操作不能借新来源继续。secret 只在来源及短时操作内存中使用，attempt 只保存非秘密 pin，不存原 snapshot 或捕获秘密的闭包。Basic 对标识和 secret 分别 form 编码，Post 只在表单认证；失败不自动换方法。
 
-public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 authContext，不迁移 V1。机密 grant 的方法、selector 或 revision 不符时拒绝；有效 AT、恢复、共享刷新完成和最终 token 返回同样复验来源。V2 不是防旧 writer 回滚机制，测试组合不混跑可覆盖同一键的旧 writer。
+public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 authContext，不迁移 V1。两种会话均要求 `sessionInstanceId`，缺少时不被采用。机密 grant 的方法、selector 或 revision 不符时拒绝；有效 AT、恢复、共享刷新完成和最终 token 返回同样复验来源。V2 不是防旧 writer 回滚机制，测试组合不混跑可覆盖同一键的旧 writer。
 
 来源准备在 grant 锁外。刷新先确认持久 pending，再最多发送一次原请求；来源变化、回执异常或结果未知不能接管、清除 pending 或重发。每个 await、提交和结果采用边界复验原操作；取消、退出或卸载后的旧成功和旧错误不覆盖新会话。检查不能撤回已经发出的 HTTP。
 
@@ -136,7 +136,7 @@ view 包含 `state`、`configured`、`signedIn`、`canSignIn`、`canSignOut`、`
 | 网关元数据 | 独立记录 `heluo-iam/gateway-credential`，记录录入人、设备标签、录入和建议到期时间。 |
 | 旧 IAM 镜像 | 新令牌不再写 `ENTERPRISE_ACCESS_TOKEN`；启动不自动删除现存旧引用。保留不等于隔离，其他消费者仍可能解析它。 |
 
-网关状态只有 `unconfigured`、`configured`、`owner-mismatch`、`invalid`；读取失败还可让摘要未知。`ownerSubject` 只是录入人，不证明真实 Key 归属。换账号、共享记录同步、回调和取消保留现存 Key/元数据。旧格式、未知格式和不一致 pair 只读；显式操作也不自动迁移或修复。
+网关状态只有 `unconfigured`、`configured`、`owner-mismatch`、`invalid`；读取失败还可让摘要未知。`ownerSubject` 只是录入人，不证明真实 Key 归属。换账号、共享记录同步、回调和取消保留现存 Key/元数据。旧网关 V1 读取结果为 `invalid-credential`，记录和 Key 保留且不覆盖；未知格式和不一致 pair 保留，显式操作也不自动迁移或修复。
 
 网关读取在检查缓存或复用在途请求前重取当前 provider。一次加载固定同一 store/provider 读取元数据、值与存储描述，每次异步完成后复查；旧 provider 的结果、错误和收尾不会覆盖另一 provider 的摘要或释放其单飞 guard。账户匹配只使用同一 store 已采纳的 IAM 主体，不借用其他 provider 的缓存身份。
 
@@ -166,7 +166,7 @@ adapter.compareAndSwap(scope, expectedPair, nextPair, guard)
 
 getter 与 verifier 绑定具体 credentials、adapter 和作用域。只比方法形状、自报属性或复用 grant verifier 均不足以放行。联合快照必须脱离后端引用；CAS 比较完整 record 和精确存储值，expected 不随失败更新、不重试。比较成功后，adapter 在同一不可让出的提交临界段恰好调用一次同步 guard；只有字面 `true` 可联合写入。guard 内重验专用信任及现有 provider、认证代际、独占状态和卸载状态。store 私有保留原始 expected 与 next，只把独立深拷贝交给 adapter；guard 还核对可见参数没有偏离原始快照或意图，回执只对私有原始 next 比较。不能用 adapter 改过的对象反过来定义“成功”；已提交后才发现偏离仍报告未知，不补偿。仅修改提交后的局部参数不改变该次真实回执的含义，返回元数据也不与 adapter 参数共享。此保护不证明 adapter 任意内部实现可靠，更不隔离恶意同权 JS。
 
-新元数据采用内部格式 `version: 2`，增加随机 `writeOperationId` 和 `valueDigest`。前者区分写入代际，后者在分开读取值和元数据时检出错配；都不是原子能力或真实 Key 归属证明，不进入 HostView 或诊断。Key 原文仍只在引用中，不放进元数据。格式 1 永远只读；这不是产品一期 V1 或 IAM grant 格式版本的变更。
+新元数据采用内部格式 `version: 2`，增加随机 `writeOperationId` 和 `valueDigest`。前者区分写入代际，后者在分开读取值和元数据时检出错配；都不是原子能力或真实 Key 归属证明，不进入 HostView 或诊断。Key 原文仍只在引用中，不放进元数据。网关元数据格式 1 不被采用或覆盖；这不是产品一期 V1 或 IAM grant 格式版本的变更。
 
 每次成功 clear，包括空状态与重复 clear，都联合写入新代际逻辑墓碑和缺失引用值，废止先前快照，不物理删除元数据记录。orphan、未知版本、错误 kind、digest 错配或墓碑配值均拒绝变更，不自动修复。回执只核对本次 committedPair，不读取随后当前 pair 判断此前提交；回执畸形、异常、无异常值的拒绝也统一报告未知，不输出底层原文。
 
@@ -197,7 +197,7 @@ Host 为登录尝试生成 state、nonce 和 PKCE S256；授权码只兑换一�
 
 回调写 grant 的锁内 mutator 同步复查本进程 attempt、代际与到期状态，失效时抛错而非把未写入当成功。新 grant 带随机 32 字节 canonical base64url `sessionInstanceId`，刷新保持该标识不变；它只用于记录匹配，不是认证凭据。
 
-失败或取消后的回调清理只针对该回调记住的 store、会话标识及固定上下文。匹配时写 `{version: 1, type: 'heluo-iam-session-tombstone'}` 的固定逻辑墓碑（`kind: grant`），读取将严格匹配的墓碑视为空，新登录可以覆盖；物理记录仍存在。旧 V1 无标识仍可读，但不能被回调清理安全归属。坏记录、无标识、异常提交或回执不符均不能报告清理成功；远端只尽力撤销该回调自己的 refresh token。
+失败或取消后的回调清理只针对该回调记住的 store、会话标识及固定上下文。匹配时写 `{version: 1, type: 'heluo-iam-session-tombstone'}` 的固定逻辑墓碑（`kind: grant`），读取将严格匹配的墓碑视为空，新登录可以覆盖；物理记录仍存在。缺少 `sessionInstanceId` 的旧会话不被采用。坏记录、无标识、异常提交或回执不符均不能报告清理成功；远端只尽力撤销该回调自己的 refresh token。
 
 ### 刷新防重放
 
@@ -210,13 +210,13 @@ Host 为登录尝试生成 state、nonce 和 PKCE S256；授权码只兑换一�
 
 旧 grant 含 `resource` 而刷新结果删除该字段时，完整会话身份不一致，等待者和桥接拒绝本次结果；不复制旧 `resource`，也不自动迁移。
 
-配置 Host 桥接时，Host 先核验 issuer 信任上下文并解析令牌，CLI 回读合法、未过期且无退出 pending 的当前会话，只输出与 Host 响应一致的 access token。无 `sessionInstanceId` 的旧 V1 也可按原 pending 的操作 version、id、base、会话身份及 refresh token 变化核验对应 complete；若首次读取为 active 而回读为 complete，则以完整原 grant 和 complete 的 id 计算 `base`，并核验身份和令牌变化。结果未确认、操作或会话不匹配时拒绝；不为桥接增加标识或迁移存储。该匹配仍受下述旧记录 ABA 和同权写入限制。
+配置 Host 桥接时，Host 先核验 issuer 信任上下文并解析令牌，CLI 回读合法、未过期且无退出 pending 的当前会话，只输出与 Host 响应一致的 access token。缺少 `sessionInstanceId` 的会话不被采用。结果未确认、操作或会话不匹配时拒绝；不为桥接补齐标识或迁移存储。同权进程仍可直接写入底层存储。
 
 等待阶段采用单调时钟的 5 秒截止；只对无副作用的读取竞速超时，底层 I/O 不会被取消。首次读取、claim/写入、事件循环阻塞及退出自身 I/O 不在这一总等待界限内。迟到读取结果不能更新该次等待的视图。
 
 Host 在运行期间按较早的已知令牌期限调度续期，并在退出或卸载时取消计时。前置元数据或 JWKS 网络检查不可达、且尚未尝试写入 pending 时，仍有效的会话保持不变，Host 在期限内退避重试。claim 写锁超时且回调尚未进入时，使该次回调失效，并对未变的可刷新会话按同一退避策略重试；本次调用仍返回 `IAM_REAUTH_REQUIRED`。超时时回调已进入，或提交结果未知时，失败关闭；请求已发送或结果不确定时不得重试原 refresh token。停止 Host、设备休眠或断网超过刷新令牌期限后，须重新登录。普通 `/view` 对无标记、可刷新的过期会话仍可触发后台刷新，使用 30 秒退避。读取本 Host 自己正在执行的 pending 时，最多等待 5 秒取得结果；其他 pending 或等待超时进入 error，仅本实例明确观察并绑定的操作，才可在本地时钟 5 秒观察窗内由轮询采用匹配的合法 complete。记录或会话变化、过期、其他错误、读取失败、退出、卸载或新登录都会阻止该恢复；恢复后的视图仍不是服务端授权或强一致证明。
 
-未知版本、状态或损坏操作标记拒绝使用。无标记的旧 grant 可由遵守协议的新进程在事务内受控升级；旧客户端混跑不享有这些保证。
+未知版本、状态或损坏操作标记拒绝使用。无刷新操作标记且带 `sessionInstanceId` 的有效 grant 可由遵守协议的进程在事务内声明刷新；旧客户端混跑不享有这些保证。
 
 ### 退出与卸载
 
@@ -335,9 +335,9 @@ SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩�
 
 **现行限制**：
 
-- IAM 单记录事务依赖所有参与者遵守协议，且同记录跨进程排他与提交确认可靠；provider 迟到提交无法靠回读自证已消除。无标识旧 grant 的 ABA（记录被替换后又变回完全相同的字节）仍不能识别；此事务不提供网关两键或会话整体线性一致性，网关另受独立联合能力门禁约束。
+- IAM 单记录事务依赖所有参与者遵守协议，且同记录跨进程排他与提交确认可靠；provider 迟到提交无法靠回读自证已消除。此事务不提供网关两键或会话整体线性一致性，网关另受独立联合能力门禁约束。
 - 默认组合经 `iam-atomic-store` 绑定 verifier；未知 provider 上旧有效 grant 仍可 ready/读取，退出保留持久记录。存储门禁不能抵御同权 JS 直接写存储。
-- 旧 V1 不携带 discovery 来源，不能从旧记录自己取得可信 issuer。启动不联网；无明确 issuer pin 或本实例已验证的 metadata 上下文时，拒绝恢复身份、返回 AT 或采用其主体保存网关 Key，保留持久记录。显式 issuer 匹配的旧 V1 继续兼容，不因缺少 `sessionInstanceId` 一刀拒绝；不自动增加来源字段或迁移。只配 discovery 的新登录仍是有效配置，本实例取得可信 metadata 后可按其固定上下文处理会话。
+- 旧 V1 不携带 discovery 来源，不能从旧记录自己取得可信 issuer。启动不联网；无明确 issuer pin 或本实例已验证的 metadata 上下文时，拒绝恢复身份、返回 AT 或采用其主体保存网关 Key，保留持久记录。公共 V1 会话需具备 `sessionInstanceId` 且匹配可信 issuer 上下文；缺少标识时拒绝采用，不自动补齐或迁移。只配 discovery 的新登录仍是有效配置，本实例取得可信 metadata 后可按其固定上下文处理会话。
 - [只读模型采样](<../src/model-selection-host.mjs>)已接入 Host 生命周期，但没有实际保存或模型/工具执行授权。独立的[判定与记录式适配](<../src/model-gate.mjs>)保留显式选择、未知写入和回读缺口的测试；不把 SDK 缺少 explicit 或明确空态视为覆盖许可。真实默认模型配置不自动保存。
 - 本地模型执行门禁与网关消费方已接入；真实企业授权和工具执行入口仍须分别核验。前端隐藏、Key 保存、ownerSubject 匹配及旧引用保留均不能证明实际调用已安全隔离；个人 A/B 授权路线及服务端归属校验未完成。
 - 自动迁移旧凭据存储、Client Remote/watch 与凭据探测未实现；真实 GUI/浏览器调度、跨入口顺序、Windows/麒麟平台及真实 IAM/UAG 路径缺少完整验证。界面文案仍为中文，locale 元数据不等于界面全量本地化。
@@ -349,7 +349,7 @@ SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩�
 
 ## 可配置网关与动态模型目录
 
-`managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人访问凭证一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧只读记录。显式地址的兼容 Key 为 1—4096 个可见 ASCII 字符；旧的无地址路径继续使用 UAG 格式校验。Key 原文不进入视图、日志或错误响应。
+`managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人访问凭证一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧记录。显式地址的兼容 Key 为 1—4096 个可见 ASCII 字符；旧的无地址路径继续使用 UAG 格式校验。Key 原文不进入视图、日志或错误响应。
 
 新增同源 `GET /api/forge-iam/models`，在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。该入口是用户主动刷新，直接发起一次目录同步。`modelAccess` 提供目录 `state`、`error`、`stale`、`retryAt`、`syncedAt`、`models` 及已保存地址；`stale` 表示列表仍是上次成功目录、网关此后未连上，`retryAt` 是下一次自动重试时间（不可重试的失败为空），`syncedAt` 是最近一次成功时间。它不是网关授权证明：调用仍按 `permit()` 与启用集合裁决。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际，每次通过 `resolveToken()` 复查会话及 Key owner，异步读取后复查生命周期；令牌不发往网关。
 

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-005 |
 | 文档名称 | 模型网关接入详细设计 |
-| 版本 | V1.0.2 |
+| 版本 | V1.0.3 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -20,7 +20,7 @@
 
 > 编制依据：2026-10-22 对已安装 DSH 包核验；企业级 AI 网关技术规范 V2.1（正式评审稿，文件状态「正在修改」，审核与批准待定）作为建设标准输入，受管个人助手采用**路线 B（长效凭据 + 实时 IAM 身份令牌双因子凭据协同）**，该路线已由[需求基线](../../requirements/requirements-baseline.md)选定，并确立客户端 `baseUrl` 解耦架构、17 个标准服务路由、SSE 保活心跳过滤与统一错误码处理。本设计为设计层面定稿，不表示已实现、已联调或已批准；上游规范仍在修改，接入契约未冻结，模块实现状态见[设计索引 §2.2](../README.md#22-实现与验证入口)。
 >
-> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md)（CORP-DSH-GW-001 V2.1.1）、[总体架构 ADR-16](../../architecture/platform-architecture.md)、[网关凭据双模式设计](../credential-modes.md)（CORP-DSH-DESIGN-001 V1.0.3）、[客户端标识设计](../client-identification.md)。
+> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md)（CORP-DSH-GW-001 V2.1.2）、[总体架构 ADR-16](../../architecture/platform-architecture.md)、[网关凭据双模式设计](../credential-modes.md)（CORP-DSH-DESIGN-001 V2.0.0）、[客户端标识设计](../client-identification.md)。
 
 ## 1. 结论
 

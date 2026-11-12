@@ -1,6 +1,7 @@
 // Test-only joint gateway capability. No production provider is inferred from
 // this fixture: callers explicitly bind its exact credentials + adapter pair.
 import { isDeepStrictEqual } from 'node:util';
+import { createHash, randomUUID } from 'node:crypto';
 import { MemoryCredentials } from './memory-credentials.mjs';
 import { GATEWAY_RECORD_KEY, GATEWAY_REF } from '../../src/store.mjs';
 
@@ -10,6 +11,17 @@ export function seedLegacyGateway(credentials, { value, ownerSubject, enteredAt,
   credentials.records.set(GATEWAY_RECORD_KEY, { kind: 'grant', payload: {
     version: 1, ownerSubject, enteredAt,
     ...(deviceLabel ? { deviceLabel } : {}), ...(suggestedExpiry ? { suggestedExpiry } : {}),
+  } });
+}
+
+export function seedGateway(credentials, { value, ownerSubject, enteredAt,
+  deviceLabel, suggestedExpiry, baseURL } = {}) {
+  credentials.refs.set(GATEWAY_REF, value);
+  credentials.records.set(GATEWAY_RECORD_KEY, { kind: 'grant', payload: {
+    version: 2, ownerSubject, enteredAt, writeOperationId: randomUUID(),
+    valueDigest: createHash('sha256').update(value).digest('hex'),
+    ...(deviceLabel ? { deviceLabel } : {}), ...(suggestedExpiry ? { suggestedExpiry } : {}),
+    ...(baseURL ? { baseURL } : {}),
   } });
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ const ref2 = 'heluo-forge/iam/ref/TWO';
 const ref3 = 'heluo-forge/iam/ref/THREE';
 const legacyKey = (dir) => join(dir, 'keyring.json');
 const separateKey = (dir) => join(`${dir}.keys`, 'keyring.json');
-const actualKey = (dir) => existsSync(separateKey(dir)) ? separateKey(dir) : legacyKey(dir);
+const actualKey = (dir) => separateKey(dir);
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'forge-separated-key-'));
@@ -44,13 +44,6 @@ function fixture(t) {
       return store;
     },
   };
-}
-
-function asLegacy(directory) {
-  if (existsSync(separateKey(directory))) renameSync(separateKey(directory), legacyKey(directory));
-  const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
-  try { db.prepare("DELETE FROM meta WHERE key = 'key_auth'").run(); }
-  finally { db.close(); }
 }
 
 test('new stores separate keys and data-only copies cannot be written', async (t) => {
@@ -100,31 +93,6 @@ test('native sibling paths remain distinct when process.platform is overridden',
   assert.equal(existsSync(separateKey(directory)), true);
 });
 
-test('legacy stores stay in place and a stopped manual key move remains readable', async (t) => {
-  const f = fixture(t);
-  const directory = join(f.root, 'legacy');
-  const original = f.open(directory);
-  await original.set(ref, 'old');
-  await original.close();
-  asLegacy(directory);
-  const beforeRead = readFileSync(join(directory, 'credentials.sqlite'));
-  const reader = f.open(directory, { readOnly: true });
-  assert.equal(await reader.get(ref), 'old');
-  await reader.close();
-  assert.deepEqual(readFileSync(join(directory, 'credentials.sqlite')), beforeRead);
-  const writer = f.open(directory);
-  await writer.rotate('k2');
-  await writer.set(ref2, 'new');
-  await writer.close();
-  assert.equal(existsSync(legacyKey(directory)), true);
-  assert.equal(existsSync(separateKey(directory)), false);
-  mkdirSync(`${directory}.keys`, { mode: 0o700, recursive: true });
-  renameSync(legacyKey(directory), separateKey(directory));
-  const moved = f.open(directory, { readOnly: true });
-  assert.equal(await moved.get(ref), 'old');
-  assert.equal(await moved.get(ref2), 'new');
-});
-
 test('two keyring locations conflict without changing either file or the database', async (t) => {
   const f = fixture(t);
   const directory = join(f.root, 'conflict');
@@ -140,8 +108,8 @@ test('two keyring locations conflict without changing either file or the databas
   const beforeOld = readFileSync(legacyKey(directory));
   const beforeNew = readFileSync(separateKey(directory));
   const conflict = f.open(directory);
-  await assert.rejects(conflict.get(ref), { code: 'CRED_KEY_UNAVAILABLE' });
-  await assert.rejects(conflict.set(ref, 'replacement'), { code: 'CRED_KEY_UNAVAILABLE' });
+  await assert.rejects(conflict.get(ref), { code: 'CRED_LEGACY_STORE' });
+  await assert.rejects(conflict.set(ref, 'replacement'), { code: 'CRED_LEGACY_STORE' });
   assert.deepEqual(readFileSync(dbPath), beforeDb);
   assert.deepEqual(readFileSync(legacyKey(directory)), beforeOld);
   assert.deepEqual(readFileSync(separateKey(directory)), beforeNew);
@@ -175,75 +143,7 @@ test('same-kid keyring swaps refuse set, delete and rotate without changing the 
   assert.equal(await restored.get(ref), 'first');
 });
 
-test('unbound legacy data refuses a same-kid keyring swap before any callback or write', async (t) => {
-  const f = fixture(t);
-  const a = join(f.root, 'legacy-a');
-  const b = join(f.root, 'legacy-b');
-  const first = f.open(a);
-  const second = f.open(b);
-  await first.set(ref, 'first');
-  await second.set(ref, 'second');
-  await first.close();
-  await second.close();
-  asLegacy(a);
-  const keyPath = legacyKey(a);
-  const correct = readFileSync(keyPath);
-  copyFileSync(actualKey(b), keyPath);
-  const wrong = readFileSync(keyPath);
-  const database = join(a, 'credentials.sqlite');
-  const before = readFileSync(database);
-  const bad = f.open(a);
-  let calls = 0;
-  for (const operation of [
-    () => bad.set(ref, 'replacement'),
-    () => bad.set(ref2, 'new'),
-    () => bad.delete(ref),
-    () => bad.rotate('k2'),
-    () => bad.transaction(ref, async () => { calls += 1; }),
-  ]) {
-    await assert.rejects(operation(), { code: 'CRED_DECRYPT_FAILED' });
-    assert.deepEqual(readFileSync(database), before);
-    assert.deepEqual(readFileSync(keyPath), wrong);
-  }
-  assert.equal(calls, 0);
-  await bad.close();
-  writeFileSync(keyPath, correct);
-  const restored = f.open(a, { readOnly: true });
-  assert.equal(await restored.get(ref), 'first');
-});
-
-test('unbound legacy data with a missing historical key cannot be changed', async (t) => {
-  const f = fixture(t);
-  const directory = join(f.root, 'missing-history');
-  const writer = f.open(directory);
-  await writer.set(ref, 'one');
-  await writer.rotate('k2');
-  await writer.set(ref2, 'two');
-  await writer.rotate('k3');
-  await writer.set(ref3, 'three');
-  await writer.close();
-  asLegacy(directory);
-  const keyPath = legacyKey(directory);
-  const saved = readFileSync(keyPath);
-  const document = JSON.parse(saved);
-  delete document.keys.k1;
-  writeFileSync(keyPath, JSON.stringify(document));
-  const before = readFileSync(join(directory, 'credentials.sqlite'));
-  const damaged = f.open(directory);
-  let called = 0;
-  await assert.rejects(damaged.transaction(ref3, () => { called += 1; }), { code: 'CRED_KEY_UNAVAILABLE' });
-  await assert.rejects(damaged.set(ref3, 'replacement'), { code: 'CRED_KEY_UNAVAILABLE' });
-  assert.equal(called, 0);
-  assert.deepEqual(readFileSync(join(directory, 'credentials.sqlite')), before);
-  await damaged.close();
-  writeFileSync(keyPath, saved);
-  const restored = f.open(directory, { readOnly: true });
-  assert.equal(await restored.get(ref), 'one');
-  assert.equal(await restored.get(ref2), 'two');
-  assert.equal(await restored.get(ref3), 'three');
-});
-
-test('a damaged historical key blocks writes without affecting readable newer values', async (t) => {
+test('a damaged bound historical key blocks reads and writes', async (t) => {
   const f = fixture(t);
   const directory = join(f.root, 'damaged-history');
   const writer = f.open(directory);
@@ -260,43 +160,12 @@ test('a damaged historical key blocks writes without affecting readable newer va
   writeFileSync(path, JSON.stringify(document));
   const before = readFileSync(join(directory, 'credentials.sqlite'));
   const damaged = f.open(directory);
-  assert.equal(await damaged.get(ref3), 'three');
+  await assert.rejects(damaged.get(ref3), { code: 'CRED_DECRYPT_FAILED' });
   await assert.rejects(damaged.set(ref3, 'replacement'), { code: 'CRED_DECRYPT_FAILED' });
   await assert.rejects(damaged.delete(ref3), { code: 'CRED_DECRYPT_FAILED' });
   assert.deepEqual(readFileSync(join(directory, 'credentials.sqlite')), before);
   await damaged.close();
   writeFileSync(path, saved);
-  const restored = f.open(directory, { readOnly: true });
-  assert.equal(await restored.get(ref), 'one');
-  assert.equal(await restored.get(ref2), 'two');
-  assert.equal(await restored.get(ref3), 'three');
-});
-
-test('unbound legacy validation checks every historical ciphertext before a write', async (t) => {
-  const f = fixture(t);
-  const directory = join(f.root, 'damaged-legacy-row');
-  const writer = f.open(directory);
-  await writer.set(ref, 'one');
-  await writer.rotate('k2');
-  await writer.set(ref2, 'two');
-  await writer.rotate('k3');
-  await writer.set(ref3, 'three');
-  await writer.close();
-  asLegacy(directory);
-  const database = join(directory, 'credentials.sqlite');
-  const original = readFileSync(database);
-  const db = new DatabaseSync(database);
-  try {
-    const envelope = Buffer.from(db.prepare('SELECT envelope FROM secret WHERE id = ?').get(ref2).envelope);
-    envelope[envelope.length - 1] ^= 1;
-    db.prepare('UPDATE secret SET envelope = ? WHERE id = ?').run(envelope, ref2);
-  } finally { db.close(); }
-  const damagedBytes = readFileSync(database);
-  const damaged = f.open(directory);
-  await assert.rejects(damaged.set(ref3, 'replacement'), { code: 'CRED_DECRYPT_FAILED' });
-  assert.deepEqual(readFileSync(database), damagedBytes);
-  await damaged.close();
-  writeFileSync(database, original);
   const restored = f.open(directory, { readOnly: true });
   assert.equal(await restored.get(ref), 'one');
   assert.equal(await restored.get(ref2), 'two');

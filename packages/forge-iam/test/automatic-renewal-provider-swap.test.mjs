@@ -31,7 +31,7 @@ for (const swap of ['before the timer', 'between provider checks']) test(`an old
   const now = Date.now();
   const issuer = 'https://iam.corp.example';
   const grant = (subject, refreshToken, ttl) => ({
-    version: 1, issuer, subject, clientId: 'dsh', refreshToken, scope: 'openid',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer, subject, clientId: 'dsh', refreshToken, scope: 'openid',
     obtainedAt: new Date(now).toISOString(), refreshExpiresAt: new Date(now + ttl).toISOString(),
   });
   await createGrantStore(first).write(grant('E1001', 'refresh-a', 2400));

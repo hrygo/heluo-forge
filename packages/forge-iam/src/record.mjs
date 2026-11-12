@@ -96,9 +96,8 @@ function validateGrantFields(input) {
     }
   }
 
-  if (Object.hasOwn(input, 'sessionInstanceId')
-    && (typeof input.sessionInstanceId !== 'string'
-      || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(input.sessionInstanceId))) {
+  if (typeof input.sessionInstanceId !== 'string'
+    || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(input.sessionInstanceId)) {
     errors.push('grant.sessionInstanceId is invalid');
   }
 
@@ -135,8 +134,7 @@ function validateGrantFields(input) {
 }
 
 /**
- * Parse a stored payload. Returns a validation error instead of throwing so
- * callers can clear a corrupt record and force re-login.
+ * Parse a stored payload. Returns a validation error without changing it.
  *
  * @param {unknown} payload
  */

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createIamService } from '../src/service.mjs';
 import { createGrantStore, createGatewayCredentialStore, GRANT_KEY, GATEWAY_RECORD_KEY, GATEWAY_REF } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
-import { createAtomicGatewayFixture, gatewayAtomicOptions, seedLegacyGateway } from './support/atomic-gateway.mjs';
+import { createAtomicGatewayFixture, gatewayAtomicOptions, seedGateway } from './support/atomic-gateway.mjs';
 
 const now = Date.parse('2030-01-01T00:00:00.000Z');
 const config = {
@@ -16,13 +16,13 @@ const value = `uag-${'a'.repeat(32)}`;
 
 async function seedGrant(credentials, subject = 'old-user', clientId = config.clientId) {
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, subject, clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject, clientId,
     refreshToken: `${subject}-refresh`, accessToken: `${subject}-access`, scope: 'openid',
     obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + 3600000).toISOString(),
   });
 }
 async function seedKey(credentials, subject) {
-  seedLegacyGateway(credentials, { value, ownerSubject: subject,
+  seedGateway(credentials, { value, ownerSubject: subject,
     enteredAt: new Date(now).toISOString(), deviceLabel: subject });
 }
 function pause(credentials, method, fail = false, key = GATEWAY_RECORD_KEY) {

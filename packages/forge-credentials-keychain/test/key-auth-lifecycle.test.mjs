@@ -41,7 +41,7 @@ test('an unreferenced historical key remains bound and must be restored before w
   assert.equal(await store.get(ref), 'recovered');
 });
 
-test('a mismatched unreferenced historical key still prevents writes', async (t) => {
+test('a mismatched bound historical key prevents reads and writes', async (t) => {
   const root = await outsideRepositoryTmpAsync('forge-key-auth-mismatch-');
   const directory = join(root, 'data');
   let store = createCredentialStore({ directory });
@@ -58,10 +58,10 @@ test('a mismatched unreferenced historical key still prevents writes', async (t)
   writeFileSync(keyPath, JSON.stringify(document));
   store = createCredentialStore({ directory });
   await assert.rejects(store.set(ref, 'refused'), { code: 'CRED_DECRYPT_FAILED' });
-  assert.equal(await store.get(ref), 'new-value');
+  await assert.rejects(store.get(ref), { code: 'CRED_DECRYPT_FAILED' });
 });
 
-test('first binding rejects a ciphertext changed after its read snapshot', async (t) => {
+test('missing binding refuses an already open store before invoking a mutation', async (t) => {
   const root = await outsideRepositoryTmpAsync('forge-key-auth-race-');
   const directory = join(root, 'data');
   const store = createCredentialStore({ directory });
@@ -74,16 +74,15 @@ test('first binding rejects a ciphertext changed after its read snapshot', async
   const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
   let calls = 0;
   try {
-    // Model an older SQLite store before its first key binding.
     db.prepare("DELETE FROM meta WHERE key='key_auth'").run();
     await assert.rejects(store.transaction(first, (tx) => {
       calls += 1;
       db.prepare("UPDATE secret SET envelope = X'00' WHERE id = ?").run(second);
       tx.set('should-not-commit');
-    }), { code: 'CRED_DECRYPT_FAILED' });
-    assert.equal(calls, 1);
-    assert.equal(await store.get(first), 'first-value');
+    }), { code: 'CRED_LEGACY_STORE' });
+    assert.equal(calls, 0);
+    await assert.rejects(store.get(first), { code: 'CRED_LEGACY_STORE' });
     assert.equal(db.prepare("SELECT value FROM meta WHERE key='key_auth'").get(), undefined);
-    await assert.rejects(store.get(second), { code: 'CRED_DECRYPT_FAILED' });
+    await assert.rejects(store.get(second), { code: 'CRED_LEGACY_STORE' });
   } finally { db.close(); }
 });

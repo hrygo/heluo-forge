@@ -15,7 +15,7 @@ for (const expired of [false, true]) test(`an adopted rotation does not inherit 
   let keyRequests = 0;
   const posted = [];
   const original = {
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'refresh-a', accessToken: 'access-a', scope: 'openid',
     obtainedAt: new Date(time).toISOString(), accessExpiresAt: new Date(time + 10_000).toISOString(),
     refreshExpiresAt: new Date(time + 120_000).toISOString(),
@@ -54,7 +54,7 @@ test('a rotation with unchanged deadlines still schedules its new refresh token'
   const store = createGrantStore(credentials);
   const time = Date.now();
   const original = {
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'refresh-a', accessToken: 'access-a', scope: 'openid',
     obtainedAt: new Date(time).toISOString(), accessExpiresAt: new Date(time + 2200).toISOString(),
     refreshExpiresAt: new Date(time + 120_000).toISOString(),
@@ -90,7 +90,7 @@ test('a view notification after access expires preserves the scheduled preflight
   let keyRequests = 0;
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 800).toISOString(),
     refreshExpiresAt: new Date(clock + 10_000).toISOString(),
@@ -126,7 +126,7 @@ test('a replacement session does not inherit the previous session preflight back
   oidc.refreshTokens.set('refresh-a', { subject: 'E1001' });
   oidc.refreshTokens.set('refresh-b', { subject: 'E2002' });
   const grant = (subject, refreshToken) => ({
-    version: 1, issuer: oidc.issuer, subject, clientId: oidc.clientId, refreshToken, scope: 'openid',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject, clientId: oidc.clientId, refreshToken, scope: 'openid',
     obtainedAt: new Date(now).toISOString(), refreshExpiresAt: new Date(now + 10_000).toISOString(),
   });
   await store.write(grant('E1001', 'refresh-a'));
@@ -164,7 +164,7 @@ test('an old recovery timer does not refresh a replacement session in the same s
   oidc.refreshTokens.set('refresh-a', { subject: 'E1001' });
   oidc.refreshTokens.set('refresh-b', { subject: 'E2002' });
   const grant = (subject, refreshToken, ttl) => ({
-    version: 1, issuer: oidc.issuer, subject, clientId: oidc.clientId, refreshToken, scope: 'openid',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject, clientId: oidc.clientId, refreshToken, scope: 'openid',
     obtainedAt: new Date(now).toISOString(), refreshExpiresAt: new Date(now + ttl).toISOString(),
   });
   await store.write(grant('E1001', 'refresh-a', 2400));
@@ -203,7 +203,7 @@ test('replacing a session during retry preflight does not strand the replacement
   oidc.refreshTokens.set('refresh-a', { subject: 'E1001' });
   oidc.refreshTokens.set('refresh-b', { subject: 'E2002' });
   const grant = (subject, refreshToken, ttl) => ({
-    version: 1, issuer: oidc.issuer, subject, clientId: oidc.clientId, refreshToken, scope: 'openid',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject, clientId: oidc.clientId, refreshToken, scope: 'openid',
     obtainedAt: new Date(now).toISOString(), refreshExpiresAt: new Date(now + ttl).toISOString(),
   });
   await store.write(grant('E1001', 'refresh-a', 2400));

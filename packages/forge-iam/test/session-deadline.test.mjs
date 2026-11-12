@@ -14,7 +14,7 @@ const config = {
   redirectUri: 'http://127.0.0.1:4567/iam/callback',
 };
 const grant = (expiresAt) => ({ kind: 'grant', payload: {
-  version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+  version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
   refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z',
   accessToken: 'synthetic-access', accessExpiresAt: new Date(expiresAt).toISOString(),
   refreshExpiresAt: new Date(now - 1000).toISOString(),

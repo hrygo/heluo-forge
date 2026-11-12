@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createManagedModelRuntime } from '../src/managed-models.mjs';
 import { createServiceGrant } from '../src/service-grant.mjs';
 import { createGrantStore } from '../src/store.mjs';
-import { seedLegacyGateway } from './support/atomic-gateway.mjs';
+import { seedGateway } from './support/atomic-gateway.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 import { createIamService } from './support/trusted-service.mjs';
@@ -15,12 +15,12 @@ test('a running model call survives the original expiry when the same session ca
   const deadline = Date.now() + 3000;
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(deadline).toISOString(),
     refreshExpiresAt: new Date(deadline + 60_000).toISOString(),
   });
-  seedLegacyGateway(credentials, {
+  seedGateway(credentials, {
     value: `uag-${'a'.repeat(32)}`, ownerSubject: 'E1001', enteredAt: new Date().toISOString(),
   });
   const config = {
@@ -77,7 +77,7 @@ test('a rotated refresh token does not inherit the previous token deadline when 
   const now = Date.parse('2030-01-01T00:00:00.000Z');
   const grants = createServiceGrant({ config: { clientId: 'dsh', gatewayResource: '', scopes: ['openid'] }, now: () => now });
   const previous = {
-    version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'dsh',
     refreshToken: 'old', accessToken: 'old-access', scope: 'openid', obtainedAt: new Date(now).toISOString(),
     refreshExpiresAt: new Date(now + 1000).toISOString(),
   };
@@ -95,7 +95,7 @@ test('successive rotations remain usable when the issuer omits the new refresh-t
   let clock = Date.now();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock - 1).toISOString(),
     refreshExpiresAt: new Date(clock + 1000).toISOString(),
@@ -116,7 +116,7 @@ test('hydration renews a refresh-only grant without a token request', async (t) 
   const credentials = new MemoryCredentials();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date().toISOString(),
     refreshExpiresAt: new Date(Date.now() + 60_000).toISOString(),
   });
@@ -153,7 +153,7 @@ test('a failed refresh claim is shared and can be retried after storage recovers
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   const store = createGrantStore(credentials);
   await store.write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 120_000).toISOString(),
   });
@@ -196,7 +196,7 @@ test('a refresh token that expires first is renewed before its own deadline', as
   const credentials = new MemoryCredentials();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 30_000).toISOString(),
     refreshExpiresAt: new Date(Date.now() + 2400).toISOString(),
@@ -214,7 +214,7 @@ test('a refresh token that expires first is renewed before its own deadline', as
 test('disposing the Host cancels scheduled renewal without changing the stored session', async (t) => {
   const oidc = await startMockOidc({ accessTtl: 30 });
   const credentials = new MemoryCredentials();
-  const grant = { version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+  const grant = { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 1200).toISOString() };
   const store = createGrantStore(credentials);
@@ -234,7 +234,7 @@ test('a temporary preflight outage does not discard a valid session and is retri
   const credentials = new MemoryCredentials();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 5000).toISOString(),
   });
@@ -266,7 +266,7 @@ for (const [accessState, outage] of [['missing', 'network'], ['expired', 'networ
     const credentials = new MemoryCredentials();
     oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
     const grant = {
-      version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+      version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
       refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date().toISOString(),
       refreshExpiresAt: new Date(Date.now() + 5000).toISOString(),
       ...(accessState === 'expired' ? {
@@ -310,7 +310,7 @@ for (const accessDeadline of ['later', 'same']) test(`a refresh token expiring $
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   const now = Date.now();
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + (accessDeadline === 'same' ? 2400 : 30_000)).toISOString(),
     refreshExpiresAt: new Date(now + 2400).toISOString(),
@@ -339,7 +339,7 @@ test('disposing an expired session cancels its scheduled preflight retry', async
   const credentials = new MemoryCredentials();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date().toISOString(),
     refreshExpiresAt: new Date(Date.now() + 2400).toISOString(),
   });
@@ -372,7 +372,7 @@ test('view reconciliation does not bypass preflight backoff when access expires 
   const release = Promise.withResolvers();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 1000).toISOString(),
     refreshExpiresAt: new Date(clock + 60_000).toISOString(),
@@ -410,7 +410,7 @@ test('an unrelated view notification cannot shorten the preflight retry delay', 
   const requests = [];
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 1200).toISOString(),
   });
@@ -437,7 +437,7 @@ test('zero skew does not make a still-valid access token expire with an older re
   const credentials = new MemoryCredentials();
   let clock = Date.now();
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock - 5000).toISOString(), accessExpiresAt: new Date(clock + 500).toISOString(),
     refreshExpiresAt: new Date(clock - 1).toISOString(),
@@ -461,7 +461,7 @@ test('successive refreshes honor the discovery metadata cache lifetime', async (
   const tokenPaths = [];
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 10_000).toISOString(),
   });
@@ -508,7 +508,7 @@ test('a discovery outage after the cache expires does not claim or consume the r
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   const store = createGrantStore(credentials);
   await store.write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 10_000).toISOString(),
   });
@@ -548,7 +548,7 @@ test('a lost refresh response leaves pending and is never retried automatically'
   const credentials = new MemoryCredentials();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 1800).toISOString(),
   });
@@ -569,7 +569,7 @@ test('two running Hosts share one automatic refresh', async (t) => {
   const credentials = new MemoryCredentials();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 2400).toISOString(),
   });
@@ -605,7 +605,7 @@ test('a view read joins this Host\'s own refresh without exposing a temporary si
   const release = Promise.withResolvers();
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
   await createGrantStore(credentials).write({
-    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 2500).toISOString(),
   });
@@ -640,7 +640,7 @@ test('adopting another process\'s renewed grant publishes its new deadline', asy
   const config = { issuer: 'https://iam.corp.example', authorizationEndpoint: 'https://iam.corp.example/authorize',
     tokenEndpoint: 'https://iam.corp.example/token', jwksUri: 'https://iam.corp.example/jwks',
     clientId: 'dsh', redirectUri: 'http://127.0.0.1:4567/iam/callback' };
-  const grant = { version: 1, issuer: config.issuer, subject: 'E1001', clientId: config.clientId,
+  const grant = { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'E1001', clientId: config.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 120_000).toISOString() };
   const store = createGrantStore(credentials);

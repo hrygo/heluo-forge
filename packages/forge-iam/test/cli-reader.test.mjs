@@ -43,7 +43,7 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   return { directory, env, log, async cli(...args) { return run(process.execPath, ['--import', hook, bin, 'auth', ...args], { env }); } };
 }
 
-const grant = { kind: 'grant', payload: { version: 1, clientId: 'fixture', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z', subject: 'E1001', issuer: 'https://iam.corp.example',
+const grant = { kind: 'grant', payload: { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), clientId: 'fixture', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z', subject: 'E1001', issuer: 'https://iam.corp.example',
   refreshToken: 'placeholder-refresh', accessToken: 'placeholder-access', accessExpiresAt: '2099-01-01T00:00:00.000Z' } };
 
 test('CLI opens the shared reader with its namespace, preserves output and closes it', async (t) => {
@@ -273,8 +273,9 @@ test('bridge accepts a verified refresh of the same session only when Host retur
   const identity = { version: 1, issuer: 'https://iam.corp.example', subject: 'E1001', clientId: 'fixture',
     scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z', sessionInstanceId: Buffer.alloc(32, 7).toString('base64url') };
   const before = { kind: 'grant', payload: { ...identity, accessToken: 'synthetic-old', refreshToken: 'synthetic-old-refresh', accessExpiresAt: '2020-01-01T00:00:00.000Z' } };
+  const operationId = Buffer.alloc(32, 3).toString('base64url');
   const after = { kind: 'grant', payload: { ...before.payload, accessToken: 'synthetic-new', refreshToken: 'synthetic-new-refresh', accessExpiresAt: '2099-01-01T00:00:00.000Z',
-    refreshOperation: { version: 1, state: 'complete', id: Buffer.alloc(32, 3).toString('base64url'), base: Buffer.alloc(32, 4).toString('base64url') } } };
+    refreshOperation: { version: 1, state: 'complete', id: operationId, base: refreshBaseId(before.payload, operationId) } } };
   let token = 'synthetic-new';
   const server = createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ token })); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -316,7 +317,7 @@ test('invalid grant and malformed refresh marker are refused before contacting b
 });
 
 
-test('legacy V1 refresh bridge accepts only the completed rotation of the original grant', async (t) => {
+test('identified V1 refresh bridge checks pending rotation and the session identity', async (t) => {
   const previous = { version: 1, state: 'complete', id: Buffer.alloc(32, 10).toString('base64url'), base: Buffer.alloc(32, 11).toString('base64url') };
   const original = { ...grant.payload, accessToken: 'synthetic-old', refreshToken: 'synthetic-old-refresh', refreshOperation: previous };
   const id = Buffer.alloc(32, 12).toString('base64url');
@@ -348,7 +349,7 @@ test('legacy V1 refresh bridge accepts only the completed rotation of the origin
     ['active operation base changed', active, changed({ refreshOperation: { ...completed.payload.refreshOperation, base: differentBase } }), 'synthetic-new'],
     ['base belongs to another original grant', { ...active, payload: { ...original, refreshToken: 'another-original-refresh' } }, completed, 'synthetic-new'],
     ['identity changed', pending, changed({ subject: 'another-subject' }), 'synthetic-new'],
-    ['instance added', pending, changed({ sessionInstanceId: instance }), 'synthetic-new'],
+    ['instance changed', pending, changed({ sessionInstanceId: instance }), 'synthetic-new'],
     ['instance replaced', { ...pending, payload: { ...pending.payload, sessionInstanceId: instance } }, changed({ sessionInstanceId: differentId }), 'synthetic-new'],
     ['old Host token', pending, completed, 'synthetic-old'],
     ['old refresh token', pending, changed({ refreshToken: original.refreshToken }), 'synthetic-new'],
