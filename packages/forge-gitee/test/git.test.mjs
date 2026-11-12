@@ -321,6 +321,9 @@ test('适配器：普通认证拒绝/缺凭据/HTTP 断开维持 GIT_COMMAND_FAI
     'remote: HTTP Basic: Access denied',
     'error: RPC failed; curl 56 Recv failure: Broken pipe',
     'fatal: bad config line 1 in file /opt/msys/etc/gitconfig',
+    // 服务端 hook 的资源不足是远端诊断：连接已建立，不能据此改本机凭据。
+    'remote: cannot fork: Resource temporarily unavailable',
+    'remote: CreateFileMapping failed: 5',
   ];
   for (const stderr of samples) {
     const adapter = createGiteeGitAdapter({
@@ -337,6 +340,48 @@ test('适配器：普通认证拒绝/缺凭据/HTTP 断开维持 GIT_COMMAND_FAI
       },
     );
   }
+});
+
+test('适配器：服务端 remote: 诊断不参与传输层判定，本机崩溃特征仍归类', async () => {
+  const remoteOnly = createGiteeGitAdapter({
+    runner: fakeRunner(() => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'remote: cannot fork: Resource temporarily unavailable\nremote: error: hook declined push',
+      durationMs: 5,
+      timedOut: false,
+      truncated: false,
+    })),
+    cwd: '/tmp/offline-repo',
+  });
+  await assert.rejects(
+    () => remoteOnly.push({ remote: 'origin', branch: 'feat/r10' }),
+    (error) => {
+      assert.equal(error.code, GIT_REASONS.COMMAND_FAILED, '远端 hook 失败应维持普通命令失败');
+      assert.equal(error.detail.authTransport, undefined);
+      return true;
+    },
+  );
+
+  const localMixed = createGiteeGitAdapter({
+    runner: fakeRunner(() => ({
+      exitCode: 128,
+      stdout: '',
+      stderr: 'remote: hook accepted\nsh: cannot fork: Resource temporarily unavailable',
+      durationMs: 5,
+      timedOut: false,
+      truncated: false,
+    })),
+    cwd: '/tmp/offline-repo',
+  });
+  await assert.rejects(
+    () => localMixed.push({ remote: 'origin', branch: 'feat/r10' }),
+    (error) => {
+      assert.equal(error.code, GIT_REASONS.AUTH_TRANSPORT_UNAVAILABLE, '本机 sh 崩溃仍应归类');
+      assert.equal(error.detail.mayHaveSideEffect, false);
+      return true;
+    },
+  );
 });
 
 test('适配器：msys 运行时名必须与「凭据拿不到」症状同现才归类（单独环境名不算）', async () => {

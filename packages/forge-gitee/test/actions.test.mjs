@@ -743,8 +743,26 @@ test('AC-6: 判定缺参/非法入参 fail closed——零策略、零子进程�
   assert.equal(badMessage.reason, ACTION_REASONS.COMMIT_MESSAGE_INVALID);
   assert.equal(badMessage.executed, false, '判定即使失败也只判定不执行');
   assert.equal(badMessage.remote_calls, 0);
+  assert.equal(badMessage.next_action, 'fix-content', '提交信息不合规要指向修内容');
   assert.equal(harness.counters.execFile, 0);
   assert.equal(harness.counters.invoke, 0);
+});
+
+test('AC-21 交付判定未通过：failed 无原因码也必须给下一步，且不误报参数错误', async () => {
+  const harness = createHarness();
+  const notReady = await runTool(harness.service, 'forge_gitee_delivery_gate', {
+    ...DELIVERY_GATE_READY,
+    criteria: { ...DELIVERY_GATE_READY.criteria, merged: 'fail' },
+  });
+  assert.equal(notReady.status, 'failed', `未满足关闭条件应为 failed（实际：${notReady.status}）`);
+  assert.equal(notReady.reason, null, '条件未满足不是错误原因码');
+  assert.equal(notReady.next_action, 'complete-delivery-criteria', '要让调用方知道去补齐关闭条件');
+  assert.equal(notReady.executed, false);
+  assert.equal(harness.counters.execFile, 0);
+
+  const ready = await runTool(harness.service, 'forge_gitee_delivery_gate', DELIVERY_GATE_READY);
+  assert.equal(ready.status, 'done');
+  assert.equal('next_action' in ready, false, 'done 不再挂下一步');
 });
 
 test('AC-11 本地/判定类动作不要求 confirm，但仍过门禁与审计（远程写才需要确认）', async () => {

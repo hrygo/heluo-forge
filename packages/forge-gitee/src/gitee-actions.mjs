@@ -40,7 +40,7 @@ import {
   REPO_PATTERN as REPO_TARGET_PATTERN,
 } from './gitee-adapter.mjs';
 import { GUARD_REASONS, GITEE_PLATFORM } from './gitee-guard.mjs';
-import { nextActionFor } from './gitee-next-action.mjs';
+import { DELIVERY_NOT_READY_ACTION, nextActionFor } from './gitee-next-action.mjs';
 import { REPLAY_BLOCKED_STATUSES, buildEvidence, idempotencyKey } from './gitee-session.mjs';
 
 /**
@@ -180,8 +180,9 @@ function bodyDigest(body) {
  * 显式声明了才输出（当前仅 `gitee-delivery.judge` 声明 `executed: false`）。四个写动作的
  * produced 没有这个键。
  *
- * `next_action` 只在 `reason !== null`（被拒/失败/不确定）时出现：`done` 已经给了结果，
- * 再挂一个"下一步"会诱导调用方对成功动作重试。词表与门禁共用 `gitee-next-action.mjs`。
+ * `next_action` 只在 `status !== 'done'` 时出现：`done` 已经给了结果，再挂一个"下一步"
+ * 会诱导调用方对成功动作重试。常规路径由 `reason` 映射；没有原因码的确定失败（交付判定
+ * 未通过）由调用方显式给动词，避免把"还有关闭条件没满足"误报成参数错误。
  */
 function actionResult({
   tool,
@@ -199,8 +200,14 @@ function actionResult({
   evidence,
   remoteCalls = 0,
   executed,
+  nextAction,
 } = {}) {
-  const hint = reason === null ? null : nextActionFor(reason);
+  const explicit = text(nextAction);
+  const hint = status === 'done'
+    ? null
+    : explicit === ''
+      ? nextActionFor(reason)
+      : explicit;
   return {
     ok: status === 'done',
     provider: GITEE_PLATFORM,
@@ -463,6 +470,7 @@ async function executeWrite(service, spec) {
     readback: produced.readback,
     evidence: produced.evidence,
     remoteCalls: produced.remote_calls ?? 0,
+    nextAction: produced.next_action,
   });
 }
 
@@ -1130,6 +1138,8 @@ export function createDeliveryGate() {
                   // 只判定：把"没有执行任何远端动作"作为运行时事实声明出来（来源恒 false），
                   // 信封层按"produced 声明才输出"透传，读写动作不会因此多键。
                   executed: judged?.executed === true,
+                  // 交付判定未通过时没有错误原因码：显式指到"补齐关闭条件"，不借用参数类动词。
+                  next_action: status === 'failed' && commitOk && judged !== null ? DELIVERY_NOT_READY_ACTION : undefined,
                   readback: {
                     via: 'gitee-delivery',
                     ok: status === 'done',
@@ -1221,6 +1231,8 @@ export function settleActionVerdict(spec, verdict, { target, key }) {
     remoteCalls: produced.remote_calls ?? 0,
     // 判定体的 `executed: false` 在这里过桥；写动作 produced 无此键 ⇒ undefined ⇒ 信封不出现该键。
     executed: produced.executed,
+    // 交付判定未通过没有原因码，需要显式下一步；其他动作 produced 无此键。
+    nextAction: produced.next_action,
   });
 }
 

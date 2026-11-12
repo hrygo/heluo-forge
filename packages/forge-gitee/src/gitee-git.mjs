@@ -102,8 +102,10 @@ const clip = (value, max = 180) => {
  *    单独出现运行时名不算命中——路径里出现 msys 也可能只是普通报错。
  *
  * 明确**不算**命中：401/403、`Authentication failed`、`permission denied`、孤立的
- * `could not read Username`（没有崩溃特征时就是凭据真的缺失或被拒），以及 HTTP 传输的
- * `Broken pipe`。这些维持原有原因码，不能被笼统归到传输层。
+ * `could not read Username`（没有崩溃特征时就是凭据真的缺失或被拒）、HTTP 传输的
+ * `Broken pipe`，以及带 `remote:` 前缀的服务端诊断。最后一条是必要的：服务端 hook 可能
+ * 回 `remote: cannot fork: Resource temporarily unavailable`，那是远端资源不足，连接本身
+ * 已经建立，不能据此让用户去改本机凭据。判定前先剔除所有 `remote:` 行。
  */
 const HARD_AUTH_TRANSPORT_SIGNS = Object.freeze([
   Object.freeze({ id: 'cannot-fork', pattern: /\bcannot fork\b/iu }),
@@ -134,7 +136,11 @@ const CREDENTIAL_SYMPTOM_SIGN =
 export function detectAuthTransportFailure(outcome = {}) {
   const stderr = typeof outcome.stderr === 'string' ? outcome.stderr : '';
   const stdout = typeof outcome.stdout === 'string' ? outcome.stdout : '';
-  const output = `${stderr}\n${stdout}`;
+  // 服务端诊断（`remote:` 前缀）不是本机传输层的证据：连接已经建立，问题在远端。
+  const output = `${stderr}\n${stdout}`
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s*remote:/iu.test(line))
+    .join('\n');
   if (output.trim() === '') return null;
   const signs = HARD_AUTH_TRANSPORT_SIGNS.filter(({ pattern }) => pattern.test(output)).map(({ id }) => id);
   if (signs.length > 0) return Object.freeze({ signs: Object.freeze(signs) });

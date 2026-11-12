@@ -53,6 +53,12 @@ const GUARD_NEXT = Object.freeze({
 const FALLBACK = 'report-to-admin';
 
 /**
+ * 判定类结果没有失败原因码时由调用方显式给的动词：交付判定未通过表示"还有关闭条件没满足"，
+ * 不是参数错、也不是策略拒绝，因此单独给一个可执行动作，不借用 `fix-arguments`。
+ */
+export const DELIVERY_NOT_READY_ACTION = 'complete-delivery-criteria';
+
+/**
  * 原因码 → 下一步动词。未知原因不猜，落到 `report-to-admin`。
  *
  * @param {unknown} reason 原因码（门禁或动作层）
@@ -65,4 +71,4 @@ export function nextActionFor(reason) {
 }
 
 /** 词表全集（文档与测试枚举用；顺序无关，去重后冻结）。 */
-export const NEXT_ACTIONS = Object.freeze([...new Set([...Object.values(GUARD_NEXT), ...Object.values(ACTION_NEXT), FALLBACK])].sort());
+export const NEXT_ACTIONS = Object.freeze([...new Set([...Object.values(GUARD_NEXT), ...Object.values(ACTION_NEXT), DELIVERY_NOT_READY_ACTION, FALLBACK])].sort());
