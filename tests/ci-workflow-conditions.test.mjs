@@ -38,12 +38,12 @@ const iamReadTestPaths = [
 ];
 
 const platformEnvironment = new Map([
-  ['native-linux-x64', { NAME: 'linux-x64', PLATFORM: 'linux', ARCH: 'x64' }],
-  ['native-linux-arm64', { NAME: 'linux-arm64', PLATFORM: 'linux', ARCH: 'arm64' }],
-  ['native-win32-x64', { NAME: 'win32-x64', PLATFORM: 'win32', ARCH: 'x64' }],
-  ['native-win32-arm64', { NAME: 'win32-arm64', PLATFORM: 'win32', ARCH: 'arm64' }],
-  ['native-linux-x64-next', { NAME: 'linux-x64, ubuntu-26.04', PLATFORM: 'linux', ARCH: 'x64' }],
-  ['native-win32-x64-next', { NAME: 'win32-x64, windows-2025', PLATFORM: 'win32', ARCH: 'x64' }],
+  ['native-linux-x64', { PLATFORM: 'linux', ARCH: 'x64' }],
+  ['native-linux-arm64', { PLATFORM: 'linux', ARCH: 'arm64' }],
+  ['native-win32-x64', { PLATFORM: 'win32', ARCH: 'x64' }],
+  ['native-win32-arm64', { PLATFORM: 'win32', ARCH: 'arm64' }],
+  ['native-linux-x64-next', { PLATFORM: 'linux', ARCH: 'x64' }],
+  ['native-win32-x64-next', { PLATFORM: 'win32', ARCH: 'x64' }],
   ['document-macos-15', { PLATFORM: 'darwin', ARCH: 'arm64' }],
   ['document-macos-15-intel', { PLATFORM: 'darwin', ARCH: 'x64' }],
 ]);
@@ -170,7 +170,6 @@ function expressionValue(expression, scenario, { caseInsensitive = true } = {}) 
     if (token === 'needs.changes.result') return scenario.result;
     if (token === 'needs.changes.outputs.run_platforms') return scenario.output;
     if (token === 'github.event_name') return scenario.event;
-    if (token === 'env.FORGE_CI_NAME') return scenario.name;
     if (['cancelled', 'always', 'success', 'failure'].includes(token)) {
       if (!take('(') || !take(')')) throw new Error(`invalid status function ${token}`);
       if (token === 'cancelled') return scenario.cancelled;
@@ -437,9 +436,9 @@ test('workflow guards reject deleted gates, inverted conditions and missing clas
     ['case validation exit', replaceJob(workflow, 'changes', (job) => job.replace('exit 1 ;;', 'echo ignored ;;')), /changes: platform output validation must accept only/u],
     ['platform dependency', replaceJob(workflow, 'native-win32-x64', (job) => job.replace(/^    needs:.*\n/mu, '')), /native-win32-x64: must depend/u],
     ['platform condition', replaceJob(workflow, 'native-win32-x64', (job) => job.replace(/^    if:.*$/mu, "    if: ${{ !cancelled() && needs.changes.outputs.run_platforms == 'false' }}")), /native-win32-x64: unsafe condition/u],
+    ['runner', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('runs-on: ubuntu-24.04-arm', 'runs-on: ubuntu-24.04')), /native-linux-arm64: runner changed/u],
     ['platform OS', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_PLATFORM: linux', 'FORGE_CI_PLATFORM: darwin')), /native-linux-arm64: FORGE_CI_PLATFORM/u],
     ['platform arch', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_ARCH: arm64', 'FORGE_CI_ARCH: x64')), /native-linux-arm64: FORGE_CI_ARCH/u],
-    ['platform name', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_NAME: linux-arm64', 'FORGE_CI_NAME: linux-x64')), /native-linux-arm64: FORGE_CI_NAME/u],
     ['document arch', replaceJob(workflow, 'document-macos-15-intel', (job) => job.replace('FORGE_CI_ARCH: x64', 'FORGE_CI_ARCH: arm64')), /document-macos-15-intel: FORGE_CI_ARCH/u],
     ['installed SQLite smoke removed', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('node scripts/probe/installed-credential-smoke.mjs', 'node missing.mjs')), /native-linux-x64: installed SQLite smoke must run unconditionally/u],
     ['sqlite tests skipped', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('      - name: Test credential storage\n', '      - name: Test credential storage\n        if: ${{ false }}\n')), /native-linux-x64: platform tests must run unconditionally/u],
