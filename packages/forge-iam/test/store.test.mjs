@@ -62,6 +62,20 @@ test('read returns null when no IAM record exists', async () => {
   assert.deepEqual(await store.read(), { ok: true, grant: null });
 });
 
+test('grant reads preserve the result and details for string, invalid and pending records', async () => {
+  const id = Buffer.alloc(32, 1).toString('base64url');
+  const read = async (record) => createGrantStore(fakeCredentials({ records: [[GRANT_KEY, record]] })).read();
+  assert.deepEqual(await read({ kind: 'grant', payload: JSON.stringify(grant) }), { ok: true, grant });
+  assert.deepEqual(await read({ kind: 'grant', payload: '{not valid json' }), {
+    ok: false, reason: 'invalid-grant', errors: ['grant payload is not valid JSON'],
+  });
+  assert.deepEqual(await read({ kind: 'api-key' }), { ok: false, reason: 'wrong-kind', kind: 'api-key' });
+  const signout = { ...grant, signOutOperation: { version: 1, state: 'pending', id } };
+  assert.deepEqual(await read({ kind: 'grant', payload: JSON.stringify(signout) }), { ok: false, reason: 'sign-out-pending' });
+  const refresh = { ...grant, refreshOperation: { version: 1, state: 'pending', id, base: id } };
+  assert.deepEqual(await read({ kind: 'grant', payload: JSON.stringify(refresh) }), { ok: true, grant: refresh });
+});
+
 test('write then read round-trips the grant and keeps the key stable', async () => {
   const credentials = fakeCredentials();
   const store = createGrantStore(credentials);

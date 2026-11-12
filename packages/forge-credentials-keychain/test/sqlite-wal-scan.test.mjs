@@ -30,8 +30,10 @@ test('database, WAL and SHM exist and contain no credential plaintext in WAL mod
   observer = new DatabaseSync(database);
   assert.equal(observer.prepare('PRAGMA journal_mode=WAL').get().journal_mode, 'wal');
   store = createCredentialStore({ directory });
-  const refMarker = 'synthetic-wal-secret-marker-alpha-bravo';
-  const recordMarker = 'synthetic-record-secret-marker-abcdefgh';
+  const refMarker = 'synthetic-wal-secret-marker-xxxx';
+  const recordMarker = 'synthetic-record-secret-marker-b';
+  assert.equal(Buffer.byteLength(refMarker), 32);
+  assert.equal(Buffer.byteLength(recordMarker), 32);
   await store.set('heluo-forge/iam/ref/TEST', refMarker);
   await store.set('heluo-forge/iam/record/heluo-iam/session', JSON.stringify({
     kind: 'grant', payload: { subject: 'E1001', accessToken: recordMarker },

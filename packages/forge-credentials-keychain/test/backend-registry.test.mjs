@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createDecipheriv } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { capabilities, createRegisteredBackend } from '../src/backend-registry.mjs';
@@ -28,6 +29,84 @@ function context() {
     provide(name, value) { provided.set(name, value); return () => provided.delete(name); },
     effect(fn) { return fn(); } };
 }
+
+async function withRegisteredMemoryDefault(t) {
+  const root = await outsideRepositoryTmpAsync('forge-registry-memory-');
+  const own = ownDirectory(t, root);
+  const src = join(root, 'src');
+  await cp(new URL('../src/', import.meta.url), src, { recursive: true });
+  const fixtureDir = join(root, 'test', 'support');
+  await mkdir(fixtureDir, { recursive: true });
+  const fixturePath = join(fixtureDir, 'registered-memory-row-backend.mjs');
+  await cp(new URL('./support/registered-memory-row-backend.mjs', import.meta.url), fixturePath);
+  const registryPath = join(src, 'backend-registry.mjs');
+  const registry = await readFile(registryPath, 'utf8');
+  const defaultSelection = /^const DEFAULT_BACKEND = ['"][^'"]+['"];$/gm;
+  const registrations = 'const BACKENDS = Object.freeze({\n';
+  assert.equal([...registry.matchAll(defaultSelection)].length, 1, 'one default selection in registry');
+  assert.equal(registry.split(registrations).length, 2, 'one registration table');
+  const entry = `  'synthetic-memory': Object.freeze({
+    create: createRegisteredMemoryStore,
+    capabilities: Object.freeze({ crossProcessLock: false, jointAtomic: false }),
+  }),\n`;
+  await writeFile(registryPath, `import { createRegisteredMemoryStore } from '../test/support/registered-memory-row-backend.mjs';\n${registry
+    .replace(defaultSelection, "const DEFAULT_BACKEND = 'synthetic-memory';")
+    .replace(registrations, registrations + entry)}`);
+  const api = await import(pathToFileURL(join(src, 'index.mjs')).href);
+  const fixture = await import(pathToFileURL(fixturePath).href);
+  return { ...api, ...fixture, root, own };
+}
+
+test('a registered non-SQLite row backend shares the HFSE cipher across Host and reader without gaining trust', async (t) => {
+  const isolated = await withRegisteredMemoryDefault(t);
+  const directory = join(isolated.root, 'data');
+  const ctx = context();
+  const dispose = isolated.apply(ctx, { storeDirectory: directory, allowEphemeral: true });
+  isolated.own(dispose);
+  const provider = ctx.provided.get('credentials');
+  assert.equal(provider.durable, false);
+  assert.equal(provider.crossProcessLock, false);
+  assert.equal(ctx.provided.has('iam-atomic-store'), false);
+
+  const refSecret = 'synthetic-ref-secret-alpha';
+  const record = { kind: 'grant', payload: { subject: 'fixture-owner', accessToken: 'synthetic-record-secret-beta' } };
+  await provider.set('TEST', refSecret);
+  await provider.modifyRecord('generic/session', () => record);
+  await dispose();
+  const reader = await isolated.openCredentialReader({ directory });
+  isolated.own(() => reader.close());
+  assert.equal((await reader.resolve('TEST')).value, refSecret);
+  assert.deepEqual(await reader.readRecord('generic/session'), record);
+  assert.deepEqual(isolated.syntheticCalls, [false, true]);
+  assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
+
+  const expected = new Map([
+    ['heluo-forge/iam/ref/TEST', refSecret],
+    ['heluo-forge/iam/record/generic/session', JSON.stringify(record)],
+  ]);
+  const rows = isolated.syntheticRows(directory);
+  assert.equal(rows.length, expected.size);
+  for (const row of rows) {
+    assert.equal(expected.has(row.id), true);
+    assert.equal(row.envelope.subarray(0, 4).toString('ascii'), 'HFSE');
+    assert.equal(row.envelope[4], 1);
+    assert.equal(row.envelope[5], 1);
+    const ivOffset = 7 + row.envelope[6];
+    assert.equal(row.envelope.subarray(7, ivOffset).toString('ascii'), row.kid);
+    for (const value of Object.values(row)) {
+      const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+      assert.equal(bytes.includes(refSecret), false);
+      assert.equal(bytes.includes(record.payload.accessToken), false);
+    }
+    const decipher = createDecipheriv('aes-256-gcm', isolated.syntheticKey, row.envelope.subarray(ivOffset, ivOffset + 12));
+    decipher.setAAD(Buffer.from(`HFSE|1|${row.kind}|${row.id}|${row.owner}|${row.kid}`));
+    decipher.setAuthTag(row.envelope.subarray(ivOffset + 12, ivOffset + 28));
+    const plaintext = Buffer.concat([decipher.update(row.envelope.subarray(ivOffset + 28)), decipher.final()]);
+    assert.equal(plaintext.toString('utf8'), expected.get(row.id));
+    expected.delete(row.id);
+  }
+  assert.equal(expected.size, 0);
+});
 
 // The test changes only the isolated registry; the real Host and reader are
 // copied unchanged. This synthetic SQLite wrapper selects a separate directory

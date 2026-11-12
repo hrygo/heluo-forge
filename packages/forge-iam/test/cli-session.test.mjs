@@ -35,6 +35,29 @@ test('the store record projects onto the session shape without tokens', () => {
   assert.equal(signedOut.principal, undefined);
 });
 
+test('JSON string grant payload has the same offline and bridge behavior as its object form', () => {
+  const original = grant();
+  const encoded = { ...original, payload: JSON.stringify(original.payload) };
+  assert.deepEqual(sessionFromRecord(encoded), sessionFromRecord(original));
+  assert.deepEqual(accessTokenOf(encoded), accessTokenOf(original));
+  assert.equal(isBridgeReadableSession(encoded), true);
+  assert.equal(isSameBridgeSession(encoded, encoded), true);
+});
+
+test('malformed JSON and encoded pending operations never expose an offline token', () => {
+  const invalid = { kind: 'grant', payload: '{not valid json' };
+  assert.equal(sessionFromRecord(invalid).status, 'error');
+  assert.deepEqual(accessTokenOf(invalid), { ok: false, code: 'IAM_INVALID_GRANT' });
+  const id = Buffer.alloc(32, 1).toString('base64url');
+  const signout = grant({ signOutOperation: { version: 1, state: 'pending', id } });
+  const pending = grant({ refreshOperation: { version: 1, state: 'pending', id, base: id } });
+  const encode = (record) => ({ ...record, payload: JSON.stringify(record.payload) });
+  assert.deepEqual(accessTokenOf(encode(signout)), { ok: false, code: 'IAM_INVALID_GRANT' });
+  assert.equal(isBridgeReadableSession(encode(signout)), false);
+  assert.deepEqual(accessTokenOf(encode(pending)), { ok: false, code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal(isBridgeReadableSession(encode(pending)), true);
+});
+
 test('an expired or unknown-expiry token is refused rather than returned', () => {
   const now = Date.now();
   assert.deepEqual(accessTokenOf(grant({ accessExpiresAt: new Date(now - 1000).toISOString() }), now), {
@@ -77,6 +100,8 @@ test('absent and tombstoned records remain signed out while validated sign-out p
   const pending = grant({ signOutOperation: { version: 1, state: 'pending', id: Buffer.alloc(32, 8).toString('base64url') } });
   assert.equal(sessionFromRecord(pending).status, 'error');
   assert.deepEqual(accessTokenOf(pending), { ok: false, code: 'IAM_INVALID_GRANT' });
+  const encodedTombstone = { kind: 'grant', payload: JSON.stringify({ version: 1, type: 'heluo-iam-session-tombstone' }) };
+  assert.deepEqual(accessTokenOf(encodedTombstone), { ok: false, code: 'IAM_INVALID_GRANT' });
 });
 
 

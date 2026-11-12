@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-017A |
 | 文档名称 | 凭据存储整洁架构执行细案 |
-| 版本 | V0.1.2 |
+| 版本 | V0.1.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -23,7 +23,7 @@
 
 - 存储面向同一 PID namespace 的单机本地文件系统。新存储使用 `D/credentials.sqlite` 与同级 `D.keys/keyring.json`，已有 SQLite 的 `D/keyring.json` 原地兼容；两处 keyring 同时存在、已有数据库缺失密钥或发现旧 JSON/key、未知格式时拒绝并保留原物，不得把不兼容解释为授权清除数据。
 - Host 与 CLI 仅配置同一 `D` 并按相同规则确定密钥位置；不自动迁移、合并或覆盖。离线备份新布局时同时保存 `D` 与 `D.keys`；恢复到新 `D` 时对应调整密钥目录名。旧布局备份保持原样，手动迁移前停用所有进程、备份且不得残留双位置密钥。
-- `secret.id` 使用包含 service 和 accountPrefix 的完整存储键，`kind` 为 `ref` 或 `record`；记录属主在写入时确定并写入 `owner` 列，读取时以该列构造 AAD。`ref` 属主允许为空。
+- `secret.id` 使用包含 service 和 accountPrefix 的完整存储键，`kind` 为 `ref` 或 `record`；记录属主在写入时确定并写入 `owner` 列，读取时以该列构造 AAD。仅对象载荷中可无损表达的字符串 `subject` 或 `ownerSubject` 可作为属主；引用、其他载荷及无法确定属主的记录使用空属主，不解析不透明字符串载荷推断身份。
 - `meta.active` 是建库后唯一活动密钥真源。轮换先安全落盘新密钥与 keyring 的活动标记，再在短事务中切换 `meta.active`；两者短暂不一致时以数据库为准。崩溃时旧密钥始终保留，不在读取时重封。
 - `modifyRecord` 支持异步回调，数据库写事务不能跨 `await`。所有写操作以 SQLite 中持久化的逻辑锁串行，网络调用不持有数据库写事务。锁由进程 ID 和随机 token 的摘要标识；取得排他写事务后一次执行同步提交，将凭据写入和逻辑锁释放共同提交，不重放业务回调。操作已结束但释放被阻时发布私有完成标记，后续写入须在事务内复核进程 ID 和原 token 与锁摘要的对应关系后才可回收；`ESRCH` 明确确认进程不存在时也可回收。操作活跃、状态未知或 PID 复用而无完成证明时超时拒绝，不依赖租约超时接管。读写争用异步有界等待；只读路径不持逻辑锁，联合快照使用同一短读事务。
 - 首次建库用初始化标记协调并发，确认数据库结构及活动密钥完整后才可绕过遗留标记；中断且完整性未知时保留文件、拒绝写入。POSIX 平台密钥切换前要求文件和目录同步成功，Windows 目录持久性另行实测。
@@ -55,3 +55,28 @@
 - 双键第二次写入失败或进程崩溃：两个键共同回滚，重开后不出现半次提交。
 - 异步退出持锁期间其他进程写入：等待或超时拒绝；不得撤销新会话或覆盖新记录。
 - 读取时数据库或 keyring 不存在：只读 reader 不创建、重建、迁移或更改任何存储文件。
+
+## issue #250 验收对照
+
+| 完成标准 | 验证入口与边界 |
+|---|---|
+| 共同会话判定与依赖方向 | Host 与 CLI 复用 `session-read.mjs`；[provider 隔离测试](../../packages/forge-credentials-keychain/test/provider-independence.test.mjs)验证不依赖具体测试后端。SQLite 初始化与密钥路径仍有耦合，其他 `KeyProvider` 的替换尚未取证 |
+| 值往返、AAD 错位、篡改、截断、未知 `kid`、密钥权限拒绝 | [信封测试](../../packages/forge-credentials-keychain/test/cipher.test.mjs)、[密钥测试](../../packages/forge-credentials-keychain/test/keyring.test.mjs)；POSIX 权限判据不代替 Windows ACL 取证 |
+| 库、WAL、SHM 不含秘密明文 | [WAL 扫描](../../packages/forge-credentials-keychain/test/sqlite-wal-scan.test.mjs)实际启用 WAL，断言三个文件存在并扫描两种 32 字节合成秘密；属主等元数据按存储边界保留明文 |
+| 新后端通过登记接入 | [登记测试](../../packages/forge-credentials-keychain/test/backend-registry.test.mjs)验证 Host 和 reader 选择同一登记项、既有信封格式及信任拒绝；测试替身不证明新后端的跨进程能力 |
+| 四入口统一 | [四入口矩阵](../../packages/forge-iam/test/read-paths-matrix.test.mjs)对照共同会话、令牌与错误；保留输出封装、鉴权、时效和 Host 配置上下文的差异 |
+| 密钥轮换 | [SQLite 存储测试](../../packages/forge-credentials-keychain/test/sqlite-store.test.mjs)验证旧密钥可读、缺失时报 `CRED_KEY_UNAVAILABLE`；[密钥绑定测试](../../packages/forge-credentials-keychain/test/key-auth-lifecycle.test.mjs)验证历史密钥缺失或错配时写入拒绝 |
+| 三平台与 Electron 宿主 | 以下表记录已完成和仍缺失的证据；目标机与完整桌面宿主未完成前保持跟踪 |
+
+## 平台与宿主取证记录
+
+以下 CI 与本机证据核验于 2026-11-12。CI 对应 PR #253 的 `98defd8`，该次合成 merge 的文件树与该提交一致；后续提交仍须重新执行对应检查。
+
+| 环境 | 已验证 | 未验证与边界 |
+|---|---|---|
+| [Ubuntu x64 / ARM64 与 macOS arm64 / x64](https://github.com/hrygo/heluo-forge/actions/runs/43200122810) | Node 24.21.0：各作业的凭据包 186 项及 IAM 38 项通过；企业 bundle 构建、校验、离线安装与合成凭据往返、轮换和备份通过 | 使用托管运行器、测试宿主与模拟 IAM，不代表国产目标机或真实企业环境 |
+| [Windows x64 / ARM64](https://github.com/hrygo/heluo-forge/actions/runs/43200122810) | Node 24.21.0：各作业凭据包 178 项通过、8 项跳过，IAM 38 项通过；单独打包凭据包并离线安装，合成往返、轮换与备份通过 | 跳过 POSIX 权限、符号链接及部分目录耐久性用例；未验证目标机 NTFS ACL、真实备份恢复或企业 bundle 安装 |
+| 本机 Electron Node 模式 | macOS arm64 上以已安装 DSH 0.2.2-rc.2 的 Electron 44.7.0、Node 24.21.0 和 SQLite 3.53.4，离线打包并安装凭据包；`scripts/probe/installed-credential-smoke.mjs` 的合成往返、轮换、只读备份和缺件拒绝通过。另以安装包中的真实 Cordis Context 装载源码插件，验证 SQLite 读写、联合信任绑定与条件提交、卸载后只读重开；源码的后端登记、WAL 和四入口矩阵 31/31 通过 | 探针分别验证安装包、独立 Context 和源码测试，未启动真实 DSH GUI 或加载桌面 profile；已安装 DSH 版本与仓库锁定的 0.2.1-rc.3 不同 |
+| 麒麟目标机、锁定版本 DSH 的桌面插件宿主 | 未实测 | 待对应目标环境、宿主及部署制品取证；不得以 Ubuntu、Electron Node 模式或模拟宿主替代 |
+
+上述平台作业使用 Node 内置 `node:sqlite`，不验证系统独立安装的 SQLite。真实企业 IAM 与 AI 网关联调另行跟踪。

@@ -1,4 +1,4 @@
-import { NAMESPACE_PATTERN } from './backend.mjs';
+import { NAMESPACE_PATTERN } from './text.mjs';
 
 const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const KEY_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;

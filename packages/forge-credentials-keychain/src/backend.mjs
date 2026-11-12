@@ -4,11 +4,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { assertCredentialValue } from './text.mjs';
 
-/**
- * Grammar for a backend's service/namespace segment. Backends and the provider
- * must accept exactly the same names, so it is defined once here.
- */
-export const NAMESPACE_PATTERN = /^[A-Za-z0-9._-]+$/;
+export { NAMESPACE_PATTERN } from './text.mjs';
 
 export class KeychainBackendError extends Error {
   constructor(code, message) {

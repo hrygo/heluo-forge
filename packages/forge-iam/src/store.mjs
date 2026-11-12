@@ -2,9 +2,7 @@ import { isModelId, normalizeGatewayBaseURL } from './model-options.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
-
-const TOMBSTONE = Object.freeze({ kind: 'grant', payload: Object.freeze({ version: 1, type: 'heluo-iam-session-tombstone' }) });
-const isTombstone = (record) => isDeepStrictEqual(record, TOMBSTONE);
+import { inspectSessionRecord, isSessionTombstone as isTombstone, SESSION_TOMBSTONE as TOMBSTONE } from './session-read.mjs';
 
 export const GRANT_KEY = 'heluo-iam/session';
 export const GATEWAY_REF = 'ENTERPRISE_STATIC_KEY';
@@ -75,17 +73,15 @@ export function createGrantStore(credentials, options = {}) {
   }
 
   async function read() {
-    const record = await credentials.readRecord(key);
-    if (record === undefined || record === null || isTombstone(record)) return { ok: true, grant: null };
-    if (record.kind !== 'grant') {
-      return { ok: false, reason: 'wrong-kind', kind: record.kind };
+    const session = inspectSessionRecord(await credentials.readRecord(key));
+    if (session.state === 'absent') return { ok: true, grant: null };
+    if (session.state === 'invalid') {
+      return session.reason === 'wrong-kind'
+        ? { ok: false, reason: session.reason, kind: session.kind }
+        : { ok: false, reason: session.reason, errors: session.errors };
     }
-    const parsed = parseGrant(record.payload);
-    if (!parsed.ok) {
-      return { ok: false, reason: 'invalid-grant', errors: parsed.errors };
-    }
-    if (parsed.value.signOutOperation) return { ok: false, reason: 'sign-out-pending' };
-    return { ok: true, grant: parsed.value };
+    if (session.state === 'pending' && session.operation === 'sign-out') return { ok: false, reason: 'sign-out-pending' };
+    return { ok: true, grant: session.grant };
   }
 
   return {

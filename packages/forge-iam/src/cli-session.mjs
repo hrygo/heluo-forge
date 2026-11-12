@@ -5,31 +5,17 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import { grantIdentity, refreshBaseId } from './session-identity.mjs';
-import { sessionView } from './session-read.mjs';
-import { isAccessExpired, validateGrant } from './record.mjs';
+import { inspectSessionRecord, sessionView } from './session-read.mjs';
+import { isAccessExpired } from './record.mjs';
 
 /** The record key the IAM service uses for its session (see store.mjs). */
 export const SESSION_RECORD_KEY = 'heluo-iam/session';
-
-function inspectSessionRecord(record) {
-  if (record == null) return { state: 'absent' };
-  if (record.kind === 'grant' && record.payload?.version === 1
-    && record.payload?.type === 'heluo-iam-session-tombstone'
-    && Object.keys(record).length === 2 && Object.keys(record.payload).length === 2) return { state: 'absent' };
-  if (record.kind !== 'grant') return { state: 'invalid' };
-  const parsed = validateGrant(record.payload);
-  if (!parsed.ok) return { state: 'invalid' };
-  if (parsed.value.signOutOperation) return { state: 'pending', operation: 'sign-out' };
-  if (parsed.value.refreshOperation?.state === 'pending') {
-    return { state: 'pending', operation: 'refresh', grant: parsed.value };
-  }
-  return { state: 'active', grant: parsed.value };
-}
 
 /** Interpret the same validated grant format as the Host store. */
 export function classifySessionRecord(record) {
   const session = inspectSessionRecord(record);
   if (session.state === 'pending') return { state: session.state, operation: session.operation };
+  if (session.state === 'invalid') return { state: 'invalid' };
   return session;
 }
 

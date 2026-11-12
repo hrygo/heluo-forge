@@ -153,10 +153,44 @@ test('real CLI, Host and both HTTP endpoints expose the same identity and token 
   assert.equal(f.mock.counts.refresh, 0);
 });
 
+test('a JSON string grant is read consistently through real CLI, Host and both HTTP endpoints', async (t) => {
+  const f = await fixture(t, (record) => ({ ...record, payload: JSON.stringify(record.payload) }));
+  const grant = JSON.parse(f.record.payload);
+  const whoami = await f.cli(['whoami', '--json']);
+  const hostSession = JSON.parse(JSON.stringify(f.service.getSession()));
+  const httpSession = await f.request('/api/forge-iam/session', { headers: sessionHeaders });
+  assert.equal(whoami.code, 0, whoami.stderr);
+  assert.deepEqual(JSON.parse(whoami.stdout), hostSession);
+  assert.deepEqual(httpSession.json, hostSession);
+  assert.equal(hostSession.principal.subject, grant.subject);
+  for (const output of [whoami.stdout, JSON.stringify(hostSession), httpSession.body]) {
+    assert.ok(!output.includes(grant.accessToken));
+    assert.ok(!output.includes(grant.refreshToken));
+  }
+
+  const hostToken = await f.service.getAccessToken();
+  assert.equal(hostToken, grant.accessToken);
+  for (const bridged of [false, true]) {
+    const result = await f.cli(['token'], bridged);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, `${hostToken}\n`);
+  }
+  for (const [path, headers] of [
+    ['/api/forge-iam/token', tokenHeaders],
+    ['/api/forge-iam/bridge/token', bridgeHeaders],
+  ]) {
+    const response = await f.request(path, { method: 'POST', headers });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, { token: hostToken, expiresAt: hostSession.accessExpiresAt });
+  }
+  assert.equal(f.mock.counts.refresh, 0);
+});
+
 for (const [name, transform, code, exit] of [
   ['signed out', () => undefined, 'IAM_NOT_SIGNED_IN', 2],
   ['signed-out tombstone', () => ({ kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' } }), 'IAM_NOT_SIGNED_IN', 2],
   ['invalid grant', (record) => ({ ...record, payload: { ...record.payload, clientId: undefined } }), 'IAM_INVALID_GRANT', 3],
+  ['malformed JSON grant', () => ({ kind: 'grant', payload: '{not valid json' }), 'IAM_INVALID_GRANT', 3],
   ['pending sign-out', (record) => ({ ...record, payload: { ...record.payload, signOutOperation: {
     version: 1, state: 'pending', id: Buffer.alloc(32, 42).toString('base64url'),
   } } }), 'IAM_INVALID_GRANT', 3],
@@ -294,4 +328,24 @@ test('offline CLI never refreshes an expired token; only Host refreshes for the 
     assert.equal(response.json.token, refreshed.payload.accessToken);
   }
   assert.equal(f.mock.counts.refresh, 1);
+});
+
+test('an expired JSON string grant is refreshed only by Host through the bridge', async (t) => {
+  const f = await fixture(t);
+  await f.provider.modifyRecord(SESSION_RECORD_KEY, (record) => ({
+    ...record, payload: JSON.stringify({ ...record.payload, accessExpiresAt: '2020-01-01T00:00:00.000Z' }),
+  }));
+  const before = await f.provider.readRecord(SESSION_RECORD_KEY);
+  assertCliError(await f.cli(['token', '--json']), 'IAM_REAUTH_REQUIRED', 3);
+  assert.deepEqual(await f.provider.readRecord(SESSION_RECORD_KEY), before);
+  assert.equal(f.mock.counts.refresh, 0);
+
+  const bridged = await f.cli(['token'], true);
+  assert.equal(bridged.code, 0, bridged.stderr);
+  const after = await f.provider.readRecord(SESSION_RECORD_KEY);
+  assert.equal(f.mock.counts.refresh, 1);
+  assert.equal(typeof after.payload, 'object');
+  assert.notEqual(after.payload.accessToken, JSON.parse(before.payload).accessToken);
+  assert.equal(bridged.stdout, `${after.payload.accessToken}\n`);
+  assert.equal((await f.cli(['token'])).stdout, bridged.stdout);
 });

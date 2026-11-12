@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.78.1 |
+| 版本 | V1.78.2 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,7 +19,7 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.78.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.78.2 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.42.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.40.2 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
@@ -70,7 +70,7 @@
 | CORP-DSH-PLAN-015 | DevOps 插件阶段总结与交接 | [plans/2026-11-04-devops-plugin-stage-handoff.md](<plans/2026-11-04-devops-plugin-stage-handoff.md>) | V0.1.1 | 草案 | 平台组（代拟） | 只读面已对真实 dop 平台跑通、写回仅一次同值 no-op；Gitee 侧与企业 CLI 未联调，全部 NOT RUN |
 | CORP-DSH-PLAN-016 | 企业包原生 addon 缺失修复实施计划 | [plans/2026-11-09-enterprise-bundle-native-addon.md](<plans/2026-11-09-enterprise-bundle-native-addon.md>) | V0.2.1 | 草案 | 平台组（代拟） | 构建期前置与产物期字节校验已实现并本机实测（含变异证明）；目标机实机取证仍按 #182 另行关闭 |
 | CORP-DSH-PLAN-017 | 凭据存储整洁架构实施方案 | [plans/2026-11-12-credential-storage-clean-arch.md](<plans/2026-11-12-credential-storage-clean-arch.md>) | V0.2.1 | 草案 | 平台组（代拟） | 方案背景与设计评审；不授予生产能力 |
-| CORP-DSH-PLAN-017A | 凭据存储整洁架构执行细案 | [plans/2026-11-12-credential-storage-execution.md](<plans/2026-11-12-credential-storage-execution.md>) | V0.1.2 | 草案 | 平台组（代拟） | 当前源码与本机离线验证；企业环境和目标宿主另行取证 |
+| CORP-DSH-PLAN-017A | 凭据存储整洁架构执行细案 | [plans/2026-11-12-credential-storage-execution.md](<plans/2026-11-12-credential-storage-execution.md>) | V0.1.3 | 草案 | 平台组（代拟） | 当前源码与本机离线验证；企业环境和目标宿主另行取证 |
 | CORP-DSH-PLAN-018 | IAM 调用失败自愈与错误码恢复方案 | [plans/2026-11-12-iam-call-failure-recovery.md](<plans/2026-11-12-iam-call-failure-recovery.md>) | V0.1.0 | 草案 | 平台组（代拟） | 方案待评审；以 PR #253 为基线，不改写现有实现状态 |
 | CORP-DSH-PLAN-019 | CI 平台验证优化实施计划 | [plans/2026-11-12-ci-platform-verification.md](<plans/2026-11-12-ci-platform-verification.md>) | V0.2.0 | 草案 | 平台组（代拟） | 仓库离线检查与托管平台回归；目标宿主和企业环境另行取证 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.1.0 | 评审稿 | 平台组 | G0 |
