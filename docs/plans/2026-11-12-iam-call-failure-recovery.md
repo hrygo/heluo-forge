@@ -360,11 +360,11 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 
 两台目标机从 `codex/issue-259-iam-recovery` 分支安装 `.node-version` 指定的 Node 24.21.0，运行 `packages/forge-iam` 测试套件：
 
-| 目标机 | 结果 |
-|---|---|
-| 麒麟 V10 SP1 ARM64 | 1569 用例全部通过 |
-| Windows 11 ARM64 | 1569 用例全部通过 |
-| macOS arm64（对照） | 1569 用例全部通过 |
+| 目标机 | 包级套件（`packages/forge-iam`） | 仓库级检查 |
+|---|---|---|
+| 麒麟 V10 SP1 ARM64 | 1569 用例全部通过 | `check:docs`／`check:repo`／`check:skills`／`check:bundle-tarballs`／`dsh-version check` 通过；`node --test` 3710 用例、3704 通过、0 失败、6 跳过 |
+| Windows 11 ARM64 | 1569 用例全部通过 | 未执行（该机只安装 Node，未安装 git） |
+| macOS arm64（对照） | 1569 用例全部通过 | 3710 用例、3707 通过、0 失败、3 跳过 |
 
 #### 12.6.1 Windows：`--import` 必须传文件 URL
 
@@ -374,7 +374,18 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 
 未处理时 `callback-port.test.mjs` 的 IPv6 回环用例失败（`::1` 上 `EACCES`）。`/var/log/kysec.log` 记录 `command=netctl result=forbid` 与 `program: <node 路径>, pkg: net-node`：麒麟安全中心的“应用联网控制”默认拒绝未登记程序联网，node 来自官方压缩包因此被拒，IPv4 回环不受影响。用 `netctl --set -p net-node -a <node 路径> -s allow` 登记后该用例通过。这是目标机的安全策略配置，不是代码缺陷；未登记的 node 在麒麟上无法完成 IPv6 回环数据传输。
 
-#### 12.6.3 未覆盖项
+#### 12.6.3 麒麟：在用户目录准备 git 与正确 umask
+
+麒麟目标机的软件源只提供 git 2.25.1，`git init --initial-branch`、`git init -b`、`git init --object-format` 与 `git worktree list --porcelain -z` 都不支持，仓库级用例因此失败；该机又无免密提权，无法安装软件包。改用用户目录自建的 git 2.47.1：
+
+```sh
+make -j4 NO_OPENSSL=1 NO_CURL=1 NO_EXPAT=1 NO_TCLTK=1 NO_GETTEXT=1 NO_PERL=1 prefix=~/forge-test/git2 all install
+export PATH=~/forge-test/git2/bin:$PATH GIT_EXEC_PATH=~/forge-test/git2/libexec/git-core GIT_TEMPLATE_DIR=~/forge-test/git2/share/git-core/templates
+```
+
+麒麟桌面默认 `umask 002`，检出的脚本会带 group-writable 位，`sensitive-scan` 会按设计拒绝这种文件（报 `is 0664 (group/other writable)`）。以 `umask 022` 重新解包（或 `chmod -R go-w`）后，仓库级检查全部通过。`dsh-version check` 输出的两条“代码例外”是仓库既有的显式例外记录，不是失败。
+
+#### 12.6.4 未覆盖项
 
 - §7.3 的**应用级**手工矩阵（断网重连、重存 Key、跨进程改写凭据、对话中切换模型）仍需装好企业插件的实机环境。
-- 麒麟目标机未安装 `git` 且无免密提权，仓库级检查（`pnpm check`）在该机不可执行；包级套件已全部通过。
+- Windows 目标机未安装 git，仓库级检查只取 macOS 与麒麟两台的证据。
