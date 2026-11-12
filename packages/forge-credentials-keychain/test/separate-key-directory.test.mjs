@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -74,6 +74,30 @@ test('new stores separate keys and data-only copies cannot be written', async (t
   await assert.rejects(incomplete.set(ref, 'replacement'), { code: 'CRED_KEY_UNAVAILABLE' });
   assert.deepEqual(readFileSync(join(copy, 'credentials.sqlite')), before);
   assert.equal(existsSync(`${copy}.keys`), false);
+});
+
+test('native sibling paths remain distinct when process.platform is overridden', (t) => {
+  const f = fixture(t);
+  const directory = join(f.root, 'platform-spoof');
+  const moduleUrl = new URL('../src/credential-store.mjs', import.meta.url).href;
+  const source = `import assert from 'node:assert/strict';
+    import { createCredentialStore } from ${JSON.stringify(moduleUrl)};
+    const original = process.platform;
+    const spoofed = original === 'win32' ? 'linux' : 'win32';
+    let store;
+    try {
+      Object.defineProperty(process, 'platform', { value: spoofed, configurable: true });
+      store = createCredentialStore({ directory: process.argv[1] });
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+    }
+    try {
+      await store.set(${JSON.stringify(ref)}, 'synthetic');
+      assert.equal(await store.get(${JSON.stringify(ref)}), 'synthetic');
+    } finally { await store.close(); }`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', source, directory], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 0, child.stderr || child.error?.message);
+  assert.equal(existsSync(separateKey(directory)), true);
 });
 
 test('legacy stores stay in place and a stopped manual key move remains readable', async (t) => {

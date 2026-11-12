@@ -1,5 +1,5 @@
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const error = (code, message) => Object.assign(new Error(message), { code });
 
@@ -29,7 +29,7 @@ function directoryInfo(path) {
 
 function within(parent, child) {
   const rel = relative(parent, child);
-  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`));
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 }
 
 function outsideRepository(path) {

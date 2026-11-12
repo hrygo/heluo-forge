@@ -337,6 +337,13 @@ export function workflowProblems(source) {
     if (tests.length !== 1 || stepField(tests[0], 'if') !== undefined) errors.push(`${id}: platform tests must run unconditionally`);
     if (kind === 'sqlite' && !steps.includes('packages/forge-iam/test/read-paths-matrix.test.mjs')) errors.push(`${id}: IAM read paths must be covered`);
     if (kind === 'sqlite') {
+      const bridge = blocks.filter((step) => {
+        const args = (stepField(step, 'run') ?? '').split(/\s+/u);
+        return args[0] === 'node' && args[1] === '--test'
+          && args.slice(2).every((arg) => /^packages\/forge-iam\/test\/[a-z0-9-]+\.test\.mjs$/u.test(arg))
+          && args.includes('packages/forge-iam/test/bridge-real-provider.test.mjs');
+      });
+      if (bridge.length !== 1 || stepField(bridge[0], 'if') !== undefined) errors.push(`${id}: real IAM bridge test must run unconditionally`);
       const install = blocks.filter((step) => step.startsWith('      - name: Install the artifact offline\n'));
       if (install.length !== 1 || stepField(install[0], 'if') !== undefined || !install[0].includes('node scripts/probe/installed-credential-smoke.mjs')) errors.push(`${id}: installed SQLite smoke must run unconditionally`);
     }
@@ -380,6 +387,9 @@ test('workflow guards reject deleted gates, inverted conditions and missing clas
     ['document arch', replaceJob(workflow, 'document-macos-15-intel', (job) => job.replace('FORGE_CI_ARCH: x64', 'FORGE_CI_ARCH: arm64')), /document-macos-15-intel: FORGE_CI_ARCH/u],
     ['installed SQLite smoke removed', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('node scripts/probe/installed-credential-smoke.mjs', 'node missing.mjs')), /native-linux-x64: installed SQLite smoke must run unconditionally/u],
     ['sqlite tests skipped', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('      - name: Run credential backend tests\n', '      - name: Run credential backend tests\n        if: ${{ false }}\n')), /native-linux-x64: platform tests must run unconditionally/u],
+    ['real IAM bridge removed', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('packages/forge-iam/test/bridge-real-provider.test.mjs', 'packages/forge-iam/test/other.test.mjs')), /native-linux-x64: real IAM bridge test must run unconditionally/u],
+    ['real IAM bridge skipped', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('      - name: Run IAM read path tests\n', '      - name: Run IAM read path tests\n        if: ${{ false }}\n')), /native-linux-x64: real IAM bridge test must run unconditionally/u],
+    ['real IAM bridge echoed', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs', 'run: echo node --test packages/forge-iam/test/read-paths-matrix.test.mjs')), /native-linux-x64: real IAM bridge test must run unconditionally/u],
     ['Windows scan skipped', replaceJob(workflow, 'sensitive-scan', (job) => job.replace('      - name: Run portable sensitive-scan tests\n', '      - name: Run portable sensitive-scan tests\n        if: ${{ false }}\n')), /sensitive-scan: platform tests must run unconditionally/u],
     ['Windows callback skipped', replaceJob(workflow, 'forge-iam-callback', (job) => job.replace('      - name: Run loopback callback tests\n', '      - name: Run loopback callback tests\n        if: ${{ false }}\n')), /forge-iam-callback: platform tests must run unconditionally/u],
     ['verify skipped on failure', replaceJob(workflow, 'verify', (job) => job.replace(/^    if:.*$/mu, "    if: ${{ !cancelled() && needs.changes.result == 'success' }}")), /verify: must run after changes failure/u],
