@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V2.2.0 |
+| 版本 | V3.0.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -16,7 +16,7 @@
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（设计阶段；实现与验证见设计索引 §2.2） |
 
-> **规范基准与安全边界**：本设计依据 DSH 运行环境（基准版本 `0.2.1-rc.2` / `0.2.1-rc.3`）与企业统一认证技术标准编制。系统确立 **O3「企业 IAM 独占登录」** 架构，组合层禁用官方账号体系与公网模型旁路。核心已核验能力包括：`ctx.credentials` 凭据读写与授权记录、`ctx.webServer` 独立回调路由、`dsh-llm-pi-ai` 网关协议适配、`exclusive` 排他性断言及新会话默认模型失效对齐。未联调项与跨平台实机差异严格保持隔离，不作为生产就绪断言。
+> **规范基准与安全边界**：本设计依据 DSH 运行环境（基准版本 `0.2.1-rc.2` / `0.2.1-rc.3`）与企业统一认证技术标准编制。系统确立 **O3「企业 IAM 独占登录」** 架构，组合层禁用官方账号体系与公网模型旁路。核心能力包括：`ctx.credentials` 凭据读写与授权记录、`ctx.webServer` 独立回调路由、`dsh-llm-pi-ai` 网关协议适配、`exclusive` 排他性断言及宿主默认模型只读观察。未联调项与跨平台实机差异严格保持隔离，不作为生产就绪断言。
 >
 > **关联文档**：[总体架构](../../architecture/platform-architecture.md)、[网关契约](../../contracts/gateway-contract.md)、[双模式凭据](../credential-modes.md)、[企业组合包](forge-enterprise.md)、[模型网关](forge-gateway.md)、[设计索引](../README.md)、[需求基线](../../requirements/requirements-baseline.md)、[IAM 独立问询函](../../collaboration/iam-confirmation-letter.md)、[机密客户端隔离设计](../iam-confidential-isolated.md)、[机密认证契约](../../contracts/iam-client-auth-isolated.md)。
 
@@ -47,14 +47,14 @@
    - 访问令牌通过专用端点 `GET /idp/oauth2/revokeToken?access_token=...` 实现单令牌实时幂等撤销；
    - 刷新令牌服务端不开放撤销接口，依赖服务端自然失效（7300 秒）；
    - 默认退出流程执行“撤销访问令牌 + 本地清理会话记录 + 写入逻辑墓碑”，严禁默认调用影响同浏览器全局会话的 RP 登出；
-4. **新会话默认模型对齐**：内网环境下官方模型不可用，系统在目录就绪时若检测到宿主默认模型可证明不可用，自动对齐为企业默认模型，且绝不覆盖用户已有的可用选择。
+4. **新会话默认模型由用户选择**：模型目录刷新、启用集变更和登录状态变化均不自动修改宿主默认模型。当前选择不可用时，用户在宿主中选择可用模型。
 
 | 能力领域 | 规范设计基线 | 当前验证现状与实施边界 |
 |---|---|---|
 | **个人网关凭据** | 与会话分别存储并加密，绑定员工工号属主（ownerSubject），网关强校验属主匹配 | 本地验证状态见设计索引 §2.2；端到端联调待网关环境验证 |
 | **会话刷新机制** | 锁外原子声明 pending、单飞请求、条件提交 complete，多进程防并发重放 | 双进程刷新用例与超时熔断已通过自动化验证；端到端网络时延待实机测试 |
 | **会话退出机制** | 单设备定向撤销访问令牌，保留个人长期 Key，如实记录撤销状态 | 本地清理与墓碑写入已闭环；端到端撤销端点联调待企业端点配合 |
-| **默认模型对齐** | 宿主默认模型失效时自动对齐企业默认模型，保护用户已有显式可用选择 | 运行时对齐与状态机流转已完全覆盖离线测试；待双端桌面集成实测 |
+| **默认模型选择** | 宿主默认模型由用户选择，插件只读观察，不自动保存 | 离线用例覆盖目录刷新、启用集变更和手动选择保留；不以模拟测试代替真实宿主验证 |
 
 ---
 
@@ -68,7 +68,7 @@
 - **锁外安全刷新与防重放**：会话令牌写入宿主受保护凭据存储；通过“原子声明 pending → 锁外单次换票 → 条件提交 complete”协议防御并发刷新击穿与重放；
 - **双凭据生命周期隔离与感知**：账户面板与 4 屏向导明确区分员工身份与网关个人访问凭证，双准入就绪状态实时可视；
 - **确定性退出与单令牌撤销**：退出时显式调用撤销接口使当前访问令牌实时失效，清除本地凭据并写入逻辑墓碑，默认保留个人长期网关 Key；
-- **开箱即用默认模型自愈**：企业模型目录加载就绪后，自动将宿主已失效的默认模型对齐为企业首选模型，保障新对话立即可用。
+- **用户选择对话模型**：目录就绪后提供已启用的企业模型；新对话模型由用户在宿主中选择，原选择不可用时不自动替换。
 
 ### 2.2 非目标
 
@@ -101,7 +101,7 @@
 | `dsh-web-server`（`ctx.webServer`） | 基础服务 | 随目标 DSH 挂载 | 无法注册 `/iam/callback` 回调；登录流程阻断 |
 | `dsh-settings` | 基础服务 | 随目标 DSH 挂载 | 设置项无法持久化；回退为内存只读模式 |
 | `dsh-llm-pi-ai` | 协议适配 | 随目标 DSH 挂载 | 缺乏模型执行适配器；模型调用无法生效，不影响身份登录 |
-| `dsh-agent-default-model` | 配置服务 | 随目标 DSH 挂载 | 无法自动对齐新会话模型；由用户手动选择可用模型 |
+| `dsh-agent-default-model` | 只读观察依赖 | 随目标 DSH 挂载 | 缺失时不观察宿主默认模型；用户仍在宿主中选择可用模型 |
 | 企业 IAM OIDC 认证中心 | 外部服务 | 标准 OIDC / RFC 6749 | 未配置或不可达时显示 `unconfigured` / `unreachable` |
 | `@heluo/forge-enterprise` | 方案协同 | 同批次方案包 | 组合层打入禁用补丁；若官方行残留则本包触发排他性阻断 |
 | `@heluo/forge-gateway` | 方案协同 | 同批次方案包 | 提供实际模型网关流量校验与凭据探测；缺失时阻断模型路由 |
@@ -158,7 +158,7 @@ flowchart TB
     subgraph Domain_Model["模型就绪协调域"]
       direction LR
       F_ModelGate["模型准入纯逻辑门禁<br/>(9 级输入纯函数判定 / 无越权拦截)"]
-      F_ModelObserve["宿主默认模型协调<br/>(失效安全对齐 / 绝不覆盖可用选择)"]
+      F_ModelObserve["宿主默认模型只读观察<br/>(由用户选择 / 插件不自动保存)"]
       F_ReadySync["就绪态跨模块透传<br/>(提供统一快照支撑网关鉴权)"]
     end
   end
@@ -207,7 +207,7 @@ flowchart TB
 | **2. 核心业务功能层** | 企业身份认证域 | 标准 OIDC 握手、PKCE S256 动态防御、ID Token 验签核验、企业主体规范解析 | 落地企业统一认证，强制 S256 防御授权码拦截攻击；严格基于 JWKS 验签提取员工 Principal |
 | | 会话与生命周期域 | 多态会话状态机、锁外原子刷新协议、并发刷新防重放、显式登出与会话撤销 | 管控完整会话生命周期；提前 60 秒静默刷新，双阶段 Pending/Complete 协议防止并发击穿；按规范撤销访问令牌 |
 | | 企业独占管控域 | 官方账号排他阻断、公网旁路封禁、组合失效自愈防御 | 落实 O3 企业独占登录原则；启动时强校验官方服务残留，发现违规立即 Fail-Closed 阻断 |
-| | 模型就绪协调域 | 模型准入纯逻辑门禁、宿主默认模型协调、就绪态跨模块透传 | 提供纯函数模型前提准入判定；在默认模型失效时安全对齐，绝不覆盖用户显式可用选择 |
+| | 模型就绪协调域 | 模型准入纯逻辑门禁、宿主默认模型只读观察、就绪态跨模块透传 | 提供纯函数模型前提准入判定；保留宿主默认模型，由用户选择可用模型 |
 | **3. 凭据安全与数据层** | 双模式凭据存储隔离 | 身份凭据存储区（Session）、网关凭据独立存储区（Static Key）、网关元数据专区 | 身份令牌与网关凭据分区存储、互不覆盖：登出与刷新不清除长效凭据，凭据重置不影响 IAM 登录。路线 B 下令牌仅由 Host 传输层按需读取用于请求头组装，不新增视图字段 |
 | | 事务一致性与凭据存储 | 单记录原子信任门禁、双键联合 CAS 提交、SQLite 值级加密 | 确保凭据写盘具备原子互斥能力；网关 Key 与元数据通过 CAS 联合一致性提交；拒绝明文降级 |
 | **4. 集成与基础设施层** | DSH 宿主环境 | Cordis 插件容器、Web Server 路由服务、Connection 安全守卫 | 依托 Cordis 声明生命周期所有权；通过宿主连接守卫拦截未授权跨域接口调用 |
@@ -316,7 +316,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `redirectUri` | string | 空 | 否 | 显式 HTTP(S) 回调 URI，Origin 必须匹配所选实时回调 Origin；固定端口时必须等于 `http://<callbackAddress>:<callbackPort><redirectPath>`，系统分配端口时不可设置；省略 `callbackPort` 时可使用宿主地址 |
 | `gatewayConsoleUrl` | string | 空 | 否 | UAG 网关个人访问凭证控制台链接，仅用于界面指引 |
 | `defaultProvider` | string | `enterprise` | 否 | 企业模型提供方标识 |
-| `defaultModel` | string | 空 | 否 | 企业首选默认模型标识 |
+| `defaultModel` | string | 空 | 否 | 企业模型目录的首选项与只读观察目标；不写宿主默认模型 |
 | `refreshSkewSeconds` | number | 60 | 否 | 访问令牌过期前预刷新提前量（秒） |
 | `attemptTimeoutSeconds` | number | 300 | 否 | 单次登录 Attempt 超时时间（秒） |
 | `httpTimeoutMs` | number | 10000 | 否 | HTTP 请求默认超时上限（毫秒）；刷新与撤销请求设 5000ms 硬上限 |
@@ -346,7 +346,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `getPrincipal()` | 无 | 返回 `{ issuer, subject }` 最小身份标识 |
 | `saveGatewayCredential(input)` | `{ key, deviceLabel, baseURL }` | 基于条件比对（CAS）原子写入网关 Key 与元数据 |
 | `clearGatewayCredential()` | 无 | 原子清除网关凭证并写入墓碑记录 |
-| `reconcileDefaultModel()` | 无 | 宿主默认模型状态采样与失效对齐协调 |
+| `reconcileDefaultModel()` | 无 | 宿主默认模型状态只读采样，不修改选择 |
 
 #### 5.2.2 同源 HTTP 路由（`/api/forge-iam/*`）
 
@@ -409,7 +409,10 @@ export interface IamView {
   readonly gatewayCredential: GatewayCredentialView;
   readonly authorizationUrl?: string;
   readonly attemptId?: string;
-  readonly hostDefaultModel?: string;
+  readonly modelAccess?: {
+    readonly defaultModelId?: string | null;
+    readonly hostDefaultModel?: string | null;
+  } | null;
   readonly error?: { readonly code: string; readonly message: string };
 }
 ```
@@ -721,8 +724,8 @@ flowchart TD
 
 1. **SM1: 企业身份认证状态机（IAM Session）**：管理用户 OIDC 握手、令牌有效性与生命周期；
 2. **SM2: 网关静态凭据状态机（Gateway Credential）**：管理凭据存储中 `ENTERPRISE_STATIC_KEY` 的持有、录入与属主一致性；
-3. **SM3: 企业模型准入与目录状态机（Managed Models & Catalog）**：管理网关模型发现、已启用模型集、首选默认模型推导与瞬态故障重试；
-4. **SM4: 宿主新会话默认模型状态机（Host Agent Default Model）**：管理 DSH 宿主层 `ctx.agentDefaultModel` 的落盘与当前会话绑定。
+3. **SM3: 企业模型准入与目录状态机（Managed Models & Catalog）**：管理网关模型发现、已启用模型集、目录首选项推导与瞬态故障重试；
+4. **SM4: 宿主新会话默认模型观察（Host Agent Default Model）**：只读观察 DSH 宿主的选择；模型由用户在宿主中选择，插件不写入该设置。
 
 #### 7.6.1 四层联动状态机拓扑
 
@@ -764,54 +767,25 @@ stateDiagram-v2
         SM3_auth_error --> SM3_unconfigured: 用户更新凭据
     }
 
-    state "4. 宿主默认模型状态机 (Host Agent Default Model)" as SM4 {
-        [*] --> SM4_disabled: 初始状态 (指向官方已禁用 deepseek-account)
-        SM4_disabled --> SM4_aligned: 目录就绪触发对齐 (alignHostDefaultModel)
-        SM4_disabled --> SM4_blocked: 未对齐发消息 (报 session/model-unavailable)
-        SM4_blocked --> SM4_aligned: 目录加载就绪或设置保存
-        SM4_aligned --> SM4_session_ready: 会话绑定有效企业模型
-        SM4_aligned --> SM4_disabled: IAM 登出或模型被整体禁用
+    state "4. 宿主默认模型观察 (Host Agent Default Model)" as SM4 {
+        [*] --> SM4_observing: 目录就绪或启用集变更
+        SM4_observing --> SM4_kept: 观察完成 / 保持原样
+        SM4_observing --> SM4_unknown: 无目标或无法可靠观察
+        SM4_kept --> SM4_observing: 刷新或用户调整模型
+        SM4_unknown --> SM4_observing: 刷新或用户调整模型
     }
 ```
 
-#### 7.6.2 新会话默认模型对齐判定流转
+#### 7.6.2 新会话默认模型只读观察
 
 ```mermaid
 flowchart TD
-    subgraph S1["触发源 (Trigger Events)"]
-        T1["企业模型目录加载就绪<br/>(catalogState 变为 ready)"]
-        T2["用户更新已启用模型集<br/>(updateModelOptions 提交)"]
-    end
-
-    subgraph S2["前置与健康检查 (Pre-conditions)"]
-        P1{"isCurrent() 检查<br/>(未登出、无换人、Token未过期)"}
-        P2{"读取宿主当前默认模型<br/>currentSelection()"}
-    end
-
-    subgraph S3["可用性判定 (Provable Usability Gate)"]
-        U1{"当前选择是否仍可运行?<br/>(Provider已注册 且 Model在可用列表中)"}
-    end
-
-    subgraph S4["对齐与落盘决策 (Decision Actions)"]
-        A_KEPT["KEPT: 当前选择仍可用<br/>绝不覆盖，保持原样"]
-        A_UNKNOWN["UNKNOWN: 宿主读取失败/列表报错<br/>保守不写，防止误伤"]
-        A_ALIGNED["ALIGNED: 当前默认可证明不可用<br/>(如已被禁用的 deepseek-account)<br/>调用 saveSelection 对齐为企业默认模型"]
-        A_STALE["STALE: 执行中会话已发生变化<br/>中止写入，防止串号污染"]
-    end
-
-    subgraph S5["事件联动 (Event Notification)"]
-        E1["发出 llm/adapters-updated 拓扑变更事件<br/>客户端目录与会话控制器即时重新读取默认模型"]
-    end
-
-    T1 --> P1
-    T2 --> P1
-    P1 -->|通过| P2
-    P1 -->|未通过| A_STALE
-    P2 -->|读取成功且结构有效| U1
-    P2 -->|读取失败/异常| A_UNKNOWN
-    U1 -->|可用| A_KEPT
-    U1 -->|不可用| A_ALIGNED
-    A_ALIGNED --> E1
+    T1["目录就绪或用户更新启用集"] --> P1{"观察条件是否满足"}
+    P1 -->|满足| P2["读取宿主选择与提供方列表"]
+    P1 -->|不满足| A_UNKNOWN["保留选择；返回不可观察原因"]
+    P2 -->|可判断| A_KEPT["保留原选择，不调用保存接口"]
+    P2 -->|读取失败或上下文失效| A_UNKNOWN
+    A_KEPT --> U1["当前选择不可用时，用户自行选择可用模型"]
 ```
 
 #### 7.6.3 状态转换与安全不变量矩阵
@@ -825,14 +799,14 @@ flowchart TD
 | **SM2: GW** | `unconfigured` | 录入静态 Key | 格式合规且工号属主匹配 | `configured` | 写入凭据存储；触发 SM3 重新刷新 |
 | **SM2: GW** | `configured` | 换人登录检测 | 存储属主与当前 principal 不一致 | `mismatched-owner` | 阻断网关请求；禁止跨工号静默使用旧凭据 |
 | **SM3: 模型** | `unconfigured` | 轮询/事件感知 | `SM1===ready` 且 `SM2===configured` | `loading` | 发起网关 `/models` 发现；设置 10 秒超时硬上限 |
-| **SM3: 模型** | `loading` | 目录拉取成功 | 返回合法 JSON 模型数组 | `ready` | 首登选定第 1 个模型；串行化落盘；触发 SM4 模型对齐 |
+| **SM3: 模型** | `loading` | 目录拉取成功 | 返回合法 JSON 模型数组 | `ready` | 首次启用一个目录模型并保存启用集；触发 SM4 只读观察 |
 | **SM3: 模型** | `loading` | 网关不可达/超时 | HTTP 502/503 或网络异常 | `error` (transient) | 启动有界指数退避（2s, 5s, 15s, 30s, 60s），网络恢复自愈 |
 | **SM3: 模型** | `loading` | 凭据鉴权失败 | HTTP 401/403 | `error` (auth) | 立即终止重试，不发起额外重放，向用户清晰定位凭据问题 |
 | **SM3: 模型** | `loading` | 本次同步被本地取消 | 身份变化、令牌到期或请求被取代 | `error` (`ENTERPRISE_MODEL_SYNC_CANCELLED`) | 不进入退避；取消只作用于当前身份，会话恢复后重新同步 |
 | **SM3: 模型** | `ready` | 登出 / 令牌过期 | 任意失效事件 | `unconfigured` | **原子双清**：同步将目录置空并销毁后端，绝无幽灵 Ready 态 |
-| **SM4: 宿主** | `disabled` | 收到 SM3 ready | 宿主默认可证明不可用 | `aligned` | 调用 `saveSelection` 对齐为企业默认；发更新事件 |
-| **SM4: 宿主** | `disabled` | 未选模型直接发消息 | 宿主指向已禁用 Provider | `blocked` | 抛出 `session/model-unavailable`（对齐后彻底杜绝此路径） |
-| **SM4: 宿主** | `aligned` | 正常提问发消息 | 会话已绑定有效企业模型 | `session-ready` | 适配器取推理强度下界，流式对话正常返回 |
+| **SM4: 宿主** | `observing` | 目录就绪或启用集变更 | 观察完成 | `kept` | 保留原选择及推理设置，不调用宿主保存接口；`kept` 不证明模型可用 |
+| **SM4: 宿主** | `observing` | 读取失败、无目标或上下文失效 | 无法可靠观察 | `unknown` | 保留原选择；接口返回相应固定原因码 |
+| **SM4: 宿主** | 任意 | 用户需要使用企业模型 | 账号及模型准入就绪 | 不由插件改写 | 用户在宿主中选择已启用模型；不可用选择可能导致 `session/model-unavailable` |
 
 ---
 
@@ -1083,7 +1057,7 @@ flowchart TD
 ### 13.1 模型启用与单模型个性化参数（代拟）
 
 1. **目录源唯一定律**：模型清单严格且仅能来自网关 `GET ${baseURL}/models`，目录条目按 ID 严格稳定排序，刷新不受网关响应次序变化影响；条目按网关声明解释，客户端只做长度上限与去重，不限制字符集（`@`、`+` 与非 ASCII 标识符均合法）；单条畸形或重复判为目录非法，不替换已有目录；条目数超出防御上限时截断并记录，不判为非法；
-2. **首跑默认模型自动落盘**：首次获取目录且账号未保存过任何选择时，自动选定目录首个模型写入持久化存储（以默认参数启用），确保新会话无需复杂配置即处于可用状态；管理员配置的 `defaultModel` 存在时优先采用；
+2. **首跑启用模型**：首次获取目录且账号未保存过启用集时，以默认参数启用目录首个模型并保存；管理员配置的 `defaultModel` 在目录中存在时优先启用。此记录不修改宿主默认模型，用户需在对话中选择模型；
 3. **启用集合即为可用集合**：持久化记录中的 Key 即代表已启用模型；未启用的模型仅在设置列表中展示，不暴露在对话模型选择器中；`prepareCall`、`resolveModel` 与 `stream` 强校验启用状态，未启用直接以 `ENTERPRISE_MODEL_NOT_ALLOWED` 拒绝；拒绝提示区分「本机未启用」与「企业目录未提供」，不把用户停用表述为企业未开放；显式保存空集合代表用户主动停用全部模型；
 4. **模型配置独立存储与归属绑定**：模型配置持久化于独立存储键 `heluo-iam/model-selection`（格式为 `{ subject, models, defaultModelId }`），内容不含任何敏感密钥。读写操作严格校验当前有效授权的 `subject`，换人登录不继承前人配置，按未保存处理并重新生成首跑默认；
 5. **单模型个性化参数覆盖**：
@@ -1092,7 +1066,7 @@ flowchart TD
    - 推理强度限定为 `off`、`low`、`medium`、`high`、`xhigh`、`max` 六档连续区间，未声明档位及 `minimal` 显式置 `null`；
    - 界面支持一键套用推荐默认参数（200K 上下文、64K 输出、开启低中高推理区间）并即时生效；
 6. **面板与运行时一致性收敛**：客户端面板以宿主持久化存储为唯一准入真源，账号变更或配置重载时即时刷新，浏览器本地存储仅用作临时缓存，严禁反向污染宿主配置；
-7. **列表行快捷停用**：已启用模型的行上直接提供停用入口，无须展开精细配置；该动作与「一键启用」对称，改完启用集立即提交整份集合。停用默认模型时，宿主在同一次提交内重算默认模型并同步宿主新会话默认（SM4），面板以返回视图为准刷新徽章；停用最后一个模型提交显式空集合，SM3 允许该状态、SM4 回落为未对齐，重新启用前新对话无企业模型可用，故提示必须点明该后果。一次提交携带整份启用集，行上停用会连同其他未保存的面板修改一并生效，提示如实说明。
+7. **列表行快捷停用**：已启用模型的行上直接提供停用入口，无须展开精细配置；该动作与「一键启用」对称，改完启用集立即提交整份集合。停用不改变宿主默认模型；如果当前对话正在使用该模型，用户需自行选择其他已启用模型。停用最后一个模型提交显式空集合，重新启用前对话无企业模型可选。一次提交携带整份启用集，行上停用会连同其他未保存的面板修改一并生效，提示如实说明。
 
 8. **保存时机与提交串行化**：启用、停用、容量预设、输入模态、推理档位等离散操作在选定后立即提交整份启用集，不依赖保存按钮；显示名称与容量输入框只在失焦时提交，提交值与该字段最近一次持久化值相同时不发请求，避免点进点出各写一次。同一时刻只有一次请求在途，途中的改动排队，应答返回后按最后一版草稿重发；先到的应答不得覆盖之后产生的草稿。失败时保留草稿并提示原因，不以旧值静默回滚。「保存模型配置」按钮保留为立即提交与失败重试入口，仅在存在未提交的文本草稿时出现。
 9. **网关地址单点归一化**：基地址归一化只有一个实现，裁尾斜杠、不补写版本段；拒绝 userinfo、query 与 fragment；HTTP 和 HTTPS 地址不受主机是否为回环地址的限制。HTTP 不提供传输加密或端点身份认证，Key 与业务内容可能被窃取或篡改。

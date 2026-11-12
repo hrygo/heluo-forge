@@ -3,13 +3,12 @@ import { inspectReadonlyModelSelection, readonlyModelResult } from './model-sele
 import { isAccessExpired, isRefreshUsable } from './record.mjs';
 
 /**
- * The durable default-model selection and its single-flight reconciliation.
+ * Account-scoped model-selection storage and single-flight Host observation.
  *
- * A catalogue read is the only place that writes a default model, so the flight
- * lives next to it: a forced gateway read or a second caller joins the current
- * flight instead of starting a competing one, and a queued request re-runs once
- * the flight settles. Reconciliation is deliberately detached from login
- * failure handling, so a read-only observation can never discard a grant.
+ * A forced gateway read or a second caller joins the current observation
+ * instead of starting a competing one; a queued request re-runs once the flight
+ * settles. Observation is detached from login failure handling, so it cannot
+ * discard a grant or write the Host default model.
  */
 export function createModelSelection(env) {
   const { config, options, ctx, provider, grants, now, getAuthEpoch, isSigningOut, getLoadGateway, resolveToken } = env;

@@ -665,7 +665,7 @@ test('a stale or disabled defaultModelId is re-assigned to an enabled catalog mo
   assert.equal(f.runtime.getView().defaultModelId, 'beta');
 });
 
-test('syncDefaultModel explicitly triggers default alignment and safeGet retrieves host property', async t => {
+test('syncDefaultModel preserves an unavailable host default', async t => {
   let alignedTarget = null;
   const agentDefaultModel = {
     currentSelection: () => ({ provider: 'deepseek-account', model: 'deepseek-chat' }),
@@ -689,7 +689,7 @@ test('syncDefaultModel explicitly triggers default alignment and safeGet retriev
   await f.runtime.ready;
   assert.equal(typeof f.runtime.syncDefaultModel, 'function');
   await f.runtime.syncDefaultModel();
-  assert.equal(alignedTarget, 'enterprise:alpha');
+  assert.equal(alignedTarget, null);
 });
 
 test('a new model selection epoch keeps the active gateway usable for new calls', async t => {

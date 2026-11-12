@@ -155,8 +155,8 @@ const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name)
 
 /**
  * Own an adapter and the public stream waterfall. Host methods are never
- * replaced; the only Host setting touched is the new-conversation default
- * model, and only when it provably cannot run (see host-default-model.mjs).
+ * replaced; the new-conversation default is observed without writing any Host
+ * setting (see host-default-model.mjs).
  */
 export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch, logFailure,
   requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders(),
@@ -550,7 +550,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     retryTimer.unref?.();
   }
 
-  /** Single-flight alignment of DSH's new-conversation default; reruns once if asked again mid-flight. */
+  /** Single-flight observation of DSH's new-conversation default. */
   function syncHostDefault() {
     if (alignment) { alignQueued = true; return alignment; }
     const mine = version;
@@ -561,8 +561,6 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     })).catch(() => HOST_DEFAULT_RESULTS.FAILED).then(result => {
       if (!disposed && mine === version) {
         hostDefault = result;
-        // The client catalogue re-reads the default on this event.
-        if (result === HOST_DEFAULT_RESULTS.ALIGNED) publish();
       }
       return result;
     }).finally(() => {
@@ -672,7 +670,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       }
     }
     publish();
-    // Disabling the model DSH uses for new conversations would strand them.
+    // The enabled set and the user's Host default are separate settings.
     await syncHostDefault();
     return {
       ok: true, persisted,
@@ -704,7 +702,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         stale: catalogState === 'error' && models.length > 0,
         retryAt, syncedAt,
         defaultModelId,
-        // Fixed code describing the last alignment of DSH's new-conversation default.
+        // Fixed code describing the last read-only observation of the Host default.
         hostDefaultModel: hostDefault,
         enabled: Object.keys(modelOptions),
         selectionError: selectionError ?? selectionWriteError,
