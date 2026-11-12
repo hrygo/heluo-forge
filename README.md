@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="docs/assets/branding/cyber-long/index.html">
-    <img src="docs/assets/branding/cyber-long/primary/app-icon.png" alt="河洛 / Heluo Forge 官方主标：河洛苍螭" width="128" height="128">
+    <img src="docs/assets/branding/cyber-long/primary/app-icon.svg" alt="河洛 / Heluo Forge 官方主标：河洛苍螭" width="128" height="128">
   </a>
   <br>
   <strong>企业级智能研发平台 × 智能个人助理</strong>
@@ -14,9 +14,9 @@
 
 河洛通过扩展复用企业已有的身份、模型和业务系统，让个人工作体验与企业的权限、数据和治理要求相衔接。每位员工使用自己的工作环境，各项能力遵循实际用户授权和接入系统的权限。
 
-![河洛产品蓝图：个人工作环境、研发与个人助理、AIHUB 和 Nacos 能力生态、企业治理及外部系统](docs/assets/product-blueprint.png)
+![河洛产品蓝图：个人工作环境、研发与个人助理、AIHUB 和 Nacos 能力生态、企业治理及外部系统](docs/assets/product-blueprint.svg)
 
-[查看高清蓝图](docs/assets/product-blueprint.png) · [了解产品方向](#产品方向) · [查看产品路线图](#产品路线图) · [阅读项目文档](#了解更多)
+[查看高清蓝图](docs/assets/product-blueprint.svg) · [了解产品方向](#产品方向) · [查看产品路线图](#产品路线图) · [阅读项目文档](#了解更多)
 
 ---
 
