@@ -237,6 +237,9 @@ export function apply(ctx, rawConfig = {}) {
           iam: service,
           config: result.value,
           getHostDefaultModel,
+          // P1-3: keep the failure object fixed at { code, message }; the
+          // internal code is diagnosis and goes to the host log only.
+          logFailure: (detailCode, code) => ctx.logger?.debug?.(`forge-iam: model call failure ${detailCode} -> ${code}`),
           // The catalogue flips loading → ready/error without any IAM
           // transition. Push a view frame so subscribers do not keep a stale
           // "syncing" snapshot until some unrelated event arrives.

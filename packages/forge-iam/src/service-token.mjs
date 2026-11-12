@@ -566,6 +566,10 @@ export function createTokenResolver(env) {
             ctx.notify();
           }
           scheduleRenewal({ retry: true });
+          // The preflight failed, not the session. A still-valid access token
+          // keeps the conversation usable while the renewal backs off; serving
+          // an expired one is never safe, so that case keeps the error.
+          if (ctx.state === 'ready' && !isAccessExpired(ctx.lastGrant, now())) return ctx.lastGrant.accessToken;
           throw cause;
         }
         if (['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_CHANGED', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)) {

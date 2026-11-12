@@ -130,7 +130,7 @@ jobs:
       - name: Test credential storage
         run: node --test packages/forge-credentials-keychain/test/*.test.mjs
       - name: Test IAM read paths and CLI bridge
-        run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs packages/forge-iam/test/bridge-real-provider.test.mjs
+        run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs packages/forge-iam/test/bridge-real-provider.test.mjs packages/forge-iam/test/cli-reader.test.mjs
       # The release closure requires POSIX mode bits on bin entry points, which a
       # Windows checkout cannot carry; Windows packs the credentials package
       # directly for the offline installation check.

@@ -36,7 +36,7 @@ for (const expired of [false, true]) test(`an adopted rotation does not inherit 
   });
   t.after(async () => { await service.dispose(); await oidc.close(); });
   await service.hydrate();
-  await assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+  assert.equal(await service.getAccessToken(), 'access-a', 'a still-valid access token is served while renewal backs off');
   const id = Buffer.alloc(32, 7).toString('base64url');
   const deadline = Date.now() + (expired ? -100 : 2000);
   await store.write({ ...original, refreshToken: 'refresh-b', accessToken: 'access-b',
@@ -105,7 +105,7 @@ test('a view notification after access expires preserves the scheduled preflight
   });
   t.after(async () => { await service.dispose(); await oidc.close(); });
   await service.hydrate();
-  await assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+  assert.equal(await service.getAccessToken(), 'synthetic-access');
   clock += 850;
   assert.equal(service.notifyView().state, 'expired');
   clock += 250;

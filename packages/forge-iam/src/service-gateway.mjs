@@ -3,6 +3,7 @@ import { assertClientAuthCurrent } from './client-auth.mjs';
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { normalizeGatewayBaseURL } from './model-options.mjs';
+import { isAccessExpired, isRefreshUsable } from './record.mjs';
 import { StoreError } from './store.mjs';
 import { addSeconds, nowIso, safeMessage } from './service-helpers.mjs';
 
@@ -99,10 +100,12 @@ export function createServiceGateway(env) {
   }
 
   async function resolveConnection() {
-    // Refresh and validate the current grant through the existing authoritative path.
     // This returns only the personal Key; the IAM token has its own per-request
-    // resolver and never passes through this return value.
-    await resolveToken();
+    // resolver and never passes through this return value. A cold start still
+    // adopts the stored session first, but once a grant is in memory the key is
+    // not made to wait on a token round trip: a failing preflight is the token
+    // layer's error to report, not "cannot read the credential".
+    if (!ctx.lastGrant) await resolveToken();
     const epoch = getAuthEpoch();
     const targetStore = provider.require();
     const targetGatewayStore = provider.gatewayStore;
@@ -110,8 +113,15 @@ export function createServiceGateway(env) {
     const subject = ctx.lastGrant?.subject;
     const generation = selection.generation;
     const check = () => {
+      // A session is continuable while either factor still works: a valid
+      // access token serves the request as-is, and a valid refresh token is
+      // renewed by the token resolver before the request is sent. Only a dead
+      // session (both expired) is rejected here.
+      const grant = ctx.lastGrant;
+      const continuable = Boolean(grant) && (isRefreshUsable(grant, now()) || !isAccessExpired(grant, now()));
       if (ctx.disposed || isSigningOut() || getAuthEpoch() !== epoch || selection.generation !== generation
-        || ctx.state !== 'ready' || !subject || ctx.lastGrant?.subject !== subject || Date.parse(ctx.lastGrant.accessExpiresAt) <= now()) {
+        || !['ready', 'expired'].includes(ctx.state) || !subject || !grant || grant.subject !== subject
+        || !continuable) {
         throw new IamError('IAM_NOT_SIGNED_IN', '企业账号状态已变化，请重新登录。');
       }
       ctx.assertExclusive();
@@ -133,7 +143,7 @@ export function createServiceGateway(env) {
     const address = record.credential.baseURL ?? config.managedModels?.baseURL;
     if (!address) throw new IamError('IAM_GATEWAY_URL_INVALID', '请先设置网关地址。');
     const baseURL = normalizeGatewayBaseURL(address);
-    return { key: resolved.value, baseURL, generation: record.credential.writeOperationId ?? null };
+    return { key: resolved.value, baseURL, generation: record.credential.writeOperationId ?? null, subject };
   }
 
   async function saveCredential({ key: value, deviceLabel, baseURL: address } = {}) {

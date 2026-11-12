@@ -12,6 +12,8 @@
 
 // Codes the plugin itself emits; they are already the contract.
 export const SELF_CODES = new Set([
+  'ENTERPRISE_IAM_UNAVAILABLE',
+  'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
   'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
   'ENTERPRISE_GATEWAY_FORBIDDEN',
   'ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED',
@@ -132,6 +134,99 @@ const bodyTokens = (failure) => {
   return [inner.code, inner.type, body.code, body.type, body.status, body.error]
     .filter(value => typeof value === 'string');
 };
+/**
+ * Internal IAM and credential-storage codes answer "what should the person do?".
+ * They are emitted while resolving the key, before any request leaves, so each
+ * one must reach a registered user code instead of the unknown-failure bucket.
+ *
+ * The table is a compatibility surface: gateway-failure.test.mjs walks every
+ * IAM_/CRED_ code registered in ERROR_STATUS and fails when one is missing.
+ */
+export const USER_CODE_BY_INTERNAL = Object.freeze({
+  // The authentication service itself is out of reach: retry later.
+  IAM_UNREACHABLE: 'ENTERPRISE_IAM_UNAVAILABLE',
+  IAM_HTTP_ERROR: 'ENTERPRISE_IAM_UNAVAILABLE',
+  // Keyring, encrypted record or client-secret storage cannot be used.
+  CRED_KEY_UNAVAILABLE: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  CRED_DECRYPT_FAILED: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  IAM_CREDENTIALS_UNAVAILABLE: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  IAM_ATOMIC_STORE_UNVERIFIED: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  IAM_CREDENTIALS_CLEAR_FAILED: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  IAM_CLIENT_AUTH_UNVERIFIED: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  IAM_GATEWAY_ATOMIC_UNVERIFIED: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  IAM_GATEWAY_LEGACY_READ_ONLY: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  IAM_GATEWAY_WRITE_UNKNOWN: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
+  // The session is gone or cannot be proven current: sign in again.
+  IAM_NOT_SIGNED_IN: 'IAM_LOGIN_REQUIRED',
+  IAM_REAUTH_REQUIRED: 'IAM_LOGIN_REQUIRED',
+  IAM_LOGIN_REQUIRED: 'IAM_LOGIN_REQUIRED',
+  IAM_INVALID_GRANT: 'IAM_LOGIN_REQUIRED',
+  IAM_REFRESH_SUBJECT_MISMATCH: 'IAM_LOGIN_REQUIRED',
+  IAM_GRANT_CONTEXT_MISMATCH: 'IAM_LOGIN_REQUIRED',
+  IAM_STATE_MISMATCH: 'IAM_LOGIN_REQUIRED',
+  IAM_ATTEMPT_EXPIRED: 'IAM_LOGIN_REQUIRED',
+  IAM_ATTEMPT_IN_PROGRESS: 'IAM_LOGIN_REQUIRED',
+  IAM_ATTEMPT_CANCELLED: 'IAM_LOGIN_REQUIRED',
+  IAM_AUTHORIZATION_ERROR: 'IAM_LOGIN_REQUIRED',
+  IAM_CALLBACK_INVALID: 'IAM_LOGIN_REQUIRED',
+  IAM_CALLBACK_ISSUER: 'IAM_LOGIN_REQUIRED',
+  IAM_CALLBACK_UNAVAILABLE: 'IAM_LOGIN_REQUIRED',
+  IAM_CALLBACK_PORT_UNAVAILABLE: 'IAM_LOGIN_REQUIRED',
+  IAM_CALLBACK_BIND_FAILED: 'IAM_LOGIN_REQUIRED',
+  IAM_CLIENT_AUTH_CHANGED: 'IAM_LOGIN_REQUIRED',
+  IAM_CLIENT_AUTH_CONTEXT_INVALID: 'IAM_LOGIN_REQUIRED',
+  // The stored gateway credential or its address needs a person to fix it.
+  IAM_GATEWAY_CREDENTIAL_REQUIRED: 'IAM_GATEWAY_CREDENTIAL_REQUIRED',
+  IAM_GATEWAY_KEY_INVALID: 'IAM_GATEWAY_CREDENTIAL_REQUIRED',
+  IAM_GATEWAY_OWNER_MISSING: 'IAM_GATEWAY_CREDENTIAL_REQUIRED',
+  IAM_GATEWAY_URL_INVALID: 'IAM_GATEWAY_URL_INVALID',
+  // The live context no longer matches what the call was prepared for.
+  IAM_MODEL_CONTEXT_CHANGED: 'IAM_MODEL_CONTEXT_CHANGED',
+  IAM_GATEWAY_BINDING_CHANGED: 'IAM_MODEL_CONTEXT_CHANGED',
+  IAM_GATEWAY_CHANGED: 'IAM_MODEL_CONTEXT_CHANGED',
+  // The enterprise model layer needs an administrator.
+  IAM_INTERNAL: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_BRIDGE_UNAUTHORIZED: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_BRIDGE_FORBIDDEN: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_NOT_IMPLEMENTED: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_UNCONFIGURED: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_EXCLUSIVE_CONFLICT: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_INVALID_TRANSITION: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_CONFIG_INVALID: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_DISPOSED: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_RECORD_KIND_MISMATCH: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_MODEL_SELECTION_INVALID: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_MODEL_SELECTION_UNWRITTEN: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_REQUEST_INVALID: 'ENTERPRISE_MODELS_UNAVAILABLE',
+  IAM_REQUEST_TOO_LARGE: 'ENTERPRISE_MODELS_UNAVAILABLE',
+});
+
+/**
+ * Codes a person can act on. Every internal IAM/CRED failure resolves to one of
+ * these before it reaches the failure object, so the interface never shows a
+ * code that only names an internal module.
+ */
+export const USER_FACING_CODES = new Set([
+  ...SELF_CODES,
+  ...Object.values(USER_CODE_BY_INTERNAL),
+  // Model-layer codes that never travel through the key resolver but share the
+  // same failure surface.
+  'ENTERPRISE_MODELS_UNAVAILABLE',
+  'ENTERPRISE_MODEL_CATALOG_INVALID',
+  'ENTERPRISE_MODEL_SYNC_CANCELLED',
+]);
+
+/**
+ * One entry point for the failure object: internal IAM/CRED codes take their
+ * registered user code, everything the gateway layer emits keeps the existing
+ * evidence-first classification.
+ */
+export const failureCode = (failure) => {
+  const raw = typeof failure?.code === 'string' ? failure.code : undefined;
+  if (raw && Object.hasOwn(USER_CODE_BY_INTERNAL, raw)) return USER_CODE_BY_INTERNAL[raw];
+  return classifyFailure(failure);
+};
+
 export const classifyFailure = (failure) => {
   const raw = typeof failure?.code === 'string' ? failure.code : undefined;
   if (raw && SELF_CODES.has(raw)) return raw;

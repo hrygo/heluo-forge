@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BODY_CODES, LAYER_CODES, SELF_CODES, UNREACHABLE_SYSCALLS, classifyFailure, gatewayCode, squash, statusOf } from '../src/gateway-failure.mjs';
+import { BODY_CODES, LAYER_CODES, SELF_CODES, UNREACHABLE_SYSCALLS, USER_CODE_BY_INTERNAL, USER_FACING_CODES, classifyFailure, failureCode, gatewayCode, squash, statusOf } from '../src/gateway-failure.mjs';
+import { ERROR_STATUS } from '../src/error-contract.mjs';
 import { MESSAGES } from '../src/managed-models.mjs';
 
 // The tables are the compatibility surface. These invariants keep them honest:
@@ -94,4 +95,38 @@ test('the V2.1 vocabulary maps to distinct local codes and outranks the status',
   assert.equal(classifyFailure({ status: 401, responseBody: JSON.stringify({ error: { code: 'invalid_iam_token' } }) }), 'ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED');
   assert.equal(classifyFailure({ status: 403, responseBody: JSON.stringify({ error: { code: 'iam_token_mismatch' } }) }), 'ENTERPRISE_GATEWAY_IDENTITY_MISMATCH');
   assert.equal(classifyFailure({ status: 429, responseBody: JSON.stringify({ error: { code: 'budget_exhausted' } }) }), 'ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED');
+});
+
+test('every IAM and credential code maps to a registered user code', () => {
+  // Plan CORP-DSH-PLAN-018: an internal code that reaches the failure object is
+  // a user-facing defect. Enumerating ERROR_STATUS keeps a new code from
+  // silently inheriting ENTERPRISE_GATEWAY_CALL_FAILED.
+  const internal = Object.keys(ERROR_STATUS).filter(code => /^(IAM_|CRED_)/u.test(code));
+  assert.ok(internal.length > 0);
+  for (const code of internal) {
+    assert.ok(Object.hasOwn(USER_CODE_BY_INTERNAL, code), `${code} must map to a user code`);
+    const user = USER_CODE_BY_INTERNAL[code];
+    assert.ok(USER_FACING_CODES.has(user), `${code} -> ${user} must be user-facing`);
+    assert.ok(Object.hasOwn(MESSAGES, user), `${code} -> ${user} must have a message`);
+    assert.ok(Object.hasOwn(ERROR_STATUS, user), `${code} -> ${user} must have a status`);
+    assert.equal(failureCode({ code }), user, code);
+  }
+});
+
+test('a known IAM or credential code never lands on the unknown-failure bucket', () => {
+  for (const code of Object.keys(ERROR_STATUS)) {
+    if (!/^(IAM_|CRED_)/u.test(code)) continue;
+    assert.notEqual(failureCode({ code }), 'ENTERPRISE_GATEWAY_CALL_FAILED', code);
+  }
+  // Only genuinely unknown evidence still falls back.
+  assert.equal(failureCode({ code: 'SOMETHING_NEW' }), 'ENTERPRISE_GATEWAY_CALL_FAILED');
+  assert.equal(failureCode(new Error('no evidence at all')), 'ENTERPRISE_GATEWAY_CALL_FAILED');
+});
+
+test('a user code passes through the failure mapping untouched', () => {
+  for (const code of SELF_CODES) assert.equal(failureCode({ code }), code);
+  for (const code of ['IAM_LOGIN_REQUIRED', 'IAM_GATEWAY_CREDENTIAL_REQUIRED', 'IAM_MODEL_CONTEXT_CHANGED', 'IAM_GATEWAY_URL_INVALID']) {
+    assert.equal(failureCode({ code }), code);
+  }
+  assert.equal(failureCode({ code: 'IAM_GATEWAY_BINDING_CHANGED' }), 'IAM_MODEL_CONTEXT_CHANGED');
 });

@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.80.0 |
+| 版本 | V1.81.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,12 +19,12 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.80.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.81.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.43.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.41.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.42.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V2.1.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
+| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V2.2.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.7.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V1.0.3 | 评审稿 | 平台组（代拟） | G2 |
@@ -71,7 +71,7 @@
 | CORP-DSH-PLAN-016 | 企业包原生 addon 缺失修复实施计划 | [plans/2026-11-09-enterprise-bundle-native-addon.md](<plans/2026-11-09-enterprise-bundle-native-addon.md>) | V0.2.1 | 草案 | 平台组（代拟） | 构建期前置与产物期字节校验已实现并本机实测（含变异证明）；目标机实机取证仍按 #182 另行关闭 |
 | CORP-DSH-PLAN-017 | 凭据存储整洁架构实施方案 | [plans/2026-11-12-credential-storage-clean-arch.md](<plans/2026-11-12-credential-storage-clean-arch.md>) | V0.3.0 | 草案 | 平台组（代拟） | 方案背景与设计评审；不授予生产能力 |
 | CORP-DSH-PLAN-017A | 凭据存储整洁架构执行细案 | [plans/2026-11-12-credential-storage-execution.md](<plans/2026-11-12-credential-storage-execution.md>) | V0.2.0 | 草案 | 平台组（代拟） | 当前源码与本机离线验证；企业环境和目标宿主另行取证 |
-| CORP-DSH-PLAN-018 | IAM 调用失败自愈与错误码恢复方案 | [plans/2026-11-12-iam-call-failure-recovery.md](<plans/2026-11-12-iam-call-failure-recovery.md>) | V0.1.0 | 草案 | 平台组（代拟） | 方案待评审；以 PR #253 为基线，不改写现有实现状态 |
+| CORP-DSH-PLAN-018 | IAM 调用失败自愈与错误码恢复方案 | [plans/2026-11-12-iam-call-failure-recovery.md](<plans/2026-11-12-iam-call-failure-recovery.md>) | V0.2.0 | 草案 | 平台组（代拟） | 方案待评审；以 PR #253 为基线，不改写现有实现状态 |
 | CORP-DSH-PLAN-019 | CI 平台验证优化实施计划 | [plans/2026-11-12-ci-platform-verification.md](<plans/2026-11-12-ci-platform-verification.md>) | V0.2.1 | 草案 | 平台组（代拟） | 仓库离线检查与托管平台回归；目标宿主和企业环境另行取证 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.1.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.1 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |

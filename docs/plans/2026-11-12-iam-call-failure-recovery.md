@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-018 |
 | 文档名称 | IAM 调用失败自愈与错误码恢复方案 |
-| 版本 | V0.1.0 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -282,13 +282,110 @@ git diff --check
 
 ## 10. 待确认
 
-| 问题 | 责任方 | 截止门禁 |
-|---|---|---|
-| 宿主 `finish` 是否接受额外 `detailCode` 字段 | 宿主适配层 | P1-3 开始前 |
-| 流中凭据吊销是否必须中止已开始的回答 | 产品与安全 | P0-4 评审 |
-| PR #253 的 review-fixes 是否先合入 | 实现负责人 | 实现 PR 创建前 |
-| Windows 实机由谁提供日志与复现 | 试点支持 | 验收前 |
+| 问题 | 责任方 | 截止门禁 | 现状 |
+|---|---|---|---|
+| 宿主 `finish` 是否接受额外 `detailCode` 字段 | 宿主适配层 | P1-3 开始前 | 按客户端契约保持 `{ code, message }`，内部码经宿主调试日志记录（P1-3 回退路径） |
+| 流中凭据吊销是否必须中止已开始的回答 | 产品与安全 | P0-4 评审 | 是：`authorizationRefusal()` 保留吊销中止 |
+| PR #253 的 review-fixes 是否先合入 | 实现负责人 | 实现 PR 创建前 | PR #253 已合入 main（`ce19a34`）；实现基线取 `origin/main` `5e026a2` |
+| Windows 实机由谁提供日志与复现 | 试点支持 | 验收前 | 未取得，§7.3 手工矩阵未执行 |
 
 ## 11. 附图
 
 同目录 [HTML 版](<2026-11-12-iam-call-failure-recovery.html>) 为评审视图，控制稿为本文。两者冲突时以本文为准；状态、门禁与未验证项只以本文为准。
+
+## 12. 实施与验证记录
+
+P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内部码走宿主调试日志”的回退路径。基线为 `origin/main` `5e026a2`（含 PR #253 `ce19a34` 与 PR #258 方案文档）。
+
+### 12.1 落地清单
+
+| 项 | 文件 | 落地内容 |
+|---|---|---|
+| P0-1 | `packages/forge-iam/src/service-token.mjs` | `retryablePreflight` 分支在 AT 未过期时先按退避安排续期再返回当前 AT；AT 过期或状态非 ready 时保留原错误 |
+| P0-2 | `packages/forge-iam/src/service-gateway.mjs`、`src/managed-models.mjs` | `resolveConnection()` 返回 `subject`；新增 `sameBinding()` 只比较规范化地址与主体；同地址换 Key 直接采用新 Key，地址变化抛内部码 `IAM_GATEWAY_BINDING_CHANGED`（`ERROR_STATUS` 409），主体变化按登录失效处理 |
+| P0-3 | `packages/forge-iam/src/managed-models.mjs` | `protect()` 增加 `emitted` 守卫、一次重试预算与 `redispatch`；仅派发前、未产出分片、原因为 `IAM_GATEWAY_BINDING_CHANGED`、请求未取消时重建并重试；重建等待上限 5 秒 |
+| P0-4 | `packages/forge-iam/src/managed-models.mjs` | 新增 `authorizationRefusal()` 供流中使用，只查销毁、账号与凭据、吊销与主体；`prepareCall` 与 `stream` 间的代际变化改为重新准备一次 |
+| P0-5 | `src/gateway-failure.mjs`、`src/managed-models.mjs`、`src/error-contract.mjs`、`client.js` | 新增 `failureCode()` 与 `USER_CODE_BY_INTERNAL`（覆盖 `ERROR_STATUS` 全部 `IAM_*`／`CRED_*` 码）；登记 `ENTERPRISE_IAM_UNAVAILABLE`、`ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE`、`IAM_GATEWAY_BINDING_CHANGED`；客户端文案与宿主同步 |
+| P1-1 | `packages/forge-iam/src/service-gateway.mjs` | `resolveConnection()` 只在冷启动（内存无 grant）时读取会话，不再以 `resolveToken()` 为前置；续期可用即视为会话可继续 |
+| P1-2 | `packages/forge-iam/src/managed-models.mjs` | `refresh()` 因上下文变化作废时，为当前版本补一次重建；按版本去重，连续最多 3 次 |
+| P1-3 | `packages/forge-iam/src/managed-models.mjs`、`src/index.mjs` | failure 形状保持 `{ code, message }`；被映射的内部码经 `logFailure` 写入宿主调试日志 |
+
+### 12.2 自动化验证
+
+| 命令 | 结果 |
+|---|---|
+| `node --test`（`packages/forge-iam`） | 1569 通过、0 失败（新增 22 项：`iam-call-recovery` 19 项、`gateway-failure` 3 项） |
+| `node scripts/check-docs.mjs` | `docs: ok`（157 文件、1048 表格、1226 本地链接、165 片段、46 受控文档） |
+| `node scripts/check-repo.mjs` | 通过 |
+| `node scripts/dsh-version.mjs check` | 通过 |
+| `node --test`（仓库根） | 全量通过 |
+| `git diff --check` | 无输出 |
+
+### 12.3 变异证明
+
+| 变异 | 实测转红的用例 |
+|---|---|
+| 删除预检回退（AT 仍有效时不返回） | `preflight-retry-lifecycle`：adopted rotation（valid／expired access）、view notification 后保留重试；`login`：prefetch failure serves the still-valid access token |
+| `sameBinding` 恒真（不再比较地址与主体） | `iam-call-recovery`：地址变化重建并重试、重建失败返回具体码、prepared call 重新准备 |
+| 移除派发前重建与一次重试 | 同上三项 |
+| 移除内部码→用户码映射 | `gateway-failure`：映射完备性、已知码不落兜底、用户码直通；`iam-call-recovery`：主体变化、IAM 令牌失败、凭据存储失败、映射日志 |
+| 中止边界退回凭据整对象（保存 Key 即中止） | `iam-call-recovery`：re-saving the key does not interrupt an answer already in progress |
+| 会话可继续条件退回“续期令牌必须可用” | `iam-call-recovery`：a still-valid access token keeps the key resolvable after its refresh token expired |
+
+### 12.4 未验证项
+
+- Windows 目标机 §7.3 手工矩阵未执行：当前无 Windows 目标机，A/B 类现场归因仍待该证据关闭。
+- 企业真实 IAM 与网关未联调：结论来自离线用例与本地 mock。
+- 宿主是否实际输出 `iam` 调试日志未在真机确认。
+- 跨进程写入仍为最终一致，仅保证首个请求自愈。
+
+### 12.5 审查修正
+
+实现 PR 的自动审查提出两处缺陷，已修正并补用例：
+
+| 缺陷 | 影响 | 修正 | 用例 |
+|---|---|---|---|
+| 保存 Key 会中止进行中的回答 | `sample()` 以凭据整对象计算身份并据此中止租约，同地址换 Key（写入代次变化）会切断已开始的流 | 中止边界改为授权身份（主体 + 凭据状态），凭据写入代次只触发目录重建 | `re-saving the key does not interrupt an answer already in progress` |
+| 刷新令牌过期但访问令牌仍有效时会话被拒 | `resolveConnection()` 以续期令牌可用为前置，提前把仍可用的会话判为未登录 | 会话可继续条件改为访问令牌或刷新令牌任一有效，仅两者都过期才拒绝 | `a still-valid access token keeps the key resolvable after its refresh token expired`、`a session with both factors expired is not a usable session` |
+
+另补一条形状守卫用例：绑定变化若以 `finish` 分块（而非抛出）送达，按用户码映射且不重试（`a transport that reports the binding change as a finish chunk is not retried`）。
+
+第三处意见指出恢复用例只覆盖替身适配器，绕开了宿主实际装配的 `createNativeGatewayAdapter`：
+
+| 缺陷 | 影响 | 修正 | 用例 |
+|---|---|---|---|
+| 恢复用例绕过宿主实际装配的适配器 | 只证明替身适配器可重试，未证明重试穿过原生适配器的按调用解析 Key 边界 | 以 `host.loader.import` 注入 PiAiAdapter 与协议桩，让恢复路径经 `createNativeGatewayAdapter` 装配后运行 | `the native adapter retries exactly once after the binding moves before dispatch`（断言一次重建、一次请求、使用新 Key；移除派发前重试即转红） |
+
+### 12.6 虚拟机验证记录
+
+两台目标机从 `codex/issue-259-iam-recovery` 分支安装 `.node-version` 指定的 Node 24.21.0，运行 `packages/forge-iam` 测试套件：
+
+| 目标机 | 包级套件（`packages/forge-iam`） | 仓库级检查 |
+|---|---|---|
+| 麒麟 V10 SP1 ARM64 | 1569 用例全部通过 | `check:docs`／`check:repo`／`check:skills`／`check:bundle-tarballs`／`dsh-version check` 通过；`node --test` 3710 用例、3704 通过、0 失败、6 跳过 |
+| Windows 11 ARM64 | 1569 用例全部通过 | 未执行（该机只安装 Node，未安装 git） |
+| macOS arm64（对照） | 1569 用例全部通过 | 3710 用例、3707 通过、0 失败、3 跳过 |
+
+#### 12.6.1 Windows：`--import` 必须传文件 URL
+
+`cli-reader.test.mjs` 用 `node --import <hook.mjs> bin/heluo-forge.mjs` 注入凭据存储桩。Windows 上 Node 24.21.0 把绝对路径的 `--import` 值按 URL 解析，协议被读成 `c:`，子进程在 CLI 启动前即以 `ERR_UNSUPPORTED_ESM_URL_SCHEME` 退出，该文件的 18 个用例因此全红。该文件此前不在 Windows CI 的目标步骤里，远端从未覆盖。改为 `pathToFileURL(hook).href` 后两台机器一致通过，并把该文件加入 `.github/workflows/check.yml` 的 “Test IAM read paths and CLI bridge” 步骤。
+
+#### 12.6.2 麒麟：KySec 应用联网控制默认拒绝未登记的 node
+
+未处理时 `callback-port.test.mjs` 的 IPv6 回环用例失败（`::1` 上 `EACCES`）。`/var/log/kysec.log` 记录 `command=netctl result=forbid` 与 `program: <node 路径>, pkg: net-node`：麒麟安全中心的“应用联网控制”默认拒绝未登记程序联网，node 来自官方压缩包因此被拒，IPv4 回环不受影响。用 `netctl --set -p net-node -a <node 路径> -s allow` 登记后该用例通过。这是目标机的安全策略配置，不是代码缺陷；未登记的 node 在麒麟上无法完成 IPv6 回环数据传输。
+
+#### 12.6.3 麒麟：在用户目录准备 git 与正确 umask
+
+麒麟目标机的软件源只提供 git 2.25.1，`git init --initial-branch`、`git init -b`、`git init --object-format` 与 `git worktree list --porcelain -z` 都不支持，仓库级用例因此失败；该机又无免密提权，无法安装软件包。改用用户目录自建的 git 2.47.1：
+
+```sh
+make -j4 NO_OPENSSL=1 NO_CURL=1 NO_EXPAT=1 NO_TCLTK=1 NO_GETTEXT=1 NO_PERL=1 prefix=~/forge-test/git2 all install
+export PATH=~/forge-test/git2/bin:$PATH GIT_EXEC_PATH=~/forge-test/git2/libexec/git-core GIT_TEMPLATE_DIR=~/forge-test/git2/share/git-core/templates
+```
+
+麒麟桌面默认 `umask 002`，检出的脚本会带 group-writable 位，`sensitive-scan` 会按设计拒绝这种文件（报 `is 0664 (group/other writable)`）。以 `umask 022` 重新解包（或 `chmod -R go-w`）后，仓库级检查全部通过。`dsh-version check` 输出的两条“代码例外”是仓库既有的显式例外记录，不是失败。
+
+#### 12.6.4 未覆盖项
+
+- §7.3 的**应用级**手工矩阵（断网重连、重存 Key、跨进程改写凭据、对话中切换模型）仍需装好企业插件的实机环境。
+- Windows 目标机未安装 git，仓库级检查只取 macOS 与麒麟两台的证据。

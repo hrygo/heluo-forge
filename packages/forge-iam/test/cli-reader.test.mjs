@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { refreshBaseId } from '../src/service-helpers.mjs';
 
@@ -40,7 +40,11 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   const env = { ...process.env, TEST_READER_LOG: log, HELUO_FORGE_STORE_DIRECTORY: directory,
     HELUO_FORGE_KEYCHAIN_SERVICE: 'fixture-service', HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX: 'fixture-prefix', ...options };
   delete env.HELUO_FORGE_IAM_URL;
-  return { directory, env, log, async cli(...args) { return run(process.execPath, ['--import', hook, bin, 'auth', ...args], { env }); } };
+  // `--import` takes a specifier, not a shell argument: an absolute Windows path
+  // is read as a `c:` URL and the child dies with ERR_UNSUPPORTED_ESM_URL_SCHEME
+  // before the CLI runs. A file URL is the portable spelling on every platform.
+  const hookUrl = pathToFileURL(hook).href;
+  return { directory, env, log, async cli(...args) { return run(process.execPath, ['--import', hookUrl, bin, 'auth', ...args], { env }); } };
 }
 
 const grant = { kind: 'grant', payload: { version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), clientId: 'fixture', scope: 'openid', obtainedAt: '2026-01-01T00:00:00.000Z', subject: 'E1001', issuer: 'https://iam.corp.example',
