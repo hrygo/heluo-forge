@@ -9,10 +9,12 @@ name: sensitive-attestation
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -42,6 +44,10 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
+      - name: Verify PR issue reference using base code
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-pr-issue.mjs
       - name: Verify local attestations
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
