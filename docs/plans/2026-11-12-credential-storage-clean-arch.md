@@ -71,13 +71,16 @@ keyring.json
 magic "HFSE" | ver 1B | alg 1B | kidLen 1B | kid | iv 12B | tag 16B | ciphertext
 
 AAD
-"HFSE|1|record|heluo-iam/session|<ownerSubject>|k2"
+"HFSE|1|record|heluo-iam/session|E1001|k2"
 ```
 
 - 每条值独立随机 IV，禁止复用。
-- AAD 绑定 kind、键名与属主，防止记录被挪到其他键名下重放。
+- AAD 绑定 kind、键名、属主与 `kid`。属主取自 `secret.owner` 明文列：写入时同时落列与信封，读取时先取列再解密，不从密文推断，冷启动因此可读。
+- 属主列被改动会使 AAD 不匹配并解密失败；整行挪用会因键名或属主不符而失败。
 - 解密失败与 AAD 不匹配返回同一错误码 `CRED_DECRYPT_FAILED`，不区分为解密预言机。
 - 联合提交时先解密当前值再比较明文；随机 IV 使密文不可直接比较，比对通过后只封一次再写。
+- 轮换只切 `meta.active`；旧 `kid` 保留到重封完成，移除后该值返回 `CRED_KEY_UNAVAILABLE`。
+- 读路径只解密不写库；重封由显式任务或该键的下一次写入完成。
 
 ## 4. 数据模型
 
@@ -85,6 +88,7 @@ AAD
 CREATE TABLE secret (
   id         TEXT PRIMARY KEY,
   kind       TEXT NOT NULL,      -- 'ref' | 'record'
+  owner      TEXT NOT NULL DEFAULT '',  -- AAD 中的属主，引用可为空
   envelope   BLOB NOT NULL,
   kid        TEXT NOT NULL,
   revision   INTEGER NOT NULL,
@@ -118,6 +122,8 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 后端能力不靠自报：注册表只列出通过契约套件的实现，`capabilities()` 由测试证明。
 
+契约套件至少覆盖三类结果：普通读写、两键联合提交的原子性、以及缺少联合提交的后端被拒绝。网关写只允许落在通过第三类用例的后端上，其余一律拒绝，不做静默降级。
+
 ## 7. 实施步骤
 
 | 步 | 内容 | 完成判据 |
@@ -135,11 +141,12 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | 层 | 用例 |
 |---|---|
 | 单元 | 往返、AAD 错位、篡改、截断、未知 `kid`、密钥文件 0644 拒绝 |
-| 属性 | 任意字节往返；密文不含明文子串 |
-| 集成 | 契约套件跑 sqlite 与内存后端；崩溃后重开 |
+| 属性 | 任意字节往返；空值被拒绝 |
+| 集成 | 契约套件跑 sqlite 与内存后端；联合提交注入失败后两键均不可见；缺联合提交的后端被拒绝；崩溃后重开 |
 | 接口 | 四个面同一输入得到同一形状与错误码 |
+| 冷启动 | 新进程直接读取 session 与网关引用，不需要先验状态 |
 | 轮换 | 旧 `kid` 仍可解；移除后返回 `CRED_KEY_UNAVAILABLE` |
-| 安全 | 库、`-wal`、`-shm` 全文件扫描无明文 |
+| 安全 | 库、`-wal`、`-shm` 扫描固定 32 字节标记，结果为空 |
 | 平台 | Node 24 三平台，加 Electron 宿主 |
 
 篡改用例必须失败：改动一个字节后抛 `CRED_DECRYPT_FAILED`，不返回旧值。
@@ -147,7 +154,7 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ## 9. 删除清单
 
 - `migrate.mjs` 与旧格式解密器。
-- 文件后端内的整文档 AES-256-GCM 路径。
+- 文件后端及其整文档 AES-256-GCM 路径；只保留 SQLite 与测试用内存后端。
 - 探测后端是否支持原子能力的自报字段判断。
 - CLI 中的后端解析、目录解析与不取证开关复制。
 
@@ -157,8 +164,9 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - 同步 API 不允许在事务中 `await`；占用写锁跨 I/O 会让其他进程 busy 超时。
 - Windows、麒麟与 Electron 宿主尚未按本方案取证。
 - 密钥文件与库同目录，隔离边界仍是用户账户，不是单个应用。
+- 读路径不写库；轮换后的重封需显式任务或下次写入，本计划未为批量重封排期。
 - 本计划不覆盖企业 IAM 与网关联调，相关结论以既有门禁为准。
 
 ## 11. 附图
 
-同目录 [HTML 版](<2026-11-12-credential-storage-clean-arch.html>) 为同一内容的可视化版本，用于评审阅读。
+同目录 [HTML 版](<2026-11-12-credential-storage-clean-arch.html>) 为评审视图，控制稿为本文。两者冲突时以本文为准；状态、门禁与未验证项只以本文为准。
