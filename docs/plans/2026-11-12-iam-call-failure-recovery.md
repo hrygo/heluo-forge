@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-018 |
 | 文档名称 | IAM 调用失败自愈与错误码恢复方案 |
-| 版本 | V0.1.0 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -282,13 +282,57 @@ git diff --check
 
 ## 10. 待确认
 
-| 问题 | 责任方 | 截止门禁 |
-|---|---|---|
-| 宿主 `finish` 是否接受额外 `detailCode` 字段 | 宿主适配层 | P1-3 开始前 |
-| 流中凭据吊销是否必须中止已开始的回答 | 产品与安全 | P0-4 评审 |
-| PR #253 的 review-fixes 是否先合入 | 实现负责人 | 实现 PR 创建前 |
-| Windows 实机由谁提供日志与复现 | 试点支持 | 验收前 |
+| 问题 | 责任方 | 截止门禁 | 现状 |
+|---|---|---|---|
+| 宿主 `finish` 是否接受额外 `detailCode` 字段 | 宿主适配层 | P1-3 开始前 | 按客户端契约保持 `{ code, message }`，内部码经宿主调试日志记录（P1-3 回退路径） |
+| 流中凭据吊销是否必须中止已开始的回答 | 产品与安全 | P0-4 评审 | 是：`authorizationRefusal()` 保留吊销中止 |
+| PR #253 的 review-fixes 是否先合入 | 实现负责人 | 实现 PR 创建前 | PR #253 已合入 main（`ce19a34`）；实现基线取 `origin/main` `5e026a2` |
+| Windows 实机由谁提供日志与复现 | 试点支持 | 验收前 | 未取得，§7.3 手工矩阵未执行 |
 
 ## 11. 附图
 
 同目录 [HTML 版](<2026-11-12-iam-call-failure-recovery.html>) 为评审视图，控制稿为本文。两者冲突时以本文为准；状态、门禁与未验证项只以本文为准。
+
+## 12. 实施与验证记录
+
+P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内部码走宿主调试日志”的回退路径。基线为 `origin/main` `5e026a2`（含 PR #253 `ce19a34` 与 PR #258 方案文档）。
+
+### 12.1 落地清单
+
+| 项 | 文件 | 落地内容 |
+|---|---|---|
+| P0-1 | `packages/forge-iam/src/service-token.mjs` | `retryablePreflight` 分支在 AT 未过期时先按退避安排续期再返回当前 AT；AT 过期或状态非 ready 时保留原错误 |
+| P0-2 | `packages/forge-iam/src/service-gateway.mjs`、`src/managed-models.mjs` | `resolveConnection()` 返回 `subject`；新增 `sameBinding()` 只比较规范化地址与主体；同地址换 Key 直接采用新 Key，地址变化抛内部码 `IAM_GATEWAY_BINDING_CHANGED`（`ERROR_STATUS` 409），主体变化按登录失效处理 |
+| P0-3 | `packages/forge-iam/src/managed-models.mjs` | `protect()` 增加 `emitted` 守卫、一次重试预算与 `redispatch`；仅派发前、未产出分片、原因为 `IAM_GATEWAY_BINDING_CHANGED`、请求未取消时重建并重试；重建等待上限 5 秒 |
+| P0-4 | `packages/forge-iam/src/managed-models.mjs` | 新增 `authorizationRefusal()` 供流中使用，只查销毁、账号与凭据、吊销与主体；`prepareCall` 与 `stream` 间的代际变化改为重新准备一次 |
+| P0-5 | `src/gateway-failure.mjs`、`src/managed-models.mjs`、`src/error-contract.mjs`、`client.js` | 新增 `failureCode()` 与 `USER_CODE_BY_INTERNAL`（覆盖 `ERROR_STATUS` 全部 `IAM_*`／`CRED_*` 码）；登记 `ENTERPRISE_IAM_UNAVAILABLE`、`ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE`、`IAM_GATEWAY_BINDING_CHANGED`；客户端文案与宿主同步 |
+| P1-1 | `packages/forge-iam/src/service-gateway.mjs` | `resolveConnection()` 只在冷启动（内存无 grant）时读取会话，不再以 `resolveToken()` 为前置；续期可用即视为会话可继续 |
+| P1-2 | `packages/forge-iam/src/managed-models.mjs` | `refresh()` 因上下文变化作废时，为当前版本补一次重建；按版本去重，连续最多 3 次 |
+| P1-3 | `packages/forge-iam/src/managed-models.mjs`、`src/index.mjs` | failure 形状保持 `{ code, message }`；被映射的内部码经 `logFailure` 写入宿主调试日志 |
+
+### 12.2 自动化验证
+
+| 命令 | 结果 |
+|---|---|
+| `node --test`（`packages/forge-iam`） | 1564 通过、0 失败（新增 17 项：`iam-call-recovery` 14 项、`gateway-failure` 3 项） |
+| `node scripts/check-docs.mjs` | `docs: ok`（157 文件、1048 表格、1226 本地链接、165 片段、46 受控文档） |
+| `node scripts/check-repo.mjs` | 通过 |
+| `node scripts/dsh-version.mjs check` | 通过 |
+| `node --test`（仓库根） | 全量通过 |
+| `git diff --check` | 无输出 |
+
+### 12.3 变异证明
+
+| 变异 | 实测转红的用例 |
+|---|---|
+| 删除预检回退（AT 仍有效时不返回） | `preflight-retry-lifecycle`：adopted rotation（valid／expired access）、view notification 后保留重试；`login`：prefetch failure serves the still-valid access token |
+| `sameBinding` 恒真（不再比较地址与主体） | `iam-call-recovery`：地址变化重建并重试、重建失败返回具体码、prepared call 重新准备 |
+| 移除派发前重建与一次重试 | 同上三项 |
+| 移除内部码→用户码映射 | `gateway-failure`：映射完备性、已知码不落兜底、用户码直通；`iam-call-recovery`：主体变化、IAM 令牌失败、凭据存储失败、映射日志 |
+
+### 12.4 未验证项
+
+- Windows 目标机 §7.3 手工矩阵未执行：当前无 Windows 目标机，A/B 类现场归因仍待该证据关闭。
+- 企业真实 IAM 与网关未联调：结论来自离线用例与本地 mock。
+- 宿主是否实际输出 `iam` 调试日志未在真机确认。
+- 跨进程写入仍为最终一致，仅保证首个请求自愈。

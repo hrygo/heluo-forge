@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V2.1.0 |
+| 版本 | V2.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -861,23 +861,25 @@ flowchart TD
 | 网关接口返回 429（限流） | 不自动重发请求 | 提示“请求过于频繁，请稍后重试” | 是，稍后重试 |
 | 网关接口返回 429（额度或路由冷却） | 不自动重发请求，按响应体 `code` 区分 | 提示“所选模型的额度已用尽，请更换模型或联系管理员” | 否，改用其他模型或补足额度 |
 | 官方账号服务残留 | `checkExclusive` 报错，拒绝进入 ready | 提示“企业组合配置异常：官方账号服务未禁用” | 否，需修复部署配置 |
-| 凭据存储不可写/损坏 | 拒绝就绪，保持文件原始内容不变 | 提示“凭据安全存储异常，请检查文件权限” | 否，需排查宿主权限 |
+| 凭据存储不可写/损坏 | 拒绝就绪，保持文件原始内容不变 | 提示“凭据安全存储暂不可用，请检查系统密钥环或联系管理员。” | 否，需排查宿主权限 |
 
 
 ### 8.1 网关失败分类与换网关适配
 
-企业模型调用的失败归类与具体网关实现解耦：分类只读取调用失败对象上的证据，不依赖某一厂商的错误词汇。实现位于 `packages/forge-iam/src/gateway-failure.mjs`，`managed-models.mjs` 在流内 `finish` 块与抛出异常两条路径上共用同一分类入口。
+企业模型调用的失败归类与具体网关实现解耦：分类只读取调用失败对象上的证据，不依赖某一厂商的错误词汇。实现位于 `packages/forge-iam/src/gateway-failure.mjs`，`managed-models.mjs` 在流内 `finish` 块与抛出异常两条路径上共用同一失败入口 `failureCode()`：先按 `USER_CODE_BY_INTERNAL` 把插件内部的 `IAM_*`／`CRED_*` 码换成已登记用户码，再交给 `classifyFailure()` 归类网关证据。
 
 #### 8.1.1 分类顺序
 
 | 顺序 | 证据来源 | 覆盖的典型形态 | 命中后的结论 |
 |---|---|---|---|
-| 1 | 插件自身错误码 | `finish` 块或异常已带 `ENTERPRISE_*` 码 | 直接放行，不二次归类 |
+| 1 | 插件自身错误码 | `finish` 块或异常已带已登记用户码（`ENTERPRISE_*` 或入口码） | 直接放行，不二次归类 |
 | 2 | 模型层错误码 | `QUOTA`、`RATE_LIMIT`、`FreeUsageLimitError`、`RateLimitError` | 查 `LAYER_CODES` |
 | 3 | 响应体词表 | OpenAI `error.code`／`error.type`、RFC 9457 `type`（取末段）、路由冷却码（`model_cooldown`） | 查 `BODY_CODES` |
 | 4 | HTTP 状态码 | `status`、`statusCode`、`response.status`、`cause.*` | 401/403/429/4xx/5xx 分别归类 |
 | 5 | socket 错误码 | `ECONNREFUSED`、`ENOTFOUND`、`ETIMEDOUT` 等 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
 | 6 | 兜底 | 以上均无 | `ENTERPRISE_GATEWAY_CALL_FAILED` |
+
+插件内部码在进入上述层级之前先做一次映射：`USER_CODE_BY_INTERNAL` 覆盖 `ERROR_STATUS` 中全部 `IAM_*` 与 `CRED_*` 码，把“哪个模块失败”换成“用户该做什么”。未映射的内部码不允许落到第 6 层——`gateway-failure.test.mjs` 逐码断言这一点。`IAM_GATEWAY_BINDING_CHANGED` 是内部码（`ERROR_STATUS` 409），只映射为 `IAM_MODEL_CONTEXT_CHANGED`，不直接呈现给用户。
 
 响应体来源按 `responseBody`、`data`、`body`、`cause.responseBody` 依次尝试，并兼容模型层把响应体前缀进错误消息的形态（`429: {"code":…}`）。解析失败或超过 8 KiB 时放弃解析，不影响后续层级。
 
@@ -898,9 +900,11 @@ flowchart TD
 | `ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED` | `budget_exhausted` | 429 | 所选模型的预算已用尽，请联系管理员或更换模型。 |
 | `ENTERPRISE_GATEWAY_REQUEST_REJECTED` | 其余 4xx、`context_length_exceeded`、`INVALID_REQUEST` | 502 | 网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。 |
 | `ENTERPRISE_GATEWAY_UNAVAILABLE` | 5xx、`NETWORK`、`TIMEOUT`、`OVERLOADED`、socket 错误 | 502 | 暂时无法连接企业模型，请稍后重试。 |
-| `ENTERPRISE_GATEWAY_CALL_FAILED` | 无可识别证据的失败 | 502 | 本次请求未完成，请重试；持续失败请联系管理员。 |
+| `ENTERPRISE_IAM_UNAVAILABLE` | `IAM_UNREACHABLE`、`IAM_HTTP_ERROR`（认证服务未接受请求即失败） | 503 | 企业认证服务暂不可达，请稍后重试。 |
+| `ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE` | `CRED_KEY_UNAVAILABLE`、`CRED_DECRYPT_FAILED`、`IAM_CREDENTIALS_UNAVAILABLE`、联合存储未核验或写入未知 | 503 | 凭据安全存储暂不可用，请检查系统密钥环或联系管理员。 |
+| `ENTERPRISE_GATEWAY_CALL_FAILED` | 无可识别证据的失败；已登记的 `IAM_*`／`CRED_*` 码不落此码 | 502 | 本次请求未完成，请重试；持续失败请联系管理员。 |
 
-`ENTERPRISE_GATEWAY_UNAVAILABLE` 是唯一可断言“不可达”的码，仅在响应为 5xx 或存在 socket 级错误时产生；其余未知情况一律归入 `ENTERPRISE_GATEWAY_CALL_FAILED`，避免把额度或参数问题误报为网络故障。
+`ENTERPRISE_GATEWAY_UNAVAILABLE` 在网关层是唯一可断言“不可达”的码，仅在响应为 5xx 或存在 socket 级错误时产生；认证服务与凭据存储的不可达各有独立用户码（上表两条 503），不并入网关码。其余未知情况一律归入 `ENTERPRISE_GATEWAY_CALL_FAILED`，避免把额度或参数问题误报为网络故障；任何已登记的 `IAM_*`／`CRED_*` 码都不会落到该码。
 
 #### 8.1.3 换网关适配流程
 
@@ -919,17 +923,28 @@ flowchart TD
 2. 两个码表与自身码集合的值必须是 `MESSAGES` 中已登记的错误码；
 3. 每个词表项都必须能通过一次失败对象命中；
 4. 无证据的失败不得归类为 `ENTERPRISE_GATEWAY_UNAVAILABLE`；
-5. 响应体只参与归类，不进入用户可见文案、日志或诊断快照。
+5. 响应体只参与归类，不进入用户可见文案、日志或诊断快照；
+6. `ERROR_STATUS` 中每个 `IAM_*`／`CRED_*` 码在 `USER_CODE_BY_INTERNAL` 都有映射，且映射值必须同时具备文案与 HTTP 状态。
 
 #### 8.1.5 重试边界
 
 目录同步的后台退避只覆盖 `ENTERPRISE_GATEWAY_UNAVAILABLE` 与 `ENTERPRISE_GATEWAY_RATE_LIMIT`；`QUOTA_EXHAUSTED` 与 `CALL_FAILED` 不参与自动重试，避免在额度耗尽或原因未知时反复撞击网关。
 
-#### 8.1.6 已知限制
+模型调用另有一处派发前重试，与目录同步退避相互独立：`resolveApiKey` 在请求构造与发送之前解析 Key，此时失败说明请求尚未发出，因此允许重建后重试。四个条件同时成立才重试——尚未产出任何分片（`emitted === false`）、原因为插件自身的 `IAM_GATEWAY_BINDING_CHANGED`、尚未重试过（预算一次）、请求未被取消。重建走目录单飞，等待上限 5 秒，超时按 `ENTERPRISE_GATEWAY_UNAVAILABLE` 处理；重建失败直接返回其用户码。首个分片之后不重试，避免同一回答被投递两次。
+
+同地址换 Key 不是绑定变化：`baseURL` 与主体不变时直接采用新 Key 并更新本地快照，不重建适配器。绑定快照只由这两个字段构成，`generation` 仅是 Key 的写入版本。
+
+#### 8.1.6 流中授权边界
+
+回答开始前由 `refusal()` 判定：账号状态、凭据配置、上下文代际（`version`）、后端可用性与模型门禁任一不符即拒绝，`prepareCall` 与 `stream` 之间发生代际变化时先按当前后端重新准备一次，仅当重新准备失败才报 `IAM_MODEL_CONTEXT_CHANGED`。回答进行中改用 `authorizationRefusal()`，只检查销毁、账号与凭据可用性、凭证吊销与主体一致；模型选择、Key 轮换与上下文代际变化不再中止已经开始的回答。主体变化按 `IAM_LOGIN_REQUIRED` 处理，且不会重新准备：重试只在同一主体内发生，不把调用转到另一个人名下。
+
+#### 8.1.7 已知限制
 
 1. 响应体不含可识别词汇时只能按 HTTP 状态归类：429 将统一报为限流，无法区分额度与瞬时限流。
 2. 厂商新增错误词汇需要显式补表；遗漏时落到第 6 层，语义中性但不精确。
 3. 进一步提升精度依赖网关在响应体中给出机器可读原因码，属网关侧契约，客户端无法单方面解决。
+4. 同地址换 Key 依赖地址规范化可靠；若同一 URL 背后已换成另一个网关，旧 Key 会收到 401，按 `ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED` 处理。
+5. 跨进程写入仍是最终一致：派发前自愈覆盖首个请求，不承诺无锁原子性。
 
 ---
 

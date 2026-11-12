@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.41.1 |
+| 版本 | V0.42.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -25,7 +25,7 @@
 
 | 包 | 形态 | 设计文档 | 设计状态 | 主要待确认 |
 |---|---|---|---|---|
-| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型写入接线（写前独立复查、绝不覆盖显式企业选择）、禁用插件/独占冲突 fail closed 实测已落地；新对话默认模型在可证明不可用时对齐为企业默认模型（离线测试覆盖，未实机）；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录、七行禁用与回灌检查）本地实现，见 §2.2.1；Remote/watch 未实现） | IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测 |
+| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型写入接线（写前独立复查、绝不覆盖显式企业选择）、默认模型体系；调用失败自愈与内部码→用户码映射（离网测试覆盖，未实机）；禁用插件/独占冲突 fail closed 实测已落地；新对话默认模型在可证明不可用时对齐为企业默认模型（离线测试覆盖，未实机）；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录、七行禁用与回灌检查）本地实现，见 §2.2.1；Remote/watch 未实现） | IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（guard、异步确认、必要审计与命令共用屏障已实测；既有 32 项宿主探针中的辅助函数调用不等于真实恢复、分叉、子 Agent 的授权承接；确认/委托纯 API 与可信运行时接线分开验收） | 审批注册与超时、`$DSH_HOME` 范围（子 Agent 模型自决调用与策略×沙箱叠加顺序已实测，见下方证据） |
 | `@heluo/forge-enterprise` | umbrella bundle | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（策略为硬依赖，无只读降级；市场不插入历史插件行；按需技能/条款装配、包体闭包检查、五类开关声明与判定、官方行回灌检测已实现；官方行禁用（2026-10-24 实测四个登录/模型行加明文凭据行；2026-11-04 扩至六个官方行加明文凭据行，扩行后组合层未复测）与装/升/退/卸演练已实测；真机 `dsh plugin` profile 级安装、rc.2→rc.3 升级循环与回退/卸载残留、四层组合层序与 `--from-default-profile` 整体替换已实测；企业能力行按最小挂载挂凭据/策略/IAM 三插件（SDD 已于 2026-11-03 退役，补丁 `insert:` 段仅三插件行） | 版本断言报错形态、`fiberPhase`、双端、企业索引源键名、`ai-publish`/`human-review` 业务行（未落地故 `blocked`）、角色 preset 粒度、`desktop` profile |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（路线 B 已选定） | 当前身份/用途、B 双因子承载、应用/IP、五分钟及单授权退出、C4 策略与容量联调；模块仍为规划入口，无清单、源码或测试 |
@@ -84,7 +84,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | discovery-only 的旧会话绑定 | [issuer-context-policy](<../../packages/forge-iam/test/issuer-context-policy.test.mjs>)、[discovery-issuer-outbound](<../../packages/forge-iam/test/discovery-issuer-outbound.test.mjs>) | 不为恢复补齐未知 issuer 而启动探测；无明确 pin 或本实例已验证上下文时拒绝采用旧身份、AT 及主体，保留记录。带 `sessionInstanceId` 且与显式 pin 匹配的公共 V1 可读；缺少该标识的会话拒绝采用；异步操作与共享刷新固定 issuer，错误出口不发送旧 RT |
 | 用户自助信息 | [client-clipboard-behavior](<../../packages/forge-iam/test/client-clipboard-behavior.test.mjs>)、Client 与随包指南测试 | 账户页可主动复制已取得的登录链接和最小白名单诊断；不额外联网、不导出身份或凭据。异步结果受页面代际/链接身份/生命周期保护；不代替真实浏览器权限或原生剪贴板验收 |
 | 模型只读编排与隔离适配 | [实际 Host 编排](<../../packages/forge-iam/test/model-selection-host.test.mjs>)、`model-gate`、`model-selection` 及 [outcome 回归](<../../packages/forge-iam/test/model-selection-outcome.test.mjs>) | 真实 apply/服务加模拟 SDK 验证严格只读、保存 getter 零访问、原选择不变、单飞与解绑、异步旧结果失效及模型错误不清 OIDC grant。只复用纯判定，不应用切换；记录式 sink 写入保持独立，异常用 written:null 标示未知。SDK无明确空态/条件保存；另有隔离执行组合证据见下表，真实人员/用途授权仍未接线 |
-| 企业模型运行时与动态目录 | [managed-models](<../../packages/forge-iam/test/managed-models.test.mjs>)、[组合探针](<../../scripts/probe/run-iam-managed-models-probe.mjs>) | 企业账号页配置网关地址与个人 Key，`${baseURL}/models` 动态目录接入公开适配器和执行门禁；七行禁用与回灌检查覆盖通用模型与自由配置页。探针只用模拟 IAM／UAG 与合成内存存储：生产认证与存储、真实企业授权、工具入口和双端 GUI 未验 |
+| 企业模型运行时与动态目录 | [managed-models](<../../packages/forge-iam/test/managed-models.test.mjs>)、[组合探针](<../../scripts/probe/run-iam-managed-models-probe.mjs>) | 企业账号页配置网关地址与个人 Key，`${baseURL}/models` 动态目录接入公开适配器和执行门禁；七行禁用与回灌检查覆盖通用模型与自由配置页。调用失败自愈把内部 `IAM_*`／`CRED_*` 码映射为已登记用户码，派发前按绑定重建并重试一次；[调用自愈用例](<../../packages/forge-iam/test/iam-call-recovery.test.mjs>)覆盖同地址换 Key、地址变化、主体变化、流中授权边界与取消不重试。探针只用模拟 IAM／UAG 与合成内存存储：生产认证与存储、真实企业授权、工具入口和双端 GUI 未验 |
 | 包说明与制品 | `package-shape`、仓库包体检查 | 用户/开发指南随包，检查本地链接、锚点与表格；不代替 GUI 或生产操作验收 |
 
 #### 本阶段关闭项与剩余可模拟项
