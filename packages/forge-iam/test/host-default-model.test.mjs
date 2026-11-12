@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS as R } from '../src/host-default-model.mjs';
 import { createManagedModelRuntime } from '../src/managed-models.mjs';
 
-function sdk({ selection, providers = [{ id: 'enterprise', name: '企业模型' }], models = {}, saveFails = false } = {}) {
+function sdk({ selection, providers = [{ id: 'enterprise', name: '企业模型' }], models = {} } = {}) {
   const saves = [];
   let current = selection;
   return {
     saves,
+    get selection() { return current; },
+    choose(next) { current = next; },
     service: {
       currentSelection: () => current,
-      async saveSelection(next) { if (saveFails) throw new Error('editor down'); saves.push(next); current = next; },
+      async saveSelection(next) { saves.push(next); current = next; },
     },
     llm: {
       listProviders: () => providers,
@@ -25,17 +27,18 @@ function sdk({ selection, providers = [{ id: 'enterprise', name: '企业模型' 
 const enabledSet = (...ids) => id => ids.includes(id);
 const base = { provider: 'enterprise', target: 'alpha', enterpriseUsable: enabledSet('alpha', 'beta'), isCurrent: () => true };
 
-test('a default pointing at a disabled official provider is replaced by the enterprise default', async () => {
+test('a default pointing at a disabled official provider is preserved for the user to change', async () => {
   const s = sdk({ selection: { provider: 'deepseek-account', model: 'deepseek-chat' } });
-  assert.equal(await alignHostDefaultModel({ ...base, ...s }), R.ALIGNED);
-  // No reasoningEffort: the adapter applies the model's lower bound.
-  assert.deepEqual(s.saves, [{ provider: 'enterprise', model: 'alpha' }]);
+  assert.equal(await alignHostDefaultModel({ ...base, ...s }), R.KEPT);
+  assert.deepEqual(s.saves, []);
+  assert.deepEqual(s.selection, { provider: 'deepseek-account', model: 'deepseek-chat' });
 });
 
-test('an enterprise default that was disabled is moved to the current enterprise default', async () => {
+test('a disabled enterprise default and its reasoning setting remain unchanged', async () => {
   const s = sdk({ selection: { provider: 'enterprise', model: 'zeta', reasoningEffort: 'high' } });
-  assert.equal(await alignHostDefaultModel({ ...base, ...s }), R.ALIGNED);
-  assert.deepEqual(s.saves, [{ provider: 'enterprise', model: 'alpha' }]);
+  assert.equal(await alignHostDefaultModel({ ...base, ...s }), R.KEPT);
+  assert.deepEqual(s.saves, []);
+  assert.deepEqual(s.selection, { provider: 'enterprise', model: 'zeta', reasoningEffort: 'high' });
 });
 
 test('a still-usable selection is never touched, enterprise or not', async () => {
@@ -49,9 +52,10 @@ test('a still-usable selection is never touched, enterprise or not', async () =>
   }
 });
 
-test('a registered provider that no longer lists the model is provably unusable', async () => {
+test('a missing model in a registered provider is preserved', async () => {
   const s = sdk({ selection: { provider: 'local', model: 'gone' }, providers: [{ id: 'local', name: 'l' }], models: { local: ['qwen'] } });
-  assert.equal(await alignHostDefaultModel({ ...base, ...s }), R.ALIGNED);
+  assert.equal(await alignHostDefaultModel({ ...base, ...s }), R.KEPT);
+  assert.deepEqual(s.saves, []);
 });
 
 test('unknown is not unusable: a failing listModels or unreadable selection preserves the setting', async () => {
@@ -74,9 +78,32 @@ test('no write without a usable target, without the SDK, or after the context ch
   assert.deepEqual(s.saves, []);
 });
 
-test('a failed save is reported once and never retried', async () => {
-  const s = sdk({ selection: { provider: 'deepseek-account', model: 'x' }, saveFails: true });
-  assert.equal(await alignHostDefaultModel({ ...base, ...s }), R.FAILED);
+test('read-only observation does not even access the host saveSelection property', async () => {
+  const s = sdk({ selection: { provider: 'deepseek-account', model: 'x' } });
+  const service = {
+    currentSelection: s.service.currentSelection,
+    get saveSelection() { throw new Error('must not access the writer'); },
+  };
+  assert.equal(await alignHostDefaultModel({ ...base, ...s, service }), R.KEPT);
+});
+
+test('a user choice made while a provider lookup is pending is never overwritten', async () => {
+  const s = sdk({ selection: { provider: 'local', model: 'gone' }, providers: [{ id: 'local' }] });
+  let entered;
+  let release;
+  const lookupStarted = new Promise(resolve => { entered = resolve; });
+  const lookupGate = new Promise(resolve => { release = resolve; });
+  s.llm.listModels = async () => { entered(); await lookupGate; return []; };
+
+  const observation = alignHostDefaultModel({ ...base, ...s });
+  await lookupStarted;
+  const manualChoice = { provider: 'enterprise', model: 'beta', reasoningEffort: 'high' };
+  s.choose(manualChoice);
+  release();
+
+  assert.equal(await observation, R.KEPT);
+  assert.deepEqual(s.saves, []);
+  assert.deepEqual(s.selection, manualChoice);
 });
 
 // --- Runtime integration: the first-login scenario end to end. ---
@@ -129,6 +156,8 @@ function runtimeFixture({ hostSelection, catalog = ['zeta', 'alpha'], fetch, ret
   });
   return {
     runtime, events, saves: s.saves, get stored() { return stored; },
+    get hostSelection() { return s.selection; },
+    chooseHostModel(next) { s.choose(next); },
     listModels: route => host.llm.listModels(route),
     holdSaves() { let release; hold = new Promise(resolve => { release = resolve; }); return () => { hold = null; release(); }; },
     change(next) { view = { ...view, ...next }; for (const listener of [...listeners]) listener(); },
@@ -136,14 +165,15 @@ function runtimeFixture({ hostSelection, catalog = ['zeta', 'alpha'], fetch, ret
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-test('first login: the shipped official default is switched to the auto-enabled enterprise model', async t => {
+test('first login keeps an unavailable host default while the catalogue becomes selectable', async t => {
   const f = runtimeFixture({ hostSelection: { provider: 'deepseek-account', model: 'deepseek-chat' } });
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
-  assert.deepEqual(f.saves, [{ provider: 'enterprise', model: 'alpha' }]);
-  assert.equal(f.runtime.getView().hostDefaultModel, 'aligned');
-  // The client catalogue reloads its default on this event.
-  assert.ok(f.events.filter(e => e === 'llm/adapters-updated').length >= 2);
+  assert.deepEqual(f.saves, []);
+  assert.deepEqual(f.hostSelection, { provider: 'deepseek-account', model: 'deepseek-chat' });
+  assert.equal(f.runtime.getView().hostDefaultModel, 'kept');
+  assert.deepEqual((await f.listModels('enterprise')).map(model => model.id), ['alpha']);
+  assert.ok(f.events.includes('llm/adapters-updated'));
 });
 
 test('a person who already chose an enabled enterprise model keeps it across restarts', async t => {
@@ -154,14 +184,18 @@ test('a person who already chose an enabled enterprise model keeps it across res
   assert.equal(f.runtime.getView().hostDefaultModel, 'kept');
 });
 
-test('disabling the model new conversations use moves the default to a still-enabled one', async t => {
+test('refreshing and disabling a manually selected model never changes the host default', async t => {
   const f = runtimeFixture({ hostSelection: { provider: 'deepseek-account', model: 'x' }, catalog: ['alpha', 'beta'] });
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
   await f.runtime.updateModelOptions({ alpha: {}, beta: {} });
-  assert.deepEqual(f.saves, [{ provider: 'enterprise', model: 'alpha' }]);
+  f.chooseHostModel({ provider: 'enterprise', model: 'beta', reasoningEffort: 'high' });
+  await f.runtime.refresh();
+  await f.runtime.syncDefaultModel();
   await f.runtime.updateModelOptions({ beta: {} });
-  assert.deepEqual(f.saves.at(-1), { provider: 'enterprise', model: 'beta' });
+  await f.runtime.updateModelOptions({ alpha: {} });
+  assert.deepEqual(f.saves, []);
+  assert.deepEqual(f.hostSelection, { provider: 'enterprise', model: 'beta', reasoningEffort: 'high' });
 });
 
 test('a save that races a sign-out is refused instead of landing in the next state', async t => {

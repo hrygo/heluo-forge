@@ -35,7 +35,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `postLogoutRedirectUri` | 空 | 可选的 RP 登出回跳 URI。 |
 | `gatewayResource` | 空 | 可选的授权/令牌请求 resource 与 grant 上下文约束；不证明已实现网关目标授权。 |
 | `gatewayConsoleUrl` | 空 | 网关控制台引导链接，不参与鉴权。 |
-| `defaultProvider` / `defaultModel` | `enterprise` / 空 | 只读模型观察目标；defaultModel 为空时不注册模型注入、不取 SDK。不会自动写入宿主默认模型。 |
+| `defaultProvider` / `defaultModel` | `enterprise` / 空 | 只读编排的观察目标；`defaultModel` 为空时该编排不注册模型注入、不取 SDK。受管目录也可将其作为首跑启用的优先项；不会自动写入宿主默认模型。 |
 | `refreshSkewSeconds` | `60` | Host 按访问令牌和已知刷新令牌中较早的到期时间提前续期；剩余时间短时以一半作为提前量。`0` 通常不提前；若已知刷新令牌先于或同时到期，仍预留 1 秒，尽力在其失效前发起刷新。 |
 | `attemptTimeoutSeconds` | `300` | 登录尝试时限。 |
 | `httpTimeoutMs` | `10000` | 协议请求超时参数；刷新与退出撤销请求取该值和 5000ms 的较小值，不是整个操作总时限。 |
@@ -296,7 +296,7 @@ DSH_WEB_ORIGIN=http://127.0.0.1:<dsh-port> node packages/forge-iam/scripts/mock-
 
 ## 默认模型判定与写入结果
 
-Host 已接入严格只读编排：可选绑定 llm 与 agentDefaultModel，在 IAM 就绪、网关状态变更和 llm/adapters-updated 时合并观察。defaultModel 为空时不注册模型注入，也不调用私有 SDK getter；缺 SDK、不满足 ready、凭据不匹配或选择无法证明时保守返回。观察只调用 listProviders/currentSelection，不读 saveSelection 属性、不发模型请求、不做额外 discovery。所有现有选择和 reasoningEffort 都保留，没有配置或私有注入可以解锁保存。该路径仍只读；唯一的写入在企业模型运行时，见下文“新对话默认模型对齐”。
+Host 已接入严格只读编排：可选绑定 llm 与 agentDefaultModel，在 IAM 就绪、网关状态变更和 llm/adapters-updated 时合并观察。defaultModel 为空时不注册模型注入，也不调用私有 SDK getter；缺 SDK、不满足 ready、凭据不匹配或选择无法证明时保守返回。该观察只调用 listProviders/currentSelection，不读 saveSelection 属性、不发模型请求、不做额外 discovery。企业模型运行时的独立观察也不写宿主设置；所有现有选择和 reasoningEffort 均保留。
 
 `reconcileDefaultModel()` 仅为本包 Host 协调方法，不是 DSH 新增 SDK API 或 Remote/HTTP 接口。返回冻结的 `{ mode: 'read-only', written: false, verified: false, reason }`；reason 为固定代码，不带主体、原始选择、Key、令牌或 SDK 异常。结果没有放行含义，不证明目标模型存在、凭据有效、当前人员/用途或服务端权限。
 
@@ -317,19 +317,16 @@ Host 已接入严格只读编排：可选绑定 llm 与 agentDefaultModel，在 
 
 为兼容现有原因码，`selection-write-failed` 仍表示写入调用报错，不表示设置必然未变。 调用方应使用 `written === false` 判断未调用，不能用 `!written` 将 `null` 误当作可安全重试的未写入。SDK 异常与不一致回读的原文不进入 notes；结果对象仍含调用方模型标识，不能未经筛选当作脱敏诊断导出。
 
-2026-11-02 只读 SDK 核验确认：`currentSelection()` 的声明始终返回 provider/model 对象，没有 explicit 或已定义的空态；`saveSelection(next)` 是完整选择覆盖，省略 reasoningEffort 会清除该设置。保存按提交顺序排队，没有比较快照、同步 guard 或取消接口，无配置 editor 时可不改设置而正常返回。因此不能把 null/undefined/双方空串或 provider 暂时未注册直接解释为“用户没有显式选择”，也不能承诺写前检查能撤回已排队的保存。用户已选择真实 Host 严格只读，禁止自动保存且完整保留现有设置；只读编排已按禁写边界接线。不把临时 fixture 的空态、显式标记或条件回调当 SDK 能力。
+SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 explicit 或已定义的空态；`saveSelection(next)` 完整覆盖选择，省略 reasoningEffort 会清除该设置。保存按提交顺序排队，没有比较快照、同步 guard 或取消接口；无配置 editor 时，调用可能未改设置但正常返回。因此不能将 null/undefined、双方空串或 provider 暂时未注册直接解释为“用户没有显式选择”，也不能承诺写前检查能撤回已排队的保存。默认模型由用户选择，插件不自动保存。
 
-### 新对话默认模型对齐
+### 新对话默认模型只读观察
 
-2026-11-05 用户确认：内网环境官方模型不可用，企业补丁禁用官方行后 DSH 的出厂默认模型必然失效，首次登录直接发消息会得到 `session/model-unavailable`。因此由企业模型运行时（`src/managed-models.mjs` 调用 `src/host-default-model.mjs`）在目录就绪和启用集保存后对齐一次：
+企业补丁禁用官方行后，指向不可用官方模型的宿主默认选择无法用于新对话；用户需在宿主中选择已启用的企业模型。企业模型运行时在目录就绪或启用集保存后调用 `src/host-default-model.mjs` 只读观察，保留既有 `syncDefaultModel()` 接口与结果字段：
 
-- 只在当前默认**可证明不可用**时写：提供方未注册；或是企业提供方但模型未启用、不在目录；或已注册提供方的 `listModels` 结果不含该模型。
-- `currentSelection()` 读不出、返回异步值、`listModels` 抛错均按未知处理，不写。仍可用的选择（含非企业提供方）一律保留。
-- 写入目标为 `{ provider: 企业提供方, model: defaultModelId }`，不带 reasoningEffort，由适配器取该模型推理强度下界。
-- 写前复查 IAM 会话代际与准入；单飞，进行中再次触发只补跑一次；失败不重试、不补偿。对齐成功后发出 `llm/adapters-updated`，让客户端目录重新读取默认值。
-- 结果以固定代码暴露在 `modelAccess.hostDefaultModel`：`aligned` / `kept` / `no-target` / `unsupported` / `unknown` / `stale` / `failed`，不含选择原文、主体或 SDK 异常。
-
-SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩小竞态窗口，不能撤回已排队的保存。
+- 当前选择无论可用与否都不会被修改，也不读取 `saveSelection` 属性。`currentSelection()` 读不出、返回异步值或 `listModels` 抛错时按未知处理。
+- 观察采用单飞，进行中再次触发只补跑一次；会话或模型上下文失效时不采纳旧结果。
+- `modelAccess.hostDefaultModel` 保留固定结果代码：`kept` 表示选择未被更改，不证明模型可用；`no-target`、`unsupported`、`unknown`、`stale`、`failed` 表示无法完成观察的不同原因。旧代码 `aligned` 为兼容保留，不再由该路径产生。结果不含选择原文、主体或 SDK 异常。
+- `modelAccess.defaultModelId` 是企业目录启用集的首选项，不是宿主新对话默认模型。首次同步可自动启用目录中的一个模型，但不代替用户在宿主中选择。
 
 ## 限制与生产门禁
 
@@ -338,7 +335,7 @@ SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩�
 - IAM 单记录事务依赖所有参与者遵守协议，且同记录跨进程排他与提交确认可靠；provider 迟到提交无法靠回读自证已消除。此事务不提供网关两键或会话整体线性一致性，网关另受独立联合能力门禁约束。
 - 默认组合经 `iam-atomic-store` 绑定 verifier；未知 provider 上旧有效 grant 仍可 ready/读取，退出保留持久记录。存储门禁不能抵御同权 JS 直接写存储。
 - 旧 V1 不携带 discovery 来源，不能从旧记录自己取得可信 issuer。启动不联网；无明确 issuer pin 或本实例已验证的 metadata 上下文时，拒绝恢复身份、返回 AT 或采用其主体保存网关 Key，保留持久记录。公共 V1 会话需具备 `sessionInstanceId` 且匹配可信 issuer 上下文；缺少标识时拒绝采用，不自动补齐或迁移。只配 discovery 的新登录仍是有效配置，本实例取得可信 metadata 后可按其固定上下文处理会话。
-- [只读模型采样](<../src/model-selection-host.mjs>)已接入 Host 生命周期，但没有实际保存或模型/工具执行授权。独立的[判定与记录式适配](<../src/model-gate.mjs>)保留显式选择、未知写入和回读缺口的测试；不把 SDK 缺少 explicit 或明确空态视为覆盖许可。真实默认模型配置不自动保存。
+- [只读模型采样](<../src/model-selection-host.mjs>)已接入 Host 生命周期，本身不保存设置或授予模型/工具执行权限。独立的[判定与记录式适配](<../src/model-gate.mjs>)覆盖显式选择、未知写入和回读缺口；企业模型运行时的默认模型观察同样只读，条件和限制见前文。
 - 本地模型执行门禁与网关消费方已接入；真实企业授权和工具执行入口仍须分别核验。前端隐藏、Key 保存、ownerSubject 匹配及旧引用保留均不能证明实际调用已安全隔离；个人 A/B 授权路线及服务端归属校验未完成。
 - 自动迁移旧凭据存储、Client Remote/watch 与凭据探测未实现；真实 GUI/浏览器调度、跨入口顺序、Windows/麒麟平台及真实 IAM/UAG 路径缺少完整验证。界面文案仍为中文，locale 元数据不等于界面全量本地化。
 
@@ -355,10 +352,14 @@ SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩�
 
 [模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方与目录外模型。目录请求带宿主 `attributionHeaders()`，只请求 `${baseURL}/models`，禁用重定向、限制响应大小与数量、去重校验 ID；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。同步失败保留上次目录并标记 `stale`：可重试的失败（连接、超时、限流）同时保留适配器，按 2/5/15/30/60 秒退避；不可重试的失败（凭证被拒、目录非法）保留目录但关闭模型调用表面，避免每次调用都打到网关再失败；身份或网关变化、显式退出才清空。地址/Key/身份变化、显式退出与令牌到期撤销旧代际；本地在途流收到 abort，迟到目录和内容不交付。展示用目录不随访问令牌过期清空：同一主体与网关下保留列表并以 `stale` 标注，调用仍被 `IAM_LOGIN_REQUIRED` 拒绝直到会话恢复。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 `200000`（`200K`）上下文窗口与 `64000`（`64K`）最大输出本地容量默认值，不宣称为网关实际上限。
 
-宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务。默认模型保持严格只读，不自动保存。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出，不自动重放失败请求。
+宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务；新对话模型由用户在宿主中选择。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出，不自动重放失败请求。
 
 模型启用与参数覆盖分两层。**启用集合**决定可用性：`modelOptions` 的键即"已启用"，值为覆盖参数（可为空对象）。未启用的目录模型照旧出现在账号页，但 `listModels` 不返回它，`prepareCall`/`resolveModel`/`llm/stream` 都以 `ENTERPRISE_MODEL_NOT_ALLOWED` 拒绝，避免"能选不能用"。首跑（该 subject 从未保存过）自动启用目录第一个模型并落盘；管理员配置了 `defaultModel` 且网关仍提供时优先用它。显式保存空集合是合法状态，不会被打回默认值——区分"从未保存"与"保存为空"的是 `readModelSelection()` 返回的 `saved` 标志。
 
-**持久化**在宿主侧凭证记录的独立键 `heluo-iam/model-selection`（`createModelSelectionStore`，`grant` 类载荷，仅存 subject、模型 ID 与覆盖参数，不含凭据）。读写都以回读的 grant subject 为准，换人不继承旧记录，过期写入拒绝 `IAM_NOT_SIGNED_IN`；该记录不参与网关凭证的联合原子事务，最后确认写入者胜，失败不阻断调用（`updateModelOptions` 返回 `persisted: false`，面板据此提示）。`PUT /api/forge-iam/models` 仍只改本地 `PiAiAdapter` 目录，不写 profile 配置、不改网关目录。面板以当前账号的宿主选择为准（包括显式空集合），浏览器缓存仅作副本，不向宿主自动回推；账号或宿主选择变化时更新显示，避免旧缓存覆盖已保存选择。模型行提供“一键启用”“一键停用”与“全部默认启用”快捷操作，支持一键采用默认参数（`200K` 上下文、`64K` 最大输出）启用并立即持久化生效；已启用模型的行可直接停用，不必展开精细配置。行上停用与一键启用对称：改完启用集立即提交整份集合，因此会连同其他未保存的面板修改一并生效；停用默认模型时由宿主在同一次提交内重算默认模型并同步宿主新会话默认，停用最后一个模型提交显式空集合，重新启用前新对话无企业模型可用。推理等级仅开放 `'off'`、`'low'`、`'medium'`、`'high'`、`'xhigh'`、`'max'`，按宿主 `thinkingLevelMap` 语义生成，支持快捷档位及自由选择推理强度下界（最低档）与上界（最高档，`buildReasoningEffortRange` / `getReasoningEffortBounds`），所选区间外档位显式置 `null`；线名由档位名推导，暂不支持逐档自定义字符串；`off` 不下发线值，`thinkingLevelMap.off` 恒为 `null`，请求以省略 `reasoning_effort` 表示不抑制推理；宿主传来不支持的档位时返回 `ENTERPRISE_MODEL_REASONING_UNSUPPORTED`，网关返回 4xx 时返回 `ENTERPRISE_GATEWAY_REQUEST_REJECTED`，两者都不再伪装成不可达。`contextWindow`/`maxTokens` 接受正整数或 `K`/`M` 后缀；`maxTokens` 仅在显式覆盖时计入 `configuredMaxTokens`。回归：`node --test packages/forge-iam/test/managed-models.test.mjs packages/forge-iam/test/model-selection-store.test.mjs packages/forge-iam/test/model-selection-service.test.mjs packages/forge-iam/test/client-managed-models.test.mjs packages/forge-iam/test/model-options.test.mjs`。
+**持久化**在宿主侧凭证记录的独立键 `heluo-iam/model-selection`（`createModelSelectionStore`，`grant` 类载荷，仅存 subject、模型 ID 与覆盖参数，不含凭据）。读写都以回读的 grant subject 为准，换人不继承旧记录，过期写入拒绝 `IAM_NOT_SIGNED_IN`；该记录不参与网关凭证的联合原子事务，最后确认写入者胜，失败不阻断调用（`updateModelOptions` 返回 `persisted: false`，面板据此提示）。`PUT /api/forge-iam/models` 仍只改本地 `PiAiAdapter` 目录，不写 profile 配置、不改网关目录。面板以当前账号的宿主选择为准（包括显式空集合），浏览器缓存仅作副本，不向宿主自动回推；账号或宿主选择变化时更新显示，避免旧缓存覆盖已保存选择。
+
+模型行提供“一键启用”“一键停用”与“全部默认启用”快捷操作，支持一键采用默认参数（`200K` 上下文、`64K` 最大输出）启用并立即持久化生效；已启用模型的行可直接停用，不必展开精细配置。行上停用与一键启用对称：改完启用集立即提交整份集合，因此会连同其他未保存的面板修改一并生效；停用不会改写宿主新对话默认模型；用户需要时自行选择其他已启用模型。停用最后一个模型提交显式空集合，重新启用前新对话无企业模型可选。
+
+推理等级仅开放 `'off'`、`'low'`、`'medium'`、`'high'`、`'xhigh'`、`'max'`，按宿主 `thinkingLevelMap` 语义生成，支持快捷档位及自由选择推理强度下界（最低档）与上界（最高档，`buildReasoningEffortRange` / `getReasoningEffortBounds`），所选区间外档位显式置 `null`；线名由档位名推导，暂不支持逐档自定义字符串；`off` 不下发线值，`thinkingLevelMap.off` 恒为 `null`，请求以省略 `reasoning_effort` 表示不抑制推理；宿主传来不支持的档位时返回 `ENTERPRISE_MODEL_REASONING_UNSUPPORTED`，网关返回 4xx 时返回 `ENTERPRISE_GATEWAY_REQUEST_REJECTED`，两者都不再伪装成不可达。`contextWindow`/`maxTokens` 接受正整数或 `K`/`M` 后缀；`maxTokens` 仅在显式覆盖时计入 `configuredMaxTokens`。回归：`node --test packages/forge-iam/test/managed-models.test.mjs packages/forge-iam/test/model-selection-store.test.mjs packages/forge-iam/test/model-selection-service.test.mjs packages/forge-iam/test/client-managed-models.test.mjs packages/forge-iam/test/model-options.test.mjs`。
 
 回归命令：`node --test packages/forge-iam/test/managed-models.test.mjs packages/forge-iam/test/gateway-atomic-service.test.mjs`。安装宿主组合探针：`node scripts/probe/run-iam-managed-models-probe.mjs`；支持现有 `DSH_BIN` / `DSH_NODE_MODULES` 定位参数。探针使用实际 Cordis/LLM/PiAiAdapter、模拟 IAM 与网关及显式内存事务夹具，验证登录、标准目录、流式对话、刷新和退出后零模型请求；不构成生产存储、真实 IAM/UAG 或双端 GUI 验收。

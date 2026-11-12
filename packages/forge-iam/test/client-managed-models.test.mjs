@@ -749,12 +749,13 @@ test('the row-level disable button stops an enabled model without expanding its 
 
   assert.equal(writes.length, 1);
   assert.deepEqual(writes[0].options, { 'corp-coder': {} });
-  assert.match(panel.text(panel.render()), /已停用 corp-chat 并生效/);
+  assert.match(panel.text(panel.render()), /已停用 corp-chat/);
+  assert.match(panel.text(panel.render()), /请自行选择其他已启用模型/);
   // The row flips to the disabled state, which is the only place the panel renders 一键启用.
   assert.match(panel.text(panel.render()), /一键启用/);
 });
 
-test('disabling the model DSH uses for new conversations announces the automatic switch', async t => {
+test('disabling a model tells the user to choose another without claiming an automatic switch', async t => {
   const writes = [];
   const twoModels = {
     ...view,
@@ -769,7 +770,7 @@ test('disabling the model DSH uses for new conversations announces the automatic
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
-      // The Host recomputes the default inside the same submission (SM3/SM4).
+      // The catalogue's preferred model changes independently of the host choice.
       return Response.json({
         ok: true, persisted: true,
         view: {
@@ -784,13 +785,13 @@ test('disabling the model DSH uses for new conversations announces the automatic
   await new Promise(setImmediate);
 
   const button = nodes(panel.render()).find(node => node.props['aria-label'] === '一键停用 corp-chat');
-  assert.match(button.props.title, /默认模型会自动切换/);
+  assert.match(button.props.title, /请自行选择其他已启用模型/);
   await button.props.onClick();
 
   assert.deepEqual(writes[0].options, { 'corp-coder': {} });
-  assert.match(panel.text(panel.render()), /默认模型已自动切换到其他已启用模型/);
-  // The surviving model carries the default badge after the response view lands.
-  assert.match(panel.text(panel.render()), /默认可用/);
+  assert.match(panel.text(panel.render()), /请自行选择其他已启用模型/);
+  assert.doesNotMatch(panel.text(panel.render()), /默认模型已自动切换|默认可用/);
+  assert.match(panel.text(panel.render()), /已启用/);
 });
 
 test('disabling the last enabled model submits an empty set and states the consequence', async t => {

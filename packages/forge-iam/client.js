@@ -2124,7 +2124,6 @@ window.__ModuleLoader__.load({
       // Presence in the map is what makes a model callable; otherwise it is only
       // listed here so it can be turned on.
       const isEnabled = Object.hasOwn(modelOptions, model.id);
-      const isDefaultModel = view?.modelAccess?.defaultModelId === model.id;
       const actionBusy = Boolean(modelSaving || viewBarrier?.current?.pending);
 
       return h('div', { key: model.id, className: `fiam-model-item${isExpanded ? ' fiam-model-item-expanded' : ''}` },
@@ -2134,7 +2133,7 @@ window.__ModuleLoader__.load({
               h('span', { className: `fiam-model-dot ${isEnabled ? 'fiam-model-dot-enabled' : 'fiam-model-dot-disabled'}` }),
               h('span', { className: 'fiam-model-name', title: `${displayName} (${model.id})` }, displayName),
               isEnabled
-                ? h('span', { className: 'fiam-badge fiam-badge-success' }, isDefaultModel ? '默认可用' : '已启用')
+                ? h('span', { className: 'fiam-badge fiam-badge-success' }, '已启用')
                 : null,
             ),
             h('div', { className: 'fiam-model-meta-line' },
@@ -2157,9 +2156,7 @@ window.__ModuleLoader__.load({
                 disabled: actionBusy,
                 title: Object.keys(modelOptions).length === 1
                   ? `停用后立即生效；这是最后一个已启用模型，停用后新对话将无法选择企业模型`
-                  : isDefaultModel
-                    ? `停用后立即生效，不再出现在对话模型选择中；默认模型会自动切换到其他已启用模型`
-                    : `停用后立即生效，不再出现在对话模型选择中`,
+                  : `停用后立即生效，不再出现在对话模型选择中；如当前对话正在使用此模型，请自行选择其他已启用模型`,
                 'aria-label': `一键停用 ${model.id}`,
                 onClick: () => disableModelWithSave(model.id),
               }, '停用')
@@ -2978,39 +2975,27 @@ window.__ModuleLoader__.load({
         const next = { ...current };
         delete next[id];
         const remaining = Object.keys(next).length;
-        const wasDefault = view?.modelAccess?.defaultModelId === id;
         const notice = remaining === 0
           ? `已停用 ${id}，当前没有已启用模型，新对话将无法选择企业模型（可随时一键启用）。`
-          : wasDefault
-            ? `已停用 ${id}，默认模型已自动切换到其他已启用模型。`
-            : `已停用 ${id}。`;
+          : `已停用 ${id}；如当前对话正在使用此模型，请自行选择其他已启用模型。`;
         applyModelOptions(next);
         return persistModelOptions(next, notice);
       };
 
-      // 面板里的「停用模型」只改草稿，必须再点保存才生效。列表行上的「停用」没有面板可展开，
-      // 所以与「一键启用」对称：改完草稿立即提交整份启用集合。
-      // 状态机上的三个后果都在这条路径上处理：
-      // - 一次 PUT 提交的是整份集合，其他未保存的修改会一并生效，提示里如实说明；
-      // - 停用的是默认模型时，宿主在同一次提交里重算默认模型并同步宿主默认（SM4），
-      //   这里只负责把结果说清楚；
-      // - 停用最后一个模型会提交空集合，SM3 允许（设计 §13.1），SM4 回到未对齐状态，
-      //   因此提示必须点明「新对话将无法选择企业模型」。
+      // 行上停用立即提交整份启用集；其他未保存的修改也会一并提交。
+      // 宿主默认模型不随启用集自动更改；停用最后一个模型会提交空集合。
       const disableModelWithSave = async (id) => {
         if (!Object.hasOwn(modelOptions, id)) return;
         if (modelSaving || viewBarrier.current.pending) return;
         const nextOptions = { ...modelOptions };
         delete nextOptions[id];
-        const wasDefault = view?.modelAccess?.defaultModelId === id;
         const dirty = JSON.stringify(modelOptions) !== JSON.stringify(lastSyncedOptions.current);
         const remaining = Object.keys(nextOptions).length;
         const notice = remaining === 0
           ? `已停用 ${id}，当前没有已启用模型，新对话将无法选择企业模型（可随时一键启用）。`
-          : wasDefault
-            ? `已停用 ${id}，默认模型已自动切换到其他已启用模型。`
-            : dirty
-              ? `已停用 ${id}，其他未保存的修改一并生效。`
-              : `已停用 ${id} 并生效。`;
+          : dirty
+            ? `已停用 ${id}，其他未保存的修改一并生效；如当前对话正在使用此模型，请自行选择其他已启用模型。`
+            : `已停用 ${id}；如当前对话正在使用此模型，请自行选择其他已启用模型。`;
         applyModelOptions(nextOptions);
         await persistModelOptions(nextOptions, notice);
       };

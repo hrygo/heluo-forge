@@ -1,21 +1,7 @@
-// Align DSH's "default model for new conversations" with the enterprise
-// catalogue when, and only when, the current default provably cannot run.
-//
-// Why this exists: the enterprise patch disables the official providers, but
-// DSH keeps its shipped default (an official model). New sessions then fail
-// with `session/model-unavailable` until the person picks a model by hand.
-// In an intranet deployment the official models can never work, so a default
-// that points at an unregistered provider is not a choice worth preserving.
-//
-// Rules (each one is a test):
-// - A default that is still usable is never touched, whatever its provider.
-// - "Unusable" must be proven: provider not registered, the enterprise model
-//   not enabled/advertised, or a registered provider listing models without it.
-//   A provider whose listModels throws is "unknown" and is left alone.
-// - At most one write per call; no retry, no compensation on failure.
-// - The caller's isCurrent() is checked before the write so a sign-out or an
-//   account switch during the async read cannot write for the wrong person.
-// - Results are fixed codes; no selection, subject or SDK error text leaks.
+// Observe DSH's new-conversation default without changing it. The user chooses
+// a model even when the previous selection is unavailable. The legacy function
+// name and result codes remain available to existing callers; `kept` means the
+// selection was left unchanged, not that it is usable or authorized.
 
 export const HOST_DEFAULT_RESULTS = Object.freeze({
   ALIGNED: 'aligned',
@@ -51,7 +37,7 @@ async function foreignUsable(llm, selection) {
  * @returns {Promise<string>} one of HOST_DEFAULT_RESULTS.
  */
 export async function alignHostDefaultModel({ service, llm, provider, target, enterpriseUsable, isCurrent }) {
-  if (typeof service?.currentSelection !== 'function' || typeof service?.saveSelection !== 'function'
+  if (typeof service?.currentSelection !== 'function'
     || typeof llm?.listProviders !== 'function' || typeof llm?.listModels !== 'function') {
     return HOST_DEFAULT_RESULTS.UNSUPPORTED;
   }
@@ -69,9 +55,5 @@ export async function alignHostDefaultModel({ service, llm, provider, target, en
   if (usable === null) return HOST_DEFAULT_RESULTS.UNKNOWN;
   if (usable) return HOST_DEFAULT_RESULTS.KEPT;
   if (!isCurrent() || !enterpriseUsable(target)) return HOST_DEFAULT_RESULTS.STALE;
-  // reasoningEffort is omitted on purpose: the adapter then applies the
-  // model's own lower bound, and an effort tied to the old model is dropped.
-  try { await service.saveSelection({ provider, model: target }); }
-  catch { return HOST_DEFAULT_RESULTS.FAILED; }
-  return HOST_DEFAULT_RESULTS.ALIGNED;
+  return HOST_DEFAULT_RESULTS.KEPT;
 }
