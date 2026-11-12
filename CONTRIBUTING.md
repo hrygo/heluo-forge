@@ -31,7 +31,9 @@
 3. 需要创建分支时从适当基线建立短分支，常规命名见[开发约定](docs/engineering/development-conventions.md)；agent 宿主明确规定前缀时遵循宿主要求，不擅自切换已有工作分支。
 4. 修改文件并同步受影响的登记与引用；移动文件使用 `git mv`，同一变更更新全部引用。
 5. 运行 `pnpm check` 与 `git diff --check`，审阅最终 diff；前者已包含自动发现的历史市场包契约、索引校验与归档安装用例。推送前再运行 `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD`，结果必须全部 verified；不跑就推，PR 上的 `sensitive-attestation-verify` 会直接变红，即使代码本身没有问题。签名绑定钩子扫描时的基线 tree。安装完整包后，`post-rewrite` 钩子会在 amend、rebase 后自动重扫重签，无需手工逐条重签；`reset` 和 `cherry-pick` 不触发重签，需人工确认。不要在其他会话改写这条分支的父提交：父提交被换掉且未经重签时会出现 `parent-tree does not match`，步骤见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。变更需要企业接口或实机证据时另行验证，已有完整有效测试不重复运行。失败须修复或明确阻塞，不能以跳过宣称通过。
-6. 在相应授权范围内提交或发起 PR，一次提交只做一件事。按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)填写关联依据、验证结果、未验项与风险；本地编辑完成不自动触发推送、合并或发布。
+6. 在相应授权范围内提交或发起 PR，一次提交只做一件事。按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)填写关联依据、验证结果、未验项与风险；正文单独一行填写 `Closes #编号`（完整解决）或 `Part of #编号`（部分解决），关联至少一个本仓库已有 Issue。关闭关键字仅在 PR 目标为默认分支且仓库启用自动关闭时生效；部分解决请说明本次范围。CI 会核验 Issue 存在，正文修改后重新检查；Dependabot PR 同样需要维护者补填关联；`@dependabot recreate` 会覆盖正文修改，须重新补填；本地编辑完成不自动触发推送、合并或发布。
+
+Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡献提交，即使关联了 Issue，也不能通过独立的 `sensitive-attestation-verify`。维护者应在受控工作区审查变更，基于目标分支重新生成并签署提交，保留原作者与原 PR 的追溯信息，再发起关联 Issue 的 PR；签名和重放约定见[敏感扫描说明](scripts/sensitive-scan/README.md#verification-and-rotation)。不要向外部分发团队私钥，也不要通过跳过验签放行。
 
 推送与发布分开：合并到 `main` 不自动发布任何包。
 
@@ -87,7 +89,8 @@
 - Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test` 自动发现工程、包与集成测试。
 - `verify` 不安装 pnpm 或项目依赖，也不读取包缓存；平台作业不配置 npm 包或 `node_modules` 缓存。Linux 和 macOS 作业构建并离线安装企业组合包，Windows 作业打包并离线安装凭据独立包；安装使用 runner 工作区内的独立前缀，冒烟测试在系统临时目录使用合成数据。六个平台检查使用 `SQLite and IAM` 名称，具体名称见[开发约定](docs/engineering/development-conventions.md#6-检查与-ci)；分支保护中的必需检查名称须与工作流显示名称一致，远端配置状态以实测为准。
 - 托管 runner 的结果不代替 Windows 10、UOS、银河麒麟、目标 DSH/Electron 宿主、Windows ACL 或企业 IAM 的目标环境取证。8.3 真实短名用例在卷不提供不同的短别名时跳过；需以实际运行记录区分通过与跳过。
-- 工作流只授予 `contents: read`，检出不保留凭据；分类作业检出完整历史以比较 PR 的基线与 head，其余作业检出深度为 1。Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
+- 工作流只授予 `contents: read`、用于核验 Issue 的 `issues: read` 和用于读取 PR 正文的 `pull-requests: read`，检出不保留凭据；分类作业检出完整历史以比较 PR 的基线与 head，其余作业检出深度为 1。Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
+- 合并队列的 `verify` 在 `merge_group` 上执行代码检查，不重新读取各 PR 正文；关联检查依赖入队前的 PR 必需检查。入队后修改正文可能导致检查结果与队列快照不同，合并前须确认最新正文及检查结果。独立的 `sensitive-attestation-verify` 尚未支持 `merge_group`：若分支保护仍要求该检查，队列会等待缺失的检查。启用队列前须补齐并验证可信验签路径，不能仅依靠 `verify` 的队列触发器。
 - PR 另由 [sensitive-attestation](.github/workflows/sensitive-attestation.yml) 以 `pull_request_target` 从基线读取团队公钥验签，不 checkout 也不执行 PR 代码，权限同为 `contents: read`。它的 required 配置与部署状态不在本文件断言，实测与上线步骤见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。
 - 本地修改不代表远端必需检查、合并队列或 Dependabot 已启用，也不代表远端 CI 已通过。
 
