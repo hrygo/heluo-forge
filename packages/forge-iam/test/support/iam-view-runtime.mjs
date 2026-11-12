@@ -3,7 +3,7 @@
 
 export const SIGNED_OUT_VIEW = Object.freeze({
   state: 'signed-out', configured: true, signedIn: false, canSignOut: false, canSignIn: true,
-  missing: Object.freeze([]), error: null, exclusive: 'ok', principal: null,
+  missing: Object.freeze([]), error: null, exclusive: 'ok', principal: null, identity: null,
   accessExpiresAt: null, gatewayCredential: Object.freeze({ state: 'unconfigured' }), gatewayConsoleUrl: null,
 });
 

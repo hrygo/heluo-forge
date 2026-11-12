@@ -26,6 +26,7 @@ export function createServiceState(env) {
     now,
     getGatewaySummary,
     getMetadataIssuer,
+    getIdentityProfile,
     scheduleReconcile,
     scheduleRenewal,
     clearPendingObservation,
@@ -78,6 +79,9 @@ export function createServiceState(env) {
       error,
       exclusive: exclusive.ok ? 'ok' : (exclusive.reason ?? 'exclusive-violation'),
       principal: summary.principal ?? null,
+      // 只读显示投影（issue #160）：姓名/工号/OA 账号随 grant 失效而消失；
+      // 令牌与 UserInfo 原始响应不在此处。
+      identity: getIdentityProfile?.() ?? null,
       accessExpiresAt: summary.accessExpiresAt ?? null,
       renewal: lastGrant ? (renewable ? 'available' : 'unavailable') : 'none',
       refreshExpiresAt: summary.refreshExpiresAt ?? null,

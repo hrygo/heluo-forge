@@ -79,17 +79,28 @@ export async function startMockOidc({
       }
       if (url.pathname === '/userinfo' && req.method === 'GET') {
         counts.userInfo += 1;
+        // 企业 IAM 实测契约：Bearer 头或 ?access_token= query 二选一；
+        // 令牌无效返回 401（issue #160 联调口径）。
         const authorization = req.headers.authorization ?? null;
-        lastUserInfo = { authorization };
+        const queryToken = url.searchParams.get('access_token');
+        lastUserInfo = { authorization, queryToken };
         if (control.userInfoMode === 'http500') { res.writeHead(500); res.end(); return; }
         if (control.userInfoMode === 'malformed') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('not-json'); return; }
-        const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+        if (control.userInfoMode === 'unauthorized') { res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: ['expired_accessToken'] })); return; }
+        const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : (queryToken ?? '');
         if (!accessTokens.has(token)) { res.writeHead(401); res.end(); return; }
         const { subject } = accessTokens.get(token);
-        return json(res, 200, {
-          sub: subject, work_no: '10001234', pinyin: 'Zhang San',
-          employeeNumber: '10001234', name: 'Zhang San',
-        });
+        // 定稿口径的真实响应形态（issue #160）：sub/authTime 必须被严格投影丢弃。
+        // 全部为占位值，不含真实个人数据。
+        const body = {
+          sub: subject,
+          employeeNumber: '10001234',
+          displayName: 'Zhang San',
+          giveName: 'zhangsan',
+          authTime: 1794363364,
+        };
+        if (control.userInfoMode === 'missingName') delete body.displayName;
+        return json(res, 200, body);
       }
       if (url.pathname === '/authorize') {
         counts.authorize += 1;

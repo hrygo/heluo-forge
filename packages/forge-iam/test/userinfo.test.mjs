@@ -4,7 +4,8 @@ import { createIamService } from './support/trusted-service.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
-import { normalizeProfileFields, projectUserInfo } from '../src/userinfo.mjs';
+import { normalizeProfileFields, projectUserInfo, fetchUserInfo, DEFAULT_PROFILE_FIELDS } from '../src/userinfo.mjs';
+import { IamError } from '../src/errors.mjs';
 
 function configFor(mock, overrides = {}) {
   return validateConfig({
@@ -27,43 +28,59 @@ async function signIn(service) {
 }
 
 test('projection takes only mapped string fields and drops the rest', () => {
-  const raw = { work_no: '10001234', pinyin: ' Zhang San ', employeeNumber: 'E9', name: 'Li Si', nested: { name: 'x' } };
-  assert.deepEqual(projectUserInfo(raw, { workNo: 'work_no', name: 'pinyin' }), { workNo: '10001234', name: 'Zhang San' });
-  assert.deepEqual(projectUserInfo(raw, { workNo: 'employeeNumber', name: 'name' }), { workNo: 'E9', name: 'Li Si' });
-  assert.equal(projectUserInfo(raw, { workNo: 'missing' }), undefined);
-  assert.equal(projectUserInfo({ work_no: 42, pinyin: '   ' }, { workNo: 'work_no', name: 'pinyin' }), undefined);
+  const raw = { employeeNumber: '10001234', displayName: ' Zhang San ', giveName: 'zhangsan', sub: 'S1', authTime: 1794363364, nested: { name: 'x' } };
+  assert.deepEqual(projectUserInfo(raw, DEFAULT_PROFILE_FIELDS), {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
+  assert.deepEqual(projectUserInfo(raw, { user_id: 'employeeNumber' }), { user_id: '10001234' });
+  assert.equal(projectUserInfo(raw, { user_id: 'missing' }), undefined);
+  assert.equal(projectUserInfo({ employeeNumber: 42, displayName: '   ' }, { user_id: 'employeeNumber', user_name: 'displayName' }), undefined);
   assert.equal(projectUserInfo(raw, {}), undefined);
-  assert.equal(projectUserInfo(null, { workNo: 'work_no' }), undefined);
+  assert.equal(projectUserInfo(null, { user_id: 'employeeNumber' }), undefined);
 });
 
 test('normalizeProfileFields keeps only known string keys', () => {
-  assert.deepEqual({ ...normalizeProfileFields({ workNo: 'work_no', name: 'pinyin', extra: 'x', workNo2: 1 }) },
-    { workNo: 'work_no', name: 'pinyin' });
+  assert.deepEqual({ ...normalizeProfileFields({ user_id: 'employeeNumber', user_name: 'displayName', extra: 'x', unknown: 1 }) },
+    { user_id: 'employeeNumber', user_name: 'displayName' });
   assert.deepEqual({ ...normalizeProfileFields(undefined) }, {});
-  assert.deepEqual({ ...normalizeProfileFields(['work_no']) }, {});
+  assert.deepEqual({ ...normalizeProfileFields(['employeeNumber']) }, {});
 });
 
-test('login loads UserInfo once with a Bearer token and projects configured fields', async (t) => {
+test('invalid endpoint and empty token surface IamError, never a raw TypeError', async () => {
+  await assert.rejects(
+    () => fetchUserInfo({ userInfoEndpoint: 'not-a-url', accessToken: 'at', fetchImpl: async () => { throw new Error('must not be called'); } }),
+    (error) => error instanceof IamError && error.code === 'IAM_USERINFO_UNAVAILABLE',
+  );
+  await assert.rejects(
+    () => fetchUserInfo({ userInfoEndpoint: '', accessToken: 'at', fetchImpl: async () => { throw new Error('must not be called'); } }),
+    (error) => error instanceof IamError && error.code === 'IAM_USERINFO_UNAVAILABLE',
+  );
+  await assert.rejects(
+    () => fetchUserInfo({ userInfoEndpoint: 'http://127.0.0.1:9/userinfo', accessToken: '' }),
+    (error) => error instanceof IamError && error.code === 'IAM_USERINFO_UNAVAILABLE',
+  );
+});
+
+test('default mapping is the confirmed field contract and requests UserInfo once', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock), {
-    credentials,
-    profileFields: { workNo: 'work_no', name: 'pinyin' },
-  });
+  // 未传 profileFields：默认启用定稿口径（issue #160）。
+  const service = createIamService(configFor(mock), { credentials });
   t.after(() => service.dispose());
   const view = await signIn(service);
   assert.equal(view.state, 'ready');
-  assert.deepEqual(service.getIdentityProfile(), { workNo: '10001234', name: 'Zhang San' });
+  assert.deepEqual(service.getIdentityProfile(), {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
   assert.equal(mock.counts.userInfo, 1);
   assert.match(mock.lastUserInfo.authorization, /^Bearer \S+$/);
-  assert.equal(JSON.stringify(view).includes('Zhang San'), false, 'the profile is not in the view yet');
 });
 
-test('no field mapping means no UserInfo request', async (t) => {
+test('explicit empty profileFields keeps the opt-out: no UserInfo request', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
-  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials() });
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials(), profileFields: {} });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
@@ -74,10 +91,17 @@ test('UserInfo failure degrades without failing login', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   mock.control.userInfoMode = 'http500';
-  const service = createIamService(configFor(mock), {
-    credentials: new MemoryCredentials(),
-    profileFields: { workNo: 'work_no' },
-  });
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials() });
+  t.after(() => service.dispose());
+  assert.equal((await signIn(service)).state, 'ready');
+  assert.equal(service.getIdentityProfile(), undefined);
+});
+
+test('UserInfo 401 follows the enterprise contract and degrades', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  mock.control.userInfoMode = 'unauthorized';
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials() });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
@@ -87,10 +111,7 @@ test('malformed UserInfo JSON degrades and sign-out clears the profile', async (
   const mock = await startMockOidc();
   t.after(() => mock.close());
   mock.control.userInfoMode = 'malformed';
-  const service = createIamService(configFor(mock), {
-    credentials: new MemoryCredentials(),
-    profileFields: { workNo: 'work_no' },
-  });
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials() });
   t.after(() => service.dispose());
   assert.equal((await signIn(service)).state, 'ready');
   assert.equal(service.getIdentityProfile(), undefined);
@@ -103,15 +124,69 @@ test('profile never outlives the grant that produced it', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const service = createIamService(configFor(mock), {
-    credentials,
-    profileFields: { workNo: 'work_no' },
-  });
+  const service = createIamService(configFor(mock), { credentials });
   t.after(() => service.dispose());
   await signIn(service);
-  assert.deepEqual(service.getIdentityProfile(), { workNo: '10001234' });
+  assert.deepEqual(service.getIdentityProfile(), {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
   await credentials.deleteRecord('heluo-iam/session');
   await service.syncFromStore();
   assert.equal(service.getView().state, 'signed-out');
   assert.equal(service.getIdentityProfile(), undefined, 'a stale profile must not survive its grant');
+});
+
+// Fixture B（issue #160）：后管删除 displayName 后的真实形态——
+// 登录成功、投影缺失姓名、其余字段照常返回。
+test('missing displayName degrades to the remaining fields without failing login', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  mock.control.userInfoMode = 'missingName';
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials() });
+  t.after(() => service.dispose());
+  assert.equal((await signIn(service)).state, 'ready');
+  assert.deepEqual(service.getIdentityProfile(), { user_id: '10001234', work_no: 'zhangsan' });
+});
+
+// 企业 IAM 的 profile 端点实测要求 query 传令牌（issue #160 联调口径）。
+test('query token transport sends access_token as a URL parameter', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const service = createIamService(configFor(mock, { userInfoTokenTransport: 'query' }), {
+    credentials: new MemoryCredentials(),
+  });
+  t.after(() => service.dispose());
+  assert.equal((await signIn(service)).state, 'ready');
+  assert.equal(mock.lastUserInfo.authorization, null);
+  assert.match(mock.lastUserInfo.queryToken, /^\S+$/);
+  assert.deepEqual(service.getIdentityProfile(), {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
+});
+
+// 视图/RPC 白名单（issue #160）：identity 只进显示投影，原始响应不进任何读面。
+test('view and session expose the projected identity only, never raw UserInfo', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const service = createIamService(configFor(mock), { credentials: new MemoryCredentials() });
+  t.after(() => service.dispose());
+  await signIn(service);
+
+  const view = service.getView();
+  assert.deepEqual(view.identity, { user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan' });
+
+  const session = service.getSession();
+  assert.deepEqual(session.identity, { user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan' });
+
+  // PII 红线：令牌、sub、authTime 不进视图、不进 RPC。
+  const viewText = JSON.stringify(view);
+  const sessionText = JSON.stringify(session);
+  assert.equal(viewText.includes('1794363364'), false, 'authTime must not reach the view');
+  assert.equal(sessionText.includes('1794363364'), false, 'authTime must not reach the session RPC');
+  assert.equal(viewText.includes('"sub"'), false, 'raw sub must not reach the view');
+  assert.equal(JSON.stringify(view).includes('Bearer'), false);
+
+  await service.signOut();
+  assert.equal(service.getView().identity, null);
+  assert.equal(service.getSession().identity, undefined);
 });

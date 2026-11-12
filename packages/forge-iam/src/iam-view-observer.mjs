@@ -11,9 +11,11 @@ import { types } from 'node:util';
 const INTERVAL_MS = 2000;
 const STATES = Object.freeze(['unconfigured', 'signed-out', 'authenticating', 'ready', 'expired', 'unreachable', 'error']);
 const VIEW_KEYS = Object.freeze(['state', 'configured', 'signedIn', 'canSignOut', 'canSignIn', 'missing',
-  'error', 'exclusive', 'principal', 'accessExpiresAt', 'gatewayCredential', 'gatewayConsoleUrl']);
+  'error', 'exclusive', 'principal', 'identity', 'accessExpiresAt', 'gatewayCredential', 'gatewayConsoleUrl']);
 const CREDENTIAL_KEYS = Object.freeze(['state', 'ownerSubject', 'deviceLabel', 'enteredAt', 'suggestedExpiry',
   'storage', 'matchesAccount']);
+// 只读显示投影（issue #160）：仅三个定稿字段，未知键一律拒绝。
+const IDENTITY_KEYS = Object.freeze(['user_id', 'user_name', 'work_no']);
 
 export class IamViewError extends Error {
   constructor(code, message) {
@@ -110,13 +112,32 @@ export function projectView(raw) {
   if (typeof exclusive !== 'string') throw invalid('the view has an invalid exclusive');
   const error = stringOrNull(dataOf(raw, 'error'), 'error');
   const principal = stringOrNull(dataOf(raw, 'principal'), 'principal');
+  const identity = projectIdentity(dataOf(raw, 'identity'));
   const accessExpiresAt = stringOrNull(dataOf(raw, 'accessExpiresAt'), 'accessExpiresAt');
   const gatewayConsoleUrl = stringOrNull(dataOf(raw, 'gatewayConsoleUrl'), 'gatewayConsoleUrl');
   const gatewayCredential = projectCredential(dataOf(raw, 'gatewayCredential'));
   return Object.freeze({
     state, configured, signedIn, canSignOut, canSignIn, missing,
-    error, exclusive, principal, accessExpiresAt, gatewayCredential, gatewayConsoleUrl,
+    error, exclusive, principal, identity, accessExpiresAt, gatewayCredential, gatewayConsoleUrl,
   });
+}
+
+function projectIdentity(value) {
+  if (value === null || value === undefined) return null;
+  if (!plainRecord(value)) throw invalid('the view has an invalid identity');
+  const identity = {};
+  for (const key of IDENTITY_KEYS) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined) continue;
+    if (!Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'string' || descriptor.value.length === 0) {
+      throw invalid('the view has an invalid identity');
+    }
+    identity[key] = descriptor.value;
+  }
+  for (const key of Object.keys(value)) {
+    if (!IDENTITY_KEYS.includes(key)) throw invalid('the view has an invalid identity');
+  }
+  return Object.keys(identity).length === 0 ? null : Object.freeze(identity);
 }
 
 function projectMissing(value) {
