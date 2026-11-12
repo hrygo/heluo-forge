@@ -10,7 +10,7 @@
     "pnpm": ">=11.0.0 <12"
   },
   "scripts": {
-    "check": "node scripts/link-workspace.mjs && node scripts/check-docs.mjs && node scripts/check-repo.mjs && node scripts/check-bundle-tarballs.mjs && node scripts/dsh-version.mjs check && node --test",
+    "check": "node scripts/link-workspace.mjs && node scripts/check-docs.mjs && node scripts/check-repo.mjs && node scripts/check-skills.mjs && node scripts/check-bundle-tarballs.mjs && node scripts/dsh-version.mjs check && node --test",
     "check:docs": "node scripts/check-docs.mjs",
     "link:workspace": "node scripts/link-workspace.mjs",
     "check:repo": "node scripts/check-repo.mjs",

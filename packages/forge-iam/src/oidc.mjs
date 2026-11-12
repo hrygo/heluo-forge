@@ -111,6 +111,16 @@ const SIGNING_ALGORITHMS = Object.freeze({
   },
 });
 
+function decodeBase64Any(value) {
+  // Base64url (unpadded) and standard Base64 (padded) decode to the same
+  // bytes; at_hash only needs byte equality. Anything else is malformed.
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/u.test(value)) return null;
+  let text = value.replaceAll('-', '+').replaceAll('_', '/');
+  if (text.length % 4 === 1) return null;
+  while (text.length % 4 !== 0) text += '=';
+  return Buffer.from(text, 'base64');
+}
+
 export function verifyIdToken(token, { jwks, issuer, clientId, nonce, accessToken, now = Date.now(), skewSeconds = 60 } = {}) {
   const decoded = decodeJwt(token);
   // No critical JWS extensions are implemented, so none may be declared.
@@ -202,9 +212,14 @@ export function verifyIdToken(token, { jwks, issuer, clientId, nonce, accessToke
       throw new OidcError('IAM_ID_TOKEN_AT_HASH', 'ID token access token hash is invalid');
     }
     const digest = createHash('sha256').update(accessToken, 'ascii').digest();
-    const expected = Buffer.from(digest.subarray(0, digest.length / 2).toString('base64url'));
-    const received = Buffer.from(claims.at_hash, 'utf8');
-    if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+    const expectedBytes = digest.subarray(0, digest.length / 2);
+    // The enterprise issuer emits at_hash in standard Base64 with padding
+    // (`+`, `/`, `==`), not the base64url form OIDC prescribes. Compare the
+    // decoded bytes so both encodings bind the same access token; comparing
+    // the strings would reject every real token from this issuer.
+    const receivedBytes = decodeBase64Any(claims.at_hash);
+    if (receivedBytes === null || receivedBytes.length !== expectedBytes.length
+        || !timingSafeEqual(expectedBytes, receivedBytes)) {
       throw new OidcError('IAM_ID_TOKEN_AT_HASH', 'ID token access token hash is invalid');
     }
   }

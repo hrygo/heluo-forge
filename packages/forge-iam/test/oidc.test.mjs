@@ -187,6 +187,18 @@ test('at_hash binds the provided access token and cannot be ignored', async (t) 
   assert.equal(verifyIdToken(idToken(), verifyOptions).sub, 'E1001');
 });
 
+test('at_hash accepts the enterprise issuer standard-Base64 form', () => {
+  const accessToken = 'access-token-placeholder';
+  const half = createHash('sha256').update(accessToken, 'ascii').digest().subarray(0, 16);
+  const standard = half.toString('base64');
+  const urlSafe = half.toString('base64url');
+  assert.match(standard, /[+/=]/u, 'fixture must exercise standard Base64 characters');
+  assert.equal(verifyIdToken(idToken({ at_hash: standard }), { ...verifyOptions, accessToken }).sub, 'E1001');
+  assert.equal(verifyIdToken(idToken({ at_hash: urlSafe }), { ...verifyOptions, accessToken }).sub, 'E1001');
+  const wrong = createHash('sha256').update('other', 'ascii').digest().subarray(0, 16).toString('base64');
+  assert.throws(() => verifyIdToken(idToken({ at_hash: wrong }), { ...verifyOptions, accessToken }), (error) => error.code === 'IAM_ID_TOKEN_AT_HASH');
+});
+
 test('callback rejects ambiguous and empty response parameters without leaking provider error', async (t) => {
   const invalid = [
     '?code=c&state=s&iss=a&iss=b', '?code=c&state=s&error=denied',

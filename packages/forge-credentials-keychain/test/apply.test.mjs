@@ -75,7 +75,7 @@ test('a plaintext file backend without explicit approval is refused', () => {
   );
 });
 
-test('apply fails closed when the platform backend is unavailable', { skip: process.platform === 'darwin' && 'macOS now mounts the encrypted document backend' }, () => {
+test('apply fails closed when the platform backend is unavailable', { skip: (process.platform === 'darwin' || process.platform === 'win32') && 'macOS and Windows now mount the encrypted document backend' }, () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, {}),
@@ -88,7 +88,7 @@ test('apply fails closed when the platform backend is unavailable', { skip: proc
   );
 });
 
-test('the unavailable error names the reason and the development override', { skip: process.platform === 'darwin' && 'macOS now mounts the encrypted document backend' }, () => {
+test('the unavailable error names the reason and the development override', { skip: (process.platform === 'darwin' || process.platform === 'win32') && 'macOS and Windows now mount the encrypted document backend' }, () => {
   const ctx = fakeContext();
   assert.throws(
     () => apply(ctx, {}),
@@ -328,4 +328,11 @@ test('a plaintext document inside a git work tree is refused at mount', async ()
   const dispose = apply(okContext, { filePath: join(outside, 'credentials.json'), allowInsecureFile: true });
   assert.equal(okContext.provided.has('credentials'), true);
   await dispose();
+});
+
+test('storeDirectory is validated and carried into the platform backend', () => {
+  assert.equal(validateConfig({}).value.storeDirectory, '');
+  assert.equal(validateConfig({ storeDirectory: '/tmp/heluo-uat' }).value.storeDirectory, '/tmp/heluo-uat');
+  const invalid = validateConfig({ storeDirectory: 42 });
+  assert.ok(invalid.issues.some((issue) => issue.path[0] === 'storeDirectory'));
 });

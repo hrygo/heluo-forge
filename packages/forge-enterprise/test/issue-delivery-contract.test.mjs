@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { RESOURCE_BASE } from '../src/issue-delivery-skill.mjs';
+import { loadClausePack } from '../src/skills.mjs';
 
 const SKILL_DIR = join(RESOURCE_BASE, 'issue-delivery');
 const read = (relative) => readFileSync(join(SKILL_DIR, relative), 'utf8');
@@ -18,9 +19,12 @@ const MAIN = read('SKILL.md');
 const HANDOFF = read('references/handoff.md');
 const EVIDENCE = read('references/evidence.md');
 const INDEX = JSON.parse(readFileSync(join(RESOURCE_BASE, 'clauses.json'), 'utf8'));
+const PACK = loadClausePack({ root: RESOURCE_BASE });
 
 test('资源有界：主正文精简，细节在 references 里按需加载', () => {
-  const mainBytes = Buffer.byteLength(MAIN, 'utf8');
+  // 标准 Agent Skill 的 frontmatter 是发现元数据，不属于“主正文”；以宿主实际
+  // 装载的剥离结果计量，避免把元数据算成正文预算。
+  const mainBytes = PACK.clauses[0].bytes;
   assert.ok(mainBytes > 500, '主正文不能空到没有实质内容');
   assert.ok(mainBytes < 4096, `主正文应保持精简（当前 ${mainBytes} 字节），细节放 references/`);
   assert.ok(Buffer.byteLength(HANDOFF, 'utf8') > 400);

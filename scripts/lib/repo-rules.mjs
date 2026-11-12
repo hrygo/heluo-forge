@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve, dirname, sep } from 'node:path';
 
 import { checkBundleClosure } from './bundle-rules.mjs';
+import { HOST_PATH, SECRETS } from './sensitive-patterns.mjs';
 
 const REQUIRED = [
   'README.md',
@@ -31,18 +32,9 @@ const REQUIRED = [
   'tests',
 ];
 
-const SECRETS = [
-  [/-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/, 'private key block'],
-  [/\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/, 'GitHub token'],
-  [/\bsk-[A-Za-z0-9_-]{24,}\b/, 'API secret key'],
-  [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/, 'cloud access key'],
-  [/https?:\/\/[^\s/@:]+:[^\s/@]+@/, 'URL with embedded password'],
-];
-
-const TEXT_EXTENSIONS = /\.(md|mjs|cjs|js|json|ya?ml|txt|html|css|ts|tsx|sh|toml|ini|cfg)$/i;
-
-const HOST_PATH = /(^|[^A-Za-z0-9])(?:\/Users\/|\/home\/|[A-Za-z]:\\\\Users\\\\)/;
+export { SECRETS, HOST_PATH } from './sensitive-patterns.mjs';
 const ALLOW_MARKER = 'security-scan: allow';
+const TEXT_EXTENSIONS = /\.(?:md|mjs|cjs|js|json|yaml|yml|txt|html|css|ts|tsx|sh|toml|ini|cfg)$/u;
 
 function posix(path) {
   return path.split(sep).join('/');

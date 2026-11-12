@@ -332,6 +332,8 @@ clearGatewayCredential: gateway.clearCredential,
     _startSignInOnce: signin.signInOnce,
     handleCallback: signin.handleCallback,
     cancelSignIn: signin.cancelSignIn,
+    /** Route-owned drain: call after the callback response has been written. */
+    releaseCallback: options.closeCallback,
 
 
 

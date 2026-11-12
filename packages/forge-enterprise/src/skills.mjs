@@ -5,7 +5,7 @@
  * 上下文开销。加载不写仓库、不建 Issue、不做"合规通过"结论；模型不能自动冒用企业入口。
  */
 import { readFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
 export class EnterpriseSkillError extends Error {
   constructor(message, code, details = undefined) {
@@ -33,6 +33,71 @@ function readText(path) {
     if (error?.code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
+const SKILL_NAME_MAX = 64;
+const SKILL_DESCRIPTION_MAX = 1024;
+
+function invalidFrontmatter(clauseId, problem) {
+  throw new EnterpriseSkillError(
+    `clause "${clauseId}" has invalid skill frontmatter: ${problem}`,
+    'ENTERPRISE_SKILL_FRONTMATTER_INVALID',
+    { id: clauseId, problem },
+  );
+}
+
+function unquoteYamlScalar(value) {
+  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+/**
+ * Split an optional Agent Skills YAML frontmatter block off a clause body.
+ *
+ * Only the flat `key: value` subset is parsed. Unknown keys are ignored so the
+ * format can grow without breaking this loader; `name` and `description` are
+ * validated because the host discovery face depends on them. A body without
+ * frontmatter is returned untouched, so existing clause packs keep loading
+ * byte-identically.
+ *
+ * @param {string} text raw file contents
+ * @param {{id: string, bodyPath: string}} clause clause id and pack-relative body path
+ * @returns {{body: string, frontmatter: Record<string, string> | undefined}}
+ */
+function stripSkillFrontmatter(text, { id, bodyPath }) {
+  if (!text.startsWith('---\n')) return { body: text, frontmatter: undefined };
+  const lines = text.split('\n');
+  const close = lines.indexOf('---', 1);
+  if (close === -1) invalidFrontmatter(id, 'the opening "---" is not closed by a "---" line');
+  const fields = new Map();
+  for (let index = 1; index < close; index += 1) {
+    const line = lines[index];
+    if (line.trim().length === 0) continue;
+    const match = /^([A-Za-z][A-Za-z0-9_-]*):[ \t]*(.*)$/u.exec(line);
+    if (match === null) invalidFrontmatter(id, `line ${index + 1} is not a simple "key: value" pair`);
+    fields.set(match[1], unquoteYamlScalar(match[2].trim()));
+  }
+  const name = fields.get('name');
+  if (typeof name !== 'string' || name.length === 0) invalidFrontmatter(id, 'the required "name" key is missing');
+  if (name.length > SKILL_NAME_MAX) invalidFrontmatter(id, `name is ${name.length} characters, above the ${SKILL_NAME_MAX} limit`);
+  if (!SKILL_NAME_PATTERN.test(name)) invalidFrontmatter(id, `name "${name}" must be lowercase kebab-case`);
+  const directory = basename(dirname(bodyPath));
+  if (name !== directory) invalidFrontmatter(id, `name "${name}" does not match its directory "${directory}"`);
+  const description = fields.get('description');
+  if (typeof description !== 'string' || description.trim().length === 0) {
+    invalidFrontmatter(id, 'the required "description" key is missing or empty');
+  }
+  if (description.length > SKILL_DESCRIPTION_MAX) {
+    invalidFrontmatter(id, `description is ${description.length} characters, above the ${SKILL_DESCRIPTION_MAX} limit`);
+  }
+  if (/^[>|][+-]?$/u.test(description)) invalidFrontmatter(id, 'description must be a single line, not a YAML block scalar');
+  return {
+    body: lines.slice(close + 1).join('\n').replace(/^\n+/u, ''),
+    frontmatter: Object.freeze(Object.fromEntries(fields)),
+  };
 }
 
 function resolveClausePath(clause, pack) {
@@ -110,10 +175,13 @@ export function loadClausePack(input) {
       }
     }
     const located = resolveClausePath(clause, { root });
-    const body = readText(located.path);
-    if (body === undefined) {
+    const raw = readText(located.path);
+    if (raw === undefined) {
       throw new EnterpriseSkillError(`clause "${id}" body "${clause.body}" is missing`, 'ENTERPRISE_CLAUSE_BODY_MISSING', { id, path: clause.body });
     }
+    // 标准 Agent Skill 以 `---` frontmatter 声明 name/description；宿主的发现面只需要正文，
+    // 所以这里把前置元数据校验并剥离，`content`/`bytes` 都以剥离后的正文为准。
+    const { body } = stripSkillFrontmatter(raw, { id, bodyPath: located.bodyPath });
     return Object.freeze({
       id,
       title: clause.title ?? id,

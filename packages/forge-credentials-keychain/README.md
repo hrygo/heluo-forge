@@ -1,8 +1,8 @@
 # @heluo/forge-credentials-keychain
 
-状态：可用（开发骨架）。`@napi-rs/keyring` 2.1.2 的四个预编译 addon（win32-x64、win32-arm64、linux-x64、linux-arm64）在发布前暂存后随包分发（缺失时构建与产物核验均硬失败），运行时按 platform-arch 解析，Windows/UOS/麒麟适配器因此可挂载；macOS 不使用 addon，也不使用系统钥匙串，而是走应用层加密文档后端（AES-256-GCM，密钥 0600），因此不依赖代码签名、不要求图形会话。四个 addon 组合**未在目标机取证**，`unvetted` 全局开关保持关闭；macOS 加密后端已于 2026-11-06 在本机与一台远程 Apple Silicon Mac 的 SSH 会话中分别实测 7/7。本地 0600 明文 file backend 仅显式开发/试点。
+状态：可用（开发骨架）。`@napi-rs/keyring` 2.1.2 的四个预编译 addon（win32-x64、win32-arm64、linux-x64、linux-arm64）在发布前暂存后随包分发（缺失时构建与产物核验均硬失败），运行时按 platform-arch 解析，Windows/UOS/麒麟适配器因此可挂载；macOS 不使用 addon，也不使用系统钥匙串，而是走应用层加密文档后端（AES-256-GCM，密钥 0600），因此不依赖代码签名、不要求图形会话；Windows 默认同一套加密文档后端。四个 addon 组合**未在目标机取证**，`unvetted` 全局开关保持关闭；macOS 加密后端已于 2026-11-06 在本机与一台远程 Apple Silicon Mac 的 SSH 会话中分别实测 7/7。本地 0600 明文 file backend 仅显式开发/试点。
 
-一句话：`ctx.credentials` 的 keychain provider。提供 backend 契约、内存/不可用/显式 0600 file backend、macOS 加密文档后端、记录/引用读写与进程内单键锁；Windows 凭据管理器与麒麟/UOS Secret Service 由 `vendor/` 下的预编译 addon 接入，macOS 由应用层加密文档接入，四组 addon 待目标机取证。
+一句话：`ctx.credentials` 的 keychain provider。提供 backend 契约、内存/不可用/显式 0600 file backend、macOS 加密文档后端、记录/引用读写与进程内单键锁；Windows 与 macOS 由应用层加密文档接入（同一文档锁与记录/引用联合提交），麒麟/UOS Secret Service 与 Windows 凭据管理器由 `vendor/` 下的预编译 addon 以未取证状态接入。
 
 ## 当前实现
 
@@ -12,18 +12,19 @@
 | backend | 内存、不可用、显式 0600 file（含跨进程事务锁）、macOS 加密文档（AES-256-GCM + 0600 密钥，含同一文档锁）、`vendor/` 下四组合预编译 addon（原生 addon 需 `allowUnvettedPlatformAdapter: true`）；生产级取证待目标机 |
 | provider | `resolve / describe / set / unset / readRecord / describeRecord / listRecords / modifyRecord / deleteRecord` |
 | 迁移 | `migrateLegacyFileToKeychain()` 暂时 fail closed：不读取旧文件、不访问目标、不复制也不删除；`legacyRetained: null` 表示未核实旧文件是否存在。跨进程互斥和源文件隔离契约核验前不可迁移 |
-| 并发 | 进程内单键串行；file backend 使用本地 O_EXCL 文档锁与每次读取的独立快照（仅 dev/pilot），锁争用超时后 fail closed；只有锁记录的 PID 确已不存在时才用原子 rename 回收，存活进程持有的锁不会被顶替；OS backend 未实现 |
+| 并发 | 进程内单键串行；加密文档后端（macOS/Windows）与明文 file backend 都用本地 O_EXCL 文档锁，锁内读取独立快照，争用超时 fail closed；只有锁记录的 PID 确已不存在时才用原子 rename 回收，存活进程持有的锁不会被顶替。`snapshot(scope)` 与 `compareAndSwap(scope, expected, next, guard)` 在同一文档、同一把锁内完成比较、单次同步 guard 与两键写入，一次 fsync+rename 是唯一提交点；guard 拒绝或快照过期时零写入，异步 guard 直接拒绝。原生 OS backend 不提供联合提交 |
 | 记录 | `api-key` / `grant` JSON；损坏记录显式报错，不静默当作空 |
 | 生命周期 | 清理登记为 `ctx.effect`（Cordis 4 不收集普通 `function apply` 的返回值）；卸载时撤销 `ctx.credentials` 并 `close` backend |
-| 配置 | `Config` 归一化幂等：缺省 `filePath` 为空串表示“不启用 file backend”，可被框架二次校验接受 |
+| 配置 | `Config` 归一化幂等：缺省 `filePath` 与 `storeDirectory` 为空串，分别表示“不启用 file backend”“用平台默认目录”；两者都只接受非空字符串 |
 | 事件 | 按 seam 要求逐个监听器隔离并记录失败；同步抛错不截断后续监听器，异步拒绝不产生未处理 rejection |
 | 组合 | 企业补丁已默认禁用 `dsh-credentials-local`（只禁用、不删除该行）；检测到已有 `credentials` 时本插件拒绝挂载，不静默接管 |
 | 安全 | 空值拒绝；不落日志；不可用/临时/不安全 backend 默认 fail closed |
 
 ## backend 选择
 
-- `resolvePlatformBackend()` 是默认解析：`win32-x64` / `win32-arm64` / `linux-x64` / `linux-arm64` 映射到 `vendor/` 下对应 addon；`darwin-arm64` / `darwin-x64` 映射到 macOS 加密文档后端；其余组合返回不可用 backend。显式指定的 platform-arch 不会被本机架构顶替，任何分支都不会落到明文。
-- `createPlatformBackend()` 在 macOS 返回加密文档后端，在其余未映射平台返回不可用 backend，是上述“其余组合”的兜底，也用于断言不存在静默降级。
+- `resolvePlatformBackend()` 是默认解析：`win32-*` 与 `darwin-*` 映射到加密文档后端（Windows 根目录 `%LOCALAPPDATA%\\HeluoForge`）；`linux-x64` / `linux-arm64` 映射到 `vendor/` 下对应 addon，仍未取证、需显式开关；其余组合返回不可用 backend。显式指定的 platform-arch 不会被本机架构顶替，任何分支都不会落到明文。
+- `createPlatformBackend()` 在 macOS 与 Windows 返回加密文档后端（Windows 根目录为 `%LOCALAPPDATA%\\HeluoForge`），在其余未映射平台返回不可用 backend，是上述“其余组合”的兜底，也用于断言不存在静默降级。
+- `storeDirectory` 把加密文档后端指到固定目录（隔离 UAT 与需要固定路径的部署用它），缺省时用平台默认位置；它不影响选择哪一类后端。
 - `createMacosBackend({ directory })` 是 macOS 的生产存储：`~/Library/Application Support/HeluoForge/credentials.json`（0600）以 AES-256-GCM 加密，密钥为同目录 `credentials.key`（32 B 随机，0600，首次使用时生成）。目录 0700；密钥文件权限不是 0600、所有者不是当前用户、或文档无法通过认证标签校验时一律拒绝，不回退明文。枚举由 `listEntries()` 支持，不需要显式开关。
 - `createMemoryBackend()` 只用于测试/开发，默认拒绝，需 `allowEphemeral: true`。
 - `createFileBackend({ path })` 是显式 0600 明文 fallback，默认拒绝，需 `allowInsecureFile: true`；文件权限在 POSIX 上校验为 `0600`。
@@ -33,7 +34,7 @@
 - 该样机的枚举默认不可用：`listRecords()` 报 `KEYCHAIN_LIST_UNSUPPORTED`，而不是返回空表；只有显式 `allowUnverifiedEnumeration: true` 才使用 `findCredentials`，且各平台的过滤/编码差异仍未核验。没有它，IAM 拿不到 `listRecords`，写路径仍应保持关闭。
 - 实测（2026-10-24，darwin-arm64）：未命中条目退出码 44；`add-generic-password -U` 覆盖同名条目；删除幂等；spike 过程无明文文件、测试条目已清理。复跑：`node scripts/probe/run-keychain-spike.mjs`（10/10 步通过）。
 - 2026-10-24 的 macOS 迁移演练曾在旧实现上以合成副本记录 9/9；该历史结果不证明当前实现或真实迁移可用。现有 `node scripts/probe/run-keychain-migration-rehearsal.mjs` 只用临时合成文件验证关闭路径：不调用旧读取器、删除器或目标，测试通过仅代表该阻断生效，不代表迁移或目标平台验收通过。受控 IAM 设计中的旧迁移表待同步。
-- 生产必须使用 Windows 凭据管理器、麒麟/UOS Secret Service 或 macOS 加密文档的审核实现；file backend 与 macOS `security` CLI spike 都不是生产方案。四组合 addon 由发布前暂存随包分发，构建期前置（记录必须列在 `files` 内且逐条满足）与产物期字节校验都按 `CHECKSUMS.json` 硬失败；但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。macOS 加密后端不经过该开关。
+- 生产使用 Windows/macOS 加密文档后端与麒麟/UOS Secret Service 的审核实现；Windows 凭据管理器只经未取证的原生适配器接入；file backend 与 macOS `security` CLI spike 都不是生产方案。四组合 addon 由发布前暂存随包分发，构建期前置（记录必须列在 `files` 内且逐条满足）与产物期字节校验都按 `CHECKSUMS.json` 硬失败；但**目标机读写、失效与跨进程可见尚未取证**，`unvetted` 因此保持为真，默认挂载需要 `allowUnvettedPlatformAdapter: true`；取证通过后由一处开关（`NATIVE_ADAPTER_VETTED`）转为默认可用。macOS 加密后端不经过该开关。
 
 ## macOS 存储边界
 
@@ -53,7 +54,7 @@ macOS 不提供“免签名且无需交互”的系统凭据库：钥匙串条�
 |---|---|---|---|---|
 | Windows | account 为原始 key；target 为 `{account}.~heluo-forge-v1-{service 摘要}-{key 摘要}`，blob 为 UTF-16LE；旧目标为 `{account}.{service}` | `CredEnumerateW` 按调用方 key 前缀取得候选 account，再逐键检查旧目标并回读当前 service 的新目标 | 凭据的 `UserName` | 上游不返回目标名；其他 service 的同前缀条目、含糊的 account 或不匹配的值会阻断枚举，非法 blob 也会使整次枚举失败 |
 | Linux | Secret Service 条目，属性含 `service`、`username` | 按属性 `service` 搜索 | 属性 `username` | 缺 `username` 属性的条目被上游静默跳过；集合锁定时搜索失败 |
-| macOS | 应用层加密文档：AES-256-GCM，密钥 0600 同目录保存 | 整篇文档解密后按 key 前缀过滤 | 文档内的 key 原样 | 密钥权限放宽、密钥与文档不匹配或文档被篡改时显式报错，不回退明文 |
+| macOS / Windows | 应用层加密文档：AES-256-GCM，密钥 0600 同目录保存（Windows 位于用户目录 `%LOCALAPPDATA%`） | 整篇文档解密后按 key 前缀过滤 | 文档内的 key 原样 | 密钥权限放宽、密钥与文档不匹配或文档被篡改时显式报错，不回退明文；Windows 上隔离边界是用户账户，不是单个应用 |
 
 原生后端的枚举默认关闭，`allowUnverifiedEnumeration: true` 才走 `findCredentials`。Windows 枚举逐个核对候选 account、旧目标及本 service 新目标的值，仅返回通过核验的结果；重复 account、无法对应的新目标或值不一致时以 `KEYCHAIN_OPERATION_FAILED` 拒绝整次枚举。其他 service 即使使用不同 account，只要目标前缀命中，也可能阻断枚举；单键读写仍按 service 隔离。结果按大小写敏感前缀过滤；非 ASCII 前缀仅大小写不同而无法确认 Windows 比较语义时拒绝枚举。Windows 的调用方前缀若含 `*`，返回 `KEYCHAIN_LIST_UNSUPPORTED`；Windows key 与前缀还须为完整 Unicode。Linux 丢弃不能作为 key 的空 account 与含控制字符的 account。macOS 加密文档后端由 `listEntries()` 直接枚举，不需要该开关。上游错误统一归一为 `KEYCHAIN_OPERATION_FAILED` 并保留平台文本。上游检查的 Windows account 上限为 513 字节（UTF-8）、blob 上限为 2560 字节（UTF-16LE）；实际系统还可能拒绝上游检查允许的账户名：本地 Windows 11 ARM64 虚拟机的合成测试中，512 字节 ASCII account 可写，513 字节以 Windows 错误 1734 拒绝，旧格式与新格式一致。Linux 无库级大小上限，实际受 D-Bus 报文大小约束。
 

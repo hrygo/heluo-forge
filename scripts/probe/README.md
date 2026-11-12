@@ -193,3 +193,19 @@ node scripts/probe/sse-heartbeat-probe.mjs --heartbeat-ms 15000 --first-token-ms
 响应字节会产生一次 `start`；因此宿主的 `streamIdleTimeoutMs` 不能把心跳当作存活信号。
 `--pi-ai` 或 `PI_AI_DIR` 可指向宿主安装的 `@earendil-works/pi-ai`，默认取
 `$DSH_HOME/profiles/node_modules/...`。
+
+## 模拟 IAM 与模型网关（交付包目标机验证）
+
+```sh
+node scripts/probe/mock-iam-gateway.mjs
+```
+
+单文件、只依赖 Node 标准库的模拟 IdP + 网关：Discovery、授权码 + PKCE S256、RS256
+ID Token 与 JWKS、刷新轮换、撤销（POST 表单与 D1 的 `GET ?access_token=` 两种形态），
+以及 `/v1/models` 与流式对话。默认 `http://127.0.0.1:5599`（issuer）与
+`http://127.0.0.1:5600/v1`（网关），可用 `MOCK_IAM_PORT`、`MOCK_GATEWAY_PORT`、
+`MOCK_CLIENT_ID`、`MOCK_SUBJECT` 覆盖。
+
+用途是在没有企业 IAM 的机器（含 Windows 虚拟机）验证**已按同一 issuer 打包**的交付包：
+浏览器登录、回调、凭据保存、模型列表与对话都能走完。它不产生真实令牌，也不校验真实
+主体与权限；企业联调仍需真实 IAM 与网关。

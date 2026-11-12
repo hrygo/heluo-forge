@@ -386,6 +386,8 @@
 
 ### S3.0 原生凭据适配器试点前提
 
+> **已被取代（2026-11-11）**：Windows 与 macOS 的默认凭据后端是应用层加密文档，企业补丁不再注入任何适配器开关，`HELUO_KEYCHAIN_ALLOW_UNVETTED_ADAPTER` 已退役——旧 `.env` 里残留该键会以 `CONFIG_UNKNOWN_KEY` 明确失败。以下原生适配器试点步骤只作历史记录，不要在目标机上执行。
+
 Windows/Linux 的原生适配器仍属未审核样机。企业默认补丁不启用试点开关，挂载时会以 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED` 拒绝；addon 已随包不代表 profile 可以直接启动或具备生产资格。仅在非生产试点 profile 上，确认接受该限制后，叠加独立补丁：
 
 ```yaml

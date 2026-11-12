@@ -65,11 +65,11 @@ function readPaxRecords(buffer) {
 }
 
 /** npm pack roots every archive at `package/`; anything else is not our artifact. */
-function normalizePath(raw) {
+function normalizePath(raw, rootPrefix = PACKAGE_PREFIX) {
   if (typeof raw !== 'string' || raw === '' || raw.includes('\0')) fail(`unsafe path "${raw}"`);
   if (raw.includes('\\')) fail(`unsafe path "${raw}"`);
-  if (!raw.startsWith(PACKAGE_PREFIX)) fail(`unsafe path "${raw}" (expected the package/ prefix)`);
-  const relative = raw.slice(PACKAGE_PREFIX.length);
+  if (!raw.startsWith(rootPrefix)) fail(`unsafe path "${raw}" (expected the ${rootPrefix} prefix)`);
+  const relative = raw.slice(rootPrefix.length);
   if (relative === '' || relative.startsWith('/') || relative.endsWith('/') || relative.includes('//')) fail(`unsafe path "${raw}"`);
   if (relative.split('/').some((part) => part === '' || part === '.' || part === '..')) fail(`unsafe path "${raw}"`);
   return relative;
@@ -79,10 +79,13 @@ function normalizePath(raw) {
  * Parse one tarball into its regular files.
  *
  * @param {string | Uint8Array} source tarball path or raw gzip bytes
- * @param {{ withContent?: boolean }} [options] keep each file body for structural checks
+ * @param {{ withContent?: boolean, prefix?: string }} [options] keep each file body
+ *   for structural checks; `prefix` is the archive root (default `package/`), so
+ *   the release-tool tarball can be read with its own root.
  * @returns {Array<{ path: string, size: number, sha256: string, mode: string, content?: Buffer }>}
  */
-export function readBundleEntries(source, { withContent = false } = {}) {
+export function readBundleEntries(source, { withContent = false, prefix: rootPrefix = PACKAGE_PREFIX } = {}) {
+  if (!rootPrefix.endsWith('/') || rootPrefix.startsWith('/') || rootPrefix.includes('..')) fail(`invalid archive root ${JSON.stringify(rootPrefix)}`);
   const bytes = typeof source === 'string' ? readFileSync(source) : source;
   if (!(bytes instanceof Uint8Array)) fail('source must be a tarball path or buffer');
   let tar;
@@ -118,7 +121,7 @@ export function readBundleEntries(source, { withContent = false } = {}) {
     if (typeflag === '1' || typeflag === '2') fail(`unsupported type "${typeflag}" (link "${name}")`);
     if (typeflag !== '0') fail(`unsupported type "${typeflag}" ("${name}")`);
     if (pax.size !== undefined && pax.size !== size) fail(`unsupported pax size override for "${name}"`);
-    const entryPath = normalizePath(pax.path ?? (prefix === '' ? name : `${prefix}/${name}`));
+    const entryPath = normalizePath(pax.path ?? (prefix === '' ? name : `${prefix}/${name}`), rootPrefix);
     pax = {};
     if (seen.has(entryPath)) fail(`duplicate path "${entryPath}"`);
     seen.add(entryPath);

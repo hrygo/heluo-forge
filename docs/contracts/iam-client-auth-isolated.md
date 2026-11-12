@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-IAM-002 |
 | 文档名称 | IAM 机密客户端隔离开发契约 |
-| 版本 | V0.5.0 |
+| 版本 | V0.5.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -15,6 +15,8 @@
 | 最后更新 | 2026-11-10 |
 | 门禁 | 用户已批准 source/mock 设计；真实来源关闭，生产 G1 未关闭 |
 
+> 适用范围：企业交付采用公开客户端 + PKCE S256（`authMode=public`、`clientAuthMethod=none`），不包含共享 `client_secret`；本契约只约束可选的机密客户端隔离路径。
+>
 > 编制依据：用户于 2026-11-02 选择管理员预置的隔离基线并批准完整设计进入 source/mock 实施。本契约定义本包的配置、私有组合参数和记录格式。实际隔离服务已接入 Basic/Post 的 code/refresh/revoke、V2 会话、共享刷新与 cleanup，不代表 SDK 新增接口、供应商能力或生产批准。
 >
 > 关联文档：[隔离开发设计](<../design/iam-confidential-isolated.md>)、[现行 IAM 模块](<../design/plugins/forge-iam.md>)、[IAM 回函](<../collaboration/iam-confirmation-letter.md>)。

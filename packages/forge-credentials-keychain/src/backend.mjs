@@ -10,6 +10,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 
 /**
  * Grammar for a backend's service/namespace segment. Backends and the provider
@@ -111,8 +112,26 @@ export function createMacosBackend({ directory } = {}) {
   });
 }
 
+/**
+ * Windows: the same application-level encrypted document as macOS, rooted in
+ * the user profile. The Windows Credential Manager only offers overwrite
+ * writes, so it cannot express the read-under-lock, guard, joint-commit
+ * sequence the IAM sign-in gate requires; the native keyring adapter stays an
+ * opt-in experiment. This backend gives a real single-document transaction and
+ * a per-user isolation boundary, with the key file owned by the same profile.
+ */
+export function createWindowsBackend({ directory } = {}) {
+  const root = directory
+    ?? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'HeluoForge');
+  return createFileBackend({
+    path: join(root, 'credentials.json'),
+    keyPath: join(root, 'credentials.key'),
+  });
+}
+
 export function createPlatformBackend() {
   if (process.platform === 'darwin') return createMacosBackend();
+  if (process.platform === 'win32') return createWindowsBackend();
   return createUnavailableBackend(
     `OS keychain adapter is not implemented on this platform (${process.platform}); this profile fails closed. Use a reviewed backend for production, or the documented development override (filePath + allowInsecureFile) in a non-production profile`,
   );
@@ -288,6 +307,28 @@ async function withFileLock(path, fn, timeoutMs) {
  * production keychain: callers must opt in with allowInsecureFile=true and
  * accept that the file is plaintext at rest.
  */
+function normalizeScope(scope) {
+  const recordKey = scope?.recordKey;
+  const ref = scope?.ref;
+  if (typeof recordKey !== 'string' || recordKey.length === 0
+    || typeof ref !== 'string' || ref.length === 0) {
+    throw new KeychainBackendError('KEYCHAIN_SCOPE_INVALID', 'joint commit requires recordKey and ref');
+  }
+  if (recordKey === ref) {
+    throw new KeychainBackendError('KEYCHAIN_SCOPE_INVALID', 'joint commit requires two distinct keys');
+  }
+  return { recordKey, ref };
+}
+
+function decodeRecord(raw, key) {
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new KeychainBackendError('KEYCHAIN_FILE_CORRUPT', `stored record ${key} is not JSON`);
+  }
+}
+
 export function createFileBackend({ path, mode = 0o600, lockTimeoutMs = 10000, keyPath } = {}) {
   if (typeof path !== 'string' || path.length === 0 || !isAbsolute(path)) {
     throw new KeychainBackendError('KEYCHAIN_PATH_REQUIRED', 'file backend requires an absolute path');
@@ -419,6 +460,49 @@ export function createFileBackend({ path, mode = 0o600, lockTimeoutMs = 10000, k
         const result = await fn(tx);
         if (changed) await persist(snapshot);
         return result;
+      }, lockTimeoutMs);
+    },
+    /**
+     * Joint record/ref read. Both entries live in one document, so a caller gets
+     * a consistent pair instead of two independent reads that another process
+     * may straddle.
+     */
+    async snapshot(scope) {
+      const { recordKey, ref } = normalizeScope(scope);
+      const entries = await load();
+      return { record: decodeRecord(entries.get(recordKey), recordKey), value: entries.get(ref) };
+    },
+    /**
+     * Joint record/ref commit: compare the pair, run exactly one synchronous
+     * guard, write both entries, then one fsync+rename. A stale snapshot
+     * returns { ok: false }; a refusing guard writes nothing. The guard runs
+     * inside the document lock, so no other process can slip between the guard
+     * decision and the commit.
+     */
+    async compareAndSwap(scope, expected, next, guard) {
+      const { recordKey, ref } = normalizeScope(scope);
+      if (typeof guard !== 'function') {
+        throw new KeychainBackendError('KEYCHAIN_GUARD_REQUIRED', 'joint commit requires a synchronous guard');
+      }
+      return withFileLock(path, async () => {
+        const entries = await load();
+        const current = { record: decodeRecord(entries.get(recordKey), recordKey), value: entries.get(ref) };
+        if (!isDeepStrictEqual(current, expected)) return { ok: false };
+        const admitted = guard();
+        if (admitted !== null && typeof admitted === 'object' && typeof admitted.then === 'function') {
+          Promise.resolve(admitted).catch(() => {});
+          throw new KeychainBackendError('KEYCHAIN_GUARD_ASYNC', 'the joint-commit guard must decide synchronously');
+        }
+        if (admitted !== true) {
+          throw new KeychainBackendError('KEYCHAIN_GUARD_REFUSED', 'the joint-commit guard refused the swap');
+        }
+        const committed = { record: next?.record, value: next?.value };
+        if (committed.record === undefined) entries.delete(recordKey);
+        else entries.set(recordKey, JSON.stringify(committed.record));
+        if (committed.value === undefined) entries.delete(ref);
+        else entries.set(ref, committed.value);
+        await persist(entries);
+        return { ok: true, snapshot: structuredClone(committed) };
       }, lockTimeoutMs);
     },
     async close() {},

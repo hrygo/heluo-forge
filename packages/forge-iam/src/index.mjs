@@ -34,6 +34,17 @@ export function apply(ctx, rawConfig = {}) {
     throw new IamError('IAM_HOST_UNAVAILABLE', 'ctx.effect is required to own the IAM lifecycle');
   }
 
+  // Cordis refuses to read a service the plugin did not inject ("cannot get
+  // property ... without inject"), and ctx.get() is not an escape hatch. Every
+  // lazy dependency is therefore bound through dynamic injection: the callback
+  // runs when the service appears and its disposer clears the binding when the
+  // service goes away, so a replaced provider can never satisfy the gate.
+  const current = { credentials: undefined, atomicStore: undefined };
+  // Cordis throws for a mounted service read without injection, while plain
+  // embeddings (tests, CLI hosts) expose services as properties or through
+  // ctx.get. Injection is the primary binding for the two services the sign-in
+  // gate depends on; the legacy reads stay as the embedding fallback and never
+  // satisfy the gate on their own.
   const getContextService = (name) => {
     try {
       return ctx?.[name] ?? (typeof ctx?.get === 'function' ? ctx.get(name) : undefined);
@@ -41,13 +52,37 @@ export function apply(ctx, rawConfig = {}) {
       return undefined;
     }
   };
+  const readCredentials = () => current.credentials ?? getContextService('credentials');
+  const readAtomicStore = () => current.atomicStore ?? getContextService('iam-atomic-store');
 
-  let credentials;
-  try {
-    credentials = getContextService('credentials');
-  } catch {
-    credentials = undefined;
-  }
+  // The atomic-store verdict and the joint adapter come from a separate host
+  // service owned by the credentials plugin, not from the provider's own
+  // fields. A plain ctx.credentials impostor cannot satisfy the gate unless it
+  // also mounts that service, and both disappear together on unload.
+  const trustedJointStore = () => readAtomicStore();
+  const verifyAtomicStore = (instance) => {
+    try {
+      const trust = trustedJointStore();
+      return trust !== undefined && trust.verify(instance) === true;
+    } catch {
+      return false;
+    }
+  };
+  const getGatewayAtomicStore = (instance) => {
+    const trust = trustedJointStore();
+    if (trust === undefined || trust.verify(instance) !== true) {
+      throw new IamError('IAM_GATEWAY_ATOMIC_UNVERIFIED', 'no trusted joint store is bound to this credentials instance');
+    }
+    return trust.adapter();
+  };
+  const verifyGatewayAtomicStore = (instance, adapter) => {
+    try {
+      const trust = trustedJointStore();
+      return trust !== undefined && trust.verify(instance) === true && adapter === trust.adapter();
+    } catch {
+      return false;
+    }
+  };
 
   let currentWebServer;
   let currentConnection;
@@ -56,8 +91,11 @@ export function apply(ctx, rawConfig = {}) {
   const service = createIamService(result.value, {
     exclusive: checkExclusive(ctx, result.value),
     recheckExclusive: () => checkExclusive(ctx, result.value),
-    credentials,
-    getCredentials: () => getContextService('credentials'),
+    credentials: readCredentials(),
+    getCredentials: () => readCredentials(),
+    verifyAtomicStore,
+    getGatewayAtomicStore,
+    verifyGatewayAtomicStore,
     getManagedModelRuntime: () => managedRuntime,
     getModelSelectionServices: () => {
       try {
@@ -117,12 +155,18 @@ export function apply(ctx, rawConfig = {}) {
     else await offModelServices?.dispose?.();
     if (typeof offWebServer === 'function') offWebServer();
     else await offWebServer?.dispose?.();
+    if (typeof offAtomicStore === 'function') offAtomicStore();
+    else await offAtomicStore?.dispose?.();
+    if (typeof offCredentials === 'function') offCredentials();
+    else await offCredentials?.dispose?.();
     disposeProvide?.();
   };
 
   let disposeProvide;
   let offWebServer;
   let offConnection;
+  let offCredentials;
+  let offAtomicStore;
   let offModelServices;
   let offManagedModels;
   let offAgentDefaultModel;
@@ -199,6 +243,16 @@ export function apply(ctx, rawConfig = {}) {
     // is a GET route; state/PKCE bind it to the Host attempt. The management
     // API is additionally gated by DSH Connection authentication.
     if (typeof ctx.inject === 'function') {
+      offCredentials = ctx.inject(['credentials'], (host) => {
+        const binding = host.credentials;
+        current.credentials = binding;
+        return () => { if (current.credentials === binding) current.credentials = undefined; };
+      });
+      offAtomicStore = ctx.inject(['iam-atomic-store'], (host) => {
+        const binding = host['iam-atomic-store'];
+        current.atomicStore = binding;
+        return () => { if (current.atomicStore === binding) current.atomicStore = undefined; };
+      });
       offConnection = ctx.inject(['connection'], (host) => {
         const binding = host.connection;
         currentConnection = binding;

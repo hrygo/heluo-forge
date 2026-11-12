@@ -205,7 +205,7 @@ A 的宿主子任务必须在目标版本、实际 web 与桌面 profile 上用�
 | B1 backend 样机（已实现） | 新建 `packages/forge-credentials-keychain/src/native-keyring.mjs` 及同包测试；修改现有 [backend 选择与 Config](<../../packages/forge-credentials-keychain/src/index.mjs>) | 已用注入的假 loader 验证 §3.1 的接口、null 归一化、错误传播、命名空间、Linux pin、Windows 字节上限与卸载；未访问真实 OS store |
 | B2 安全启用 | 同上；现有 [provider](<../../packages/forge-credentials-keychain/src/provider.mjs>)只做必要兼容，不扩写公开 Service | 新增的 `platformAdapter: native-keyring` 仍需 `allowUnvettedPlatformAdapter: true`，backend 标 `unvetted`；不自报 cross-process trust |
 | B3 原生专项 | 新建独立 native probe；按 §6 交付资源 | 只用随机合成数据，证明成功/缺失/拒绝/枚举与重启；清理只限本次命名空间，失败保留非秘密诊断 |
-| C1 能力决策 | [IAM 设计](<../design/plugins/forge-iam.md>)、[联合变更计划](<2026-11-02-iam-gateway-atomic.md>)及必要的架构评审 | 选定 §3.3/§3.4 的存储/锁/提交与长度方案，写明 guard 的线性化点；缺一项不准生产实现 |
+| C1 能力决策（2026-11-11 已定） | [IAM 设计](<../design/plugins/forge-iam.md>)、[联合变更计划](<2026-11-02-iam-gateway-atomic.md>)及必要的架构评审 | Windows 生产存储采用应用层加密文档后端：单文档、`O_EXCL` 跨进程锁、一次 fsync+rename 为唯一提交点；`snapshot(scope)` 与 `compareAndSwap(scope, expected, next, guard)` 在同一把锁内完成比较、单次同步 guard 与双键写入，guard 的线性化点在锁内比较之后、写入之前。原生 Windows 凭据管理器只有覆盖写、无 CAS，保持未取证与默认关闭 |
 | C2 可信装配设计 | 凭据包公开导出、[IAM apply](<../../packages/forge-iam/src/index.mjs>)及其测试 | 明确具体工厂、精确实例证明、重绑与卸载；缺失/伪造/异步 verifier、跨域与陈旧实例一律拒绝 |
 | C3 按获批设计实现 | 文件表由 C1/C2 冻结，不预建未知锁/事务模块 | 真实两进程竞争、提交前后 kill、锁超时、刷新与退出竞争、双键中断均有证据后才发能力 |
 
@@ -263,6 +263,8 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 - **失败模式**：Windows 命中集合中任一凭据 blob 奇数长或非法 UTF-16 时，整次枚举抛错且不返回部分结果。
 - **平台默认值**：Windows 未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境 + 漫游配置下凭据随用户配置文件漫游；Linux 写入集合 `default`，集合锁定时读失败而不是返回空。绑定未暴露 `persistence` 与解锁流程，这两项只能作为部署前提记录，不能在本包内改变（`src/store.rs`、`src/cred.rs`）。
 - **macOS 实测（2026-11-06）**：`scripts/probe/native-keyring-store-probe.mjs --platform --enumeration` 在本机图形会话与一台远程 Apple Silicon Mac 的 SSH 会话中均 7/7 通过（Node v24.21.0，未签名产物），覆盖读写、覆盖、跨进程可见、枚举命中、删除与幂等删除，探针条目已删除。这是 macOS 加密文档后端证据，不是 Windows/UOS/麒麟 证据。
+- **Windows 虚拟机实测（2026-11-11）**：Windows 11 ARM64 虚拟机上 `vendor/win32-arm64-msvc/keyring.node` 加载成功、`windowsRuntime` 无缺失项，`scripts/probe/native-keyring-store-probe.mjs` 6/6 通过（含跨进程读、覆盖写与幂等删除）。同一 VM 上逐个配置挂载：不写 config 与只写 `platformAdapter: native-keyring` 均为 `KEYCHAIN_UNVETTED_ADAPTER_REFUSED`；写入 `allowUnvettedPlatformAdapter: true` 后挂载成功，`crossProcessLock=false`、`durable=true`；挂载成功后直接调用 `startSignIn` 返回 `IAM_ATOMIC_STORE_UNVERIFIED`。这说明 addon 与 VC++ 运行库不是失败原因，登录阻断来自原子存储门禁，且原生后端不能满足联合提交。
+- **Windows 端到端装配（2026-11-11）**：同一虚拟机用真实 `%LOCALAPPDATA%` 存储跑通插件装配：凭据挂载为 `file-encrypted`、`crossProcessLock=true`、受信联合存储服务在位；`startSignIn` 返回授权地址（主机 `iam.corp.example`），不再停在 `IAM_ATOMIC_STORE_UNVERIFIED`；联合提交 `commit=true`、回读一致。这证明受信装配与加密文档后端在 Windows 目标机可用。
 - **macOS 存储语义**：文档 `~/Library/Application Support/HeluoForge/credentials.json` 以 AES-256-GCM 加密，密钥为同目录 0600 文件；目录 0700；密钥权限或所有者不符、认证标签校验失败时显式报错，不回退明文。枚举由整篇解密后按 key 前缀过滤，不依赖系统枚举差异。
 - **加载前提**：Windows 产物直接导入 `VCRUNTIME140.dll`，缺 Microsoft Visual C++ 2015-2022 Redistributable 时 `require` 报“找不到模块”，与凭据逻辑无关；Linux 产物导入的符号版本最高为 x64 `GLIBC_2.15`、arm64 `GLIBC_2.17`，均低于 UOS 20 与麒麟的发行版基线。适配器在 Windows 上先探测该 DLL，缺失即以 `KEYCHAIN_UNAVAILABLE` 说明安装项。
 

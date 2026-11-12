@@ -6,14 +6,14 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.5.0 |
+| 版本 | V0.5.7 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-10 |
-| 门禁 | 完整方案待用户确认；企业接口与目标平台待实测 |
+| 最后更新 | 2026-11-11 |
+| 门禁 | 轻量集成方案待用户确认；问答式交付打包与员工启动器已本地验证；企业接口与目标平台待实测 |
 
 > 编制依据：项目负责人确认企业采用 public 客户端、以官方宿主集成企业插件、不重新签名或公证，轻量安装方式由 miniceM 调研选择；具体范围见 §1。文档为技术方案草案，不表示企业接口、安装流程或目标平台已实测。现有实现与验证见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)。
 >
@@ -80,7 +80,7 @@ flowchart LR
 
 OIDC Discovery 的 `issuer`、可信 issuer 和 ID Token 的 `iss` 必须精确一致；生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。用户确认企业支持 public；厂商历史回函曾对 public / PKCE 给出不支持的口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
 
-Skill 确认公版及宿主版本与摘要、输出位置、目标能力和必填字段；取消、校验失败或输出已存在时安全停止，不覆盖用户文件。企业配置、私版及暂存位于仓库外，失败只处理本次运行可确认归属的暂存。
+Skill 引导助手逐项收集公版摘要、企业版本、IAM issuer 与 client_id、网关地址、回调端口与地址、可选 Gitee host 和输出位置，未收集齐不生成；值由 `release-delivery` 复核，配置只写入仓库外的 600 权限临时文件，不把 secret 或完整 `.env` 放入交付物、日志、错误或公开报告。用户明确确认已汇总的必要参数后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。企业地址默认只接受 HTTPS；确需内网 HTTP 时必须由打包人员显式确认明文传输风险，并在配置中设置 `allowInsecureHttp=true`。员工端初始化脚本按 `--release` 与 `--profile` 执行，只回显 profile、版本、摘要与结论；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用），随后只执行一次 `dsh plugin add`。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。真实 `.env`、包含企业配置的暂存文件与私版插件均置于仓库外，按平台使用受限制的文件权限；成功前只原子落位工具自身创建的临时文件，失败只清理本次运行可确认归属的暂存，不清理用户已有数据。
 
 ## 4. 公版构建与本地二次制作
 
@@ -100,12 +100,30 @@ Skill 确认公版及宿主版本与摘要、输出位置、目标能力和必�
 
 ### 4.2 官方宿主与企业插件的低成本集成
 
-官方 DSH 由可核验渠道获取，记录版本、来源、目标架构和摘要。企业插件包继续通过私有 npm / AIHUB 或内部文件交付；公开 Release 不代为提供官方宿主。miniceM 对比并选择以下两条候选：
+官方 DSH 由可核验渠道获取，记录版本、来源、目标架构和摘要。企业插件包继续通过私有 npm / AIHUB 或内部文件交付；公开 Release 不代为提供官方宿主。
+
+企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 负责向打包人员逐项收集企业字段、展示脱敏确认页并调用该命令。制作器在写盘前自动请求 IAM Discovery：要求 HTTP 200、文档 `issuer` 与配置一致、`authorization_endpoint`/`token_endpoint`/`jwks_uri` 齐全且与显式配置一致；网络确实不可达时只能显式 `--skip-discovery-check`，该跳过项作为未验证证据报告。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
+
+miniceM 对比并选择以下两条候选：
 
 | 候选 | 员工或管理员操作 | 成本与待核验项 |
 |---|---|---|
 | A：企业内成套提供 | 取得原样官方宿主、企业插件及简明步骤或初始化脚本，按指引完成安装集成 | 宿主与插件一起管理便于线下交付；须核验官方二进制和第三方组件的企业内再分发许可、版本与更新责任 |
 | B：官方渠道加企业初始化 | 从官方渠道取得并安装宿主，再执行企业脚本或按简明步骤集成插件 | 无需随企业材料分发宿主；需核验终端取得官方宿主的实际途径，以及不同系统的脚本、权限和离线依赖 |
+
+| 维度 | A：企业内成套提供 | B：官方渠道加企业初始化 |
+|---|---|---|
+| 员工操作步数 | 解压企业材料 → 运行启动器（host 与插件同包）→ 重启登录；未含 Node.js 安装步骤 | 安装 Node.js LTS（如缺）→ 运行启动器（缺宿主时 npm 自动安装、缺 profile 时自动创建）→ 重启登录；macOS web 已实测，Desktop 未实测 |
+| 管理员/受限角色 | 需管理员分发宿主、运行依赖与更新，受限角色依赖受管预置 | 员工可自助安装插件；受限角色是否允许 `dsh plugin` 与 npm 安装须实测，不放宽 `plugin_manager` |
+| 平台宿主与运行依赖 | 每个目标需准备并核验宿主、Node/Electron 依赖与架构；六目标当前仅 macOS arm64 有本地证据 | 宿主由官方渠道按平台提供；npm 自动安装需要可用的官方 registry 或企业镜像，麒麟/Windows 离线场景未实测 |
+| 离线依赖 | 可在内网分发完整材料，但宿主与依赖需随包校验 | 终端无公网时需要企业镜像或预置宿主；启动器未内置离线宿主包，离线路径未实测 |
+| 更新与回退 | 需同时管理宿主与插件版本；回退由企业包控制 | 宿主更新由官方渠道负责；插件回退需重新安装旧版，启动器对版本冲突 fail closed、不自动升降 |
+| 用户数据保留 | 取决于安装位置；当前启动器不改 profile 数据，未做保留测试 | 当前启动器不改用户 profile/数据，未做保留测试；卸载与恢复按 #123 |
+| 许可与再分发 | 必须取得官方宿主及第三方组件的企业内再分发许可，结论未出 | 不随企业材料分发宿主，许可风险较低；官方制品来源与版本须可核验 |
+| 签名与系统信任 | 不重签；外层材料完整性不等于上游签名，Gatekeeper/SmartScreen 未验证 | 同左；宿主走官方签名载荷，企业插件为未签名 npm 包 |
+| 实现与维护成本 | 需维护宿主版本组合、安装包与更新通道；人日待测 | 已实现启动器与 npm 安装、web profile 创建；后续主要跟随官方版本与 npm 可用性；人日待测 |
+
+路线选择：**候选 B**。依据是 issue #222 明确优先低成本集成、官方载荷原样、不新增宿主再分发；A 保留为内网离线成套交付的替代方案，使用前补宿主许可、平台组合与更新责任结论。miniceM 的最终确认记录仍待补于 issue #222。
 
 两条路线都不要求重新签名、公证或新增双击安装器；不修改上游签名载荷，集成到宿主支持的 profile 或插件位置。企业内部不连接公网的终端可由授权人员提前取得所需官方制品；不假定必须由终端直接联网。若任何候选要求修改已签名宿主，不能沿用原签名或默认增加重签，须记录缺口并重新评估。
 
@@ -117,7 +135,7 @@ Skill 确认公版及宿主版本与摘要、输出位置、目标能力和必�
 
 ### 4.3 安装、首启与更新
 
-集成使用目标 DSH 版本支持的插件管理和 profile 机制，不以插件文件存在代替实际挂载。锁定版 [Desktop 官方文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/README.md>)给出的插件管理顺序是：首次启动并初始化 Desktop profile、完全退出、通过 `dsh plugin --profile desktop add <package>` 安装、重新启动。该流程是轻量集成候选，实际命令入口、离线文件安装、权限和不同目标版本仍须验证；Web 使用独立 profile。现有用户 profile、对话、工作区、非企业设置和个人凭据均须保留；覆盖层使企业必需配置失效时，保留原文件、报告冲突并使受保护能力 fail closed。
+集成使用目标 DSH 版本支持的插件管理和 profile 机制，不以插件文件存在代替实际挂载。锁定版 [Desktop 官方文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/apps/desktop/README.md>)给出的插件管理顺序是：首次启动并初始化 Desktop profile、完全退出、通过 `dsh plugin --profile desktop add <package>` 安装、重新启动。**2026-11-11 本机在 npm 安装的 dsh 0.2.1-rc.5 上复核：CLI 对任何 `--profile desktop` 调用（含 `--dump-config` 与 `plugin add`）都直接报 `profile "desktop" is managed exclusively by the Electron application`，该顺序在当前公开 CLI 上不可执行**；因此启动器不再自动选择 Desktop，只检测到 Desktop profile 时以 `DESKTOP_PROFILE_UNSUPPORTED` 明确拒绝，提示改用 web 形态或在 Desktop 应用内插件设置安装。Desktop 内的实际安装路径、权限与运行期挂载仍待官方能力或目标版本支持后实测。现有用户 profile、对话、工作区、非企业设置和个人凭据均须保留；覆盖层使企业必需配置失效时，保留原文件、报告冲突并使受保护能力 fail closed。
 
 Web 目标只监听本机回环；回环本身不证明多用户隔离。[锁定版 Web 文档](<https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/bundle/web-app/README.md>)说明启动 URL 包含进程凭据，`printUrl: false` 可阻止输出该行；是否能配合浏览器启动和重复入口安全使用仍须验证。会话隔离、并发、重启、端口冲突及令牌泄露均需检查；令牌不得进入其他用户可读的日志或输出。目标终端禁公网、更新与恢复行为和系统卸载数据保留均按 #123 在实际环境验证。
 
@@ -133,7 +151,7 @@ Skill 不依赖 Codex 专有接口、工具名或路径；由具备读取技能�
 
 | Skill | 实施范围 | 兼容性要求 |
 |---|---|---|
-| `.agents/skills/heluo-forge-release-bundle/` | 建立从公版下载、私版定制到官方宿主轻量集成的流程，提供制作脚本及按需手册 | 不依赖 Codex 专有工具；制作脚本在 macOS 验证，并随公开 Release 取得；普通 SOP 支持不通过 Agent 手工运行 |
+| `.agents/skills/heluo-forge-release-bundle/` | 以问答方式向打包人员收集企业字段，调用 `release-delivery` 生成含私版插件、启动器、安装说明与校验和的员工 zip；提供制作脚本、初始化脚本及按需手册；不装配宿主安装包，不面向安装用户询问企业配置 | 不依赖 Codex 专有工具；制作脚本在 macOS 验证，并随公开 Release 取得；普通 SOP 支持不通过 Agent 手工运行 |
 | `packages/forge-enterprise/skills/issue-delivery/` | 为已有研发 Skill 添加标准 frontmatter 并核验全部引用资源 | `name` 与 `issue-delivery` 目录一致；DSH 仍以 `enterprise-issue-delivery` 入口注册，保持仅用户显式触发、按需加载、卸载清理和原有 Teamflow 职责 |
 
 现有 DSH provider 从 `clauses.json` 提供发现摘要并读取包内 Skill 正文。标准元数据与宿主摘要须有一致性约束，避免形成互相矛盾的维护入口；实际注册名称是宿主的命名空间映射，不要求改名或迁移已有 DSH 入口。元数据变更后须验证候选、正文及相对 `references/` 在真实目标宿主仍可读取，不能只凭标准文件校验宣称 DSH 已兼容。

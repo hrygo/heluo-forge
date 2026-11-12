@@ -23,12 +23,17 @@ export function createSignIn(env) {
   } = env;
 
   let attempt = null;
+  // While the callback route is still producing its HTML response, the attempt
+  // ends before that response is written. Releasing the loopback listener here
+  // would start its drain timer and can cut the page on a slow failure path, so
+  // the route owns that release and calls it once the response is out.
+  let callbackInFlight = false;
 
   function clearAttempt() {
     // Every terminal transition of an attempt passes here: success, expiry,
     // cancellation, a replaced provider or a sign-out. The loopback listener
     // lives exactly as long as the attempt, so this is also where it drains.
-    closeCallback?.();
+    if (!callbackInFlight) closeCallback?.();
     if (!attempt) return;
     if (attempt.timer) clearTimeout(attempt.timer);
     attempt = null;
@@ -200,7 +205,7 @@ export function createSignIn(env) {
     return { view: ctx.view(), authorizationUrl };
   }
 
-  async function handleCallback(rawUrl) {
+  async function handleCallbackInner(rawUrl) {
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     ctx.assertExclusive();
     let callback;
@@ -396,6 +401,15 @@ export function createSignIn(env) {
       const failureCode = tokenErrorMessage(cause);
       ctx.fail(failureCode);
       throw new IamError(failureCode, safeMessage(failureCode));
+    }
+  }
+
+  async function handleCallback(rawUrl) {
+    callbackInFlight = true;
+    try {
+      return await handleCallbackInner(rawUrl);
+    } finally {
+      callbackInFlight = false;
     }
   }
 

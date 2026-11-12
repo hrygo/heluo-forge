@@ -1,8 +1,8 @@
 # IAM 本地 mock 用户流程测试
 
-本指南在开发者本机启动一套隔离的 DSH，用模拟 IAM 与内存凭证走完登录、配置网关、模型对话和退出。它从当前 `HEAD` 打包企业插件，因此不包含未提交的修改，也不改动现有 DSH 配置或正在运行的验收环境。
+本指南在开发者本机启动一套隔离的 DSH，用模拟 IAM 与插件自己的加密文档后端走完登录、配置网关、模型对话和退出。它从当前 `HEAD` 打包企业插件，因此不包含未提交的修改，也不改动现有 DSH 配置或正在运行的验收环境。
 
-模拟 IAM 与内存凭证只用于本机测试。该组合显式注入测试夹具，绕过正式组合的存储信任门禁；它不能证明真实企业身份、授权、撤销或生产凭证存储可用，测试注入也不得用于生产。CLIProxyAPI 的上游调用可以是真实请求，可能产生费用。
+模拟 IAM 只用于本机测试，存储走的是正式组合那条路径：凭据插件按 `storeDirectory` 挂载应用层加密文档后端，IAM 从它提供的受信联合存储服务读取结论，联合提交、跨进程锁与 fail closed 都按生产语义运行。它仍不能证明真实企业身份、授权或撤销，`storeDirectory` 只用于隔离目录，生产部署保持默认位置。CLIProxyAPI 的上游调用可以是真实请求，可能产生费用。
 
 回调按与真实 IAM 一致的前缀形态运行：插件自建回环监听，端口由系统分配，只在该次登录期间存在；IAM 管理台对 `http://127.0.0.1:` 前缀放行任意端口，本指南的 mock 走同一条路径。
 
@@ -15,13 +15,13 @@
 
 ## 启动
 
-在仓库根目录打开终端，执行以下命令并保持终端运行。脚本创建系统临时目录，通过 `git archive HEAD` 制作源码快照，在隔离 profile 安装企业插件，并仅在该副本注入模拟存储。`npm install` 可能需要访问已配置的包源。
+在仓库根目录打开终端，执行以下命令并保持终端运行。脚本创建系统临时目录，通过 `git archive HEAD` 制作源码快照，在隔离 profile 安装企业插件，只把凭据存储目录和身份提供方指向隔离副本。`npm install` 可能需要访问已配置的包源。
 
 ```sh
 bash scripts/probe/run-iam-local-uat.sh
 ```
 
-非交互自检（验证打包、注入与宿主启动仍匹配当前 `HEAD`）：
+非交互自检（验证打包、存储门禁与宿主启动仍匹配当前 `HEAD`）：
 
 ```sh
 IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
@@ -48,6 +48,25 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 - **端口被占用时拒绝登录**：先用 `node -e "require('node:net').createServer().listen(17890,'127.0.0.1')"` 占住 `17890`，再用 `IAM_UAT_CALLBACK_PORT=17890 bash scripts/probe/run-iam-local-uat.sh` 启动。点击登录应立即提示“登录回调端口被占用，暂时无法登录”，不跳转、不改用宿主端口（`48388`）。
 - **尝试过期后回调失效**：回调尝试默认在 `attemptTimeoutSeconds`（300 秒）后过期，监听也随之关闭。手工验证需要等待，通常交给单元用例覆盖，不必在 UAT 里空等。
 
+## 目标机验证（已打包交付包）
+
+上面的脚本从 `HEAD` 现场打包，适合开发自测；验证**已经交给员工的交付包**时，改用
+`scripts/probe/mock-iam-gateway.mjs`：它是单文件、只依赖 Node 标准库的模拟 IdP 与网关，
+可以随交付包一起复制到目标机（包括 Windows 虚拟机）。
+
+1. 目标机装 Node.js LTS，解压交付包，运行 `node mock-iam-gateway.mjs`，保持窗口开启。
+   默认 issuer `http://127.0.0.1:5599`、网关 `http://127.0.0.1:5600/v1`；打包时的配置
+   必须指向同一组地址，否则登录会停在 Discovery 或回跳失败。
+2. 运行交付包里的启动器安装插件，启动 `dsh web` 并打开带一次性参数的地址。
+3. 向导里登录：浏览器打开模拟 IdP，授权后回跳 `127.0.0.1:17321`，页面显示登录完成。
+4. 录入任意非空网关 Key，模型列表应出现 `mock-chat-1`，发送一条消息应收到模拟回复。
+
+端口、client_id 与主体可用 `MOCK_IAM_PORT`、`MOCK_GATEWAY_PORT`、`MOCK_CLIENT_ID`、
+`MOCK_SUBJECT` 覆盖；覆盖后要重新打包，交付包里的 issuer 与回调端口必须与模拟器一致。
+
+它仍不是企业证据：`http` 明文、固定回环地址、令牌只存在进程内，模拟 IdP 不校验密码、
+授权策略或配额。真实验收需要企业 IAM 与网关，并按本指南的读取路径矩阵取证。
+
 ## 读取路径矩阵（2026-11-06）
 
 存储读取不是单条路径，也不是单平台成立就算完成。当前覆盖：
@@ -67,10 +86,11 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 
 平台交付形状：
 
-- Windows x64/arm64、Linux x64/arm64：`@napi-rs/keyring` 2.1.2 原生 addon；未取证前 `unvetted`，CLI 与插件一样拒绝，`HELUO_FORGE_ALLOW_UNVETTED=1` 仅用于本地验证。
+- Windows x64/arm64：应用层加密文档（`%LOCALAPPDATA%\HeluoForge`），与 macOS 同一条路径，不经过 `unvetted` 开关。
+- Linux x64/arm64：没有可用后端，按 fail closed 关闭；`@napi-rs/keyring` 2.1.2 原生 addon 随包分发但未取证，需显式选择才会用到（插件 `platformAdapter: native-keyring`，CLI `HELUO_FORGE_ALLOW_UNVETTED=1`）。
 - macOS arm64/x64：应用层加密文档（AES-256-GCM + 0600 密钥），不经过 `unvetted` 开关，SSH 会话可用。
 
-CLI 默认走与插件相同的 `createPlatformBackend()`；`HELUO_FORGE_CREDENTIALS_FILE` 仍是显式开发用明文覆盖，不用于生产。
+CLI 默认走 `createPlatformBackend()`，解析结果与插件一致；`HELUO_FORGE_CREDENTIALS_FILE` 仍是显式开发用明文覆盖，不用于生产。
 
 ## 自动验证与排障
 

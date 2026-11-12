@@ -95,13 +95,21 @@ function encodeRecord(record) {
  * @param {object} backend
  * @param {{ service?: string, accountPrefix?: string, notifyReference?: (ref: string) => void | PromiseLike<void>, notifyRecord?: (key: string) => void | PromiseLike<void> }} [options]
  */
-export function createKeychainProvider(backend, options = {}) {
-  assertBackend(backend);
+/**
+ * Storage namespace shared by the provider and any joint store built on the
+ * same backend. Both derive keys here so a joint commit can never address a
+ * different namespace than the credential reads it replaces.
+ */
+export function namespacePrefixes(options = {}) {
   const service = validateNamespacePart(options.service ?? 'heluo-forge', 'service');
   const accountPrefix = validateNamespacePart(options.accountPrefix ?? 'iam', 'accountPrefix');
   const namespace = `${service}/${accountPrefix}`;
-  const refPrefix = `${namespace}/ref/`;
-  const recordPrefix = `${namespace}/record/`;
+  return { namespace, refPrefix: `${namespace}/ref/`, recordPrefix: `${namespace}/record/` };
+}
+
+export function createKeychainProvider(backend, options = {}) {
+  assertBackend(backend);
+  const { namespace, refPrefix, recordPrefix } = namespacePrefixes(options);
   const locks = new Map();
 
   // Notifications are best-effort after a successful backend operation. Never

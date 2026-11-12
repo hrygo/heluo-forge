@@ -20,7 +20,7 @@ test('the client only targets the IAM routes and sends the CSRF header', async (
   const client = await read('client.js');
   const fetches = [...client.matchAll(/fetch\('([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual([...new Set(fetches)].sort(), ['/api/forge-iam/view']);
-  assert.match(client, /postJson\('\/api\/forge-iam\/sign-in'\)/);
+  assert.match(client, /postJson\('\/api\/forge-iam\/sign-in'(?:, \{ timeoutMs: SIGN_IN_TIMEOUT_MS \})?\)/);
   assert.match(client, /postJson\('\/api\/forge-iam\/sign-out'\)/);
   assert.match(client, /x-forge-iam-request/);
   assert.match(client, /authorizationUrl/);

@@ -1,0 +1,61 @@
+name: release-bundle
+
+# Public release lane (issue #222 item ③).
+#
+# A tag is the only input: the same tagged source produces the plugin tarball,
+# the maker/installer toolchain and the source archive. This workflow never
+# receives enterprise configuration, never writes to the repository, and never
+# publishes a Release by itself; it uploads the verified directory as a workflow
+# artifact for a human to publish after reviewing the digests.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  public:
+    name: public release (ubuntu-x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          show-progress: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Fetch the native keyring payload for every release triple
+        run: node scripts/fetch-native-keyring.mjs
+      - name: Build and self-verify the public release
+        env:
+          HELUO_PUBLIC_LICENSE: ${{ vars.HELUO_PUBLIC_LICENSE }}
+        run: |
+          if [[ -z "$HELUO_PUBLIC_LICENSE" ]]; then
+            echo 'HELUO_PUBLIC_LICENSE is not set; a public release needs an explicit license decision.' >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" != 'tag' ]]; then
+            echo 'release-bundle must be dispatched on a tag, not a branch.' >&2
+            exit 1
+          fi
+          node scripts/build-public-release.mjs --output dist/public --tag "$GITHUB_REF_NAME" --license "$HELUO_PUBLIC_LICENSE"
+          node scripts/verify-enterprise-bundle.mjs "dist/public/heluo-forge-enterprise-"*.tgz --manifest dist/public/bundle-manifest.json
+      - name: Upload the verified release directory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.3.0
+        with:
+          name: public-release-${{ github.ref_name }}
+          path: dist/public
+          if-no-files-found: error
+          retention-days: 90

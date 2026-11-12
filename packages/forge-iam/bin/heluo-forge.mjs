@@ -38,9 +38,10 @@ async function openReader() {
   const accountPrefix = process.env.HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX || 'iam';
   const file = process.env.HELUO_FORGE_CREDENTIALS_FILE;
   try {
-    // Default to the same resolver the product uses: Windows/Linux native
-    // keyring, macOS encrypted document. The plaintext file backend stays an
-    // explicit development override.
+    // Default to the same resolver the product uses: Windows and macOS both
+    // resolve to the application-level encrypted document, Linux has no
+    // credentialed backend and fails closed. The plaintext file backend stays
+    // an explicit development override.
     const backend = file ? keychain.createFileBackend({ path: file }) : keychain.createPlatformBackend();
     if (backend.available === false) {
       return { error: { code: 'IAM_CREDENTIALS_UNAVAILABLE', message: backend.reason ?? '当前平台没有可用的凭据后端' } };

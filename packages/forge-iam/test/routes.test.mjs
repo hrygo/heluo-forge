@@ -81,6 +81,30 @@ test('the callback route follows the configured path', async () => {
   assert.equal(miss.statusCode, 404);
 });
 
+test('the callback route drains the listener only after the page is written', async () => {
+  let releases = 0;
+  let releasesAtEnd = -1;
+  const handler = routes(service({ releaseCallback: async () => { releases += 1; } }));
+  const res = response();
+  const end = res.end.bind(res);
+  res.end = (value) => { releasesAtEnd = releases; end(value); };
+  await handler(request('GET', '/iam/callback?code=x&state=y'), res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(releasesAtEnd, 0);
+  assert.equal(releases, 1);
+});
+
+test('the callback route drains the listener after a failed callback too', async () => {
+  let releases = 0;
+  const handler = routes(service({
+    releaseCallback: async () => { releases += 1; },
+    handleCallback: async () => { throw new IamError('IAM_STATE_MISMATCH', 'state does not match'); },
+  }));
+  const failed = await call(handler, 'GET', '/iam/callback?code=x&state=y');
+  assert.equal(failed.statusCode, 400);
+  assert.equal(releases, 1);
+});
+
 test('the callback rejects a Host that differs from the live origin', async () => {
   const handler = routes(service(), { getOrigin: () => 'http://127.0.0.1:4567' });
   const callback = await call(handler, 'GET', '/iam/callback?code=x&state=y', { host: 'evil.example:4567' });

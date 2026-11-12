@@ -1544,9 +1544,19 @@ window.__ModuleLoader__.load({
       return { ok: response.ok, status: response.status, body: await readJson(response) };
     }
 
-    async function postJson(path) {
-      const response = await fetch(path, { method: 'POST', headers: REQUEST_HEADERS, body: '{}' });
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    // 请求超时是登录弹窗的护栏：没有它，等待中的请求会让空白窗口永远停住。
+    async function postJson(path, { timeoutMs = 0 } = {}) {
+      const controller = timeoutMs > 0 && typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      try {
+        const response = await fetch(path, { method: 'POST', headers: REQUEST_HEADERS, body: '{}', ...(controller ? { signal: controller.signal } : {}) });
+        return { ok: response.ok, status: response.status, body: await readJson(response) };
+      } catch (error) {
+        if (error?.name === 'AbortError') return { ok: false, status: 0, body: { error: { code: 'IAM_REQUEST_TIMEOUT' } } };
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
 
     async function putJson(path, payload) {
@@ -1592,10 +1602,49 @@ window.__ModuleLoader__.load({
 
 
     // §7 登录窗口
+    const SIGN_IN_TIMEOUT_MS = 15000;
+    // A blank window reads as a broken popup. The window itself cannot be
+    // created after the awaited sign-in request (browsers treat that as a
+    // blocker), so it is rendered as a quiet spinner page instead of an empty
+    // document; it is replaced by the IAM page as soon as the URL arrives.
+    const LOGIN_PLACEHOLDER = '<!doctype html><meta charset="utf-8"><title>企业登录</title>'
+      + '<style>html,body{height:100%}body{margin:0;display:grid;place-items:center;'
+      + 'background:#fff;color:#8b949e;font:12px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}'
+      + '.wrap{display:flex;flex-direction:column;align-items:center;gap:12px}'
+      + '.spinner{width:18px;height:18px;border:2px solid #e6e8eb;border-top-color:#2563eb;'
+      + 'border-radius:50%;animation:heluo-spin .9s linear infinite}'
+      + '@media (prefers-color-scheme:dark){body{background:#151517;color:#6e7681}'
+      + '.spinner{border-color:#2d2f33;border-top-color:#3b82f6}}'
+      + '@media (prefers-reduced-motion:reduce){.spinner{animation:none;border-top-color:#2563eb}}'
+      + '@keyframes heluo-spin{to{transform:rotate(360deg)}}</style>'
+      + '<div class="wrap"><div class="spinner" role="status" aria-label="正在打开企业登录"></div>'
+      + '<p id="heluo-login-message" style="margin:0">正在打开企业登录…</p></div>';
+
+    // The popup is opened before the server answers so that a user gesture
+    // exists. Until then it must not look broken: render a readable status page
+    // that later becomes the fallback surface when navigation cannot happen.
+    function writeLoginMessage(popup, title, detail = '') {
+      if (!popup) return;
+      try {
+        popup.document.open();
+        popup.document.write('<!doctype html><meta charset="utf-8"><title>企业登录</title>'
+          + '<body style="margin:0;padding:28px;font:13px/1.6 system-ui,-apple-system,sans-serif;color:#1f2328;background:#fff">'
+          + `<p style="margin:0 0 6px;font-weight:600">${title}</p>`
+          + (detail ? `<p style="margin:0;color:#57606a">${detail}</p>` : '')
+          + '</body>');
+        popup.document.close();
+      } catch { /* cross-origin popup: keep whatever it shows */ }
+    }
+
     function openLoginWindow() {
       try {
         const popup = window.open('', '_blank');
         if (popup) {
+          try {
+            popup.document.open();
+            popup.document.write(LOGIN_PLACEHOLDER);
+            popup.document.close();
+          } catch { /* about:blank stays usable for navigation */ }
           try { popup.opener = null; } catch { /* cross-origin about:blank is still usable */ }
         }
         return popup;
@@ -1612,15 +1661,25 @@ window.__ModuleLoader__.load({
         return;
       }
       if (!url) {
-        try { popup.close(); } catch { /* already closed */ }
+        writeLoginMessage(popup, '没有收到企业登录地址', '登录服务未返回授权地址。请关闭本页后重试；如果持续出现，请联系管理员检查 IAM 配置。');
         return;
       }
       try {
         popup.location.replace(url);
       } catch {
+        writeLoginMessage(popup, '无法自动打开企业登录页', '浏览器阻止了跳转。本页会尝试在当前标签页继续；若仍未跳转，请使用页面上的“打开登录页”链接。');
         try { popup.close(); } catch { /* already closed */ }
-        try { window.open(url, '_blank', 'noopener,noreferrer'); } catch { /* visible fallback link remains */ }
+        try { window.location.assign(url); } catch { /* fallback link remains */ }
+        return;
       }
+      // Some embedded browsers keep the pre-opened window on about:blank when
+      // the navigation is refused. Detect that and continue in this tab.
+      setTimeout(() => {
+        try {
+          if (popup.closed) return;
+          if (popup.location.href === 'about:blank') window.location.assign(url);
+        } catch { /* cross-origin means the navigation happened */ }
+      }, 1500);
     }
 
     // §8 本地存储
@@ -1707,6 +1766,7 @@ window.__ModuleLoader__.load({
       'exclusive-violation': '登录设置有冲突，请联系管理员。',
       'exclusive-check-unavailable': '暂时无法确认登录设置是否与其他插件冲突，请稍后重试。',
       IAM_UNREACHABLE: '暂时无法连接登录服务，请稍后重试。',
+      IAM_REQUEST_TIMEOUT: '登录服务响应超时，请检查网络后重试。',
       IAM_STATE_MISMATCH: '登录未能完成，请重新登录。',
       IAM_CALLBACK_INVALID: '登录未能完成，请重新登录。',
       IAM_ATTEMPT_EXPIRED: '登录尝试已过期，请重新登录。',
@@ -1747,6 +1807,9 @@ window.__ModuleLoader__.load({
       IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
       IAM_GATEWAY_OWNER_MISSING: '请先登录企业账号，再添加个人访问凭证。',
       IAM_GATEWAY_ATOMIC_UNVERIFIED: '暂时无法安全地保存或清除凭证，请联系管理员。',
+      // 未匹配文案时这句会退到兜底「操作未完成，请重试」，把可复现的实现缺口说成
+      // 临时故障，用户只会反复点。此码表示当前构建没有可信原子存储，重试无用。
+      IAM_ATOMIC_STORE_UNVERIFIED: '当前版本不支持在本机保存企业登录状态，重试无法解决；请联系管理员获取可登录的版本。',
       IAM_GATEWAY_LEGACY_READ_ONLY: '现有凭证暂时只能查看，本次没有更改。如需更换，请联系管理员。',
       IAM_GATEWAY_CHANGED: '凭证已发生变化，本次没有更改。请刷新页面后核对。',
       IAM_GATEWAY_WRITE_UNKNOWN: '无法确认凭证是否已更改。请刷新页面查看状态，暂时不要重复操作。',
@@ -1763,22 +1826,10 @@ window.__ModuleLoader__.load({
     }
 
     // §10 诊断快照
-    const DIAGNOSTIC_ERRORS = new Set([
-      'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_UNCONFIGURED', 'IAM_CONFIG_INVALID',
-      'IAM_CREDENTIALS_UNAVAILABLE', 'IAM_CREDENTIALS_CLEAR_FAILED', 'IAM_REVOCATION_FAILED',
-      'IAM_REVOCATION_UNKNOWN',
-      'IAM_EXCLUSIVE_CONFLICT', 'IAM_UNREACHABLE', 'IAM_STATE_MISMATCH', 'IAM_CALLBACK_INVALID',
-      'IAM_ATTEMPT_EXPIRED', 'IAM_INVALID_GRANT', 'IAM_REAUTH_REQUIRED', 'IAM_NOT_SIGNED_IN',
-      'IAM_ATTEMPT_CANCELLED', 'IAM_CALLBACK_UNAVAILABLE', 'IAM_DISPOSED',
-      'IAM_CALLBACK_PORT_UNAVAILABLE', 'IAM_CALLBACK_BIND_FAILED',
-      'IAM_GRANT_CONTEXT_MISMATCH', 'IAM_REFRESH_SUBJECT_MISMATCH',
-      'IAM_GATEWAY_KEY_INVALID', 'IAM_GATEWAY_OWNER_MISSING', 'IAM_REQUEST_HEADER_REQUIRED',
-      'IAM_GATEWAY_ATOMIC_UNVERIFIED', 'IAM_GATEWAY_LEGACY_READ_ONLY',
-      'IAM_GATEWAY_CHANGED', 'IAM_GATEWAY_WRITE_UNKNOWN',
-      'IAM_REQUEST_INVALID', 'IAM_REQUEST_TOO_LARGE', 'IAM_UNAUTHENTICATED',
-      'IAM_CONNECTION_UNAVAILABLE', 'IAM_METHOD_NOT_ALLOWED', 'IAM_NOT_FOUND',
-      'IAM_REQUEST_FAILED', 'IAM_VIEW_FAILED',
-    ]);
+    // Any IAM code is safe to surface: codes are a closed vocabulary and never
+    // carry tokens, hostnames or user data. The regex (not a hand-maintained
+    // list) is what keeps a new code from silently becoming "unknown".
+    const DIAGNOSTIC_ERROR = /^IAM_[A-Z0-9_]+$/u;
 
     // Build a new scalar object: the original view/state may contain private data.
     function diagnosticSnapshot(state) {
@@ -1793,7 +1844,7 @@ window.__ModuleLoader__.load({
         signedIn: typeof view?.signedIn === 'boolean' ? view.signedIn : null,
         exclusive: view?.exclusive === 'ok' ? 'ok' : typeof view?.exclusive === 'string' && view.exclusive ? 'not-ok' : 'unknown',
         gatewayState: deriveGatewayUi(view?.gatewayCredential).state,
-        errorCode: code == null ? null : DIAGNOSTIC_ERRORS.has(code) ? code : 'unknown',
+        errorCode: code == null ? null : DIAGNOSTIC_ERROR.test(code) ? code : 'unknown',
         missingConfigCount: Array.isArray(view?.missing) ? view.missing.length : null,
       };
     }
@@ -3296,7 +3347,7 @@ window.__ModuleLoader__.load({
         setState((current) => ({ ...current, notice: null }));
         const popup = openLoginWindow();
         try {
-          const result = await postJson('/api/forge-iam/sign-in');
+          const result = await postJson('/api/forge-iam/sign-in', { timeoutMs: SIGN_IN_TIMEOUT_MS });
           if (!isCurrentEpoch(epoch)) {
             try { popup?.close(); } catch { /* already closed */ }
             return;
@@ -3808,7 +3859,7 @@ window.__ModuleLoader__.load({
           if (signingInRef.current) return;
           signingInRef.current = true;
           const popup = openLoginWindow();
-          postJson('/api/forge-iam/sign-in')
+          postJson('/api/forge-iam/sign-in', { timeoutMs: SIGN_IN_TIMEOUT_MS })
             .then((result) => {
               if (!result.ok) {
                 try { popup?.close(); } catch { }
@@ -3980,7 +4031,7 @@ window.__ModuleLoader__.load({
         signingInRef.current = true;
         const popup = openLoginWindow();
         try {
-          const result = await postJson('/api/forge-iam/sign-in');
+          const result = await postJson('/api/forge-iam/sign-in', { timeoutMs: SIGN_IN_TIMEOUT_MS });
           if (!result.ok) {
             try { popup?.close(); } catch { /* already closed */ }
             setState((current) => ({ ...current, notice: resultNotice(result) }));
@@ -4281,7 +4332,7 @@ window.__ModuleLoader__.load({
         signingInRef.current = true;
         const popup = openLoginWindow();
         try {
-          const result = await postJson('/api/forge-iam/sign-in');
+          const result = await postJson('/api/forge-iam/sign-in', { timeoutMs: SIGN_IN_TIMEOUT_MS });
           if (!result.ok) {
             try { popup?.close(); } catch { /* already closed */ }
             setState((current) => ({ ...current, notice: resultNotice(result) }));

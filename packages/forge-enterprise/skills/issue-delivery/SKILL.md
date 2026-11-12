@@ -1,3 +1,7 @@
+---
+name: issue-delivery
+description: 把用户选定的 Issue 变成可追溯的待验收交付：核验唯一变更、唯一仓库与要求版本，交给原生 Teamflow 执行，并给出证据边界与来源分层。
+---
 # 单 Issue 可信待验收交付
 
 ## 用途

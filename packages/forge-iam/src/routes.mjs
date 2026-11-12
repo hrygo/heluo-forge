@@ -327,6 +327,21 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           sendHtml(res, 403, '登录回调失败', '回调来源不受信任。');
           return;
         }
+        // The attempt clears before this response is written. Draining the
+        // listener only after the page is out keeps a slow token/JWKS/cleanup
+        // path from having its 200 cut by the release grace timer.
+        let released = false;
+        const release = () => {
+          if (released) return;
+          released = true;
+          // A rejected release must not turn into an unhandled rejection or
+          // mask the response. The listener is already closing either way.
+          Promise.resolve(service.releaseCallback?.()).catch(() => {});
+        };
+        if (typeof res.once === 'function') {
+          res.once('finish', release);
+          res.once('close', release);
+        }
         try {
           // Resolve origin-form requests against the trusted live origin, not
           // the synthetic localhost base used only for routing above.
@@ -339,7 +354,15 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           sendHtml(res, 200, '登录完成', '企业账号已完成登录。');
         } catch (error) {
           const status = ERROR_STATUS[error?.code] ?? 500;
+          // Codes and OAuth error names are not secrets and are what make a
+          // failed exchange diagnosable. The page stays generic by contract;
+          // the operator gets the pair on the server log instead.
+          const oauthError = typeof error?.details?.oauthError === 'string' ? error.details.oauthError : '';
+          console.error('[heluo-iam] callback failed:', error?.code ?? 'unknown', oauthError);
           sendHtml(res, status, '登录失败', '企业账号登录未完成。');
+        } finally {
+          // Test doubles have no event emitter; the response is already ended.
+          if (typeof res.once !== 'function') release();
         }
         return;
       }
