@@ -61,20 +61,25 @@ function warnNonProduction(ctx, backend) {
 /**
  * Report a committed credentials change through `ctx.events.dispatch` so one
  * broken observer cannot affect the others or the durable write. Cordis
- * `ctx.emit()` runs every listener in one synchronous `map`, so a single throw
- * aborts the remaining listeners and an async rejection escapes unhandled;
- * the seam requires both to be contained and logged.
+ * `ctx.emit()` may stop on a synchronous throw; the fallback can only observe
+ * returned asynchronous results and cannot isolate a partially failed emit.
  *
  * @param {object} ctx plugin context
  * @param {string} event `credentials/reference-updated` or `credentials/record-updated`
  * @param {string} subject the changed ref or record key
  */
 function notifyContained(ctx, event, subject) {
-  const warn = (error) => {
+  const warn = () => {
     try {
-      ctx.logger?.warn?.(`credentials: a ${event} listener for "${subject}" failed`, error);
+      // Both the subject and the thrown value can contain credentials.
+      ctx.logger?.warn?.(`credentials: ${event} notification failed`);
     } catch {
       // Diagnostics must never turn a committed write into a failure.
+    }
+  };
+  const observe = (result) => {
+    if (result != null && typeof result.then === 'function') {
+      Promise.resolve(result).catch(warn);
     }
   };
   const dispatch = ctx.events?.dispatch;
@@ -82,26 +87,30 @@ function notifyContained(ctx, event, subject) {
     let listeners;
     try {
       listeners = dispatch.call(ctx.events, 'emit', [event, subject]);
-    } catch (error) {
-      warn(error);
+    } catch {
+      warn();
       return;
     }
     for (const listener of listeners ?? []) {
       try {
-        const returned = listener(subject);
-        if (returned != null && typeof returned.then === 'function') {
-          Promise.resolve(returned).catch(warn);
-        }
-      } catch (error) {
-        warn(error);
+        observe(listener(subject));
+      } catch {
+        warn();
       }
     }
     return;
   }
   try {
-    ctx.emit?.(event, subject);
-  } catch (error) {
-    warn(error);
+    const returned = ctx.emit?.(event, subject);
+    if (Array.isArray(returned)) {
+      for (const result of returned) {
+        try { observe(result); } catch { warn(); }
+      }
+    } else {
+      observe(returned);
+    }
+  } catch {
+    warn();
   }
 }
 

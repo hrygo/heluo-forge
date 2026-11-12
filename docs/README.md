@@ -50,7 +50,7 @@
 | `contracts/` | 外部系统字段级契约与明确标注的私有隔离草案 | [AI 网关契约](<contracts/gateway-contract.md>)；[IAM 消费隔离草案](<contracts/iam-consumer-isolated.md>)（source/mock见证/许可/合成工具与模型已分段验收；根联合已实现，本地验收已完成，真实准入未开放）；[IAM 只读订阅隔离草案](<contracts/iam-view-observer-isolated.md>)（私有source/mock接缝已验收；真实注册关闭） | 网关、模型与安全团队 |
 | `operations/` | 分发、发布、回滚、支持和运行手册 | [运维索引](<operations/README.md>) | 平台运维、IT |
 | `collaboration/` | 跨团队询问与回函协作 | [跨团队确认询问函](<collaboration/team-confirmation-letters.md>) | 发函人、各接入团队 |
-| `engineering/` | 仓库结构、开发测试与发布约定、插件跨包规范 | [工程结构设计](<engineering/repository-structure-design.md>) | 工程负责人、维护者 |
+| `engineering/` | 仓库结构、开发测试与发布约定、插件跨包规范 | [工程结构设计](<engineering/repository-structure-design.md>)；[SQLite 存储扩展与使用规范](<engineering/sqlite-storage-conventions.md>) | 工程负责人、维护者 |
 | `templates/` | 受控文档与模块设计模板 | [_template.md](<templates/_template.md>) | 全体撰写人 |
 | `assets/` | 可离线打开的 HTML 图解与品牌资产 | [认证流程图解](<assets/enterprise-authentication-flow.html>)；品牌见[品牌全景](<assets/branding/cyber-long/index.html>)与[生图规范](<assets/branding/prompts.md>) | 评审与对接人员 |
 

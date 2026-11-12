@@ -179,6 +179,89 @@ test('record listeners are isolated too and the committed write still lands', as
   assert.deepEqual(calls, ['heluo-iam/session']);
 });
 
+test('listener failures log neither credentials nor changed references or records', async (t) => {
+  const secret = 'synthetic-listener-secret';
+  const reference = 'SYNTHETIC_PRIVATE_REF';
+  const record = 'synthetic/private-record';
+  const calls = [];
+  const warnings = [];
+  const ctx = fakeContext(undefined, {
+    dispatch(_mode, [event, subject]) {
+      return [
+        () => { throw new Error(`synchronous ${secret}`); },
+        async () => { throw new Error(`asynchronous ${secret}`); },
+        () => { calls.push([event, subject]); },
+      ];
+    },
+  });
+  ctx.logger = { warn: (...args) => warnings.push(args) };
+  const dispose = apply(ctx, { backend: createMemoryBackend(), allowEphemeral: true });
+  t.after(dispose);
+  warnings.length = 0;
+  const provider = ctx.provided.get('credentials');
+
+  await provider.set(reference, secret);
+  await provider.modifyRecord(record, () => ({ kind: 'grant', payload: { token: secret } }));
+  await new Promise(setImmediate);
+
+  assert.equal((await provider.resolve(reference)).value, secret);
+  assert.deepEqual(await provider.readRecord(record), { kind: 'grant', payload: { token: secret } });
+  assert.deepEqual(calls, [
+    ['credentials/reference-updated', reference],
+    ['credentials/record-updated', record],
+  ]);
+  assert.equal(warnings.length, 4);
+  for (const args of warnings) {
+    assert.equal(args.length, 1, 'raw exceptions must not reach the logger');
+    assert.equal(typeof args[0], 'string');
+    for (const privateValue of [secret, reference, record]) {
+      assert.equal(args[0].includes(privateValue), false);
+    }
+  }
+});
+
+for (const failurePath of ['dispatch', 'emit', 'emit-async', 'emit-array']) {
+  test(`${failurePath} failures do not log exception contents or references`, async (t) => {
+    const reference = 'SYNTHETIC_PRIVATE_REF';
+    const secret = 'synthetic-dispatch-secret';
+    const warnings = [];
+    const fail = () => {
+      if (failurePath === 'dispatch' || failurePath === 'emit') throw new Error(secret);
+      const rejected = Promise.reject(new Error(secret));
+      return failurePath === 'emit-array' ? [undefined, rejected] : rejected;
+    };
+    const ctx = fakeContext(undefined, failurePath === 'dispatch' ? { dispatch: fail } : undefined);
+    if (failurePath !== 'dispatch') ctx.emit = fail;
+    ctx.logger = { warn: (...args) => warnings.push(args) };
+    const dispose = apply(ctx, { backend: createMemoryBackend(), allowEphemeral: true });
+    t.after(dispose);
+    warnings.length = 0;
+    const provider = ctx.provided.get('credentials');
+
+    await provider.set(reference, secret);
+    await new Promise(setImmediate);
+
+    assert.equal((await provider.resolve(reference)).value, secret);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].length, 1, 'raw exceptions must not reach the logger');
+    assert.equal(typeof warnings[0][0], 'string');
+    assert.equal(warnings[0][0].includes(secret), false);
+    assert.equal(warnings[0][0].includes(reference), false);
+  });
+}
+
+test('a failing listener and logger cannot turn a committed write into a failure', async (t) => {
+  const ctx = fakeContext(undefined, { dispatch: () => [() => { throw new Error('synthetic-listener'); }] });
+  ctx.logger = { warn: () => { throw new Error('synthetic-logger'); } };
+  const dispose = apply(ctx, { backend: createMemoryBackend(), allowEphemeral: true });
+  t.after(dispose);
+  const provider = ctx.provided.get('credentials');
+
+  await provider.set('SYNTHETIC_REF', 'synthetic-value');
+
+  assert.equal((await provider.resolve('SYNTHETIC_REF')).value, 'synthetic-value');
+});
+
 test('an ephemeral in-memory backend is announced as non-durable', async () => {
   const warnings = [];
   const ctx = fakeContext();
