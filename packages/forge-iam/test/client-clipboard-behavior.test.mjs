@@ -70,6 +70,12 @@ test('diagnostic is a fixed scalar projection and excludes all private fields an
   assert.ok(nodes(f.render()).some((node) => node.props.role === 'status'));
 });
 
+test('diagnostic surfaces every IAM code instead of collapsing it to unknown', async (t) => {
+  const f = await fixture(t, { view: { ...signedOut, state: 'error', error: 'IAM_HTTP_ERROR' } });
+  await f.button('复制问题信息').props.onClick();
+  assert.equal(JSON.parse(f.writes[0]).errorCode, 'IAM_HTTP_ERROR');
+});
+
 for (const phase of ['loading', 'error']) {
   test(`${phase} can copy an honest unknown diagnostic without a new request`, async (t) => {
     const gate = deferred();

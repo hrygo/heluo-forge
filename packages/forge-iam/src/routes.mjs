@@ -354,6 +354,11 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           sendHtml(res, 200, '登录完成', '企业账号已完成登录。');
         } catch (error) {
           const status = ERROR_STATUS[error?.code] ?? 500;
+          // Codes and OAuth error names are not secrets and are what make a
+          // failed exchange diagnosable. The page stays generic by contract;
+          // the operator gets the pair on the server log instead.
+          const oauthError = typeof error?.details?.oauthError === 'string' ? error.details.oauthError : '';
+          console.error('[heluo-iam] callback failed:', error?.code ?? 'unknown', oauthError);
           sendHtml(res, status, '登录失败', '企业账号登录未完成。');
         } finally {
           // Test doubles have no event emitter; the response is already ended.

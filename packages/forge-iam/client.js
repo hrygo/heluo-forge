@@ -1813,22 +1813,10 @@ window.__ModuleLoader__.load({
     }
 
     // §10 诊断快照
-    const DIAGNOSTIC_ERRORS = new Set([
-      'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_UNCONFIGURED', 'IAM_CONFIG_INVALID',
-      'IAM_CREDENTIALS_UNAVAILABLE', 'IAM_CREDENTIALS_CLEAR_FAILED', 'IAM_REVOCATION_FAILED',
-      'IAM_REVOCATION_UNKNOWN',
-      'IAM_EXCLUSIVE_CONFLICT', 'IAM_UNREACHABLE', 'IAM_STATE_MISMATCH', 'IAM_CALLBACK_INVALID',
-      'IAM_ATTEMPT_EXPIRED', 'IAM_INVALID_GRANT', 'IAM_REAUTH_REQUIRED', 'IAM_NOT_SIGNED_IN',
-      'IAM_ATTEMPT_CANCELLED', 'IAM_CALLBACK_UNAVAILABLE', 'IAM_DISPOSED',
-      'IAM_CALLBACK_PORT_UNAVAILABLE', 'IAM_CALLBACK_BIND_FAILED',
-      'IAM_GRANT_CONTEXT_MISMATCH', 'IAM_REFRESH_SUBJECT_MISMATCH',
-      'IAM_GATEWAY_KEY_INVALID', 'IAM_GATEWAY_OWNER_MISSING', 'IAM_REQUEST_HEADER_REQUIRED',
-      'IAM_GATEWAY_ATOMIC_UNVERIFIED', 'IAM_GATEWAY_LEGACY_READ_ONLY',
-      'IAM_GATEWAY_CHANGED', 'IAM_GATEWAY_WRITE_UNKNOWN',
-      'IAM_REQUEST_INVALID', 'IAM_REQUEST_TOO_LARGE', 'IAM_UNAUTHENTICATED',
-      'IAM_CONNECTION_UNAVAILABLE', 'IAM_METHOD_NOT_ALLOWED', 'IAM_NOT_FOUND',
-      'IAM_REQUEST_FAILED', 'IAM_VIEW_FAILED', 'IAM_REQUEST_TIMEOUT',
-    ]);
+    // Any IAM code is safe to surface: codes are a closed vocabulary and never
+    // carry tokens, hostnames or user data. The regex (not a hand-maintained
+    // list) is what keeps a new code from silently becoming "unknown".
+    const DIAGNOSTIC_ERROR = /^IAM_[A-Z0-9_]+$/u;
 
     // Build a new scalar object: the original view/state may contain private data.
     function diagnosticSnapshot(state) {
@@ -1843,7 +1831,7 @@ window.__ModuleLoader__.load({
         signedIn: typeof view?.signedIn === 'boolean' ? view.signedIn : null,
         exclusive: view?.exclusive === 'ok' ? 'ok' : typeof view?.exclusive === 'string' && view.exclusive ? 'not-ok' : 'unknown',
         gatewayState: deriveGatewayUi(view?.gatewayCredential).state,
-        errorCode: code == null ? null : DIAGNOSTIC_ERRORS.has(code) ? code : 'unknown',
+        errorCode: code == null ? null : DIAGNOSTIC_ERROR.test(code) ? code : 'unknown',
         missingConfigCount: Array.isArray(view?.missing) ? view.missing.length : null,
       };
     }
