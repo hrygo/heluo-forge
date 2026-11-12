@@ -59,10 +59,11 @@ export async function validateIssueReference(body, lookup) {
   return false;
 }
 
-export async function checkPullRequest({ event, ref, repository, apiUrl, token, fetcher = fetch }) {
-  const refNumber = /^refs\/pull\/([1-9]\d*)\/merge$/u.exec(ref ?? '')?.[1];
-  const eventNumber = event?.number == null ? undefined : String(event.number);
-  if (!refNumber || (eventNumber && eventNumber !== refNumber) || !/^[^/]+\/[^/]+$/u.test(repository ?? '') || !apiUrl || !token) {
+export async function checkPullRequest({ event, eventName = 'pull_request', ref, repository, apiUrl, token, fetcher = fetch }) {
+  const eventNumbers = [event?.number, event?.pull_request?.number].filter((number) => number != null).map(String);
+  const refNumber = eventName === 'pull_request' ? /^refs\/pull\/([1-9]\d*)\/merge$/u.exec(ref ?? '')?.[1]
+    : eventName === 'pull_request_target' && /^refs\/heads\/.+$/u.test(ref ?? '') ? eventNumbers[0] : undefined;
+  if (!refNumber || !/^[1-9]\d*$/u.test(refNumber) || eventNumbers.some((number) => number !== refNumber) || !/^[^/]+\/[^/]+$/u.test(repository ?? '') || !apiUrl || !token) {
     throw new Error('Missing or inconsistent GitHub PR context');
   }
   const get = async (path) => fetcher(`${apiUrl}/repos/${repository}/${path}`, {
@@ -82,7 +83,7 @@ export async function checkPullRequest({ event, ref, repository, apiUrl, token, 
 
 async function main() {
   const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, 'utf8'));
-  const valid = await checkPullRequest({ event, ref: process.env.GITHUB_REF, repository: process.env.GITHUB_REPOSITORY, apiUrl: process.env.GITHUB_API_URL, token: process.env.GITHUB_TOKEN });
+  const valid = await checkPullRequest({ event, eventName: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF, repository: process.env.GITHUB_REPOSITORY, apiUrl: process.env.GITHUB_API_URL, token: process.env.GITHUB_TOKEN });
   if (!valid) throw new Error('PR 正文须单独一行填写 Closes #编号 或 Part of #编号，关联本仓库已有 Issue。');
   console.log('PR issue reference verified.');
 }

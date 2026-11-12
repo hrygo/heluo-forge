@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.9.0 |
+| 版本 | V0.9.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-13 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：仓库结构、`package.json`、`pnpm-workspace.yaml`、检查脚本、测试与 `.github/workflows/check.yml`；工具链版本以 `.node-version` 和 `package.json` 为准。托管平台的实际执行结果以对应工作流记录为准。
@@ -100,7 +100,7 @@
 - Linux 和 macOS 作业构建、核验并离线安装企业组合包；Windows 作业打包并离线安装凭据独立包。安装冒烟使用临时 SQLite 存储和合成值，不代表 Windows 已安装企业组合包。凭据使用值级加密 SQLite 和文件 keyring，不使用系统钥匙串或原生 addon；文件权限与隔离边界见[凭据包说明](../../packages/forge-credentials-keychain/README.md)。
 - `SQLite and IAM (linux-x64, ubuntu-26.04)` 与 `SQLite and IAM (win32-x64, windows-2025)` 非必需作业执行相同的 SQLite 和 IAM 平台检查，用于观察后续镜像兼容性；结果不替代目标系统验收。
 - `sensitive scan and IAM callback (win32-x64)` 在 Windows Server 2022 的非必需作业中以同一次 `node --test` 运行敏感扫描和 IAM 回调端口测试；POSIX 分支已由 `verify (ubuntu-x64)` 覆盖。路径测试覆盖 `icase` pathspec 和反斜杠归一化；卷不提供不同的 8.3 短别名时，真实别名用例跳过，运行时应检查该项是通过还是跳过。回调测试检查平台 socket 行为。
-- `pull_request_target` 的窄例外是 `.github/workflows/sensitive-attestation.yml`：目标实现从 PR 基线加载受信任的验签脚本及单一团队公钥，checkout 基线、只 fetch PR 的 Git 对象并校验事件 head，不 checkout、不执行 PR 代码，不读取 secrets，权限仅 `contents: read`。工作流始终验签，基线缺少或无效公钥时失败；首次合入工作流与公钥后，须实测正反例，再将唯一新 required context `sensitive-attestation-verify` 与 `verify (ubuntu-x64)` 分别配置。该上下文名保持不变：`pull_request_target` 工作流由基线加载，改名要先合并再同步切换必需检查，不能一步完成。团队 v2 签名绑定实际扫描的 HEAD tree，远端要求唯一父提交 tree 与签名基线一致并拒绝 v1；基线 tree 改变的 rebase 和普通 amend 须重新扫描签名。旧 `sensitive:scan` / `sensitive:install` 是不同规则格式和路径的 legacy v1，不能满足 v2。Git 仓库内容正常推送，私钥、真实规则与扫描结果不上远端；签名不证明规则有效，也不能防止扫描竞态或恶意持钥人伪造声明。共享 Git common dir 安装、引导与限制见[敏感扫描说明](../../scripts/sensitive-scan/README.md)；工作流合入、远端实测及分支保护配置均须分别取证。
+- `pull_request_target` 的窄例外是 `.github/workflows/sensitive-attestation.yml`：从 PR 基线加载受信任的 Issue 校验和验签脚本及单一团队公钥，checkout 基线、只 fetch PR 的 Git 对象并校验事件 head，不 checkout、不执行 PR 代码，不读取 secrets，权限为 `contents: read`、`issues: read`、`pull-requests: read`。正文编辑时重新读取并校验当前 PR，Issue 不存在、引用 PR 或 API 失败时拒绝；普通 PR 工作流中的校验仅供提前反馈。工作流始终验签，基线缺少或无效公钥时失败；新门禁合入目标基线后生效，并须实测正反例。该上下文名保持不变：`pull_request_target` 工作流由基线加载，改名要先合并再同步切换必需检查，不能一步完成。团队 v2 签名绑定实际扫描的 HEAD tree，远端要求唯一父提交 tree 与签名基线一致并拒绝 v1；基线 tree 改变的 rebase 和普通 amend 须重新扫描签名。旧 `sensitive:scan` / `sensitive:install` 是不同规则格式和路径的 legacy v1，不能满足 v2。Git 仓库内容正常推送，私钥、真实规则与扫描结果不上远端；签名不证明规则有效，也不能防止扫描竞态或恶意持钥人伪造声明。共享 Git common dir 安装、引导与限制见[敏感扫描说明](../../scripts/sensitive-scan/README.md)；工作流合入、远端实测及分支保护配置均须分别取证。
 - `verify` 执行离线检查；平台作业不配置 npm 包缓存或使用系统钥匙串，离线安装使用 runner 工作区内的独立前缀，冒烟存储位于系统临时目录并使用合成数据。托管 runner 的结果不等于 Windows 10、UOS、银河麒麟、目标 DSH/Electron、Windows NTFS ACL 或企业 IAM 的实测；这些环境及企业联调分别取证。CI 不接触企业系统、不注入生产密钥、不自动发布。
 
 ## 7. 版本与发布
