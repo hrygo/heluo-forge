@@ -1,0 +1,739 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2400 1350" width="2400" height="1350" role="img" aria-label="河洛 Heluo Forge 产品全景蓝图">
+  <defs>
+
+    <!-- 1. Rich Canvas Background: Cool gentle azure fade into luminous pure white -->
+    <linearGradient id="bg-base" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#EAF0F7"/>
+      <stop offset="18%" stop-color="#F4F8FC"/>
+      <stop offset="42%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF"/>
+    </linearGradient>
+
+    <!-- 2. Official Cyber Long App Icon -->
+    <linearGradient id="squircleBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1325"/>
+      <stop offset="50%" stop-color="#112244"/>
+      <stop offset="100%" stop-color="#070D1A"/>
+    </linearGradient>
+    <radialGradient id="ambientGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00D2FE" stop-opacity="0.32"/>
+      <stop offset="70%" stop-color="#1D4ED8" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#070D1A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cyberLongGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1D4ED8"/>
+      <stop offset="35%" stop-color="#2563EB"/>
+      <stop offset="75%" stop-color="#00D2FE"/>
+      <stop offset="100%" stop-color="#00F5FF"/>
+    </linearGradient>
+
+    <!-- 3. Executive Navy Header Bands (Jeweled Silk Luster) -->
+    <linearGradient id="hdr-grad-navy-a" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#002D6E"/>
+      <stop offset="28%" stop-color="#003584"/>
+      <stop offset="68%" stop-color="#0F4796"/>
+      <stop offset="100%" stop-color="#1B59A4"/>
+    </linearGradient>
+
+    <linearGradient id="hdr-grad-navy-b" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#063578"/>
+      <stop offset="28%" stop-color="#073E8D"/>
+      <stop offset="68%" stop-color="#154F9D"/>
+      <stop offset="100%" stop-color="#2264AC"/>
+    </linearGradient>
+
+    <linearGradient id="hub-navy-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#003584"/>
+      <stop offset="100%" stop-color="#0E489E"/>
+    </linearGradient>
+
+    <!-- 4. Luminous Surface Gradients (Paper / Enamel Texture) -->
+    <!-- Card White Gloss: Pure white top catchlight fading gently to crisp azure-tinted white -->
+    <linearGradient id="card-gloss-white" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#FCFDFE"/>
+      <stop offset="100%" stop-color="#F2F6FA"/>
+    </linearGradient>
+
+    <!-- Card Soft Azure Gloss: Calming tinted backing -->
+    <linearGradient id="card-gloss-tint" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F8FAFE"/>
+      <stop offset="60%" stop-color="#EFF5FB"/>
+      <stop offset="100%" stop-color="#E5EFF8"/>
+    </linearGradient>
+
+    <!-- Pillar Grounding Base Texture -->
+    <linearGradient id="pillar-gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#EBF3FA"/>
+      <stop offset="50%" stop-color="#DFECF7"/>
+      <stop offset="100%" stop-color="#D5E4F2"/>
+    </linearGradient>
+
+    <!-- Spine Badge Gradient -->
+    <linearGradient id="spine-badge-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F0F6FC"/>
+      <stop offset="50%" stop-color="#E3EEF8"/>
+      <stop offset="100%" stop-color="#D7E6F4"/>
+    </linearGradient>
+
+    <!-- Micro-Icon Badge Gradient -->
+    <linearGradient id="icon-badge-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F2F7FD"/>
+      <stop offset="100%" stop-color="#D8E9F8"/>
+    </linearGradient>
+
+    <linearGradient id="active-flow-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E3EFF9"/>
+      <stop offset="100%" stop-color="#CEE1F3"/>
+    </linearGradient>
+
+    <!-- Linear Accent Gradients -->
+    <linearGradient id="accent-grad-1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#003584"/>
+      <stop offset="100%" stop-color="#1758A8"/>
+    </linearGradient>
+
+    <linearGradient id="accent-grad-2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1758A8"/>
+      <stop offset="100%" stop-color="#2384CA"/>
+    </linearGradient>
+
+    <linearGradient id="accent-grad-3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2384CA"/>
+      <stop offset="100%" stop-color="#429EE0"/>
+    </linearGradient>
+
+    <linearGradient id="rule-fade" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#CBD9E8" stop-opacity="0.15"/>
+      <stop offset="50%" stop-color="#1758A8" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#CBD9E8" stop-opacity="0.15"/>
+    </linearGradient>
+
+    <!-- Vector Arrow Markers -->
+    <marker id="arrow-navy" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M 2 2 L 9.5 6 L 2 10" fill="none" stroke="#003584" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <marker id="arrow-mid" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 2 2 L 9.5 6 L 2 10" fill="none" stroke="#1764A0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <marker id="arrow-slate" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 2 2 L 9.5 6 L 2 10" fill="none" stroke="#346CA2" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <!-- Typographic System: Deep Ink Navy #0E2A52 + Executive Blue #003584 + Slate Blue #48607E -->
+    <style>
+      text { font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .kicker { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Microsoft YaHei", "PingFang SC", sans-serif; font-size: 16px; font-weight: 700; letter-spacing: 2.5px; fill: #1758A8; }
+      .title { font-size: 48px; font-weight: 700; letter-spacing: 0.5px; fill: #003584; }
+      .subtitle { font-size: 21px; font-weight: 400; fill: #48607E; }
+      .subtitle-strong { font-size: 21px; font-weight: 700; fill: #003584; }
+
+      .tier-lbl { font-size: 15px; font-weight: 700; letter-spacing: 0.5px; fill: #003584; }
+
+      .layer-title { font-size: 24px; font-weight: 700; fill: #003584; }
+      .layer-sub { font-size: 16px; font-weight: 400; fill: #48607E; }
+      .panel-title { font-size: 23px; font-weight: 700; fill: #FFFFFF; }
+      .panel-sub { font-size: 15.5px; font-weight: 400; fill: #E1EEFA; }
+
+      /* Deep Ink Navy #0E2A52 for crisp, solid, eye-friendly primary reading */
+      .tile-title { font-size: 20px; font-weight: 700; fill: #0E2A52; }
+      .tile-sub { font-size: 15.5px; font-weight: 400; fill: #48607E; }
+      .gov-title { font-size: 19.5px; font-weight: 700; fill: #0E2A52; }
+      .gov-sub { font-size: 15.5px; font-weight: 400; fill: #48607E; }
+
+      .pill-hdr { font-size: 15.5px; font-weight: 600; fill: #0E2A52; }
+      .flow-node { font-size: 16px; font-weight: 600; fill: #0E2A52; }
+      .flow-node-blue { font-size: 16px; font-weight: 700; fill: #003584; }
+      .flow-sub { font-size: 13.5px; font-weight: 400; fill: #48607E; }
+
+      .eco-title { font-size: 23px; font-weight: 700; fill: #0E2A52; }
+      .eco-sub { font-size: 16px; font-weight: 400; fill: #48607E; }
+      .chip-text { font-size: 16.5px; font-weight: 600; fill: #0E2A52; }
+      .foot { font-size: 16px; font-weight: 400; fill: #48607E; }
+    </style>
+  </defs>
+
+  <!-- ==================== BACKGROUND ==================== -->
+  <rect width="2400" height="1350" fill="url(#bg-base)"/>
+
+  <!-- Clean Outer Structural Frame with Top Specular Line -->
+  <rect x="28" y="28" width="2344" height="1294" rx="20" fill="none" stroke="#BDD2E8" stroke-width="1.4"/>
+  <path d="M 48 29 H 2352" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="1"/>
+
+  <!-- ==================== 1. HEADER & BRANDING ==================== -->
+  <g transform="translate(58, 42)">
+    <g transform="scale(0.18359375)">
+      <rect width="512" height="512" rx="115" ry="115" fill="url(#squircleBg)"/>
+      <rect x="2" y="2" width="508" height="508" rx="114" ry="114" fill="none" stroke="#1758A8" stroke-opacity="0.45" stroke-width="5"/>
+      <circle cx="256" cy="256" r="155" fill="url(#ambientGlow)"/>
+      <g transform="translate(96, 96)">
+        <g transform="translate(160, 160) scale(0.04241491363092184, -0.04241491363092184) translate(-5153.5, 23.5)" fill="url(#cyberLongGrad)">
+          <path d="m3441 2750 c102 -64 184 -104 339 -165 183 -73 304 -108 500 -144 215 -41 361 -54 600 -54 312 1 562 35 1000 138 262 61 353 77 486 82 220 10 346 -26 531 -151 129 -87 153 -96 251 -96 125 0 279 40 579 151 103 38 185 17 259 -63 62 -67 85 -127 91 -233 5 -95 -14 -245 -43 -332 -25 -76 -109 -243 -153 -305 -41 -56 -41 -56 -113 -68 -349 -55 -696 -215 -1001 -463 -56 -45 -156 -127 -222 -182 -296 -247 -626 -406 -986 -474 -219 -42 -669 -70 -669 -42 0 5 37 24 82 41 121 47 265 122 335 175 78 58 187 176 232 249 157 260 147 604 -23 835 -136 183 -333 278 -656 316 -283 34 -489 79 -690 152 -157 57 -246 101 -384 193 -162 107 -292 240 -387 395 -60 99 -55 105 42 45z m864 -895 c126 -41 297 -76 500 -104 166 -24 249 -48 330 -96 148 -89 238 -228 260 -400 17 -136 -51 -313 -162 -424 -88 -87 -187 -135 -399 -196 -206 -58 -541 -176 -611 -214 -10 -6 -72 -35 -138 -66 -191 -89 -457 -252 -557 -342 -30 -26 -87 -75 -127 -108 -61 -51 -129 -125 -268 -296 -34 -41 -170 -280 -194 -341 -34 -86 -70 -207 -91 -303 -24 -113 -35 -390 -19 -490 44 -276 91 -408 229 -639 58 -95 89 -133 222 -267 85 -86 178 -175 205 -198 65 -56 41 -49 -140 39 -246 120 -477 305 -696 560 -71 82 -108 137 -191 280 -114 196 -167 325 -228 555 -168 629 -59 1290 303 1835 304 458 820 880 1392 1138 125 57 251 110 265 111 3 0 55 -15 115 -34z m-629 -2116 c-76 -161 -95 -231 -110 -409 -13 -158 -6 -256 29 -387 36 -138 78 -230 158 -350 130 -195 301 -345 517 -453 138 -69 177 -84 335 -125 140 -36 256 -49 430 -48 189 1 272 11 460 59 293 74 485 166 770 370 121 87 244 204 382 364 64 75 207 301 264 418 33 67 62 122 66 122 20 0 -32 -303 -82 -473 -27 -96 -117 -309 -169 -401 -196 -350 -497 -666 -836 -877 -330 -205 -724 -331 -1074 -346 -402 -16 -798 87 -1093 284 -196 131 -268 196 -376 339 -150 197 -195 291 -254 524 -25 96 -27 122 -27 300 0 148 4 212 17 266 19 80 76 249 111 327 22 50 142 250 176 294 30 39 184 206 226 246 50 46 138 107 142 98 1 -4 -26 -68 -62 -142z"/>
+        </g>
+        <path d="M 198 94 C 204 90 215 93 222 98 C 215 103 204 100 198 94 Z" fill="#0B1224"/>
+      </g>
+    </g>
+  </g>
+
+  <text x="168" y="61" class="kicker">河洛 · HELUO FORGE</text>
+  <text x="168" y="109" class="title">一体化智能工作空间</text>
+  <text x="168" y="140" class="subtitle"><tspan class="subtitle-strong">企业级智能研发</tspan><tspan dx="6">×</tspan><tspan dx="6" class="subtitle-strong">智能个人助理</tspan><tspan dx="6">· 每位员工的统一工作入口</tspan></text>
+
+  <!-- Top-Right Blueprint Tag & 3 Value Pills with Subtle Specular Polish -->
+  <rect x="1952" y="42" width="390" height="38" rx="19" fill="url(#card-gloss-white)" stroke="#B8CDE2" stroke-width="1.3"/>
+  <rect x="1962" y="48" width="128" height="26" rx="13" fill="url(#hub-navy-grad)"/>
+  <text x="2026" y="66.5" text-anchor="middle" font-size="14.5" font-weight="700" fill="#FFFFFF">产品全景蓝图</text>
+  <text x="2212" y="66.5" text-anchor="middle" class="pill-hdr" style="fill:#48607E">企业研发与协作融合架构</text>
+
+  <rect x="1724" y="94" width="194" height="36" rx="10" fill="url(#card-gloss-white)" stroke="#C0D6EC" stroke-width="1.2"/>
+  <circle cx="1760" cy="112" r="4" fill="#003584"/>
+  <text x="1775" y="117.5" class="pill-hdr">员工专属入口</text>
+  <rect x="1936" y="94" width="194" height="36" rx="10" fill="url(#card-gloss-white)" stroke="#C0D6EC" stroke-width="1.2"/>
+  <circle cx="1972" cy="112" r="4" fill="#1758A8"/>
+  <text x="1987" y="117.5" class="pill-hdr">研发日常融通</text>
+  <rect x="2148" y="94" width="194" height="36" rx="10" fill="url(#card-gloss-white)" stroke="#C0D6EC" stroke-width="1.2"/>
+  <circle cx="2184" cy="112" r="4" fill="#2384CA"/>
+  <text x="2199" y="117.5" class="pill-hdr">安全授权可控</text>
+
+  <!-- ==================== LEFT STRUCTURAL TIER SPINE (Rich Enamel Texture with Grounded Accents) ==================== -->
+  <path d="M 96 196 V 1222" stroke="#B4CCE5" stroke-width="2" stroke-dasharray="4 4"/>
+
+  <!-- Tier 1: 入口层 (y=156..244, h=88, center=200) -->
+  <rect x="58" y="156" width="76" height="88" rx="12" fill="url(#spine-badge-grad)" stroke="#8EB3DA" stroke-width="1.3"/>
+  <path d="M 70 156 H 122" stroke="url(#accent-grad-1)" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 68 158 H 124" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1"/>
+  <rect x="83" y="177" width="26" height="19" rx="3" fill="none" stroke="#003584" stroke-width="1.8"/>
+  <path d="M 90 201 H 102" stroke="#003584" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="96" y="228" text-anchor="middle" class="tier-lbl">入口层</text>
+  <path d="M 134 200 H 154" stroke="#346CA2" stroke-width="1.6"/>
+  <circle cx="134" cy="200" r="2.5" fill="#003584"/><circle cx="154" cy="200" r="2.5" fill="#003584"/>
+
+  <!-- Tier 2: 能力层 (y=264..566, h=302, center=415) -->
+  <rect x="58" y="264" width="76" height="302" rx="12" fill="url(#spine-badge-grad)" stroke="#8EB3DA" stroke-width="1.3"/>
+  <path d="M 70 264 H 122" stroke="url(#accent-grad-1)" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 68 266 H 124" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1"/>
+  <polygon points="96,386 110,394 110,410 96,418 82,410 82,394" fill="none" stroke="#003584" stroke-width="1.8"/>
+  <path d="M 96 402 V 418 M 96 402 L 110 394 M 96 402 L 82 394" stroke="#1758A8" stroke-width="1.4"/>
+  <text x="96" y="445" text-anchor="middle" class="tier-lbl">能力层</text>
+  <path d="M 134 415 H 154" stroke="#346CA2" stroke-width="1.6"/>
+  <circle cx="134" cy="415" r="2.5" fill="#003584"/><circle cx="154" cy="415" r="2.5" fill="#003584"/>
+
+  <!-- Tier 3: 协同层 (y=586..730, h=144, center=658) -->
+  <rect x="58" y="586" width="76" height="144" rx="12" fill="url(#spine-badge-grad)" stroke="#8EB3DA" stroke-width="1.3"/>
+  <path d="M 70 586 H 122" stroke="url(#accent-grad-1)" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 68 588 H 124" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1"/>
+  <rect x="82" y="630" width="20" height="14" rx="4" fill="none" stroke="#1758A8" stroke-width="1.7"/>
+  <rect x="90" y="640" width="20" height="14" rx="4" fill="#E4EFF9" stroke="#003584" stroke-width="1.8"/>
+  <text x="96" y="681" text-anchor="middle" class="tier-lbl">协同层</text>
+  <path d="M 134 658 H 154" stroke="#346CA2" stroke-width="1.6"/>
+  <circle cx="134" cy="658" r="2.5" fill="#003584"/><circle cx="154" cy="658" r="2.5" fill="#003584"/>
+
+  <!-- Tier 4: 生态层 (y=750..970, h=220, center=860) -->
+  <rect x="58" y="750" width="76" height="220" rx="12" fill="url(#spine-badge-grad)" stroke="#8EB3DA" stroke-width="1.3"/>
+  <path d="M 70 750 H 122" stroke="url(#accent-grad-1)" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 68 752 H 124" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1"/>
+  <circle cx="96" cy="836" r="4" fill="#003584"/>
+  <circle cx="85" cy="854" r="3.5" fill="#1758A8"/>
+  <circle cx="107" cy="854" r="3.5" fill="#2384CA"/>
+  <path d="M 96 840 L 87 851 M 96 840 L 105 851 M 89 854 H 103" stroke="#346CA2" stroke-width="1.4"/>
+  <text x="96" y="883" text-anchor="middle" class="tier-lbl">生态层</text>
+  <path d="M 134 860 H 154" stroke="#346CA2" stroke-width="1.6"/>
+  <circle cx="134" cy="860" r="2.5" fill="#003584"/><circle cx="154" cy="860" r="2.5" fill="#003584"/>
+
+  <!-- Tier 5: 治理层 (y=990..1152, h=162, center=1071) -->
+  <rect x="58" y="990" width="76" height="162" rx="12" fill="url(#spine-badge-grad)" stroke="#8EB3DA" stroke-width="1.3"/>
+  <path d="M 70 990 H 122" stroke="url(#accent-grad-1)" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 68 992 H 124" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1"/>
+  <path d="M 96 1042 L 108 1047 V 1058 C 108 1066 102 1072 96 1074 C 90 1072 84 1066 84 1058 V 1047 Z" fill="none" stroke="#003584" stroke-width="1.8"/>
+  <text x="96" y="1099" text-anchor="middle" class="tier-lbl">治理层</text>
+  <path d="M 134 1071 H 154" stroke="#346CA2" stroke-width="1.6"/>
+  <circle cx="134" cy="1071" r="2.5" fill="#003584"/><circle cx="154" cy="1071" r="2.5" fill="#003584"/>
+
+  <!-- Tier 6: 底座层 (y=1170..1268, h=98, center=1219) -->
+  <rect x="58" y="1170" width="76" height="98" rx="12" fill="url(#spine-badge-grad)" stroke="#8EB3DA" stroke-width="1.3"/>
+  <path d="M 70 1170 H 122" stroke="url(#accent-grad-1)" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 68 1172 H 124" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1"/>
+  <rect x="83" y="1195" width="26" height="8" rx="2" fill="none" stroke="#003584" stroke-width="1.7"/>
+  <rect x="83" y="1207" width="26" height="8" rx="2" fill="none" stroke="#1758A8" stroke-width="1.7"/>
+  <text x="96" y="1242" text-anchor="middle" class="tier-lbl">底座层</text>
+  <path d="M 134 1219 H 154" stroke="#346CA2" stroke-width="1.6"/>
+  <circle cx="134" cy="1219" r="2.5" fill="#003584"/><circle cx="154" cy="1219" r="2.5" fill="#003584"/>
+
+  <!-- ==================== 2. 入口层: 个人工作环境 ==================== -->
+  <rect x="154" y="156" width="2188" height="88" rx="16" fill="url(#card-gloss-tint)" stroke="#A8C4E2" stroke-width="1.3"/>
+  <path d="M 170 157 H 2326" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.2"/>
+  <rect x="174" y="173" width="54" height="54" rx="12" fill="url(#hub-navy-grad)"/>
+  <rect x="187" y="187" width="28" height="20" rx="3" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+  <path d="M 196 207 V 213 M 206 207 V 213 M 191 213 H 211" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+
+  <text x="244" y="197" font-size="26" font-weight="700" fill="#003584">个人工作环境</text>
+  <rect x="414" y="174" width="184" height="28" rx="14" fill="url(#card-gloss-white)" stroke="#8FB2D9" stroke-width="1.2"/>
+  <text x="506" y="193.5" text-anchor="middle" font-size="15" font-weight="700" fill="#003584">DeepSeek Harness</text>
+  <text x="244" y="227" font-size="16.5" font-weight="400" fill="#48607E">在同一工作台衔接研发交付、日常沟通与个人任务，遵循个人真实授权</text>
+
+  <path d="M 1574 172 V 228" stroke="#BDD2E8" stroke-width="1.5"/>
+  <text x="1598" y="186" font-size="14.5" font-weight="700" fill="#1758A8">目标工作终端</text>
+
+  <rect x="1598" y="195" width="142" height="36" rx="9" fill="url(#card-gloss-white)" stroke="#BDD2E8" stroke-width="1.2"/>
+  <rect x="1622" y="207" width="16" height="12" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1630 207 V 219 M 1622 213 H 1638" stroke="#003584" stroke-width="1.2"/>
+  <text x="1648" y="219" class="chip-text" style="font-size:16px">Windows</text>
+
+  <rect x="1754" y="195" width="134" height="36" rx="9" fill="url(#card-gloss-white)" stroke="#BDD2E8" stroke-width="1.2"/>
+  <rect x="1778" y="205" width="18" height="12" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1775 220 H 1799" stroke="#003584" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="1804" y="219" class="chip-text" style="font-size:16px">macOS</text>
+
+  <rect x="1902" y="195" width="420" height="36" rx="9" fill="url(#card-gloss-white)" stroke="#BDD2E8" stroke-width="1.2"/>
+  <rect x="1936" y="205.5" width="18" height="15" rx="3" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1941 210.5 L 1945 213.5 L 1941 216.5 M 1947 216.5 H 1951" fill="none" stroke="#003584" stroke-width="1.4" stroke-linecap="round"/>
+  <text x="1964" y="219" class="chip-text" style="font-size:16px">银河麒麟 / 统信 UOS 等国产 Linux 环境</text>
+
+  <!-- Vertical Flow Connectors: 入口层 -> 能力层 -->
+  <path d="M 694 244 V 261" stroke="#003584" stroke-width="2" marker-end="url(#arrow-navy)"/>
+  <circle cx="694" cy="244" r="3" fill="#003584"/>
+  <path d="M 1802 244 V 261" stroke="#1764A0" stroke-width="2" marker-end="url(#arrow-mid)"/>
+  <circle cx="1802" cy="244" r="3" fill="#1764A0"/>
+
+  <!-- ==================== 3. 能力层: 智能研发 (左) + 智能个人助理 (右) ==================== -->
+
+  <!-- PANEL A: 智能研发 (x=154..1234, w=1080, y=264..566, h=302) -->
+  <rect x="154" y="264" width="1080" height="302" rx="16" fill="url(#card-gloss-white)" stroke="#A8C4E2" stroke-width="1.3"/>
+  <!-- Top Refined Navy Header Strip (h=42) with Top Specular Line -->
+  <path d="M 155 279 A 15 15 0 0 1 170 265 H 1218 A 15 15 0 0 1 1233 279 V 307 H 155 Z" fill="url(#hdr-grad-navy-a)"/>
+  <path d="M 170 266 H 1218" stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="1"/>
+
+  <rect x="172" y="271" width="30" height="30" rx="7" fill="#FFFFFF" fill-opacity="0.2" stroke="#FFFFFF" stroke-opacity="0.45"/>
+  <path d="M 183 279 L 178 285 L 183 291 M 191 279 L 196 285 L 191 291 M 189 278 L 185 292" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="214" y="293" class="panel-title">智能研发</text>
+  <text x="324" y="292.5" class="panel-sub">需求理解到交付验收</text>
+  <rect x="1036" y="272" width="178" height="26" rx="13" fill="#FFFFFF" fill-opacity="0.2" stroke="#FFFFFF" stroke-opacity="0.45"/>
+  <text x="1125" y="290" text-anchor="middle" font-size="14" font-weight="600" fill="#FFFFFF">R&amp;D 工程全链路</text>
+
+  <!-- Mini Flow Diagram inside 智能研发: 4-Stage R&D Pipeline -->
+  <rect x="174" y="322" width="242" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="295" y="344.5" text-anchor="middle" class="flow-node-blue">01 · 需求与变更</text>
+  <path d="M 418 339 H 436" stroke="#1764A0" stroke-width="1.8" marker-end="url(#arrow-mid)"/>
+
+  <rect x="440" y="322" width="242" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="561" y="344.5" text-anchor="middle" class="flow-node-blue">02 · 代码仓库</text>
+  <path d="M 684 339 H 702" stroke="#1764A0" stroke-width="1.8" marker-end="url(#arrow-mid)"/>
+
+  <rect x="706" y="322" width="242" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="827" y="344.5" text-anchor="middle" class="flow-node-blue">03 · 流程执行</text>
+  <path d="M 950 339 H 968" stroke="#1764A0" stroke-width="1.8" marker-end="url(#arrow-mid)"/>
+
+  <rect x="972" y="322" width="242" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="1093" y="344.5" text-anchor="middle" class="flow-node-blue">04 · 验证与审查</text>
+
+  <!-- 2x3 Micro-Icon Tiles: 智能研发 (y=368, 432, 496; h=56) -->
+  <!-- Row 1: DevOps 平台 & 代码仓库 -->
+  <rect x="174" y="368" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="186" y="379" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <circle cx="198" cy="391" r="3" fill="#003584"/><circle cx="208" cy="401" r="3" fill="#1764A0"/>
+  <path d="M 198 394 V 401 H 205" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <text x="232" y="392" class="tile-title">DevOps 平台</text>
+  <text x="232" y="414" class="tile-sub">梳理需求上下文 · 协同研发流程</text>
+
+  <rect x="702" y="368" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="714" y="379" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <path d="M 727 390 L 722 396 L 727 402 M 735 390 L 740 396 L 735 402" fill="none" stroke="#003584" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="760" y="392" class="tile-title">代码仓库</text>
+  <text x="760" y="414" class="tile-sub">Gitee 代码理解 · 版本协同</text>
+
+  <!-- Row 2 -->
+  <rect x="174" y="432" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="186" y="443" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="196" y="452" width="14" height="16" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 199 457 H 207 M 199 462 H 205" stroke="#003584" stroke-width="1.4" stroke-linecap="round"/>
+  <text x="232" y="456" class="tile-title">需求与交付</text>
+  <text x="232" y="478" class="tile-sub">围绕 Issue 交付 · 明确验收</text>
+
+  <rect x="702" y="432" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="714" y="443" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="723" y="452" width="6" height="6" rx="1.5" fill="#003584"/>
+  <path d="M 729 455 H 735 V 464 M 732 464 H 738" fill="none" stroke="#1758A8" stroke-width="1.6" stroke-linecap="round"/>
+  <circle cx="735" cy="466" r="2.8" fill="#1764A0"/>
+  <text x="760" y="456" class="tile-title">任务执行</text>
+  <text x="760" y="478" class="tile-sub">Teamflow 标准化工作流</text>
+
+  <!-- Row 3 -->
+  <rect x="174" y="496" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="186" y="507" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <circle cx="203" cy="524" r="7" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 200 524 L 202.5 526.5 L 207 521.5" fill="none" stroke="#003584" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="232" y="520" class="tile-title">验证与审查</text>
+  <text x="232" y="542" class="tile-sub">本地测试验证 · 独立 AI 审查</text>
+
+  <rect x="702" y="496" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="714" y="507" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <path d="M 731 515 L 739 520 L 731 525 L 723 520 Z M 723 525 L 731 530 L 739 525" fill="none" stroke="#003584" stroke-width="1.6" stroke-linejoin="round"/>
+  <text x="760" y="520" class="tile-title">企业技能</text>
+  <text x="760" y="542" class="tile-sub">Skill 沉淀规范与工程经验</text>
+
+  <!-- Gutter + Synergy Connector -->
+  <path d="M 1234 415 H 1262" stroke="#B4CCE5" stroke-width="1.6" stroke-dasharray="3 2"/>
+  <circle cx="1248" cy="415" r="10.5" fill="url(#card-gloss-white)" stroke="#003584" stroke-width="1.5"/>
+  <path d="M 1242 415 H 1254 M 1245 412 L 1242 415 L 1245 418 M 1251 412 L 1254 415 L 1251 418" fill="none" stroke="#003584" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- PANEL B: 智能个人助理 (x=1262..2342, w=1080, y=264..566, h=302) -->
+  <rect x="1262" y="264" width="1080" height="302" rx="16" fill="url(#card-gloss-white)" stroke="#A8C4E2" stroke-width="1.3"/>
+  <!-- Top Refined Navy Header Strip (h=42) with Top Specular Line -->
+  <path d="M 1263 279 A 15 15 0 0 1 1278 265 H 2326 A 15 15 0 0 1 2341 279 V 307 H 1263 Z" fill="url(#hdr-grad-navy-b)"/>
+  <path d="M 1278 266 H 2326" stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="1"/>
+
+  <rect x="1280" y="271" width="30" height="30" rx="7" fill="#FFFFFF" fill-opacity="0.2" stroke="#FFFFFF" stroke-opacity="0.45"/>
+  <path d="M 1295 277 L 1297 284 L 1304 286 L 1297 288 L 1295 295 L 1293 288 L 1286 286 L 1293 284 Z" fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linejoin="round"/>
+  <text x="1322" y="293" class="panel-title">智能个人助理</text>
+  <text x="1484" y="292.5" class="panel-sub">邮件、记忆与跨领域协作</text>
+  <rect x="2142" y="272" width="178" height="26" rx="13" fill="#FFFFFF" fill-opacity="0.2" stroke="#FFFFFF" stroke-opacity="0.45"/>
+  <text x="2231" y="290" text-anchor="middle" font-size="14" font-weight="600" fill="#FFFFFF">以员工为中心</text>
+
+  <!-- Mini Hub-and-Spoke Diagram inside 智能个人助理 -->
+  <rect x="1282" y="322" width="166" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="1365" y="344.5" text-anchor="middle" class="flow-node">邮件沟通</text>
+  <path d="M 1452 339 H 1472" stroke="#1764A0" stroke-width="1.6" marker-start="url(#arrow-mid)" marker-end="url(#arrow-mid)"/>
+
+  <rect x="1476" y="322" width="166" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="1559" y="344.5" text-anchor="middle" class="flow-node">个人记忆</text>
+  <path d="M 1646 339 H 1672" stroke="#003584" stroke-width="1.8" marker-start="url(#arrow-navy)" marker-end="url(#arrow-navy)"/>
+
+  <!-- High-Gloss Navy Jewel Capsule: 个人助理中枢 -->
+  <rect x="1676" y="320" width="252" height="38" rx="19" fill="url(#hub-navy-grad)" stroke="#0E3C7D" stroke-width="1.2"/>
+  <path d="M 1695 321 H 1909" stroke="#FFFFFF" stroke-opacity="0.38" stroke-width="1"/>
+  <path d="M 1744 332 L 1745.8 337.2 L 1751 339 L 1745.8 340.8 L 1744 346 L 1742.2 340.8 L 1737 339 L 1742.2 337.2 Z" fill="#FFFFFF"/>
+  <text x="1760" y="344.5" font-size="16" font-weight="700" fill="#FFFFFF">个人助理中枢</text>
+
+  <path d="M 1932 339 H 1958" stroke="#003584" stroke-width="1.8" marker-start="url(#arrow-navy)" marker-end="url(#arrow-navy)"/>
+  <rect x="1962" y="322" width="166" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="2045" y="344.5" text-anchor="middle" class="flow-node">日常办公</text>
+  <path d="M 2132 339 H 2152" stroke="#1764A0" stroke-width="1.6" marker-start="url(#arrow-mid)" marker-end="url(#arrow-mid)"/>
+
+  <rect x="2156" y="322" width="166" height="34" rx="8" fill="url(#card-gloss-white)" stroke="#BED5EB" stroke-width="1.1"/>
+  <text x="2239" y="344.5" text-anchor="middle" class="flow-node">专家协同</text>
+
+  <!-- 2x3 Micro-Icon Tiles: 智能个人助理 (y=368, 432, 496; h=56) -->
+  <!-- Row 1 -->
+  <rect x="1282" y="368" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1294" y="379" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="1302" y="390" width="18" height="12" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1303 391 L 1311 397 L 1319 391" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <text x="1340" y="392" class="tile-title">智能邮件</text>
+  <text x="1340" y="414" class="tile-sub">dsh-mail · 检索日报 · 批准发送</text>
+
+  <rect x="1810" y="368" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1822" y="379" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <circle cx="1839" cy="396" r="8" fill="none" stroke="#1764A0" stroke-width="1.2" stroke-dasharray="2.5 2"/>
+  <circle cx="1839" cy="396" r="4.5" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <circle cx="1839" cy="396" r="1.8" fill="#003584"/>
+  <text x="1868" y="392" class="tile-title">个人记忆</text>
+  <text x="1868" y="414" class="tile-sub">Hindsight · 员工自主管理</text>
+
+  <!-- Row 2 -->
+  <rect x="1282" y="432" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1294" y="443" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="1303" y="454" width="16" height="11" rx="3" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1307 465 L 1305 469 L 1311 465" fill="none" stroke="#003584" stroke-width="1.4"/>
+  <text x="1340" y="456" class="tile-title">企业 IM 聊天</text>
+  <text x="1340" y="478" class="tile-sub">单群聊互通 · 按需自选生成摘要</text>
+
+  <rect x="1810" y="432" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1822" y="443" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="1832" y="452" width="14" height="16" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1836 458 L 1838 460 L 1843 455" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <text x="1868" y="456" class="tile-title">OA 办公</text>
+  <text x="1868" y="478" class="tile-sub">授权阅览 · 待办整理</text>
+
+  <!-- Row 3 -->
+  <rect x="1282" y="496" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1294" y="507" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <circle cx="1307" cy="520" r="3" fill="#003584"/><circle cx="1316" cy="524" r="2.5" fill="#1764A0"/><circle cx="1306" cy="530" r="2.5" fill="#1758A8"/>
+  <path d="M 1309 521 L 1314 523 M 1307 523 L 1306 527" stroke="#003584" stroke-width="1.2"/>
+  <text x="1340" y="520" class="tile-title">专家智能体</text>
+  <text x="1340" y="542" class="tile-sub">Delegra · 按需委派与综合</text>
+
+  <rect x="1810" y="496" width="512" height="56" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1822" y="507" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="1830" y="518" width="6" height="12" rx="1.5" fill="none" stroke="#003584" stroke-width="1.4"/>
+  <rect x="1839" y="517" width="10" height="8" rx="1.5" fill="none" stroke="#1758A8" stroke-width="1.4"/>
+  <path d="M 1836 524 H 1842" stroke="#1764A0" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="1868" y="520" class="tile-title">跨端任务</text>
+  <text x="1868" y="542" class="tile-sub">IM 远程触达本人桌面助理</text>
+
+  <!-- Vertical Connector: 能力层 -> 协同层 -->
+  <path d="M 1802 566 V 583" stroke="#003584" stroke-width="2" marker-end="url(#arrow-navy)"/>
+  <circle cx="1802" cy="566" r="3" fill="#003584"/>
+
+  <!-- ==================== 4. 协同层: 企业 IM 协作 (清晰、克制、均衡对称流) ==================== -->
+  <rect x="154" y="586" width="2188" height="144" rx="16" fill="url(#card-gloss-tint)" stroke="#B8D0E8" stroke-width="1.3"/>
+  <path d="M 170 587 H 2326" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="1.2"/>
+
+  <!-- Left Title Block (w=206, Enamel Finish Card) -->
+  <rect x="174" y="600" width="206" height="116" rx="12" fill="url(#card-gloss-white)" stroke="#9DBEE0" stroke-width="1.3"/>
+  <path d="M 186 600 H 268" stroke="url(#accent-grad-1)" stroke-width="3" stroke-linecap="round"/>
+  <rect x="194" y="618" width="34" height="34" rx="8" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="202" y="627" width="12" height="9" rx="2" fill="none" stroke="#1758A8" stroke-width="1.5"/>
+  <rect x="208" y="634" width="12" height="9" rx="2" fill="#FFFFFF" stroke="#003584" stroke-width="1.6"/>
+  <text x="238" y="642" font-size="21" font-weight="700" fill="#003584">企业 IM 协作</text>
+  <rect x="194" y="666" width="170" height="30" rx="15" fill="url(#card-gloss-tint)" stroke="#C0D6EC"/>
+  <text x="279" y="686.5" text-anchor="middle" font-size="14.5" font-weight="600" fill="#1758A8">两条独立融合体验</text>
+
+  <!-- Path A Card + Visual Flow Diagram (x=396, w=955) -->
+  <rect x="396" y="600" width="955" height="116" rx="12" fill="url(#card-gloss-white)" stroke="#B8D0E8" stroke-width="1.2"/>
+  <circle cx="418" cy="624" r="4" fill="#003584"/>
+  <text x="432" y="630.5" font-size="20" font-weight="700" fill="#0E2A52">人与人聊天</text>
+  <rect x="556" y="611" width="302" height="26" rx="13" fill="url(#card-gloss-tint)" stroke="#C0D6EC"/>
+  <text x="707" y="629" text-anchor="middle" font-size="14" font-weight="600" fill="#1758A8">消息优先互通 · 自选记录按需生成摘要</text>
+
+  <!-- Sequence Diagram A (y=648, h=52, center=674) -->
+  <rect x="414" y="648" width="185" height="52" rx="9" fill="url(#card-gloss-white)" stroke="#C4D8EC"/>
+  <circle cx="458" cy="669" r="3" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <path d="M 453 678 C 453 674.5 463 674.5 463 678" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <text x="472" y="679.5" class="flow-node">同事 / 群组</text>
+  <path d="M 603 674 H 635" stroke="#1764A0" stroke-width="1.8" marker-start="url(#arrow-mid)" marker-end="url(#arrow-mid)"/>
+
+  <rect x="639" y="648" width="185" height="52" rx="9" fill="url(#card-gloss-white)" stroke="#C4D8EC"/>
+  <rect x="690" y="668" width="14" height="10" rx="2.5" fill="none" stroke="#1758A8" stroke-width="1.5"/>
+  <text x="712" y="679.5" class="flow-node">企业 IM</text>
+  <path d="M 828 674 H 860" stroke="#1764A0" stroke-width="1.8" marker-start="url(#arrow-mid)" marker-end="url(#arrow-mid)"/>
+
+  <rect x="864" y="648" width="185" height="52" rx="9" fill="url(#active-flow-grad)" stroke="#1758A8" stroke-width="1.4"/>
+  <path d="M 914 667 L 915.5 671.5 L 920 673 L 915.5 674.5 L 914 679 L 912.5 674.5 L 908 673 L 912.5 671.5 Z" fill="#003584"/>
+  <text x="928" y="679.5" class="flow-node-blue">DSH 聊天</text>
+  <path d="M 1053 674 H 1083" stroke="#003584" stroke-width="1.8" marker-end="url(#arrow-navy)"/>
+
+  <!-- Endpoint A: Balanced, gentle, clearly explained -->
+  <rect x="1087" y="648" width="246" height="52" rx="9" fill="url(#card-gloss-tint)" stroke="#92B8DE" stroke-width="1.2"/>
+  <rect x="1116" y="665" width="14" height="17" rx="2" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <path d="M 1119.5 670.5 H 1126.5 M 1119.5 675 H 1124.5" stroke="#003584" stroke-width="1.3" stroke-linecap="round"/>
+  <text x="1142" y="670" font-size="16" font-weight="700" fill="#0E2A52">个人聊天总结</text>
+  <text x="1142" y="690" class="flow-sub">自选记录 · 仅归个人留存</text>
+
+  <!-- Path B Card + Visual Flow Diagram (x=1367, w=955) -->
+  <rect x="1367" y="600" width="955" height="116" rx="12" fill="url(#card-gloss-white)" stroke="#B8D0E8" stroke-width="1.2"/>
+  <circle cx="1389" cy="624" r="4" fill="#1758A8"/>
+  <text x="1403" y="630.5" font-size="20" font-weight="700" fill="#0E2A52">远程交办桌面助理</text>
+  <rect x="1584" y="611" width="268" height="26" rx="13" fill="url(#card-gloss-tint)" stroke="#C0D6EC"/>
+  <text x="1718" y="629" text-anchor="middle" font-size="14" font-weight="600" fill="#1758A8">IM 发起交办 · 进展与确认回传</text>
+
+  <!-- Sequence Diagram B (y=648, h=52, center=674) -->
+  <rect x="1385" y="648" width="248" height="52" rx="9" fill="url(#card-gloss-white)" stroke="#C4D8EC"/>
+  <rect x="1450" y="666" width="10" height="15" rx="2" fill="none" stroke="#1758A8" stroke-width="1.5"/>
+  <text x="1469" y="679.5" class="flow-node">IM 智能助手</text>
+
+  <path d="M 1637 674 H 1707" stroke="#1764A0" stroke-width="1.8" marker-start="url(#arrow-mid)" marker-end="url(#arrow-mid)"/>
+  <text x="1672" y="663" text-anchor="middle" font-size="14" font-weight="700" fill="#1758A8">交办</text>
+
+  <rect x="1711" y="648" width="267" height="52" rx="9" fill="url(#active-flow-grad)" stroke="#1758A8" stroke-width="1.4"/>
+  <rect x="1775" y="667" width="16" height="11" rx="2" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <path d="M 1773 681 H 1793" stroke="#003584" stroke-width="1.5" stroke-linecap="round"/>
+  <text x="1800" y="679.5" class="flow-node-blue">本人桌面 DSH</text>
+
+  <path d="M 1982 674 H 2052" stroke="#003584" stroke-width="1.8" marker-end="url(#arrow-navy)"/>
+  <text x="2017" y="663" text-anchor="middle" font-size="14" font-weight="700" fill="#003584">回传</text>
+
+  <!-- Endpoint B: Balanced with semantic green check -->
+  <rect x="2056" y="648" width="248" height="52" rx="9" fill="url(#card-gloss-tint)" stroke="#92B8DE" stroke-width="1.2"/>
+  <circle cx="2104" cy="674" r="7" fill="none" stroke="#1F7A4D" stroke-width="1.6"/>
+  <path d="M 2101 674 L 2103.5 676.5 L 2107.5 671.5" fill="none" stroke="#1F7A4D" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="2120" y="679.5" class="flow-node">进展 · 确认 · 结果</text>
+
+  <!-- ==================== 5. 生态层: 企业能力生态 ==================== -->
+  <rect x="154" y="750" width="2188" height="220" rx="16" fill="url(#card-gloss-white)" stroke="#B4CEE6" stroke-width="1.4"/>
+  <path d="M 170 751 H 2326" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.2"/>
+  <rect x="174" y="766" width="4.5" height="22" rx="2.2" fill="#003584"/>
+  <text x="190" y="784.5" class="layer-title">企业能力生态</text>
+  <text x="352" y="784" class="layer-sub">能力聚合、注册发现与工作台直达</text>
+
+  <!-- Card 1: AIHUB 能力门户 (w=602) with Luminous Gradient Accent Top -->
+  <rect x="174" y="802" width="602" height="114" rx="12" fill="url(#card-gloss-white)" stroke="#C0D5EB" stroke-width="1.2"/>
+  <path d="M 186 802 H 764" stroke="url(#accent-grad-1)" stroke-width="3" stroke-linecap="round"/>
+  <rect x="194" y="817" width="34" height="34" rx="8" fill="url(#hub-navy-grad)"/>
+  <rect x="203" y="826" width="7" height="7" rx="1.5" fill="#FFFFFF"/><rect x="212" y="826" width="7" height="7" rx="1.5" fill="#B8D2E7"/>
+  <rect x="203" y="835" width="7" height="7" rx="1.5" fill="#B8D2E7"/><rect x="212" y="835" width="7" height="7" rx="1.5" fill="#FFFFFF"/>
+  <text x="240" y="842" class="eco-title">AIHUB 能力门户</text>
+  <text x="434" y="841" class="eco-sub">企业能力与插件目录</text>
+
+  <rect x="194" y="866" width="128" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.1"/>
+  <rect x="202" y="875" width="4" height="18" rx="2" fill="#003584"/>
+  <text x="262" y="890" text-anchor="middle" class="chip-text">MCP</text>
+  <rect x="338" y="866" width="128" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.1"/>
+  <rect x="346" y="875" width="4" height="18" rx="2" fill="#1758A8"/>
+  <text x="406" y="890" text-anchor="middle" class="chip-text">Skills</text>
+  <rect x="482" y="866" width="128" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.1"/>
+  <rect x="490" y="875" width="4" height="18" rx="2" fill="#1764A0"/>
+  <text x="550" y="890" text-anchor="middle" class="chip-text">CLI</text>
+  <rect x="626" y="866" width="128" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.1"/>
+  <rect x="634" y="875" width="4" height="18" rx="2" fill="#3E7BB8"/>
+  <text x="694" y="890" text-anchor="middle" class="chip-text">插件</text>
+
+  <!-- Arrow 1 (gap 776..900 = 124px, center=838) -->
+  <path d="M 784 859 H 892" stroke="#003584" stroke-width="2.2" marker-end="url(#arrow-navy)"/>
+  <rect x="786" y="827" width="104" height="24" rx="12" fill="url(#card-gloss-tint)" stroke="#A8C4E2"/>
+  <text x="838" y="843.5" text-anchor="middle" font-size="13.5" font-weight="700" fill="#003584">MCP / Skills</text>
+
+  <!-- Card 2: AI 注册中心 (w=552) with Luminous Gradient Accent Top -->
+  <rect x="900" y="802" width="552" height="114" rx="12" fill="url(#card-gloss-white)" stroke="#C0D5EB" stroke-width="1.2"/>
+  <path d="M 912 802 H 1440" stroke="url(#accent-grad-2)" stroke-width="3" stroke-linecap="round"/>
+  <rect x="920" y="817" width="34" height="34" rx="8" fill="#1758A8"/>
+  <circle cx="937" cy="834" r="7" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+  <circle cx="937" cy="834" r="2.2" fill="#FFFFFF"/>
+  <text x="966" y="842" class="eco-title">AI 注册中心</text>
+  <text x="1108" y="841" class="eco-sub">服务注册与按需分发</text>
+
+  <rect x="920" y="866" width="248" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.1"/>
+  <text x="1044" y="890" text-anchor="middle" class="chip-text" style="font-size:16px">MCP 注册与发现</text>
+  <rect x="1184" y="866" width="248" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.1"/>
+  <text x="1308" y="890" text-anchor="middle" class="chip-text" style="font-size:16px">Skills 注册与分发</text>
+
+  <!-- Arrow 2 (gap 1452..1576 = 124px, center=1514) -->
+  <path d="M 1460 859 H 1568" stroke="#003584" stroke-width="2.2" marker-end="url(#arrow-navy)"/>
+  <rect x="1464" y="827" width="100" height="24" rx="12" fill="url(#card-gloss-tint)" stroke="#A8C4E2"/>
+  <text x="1514" y="843.5" text-anchor="middle" font-size="13.5" font-weight="700" fill="#003584">发现 · 获取</text>
+
+  <!-- Card 3: DSH 个人工作台 (w=746) with Luminous Gradient Accent Top -->
+  <rect x="1576" y="802" width="746" height="114" rx="12" fill="url(#card-gloss-tint)" stroke="#92B8DE" stroke-width="1.3"/>
+  <path d="M 1588 802 H 2310" stroke="url(#accent-grad-3)" stroke-width="3" stroke-linecap="round"/>
+  <rect x="1596" y="817" width="34" height="34" rx="8" fill="url(#hub-navy-grad)"/>
+  <rect x="1605" y="826" width="16" height="16" rx="3" fill="none" stroke="#FFFFFF" stroke-width="1.7"/>
+  <path d="M 1609 834 L 1613 838 L 1618 831" fill="none" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round"/>
+  <text x="1642" y="842" class="eco-title" style="fill:#003584">DSH 个人工作台</text>
+  <text x="1834" y="841" class="eco-sub" style="fill:#1758A8">统一发现、安装与安全调用</text>
+
+  <rect x="1596" y="866" width="345" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#ADC8E6" stroke-width="1.1"/>
+  <text x="1768.5" y="890" text-anchor="middle" class="chip-text" style="font-size:16px">原生市场浏览与安装插件</text>
+  <rect x="1957" y="866" width="345" height="36" rx="8" fill="url(#card-gloss-white)" stroke="#ADC8E6" stroke-width="1.1"/>
+  <text x="2129.5" y="890" text-anchor="middle" class="chip-text" style="font-size:16px">授权范围内调用技能与工具</text>
+
+  <!-- Bottom Dashed Bus: AIHUB -> DSH (center=1248) -->
+  <path d="M 475 916 V 943 H 1098 M 1398 943 H 1949 V 920" fill="none" stroke="#1764A0" stroke-width="1.9" stroke-dasharray="6 4" marker-end="url(#arrow-slate)"/>
+  <rect x="1098" y="928" width="300" height="30" rx="15" fill="url(#card-gloss-tint)" stroke="#92B8DE" stroke-width="1.2"/>
+  <text x="1248" y="948.5" text-anchor="middle" font-size="15" font-weight="700" fill="#003584">CLI / 插件 · 发现与按需安装</text>
+
+  <!-- Inter-layer Upward Connectors: 治理层 -> 生态层 -->
+  <path d="M 475 990 V 973" stroke="#346CA2" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+  <circle cx="475" cy="990" r="2.5" fill="#003584"/>
+  <path d="M 1176 990 V 973" stroke="#346CA2" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+  <circle cx="1176" cy="990" r="2.5" fill="#003584"/>
+  <path d="M 1949 990 V 973" stroke="#346CA2" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+  <circle cx="1949" cy="990" r="2.5" fill="#003584"/>
+
+  <!-- ==================== 6. 治理层: 企业接入与治理 ==================== -->
+  <rect x="154" y="990" width="2188" height="162" rx="16" fill="url(#card-gloss-white)" stroke="#B4CEE6" stroke-width="1.3"/>
+  <path d="M 170 991 H 2326" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.2"/>
+  <rect x="174" y="1005" width="4.5" height="22" rx="2.2" fill="#1758A8"/>
+  <text x="190" y="1023.5" class="layer-title">企业接入与治理</text>
+  <text x="376" y="1023" class="layer-sub">以企业边界支撑个人体验 · 全链路授权与安全可控</text>
+
+  <!-- 4x2 Governance Cards with Enamel Gloss Tiles (x=174, 714, 1254, 1794; w=524; h=50) -->
+  <!-- Row 1 (y=1038) -->
+  <rect x="174" y="1038" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="186" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <circle cx="202" cy="1058.5" r="3.5" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 196 1069.5 C 196 1065.5 208 1065.5 208 1069.5" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <text x="230" y="1069.5" class="gov-title">统一身份</text>
+  <text x="328" y="1069" class="gov-sub"><tspan font-weight="700" fill="#003584">人 × Agent</tspan><tspan dx="6">· 复用企业账号与权限</tspan></text>
+
+  <rect x="714" y="1038" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="726" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="736" y="1061" width="12" height="9" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 739 1061 V 1058 A 3 3 0 0 1 745 1058 V 1061" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <text x="770" y="1069.5" class="gov-title">凭据保护</text>
+  <text x="868" y="1069" class="gov-sub">本地加密 · 严防凭据外泄</text>
+
+  <rect x="1254" y="1038" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1266" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <circle cx="1282" cy="1063" r="6.5" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1276 1063 H 1288 M 1282 1056.5 C 1285 1060 1285 1066 1282 1069.5" fill="none" stroke="#003584" stroke-width="1.2"/>
+  <text x="1310" y="1069.5" class="gov-title">企业模型</text>
+  <text x="1408" y="1069" class="gov-sub">网关访问 · 数据不出边界</text>
+
+  <rect x="1794" y="1038" width="528" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1806" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <path d="M 1816 1063 L 1820 1067 L 1828 1058" fill="none" stroke="#1F7A4D" stroke-width="1.9" stroke-linecap="round"/>
+  <text x="1850" y="1069.5" class="gov-title">确认与审计</text>
+  <text x="1966" y="1069" class="gov-sub">人工确认 · 全程可追溯</text>
+
+  <!-- Row 2 (y=1094) -->
+  <rect x="174" y="1094" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="186" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <path d="M 198 1119 H 206 M 196 1115 C 193 1115 193 1123 196 1123 M 208 1115 C 211 1115 211 1123 208 1123" fill="none" stroke="#003584" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="230" y="1125.5" class="gov-title">研发连接</text>
+  <text x="328" y="1125" class="gov-sub">无缝衔接 DevOps 与 Gitee</text>
+
+  <rect x="714" y="1094" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="726" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <rect x="736" y="1113" width="6" height="6" rx="1" fill="#003584"/><rect x="743" y="1113" width="6" height="6" rx="1" fill="#1764A0"/>
+  <rect x="736" y="1120" width="6" height="6" rx="1" fill="#1764A0"/><rect x="743" y="1120" width="6" height="6" rx="1" fill="#003584"/>
+  <text x="770" y="1125.5" class="gov-title">企业组合</text>
+  <text x="868" y="1125" class="gov-sub">按需装配 · 灵活协同</text>
+
+  <rect x="1254" y="1094" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1266" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <path d="M 1282 1111 L 1289 1115 V 1123 L 1282 1127 L 1275 1123 V 1115 Z" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <text x="1310" y="1125.5" class="gov-title">插件生态</text>
+  <text x="1408" y="1125" class="gov-sub">原生市场 · 统一安装管理</text>
+
+  <rect x="1794" y="1094" width="528" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
+  <rect x="1806" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
+  <circle cx="1822" cy="1119" r="6" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <circle cx="1822" cy="1119" r="2.2" fill="#1758A8"/>
+  <text x="1850" y="1125.5" class="gov-title">品牌体验</text>
+  <text x="1966" y="1125" class="gov-sub">河洛苍螭 · 多端一致体验</text>
+
+  <!-- Inter-layer Upward Connectors: 底座层 -> 治理层 -->
+  <path d="M 553 1170 V 1155" stroke="#003584" stroke-width="1.8" marker-end="url(#arrow-navy)"/>
+  <circle cx="553" cy="1170" r="2.5" fill="#003584"/>
+  <path d="M 1262 1170 V 1155" stroke="#1758A8" stroke-width="1.8" marker-end="url(#arrow-slate)"/>
+  <circle cx="1262" cy="1170" r="2.5" fill="#1758A8"/>
+  <path d="M 1957 1170 V 1155" stroke="#1764A0" stroke-width="1.8" marker-end="url(#arrow-mid)"/>
+  <circle cx="1957" cy="1170" r="2.5" fill="#1764A0"/>
+
+  <!-- ==================== 7. 底座层: 企业系统与产品底座 (Chiseled Pedestal Base) ==================== -->
+  <!-- Pillar 1: 安全与研发底座 (x=154..952, w=798; 4 equal chips w=178) -->
+  <rect x="154" y="1170" width="798" height="98" rx="14" fill="url(#pillar-gloss)" stroke="#A0BFDF" stroke-width="1.3"/>
+  <path d="M 168 1171 H 938" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.2"/>
+  <circle cx="182" cy="1192" r="4" fill="#003584"/>
+  <text x="196" y="1197.5" font-size="16" font-weight="700" fill="#003584">安全与研发底座</text>
+  <rect x="176" y="1212" width="178" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="265" y="1238" text-anchor="middle" class="chip-text">企业 IAM</text>
+  <rect x="368" y="1212" width="178" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="457" y="1238" text-anchor="middle" class="chip-text">AI 网关</text>
+  <rect x="560" y="1212" width="178" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="649" y="1238" text-anchor="middle" class="chip-text">DevOps</text>
+  <rect x="752" y="1212" width="178" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="841" y="1238" text-anchor="middle" class="chip-text">Gitee</text>
+
+  <!-- Pillar 2: 办公与沟通底座 (x=968..1556, w=588; 3 equal chips w=172) -->
+  <rect x="968" y="1170" width="588" height="98" rx="14" fill="url(#pillar-gloss)" stroke="#A0BFDF" stroke-width="1.3"/>
+  <path d="M 982 1171 H 1542" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.2"/>
+  <circle cx="996" cy="1192" r="4" fill="#1758A8"/>
+  <text x="1010" y="1197.5" font-size="16" font-weight="700" fill="#1758A8">日常办公与沟通</text>
+  <rect x="990" y="1212" width="172" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="1076" y="1238" text-anchor="middle" class="chip-text">Coremail</text>
+  <rect x="1176" y="1212" width="172" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="1262" y="1238" text-anchor="middle" class="chip-text">企业 IM</text>
+  <rect x="1362" y="1212" width="172" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="1448" y="1238" text-anchor="middle" class="chip-text">OA</text>
+
+  <!-- Pillar 3: 能力与智能生态 (x=1572..2342, w=770; 4 equal chips w=171) -->
+  <rect x="1572" y="1170" width="770" height="98" rx="14" fill="url(#pillar-gloss)" stroke="#A0BFDF" stroke-width="1.3"/>
+  <path d="M 1586 1171 H 2328" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.2"/>
+  <circle cx="1600" cy="1192" r="4" fill="#1764A0"/>
+  <text x="1614" y="1197.5" font-size="16" font-weight="700" fill="#003584">能力与智能生态</text>
+  <rect x="1594" y="1212" width="171" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="1679.5" y="1238" text-anchor="middle" class="chip-text">AIHUB</text>
+  <rect x="1779" y="1212" width="171" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="1864.5" y="1238" text-anchor="middle" class="chip-text">AI 注册中心</text>
+  <rect x="1964" y="1212" width="171" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="2049.5" y="1238" text-anchor="middle" class="chip-text">Hindsight</text>
+  <rect x="2149" y="1212" width="171" height="40" rx="9" fill="url(#card-gloss-white)" stroke="#BDD3E8" stroke-width="1.2"/>
+  <text x="2234.5" y="1238" text-anchor="middle" class="chip-text">Delegra</text>
+
+  <!-- ==================== 8. FOOTER ==================== -->
+  <path d="M 58 1286 H 2342" stroke="url(#rule-fade)" stroke-width="1.4"/>
+  <text x="58" y="1313" class="foot">产品全景蓝图 · 连接研发交付、日常协同与企业能力，在统一授权与安全边界内释放智能生产力</text>
+  <text x="2342" y="1313" text-anchor="end" class="kicker" style="font-size:15.5px;letter-spacing:2px;fill:#003584">河洛 · HELUO FORGE</text>
+</svg>
