@@ -80,6 +80,7 @@ export function createServiceGrant(env) {
       const raw = await fetchUserInfo({
         userInfoEndpoint: endpoint,
         accessToken: grant.accessToken,
+        tokenTransport: config.userInfoTokenTransport,
         fetchImpl,
         timeoutMs: Math.min(config.httpTimeoutMs, 5000),
       });

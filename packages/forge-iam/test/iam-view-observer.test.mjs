@@ -83,8 +83,9 @@ test('the actual factory serves a signed-out first frame and never projects secr
   assert.equal(view.canSignIn, true);
   assert.deepEqual(Object.keys(view).sort(), [
     'accessExpiresAt', 'canSignIn', 'canSignOut', 'configured', 'error', 'exclusive',
-    'gatewayConsoleUrl', 'gatewayCredential', 'missing', 'principal', 'signedIn', 'state',
+    'gatewayConsoleUrl', 'gatewayCredential', 'identity', 'missing', 'principal', 'signedIn', 'state',
   ]);
+  assert.equal(view.identity, null, 'a signed-out frame carries no identity');
   assert.ok(Object.isFrozen(view));
   assert.ok(Object.isFrozen(view.missing));
   assert.deepEqual(Object.keys(view.gatewayCredential), ['state']);

@@ -25,6 +25,7 @@ export const CONFIG_FIELDS = [
   'revocationEndpoint',
   'endSessionEndpoint',
   'userInfoEndpoint',
+  'userInfoTokenTransport',
   'clientId',
   'scopes',
   'redirectPath',
@@ -87,6 +88,7 @@ const DEFAULTS = {
   attemptTimeoutSeconds: 300,
   httpTimeoutMs: 10000,
   logoutMode: 'local',
+  userInfoTokenTransport: 'header',
   requireExclusive: true,
 };
 
@@ -261,6 +263,16 @@ export function validateConfig(input) {
       issues.push(issue('logoutMode', 'logoutMode must be local or rp'));
     } else {
       value.logoutMode = source.logoutMode;
+    }
+  }
+
+  // 企业 IAM 的 profile 端点要求令牌走 URL query（?access_token=...）；
+  // 标准 OIDC 保持 Bearer 头。两种取值之外的任何值都拒绝启动。
+  if (source.userInfoTokenTransport !== undefined && source.userInfoTokenTransport !== null) {
+    if (source.userInfoTokenTransport !== 'header' && source.userInfoTokenTransport !== 'query') {
+      issues.push(issue('userInfoTokenTransport', 'userInfoTokenTransport must be header or query'));
+    } else {
+      value.userInfoTokenTransport = source.userInfoTokenTransport;
     }
   }
 
