@@ -68,6 +68,11 @@ export const READ_REASONS = Object.freeze({
   SPAWN_FAILED: 'SPAWN_FAILED',
   /** 退出码非 0。 */
   NONZERO_EXIT: 'NONZERO_EXIT',
+  /**
+   * 服务端判定"目标对象不存在"（404，或 500 但文本是"未找到/Not Found"）。
+   * 与真实 NONZERO_EXIT 服务故障分开：确定失败、确定无副作用，改正目标后可重试。
+   */
+  ITEM_NOT_FOUND: 'ITEM_NOT_FOUND',
   /** CLI 自报"字段/开关不认识"（实测 `--json` 是无值开关，不会再传字段清单，这条只兜底 CLI 自身错误）。 */
   UNSUPPORTED_FIELD: 'UNSUPPORTED_FIELD',
   /** 参数不在声明白名单里（`list`/`state`/`limit`/`json` 之外）。 */
@@ -256,6 +261,10 @@ function deniedRuleForReason(reason) {
  * 拼读信封（唯一构造点）：固定十项在前，`message`/`rule`/载荷在有值时追加。
  *
  * 失败信封不带载荷、不带 `result_refs`——"没读到的东西不许当成事实交出去"。
+ *
+ * 清单读（`kind:'list'`）的两条既定边界写在载荷里：`source_revision` 恒为 `null`（列表是
+ * 查询快照，不承诺单对象修订号；对象读才要求 created_at/updated_at/last_activity_at），
+ * `total_count` 在 CLI 未给出时是 `null`（未知），两者都不是失败，也不进 `missing_fields`。
  */
 function buildEnvelope({
   action,
@@ -310,9 +319,11 @@ function payloadOf(facts) {
   if (isPlainObject(facts.object)) payload.object = facts.object;
   if (Array.isArray(facts.items)) payload.items = Object.freeze([...facts.items]);
   if (Number.isInteger(facts.count)) payload.count = facts.count;
-  // CLI 的 `meta.total_count`：清单被 `--limit` 截住时说明"总共有多少条"，是附加事实而不是
-  // 缺失字段——它没进 `missing_fields`，也不会在取不到时出现（宁缺不编）。
-  if (Number.isInteger(facts.total_count)) payload.total_count = facts.total_count;
+  // 清单读固定携带 `total_count`：CLI 的 `meta.total_count` 取不到时是 `null`（未知），
+  // 不省略也不伪造 0——省略会让消费方把"未知"读成"这一页就是全部"。
+  // 清单读的另一个既定边界：`source_revision` 恒为 `null`（列表不承诺单对象事实版本，
+  // 对象读才要求 created_at/updated_at/last_activity_at），它不是失败也不是缺失字段。
+  if (facts.kind === 'list') payload.total_count = Number.isInteger(facts.total_count) ? facts.total_count : null;
   if (facts.truncated === true) payload.truncated = true;
   return payload;
 }

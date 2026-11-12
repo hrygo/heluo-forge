@@ -10,12 +10,12 @@
  *    人工核对（`replay_blocked`），不许自动再发一次子进程；只有 `failed`（确定未生效）可以
  *    重试，因为它连台账都不写。
  *
- * 幂等键与 r1（`packages/forge-devops/src/actions.mjs` 的 `idempotencyKey`）**逐字同位**：
- * `sha256(变更号|对象类型|归一化标题)` 前 16 位小写十六进制。归一化规则也一样（变更号大写、
- * 标题 NFKC → 折叠空白 → 去首尾 → 小写 → 去尾部标点），因为两个 provider 面对的是**同一个
- * 变更下的同一个对象**：`CHG-2026-001` 在 GitHub 面建过 Issue，在 Gitee 面就绝不该再建一个
- * "同名但键不同"的 Issue。两边算法一旦漂移，双 provider 场景就会二次建单——这是本文件唯一
- * 的跨包不变量，由 `test/session.test.mjs` 的固定向量守住。
+ * 幂等键是 `sha256(变更号|动作|对象类型|规范化目标|归一化标题)` 前 16 位小写十六进制。
+ * 变更号大写、标题与目标都做 NFKC 归一；键必须同时包含**动作**与**目标**，因为同一变更下
+ * 同一个"标题"可能落在不同对象上：`review.publish` 写远端 PR 评论，`review.record` 写本地
+ * `review.md`，两者只有动作与目标不同。键不含对象身份时，后一次写会命中前一次的 `done` 台账
+ * 并静默返回旧结果——受控写场景里这是最危险的一类错误，`test/session.test.mjs` 用固定向量
+ * 与"跨对象同标题不同键"用例守住。
  *
  * 证据（`buildEvidence`）只由**白名单字段**拼出来：命令标签、时间、宿主版本、目标、来源类型。
  * 没有 stdout、没有参数正文、没有令牌——"证据不掺假"的底线是它压根装不下别的东西。
@@ -60,20 +60,44 @@ function normalizeObjectTitle(title) {
     .trim();
 }
 
-/**
- * 幂等键：`sha256(变更号|对象类型|归一化标题)` 前 16 位十六进制。
+/** 目标归一化：NFKC → 反斜杠统一为正斜杠 → 折叠重复斜杠 → `!12` 与 `#12` 同形 → 去尾部斜杠。
  *
- * @param {{ change?: string, objectType?: string, title?: string }} input
+ * 只消除"写法不同、对象相同"的差异，**不做大小写折叠**：仓库名与本地路径在不同平台的大小写
+ * 语义不一致，把 `/repo/A` 与 `/repo/a` 并成一个键会让本地写命中错误的台账条目。
+ */
+function normalizeObjectTarget(target) {
+  const raw = text(target).normalize('NFKC').replace(/\\/gu, '/');
+  if (raw === '') return '';
+  const collapsed = raw.replace(/\/{2,}/gu, '/').replace(/!(\d+)$/u, '#$1');
+  const trimmed = collapsed.replace(/\/+$/u, '');
+  if (trimmed !== '') return trimmed;
+  return collapsed.startsWith('/') ? '/' : '';
+}
+
+/**
+ * 幂等键：`sha256(变更号|动作|对象类型|规范化目标|归一化标题)` 前 16 位十六进制。
+ *
+ * 动作与目标是必填项，不提供"忽略它们"的兼容分支：少任何一个都算不出对象身份，宁可直接
+ * 抛错，也不产出一个可能被别的对象命中的半截键。
+ *
+ * @param {{ change?: string, action?: string, objectType?: string, target?: string, title?: string }} input
  * @returns {string} 16 位小写十六进制
  */
-export function idempotencyKey({ change, objectType, title } = {}) {
+export function idempotencyKey({ change, action, objectType, target, title } = {}) {
   const changeId = text(change).toUpperCase();
+  const verb = text(action);
   const type = text(objectType);
-  const normalized = normalizeObjectTitle(title);
+  const normalizedTarget = normalizeObjectTarget(target);
+  const normalizedTitle = normalizeObjectTitle(title);
   if (changeId === '') throw new TypeError('幂等键缺少变更号（change）');
+  if (verb === '') throw new TypeError('幂等键缺少动作（action）');
   if (type === '') throw new TypeError('幂等键缺少对象类型（objectType）');
-  if (normalized === '') throw new TypeError('幂等键缺少可归一化的标题（title）');
-  return createHash('sha256').update(`${changeId}|${type}|${normalized}`, 'utf8').digest('hex').slice(0, 16);
+  if (normalizedTarget === '') throw new TypeError('幂等键缺少可归一化的目标（target）');
+  if (normalizedTitle === '') throw new TypeError('幂等键缺少可归一化的标题（title）');
+  return createHash('sha256')
+    .update(`${changeId}|${verb}|${type}|${normalizedTarget}|${normalizedTitle}`, 'utf8')
+    .digest('hex')
+    .slice(0, 16);
 }
 
 /**

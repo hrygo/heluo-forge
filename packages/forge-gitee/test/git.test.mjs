@@ -30,6 +30,7 @@ import {
   createGiteeGitAdapter,
   createGitCommit,
   createGitPush,
+  detectAuthTransportFailure,
   gitArgvFor,
   gitToolDefinitions,
 } from '../src/gitee-git.mjs';
@@ -284,6 +285,108 @@ test('适配器：超时/非零/坏回读的出口语义（可能已落地必须
   );
 });
 
+test('适配器：MSYS/sh 崩溃特征 → GIT_AUTH_TRANSPORT_UNAVAILABLE（凭据传输通道，不是用户名缺失）', async () => {
+  const samples = [
+    'sh: 1: /usr/bin/git-credential-store: not found',
+    'bash.exe: 1: /usr/bin/git-credential-manager: not found',
+    'cannot fork: Resource temporarily unavailable',
+    'CreateFileMapping failed: 5',
+    '\\\\.\\pipe\\git-credential',
+    'fatal: could not create named pipe: Permission denied',
+    'C:\\msys64\\usr\\bin\\sh.exe: 1: /usr/bin/helper: not found',
+  ];
+  for (const stderr of samples) {
+    const adapter = createGiteeGitAdapter({
+      runner: fakeRunner(() => ({ exitCode: 128, stdout: '', stderr, durationMs: 5, timedOut: false, truncated: false })),
+      cwd: '/tmp/offline-repo',
+    });
+    await assert.rejects(
+      () => adapter.push({ remote: 'origin', branch: 'feat/r10' }),
+      (error) => {
+        assert.equal(error.code, GIT_REASONS.AUTH_TRANSPORT_UNAVAILABLE, `应命中传输层：${stderr}`);
+        assert.equal(error.detail.mayHaveSideEffect, false, '认证请求没发出去，零副作用');
+        assert.equal(error.detail.authTransport.signs.length > 0, true);
+        assert.match(error.message, /不是用户名缺失/u);
+        return true;
+      },
+    );
+  }
+});
+
+test('适配器：普通认证拒绝/缺凭据/HTTP 断开维持 GIT_COMMAND_FAILED（不冒充传输故障）', async () => {
+  const samples = [
+    "fatal: could not read Username for 'https://corp.example': terminal prompts disabled",
+    "fatal: Authentication failed for 'https://corp.example/group/repo'",
+    "fatal: unable to access 'https://corp.example/group/repo': The requested URL returned error: 403",
+    'remote: HTTP Basic: Access denied',
+    'error: RPC failed; curl 56 Recv failure: Broken pipe',
+    'fatal: bad config line 1 in file /opt/msys/etc/gitconfig',
+  ];
+  for (const stderr of samples) {
+    const adapter = createGiteeGitAdapter({
+      runner: fakeRunner(() => ({ exitCode: 128, stdout: '', stderr, durationMs: 5, timedOut: false, truncated: false })),
+      cwd: '/tmp/offline-repo',
+    });
+    await assert.rejects(
+      () => adapter.push({ remote: 'origin', branch: 'feat/r10' }),
+      (error) => {
+        assert.equal(error.code, GIT_REASONS.COMMAND_FAILED, `不该命中传输层：${stderr}`);
+        assert.equal(error.detail.mayHaveSideEffect, false);
+        assert.equal(error.detail.authTransport, undefined);
+        return true;
+      },
+    );
+  }
+});
+
+test('适配器：msys 运行时名必须与「凭据拿不到」症状同现才归类（单独环境名不算）', async () => {
+  const combined = createGiteeGitAdapter({
+    runner: fakeRunner(() => ({
+      exitCode: 128,
+      stdout: '',
+      stderr: [
+        'Note: switching to C:\\msys64\\usr\\bin\\sh.exe for credential helper',
+        "fatal: could not read Username for 'https://corp.example': terminal prompts disabled",
+      ].join('\n'),
+      durationMs: 5,
+      timedOut: false,
+      truncated: false,
+    })),
+    cwd: '/tmp/offline-repo',
+  });
+  await assert.rejects(
+    () => combined.push({ remote: 'origin', branch: 'feat/r10' }),
+    (error) =>
+      error.code === GIT_REASONS.AUTH_TRANSPORT_UNAVAILABLE
+      && error.detail.authTransport.signs.includes('runtime-environment'),
+  );
+
+  assert.deepEqual(detectAuthTransportFailure({ stdout: '', stderr: '' }), null);
+  assert.deepEqual(
+    detectAuthTransportFailure({ stderr: 'fatal: bad config line 1 in file /opt/msys/etc/gitconfig' }),
+    null,
+    '只有 msys 字样、没有凭据症状时不能归类',
+  );
+});
+
+test('适配器：本地 commit 命中同类字样不冒充认证传输故障（只归类远端 push）', async () => {
+  const adapter = createGiteeGitAdapter({
+    runner: fakeRunner(() => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'cannot fork: Resource temporarily unavailable',
+      durationMs: 5,
+      timedOut: false,
+      truncated: false,
+    })),
+    cwd: '/tmp/offline-repo',
+  });
+  await assert.rejects(
+    () => adapter.commit({ changeId: CHANGE, message: `[${CHANGE}] 说明` }),
+    (error) => error.code === GIT_REASONS.COMMAND_FAILED && error.detail.mayHaveSideEffect === false,
+  );
+});
+
 test('适配器：push 只拼固定 argv，不提供 force/tags/all', async () => {
   const runner = fakeRunner();
   const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
@@ -366,6 +469,59 @@ test('工具：push 放行 + 正确 confirm → done，argv 固定、证据与�
   assert.equal(envelope.remote_calls, 1);
   assert.equal(policy.state.operations, 1);
   assert.deepEqual(runner.calls[0].args, ['push', 'origin', 'feat/r10']);
+});
+
+test('工具：push 已登记+确认后命中传输崩溃 → failed + use-native-http-credential（可安全重试）', async () => {
+  const runner = fakeRunner(() => ({
+    exitCode: 128,
+    stdout: '',
+    stderr: [
+      'sh: 1: /usr/bin/git-credential-store: not found',
+      "fatal: could not read Username for 'https://corp.example': terminal prompts disabled",
+    ].join('\n'),
+    durationMs: 5,
+    timedOut: false,
+    truncated: false,
+  }));
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  const policy = allowPolicy();
+  const { service } = serviceWith({ adapter, policy });
+  const envelope = await createGitPush().run(
+    { target: 'group/repo', branch: 'feat/r10', changeId: CHANGE, confirm: { repo: 'group/repo', object: 'group/repo' } },
+    service,
+  );
+  assert.equal(envelope.status, 'failed');
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.reason, ACTION_REASONS.AUTH_TRANSPORT_UNAVAILABLE);
+  assert.equal(envelope.rule, 'auth-transport-unavailable');
+  assert.equal(envelope.next_action, 'use-native-http-credential');
+  assert.equal(envelope.replay_blocked, false);
+  assert.match(envelope.detail, /不是用户名缺失/u);
+  assert.equal(envelope.remote_calls, 1);
+  assert.equal(policy.state.operations, 1);
+  assert.deepEqual(runner.calls[0].args, ['push', 'origin', 'feat/r10']);
+});
+
+test('工具：push 被远端 403 拒绝 → failed + COMMAND_FAILED（维持原原因码与 retry）', async () => {
+  const runner = fakeRunner(() => ({
+    exitCode: 128,
+    stdout: '',
+    stderr: "fatal: unable to access 'https://corp.example/group/repo': The requested URL returned error: 403",
+    durationMs: 5,
+    timedOut: false,
+    truncated: false,
+  }));
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  const { service } = serviceWith({ adapter, policy: allowPolicy() });
+  const envelope = await createGitPush().run(
+    { target: 'group/repo', branch: 'feat/r10', confirm: { repo: 'group/repo', object: 'group/repo' } },
+    service,
+  );
+  assert.equal(envelope.status, 'failed');
+  assert.equal(envelope.reason, ACTION_REASONS.COMMAND_FAILED);
+  assert.equal(envelope.rule, 'command-failed');
+  assert.equal(envelope.next_action, 'retry');
+  assert.equal(envelope.replay_blocked, false);
 });
 
 test('工具：push 参数不合法时不问策略、零子进程', async () => {

@@ -16,6 +16,9 @@
  *   4. **确认**：远程写动作必须带 `confirm = { repo, object }`，且两者都要与目标逐字相符
  *      （AC-16「写动作前必须先给出目标」）。确认只在这一处校验，工具面不重复。
  *
+ * 拒绝与失败都带 `next_action`（固定动词，见 `gitee-next-action.mjs`）：调用方不必从自由
+ * 文本里猜"该登记、该改参数、还是该转人工"。
+ *
  * 放行后：
  *   - operation 抛错 → `failed`，能确认有副作用痕迹（`detail.mayHaveSideEffect`）时由动作层
  *     升格成 `unknown`（不重放）；
@@ -26,6 +29,8 @@
  *     审计记录不可观察（持久 sink 或桩策略没有内存缓冲）时**不伪造结论**：裁决里标
  *     `audit.observable: false`，不据此升降状态。
  */
+import { nextActionFor } from './gitee-next-action.mjs';
+
 /**
  * 平台名（单 provider）：信封与诊断里的 `provider` 字段值仍是 `'gitee'`。
  * r10 统一用平台措辞命名常量，只为消除「两个 provider」的漂移；
@@ -50,6 +55,7 @@ export const GUARD_REASONS = Object.freeze({
   AUDIT_PROVIDER_MISMATCH: 'GITEE_AUDIT_PROVIDER_MISMATCH',
   INTERNAL: 'GUARD_INTERNAL',
 });
+
 
 /** 本包的动作命名空间。 */
 export const GITEE_ACTION_PREFIX = 'gitee.';
@@ -94,6 +100,7 @@ function denial({ status = 'denied', action, target, tool, rule, reason, detail 
     rule,
     reason,
     detail,
+    next_action: nextActionFor(reason),
     mayHaveSideEffect,
     calls,
   });
@@ -229,7 +236,9 @@ export function createGiteeGuard({ policy = null, now = Date.now } = {}) {
           : disabled
             ? GUARD_REASONS.ACTION_DISABLED
             : GUARD_REASONS.POLICY_DENIED,
-        detail: text(decision?.reason) || `策略拒绝了 ${action}`,
+        detail: unregistered
+          ? `${text(decision?.reason) || `策略拒绝了 ${action}`}；写动作默认不登记：在所属 profile 的 heluo-policy 目录登记动作 ${action}，写/确认类另补审批台账条目（见 packages/forge-gitee/README.md「策略门禁与凭据」）`
+          : (text(decision?.reason) || `策略拒绝了 ${action}`),
       });
     }
 

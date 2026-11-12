@@ -116,7 +116,7 @@
 
 **命名空间与参数落位**（2026-11-04 按 `docs/contracts/gh-cli-spec.md` 校正）：仓库标识允许嵌套命名空间（`osc/ard/ard-sdk` 这类两段以上，企业实测即三段），读/写/git 三条路径共用同一个形状源。单对象命令的位置参数**只有编号**，仓库走全局 `-R`（`issue view 12 -R osc/ard/ard-sdk`）；`repo list` **不接受位置参数**（它列的是令牌可见的仓库，不是某个仓库的清单）。`--state` 词表**按命令分表**：`issue list` 是 `created/processing/rejected/finished/all`，`pr list` 是 `opened/closed/merged/all`。本 CLI **没有 `--host` 参数**，主机来自 CLI 自己的 `~/.gitee-cli/config.json` 的 `base_url`。
 
-**剥壳**：实测出现三种包裹——`issue list` 是 `{data:{list:[…]}, meta:{…}}`、`pr list` 是 `{data:[…], meta:{…}}`、`repo view` 是扁平对象；对象读同样接受 `{data:{…}}`。`meta.total_count` 作为附加事实带进读载荷（清单被 `--limit` 截住时说明总量），其余 `meta` 键丢弃，且**不**进 `missing_fields`——那不是"取不到的字段"。认不出的壳按 `MALFORMED_RESULT` 处理，不把 `data`/`meta` 当数据交付。
+**剥壳**：实测出现三种包裹——`issue list` 是 `{data:{list:[…]}, meta:{…}}`、`pr list` 是 `{data:[…], meta:{…}}`、`repo view` 是扁平对象；对象读同样接受 `{data:{…}}`。`meta.total_count` 作为附加事实带进读载荷（清单被 `--limit` 截住时说明总量；CLI 未返回时为 `null`），其余 `meta` 键丢弃，且**不**进 `missing_fields`——那不是"取不到的字段"。认不出的壳按 `MALFORMED_RESULT` 处理，不把 `data`/`meta` 当数据交付。
 
 **编号与状态语义**：PR 用 `iid`（`id` 是全局号，`iid` 才对得上 URL 里的编号），Issue 用 `id`（实测载荷**没有** `number`）；分支是 `source_branch`/`target_branch`，可合并性是 `merge_status`，评论数是 `user_notes_count`。状态值实测是 `opened`，归一到既有词表 `open`/`closed`；未实测的状态值（如 `merged`）原样保留，不新增词、不猜同义词。
 
@@ -143,9 +143,9 @@
 | 写 | `{provider, action, status, target, targetRefs, evidence, rule, reason, message}` | `done` / `failed` / `denied` / `unknown`；`done` 必须"CLI 成功 + 回读一致"；五个写的返回体**不含** `executed` 键 |
 | 判定 | 与写同形，另带 `executed`（仅在判定体显式声明时输出，当前只有 `gitee.delivery.judge` 声明 `executed: false`） | `done` / `failed` / `denied` / `unknown`；`executed` 恒 `false`、`remote_calls` 恒 `0`；`unknown` 不计入通过 |
 
-读载荷另带 `kind`/`command` 与 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`，没有就不出现）与 `truncated`；这些是载荷键，不占上述固定七项，也不冒充 `missing_fields`。
+读载荷另带 `kind`/`command` 与 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`；取不到时恒为 `null`，表示未知，不伪造 `0`）与 `truncated`；这些是载荷键，不占上述固定七项，也不冒充 `missing_fields`。清单读的 `source_revision` 恒为 `null`：列表是查询快照，不承诺单对象修订号，对象读才要求 `created_at`/`updated_at`/`last_activity_at`。
 
-固定原因枚举（自由文本只进 `message`/`detail`，不新增枚举值）：读侧 `AUTH_MISSING`、`GITEE_PERSISTENT_TOKEN`、`HOST_NOT_ENTERPRISE`、`SPAWN_FAILED`、`NONZERO_EXIT`、`UNSUPPORTED_FIELD`、`ARG_NOT_WHITELISTED`、`ARG_INVALID`、`JSON_FIELD_NOT_DECLARED`、`FORBIDDEN_ARGV`、`TIMEOUT`、`MALFORMED_RESULT`、`OUTPUT_TRUNCATED`、`NO_STRUCTURED_STATUS`、`MISSING_SOURCE_REVISION`、`POLICY_DENIED`、`GITEE_STATUS_DISPOSED`；写侧另有 `REPLAY_BLOCKED`、`READBACK_MISMATCH`、`READBACK_UNAVAILABLE`、`HUMAN_CONFIRMATION_FORBIDDEN`、`COMMIT_MESSAGE_INVALID`、`REVIEW_INVALID`。没有「结果来自别的 provider」这类原因码：本包只服务 Gitee 一个平台，那不是可发生的事实。git 侧原因码由 `GIT_REASONS` 单列（提交信息不合规、argv 越界、非零退出、超时），不混进读侧枚举。
+固定原因枚举（自由文本只进 `message`/`detail`，不新增枚举值）：读侧 `AUTH_MISSING`、`GITEE_PERSISTENT_TOKEN`、`HOST_NOT_ENTERPRISE`、`SPAWN_FAILED`、`NONZERO_EXIT`、`ITEM_NOT_FOUND`、`UNSUPPORTED_FIELD`、`ARG_NOT_WHITELISTED`、`ARG_INVALID`、`JSON_FIELD_NOT_DECLARED`、`FORBIDDEN_ARGV`、`TIMEOUT`、`MALFORMED_RESULT`、`OUTPUT_TRUNCATED`、`NO_STRUCTURED_STATUS`、`MISSING_SOURCE_REVISION`、`POLICY_DENIED`、`GITEE_STATUS_DISPOSED`；写侧另有 `REPLAY_BLOCKED`、`READBACK_MISMATCH`、`READBACK_UNAVAILABLE`、`ITEM_NOT_FOUND`、`AUTH_TRANSPORT_UNAVAILABLE`、`HUMAN_CONFIRMATION_FORBIDDEN`、`COMMIT_MESSAGE_INVALID`、`REVIEW_INVALID`。没有「结果来自别的 provider」这类原因码：本包只服务 Gitee 一个平台，那不是可发生的事实。git 侧原因码由 `GIT_REASONS` 单列（提交信息不合规、argv 越界、非零退出、超时、认证传输不可用），不混进读侧枚举。`ITEM_NOT_FOUND` 只在服务端明确表达“对象不存在”（404 或 500 + 未找到文本）时出现；同样的 500 但无该文本仍归 `NONZERO_EXIT`，两者不能互借。
 
 ### 5.4 设置页与配置端点（r15）
 
@@ -205,8 +205,10 @@ flowchart LR
 ```
 
 - **读**：`read(action, target, params)` → 适配器 `argvFor`（`--json` 开关 + 本地投影选择）→ runner → 剥壳与投影 → 归一到信封；`provider` 不符、主机不是企业域、缺 `source_revision` 分别降级为 `unknown`/`failed`，**不编版本**。
-- **写**：确认（`confirm{repo,object}` 形状）→ 幂等键 `sha256(changeId|objectType|title)` 前 16 位 → 门禁 `executeAction` → 子进程 → 回读条目比对（编号/链接/正文一致才算 `done`）。
-- **git**：`commit` 先过 `git-message`（首行 `[变更号]`、描述非空），不合规零子进程；合规则经 `runGit()` 单一出口执行，成功以"新 HEAD 与提交前不同"为据。`push` 是远端写：门禁 `executeAction`（动作 `gitee.git.push`，未登记即 `denied`）→ `confirm{repo,object}` 逐字匹配 → `runGit()`；失败不重放，超时按 `unknown`。
+- **写**：确认（`confirm{repo,object}` 形状）→ 幂等键 `sha256(changeId|action|objectType|target|title)` 前 16 位（变更号大写，目标与标题都做 NFKC 归一；目标的反斜杠/尾部斜杠与 `!12`/`#12` 写法归一，不做大小写折叠）→ 门禁 `executeAction` → 子进程 → 回读条目比对（编号/链接/正文一致才算 `done`）。键必须包含动作与目标：同一变更、同一标题可能落在不同对象上（`review.publish` 写远端 PR 评论，`review.record` 写本地 `review.md`），缺任一项都会让后一次写命中前一次的 `done` 台账并静默返回旧结果。
+- **下一步**：`denied`/`failed`/`unknown` 信封带 `next_action`（固定动词，映射集中在 `src/gitee-next-action.mjs`；沿用 `@heluo/forge-devops` 失败面的措辞风格，gitee 侧独有处置（如 `use-native-http-credential`、`register-policy-action`、`verify-remote-state`）才新增动词）；`done` 不带。动作未登记时 `next_action: register-policy-action`，`detail` 指明到所属 profile 的 `heluo-policy` 目录登记并补审批台账条目。
+- **快照**：`NOT_A_REPOSITORY` 时对一层直接子目录做只读探测（`rev-parse --show-toplevel` + `rev-parse HEAD`，argv 写死、候选上限 8、跳过隐藏与依赖/产物目录、不跟随软链），只认子目录自身为仓库根；命中仅改写提示与下一步，不改变 `failed` 结论，不带回绝对路径或 stderr。
+- **git**：`commit` 先过 `git-message`（首行 `[变更号]`、描述非空），不合规零子进程；合规则经 `runGit()` 单一出口执行，成功以"新 HEAD 与提交前不同"为据。`push` 是远端写：门禁 `executeAction`（动作 `gitee.git.push`，未登记即 `denied`）→ `confirm{repo,object}` 逐字匹配 → `runGit()`；失败不重放，超时按 `unknown`。push 非零退出时先做认证传输判定：命中 MSYS/sh 命名管道崩溃特征即 `AUTH_TRANSPORT_UNAVAILABLE`（failed，`next_action: use-native-http-credential`，detail 说明"不是用户名缺失、命令未离开本机"），普通 401/403 与孤立 `could not read Username` 仍按 `COMMAND_FAILED`；本地 commit/head/branch 不参与该归类。
 - **并发**：允许并发调用，环境变量按调用隔离；幂等台账命中返回 `reused` 且远端 0 次调用。
 - **超时/取消**：到点终止，按结果未知处理，不保留部分输出，不自动重试（写动作永不重放）。
 
@@ -218,7 +220,10 @@ flowchart LR
 | 令牌缺失或过期 | 照常执行，由 `gh` 与服务端裁决 | `AUTH_MISSING`（服务端 401/403）或 CLI 非零退出 | 终端运行 `gh auth login`；无桌面凭据库或 CI 才用 `authEnv` |
 | CLI 配置目录含持久令牌 | 默认 `warn` 照常执行；`persistentToken: 'block'` 才阻断 | `GITEE_PERSISTENT_TOKEN`（`denied`，仅 block） | 删除明文令牌后运行 `gh auth login` |
 | 主机不是企业地址 | 拒绝 | `HOST_NOT_ENTERPRISE` | 修配置后重试 |
-| 动作未登记（默认写） | 拒绝，适配器 0 调用 | `denied` + `rule: unregistered-action` | 范围批准后追加目录 |
+| 动作未登记（默认写） | 拒绝，适配器 0 调用 | `denied` + `rule: unregistered-action` + `next_action: register-policy-action` | 范围批准后在 `heluo-policy` 目录登记并补审批台账 |
+| 对象不存在（404，或 500 + 未找到文本） | 不重试、不重放 | `failed` + `reason: ITEM_NOT_FOUND` + `next_action: check-target-exists`，`mayHaveSideEffect: false` | 核对编号/仓库后改目标重试 |
+| 快照目录不是仓库、但一层子目录是仓库根 | 只读探测（固定 argv、最多 8 个候选） | 仍 `failed` + `GIT_SNAPSHOT_NOT_A_REPOSITORY`，message 提示「子目录 <名>/ 是仓库根（HEAD=<7 位>）」 | 切换会话工作目录后重试；探测不改变失败结论 |
+| push 认证传输崩溃（Windows 沙箱/MSYS） | 命令未离开本机 | `failed` + `reason: AUTH_TRANSPORT_UNAVAILABLE` + `next_action: use-native-http-credential` | 改用钥匙串令牌 + URL 内嵌凭据走 HTTP 原生传输 |
 | 参数越界/禁项 | 拒绝，零子进程 | `ARG_NOT_WHITELISTED`/`FORBIDDEN_ARGV` | 改成白名单内调用 |
 | 输出非 JSON 或缺版本 | 降级 | `MALFORMED_RESULT`/`MISSING_SOURCE_REVISION`（`unknown`） | 否（先查 CLI 版本） |
 | 输出超 1 MiB | 截断降级 | `OUTPUT_TRUNCATED`（`unknown`） | 收窄 `--limit` 或目标范围（`--json` 无值，不能用来收窄） |
@@ -299,7 +304,7 @@ flowchart LR
 | 自建 Gitee API 客户端 | 摆脱 CLI 依赖 | 与 P7 冲突，多一层维护 | 不采用 |
 | 缓存仓库元数据 | 减少调用 | 权限变更后数据不新鲜 | 不采用 |
 | 跨仓库批量抓取 | 效率 | 触发频控与权限问题 | 不采用 |
-| 抽出 `@heluo/forge-actioncore` 消除与 devops 的受控重复 | 单一出口/幂等键/渲染只有一份 | 本轮需改 devops（PRD 非目标禁止），且两份尚在同步演进 | 下一轮若两边同步演进再评估（§13） |
+| 抽出 `@heluo/forge-actioncore` 消除与 devops 的受控重复 | 单一出口/渲染只有一份 | 本轮需改 devops（PRD 非目标禁止），且两份尚在同步演进；gitee 幂等键已按动作+目标扩展，与 devops 的公式不再要求逐字相同 | 下一轮若两边同步演进再评估（§13） |
 | 配置页 | 免手改补丁层 | 本轮无前端面，5 个键的价值不足以开页面 | 不采用（PRD T5） |
 
 若 CLI 在麒麟不可用或不满足只读查询、凭据注入等已确认前提，关闭 Gitee 命令并提交替代形态评审；不自动回到 MCP 方案，也不恢复交叉编译工作项。
@@ -313,7 +318,7 @@ flowchart LR
 
 - **对象与追溯**：Issue/PR 的创建与评论以变更号为幂等键；commit message 以 `[变更号]` 开头（`expectedCommitFormat()`），校验只看首行前缀与说明是否齐。
 - **审查**：`review.md` 落 `docs/teamflow/<变更号>/review.md`，四段（问题/风险/意见/结论）+ AI 与人工**两栏物理分节**，写模型名与被审 `commit`；人工栏只能经 `recordHumanConfirmation()` 写入（`origin` 白名单），模型自填即 `REVIEW_HUMAN_FILL_FORBIDDEN`；写盘前命中令牌/内网主机/绝对路径即 `REVIEW_REDACTION_BLOCKED`；`stale` 是"被审 sha 已不是当前 sha"的派生结果，不落盘，避免"确认后被改成通过"的窗口。
-- **交付判定**：`judgeCloseReadiness()` 只判定不执行——验收、已合入、无未完成交付、针对当前 commit 的人工确认四项；`unknown` 不计入通过。它与写共用门禁但不共用权限事实：`gitee.delivery.judge` 随包登记为只读（`kind: read`、`target` 逐字 `change`、`egress: 'allow'`），信封带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口（白名单天然缺失）。
+- **交付判定**：`judgeCloseReadiness()` 只判定不执行——验收、已合入、无未完成交付、针对当前 commit 的人工确认四项；`unknown` 不计入通过。判定器**不校验变更号真实性**：变更号只用于组织提交信息与台账坐标，是否存在、属于哪张工单由提交人、评审人与远端 Issue/PR 记录决定；`ready: true` 只是"四项条件成立"，不构成平台对变更真实性的背书。这是设计如此，不是校验缺口。它与写共用门禁但不共用权限事实：`gitee.delivery.judge` 随包登记为只读（`kind: read`、`target` 逐字 `change`、`egress: 'allow'`），信封带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口（白名单天然缺失）。
 - **更强模型交叉审查**：AI 意见与人工确认分开留痕并绑定版本；不让模型自填确认人，不把聊天"同意"冒充 Gitee 的正式批准。
 
-**与 `@heluo/forge-devops` 的分流与受控重复（R-2）**：r10 按平台切库之后，同一个事实只有一份实现——提交信息校验在 `src/git-message.mjs`、关闭就绪判定在 `src/gitee-delivery.mjs`、仓库/Issue/PR 的读写都在本包；devops 的 `commit-message`/`report`/`review`/`gh-adapter`/`actions`/`repo-ref`/`repository-resolver` 七个模块连同其用例一起删除（删除清单与理由逐条登记在交付说明与 `delivery-selfcheck.test.mjs` 的文件清单里，不静默减少覆盖）。**刻意保留**的受控重复只有两条：失败面脱敏（devops 的 `failure-face.mjs` 与本包出口的 `scrubSecrets`）与策略目标准入（`policy-guard` 与本包 `gitee-guard`）——两者 egress/confirm 语义不同，合并会把两类平台的写语义搅在一起；AGENTS.md §4 也要求包间不跨源码导入。守门：`test/adapter.test.mjs` 断言 `src/` 零 GitHub 语义标识与字段分表、`test/cli.test.mjs` 断言出口唯一性（`execFile` 只出现在 `gitee-cli.mjs`，git 复用同文件的 `runGit` 而不是新起一个出口）、`test/session.test.mjs` 断言幂等键逐字一致（`sha256(changeId|objectType|title)` 前 16 位）。
+**与 `@heluo/forge-devops` 的分流与受控重复（R-2）**：r10 按平台切库之后，同一个事实只有一份实现——提交信息校验在 `src/git-message.mjs`、关闭就绪判定在 `src/gitee-delivery.mjs`、仓库/Issue/PR 的读写都在本包；devops 的 `commit-message`/`report`/`review`/`gh-adapter`/`actions`/`repo-ref`/`repository-resolver` 七个模块连同其用例一起删除（删除清单与理由逐条登记在交付说明与 `delivery-selfcheck.test.mjs` 的文件清单里，不静默减少覆盖）。**刻意保留**的受控重复只有两条：失败面脱敏（devops 的 `failure-face.mjs` 与本包出口的 `scrubSecrets`）与策略目标准入（`policy-guard` 与本包 `gitee-guard`）——两者 egress/confirm 语义不同，合并会把两类平台的写语义搅在一起；AGENTS.md §4 也要求包间不跨源码导入。守门：`test/adapter.test.mjs` 断言 `src/` 零 GitHub 语义标识与字段分表、`test/cli.test.mjs` 断言出口唯一性（`execFile` 只出现在 `gitee-cli.mjs`，git 复用同文件的 `runGit` 而不是新起一个出口）、`test/session.test.mjs` 断言幂等键逐字一致（`sha256(changeId|action|objectType|target|title)` 前 16 位）；`test/actions.test.mjs` 另断言 `review.publish` 与 `review.record` 同变更同提交时键不同，防止跨对象误判 `reused`。

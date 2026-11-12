@@ -40,6 +40,7 @@ import {
   REPO_PATTERN as REPO_TARGET_PATTERN,
 } from './gitee-adapter.mjs';
 import { GUARD_REASONS, GITEE_PLATFORM } from './gitee-guard.mjs';
+import { nextActionFor } from './gitee-next-action.mjs';
 import { REPLAY_BLOCKED_STATUSES, buildEvidence, idempotencyKey } from './gitee-session.mjs';
 
 /**
@@ -80,6 +81,8 @@ export const ACTION_REASONS = Object.freeze({
   HUMAN_CONFIRMATION_FORBIDDEN: 'HUMAN_CONFIRMATION_FORBIDDEN',
   AUTH_MISSING: 'AUTH_MISSING',
   PERSISTENT_TOKEN: 'GITEE_PERSISTENT_TOKEN',
+  AUTH_TRANSPORT_UNAVAILABLE: 'AUTH_TRANSPORT_UNAVAILABLE',
+  ITEM_NOT_FOUND: 'ITEM_NOT_FOUND',
   REPLAY_BLOCKED: 'REPLAY_BLOCKED',
   READBACK_MISMATCH: 'READBACK_MISMATCH',
   READBACK_UNAVAILABLE: 'READBACK_UNAVAILABLE',
@@ -175,7 +178,10 @@ function bodyDigest(body) {
  *
  * `executed` 同理，但方向相反：它是"只判定不执行"的运行时证据，只有下游 produced
  * 显式声明了才输出（当前仅 `gitee-delivery.judge` 声明 `executed: false`）。四个写动作的
- * produced 没有这个键，所以写信封一个键都不多——新增字段不能借道扩散成写契约变更（AC-3）。
+ * produced 没有这个键。
+ *
+ * `next_action` 只在 `reason !== null`（被拒/失败/不确定）时出现：`done` 已经给了结果，
+ * 再挂一个"下一步"会诱导调用方对成功动作重试。词表与门禁共用 `gitee-next-action.mjs`。
  */
 function actionResult({
   tool,
@@ -194,6 +200,7 @@ function actionResult({
   remoteCalls = 0,
   executed,
 } = {}) {
+  const hint = reason === null ? null : nextActionFor(reason);
   return {
     ok: status === 'done',
     provider: GITEE_PLATFORM,
@@ -205,6 +212,7 @@ function actionResult({
     reason,
     rule,
     detail,
+    ...(hint === null ? {} : { next_action: hint }),
     idempotency_key: key,
     reused,
     replay_blocked: replayBlocked,
@@ -323,7 +331,7 @@ function requireService(service) {
 async function executeWrite(service, spec) {
   const session = service.session();
   const { tool, action, target, objectType, title, confirm, command, params, readback } = spec;
-  const key = idempotencyKey({ change: spec.change, objectType, title });
+  const key = idempotencyKey({ change: spec.change, action, objectType, target, title });
 
   // 台账先看：命中的两种结果都不该再碰门禁与子进程。
   const prior = session.lookup(key);
@@ -949,7 +957,13 @@ export function createReviewRecord() {
         }
       }
 
-      const key = idempotencyKey({ change: change.changeId, objectType: GITEE_OBJECT_TYPES.REVIEW, title: `${change.changeId}@${commit.slice(0, 7)}` });
+      const key = idempotencyKey({
+        change: change.changeId,
+        action: spec.action,
+        objectType: GITEE_OBJECT_TYPES.REVIEW,
+        target,
+        title: `${change.changeId}@${commit.slice(0, 7)}`,
+      });
       const session = service.session();
       const prior = session.lookup(key);
       if (prior !== undefined && prior.status === 'done') {
@@ -1333,7 +1347,7 @@ export function writeToolDefinitions(service) {
     {
       name: deliveryGate.tool,
       description:
-        '判定交付是否满足关闭条件（只判定，不关闭、不合并）：提交信息是否带 [变更号] + 关闭四项。随包默认登记、开箱可用（只读判定）；返回体 executed 恒为 false、remote_calls 恒为 0。有 unknown 项即返回 unknown（不计入通过）。',
+        '判定交付是否满足关闭条件（只判定，不关闭、不合并）：提交信息是否带 [变更号] + 关闭四项。随包默认登记、开箱可用（只读判定）；返回体 executed 恒为 false、remote_calls 恒为 0。有 unknown 项即返回 unknown（不计入通过）。不校验变更号是否真实存在：判定只表示四项条件成立，不是平台对变更真实性的背书（设计如此）。',
       parameters: {
         type: 'object',
         properties: {

@@ -213,6 +213,38 @@ test('AC-15: 清单读是查询快照 —— source_revision 为 null 仍算 suc
   assert.deepEqual(again, envelope);
 });
 
+test('AC-15: 清单读的 total_count 恒在信封里 —— meta 缺失时是 null 而不是省略或 0（issue/pr 一致）', async () => {
+  const { meta: _meta, ...withoutMeta } = ISSUE_LIST;
+  const issueRunner = stubRunner(() => outcome({ stdout: JSON.stringify(withoutMeta) }));
+  const issueFacts = await makeAdapter({ runner: issueRunner }).read('gitee.issue.read', 'group/repo', { list: true });
+  const issueEnvelope = normalizeGiteeReadResult({ action: 'gitee.issue.read', target: 'group/repo', result: issueFacts });
+
+  assert.equal('total_count' in issueEnvelope, true, '缺 meta 时字段仍在：省略会被读成"这一页就是全部"');
+  assert.equal(issueEnvelope.total_count, null, '未知就是 null，不编 0');
+  assert.equal(issueEnvelope.count, 2);
+  assert.equal(issueEnvelope.status, 'succeeded');
+  assert.equal(issueEnvelope.source_revision, null, '清单 source_revision 恒 null 的既定语义不变');
+  assert.deepEqual([...issueEnvelope.missing_fields], [], 'total_count 是附加事实，不进缺失字段');
+
+  const prPayload = {
+    data: [{
+      iid: 3,
+      title: '示例 PR',
+      state: 'open',
+      web_url: `http://${HOST}/group/repo/pulls/3`,
+      source_branch: 'feat',
+      target_branch: 'master',
+      merge_status: 'can_be_merged',
+    }],
+  };
+  const prRunner = stubRunner(() => outcome({ stdout: JSON.stringify(prPayload) }));
+  const prFacts = await makeAdapter({ runner: prRunner }).read('gitee.pr.read', 'group/repo', { list: true });
+  const prEnvelope = normalizeGiteeReadResult({ action: 'gitee.pr.read', target: 'group/repo', result: prFacts });
+  assert.equal('total_count' in prEnvelope, true, 'PR 清单同样恒带 total_count');
+  assert.equal(prEnvelope.total_count, null);
+  assert.equal(prEnvelope.count, 1);
+});
+
 test('AC-15: 取不到事实版本的对象读降级 unknown，不编版本号', async () => {
   // 仓库的版本字段是 last_activity_at（实测没有 updated_at）：两者都缺才是"取不到版本"。
   const { last_activity_at: _ignored, ...withoutRevision } = REPO_JSON;
@@ -300,6 +332,20 @@ test('AC-15: CLI 未找到 / 退出码非 0 / 超时三类失败原因固定', a
       code: READ_REASONS.TIMEOUT,
       status: 'unknown',
     },
+    {
+      label: '对象不存在（404）：与真实故障分开，确定失败',
+      result: outcome({ exitCode: 1, stderr: 'HTTP 404: Not Found' }),
+      code: READ_REASONS.ITEM_NOT_FOUND,
+      status: 'failed',
+      message: /HTTP 404: Not Found/u,
+    },
+    {
+      label: '对象不存在（内网 500 + 未找到）：按正文归类',
+      result: outcome({ exitCode: 1, stderr: '{"message":"未找到项目 group/missing"}' }),
+      code: READ_REASONS.ITEM_NOT_FOUND,
+      status: 'failed',
+      message: /未找到项目 group\/missing/u,
+    },
   ];
   for (const entry of cases) {
     const runner = stubRunner(() => entry.result);
@@ -310,6 +356,9 @@ test('AC-15: CLI 未找到 / 退出码非 0 / 超时三类失败原因固定', a
     assert.equal(envelope.status, entry.status, entry.label);
     assert.equal(envelope.error_code, entry.code, entry.label);
     assert.equal(envelope.retry_policy, 'read_recheck', entry.label);
+    if (entry.message !== undefined) {
+      assert.match(envelope.message, entry.message, `${entry.label}：message 保留服务端原文（脱敏+截断）`);
+    }
     assert.equal(runner.calls.length, 1, `${entry.label}：读失败不许自动重试`);
     assertReadOnlyCalls(runner.calls);
   }

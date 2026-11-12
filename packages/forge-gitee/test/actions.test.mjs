@@ -35,6 +35,7 @@ import { createGiteeSession } from '../src/gitee-session.mjs';
 import { GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
 
 const SRC_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'src');
+const HEX16 = /^[0-9a-f]{16}$/u;
 const CLOCK = 1_700_000_000_000;
 
 /** 5 个受控工具（顺序 = 4 写 + 1 判定；名字是 PRD 契约，不能随手改）。 */
@@ -287,6 +288,9 @@ test('AC-3/AC-8 默认禁用：未登记时四个写动作逐个 denied、规则
     // 被拒的动作没有证据：留一个空 evidence 会被读成"执行过但没证据"。
     assert.equal('evidence' in body, false, `${tool} 被拒却带了证据`);
     assert.equal(body.ok, false);
+    // 拒绝必须可执行：调用方要知道下一步是去登记目录，而不是反复重试同一个调用。
+    assert.equal(body.next_action, 'register-policy-action', `${tool} 被拒却没有可执行的下一步`);
+    assert.match(body.detail, /heluo-policy/u, `${tool} 的拒绝文案没说清向谁登记、在哪登记`);
   }
 
   assert.equal(harness.counters.decide, 5, '每个动作都问过目录（拒绝是裁决，不是短路）');
@@ -294,6 +298,26 @@ test('AC-3/AC-8 默认禁用：未登记时四个写动作逐个 denied、规则
   assert.equal(harness.counters.invoke, 0);
   assert.equal(harness.counters.read, 0);
   assert.equal(harness.counters.execFile, 0);
+});
+
+test('AC-16 回归：review.publish 与 review.record 同变更同提交，目标不同则幂等键不同（不跨对象复用）', async () => {
+  const harness = createHarness({ admit: false });
+  const repoRoot = mkdtempSync(join(tmpdir(), 'forge-gitee-cross-object-'));
+  try {
+    const published = await runTool(harness.service, 'forge_gitee_review_publish', REVIEW_PUBLISH);
+    const recorded = await runTool(harness.service, 'forge_gitee_review_record', reviewRecordArgs(repoRoot));
+    assert.equal(published.status, 'denied');
+    assert.equal(recorded.status, 'denied');
+    assert.match(published.idempotency_key, HEX16);
+    assert.match(recorded.idempotency_key, HEX16);
+    assert.notEqual(
+      published.idempotency_key,
+      recorded.idempotency_key,
+      '同一变更同一提交但动作/目标不同：共用键会让后一次写误判 reused=true 并静默返回上一次结果',
+    );
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test('AC-11 非 gitee.* 动作在门禁入口就地拒绝：零策略调用、零子进程', async () => {
@@ -320,6 +344,7 @@ test('AC-11 确认是"逐字相符"：缺失或改写目标都 denied，零写�
   assert.equal(first.status, 'denied');
   assert.equal(first.rule, 'confirm-required');
   assert.equal(first.reason, GUARD_REASONS.CONFIRMATION_REQUIRED);
+  assert.equal(first.next_action, 'confirm-object', '确认缺失要指向补确认，而不是泛泛失败');
   assert.equal(missing.counters.invoke, 0);
 
   const tampered = createHarness();
@@ -543,6 +568,7 @@ test('AC-16 预检未过（缺凭据/持久令牌）→ failed 而不是 denied�
   assert.equal(body.reason, ACTION_REASONS.AUTH_MISSING);
   assert.equal(body.rule, 'preflight-failed');
   assert.notEqual(body.status, 'denied', '门禁已经放行，拒它的是环境，不是策略');
+  assert.equal(body.next_action, 'configure-credentials', '缺凭据要给凭据修复动作');
   assert.equal(harness.counters.invoke, 0);
   assert.equal(harness.counters.read, 0);
   assert.equal(harness.counters.execFile, 0);

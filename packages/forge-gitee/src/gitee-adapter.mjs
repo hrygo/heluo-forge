@@ -320,6 +320,11 @@ export const ADAPTER_REASONS = Object.freeze({
   GITEE_PERSISTENT_TOKEN: 'GITEE_PERSISTENT_TOKEN',
   TIMEOUT: 'TIMEOUT',
   NONZERO_EXIT: 'NONZERO_EXIT',
+  /**
+   * 服务端明确判定"目标对象不存在"（404，或 500 但文本是"未找到/Not Found"）。
+   * 它与真实的 NONZERO_EXIT 服务故障分开：确定失败、确定没有副作用，核对目标后可安全重试。
+   */
+  ITEM_NOT_FOUND: 'ITEM_NOT_FOUND',
   SPAWN_FAILED: 'SPAWN_FAILED',
   UNSUPPORTED_FIELD: 'UNSUPPORTED_FIELD',
   MALFORMED_RESULT: 'MALFORMED_RESULT',
@@ -959,10 +964,24 @@ export function createGiteeAdapter({
       // 凭据问题单独归一：缺令牌不再是客户端拒绝，服务端拒了就要说清是"凭据"而不是
       // 笼统的"命令失败"——否则模型只能靠猜（r10 的 AUTH_MISSING 只剩这一个触发点）。
       const authRefused = /\b401\b|\b403\b|unauthori[sz]ed|authenticat|permission denied|invalid (?:token|credential)/i.test(stderr);
+      // 服务端对"对象不存在"也可能回 500：这类响应的文本带"未找到/Not Found/404"语义，
+      // 必须与真实故障（500 + Internal Server Error 之类）分开，否则调用方只能拿 NONZERO_EXIT 猜。
+      // 只有真的起了进程才谈"对象不存在"：起不来是 SPAWN_FAILED，不能因为错误文案里碰巧有
+      // "not found"（如 `command not found`）就被当成目标不存在。
+      const commandMissing = /command not found|not recognized as an internal|No such file or directory/u.test(stderr);
+      const itemNotFound = spawned && !commandMissing && (
+        /\b404\b/u.test(stderr)
+        || /未找到|not[\s_-]+found|does[\s_-]+not[\s_-]+exist|no[\s_-]+such\b/iu.test(stderr)
+      );
       const code = unsupported
         ? ADAPTER_REASONS.UNSUPPORTED_FIELD
-        : (spawned ? (authRefused ? ADAPTER_REASONS.AUTH_MISSING : ADAPTER_REASONS.NONZERO_EXIT) : ADAPTER_REASONS.SPAWN_FAILED);
+        : itemNotFound
+          ? ADAPTER_REASONS.ITEM_NOT_FOUND
+          : (spawned ? (authRefused ? ADAPTER_REASONS.AUTH_MISSING : ADAPTER_REASONS.NONZERO_EXIT) : ADAPTER_REASONS.SPAWN_FAILED);
       const hint = authRefused ? '（服务端拒绝了当前凭据：请在终端运行 gh auth login 重新登录；无桌面凭据库或 CI 环境才用 authEnv 注入）' : '';
+      // 对象不存在 = 确定失败且确定没有副作用（目标写错了，改正后可安全重试）；其余非零退出/
+      // 未启动一律按"可能已有副作用"处理（写动作侧会因此降级 unknown，不许重放）。
+      const mayHaveSideEffect = code !== ADAPTER_REASONS.ITEM_NOT_FOUND;
       fail(
         code,
         `${label} 失败（${spawned ? `退出码 ${outcome.exitCode}` : '未启动'}）${line === '' ? '' : `：${line}`}${hint}`,
@@ -971,7 +990,7 @@ export function createGiteeAdapter({
           purpose: reason,
           observedAt,
           exitCode: Number.isInteger(outcome.exitCode) ? outcome.exitCode : null,
-          mayHaveSideEffect: true,
+          mayHaveSideEffect,
         },
       );
     }
@@ -1058,6 +1077,7 @@ export function createGiteeAdapter({
         normalized.push(object);
       }
       // CLI 的 `meta.total_count` 是附加事实：清单被 `--limit` 截住时，它说明"总共有多少条"。
+      // 取不到时给 `null`（未知）：不省略（消费方会把省略当成"这一页就是全部"），也不编 0。
       const totalCount = meta !== null && Number.isInteger(meta.total_count) ? meta.total_count : null;
       return Object.freeze({
         provider: GITEE_PLATFORM,
@@ -1065,7 +1085,8 @@ export function createGiteeAdapter({
         kind: 'list',
         target_ref: text(target),
         status: 'succeeded',
-        // 清单是查询快照，不冻结事实版本：`source_revision` 恒为 `null`，观测时间看 observed_at。
+        // 清单是查询快照，不冻结事实版本：`source_revision` 恒为 `null`，观测时间看 observed_at；
+        // 列表不承诺单对象修订号，对象读才要求 created_at/updated_at/last_activity_at。
         source_revision: null,
         observed_at: outcome.observedAt,
         result_refs: Object.freeze([]),
@@ -1074,7 +1095,7 @@ export function createGiteeAdapter({
         error_code: null,
         items: Object.freeze(normalized),
         count: normalized.length,
-        ...(totalCount === null ? {} : { total_count: totalCount }),
+        total_count: totalCount,
         truncated: outcome.truncated,
         raw: items,
       });

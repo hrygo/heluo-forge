@@ -16,8 +16,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, normalize, resolve, sep } from 'node:path';
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
 /** 工具名的唯一枚举（`gitee-tools` 从这里 re-export，避免两套清单）。 */
 export const GITEE_SNAPSHOT_TOOLS = Object.freeze(['forge_gitee_delivery_snapshot']);
@@ -64,6 +64,15 @@ const READ_COMMANDS = Object.freeze([
 const SUPPORTED_MODES = new Set(['100644', '100755', '120000']);
 const GITLINK_MODE = '160000';
 const OBJECT_ID_PATTERN = /^[0-9a-f]{40,64}$/u;
+
+/**
+ * `NOT_A_REPOSITORY` 时对"一层直接子目录"的只读探测参数：argv 写死、候选有上限、
+ * 跳过隐藏目录（`.git`/`.ssh` 等）与依赖/产物目录；只用来补充提示，不改变失败结论。
+ */
+const PROBE_MAX_CANDIDATES = 8;
+const PROBE_SKIP = new Set(['node_modules', 'vendor', 'dist', 'build', 'target', 'out', 'coverage']);
+const PROBE_TOP_LEVEL = Object.freeze({ args: Object.freeze(['rev-parse', '--show-toplevel']), purpose: 'git.snapshot.probe-top-level' });
+const PROBE_HEAD = Object.freeze({ args: Object.freeze(['rev-parse', 'HEAD']), purpose: 'git.snapshot.probe-head' });
 
 const text = (value) => (typeof value === 'string' ? value : '');
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
@@ -173,6 +182,47 @@ export function createGiteeSnapshotReader({ runner, now = Date.now, samples = 2 
       };
     }
     return { ok: true, stdout: text(outcome.stdout), stderr: text(outcome.stderr) };
+  }
+
+  /**
+   * `NOT_A_REPOSITORY` 的一层探测：只读**直接子目录**，找到"子目录自己就是仓库根"就返回
+   * 相对目录名与 7 位 HEAD。argv 写死、候选有上限；符号链接不会被当成目录（`Dirent` 不跟随），
+   * 隐藏目录与依赖/产物目录直接跳过。任何失败都只是"没找到"：不改变快照的 failed 结论，
+   * 也不把绝对路径或 stderr 原文带回提示。
+   */
+  async function probeChildRepository(cwd) {
+    let names;
+    try {
+      names = readdirSync(cwd, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !PROBE_SKIP.has(entry.name))
+        .map((entry) => entry.name)
+        .sort(compareBytes)
+        .slice(0, PROBE_MAX_CANDIDATES);
+    } catch {
+      return null;
+    }
+    for (const name of names) {
+      const child = join(cwd, name);
+      const top = await git(PROBE_TOP_LEVEL.args, PROBE_TOP_LEVEL.purpose, child);
+      if (!top.ok) continue;
+      const topLevel = text(top.stdout).split(/\r?\n/u).map((line) => line.trim()).find((line) => line !== '') ?? '';
+      let childRoot;
+      let resolved;
+      try {
+        childRoot = realpathSync(child);
+        resolved = realpathSync(topLevel);
+      } catch {
+        continue;
+      }
+      // 只认"这个子目录自己就是仓库根"：避免把上层仓库或别处的 toplevel 误报成候选。
+      if (resolved !== childRoot) continue;
+      const head = await git(PROBE_HEAD.args, PROBE_HEAD.purpose, child);
+      if (!head.ok) continue;
+      const commit = (text(head.stdout).split(/\r?\n/u).find((line) => line.trim() !== '') ?? '').trim().toLowerCase();
+      if (!OBJECT_ID_PATTERN.test(commit)) continue;
+      return Object.freeze({ name, shortHead: commit.slice(0, 7) });
+    }
+    return null;
   }
 
   /** 工作树内容摘要：软链只散列目标字符串（不跟随），越界或不可读一律拒绝。 */
@@ -331,7 +381,18 @@ export function createGiteeSnapshotReader({ runner, now = Date.now, samples = 2 
         const message = outcome.reason === SNAPSHOT_REASONS.COMMAND_FAILED && outcome.exitCode !== null
           ? `git 只读采样失败（exit ${outcome.exitCode}）：不生成代码版本`
           : `${(NEXT_OF[outcome.reason] ?? '快照不可用')}`;
-        return Object.freeze({ ...failure(status, outcome.reason, message), observedAt });
+        let detailMessage = message;
+        let next = NEXT_OF[outcome.reason] ?? '按失败原因核对后重试。';
+        // "不是仓库"时补一层探测：会话根常常是仓库的父目录，盲查会让调用方以为选错了项目。
+        // 探测只补充提示，status/reason 保持原判（探测失败绝不让 failed 变成 unknown）。
+        if (outcome.reason === SNAPSHOT_REASONS.NOT_A_REPOSITORY) {
+          const child = await probeChildRepository(directory);
+          if (child !== null) {
+            detailMessage = `当前工作目录不是仓库，但子目录 ${child.name}/ 是仓库根（HEAD=${child.shortHead}）：不生成代码版本`;
+            next = `把会话工作目录切到 ${child.name}/ 后重试；本次结果不构成代码版本。`;
+          }
+        }
+        return Object.freeze({ ...failure(status, outcome.reason, detailMessage), next, observedAt });
       }
       if (previous !== null && previous.fingerprint !== outcome.sample.fingerprint) {
         return Object.freeze({
