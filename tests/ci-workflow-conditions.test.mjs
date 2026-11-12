@@ -4,16 +4,16 @@ import test from 'node:test';
 
 const workflow = readFileSync(new URL('../.github/workflows/check.yml', import.meta.url), 'utf8');
 
-// Keep fixed platform contexts stable, including the six required by branch protection.
+// Keep each platform check context explicit so branch protection can match it.
 const platforms = new Map([
-  ['native-linux-x64', ['native keychain (linux-x64)', 'ubuntu-24.04', 'sqlite']],
-  ['native-linux-arm64', ['native keychain (linux-arm64)', 'ubuntu-24.04-arm', 'sqlite']],
-  ['native-win32-x64', ['native keychain (win32-x64)', 'windows-2022', 'sqlite']],
-  ['native-win32-arm64', ['native keychain (win32-arm64)', 'windows-11-arm', 'sqlite']],
+  ['native-linux-x64', ['SQLite and IAM (linux-x64, ubuntu-24.04)', 'ubuntu-24.04', 'sqlite']],
+  ['native-linux-arm64', ['SQLite and IAM (linux-arm64, ubuntu-24.04-arm)', 'ubuntu-24.04-arm', 'sqlite']],
+  ['native-win32-x64', ['SQLite and IAM (win32-x64, windows-2022)', 'windows-2022', 'sqlite']],
+  ['native-win32-arm64', ['SQLite and IAM (win32-arm64, windows-11-arm)', 'windows-11-arm', 'sqlite']],
   ['native-linux-x64-next', ['SQLite and IAM (linux-x64, ubuntu-26.04)', 'ubuntu-26.04', 'sqlite']],
   ['native-win32-x64-next', ['SQLite and IAM (win32-x64, windows-2025)', 'windows-2025', 'sqlite']],
-  ['document-macos-15', ['document backend (macos-15)', 'macos-15', 'sqlite']],
-  ['document-macos-15-intel', ['document backend (macos-15-intel)', 'macos-15-intel', 'sqlite']],
+  ['document-macos-15', ['SQLite and IAM (darwin-arm64, macos-15)', 'macos-15', 'sqlite']],
+  ['document-macos-15-intel', ['SQLite and IAM (darwin-x64, macos-15-intel)', 'macos-15-intel', 'sqlite']],
   ['sensitive-scan', ['sensitive scan and IAM callback (win32-x64)', 'windows-2022', 'sensitive']],
 ]);
 
@@ -396,8 +396,28 @@ function replaceJob(source, id, transform) {
   return source.replace(job, changed);
 }
 
-test('workflow preserves every required context and fails closed when classification is uncertain', () => {
+test('workflow keeps platform contexts fixed and fails closed when classification is uncertain', () => {
   assert.deepEqual(workflowProblems(workflow), []);
+});
+
+test('workflow rejects legacy platform names and duplicate contexts', () => {
+  const legacy = [
+    ['native-linux-x64', 'native keychain (linux-x64)'],
+    ['native-linux-arm64', 'native keychain (linux-arm64)'],
+    ['native-win32-x64', 'native keychain (win32-x64)'],
+    ['native-win32-arm64', 'native keychain (win32-arm64)'],
+    ['document-macos-15', 'document backend (macos-15)'],
+    ['document-macos-15-intel', 'document backend (macos-15-intel)'],
+  ];
+  for (const [id, oldName] of legacy) {
+    const [name] = platforms.get(id);
+    const mutated = replaceJob(workflow, id, (job) => job.replace(`name: ${name}`, `name: ${oldName}`));
+    assert.match(workflowProblems(mutated).join('\n'), new RegExp(`${id}: display name changed`, 'u'));
+  }
+  const [name] = platforms.get('native-linux-arm64');
+  const [duplicate] = platforms.get('native-linux-x64');
+  const mutated = replaceJob(workflow, 'native-linux-arm64', (job) => job.replace(`name: ${name}`, `name: ${duplicate}`));
+  assert.match(workflowProblems(mutated).join('\n'), /native-linux-arm64: display name changed/u);
 });
 
 test('GitHub condition comparisons and shell guards use their actual case rules', () => {

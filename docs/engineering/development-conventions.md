@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.7.0 |
+| 版本 | V0.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -94,8 +94,8 @@
 - `check:tarballs` 校验真实 tarball 内容与模式位。
 - `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。
 - CI 的 `repository checks` 工作流使用 `.github/workflows/check.yml` 的 `verify (ubuntu-x64)` 作业执行 `node --run check`，是全量离线检查与全部用例的唯一执行点；默认 `contents: read`，外部动作固定到完整提交 SHA，常规检查不使用 `pull_request_target`。触发与依赖策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
-- `classify changes (ubuntu-x64)` 以 PR merge-base 到 head 的完整差异分类；PR 事件基线为 head 祖先，且仅修改或删除 `docs/` 中普通 Markdown 与根 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时允许跳过平台作业。新增或重命名文件、非便携路径、分类不能确认、文件类型或模式异常、混合其他路径、事件基线前移时全跑；分类作业失败或输出无效时 `verify` 失败。该比较只反映触发事件的基线快照，是否要求合并前同步最新 `main` 由分支保护决定。`main` 推送、合并队列和手动运行全跑。跨平台必需检查使用固定 job 和原有显示名称，避免整组矩阵被跳过时缺失检查上下文；分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
-- 平台作业在 GitHub 托管的 Ubuntu 24.04 x64/arm64、Windows Server 2022 x64、Windows 11 ARM64 及 macOS 15 arm64/x64 上运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。`native keychain (linux-x64)`、`native keychain (linux-arm64)`、`native keychain (win32-x64)`、`native keychain (win32-arm64)`、`document backend (macos-15)` 和 `document backend (macos-15-intel)` 名称为兼容历史必需检查保留；名称不表示测试系统钥匙串或旧文档后端，远端 required 配置须另行核验。
+- `classify changes (ubuntu-x64)` 以 PR merge-base 到 head 的完整差异分类；PR 事件基线为 head 祖先，且仅修改或删除 `docs/` 中普通 Markdown 与根 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时允许跳过平台作业。新增或重命名文件、非便携路径、分类不能确认、文件类型或模式异常、混合其他路径、事件基线前移时全跑；分类作业失败或输出无效时 `verify` 失败。该比较只反映触发事件的基线快照，是否要求合并前同步最新 `main` 由分支保护决定。`main` 推送、合并队列和手动运行全跑。跨平台必需检查使用固定 job，避免整组矩阵被跳过时缺失检查上下文；分支保护的必需检查名称须与实际显示名称一致，远端配置以实测为准。分类只优化 CI，不构成防止恶意 PR 修改工作流的安全边界。
+- 平台作业在 GitHub 托管的 Ubuntu 24.04 x64/arm64、Windows Server 2022 x64、Windows 11 ARM64 及 macOS 15 arm64/x64 上运行 Node SQLite 凭据测试、IAM 读取路径测试和离线安装冒烟。六项检查分别为 `SQLite and IAM (linux-x64, ubuntu-24.04)`、`SQLite and IAM (linux-arm64, ubuntu-24.04-arm)`、`SQLite and IAM (win32-x64, windows-2022)`、`SQLite and IAM (win32-arm64, windows-11-arm)`、`SQLite and IAM (darwin-arm64, macos-15)` 和 `SQLite and IAM (darwin-x64, macos-15-intel)`。
 - Linux 和 macOS 作业构建、核验并离线安装企业组合包；Windows 作业打包并离线安装凭据独立包。安装冒烟使用临时 SQLite 存储和合成值，不代表 Windows 已安装企业组合包。凭据使用值级加密 SQLite 和文件 keyring，不使用系统钥匙串或原生 addon；文件权限与隔离边界见[凭据包说明](../../packages/forge-credentials-keychain/README.md)。
 - `SQLite and IAM (linux-x64, ubuntu-26.04)` 与 `SQLite and IAM (win32-x64, windows-2025)` 非必需作业执行相同的 SQLite 和 IAM 平台检查，用于观察后续镜像兼容性；结果不替代目标系统验收。
 - `sensitive scan and IAM callback (win32-x64)` 在 Windows Server 2022 的非必需作业中以同一次 `node --test` 运行敏感扫描和 IAM 回调端口测试；POSIX 分支已由 `verify (ubuntu-x64)` 覆盖。路径测试覆盖 `icase` pathspec 和反斜杠归一化；卷不提供不同的 8.3 短别名时，真实别名用例跳过，运行时应检查该项是通过还是跳过。回调测试检查平台 socket 行为。

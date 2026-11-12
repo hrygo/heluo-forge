@@ -16,8 +16,8 @@ concurrency:
   # Cancel stale PR runs, but never cancel a main-branch run mid-flight.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Existing required-check names are preserved for branch protection;
-# credential jobs run SQLite and IAM tests as described by their steps.
+# Platform check names describe the SQLite and IAM tests run by their steps.
+# Branch protection must use the corresponding names.
 jobs:
   changes:
     name: classify changes (ubuntu-x64)
@@ -92,11 +92,11 @@ jobs:
       - name: Check documents, repository and tests
         run: node --run check
 
-  # Fixed jobs preserve each required check name when a job is skipped. A job
+  # Fixed jobs preserve each platform check name when a job is skipped. A job
   # condition on the whole matrix is evaluated before the matrix is expanded.
-  # Context names stay compatible with branch protection; steps run SQLite and IAM tests.
+  # Configure required contexts in branch protection to match these names.
   native-linux-x64:
-    name: native keychain (linux-x64)
+    name: SQLite and IAM (linux-x64, ubuntu-24.04)
     needs: changes
     if: &run_platforms ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run_platforms != 'false') }}
     runs-on: ubuntu-24.04
@@ -166,7 +166,7 @@ jobs:
           node scripts/probe/installed-credential-smoke.mjs "$PACKAGE"
 
   native-linux-arm64:
-    name: native keychain (linux-arm64)
+    name: SQLite and IAM (linux-arm64, ubuntu-24.04-arm)
     needs: changes
     if: *run_platforms
     runs-on: ubuntu-24.04-arm
@@ -179,7 +179,7 @@ jobs:
     steps: *native_steps
 
   native-win32-x64:
-    name: native keychain (win32-x64)
+    name: SQLite and IAM (win32-x64, windows-2022)
     needs: changes
     if: *run_platforms
     runs-on: windows-2022
@@ -192,7 +192,7 @@ jobs:
     steps: *native_steps
 
   native-win32-arm64:
-    name: native keychain (win32-arm64)
+    name: SQLite and IAM (win32-arm64, windows-11-arm)
     needs: changes
     if: *run_platforms
     runs-on: windows-11-arm
@@ -233,7 +233,7 @@ jobs:
 
   # The same synthetic SQLite and IAM tests run on each supported OS.
   document-macos-15:
-    name: document backend (macos-15)
+    name: SQLite and IAM (darwin-arm64, macos-15)
     needs: changes
     if: *run_platforms
     runs-on: macos-15
@@ -245,7 +245,7 @@ jobs:
     steps: *native_steps
 
   document-macos-15-intel:
-    name: document backend (macos-15-intel)
+    name: SQLite and IAM (darwin-x64, macos-15-intel)
     needs: changes
     if: *run_platforms
     runs-on: macos-15-intel

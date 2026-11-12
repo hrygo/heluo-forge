@@ -8,7 +8,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-019 |
 | 文档名称 | CI 平台验证优化实施计划 |
-| 版本 | V0.1.0 |
+| 版本 | V0.2.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -23,13 +23,36 @@
 
 **Goal:** 使 CI 的名称、测试和成本符合实际平台验证范围，维护既有合并门禁。
 
-**Architecture:** 保留已被 `main` 分支保护引用的历史检查名称，改进其他作业及步骤名称；将 Windows 回调与敏感扫描测试合并到同一个非必需作业的一次测试运行中，保持必需门禁不变。平台安装冒烟验证实际制品中的 SQLite 分目录、轮换和恢复；目标机验收独立记录。
+**Architecture（初始阶段）:** 保留已被 `main` 分支保护引用的历史检查名称，改进其他作业及步骤名称；将 Windows 回调与敏感扫描测试合并到同一个非必需作业的一次测试运行中，保持必需门禁不变。平台安装冒烟验证实际制品中的 SQLite 分目录、轮换和恢复；目标机验收独立记录。
 
 **Tech Stack:** GitHub Actions、Node.js 内置测试与 SQLite、现有离线包构建脚本。
 
 **Spec:** [需求基线](../requirements/requirements-baseline.md)、[工程开发约定](../engineering/development-conventions.md)。
 
-## 全局约束
+## 2026-11-12：检查名称与分支保护迁移
+
+初始阶段为保持必需检查上下文而保留旧名称。用户随后要求将六个平台作业的显示名称改为与 SQLite、IAM 验证内容一致；job ID、平台、测试、分类与失败关闭行为保持不变。
+
+2026-11-12 只读核验 `main` 的分支保护：下表六项旧名称仍为必需检查；四项 Linux/Windows 检查绑定 GitHub Actions（`app_id=15368`），两项 macOS 检查未指定来源。`verify (ubuntu-x64)` 与 `sensitive-attestation-verify` 也为必需检查，后者绑定同一 GitHub Actions 来源。远端状态以再次实测为准。
+
+| 旧名称 | 新名称 |
+|---|---|
+| `native keychain (linux-x64)` | `SQLite and IAM (linux-x64, ubuntu-24.04)` |
+| `native keychain (linux-arm64)` | `SQLite and IAM (linux-arm64, ubuntu-24.04-arm)` |
+| `native keychain (win32-x64)` | `SQLite and IAM (win32-x64, windows-2022)` |
+| `native keychain (win32-arm64)` | `SQLite and IAM (win32-arm64, windows-11-arm)` |
+| `document backend (macos-15)` | `SQLite and IAM (darwin-arm64, macos-15)` |
+| `document backend (macos-15-intel)` | `SQLite and IAM (darwin-x64, macos-15-intel)` |
+
+迁移顺序：
+
+1. 提交待评审的工作流和文档改动后，在目标 PR 的实际受检提交上运行六项新检查，核对名称、来源与结果均符合预期。
+2. 新检查成功后，由获明确授权的用户或操作者将分支保护中的六项旧名称替换为新名称，保留既有来源绑定、`verify (ubuntu-x64)`、`sensitive-attestation-verify` 及其他保护配置。
+3. 重新读取分支保护和 PR 检查状态，确认六项新名称与工作流完全一致、其他必需项未丢失；结果以实际远端记录为准。
+
+旧名称仍为必需项时，仅改名会使 PR 缺少旧检查而被分支保护阻塞；因此必须在合并前完成名称迁移，不能等待合并后才切换。本计划记录所需步骤，不代表远端配置已更改。
+
+## 初始阶段约束
 
 - 已配置的必需检查上下文、受信验签、文档变更的保守分类和失败关闭行为保持不变；不修改远端分支保护。
 - 保留已有平台及架构覆盖；托管 Windows Server、Ubuntu 和 macOS 的合成测试不充当目标桌面、国产系统、DSH/Electron 或企业联调取证。
