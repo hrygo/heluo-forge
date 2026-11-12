@@ -42,11 +42,13 @@ description: 供打包人员通过问答收集企业 IAM/网关配置，在 macO
 | IAM Discovery URL | 是 | issuer + `/.well-known/openid-configuration` | 绝对地址。maker 会自动 GET：要求 200、`issuer` 与配置一致、三个端点齐全；缺失或不可达会直接拒绝。确认网络确实不可达时才加 `--skip-discovery-check` 并在报告里写明 |
 | 内网 HTTP opt-in | 否 | 空 | 仅当打包人员确认接受明文传输风险时写 `true` |
 | 凭据存储 | 否 | 空 | Windows 与 macOS 使用内置加密文档后端，不需要任何 opt-in；Linux 目标没有可用的凭据后端，向导会显示“凭据存储不可用”，属预期 |
-| 回调端口 | 否 | `17321` | 1024–65535 整数 |
-| 回调地址 | 否 | `127.0.0.1` | IPv4 回环或主机名 |
+| 回调端口 | 否 | `0` | `0`（系统分配）或 1024–65535 整数；固定端口只在 IAM 要求精确登记时使用 |
+| 回调地址 | 否 | `127.0.0.1` | `127.0.0.1` 或 `::1`；须与 IAM 登记的回调前缀一致 |
 | Gitee host | 否 | 空 | 企业 Gitee 的 `https://` 地址；没有就跳过 |
 | 版本号 | 是 | 公版版本 + `-corp.1` | 与公版不同，符合 semver |
 | 输出目录 | 是 | — | 仓库外、不存在或为空 |
+
+企业 IAM 按回调前缀登记（`http://127.0.0.1:` 或 `http://127.0.0.1/`，2026-11-06 答复：端口可随机），因此端口默认填 `0`：端口在登录发起时由系统分配，插件只为本次登录临时监听，不需要预登记，也不会因端口被其他进程占用而登录失败。只有 IAM 明确要求逐字节匹配固定回调 URI 时，才填 1024–65535，并保证与登记值完全一致；固定端口被占用时插件以 `IAM_CALLBACK_PORT_UNAVAILABLE` 拒绝登录，不回落到随机端口。选 `0` 时不要额外写 `redirectUri`，端口在运行时才确定。
 
 收齐后写入临时文件：
 
@@ -59,7 +61,7 @@ HELUO_IAM_ISSUER=<issuer>
 HELUO_IAM_DISCOVERY_URL=<discovery url>
 HELUO_IAM_CLIENT_ID=<client_id>
 HELUO_IAM_SCOPES=openid profile offline_access
-HELUO_IAM_CALLBACK_PORT=<port>
+HELUO_IAM_CALLBACK_PORT=<0 或固定端口>
 HELUO_IAM_CALLBACK_ADDRESS=<address>
 HELUO_IAM_MANAGED_MODELS_BASE_URL=<gateway baseURL>
 HELUO_IAM_DEFAULT_PROVIDER=<provider id>

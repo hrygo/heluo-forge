@@ -140,6 +140,30 @@ test('maker changes only the patch, the version and its own metadata', (t) => {
   assert.match(readFileSync(join(output, 'SHA256SUMS'), 'utf8'), new RegExp(result.sha256, 'u'));
 });
 
+test('callback port 0 asks the plugin for an OS-assigned port', (t) => {
+  const root = temp(t);
+  const publicPath = join(root, 'public.tgz');
+  writeFileSync(publicPath, publicTarball());
+  const configPath = writeConfig(root, ENV.map((line) => (line.startsWith('HELUO_IAM_CALLBACK_PORT=') ? 'HELUO_IAM_CALLBACK_PORT=0' : line)));
+  const result = makePrivateBundle({
+    publicPath,
+    expectedSha256: inspectPublicTarball(publicPath).sha256,
+    configPath,
+    version: '0.2.0',
+    output: join(root, 'private'),
+  });
+  const patch = readBundleEntries(result.tarball, { withContent: true })
+    .find((entry) => entry.path === 'cordis.patch.yml').content.toString('utf8');
+  assert.match(patch, /callbackPort: 0/u);
+});
+
+test('callback port outside 0 or 1024-65535 is refused', () => {
+  for (const port of ['1023', '65536']) {
+    const entries = parseEnvConfig(ENV.map((line) => (line.startsWith('HELUO_IAM_CALLBACK_PORT=') ? `HELUO_IAM_CALLBACK_PORT=${port}` : line)).join('\n'));
+    expectCode(() => buildConfig(entries), 'CONFIG_INVALID');
+  }
+});
+
 test('two runs over the same inputs produce the same tarball bytes', (t) => {
   const root = temp(t);
   const publicBytes = publicTarball();

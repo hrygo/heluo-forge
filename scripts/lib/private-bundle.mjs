@@ -306,7 +306,13 @@ export function buildConfig(entries) {
   if (iam.gatewayResource !== undefined && (typeof iam.gatewayResource !== 'string' || iam.gatewayResource.trim() === '')) problems.push('HELUO_IAM_GATEWAY_RESOURCE must be a non-empty string');
   if (iam.redirectPath !== undefined && !iam.redirectPath.startsWith('/')) problems.push('HELUO_IAM_REDIRECT_PATH must start with /');
   if (iam.callbackAddress !== undefined && !LOOPBACK.has(iam.callbackAddress)) problems.push('HELUO_IAM_CALLBACK_ADDRESS must be a loopback address');
-  if (iam.callbackPort !== undefined && (iam.callbackPort < 1 || iam.callbackPort > 65535)) problems.push('HELUO_IAM_CALLBACK_PORT must be between 1 and 65535');
+  // 0 asks the plugin for an OS-assigned loopback port, which is the production
+  // form: IAM registers the `http://127.0.0.1:` prefix and accepts any port. A
+  // pinned port is only for an authorisation server that demands an exact
+  // registered URI, so the maker must accept both and keep the plugin's floor.
+  if (iam.callbackPort !== undefined && iam.callbackPort !== 0 && (iam.callbackPort < 1024 || iam.callbackPort > 65535)) {
+    problems.push('HELUO_IAM_CALLBACK_PORT must be 0 (OS-assigned) or between 1024 and 65535');
+  }
   if (iam.managedModels !== undefined && (typeof iam.defaultProvider !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(iam.defaultProvider))) {
     problems.push('HELUO_IAM_DEFAULT_PROVIDER must be an exact route ID when managed models are configured');
   }
