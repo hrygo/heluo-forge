@@ -81,11 +81,12 @@
 
 ### 7.1 GitHub Actions
 
-[检查工作流](.github/workflows/check.yml)在 `main` 推送、PR、合并队列的 `checks_requested` 和手动运行时触发，不在工作流入口使用路径过滤。PR 的事件基线为 head 祖先，且仅修改或删除 `docs/` 下普通 Markdown 文件或根目录的 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时跳过跨平台作业；文档链接、登记、仓库规则和全部离线测试仍由 `verify` 执行。新增或重命名文件、混合或未知路径、非便携路径、文件类型和模式异常、事件基线前移或无法完整比较时全跑；`main` 推送、合并队列和手动运行也全跑。
+[检查工作流 `repository checks`](.github/workflows/check.yml)在 `main` 推送、PR、合并队列的 `checks_requested` 和手动运行时触发，不在工作流入口使用路径过滤。PR 的事件基线为 head 祖先，且仅修改或删除 `docs/` 下普通 Markdown 文件或根目录的 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时跳过跨平台作业；文档链接、登记、仓库规则和全部离线测试仍由 `verify` 执行。新增或重命名文件、混合或未知路径、非便携路径、文件类型和模式异常、事件基线前移或无法完整比较时全跑；`main` 推送、合并队列和手动运行也全跑。
 
-- `verify (ubuntu-x64)` 在 `ubuntu-24.04` 上运行完整离线检查，超时 5 分钟；分类作业失败或结果无效时，该必需检查失败。同一 PR 的新运行取消过期运行。`native keychain` 固定作业覆盖 Linux 与 Windows 的 x64/arm64，`document backend` 固定作业覆盖 macOS 两种架构；Windows 的敏感扫描和回调端口测试另有平台作业。
+- `verify (ubuntu-x64)` 在 `ubuntu-24.04` 上运行完整离线检查，超时 5 分钟；分类作业失败或结果无效时，该必需检查失败。同一 PR 的新运行取消过期运行。平台作业在 GitHub 托管的 Linux、Windows 和 macOS runner 上执行 SQLite 凭据、IAM 合成测试与离线安装冒烟；`sensitive scan and IAM callback (win32-x64)` 是合并运行 Windows 敏感扫描和回调端口测试的非必需作业。
 - Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test` 自动发现工程、包与集成测试。
-- `verify` 不安装 pnpm 或项目依赖，也不读取包缓存。原生钥匙串作业使用 npm 缓存加速来源包下载，每次仍按锁文件验证 tarball 并核对提交的暂存记录；Linux 作业另安装系统存储依赖。工作流不缓存 `node_modules`。
+- `verify` 不安装 pnpm 或项目依赖，也不读取包缓存；平台作业不配置 npm 包或 `node_modules` 缓存。Linux 和 macOS 作业构建并离线安装企业组合包，Windows 作业打包并离线安装凭据独立包；安装使用 runner 工作区内的独立前缀，冒烟测试在系统临时目录使用合成数据。为兼容历史必需检查上下文，六个平台作业保留 `native keychain` 和 `document backend` 名称；这些名称不代表当前使用系统钥匙串或文档后端。
+- 托管 runner 的结果不代替 Windows 10、UOS、银河麒麟、目标 DSH/Electron 宿主、Windows ACL 或企业 IAM 的目标环境取证。8.3 真实短名用例在卷不提供不同的短别名时跳过；需以实际运行记录区分通过与跳过。
 - 工作流只授予 `contents: read`，检出不保留凭据；分类作业检出完整历史以比较 PR 的基线与 head，其余作业检出深度为 1。Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
 - PR 另由 [sensitive-attestation](.github/workflows/sensitive-attestation.yml) 以 `pull_request_target` 从基线读取团队公钥验签，不 checkout 也不执行 PR 代码，权限同为 `contents: read`。它的 required 配置与部署状态不在本文件断言，实测与上线步骤见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。
 - 本地修改不代表远端必需检查、合并队列或 Dependabot 已启用，也不代表远端 CI 已通过。

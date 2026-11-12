@@ -1,4 +1,4 @@
-name: check
+name: repository checks
 
 on:
   push:
@@ -128,9 +128,9 @@ jobs:
           if (process.platform!==p||process.arch!==a)
           { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
           "$FORGE_CI_PLATFORM" "$FORGE_CI_ARCH"
-      - name: Run credential backend tests
+      - name: Test credential storage
         run: node --test packages/forge-credentials-keychain/test/*.test.mjs
-      - name: Run IAM read path tests
+      - name: Test IAM read paths and CLI bridge
         run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs packages/forge-iam/test/bridge-real-provider.test.mjs
       # The release closure requires POSIX mode bits on bin entry points, which a
       # Windows checkout cannot carry; Windows packs the credentials package
@@ -152,7 +152,7 @@ jobs:
           mkdir -p node_modules/.forge-ci/bundle
           rm -f node_modules/.forge-ci/bundle/*.tgz
           node --input-type=module -e "import { execNpm } from './scripts/lib/bundle-rules.mjs'; execNpm(['pack', './packages/forge-credentials-keychain', '--ignore-scripts', '--pack-destination', 'node_modules/.forge-ci/bundle'], { stdio: 'inherit' });"
-      - name: Install the artifact offline
+      - name: Install and test the artifact offline
         run: |
           set -euo pipefail
           rm -rf node_modules/.forge-ci/install
@@ -206,7 +206,7 @@ jobs:
 
   # Forward-compatibility jobs are not required checks.
   native-linux-x64-next:
-    name: native keychain (linux-x64, ubuntu-26.04)
+    name: SQLite and IAM (linux-x64, ubuntu-26.04)
     needs: changes
     if: *run_platforms
     runs-on: ubuntu-26.04
@@ -219,7 +219,7 @@ jobs:
     steps: *native_steps
 
   native-win32-x64-next:
-    name: native keychain (win32-x64, windows-2025)
+    name: SQLite and IAM (win32-x64, windows-2025)
     needs: changes
     if: *run_platforms
     runs-on: windows-2025
@@ -255,12 +255,11 @@ jobs:
       FORGE_CI_ARCH: x64
     defaults: *bash_defaults
     steps: *native_steps
-  # Local hook and scanner portability. Windows only: the POSIX branches of
-  # these suites already run inside `verify` on ubuntu-24.04, so the ubuntu leg
-  # duplicated it; 8.3 aliases, `icase` pathspecs and backslash normalisation
-  # have no POSIX equivalent. Not required yet — make it required once stable.
+  # Windows-specific scanner and socket behavior: verify already runs these
+  # suites on Ubuntu. Keep this job non-required and run all files together so
+  # a failure in one suite does not prevent the other from executing.
   sensitive-scan:
-    name: sensitive scan (win32-x64)
+    name: sensitive scan and IAM callback (win32-x64)
     needs: changes
     if: *run_platforms
     runs-on: windows-2022
@@ -280,32 +279,5 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
-      - name: Run portable sensitive-scan tests
-        run: node --test tests/sensitive-scan.test.mjs tests/sensitive-scan-team.test.mjs tests/sensitive-scan-full-distribution.test.mjs tests/sensitive-scan-parent-tree.test.mjs tests/sensitive-scan-legacy-install.test.mjs tests/sensitive-scan-managed-upgrade.test.mjs tests/sensitive-scan-windows-paths.test.mjs tests/sensitive-scan-post-rewrite.test.mjs tests/sensitive-scan-server-merge.test.mjs tests/sensitive-scan-pre-push.test.mjs
-
-  # Windows only, for the same reason as sensitive-scan: `verify` already runs
-  # this test on ubuntu-24.04. The Windows leg is what proves the socket
-  # semantics that differ (address-family availability, port reuse, shutdown).
-  forge-iam-callback:
-    name: iam callback (win32-x64)
-    needs: changes
-    if: *run_platforms
-    runs-on: windows-2022
-    timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-          show-progress: false
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-          package-manager-cache: false
-      - name: Run loopback callback tests
-        run: node --test packages/forge-iam/test/callback-port.test.mjs
+      - name: Test Windows sensitive scan and IAM callback
+        run: node --test tests/sensitive-scan.test.mjs tests/sensitive-scan-team.test.mjs tests/sensitive-scan-full-distribution.test.mjs tests/sensitive-scan-parent-tree.test.mjs tests/sensitive-scan-legacy-install.test.mjs tests/sensitive-scan-managed-upgrade.test.mjs tests/sensitive-scan-windows-paths.test.mjs tests/sensitive-scan-post-rewrite.test.mjs tests/sensitive-scan-server-merge.test.mjs tests/sensitive-scan-pre-push.test.mjs packages/forge-iam/test/callback-port.test.mjs
