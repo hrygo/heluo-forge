@@ -136,6 +136,33 @@ test('profile never outlives the grant that produced it', async (t) => {
   assert.equal(service.getIdentityProfile(), undefined, 'a stale profile must not survive its grant');
 });
 
+// 刷新换票不清投影（issue #160 澄清后的契约）：刷新保留同一 grantIdentity
+// （同一会话同一主体），identity 保持稳定；刷新路径亦不重新请求 UserInfo。
+test('identity persists across token refresh for both view and session read paths', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  // 巨大的 skew 让 resolveToken 立即走刷新路径。
+  const service = createIamService(configFor(mock, { refreshSkewSeconds: 999999 }), { credentials });
+  t.after(() => service.dispose());
+  await signIn(service);
+  assert.deepEqual(service.getIdentityProfile(), {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
+  await service.resolveToken();
+  assert.equal(mock.counts.refresh, 1, 'the refresh path must have run');
+  assert.equal(mock.counts.userInfo, 1, 'refresh must not re-request UserInfo');
+  assert.deepEqual(service.getIdentityProfile(), {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
+  assert.deepEqual(service.getView().identity, {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
+  assert.deepEqual(service.getSession().identity, {
+    user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan',
+  });
+});
+
 // Fixture B（issue #160）：后管删除 displayName 后的真实形态——
 // 登录成功、投影缺失姓名、其余字段照常返回。
 test('missing displayName degrades to the remaining fields without failing login', async (t) => {
