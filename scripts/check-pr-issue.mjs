@@ -1,19 +1,36 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
+function indentationWidth(prefix) {
+  return [...prefix].reduce((width, char) => width + (char === '\t' ? 4 - width % 4 : 1), 0);
+}
+
+function openingFence(line) {
+  const match = /^( {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?)(`{3,}|~{3,})[^\n]*$/u.exec(line);
+  if (!match) return null;
+  const listIndent = /[^ ]/u.test(match[1]) ? indentationWidth(match[1]) : 0;
+  return { marker: match[2], listIndent };
+}
+
 export async function validateIssueReference(body, lookup) {
   const numbers = [];
   let fence = null;
   let inComment = false;
   for (const rawLine of (body ?? '').split(/\r?\n/u)) {
-    // A comment marker inside a fenced example is literal text.
+    // A comment marker inside a fenced example is literal text. A list item
+    // ends its contained fence when a nonblank line leaves the list.
     if (fence) {
-      const close = /^ *(`{3,}|~{3,})[ \t]*$/u.exec(rawLine);
-      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
-      continue;
+      const indent = indentationWidth(/^[ \t]*/u.exec(rawLine)[0]);
+      if (fence.listIndent && rawLine.trim() && indent < fence.listIndent) {
+        fence = null;
+      } else {
+        const close = /^[ \t]*(`{3,}|~{3,})[ \t]*$/u.exec(rawLine);
+        if (close && indent - fence.listIndent <= 3 && close[1][0] === fence.marker[0] && close[1].length >= fence.marker.length) fence = null;
+        continue;
+      }
     }
-    const opening = !inComment && /^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?(`{3,}|~{3,})[^\n]*$/u.exec(rawLine);
-    if (opening) { fence = opening[1]; continue; }
+    const opening = !inComment && openingFence(rawLine);
+    if (opening) { fence = opening; continue; }
     let line = '';
     let remaining = rawLine;
     while (remaining) {
@@ -30,8 +47,8 @@ export async function validateIssueReference(body, lookup) {
         inComment = true;
       }
     }
-    const marker = /^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+)?(`{3,}|~{3,})[^\n]*$/u.exec(line);
-    if (marker) { fence = marker[1]; continue; }
+    const marker = openingFence(line);
+    if (marker) { fence = marker; continue; }
     const match = /^ {0,3}(?:[-*] +)?(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?|part of)[ \t]*:?[ \t]+#([1-9]\d*)[ \t]*$/iu.exec(line);
     if (match) numbers.push(match[1]);
   }

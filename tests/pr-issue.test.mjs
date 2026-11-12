@@ -53,3 +53,16 @@ test('ignores list-fenced examples and respects comment and fence order', async 
   assert.equal(await validateIssueReference('~~~ <!--\nexample\n~~~\nPart of #12', issue), true);
   assert.equal(await validateIssueReference('- ```\n  Closes #12\n  ```\nPart of #12', issue), true);
 });
+
+test('keeps over-indented closing fences inside their code block', async () => {
+  assert.equal(await validateIssueReference('```markdown\n    ```\n```\n\nPart of #12', issue), true);
+  assert.equal(await validateIssueReference('```markdown\n    ```\nCloses #12\n```', issue), false);
+  assert.equal(await validateIssueReference('- ```markdown\n      ```\n  Closes #12\n  ```', issue), false);
+  assert.equal(await validateIssueReference('- ```markdown\n     ```\nPart of #12', issue), true);
+  assert.equal(await validateIssueReference('1. ~~~markdown\n      ~~~\nPart of #12', issue), true);
+});
+
+test('continues after a list code block ends when the next paragraph leaves the list', async () => {
+  assert.equal(await validateIssueReference('- ```\n  example\n\nPart of #12', issue), true);
+  assert.equal(await validateIssueReference('1. ~~~\n   example\n\nPart of #12', issue), true);
+});
