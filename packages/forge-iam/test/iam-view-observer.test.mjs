@@ -151,6 +151,49 @@ test('hostile view shapes are rejected instead of being coerced', async (t) => {
   assert.equal(proxyClock.size, 0);
 });
 
+test('the identity projection whitelist admits only the three confirmed fields', async (t) => {
+  const transport = createManagementTransport();
+
+  async function projectOne(view) {
+    const iam = createFakeIam();
+    iam.view = view;
+    const clock = createManualClock();
+    const observer = createIamViewObserver(iam, { verifyManagementContext: transport.verify, clock });
+    t.after(() => observer.dispose());
+    const grant = transport.issue({ observer });
+    const [frame] = await collectFrames(observer.observe(grant.context), 1);
+    return frame;
+  }
+
+  const frame = await projectOne({ ...READY_VIEW,
+    identity: { user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan' } });
+  assert.deepEqual(frame.identity, { user_id: '10001234', user_name: 'Zhang San', work_no: 'zhangsan' });
+  assert.ok(Object.isFrozen(frame.identity));
+  assert.deepEqual(Object.keys(frame.identity), ['user_id', 'user_name', 'work_no']);
+
+  const partial = await projectOne({ ...READY_VIEW, identity: { user_id: '10001234' } });
+  assert.deepEqual(partial.identity, { user_id: '10001234' });
+
+  for (const invalid of [
+    { ...READY_VIEW, identity: { user_id: '10001234', nickname: 'unexpected' } },
+    { ...READY_VIEW, identity: { user_id: 42 } },
+    { ...READY_VIEW, identity: { user_name: '' } },
+    { ...READY_VIEW, identity: { get work_no() { return 'zhangsan'; } } },
+    { ...READY_VIEW, identity: 'text' },
+    { ...READY_VIEW, identity: ['user_id'] },
+    { ...READY_VIEW, identity: { user_id: 'x', ...Object.fromEntries([['toString', ' hostile']]) } },
+  ]) {
+    const iam = createFakeIam();
+    iam.view = invalid;
+    const clock = createManualClock();
+    const observer = createIamViewObserver(iam, { verifyManagementContext: transport.verify, clock });
+    t.after(() => observer.dispose());
+    await assert.rejects(open(observer, transport.issue({ observer }).context).next(), frameError('IAM_VIEW_INVALID'),
+      `identity shape must be rejected: ${JSON.stringify(Object.keys(invalid.identity === 'text' ? {} : invalid.identity))}`);
+    await observer.dispose();
+  }
+});
+
 test('two subscribers share one flight and the last leaving stops timer and watch', async (t) => {
   const iam = createFakeIam();
   const transport = createManagementTransport();

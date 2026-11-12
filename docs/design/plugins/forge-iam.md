@@ -510,7 +510,7 @@ export interface IamView {
 - **映射由配置给出，内部键固定**：内部键恒为 `workNo`/`name`，映射到哪个企业 IAM 声明由插件配置 `profileFields`（与私版 `HELUO_IAM_PROFILE_FIELDS` 同一映射）给出，取值须为合法的 claim 名 token。**未配置则不取 UserInfo、不投影**，不猜测任何字段名，也不维护猜测性回退链。
 - **口径待 IAM 确认**：同一版本答复并存 `work_no`/`pinyin`（2026-10-28 最终确认函）与 `employeeNumber`/`name`/`givenName`（2026-10-26 内部校验回函）两种写法，已并入 [IAM｜六项待答复与整改跟踪 #433](https://github.com/hrygo/heluo-forge/issues/433) 第 3 项跟踪。联调确认前**任何字段名都不写入契约**，本单只交付映射机制与两套候选口径的 fixture。
 - **严格投影**：只取命中映射的字符串值，去空白、限长；`sub`、`authTime` 等其余声明整体丢弃。
-- **失败降级**：端点不可达、401/5xx、超时（5 秒上限）、JSON 非法或字段缺失均只丢弃投影，不影响登录就绪；投影随 grant 失效（登出、会话失效）即时清空，跨令牌刷新保持不变。
+- **失败降级**：端点不可达、401/5xx、超时（5 秒上限）、JSON 非法或字段缺失均只丢弃投影，不影响登录就绪；投影随会话失效（登出、会话失效、重新登录）即时清空。访问令牌刷新**不**清空投影：刷新保留同一 `grantIdentity`（同一会话同一主体），identity 保持稳定，刷新路径亦不重新请求 UserInfo。
 - **令牌传递**：`userInfoTokenTransport` 配置 `header`（默认，标准 OIDC `Authorization: Bearer`）或 `query`（企业 IAM profile 端点实测要求 `?access_token=`）；令牌经 URL 传递时严禁进入日志与诊断数据。
 - **PII 边界**：投影仅进入视图 `identity` 与 `GET /api/forge-iam/session` 的 `identity` 字段；审计主体保持 `iss`/`sub`（或其哈希），姓名与工号不进入审计、模型执行请求与日志。
 
