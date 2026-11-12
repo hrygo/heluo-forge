@@ -18,7 +18,7 @@
 
 > 编制依据：PR #253 head `11b3237`（分支 `codex/credential-storage-clean-arch`）的 `managed-models.mjs`、`service-token.mjs`、`service-gateway.mjs` 与 `gateway-failure.mjs`；2026-11-12 在本机以只读脚本复现的四条失败路径；issue #226 关于跨进程写入的待核实边界。Windows 实机日志未取得，A 类与 B 类的现场归因仍需该证据关闭。
 
-> 关联文档：[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[凭据存储模式](<../design/credential-modes.md>)、[凭据存储整洁架构实施方案](<2026-11-12-credential-storage-clean-arch.md>)、[PR #253](https://github.com/hrygo/heluo-forge/pull/253)、[issue #226](https://github.com/hrygo/heluo-forge/issues/226)。
+> 关联文档：[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[凭据存储模式](<../design/credential-modes.md>)、[凭据存储整洁架构实施方案](<2026-11-12-credential-storage-clean-arch.md>)、[PR #253](https://github.com/hrygo/heluo-forge/pull/253)、[issue #226](https://github.com/hrygo/heluo-forge/issues/226)、[issue #259](https://github.com/hrygo/heluo-forge/issues/259)（落地跟踪）。
 
 ## 1. 结论与范围
 
