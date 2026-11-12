@@ -95,10 +95,24 @@ argv 按 2026-11-03 实测的规格 `docs/contracts/gh-cli-spec.md` 逐条对齐
 
 结果契约：
 
-- **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。载荷另带 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`）。`json` 参数是**本地投影选择器**（默认完整声明集，越界名字按 `JSON_FIELD_NOT_DECLARED` 拒绝），不改变 argv；清单投影按实测载荷：`issue list` 元素恰好 `description`/`id`/`labels`/`title`/`updated_at`（没有 `state`/`web_url`）。剥壳认得 `{data:{list:[…]}}`、`{data:[…]}`、扁平对象，以及 `pr list` 空结果的 `{"message":"No pull requests found."}`——后者解成 0 条，不报畸形。事实版本：Issue/PR 取 `updated_at`，仓库取 `last_activity_at`（实测无 `updated_at`）；取不到即 `unknown`，不编版本。
-- **写**：四状态 `done`/`failed`/`denied`/`unknown`。`done` 必须"CLI 成功 + 回读一致"；退出码 0 单凭算 `unknown`。写前有幂等台账（`sha256(changeId|objectType|title)` 前 16 位，进程内 6 小时），命中返回 `reused` 且远端 0 次调用；失败不重放。写动作返回体**不出现 `executed` 键**（该键只由判定体的 `produced` 声明产生，写动作返回体一个键都不多）。
+- **读**：信封 `{provider:'gitee', action, status, source_revision, observed_at, target, result_refs, missing_fields, detail}`；状态 `succeeded`/`failed`/`partial`/`unknown`，准入拒绝另记 `denied`；失败降级为数据（`reason` 固定枚举），不抛二次错误。载荷另带 `object`（对象读）或 `items`/`count`/`total_count`（清单读，`total_count` 来自 CLI 的 `meta.total_count`；取不到时输出 `null` 表示未知，不伪造 0）。清单读的 `source_revision` 恒为 `null`：列表不承诺单对象修订号，对象读才要求事实版本。`json` 参数是**本地投影选择器**（默认完整声明集，越界名字按 `JSON_FIELD_NOT_DECLARED` 拒绝），不改变 argv；清单投影按实测载荷：`issue list` 元素恰好 `description`/`id`/`labels`/`title`/`updated_at`（没有 `state`/`web_url`）。剥壳认得 `{data:{list:[…]}}`、`{data:[…]}`、扁平对象，以及 `pr list` 空结果的 `{"message":"No pull requests found."}`——后者解成 0 条，不报畸形。事实版本：Issue 取 `created_at`、PR 取 `updated_at`、仓库取 `last_activity_at`（实测无 `updated_at`）；取不到即 `unknown`，不编版本。
+- **写**：四状态 `done`/`failed`/`denied`/`unknown`。`done` 必须"CLI 成功 + 回读一致"；退出码 0 单凭算 `unknown`。写前有幂等台账（`sha256(变更号|动作|对象类型|规范化目标|归一化标题)` 前 16 位，进程内 6 小时），命中返回 `reused` 且远端 0 次调用；失败不重放。键同时含**动作**与**目标**：`review.publish`（远端 PR 评论）与 `review.record`（本地 `review.md`）即使变更号、提交与标题相同也落不同的键，不会把一次写的结果复用到另一份对象上。被拒/失败/不确定信封另带 `next_action`（固定动词，如 `register-policy-action`、`confirm-object`、`configure-credentials`、`verify-remote-state`），`done` 不带"下一步"；交付判定未通过属"确定失败但无错误原因码"，给 `complete-delivery-criteria`，避免调用方把"关闭条件未满足"误判成参数错误。写动作返回体**不出现 `executed` 键**（该键只由判定体的 `produced` 声明产生）。
 - **审查**：`review.md` 四段（问题 / 风险 / 意见 / 结论）+ AI 与人工两栏物理分节；人工栏只能由 `recordHumanConfirmation` 写，模型自填即拒；`stale` 是派生结果不落盘。
+- **对象不存在 vs 服务故障**：读/写失败原因新增 `ITEM_NOT_FOUND`。仅当子进程已启动、非零退出、诊断文本明确表达 404 / 未找到 / Not Found / does not exist / no such（并排除 `command not found` 这类环境错误）时归类，`message` 保留服务端原文（脱敏 + 截断 160 字符），`detail.mayHaveSideEffect: false`——改正目标后可安全重试；真实 5xx 服务故障仍是 `NONZERO_EXIT`。判定是诊断文本启发式：服务端对不存在对象返回 200 或换一套文案时会落回 `NONZERO_EXIT`/畸形，不冒充确定结论。
+
+- **快照的“不是仓库”提示**：`forge_gitee_delivery_snapshot` 在 `GIT_SNAPSHOT_NOT_A_REPOSITORY` 时只读探测一层直接子目录（固定 `git rev-parse --show-toplevel` + `rev-parse HEAD`，最多 8 个候选，跳过隐藏目录与依赖/产物目录，不跟随软链），若某个子目录自身就是仓库根，`message` 给出「子目录 <相对名>/ 是仓库根（HEAD=<7 位>）」并建议切换工作目录；不命中保持原文案。探测只补充提示，不改变 `status`/`reason`，不输出绝对路径或 stderr 原文。
+
+- **变更号真实性不在判定范围**：`forge_gitee_delivery_gate` 只校验提交信息首行是否带 `[变更号]`、关闭四项是否成立，**不校验该变更号在工单/需求系统里是否存在、是否属于本次交付**——变更号只作提交信息与台账的组织坐标。`ready: true` 表示"这四项条件成立"，不构成平台对变更真实性的背书；这是设计如此，不是校验缺口。真实性由提交人、评审人与远端 Issue/PR 记录共同承担。
+
 - **现有关闭条件判定**：只判定不执行——`[变更号]` 提交信息前缀、关闭四条件（验收、已合入、无未完成交付、针对当前 commit 的人工确认），`unknown` 不计入通过；返回体带 `executed: false` 与 `remote_calls: 0` 作为"只判定"的运行时证据；包里没有 close/merge 入口。此处如实描述现有判定器，不是所有用户验收的统一门槛：2026-11-03 已确认本地验证与独立 AI 审查后可形成待验收候选，由用户对实际代码版本验收；CI／合入／Issue 关闭／验收／业务结束分记，必要 CI 与分支保护仍须守，判定器未在本轮改造。
+
+## Windows + DSH 沙箱下的 git 凭据传输
+
+Windows 主机在 DSH 沙箱内执行 `forge_gitee_git_push` 时，git 的 credential helper 由 `sh -c` 包装执行；沙箱禁止命名管道，sh 在启动阶段即退出，git 取不到用户名，原始输出常以 `could not read Username` 结尾。该文本是**症状**，不是"用户名没配"的结论。
+
+- 归类：仅当 push 的非零退出命中 MSYS/sh/命名管道崩溃特征（`cannot fork`、`CreateFileMapping*`、`\.\pipe\`、管道创建失败、行首 `sh:`/`bash:` 诊断，或 `msys`/`cygwin`/`mingw` 运行时名与凭据症状同现）时，信封返回 `status: failed`、`reason: AUTH_TRANSPORT_UNAVAILABLE`、`rule: auth-transport-unavailable`、`next_action: use-native-http-credential`；本地 `commit`/`head`/`branch` 从不归入此类。
+- 不归类：普通 401/403、`Authentication failed`、`permission denied`、孤立的 `could not read Username`、HTTP 断链仍按 `COMMAND_FAILED` 处理（可重试），不会被误报成传输故障。
+- 绕行：用系统钥匙串保存的令牌与内嵌凭据的远端 URL（形如 `https://<access-token>@corp.example/<owner>/<repo>.git`）走 HTTP 原生传输，credential helper 与 `sh -c` 不在链路上；令牌只保留在本机会话配置与钥匙串，不写入仓库、不进入日志或错误体。
 
 ## 策略门禁与凭据
 

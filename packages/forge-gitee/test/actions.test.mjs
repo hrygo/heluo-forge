@@ -35,6 +35,7 @@ import { createGiteeSession } from '../src/gitee-session.mjs';
 import { GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
 
 const SRC_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'src');
+const HEX16 = /^[0-9a-f]{16}$/u;
 const CLOCK = 1_700_000_000_000;
 
 /** 5 个受控工具（顺序 = 4 写 + 1 判定；名字是 PRD 契约，不能随手改）。 */
@@ -287,6 +288,9 @@ test('AC-3/AC-8 默认禁用：未登记时四个写动作逐个 denied、规则
     // 被拒的动作没有证据：留一个空 evidence 会被读成"执行过但没证据"。
     assert.equal('evidence' in body, false, `${tool} 被拒却带了证据`);
     assert.equal(body.ok, false);
+    // 拒绝必须可执行：调用方要知道下一步是去登记目录，而不是反复重试同一个调用。
+    assert.equal(body.next_action, 'register-policy-action', `${tool} 被拒却没有可执行的下一步`);
+    assert.match(body.detail, /heluo-policy/u, `${tool} 的拒绝文案没说清向谁登记、在哪登记`);
   }
 
   assert.equal(harness.counters.decide, 5, '每个动作都问过目录（拒绝是裁决，不是短路）');
@@ -294,6 +298,26 @@ test('AC-3/AC-8 默认禁用：未登记时四个写动作逐个 denied、规则
   assert.equal(harness.counters.invoke, 0);
   assert.equal(harness.counters.read, 0);
   assert.equal(harness.counters.execFile, 0);
+});
+
+test('AC-16 回归：review.publish 与 review.record 同变更同提交，目标不同则幂等键不同（不跨对象复用）', async () => {
+  const harness = createHarness({ admit: false });
+  const repoRoot = mkdtempSync(join(tmpdir(), 'forge-gitee-cross-object-'));
+  try {
+    const published = await runTool(harness.service, 'forge_gitee_review_publish', REVIEW_PUBLISH);
+    const recorded = await runTool(harness.service, 'forge_gitee_review_record', reviewRecordArgs(repoRoot));
+    assert.equal(published.status, 'denied');
+    assert.equal(recorded.status, 'denied');
+    assert.match(published.idempotency_key, HEX16);
+    assert.match(recorded.idempotency_key, HEX16);
+    assert.notEqual(
+      published.idempotency_key,
+      recorded.idempotency_key,
+      '同一变更同一提交但动作/目标不同：共用键会让后一次写误判 reused=true 并静默返回上一次结果',
+    );
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test('AC-11 非 gitee.* 动作在门禁入口就地拒绝：零策略调用、零子进程', async () => {
@@ -320,6 +344,7 @@ test('AC-11 确认是"逐字相符"：缺失或改写目标都 denied，零写�
   assert.equal(first.status, 'denied');
   assert.equal(first.rule, 'confirm-required');
   assert.equal(first.reason, GUARD_REASONS.CONFIRMATION_REQUIRED);
+  assert.equal(first.next_action, 'confirm-object', '确认缺失要指向补确认，而不是泛泛失败');
   assert.equal(missing.counters.invoke, 0);
 
   const tampered = createHarness();
@@ -543,6 +568,7 @@ test('AC-16 预检未过（缺凭据/持久令牌）→ failed 而不是 denied�
   assert.equal(body.reason, ACTION_REASONS.AUTH_MISSING);
   assert.equal(body.rule, 'preflight-failed');
   assert.notEqual(body.status, 'denied', '门禁已经放行，拒它的是环境，不是策略');
+  assert.equal(body.next_action, 'configure-credentials', '缺凭据要给凭据修复动作');
   assert.equal(harness.counters.invoke, 0);
   assert.equal(harness.counters.read, 0);
   assert.equal(harness.counters.execFile, 0);
@@ -717,8 +743,26 @@ test('AC-6: 判定缺参/非法入参 fail closed——零策略、零子进程�
   assert.equal(badMessage.reason, ACTION_REASONS.COMMIT_MESSAGE_INVALID);
   assert.equal(badMessage.executed, false, '判定即使失败也只判定不执行');
   assert.equal(badMessage.remote_calls, 0);
+  assert.equal(badMessage.next_action, 'fix-content', '提交信息不合规要指向修内容');
   assert.equal(harness.counters.execFile, 0);
   assert.equal(harness.counters.invoke, 0);
+});
+
+test('AC-21 交付判定未通过：failed 无原因码也必须给下一步，且不误报参数错误', async () => {
+  const harness = createHarness();
+  const notReady = await runTool(harness.service, 'forge_gitee_delivery_gate', {
+    ...DELIVERY_GATE_READY,
+    criteria: { ...DELIVERY_GATE_READY.criteria, merged: 'fail' },
+  });
+  assert.equal(notReady.status, 'failed', `未满足关闭条件应为 failed（实际：${notReady.status}）`);
+  assert.equal(notReady.reason, null, '条件未满足不是错误原因码');
+  assert.equal(notReady.next_action, 'complete-delivery-criteria', '要让调用方知道去补齐关闭条件');
+  assert.equal(notReady.executed, false);
+  assert.equal(harness.counters.execFile, 0);
+
+  const ready = await runTool(harness.service, 'forge_gitee_delivery_gate', DELIVERY_GATE_READY);
+  assert.equal(ready.status, 'done');
+  assert.equal('next_action' in ready, false, 'done 不再挂下一步');
 });
 
 test('AC-11 本地/判定类动作不要求 confirm，但仍过门禁与审计（远程写才需要确认）', async () => {

@@ -714,7 +714,7 @@ test('包裹形状：扁平对象、{data:[…]}、{data:{list:[…]}}、{items:
     assert.equal(facts.status, 'succeeded', `包裹形状 ${JSON.stringify(payload).slice(0, 24)}… 应当可读`);
     assert.equal(facts.items[0].id, 3);
     if ('meta' in payload) assert.equal(facts.total_count, 9, 'meta.total_count 在剥壳后仍要带出');
-    else assert.equal('total_count' in facts, false, '没有 meta 时不编 total_count');
+    else assert.equal(facts.total_count, null, '没有 meta 时 total_count 是 null（未知，不编 0）');
   }
   // 认不出的形状 → 畸形结果（不把 data/meta 当数据交付）。
   for (const payload of [{ data: { list: 'nope' } }, { data: 42 }, 'nope', 42]) {
@@ -737,7 +737,7 @@ test('空 PR 列表不是畸形：`{"message":"No pull requests found."}` 解成
   assert.deepEqual([...facts.items], []);
   assert.equal(facts.count, 0);
   assert.deepEqual([...facts.missing_fields], []);
-  assert.equal('total_count' in facts, false, 'message 信封没有 meta：不编 total_count');
+  assert.equal(facts.total_count, null, 'message 信封没有 meta：total_count 是 null（未知，不编 0）');
 
   // 别顺手把其它畸形形状也放行：多一个键、message 非字符串、空对象与只有 data:null 都要报错。
   for (const payload of [
@@ -802,7 +802,7 @@ test('命令结果翻译：超时/非零退出/字段不支持/起不来/畸形 
   assert.equal(timeoutError.detail.mayHaveSideEffect, true, '超时意味着远端可能已生效：必须回读不得重放');
 
   const nonzero = createGiteeAdapter({
-    runner: fakeRunner(() => ({ exitCode: 4, stdout: '', stderr: 'HTTP 404' })),
+    runner: fakeRunner(() => ({ exitCode: 4, stdout: '', stderr: 'HTTP 500 Internal Server Error' })),
     env: SECRET_ENV,
   });
   await assertRejectedAsync(() => nonzero.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.NONZERO_EXIT);
@@ -827,6 +827,49 @@ test('命令结果翻译：超时/非零退出/字段不支持/起不来/畸形 
 
   const noOutcome = createGiteeAdapter({ runner: { async run() { return null; } }, env: SECRET_ENV });
   await assertRejectedAsync(() => noOutcome.invoke('issueView', { target: ISSUE_TARGET }), ADAPTER_REASONS.MALFORMED_RESULT);
+});
+
+test('对象不存在 → ITEM_NOT_FOUND：保留服务端原文、无副作用；与真实故障分开（UAT-5）', async () => {
+  const notFound404 = createGiteeAdapter({
+    runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'HTTP 404: Not Found' })),
+    env: EMPTY_ENV,
+  });
+  const error404 = await assertRejectedAsync(() => notFound404.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.ITEM_NOT_FOUND);
+  assert.equal(error404.detail.mayHaveSideEffect, false, '目标不存在是确定失败：改正目标可安全重试');
+  assert.match(error404.message, /HTTP 404: Not Found/u, '保留服务端原文（脱敏+截断），不换成笼统失败文案');
+  assert.equal(error404.detail.exitCode, 1);
+
+  // 内网 Gitee 对不存在对象可能回 500，正文才是判据："未找到"不是真实服务故障。
+  const notFound500 = createGiteeAdapter({
+    runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: '{"message":"未找到项目 corp/missing"}' })),
+    env: EMPTY_ENV,
+  });
+  const error500 = await assertRejectedAsync(() => notFound500.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.ITEM_NOT_FOUND);
+  assert.match(error500.message, /未找到项目 corp\/missing/u);
+  assert.equal(error500.detail.mayHaveSideEffect, false);
+
+  const notFoundEnglish = createGiteeAdapter({
+    runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'HTTP 500: Not Found' })),
+    env: EMPTY_ENV,
+  });
+  await assertRejectedAsync(() => notFoundEnglish.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.ITEM_NOT_FOUND);
+
+  // "命令找不到"的文案里同样有 not found，但那是环境问题，不能当成目标不存在。
+  const missingBinary = createGiteeAdapter({
+    runner: fakeRunner(() => ({ exitCode: 127, stdout: '', stderr: 'gh: command not found' })),
+    env: EMPTY_ENV,
+  });
+  await assertRejectedAsync(() => missingBinary.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.NONZERO_EXIT);
+
+  // 脱敏规则照样作用于 ITEM_NOT_FOUND 的原文。
+  const leaked = createGiteeAdapter({
+    runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: `404 未找到 target ${TOKEN_VALUE}` })),
+    env: SECRET_ENV,
+    authEnv: TOKEN_NAME,
+  });
+  const leakedError = await assertRejectedAsync(() => leaked.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.ITEM_NOT_FOUND);
+  assert.ok(!leakedError.message.includes(TOKEN_VALUE), '消息不得含令牌');
+  assert.ok(leakedError.message.includes('[REDACTED]'));
 });
 
 test('失败信息脱敏：stderr 里的令牌不回到消息与 detail（AC-22）', async () => {

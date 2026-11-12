@@ -45,6 +45,7 @@ export const GIT_REASONS = Object.freeze({
   COMMAND_TIMEOUT: 'GIT_COMMAND_TIMEOUT',
   INVALID_OUTPUT: 'GIT_INVALID_OUTPUT',
   READBACK_UNAVAILABLE: 'GIT_READBACK_UNAVAILABLE',
+  AUTH_TRANSPORT_UNAVAILABLE: 'GIT_AUTH_TRANSPORT_UNAVAILABLE',
   INTERNAL: 'GIT_INTERNAL',
 });
 
@@ -84,6 +85,70 @@ const clip = (value, max = 180) => {
     .trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };
+
+/* ------------------------------------------------- 认证传输面（Windows + DSH 沙箱） */
+
+/**
+ * MSYS/sh 认证传输不可用的判定特征（UAT 问题 3）。
+ *
+ * 现象：Windows 上 git 的 credential helper 由 `sh -c` 包装执行；DSH 沙箱禁止命名管道，
+ * sh 在启动阶段就崩，git 拿不到凭据，最后打印 `could not read Username` 这类文本，
+ * 看起来像「用户名没配」，实际是**凭据传输通道不可用**。
+ *
+ * 只采信**只有该运行时才会出现**的特征：
+ * 1. 硬特征（单独命中即成立）：`cannot fork`、`CreateFileMapping`、命名管道路径
+ *    `\\.\pipe\`、管道创建失败，以及行首 `sh:` / `bash:` 的 shell 自身诊断。
+ * 2. 环境特征（必须与「凭据拿不到」的症状同现）：`msys` / `cygwin` / `mingw` 运行时名。
+ *    单独出现运行时名不算命中——路径里出现 msys 也可能只是普通报错。
+ *
+ * 明确**不算**命中：401/403、`Authentication failed`、`permission denied`、孤立的
+ * `could not read Username`（没有崩溃特征时就是凭据真的缺失或被拒）、HTTP 传输的
+ * `Broken pipe`，以及带 `remote:` 前缀的服务端诊断。最后一条是必要的：服务端 hook 可能
+ * 回 `remote: cannot fork: Resource temporarily unavailable`，那是远端资源不足，连接本身
+ * 已经建立，不能据此让用户去改本机凭据。判定前先剔除所有 `remote:` 行。
+ */
+const HARD_AUTH_TRANSPORT_SIGNS = Object.freeze([
+  Object.freeze({ id: 'cannot-fork', pattern: /\bcannot fork\b/iu }),
+  Object.freeze({ id: 'create-file-mapping', pattern: /\bCreateFileMapping[A-Za-z]*/iu }),
+  Object.freeze({ id: 'named-pipe-path', pattern: /\\\\\.\\pipe\\/u }),
+  Object.freeze({
+    id: 'pipe-setup',
+    pattern:
+      /\b(?:create|creating|open|opening|make|making)\b[^\r\n]{0,40}\b(?:named\s+)?pipe\b[^\r\n]{0,40}\b(?:fail|error|denied|refused|unavailable)|\b(?:named\s+)?pipe\b[^\r\n]{0,40}\b(?:failed|failure|error|denied|refused|unavailable)\b/iu,
+  }),
+  Object.freeze({
+    // 行首（或 Windows 路径后的）`sh:` / `bash:` 是 shell 自己的诊断：脚本没跑起来，传输层不可用。
+    id: 'shell-wrapper',
+    pattern: /(?:^|\r?\n)[ \t]*(?:[A-Za-z]:[^\r\n]{0,120}?[\\/])?(?:sh|bash)(?:\.exe)?:[ \t]/iu,
+  }),
+]);
+
+const ENV_RUNTIME_SIGN = /\b(?:msys[0-9]*|cygwin|mingw(?:32|64)?)\b/iu;
+const CREDENTIAL_SYMPTOM_SIGN =
+  /\bcould not read (?:Username|Password)\b|\bterminal prompts disabled\b|\bAuthentication failed\b|\bunable to (?:read|get) (?:username|password)\b|\baskpass\b/iu;
+
+/**
+ * 从一次 git 执行结果里判定「MSYS/sh 认证传输不可用」。
+ *
+ * @param {{stdout?: unknown, stderr?: unknown}} outcome 执行器返回的输出（已由出口脱敏）
+ * @returns {{signs: readonly string[]} | null} 命中时返回命中的特征 id（静态标签，不含原始输出）
+ */
+export function detectAuthTransportFailure(outcome = {}) {
+  const stderr = typeof outcome.stderr === 'string' ? outcome.stderr : '';
+  const stdout = typeof outcome.stdout === 'string' ? outcome.stdout : '';
+  // 服务端诊断（`remote:` 前缀）不是本机传输层的证据：连接已经建立，问题在远端。
+  const output = `${stderr}\n${stdout}`
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s*remote:/iu.test(line))
+    .join('\n');
+  if (output.trim() === '') return null;
+  const signs = HARD_AUTH_TRANSPORT_SIGNS.filter(({ pattern }) => pattern.test(output)).map(({ id }) => id);
+  if (signs.length > 0) return Object.freeze({ signs: Object.freeze(signs) });
+  if (ENV_RUNTIME_SIGN.test(output) && CREDENTIAL_SYMPTOM_SIGN.test(output)) {
+    return Object.freeze({ signs: Object.freeze(['runtime-environment', 'credential-symptom']) });
+  }
+  return null;
+}
 
 function assertMessage(value) {
   const message = typeof value === 'string' ? value : '';
@@ -232,6 +297,20 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
       });
     }
     if (exitCode !== 0) {
+      // 只有远端动词（push）走认证：本地 commit/head/branch 命中同类字样时更可能是 hook 或
+      // 本地 shell 问题，不能冒充「认证传输故障」。非零退出即证明命令没有走完，记 failed。
+      const transport = verb === 'push' ? detectAuthTransportFailure({ stdout, stderr }) : null;
+      if (transport !== null) {
+        throw new GiteeGitError(
+          `git ${verb} 在 ${dir} 失败（exit ${exitCode === null ? '未知' : exitCode}）：`
+            + `凭据传输通道不可用，不是用户名缺失（命中 ${transport.signs.join(' / ')}）；`
+            + `原始输出：${clip(stderr || stdout) || '无输出'}`,
+          {
+            reason: GIT_REASONS.AUTH_TRANSPORT_UNAVAILABLE,
+            detail: { exitCode, cwd: dir, mayHaveSideEffect: false, authTransport: { signs: transport.signs } },
+          },
+        );
+      }
       // 把实际目录写进失败说明：`not a git repository` 这类错误的根因几乎都是「跑错了目录」，
       // 不写出来就只能靠猜。
       throw new GiteeGitError(
@@ -376,6 +455,15 @@ function gitFailureVerdict(error, what) {
       reason: ACTION_REASONS.SPAWN_FAILED,
       rule: 'spawn-failed',
       detail: `${what}命令未启动（无副作用）：${message}`,
+    };
+  }
+  if (error.code === GIT_REASONS.AUTH_TRANSPORT_UNAVAILABLE) {
+    // 凭据传输通道在子进程侧就崩了：认证请求没有发出去，远端不会留下任何写入，可安全重试。
+    return {
+      status: 'failed',
+      reason: ACTION_REASONS.AUTH_TRANSPORT_UNAVAILABLE,
+      rule: 'auth-transport-unavailable',
+      detail: `${what}未发出：凭据传输通道不可用（不是用户名缺失），命令未离开本机，可安全重试：${message}`,
     };
   }
   if (detail.mayHaveSideEffect === true) {
