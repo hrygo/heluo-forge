@@ -221,7 +221,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         await sleep(10);
       }
     }
-    if (db) { open(); return; }
+    if (db) { await retryRead(() => open()); return; }
     assertOutsideRepository(directory);
     const keyPresent = keyExists();
     if (!existsSync(path) && keyPresent) {

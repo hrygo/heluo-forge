@@ -149,6 +149,50 @@ test('an ordinary read waits for a short exclusive writer instead of reporting b
   }
 });
 
+test('an already open joint store waits for a short exclusive writer before committing', async (t) => {
+  const { directory, store } = await fixture(t);
+  const scope = { recordKey, ref };
+  const expected = await store.snapshot(scope);
+  const next = { record: { kind: 'grant', payload: {} }, value: 'after' };
+  let guardCalls = 0;
+  const writer = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  try {
+    writer.exec('BEGIN EXCLUSIVE');
+    const write = store.compareAndSwap(scope, expected, next, () => { guardCalls += 1; return true; })
+      .then((result) => ({ result }), (error) => ({ error }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(guardCalls, 0);
+    writer.exec('COMMIT');
+    const outcome = await write;
+    assert.equal(outcome.error, undefined, outcome.error?.stack);
+    assert.deepEqual(outcome.result, { ok: true, snapshot: next });
+    assert.equal(guardCalls, 1);
+    assert.deepEqual(await store.snapshot(scope), next);
+  } finally {
+    writer.close();
+  }
+});
+
+test('an already open joint store times out without committing under a persistent exclusive writer', async (t) => {
+  const { directory, store } = await fixture(t, 80);
+  const scope = { recordKey, ref };
+  const expected = await store.snapshot(scope);
+  let guardCalls = 0;
+  const writer = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  try {
+    writer.exec('BEGIN EXCLUSIVE');
+    await assert.rejects(store.compareAndSwap(scope, expected, { record: undefined, value: 'after' }, () => {
+      guardCalls += 1;
+      return true;
+    }), { code: 'CRED_LOCK_TIMEOUT' });
+    assert.equal(guardCalls, 0);
+    writer.exec('COMMIT');
+    assert.deepEqual(await store.snapshot(scope), expected);
+  } finally {
+    writer.close();
+  }
+});
+
 test('close drains an accepted read while it waits for an exclusive writer', async (t) => {
   const { directory, store } = await fixture(t);
   const writer = new DatabaseSync(join(directory, 'credentials.sqlite'));
