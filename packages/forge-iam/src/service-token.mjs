@@ -226,6 +226,7 @@ export function createTokenResolver(env) {
     const consumption = beginConsumption(expectedIssuer, targetStore, targetCredentials);
     let refreshing = false;
     let refreshWriteAttempted = false;
+    let unclaimedLockTimeout = false;
     let waitingForPending = false;
     let operationGrant = null;
     const staleBackground = expected ? new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed') : null;
@@ -407,17 +408,33 @@ export function createTokenResolver(env) {
           grant: { ...initial, refreshOperation: operation } };
         let claimed = false;
         let claimedGrant = null;
+        let claimGateOpen = true;
+        let claimCallbackUsed = false;
         refreshWriteAttempted = true;
-        const claim = await targetStore.mutate((current) => {
-          checkAlive();
-          if (!current) return undefined;
-          grants.assertGrantContext(current, meta.issuer);
-          if (current.refreshOperation?.state === 'pending' || !isDeepStrictEqual(current, initial)) return undefined;
-          if (!shouldRefresh(current, now(), config.refreshSkewSeconds) || !isRefreshUsable(current, now())) return undefined;
-          claimed = true;
-          claimedGrant = current;
-          return { ...current, refreshOperation: operation };
-        }, { guard: () => { checkAlive(); return true; } });
+        let claim;
+        try {
+          claim = await targetStore.mutate((current) => {
+            // A provider that rejects and invokes its callback later must not
+            // create a pending write after this flight has been abandoned.
+            if (!claimGateOpen || claimCallbackUsed) return undefined;
+            claimCallbackUsed = true;
+            checkAlive();
+            if (!current) return undefined;
+            grants.assertGrantContext(current, meta.issuer);
+            if (current.refreshOperation?.state === 'pending' || !isDeepStrictEqual(current, initial)) return undefined;
+            if (!shouldRefresh(current, now(), config.refreshSkewSeconds) || !isRefreshUsable(current, now())) return undefined;
+            claimed = true;
+            claimedGrant = current;
+            return { ...current, refreshOperation: operation };
+          }, { guard: () => { checkAlive(); return true; } });
+        } catch (cause) {
+          // Once the callback runs it may have observed a different or pending
+          // grant, or produced a candidate that could still commit later.
+          unclaimedLockTimeout = cause?.code === 'CRED_LOCK_TIMEOUT' && !claimCallbackUsed && !claimed;
+          throw cause;
+        } finally {
+          claimGateOpen = false;
+        }
         checkAlive();
         const claimedRecord = claim.record?.kind === 'grant' ? claim.record.payload : null;
         if (!claimed) {
@@ -501,6 +518,27 @@ export function createTokenResolver(env) {
         if (staleBackground && cause === staleBackground) throw cause;
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         try { checkAlive(); } catch (currentCause) { cause = currentCause; }
+        // The callback never ran, and the closed gate prevents a late callback
+        // from producing a write candidate. Retry only the same adopted session;
+        // keep the existing error contract for callers of this failed flight.
+        if (unclaimedLockTimeout && cause?.code === 'CRED_LOCK_TIMEOUT'
+          && ['ready', 'expired'].includes(ctx.state) && ctx.lastGrant && isRefreshUsable(ctx.lastGrant, now())
+          && isDeepStrictEqual(ctx.lastGrant, operationGrant)
+          && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials
+          && alive() && ['ready', 'expired'].includes(ctx.state) && ctx.lastGrant
+          && isDeepStrictEqual(ctx.lastGrant, operationGrant)) {
+          rememberBackgroundRefresh(now());
+          if (ctx.state === 'ready' && isAccessExpired(ctx.lastGrant, now())) {
+            ctx.state = 'expired';
+            ctx.error = null;
+            ctx.notify();
+          }
+          if (alive() && isDeepStrictEqual(ctx.lastGrant, operationGrant)
+            && provider.store === targetStore && provider.storeCredentials === targetCredentials) {
+            scheduleRenewal({ retry: true });
+          }
+          throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+        }
         // A transient preflight failure cannot have consumed the refresh token.
         // Keep the same session for a bounded retry, but never return expired access.
         const status = cause?.details?.status;
