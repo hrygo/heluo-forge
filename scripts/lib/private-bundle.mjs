@@ -92,7 +92,11 @@ export const SECRET_ENV_KEYS = Object.freeze(['HELUO_IAM_CLIENT_SECRET', 'HELUO_
 const ALL_KEYS = new Set([...Object.keys(IAM_ENV_MAP), ...Object.keys(GITEE_ENV_MAP), ...SECRET_ENV_KEYS]);
 const INTEGER_KEYS = new Set(['HELUO_IAM_CALLBACK_PORT', 'HELUO_GITEE_TIMEOUT_MS']);
 const BOOLEAN_KEYS = new Set(['HELUO_IAM_ALLOW_INSECURE_HTTP']);
-const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+// Mirror the plugin's callbackAddress enum. `auto` tries 127.0.0.1 first and
+// only falls back to ::1 when that family is missing; a pinned literal is used
+// verbatim. `localhost` is not a host the IAM prefix covers, and the bracketed
+// `[::1]` form only appears inside a redirect URI, never as the bind address.
+const CALLBACK_ADDRESSES = new Set(['auto', '127.0.0.1', '::1']);
 
 /** Parse one `.env` file strictly. No `export`, no escapes, no continuation lines. */
 /**
@@ -305,7 +309,9 @@ export function buildConfig(entries) {
   }
   if (iam.gatewayResource !== undefined && (typeof iam.gatewayResource !== 'string' || iam.gatewayResource.trim() === '')) problems.push('HELUO_IAM_GATEWAY_RESOURCE must be a non-empty string');
   if (iam.redirectPath !== undefined && !iam.redirectPath.startsWith('/')) problems.push('HELUO_IAM_REDIRECT_PATH must start with /');
-  if (iam.callbackAddress !== undefined && !LOOPBACK.has(iam.callbackAddress)) problems.push('HELUO_IAM_CALLBACK_ADDRESS must be a loopback address');
+  if (iam.callbackAddress !== undefined && !CALLBACK_ADDRESSES.has(iam.callbackAddress)) {
+    problems.push('HELUO_IAM_CALLBACK_ADDRESS must be auto, 127.0.0.1 or ::1 (localhost and [::1] are not accepted)');
+  }
   // 0 asks the plugin for an OS-assigned loopback port, which is the production
   // form: IAM registers the `http://127.0.0.1:` prefix and accepts any port. A
   // pinned port is only for an authorisation server that demands an exact

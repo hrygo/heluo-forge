@@ -14,7 +14,7 @@
 3. Discovery URL：默认取 `issuer + /.well-known/openid-configuration`。maker 会自动请求，要求 200、`issuer` 与配置一致、`authorization_endpoint`/`token_endpoint`/`jwks_uri` 齐全；不确定时让管理员提供。只有打包机确实无法访问 IAM 时才加 `--skip-discovery-check`，并在交付报告里注明该检查未执行。
 4. client_id：企业的公开客户端 ID，不是员工个人标识。
 5. 网关 baseURL：企业模型网关地址，通常以 `/v1` 结尾；用于 `managedModels.baseURL`，http 同上需显式确认。
-6. 回调端口与地址：端口默认 `0`（系统分配），地址默认 `127.0.0.1`。企业 IAM 按 `http://127.0.0.1:` 前缀登记回环回调，端口可随机，不需要为每个包约定固定值；只有 IAM 明确要求精确匹配固定 URI 时，才填 1024–65535，并保证与登记值逐字节一致。固定端口被占用会直接拒绝登录（`IAM_CALLBACK_PORT_UNAVAILABLE`），不回落随机端口。
+6. 回调端口与地址：端口默认 `0`（系统分配），地址默认 `127.0.0.1`（不接受 `localhost` 或 `[::1]`）。企业 IAM 按 `http://127.0.0.1:` 前缀登记回环回调，端口可随机，不需要为每个包约定固定值；只有 IAM 明确要求精确匹配固定 URI 时，才填 1024–65535，并保证与登记值逐字节一致。固定端口被占用会直接拒绝登录（`IAM_CALLBACK_PORT_UNAVAILABLE`），不回落随机端口。
 7. Gitee host：没有企业 Gitee 就跳过，不写空键。
 8. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
 9. 输出目录：仓库外、不存在或为空。

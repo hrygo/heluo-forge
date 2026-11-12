@@ -157,6 +157,17 @@ test('callback port 0 asks the plugin for an OS-assigned port', (t) => {
   assert.match(patch, /callbackPort: 0/u);
 });
 
+test('callback address only accepts auto or a bare loopback literal', () => {
+  for (const address of ['localhost', '[::1]', '0.0.0.0', '127.0.0.2']) {
+    const entries = parseEnvConfig(ENV.map((line) => (line.startsWith('HELUO_IAM_CALLBACK_ADDRESS=') ? `HELUO_IAM_CALLBACK_ADDRESS=${address}` : line)).join('\n'));
+    expectCode(() => buildConfig(entries), 'CONFIG_INVALID');
+  }
+  for (const address of ['auto', '::1']) {
+    const entries = parseEnvConfig(ENV.map((line) => (line.startsWith('HELUO_IAM_CALLBACK_ADDRESS=') ? `HELUO_IAM_CALLBACK_ADDRESS=${address}` : line)).join('\n'));
+    assert.equal(buildConfig(entries).iam.callbackAddress, address);
+  }
+});
+
 test('callback port outside 0 or 1024-65535 is refused', () => {
   for (const port of ['1023', '65536']) {
     const entries = parseEnvConfig(ENV.map((line) => (line.startsWith('HELUO_IAM_CALLBACK_PORT=') ? `HELUO_IAM_CALLBACK_PORT=${port}` : line)).join('\n'));
