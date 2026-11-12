@@ -181,10 +181,6 @@ set "LOG=%TEMP%\\heluo-enterprise-install.log"
 if not defined DSH_HOME set "DSH_HOME=%USERPROFILE%\\.dsh"
 echo [heluo] Enterprise plugin installer
 echo [heluo] DSH_HOME=%DSH_HOME%
-if not exist "%SystemRoot%\\System32\\vcruntime140.dll" (
-  echo [heluo] WARNING: Microsoft Visual C++ 2015-2022 Redistributable is missing.
-  echo [heluo] The enterprise credential store cannot start until it is installed.
-)
 where node >nul 2>nul
 if errorlevel 1 if exist "%ProgramFiles%\\nodejs\\node.exe" set "PATH=%ProgramFiles%\\nodejs;%PATH%"
 where node >nul 2>nul
@@ -223,7 +219,7 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 ## 安装前
 
 只需要安装 **Node.js LTS**（自带 npm）。DSH 可以已经装好，也可以完全不装：
-启动脚本发现缺少官方 DSH 时，会用 npm 自动安装并在本机创建 web profile。
+启动脚本发现缺少官方 DSH 时，会用 npm 自动安装并在本机创建 web profile；安装插件依赖 pnpm，缺少时启动脚本会用同一个 npm 自动补装。
 
 > 官方 Desktop 应用由 Electron 独占 desktop profile，命令行无法管理它
 > （当前锁定版实测：profile "desktop" is managed exclusively by the Electron application）。
@@ -256,10 +252,11 @@ dsh plugin --profile <desktop|web> remove @heluo/forge-enterprise
 - Windows 双击后窗口一闪而过：右键该文件 → 属性 → 勾选“解除锁定”，或在命令提示符里手动运行。日志位于 %TEMP%\\heluo-enterprise-install.log。
 - Windows 提示 Node.js was not found：先安装 Node.js LTS，再重跑本文件。
 - 提示 dsh 安装失败：确认 npm 可用且能访问企业允许的 registry；也可由管理员先手工安装官方 DSH，再重跑本文件。
-- Windows 提示与原生凭据适配器相关：npm 全局安装的 dsh.cmd/.bat 已被支持，脚本会解析 shim 后直接用 node 运行。
+- Windows 上提示 dsh 安装失败但 npm 正常：npm 全局安装的 dsh.cmd/.bat 会被启动脚本解析成 node 入口直接运行，不需要手工改 PATH；仍失败时看日志里的 dsh 输出。
+- 提示 pnpm 安装失败：确认 npm 能访问企业允许的 registry；也可由管理员预先执行 npm install -g pnpm 后重跑。
 - 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。确认安装脚本输出的 profile 与随后启动的 DSH profile 一致。
 - 页面仍提示「企业登录尚未设置」：确认安装脚本输出 loginReady 或已包含管理员配置，并确认 IAM Discovery 地址在该机器可达；仍失败时把日志和 profile 名发给管理员。
-- 页面提示「凭据存储不可用」：Windows/Linux 需要本包启用原生凭据适配器，并且 Windows 需安装 Microsoft Visual C++ 2015-2022 Redistributable。
+- 页面提示「凭据存储不可用」：Windows 检查 %LOCALAPPDATA%\\HeluoForge 的目录权限、磁盘空间，以及 credentials.key 是否被改动；macOS 对应路径为 ~/Library/Application Support/HeluoForge；Linux 没有默认凭据后端，需先由管理员配置企业后端，属预期拒绝。
 - 企业内网地址使用 HTTP 时，登录令牌与个人 Key 会明文传输，请只在可信内网使用。
 
 ## 不要做

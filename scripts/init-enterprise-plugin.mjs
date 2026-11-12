@@ -21,7 +21,7 @@
  */
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -256,6 +256,22 @@ export function locateCommandLaunch(name, env = {}, platform = process.platform)
   return null;
 }
 
+/**
+ * 定位 npm 的入口。Windows 的 npm.cmd 同时提到 `npm-prefix.js` 与 `npm-cli.js`，
+ * 通用 shim 解析会取到前者，`node npm-prefix.js install -g …` 只会打印前缀并以 0
+ * 退出，看似成功却什么都没装。这里对 npm 固定选 npm-cli.js，仍不经过 shell。
+ *
+ * @returns {{path: string, bin: string, prefix: string[]}|null}
+ */
+export function locateNpmLaunch(env = {}, platform = process.platform) {
+  const npm = locateCommandLaunch('npm', env, platform);
+  if (npm === null) return null;
+  if (platform !== 'win32') return npm;
+  const cli = join(dirname(npm.path), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (existsSync(cli)) return { path: npm.path, bin: process.execPath, prefix: [cli] };
+  return npm;
+}
+
 /** dsh 专用别名；保留旧导出。 */
 export function locateDshLaunch(env = {}, platform = process.platform) {
   return locateCommandLaunch('dsh', env, platform);
@@ -298,6 +314,101 @@ export function commandInNpmPrefix(name, prefix, platform = process.platform) {
     if (launch !== null) return { path: join(binDir, `${name}${extension}`), ...launch };
   }
   return null;
+}
+
+/**
+ * 官方 npm 版 `dsh plugin add` 在内部用 pnpm 装依赖；PATH 里没有 pnpm 时它只返回
+ * 退出码 1，员工看到的是宿主的 `'pnpm' is not recognized` 而不是缺工具，失败还会
+ * 停在半安装状态。安装前先判定，给出可直接执行的下一步。
+ *
+ * @param {object} env 运行环境（默认 process.env）
+ * @param {string} platform
+ */
+const PNPM_CANDIDATES = Object.freeze({
+  win32: ['pnpm.cmd', 'pnpm.exe', 'pnpm.bat'],
+  other: ['pnpm'],
+});
+
+/**
+ * 目录里是否存在 pnpm 启动文件。npm 全局安装的 `pnpm.cmd` 指向 `pnpm.exe` 而不是
+ * JS 入口，解析器不会把它当可执行 shim，因此按文件存在判断，运行交给子进程 PATH。
+ */
+function pnpmLauncherIn(directory, platform = process.platform) {
+  const names = platform === 'win32' ? PNPM_CANDIDATES.win32 : PNPM_CANDIDATES.other;
+  for (const name of names) {
+    const candidate = join(directory, name);
+    try {
+      if (!statSync(candidate).isFile()) continue;
+      if (platform !== 'win32') accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** 在 PATH 的每个目录里找 pnpm 启动文件，返回其目录。 */
+function pnpmDirInPath(env, platform = process.platform) {
+  const value = env.PATH ?? env.Path ?? env.path ?? '';
+  if (typeof value !== 'string' || value === '') return null;
+  for (const directory of value.split(delimiter)) {
+    if (directory.length === 0) continue;
+    if (pnpmLauncherIn(directory, platform) !== null) return directory;
+  }
+  return null;
+}
+
+/** 把目录放到 PATH 最前，供子进程查找刚装好的 pnpm。 */
+function withPathDir(env, dir, platform = process.platform) {
+  const key = env.PATH === undefined ? (env.Path === undefined ? 'PATH' : 'Path') : 'PATH';
+  const current = env[key] ?? '';
+  const separator = platform === 'win32' ? ';' : ':';
+  return { ...env, [key]: current === '' ? dir : `${dir}${separator}${current}` };
+}
+
+/**
+ * `dsh plugin add` 在官方 npm 版宿主内部调用 pnpm。缺 pnpm 时宿主只回一行
+ * "'pnpm' is not recognized" 和退出码 1，员工看到的是安装失败而不是缺工具，
+ * 因此这里先用与安装宿主相同的 npm 权限补装，并把它的目录注入子进程 PATH。
+ *
+ * @returns {Promise<{env: object, dir: string|null}>} dir 为需要注入 PATH 的目录
+ */
+async function ensurePnpm({ exec, env, platform, lines }) {
+  const found = pnpmDirInPath(env, platform);
+  if (found !== null) return { env: withPathDir(env, found, platform), dir: found };
+  const npm = locateNpmLaunch(env, platform);
+  if (npm === null) {
+    throw new InitError(
+      'PNPM_REQUIRED',
+      'init: 找不到 pnpm，且没有 npm 可以补装',
+      '先安装 Node.js LTS（自带 npm），再运行 npm install -g pnpm；或在可用 corepack 的环境执行 corepack enable pnpm，确认 pnpm --version 可运行后重跑。',
+    );
+  }
+  lines.push('工具：未找到 pnpm，执行 npm install -g pnpm');
+  const installed = await runStep(exec, npm, ['install', '-g', 'pnpm'], HOST_INSTALL_TIMEOUT_MS, 'PNPM_REQUIRED');
+  if (installed.code !== 0) {
+    throw new InitError(
+      'PNPM_REQUIRED',
+      `init: npm install -g pnpm 失败（退出码 ${installed.code}）`,
+      '检查网络与 npm registry 配置；或由管理员预先安装 pnpm，确认 pnpm --version 可运行后重跑。',
+    );
+  }
+  const afterInstall = pnpmDirInPath(env, platform);
+  if (afterInstall !== null) return { env: withPathDir(env, afterInstall, platform), dir: afterInstall };
+  const prefixResult = await runStep(exec, npm, ['prefix', '-g'], 60_000, 'PNPM_REQUIRED');
+  const prefix = prefixResult.stdout.split(/\r?\n/u).filter((line) => line.trim() !== '').pop();
+  if (prefix !== undefined) {
+    const binDir = platform === 'win32' ? prefix.trim() : join(prefix.trim(), 'bin');
+    if (pnpmLauncherIn(binDir, platform) !== null) {
+      return { env: withPathDir(env, binDir, platform), dir: binDir };
+    }
+  }
+  throw new InitError(
+    'PNPM_REQUIRED',
+    'init: pnpm 安装完成但找不到入口',
+    '运行 npm prefix -g，把其 bin 目录加入 PATH；确认 pnpm --version 可运行后重跑。',
+  );
 }
 
 /**
@@ -441,10 +552,10 @@ function defaultExec() {
 
 const resolveExec = (exec) => (typeof exec === 'function' ? exec : defaultExec());
 
-async function runStep(exec, launch, args, timeout, failureCode) {
+async function runStep(exec, launch, args, timeout, failureCode, { env } = {}) {
   let result;
   try {
-    result = await exec(launch.bin, [...launch.prefix, ...args], { timeout, shell: false });
+    result = await exec(launch.bin, [...launch.prefix, ...args], { timeout, shell: false, ...(env === undefined ? {} : { env }) });
   } catch (error) {
     const reason = typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN');
     throw new InitError(failureCode, `init: 调用 dsh 失败（${reason}）`, '确认 --dsh 指向可用的 dsh（原生可执行文件或 npm 的 dsh.cmd）、宿主未在升级中，再重跑。');
@@ -463,7 +574,7 @@ async function runStep(exec, launch, args, timeout, failureCode) {
  * @returns {Promise<{path: string, bin: string, prefix: string[]}>}
  */
 async function installHost({ exec, env, platform, version, lines }) {
-  const npm = locateCommandLaunch('npm', env, platform);
+  const npm = locateNpmLaunch(env, platform);
   if (npm === null) {
     throw new InitError(
       'HOST_INSTALL_FAILED',
@@ -695,7 +806,8 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     }
 
     const cli = resolveExec(exec);
-    const install = await runStep(cli, launch, command, INSTALL_TIMEOUT_MS, 'INSTALL_FAILED');
+    const pnpm = await ensurePnpm({ exec: cli, env, platform: process.platform, lines });
+    const install = await runStep(cli, launch, command, INSTALL_TIMEOUT_MS, 'INSTALL_FAILED', { env: pnpm.env });
     if (install.code !== 0) {
       throw new InitError(
         'INSTALL_FAILED',

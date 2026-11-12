@@ -16,6 +16,7 @@ import {
   inspectProfile,
   locateDsh,
   locateDshLaunch,
+  locateNpmLaunch,
   parseArgs,
   readPrivateRelease,
   resolveDshLaunch,
@@ -84,6 +85,17 @@ function writeDsh(root) {
   return path;
 }
 
+/** 一个只有 pnpm 的 PATH 目录：dsh 安装插件时由宿主自己调用 pnpm。 */
+function writePnpm(root) {
+  const dir = join(root, 'pnpm-bin');
+  mkdirSync(dir, { recursive: true });
+  const name = process.platform === 'win32' ? 'pnpm.exe' : 'pnpm';
+  const path = join(dir, name);
+  writeFileSync(path, process.platform === 'win32' ? '' : '#!/bin/sh\nexit 0\n');
+  if (process.platform !== 'win32') chmodSync(path, 0o755);
+  return dir;
+}
+
 /** 注入的 exec：install 时真实改写 profile（模拟宿主 reconcile），dump-config 返回合成树。 */
 function fakeExec({ profileDir, version = '0.1.0', installCode = 0, dumpConfig = { includeEntry: true } } = {}) {
   const calls = [];
@@ -146,6 +158,8 @@ test('runInit --profile auto --install-host：装宿主、建 web profile、装�
   writeFileSync(npm, '#!/bin/sh\nexit 0\n');
   chmodSync(npm, 0o755);
   const dshPath = join(bin, 'dsh');
+  writeFileSync(join(bin, process.platform === 'win32' ? 'pnpm.exe' : 'pnpm'), process.platform === 'win32' ? '' : '#!/bin/sh\nexit 0\n');
+  if (process.platform !== 'win32') chmodSync(join(bin, 'pnpm'), 0o755);
   const dshHome = join(root, 'home', '.dsh');
   const profileDir = join(dshHome, 'profiles', 'web');
   const calls = [];
@@ -314,6 +328,22 @@ test('resolveDshLaunch 与 locateDsh 对原生 .exe 保持直接执行，且不�
   assert.equal(locateDsh({ PATH: bin }, 'win32'), exe);
 });
 
+test('locateNpmLaunch 在 Windows 上固定选 npm-cli.js，不落到 npm-prefix.js', (t) => {
+  const root = tempRoot(t);
+  const bin = join(root, 'npm-bin');
+  const cli = join(bin, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  mkdirSync(dirname(cli), { recursive: true });
+  writeFileSync(cli, '');
+  writeFileSync(join(bin, 'node_modules', 'npm', 'bin', 'npm-prefix.js'), '');
+  writeFileSync(join(bin, 'npm.cmd'), '@ECHO OFF\n"%dp0%\\node.exe" "%dp0%\\node_modules\\npm\\bin\\npm-prefix.js" %*\n');
+
+  const launch = locateNpmLaunch({ PATH: bin }, 'win32');
+  assert.notEqual(launch, null);
+  assert.deepEqual(launch.prefix, [cli]);
+
+  assert.equal(locateNpmLaunch({ PATH: join(root, 'empty') }, 'win32'), null);
+});
+
 test('sha256File 输出 hex 小写', (t) => {
   const root = tempRoot(t);
   const path = join(root, 'bytes');
@@ -390,7 +420,7 @@ test('runInit 安装成功：argv 逐字、shell:false、L2 核验、mounted=unk
 
   const outcome = await runInit({
     argv: ['--release', release.dir, '--profile', 'desktop', '--sha256', sha256File(release.tarballPath), '--dsh', dshPath],
-    env: { DSH_HOME: join(home, '.dsh') },
+    env: { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) },
     home,
     exec,
   });
@@ -407,6 +437,44 @@ test('runInit 安装成功：argv 逐字、shell:false、L2 核验、mounted=unk
   assert.equal(calls[1].options.shell, false);
   assert.ok(outcome.lines.some((line) => line.includes('mounted=unknown')));
   assert.ok(outcome.lines.every((line) => !line.includes('secret')));
+});
+
+test('缺 pnpm 时用 npm 补装，并把 pnpm 目录注入安装子进程 PATH', { skip: process.platform === 'win32' }, async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const bin = join(root, 'bin-npm');
+  mkdirSync(bin, { recursive: true });
+  const npm = join(bin, 'npm');
+  writeFileSync(npm, '#!/bin/sh\nexit 0\n');
+  chmodSync(npm, 0o755);
+  const inner = fakeExec({ profileDir });
+  const calls = [];
+  const exec = async (command, args, options) => {
+    calls.push({ command, args, options });
+    if (command === npm) {
+      const pnpm = join(bin, 'pnpm');
+      writeFileSync(pnpm, '#!/bin/sh\nexit 0\n');
+      chmodSync(pnpm, 0o755);
+      return { code: 0, stdout: 'added 1 package', stderr: '' };
+    }
+    return inner.exec(command, args, options);
+  };
+
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env: { DSH_HOME: join(home, '.dsh'), PATH: bin },
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.deepEqual(calls[0].args, ['install', '-g', 'pnpm']);
+  const add = calls.find((call) => call.args[0] === 'plugin');
+  assert.ok(add !== undefined, '应执行 dsh plugin add');
+  assert.ok(add.options.env.PATH.startsWith(`${bin}${process.platform === 'win32' ? ';' : ':'}`));
+  assert.ok(outcome.lines.some((line) => line.includes('npm install -g pnpm')));
 });
 
 test('runInit 同版本幂等：只跑 dump-config，不调用 add', async (t) => {
@@ -489,11 +557,21 @@ test('runInit 摘要口径、缺 dsh、安装失败、核验失败各自分类�
   const installFail = fakeExec({ profileDir, installCode: 1 });
   const c1 = await runInit({
     argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
-    env,
+    env: { ...env, PATH: writePnpm(root) },
     home,
     exec: installFail.exec,
   });
   assert.equal(c1.result.error.code, 'INSTALL_FAILED');
+  assert.equal(readFileSync(manifestPath, 'utf8'), before);
+
+  const noPnpm = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec: async () => assert.fail('缺 pnpm 时不应调用 dsh'),
+  });
+  assert.equal(noPnpm.result.error.code, 'PNPM_REQUIRED');
+  assert.match(noPnpm.result.error.next, /npm install -g pnpm/u);
   assert.equal(readFileSync(manifestPath, 'utf8'), before);
 
   const root2 = tempRoot(t);
@@ -503,7 +581,7 @@ test('runInit 摘要口径、缺 dsh、安装失败、核验失败各自分类�
   const verifyFail = fakeExec({ profileDir: second.profileDir, dumpConfig: { includeEntry: false } });
   const c2 = await runInit({
     argv: ['--release', release2.dir, '--profile', 'desktop', '--dsh', dshPath2],
-    env: { DSH_HOME: join(second.home, '.dsh'), PATH: '' },
+    env: { DSH_HOME: join(second.home, '.dsh'), PATH: writePnpm(root2) },
     home: second.home,
     exec: verifyFail.exec,
   });
