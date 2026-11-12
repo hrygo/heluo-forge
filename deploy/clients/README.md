@@ -7,6 +7,12 @@
 | Windows | 桌面应用，MSI 预置企业组合包 | 约 400 人 | 未构建、未签名、未验证 |
 | 银河麒麟 aarch64 | `dsh --profile web` + 浏览器，仅绑定 `127.0.0.1` | 约 400 台 | 未构建、未实机验证 |
 
+## Web 浏览器
+
+Web 端建议使用支持 `AbortSignal.any()` 的新版 Chrome 或 Chromium；Chrome 的系统和处理器要求以[官方说明](https://support.google.com/chrome/answer/95346)为准。该接口从 [Chrome 116](https://developer.chrome.com/blog/chrome-116-beta) 开始提供，但接口可用不代表所有功能均已完成兼容性验收。
+
+银河麒麟 V10 SP1 aarch64 虚拟机使用 DSH `0.2.1-rc.3` 和 Chromium `128.0.6613.119` 时，已验证 Web 页面和工作区目录列表可打开。该环境中的奇安信可信浏览器 `1.0.46402.2` 打开工作区目录时出现 `AbortSignal.any is not a function`；可改用上述浏览器。Chrome、其他版本及企业目标终端仍需各自验证。
+
 ## 计划资产
 
 | 资产 | 用途 | 状态 |
