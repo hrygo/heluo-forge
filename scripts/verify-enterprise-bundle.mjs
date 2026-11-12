@@ -12,7 +12,7 @@ import { basename, dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readBundleEntries, summarizeBundle } from './lib/bundle-archive.mjs';
 import { createBundleManifest, diffBundleManifest, parseBundleManifest } from './lib/bundle-manifest.mjs';
-import { auditPackagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS, NATIVE_KEYCHAIN_PACKAGE } from './lib/native-resources.mjs';
+import { auditPackagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS } from './lib/native-resources.mjs';
 
 const MANIFEST_FILE = 'bundle-manifest.json';
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
@@ -63,6 +63,15 @@ function inspectBundle(entries) {
   for (const entry of entries) {
     if (/(?:^|\/)(?:test|tests)\//u.test(entry.path) || /\.test\.[cm]?js$/u.test(entry.path)) errors.push(`${shown(entry.path)}: must not ship tests`);
   }
+  // A vendor resource without its record has no checksum to audit. Apply this
+  // to every shipped package, while allowing packages without vendor resources.
+  for (const { dir, pkg } of manifests) {
+    if (pkg === null) continue;
+    const prefix = `${dir}vendor/`;
+    if ([...files.keys()].some((path) => path.startsWith(prefix)) && !files.has(`${dir}${NATIVE_CHECKSUMS}`)) {
+      errors.push(`${shown(`${dir}${NATIVE_CHECKSUMS}`)}: native resource record missing for vendor resources`);
+    }
+  }
   // Issue #216: a package that records native resources must ship them. This is
   // the only check that can reject an artifact built elsewhere, because it reads
   // nothing but the archive bytes.
@@ -82,11 +91,6 @@ function inspectBundle(entries) {
       // A defective record is an artifact verdict, not a usage error: keep the
       // "inspectBundle returns error lines" invariant so the CLI exits 1.
       errors.push(`${label}: ${String(error.message).replace(/^native resources: /u, '').replace(`${label}: `, '')}`);
-    }
-  }
-  for (const { dir, pkg } of manifests) {
-    if (pkg?.name === NATIVE_KEYCHAIN_PACKAGE && !files.has(`${dir}${NATIVE_CHECKSUMS}`)) {
-      errors.push(`${shown(`${dir}${NATIVE_CHECKSUMS}`)}: required native resource record missing`);
     }
   }
   for (const { dir, label, pkg } of manifests) {

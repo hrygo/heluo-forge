@@ -172,7 +172,7 @@ export function createReconciler(env) {
       if (!isCurrent()) return ctx.view();
       setObservation(null);
       ctx.lastGrant = null;
-      ctx.error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED'].includes(cause?.code)
+      ctx.error = ['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_CLIENT_AUTH_CHANGED', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)
         ? cause.code : 'IAM_CREDENTIALS_UNAVAILABLE';
       ctx.state = 'error';
       published();

@@ -1,6 +1,7 @@
 import { assertClientAuthCurrent, clientAuthDescriptor } from './client-auth.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
+import { credentialReadError } from './error-contract.mjs';
 import { randomToken, refreshTokens, verifyIdToken } from './oidc.mjs';
 import { isAccessExpired, isRefreshUsable, shouldRefresh } from './record.mjs';
 import { grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
@@ -146,9 +147,10 @@ export function createTokenResolver(env) {
     let record;
     try {
       record = await targetStore.read();
-    } catch {
+    } catch (cause) {
       if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
-      return rejectSession('IAM_CREDENTIALS_UNAVAILABLE');
+      const unchanged = provider.ensure() === targetStore && provider.storeCredentials === targetCredentials;
+      return rejectSession(unchanged ? credentialReadError(cause) : 'IAM_CREDENTIALS_UNAVAILABLE');
     }
     if (!alive()) throw new IamError(ctx.disposed ? 'IAM_DISPOSED' : 'IAM_NOT_SIGNED_IN', 'IAM session changed');
     const currentStore = provider.ensure();
@@ -333,7 +335,7 @@ export function createTokenResolver(env) {
       } catch (cause) {
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         try { checkAlive(); } catch (currentCause) { cause = currentCause; }
-        if (['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_CHANGED', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE'].includes(cause?.code)) {
+        if (['IAM_GRANT_CONTEXT_MISMATCH', 'IAM_CLIENT_AUTH_CONTEXT_INVALID', 'IAM_CLIENT_AUTH_CHANGED', 'IAM_CLIENT_AUTH_UNVERIFIED', 'IAM_NOT_SIGNED_IN', 'IAM_INVALID_GRANT', 'IAM_ATOMIC_STORE_UNVERIFIED', 'IAM_CREDENTIALS_UNAVAILABLE', 'CRED_KEY_UNAVAILABLE', 'CRED_DECRYPT_FAILED'].includes(cause?.code)) {
           return rejectSession(cause.code);
         }
         // Once a request might have been sent, pending remains authoritative;

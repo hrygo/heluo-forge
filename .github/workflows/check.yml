@@ -16,12 +16,8 @@ concurrency:
   # Cancel stale PR runs, but never cancel a main-branch run mid-flight.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Job display names follow one rule: `<subject> (<platform-pair>)`, subject in
-# lowercase words, hyphens only inside the pair. The subject names what the job
-# certifies, not the tool it uses, so the required-check list states its own
-# coverage: `verify (ubuntu-x64)`, `native keychain (win32-arm64)`, ... When a
-# leg is not the canonical image for its pair, the qualifier appends the image:
-# `native keychain (win32-x64, windows-2025)`.
+# Existing required-check names are preserved for branch protection;
+# credential jobs run SQLite and IAM tests as described by their steps.
 jobs:
   changes:
     name: classify changes (ubuntu-x64)
@@ -98,7 +94,7 @@ jobs:
 
   # Fixed jobs preserve each required check name when a job is skipped. A job
   # condition on the whole matrix is evaluated before the matrix is expanded.
-  # The shared steps still exercise each real platform and its addon/store.
+  # Context names stay compatible with branch protection; steps run SQLite and IAM tests.
   native-linux-x64:
     name: native keychain (linux-x64)
     needs: changes
@@ -109,7 +105,6 @@ jobs:
       FORGE_CI_NAME: linux-x64
       FORGE_CI_PLATFORM: linux
       FORGE_CI_ARCH: x64
-      FORGE_CI_STORE: secret-service
     defaults: &bash_defaults
       run:
         shell: bash
@@ -133,35 +128,13 @@ jobs:
           if (process.platform!==p||process.arch!==a)
           { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }"
           "$FORGE_CI_PLATFORM" "$FORGE_CI_ARCH"
-      # These two suites are the platform half of this job. They run before any
-      # network access, so a registry failure cannot hide the platform signal:
-      # the steps above stay green and the failing step names the cause. They
-      # exercise the injected-module branches (blob limits, unvetted refusal,
-      # mingw paths, socket semantics) that the real-store probe does not reach.
-      - name: Keychain backends on this host
+      - name: Run credential backend tests
         run: node --test packages/forge-credentials-keychain/test/*.test.mjs
-      - name: Read paths on this host
+      - name: Run IAM read path tests
         run: node --test packages/forge-iam/test/read-paths-matrix.test.mjs packages/forge-iam/test/cli-session.test.mjs
-      - name: Restore the staged addons
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: ${{ runner.temp }}/forge-native-npm-cache
-          key: native-keyring-npm-v2-${{ hashFiles('scripts/native-keyring.json') }}
-      - name: Stage the pinned addons
-        env:
-          npm_config_cache: ${{ runner.temp }}/forge-native-npm-cache
-          npm_config_prefer_offline: 'true'
-        run: |
-          set -euo pipefail
-          # npm's cache is only a transport: fetch always checks each tarball
-          # against the lock before extracting either the addon or its license.
-          node scripts/fetch-native-keyring.mjs --registry https://registry.npmjs.org
-          node scripts/fetch-native-keyring.mjs --check
-          git diff --exit-code -- packages/forge-credentials-keychain/vendor/CHECKSUMS.json
       # The release closure requires POSIX mode bits on bin entry points, which a
-      # Windows checkout cannot carry; the enterprise tarball is produced on
-      # macOS/Linux only. Windows still proves the addon bytes by packing the
-      # credentials package itself and installing that tarball below.
+      # Windows checkout cannot carry; Windows packs the credentials package
+      # directly for the offline installation check.
       - name: Build the release artifact and verify its bytes
         if: runner.os != 'Windows'
         run: |
@@ -190,47 +163,7 @@ jobs:
           else
             PACKAGE=node_modules/.forge-ci/install/node_modules/@heluo/forge-credentials-keychain
           fi
-          echo "FORGE_CI_PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
-          node -e "const fs=require('fs'),path=require('path'),crypto=require('crypto');const root=process.argv[1];const rec=JSON.parse(fs.readFileSync(path.join(root,'vendor/CHECKSUMS.json'),'utf8'));for(const [rel,m] of Object.entries(rec.files)){const b=fs.readFileSync(path.join(root,'vendor',rel));const h=crypto.createHash('sha256').update(b).digest('hex');if(h!==m.sha256||b.length!==m.bytes)throw new Error(rel)}console.log('installed addons match the record:',Object.keys(rec.files).length)" "$PACKAGE"
-      # Before the store exists: this runner has no session bus and no libsecret
-      # until the step below installs them, which is the state of an enterprise
-      # host that never had a secret service. The probe must return a typed
-      # refusal, not crash and not fall back to plaintext.
-      - name: Refuse a store that is not there
-        if: env.FORGE_CI_NAME == 'linux-x64'
-        run: |
-          set -euo pipefail
-          if node scripts/probe/native-keyring-store-probe.mjs --package "$FORGE_CI_PACKAGE" --json > node_modules/.forge-ci/probe-nostore.json; then
-            echo 'expected no secret service on this runner, but the probe succeeded' >&2
-            cat node_modules/.forge-ci/probe-nostore.json >&2
-            exit 1
-          fi
-          node -e "
-            // The refusal can surface at two layers: a missing addon/library
-            // aborts construction (top-level error), while a present library on
-            // a host without a session bus fails the first store operation
-            // (per-step error). Both are fail-closed; neither may be a crash.
-            const r = require('./node_modules/.forge-ci/probe-nostore.json');
-            const failed = (r.steps ?? []).filter((s) => s.ok !== true);
-            const allowed = ['KEYCHAIN_UNAVAILABLE', 'KEYCHAIN_OPERATION_FAILED'];
-            const codes = [r.error?.code, ...failed.map((s) => s.error?.code)].filter(Boolean);
-            if (r.ok !== false) { console.error('probe did not report a refusal'); process.exit(1); }
-            if (r.environment?.triple !== 'linux-x64-gnu') { console.error('unexpected host', JSON.stringify(r.environment)); process.exit(1); }
-            if (!codes.some((code) => allowed.includes(code))) { console.error('refusal carried no typed code', JSON.stringify(r)); process.exit(1); }
-            console.log('no-store refusal:', codes.join(','), '| failed steps:', failed.map((s) => s.name).join(',') || '(construction)');
-          "
-      - name: Drive the addon against the OS store
-        run: |
-          set -euo pipefail
-          PACKAGE="$FORGE_CI_PACKAGE"
-          if [ "$FORGE_CI_STORE" = "secret-service" ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq gnome-keyring libsecret-1-0 dbus-x11
-            dbus-run-session -- bash -c "echo -n ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1 || true; sleep 1; node scripts/probe/native-keyring-store-probe.mjs --package '$PACKAGE' --json > node_modules/.forge-ci/probe.json"
-          else
-            node scripts/probe/native-keyring-store-probe.mjs --package "$PACKAGE" --json > node_modules/.forge-ci/probe.json
-          fi
-          node -e "const r=require('./node_modules/.forge-ci/probe.json'); const steps=r.steps??[]; for(const s of steps) console.log(s.ok?'ok  ':'FAIL', s.name); if(r.ok!==true){console.error(JSON.stringify({stage:r.stage??null,error:r.error??null,failed:steps.filter(s=>s.ok!==true)})); process.exit(1)} console.log('store probe:', steps.length, 'steps ok on', r.environment.platform+'-'+r.environment.arch, 'addon', r.environment.triple)"
+          node scripts/probe/installed-credential-smoke.mjs "$PACKAGE"
 
   native-linux-arm64:
     name: native keychain (linux-arm64)
@@ -242,7 +175,6 @@ jobs:
       FORGE_CI_NAME: linux-arm64
       FORGE_CI_PLATFORM: linux
       FORGE_CI_ARCH: arm64
-      FORGE_CI_STORE: secret-service
     defaults: *bash_defaults
     steps: *native_steps
 
@@ -256,7 +188,6 @@ jobs:
       FORGE_CI_NAME: win32-x64
       FORGE_CI_PLATFORM: win32
       FORGE_CI_ARCH: x64
-      FORGE_CI_STORE: credential-manager
     defaults: *bash_defaults
     steps: *native_steps
 
@@ -270,7 +201,6 @@ jobs:
       FORGE_CI_NAME: win32-arm64
       FORGE_CI_PLATFORM: win32
       FORGE_CI_ARCH: arm64
-      FORGE_CI_STORE: credential-manager
     defaults: *bash_defaults
     steps: *native_steps
 
@@ -285,7 +215,6 @@ jobs:
       FORGE_CI_NAME: 'linux-x64, ubuntu-26.04'
       FORGE_CI_PLATFORM: linux
       FORGE_CI_ARCH: x64
-      FORGE_CI_STORE: secret-service
     defaults: *bash_defaults
     steps: *native_steps
 
@@ -299,14 +228,10 @@ jobs:
       FORGE_CI_NAME: 'win32-x64, windows-2025'
       FORGE_CI_PLATFORM: win32
       FORGE_CI_ARCH: x64
-      FORGE_CI_STORE: credential-manager
     defaults: *bash_defaults
     steps: *native_steps
 
-  # macOS has no addon: its production backend is an application-level
-  # encrypted document, so this job drives that backend directly instead of a
-  # native store. Both architectures run because the file backend is the whole
-  # macOS story and the images ship different macOS versions.
+  # The same synthetic SQLite and IAM tests run on each supported OS.
   document-macos-15:
     name: document backend (macos-15)
     needs: changes
@@ -317,34 +242,7 @@ jobs:
       FORGE_CI_PLATFORM: darwin
       FORGE_CI_ARCH: arm64
     defaults: *bash_defaults
-    steps: &document_steps
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-          show-progress: false
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .node-version
-          package-manager-cache: false
-      - name: Link workspace packages
-        run: node scripts/link-workspace.mjs
-      - name: Assert the runner is the expected platform-arch
-        run: node -e "const [p,a]=process.argv.slice(1); if (process.platform!==p||process.arch!==a) { console.error('expected',p,a,'got',process.platform,process.arch); process.exit(1); }" "$FORGE_CI_PLATFORM" "$FORGE_CI_ARCH"
-      - name: Drive the encrypted document backend
-        run: |
-          set -euo pipefail
-          mkdir -p node_modules/.forge-ci
-          node scripts/probe/native-keyring-store-probe.mjs --package packages/forge-credentials-keychain --platform --json > node_modules/.forge-ci/probe-document.json
-          node -e "
-            const r = require('./node_modules/.forge-ci/probe-document.json');
-            for (const s of r.steps ?? []) console.log(s.ok ? 'ok  ' : 'FAIL', s.name);
-            if (r.ok !== true) { console.error(JSON.stringify({ stage: r.stage ?? null, error: r.error ?? null })); process.exit(1); }
-            if (r.environment.triple !== null || r.environment.addon !== null) { console.error('macOS must not resolve an addon', r.environment); process.exit(1); }
-            console.log('document backend:', (r.steps ?? []).length, 'steps ok on', r.environment.platform + '-' + r.environment.arch);
-          "
+    steps: *native_steps
 
   document-macos-15-intel:
     name: document backend (macos-15-intel)
@@ -356,7 +254,7 @@ jobs:
       FORGE_CI_PLATFORM: darwin
       FORGE_CI_ARCH: x64
     defaults: *bash_defaults
-    steps: *document_steps
+    steps: *native_steps
   # Local hook and scanner portability. Windows only: the POSIX branches of
   # these suites already run inside `verify` on ubuntu-24.04, so the ubuntu leg
   # duplicated it; 8.3 aliases, `icase` pathspecs and backslash normalisation

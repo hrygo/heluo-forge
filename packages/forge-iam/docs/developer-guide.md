@@ -6,9 +6,9 @@
 
 Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../client.js>)通过 2 秒轮询展示账户、横幅和四步引导，不使用 Client Remote/watch。Host 内部 `watch(signal)` 不等于已接通 Client 状态流。
 
-当前没有经验证的生产原子存储后端。[插件 apply](<../src/index.mjs>)既不注入 IAM 单记录 `verifyAtomicStore`，也不注入网关的独立联合能力，所以新登录、刷新、网关保存和清除均被拒绝；0600 file、mock 端点或单记录证明不能解除联合门禁。未过期且无需刷新的旧 grant 仍可能被恢复、读取，此门禁不是全面的会话或执行隔离。
+内置 SQLite 凭据组合提供与当前 provider 精确绑定的 `iam-atomic-store`；[插件 apply](<../src/index.mjs>)使用它验证 IAM 单记录能力并取得网关联合 adapter。缺少受信绑定时，登录、刷新和网关写入按各自门禁拒绝。未过期且无需刷新的旧 grant 仍可能被恢复、读取，此门禁不是全面的会话或执行隔离。目标平台与企业环境尚未完成验证。
 
-组合方先准备 `@heluo/forge-credentials-keychain`，禁用 `dsh-credentials-local`，再挂载 IAM。服务通过 `getCredentials` 延迟读取当前 `ctx.credentials`，不能以加载顺序代替存储能力验证。keychain 包的生产 OS adapter 未实现；默认不可用后端拒绝服务，显式 file backend 仅供隔离开发测试，不是生产后备。
+组合方先准备 `@heluo/forge-credentials-keychain`，禁用 `dsh-credentials-local`，再挂载 IAM。服务通过 `getCredentials` 延迟读取当前 `ctx.credentials`，不能以加载顺序代替存储能力验证。凭据包使用值级加密 SQLite；内存后端仅供隔离测试且不授予 IAM 信任，目标平台实测仍待完成。
 
 官方登录、官方模型、官方 API Key 路由和官方账户 UI 由企业组合包禁用。IAM 的 `requireExclusive` 检查 `deepseekAccount` 服务残留，不证明全部官方行和执行旁路都已消失。组合禁用失败时须修正组合，不能关闭检查作为生产恢复方案。
 
@@ -142,7 +142,7 @@ view 包含 `state`、`configured`、`signedIn`、`canSignIn`、`canSignOut`、`
 
 保存从捕获的当前 store 重读并校验 grant，以该记录主体写入元数据；读取完成后及返回前检查 provider、认证代际和卸载状态。清除也固定原 provider 并在返回前核实上下文。进行中的登录、退出或 provider 变化可能使保存被拒绝；已提交给 provider 的请求不能撤回，拒绝或异常不能证明先前 I/O 未发生，不自动重放。
 
-网关不再使用分步 SDK 写入和失败补偿。默认无独立联合能力时，保存和清除在任何持久变更前拒绝；只在精确注入的隔离 fixture 中演练联合快照与条件提交。异常或无效回执报告未知，可能已提交，但不重试、不补偿、不通过重新读取后续 writer 的状态猜测本次提交。页面摘要不是执行授权屏障，不能据“已配置”推断实际消费方已接线。
+网关不使用分步 SDK 写入和失败补偿。内置 SQLite 组合提供联合快照与条件提交；缺少受信联合能力时，保存和清除在任何持久变更前拒绝。异常或无效回执报告未知，可能已提交，但不重试、不补偿、不通过重新读取后续 writer 的状态猜测本次提交。页面摘要不是执行授权屏障，不能据“已配置”推断实际消费方已接线。
 
 ### 原子存储信任
 
@@ -150,9 +150,9 @@ IAM 会话的单记录信任仅由受信宿主组合代码提供：同步 `verif
 
 这些声明不是后端能力的自动证明，也不是同权 JS 之间的隔离边界。同权代码仍可直接使用底层存储；隔离测试只承认其明确绑定的 fixture，不是产品开关或生产证明。
 
-### 网关联合存储的私有测试接缝
+### 网关联合存储的组合接口
 
-现行 SDK 没有联合修改 `CredentialRef` 与 `CredentialKey` 的方法。不得把 `set/unset` 放进 `modifyRecord` 冒充事务：文件后端可能共用锁并自锁，分步操作也不能抵抗迟到写入。服务工厂的以下依赖仅供受信组合及隔离测试，不是配置、Host Service 新方法或 Remote 接口：
+现行 SDK 没有联合修改 `CredentialRef` 与 `CredentialKey` 的方法。不得把 `set/unset` 放进 `modifyRecord` 冒充事务：共享逻辑锁可能自锁，分步操作也不能抵抗迟到写入。服务工厂的以下依赖仅供受信组合及隔离测试，不是配置、Host Service 新方法或 Remote 接口：
 
 ```text
 getGatewayAtomicStore(credentials) -> adapter 或 undefined（同步、非 thenable）
@@ -172,12 +172,12 @@ getter 与 verifier 绑定具体 credentials、adapter 和作用域。只比方�
 
 | 错误码 | HTTP | 现行含义 |
 |---|---|---|
-| `IAM_GATEWAY_ATOMIC_UNVERIFIED` | 503 | 联合能力未核验；默认拒绝任何持久变更。 |
+| `IAM_GATEWAY_ATOMIC_UNVERIFIED` | 503 | 联合能力未核验；拒绝任何持久变更。 |
 | `IAM_GATEWAY_LEGACY_READ_ONLY` | 409 | 旧格式或不一致目标保留，不自动迁移。 |
 | `IAM_GATEWAY_CHANGED` | 409 | 快照冲突或提交前 guard 拒绝；不自动重试。 |
 | `IAM_GATEWAY_WRITE_UNKNOWN` | 503 | 提交或回执无法确认；可能已生效，不补偿或重放。 |
 
-当前仅 one-turn 双 Map fixture 演练该窄契约，没有生产 adapter。双键事务不包含其他进程的 IAM grant 授权事实；同步本地 guard 也不证明整个异步耐久写入期间授权不变。后置检查拒绝仅阻止发布旧上下文结果，不代表可撤回提交。清除保持原有允许未登录调用的策略，但仍受联合能力和记录状态限制。旧客户端及同权代码混用不享有本协议保证。
+内置 SQLite adapter 实现该契约，并有本地合成测试；目标平台与企业环境尚未验证。双键事务不包含其他进程的 IAM grant 授权事实；同步本地 guard 也不证明整个异步耐久写入期间授权不变。后置检查拒绝仅阻止发布旧上下文结果，不代表可撤回提交。清除保持原有允许未登录调用的策略，但仍受联合能力和记录状态限制。旧客户端及同权代码混用不享有本协议保证。
 
 ### 会话读取与同步
 
@@ -264,8 +264,8 @@ node --test "packages/forge-iam/test/*.test.mjs"
 # 聚焦仿 OIDC 登录、刷新、撤销
 node --test packages/forge-iam/test/login.test.mjs
 
-# 仓库检查；显式关闭真实 macOS 钥匙串 spike
-DSH_KEYCHAIN_SPIKE=0 pnpm check
+# 仓库检查
+pnpm check
 git diff --check
 
 # 启动本地仿 OIDC；在另一个终端执行，Ctrl+C 停止
@@ -274,7 +274,7 @@ DSH_WEB_ORIGIN=http://127.0.0.1:<dsh-port> node packages/forge-iam/scripts/mock-
 
 最后一条命令中的 `<dsh-port>` 先替换为实际测试端口。脚本打印端点配置；它只启动模拟身份提供方，不改变凭据存储，也不改变门禁判定——能否登录取决于该 profile 的存储是否已通过受信联合存储校验。不要使用真实身份、Key 或企业凭据。协议用例通过受信测试代码注入合成 provider/verifier；不要把测试注入搬进产品配置。
 
-本地模拟配置形态如下，端口使用占位值。JSON 只说明实际配置字段，不能使默认组合登录成功：
+本地模拟配置形态如下，端口使用占位值。JSON 只说明配置字段，不证明真实 IAM 登录或环境准入：
 
 ```json
 {
@@ -288,7 +288,7 @@ DSH_WEB_ORIGIN=http://127.0.0.1:<dsh-port> node packages/forge-iam/scripts/mock-
 }
 ```
 
-不把本地 HTTP、mock 或显式 0600 文件存储用于生产。纯算法、组件 mock、内存 provider 与文件锁子进程夹具仅证明其受控输入和时序。账户恢复也有真实 service 加内存 provider 的受控请求交付验证，但不证明真实宿主调度。历史探针、源码检查与包体检查均不能替代当前双端、GUI、生产存储或真实 IAM/UAG 联调；具体执行结果与状态摘要在源码仓库的设计索引维护，不随包复制测试计数。
+不把本地 HTTP 或 mock 端点用于生产。纯算法、组件 mock、内存 provider 与文件锁子进程夹具仅证明其受控输入和时序。账户恢复也有真实 service 加内存 provider 的受控请求交付验证，但不证明真实宿主调度。历史探针、源码检查与包体检查均不能替代当前双端、GUI、生产存储或真实 IAM/UAG 联调；具体执行结果与状态摘要在源码仓库的设计索引维护，不随包复制测试计数。
 
 ## 默认模型判定与写入结果
 
@@ -332,11 +332,11 @@ SDK 的 `saveSelection` 仍无条件提交与取消能力：写前复查只缩�
 **现行限制**：
 
 - IAM 单记录事务依赖所有参与者遵守协议，且同记录跨进程排他与提交确认可靠；provider 迟到提交无法靠回读自证已消除。无标识旧 grant 的 ABA（记录被替换后又变回完全相同的字节）仍不能识别；此事务不提供网关两键或会话整体线性一致性，网关另受独立联合能力门禁约束。
-- 默认 verifier 不注入；未知 provider 上旧有效 grant 仍可 ready/读取，退出保留持久记录。存储门禁不能抵御同权 JS 直接写存储。
+- 默认组合经 `iam-atomic-store` 绑定 verifier；未知 provider 上旧有效 grant 仍可 ready/读取，退出保留持久记录。存储门禁不能抵御同权 JS 直接写存储。
 - 旧 V1 不携带 discovery 来源，不能从旧记录自己取得可信 issuer。启动不联网；无明确 issuer pin 或本实例已验证的 metadata 上下文时，拒绝恢复身份、返回 AT 或采用其主体保存网关 Key，保留持久记录。显式 issuer 匹配的旧 V1 继续兼容，不因缺少 `sessionInstanceId` 一刀拒绝；不自动增加来源字段或迁移。只配 discovery 的新登录仍是有效配置，本实例取得可信 metadata 后可按其固定上下文处理会话。
 - [只读模型采样](<../src/model-selection-host.mjs>)已接入 Host 生命周期，但没有实际保存或模型/工具执行授权。独立的[判定与记录式适配](<../src/model-gate.mjs>)保留显式选择、未知写入和回读缺口的测试；不把 SDK 缺少 explicit 或明确空态视为覆盖许可。真实默认模型配置不自动保存。
 - 本地模型执行门禁与网关消费方已接入；真实企业授权和工具执行入口仍须分别核验。前端隐藏、Key 保存、ownerSubject 匹配及旧引用保留均不能证明实际调用已安全隔离；个人 A/B 授权路线及服务端归属校验未完成。
-- 生产 OS adapter、安全旧记录迁移、Client Remote/watch 与凭据探测未实现；真实 GUI/浏览器调度、跨入口顺序、Windows/麒麟平台及真实 IAM/UAG 路径缺少完整验证。界面文案仍为中文，locale 元数据不等于界面全量本地化。
+- 自动迁移旧凭据存储、Client Remote/watch 与凭据探测未实现；真实 GUI/浏览器调度、跨入口顺序、Windows/麒麟平台及真实 IAM/UAG 路径缺少完整验证。界面文案仍为中文，locale 元数据不等于界面全量本地化。
 
 **生产开放前必须另行满足**：IAM 支持且落地的客户端认证与 secret 下发/存储/轮换/吊销；经审核并验证的目标平台存储、原子排他及提交语义；真实执行入口的身份/用途/授权检查与无官方或旧引用绕行；五分钟撤权、当前授权及刷新后代撤销的正式契约和联调；目标双端、GUI 与组合验收，以及责任方批准。现行代码和本地测试不能替代这些门禁。
 

@@ -1,0 +1,265 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { once } from 'node:events';
+import fs, { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import test from 'node:test';
+import { createCredentialStore } from '../src/credential-store.mjs';
+
+const ref = 'heluo-forge/iam/ref/TEST';
+const recordKey = 'heluo-forge/iam/record/heluo-iam/gateway-credential';
+
+async function fixture(t, lockTimeoutMs = 1000) {
+  const directory = await mkdtemp(join(tmpdir(), 'forge-sqlite-read-contention-'));
+  const store = createCredentialStore({ directory, lockTimeoutMs });
+  t.after(async () => {
+    await store.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  await store.set(ref, 'before');
+  return { directory, store };
+}
+
+test('a read transaction delays a pending mutation without replaying its callback', async (t) => {
+  const { directory, store } = await fixture(t);
+  let enter;
+  let release;
+  let calls = 0;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const mutation = store.transaction(ref, async (tx) => {
+    calls += 1;
+    enter();
+    await gate;
+    tx.set('after');
+  });
+  await entered;
+  const reader = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  try {
+    reader.exec('BEGIN');
+    reader.prepare('SELECT count(*) FROM secret').get();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    reader.exec('COMMIT');
+    await mutation;
+    assert.equal(calls, 1);
+    assert.equal(await store.get(ref), 'after');
+  } finally {
+    release();
+    reader.close();
+    await mutation.catch(() => {});
+  }
+});
+
+test('a read after joint commit cannot turn success into failure or strand the lock', async (t) => {
+  const { directory, store } = await fixture(t, 100);
+  const scope = { recordKey, ref };
+  const expected = await store.snapshot(scope);
+  const next = { record: { kind: 'grant', payload: {} }, value: 'after' };
+  let calls = 0;
+  let reader;
+  try {
+    const result = await store.compareAndSwap(scope, expected, next, () => {
+      calls += 1;
+      queueMicrotask(() => {
+        reader = new DatabaseSync(join(directory, 'credentials.sqlite'));
+        reader.exec('BEGIN');
+        reader.prepare('SELECT count(*) FROM secret').get();
+      });
+      return true;
+    });
+    assert.deepEqual(result, { ok: true, snapshot: next });
+    assert.equal(calls, 1);
+    assert.ok(reader);
+    reader.exec('COMMIT');
+    reader.close();
+    reader = undefined;
+    await store.set(ref, 'later');
+    assert.equal(await store.get(ref), 'later');
+  } finally {
+    reader?.close();
+  }
+});
+
+test('a timed-out mutation leaves no live lock that prevents a later write', async (t) => {
+  const { directory, store } = await fixture(t, 80);
+  let enter;
+  let release;
+  let calls = 0;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const mutation = store.transaction(ref, async (tx) => {
+    calls += 1;
+    enter();
+    await gate;
+    tx.set('not-committed');
+  }).then(() => undefined, (error) => error);
+  await entered;
+  const reader = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  try {
+    reader.exec('BEGIN');
+    reader.prepare('SELECT count(*) FROM secret').get();
+    release();
+    const failure = await mutation;
+    assert.equal(failure?.code, 'CRED_LOCK_TIMEOUT');
+    assert.equal(calls, 1);
+    reader.exec('COMMIT');
+    await store.set(ref, 'later');
+    assert.equal(await store.get(ref), 'later');
+  } finally {
+    release();
+    reader.close();
+    await mutation;
+  }
+});
+
+test('an ordinary read waits for a short exclusive writer instead of reporting busy', async (t) => {
+  const { directory, store } = await fixture(t);
+  const writer = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  try {
+    writer.exec('BEGIN EXCLUSIVE');
+    const read = store.get(ref).then((value) => ({ value }), (error) => ({ error }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    writer.exec('COMMIT');
+    const result = await read;
+    assert.equal(result.error, undefined, result.error?.stack);
+    assert.equal(result.value, 'before');
+  } finally {
+    writer.close();
+  }
+});
+
+test('another process reclaims a finished live owner after a read blocks release', { timeout: 5000 }, async (t) => {
+  const { directory, store } = await fixture(t, 1000);
+  const moduleUrl = new URL('../src/credential-store.mjs', import.meta.url).href;
+  const source = `import { createCredentialStore } from ${JSON.stringify(moduleUrl)};
+const store = createCredentialStore({ directory: process.argv[1], lockTimeoutMs: 80 });
+try {
+  await store.transaction(${JSON.stringify(ref)}, async (tx) => {
+    process.send('entered');
+    await new Promise((resolve) => process.once('message', resolve));
+    tx.set('not-committed');
+  });
+  process.send({ result: 'unexpected success' });
+} catch (error) { process.send({ code: error?.code }); }
+await new Promise((resolve) => process.once('message', resolve));
+await store.close();`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source, directory], {
+    env: {}, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+  });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  const exit = once(child, 'exit');
+  assert.equal((await once(child, 'message', { signal: AbortSignal.timeout(3000) }))[0], 'entered');
+  const reader = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  try {
+    reader.exec('BEGIN');
+    const lock = JSON.parse(reader.prepare("SELECT value FROM meta WHERE key='lock'").get().value);
+    const failure = once(child, 'message', { signal: AbortSignal.timeout(3000) });
+    child.send('continue');
+    assert.deepEqual((await failure)[0], { code: 'CRED_LOCK_TIMEOUT' });
+    assert.equal(child.exitCode, null);
+    const name = `credentials.sqlite.abandoned.${lock.pid}.${lock.token}`;
+    const markerPath = join(directory, name);
+    const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+    assert.equal(marker.pid, child.pid);
+    assert.equal(createHash('sha256').update(marker.token).digest('hex').slice(0, 32), lock.token);
+    if (process.platform !== 'win32') assert.equal(statSync(markerPath).mode & 0o777, 0o600);
+    reader.exec('COMMIT');
+    await store.set(ref, 'recovered');
+    assert.equal(await store.get(ref), 'recovered');
+    assert.equal(readdirSync(directory).includes(name), false);
+    child.send('stop');
+    assert.equal((await exit)[0], 0);
+  } finally {
+    reader.close();
+  }
+});
+
+test('forged and stale markers do not steal a live operation', async (t) => {
+  const { directory, store } = await fixture(t, 60);
+  const other = createCredentialStore({ directory, lockTimeoutMs: 60 });
+  t.after(() => other.close());
+  let enter;
+  let release;
+  let calls = 0;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const mutation = store.transaction(ref, async (tx) => {
+    calls += 1;
+    enter();
+    await gate;
+    tx.set('owner');
+  });
+  await entered;
+  const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  const lock = JSON.parse(db.prepare("SELECT value FROM meta WHERE key='lock'").get().value);
+  db.close();
+  const markerPath = join(directory, `credentials.sqlite.abandoned.${lock.pid}.${lock.token}`);
+  const staleToken = 'a'.repeat(32);
+  const staleDigest = createHash('sha256').update(staleToken).digest('hex').slice(0, 32);
+  const stalePath = join(directory, `credentials.sqlite.abandoned.${lock.pid}.${staleDigest}`);
+  try {
+    writeFileSync(stalePath, JSON.stringify({ pid: lock.pid, token: staleToken }), { mode: 0o600 });
+    for (const marker of [
+      { pid: lock.pid + 1, token: lock.token },
+      { pid: lock.pid, token: lock.token },
+      { pid: lock.pid, token: staleToken },
+    ]) {
+      writeFileSync(markerPath, JSON.stringify(marker), { mode: 0o600 });
+      await assert.rejects(other.set(ref, 'intruder'), { code: 'CRED_LOCK_TIMEOUT' });
+      unlinkSync(markerPath);
+    }
+    assert.equal(calls, 1);
+    release();
+    await mutation;
+    assert.equal(await store.get(ref), 'owner');
+    await other.set(ref, 'later');
+    assert.equal(await other.get(ref), 'later');
+  } finally {
+    release();
+    await mutation.catch(() => {});
+  }
+});
+
+test('failure to publish a completion marker leaves the live lock fail closed', async (t) => {
+  const { directory, store } = await fixture(t, 60);
+  const other = createCredentialStore({ directory, lockTimeoutMs: 60 });
+  t.after(() => other.close());
+  let enter;
+  let release;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const mutation = store.transaction(ref, async (tx) => { enter(); await gate; tx.set('not-committed'); })
+    .then(() => undefined, (error) => error);
+  await entered;
+  const reader = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  const originalLink = fs.linkSync;
+  try {
+    reader.exec('BEGIN');
+    reader.prepare('SELECT count(*) FROM secret').get();
+    fs.linkSync = (from, to) => {
+      if (String(to).includes('credentials.sqlite.abandoned.')) throw Object.assign(new Error('synthetic failure'), { code: 'EACCES' });
+      return originalLink(from, to);
+    };
+    syncBuiltinESMExports();
+    release();
+    assert.equal((await mutation)?.code, 'CRED_LOCK_RECOVERY_FAILED');
+    fs.linkSync = originalLink;
+    syncBuiltinESMExports();
+    reader.exec('COMMIT');
+    await assert.rejects(other.set(ref, 'intruder'), { code: 'CRED_LOCK_TIMEOUT' });
+    assert.equal(await other.get(ref), 'before');
+    assert.equal(readdirSync(directory).some((name) => name.includes('.abandoned.')), false);
+  } finally {
+    fs.linkSync = originalLink;
+    syncBuiltinESMExports();
+    release();
+    reader.close();
+    await mutation;
+  }
+});

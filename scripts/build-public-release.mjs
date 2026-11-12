@@ -113,8 +113,6 @@ function releaseToolFiles(root) {
     'scripts/make-private-bundle.mjs',
     'scripts/init-enterprise-plugin.mjs',
     'scripts/release-delivery.mjs',
-    'scripts/fetch-native-keyring.mjs',
-    'scripts/native-keyring.json',
   ];
   const files = roots.filter((path) => existsSync(join(root, path)));
   files.push(...listFiles(root, 'scripts/lib', (path) => path.endsWith('.mjs')));

@@ -116,12 +116,12 @@ curl -s -X POST http://127.0.0.1:49196/api/forge-iam/token \
   -H 'x-forge-iam-request: 1'
 ```
 
-存储后端按平台解析：Windows 与 macOS 都是应用层加密文档——Windows 在 `%LOCALAPPDATA%\HeluoForge`，macOS 在 `~/Library/Application Support/HeluoForge`——同一文档内完成记录/引用联合提交并自带跨进程 `O_EXCL` 锁；Linux 目标没有可用后端，CLI 与插件都按 fail closed 关闭。四组合原生 addon 随包分发但未取证，只有显式选择才会被用到（插件用 `platformAdapter: native-keyring`，CLI 用 `HELUO_FORGE_ALLOW_UNVETTED=1`）。CLI 默认走 `createPlatformBackend()`，解析结果与插件一致；`HELUO_FORGE_CREDENTIALS_FILE` 只是显式开发用明文覆盖。
+CLI 与插件读取相同的 SQLite 值级加密存储，目录由凭据包统一解析；隔离测试可设置 `HELUO_FORGE_STORE_DIRECTORY`，与插件的 `storeDirectory` 对应。读取不会创建存储或刷新令牌；旧文件不读取、不迁移。目标平台与 Electron 宿主的实测状态见[凭据包说明](../../forge-credentials-keychain/README.md)。
 
 两点说明：
 
 - 这两个接口走 DSH 自己的浏览器鉴权，**普通终端进程进不来**（没有那个凭据）。所以命令行工具请走 §3.1。
-- 如果是在同机进程里、又拿不到浏览器凭据，还有一个 loopback 接口 `POST /api/forge-iam/bridge/token`，需要 `authorization: Bearer <能力值>`，能力值可经 `heluo-forge` 所在的同一凭据库读取（键名见附录 A）。这条路是为"必须是 HTTP、但不在浏览器里"的场景准备的，一般用不上。
+- 如果是在同机进程里、又拿不到浏览器凭据，还有一个 loopback 接口 `POST /api/forge-iam/bridge/token`，需要 `authorization: Bearer <能力值>`，能力值由 Host 与受信本机客户端使用。这条路是为"必须是 HTTP、但不在浏览器里"的场景准备的，一般用不上。
 
 ### 3.3 你写的是 DSH 插件 → 用服务
 
@@ -175,142 +175,32 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 
 ---
 
-## 7. 联调与自测（不用等 DSH）
+## 7. 联调与自测
 
-你可以先用一份假的存储文件，把自己这边的读取逻辑跑通。建一个文件（路径自己定，必须在仓库外）：
-
-```json
-{"version":1,"entries":{"heluo-forge/iam/record/heluo-iam/session":"{\"kind\":\"grant\",\"payload\":{\"version\":1,\"issuer\":\"https://iam.example/oidc\",\"subject\":\"000001\",\"clientId\":\"heluo-forge-desktop\",\"scope\":\"openid profile offline_access\",\"obtainedAt\":\"2026-11-04T01:12:33.000Z\",\"accessToken\":\"TOKEN_VALUE\",\"accessExpiresAt\":\"2099-01-01T00:00:00.000Z\",\"refreshToken\":\"rt_example\"}}"}}
-```
-
-然后：
-
-```bash
-export HELUO_FORGE_CREDENTIALS_FILE=/path/to/your/file.json
-heluo-forge auth whoami --json   # 应输出 subject 000001
-heluo-forge auth token           # 应输出 TOKEN_VALUE
-```
-
-四个必须覆盖的场景：
-
-| 场景 | 怎么造 | 预期 |
-|---|---|---|
-| 已登录 | 上面的文件 | `signedIn: true`，拿到令牌 |
-| 未登录 | 删掉文件里的那条记录 | `signedIn: false`，`auth token` 退出码 2 |
-| 已过期 | 把 `accessExpiresAt` 改成过去时间 | `auth token` 退出码 3 |
-| 已退出 | 把记录内容改成 `{"kind":"grant","payload":{"version":1,"type":"heluo-iam-session-tombstone"}}` | 按未登录处理 |
-
----
+使用隔离目录与合成会话验证，不直接构造或解析存储文件。仓库内的 `packages/forge-iam/test/cli-reader.test.mjs` 覆盖命令的身份、过期、不可用和桥接行为；`packages/forge-credentials-keychain/test/sqlite-composition.test.mjs` 覆盖独立 CLI 进程从 SQLite 读取合成会话。
 
 ## 8. 已知限制
 
-- **Windows / 麒麟的凭据库直读路径还没实现**，所以不要自己解析系统凭据库，走 §3.1 的命令。
-- 身份只有工号（见 §2），要姓名请在你方系统内映射。
-- 存储格式里的字段集合可能增加，**遇到不认识的字段请忽略**，不要因为多一个字段就报错。
+- Windows、麒麟、Electron 宿主及企业 IAM 的实际接入尚未完成验证；各平台运行结果分别记录。
+- 身份字段中的 `subject` 是身份提供方返回的标识；姓名等资料应从获授权的来源取得。
+- 退出或刷新结果未确认时拒绝返回旧令牌，需要重新登录或按实际错误处理。
 
----
-
-## 附录 A：自己读存储（仅在没有 `heluo-forge` 时）
-
-先说明：这是**次选**。格式属于实现细节，优先用 §3.1。只在你无法启动 Node 进程、又必须离线读时才用。
-
-**位置**：一个 JSON 文件，路径由环境变量 `HELUO_FORGE_CREDENTIALS_FILE` 指定（绝对路径，权限 0600）。在系统凭据库形态下，条目名为 `heluo-forge/iam/record/heluo-iam/session`。
-
-**结构**：顶层 `{version:1, entries:{…}}`，值是**字符串**。
-
-```json
-{
-  "version": 1,
-  "entries": {
-    "heluo-forge/iam/record/heluo-iam/session": "{\"kind\":\"grant\",\"payload\":{…}}"
-  }
-}
-```
-
-**解析步骤**：
-
-1. 取 `entries["heluo-forge/iam/record/heluo-iam/session"]`，没有就是未登录；
-2. 把它按 JSON 解析，得到 `{kind, payload}`；
-3. `kind !== "grant"` → 未登录；
-4. `payload.type === "heluo-iam-session-tombstone"` → 未登录（用户已退出）；
-5. `payload.accessToken` 缺失，或 `payload.accessExpiresAt <= now` → 令牌不可用，提示重新登录；
-6. 只取 `issuer`、`subject`、`accessToken`、`accessExpiresAt`、`scope`，其余忽略；
-7. **只读**。不要改这个文件，不要写回。
-
-**参考实现**：
-
-```js
-import { readFile } from 'node:fs/promises';
-
-const KEY = 'heluo-forge/iam/record/heluo-iam/session';
-
-export async function readSession(filePath) {
-  const doc = JSON.parse(await readFile(filePath, 'utf8'));
-  if (doc?.version !== 1 || typeof doc.entries !== 'object') {
-    return { ok: false, code: 'IAM_STORE_UNSUPPORTED' };
-  }
-  const raw = doc.entries[KEY];
-  if (typeof raw !== 'string') return { ok: false, code: 'IAM_NOT_SIGNED_IN' };
-
-  let record;
-  try { record = JSON.parse(raw); } catch { return { ok: false, code: 'IAM_STORE_CORRUPT' }; }
-  if (record?.kind !== 'grant') return { ok: false, code: 'IAM_NOT_SIGNED_IN' };
-
-  const grant = record.payload ?? {};
-  if (grant.type === 'heluo-iam-session-tombstone') return { ok: false, code: 'IAM_NOT_SIGNED_IN' };
-
-  const subject = typeof grant.subject === 'string' ? grant.subject : null;
-  const issuer = typeof grant.issuer === 'string' ? grant.issuer : null;
-  if (typeof grant.accessToken !== 'string' || typeof grant.accessExpiresAt !== 'string') {
-    return { ok: false, code: 'IAM_REAUTH_REQUIRED', subject, issuer };
-  }
-  if (Date.parse(grant.accessExpiresAt) <= Date.now()) {
-    return { ok: false, code: 'IAM_REAUTH_REQUIRED', subject, issuer };
-  }
-  return {
-    ok: true,
-    subject,
-    issuer,
-    token: grant.accessToken,
-    expiresAt: grant.accessExpiresAt,
-  };
-}
-```
-
-**命名相关环境变量**（与服务端对齐时用）：
+## 附录 A：存储目录与命名空间
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `HELUO_FORGE_CREDENTIALS_FILE` | 空 | 指定文件路径（绝对路径） |
-| `HELUO_FORGE_KEYCHAIN_SERVICE` | `heluo-forge` | 系统凭据库的 service |
-| `HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX` | `iam` | 系统凭据库的账号前缀 |
+| `HELUO_FORGE_STORE_DIRECTORY` | 平台用户目录 | 指向与 Host 相同的存储目录；不提供旧文件读取 |
+| `HELUO_FORGE_IAM_URL` | 未设置 | 使用 `127.0.0.1` 或 `[::1]` 的 HTTP(S) 地址连接 Host 桥；不跟随重定向 |
+| `HELUO_FORGE_KEYCHAIN_SERVICE` | `heluo-forge` | 凭据命名空间的 service |
+| `HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX` | `iam` | 凭据命名空间的账号前缀 |
 
-## 附录 B：完整记录结构（仅解析时需要）
-
-记录是 `{"kind":"grant","payload":{…}}`。`payload` 字段：
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `version` | 是 | `1` 或 `2`，内部差异与你无关，不要依赖 |
-| `issuer` | 是 | IAM 签发方 |
-| `subject` | 是 | 用户标识（工号） |
-| `clientId` | 是 | 客户端标识，与你无关 |
-| `scope` | 是 | 空格分隔的字符串（**不是数组**） |
-| `obtainedAt` | 是 | 取得授权的 ISO 时间 |
-| `accessToken` | 条件 | 与 `accessExpiresAt` 必须同时出现 |
-| `accessExpiresAt` | 条件 | 令牌过期时间 |
-| `refreshToken` | 是 | **你不能用**，也不该读 |
-| `refreshExpiresAt` | 否 | 同上 |
-| `idToken` | 否 | 同上，不要用 |
-| `resource` | 否 | 历史字段，可能没有 |
-| `sessionInstanceId`、`refreshOperation`、`authContext` | 否 | 内部字段，**必须忽略** |
-
-## 附录 C：错误码对照
+## 附录 B：错误码对照
 
 | 码 | 出现位置 | 含义 |
 |---|---|---|
 | `IAM_NOT_SIGNED_IN` | 退出码 2 / HTTP 401 | 没有会话 |
 | `IAM_REAUTH_REQUIRED` | 退出码 3 / HTTP 401 | 令牌过期，需重新登录 |
+| `IAM_INVALID_GRANT` | 退出码 3 / HTTP 401 | 会话记录无效或退出结果未确认，需重新登录 |
 | `IAM_CREDENTIALS_UNAVAILABLE` | 退出码 4 / HTTP 503 | 凭据后端不可用 |
 | `IAM_BRIDGE_UNAUTHORIZED` | HTTP 401 | 桥能力值不对 |
 | `IAM_BRIDGE_FORBIDDEN` | HTTP 403 | 非本机来源 |
@@ -319,6 +209,6 @@ export async function readSession(filePath) {
 
 ---
 
-**反馈**：本文的样例已在 2026-11-04 用一份合成存储实测（`HELUO_FORGE_CREDENTIALS_FILE` + `heluo-forge` 命令），未登录/过期/有效/已退出四种结果与 §7 一致。HTTP 端点由实现与单元用例确定，**未在真实 DSH 上与你方联调**；如与你实测不符，以你实测为准并反馈给我们。相关设计说明见[开发者指南](<developer-guide.md>)。
+**验证边界**：CLI 与 HTTP 的合成测试不代表真实 DSH 宿主或企业 IAM 已联调。相关设计说明见[开发者指南](<developer-guide.md>)。
 
 **入口**：本手册的常驻页是 [issue #147](https://github.com/hrygo/heluo-forge/issues/147)（置顶、不关闭）。与本文不符之处请在该页留言，附命令、退出码、平台与版本。

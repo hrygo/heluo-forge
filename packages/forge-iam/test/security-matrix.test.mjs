@@ -274,11 +274,11 @@ test('RP-initiated logout builds the documented URL when the provider advertises
   assert.deepEqual(grantRecord(credentials), { version: 1, type: 'heluo-iam-session-tombstone' }, 'sign-out must replace the grant with a tombstone');
 });
 
-test('local logout still completes and stays attributable when revocation is unconfirmed', async (t) => {
+test('unconfirmed revocation retains pending and its safe diagnostic without replay', async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
-  const { impl } = scriptedFetch({ '/revoke': { status: 503, body: { error: 'temporarily_unavailable' } } });
+  const { impl, calls } = scriptedFetch({ '/revoke': { status: 503, body: { error: 'temporarily_unavailable' } } });
   const service = createIamService(configFor(mock, { logoutMode: 'local' }), { credentials, fetch: impl });
 
   const { location } = await authorize(service);
@@ -287,9 +287,14 @@ test('local logout still completes and stays attributable when revocation is unc
 
   assert.equal(result.revocation, 'unknown');
   assert.equal(result.revocationError, 'IAM_REVOKE_HTTP_503');
-  assert.equal(result.view.state, 'signed-out', 'local logout completes even when revocation is unconfirmed');
-  assert.equal(result.view.error, 'IAM_REVOCATION_UNKNOWN', 'the unconfirmed revocation stays visible');
-  assert.deepEqual(grantRecord(credentials), { version: 1, type: 'heluo-iam-session-tombstone' }, 'the local grant is replaced even when revocation fails');
+  assert.equal(result.view.state, 'error');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  const pending = structuredClone(grantRecord(credentials));
+  assert.equal(pending.signOutOperation.state, 'pending');
+  await assert.rejects(service.resolveToken());
+  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(calls.filter((url) => url.includes('/revoke')).length, 1);
+  assert.deepEqual(grantRecord(credentials), pending);
 });
 
 // Each fail-closed path must land on a non-ready state with no grant. None of

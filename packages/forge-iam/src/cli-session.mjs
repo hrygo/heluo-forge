@@ -3,51 +3,48 @@
 // the network. Keeping the decision logic here (instead of inside the bin)
 // makes the "no refresh" rule directly testable.
 
+import { sessionView } from './session-read.mjs';
+import { isAccessExpired, validateGrant } from './record.mjs';
+
 /** The record key the IAM service uses for its session (see store.mjs). */
 export const SESSION_RECORD_KEY = 'heluo-iam/session';
 
-/**
- * Project a stored grant payload onto the same shape `ctx.iam.getSession()`
- * returns. Tokens are dropped here and only surfaced by `accessTokenOf()`.
- *
- * @param {{ kind?: string, payload?: object } | undefined} record
- * @returns {{ status: string, signedIn: boolean, principal?: { issuer: string | null, subject: string }, accessExpiresAt: string | null, scope: string | null }}
- */
-export function sessionFromRecord(record) {
-  const grant = record?.kind === 'grant' ? record.payload ?? {} : {};
-  const subject = typeof grant.subject === 'string' && grant.subject.length > 0 ? grant.subject : undefined;
-  return {
-    // The CLI is a read-only observer: it can report identity, not live state.
-    status: subject ? 'ready' : 'signed-out',
-    signedIn: Boolean(subject && typeof grant.refreshToken === 'string'),
-    principal: subject ? { issuer: grant.issuer ?? null, subject } : undefined,
-    accessExpiresAt: grant.accessExpiresAt ?? null,
-    scope: grant.scope ?? null,
-  };
+/** Interpret the same validated grant format as the Host store. */
+export function classifySessionRecord(record) {
+  if (record == null) return { state: 'absent' };
+  if (record.kind === 'grant' && record.payload?.version === 1
+    && record.payload?.type === 'heluo-iam-session-tombstone'
+    && Object.keys(record).length === 2 && Object.keys(record.payload).length === 2) return { state: 'absent' };
+  if (record.kind !== 'grant') return { state: 'invalid' };
+  const parsed = validateGrant(record.payload);
+  if (!parsed.ok) return { state: 'invalid' };
+  if (parsed.value.signOutOperation) return { state: 'pending', operation: 'sign-out' };
+  if (parsed.value.refreshOperation?.state === 'pending') return { state: 'pending', operation: 'refresh' };
+  return { state: 'active', grant: parsed.value };
 }
 
-/**
- * Return the stored access token only while it is unexpired. The CLI must not
- * refresh: the IAM service owns the refresh token, and a second refresher would
- * invalidate the running session under the confirmed rotation rule.
- *
- * @param {{ payload?: { accessToken?: string, accessExpiresAt?: string } } | undefined} record
- * @param {number} nowMs
- * @returns {{ ok: true, token: string, expiresAt: string | null } | { ok: false, code: 'IAM_NOT_SIGNED_IN' | 'IAM_REAUTH_REQUIRED' | 'IAM_EXPIRY_UNKNOWN' }}
- */
+/** Project a validated grant without returning tokens. */
+export function sessionFromRecord(record, nowMs = Date.now()) {
+  const session = classifySessionRecord(record);
+  if (session.state === 'absent') return sessionView(undefined, 'signed-out');
+  if (session.state !== 'active') return sessionView(undefined, 'error');
+  return sessionView(session.grant, isAccessExpired(session.grant, nowMs) ? 'expired' : 'ready');
+}
+
+/** Return only a validated, unexpired access token; never refresh. */
 export function accessTokenOf(record, nowMs = Date.now()) {
-  const payload = record?.kind === 'grant' ? record.payload ?? {} : {};
+  const session = classifySessionRecord(record);
+  if (session.state === 'absent') return { ok: false, code: 'IAM_NOT_SIGNED_IN' };
+  if (session.state === 'invalid' || (session.state === 'pending' && session.operation === 'sign-out')) {
+    return { ok: false, code: 'IAM_INVALID_GRANT' };
+  }
+  if (session.state !== 'active') return { ok: false, code: 'IAM_REAUTH_REQUIRED' };
+  const payload = session.grant;
   if (typeof payload.accessToken !== 'string' || payload.accessToken.length === 0) {
     return { ok: false, code: 'IAM_NOT_SIGNED_IN' };
   }
-  if (typeof payload.accessExpiresAt !== 'string') {
-    // An unknown expiry cannot be proven valid; refuse instead of guessing.
-    return { ok: false, code: 'IAM_EXPIRY_UNKNOWN' };
-  }
   const expires = Date.parse(payload.accessExpiresAt);
-  if (Number.isNaN(expires) || expires <= nowMs) {
-    return { ok: false, code: 'IAM_REAUTH_REQUIRED' };
-  }
+  if (Number.isNaN(expires) || expires - 30_000 <= nowMs) return { ok: false, code: 'IAM_REAUTH_REQUIRED' };
   return { ok: true, token: payload.accessToken, expiresAt: payload.accessExpiresAt };
 }
 

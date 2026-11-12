@@ -1,20 +1,17 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { KeychainBackendError, createFileBackend, createMacosBackend, createPlatformBackend, createUnavailableBackend, createWindowsBackend } from './backend.mjs';
-import { createNativeKeyringBackend, nativeTargetFor } from './native-keyring.mjs';
-import { createSecurityCliBackend } from './security-cli.mjs';
+import { capabilities, createRegisteredBackend } from './backend-registry.mjs';
 import { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
 import { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
 
 export const name = 'forge-credentials-keychain';
 export const inject = [];
 
-export { createFileBackend, createMacosBackend, createMemoryBackend, createPlatformBackend, createUnavailableBackend, createWindowsBackend, KeychainBackendError } from './backend.mjs';
-export { createNativeKeyringBackend, NATIVE_KEYRING_MODULE, nativeAddonPath, nativeTargetFor, WINDOWS_BLOB_LIMIT_BYTES, WINDOWS_KEY_LIMIT_BYTES, WINDOWS_RUNTIME_DLLS, windowsRuntimeStatus } from './native-keyring.mjs';
-export { createSecurityCliBackend, probeSecurityCli, SECURITY_CLI_DEFAULT_PATH, SECURITY_ITEM_NOT_FOUND } from './security-cli.mjs';
+export { createMemoryBackend } from './backend.mjs';
+export { createCredentialStore } from './credential-store.mjs';
 export { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
 export { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
-export { isMigratableKey, KeychainMigrationError, migrateLegacyFileToKeychain, MIGRATION_REASONS, redactSecrets } from './migrate.mjs';
 
 const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
 
@@ -32,13 +29,15 @@ const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];
  * away from being published. Refuse it at mount instead of trusting the caller
  * to have picked a directory outside the repository.
  */
-function assertFileOutsideRepository(path) {
-  let current = dirname(resolve(path));
+function assertDirectoryOutsideRepository(path) {
+  let current = resolve(path);
+  while (!existsSync(current) && dirname(current) !== current) current = dirname(current);
+  current = realpathSync(current);
   for (;;) {
     if (existsSync(join(current, '.git'))) {
       throw new KeychainProviderError(
         'KEYCHAIN_FILE_INSIDE_REPOSITORY',
-        'filePath points inside a git work tree; keep the plaintext credential document outside any repository',
+        'credential storage must be outside a git work tree',
       );
     }
     const parent = dirname(current);
@@ -48,13 +47,8 @@ function assertFileOutsideRepository(path) {
 }
 
 function warnNonProduction(ctx, backend) {
-  const notice = backend?.requiresExplicitOptIn === true
-    ? 'credentials: 非生产凭据后端（明文文件）已启用；仅限开发/试点，不得用于生产'
-    : backend?.unvetted === true
-      ? 'credentials: 未取证的原生凭据适配器已启用；仅限试点，不得用于生产'
-      : backend?.durable === false && backend?.available !== false
-        ? 'credentials: 临时内存凭据后端已启用；进程退出即失效'
-        : undefined;
+  const notice = backend?.durable === false && backend?.available !== false
+    ? 'credentials: 临时内存凭据后端已启用；进程退出即失效' : undefined;
   if (notice === undefined) return;
   try {
     ctx.logger?.warn?.(notice);
@@ -119,11 +113,6 @@ export function validateConfig(input = {}) {
     service: 'heluo-forge',
     accountPrefix: 'iam',
     allowEphemeral: false,
-    allowInsecureFile: false,
-    allowUnvettedPlatformAdapter: false,
-    allowUnverifiedEnumeration: false,
-    platformAdapter: undefined,
-    filePath: '',
     storeDirectory: '',
     backend: undefined,
   };
@@ -137,27 +126,11 @@ export function validateConfig(input = {}) {
     }
   }
 
-  if (input.filePath !== undefined && input.filePath !== null && input.filePath !== '') {
-    if (typeof input.filePath !== 'string') {
-      issues.push({ path: ['filePath'], message: 'filePath must be a non-empty string' });
-    } else {
-      value.filePath = input.filePath;
-    }
-  }
-
   if (input.storeDirectory !== undefined && input.storeDirectory !== null && input.storeDirectory !== '') {
     if (typeof input.storeDirectory !== 'string' || input.storeDirectory.trim().length === 0) {
       issues.push({ path: ['storeDirectory'], message: 'storeDirectory must be a non-empty string' });
     } else {
       value.storeDirectory = input.storeDirectory;
-    }
-  }
-
-  if (input.allowInsecureFile !== undefined && input.allowInsecureFile !== null) {
-    if (typeof input.allowInsecureFile !== 'boolean') {
-      issues.push({ path: ['allowInsecureFile'], message: 'allowInsecureFile must be a boolean' });
-    } else {
-      value.allowInsecureFile = input.allowInsecureFile;
     }
   }
 
@@ -169,27 +142,9 @@ export function validateConfig(input = {}) {
     }
   }
 
-  if (input.allowUnvettedPlatformAdapter !== undefined && input.allowUnvettedPlatformAdapter !== null) {
-    if (typeof input.allowUnvettedPlatformAdapter !== 'boolean') {
-      issues.push({ path: ['allowUnvettedPlatformAdapter'], message: 'allowUnvettedPlatformAdapter must be a boolean' });
-    } else {
-      value.allowUnvettedPlatformAdapter = input.allowUnvettedPlatformAdapter;
-    }
-  }
-
-  if (input.platformAdapter !== undefined && input.platformAdapter !== null) {
-    if (input.platformAdapter !== 'security-cli' && input.platformAdapter !== 'native-keyring') {
-      issues.push({ path: ['platformAdapter'], message: "platformAdapter must be 'security-cli' or 'native-keyring' (both unvetted)" });
-    } else {
-      value.platformAdapter = input.platformAdapter;
-    }
-  }
-
-  if (input.allowUnverifiedEnumeration !== undefined && input.allowUnverifiedEnumeration !== null) {
-    if (typeof input.allowUnverifiedEnumeration !== 'boolean') {
-      issues.push({ path: ['allowUnverifiedEnumeration'], message: 'allowUnverifiedEnumeration must be a boolean' });
-    } else {
-      value.allowUnverifiedEnumeration = input.allowUnverifiedEnumeration;
+  for (const key of ['filePath', 'allowInsecureFile', 'platformAdapter', 'allowUnvettedPlatformAdapter', 'allowUnverifiedEnumeration']) {
+    if (Object.hasOwn(input, key)) {
+      issues.push({ path: [key], message: `${key} is not supported by the new credential store` });
     }
   }
 
@@ -204,51 +159,27 @@ export function validateConfig(input = {}) {
   return issues.length ? { issues } : { value };
 }
 
-/**
- * Whether the staged native addon is treated as vetted. It stays `false` until
- * the target-machine evidence exists (issue #182 P4); while false the provider
- * refuses to mount it without `allowUnvettedPlatformAdapter: true`. Flipping
- * this flag is the release step, and it must ship together with that evidence.
- */
-const NATIVE_ADAPTER_VETTED = false;
+/** One directory resolver is shared by the Host and the read-only CLI. */
+export function defaultStoreDirectory() {
+  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'HeluoForge');
+  if (process.platform === 'win32') return join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'HeluoForge');
+  return join(homedir(), '.local', 'share', 'HeluoForge');
+}
 
-/**
- * Pick the default backend for this platform without weakening fail closed:
- * a platform-arch with a staged addon gets the native backend, everything else
- * keeps the explicitly unavailable backend. No branch here can reach plaintext.
- *
- * @param {{ platform?: string, arch?: string, service?: string, enumeration?: string, vetted?: boolean }} [options]
- */
-export function resolvePlatformBackend(options = {}) {
-  const explicit = options.platform !== undefined || options.arch !== undefined;
-  const platform = options.platform ?? process.platform;
-  const arch = options.arch ?? process.arch;
-  // macOS has no signing identity by decision, so the login keychain is not
-  // usable: its item ACL is bound to the caller's code signature. The macOS
-  // backend is an application-level encrypted document instead.
-  if (platform === 'darwin') return createMacosBackend(options.storeDirectory === undefined ? {} : { directory: options.storeDirectory });
-  // The Windows Credential Manager only overwrites a value: it cannot express
-  // the compare-then-commit the sign-in gate requires. Windows therefore uses
-  // the same application-level encrypted document as macOS; the native adapter
-  // stays an explicit, unvetted opt-in (`platformAdapter: native-keyring`).
-  if (platform === 'win32') return createWindowsBackend(options.storeDirectory === undefined ? {} : { directory: options.storeDirectory });
-  if (nativeTargetFor(platform, arch) === undefined) {
-    // An explicitly requested platform-arch must never resolve against this
-    // host: on a machine that has an addon that would silently mount the wrong
-    // architecture. Only the host default (no explicit arguments) may ask the
-    // host's platform backend.
-    if (!explicit) return createPlatformBackend();
-    return createUnavailableBackend(
-      `OS keychain adapter is not implemented for ${platform}-${arch}; this profile fails closed. Use a reviewed backend for production, or the documented development override (filePath + allowInsecureFile) in a non-production profile`,
-    );
-  }
-  return createNativeKeyringBackend({
-    service: options.service,
-    platform,
-    arch,
-    load: options.load,
-    vetted: options.vetted ?? NATIVE_ADAPTER_VETTED,
-    enumeration: options.enumeration === 'find-credentials' ? 'find-credentials' : 'unsupported',
+function storeDirectory(directory) {
+  const selected = resolve(directory || defaultStoreDirectory());
+  assertDirectoryOutsideRepository(selected);
+  return selected;
+}
+
+/** Open only the read operations needed by offline CLI clients. */
+export async function openCredentialReader({ directory, service, accountPrefix } = {}) {
+  const backend = createRegisteredBackend('sqlite', { directory: storeDirectory(directory), readOnly: true });
+  const provider = createKeychainProvider(backend, { service, accountPrefix });
+  return Object.freeze({
+    readRecord: (key) => provider.readRecord(key),
+    resolve: (ref) => provider.resolve(ref),
+    close: () => provider.close(),
   });
 }
 
@@ -290,41 +221,11 @@ export function apply(ctx, rawConfig = {}) {
     );
   }
 
-  if (result.value.platformAdapter === 'security-cli' && result.value.allowUnvettedPlatformAdapter !== true) {
-    throw new KeychainProviderError(
-      'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
-      'platformAdapter=security-cli is a non-production spike adapter; set allowUnvettedPlatformAdapter=true only for local experiments',
-    );
+  const builtinBackend = result.value.backend === undefined;
+  if (!builtinBackend && result.value.allowEphemeral !== true) {
+    throw new KeychainProviderError('KEYCHAIN_EPHEMERAL_REFUSED', 'an injected test backend requires allowEphemeral=true');
   }
-  if (result.value.platformAdapter === 'native-keyring' && result.value.allowUnvettedPlatformAdapter !== true) {
-    throw new KeychainProviderError(
-      'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
-      'platformAdapter=native-keyring is an unvetted prototype; set allowUnvettedPlatformAdapter=true only for local experiments',
-    );
-  }
-  let backend;
-  try {
-    backend = result.value.backend
-      ?? (result.value.platformAdapter === 'security-cli'
-        ? createSecurityCliBackend({ service: result.value.service })
-        : result.value.platformAdapter === 'native-keyring'
-          ? createNativeKeyringBackend({
-            service: result.value.service,
-            enumeration: result.value.allowUnverifiedEnumeration === true ? 'find-credentials' : 'unsupported',
-          })
-          : result.value.filePath
-            ? (assertFileOutsideRepository(result.value.filePath), createFileBackend({ path: result.value.filePath }))
-            : resolvePlatformBackend({
-              service: result.value.service,
-              enumeration: result.value.allowUnverifiedEnumeration === true ? 'find-credentials' : 'unsupported',
-              ...(result.value.storeDirectory ? { storeDirectory: result.value.storeDirectory } : {}),
-            }));
-  } catch (error) {
-    // A backend that cannot be constructed is a mount failure, never a reason
-    // to try a different (plaintext) backend.
-    if (error instanceof KeychainBackendError) throw new KeychainProviderError(error.code, error.message);
-    throw error;
-  }
+  const backend = result.value.backend ?? createRegisteredBackend('sqlite', { directory: storeDirectory(result.value.storeDirectory) });
   if (backend.available === false) {
     throw new KeychainProviderError('KEYCHAIN_UNAVAILABLE', backend.reason ?? 'keychain backend is unavailable');
   }
@@ -332,18 +233,6 @@ export function apply(ctx, rawConfig = {}) {
     throw new KeychainProviderError(
       'KEYCHAIN_EPHEMERAL_REFUSED',
       'ephemeral backend requires allowEphemeral=true; no plaintext fallback is performed',
-    );
-  }
-  if (backend.unvetted === true && result.value.allowUnvettedPlatformAdapter !== true) {
-    throw new KeychainProviderError(
-      'KEYCHAIN_UNVETTED_ADAPTER_REFUSED',
-      'an unvetted platform adapter requires allowUnvettedPlatformAdapter=true; production must use a reviewed OS keychain adapter',
-    );
-  }
-  if (backend.requiresExplicitOptIn === true && result.value.allowInsecureFile !== true) {
-    throw new KeychainProviderError(
-      'KEYCHAIN_INSECURE_FILE_REFUSED',
-      'file backend requires allowInsecureFile=true; production must use an OS keychain or the macOS encrypted document backend',
     );
   }
   warnNonProduction(ctx, backend);
@@ -371,12 +260,11 @@ export function apply(ctx, rawConfig = {}) {
   // adapter bound to this exact provider instance. The trust object is a
   // separate host service, so a credentials impostor has to mount it too, and
   // it disappears together with the provider on unload.
-  let jointStore;
-  try {
-    jointStore = createJointStore(backend, namespacePrefixes(result.value));
-  } catch {
-    jointStore = undefined;
-  }
+  // Only the registered, built-in implementation is eligible for the trust
+  // service. An injected backend cannot grant itself trust by exposing methods.
+  const registeredCapabilities = builtinBackend ? capabilities('sqlite') : undefined;
+  const jointStore = registeredCapabilities?.crossProcessLock === true && registeredCapabilities?.jointAtomic === true
+    ? createJointStore(backend, namespacePrefixes(result.value)) : undefined;
   const trust = jointStore === undefined ? undefined : Object.freeze({
     verify: (candidate) => candidate === provider,
     adapter: () => jointStore,

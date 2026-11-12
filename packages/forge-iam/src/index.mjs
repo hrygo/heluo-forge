@@ -171,6 +171,9 @@ export function apply(ctx, rawConfig = {}) {
   let offManagedModels;
   let offAgentDefaultModel;
   let agentDefaultModelService;
+  const prepareBridge = () => {
+    if (!tornDown) void service.bridgeCapability().catch(() => {});
+  };
 
   ctx.effect(() => {
     disposeProvide = ctx.provide('iam', service);
@@ -246,11 +249,13 @@ export function apply(ctx, rawConfig = {}) {
       offCredentials = ctx.inject(['credentials'], (host) => {
         const binding = host.credentials;
         current.credentials = binding;
+        prepareBridge();
         return () => { if (current.credentials === binding) current.credentials = undefined; };
       });
       offAtomicStore = ctx.inject(['iam-atomic-store'], (host) => {
         const binding = host['iam-atomic-store'];
         current.atomicStore = binding;
+        prepareBridge();
         return () => { if (current.atomicStore === binding) current.atomicStore = undefined; };
       });
       offConnection = ctx.inject(['connection'], (host) => {
@@ -289,6 +294,7 @@ export function apply(ctx, rawConfig = {}) {
     return teardown;
   }, 'forge-iam');
 
+  prepareBridge();
   void service.hydrate().catch(() => {});
 
   // Returned for direct callers (tests, non-Cordis embeddings); Cordis owns

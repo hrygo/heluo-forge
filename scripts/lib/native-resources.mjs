@@ -26,9 +26,6 @@ import { join } from 'node:path';
 /** Archive-relative position of the record inside the shipping package. */
 export const NATIVE_CHECKSUMS = 'vendor/CHECKSUMS.json';
 
-/** This package requires a record even when the entire vendor directory is absent. */
-export const NATIVE_KEYCHAIN_PACKAGE = '@heluo/forge-credentials-keychain';
-
 /** Third-party license that must travel with every staged addon. */
 export const NATIVE_LICENSE = 'LICENSE.third-party.md';
 
@@ -36,9 +33,6 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 
 /** A recorded key is one directory plus one file name; nothing else. */
 const RECORDED = /^[^/\\]+\/[^/\\]+$/u;
-
-/** Findings that a `fetch-native-keyring.mjs` run can resolve. */
-const FETCHABLE = new Set(['missing', 'size', 'sha256', 'license', 'license-size', 'license-sha256']);
 
 const fail = (message) => {
   throw new Error(`native resources: ${message}`);
@@ -162,10 +156,6 @@ export function describeNativeFindings(findings) {
 }
 
 /** The staging command only helps when bytes or licenses are what is missing. */
-export function nativeFetchHint(findings) {
-  return findings.some((finding) => FETCHABLE.has(finding.kind)) ? ' Run node scripts/fetch-native-keyring.mjs, then build again.' : '';
-}
-
 /**
  * Build preflight: audit a package's own staging directory.
  *
@@ -183,7 +173,7 @@ export function auditStagedNativeResources({ dir, label, releaseFiles }) {
     // A `vendor/` directory without the record cannot be audited, and shipping it
     // would hand the terminal an unverifiable directory. Refuse instead of guessing.
     if (existsSync(join(dir, 'vendor'))) return [{ kind: 'vendor-only' }];
-    return label === NATIVE_KEYCHAIN_PACKAGE ? [{ kind: 'record-missing' }] : [];
+    return [];
   }
   // The record and the addons are only worth auditing when the build would
   // actually copy them: a record left out of `files` is invisible to the
@@ -224,9 +214,7 @@ export function auditPackagedNativeResources({ label, content, read, list }) {
  * This needs no addon bytes, so it runs in the offline CI. It catches what only
  * the release machine used to catch: a hand-edited record, a lock bump that
  * forgot the record, and a triple one document knows and the other does not.
- * Byte-level truth still belongs to `fetch-native-keyring.mjs --check`, which
- * hashes the staged files; this only proves the two documents describe the same
- * release.
+ * This only proves the two documents describe the same release.
  *
  * @param {{ record: unknown, lock: unknown, label?: string }} options
  * @returns {string[]} problems; empty means the documents agree

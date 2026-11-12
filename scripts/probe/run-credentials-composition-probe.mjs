@@ -91,7 +91,7 @@ evidence.env.dshVersion = (() => {
 /** Mount a keychain provider; `backend` decides availability. */
 const mountKeychain = (ctx, backend) => ctx.plugin(keychain, {
   backend,
-  allowEphemeral: backend.kind === 'memory',
+  allowEphemeral: true,
 }).await();
 
 /**
@@ -178,7 +178,8 @@ for (const localFirst of [true, false]) {
   //    still no plaintext file. This is the fail-closed promise of A.
   resetHome();
   {
-    const { ctx, error } = await compose({ localFirst, localEnabled: false, backend: keychain.createUnavailableBackend('probe: unavailable') });
+    const backend = { ...keychain.createMemoryBackend(), available: false, reason: 'probe: unavailable' };
+    const { ctx, error } = await compose({ localFirst, localEnabled: false, backend });
     record(`disabled-local/${order}-unavailable-backend-refuses-to-mount`, error !== undefined, { code: error?.code ?? null });
     record(`disabled-local/${order}-unavailable-backend-publishes-no-provider`, ctx.get('credentials') === undefined, { note: '挂载失败是预期；断言的是 local 没有接替' });
     record(`disabled-local/${order}-unavailable-backend-writes-nothing`, fileExists() === false);

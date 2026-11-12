@@ -1,10 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
+import { BRIDGE_REF } from './bridge.mjs';
 import { revokeAccessToken } from './oidc.mjs';
 import { grantIdentity, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
 
-const BRIDGE_REF = 'iam.bridge.capability';
+const BRIDGE_RECORD = 'heluo-iam/bridge-capability';
+const BRIDGE_VALUE_PATTERN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+const BRIDGE_SCOPE = Object.freeze({ recordKey: BRIDGE_RECORD, ref: BRIDGE_REF });
 
 /**
  * Sign-out: one flight, registered before any work runs so that a provider that
@@ -16,12 +19,14 @@ const BRIDGE_REF = 'iam.bridge.capability';
  */
 export function createSignOut(env) {
   const {
-    config, ctx, provider, grants, gateway, token, now, fetchImpl,
+    config, ctx, provider, grants, gateway, token, now, fetchImpl, getBridgeAtomicStore, verifyBridgeAtomicStore,
     bumpAuthEpoch, clearObservation, clearAttempt, invalidateConsumption,
   } = env;
 
   let signOutPromise = null;
   let signingOut = false;
+  let bridgePromise = null;
+  let bridgeProvider = null;
 
   async function signOut() {
     invalidateConsumption();
@@ -52,14 +57,15 @@ export function createSignOut(env) {
     const targetStore = provider.ensure();
     const targetCredentials = provider.storeCredentials;
     checkDisposed();
-    const unknownSignOut = () => {
+    const unknownSignOut = (remote) => {
       checkDisposed();
       ctx.lastGrant = null;
       grants.clearProfile();
       ctx.error = 'IAM_CREDENTIALS_CLEAR_FAILED';
       ctx.state = 'error';
       ctx.notify();
-      return { view: ctx.view(), logoutUrl: null, revocation: 'unknown' };
+      return { view: ctx.view(), logoutUrl: null, revocation: remote?.state === 'failed' ? 'failed' : 'unknown',
+        ...(remote?.code ? { revocationError: remote.code } : {}) };
     };
     try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
     if (targetStore) {
@@ -120,6 +126,9 @@ export function createSignOut(env) {
         });
         revocation = outcome.state;
         if (outcome.code) revocationError = outcome.code;
+        // A failed or unconfirmed remote operation cannot authorize the local
+        // completion; the durable pending grant prevents replay after restart.
+        if (outcome.state !== 'ok') throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', 'revocation was not confirmed');
       }
     };
     try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
@@ -134,7 +143,10 @@ export function createSignOut(env) {
       : { ok: false };
     checkDisposed();
     try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
-    if (!cleared.ok || !['cleared', 'absent'].includes(cleared.decision)) return unknownSignOut();
+    if (!cleared.ok || !['cleared', 'absent'].includes(cleared.decision)) {
+      return unknownSignOut(revocation === 'failed' || revocation === 'unknown'
+        ? { state: revocation, code: revocationError } : undefined);
+    }
     checkDisposed();
     // Sign-out keeps the gateway credential, but the summary must stop
     // claiming it matches the (now absent) session.
@@ -177,15 +189,87 @@ export function createSignOut(env) {
 
   async function bridgeCapability() {
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+    const store = provider.require();
     const credentials = provider.storeCredentials;
-    if (!credentials || typeof credentials.resolve !== 'function' || typeof credentials.set !== 'function') {
-      throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
-    }
-    const existing = await credentials.resolve(BRIDGE_REF);
-    if (typeof existing?.value === 'string' && existing.value.length > 0) return existing.value;
-    const secret = randomBytes(32).toString('base64url');
-    await credentials.set(BRIDGE_REF, secret);
-    return secret;
+    const unavailable = () => new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+    const checkCurrent = () => {
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      provider.assertAtomic(store, credentials);
+    };
+    const requireAdapter = () => {
+      checkCurrent();
+      let adapter;
+      let verified;
+      try {
+        adapter = getBridgeAtomicStore?.(credentials);
+        if (adapter && typeof adapter.then === 'function') { Promise.resolve(adapter).catch(() => {}); throw unavailable(); }
+        verified = verifyBridgeAtomicStore?.(credentials, adapter, BRIDGE_SCOPE);
+        if (verified && typeof verified.then === 'function') { Promise.resolve(verified).catch(() => {}); throw unavailable(); }
+      } catch { throw unavailable(); }
+      if (verified !== true || typeof adapter?.snapshot !== 'function' || typeof adapter?.compareAndSwap !== 'function') throw unavailable();
+      checkCurrent();
+      return adapter;
+    };
+    const inspect = (pair) => {
+      if (!pair || typeof pair !== 'object' || !Object.hasOwn(pair, 'record') || !Object.hasOwn(pair, 'value')) throw unavailable();
+      const { record, value } = pair;
+      if (value !== undefined && (typeof value !== 'string' || !BRIDGE_VALUE_PATTERN.test(value))) throw unavailable();
+      let stored;
+      if (record !== undefined) {
+        const payload = record?.payload;
+        if (record?.kind !== 'grant' || Object.keys(record).length !== 2
+          || !payload || typeof payload !== 'object' || Array.isArray(payload)
+          || Object.keys(payload).sort().join(',') !== 'type,value,version'
+          || payload.version !== 1 || payload.type !== 'heluo-iam-bridge-capability'
+          || typeof payload.value !== 'string' || !BRIDGE_VALUE_PATTERN.test(payload.value)) throw unavailable();
+        stored = payload.value;
+      }
+      if (stored !== undefined && value !== undefined && stored !== value) throw unavailable();
+      return { value: stored ?? value, complete: stored !== undefined && value !== undefined };
+    };
+    checkCurrent();
+    if (bridgePromise && bridgeProvider === credentials) return bridgePromise;
+    const flight = Promise.resolve().then(async () => {
+      const adapter = requireAdapter();
+      const snapshot = async () => {
+        let pair;
+        try { pair = await adapter.snapshot(BRIDGE_SCOPE); } catch { throw unavailable(); }
+        if (requireAdapter() !== adapter) throw unavailable();
+        try { return structuredClone(pair); } catch { throw unavailable(); }
+      };
+      const expected = await snapshot();
+      const state = inspect(expected);
+      if (state.complete) return state.value;
+      const value = state.value ?? randomBytes(32).toString('base64url');
+      const next = { record: { kind: 'grant', payload: { version: 1, type: 'heluo-iam-bridge-capability', value } }, value };
+      const requestedExpected = structuredClone(expected);
+      const requestedNext = structuredClone(next);
+      let calls = 0;
+      let permitted = false;
+      const guard = () => {
+        if (++calls !== 1 || requireAdapter() !== adapter
+          || !isDeepStrictEqual(requestedExpected, expected) || !isDeepStrictEqual(requestedNext, next)) throw unavailable();
+        permitted = true;
+        return true;
+      };
+      let receipt;
+      try { receipt = await adapter.compareAndSwap(BRIDGE_SCOPE, requestedExpected, requestedNext, guard); }
+      catch { throw unavailable(); }
+      if (requireAdapter() !== adapter) throw unavailable();
+      if (receipt?.ok === false && calls === 0) {
+        // A known comparison conflict permits one read, never another write.
+        const observed = inspect(await snapshot());
+        if (observed.complete) return observed.value;
+        throw unavailable();
+      }
+      if (receipt?.ok !== true || calls !== 1 || !permitted || !isDeepStrictEqual(receipt.snapshot, next)) throw unavailable();
+      return value;
+    }).finally(() => {
+      if (bridgePromise === flight) { bridgePromise = null; bridgeProvider = null; }
+    });
+    bridgeProvider = credentials;
+    bridgePromise = flight;
+    return flight;
   }
   return {
     signOut,

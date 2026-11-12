@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V1.27.1 |
+| 版本 | V1.28.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-10 |
+| 最后更新 | 2026-11-12 |
 | 门禁 | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | 模块状态 | 可用（设计阶段；实现与验证见设计索引 §2.2） |
 
@@ -32,7 +32,7 @@
 2. **三层准入解耦**：严格区分应用外壳展示、员工身份凭据和模型执行授权：
    - **外壳展示**：未登录不拦截 DSH 本地外壳与工作区启动；
    - **身份凭据**：企业 IAM 登录会话（存储于 `heluo-iam/session`）仅证明员工身份合法性与有效期；
-   - **模型执行凭证**：个人模型调用凭证（`ENTERPRISE_STATIC_KEY`）由统一模型网关控制台签发并录入，二者在物理存储与生命周期上彻底隔离；
+   - **模型执行凭证**：个人模型调用凭证（`ENTERPRISE_STATIC_KEY`）由统一模型网关控制台签发并录入，与 IAM 会话分记录加密、独立管理生命周期；
 3. **入口强鉴权与 Fail-Closed**：企业模型与工具调用必须在入口处校验当前身份与授权有效性；凭据失效或环境异常时严格遵循 Fail-Closed 原则拒绝调用，并向用户提供明确的重新认证指引。
 
 ### 1.2 规范约束与生产准入基线
@@ -51,7 +51,7 @@
 
 | 能力领域 | 规范设计基线 | 当前验证现状与实施边界 |
 |---|---|---|
-| **个人网关凭据** | 独立物理存储，绑定员工工号属主（ownerSubject），网关强校验属主匹配 | 现行原型支持钥匙串隔离存储与属主比对；端到端联调待网关环境验证 |
+| **个人网关凭据** | 与会话分别存储并加密，绑定员工工号属主（ownerSubject），网关强校验属主匹配 | 本地验证状态见设计索引 §2.2；端到端联调待网关环境验证 |
 | **会话刷新机制** | 锁外原子声明 pending、单飞请求、条件提交 complete，多进程防并发重放 | 双进程刷新用例与超时熔断已通过自动化验证；端到端网络时延待实机测试 |
 | **会话退出机制** | 单设备定向撤销访问令牌，保留个人长期 Key，如实记录撤销状态 | 本地清理与墓碑写入已闭环；端到端撤销端点联调待企业端点配合 |
 | **默认模型对齐** | 宿主默认模型失效时自动对齐企业默认模型，保护用户已有显式可用选择 | 运行时对齐与状态机流转已完全覆盖离线测试；待双端桌面集成实测 |
@@ -66,7 +66,7 @@
 - **标准授权码与 PKCE 强化**：基于系统默认浏览器完成授权码重定向交互，回调由本机 Loopback 端点（`/iam/callback`）处理；强制实施 PKCE S256 防御授权码拦截攻击；
 - **规范 OIDC 声明校验**：支持 OIDC Discovery 与显式端点配置；严格校验 `state`、`nonce`、`iss`、`aud`、JWT 签名（RS256/PS256/ES256）及有效期时钟容差；
 - **锁外安全刷新与防重放**：会话令牌写入宿主受保护凭据存储；通过“原子声明 pending → 锁外单次换票 → 条件提交 complete”协议防御并发刷新击穿与重放；
-- **双凭据物理隔离与感知**：账户面板与 4 屏向导明确区分员工身份与网关个人访问凭证，双准入就绪状态实时可视；
+- **双凭据生命周期隔离与感知**：账户面板与 4 屏向导明确区分员工身份与网关个人访问凭证，双准入就绪状态实时可视；
 - **确定性退出与单令牌撤销**：退出时显式调用撤销接口使当前访问令牌实时失效，清除本地凭据并写入逻辑墓碑，默认保留个人长期网关 Key；
 - **开箱即用默认模型自愈**：企业模型目录加载就绪后，自动将宿主已失效的默认模型对齐为企业首选模型，保障新对话立即可用。
 
@@ -89,7 +89,7 @@
 |---|---|---|
 | **REQ-01** | 核心支撑 | 授权码 + Loopback 回调；预注册 public 客户端；PKCE S256 强制校验；未登录或网关凭据缺失时阻断企业模型 |
 | **REQ-02** | 核心支撑 | 令牌原子轮换；多进程并发遵守 pending/complete 互斥协议；网络换票执行 5 秒硬超时界限 |
-| **REQ-05** | 核心支撑 | 严格物理隔离身份令牌与调用 Key；网关配额用尽不盲目重试，已提交请求不隐式重放 |
+| **REQ-05** | 核心支撑 | 身份令牌与调用 Key 独立管理；网关配额用尽不盲目重试，已提交请求不隐式重放 |
 | **REQ-17** | 核心支撑 | IAM 服务或凭据存储缺失时，企业调用严格执行 Fail-Closed 阻断，拒绝静默降级 |
 | **C1 / C4** | 安全约束 | 仅允许连通指定企业模型网关；不保留公网路由；日志及错误回显严禁泄露令牌、密钥或正文 |
 
@@ -165,17 +165,17 @@ flowchart TB
 
   subgraph Storage["3. 凭据安全与数据隔离层 (Security & Credential Storage)"]
     direction TB
-    subgraph Store_Partition["双模式凭据物理隔离"]
+    subgraph Store_Partition["双凭据独立记录与生命周期"]
       direction LR
       F_SessionStore["员工身份凭据存储<br/>(heluo-iam/session / 专有 Grant)"]
       F_GatewayStore["网关个人访问凭证独立存储<br/>(ENTERPRISE_STATIC_KEY 引用)"]
       F_MetaStore["网关凭据元数据与代际<br/>(heluo-iam/gateway-credential)"]
     end
-    subgraph Store_Atomic["事务一致性与系统钥匙串"]
+    subgraph Store_Atomic["事务一致性与凭据存储"]
       direction LR
       F_AtomicCheck["单记录原子信任门禁<br/>(verifyAtomicStore 强校验)"]
       F_GatewayCAS["双键联合 CAS 提交<br/>(GatewayAtomicStore 条件写入)"]
-      F_Keychain["凭据存储适配演进<br/>(Windows Credential Manager / Linux Secret Service / macOS 加密文档)"]
+      F_Keychain["本机凭据存储<br/>(SQLite 值级加密 / 文件 keyring)"]
     end
   end
 
@@ -209,7 +209,7 @@ flowchart TB
 | | 企业独占管控域 | 官方账号排他阻断、公网旁路封禁、组合失效自愈防御 | 落实 O3 企业独占登录原则；启动时强校验官方服务残留，发现违规立即 Fail-Closed 阻断 |
 | | 模型就绪协调域 | 模型准入纯逻辑门禁、宿主默认模型协调、就绪态跨模块透传 | 提供纯函数模型前提准入判定；在默认模型失效时安全对齐，绝不覆盖用户显式可用选择 |
 | **3. 凭据安全与数据层** | 双模式凭据存储隔离 | 身份凭据存储区（Session）、网关凭据独立存储区（Static Key）、网关元数据专区 | 身份令牌与网关凭据分区存储、互不覆盖：登出与刷新不清除长效凭据，凭据重置不影响 IAM 登录。路线 B 下令牌仅由 Host 传输层按需读取用于请求头组装，不新增视图字段 |
-| | 事务一致性与钥匙串 | 单记录原子信任门禁、双键联合 CAS 提交、OS Keychain 适配演进 | 确保凭据写盘具备原子互斥能力；网关 Key 与元数据通过 CAS 联合一致性提交；拒绝明文降级 |
+| | 事务一致性与凭据存储 | 单记录原子信任门禁、双键联合 CAS 提交、SQLite 值级加密 | 确保凭据写盘具备原子互斥能力；网关 Key 与元数据通过 CAS 联合一致性提交；拒绝明文降级 |
 | **4. 集成与基础设施层** | DSH 宿主环境 | Cordis 插件容器、Web Server 路由服务、Connection 安全守卫 | 依托 Cordis 声明生命周期所有权；通过宿主连接守卫拦截未授权跨域接口调用 |
 | | 外部交互实体 | 企业 IAM 服务端、UAG 模型网关控制台、系统默认浏览器 | 对接企业标准 IdP 完成授权码重定向；由用户自主签发个人令牌，保持职责清晰 |
 
@@ -283,7 +283,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 
 本节仅适用于未来另行批准的机密客户端场景；当前企业 public 登录及私版制作不依赖共享 secret 的来源或轮换。机密模式真实来源仍按隔离契约关闭。
 
-1. **凭据分发**：企业统一预注册機密客户端，Secret 经运维受控通道写入终端操作系统凭据库，禁止进入代码、配置文本、日志或环境变量；
+1. **凭据分发**：企业统一预注册机密客户端；真实 Secret 来源、持久方式与运维分发另行设计，当前仅验证隔离 synthetic source，禁止写入代码、配置文本、日志或环境变量；
 2. **服务端轮换窗口**：Secret 轮换保存后由服务端定时任务刷新至 Redis 集群（最迟两分钟生效）；在生效窗口期内仅旧 Secret 有效，刷新后仅新 Secret 有效，集群内不存在新旧并存交错；
 3. **轮换保护机制**：轮换窗口期内暂停发起新登录，保留后台自动刷新；遇到新密钥未生效时等待两分钟重试，不发起秒级重试风暴；
 4. **历史令牌保护**：Secret 轮换不导致已签发的访问令牌失效，现有访问令牌依自身有效期（最长 7200 秒）正常运行。
@@ -301,7 +301,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `clientId` | string | 空 | 是 | 企业预注册客户端唯一标识 |
 | `authMode` | string | `public` | 否 | 认证模式；支持 `public` 与 `confidential` |
 | `clientAuthMethod` | string | `none` | 否 | 客户端认证方法；`public` 必须为 `none`，`confidential` 支持 `client_secret_basic` / `post` |
-| `clientSecretRef` | string | 空 | 条件 | 机密客户端钥匙串选择器，必须精确对应受信任来源 |
+| `clientSecretRef` | string | 空 | 条件 | 机密客户端逻辑选择器，必须精确对应受信任来源；当前只用于隔离 synthetic source |
 | `discoveryUrl` | string | 空 | 条件 | OIDC Discovery 地址；与显式端点配置二选一 |
 | `issuer` | string | 空 | 条件 | 显式配置时必填，作为发行者 Pin 用于 ID Token 校验 |
 | `authorizationEndpoint` | string | 空 | 条件 | 显式授权请求端点 |
@@ -418,7 +418,7 @@ export interface IamView {
 | 核心事项 | 规范基准 | 边界约束与实现状态 |
 |---|---|---|
 | **Client 标识** | 全企业统一单一 `client_id` | 统一标识管理，不按端拆分 |
-| **Secret 托管** | 操作系统安全钥匙串受控存储 | 严禁明文入库；钥匙串不可用时 Fail-Closed |
+| **Secret 托管** | 真实来源与持久方式另行设计 | 当前仅有隔离 synthetic source；来源不可用时 Fail-Closed |
 | **轮换保障** | 服务端人工更新，双分钟缓存生效窗口 | 窗口期内暂停新登录，后台刷新平滑过渡 |
 | **令牌撤销** | 单令牌实时端点 `GET /idp/oauth2/revokeToken` | 撤销即时生效；刷新令牌服务端自然过期（7300s） |
 | **协议完整性** | 换票、刷新与撤销请求均携带合法凭证参数 | 强制 PKCE S256，密钥严格排除于错误堆栈之外 |
@@ -438,7 +438,8 @@ export interface IamView {
 #### 5.5.2 CLI 访问规范与退出码
 
 - **Host 在线通道**：通过读取环境变量 `HELUO_FORGE_IAM_URL` 与凭据库中的 `HELUO_IAM_BRIDGE_TOKEN` 能力值，向 Host 发起换票，共享 Host 刷新结果；
-- **离线直读通道**：在未配置 Host 地址时，直接通过钥匙串适配器读取未过期令牌，过期则明确阻断并引导启动桌面端重新认证；
+- **能力值初始化**：Host 使用受信联合存储在同一条件提交中初始化能力引用和加密内部记录 `heluo-iam/bridge-capability`；并发冲突只允许读取已完成的结果。两者不一致、提交结果未知或凭据绑定失效时拒绝，未知提交不自动重发；
+- **离线直读通道**：在未配置 Host 地址时，通过凭据包的只读入口读取未过期令牌，过期则明确阻断并引导启动桌面端重新认证；
 - **标准退出码**：`0`（成功）；`2`（未登录）；`3`（令牌过期）；`4`（后端存储不可用）；`64`（命令行用法错误）。
 
 #### 5.5.3 跨模块读取五大不变量
@@ -466,9 +467,9 @@ export interface IamView {
 
 ## 6. 凭据存储与安全隔离
 
-### 6.1 双模式凭据物理隔离模型
+### 6.1 双模式凭据隔离模型
 
-系统确立**员工身份凭据**与**模型调用凭据**在物理存储上的绝对隔离：
+员工身份凭据与模型调用凭据采用独立记录、独立用途和独立生命周期；新部署的记录可由同一本地 SQLite 库保存，每个值独立加密。此设计不提供按应用或物理介质隔离：
 
 ```text
 DSH 凭据存储 (ctx.credentials)
@@ -477,7 +478,7 @@ DSH 凭据存储 (ctx.credentials)
 │       └── [用途]: 仅供员工身份建立、会话轮换与生命周期绑定；不镜像模型 Key
 │
 ├── CredentialRef (ENTERPRISE_STATIC_KEY)
-│   └── value: "uag-..." (系统钥匙串存储引用)
+│   └── value: "uag-..." (值级加密的存储引用)
 │       └── [用途]: 仅供 UAG 模型网关鉴权；由用户独立录入，IAM 不签发、不轮换
 │
 └── GrantRecord (heluo-iam/gateway-credential)
@@ -497,14 +498,17 @@ DSH 凭据存储 (ctx.credentials)
 | **最小主体 Principal** | 内存结构体 `{ issuer, subject }` | 会话运行期 | 严禁向模型上下文注入真实姓名/工号等 PII 数据 |
 | **网关元数据** | `GrantRecord` (`heluo-iam/gateway-credential`)| 随个人访问凭证同步存在 | 换人登录检测属主不匹配时立即阻断网关调用 |
 
-### 6.3 存储后端与 OS Keychain 演进策略
+### 6.3 值级加密与存储后端
 
-1. **安全底线**：生产环境不得明文存储凭据。Windows 使用 Credential Manager，Linux 使用 Secret Service，macOS 使用应用层加密文档（AES-256-GCM、密钥 0600，见[凭据包说明](../../../packages/forge-credentials-keychain/README.md#macos-存储边界)）。macOS 不使用系统钥匙串：一期不提供 Developer ID 签名，钥匙串 ACL 绑定调用方身份，未签名构建与后台会话不可用。
-2. **Fail-Closed 约束**：当系统钥匙串服务不可用时，系统严格执行 Fail-Closed 阻断，严禁未经显式安全授权静默回退至不安全的未加密明文介质；
-3. **防并发篡改**：凭据读写与 CAS 联合提交必须具备跨进程互斥保护，防止崩溃或多进程并发导致的数据撕裂；
-4. **后端落地形态**：Windows x64/arm64、Linux x64 GNU、Linux arm64 GNU 使用固定版本的预编译 addon，以发布资源随 `@heluo/forge-credentials-keychain` 分发，按 `platform-arch` 以相对本包的绝对路径加载；terminal 不编译、不解析平台包，宿主制品保持自包含。macOS arm64/x64 不加载 addon，解析层直接进入应用层加密文档后端。未列入映射的平台返回不可用后端，加载器不提供任何明文分支；
-5. **平台持久性**：Windows 绑定未指定修饰符时按 `CRED_PERSIST_ENTERPRISE` 写入，域环境且启用漫游配置时凭据随用户配置文件漫游；绑定未暴露 `persistence`，本工程无法改写。是否接受这一默认值属业务决策：要求凭据只留本机的场景需要更换实现或申请上游参数，不能在本包内伪装成本地持久；
-6. **准入状态**：Windows 与 macOS 的凭据存储是应用层加密文档后端，同一文档内完成记录/引用联合提交，不经过 `unvetted` 开关；macOS 已在本机与远程 Apple Silicon Mac 的 SSH 会话中各 7/7 通过。四组合原生 addon 已随包分发但目标机尚未取证，保持 `unvetted` 拒绝默认挂载，枚举在取证前保持 `KEYCHAIN_LIST_UNSUPPORTED`、不返回空表。Linux 目标没有可用凭据后端，登录按 fail closed 关闭。
+新部署使用 SQLite 保存 `ref` 与 `record` 的独立密文信封，AES-256-GCM 以随机 IV 和 16 字节认证标签保护每个值。AAD 绑定格式版本、种类、完整存储键、明文属主列与 `kid`；更换位置或篡改属主导致认证失败。密钥文件与数据库同目录，目录和密钥文件在支持 POSIX 权限的平台分别为 `0700` 与 `0600`。这仅提供用户账户边界，同账户进程能读取密钥；Windows ACL 和目标系统行为须实机验证。
+
+`meta.active` 是建库后活动密钥的唯一真源。先将新密钥写入版本化 keyring，再原子切换活动 `kid`；旧密钥保留供已有密文读取。读取不重封、不创建密钥；未知密钥返回 `CRED_KEY_UNAVAILABLE`，密文认证或 AAD 不匹配统一返回 `CRED_DECRYPT_FAILED`。丢失密钥不可恢复。
+
+首次建库通过初始化标记协调并发写入；中断后无法确认完整性时保留原物并拒绝写入，已完整初始化的数据库和活动密钥通过校验后可继续使用。POSIX 平台在活动密钥切换前同步密钥文件和所在目录，同步失败时不切换；Windows 目录持久性待实证。
+
+只支持单机本地文件系统、同一 PID namespace 的协作进程。所有修改和轮换使用同一逻辑锁；数据库事务仅覆盖短暂的锁定、条件检查与提交，不跨异步 I/O。数据写入与逻辑锁删除在同一 `EXCLUSIVE` 事务内完成，读写争用采用有界异步等待。未提交操作已结束而释放锁受阻时，发布绑定 PID 和随机 token 的私有完成标记，由后续写事务复核后回收；否则仅在确认持锁进程不存在时回收，活动或未知操作不得接管。退出先持久化随机 `signOutOperation` pending，再撤销旧快照；只有撤销确认后才条件写入墓碑，失败、未知或崩溃均保留 pending 并拒绝旧令牌。并发新登录不会被迟到的退出删除。单记录原子门禁与网关联合原子门禁分别核验，任一未就绪均拒绝对应写入。
+
+旧存储格式不读取、不迁移；发现已有数据或无法判定时保留原物并拒绝初始化。三平台、Electron 宿主及企业 IAM/网关验证状态以[设计索引](../README.md#22-实现与验证入口)为准。
 
 ### 6.4 网关联合变更当前原型
 
@@ -583,7 +587,7 @@ sequenceDiagram
   Host-->>Transport: 返回极简完成 HTML (无敏感凭据)
   Transport-->>Browser: 200 OK 页面提示“登录成功，请返回客户端”
 
-  Note over Client, Store: 阶段四：前端感知就绪与录入网关个人凭据 (物理隔离)
+  Note over Client, Store: 阶段四：前端感知就绪与录入网关个人凭据 (独立记录)
   Client->>Transport: 轮询 GET /api/forge-iam/view (2 秒轮询调度)
   Transport->>Host: getView() / syncFromStore()
   Host-->>Client: 200 OK [state: ready, gatewayCredential.state: unconfigured]
@@ -670,7 +674,7 @@ flowchart TD
 系统运行时由 4 个相互解耦但通过条件强绑定的状态机协同构成：
 
 1. **SM1: 企业身份认证状态机（IAM Session）**：管理用户 OIDC 握手、令牌有效性与生命周期；
-2. **SM2: 网关静态凭据状态机（Gateway Credential）**：管理系统钥匙串中 `ENTERPRISE_STATIC_KEY` 的持有、录入与属主一致性；
+2. **SM2: 网关静态凭据状态机（Gateway Credential）**：管理凭据存储中 `ENTERPRISE_STATIC_KEY` 的持有、录入与属主一致性；
 3. **SM3: 企业模型准入与目录状态机（Managed Models & Catalog）**：管理网关模型发现、已启用模型集、首选默认模型推导与瞬态故障重试；
 4. **SM4: 宿主新会话默认模型状态机（Host Agent Default Model）**：管理 DSH 宿主层 `ctx.agentDefaultModel` 的落盘与当前会话绑定。
 
@@ -694,7 +698,7 @@ stateDiagram-v2
 
     state "2. 网关凭据状态机 (Gateway Credential)" as SM2 {
         [*] --> SM2_unconfigured: 初始无凭据
-        SM2_unconfigured --> SM2_configured: 钥匙串写入且属主匹配当前工号
+        SM2_unconfigured --> SM2_configured: 凭据写入且属主匹配当前工号
         SM2_configured --> SM2_mismatched: 换人登录 (属主不一致)
         SM2_configured --> SM2_invalid: 网关鉴权 401/403
         SM2_mismatched --> SM2_configured: 重新录入匹配凭据
@@ -772,7 +776,7 @@ flowchart TD
 | **SM1: IAM** | `authenticating` | 回调成功换票 | state 匹配、ID Token 验签通过 | `ready` | 写入 session 凭据；触发 SM3 准入评估 |
 | **SM1: IAM** | `ready` | 访问令牌超时 | 静默刷新失败且已过有效期 | `expired` | 不发模型请求；立即触发 SM3 执行 `clearCatalog()` 双清 |
 | **SM1: IAM** | `ready` | 用户点击退出 | 任意 | `signed-out` | 撤销访问令牌、写墓碑记录；内存双清，触发 SM3 清空目录 |
-| **SM2: GW** | `unconfigured` | 录入静态 Key | 格式合规且工号属主匹配 | `configured` | 写入平台钥匙串；触发 SM3 重新刷新 |
+| **SM2: GW** | `unconfigured` | 录入静态 Key | 格式合规且工号属主匹配 | `configured` | 写入凭据存储；触发 SM3 重新刷新 |
 | **SM2: GW** | `configured` | 换人登录检测 | 存储属主与当前 principal 不一致 | `mismatched-owner` | 阻断网关请求；禁止跨工号静默使用旧凭据 |
 | **SM3: 模型** | `unconfigured` | 轮询/事件感知 | `SM1===ready` 且 `SM2===configured` | `loading` | 发起网关 `/models` 发现；设置 10 秒超时硬上限 |
 | **SM3: 模型** | `loading` | 目录拉取成功 | 返回合法 JSON 模型数组 | `ready` | 首登选定第 1 个模型；串行化落盘；触发 SM4 模型对齐 |
@@ -913,7 +917,7 @@ flowchart TD
 |---|---|---|
 | **单元测试** | 状态机推演、PKCE/URL 生成、ID Token 验签、错误脱敏、配置校验、网关状态机、纯门禁表 | `node --test` |
 | **契约测试** | Discovery 解析、Token/Revocation 端点通信、`ENTERPRISE_STATIC_KEY` 引用读写、官方 row id 断言 | 契约自动化用例 |
-| **集成测试** | 令牌轮换、网络抖动、5xx/429、写盘故障、撤销失败、双进程并发、钥匙串 Fail-Closed、网关凭据录入/清除 | 本地 Mock OIDC + 双进程夹具 |
+| **集成测试** | 令牌轮换、网络抖动、5xx/429、写盘故障、撤销失败、双进程并发、存储不可用时 Fail-Closed、网关凭据录入/清除 | 本地 Mock OIDC + 双进程夹具 |
 | **负向测试** | 非法 `state`/`nonce`/`aud`/`iss`、`alg=none`、过期 ID Token、授权码重放、PKCE 降级；粘贴非法网关 Key | 脚本注入与异常断言 |
 | **端到端测试** | Windows、UOS、麒麟平台完成登录、刷新、退出、网关凭据配置与调用；首启 4 屏完成/跳过；官方入口隐藏验证 | 双端桌面环境手工 + 自动化探针 |
 | **组合测试** | 官方行禁用后 Shell/设置/引导可用性（当前为六个官方行加明文凭据行，见[企业组合包设计 §5.1](forge-enterprise.md#51-官方行默认禁用)）；环境变量 `DEEPSEEK_API_KEY` 旁路阻断实测 | 真实 DSH Profile 挂载夹具 |
@@ -955,7 +959,7 @@ flowchart TD
 
 - **工程标识**：`@heluo/forge-iam`，声明 `private: true`；
 - **构建边界**：Host 插件与 Client 插件独立构建，清单准确声明 `engines.dsh`；
-- **存储解耦**：系统钥匙串能力由独立模块 `@heluo/forge-credentials-keychain` 承载，解耦依赖与更新。
+- **存储解耦**：本机凭据存储由独立模块 `@heluo/forge-credentials-keychain` 承载，解耦依赖与更新。
 
 ### 11.2 升级策略
 
@@ -982,8 +986,8 @@ flowchart TD
 | 3 | public 客户端、PKCE S256 及回调注册企业实测 | IAM + 平台组 | 与历史厂商回函核对，按实际注册和响应验证；未证实不声明企业登录通过 |
 | 4 | 回调路由在复杂反向代理与 SSH 端口转发环境下的穿透性 | 平台组 | 评估复杂开发网络环境下的 Loopback 回调可用性 |
 | 5 | 禁用官方行后 Shell、设置与 Onboarding 完整性双端验证 | 平台组 | 验证 O3 独占方案在各宿主版本上的 GUI 稳定性 |
-| 6 | `@napi-rs/keyring` 在国产平台（UOS/麒麟）产物兼容性 | 平台组 | 决定生产环境能否完全替代明文 YAML 存储 |
-| 7 | 历史 0600 明文 YAML 文件安全迁移与擦除策略 | 安全团队 | 解决版本升级过程中的旧凭据物理残留风险 |
+| 6 | Node 24 内置 SQLite 在 Windows、麒麟与 Electron 宿主中的兼容性和耐久性 | 平台组 | 验证目标平台存储行为；本机离线测试不代表目标平台通过 |
+| 7 | 目标机发现旧凭据存储后的处置流程 | 平台组 | 旧存储保留且不读取、不迁移；处置须另行确认，不自动删除 |
 | 8 | UAG 个人凭据状态精确探测与深链自助申请集成 | 网关团队 | 优化凭据失效时的用户端自助引导体验 |
 | 9 | IAM 与 UAG 之间 SCIM 同步时效性（离职即时作废窗口） | 网关 + IAM | 评估员工离职后模型访问权的最大残留时间窗口 |
 | 10 | 撤销实现改造联调：`GET ?access_token=` 撤销端点企业环境验证 | 平台组 + IAM | 验证服务端撤销回执、错误码及脱敏一致性 |

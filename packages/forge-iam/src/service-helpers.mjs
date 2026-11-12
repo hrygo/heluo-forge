@@ -5,6 +5,8 @@ import { OidcError } from './oidc.mjs';
 import { StoreError } from './store.mjs';
 
 export const SAFE_MESSAGES = Object.freeze({
+  CRED_KEY_UNAVAILABLE: 'credential key is unavailable',
+  CRED_DECRYPT_FAILED: 'credential authentication failed',
   IAM_UNCONFIGURED: 'IAM configuration is incomplete',
   IAM_CLIENT_AUTH_CONTEXT_INVALID: 'IAM client authentication context is invalid',
   IAM_CLIENT_AUTH_UNVERIFIED: 'IAM client authentication is not verified',

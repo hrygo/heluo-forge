@@ -49,8 +49,8 @@ export function createServiceGateway(env) {
       deviceLabel: credential.deviceLabel ?? null,
       enteredAt: credential.enteredAt ?? null,
       suggestedExpiry: credential.suggestedExpiry ?? null,
-      // 'keychain' is the only source that keeps the value out of plaintext
-      // files; the account page warns for the dev/pilot fallbacks.
+      // The account page distinguishes OS keychain from other sources; a
+      // file-backed source does not imply that its contents are plaintext.
       storage: storage?.configured ? (storage.source ?? null) : null,
       matchesAccount,
     };

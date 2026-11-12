@@ -912,24 +912,30 @@ test('signOut reports an unconfirmed revocation instead of claiming success', as
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
+  let revocations = 0;
   const service = createIamService(configFor(mock), {
     credentials,
     fetch: async (url, init) => {
-      if (String(url).includes('/revoke')) return new Response('', { status: 500 });
+      if (String(url).includes('/revoke')) { revocations++; return new Response('', { status: 500 }); }
       return fetch(url, init);
     },
   });
   const { location } = await authorize(service);
   await service.handleCallback(location);
   const result = await service.signOut();
-  assert.equal(result.view.state, 'signed-out');
-  assert.equal(result.view.error, 'IAM_REVOCATION_UNKNOWN');
+  assert.equal(result.view.state, 'error');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
   assert.equal(result.revocation, 'unknown');
+  assert.equal(result.revocationError, 'IAM_REVOKE_HTTP_500');
   assert.equal(mock.revoked.size, 0);
-  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' } });
-  assert.equal((await createGrantStore(credentials).read()).grant, null);
-  const afterSync = await service.syncFromStore();
-  assert.equal(afterSync.error, 'IAM_REVOCATION_UNKNOWN');
+  const pending = await credentials.readRecord('heluo-iam/session');
+  assert.equal(pending.payload.signOutOperation.state, 'pending');
+  assert.deepEqual(await createGrantStore(credentials).read(), { ok: false, reason: 'sign-out-pending' });
+  await assert.rejects(service.resolveToken());
+  assert.notEqual((await service.syncFromStore()).state, 'ready');
+  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(revocations, 1);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
 });
 
 test('dispose releases runtime state without clearing the stored session', async (t) => {
@@ -1142,7 +1148,14 @@ test('a rejected access-token revocation stays failed and never echoes a token',
   const grant = (await credentials.readRecord('heluo-iam/session')).payload;
   const result = await service.signOut();
   assert.equal(result.revocation, 'failed');
-  assert.equal(result.view.error, 'IAM_REVOCATION_FAILED');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(result.view.state, 'error');
+  const pending = await credentials.readRecord('heluo-iam/session');
+  assert.equal(pending.payload.signOutOperation.state, 'pending');
+  await assert.rejects(service.resolveToken());
+  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(mock.counts.revokeAccess, 1);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes(grant.accessToken), false);
   assert.equal(serialized.includes(grant.refreshToken), false);
@@ -1153,10 +1166,11 @@ test('a revocation timeout stays unconfirmed instead of claiming success', async
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
+  let revocations = 0;
   const service = createIamService(configFor(mock), {
     credentials,
     fetch: async (url, init) => {
-      if (String(url).includes('/revoke')) throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+      if (String(url).includes('/revoke')) { revocations++; throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); }
       return fetch(url, init);
     },
   });
@@ -1164,7 +1178,14 @@ test('a revocation timeout stays unconfirmed instead of claiming success', async
   await service.handleCallback(location);
   const result = await service.signOut();
   assert.equal(result.revocation, 'unknown');
-  assert.equal(result.view.error, 'IAM_REVOCATION_UNKNOWN');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(result.view.state, 'error');
+  const pending = await credentials.readRecord('heluo-iam/session');
+  assert.equal(pending.payload.signOutOperation.state, 'pending');
+  await assert.rejects(service.resolveToken());
+  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(revocations, 1);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
   assert.equal(mock.counts.revokeAccess, 0);
   assert.equal(mock.counts.revokePost, 0);
 });

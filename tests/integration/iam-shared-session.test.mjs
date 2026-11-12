@@ -91,9 +91,10 @@ function tokenFetch({ tokenGate, revoked = new Set() } = {}) {
         token_type: 'Bearer', expires_in: 3600,
       });
     }
-    if (String(url).endsWith('/revoke')) {
-      revoked.add(new URLSearchParams(init.body).get('token'));
-      return new Response(null, { status: 204 });
+    if (new URL(String(url)).pathname.endsWith('/revoke')) {
+      assert.equal(init.method, 'GET');
+      revoked.add(new URL(String(url)).searchParams.get('access_token'));
+      return Response.json({ result: true });
     }
     throw new Error('unexpected synthetic IAM endpoint');
   };
@@ -160,9 +161,13 @@ test('a hydration racing a shared clear converges on the next sync', async (t) =
 
   const hydrating = service.hydrate();
   await waitForGate(gate.entered, hydrating, 'hydration read');
-  const signingOut = createIamService(configured, { credentials, fetch: tokenFetch(), verifyAtomicStore: actual => actual === credentials });
+  const revoked = new Set();
+  const signingOut = createIamService(configured, { credentials, fetch: tokenFetch({ revoked }), verifyAtomicStore: actual => actual === credentials });
   t.after(() => signingOut.dispose());
-  assert.equal((await signingOut.signOut()).view.state, 'signed-out');
+  const logout = await signingOut.signOut();
+  assert.equal(logout.view.state, 'signed-out');
+  assert.equal(logout.revocation, 'ok');
+  assert.deepEqual([...revoked], ['synthetic-old-access']);
   gate.release();
   await hydrating;
 

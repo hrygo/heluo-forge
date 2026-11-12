@@ -1,8 +1,8 @@
 # IAM 本地 mock 用户流程测试
 
-本指南在开发者本机启动一套隔离的 DSH，用模拟 IAM 与插件自己的加密文档后端走完登录、配置网关、模型对话和退出。它从当前 `HEAD` 打包企业插件，因此不包含未提交的修改，也不改动现有 DSH 配置或正在运行的验收环境。
+本指南描述在开发者本机启动隔离 DSH，使用模拟 IAM 验证登录、网关配置、模型对话和退出。脚本从当前 `HEAD` 打包企业插件，因此不包含未提交的修改，也不改动现有 DSH 配置或正在运行的验收环境。SQLite 新存储组合尚未按本指南在真实宿主复验。
 
-模拟 IAM 只用于本机测试，存储走的是正式组合那条路径：凭据插件按 `storeDirectory` 挂载应用层加密文档后端，IAM 从它提供的受信联合存储服务读取结论，联合提交、跨进程锁与 fail closed 都按生产语义运行。它仍不能证明真实企业身份、授权或撤销，`storeDirectory` 只用于隔离目录，生产部署保持默认位置。CLIProxyAPI 的上游调用可以是真实请求，可能产生费用。
+模拟 IAM 只用于本机测试，凭据插件按 `storeDirectory` 指向隔离的 SQLite 值级加密存储，IAM 通过组合注入的联合存储服务执行门禁。它不能证明真实企业身份、授权或撤销，`storeDirectory` 只用于隔离目录。CLIProxyAPI 的上游调用可以是真实请求，可能产生费用。
 
 回调按与真实 IAM 一致的前缀形态运行：插件自建回环监听，端口由系统分配，只在该次登录期间存在；IAM 管理台对 `http://127.0.0.1:` 前缀放行任意端口，本指南的 mock 走同一条路径。
 
@@ -77,20 +77,14 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 | 身份投影 | `sessionFromRecord()`（`auth whoami` 的数据源） | 同上 |
 | 访问令牌投影 | `accessTokenOf()`（`auth token` 的数据源） | 同上 |
 | 独立读取器重开 | 新建 provider 读取同一 store | 同上 |
-| Host 服务读取 | `ctx.iam.getSession()` / `getAccessToken()` | 6 个 `platform-arch` 全覆盖，store 由各平台后端提供 |
-| HTTP 身份 | `GET /api/forge-iam/session` | 同上，经真实路由处理 |
-| HTTP 令牌 | `POST /api/forge-iam/token` | 同上，含请求头门禁 |
-| CLI 端到端 | `heluo-forge auth whoami / token` | macOS 加密存储真机用例；Windows/Linux 由 CI 按真实平台覆盖 |
+| Host 服务读取 | `ctx.iam.getSession()` / `getAccessToken()` | 当前测试主机的 SQLite 与合成会话 |
+| HTTP 身份 | `GET /api/forge-iam/session` | 当前测试主机，经路由处理 |
+| HTTP 令牌 | `POST /api/forge-iam/token` | 当前测试主机，含请求头门禁 |
+| CLI 端到端 | `heluo-forge auth whoami / token` | 合成 SQLite 存储的独立进程读取 |
 
-矩阵用例：`node --test packages/forge-iam/test/read-paths-matrix.test.mjs`。CI 的 `native keychain (<平台对>)` 四腿在真实 runner 上复跑同一批读取路径与凭据后端用例（`linux-x64`、`linux-arm64`、`win32-x64`、`win32-arm64`），随后再驱动真实系统存储；每台先断言 `process.platform`/`process.arch`，再执行测试。macOS 不进 CI，由维护机（arm64 本机与 SSH）保障。CLI 的 macOS 端到端用例在 `packages/forge-iam/test/cli-session.test.mjs`（仅 darwin 运行）。
+矩阵用例：`node --test packages/forge-iam/test/read-paths-matrix.test.mjs`。每次运行只证明当前主机；各平台 CI 结果、目标机和 Electron 宿主须分别记录，不能用模拟的平台标识代替实机证据。
 
-平台交付形状：
-
-- Windows x64/arm64：应用层加密文档（`%LOCALAPPDATA%\HeluoForge`），与 macOS 同一条路径，不经过 `unvetted` 开关。
-- Linux x64/arm64：没有可用后端，按 fail closed 关闭；`@napi-rs/keyring` 2.1.2 原生 addon 随包分发但未取证，需显式选择才会用到（插件 `platformAdapter: native-keyring`，CLI `HELUO_FORGE_ALLOW_UNVETTED=1`）。
-- macOS arm64/x64：应用层加密文档（AES-256-GCM + 0600 密钥），不经过 `unvetted` 开关，SSH 会话可用。
-
-CLI 默认走 `createPlatformBackend()`，解析结果与插件一致；`HELUO_FORGE_CREDENTIALS_FILE` 仍是显式开发用明文覆盖，不用于生产。
+各平台使用同一 SQLite 后端，CLI 与插件共用存储目录解析；`HELUO_FORGE_STORE_DIRECTORY` 可为 CLI 指定隔离目录。当前已验证范围以[设计索引](../../../docs/design/README.md#22-实现与验证入口)为准。
 
 ## 自动验证与排障
 

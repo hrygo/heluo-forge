@@ -39,9 +39,11 @@ export function validateGrant(input) {
     // Read each own field once. Validation and output use the same private data,
     // including presence-only markers and V1's unknown extensions.
     const snapshot = Object.fromEntries(Reflect.ownKeys(input).map((key) => [key, input[key]]));
-    const marker = snapshot.refreshOperation;
-    if (marker && typeof marker === 'object' && !Array.isArray(marker)) {
-      snapshot.refreshOperation = Object.freeze(Object.fromEntries(Reflect.ownKeys(marker).map((key) => [key, marker[key]])));
+    for (const field of ['refreshOperation', 'signOutOperation']) {
+      const marker = snapshot[field];
+      if (marker && typeof marker === 'object' && !Array.isArray(marker)) {
+        snapshot[field] = Object.freeze(Object.fromEntries(Reflect.ownKeys(marker).map((key) => [key, marker[key]])));
+      }
     }
     return validateGrantFields(snapshot);
   } catch { return { ok: false, errors: ['grant fields are invalid'] }; }
@@ -59,7 +61,7 @@ function validateGrantFields(input) {
   } else if (input.version === GRANT_VERSION) {
     if (AUTH_MARKERS.some((key) => Object.hasOwn(input, key))) errors.push('grant V1 must not contain authentication markers');
   } else {
-    const allowed = ['version', ...REQUIRED_STRINGS, ...OPTIONAL_STRINGS, 'sessionInstanceId', 'refreshOperation', 'authContext'];
+    const allowed = ['version', ...REQUIRED_STRINGS, ...OPTIONAL_STRINGS, 'sessionInstanceId', 'refreshOperation', 'signOutOperation', 'authContext'];
     if (Reflect.ownKeys(input).some((key) => !allowed.includes(key))) errors.push('grant V2 contains unsupported fields');
     const context = input.authContext;
     const fields = ['mode', 'method', 'secretRef', 'secretRevision'];
@@ -108,6 +110,17 @@ function validateGrantFields(input) {
       || typeof operation.id !== 'string' || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(operation.id)
       || typeof operation.base !== 'string' || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(operation.base)) {
       errors.push('grant.refreshOperation is invalid');
+    }
+  }
+
+  if (Object.hasOwn(input, 'signOutOperation')) {
+    const operation = input.signOutOperation;
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)
+      || Reflect.ownKeys(operation).sort().join(',') !== 'id,state,version'
+      || operation.version !== 1 || operation.state !== 'pending'
+      || typeof operation.id !== 'string' || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(operation.id)
+      || input.refreshOperation?.state === 'pending') {
+      errors.push('grant.signOutOperation is invalid');
     }
   }
 

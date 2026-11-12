@@ -88,31 +88,6 @@ node scripts/probe/run-bundle-install-rehearsal.mjs
 接受并建出子会话；`currentInitiator()` 只在显式边界内可读。探针会把会话/存储根覆盖到本次临时目录
 （`session-persistence-jsonl` 与 `storage-json` 的 `root`），不在用户 `DSH_HOME` 下留下会话。
 
-## 旧 0600 迁移阻断探针（#107，离线）
-
-```sh
-node scripts/probe/run-keychain-migration-rehearsal.mjs
-```
-
-当前探针只创建临时合成文件，验证迁移入口不调用目标、读取器或删除器且不改变副本；
-探针退出 0 只表示阻断路径符合预期，实际迁移与目标平台验收仍为 BLOCKED，不访问系统钥匙串。
-旧版 2026-10-24 的真实钥匙串迁移演练是历史结果，不代表当前入口支持迁移。
-
-## 系统钥匙串 spike（#13 本地区块，仅 darwin）
-
-```sh
-node scripts/probe/run-keychain-spike.mjs
-```
-
-用 `@heluo/forge-credentials-keychain` 的 macOS Security CLI 适配器（非生产、需显式 opt-in）
-在真实系统钥匙串上跑 建/读/改/删、argv 传输拒绝、未命中语义、幂等删除、枚举拒绝与**无明文落盘**，
-结束时删除自己创建的测试条目并复核无残留。证据写临时目录的 `keychain-spike.json`（只有布尔与退出码）。
-`tests/keychain-spike.test.mjs` 在非 darwin 或 `DSH_KEYCHAIN_SPIKE=0` 时跳过。
-
-- 实测要点：未命中退出码 44；`add-generic-password -U` 覆盖同名条目；口令经 stdin 双次输入写入而不进 argv；
-  `list()` 报 `KEYCHAIN_LIST_UNSUPPORTED` 而不是返回空表。
-- **不代表生产**：Windows 凭据管理器与 UOS/麒麟 Secret Service 适配器、`@napi-rs/keyring` 产物仍待目标平台核验。
-
 ## Teamflow 证据探针（r13，只读）
 
 两件互不依赖的小事：九类场景矩阵的**夹具断言**与 journal 的**工作区归属**。两者都不调用模型、
@@ -154,29 +129,6 @@ node scripts/probe/check-teamflow-journal-roots.mjs --journal <journal.json> --r
 - 尚未覆盖：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 确切范围。
   这些在对应设计的未决事项里保留并注明截止门禁。
 - 探针插件只在探针 profile 内挂载，不写入任何用户 profile，也不改宿主代码。
-
-## 原生凭据存储探针（issue #182）
-
-```sh
-node scripts/probe/native-keyring-store-probe.mjs [--service <名>] [--package <目录>] [--platform] [--enumeration] [--json]
-```
-
-在目标机上直接对 OS 存储执行读、写、覆盖、跨进程读、删除与幂等删除，输出 JSON 供
-issue #182 归档。它不挂载 DSH profile、不联网、不打印存储值；探针键每次随机，跑完自行
-删除。`--enumeration` 通过 backend 枚举该探针前缀并报告命中数量。Windows 会先按 key
-前缀查找候选，再回读当前 service 的新目标；旧格式、其他 service 或无法核对的候选可能阻断枚举。
-
-重启后的持久性用三段式：首次 `--keep` 留下键并记录 `key`，重启后用
-`--key <该键> --expect-present` 复读，再用 `--key <该键> --cleanup` 清除。换一个 OS
-用户跑 `--expect-present` 应当是“读不到”（退出码 1），这正是隔离性的期望结果。
-
-只装了制品、没有仓库检出时，用 `--package` 指向安装目录里的包（如
-`.../node_modules/@heluo/forge-credentials-keychain`），探针与它的子进程都从该目录加载。
-
-`--platform` 改为使用宿主的平台后端，而不是 addon 映射：macOS 上即应用层加密文档后端
-（AES-256-GCM + 0600 密钥），因此 macOS 不要求签名、不要求图形会话，SSH 会话也能直接跑。
-不带 `--platform` 且宿主没有 addon 映射（macOS、未列入的平台）时以 `stage: environment`
-退出码 2 结束，这是预期行为。
 
 ## SSE 心跳与空闲看门狗（#203）
 

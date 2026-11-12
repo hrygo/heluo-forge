@@ -1,6 +1,6 @@
 import { isModelId, normalizeGatewayBaseURL } from './model-options.mjs';
 import { isDeepStrictEqual } from 'node:util';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
 
 const TOMBSTONE = Object.freeze({ kind: 'grant', payload: Object.freeze({ version: 1, type: 'heluo-iam-session-tombstone' }) });
@@ -84,6 +84,7 @@ export function createGrantStore(credentials, options = {}) {
     if (!parsed.ok) {
       return { ok: false, reason: 'invalid-grant', errors: parsed.errors };
     }
+    if (parsed.value.signOutOperation) return { ok: false, reason: 'sign-out-pending' };
     return { ok: true, grant: parsed.value };
   }
 
@@ -131,6 +132,7 @@ export function createGrantStore(credentials, options = {}) {
           if (!parsed.ok) {
             throw new StoreError('IAM_GRANT_INVALID', 'stored IAM grant is invalid', { errors: parsed.errors });
           }
+          if (parsed.value.signOutOperation) throw new StoreError('IAM_REAUTH_REQUIRED', 'sign-out is pending');
           grant = parsed.value;
         }
         const next = await mutator(grant);
@@ -157,40 +159,58 @@ export function createGrantStore(credentials, options = {}) {
     async signOutSnapshot(expected, beforeClear) {
       if (!atomicVerified() || typeof beforeClear !== 'function'
         || (expected !== null && !validateGrant(expected).ok)) return { ok: false };
-      let called = false;
       let decision;
-      let expectedResult;
+      let called = 0;
+      let pending;
+      let original;
+      let phaseResult;
+      let unchanged;
       try {
-        const result = await credentials.modifyRecord(key, async (current) => {
-          if (!atomicVerified()) throw new Error('atomic store no longer verified');
-          if (called) throw new Error('mutator called more than once');
-          called = true;
+        phaseResult = await credentials.modifyRecord(key, (current) => {
+          if (!atomicVerified() || ++called !== 1) throw new Error('atomic store no longer verified');
           if (current == null || isTombstone(current)) {
             decision = expected === null ? 'absent' : 'replaced';
-            expectedResult = current;
+            unchanged = structuredClone(current);
             return undefined;
           }
           if (current.kind !== 'grant') throw new Error('invalid record');
           const parsed = parseGrant(current.payload);
           if (!parsed.ok) throw new Error('invalid grant');
+          if (parsed.value.signOutOperation || parsed.value.refreshOperation?.state === 'pending') {
+            decision = 'pending';
+            unchanged = structuredClone(current);
+            return undefined;
+          }
           if (!isDeepStrictEqual(parsed.value, expected)) {
             decision = 'replaced';
-            expectedResult = current;
+            unchanged = structuredClone(current);
             return undefined;
           }
-          if (parsed.value.refreshOperation?.state === 'pending') {
-            decision = 'pending';
-            expectedResult = current;
-            return undefined;
-          }
-          await beforeClear(parsed.value);
-          if (!atomicVerified()) throw new Error('atomic store no longer verified');
-          decision = 'cleared';
-          expectedResult = TOMBSTONE;
+          original = structuredClone(parsed.value);
+          pending = { kind: 'grant', payload: { ...original, signOutOperation: {
+            version: 1, state: 'pending', id: randomBytes(32).toString('base64url'),
+          } } };
+          decision = 'claimed';
+          return pending;
+        });
+        if (!atomicVerified() || called !== 1 || !decision) return { ok: false };
+        if (decision !== 'claimed') return isDeepStrictEqual(phaseResult, unchanged)
+          ? { ok: true, decision } : { ok: false };
+        if (!isDeepStrictEqual(phaseResult, pending)) return { ok: false };
+        // The pending record is durable before any external side effect. A crash
+        // or unknown result leaves it fenced and cannot replay the old token.
+        await beforeClear(original);
+        if (!atomicVerified()) return { ok: false };
+        let finishCalls = 0;
+        let finished = false;
+        const result = await credentials.modifyRecord(key, (current) => {
+          if (!atomicVerified() || ++finishCalls !== 1) throw new Error('atomic store no longer verified');
+          if (!isDeepStrictEqual(current, pending)) return undefined;
+          finished = true;
           return { kind: 'grant', payload: { ...TOMBSTONE.payload } };
         });
-        return atomicVerified() && called && decision && isDeepStrictEqual(result, expectedResult)
-          ? { ok: true, decision } : { ok: false };
+        return atomicVerified() && finishCalls === 1 && finished && isDeepStrictEqual(result, TOMBSTONE)
+          ? { ok: true, decision: 'cleared' } : { ok: false };
       } catch {
         return { ok: false };
       }
@@ -215,7 +235,7 @@ export function createGrantStore(credentials, options = {}) {
           }
           if (current.kind !== 'grant') throw new Error('invalid record');
           const parsed = parseGrant(current.payload);
-          if (!parsed.ok || !parsed.value.sessionInstanceId) throw new Error('unattributable grant');
+          if (!parsed.ok || parsed.value.signOutOperation || !parsed.value.sessionInstanceId) throw new Error('unattributable grant');
           if (parsed.value.sessionInstanceId !== snapshot.sessionInstanceId) {
             decision = 'replaced';
             expectedResult = current;

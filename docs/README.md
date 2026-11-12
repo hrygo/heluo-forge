@@ -12,7 +12,7 @@
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-11 |
+| 最后更新 | 2026-11-12 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -100,7 +100,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 企业协作聊天方案 | [Agent 增强的企业聊天产品方案](requirements/enterprise-collaboration-chat-proposal.md) | 草案；单聊与群聊优先互通企业 IM，个人 Agent 提供私有总结；范围入基线与企业接口待确认 |
 | 云端专家智能体 PRD | [Forge 专家智能体产品需求文档](requirements/delegra-experts-prd.md) | 草案；在 DSH 中发现并 `@` 委派 Delegra 专家；范围、权限与接入待确认 |
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
-| 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | 文件 backend / OS keychain / 迁移与不可用时的 fail-closed 口径 |
+| 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | SQLite 值级加密、旧存储保留与不可用时的 fail-closed 口径 |
 | 客户端标识 | [DSH 客户端标识（UA）方案设计](<design/client-identification.md>) | 使用 DSH 默认 UA，网关按关键字匹配；不改写宿主 UA，匹配能力及企业链路待确认 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 

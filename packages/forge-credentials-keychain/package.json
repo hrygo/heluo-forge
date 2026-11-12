@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "OS keychain-backed credentials provider skeleton for Heluo Forge",
+  "description": "Encrypted SQLite credentials provider for Heluo Forge",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
@@ -17,7 +17,6 @@
   },
   "files": [
     "src",
-    "vendor",
     "README.md"
   ]
 }

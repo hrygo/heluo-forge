@@ -217,7 +217,7 @@ test('sign-out registers its promise before doing any work', () => {
   const returned = body.lastIndexOf('return signOutPromise');
   assert.ok(registered > 0 && returned > registered, 'the flight must be registered before it is returned');
   // Unknown cleanup must never be reported as a clean exit.
-  assert.match(signout, /revocation: 'unknown'/);
+  assert.match(signout, /revocation:\s*remote\?\.state\s*===\s*'failed'\s*\?\s*'failed'\s*:\s*'unknown'/);
 });
 
 // U13: service.mjs is an assembly point, not a place where session work happens.

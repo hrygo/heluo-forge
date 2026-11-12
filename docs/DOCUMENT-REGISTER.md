@@ -21,13 +21,13 @@
 |---|---|---|---|---|---|---|
 | CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.72.3 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.42.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.39.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.40.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
-| CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V1.0.1 | 评审稿 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.27.1 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
+| CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V1.0.2 | 评审稿 | 平台组（代拟） | G1 |
+| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V1.28.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.7.1 | 草案 | 平台组（代拟） | G2 |
-| CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V1.0.1 | 评审稿 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V1.0.2 | 评审稿 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-007 | 企业插件市场（轻量原生索引模式） | [design/plugins/forge-market.md](<design/plugins/forge-market.md>) | V2.2.3 | 评审稿 | 平台组（代拟） | G1 索引接入；G2 三目标安装 |
 | CORP-DSH-DESIGN-008 | SDD 兼容与退役设计 | [design/plugins/forge-sdd.md](<design/plugins/forge-sdd.md>) | V0.7.0 | 已废止 | 平台组（代拟） | 已退役：包删除，企业依赖与 bin 移除；无在库交付 |
@@ -47,13 +47,13 @@
 | CORP-DSH-CLI-002 | Gitee CLI（gh）接口规格（1.0.6） | [contracts/gh-cli-spec.md](<contracts/gh-cli-spec.md>) | V0.1.0 | 草案 | 平台组（代拟） | G1 接口事实 |
 | CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.3.2 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
 | CORP-DSH-METRICS-001 | 研发观察事件与上报契约 | [contracts/metrics-events.md](<contracts/metrics-events.md>) | V0.2.4 | 草案 | 平台组（代拟） | G2；指标导出启用前冻结 |
-| CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V3.2.6 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V3.2.8 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | AI 网关个人凭证（静态 Key）接入 | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | 历史依据；当前目标见 ADR-16 |
 | CORP-DSH-ARCH-003 | 企业插件市场调研与落地建议 | [architecture/plugin-market-research.md](<architecture/plugin-market-research.md>) | V0.3.1 | 草案 | 平台组（代拟） | 历史取证保留；来源与控制面建议由 ADR-11/13 替代 |
 | CORP-DSH-ARCH-004 | 插件市场决策：企业 Artifactory + AIHUB 原生索引 | [architecture/plugin-registry-source-decision.md](<architecture/plugin-registry-source-decision.md>) | V2.0.1 | 评审稿 | 平台组（代拟） | 正式技术方案；G1 接入与发行基线核验，G2 安装开放验证 |
-| CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [architecture/gateway-identity-review.md](architecture/gateway-identity-review.md) | V1.2.0 | 评审稿 | 平台组（代拟） | G0 认领与路线评估；G1 契约；G2 联调与安全准入 |
+| CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [architecture/gateway-identity-review.md](architecture/gateway-identity-review.md) | V1.3.0 | 评审稿 | 平台组（代拟） | G0 认领与路线评估；G1 契约；G2 联调与安全准入 |
 | CORP-DSH-ARCH-006 | 公版插件、企业私有包与官方 DSH 轻量集成方案 | [architecture/public-enterprise-bundle.md](<architecture/public-enterprise-bundle.md>) | V0.5.7 | 草案 | 平台组（代拟） | 启动器自动准备宿主/web profile；制作器自动校验 IAM Discovery；dsh 0.2.1-rc.5 拒绝 CLI 管理 Desktop profile 已实测；企业 IAM/宿主目标平台待实测 |
-| CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V4.2.4 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V4.3.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-PLAN-002 | 插件市场 P0 接入取证单 | [plans/market-p0-verification.md](<plans/market-p0-verification.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-PLAN-003 | 已关闭任务修复验收台账 | [plans/fix-acceptance-ledger.md](<plans/fix-acceptance-ledger.md>) | V0.1.0 | 草案（代拟，待负责人确认） | 平台组（代拟） | — |
 | CORP-DSH-PLAN-004 | IAM 网关联合变更实施计划 | [plans/2026-11-02-iam-gateway-atomic.md](<plans/2026-11-02-iam-gateway-atomic.md>) | V0.1.1 | 草案 | 平台组（代拟） | 本地模拟验收；不授予生产能力 |
@@ -69,9 +69,10 @@
 | CORP-DSH-PLAN-014 | forge-iam 结构整改实施计划 | [plans/2026-11-05-forge-iam-structure.md](<plans/2026-11-05-forge-iam-structure.md>) | V0.22.0 | 草案 | 平台组（代拟） | 待评审 |
 | CORP-DSH-PLAN-015 | DevOps 插件阶段总结与交接 | [plans/2026-11-04-devops-plugin-stage-handoff.md](<plans/2026-11-04-devops-plugin-stage-handoff.md>) | V0.1.1 | 草案 | 平台组（代拟） | 只读面已对真实 dop 平台跑通、写回仅一次同值 no-op；Gitee 侧与企业 CLI 未联调，全部 NOT RUN |
 | CORP-DSH-PLAN-016 | 企业包原生 addon 缺失修复实施计划 | [plans/2026-11-09-enterprise-bundle-native-addon.md](<plans/2026-11-09-enterprise-bundle-native-addon.md>) | V0.2.1 | 草案 | 平台组（代拟） | 构建期前置与产物期字节校验已实现并本机实测（含变异证明）；目标机实机取证仍按 #182 另行关闭 |
-| CORP-DSH-PLAN-017 | 凭据存储整洁架构实施方案 | [plans/2026-11-12-credential-storage-clean-arch.md](<plans/2026-11-12-credential-storage-clean-arch.md>) | V0.1.0 | 草案 | 平台组（代拟） | 方案待评审；不改写现有实现状态，SQLite 与值级加密均未实施 |
+| CORP-DSH-PLAN-017 | 凭据存储整洁架构实施方案 | [plans/2026-11-12-credential-storage-clean-arch.md](<plans/2026-11-12-credential-storage-clean-arch.md>) | V0.1.0 | 草案 | 平台组（代拟） | 方案背景与设计评审；不授予生产能力 |
+| CORP-DSH-PLAN-017A | 凭据存储整洁架构执行细案 | [plans/2026-11-12-credential-storage-execution.md](<plans/2026-11-12-credential-storage-execution.md>) | V0.1.0 | 草案 | 平台组（代拟） | 当前源码与本机离线验证；企业环境和目标宿主另行取证 |
 | CORP-DSH-PLAN-018 | IAM 调用失败自愈与错误码恢复方案 | [plans/2026-11-12-iam-call-failure-recovery.md](<plans/2026-11-12-iam-call-failure-recovery.md>) | V0.1.0 | 草案 | 平台组（代拟） | 方案待评审；以 PR #253 为基线，不改写现有实现状态 |
-| CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.0.3 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.1.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.1 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |
 | CORP-DSH-REQ-003 | Agent 增强的企业聊天产品方案 | [requirements/enterprise-collaboration-chat-proposal.md](<requirements/enterprise-collaboration-chat-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 需求基线同步、接入可行性与详细设计；企业实机验证后试点 |
 | CORP-DSH-REQ-004 | Forge 专家智能体产品需求文档 | [requirements/delegra-experts-prd.md](<requirements/delegra-experts-prd.md>) | V0.8.1 | 草案 | Agent（代拟） | 产品取舍与范围确认；宿主、Delegra 和企业接入验收 |
@@ -91,7 +92,7 @@
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | — | 待启动 | PMO | G2 |
 | CORP-DSH-UAT-001 | 企业插件内网验收交接说明 | [operations/enterprise-uat-2026-11/README.md](<operations/enterprise-uat-2026-11/README.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
 | CORP-DSH-UAT-002 | 企业插件安装与启动 | [operations/enterprise-uat-2026-11/安装与启动.md](<operations/enterprise-uat-2026-11/安装与启动.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
-| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.2 | 草案 | 平台组（代拟） | 实机验收 |
+| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.3 | 草案 | 平台组（代拟） | 实机验收 |
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | — | 待启动 | IAM 团队 | G0 方向及 P0 联调；G1 接入契约；G2 生产运行流程 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | — | 待启动 | 安全 + 平台组 | G2 |
 | CORP-DSH-DEVOPS-001 | DevOps 接入 | 待创建 | — | 待启动 | DevOps 团队 | G1 查询契约；G2 受控写批准/验证与运行参数，未准入不开放 |

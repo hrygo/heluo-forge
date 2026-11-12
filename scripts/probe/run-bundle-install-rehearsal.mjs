@@ -251,17 +251,14 @@ try {
   evidence.env.targetVerified = toolsManifest.version === evidence.env.targetVersion;
   evidence.env.targetStatus = evidence.env.targetVerified ? 'tested' : 'NOT RUN: installed SDK differs from target baseline';
   record('dsh-available', true, evidence.env);
-  // This rehearsal proves install/upgrade/uninstall/composition, not native
-  // backends. A clean checkout has no staged addons (they never enter Git), so
-  // the rehearsal builds structurally and says so: the release gate lives in the
-  // default build path and the artifact gate in verify-enterprise-bundle.
-  const first = buildEnterpriseBundle({ destination: join(dir, 'pack-v1'), requireNativeResources: false });
+  // This rehearsal checks composition with synthetic credentials, not production storage.
+  const first = buildEnterpriseBundle({ destination: join(dir, 'pack-v1') });
   evidence.artifact = {
     sha256: sha256(first.tarball),
     members: first.members,
     files: first.packed.length,
     version: first.manifest.version,
-    nativeResources: 'not verified (structural rehearsal build; not a release artifact)',
+    storage: 'synthetic fixture; production storage not verified',
   };
   npm(['install', first.tarball]);
   const installed = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8'));
@@ -296,7 +293,7 @@ try {
     { policyRows: rowCount('heluo-policy'), actions, devopsRows: rowCount('forge-devops'), giteeRows: rowCount('heluo-gitee') },
   );
   await activateInstalled('install', host);
-  const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1', requireNativeResources: false });
+  const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });
   npm(['install', upgraded.tarball]);
   await activateInstalled('upgrade', host);
   record('upgrade-to-0.1.1-keeps-composition-and-workspace', JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).version === '0.1.1' && intact());

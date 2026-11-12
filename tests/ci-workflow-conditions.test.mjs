@@ -6,25 +6,25 @@ const workflow = readFileSync(new URL('../.github/workflows/check.yml', import.m
 
 // These names are also the individual check contexts used by branch protection.
 const platforms = new Map([
-  ['native-linux-x64', ['native keychain (linux-x64)', 'ubuntu-24.04', 'native']],
-  ['native-linux-arm64', ['native keychain (linux-arm64)', 'ubuntu-24.04-arm', 'native']],
-  ['native-win32-x64', ['native keychain (win32-x64)', 'windows-2022', 'native']],
-  ['native-win32-arm64', ['native keychain (win32-arm64)', 'windows-11-arm', 'native']],
-  ['native-linux-x64-next', ['native keychain (linux-x64, ubuntu-26.04)', 'ubuntu-26.04', 'native']],
-  ['native-win32-x64-next', ['native keychain (win32-x64, windows-2025)', 'windows-2025', 'native']],
-  ['document-macos-15', ['document backend (macos-15)', 'macos-15', 'document']],
-  ['document-macos-15-intel', ['document backend (macos-15-intel)', 'macos-15-intel', 'document']],
+  ['native-linux-x64', ['native keychain (linux-x64)', 'ubuntu-24.04', 'sqlite']],
+  ['native-linux-arm64', ['native keychain (linux-arm64)', 'ubuntu-24.04-arm', 'sqlite']],
+  ['native-win32-x64', ['native keychain (win32-x64)', 'windows-2022', 'sqlite']],
+  ['native-win32-arm64', ['native keychain (win32-arm64)', 'windows-11-arm', 'sqlite']],
+  ['native-linux-x64-next', ['native keychain (linux-x64, ubuntu-26.04)', 'ubuntu-26.04', 'sqlite']],
+  ['native-win32-x64-next', ['native keychain (win32-x64, windows-2025)', 'windows-2025', 'sqlite']],
+  ['document-macos-15', ['document backend (macos-15)', 'macos-15', 'sqlite']],
+  ['document-macos-15-intel', ['document backend (macos-15-intel)', 'macos-15-intel', 'sqlite']],
   ['sensitive-scan', ['sensitive scan (win32-x64)', 'windows-2022', 'sensitive']],
   ['forge-iam-callback', ['iam callback (win32-x64)', 'windows-2022', 'callback']],
 ]);
 
 const platformEnvironment = new Map([
-  ['native-linux-x64', { NAME: 'linux-x64', PLATFORM: 'linux', ARCH: 'x64', STORE: 'secret-service' }],
-  ['native-linux-arm64', { NAME: 'linux-arm64', PLATFORM: 'linux', ARCH: 'arm64', STORE: 'secret-service' }],
-  ['native-win32-x64', { NAME: 'win32-x64', PLATFORM: 'win32', ARCH: 'x64', STORE: 'credential-manager' }],
-  ['native-win32-arm64', { NAME: 'win32-arm64', PLATFORM: 'win32', ARCH: 'arm64', STORE: 'credential-manager' }],
-  ['native-linux-x64-next', { NAME: 'linux-x64, ubuntu-26.04', PLATFORM: 'linux', ARCH: 'x64', STORE: 'secret-service' }],
-  ['native-win32-x64-next', { NAME: 'win32-x64, windows-2025', PLATFORM: 'win32', ARCH: 'x64', STORE: 'credential-manager' }],
+  ['native-linux-x64', { NAME: 'linux-x64', PLATFORM: 'linux', ARCH: 'x64' }],
+  ['native-linux-arm64', { NAME: 'linux-arm64', PLATFORM: 'linux', ARCH: 'arm64' }],
+  ['native-win32-x64', { NAME: 'win32-x64', PLATFORM: 'win32', ARCH: 'x64' }],
+  ['native-win32-arm64', { NAME: 'win32-arm64', PLATFORM: 'win32', ARCH: 'arm64' }],
+  ['native-linux-x64-next', { NAME: 'linux-x64, ubuntu-26.04', PLATFORM: 'linux', ARCH: 'x64' }],
+  ['native-win32-x64-next', { NAME: 'win32-x64, windows-2025', PLATFORM: 'win32', ARCH: 'x64' }],
   ['document-macos-15', { PLATFORM: 'darwin', ARCH: 'arm64' }],
   ['document-macos-15-intel', { PLATFORM: 'darwin', ARCH: 'x64' }],
 ]);
@@ -328,35 +328,19 @@ export function workflowProblems(source) {
     } catch (error) { errors.push(`${id}: unsafe job condition: ${error.message}`); }
     const steps = stepsOf(source, job);
     const required = {
-      native: 'node scripts/probe/native-keyring-store-probe.mjs',
-      document: 'node scripts/probe/native-keyring-store-probe.mjs',
+      sqlite: 'node --test packages/forge-credentials-keychain/test/*.test.mjs',
       sensitive: 'node --test tests/sensitive-scan.test.mjs',
       callback: 'node --test packages/forge-iam/test/callback-port.test.mjs',
     }[kind];
-    if (!steps.includes(required)) errors.push(`${id}: platform steps are missing or their alias cannot be resolved`);
     const blocks = stepBlocks(steps);
-    if (kind === 'native' || kind === 'document') {
-      const label = kind === 'native' ? 'Drive the addon against the OS store' : 'Drive the encrypted document backend';
-      const probes = blocks.filter((step) => step.startsWith(`      - name: ${label}\n`));
-      if (probes.length !== 1 || stepField(probes[0], 'if') !== undefined
-        || !probes[0].includes(required) || !/r\.ok\s*!==\s*true/u.test(probes[0])) {
-        errors.push(`${id}: real ${kind} probe must run unconditionally and fail when the probe fails`);
-      }
+    const tests = blocks.filter((step) => step.includes(required));
+    if (tests.length !== 1 || stepField(tests[0], 'if') !== undefined) errors.push(`${id}: platform tests must run unconditionally`);
+    if (kind === 'sqlite' && !steps.includes('packages/forge-iam/test/read-paths-matrix.test.mjs')) errors.push(`${id}: IAM read paths must be covered`);
+    if (kind === 'sqlite') {
+      const install = blocks.filter((step) => step.startsWith('      - name: Install the artifact offline\n'));
+      if (install.length !== 1 || stepField(install[0], 'if') !== undefined || !install[0].includes('node scripts/probe/installed-credential-smoke.mjs')) errors.push(`${id}: installed SQLite smoke must run unconditionally`);
     }
-    if (kind === 'native') {
-      const noStore = blocks.filter((step) => step.startsWith('      - name: Refuse a store that is not there\n'));
-      try {
-        const condition = expressionBody(stepField(noStore[0], 'if'));
-        const matches = expressionValue(condition, { name: jobEnvironment(job, 'NAME') });
-        if (noStore.length !== 1 || !noStore[0].includes('probe-nostore.json') || matches !== (id === 'native-linux-x64')) {
-          errors.push(`${id}: no-store refusal must run only on native-linux-x64`);
-        }
-      } catch { errors.push(`${id}: no-store refusal must run only on native-linux-x64`); }
-    }
-    if (kind === 'sensitive' || kind === 'callback') {
-      const tests = blocks.filter((step) => step.includes(required));
-      if (tests.length !== 1 || stepField(tests[0], 'if') !== undefined) errors.push(`${id}: platform tests must run unconditionally`);
-    }
+
   }
   return errors;
 }
@@ -392,14 +376,12 @@ test('workflow guards reject deleted gates, inverted conditions and missing clas
     ['platform condition', replaceJob(workflow, 'native-win32-x64', (job) => job.replace(/^    if:.*$/mu, "    if: ${{ !cancelled() && needs.changes.outputs.run_platforms == 'false' }}")), /native-win32-x64: unsafe condition/u],
     ['platform OS', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_PLATFORM: linux', 'FORGE_CI_PLATFORM: darwin')), /native-linux-arm64: FORGE_CI_PLATFORM/u],
     ['platform arch', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_ARCH: arm64', 'FORGE_CI_ARCH: x64')), /native-linux-arm64: FORGE_CI_ARCH/u],
-    ['platform store', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_STORE: secret-service', 'FORGE_CI_STORE: credential-manager')), /native-linux-arm64: FORGE_CI_STORE/u],
     ['platform name', replaceJob(workflow, 'native-linux-arm64', (job) => job.replace('FORGE_CI_NAME: linux-arm64', 'FORGE_CI_NAME: linux-x64')), /native-linux-arm64: FORGE_CI_NAME/u],
     ['document arch', replaceJob(workflow, 'document-macos-15-intel', (job) => job.replace('FORGE_CI_ARCH: x64', 'FORGE_CI_ARCH: arm64')), /document-macos-15-intel: FORGE_CI_ARCH/u],
-    ['native probe skipped', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('      - name: Drive the addon against the OS store\n', '      - name: Drive the addon against the OS store\n        if: ${{ false }}\n')), /native-linux-x64: real native probe must run unconditionally/u],
-    ['document probe skipped', replaceJob(workflow, 'document-macos-15', (job) => job.replace('      - name: Drive the encrypted document backend\n', '      - name: Drive the encrypted document backend\n        if: ${{ false }}\n')), /document-macos-15: real document probe must run unconditionally/u],
+    ['installed SQLite smoke removed', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('node scripts/probe/installed-credential-smoke.mjs', 'node missing.mjs')), /native-linux-x64: installed SQLite smoke must run unconditionally/u],
+    ['sqlite tests skipped', replaceJob(workflow, 'native-linux-x64', (job) => job.replace('      - name: Run credential backend tests\n', '      - name: Run credential backend tests\n        if: ${{ false }}\n')), /native-linux-x64: platform tests must run unconditionally/u],
     ['Windows scan skipped', replaceJob(workflow, 'sensitive-scan', (job) => job.replace('      - name: Run portable sensitive-scan tests\n', '      - name: Run portable sensitive-scan tests\n        if: ${{ false }}\n')), /sensitive-scan: platform tests must run unconditionally/u],
     ['Windows callback skipped', replaceJob(workflow, 'forge-iam-callback', (job) => job.replace('      - name: Run loopback callback tests\n', '      - name: Run loopback callback tests\n        if: ${{ false }}\n')), /forge-iam-callback: platform tests must run unconditionally/u],
-    ['no-store refusal misrouted', replaceJob(workflow, 'native-linux-x64', (job) => job.replace("if: env.FORGE_CI_NAME == 'linux-x64'", "if: env.FORGE_CI_NAME != 'linux-x64'")), /native-linux-x64: no-store refusal must run only/u],
     ['verify skipped on failure', replaceJob(workflow, 'verify', (job) => job.replace(/^    if:.*$/mu, "    if: ${{ !cancelled() && needs.changes.result == 'success' }}")), /verify: must run after changes failure/u],
     ['verify guard exit', replaceJob(workflow, 'verify', (job) => job.replace(/^([ \t]+)exit 1$/mu, '$1echo skipped')), /verify: classification guard must exit 1/u],
     ['verify guard inversion', replaceJob(workflow, 'verify', (job) => job.replace('"$CLASSIFICATION_RESULT" !=', '"$CLASSIFICATION_RESULT" ==')), /verify: classification guard is unsafe/u],

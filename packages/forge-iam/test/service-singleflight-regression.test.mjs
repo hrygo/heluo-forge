@@ -84,8 +84,13 @@ for (const shouldFail of [false, true]) {
     assert.equal(a.view.error, shouldFail ? 'IAM_CREDENTIALS_CLEAR_FAILED' : null);
     if (shouldFail) {
       credentials.modifyRecord = original;
+      const pending = await credentials.readRecord('heluo-iam/session');
+      assert.equal(pending.payload.signOutOperation.state, 'pending');
+      await assert.rejects(service.resolveToken());
       const retry = await service.signOut();
-      assert.equal(retry.view.error, null);
+      assert.equal(retry.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+      assert.equal(writes, 1);
+      assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
     }
   });
 }

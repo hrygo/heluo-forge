@@ -9,7 +9,7 @@ import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
 import { auditReleaseClosure, auditTarball, execNpm, parsePackOutput } from './lib/bundle-rules.mjs';
-import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS, nativeFetchHint } from './lib/native-resources.mjs';
+import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS } from './lib/native-resources.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const readManifest = (dir) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
@@ -46,9 +46,8 @@ export { HOST_PEERS };
  *
  * `requireNativeResources` is the issue #216 gate: any member that ships a
  * `vendor/CHECKSUMS.json` must have every recorded addon staged and byte-exact
- * before `npm pack` runs, so a clean checkout cannot produce an artifact that
- * lacks the native keyring adapter. Only the offline structural audit
- * (`check-bundle-tarballs`, `requireNativeResources: false`) may skip it, and
+ * before `npm pack` runs. Only the offline structural audit
+ * (test fixtures with `requireNativeResources: false`) may skip it, and
  * `verify-enterprise-bundle.mjs` independently rejects such an artifact.
  */
 export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, version, requireNativeResources = true } = {}) {
@@ -88,7 +87,7 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
         // native resources must carry the record and all of its bytes. Fail
         // closed, and only point at the fetch script when fetching would help.
         const findings = auditStagedNativeResources({ dir: source, label: name, releaseFiles: manifest.files });
-        if (findings.length > 0) fail(`${name}: ${describeNativeFindings(findings)}.${nativeFetchHint(findings)}`);
+        if (findings.length > 0) fail(`${name}: ${describeNativeFindings(findings)}.`);
         const record = join(source, NATIVE_CHECKSUMS);
         if (existsSync(record)) nativeRecords.push({ name, content: readFileSync(record) });
       }

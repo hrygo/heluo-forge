@@ -31,7 +31,7 @@ for (const initial of ['absent', 'tombstone', 'wrong-kind', 'invalid-grant']) {
     credentials.deleteRecord = async () => { deletes++; };
     const service = createIamService(config, { credentials, fetch: async () => {
       revocations++;
-      return new Response(null, { status: 204 });
+      return Response.json({ result: true });
     } });
     t.after(() => service.dispose());
     const result = await service.signOut();
@@ -56,21 +56,23 @@ for (const failure of ['before-commit', 'after-commit', 'wrong-receipt']) {
     let writes = 0;
     let revocations = 0;
     credentials.modifyRecord = async (key, mutate) => {
+      let committing = false;
       const result = await modify(key, async (current) => {
         const next = await mutate(current);
         if (next?.payload?.type === 'heluo-iam-session-tombstone') {
+          committing = true;
           writes++;
           if (failure === 'before-commit') throw new Error('synthetic failure');
         }
         return next;
       });
-      if (failure === 'after-commit') throw new Error('synthetic lost receipt');
-      if (failure === 'wrong-receipt') return undefined;
+      if (committing && failure === 'after-commit') throw new Error('synthetic lost receipt');
+      if (committing && failure === 'wrong-receipt') return undefined;
       return result;
     };
     const service = createIamService(config, { credentials, fetch: async () => {
       revocations++;
-      return new Response(null, { status: 204 });
+      return Response.json({ result: true });
     } });
     t.after(() => service.dispose());
     const result = await service.signOut();
@@ -80,7 +82,10 @@ for (const failure of ['before-commit', 'after-commit', 'wrong-receipt']) {
     assert.equal(writes, 1);
     assert.equal(revocations, 1);
     const stored = await store.read();
-    assert.equal(stored.grant?.subject ?? null, failure === 'before-commit' ? 'old-user' : null);
+    if (failure === 'before-commit') {
+      assert.equal(stored.ok, false);
+      assert.equal((await credentials.readRecord(GRANT_KEY)).payload.signOutOperation.state, 'pending');
+    } else assert.equal(stored.grant, null);
   });
 }
 
@@ -120,7 +125,8 @@ for (const [interruption, status] of [['provider-replaced', 204], ['provider-rep
       assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
     }
     assert.deepEqual(revoked, ['old-user-access']);
-    assert.equal((await createGrantStore(old).read()).grant.subject, 'old-user');
+    assert.equal((await createGrantStore(old).read()).ok, false);
+    assert.equal((await old.readRecord(GRANT_KEY)).payload.signOutOperation.state, 'pending');
     assert.equal((await createGrantStore(next).read()).grant.subject, 'new-user');
   });
 }
@@ -144,7 +150,7 @@ test('sign-out reports unknown if the provider changes before the result is publ
   const service = createRawIamService(config, {
     getCredentials: () => current,
     verifyAtomicStore: (candidate) => candidate === old || candidate === next,
-    fetch: async () => new Response(null, { status: 204 }),
+    fetch: async () => Response.json({ result: true }),
   });
   t.after(() => { release(); service.dispose(); });
   const pending = service.signOut();
@@ -177,7 +183,7 @@ for (const legacy of [false, true]) {
     const revoked = [];
     const service = createIamService(config, { credentials, fetch: async (url) => {
       revoked.push(new URL(String(url)).searchParams.get('access_token'));
-      return new Response(null, { status: 204 });
+      return Response.json({ result: true });
     } });
     t.after(() => service.dispose());
     await service.signOut();
@@ -203,7 +209,7 @@ for (const legacy of [false, true]) {
     const revoked = [];
     const service = createIamService(config, { credentials, fetch: async (url) => {
       revoked.push(new URL(String(url)).searchParams.get('access_token'));
-      return new Response(null, { status: 204 });
+      return Response.json({ result: true });
     } });
     t.after(() => { release(); service.dispose(); });
     const signOut = service.signOut();
