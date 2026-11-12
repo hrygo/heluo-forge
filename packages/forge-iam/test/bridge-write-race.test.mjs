@@ -15,7 +15,8 @@ const config = {
 const recordKey = 'heluo-iam/bridge-capability';
 
 async function fixture(t, wrapAdapter) {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-bridge-race-'));
+  const root = await mkdtemp(join(tmpdir(), 'forge-bridge-race-'));
+  const directory = join(root, 'store');
   const cleanups = [];
   const own = (cleanup) => cleanups.push(cleanup);
   t.after(async () => {
@@ -24,7 +25,7 @@ async function fixture(t, wrapAdapter) {
       try { await cleanups.pop()(); } catch (error) { errors.push(error); }
     }
     if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
-    await rm(directory, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   });
   const backend = createCredentialStore({ directory });
   const first = createKeychainProvider(backend);

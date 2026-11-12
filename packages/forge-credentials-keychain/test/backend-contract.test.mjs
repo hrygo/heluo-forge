@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import test from 'node:test';
 import { createMemoryBackend } from '../src/backend.mjs';
 import { createCredentialStore } from '../src/credential-store.mjs';
@@ -95,9 +96,10 @@ await runContract('memory backend', {
 
 await runContract('sqlite backend', {
   create: async (t) => {
-    const directory = await outsideRepositoryTmpAsync('forge-keychain-contract-');
+    const root = await outsideRepositoryTmpAsync('forge-keychain-contract-');
+    const directory = join(root, 'data');
     const backend = createCredentialStore({ directory });
-    t.after(async () => { await backend.close(); await rm(directory, { recursive: true, force: true }); });
+    t.after(async () => { await backend.close(); await rm(root, { recursive: true, force: true }); });
     return backend;
   },
   listing: true,

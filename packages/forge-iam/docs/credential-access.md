@@ -120,7 +120,7 @@ curl -s -X POST http://127.0.0.1:49196/api/forge-iam/token \
   -H 'x-forge-iam-request: 1'
 ```
 
-CLI 与插件读取相同的 SQLite 值级加密存储，目录由凭据包统一解析；隔离测试可设置 `HELUO_FORGE_STORE_DIRECTORY`，与插件的 `storeDirectory` 对应。读取不会创建存储或刷新令牌；旧文件不读取、不迁移。目标平台与 Electron 宿主的实测状态见[凭据包说明](../../forge-credentials-keychain/README.md)。
+CLI 与插件读取相同的 SQLite 值级加密存储，目录由凭据包统一解析；隔离测试可设置 `HELUO_FORGE_STORE_DIRECTORY`，与插件的 `storeDirectory` 对应。以该目录为 `D`，新存储的数据库在 `D/credentials.sqlite`，密钥在同级 `D.keys/keyring.json`，不需要单独配置密钥目录。已有 SQLite 的 `D/keyring.json` 继续原地使用，不自动迁移；两处 keyring 同时存在或已有数据库缺失密钥时拒绝使用。读取不会创建存储或刷新令牌；旧 `credentials.json` 和 `credentials.key` 不读取、不迁移。停用相关进程后的备份恢复、权限边界及目标平台实测状态见[凭据包说明](../../forge-credentials-keychain/README.md)。
 
 两点说明：
 
@@ -193,7 +193,7 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 
 | 变量 | 默认 | 作用 |
 |---|---|---|
-| `HELUO_FORGE_STORE_DIRECTORY` | 平台用户目录 | 指向与 Host 相同的存储目录；不提供旧文件读取 |
+| `HELUO_FORGE_STORE_DIRECTORY` | 平台用户目录 | 指向与 Host 相同的存储目录；密钥目录由此确定，支持原有 SQLite 同目录 keyring |
 | `HELUO_FORGE_IAM_URL` | 未设置 | 使用 `127.0.0.1` 或 `[::1]` 的 HTTP(S) 地址连接 Host 桥；不跟随重定向 |
 | `HELUO_FORGE_KEYCHAIN_SERVICE` | `heluo-forge` | 凭据命名空间的 service |
 | `HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX` | `iam` | 凭据命名空间的账号前缀 |

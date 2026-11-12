@@ -57,6 +57,7 @@ function readDocument(path) {
       return parseDocument(readFileSync(fd, 'utf8'));
     } catch (error) {
       if (error?.code === 'ENOENT') throw failure('CRED_KEY_UNAVAILABLE', 'keyring is unavailable');
+      if (typeof error?.code === 'string' && !error.code.startsWith('CRED_')) throw failure(error.code, 'keyring could not be read');
       throw error;
     } finally {
       if (fd !== undefined) closeSync(fd);
@@ -98,6 +99,9 @@ function writeAtomic(path, doc, create) {
       created = false;
     }
     syncDirectory(dir);
+  } catch (error) {
+    if (typeof error?.code === 'string' && !error.code.startsWith('CRED_')) throw failure(error.code, 'keyring could not be written');
+    throw error;
   } finally {
     if (fd !== undefined) closeSync(fd);
     if (created) { try { unlinkSync(temporary); } catch { /* best effort */ } }
@@ -141,5 +145,21 @@ export function createFileKeyProvider({ path } = {}) {
       Object.defineProperty(doc.keys, kid, { value: randomBytes(32).toString('base64'), enumerable: true, writable: true, configurable: true });
       writeAtomic(path, doc, false);
     },
+  });
+}
+
+/** Resolve the sole existing keyring on each use; initialization uses the sibling directory. */
+export function createStoreKeyProvider(paths) {
+  function current() {
+    const path = paths.inspect();
+    if (!path) throw failure('CRED_KEY_UNAVAILABLE', 'keyring is unavailable');
+    return createFileKeyProvider({ path });
+  }
+  return Object.freeze({
+    initialize(kid) { return createFileKeyProvider({ path: paths.prepareNew() }).initialize(kid); },
+    active() { return current().active(); },
+    byId(kid) { return current().byId(kid); },
+    activate(kid) { return current().activate(kid); },
+    add(kid) { return current().add(kid); },
   });
 }

@@ -23,7 +23,8 @@ function open(directory) {
 }
 
 test('SQLite restart fences sign-out interrupted during revoke and preserves a new login', { timeout: 10000 }, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-sqlite-signout-crash-'));
+  const root = await mkdtemp(join(tmpdir(), 'forge-sqlite-signout-crash-'));
+  const directory = join(root, 'store');
   const cleanups = [];
   const own = (cleanup) => cleanups.push(cleanup);
   t.after(async () => {
@@ -32,7 +33,7 @@ test('SQLite restart fences sign-out interrupted during revoke and preserves a n
       try { await cleanups.pop()(); } catch (error) { errors.push(error); }
     }
     if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
-    await rm(directory, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   });
   const first = open(directory);
   own(() => first.backend.close());

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 import { createCredentialStore } from '../src/credential-store.mjs';
 import { createJointStore, JOINT_STORE_SERVICE } from '../src/joint-store.mjs';
@@ -9,9 +10,10 @@ import { namespacePrefixes } from '../src/provider.mjs';
 const SCOPE = Object.freeze({ recordKey: 'gateway/record', ref: 'GATEWAY_TOKEN' });
 
 async function tempBackend(t) {
-  const directory = await outsideRepositoryTmpAsync('forge-keychain-joint-');
+  const root = await outsideRepositoryTmpAsync('forge-keychain-joint-');
+  const directory = join(root, 'data');
   const backend = createCredentialStore({ directory });
-  t.after(async () => { await backend.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { await backend.close(); await rm(root, { recursive: true, force: true }); });
   return backend;
 }
 
@@ -64,10 +66,11 @@ test('guard exceptions, asynchronous and missing guards never commit', async (t)
 });
 
 test('concurrent swaps through separate sqlite handles commit one winner', async (t) => {
-  const directory = await outsideRepositoryTmpAsync('forge-keychain-joint-race-');
+  const root = await outsideRepositoryTmpAsync('forge-keychain-joint-race-');
+  const directory = join(root, 'data');
   const one = createCredentialStore({ directory });
   const two = createCredentialStore({ directory });
-  t.after(async () => { await one.close(); await two.close(); await rm(directory, { recursive: true, force: true }); });
+  t.after(async () => { await one.close(); await two.close(); await rm(root, { recursive: true, force: true }); });
   const first = createJointStore(one, namespacePrefixes({}));
   const second = createJointStore(two, namespacePrefixes({}));
   const initial = await first.snapshot(SCOPE);

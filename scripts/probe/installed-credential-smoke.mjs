@@ -8,7 +8,8 @@ import { pathToFileURL } from 'node:url';
 
 if (!process.argv[2]) throw new Error('usage: installed-credential-smoke.mjs <package-directory>');
 const { createCredentialStore } = await import(pathToFileURL(join(resolve(process.argv[2]), 'src/index.mjs')).href);
-const directory = await mkdtemp(join(tmpdir(), 'forge-installed-credential-'));
+const root = await mkdtemp(join(tmpdir(), 'forge-installed-credential-'));
+const directory = join(root, 'store');
 let store;
 try {
   store = createCredentialStore({ directory });
@@ -21,5 +22,5 @@ try {
   console.log('synthetic SQLite round trip passed');
 } finally {
   await store?.close();
-  await rm(directory, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true });
 }

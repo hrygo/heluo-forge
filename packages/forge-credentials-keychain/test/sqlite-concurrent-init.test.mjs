@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 const backendUrl = new URL('../src/sqlite-backend.mjs', import.meta.url).href;
 const keyringUrl = new URL('../src/keyring.mjs', import.meta.url).href;
@@ -15,7 +15,7 @@ import { existsSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 const dir = process.argv[1], role = process.argv[2], timeout = Number(process.argv[3]);
-const keyProvider = createFileKeyProvider({ path: join(dir, 'keyring.json') });
+const keyProvider = createFileKeyProvider({ path: join(dir + '.keys', 'keyring.json') });
 const keys = role === 'first' ? { ...keyProvider, initialize(kid) {
   writeSync(1, 'initializing\\n');
   const wait = new Int32Array(new SharedArrayBuffer(4));
@@ -62,7 +62,8 @@ function child(directory, role, timeout) {
 }
 
 async function setup(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-init-race-'));
+  const root = await outsideRepositoryTmpAsync('forge-init-race-');
+  const directory = join(root, 'data');
   const children = [];
   const cleanups = [];
   t.after(async () => {
@@ -80,7 +81,7 @@ async function setup(t) {
       try { await cleanups.pop()(); } catch (error) { errors.push(error); }
     }
     if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
-    await rm(directory, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
   });
   const start = (role, timeout = 5000) => { const c = child(directory, role, timeout); children.push(c); return c; };
   const own = (resource) => {
@@ -114,7 +115,7 @@ test('initialization waits for a reader before activating the single generated k
   const { directory, start, own } = await setup(t);
   const first = start('after-key');
   await first.waitFor('key-ready');
-  const originalKeyring = await readFile(join(directory, 'keyring.json'));
+  const originalKeyring = await readFile(join(`${directory}.keys`, 'keyring.json'));
   const { DatabaseSync } = await import('node:sqlite');
   const reader = new DatabaseSync(join(directory, 'credentials.sqlite'));
   const closeReader = own(reader);
@@ -126,7 +127,7 @@ test('initialization waits for a reader before activating the single generated k
     reader.exec('COMMIT');
     const result = await first.exit;
     assert.equal(result.code, 0, result.output + result.stderr);
-    assert.deepEqual(await readFile(join(directory, 'keyring.json')), originalKeyring);
+    assert.deepEqual(await readFile(join(`${directory}.keys`, 'keyring.json')), originalKeyring);
     const db = new DatabaseSync(join(directory, 'credentials.sqlite'), { readOnly: true });
     const closeDb = own(db);
     try {
@@ -141,7 +142,7 @@ test('writers sharing one backend wait until initialization activates the key', 
   const { createSqliteBackend } = await import('../src/sqlite-backend.mjs');
   const { createFileKeyProvider } = await import('../src/keyring.mjs');
   const { DatabaseSync } = await import('node:sqlite');
-  const keys = createFileKeyProvider({ path: join(directory, 'keyring.json') });
+  const keys = createFileKeyProvider({ path: join(`${directory}.keys`, 'keyring.json') });
   let reader;
   let closeReader;
   let calls = 0;
@@ -179,7 +180,7 @@ test('initialization contention timeout preserves the generated key and fails cl
   const { directory, start, own } = await setup(t);
   const first = start('after-key', 100);
   await first.waitFor('key-ready');
-  const originalKeyring = await readFile(join(directory, 'keyring.json'));
+  const originalKeyring = await readFile(join(`${directory}.keys`, 'keyring.json'));
   const { DatabaseSync } = await import('node:sqlite');
   const reader = new DatabaseSync(join(directory, 'credentials.sqlite'));
   const closeReader = own(reader);
@@ -192,14 +193,14 @@ test('initialization contention timeout preserves the generated key and fails cl
     assert.notEqual(result.code, 0);
     assert.match(result.output, /error:CRED_LOCK_TIMEOUT/);
     reader.exec('COMMIT');
-    assert.deepEqual(await readFile(join(directory, 'keyring.json')), originalKeyring);
+    assert.deepEqual(await readFile(join(`${directory}.keys`, 'keyring.json')), originalKeyring);
     const { createCredentialStore } = await import('../src/credential-store.mjs');
     const store = createCredentialStore({ directory, lockTimeoutMs: 100 });
     const closeStore = own(store);
     try {
       await assert.rejects(store.get('heluo-forge/iam/ref/TEST'), { code: 'CRED_KEY_UNAVAILABLE' });
       await assert.rejects(store.set('heluo-forge/iam/ref/TEST', 'synthetic'), { code: 'CRED_KEY_UNAVAILABLE' });
-      assert.deepEqual(await readFile(join(directory, 'keyring.json')), originalKeyring);
+      assert.deepEqual(await readFile(join(`${directory}.keys`, 'keyring.json')), originalKeyring);
     } finally { await closeStore(); }
   } finally { await closeReader(); }
 });
@@ -214,7 +215,7 @@ test('interrupted initialization never regenerates a key or overwrites the datab
   const second = start('second', 300);
   const result = await second.exit;
   assert.notEqual(result.code, 0);
-  assert.equal(existsSync(join(directory, 'keyring.json')), false);
+  assert.equal(existsSync(join(`${directory}.keys`, 'keyring.json')), false);
   assert.deepEqual(await readFile(join(directory, 'credentials.sqlite')), before);
 });
 
@@ -260,11 +261,11 @@ test('leftover marker with a missing keyring cannot bypass initialization safety
   const before = await readFile(database);
   const marker = join(directory, 'credentials.sqlite.init');
   await writeFile(marker, 'unknown-owner');
-  await unlink(join(directory, 'keyring.json'));
+  await unlink(join(`${directory}.keys`, 'keyring.json'));
   const next = createCredentialStore({ directory, lockTimeoutMs: 30 });
   const closeNext = own(next);
   await assert.rejects(next.set(key, 'after'), { code: 'CRED_LOCK_TIMEOUT' });
-  assert.equal(existsSync(join(directory, 'keyring.json')), false);
+  assert.equal(existsSync(join(`${directory}.keys`, 'keyring.json')), false);
   assert.deepEqual(await readFile(database), before);
   assert.equal(await readFile(marker, 'utf8'), 'unknown-owner');
   await closeNext();

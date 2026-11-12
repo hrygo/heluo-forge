@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { capabilities, createRegisteredBackend } from '../src/backend-registry.mjs';
 import { apply, openCredentialReader } from '../src/index.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 function ownDirectory(t, directory) {
   const cleanups = [];
@@ -34,8 +34,9 @@ test('registry exposes only immutable tested sqlite capabilities', async (t) => 
     assert.throws(() => capabilities(name), { code: 'CRED_BACKEND_UNREGISTERED' });
     assert.throws(() => createRegisteredBackend(name, {}), { code: 'CRED_BACKEND_UNREGISTERED' });
   }
-  const directory = await mkdtemp(join(tmpdir(), 'forge-registry-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('forge-registry-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
   const backend = createRegisteredBackend('sqlite', { directory });
   own(() => backend.close());
   const key = 'heluo-forge/iam/ref/TEST';
@@ -44,8 +45,9 @@ test('registry exposes only immutable tested sqlite capabilities', async (t) => 
 });
 
 test('host grants trust only to registered sqlite, not an injected capability impostor', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-registry-host-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('forge-registry-host-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
   const builtin = context();
   const dispose = apply(builtin, { storeDirectory: directory });
   own(dispose);
@@ -68,8 +70,9 @@ test('host grants trust only to registered sqlite, not an injected capability im
 test('registered sqlite serializes writes across live processes', { timeout: 10000 }, async (t) => {
   const { spawn } = await import('node:child_process');
   const { once } = await import('node:events');
-  const directory = await mkdtemp(join(tmpdir(), 'forge-registry-lock-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('forge-registry-lock-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
   const backend = createRegisteredBackend('sqlite', { directory, lockTimeoutMs: 3000 });
   own(() => backend.close());
   const key = 'heluo-forge/iam/ref/TEST';

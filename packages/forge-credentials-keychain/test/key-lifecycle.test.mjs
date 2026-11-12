@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, readFile, rm, copyFile, stat } from 'node:fs/promises';
+import { cp, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createCredentialStore } from '../src/credential-store.mjs';
 import { outsideRepositoryTmp } from './support/tmp.mjs';
 
-test('a stopped store can be restored with both old and current keys; a database-only copy fails closed', async (t) => {
+test('separate stopped data and key backups restore rotated records; incomplete copies fail closed', async (t) => {
   const root = outsideRepositoryTmp('forge-key-lifecycle-');
   const stores = [];
   t.after(async () => {
@@ -19,7 +19,9 @@ test('a stopped store can be restored with both old and current keys; a database
 
   const source = join(root, 'source');
   const backup = join(root, 'backup');
-  const incomplete = join(root, 'incomplete');
+  const restoredDirectory = join(root, 'restored');
+  const dataOnly = join(root, 'data-only');
+  const keysOnly = join(root, 'keys-only');
   const oldRef = 'heluo-forge/iam/ref/OLD';
   const newRef = 'heluo-forge/iam/ref/NEW';
   const writer = createCredentialStore({ directory: source });
@@ -29,23 +31,37 @@ test('a stopped store can be restored with both old and current keys; a database
   await writer.set(newRef, 'synthetic-new');
   await writer.close();
 
-  // The source is stopped before copying: the backup includes the database
-  // and every key required by records written before and after rotation.
+  // The store is stopped before separately copying data and all retained keys.
+  await assert.rejects(stat(join(source, 'keyring.json')), { code: 'ENOENT' });
+  await stat(join(`${source}.keys`, 'keyring.json'));
   await cp(source, backup, { recursive: true, errorOnExist: true, force: false });
-  const restored = createCredentialStore({ directory: backup, readOnly: true });
+  await cp(`${source}.keys`, `${backup}.keys`, { recursive: true, errorOnExist: true, force: false });
+  await assert.rejects(stat(join(backup, 'keyring.json')), { code: 'ENOENT' });
+  await cp(backup, restoredDirectory, { recursive: true, errorOnExist: true, force: false });
+  await cp(`${backup}.keys`, `${restoredDirectory}.keys`, { recursive: true, errorOnExist: true, force: false });
+  const restored = createCredentialStore({ directory: restoredDirectory, readOnly: true });
   stores.push(restored);
   assert.equal(await restored.get(oldRef), 'synthetic-old');
   assert.equal(await restored.get(newRef), 'synthetic-new');
   await restored.close();
 
-  await mkdir(incomplete, { mode: 0o700 });
-  const database = join(incomplete, 'credentials.sqlite');
-  await copyFile(join(backup, 'credentials.sqlite'), database);
+  await cp(backup, dataOnly, { recursive: true, errorOnExist: true, force: false });
+  const database = join(dataOnly, 'credentials.sqlite');
   const before = await readFile(database);
-  const withoutKeys = createCredentialStore({ directory: incomplete });
+  const withoutKeys = createCredentialStore({ directory: dataOnly });
   stores.push(withoutKeys);
   await assert.rejects(withoutKeys.get(oldRef), { code: 'CRED_KEY_UNAVAILABLE' });
   await assert.rejects(withoutKeys.set(newRef, 'synthetic-replacement'), { code: 'CRED_KEY_UNAVAILABLE' });
   assert.deepEqual(await readFile(database), before);
-  await assert.rejects(stat(join(incomplete, 'keyring.json')), { code: 'ENOENT' });
+  await assert.rejects(stat(`${dataOnly}.keys`), { code: 'ENOENT' });
+
+  await cp(`${backup}.keys`, `${keysOnly}.keys`, { recursive: true, errorOnExist: true, force: false });
+  const keyring = join(`${keysOnly}.keys`, 'keyring.json');
+  const keyringBefore = await readFile(keyring);
+  const withoutData = createCredentialStore({ directory: keysOnly });
+  stores.push(withoutData);
+  await assert.rejects(withoutData.get(oldRef), { code: 'CRED_STORE_UNAVAILABLE' });
+  await assert.rejects(withoutData.set(newRef, 'synthetic-replacement'), { code: 'CRED_STORE_UNAVAILABLE' });
+  assert.deepEqual(await readFile(keyring), keyringBefore);
+  await assert.rejects(stat(join(keysOnly, 'credentials.sqlite')), { code: 'ENOENT' });
 });

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createMemoryBackend } from '../src/backend.mjs';
 import { createCredentialStore } from '../src/credential-store.mjs';
 import { createKeychainProvider, KeychainProviderError } from '../src/provider.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 const namespace = 'heluo-forge/iam';
 
@@ -189,9 +189,9 @@ for (const failure of ['throw', 'reject']) {
       let backend = createMemoryBackend();
       if (!transactional) delete backend.transaction;
       if (transactional) {
-        const dir = await mkdtemp(join(tmpdir(), 'forge-notify-test-'));
-        backend = createCredentialStore({ directory: dir });
-        t.after(async () => { await backend.close(); await rm(dir, { recursive: true, force: true }); });
+        const root = await outsideRepositoryTmpAsync('forge-notify-test-');
+        backend = createCredentialStore({ directory: join(root, 'data') });
+        t.after(async () => { await backend.close(); await rm(root, { recursive: true, force: true }); });
       }
       const { value } = provider({ backend, notifyRecord });
       const record = { kind: 'grant', payload: { refreshToken: secret } };

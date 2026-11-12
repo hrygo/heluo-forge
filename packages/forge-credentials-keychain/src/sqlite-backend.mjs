@@ -3,6 +3,8 @@ import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstat
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { initialKeyBinding } from './key-auth.mjs';
+import { createKeyPaths } from './key-paths.mjs';
 
 const error = (code, message) => Object.assign(new Error(message), { code });
 
@@ -23,9 +25,9 @@ function alive(pid) {
 }
 
 /** SQLite stores only opaque envelopes; lock and read contention waits are async. */
-export function createSqliteBackend({ directory, readOnly, keyProvider, lockTimeoutMs }) {
+export function createSqliteBackend({ directory, readOnly, keyProvider, lockTimeoutMs, keyPaths = createKeyPaths(directory) }) {
+  directory = keyPaths.directory;
   const path = join(directory, 'credentials.sqlite');
-  const keyPath = join(directory, 'keyring.json');
   let db;
   let closed = false;
   let closing = false;
@@ -48,11 +50,16 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     // Admitted operations may still need to open or retry while close drains them.
     if (closed) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
     if (pendingInitialization) throw error('CRED_KEY_UNAVAILABLE', 'credential store initialization is incomplete');
-    if (db) return true;
+    const keyPath = keyPaths.inspect();
+    if (db) {
+      if (!keyPath) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
+      return true;
+    }
     for (const legacy of ['credentials.json', 'credentials.key']) {
       if (existsSync(join(directory, legacy))) throw error('CRED_LEGACY_STORE', 'legacy credential store exists');
     }
     if (!existsSync(directory)) {
+      if (keyPath) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
       if (readOnly) throw error('CRED_STORE_UNAVAILABLE', 'credential store is unavailable');
       if (!create) return false;
       mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -61,14 +68,14 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     let created = false;
     if (!existsSync(path)) {
       if (readOnly) throw error('CRED_STORE_UNAVAILABLE', 'credential store is unavailable');
-      if (existsSync(keyPath)) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
+      if (keyPath) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
       if (!create) return false;
       const fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
       closeSync(fd);
       created = true;
     }
     safePath(path, 'file', 0o600);
-    if (!created && !existsSync(keyPath)) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
+    if (!created && !keyPath) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
     try {
       db = new DatabaseSync(path, { readOnly });
       db.exec('PRAGMA busy_timeout = 0');
@@ -76,6 +83,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         db.exec("CREATE TABLE secret (id TEXT PRIMARY KEY, kind TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', envelope BLOB NOT NULL, kid TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); PRAGMA user_version = 1;");
         const token = randomBytes(16).toString('hex');
         transaction(() => putMeta('lock', JSON.stringify({ pid: process.pid, token: fingerprint(token) })), true);
+        keyPaths.prepareNew();
         keyProvider.initialize('k1');
         pendingInitialization = token;
       } else {
@@ -175,6 +183,10 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
       }
     }
     if (db) return;
+    const keyPath = keyPaths.inspect();
+    if (!existsSync(path) && keyPath) {
+      throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
+    }
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     safePath(directory, 'directory', 0o700);
     const marker = join(directory, 'credentials.sqlite.init');
@@ -187,7 +199,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         if (e.code !== 'EEXIST') throw e;
         // The creator may have finished the durable initialization and died
         // before removing its marker. Never bypass for partial initialization.
-        if (existsSync(path) && existsSync(keyPath)) {
+        if (existsSync(path) && keyPaths.inspect()) {
           try { if (open(false)) return; } catch (cause) {
             // A creator may not have committed its active key yet. Only that
             // incomplete state and SQLite contention are temporary; a corrupt
@@ -222,7 +234,10 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         try {
           // The keyring is created exactly once. Wait for exclusive admission
           // before activating it, so readers cannot make COMMIT fail busy.
-          await commit(token, () => putMeta('active', 'k1'));
+          await commit(token, () => {
+            putMeta('active', 'k1');
+            putMeta('key_auth', initialKeyBinding(keyProvider, 'k1'));
+          });
           committed.delete(token);
           pendingInitialization = undefined;
         } catch (cause) {
@@ -238,9 +253,10 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
       try { if (readFileSync(marker, 'utf8') === token) unlinkSync(marker); } catch { /* fail closed if ownership is uncertain */ }
     }
   }
-  async function runWithLock(fn) {
+  async function runWithLock(fn, preflight) {
     if (readOnly) throw error('CRED_STORE_READ_ONLY', 'credential store is read only');
     await openForWrite();
+    if (preflight) await retryRead(() => transaction(preflight));
     const token = randomBytes(16).toString('hex');
     const deadline = Date.now() + lockTimeoutMs;
     while (true) {
@@ -302,27 +318,28 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     if (failed) throw actionError;
     return result;
   }
-  async function withLock(fn) {
+  async function withLock(fn, preflight) {
     if (closed || closing) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
-    const operation = runWithLock(fn);
+    const operation = runWithLock(fn, preflight);
     operations.add(operation);
     try { return await operation; }
     finally { operations.delete(operation); }
   }
+  async function retryRead(fn) {
+    const deadline = Date.now() + lockTimeoutMs;
+    while (true) {
+      try { return fn(); }
+      catch (cause) {
+        if (!busy(cause)) throw cause;
+        if (Date.now() >= deadline) throw error('CRED_LOCK_TIMEOUT', 'credential store is busy');
+        await sleep(10);
+      }
+    }
+  }
   async function withRead(fn, token) {
     // A transaction's internal read belongs to its already admitted lock holder.
     if (closed || (closing && !activeTokens.has(token))) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
-    const operation = (async () => {
-      const deadline = Date.now() + lockTimeoutMs;
-      while (true) {
-        try { return fn(); }
-        catch (cause) {
-          if (!busy(cause)) throw cause;
-          if (Date.now() >= deadline) throw error('CRED_LOCK_TIMEOUT', 'credential store is busy');
-          await sleep(10);
-        }
-      }
-    })();
+    const operation = retryRead(fn);
     operations.add(operation);
     try { return await operation; }
     finally { operations.delete(operation); }
@@ -345,6 +362,9 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     delete(id) { db.prepare('DELETE FROM secret WHERE id = ?').run(id); },
     active() { return meta('active'); },
     setActive(kid) { putMeta('active', kid); },
+    keyAuth() { return meta('key_auth'); },
+    setKeyAuth(value) { putMeta('key_auth', value); },
+    keyIds() { return db.prepare('SELECT DISTINCT kid FROM secret').all().map((row) => row.kid); },
     close,
   };
 }

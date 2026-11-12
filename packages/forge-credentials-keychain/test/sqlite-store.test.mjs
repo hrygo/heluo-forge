@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createCredentialStore } from '../src/credential-store.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 const recordKey = 'heluo-forge/iam/record/heluo-iam/gateway-credential';
 const ref = 'heluo-forge/iam/ref/ENTERPRISE_STATIC_KEY';
@@ -27,8 +27,9 @@ function ownDirectory(t, directory) {
 }
 
 async function fixture(t, options = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'heluo-sqlite-test-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('heluo-sqlite-test-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
   const store = createCredentialStore({ directory, ...options });
   own(() => store.close());
   return { directory, store, own };
@@ -242,8 +243,10 @@ test('close drains a transaction that initializes the store', async (t) => {
 });
 
 test('missing keyring or legacy document is rejected without replacing existing data', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'heluo-sqlite-legacy-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('heluo-sqlite-legacy-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
+  await mkdir(directory, { mode: 0o700 });
   const legacy = join(directory, 'credentials.json');
   writeFileSync(legacy, 'legacy-test-data');
   const store = createCredentialStore({ directory });
@@ -259,6 +262,7 @@ test('read-only open on absent storage creates no files', async (t) => {
   await assert.rejects(store.get(ref), (error) => error.code === 'CRED_STORE_UNAVAILABLE');
   assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
   assert.equal(existsSync(join(directory, 'keyring.json')), false);
+  assert.equal(existsSync(join(`${directory}.keys`, 'keyring.json')), false);
 });
 
 test('ordinary reads on an uninitialized writable store do not create a database or keyring', async (t) => {
@@ -268,6 +272,7 @@ test('ordinary reads on an uninitialized writable store do not create a database
   assert.deepEqual(await store.list('heluo-forge/'), []);
   assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
   assert.equal(existsSync(join(directory, 'keyring.json')), false);
+  assert.equal(existsSync(join(`${directory}.keys`, 'keyring.json')), false);
   await store.set(ref, 'first');
   assert.equal(await store.get(ref), 'first');
 });
@@ -284,7 +289,7 @@ test('a failed rotation after writing a key can be resumed with the same kid', a
   const { directory, store } = await fixture(t);
   await store.set(ref, 'first');
   const { createFileKeyProvider } = await import('../src/keyring.mjs');
-  createFileKeyProvider({ path: join(directory, 'keyring.json') }).add('k2');
+  createFileKeyProvider({ path: join(`${directory}.keys`, 'keyring.json') }).add('k2');
   await store.rotate('k2');
   await store.set(ref, 'second');
   assert.equal(await store.get(ref), 'second');
@@ -331,7 +336,7 @@ test('an interrupted metadata switch keeps the database key authoritative until 
   try {
     db.exec("CREATE TRIGGER fail_activation BEFORE UPDATE ON meta WHEN new.key = 'active' BEGIN SELECT RAISE(ABORT, 'synthetic activation failure'); END");
     await assert.rejects(store.rotate('k2'));
-    assert.equal(JSON.parse(readFileSync(join(directory, 'keyring.json'), 'utf8')).active, 'k2');
+    assert.equal(JSON.parse(readFileSync(join(`${directory}.keys`, 'keyring.json'), 'utf8')).active, 'k2');
     assert.equal(db.prepare("SELECT value FROM meta WHERE key='active'").get().value, 'k1');
     assert.equal(await store.get(ref), 'first');
     await store.set(ref, 'still-old-key');
@@ -359,7 +364,7 @@ test('removing an old key after rotation leaves new-key values readable across r
   await store.rotate('k2');
   await store.set(recordKey, JSON.stringify(record));
   await store.close();
-  const keyPath = join(directory, 'keyring.json');
+  const keyPath = join(`${directory}.keys`, 'keyring.json');
   const keyring = JSON.parse(readFileSync(keyPath, 'utf8'));
   delete keyring.keys.k1;
   writeFileSync(keyPath, JSON.stringify(keyring));
@@ -418,7 +423,7 @@ test('missing keyring after database creation never causes regeneration', async 
   const { directory, store, own } = await fixture(t);
   await store.set(ref, marker);
   await store.close();
-  const keyPath = join(directory, 'keyring.json');
+  const keyPath = join(`${directory}.keys`, 'keyring.json');
   unlinkSync(keyPath);
   const replacement = createCredentialStore({ directory });
   own(() => replacement.close());

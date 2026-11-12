@@ -1,16 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, unlinkSync, rmSync, symlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, chmodSync, unlinkSync, rmSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createCredentialStore } from '../src/credential-store.mjs';
 import { createFileKeyProvider } from '../src/keyring.mjs';
+import { outsideRepositoryTmp } from './support/tmp.mjs';
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'forge-keyring-test-'));
+  const dir = outsideRepositoryTmp('forge-keyring-test-');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'keyring.json');
   return { path, provider: createFileKeyProvider({ path }) };
@@ -59,8 +59,9 @@ test('removed old key is unavailable but active key remains readable', (t) => {
 });
 
 test('a read survives another process atomically rotating the keyring', async (t) => {
-  const { path } = fixture(t);
-  const directory = dirname(path);
+  const { path: fixturePath } = fixture(t);
+  const directory = join(dirname(fixturePath), 'data');
+  const path = join(`${directory}.keys`, 'keyring.json');
   const store = createCredentialStore({ directory });
   const ref = 'heluo-forge/iam/ref/ENTERPRISE_STATIC_KEY';
   const original = fs.lstatSync;

@@ -25,7 +25,7 @@ function ownerOf(kind, value) {
 }
 
 /** Encrypt values while depending only on the supplied storage, cipher and key ports. */
-export function createEncryptedAdapter({ backend, cipher, keys, kind = 'unknown', durable = false }) {
+export function createEncryptedAdapter({ backend, cipher, keys, integrity, kind = 'unknown', durable = false }) {
   function read(id) {
     const kind = kindOf(id);
     const row = backend.get(id);
@@ -40,6 +40,7 @@ export function createEncryptedAdapter({ backend, cipher, keys, kind = 'unknown'
     const kind = kindOf(id);
     assertCredentialValue(value);
     const owner = ownerOf(kind, value);
+    read(id);
     const kid = backend.active();
     const envelope = cipher.seal({ kind, id, owner, kid, plaintext: Buffer.from(value, 'utf8') });
     backend.set({ id, kind, owner, kid, envelope });
@@ -54,19 +55,28 @@ export function createEncryptedAdapter({ backend, cipher, keys, kind = 'unknown'
     return { record, value: read(scope.ref) };
   }
   function commit(token, action) {
-    return backend.commit(token, action);
+    return backend.commit(token, () => {
+      integrity?.ensure();
+      return action();
+    });
+  }
+  function withLock(action) {
+    return backend.withLock(async (token) => {
+      if (integrity) await backend.withRead(() => backend.transaction(() => integrity.verify()), token);
+      return action(token);
+    }, integrity?.verify);
   }
   return Object.freeze({
     kind,
     durable,
     available: true,
     async get(id) { kindOf(id); return backend.withRead(() => backend.open() ? read(id) : undefined); },
-    async set(id, value) { return backend.withLock((token) => commit(token, () => write(id, value))); },
-    async delete(id) { return backend.withLock((token) => commit(token, () => { kindOf(id); backend.delete(id); })); },
+    async set(id, value) { return withLock((token) => commit(token, () => write(id, value))); },
+    async delete(id) { return withLock((token) => commit(token, () => { kindOf(id); read(id); backend.delete(id); })); },
     async list(prefix) { return backend.withRead(() => backend.open() ? backend.list().map((row) => row.id).filter((id) => id.startsWith(prefix)) : []); },
     async listEntries(prefix) { return backend.withRead(() => backend.open() ? backend.transaction(() => backend.list().filter((row) => row.id.startsWith(prefix)).map((row) => ({ key: row.id, value: read(row.id) }))) : []); },
     async transaction(id, mutate) {
-      return backend.withLock(async (token) => {
+      return withLock(async (token) => {
         const original = await backend.withRead(() => read(id), token);
         let current = original;
         let changed = false;
@@ -85,7 +95,7 @@ export function createEncryptedAdapter({ backend, cipher, keys, kind = 'unknown'
     },
     async compareAndSwap(scope, expected, next, guard) {
       if (typeof guard !== 'function') throw error('KEYCHAIN_GUARD_REQUIRED', 'joint commit requires a synchronous guard');
-      return backend.withLock((token) => commit(token, () => {
+      return withLock((token) => commit(token, () => {
         const current = pair(scope);
         if (!isDeepStrictEqual(current, expected)) return { ok: false };
         const admitted = guard();
@@ -101,10 +111,10 @@ export function createEncryptedAdapter({ backend, cipher, keys, kind = 'unknown'
       }));
     },
     async rotate(kid) {
-      return backend.withLock((token) => {
+      return withLock((token) => {
         if (!keys.byId(kid)) keys.add(kid);
         keys.activate(kid);
-        return commit(token, () => backend.setActive(kid));
+        return commit(token, () => { backend.setActive(kid); integrity?.bind(kid); });
       });
     },
     async close() { await backend.close(); },

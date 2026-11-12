@@ -3,13 +3,13 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import fs, { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createCredentialStore } from '../src/credential-store.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 const ref = 'heluo-forge/iam/ref/TEST';
 const recordKey = 'heluo-forge/iam/record/heluo-iam/gateway-credential';
@@ -28,8 +28,9 @@ function ownDirectory(t, directory) {
 }
 
 async function fixture(t, lockTimeoutMs = 1000) {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-sqlite-read-contention-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('forge-sqlite-read-contention-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
   const store = createCredentialStore({ directory, lockTimeoutMs });
   own(() => store.close());
   await store.set(ref, 'before');

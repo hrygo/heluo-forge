@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -56,9 +56,9 @@ function ownChild(own, child) {
   return closed;
 }
 
-function startCli(own, directory, url) {
+function startCli(own, directory, url, extraEnv = {}) {
   const child = spawn(process.execPath, [bin, 'auth', 'token'], {
-    env: { HELUO_FORGE_STORE_DIRECTORY: directory, HELUO_FORGE_IAM_URL: url },
+    env: { HELUO_FORGE_STORE_DIRECTORY: directory, HELUO_FORGE_IAM_URL: url, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
   });
   let stdout = '';
@@ -90,14 +90,15 @@ async function listen(server) {
 }
 
 async function fixture(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-bridge-'));
-  const { own, addDirectory } = ownDirectories(t, directory);
+  const root = await mkdtemp(join(tmpdir(), 'forge-bridge-'));
+  const directory = join(root, 'store');
+  const { own } = ownDirectories(t, root);
   const backend = createCredentialStore({ directory });
   const provider = createKeychainProvider(backend);
   const adapter = createJointStore(backend, namespacePrefixes());
   own(() => provider.close());
   await provider.modifyRecord('heluo-iam/session', () => grant);
-  return { directory, provider, adapter, own, addDirectory };
+  return { root, directory, provider, adapter, own };
 }
 
 function serviceFor(provider, adapter) {
@@ -157,6 +158,103 @@ test('fresh Host initializes the shared capability before a real CLI bridge requ
   assert.equal(result.code, 0, cli.stderr());
   assert.equal(cli.stdout(), 'synthetic-access\n');
   assert.equal(cli.stderr(), '');
+});
+
+test('Host and CLI share a custom store with a separate sibling key directory', async (t) => {
+  const { root, directory, provider, adapter, own } = await fixture(t);
+  const app = host(provider, adapter);
+  own(() => app.dispose());
+  const server = createRouteServer(own, app.handler);
+  const url = await listen(server);
+  await waitForCapability(provider);
+  const home = join(root, 'cli-home');
+  const dataHome = join(root, 'cli-data');
+  const configHome = join(root, 'cli-config');
+  const localAppData = join(root, 'cli-local');
+  const cli = startCli(own, directory, url, {
+    HOME: home, USERPROFILE: home, XDG_DATA_HOME: dataHome,
+    XDG_CONFIG_HOME: configHome, LOCALAPPDATA: localAppData,
+  });
+  const result = await cli.closed;
+  if (result.error) throw result.error;
+  assert.equal(result.code, 0, cli.stderr());
+  assert.equal(cli.stdout(), 'synthetic-access\n');
+  assert.equal(cli.stderr(), '');
+  assert.equal((await stat(join(directory, 'credentials.sqlite'))).isFile(), true);
+  assert.equal((await stat(join(`${directory}.keys`, 'keyring.json'))).isFile(), true);
+  await assert.rejects(stat(join(directory, 'keyring.json')), { code: 'ENOENT' });
+  for (const path of [home, dataHome, configHome, localAppData]) {
+    await assert.rejects(stat(path), { code: 'ENOENT' });
+  }
+});
+
+test('Host and CLI continue to use a legacy SQLite keyring in place', async (t) => {
+  const { directory, provider: original, own } = await fixture(t);
+  await original.close();
+  await rename(join(`${directory}.keys`, 'keyring.json'), join(directory, 'keyring.json'));
+  await rmdir(`${directory}.keys`);
+
+  const backend = createCredentialStore({ directory });
+  const provider = createKeychainProvider(backend);
+  const adapter = createJointStore(backend, namespacePrefixes());
+  own(() => provider.close());
+  const app = host(provider, adapter);
+  own(() => app.dispose());
+  const server = createRouteServer(own, app.handler);
+  const url = await listen(server);
+  await waitForCapability(provider);
+  const cli = startCli(own, directory, url);
+  const result = await cli.closed;
+  if (result.error) throw result.error;
+  assert.equal(result.code, 0, cli.stderr());
+  assert.equal(cli.stdout(), 'synthetic-access\n');
+  assert.equal(cli.stderr(), '');
+  assert.equal((await stat(join(directory, 'keyring.json'))).isFile(), true);
+  await assert.rejects(stat(`${directory}.keys`), { code: 'ENOENT' });
+});
+
+test('Host rejects a same-kid key mismatch before writing bridge capability', async (t) => {
+  const { directory, provider, adapter, own } = await fixture(t);
+  const rotator = createCredentialStore({ directory });
+  own(() => rotator.close());
+  await rotator.rotate('k2');
+  await rotator.close();
+
+  const keyPath = join(`${directory}.keys`, 'keyring.json');
+  const original = await readFile(keyPath, 'utf8');
+  const wrong = JSON.parse(original);
+  const bytes = Buffer.from(wrong.keys.k2, 'base64');
+  bytes[0] ^= 1;
+  wrong.keys.k2 = bytes.toString('base64');
+  await writeFile(keyPath, JSON.stringify(wrong), { mode: 0o600 });
+  // The existing k1 session is readable; the failure must come from the k2
+  // binding check on the attempted write, not from an earlier session read.
+  assert.deepEqual(await provider.readRecord('heluo-iam/session'), grant);
+
+  const failures = [];
+  const observed = Object.freeze({
+    snapshot: (...args) => adapter.snapshot(...args),
+    async compareAndSwap(...args) {
+      try { return await adapter.compareAndSwap(...args); }
+      catch (error) { failures.push(error); throw error; }
+    },
+  });
+  const app = host(provider, observed);
+  own(() => app.dispose());
+  await assert.rejects(app.service.bridgeCapability(), (error) => {
+    assert.equal(error.code, 'IAM_CREDENTIALS_UNAVAILABLE');
+    assert.doesNotMatch(error.message, /synthetic-access|synthetic-refresh/u);
+    return true;
+  });
+  assert.ok(failures.length > 0, 'the real joint write must reach the storage gate');
+  assert.ok(failures.every((error) => error.code === 'CRED_DECRYPT_FAILED'));
+
+  await writeFile(keyPath, original, { mode: 0o600 });
+  assert.deepEqual(await provider.readRecord('heluo-iam/session'), grant);
+  assert.equal(await provider.readRecord('heluo-iam/bridge-capability'), undefined);
+  assert.equal(await provider.resolve(BRIDGE_REF), undefined);
+  assert.match(await app.service.bridgeCapability(), /^[A-Za-z0-9_-]{43}$/u);
+  assert.deepEqual(await provider.readRecord('heluo-iam/session'), grant);
 });
 
 test('CLI waits through the same pending refresh and outputs only the rotated Host token', { timeout: 10_000 }, async (t) => {
@@ -325,9 +423,8 @@ test('a failed joint creation leaves neither value; a later invocation can creat
 
 for (const interruption of ['replace provider', 'dispose service']) {
   test(`bridge initialization stops if callers ${interruption} during a read`, async (t) => {
-    const { provider: first, adapter: firstAdapter, own, addDirectory } = await fixture(t);
-    const secondDirectory = await mkdtemp(join(tmpdir(), 'forge-bridge-replacement-'));
-    addDirectory(secondDirectory);
+    const { root, provider: first, adapter: firstAdapter, own } = await fixture(t);
+    const secondDirectory = join(root, 'replacement');
     const secondBackend = createCredentialStore({ directory: secondDirectory });
     const second = createKeychainProvider(secondBackend);
     const secondAdapter = createJointStore(secondBackend, namespacePrefixes());

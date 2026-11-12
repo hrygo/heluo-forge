@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { apply, openCredentialReader, validateConfig } from '../src/index.mjs';
 import { createMemoryBackend } from '../src/backend.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 function ownDirectory(t, directory) {
   const cleanups = [];
@@ -32,8 +32,9 @@ function context() {
 }
 
 test('plugin and read-only reader use the same namespace and durable store', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'heluo-credentials-composition-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('heluo-credentials-composition-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
   const ctx = context();
   const dispose = apply(ctx, { storeDirectory: directory });
   own(dispose);
@@ -73,8 +74,9 @@ test('legacy backend configuration is rejected instead of silently changing its 
 });
 
 test('CLI reopens the same sqlite session in a fresh process without changing it', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'heluo-cli-sqlite-'));
-  const own = ownDirectory(t, directory);
+  const root = await outsideRepositoryTmpAsync('heluo-cli-sqlite-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
   const ctx = context();
   const dispose = apply(ctx, { storeDirectory: directory });
   own(dispose);

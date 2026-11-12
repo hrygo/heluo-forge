@@ -81,7 +81,8 @@ test('all read surfaces use the same sqlite session on the current host', async 
   {
     const platform = process.platform;
     const arch = process.arch;
-    const directory = await mkdtemp(join(tmpdir(), 'forge-read-sqlite-'));
+    const root = await mkdtemp(join(tmpdir(), 'forge-read-sqlite-'));
+    const directory = join(root, 'store');
     const cleanup = [];
     t.after(async () => {
       const errors = [];
@@ -89,7 +90,7 @@ test('all read surfaces use the same sqlite session on the current host', async 
         try { await close(); } catch (error) { errors.push(error); }
       }
       if (errors.length) throw new AggregateError(errors, 'failed to close SQLite test resources');
-      await rm(directory, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
     });
     const backend = createCredentialStore({ directory });
     assert.equal(backend.available, true, `${platform}-${arch} backend`);
