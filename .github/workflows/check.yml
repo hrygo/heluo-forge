@@ -4,12 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -89,6 +92,11 @@ jobs:
           node-version-file: .node-version
           package-manager-cache: false
       # All checks currently use Node built-ins; avoid dependency installation and cache overhead.
+      - name: Check PR issue reference
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-pr-issue.mjs
       - name: Check documents, repository and tests
         run: node --run check
 
