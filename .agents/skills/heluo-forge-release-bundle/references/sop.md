@@ -3,38 +3,43 @@
 ## 1. 开始前
 
 - 公版 `.tgz` 已下载；SHA-256 来自发布页或另一条可信渠道，不采用制品同目录的 `SHA256SUMS`。
-- 打包人员能提供：企业 IAM issuer、client_id、网关 baseURL、回调地址（端口默认随机）、Gitee host（可选）、交付版本号。
+- 打包人员能提供：企业 IAM issuer、client_id、Discovery 或显式授权/token/JWKS 端点、访问令牌撤销端点、网关 baseURL 和 provider、回调地址（端口默认随机）、Gitee host（可选）、交付版本号。
 - 输出目录在仓库之外，且不存在或为空；磁盘空间足够。
-- 企业采用公开客户端 + PKCE，**没有** `client_secret`；要求提供 secret 时说明企业方案不适用并停止。
+- 企业交付采用公开客户端 + PKCE S256，不使用 `client_secret`。用户确认企业 IAM 支持该方式；真实登录、刷新与回调仍须在企业环境验证。制作器不接收 secret 或个人 Key。
 
 ## 2. 问答（逐项确认）
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
 2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
-3. Discovery URL：默认取 `issuer + /.well-known/openid-configuration`。maker 会自动请求，要求 200、`issuer` 与配置一致、`authorization_endpoint`/`token_endpoint`/`jwks_uri` 齐全；不确定时让管理员提供。只有打包机确实无法访问 IAM 时才加 `--skip-discovery-check`，并在交付报告里注明该检查未执行。
+3. Discovery URL：优先由管理员提供，常见形式为 `issuer + /.well-known/openid-configuration`，不自行推定实际地址。maker 请求后检查 `issuer` 与 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；运行时还要求 issuer 精确一致。无 Discovery 时显式提供 issuer、三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
 4. client_id：企业的公开客户端 ID，不是员工个人标识。
-5. 网关 baseURL：企业模型网关地址，通常以 `/v1` 结尾；用于 `managedModels.baseURL`，http 同上需显式确认。
+5. 网关 baseURL 和 provider：地址用于 `managedModels.baseURL`，按网关实际路径填写；provider 使用准确的模型路由标识。http 同上需显式确认。
 6. 回调端口与地址：端口默认 `0`（系统分配），地址默认 `127.0.0.1`（不接受 `localhost` 或 `[::1]`）。企业 IAM 按 `http://127.0.0.1:` 前缀登记回环回调，端口可随机，不需要为每个包约定固定值；只有 IAM 明确要求精确匹配固定 URI 时，才填 1024–65535，并保证与登记值逐字节一致。固定端口被占用会直接拒绝登录（`IAM_CALLBACK_PORT_UNAVAILABLE`），不回落随机端口。
 7. Gitee host：没有企业 Gitee 就跳过，不写空键。
 8. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
 9. 输出目录：仓库外、不存在或为空。
-10. 凭据存储：Windows 与 macOS 使用插件内置的加密文档后端，`.env` 不需要任何相关配置；Linux 目标没有可用凭据后端，安装后向导会提示“凭据存储不可用”，交付前向使用方说明。
+10. 凭据存储：插件使用 SQLite 值级加密存储和文件 keyring，`.env` 不需要相关配置；Windows、Linux/麒麟与 macOS 的目标宿主兼容性和权限仍须实测。
+11. IAM 撤销：显式提供访问令牌 D1 撤销端点 `HELUO_IAM_REVOCATION_ENDPOINT`，地址不含查询参数；确认其 GET 回执。Discovery 预检不核验该端点。无此端点时运行时跳过远端撤销，不能当作退出闭环。回调失败时，当前代码还会向同一字段尝试 POST 撤销刷新令牌；D1 只提供访问令牌 GET 撤销，不能据此声称刷新令牌已撤销。
+12. IAM 刷新：当前插件将 `HELUO_IAM_TOKEN_ENDPOINT` 同时用于授权码换票与刷新。核对企业服务是否支持这种方式；若刷新使用独立端点，当前工具和插件均不能配置它，须先完成适配并联调。
 
-答案写入临时文件，内网 http 时追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`：
+答案保存在仓库外的专用 `.env`，权限为 `600`；该文件可复用，已有文件不得自动覆盖或删除。配置行见 [Skill 入口](../SKILL.md#问答协议)；内网 http 经明确确认后追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`：
 
 ```sh
 umask 077
-config="$(mktemp -t heluo-enterprise.XXXXXX.env)"
+config="<仓库外 .env 文件路径>"
+chmod 600 "$config"
 ```
 
-写入键值后 `chmod 600`；不要把值放进 `--issuer` 之类的命令行参数，也不要写进仓库、报告或聊天记录。
+脚本只将文件按 `KEY=VALUE` 数据解析，不执行 `source` 或变量展开。允许的企业配置会写入私版的 `cordis.patch.yml`；完整 `.env`、个人 Key、令牌和 `client_secret` 不进入交付包。配置值不要放入命令行参数、仓库或报告。
+
+插件的 `refreshSkewSeconds`、`httpTimeoutMs` 和 `logoutMode` 不在当前制作器 `.env` 白名单中，分别使用运行时默认值 `60`、`10000` 和 `local`；不得添加未经支持的环境键来假定这些值已生效。
 
 ## 3. 预览与确认
 
-1. 运行 `release-delivery --dry-run`，只回显公版摘要、版本、输出目录、配置键名、`loginReady`、`discovery`、平台列表与 `planDigest`；`loginReady` 不是 `true` 或 `discovery.checked` 不是 `true`（除非显式跳过）就停止，不得生成交付包。
-2. 把键名、版本、摘要前缀交给打包人员核对；确认企业地址与其预期一致。
+1. 运行 `release-delivery --dry-run`，确认 `loginReady` 为 `true`；配置 Discovery 且未主动跳过检查时确认 `discovery.checked` 为 `true`。只提供显式端点或主动跳过检查时，`discovery.checked` 为 `false`，须另行核验并记录。该结果不验证网关、撤销端点或完整的运行时配置。
+2. 预检结果和部分错误可能回显 issuer、端点或本地路径，制作输出按企业敏感信息保护；对外报告先人工脱敏。把键名、版本、摘要前缀交给打包人员核对，确认企业地址与预期一致。
 3. 用回显的摘要前缀（至少 8 位）重跑并带 `--confirm`；换制品、配置或版本必须重新预览。
-4. 成功后删除临时配置文件。
+4. 保留专用配置供后续复用，是否处置由文件所有者决定。
 
 ## 4. 交付物结构
 
@@ -69,9 +74,9 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。
 
 ## 6. 允许的输出与证据
 
-- 可以出现：配置键名、profile 名、版本号、摘要前缀、成功/失败结论、文件清单。
-- 不得出现：配置值、密钥、令牌、完整 `.env`、本机绝对路径、未脱敏的原始错误。
-- 应保留：公版文件名/摘要/来源、临时配置的键名与权限检查、确认摘要前缀、私版与 zip 摘要、员工安装回显与设置页确认结果。
+- 脱敏报告可以出现配置键名、profile 名、版本号、摘要前缀、成功/失败结论、文件清单。
+- 脱敏报告不得包含配置值、密钥、令牌、完整 `.env`、本机绝对路径或未脱敏的原始错误；原始制作输出可能包含企业地址和路径，不能直接作为脱敏报告。
+- 应保留：公版文件名/摘要/来源、配置的键名与权限检查、确认摘要前缀、私版与 zip 摘要、员工安装回显与设置页确认结果。
 - 企业内实测记录：宿主版本与架构、Desktop/Web profile、是否离线、升级/回退、数据保留、员工步数。
 
 ## 7. 失败处理
@@ -83,7 +88,7 @@ zip 与目录同名；zip 的 SHA-256 作为交付摘要。
 | `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续并报告类别 |
 | `CONFIG_INVALID` / `CONFIG_UNKNOWN_KEY` | 按字段修正；未知键不写入 |
 | `CONFIG_PERMISSIONS` | `chmod 600` 后重试 |
-| `BUNDLE_SECRET_EMBED_UNSUPPORTED` | 删除 secret 行；企业方案不应有共享密钥 |
+| `BUNDLE_SECRET_EMBED_UNSUPPORTED` | 不使用含 secret 的配置；修正专用 `.env` 后重新预览 |
 | `OUTPUT_INSIDE_REPO` / `OUTPUT_EXISTS` | 换仓库外的新目录；不删除或覆盖已有文件 |
 | `VERIFY_FAILED` | 保留现场，报告错误行；不手工改清单或重新打包绕过 |
 

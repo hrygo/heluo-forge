@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.5.7 |
+| 版本 | V0.6.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-11 |
+| 最后更新 | 2026-11-12 |
 | 门禁 | 轻量集成方案待用户确认；问答式交付打包与员工启动器已本地验证；企业接口与目标平台待实测 |
 
 > 编制依据：项目负责人确认企业采用 public 客户端、以官方宿主集成企业插件、不重新签名或公证，轻量安装方式由 miniceM 调研选择；具体范围见 §1。文档为技术方案草案，不表示企业接口、安装流程或目标平台已实测。现有实现与验证见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)。
@@ -76,11 +76,11 @@ flowchart LR
 | 其他企业配置 | 企业统一且与个人无关的已启用能力配置 | 按能力检查，未启用能力不强加字段 |
 | 个人数据 | 个人 Key、账号、token、密码 | 不作为企业配置或私版输入 |
 
-字段类别不表示现有 `.env` 键名或运行时映射已经实现。真实 `.env` 位于仓库外，由脚本作为数据解析，不使用 shell `source`、`eval` 或整体打入插件；转写采用结构化编码。日志、错误、报告、命令参数和 Agent 上下文不暴露敏感值或完整企业地址。
+真实 `.env` 位于仓库外且不提交，可由制作人员复用。制作器以 `--config` 读取专用文件并按数据解析，不使用 shell `source`、`eval` 或将完整文件打入插件；允许的企业配置转写到私版 `cordis.patch.yml`，因此对交付对象可见。密钥、个人凭据与令牌不作为配置输入。命令参数和脱敏报告不包含配置值；当前 Discovery 预检结果和部分错误会回显 issuer 与端点，原始输出须按企业敏感信息保护，分享前人工脱敏。
 
-OIDC Discovery 的 `issuer`、可信 issuer 和 ID Token 的 `iss` 必须精确一致；生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。用户确认企业支持 public；厂商历史回函曾对 public / PKCE 给出不支持的口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
+OIDC Discovery 的 `issuer`、可信 issuer 和 ID Token 的 `iss` 必须精确一致；生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。用户确认企业支持 public 与 PKCE S256；厂商历史回函曾给出不同口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
 
-Skill 引导助手逐项收集公版摘要、企业版本、IAM issuer 与 client_id、网关地址、回调端口与地址、可选 Gitee host 和输出位置，未收集齐不生成；值由 `release-delivery` 复核，配置只写入仓库外的 600 权限临时文件，不把 secret 或完整 `.env` 放入交付物、日志、错误或公开报告。用户明确确认已汇总的必要参数后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。企业地址默认只接受 HTTPS；确需内网 HTTP 时必须由打包人员显式确认明文传输风险，并在配置中设置 `allowInsecureHttp=true`。员工端初始化脚本按 `--release` 与 `--profile` 执行，只回显 profile、版本、摘要与结论；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用），随后只执行一次 `dsh plugin add`。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。真实 `.env`、包含企业配置的暂存文件与私版插件均置于仓库外，按平台使用受限制的文件权限；成功前只原子落位工具自身创建的临时文件，失败只清理本次运行可确认归属的暂存，不清理用户已有数据。
+Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。`release-delivery` 从仓库外权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；secret 和完整 `.env` 不进入交付物。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。该开关只约束制作器检查，运行时不能依靠它阻止 HTTP。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用），随后只执行一次 `dsh plugin add`。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。真实 `.env`、包含企业配置的暂存文件与私版插件均置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
 
 ## 4. 公版构建与本地二次制作
 
@@ -102,7 +102,7 @@ Skill 引导助手逐项收集公版摘要、企业版本、IAM issuer 与 clien
 
 官方 DSH 由可核验渠道获取，记录版本、来源、目标架构和摘要。企业插件包继续通过私有 npm / AIHUB 或内部文件交付；公开 Release 不代为提供官方宿主。
 
-企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 负责向打包人员逐项收集企业字段、展示脱敏确认页并调用该命令。制作器在写盘前自动请求 IAM Discovery：要求 HTTP 200、文档 `issuer` 与配置一致、`authorization_endpoint`/`token_endpoint`/`jwks_uri` 齐全且与显式配置一致；网络确实不可达时只能显式 `--skip-discovery-check`，该跳过项作为未验证证据报告。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
+企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 收集企业字段并引导脱敏确认。配置 Discovery 时制作器检查 HTTP 200、`issuer` 及 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；只提供显式端点或使用 `--skip-discovery-check` 时，Discovery 未核验。制作端对 issuer 尾斜杠作宽松比较，运行时要求精确一致；撤销端点也不在 Discovery 预检范围内，均须单独核验。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
 
 miniceM 对比并选择以下两条候选：
 
