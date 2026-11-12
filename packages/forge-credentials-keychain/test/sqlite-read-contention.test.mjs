@@ -148,6 +148,44 @@ test('an ordinary read waits for a short exclusive writer instead of reporting b
   }
 });
 
+test('close drains an accepted read while it waits for an exclusive writer', async (t) => {
+  const { directory, store } = await fixture(t);
+  const writer = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  let closing;
+  let read;
+  try {
+    writer.exec('BEGIN EXCLUSIVE');
+    read = store.get(ref).then((value) => ({ value }), (error) => ({ error }));
+    closing = store.close();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    writer.exec('COMMIT');
+    const result = await read;
+    assert.equal(result.error, undefined, result.error?.stack);
+    assert.equal(result.value, 'before');
+    await closing;
+  } finally {
+    writer.close();
+    if (read) await read;
+    if (closing) await closing;
+  }
+});
+
+test('close preserves the timeout of an accepted read under persistent contention', async (t) => {
+  const { directory, store } = await fixture(t, 80);
+  const writer = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  let closing;
+  try {
+    writer.exec('BEGIN EXCLUSIVE');
+    const read = store.get(ref).then(() => undefined, (error) => error);
+    closing = store.close();
+    assert.equal((await read)?.code, 'CRED_LOCK_TIMEOUT');
+    await closing;
+  } finally {
+    writer.close();
+    if (closing) await closing;
+  }
+});
+
 test('another process reclaims a finished live owner after a read blocks release', { timeout: 5000 }, async (t) => {
   const { directory, store, own } = await fixture(t, 1000);
   const moduleUrl = new URL('../src/credential-store.mjs', import.meta.url).href;

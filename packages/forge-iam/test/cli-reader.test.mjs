@@ -18,7 +18,7 @@ async function fixture(t, options = {}) {
   const stub = `import { appendFileSync } from 'node:fs';
 const mark = value => appendFileSync(process.env.TEST_READER_LOG, JSON.stringify(value) + '\\n');
 let reads = 0;
-const error = code => Object.assign(new Error('sensitive-placeholder'), {code});
+const error = code => Object.assign(new Error('sensitive-placeholder ' + process.env.TEST_READER_LOG), {code});
 export async function openCredentialReader(options) {
   mark({open:options});
   if (process.env.TEST_OPEN_ERROR) throw error(process.env.TEST_OPEN_ERROR);
@@ -66,6 +66,23 @@ test('offline key and decrypt errors preserve codes without exposing exception t
       return true;
     });
     if (field === 'TEST_READ_ERROR') assert.match(await readFile(f.log, 'utf8'), /"close":true/);
+  }
+});
+
+test('CLI identifies a store directory conflict without exposing paths or unknown errors', async (t) => {
+  for (const [input, code, message] of [
+    ['CRED_STORE_PATH_CONFLICT', 'CRED_STORE_PATH_CONFLICT', '检测到多个凭据存储目录，请核对并为 Host 和 CLI 明确选择同一目录。'],
+    ['SECRET_UNTRUSTED_CODE', 'IAM_CREDENTIALS_UNAVAILABLE', '凭据存储不可用或读取失败'],
+  ]) {
+    const f = await fixture(t, { TEST_OPEN_ERROR: input });
+    await assert.rejects(f.cli('whoami', '--json'), (error) => {
+      assert.equal(error.code, 4);
+      assert.equal(error.stdout, '');
+      assert.deepEqual(JSON.parse(error.stderr), { error: { code, message } });
+      assert.doesNotMatch(error.stderr, /sensitive-placeholder|SECRET_UNTRUSTED_CODE/);
+      assert.equal(error.stderr.includes(f.directory), false);
+      return true;
+    });
   }
 });
 

@@ -164,6 +164,83 @@ test('close waits for an in-flight mutation and releases its lock before reopeni
   assert.equal(await reopened.get(ref), 'reopened');
 });
 
+test('close in the same tick drains an accepted transaction and rejects new operations', async (t) => {
+  const { directory, store, own } = await fixture(t);
+  await store.set(ref, 'before');
+  let enter;
+  let release;
+  let calls = 0;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const mutation = store.transaction(ref, async (tx) => {
+    calls += 1;
+    assert.equal(tx.get(), 'before');
+    enter();
+    await gate;
+    tx.set('after');
+    return 'committed';
+  });
+  const result = mutation.then((value) => ({ value }), (error) => ({ error }));
+  let closeFinished = false;
+  const closing = store.close().then(() => { closeFinished = true; });
+  try {
+    for (const operation of [store.get(ref), store.set(ref, 'late'), store.transaction(ref, () => {})]) {
+      await assert.rejects(operation, { code: 'CRED_STORE_UNAVAILABLE' });
+    }
+    const outcome = await Promise.race([entered.then(() => ({ entered: true })), result]);
+    if (outcome.error) throw outcome.error;
+    assert.equal(outcome.entered, true);
+    assert.equal(closeFinished, false);
+    release();
+    assert.equal((await result).value, 'committed');
+    await closing;
+    assert.equal(calls, 1);
+    await assert.rejects(store.get(ref), { code: 'CRED_STORE_UNAVAILABLE' });
+    await assert.rejects(store.set(ref, 'late'), { code: 'CRED_STORE_UNAVAILABLE' });
+    await store.close();
+    const reopened = createCredentialStore({ directory });
+    own(() => reopened.close());
+    assert.equal(await reopened.get(ref), 'after');
+  } finally {
+    release();
+    await result;
+    await closing;
+  }
+});
+
+test('close preserves an accepted transaction callback failure and releases the lock', async (t) => {
+  const { directory, store, own } = await fixture(t);
+  await store.set(ref, 'before');
+  const expected = new Error('synthetic callback failure');
+  let calls = 0;
+  const mutation = store.transaction(ref, () => { calls += 1; throw expected; });
+  const outcome = mutation.then(() => undefined, (error) => error);
+  const closing = store.close();
+  assert.equal(await outcome, expected);
+  await closing;
+  assert.equal(calls, 1);
+  const reopened = createCredentialStore({ directory });
+  own(() => reopened.close());
+  assert.equal(await reopened.get(ref), 'before');
+  await reopened.set(ref, 'later');
+  assert.equal(await reopened.get(ref), 'later');
+});
+
+test('close drains a transaction that initializes the store', async (t) => {
+  const { directory, store, own } = await fixture(t);
+  const mutation = store.transaction(ref, (tx) => {
+    assert.equal(tx.get(), undefined);
+    tx.set('first');
+  });
+  const result = mutation.then(() => undefined, (error) => error);
+  const closing = store.close();
+  assert.equal(await result, undefined);
+  await closing;
+  const reopened = createCredentialStore({ directory });
+  own(() => reopened.close());
+  assert.equal(await reopened.get(ref), 'first');
+});
+
 test('missing keyring or legacy document is rejected without replacing existing data', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'heluo-sqlite-legacy-'));
   const own = ownDirectory(t, directory);

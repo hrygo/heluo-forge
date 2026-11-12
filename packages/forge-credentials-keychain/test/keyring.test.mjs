@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, unlinkSync, rmSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createCredentialStore } from '../src/credential-store.mjs';
 import { createFileKeyProvider } from '../src/keyring.mjs';
 
 function fixture(t) {
@@ -52,6 +56,134 @@ test('removed old key is unavailable but active key remains readable', (t) => {
   assert.equal(provider.active().kid, 'k2');
   unlinkSync(path);
   assert.throws(() => provider.active());
+});
+
+test('a read survives another process atomically rotating the keyring', async (t) => {
+  const { path } = fixture(t);
+  const directory = dirname(path);
+  const store = createCredentialStore({ directory });
+  const ref = 'heluo-forge/iam/ref/ENTERPRISE_STATIC_KEY';
+  const original = fs.lstatSync;
+  let rotated = false;
+  try {
+    await store.set(ref, 'synthetic');
+    fs.lstatSync = (target, ...args) => {
+      const stat = original(target, ...args);
+      if (!rotated && target === path) {
+        rotated = true;
+        const moduleUrl = new URL('../src/credential-store.mjs', import.meta.url).href;
+        const source = `import { createCredentialStore } from ${JSON.stringify(moduleUrl)};
+          const store = createCredentialStore({ directory: process.argv[1] });
+          try { await store.rotate('k2'); } finally { await store.close(); }`;
+        const child = spawnSync(process.execPath, ['--input-type=module', '-e', source, directory], { encoding: 'utf8', timeout: 10000 });
+        assert.equal(child.status, 0, child.stderr || child.error?.message);
+      }
+      return stat;
+    };
+    syncBuiltinESMExports();
+    assert.equal(await store.get(ref), 'synthetic');
+    assert.equal(rotated, true);
+  } finally {
+    fs.lstatSync = original;
+    syncBuiltinESMExports();
+    await store.close();
+  }
+});
+
+test('continuous keyring replacement is rejected after bounded retries', (t) => {
+  const { path, provider } = fixture(t);
+  provider.initialize('k1');
+  const replacement = `${path}.replacement`;
+  const original = fs.lstatSync;
+  let attempts = 0;
+  try {
+    fs.lstatSync = (target, ...args) => {
+      const stat = original(target, ...args);
+      if (target === path) {
+        attempts += 1;
+        writeFileSync(replacement, readFileSync(path), { mode: 0o600, flag: 'wx' });
+        fs.renameSync(replacement, path);
+      }
+      return stat;
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => provider.active(), { code: 'CRED_KEY_INVALID' });
+    assert.ok(attempts >= 2 && attempts <= 3);
+  } finally {
+    fs.lstatSync = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('an insecure replacement is rejected after an open race', { skip: process.platform === 'win32' }, (t) => {
+  const { path, provider } = fixture(t);
+  provider.initialize('k1');
+  const replacement = `${path}.replacement`;
+  writeFileSync(replacement, readFileSync(path), { mode: 0o600 });
+  chmodSync(replacement, 0o644);
+  const original = fs.lstatSync;
+  let replaced = false;
+  try {
+    fs.lstatSync = (target, ...args) => {
+      const stat = original(target, ...args);
+      if (target === path && !replaced) {
+        replaced = true;
+        fs.renameSync(replacement, path);
+      }
+      return stat;
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => provider.active(), { code: 'CRED_KEY_PERMISSIONS' });
+    assert.equal(replaced, true);
+  } finally {
+    fs.lstatSync = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('a symlink substituted during open is rejected', { skip: process.platform === 'win32' }, (t) => {
+  const { path, provider } = fixture(t);
+  provider.initialize('k1');
+  const alternate = `${path}.alternate`;
+  const replacement = `${path}.replacement`;
+  writeFileSync(alternate, readFileSync(path), { mode: 0o600 });
+  symlinkSync(alternate, replacement);
+  const original = fs.lstatSync;
+  let replaced = false;
+  try {
+    fs.lstatSync = (target, ...args) => {
+      const stat = original(target, ...args);
+      if (target === path && !replaced) {
+        replaced = true;
+        fs.renameSync(replacement, path);
+      }
+      return stat;
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => provider.active(), (error) => ['ELOOP', 'CRED_KEY_INVALID'].includes(error.code));
+    assert.equal(replaced, true);
+  } finally {
+    fs.lstatSync = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test('a keyring owned by a different user is rejected', { skip: process.platform === 'win32' }, (t) => {
+  const { provider } = fixture(t);
+  provider.initialize('k1');
+  const original = fs.fstatSync;
+  try {
+    fs.fstatSync = (fd, ...args) => {
+      const stat = original(fd, ...args);
+      stat.uid = process.getuid() + 1;
+      return stat;
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => provider.active(), { code: 'CRED_KEY_PERMISSIONS' });
+  } finally {
+    fs.fstatSync = original;
+    syncBuiltinESMExports();
+  }
 });
 
 test('rejects invalid kids and malformed or noncanonical documents without leaking key material', (t) => {

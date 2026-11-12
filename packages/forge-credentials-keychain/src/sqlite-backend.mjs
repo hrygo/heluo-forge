@@ -32,6 +32,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
   let closePromise;
   let pendingInitialization;
   const operations = new Set();
+  const activeTokens = new Set();
   const committed = new Set();
   const fingerprint = (token) => createHash('sha256').update(token).digest('hex').slice(0, 32);
   const abandoned = (pid, digest) => join(directory, `credentials.sqlite.abandoned.${pid}.${digest}`);
@@ -44,7 +45,8 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     catch (e) { try { db.exec('ROLLBACK'); } catch {} throw e; }
   }
   function open(create = false) {
-    if (closed || closing) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
+    // Admitted operations may still need to open or retry while close drains them.
+    if (closed) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
     if (pendingInitialization) throw error('CRED_KEY_UNAVAILABLE', 'credential store initialization is incomplete');
     if (db) return true;
     for (const legacy of ['credentials.json', 'credentials.key']) {
@@ -272,8 +274,10 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     let result;
     let actionError;
     let failed = false;
+    activeTokens.add(token);
     try { result = await fn(token); }
     catch (cause) { failed = true; actionError = cause; }
+    finally { activeTokens.delete(token); }
     if (!committed.delete(token)) {
       const releaseDeadline = Date.now() + lockTimeoutMs;
       try {
@@ -305,8 +309,9 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     try { return await operation; }
     finally { operations.delete(operation); }
   }
-  async function withRead(fn) {
-    if (closed || closing) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
+  async function withRead(fn, token) {
+    // A transaction's internal read belongs to its already admitted lock holder.
+    if (closed || (closing && !activeTokens.has(token))) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
     const operation = (async () => {
       const deadline = Date.now() + lockTimeoutMs;
       while (true) {

@@ -93,12 +93,14 @@ export async function currentToken() {
 | 码 | 含义 | 你该做什么 |
 |---|---|---|
 | 0 | 成功 | 继续 |
-| 2 | 未登录 | 提示"请在 DSH 中登录"，不要报成权限不足 |
-| 3 | 令牌已过期 | 提示"登录已过期，请回 DSH 重新登录" |
-| 4 | 凭据不可用或 Host 拒绝 | 报环境问题，需要人工处理 |
+| 2 | `auth token` 未登录 | 提示"请在 DSH 中登录"，不要报成权限不足 |
+| 3 | `auth token` 令牌已过期或需要重新登录 | 提示"登录已过期，请回 DSH 重新登录" |
+| 4 | 凭据存储缺失、损坏、不可访问或 Host 拒绝 | 报环境问题，需要人工处理 |
 | 64 | 参数写错 | 修代码 |
 
-一个坑：**`whoami` 永远返回 0**，未登录也是 0。判断登录态请看 JSON 里的 `signedIn`，不要看退出码。
+`whoami` 能读取存储时返回 0，未登录、已过期或记录状态为错误也是 0；判断登录态请同时查看 JSON 里的 `status` 和 `signedIn`。存储缺失、数据库或密钥文件损坏或无法访问时返回 4，stdout 为空，错误在 stderr。
+
+`CRED_STORE_PATH_CONFLICT` 表示存在多个候选存储目录。核对后，为 Host 的 `storeDirectory` 与 CLI 的 `HELUO_FORGE_STORE_DIRECTORY` 明确选择同一目录；此选择不会自动合并或迁移现有数据。
 
 另一个坑：`auth token` 失败时 **stdout 是空的**，错误在 stderr。所以不要用 stdout 非空来判断成功——看退出码。
 
@@ -171,7 +173,7 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 
 1. 把令牌存进自己的配置文件——用户下次打开就用到过期票，而且没人知道为什么。
 2. 用 refresh token 自己续期——会把用户正在用的会话踢掉。
-3. 用 `whoami` 的退出码判断登录态——它永远返回 0。
+3. 只用 `whoami` 的退出码判断登录态——成功读取时未登录和过期也返回 0；退出码 4 表示无法读取或其他环境问题。
 4. 把令牌打进日志、命令行参数、崩溃报告——日志会被收集、命令行会被 `ps` 看到。
 5. 期待拿到用户姓名——只有工号。
 
@@ -204,6 +206,7 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 | `IAM_REAUTH_REQUIRED` | 退出码 3 / HTTP 401 | 令牌过期，需重新登录 |
 | `IAM_INVALID_GRANT` | 退出码 3 / HTTP 401 | 会话记录无效或退出结果未确认，需重新登录 |
 | `IAM_CREDENTIALS_UNAVAILABLE` | 退出码 4 / HTTP 503 | 凭据后端不可用 |
+| `CRED_STORE_PATH_CONFLICT` | 退出码 4 | 多个候选凭据存储目录同时存在 |
 | `IAM_BRIDGE_UNAUTHORIZED` | HTTP 401 | 桥能力值不对 |
 | `IAM_BRIDGE_FORBIDDEN` | HTTP 403 | 非本机来源 |
 | `IAM_REQUEST_HEADER_REQUIRED` | HTTP 403 | 缺 `x-forge-iam-request: 1` |

@@ -31,6 +31,9 @@ function fail(code, message, json) {
 }
 
 function credentialError(error) {
+  if (error?.code === 'CRED_STORE_PATH_CONFLICT') {
+    return { code: 'CRED_STORE_PATH_CONFLICT', message: '检测到多个凭据存储目录，请核对并为 Host 和 CLI 明确选择同一目录。' };
+  }
   const code = error?.code === 'CRED_KEY_UNAVAILABLE' || error?.code === 'CRED_DECRYPT_FAILED'
     ? error.code : 'IAM_CREDENTIALS_UNAVAILABLE';
   return { code, message: '凭据存储不可用或读取失败' };

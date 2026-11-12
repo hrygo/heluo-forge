@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { capabilities, createRegisteredBackend } from './backend-registry.mjs';
 import { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
 import { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
+import { selectDefaultStoreDirectory } from './default-store-directory.mjs';
 
 export const name = 'forge-credentials-keychain';
 export const inject = [];
@@ -161,9 +162,12 @@ export function validateConfig(input = {}) {
 
 /** One directory resolver is shared by the Host and the read-only CLI. */
 export function defaultStoreDirectory() {
-  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'HeluoForge');
-  if (process.platform === 'win32') return join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'HeluoForge');
-  return join(homedir(), '.local', 'share', 'HeluoForge');
+  return selectDefaultStoreDirectory({
+    platform: process.platform,
+    home: homedir(),
+    localAppData: process.env.LOCALAPPDATA,
+    xdgDataHome: process.env.XDG_DATA_HOME,
+  });
 }
 
 function storeDirectory(directory) {

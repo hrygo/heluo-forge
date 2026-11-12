@@ -67,7 +67,7 @@ export function createEncryptedAdapter({ backend, cipher, keys, kind = 'unknown'
     async listEntries(prefix) { return backend.withRead(() => backend.open() ? backend.transaction(() => backend.list().filter((row) => row.id.startsWith(prefix)).map((row) => ({ key: row.id, value: read(row.id) }))) : []); },
     async transaction(id, mutate) {
       return backend.withLock(async (token) => {
-        const original = await backend.withRead(() => read(id));
+        const original = await backend.withRead(() => read(id), token);
         let current = original;
         let changed = false;
         const tx = { get: () => current, set(value) { current = value; changed = true; }, delete() { current = undefined; changed = true; } };
