@@ -1020,13 +1020,13 @@ for (const expired of [false, true]) test(`a prefetch failure before a refresh c
   });
   await gated.hydrate();
   if (expired) clock = Date.parse(before.payload.accessExpiresAt) + 1;
-  await assert.rejects(gated.resolveToken(), { code: expired ? 'IAM_REAUTH_REQUIRED' : 'IAM_UNREACHABLE' });
+  await assert.rejects(gated.resolveToken(), { code: 'IAM_UNREACHABLE' });
   assert.equal(prefetchFailures, 1);
   assert.equal(refreshPosts, 0, 'prefetch failure precedes any refresh POST attempt');
   assert.equal(mock.counts.token, beforeRequests, 'prefetch failure precedes the refresh POST');
   assert.deepEqual(await credentials.readRecord('heluo-iam/session'), before);
   assert.equal(before.payload.refreshOperation, undefined);
-  if (expired) assert.notEqual(gated.getView().state, 'ready');
+  if (expired) assert.equal(gated.getView().state, 'expired');
   else assert.equal(gated.getView().state, 'ready');
 });
 

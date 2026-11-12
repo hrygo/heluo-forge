@@ -152,6 +152,7 @@ export function createReconciler(env) {
       const previousSubject = ctx.lastGrant?.subject ?? null;
       const previousExpiry = ctx.lastGrant?.accessExpiresAt ?? null;
       const previousRefreshExpiry = ctx.lastGrant?.refreshExpiresAt ?? null;
+      const previousRefreshToken = ctx.lastGrant?.refreshToken ?? null;
       const previous = `${ctx.state}|${ctx.error}|${previousSubject}`;
       ctx.lastGrant = record.grant;
       grants.own(record.grant, targetStore);
@@ -182,7 +183,8 @@ export function createReconciler(env) {
       }
       if (previous !== `${ctx.state}|${ctx.error}|${ctx.lastGrant.subject ?? ''}`
         || previousExpiry !== (ctx.lastGrant.accessExpiresAt ?? null)
-        || previousRefreshExpiry !== (ctx.lastGrant.refreshExpiresAt ?? null)) ctx.notify();
+        || previousRefreshExpiry !== (ctx.lastGrant.refreshExpiresAt ?? null)
+        || previousRefreshToken !== (ctx.lastGrant.refreshToken ?? null)) ctx.notify();
     } catch (cause) {
       if (!isCurrent()) return ctx.view();
       setObservation(null);

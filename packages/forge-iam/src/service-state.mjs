@@ -1,7 +1,7 @@
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { createView, transition } from './state.mjs';
-import { isRefreshUsable, summarizeGrant } from './record.mjs';
+import { isAccessExpired, isRefreshUsable, summarizeGrant } from './record.mjs';
 
 /**
  * Session state, owned in one place.
@@ -92,6 +92,12 @@ export function createServiceState(env) {
   }
 
   function notify() {
+    // A notification can arrive after a still-running timer's access deadline.
+    // Publish the expired view before rescheduling its recoverable session.
+    if (state === 'ready' && lastGrant && isAccessExpired(lastGrant, now())) {
+      state = 'expired';
+      error = null;
+    }
     const snapshot = view();
     for (const listener of listeners) {
       try {

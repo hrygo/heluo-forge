@@ -260,6 +260,289 @@ test('a temporary preflight outage does not discard a valid session and is retri
   assert.equal(service.getView().state, 'ready');
 });
 
+for (const [accessState, outage] of [['missing', 'network'], ['expired', 'network'], ['expired', 'HTTP 503']]) {
+  test(`preflight failure after access expiry is retried automatically (${accessState} access, ${outage})`, async (t) => {
+    const oidc = await startMockOidc({ accessTtl: 30 });
+    const credentials = new MemoryCredentials();
+    oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+    const grant = {
+      version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+      refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date().toISOString(),
+      refreshExpiresAt: new Date(Date.now() + 5000).toISOString(),
+      ...(accessState === 'expired' ? {
+        accessToken: 'expired-access', accessExpiresAt: new Date(Date.now() - 1000).toISOString(),
+      } : {}),
+    };
+    const store = createGrantStore(credentials);
+    await store.write(grant);
+    let keyRequests = 0;
+    const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+      redirectUri: 'http://127.0.0.1:4567/iam/callback', refreshSkewSeconds: 1 }, {
+      credentials,
+      fetch: async (url, init) => {
+        if (String(url).endsWith('/jwks') && ++keyRequests === 1) {
+          if (outage === 'HTTP 503') return Response.json({}, { status: 503 });
+          throw new Error('synthetic outage');
+        }
+        return fetch(url, init);
+      },
+    });
+    t.after(async () => { await service.dispose(); await oidc.close(); });
+    await service.hydrate();
+    const timeout = Date.now() + 4500;
+    while (keyRequests === 0 && Date.now() < timeout) await delay(20);
+    await delay(30);
+    assert.equal(keyRequests, 1);
+    assert.equal(oidc.counts.refresh, 0, 'the failed preflight did not send a refresh request');
+    assert.equal(service.getView().state, 'expired');
+    assert.deepEqual((await store.read()).grant, grant, 'the unconsumed refresh grant remains intact');
+    while (oidc.counts.refresh === 0 && Date.now() < timeout) await delay(20);
+    assert.equal(oidc.counts.refresh, 1, 'the Host retries without a view poll');
+    while (service.getView().state !== 'ready' && Date.now() < timeout) await delay(20);
+    assert.equal(service.getView().state, 'ready');
+    assert.notEqual(await service.getAccessToken(), 'expired-access');
+  });
+}
+
+for (const accessDeadline of ['later', 'same']) test(`a refresh token expiring ${accessDeadline === 'same' ? 'with' : 'before'} access is renewed when configured skew is zero`, async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  const now = Date.now();
+  await createGrantStore(credentials).write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
+    obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + (accessDeadline === 'same' ? 2400 : 30_000)).toISOString(),
+    refreshExpiresAt: new Date(now + 2400).toISOString(),
+  });
+  let refreshSentAt;
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback', refreshSkewSeconds: 0 }, {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/token') && init?.method === 'POST') refreshSentAt = Date.now();
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  const timeout = Date.now() + 2700;
+  while (oidc.counts.refresh === 0 && Date.now() < timeout) await delay(20);
+  assert.equal(oidc.counts.refresh, 1, 'refresh begins before the refresh token expires');
+  assert.ok(refreshSentAt < now + 2400, 'the request was sent before the refresh token expired');
+  while (service.getView().state !== 'ready' && Date.now() < timeout) await delay(20);
+  assert.equal(service.getView().state, 'ready');
+});
+
+test('disposing an expired session cancels its scheduled preflight retry', async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  await createGrantStore(credentials).write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date().toISOString(),
+    refreshExpiresAt: new Date(Date.now() + 2400).toISOString(),
+  });
+  let keyRequests = 0;
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/jwks')) { keyRequests += 1; throw new Error('synthetic outage'); }
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  const timeout = Date.now() + 1000;
+  while (keyRequests === 0 && Date.now() < timeout) await delay(20);
+  assert.equal(keyRequests, 1);
+  await service.dispose();
+  await delay(1400);
+  assert.equal(keyRequests, 1);
+  assert.equal(oidc.counts.refresh, 0);
+});
+
+test('view reconciliation does not bypass preflight backoff when access expires during the request', async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  let clock = Date.now();
+  let keyRequests = 0;
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  await createGrantStore(credentials).write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
+    obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 1000).toISOString(),
+    refreshExpiresAt: new Date(clock + 60_000).toISOString(),
+  });
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials, now: () => clock,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/jwks')) {
+        keyRequests += 1;
+        started.resolve();
+        await release.promise;
+        throw new Error('synthetic outage');
+      }
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { release.resolve(); await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  const attempt = service.getAccessToken();
+  await started.promise;
+  clock += 1500;
+  release.resolve();
+  await assert.rejects(attempt, { code: 'IAM_UNREACHABLE' });
+  assert.equal(service.getView().state, 'expired');
+  await service.syncFromStore();
+  await delay(60);
+  assert.equal(keyRequests, 1, 'background reconciliation honors the retry delay');
+  assert.equal(oidc.counts.refresh, 0);
+});
+
+test('an unrelated view notification cannot shorten the preflight retry delay', async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  const requests = [];
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  await createGrantStore(credentials).write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
+    obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 1200).toISOString(),
+  });
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/jwks')) { requests.push(performance.now()); throw new Error('synthetic outage'); }
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  await assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+  assert.equal(service.getView().state, 'ready');
+  service.notifyView();
+  await delay(1250);
+  assert.ok(requests.length === 1 || requests[1] - requests[0] >= 950, 'notifications must not shorten the one-second retry delay');
+  assert.equal(oidc.counts.refresh, 0);
+});
+
+test('zero skew does not make a still-valid access token expire with an older refresh token', async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  let clock = Date.now();
+  await createGrantStore(credentials).write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
+    obtainedAt: new Date(clock - 5000).toISOString(), accessExpiresAt: new Date(clock + 500).toISOString(),
+    refreshExpiresAt: new Date(clock - 1).toISOString(),
+  });
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback', refreshSkewSeconds: 0 }, { credentials, now: () => clock });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  assert.equal(await service.getAccessToken(), 'synthetic-access');
+  clock += 501;
+  await assert.rejects(service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal(oidc.counts.refresh, 0);
+});
+
+test('successive refreshes honor the discovery metadata cache lifetime', async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 30 });
+  const credentials = new MemoryCredentials();
+  let clock = Date.now();
+  let discoveryRequests = 0;
+  let newTokenEndpoint = false;
+  const tokenPaths = [];
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  await createGrantStore(credentials).write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
+    obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 10_000).toISOString(),
+  });
+  const service = createIamService({ issuer: oidc.issuer,
+    discoveryUrl: `${oidc.issuer}/.well-known/openid-configuration`, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials, now: () => clock,
+    fetch: async (url, init) => {
+      const address = String(url);
+      if (address.endsWith('/.well-known/openid-configuration')) {
+        discoveryRequests += 1;
+        const document = await (await fetch(url, init)).json();
+        if (newTokenEndpoint) document.token_endpoint = `${oidc.issuer}/token-new`;
+        return Response.json(document);
+      }
+      if (address.endsWith('/token') || address.endsWith('/token-new')) {
+        tokenPaths.push(new URL(address).pathname);
+        const response = await fetch(`${oidc.issuer}/token`, init);
+        const payload = await response.json();
+        delete payload.id_token; // The test advances the local clock, not the mock issuer's clock.
+        return Response.json(payload, { status: response.status });
+      }
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  await service.getAccessToken();
+  clock += 31_000;
+  await service.getAccessToken();
+  assert.equal(discoveryRequests, 1, 'fresh metadata is reused');
+  newTokenEndpoint = true;
+  clock += 270_000;
+  await service.getAccessToken();
+  assert.equal(discoveryRequests, 2, 'expired metadata is fetched again before claiming the token');
+  assert.deepEqual(tokenPaths, ['/token', '/token', '/token-new']);
+});
+
+test('a discovery outage after the cache expires does not claim or consume the refresh token', async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 600 });
+  const credentials = new MemoryCredentials();
+  let clock = Date.now();
+  let discoveries = 0;
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  const store = createGrantStore(credentials);
+  await store.write({
+    version: 1, issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
+    obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + 10_000).toISOString(),
+  });
+  const service = createIamService({ issuer: oidc.issuer,
+    discoveryUrl: `${oidc.issuer}/.well-known/openid-configuration`, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials, now: () => clock,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/.well-known/openid-configuration') && ++discoveries === 2) {
+        throw new Error('synthetic outage');
+      }
+      if (String(url).endsWith('/token')) {
+        const response = await fetch(url, init);
+        const payload = await response.json();
+        delete payload.id_token;
+        return Response.json(payload, { status: response.status });
+      }
+      return fetch(url, init);
+    },
+  });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  await service.getAccessToken();
+  const previous = structuredClone((await store.read()).grant);
+  clock += 541_000;
+  await assert.rejects(service.getAccessToken(), { code: 'IAM_UNREACHABLE' });
+  assert.equal(oidc.counts.refresh, 1, 'the failed preflight made no refresh POST');
+  assert.deepEqual((await store.read()).grant, previous);
+  assert.equal(service.getView().state, 'ready');
+  await service.getAccessToken();
+  assert.equal(oidc.counts.refresh, 2);
+  assert.equal(discoveries, 3);
+});
+
 test('a lost refresh response leaves pending and is never retried automatically', async (t) => {
   const oidc = await startMockOidc({ accessTtl: 30, dropRefreshResponse: true });
   const credentials = new MemoryCredentials();

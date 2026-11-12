@@ -36,7 +36,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 | `gatewayResource` | 空 | 可选的授权/令牌请求 resource 与 grant 上下文约束；不证明已实现网关目标授权。 |
 | `gatewayConsoleUrl` | 空 | 网关控制台引导链接，不参与鉴权。 |
 | `defaultProvider` / `defaultModel` | `enterprise` / 空 | 只读模型观察目标；defaultModel 为空时不注册模型注入、不取 SDK。不会自动写入宿主默认模型。 |
-| `refreshSkewSeconds` | `60` | Host 按访问令牌和已知刷新令牌中较早的到期时间提前续期；剩余时间短时以一半作为提前量。`0` 不提前。 |
+| `refreshSkewSeconds` | `60` | Host 按访问令牌和已知刷新令牌中较早的到期时间提前续期；剩余时间短时以一半作为提前量。`0` 通常不提前；若已知刷新令牌先于或同时到期，仍预留 1 秒，尽力在其失效前发起刷新。 |
 | `attemptTimeoutSeconds` | `300` | 登录尝试时限。 |
 | `httpTimeoutMs` | `10000` | 协议请求超时参数；刷新与退出撤销请求取该值和 5000ms 的较小值，不是整个操作总时限。 |
 | `logoutMode` | `local` | `local` 尽力撤销并本地退出；`rp` 还可生成浏览器登出 URL，不保证单授权或全局 SSO 生命周期闭环。 |

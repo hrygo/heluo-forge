@@ -164,11 +164,19 @@ export function renewalDeadline(grant, now = Date.now()) {
   return Number.isFinite(refresh) && refresh > now ? Math.min(access, refresh) : access;
 }
 
+/** A refresh token expiring first must still have time to reach the issuer. */
+export function renewalSkewMillis(grant, skewSeconds = 60, now = Date.now()) {
+  const access = Date.parse(grant?.accessExpiresAt);
+  const refresh = Date.parse(grant?.refreshExpiresAt);
+  const refreshFirst = Number.isFinite(refresh) && refresh > now && (!Number.isFinite(access) || refresh <= access);
+  return skewSeconds === 0 && refreshFirst ? 1000 : skewSeconds * 1000;
+}
+
 export function shouldRefresh(grant, now = Date.now(), skewSeconds = 60) {
   if (!grant?.accessToken || !grant?.accessExpiresAt) return true;
   const deadline = renewalDeadline(grant, now);
   if (!Number.isFinite(deadline)) return true;
-  return deadline - skewSeconds * 1000 <= now;
+  return deadline - renewalSkewMillis(grant, skewSeconds, now) <= now;
 }
 
 export function isRefreshUsable(grant, now = Date.now()) {
