@@ -3978,6 +3978,38 @@ window.__ModuleLoader__.load({
     }
 
     // §16 未登录横幅与引导（16.1 横幅 / 16.2 步骤 / 16.3 流程）
+    function BrowserCompatibilityNotice() {
+      const [dismissed, setDismissed] = React.useState(false);
+      if (dismissed || typeof window.AbortSignal?.any === 'function') return null;
+      return h('div', {
+        role: 'status',
+        style: {
+          position: 'fixed', top: 56, right: 16, zIndex: 1100, pointerEvents: 'auto',
+          width: 'min(400px, calc(100vw - 32px))', boxSizing: 'border-box', padding: '16px',
+          borderRadius: 'var(--dsw-radius-lg)', border: '1px solid var(--dsw-alias-border-l2)',
+          background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)',
+          boxShadow: 'var(--dsw-elevation-panel)', font: 'var(--dsw-font-s-14)',
+        },
+      },
+        h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 12 } },
+          h('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': 'true',
+            style: { flex: '0 0 20px', color: 'var(--dsw-alias-state-warn-primary)' } },
+            h('circle', { cx: 12, cy: 12, r: 9, stroke: 'currentColor', strokeWidth: 1.8 }),
+            h('path', { d: 'M12 7.5v5.5m0 3.5h.01', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' }),
+          ),
+          h('div', { style: { flex: 1, minWidth: 0 } },
+            h('div', { style: { fontWeight: 600, lineHeight: '20px' } }, '浏览器兼容提示'),
+            h('div', { style: { marginTop: 6, lineHeight: 1.6, color: 'var(--dsw-alias-label-secondary)' } },
+              '当前浏览器可能无法打开工作区。请使用新版 Chrome 或 Chromium。'),
+          ),
+          h('button', { type: 'button', onClick: () => setDismissed(true), style: {
+            flex: '0 0 auto', border: 0, padding: '2px 4px', background: 'transparent',
+            color: 'var(--dsw-alias-label-secondary)', font: 'inherit', cursor: 'pointer',
+          } }, '关闭'),
+        ),
+      );
+    }
+
     function SignedOutBanner() {
       const [state, setState] = React.useState({ visible: false, notice: null, view: null, authorizationUrl: null });
       const signingInRef = React.useRef(false);
@@ -4515,6 +4547,10 @@ window.__ModuleLoader__.load({
           order: 30,
           label: () => '企业账号',
         }, Panel));
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          name: 'shell.overlay',
+          id: 'forge-iam-browser-compatibility',
+        }, BrowserCompatibilityNotice));
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
           name: 'shell.overlay',
           id: 'forge-iam-banner',
