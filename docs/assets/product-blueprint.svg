@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2400 1350" width="2400" height="1350" role="img" aria-label="河洛 Heluo Forge 产品全景蓝图">
   <defs>
+    <!-- Enterprise Brand Palette — High-Texture Executive Architecture -->
 
     <!-- 1. Rich Canvas Background: Cool gentle azure fade into luminous pure white -->
     <linearGradient id="bg-base" x1="0%" y1="0%" x2="0%" y2="100%">
@@ -140,8 +141,8 @@
       /* Deep Ink Navy #0E2A52 for crisp, solid, eye-friendly primary reading */
       .tile-title { font-size: 20px; font-weight: 700; fill: #0E2A52; }
       .tile-sub { font-size: 15.5px; font-weight: 400; fill: #48607E; }
-      .gov-title { font-size: 19.5px; font-weight: 700; fill: #0E2A52; }
-      .gov-sub { font-size: 15.5px; font-weight: 400; fill: #48607E; }
+      .gov-title { font-size: 15px; font-weight: 700; fill: #003584; }
+      .gov-sub { font-size: 12.5px; font-weight: 400; fill: #48607E; }
 
       .pill-hdr { font-size: 15.5px; font-weight: 600; fill: #0E2A52; }
       .flow-node { font-size: 16px; font-weight: 600; fill: #0E2A52; }
@@ -625,63 +626,83 @@
   <path d="M 170 991 H 2326" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.2"/>
   <rect x="174" y="1005" width="4.5" height="22" rx="2.2" fill="#1758A8"/>
   <text x="190" y="1023.5" class="layer-title">企业接入与治理</text>
-  <text x="376" y="1023" class="layer-sub">以企业边界支撑个人体验 · 全链路授权与安全可控</text>
+  <text x="376" y="1023" class="layer-sub">以企业边界支撑个人体验 · 贯通身份归集、密文托管、全流量隔离与硬撤权闭环</text>
 
   <!-- 4x2 Governance Cards with Enamel Gloss Tiles (x=174, 714, 1254, 1794; w=524; h=50) -->
-  <!-- Row 1 (y=1038) -->
+  <!-- Row 1 (y=1038): 身份建立与准入链 (上下双行排布，绝不重叠) -->
+  <!-- Card 1: 统一身份体系 (规范 3.1) -->
   <rect x="174" y="1038" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="186" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <circle cx="202" cy="1058.5" r="3.5" fill="none" stroke="#003584" stroke-width="1.6"/>
-  <path d="M 196 1069.5 C 196 1065.5 208 1065.5 208 1069.5" fill="none" stroke="#003584" stroke-width="1.6"/>
-  <text x="230" y="1069.5" class="gov-title">统一身份</text>
-  <text x="328" y="1069" class="gov-sub"><tspan font-weight="700" fill="#003584">人 × Agent</tspan><tspan dx="6">· 复用企业账号与权限</tspan></text>
+  <circle cx="198" cy="1058" r="3" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 193 1069 C 193 1065.5 203 1065.5 203 1069" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <rect x="204" y="1058" width="6" height="6" rx="1.5" fill="none" stroke="#1758A8" stroke-width="1.3"/>
+  <path d="M 200 1063 H 204" stroke="#003584" stroke-width="1.3"/>
+  <text x="228" y="1060.5" class="gov-title">统一身份体系</text>
+  <text x="228" y="1078" class="gov-sub"><tspan font-weight="700" fill="#003584">人 × Agent</tspan><tspan dx="6">· 租户 / 团队 / 应用 / 成员四级归集映射</tspan></text>
 
+  <!-- Card 2: 凭据安全托管 (规范 3.1.2 / 3.2.2) -->
   <rect x="714" y="1038" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="726" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <rect x="736" y="1061" width="12" height="9" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
-  <path d="M 739 1061 V 1058 A 3 3 0 0 1 745 1058 V 1061" fill="none" stroke="#003584" stroke-width="1.6"/>
-  <text x="770" y="1069.5" class="gov-title">凭据保护</text>
-  <text x="868" y="1069" class="gov-sub">本地加密 · 严防凭据外泄</text>
+  <rect x="736" y="1060" width="12" height="10" rx="2" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 739 1060 V 1056.5 A 3 3 0 0 1 745 1056.5 V 1060" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <circle cx="742" cy="1064" r="1.1" fill="#003584"/>
+  <path d="M 742 1065 V 1067" stroke="#003584" stroke-width="1.3"/>
+  <text x="768" y="1060.5" class="gov-title">凭据安全托管</text>
+  <text x="768" y="1078" class="gov-sub">员工零明文接触 · 系统 Keychain/DPAPI 密文安全托管</text>
 
+  <!-- Card 3: 三重门禁准入 (规范 3.2.1 / 3.2.2 / 3.5) -->
   <rect x="1254" y="1038" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="1266" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <circle cx="1282" cy="1063" r="6.5" fill="none" stroke="#003584" stroke-width="1.6"/>
-  <path d="M 1276 1063 H 1288 M 1282 1056.5 C 1285 1060 1285 1066 1282 1069.5" fill="none" stroke="#003584" stroke-width="1.2"/>
-  <text x="1310" y="1069.5" class="gov-title">企业模型</text>
-  <text x="1408" y="1069" class="gov-sub">网关访问 · 数据不出边界</text>
+  <path d="M 1276 1056.5 H 1288 V 1063 C 1288 1067.5 1282 1070 1282 1070 C 1282 1070 1276 1067.5 1276 1063 Z" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <path d="M 1279 1060.5 H 1285 M 1279 1063.5 H 1285 M 1280.5 1066.5 H 1283.5" stroke="#1758A8" stroke-width="1.2"/>
+  <text x="1308" y="1060.5" class="gov-title">三重门禁准入</text>
+  <text x="1308" y="1078" class="gov-sub">IAM 在岗 ∩ 部门白名单在册 ∩ 受管客户端 UA 合规</text>
 
+  <!-- Card 4: 双因子在线验签 (规范 3.2.3 / 附录 D.3) -->
   <rect x="1794" y="1038" width="528" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="1806" y="1047" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <path d="M 1816 1063 L 1820 1067 L 1828 1058" fill="none" stroke="#1F7A4D" stroke-width="1.9" stroke-linecap="round"/>
-  <text x="1850" y="1069.5" class="gov-title">确认与审计</text>
-  <text x="1966" y="1069" class="gov-sub">人工确认 · 全程可追溯</text>
+  <circle cx="1822" cy="1063" r="7.5" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <path d="M 1817.5 1063 L 1820.5 1066 L 1826.5 1060" fill="none" stroke="#1F7A4D" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="1848" y="1060.5" class="gov-title">双因子在线验签</text>
+  <text x="1848" y="1078" class="gov-sub">X-IAM-Token 实时验签 · sub 声明强校验防伪造</text>
 
-  <!-- Row 2 (y=1094) -->
+  <!-- Row 2 (y=1094): 安全控制与生命周期闭环 (上下双行排布) -->
+  <!-- Card 5: 用途跨界拦截 (规范 3.4.1) -->
   <rect x="174" y="1094" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="186" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <path d="M 198 1119 H 206 M 196 1115 C 193 1115 193 1123 196 1123 M 208 1115 C 211 1115 211 1123 208 1123" fill="none" stroke="#003584" stroke-width="1.6" stroke-linecap="round"/>
-  <text x="230" y="1125.5" class="gov-title">研发连接</text>
-  <text x="328" y="1125" class="gov-sub">无缝衔接 DevOps 与 Gitee</text>
+  <path d="M 196 1113 V 1125 M 208 1113 V 1125" stroke="#003584" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="202" cy="1119" r="4.2" fill="none" stroke="#C23934" stroke-width="1.4"/>
+  <path d="M 199.2 1116.2 L 204.8 1121.8" stroke="#C23934" stroke-width="1.3"/>
+  <text x="228" y="1116.5" class="gov-title">用途跨界拦截</text>
+  <text x="228" y="1134" class="gov-sub">个人凭证与应用凭证严格隔离 · 全流量双向防穿透阻断</text>
 
+  <!-- Card 6: 最小权限管控 (规范 3.4.4 / 3.4.3) -->
   <rect x="714" y="1094" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="726" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <rect x="736" y="1113" width="6" height="6" rx="1" fill="#003584"/><rect x="743" y="1113" width="6" height="6" rx="1" fill="#1764A0"/>
-  <rect x="736" y="1120" width="6" height="6" rx="1" fill="#1764A0"/><rect x="743" y="1120" width="6" height="6" rx="1" fill="#003584"/>
-  <text x="770" y="1125.5" class="gov-title">企业组合</text>
-  <text x="868" y="1125" class="gov-sub">按需装配 · 灵活协同</text>
+  <path d="M 735 1114 H 749 M 735 1119 H 749 M 735 1124 H 749" stroke="#BED5EB" stroke-width="1.4"/>
+  <circle cx="739" cy="1114" r="2.2" fill="#003584"/>
+  <circle cx="745" cy="1119" r="2.2" fill="#1758A8"/>
+  <circle cx="737" cy="1124" r="2.2" fill="#003584"/>
+  <text x="768" y="1116.5" class="gov-title">最小权限管控</text>
+  <text x="768" y="1134" class="gov-sub">模型 / MCP 工具 / 场景码动态最小授权 · CI 泄露拦截</text>
 
+  <!-- Card 7: 生命周期治理 (规范 3.2.4 / 3.3.3 / 3.4.2) -->
   <rect x="1254" y="1094" width="524" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="1266" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <path d="M 1282 1111 L 1289 1115 V 1123 L 1282 1127 L 1275 1123 V 1115 Z" fill="none" stroke="#003584" stroke-width="1.6"/>
-  <text x="1310" y="1125.5" class="gov-title">插件生态</text>
-  <text x="1408" y="1125" class="gov-sub">原生市场 · 统一安装管理</text>
+  <path d="M 1276 1119 A 6 6 0 1 1 1282 1125" fill="none" stroke="#003584" stroke-width="1.6"/>
+  <path d="M 1275 1116.5 L 1276.5 1119.5 L 1279.5 1119" fill="none" stroke="#003584" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M 1282 1119 V 1116.5 M 1282 1119 L 1284.5 1120.5" stroke="#003584" stroke-width="1.3" stroke-linecap="round"/>
+  <text x="1308" y="1116.5" class="gov-title">生命周期治理</text>
+  <text x="1308" y="1134" class="gov-sub">双密钥平滑轮换过渡 · 离岗 ≤5min 全集群硬撤权闭环</text>
 
+  <!-- Card 8: 高危拦截与审计 (规范 1.4.3 / 3.4 / 7.5) -->
   <rect x="1794" y="1094" width="528" height="50" rx="10" fill="url(#card-gloss-white)" stroke="#C4D8EC" stroke-width="1.1"/>
   <rect x="1806" y="1103" width="32" height="32" rx="7" fill="url(#icon-badge-grad)" stroke="#BED5EB"/>
-  <circle cx="1822" cy="1119" r="6" fill="none" stroke="#003584" stroke-width="1.6"/>
-  <circle cx="1822" cy="1119" r="2.2" fill="#1758A8"/>
-  <text x="1850" y="1125.5" class="gov-title">品牌体验</text>
-  <text x="1966" y="1125" class="gov-sub">河洛苍螭 · 多端一致体验</text>
+  <rect x="1815" y="1112" width="14" height="14" rx="2.5" fill="none" stroke="#003584" stroke-width="1.5"/>
+  <path d="M 1818 1117 L 1820.5 1119.5 L 1825.5 1114.5" fill="none" stroke="#1F7A4D" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M 1818 1122.5 H 1826" stroke="#1758A8" stroke-width="1.2"/>
+  <text x="1848" y="1116.5" class="gov-title">高危拦截与审计</text>
+  <text x="1848" y="1134" class="gov-sub">高风险操作强制 HITL 人工介入 · 全链路 OTel 留痕追溯</text>
 
   <!-- Inter-layer Upward Connectors: 底座层 -> 治理层 -->
   <path d="M 553 1170 V 1155" stroke="#003584" stroke-width="1.8" marker-end="url(#arrow-navy)"/>

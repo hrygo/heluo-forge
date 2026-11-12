@@ -14,19 +14,9 @@
 
 河洛通过扩展复用企业已有的身份、模型和业务系统，让个人工作体验与企业的权限、数据和治理要求相衔接。每位员工使用自己的工作环境，各项能力遵循实际用户授权和接入系统的权限。
 
-[产品全景](#产品全景) · [了解产品方向](#产品方向) · [查看产品路线图](#产品路线图) · [阅读项目文档](#了解更多)
+![河洛产品蓝图：个人工作环境、研发与个人助理、AIHUB 和 Nacos 能力生态、企业治理及外部系统](docs/assets/product-blueprint.png)
 
----
-
-## 产品全景
-
-河洛以员工的个人工作环境为中心，连接以下能力；各方向的当前进展见[产品路线图](#产品路线图)。
-
-- **工作入口**：面向 Windows、macOS、麒麟、统信 UOS 等目标环境，在桌面与助手和同事协作，也可通过企业 IM 向本人桌面助理远程交办任务。
-- **工作场景**：围绕研发、智能邮件、个人记忆、企业聊天、OA 办公与专家协作，让个人工作和团队协作相互衔接。
-- **智能运行**：以 DSH 为宿主，结合模型、工作流、MCP、Skills 和插件，围绕员工任务组织上下文与能力调用。
-- **能力发现与获取**：AIHUB 提供企业 MCP、Skills、CLI 和插件的浏览获取入口；Nacos AI 注册中心负责 MCP 与 Skills 的注册和获取，DSH 原生市场承接插件发现与安装。
-- **企业连接与治理**：对接企业身份、模型网关和研发、邮件、IM、OA 等系统，遵循各自的权限、凭据、策略与审计边界。
+[查看高清蓝图](docs/assets/product-blueprint.png) · [了解产品方向](#产品方向) · [查看产品路线图](#产品路线图) · [阅读项目文档](#了解更多)
 
 ---
 
@@ -61,7 +51,7 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 
 ### 让专业能力按需协作
 
-遇到跨领域工作时，河洛希望让员工发现并选择有权调用的专家智能体，由个人助理发起委派并综合结果。专家目录、任务状态与结果来源依托对应服务，调用遵循员工授权与接入规则。
+遇到跨领域工作时，员工可以在产品愿景中发现并选择有权调用的专家智能体，由个人助理发起委派并综合结果。专家目录、实际权限、任务状态和结果来源需要由对应服务提供并验证；专家接入目前仍处于产品草案阶段。
 
 ### 以企业边界支撑个人体验
 
@@ -81,50 +71,21 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 
 以下路线图展示用户体验和当前进展，**不是发布日期或先后顺序承诺**。实际交付范围以[需求与场景基线](docs/requirements/requirements-baseline.md#2-范围边界唯一真源)及后续确认结果为准。
 
-### 研发与平台能力
-
-- **研发工作**：在个人工作环境中衔接需求、Issue、代码、验证和交付。<br>
-  进展：DevOps、Gitee 等扩展已有部分本地实现；企业 CLI 与目标终端仍需验证。[实现与验证入口](docs/design/README.md#22-实现与验证入口)
-
-- **企业身份与治理**：使用企业身份和模型，按既有权限与策略访问工作工具。<br>
-  进展：身份、凭据、策略及企业组合已有部分本地实现；企业 IAM、网关与目标环境需分别验证。
-
-- **AIHUB 能力门户**：在一个门户浏览和获取企业 MCP、Skills、CLI 和插件。<br>
-  进展：产品方向已明确；各资源来源、用户权限与 DSH 接入按企业实际能力验证。
-
-- **Nacos AI 注册中心**：注册、发现 MCP 服务，注册和获取 Skills。<br>
-  进展：Nacos 提供相应注册中心能力；企业版本、权限及实际接入需分别核验。
-
-- **插件发现与分发**：通过熟悉的 DSH 入口发现和安装企业提供的扩展。<br>
-  进展：原生市场、AIHUB 索引与企业制品源的接入方向已有设计；实际企业接入待验证。[市场设计](docs/design/plugins/forge-market.md)
-
-- **企业技能**：发现适用的企业 Skill，按需安装并在工作中使用。<br>
-  进展：通过企业 Nacos 发现、安装及原生加载 Skill 为待评估方向。[企业技能跟踪](https://github.com/hrygo/heluo-forge/issues/97)
-
-### 个人助理与协作
-
-- **智能邮件**：查找邮件、整理信息和准备草稿，按人工批准规则处理 Agent 草稿发送。<br>
-  进展：dsh-mail 将邮件入口带入 DSH；实际使用取决于安装和邮箱授权。[邮件接入跟踪](https://github.com/hrygo/heluo-forge/issues/155)
-
-- **个人记忆**：员工选择记忆的采集和使用方式，让助理更好地延续工作。<br>
-  进展：Hindsight 与 DSH 接入为产品方案草案；身份、记忆访问与数据处理边界待设计和核验。[个人记忆跟踪](https://github.com/hrygo/heluo-forge/issues/264)
-
-- **企业 IM 聊天**：在 DSH 中与同事沟通，并对主动选择的聊天文字生成个人总结。<br>
-  进展：[企业聊天方案](docs/requirements/enterprise-collaboration-chat-proposal.md)为草案，优先探索现有企业 IM 互通；接口和权限待核验。
-
-- **IM 远程交办**：在企业 IM 中向本人桌面助理交办任务，查看进展、确认请求和结果。<br>
-  进展：[跨端任务协同](https://github.com/hrygo/heluo-forge/issues/240)为待确认方向；身份绑定、桌面接入和任务反馈待验证。
-
-- **OA 办公**：在授权范围内查看办公信息，并请助理协助阅读和整理。<br>
-  进展：[OA 接入](https://github.com/hrygo/heluo-forge/issues/241)为候选方向；首期场景、接口与权限待确认。
-
-- **专家智能体**：发现并选择合适的专家，向其委派任务并使用结果。<br>
-  进展：[专家产品需求](docs/requirements/delegra-experts-prd.md)为草案；Delegra、员工授权与宿主接入待确认或验证。
-
-### 目标环境与落地
-
-- **目标环境与试点**：在 Windows、macOS 及麒麟、统信 UOS 等国产 Linux 环境中获得连贯、可控的工作体验。<br>
-  进展：安装、企业接入与实际使用需在各目标环境分别验证；试点以验收结果为前提。
+| 方向 | 希望带来的体验 | 当前进展 |
+|---|---|---|
+| **研发工作** | 在个人工作环境中衔接需求、Issue、代码、验证和交付。 | DevOps、Gitee 等扩展已有部分本地实现；企业 CLI 与目标终端仍需验证。[实现与验证入口](docs/design/README.md#22-实现与验证入口) |
+| **企业身份与治理** | 使用企业身份和模型，按既有权限与策略访问工作工具。 | 身份、凭据、策略及企业组合已有部分本地实现；企业 IAM、网关与目标环境需分别验证。 |
+| **AIHUB 能力门户** | 在一个门户浏览和获取企业 MCP、Skills、CLI 和插件。 | 产品方向已明确；各资源来源、用户权限与 DSH 接入按企业实际能力验证。 |
+| **Nacos AI 注册中心** | 注册、发现 MCP 服务，注册和获取 Skills。 | Nacos 提供相应注册中心能力；企业版本、权限及实际接入需分别核验。 |
+| **插件发现与分发** | 通过熟悉的 DSH 入口发现和安装企业提供的扩展。 | 原生市场、AIHUB 索引与企业制品源的接入方向已有设计；实际企业接入待验证。[市场设计](docs/design/plugins/forge-market.md) |
+| **企业技能** | 发现适用的企业 Skill，按需安装并在工作中使用。 | 通过企业 Nacos 发现、安装及原生加载 Skill 为待评估方向。[企业技能跟踪](https://github.com/hrygo/heluo-forge/issues/97) |
+| **智能邮件** | 查找邮件、整理信息和准备草稿，按人工批准规则处理 Agent 草稿发送。 | dsh-mail 将邮件入口带入 DSH；实际使用取决于安装和邮箱授权。[邮件接入跟踪](https://github.com/hrygo/heluo-forge/issues/155) |
+| **个人记忆** | 员工选择记忆的采集和使用方式，让助理更好地延续工作。 | Hindsight 与 DSH 接入为产品方案草案；身份、记忆访问与数据处理边界待设计和核验。[个人记忆跟踪](https://github.com/hrygo/heluo-forge/issues/264) |
+| **企业 IM 聊天** | 在 DSH 中与同事沟通，并对主动选择的聊天文字生成个人总结。 | [企业聊天方案](docs/requirements/enterprise-collaboration-chat-proposal.md)为草案，优先探索现有企业 IM 互通；接口和权限待核验。 |
+| **IM 远程交办** | 在企业 IM 中向本人桌面助理交办任务，查看进展、确认请求和结果。 | [跨端任务协同](https://github.com/hrygo/heluo-forge/issues/240)为待确认方向；身份绑定、桌面接入和任务反馈待验证。 |
+| **OA 办公** | 在授权范围内查看办公信息，并请助理协助阅读和整理。 | [OA 接入](https://github.com/hrygo/heluo-forge/issues/241)为候选方向；首期场景、接口与权限待确认。 |
+| **专家智能体** | 发现并选择合适的专家，向其委派任务并使用结果。 | [专家产品需求](docs/requirements/delegra-experts-prd.md)为草案；Delegra、员工授权与宿主接入待确认或验证。 |
+| **目标环境与试点** | 在 Windows、macOS 及麒麟、统信 UOS 等国产 Linux 环境中获得连贯、可控的工作体验。 | 安装、企业接入与实际使用需在各目标环境分别验证；试点以验收结果为前提。 |
 
 ## 当前进展
 
@@ -136,13 +97,14 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 
 ## 了解更多
 
-- **产品当前范围和企业研发场景**：[需求与场景基线](docs/requirements/requirements-baseline.md)
-- **架构、企业接入与安全边界**：[总体架构](docs/architecture/platform-architecture.md) · [安全说明](SECURITY.md)
-- **已实现什么、验证到哪里**：[实现与验证入口](docs/design/README.md#22-实现与验证入口)
-- **企业能力门户与注册中心**：[插件市场设计](docs/design/plugins/forge-market.md) · [企业 Skill 跟踪](https://github.com/hrygo/heluo-forge/issues/97) · [Nacos MCP Registry](https://nacos.io/en/docs/latest/manual/user/ai/mcp-registry/) · [Nacos Skill Registry](https://nacos.io/en/docs/v3.2/manual/user/ai/skill-registry/)
-- **员工个人助理的产品方向**：[邮件](https://github.com/hrygo/heluo-forge/issues/155) · [个人记忆](https://github.com/hrygo/heluo-forge/issues/264) · [企业聊天](docs/requirements/enterprise-collaboration-chat-proposal.md) · [IM 远程交办](https://github.com/hrygo/heluo-forge/issues/240) · [OA](https://github.com/hrygo/heluo-forge/issues/241) · [专家智能体](docs/requirements/delegra-experts-prd.md)
-- **了解交付与部署**：[部署资产说明](deploy/README.md) · [文档总览](docs/README.md)
-- **反馈问题或参与贡献**：[项目议题](https://github.com/hrygo/heluo-forge/issues) · [贡献指南](CONTRIBUTING.md) · [安全报告](SECURITY.md)
-- **河洛的视觉形象**：[河洛苍螭品牌全景](docs/assets/branding/cyber-long/index.html)
+| 我想了解 | 从这里开始 |
+|---|---|
+| 产品当前范围和企业研发场景 | [需求与场景基线](docs/requirements/requirements-baseline.md) |
+| 架构、企业接入与安全边界 | [总体架构](docs/architecture/platform-architecture.md) · [安全说明](SECURITY.md) |
+| 已实现什么、验证到哪里 | [实现与验证入口](docs/design/README.md#22-实现与验证入口) |
+| 企业能力门户与注册中心 | [插件市场设计](docs/design/plugins/forge-market.md) · [企业 Skill 跟踪](https://github.com/hrygo/heluo-forge/issues/97) · [Nacos MCP Registry](https://nacos.io/en/docs/latest/manual/user/ai/mcp-registry/) · [Nacos Skill Registry](https://nacos.io/en/docs/v3.2/manual/user/ai/skill-registry/) |
+| 员工个人助理的产品方向 | [邮件](https://github.com/hrygo/heluo-forge/issues/155) · [个人记忆](https://github.com/hrygo/heluo-forge/issues/264) · [企业聊天](docs/requirements/enterprise-collaboration-chat-proposal.md) · [IM 远程交办](https://github.com/hrygo/heluo-forge/issues/240) · [OA](https://github.com/hrygo/heluo-forge/issues/241) · [专家智能体](docs/requirements/delegra-experts-prd.md) |
+| 交付、部署与贡献 | [部署说明](deploy/README.md) · [贡献指南](CONTRIBUTING.md) · [文档总览](docs/README.md) |
+| 河洛的视觉形象 | [河洛苍螭品牌全景](docs/assets/branding/cyber-long/index.html) |
 
 本仓库存放河洛的方案与扩展工程，基于 DSH 构建，不修改 DSH 本体。仓库使用 `UNLICENSED`，未授予开源许可；根工程与扩展包的 `private: true` 用于防止发布到 npm，具体使用和交付以适用许可及企业要求为准。
