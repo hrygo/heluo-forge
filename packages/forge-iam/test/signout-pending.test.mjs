@@ -22,7 +22,7 @@ for (const failure of ['throws', 'skips-mutator']) {
   test(`sign-out will not delete after the locked read ${failure}`, async (t) => {
     const credentials = new MemoryCredentials();
     await createGrantStore(credentials).write({
-      version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+      version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
       refreshToken: 'synthetic-old-refresh', accessToken: 'synthetic-old-access', scope: 'openid',
       obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
     });
@@ -49,7 +49,7 @@ for (const failure of ['throws', 'skips-mutator']) {
 test('sign-out observing an in-flight refresh preserves pending and reports unknown', async (t) => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
     refreshToken: 'synthetic-old-refresh', accessToken: 'synthetic-old-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   });

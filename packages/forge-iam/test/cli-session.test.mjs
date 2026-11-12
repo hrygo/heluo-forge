@@ -1,28 +1,15 @@
-// Step 2/3 of DESIGN-002 §5.5 for the CLI path: read identity and an unexpired
-// token from the store, never refresh, and fail loudly when the token is stale.
-// The store is a real file-backend document written through the keychain
-// package, so the CLI and the IAM service agree on the record format.
+// CLI session projection and offline token policy.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { promisify } from 'node:util';
-import { createFileBackend, createKeychainProvider } from '@heluo/forge-credentials-keychain';
-import { accessTokenOf, SESSION_RECORD_KEY, sessionFromRecord } from '../src/cli-session.mjs';
-import { BRIDGE_REF } from '../src/bridge.mjs';
-
-const run = promisify(execFile);
-const BIN = fileURLToPath(new URL('../bin/heluo-forge.mjs', import.meta.url));
+import { accessTokenOf, classifySessionRecord, isBridgeReadableSession, isSameBridgeSession, sessionFromRecord } from '../src/cli-session.mjs';
+import { refreshBaseId } from '../src/service-helpers.mjs';
 
 function grant(overrides = {}) {
   return {
     kind: 'grant',
     payload: {
+      version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), clientId: 'fixture', obtainedAt: '2026-01-01T00:00:00.000Z',
       issuer: 'https://iam.corp.example',
       subject: 'E1001',
       scope: 'openid profile',
@@ -33,20 +20,6 @@ function grant(overrides = {}) {
       ...overrides,
     },
   };
-}
-
-async function storeWith(t, record) {
-  const directory = await mkdtemp(join(tmpdir(), 'forge-iam-cli-'));
-  const path = join(directory, 'credentials.json');
-  const provider = createKeychainProvider(createFileBackend({ path }));
-  if (record) await provider.modifyRecord(SESSION_RECORD_KEY, async () => record);
-  return path;
-}
-
-function cli(path, ...args) {
-  return run(process.execPath, [BIN, 'auth', ...args], {
-    env: { ...process.env, HELUO_FORGE_CREDENTIALS_FILE: path },
-  });
 }
 
 test('the store record projects onto the session shape without tokens', () => {
@@ -62,117 +35,127 @@ test('the store record projects onto the session shape without tokens', () => {
   assert.equal(signedOut.principal, undefined);
 });
 
+test('JSON string grant payload has the same offline and bridge behavior as its object form', () => {
+  const original = grant();
+  const encoded = { ...original, payload: JSON.stringify(original.payload) };
+  assert.deepEqual(sessionFromRecord(encoded), sessionFromRecord(original));
+  assert.deepEqual(accessTokenOf(encoded), accessTokenOf(original));
+  assert.equal(isBridgeReadableSession(encoded), true);
+  assert.equal(isSameBridgeSession(encoded, encoded), true);
+});
+
+test('malformed JSON and encoded pending operations never expose an offline token', () => {
+  const invalid = { kind: 'grant', payload: '{not valid json' };
+  assert.equal(sessionFromRecord(invalid).status, 'error');
+  assert.deepEqual(accessTokenOf(invalid), { ok: false, code: 'IAM_INVALID_GRANT' });
+  const id = Buffer.alloc(32, 1).toString('base64url');
+  const signout = grant({ signOutOperation: { version: 1, state: 'pending', id } });
+  const pending = grant({ refreshOperation: { version: 1, state: 'pending', id, base: id } });
+  const encode = (record) => ({ ...record, payload: JSON.stringify(record.payload) });
+  assert.deepEqual(accessTokenOf(encode(signout)), { ok: false, code: 'IAM_INVALID_GRANT' });
+  assert.equal(isBridgeReadableSession(encode(signout)), false);
+  assert.deepEqual(accessTokenOf(encode(pending)), { ok: false, code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal(isBridgeReadableSession(encode(pending)), true);
+});
+
 test('an expired or unknown-expiry token is refused rather than returned', () => {
   const now = Date.now();
   assert.deepEqual(accessTokenOf(grant({ accessExpiresAt: new Date(now - 1000).toISOString() }), now), {
     ok: false,
     code: 'IAM_REAUTH_REQUIRED',
   });
-  assert.deepEqual(accessTokenOf(grant({ accessExpiresAt: undefined }), now), { ok: false, code: 'IAM_EXPIRY_UNKNOWN' });
+  assert.deepEqual(accessTokenOf(grant({ accessExpiresAt: undefined }), now), { ok: false, code: 'IAM_INVALID_GRANT' });
   assert.deepEqual(accessTokenOf(undefined, now), { ok: false, code: 'IAM_NOT_SIGNED_IN' });
   assert.equal(accessTokenOf(grant(), now).token, 'placeholder-access-token');
 });
 
-test('heluo-forge auth whoami prints identity, and token prints the unexpired token', async (t) => {
-  const path = await storeWith(t, grant());
-
-  const whoami = await cli(path, 'whoami', '--json');
-  const session = JSON.parse(whoami.stdout);
-  assert.equal(session.principal.subject, 'E1001');
-  assert.equal(session.signedIn, true);
-  assert.doesNotMatch(whoami.stdout, /placeholder-access-token/u);
-
-  const token = await cli(path, 'token');
-  assert.equal(token.stdout.trim(), 'placeholder-access-token');
+test('an unresolved refresh never exposes the previous token or a ready session', () => {
+  const pending = grant({ refreshOperation: { version: 1, state: 'pending', id: Buffer.alloc(32, 1).toString('base64url'), base: Buffer.alloc(32, 2).toString('base64url') } });
+  assert.deepEqual(accessTokenOf(pending), { ok: false, code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal(sessionFromRecord(pending).status, 'error');
+  assert.equal(sessionFromRecord(pending).signedIn, false);
+  assert.equal(sessionFromRecord(pending).principal, undefined);
 });
 
-test('heluo-forge auth token fails with a distinct exit code when the token expired', async (t) => {
-  const path = await storeWith(t, grant({ accessExpiresAt: new Date(Date.now() - 60_000).toISOString() }));
-  await assert.rejects(cli(path, 'token'), (error) => {
-    assert.equal(error.code, 3);
-    assert.match(String(error.stderr), /IAM_REAUTH_REQUIRED/u);
-    assert.equal(String(error.stdout), '');
-    return true;
-  });
+test('invalid grant fields and malformed refresh markers never expose identity or token', () => {
+  const valid = grant({ version: 1, clientId: 'fixture', obtainedAt: '2026-01-01T00:00:00.000Z' });
+  for (const payload of [
+    { ...valid.payload, version: undefined },
+    { ...valid.payload, clientId: undefined },
+    { ...valid.payload, refreshOperation: { state: 'broken' } },
+    { ...valid.payload, refreshOperation: { state: 'complete' } },
+  ]) {
+    const invalid = { kind: 'grant', payload };
+    assert.equal(sessionFromRecord(invalid).status, 'error');
+    assert.equal(sessionFromRecord(invalid).signedIn, false);
+    assert.equal(accessTokenOf(invalid).ok, false);
+  }
 });
 
-test('auth whoami reads the macOS encrypted store through the platform backend', { skip: process.platform !== 'darwin' && 'macOS encrypted store only' }, async (t) => {
-  const home = await mkdtemp(join(tmpdir(), 'forge-iam-cli-home-'));
-  t.after(() => rm(home, { recursive: true, force: true }));
-  const env = { ...process.env, HOME: home };
-  delete env.HELUO_FORGE_CREDENTIALS_FILE;
-  delete env.HELUO_FORGE_ALLOW_UNVETTED;
-  const keychain = pathToFileURL(fileURLToPath(new URL('../../forge-credentials-keychain/src/index.mjs', import.meta.url))).href;
-  const seed = [
-    `import { createPlatformBackend, createKeychainProvider } from ${JSON.stringify(keychain)};`,
-    'const provider = createKeychainProvider(createPlatformBackend());',
-    `await provider.modifyRecord(${JSON.stringify(SESSION_RECORD_KEY)}, async () => (${JSON.stringify(grant())}));`,
-  ].join('\n');
-  await run(process.execPath, ['--input-type=module', '-e', seed], { env });
-
-  const whoami = await run(process.execPath, [BIN, 'auth', 'whoami', '--json'], { env });
-  const session = JSON.parse(whoami.stdout);
-  assert.equal(session.principal.subject, 'E1001');
-
-  const token = await run(process.execPath, [BIN, 'auth', 'token'], { env });
-  assert.equal(token.stdout.trim(), 'placeholder-access-token');
+test('absent and tombstoned records remain signed out while validated sign-out pending stays fenced', () => {
+  for (const record of [undefined, null, { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' } }]) {
+    assert.equal(sessionFromRecord(record).status, 'signed-out');
+    assert.deepEqual(accessTokenOf(record), { ok: false, code: 'IAM_NOT_SIGNED_IN' });
+  }
+  const pending = grant({ signOutOperation: { version: 1, state: 'pending', id: Buffer.alloc(32, 8).toString('base64url') } });
+  assert.equal(sessionFromRecord(pending).status, 'error');
+  assert.deepEqual(accessTokenOf(pending), { ok: false, code: 'IAM_INVALID_GRANT' });
+  const encodedTombstone = { kind: 'grant', payload: JSON.stringify({ version: 1, type: 'heluo-iam-session-tombstone' }) };
+  assert.deepEqual(accessTokenOf(encodedTombstone), { ok: false, code: 'IAM_INVALID_GRANT' });
 });
 
-test('heluo-forge auth whoami reports a signed-out store without inventing identity', async (t) => {
-  const path = await storeWith(t, undefined);
-  const result = await cli(path, 'whoami', '--json');
-  const session = JSON.parse(result.stdout);
-  assert.equal(session.status, 'signed-out');
-  assert.equal(session.principal, undefined);
+
+test('bridge readability admits identified refresh pending but fences sign-out and invalid records', () => {
+  const id = Buffer.alloc(32, 1).toString('base64url');
+  const original = grant();
+  const operation = { version: 1, state: 'pending', id, base: refreshBaseId(original.payload, id) };
+  assert.equal(isBridgeReadableSession(grant({ refreshOperation: operation })), true);
+  assert.equal(isBridgeReadableSession(grant({ signOutOperation: { version: 1, state: 'pending', id } })), false);
+  assert.equal(isBridgeReadableSession(grant({ refreshOperation: { ...operation, base: 'bad' } })), false);
+  const v2 = grant({ version: 2, authContext: { mode: 'confidential', method: 'client_secret_basic',
+    secretRef: 'fixture-secret-ref', secretRevision: 'fixture-revision' }, refreshOperation: operation });
+  assert.deepEqual(classifySessionRecord(v2), { state: 'pending', operation: 'refresh' });
+  assert.equal(isBridgeReadableSession(v2), true);
 });
 
-async function bridgeServer(t, { status = 200, token = 'placeholder-host-token' } = {}) {
-  const seen = [];
-  const server = createServer((req, res) => {
-    seen.push({ method: req.method, url: req.url, authorization: req.headers.authorization });
-    res.setHeader('content-type', 'application/json');
-    if (status !== 200) {
-      res.statusCode = status;
-      res.end(JSON.stringify({ error: { code: 'IAM_BRIDGE_UNAUTHORIZED' } }));
-      return;
-    }
-    res.end(JSON.stringify({ token, expiresAt: new Date(Date.now() + 3600_000).toISOString() }));
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
-  return { server, seen, url: `http://127.0.0.1:${server.address().port}` };
-}
-
-test('heluo-forge auth token asks the running Host before falling back to the store', async (t) => {
-  // The stored token is expired; only the Host can produce a usable one, so a
-  // successful run proves the bridge path was taken rather than the offline read.
-  const path = await storeWith(t, grant({ accessExpiresAt: new Date(Date.now() - 60_000).toISOString() }));
-  const provider = createKeychainProvider(createFileBackend({ path }));
-  await provider.set(BRIDGE_REF, 'placeholder-capability');
-  const host = await bridgeServer(t);
-
-  const result = await run(process.execPath, [BIN, 'auth', 'token'], {
-    env: { ...process.env, HELUO_FORGE_CREDENTIALS_FILE: path, HELUO_FORGE_IAM_URL: host.url },
-  });
-  assert.equal(result.stdout.trim(), 'placeholder-host-token');
-  assert.equal(host.seen.length, 1);
-  assert.equal(host.seen[0].method, 'POST');
-  assert.equal(host.seen[0].url, '/api/forge-iam/bridge/token');
-  assert.equal(host.seen[0].authorization, 'Bearer placeholder-capability');
+test('bridge associates an identified pending refresh only with the same completed rotation', () => {
+  const original = grant();
+  const id = Buffer.alloc(32, 2).toString('base64url');
+  const other = Buffer.alloc(32, 3).toString('base64url');
+  const operation = { version: 1, state: 'pending', id, base: refreshBaseId(original.payload, id) };
+  const pending = grant({ ...original.payload, refreshOperation: operation });
+  const complete = grant({ ...original.payload, accessToken: 'rotated-access', refreshToken: 'rotated-refresh', refreshOperation: { ...operation, state: 'complete' } });
+  assert.equal(isSameBridgeSession(pending, complete), true);
+  for (const changed of [
+    grant({ ...complete.payload, refreshOperation: { ...complete.payload.refreshOperation, id: other } }),
+    grant({ ...complete.payload, refreshOperation: { ...complete.payload.refreshOperation, base: other } }),
+    grant({ ...complete.payload, subject: 'other-subject' }),
+    grant({ ...complete.payload, refreshToken: pending.payload.refreshToken }),
+  ]) assert.equal(isSameBridgeSession(pending, changed), false);
 });
 
-test('heluo-forge auth token fails closed when the Host rejects the capability', async (t) => {
-  const path = await storeWith(t, grant());
-  const provider = createKeychainProvider(createFileBackend({ path }));
-  await provider.set(BRIDGE_REF, 'placeholder-wrong-capability');
-  const host = await bridgeServer(t, { status: 401 });
+test('bridge associates an active grant only with the same session identity', () => {
+  const previous = { version: 1, state: 'complete', id: Buffer.alloc(32, 4).toString('base64url'), base: Buffer.alloc(32, 5).toString('base64url') };
+  const before = grant({ refreshOperation: previous });
+  const id = Buffer.alloc(32, 6).toString('base64url');
+  const marker = { version: 1, state: 'complete', id, base: refreshBaseId(before.payload, id) };
+  const after = grant({ ...before.payload, accessToken: 'rotated-access', refreshToken: 'rotated-refresh', refreshOperation: marker });
+  assert.equal(isSameBridgeSession(before, before), true);
+  assert.equal(isSameBridgeSession(before, after), true);
+  const otherSession = grant({ ...after.payload, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') });
+  assert.equal(isSameBridgeSession(before, otherSession), false);
+  const wrongBase = grant({ ...after.payload, refreshOperation: { ...marker, base: Buffer.alloc(32, 7).toString('base64url') } });
+  assert.equal(isSameBridgeSession(before, wrongBase), false);
+});
 
-  await assert.rejects(run(process.execPath, [BIN, 'auth', 'token'], {
-    env: { ...process.env, HELUO_FORGE_CREDENTIALS_FILE: path, HELUO_FORGE_IAM_URL: host.url },
-    }).then((result) => result), (error) => {
-    assert.equal(error.code, 4);
-    assert.match(String(error.stderr), /IAM_BRIDGE_UNAUTHORIZED/u);
-    assert.equal(String(error.stdout), '');
-    return true;
-  });
+test('bridge rejects a bound pending refresh completed without rotating its refresh token', () => {
+  const original = grant({ sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') });
+  const id = Buffer.alloc(32, 9).toString('base64url');
+  const operation = { version: 1, state: 'pending', id, base: refreshBaseId(original.payload, id) };
+  const pending = grant({ ...original.payload, refreshOperation: operation });
+  const completed = grant({ ...original.payload, accessToken: 'rotated-access', refreshToken: 'rotated-refresh',
+    refreshOperation: { ...operation, state: 'complete' } });
+  const unchangedRefresh = grant({ ...completed.payload, refreshToken: original.payload.refreshToken });
+  assert.equal(isSameBridgeSession(pending, completed), true);
+  assert.equal(isSameBridgeSession(pending, unchangedRefresh), false);
 });

@@ -7,6 +7,7 @@
  * failed run.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +16,9 @@ import test from 'node:test';
 import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
+import { validateConfig } from '../packages/forge-iam/src/config.mjs';
 import {
+  assertIamValidatorMatches,
   buildConfig,
   buildPrivateTarball,
   inspectPublicTarball,
@@ -57,15 +60,64 @@ function patchText({ iamConfig = '', giteeConfig = '' } = {}) {
   ].join('\n');
 }
 
-function publicTarball({ patch } = {}) {
+function publicTarball({ patch, validatorOverride, omitValidator } = {}) {
   const files = [
     { path: 'package.json', body: `${JSON.stringify({ name: ENTRY, version: PUBLIC_VERSION, license: 'Apache-2.0' }, null, 2)}\n` },
     { path: 'cordis.patch.yml', body: patch ?? patchText() },
     { path: 'README.md', body: '# fixture enterprise bundle\n' },
     { path: 'src/index.mjs', body: 'export const fixture = true;\n' },
+    ...['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs'].filter((name) => name !== omitValidator).map((name) => ({
+      path: `node_modules/@heluo/forge-iam/src/${name}`,
+      body: name === 'config.mjs' && validatorOverride !== undefined ? validatorOverride : readFileSync(new URL(`../packages/forge-iam/src/${name}`, import.meta.url)),
+    })),
   ];
   return writeBundleTarball(files);
 }
+
+test('maker rejects a public bundle with a different or missing IAM validator', (t) => {
+  const root = temp(t);
+  for (const [label, options] of [['different', { validatorOverride: 'export const different = true;\n' }], ['missing', { omitValidator: 'http-url.mjs' }]]) {
+    const path = join(root, `${label}.tgz`);
+    const bytes = publicTarball(options);
+    writeFileSync(path, bytes);
+    expectCode(() => inspectPublicTarball(path), 'IAM_VALIDATOR_MISMATCH');
+    expectCode(() => makePrivateBundle({ publicPath: path, expectedSha256: createHash('sha256').update(bytes).digest('hex'), configPath: writeConfig(root, ENV), version: '0.2.0', output: join(root, 'out') }), 'IAM_VALIDATOR_MISMATCH');
+    assert.equal(existsSync(join(root, 'out')), false);
+  }
+});
+
+test('IAM validator comparison accepts LF and CRLF without accepting changed bytes', (t) => {
+  const root = temp(t);
+  const config = readFileSync(new URL('../packages/forge-iam/src/config.mjs', import.meta.url));
+  const crlf = Buffer.from(config.toString('utf8').replace(/\r?\n/gu, '\r\n'));
+  const publicPath = join(root, 'public-crlf.tgz');
+  writeFileSync(publicPath, publicTarball({ validatorOverride: crlf }));
+  const inspected = inspectPublicTarball(publicPath);
+  const output = join(root, 'private');
+  makePrivateBundle({ publicPath, expectedSha256: inspected.sha256, configPath: writeConfig(root, ENV), version: '0.2.0', output });
+  assert.equal(existsSync(output), true);
+
+  const localDirectory = join(root, 'tool', 'packages', 'forge-iam', 'src');
+  mkdirSync(localDirectory, { recursive: true });
+  const entries = readBundleEntries(publicTarball(), { withContent: true });
+  for (const name of ['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']) {
+    const source = readFileSync(new URL(`../packages/forge-iam/src/${name}`, import.meta.url), 'utf8');
+    writeFileSync(join(localDirectory, name), source.replace(/\r?\n/gu, '\r\n'));
+  }
+  assert.doesNotThrow(() => assertIamValidatorMatches(entries, { toolRoot: join(root, 'tool') }));
+  writeFileSync(join(localDirectory, 'config.mjs'), Buffer.concat([crlf, Buffer.from('\n// changed')]));
+  assert.throws(() => assertIamValidatorMatches(entries, { toolRoot: join(root, 'tool') }), (error) => {
+    assert.equal(error.code, 'IAM_VALIDATOR_MISMATCH');
+    assert.match(error.message, /config\.mjs/u);
+    assert.equal(error.message.includes(root), false);
+    return true;
+  });
+  const invalidBytes = entries.map((entry) => entry.path.endsWith('/config.mjs')
+    ? { ...entry, content: Buffer.from([0x80, 0x0a]) }
+    : entry);
+  writeFileSync(join(localDirectory, 'config.mjs'), Buffer.from([0x81, 0x0d, 0x0a]));
+  expectCode(() => assertIamValidatorMatches(invalidBytes, { toolRoot: join(root, 'tool') }), 'IAM_VALIDATOR_MISMATCH');
+});
 
 function writeConfig(root, lines) {
   const path = join(root, 'enterprise.env');
@@ -172,6 +224,29 @@ test('callback port outside 0 or 1024-65535 is refused', () => {
   for (const port of ['1023', '65536']) {
     const entries = parseEnvConfig(ENV.map((line) => (line.startsWith('HELUO_IAM_CALLBACK_PORT=') ? `HELUO_IAM_CALLBACK_PORT=${port}` : line)).join('\n'));
     expectCode(() => buildConfig(entries), 'CONFIG_INVALID');
+  }
+});
+
+test('maker rejects representative configuration rejected by the IAM runtime', () => {
+  const baseline = buildConfig(parseEnvConfig(ENV.join('\n'))).iam;
+  const cases = [
+    ['HELUO_IAM_SCOPES', 'profile offline_access', 'scopes', ['profile', 'offline_access']],
+    ['HELUO_IAM_REDIRECT_PATH', '/api/forge-iam/test', 'redirectPath', '/api/forge-iam/test'],
+    ['HELUO_IAM_REDIRECT_PATH', '/', 'redirectPath', '/'],
+    ['HELUO_IAM_REDIRECT_PATH', '/callback/', 'redirectPath', '/callback/'],
+    ['HELUO_IAM_REDIRECT_PATH', '/callback?secret=example', 'redirectPath', '/callback?secret=example'],
+    ['HELUO_IAM_REDIRECT_PATH', '/x/../callback', 'redirectPath', '/x/../callback'],
+    ['HELUO_IAM_POST_LOGOUT_REDIRECT_URI', 'invalid-url', 'postLogoutRedirectUri', 'invalid-url'],
+  ];
+  for (const [envKey, input, field, runtimeValue] of cases) {
+    const runtime = validateConfig({ ...baseline, [field]: runtimeValue });
+    assert.ok(runtime.issues?.some((issue) => issue.path.includes(field)), `${envKey} fixture must be invalid at runtime`);
+    const lines = ENV.filter((line) => !line.startsWith(`${envKey}=`));
+    expectCode(() => buildConfig(parseEnvConfig([...lines, `${envKey}=${input}`].join('\n'))), 'CONFIG_INVALID');
+  }
+  for (const path of ['/iam/callback', '/valid-callback']) {
+    const built = buildConfig(parseEnvConfig([...ENV, `HELUO_IAM_REDIRECT_PATH=${path}`].join('\n')));
+    assert.equal(validateConfig(built.iam).issues, undefined);
   }
 });
 
@@ -313,6 +388,8 @@ test('enterprise HTTP endpoints require an explicit insecure opt-in', () => {
   assert.equal(config.iam.issuer, 'http://iam.corp.example/esc-sso/oidc');
   assert.equal(config.iam.managedModels.baseURL, 'http://gateway.corp.example:9080/aig-coding/v1');
   assert.equal(config.iam.allowInsecureHttp, true);
+  const built = buildPrivateTarball({ entries: readBundleEntries(publicTarball(), { withContent: true }), version: '0.2.0', config, baseSha256: 'a'.repeat(64) });
+  assert.doesNotMatch(built.patch, /allowInsecureHttp/u, 'the packaging-only opt-in must not be represented as a runtime guard');
 });
 
 test('issuer without discovery or explicit endpoints is rejected at package time', () => {

@@ -40,6 +40,7 @@ export function apply(ctx, rawConfig = {}) {
   // runs when the service appears and its disposer clears the binding when the
   // service goes away, so a replaced provider can never satisfy the gate.
   const current = { credentials: undefined, atomicStore: undefined };
+  const hasDynamicInjection = typeof ctx.inject === 'function';
   // Cordis throws for a mounted service read without injection, while plain
   // embeddings (tests, CLI hosts) expose services as properties or through
   // ctx.get. Injection is the primary binding for the two services the sign-in
@@ -63,14 +64,16 @@ export function apply(ctx, rawConfig = {}) {
   const verifyAtomicStore = (instance) => {
     try {
       const trust = trustedJointStore();
-      return trust !== undefined && trust.verify(instance) === true;
+      const bound = () => !hasDynamicInjection
+        || (current.credentials === instance && current.atomicStore === trust);
+      return trust !== undefined && bound() && trust.verify(instance) === true && bound();
     } catch {
       return false;
     }
   };
   const getGatewayAtomicStore = (instance) => {
     const trust = trustedJointStore();
-    if (trust === undefined || trust.verify(instance) !== true) {
+    if (trust === undefined || !verifyAtomicStore(instance) || trustedJointStore() !== trust) {
       throw new IamError('IAM_GATEWAY_ATOMIC_UNVERIFIED', 'no trusted joint store is bound to this credentials instance');
     }
     return trust.adapter();
@@ -78,10 +81,17 @@ export function apply(ctx, rawConfig = {}) {
   const verifyGatewayAtomicStore = (instance, adapter) => {
     try {
       const trust = trustedJointStore();
-      return trust !== undefined && trust.verify(instance) === true && adapter === trust.adapter();
+      return trust !== undefined && verifyAtomicStore(instance)
+        && trustedJointStore() === trust && adapter === trust.adapter();
     } catch {
       return false;
     }
+  };
+  const hasTrustedBinding = () => {
+    const credentials = current.credentials;
+    const atomicStore = current.atomicStore;
+    return Boolean(credentials && atomicStore && verifyAtomicStore(credentials)
+      && current.credentials === credentials && current.atomicStore === atomicStore);
   };
 
   let currentWebServer;
@@ -171,6 +181,25 @@ export function apply(ctx, rawConfig = {}) {
   let offManagedModels;
   let offAgentDefaultModel;
   let agentDefaultModelService;
+  let credentialsOwner;
+  let atomicStoreOwner;
+  let hydratedBinding;
+  const prepareBridge = () => {
+    if (!tornDown) void service.bridgeCapability().catch(() => {});
+  };
+  const hydrateBinding = () => {
+    if (tornDown || !hasTrustedBinding()) return;
+    const credentials = current.credentials;
+    const atomicStore = current.atomicStore;
+    if (hydratedBinding?.credentials === credentials && hydratedBinding.atomicStore === atomicStore) return;
+    const binding = { credentials, atomicStore };
+    hydratedBinding = binding;
+    void service.hydrate().then(() => {
+      // Rebinding the same record may not produce a state transition, but its
+      // previous timer may have stopped while the trust service was absent.
+      if (!tornDown && hydratedBinding === binding && hasTrustedBinding()) service.notifyView();
+    }).catch(() => {});
+  };
 
   ctx.effect(() => {
     disposeProvide = ctx.provide('iam', service);
@@ -245,13 +274,33 @@ export function apply(ctx, rawConfig = {}) {
     if (typeof ctx.inject === 'function') {
       offCredentials = ctx.inject(['credentials'], (host) => {
         const binding = host.credentials;
+        const owner = {};
+        credentialsOwner = owner;
         current.credentials = binding;
-        return () => { if (current.credentials === binding) current.credentials = undefined; };
+        prepareBridge();
+        hydrateBinding();
+        return () => {
+          if (credentialsOwner !== owner) return;
+          credentialsOwner = undefined;
+          current.credentials = undefined;
+          hydratedBinding = undefined;
+          if (!tornDown) service.notifyView();
+        };
       });
       offAtomicStore = ctx.inject(['iam-atomic-store'], (host) => {
         const binding = host['iam-atomic-store'];
+        const owner = {};
+        atomicStoreOwner = owner;
         current.atomicStore = binding;
-        return () => { if (current.atomicStore === binding) current.atomicStore = undefined; };
+        prepareBridge();
+        hydrateBinding();
+        return () => {
+          if (atomicStoreOwner !== owner) return;
+          atomicStoreOwner = undefined;
+          current.atomicStore = undefined;
+          hydratedBinding = undefined;
+          if (!tornDown) service.notifyView();
+        };
       });
       offConnection = ctx.inject(['connection'], (host) => {
         const binding = host.connection;
@@ -289,7 +338,9 @@ export function apply(ctx, rawConfig = {}) {
     return teardown;
   }, 'forge-iam');
 
-  void service.hydrate().catch(() => {});
+  prepareBridge();
+  if (hasDynamicInjection) hydrateBinding();
+  else void service.hydrate().catch(() => {});
 
   // Returned for direct callers (tests, non-Cordis embeddings); Cordis owns
   // the same idempotent teardown through the effect above.

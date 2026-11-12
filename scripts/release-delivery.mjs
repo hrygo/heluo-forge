@@ -1,7 +1,7 @@
 /**
  * Release delivery builder (issue #222 items ③④⑤⑥).
  *
- * One command turns a verified public artifact plus an out-of-repo enterprise
+ * One command turns a verified public artifact plus a local enterprise
  * configuration into a delivery package an employee can use with minimal steps:
  *
  *   - `enterprise-plugin/` — the private plugin tarball, sidecar, manifest, sums
@@ -28,7 +28,6 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -43,6 +42,7 @@ import {
   parseEnvConfig,
   planDigest,
   PrivateBundleError,
+  readConfigFile,
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
@@ -112,11 +112,7 @@ function parseArguments(argv) {
 }
 
 export function readDeliveryConfig(configPath) {
-  const stats = statSync(configPath);
-  if ((stats.mode & 0o077) !== 0) {
-    fail('CONFIG_PERMISSIONS', `configuration file permissions are too broad (mode ${(stats.mode & 0o777).toString(8)}); run chmod 600`);
-  }
-  const text = readFileSync(configPath, 'utf8');
+  const text = readConfigFile(configPath);
   const entries = parseEnvConfig(text);
   return { config: buildConfig(entries) };
 }
@@ -310,6 +306,8 @@ export function buildDelivery(input) {
     configKeys: config.keys,
     configValues: 'redacted',
     loginReady: isLoginConfigured(config.iam),
+    gatewayConfigured: Boolean(config.iam.managedModels && config.iam.defaultProvider),
+    revocationConfigured: Boolean(config.iam.revocationEndpoint),
     discovery: input.discovery ?? { checked: false, reason: 'not-run' },
     platforms: [...SUPPORTED_PLATFORMS],
     planDigest: digest,
@@ -425,6 +423,8 @@ async function main() {
     },
     configKeys: result.configKeys,
     loginReady: result.plan.loginReady,
+    gatewayConfigured: result.plan.gatewayConfigured,
+    revocationConfigured: result.plan.revocationConfigured,
     discovery: result.plan.discovery,
     planDigest: result.digest,
   };

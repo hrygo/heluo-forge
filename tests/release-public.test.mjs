@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +67,9 @@ function licensedTree(t, { license = 'Apache-2.0' } = {}) {
     put(tree.root, `packages/${name}/package.json`, { name: `@heluo/${name}`, version: '0.1.0', type: 'module', main: './src/index.mjs', files: ['src', 'README.md'], license });
     put(tree.root, `packages/${name}/README.md`, `# ${name} fixture\n`);
     put(tree.root, `packages/${name}/src/index.mjs`, 'export const fixture = true;\n');
+  }
+  for (const name of ['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']) {
+    put(tree.root, `packages/forge-iam/src/${name}`, readFileSync(new URL(`../packages/forge-iam/src/${name}`, import.meta.url)));
   }
   const enterprisePath = join(tree.root, 'packages/forge-enterprise/package.json');
   const enterprise = JSON.parse(readFileSync(enterprisePath, 'utf8'));
@@ -137,6 +140,19 @@ test('builds a configuration-neutral public release from a tagged checkout', (t)
     true,
     'the packager delivery builder must ship with the toolchain',
   );
+  for (const name of ['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']) {
+    const entry = tools.find((item) => item.path === `toolchain/packages/forge-iam/src/${name}`);
+    assert.ok(entry, `the standalone maker must include IAM validation dependency ${name}`);
+    assert.deepEqual(entry.content, readFileSync(join(TOOL_ROOT, 'packages/forge-iam/src', name)));
+  }
+  const extracted = temp(t, 'forge-standalone-toolchain-');
+  for (const entry of tools) {
+    const path = join(extracted, entry.path);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, entry.content);
+  }
+  const maker = join(extracted, 'toolchain/scripts/lib/private-bundle.mjs');
+  execFileSync(process.execPath, ['--input-type=module', '-e', 'import { pathToFileURL } from "node:url"; const maker = await import(pathToFileURL(process.argv[1])); maker.inspectPublicTarball(process.argv[2]);', maker, release.tarball], { encoding: 'utf8' });
   assert.equal(
     tools.some((entry) => entry.path === 'toolchain/scripts/init-enterprise-plugin.mjs'),
     true,
@@ -150,10 +166,41 @@ test('builds a configuration-neutral public release from a tagged checkout', (t)
   assert.equal(tools.every((entry) => entry.path.startsWith('toolchain/')), true);
 });
 
+test('an ignored in-repository .env is absent from public release archives', (t) => {
+  const tree = licensedTree(t);
+  writeFileSync(join(tree.root, '.gitignore'), readFileSync(join(TOOL_ROOT, '.gitignore')));
+  git(tree.root, ['init', '-q']);
+  commitAll(tree.root, 'fixture release tree with ignore rules');
+  git(tree.root, ['tag', `v${VERSION}`]);
+  const marker = 'synthetic-private-configuration-marker';
+  writeFileSync(join(tree.root, '.env'), `HELUO_IAM_CLIENT_ID=${marker}\n`, { mode: 0o600 });
+  git(tree.root, ['check-ignore', '-q', '--', '.env']);
+  const release = buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' });
+  for (const [path, prefix] of [
+    [release.source, `heluo-forge-${VERSION}/`],
+    [release.tarball, 'package/'],
+    [release.tools, 'heluo-forge-release-tools-1.0.0/'],
+  ]) {
+    const files = readBundleEntries(readFileSync(path), { withContent: true, prefix });
+    assert.equal(files.some((file) => file.path.split('/').includes('.env')), false);
+    assert.equal(files.some((file) => file.content.includes(marker)), false);
+  }
+});
+
 test('refuses a dirty checkout', (t) => {
   const tree = taggedTree(t);
   writeFileSync(join(tree.root, 'uncommitted.txt'), 'dirty\n');
   expectCode(() => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' }), 'WORKTREE_DIRTY');
+});
+
+test('refuses to publish a toolchain with a different IAM runtime validator', (t) => {
+  const tree = taggedTree(t);
+  writeFileSync(join(tree.root, 'packages/forge-iam/src/config.mjs'), 'export const different = true;\n');
+  commitAll(tree.root, 'change the fixture validator');
+  git(tree.root, ['tag', '-f', `v${VERSION}`]);
+  const destination = output(t);
+  expectCode(() => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: destination, tag: `v${VERSION}`, license: 'Apache-2.0' }), 'IAM_VALIDATOR_MISMATCH');
+  assert.equal(existsSync(destination), false);
 });
 
 test('refuses a missing or mismatched tag', (t) => {

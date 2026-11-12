@@ -39,9 +39,11 @@ export function validateGrant(input) {
     // Read each own field once. Validation and output use the same private data,
     // including presence-only markers and V1's unknown extensions.
     const snapshot = Object.fromEntries(Reflect.ownKeys(input).map((key) => [key, input[key]]));
-    const marker = snapshot.refreshOperation;
-    if (marker && typeof marker === 'object' && !Array.isArray(marker)) {
-      snapshot.refreshOperation = Object.freeze(Object.fromEntries(Reflect.ownKeys(marker).map((key) => [key, marker[key]])));
+    for (const field of ['refreshOperation', 'signOutOperation']) {
+      const marker = snapshot[field];
+      if (marker && typeof marker === 'object' && !Array.isArray(marker)) {
+        snapshot[field] = Object.freeze(Object.fromEntries(Reflect.ownKeys(marker).map((key) => [key, marker[key]])));
+      }
     }
     return validateGrantFields(snapshot);
   } catch { return { ok: false, errors: ['grant fields are invalid'] }; }
@@ -59,7 +61,7 @@ function validateGrantFields(input) {
   } else if (input.version === GRANT_VERSION) {
     if (AUTH_MARKERS.some((key) => Object.hasOwn(input, key))) errors.push('grant V1 must not contain authentication markers');
   } else {
-    const allowed = ['version', ...REQUIRED_STRINGS, ...OPTIONAL_STRINGS, 'sessionInstanceId', 'refreshOperation', 'authContext'];
+    const allowed = ['version', ...REQUIRED_STRINGS, ...OPTIONAL_STRINGS, 'sessionInstanceId', 'refreshOperation', 'signOutOperation', 'authContext'];
     if (Reflect.ownKeys(input).some((key) => !allowed.includes(key))) errors.push('grant V2 contains unsupported fields');
     const context = input.authContext;
     const fields = ['mode', 'method', 'secretRef', 'secretRevision'];
@@ -94,9 +96,8 @@ function validateGrantFields(input) {
     }
   }
 
-  if (Object.hasOwn(input, 'sessionInstanceId')
-    && (typeof input.sessionInstanceId !== 'string'
-      || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(input.sessionInstanceId))) {
+  if (typeof input.sessionInstanceId !== 'string'
+    || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(input.sessionInstanceId)) {
     errors.push('grant.sessionInstanceId is invalid');
   }
 
@@ -111,6 +112,17 @@ function validateGrantFields(input) {
     }
   }
 
+  if (Object.hasOwn(input, 'signOutOperation')) {
+    const operation = input.signOutOperation;
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)
+      || Reflect.ownKeys(operation).sort().join(',') !== 'id,state,version'
+      || operation.version !== 1 || operation.state !== 'pending'
+      || typeof operation.id !== 'string' || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(operation.id)
+      || input.refreshOperation?.state === 'pending') {
+      errors.push('grant.signOutOperation is invalid');
+    }
+  }
+
   const hasAccess = isNonEmptyString(input.accessToken);
   const hasAccessExpiry = isNonEmptyString(input.accessExpiresAt);
   if (hasAccess !== hasAccessExpiry) {
@@ -122,8 +134,7 @@ function validateGrantFields(input) {
 }
 
 /**
- * Parse a stored payload. Returns a validation error instead of throwing so
- * callers can clear a corrupt record and force re-login.
+ * Parse a stored payload. Returns a validation error without changing it.
  *
  * @param {unknown} payload
  */
@@ -144,11 +155,26 @@ export function isAccessExpired(grant, now = Date.now()) {
   return Number.isNaN(expires) || expires <= now;
 }
 
+/** The earlier known usable deadline is the last chance to renew the session. */
+export function renewalDeadline(grant, now = Date.now()) {
+  const access = Date.parse(grant?.accessExpiresAt);
+  const refresh = Date.parse(grant?.refreshExpiresAt);
+  return Number.isFinite(refresh) && refresh > now ? Math.min(access, refresh) : access;
+}
+
+/** A refresh token expiring first must still have time to reach the issuer. */
+export function renewalSkewMillis(grant, skewSeconds = 60, now = Date.now()) {
+  const access = Date.parse(grant?.accessExpiresAt);
+  const refresh = Date.parse(grant?.refreshExpiresAt);
+  const refreshFirst = Number.isFinite(refresh) && refresh > now && (!Number.isFinite(access) || refresh <= access);
+  return skewSeconds === 0 && refreshFirst ? 1000 : skewSeconds * 1000;
+}
+
 export function shouldRefresh(grant, now = Date.now(), skewSeconds = 60) {
   if (!grant?.accessToken || !grant?.accessExpiresAt) return true;
-  const expires = Date.parse(grant.accessExpiresAt);
-  if (Number.isNaN(expires)) return true;
-  return expires - skewSeconds * 1000 <= now;
+  const deadline = renewalDeadline(grant, now);
+  if (!Number.isFinite(deadline)) return true;
+  return deadline - renewalSkewMillis(grant, skewSeconds, now) <= now;
 }
 
 export function isRefreshUsable(grant, now = Date.now()) {

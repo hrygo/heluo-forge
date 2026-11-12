@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createFileBackend, createMemoryBackend } from '../src/backend.mjs';
-import { createNativeKeyringBackend } from '../src/index.mjs';
+import { createMemoryBackend } from '../src/backend.mjs';
+import { createCredentialStore } from '../src/credential-store.mjs';
 import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 const KEY = 'heluo-forge/iam/ref/ENTERPRISE_ACCESS_TOKEN';
@@ -19,6 +19,26 @@ async function runContract(name, { create, listing }) {
     const backend = await create(t);
     await backend.set(KEY, 'synthetic-value');
     assert.equal(await backend.get(KEY), 'synthetic-value');
+  });
+
+  test(`${name}: invalid Unicode cannot silently change a stored credential`, async (t) => {
+    const backend = await create(t);
+    await backend.set(KEY, '有效 🔐');
+    assert.equal(await backend.get(KEY), '有效 🔐');
+    const invalid = 'a\ud800b';
+    await assert.rejects(backend.set(KEY, invalid), (error) => error.code === 'CRED_STORE_INVALID');
+    await assert.rejects(backend.transaction(KEY, (tx) => tx.set(invalid)), (error) => error.code === 'CRED_STORE_INVALID');
+    assert.equal(await backend.get(KEY), '有效 🔐');
+  });
+
+  test(`${name}: empty or non-string credential values are rejected`, async (t) => {
+    const backend = await create(t);
+    await backend.set(KEY, 'original');
+    for (const invalid of ['', null, 123]) {
+      await assert.rejects(backend.set(KEY, invalid), (error) => error.code === 'CRED_STORE_INVALID');
+      await assert.rejects(backend.transaction(KEY, (tx) => tx.set(invalid)), (error) => error.code === 'CRED_STORE_INVALID');
+      assert.equal(await backend.get(KEY), 'original');
+    }
   });
 
   test(`${name}: an absent key reads as undefined, never as an error or empty string`, async (t) => {
@@ -39,6 +59,17 @@ async function runContract(name, { create, listing }) {
     await backend.delete(KEY);
     assert.equal(await backend.get(KEY), undefined);
     await backend.delete(KEY);
+  });
+
+  test(`${name}: concurrent writes preserve distinct case-sensitive keys`, async (t) => {
+    const backend = await create(t);
+    const upper = 'heluo-forge/iam/ref/EXAMPLE';
+    const lower = 'heluo-forge/iam/ref/example';
+    await Promise.all([backend.set(upper, 'upper'), backend.set(lower, 'lower')]);
+    assert.equal(await backend.get(upper), 'upper');
+    assert.equal(await backend.get(lower), 'lower');
+    await backend.delete(upper);
+    assert.equal(await backend.get(lower), 'lower');
   });
 
   if (listing) {
@@ -63,51 +94,13 @@ await runContract('memory backend', {
   listing: true,
 });
 
-await runContract('file backend', {
+await runContract('sqlite backend', {
   create: async (t) => {
-    const directory = await outsideRepositoryTmpAsync('forge-keychain-contract-');
-    t.after(() => rm(directory, { recursive: true, force: true }));
-    return createFileBackend({ path: join(directory, 'credentials.json') });
+    const root = await outsideRepositoryTmpAsync('forge-keychain-contract-');
+    const directory = join(root, 'data');
+    const backend = createCredentialStore({ directory });
+    t.after(async () => { await backend.close(); await rm(root, { recursive: true, force: true }); });
+    return backend;
   },
-  listing: true,
-});
-
-// The native backend is exercised through an injected store so the contract runs
-// on any host: the platform addons only load on their own OS.
-const nativeStore = new Map();
-class FakeEntry {
-  constructor(service, key) {
-    this.id = `${service}\u0000${key}`;
-    this.account = key;
-  }
-  async getPassword() {
-    return nativeStore.get(this.id)?.password ?? null;
-  }
-  async setPassword(value) {
-    nativeStore.set(this.id, { account: this.account, password: value });
-  }
-  async deletePassword() {
-    return nativeStore.delete(this.id);
-  }
-}
-const fakeModule = {
-  Entry: FakeEntry,
-  AsyncEntry: FakeEntry,
-  findCredentialsAsync: async (service, filter) =>
-    [...nativeStore.entries()]
-      .filter(([id, credential]) => filter === undefined
-        ? id.startsWith(`${service}\u0000`)
-        : credential.account.toLowerCase().startsWith(filter.slice(0, -1).toLowerCase()))
-      .map(([, credential]) => credential),
-};
-
-await runContract('native backend', {
-  create: async () =>
-    createNativeKeyringBackend({
-      service: 'heluo-forge',
-      platform: 'win32',
-      load: () => fakeModule,
-      enumeration: 'find-credentials',
-    }),
   listing: true,
 });

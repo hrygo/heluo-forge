@@ -26,7 +26,7 @@ function createService(credentials, options = {}) {
 
 async function seed(credentials) {
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, subject: 'synthetic', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic', clientId: config.clientId,
     resource: config.gatewayResource, scope: 'openid', obtainedAt: new Date().toISOString(),
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access',
     accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
@@ -84,8 +84,13 @@ for (const shouldFail of [false, true]) {
     assert.equal(a.view.error, shouldFail ? 'IAM_CREDENTIALS_CLEAR_FAILED' : null);
     if (shouldFail) {
       credentials.modifyRecord = original;
+      const pending = await credentials.readRecord('heluo-iam/session');
+      assert.equal(pending.payload.signOutOperation.state, 'pending');
+      await assert.rejects(service.resolveToken());
       const retry = await service.signOut();
-      assert.equal(retry.view.error, null);
+      assert.equal(retry.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+      assert.equal(writes, 1);
+      assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
     }
   });
 }

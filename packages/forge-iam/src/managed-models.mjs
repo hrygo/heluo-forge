@@ -637,8 +637,9 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
   // async token lookup inside `stream` would arrive after the headers are
   // consumed. The host asks for the key on every call, which gives exactly one
   // resolution per request; the token resolved there is reused by the headers
-  // below. A parallel call may therefore see the newer token, which is still
-  // valid: rotation never invalidates the previous token while it is unexpired.
+  // below. A parallel call may see a newer token. The provider can invalidate
+  // the previous token immediately on rotation, so already-dispatched requests
+  // still depend on the gateway's handling of in-flight authorization.
   let iamToken = null;
   const resolveApiKey = async (...args) => {
     const key = await resolveKey(...args);

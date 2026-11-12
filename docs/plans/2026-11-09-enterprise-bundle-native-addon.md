@@ -52,7 +52,7 @@
 | 构建 | [build-enterprise-bundle.mjs](../../scripts/build-enterprise-bundle.mjs) | 按各包 `manifest.files` 复制资源，`vendor` 在 `files` 中 | 没有"必需资源"概念，无前置断言 |
 | 结构审计 | [bundle-rules.mjs](../../scripts/lib/bundle-rules.mjs) | `auditTarball` 只校验声明条目存在，目录形态由任一文件满足 | 不读取 `CHECKSUMS.json` 的条目清单，不校验 addon |
 | 产物核验 | [verify-enterprise-bundle.mjs](../../scripts/verify-enterprise-bundle.mjs) | 只做结构规则与 manifest diff | manifest 由同一坏产物生成，自洽，永不红 |
-| 运行时 | [native-keyring.mjs](../../packages/forge-credentials-keychain/src/native-keyring.mjs) | `store()` 在挂载期加载 addon，缺失即抛错 | 唯一报警器，但位于客户机器上 |
+| 运行时 | `native-keyring.mjs` | `store()` 在挂载期加载 addon，缺失即抛错 | 唯一报警器，但位于客户机器上 |
 
 **三处绿灯互不相关的原因**：本机 `vendor/*/` 已暂存（日常构建是 136 文件的正确产物）；macOS 在解析层就分到加密文档后端，不触碰 addon；CI 的 `device-matrix` 在无 addon 的 runner 上把"缺 addon 就 `KEYCHAIN_UNAVAILABLE`"作为正确行为断言通过。
 
@@ -112,7 +112,7 @@
 
 ### 5.4 附带修正
 
-- [fetch-native-keyring.mjs](../../scripts/fetch-native-keyring.mjs) 的 `verifyStagedLayout` 目前只比 `version` 与 `license`，不与锁文件比 `integrity` 与 `source`，导致 `CHECKSUMS.json` 的 integrity 漂移时 `--check` 仍绿；补齐交叉比较并加负例。
+- `fetch-native-keyring.mjs` 的 `verifyStagedLayout` 目前只比 `version` 与 `license`，不与锁文件比 `integrity` 与 `source`，导致 `CHECKSUMS.json` 的 integrity 漂移时 `--check` 仍绿；补齐交叉比较并加负例。
 - 同文件头注释写 `native/<triple>/`，实际目录是 `vendor/<triple>/`；改正注释。
 - 关联计划"三个目标全部就位"与清单的四组合不一致；按四组合表述。
 
@@ -216,7 +216,7 @@ node --test tests/bundle-native.test.mjs
 | 构建前置（记录覆盖 + 字节判定）与复制范围 | [build-enterprise-bundle.mjs](../../scripts/build-enterprise-bundle.mjs) 第 86 行起、第 94 行起 |
 | 结构审计只验条目存在 | [bundle-rules.mjs](../../scripts/lib/bundle-rules.mjs) 第 284 行、第 299 行起 |
 | 产物核验的原生资源规则 | [verify-enterprise-bundle.mjs](../../scripts/verify-enterprise-bundle.mjs) 第 70 行起 |
-| 挂载期加载与抛错 | [native-keyring.mjs](../../packages/forge-credentials-keychain/src/native-keyring.mjs) 第 137 行、第 142 行、第 411 行 |
+| 挂载期加载与抛错 | `native-keyring.mjs` 第 137 行、第 142 行、第 411 行 |
 | 原生后端未取证即拒绝 | [index.mjs](../../packages/forge-credentials-keychain/src/index.mjs) 第 202 行、第 320 行起 |
 | macOS 不经 addon | [backend.mjs](../../packages/forge-credentials-keychain/src/backend.mjs) 第 106 行起 |
 | 企业组合禁用官方凭据行 | [cordis.patch.yml](../../packages/forge-enterprise/cordis.patch.yml) 第 36 行起 |

@@ -22,7 +22,7 @@ import { buildBundle, writeBundleArtifacts } from './build-enterprise-bundle.mjs
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { writeBundleTarball } from './lib/bundle-write.mjs';
-import { TOOL_NAME, TOOL_VERSION, assertNeutralPatch } from './lib/private-bundle.mjs';
+import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch } from './lib/private-bundle.mjs';
 import { scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
 
 export const PUBLIC_RELEASE_SCHEMA = 'heluo-public-release/1';
@@ -113,12 +113,14 @@ function releaseToolFiles(root) {
     'scripts/make-private-bundle.mjs',
     'scripts/init-enterprise-plugin.mjs',
     'scripts/release-delivery.mjs',
-    'scripts/fetch-native-keyring.mjs',
-    'scripts/native-keyring.json',
   ];
   const files = roots.filter((path) => existsSync(join(root, path)));
   files.push(...listFiles(root, 'scripts/lib', (path) => path.endsWith('.mjs')));
   files.push(...listFiles(root, '.agents/skills/heluo-forge-release-bundle'));
+  // The maker invokes the same config validator as the IAM runtime. Include
+  // its complete local import closure so the released toolchain stays standalone.
+  files.push(...IAM_VALIDATOR_MODULES
+    .map((name) => `packages/forge-iam/src/${name}`));
   for (const path of files) {
     if (!existsSync(join(root, path))) fail('TOOLS_INCOMPLETE', `release toolchain is missing ${path}`);
   }
@@ -178,6 +180,7 @@ export function buildPublicRelease(input) {
     if (patch === undefined) fail('ARTIFACT_INVALID', 'public tarball has no cordis.patch.yml');
     const neutral = assertNeutralPatch(patch.content.toString('utf8'));
     if (neutral.length > 0) fail('ARTIFACT_NOT_NEUTRAL', `public tarball carries enterprise configuration:\n- ${neutral.join('\n- ')}`);
+    assertIamValidatorMatches(entries, { toolRoot });
     const scan = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
     if (scan.length > 0) fail('ARTIFACT_SENSITIVE', `public tarball failed the sensitive scan:\n- ${scan.join('\n- ')}`);
 
@@ -219,7 +222,8 @@ export function buildPublicRelease(input) {
               `# ${TOOL_NAME} ${TOOL_VERSION}`,
               '',
               '离线发布工具链。解压后按 `toolchain/.agents/skills/heluo-forge-release-bundle/SKILL.md` 的步骤执行；',
-              '真实企业配置只从仓库外的 `.env` 读取，任何密钥都不得写入日志、报告或 argv。',
+              '企业配置从不提交的 `.env` 读取；放在仓库内时须受 Git 忽略规则保护。',
+              '任何密钥都不得写入 `.env`、日志、报告或 argv。',
               '',
               `source commit: ${gitState.commit ?? 'not-a-git-checkout'}`,
               `plugin tarball: ${tarballName}`,

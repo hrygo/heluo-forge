@@ -25,7 +25,7 @@ async function fixture(t, discoveredIssuer, overrides = {}, discoveryFails = fal
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials);
   await store.write({
-    version: 1, issuer: issuerA, subject: 'synthetic-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: issuerA, subject: 'synthetic-user', clientId: config.clientId,
     refreshToken: 'synthetic-old-refresh', accessToken: 'synthetic-expired-access',
     obtainedAt: '2026-01-01T00:00:00.000Z', accessExpiresAt: '2026-01-01T00:59:00.000Z',
     scope: 'openid profile offline_access',

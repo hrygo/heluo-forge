@@ -44,25 +44,6 @@ test('a fully staged release packs four addons and verifies', (t) => {
   assert.equal(verdict.ok, true);
 });
 
-test('every mapped platform resolves to an addon the artifact actually ships', async (t) => {
-  // The record names four triples and the loader maps four platform pairs; these
-  // are separate assertions today. This joins them: what the loader looks up is
-  // what the artifact must contain, so a mapping change cannot silently ship an
-  // addon nobody loads (or look for one nobody ships).
-  const { nativeTargetFor } = await import('../packages/forge-credentials-keychain/src/native-keyring.mjs');
-  const { root } = release(t);
-  const result = buildBundle({ root, entry: ENTRY, destination: join(root, 'release') });
-  for (const [platform, arch] of [['win32', 'x64'], ['win32', 'arm64'], ['linux', 'x64'], ['linux', 'arm64']]) {
-    const triple = nativeTargetFor(platform, arch);
-    assert.ok(triple, `${platform}-${arch} must map to a delivery triple`);
-    assert.ok(
-      result.packed.some((file) => file.path === `node_modules/${MEMBER}/vendor/${triple}/keyring.node`),
-      `${platform}-${arch} resolves to ${triple}, so the artifact must ship that addon`,
-    );
-  }
-  assert.equal(nativeTargetFor('darwin', 'arm64'), undefined, 'macOS keeps the encrypted document backend, not an addon');
-});
-
 test('a clean checkout cannot produce the #216 artifact', (t) => {
   // Only the record and the README are staged, exactly what git tracks.
   const { root } = release(t, { staged: [] });
@@ -71,8 +52,7 @@ test('a clean checkout cannot produce the #216 artifact', (t) => {
     () => buildBundle({ root, entry: ENTRY, destination }),
     (error) =>
       /4 recorded file\(s\) missing: .*linux-arm64-gnu\/keyring\.node/u.test(error.message)
-      && /4 addon license\(s\) missing/u.test(error.message)
-      && /fetch-native-keyring/u.test(error.message),
+      && /4 addon license\(s\) missing/u.test(error.message),
   );
   assert.equal(existsSync(destination), false, 'a refused build must not leave an artifact directory');
 });
@@ -122,13 +102,11 @@ for (const [ignored, expected] of [
   });
 }
 
-test('the keychain package cannot build when its entire vendor directory is missing', (t) => {
+test('a credentials package without native resources builds and verifies', (t) => {
   const { root, vendorDir } = release(t, { memberFiles: ['src', 'README.md'] });
   rmSync(vendorDir, { recursive: true });
-  assert.throws(
-    () => buildBundle({ root, entry: ENTRY, destination: join(root, 'release') }),
-    /vendor\/CHECKSUMS\.json.*missing/u,
-  );
+  const result = buildBundle({ root, entry: ENTRY, destination: join(root, 'release') });
+  assert.deepEqual(verifyBundle(result.tarball).errors, []);
 });
 
 test('tampered addon bytes fail the release build', (t) => {
@@ -163,14 +141,6 @@ test('the verifier rejects a structurally built artifact that lacks the addons',
   assert.match(verdict.errors[0], /4 addon license\(s\) missing/u);
 });
 
-test('the verifier rejects a keychain package without its native resource record', (t) => {
-  const { root } = release(t, { memberFiles: ['src', 'README.md'] });
-  const result = buildBundle({ root, entry: ENTRY, destination: join(root, 'release'), requireNativeResources: false });
-  const verdict = verifyBundle(result.tarball);
-  assert.equal(verdict.ok, false);
-  assert.match(verdict.errors.join('\n'), /forge-credentials-keychain\/vendor\/CHECKSUMS\.json.*missing/u);
-});
-
 test('the verifier rejects an artifact whose addon bytes were replaced', (t) => {
   // The archive is gzip, so a packed file cannot be byte-patched in place: build
   // the same tree twice, once intact and once with one addon corrupted, and let
@@ -201,6 +171,19 @@ test('a defective record inside the artifact is a verdict, not an exception', (t
     (error) => error.status === 1 && /not valid JSON/u.test(String(error.stdout)),
   );
 });
+
+for (const entry of [ENTRY, MEMBER]) {
+  test(`the verifier rejects ${entry} vendor resources without a record or sibling manifest`, (t) => {
+    const { root, vendorDir } = release(t);
+    rmSync(join(vendorDir, 'CHECKSUMS.json'));
+    const result = buildBundle({ root, entry, destination: join(root, 'release'), requireNativeResources: false });
+    assert.equal(existsSync(join(dirname(result.tarball), 'bundle-manifest.json')), false);
+    const verdict = verifyBundle(result.tarball);
+    assert.equal(verdict.manifest, null);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.errors.join('\n'), /vendor\/CHECKSUMS\.json.*missing/u);
+  });
+}
 
 test('a vendor directory without the record is refused instead of packed blind', (t) => {
   const { root, vendorDir } = release(t);

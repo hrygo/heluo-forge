@@ -13,7 +13,7 @@ const config = {
 
 async function seed(credentials, subject = 'old-user') {
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, subject, clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject, clientId: config.clientId,
     refreshToken: `${subject}-refresh`, accessToken: `${subject}-access`, scope: 'openid',
     obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + 3600000).toISOString(),
   });

@@ -9,10 +9,9 @@
  *     [--repo-root <dir>] [--confirm <digest-prefix>]
  *
  * The release engineer runs this from a place where the public artifact was
- * downloaded, not necessarily this checkout. `--config` must live outside the
- * repository (default root: this script's repository) and be mode 0600.
+ * downloaded, not necessarily this checkout. `--config` must be mode 0600;
+ * when placed in a repository, use a git-ignored file such as `.env`.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
@@ -24,6 +23,7 @@ import {
   parseEnvConfig,
   planDigest,
   PrivateBundleError,
+  readConfigFile,
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
@@ -88,14 +88,13 @@ async function main() {
   const publicPath = resolve(options.publicPath);
   const configPath = resolve(options.configPath);
   const output = resolve(options.output);
-  assertOutsideDirectory(configPath, repoRoot, 'configuration file');
   assertOutsideDirectory(output, repoRoot, 'output directory');
 
   const publicInfo = inspectPublicTarball(publicPath);
   if (publicInfo.problems.length > 0) {
     throw new PrivateBundleError('PUBLIC_UNSAFE', `public input failed preflight:\n- ${publicInfo.problems.join('\n- ')}`);
   }
-  const entries = parseEnvConfig(readFileSync(configPath, 'utf8'));
+  const entries = parseEnvConfig(readConfigFile(configPath));
   const config = buildConfig(entries);
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }

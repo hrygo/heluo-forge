@@ -33,7 +33,7 @@ function baseOf(grant, operationId) {
 
 function initialGrant() {
   return {
-    version: 1, issuer: config.issuer, subject: 'original-subject', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'original-subject', clientId: config.clientId,
     resource: config.gatewayResource, scope: 'openid profile offline_access',
     obtainedAt: '2026-01-01T00:00:00.000Z', refreshToken: 'synthetic-original-refresh',
     accessToken: 'synthetic-old-access', accessExpiresAt: '2026-01-01T00:00:00.000Z',

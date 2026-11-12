@@ -233,7 +233,7 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 | 持久性与恢复 | 进程和系统重启后数据/代际一致；锁持有者崩溃有明确恢复策略，不依赖自动删除未证实的活锁 |
 | 长记录 | 覆盖业务最大值、编码边界、pending marker、可选 ID Token；失败不破坏已有 grant，不截断 |
 
-现有 [跨进程探针](<../../scripts/probe/run-keychain-cross-process-probe.mjs>)只证明可见性；现有 [网关原子 fixture](<../../packages/forge-iam/test/support/atomic-gateway.mjs>)只在单次 JS turn 更新内存 Map。两者均不证明生产事务。
+现有 `scripts/probe/run-keychain-cross-process-probe.mjs`只证明可见性；现有 [网关原子 fixture](<../../packages/forge-iam/test/support/atomic-gateway.mjs>)只在单次 JS turn 更新内存 Map。两者均不证明生产事务。
 
 ## 6. 自包含制品路线
 
@@ -243,8 +243,8 @@ C 通过前，不把原生样机改为默认生产 backend。是否升级候选�
 
 落点（`packages/forge-credentials-keychain`）：
 
-1. 锁定清单 [scripts/native-keyring.json](<../../scripts/native-keyring.json>) 固定上游包、精确版本与每个 tarball 的 integrity；`vendor/CHECKSUMS.json` 记录落地文件的 sha256、字节数、来源包与许可。
-2. [scripts/fetch-native-keyring.mjs](<../../scripts/fetch-native-keyring.mjs>) 按清单下载、校验 integrity、暂存到 `vendor/<triple>/keyring.node` 并写校验和；任何一项不符立即中止且不写文件，`--check` 只校验不下载。
+1. 锁定清单 `scripts/native-keyring.json` 固定上游包、精确版本与每个 tarball 的 integrity；`vendor/CHECKSUMS.json` 记录落地文件的 sha256、字节数、来源包与许可。
+2. `scripts/fetch-native-keyring.mjs` 按清单下载、校验 integrity、暂存到 `vendor/<triple>/keyring.node` 并写校验和；任何一项不符立即中止且不写文件，`--check` 只校验不下载。
 3. 二进制不进入 Git：提交钩子拒绝二进制与大文件，`vendor/*/` 已由 [.gitignore](<../../.gitignore>) 排除。干净克隆只有清单与校验和、没有字节，因此不能出制品；发布打包前必须先暂存并跑 `--check`，四个目标（win32-x64、win32-arm64、linux-x64、linux-arm64）全部就位才出制品。该前置由构建期校验强制，缺失即非零退出；记录本身也必须列在发布文件集内，否则构建同样拒绝——否则产物核验连「有记录可判」这个前提都不成立。离线检查器不要求原生产物，避免 CI 依赖网络。
 4. 加载器 `src/native-keyring.mjs` 用 `nativeTargetFor()` 映射 `platform-arch`，按**相对本包的绝对路径**加载，不做 `node_modules` 解析；未列入映射的组合返回不可用 backend；macOS 在解析层直接进入加密文档后端，不经过 addon 映射。
 5. 启用分两步：`NATIVE_ADAPTER_VETTED` 为 `false` 时挂载需要 `allowUnvettedPlatformAdapter: true`；目标机完成读、写、删、失效、跨进程与重启后保留的记录后置为 `true`，此后无需平台相关配置。

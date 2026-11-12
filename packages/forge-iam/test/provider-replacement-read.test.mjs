@@ -14,7 +14,7 @@ const config = {
 test('a new caller cannot reuse a token promise after the provider changes', async (t) => {
   const old = new MemoryCredentials();
   await createGrantStore(old).write({
-    version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   });
@@ -42,7 +42,7 @@ test('a new caller cannot reuse a token promise after the provider changes', asy
 test('a token promise cannot return after the service is disposed', async (t) => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   });
@@ -67,7 +67,7 @@ for (const lookup of [2, 3, 4]) {
   test(`synchronous provider lookup ${lookup} cannot return a token after disposal`, async (t) => {
     const credentials = new MemoryCredentials();
     await createGrantStore(credentials).write({
-      version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+      version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
       refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
       obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
     });
@@ -87,7 +87,7 @@ test('an old empty read cannot invalidate a newer provider session', async (t) =
   const old = new MemoryCredentials();
   const next = new MemoryCredentials();
   await createGrantStore(next).write({
-    version: 1, issuer: config.issuer, subject: 'new-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'new-user', clientId: config.clientId,
     refreshToken: 'new-refresh', accessToken: 'new-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   });
@@ -114,7 +114,7 @@ test('a failed old-provider refresh cannot erase a newer provider session', asyn
   const old = new MemoryCredentials();
   const next = new MemoryCredentials();
   const grant = (subject, hours) => ({
-    version: 1, issuer: config.issuer, subject, clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject, clientId: config.clientId,
     refreshToken: `${subject}-refresh`, accessToken: `${subject}-access`, scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + hours * 3600000).toISOString(),
   });
@@ -152,9 +152,9 @@ test('a failed old-provider refresh cannot erase a newer provider session', asyn
 for (const legacy of [false, true]) {
   test(`a failed refresh cannot erase a newer ${legacy ? 'legacy' : 'identified'} session on the same provider`, async (t) => {
   const credentials = new MemoryCredentials();
-  const grant = (subject, hours, id) => ({
+  const grant = (subject, hours, id, withoutId = false) => ({
     version: 1, issuer: config.issuer, subject, clientId: config.clientId,
-    ...(legacy ? {} : { sessionInstanceId: Buffer.alloc(32, id).toString('base64url') }),
+    ...(withoutId ? {} : { sessionInstanceId: Buffer.alloc(32, id).toString('base64url') }),
     refreshToken: `${subject}-refresh`, accessToken: `${subject}-access`, scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + hours * 3600000).toISOString(),
   });
@@ -179,12 +179,16 @@ for (const legacy of [false, true]) {
   t.after(() => { release(); service.dispose(); });
   const refresh = service.resolveToken();
   await Promise.race([entered, refresh.then(() => { throw new Error('refresh completed before the mock gate'); })]);
-  await store.write(grant('new-user', 3, 2));
-  assert.equal((await service.syncFromStore()).principal, 'new-user');
+  const replacement = grant('new-user', 3, 2, legacy);
+  if (legacy) await credentials.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: replacement }));
+  else await store.write(replacement);
+  const view = await service.syncFromStore();
+  assert.equal(view.principal, legacy ? null : 'new-user');
   release();
   await assert.rejects(refresh);
-  assert.equal(service.getView().state, 'ready');
-  assert.equal(service.getView().principal, 'new-user');
+  assert.equal(service.getView().state, legacy ? 'error' : 'ready');
+  assert.equal(service.getView().principal, legacy ? null : 'new-user');
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), { kind: 'grant', payload: replacement });
   });
 }
 
@@ -207,7 +211,7 @@ test('an old empty read cannot erase a later session on the same provider', asyn
   const oldRead = service.resolveToken();
   await waiting;
   await store.write({
-    version: 1, issuer: config.issuer, subject: 'new-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'new-user', clientId: config.clientId,
     refreshToken: 'new-refresh', accessToken: 'new-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   });
@@ -222,7 +226,7 @@ test('a changed invalid grant cannot leave the unchanged old view ready', async 
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials);
   const grant = {
-    version: 1, issuer: config.issuer, subject: 'old-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'old-user', clientId: config.clientId,
     refreshToken: 'old-refresh', accessToken: 'old-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   };
@@ -239,7 +243,7 @@ test('a changed invalid grant cannot leave the unchanged old view ready', async 
 test('an initial storage read failure clears the unchanged cached session', async (t) => {
   const credentials = new MemoryCredentials();
   await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, subject: 'old-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'old-user', clientId: config.clientId,
     refreshToken: 'old-refresh', accessToken: 'old-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   });
@@ -256,7 +260,7 @@ test('a pending refresh does not expose an old ready view while waiting', async 
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials);
   const grant = {
-    version: 1, issuer: config.issuer, subject: 'old-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'old-user', clientId: config.clientId,
     refreshToken: 'old-refresh', accessToken: 'old-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   };
@@ -293,7 +297,7 @@ test('a pending marker for the same session cannot leave its old view ready', as
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials);
   const grant = {
-    version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
   };
@@ -313,7 +317,7 @@ for (const replacement of ['other', 'unavailable']) {
   test(`a non-refreshing token read cannot use a ${replacement} provider's predecessor`, async (t) => {
     const old = new MemoryCredentials();
     await createGrantStore(old).write({
-      version: 1, issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+      version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
       refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
       obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
     });

@@ -19,6 +19,8 @@
 | 仓库边界 | 企业方案与扩展工程仓库，不包含、不修改或分发 DSH 本体 |
 | 许可与使用 | 公开（public）方案仓库；根工程与各扩展包 `private: true` 禁止发布，`UNLICENSED` 表示未授予开源许可 |
 
+银河麒麟使用 Web 端时，推荐使用新版 Chrome 或 Chromium；浏览器兼容性与实测范围见[客户端说明](deploy/clients/README.md#web-浏览器)。
+
 ---
 
 ## 1. 愿景与核心价值

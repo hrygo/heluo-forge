@@ -15,9 +15,9 @@ const skip = dshReady && enabled ? false : `needs ${dsh} on PATH and npm (or DSH
 // independent. Exercise both built-in profiles for whichever host was selected.
 const profiles = process.env.DSH_HOST_PROBE_PROFILE ? [process.env.DSH_HOST_PROBE_PROFILE] : ['sdk', 'web'];
 
-test('structural rehearsal evidence does not claim the native resources were verified', () => {
+test('rehearsal evidence does not claim production storage verification', () => {
   const source = readFileSync(script, 'utf8');
-  assert.match(source, /nativeResources: 'not verified \(structural rehearsal build; not a release artifact\)'/u);
+  assert.match(source, /storage: 'synthetic fixture; production storage not verified'/u);
 });
 
 for (const profile of profiles) {

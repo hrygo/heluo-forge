@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.42.0 |
+| 版本 | V1.43.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-11 |
+| 最后更新 | 2026-11-12 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -63,7 +63,7 @@
 | 编号 | 交付物 | 文件 | 必须先回答 |
 |---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V2.1.1，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 个人访问采用路线 B 双因子凭据协同（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；含阶段能力矩阵，上游规范仍在修改，能力待联调 |
+| CORP-DSH-GW-001 | AI 网关契约（V2.1.2，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 个人访问采用路线 B 双因子凭据协同（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；含阶段能力矩阵，上游规范仍在修改，能力待联调 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
 | CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
@@ -100,7 +100,7 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 企业协作聊天方案 | [Agent 增强的企业聊天产品方案](requirements/enterprise-collaboration-chat-proposal.md) | 草案；单聊与群聊优先互通企业 IM，个人 Agent 提供私有总结；范围入基线与企业接口待确认 |
 | 云端专家智能体 PRD | [Forge 专家智能体产品需求文档](requirements/delegra-experts-prd.md) | 草案；在 DSH 中发现并 `@` 委派 Delegra 专家；范围、权限与接入待确认 |
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
-| 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | 文件 backend / OS keychain / 迁移与不可用时的 fail-closed 口径 |
+| 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | SQLite 值级加密、旧存储保留与不可用时的 fail-closed 口径 |
 | 客户端标识 | [DSH 客户端标识（UA）方案设计](<design/client-identification.md>) | 使用 DSH 默认 UA，网关按关键字匹配；不改写宿主 UA，匹配能力及企业链路待确认 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 

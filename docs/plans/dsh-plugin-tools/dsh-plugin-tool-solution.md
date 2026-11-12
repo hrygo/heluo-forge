@@ -1,6 +1,6 @@
 # DSH 插件与工具方案
 
-> 归档快照：本文件是《DSH 插件与工具方案》V2.0 的 Markdown 版本；主计划、门禁与版本以 [推广实施方案](../rollout-plan.md) 为准。
+> 归档快照：本文件是《DSH 插件与工具方案》V2.0 的 Markdown 版本；主计划、门禁与版本以 [推广实施方案](../rollout-plan.md) 为准。文内机密客户端与延后 PKCE 是当时前提；当前企业交付采用 [ADR-26](../../architecture/platform-architecture.md#14-架构决策记录) 的 public 客户端 + PKCE S256，实际企业行为仍待联调。
 >
 > **2026-11-03 决策更新**：用户决定，任何形式的 client_id/client_secret 泄露均不在评估范围，视为无影响。本文 D2（按部门/批次多 client）、F05 与表 12 的“部门级 client_secret 可被提取”不再作为风险或准入理由；V1 按单 client 执行。原文保留为 2026-10-28 快照。
 

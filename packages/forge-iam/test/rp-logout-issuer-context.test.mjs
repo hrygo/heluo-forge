@@ -28,7 +28,7 @@ async function fixture(t, { discoveredIssuer = issuerA, discoveryFails = false,
   const credentials = new MemoryCredentials();
   const store = createGrantStore(credentials);
   await store.write({
-    version: 1, issuer: issuerA, subject: 'synthetic-subject', clientId,
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: issuerA, subject: 'synthetic-subject', clientId,
     refreshToken, idToken, accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock - 1000).toISOString(),
     accessExpiresAt: new Date(clock + 24 * 60 * 60 * 1000).toISOString(),

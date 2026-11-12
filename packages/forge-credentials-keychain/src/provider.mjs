@@ -1,4 +1,4 @@
-import { NAMESPACE_PATTERN } from './backend.mjs';
+import { NAMESPACE_PATTERN } from './text.mjs';
 
 const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const KEY_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
@@ -110,6 +110,7 @@ export function namespacePrefixes(options = {}) {
 export function createKeychainProvider(backend, options = {}) {
   assertBackend(backend);
   const { namespace, refPrefix, recordPrefix } = namespacePrefixes(options);
+  const source = backend.kind === 'memory' ? 'memory' : 'file';
   const locks = new Map();
 
   // Notifications are best-effort after a successful backend operation. Never
@@ -135,16 +136,18 @@ export function createKeychainProvider(backend, options = {}) {
   return {
     kind: backend.kind,
     durable: backend.durable === true,
-    crossProcessLock: backend.crossProcessLock === true || typeof backend.transaction === 'function',
+    // A method or self-reported flag is not evidence of cross-process trust.
+    // IAM uses the separately registered composition service for that proof.
+    crossProcessLock: false,
 
     async resolve(ref) {
       const value = await backend.get(`${refPrefix}${validateRef(ref)}`);
-      return value === undefined || value === '' ? undefined : { value, source: 'keychain' };
+      return value === undefined || value === '' ? undefined : { value, source };
     },
 
     async describe(ref) {
       const resolved = await this.resolve(ref);
-      return { configured: resolved !== undefined, ...(resolved ? { source: 'keychain' } : {}), writable: true };
+      return { configured: resolved !== undefined, ...(resolved ? { source } : {}), writable: true };
     },
 
     async set(ref, value) {

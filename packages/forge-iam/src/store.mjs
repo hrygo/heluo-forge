@@ -1,10 +1,8 @@
 import { isModelId, normalizeGatewayBaseURL } from './model-options.mjs';
 import { isDeepStrictEqual } from 'node:util';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
-
-const TOMBSTONE = Object.freeze({ kind: 'grant', payload: Object.freeze({ version: 1, type: 'heluo-iam-session-tombstone' }) });
-const isTombstone = (record) => isDeepStrictEqual(record, TOMBSTONE);
+import { inspectSessionRecord, isSessionTombstone as isTombstone, SESSION_TOMBSTONE as TOMBSTONE } from './session-read.mjs';
 
 export const GRANT_KEY = 'heluo-iam/session';
 export const GATEWAY_REF = 'ENTERPRISE_STATIC_KEY';
@@ -17,7 +15,6 @@ const GATEWAY_RECORD_KIND = 'grant';
 export const LEGACY_TOKEN_REF = 'ENTERPRISE_ACCESS_TOKEN';
 
 const GATEWAY_VERSION = 2;
-const GATEWAY_LEGACY_VERSION = 1;
 const WRITE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const valueDigest = (value) => createHash('sha256').update(value).digest('hex');
 const gatewayTombstone = () => ({
@@ -75,16 +72,15 @@ export function createGrantStore(credentials, options = {}) {
   }
 
   async function read() {
-    const record = await credentials.readRecord(key);
-    if (record === undefined || record === null || isTombstone(record)) return { ok: true, grant: null };
-    if (record.kind !== 'grant') {
-      return { ok: false, reason: 'wrong-kind', kind: record.kind };
+    const session = inspectSessionRecord(await credentials.readRecord(key));
+    if (session.state === 'absent') return { ok: true, grant: null };
+    if (session.state === 'invalid') {
+      return session.reason === 'wrong-kind'
+        ? { ok: false, reason: session.reason, kind: session.kind }
+        : { ok: false, reason: session.reason, errors: session.errors };
     }
-    const parsed = parseGrant(record.payload);
-    if (!parsed.ok) {
-      return { ok: false, reason: 'invalid-grant', errors: parsed.errors };
-    }
-    return { ok: true, grant: parsed.value };
+    if (session.state === 'pending' && session.operation === 'sign-out') return { ok: false, reason: 'sign-out-pending' };
+    return { ok: true, grant: session.grant };
   }
 
   return {
@@ -106,6 +102,9 @@ export function createGrantStore(credentials, options = {}) {
         }
         if (current !== undefined && current !== null && current.kind !== 'grant') {
           throw new StoreError('IAM_RECORD_KIND_MISMATCH', 'existing IAM record is not a grant');
+        }
+        if (current != null && !isTombstone(current) && !parseGrant(current.payload).ok) {
+          throw new StoreError('IAM_GRANT_INVALID', 'existing IAM grant cannot be replaced');
         }
         return { kind: 'grant', payload: validation.value };
       });
@@ -131,6 +130,7 @@ export function createGrantStore(credentials, options = {}) {
           if (!parsed.ok) {
             throw new StoreError('IAM_GRANT_INVALID', 'stored IAM grant is invalid', { errors: parsed.errors });
           }
+          if (parsed.value.signOutOperation) throw new StoreError('IAM_REAUTH_REQUIRED', 'sign-out is pending');
           grant = parsed.value;
         }
         const next = await mutator(grant);
@@ -157,40 +157,58 @@ export function createGrantStore(credentials, options = {}) {
     async signOutSnapshot(expected, beforeClear) {
       if (!atomicVerified() || typeof beforeClear !== 'function'
         || (expected !== null && !validateGrant(expected).ok)) return { ok: false };
-      let called = false;
       let decision;
-      let expectedResult;
+      let called = 0;
+      let pending;
+      let original;
+      let phaseResult;
+      let unchanged;
       try {
-        const result = await credentials.modifyRecord(key, async (current) => {
-          if (!atomicVerified()) throw new Error('atomic store no longer verified');
-          if (called) throw new Error('mutator called more than once');
-          called = true;
+        phaseResult = await credentials.modifyRecord(key, (current) => {
+          if (!atomicVerified() || ++called !== 1) throw new Error('atomic store no longer verified');
           if (current == null || isTombstone(current)) {
             decision = expected === null ? 'absent' : 'replaced';
-            expectedResult = current;
+            unchanged = structuredClone(current);
             return undefined;
           }
           if (current.kind !== 'grant') throw new Error('invalid record');
           const parsed = parseGrant(current.payload);
           if (!parsed.ok) throw new Error('invalid grant');
+          if (parsed.value.signOutOperation || parsed.value.refreshOperation?.state === 'pending') {
+            decision = 'pending';
+            unchanged = structuredClone(current);
+            return undefined;
+          }
           if (!isDeepStrictEqual(parsed.value, expected)) {
             decision = 'replaced';
-            expectedResult = current;
+            unchanged = structuredClone(current);
             return undefined;
           }
-          if (parsed.value.refreshOperation?.state === 'pending') {
-            decision = 'pending';
-            expectedResult = current;
-            return undefined;
-          }
-          await beforeClear(parsed.value);
-          if (!atomicVerified()) throw new Error('atomic store no longer verified');
-          decision = 'cleared';
-          expectedResult = TOMBSTONE;
+          original = structuredClone(parsed.value);
+          pending = { kind: 'grant', payload: { ...original, signOutOperation: {
+            version: 1, state: 'pending', id: randomBytes(32).toString('base64url'),
+          } } };
+          decision = 'claimed';
+          return pending;
+        });
+        if (!atomicVerified() || called !== 1 || !decision) return { ok: false };
+        if (decision !== 'claimed') return isDeepStrictEqual(phaseResult, unchanged)
+          ? { ok: true, decision } : { ok: false };
+        if (!isDeepStrictEqual(phaseResult, pending)) return { ok: false };
+        // The pending record is durable before any external side effect. A crash
+        // or unknown result leaves it fenced and cannot replay the old token.
+        await beforeClear(original);
+        if (!atomicVerified()) return { ok: false };
+        let finishCalls = 0;
+        let finished = false;
+        const result = await credentials.modifyRecord(key, (current) => {
+          if (!atomicVerified() || ++finishCalls !== 1) throw new Error('atomic store no longer verified');
+          if (!isDeepStrictEqual(current, pending)) return undefined;
+          finished = true;
           return { kind: 'grant', payload: { ...TOMBSTONE.payload } };
         });
-        return atomicVerified() && called && decision && isDeepStrictEqual(result, expectedResult)
-          ? { ok: true, decision } : { ok: false };
+        return atomicVerified() && finishCalls === 1 && finished && isDeepStrictEqual(result, TOMBSTONE)
+          ? { ok: true, decision: 'cleared' } : { ok: false };
       } catch {
         return { ok: false };
       }
@@ -215,7 +233,7 @@ export function createGrantStore(credentials, options = {}) {
           }
           if (current.kind !== 'grant') throw new Error('invalid record');
           const parsed = parseGrant(current.payload);
-          if (!parsed.ok || !parsed.value.sessionInstanceId) throw new Error('unattributable grant');
+          if (!parsed.ok || parsed.value.signOutOperation || !parsed.value.sessionInstanceId) throw new Error('unattributable grant');
           if (parsed.value.sessionInstanceId !== snapshot.sessionInstanceId) {
             decision = 'replaced';
             expectedResult = current;
@@ -279,7 +297,7 @@ function parseGatewayCredential(payload) {
     return { ok: false, errors: ['gateway credential must be an object'] };
   }
   const errors = [];
-  if (![GATEWAY_LEGACY_VERSION, GATEWAY_VERSION].includes(payload.version)) errors.push('unsupported gateway credential version');
+  if (payload.version !== GATEWAY_VERSION) errors.push('unsupported gateway credential version');
   for (const field of ['ownerSubject', 'enteredAt']) {
     if (!isNonEmptyString(payload[field])) errors.push(`gateway credential ${field} must be a non-empty string`);
   }
@@ -424,11 +442,22 @@ export function createGatewayCredentialStore(credentials, options = {}) {
   return {
     key, ref, read,
     async resolve(credential) {
+      if (credential == null) return undefined;
+      let expected;
+      try { expected = structuredClone(credential); } catch { return { invalid: true }; }
+      if (!parseGatewayCredential(expected).ok) return { invalid: true };
+      const current = await read();
+      if (!current.ok || !current.credential || !isDeepStrictEqual(current.credential, expected)) return { invalid: true };
       const resolved = await credentials.resolve(ref);
-      if (credential?.version === GATEWAY_VERSION && (!isNonEmptyString(resolved?.value)
-        || valueDigest(resolved.value) !== credential.valueDigest)) return { invalid: true };
-      return resolved && isNonEmptyString(resolved.value)
-        ? { value: resolved.value, source: resolved.source ?? null } : undefined;
+      const value = resolved?.value;
+      const source = resolved?.source ?? null;
+      if (!isNonEmptyString(value) || valueDigest(value) !== expected.valueDigest) return { invalid: true };
+      const confirmed = await read();
+      try {
+        if (!confirmed.ok || !confirmed.credential || !isDeepStrictEqual(confirmed.credential, expected)
+          || !isDeepStrictEqual(credential, expected)) return { invalid: true };
+      } catch { return { invalid: true }; }
+      return { value, source };
     },
     async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry, baseURL }, { guard } = {}) {
       if (!isNonEmptyString(value)) {

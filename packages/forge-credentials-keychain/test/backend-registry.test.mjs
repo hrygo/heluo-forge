@@ -1,0 +1,287 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createDecipheriv } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { capabilities, createRegisteredBackend } from '../src/backend-registry.mjs';
+import { apply, openCredentialReader } from '../src/index.mjs';
+import { createMemoryBackend } from '../src/backend.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
+
+function ownDirectory(t, directory) {
+  const cleanups = [];
+  t.after(async () => {
+    const errors = [];
+    while (cleanups.length) {
+      try { await cleanups.pop()(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, 'test resource cleanup failed');
+    await rm(directory, { recursive: true, force: true });
+  });
+  return (cleanup) => cleanups.push(cleanup);
+}
+
+function context() {
+  const provided = new Map();
+  return { provided, get: (name) => provided.get(name),
+    provide(name, value) { provided.set(name, value); return () => provided.delete(name); },
+    effect(fn) { return fn(); } };
+}
+
+async function withRegisteredMemoryDefault(t) {
+  const root = await outsideRepositoryTmpAsync('forge-registry-memory-');
+  const own = ownDirectory(t, root);
+  const src = join(root, 'src');
+  await cp(new URL('../src/', import.meta.url), src, { recursive: true });
+  const fixtureDir = join(root, 'test', 'support');
+  await mkdir(fixtureDir, { recursive: true });
+  const fixturePath = join(fixtureDir, 'registered-memory-row-backend.mjs');
+  await cp(new URL('./support/registered-memory-row-backend.mjs', import.meta.url), fixturePath);
+  const registryPath = join(src, 'backend-registry.mjs');
+  const registry = await readFile(registryPath, 'utf8');
+  const defaultSelection = /^const DEFAULT_BACKEND = ['"][^'"]+['"];$/gm;
+  const registrations = 'const BACKENDS = Object.freeze({\n';
+  assert.equal([...registry.matchAll(defaultSelection)].length, 1, 'one default selection in registry');
+  assert.equal(registry.split(registrations).length, 2, 'one registration table');
+  const entry = `  'synthetic-memory': Object.freeze({
+    create: createRegisteredMemoryStore,
+    capabilities: Object.freeze({ crossProcessLock: false, jointAtomic: false }),
+  }),\n`;
+  await writeFile(registryPath, `import { createRegisteredMemoryStore } from '../test/support/registered-memory-row-backend.mjs';\n${registry
+    .replace(defaultSelection, "const DEFAULT_BACKEND = 'synthetic-memory';")
+    .replace(registrations, registrations + entry)}`);
+  const api = await import(pathToFileURL(join(src, 'index.mjs')).href);
+  const fixture = await import(pathToFileURL(fixturePath).href);
+  return { ...api, ...fixture, root, own };
+}
+
+test('a registered non-SQLite row backend shares the HFSE cipher across Host and reader without gaining trust', async (t) => {
+  const isolated = await withRegisteredMemoryDefault(t);
+  const directory = join(isolated.root, 'data');
+  const ctx = context();
+  const dispose = isolated.apply(ctx, { storeDirectory: directory, allowEphemeral: true });
+  isolated.own(dispose);
+  const provider = ctx.provided.get('credentials');
+  assert.equal(provider.durable, false);
+  assert.equal(provider.crossProcessLock, false);
+  assert.equal(ctx.provided.has('iam-atomic-store'), false);
+
+  const refSecret = 'synthetic-ref-secret-alpha';
+  const record = { kind: 'grant', payload: { subject: 'fixture-owner', accessToken: 'synthetic-record-secret-beta' } };
+  await provider.set('TEST', refSecret);
+  await provider.modifyRecord('generic/session', () => record);
+  await dispose();
+  const reader = await isolated.openCredentialReader({ directory });
+  isolated.own(() => reader.close());
+  assert.equal((await reader.resolve('TEST')).value, refSecret);
+  assert.deepEqual(await reader.readRecord('generic/session'), record);
+  assert.deepEqual(isolated.syntheticCalls, [false, true]);
+  assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
+
+  const expected = new Map([
+    ['heluo-forge/iam/ref/TEST', refSecret],
+    ['heluo-forge/iam/record/generic/session', JSON.stringify(record)],
+  ]);
+  const rows = isolated.syntheticRows(directory);
+  assert.equal(rows.length, expected.size);
+  for (const row of rows) {
+    assert.equal(expected.has(row.id), true);
+    assert.equal(row.envelope.subarray(0, 4).toString('ascii'), 'HFSE');
+    assert.equal(row.envelope[4], 1);
+    assert.equal(row.envelope[5], 1);
+    const ivOffset = 7 + row.envelope[6];
+    assert.equal(row.envelope.subarray(7, ivOffset).toString('ascii'), row.kid);
+    for (const value of Object.values(row)) {
+      const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+      assert.equal(bytes.includes(refSecret), false);
+      assert.equal(bytes.includes(record.payload.accessToken), false);
+    }
+    const decipher = createDecipheriv('aes-256-gcm', isolated.syntheticKey, row.envelope.subarray(ivOffset, ivOffset + 12));
+    decipher.setAAD(Buffer.from(`HFSE|1|${row.kind}|${row.id}|${row.owner}|${row.kid}`));
+    decipher.setAuthTag(row.envelope.subarray(ivOffset + 12, ivOffset + 28));
+    const plaintext = Buffer.concat([decipher.update(row.envelope.subarray(ivOffset + 28)), decipher.final()]);
+    assert.equal(plaintext.toString('utf8'), expected.get(row.id));
+    expected.delete(row.id);
+  }
+  assert.equal(expected.size, 0);
+});
+
+// The test changes only the isolated registry; the real Host and reader are
+// copied unchanged. This synthetic SQLite wrapper selects a separate directory
+// so selecting the old default cannot accidentally satisfy the test.
+async function withSyntheticDefault(t, provenCapabilities, { omitJointMethods = false, selectedName = 'synthetic' } = {}) {
+  const root = await outsideRepositoryTmpAsync('forge-registry-synthetic-');
+  const own = ownDirectory(t, root);
+  const src = join(root, 'src');
+  await cp(new URL('../src/', import.meta.url), src, { recursive: true });
+  const registryPath = join(src, 'backend-registry.mjs');
+  const registry = await readFile(registryPath, 'utf8');
+  const defaultSelection = /^const DEFAULT_BACKEND = ['"][^'"]+['"];$/gm;
+  const registrations = 'const BACKENDS = Object.freeze({\n';
+  assert.equal([...registry.matchAll(defaultSelection)].length, 1, 'one default selection in registry');
+  assert.equal(registry.split(registrations).length, 2, 'one registration table');
+  const synthetic = `  synthetic: Object.freeze({
+    create: (options) => {
+      syntheticCalls.push(options.readOnly === true);
+      const store = createCredentialStore({ ...options, directory: join(options.directory, 'synthetic') });
+      return { ...store,
+        ${omitJointMethods ? 'snapshot: undefined, compareAndSwap: undefined,' : ''}
+        capabilities: () => ({ crossProcessLock: true, jointAtomic: true }),
+      };
+    },
+    capabilities: Object.freeze(${JSON.stringify(provenCapabilities)}),
+  }),
+`;
+  await writeFile(registryPath, `import { join } from 'node:path';\nexport const syntheticCalls = [];\n${registry
+    .replace(defaultSelection, `const DEFAULT_BACKEND = ${JSON.stringify(selectedName)};`)
+    .replace(registrations, registrations + synthetic)}`);
+  const api = await import(pathToFileURL(join(src, 'index.mjs')).href);
+  const { syntheticCalls } = await import(pathToFileURL(registryPath).href);
+  return { ...api, root, own, syntheticCalls };
+}
+
+test('a second registered default is selected by both Host and reader with its proven capabilities', async (t) => {
+  const isolated = await withSyntheticDefault(t, { crossProcessLock: true, jointAtomic: true });
+  const directory = join(isolated.root, 'data');
+  const ctx = context();
+  const dispose = isolated.apply(ctx, { storeDirectory: directory });
+  isolated.own(dispose);
+  const provider = ctx.provided.get('credentials');
+  const trust = ctx.provided.get('iam-atomic-store');
+  assert.equal(trust.verify(provider), true);
+  assert.equal(trust.verify({}), false);
+  await provider.set('TEST', 'synthetic');
+  assert.deepEqual(await trust.adapter().snapshot({ recordKey: 'gateway/config', ref: 'TEST' }), {
+    record: undefined, value: 'synthetic',
+  });
+  assert.equal(existsSync(join(directory, 'synthetic', 'credentials.sqlite')), true);
+  assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
+  const reader = await isolated.openCredentialReader({ directory });
+  isolated.own(() => reader.close());
+  assert.equal((await reader.resolve('TEST')).value, 'synthetic');
+  assert.deepEqual(isolated.syntheticCalls, [false, true]);
+});
+
+for (const proven of [
+  { crossProcessLock: false, jointAtomic: true },
+  { crossProcessLock: true, jointAtomic: false },
+]) {
+  test(`registered backend without ${proven.crossProcessLock ? 'joint atomicity' : 'cross-process lock'} receives no trust even if it self-reports both`, async (t) => {
+    const isolated = await withSyntheticDefault(t, proven);
+    const directory = join(isolated.root, 'data');
+    const ctx = context();
+    const dispose = isolated.apply(ctx, { storeDirectory: directory });
+    isolated.own(dispose);
+    assert.equal(ctx.provided.has('iam-atomic-store'), false);
+    await ctx.provided.get('credentials').set('TEST', 'synthetic');
+    const reader = await isolated.openCredentialReader({ directory });
+    isolated.own(() => reader.close());
+    assert.equal((await reader.resolve('TEST')).value, 'synthetic');
+  });
+}
+
+test('missing joint backend methods do not produce a trusted adapter', async (t) => {
+  const isolated = await withSyntheticDefault(t, { crossProcessLock: true, jointAtomic: true }, { omitJointMethods: true });
+  const ctx = context();
+  const dispose = isolated.apply(ctx, { storeDirectory: join(isolated.root, 'data') });
+  isolated.own(dispose);
+  assert.equal(ctx.provided.has('iam-atomic-store'), false);
+  await ctx.provided.get('credentials').set('TEST', 'synthetic');
+});
+
+test('an unregistered default fails before Host or reader publishes a provider', async (t) => {
+  const isolated = await withSyntheticDefault(t, { crossProcessLock: true, jointAtomic: true }, { selectedName: 'unknown' });
+  const directory = join(isolated.root, 'data');
+  const ctx = context();
+  assert.throws(() => isolated.apply(ctx, { storeDirectory: directory }), { code: 'CRED_BACKEND_UNREGISTERED' });
+  assert.equal(ctx.provided.size, 0);
+  await assert.rejects(isolated.openCredentialReader({ directory }), { code: 'CRED_BACKEND_UNREGISTERED' });
+  assert.equal(existsSync(directory), false);
+});
+
+test('registry exposes only immutable tested sqlite capabilities', async (t) => {
+  assert.deepEqual(capabilities('sqlite'), { crossProcessLock: true, jointAtomic: true });
+  assert.equal(Object.isFrozen(capabilities('sqlite')), true);
+  for (const name of ['memory', 'bogus', '__proto__', 'constructor']) {
+    assert.throws(() => capabilities(name), { code: 'CRED_BACKEND_UNREGISTERED' });
+    assert.throws(() => createRegisteredBackend(name, {}), { code: 'CRED_BACKEND_UNREGISTERED' });
+  }
+  const root = await outsideRepositoryTmpAsync('forge-registry-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
+  const backend = createRegisteredBackend('sqlite', { directory });
+  own(() => backend.close());
+  const key = 'heluo-forge/iam/ref/TEST';
+  await backend.set(key, 'synthetic');
+  assert.equal(await backend.get(key), 'synthetic');
+});
+
+test('host grants trust only to registered sqlite, not an injected capability impostor', async (t) => {
+  const root = await outsideRepositoryTmpAsync('forge-registry-host-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
+  const builtin = context();
+  const dispose = apply(builtin, { storeDirectory: directory });
+  own(dispose);
+  const provider = builtin.provided.get('credentials');
+  assert.equal(builtin.provided.get('iam-atomic-store').verify(provider), true);
+  await provider.set('TEST', 'synthetic');
+  const reader = await openCredentialReader({ directory });
+  own(() => reader.close());
+  assert.equal((await reader.resolve('TEST')).value, 'synthetic');
+  const injected = context();
+  const backend = Object.assign(createMemoryBackend(), {
+    durable: true, capabilities: () => ({ crossProcessLock: true, jointAtomic: true }),
+    transaction: async () => {}, snapshot: async () => ({}), compareAndSwap: async () => ({ ok: true }),
+  });
+  const close = apply(injected, { backend, allowEphemeral: true });
+  own(close);
+  assert.equal(injected.provided.has('iam-atomic-store'), false);
+});
+
+test('registered sqlite serializes writes across live processes', { timeout: 10000 }, async (t) => {
+  const { spawn } = await import('node:child_process');
+  const { once } = await import('node:events');
+  const root = await outsideRepositoryTmpAsync('forge-registry-lock-');
+  const directory = join(root, 'data');
+  const own = ownDirectory(t, root);
+  const backend = createRegisteredBackend('sqlite', { directory, lockTimeoutMs: 3000 });
+  own(() => backend.close());
+  const key = 'heluo-forge/iam/ref/TEST';
+  await backend.set(key, 'initial');
+  let release;
+  let entered;
+  const held = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const first = backend.transaction(key, async (tx) => { entered(); await gate; tx.set('first'); });
+  const firstResult = first.then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  own(async () => { release(); const result = await firstResult; if (!result.ok) throw result.error; });
+  await held;
+  const registry = new URL('../src/backend-registry.mjs', import.meta.url).href;
+  const code = `import { createRegisteredBackend } from ${JSON.stringify(registry)};
+const store = createRegisteredBackend('sqlite', { directory: process.argv[1], lockTimeoutMs: 3000 });
+process.send('trying'); await store.set(${JSON.stringify(key)}, 'second'); process.send('committed'); await store.close();`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code, directory], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  const childClosed = once(child, 'close').then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  own(async () => {
+    release();
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    const result = await childClosed;
+    if (!result.ok) throw result.error;
+  });
+  assert.equal((await once(child, 'message', { signal: AbortSignal.timeout(3000) }))[0], 'trying');
+  let committed = false;
+  child.on('message', (message) => { if (message === 'committed') committed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(committed, false);
+  assert.equal(await backend.get(key), 'initial');
+  const exited = once(child, 'exit');
+  release();
+  await first;
+  const [codeResult] = await exited;
+  assert.equal(codeResult, 0);
+  assert.equal(committed, true);
+  assert.equal(await backend.get(key), 'second');
+});

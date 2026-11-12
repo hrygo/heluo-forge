@@ -19,19 +19,16 @@ test('the manifest declares the repository package contract', async () => {
   }
 });
 
-test('the README claims only the development skeleton', async () => {
-  const text = await read('README.md');
-  assert.match(text, /状态：可用（开发骨架/);
-  assert.match(text, /非生产/);
-  assert.match(text, /Windows\/UOS\/麒麟适配器/);
-  assert.match(text, /macOS 不使用 addon/);
-  assert.match(text, /macOS 存储边界/);
-  assert.match(text, /allowUnvettedPlatformAdapter/);
-  assert.doesNotMatch(text, /已联调/);
+test('the package ships SQLite storage and does not ship retired native resources', async () => {
+  const manifest = JSON.parse(await read('package.json'));
+  assert.ok(manifest.files.includes('src'));
+  assert.equal(manifest.files.includes('vendor'), false);
+  await access(join(here, 'src/credential-store.mjs'));
+  await access(join(here, 'src/sqlite-backend.mjs'));
 });
 
-test('the platform backend is intentionally unavailable', async () => {
-  const source = await read('src/backend.mjs');
-  assert.match(source, /createUnavailableBackend/);
-  assert.match(source, /no plaintext fallback/);
+test('the README identifies SQLite and distinguishes unverified environments', async () => {
+  const text = await read('README.md');
+  assert.ok(/SQLite/iu.test(text), 'README must describe SQLite');
+  assert.ok(/未实机|未取证|未验证/u.test(text), 'README must distinguish unverified environments');
 });

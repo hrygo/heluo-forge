@@ -422,7 +422,14 @@ export function createSignIn(env) {
     // reached `authenticating` (discovery or client-auth was still pending):
     // leaving its promise registered would keep blocking background hydration.
     setSignInPromise(null);
-    if (ctx.state !== 'authenticating') return ctx.view();
+    if (ctx.state !== 'authenticating') {
+      const view = ctx.view();
+      // Closing onboarding may cancel after sign-in completed. The epoch bump
+      // invalidates older observers, including the existing renewal binding;
+      // schedule the current session again without publishing a state change.
+      if (ctx.state === 'ready' || ctx.state === 'expired') token.scheduleRenewal();
+      return view;
+    }
     clearAttempt();
     ctx.lastGrant = null;
     provider.gatewayEpoch += 1;

@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createFileBackend, createMemoryBackend } from '../src/backend.mjs';
+import { createMemoryBackend } from '../src/backend.mjs';
+import { createCredentialStore } from '../src/credential-store.mjs';
 import { createKeychainProvider, KeychainProviderError } from '../src/provider.mjs';
+import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 
 const namespace = 'heluo-forge/iam';
 
@@ -18,11 +19,11 @@ test('refs round-trip through the keychain namespace', async () => {
   await value.set('ENTERPRISE_ACCESS_TOKEN', 'placeholder-token');
   assert.deepEqual(await value.resolve('ENTERPRISE_ACCESS_TOKEN'), {
     value: 'placeholder-token',
-    source: 'keychain',
+    source: 'memory',
   });
   assert.deepEqual(await value.describe('ENTERPRISE_ACCESS_TOKEN'), {
     configured: true,
-    source: 'keychain',
+    source: 'memory',
     writable: true,
   });
   assert.equal(backend._snapshot().has(`${namespace}/ref/ENTERPRISE_ACCESS_TOKEN`), true);
@@ -186,10 +187,11 @@ for (const failure of ['throw', 'reject']) {
         return Promise.reject(new Error(secret));
       };
       let backend = createMemoryBackend();
+      if (!transactional) delete backend.transaction;
       if (transactional) {
-        const dir = await mkdtemp(join(tmpdir(), 'forge-notify-test-'));
-        t.after(() => rm(dir, { recursive: true, force: true }));
-        backend = createFileBackend({ path: join(dir, 'records.json') });
+        const root = await outsideRepositoryTmpAsync('forge-notify-test-');
+        backend = createCredentialStore({ directory: join(root, 'data') });
+        t.after(async () => { await backend.close(); await rm(root, { recursive: true, force: true }); });
       }
       const { value } = provider({ backend, notifyRecord });
       const record = { kind: 'grant', payload: { refreshToken: secret } };
@@ -212,6 +214,7 @@ for (const failure of ['throw', 'reject']) {
 test('backend write and delete failures still propagate without notification', async () => {
   const backend = createMemoryBackend();
   const failure = new Error('backend failed');
+  delete backend.transaction;
   backend.set = async () => { throw failure; };
   backend.delete = async () => { throw failure; };
   let notified = 0;

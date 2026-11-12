@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { isConfigured, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { assertClientAuthConfigured } from './client-auth.mjs';
-import { isAccessExpired, summarizeGrant } from './record.mjs';
+import { isAccessExpired } from './record.mjs';
+import { sessionView } from './session-read.mjs';
 import { createServiceState } from './service-state.mjs';
 import { createServiceGrant } from './service-grant.mjs';
 import { createModelSelection } from './service-model-selection.mjs';
@@ -67,6 +68,7 @@ export function createIamService(rawConfig, options = {}) {
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
     scheduleReconcile: () => selection.schedule(),
+    scheduleRenewal: () => token.scheduleRenewal(),
     clearPendingObservation: () => { observedPending = null; },
     onFailReset: () => {
       observedPending = null;
@@ -148,6 +150,8 @@ export function createIamService(rawConfig, options = {}) {
     token,
     now,
     fetchImpl,
+    getBridgeAtomicStore: options.getGatewayAtomicStore,
+    verifyBridgeAtomicStore: options.verifyGatewayAtomicStore,
     bumpAuthEpoch: () => { authEpoch += 1; },
     clearObservation: () => { observedPending = null; },
     clearAttempt,
@@ -253,16 +257,7 @@ export function createIamService(rawConfig, options = {}) {
      */
     getSession() {
       ctx.recheckExclusive();
-      const summary = ctx.lastGrant ? summarizeGrant(ctx.lastGrant) : {};
-      return {
-        status: ctx.state,
-        signedIn: summary.signedIn === true,
-        principal: summary.principal
-          ? { issuer: summary.issuer ?? null, subject: summary.principal }
-          : undefined,
-        accessExpiresAt: summary.accessExpiresAt ?? null,
-        scope: summary.scope ?? null,
-      };
+      return sessionView(ctx.lastGrant, ctx.state);
     },
 
     hydrate: reconcile.hydrate,
@@ -397,6 +392,7 @@ clearGatewayCredential: gateway.clearCredential,
       consumptionWitness?.dispose();
       if (ctx.disposed) return;
       ctx.disposed = true;
+      token.cancelRenewal();
       selection.clearQueue();
       sessionEpoch += 1;
       authEpoch += 1;

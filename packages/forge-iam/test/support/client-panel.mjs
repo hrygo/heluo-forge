@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
-export async function mountPanel(fetch, { open = () => null, navigator, componentId = 'forge-iam', componentProps = {}, storage } = {}) {
+export async function mountPanel(fetch, { open = () => null, navigator, componentId = 'forge-iam', componentProps = {}, storage, abortSignal = globalThis.AbortSignal } = {}) {
   const source = await readFile(new URL('../../client.js', import.meta.url), 'utf8');
   const cells = [];
   const effects = [];
@@ -63,7 +63,7 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
       } });
     } },
     location: { assign: (url) => locations.push(url) },
-    open, navigator, localStorage,
+    open, navigator, localStorage, AbortSignal: abortSignal,
   };
   runInNewContext(source, {
     window, fetch, navigator, setTimeout: () => 0,

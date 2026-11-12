@@ -34,9 +34,9 @@
 - `forge-sdd` bin 转发已于 2026-11-03 随 SDD 退役移除；本包不再提供该可执行入口。
 - 定向验收：`node --test tests/bundle-build.test.mjs tests/bundle-closure.test.mjs tests/bundle-install-rehearsal.test.mjs packages/forge-enterprise/test/bundle-patch.test.mjs`。闭包失败/成功回归与真实最终制品演练分开记账。
 - `node scripts/probe/run-bundle-install-rehearsal.mjs` 使用空 npm cache、`--offline` 和不可达 registry，在干净 scratch 项目安装最终 tarball；分别证明 dump 组合、真实 Cordis/Loader 插件实例化与服务查询、升级/回退、卸载注册清理及用户标记保留（SDD CLI 夹具已随退役移除）。`DSH_BIN` 选择已有 CLI，`DSH_NODE_MODULES` 可显式选择已有 SDK 的 node_modules 目录；不下载或升级宿主。
-- 没有审核过的 OS 适配器时，凭据行会拒绝挂载并把原因写进启动日志（`KEYCHAIN_UNAVAILABLE`，含“未实现”与开发覆盖层指引）；开发/试点按[凭据包说明 §开发/试点覆盖层](../forge-credentials-keychain/README.md)叠一层 `filePath` + `allowInsecureFile`，不修改默认补丁。
-- 默认组合禁用官方 `credentials` 行后，`heluo-credentials-keychain` 是唯一凭据提供方；后端不可用时企业凭据能力拒绝挂载，不得为了让组合启动而重新启用 local。`node scripts/probe/run-credentials-composition-probe.mjs` 用**已安装 SDK** 的真实 `dsh-credentials-local` 与真实 Cordis 上下文，在两种挂载顺序下分别验证：启用 local 时写入会落到明文文件（#125 形态）、禁用后只有一个提供方且写入走 keychain backend、后端不可用时不发布提供方也不落盘、预置遗留文件不被迁移或删除。该探针**不**证明进程退出、IAM trust 或原生 OS 存储；无宿主时记为 `NOT RUN`。
-- **2026-10-26 本地证据边界**：已安装宿主只覆盖清单声明的兼容下限；仓库 `.dsh-version` 目标尚未运行，证据 JSON 明确记录实际/目标版本与 `NOT RUN`，不能宣称目标基线通过。凭据使用显式内存夹具，IAM 未配置企业端点；这只验证本地方向的制品/组合生命周期，不代表真实 IAM、OS keychain、企业 registry/官方 manager、Windows 或麒麟业务准入。
+- 凭据行使用 SQLite 值级加密存储；密钥或存储不可用时拒绝，不回退明文。隔离测试可按[凭据包说明](../forge-credentials-keychain/README.md)指定 `storeDirectory`；目标机与企业环境仍须实测。
+- 默认组合禁用官方 `credentials` 行后，`heluo-credentials-keychain` 是唯一凭据提供方；后端不可用时企业凭据能力拒绝挂载，不得为了让组合启动而重新启用 local。`node scripts/probe/run-credentials-composition-probe.mjs` 用**已安装 SDK** 的真实 `dsh-credentials-local` 与真实 Cordis 上下文，在两种挂载顺序下分别验证：启用 local 时写入会落到明文文件（#125 形态）、禁用后只有一个提供方且写入走内存凭据夹具、后端不可用时不发布提供方也不落盘、预置遗留文件不被迁移或删除。该探针**不**证明进程退出、IAM trust 或 SQLite 持久存储；无宿主时记为 `NOT RUN`。
+- **2026-10-26 本地证据边界**：已安装宿主只覆盖清单声明的兼容下限；仓库 `.dsh-version` 目标尚未运行，证据 JSON 明确记录实际/目标版本与 `NOT RUN`，不能宣称目标基线通过。凭据使用显式内存夹具，IAM 未配置企业端点；这只验证本地方向的制品/组合生命周期，不代表真实 IAM、目标机 SQLite 存储、企业 registry/官方 manager、Windows 或麒麟业务准入。
 
 ## 边界
 

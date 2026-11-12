@@ -6,7 +6,7 @@ import { apply } from '../src/index.mjs';
 import { createIamService } from '../src/service.mjs';
 import { createGrantStore, GRANT_KEY, GATEWAY_REF } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
-import { seedLegacyGateway } from './support/atomic-gateway.mjs';
+import { seedGateway } from './support/atomic-gateway.mjs';
 
 const clock = Date.parse('2030-01-01T00:00:00.000Z');
 const sentinel = 'SYNTHETIC_PRIVATE_MODEL_CONTEXT';
@@ -33,11 +33,11 @@ function recordingSdk({ selection = { provider: 'enterprise', model: 'chosen-mod
 async function seeded({ gateway = 'matching', signedIn = true } = {}) {
   const credentials = new MemoryCredentials();
   if (signedIn) await createGrantStore(credentials).write({
-    version: 1, issuer: config.issuer, clientId: config.clientId, subject: 'synthetic-subject',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, clientId: config.clientId, subject: 'synthetic-subject',
     accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh', scope: 'openid',
     obtainedAt: new Date(clock - 60000).toISOString(), accessExpiresAt: new Date(clock + 3600000).toISOString(),
   });
-  if (gateway !== 'missing') seedLegacyGateway(credentials, {
+  if (gateway !== 'missing') seedGateway(credentials, {
     value: `uag-${'a'.repeat(32)}`, ownerSubject: gateway === 'matching' ? 'synthetic-subject' : 'synthetic-other',
     enteredAt: new Date(clock).toISOString(),
   });
@@ -295,7 +295,7 @@ test('getView/getPrincipal are side-effect-free and SDK events coalesce without 
 test('an externally refreshed gateway state triggers one bounded read-only observation', async (t) => {
   const f = await host(t, { gateway: 'missing' });
   assert.equal(f.sdk.counts.list, 0);
-  seedLegacyGateway(f.credentials, { value: `uag-${'a'.repeat(32)}`, ownerSubject: 'synthetic-subject', enteredAt: new Date(clock).toISOString() });
+  seedGateway(f.credentials, { value: `uag-${'a'.repeat(32)}`, ownerSubject: 'synthetic-subject', enteredAt: new Date(clock).toISOString() });
   await f.service.loadGatewayCredential({ force: true }); await settle();
   assert.equal(f.sdk.counts.list, 1);
   assert.equal(f.sdk.counts.saveAccess, 0);

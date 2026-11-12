@@ -21,7 +21,7 @@ async function fixture(t, { trusted = false, gatewayTrusted = false, pin, grant 
   const atomic = gatewayTrusted ? createAtomicGatewayFixture(credentials) : null;
   const store = createGrantStore(credentials);
   await store.write({
-    version: 1, issuer: issuerA, clientId: config.clientId, subject: 'synthetic-subject',
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: issuerA, clientId: config.clientId, subject: 'synthetic-subject',
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
     obtainedAt: new Date(clock - 3600000).toISOString(),
     accessExpiresAt: new Date(clock + 3600000).toISOString(), ...grant,
@@ -72,7 +72,7 @@ function assertNoIdentity(service) {
 
 for (const trusted of [false, true]) {
   for (const operation of ['hydrate', 'syncFromStore', 'resolveToken']) {
-    test(`cold discovery-only ${operation} refuses legacy V1 without issuer context, atomicTrusted=${trusted}`, async (t) => {
+    test(`cold discovery-only ${operation} refuses V1 without issuer context, atomicTrusted=${trusted}`, async (t) => {
       const f = await fixture(t, { trusted });
       if (operation === 'resolveToken') {
         await assert.rejects(f.service.resolveToken(), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
@@ -102,7 +102,7 @@ for (const trusted of [false, true]) {
       });
     }
   }
-  test(`gateway save cannot adopt an unbound legacy V1 subject, atomicTrusted=${trusted}`, async (t) => {
+  test(`gateway save cannot adopt an unbound V1 subject, atomicTrusted=${trusted}`, async (t) => {
     const f = await fixture(t, { trusted, gatewayTrusted: true });
     await assert.rejects(f.service.saveGatewayCredential({ key }), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
     assert.equal(await f.credentials.resolve(GATEWAY_REF), undefined);
@@ -113,7 +113,7 @@ for (const trusted of [false, true]) {
 }
 
 for (const operation of ['hydrate', 'syncFromStore', 'resolveToken']) {
-  test(`explicit matching issuer preserves offline legacy V1 ${operation} without session ID or atomic verifier`, async (t) => {
+  test(`explicit matching issuer preserves offline identified V1 ${operation} without atomic verifier`, async (t) => {
     const f = await fixture(t, { pin: issuerA });
     if (operation === 'resolveToken') assert.equal(await f.service.resolveToken() === 'synthetic-access', true);
     else await f.service[operation]();
@@ -123,7 +123,7 @@ for (const operation of ['hydrate', 'syncFromStore', 'resolveToken']) {
     assert.equal(f.mutations(), 0);
     assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
   });
-  test(`explicit wrong issuer rejects legacy V1 ${operation} offline`, async (t) => {
+  test(`explicit wrong issuer rejects V1 ${operation} offline`, async (t) => {
     const f = await fixture(t, { pin: issuerB });
     if (operation === 'resolveToken') {
       await assert.rejects(f.service.resolveToken(), { code: 'IAM_GRANT_CONTEXT_MISMATCH' });
@@ -132,7 +132,7 @@ for (const operation of ['hydrate', 'syncFromStore', 'resolveToken']) {
     assert.equal(f.requests.length, 0);
     assert.deepEqual(await f.credentials.readRecord(GRANT_KEY), f.original);
   });
-  test(`this instance's verified discovery issuer permits legacy V1 ${operation}`, async (t) => {
+  test(`this instance's verified discovery issuer permits V1 ${operation}`, async (t) => {
     const f = await fixture(t, { trusted: true });
     await f.service.startSignIn();
     await f.service.cancelSignIn();
@@ -147,7 +147,7 @@ for (const operation of ['hydrate', 'syncFromStore', 'resolveToken']) {
   });
 }
 
-test('gateway save accepts a bound legacy IAM subject with exact gateway capability and no grant verifier', async (t) => {
+test('gateway save accepts a bound IAM subject with exact gateway capability and no grant verifier', async (t) => {
   const f = await fixture(t, { pin: issuerA, gatewayTrusted: true });
   await f.service.saveGatewayCredential({ key });
   assert.equal((await f.credentials.readRecord(GATEWAY_RECORD_KEY)).payload.ownerSubject, 'synthetic-subject');

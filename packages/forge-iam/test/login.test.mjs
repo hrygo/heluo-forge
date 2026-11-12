@@ -5,7 +5,7 @@ import { createIamService } from './support/trusted-service.mjs';
 import { createIamService as createRawIamService } from '../src/service.mjs';
 import { validateConfig } from '../src/config.mjs';
 import { createGrantStore } from '../src/store.mjs';
-import { seedLegacyGateway } from './support/atomic-gateway.mjs';
+import { seedGateway } from './support/atomic-gateway.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 
@@ -69,6 +69,25 @@ test('authorization-code + PKCE completes over HTTP without opt-in and stores on
   assert.equal(record.payload.idToken, undefined);
   // V1 no longer derives a model credential from the IAM access token.
   assert.equal(await credentials.resolve('ENTERPRISE_ACCESS_TOKEN'), undefined);
+});
+
+test('a login callback cannot overwrite a legacy session written during authorization', async (t) => {
+  const mock = await startMockOidc();
+  t.after(() => mock.close());
+  const credentials = new MemoryCredentials();
+  const service = createIamService(configFor(mock), { credentials });
+  t.after(() => service.dispose());
+  const { location } = await authorize(service);
+  const legacy = { kind: 'grant', payload: {
+    version: 1, issuer: mock.issuer, clientId: mock.clientId, subject: 'old-user',
+    scope: 'openid', obtainedAt: '2030-01-01T00:00:00.000Z', refreshToken: 'old-refresh',
+    accessToken: 'old-access', accessExpiresAt: '2099-01-01T00:00:00.000Z',
+  } };
+  await credentials.modifyRecord('heluo-iam/session', () => legacy);
+  await assert.rejects(service.handleCallback(location));
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), legacy);
+  assert.notEqual(service.getView().state, 'ready');
+  assert.equal(mock.counts.refresh, 0);
 });
 
 test('resolveToken refreshes a near-expiry access token and rotates the refresh token', async (t) => {
@@ -482,7 +501,7 @@ test('callback preserves another account’s gateway value and metadata', async 
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
   const value = `uag-${'a'.repeat(32)}`;
-  seedLegacyGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
+  seedGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
   const before = structuredClone(await credentials.readRecord('heluo-iam/gateway-credential'));
   const service = createIamService(configFor(mock), { credentials });
   const { location } = await authorize(service);
@@ -508,7 +527,7 @@ test('cancel during gateway read preserves its value and metadata and discards t
   }
   const credentials = new DelayedGatewayCredentials();
   const value = `uag-${'b'.repeat(32)}`;
-  seedLegacyGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
+  seedGateway(credentials, { value, ownerSubject: 'E1002', enteredAt: '2030-01-01T00:00:00.000Z' });
   const before = structuredClone(credentials.records.get('heluo-iam/gateway-credential'));
   const service = createIamService(configFor(mock), { credentials });
   const { location } = await authorize(service);
@@ -912,24 +931,30 @@ test('signOut reports an unconfirmed revocation instead of claiming success', as
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
+  let revocations = 0;
   const service = createIamService(configFor(mock), {
     credentials,
     fetch: async (url, init) => {
-      if (String(url).includes('/revoke')) return new Response('', { status: 500 });
+      if (String(url).includes('/revoke')) { revocations++; return new Response('', { status: 500 }); }
       return fetch(url, init);
     },
   });
   const { location } = await authorize(service);
   await service.handleCallback(location);
   const result = await service.signOut();
-  assert.equal(result.view.state, 'signed-out');
-  assert.equal(result.view.error, 'IAM_REVOCATION_UNKNOWN');
+  assert.equal(result.view.state, 'error');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
   assert.equal(result.revocation, 'unknown');
+  assert.equal(result.revocationError, 'IAM_REVOKE_HTTP_500');
   assert.equal(mock.revoked.size, 0);
-  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' } });
-  assert.equal((await createGrantStore(credentials).read()).grant, null);
-  const afterSync = await service.syncFromStore();
-  assert.equal(afterSync.error, 'IAM_REVOCATION_UNKNOWN');
+  const pending = await credentials.readRecord('heluo-iam/session');
+  assert.equal(pending.payload.signOutOperation.state, 'pending');
+  assert.deepEqual(await createGrantStore(credentials).read(), { ok: false, reason: 'sign-out-pending' });
+  await assert.rejects(service.resolveToken());
+  assert.notEqual((await service.syncFromStore()).state, 'ready');
+  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(revocations, 1);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
 });
 
 test('dispose releases runtime state without clearing the stored session', async (t) => {
@@ -988,7 +1013,7 @@ test('a rotated signing key is retried once instead of failing the login', async
   assert.equal(jwksCalls, 2);
 });
 
-test('a prefetch failure before a refresh claim does not send a POST or serve the old access token', async (t) => {
+for (const expired of [false, true]) test(`a prefetch failure before a refresh claim rejects without serving the ${expired ? 'expired' : 'valid'} access token`, async (t) => {
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
@@ -999,8 +1024,10 @@ test('a prefetch failure before a refresh claim does not send a POST or serve th
   const beforeRequests = mock.counts.token;
   let prefetchFailures = 0;
   let refreshPosts = 0;
+  let clock = Date.now();
   const gated = createIamService(configFor(mock, { refreshSkewSeconds: 7200 }), {
     credentials,
+    now: () => clock,
     fetch: async (url, init) => {
       if (String(url).endsWith('/token') && init?.method === 'POST') refreshPosts += 1;
       if (String(url).endsWith('/jwks')) {
@@ -1011,13 +1038,15 @@ test('a prefetch failure before a refresh claim does not send a POST or serve th
     },
   });
   await gated.hydrate();
-  await assert.rejects(gated.resolveToken(), { code: 'IAM_REAUTH_REQUIRED' });
+  if (expired) clock = Date.parse(before.payload.accessExpiresAt) + 1;
+  await assert.rejects(gated.resolveToken(), { code: 'IAM_UNREACHABLE' });
   assert.equal(prefetchFailures, 1);
   assert.equal(refreshPosts, 0, 'prefetch failure precedes any refresh POST attempt');
   assert.equal(mock.counts.token, beforeRequests, 'prefetch failure precedes the refresh POST');
   assert.deepEqual(await credentials.readRecord('heluo-iam/session'), before);
   assert.equal(before.payload.refreshOperation, undefined);
-  assert.notEqual(gated.getView().state, 'ready');
+  if (expired) assert.equal(gated.getView().state, 'expired');
+  else assert.equal(gated.getView().state, 'ready');
 });
 
 test('a lost refresh response leaves pending and cannot resend the token request', async (t) => {
@@ -1142,7 +1171,14 @@ test('a rejected access-token revocation stays failed and never echoes a token',
   const grant = (await credentials.readRecord('heluo-iam/session')).payload;
   const result = await service.signOut();
   assert.equal(result.revocation, 'failed');
-  assert.equal(result.view.error, 'IAM_REVOCATION_FAILED');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(result.view.state, 'error');
+  const pending = await credentials.readRecord('heluo-iam/session');
+  assert.equal(pending.payload.signOutOperation.state, 'pending');
+  await assert.rejects(service.resolveToken());
+  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(mock.counts.revokeAccess, 1);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes(grant.accessToken), false);
   assert.equal(serialized.includes(grant.refreshToken), false);
@@ -1153,10 +1189,11 @@ test('a revocation timeout stays unconfirmed instead of claiming success', async
   const mock = await startMockOidc();
   t.after(() => mock.close());
   const credentials = new MemoryCredentials();
+  let revocations = 0;
   const service = createIamService(configFor(mock), {
     credentials,
     fetch: async (url, init) => {
-      if (String(url).includes('/revoke')) throw Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+      if (String(url).includes('/revoke')) { revocations++; throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); }
       return fetch(url, init);
     },
   });
@@ -1164,7 +1201,14 @@ test('a revocation timeout stays unconfirmed instead of claiming success', async
   await service.handleCallback(location);
   const result = await service.signOut();
   assert.equal(result.revocation, 'unknown');
-  assert.equal(result.view.error, 'IAM_REVOCATION_UNKNOWN');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(result.view.state, 'error');
+  const pending = await credentials.readRecord('heluo-iam/session');
+  assert.equal(pending.payload.signOutOperation.state, 'pending');
+  await assert.rejects(service.resolveToken());
+  assert.equal((await service.signOut()).view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+  assert.equal(revocations, 1);
+  assert.deepEqual(await credentials.readRecord('heluo-iam/session'), pending);
   assert.equal(mock.counts.revokeAccess, 0);
   assert.equal(mock.counts.revokePost, 0);
 });

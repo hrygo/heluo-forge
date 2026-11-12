@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-IAM-002 |
 | 文档名称 | IAM 机密客户端隔离开发契约 |
-| 版本 | V0.5.1 |
+| 版本 | V0.6.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-10 |
+| 最后更新 | 2026-11-12 |
 | 门禁 | 用户已批准 source/mock 设计；真实来源关闭，生产 G1 未关闭 |
 
 > 适用范围：企业交付采用公开客户端 + PKCE S256（`authMode=public`、`clientAuthMethod=none`），不包含共享 `client_secret`；本契约只约束可选的机密客户端隔离路径。
@@ -25,7 +25,7 @@
 
 | 字段 | 提案值与约束 | 语义 |
 |---|---|---|
-| authMode | public / confidential；省略等价 public | 原型兼容默认，不改变生产以机密客户端为目标的准入要求 |
+| authMode | public / confidential；省略等价 public | 当前企业交付采用 public；confidential 仅为可选隔离路径，真实来源与生产准入仍关闭 |
 | clientAuthMethod | public 省略或 none；confidential 必须显式为 client_secret_basic / client_secret_post | code、refresh、revoke 同一方法，不根据 discovery、401 或失败响应猜测/切换 |
 | clientSecretRef | 仅 confidential 必填非空逻辑 selector | 仅匹配 synthetic source，不是 SDK CredentialRef、CredentialKey、路径或环境变量名，不触发 resolve/readRecord |
 
@@ -33,7 +33,7 @@
 
 所有模式保持现有 mandatory PKCE S256、state、nonce、code_verifier。字段只属于本包 source/mock 提案；没有 editor 开关或原生来源自动发现能解除真实来源门禁。
 
-**已确认的外部轮换事实（2026-11-03 IAM 答复，未联调）**：企业 IAM 全企业共用一个 client_id；client_secret 只能人工轮换，后台更新后最迟两分钟经缓存生效；轮换不会作废已发出的访问令牌（按 7200 秒自然过期），刷新接口必须同时携带 secret，因此旧刷新令牌在 secret 更换后实际不可用。本契约仍采用更严格的本地策略：认证上下文（method/ref/revision）改变后不采用旧 AT/RT，需新登录；不得用新 secret 重放旧 RT。轮换后至少等待两分钟再判定失败，不在该窗口内反复重建来源或切换方法。本项目内部使用，client_id/client_secret 泄露不在评估范围（用户 2026-11-03 决定，视为无影响）；凭据存放与轮换按存储和运维要求执行。依据见[接入确认函 §5](<../collaboration/iam-access-confirmation.md#5-客户端注册与-secret-管理>)。
+**机密客户端轮换答复（2026-11-03 IAM 答复，未联调）**：当时书面答复为企业共用一个 client_id；client_secret 只能人工轮换，后台更新后最迟两分钟经缓存生效；轮换不会作废已发出的访问令牌（按 7200 秒自然过期），刷新接口须同时携带 secret，因此旧刷新令牌在 secret 更换后实际不可用。这些 secret 规则针对机密客户端，不作为当前 public 客户端的刷新要求。本契约对可选机密路径采用更严格的本地策略：认证上下文（method/ref/revision）改变后不采用旧 AT/RT，需新登录；不得用新 secret 重放旧 RT。轮换后至少等待两分钟再判定失败，不在该窗口内反复重建来源或切换方法。本项目内部使用，client_id/client_secret 泄露不在评估范围（用户 2026-11-03 决定，视为无影响）；凭据存放与轮换按存储和运维要求执行。依据见[接入确认函 §5](<../collaboration/iam-access-confirmation.md#5-客户端注册与-secret-管理>)。
 
 ## 2. 私有只读来源
 
@@ -80,8 +80,8 @@ verifyClientSecretSource?: (
 
 ## 4. 会话与记录隔离
 
-- public 继续原 grant format 1，不增加机密上下文；无新认证字段的旧 V1 按现行明确 issuer/client/resource 规则读取。V1 出现 authContext/clientAuth 等认证标记（含 null/undefined/畸形）拒绝，不擦字段伪装 legacy。
-- confidential 使用 grant format 2，原 grant 业务字段和 sessionInstanceId 继续有效；外层字段严格列举。必填 authContext 为 `{mode:'confidential', method, secretRef, secretRevision}`，method 取上表两种；拒绝未知键、public/none、秘密原文、header 或编码串。
+- public 使用 grant format 1，不增加机密上下文；带 `sessionInstanceId` 且无新认证字段的 V1 按现行明确 issuer/client/resource 规则读取。V1 出现 authContext/clientAuth 等认证标记（含 null/undefined/畸形）拒绝，不擦字段伪装 legacy。
+- confidential 使用 grant format 2，原 grant 业务字段和 `sessionInstanceId` 继续有效；public V1 与 confidential V2 缺少 `sessionInstanceId` 时均拒绝采用，外层字段严格列举。必填 authContext 为 `{mode:'confidential', method, secretRef, secretRevision}`，method 取上表两种；拒绝未知键、public/none、秘密原文、header 或编码串。
 - issuer/clientId/resource 沿用 grant 原字段；source 对象身份不持久化。V2 本身不是可信证明，仍核对当前配置、来源、binding、revision 和现有存储/生命周期前提。
 - public 不采用 V2；confidential 不采用 V1。method/ref/revision 改变后不能采用旧 AT/RT/共享完成结果，需新登录，不自动迁移或拿新 secret 重放旧 RT。旧 public reader 严格 version=1，因而拒绝 V2；这不阻止被授权的旧 writer 覆盖相同 key，隔离 fixture 不混跑旧 writer。
 - attempt 只固定非秘密 auth pin、精确 source/credentials/store 和现有 issuer/端点/redirect/resource/state/nonce/verifier/代际。callback 与每个 POST 重新 read 并要求同一 revision，不在 attempt 保留 value。

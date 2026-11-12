@@ -13,6 +13,7 @@ import { createAtomicGatewayFixture } from './support/atomic-gateway.mjs';
 
 const grant = {
   version: 1,
+  sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
   issuer: 'https://iam.corp.example',
   subject: 'E1001',
   clientId: 'dsh-desktop',
@@ -60,6 +61,20 @@ function fakeCredentials(initial = {}) {
 test('read returns null when no IAM record exists', async () => {
   const store = createGrantStore(fakeCredentials());
   assert.deepEqual(await store.read(), { ok: true, grant: null });
+});
+
+test('grant reads preserve the result and details for string, invalid and pending records', async () => {
+  const id = Buffer.alloc(32, 1).toString('base64url');
+  const read = async (record) => createGrantStore(fakeCredentials({ records: [[GRANT_KEY, record]] })).read();
+  assert.deepEqual(await read({ kind: 'grant', payload: JSON.stringify(grant) }), { ok: true, grant });
+  assert.deepEqual(await read({ kind: 'grant', payload: '{not valid json' }), {
+    ok: false, reason: 'invalid-grant', errors: ['grant payload is not valid JSON'],
+  });
+  assert.deepEqual(await read({ kind: 'api-key' }), { ok: false, reason: 'wrong-kind', kind: 'api-key' });
+  const signout = { ...grant, signOutOperation: { version: 1, state: 'pending', id } };
+  assert.deepEqual(await read({ kind: 'grant', payload: JSON.stringify(signout) }), { ok: false, reason: 'sign-out-pending' });
+  const refresh = { ...grant, refreshOperation: { version: 1, state: 'pending', id, base: id } };
+  assert.deepEqual(await read({ kind: 'grant', payload: JSON.stringify(refresh) }), { ok: true, grant: refresh });
 });
 
 test('write then read round-trips the grant and keeps the key stable', async () => {
@@ -130,7 +145,7 @@ test('callback discard atomically tombstones only its identified grant and permi
 test('discard refuses legacy or malformed records and unconfirmed provider results', async () => {
   const own = { ...grant, sessionInstanceId: Buffer.alloc(32, 1).toString('base64url') };
   for (const record of [
-    { kind: 'grant', payload: grant },
+    { kind: 'grant', payload: (({ sessionInstanceId, ...rest }) => rest)(grant) },
     { kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone', secret: 'x' } },
     { kind: 'api-key', payload: { version: 1, type: 'heluo-iam-session-tombstone' } },
   ]) {
@@ -296,7 +311,7 @@ test('saving a gateway credential atomically writes its value and bound V2 owner
   assert.equal(JSON.stringify(record).includes(gatewayValue), false);
   assert.equal(atomic.adapter.commits, 1);
   assert.equal((await store.read()).credential.ownerSubject, 'E1001');
-  assert.deepEqual(await store.resolve(), { value: gatewayValue, source: 'keychain' });
+  assert.deepEqual(await store.resolve(record.payload), { value: gatewayValue, source: 'keychain' });
 });
 
 test('an empty gateway credential is rejected before any write', async () => {
@@ -321,7 +336,7 @@ test('a V2.1-format credential saves and can be replaced without an address', as
   const replaced = await store.save({ value: second, ownerSubject: 'E1001', enteredAt: '2030-01-02T00:00:00.000Z' });
   assert.equal(replaced.ok, true);
   assert.equal(atomic.credentials.refs.get(GATEWAY_REF), second);
-  assert.deepEqual(await store.resolve(), { value: second, source: 'keychain' });
+  assert.deepEqual(await store.resolve(replaced.credential), { value: second, source: 'keychain' });
 });
 
 test('a V2.1-format credential clears without tripping the legacy guard', async () => {
@@ -336,8 +351,8 @@ test('credential values are opaque: punctuation, spaces and non-ASCII are stored
   const atomic = createAtomicGatewayFixture();
   const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
   for (const value of ['gpt-4o@2024 key', '凭据-示例', `uag-sk-u-${'Z'.repeat(43)}`]) {
-    await store.save({ value, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
-    assert.deepEqual(await store.resolve(), { value, source: 'keychain' });
+    const saved = await store.save({ value, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
+    assert.deepEqual(await store.resolve(saved.credential), { value, source: 'keychain' });
   }
 });
 
@@ -400,9 +415,11 @@ test('an unknown gateway commit receipt never compensates by deleting the commit
 });
 
 test('resolve reports the provider source so ambient values stay distinguishable', async () => {
-  const credentials = fakeCredentials();
+  const { credentials, options } = createAtomicGatewayFixture();
+  const store = createGatewayCredentialStore(credentials, options);
+  const saved = await store.save({ value: gatewayValue, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
   credentials.resolve = async () => ({ value: gatewayValue, source: 'env' });
-  assert.deepEqual(await createGatewayCredentialStore(credentials).resolve(), { value: gatewayValue, source: 'env' });
+  assert.deepEqual(await store.resolve(saved.credential), { value: gatewayValue, source: 'env' });
 });
 
 test('clearing a modern gateway pair atomically removes the value and writes a fresh tombstone nonce', async () => {

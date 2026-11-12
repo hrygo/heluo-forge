@@ -1,7 +1,7 @@
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
 import { createView, transition } from './state.mjs';
-import { isRefreshUsable, summarizeGrant } from './record.mjs';
+import { isAccessExpired, isRefreshUsable, summarizeGrant } from './record.mjs';
 
 /**
  * Session state, owned in one place.
@@ -15,7 +15,8 @@ import { isRefreshUsable, summarizeGrant } from './record.mjs';
  *
  * Ordering is part of the contract: `view()` reads the gateway summary before
  * asking the managed-model runtime, `notify()` calls the reconciliation trigger
- * after every listener, and `fail()` notifies once per branch.
+ * after every listener, then updates the renewal schedule; `fail()` notifies
+ * once per branch.
  */
 export function createServiceState(env) {
   const {
@@ -26,6 +27,7 @@ export function createServiceState(env) {
     getGatewaySummary,
     getMetadataIssuer,
     scheduleReconcile,
+    scheduleRenewal,
     clearPendingObservation,
     onFailReset,
   } = env;
@@ -90,6 +92,12 @@ export function createServiceState(env) {
   }
 
   function notify() {
+    // A notification can arrive after a still-running timer's access deadline.
+    // Publish the expired view before rescheduling its recoverable session.
+    if (state === 'ready' && lastGrant && isAccessExpired(lastGrant, now())) {
+      state = 'expired';
+      error = null;
+    }
     const snapshot = view();
     for (const listener of listeners) {
       try {
@@ -99,6 +107,7 @@ export function createServiceState(env) {
       }
     }
     scheduleReconcile();
+    scheduleRenewal?.();
     return snapshot;
   }
 

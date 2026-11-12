@@ -31,11 +31,10 @@
 - id: ui-settings-models
   disabled: true
 
-# 官方本地凭据提供方（0600 明文 YAML）默认停用：企业凭据只允许进系统钥匙串。
+# 官方本地凭据提供方（0600 明文 YAML）默认停用：企业凭据由下方凭据包管理。
 # 只禁用、不删除该行——覆写层给命中行加 `disabled: true`，行本身仍出现在 dump 里。
-# 停用后由下方 insert 的 heluo-credentials-keychain 兜底；该包的 @napi-rs/keyring
-# 原生后端仍是未审核样机，原生不可用时的行为以包 README 为准。不得为了让组合起来而
-# 重新启用该行，也不得以本补丁存在证明凭据存储已具备生产资格。
+# 该包使用值级加密 SQLite 和文件 keyring；保护边界与平台验证状态见包 README。
+# 不得为了让组合起来而重新启用该行，也不得以本补丁存在证明凭据存储已具备生产资格。
 - id: credentials
   disabled: true
 

@@ -36,8 +36,6 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
-      - name: Fetch the native keyring payload for every release triple
-        run: node scripts/fetch-native-keyring.mjs
       - name: Build and self-verify the public release
         env:
           HELUO_PUBLIC_LICENSE: ${{ vars.HELUO_PUBLIC_LICENSE }}

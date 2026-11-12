@@ -1,9 +1,8 @@
-// Joint record/ref store for the IAM gateway credential: the two keys live in
-// one backend document, so a compare-then-commit is a single durable write.
+// Joint record/ref store for IAM credentials: comparison and both writes occur
+// in one backend transaction.
 //
-// This adapter only exists when the backend can actually do that. The native OS
-// keyrings export neither snapshot() nor compareAndSwap(), so they get no joint
-// store at all — never an adapter that degrades into two independent writes.
+// This adapter only exists when the backend supports snapshot() and
+// compareAndSwap(); it never degrades into two independent writes.
 
 import { KeychainProviderError } from './provider.mjs';
 
