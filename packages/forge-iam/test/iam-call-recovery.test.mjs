@@ -32,6 +32,7 @@ function fixture({ tokenFailure = null, logFailure } = {}) {
   let discover = 0; let movedGatewayDown = false;
   let holdDiscovery = null;
   let releaseChunk = null;
+  let failAfterFirstChunk = false;
   const iam = {
     getView: () => structuredClone(view),
     readModelSelection: async () => ({
@@ -74,6 +75,7 @@ function fixture({ tokenFailure = null, logFailure } = {}) {
       requests += 1; credential = key;
       yield { type: 'text-delta', text: 'first' };
       if (releaseChunk) await releaseChunk.promise;
+      if (failAfterFirstChunk) throw new IamError('IAM_GATEWAY_BINDING_CHANGED', 'synthetic mid-stream binding change', { retryable: true });
       yield { type: 'finish', reason: { kind: 'stop' } };
     };
     return {
@@ -107,6 +109,7 @@ function fixture({ tokenFailure = null, logFailure } = {}) {
     failMovedGateway(next = true) { movedGatewayDown = next; },
     holdNextDiscovery() { holdDiscovery = Promise.withResolvers(); return holdDiscovery; },
     holdChunks() { releaseChunk = Promise.withResolvers(); return releaseChunk; },
+    failAfterFirstChunk() { failAfterFirstChunk = true; },
     change(next) { view = { ...view, ...next }; for (const listener of [...listeners]) listener(); },
   };
 }
@@ -199,15 +202,18 @@ test('a binding change after the first chunk is never retried', async t => {
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
   const release = f.holdChunks();
+  f.failAfterFirstChunk();
   const stream = f.adapter.stream(options);
   const iterator = stream[Symbol.asyncIterator]();
   assert.equal((await iterator.next()).value.text, 'first');
-  // Move the binding, then let the transport fail as if the socket learned it.
+  // The binding moves while the answer is being read: a retry here would
+  // deliver the same answer twice.
   f.setConnection({ baseURL: MOVED_GATEWAY });
   release.resolve();
   const rest = [];
   for (let step = await iterator.next(); !step.done; step = await iterator.next()) rest.push(step.value);
-  // This transport ends normally; the guard is that no rebuild was attempted.
+  assert.equal(failureOf(rest), 'IAM_MODEL_CONTEXT_CHANGED');
+  assert.equal(f.attempts, 1, 'no second dispatch after the first chunk');
   assert.equal(f.builds, 1, 'a started answer must not rebuild under the reader');
   assert.equal(f.requests, 1);
 });
