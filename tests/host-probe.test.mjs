@@ -12,34 +12,28 @@ import { readDshVersion } from '../scripts/lib/dsh-version.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const runner = resolve(here, '../scripts/probe/run-host-probe.mjs');
 
-/**
- * DSH 0.2.2-rc.1 的 `tools.execute` 形状替身：宿主把 `input.calls` 直接 `.map(...)`
- * （`dsh-tools/lib/pipeline.js:33`，经 `NativeToolExecutor.execute` 与
- * `ToolsService.execute` 转给执行器），单次对象会在这里抛
- * `TypeError: Cannot read properties of undefined (reading 'map')`。
- * 替身若接受单对象，就只是在测我们自己的假设，因此这里刻意保持严格。
- */
-function batchHost(settle) {
+/** The target DSH tools service accepts one ToolExecutionInput and returns one result. */
+function singleCallHost(settle) {
   const seen = [];
   return {
     seen,
     tools: {
       execute: async (input) => {
         seen.push(input);
-        if (!Array.isArray(input?.calls)) {
-          throw new TypeError("Cannot read properties of undefined (reading 'map')");
-        }
-        return { results: input.calls.map((call) => ({ callId: call.id, result: settle(call) })) };
+        assert.equal(typeof input?.callId, 'string');
+        assert.equal(typeof input?.name, 'string');
+        assert.equal(Array.isArray(input?.calls), false);
+        return settle(input);
       },
     },
   };
 }
 
-const textResult = (text) => ({ content: [{ type: 'text', text }] });
+const textResult = (text) => ({ isError: false, content: [{ type: 'text', text }], value: { text } });
 
-test('dispatchTool: sends the host`s one-element calls batch, not a single call object', async () => {
-  const host = batchHost((call) =>
-    call.name === 'probe_x' ? textResult('probe_x ran') : { content: [{ type: 'text', text: 'unexpected' }] },
+test('dispatchTool: sends the target host one call with parsed arguments', async () => {
+  const host = singleCallHost((call) =>
+    call.name === 'probe_x' ? textResult('probe_x ran') : textResult('unexpected'),
   );
   const signal = new AbortController().signal;
   const result = await dispatchTool({ tools: host.tools }, 'probe_x', { target: 'demo' }, { callId: 'probe-7', signal });
@@ -47,37 +41,39 @@ test('dispatchTool: sends the host`s one-element calls batch, not a single call 
   assert.equal(result.text, 'probe_x ran');
   assert.equal(host.seen.length, 1);
   const [input] = host.seen;
-  assert.deepEqual(Object.keys(input).sort(), ['calls', 'signal'], 'batch input carries calls and the caller signal');
-  assert.equal(input.signal, signal);
-  assert.equal(input.calls.length, 1);
-  assert.deepEqual(input.calls[0], { id: 'probe-7', name: 'probe_x', arguments: '{"target":"demo"}' });
+  assert.deepEqual(input, { callId: 'probe-7', name: 'probe_x', arguments: { target: 'demo' }, signal });
+  assert.equal(result.shape.kind, 'object');
+  assert.deepEqual(result.shape.keys, ['isError', 'content', 'value']);
 });
 
-test('dispatchTool: reads the matching entry out of results and keeps error details', async () => {
-  const host = batchHost(() => ({
+test('dispatchTool: preserves the single result error details', async () => {
+  const host = singleCallHost(() => ({
     isError: true,
     content: [{ type: 'text', text: 'probe-guard-deny' }],
     error: { code: 'DENIED', message: 'probe-guard-deny' },
   }));
-  // A settled batch may carry more than the dispatched call; only the matching callId is ours.
-  const raw = host.tools.execute;
-  host.tools.execute = async (input) => {
-    const settled = await raw(input);
-    return { results: [{ callId: 'someone-else', result: textResult('other') }, ...settled.results] };
-  };
   const result = await dispatchTool({ tools: host.tools }, 'probe_body', {}, { callId: 'probe-8' });
   assert.equal(result.isError, true);
   assert.equal(result.text, 'probe-guard-deny');
   assert.deepEqual(result.error, { code: 'DENIED', message: 'probe-guard-deny' });
 });
 
-test('dispatchTool: a batch with no result for the dispatched call fails loudly', async () => {
-  const tools = { execute: async () => ({ results: [] }) };
-  await assert.rejects(
-    dispatchTool({ tools }, 'probe_x', {}, { callId: 'probe-9' }),
-    /no result for probe-9/,
-    'silently returning empty text would look like a passed probe',
-  );
+test('dispatchTool: defaults the call ID and arguments', async () => {
+  const host = singleCallHost(() => textResult('probe_x ran'));
+  await dispatchTool({ tools: host.tools }, 'probe_x', null, { callId: '' });
+  assert.equal(host.seen[0].callId, 'probe-probe_x');
+  assert.deepEqual(host.seen[0].arguments, {});
+  assert.ok(host.seen[0].signal instanceof AbortSignal);
+});
+
+test('dispatchTool: malformed or batch results fail instead of looking successful', async () => {
+  for (const returned of [undefined, null, {}, { results: [] }, { isError: false }, { isError: false, content: 'text' }]) {
+    const tools = { execute: async () => returned };
+    await assert.rejects(
+      dispatchTool({ tools }, 'probe_x', {}, { callId: 'probe-9' }),
+      /invalid result for probe-9/,
+    );
+  }
 });
 
 const dsh = process.env.DSH_BIN ?? 'dsh';

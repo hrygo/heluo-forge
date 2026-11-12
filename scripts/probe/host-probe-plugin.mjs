@@ -25,56 +25,44 @@ const errorOf = (result) => (result?.error === undefined ? undefined : { code: r
 const parentAgentOf = (handle) => handle?.agent ?? handle;
 
 /**
- * 最小批次派发（AC-7）：宿主 `tools.execute` 收的是**批次输入**
- * `{ calls: [{ id, name, arguments }], signal }`，返回已结算批次
- * `{ results: [{ callId, result }], additionalContexts, concluded }`。
- *
- * 依据（应用内置宿主构建，只读核对 app.asar 内实现，2026-11-09；版本见该内置清单）：
- * - `@deepseek-ai/dsh-tools/lib/index.js`：`ToolsService.execute(input)` 把整个
- *   `input` 交给 `selectExecutor(input.agent).execute(input)`，不存在单调用重载。
- * - `@deepseek-ai/dsh-tools/lib/types/batch.js`：`executeToolBatch` 解构
- *   `{ calls: toolCalls, signal, ... }` 后直接 `toolCalls.map(block => ...)`；
- *   `block` 是 `{ id, name, arguments }`，`arguments` 走 `parseArguments`（字符串形态）。
- * - 结算结果 `this.results.push({ callId: block.id, result })`，于是解包是
- *   `results.find(item => item.callId === id).result`；单对象入参会在这里
- *   抛 `TypeError: Cannot read properties of undefined (reading 'map')`。
- *
- * 导出它是为了让 `tests/host-probe.test.mjs` 用严格替身断言形状：替身拒绝单对象，
- * 只有真正发出单元素 `calls` 批次并通过 `results` 取回匹配项才算通过。
+ * 最小单次派发（AC-7）：`.dsh-version` 固定的目标宿主中，
+ * `@deepseek-ai/dsh-tools` 的 `ToolExecutionInput` 接收
+ * `{ callId, name, arguments, signal }`，`arguments` 是已解析的值，
+ * 返回单个 `ToolExecutionResult`，而不是 `calls` / `results` 批次。
+ * 返回形状不符合目标宿主契约时必须报错，不能把缺失结果当成成功。
  *
  * @param {{tools:{execute:Function}}} ctx 宿主上下文（探针或子代理的上下文均可）
  * @param {string} toolName 目标工具名
- * @param {object} [args] 工具参数（宿主批式契约要求 JSON 字符串）
+ * @param {object} [args] 已解析的工具参数
  * @param {{signal?:AbortSignal, callId?:string}} [options] 调用标识与中止信号
  * @returns {Promise<{isError:boolean,text:string,error?:object,shape:object}>}
  */
 export async function dispatchTool(ctx, toolName, args = {}, options = {}) {
-  const { signal, callId } = options ?? {};
+  const { signal = new AbortController().signal, callId } = options ?? {};
   const id = typeof callId === 'string' && callId !== '' ? callId : `probe-${toolName}`;
-  const batch = await ctx.tools.execute({
-    calls: [{ id, name: toolName, arguments: JSON.stringify(args ?? {}) }],
+  const result = await ctx.tools.execute({
+    callId: id,
+    name: toolName,
+    arguments: args ?? {},
     signal,
   });
-  const results = Array.isArray(batch?.results) ? batch.results : [];
-  const entry = results.find((item) => item?.callId === id) ?? results[0];
-  if (entry === undefined) {
-    throw new Error(`tools.execute returned no result for ${id} (results: ${results.length})`);
+  if (typeof result?.isError !== 'boolean' || !Array.isArray(result.content)) {
+    throw new Error(`tools.execute returned an invalid result for ${id}`);
   }
-  const result = entry.result;
   return {
-    isError: result?.isError === true,
+    isError: result.isError,
     text: textOf(result),
     error: errorOf(result),
-    shape: describeDispatchShape(batch),
+    shape: describeDispatchShape(result),
   };
 }
 
 /** 只读记录返回形状，写进 `probe-raw.json` 作为契约证据（additive，不参与判定）。 */
-function describeDispatchShape(batch) {
+function describeDispatchShape(result) {
   return {
-    kind: batch === null ? 'null' : Array.isArray(batch) ? 'array' : typeof batch,
-    keys: batch !== null && typeof batch === 'object' ? Object.keys(batch) : [],
-    resultsLength: Array.isArray(batch?.results) ? batch.results.length : null,
+    kind: result === null ? 'null' : Array.isArray(result) ? 'array' : typeof result,
+    keys: result !== null && typeof result === 'object' ? Object.keys(result) : [],
+    resultsLength: Array.isArray(result?.results) ? result.results.length : null,
   };
 }
 
