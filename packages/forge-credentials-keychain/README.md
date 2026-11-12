@@ -26,6 +26,8 @@
 
 ## 装配与读取
 
+凭据更新事件的监听器或分发失败时，提供器日志只记录事件类别，不记录引用名、记录键或异常内容。监听器自身不得记录凭据、令牌或包含秘密的异常。
+
 企业组合先挂载本包并禁用官方 `dsh-credentials-local`，再挂载 `@heluo/forge-iam`。内置 SQLite 后端由组合根绑定到当前 provider，单记录和网关联合写入分别受 IAM 门禁约束；其他注入对象不能通过自报方法获得信任。同权 JavaScript 代码仍可绕过进程内门禁，这不是进程隔离。
 
 `storeDirectory` 可指定隔离存储目录 `D`，必须在 Git 工作区外；新布局的 `D.keys` 由此路径确定，无需单独配置。省略时使用平台用户目录：macOS 为 `~/Library/Application Support/HeluoForge`，Windows 为 `%LOCALAPPDATA%/HeluoForge`，Linux 为 `$XDG_DATA_HOME/HeluoForge`，未设置或无效时为 `~/.local/share/HeluoForge`。Windows 的 `LOCALAPPDATA` 为空或不是绝对路径时使用用户目录下的 `AppData/Local/HeluoForge`。
