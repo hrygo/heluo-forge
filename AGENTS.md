@@ -1,6 +1,6 @@
 # AGENTS.md — Heluo Forge agent 工作约定
 
-> 适用范围：仓库根目录及全部子目录。版本：V1.20；最后更新：2026-11-12。
+> 适用范围：仓库根目录及全部子目录。版本：V1.21；最后更新：2026-11-12。
 >
 > 职责：面向智能编程代理（AI Agent）的任务路由、授权边界、技术纪律、修改约束与验收交付规范（职责边界见[文档总览 §2.1](docs/README.md#21-仓库入口职责)）。项目状态、契约字段、文档元数据规范与命令细节留在各自正文，本文件只保留约束 Agent 行为的核心准则与入口。系统、开发者与当前用户指令优先；与公共约定重叠处从其规定，本文件只写差异。
 
@@ -53,6 +53,7 @@
 | **跨域架构与 ADR** | [总体架构](docs/architecture/platform-architecture.md)、对应需求基线 | 决策与 ADR 写架构，字段细节留契约；L1 架构不复制外部字段表 | 更新架构图与 ADR 状态，核查依赖方一致性 |
 | **外部契约与接口** | [文档清单](docs/DOCUMENT-REGISTER.md)、对应契约文档 | 字段定义、错误语义与交互示例维护在 `docs/contracts/`；未验项显式标注待确认 | 验证数据类型与错误码覆盖，不假定服务端全字段可用 |
 | **新增或修改扩展包** | [设计索引](docs/design/README.md)、对应包 README、[开发约定](docs/engineering/development-conventions.md) | 严守“设计先行 -> 准入核验 -> 建清单与测试 -> 编码”；不预建空壳包 | 满足 `pnpm check:repo` 与包体闭包断言；补充正反向单元测试 |
+| **凭据存取与本地 UAT** | [凭据接入指南](packages/forge-iam/docs/credential-access.md) | 按运行环境选用指南中的身份、令牌及插件凭据接口 | 按指南使用隔离目录与合成数据验证，区分本地 mock 与实际环境证据 |
 | **SQLite 存储** | [SQLite 存储扩展与使用规范](docs/engineering/sqlite-storage-conventions.md) | 按规范区分现有凭据接口与业务数据扩展，复核存储所有权及敏感数据边界 | 按规范验证存取、并发、迁移与恢复；区分目标环境证据 |
 | **品牌与视觉资产** | [品牌设计](docs/design/plugins/forge-brand.md)、[品牌全景](docs/assets/branding/cyber-long/index.html)、[生图规范](docs/assets/branding/prompts.md) | 遵循河洛苍螭视觉标准与 manifest 清单校验；内置图标与源文件保持**逐字节一致** | 运行 `package-shape` 测试确保矢量图一致 |
 | **轻量市场与索引契约** | [市场设计](docs/design/plugins/forge-market.md)、[索引契约](docs/design/services/market-index.md)、[issue #12](https://github.com/hrygo/heluo-forge/issues/12) | 严格区分 AIHUB 索引、原生市场面板与私有 npm 制品源职责；不自建独立索引服务或写前授权 | 运行 `services/market-index` 校验器测试 |
