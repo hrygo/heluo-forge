@@ -1603,9 +1603,22 @@ window.__ModuleLoader__.load({
 
     // §7 登录窗口
     const SIGN_IN_TIMEOUT_MS = 15000;
+    // A blank window reads as a broken popup. The window itself cannot be
+    // created after the awaited sign-in request (browsers treat that as a
+    // blocker), so it is rendered as a quiet spinner page instead of an empty
+    // document; it is replaced by the IAM page as soon as the URL arrives.
     const LOGIN_PLACEHOLDER = '<!doctype html><meta charset="utf-8"><title>企业登录</title>'
-      + '<body style="margin:0;padding:32px;font:14px/1.6 system-ui,-apple-system,sans-serif;color:#1f2328;background:#fff">'
-      + '<p id="heluo-login-message">正在打开企业登录…</p></body>';
+      + '<style>html,body{height:100%}body{margin:0;display:grid;place-items:center;'
+      + 'background:#fff;color:#8b949e;font:12px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}'
+      + '.wrap{display:flex;flex-direction:column;align-items:center;gap:12px}'
+      + '.spinner{width:18px;height:18px;border:2px solid #e6e8eb;border-top-color:#2563eb;'
+      + 'border-radius:50%;animation:heluo-spin .9s linear infinite}'
+      + '@media (prefers-color-scheme:dark){body{background:#151517;color:#6e7681}'
+      + '.spinner{border-color:#2d2f33;border-top-color:#3b82f6}}'
+      + '@media (prefers-reduced-motion:reduce){.spinner{animation:none;border-top-color:#2563eb}}'
+      + '@keyframes heluo-spin{to{transform:rotate(360deg)}}</style>'
+      + '<div class="wrap"><div class="spinner" role="status" aria-label="正在打开企业登录"></div>'
+      + '<p id="heluo-login-message" style="margin:0">正在打开企业登录…</p></div>';
 
     // The popup is opened before the server answers so that a user gesture
     // exists. Until then it must not look broken: render a readable status page
@@ -1615,9 +1628,9 @@ window.__ModuleLoader__.load({
       try {
         popup.document.open();
         popup.document.write('<!doctype html><meta charset="utf-8"><title>企业登录</title>'
-          + '<body style="margin:0;padding:32px;font:14px/1.6 system-ui,-apple-system,sans-serif;color:#1f2328;background:#fff">'
-          + `<p style="font-weight:600">${title}</p>`
-          + (detail ? `<p style="color:#57606a">${detail}</p>` : '')
+          + '<body style="margin:0;padding:28px;font:13px/1.6 system-ui,-apple-system,sans-serif;color:#1f2328;background:#fff">'
+          + `<p style="margin:0 0 6px;font-weight:600">${title}</p>`
+          + (detail ? `<p style="margin:0;color:#57606a">${detail}</p>` : '')
           + '</body>');
         popup.document.close();
       } catch { /* cross-origin popup: keep whatever it shows */ }
