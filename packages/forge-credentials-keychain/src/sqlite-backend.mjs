@@ -292,20 +292,21 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
       let acquired = false;
       let reclaimed;
       try {
+        const raw = meta('lock');
+        let old;
+        if (raw !== undefined) {
+          try { old = JSON.parse(raw); } catch { /* A corrupt lock cannot be reclaimed. */ }
+          if (!old || !Number.isSafeInteger(old.pid) || old.pid <= 0 || typeof old.token !== 'string' || !/^[a-f0-9]{32}$/.test(old.token)
+            || (alive(old.pid) && !isAbandoned(old))) old = undefined;
+        }
+        // Filesystem checks happen before write admission. Replace only the
+        // exact lock examined above, while SQLite serializes other writers.
         acquired = transaction(() => {
-          const raw = meta('lock');
-          if (raw !== undefined) {
-            let old;
-            try { old = JSON.parse(raw); } catch { return false; }
-            if (!old || !Number.isSafeInteger(old.pid) || old.pid <= 0 || typeof old.token !== 'string' || !/^[a-f0-9]{32}$/.test(old.token)) return false;
-            if (alive(old.pid) && !isAbandoned(old)) return false;
-            // The transaction serializes the token check and replacement.
-            if (meta('lock') !== raw) return false;
-            reclaimed = old;
-          }
+          if (meta('lock') !== raw || (raw !== undefined && !old)) return false;
           putMeta('lock', JSON.stringify({ pid: process.pid, token: fingerprint(token) }));
           return true;
         }, true);
+        if (acquired) reclaimed = old;
       } catch (e) {
         if (e.errcode !== 5 && e.errcode !== 6) throw e;
       }

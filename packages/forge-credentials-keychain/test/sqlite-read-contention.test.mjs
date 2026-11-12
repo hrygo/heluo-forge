@@ -240,6 +240,73 @@ await store.close();`;
   }
 });
 
+test('checking a completion marker does not hold a SQLite write transaction', async (t) => {
+  const { directory, store } = await fixture(t);
+  const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  const token = 'a'.repeat(32);
+  const digest = createHash('sha256').update(token).digest('hex').slice(0, 32);
+  const markerName = `credentials.sqlite.abandoned.${process.pid}.${digest}`;
+  const marker = join(directory, markerName);
+  const originalLstat = fs.lstatSync;
+  let observed;
+  try {
+    db.exec('PRAGMA busy_timeout = 0');
+    db.prepare("INSERT INTO meta(key,value) VALUES('lock',?)").run(JSON.stringify({ pid: process.pid, token: digest }));
+    writeFileSync(marker, JSON.stringify({ pid: process.pid, token }), { mode: 0o600 });
+    fs.lstatSync = (...args) => {
+      if (args[0] === marker && observed === undefined) {
+        try { db.exec('BEGIN IMMEDIATE'); db.exec('ROLLBACK'); observed = 'available'; }
+        catch (error) { observed = error.errcode; }
+      }
+      return originalLstat(...args);
+    };
+    syncBuiltinESMExports();
+    await store.set(ref, 'recovered');
+    assert.equal(observed, 'available');
+    assert.equal(await store.get(ref), 'recovered');
+    assert.equal(readdirSync(directory).includes(markerName), false);
+  } finally {
+    fs.lstatSync = originalLstat;
+    syncBuiltinESMExports();
+    db.close();
+  }
+});
+
+test('a changed lock is not reclaimed using an earlier completion marker', async (t) => {
+  const { directory, store } = await fixture(t, 60);
+  const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  const token = 'a'.repeat(32);
+  const digest = createHash('sha256').update(token).digest('hex').slice(0, 32);
+  const marker = join(directory, `credentials.sqlite.abandoned.${process.pid}.${digest}`);
+  const replacement = JSON.stringify({ pid: process.pid, token: 'b'.repeat(32) });
+  const originalLstat = fs.lstatSync;
+  let replaced = false;
+  let calls = 0;
+  try {
+    db.exec('PRAGMA busy_timeout = 0');
+    db.prepare("INSERT INTO meta(key,value) VALUES('lock',?)").run(JSON.stringify({ pid: process.pid, token: digest }));
+    writeFileSync(marker, JSON.stringify({ pid: process.pid, token }), { mode: 0o600 });
+    fs.lstatSync = (...args) => {
+      if (args[0] === marker && !replaced) {
+        try { db.prepare("UPDATE meta SET value=? WHERE key='lock'").run(replacement); replaced = true; }
+        catch { /* The assertion below reports whether another writer could run. */ }
+      }
+      return originalLstat(...args);
+    };
+    syncBuiltinESMExports();
+    const result = store.transaction(ref, (tx) => { calls += 1; tx.set('intruder'); });
+    await assert.rejects(result, { code: 'CRED_LOCK_TIMEOUT' });
+    assert.equal(replaced, true);
+    assert.equal(calls, 0);
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key='lock'").get().value, replacement);
+    assert.equal(await store.get(ref), 'before');
+  } finally {
+    fs.lstatSync = originalLstat;
+    syncBuiltinESMExports();
+    db.close();
+  }
+});
+
 test('forged and stale markers do not steal a live operation', async (t) => {
   const { directory, store, own } = await fixture(t, 60);
   const other = createCredentialStore({ directory, lockTimeoutMs: 60 });

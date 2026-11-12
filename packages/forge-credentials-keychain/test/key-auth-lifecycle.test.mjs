@@ -60,3 +60,30 @@ test('a mismatched unreferenced historical key still prevents writes', async (t)
   await assert.rejects(store.set(ref, 'refused'), { code: 'CRED_DECRYPT_FAILED' });
   assert.equal(await store.get(ref), 'new-value');
 });
+
+test('first binding rejects a ciphertext changed after its read snapshot', async (t) => {
+  const root = await outsideRepositoryTmpAsync('forge-key-auth-race-');
+  const directory = join(root, 'data');
+  const store = createCredentialStore({ directory });
+  const first = 'heluo-forge/iam/ref/FIRST';
+  const second = 'heluo-forge/iam/ref/SECOND';
+  t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
+  await store.set(first, 'first-value');
+  await store.set(second, 'second-value');
+
+  const db = new DatabaseSync(join(directory, 'credentials.sqlite'));
+  let calls = 0;
+  try {
+    // Model an older SQLite store before its first key binding.
+    db.prepare("DELETE FROM meta WHERE key='key_auth'").run();
+    await assert.rejects(store.transaction(first, (tx) => {
+      calls += 1;
+      db.prepare("UPDATE secret SET envelope = X'00' WHERE id = ?").run(second);
+      tx.set('should-not-commit');
+    }), { code: 'CRED_DECRYPT_FAILED' });
+    assert.equal(calls, 1);
+    assert.equal(await store.get(first), 'first-value');
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key='key_auth'").get(), undefined);
+    await assert.rejects(store.get(second), { code: 'CRED_DECRYPT_FAILED' });
+  } finally { db.close(); }
+});
