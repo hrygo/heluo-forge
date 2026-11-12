@@ -1,8 +1,9 @@
-import { createHmac } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { OidcError } from './oidc.mjs';
 import { StoreError } from './store.mjs';
+
+export { canonicalRecord, grantIdentity, refreshBaseId } from './session-identity.mjs';
 
 export const SAFE_MESSAGES = Object.freeze({
   CRED_KEY_UNAVAILABLE: 'credential key is unavailable',
@@ -40,26 +41,10 @@ export const SAFE_MESSAGES = Object.freeze({
   IAM_REFRESH_SUBJECT_MISMATCH: 'IAM refresh response changed the subject',
 });
 
-export function canonicalRecord(value) {
-  if (Array.isArray(value)) return value.map(canonicalRecord);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalRecord(value[key])]));
-  }
-  return value;
-}
-
-export function refreshBaseId(grant, id) {
-  return createHmac('sha256', id).update(JSON.stringify(canonicalRecord(grant))).digest('base64url');
-}
-
 export function sameGrantIgnoringRefreshMarker(left, right) {
   const { refreshOperation: ignoredLeft, ...leftBase } = left;
   const { refreshOperation: ignoredRight, ...rightBase } = right;
   return isDeepStrictEqual(leftBase, rightBase);
-}
-
-export function grantIdentity({ version, issuer, clientId, resource, subject, obtainedAt, sessionInstanceId, authContext }) {
-  return { version, issuer, clientId, resource, subject, obtainedAt, sessionInstanceId, ...(authContext ? { authContext } : {}) };
 }
 
 export function nowIso(now) {

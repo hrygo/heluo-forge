@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { refreshBaseId } from '../src/service-helpers.mjs';
 
 const run = promisify(execFile);
 const bin = fileURLToPath(new URL('../bin/heluo-forge.mjs', import.meta.url));
@@ -207,13 +208,6 @@ test('bridge may observe a pending refresh, but only returns its completed curre
   assert.equal((await success.cli('token')).stdout, 'synthetic-new\n');
   assert.equal(requests, 1);
 
-  const missingIdentity = { ...before, payload: { ...before.payload } };
-  delete missingIdentity.payload.sessionInstanceId;
-  const unbound = await fixture(t, { TEST_RECORD: JSON.stringify(missingIdentity) });
-  unbound.env.HELUO_FORGE_IAM_URL = success.env.HELUO_FORGE_IAM_URL;
-  await assert.rejects(unbound.cli('token'), (error) => error.code !== 0 && error.stdout === '');
-  assert.equal(requests, 1);
-
   for (const [name, latest] of [
     ['still pending', before],
     ['different refresh', { ...completed, payload: { ...completed.payload, refreshOperation: { ...completed.payload.refreshOperation, id: Buffer.alloc(32, 8).toString('base64url') } } }],
@@ -319,4 +313,57 @@ test('invalid grant and malformed refresh marker are refused before contacting b
     assert.notEqual(JSON.parse((await f.cli('whoami', '--json')).stdout).status, 'ready');
   }
   assert.equal(calls, 0);
+});
+
+
+test('legacy V1 refresh bridge accepts only the completed rotation of the original grant', async (t) => {
+  const previous = { version: 1, state: 'complete', id: Buffer.alloc(32, 10).toString('base64url'), base: Buffer.alloc(32, 11).toString('base64url') };
+  const original = { ...grant.payload, accessToken: 'synthetic-old', refreshToken: 'synthetic-old-refresh', refreshOperation: previous };
+  const id = Buffer.alloc(32, 12).toString('base64url');
+  const operation = { version: 1, state: 'pending', id, base: refreshBaseId(original, id) };
+  const active = { kind: 'grant', payload: original };
+  const pending = { kind: 'grant', payload: { ...original, refreshOperation: operation } };
+  const completed = { kind: 'grant', payload: { ...original, accessToken: 'synthetic-new', refreshToken: 'synthetic-new-refresh', refreshOperation: { ...operation, state: 'complete' } } };
+  let token = 'synthetic-new';
+  let requests = 0;
+  const server = createServer((_req, res) => { requests++; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ token })); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  for (const [name, before] of [['pending to complete', pending], ['active to complete', active]]) {
+    await t.test(name, async (t) => {
+      const f = await fixture(t, { TEST_RECORD: JSON.stringify(before), TEST_RECORD_AFTER: JSON.stringify(completed) });
+      f.env.HELUO_FORGE_IAM_URL = url;
+      assert.equal((await f.cli('token')).stdout, `${completed.payload.accessToken}\n`);
+    });
+  }
+  const differentId = Buffer.alloc(32, 13).toString('base64url');
+  const differentBase = Buffer.alloc(32, 14).toString('base64url');
+  const instance = Buffer.alloc(32, 15).toString('base64url');
+  const changed = (fields) => ({ ...completed, payload: { ...completed.payload, ...fields } });
+  for (const [name, before, latest, returned] of [
+    ['pending operation id changed', pending, changed({ refreshOperation: { ...completed.payload.refreshOperation, id: differentId } }), 'synthetic-new'],
+    ['pending operation base changed', pending, changed({ refreshOperation: { ...completed.payload.refreshOperation, base: differentBase } }), 'synthetic-new'],
+    ['active operation id changed', active, changed({ refreshOperation: { ...completed.payload.refreshOperation, id: differentId } }), 'synthetic-new'],
+    ['active operation base changed', active, changed({ refreshOperation: { ...completed.payload.refreshOperation, base: differentBase } }), 'synthetic-new'],
+    ['base belongs to another original grant', { ...active, payload: { ...original, refreshToken: 'another-original-refresh' } }, completed, 'synthetic-new'],
+    ['identity changed', pending, changed({ subject: 'another-subject' }), 'synthetic-new'],
+    ['instance added', pending, changed({ sessionInstanceId: instance }), 'synthetic-new'],
+    ['instance replaced', { ...pending, payload: { ...pending.payload, sessionInstanceId: instance } }, changed({ sessionInstanceId: differentId }), 'synthetic-new'],
+    ['old Host token', pending, completed, 'synthetic-old'],
+    ['old refresh token', pending, changed({ refreshToken: original.refreshToken }), 'synthetic-new'],
+    ['still pending', pending, pending, 'synthetic-new'],
+    ['pending sign-out', pending, changed({ signOutOperation: { version: 1, state: 'pending', id: differentId } }), 'synthetic-new'],
+  ]) await t.test(name, async (t) => {
+    token = returned;
+    const f = await fixture(t, { TEST_RECORD: JSON.stringify(before), TEST_RECORD_AFTER: JSON.stringify(latest) });
+    f.env.HELUO_FORGE_IAM_URL = url;
+    await assert.rejects(f.cli('token'), (error) => error.code !== 0 && error.stdout === '');
+  });
+  await t.test('offline pending cannot return the old token', async (t) => {
+    const beforeRequests = requests;
+    const f = await fixture(t, { TEST_RECORD: JSON.stringify(pending) });
+    await assert.rejects(f.cli('token'), (error) => error.code !== 0 && error.stdout === '');
+    assert.equal(requests, beforeRequests);
+  });
 });

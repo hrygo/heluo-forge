@@ -95,7 +95,7 @@ export async function currentToken() {
 | 0 | 成功 | 继续 |
 | 2 | `auth token` 未登录 | 提示"请在 DSH 中登录"，不要报成权限不足 |
 | 3 | `auth token` 令牌已过期或需要重新登录 | 提示"登录已过期，请回 DSH 重新登录" |
-| 4 | 凭据存储缺失、损坏、不可访问或 Host 拒绝 | 报环境问题，需要人工处理 |
+| 4 | 凭据存储缺失、损坏、不可访问，Host 拒绝或会话回读核验失败 | 报环境问题，需要人工处理 |
 | 64 | 参数写错 | 修代码 |
 
 `whoami` 能读取存储时返回 0，未登录、已过期或记录状态为错误也是 0；判断登录态请同时查看 JSON 里的 `status` 和 `signedIn`。存储缺失、数据库或密钥文件损坏或无法访问时返回 4，stdout 为空，错误在 stderr。
@@ -104,7 +104,7 @@ export async function currentToken() {
 
 另一个坑：`auth token` 失败时 **stdout 是空的**，错误在 stderr。所以不要用 stdout 非空来判断成功——看退出码。
 
-设置 `HELUO_FORGE_IAM_URL` 后，CLI 通过本机 Host 获取令牌；遇到正在进行的刷新时，由 Host 等待该操作，CLI 只接受回读后确认属于同一会话、同一次刷新且与当前存储一致的令牌。未设置 Host 地址时，CLI 不等待刷新，也不返回刷新中的旧令牌；退出进行中同样不会返回令牌。
+设置 `HELUO_FORGE_IAM_URL` 后，CLI 通过本机 Host 获取令牌；Host 核验 issuer 信任上下文，遇到正在进行的刷新时等待该操作，CLI 只接受回读后确认属于同一会话、同一次刷新且与当前存储一致的令牌。无 `sessionInstanceId` 的旧 V1 可通过刷新操作标记或完整原记录绑定核验，不迁移存储。退出进行中、结果未确认或回读不匹配时不返回令牌。未设置 Host 地址时，CLI 不等待刷新，也不返回刷新中的旧令牌。
 
 ### 3.2 你的工具跑在 DSH 里（插件/同源页面）→ 用 HTTP
 
@@ -161,7 +161,7 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 |---|---|---|
 | 退出码 2 / `IAM_NOT_SIGNED_IN` | 用户没登录 | 请先在 DSH 中完成登录 |
 | 退出码 3 / `IAM_REAUTH_REQUIRED` | 令牌过期 | 登录已过期，请回到 DSH 重新登录 |
-| 退出码 4 / `IAM_CREDENTIALS_UNAVAILABLE` | 凭据读不到（没装、权限不对） | 无法读取本机登录信息，请联系管理员 |
+| 退出码 4 / `IAM_CREDENTIALS_UNAVAILABLE` | 凭据读不到或会话回读核验失败 | 无法确认本机登录信息，请联系管理员 |
 | 业务接口返回 401 | 平台不认这张令牌 | 请重新登录；仍失败则联系管理员 |
 | 业务接口返回 403 | 平台认人但无权限 | 你无权访问该资源（**不要说成"未登录"**） |
 
@@ -205,7 +205,7 @@ const token = await ctx.iam.getAccessToken();  // 令牌，按需刷新
 | `IAM_NOT_SIGNED_IN` | 退出码 2 / HTTP 401 | 没有会话 |
 | `IAM_REAUTH_REQUIRED` | 退出码 3 / HTTP 401 | 令牌过期，需重新登录 |
 | `IAM_INVALID_GRANT` | 退出码 3 / HTTP 401 | 会话记录无效或退出结果未确认，需重新登录 |
-| `IAM_CREDENTIALS_UNAVAILABLE` | 退出码 4 / HTTP 503 | 凭据后端不可用 |
+| `IAM_CREDENTIALS_UNAVAILABLE` | 退出码 4 / HTTP 503 | 凭据后端不可用或 CLI 会话回读核验失败 |
 | `CRED_STORE_PATH_CONFLICT` | 退出码 4 | 多个候选凭据存储目录同时存在 |
 | `IAM_BRIDGE_UNAUTHORIZED` | HTTP 401 | 桥能力值不对 |
 | `IAM_BRIDGE_FORBIDDEN` | HTTP 403 | 非本机来源 |

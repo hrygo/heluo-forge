@@ -40,7 +40,8 @@
 | `src/service-reconcile.mjs` | 无（经端口读写观测标志与发布计数） | 记录到视图的勘定：`syncFromStore`、`hydrate` |
 | `src/service-signin.mjs` | 登录 attempt 及其计时器 | `startSignIn`、回调、取消，含 verifier/nonce 的归属 |
 | `src/service-signout.mjs` | 退出单飞、`signingOut` 标志 | `signOut`、清理、桥接凭据 |
-| `src/service-helpers.mjs` | 无 | 纯函数与共享常量（时间、身份比较、错误码映射） |
+| `src/service-helpers.mjs` | 无 | 纯函数与共享常量（时间、错误码映射） |
+| `src/session-identity.mjs` | 无 | Host 与 CLI 共用的会话身份和刷新记录绑定纯逻辑 |
 
 **改动落点**：状态判定改 `service-state.mjs`；协议与校验改 `service-grant.mjs`；刷新改 `service-token.mjs`；勘定改 `service-reconcile.mjs`；登录/回调改 `service-signin.mjs`；退出改 `service-signout.mjs`；网关与默认模型改 `service-gateway.mjs`、`service-model-selection.mjs`。`service.mjs` 只在新增轴或改装配顺序时动。
 

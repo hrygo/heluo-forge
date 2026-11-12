@@ -6,11 +6,10 @@
 // invalidate the running session, so the CLI only reports what the store holds
 // and tells the user to sign in again when the access token has expired.
 
-import { isDeepStrictEqual } from 'node:util';
-import { accessTokenOf, classifySessionRecord, EXIT, sessionFromRecord, SESSION_RECORD_KEY } from '../src/cli-session.mjs';
+import {
+  accessTokenOf, EXIT, isBridgeReadableSession, isSameBridgeSession, sessionFromRecord, SESSION_RECORD_KEY,
+} from '../src/cli-session.mjs';
 import { BRIDGE_REF } from '../src/bridge.mjs';
-import { validateGrant } from '../src/record.mjs';
-import { grantIdentity } from '../src/service-helpers.mjs';
 import { ERROR_STATUS } from '../src/error-contract.mjs';
 
 const USAGE = `用法：
@@ -51,33 +50,6 @@ async function openReader() {
   } catch (error) {
     return { error: credentialError(error) };
   }
-}
-
-function activeSession(record) {
-  return classifySessionRecord(record).state === 'active';
-}
-
-function bridgeReadableSession(record) {
-  const session = classifySessionRecord(record);
-  return session.state === 'active' || (session.state === 'pending' && session.operation === 'refresh'
-    && typeof record.payload.sessionInstanceId === 'string');
-}
-
-function sameSession(before, after) {
-  if (!bridgeReadableSession(before) || !activeSession(after)) return false;
-  if (isDeepStrictEqual(before, after)) return true;
-  const left = validateGrant(before.payload);
-  const right = validateGrant(after.payload);
-  if (!left.ok || !right.ok || typeof left.value.sessionInstanceId !== 'string'
-    || left.value.sessionInstanceId !== right.value.sessionInstanceId) return false;
-  const pending = left.value.refreshOperation;
-  if (pending?.state === 'pending') {
-    const completed = right.value.refreshOperation;
-    if (completed?.state !== 'complete' || completed.version !== pending.version
-      || completed.id !== pending.id || completed.base !== pending.base
-      || left.value.refreshToken === right.value.refreshToken) return false;
-  }
-  return isDeepStrictEqual(grantIdentity(left.value), grantIdentity(right.value));
 }
 
 /** Ask the running Host for a token through the loopback bridge. */
@@ -154,7 +126,7 @@ async function main(argv) {
 
     const hostUrl = process.env.HELUO_FORGE_IAM_URL;
     if (typeof hostUrl === 'string' && hostUrl.length > 0) {
-      if (!bridgeReadableSession(record)) {
+      if (!isBridgeReadableSession(record)) {
         const code = accessTokenOf(record).code;
         fail(code, '当前没有可用的访问令牌', json);
         return code === 'IAM_NOT_SIGNED_IN' ? EXIT.NOT_SIGNED_IN : EXIT.REAUTH_REQUIRED;
@@ -169,7 +141,7 @@ async function main(argv) {
           return EXIT.UNAVAILABLE;
         }
         const current = accessTokenOf(latest);
-        if (!sameSession(record, latest) || !current.ok || current.token !== fromHost.token) {
+        if (!isSameBridgeSession(record, latest) || !current.ok || current.token !== fromHost.token) {
           fail('IAM_CREDENTIALS_UNAVAILABLE', '凭据存储不可用或读取失败', json);
           return EXIT.UNAVAILABLE;
         }

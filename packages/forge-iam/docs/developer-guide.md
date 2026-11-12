@@ -208,6 +208,10 @@ Host 为登录尝试生成 state、nonce 和 PKCE S256；授权码只兑换一�
 
 同进程且 provider、issuer 上下文匹配的调用共用刷新 promise；其他参与者只等待自己观察到的操作，匹配操作标记、会话身份和令牌变化，不隐式采用另一授权。等待超时不是租约，不接管、不重发旧 refresh token。`invalid_grant`、网络不确定、校验或提交失败不返回旧 access token，不读后删除记录；已写入的 pending 保留并要求重新登录。若 complete 已提交但回复丢失，其他实例仍可能取得匹配结果，不能声称所有实例必然重登。
 
+旧 grant 含 `resource` 而刷新结果删除该字段时，完整会话身份不一致，等待者和桥接拒绝本次结果；不复制旧 `resource`，也不自动迁移。
+
+配置 Host 桥接时，Host 先核验 issuer 信任上下文并解析令牌，CLI 回读合法、未过期且无退出 pending 的当前会话，只输出与 Host 响应一致的 access token。无 `sessionInstanceId` 的旧 V1 也可按原 pending 的操作 version、id、base、会话身份及 refresh token 变化核验对应 complete；若首次读取为 active 而回读为 complete，则以完整原 grant 和 complete 的 id 计算 `base`，并核验身份和令牌变化。结果未确认、操作或会话不匹配时拒绝；不为桥接增加标识或迁移存储。该匹配仍受下述旧记录 ABA 和同权写入限制。
+
 等待阶段采用单调时钟的 5 秒截止；只对无副作用的读取竞速超时，底层 I/O 不会被取消。首次读取、claim/写入、事件循环阻塞及退出自身 I/O 不在这一总等待界限内。迟到读取结果不能更新该次等待的视图。
 
 普通 `/view` 对无标记、可刷新的过期会话可触发后台刷新，使用 30 秒退避。观察 pending 时视图进入 error；仅本实例明确观察并绑定的操作，才可在本地时钟 5 秒观察窗内由轮询采用匹配的合法 complete。记录或会话变化、过期、其他错误、读取失败、退出、卸载或新登录都会阻止该恢复；恢复后的视图仍不是服务端授权或强一致证明。

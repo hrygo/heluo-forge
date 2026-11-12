@@ -309,6 +309,102 @@ test('CLI waits through the same pending refresh and outputs only the rotated Ho
   assert.equal(cli.stderr(), '');
 });
 
+test('legacy V1 pending refresh returns the rotated token through real Host and CLI', { timeout: 10_000 }, async (t) => {
+  const { directory, provider, adapter, own } = await fixture(t);
+  const app = host(provider, adapter);
+  own(() => app.dispose());
+  await app.service.hydrate();
+  await waitForCapability(provider);
+
+  const writer = createKeychainProvider(createCredentialStore({ directory }));
+  own(() => writer.close());
+  const initial = { ...grant.payload };
+  const id = Buffer.alloc(32, 2).toString('base64url');
+  const operation = { version: 1, state: 'pending', id, base: refreshBaseId(initial, id) };
+  const pending = { kind: 'grant', payload: { ...initial, refreshOperation: operation } };
+  await writer.modifyRecord('heluo-iam/session', () => pending);
+
+  let requested = false;
+  let pendingReads = 0;
+  let observed;
+  const observedPending = new Promise((resolve) => { observed = resolve; });
+  const readRecord = provider.readRecord.bind(provider);
+  provider.readRecord = async (key) => {
+    const value = await readRecord(key);
+    if (requested && key === 'heluo-iam/session' && value?.payload?.refreshOperation?.state === 'pending') {
+      if (++pendingReads === 2) observed();
+    }
+    return value;
+  };
+  const server = createRouteServer(own, (req, res) => {
+    if (req.url === '/api/forge-iam/bridge/token') requested = true;
+    return app.handler(req, res);
+  });
+  const url = await listen(server);
+  const cli = startCli(own, directory, url);
+  await Promise.race([
+    observedPending,
+    cli.closed.then((result) => { throw new Error(`CLI exited before Host observed pending: ${result.code ?? result.signal}`); }),
+  ]);
+  assert.equal(cli.stdout(), '');
+  assert.equal(app.service.getView().error, 'IAM_REAUTH_REQUIRED');
+
+  await writer.modifyRecord('heluo-iam/session', (current) => {
+    assert.deepEqual(current, pending);
+    return { kind: 'grant', payload: { ...initial, refreshToken: 'synthetic-rotated-refresh',
+      accessToken: 'synthetic-rotated-access', refreshOperation: { ...operation, state: 'complete' } } };
+  });
+  const result = await cli.closed;
+  if (result.error) throw result.error;
+  assert.equal(result.code, 0, cli.stderr());
+  assert.equal(cli.stdout(), `${(await provider.readRecord('heluo-iam/session')).payload.accessToken}\n`);
+  assert.equal(cli.stdout(), 'synthetic-rotated-access\n');
+  assert.equal(cli.stderr(), '');
+});
+
+for (const resource of ['https://gateway.corp.example', null]) test(`legacy V1 Host refresh rejects changed identity after removing resource ${String(resource)}`, { timeout: 10_000 }, async (t) => {
+  const { directory, provider, adapter, own } = await fixture(t);
+  const initial = { ...grant.payload, resource, accessExpiresAt: '2020-01-01T00:00:00.000Z' };
+
+  let requests = 0;
+  let posts = 0;
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    if (String(url) === config.jwksUri) return Response.json({ keys: [] });
+    if (String(url) === config.tokenEndpoint && init.method === 'POST') {
+      assert.equal(requests, 1, 'refresh must follow the CLI bridge request');
+      const form = new URLSearchParams(init.body);
+      assert.equal(form.get('grant_type'), 'refresh_token');
+      assert.equal(form.has('resource'), false);
+      posts++;
+      return Response.json({ access_token: 'synthetic-rotated-access', token_type: 'Bearer', expires_in: 3600,
+        refresh_token: 'synthetic-rotated-refresh' });
+    }
+    throw new Error('unexpected synthetic endpoint');
+  });
+  const app = host(provider, adapter);
+  own(() => app.dispose());
+  const server = createRouteServer(own, (req, res) => {
+    if (req.url === '/api/forge-iam/bridge/token') requests++;
+    return app.handler(req, res);
+  });
+  const url = await listen(server);
+  await app.service.hydrate();
+  await waitForCapability(provider);
+  await provider.modifyRecord('heluo-iam/session', () => ({ kind: 'grant', payload: initial }));
+  const cli = startCli(own, directory, url);
+  const result = await cli.closed;
+  if (result.error) throw result.error;
+  const stored = await provider.readRecord('heluo-iam/session');
+  assert.equal(posts, 1, `Host performs exactly one refresh POST; requests=${requests}, exit=${result.code}, signal=${result.signal}, stderr=${cli.stderr()}`);
+  assert.equal(Object.hasOwn(stored.payload, 'resource'), false);
+  assert.equal(stored.payload.refreshOperation.state, 'complete');
+  assert.equal(stored.payload.accessToken, 'synthetic-rotated-access');
+  assert.equal(stored.payload.refreshToken, 'synthetic-rotated-refresh');
+  assert.equal(result.code, 4, cli.stderr());
+  assert.equal(cli.stdout(), '');
+  assert.match(cli.stderr(), /IAM_CREDENTIALS_UNAVAILABLE/);
+});
+
 test('concurrent Host instances initialize one capability in the shared store', async (t) => {
   const { directory, provider: first, adapter: firstAdapter, own } = await fixture(t);
   const secondBackend = createCredentialStore({ directory });
