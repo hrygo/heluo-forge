@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createManagedModelRuntime } from '../src/managed-models.mjs';
+import { createManagedModelRuntime, createNativeGatewayAdapter } from '../src/managed-models.mjs';
 import { IamError } from '../src/errors.mjs';
 import { createGrantStore } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
@@ -20,7 +20,7 @@ const options = { provider: 'enterprise', model: 'enterprise-chat', messages: []
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
-function fixture({ tokenFailure = null, logFailure, finishFailureCode = null } = {}) {
+function fixture({ tokenFailure = null, logFailure, finishFailureCode = null, native = false } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -65,35 +65,83 @@ function fixture({ tokenFailure = null, logFailure, finishFailureCode = null } =
     on(name, callback) { assert.equal(name, 'llm/stream'); guard = callback; return () => { }; },
     emit() { },
   };
-  const createAdapter = async ({ resolveKey, resolveIamToken }) => {
+  // One transport models the gateway: it follows the request signal, counts the
+  // requests that actually reached it, and can fail by throwing as well as by a
+  // finish chunk, because the shipped adapter produces both shapes.
+  const transport = async function* (key, callOptions = {}) {
+    lastSignal = callOptions.signal ?? null;
+    if (finishFailureCode) {
+      yield { type: 'finish', reason: { kind: 'error', failure: { code: finishFailureCode, message: 'synthetic transport failure' } } };
+      return;
+    }
+    requests += 1; credential = key;
+    yield { type: 'text-delta', text: 'first' };
+    if (releaseChunk) {
+      // The transport follows the request signal: an aborted request ends here,
+      // exactly like a socket that is torn down.
+      await new Promise((resolve, reject) => {
+        const signal = callOptions.signal;
+        const abort = () => reject(Object.assign(new Error('transport aborted'), { name: 'AbortError' }));
+        signal?.addEventListener('abort', abort, { once: true });
+        releaseChunk.promise.then(() => { signal?.removeEventListener('abort', abort); resolve(); });
+      });
+    }
+    if (failAfterFirstChunk) throw new IamError('IAM_GATEWAY_BINDING_CHANGED', 'synthetic mid-stream binding change', { retryable: true });
+    yield { type: 'finish', reason: { kind: 'stop' } };
+  };
+  // The host installs the native adapter, so the recovery has to hold through it:
+  // its per-call key resolution is where a binding change surfaces, and a stand-in
+  // adapter alone cannot prove the retry survives that boundary.
+  const nativeLoader = {
+    async import(specifier) {
+      if (specifier === '@deepseek-ai/dsh-llm-pi-ai') {
+        return {
+          PiAiAdapter: class PiAiAdapter {
+            constructor(adapterOptions) { this.options = adapterOptions; }
+            providerInfo(id) { const profile = this.options.profiles().get(id); return profile ? { id, name: profile.displayName } : undefined; }
+            providerRetryPolicy(id) { return this.options.profiles().get(id)?.retryPolicy; }
+            async resolveModel(provider, model) { return { provider, id: model, name: model }; }
+            async listModels(provider) { return this.options.profiles().get(provider)?.piProvider.getModels() ?? []; }
+            async prepareCall(provider, model) {
+              return { model: await this.resolveModel(provider, model), stream: callOptions => this.stream(callOptions) };
+            }
+            stream(callOptions) {
+              const profile = this.options.profiles().get('enterprise');
+              const resolveApiKey = this.options.resolveApiKey;
+              return (async function* () {
+                // The host asks for the key on every call: this is the call site
+                // that reports a binding change before anything is sent.
+                const key = await resolveApiKey();
+                yield* profile.piProvider.stream({ id: callOptions.model }, {}, { ...callOptions, apiKey: key });
+              })();
+            }
+          },
+        };
+      }
+      if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
+        return {
+          openAICompletionsApi: () => ({
+            stream: (model, context, streamOptions) => transport(streamOptions.apiKey, streamOptions),
+            streamSimple: (model, context, streamOptions) => transport(streamOptions.apiKey, streamOptions),
+          }),
+        };
+      }
+      throw new Error(`unexpected import: ${specifier}`);
+    },
+  };
+  const createAdapter = async adapterOptions => {
     builds += 1;
+    if (native) {
+      return createNativeGatewayAdapter({ ...adapterOptions, host: { ...adapterOptions.host, loader: nativeLoader } });
+    }
+    const { resolveKey, resolveIamToken } = adapterOptions;
     const dispatch = async function* (callOptions = {}) {
-      lastSignal = callOptions.signal ?? null;
       attempts += 1;
       // The host asks for the key while building the request: a failure here
       // means nothing was sent, which is what makes the retry safe.
       const key = await resolveKey();
       if (typeof resolveIamToken === 'function') await resolveIamToken();
-      if (finishFailureCode) {
-        // The shipped adapter reports transport failures as a finish chunk, not
-        // only as a throw: both shapes must land on the same user code.
-        yield { type: 'finish', reason: { kind: 'error', failure: { code: finishFailureCode, message: 'synthetic transport failure' } } };
-        return;
-      }
-      requests += 1; credential = key;
-      yield { type: 'text-delta', text: 'first' };
-      if (releaseChunk) {
-        // The transport follows the request signal: an aborted request ends
-        // here, exactly like a socket that is torn down.
-        await new Promise((resolve, reject) => {
-          const signal = callOptions.signal;
-          const abort = () => reject(Object.assign(new Error('transport aborted'), { name: 'AbortError' }));
-          signal?.addEventListener('abort', abort, { once: true });
-          releaseChunk.promise.then(() => { signal?.removeEventListener('abort', abort); resolve(); });
-        });
-      }
-      if (failAfterFirstChunk) throw new IamError('IAM_GATEWAY_BINDING_CHANGED', 'synthetic mid-stream binding change', { retryable: true });
-      yield { type: 'finish', reason: { kind: 'stop' } };
+      yield* transport(key, callOptions);
     };
     return {
       providerInfo: id => ({ id, name: '企业模型' }),
@@ -179,6 +227,23 @@ test('re-saving the key does not interrupt an answer already in progress', async
   assert.equal(finishOf(rest).kind, 'stop', 'a Key save must not cut the answer');
   assert.equal(f.lastSignal?.aborted, false, 'the in-flight transport keeps its signal');
   assert.equal(f.requests, 1);
+});
+
+test('the native adapter retries exactly once after the binding moves before dispatch', async t => {
+  // Greptile P2: the recovery must be proven through the adapter the host really
+  // installs, not only through the stand-in used by the other cases.
+  const f = fixture({ native: true });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // The call was prepared against gateway A; the connection moves to B before
+  // dispatch, so the adapter's own per-call key resolution fails first.
+  f.setConnection({ baseURL: MOVED_GATEWAY, key: 'key-2', generation: 'gen-2' });
+  const result = await chunks(f.adapter.stream(options));
+  assert.equal(finishOf(result).kind, 'stop');
+  assert.equal(f.builds, 2, 'one rebuild bound to the new address');
+  assert.equal(f.requests, 1, 'exactly one model request reaches the gateway');
+  assert.equal(f.credential, 'key-2');
+  assert.equal(failureOf(result), undefined);
 });
 
 test('an address change rebuilds once and retries the dispatch once', async t => {

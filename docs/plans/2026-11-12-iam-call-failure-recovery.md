@@ -314,7 +314,7 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 
 | 命令 | 结果 |
 |---|---|
-| `node --test`（`packages/forge-iam`） | 1568 通过、0 失败（新增 21 项：`iam-call-recovery` 18 项、`gateway-failure` 3 项） |
+| `node --test`（`packages/forge-iam`） | 1569 通过、0 失败（新增 22 项：`iam-call-recovery` 19 项、`gateway-failure` 3 项） |
 | `node scripts/check-docs.mjs` | `docs: ok`（157 文件、1048 表格、1226 本地链接、165 片段、46 受控文档） |
 | `node scripts/check-repo.mjs` | 通过 |
 | `node scripts/dsh-version.mjs check` | 通过 |
@@ -350,13 +350,31 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 
 另补一条形状守卫用例：绑定变化若以 `finish` 分块（而非抛出）送达，按用户码映射且不重试（`a transport that reports the binding change as a finish chunk is not retried`）。
 
+第三处意见指出恢复用例只覆盖替身适配器，绕开了宿主实际装配的 `createNativeGatewayAdapter`：
+
+| 缺陷 | 影响 | 修正 | 用例 |
+|---|---|---|---|
+| 恢复用例绕过宿主实际装配的适配器 | 只证明替身适配器可重试，未证明重试穿过原生适配器的按调用解析 Key 边界 | 以 `host.loader.import` 注入 PiAiAdapter 与协议桩，让恢复路径经 `createNativeGatewayAdapter` 装配后运行 | `the native adapter retries exactly once after the binding moves before dispatch`（断言一次重建、一次请求、使用新 Key；移除派发前重试即转红） |
+
 ### 12.6 虚拟机验证记录
 
-在 Parallels Desktop 的两个目标机上以 `origin/main` 为对照运行 `packages/forge-iam` 测试套件（分支为提交 `a4e62ef` 前后的实现，基线为同一虚拟机的 `origin/main`）：
+两台目标机从 `codex/issue-259-iam-recovery` 分支安装 `.node-version` 指定的 Node 24.21.0，运行 `packages/forge-iam` 测试套件：
 
-| 目标机 | 分支结果 | 基线结果 | 结论 |
-|---|---|---|---|
-| 麒麟 V10 SP1 ARM64 | 1568 用例，1567 通过、1 失败 | `callback-port` 26 用例，25 通过、1 失败 | 唯一失败是同一条 IPv6 回环用例（`::1` 连接 `EACCES`），基线与分支一致，属虚拟机网络限制 |
-| Windows 11 ARM64 | 1554 用例，1534 通过、20 失败 | 1533 用例，1513 通过、20 失败 | 失败集合逐名一致（`branch-only`、`base-only` 均为空）；同一文件的单文件运行通过，CI 的 win32-arm64／win32-x64 runner 全绿，属该虚拟机环境而非本方案改动 |
+| 目标机 | 结果 |
+|---|---|
+| 麒麟 V10 SP1 ARM64 | 1569 用例全部通过 |
+| Windows 11 ARM64 | 1569 用例全部通过 |
+| macOS arm64（对照） | 1569 用例全部通过 |
 
-两台目标机均未安装企业插件与真实 IAM／网关，因此 §7.3 的**应用级**手工矩阵（断网重连、重存 Key、跨进程改写凭据、对话中切换模型）仍未执行；本节只提供平台级测试套件证据。
+#### 12.6.1 Windows：`--import` 必须传文件 URL
+
+`cli-reader.test.mjs` 用 `node --import <hook.mjs> bin/heluo-forge.mjs` 注入凭据存储桩。Windows 上 Node 24.21.0 把绝对路径的 `--import` 值按 URL 解析，协议被读成 `c:`，子进程在 CLI 启动前即以 `ERR_UNSUPPORTED_ESM_URL_SCHEME` 退出，该文件的 18 个用例因此全红。该文件此前不在 Windows CI 的目标步骤里，远端从未覆盖。改为 `pathToFileURL(hook).href` 后两台机器一致通过，并把该文件加入 `.github/workflows/check.yml` 的 “Test IAM read paths and CLI bridge” 步骤。
+
+#### 12.6.2 麒麟：KySec 应用联网控制默认拒绝未登记的 node
+
+未处理时 `callback-port.test.mjs` 的 IPv6 回环用例失败（`::1` 上 `EACCES`）。`/var/log/kysec.log` 记录 `command=netctl result=forbid` 与 `program: <node 路径>, pkg: net-node`：麒麟安全中心的“应用联网控制”默认拒绝未登记程序联网，node 来自官方压缩包因此被拒，IPv4 回环不受影响。用 `netctl --set -p net-node -a <node 路径> -s allow` 登记后该用例通过。这是目标机的安全策略配置，不是代码缺陷；未登记的 node 在麒麟上无法完成 IPv6 回环数据传输。
+
+#### 12.6.3 未覆盖项
+
+- §7.3 的**应用级**手工矩阵（断网重连、重存 Key、跨进程改写凭据、对话中切换模型）仍需装好企业插件的实机环境。
+- 麒麟目标机未安装 `git` 且无免密提权，仓库级检查（`pnpm check`）在该机不可执行；包级套件已全部通过。
