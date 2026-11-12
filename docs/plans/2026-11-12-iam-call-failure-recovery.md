@@ -349,3 +349,14 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 | 刷新令牌过期但访问令牌仍有效时会话被拒 | `resolveConnection()` 以续期令牌可用为前置，提前把仍可用的会话判为未登录 | 会话可继续条件改为访问令牌或刷新令牌任一有效，仅两者都过期才拒绝 | `a still-valid access token keeps the key resolvable after its refresh token expired`、`a session with both factors expired is not a usable session` |
 
 另补一条形状守卫用例：绑定变化若以 `finish` 分块（而非抛出）送达，按用户码映射且不重试（`a transport that reports the binding change as a finish chunk is not retried`）。
+
+### 12.6 虚拟机验证记录
+
+在 Parallels Desktop 的两个目标机上以 `origin/main` 为对照运行 `packages/forge-iam` 测试套件（分支为提交 `a4e62ef` 前后的实现，基线为同一虚拟机的 `origin/main`）：
+
+| 目标机 | 分支结果 | 基线结果 | 结论 |
+|---|---|---|---|
+| 麒麟 V10 SP1 ARM64 | 1568 用例，1567 通过、1 失败 | `callback-port` 26 用例，25 通过、1 失败 | 唯一失败是同一条 IPv6 回环用例（`::1` 连接 `EACCES`），基线与分支一致，属虚拟机网络限制 |
+| Windows 11 ARM64 | 1554 用例，1534 通过、20 失败 | 1533 用例，1513 通过、20 失败 | 失败集合逐名一致（`branch-only`、`base-only` 均为空）；同一文件的单文件运行通过，CI 的 win32-arm64／win32-x64 runner 全绿，属该虚拟机环境而非本方案改动 |
+
+两台目标机均未安装企业插件与真实 IAM／网关，因此 §7.3 的**应用级**手工矩阵（断网重连、重存 Key、跨进程改写凭据、对话中切换模型）仍未执行；本节只提供平台级测试套件证据。
