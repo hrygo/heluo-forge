@@ -72,7 +72,7 @@ test('offline key and decrypt errors preserve codes without exposing exception t
 
 test('CLI identifies a store directory conflict without exposing paths or unknown errors', async (t) => {
   for (const [input, code, message] of [
-    ['CRED_STORE_PATH_CONFLICT', 'CRED_STORE_PATH_CONFLICT', '检测到多个凭据存储目录，请核对并为 Host 和 CLI 明确选择同一目录。'],
+    ['CRED_STORE_PATH_CONFLICT', 'CRED_STORE_PATH_CONFLICT', '凭据存储目录不可用或存在冲突，请核对 Host 和 CLI 的存储目录设置。'],
     ['SECRET_UNTRUSTED_CODE', 'IAM_CREDENTIALS_UNAVAILABLE', '凭据存储不可用或读取失败'],
   ]) {
     const f = await fixture(t, { TEST_OPEN_ERROR: input });

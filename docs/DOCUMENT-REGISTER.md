@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.79.1 |
+| 版本 | V1.80.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,12 +19,12 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.79.1 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.80.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.43.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.41.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.41.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V2.0.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
+| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V2.1.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-004 | 企业组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.7.1 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V1.0.3 | 评审稿 | 平台组（代拟） | G2 |
@@ -47,7 +47,7 @@
 | CORP-DSH-CLI-002 | Gitee CLI（gh）接口规格（1.0.6） | [contracts/gh-cli-spec.md](<contracts/gh-cli-spec.md>) | V0.1.0 | 草案 | 平台组（代拟） | G1 接口事实 |
 | CORP-DSH-TOOLS-001 | 企业工程工具最小契约 | [contracts/engineering-tools.md](<contracts/engineering-tools.md>) | V0.3.2 | 草案 | 平台组（代拟） | G1 查询映射；G2 受控写准入 |
 | CORP-DSH-METRICS-001 | 研发观察事件与上报契约 | [contracts/metrics-events.md](<contracts/metrics-events.md>) | V0.2.4 | 草案 | 平台组（代拟） | G2；指标导出启用前冻结 |
-| CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V3.2.9 | 评审稿 | 平台组 | G0 |
+| CORP-DSH-ARCH-001 | 总体架构设计 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V3.2.10 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-ARCH-002 | AI 网关个人凭证（静态 Key）接入 | [architecture/gateway-static-key-option.md](<architecture/gateway-static-key-option.md>) | V0.4.0 | 评审稿 | 平台组（代拟） | 历史依据；当前目标见 ADR-16 |
 | CORP-DSH-ARCH-003 | 企业插件市场调研与落地建议 | [architecture/plugin-market-research.md](<architecture/plugin-market-research.md>) | V0.3.1 | 草案 | 平台组（代拟） | 历史取证保留；来源与控制面建议由 ADR-11/13 替代 |
 | CORP-DSH-ARCH-004 | 插件市场决策：企业 Artifactory + AIHUB 原生索引 | [architecture/plugin-registry-source-decision.md](<architecture/plugin-registry-source-decision.md>) | V2.0.1 | 评审稿 | 平台组（代拟） | 正式技术方案；G1 接入与发行基线核验，G2 安装开放验证 |

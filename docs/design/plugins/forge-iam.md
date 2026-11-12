@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V2.0.0 |
+| 版本 | V2.1.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -341,14 +341,16 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `handleCallback(rawUrl)` | `rawUrl: string` | 接收并处理回调 URL，执行状态校对、换票与验签落盘 |
 | `signOut()` | 无 | 执行登出，按规范撤销访问令牌并写入逻辑墓碑 |
 | `resolveToken()` | 无 | 获取当前有效 Access Token（必要时触发锁外刷新）；绝不返回 Refresh Token |
+| `getSession()` | 无 | 同步返回不含令牌的身份与时效快照，不触发存储同步或刷新 |
+| `getAccessToken()` | 无 | `resolveToken()` 的别名，按需取得访问令牌 |
 | `getPrincipal()` | 无 | 返回 `{ issuer, subject }` 最小身份标识 |
-| `saveGatewayCredential(input)` | `{ key, deviceLabel }` | 基于条件比对（CAS）原子写入网关 Key 与元数据 |
+| `saveGatewayCredential(input)` | `{ key, deviceLabel, baseURL }` | 基于条件比对（CAS）原子写入网关 Key 与元数据 |
 | `clearGatewayCredential()` | 无 | 原子清除网关凭证并写入墓碑记录 |
 | `reconcileDefaultModel()` | 无 | 宿主默认模型状态采样与失效对齐协调 |
 
 #### 5.2.2 同源 HTTP 路由（`/api/forge-iam/*`）
 
-全部挂载于 `ctx.webServer`，受 Connection 鉴权保护，写入端点要求 `x-forge-iam-request: 1`：
+全部挂载于 `ctx.webServer`；除桥接端点外均受 Connection 鉴权保护，同源写入端点要求 `x-forge-iam-request: 1` 与 `content-type: application/json`：
 
 | 端点与方法 | 鉴权与约束 | 返回数据及语义 |
 |---|---|---|
@@ -431,26 +433,30 @@ export interface IamView {
 | 消费主体 | 接入端点 | 权限与数据边界 |
 |---|---|---|
 | **Host 插件与服务** | `ctx.iam.getSession()` / `getAccessToken()` | 身份与时效只读；令牌按需获取并由 Host 单飞刷新 |
-| **浏览器前端与插件** | `GET /api/forge-iam/session`、`POST /api/forge-iam/token` | 身份快照与独立令牌端点，禁止混部 |
-| **CLI / 脚本 / 子进程** | `heluo-forge auth whoami` / `auth token` | 标准输出最小身份或单行有效令牌 |
+| **同源 HTTP** | `GET /api/forge-iam/session`、`POST /api/forge-iam/token` | 身份快照与独立令牌端点；经 Connection 守卫，令牌端点要求请求头 |
+| **桥接 HTTP** | `POST /api/forge-iam/bridge/token` | 本机 loopback 与能力值准入；经 Host 取得令牌，不经过同源 Connection 守卫 |
+| **CLI / 脚本 / 子进程** | `heluo-forge auth whoami` / `auth token` | 标准输出最小身份或单行有效令牌；可选择 Host 桥接或只读存储 |
 
-**唯一刷新者原则**：系统中**仅允许 Host 服务持有刷新主权**。CLI 与其他消费方严格只读；当 Host 在线时通过 Loopback 桥接换票，Host 离线时仅允许直读未过期令牌，绝不在外部并发消费刷新令牌。
+四个入口共用会话记录分类与不含令牌的身份投影；身份读取和取令牌是独立操作。Host 的 `getSession()` 与同源 `/session` 投影 Host 当前内存快照，CLI `whoami` 读取持久记录，因此并发变化时快照时点和状态可以不同。同源 HTTP 与桥接 HTTP 取令牌均调用 Host 的 `getAccessToken()`；传输鉴权、输出格式及错误映射各自保留，不能据此要求四个入口的响应逐字相同。
+
+**唯一刷新者原则**：仅 Host 服务持有刷新主权。CLI 自身只读、不写入或刷新；设置 `HELUO_FORGE_IAM_URL` 时通过 Loopback 桥接请求 Host，未设置时直读本地记录。是否设置地址决定读取路径，不自动探测 Host 在线状态；外部消费方不并发使用刷新令牌。
 
 #### 5.5.2 CLI 访问规范与退出码
 
-- **Host 在线通道**：通过读取环境变量 `HELUO_FORGE_IAM_URL` 与凭据库中的 `HELUO_IAM_BRIDGE_TOKEN` 能力值，向 Host 发起换票，共享 Host 刷新结果。Host 核验 issuer 信任上下文；CLI 回读会话并核对当前令牌与 Host 响应。缺少 `sessionInstanceId` 的会话不被采用；退出 pending、结果未确认或回读不匹配时拒绝返回令牌；
+- **Host 桥接通道**：设置 `HELUO_FORGE_IAM_URL` 后，读取凭据库中的 `HELUO_IAM_BRIDGE_TOKEN` 能力值向 Host 请求令牌，共享 Host 刷新结果。Host 核验 issuer 信任上下文；CLI 回读会话并核对当前令牌与 Host 响应。缺少 `sessionInstanceId` 的会话不被采用；退出 pending、结果未确认或回读不匹配时拒绝返回令牌，Host 不可达不自动改走离线直读；
 - **能力值初始化**：Host 使用受信联合存储在同一条件提交中初始化能力引用和加密内部记录 `heluo-iam/bridge-capability`；并发冲突只允许读取已完成的结果。两者不一致、提交结果未知或凭据绑定失效时拒绝，未知提交不自动重发；
-- **离线直读通道**：在未配置 Host 地址时，通过凭据包的只读入口读取未过期令牌，过期则明确阻断并引导启动桌面端重新认证；
+- **离线直读通道**：未配置 Host 地址时，通过凭据包的只读入口读取有效令牌，不等待刷新，也不返回刷新 pending 的旧令牌；令牌临近过期或已过期时要求通过 Host 续期或重新认证；
 - **标准退出码**：`0`（成功）；`2`（未登录）；`3`（令牌过期、需要重新认证或会话无效）；`4`（存储、Host 或会话核验失败）；`64`（命令行用法错误）。
 
 #### 5.5.3 跨模块读取五大不变量
 
 1. **身份与令牌彻底分离**：`getSession()`、`/session`、`whoami` 的任何字段均严禁包含令牌原文；
 2. **唯一刷新所有权**：仅 Host 服务有权发起刷新，消除并发刷新踢出风险；
-3. **失败即时显式中断**：未登录或失效时立即返回 401 及 `IAM_NOT_SIGNED_IN`，严禁回显历史过期令牌；
-4. **全链路防泄漏**：令牌严禁进入日志、环境变量、界面视图或诊断数据；端点响应强制声明 `no-store`；
-5. **有效性快照时钟保护**：本地快照在到期前 30 秒即视为失效，拒绝陈旧快照；
-6. **路线 B 的传输面**：Host 传输层可读取当前令牌用于 `X-IAM-Token` 组装，该消费不改变上表读取面，也不新增令牌字段。令牌同时参与模型访问后，`POST /api/forge-iam/token` 的暴露面须单独评审，收紧或保留需书面决定。
+3. **失败显式中断**：无会话、会话无效及需重新认证分别使用 `IAM_NOT_SIGNED_IN`、`IAM_INVALID_GRANT`、`IAM_REAUTH_REQUIRED`；HTTP 取令牌映射为 401，CLI 分别映射为退出码 2、3、3。存储或 Host 故障按其错误映射处理，不回显历史令牌；
+4. **全链路防泄漏**：令牌严禁进入日志、环境变量、界面视图或诊断数据；令牌端点响应声明 `no-store`；
+5. **CLI 令牌时钟保护**：CLI 直读及桥接响应后的存储回读均拒绝距到期不超过 30 秒的令牌；`whoami` 的身份状态与 Host 的会话快照不使用该提前期。Host 按配置的刷新提前量判断是否刷新。
+
+路线 B 的 Host 传输层可读取当前令牌用于 `X-IAM-Token` 组装，该消费不改变上表读取面，也不新增令牌字段。令牌同时参与模型访问后，`POST /api/forge-iam/token` 的暴露面须单独评审，收紧或保留需书面决定。
 
 ### 5.6 宿主能力核验与状态订阅
 
@@ -492,7 +498,7 @@ DSH 凭据存储 (ctx.credentials)
 | 数据项 | 物理载体与存储键 | 生命周期管理规范 | 失效与异常处置策略 |
 |---|---|---|---|
 | **Refresh Token** | `GrantRecord` (`heluo-iam/session`) | 轮换后旧值作废；最长持续至登出或自然过期（7300s） | 写入失败阻断进入 `ready`；存储不可用时 Fail-Closed |
-| **Access Token** | 内存及 `heluo-iam/session` (不入网关) | 短生命周期（按 IAM TTL 7200 秒） | 过期前 60 秒静默刷新；刷新失败要求重登 |
+| **Access Token** | 内存及 `heluo-iam/session`；不镜像到网关 Key 记录 | 短生命周期（按 IAM TTL 7200 秒）；路线 B 推理请求按契约携带 | 过期前 60 秒静默刷新；刷新失败要求重登 |
 | **网关个人访问凭证** | `CredentialRef` (`ENTERPRISE_STATIC_KEY`) | 长期凭据（建议 90 天有效期） | 未配置或失效阻断模型调用；登出默认保留 |
 | **授权码与 Verifier** | 仅 Host 内存活跃 Attempt | 单次尝试有效（≤ 300 秒） | 兑换一次即作废；超时立即从内存销毁 |
 | **ID Token** | 仅 `logoutMode=rp` 落盘，其余仅内存验签 | 仅维持至会话退出 | 验签失败直接阻断登录；不向第三方泄露 |
@@ -501,13 +507,48 @@ DSH 凭据存储 (ctx.credentials)
 
 ### 6.3 值级加密与存储后端
 
-新部署使用 SQLite 保存 `ref` 与 `record` 的独立密文信封，AES-256-GCM 以随机 IV 和 16 字节认证标签保护每个值。AAD 绑定格式版本、种类、完整存储键、明文属主列与 `kid`；更换位置或篡改属主导致认证失败。以存储目录为 `D`，新数据库位于 `D/credentials.sqlite`，密钥位于同级 `D.keys/keyring.json`；发现旧 `D/keyring.json`、已有数据库缺少密钥或密钥绑定时拒绝使用，保留原物，不自动迁移、绑定或重建。密钥仅经 Base64 编码，两个目录和密钥文件在支持 POSIX 权限的平台分别为 `0700` 与 `0600`。同账户进程能读取密钥，分目录不提供应用隔离，权限位不验证扩展 ACL；Windows ACL 和目标系统行为须实机验证。
+新部署的 `ref` 与 `record` 分别保存为 SQLite 记录，值以 AES-256-GCM 加密；数据库并非全库加密。当前内置 SQLite 存储格式如下（`PRAGMA user_version = 1`）：
 
-`meta.active` 是建库后活动密钥的唯一真源。先将新密钥写入版本化 keyring，再原子切换活动 `kid`；旧密钥保留供已有密文读取。读取不重封、不创建密钥；未知密钥返回 `CRED_KEY_UNAVAILABLE`，密文认证或 AAD 不匹配统一返回 `CRED_DECRYPT_FAILED`。没有对应密钥或其备份时密文不可恢复。新存储首次写入时生成密钥，重启后继续使用；轮换由存储层显式调用，不按时间自动执行。旧值在下次写入时重封，当前没有批量重封或旧密钥安全退役功能。
+```sql
+CREATE TABLE secret (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  owner TEXT NOT NULL DEFAULT '',
+  envelope BLOB NOT NULL,
+  kid TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+```
+
+| 数据 | 格式与边界 |
+|---|---|
+| `secret.id` | 明文完整存储键：`<service>/<accountPrefix>/ref/<ref>` 或 `<service>/<accountPrefix>/record/<scope>/<id>`；默认前缀为 `heluo-forge/iam` |
+| `secret.kind`、`owner` | 明文种类 `ref` 或 `record`；`ref` 的 `owner` 为空，`record` 优先取 `payload.subject` 的有效字符串，否则取 `payload.ownerSubject` 的有效字符串，均不可用时为空。属主字段不得放置令牌等秘密 |
+| `secret.envelope`、`kid` | 每个值独立加密；`kid` 为明文密钥标识，也包含在密文信封中 |
+| `secret.revision`、`updated_at` | 明文写入代际与 ISO 8601 更新时间；首次写入为 1，更新时递增 |
+| `meta.active`、`key_auth`、`lock` | 活动密钥标识、密钥绑定校验资料和写入逻辑锁元数据；`lock` 在持锁期间或异常遗留时存在 |
+
+`envelope` 按字节顺序保存 `HFSE` 魔数（4 字节）、格式版本 `1`（1 字节）、算法标识 `1`（1 字节）、`kid` 长度（1 字节）、ASCII `kid`、随机 IV（12 字节）、认证标签（16 字节）及密文。附加认证数据（AAD）为 UTF-8 字符串 `HFSE|1|<kind>|<id>|<owner>|<kid>`；更改行的存储键、种类或属主等绑定内容会导致认证失败，完整目录的配对备份可恢复到新位置。读写经过统一加密适配层；可注册后端须通过契约与跨进程验证，不能凭自报能力获得 IAM 信任。
+
+以存储目录为 `D`，新数据库位于 `D/credentials.sqlite`，密钥位于同级 `D.keys/keyring.json`；发现旧 `D/keyring.json`、已有数据库缺少密钥或密钥绑定时拒绝使用，保留原物，不自动迁移、绑定或重建。文件保存版本化 `{ v: 1, active, keys }`，每个值是 32 字节随机密钥的 Base64 编码，密钥本身未再加密。在支持 POSIX 权限的平台，目录须为 `0700`，数据库与密钥文件须为 `0600` 且属于当前用户。明文元数据包含存储键和可能的主体标识；同账户进程能读取密钥，分目录不提供应用隔离，权限位不验证扩展 ACL；Windows ACL 和目标系统行为须实机验证。
+
+`meta.active` 是建库后活动密钥的唯一真源。先将新密钥写入版本化 keyring，再原子切换活动 `kid`；旧密钥保留供已有密文读取。读取不重封、不创建密钥；未知密钥返回 `CRED_KEY_UNAVAILABLE`，密文认证或 AAD 不匹配返回 `CRED_DECRYPT_FAILED`。`meta.key_auth` 保存按 `kid` 计算的 HMAC-SHA-256 绑定校验，新库初始化时建立；缺少密钥绑定的旧库拒绝访问，不自动建立绑定。该校验不能代替备份，也不能阻止同账户进程访问。没有对应密钥或其备份时密文不可恢复。新存储首次写入时生成 `k1`，重启后继续使用；轮换由存储层显式调用，不按时间自动执行。旧值在下次写入时重封，当前没有批量重封或旧密钥安全退役功能。
 
 首次建库通过初始化标记协调并发写入；中断后无法确认完整性时保留原物并拒绝写入，已完整初始化的数据库和活动密钥通过校验后可继续使用。POSIX 平台在活动密钥切换前同步密钥文件和所在目录，同步失败时不切换；Windows 目录持久性待实证。
 
-Linux 使用当前绝对路径形式的 `XDG_DATA_HOME`；未设置或无效时使用用户目录下的 `.local/share`，不回退旧默认目录。Host 与 CLI 使用同一 `D` 并确定相同密钥位置；不自动迁移或合并存储。离线备份须同时保存 `D` 和 `D.keys`，恢复至新 `D` 时密钥目录随之对应命名。默认目录、备份与旧存储保护边界见[凭据包说明](../../../packages/forge-credentials-keychain/README.md)。
+Linux 使用当前绝对路径形式的 `XDG_DATA_HOME`；未设置或无效时使用用户目录下的 `.local/share`，不回退旧默认目录。Host 与 CLI 使用同一 `D`、service 和 accountPrefix 并确定相同密钥位置；不自动迁移或合并存储。停止所有相关进程后，备份须同时保存整个 `D` 和 `D.keys`；恢复至不存在的目标位置时保留对应布局并核对权限，不覆盖已有存储。备份含未加密密钥，服务端过期或撤销的令牌不会因恢复而重新有效。默认目录、备份与旧存储保护边界见[凭据包说明](../../../packages/forge-credentials-keychain/README.md)。
+
+| 存储错误 | 含义与处置 |
+|---|---|
+| `CRED_KEY_UNAVAILABLE` | 已有库缺少所需 keyring 或 `kid`；保留原物，不生成替代密钥 |
+| `CRED_DECRYPT_FAILED` | 密文、绑定上下文或密钥认证失败；拒绝受影响的读取或写入 |
+| `CRED_KEY_PERMISSIONS` / `CRED_STORE_PERMISSIONS` | 支持 POSIX 权限的平台发现密钥文件或存储路径权限、属主不符；拒绝访问，不自动修复 |
+| `CRED_LEGACY_STORE` | 发现旧 `credentials.json`、`credentials.key` 或同目录 keyring；保留原物并拒绝访问 |
+| `CRED_LOCK_TIMEOUT` / `CRED_LOCK_RECOVERY_FAILED` | 锁争用超时或无法安全记录锁回收条件；拒绝本次操作 |
+
+以上为存储层错误。Host、HTTP 和 CLI 可按入口契约映射错误：例如读取时保留 `CRED_KEY_UNAVAILABLE` / `CRED_DECRYPT_FAILED`，其他存储错误通常收敛为 `IAM_CREDENTIALS_UNAVAILABLE`。错误映射不改变存储的保留与拒绝行为。
 
 只支持单机本地文件系统、同一 PID namespace 的协作进程。所有修改和轮换使用同一逻辑锁；数据库事务仅覆盖短暂的锁定、条件检查与提交，不跨异步 I/O。数据写入与逻辑锁删除在同一 `EXCLUSIVE` 事务内完成，读写争用采用有界异步等待。未提交操作已结束而释放锁受阻时，发布绑定 PID 和随机 token 的私有完成标记，由后续写事务复核后回收；否则仅在确认持锁进程不存在时回收，活动或未知操作不得接管。退出先持久化随机 `signOutOperation` pending，再撤销旧快照；只有撤销确认后才条件写入墓碑，失败、未知或崩溃均保留 pending 并拒绝旧令牌。并发新登录不会被迟到的退出删除。单记录原子门禁与网关联合原子门禁分别核验，任一未就绪均拒绝对应写入。
 

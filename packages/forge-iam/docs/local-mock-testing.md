@@ -2,6 +2,8 @@
 
 本指南描述在开发者本机启动隔离 DSH，使用模拟 IAM 验证登录、网关配置、模型对话和退出。脚本从当前 `HEAD` 打包企业插件，因此不包含未提交的修改，也不改动现有 DSH 配置或正在运行的验收环境。SQLite 新存储组合尚未按本指南在真实宿主复验。
 
+下游功能如何读取身份和令牌、保存自己的凭据，以及从隔离环境调用 CLI，见[凭据接入指南](<credential-access.md>)。
+
 模拟 IAM 只用于本机测试，凭据插件按 `storeDirectory` 指向隔离的 SQLite 值级加密存储，IAM 通过组合注入的联合存储服务执行门禁。它不能证明真实企业身份、授权或撤销，`storeDirectory` 只用于隔离目录。CLIProxyAPI 的上游调用可以是真实请求，可能产生费用。
 
 回调按与真实 IAM 一致的前缀形态运行：插件自建回环监听，端口由系统分配，只在该次登录期间存在；IAM 管理台对 `http://127.0.0.1:` 前缀放行任意端口，本指南的 mock 走同一条路径。
@@ -21,7 +23,7 @@
 bash scripts/probe/run-iam-local-uat.sh
 ```
 
-非交互自检（验证打包、存储门禁与宿主启动仍匹配当前 `HEAD`）：
+非交互自检（检查打包与宿主启动，不覆盖登录或凭据写入门禁）：
 
 ```sh
 IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
@@ -29,12 +31,12 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 
 脚本先检查 `node`、`npm`、`python3`、`git`、`tar` 与 `dsh`；Node 与仓库 `.node-version` 不一致时给出警告。`SMOKE OK` 表示入口 `/health` 返回 200，脚本随即停掉宿主与模拟 IAM。
 
-终端会打印两行：测试入口，以及本次的回调端口形态（系统分配或固定值）。在本机浏览器打开入口；宿主尚未就绪时稍等并刷新。入口只监听 `127.0.0.1`，跳转地址中的一次性访问参数属于本地会话信息，不要分享。另开终端可检查 `curl -i http://127.0.0.1:48389/health`；若自定义了入口端口，替换其中的 `48389`。`200` 表示宿主已给出访问入口。
+构建和安装完成后，脚本打印隔离目录；宿主启动后会打印测试入口和本次的回调端口形态（系统分配或固定值）。在本机浏览器打开入口；宿主尚未就绪时稍等并刷新。入口只监听 `127.0.0.1`，跳转地址中的一次性访问参数属于本地会话信息，不要分享。另开终端可检查 `curl -i http://127.0.0.1:48389/health`；若自定义了入口端口，替换其中的 `48389`。`200` 表示宿主已给出访问入口。
 
 ## 手动验证
 
 1. 首次进入后选择开始，用模拟企业账号登录；浏览器完成回调后应进入凭证步骤。回调端口只在该次尝试期间开着，通常一闪而过，肉眼难以确认——需要确定性证据时用下方的自动用例，不必反复刷新。
-2. 检查网关地址，输入自己的 CLIProxyAPI Key 并保存。Key 仅输入本机页面，不要截图或粘贴给他人；测试凭证保存在内存中，停止环境后丢失。也可选择稍后配置，再从“设置 → 企业账号”填写。
+2. 检查网关地址，输入自己的 CLIProxyAPI Key 并保存。Key 仅输入本机页面，不要截图或粘贴给他人；测试凭证写入隔离目录中的 SQLite 存储，停止进程不会自动删除。也可选择稍后配置，再从“设置 → 企业账号”填写。
 3. 等待或手动刷新模型列表，确认显示 CLIProxyAPI 提供的模型；选择模型发送一条不含敏感信息的测试消息，确认收到回复。模型是否可用取决于本机网关和上游服务；如果失败，先在本机网关侧排查认证、模型和上游状态，不记录 Key。
 4. 在“设置 → 企业账号”退出，确认账号显示未登录、企业模型不再可选，尝试访问模型时提示重新登录。重新登录可继续验证；凭证是否仍可用以页面显示为准。
 5. 如需覆盖令牌刷新，在登录状态下保持会话并等待模拟 access token 接近 120 秒有效期后再操作，观察会话仍可用；要证明刷新请求本身发生，使用下方自动探针，单凭页面状态不能证明。
@@ -64,23 +66,21 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 端口、client_id 与主体可用 `MOCK_IAM_PORT`、`MOCK_GATEWAY_PORT`、`MOCK_CLIENT_ID`、
 `MOCK_SUBJECT` 覆盖；覆盖后要重新打包，交付包里的 issuer 与回调端口必须与模拟器一致。
 
-它仍不是企业证据：`http` 明文、固定回环地址、令牌只存在进程内，模拟 IdP 不校验密码、
-授权策略或配额。真实验收需要企业 IAM 与网关，并按本指南的读取路径矩阵取证。
+它仍不是企业证据：`http` 明文、固定回环地址，模拟 IdP 的令牌状态只保存在其进程内，
+客户端仍可将令牌写入本地凭据存储。模拟 IdP 不校验密码、授权策略或配额。真实验收需要企业 IAM 与网关，并按本指南的读取路径矩阵取证。
 
-## 读取路径矩阵（2026-11-06）
+## 读取路径矩阵
 
-存储读取不是单条路径，也不是单平台成立就算完成。当前覆盖：
+下表描述合成 SQLite 会话在当前测试主机上的四类令牌读取入口：
 
-| 读取路径 | 入口 | 覆盖方式 |
+| 读取路径 | 入口 | 行为与门禁 |
 |---|---|---|
-| Provider 读取 | `createKeychainProvider(...).readRecord()` | 6 个 `platform-arch` 全覆盖（Windows/Linux 注入原生模块，macOS 临时加密目录） |
-| 身份投影 | `sessionFromRecord()`（`auth whoami` 的数据源） | 同上 |
-| 访问令牌投影 | `accessTokenOf()`（`auth token` 的数据源） | 同上 |
-| 独立读取器重开 | 新建 provider 读取同一 store | 同上 |
-| Host 服务读取 | `ctx.iam.getSession()` / `getAccessToken()` | 当前测试主机的 SQLite 与合成会话 |
-| HTTP 身份 | `GET /api/forge-iam/session` | 当前测试主机，经路由处理 |
-| HTTP 令牌 | `POST /api/forge-iam/token` | 当前测试主机，含请求头门禁 |
-| CLI 端到端 | `heluo-forge auth whoami / token` | 合成 SQLite 存储的独立进程读取 |
+| 离线 CLI | `heluo-forge auth token` | 独立进程只读本地记录，不刷新，也不校验 Host 的发行者、客户端或 resource 配置 |
+| Host 服务 | `ctx.iam.getAccessToken()` | 核验 Host 上下文，可在受信存储上按需刷新 |
+| 同源 HTTP | `POST /api/forge-iam/token` | 经 Connection 鉴权与请求头检查后调用 Host |
+| 本机桥接 | `POST /api/forge-iam/bridge/token` | 校验回环来源与能力值后调用 Host；配置 `HELUO_FORGE_IAM_URL` 的 CLI 还会回读存储核验会话 |
+
+身份读取使用 `heluo-forge auth whoami`、`ctx.iam.getSession()` 或 `GET /api/forge-iam/session`，不返回令牌。CLI 读取本地记录，Host 与 HTTP 返回 Host 会话视图，二者可能暂时不同。
 
 矩阵用例：`node --test packages/forge-iam/test/read-paths-matrix.test.mjs`。每次运行只证明当前主机；各平台 CI 结果、目标机和 Electron 宿主须分别记录，不能用模拟的平台标识代替实机证据。
 
@@ -110,8 +110,8 @@ node scripts/probe/run-iam-managed-models-probe.mjs
 - **回调页返回 403 或 404**：Host 或路径与监听地址不一致，通常是手工改写地址或代理改写 `Host`；用脚本打印的入口重新发起，不要手工拼接回调 URL。
 - **未登录或尚未保存凭证时无法获取模型**：先完成模拟登录并保存网关凭证，这是预期门禁。只运行 `packages/forge-iam/scripts/mock-oidc.mjs` 不会提供本指南的测试存储，不能单独解除正式组合的门禁。
 - **无法获取列表或对话失败**：确认网关地址以 `/v1` 结尾、服务正在监听、Key 和上游模型可用；未授权的 `/v1/models` 返回 401 只能证明服务可到达，不能证明 Key 正确。
-- **重启后需要重新填写**：本指南使用短暂的内存存储；保留临时目录不会保留测试凭证。
+- **重新运行后需要重新填写**：脚本每次创建新的隔离目录，不自动复用以前的存储。停止进程后原目录仍可能保留凭证和未加密密钥，须按敏感数据保护。
 
 如需复现未提交的源码修改，先通过项目正常流程形成可供测试的提交或单独准备可审阅快照；本指南不会擅自打包其他会话的未提交改动。
 
-**入口**：本指南的常驻页是 [issue #147](https://github.com/hrygo/heluo-forge/issues/147)（置顶、不关闭）的 B 段。与本指南不符之处请在该页留言，附命令、平台与版本。
+**入口**：[issue #147](https://github.com/hrygo/heluo-forge/issues/147) 提供凭据接入与本地 UAT 的常驻导航。与本指南不符之处请在该页留言，附命令、平台与版本。

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // `heluo-forge auth …`: read-only identity and token access for scripts.
 //
-// This entry point never refreshes and never writes. The IAM service owns the
-// refresh token; under the confirmed rotation rule a second refresher would
-// invalidate the running session, so the CLI only reports what the store holds
-// and tells the user to sign in again when the access token has expired.
+// The CLI opens the credential store read-only and never refreshes tokens
+// itself. Without a Host URL it reads the current, unexpired access token.
+// With a Host URL it requests a token over the loopback bridge; the Host may
+// refresh the session, and the CLI checks the returned token against the store.
 
 import {
   accessTokenOf, EXIT, isBridgeReadableSession, isSameBridgeSession, sessionFromRecord, SESSION_RECORD_KEY,
@@ -14,14 +14,14 @@ import { ERROR_STATUS } from '../src/error-contract.mjs';
 
 const USAGE = `用法：
   heluo-forge auth whoami [--json]   输出当前身份与登录状态
-  heluo-forge auth token             输出未过期的访问令牌（不刷新）
+  heluo-forge auth token             输出当前可用的访问令牌（CLI 不直接刷新）
 
 环境变量：
   HELUO_FORGE_IAM_URL                 运行中的 DSH 地址（如 http://127.0.0.1:49196）；设置后
-                                      auth token 经 loopback 桥向 Host 取，过期也能拿到新票
-  HELUO_FORGE_STORE_DIRECTORY        凭据存储目录（默认与插件一致）
-  HELUO_FORGE_KEYCHAIN_SERVICE        凭据 service，默认 heluo-forge
-  HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX 凭据 account 前缀，默认 iam
+                                      auth token 经回环桥向 Host 取票，由 Host 按需刷新
+  HELUO_FORGE_STORE_DIRECTORY         凭据存储目录（默认与插件一致）
+  HELUO_FORGE_KEYCHAIN_SERVICE        凭据命名空间的 service，默认 heluo-forge
+  HELUO_FORGE_KEYCHAIN_ACCOUNT_PREFIX 凭据命名空间的 account 前缀，默认 iam
 `;
 
 function fail(code, message, json) {
@@ -31,7 +31,7 @@ function fail(code, message, json) {
 
 function credentialError(error) {
   if (error?.code === 'CRED_STORE_PATH_CONFLICT') {
-    return { code: 'CRED_STORE_PATH_CONFLICT', message: '检测到多个凭据存储目录，请核对并为 Host 和 CLI 明确选择同一目录。' };
+    return { code: 'CRED_STORE_PATH_CONFLICT', message: '凭据存储目录不可用或存在冲突，请核对 Host 和 CLI 的存储目录设置。' };
   }
   const code = error?.code === 'CRED_KEY_UNAVAILABLE' || error?.code === 'CRED_DECRYPT_FAILED'
     ? error.code : 'IAM_CREDENTIALS_UNAVAILABLE';
