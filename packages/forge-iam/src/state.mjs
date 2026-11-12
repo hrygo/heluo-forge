@@ -109,8 +109,12 @@ export function credentialStoreUnavailable(state, error) {
 /**
  * Build the non-secret snapshot consumed by the Host service and Client UI.
  *
+ * `identity` 是 UserInfo 的只读显示投影（issue #160）：只含 workNo/name
+ * 两个定稿内部键，令牌、sub、authTime 等原始响应内容一律不进视图。
+ * 审计主体仍只读 principal（issuer/subject），identity 不参与审计。
+ *
  * @param {string} state
- * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, accessExpiresAt?: string | null, renewal?: string, refreshExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
+ * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, identity?: object | null, accessExpiresAt?: string | null, renewal?: string, refreshExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
  */
 export function createView(state, details = {}) {
   const storageUnavailable = credentialStoreUnavailable(state, details.error);
@@ -128,6 +132,7 @@ export function createView(state, details = {}) {
     error: details.error ?? null,
     exclusive: details.exclusive ?? 'ok',
     principal: details.principal ?? null,
+    identity: details.identity ?? null,
     accessExpiresAt: details.accessExpiresAt ?? null,
     // Whether this session can still renew itself without a fresh sign-in.
     // `none` means there is no stored grant to renew.

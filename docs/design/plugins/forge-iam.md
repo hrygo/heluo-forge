@@ -393,7 +393,7 @@ Host 在读取机密模式的 Discovery 前检查其协议，并在换票、刷�
 #### 5.2.3 最小只读订阅接缝（source/mock 已实现）
 
 系统定义了轻量级只读订阅接缝（`iam-view-observer` 与 `iam-view-consumer`）：
-- **数据白名单**：仅对外投射 12 项非敏感字段，禁止包含令牌、Verifier、密钥或网关 Key 原文；
+- **数据白名单**：仅对外投射 13 项非敏感字段（含 `identity` 只读显示投影），禁止包含令牌、Verifier、密钥或网关 Key 原文；
 - **唯一刷新主权**：订阅监听仅观察快照变更，后台定时同步严格收敛于 Host 单飞任务，禁止客户端每帧强制刷新；
 - **代际隔离**：网络中断或订阅取消时即时清理异步等待队列，废弃过时响应。
 
@@ -412,8 +412,16 @@ export type IamState =
 export interface IamPrincipal {
   readonly issuer: string;
   readonly subject: string;
-  readonly displayName?: string;
   readonly groups?: readonly string[];
+}
+
+/**
+ * UserInfo 只读显示投影（issue #160）。仅此两个字段；
+ * 令牌、sub、authTime 等原始响应内容严禁进入任何读取面。
+ */
+export interface IamIdentity {
+  readonly workNo?: string;
+  readonly name?: string;
 }
 
 export interface GatewayCredentialView {
@@ -430,6 +438,7 @@ export interface GatewayCredentialView {
 export interface IamView {
   readonly state: IamState;
   readonly principal?: IamPrincipal;
+  readonly identity?: IamIdentity | null;
   readonly accessExpiresAt?: string;
   /** 会话是否仍能自行续期；`unavailable` 表示滑动刷新窗口已过，必须重新登录 */
   readonly renewal?: 'available' | 'unavailable' | 'none';
@@ -488,6 +497,22 @@ export interface IamView {
 5. **CLI 令牌时钟保护**：CLI 直读及桥接响应后的存储回读均拒绝距到期不超过 30 秒的令牌；`whoami` 的身份状态与 Host 的会话快照不使用该提前期。Host 按配置的刷新提前量判断是否刷新。
 
 路线 B 的 Host 传输层可读取当前令牌用于 `X-IAM-Token` 组装，该消费不改变上表读取面，也不新增令牌字段。令牌同时参与模型访问后，`POST /api/forge-iam/token` 的暴露面须单独评审，收紧或保留需书面决定。
+
+#### 5.5.4 UserInfo 身份投影契约
+
+登录成功后经 UserInfo 端点取回一次用户属性，作为只读显示投影随会话发布：
+
+| 内部字段 | 含义 | 消费边界 |
+|---|---|---|
+| `workNo` | 工号 | 账户页姓名缺失时的回退显示 |
+| `name` | 姓名 | 账户页优先显示 |
+
+- **映射由配置给出，内部键固定**：内部键恒为 `workNo`/`name`，映射到哪个企业 IAM 声明由插件配置 `profileFields`（与私版 `HELUO_IAM_PROFILE_FIELDS` 同一映射）给出，取值须为合法的 claim 名 token。**未配置则不取 UserInfo、不投影**，不猜测任何字段名，也不维护猜测性回退链。
+- **口径待 IAM 确认**：同一版本答复并存 `work_no`/`pinyin`（2026-10-28 最终确认函）与 `employeeNumber`/`name`/`givenName`（2026-10-26 内部校验回函）两种写法，已并入 [IAM｜六项待答复与整改跟踪 #433](https://github.com/hrygo/heluo-forge/issues/433) 第 3 项跟踪。联调确认前**任何字段名都不写入契约**，本单只交付映射机制与两套候选口径的 fixture。
+- **严格投影**：只取命中映射的字符串值，去空白、限长；`sub`、`authTime` 等其余声明整体丢弃。
+- **失败降级**：端点不可达、401/5xx、超时（5 秒上限）、JSON 非法或字段缺失均只丢弃投影，不影响登录就绪；投影随 grant 失效（登出、会话失效）即时清空，跨令牌刷新保持不变。
+- **令牌传递**：`userInfoTokenTransport` 配置 `header`（默认，标准 OIDC `Authorization: Bearer`）或 `query`（企业 IAM profile 端点实测要求 `?access_token=`）；令牌经 URL 传递时严禁进入日志与诊断数据。
+- **PII 边界**：投影仅进入视图 `identity` 与 `GET /api/forge-iam/session` 的 `identity` 字段；审计主体保持 `iss`/`sub`（或其哈希），姓名与工号不进入审计、模型执行请求与日志。
 
 ### 5.6 宿主能力核验与状态订阅
 

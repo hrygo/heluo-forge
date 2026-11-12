@@ -51,7 +51,7 @@ export function createIamService(rawConfig, options = {}) {
   // Wall-clock jumps (sleep/wake) are diagnosed against this clock.
   const monotonic = options.monotonic ?? (() => performance.now());
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  const logRenewal = typeof options.logRenewal === 'function' ? (event, fields) => {
+const logRenewal = typeof options.logRenewal === 'function' ? (event, fields) => {
     try { options.logRenewal(event, fields); } catch { /* diagnostics cannot change the session */ }
   } : undefined;
   // Empty by default: IAM has not confirmed field names, so no name is shown.
@@ -82,6 +82,7 @@ export function createIamService(rawConfig, options = {}) {
     logRenewal,
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
+    getIdentityProfile: () => service.getIdentityProfile(),
     scheduleReconcile: () => selection.schedule(),
     scheduleRenewal: () => token.scheduleRenewal(),
     clearPendingObservation: () => { observedPending = null; },
@@ -340,7 +341,7 @@ export function createIamService(rawConfig, options = {}) {
      */
     getSession() {
       ctx.recheckExclusive();
-      return sessionView(ctx.lastGrant, ctx.state);
+      return sessionView(ctx.lastGrant, ctx.state, service.getIdentityProfile() ?? undefined);
     },
 
     hydrate: reconcile.hydrate,
