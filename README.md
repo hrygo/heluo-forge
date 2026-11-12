@@ -124,15 +124,13 @@ OA 方向则关注员工在授权范围内查看和整理办公信息。上述�
 
 ## 了解更多
 
-| 我想了解 | 从这里开始 |
-|---|---|
-| 产品当前范围和企业研发场景 | [需求与场景基线](docs/requirements/requirements-baseline.md) |
-| 架构、企业接入与安全边界 | [总体架构](docs/architecture/platform-architecture.md) · [安全说明](SECURITY.md) |
-| 已实现什么、验证到哪里 | [实现与验证入口](docs/design/README.md#22-实现与验证入口) |
-| 企业能力门户与注册中心 | [插件市场设计](docs/design/plugins/forge-market.md) · [企业 Skill 跟踪](https://github.com/hrygo/heluo-forge/issues/97) · [Nacos MCP Registry](https://nacos.io/en/docs/latest/manual/user/ai/mcp-registry/) · [Nacos Skill Registry](https://nacos.io/en/docs/v3.2/manual/user/ai/skill-registry/) |
-| 员工个人助理的产品方向 | [邮件](https://github.com/hrygo/heluo-forge/issues/155) · [个人记忆](https://github.com/hrygo/heluo-forge/issues/264) · [企业聊天](docs/requirements/enterprise-collaboration-chat-proposal.md) · [IM 远程交办](https://github.com/hrygo/heluo-forge/issues/240) · [OA](https://github.com/hrygo/heluo-forge/issues/241) · [专家智能体](docs/requirements/delegra-experts-prd.md) |
-| 了解交付与部署 | [部署资产说明](deploy/README.md) · [文档总览](docs/README.md) |
-| 反馈问题或参与贡献 | [项目议题](https://github.com/hrygo/heluo-forge/issues) · [贡献指南](CONTRIBUTING.md) · [安全报告](SECURITY.md) |
-| 河洛的视觉形象 | [河洛苍螭品牌全景](docs/assets/branding/cyber-long/index.html) |
+- **产品当前范围和企业研发场景**：[需求与场景基线](docs/requirements/requirements-baseline.md)
+- **架构、企业接入与安全边界**：[总体架构](docs/architecture/platform-architecture.md) · [安全说明](SECURITY.md)
+- **已实现什么、验证到哪里**：[实现与验证入口](docs/design/README.md#22-实现与验证入口)
+- **企业能力门户与注册中心**：[插件市场设计](docs/design/plugins/forge-market.md) · [企业 Skill 跟踪](https://github.com/hrygo/heluo-forge/issues/97) · [Nacos MCP Registry](https://nacos.io/en/docs/latest/manual/user/ai/mcp-registry/) · [Nacos Skill Registry](https://nacos.io/en/docs/v3.2/manual/user/ai/skill-registry/)
+- **员工个人助理的产品方向**：[邮件](https://github.com/hrygo/heluo-forge/issues/155) · [个人记忆](https://github.com/hrygo/heluo-forge/issues/264) · [企业聊天](docs/requirements/enterprise-collaboration-chat-proposal.md) · [IM 远程交办](https://github.com/hrygo/heluo-forge/issues/240) · [OA](https://github.com/hrygo/heluo-forge/issues/241) · [专家智能体](docs/requirements/delegra-experts-prd.md)
+- **了解交付与部署**：[部署资产说明](deploy/README.md) · [文档总览](docs/README.md)
+- **反馈问题或参与贡献**：[项目议题](https://github.com/hrygo/heluo-forge/issues) · [贡献指南](CONTRIBUTING.md) · [安全报告](SECURITY.md)
+- **河洛的视觉形象**：[河洛苍螭品牌全景](docs/assets/branding/cyber-long/index.html)
 
 本仓库存放河洛的方案与扩展工程，基于 DSH 构建，不修改 DSH 本体。仓库使用 `UNLICENSED`，未授予开源许可；根工程与扩展包的 `private: true` 用于防止发布到 npm，具体使用和交付以适用许可及企业要求为准。
