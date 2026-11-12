@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { initialKeyBinding } from './key-auth.mjs';
-import { createKeyPaths } from './key-paths.mjs';
+import { assertOutsideRepository, createKeyPaths } from './key-paths.mjs';
 
 const error = (code, message) => Object.assign(new Error(message), { code });
 
@@ -25,8 +25,13 @@ function alive(pid) {
 }
 
 /** SQLite stores only opaque envelopes; lock and read contention waits are async. */
-export function createSqliteBackend({ directory, readOnly, keyProvider, lockTimeoutMs, keyPaths = createKeyPaths(directory) }) {
-  directory = keyPaths.directory;
+export function createSqliteBackend({ directory, readOnly, keyProvider, lockTimeoutMs, keyPaths }) {
+  // Existing internal file-provider callers predate the existence port. Keep
+  // their original path checks and initialization without applying them to a
+  // provider that implements the port.
+  const legacy = !('exists' in Object(keyProvider));
+  directory = resolve(legacy && keyPaths ? keyPaths.directory : directory);
+  const legacyPaths = legacy ? (keyPaths ?? createKeyPaths(directory)) : undefined;
   const path = join(directory, 'credentials.sqlite');
   let db;
   let closed = false;
@@ -41,6 +46,22 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
   const busy = (cause) => cause?.errcode === 5 || cause?.errcode === 6;
   const meta = (name) => db.prepare('SELECT value FROM meta WHERE key = ?').get(name)?.value;
   const putMeta = (name, value) => db.prepare('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(name, value);
+  function keyExists() {
+    if (legacyPaths) {
+      const path = legacyPaths.inspect();
+      if (path === undefined) return false;
+      if (typeof path === 'string' && path.length > 0) return true;
+      throw error('CRED_KEY_INVALID', 'invalid credential key material state');
+    }
+    if (typeof keyProvider.exists !== 'function') throw error('CRED_KEY_INVALID', 'invalid credential key material state');
+    const present = keyProvider.exists();
+    if (typeof present !== 'boolean') {
+      // An accidental async implementation is invalid, including on rejection.
+      if (present instanceof Promise) void present.catch(() => {});
+      throw error('CRED_KEY_INVALID', 'invalid credential key material state');
+    }
+    return present;
+  }
   function transaction(fn, write = false) {
     db.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
     try { const result = fn(); db.exec('COMMIT'); return result; }
@@ -50,16 +71,17 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     // Admitted operations may still need to open or retry while close drains them.
     if (closed) throw error('CRED_STORE_UNAVAILABLE', 'credential store is closed');
     if (pendingInitialization) throw error('CRED_KEY_UNAVAILABLE', 'credential store initialization is incomplete');
-    const keyPath = keyPaths.inspect();
+    assertOutsideRepository(directory);
+    const keyPresent = keyExists();
     if (db) {
-      if (!keyPath) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
+      if (!keyPresent) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
       return true;
     }
     for (const legacy of ['credentials.json', 'credentials.key']) {
       if (existsSync(join(directory, legacy))) throw error('CRED_LEGACY_STORE', 'legacy credential store exists');
     }
     if (!existsSync(directory)) {
-      if (keyPath) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
+      if (keyPresent) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
       if (readOnly) throw error('CRED_STORE_UNAVAILABLE', 'credential store is unavailable');
       if (!create) return false;
       mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -68,14 +90,14 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     let created = false;
     if (!existsSync(path)) {
       if (readOnly) throw error('CRED_STORE_UNAVAILABLE', 'credential store is unavailable');
-      if (keyPath) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
+      if (keyPresent) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
       if (!create) return false;
       const fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
       closeSync(fd);
       created = true;
     }
     safePath(path, 'file', 0o600);
-    if (!created && !keyPath) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
+    if (!created && !keyPresent) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
     try {
       db = new DatabaseSync(path, { readOnly });
       db.exec('PRAGMA busy_timeout = 0');
@@ -83,8 +105,12 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         db.exec("CREATE TABLE secret (id TEXT PRIMARY KEY, kind TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', envelope BLOB NOT NULL, kid TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); PRAGMA user_version = 1;");
         const token = randomBytes(16).toString('hex');
         transaction(() => putMeta('lock', JSON.stringify({ pid: process.pid, token: fingerprint(token) })), true);
-        keyPaths.prepareNew();
-        keyProvider.initialize('k1');
+        if (legacyPaths) legacyPaths.prepareNew();
+        const initialized = keyProvider.initialize('k1');
+        if (initialized && typeof initialized.then === 'function') {
+          Promise.resolve(initialized).catch(() => {});
+          throw error('CRED_KEY_INVALID', 'credential key initialization must be synchronous');
+        }
         pendingInitialization = token;
       } else {
         if (db.prepare('PRAGMA user_version').get().user_version !== 1) throw error('CRED_STORE_UNAVAILABLE', 'unknown credential store format');
@@ -160,6 +186,8 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     }
     try {
       assertToken(token);
+      // An async mutator or a busy database can outlive key material access.
+      if (!keyExists()) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
       const result = action();
       assertToken(token);
       db.prepare("DELETE FROM meta WHERE key='lock'").run();
@@ -182,9 +210,10 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         await sleep(10);
       }
     }
-    if (db) return;
-    const keyPath = keyPaths.inspect();
-    if (!existsSync(path) && keyPath) {
+    if (db) { open(); return; }
+    assertOutsideRepository(directory);
+    const keyPresent = keyExists();
+    if (!existsSync(path) && keyPresent) {
       throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
     }
     mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -199,7 +228,7 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
         if (e.code !== 'EEXIST') throw e;
         // The creator may have finished the durable initialization and died
         // before removing its marker. Never bypass for partial initialization.
-        if (existsSync(path) && keyPaths.inspect()) {
+        if (existsSync(path) && keyExists()) {
           try { if (open(false)) return; } catch (cause) {
             // A creator may not have committed its active key yet. Only that
             // incomplete state and SQLite contention are temporary; a corrupt
@@ -291,7 +320,10 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
     let actionError;
     let failed = false;
     activeTokens.add(token);
-    try { result = await fn(token); }
+    try {
+      if (!keyExists()) throw error('CRED_KEY_UNAVAILABLE', 'credential keyring is unavailable');
+      result = await fn(token);
+    }
     catch (cause) { failed = true; actionError = cause; }
     finally { activeTokens.delete(token); }
     if (!committed.delete(token)) {

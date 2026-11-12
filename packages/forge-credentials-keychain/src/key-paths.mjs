@@ -32,7 +32,7 @@ function within(parent, child) {
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 }
 
-function outsideRepository(path) {
+export function assertOutsideRepository(path) {
   let current = path;
   while (!stat(current)) {
     const parent = dirname(current);
@@ -58,8 +58,8 @@ export function createKeyPaths(input) {
   }
 
   function inspect() {
-    outsideRepository(directory);
-    outsideRepository(keyDirectory);
+    assertOutsideRepository(directory);
+    assertOutsideRepository(keyDirectory);
     const data = directoryInfo(directory);
     const keys = directoryInfo(keyDirectory);
     if (data && keys) {

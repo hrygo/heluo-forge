@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-017A |
 | 文档名称 | 凭据存储整洁架构执行细案 |
-| 版本 | V0.1.3 |
+| 版本 | V0.1.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -45,7 +45,7 @@
 ## 实施接口
 
 - `createAesGcmCipher(keyProvider)` 返回 `seal({kind,id,owner,kid,plaintext})` 和 `open({kind,id,owner,kid,envelope})`；输入及输出明文均为非空字节，信封为字节。`kind` 为 `ref` 或 `record`，`id` 是完整存储键；AAD 为 `HFSE|1|kind|id|owner|kid`。`kid` 缺失抛 `CRED_KEY_UNAVAILABLE`，认证、编码、截断或上下文错误抛 `CRED_DECRYPT_FAILED`。
-- `createFileKeyProvider({path})` 返回同步 `initialize(kid)`、`active()`、`byId(kid)`、`add(kid)` 和 `activate(kid)`。`active()` 返回 keyring 标记对应的 `{kid,key}`，`byId` 返回 32 字节密钥或 `undefined`。读取不创建文件；创建、添加与标记切换由组合方协调，添加已有 `kid` 必须拒绝。运行期使用数据库的 `meta.active` 选择活动密钥。
+- 密钥来源端口同步提供 `exists()`、`initialize(kid)`、`active()`、`byId(kid)`、`add(kid)` 和 `activate(kid)`。`exists()` 返回布尔值，未知状态或访问失败不得按不存在处理；`active()` 返回 keyring 标记对应的 `{kid,key}`，`byId` 返回 32 字节密钥或 `undefined`。文件实现由 `createStoreKeyProvider` 封装路径和 `createFileKeyProvider`；读取不创建文件，创建、添加与标记切换由组合方协调，添加已有 `kid` 必须拒绝。运行期使用数据库的 `meta.active` 选择活动密钥。
 - 后端组合保持现有 credentials seam：`get/set/delete/list/listEntries`、支持异步 mutator 的单键 `transaction`、两键 `snapshot/compareAndSwap`。后两种写操作与普通写入共享锁域；比较、一次同步 guard、两键提交及锁 token 校验必须在同一短数据库事务中完成。
 
 ## 失败模式审阅
@@ -60,13 +60,15 @@
 
 | 完成标准 | 验证入口与边界 |
 |---|---|
-| 共同会话判定与依赖方向 | Host 与 CLI 复用 `session-read.mjs`；[provider 隔离测试](../../packages/forge-credentials-keychain/test/provider-independence.test.mjs)验证不依赖具体测试后端。SQLite 初始化与密钥路径仍有耦合，其他 `KeyProvider` 的替换尚未取证 |
+| 共同会话判定与依赖方向 | Host 与 CLI 复用 `session-read.mjs`；[provider 隔离测试](../../packages/forge-credentials-keychain/test/provider-independence.test.mjs)验证不依赖具体测试后端。[密钥来源测试](../../packages/forge-credentials-keychain/test/sqlite-key-provider.test.mjs)以进程内替身验证 SQLite 读写、轮换及失败关闭；替身不证明其他来源的持久化或跨进程能力 |
 | 值往返、AAD 错位、篡改、截断、未知 `kid`、密钥权限拒绝 | [信封测试](../../packages/forge-credentials-keychain/test/cipher.test.mjs)、[密钥测试](../../packages/forge-credentials-keychain/test/keyring.test.mjs)；POSIX 权限判据不代替 Windows ACL 取证 |
 | 库、WAL、SHM 不含秘密明文 | [WAL 扫描](../../packages/forge-credentials-keychain/test/sqlite-wal-scan.test.mjs)实际启用 WAL，断言三个文件存在并扫描两种 32 字节合成秘密；属主等元数据按存储边界保留明文 |
 | 新后端通过登记接入 | [登记测试](../../packages/forge-credentials-keychain/test/backend-registry.test.mjs)验证 Host 和 reader 选择同一登记项、既有信封格式及信任拒绝；测试替身不证明新后端的跨进程能力 |
 | 四入口统一 | [四入口矩阵](../../packages/forge-iam/test/read-paths-matrix.test.mjs)对照共同会话、令牌与错误；保留输出封装、鉴权、时效和 Host 配置上下文的差异 |
 | 密钥轮换 | [SQLite 存储测试](../../packages/forge-credentials-keychain/test/sqlite-store.test.mjs)验证旧密钥可读、缺失时报 `CRED_KEY_UNAVAILABLE`；[密钥绑定测试](../../packages/forge-credentials-keychain/test/key-auth-lifecycle.test.mjs)验证历史密钥缺失或错配时写入拒绝 |
 | 三平台与 Electron 宿主 | 以下表记录已完成和仍缺失的证据；目标机与完整桌面宿主未完成前保持跟踪 |
+
+写事务不跨 `await`。使用短合成凭据、无竞争并重复 8 次的本机测量中，已绑定库写入的提交调用中位数约 1 ms；模拟旧库未绑定状态时，10、100、1000 条记录的首次绑定提交调用分别约为 3、21、175 ms。首次绑定须认证全部既有密文，耗时随记录数增长；测量不构成大库或争用场景的延迟保证。
 
 ## 平台与宿主取证记录
 

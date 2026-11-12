@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-017 |
 | 文档名称 | 凭据存储整洁架构实施方案 |
-| 版本 | V0.2.1 |
+| 版本 | V0.2.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -98,7 +98,7 @@ CREATE TABLE secret (
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
-端口只保留签名，实现由组合根注入：`Cipher.seal/open`、`KeyProvider.active/byId`、`Backend.get/set/delete/list`、可选 `Backend.transaction`。
+端口只保留签名，实现由组合根注入：`Cipher.seal/open`、`KeyProvider.exists/initialize/active/byId/add/activate`、`Backend.get/set/delete/list`、可选 `Backend.transaction`。SQLite 使用同步密钥来源；`exists` 只在能确认密钥材料不存在时返回 `false`，无法确认或访问失败时拒绝操作。现有文件来源仍是默认实现，其他来源须分别验证持久化和跨进程语义。
 
 ## 5. 标准 API 面
 

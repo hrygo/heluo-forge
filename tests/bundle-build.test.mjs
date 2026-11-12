@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -151,6 +151,52 @@ test('build CLI emits the final artifact and refuses replacing it', (t) => {
   assert.ok(existsSync(result.tarball));
   assert.ok(!Object.hasOwn(result.members, '@heluo/forge-sdd'));
   assert.throws(() => execFileSync(process.execPath, [builder, '--root', root, join(root, 'cli-release')], { stdio: 'pipe' }), (error) => error.status === 1 && /refusing to replace/u.test(error.stderr));
+});
+
+for (const flag of ['--help', '-h']) test(`build CLI ${flag} prints help without creating artifacts`, (t) => {
+  const root = fixture(t);
+  const builder = fileURLToPath(new URL('../scripts/build-enterprise-bundle.mjs', import.meta.url));
+  const cwd = join(root, 'cwd');
+  const scratch = join(root, 'scratch');
+  mkdirSync(cwd);
+  mkdirSync(scratch);
+  const cases = [
+    ['--root', root, flag],
+    [flag],
+    ['--root', root, flag, 'release'],
+    ['release', '--root', root, flag],
+  ];
+  for (const args of cases) {
+    const result = spawnSync(process.execPath, [builder, ...args], {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, TMPDIR: scratch, npm_config_cache: join(scratch, 'npm-cache') },
+    });
+    assert.equal(result.status, 0, `${args.join(' ')}: ${result.stderr}`);
+    assert.deepEqual(readdirSync(cwd), [], `${args.join(' ')} must not create output`);
+    assert.deepEqual(readdirSync(scratch), [], `${args.join(' ')} must not create temporary artifacts`);
+    assert.match(result.stdout, /Usage:.*build-enterprise-bundle\.mjs.*\[--root <dir>\].*\[destination\]/u);
+    assert.match(result.stdout, /--help/u);
+    assert.match(result.stdout, /-h/u);
+    assert.equal(result.stderr, '');
+  }
+});
+
+test('build CLI preserves option-like root values and unknown destination arguments', (t) => {
+  const root = fixture(t);
+  const builder = fileURLToPath(new URL('../scripts/build-enterprise-bundle.mjs', import.meta.url));
+  const cwd = join(root, 'cwd');
+  mkdirSync(cwd);
+  const missingRoot = spawnSync(process.execPath, [builder, '--root', '-h', 'release'], { cwd, encoding: 'utf8' });
+  assert.equal(missingRoot.status, 1);
+  assert.match(missingRoot.stderr, /ENOENT/u);
+  assert.equal(missingRoot.stdout, '');
+  assert.deepEqual(readdirSync(cwd), []);
+
+  const output = execFileSync(process.execPath, [builder, '--root', root, '--unknown'], { cwd, encoding: 'utf8' });
+  assert.ok(existsSync(JSON.parse(output).tarball));
+  assert.deepEqual(readdirSync(cwd), ['--unknown']);
+  assert.throws(() => execFileSync(process.execPath, [builder, '--root', root, '--unknown', 'extra'], { cwd, stdio: 'pipe' }), (error) => error.status === 1 && /unexpected argument extra/u.test(error.stderr));
 });
 
 test('packed closure rejects omitted payloads and unclosed dependencies including peers/kernel', () => {

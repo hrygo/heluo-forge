@@ -160,6 +160,7 @@ export function createStoreKeyProvider(paths) {
     return createFileKeyProvider({ path });
   }
   return Object.freeze({
+    exists() { return paths.inspect() !== undefined; },
     initialize(kid) { return createFileKeyProvider({ path: paths.prepareNew() }).initialize(kid); },
     active() { return current().active(); },
     byId(kid) { return current().byId(kid); },

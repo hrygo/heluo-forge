@@ -244,6 +244,7 @@ export function writeBundleArtifacts({ destination, tarballPath, entry, members,
 function parseArguments(argv) {
   let root;
   let destination;
+  let help = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--root') {
@@ -252,28 +253,44 @@ function parseArguments(argv) {
       if (root === undefined) throw new Error('--root needs a directory');
       continue;
     }
+    if (argument === '--help' || argument === '-h') {
+      help = true;
+      continue;
+    }
     if (destination !== undefined) throw new Error(`unexpected argument ${argument}`);
     destination = argument;
   }
-  return { root, destination };
+  return { root, destination, help };
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let tarball;
   try {
-    const { root, destination } = parseArguments(process.argv.slice(2));
-    const result = buildEnterpriseBundle({ root, destination });
-    tarball = result.tarball;
-    const bytes = readFileSync(tarball);
-    const entries = readBundleEntries(tarball);
-    const sidecar = writeBundleArtifacts({
-      destination: dirname(tarball),
-      tarballPath: tarball,
-      entry: { name: result.manifest.name, version: result.manifest.version },
-      members: result.members,
-      entries,
-    });
-    console.log(JSON.stringify({ tarball, version: result.manifest.version, members: result.members, files: result.packed.length, sha256: digest(bytes), manifest: sidecar.manifestPath, sums: sidecar.sumsPath }, null, 2));
+    const { root, destination, help } = parseArguments(process.argv.slice(2));
+    if (help) {
+      console.log([
+        'Usage: node scripts/build-enterprise-bundle.mjs [--root <dir>] [destination]',
+        '',
+        'Build the enterprise bundle with its manifest and SHA256SUMS.',
+        '',
+        '  --root <dir>  Workspace root (default: repository root)',
+        '  destination   Output directory (default: a new temporary directory)',
+        '  -h, --help    Show this help without building',
+      ].join('\n'));
+    } else {
+      const result = buildEnterpriseBundle({ root, destination });
+      tarball = result.tarball;
+      const bytes = readFileSync(tarball);
+      const entries = readBundleEntries(tarball);
+      const sidecar = writeBundleArtifacts({
+        destination: dirname(tarball),
+        tarballPath: tarball,
+        entry: { name: result.manifest.name, version: result.manifest.version },
+        members: result.members,
+        entries,
+      });
+      console.log(JSON.stringify({ tarball, version: result.manifest.version, members: result.members, files: result.packed.length, sha256: digest(bytes), manifest: sidecar.manifestPath, sums: sidecar.sumsPath }, null, 2));
+    }
   } catch (error) {
     // A sidecar failure means this invocation's tarball must not survive: the
     // artifact is only publishable together with its manifest and sums.
