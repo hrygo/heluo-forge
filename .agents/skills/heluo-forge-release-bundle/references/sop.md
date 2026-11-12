@@ -6,13 +6,13 @@
 - 使用与公版配套的制作工具链；工具检查其 IAM 校验模块与公版内的运行时逐字节一致。
 - 打包人员能提供：企业 IAM issuer、client_id、Discovery 或显式授权/token/JWKS 端点、访问令牌撤销端点、网关 baseURL 和 provider、回调地址（端口默认随机）、Gitee host（可选）、交付版本号。
 - 输出目录在仓库之外，且不存在或为空；磁盘空间足够。
-- 企业交付采用公开客户端 + PKCE S256，不使用 `client_secret`。用户确认企业 IAM 支持该方式；真实登录、刷新与回调仍须在企业环境验证。制作器不接收 secret 或个人 Key。
+- 企业交付采用公开客户端 + PKCE S256，不使用 `client_secret`。企业 IAM 支持该方式；真实登录、刷新与回调仍须在企业环境验证。制作器不接收 secret 或个人 Key。
 
 ## 2. 问答（逐项确认）
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
 2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
-3. Discovery URL：优先由管理员提供，常见形式为 `issuer + /.well-known/openid-configuration`，不自行推定实际地址。maker 请求后检查 `issuer` 与 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；运行时还要求 issuer 精确一致。无 Discovery 时显式提供 issuer、三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
+3. Discovery URL：优先由管理员提供，常见形式为 `issuer + /.well-known/openid-configuration`，不自行推定实际地址。maker 请求后精确检查 `issuer`，并检查 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；未显式指定时也校验发现的撤销、登出和用户信息端点格式。无 Discovery 时显式提供 issuer、三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
 4. client_id：企业的公开客户端 ID，不是员工个人标识。
 5. 网关 baseURL 和 provider：地址用于 `managedModels.baseURL`，按网关实际路径填写；provider 使用准确的模型路由标识。http 同上需显式确认。
 6. 回调端口与地址：端口默认 `0`（系统分配），地址默认 `127.0.0.1`（不接受 `localhost` 或 `[::1]`）。企业 IAM 按 `http://127.0.0.1:` 前缀登记回环回调，端口可随机，不需要为每个包约定固定值；只有 IAM 明确要求精确匹配固定 URI 时，才填 1024–65535，并保证与登记值逐字节一致。固定端口被占用会直接拒绝登录（`IAM_CALLBACK_PORT_UNAVAILABLE`），不回落随机端口。
@@ -20,18 +20,18 @@
 8. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
 9. 输出目录：仓库外、不存在或为空。
 10. 凭据存储：插件使用 SQLite 值级加密存储和文件 keyring，`.env` 不需要相关配置；Windows、Linux/麒麟与 macOS 的目标宿主兼容性和权限仍须实测。
-11. IAM 撤销：显式提供访问令牌 D1 撤销端点 `HELUO_IAM_REVOCATION_ENDPOINT`，地址不含查询参数；确认其 GET 回执。Discovery 预检不核验该端点。无此端点时运行时跳过远端撤销，不能当作退出闭环。回调失败时，当前代码还会向同一字段尝试 POST 撤销刷新令牌；D1 只提供访问令牌 GET 撤销，不能据此声称刷新令牌已撤销。
+11. IAM 撤销：显式提供访问令牌 D1 撤销端点 `HELUO_IAM_REVOCATION_ENDPOINT`，地址不含查询参数；确认其 GET 回执。Discovery 预检不请求撤销端点或验证协议。没有显式或发现的端点时运行时跳过远端撤销，不能当作退出闭环。回调失败时，当前代码还会向同一字段尝试 POST 撤销刷新令牌；D1 只提供访问令牌 GET 撤销，不能据此声称刷新令牌已撤销。
 12. IAM 刷新：当前插件将 `HELUO_IAM_TOKEN_ENDPOINT` 同时用于授权码换票与刷新。核对企业服务是否支持这种方式；若刷新使用独立端点，当前工具和插件均不能配置它，须先完成适配并联调。
 
-答案保存在仓库外的专用 `.env`，权限为 `600`；该文件可复用，已有文件不得自动覆盖或删除。配置行见 [Skill 入口](../SKILL.md#问答协议)；内网 http 经明确确认后追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`：
+答案保存在仓库根目录的专用 `.env`，确认被 Git 忽略且未跟踪，权限为 `600`；该文件可复用，已有文件不得自动覆盖或删除。不要在可提交的 `.env.example` 中填写企业配置。配置行见 [Skill 入口](../SKILL.md#问答协议)；内网 http 经明确确认后追加 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`：
 
 ```sh
 umask 077
-config="<仓库外 .env 文件路径>"
-chmod 600 "$config"
+config="<仓库根目录>/.env"
+git -C "<仓库根目录>" check-ignore -q -- .env && chmod 600 "$config"
 ```
 
-脚本只将文件按 `KEY=VALUE` 数据解析，不执行 `source` 或变量展开。允许的企业配置会写入私版的 `cordis.patch.yml`；完整 `.env`、个人 Key、令牌和 `client_secret` 不进入交付包。配置值不要放入命令行参数、仓库或报告。
+忽略检查失败时停止。独立工具链没有 Git 仓库时，将 `config` 指向不受版本管理的专用文件并设置权限为 `600`。脚本只将文件按 `KEY=VALUE` 数据解析，不执行 `source` 或变量展开。允许的企业配置会写入私版的 `cordis.patch.yml`；完整 `.env`、个人 Key、令牌和 `client_secret` 不进入交付包。配置值不要放入命令行参数、提交到仓库或写入报告。
 
 插件的 `refreshSkewSeconds`、`httpTimeoutMs` 和 `logoutMode` 不在当前制作器 `.env` 白名单中，分别使用运行时默认值 `60`、`10000` 和 `local`；不得添加未经支持的环境键来假定这些值已生效。
 

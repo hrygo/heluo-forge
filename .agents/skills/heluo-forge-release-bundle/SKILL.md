@@ -18,7 +18,7 @@ description: 供打包人员收集企业 IAM/网关配置，在 macOS 上生成�
 
 ## 不可让步的边界
 
-- 使用仓库外、不提交的专用 `.env` 文件（`umask 077`，权限 600）；可供后续打包复用，不自动删除或覆盖。
+- 使用仓库根目录受 Git 忽略的专用 `.env` 文件（`umask 077`，权限 600）；可供后续打包复用，不提交、不自动删除或覆盖。独立工具链未放入 Git 仓库时，配置保存在不受版本管理的位置。
 - IAM 和网关地址等允许的配置会写入私版插件的 `cordis.patch.yml`，交付对象可见；完整 `.env`、密钥和令牌不进入交付物。配置值不作为命令行参数。
 - Discovery 预检结果与错误只显示状态、字段名和受限错误码，不回显 issuer、端点或网络异常原文。预览与交付回执仍包含本地路径；分享报告前人工脱敏。
 - 公版摘要必须来自发布页或另一条可信渠道，不信任制品旁边的 `SHA256SUMS`。
@@ -54,7 +54,7 @@ description: 供打包人员收集企业 IAM/网关配置，在 macOS 上生成�
 
 企业 IAM 按回调前缀登记（`http://127.0.0.1:` 或 `http://127.0.0.1/`，2026-11-06 答复：端口可随机），因此端口默认填 `0`：端口在登录发起时由系统分配，插件只为本次登录临时监听，不需要预登记，也不会因端口被其他进程占用而登录失败。只有 IAM 明确要求逐字节匹配固定回调 URI 时，才填 1024–65535，并保证与登记值完全一致；固定端口被占用时插件以 `IAM_CALLBACK_PORT_UNAVAILABLE` 拒绝登录，不回落到随机端口。选 `0` 时不要额外写 `redirectUri`，端口在运行时才确定。
 
-在仓库外准备专用 `.env`；已有文件按实际需要维护，不用模板覆盖：
+在仓库根目录准备专用 `.env`，确认 Git 忽略该文件且未跟踪；已有文件按实际需要维护，不用模板覆盖，也不要在可提交的 `.env.example` 中填写企业配置：
 
 ```dotenv
 HELUO_IAM_AUTH_MODE=public
@@ -73,12 +73,14 @@ HELUO_GITEE_HOST=<gitee host>
 
 `HELUO_IAM_DEFAULT_PROVIDER` 使用企业网关的模型路由标识；不确定时向打包人员确认，不要编造。Gitee 未提供时删掉该行。未配置 Discovery 时，以 `HELUO_IAM_AUTHORIZATION_ENDPOINT`、`HELUO_IAM_TOKEN_ENDPOINT` 和 `HELUO_IAM_JWKS_URI` 显式给出端点。当前实现用同一个 `tokenEndpoint` 换票和刷新；企业刷新是否使用同一端点须联调确认。只有制包端验证使用 `HELUO_IAM_ALLOW_INSECURE_HTTP`，运行时不依靠此字段阻止 HTTP。
 
-提供现有文件路径给 `config`，并在 macOS 制包机上设置文件权限：
+提供现有文件路径给 `config`，并在 macOS 制包机上检查忽略规则、设置文件权限；检查失败时停止：
 
 ```sh
-config="<仓库外 .env 文件路径>"
-chmod 600 "$config"
+config="<仓库根目录>/.env"
+git -C "<仓库根目录>" check-ignore -q -- .env && chmod 600 "$config"
 ```
+
+独立工具链没有 Git 仓库时，`config` 指向不受版本管理的专用文件，并单独设置权限为 `600`。
 
 脚本按数据解析 `KEY=VALUE`，不执行 `source`、变量展开或命令替换；不得写入个人 Key、令牌或 `client_secret`。
 

@@ -2,12 +2,12 @@
  * Delivery package tests (issue #222 items ③④⑤⑥).
  *
  * The delivery builder is the packager-facing entry point: it turns a public
- * artifact plus an out-of-repo configuration into a zip an employee can run
+ * artifact plus a local configuration into a zip an employee can run
  * without editing files. These tests pin the package shape and the fail-closed
  * behaviour that keeps a half-built delivery from being mistaken for a release.
  */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -17,6 +17,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { buildDelivery } from '../scripts/release-delivery.mjs';
+import { readBundleEntries } from '../scripts/lib/bundle-archive.mjs';
 import { writeBundleTarball } from '../scripts/lib/bundle-write.mjs';
 import { PrivateBundleError } from '../scripts/lib/private-bundle.mjs';
 
@@ -141,6 +142,44 @@ function runCli(script, args) {
     child.once('close', (code) => resolve({ code, stdout, stderr }));
   });
 }
+
+test('both packaging CLIs accept a git-ignored in-repository .env', async (t) => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const outside = temp(t);
+  const ignoredConfig = join(root, '.env');
+  writeFileSync(ignoredConfig, readFileSync(configPath), { mode: 0o600 });
+  writeFileSync(join(root, '.gitignore'), readFileSync(join(TOOL_ROOT, '.gitignore')));
+  execFileSync('git', ['init', '-q', root]);
+  execFileSync('git', ['check-ignore', '-q', '--', '.env'], { cwd: root });
+  mkdirSync(join(root, 'scripts'));
+  writeFileSync(join(root, 'scripts', 'init-enterprise-plugin.mjs'), readFileSync(join(TOOL_ROOT, 'scripts', 'init-enterprise-plugin.mjs')));
+
+  const common = ['--public', publicPath, '--public-sha256', sha256, '--config', ignoredConfig, '--version', '0.1.0-corp.1', '--skip-discovery-check'];
+  const commands = [
+    ['release-delivery.mjs', [...common, '--tool-root', root, '--output', join(outside, 'delivery')], ['--dry-run']],
+    ['make-private-bundle.mjs', [...common, '--repo-root', root, '--output', join(outside, 'private')], []],
+  ];
+  for (const [script, args, previewArgs] of commands) {
+    const preview = await runCli(script, [...args, ...previewArgs]);
+    assert.equal(preview.code, 1, preview.stderr);
+    assert.match(preview.stderr, /CONFIRM_REQUIRED/u);
+    const digest = /"planDigest":\s*"([a-f0-9]{64})"/u.exec(preview.stderr)?.[1];
+    assert.ok(digest);
+    const result = await runCli(script, [...args, '--confirm', digest.slice(0, 16)]);
+    assert.equal(result.code, 0, result.stderr);
+    const summary = JSON.parse(result.stdout);
+    const tarball = script === 'release-delivery.mjs' ? summary.private.tarball : summary.tarball;
+    const files = readBundleEntries(readFileSync(tarball), { withContent: true });
+    assert.equal(files.some((file) => file.path.split('/').includes('.env')), false);
+  }
+  for (const [script, rootFlag] of [['release-delivery.mjs', '--tool-root'], ['make-private-bundle.mjs', '--repo-root']]) {
+    const forbiddenOutput = join(root, 'forbidden-output');
+    const result = await runCli(script, [...common, rootFlag, root, '--output', forbiddenOutput]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /outside/u);
+    assert.equal(existsSync(forbiddenOutput), false);
+  }
+});
 
 test('both packaging CLIs redact discovery on success and failure', async (t) => {
   const { root, publicPath, configPath, sha256 } = fixture(t);

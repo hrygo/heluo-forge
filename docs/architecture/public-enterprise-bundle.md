@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.6.1 |
+| 版本 | V0.6.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -21,7 +21,7 @@
 
 ## 1. 目标与范围
 
-GitHub Actions 使用公开源码生成包含目标平台组件的公版 DSH 插件 `.tgz`，公版及公开附属物不包含企业私有地址、企业凭据或个人信息。制包人员在 macOS 下载并核验公版，以仓库外的企业配置、项目级 Skill、手册和脚本制作跨平台企业私有插件包；官方 DSH 宿主与企业插件通过简便步骤集成，员工无需输入企业统一配置。
+GitHub Actions 使用公开源码生成包含目标平台组件的公版 DSH 插件 `.tgz`，公版及公开附属物不包含企业私有地址、企业凭据或个人信息。制包人员在 macOS 下载并核验公版，以不提交的企业配置、项目级 Skill、手册和脚本制作跨平台企业私有插件包；官方 DSH 宿主与企业插件通过简便步骤集成，员工无需输入企业统一配置。
 
 | 事项 | 已确认目标 |
 |---|---|
@@ -41,7 +41,7 @@ GitHub Actions 使用公开源码生成包含目标平台组件的公版 DSH 插
 flowchart LR
   A[公开源码] --> B[公版插件与制作工具]
   B --> C[macOS 本地制作]
-  D[仓库外企业配置] --> C
+  D[不提交的企业配置] --> C
   C --> E[企业私版插件]
   F[官方原样 DSH 宿主] --> G[轻量集成]
   E --> G
@@ -76,11 +76,11 @@ flowchart LR
 | 其他企业配置 | 企业统一且与个人无关的已启用能力配置 | 按能力检查，未启用能力不强加字段 |
 | 个人数据 | 个人 Key、账号、token、密码 | 不作为企业配置或私版输入 |
 
-真实 `.env` 位于仓库外且不提交，可由制作人员复用。制作器以 `--config` 读取专用文件并按数据解析，不使用 shell `source`、`eval` 或将完整文件打入插件；允许的企业配置转写到私版 `cordis.patch.yml`，因此对交付对象可见。密钥、个人凭据与令牌不作为配置输入。制作器复用 IAM 运行时配置校验，并核对配套工具链与公版内校验模块逐字节一致；不匹配时拒绝制作。Discovery 预检的结果与错误不回显企业地址；预览和回执仍包含本地路径，分享前须脱敏。静态校验不证明企业登录、网关或撤销协议可用。
+真实企业配置保存在仓库根目录被 Git 忽略且未跟踪的 `.env` 中，可由制作人员复用；独立工具链没有 Git 仓库时，配置文件保存在不受版本管理的位置。制作器以 `--config` 读取专用文件并按数据解析，不使用 shell `source`、`eval` 或将完整文件打入插件；允许的企业配置转写到私版 `cordis.patch.yml`，因此对交付对象可见。密钥、个人凭据与令牌不作为配置输入。制作器复用 IAM 运行时配置校验，并核对配套工具链与公版内校验模块逐字节一致；不匹配时拒绝制作。Discovery 预检的结果与错误不回显企业地址；预览和回执仍包含本地路径，分享前须脱敏。静态校验不证明企业登录、网关或撤销协议可用。
 
-OIDC Discovery 的 `issuer`、可信 issuer 和 ID Token 的 `iss` 必须精确一致；生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。用户确认企业支持 public 与 PKCE S256；厂商历史回函曾给出不同口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
+OIDC Discovery 的 `issuer`、可信 issuer 和 ID Token 的 `iss` 必须精确一致；生产回调的路径、端口与 IPv4 / IPv6 策略按企业注册规则核验。企业接入采用 public 与 PKCE S256；厂商历史回函曾给出不同口径，实际 public 登录、S256 及回调注册仍须在企业环境验证，不能仅凭配置或 mock 消除证据冲突。
 
-Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。`release-delivery` 从仓库外权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；secret 和完整 `.env` 不进入交付物。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。该开关只约束制作器检查，运行时不能依靠它阻止 HTTP。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用），随后只执行一次 `dsh plugin add`。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。真实 `.env`、包含企业配置的暂存文件与私版插件均置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
+Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点、client_id、网关地址与 provider、回调信息、可选 Gitee host 和输出位置。`release-delivery` 从权限为 600 的专用 `.env` 读取允许的配置，制包人员可复用该文件；secret 和完整 `.env` 不进入交付物。用户核对配置与预览摘要后才生成；取消或校验失败不输出被标为成功的包，也不覆盖已有文件。制作器默认只接受 HTTPS；确需内网 HTTP 时由打包人员显式确认明文传输风险，再设置 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。该开关只约束制作器检查，运行时不能依靠它阻止 HTTP。员工端初始化脚本按 `--release` 与 `--profile` 执行；交付 zip 内的 macOS/Linux/Windows 启动器以 `--profile auto --install-host` 运行：员工只需有 Node.js（含 npm），缺少官方 dsh 时由脚本以 npm 全局安装锁定版本，再用 `dsh --profile web --dump-config` 无界面创建 web profile（已有 web 则复用），随后只执行一次 `dsh plugin add`。官方 Desktop 应用独占 desktop profile，且锁定版公开 CLI 无条件拒绝管理该 profile；启动器因此在只检测到 desktop profile 时报 `DESKTOP_PROFILE_UNSUPPORTED`，提示改用 web 形态或在 Desktop 应用内插件设置中安装，不会误改 Electron 的 profile。员工不需要手工填写任何企业字段，也不需要预装 DSH。Windows 同时兼容原生 `dsh.exe` 与 npm 全局安装的 `dsh.cmd`/`dsh.bat`：启动器与初始化脚本解析 shim 中的 JS 入口后直接用 node 执行，不要求员工机存在 `dsh.exe`，也不通过 shell 拼接命令。包含企业配置的暂存文件与私版插件置于仓库外，按平台使用受限制的文件权限；失败时只清理本次运行可确认归属的暂存，不清理用户已有数据。
 
 ## 4. 公版构建与本地二次制作
 
@@ -102,7 +102,7 @@ Skill 引导助手收集公版摘要、企业版本、IAM 登录和撤销端点�
 
 官方 DSH 由可核验渠道获取，记录版本、来源、目标架构和摘要。企业插件包继续通过私有 npm / AIHUB 或内部文件交付；公开 Release 不代为提供官方宿主。
 
-企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 收集企业字段并引导脱敏确认。配置 Discovery 时制作器检查 HTTP 200、`issuer` 及 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；只提供显式端点或使用 `--skip-discovery-check` 时，Discovery 未核验。制作端对 issuer 尾斜杠作宽松比较，运行时要求精确一致；撤销端点也不在 Discovery 预检范围内，均须单独核验。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
+企业交付物由四部分组成：私版 `.tgz`、`private-release.json`、`scripts/init-enterprise-plugin.mjs` 与面向员工的按平台启动器。制作端由 `scripts/release-delivery.mjs` 一次完成制作、独立核验、目录组织、启动器生成与 zip 打包，打包人员无需手工拼接目录；Skill 收集企业字段并引导脱敏确认。配置 Discovery 时制作器检查 HTTP 200、issuer 精确一致以及 `authorization_endpoint`/`token_endpoint`/`jwks_uri`，未显式指定时也校验发现的撤销、登出和用户信息端点格式；只提供显式端点或使用 `--skip-discovery-check` 时，Discovery 未核验。预检不请求撤销端点，也不验证其协议兼容性。来源记录沿用 `heluo-private-release/1` 模式，至少包含入口包名与版本、公版基线版本与摘要、制品文件名、大小与 SHA-256，并声明 `config.secretEmbedded: false`。初始化脚本单文件自包含，只依赖 Node 内置模块，不 import 仓库内模块，可在没有源码工作区的员工机上直接运行。
 
 miniceM 对比并选择以下两条候选：
 

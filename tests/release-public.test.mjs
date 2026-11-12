@@ -166,6 +166,27 @@ test('builds a configuration-neutral public release from a tagged checkout', (t)
   assert.equal(tools.every((entry) => entry.path.startsWith('toolchain/')), true);
 });
 
+test('an ignored in-repository .env is absent from public release archives', (t) => {
+  const tree = licensedTree(t);
+  writeFileSync(join(tree.root, '.gitignore'), readFileSync(join(TOOL_ROOT, '.gitignore')));
+  git(tree.root, ['init', '-q']);
+  commitAll(tree.root, 'fixture release tree with ignore rules');
+  git(tree.root, ['tag', `v${VERSION}`]);
+  const marker = 'synthetic-private-configuration-marker';
+  writeFileSync(join(tree.root, '.env'), `HELUO_IAM_CLIENT_ID=${marker}\n`, { mode: 0o600 });
+  git(tree.root, ['check-ignore', '-q', '--', '.env']);
+  const release = buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' });
+  for (const [path, prefix] of [
+    [release.source, `heluo-forge-${VERSION}/`],
+    [release.tarball, 'package/'],
+    [release.tools, 'heluo-forge-release-tools-1.0.0/'],
+  ]) {
+    const files = readBundleEntries(readFileSync(path), { withContent: true, prefix });
+    assert.equal(files.some((file) => file.path.split('/').includes('.env')), false);
+    assert.equal(files.some((file) => file.content.includes(marker)), false);
+  }
+});
+
 test('refuses a dirty checkout', (t) => {
   const tree = taggedTree(t);
   writeFileSync(join(tree.root, 'uncommitted.txt'), 'dirty\n');

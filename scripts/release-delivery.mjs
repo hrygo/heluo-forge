@@ -1,7 +1,7 @@
 /**
  * Release delivery builder (issue #222 items ③④⑤⑥).
  *
- * One command turns a verified public artifact plus an out-of-repo enterprise
+ * One command turns a verified public artifact plus a local enterprise
  * configuration into a delivery package an employee can use with minimal steps:
  *
  *   - `enterprise-plugin/` — the private plugin tarball, sidecar, manifest, sums

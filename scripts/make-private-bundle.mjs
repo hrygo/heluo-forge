@@ -9,8 +9,8 @@
  *     [--repo-root <dir>] [--confirm <digest-prefix>]
  *
  * The release engineer runs this from a place where the public artifact was
- * downloaded, not necessarily this checkout. `--config` must live outside the
- * repository (default root: this script's repository) and be mode 0600.
+ * downloaded, not necessarily this checkout. `--config` must be mode 0600;
+ * when placed in a repository, use a git-ignored file such as `.env`.
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -88,7 +88,6 @@ async function main() {
   const publicPath = resolve(options.publicPath);
   const configPath = resolve(options.configPath);
   const output = resolve(options.output);
-  assertOutsideDirectory(configPath, repoRoot, 'configuration file');
   assertOutsideDirectory(output, repoRoot, 'output directory');
 
   const publicInfo = inspectPublicTarball(publicPath);
