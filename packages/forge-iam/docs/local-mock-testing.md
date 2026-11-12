@@ -48,6 +48,25 @@ IAM_UAT_SMOKE=1 bash scripts/probe/run-iam-local-uat.sh
 - **端口被占用时拒绝登录**：先用 `node -e "require('node:net').createServer().listen(17890,'127.0.0.1')"` 占住 `17890`，再用 `IAM_UAT_CALLBACK_PORT=17890 bash scripts/probe/run-iam-local-uat.sh` 启动。点击登录应立即提示“登录回调端口被占用，暂时无法登录”，不跳转、不改用宿主端口（`48388`）。
 - **尝试过期后回调失效**：回调尝试默认在 `attemptTimeoutSeconds`（300 秒）后过期，监听也随之关闭。手工验证需要等待，通常交给单元用例覆盖，不必在 UAT 里空等。
 
+## 目标机验证（已打包交付包）
+
+上面的脚本从 `HEAD` 现场打包，适合开发自测；验证**已经交给员工的交付包**时，改用
+`scripts/probe/mock-iam-gateway.mjs`：它是单文件、只依赖 Node 标准库的模拟 IdP 与网关，
+可以随交付包一起复制到目标机（包括 Windows 虚拟机）。
+
+1. 目标机装 Node.js LTS，解压交付包，运行 `node mock-iam-gateway.mjs`，保持窗口开启。
+   默认 issuer `http://127.0.0.1:5599`、网关 `http://127.0.0.1:5600/v1`；打包时的配置
+   必须指向同一组地址，否则登录会停在 Discovery 或回跳失败。
+2. 运行交付包里的启动器安装插件，启动 `dsh web` 并打开带一次性参数的地址。
+3. 向导里登录：浏览器打开模拟 IdP，授权后回跳 `127.0.0.1:17321`，页面显示登录完成。
+4. 录入任意非空网关 Key，模型列表应出现 `mock-chat-1`，发送一条消息应收到模拟回复。
+
+端口、client_id 与主体可用 `MOCK_IAM_PORT`、`MOCK_GATEWAY_PORT`、`MOCK_CLIENT_ID`、
+`MOCK_SUBJECT` 覆盖；覆盖后要重新打包，交付包里的 issuer 与回调端口必须与模拟器一致。
+
+它仍不是企业证据：`http` 明文、固定回环地址、令牌只存在进程内，模拟 IdP 不校验密码、
+授权策略或配额。真实验收需要企业 IAM 与网关，并按本指南的读取路径矩阵取证。
+
 ## 读取路径矩阵（2026-11-06）
 
 存储读取不是单条路径，也不是单平台成立就算完成。当前覆盖：
