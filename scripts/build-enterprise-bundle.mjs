@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HOST_PEERS, peerDependencyErrors } from './lib/bundle-rules.mjs';
-import { readBundleEntries } from './lib/bundle-archive.mjs';
+import { executableTargets, readBundleEntries, withExecutableModes } from './lib/bundle-archive.mjs';
 import { createBundleManifest, serializeBundleManifest, serializeSha256Sums } from './lib/bundle-manifest.mjs';
-import { auditReleaseClosure, auditTarball, execNpm, parsePackOutput } from './lib/bundle-rules.mjs';
+import { auditReleaseClosure, auditTarball, execNpm, gitIndexedModes, parsePackOutput } from './lib/bundle-rules.mjs';
 import { auditPackagedNativeResources, auditStagedNativeResources, describeNativeFindings, NATIVE_CHECKSUMS, nativeFetchHint } from './lib/native-resources.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -121,18 +121,29 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
     const stdout = execNpm(['pack', '--ignore-scripts', '--offline', '--json', '--pack-destination', packedDir], { cwd: stage, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const packed = parsePackOutput(stdout);
     if (packed === null) fail('npm returned no packed file list');
-    const errors = auditTarball({ label: manifest.name, manifest, packed });
+    const errors = auditTarball({ label: manifest.name, manifest, packed, indexModes: gitIndexedModes(sources.get(manifest.name)) });
     for (const name of members.keys()) {
       if (name === manifest.name) continue;
       const prefix = `node_modules/${name}/`;
       const member = readManifest(join(stage, 'node_modules', name));
       // Graph identity/version closure was checked above; audit each member's
       // actual packed resources too, including exports, locale and bin mode.
-      errors.push(...auditTarball({ label: name, manifest: { ...member, dependencies: {}, bundledDependencies: [] }, packed: packed.filter((entry) => entry.path.startsWith(prefix)).map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) })) }));
+      errors.push(...auditTarball({ label: name, manifest: { ...member, dependencies: {}, bundledDependencies: [] }, packed: packed.filter((entry) => entry.path.startsWith(prefix)).map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) })), indexModes: gitIndexedModes(sources.get(name)) }));
     }
     if (errors.length > 0) fail(errors.join('; '));
     const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
     if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
+    // Windows 上 `npm pack` 只能把 bin 写成 0644（NTFS 不保存 POSIX 位）。按清单把
+    // 声明的 bin 在 tar 头里补成 0755，否则发布包在 Unix 侧"bin 不可执行"。
+    const declaredBins = new Set();
+    for (const [name] of members) {
+      const prefix = name === manifest.name ? '' : `node_modules/${name}/`;
+      for (const path of executableTargets(readManifest(sources.get(name)), prefix)) declaredBins.add(path);
+    }
+    const packedPath = join(packedDir, tarballs[0]);
+    const before = readFileSync(packedPath);
+    const patched = withExecutableModes(before, declaredBins);
+    if (!patched.equals(before)) writeFileSync(packedPath, patched);
     if (requireNativeResources && nativeRecords.length > 0) {
       // npm may exclude files after preflight. Judge the archive's actual bytes
       // against the staged record before creating anything in the destination.

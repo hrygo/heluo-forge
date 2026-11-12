@@ -10,6 +10,56 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { dirname, join } from 'node:path';
 
 const LIFECYCLE_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'];
+
+// 可执行位不是所有文件系统都保存：Windows 上 `statSync().mode & 0o100` 恒为 0，`npm pack`
+// 也只能把 bin 打成 0644，于是"bin 不可执行"在这类平台上既测不准也修不掉。Git 索引却
+// 把 +x 记成 100755，这个记录随提交在各平台一致。索引里查不到（未跟踪、已解包的
+// 发布目录、没有 git）时返回 null，按"无法判定"处理，不据此报错。
+const POSIX_MODE_FILESYSTEM = process.platform !== 'win32';
+
+/**
+ * 版本库索引里每个已跟踪文件记录的模式（路径相对 `base`，值是 `100755`/`100644` 这类
+ * 六位八进制串）。不是仓库、没有 git 或当前平台文件系统本身就保存该位时返回 null。
+ *
+ * 必须用 `-z`：默认输出会把非 ASCII 路径转成带引号的 C 风格转义（`"\351\205\245..."`），
+ * 并按空白分隔，中文入口和含空格的路径都会对不上；`-z` 用 NUL 分隔记录，元数据与路径
+ * 之间是 tab，路径原样保留。
+ */
+export function gitIndexedModes(base) {
+  if (POSIX_MODE_FILESYSTEM) return null;
+  try {
+    // `git -C <子目录> ls-files` 输出的路径本身就相对该目录，不再按仓库根裁剪。
+    const out = execFileSync('git', ['-C', base, 'ls-files', '-s', '-z'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const modes = new Map();
+    for (const record of out.split('\0')) {
+      if (record === '') continue;
+      const tab = record.indexOf('\t');
+      if (tab < 0) continue;
+      const mode = record.slice(0, tab).trim().split(' ')[0];
+      if (!/^[0-7]{6}$/u.test(mode)) continue;
+      modes.set(record.slice(tab + 1), mode);
+    }
+    return modes;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 单文件的三态判定：`true` 已跟踪且索引记录 +x、`false` 已跟踪但没记录 +x、
+ * `null` 无法判定（没有索引，或文件尚未被 `git add`）。
+ *
+ * 未跟踪必须算"无法判定"：只收集可执行路径时，`!set.has()` 无法区分"未跟踪"和
+ * "已跟踪但 100644"，会把新写还没 add 的 bin 误报成缺陷。
+ */
+function indexExecutableState(base, relPath) {
+  const modes = gitIndexedModes(base);
+  if (modes === null) return null;
+  const cleaned = String(relPath).replace(/^\.\//u, '');
+  const mode = modes.get(cleaned);
+  if (mode === undefined) return null;
+  return (Number.parseInt(mode, 8) & 0o100) !== 0;
+}
 const DEP_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'];
 const KERNEL_PACKAGE = '@deepseek-ai/dsh';
 const MARKET_PACKAGE = '@heluo/forge-market';
@@ -166,8 +216,16 @@ function checkEntryPoints(label, base, pkg, errors) {
     requireTarget(target, `bin.${name}`);
     if (typeof target === 'string' && !target.includes('*')) {
       const full = join(base, target);
-      if (existsSync(full) && (statSync(full).mode & 0o100) === 0) {
-        errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
+      if (!existsSync(full)) continue;
+      if (POSIX_MODE_FILESYSTEM) {
+        if ((statSync(full).mode & 0o100) === 0) {
+          errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
+        }
+        continue;
+      }
+      const indexed = indexExecutableState(base, target);
+      if (indexed === false) {
+        errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable (git index records it without +x)`);
       }
     }
   }
@@ -294,9 +352,11 @@ export function checkBundleClosure(root, errors) {
  * 真实 tarball 闭包核验（#37 AC4）：把 `npm pack --dry-run --json` 的结果与清单对照。
  * 只看"包装出来的东西"，不重复静态规则；模式位来自 pack 的实际输出。
  *
- * @param {{label: string, manifest: Record<string, any>, packed: Array<{path: string, mode?: number}>}} input
+ * @param {{label: string, manifest: Record<string, any>, packed: Array<{path: string, mode?: number}>, indexModes?: Map<string, string> | null}} input
+ *   `indexModes`: 不保存 POSIX 位的平台上，版本库索引里每个已跟踪文件的模式（见
+ *   `gitIndexedModes`）；传入时按它判定 bin，而不是 pack 输出里恒为 0644 的模式位。
  */
-export function auditTarball({ label, manifest, packed }) {
+export function auditTarball({ label, manifest, packed, indexModes = null }) {
   const errors = [];
   const paths = new Map();
   for (const entry of packed) {
@@ -354,9 +414,22 @@ export function auditTarball({ label, manifest, packed }) {
   for (const [name, target] of Object.entries(manifest.bin ?? {})) {
     requirePacked(target, `bin.${name}`);
     if (typeof target === 'string' && !target.includes('*')) {
-      const mode = paths.get(target.replace(/^\.\//u, ''));
-      if (typeof mode === 'number' && (mode & 0o100) === 0) {
-        errors.push(`bundle: ${label} tarball bin.${name} ${target} is not executable (mode ${(mode & 0o777).toString(8)})`);
+      const relative = target.replace(/^\.\//u, '');
+      if (indexModes !== null) {
+        // 只有"已跟踪且记录 100644"才是缺陷；索引里没有这个路径说明文件尚未被
+        // `git add`，与"没有索引"同样按无法判定处理，不报错。
+        const indexedMode = indexModes.get(relative);
+        if (indexedMode !== undefined && (Number.parseInt(indexedMode, 8) & 0o100) === 0) {
+          errors.push(`bundle: ${label} tarball bin.${name} ${target} is not executable (git index records it without +x)`);
+        }
+        continue;
+      }
+      // 没有索引依据、平台又不保存该位：先判平台再判模式，否则 pack 输出里恒为 0644
+      // 的条目会在"无法判定"的情况下被记成错误，让 Windows 上的构建直接中止。
+      if (!POSIX_MODE_FILESYSTEM) continue;
+      const packedMode = paths.get(relative);
+      if (typeof packedMode === 'number' && (packedMode & 0o100) === 0) {
+        errors.push(`bundle: ${label} tarball bin.${name} ${target} is not executable (mode ${(packedMode & 0o777).toString(8)})`);
       }
     }
   }

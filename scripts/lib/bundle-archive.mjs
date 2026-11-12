@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 const BLOCK_SIZE = 512;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
@@ -138,4 +138,104 @@ export function summarizeBundle(entries) {
     fileCount: entries.length,
     totalBytes: entries.reduce((total, entry) => total + entry.size, 0),
   };
+}
+
+/** 写一个 ustar 数值字段：`0` 填充的八进制、以 NUL 结束。 */
+function writeOctal(header, offset, length, value) {
+  const text = value.toString(8).padStart(length - 1, '0');
+  header.write(`${text}\0`, offset, length, 'latin1');
+}
+
+/** 重算头部校验和（先按空格占位，再写入 6 位八进制 + NUL + 空格）。 */
+function writeChecksum(header) {
+  header.fill(0x20, 148, 156);
+  let sum = 0;
+  for (let index = 0; index < BLOCK_SIZE; index += 1) sum += header[index];
+  header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'latin1');
+}
+
+/**
+ * 把声明为 bin 的条目在 tar 头里补成 0755，并重新 gzip。
+ *
+ * `npm pack` 在 Windows 上只能写出 0644（NTFS 不保存 POSIX 位），构建出的发布包因此
+ * 在 Unix 侧看起来"bin 不可执行"。这里按字节改头部而不是另起一套打包器：条目内容、
+ * 顺序、大小与 pax 记录都不动，只把 `mode` 字段和校验和改对。
+ *
+ * 声明的路径是相对包根的（`bin/heluo-forge.mjs`），而 tar 头里的条目带 `package/` 前缀。
+ * 这里只在**一套坐标系**里比对：把声明项换算成"预期的头部原始路径" `package/<声明>`，
+ * 再与头部路径逐字相等。不要反过来去剥前缀——剥完之后 `package/bin/cli.mjs` 这种普通
+ * 文件会和声明成 `./package/bin/cli.mjs` 的入口撞成同一条路径，把无关文件误改 0755。
+ *
+ * 声明了却一个条目都没匹配到（路径拼错、包被 pack 排除）直接报错，避免"补位静默无操作、
+ * Unix 侧照旧拒绝"。
+ *
+ * @param {Uint8Array} source gzip 字节
+ * @param {Set<string>} executablePaths 相对包根的路径
+ * @returns {Buffer} 新的 gzip 字节
+ */
+export function withExecutableModes(source, executablePaths) {
+  if (!(source instanceof Uint8Array)) fail('source must be tarball bytes');
+  let tar;
+  try {
+    tar = gunzipSync(source);
+  } catch {
+    fail('not a gzip stream');
+  }
+  const patched = Buffer.from(tar);
+  // 预期的头部原始路径 -> 清单里声明的包根相对路径（用于报错时给人看）。
+  const pending = new Map();
+  for (const value of executablePaths) {
+    const declared = String(value).replace(/^\.\//u, '');
+    pending.set(`package/${declared}`, declared);
+  }
+  let offset = 0;
+  let pax = {};
+  let changed = 0;
+  while (offset + BLOCK_SIZE <= patched.length) {
+    const header = patched.subarray(offset, offset + BLOCK_SIZE);
+    if (header.equals(ZERO_BLOCK)) break;
+    const size = readOctal(header, 124, 12, 'size');
+    const typeflag = header[156] === 0 ? '0' : String.fromCharCode(header[156]);
+    const name = readText(header, 0, 100);
+    const prefix = readText(header, 345, 155);
+    const bodyStart = offset + BLOCK_SIZE;
+    if (bodyStart + size > patched.length) fail(`truncated tar: "${name}" declares ${size} bytes`);
+    if (typeflag === 'x' || typeflag === 'g') {
+      pax = { ...pax, ...readPaxRecords(patched.subarray(bodyStart, bodyStart + size)) };
+      offset = bodyStart + padded(size);
+      continue;
+    }
+    if (typeflag === '5') {
+      pax = {};
+      offset = bodyStart + padded(size);
+      continue;
+    }
+    if (typeflag !== '0') fail(`unsupported type "${typeflag}" ("${name}")`);
+    const rawPath = pax.path ?? (prefix === '' ? name : `${prefix}/${name}`);
+    pax = {};
+    const mode = readOctal(header, 100, 8, 'mode');
+    if (!pending.has(rawPath)) {
+      offset = bodyStart + padded(size);
+      continue;
+    }
+    pending.delete(rawPath);
+    if ((mode & 0o100) === 0) {
+      writeOctal(header, 100, 8, 0o755);
+      writeChecksum(header);
+      changed += 1;
+    }
+    offset = bodyStart + padded(size);
+  }
+  if (pending.size > 0) fail(`tar archive has no entry for declared executable ${[...pending.values()].join(', ')}`);
+  if (changed === 0) return Buffer.from(source);
+  return gzipSync(patched);
+}
+
+/** 只读一次目录内的 bin 声明，供构建器在打包后补位。 */
+export function executableTargets(manifest, prefix = '') {
+  const out = new Set();
+  for (const target of Object.values(manifest?.bin ?? {})) {
+    if (typeof target === 'string' && !target.includes('*')) out.add(`${prefix}${target.replace(/^\.\//u, '')}`);
+  }
+  return out;
 }
