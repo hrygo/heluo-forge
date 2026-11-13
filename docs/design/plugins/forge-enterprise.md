@@ -150,7 +150,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-补丁层落在 [packages/forge-enterprise/cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml)：禁用四个官方行与官方 `credentials` 行；现行 `insert:` 段挂载五个有 Host 职责的企业插件（凭据/策略/IAM/DevOps/Gitee）＋本包自己的 Skill 子路径入口（`insert:` 段见 §5.1.2）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
+补丁分两层：[cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml) 是 `dsh.bundle.patch` 指向的**通用底座**——禁用六个官方行与官方 `credentials` 行，`insert:` 段只挂凭据、策略与 IAM；[cordis.patch.engineering.yml](../../../packages/forge-enterprise/cordis.patch.engineering.yml) 是**研发叠加层**——挂「企业研发工具」容器行 `heluo-engineering-ui`、Skill 子路径入口与 DevOps、Gitee 两行（`insert:` 段见 §5.1.2）。SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -163,9 +163,9 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-`insert:` 段挂五个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`、`@heluo/forge-devops`、`@heluo/forge-gitee`，外加本包的 Skill 子路径入口 `@heluo/forge-enterprise/issue-delivery-skill`。DevOps 与 Gitee 两行在 r13 进闭包，条目内显式写 `config: {}`：行配置缺席时 `ConfigStandard` 会拒、loader 只把该行静默跳过（装上却没有读面，比报错更难查）。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
+通用底座的 `insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`；研发叠加层另挂四项：`heluo-engineering-ui`（`@heluo/forge-enterprise` 自身，激活 `client.js` 的那一行）、`@heluo/forge-enterprise/issue-delivery-skill`、`@heluo/forge-devops` 与 `@heluo/forge-gitee`。两层行 id 不相交，叠加生效时不会重复插入同一行。DevOps 与 Gitee 两行在 r13 进闭包，条目内显式写 `config: {}`：行配置缺席时 `ConfigStandard` 会拒、loader 只把该行静默跳过（装上却没有读面，比报错更难查）。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
 
-本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行六行口径以补丁文件、`bundle-patch.test.mjs` 与安装演练 `run-bundle-install-rehearsal.mjs` 为准）：
+本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行分层口径以两个补丁文件、`bundle-patch.test.mjs` 与安装演练 `run-bundle-install-rehearsal.mjs` 为准）：
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -174,7 +174,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 | 确定性 | 同上跑两次 `cmp` | 两次输出逐字节相同 |
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
-**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**2026-11-05 现行口径（r13）**：`insert:` 共六行——凭据、策略、IAM、DevOps、Gitee 与 Skill 子路径入口；dump 级断言以 `bundle-patch.test.mjs`（6 行、三项成员清单）与安装演练的 `install-patch-mounts-six-members` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
+**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**现行口径（分层后）**：底座 `insert:` 三行（凭据、策略、IAM），叠加层四行（容器、Skill、DevOps、Gitee）；dump 级断言以 `packages/forge-enterprise/test/bundle-patch.test.mjs` 与安装演练的 `install-patch-mounts-base-and-overlay` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
 
 #### 5.1.3 企业模型配置入口收敛（2026-11-04）
 
@@ -375,7 +375,7 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
-| 装配（r13） | 装好的补丁层六行 insert、三层策略行合成**一份**且目录等于六条并集、无 `isolate`、官方行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
+| 装配 | 装好的底座三行 + 叠加层四行（含容器行）、三层策略行合成**一份**且目录等于六条并集、无 `isolate`、官方行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
 | Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-enterprise/test/issue-delivery-skill.test.mjs` |
 | 制品清单 | 最终 tarball 含 `skills/issue-delivery/**`、`locale/*.json`、`icon.svg`，闭包无 `workspace:/file:/link:` | `node scripts/check-bundle-tarballs.mjs` |
 | 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |

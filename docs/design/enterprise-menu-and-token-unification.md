@@ -142,7 +142,7 @@ flowchart TB
 2. **显式单独保存（`HOSTED_ACTIVE`）**：仅当当前 IAM 会话已登录且 `ownerSubject === session.subject` 时，在子进程启动边界先完成环境变量白名单裁剪，再以最高优先级强制注入插件声明的 `envKey`（DevOps 为 `DEVOPS_API_KEY`，Gitee 为 `GITEE_TOKEN`，移除任何同域干扰环境变量）。
 3. **跨账号换号隔离（`OWNER_MISMATCH`）**：若库内存在该 `extensionId` 的托管记录但 `ownerSubject !== currentSession.subject`，Broker **强制 fail-closed（返回拒绝，0 次子进程启动）**——既不注入旧员工 Token，也不静默回退读取本机环境制造身份混淆，等待用户在扩展卡片点击清除或覆写。
 4. **未登录（`IAM_NOT_SIGNED_IN`）与换号是两种状态**：库内有托管记录但当前没有登录主体时，没有可比较的 `ownerSubject`；同样 fail-closed，但用户人话是「请先登录企业账号」，不能错误地显示成「其他账号遗留凭据」。
-4. **`forge-devops` 子进程环境安全收敛**：将 `packages/forge-devops/src/cli-runner.mjs` 从 `{ ...process.env, ...normalizeEnv(env) }` 收敛至与 `packages/forge-gitee/src/gitee-cli.mjs` 同等级的 **`ENV_ALLOWLIST` 严格白名单模式**，阻断 `DEEPSEEK_API_KEY`、`GITEE_TOKEN` 等无关环境凭据泄漏。
+5. **`forge-devops` 子进程环境安全收敛**：将 `packages/forge-devops/src/cli-runner.mjs` 从 `{ ...process.env, ...normalizeEnv(env) }` 收敛至与 `packages/forge-gitee/src/gitee-cli.mjs` 同等级的 **`ENV_ALLOWLIST` 严格白名单模式**，阻断 `DEEPSEEK_API_KEY`、`GITEE_TOKEN` 等无关环境凭据泄漏。
 
 ### 5.3 收敛 Gitee「高级（`authEnv` / `persistentToken`）」分层职责
 
