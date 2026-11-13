@@ -1,0 +1,373 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2400 1260" width="2400" height="1260" role="img" aria-label="河洛 Heluo Forge 价值主张：能力价值的时效性矩阵">
+  <defs>
+    <!-- Enterprise Brand Palette — Aligned with Cyber Long & Product Blueprint -->
+    <linearGradient id="bg-base" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#EAF0F7"/>
+      <stop offset="18%" stop-color="#F4F8FC"/>
+      <stop offset="48%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#FFFFFF"/>
+    </linearGradient>
+
+    <linearGradient id="squircleBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1325"/>
+      <stop offset="50%" stop-color="#112244"/>
+      <stop offset="100%" stop-color="#070D1A"/>
+    </linearGradient>
+    <radialGradient id="ambientGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00D2FE" stop-opacity="0.32"/>
+      <stop offset="70%" stop-color="#1D4ED8" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#070D1A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cyberLongGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1D4ED8"/>
+      <stop offset="35%" stop-color="#2563EB"/>
+      <stop offset="75%" stop-color="#00D2FE"/>
+      <stop offset="100%" stop-color="#00F5FF"/>
+    </linearGradient>
+
+    <linearGradient id="hdr-grad-navy-a" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#002D6E"/>
+      <stop offset="28%" stop-color="#003584"/>
+      <stop offset="68%" stop-color="#0F4796"/>
+      <stop offset="100%" stop-color="#1B59A4"/>
+    </linearGradient>
+
+    <linearGradient id="hdr-grad-navy-b" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#063578"/>
+      <stop offset="28%" stop-color="#073E8D"/>
+      <stop offset="68%" stop-color="#154F9D"/>
+      <stop offset="100%" stop-color="#2264AC"/>
+    </linearGradient>
+
+    <linearGradient id="hub-navy-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#003584"/>
+      <stop offset="100%" stop-color="#0E489E"/>
+    </linearGradient>
+
+    <linearGradient id="card-gloss-white" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#FCFDFE"/>
+      <stop offset="100%" stop-color="#F2F6FA"/>
+    </linearGradient>
+
+    <linearGradient id="card-gloss-tint" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F8FAFE"/>
+      <stop offset="60%" stop-color="#EFF5FB"/>
+      <stop offset="100%" stop-color="#E5EFF8"/>
+    </linearGradient>
+
+    <linearGradient id="card-muted-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAFBFD"/>
+      <stop offset="100%" stop-color="#F1F5F9"/>
+    </linearGradient>
+
+    <linearGradient id="hdr-muted" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E4ECF5"/>
+      <stop offset="100%" stop-color="#EEF4FA"/>
+    </linearGradient>
+
+    <linearGradient id="pillar-gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#EBF3FA"/>
+      <stop offset="50%" stop-color="#DFECF7"/>
+      <stop offset="100%" stop-color="#D5E4F2"/>
+    </linearGradient>
+
+    <linearGradient id="spine-badge-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F0F6FC"/>
+      <stop offset="50%" stop-color="#E3EEF8"/>
+      <stop offset="100%" stop-color="#D7E6F4"/>
+    </linearGradient>
+
+    <linearGradient id="spine-muted-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F7F9FC"/>
+      <stop offset="100%" stop-color="#EBF0F6"/>
+    </linearGradient>
+
+    <linearGradient id="accent-grad-1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#003584"/>
+      <stop offset="100%" stop-color="#1758A8"/>
+    </linearGradient>
+
+    <marker id="arrow-navy" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M 2 2 L 9.5 6 L 2 10" fill="none" stroke="#003584" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <marker id="arrow-slate" viewBox="0 0 12 12" refX="9" refY="6" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 2 2 L 9.5 6 L 2 10" fill="none" stroke="#346CA2" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+
+    <style>
+      text { font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .kicker { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Microsoft YaHei", "PingFang SC", sans-serif; font-size: 16px; font-weight: 700; letter-spacing: 2.5px; fill: #1758A8; }
+      .title { font-size: 44px; font-weight: 700; letter-spacing: 0.4px; fill: #003584; }
+      .subtitle { font-size: 20px; font-weight: 400; fill: #48607E; }
+      .subtitle-strong { font-size: 20px; font-weight: 700; fill: #003584; }
+      .pill-hdr { font-size: 15px; font-weight: 600; fill: #0E2A52; }
+      .panel-title { font-size: 22px; font-weight: 700; fill: #FFFFFF; }
+      .panel-sub { font-size: 15px; font-weight: 400; fill: #E1EEFA; }
+      .panel-title-muted { font-size: 21px; font-weight: 700; fill: #1E3A63; }
+      .panel-sub-muted { font-size: 14.5px; font-weight: 400; fill: #526A85; }
+      .tile-title { font-size: 18.5px; font-weight: 700; fill: #0E2A52; }
+      .tile-sub { font-size: 14.5px; font-weight: 400; fill: #48607E; }
+      .tile-title-muted { font-size: 18px; font-weight: 700; fill: #334E6E; }
+      .tile-sub-muted { font-size: 14.5px; font-weight: 400; fill: #5B728D; }
+      .foot { font-size: 15.5px; font-weight: 400; fill: #48607E; }
+    </style>
+  </defs>
+
+  <!-- Canvas -->
+  <rect width="2400" height="1260" fill="url(#bg-base)"/>
+  <rect x="28" y="28" width="2344" height="1204" rx="20" fill="none" stroke="#BDD2E8" stroke-width="1.4"/>
+  <path d="M 48 29 H 2352" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="1"/>
+
+  <!-- ==================== HEADER ==================== -->
+  <g transform="translate(58, 42)">
+    <g transform="scale(0.18359375)">
+      <rect width="512" height="512" rx="115" ry="115" fill="url(#squircleBg)"/>
+      <rect x="2" y="2" width="508" height="508" rx="114" ry="114" fill="none" stroke="#1758A8" stroke-opacity="0.45" stroke-width="5"/>
+      <circle cx="256" cy="256" r="155" fill="url(#ambientGlow)"/>
+      <g transform="translate(96, 96)">
+        <g transform="translate(160, 160) scale(0.04241491363092184, -0.04241491363092184) translate(-5153.5, 23.5)" fill="url(#cyberLongGrad)">
+          <path d="m3441 2750 c102 -64 184 -104 339 -165 183 -73 304 -108 500 -144 215 -41 361 -54 600 -54 312 1 562 35 1000 138 262 61 353 77 486 82 220 10 346 -26 531 -151 129 -87 153 -96 251 -96 125 0 279 40 579 151 103 38 185 17 259 -63 62 -67 85 -127 91 -233 5 -95 -14 -245 -43 -332 -25 -76 -109 -243 -153 -305 -41 -56 -41 -56 -113 -68 -349 -55 -696 -215 -1001 -463 -56 -45 -156 -127 -222 -182 -296 -247 -626 -406 -986 -474 -219 -42 -669 -70 -669 -42 0 5 37 24 82 41 121 47 265 122 335 175 78 58 187 176 232 249 157 260 147 604 -23 835 -136 183 -333 278 -656 316 -283 34 -489 79 -690 152 -157 57 -246 101 -384 193 -162 107 -292 240 -387 395 -60 99 -55 105 42 45z m864 -895 c126 -41 297 -76 500 -104 166 -24 249 -48 330 -96 148 -89 238 -228 260 -400 17 -136 -51 -313 -162 -424 -88 -87 -187 -135 -399 -196 -206 -58 -541 -176 -611 -214 -10 -6 -72 -35 -138 -66 -191 -89 -457 -252 -557 -342 -30 -26 -87 -75 -127 -108 -61 -51 -129 -125 -268 -296 -34 -41 -170 -280 -194 -341 -34 -86 -70 -207 -91 -303 -24 -113 -35 -390 -19 -490 44 -276 91 -408 229 -639 58 -95 89 -133 222 -267 85 -86 178 -175 205 -198 65 -56 41 -49 -140 39 -246 120 -477 305 -696 560 -71 82 -108 137 -191 280 -114 196 -167 325 -228 555 -168 629 -59 1290 303 1835 304 458 820 880 1392 1138 125 57 251 110 265 111 3 0 55 -15 115 -34z m-629 -2116 c-76 -161 -95 -231 -110 -409 -13 -158 -6 -256 29 -387 36 -138 78 -230 158 -350 130 -195 301 -345 517 -453 138 -69 177 -84 335 -125 140 -36 256 -49 430 -48 189 1 272 11 460 59 293 74 485 166 770 370 121 87 244 204 382 364 64 75 207 301 264 418 33 67 62 122 66 122 20 0 -32 -303 -82 -473 -27 -96 -117 -309 -169 -401 -196 -350 -497 -666 -836 -877 -330 -205 -724 -331 -1074 -346 -402 -16 -798 87 -1093 284 -196 131 -268 196 -376 339 -150 197 -195 291 -254 524 -25 96 -27 122 -27 300 0 148 4 212 17 266 19 80 76 249 111 327 22 50 142 250 176 294 30 39 184 206 226 246 50 46 138 107 142 98 1 -4 -26 -68 -62 -142z"/>
+        </g>
+        <path d="M 198 94 C 204 90 215 93 222 98 C 215 103 204 100 198 94 Z" fill="#0B1224"/>
+      </g>
+    </g>
+  </g>
+
+  <text x="168" y="61" class="kicker">河洛 · HELUO FORGE</text>
+  <text x="168" y="109" class="title">能力价值的时效性与长期护城河</text>
+  <text x="168" y="140" class="subtitle"><tspan class="subtitle-strong">模型约半年跨代 · 宿主约两周迭代</tspan><tspan dx="8">· 河洛将投入锚定在“难衰减的组织与个人事实”及“开放标准接口”</tspan></text>
+
+  <!-- Top-Right Tag & 2 Core Premise Pills -->
+  <rect x="1932" y="42" width="410" height="38" rx="19" fill="url(#card-gloss-white)" stroke="#B8CDE2" stroke-width="1.3"/>
+  <rect x="1942" y="48" width="124" height="26" rx="13" fill="url(#hub-navy-grad)"/>
+  <text x="2004" y="66.5" text-anchor="middle" font-size="14.5" font-weight="700" fill="#FFFFFF">价值主张</text>
+  <text x="2202" y="66.5" text-anchor="middle" class="pill-hdr" style="fill:#48607E">耐模型升级 · 抗宿主迭代</text>
+
+  <rect x="1932" y="94" width="198" height="36" rx="10" fill="url(#card-gloss-white)" stroke="#C0D6EC" stroke-width="1.2"/>
+  <circle cx="1956" cy="112" r="4" fill="#003584"/>
+  <text x="1970" y="117.5" class="pill-hdr">核心不改 · 能力全插件</text>
+
+  <rect x="2144" y="94" width="198" height="36" rx="10" fill="url(#card-gloss-white)" stroke="#C0D6EC" stroke-width="1.2"/>
+  <circle cx="2168" cy="112" r="4" fill="#1758A8"/>
+  <text x="2182" y="117.5" class="pill-hdr">开放标准 · 资产可迁移</text>
+
+  <!-- ==================== LEFT Y-AXIS (Value Durability) ==================== -->
+  <path d="M 96 970 V 180" stroke="#99BBE0" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrow-navy)"/>
+
+  <!-- Upper Tier Label: 难衰减 -->
+  <rect x="58" y="210" width="76" height="340" rx="12" fill="url(#spine-badge-grad)" stroke="#8EB3DA" stroke-width="1.4"/>
+  <path d="M 70 210 H 122" stroke="url(#accent-grad-1)" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 96 296 L 106 310 H 86 Z" fill="#003584"/>
+  <text x="96" y="348" text-anchor="middle" font-size="18" font-weight="700" fill="#003584">难衰减</text>
+  <text x="96" y="376" text-anchor="middle" font-size="14" font-weight="600" fill="#1758A8">持续升值</text>
+  <rect x="65" y="402" width="62" height="26" rx="13" fill="#003584"/>
+  <text x="96" y="420" text-anchor="middle" font-size="12.5" font-weight="700" fill="#FFFFFF">重点投入</text>
+  <path d="M 134 368 H 154" stroke="#346CA2" stroke-width="1.6"/>
+  <circle cx="134" cy="368" r="2.5" fill="#003584"/><circle cx="154" cy="368" r="2.5" fill="#003584"/>
+
+  <!-- Lower Tier Label: 易衰减 -->
+  <rect x="58" y="616" width="76" height="330" rx="12" fill="url(#spine-muted-grad)" stroke="#C6D4E3" stroke-width="1.2"/>
+  <path d="M 96 710 L 106 696 H 86 Z" fill="#647C98"/>
+  <text x="96" y="746" text-anchor="middle" font-size="18" font-weight="700" fill="#48607E">易衰减</text>
+  <text x="96" y="774" text-anchor="middle" font-size="14" font-weight="600" fill="#647C98">随版贬值</text>
+  <rect x="65" y="800" width="62" height="26" rx="13" fill="#DDE6F0"/>
+  <text x="96" y="818" text-anchor="middle" font-size="12.5" font-weight="700" fill="#48607E">做薄避坑</text>
+  <path d="M 134 784 H 154" stroke="#9DB5CE" stroke-width="1.6"/>
+  <circle cx="134" cy="784" r="2.5" fill="#647C98"/><circle cx="154" cy="784" r="2.5" fill="#647C98"/>
+
+  <!-- Center Quadrant Dividers -->
+  <path d="M 1248 166 V 972" stroke="#AFC7E0" stroke-width="1.6" stroke-dasharray="6 5"/>
+  <path d="M 154 583 H 2342" stroke="#AFC7E0" stroke-width="1.6" stroke-dasharray="6 5"/>
+
+  <!-- ==================== QUADRANT II: TOP-LEFT (难衰减 × 技术型) ==================== -->
+  <rect x="154" y="166" width="1081" height="404" rx="16" fill="url(#card-gloss-white)" stroke="#8BB3DC" stroke-width="1.5"/>
+  <path d="M 155 181 A 15 15 0 0 1 170 167 H 1219 A 15 15 0 0 1 1234 181 V 213 H 155 Z" fill="url(#hdr-grad-navy-b)"/>
+  <path d="M 170 168 H 1219" stroke="#FFFFFF" stroke-opacity="0.32" stroke-width="1"/>
+
+  <rect x="172" y="176" width="136" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.18" stroke="#FFFFFF" stroke-opacity="0.4"/>
+  <text x="240" y="195" text-anchor="middle" font-size="13.5" font-weight="700" fill="#FFFFFF">难衰减 × 技术型</text>
+  <text x="324" y="196.5" class="panel-title">开放标准接口</text>
+  <text x="476" y="196" class="panel-sub">跨模型、跨宿主可迁移的通用协议资产</text>
+  <rect x="1102" y="177" width="114" height="26" rx="13" fill="#FFFFFF" fill-opacity="0.2" stroke="#FFFFFF" stroke-opacity="0.45"/>
+  <text x="1159" y="195" text-anchor="middle" font-size="13.5" font-weight="700" fill="#FFFFFF">重点投入</text>
+
+  <!-- Q2 Cards: Row 1 (3 cards, w=337, h=154, y=230) -->
+  <rect x="172" y="230" width="337" height="154" rx="12" fill="url(#card-gloss-tint)" stroke="#BCD3EA" stroke-width="1.2"/>
+  <rect x="188" y="246" width="6" height="22" rx="3" fill="#003584"/>
+  <text x="204" y="264" class="tile-title">OAuth 2.1 + PKCE</text>
+  <text x="188" y="298" class="tile-sub">标准化企业登录与最小授权边界</text>
+  <text x="188" y="324" class="tile-sub">按目标资源绑定访问作用域</text>
+  <text x="188" y="356" font-size="13" font-weight="600" fill="#1758A8">→ 登录表单可换，身份契约不变</text>
+
+  <rect x="526" y="230" width="337" height="154" rx="12" fill="url(#card-gloss-tint)" stroke="#BCD3EA" stroke-width="1.2"/>
+  <rect x="542" y="246" width="6" height="22" rx="3" fill="#1758A8"/>
+  <text x="558" y="264" class="tile-title">MCP 开放协议</text>
+  <text x="542" y="298" class="tile-sub">工具与系统连接的标准协议层</text>
+  <text x="542" y="324" class="tile-sub">配合已有 CLI，消除胶水封装</text>
+  <text x="542" y="356" font-size="13" font-weight="600" fill="#1758A8">→ 不因模型升级重写接口适配</text>
+
+  <rect x="880" y="230" width="337" height="154" rx="12" fill="url(#card-gloss-tint)" stroke="#BCD3EA" stroke-width="1.2"/>
+  <rect x="896" y="246" width="6" height="22" rx="3" fill="#2384CA"/>
+  <text x="912" y="264" class="tile-title">Agent Skills (SKILL.md)</text>
+  <text x="896" y="298" class="tile-sub">开放格式与渐进披露知识包</text>
+  <text x="896" y="324" class="tile-sub">沉淀企业工程与业务规范语义</text>
+  <text x="896" y="356" font-size="13" font-weight="600" fill="#1758A8">→ 跨智能体宿主直接复用的资产</text>
+
+  <!-- Q2 Cards: Row 2 (2 cards, w=514, h=150, y=400) -->
+  <rect x="172" y="400" width="514" height="150" rx="12" fill="url(#card-gloss-tint)" stroke="#BCD3EA" stroke-width="1.2"/>
+  <rect x="188" y="416" width="6" height="22" rx="3" fill="#1758A8"/>
+  <text x="204" y="434" class="tile-title">OpenTelemetry GenAI 语义</text>
+  <text x="188" y="468" class="tile-sub">跨模型、跨宿主的统一决策审计与可观测语义约定</text>
+  <text x="188" y="494" class="tile-sub">默认只采集必要调用元数据，不留存业务与代码正文</text>
+  <text x="188" y="526" font-size="13" font-weight="600" fill="#1758A8">→ 统一企业审计口径，不受客户端更迭影响</text>
+
+  <rect x="703" y="400" width="514" height="150" rx="12" fill="url(#card-gloss-tint)" stroke="#BCD3EA" stroke-width="1.2"/>
+  <rect x="719" y="416" width="6" height="22" rx="3" fill="#003584"/>
+  <text x="735" y="434" class="tile-title">AI 注册中心 × npm + 原生索引</text>
+  <text x="719" y="468" class="tile-sub">协同 Nacos AI 注册中心（MCP / Skills）与标准私有制品源</text>
+  <text x="719" y="494" class="tile-sub">以只读轻量索引对接宿主原生市场，精准控制版本分发</text>
+  <text x="719" y="526" font-size="13" font-weight="600" fill="#1758A8">→ 告别人工拷贝与私有安装器锁死</text>
+
+  <!-- ==================== QUADRANT I: TOP-RIGHT (难衰减 × 组织型) ==================== -->
+  <rect x="1261" y="166" width="1081" height="404" rx="16" fill="url(#card-gloss-tint)" stroke="#5E90C8" stroke-width="1.8"/>
+  <path d="M 1262 181 A 15 15 0 0 1 1277 167 H 2326 A 15 15 0 0 1 2341 181 V 213 H 1262 Z" fill="url(#hdr-grad-navy-a)"/>
+  <path d="M 1277 168 H 2326" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1"/>
+
+  <rect x="1279" y="176" width="142" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.18" stroke="#FFFFFF" stroke-opacity="0.4"/>
+  <text x="1350" y="195" text-anchor="middle" font-size="13.5" font-weight="700" fill="#FFFFFF">难衰减 × 组织型</text>
+  <text x="1437" y="196.5" class="panel-title">组织与个人持续事实</text>
+  <text x="1654" y="196" class="panel-sub">随使用持续沉淀的真实边界与工作脉络</text>
+  <rect x="2208" y="177" width="116" height="26" rx="13" fill="#FFFFFF"/>
+  <text x="2266" y="195" text-anchor="middle" font-size="13.5" font-weight="700" fill="#003584">核心护城河</text>
+
+  <!-- Q1 Cards: Row 1 (3 cards, w=337, h=154, y=230) -->
+  <rect x="1279" y="230" width="337" height="154" rx="12" fill="url(#card-gloss-white)" stroke="#A7C5E4" stroke-width="1.3"/>
+  <rect x="1295" y="246" width="6" height="22" rx="3" fill="#003584"/>
+  <text x="1311" y="264" class="tile-title">统一身份与网关治理</text>
+  <text x="1295" y="298" class="tile-sub">真实员工归属、个人/应用隔离</text>
+  <text x="1295" y="324" class="tile-sub">网关预算配额、撤权闭环与边界</text>
+  <text x="1295" y="356" font-size="13" font-weight="600" fill="#003584">→ 服务端权威控制不随前端变化</text>
+
+  <rect x="1633" y="230" width="337" height="154" rx="12" fill="url(#card-gloss-white)" stroke="#A7C5E4" stroke-width="1.3"/>
+  <rect x="1649" y="246" width="6" height="22" rx="3" fill="#1758A8"/>
+  <text x="1665" y="264" class="tile-title">个人长期记忆与协作</text>
+  <text x="1649" y="298" class="tile-sub">以员工本人为中心的记忆边界</text>
+  <text x="1649" y="324" class="tile-sub">授权邮件与自选聊天摘要脉络</text>
+  <text x="1649" y="356" font-size="13" font-weight="600" fill="#003584">→ 换模型、换终端仍延续个人理解</text>
+
+  <rect x="1987" y="230" width="337" height="154" rx="12" fill="url(#card-gloss-white)" stroke="#A7C5E4" stroke-width="1.3"/>
+  <rect x="2003" y="246" width="6" height="22" rx="3" fill="#2384CA"/>
+  <text x="2019" y="264" class="tile-title">端侧安全策略与门禁</text>
+  <text x="2003" y="298" class="tile-sub">敏感目录硬拒绝、外发人工确认</text>
+  <text x="2003" y="324" class="tile-sub">安全依赖缺失即默认拒绝执行</text>
+  <text x="2003" y="356" font-size="13" font-weight="600" fill="#003584">→ 模型自主性越强，门禁越关键</text>
+
+  <!-- Q1 Cards: Row 2 (2 cards, w=514, h=150, y=400) -->
+  <rect x="1279" y="400" width="514" height="150" rx="12" fill="url(#card-gloss-white)" stroke="#A7C5E4" stroke-width="1.3"/>
+  <rect x="1295" y="416" width="6" height="22" rx="3" fill="#003584"/>
+  <text x="1311" y="434" class="tile-title">研发交付与真实验收事实</text>
+  <text x="1295" y="468" class="tile-sub">系统变更与 Issue 真实边界、独立代码验证与专家审查</text>
+  <text x="1295" y="494" class="tile-sub">跨研发、办公与专家委派的授权权限和结果溯源</text>
+  <text x="1295" y="526" font-size="13" font-weight="600" fill="#003584">→ 紧扣真实交付物与授权事实，而非过程模板</text>
+
+  <rect x="1810" y="400" width="514" height="150" rx="12" fill="url(#card-gloss-white)" stroke="#A7C5E4" stroke-width="1.3"/>
+  <rect x="1826" y="416" width="6" height="22" rx="3" fill="#1758A8"/>
+  <text x="1842" y="434" class="tile-title">可信企业供应链与多端基线</text>
+  <text x="1826" y="468" class="tile-sub">企业私有源、AIHUB 策展准入、版本兼容门禁与可控回滚</text>
+  <text x="1826" y="494" class="tile-sub">统一保障 Windows、macOS 与银河麒麟 / UOS 多端基线</text>
+  <text x="1826" y="526" font-size="13" font-weight="600" fill="#003584">→ 组织级分发与安全基线不依赖公网通道</text>
+
+  <!-- ==================== QUADRANT III: BOTTOM-LEFT (易衰减 × 技术型) ==================== -->
+  <rect x="154" y="596" width="1081" height="376" rx="16" fill="url(#card-muted-bg)" stroke="#C7D6E6" stroke-width="1.3"/>
+  <path d="M 155 611 A 15 15 0 0 1 170 597 H 1219 A 15 15 0 0 1 1234 611 V 642 H 155 Z" fill="url(#hdr-muted)"/>
+  <line x1="155" y1="642" x2="1234" y2="642" stroke="#C7D6E6" stroke-width="1"/>
+
+  <rect x="172" y="606" width="128" height="26" rx="13" fill="#FFFFFF" stroke="#B9CBE0" stroke-width="1"/>
+  <text x="236" y="624" text-anchor="middle" font-size="13" font-weight="700" fill="#48607E">易衰减 × 技术型</text>
+  <text x="316" y="625" class="panel-title-muted">脆性技术封装</text>
+  <text x="462" y="624.5" class="panel-sub-muted">易被下一代模型或宿主升级淘汰的实现层</text>
+  <rect x="1056" y="606" width="160" height="26" rx="13" fill="#E3ECF5" stroke="#B9CBE0" stroke-width="1"/>
+  <text x="1136" y="624" text-anchor="middle" font-size="12.5" font-weight="700" fill="#334E6E">刻意做薄 · 可替换</text>
+
+  <rect x="172" y="658" width="1045" height="90" rx="11" fill="#FFFFFF" stroke="#D3DFEC" stroke-width="1.1"/>
+  <circle cx="196" cy="686" r="5" fill="#7D95B0"/>
+  <text x="212" y="692" class="tile-title-muted">提示词脚手架（Prompt Scaffold）</text>
+  <text x="212" y="724" class="tile-sub-muted">为弥补旧模型短板而堆叠的复杂提示链与微操补丁；新模型能力原生覆盖后往往直接失效甚至造成制约</text>
+
+  <rect x="172" y="762" width="1045" height="90" rx="11" fill="#FFFFFF" stroke="#D3DFEC" stroke-width="1.1"/>
+  <circle cx="196" cy="790" r="5" fill="#7D95B0"/>
+  <text x="212" y="796" class="tile-title-muted">宿主核心魔改与私有适配（Host Adapters）</text>
+  <text x="212" y="828" class="tile-sub-muted">Fork 宿主代码或耦合内部私有 API 的脆弱接入；在约两周一次的宿主候选版迭代节奏下持续碎裂、难以维护</text>
+
+  <rect x="172" y="866" width="1045" height="90" rx="11" fill="#FFFFFF" stroke="#D3DFEC" stroke-width="1.1"/>
+  <circle cx="196" cy="894" r="5" fill="#7D95B0"/>
+  <text x="212" y="900" class="tile-title-muted">表层表单、安装器与交互外壳</text>
+  <text x="212" y="932" class="tile-sub-muted">具体登录页跳转、面板样式与客户端打包外壳；保持轻薄外挂与解耦，可随平台形态与宿主界面平滑替换</text>
+
+  <!-- ==================== QUADRANT IV: BOTTOM-RIGHT (易衰减 × 组织型) ==================== -->
+  <rect x="1261" y="596" width="1081" height="376" rx="16" fill="url(#card-muted-bg)" stroke="#C7D6E6" stroke-width="1.3"/>
+  <path d="M 1262 611 A 15 15 0 0 1 1277 597 H 2326 A 15 15 0 0 1 2341 611 V 642 H 1262 Z" fill="url(#hdr-muted)"/>
+  <line x1="1262" y1="642" x2="2341" y2="642" stroke="#C7D6E6" stroke-width="1"/>
+
+  <rect x="1279" y="606" width="136" height="26" rx="13" fill="#FFFFFF" stroke="#B9CBE0" stroke-width="1"/>
+  <text x="1347" y="624" text-anchor="middle" font-size="13" font-weight="700" fill="#48607E">易衰减 × 组织型</text>
+  <text x="1431" y="625" class="panel-title-muted">固定环数与刚性模板</text>
+  <text x="1638" y="624.5" class="panel-sub-muted">锁死模型自主性与演进的静态壳子</text>
+  <rect x="2164" y="606" width="160" height="26" rx="13" fill="#E3ECF5" stroke="#B9CBE0" stroke-width="1"/>
+  <text x="2244" y="624" text-anchor="middle" font-size="12.5" font-weight="700" fill="#334E6E">避免锁死 · 按需精简</text>
+
+  <rect x="1279" y="658" width="1045" height="90" rx="11" fill="#FFFFFF" stroke="#D3DFEC" stroke-width="1.1"/>
+  <circle cx="1303" cy="686" r="5" fill="#7D95B0"/>
+  <text x="1319" y="692" class="tile-title-muted">固定环数与重流程状态机（Rings）</text>
+  <text x="1319" y="724" class="tile-sub-muted">强绑多阶段强制冻结与繁文缛节的流程引擎会阻碍敏捷交付；河洛以 Issue 验收驱动并交由标准化工作流执行</text>
+
+  <rect x="1279" y="762" width="1045" height="90" rx="11" fill="#FFFFFF" stroke="#D3DFEC" stroke-width="1.1"/>
+  <circle cx="1303" cy="790" r="5" fill="#7D95B0"/>
+  <text x="1319" y="796" class="tile-title-muted">形式化静态文档模板（Templates）</text>
+  <text x="1319" y="828" class="tile-sub-muted">为填表而填表、不直接绑定真实代码变更与验收标准的冗余规格壳子，迅速与真实工程上下文脱节</text>
+
+  <rect x="1279" y="866" width="1045" height="90" rx="11" fill="#FFFFFF" stroke="#D3DFEC" stroke-width="1.1"/>
+  <circle cx="1303" cy="894" r="5" fill="#7D95B0"/>
+  <text x="1319" y="900" class="tile-title-muted">硬编码的任务编排顺序</text>
+  <text x="1319" y="932" class="tile-sub-muted">把“如何执行每一步”写死在平台契约中，使更聪明的模型和协作工作流无法灵活优化路径</text>
+
+  <!-- ==================== X-AXIS BAR ==================== -->
+  <line x1="472" y1="1008" x2="1992" y2="1008" stroke="#99BBE0" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#arrow-slate)"/>
+  <rect x="154" y="990" width="308" height="36" rx="18" fill="url(#card-gloss-white)" stroke="#B7CCE2" stroke-width="1.2"/>
+  <text x="308" y="1013" text-anchor="middle" font-size="14.5" font-weight="700" fill="#1758A8">技术型（协议接口 ↔ 运行载体）</text>
+  <rect x="2004" y="990" width="338" height="36" rx="18" fill="url(#card-gloss-white)" stroke="#B7CCE2" stroke-width="1.2"/>
+  <text x="2173" y="1013" text-anchor="middle" font-size="14.5" font-weight="700" fill="#003584">组织型（权限边界 ↔ 业务与个人事实）</text>
+
+  <!-- ==================== BOTTOM STRIP: 3 EVOLUTION TESTS ==================== -->
+  <rect x="154" y="1044" width="2188" height="142" rx="16" fill="url(#pillar-gloss)" stroke="#9BBCE0" stroke-width="1.4"/>
+  <rect x="172" y="1060" width="174" height="110" rx="12" fill="url(#hub-navy-grad)"/>
+  <text x="259" y="1107" text-anchor="middle" font-size="19" font-weight="700" fill="#FFFFFF">三条演进标尺</text>
+  <text x="259" y="1136" text-anchor="middle" font-size="13.5" font-weight="400" fill="#CFE2F7">检验方案是否真正抗衰减</text>
+
+  <rect x="364" y="1060" width="640" height="110" rx="12" fill="url(#card-gloss-white)" stroke="#B6CFE8" stroke-width="1.2"/>
+  <rect x="382" y="1076" width="84" height="24" rx="12" fill="#E6F0FA"/>
+  <text x="424" y="1093" text-anchor="middle" font-size="12.5" font-weight="700" fill="#003584">标尺 01</text>
+  <text x="478" y="1094" font-size="18" font-weight="700" fill="#0E2A52">换更强模型时，是否需要推倒重写？</text>
+  <text x="382" y="1126" class="tile-sub">技巧与编排不写死在契约里，以 Skill 承载企业语义，</text>
+  <text x="382" y="1150" class="tile-sub">模型越强，对意图与任务的完成质量越高。</text>
+
+  <rect x="1022" y="1060" width="640" height="110" rx="12" fill="url(#card-gloss-white)" stroke="#B6CFE8" stroke-width="1.2"/>
+  <rect x="1040" y="1076" width="84" height="24" rx="12" fill="#E6F0FA"/>
+  <text x="1082" y="1093" text-anchor="middle" font-size="12.5" font-weight="700" fill="#003584">标尺 02</text>
+  <text x="1136" y="1094" font-size="18" font-weight="700" fill="#0E2A52">宿主两周迭代时，扩展是否稳定不碎？</text>
+  <text x="1040" y="1126" class="tile-sub">严格不修改、不 fork 宿主核心，只依托公开扩展点装配，</text>
+  <text x="1040" y="1150" class="tile-sub">通用底座与研发能力解耦，平滑承接上游更新。</text>
+
+  <rect x="1680" y="1060" width="640" height="110" rx="12" fill="url(#card-gloss-white)" stroke="#B6CFE8" stroke-width="1.2"/>
+  <rect x="1698" y="1076" width="84" height="24" rx="12" fill="#E6F0FA"/>
+  <text x="1740" y="1093" text-anchor="middle" font-size="12.5" font-weight="700" fill="#003584">标尺 03</text>
+  <text x="1794" y="1094" font-size="18" font-weight="700" fill="#0E2A52">切换或新增工作载体时，资产能否迁移？</text>
+  <text x="1698" y="1126" class="tile-sub">SKILL.md、MCP、OAuth、OTel 与组织授权及个人记忆，</text>
+  <text x="1698" y="1150" class="tile-sub">均属于跨运行载体的长期可迁移资产。</text>
+
+  <!-- ==================== FOOTER ==================== -->
+  <text x="58" y="1215" class="foot">核心结论：把价值锚定在“难衰减的组织与个人事实”和“开放标准接口”上，让模型与宿主演进成为持续放大的顺风车。</text>
+  <text x="2342" y="1215" text-anchor="end" font-size="15" font-weight="700" letter-spacing="1.5" fill="#003584">河洛 · HELUO FORGE</text>
+</svg>
