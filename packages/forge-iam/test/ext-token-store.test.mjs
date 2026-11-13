@@ -234,3 +234,96 @@ test('ext-token-store: clear reports success once the record is gone, even if th
   });
   assert.equal(read.state, 'UNSET_NO_HOSTED');
 });
+
+/**
+ * 可换绑 provider：`pin()` 返回绑定到某一代 provider 的视图，`isCurrent()` 反映
+ * 装配层是否已把它换掉。保存/清除必须整段落在一个 provider 上。
+ */
+function pinnableProvider(provider, state) {
+  const call = (method) => (...args) => state.current[method](...args);
+  return {
+    readRecord: call('readRecord'),
+    modifyRecord: call('modifyRecord'),
+    deleteRecord: call('deleteRecord'),
+    set: call('set'),
+    unset: call('unset'),
+    resolve: call('resolve'),
+    pin() {
+      const port = state.current;
+      return {
+        readRecord: (key) => port.readRecord(key),
+        modifyRecord: (key, mutate) => port.modifyRecord(key, mutate),
+        deleteRecord: (key) => port.deleteRecord(key),
+        set: (ref, value) => port.set(ref, value),
+        unset: (ref) => port.unset(ref),
+        resolve: (ref) => port.resolve(ref),
+        isCurrent: () => state.current === port,
+      };
+    },
+  };
+}
+
+test('ext-token-store refuses a save whose provider is replaced mid-write', async () => {
+  const first = createKeychainProvider(createMemoryBackend());
+  const second = createKeychainProvider(createMemoryBackend());
+  const state = { current: first };
+  // 在第一次写入之后换绑：模拟「set 与 modifyRecord 之间 provider 被替换」。
+  const swapping = pinnableProvider(first, state);
+  const originalSet = swapping.pin;
+  swapping.pin = () => {
+    const port = originalSet();
+    return {
+      ...port,
+      async set(ref, value) {
+        await port.set(ref, value);
+        state.current = second;
+      },
+    };
+  };
+
+  const store = createExtTokenStore(swapping);
+  await assert.rejects(
+    store.save({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', ownerSubject: 'emp-001', token: 'secret-alpha-456' }),
+    (error) => error instanceof ExtTokenStoreError && error.code === 'KEYCHAIN_UNAVAILABLE',
+  );
+  // 两次写入都落在被 pin 的旧 provider 上：没有半条记录跑到新 provider。
+  const oldRead = await first.readRecord(extTokenRecordKey('alpha-tool'));
+  assert.equal(oldRead?.kind, 'grant');
+  assert.equal(await second.readRecord(extTokenRecordKey('alpha-tool')), undefined);
+});
+
+test('ext-token-store reports an unavailable storage when the provider changes during a read', async () => {
+  const first = createKeychainProvider(createMemoryBackend());
+  const second = createKeychainProvider(createMemoryBackend());
+  const state = { current: first };
+  await first.set('HEL_EXT_ALPHA_TOKEN', 'sealed-placeholder');
+  await first.modifyRecord(extTokenRecordKey('alpha-tool'), () => ({
+    kind: 'grant',
+    payload: {
+      version: 1,
+      type: 'heluo-iam-ext-token',
+      extensionId: 'alpha-tool',
+      storageRef: 'HEL_EXT_ALPHA_TOKEN',
+      ownerSubject: 'emp-001',
+      valueDigest: 'not-matching-any-digest',
+      updatedAt: '2026-11-13T00:00:00.000Z',
+    },
+  }));
+  const swapping = pinnableProvider(first, state);
+  const originalPin = swapping.pin;
+  swapping.pin = () => {
+    const port = originalPin();
+    return {
+      ...port,
+      async readRecord(key) {
+        const value = await port.readRecord(key);
+        state.current = second;
+        return value;
+      },
+    };
+  };
+  const store = createExtTokenStore(swapping);
+  const read = await store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  assert.equal(read.state, 'KEYCHAIN_UNAVAILABLE');
+  assert.equal(read.token, undefined);
+});

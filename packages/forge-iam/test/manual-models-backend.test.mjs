@@ -284,3 +284,32 @@ test('managed-models: a manual record shadowed by the catalogue stays removable'
 
   await runtime.dispose();
 });
+
+test('managed-models: removing an absent manual model is an idempotent success', async () => {
+  const { runtime, state } = makeRuntime();
+  await runtime.ready;
+  const before = runtime.getView();
+  state.savedRecord = null;
+  // 计划 §U3/§6.1：重复删除幂等成功——不写库、不重建、不换默认值。
+  const first = await runtime.updateManualModel({ action: 'remove', id: 'never-added' });
+  assert.equal(first.ok, true);
+  assert.equal(first.removed, false);
+  assert.equal(first.persisted, false);
+  assert.deepEqual(first.manual, []);
+  assert.equal(state.savedRecord, null, '幂等删除不得写库');
+  assert.deepEqual(runtime.getView().models, before.models);
+  assert.equal(runtime.getView().defaultModelId, before.defaultModelId);
+
+  // 添加后再删两次：第一次真删，第二次仍成功但不写库。
+  await runtime.updateManualModel({ action: 'add', id: 'custom-deepseek-r1' });
+  state.savedRecord = null;
+  const removed = await runtime.updateManualModel({ action: 'remove', id: 'custom-deepseek-r1' });
+  assert.equal(removed.removed, true);
+  assert.ok(state.savedRecord !== null);
+  state.savedRecord = null;
+  const again = await runtime.updateManualModel({ action: 'remove', id: 'custom-deepseek-r1' });
+  assert.equal(again.ok, true);
+  assert.equal(again.removed, false);
+  assert.equal(state.savedRecord, null);
+  await runtime.dispose();
+});

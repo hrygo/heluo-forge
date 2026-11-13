@@ -725,6 +725,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const activeId = identity(iam.getView());
     const stale = () => { sample(); return disposed || identity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
 
+    let removed = false;
     if (action === 'add') {
       if (catalogModels.some(item => item.id === cleanId) || manualModels.some(item => item.id === cleanId)) {
         throw error('IAM_MANUAL_MODEL_CONFLICT');
@@ -741,9 +742,27 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // good and the person could never clean it up.
       const nextManual = manualModels.filter(item => item.id !== cleanId);
       if (nextManual.length === manualModels.length) {
-        throw error('IAM_MANUAL_MODEL_NOT_FOUND');
+        // 计划 §U3/§6.1：删除不存在的手动条目是幂等成功——不写库、不重建、不换默认值。
+        return {
+          ok: true,
+          persisted: false,
+          removed: false,
+          defaultModelId,
+          enabled: Object.keys(modelOptions),
+          models: models.map(({ id: modelId, name, source, contextWindow, maxTokens, inputModalities }) => ({
+            id: modelId,
+            name,
+            source: source ?? 'gateway',
+            contextWindow,
+            maxTokens,
+            inputModalities,
+          })),
+          manual: manualModels.map(entry => ({ ...entry })),
+          manualTruncated,
+        };
       }
       manualModels = nextManual;
+      removed = true;
       const nextOptions = { ...modelOptions };
       delete nextOptions[cleanId];
       modelOptions = nextOptions;
@@ -771,6 +790,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     return {
       ok: true,
       persisted,
+      removed,
       defaultModelId,
       enabled: Object.keys(modelOptions),
       models: models.map(({ id: modelId, name, source, contextWindow, maxTokens, inputModalities }) => ({

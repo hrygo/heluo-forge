@@ -254,6 +254,14 @@ export function createIamService(rawConfig, options = {}) {
     registry: credentialRegistry,
     store: extTokenStore,
     getCurrentSubject: () => (ctx.state === 'ready' ? (ctx.lastGrant?.subject ?? null) : null),
+    // 会话快照：登出/换账号会同时改 state、epoch 与最后一次 grant，因此解析令牌
+    // 前后各取一次就能发现「读存储期间用户已登出」——缓存里的 ready 不足以证明。
+    getSessionRef: () => (ctx.state === 'ready' && ctx.lastGrant
+      ? {
+        subject: ctx.lastGrant.subject,
+        epoch: `${authEpoch}:${sessionEpoch}:${ctx.lastGrant.sessionInstanceId ?? ''}:${ctx.lastGrant.version ?? ''}`,
+      }
+      : null),
   });
 
   const extCredentialBroker = createCredentialBroker({ extTokens, registry: credentialRegistry });

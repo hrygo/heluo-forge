@@ -102,49 +102,53 @@ export function createServiceStore({ options }) {
   }
 
   /**
-   * 动态凭据端口：把「provider 何时就绪」这一层留在本模块里，装配点只拿端口。
+   * 凭据端口：把「provider 何时就绪」留在本模块，装配点只拿端口。
    *
-   * `ExtTokenStore` 需要 `readRecord/modifyRecord/deleteRecord/set/unset/resolve`
-   * 六个方法；provider 在注入前可能还没就绪，所以这里每次调用都现取，绝不在装配时
-   * 缓存某个 provider 的 store（否则换绑 provider 后仍会读到旧凭据）。
+   * 一次保存/清除由多次 awaited 调用组成（`set` + `modifyRecord`，`deleteRecord` +
+   * `unset`）。若每次调用都现取 provider，换绑恰好发生在两次调用之间就会把密文写到
+   * 旧 provider、把记录写到新 provider，令牌从此不可读。因此每个完整操作先用
+   * `pin()` 固定一个 provider，操作结束再核对 `isCurrent()`：绑定变了就如实报错，
+   * 不让「保存成功」变成一条读不回来的记录。
    */
   function credentialsPort() {
-    const target = () => (ensure() ? storeCredentials : null);
     const unavailable = () => {
       const error = new Error('credentials storage is unavailable');
       error.code = 'KEYCHAIN_UNAVAILABLE';
       return error;
     };
+
+    function boundTo(port) {
+      const require = (method) => (...args) => {
+        if (!port || typeof port[method] !== 'function') return Promise.reject(unavailable());
+        return port[method](...args);
+      };
+      return Object.freeze({
+        // A missing record is a normal state, not a storage failure.
+        readRecord: (key) => (port && typeof port.readRecord === 'function'
+          ? port.readRecord(key)
+          : Promise.resolve(null)),
+        modifyRecord: require('modifyRecord'),
+        deleteRecord: require('deleteRecord'),
+        set: require('set'),
+        unset: require('unset'),
+        resolve: require('resolve'),
+        isCurrent: () => Boolean(port) && Boolean(ensure()) && storeCredentials === port,
+      });
+    }
+
+    function pin() {
+      return boundTo(ensure() ? storeCredentials : null);
+    }
+
     return Object.freeze({
-      readRecord: (key) => {
-        const port = target();
-        return port && typeof port.readRecord === 'function' ? port.readRecord(key) : Promise.resolve(null);
-      },
-      modifyRecord: (key, mutate) => {
-        const port = target();
-        if (!port || typeof port.modifyRecord !== 'function') return Promise.reject(unavailable());
-        return port.modifyRecord(key, mutate);
-      },
-      deleteRecord: (key) => {
-        const port = target();
-        if (!port || typeof port.deleteRecord !== 'function') return Promise.reject(unavailable());
-        return port.deleteRecord(key);
-      },
-      set: (ref, value) => {
-        const port = target();
-        if (!port || typeof port.set !== 'function') return Promise.reject(unavailable());
-        return port.set(ref, value);
-      },
-      unset: (ref) => {
-        const port = target();
-        if (!port || typeof port.unset !== 'function') return Promise.reject(unavailable());
-        return port.unset(ref);
-      },
-      resolve: (ref) => {
-        const port = target();
-        if (!port || typeof port.resolve !== 'function') return Promise.reject(unavailable());
-        return port.resolve(ref);
-      },
+      readRecord: (key) => pin().readRecord(key),
+      modifyRecord: (key, mutate) => pin().modifyRecord(key, mutate),
+      deleteRecord: (key) => pin().deleteRecord(key),
+      set: (ref, value) => pin().set(ref, value),
+      unset: (ref) => pin().unset(ref),
+      resolve: (ref) => pin().resolve(ref),
+      pin,
+      isCurrent: () => Boolean(ensure()) && Boolean(storeCredentials),
     });
   }
 

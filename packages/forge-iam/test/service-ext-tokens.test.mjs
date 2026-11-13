@@ -98,3 +98,85 @@ test('service-ext-tokens projects sanitized states, enforces allowlist, and bloc
     (err) => err instanceof ExtTokenStoreError && err.code === 'IAM_NOT_SIGNED_IN',
   );
 });
+
+test('a sign-out while the token read is pending never releases the hosted token', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool',
+    storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN',
+    allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+
+  const backend = createMemoryBackend();
+  const credentials = createKeychainProvider(backend);
+  const session = { subject: 'emp-001', epoch: 'session-1' };
+  let releaseRead;
+  const gate = new Promise((resolve) => { releaseRead = resolve; });
+  let gated = false;
+  const delayed = {
+    ...credentials,
+    pin: typeof credentials.pin === 'function' ? credentials.pin.bind(credentials) : undefined,
+    async readRecord(key) {
+      // 只拦解析路径：保存本身也要读（状态投影），拦早了会死锁。
+      if (gated) await gate;
+      return credentials.readRecord(key);
+    },
+  };
+  const store = createExtTokenStore(delayed);
+  const svc = createExtTokensService({
+    registry,
+    store,
+    getCurrentSubject: () => session.subject,
+    getSessionRef: () => (session.subject ? { subject: session.subject, epoch: session.epoch } : null),
+    getProcessEnv: () => ({}),
+  });
+
+  await svc.saveToken({ extensionId: 'alpha-tool', token: 'hosted-alpha-777' });
+  gated = true;
+
+  const pending = svc.resolveChildEnv({ extensionId: 'alpha-tool' });
+  // 读存储期间用户登出：epoch 与 subject 同时失效。
+  session.subject = null;
+  session.epoch = 'session-2';
+  releaseRead();
+  await assert.rejects(pending, (error) => error instanceof ExtTokenStoreError && error.code === 'IAM_NOT_SIGNED_IN');
+});
+
+test('a switched account mid-read is treated as signed out instead of returning the old token', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool',
+    storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN',
+    allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+  const credentials = createKeychainProvider(createMemoryBackend());
+  const session = { subject: 'emp-001', epoch: 'session-1' };
+  let releaseRead;
+  const gate = new Promise((resolve) => { releaseRead = resolve; });
+  let gated = false;
+  const delayed = {
+    ...credentials,
+    async readRecord(key) {
+      if (gated) await gate;
+      return credentials.readRecord(key);
+    },
+  };
+  const store = createExtTokenStore(delayed);
+  const svc = createExtTokensService({
+    registry,
+    store,
+    getCurrentSubject: () => session.subject,
+    getSessionRef: () => (session.subject ? { subject: session.subject, epoch: session.epoch } : null),
+    getProcessEnv: () => ({}),
+  });
+  await svc.saveToken({ extensionId: 'alpha-tool', token: 'hosted-alpha-888' });
+  gated = true;
+
+  const pending = svc.resolveChildEnv({ extensionId: 'alpha-tool' });
+  session.subject = 'emp-002';
+  session.epoch = 'session-9';
+  releaseRead();
+  await assert.rejects(pending, (error) => error instanceof ExtTokenStoreError && error.code === 'IAM_NOT_SIGNED_IN');
+});

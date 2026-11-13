@@ -134,15 +134,28 @@ export function createExtTokenStore(credentials, options = {}) {
     return (pendingCounts.get(extensionId) ?? 0) > 0;
   }
 
+  /**
+   * 一次操作内固定同一个 provider：换绑恰好发生在两次 awaited 调用之间时，密文与
+   * 记录必须落在同一个 provider，否则保存下来的令牌永远读不回来。
+   */
+  function pinCredentials() {
+    return typeof credentials.pin === 'function' ? credentials.pin() : credentials;
+  }
+
+  function providerChanged(port) {
+    return typeof port.isCurrent === 'function' && !port.isCurrent();
+  }
+
   async function read({ extensionId, storageRef, currentSubject }) {
     const recordKey = extTokenRecordKey(extensionId);
     if (isPending(extensionId)) {
       return { state: 'PENDING_WRITE', ownerMismatch: false, updatedAt: null };
     }
 
+    const port = pinCredentials();
     let record;
     try {
-      record = await credentials.readRecord(recordKey);
+      record = await port.readRecord(recordKey);
     } catch (cause) {
       if (isKeychainFailure(cause)) {
         return { state: 'KEYCHAIN_UNAVAILABLE', ownerMismatch: false, updatedAt: null };
@@ -176,7 +189,7 @@ export function createExtTokenStore(credentials, options = {}) {
 
     let resolved;
     try {
-      resolved = await credentials.resolve(storageRef);
+      resolved = await port.resolve(storageRef);
     } catch (cause) {
       if (isKeychainFailure(cause)) {
         return { state: 'KEYCHAIN_UNAVAILABLE', ownerMismatch: false, updatedAt: payload.updatedAt ?? null };
@@ -193,6 +206,9 @@ export function createExtTokenStore(credentials, options = {}) {
       return { state: 'KEYCHAIN_UNAVAILABLE', ownerMismatch: false, updatedAt: payload.updatedAt ?? null };
     }
 
+    if (providerChanged(port)) {
+      return { state: 'KEYCHAIN_UNAVAILABLE', ownerMismatch: false, updatedAt: payload.updatedAt ?? null };
+    }
     return {
       state: 'HOSTED_ACTIVE',
       ownerMismatch: false,
@@ -211,6 +227,7 @@ export function createExtTokenStore(credentials, options = {}) {
     }
 
     return enqueue(extensionId, async () => {
+      const port = pinCredentials();
       const sealed = sealWithOwnerAad(token, ownerSubject, extensionId);
       const updatedAt = now();
       const digest = sha256Hex(token);
@@ -219,16 +236,16 @@ export function createExtTokenStore(credentials, options = {}) {
       // previous value (or remove the ref) before rethrowing.
       let previousSealed;
       try {
-        previousSealed = (await credentials.resolve(storageRef))?.value;
+        previousSealed = (await port.resolve(storageRef))?.value;
       } catch {
         previousSealed = undefined;
       }
       const restorePrevious = async () => {
         try {
           if (typeof previousSealed === 'string' && previousSealed.length > 0) {
-            await credentials.set(storageRef, previousSealed);
+            await port.set(storageRef, previousSealed);
           } else {
-            await credentials.unset(storageRef);
+            await port.unset(storageRef);
           }
         } catch {
           // A failed rollback must not mask the original write error. The record
@@ -236,8 +253,8 @@ export function createExtTokenStore(credentials, options = {}) {
         }
       };
       try {
-        await credentials.set(storageRef, sealed);
-        await credentials.modifyRecord(recordKey, () => ({
+        await port.set(storageRef, sealed);
+        await port.modifyRecord(recordKey, () => ({
           kind: 'grant',
           payload: {
             version: EXT_TOKEN_VERSION,
@@ -256,6 +273,10 @@ export function createExtTokenStore(credentials, options = {}) {
         }
         throw cause;
       }
+      if (providerChanged(port)) {
+        // 写落在已被替换的 provider 上：如实报不可用，别把读不回来的记录说成成功。
+        throw new ExtTokenStoreError('KEYCHAIN_UNAVAILABLE', 'credential storage was replaced during the save');
+      }
       return { state: 'HOSTED_ACTIVE', updatedAt };
     });
   }
@@ -263,8 +284,9 @@ export function createExtTokenStore(credentials, options = {}) {
   async function clear({ extensionId, storageRef }) {
     const recordKey = extTokenRecordKey(extensionId);
     return enqueue(extensionId, async () => {
+      const port = pinCredentials();
       try {
-        await credentials.deleteRecord(recordKey);
+        await port.deleteRecord(recordKey);
       } catch (cause) {
         if (isKeychainFailure(cause)) {
           throw new ExtTokenStoreError('KEYCHAIN_UNAVAILABLE', 'credential storage is unavailable');
@@ -276,9 +298,12 @@ export function createExtTokenStore(credentials, options = {}) {
       // therefore leaves nothing reachable, and reporting the whole clear as
       // failed would tell the person the opposite of what happened.
       try {
-        await credentials.unset(storageRef);
+        await port.unset(storageRef);
       } catch {
         // Dead ciphertext is harmless: the next save overwrites the same ref.
+      }
+      if (providerChanged(port)) {
+        throw new ExtTokenStoreError('KEYCHAIN_UNAVAILABLE', 'credential storage was replaced during the clear');
       }
       return { state: 'UNSET_NO_HOSTED', updatedAt: null };
     });

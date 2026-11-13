@@ -40,9 +40,46 @@ function safeDetectRisk(descriptor, processEnv) {
  * owner-bound encrypted storage, sanitized status projections, and child-process
  * env resolution.
  */
-export function createExtTokensService({ registry, store, getCurrentSubject, getProcessEnv = () => process.env }) {
+export function createExtTokensService({ registry, store, getCurrentSubject, getSessionRef, getProcessEnv = () => process.env }) {
   if (!registry || !store || typeof getCurrentSubject !== 'function') {
     throw new ExtTokenStoreError('IAM_INTERNAL', 'registry, store, and getCurrentSubject are required');
+  }
+
+  /**
+   * 会话引用：subject + 一个标识「这是哪一次会话」的 epoch。
+   *
+   * 只认缓存里的 `ready` 不够：解析令牌是异步的，读存储期间用户可能已经登出。
+   * 调用方给出 epoch 时，本服务在读出令牌前后各取一次快照；两次不一致就当作
+   * 已登出，绝不把登出会话的令牌交给子进程。没给 epoch 的旧调用按 subject 比较。
+   */
+  function readSessionRef() {
+    if (typeof getSessionRef === 'function') {
+      const ref = getSessionRef();
+      if (ref && typeof ref === 'object' && typeof ref.subject === 'string' && ref.subject.length > 0) {
+        return { subject: ref.subject, epoch: typeof ref.epoch === 'string' ? ref.epoch : ref.subject };
+      }
+      return null;
+    }
+    const subject = getCurrentSubject();
+    return typeof subject === 'string' && subject.length > 0 ? { subject, epoch: subject } : null;
+  }
+
+  function sameSession(before, after) {
+    return Boolean(before) && Boolean(after) && before.subject === after.subject && before.epoch === after.epoch;
+  }
+
+  function requireSession() {
+    const ref = readSessionRef();
+    if (!ref) {
+      throw new ExtTokenStoreError('IAM_NOT_SIGNED_IN', 'sign in to enterprise IAM before using hosted extension tokens');
+    }
+    return ref;
+  }
+
+  function assertSessionUnchanged(before) {
+    if (!sameSession(before, readSessionRef())) {
+      throw new ExtTokenStoreError('IAM_NOT_SIGNED_IN', 'the IAM session ended while the extension credential was in flight');
+    }
   }
 
   function requireDescriptor(extensionId) {
@@ -94,6 +131,7 @@ export function createExtTokensService({ registry, store, getCurrentSubject, get
 
   async function saveToken({ extensionId, token }) {
     const descriptor = requireDescriptor(extensionId);
+    const session = requireSession();
     const currentSubject = getCurrentSubject();
     if (typeof currentSubject !== 'string' || currentSubject.length === 0) {
       throw new ExtTokenStoreError('IAM_NOT_SIGNED_IN', 'sign in to enterprise IAM before saving an extension token', {
@@ -111,6 +149,7 @@ export function createExtTokensService({ registry, store, getCurrentSubject, get
 
   async function clearToken({ extensionId }) {
     const descriptor = requireDescriptor(extensionId);
+    const session = requireSession();
     await store.clear({
       extensionId: descriptor.extensionId,
       storageRef: descriptor.storageRef,
@@ -120,12 +159,15 @@ export function createExtTokensService({ registry, store, getCurrentSubject, get
 
   async function resolveChildEnv({ extensionId, baseEnv = undefined, processEnv = getProcessEnv() ?? {} }) {
     const descriptor = requireDescriptor(extensionId);
-    const currentSubject = getCurrentSubject() ?? null;
+    const session = readSessionRef();
     const stored = await store.read({
       extensionId: descriptor.extensionId,
       storageRef: descriptor.storageRef,
-      currentSubject,
+      currentSubject: session?.subject ?? null,
     });
+
+    // 读存储期间登出/换账号：这次解析的结论不能当真，按未登录拒绝。
+    assertSessionUnchanged(session);
 
     if (stored.state === 'OWNER_MISMATCH') {
       throw new ExtTokenStoreError(

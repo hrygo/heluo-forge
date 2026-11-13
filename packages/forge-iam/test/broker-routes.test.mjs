@@ -150,3 +150,46 @@ test('/api/forge-iam/ext-credentials GET/PUT/DELETE 不回显明文且强制预�
   assert.equal(resDel.statusCode, 200);
   assert.equal(JSON.parse(resDel.body).credential.hosted, false);
 });
+
+test('扩展凭据路由保留错误契约：空令牌 400、存储不可用 503 且码不被压成 IAM_INTERNAL', async () => {
+  const handler = createIamRoutes(
+    {
+      async listExtCredentials() { return []; },
+      async saveExtCredential() {
+        const err = new Error('invalid token');
+        err.code = 'IAM_EXT_TOKEN_INVALID';
+        throw err;
+      },
+      async clearExtCredential() {
+        const err = new Error('keychain unavailable');
+        err.code = 'KEYCHAIN_UNAVAILABLE';
+        throw err;
+      },
+    },
+    {
+      getOrigin: () => 'http://localhost',
+      getConnection: () => ({ requestRejection: () => undefined }),
+    },
+  );
+
+  const resInvalid = makeRes();
+  await handler(
+    makeReq('PUT', '/api/forge-iam/ext-credentials/sample-ext', {
+      headers: { 'x-forge-iam-request': '1', 'content-type': 'application/json' },
+      body: { token: '' },
+    }),
+    resInvalid,
+  );
+  assert.equal(resInvalid.statusCode, 400);
+  assert.equal(JSON.parse(resInvalid.body).error.code, 'IAM_EXT_TOKEN_INVALID');
+
+  const resStorage = makeRes();
+  await handler(
+    makeReq('DELETE', '/api/forge-iam/ext-credentials/sample-ext', {
+      headers: { 'x-forge-iam-request': '1', 'content-type': 'application/json' },
+    }),
+    resStorage,
+  );
+  assert.equal(resStorage.statusCode, 503);
+  assert.equal(JSON.parse(resStorage.body).error.code, 'KEYCHAIN_UNAVAILABLE', '已登记的码不能被压成 IAM_INTERNAL');
+});

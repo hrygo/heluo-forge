@@ -126,8 +126,10 @@ function errorBody(error) {
   // repeats their text verbatim. Flattening them into IAM_INTERNAL made a
   // gateway rejection, a cancelled sync and a real outage indistinguishable
   // in the response the browser already has to act on.
-  const code = typeof error?.code === 'string' && (error.code.startsWith('IAM_') || error.code.startsWith('ENTERPRISE_')
-    || ((error.code === 'CRED_KEY_UNAVAILABLE' || error.code === 'CRED_DECRYPT_FAILED') && Object.hasOwn(ERROR_STATUS, error.code)))
+  // 契约表是唯一真源：登记在 `ERROR_STATUS` 里的码原样透出，未登记的才归到
+  // `IAM_INTERNAL`。按前缀白名单判断会把 `KEYCHAIN_UNAVAILABLE`、`PENDING_WRITE`
+  // 这类已登记码压成"内部错误"，客户端既看不到真实原因也没法据此提示。
+  const code = typeof error?.code === 'string' && Object.hasOwn(ERROR_STATUS, error.code)
     ? error.code : 'IAM_INTERNAL';
   return {
     error: {

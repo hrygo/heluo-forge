@@ -129,3 +129,47 @@ test('IAM 插件真的把 broker 提供给宿主，而不只是导出一个工�
   off();
   assert.ok(statuses.some((item) => item.extensionId === DEVOPS_CREDENTIAL_DESCRIPTOR.extensionId));
 });
+
+test('broker 在会话解析期间失效时 fail closed，不回放旧令牌', async () => {
+  const credentials = new MemoryCredentials();
+  const registry = createCredentialRegistry();
+  const session = { subject: 'E1001', epoch: 'boot-1' };
+  let releaseRead;
+  const gate = new Promise((resolve) => { releaseRead = resolve; });
+  let gated = false;
+  // 只拦解析路径（保存本身也要读）；顺手补齐六个方法，避免原型方法被展开丢掉。
+  const delayed = {
+    async readRecord(key) {
+      if (gated) await gate;
+      return credentials.readRecord(key);
+    },
+    modifyRecord: (key, mutate) => credentials.modifyRecord(key, mutate),
+    deleteRecord: (key) => credentials.deleteRecord(key),
+    set: (ref, value) => credentials.set(ref, value),
+    unset: (ref) => credentials.unset(ref),
+    resolve: (ref) => credentials.resolve(ref),
+  };
+  const store = createExtTokenStore(delayed);
+  const extTokens = createExtTokensService({
+    registry,
+    store,
+    getCurrentSubject: () => session.subject,
+    getSessionRef: () => (session.subject ? { subject: session.subject, epoch: session.epoch } : null),
+    getProcessEnv: () => ({}),
+  });
+  const broker = createCredentialBroker({ extTokens, registry });
+  registry.registerExtensionCredential(DEVOPS_CREDENTIAL_DESCRIPTOR);
+
+  await broker.saveToken({ extensionId: 'devops', token: 'devops-hosted-token' });
+  gated = true;
+  const resolve = createDevopsResolveChildEnv({ broker, processEnv: { DEVOPS_API_KEY: 'from-env' } });
+  const pending = resolve();
+  session.subject = null;
+  session.epoch = 'boot-2';
+  releaseRead();
+
+  const resolved = await pending;
+  assert.equal(resolved.ok, false, '登出后不得把旧令牌交给子进程');
+  assert.equal(resolved.code, 'IAM_NOT_SIGNED_IN');
+  assert.equal(JSON.stringify(resolved).includes('devops-hosted-token'), false);
+});
