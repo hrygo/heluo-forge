@@ -8,13 +8,12 @@
     "dsh": ">=0.2.1-rc.3"
   },
   "scripts": {
-    "test": "node --test",
-    "build": "node scripts/build-client.mjs"
+    "test": "node --test"
   },
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
-    "./client": "./client.cjs",
+    "./client": "./client.js",
     "./catalog": "./src/catalog.mjs",
     "./errors": "./src/errors.mjs",
     "./ledger": "./src/ledger.mjs",
@@ -39,11 +38,8 @@
   },
   "files": [
     "src",
-    "client.cjs",
+    "client.js",
     "README.md",
     "cordis.patch.yml"
-  ],
-  "devDependencies": {
-    "esbuild": "^0.25.0"
-  }
+  ]
 }
