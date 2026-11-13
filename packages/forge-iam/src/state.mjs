@@ -105,8 +105,12 @@ export function canSignIn(state) {
 /**
  * Build the non-secret snapshot consumed by the Host service and Client UI.
  *
+ * `identity` 是 UserInfo 的只读显示投影（issue #160）：只含 user_id/user_name/
+ * work_no 三个定稿字段，令牌、sub、authTime 等原始响应内容一律不进视图。
+ * 审计主体仍只读 principal（issuer/subject），identity 不参与审计。
+ *
  * @param {string} state
- * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, accessExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
+ * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, identity?: object | null, accessExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
  */
 export function createView(state, details = {}) {
   return {
@@ -119,6 +123,7 @@ export function createView(state, details = {}) {
     error: details.error ?? null,
     exclusive: details.exclusive ?? 'ok',
     principal: details.principal ?? null,
+    identity: details.identity ?? null,
     accessExpiresAt: details.accessExpiresAt ?? null,
     gatewayCredential: details.gatewayCredential ?? null,
     gatewayConsoleUrl: details.gatewayConsoleUrl ?? null,

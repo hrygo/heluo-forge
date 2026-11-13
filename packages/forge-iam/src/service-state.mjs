@@ -26,6 +26,7 @@ export function createServiceState(env) {
     now,
     getGatewaySummary,
     getMetadataIssuer,
+    getIdentityProfile,
     scheduleReconcile,
     scheduleRenewal,
     clearPendingObservation,
@@ -77,6 +78,10 @@ export function createServiceState(env) {
       error,
       exclusive: exclusive.ok ? 'ok' : (exclusive.reason ?? 'exclusive-violation'),
       principal: summary.principal ?? null,
+      // 只读显示投影（issue #160）：姓名/工号/OA 账号随会话失效（登出、
+      // 会话失效、重新登录）而消失；访问令牌刷新不清投影（同一 grantIdentity）。
+      // 令牌与 UserInfo 原始响应不在此处。
+      identity: getIdentityProfile?.() ?? null,
       accessExpiresAt: summary.accessExpiresAt ?? null,
       gatewayCredential: gateway,
       gatewayConsoleUrl: config.gatewayConsoleUrl || null,

@@ -1,8 +1,17 @@
 // UserInfo 只在登录成功后取一次，失败只丢弃画像，不影响登录。
-// 字段映射默认全空：IAM 尚未确认字段名，机制先落地，不显示姓名。
+// 字段口径已定稿（issue #160）：内部键 user_id/user_name/work_no，
+// 默认映射企业 IAM 的 employeeNumber（工号）/displayName（姓名）/giveName（OA 账号）。
+// 只保留这一套映射，不做猜测性回退链；宿主可用 profileFields 覆盖，
+// 显式传空对象则保持不请求、不投影。
 import { IamError } from './errors.mjs';
 
-export const PROFILE_FIELD_KEYS = Object.freeze(['workNo', 'name']);
+export const PROFILE_FIELD_KEYS = Object.freeze(['user_id', 'user_name', 'work_no']);
+
+export const DEFAULT_PROFILE_FIELDS = Object.freeze({
+  user_id: 'employeeNumber',
+  user_name: 'displayName',
+  work_no: 'giveName',
+});
 
 const MAX_PROFILE_VALUE = 128;
 
@@ -33,9 +42,14 @@ export function projectUserInfo(raw, fields) {
   return Object.keys(profile).length === 0 ? undefined : Object.freeze(profile);
 }
 
+/**
+ * 令牌传递方式：标准 OIDC 用 Authorization Bearer 头（header）；
+ * 企业 IAM 的 profile 端点实测要求 query 参数（?access_token=...）。
+ */
 export async function fetchUserInfo({
   userInfoEndpoint,
   accessToken,
+  tokenTransport = 'header',
   fetchImpl = globalThis.fetch,
   timeoutMs = 5000,
   signal,
@@ -48,9 +62,16 @@ export async function fetchUserInfo({
   if (signal) signals.push(signal);
   let response;
   try {
-    response = await fetchImpl(userInfoEndpoint, {
+    const url = new URL(userInfoEndpoint);
+    const headers = { accept: 'application/json' };
+    if (tokenTransport === 'query') {
+      url.searchParams.set('access_token', accessToken);
+    } else {
+      headers.authorization = `Bearer ${accessToken}`;
+    }
+    response = await fetchImpl(url, {
       method: 'GET',
-      headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+      headers,
       redirect: 'error',
       signal: AbortSignal.any(signals),
     });

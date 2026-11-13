@@ -15,7 +15,7 @@ import { createSignOut } from './service-signout.mjs';
 import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
-import { normalizeProfileFields } from './userinfo.mjs';
+import { normalizeProfileFields, DEFAULT_PROFILE_FIELDS } from './userinfo.mjs';
 import { grantIdentity, safeMessage } from './service-helpers.mjs';
 
 /**
@@ -43,8 +43,9 @@ export function createIamService(rawConfig, options = {}) {
   const configured = isConfigured(config).ok;
   const now = options.now ?? (() => Date.now());
   const fetchImpl = options.fetch ?? globalThis.fetch;
-  // Empty by default: IAM has not confirmed field names, so no name is shown.
-  const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
+  // 默认映射为定稿口径（issue #160）：employeeNumber/displayName/giveName。
+  // 宿主可用 options.profileFields 覆盖；显式传空对象表示不请求、不投影。
+  const profileFields = normalizeProfileFields(options.profileFields ?? DEFAULT_PROFILE_FIELDS);
 
   // Sign-in/out lifetimes: one attempt at a time, and an epoch pair that makes
   // a response belonging to a replaced session unable to publish.
@@ -67,6 +68,7 @@ export function createIamService(rawConfig, options = {}) {
     now,
     getGatewaySummary: () => provider.gatewaySummary,
     getMetadataIssuer: () => grants.cachedIssuer(),
+    getIdentityProfile: () => service.getIdentityProfile(),
     scheduleReconcile: () => selection.schedule(),
     scheduleRenewal: () => token.scheduleRenewal(),
     clearPendingObservation: () => { observedPending = null; },
@@ -257,7 +259,7 @@ export function createIamService(rawConfig, options = {}) {
      */
     getSession() {
       ctx.recheckExclusive();
-      return sessionView(ctx.lastGrant, ctx.state);
+      return sessionView(ctx.lastGrant, ctx.state, service.getIdentityProfile() ?? undefined);
     },
 
     hydrate: reconcile.hydrate,
@@ -308,10 +310,12 @@ clearGatewayCredential: gateway.clearCredential,
       return { issuer: ctx.lastGrant.issuer, subject: ctx.lastGrant.subject };
     },
 
-    /** Projected UserInfo for future display; empty until IAM confirms fields. */
+    /** Projected UserInfo for display; hidden whenever the owning session is gone. */
     getIdentityProfile() {
-      // A profile is only valid for the grant that produced it: every path that
-      // clears or replaces lastGrant hides it, without touching each call site.
+      // The profile is bound to the session that produced it: the identity
+      // comparison hides it on sign-out, session loss, and re-login, while a
+      // token refresh preserves grantIdentity and keeps it visible — without
+      // touching each call site.
       if (!ctx.lastGrant || !grants.identityProfile) return undefined;
       if (!isDeepStrictEqual(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
       return { ...grants.identityProfile.profile };
