@@ -101,13 +101,16 @@ const REBUILD_ATTEMPT_LIMIT = 3;
 /**
  * A stored credential stays opaque (issue #199): no format, charset or length
  * rule at save time, and the gateway owns validity. The one local property the
- * transport does impose is header safety: a value outside printable ASCII
- * cannot travel as `Authorization: Bearer <key>`, and letting it reach the
- * transport would surface undici's message, which can carry the raw value.
- * Intercept it once here with a deterministic, echo-free code.
+ * transport does impose is header safety. The transport is fetch/Headers, whose
+ * value must be a ByteString and rejects CR/LF, NUL, DEL, other control
+ * characters and anything above Latin-1, while TAB and Latin-1 (measured:
+ * `clé`, embedded TAB) pass — so the guard mirrors exactly that rule instead
+ * of inventing a stricter one. Letting an invalid value reach the transport
+ * would surface its error message, which can carry the raw value; intercept it
+ * once here with a deterministic, echo-free code.
  */
 export const assertSendableCredential = key => {
-  if (typeof key === 'string' && !/^[\x20-\x7e]*$/.test(key)) {
+  if (typeof key === 'string' && /[^\t\x20-\x7e\x80-\xff]/.test(key)) {
     throw error('ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
   }
   return key;

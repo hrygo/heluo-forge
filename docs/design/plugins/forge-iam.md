@@ -866,7 +866,7 @@ flowchart TD
 | `ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED` | `credential_revoked` | 401 | 个人访问凭证已被回收，请联系管理员重新申领。 |
 | `ENTERPRISE_GATEWAY_FORBIDDEN` | 403、`permission_error`、`PERMISSION` | 403 | 当前账号没有此模型的使用权限，请联系管理员。 |
 | `ENTERPRISE_GATEWAY_CREDENTIAL_SUSPENDED` | `credential_suspended` | 403 | 个人访问凭证已被暂停，请联系管理员。 |
-| `ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE` | 存储值含 CR/LF、控制字符或非可打印 ASCII（发送前本地拦截，不进传输层） | 401 | 保存的网关凭证无法用于发送请求，请重新粘贴网关提供的凭证。 |
+| `ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE` | 存储值超出 HTTP 头值合法字符集（fetch/Headers 的 ByteString 规则：拒 CR/LF、NUL、DEL、其余控制字符及高于 Latin-1 的字符；TAB 与 Latin-1 放行），发送前本地拦截，不进传输层 | 401 | 保存的网关凭证无法用于发送请求，请重新粘贴网关提供的凭证。 |
 | `ENTERPRISE_GATEWAY_IDENTITY_MISMATCH` | `iam_token_mismatch` | 403 | 登录身份与凭证绑定账号不一致，请重新登录后重试。 |
 | `ENTERPRISE_GATEWAY_CLIENT_NOT_RECOGNIZED` | `client_not_recognized` | 403 | 当前客户端的标识未被企业网关识别，请升级客户端或联系管理员核准。 |
 | `ENTERPRISE_MODEL_NOT_ALLOWED` | `model_not_allowed`、本地门禁拒绝 | 403 | 此模型未由企业开放，请选择企业提供的模型。 |

@@ -882,9 +882,7 @@ test('a stored credential that cannot be an HTTP header fails deterministically 
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
   // The catalogue was fine; the user then saves a value that cannot travel.
-  const before = f.iam.resolveGatewayConnection;
   f.iam.resolveGatewayConnection = async () => ({ baseURL: configuration.baseURL, key: unsafe, generation: 'one' });
-  void before;
   const prepared = await f.adapter.prepareCall(options.provider, options.model);
   const result = await chunks(prepared.stream(options));
   // The guard fires before any content chunk is produced.
@@ -892,22 +890,49 @@ test('a stored credential that cannot be an HTTP header fails deterministically 
   const failure = result.at(-1).reason.failure;
   assert.equal(failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
   assert.equal(failure.message, '保存的网关凭证无法用于发送请求，请重新粘贴网关提供的凭证。');
-  // Neither the failure text nor any view surface may echo the stored value.
-  assert.equal(JSON.stringify(result).includes(unsafe), false);
-  assert.equal(JSON.stringify(f.runtime.getView()).includes(unsafe), false);
+  // Leak scan must compare with JSON-escaped needles: JSON.stringify escapes
+  // CR/LF in the OUTPUT, so searching for the raw value would never match even
+  // when the value is present verbatim.
+  const needle = JSON.stringify(unsafe).slice(1, -1);
+  assert.equal(JSON.stringify(result).includes(needle), false);
+  assert.equal(JSON.stringify(f.runtime.getView()).includes(needle), false);
   // A later catalogue sync fails at the same guard instead of sending the value.
   await f.runtime.refresh().catch(() => { });
   assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
-  // A printable-ASCII value of any shape still travels (no format/length rule).
-  const printable = fixture({
-    connectionKey: `${'x'.repeat(5000)} !?@#`,
-    fetch: async () => new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] })),
-  });
-  t.after(() => printable.runtime.dispose());
-  await printable.runtime.ready;
-  const ok = await chunks((await printable.adapter.prepareCall(options.provider, options.model)).stream(options));
-  assert.equal(ok[0].text, 'ok');
-  assert.equal(printable.credential, `${'x'.repeat(5000)} !?@#`);
+});
+
+test('the leak scan itself is not vacuous: a planted credential is detected (issue #199)', async t => {
+  // Mutation check for the assertions above: if a view or error body ever
+  // carried the stored value, the same comparison MUST fire.
+  const unsafe = `uag-sk-u-${'A'.repeat(43)}\r\nSet-Cookie: 1`;
+  const needle = JSON.stringify(unsafe).slice(1, -1);
+  const poisoned = JSON.stringify({ failure: { message: `internal detail ${unsafe}` } });
+  assert.equal(poisoned.includes(needle), true);
+});
+
+test('header-unsafety follows the transport, not a stricter local rule (issue #199 review)', async t => {
+  // Values the transport accepts must travel: embedded TAB, Latin-1, any length.
+  for (const connectionKey of [`uag-sk-u-${'B'.repeat(40)} clé`, `key\tpart`, `${'x'.repeat(5000)} !?@#`]) {
+    const f = fixture({
+      connectionKey,
+      fetch: async () => new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] })),
+    });
+    t.after(() => f.runtime.dispose());
+    await f.runtime.ready;
+    const result = await chunks((await f.adapter.prepareCall(options.provider, options.model)).stream(options));
+    assert.equal(result[0].text, 'ok');
+    assert.equal(f.credential, connectionKey);
+  }
+  // Values the transport rejects are still refused deterministically before it.
+  for (const blocked of ['凭据-示例', 'bad\x7Fvalue']) {
+    const f = fixture();
+    t.after(() => f.runtime.dispose());
+    await f.runtime.ready;
+    f.iam.resolveGatewayConnection = async () => ({ baseURL: configuration.baseURL, key: blocked, generation: 'one' });
+    const result = await chunks((await f.adapter.prepareCall(options.provider, options.model)).stream(options));
+    assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
+    assert.equal(JSON.stringify(result).includes(JSON.stringify(blocked).slice(1, -1)), false);
+  }
 });
 
 test('catalogue requests keep the host attribution headers untouched (issue #198)', async t => {
