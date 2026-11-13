@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-018 |
 | 文档名称 | 企业 Nacos Skill 发现、安装与 DSH 原生加载详细设计 |
-| 版本 | V0.2 |
+| 版本 | V0.3 |
 | 文档状态 | 草案（代拟） |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-28 |
+| 最后更新 | 2026-11-13 |
 | 门禁 | G1 发现与安装闭环；G2 三目标实机 |
 | 模块状态 | 规划（核心骨架源码与离线测试随首版 PR；企业 Nacos 未联调） |
 
@@ -21,14 +21,15 @@
 > 1. 目标 DSH 源码只读核验（基线见仓库 `.dsh-version`）：`ctx.skills.registerProvider`（`SkillProvider.list/get`、`SkillProviderControl.signal/invalidate`、rank 合并与层遮蔽）、`dsh-skill-filesystem` 的 rank 100–600 与扫描面、`dsh-tool-skill` 目录 digest 与 `/name` 手势、`dsh-credentials` 记录接口（[DSH skills 服务](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/skill/README.md)、[原生加载](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/skill/tool-skill/README.md)）。
 > 2. Nacos 源码只读核验（`alibaba/nacos` tag `3.2.0` 与 `develop`）：`SkillClientController`（3.2 仅有 ZIP 下载，无摘要头、无目录列举）、`ConsoleSkillController`（list/detail 在 console 面）、client `/search` 为 3.3 起能力。响应模型的字段名以 P0 实测为准，代码中防御式解析并标注待实测。
 > 3. 本仓库文档：[设计索引](../README.md)、[开发与发布约定](../../engineering/development-conventions.md)、[需求基线 §2](../../requirements/requirements-baseline.md#2-范围边界唯一真源)、[forge-policy 设计](forge-policy.md)、[forge-market 设计](forge-market.md)、[#97](https://github.com/hrygo/heluo-forge/issues/97)、[#12](https://github.com/hrygo/heluo-forge/issues/12)、[#28](https://github.com/hrygo/heluo-forge/issues/28)。
+> 4. 2026-11-13 本机 Nacos 3.2.1（源码运行）身份与可见性核验：默认鉴权插件的查询谓词（`DefaultAiVisibilityService`）为匿名身份仅 `PUBLIC`、登录非管理员 `PUBLIC`+自有、全局管理员全量、写操作仅 owner；RBAC 先于可见性生效（无角色用户 console list 拒绝 10001，授 `public:*:ai/*` 读角色后放行）；三账号活体矩阵（admin 全量 / 只读角色用户仅 PUBLIC / 公共只读账号仅 PUBLIC）逐一吻合。另核验：平台原生匿名通道存在（`nacos.core.auth.nacos.anonymous.ai.enabled` 开关 + 重启自动建系统匿名用户/角色/读权限；仅 admin 面 `/v3/admin/ai/skills/list` 带 `ALLOW_ANONYMOUS` 标签，console 面接口无此标签），本机未启用未活测；`nacos-oidc-auth-plugin` 随 3.2.1 发行（与 IAM 直通的平台信号，接法未核验）。
 >
-> 未核验（P0 前置，见 §12）：企业 Nacos 实际版本/部署/鉴权插件/TLS；目标 DSH 宿主真机挂载；Nacos console/client 响应字段名与鉴权头形态。
+> 未核验（P0 前置，见 §12）：企业 Nacos 实际版本/部署/鉴权插件/TLS（本机 3.2.1 见编制依据 4，不代表企业环境）；目标 DSH 宿主真机挂载；Nacos console/client 响应字段名与鉴权头形态。
 >
 > 关联文档：PRD（CORP-DSH-REQ-006，[skill-nacos-prd.md](../../requirements/skill-nacos-prd.md)，交互效果图八页）；字段级外部契约随实现 PR 落 `docs/contracts/skill-nacos-contract.md`（待建），本文只引用不复制。
 
 ## 1. 结论
 
-本模块以 Host 插件 `@heluo/forge-skill-nacos` 连接企业 Nacos，提供有权限边界的 Skill 目录发现、精确版本安装与 DSH 原生加载：安装后的技能经 `ctx.skills` Provider 进入原生目录、`skill` 工具与 `/技能名`，不改 DSH 核心。目录发现按 Nacos 版本走三条已核验路线之一（3.2 console 只读 list、≥3.3 client search、Config 轻量索引兜底），下载固定走 3.2 起即存在的 client OPEN API。进入生产仍缺三项：企业 Nacos 版本与最小权限入口的实机取证（P0）、Skill 包体经 Nacos 分发相对 S6/ADR-11/13 的范围差异批准、forge-policy 受控动作目录的登记与台账批准；批准前安装保持关闭（fail closed），只读发现不受影响。
+本模块以 Host 插件 `@heluo/forge-skill-nacos` 连接企业 Nacos，提供有权限边界的 Skill 目录发现、精确版本安装与 DSH 原生加载：安装后的技能经 `ctx.skills` Provider 进入原生目录、`skill` 工具与 `/技能名`，不改 DSH 核心。目录发现按 Nacos 版本走三条已核验路线之一（3.2 console 只读 list、≥3.3 client search、Config 轻量索引兜底），下载固定走 3.2 起即存在的 client OPEN API。目录身份分层（匿名公共面/登录个人面/管理档）为 2026-11-13 确认方向：匿名公共面经宿主持有的公共只读凭据实现，已在本机 web profile 落地（§6）。进入生产仍缺三项：企业 Nacos 版本与最小权限入口的实机取证（P0）、Skill 包体经 Nacos 分发相对 S6/ADR-11/13 的范围差异批准、forge-policy 受控动作目录的登记与台账批准；批准前安装保持关闭（fail closed），只读发现不受影响。
 
 ## 2. 目标与非目标
 
@@ -39,6 +40,7 @@
 - 安装固定到精确版本，保留来源、内容摘要与操作结果；更版显式触发；失败不损坏旧版本。
 - 启用后的技能复用 DSH 原生目录、`skill` 工具和 `/技能名`，完整保留相对资源路径。
 - **作用域**（2026-10-28 需求确认）：安装可选全局或项目级；已安装列表显示作用域并可随时转换；作用域是台账字段，包体统一在受管目录，不写入项目源码树。
+- **目录身份分层**（2026-11-13 需求确认）：未登录用户可浏览公共面；经 IAM 登录后按用户身份可见「公共 + 自有」；管理档全量。「匿名」仅指 DSH 用户会话层——Host→Nacos 连接永远携带凭据，公共面经宿主持有的公共只读凭据访问（档位与红线见 §6）。
 
 **非目标**：不修改或 fork DSH 核心；不替换 [#12](https://github.com/hrygo/heluo-forge/issues/12) 插件市场（Skill 不是插件，安装 Skill 不授工具权限）；不自建 Nacos/审批后台/身份系统；不执行包内脚本、不安装包声明的依赖；不承诺全通道撤销（已进入会话上下文的指令不在远程收回范围）；不做 20+ 外部 Agent 目录管理。
 
@@ -69,7 +71,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 形态 | Host 插件（Client 面板与 HTTP 路由另行准入；首版为服务 + 模型可见工具面） |
+| 形态 | Host 插件 + Web Client 面板（设置页「企业技能市场」+ Host prefix 路由，本机 web profile 实测；desktop/Electron 渲染未验） |
 | 运行位置 | 本机 Host；全部网络请求在 Host 进程内执行，Client 与模型不持有 Nacos 凭据 |
 | 目标 DSH 与 SDK | 基线见 `.dsh-version`；`engines.dsh` 与之同发布线 |
 | 使用的 seam | `ctx.skills.registerProvider`（Provider 角色）、`ctx.tools.register`（工具）、`ctx.get('credentials')`（凭据记录，可选服务）、结构化日志回调 |
@@ -91,6 +93,8 @@
 
 约束：只请求配置声明的 `endpoint`；禁跟随 3xx 重定向；无任何公网回落。`catalogMode` 显式选择路线，默认 `console-list`，P0 取证后定稿；模式与实际版本不符时在首次目录刷新处失败（不静默换路线）。
 
+2026-11-13 本机 3.2.1 身份可见性核验（编制依据 4）：console 面目录按请求身份在服务端过滤（owner/scope 谓词），客户端查询参数不能绕过；账号须先具备 AI 读角色（`public:*:ai/*` 授权模式实测有效）才可达可见性判定。无凭据匿名通道仅存在于 admin 面（`/v3/admin/ai/skills/list`，`ALLOW_ANONYMOUS` 标签 + 平台开关，默认关闭）；本设计的匿名公共面走公共只读账号 + console 接口，不依赖平台开关与重启。
+
 ### 5.2 配置（cordis.yml 插件 config）
 
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
@@ -100,6 +104,9 @@
 | `catalogMode` | `console-list` \| `client-search` \| `config-index` | `console-list` | 否 | 目录来源路线 |
 | `configIndexDataId` | string | — | 路线 C 必填 | 索引 dataId |
 | `credentialRecordId` | string | — | 是 | `ctx.credentials` 记录 id（owner 固定 `skill-nacos`），配置只含名字不含值 |
+| `consoleEndpoint` | string | — | 否 | console 面地址，缺省用 `endpoint`；3.2 部署形态 console 与主端口分离时必填（本机先例：console 8080、主端口 8848） |
+| `environments` | object[] | `[]` | 与平铺三件套二选一 | 多环境数组，每项含 `id`/`label`/`endpoint`/`consoleEndpoint`/`namespaceId`/`credentialRecordId`；非空时连接三件套取自生效环境项，顶层不再必填；`id` 不得重复 |
+| `activeEnvironmentId` | string | 首个环境 | 否 | 生效环境 id；运行时经设置覆盖层（`$DSH_HOME/skill-nacos/settings.json`）与面板「源设置」切换，切换即重建目录缓存，不需重启 |
 | `requestTimeoutMs` | number | `10000` | 否 | 单请求超时（正整数） |
 | `catalogRefreshIntervalMs` | number | `300000` | 否 | 目录轮询周期；`0` 表示仅手动刷新 |
 | `catalogCacheTtlMs` | number | `300000` | 否 | 目录缓存有效期，过期标 stale |
@@ -113,21 +120,26 @@
 
 必填项缺失在插件加载时失败（fail loud）；数值边界由校验拒绝。`caFile`（企业 CA）列入 P0：Node 原生 fetch 的自定义 CA 通道待宿主内核选项核验，未就绪前只支持系统信任链并在配置校验中拒绝该项。
 
+环境数组与运行时切换已实现（设置页「源设置」，面板与路由见 §5.3 末段）。2026-11-13 本机 web profile 按双环境部署——默认 `local-public`（公共只读凭据，匿名公共面）与 `local-admin`（管理员凭据，全量）——作为 §6 匿名公共面档的部署先例：当前匿名浏览 = 默认环境指向公共只读凭据记录，属部署配置选择；按 IAM 会话自动选档的代码未实现（§6 档位表「登录个人面」）。
+
 ### 5.3 Host 服务与工具导出面
 
-Host 服务 `skillNacos` 是业务唯一真源；工具与后续 Client 面板都是它的消费者，权限与错误语义一致：
+Host 服务 `skillNacos` 是业务唯一真源；工具与 Client 面板（Web）都是它的消费者，权限与错误语义一致：
 
-- 服务方法：`searchCatalog({keyword,page,pageSize})`、`showSkill(name)`、`install({name,ref,scope,cwd,enable})`、`enable/disable(name)`、`upgrade({name,ref,cwd})`、`uninstall(name)`、`restore(name)`、`purge(name)`、`changeScope({name,to,cwd})`、`refreshCatalog()`、`status()`、`listInstalled()`。写操作返回 `{txId, name, version, contentSha256}` 等可回查标识。
+- 服务方法：`searchCatalog({keyword,page,pageSize})`、`showSkill(name)`、`install({name,ref,scope,cwd,enable})`、`enable/disable(name)`、`upgrade({name,ref,cwd})`、`uninstall(name)`、`restore(name)`、`purge(name)`、`changeScope({name,to,cwd})`、`refreshCatalog()`、`status()`、`listInstalled()`、`listTrash()`、`getSettings()`、`updateSettings({activeEnvironmentId,…可覆盖字段})`（面板「源设置」用）；`cleanStaging()` 为挂载期生命周期内部方法。写操作返回 `{txId, name, version, contentSha256}` 等可回查标识。
 - 工具面（经 `ctx.tools.register`，参数含门禁识别的 `target`，命名沿用 forge-devops 先例）：
 
 | 工具 | 读/写 | 参数 | 门禁 |
 |---|---|---|---|
 | `skill_nacos_search` | 只读 | `keyword`、`page`、`pageSize`（有界） | 不经受控目录 |
 | `skill_nacos_show` | 只读 | `target: <name>` | 不经受控目录 |
-| `skill_nacos_install` | 写 | `target: <name@version\|label>`、`scope?` | forge-policy 登记 `skill-nacos.install`，默认 `enabled: false` |
+| `skill_nacos_install` | 写 | `target: <name@version\|label>`、`scope?`、`enable?`（默认 true） | forge-policy 登记 `skill-nacos.install`，默认 `enabled: false` |
 | `skill_nacos_enable` / `disable` / `upgrade` / `uninstall` | 写 | `target: <name>` / `<name@version>` | 同上逐动作登记 |
+| `skill_nacos_scope` | 写 | `target: <name>`、`to: user\|project` | forge-policy 登记 `skill-nacos.scope-change` |
 
 可信源（`endpoint`/`credentialRecordId`）、凭据录入与策略放宽**不提供工具**，用户专属，仅经配置与 DSH 原生凭据面。
+
+Client 面板与 HTTP 路由（Web，已实现）：`client.js` 单文件（ENG-003 浏览器侧形态，无构建环节）注册设置页 `settings.section`（order 30）、`main` 主面板与 `sidebar.panellist` 侧栏入口；页面经 Host prefix 路由（`/api/heluo/forge-skill-nacos/*`，同源校验）访问 `status`/`catalog`/`installed`/`trash`/`skill`/`action`/`settings`，与服务、工具同一判定与错误语义。`webServer` 缺席（sdk/headless）时路由不激活，服务与工具面照常（宿主探针依赖此行为）；desktop/Electron 渲染未验。
 
 ### 5.4 状态机与台账
 
@@ -150,13 +162,23 @@ stateDiagram-v2
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
-| Nacos 凭据 | `skill-nacos/<credentialRecordId>` 记录，经 `ctx.get('credentials').readRecord` 每操作解析；配置只含记录 id，值不进日志、提示词、模型上下文 | 随凭据存储 | `SN_AUTH_MISSING` / `SN_FORBIDDEN`，不降级匿名 |
-| 目录缓存 | 内存 `Map`，源键 = (endpoint, namespaceId, credentialRecordId) | 进程内；撤权/换身份即整体清除 | 过期标 stale；刷新失败保留 last-good |
-| 受管文件 | `$DSH_HOME/skill-nacos/{state.json, store/<name>/<version>/, staging/<txId>/, .lock}`；`state.json` 0600 原子写（临时文件 + rename） | 与安装共存；卸载仅删本插件拥有路径 | 配额超限 `SN_QUOTA_EXCEEDED` |
+| Nacos 凭据 | `skill-nacos/<credentialRecordId>` 记录，经 `ctx.get('credentials').readRecord` 每操作解析；配置只含记录 id，值不进日志、提示词、模型上下文 | 随凭据存储 | `SN_AUTH_MISSING` / `SN_FORBIDDEN`；连接永不无凭据，匿名语义见下表 |
+| 目录缓存 | 内存单槽缓存（当前生效源一份）；切环境/换身份整体清空重建，不跨源复用 | 进程内；撤权/换身份即整体清除 | 过期标 stale；刷新失败保留 last-good |
+| 受管文件 | `$DSH_HOME/skill-nacos/{state.json, settings.json, store/<name>/<version>/, staging/<txId>/, .lock}`；`state.json`/`settings.json` 均 0600 原子写（临时文件 + rename） | 与安装共存；卸载仅删本插件拥有路径 | 配额超限 `SN_QUOTA_EXCEEDED` |
 | 模型可见面 | 仅经 Provider 进入 tool-skill 目录/`skill` 工具/`/name`（既有 session 事件）；远程目录浏览只产生工具结果 | 按 session 既有规则 | — |
 | 审计 | 结构化日志回调（动作/name/版本/来源/sha256/结果/时间/错误分类），本地保留 | 按宿主日志策略 | 记录失败不阻断业务 |
 
 `$DSH_HOME` 边界：受管目录位于 `$DSH_HOME/skill-nacos`，被 forge-policy `protectedPaths`（默认 `$DSH_HOME/**`）硬拒绝覆盖——模型经 `bash`/`fs` 工具不可写该树，插件自身的 Host 一方写入与 `dsh-credentials-local` 同先例；安装工具只接受 `name@version`，不接受路径参数。安装目录不落在 skill-filesystem 的任何扫描面，避免双重发现。
+
+**凭据档位（2026-11-13 增补）**：
+
+| 档位 | 凭据来源 | 目录可见面 | 状态 |
+|---|---|---|---|
+| 匿名公共面 | 宿主持有的公共只读记录（本机先例 `skill-nacos/local-anonymous`，对应 Nacos 公共只读账号 + `public:*:ai/*` 读角色） | 仅 PUBLIC（服务端谓词过滤，客户端不可绕过） | 本机 web profile 已落地（默认环境，配置级）；未接 IAM 会话判定 |
+| 登录个人面 | forge-iam `tokenFor('nacos')` 签发的用户凭据（形态 A 直通），或企业按用户映射开通的 Nacos 账号（形态 B 映射） | PUBLIC + 自有（`PUBLIC_AND_OWNER` 谓词） | 未实现；依赖 forge-iam tokenFor 接缝（设计索引 §2.2.1 剩余边界盘点）与 Nacos 侧身份接法（§12） |
+| 管理档 | 管理员凭据记录（本地开发环境） | 全量 | 本机部署（`local-admin` 环境，运行时可切换） |
+
+红线重定义：Host→Nacos 的每个请求都携带凭据；「匿名」仅指用户未登录 IAM，其请求经公共只读凭据访问公共面。原「不降级匿名」的连接层语义保留（不裸连、两档凭据均不可用即拒绝）。新增约束：匿名公共面缓存不得包含公共面之外的条目；安装与写动作要求登录档，匿名态触发安装时引导登录而非报 `SN_AUTH_MISSING`（目标行为，随档位代码实现）。
 
 ## 7. 流程
 
@@ -202,7 +224,7 @@ flowchart TD
 | 场景 | 行为 | 用户可见结果 | 可重试 |
 |---|---|---|---|
 | 网络超时/连接失败 | 退避轮询；目录保留 last-good 标 stale；安装事务中止并清理 staging | 明确错误 + stale 标记 | 是 |
-| 401/403 | 清空该源目录缓存；安装拒绝 | 引导凭据录入；不降级匿名 | 修复凭据后 |
+| 401/403 | 清空该源目录缓存；安装拒绝 | 按档位分流：登录档提示重新登录；公共档提示联系管理员（公共凭据不由用户自助修复）；连接永不无凭据 | 修复凭据/登录后 |
 | 404/版本不在线 | 安装拒绝 `SN_NOT_FOUND` | 指明 name/version 不可用 | 换版本 |
 | 响应非 JSON/坏 ZIP | 目录丢弃本次响应；安装 `SN_INVALID_PACKAGE` | 明确错误 | 是 |
 | 非法元数据/名称版本不一致 | `SN_INVALID_PACKAGE` / `SN_NAME_INVALID` / `SN_VERSION_MISMATCH` | 列明哪项校验失败 | 否 |
@@ -226,6 +248,7 @@ flowchart TD
 | 单元 | ZIP 校验器负测全家桶（穿越/绝对路径/越界链接/重复大小写/炸弹/条目数/坏 frontmatter/名称版本不一致）、版本解析与固定、台账原子提交与恢复、缓存隔离、作用域过滤 | `node --test packages/forge-skill-nacos/test` |
 | 契约 | 本地仿 Nacos HTTP：console list/detail、client search、config-index、ZIP 下载；401/403/404/超时/坏响应；三模式路由与模式不符失败 | 同上 |
 | 集成 | 安装→Provider 候选出现→`get` 加载→停用→卸载→恢复；同名冲突；作用域转换与项目内/外可见性；孤儿清理 | 同上 |
+| 多身份可见性 | 真实 Nacos 三账号矩阵：admin 全量 / 只读角色用户仅 PUBLIC / 公共只读账号仅 PUBLIC；无角色账号 RBAC 拒绝；scope 翻转后可见性即时变化。2026-11-13 本机 3.2.1 手工活体验证（编制依据 4）；自动化回归待档位代码与企业 Nacos 准入后纳入 | 手工 curl（本机夹具：`nacos`/`dsh-probe-user`/`heluo-public` + `test-ai-skill`(PUBLIC)/`dsh-nacos-skill-test`(PRIVATE)） |
 | 宿主探针 | 目标 DSH 真进程挂载：服务暴露→安装事务→原生目录候选→正文加载→停用（含 `skills/change` 事件）→启用→未知版本拒绝→项目作用域内外可见性→作用域转换→回收站恢复；门禁负测与插件卸载无残留待 forge-policy 登记后补 | `DSH_BIN=<dsh> node scripts/probe/run-skill-nacos-probe.mjs`（无 `dsh` 跳过，不伪装通过；2026-10-29 于 DSH 0.2.1-rc.3 源码构建实测 10/10） |
 | 端到端（AC10） | Win10 amd64 / UOS 20 amd64 / 麒麟 aarch64 全生命周期与关键失败回归；AC 证据回填，NOT RUN 不算通过 | 按 #97 验收规则 |
 
@@ -239,9 +262,12 @@ flowchart TD
 
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
-| 企业 Nacos 实际版本、鉴权插件、TLS/CA、能否发放 AI 只读 console 账号（路线 A 可行性） | Nacos 运维 + 安全 | catalogMode 定稿；不可行则评估 B 或 C |
+| 企业 Nacos 实际版本、鉴权插件、TLS/CA、能否发放 AI 只读 console 账号与公共只读账号（路线 A 可行性；本机 3.2.1 已验身份可见性模型，见编制依据 4） | Nacos 运维 + 安全 | catalogMode 定稿；匿名公共面账号的开通/轮换/回收责任 |
 | Skill 包体经 Nacos 分发的范围差异批准（相对 S6/ADR-11/13） | 责任方（基线变更流程） | 未批前 `install` 类动作保持关闭 |
 | console/client 响应字段名与鉴权头形态实测 | 平台组（P0） | 契约文档与解析器定稿 |
+| forge-iam `tokenFor('nacos')` 接缝（登录个人面的前提）：resource/audience 信任映射、失效交错、iam-consumer-isolated 后续批次是否纳入 nacos 资源 | 平台组 + IAM 责任方 | §6 登录个人面档位与「安装要求登录」的实现 |
+| `nacos-oidc-auth-plugin` 与企业 IAM 同源配置的可行性（形态 A 免映射直通） | Nacos 运维 + IAM | 统一签发路径选择；影响上一行实现形态 |
+| 匿名公共面是否改走平台原生匿名开关（admin 面无凭据通道，编制依据 4）替代公共账号 | Nacos 运维 + 安全 | 部署形态；现方案不依赖平台开关与重启 |
 | Pipeline 是否启用、"online" 的组织准入含义 | AIHUB/技能维护方 | 目录展示口径与保障边界 |
 | 可信摘要是否可得；仅 TLS+内网+自算哈希的边界是否被接受 | 安全 | §8 摘要边界裁定；不满足则安装不开放 |
 | 全局与项目双作用域并存（P1）、回收站保留期默认值 | 需求方 | §5.4 / §7.4 |
