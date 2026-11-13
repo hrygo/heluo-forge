@@ -1,0 +1,12 @@
+# @heluo/forge-enterprise 研发域叠加载荷补丁层（CORP-DSH-DESIGN-018 §3.2）。
+# 仅在需要企业研发工具（DOP / Gitee / 交付 Skill）时叠加挂载，不重复声明策略或 IAM。
+
+- insert:
+    - id: heluo-issue-delivery-skill
+      name: '@heluo/forge-enterprise/issue-delivery-skill'
+    - id: forge-devops
+      name: '@heluo/forge-devops'
+      config: {}
+    - id: heluo-gitee
+      name: '@heluo/forge-gitee'
+      config: {}

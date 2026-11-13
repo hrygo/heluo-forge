@@ -1,0 +1,37 @@
+# @heluo/forge-enterprise 通用企业基础补丁层（CORP-DSH-DESIGN-018 §3.2）。
+# 仅包含通用企业能力（账号 IAM、凭据加密、策略审计）与官方行禁用，
+# 不含研发域插件（devops / gitee / issue-delivery-skill）。
+
+- id: deepseek-account
+  disabled: true
+- id: ui-settings-account
+  disabled: true
+- id: llm-deepseek-account
+  disabled: true
+- id: llm-deepseek
+  disabled: true
+- id: llm-pi-ai
+  disabled: true
+- id: ui-settings-models
+  disabled: true
+- id: credentials
+  disabled: true
+
+- insert:
+    - id: heluo-credentials-keychain
+      name: '@heluo/forge-credentials-keychain'
+    - id: heluo-policy
+      name: '@heluo/forge-policy'
+      config:
+        catalog:
+          - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
+          - { action: 'change.list', kind: 'read', target: 'changes', enabled: true }
+          - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
+          - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' }
+        audit:
+          sink: memory
+          allowNonDurable: true
+    - id: heluo-iam
+      name: '@heluo/forge-iam'
