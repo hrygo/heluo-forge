@@ -44,7 +44,7 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
   IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
   IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
-  ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
+  ENTERPRISE_MODEL_NOT_ALLOWED: '所选模型不可用，请在企业模型设置中检查。',
   ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
   ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
   IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
@@ -72,7 +72,7 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
 });
 const error = code => new IamError(code, MESSAGES[code]);
-const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { code, message: MESSAGES[code] } } });
+const finish = (code, message = MESSAGES[code]) => ({ type: 'finish', reason: { kind: 'error', failure: { code, message } } });
 
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
@@ -188,6 +188,26 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const enabled = id => Object.hasOwn(modelOptions, id);
   const enabledInCatalog = id => models.some(item => item.id === id);
   const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
+  /**
+   * Why a model call is refused (issue #206). The user-facing causes share one
+   * contract code, but the sentence must name the real one: a model this person
+   * turned off is a local preference, not an enterprise authorization decision.
+   */
+  const DENIED_LOCALLY = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '该模型在本机未启用，请在设置中启用。' });
+  const NOT_IN_CATALOG = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '企业目录未提供该模型。' });
+  /** The sentence for a refusal: one code may describe two different causes. */
+  function failureMessage(code, route, model) {
+    if (code !== 'ENTERPRISE_MODEL_NOT_ALLOWED') return MESSAGES[code];
+    return denialFor(route, model)?.message ?? MESSAGES[code];
+  }
+  function denialFor(route, model) {
+    // A route that is not this provider is a caller bug, not a model decision,
+    // so it must not borrow the model-authorization vocabulary.
+    if (route !== provider) return { code: 'IAM_INTERNAL', message: MESSAGES.IAM_INTERNAL };
+    if (!enabledInCatalog(model)) return NOT_IN_CATALOG;
+    if (!enabled(model)) return DENIED_LOCALLY;
+    return null;
+  }
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
   // Bounded compensation for a refresh that lost its race to a context change:
@@ -342,7 +362,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         catch (cause) { yield finish(record(failureCode(cause))); return; }
       }
     }
-    if (code) { yield finish(code); return; }
+    if (code) { yield finish(code, failureMessage(code, request.provider, request.model)); return; }
     const subject = iam.getView()?.principal;
     const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
     let emitted = false; let retried = false;
@@ -592,7 +612,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         sample(); const mine = version;
         const subject = iam.getView()?.principal;
         // Even a saved selection after logout reaches an actionable sign-in error.
-        if (!permit(iam.getView()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
+        if (!permit(iam.getView()) && !allowed(route, model)) {
+          const denial = denialFor(route, model) ?? { code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: MESSAGES.ENTERPRISE_MODEL_NOT_ALLOWED };
+          throw new IamError(denial.code, denial.message);
+        }
         const prepare = async () => backend
           ? (typeof backend.prepareCall === 'function'
             ? await backend.prepareCall(route, model, signal)
@@ -609,7 +632,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         };
       };
       if (key === 'resolveModel') return async (route, model, signal) => {
-        if (!permit(sample()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
+        if (!permit(sample()) && !allowed(route, model)) {
+          const denial = denialFor(route, model) ?? { code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: MESSAGES.ENTERPRISE_MODEL_NOT_ALLOWED };
+          throw new IamError(denial.code, denial.message);
+        }
         return backend ? backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
       };
       return typeof backend?.[key] === 'function' ? backend[key].bind(backend) : backend?.[key];

@@ -1801,7 +1801,7 @@ window.__ModuleLoader__.load({
       ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
       ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
       ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
-      ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
+      ENTERPRISE_MODEL_NOT_ALLOWED: '所选模型不可用，请在企业模型设置中检查。',
       IAM_MODEL_CONTEXT_CHANGED: '账号或凭证已变化，请重新选择模型后再试。',
       IAM_GATEWAY_BINDING_CHANGED: '网关地址或账号已变化，请重新选择模型后再试。',
       // 认证服务与凭据存储在请求发出前失败：说清楚能做什么，不暴露内部模块名。

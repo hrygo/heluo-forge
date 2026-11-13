@@ -875,3 +875,53 @@ test('a cancelled discovery is reported as a cancelled sync, not an unreachable 
   assert.equal(timedOut.error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
   assert.ok(Number.isFinite(timedOut.retryAt));
 });
+
+test('a model disabled on this machine is not described as an enterprise decision (issue #206)', async t => {
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }, { id: 'beta' }] })),
+    selection: { models: { alpha: {} }, defaultModelId: 'alpha' },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // `beta` is in the enterprise catalogue but this person never enabled it.
+  for (const attempt of [
+    () => f.adapter.prepareCall('enterprise', 'beta'),
+    () => f.adapter.resolveModel('enterprise', 'beta'),
+  ]) {
+    await assert.rejects(attempt, (error) => {
+      assert.equal(error.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+      assert.equal(error.message, '该模型在本机未启用，请在设置中启用。');
+      // The enterprise wording must not appear on a local-preference refusal.
+      assert.doesNotMatch(error.message, /企业开放|企业未开放/u);
+      return true;
+    });
+  }
+  const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'beta', messages: [] }, async function* () { yield { type: 'text', text: 'leak' }; }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(streamed[0].reason.failure.message, '该模型在本机未启用，请在设置中启用。');
+  assert.equal(f.calls, 0);
+});
+
+test('a model the catalogue never offered says so, with the same contract code (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }] })) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await assert.rejects(f.adapter.prepareCall('enterprise', 'not-offered'), (error) => {
+    assert.equal(error.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+    assert.equal(error.message, '企业目录未提供该模型。');
+    return true;
+  });
+  const streamed = await chunks(f.guard({ provider: 'enterprise', model: 'not-offered', messages: [] }, async function* () { yield { type: 'text', text: 'leak' }; }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(streamed[0].reason.failure.message, '企业目录未提供该模型。');
+});
+
+test('a route that is not this provider is a caller bug, not a model decision (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }] })) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await assert.rejects(f.adapter.prepareCall('standalone', 'alpha'), (error) => {
+    assert.equal(error.code, 'IAM_INTERNAL');
+    return true;
+  });
+});
