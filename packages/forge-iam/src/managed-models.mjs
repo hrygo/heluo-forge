@@ -195,15 +195,23 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
    */
   const DENIED_LOCALLY = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '该模型在本机未启用，请在设置中启用。' });
   const NOT_IN_CATALOG = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '企业目录未提供该模型。' });
-  /** The sentence for a refusal: one code may describe two different causes. */
-  function failureMessage(code, route, model) {
-    if (code !== 'ENTERPRISE_MODEL_NOT_ALLOWED') return MESSAGES[code];
-    return denialFor(route, model)?.message ?? MESSAGES[code];
-  }
-  function denialFor(route, model) {
+  const INTERNAL_REFUSAL = Object.freeze({ code: 'IAM_INTERNAL', message: '内部错误，请重试；持续失败请联系管理员。' });
+  // The waterfall sees every provider this host may route to. A foreign route
+  // there is a policy refusal (the enterprise profile allows only its own
+  // model), not a caller bug, so it keeps the model-refusal code with a
+  // sentence that does not claim the catalogue lacks the model.
+  const FOREIGN_PROVIDER = Object.freeze({ code: 'ENTERPRISE_MODEL_NOT_ALLOWED', message: '企业环境仅允许使用企业模型。' });
+  function denialFor(route, model, { guard = false } = {}) {
     // A route that is not this provider is a caller bug, not a model decision,
-    // so it must not borrow the model-authorization vocabulary.
-    if (route !== provider) return { code: 'IAM_INTERNAL', message: MESSAGES.IAM_INTERNAL };
+    // so it must not borrow the model-authorization vocabulary; the stream guard
+    // is the one place where a foreign route is a policy refusal instead.
+    if (route !== provider) return guard ? FOREIGN_PROVIDER : INTERNAL_REFUSAL;
+    // Without an accepted catalogue there is no evidence the model is absent:
+    // the gateway outage decides that, not this refusal.
+    if (models.length === 0 && catalogState !== 'ready') {
+      const code = catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
+      return { code, message: MESSAGES[code] ?? MESSAGES.ENTERPRISE_MODELS_UNAVAILABLE };
+    }
     if (!enabledInCatalog(model)) return NOT_IN_CATALOG;
     if (!enabled(model)) return DENIED_LOCALLY;
     return null;
@@ -297,12 +305,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   /** Answered before a stream starts: the call must still belong to this context. */
   function refusal(request, captured) {
     const denied = permit(sample());
-    if (disposed) return 'ENTERPRISE_MODELS_UNAVAILABLE';
-    if (denied) return denied;
-    if (captured !== undefined && captured !== version) return 'IAM_MODEL_CONTEXT_CHANGED';
-    if (!backend) return catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
-    if (revokedCredential) return 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED';
-    if (!allowed(request.provider, request.model)) return 'ENTERPRISE_MODEL_NOT_ALLOWED';
+    const plain = code => (code ? { code, message: MESSAGES[code] } : null);
+    if (disposed) return plain('ENTERPRISE_MODELS_UNAVAILABLE');
+    if (denied) return plain(denied);
+    if (captured !== undefined && captured !== version) return plain('IAM_MODEL_CONTEXT_CHANGED');
+    if (!backend) return plain(catalogError ?? 'ENTERPRISE_MODELS_UNAVAILABLE');
+    if (revokedCredential) return plain('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+    if (!allowed(request.provider, request.model)) return denialFor(request.provider, request.model, { guard: true });
     return null;
   }
   /**
@@ -350,27 +359,27 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     } finally { clearTimeout(timer); }
   }
   async function* protect(request, dispatch, captured, redispatch, preparedSubject) {
-    let code = refusal(request, captured);
+    let denial = refusal(request, captured);
     // A prepared call that outlived its selection is re-prepared when it still
     // belongs to this person: the model is still callable, only the context
     // generation moved. A different account is not recoverable by re-preparing.
-    if (code === 'IAM_MODEL_CONTEXT_CHANGED') {
+    if (denial?.code === 'IAM_MODEL_CONTEXT_CHANGED') {
       const moved = preparedSubject !== undefined && iam.getView()?.principal !== preparedSubject;
-      if (moved) code = 'IAM_LOGIN_REQUIRED';
+      if (moved) denial = { code: 'IAM_LOGIN_REQUIRED', message: MESSAGES.IAM_LOGIN_REQUIRED };
       else if (redispatch) {
-        try { await redispatch(); captured = version; code = refusal(request, captured); }
+        try { await redispatch(); captured = version; denial = refusal(request, captured); }
         catch (cause) { yield finish(record(failureCode(cause))); return; }
       }
     }
-    if (code) { yield finish(code, failureMessage(code, request.provider, request.model)); return; }
+    if (denial) { yield finish(denial.code, denial.message); return; }
     const subject = iam.getView()?.principal;
     const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
     let emitted = false; let retried = false;
     for (;;) {
       try {
         for await (const chunk of dispatch({ ...request, signal })) {
-          code = authorizationRefusal(subject);
-          if (code) { yield finish(code); return; }
+          const authCode = authorizationRefusal(subject);
+          if (authCode) { yield finish(authCode); return; }
           if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
             // The model layer turns an HTTP error into a finish chunk, so the code
             // arrives here without ever passing through the thrown-error branch.
@@ -381,13 +390,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           emitted = true;
           yield chunk;
         }
-        code = authorizationRefusal(subject);
-        if (code) yield finish(code);
+        const authCode = authorizationRefusal(subject);
+        if (authCode) yield finish(authCode);
         return;
       } catch (cause) {
         if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
         const authorization = authorizationRefusal(subject);
-        code = authorization ?? failureCode(cause);
+        const code = authorization ?? failureCode(cause);
         // Retry only before the first chunk leaves: after emission a second
         // dispatch would deliver the same answer twice. The failure must be the
         // plugin's own binding change (not a mapped user code), and the budget

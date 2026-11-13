@@ -922,6 +922,32 @@ test('a route that is not this provider is a caller bug, not a model decision (i
   await f.runtime.ready;
   await assert.rejects(f.adapter.prepareCall('standalone', 'alpha'), (error) => {
     assert.equal(error.code, 'IAM_INTERNAL');
+    // Greptile: IAM_INTERNAL has no MESSAGES entry, so this must not be blank.
+    assert.equal(typeof error.message, 'string');
+    assert.ok(error.message.length > 0);
+    return true;
+  });
+});
+
+test('the stream guard names a foreign provider as a policy limit, not a missing model (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response(JSON.stringify({ data: [{ id: 'alpha' }] })) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const streamed = await chunks(f.guard({ provider: 'standalone', model: 'alpha', messages: [] }, async function* () { yield { type: 'text', text: 'leak' }; }));
+  assert.equal(streamed[0].reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(streamed[0].reason.failure.message, '企业环境仅允许使用企业模型。');
+  assert.doesNotMatch(streamed[0].reason.failure.message, /企业目录未提供/u);
+});
+
+test('a failed discovery is reported as the gateway failure, not as a missing model (issue #206)', async t => {
+  const f = fixture({ fetch: async () => new Response('synthetic outage', { status: 503 }) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // No catalogue was ever accepted, so "the catalogue does not offer it" is not
+  // a supported conclusion; the refusal must carry the gateway code instead.
+  await assert.rejects(f.adapter.prepareCall('enterprise', 'alpha'), (error) => {
+    assert.equal(error.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+    assert.doesNotMatch(error.message, /企业目录未提供/u);
     return true;
   });
 });
