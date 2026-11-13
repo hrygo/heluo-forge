@@ -15,6 +15,7 @@ export const REASONING_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', '
 export const DEFAULT_CONTEXT_WINDOW = 200000;
 export const DEFAULT_MAX_TOKENS = 64000;
 export const MAX_MODEL_ID_LENGTH = 200;
+export const MAX_MANUAL_MODELS = 100;
 
 /** A catalogue identifier is opaque apart from its length; do not narrow the charset. */
 export const isModelId = value => typeof value === 'string'
@@ -211,4 +212,37 @@ export function applyModelOptions(rawModels, options = {}) {
       ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     };
   });
+}
+
+/**
+ * Merge gateway-discovered models with user-declared manual models without
+ * mutating inputs. Gateway entries always win on id and carry `source: 'gateway'`;
+ * manual-only entries appear afterwards in declaration order with `source: 'manual'`.
+ */
+export function mergeAvailableModels(catalog, manual) {
+  const catalogList = Array.isArray(catalog) ? catalog : [];
+  const manualList = Array.isArray(manual) ? manual : [];
+  const merged = [];
+  const seen = new Set();
+
+  for (const item of catalogList) {
+    const id = item?.id;
+    if (typeof id !== 'string' || id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    merged.push({ ...item, source: 'gateway' });
+  }
+
+  for (const entry of manualList) {
+    const id = typeof entry === 'string' ? entry : entry?.id;
+    if (typeof id !== 'string' || id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    merged.push({
+      id,
+      name: id,
+      source: 'manual',
+      ...(typeof entry?.addedAt === 'string' ? { addedAt: entry.addedAt } : {}),
+    });
+  }
+
+  return merged;
 }

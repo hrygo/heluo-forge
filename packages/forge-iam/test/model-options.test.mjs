@@ -252,3 +252,31 @@ test('default thinking range is off through high and explicit options take prece
   assert.equal(disabledModel.thinkingLevelMap, undefined);
   assert.deepEqual(suppliedModel.reasoningEfforts, { low: 'low', xhigh: 'xhigh' });
 });
+
+import { MAX_MANUAL_MODELS, mergeAvailableModels } from '../src/model-options.mjs';
+
+test('mergeAvailableModels merges catalog and manual lists without mutation and keeps gateway priority', () => {
+  assert.equal(MAX_MANUAL_MODELS, 100);
+  const catalog = Object.freeze([
+    Object.freeze({ id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxTokens: 16384 }),
+    Object.freeze({ id: 'deepseek-r1', name: 'DeepSeek R1' }),
+  ]);
+  const manual = Object.freeze([
+    Object.freeze({ id: 'gpt-4o', addedAt: '2026-11-13T00:00:00.000Z' }),
+    Object.freeze({ id: 'custom-model@v1', addedAt: '2026-11-13T00:01:00.000Z' }),
+    Object.freeze({ id: 'custom-model@v1', addedAt: '2026-11-13T00:02:00.000Z' }),
+  ]);
+
+  const merged = mergeAvailableModels(catalog, manual);
+  assert.deepEqual(merged, [
+    { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxTokens: 16384, source: 'gateway' },
+    { id: 'deepseek-r1', name: 'DeepSeek R1', source: 'gateway' },
+    { id: 'custom-model@v1', name: 'custom-model@v1', source: 'manual', addedAt: '2026-11-13T00:01:00.000Z' },
+  ]);
+
+  // Empty and undefined inputs are handled safely.
+  assert.deepEqual(mergeAvailableModels(undefined, undefined), []);
+  assert.deepEqual(mergeAvailableModels([], [{ id: 'only-manual' }]), [
+    { id: 'only-manual', name: 'only-manual', source: 'manual' },
+  ]);
+});
