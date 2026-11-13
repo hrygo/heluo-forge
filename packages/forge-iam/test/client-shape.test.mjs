@@ -27,19 +27,26 @@ test('the client only targets the IAM routes and sends the CSRF header', async (
   assert.match(client, /window\.open/);
 });
 
-test('the client registers the settings section, launcher, signed-out banner and a four-step onboarding overlay', async () => {
+test('the client registers the settings sections, icons, launcher, signed-out banner and a three-step onboarding overlay', async () => {
   const client = await read('client.js');
   assert.match(client, /settings\.launcher/);
+  assert.match(client, /settings\.section\.icon/);
+  assert.match(client, /id: 'forge-models'/);
+  assert.match(client, /order: -10/);
+  assert.match(client, /order: 10/);
   assert.match(client, /forge-iam-launcher/);
   assert.match(client, /shell\.overlay/);
   assert.match(client, /尚未登录企业账号/);
   assert.match(client, /forge-iam-banner/);
   assert.match(client, /forge-iam\.onboarding\.v1/);
-  for (const title of ['欢迎使用企业版', '登录企业账号', '添加个人访问凭证', '准备就绪']) {
+  assert.match(client, /步骤 \$\{state\.step \+ 1\} \/ 3/);
+  assert.doesNotMatch(client, /步骤 .*\/ 4/);
+  assert.doesNotMatch(client, /已绑定企业 OIDC 身份/);
+  for (const title of ['登录企业账号', '启用 AI 服务', '准备就绪']) {
     assert.match(client, new RegExp(title));
   }
   assert.match(client, /close\('skipped'\)/);
-  // The credential screen is where the UAG key is pasted; it must offer the
+  // The credential screen is where the personal AI access key is pasted; it must offer the
   // "later" path without marking onboarding complete.
   assert.match(client, /\/api\/forge-iam\/credential/);
   assert.match(client, /稍后配置/);
@@ -81,7 +88,7 @@ test('the banner polls for the component lifetime instead of while visible', asy
 
 test('a repeated ready poll cannot pull onboarding back from the final step', async () => {
   const client = await read('client.js');
-  assert.match(client, /deriveSessionUi\(view\)\.ready && current\.step < 2/);
+  assert.match(client, /deriveSessionUi\(view\)\.ready && current\.step < 1/);
 });
 
 test('the client follows host theme tokens instead of private fallbacks', async () => {

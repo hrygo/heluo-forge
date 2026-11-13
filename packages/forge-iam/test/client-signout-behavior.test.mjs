@@ -49,7 +49,7 @@ async function mountPanel(fetch) {
       });
       plugin.apply({ slots: {
         inject(_name, register) { register(); },
-        register(options, component) { if (options.name === 'settings.section') Panel = component; },
+        register(options, component) { if (options.name === 'settings.section' && options.id === 'forge-iam') Panel = component; },
       } });
     } },
     location: { assign: (url) => locations.push(url) },
@@ -94,6 +94,10 @@ for (const [state, label] of [
   test(`account page reports credential state ${state} without guessing`, async (t) => {
     const panel = await mountPanel(async () => Response.json({ ...ready, gatewayCredential: { state } }));
     t.after(() => panel.close());
+    if (state === 'configured') {
+      assert.match(panel.text(panel.render()), /AI 服务 · 已就绪/);
+      panel.findButton(panel.render(), '更换密钥').props.onClick();
+    }
     assert.ok(panel.text(panel.render()).includes(`个人访问凭证：${label}`));
   });
 }
@@ -109,7 +113,7 @@ test('a poll during sign-out cannot restore ready or start a duplicate sign-out'
   });
   t.after(() => { post.resolve(Response.json({ view: failed }, { status: 503 })); panel.close(); });
   let tree = panel.render();
-  assert.match(panel.text(tree), /个人访问凭证：已保存/);
+  assert.match(panel.text(tree), /AI 服务 · 已就绪/);
   const button = panel.findButton(tree, '退出');
   assert.ok(button);
   const first = button.props.onClick();
@@ -161,7 +165,9 @@ test('a credential operation begun before sign-out cannot revive the old view', 
     return Response.json({ view: signedOut, logoutUrl: null, revocation: 'ok' });
   });
   t.after(() => { credential.resolve(Response.json({ view: initial })); panel.close(); });
-  const tree = panel.render();
+  let tree = panel.render();
+  panel.findButton(tree, '更换密钥').props.onClick();
+  tree = panel.render();
   const clearing = panel.findButton(tree, '清除凭据').props.onClick();
   await panel.findButton(tree, '退出').props.onClick();
   credential.resolve(Response.json({ view: initial }));
