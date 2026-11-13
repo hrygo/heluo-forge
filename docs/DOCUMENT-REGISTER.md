@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.85.0 |
+| 版本 | V1.85.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,7 +19,7 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.85.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.85.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.47.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.44.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
@@ -54,7 +54,7 @@
 | CORP-DSH-ARCH-003 | 企业插件市场调研与落地建议 | [architecture/plugin-market-research.md](<architecture/plugin-market-research.md>) | V0.3.1 | 草案 | 平台组（代拟） | 历史取证保留；来源与控制面建议由 ADR-11/13 替代 |
 | CORP-DSH-ARCH-004 | 插件市场决策：企业 Artifactory + AIHUB 原生索引 | [architecture/plugin-registry-source-decision.md](<architecture/plugin-registry-source-decision.md>) | V2.0.1 | 评审稿 | 平台组（代拟） | 正式技术方案；G1 接入与发行基线核验，G2 安装开放验证 |
 | CORP-DSH-ARCH-005 | DSH 与 Agent 模型网关认证方案评审稿 | [architecture/gateway-identity-review.md](architecture/gateway-identity-review.md) | V1.3.0 | 评审稿 | 平台组（代拟） | G0 认领与路线评估；G1 契约；G2 联调与安全准入 |
-| CORP-DSH-ARCH-006 | 公版插件、企业私有包与官方 DSH 轻量集成方案 | [architecture/public-enterprise-bundle.md](<architecture/public-enterprise-bundle.md>) | V0.6.3 | 草案 | 平台组（代拟） | 启动器自动准备宿主/web profile；已配置的 IAM Discovery 可由制作器校验；dsh 0.2.1-rc.5 拒绝 CLI 管理 Desktop profile 已实测；企业 IAM/宿主目标平台待实测 |
+| CORP-DSH-ARCH-006 | 公版插件、企业私有包与官方 DSH 轻量集成方案 | [architecture/public-enterprise-bundle.md](<architecture/public-enterprise-bundle.md>) | V0.6.4 | 草案 | 平台组（代拟） | 启动器自动准备宿主/web profile；已配置的 IAM Discovery 可由制作器校验；dsh 0.2.1-rc.5 拒绝 CLI 管理 Desktop profile 已实测；企业 IAM/宿主目标平台待实测 |
 | CORP-DSH-PLAN-001 | 推广实施方案 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V4.3.1 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-PLAN-002 | 插件市场 P0 接入取证单 | [plans/market-p0-verification.md](<plans/market-p0-verification.md>) | V0.3.0 | 草案 | 平台组（代拟） | G1 |
 | CORP-DSH-PLAN-003 | 已关闭任务修复验收台账 | [plans/fix-acceptance-ledger.md](<plans/fix-acceptance-ledger.md>) | V0.1.0 | 草案（代拟，待负责人确认） | 平台组（代拟） | — |
@@ -84,7 +84,7 @@
 | CORP-DSH-REQ-004 | Forge 专家智能体产品需求文档 | [requirements/delegra-experts-prd.md](<requirements/delegra-experts-prd.md>) | V0.8.1 | 草案 | Agent（代拟） | 产品取舍与范围确认；宿主、Delegra 和企业接入验收 |
 | CORP-DSH-REQ-005 | 员工智能助理个人记忆产品方案 | [requirements/employee-assistant-memory-proposal.md](<requirements/employee-assistant-memory-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 产品方案评审、范围基线同步、接口与宿主准入；企业环境验证后试点 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.1.2 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
-| CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.2 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
+| CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.3 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
 | CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.9.2 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-ENG-003 | DSH 插件高阶规范 | [engineering/dsh-plugin-conventions.md](<engineering/dsh-plugin-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 每个新插件准入时对照复核 |
 | CORP-DSH-ENG-004 | SQLite 存储扩展与使用规范 | [engineering/sqlite-storage-conventions.md](<engineering/sqlite-storage-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 新增或修改 SQLite 存储时复核 |
@@ -98,9 +98,9 @@
 | CORP-DSH-DIST-001 | 分发与市场 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PKG-001 | 终端打包 | 待创建 | — | 待启动 | 平台组 + IT | G2 |
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | — | 待启动 | PMO | G2 |
-| CORP-DSH-UAT-001 | 企业插件内网验收交接说明 | [operations/enterprise-uat-2026-11/README.md](<operations/enterprise-uat-2026-11/README.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
-| CORP-DSH-UAT-002 | 企业插件安装与启动 | [operations/enterprise-uat-2026-11/安装与启动.md](<operations/enterprise-uat-2026-11/安装与启动.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
-| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.5 | 草案 | 平台组（代拟） | 实机验收 |
+| CORP-DSH-UAT-001 | 企业插件内网验收交接说明 | [operations/enterprise-uat-2026-11/README.md](<operations/enterprise-uat-2026-11/README.md>) | V0.2 | 草案 | 平台组（代拟） | PR #215 历史验收基线；当前双包须另行验收 |
+| CORP-DSH-UAT-002 | 企业插件安装与启动 | [operations/enterprise-uat-2026-11/安装与启动.md](<operations/enterprise-uat-2026-11/安装与启动.md>) | V0.2 | 草案 | 平台组（代拟） | PR #215 历史验收基线；当前双包须另行验收 |
+| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.6 | 草案 | 平台组（代拟） | PR #215 历史验收基线；当前双包须另行验收 |
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | — | 待启动 | IAM 团队 | G0 方向及 P0 联调；G1 接入契约；G2 生产运行流程 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | — | 待启动 | 安全 + 平台组 | G2 |
 | CORP-DSH-DEVOPS-001 | DevOps 接入 | 待创建 | — | 待启动 | DevOps 团队 | G1 查询契约；G2 受控写批准/验证与运行参数，未准入不开放 |

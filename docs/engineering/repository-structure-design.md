@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-001 |
 | 文档名称 | 工程仓库结构与长期迭代设计 |
-| 版本 | V0.7.2 |
+| 版本 | V0.7.3 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-10 |
+| 最后更新 | 2026-11-13 |
 | 门禁 | 工程整理已获准并完成；业务能力仍按 G0—G3 验证 |
 
 > 编制依据：V0.1 于 2026-10-20 核对的初始仓库基线为提交 `034764487cddc87e8e1a0a2439d39168a4f28d4f`、12 个受跟踪文件及当时方案。用户明确后续覆盖完整方案、逐插件详细设计、全部插件开发及私有插件市场建设。初始实施记录的工具链为 Node.js 24.21.0、pnpm 11.28.5，属于历史实测，不代表后续会话默认环境；官方资料核对见 §3.3。V0.1 只形成设计，V0.2 已按批准范围完成工程整理，结果见 §4.8；未创建业务源码、插件清单、发布凭据或部署实例。V0.2.2 于 2026-10-20 复核现有入口与工程配置，修正时间与状态表述，未重新验证企业接口或部署。
@@ -21,7 +21,7 @@
 
 ## 1. 结论
 
-**当前需求入口（2026-11-03 用户确认）**：研发交付模型与唯一负责人治理以[需求基线 §2.3](../requirements/requirements-baseline.md)为准。下述八包目录（另有凭据支撑包与一个已删除的历史入口）及历史整理结果不等于各包均为当前默认交付；`forge-sdd` 已于 2026-11-03 全量退役（包删除、企业组合依赖与 bin 移除），边界见[对应设计](../design/plugins/forge-sdd.md)。外部能力核验不构成本项目额外的需求审批链，真实权限与技术准入仍须验证。
+**当前需求入口（2026-11-03 用户确认）**：研发交付模型与唯一负责人治理以[需求基线 §2.3](../requirements/requirements-baseline.md)为准。下述产品包目录（另有凭据支撑包与一个已删除的历史入口）及历史整理结果不等于各包均为当前默认交付；`forge-sdd` 已于 2026-11-03 全量退役（包删除、企业组合依赖与 bin 移除），边界见[对应设计](../design/plugins/forge-sdd.md)。外部能力核验不构成本项目额外的需求审批链，真实权限与技术准入仍须验证。
 
 建议采用 **pnpm workspace 单仓多包（monorepo）**：文档按职责分类，客户端插件包、独立运行服务、部署资产、工程脚本及跨模块测试分别管理。该组织方式覆盖从方案评审到开发、测试、发布和运维的完整迭代，但不把本次目录整理等同于插件或市场已经实现。
 
@@ -120,6 +120,7 @@ heluo-forge/
 | 包名 | 代码位置 | 形态与边界 | 后续详细设计位置 |
 |---|---|---|---|
 | `@heluo/forge-enterprise` | `packages/forge-enterprise/` | umbrella bundle；组合、角色 preset、默认依赖，不重复实现各插件 | `docs/design/plugins/forge-enterprise.md` |
+| `@heluo/forge-engineering` | `packages/forge-engineering/` | 独立研发工具组合包；装配研发设置、交付 Skill 与工具插件 | `docs/design/plugins/forge-engineering.md` |
 | `@heluo/forge-iam` | `packages/forge-iam/` | Host + Client；授权流程、令牌 broker 与账户 UI | `docs/design/plugins/forge-iam.md` |
 | `@heluo/forge-gateway` | `packages/forge-gateway/` | 网关接入配置；不是服务端 AI 网关实现 | `docs/design/plugins/forge-gateway.md` |
 | `@heluo/forge-policy` | `packages/forge-policy/` | Host 策略、执行前门禁与决策审计 | `docs/design/plugins/forge-policy.md` |
@@ -129,7 +130,7 @@ heluo-forge/
 | `@heluo/forge-market` | `packages/forge-market/` | 历史参考包：Host + Client、十个工具、面板、bundle 与测试；不属轻量模式目标 | `docs/design/plugins/forge-market.md` |
 | `@heluo/forge-brand` | `packages/forge-brand/` | 品牌配置；不隐含白标客户端发行授权 | `docs/design/plugins/forge-brand.md` |
 
-上表九份设计正文均已建立；市场设计为正式评审稿，其余仍为草案，设计路径不是待创建项。**截至 2026-10-24**：`@heluo/forge-market`、`@heluo/forge-iam`、`@heluo/forge-policy`、`@heluo/forge-enterprise` 与 `@heluo/forge-devops` 已有包清单与源码/骨架；`@heluo/forge-sdd` 已于 2026-11-03 删除（其中 IAM 的 Host + Client 骨架本地 mock 已验、真实 IAM 未联调，账户页暂走 interim route；devops 为只读查询 + 门禁骨架，企业 CLI 未联调），`@heluo/forge-brand`、`@heluo/forge-gateway`、`@heluo/forge-gitee` 仍只保留职责 README；逐包实现状态以[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)为准。另有凭据支撑包 `@heluo/forge-credentials-keychain`（开发骨架），不在上述九个产品模块内，实现入口见[设计索引](<../design/README.md#22-实现与验证入口>)。
+上表列出产品包与已退役的历史入口。逐包实现及验证状态以[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)为准；凭据支撑包 `@heluo/forge-credentials-keychain` 的实现入口同样见该索引。
 
 真实 Node 包启用时采用 `src/`、`test/`、`package.json` 等局部布局；配置 bundle 不强制建立空 `src/`。对外只能使用声明的导出，不跨包直接导入另一个包的 `src`。源码包之间采用显式 `workspace:` 依赖，并避免循环依赖；进入市场首版的实际发布包须将运行产物自包含，不携带需要终端解析的 workspace/外部 npm 运行依赖。新的 Node 组件默认 TypeScript；上游复用组件保留其合理语言，不因 monorepo 强制改写。
 
