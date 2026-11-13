@@ -261,46 +261,57 @@ test('a temporary preflight outage does not discard a valid session and is retri
 });
 
 for (const [accessState, outage] of [['missing', 'network'], ['expired', 'network'], ['expired', 'HTTP 503']]) {
-  test(`preflight failure after access expiry is retried automatically (${accessState} access, ${outage})`, async (t) => {
+  test(`preflight failure after access expiry is retried automatically (${accessState} access, ${outage})`, { timeout: 15_000 }, async (t) => {
     const oidc = await startMockOidc({ accessTtl: 30 });
     const credentials = new MemoryCredentials();
+    const firstPreflight = Promise.withResolvers();
+    let clock = Date.now();
     oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
     const grant = {
       version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
-      refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date().toISOString(),
-      refreshExpiresAt: new Date(Date.now() + 5000).toISOString(),
+      refreshToken: 'synthetic-refresh', scope: 'openid', obtainedAt: new Date(clock).toISOString(),
+      refreshExpiresAt: new Date(clock + 5000).toISOString(),
       ...(accessState === 'expired' ? {
-        accessToken: 'expired-access', accessExpiresAt: new Date(Date.now() - 1000).toISOString(),
+        accessToken: 'expired-access', accessExpiresAt: new Date(clock - 1000).toISOString(),
       } : {}),
     };
     const store = createGrantStore(credentials);
     await store.write(grant);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     let keyRequests = 0;
     const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
       redirectUri: 'http://127.0.0.1:4567/iam/callback', refreshSkewSeconds: 1 }, {
       credentials,
+      now: () => clock,
       fetch: async (url, init) => {
         if (String(url).endsWith('/jwks') && ++keyRequests === 1) {
+          firstPreflight.resolve();
           if (outage === 'HTTP 503') return Response.json({}, { status: 503 });
           throw new Error('synthetic outage');
         }
         return fetch(url, init);
       },
     });
-    t.after(async () => { await service.dispose(); await oidc.close(); });
+    t.after(async () => { await service.dispose(); t.mock.timers.reset(); await oidc.close(); });
+    const views = service.watch();
+    await views.next();
     await service.hydrate();
-    const timeout = Date.now() + 4500;
-    while (keyRequests === 0 && Date.now() < timeout) await delay(20);
-    await delay(30);
+    await firstPreflight.promise;
+    // Let the failed preflight schedule its retry before advancing the clock.
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(keyRequests, 1);
     assert.equal(oidc.counts.refresh, 0, 'the failed preflight did not send a refresh request');
     assert.equal(service.getView().state, 'expired');
     assert.deepEqual((await store.read()).grant, grant, 'the unconsumed refresh grant remains intact');
-    while (oidc.counts.refresh === 0 && Date.now() < timeout) await delay(20);
+
+    clock += 3000;
+    t.mock.timers.tick(3000);
+    let view;
+    do { ({ value: view } = await views.next()); } while (view.state !== 'ready');
     assert.equal(oidc.counts.refresh, 1, 'the Host retries without a view poll');
-    while (service.getView().state !== 'ready' && Date.now() < timeout) await delay(20);
     assert.equal(service.getView().state, 'ready');
     assert.notEqual(await service.getAccessToken(), 'expired-access');
+    await views.return();
   });
 }
 
