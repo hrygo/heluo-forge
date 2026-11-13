@@ -3,7 +3,8 @@
 // 浏览器半不经过打包器，两端各写一份常量，最容易悄悄漂移：改了一侧的端点、
 // 忘了另一侧，页面就会 404 而单元测试全绿。这里把"必须逐字一致"的几处钉死：
 //   1. 两个浏览器半都能被 Loader 装进页面（真执行，见 scripts/check-client-module.mjs）；
-//   2. 分区 id/order 唯一且与设计表一致（29 企业研发 / 50 企业 Gitee / 60 企业 DevOps）；
+//   2. 分区 id/order 唯一且与设计表一致（无容器：`devops-readiness` 29 / `gitee` 50 / `devops` 60；
+//      装容器：`forge-engineering` 30，DevOps/Gitee 各一个子条目 10/20）；
 //   3. 挂载一律两段式 `slots.inject('settings.section', ...)`，name 逐字；
 //   4. 客户端端点/请求头常量与各自 `src/http.mjs` 的导出逐字一致；
 //   5. `?refresh=1` 只有一处拼法，且只在 devops 客户端（Gitee 分区不发探测请求）。
@@ -66,8 +67,15 @@ test('分区 id 与 order 与设计表逐字一致，且互不重复（AC-13）'
 test('挂载一律两段式 slots.inject，不在 apply 里直接 register（AC-16）', () => {
   for (const file of CLIENTS) {
     const source = read(file);
-    assert.ok(source.includes("ctx.slots.inject('settings.section'"), `${file} 必须两段式挂载 settings.section`);
-    assert.ok(source.includes("name: 'settings.section'"), `${file} 的注册项 name 必须逐字为 settings.section`);
+    const injectsSection = source.includes("ctx.slots.inject('settings.section'") || source.includes('ctx.slots.inject(SECTION_SLOT');
+    assert.ok(injectsSection, `${file} 必须两段式挂载 settings.section`);
+    if (source.includes('ctx.slots.inject(SECTION_SLOT')) {
+      assert.ok(source.includes("const SECTION_SLOT = 'settings.section';"), `${file} 的 SECTION_SLOT 必须逐字为 settings.section`);
+    }
+    assert.ok(
+      source.includes("name: 'settings.section'") || source.includes('name: SECTION_SLOT'),
+      `${file} 的注册项 name 必须逐字为 settings.section`,
+    );
     assert.equal(/ctx\.slots\.register\(\s*['"]/u.test(source), false, `${file} 不得直接 register 槽位名`);
     assert.equal(/id:\s*['"]forge-iam['"]/u.test(source), false, `${file} 不得注册第二个企业身份入口`);
   }
@@ -161,12 +169,16 @@ test('r16：Gitee 分区不发就绪探测，也不重复实现四项/四层（A
 
 const CONTAINER_CLIENTS = ['packages/forge-gitee/client.js', 'packages/forge-devops/client.js', 'packages/forge-enterprise/client.js'];
 
+let cachedContainerReport;
+/** 检查器要真跑 `apply`（每个 client 四种声明时序），只跑一次并复用结果。 */
 function loadContainerReport() {
+  if (cachedContainerReport !== undefined) return cachedContainerReport;
   const stdout = execFileSync(process.execPath, [join(root, 'scripts/check-client-module.mjs'), ...CONTAINER_CLIENTS], {
     cwd: root,
     encoding: 'utf8',
   });
-  return JSON.parse(stdout);
+  cachedContainerReport = JSON.parse(stdout);
+  return cachedContainerReport;
 }
 
 test('容器在场时：devops 与 gitee 只注册容器条目，不再各占侧栏分区', () => {
@@ -186,6 +198,31 @@ test('容器在场时：devops 与 gitee 只注册容器条目，不再各占侧
   }
 });
 
+test('容器后到：独立分区先撤再挂容器条目，侧栏只留一个入口', () => {
+  const report = loadContainerReport();
+  assert.equal(report.failed, 0, 'scripts/check-client-module.mjs 必须全部通过');
+  const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
+  for (const id of ['@heluo/forge-gitee', '@heluo/forge-devops']) {
+    const entry = byId.get(id);
+    const lateSections = entry.late.filter((item) => item.name === 'settings.section');
+    const lateTabs = entry.late.filter((item) => item.name === 'heluo.engineering.tab');
+    assert.deepEqual(lateSections, [], `${id} 容器晚于 apply 声明时不得残留独立分区（否则侧栏两份入口）`);
+    assert.equal(lateTabs.length, 1, `${id} 容器晚到时应正好注册一个容器条目`);
+  }
+});
+
+test('容器运行期塌陷：独立分区补回来，入口不会整块消失', () => {
+  const report = loadContainerReport();
+  const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
+  for (const id of ['@heluo/forge-gitee', '@heluo/forge-devops']) {
+    const entry = byId.get(id);
+    const sections = entry.collapse.filter((item) => item.name === 'settings.section');
+    const tabs = entry.collapse.filter((item) => item.name === 'heluo.engineering.tab');
+    assert.deepEqual(tabs, [], `${id} 容器塌陷后容器条目必须撤掉`);
+    assert.ok(sections.length > 0, `${id} 容器塌陷后必须把独立分区补回来`);
+  }
+});
+
 test('容器缺席时：devops/gitee 保留独立分区与 order（ADR-0012 单包可用）', () => {
   const report = loadContainerReport();
   const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
@@ -195,6 +232,27 @@ test('容器缺席时：devops/gitee 保留独立分区与 order（ADR-0012 单�
     { id: 'devops', order: 60 },
     { id: 'devops-readiness', order: 29 },
   ]);
+});
+
+test('跨客户端分区序唯一：企业账号 -10 / 容器 30 / Gitee 50 / DevOps 60 与子条目 10/20', () => {
+  const clients = [
+    'packages/forge-iam/client.js',
+    'packages/forge-enterprise/client.js',
+    'packages/forge-gitee/client.js',
+    'packages/forge-devops/client.js',
+  ];
+  const orders = [];
+  for (const file of clients) {
+    const source = read(file);
+    // 只取注册项里的 `id:` + 紧随其后的 `order:`，避免把排序比较器里的数字算进来。
+    for (const match of source.matchAll(/id: '([a-z0-9-]+)',\s*\n\s*order: (-?\d+)/gu)) {
+      orders.push({ file, id: match[1], order: Number(match[2]) });
+    }
+  }
+  assert.ok(orders.length >= 6, `至少应解析出六个分区注册项，实际 ${orders.length}`);
+  const values = orders.map(({ order }) => order);
+  assert.equal(new Set(values).size, values.length, `分区 order 撞号：${JSON.stringify(values)}`);
+  assert.ok(values.includes(-10), '企业账号必须排最前（-10），否则与研发容器 30 同序');
 });
 
 test('容器自身：forge-engineering（order 30）声明子槽位并注册同名图标', () => {

@@ -8,9 +8,9 @@
  *      supplied through a trusted channel, not a digest read next to the file);
  *   2. read the enterprise `.env` as **data** -- no shell, no `eval`, no whole-file
  *      substitution into the artifact;
- *   3. change exactly two documented locations inside the package
- *      (`cordis.patch.yml` plugin config and `package.json` version) plus add a
- *      redacted `heluo-private-release.json`;
+ *   3. change the documented locations inside the package (the plugin config of
+ *      whichever patch layer declares each row, and `package.json` version) plus
+ *      add a redacted `heluo-private-release.json`;
  *   4. rebuild the archive from the original bytes and recompute the manifest.
  *
  * Confidential client secrets are deliberately NOT accepted yet: the IAM plugin
@@ -554,9 +554,9 @@ export function injectPatchConfig(text, id, config) {
 }
 
 /**
- * Bundle patch files, in install order. A bundle may ship one patch or several
- * layers (`cordis.patch.yml` plus `cordis.patch.<layer>.yml`); the acceptance
- * gate judges the **set**, because a layer only carries part of the rows.
+ * Bundle patch files in tarball order (a bundle may ship one patch or several
+ * layers: `cordis.patch.yml` plus `cordis.patch.<layer>.yml`); the acceptance gate
+ * judges the **set** — order is irrelevant, a layer only carries part of the rows.
  */
 export const PATCH_FILE_PATTERN = /^cordis\.patch(?:\.[A-Za-z0-9-]+)?\.yml$/u;
 

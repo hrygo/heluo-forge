@@ -35,7 +35,7 @@ Heluo Forge 面向全体企业员工提供**智能个人助理**（日常对话�
 | 事实类别 | 当前结论 | 说明 |
 |---|---|---|
 | **已生效（设计规范）** | 生效 | 本文确立的双定位分层菜单、IAM 通用凭据扩展机制、渐进披露文案规则、`cli-runner.mjs` 环境白名单收敛与 Gitee「高级」下线规则为后续实施唯一依据 |
-| **未实施（仓库代码现状）** | 未实施 | 当前仓库代码仍为旧版四分散菜单（`devops-readiness` 29 / `forge-iam` 30 / `gitee` 50 / `devops` 60，均无 `settings.section.icon`），且 `forge-enterprise/cordis.patch.yml` 默认统一插入研发插件、`tests/ui-contract.test.mjs` 仍锁旧分区；源码与组合分层尚待按 §8 实施 |
+| **已实施（仓库代码现状）** | 部分实施 | 已落地：`@heluo/forge-credentials-keychain` 的内存后端与存储引用校验、`CredentialBroker` 与 `ext-token` 状态机（含 `IAM_NOT_SIGNED_IN`）、`ENV_ALLOWLIST` 收敛（devops/gitee 共用）、补丁分层（底座 3 行 + 研发叠加层 4 行）、`forge-engineering`（`order: 30` + 同名图标 + `heluo.engineering.tab` 子槽位）、devops/gitee 的 Tab（`order: 10`/`20`）与无容器回退（`gitee` 50、`devops` 60、`devops-readiness` 29，回退不注册图标）、`tests/ui-contract.test.mjs` 的容器在场/缺席两组契约。未实施：`forge-iam` 拆成 `forge-iam`(-10) 与 `forge-models`(10) 两分区与图标、`heluo.iam.credential-item` 扩展凭据槽位及其业务侧接线、3 步通用引导、企业 OS 凭据库联调 |
 | **未联调（企业外部环境）** | 未核验 / 未联调 | 真实企业 OS 凭据库（`iam-cli:devops:<loginCode>`、`gitee-cli-go`）在子进程中的继承与覆写行为、企业内网 `gh` 只读探测样本及未来 IAM 联邦换票接口仍受 G1/G2 门禁约束 |
 
 ## 2. 产品与架构设计原则
@@ -92,7 +92,7 @@ flowchart TB
    - **渲染规则**：前端实时读取 `ctx.slots.entries('heluo.iam.credential-item')`；当条目数为 `0` 时，**整块扩展 Token 区块（含标签入口、说明、空状态）彻底不渲染**。只有至少一个业务扩展注入凭据组件时，才呈现「访问凭据（Token）」子区并按 `order` 渲染各已安装扩展。
 2. **研发容器子槽位（`heluo.engineering.tab`）与 ADR-0012 回退**：
    - `@heluo/forge-enterprise` 通过 `package.json` 的 `dsh.client` 与 `./client` 提供极简纯 UI 容器 `heluo-engineering-ui`（宿主入口仅导出空 `apply()` 占位，零业务逻辑、零持久化，符合 [企业组合包详细设计](plugins/forge-enterprise.md)），注册 `settings.section`（`id: 'forge-engineering'`, `order: 30`，`children` 声明子槽位 `heluo.engineering.tab`，另注册 `settings.section.icon`）——**容器只由研发叠加层那条 `heluo-engineering-ui` 行激活**：bundle 的 client 随条目装载，通用底座没有该行，非研发用户不会出现空分区。
-   - `@heluo/forge-devops/client.js`（Tab `order: 10`）与 `@heluo/forge-gitee/client.js`（Tab `order: 20`）继续使用两段式 `ctx.slots.inject` + Cordis disposer 切换：容器存在时立即释放各自独立 `settings.section` 落入容器标签页；单独安装单包（ADR-0012）且无容器时保留单一 `settings.section`（`order: 30` + icon）不丢失配置入口。
+   - `@heluo/forge-devops/client.js`（Tab `order: 10`）与 `@heluo/forge-gitee/client.js`（Tab `order: 20`）使用两段式 `ctx.slots.inject` + Cordis disposer 切换：容器存在时立即释放各自独立 `settings.section` 落入容器标签页；单独安装单包（ADR-0012）且无容器时保留既有独立分区（`gitee` 50、`devops` 60、`devops-readiness` 29）不丢失配置入口。回退不注册 `settings.section.icon`，也不统一到 `order: 30`：那会与 `forge-iam` 现 `order: 30` 及彼此撞号，待 IAM 拆出 `-10`/`10` 两分区后再收口。
 
 ### 3.4 与 `CORP-DSH-PLAN-021`（手动添加模型）协同边界
 
@@ -169,7 +169,7 @@ flowchart TB
 ### 6.3 `企业研发工具`（`id: 'forge-engineering'`, `order: 30`，仅研发叠加层启用）
 
 - **顶部状态条**：一行工具就绪态 + 全局刷新 + 轻量引导 `需要独立指定工具 Token 可前往 设置 → 企业账号`（仅在需要时）。
-- **子槽位条目（`heluo.engineering.tab`）**：`DevOps (dop)`（`order: 10`）与 `Gitee (gh)`（`order: 20`），只呈现与定位本地工具直接相关的「就绪检查 + 可执行文件路径 + 超时 + 主机提示（只读）」。宿主只向容器组件暴露 `renderSlot(key, owner)` 而不暴露条目枚举（`SlotCore` 没有列接口），因此容器按 `order` 纵向渲染条目、不自绘 Tab 条；条目自身的标题与可视层级由条目提供。
+- **子槽位条目（`heluo.engineering.tab`）**：`DevOps (dop)`（`order: 10`）与 `Gitee (gh)`（`order: 20`），只呈现与定位本地工具直接相关的「就绪检查 + 可执行文件路径 + 超时 + 主机提示（只读）」。DevOps 条目内部先渲染跨工具就绪总览、再渲染配置面板；就绪面板以嵌入形态渲染（不重复容器标题与页脚）。容器级「一行工具就绪态 + 全局刷新」状态条属后续项，尚未实现。宿主只向容器组件暴露 `renderSlot(key, owner)` 而不暴露条目枚举（`SlotCore` 没有列接口），因此容器按 `order` 纵向渲染条目、不自绘 Tab 条；条目自身的标题与可视层级由条目提供。
 - **底部折叠「环境诊断（技术详情）」**（默认严格收起）：集中展示 DevOps 四层探测明细、实际命中环境变量**名**、`authEnv` / `persistentToken` 策略及「复制脱敏诊断报告」。
 
 ## 7. 状态机、失败模式与安全边界
@@ -188,15 +188,15 @@ flowchart TB
 - 遵循 `CORP-DSH-ENG-003` P5：前端经单一错误读取口解析响应，HTTP 接口与错误信息**绝对禁止携带密钥原文、切片或未脱敏的环境变量值**。
 - **防不了什么**：如本机运行同系统权限（同 UID）恶意进程直接读取进程环境变量、钩取子进程内存或直接读取用户本地终端 `~/.gitee-cli/config.json`，应用层加密保存无法替代操作系统内核隔离；本方案保证的是静态配置文件零明文、插件跨包零直读 Vault、换号零错用及子进程环境最小暴露。
 
-## 8. 待实施模块与契约变更矩阵（当前均未实施）
+## 8. 模块与契约变更矩阵（状态见各行）
 
 | 目标包 / 范围 | V2.0.0 变更职责与边界 | 禁止与隔离要求 |
 |---|---|---|
 | `@heluo/forge-credentials-keychain` | 复用 `readRecord` / `modifyRecord` / `deleteRecord`；校验各扩展注册的 `storageRef` 符合 `^[A-Za-z_][A-Za-z0-9_]*$` | **不**改变既有 `ENTERPRISE_STATIC_KEY`；**不**向工具包开放原始 Vault 句柄 |
-| `@heluo/forge-iam` | 新增**领域无关**的 `CredentialBroker` 注册服务与通用 `ext-token` 隔离存储/路由（含双因子 AAD 与状态机）；Onboarding 收回 **3 步纯通用引导**（零工具名词）；`client.js` 拆出 `forge-iam`（`-10`，账号 + 就绪即折叠 AI 服务 + `heluo.iam.credential-item` 空则隐藏）与 `forge-models`（`10`，含 `CORP-DSH-PLAN-021` 模型特征）及各自图标 | **严禁在 `forge-iam` 源码或默认文案中硬编码 `DevOps`/`Gitee`/`dop`/`gh`**；遵守 `client-structure.test.mjs` 单点读取与参数预算 |
-| `@heluo/forge-enterprise` | 梳理基础企业组合补丁与研发能力叠加层分离（通用用户不加载 `heluo-engineering-ui`、`forge-devops`、`heluo-gitee`、`heluo-issue-delivery-skill`）；提供纯展示 `client.js` 研发容器（`forge-engineering` `order: 30` + icon + `heluo.engineering.tab` + 折叠「环境诊断」）；更新包清单与测试 | 容器内严禁写业务逻辑或持久化状态；维持三层 `heluo-policy` 6 条目录逐字同步 |
-| `@heluo/forge-devops` | 收敛 `cli-runner.mjs` 至 `ENV_ALLOWLIST`；向 IAM Broker 注册 `HEL_EXT_DEVOPS_TOKEN` 扩展描述；`client.js` 实现 `heluo.engineering.tab`（`order: 10`）与独立回退（`order: 30`），同时向 `heluo.iam.credential-item` 注册「跟随本机登录 / 按需展开 / 异常警示」极简项；四层明细收敛入诊断端 | 保留 ADR-0012 单包可用性与单一 `?refresh=1` 契约 |
-| `@heluo/forge-gitee` | 保留 `runtime-config.mjs` 中 `authEnv`/`persistentToken` 后端契约与检测；向 IAM Broker 注册 `HEL_EXT_GITEE_TOKEN`；`client.js` 实现 `heluo.engineering.tab`（`order: 20`）与独立回退、彻底移除「高级」用户表单，并向 `heluo.iam.credential-item` 注册极简 Token 项与条件式明文风险提示 | 禁止绕过 `detectPersistentToken` 或改动用户本地 `~/.gitee-cli/config.json` |
+| `@heluo/forge-iam` | **已实施**：`CredentialBroker` 注册服务与通用 `ext-token` 隔离存储/路由（双因子 AAD 与状态机）。**未实施**：Onboarding 收回 **3 步纯通用引导**（零工具名词）；`client.js` 拆出 `forge-iam`（`-10`，账号 + 就绪即折叠 AI 服务 + `heluo.iam.credential-item` 空则隐藏）与 `forge-models`（`10`，含 `CORP-DSH-PLAN-021` 模型特征）及各自图标 | **严禁在 `forge-iam` 源码或默认文案中硬编码 `DevOps`/`Gitee`/`dop`/`gh`**；遵守 `client-structure.test.mjs` 单点读取与参数预算 |
+| `@heluo/forge-enterprise` | **已实施**：基础企业组合补丁与研发能力叠加层分离（`cordis.patch.yml` 3 行 / `cordis.patch.engineering.yml` 4 行，通用用户不加载 `heluo-engineering-ui`、`forge-devops`、`heluo-gitee`、`heluo-issue-delivery-skill`）；纯展示 `client.js` 研发容器（`forge-engineering` `order: 30` + icon + `heluo.engineering.tab` + 折叠「环境诊断」）；包清单与测试同步 | 容器内严禁写业务逻辑或持久化状态；维持三层 `heluo-policy` 6 条目录逐字同步 |
+| `@heluo/forge-devops` | **已实施**：`cli-runner.mjs` 收敛至 `ENV_ALLOWLIST`、向 IAM Broker 注册 `HEL_EXT_DEVOPS_TOKEN` 扩展描述、`client.js` 实现 `heluo.engineering.tab`（`order: 10`，就绪检查与配置面板合并为一个条目）与独立回退（保留既有 `devops` 60 + `devops-readiness` 29，不注册分区图标：两个包的独立回退若都取 30 会彼此撞号，统一口径待容器成为必装件后再收口）。**未实施**：向 `heluo.iam.credential-item` 注册「跟随本机登录 / 按需展开 / 异常警示」极简项；四层明细收敛入诊断端 | 保留 ADR-0012 单包可用性与单一 `?refresh=1` 契约 |
+| `@heluo/forge-gitee` | **已实施**：保留 `runtime-config.mjs` 中 `authEnv`/`persistentToken` 后端契约与检测、向 IAM Broker 注册 `HEL_EXT_GITEE_TOKEN`、`client.js` 实现 `heluo.engineering.tab`（`order: 20`）与独立回退（保留 `gitee` 50，不注册分区图标，理由同上）、彻底移除「高级」用户表单，并向 `heluo.iam.credential-item` 注册极简 Token 项与条件式明文风险提示 | 禁止绕过 `detectPersistentToken` 或改动用户本地 `~/.gitee-cli/config.json` |
 | 全仓门禁与文档 | `tests/ui-contract.test.mjs` 分别覆盖 **「通用助理 2 菜单（零研发渗漏）」** 与 **「研发增强 3 菜单（含子 Tab 与扩展凭据槽位）」** 两组契约；同步插件设计文档与 README | 不放松 P1–P9、补丁一致性与脱敏扫描测试 |
 | DSH 宿主系统 | **零修改（严禁任何源码或接口改动）** | 不修改 `SettingsRoot` 与 `SettingsSectionOwnerProps` |
 

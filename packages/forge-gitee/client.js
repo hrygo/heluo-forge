@@ -797,15 +797,11 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * `ctx.slots.register` 的释放句柄可能是函数，也可能是 Fiber/对象：两种都要能释放，
-     * 否则容器后到时会留下一个已废弃的独立分区。
+     * `ctx.slots.register` 返回函数型 disposer（宿主内部是 `ctx.effect` 的返回值）。
+     * 只认函数：拿到别的形态多半是宿主契约变了，凭猜测调 `.dispose()` 可能整个插件 fiber 被卸掉。
      */
     function releaseDisposable(handle) {
-      if (typeof handle === 'function') {
-        handle();
-        return;
-      }
-      if (handle !== null && typeof handle === 'object' && typeof handle.dispose === 'function') handle.dispose();
+      if (typeof handle === 'function') handle();
     }
 
     function apply(ctx) {
@@ -816,59 +812,72 @@ window.__ModuleLoader__.load({
       // 本插件不另占侧栏分区，而是把同一面板挂进容器的子槽位 `heluo.engineering.tab`
       // （order 20，设计 §6.3）；单独安装单包（ADR-0012）时容器缺席，保留独立分区。
       //
-      // 两条挂载都走两段式：槽位可能晚于本插件 apply 声明，直接 register 会抛
-      // `slot "..." is not declared` 并让入口整块消失。容器后到时先撤掉已经注册的
-      // 独立分区再注册标签页；容器先到时标记 `tabbed` 让独立分区不再注册。
+      // 两个槽位的声明先后不定（容器可能晚于本插件 apply 声明，也可能在运行期被禁用而塌陷），
+      // 因此不靠单向开关：用 `container` / `section` 两个声明标志 + `reconcile()` 收敛，
+      // 任一标志变化都先按当前状态重建挂载，旧的挂载在新挂载成功之后才释放。
       const ENGINEERING_TAB_SLOT = 'heluo.engineering.tab';
-      let standalone;
-      let tabbed = false;
+      const SECTION_SLOT = 'settings.section';
+      let container = false;
+      let section = false;
+      /** 当前唯一生效的挂载：`{ kind: 'tab' | 'section', release }`。 */
+      let mounted;
+
+      const mount = (kind) => {
+        const release = kind === 'tab'
+          ? ctx.slots.register({
+            name: ENGINEERING_TAB_SLOT,
+            id: 'gitee',
+            order: 20,
+            label: () => t('nav'),
+            locale: NS,
+            inject: () => ({ t }),
+          }, GiteeSection)
+          : ctx.slots.register({
+            name: SECTION_SLOT,
+            id: 'gitee',
+            order: 50,
+            label: () => t('nav'),
+            locale: NS,
+            inject: () => ({ t }),
+          }, GiteeSection);
+        const previous = mounted;
+        mounted = { kind, release };
+        if (previous !== undefined) releaseDisposable(previous.release);
+      };
+
+      const reconcile = () => {
+        const wanted = container ? 'tab' : (section ? 'section' : undefined);
+        if (wanted === undefined) {
+          const previous = mounted;
+          mounted = undefined;
+          if (previous !== undefined) releaseDisposable(previous.release);
+          return;
+        }
+        if (mounted !== undefined && mounted.kind === wanted) return;
+        // 目标槽位没声明时 `register` 会抛：保留旧挂载并在下一次声明变化时重试。
+        mount(wanted);
+      };
+
       ctx.effect(
-        () =>
-          ctx.slots.inject(ENGINEERING_TAB_SLOT, () => {
-            tabbed = true;
-            const releaseSection = standalone;
-            standalone = undefined;
-            const releaseTab = ctx.slots.register(
-              {
-                name: ENGINEERING_TAB_SLOT,
-                id: 'gitee',
-                order: 20,
-                label: () => t('nav'),
-                locale: NS,
-                inject: () => ({ t }),
-              },
-              GiteeSection,
-            );
-            return () => {
-              releaseDisposable(releaseTab);
-              if (releaseSection !== undefined) releaseDisposable(releaseSection);
-              tabbed = false;
-            };
-          }),
+        () => ctx.slots.inject(ENGINEERING_TAB_SLOT, () => {
+          container = true;
+          reconcile();
+          return () => {
+            container = false;
+            reconcile();
+          };
+        }),
         'forge-gitee: engineering tab',
       );
       ctx.effect(
-        () =>
-          ctx.slots.inject('settings.section', () => {
-            // 容器已在场时由标签页接管入口，不再重复注册分区。
-            if (tabbed) return undefined;
-            const releaseSection = ctx.slots.register(
-              {
-                name: 'settings.section',
-                id: 'gitee',
-                order: 50,
-                label: () => t('nav'),
-                locale: NS,
-                inject: () => ({ t }),
-              },
-              GiteeSection,
-            );
-            standalone = releaseSection;
-            return () => {
-              releaseDisposable(releaseSection);
-              if (standalone === releaseSection) standalone = undefined;
-            };
-          }),
+        () => ctx.slots.inject(SECTION_SLOT, () => {
+          section = true;
+          reconcile();
+          return () => {
+            section = false;
+            reconcile();
+          };
+        }),
         'forge-gitee: settings section',
       );
     }

@@ -511,4 +511,21 @@ test('layer-aware gate: a two-layer bundle is neutral and gets its config inject
   assert.match(overlay, /gitee\.corp\.example/u, 'Gitee endpoint must land in the layer that declares the row');
   assert.match(base, /iam\.corp\.example/u);
   assert.doesNotMatch(overlay, /iam\.corp\.example/u);
+
+  // 断言产物字节，而不只是内存里的 map：`buildPrivateTarball` 真正把两层写进 tar 的那一步
+  // 单独回退（只写 IAM 层、叠加层保持 `config: {}`）时，上面的断言仍然全绿。
+  const entries = readBundleEntries(built.tar, { withContent: true });
+  const textOf = (name) => {
+    const entry = entries.find((item) => item.path === name || item.path === `package/${name}`);
+    assert.ok(entry, `${name} must be present in the private tarball`);
+    return String(entry.content ?? '');
+  };
+  const packedBase = textOf('cordis.patch.yml');
+  const packedOverlay = textOf('cordis.patch.engineering.yml');
+  assert.match(packedBase, /iam\.corp\.example/u, 'IAM config must be written into the packed base layer');
+  assert.doesNotMatch(packedBase, /gitee\.corp\.example/u, 'base layer must not carry the Gitee endpoint');
+  assert.match(packedOverlay, /gitee\.corp\.example/u, 'Gitee config must be written into the packed overlay layer');
+  assert.doesNotMatch(packedOverlay, /iam\.corp\.example/u, 'overlay layer must not carry the gateway endpoint');
+  assert.ok(built.changed.includes('cordis.patch.yml'), 'change metadata must list the base layer');
+  assert.ok(built.changed.includes('cordis.patch.engineering.yml'), 'change metadata must list the overlay layer');
 });

@@ -163,7 +163,11 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-通用底座的 `insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`；研发叠加层另挂四项：`heluo-engineering-ui`（`@heluo/forge-enterprise` 自身，激活 `client.js` 的那一行）、`@heluo/forge-enterprise/issue-delivery-skill`、`@heluo/forge-devops` 与 `@heluo/forge-gitee`。两层行 id 不相交，叠加生效时不会重复插入同一行。DevOps 与 Gitee 两行在 r13 进闭包，条目内显式写 `config: {}`：行配置缺席时 `ConfigStandard` 会拒、loader 只把该行静默跳过（装上却没有读面，比报错更难查）。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
+通用底座的 `insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`；研发叠加层另挂四项：`heluo-engineering-ui`（`@heluo/forge-enterprise` 自身，激活 `client.js` 的那一行）、`@heluo/forge-enterprise/issue-delivery-skill`、`@heluo/forge-devops` 与 `@heluo/forge-gitee`。两层行 id 不相交，叠加生效时不会重复插入同一行。
+
+**安装语义**：`dsh.bundle.patch` 只声明通用底座，`dsh plugin add <tarball>` 因此只装底座，研发叠加层需要部署侧显式叠加——`dsh --profile <name> --patch <包目录>/cordis.patch.engineering.yml`，或把该层内容写进目标 profile 的补丁文件（`profile.patchPath`）后再启动。Web/Desktop 外壳不接受 `--patch` 参数，终端用户无法在设置页启用研发组合。把叠加层写进 profile 补丁文件这条路径**未实机验证**：安装演练只覆盖 `--patch` 形态（§11）。要让研发组合随 `dsh plugin add` 自动生效，需要新增一个独立的研发 bundle 包（本仓当前门禁要求 `dsh.bundle.patch` 指向单一文件），属范围变更，未在本版实施。
+
+容器行 `heluo-engineering-ui` 激活后，`@heluo/forge-devops` 与 `@heluo/forge-gitee` 的浏览器半把各自面板挂进容器的 `heluo.engineering.tab`（`order` 10 / 20）并撤掉独立分区；只有底座（没有该行）时两个包各自保留独立分区（`gitee` 50、`devops` 60、`devops-readiness` 29），单包安装不丢配置入口。DevOps 与 Gitee 两行在 r13 进闭包，条目内显式写 `config: {}`：行配置缺席时 `ConfigStandard` 会拒、loader 只把该行静默跳过（装上却没有读面，比报错更难查）。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
 
 本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行分层口径以两个补丁文件、`bundle-patch.test.mjs` 与安装演练 `run-bundle-install-rehearsal.mjs` 为准）：
 

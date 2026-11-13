@@ -4534,10 +4534,12 @@ window.__ModuleLoader__.load({
           name: 'settings.launcher',
           id: 'forge-iam-launcher',
         }, IamLauncher));
+        // 设计矩阵（enterprise-menu-and-token-unification §3）：企业账号排在最前（-10），
+        // 企业模型 10，研发容器 30。拆出 forge-models 分区前先占 -10，避免与容器同序。
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'forge-iam',
-          order: 30,
+          order: -10,
           label: () => '企业账号',
         }, Panel));
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({

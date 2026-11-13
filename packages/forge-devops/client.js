@@ -1171,6 +1171,9 @@ window.__ModuleLoader__.load({
      */
     function ReadinessSection(props) {
       const t = props.t;
+      // 嵌在容器条目里时不再画自己的标题与页脚：容器已经给了「企业研发工具」标题，
+      // 再出现一个「企业研发」h2 就是三层同名标题（§6.3 的信息层级）。
+      const embedded = props.embedded === true;
       const navigate = typeof props.navigate === 'function' ? props.navigate : null;
       const [reading, setReading] = React.useState({ mode: 'loading', sources: null, reason: null });
       const [check, setCheck] = React.useState({
@@ -1669,7 +1672,7 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           { className: 'fdv-root' },
-          h('div', { className: 'fdv-title' }, t('readiness.title')),
+          embedded ? null : h('div', { className: 'fdv-title' }, t('readiness.title')),
           h(Skeleton, { key: 'skeleton' }),
           h('p', { className: 'fdv-note', role: 'status', 'aria-live': 'polite' }, t('readiness.loading')),
         );
@@ -1702,7 +1705,7 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'fdv-root', 'aria-busy': reading.mode === 'refreshing' ? 'true' : undefined },
-        h('div', { className: 'fdv-title' }, t('readiness.title')),
+        embedded ? null : h('div', { className: 'fdv-title' }, t('readiness.title')),
         h(
           'div',
           { className: 'fdv-summary-row' },
@@ -1717,7 +1720,7 @@ window.__ModuleLoader__.load({
         reading.reason
           ? h('p', { className: 'fdv-note fdv-note-error', role: 'status' }, t('readiness.failed', { reason: t(`readiness.state.${reading.reason}`) }))
           : null,
-        h('p', { className: 'fdv-footer fdv-disclaimer', key: 'footer' }, t('readiness.footer')),
+        embedded ? null : h('p', { className: 'fdv-footer fdv-disclaimer', key: 'footer' }, t('readiness.footer')),
       );
     }
 
@@ -2232,116 +2235,111 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * `ctx.slots.register` 的释放句柄可能是函数，也可能是 Fiber/对象：两种都要能释放，
-     * 否则容器后到时会留下一个已废弃的独立分区。
+     * `ctx.slots.register` 返回函数型 disposer（宿主内部是 `ctx.effect` 的返回值）。
+     * 只认函数：拿到别的形态多半是宿主契约变了，凭猜测调 `.dispose()` 可能整个插件 fiber 被卸掉。
      */
     function releaseDisposable(handle) {
-      if (typeof handle === 'function') {
-        handle();
-        return;
-      }
-      if (handle !== null && typeof handle === 'object' && typeof handle.dispose === 'function') handle.dispose();
+      if (typeof handle === 'function') handle();
     }
 
     /** 容器子槽位只放一个 DevOps 条目：就绪检查在上，配置面板在下（设计 §6.3）。 */
     function DevopsEngineeringTab(props) {
+      // 顺序：先跨工具就绪总览，再 DevOps 配置；就绪面板在容器里以 embedded 形态渲染，
+      // 不重复画容器已给出的标题与页脚（§6.3）。
       return React.createElement(
         React.Fragment,
         null,
-        React.createElement(ReadinessSection, props),
+        React.createElement(ReadinessSection, { ...props, embedded: true }),
         React.createElement(DevopsSection, props),
       );
     }
+
+    const ENGINEERING_TAB_SLOT = 'heluo.engineering.tab';
 
     function apply(ctx) {
       const t = ctx.locale.bind(NS);
       const navigate = sectionNavigatorOf(ctx);
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'forge-devops: copy');
       ctx.effect(() => ensureStyle(), 'forge-devops: styles');
-      // `settings.section` 由父条目（settings 壳 → settings-general 的 `slots.inject` 回调）声明，
-      // 冷启动最坏时序下会**晚于**本插件 apply。直接 `register` 会抛
-      // `slot "settings.section" is not declared (a parent entry's children table must declare it)`
-      // 并让整个分区消失（QA D-2）；宿主内五个设置类插件与 `forge-iam/client.js`
-      // 一律用 `slots.inject(<槽位>, () => register(...))` 等声明，这里同法——声明后才注册，
-      // 声明已存在时立即注册，卸载时两者都随 effect 释放。
+      // `settings.section` 由父条目声明，冷启动最坏时序下会**晚于**本插件 apply；
+      // 直接 `register` 会抛 `slot "settings.section" is not declared ...` 并让分区消失（QA D-2）。
       // 研发组合装了容器时，DevOps 与就绪检查合并成一个容器条目（order 10，设计 §6.3），
-      // 不再各占一个侧栏分区；单独安装单包（ADR-0012）时容器缺席，两者保持原样。
-      const ENGINEERING_TAB_SLOT = 'heluo.engineering.tab';
-      let standalone = [];
-      let tabbed = false;
+      // 不再各占侧栏分区；单独安装单包（ADR-0012）时容器缺席，两个独立分区保持原样。
+      //
+      // 两个槽位的声明先后不定（容器可能晚于 apply 声明，也可能运行期被禁用而塌陷），
+      // 所以用声明标志 + `reconcile()` 收敛：任一标志变化都按当前状态重建挂载，
+      // 新挂载成功后才释放旧的，容器塌陷时把独立分区补回来。
+      let container = false;
+      let section = false;
+      /** 当前生效的挂载：`{ kind: 'tab' | 'section', releases: Array<() => void> }`。 */
+      let mounted;
+
+      const mountSection = () => [
+        ctx.slots.register({
+          name: 'settings.section',
+          id: 'devops',
+          order: 60,
+          label: () => t('nav'),
+          locale: NS,
+          inject: () => ({ t, navigate }),
+        }, DevopsSection),
+        ctx.slots.register({
+          name: 'settings.section',
+          id: 'devops-readiness',
+          order: 29,
+          label: () => t('readiness.nav'),
+          locale: NS,
+          inject: () => ({ t, navigate }),
+        }, ReadinessSection),
+      ];
+
+      const mountTab = () => [
+        ctx.slots.register({
+          name: ENGINEERING_TAB_SLOT,
+          id: 'devops',
+          order: 10,
+          label: () => t('nav'),
+          locale: NS,
+          inject: () => ({ t, navigate }),
+        }, DevopsEngineeringTab),
+      ];
+
+      const reconcile = () => {
+        const wanted = container ? 'tab' : (section ? 'section' : undefined);
+        if (wanted === undefined) {
+          const previous = mounted;
+          mounted = undefined;
+          if (previous !== undefined) for (const release of previous.releases) releaseDisposable(release);
+          return;
+        }
+        if (mounted !== undefined && mounted.kind === wanted) return;
+        const releases = wanted === 'tab' ? mountTab() : mountSection();
+        const previous = mounted;
+        mounted = { kind: wanted, releases };
+        if (previous !== undefined) for (const release of previous.releases) releaseDisposable(release);
+      };
+
       ctx.effect(
-        () =>
-          ctx.slots.inject(ENGINEERING_TAB_SLOT, () => {
-            tabbed = true;
-            const released = standalone;
-            standalone = [];
-            for (const handle of released) releaseDisposable(handle);
-            const releaseTab = ctx.slots.register(
-              {
-                name: ENGINEERING_TAB_SLOT,
-                id: 'devops',
-                order: 10,
-                label: () => t('nav'),
-                locale: NS,
-                inject: () => ({ t, navigate }),
-              },
-              DevopsEngineeringTab,
-            );
-            return () => {
-              releaseDisposable(releaseTab);
-              tabbed = false;
-            };
-          }),
+        () => ctx.slots.inject(ENGINEERING_TAB_SLOT, () => {
+          container = true;
+          reconcile();
+          return () => {
+            container = false;
+            reconcile();
+          };
+        }),
         'forge-devops: engineering tab',
       );
       ctx.effect(
-        () =>
-          ctx.slots.inject('settings.section', () => {
-            // 容器已在场时由容器条目接管，不再重复注册分区。
-            if (tabbed) return undefined;
-            const releaseSection = ctx.slots.register(
-              {
-                name: 'settings.section',
-                id: 'devops',
-                order: 60,
-                label: () => t('nav'),
-                locale: NS,
-                inject: () => ({ t, navigate }),
-              },
-              DevopsSection,
-            );
-            standalone.push(releaseSection);
-            return () => {
-              releaseDisposable(releaseSection);
-              standalone = standalone.filter((handle) => handle !== releaseSection);
-            };
-          }),
+        () => ctx.slots.inject('settings.section', () => {
+          section = true;
+          reconcile();
+          return () => {
+            section = false;
+            reconcile();
+          };
+        }),
         'forge-devops: settings section',
-      );
-      // r15「企业研发」分区（order 29，排在 `forge-iam` 的 30 之前）：同一个 client 承载两个分区，
-      // 各自独立注册——任一注册失败不牵连另一个（两个 effect 标签分开，测试按标签断言）。
-      ctx.effect(
-        () =>
-          ctx.slots.inject('settings.section', () => {
-            if (tabbed) return undefined;
-            const releaseSection = ctx.slots.register(
-              {
-                name: 'settings.section',
-                id: 'devops-readiness',
-                order: 29,
-                label: () => t('readiness.nav'),
-                locale: NS,
-                inject: () => ({ t, navigate }),
-              },
-              ReadinessSection,
-            );
-            standalone.push(releaseSection);
-            return () => {
-              releaseDisposable(releaseSection);
-              standalone = standalone.filter((handle) => handle !== releaseSection);
-            };
-          }),
-        'forge-devops: readiness section',
       );
     }
 

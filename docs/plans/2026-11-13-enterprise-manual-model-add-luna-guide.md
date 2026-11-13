@@ -49,7 +49,7 @@
 
 ### 2.3 持久化没有「来源」概念，且服务层只透传三字段
 
-- 键 `heluo-iam/model-selection`（`store.mjs:497`），记录 `{version:1, type, subject, models, defaultModelId, updatedAt}`（`:588-592`）；解析同时校验 `version` 与 `type`（`:529-547`）。
+- 键 `heluo-iam/model-selection`（`store.mjs:497`），记录 `{version:1, type, subject, models, defaultModelId, updatedAt}`（`:604-617`）；解析同时校验 `version` 与 `type`（`:552-570`）。
 - `sanitizeModelOption` 白名单只保留 `name`、`contextWindow`、`maxTokens`、`inputModalities`、`reasoningEfforts`（`:504-526`）。
 - `MAX_SELECTED_MODELS = 200`（`:500`），`defaultModelId` 必须落在 `models` 内（`:544`）；「A selection is valid only as a whole; a malformed one is ignored, never migrated」（`:529-547`）。
 - 服务层 `service-model-selection.mjs` 的 `readSelection` 有**四个返回点**（`:121`、`:124`、`:130`、`:132`），只有 `:132` 真正返回记录，其余三点硬编码 `{subject, saved, models, defaultModelId}`；`saveSelection` 解构并只透传 `{ models, defaultModelId }`（`:136`、`:153`）。`service.mjs:294`、`:297` 直接挂这两个函数。

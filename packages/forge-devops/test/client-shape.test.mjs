@@ -253,7 +253,7 @@ test('装配注册双语字典与样式，且 effect 可整体回收', () => {
   const [{ namespace, dictionaries }] = APPLIED.locales;
   assert.equal(namespace, 'devops');
   assert.deepEqual(Object.keys(dictionaries).sort(), ['en', 'zh']);
-  assert.equal(APPLIED.effects.length, 5, '五条 effect：字典、样式、容器条目、企业 DevOps 分区、企业研发分区');
+  assert.equal(APPLIED.effects.length, 4, '四条 effect：字典、样式、容器子槽位、settings.section（两种挂载由 reconcile 收敛）');
   for (const effect of APPLIED.effects) {
     assert.equal(typeof effect.label, 'string', '每条 effect 都要有可读标签（宿主 hook 列表里能定位）');
   }
@@ -270,6 +270,17 @@ test('装配注册双语字典与样式，且 effect 可整体回收', () => {
  * 离线 Node 无 document 走 `return null` 合法分支，所以旧单测全绿也看不出来；
  * 本用例补上「有 document」的浏览器分支：伪造 document 首挂载，逐条校验 effect 返回值。
  */
+test('容器条目：就绪面板以 embedded 形态渲染，不重复容器标题', () => {
+  const { DevopsEngineeringTab, ReadinessSection, DevopsSection } = CLIENT.module;
+  assert.equal(typeof DevopsEngineeringTab, 'function');
+  const tree = DevopsEngineeringTab({ t: (key) => key, navigate: () => {} });
+  assert.equal(tree.type, 'Fragment', '顶层是 Fragment（键见 fake React 的 Fragment 标记）');
+  const [first, second] = tree.children;
+  assert.equal(first.type, ReadinessSection, '容器条目先渲染跨工具就绪总览');
+  assert.equal(first.props.embedded, true, '嵌入形态才能压掉重复标题与页脚');
+  assert.equal(second.type, DevopsSection, '容器条目后渲染 DevOps 配置面板');
+});
+
 test('浏览器分支：有 document 时样式 effect 返回 disposer，不抛 Invalid effect（boot 回归）', () => {
   const created = [];
   const head = { appendChild: (tag) => created.push(tag) };
@@ -335,26 +346,23 @@ test('槽位晚于 apply 声明时不得抛错，声明后分区仍挂上（D-2 
 });
 
 test('分区注册一律经 slots.inject 等声明，禁止裸 register（D-2 静态面）', () => {
-  assert.match(
-    SOURCE,
-    /ctx\.slots\.inject\(\s*'settings\.section'/u,
-    '必须用 ctx.slots.inject(\'settings.section\', () => ctx.slots.register(...)) 等父条目声明',
-  );
+  // 两处挂载都必须先等声明确认；register 只能由 reconcile 在声明回调里触发。
+  assert.match(SOURCE, /ctx\.slots\.inject\(ENGINEERING_TAB_SLOT/u, '容器条目必须经 slots.inject 等子槽位声明');
+  assert.match(SOURCE, /ctx\.slots\.inject\((?:SECTION_SLOT|'settings\.section')/u, '独立分区必须经 slots.inject 等 settings.section 声明');
   assert.ok(
     !/ctx\.effect\(\s*\(\)\s*=>\s*ctx\.slots\.register/u.test(SOURCE),
     'effect 里直接 register 会让挂载依赖模块加载顺序（宿主冷启动会抛 not declared）',
   );
+  // 声明生命周期双向：出现时挂容器条目，塌陷时把独立分区补回来——两条都要 reconcile。
+  for (const [flag, value] of [['container', 'true'], ['container', 'false'], ['section', 'true'], ['section', 'false']]) {
+    assert.match(
+      SOURCE,
+      new RegExp(`${flag} = ${value};\\s*\\n\\s*reconcile\\(\\);`, 'u'),
+      `${flag} 声明变化后必须调用 reconcile()（否则挂载状态会与实际声明脱节）`,
+    );
+  }
   const registers = SOURCE.match(/ctx\.slots\.register\(/gu) ?? [];
-  // 第一个 register 必须挂在某个 slots.inject 之后：容器条目先于 settings.section 声明。
-  const injectIndex = SOURCE.indexOf('ctx.slots.inject(');
-  const registerIndex = SOURCE.search(/ctx\.slots\.register\(/u);
-  assert.equal(registers.length, 3, '三次注册：容器条目 + 两个独立分区（企业 DevOps / 企业研发）');
-  assert.match(
-    SOURCE,
-    /ctx\.slots\.inject\(\s*ENGINEERING_TAB_SLOT/u,
-    '容器条目必须同样经 slots.inject 等容器声明，不得直接 register',
-  );
-  assert.ok(injectIndex >= 0 && injectIndex < registerIndex, 'register 必须写在 inject 的等待回调里');
+  assert.equal(registers.length, 3, '三次注册：容器条目 + 两个独立分区');
 });
 
 /* ------------------------------------------------------------------------- *

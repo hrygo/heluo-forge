@@ -25,11 +25,16 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = join(root, 'packages');
 
-/** 所有声明了补丁层的包（包目录下的 cordis.patch.yml）。 */
+/** 所有声明了补丁层的包（包目录下的 cordis.patch.yml 及 `cordis.patch.<layer>.yml` 叠加层）。 */
 function bundles() {
   return readdirSync(packagesDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => join(packagesDir, entry.name, 'cordis.patch.yml'))
+    .flatMap((entry) => {
+      const dir = join(packagesDir, entry.name);
+      return readdirSync(dir, { withFileTypes: true })
+        .filter((item) => item.isFile() && /^cordis\.patch(?:\.[A-Za-z0-9-]+)?\.yml$/u.test(item.name))
+        .map((item) => join(dir, item.name));
+    })
     .filter((path) => {
       try {
         readFileSync(path, 'utf8');
@@ -39,6 +44,16 @@ function bundles() {
       }
     })
     .map((path) => ({ name: path.split('/').slice(-2, -1)[0], path, text: readFileSync(path, 'utf8') }));
+}
+
+/** 同一个包的多层补丁合并成一条文本（策略目录可以写在任意一层，判据看合并结果）。 */
+function mergedLayers() {
+  const byPackage = new Map();
+  for (const layer of bundles()) {
+    const existing = byPackage.get(layer.name);
+    byPackage.set(layer.name, existing === undefined ? { ...layer } : { ...existing, text: `${existing.text}\n${layer.text}` });
+  }
+  return [...byPackage.values()];
 }
 
 /** 解析出 `[{ id, name, isolate, catalog }]`——只认本仓库补丁层用到的那几个键。 */
@@ -325,7 +340,7 @@ test('D-1: gitee 回滚文档引用真实插件行 id（heluo-gitee），不得�
 });
 
 test('D-5: 企业 / devops / gitee 三层的策略目录逐字相同（企业层不得清空目录）', () => {
-  const layers = bundles();
+  const layers = mergedLayers();
   assertUniformPolicyCatalogs(layers);
 
   // 门禁有牙：把企业层的 catalog 段删掉（等价于修复前的「只插行、不带 config」），判据必须失败。
