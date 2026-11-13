@@ -47,6 +47,8 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 进入路径两次点击：首页 → 左下「设置」→ 侧栏「Gitee」。分区 id `gitee`、order 50，由本包 `client.js` 提供（`settings.section` 槽，`ctx.slots.inject` 两段式挂载；`ensureStyle` 返回 disposer）。
 
+同一 profile 装了研发容器（`@heluo/forge-enterprise` 的 `forge-engineering` 分区）时，本面板改为挂进容器的子槽位 `heluo.engineering.tab`（order 20）并撤掉独立分区：`client.js` 先等子槽位声明，出现后释放已注册的独立分区再注册容器条目；容器缺席（单包安装）时保持上面的独立分区。
+
 页面是**一张五行三列的表**：每行一个配置键，三列分别是「公共参数」（补丁层/企业下发的值）、「本机覆盖」（这台机器在页面上改过的值）、「最终生效」。只有两项可编辑：
 
 | 行 | 可编辑 | 说明 |

@@ -83,6 +83,7 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
   assert.deepEqual(Object.keys(CLIENT.module).sort(), [
     'CandidateList',
     'CliEntryField',
+    'DevopsEngineeringTab',
     'DevopsSection',
     'ReadinessSection',
     'StatusLine',
@@ -91,7 +92,7 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
   ].sort());
   assert.deepEqual(CLIENT.module.inject, ['slots', 'locale'], 'inject 缺一项宿主就不装配客户端半');
   assert.equal(typeof CLIENT.module.apply, 'function');
-  for (const name of ['DevopsSection', 'ReadinessSection', 'CliEntryField', 'StatusLine', 'CandidateList']) {
+  for (const name of ['DevopsSection', 'ReadinessSection', 'DevopsEngineeringTab', 'CliEntryField', 'StatusLine', 'CandidateList']) {
     assert.equal(typeof CLIENT.module[name], 'function', `${name} 必须是可渲染的组件函数`);
   }
   // 段控件随「事实来源」一起下线：导出面不允许留一个没人能填的控件（页面收窄到三键）。
@@ -252,7 +253,7 @@ test('装配注册双语字典与样式，且 effect 可整体回收', () => {
   const [{ namespace, dictionaries }] = APPLIED.locales;
   assert.equal(namespace, 'devops');
   assert.deepEqual(Object.keys(dictionaries).sort(), ['en', 'zh']);
-  assert.equal(APPLIED.effects.length, 4, '四条 effect：字典、样式、企业 DevOps 分区、企业研发分区');
+  assert.equal(APPLIED.effects.length, 5, '五条 effect：字典、样式、容器条目、企业 DevOps 分区、企业研发分区');
   for (const effect of APPLIED.effects) {
     assert.equal(typeof effect.label, 'string', '每条 effect 都要有可读标签（宿主 hook 列表里能定位）');
   }
@@ -344,9 +345,15 @@ test('分区注册一律经 slots.inject 等声明，禁止裸 register（D-2 �
     'effect 里直接 register 会让挂载依赖模块加载顺序（宿主冷启动会抛 not declared）',
   );
   const registers = SOURCE.match(/ctx\.slots\.register\(/gu) ?? [];
-  const injectIndex = SOURCE.search(/ctx\.slots\.inject\(\s*'settings\.section'/u);
+  // 第一个 register 必须挂在某个 slots.inject 之后：容器条目先于 settings.section 声明。
+  const injectIndex = SOURCE.indexOf('ctx.slots.inject(');
   const registerIndex = SOURCE.search(/ctx\.slots\.register\(/u);
-  assert.equal(registers.length, 2, '两个分区各注册一次（企业 DevOps / 企业研发）');
+  assert.equal(registers.length, 3, '三次注册：容器条目 + 两个独立分区（企业 DevOps / 企业研发）');
+  assert.match(
+    SOURCE,
+    /ctx\.slots\.inject\(\s*ENGINEERING_TAB_SLOT/u,
+    '容器条目必须同样经 slots.inject 等容器声明，不得直接 register',
+  );
   assert.ok(injectIndex >= 0 && injectIndex < registerIndex, 'register 必须写在 inject 的等待回调里');
 });
 

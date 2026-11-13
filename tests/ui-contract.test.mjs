@@ -152,3 +152,57 @@ test('r16：Gitee 分区不发就绪探测，也不重复实现四项/四层（A
   assert.equal(gitee.includes('/api/forge-iam/view'), false, 'Gitee 分区不读企业身份');
   assert.equal(gitee.includes('检查 Gitee'), false, 'Gitee 分区没有自己的检查按钮');
 });
+
+// ---------------------------------------------------------------------------
+// 研发容器子槽位（设计 §6.3）：容器在场时 devops/gitee 各注册一个条目并撤掉
+// 自己的独立分区；容器缺席（ADR-0012 单包安装）时保留原有分区。检查器把
+// `heluo.engineering.tab` 的两种时序各跑一遍，分别给出 sections / tabs。
+// ---------------------------------------------------------------------------
+
+const CONTAINER_CLIENTS = ['packages/forge-gitee/client.js', 'packages/forge-devops/client.js', 'packages/forge-enterprise/client.js'];
+
+function loadContainerReport() {
+  const stdout = execFileSync(process.execPath, [join(root, 'scripts/check-client-module.mjs'), ...CONTAINER_CLIENTS], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  return JSON.parse(stdout);
+}
+
+test('容器在场时：devops 与 gitee 只注册容器条目，不再各占侧栏分区', () => {
+  const report = loadContainerReport();
+  assert.equal(report.failed, 0, 'scripts/check-client-module.mjs 必须全部通过');
+  const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
+  const gitee = byId.get('@heluo/forge-gitee');
+  const devops = byId.get('@heluo/forge-devops');
+  assert.deepEqual(gitee.containerSections, [], 'Gitee 注册容器条目后不得再注册 settings.section');
+  assert.deepEqual(devops.containerSections, [], 'DevOps 注册容器条目后不得再注册 settings.section');
+  assert.deepEqual(gitee.tabs.map(({ id, order }) => ({ id, order })), [{ id: 'gitee', order: 20 }]);
+  // 就绪检查与配置面板合并为一个容器条目：两个独立分区收进同一个 order 10。
+  assert.deepEqual(devops.tabs.map(({ id, order }) => ({ id, order })), [{ id: 'devops', order: 10 }]);
+  for (const tab of [...gitee.tabs, ...devops.tabs]) {
+    assert.equal(tab.name, 'heluo.engineering.tab');
+    assert.ok(tab.component, `${tab.id} 容器条目必须带组件`);
+  }
+});
+
+test('容器缺席时：devops/gitee 保留独立分区与 order（ADR-0012 单包可用）', () => {
+  const report = loadContainerReport();
+  const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
+  const sectionsOf = (id) => byId.get(id).sections.map(({ id: sectionId, order }) => ({ id: sectionId, order }));
+  assert.deepEqual(sectionsOf('@heluo/forge-gitee'), [{ id: 'gitee', order: 50 }]);
+  assert.deepEqual(sectionsOf('@heluo/forge-devops'), [
+    { id: 'devops', order: 60 },
+    { id: 'devops-readiness', order: 29 },
+  ]);
+});
+
+test('容器自身：forge-engineering（order 30）声明子槽位并注册同名图标', () => {
+  const report = loadContainerReport();
+  const enterprise = report.checked.find((entry) => entry.id === '@heluo/forge-enterprise');
+  assert.ok(enterprise, '客户浏览器半必须能被装载');
+  assert.equal(enterprise.container, true, '容器必须在 children 里声明 heluo.engineering.tab');
+  assert.deepEqual(enterprise.sections.map(({ id, order }) => ({ id, order })), [{ id: 'forge-engineering', order: 30 }]);
+  assert.deepEqual(enterprise.tabs, [], '容器不得往自己的子槽位注册条目');
+  assert.deepEqual(enterprise.icons, ['forge-engineering'], '图标条目 id 必须与分区 id 一致');
+});

@@ -49,6 +49,8 @@ dsh --profile web --dump-config | grep -A2 "id: forge-devops"
 
 ### 企业研发（`设置 → 企业研发`，r15 新增）
 
+同一 profile 装了研发容器（`@heluo/forge-enterprise` 的 `forge-engineering` 分区）时，上面两个分区收进容器的子槽位 `heluo.engineering.tab`（order 10，就绪检查在上、配置面板在下），不再各占侧栏分区；容器缺席（单包安装）时保持 `devops` 与 `devops-readiness` 两个独立分区。
+
 本包在设置页还有第二个分区：id `devops-readiness`、order 29。它**只汇总本机可见性**，页面顶部固定声明「本页只汇总本机可见性，不代表业务授权」。六行各读各的源，一行失败只影响自己：
 
 | 行 | 事实来源 | 状态 |

@@ -186,9 +186,13 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
       },
     },
     slots: {
+      // 无容器场景：只有 `settings.section` 被声明，研发容器子槽位缺席。
       inject: (name, callback) => {
-        assert.equal(name, 'settings.section');
-        return callback();
+        assert.ok(
+          name === 'settings.section' || name === 'heluo.engineering.tab',
+          `未知槽位 ${name}`,
+        );
+        return name === 'settings.section' ? callback() : () => {};
       },
       register: (options, component) => {
         registrations.push({ options, component });
@@ -199,7 +203,12 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
 
   CLIENT.module.apply(ctx);
 
-  assert.deepEqual(effects, ['forge-gitee: copy', 'forge-gitee: styles', 'forge-gitee: settings section']);
+  assert.deepEqual(effects, [
+    'forge-gitee: copy',
+    'forge-gitee: styles',
+    'forge-gitee: engineering tab',
+    'forge-gitee: settings section',
+  ]);
   assert.deepEqual(locales.map((item) => item.namespace), ['gitee']);
   assert.equal(registrations.length, 1);
   const { options, component } = registrations[0];

@@ -2231,6 +2231,28 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    /**
+     * `ctx.slots.register` 的释放句柄可能是函数，也可能是 Fiber/对象：两种都要能释放，
+     * 否则容器后到时会留下一个已废弃的独立分区。
+     */
+    function releaseDisposable(handle) {
+      if (typeof handle === 'function') {
+        handle();
+        return;
+      }
+      if (handle !== null && typeof handle === 'object' && typeof handle.dispose === 'function') handle.dispose();
+    }
+
+    /** 容器子槽位只放一个 DevOps 条目：就绪检查在上，配置面板在下（设计 §6.3）。 */
+    function DevopsEngineeringTab(props) {
+      return React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(ReadinessSection, props),
+        React.createElement(DevopsSection, props),
+      );
+    }
+
     function apply(ctx) {
       const t = ctx.locale.bind(NS);
       const navigate = sectionNavigatorOf(ctx);
@@ -2242,10 +2264,42 @@ window.__ModuleLoader__.load({
       // 并让整个分区消失（QA D-2）；宿主内五个设置类插件与 `forge-iam/client.js`
       // 一律用 `slots.inject(<槽位>, () => register(...))` 等声明，这里同法——声明后才注册，
       // 声明已存在时立即注册，卸载时两者都随 effect 释放。
+      // 研发组合装了容器时，DevOps 与就绪检查合并成一个容器条目（order 10，设计 §6.3），
+      // 不再各占一个侧栏分区；单独安装单包（ADR-0012）时容器缺席，两者保持原样。
+      const ENGINEERING_TAB_SLOT = 'heluo.engineering.tab';
+      let standalone = [];
+      let tabbed = false;
       ctx.effect(
         () =>
-          ctx.slots.inject('settings.section', () =>
-            ctx.slots.register(
+          ctx.slots.inject(ENGINEERING_TAB_SLOT, () => {
+            tabbed = true;
+            const released = standalone;
+            standalone = [];
+            for (const handle of released) releaseDisposable(handle);
+            const releaseTab = ctx.slots.register(
+              {
+                name: ENGINEERING_TAB_SLOT,
+                id: 'devops',
+                order: 10,
+                label: () => t('nav'),
+                locale: NS,
+                inject: () => ({ t, navigate }),
+              },
+              DevopsEngineeringTab,
+            );
+            return () => {
+              releaseDisposable(releaseTab);
+              tabbed = false;
+            };
+          }),
+        'forge-devops: engineering tab',
+      );
+      ctx.effect(
+        () =>
+          ctx.slots.inject('settings.section', () => {
+            // 容器已在场时由容器条目接管，不再重复注册分区。
+            if (tabbed) return undefined;
+            const releaseSection = ctx.slots.register(
               {
                 name: 'settings.section',
                 id: 'devops',
@@ -2255,16 +2309,22 @@ window.__ModuleLoader__.load({
                 inject: () => ({ t, navigate }),
               },
               DevopsSection,
-            ),
-          ),
+            );
+            standalone.push(releaseSection);
+            return () => {
+              releaseDisposable(releaseSection);
+              standalone = standalone.filter((handle) => handle !== releaseSection);
+            };
+          }),
         'forge-devops: settings section',
       );
       // r15「企业研发」分区（order 29，排在 `forge-iam` 的 30 之前）：同一个 client 承载两个分区，
       // 各自独立注册——任一注册失败不牵连另一个（两个 effect 标签分开，测试按标签断言）。
       ctx.effect(
         () =>
-          ctx.slots.inject('settings.section', () =>
-            ctx.slots.register(
+          ctx.slots.inject('settings.section', () => {
+            if (tabbed) return undefined;
+            const releaseSection = ctx.slots.register(
               {
                 name: 'settings.section',
                 id: 'devops-readiness',
@@ -2274,14 +2334,19 @@ window.__ModuleLoader__.load({
                 inject: () => ({ t, navigate }),
               },
               ReadinessSection,
-            ),
-          ),
+            );
+            standalone.push(releaseSection);
+            return () => {
+              releaseDisposable(releaseSection);
+              standalone = standalone.filter((handle) => handle !== releaseSection);
+            };
+          }),
         'forge-devops: readiness section',
       );
     }
 
     const inject = ['slots', 'locale'];
 
-    return { apply, inject, DevopsSection, ReadinessSection, CliEntryField, StatusLine, CandidateList };
+    return { apply, inject, DevopsSection, ReadinessSection, DevopsEngineeringTab, CliEntryField, StatusLine, CandidateList };
   },
 });

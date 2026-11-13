@@ -38,8 +38,12 @@ function fakeReact() {
   return new Proxy(base, { get: (target, key) => (key in target ? target[key] : () => {}) });
 }
 
-/** 假 `ctx`：记录 effect / slot / locale，并让 `slots.inject` 立刻回调（模拟槽位已在场）。 */
-function fakeContext() {
+/**
+ * 假 `ctx`：记录 effect / slot / locale。`container` 决定研发容器子槽位是否存在：
+ * 为真时 `heluo.engineering.tab` 视为已声明（`inject` 立刻回调），为假时视为缺席
+ * （`inject` 不回调，与真实宿主"槽位尚未声明"的时序一致）。
+ */
+function fakeContext({ container = false } = {}) {
   const effects = [];
   const registrations = [];
   const locales = [];
@@ -63,13 +67,24 @@ function fakeContext() {
     },
     slots: {
       inject: (name, fn) => {
+        if (name === 'heluo.engineering.tab' && !container) {
+          // 容器缺席：槽位永远不出现，回调不执行。
+          return () => {};
+        }
         const dispose = fn();
         return () => {
           if (typeof dispose === 'function') dispose();
         };
       },
       register: (options, component) => {
-        registrations.push({ name: options?.name, id: options?.id, order: options?.order, label: options?.label, component });
+        registrations.push({
+          name: options?.name,
+          id: options?.id,
+          order: options?.order,
+          label: options?.label,
+          children: options?.children,
+          component,
+        });
         return () => {};
       },
     },
@@ -145,33 +160,75 @@ function checkOne(file) {
       if (!exported.inject.includes(name)) errors.push(`inject must declare ${name}`);
     }
   }
-  const runtime = fakeContext();
-  if (typeof exported.apply === 'function') {
-    try {
-      exported.apply(runtime.ctx, {});
-    } catch (error) {
-      errors.push(`apply threw: ${error.message}`);
-    }
-  }
-  for (const warning of runtime.warnings) errors.push(warning);
-  if (runtime.locales.length === 0) errors.push('apply did not register a locale namespace');
-  if (runtime.registrations.length === 0) errors.push('apply did not register a settings section');
-  const sections = runtime.registrations.map((entry) => ({
+  const describe = (runtime) => runtime.registrations.map((entry) => ({
     name: entry.name,
     id: entry.id,
     order: entry.order,
     label: typeof entry.label === 'function' ? entry.label() : undefined,
+    children: Object.keys(entry.children ?? {}),
     component: typeof entry.component === 'function' || (entry.component !== null && typeof entry.component === 'object'),
   }));
-  for (const section of sections) {
+  const run = (container) => {
+    const runtime = fakeContext({ container });
+    if (typeof exported.apply === 'function') {
+      try {
+        exported.apply(runtime.ctx, {});
+      } catch (error) {
+        errors.push(`apply threw (${container ? 'container' : 'standalone'}): ${error.message}`);
+      }
+    }
+    for (const warning of runtime.warnings) errors.push(warning);
+    if (runtime.locales.length === 0) errors.push('apply did not register a locale namespace');
+    return describe(runtime);
+  };
+
+  // 单包安装（无容器）：必须有一个独立 settings.section 入口。图标注册单独收集，
+  // 不参与分区校验。
+  const standaloneAll = run(false);
+  const standalone = standaloneAll.filter((entry) => entry.name === 'settings.section');
+  const standaloneIcons = standaloneAll.filter((entry) => entry.name === 'settings.section.icon').map((entry) => entry.id);
+  if (standalone.length === 0) errors.push('apply did not register a settings section when no container is present');
+  for (const section of standalone) {
     if (section.name !== 'settings.section') errors.push(`slot registration must be two-stage on settings.section (got ${JSON.stringify(section.name)})`);
     if (typeof section.id !== 'string' || section.id.length === 0) errors.push('settings section needs a stable id');
     if (typeof section.order !== 'number') errors.push(`settings section ${section.id} needs a numeric order`);
     if (!section.component) errors.push(`settings section ${section.id} has no component`);
   }
-  const orders = sections.map((section) => section.order);
-  if (new Set(orders).size !== orders.length) errors.push('settings sections must not share an order');
-  return { file, id, sections, errors };
+  const standaloneOrders = standalone.map((section) => section.order);
+  if (new Set(standaloneOrders).size !== standaloneOrders.length) errors.push('settings sections must not share an order');
+
+  // 装有研发容器：同一面板必须改成容器子槽位条目，且不再单独占侧栏分区。
+  const mounted = run(true);
+  const tabs = mounted.filter((entry) => entry.name === 'heluo.engineering.tab');
+  const containerSections = mounted.filter((entry) => entry.name === 'settings.section');
+  // 容器自身声明子槽位（`children`），因此不该被要求再往子槽位注册条目。
+  const isContainer = mounted.some((entry) => entry.children.includes('heluo.engineering.tab'));
+  if (tabs.length === 0 && standalone.length > 0 && !isContainer) {
+    errors.push('container is present but no entry was registered into heluo.engineering.tab');
+  }
+  if (isContainer && tabs.length > 0) errors.push('container must not register into its own child slot');
+  for (const tab of tabs) {
+    if (typeof tab.id !== 'string' || tab.id.length === 0) errors.push('container tab needs a stable id');
+    if (typeof tab.order !== 'number') errors.push(`container tab ${tab.id} needs a numeric order`);
+    if (!tab.component) errors.push(`container tab ${tab.id} has no component`);
+  }
+  const otherSlots = mounted.filter(
+    (entry) => entry.name !== 'heluo.engineering.tab' && entry.name !== 'settings.section' && entry.name !== 'settings.section.icon',
+  );
+  for (const entry of otherSlots) errors.push(`unexpected slot registration ${JSON.stringify(entry.name)}`);
+  return {
+    file,
+    id,
+    sections: standalone,
+    tabs,
+    containerSections,
+    container: isContainer,
+    icons: [...new Set([
+      ...standaloneIcons,
+      ...mounted.filter((entry) => entry.name === 'settings.section.icon').map((entry) => entry.id),
+    ])],
+    errors,
+  };
 }
 
 const files = process.argv.slice(2);
@@ -187,7 +244,12 @@ if (files.length === 0) {
     }
   });
   const failed = results.filter((result) => result.errors.length > 0);
-  console.log(JSON.stringify({ checked: results.map(({ file, id, sections }) => ({ file, id, sections })), failed: failed.length }, null, 2));
+  console.log(JSON.stringify({
+    checked: results.map(({ file, id, sections, tabs, containerSections, container, icons }) => ({
+      file, id, sections, tabs, containerSections, container, icons,
+    })),
+    failed: failed.length,
+  }, null, 2));
   if (failed.length > 0) {
     for (const result of failed) for (const message of result.errors) console.error(`${result.file}: ${message}`);
     process.exitCode = 1;

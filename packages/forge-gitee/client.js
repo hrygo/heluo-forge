@@ -796,16 +796,63 @@ window.__ModuleLoader__.load({
       return () => tag.remove();
     }
 
+    /**
+     * `ctx.slots.register` 的释放句柄可能是函数，也可能是 Fiber/对象：两种都要能释放，
+     * 否则容器后到时会留下一个已废弃的独立分区。
+     */
+    function releaseDisposable(handle) {
+      if (typeof handle === 'function') {
+        handle();
+        return;
+      }
+      if (handle !== null && typeof handle === 'object' && typeof handle.dispose === 'function') handle.dispose();
+    }
+
     function apply(ctx) {
       const t = ctx.locale.bind(NS);
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'forge-gitee: copy');
       ctx.effect(() => ensureStyle(), 'forge-gitee: styles');
-      // 两段式挂载（TECHNICAL §4.1）：`settings.section` 由父条目声明，冷启动时可能晚于本插件
-      // apply；直接 `register` 会抛 `slot "settings.section" is not declared` 并让整个分区消失。
+      // 研发组合同时装了容器（`@heluo/forge-enterprise` 的 `forge-engineering` 分区）时，
+      // 本插件不另占侧栏分区，而是把同一面板挂进容器的子槽位 `heluo.engineering.tab`
+      // （order 20，设计 §6.3）；单独安装单包（ADR-0012）时容器缺席，保留独立分区。
+      //
+      // 两条挂载都走两段式：槽位可能晚于本插件 apply 声明，直接 register 会抛
+      // `slot "..." is not declared` 并让入口整块消失。容器后到时先撤掉已经注册的
+      // 独立分区再注册标签页；容器先到时标记 `tabbed` 让独立分区不再注册。
+      const ENGINEERING_TAB_SLOT = 'heluo.engineering.tab';
+      let standalone;
+      let tabbed = false;
       ctx.effect(
         () =>
-          ctx.slots.inject('settings.section', () =>
-            ctx.slots.register(
+          ctx.slots.inject(ENGINEERING_TAB_SLOT, () => {
+            tabbed = true;
+            const releaseSection = standalone;
+            standalone = undefined;
+            const releaseTab = ctx.slots.register(
+              {
+                name: ENGINEERING_TAB_SLOT,
+                id: 'gitee',
+                order: 20,
+                label: () => t('nav'),
+                locale: NS,
+                inject: () => ({ t }),
+              },
+              GiteeSection,
+            );
+            return () => {
+              releaseDisposable(releaseTab);
+              if (releaseSection !== undefined) releaseDisposable(releaseSection);
+              tabbed = false;
+            };
+          }),
+        'forge-gitee: engineering tab',
+      );
+      ctx.effect(
+        () =>
+          ctx.slots.inject('settings.section', () => {
+            // 容器已在场时由标签页接管入口，不再重复注册分区。
+            if (tabbed) return undefined;
+            const releaseSection = ctx.slots.register(
               {
                 name: 'settings.section',
                 id: 'gitee',
@@ -815,8 +862,13 @@ window.__ModuleLoader__.load({
                 inject: () => ({ t }),
               },
               GiteeSection,
-            ),
-          ),
+            );
+            standalone = releaseSection;
+            return () => {
+              releaseDisposable(releaseSection);
+              if (standalone === releaseSection) standalone = undefined;
+            };
+          }),
         'forge-gitee: settings section',
       );
     }

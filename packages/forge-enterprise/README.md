@@ -46,7 +46,8 @@
 - 角色 preset 只调整工具可见性与提示，不替代服务端授权。
 - 条款责任人与维护者由企业侧指定；本包只按索引标注呈现，不代替责任人裁定。
 - 通用底座（`cordis.patch.yml`）只挂有真实 Host 职责的通用插件——凭据、策略、IAM；研发域成员（DevOps、Gitee、研发 Skill 与「企业研发工具」容器）一律进叠加层 `cordis.patch.engineering.yml`，通用用户因此看不到研发设置入口。
-- 研发组合的安装方式：先装 bundle（自动应用底座），再以 `dsh --profile <name> --patch <包目录>/cordis.patch.engineering.yml` 叠加。`heluo-engineering-ui` 是激活本包 [client.js](client.js) 的那一行——bundle 的 client 只随条目装载，底座没有该行，所以通用用户不会出现空的「企业研发工具」分区。
+- 研发组合的安装方式：先装 bundle（自动应用底座），再以 `dsh --profile <name> --patch <包目录>/cordis.patch.engineering.yml` 叠加——叠加层是部署期动作，不是终端用户在设置页里的开关；Web/Desktop 外壳不能传 `--patch`，由企业部署侧在创建研发 profile 时把这一层落进该 profile 的补丁文件。`heluo-engineering-ui` 是激活本包 [client.js](client.js) 的那一行——bundle 的 client 只随条目装载，底座没有该行，所以通用用户不会出现空的「企业研发工具」分区。
+- 容器行 `heluo-engineering-ui` 激活后，`@heluo/forge-devops` 与 `@heluo/forge-gitee` 的浏览器半把各自面板挂进容器的 `heluo.engineering.tab`（order 10 / 20）并撤掉独立分区；底座安装（没有该行）时两个包仍保留独立分区，单包安装因此不丢配置入口。
 - 叠加层里的 Skill 子路径入口指向同一 tarball 内的 `exports`（缺 `skills` 服务时按 `inject` 不激活）；SDD 已退役并从包中删除，不补空 `apply` 伪装成插件；网关与品牌仍只有 README，不预建指向未实现包的入口。
 - 禁用实验失败即暂停 O3，不 patch 内核；`desktop` profile 行 id 与运行时模型面待核验。
 
