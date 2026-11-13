@@ -101,7 +101,55 @@ export function createServiceStore({ options }) {
     throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
   }
 
+  /**
+   * 动态凭据端口：把「provider 何时就绪」这一层留在本模块里，装配点只拿端口。
+   *
+   * `ExtTokenStore` 需要 `readRecord/modifyRecord/deleteRecord/set/unset/resolve`
+   * 六个方法；provider 在注入前可能还没就绪，所以这里每次调用都现取，绝不在装配时
+   * 缓存某个 provider 的 store（否则换绑 provider 后仍会读到旧凭据）。
+   */
+  function credentialsPort() {
+    const target = () => (ensure() ? storeCredentials : null);
+    const unavailable = () => {
+      const error = new Error('credentials storage is unavailable');
+      error.code = 'KEYCHAIN_UNAVAILABLE';
+      return error;
+    };
+    return Object.freeze({
+      readRecord: (key) => {
+        const port = target();
+        return port && typeof port.readRecord === 'function' ? port.readRecord(key) : Promise.resolve(null);
+      },
+      modifyRecord: (key, mutate) => {
+        const port = target();
+        if (!port || typeof port.modifyRecord !== 'function') return Promise.reject(unavailable());
+        return port.modifyRecord(key, mutate);
+      },
+      deleteRecord: (key) => {
+        const port = target();
+        if (!port || typeof port.deleteRecord !== 'function') return Promise.reject(unavailable());
+        return port.deleteRecord(key);
+      },
+      set: (ref, value) => {
+        const port = target();
+        if (!port || typeof port.set !== 'function') return Promise.reject(unavailable());
+        return port.set(ref, value);
+      },
+      unset: (ref) => {
+        const port = target();
+        if (!port || typeof port.unset !== 'function') return Promise.reject(unavailable());
+        return port.unset(ref);
+      },
+      resolve: (ref) => {
+        const port = target();
+        if (!port || typeof port.resolve !== 'function') return Promise.reject(unavailable());
+        return port.resolve(ref);
+      },
+    });
+  }
+
   return {
+    credentialsPort,
     get store() { return store; },
     set store(next) { store = next; },
     get storeCredentials() { return storeCredentials; },

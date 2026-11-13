@@ -446,6 +446,62 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
         return methodNotAllowed(res, 'GET, PUT, POST');
       }
 
+      if (url.pathname === '/api/forge-iam/models/manual') {
+        if (req.method === 'POST') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const body = await readJsonBody(req);
+            const result = await service.updateManualModel({ action: body?.action, id: body?.id });
+            return sendJson(res, 200, { ...result, view: service.getView() });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'POST');
+      }
+
+      if (url.pathname === '/api/forge-iam/ext-credentials') {
+        if (req.method === 'GET') {
+          try {
+            const credentials = await service.listExtCredentials();
+            return sendJson(res, 200, { credentials });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'GET');
+      }
+
+      if (url.pathname.startsWith('/api/forge-iam/ext-credentials/')) {
+        const extensionId = decodeURIComponent(url.pathname.slice('/api/forge-iam/ext-credentials/'.length));
+        if (!extensionId || extensionId.includes('/')) {
+          return sendJson(res, 400, { error: { code: 'IAM_EXT_CREDENTIAL_INVALID' } });
+        }
+        if (req.method === 'PUT') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const body = await readJsonBody(req);
+            const token = typeof body?.token === 'string' ? body.token : '';
+            const credential = await service.saveExtCredential({ extensionId, token });
+            const credentials = await service.listExtCredentials();
+            return sendJson(res, 200, { credential, credentials });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        if (req.method === 'DELETE') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const credential = await service.clearExtCredential({ extensionId });
+            const credentials = await service.listExtCredentials();
+            return sendJson(res, 200, { credential, credentials });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'PUT, DELETE');
+      }
+
       if (url.pathname === '/api/forge-iam/credential') {
         if (req.method === 'GET') {
           try {

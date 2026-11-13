@@ -296,7 +296,8 @@ test('an embedding without inject retains initial hydration', async (t) => {
   let service;
   const ctx = {
     get: (name) => name === 'credentials' ? credentials : undefined,
-    provide: (_name, value) => { service = value; return () => {}; },
+    // 只认 `iam` 这一笔：装配点还会 provide 凭据 broker，测试不能把它当成服务本体。
+    provide: (name, value) => { if (name === 'iam') service = value; return () => {}; },
     effect: (fn) => fn(),
   };
   const dispose = apply(ctx, config);

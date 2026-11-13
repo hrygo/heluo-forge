@@ -57,6 +57,9 @@ export const MESSAGES = Object.freeze({
   // they answer with what the person can do, not with an internal module name.
   ENTERPRISE_IAM_UNAVAILABLE: '企业认证服务暂不可达，请稍后重试。',
   ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: '凭据安全存储暂不可用，请检查系统密钥环或联系管理员。',
+  ENTERPRISE_CREDENTIAL_INVALID: '提交的扩展令牌或扩展声明不合规，请检查后重试。',
+  ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: '该令牌属于另一个企业账号，请重新登录后再操作。',
+  ENTERPRISE_CREDENTIAL_PENDING: '上一次保存尚未完成，请稍后重试。',
   ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
   ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
   ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',

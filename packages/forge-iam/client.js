@@ -1811,6 +1811,9 @@ window.__ModuleLoader__.load({
       // 认证服务与凭据存储在请求发出前失败：说清楚能做什么，不暴露内部模块名。
       ENTERPRISE_IAM_UNAVAILABLE: '企业认证服务暂不可达，请稍后重试。',
       ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: '凭据安全存储暂不可用，请检查系统密钥环或联系管理员。',
+      ENTERPRISE_CREDENTIAL_INVALID: '提交的扩展令牌或扩展声明不合规，请检查后重试。',
+      ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: '该令牌属于另一个企业账号，请重新登录后再操作。',
+      ENTERPRISE_CREDENTIAL_PENDING: '上一次保存尚未完成，请稍后重试。',
       IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
       IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
       IAM_GATEWAY_OWNER_MISSING: '请先登录企业账号，再添加个人访问凭证。',

@@ -170,9 +170,11 @@ export function apply(ctx, rawConfig = {}) {
     if (typeof offCredentials === 'function') offCredentials();
     else await offCredentials?.dispose?.();
     disposeProvide?.();
+    disposeBrokerProvide?.();
   };
 
   let disposeProvide;
+  let disposeBrokerProvide;
   let offWebServer;
   let offConnection;
   let offCredentials;
@@ -203,6 +205,7 @@ export function apply(ctx, rawConfig = {}) {
 
   ctx.effect(() => {
     disposeProvide = ctx.provide('iam', service);
+    disposeBrokerProvide = ctx.provide('forgeIamCredentialBroker', service.extCredentialBroker);
     if (typeof ctx.inject === 'function') {
       try {
         offAgentDefaultModel = ctx.inject(['agentDefaultModel'], (agentHost) => {

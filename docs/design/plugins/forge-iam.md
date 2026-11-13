@@ -364,6 +364,10 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `GET /api/forge-iam/credential` | 同源校验 | 返回网关凭据状态视图对象 `{ credential }` |
 | `PUT /api/forge-iam/credential` | 同源 + Header (≤ 8 KiB) | 保存个人网关凭据，返回更新后的 `IamView` |
 | `DELETE /api/forge-iam/credential` | 同源 + Header | 清除网关凭据，返回更新后的 `IamView` |
+| `POST /api/forge-iam/models/manual` | 同源 + Header | 增删手动模型条目（`{ action: 'add' \| 'remove', id }`），返回操作结果与最新 `IamView`；浏览器控件尚未实施 |
+| `GET /api/forge-iam/ext-credentials` | 同源校验 | 返回已注册扩展凭据的状态投影（不含令牌明文） |
+| `PUT /api/forge-iam/ext-credentials/<extensionId>` | 同源 + Header | 保存扩展托管令牌，返回投影与最新列表；令牌值不回显 |
+| `DELETE /api/forge-iam/ext-credentials/<extensionId>` | 同源 + Header | 清除扩展托管令牌，返回投影与最新列表 |
 
 #### 5.2.3 最小只读订阅接缝（source/mock 已实现）
 
@@ -1079,5 +1083,6 @@ flowchart TD
 ### 13.2 手动模型条目（代拟）
 
 - **两级权威与协同规则**：目录唯一提供模型元数据与可用性证据；`manual` 条目仅记录本机声明，不随目录刷新移除；若目录后来返回同 ID，以目录元数据为准并标为 `source: 'gateway'`；删除手动条目按当前生效选择重指 `defaultModelId`。
-- **应用入口（未实施）**：`updateManualModel` 目前只有运行时方法与单测；服务方法、受保护路由与浏览器控件均未接线，用户暂时不能在应用内添加或删除手动模型。接线完成前不得在界面或文案上宣称该能力可用。
+- **应用入口（部分实施）**：`updateManualModel` 已由 `createIamService` 暴露，并经 `POST /api/forge-iam/models/manual`（同源 + `x-forge-iam-request` 预检头）开放；浏览器控件尚未实施，用户在设置页暂时不能增删手动模型。
+- **扩展凭据入口（部分实施）**：宿主侧经 `forgeIamCredentialBroker` 提供者接线（`registerDescriptor` / `resolveChildEnv` / `saveToken` / `clearToken` / 状态投影），并有 `GET`、`PUT`、`DELETE /api/forge-iam/ext-credentials[/<extensionId>]` 三个同源端点；浏览器侧的 `heluo.iam.credential-item` 扩展槽位未实施。
 - **存储与安全边界**：手动条目存入 `heluo-iam/model-selection.manual`，不存放密钥或网关地址；不改变登录、凭据与启用校验，无法绕过企业网关授权（同权进程内 JS 可绕过进程内门禁；最终裁决仍在企业网关）。当前行为尚待在真实企业网关与目标客户端实机验证（未实机验证）。

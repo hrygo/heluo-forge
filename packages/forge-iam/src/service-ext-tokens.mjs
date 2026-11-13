@@ -173,3 +173,43 @@ export function createExtTokensService({ registry, store, getCurrentSubject, get
     resolveChildEnv,
   });
 }
+
+/**
+ * 宿主窄端口 `CredentialBroker`：消费方扩展按契约注册描述符，并按次取得子进程环境。
+ *
+ * 与 `createExtTokensService` 的差别只有一处：子进程解析的失败态必须返回
+ * `{ ok: false, code }` 而不是抛异常——消费方的 runner 见到 `ok: false` 会 fail closed
+ * 且零 spawn；抛异常则会先被当成普通错误，可能被上层当成「工具没装」重试。
+ */
+export function createCredentialBroker({ extTokens, registry }) {
+  if (!extTokens || typeof extTokens.resolveChildEnv !== 'function') {
+    throw new ExtTokenStoreError('IAM_INTERNAL', 'extTokens service is required');
+  }
+  if (!registry || typeof registry.registerExtensionCredential !== 'function') {
+    throw new ExtTokenStoreError('IAM_INTERNAL', 'credential registry is required');
+  }
+  const FAIL_CLOSED_CODES = new Set([
+    'OWNER_MISMATCH',
+    'IAM_NOT_SIGNED_IN',
+    'KEYCHAIN_UNAVAILABLE',
+    'PENDING_WRITE',
+    'IAM_EXT_CREDENTIAL_NOT_FOUND',
+    'IAM_EXT_CREDENTIAL_INVALID',
+  ]);
+  const registerDescriptor = (descriptor) => registry.registerExtensionCredential(descriptor);
+  return Object.freeze({
+    registerDescriptor,
+    register: registerDescriptor,
+    listProjectedStatuses: () => extTokens.listProjectedStatuses(),
+    saveToken: (input) => extTokens.saveToken(input),
+    clearToken: (input) => extTokens.clearToken(input),
+    async resolveChildEnv(input) {
+      try {
+        return await extTokens.resolveChildEnv(input);
+      } catch (error) {
+        if (FAIL_CLOSED_CODES.has(error?.code)) return { ok: false, code: error.code, env: {} };
+        throw error;
+      }
+    },
+  });
+}

@@ -17,6 +17,9 @@ import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { normalizeProfileFields } from './userinfo.mjs';
 import { grantIdentity, safeMessage } from './service-helpers.mjs';
+import { createCredentialRegistry } from './credential-registry.mjs';
+import { createExtTokenStore } from './ext-token-store.mjs';
+import { createExtTokensService, createCredentialBroker } from './service-ext-tokens.mjs';
 
 /**
  * Host-side IAM session. Login is OIDC authorization-code + PKCE against
@@ -244,7 +247,22 @@ export function createIamService(rawConfig, options = {}) {
 
   // The private composition getter keeps one binding object per scoped lifetime.
 
+  const credentialRegistry = createCredentialRegistry();
+  // 装配点只拿端口：provider 就绪时序与「换绑后不读旧 store」都由 service-store 负责。
+  const extTokenStore = createExtTokenStore(provider.credentialsPort());
+  const extTokens = createExtTokensService({
+    registry: credentialRegistry,
+    store: extTokenStore,
+    getCurrentSubject: () => (ctx.state === 'ready' ? (ctx.lastGrant?.subject ?? null) : null),
+  });
+
+  const extCredentialBroker = createCredentialBroker({ extTokens, registry: credentialRegistry });
+
   const service = {
+    extCredentialBroker,
+    listExtCredentials: () => extTokens.listProjectedStatuses(),
+    saveExtCredential: (input) => extTokens.saveToken(input),
+    clearExtCredential: (input) => extTokens.clearToken(input),
     getView() {
       return ctx.view();
     },
@@ -284,6 +302,12 @@ refreshGatewayModels: gateway.refreshModels,
       const runtime = options.getManagedModelRuntime?.();
       if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
       return runtime.updateModelOptions(nextOptions);
+    },
+
+    async updateManualModel(payload) {
+      const runtime = options.getManagedModelRuntime?.();
+      if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
+      return runtime.updateManualModel(payload);
     },
 
     getModelOptions() {
