@@ -769,27 +769,6 @@ function assertArtifactClosure(bytes, { code, label }) {
 }
 
 /**
- * Verify artifact bytes with the independent verifier the delivery pipeline
- * already trusts (`scripts/verify-enterprise-bundle.mjs`).
- *
- * The bytes go into a throwaway directory so no sibling `bundle-manifest.json`
- * is picked up by accident: this is a closure check of the artifact itself, not
- * a comparison against a manifest that may belong to a different download.
- */
-function assertArtifactClosure(bytes, { code, label }) {
-  const work = mkdtempSync(join(tmpdir(), 'heluo-closure-'));
-  try {
-    const artifact = join(work, 'artifact.tgz');
-    writeFileSync(artifact, bytes);
-    const verdict = verifyBundle(artifact);
-    if (!verdict.ok) fail(code, `${label} failed the artifact closure check:\n- ${verdict.errors.join('\n- ')}`);
-    return verdict;
-  } finally {
-    rmSync(work, { recursive: true, force: true });
-  }
-}
-
-/**
  * Full maker flow. Returns the written paths and a redacted summary.
  *
  * @param {{publicPath: string, expectedSha256: string, configPath: string, version: string,
