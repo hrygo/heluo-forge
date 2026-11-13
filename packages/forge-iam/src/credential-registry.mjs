@@ -117,4 +117,3 @@ export function createCredentialRegistry() {
     list,
   });
 }
-

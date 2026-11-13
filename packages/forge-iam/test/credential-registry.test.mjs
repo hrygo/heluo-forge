@@ -81,4 +81,3 @@ test('domain-agnostic broker modules contain zero hardcoded R&D business names',
     assert.equal(forbidden.test(content), false, `${rel} must remain domain-agnostic`);
   }
 });
-

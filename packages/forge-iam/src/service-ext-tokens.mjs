@@ -173,4 +173,3 @@ export function createExtTokensService({ registry, store, getCurrentSubject, get
     resolveChildEnv,
   });
 }
-

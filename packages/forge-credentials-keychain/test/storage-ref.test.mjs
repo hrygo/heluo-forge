@@ -20,4 +20,3 @@ test('validateStorageRef rejects invalid or injection-prone storage references',
     );
   }
 });
-

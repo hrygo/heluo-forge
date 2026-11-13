@@ -98,4 +98,3 @@ test('service-ext-tokens projects sanitized states, enforces allowlist, and bloc
     (err) => err instanceof ExtTokenStoreError && err.code === 'IAM_NOT_SIGNED_IN',
   );
 });
-
