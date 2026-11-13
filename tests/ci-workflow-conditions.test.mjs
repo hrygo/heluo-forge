@@ -28,6 +28,7 @@ const windowsTestPaths = [
   'tests/sensitive-scan-post-rewrite.test.mjs',
   'tests/sensitive-scan-server-merge.test.mjs',
   'tests/sensitive-scan-pre-push.test.mjs',
+  'tests/plugin-patch-layers.test.mjs',
   'packages/forge-iam/test/callback-port.test.mjs',
 ];
 
@@ -505,6 +506,7 @@ test('Windows scan and callback run together in one unconditional Node test step
 const windowsSuiteError = /sensitive-scan: Windows scan and callback tests must run together unconditionally/u;
 const windowsLinkError = /sensitive-scan: Windows suite needs workspace links before the tests/u;
 const windowsExecutionMutations = [
+  ['plugin patch layers removed', workflow.replace(' tests/plugin-patch-layers.test.mjs', '')],
   ['callback removed', workflow.replace(' packages/forge-iam/test/callback-port.test.mjs', '')],
   ['callback moved to a comment', workflow.replace(' packages/forge-iam/test/callback-port.test.mjs', '')
     .replace('        run: node --test tests/sensitive-scan.test.mjs', '        # packages/forge-iam/test/callback-port.test.mjs\n        run: node --test tests/sensitive-scan.test.mjs')],

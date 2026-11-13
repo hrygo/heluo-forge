@@ -85,7 +85,7 @@
 | CORP-DSH-REQ-005 | 员工智能助理个人记忆产品方案 | [requirements/employee-assistant-memory-proposal.md](<requirements/employee-assistant-memory-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 产品方案评审、范围基线同步、接口与宿主准入；企业环境验证后试点 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.1.2 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.2 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
-| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.9.1 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
+| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.9.2 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-ENG-003 | DSH 插件高阶规范 | [engineering/dsh-plugin-conventions.md](<engineering/dsh-plugin-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 每个新插件准入时对照复核 |
 | CORP-DSH-ENG-004 | SQLite 存储扩展与使用规范 | [engineering/sqlite-storage-conventions.md](<engineering/sqlite-storage-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 新增或修改 SQLite 存储时复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.13.5 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |

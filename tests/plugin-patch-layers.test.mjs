@@ -18,7 +18,7 @@
  */
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -43,7 +43,7 @@ function bundles() {
         return false;
       }
     })
-    .map((path) => ({ name: path.split('/').slice(-2, -1)[0], path, text: readFileSync(path, 'utf8') }));
+    .map((path) => ({ name: basename(dirname(path)), path, text: readFileSync(path, 'utf8') }));
 }
 
 /** 同一个包的多层补丁合并成一条文本（策略目录可以写在任意一层，判据看合并结果）。 */

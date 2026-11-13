@@ -257,7 +257,7 @@ jobs:
       FORGE_CI_ARCH: x64
     defaults: *bash_defaults
     steps: *native_steps
-  # Windows-specific scanner and socket behavior: verify already runs these
+  # Windows-specific scanner, patch paths and socket behavior: verify already runs these
   # suites on Ubuntu. Keep this job non-required and run all files together so
   # a failure in one suite does not prevent the other from executing.
   sensitive-scan:
@@ -287,4 +287,4 @@ jobs:
       - name: Link workspace packages
         run: node scripts/link-workspace.mjs
       - name: Test Windows sensitive scan and IAM callback
-        run: node --test tests/sensitive-scan.test.mjs tests/sensitive-scan-team.test.mjs tests/sensitive-scan-full-distribution.test.mjs tests/sensitive-scan-parent-tree.test.mjs tests/sensitive-scan-legacy-install.test.mjs tests/sensitive-scan-managed-upgrade.test.mjs tests/sensitive-scan-windows-paths.test.mjs tests/sensitive-scan-post-rewrite.test.mjs tests/sensitive-scan-server-merge.test.mjs tests/sensitive-scan-pre-push.test.mjs packages/forge-iam/test/callback-port.test.mjs
+        run: node --test tests/sensitive-scan.test.mjs tests/sensitive-scan-team.test.mjs tests/sensitive-scan-full-distribution.test.mjs tests/sensitive-scan-parent-tree.test.mjs tests/sensitive-scan-legacy-install.test.mjs tests/sensitive-scan-managed-upgrade.test.mjs tests/sensitive-scan-windows-paths.test.mjs tests/sensitive-scan-post-rewrite.test.mjs tests/sensitive-scan-server-merge.test.mjs tests/sensitive-scan-pre-push.test.mjs tests/plugin-patch-layers.test.mjs packages/forge-iam/test/callback-port.test.mjs
