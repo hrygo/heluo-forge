@@ -685,7 +685,13 @@ window.__ModuleLoader__.load({
      * 纯函数helper                                                       *
      * ------------------------------------------------------------------ */
 
-    const normalize = (value) => (value === null || value === undefined ? '' : String(value).trim());
+    /**
+     * 页面侧单值归一化：去首尾空白，再剥掉**一层**成对包裹引号。
+     * 与服务端 `validateConfigField` 里的 `scalarText`（`src/runtime-config.mjs`）同一口径：
+     * 启动脚本 `set VAR='值'` 与「复制文件地址」的双引号全路径都是搬运噪声。只剥一层，
+     * 剥完仍带引号的交给服务端判非法——页面只做格式判定，不做第二条规则。
+     */
+    const normalize = (value) => { const text = value === null || value === undefined ? '' : String(value).trim(); const quoted = /^(['"])([\s\S]*)\1$/u.exec(text); return quoted ? quoted[2].trim() : text; };
 
     /** 删除一个键，返回新对象（不改原对象，配合 setState 使用）。 */
     function omit(object, key) {

@@ -31,9 +31,9 @@
  *   「覆盖环境变量」Tag；环境变量/自动发现/缺省被压过时同样记录，绝不静默。
  */
 import {
-  DEFAULT_SOURCE_TYPE,
-  DEFAULT_TIMEOUT_MS,
+  DEFAULT_FIELD_VALUES,
   ENV_KEYS,
+  hasConfigValue,
   validateConfigField,
 } from './runtime-config.mjs';
 // 入口形态（后缀词表 + 可直接执行判定）的唯一真源：保存侧只消费，不再自带后缀规则（AC-4/r8）。
@@ -126,11 +126,8 @@ const LAYERS = Object.freeze({
   timeoutMs: Object.freeze(['config', 'env']),
 });
 
-/** 基线缺省（非机密、与 `resolveRuntimeConfig` 同源）。`dopBin` 故意缺席。 */
-const DEFAULTS = Object.freeze({
-  sourceType: DEFAULT_SOURCE_TYPE,
-  timeoutMs: DEFAULT_TIMEOUT_MS,
-});
+/** 基线缺省（非机密）。与 `resolveRuntimeConfig` 共用同一份表：`dopBin` 故意缺席。 */
+const DEFAULTS = DEFAULT_FIELD_VALUES;
 
 const ORIGIN_BY_LAYER = Object.freeze({
   config: CLI_ORIGINS.CONFIG,
@@ -158,13 +155,14 @@ function layerValue(layer, field, sources) {
   if (layer === 'config') {
     const raw = sources.config[field];
     if (raw === null || raw === undefined) return undefined;
-    if (typeof raw === 'string' && raw.trim() === '') return undefined;
+    // 文本按同一口径判「到没到」（`''` / `VAR=''` 都算没配）；数字是超时字段的合法形态。
+    if (typeof raw === 'string') return hasConfigValue(raw) ? raw : undefined;
     return raw;
   }
   if (layer === 'env') {
     const env = sources.env;
     const raw = isPlainObject(env) ? env[ENV_KEYS[field]] : undefined;
-    return typeof raw === 'string' && raw.trim() !== '' ? raw : undefined;
+    return typeof raw === 'string' && hasConfigValue(raw) ? raw : undefined;
   }
   // discovered：发现结果只贡献路径类字段；`found` 按 tier、path 升序，取首个即"静默取首个"策略。
   const tool = TOOL_BY_FIELD[field];
@@ -264,6 +262,9 @@ function resolveField(field, sources, invalid) {
       // 不回落下一层：填错的意图若被静默替换成别的路径，用户会以为"我配置的那个在生效"。
       return entryOf(field, origin, null, []);
     }
+    // 归一化后为空（例如只剩一对引号 `VAR=''`）：该层没给值，继续看下一层，
+    // 而不是拿一个空值占位把自动发现挡掉。
+    if (verdict.value === null) continue;
     return entryOf(field, ORIGIN_BY_LAYER[layer], verdict.value, overriddenLayers(field, layer, sources));
   }
   if (Object.prototype.hasOwnProperty.call(DEFAULTS, field)) {

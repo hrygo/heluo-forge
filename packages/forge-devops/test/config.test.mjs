@@ -87,6 +87,59 @@ test('完整配置原样传递，并去掉首尾空白', () => {
   });
 });
 
+test('启动脚本把引号写进值里：剥掉一层成对引号后四键照常可用', () => {
+  // 现场：Windows 启动脚本写 `set VAR='值'`——单引号不是语法，而是值本身的一部分；
+  // 三个字段因此整层被拒，插件看起来"开箱不可用"。搬运噪声不该让整层 fail closed。
+  const result = resolveRuntimeConfig({
+    FORGE_DEVOPS_DOP_BIN: `'C:\\tools\\dop.exe'`,
+    FORGE_DEVOPS_DOP_ENDPOINT: `'${ENDPOINT}'`,
+    FORGE_DEVOPS_SOURCE_TYPE: `'Enterprise'`,
+    FORGE_DEVOPS_TIMEOUT_MS: `'30000'`,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual({ ...result.value }, {
+    dopBin: 'C:\\tools\\dop.exe',
+    dopEndpoint: ENDPOINT,
+    sourceType: 'enterprise',
+    timeoutMs: 30_000,
+  });
+});
+
+test('双引号是全路径的常见包裹（资源管理器「复制文件地址」），同样剥掉一层', () => {
+  const verdict = validateConfigField('dopBin', '"C:\\Program Files\\Heluo\\dop.exe"');
+  assert.deepEqual(verdict, { ok: true, value: 'C:\\Program Files\\Heluo\\dop.exe' });
+});
+
+test('剥完仍带引号（单边 / 两层）判非法：dopBin 不得带着引号活到 execFile', () => {
+  // 环境变量层不读盘，所以一个带引号的 `dopBin` 在旧实现里能通过装配期，
+  // 直到 `execFile` 拿一个带引号的名字去启动才报 ENOENT——错得晚且难归因。
+  for (const raw of [`'C:\\tools\\dop.exe`, `C:\\tools\\dop.exe'`, `''C:\\tools\\dop.exe''`]) {
+    assert.equal(validateConfigField('dopBin', raw).ok, false, raw);
+    const result = resolveRuntimeConfig({ FORGE_DEVOPS_DOP_BIN: raw });
+    assert.equal(result.ok, false, raw);
+    assert.deepEqual(result.invalid, ['FORGE_DEVOPS_DOP_BIN'], raw);
+  }
+});
+
+test('endpoint / 超时同样只接受一层成对引号，单边仍 CONFIG_INVALID', () => {
+  const ok = resolveRuntimeConfig({
+    FORGE_DEVOPS_DOP_BIN: DOP_BIN,
+    FORGE_DEVOPS_DOP_ENDPOINT: `"${ENDPOINT}"`,
+    FORGE_DEVOPS_TIMEOUT_MS: `'45000'`,
+  });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.value.dopEndpoint, ENDPOINT);
+  assert.equal(ok.value.timeoutMs, 45_000);
+
+  const bad = resolveRuntimeConfig({
+    FORGE_DEVOPS_DOP_BIN: DOP_BIN,
+    FORGE_DEVOPS_DOP_ENDPOINT: `'${ENDPOINT}`,
+    FORGE_DEVOPS_TIMEOUT_MS: `45000"`,
+  });
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.invalid, ['FORGE_DEVOPS_DOP_ENDPOINT', 'FORGE_DEVOPS_TIMEOUT_MS']);
+});
+
 test('空串与纯空白等价于未配置（不把空值当合法路径）', () => {
   const missing = resolveRuntimeConfig({ FORGE_DEVOPS_DOP_BIN: '   ' });
   assert.equal(missing.ok, false);

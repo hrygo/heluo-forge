@@ -359,6 +359,23 @@ test('覆盖关系可解释：配置压过环境变量/自动发现、环境变�
 
   const clean = resolve({ config: { dopBin: CONF_DOP }, env: {}, discovery: discoveryOf({}) });
   assert.deepEqual(Array.from(clean.entries.dopBin.overrides), [], '下层没有值就没有"被覆盖"可报');
+
+  // 归一化后为空的下层等于没给值：`FORGE_DEVOPS_DOP_BIN=''` 不能被报成"配置覆盖了环境变量"。
+  const quoteOnly = resolve({
+    config: { dopBin: CONF_DOP },
+    env: { [ENV_KEYS.dopBin]: `''` },
+    discovery: discoveryOf({}),
+  });
+  assert.equal(quoteOnly.entries.dopBin.origin, CLI_ORIGINS.CONFIG);
+  assert.deepEqual(Array.from(quoteOnly.entries.dopBin.overrides), [], '空归一化的下层不产生覆盖提示');
+
+  // 反过来：带引号但有内容的环境变量是"真的配了"，覆盖关系照常留痕。
+  const quotedEnv = resolve({
+    config: { dopBin: CONF_DOP },
+    env: { [ENV_KEYS.dopBin]: `'${ENV_DOP}'` },
+    discovery: discoveryOf({}),
+  });
+  assert.deepEqual(Array.from(quotedEnv.entries.dopBin.overrides), [CLI_ORIGINS.ENV]);
 });
 
 test('配置层非法：CLI_CONFIG_INVALID，且不回落环境变量/自动发现（不静默换路径）', () => {
@@ -388,6 +405,66 @@ test('环境变量层非法同样 fail closed，origin 记 env（不是 config�
   assert.equal(access.reason, CLI_REASONS.INVALID);
   assert.equal(access.invalid[0].origin, CLI_ORIGINS.ENV);
   assert.equal(access.entries.dopBin.origin, CLI_ORIGINS.ENV);
+});
+
+test('环境变量层的一层包裹引号被剥掉：origin 仍是 env、值已归一（不让噪声拖垮整层）', () => {
+  const access = resolve({
+    config: {},
+    env: {
+      [ENV_KEYS.dopBin]: `'${ENV_DOP}'`,
+      [ENV_KEYS.timeoutMs]: `'30000'`,
+    },
+    discovery: discoveryOf({}),
+  });
+  assert.equal(access.ready, true);
+  assert.equal(access.reason, null);
+  assert.equal(access.entries.dopBin.origin, CLI_ORIGINS.ENV);
+  assert.equal(access.entries.dopBin.value, ENV_DOP, '引号不进值：它只用于 execFile，带引号必 ENOENT');
+  assert.equal(access.entries.timeoutMs.value, 30_000);
+});
+
+test('只剩一对引号的 env 值算「该层没给值」：继续回落自动发现，不用空值占位', () => {
+  // 归一化后为空是"没配"，不是"配了个空路径"。拿空值占位会把 PATH 上的 dop 挡掉，
+  // 用户看到的是"明明装了却找不到"。
+  const access = resolve({
+    config: {},
+    env: { [ENV_KEYS.dopBin]: `''` },
+    discovery: discoveryOf({ dop: [ENV_DOP] }),
+  });
+  assert.equal(access.ready, true);
+  assert.equal(access.entries.dopBin.origin, CLI_ORIGINS.DISCOVERED);
+  assert.equal(access.entries.dopBin.value, ENV_DOP);
+});
+
+test('保存口同样剥一层引号：页面粘贴「复制文件地址」的带引号路径能直接存', () => {
+  const verdict = validateCliField({
+    field: 'dopBin',
+    value: `"${ENV_DOP}"`,
+    platform: WIN,
+    fs: FILE_FS,
+  });
+  assert.deepEqual(verdict, { ok: true, value: ENV_DOP });
+
+  const patch = buildCliPatch({
+    current: {},
+    patch: { dopBin: `"${ENV_DOP}"` },
+    platform: WIN,
+    fs: FILE_FS,
+  });
+  assert.equal(patch.ok, true);
+  assert.equal(patch.next.dopBin, ENV_DOP);
+});
+
+test('单边引号在保存口被拒，且错误信息不回显路径', () => {
+  const verdict = validateCliField({
+    field: 'dopBin',
+    value: `${ENV_DOP}'`,
+    platform: WIN,
+    fs: FILE_FS,
+  });
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.message.includes(ENV_DOP), false);
+  assert.match(verdict.message, /引号/);
 });
 
 test('非路径字段的非法值也拒：endpoint/sourceType/timeoutMs 逐字段进 invalid', () => {
