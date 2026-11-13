@@ -6,9 +6,11 @@
  * 只依赖 `node:` 内置模块，不 import 仓库内任何模块，也不依赖源码工作区结构。把本文件
  * 与私版交付目录一起拷到员工机即可运行。
  *
- * 唯一的写入面是 `dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、shell:false、
- * 固定 argv）。脚本不创建 profile、不启动或重启宿主、不直接编辑 profile 文件、不改
- * plugin_manager 权限、不删除用户文件。
+ * 写入面只有两处：`dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、shell:false、
+ * 固定 argv），以及安装成功后在本 profile 目录下写一份制品证据
+ * （`profiles/<p>/.heluo-enterprise-install.json`：本次 tgz 摘要 + 已安装目录摘要），
+ * 供下次同版本重跑判断"已安装的是不是这份交付"。脚本不创建 profile、不启动或重启宿主、
+ * 不直接编辑 profile 清单、不改 plugin_manager 权限、不删除用户文件。
  *
  * 核验只到脚本能证明的层次：L1 安装命令退出码、L2 `--dump-config` 含本插件且 profile
  * 记录对齐；L3 运行期挂载只输出 `mounted=unknown`，必须由员工在设置页确认。
@@ -21,9 +23,9 @@
  */
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** 本插件在 profile 中的包名；与私版清单、补丁层同源。 */
@@ -33,9 +35,14 @@ export const ENTRY_PACKAGE = '@heluo/forge-enterprise';
 export const PROFILE_NAMES = Object.freeze(['desktop', 'web']);
 export const PROFILE_CHOICES = Object.freeze(['desktop', 'web', 'auto']);
 
-/** 官方宿主 npm 包名与默认安装版本；版本可用 `--host-version` 覆盖。 */
+/**
+ * 官方宿主 npm 包名与默认安装版本；版本可用 `--host-version` 覆盖。
+ *
+ * 交付包离开仓库运行，读不到 `.dsh-version`，只能写成字面量；该字面量必须与仓库根
+ * `.dsh-version` 的确认基线一致（`scripts/dsh-version.mjs check` 会断言，升级基线须同步）。
+ */
 export const HOST_PACKAGE = '@deepseek-ai/dsh';
-export const DEFAULT_HOST_VERSION = '0.2.1-rc.5';
+export const DEFAULT_HOST_VERSION = '0.2.1-rc.3';
 
 /** 私版交付 sidecar 的 schema；与 `scripts/lib/private-bundle.mjs` 同源。 */
 export const RELEASE_SCHEMA = 'heluo-private-release/1';
@@ -58,8 +65,10 @@ export const USAGE = [
   '        [--dry-run] [--json]',
   '',
   '  --release <目录>   私版交付目录（须含 private-release.json 与同名 tgz）',
-  '  --profile <名>     desktop、web 或 auto（auto：已有 desktop/web 优先，都没有则创建 web）',
-  '  --sha256 <hex>     独立摘要口径；缺省读 private-release.json（自证）',
+  '  --profile <名>     web 或 auto（auto：已有 web 优先，都没有则创建 web）；desktop 由',
+  '                     Desktop 应用独占，脚本会先探测宿主是否支持命令行核验，不支持就拒绝',
+  '  --sha256 <hex>     调用方提供的摘要；脚本无法判断来源是否独立，交付包内启动器传入的',
+  '                     是同一 tgz 的自算值（自证，只能发现损坏）',
   '  --dsh <path>       指定 dsh（原生可执行文件或 npm 的 .cmd/.bat shim）；缺省在 PATH 查找',
   '  --install-host     找不到 dsh 时用 npm 全局安装官方宿主（需要 npm 与网络）',
   '  --host-version <v> 安装宿主时锁定的版本；缺省 ' + DEFAULT_HOST_VERSION,
@@ -213,7 +222,7 @@ export function parseArgs(argv) {
     throw new InitError('PROFILE_INVALID', `init: 不支持的 profile「${options.profile}」`, '只接受 desktop、web 或 auto。');
   }
   if (!HOST_VERSION.test(options.hostVersion)) {
-    throw new InitError('HOST_VERSION_INVALID', `init: --host-version 不是合法版本号「${options.hostVersion}」`, '传入纯版本号（如 0.2.1-rc.5），不要带包名或路径。');
+    throw new InitError('HOST_VERSION_INVALID', `init: --host-version 不是合法版本号「${options.hostVersion}」`, '传入纯版本号（形如 x.y.z-rc.1），不要带包名或路径。');
   }
   if (options.sha256 !== undefined) {
     if (!SHA256.test(options.sha256.toLowerCase())) {
@@ -293,9 +302,10 @@ export function profileExists(name, { env = {}, home = homedir() } = {}) {
 
 /** 已有 profile 优先 desktop、再 web；都没有返回 null。 */
 export function existingProfileName({ env = {}, home = homedir() } = {}) {
-  // Prefer web: official dsh 0.2.1-rc.5 refuses to manage the Electron profile
-  // from the CLI ("profile \"desktop\" is managed exclusively by the Electron
-  // application"), so auto-selecting desktop would only produce a late failure.
+  // Prefer web: the official dsh CLI refuses to manage the Electron profile from
+  // the command line ("profile \"desktop\" is managed exclusively by the
+  // Electron application"), so auto-selecting desktop would only produce a late
+  // failure.
   for (const name of ['web', 'desktop']) {
     if (profileExists(name, { env, home })) return name;
   }
@@ -388,9 +398,10 @@ async function ensurePnpm({ exec, env, platform, lines }) {
   lines.push('工具：未找到 pnpm，执行 npm install -g pnpm');
   const installed = await runStep(exec, npm, ['install', '-g', 'pnpm'], HOST_INSTALL_TIMEOUT_MS, 'PNPM_REQUIRED');
   if (installed.code !== 0) {
+    const reason = reasonTail(installed);
     throw new InitError(
       'PNPM_REQUIRED',
-      `init: npm install -g pnpm 失败（退出码 ${installed.code}）`,
+      `init: npm install -g pnpm 失败（退出码 ${installed.code}）${reason === '' ? '' : `：${reason}`}`,
       '检查网络与 npm registry 配置；或由管理员预先安装 pnpm，确认 pnpm --version 可运行后重跑。',
     );
   }
@@ -414,7 +425,8 @@ async function ensurePnpm({ exec, env, platform, lines }) {
 /**
  * 读取并核验私版交付目录：sidecar schema、包名、secret 标记、tgz 文件名/大小/摘要。
  *
- * sidecar 的摘要只是制作者自证；调用方可用 `--sha256` 覆盖为独立口径。
+ * sidecar 的摘要只是制作者自证；`--sha256` 可换成调用方提供的口径，但脚本无法判断
+ * 该口径是否来自独立渠道（交付包内启动器传入的就是同一 tgz 的自算值）。
  *
  * @param {string} directory 交付目录
  * @returns {{dir: string, metadataPath: string, metadata: object, version: string,
@@ -537,6 +549,141 @@ function verificationPoints(profile) {
   ];
 }
 
+/** 安装时刻留存的制品证据文件名；只放在 profile 目录下，不进 profile 清单。 */
+export const INSTALL_RECORD_FILE = '.heluo-enterprise-install.json';
+
+const installedPackageDir = (profile) => join(profile.dir, 'node_modules', ...ENTRY_PACKAGE.split('/'));
+
+/**
+ * 已安装包目录的内容摘要：按相对路径排序后逐文件喂入「路径 + 字节」。
+ * 符号链接只喂链接目标文本（不跟随），避免跟随到目录外或漏算被替换的链接。
+ * 只用于判断"安装后有没有被改动"，同一份内容必得同一摘要。
+ */
+function installedTreeSha256(dir) {
+  const entries = [];
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile()) entries.push({ path, kind: 'file' });
+      else if (entry.isSymbolicLink()) entries.push({ path, kind: 'link' });
+      else entries.push({ path, kind: 'other' });
+    }
+  };
+  walk(dir);
+  entries.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  const hash = createHash('sha256');
+  for (const { path, kind } of entries) {
+    hash.update(`${kind}\0${relative(dir, path).split(sep).join('/')}\0`);
+    hash.update(kind === 'link' ? readlinkSync(path) : readFileSync(path));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+const installRecordPath = (profile) => join(profile.dir, INSTALL_RECORD_FILE);
+
+/** 读取安装时刻证据；缺失、损坏或不是本插件的记录一律当作"没有证据"。 */
+function readInstallRecord(profile) {
+  const path = installRecordPath(profile);
+  if (!existsSync(path)) return null;
+  let record;
+  try {
+    record = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (record === null || typeof record !== 'object') return null;
+  if (record.package !== ENTRY_PACKAGE) return null;
+  if (typeof record.version !== 'string') return null;
+  if (typeof record.tarballSha256 !== 'string' || typeof record.installedTreeSha256 !== 'string') return null;
+  return record;
+}
+
+/**
+ * 安装成功后写证据：记下"这次装进去的是哪份 tgz、装完的目录内容是什么"。
+ * 下次同版本重跑据此判断已安装的是不是同一制品；写不了就返回 null（下次只能报无法确认）。
+ */
+function writeInstallRecord(profile, release) {
+  const dir = installedPackageDir(profile);
+  if (!existsSync(dir)) return null;
+  let tree;
+  try {
+    tree = installedTreeSha256(dir);
+  } catch {
+    return null;
+  }
+  const record = {
+    schema: 1,
+    package: ENTRY_PACKAGE,
+    version: release.version,
+    tarballName: release.tarballName,
+    tarballSha256: release.sha256,
+    installedTreeSha256: tree,
+    installedAt: new Date().toISOString(),
+  };
+  try {
+    writeFileSync(installRecordPath(profile), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  } catch {
+    return null;
+  }
+  return record;
+}
+
+/**
+ * 判断"已安装的就是这份交付"。
+ *
+ * 判据是**安装时刻留存的证据 + 已安装文件本身**，而不是 profile 里 `file:` 路径上
+ * 当前的文件：管理员把新交付物放到同一路径、版本号不变时，旧包仍装在 node_modules
+ * 里，按路径当前内容比对会把旧安装误判成新交付。
+ *
+ * 依次核对：证据存在且版本相同 → 证据里的 tgz 摘要等于本次交付（不等即冲突）→
+ * 已安装目录内容摘要等于证据记录（安装后被改动则无法确认）。任一环节拿不到可信
+ * 证据都返回 unconfirmed，不把版本相同当作制品一致。摘要本身来自交付包（自证），
+ * 只能证明字节一致，不证明来源。
+ *
+ * @returns {{identity: 'confirmed'|'conflict'|'unconfirmed', detail: string}}
+ */
+function artifactIdentityOf(profile, release) {
+  const dir = installedPackageDir(profile);
+  if (!existsSync(dir)) {
+    return { identity: 'unconfirmed', detail: `profile 的 node_modules 里没有已安装的企业插件目录（${dir}），无法核对已安装内容` };
+  }
+  const record = readInstallRecord(profile);
+  if (record === null) {
+    return {
+      identity: 'unconfirmed',
+      detail: `profile 里没有安装时刻的制品证据（profiles/${profile.name}/${INSTALL_RECORD_FILE} 缺失或不可读；可能由宿主 CLI 或旧版脚本安装），无法证明已安装内容与本次交付一致`,
+    };
+  }
+  if (record.version !== release.version) {
+    return { identity: 'unconfirmed', detail: `安装时刻记录的版本为 ${record.version}，与交付版本 ${release.version} 不同，无法核对` };
+  }
+  if (record.tarballSha256 !== release.sha256) {
+    return {
+      identity: 'conflict',
+      detail: `安装时刻记录的制品摘要（${record.tarballSha256}）与本次交付（${release.sha256}）不一致；同一路径上的文件可能已被替换`,
+    };
+  }
+  let tree;
+  try {
+    tree = installedTreeSha256(dir);
+  } catch {
+    return { identity: 'unconfirmed', detail: `读取已安装包内容失败（${dir}），无法核对` };
+  }
+  if (tree !== record.installedTreeSha256) {
+    return { identity: 'unconfirmed', detail: `已安装包内容与安装时刻记录不一致（${dir}），安装后被改动或损坏，无法核对` };
+  }
+  return { identity: 'confirmed', detail: `安装时刻记录与已安装内容一致（tgz 摘要 ${record.tarballSha256.slice(0, 12)}…，${dir}）` };
+}
+
+/** 启动提示按 profile 分开写：默认安装写入 web profile，Desktop 是另一个 profile。 */
+function nextStepLine(profileName) {
+  return profileName === 'desktop'
+    ? `下一步：在 Desktop 应用的「设置 → 插件」确认 ${ENTRY_PACKAGE} 已加载（desktop profile 由应用独占，命令行不再改动它）。`
+    : `下一步：在终端运行 dsh web，打开它打印的本机地址，在「设置 → 插件」确认 ${ENTRY_PACKAGE} 已加载（Desktop 是另一个 profile，打开它不会看到本次安装）。`;
+}
+
 function defaultExec() {
   return (bin, args, options) =>
     new Promise((settle) => {
@@ -565,6 +712,22 @@ async function runStep(exec, launch, args, timeout, failureCode, { env } = {}) {
     stdout: String(result?.stdout ?? ''),
     stderr: String(result?.stderr ?? ''),
   };
+}
+
+/**
+ * 取子进程输出的最后几行有效文本。宿主自己知道失败原因（如 `'pnpm' is not
+ * recognized`），只回退出码会让员工和排障者都看不出根因，这里把它带回结论里。
+ *
+ * @param {{stdout: string, stderr: string}} result
+ * @returns {string} 单行摘要；无输出时为空串
+ */
+function reasonTail(result) {
+  const lines = `${result.stderr}\n${result.stdout}`
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  const tail = lines.slice(-3).join(' / ');
+  return tail.length > 300 ? `${tail.slice(0, 300)}…` : tail;
 }
 
 /**
@@ -624,6 +787,26 @@ async function createWebProfile({ exec, launch, lines }) {
     );
   }
   lines.push('profile：已用官方宿主创建 web profile 模板（--dump-config，未启动服务）');
+}
+
+/**
+ * 显式 desktop 在**写入前**先探测宿主是否支持 `--profile desktop --dump-config`。
+ *
+ * desktop profile 由 Electron 应用独占：npm 版宿主拒绝任何 `--profile desktop` 调用，
+ * Desktop 自带 CLI 允许 `plugin add` 却拒绝 `--dump-config`。两种情况都会让安装写完之后
+ * 的核验必然失败、重跑也过不去（留下"已安装却报失败"的状态）。探测失败就拒绝，不写入。
+ */
+async function assertDesktopVerifiable({ exec, launch, profile, lines }) {
+  const result = await runStep(exec, launch, ['--profile', profile.name, '--dump-config'], VERIFY_TIMEOUT_MS, 'DESKTOP_PROFILE_UNSUPPORTED');
+  if (result.code !== 0) {
+    const reason = reasonTail(result);
+    throw new InitError(
+      'DESKTOP_PROFILE_UNSUPPORTED',
+      `init: 当前宿主不支持命令行核验 desktop profile（dsh --profile desktop --dump-config 退出码 ${result.code}${reason === '' ? '' : `：${reason}`}），已停止且未写入 profile`,
+      '在 Desktop 应用的插件设置中安装企业插件；或改用默认的 web 形态（--profile web 或 auto），装好后在终端运行 dsh web。',
+    );
+  }
+  lines.push('profile：宿主支持 desktop 的 --dump-config，继续安装（挂载仍需在应用内确认）');
 }
 
 async function verifyInstall({ exec, launch, profile, lines }) {
@@ -760,7 +943,9 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     lines.push(`插件：${ENTRY_PACKAGE} ${release.version}`);
     lines.push(`制品：${release.tarballName}`);
     lines.push(
-      `摘要：${release.sha256}（来源：${digestSource === '--sha256' ? '--sha256 独立口径' : 'private-release.json 自证；建议另用 --sha256 提供独立来源'}）`,
+      digestSource === '--sha256'
+        ? `摘要：${release.sha256}（来源：--sha256 由调用方提供；本脚本无法判断它是否来自独立渠道，交付包内启动器传入的是同一 tgz 的自算值，属自证，只能证明未损坏）`
+        : `摘要：${release.sha256}（来源：private-release.json，自证；需要独立口径时请另行核对摘要）`,
     );
 
     const installed = installedVersionOf(profile);
@@ -786,7 +971,23 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
           `不自动升级或降级。确认后执行 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}，再重跑本脚本。`,
         );
       }
+      const identity = artifactIdentityOf(profile, release);
+      if (identity.identity === 'conflict') {
+        throw new InitError(
+          'ARTIFACT_CONFLICT',
+          `init: 已安装 ${installed}，但 ${identity.detail}`,
+          `同名同版本不保证同一制品（不同 issuer 的私版包会冲突）。确认后用 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE} 移除，再装本次交付；或改用与已安装制品一致的交付包。`,
+        );
+      }
       lines.push(`状态：已安装同版本 ${installed}，本次不写入`);
+      if (identity.identity === 'confirmed') {
+        lines.push(`制品一致性：已确认——${identity.detail}（摘要来自交付包，属自证）`);
+      } else {
+        lines.push(`制品一致性：无法确认——${identity.detail}；仅版本相同不能证明是同一制品`);
+        warnings.push(
+          `warn: 已安装版本与交付版本相同，但无法确认两者是同一制品；profile 里的配置可能仍来自旧包（例如不同 issuer）。需要确认时先 remove 再重装。`,
+        );
+      }
       if (options.dryRun) {
         lines.push('dry-run：未执行安装，未写入 profile');
         lines.push(...verificationPoints(profile));
@@ -794,8 +995,13 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       }
       const verification = await verifyInstall({ exec: resolveExec(exec), launch, profile, lines });
       lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
-      lines.push(`下一步：启动官方 DSH（${profile.name} profile），在设置页确认 ${ENTRY_PACKAGE} 已加载。`);
-      return { code: 0, lines, warnings, result: { ...base, status: 'already-installed', command, verified: verification.verified } };
+      lines.push(nextStepLine(profile.name));
+      return {
+        code: 0,
+        lines,
+        warnings,
+        result: { ...base, status: 'already-installed', command, verified: verification.verified, artifact: { ...artifact, identity: identity.identity } },
+      };
     }
 
     lines.push(`命令：dsh ${command.join(' ')}`);
@@ -806,20 +1012,43 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     }
 
     const cli = resolveExec(exec);
+    if (profile.name === 'desktop') {
+      await assertDesktopVerifiable({ exec: cli, launch, profile, lines });
+    }
     const pnpm = await ensurePnpm({ exec: cli, env, platform: process.platform, lines });
     const install = await runStep(cli, launch, command, INSTALL_TIMEOUT_MS, 'INSTALL_FAILED', { env: pnpm.env });
     if (install.code !== 0) {
+      const reason = reasonTail(install);
       throw new InitError(
         'INSTALL_FAILED',
-        `init: dsh plugin add 失败（退出码 ${install.code}）`,
+        `init: dsh plugin add 失败（退出码 ${install.code}）${reason === '' ? '' : `：${reason}`}`,
         `检查上面的命令输出与 profile 占用情况后重跑；回滚用 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}。`,
       );
     }
     lines.push('安装：dsh 退出码 0');
+    const record = writeInstallRecord(profile, release);
+    // 证据没写成，「装进去的是不是这份交付」就没有可回查的依据，结论必须跟着降级：
+    // 否则告警说「没留证据」、JSON 却说 confirmed，调用方会把没核对过的安装当成已核对。
+    const identity = record === null
+      ? {
+        identity: 'unconfirmed',
+        detail: `安装已完成，但未能留存安装时刻的制品证据（读不到已安装目录或写入失败），无法核对装进去的是不是本次交付`,
+      }
+      : { identity: 'confirmed', detail: `安装时刻记录与已安装内容一致（tgz 摘要 ${record.tarballSha256.slice(0, 12)}…）` };
+    if (record === null) {
+      warnings.push('warn: 安装后未能留存制品证据（读不到已安装目录或写入失败）；下次同版本重跑只能报「无法确认」。');
+    } else {
+      lines.push(`制品证据：已记录本次安装的 tgz 摘要与已安装目录摘要（profiles/${profile.name}/${INSTALL_RECORD_FILE}，自证）`);
+    }
     const verification = await verifyInstall({ exec: cli, launch, profile, lines });
     lines.push('mounted=unknown（运行期挂载不在本脚本断言；启动宿主后在「设置 → 插件」确认）');
-    lines.push(`下一步：启动官方 DSH（${profile.name} profile），在设置页确认 ${ENTRY_PACKAGE} 已加载。`);
-    return { code: 0, lines, warnings, result: { ...base, status: 'installed', command, verified: verification.verified } };
+    lines.push(nextStepLine(profile.name));
+    return {
+      code: 0,
+      lines,
+      warnings,
+      result: { ...base, status: 'installed', command, verified: verification.verified, artifact: { ...artifact, identity: identity.identity, detail: identity.detail } },
+    };
   } catch (error) {
     const known = error instanceof InitError
       ? error

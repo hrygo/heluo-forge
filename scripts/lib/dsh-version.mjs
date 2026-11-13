@@ -215,16 +215,62 @@ export const TEST_FIXTURE_EXCEPTIONS = {
  * 代码里有意写死的版本字面量（交付包内置的默认值等），登记版本与原因后放行；
  * 与夹具例外一样单独列出，不静默放行，升级基线时必须同步。
  */
-export const CODE_LITERAL_EXCEPTIONS = {
-  'scripts/init-enterprise-plugin.mjs': {
-    versions: Object.freeze(['0.2.1-rc.5']),
-    reason: '交付包内置的官方宿主 npm 安装默认版本；可用 --host-version 覆盖，升级基线时同步。',
+/** 单文件里有意保留的版本字面量例外；目前为空，发行默认宿主改由 RELEASE_DEFAULT_HOSTS 覆盖。 */
+export const CODE_LITERAL_EXCEPTIONS = Object.freeze({});
+/** 发行默认宿主字面量的放行说明：等于基线才放行，漂移即 code-forbidden。 */
+const RELEASE_DEFAULT_REASON = '交付包默认宿主版本：由 checkReleaseDefaults 断言必须等于基线';
+
+/**
+ * 交付包内置的发行默认宿主版本：交付包离开仓库运行，读不到 `.dsh-version`，只能写成
+ * 字面量。这里把它纳入版本检查并要求等于确认基线——否则会出现"默认装 rc.5、基线锁
+ * rc.3"的错位，而单靠上面的例外清单只会放行、不会发现漂移。
+ */
+export const RELEASE_DEFAULT_HOSTS = [
+  {
+    file: 'scripts/init-enterprise-plugin.mjs',
+    label: '交付包默认宿主版本',
+    pattern: /export const DEFAULT_HOST_VERSION = '([^']+)'/,
   },
-  'tests/init-enterprise-plugin.test.mjs': {
-    versions: Object.freeze(['0.2.1-rc.5']),
-    reason: '断言安装命令钉住的默认宿主版本；与 init 脚本的显式例外同源。',
-  },
-};
+];
+
+/** 改版：只改发行默认宿主的版本字面量；找不到声明时原样返回（交给 check 报缺失）。 */
+export function rewriteReleaseDefaults(text, file, target) {
+  const spot = RELEASE_DEFAULT_HOSTS.find((item) => item.file === file);
+  if (spot === undefined) return { text, replaced: false };
+  const match = spot.pattern.exec(text);
+  if (match === null) return { text, replaced: false };
+  if (match[1] === target) return { text, replaced: false, from: match[1] };
+  return {
+    text: text.replace(spot.pattern, (whole) => whole.replace(match[1], target)),
+    replaced: true,
+    from: match[1],
+  };
+}
+
+/** 校验发行默认宿主版本与基线一致；返回问题列表（空数组表示通过）。 */
+export function checkReleaseDefaults(root = process.cwd(), baseline = readDshVersion(root)) {
+  const problems = [];
+  for (const spot of RELEASE_DEFAULT_HOSTS) {
+    let text;
+    try {
+      text = readFileSync(join(root, spot.file), 'utf8');
+    } catch {
+      problems.push(`${spot.file}：找不到「${spot.label}」的声明位置（文件缺失或被改写）`);
+      continue;
+    }
+    const match = spot.pattern.exec(text);
+    if (match === null) {
+      problems.push(`${spot.file}：找不到「${spot.label}」的声明（交付包默认宿主版本被改写？）`);
+      continue;
+    }
+    if (match[1] !== baseline) {
+      problems.push(
+        `${spot.file}：「${spot.label}」为 ${match[1]}，与 ${DSH_VERSION_FILE} 的 ${baseline} 不一致（交付包默认宿主必须等于确认基线，升级基线须同步）`,
+      );
+    }
+  }
+  return problems;
+}
 
 function manifestEnginesTokens(abs) {
   try {
@@ -342,8 +388,12 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
         let kind;
         const literalNote = CODE_LITERAL_EXCEPTIONS[rel] ?? null;
         const literalAllowed = literalNote !== null && literalNote.versions.includes(match[0]);
+        // 发行默认宿主的字面量只认基线本身：等于基线放行，漂移则落到 code-forbidden 被 check 拦下。
+        const releaseDefault =
+          match[0] === baseline && RELEASE_DEFAULT_HOSTS.some((spot) => spot.file === rel);
+        const exceptionReason = literalAllowed ? literalNote.reason : releaseDefault ? RELEASE_DEFAULT_REASON : null;
         if (manifestTokens) kind = manifestTokens.has(match[0]) ? 'code-allowed' : 'code-forbidden';
-        else if (literalAllowed) kind = 'code-exception';
+        else if (exceptionReason !== null) kind = 'code-exception';
         else if (allowed) kind = fixtureNote ? 'fixture-exception' : 'code-allowed';
         else kind = 'code-forbidden';
         found.push({
@@ -351,7 +401,7 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
           line: index + 1,
           version: match[0],
           kind,
-          reason: kind === 'code-exception' ? literalNote.reason : fixtureNote,
+          reason: kind === 'code-exception' ? exceptionReason : fixtureNote,
           text: line.trim().slice(0, 160),
         });
       }

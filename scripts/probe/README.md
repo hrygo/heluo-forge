@@ -87,6 +87,11 @@ node scripts/probe/run-bundle-install-rehearsal.mjs
 作用域内注册的工具不进子视图、子注册不上浮，`dispose` 后都清理；`subagents.startActivation({provider:'fork'})`
 接受并建出子会话；`currentInitiator()` 只在显式边界内可读。探针会把会话/存储根覆盖到本次临时目录
 （`session-persistence-jsonl` 与 `storage-json` 的 `root`），不在用户 `DSH_HOME` 下留下会话。
+证据与复跑：上述三项即探针步 `subagent-inherits-parent-guards-not-view-restrictions`、
+`delegation-initiator-scope-is-causal-only`、`delegation-service-start-activation`，运行
+`node scripts/probe/run-host-probe.mjs`（目标 DSH；无 `dsh` 时跳过）。实测记录见
+[forge-policy 的编制依据](../../docs/design/plugins/forge-policy.md)中「2026-10-24 委派继承实验
+（探针 32/32 通过、1 blocked）」。
 
 ## Teamflow 证据探针（r13，只读）
 
@@ -122,10 +127,16 @@ node scripts/probe/check-teamflow-journal-roots.mjs --journal <journal.json> --r
   受控写批准）不在本探针范围，也不能用它替代。
 - **已实测**：真实 agent 会话可在 `sdk` profile 创建（`agents.create({sessionId, meta, setup})`），
   且作用域限制只落在该 agent 视图（见 `agent-scoped-restriction-is-per-scope`）。
-- **未跑通（报告里单列 `blocked`）**：官方行的**运行时**模型面（本 profile 无 LLM 提供方，见上），
-  以及**子** Agent 是否继承父作用域限制，后者需要一次真实委派
-  （会触发模型调用），当前探针环境没有可用模型；已知的子 Agent provider 为 `spawn`
-  （`inheritsParentContext: false`）与 `fork`（`true`），这是声明事实，不等于实测继承行为。
+- **已实测（目标 DSH）**：子 Agent 的限制继承——作用域 guard 会约束子 Agent（拒绝生效、工具体零调用），
+  父 agent 视图的 `restrict` **不**继承（子视图仍看得见被父视图拒绝的全局工具）；作用域内注册的工具
+  不进子视图，`dispose` 后限制与子注册都清理。子 Agent 由宿主工厂按 `parentAgent`/`origin=subagent`/
+  `delegationDepth=1` 创建，该实验不需要模型参与。复跑 `node scripts/probe/run-host-probe.mjs`
+  （步 `subagent-inherits-parent-guards-not-view-restrictions`），记录见 forge-policy 编制依据
+  「2026-10-24 委派继承实验（探针 32/32 通过、1 blocked）」。
+- **未跑通（报告里单列 `blocked`）**：官方行的**运行时**模型面（本 profile 无 LLM 提供方）；
+  「模型自决调用」是否绕开门禁由模型门禁探针另行覆盖（见 forge-policy §9.2.2/§9.3），不属本探针。
+- 已知子 Agent provider 为 `spawn`（`inheritsParentContext: false`）与 `fork`（`true`），这是声明事实，
+  不等于继承行为；上面的继承结论来自作用域工具管线的真实派发实测，不依赖该声明。
 - 尚未覆盖：策略与沙箱的叠加顺序、审批 UI 的注册方式与超时语义、`$DSH_HOME` 确切范围。
   这些在对应设计的未决事项里保留并注明截止门禁。
 - 探针插件只在探针 profile 内挂载，不写入任何用户 profile，也不改宿主代码。

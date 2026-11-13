@@ -26,6 +26,12 @@ function write(root, path, content) {
   writeFileSync(join(root, path), content);
 }
 
+// Assembled at runtime: the checker's own fixture must not place a literal
+// credential marker or host path in tracked source, because the public source
+// archive is scanned without the source-line exemption.
+const PRIVATE_KEY_MARKER = ['-----BEGIN', 'OPENSSH', 'PRIVATE KEY-----'].join(' ');
+const HOST_ABSOLUTE_DIR = ['', 'Users', 'example', 'work'].join('/');
+
 const PACKAGE = `${JSON.stringify(
   {
     name: 'heluo-forge',
@@ -239,11 +245,27 @@ test('manifest without engines.dsh or test script is rejected', () => {
 test('credential pattern and host path are reported without printing values', () => {
   const root = fixture();
   try {
-    write(root, 'docs/operations/notes.md', `# 说明\n\n-----BEGIN OPENSSH PRIVATE KEY-----\n`); // security-scan: allow
-    write(root, 'docs/operations/paths.md', '# 路径\n\n/Users/example/work\n');
+    write(root, 'docs/operations/notes.md', `# 说明\n\n${PRIVATE_KEY_MARKER}\n`);
+    write(root, 'docs/operations/paths.md', `# 路径\n\n${HOST_ABSOLUTE_DIR}\n`);
     const { errors } = checkRepo(root);
     assert.ok(errors.some((error) => error.includes('private key block') && !error.includes('OPENSSH')), errors.join('\n'));
     assert.ok(errors.some((error) => error.includes('host-specific absolute path')), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('uppercase text extensions are scanned like their lowercase forms', () => {
+  const root = fixture();
+  try {
+    write(root, 'docs/operations/EXAMPLE.MD', `# 说明\n\n${PRIVATE_KEY_MARKER}\n`);
+    write(root, 'docs/operations/PATHS.JSON', `{\n  "path": "${HOST_ABSOLUTE_DIR}"\n}\n`);
+    const { errors } = checkRepo(root);
+    assert.ok(
+      errors.some((error) => error.includes('EXAMPLE.MD') && error.includes('private key block') && !error.includes('OPENSSH')),
+      errors.join('\n'),
+    );
+    assert.ok(errors.some((error) => error.includes('PATHS.JSON') && error.includes('host-specific absolute path')), errors.join('\n'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -19,6 +19,7 @@ import { createInterface } from 'node:readline/promises';
 import {
   buildConfig,
   inspectPublicTarball,
+  isLoginConfigured,
   makePrivateBundle,
   parseEnvConfig,
   planDigest,
@@ -82,13 +83,28 @@ async function confirmDigest(digest, provided) {
   }
 }
 
+/** Boundary refusals carry the same error codes the library and the skill document use. */
+function assertOutside(target, forbidden, code, label) {
+  try {
+    assertOutsideDirectory(target, forbidden, label);
+  } catch {
+    throw new PrivateBundleError(code, `${label} "${target}" must be outside ${forbidden}`);
+  }
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
   const repoRoot = resolve(options.repoRoot);
   const publicPath = resolve(options.publicPath);
   const configPath = resolve(options.configPath);
   const output = resolve(options.output);
-  assertOutsideDirectory(output, repoRoot, 'output directory');
+  // The output boundary is a path-component, symlink-resolved question, not a
+  // string-prefix question: the CLI must not be the one place where a `..secret`
+  // sibling or a symlink back into the checkout slips through (issue #254 item
+  // 14). The configuration file is deliberately NOT held to the same rule: the
+  // documented workflow keeps it in a git-ignored `.env` beside the checkout, and
+  // it is never copied into the artifact.
+  assertOutside(output, repoRoot, 'OUTPUT_INSIDE_REPO', 'output directory');
 
   const publicInfo = inspectPublicTarball(publicPath);
   if (publicInfo.problems.length > 0) {
@@ -99,6 +115,17 @@ async function main() {
   const discovery = options.skipDiscoveryCheck
     ? { checked: false, reason: 'skipped by --skip-discovery-check' }
     : await verifyDiscovery(config.iam);
+  // "Verified" and "not verified because the packager skipped it" must never
+  // look alike in the output an audit reads back (review F4). `required` records
+  // the policy; `skipped` records the deviation from it, with its reason.
+  const discoveryState = {
+    required: true,
+    checked: discovery.checked === true,
+    skipped: options.skipDiscoveryCheck,
+    reason: options.skipDiscoveryCheck
+      ? 'skipped by --skip-discovery-check'
+      : (discovery.checked === true ? null : (discovery.reason ?? 'not-checked')),
+  };
   const digest = planDigest({ publicSha256: options.publicSha256, version: options.version, config, platforms: SUPPORTED_PLATFORMS });
   const redacted = {
     public: { path: publicPath, sha256: options.publicSha256, version: publicInfo.version, name: publicInfo.name, files: publicInfo.files },
@@ -106,11 +133,20 @@ async function main() {
     output,
     configKeys: config.keys,
     configValues: 'redacted',
+    loginReady: isLoginConfigured(config.iam),
     discovery,
+    discoveryCheck: discoveryState,
     platforms: SUPPORTED_PLATFORMS,
     planDigest: digest,
   };
-  if (!options.json) console.error(JSON.stringify(redacted, null, 2));
+  if (!options.json) {
+    console.error(JSON.stringify(redacted, null, 2));
+    // One human-readable line, because the JSON block above is easy to skim
+    // past: a packager reading the terminal must see whether discovery ran.
+    console.error(`discovery: ${discoveryState.skipped
+      ? `skipped (${discoveryState.reason})`
+      : discoveryState.checked ? 'verified' : `not verified (${discoveryState.reason})`}`);
+  }
   await confirmDigest(digest, options.confirm);
 
   const result = makePrivateBundle({
@@ -133,6 +169,8 @@ async function main() {
         configKeys: result.configKeys,
         manifest: result.manifest,
         release: result.release,
+        verified: result.verified,
+        discovery: discoveryState,
       },
       null,
       2,

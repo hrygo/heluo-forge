@@ -11,12 +11,12 @@
 ## 2. 问答（逐项确认）
 
 1. 公版制品路径与 SHA-256：核对文件名、大小与摘要；摘要不一致立即停止。
-2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。
-3. Discovery URL：优先由管理员提供，常见形式为 `issuer + /.well-known/openid-configuration`，不自行推定实际地址。maker 请求后精确检查 `issuer`，并检查 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；未显式指定时也校验发现的撤销、登出和用户信息端点格式。无 Discovery 时显式提供 issuer、三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
+2. IAM issuer：默认必须是 `https://` 绝对地址，不带 query/fragment；企业内网只有 http 时，先说明明文风险，取得明确确认后才允许 `HELUO_IAM_ALLOW_INSECURE_HTTP=true`。issuer 是交付包的信任锚：Discovery 文档里的 `issuer` 必须与之逐字符相同，结尾斜杠或大小写不同都按不一致拒绝，工具不会采用文档自称的 issuer。
+3. Discovery URL：优先由管理员提供，常见形式为 `issuer + /.well-known/openid-configuration`，不自行推定实际地址。maker 请求后精确检查 `issuer`，并检查 `authorization_endpoint`/`token_endpoint`/`jwks_uri`；未显式指定时也校验发现的撤销、登出和用户信息端点格式。回显只给 `checked` 与匹配到的字段名，不含端点原值。无 Discovery 时显式提供 issuer、三个端点并记录未执行发现核验；打包机确实无法访问已配置的 Discovery 时可用 `--skip-discovery-check`，并记录未验证项。
 4. client_id：企业的公开客户端 ID，不是员工个人标识。
 5. 网关 baseURL 和 provider：地址用于 `managedModels.baseURL`，按网关实际路径填写；provider 使用准确的模型路由标识。http 同上需显式确认。
 6. 回调端口与地址：端口默认 `0`（系统分配），地址默认 `127.0.0.1`（不接受 `localhost` 或 `[::1]`）。企业 IAM 按 `http://127.0.0.1:` 前缀登记回环回调，端口可随机，不需要为每个包约定固定值；只有 IAM 明确要求精确匹配固定 URI 时，才填 1024–65535，并保证与登记值逐字节一致。固定端口被占用会直接拒绝登录（`IAM_CALLBACK_PORT_UNAVAILABLE`），不回落随机端口。
-7. Gitee host：没有企业 Gitee 就跳过，不写空键。
+7. Gitee host：只填主机名（可带端口，如 `gitee.corp.example`），不带 `https://`、路径或用户名密码；带协议会被插件拒绝加载，maker 也会在制作前拒绝。没有企业 Gitee 就跳过，不写空键。
 8. 版本号：必须与公版不同（例如 `0.1.0-corp.1`）；同名同版本不允许不同字节。
 9. 输出目录：仓库外、不存在或为空。
 10. 凭据存储：插件使用 SQLite 值级加密存储和文件 keyring，`.env` 不需要相关配置；Windows、Linux/麒麟与 macOS 的目标宿主兼容性和权限仍须实测。
@@ -60,16 +60,16 @@ heluo-enterprise-release-<version>/
   SHA256SUMS
 ```
 
-zip 与目录同名；zip 的 SHA-256 作为交付摘要。
+zip 与目录同名；zip 的 SHA-256 作为交付摘要。启动器把同一份 tgz 的自算摘要传给 `--sha256`，属自证（只能发现拷贝损坏）；需要独立口径时须由管理员另行核对摘要。
 
 ## 5. 员工安装
 
 1. 员工机器只需有 Node.js LTS（自带 npm）。DSH 可以已安装，也可以完全没装。
 2. macOS 双击 `installer/install-macos.command`；Windows 双击 `installer/install-windows.cmd`；麒麟/Linux 运行 `sh installer/install-linux.sh`。
 3. 启动器会：检查 Node.js → 缺 dsh 时执行 `npm install -g @deepseek-ai/dsh@<锁定版本>` → 用 `dsh --profile web --dump-config` 创建 web profile（若已有 desktop/web 则复用）→ 校验插件摘要 → 只调用 `dsh plugin --profile <p> add <tgz>`。
-4. 启动 DSH（`dsh web` 或 Desktop），在「设置 → 插件」确认已加载；登录后录入个人网关 Key。
+4. 在终端运行 `dsh web`，打开它打印的本机地址，在「设置 → 插件」确认已加载（默认安装写入的是 web profile）；登录后录入个人网关 Key。不要用「打开 Desktop」代替这一步：Desktop 是另一个 profile，看不到本次安装。
 
-官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法管理（0.2.1-rc.5 实测）；仅检测到 Desktop profile 时启动器会报 `DESKTOP_PROFILE_UNSUPPORTED`，应在应用内插件设置中安装，不要改 Electron 的 profile。
+官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法管理（锁定基线版实测：`profile "desktop" is managed exclusively by the Electron application`）。Desktop 用户须在应用完全退出后于应用内插件设置中安装同一份 tgz，并在应用内确认挂载；`--profile desktop --dump-config` 可能被拒绝，不能作为核验依据。显式指定 desktop 时启动器会先探测该核验是否可用，不支持就在写入前拒绝；仅检测到 Desktop profile 时也会报 `DESKTOP_PROFILE_UNSUPPORTED`。
 
 脚本回显 `mounted=unknown` 是预期行为：运行期挂载只能在宿主内确认。
 

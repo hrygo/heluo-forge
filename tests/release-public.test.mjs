@@ -105,6 +105,45 @@ function expectCode(fn, code) {
   });
 }
 
+/**
+ * Tool trees for the toolchain-report cases (issue #254 items 13 and 23).
+ *
+ * `TOOL_TREE_FILES` is what the build must require before it archives anything:
+ * the release scripts, the IAM validator import closure (#253), the skill entry and
+ * a `scripts/lib` module. The native keyring helper and its data file are gone from
+ * #253's toolchain and must stay out of the required list. The synthetic token is
+ * assembled at runtime so this test file itself never carries a literal credential
+ * pattern into the source archive it is scanned from.
+ */
+const TOOL_TOKEN = ['ghp', 'syntheticreleasefixturetoken1234'].join('_');
+const IAM_VALIDATOR_FILES = ['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs']
+  .map((name) => `packages/forge-iam/src/${name}`);
+const TOOL_TREE_FILES = [
+  '.agents/skills/heluo-forge-release-bundle/SKILL.md',
+  ...IAM_VALIDATOR_FILES,
+  'scripts/build-enterprise-bundle.mjs',
+  'scripts/build-public-release.mjs',
+  'scripts/init-enterprise-plugin.mjs',
+  'scripts/lib/private-bundle.mjs',
+  'scripts/make-private-bundle.mjs',
+  'scripts/release-delivery.mjs',
+  'scripts/verify-enterprise-bundle.mjs',
+];
+
+function toolTree(t, { omit } = {}) {
+  const root = temp(t, 'forge-tool-tree-');
+  for (const path of TOOL_TREE_FILES) {
+    if (path === omit) continue;
+    const full = join(root, path);
+    mkdirSync(dirname(full), { recursive: true });
+    // The IAM validator closure is byte-compared against the bundle, so a tool tree
+    // fixture must carry the real modules; every other file only needs to exist.
+    if (path.startsWith('packages/forge-iam/src/')) writeFileSync(full, readFileSync(join(TOOL_ROOT, path)));
+    else writeFileSync(full, path.endsWith('.json') ? '{}\n' : '// fixture toolchain\n');
+  }
+  return root;
+}
+
 test('builds a configuration-neutral public release from a tagged checkout', (t) => {
   const tree = taggedTree(t);
   const release = buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' });
@@ -268,4 +307,68 @@ test('license inventory records declared licenses and the root entry', (t) => {
   assert.equal(inventory.packages.some((item) => item.entry === true && item.name === ENTRY), true);
   assert.equal(inventory.packages.some((item) => item.name === MEMBER), true);
   assert.equal(release.source, null);
+});
+
+test('refuses a tool tree with no release scripts', (t) => {
+  const tree = taggedTree(t);
+  const destination = output(t);
+  expectCode(
+    () => buildPublicRelease({ root: tree.root, toolRoot: temp(t, 'forge-tool-empty-'), output: destination, tag: `v${VERSION}`, license: 'Apache-2.0' }),
+    'TOOLS_INCOMPLETE',
+  );
+  assert.equal(existsSync(destination), false, 'a refused build must not leave release assets behind');
+});
+
+test('refuses a tool tree missing one required script or the skill entry', (t) => {
+  const tree = taggedTree(t);
+  for (const missing of ['scripts/release-delivery.mjs', '.agents/skills/heluo-forge-release-bundle/SKILL.md', 'packages/forge-iam/src/config.mjs']) {
+    const destination = output(t);
+    assert.throws(
+      () => buildPublicRelease({ root: tree.root, toolRoot: toolTree(t, { omit: missing }), output: destination, tag: `v${VERSION}`, license: 'Apache-2.0' }),
+      (error) => {
+        assert.equal(error.code, 'TOOLS_INCOMPLETE', `${missing}: ${error.message}`);
+        assert.ok(error.message.includes(missing), `the failure must name ${missing}: ${error.message}`);
+        return true;
+      },
+    );
+    assert.equal(existsSync(destination), false);
+  }
+});
+
+test('refuses a release tool script that carries a credential pattern', (t) => {
+  const tree = taggedTree(t);
+  const toolRoot = toolTree(t);
+  writeFileSync(join(toolRoot, 'scripts/lib/private-bundle.mjs'), `export const leaked = '${TOOL_TOKEN}';\n`);
+  const destination = output(t);
+  assert.throws(
+    () => buildPublicRelease({ root: tree.root, toolRoot, output: destination, tag: `v${VERSION}`, license: 'Apache-2.0' }),
+    (error) => {
+      assert.equal(error.code, 'TOOLS_SENSITIVE', error.message);
+      assert.ok(error.message.includes('scripts/lib/private-bundle.mjs'), error.message);
+      assert.ok(error.message.includes('GitHub token'), error.message);
+      assert.equal(error.message.includes(TOOL_TOKEN), false, 'the finding must not print the secret value');
+      return true;
+    },
+  );
+  assert.equal(existsSync(destination), false);
+});
+
+test('refuses a tracked source file that carries a credential pattern', (t) => {
+  const tree = taggedTree(t);
+  const token = ['ghp', 'syntheticsourcefixturetoken12345'].join('_');
+  put(tree.root, 'docs/notes.md', `# 运维说明\n\n${token}\n`);
+  commitAll(tree.root, 'add a synthetic credential pattern to the source tree');
+  git(tree.root, ['tag', '-f', `v${VERSION}`]);
+  const destination = output(t);
+  assert.throws(
+    () => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: destination, tag: `v${VERSION}`, license: 'Apache-2.0' }),
+    (error) => {
+      assert.equal(error.code, 'SOURCE_UNSAFE', error.message);
+      assert.ok(error.message.includes('docs/notes.md'), error.message);
+      assert.ok(error.message.includes('GitHub token'), error.message);
+      assert.equal(error.message.includes(token), false, 'the finding must not print the secret value');
+      return true;
+    },
+  );
+  assert.equal(existsSync(destination), false);
 });

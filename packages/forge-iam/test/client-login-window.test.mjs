@@ -20,8 +20,13 @@ test('the sign-in request is bounded and reports a timeout', () => {
   assert.match(source, /const SIGN_IN_TIMEOUT_MS = 15000;/);
   assert.match(source, /new AbortController\(\)/);
   assert.match(source, /IAM_REQUEST_TIMEOUT/);
-  const bounded = source.match(/postJson\('\/api\/forge-iam\/sign-in', \{ timeoutMs: SIGN_IN_TIMEOUT_MS \}\)/gu) ?? [];
-  assert.equal(bounded.length, 4, 'every sign-in call site must pass the timeout');
+  // Count every sign-in call first, then how many of them pass the timeout. A new
+  // unbounded call site must make this guard fail; counting only the bounded form
+  // (and asserting a fixed total) would silently accept an added bare call.
+  const calls = source.match(/postJson\(\s*'\/api\/forge-iam\/sign-in'/gu) ?? [];
+  const bounded = source.match(/postJson\(\s*'\/api\/forge-iam\/sign-in',\s*\{\s*timeoutMs: SIGN_IN_TIMEOUT_MS,?\s*\}\)/gu) ?? [];
+  assert.ok(calls.length > 0, 'the client must call the sign-in endpoint');
+  assert.equal(bounded.length, calls.length, 'every sign-in call site must pass the timeout');
 });
 
 test('a popup that never leaves about:blank falls back to this tab', () => {

@@ -48,7 +48,7 @@ function checksum(header) {
 
 const octal = (value, width) => `${value.toString(8).padStart(width - 1, '0')}\0`;
 
-function header({ name, prefix = '', mode, size }) {
+function header({ name, prefix = '', mode, size, typeflag = '0' }) {
   const block = Buffer.alloc(BLOCK);
   block.write(name, 0, 100, 'utf8');
   block.write(octal(mode & 0o7777, 8), 100, 'latin1');
@@ -57,7 +57,7 @@ function header({ name, prefix = '', mode, size }) {
   block.write(octal(size, 12), 124, 'latin1');
   block.write(octal(FIXED_MTIME, 12), 136, 'latin1');
   block.write('        ', 148, 'latin1');
-  block.write('0', 156, 'latin1');
+  block.write(typeflag, 156, 1, 'latin1');
   block.write('ustar\0', 257, 6, 'latin1');
   block.write('00', 263, 2, 'latin1');
   if (prefix !== '') block.write(prefix, 345, 155, 'utf8');
@@ -76,15 +76,21 @@ function paxRecord(key, value) {
   }
 }
 
-/** Long-name fallback: one pax header whose payload the reader already understands. */
-function paxBlocks(path, size) {
+/**
+ * Long-name fallback: a pax extended header (`x`) followed by the real entry.
+ *
+ * The extended header's typeflag must be `x`; writing it as a regular file makes
+ * every reader treat `PaxHeaders/entry` as a shipped file, and the following
+ * header keeps the entry's own mode rather than a hard-coded 0644.
+ */
+function paxBlocks(path, { size, mode }) {
   const payload = paxRecord('path', path);
   const record = Buffer.concat([
-    header({ name: 'PaxHeaders/entry', mode: 0o644, size: payload.length }),
+    header({ name: 'PaxHeaders/entry', mode: 0o644, size: payload.length, typeflag: 'x' }),
     payload,
     Buffer.alloc((BLOCK - (payload.length % BLOCK)) % BLOCK),
   ]);
-  return [record, header({ name: lastSegment(path), mode: 0o644, size })];
+  return [record, header({ name: lastSegment(path), mode, size })];
 }
 
 function lastSegment(path) {
@@ -132,7 +138,7 @@ export function writeBundleTarball(files, { prefix = PACKAGE_PREFIX } = {}) {
     const padding = Buffer.alloc((BLOCK - (file.body.length % BLOCK)) % BLOCK);
     const located = locate(file.path);
     if (located === undefined) {
-      const [pax, entry] = paxBlocks(file.path, file.body.length);
+      const [pax, entry] = paxBlocks(file.path, { size: file.body.length, mode: file.mode });
       chunks.push(pax, entry, file.body, padding);
       continue;
     }

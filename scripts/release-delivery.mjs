@@ -12,6 +12,13 @@
  * The maker's confirmation stays intact: the first run prints a redacted plan
  * and its digest; only a matching `--confirm` prefix writes anything.
  *
+ * 发布与失败清理（PR #256 R4）：
+ *   - 发布前用独占创建（`wx`）**预留**最终 zip 路径，并发打包者在争用点显式拿到
+ *     `OUTPUT_EXISTS`，而不是各自发布完再靠 finally 互相删除；
+ *   - 最终目录只在发布 rename 时产生，因此失败清理从不删除它，只删除本次运行创建的
+ *     路径，并按创建时记录的 dev+ino 复核：身份变了说明已被别的进程或用户替换，
+ *     跳过删除并告警（`OUTPUT_EXISTS` / `ARCHIVE_FAILED` 语义不变）。
+ *
  * 用法：
  *   node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex>
  *     --config <enterprise.env> --version <x.y.z> --output <dir>
@@ -21,12 +28,15 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -46,7 +56,7 @@ import {
   SUPPORTED_PLATFORMS,
   verifyDiscovery,
 } from './lib/private-bundle.mjs';
-import { sha256 } from './lib/release-support.mjs';
+import { assertOutsideDirectory, sha256 } from './lib/release-support.mjs';
 
 const INSTALLER_SCRIPT = 'init-enterprise-plugin.mjs';
 
@@ -118,11 +128,53 @@ export function readDeliveryConfig(configPath) {
 }
 
 function assertOutsideRepo(path, repoRoot, label) {
-  const target = resolve(path);
-  const repo = resolve(repoRoot);
-  if (target === repo || target.startsWith(`${repo}${sep}`)) {
+  // Containment is decided on canonical paths per component, never by a string
+  // prefix: a sibling literally named `..secret` is outside the checkout, and an
+  // out-of-checkout symlink that points back in is rejected (issue #254 item 14).
+  try {
+    assertOutsideDirectory(path, repoRoot, label);
+  } catch {
     fail('OUTPUT_INSIDE_REPO', `${label} must be outside the source checkout`);
   }
+}
+
+/**
+ * 读路径的文本内容；不存在或读不了时返回 null。
+ *
+ * 「这条路径现在还是我留的那份吗」用内容判断，不用 inode：Linux 与容器文件系统会在
+ * 删除后立刻复用 inode，dev+ino 相同不代表是同一个文件，据此删除会误删别人的产物。
+ */
+function readTextOf(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 发布失败时清理本次运行在最终 zip 位置上的产物。
+ *
+ * 只删两种确定属于自己的形态：仍是本运行独占创建的那份占位文件（内容带本次运行的
+ * 唯一标记），或已被本运行 rename 上位的 zip（内容摘要与刚打出的 zip 相同）。其余
+ * 一律保留并告警：路径已被别的打包者或用户替换时，删掉就是销毁别人的产物。
+ */
+function removeOwnArchive(archive, claimText, archiveSha256, warn) {
+  const text = readTextOf(archive);
+  if (text === null) return;
+  if (text === claimText) {
+    rmSync(archive, { force: true });
+    return;
+  }
+  try {
+    if (sha256(readFileSync(archive)) === archiveSha256) {
+      rmSync(archive, { force: true });
+      return;
+    }
+  } catch {
+    // 读不了就当不是自己的：保留并告警，交给人判断。
+  }
+  warn(`warning: left ${archive} in place: it was replaced by another process while this run was failing`);
 }
 
 function sumsOf(root, files) {
@@ -142,6 +194,7 @@ function installerSource(toolRoot) {
 const LAUNCHERS = {
   'install-macos.command': `#!/bin/sh
 # 双击运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
+# HASH 是同一交付包内 tgz 的自算摘要：只能发现制品损坏，不构成独立来源。
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
@@ -154,6 +207,7 @@ exec /usr/bin/env node "$HERE/${INSTALLER_SCRIPT}" --release "$ROOT/enterprise-p
 `,
   'install-linux.sh': `#!/bin/sh
 # 终端运行：自动准备官方 DSH（必要时 npm 安装）并装入企业插件。
+# HASH 是同一交付包内 tgz 的自算摘要：只能发现制品损坏，不构成独立来源。
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
@@ -197,8 +251,10 @@ set "CODE=%ERRORLEVEL%"
 type "%LOG%"
 echo.
 if "%CODE%"=="0" (
-  echo [heluo] OK: plugin installed and verified locally.
-  echo [heluo] Start DSH, then open Settings -^> Plugins to confirm it is loaded.
+  echo [heluo] OK: plugin installed into the web profile and verified locally.
+  echo [heluo] Start it with: dsh web
+  echo [heluo] Desktop is a separate profile; opening it will NOT show this install.
+  echo [heluo] Then open Settings -^> Plugins to confirm it is loaded.
 ) else (
   echo [heluo] FAILED with exit code %CODE%.
   echo [heluo] Log: %LOG%
@@ -218,8 +274,8 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 启动脚本发现缺少官方 DSH 时，会用 npm 自动安装并在本机创建 web profile；安装插件依赖 pnpm，缺少时启动脚本会用同一个 npm 自动补装。
 
 > 官方 Desktop 应用由 Electron 独占 desktop profile，命令行无法管理它
-> （当前锁定版实测：profile "desktop" is managed exclusively by the Electron application）。
-> 请用 dsh web 形态运行本启动器；Desktop 用户需在应用内的插件设置中安装。
+> （锁定基线版实测：profile "desktop" is managed exclusively by the Electron application）。
+> 本启动器默认把插件装进 web profile；Desktop 用户按下文「Desktop 用户」单独安装。
 
 ## 安装（任选当前系统）
 
@@ -231,11 +287,28 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 校验插件摘要 → 只执行一次 dsh plugin add → 读回配置确认插件已登记。
 看到 mounted=unknown 是正常的：运行期挂载需要在下一步确认。
 
+启动器传入的摘要是**同一交付包内 tgz 的自算值**（自证）：它只能发现制品在拷贝中损坏，
+不能证明制品来自可信渠道。需要独立口径时，请向管理员另行核对摘要后再安装。
+
 ## 安装后
 
-1. 启动 DSH：运行 dsh web（浏览器打开本机地址），或打开 Desktop。
+1. 在终端运行 dsh web，打开它打印的本机地址（默认安装写入的是 web profile）。
 2. 在「设置 → 插件」确认 @heluo/forge-enterprise 已加载。
 3. 按企业身份登录，首次登录时录入**你个人**的网关 Key；Key 不随交付包分发。
+
+**不要用「打开 Desktop」代替第 1 步**：Desktop 使用自己的 desktop profile，看不到本次
+装进 web profile 的插件。
+
+## Desktop 用户
+
+Desktop 的 desktop profile 由应用独占，本启动器不会写入它（只检测到 Desktop profile
+时会直接拒绝）。在 Desktop 中使用企业插件需要：
+
+1. 完全退出 Desktop 应用（含托盘/菜单栏里的进程），确认没有 dsh 进程占用该 profile。
+2. 在应用的插件设置中安装同一份 enterprise-plugin/*.tgz；若应用不提供安装入口，则用
+   应用自带的命令行在应用完全退出后执行 dsh plugin --profile desktop add <tgz>。
+3. 重新打开 Desktop，在「设置 → 插件」确认已加载——desktop profile 的挂载只能在应用内
+   确认；命令行 --profile desktop --dump-config 可能被拒绝，不能作为核验依据。
 
 ## 回滚
 
@@ -269,7 +342,10 @@ function launcherFiles() {
  * Build the delivery directory and zip.
  *
  * @param {{publicPath: string, publicSha256: string, configPath: string, version: string,
- *   output: string, toolRoot?: string, dryRun?: boolean}} input
+ *   output: string, toolRoot?: string, dryRun?: boolean, confirm?: string, zipCommand?: string,
+ *   warn?: (message: string) => void}} input
+ *   `zipCommand` 仅供测试注入（默认 `zip`）：打包失败必须什么也不发布。
+ *   `warn` 仅供测试注入（默认写 stderr）：清理时跳过别人的产物必须告警，不能静默。
  */
 export function buildDelivery(input) {
   const publicPath = resolve(input.publicPath);
@@ -320,10 +396,34 @@ export function buildDelivery(input) {
   const archive = `${output}.zip`;
   if (existsSync(archive)) fail('OUTPUT_EXISTS', `archive already exists: ${archive}`);
 
-  const staging = join(dirname(output), `.release-delivery-${process.pid}-${Date.now().toString(36)}`);
+  const parent = dirname(output);
+  const staging = join(parent, `.release-delivery-${process.pid}-${Date.now().toString(36)}`);
+  // 暂存目录里先放一个以最终目录名命名的内容根，zip 的内层路径才是 <output>/…。
+  const content = join(staging, basename(output));
+  const partialArchive = join(staging, 'archive.zip');
+  const zipCommand = input.zipCommand ?? 'zip';
+  const warn = input.warn ?? ((message) => process.stderr.write(`${message}\n`));
+  const hadOutput = existsSync(output);
+  // 占位文件里写本次运行的唯一标记：清理与「被别人换掉」的判定都按内容做，不按 inode。
+  const claimText = `reserved by release-delivery while packaging (run ${process.pid}-${Date.now().toString(36)}); safe to delete if no build is running\n`;
+  let archiveSha256;
+  let published = false;
   mkdirSync(staging, { recursive: true, mode: 0o700 });
   try {
-    const pluginDir = join(staging, 'enterprise-plugin');
+    // 预留最终 zip 路径：独占创建（wx）让并发打包者在这里显式失败，而不是各自发布完再靠
+    // finally 互相删除。占位文件本身就是「本次运行创建」的第一个登记项。
+    try {
+      closeSync(openSync(archive, 'wx', 0o600));
+    } catch (error) {
+      if (error.code === 'EEXIST') {
+        fail('OUTPUT_EXISTS', `archive appeared while packaging: ${archive}; nothing was published`);
+      }
+      throw error;
+    }
+    // 占位文件里写明来历：进程被强杀时会留下它，操作者要能判断它可删。
+    writeFileSync(archive, claimText);
+    mkdirSync(content, { recursive: true });
+    const pluginDir = join(content, 'enterprise-plugin');
     mkdirSync(pluginDir, { recursive: true });
     const made = makePrivateBundle({
       publicPath,
@@ -338,7 +438,7 @@ export function buildDelivery(input) {
       fail('VERIFY_FAILED', `private artifact failed verification:\n- ${verified.errors.join('\n- ')}`);
     }
 
-    const installerDir = join(staging, 'installer');
+    const installerDir = join(content, 'installer');
     mkdirSync(installerDir, { recursive: true });
     cpSync(installer, join(installerDir, INSTALLER_SCRIPT));
     for (const launcher of launcherFiles()) {
@@ -347,31 +447,54 @@ export function buildDelivery(input) {
       writeFileSync(path, body);
       chmodSync(path, 0o755);
     }
-    writeFileSync(join(staging, 'INSTALL.md'), EMPLOYEE_GUIDE);
+    writeFileSync(join(content, 'INSTALL.md'), EMPLOYEE_GUIDE);
 
     const files = [];
     const walk = (directory) => {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
         const path = join(directory, entry.name);
         if (entry.isDirectory()) walk(path);
-        else if (entry.isFile()) files.push(relative(staging, path).split(sep).join('/'));
+        else if (entry.isFile()) files.push(relative(content, path).split(sep).join('/'));
       }
     };
-    walk(staging);
-    writeFileSync(join(staging, 'SHA256SUMS'), sumsOf(staging, files));
-    const parent = dirname(output);
-    renameSync(staging, output);
-    const zipPath = `${output}.zip`;
-    execFileSync('zip', ['-r', '-q', zipPath, basename(output)], { cwd: parent });
-    if (!existsSync(zipPath)) fail('ARCHIVE_FAILED', `zip archive was not written: ${zipPath}`);
-    const archiveDigest = sha256(readFileSync(zipPath));
+    walk(content);
+    writeFileSync(join(content, 'SHA256SUMS'), sumsOf(content, files));
+
+    // 交付物齐了才打包；zip 缺失或失败时不留半成品目录，重跑不会被 OUTPUT_EXISTS 挡住。
+    try {
+      execFileSync(zipCommand, ['-r', '-q', partialArchive, basename(output)], { cwd: staging });
+    } catch (error) {
+      const reason = typeof error?.code === 'string' ? error.code : (error?.message ?? 'UNKNOWN');
+      fail('ARCHIVE_FAILED', `zip failed (${reason}) while packaging ${basename(output)} with ${zipCommand}; nothing was published`);
+    }
+    if (!existsSync(partialArchive)) fail('ARCHIVE_FAILED', `zip did not write ${partialArchive}; nothing was published`);
+    const archiveDigest = sha256(readFileSync(partialArchive));
+    archiveSha256 = archiveDigest;
+
+    // 发布：先放 zip 再放目录；两步都成功才算完成。
+    // 替换前确认路径上仍是本进程那份占位文件：被别人换掉的就绝不覆盖。
+    if (readTextOf(archive) !== claimText) {
+      fail('OUTPUT_EXISTS', `archive was replaced by another process while packaging: ${archive}; nothing was published`);
+    }
+    renameSync(partialArchive, archive);
+    try {
+      if (hadOutput) rmdirSync(output);
+      renameSync(content, output);
+    } catch (error) {
+      // 最终目录在打包期间被别人发布出来：显式失败并把发布权留给先到者，不删任何东西。
+      if (existsSync(output)) {
+        fail('OUTPUT_EXISTS', `output directory appeared while packaging: ${output}; nothing was published`);
+      }
+      throw error;
+    }
+    published = true;
 
     return {
       plan,
       digest,
       written: true,
       output,
-      archive: zipPath,
+      archive,
       archiveSha256: archiveDigest,
       privateTarball: join(output, 'enterprise-plugin', basename(made.tarball)),
       privateSha256: made.sha256,
@@ -380,7 +503,14 @@ export function buildDelivery(input) {
       verified: verified.ok,
     };
   } finally {
-    if (existsSync(staging)) rmSync(staging, { recursive: true, force: true });
+    rmSync(staging, { recursive: true, force: true });
+    if (!published) {
+      // 只清理确定属于自己的产物：内容对不上说明已被别人替换，保留并告警。
+      // 最终目录从不由本运行创建（只有发布的 rename 才会产生），所以这里绝不碰它；
+      // 用户原有的空目录按原样恢复。
+      removeOwnArchive(archive, claimText, archiveSha256, warn);
+      if (hadOutput && !existsSync(output)) mkdirSync(output, { recursive: true, mode: 0o700 });
+    }
   }
 }
 

@@ -10,13 +10,15 @@
  * 默认不改历史记录：带日期或标注为编制依据/实测/探针的行只出现在 report 里，不会被 apply 改写。
  * `apply` 默认演练（dry-run），加 `--write` 才落盘。
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   CANONICAL_SPOTS,
   DSH_VERSION_FILE,
+  RELEASE_DEFAULT_HOSTS,
   DSH_VERSION_SHAPE,
   checkEngineFloors,
+  checkReleaseDefaults,
   checkTargetDeclarations,
   listCodeOccurrences,
   listDocOccurrences,
@@ -24,6 +26,7 @@ import {
   readDshVersion,
   rewriteCanonical,
   rewriteEngineFloors,
+  rewriteReleaseDefaults,
   spotMatches,
 } from './lib/dsh-version.mjs';
 
@@ -104,6 +107,7 @@ function check() {
     }
   }
   problems.push(...checkTargetDeclarations(root));
+  problems.push(...checkReleaseDefaults(root, current));
   const floorsCheck = checkEngineFloors(root, current);
   problems.push(...floorsCheck.problems);
   const code = listCodeOccurrences(root, current);
@@ -119,7 +123,7 @@ function check() {
     return;
   }
   console.log(
-    `version: ok（基线 ${current}；基线位置 ${CANONICAL_SPOTS.length} 处、代码无硬编码、下限 ${listEngineFloors(root).length} 个已断言）`,
+    `version: ok（基线 ${current}；基线位置 ${CANONICAL_SPOTS.length} 处、代码无硬编码、发行默认宿主 ${RELEASE_DEFAULT_HOSTS.length} 处已对齐、下限 ${listEngineFloors(root).length} 个已断言）`,
   );
   for (const line of floorsCheck.warnings) console.log(`version: 提示 ${line}`);
   for (const row of code.filter((item) => item.kind === 'fixture-exception')) {
@@ -151,8 +155,26 @@ function apply(target) {
       console.log(`跳过 ${spot.file}：${spot.label} 已是 ${target}`);
     }
   }
+  // 发行默认宿主也必须跟着基线走：交付包离开仓库运行读不到 .dsh-version，漏改会立刻被 check 拦下。
+  for (const spot of RELEASE_DEFAULT_HOSTS) {
+    const abs = join(root, spot.file);
+    if (!existsSync(abs)) continue;
+    const { text, replaced, from } = rewriteReleaseDefaults(readFileSync(abs, 'utf8'), spot.file, target);
+    if (replaced) {
+      staged.set(abs, text);
+      changes.push({ file: `${spot.file}（${spot.label}）`, from: from ?? current, to: target });
+    }
+  }
   // 落盘前自检：改完的正文里，声明位置的非历史命中必须**全等于**目标版本，否则会把自己写进 check 失败的状态。
   const selfProblems = [];
+  for (const spot of RELEASE_DEFAULT_HOSTS) {
+    const abs = join(root, spot.file);
+    if (!existsSync(abs)) continue;
+    const text = staged.get(abs) ?? readFileSync(abs, 'utf8');
+    const match = spot.pattern.exec(text);
+    if (match === null) selfProblems.push(`${spot.file}：改写后找不到「${spot.label}」的声明`);
+    else if (match[1] !== target) selfProblems.push(`${spot.file}：「${spot.label}」改写后仍为 ${match[1]}`);
+  }
   for (const spot of CANONICAL_SPOTS) {
     const abs = join(root, spot.file);
     const text = staged.get(abs) ?? readFileSync(abs, 'utf8');

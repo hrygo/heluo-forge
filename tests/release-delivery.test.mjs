@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -418,6 +418,39 @@ test('output inside the source checkout is refused', (t) => {
   );
 });
 
+test('an out-of-checkout symlink that points back in is refused', (t) => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const link = join(root, 'into-checkout');
+  symlinkSync(TOOL_ROOT, link, 'dir');
+  expectCode(
+    () => buildDelivery({
+      publicPath,
+      publicSha256: sha256,
+      configPath,
+      version: '0.1.0-corp.1',
+      output: join(link, 'delivery'),
+      toolRoot: TOOL_ROOT,
+      confirm: 'aaaaaaaaaaaa',
+    }),
+    'OUTPUT_INSIDE_REPO',
+  );
+});
+
+test('a sibling directory named like a parent reference is not mistaken for the checkout', (t) => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const output = join(root, '..delivery');
+  const plan = buildDelivery({
+    publicPath,
+    publicSha256: sha256,
+    configPath,
+    version: '0.1.0-corp.1',
+    output,
+    toolRoot: TOOL_ROOT,
+    dryRun: true,
+  });
+  assert.ok(plan);
+});
+
 test('a non-empty output directory is refused', (t) => {
   const { root, publicPath, configPath, sha256 } = fixture(t);
   const output = join(root, 'delivery');
@@ -445,4 +478,177 @@ test('a non-empty output directory is refused', (t) => {
     'OUTPUT_EXISTS',
   );
   assert.equal(readFileSync(join(output, 'keep.txt'), 'utf8'), 'keep');
+});
+
+/** 先演练拿确认码，再真正打包；extra 用来注入测试用参数（如 zipCommand）。 */
+function packageDelivery({ publicPath, configPath, sha256 }, output, extra = {}) {
+  const base = {
+    publicPath,
+    publicSha256: sha256,
+    configPath,
+    version: '0.1.0-corp.1',
+    output,
+    toolRoot: TOOL_ROOT,
+  };
+  const plan = buildDelivery({ ...base, dryRun: true });
+  return buildDelivery({ ...base, confirm: plan.digest.slice(0, 16), ...extra });
+}
+
+test('zip failure publishes nothing, so a retry is not blocked by OUTPUT_EXISTS', (t) => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const output = join(root, 'delivery');
+  const input = { publicPath, configPath, sha256 };
+  expectCode(
+    () => packageDelivery(input, output, { zipCommand: join(root, 'missing', 'zip-not-here') }),
+    'ARCHIVE_FAILED',
+  );
+  assert.equal(existsSync(output), false, '打包失败不能留下半成品输出目录');
+  assert.equal(existsSync(`${output}.zip`), false, '打包失败不能留下 zip');
+
+  const retried = packageDelivery(input, output);
+  assert.equal(retried.written, true, '重跑不应被 OUTPUT_EXISTS 挡住');
+  assert.equal(existsSync(`${output}.zip`), true);
+  assert.equal(existsSync(join(output, 'INSTALL.md')), true);
+});
+
+test('zip failure keeps a pre-existing empty output directory and never deletes user files', (t) => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const output = join(root, 'delivery');
+  mkdirSync(output);
+  expectCode(
+    () => packageDelivery({ publicPath, configPath, sha256 }, output, { zipCommand: join(root, 'missing', 'zip') }),
+    'ARCHIVE_FAILED',
+  );
+  assert.equal(existsSync(output), true, '用户原有的空目录必须原样保留');
+  assert.deepEqual(readdirSync(output), [], '失败时不能往里写任何东西');
+  assert.equal(existsSync(`${output}.zip`), false);
+});
+
+/** 假的 zip：把本次运行预留的占位文件换成「别人」的 zip，然后失败（PR #256 R4）。 */
+function zipReplacedByAnotherProcess(root, archive) {
+  const path = join(root, 'zip-replaced.sh');
+  writeFileSync(path, `#!/bin/sh\nrm -f '${archive}'\nprintf 'external-zip' > '${archive}'\nexit 1\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** 假的 zip：模拟并发进程在打包期间发布了最终目录，然后照常写出 zip（PR #256 R4）。 */
+function zipWhileAnotherProcessPublishes(root, output, partialArchiveIndex = 3) {
+  const path = join(root, 'zip-concurrent.sh');
+  writeFileSync(
+    path,
+    [
+      '#!/bin/sh',
+      `mkdir -p '${output}'`,
+      `printf 'published by A\\n' > '${output}/INSTALL.md'`,
+      `: > "$${partialArchiveIndex}"`,
+      'exit 0',
+      '',
+    ].join('\n'),
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** 假的 zip：只写出 zip 再失败，模拟本次运行自己的产物（PR #256 R4）。 */
+function zipFailingAfterWrite(root) {
+  const path = join(root, 'zip-failing.sh');
+  writeFileSync(path, '#!/bin/sh\n: > "$3"\nexit 1\n');
+  chmodSync(path, 0o755);
+  return path;
+}
+
+/** 暂存目录是发布前的唯一中间产物，失败后必须清理干净。 */
+function stagingLeftovers(root) {
+  return readdirSync(root).filter((name) => name.startsWith('.release-delivery-'));
+}
+
+test(
+  'an archive created by another process during the build is never deleted (PR #256 R4)',
+  { skip: process.platform === 'win32' ? 'needs a POSIX shell to fake the zip step' : false },
+  (t) => {
+    const { root, publicPath, configPath, sha256 } = fixture(t);
+    const output = join(root, 'delivery');
+    const archive = `${output}.zip`;
+    const warnings = [];
+    expectCode(
+      () => packageDelivery({ publicPath, configPath, sha256 }, output, {
+        zipCommand: zipReplacedByAnotherProcess(root, archive),
+        warn: (message) => warnings.push(message),
+      }),
+      'ARCHIVE_FAILED',
+    );
+    assert.equal(existsSync(archive), true, '别的进程写出的 zip 不能被本次运行的失败清理删掉');
+    assert.equal(readFileSync(archive, 'utf8'), 'external-zip');
+    assert.equal(warnings.length, 1, '跳过清理必须告警，不能静默');
+    assert.match(warnings[0], /left .*delivery\.zip in place: it was replaced by another process/u);
+    assert.equal(existsSync(output), false);
+    assert.deepEqual(stagingLeftovers(root), []);
+  },
+);
+
+test(
+  'a delivery directory published by a concurrent run survives this run failing (PR #256 R4)',
+  { skip: process.platform === 'win32' ? 'needs a POSIX shell to fake the zip step' : false },
+  (t) => {
+    const { root, publicPath, configPath, sha256 } = fixture(t);
+    const output = join(root, 'delivery');
+    const warnings = [];
+    expectCode(
+      () => packageDelivery({ publicPath, configPath, sha256 }, output, {
+        zipCommand: zipWhileAnotherProcessPublishes(root, output),
+        warn: (message) => warnings.push(message),
+      }),
+      'OUTPUT_EXISTS',
+    );
+    assert.deepEqual(readdirSync(output), ['INSTALL.md'], '先到者的产物必须原样保留');
+    assert.equal(readFileSync(join(output, 'INSTALL.md'), 'utf8'), 'published by A\n');
+    assert.equal(existsSync(`${output}.zip`), false, '失败时本次运行的 zip 不能留在发布位上');
+    assert.deepEqual(warnings, [], '没有替换发生时不该告警');
+    assert.deepEqual(stagingLeftovers(root), []);
+  },
+);
+
+test(
+  'a failure still removes the artifacts this run created (PR #256 R4)',
+  { skip: process.platform === 'win32' ? 'needs a POSIX shell to fake the zip step' : false },
+  (t) => {
+    const { root, publicPath, configPath, sha256 } = fixture(t);
+    const output = join(root, 'delivery');
+    const archive = `${output}.zip`;
+    const warnings = [];
+    expectCode(
+      () => packageDelivery({ publicPath, configPath, sha256 }, output, {
+        zipCommand: zipFailingAfterWrite(root),
+        warn: (message) => warnings.push(message),
+      }),
+      'ARCHIVE_FAILED',
+    );
+    assert.equal(existsSync(archive), false, '本次运行预留的 zip 占位必须清掉');
+    assert.equal(existsSync(output), false);
+    assert.deepEqual(warnings, [], '自己的产物不需要告警');
+    assert.deepEqual(stagingLeftovers(root), []);
+  },
+);
+
+test('employee guide starts dsh web and Desktop is documented separately (issue #254 items 19/26)', (t) => {
+  const { root, publicPath, configPath, sha256 } = fixture(t);
+  const output = join(root, 'delivery');
+  const result = packageDelivery({ publicPath, configPath, sha256 }, output);
+  assert.equal(result.written, true);
+
+  const guide = readFileSync(join(output, 'INSTALL.md'), 'utf8');
+  assert.match(guide, /在终端运行 dsh web/u, '默认安装写入 web profile，必须让员工显式启动 dsh web');
+  assert.doesNotMatch(guide, /或打开 Desktop/u, '不能用「打开 Desktop」代替启动 web profile');
+  assert.match(guide, /## Desktop 用户/u, 'Desktop 需单独说明安装与核验条件');
+  assert.match(guide, /自算值\*\*（自证）/u, '自算摘要必须标成自证，而不是独立口径');
+
+  for (const name of ['install-macos.command', 'install-linux.sh']) {
+    const body = readFileSync(join(output, 'installer', name), 'utf8');
+    assert.match(body, /自算摘要/u, `${name} 必须说明 HASH 是自算值`);
+    assert.doesNotMatch(body, /独立口径/u);
+  }
+  const windows = readFileSync(join(output, 'installer', 'install-windows.cmd'), 'utf8');
+  assert.match(windows, /dsh web/u);
+  assert.match(windows, /separate profile/u, 'Windows 启动器必须说明 Desktop 是另一个 profile');
 });
