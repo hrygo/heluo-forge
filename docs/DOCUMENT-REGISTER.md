@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.81.1 |
+| 版本 | V1.82.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,9 +19,9 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.81.1 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.44.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.42.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.82.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.45.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.43.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V3.0.0 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
@@ -40,6 +40,7 @@
 | CORP-DSH-DESIGN-015 | DSH 客户端标识（UA）方案设计 | [design/client-identification.md](<design/client-identification.md>) | V0.2.0 | 草案 | 平台组（代拟） | G1 接入契约 |
 | CORP-DSH-DESIGN-016 | IAM 机密客户端隔离开发设计 | [design/iam-confidential-isolated.md](<design/iam-confidential-isolated.md>) | V0.4.1 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；不开放真实来源与生产 |
 | CORP-DSH-DESIGN-017 | IAM 模型与工具隔离消费设计 | [design/iam-consumer-isolated.md](<design/iam-consumer-isolated.md>) | V0.7.0 | 草案 | 平台组（代拟） | 用户已批准完整 source/mock 设计；真实环境关闭，A/B/C/D分段已验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
+| CORP-DSH-DESIGN-018 | 企业 Nacos Skill 发现、安装与 DSH 原生加载详细设计 | [design/plugins/forge-skill-nacos.md](<design/plugins/forge-skill-nacos.md>) | V0.2 | 草案（代拟） | 平台组（代拟） | G1 发现与安装闭环；G2 三目标实机 |
 | CORP-DSH-IAM-002 | IAM 机密客户端隔离开发契约 | [contracts/iam-client-auth-isolated.md](<contracts/iam-client-auth-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；生产 G1 未关闭 |
 | CORP-DSH-IAM-003 | IAM 模型与工具隔离消费契约草案 | [contracts/iam-consumer-isolated.md](<contracts/iam-consumer-isolated.md>) | V0.7.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；见证/许可/合成工具与模型已分段验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
 | CORP-DSH-IAM-004 | IAM 只读状态订阅隔离契约 | [contracts/iam-view-observer-isolated.md](<contracts/iam-view-observer-isolated.md>) | V0.3.0 | 草案 | 平台组（代拟） | 私有接缝已实现并定向验收；真实注册关闭 |
@@ -78,6 +79,7 @@
 | CORP-DSH-REQ-003 | Agent 增强的企业聊天产品方案 | [requirements/enterprise-collaboration-chat-proposal.md](<requirements/enterprise-collaboration-chat-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 需求基线同步、接入可行性与详细设计；企业实机验证后试点 |
 | CORP-DSH-REQ-004 | Forge 专家智能体产品需求文档 | [requirements/delegra-experts-prd.md](<requirements/delegra-experts-prd.md>) | V0.8.1 | 草案 | Agent（代拟） | 产品取舍与范围确认；宿主、Delegra 和企业接入验收 |
 | CORP-DSH-REQ-005 | 员工智能助理个人记忆产品方案 | [requirements/employee-assistant-memory-proposal.md](<requirements/employee-assistant-memory-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 产品方案评审、范围基线同步、接口与宿主准入；企业环境验证后试点 |
+| CORP-DSH-REQ-006 | DSH 对接 Nacos 动态获取与加载企业 Skill 产品需求文档 | [requirements/skill-nacos-prd.md](<requirements/skill-nacos-prd.md>) | V0.2 | 草案（代拟，待评审） | DSH 平台组（产品视角代拟） | 范围与取舍确认；企业 Nacos 联调与目标平台验收详见详细设计（DESIGN-018） |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.1.2 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.2 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
 | CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.9.1 | 草案 | 平台组（代拟） | 随首个可发布包复核 |

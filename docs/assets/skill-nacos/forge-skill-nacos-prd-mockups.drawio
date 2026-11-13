@@ -1,0 +1,795 @@
+<mxfile host="localhost" pages="8">
+  <diagram id="s0q9p4zp-ucbb" name="1-技能市场浏览与搜索">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="w1" parent="1" style="fillColor=#ffffff;strokeColor=#666666;rounded=0;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="560" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="DeepSeek Harness（Web / 桌面同构）— 设置 ▸ 企业技能市场" vertex="1">
+          <mxGeometry height="28" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="s1" parent="1" style="fillColor=#f5f5f5;strokeColor=#cccccc;fontSize=11;align=left;verticalAlign=top;spacing=6;whiteSpace=wrap;html=1;" value="导航" vertex="1">
+          <mxGeometry height="532" width="150" x="20" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="si3" parent="1" style="fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="企业技能市场" vertex="1">
+          <mxGeometry height="26" width="130" x="30" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="si1" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="会话与目录" vertex="1">
+          <mxGeometry height="20" width="130" x="30" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="si2" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="本地技能" vertex="1">
+          <mxGeometry height="20" width="130" x="30" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="si4" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="凭据" vertex="1">
+          <mxGeometry height="20" width="130" x="30" y="152" as="geometry" />
+        </mxCell>
+        <mxCell id="si5" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="插件" vertex="1">
+          <mxGeometry height="20" width="130" x="30" y="176" as="geometry" />
+        </mxCell>
+        <mxCell id="si6" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="设置" vertex="1">
+          <mxGeometry height="20" width="130" x="30" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="h1" parent="1" style="text;fontSize=15;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="企业技能市场" vertex="1">
+          <mxGeometry height="24" width="240" x="190" y="58" as="geometry" />
+        </mxCell>
+        <mxCell id="sync" parent="1" style="text;fontSize=10;fontColor=#666666;align=right;whiteSpace=wrap;html=1;" value="● 3 分钟前同步 · 可见 12 个技能" vertex="1">
+          <mxGeometry height="18" width="200" x="520" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="rf" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="刷新" vertex="1">
+          <mxGeometry height="24" width="42" x="728" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="q1" parent="1" style="fillColor=#ffffff;strokeColor=#b3b3b3;align=left;spacingLeft=6;fontColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="搜索技能名称 / 描述 / 标签…" vertex="1">
+          <mxGeometry height="26" width="320" x="190" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="q2" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="搜索" vertex="1">
+          <mxGeometry height="26" width="54" x="516" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="c1" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="全部 12" vertex="1">
+          <mxGeometry height="22" width="62" x="190" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="已安装 3" vertex="1">
+          <mxGeometry height="22" width="72" x="258" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="可更版 1" vertex="1">
+          <mxGeometry height="22" width="72" x="336" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="k1" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="65" width="580" x="190" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="k1t" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;code-review-std&lt;/b&gt;　v1.4.2 · 质量组 · 更新 10-20" vertex="1">
+          <mxGeometry height="18" width="330" x="200" y="172" as="geometry" />
+        </mxCell>
+        <mxCell id="k1d" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="提交前代码评审标准流程：评审清单、阻断项判定与豁免口径（部门规范）" vertex="1">
+          <mxGeometry height="30" width="340" x="200" y="192" as="geometry" />
+        </mxCell>
+        <mxCell id="k1b1" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="已启用" vertex="1">
+          <mxGeometry height="18" width="58" x="560" y="172" as="geometry" />
+        </mxCell>
+        <mxCell id="k1b2" parent="1" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;whiteSpace=wrap;html=1;" value="可更版 1.5.0" vertex="1">
+          <mxGeometry height="18" width="92" x="624" y="172" as="geometry" />
+        </mxCell>
+        <mxCell id="k1a1" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="详情" vertex="1">
+          <mxGeometry height="22" width="45" x="560" y="198" as="geometry" />
+        </mxCell>
+        <mxCell id="k1a2" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="更版" vertex="1">
+          <mxGeometry height="22" width="45" x="610" y="198" as="geometry" />
+        </mxCell>
+        <mxCell id="k2" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="65" width="580" x="190" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="k2t" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;api-doc-gen&lt;/b&gt;　v2.0.1 · 平台组 · 更新 10-24" vertex="1">
+          <mxGeometry height="18" width="330" x="200" y="247" as="geometry" />
+        </mxCell>
+        <mxCell id="k2d" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="按企业模板生成接口文档：字段口径、示例与变更记录要求" vertex="1">
+          <mxGeometry height="30" width="340" x="200" y="267" as="geometry" />
+        </mxCell>
+        <mxCell id="k2b1" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="未安装" vertex="1">
+          <mxGeometry height="18" width="58" x="560" y="247" as="geometry" />
+        </mxCell>
+        <mxCell id="k2a1" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="详情" vertex="1">
+          <mxGeometry height="22" width="45" x="560" y="273" as="geometry" />
+        </mxCell>
+        <mxCell id="k2a2" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="安装" vertex="1">
+          <mxGeometry height="22" width="45" x="610" y="273" as="geometry" />
+        </mxCell>
+        <mxCell id="k3" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="65" width="580" x="190" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="k3t" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;db-migration-guard&lt;/b&gt;　v0.9.4 · 数据组 · 更新 09-30" vertex="1">
+          <mxGeometry height="18" width="330" x="200" y="322" as="geometry" />
+        </mxCell>
+        <mxCell id="k3d" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="数据库变更自查：高危 DDL 识别、审批引导与回滚口径" vertex="1">
+          <mxGeometry height="30" width="340" x="200" y="342" as="geometry" />
+        </mxCell>
+        <mxCell id="k3b1" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="已停用" vertex="1">
+          <mxGeometry height="18" width="58" x="560" y="322" as="geometry" />
+        </mxCell>
+        <mxCell id="k3a1" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="详情" vertex="1">
+          <mxGeometry height="22" width="45" x="560" y="348" as="geometry" />
+        </mxCell>
+        <mxCell id="k3a2" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="启用" vertex="1">
+          <mxGeometry height="22" width="45" x="610" y="348" as="geometry" />
+        </mxCell>
+        <mxCell id="k4" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="65" width="580" x="190" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="k4t" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;legacy-lint&lt;/b&gt;　v1.0.0 · 前端组" vertex="1">
+          <mxGeometry height="18" width="330" x="200" y="397" as="geometry" />
+        </mxCell>
+        <mxCell id="k4d" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="旧版前端规范（远程已下线，本地保留可用）" vertex="1">
+          <mxGeometry height="30" width="340" x="200" y="417" as="geometry" />
+        </mxCell>
+        <mxCell id="k4b1" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="远程下线" vertex="1">
+          <mxGeometry height="18" width="70" x="560" y="397" as="geometry" />
+        </mxCell>
+        <mxCell id="k4a1" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="详情" vertex="1">
+          <mxGeometry height="22" width="45" x="560" y="423" as="geometry" />
+        </mxCell>
+        <mxCell id="k4a2" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="卸载" vertex="1">
+          <mxGeometry height="22" width="45" x="610" y="423" as="geometry" />
+        </mxCell>
+        <mxCell id="pg" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="‹ 上一页　1 / 3　下一页 ›（每页默认 20 条，结果有界）" vertex="1">
+          <mxGeometry height="18" width="360" x="190" y="462" as="geometry" />
+        </mxCell>
+        <mxCell id="nb" parent="1" style="fillColor=#fffbe6;strokeColor=#d6b656;dashed=1;align=left;verticalAlign=top;spacing=6;fontSize=10;whiteSpace=wrap;html=1;" value="交互规则&lt;br&gt;① 目录仅显示当前身份有权可见的技能：无权限、已下线条目不出现在列表与搜索结果。&lt;br&gt;② 状态徽章四态互斥：未安装 / 已启用 / 已停用 / 可更版；可更版只提示新版本号，绝不自动升级。&lt;br&gt;③ 主按钮随状态变化：未安装→安装；已停用→启用；可更版→更版；已启用→停用（收进详情）。点技能名进详情页。" vertex="1">
+          <mxGeometry height="82" width="580" x="190" y="490" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p2" name="2-技能详情与安装确认">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="bg" parent="1" style="fillColor=#f0f0f0;strokeColor=#b3b3b3;rounded=0;whiteSpace=wrap;html=1;" value="" vertex="1">
+          <mxGeometry height="560" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="bgf" parent="1" style="text;fontSize=10;fontColor=#8c8c8c;align=left;whiteSpace=wrap;html=1;" value="（背景：上一页的技能市场列表，被抽屉遮挡变暗）" vertex="1">
+          <mxGeometry height="16" width="300" x="32" y="26" as="geometry" />
+        </mxCell>
+        <mxCell id="dr" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;spacing=6;fontSize=11;verticalAlign=middle;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="560" width="420" x="360" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="db" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="技能详情　code-review-std　　　　　　　　　　　　　　 × 关闭" vertex="1">
+          <mxGeometry height="28" width="420" x="360" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="l1" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="描述" vertex="1">
+          <mxGeometry height="18" width="200" x="376" y="58" as="geometry" />
+        </mxCell>
+        <mxCell id="b1" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="面向提交前自检与评审的部门规范：评审清单、阻断项判定、豁免口径与记录要求。" vertex="1">
+          <mxGeometry height="34" width="390" x="376" y="78" as="geometry" />
+        </mxCell>
+        <mxCell id="l2" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="适用范围（when to use）" vertex="1">
+          <mxGeometry height="18" width="300" x="376" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="涉及代码提交、评审请求的编码任务；不适用于纯配置变更。" vertex="1">
+          <mxGeometry height="32" width="390" x="376" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="l3" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="版本（单选 · 安装固定精确版本）" vertex="1">
+          <mxGeometry height="18" width="340" x="376" y="182" as="geometry" />
+        </mxCell>
+        <mxCell id="v1" parent="1" style="strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;fillColor=#f7fff2;whiteSpace=wrap;html=1;" value="◉　v1.5.0　最新 · 未安装 · 发布 10-25 · 状态 online" vertex="1">
+          <mxGeometry height="36" width="390" x="376" y="204" as="geometry" />
+        </mxCell>
+        <mxCell id="v2" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" value="○　v1.4.2　已安装 · 已启用 · 发布 09-12" vertex="1">
+          <mxGeometry height="36" width="390" x="376" y="246" as="geometry" />
+        </mxCell>
+        <mxCell id="l4" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="来源与完整性" vertex="1">
+          <mxGeometry height="18" width="200" x="376" y="296" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="Namespace：skill-prod（nacos.corp.example，占位）&lt;br&gt;标签 stable → 解析为 v1.5.0（安装后不再跟随标签）&lt;br&gt;SHA-256：ab12c3d4…（安装成功后本地记录并展示）&lt;br&gt;依赖声明：无（Skill 不安装任何外部依赖）" vertex="1">
+          <mxGeometry height="70" width="390" x="376" y="316" as="geometry" />
+        </mxCell>
+        <mxCell id="l5" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="安全说明" vertex="1">
+          <mxGeometry height="18" width="200" x="376" y="394" as="geometry" />
+        </mxCell>
+        <mxCell id="b5" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="安装不执行包内脚本、不授予工具权限、不安装依赖；同名本地技能存在时将拒绝安装。" vertex="1">
+          <mxGeometry height="34" width="390" x="376" y="414" as="geometry" />
+        </mxCell>
+        <mxCell id="ck" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="☑ 安装后立即启用（可取消勾选，仅安装不启用）" vertex="1">
+          <mxGeometry height="20" width="390" x="376" y="496" as="geometry" />
+        </mxCell>
+        <mxCell id="cancel" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="取消" vertex="1">
+          <mxGeometry height="26" width="70" x="376" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="inst" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="安装 v1.5.0 并启用" vertex="1">
+          <mxGeometry height="26" width="146" x="620" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="cd" parent="1" style="fillColor=#ffffff;strokeColor=#82b366;strokeWidth=2;rounded=0;align=left;verticalAlign=top;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="180" width="300" x="40" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="cdt" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;安装确认（用户专属操作）&lt;/b&gt;" vertex="1">
+          <mxGeometry height="20" width="270" x="56" y="92" as="geometry" />
+        </mxCell>
+        <mxCell id="cdb" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="技能：code-review-std@v1.5.0&lt;br&gt;作用域：全局&lt;br&gt;来源：nacos.corp.example / skill-prod&lt;br&gt;行为：下载 → 校验 → 安装并启用&lt;br&gt;不执行脚本 · 不授工具权限&lt;br&gt;同名冲突时拒绝并提示" vertex="1">
+          <mxGeometry height="98" width="270" x="56" y="116" as="geometry" />
+        </mxCell>
+        <mxCell id="cok" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="确认安装" vertex="1">
+          <mxGeometry height="26" width="90" x="96" y="218" as="geometry" />
+        </mxCell>
+        <mxCell id="cc" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="取消" vertex="1">
+          <mxGeometry height="26" width="60" x="196" y="218" as="geometry" />
+        </mxCell>
+        <mxCell id="note1" parent="1" style="fillColor=#fffbe6;strokeColor=#d6b656;dashed=1;align=left;verticalAlign=top;spacing=6;fontSize=10;whiteSpace=wrap;html=1;" value="交互规则&lt;br&gt;① 版本为单选，默认选中「最新 online 版本」；标签只辅助理解，落台账的永远是解析后的精确版本。&lt;br&gt;② 安装作用域默认全局；选「当前项目」则仅该项目内会话可见（对齐 DSH 项目根优先级：同名时项目级先于全局级）。&lt;br&gt;③ 「安装并启用」默认勾选；安装中 loading 可取消，失败给错误分类与重试。&lt;br&gt;④ 抽屉保持列表上下文：确认/取消后返回原滚动位置；作用域安装后可在已安装页随时转换。" vertex="1">
+          <mxGeometry height="180" width="300" x="40" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="note2" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="会话内由 agent 发起安装时&lt;br&gt;复用同一确认语义，见第 5 页审批弹窗" vertex="1">
+          <mxGeometry height="40" width="300" x="40" y="500" as="geometry" />
+        </mxCell>
+        <mxCell id="l6" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="安装作用域（写入受管目录，不写入项目源码树）" vertex="1">
+          <mxGeometry height="18" width="390" x="376" y="452" as="geometry" />
+        </mxCell>
+        <mxCell id="sc1" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="◉ 全局（本机所有工作区可用）　　○ 当前项目（demo-app，仅该项目会话可用）" vertex="1">
+          <mxGeometry height="18" width="390" x="376" y="472" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p3" name="3-已安装技能管理">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="w1" parent="1" style="fillColor=#ffffff;strokeColor=#666666;rounded=0;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="560" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="设置 ▸ 企业技能市场 ▸ 已安装（3 个）" vertex="1">
+          <mxGeometry height="28" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="tab1" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="浏览" vertex="1">
+          <mxGeometry height="22" width="60" x="20" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="tab2" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="已安装 3" vertex="1">
+          <mxGeometry height="22" width="76" x="84" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="hint" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="安装记录与包体均在本机受管目录；卸载只清理本插件拥有的资源" vertex="1">
+          <mxGeometry height="18" width="230" x="540" y="58" as="geometry" />
+        </mxCell>
+        <mxCell id="th" value="技能　｜　当前版本　｜　作用域　｜　状态　｜　远程　｜　操作" style="fillColor=#f5f5f5;strokeColor=#cccccc;fontStyle=1;fontSize=10;align=left;spacing=6;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="92" width="760" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="r1" parent="1" style="fillColor=#ffffff;strokeColor=#cccccc;align=left;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="46" width="760" x="20" y="116" as="geometry" />
+        </mxCell>
+        <mxCell id="r1a" value="code-review-std" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="122" width="165" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r1b" value="安装于 10-18 · SHA ab12c3d4" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="140" width="190" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="r1c" value="已启用" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="415" y="130" width="58" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r1d" value="v1.5.0 可更版" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="485" y="130" width="95" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r1e1" value="停用" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="588" y="128" width="40" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r1e2" value="更版" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="632" y="128" width="40" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r1e3" value="卸载" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="738" y="128" width="40" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" parent="1" style="fillColor=#ffffff;strokeColor=#cccccc;align=left;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="46" width="760" x="20" y="166" as="geometry" />
+        </mxCell>
+        <mxCell id="r2a" value="db-migration-guard" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="172" width="165" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r2b" value="安装于 09-30 · SHA 9f88e2a1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="190" width="190" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="r2c" value="已停用" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="415" y="180" width="58" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r2d" value="无变化" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="485" y="180" width="70" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r2e1" value="启用" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="588" y="178" width="40" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r2e2" value="卸载" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="738" y="178" width="40" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r3" parent="1" style="fillColor=#ffffff;strokeColor=#cccccc;align=left;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="46" width="760" x="20" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="r3a" value="api-doc-gen" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="222" width="165" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r3b" value="安装于 10-24 · SHA 31dd77b0" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="240" width="190" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="r3c" value="已启用" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="415" y="230" width="58" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r3d" value="远程下线" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="485" y="230" width="80" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r3e1" value="停用" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="588" y="228" width="40" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r3e2" value="卸载" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="738" y="228" width="40" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="pop" parent="1" style="fillColor=#ffffff;strokeColor=#82b366;strokeWidth=2;rounded=0;align=left;verticalAlign=top;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="120" width="270" x="500" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="popt" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;更版到 v1.5.0？&lt;/b&gt;" vertex="1">
+          <mxGeometry height="18" width="240" x="516" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="popb" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="旧版本目录保留至卸载；已进入&lt;br&gt;会话上下文的指令不受影响；已选&lt;br&gt;版本不跟随 stable 标签漂移。" vertex="1">
+          <mxGeometry height="52" width="240" x="516" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="popok" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="确认更版" vertex="1">
+          <mxGeometry height="24" width="80" x="516" y="364" as="geometry" />
+        </mxCell>
+        <mxCell id="popc" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="取消" vertex="1">
+          <mxGeometry height="24" width="55" x="604" y="364" as="geometry" />
+        </mxCell>
+        <mxCell id="nb" value="交互规则&lt;br&gt;① 状态机（页面徽章即台账事实）：未安装 → 已安装（默认启用）⇄ 停用；更版为显式动作；卸载进回收站。&lt;br&gt;② 作用域：安装时选「全局」或「当前项目」；列表展示作用域，可随时转换——转全局=所有工作区可见；转项目=仅该项目会话可见，离开项目即从会话目录消失。&lt;br&gt;③ 同名优先级：项目级 &gt; 全局级（对齐 DSH 原生项目根优先级）；企业技能仍不覆盖个人/项目本地技能。&lt;br&gt;④ 停用即新会话目录退役旧名；远程下线 ≠ 自动删除。&lt;br&gt;⑤ 「远程」列来自目录缓存，stale 时显示最后同步时间。" style="fillColor=#fffbe6;strokeColor=#d6b656;dashed=1;align=left;verticalAlign=top;spacing=6;fontSize=10;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="420" width="460" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="r1v" value="v1.4.2" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="205" y="130" width="72" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r1s" value="项目 · demo-app" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="130" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="r1e4" value="转全局" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="676" y="128" width="58" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r2v" value="v0.9.4" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="205" y="180" width="72" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r2s" value="全局" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="180" width="58" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="r2e3" value="转项目" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="632" y="178" width="58" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="r3v" value="v2.0.1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="205" y="230" width="72" height="18" as="geometry" />
+        </mxCell>
+        <mxCell id="r3s" value="全局" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="283" y="230" width="58" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="r3e3" value="转项目" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="632" y="228" width="58" height="22" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p4" name="4-技能源与凭据设置">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="w1" parent="1" style="fillColor=#ffffff;strokeColor=#666666;rounded=0;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="560" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="设置 ▸ 企业技能源（源参数由管理员配置下发；本页可写项仅凭据与刷新）" vertex="1">
+          <mxGeometry height="28" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="h1" parent="1" style="text;fontSize=15;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="企业技能源" vertex="1">
+          <mxGeometry height="24" width="240" x="40" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="l1" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="企业 Nacos 地址" vertex="1">
+          <mxGeometry height="18" width="180" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="f1" parent="1" style="fillColor=#f5f5f5;strokeColor=#b3b3b3;align=left;spacingLeft=6;fontColor=#666666;fontSize=11;whiteSpace=wrap;html=1;" value="https://nacos.corp.example（只读 · 占位示例）" vertex="1">
+          <mxGeometry height="24" width="380" x="220" y="98" as="geometry" />
+        </mxCell>
+        <mxCell id="l2" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="Namespace" vertex="1">
+          <mxGeometry height="18" width="180" x="40" y="134" as="geometry" />
+        </mxCell>
+        <mxCell id="f2" parent="1" style="fillColor=#f5f5f5;strokeColor=#b3b3b3;align=left;spacingLeft=6;fontColor=#666666;fontSize=11;whiteSpace=wrap;html=1;" value="skill-prod" vertex="1">
+          <mxGeometry height="24" width="380" x="220" y="132" as="geometry" />
+        </mxCell>
+        <mxCell id="l3" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="目录模式" vertex="1">
+          <mxGeometry height="18" width="180" x="40" y="168" as="geometry" />
+        </mxCell>
+        <mxCell id="f3" parent="1" style="fillColor=#f5f5f5;strokeColor=#b3b3b3;align=left;spacingLeft=6;fontColor=#666666;fontSize=11;whiteSpace=wrap;html=1;" value="console-list（按企业 Nacos 版本由管理员选定）" vertex="1">
+          <mxGeometry height="24" width="380" x="220" y="166" as="geometry" />
+        </mxCell>
+        <mxCell id="l4" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="目录刷新" vertex="1">
+          <mxGeometry height="18" width="180" x="40" y="202" as="geometry" />
+        </mxCell>
+        <mxCell id="f4" parent="1" style="fillColor=#f5f5f5;strokeColor=#b3b3b3;align=left;spacingLeft=6;fontColor=#666666;fontSize=11;whiteSpace=wrap;html=1;" value="每 5 分钟自动刷新　[暂停自动刷新]" vertex="1">
+          <mxGeometry height="24" width="380" x="220" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="l5" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="访问凭据" vertex="1">
+          <mxGeometry height="18" width="180" x="40" y="244" as="geometry" />
+        </mxCell>
+        <mxCell id="f5" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="46" width="380" x="220" y="238" as="geometry" />
+        </mxCell>
+        <mxCell id="f5a" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="● 已配置 · 存储于企业凭据（钥匙串）· 可写" vertex="1">
+          <mxGeometry height="18" width="260" x="232" y="244" as="geometry" />
+        </mxCell>
+        <mxCell id="f5b" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="值永不显示，也不进入会话、日志与模型上下文" vertex="1">
+          <mxGeometry height="16" width="260" x="232" y="262" as="geometry" />
+        </mxCell>
+        <mxCell id="f5c" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="修改…" vertex="1">
+          <mxGeometry height="24" width="60" x="520" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="sc" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="86" width="560" x="40" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="sct" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;目录同步状态&lt;/b&gt;" vertex="1">
+          <mxGeometry height="18" width="200" x="52" y="318" as="geometry" />
+        </mxCell>
+        <mxCell id="scb" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="上次同步：10-27 09:41（3 分钟前）　　可见条目：12　　状态：正常&lt;br&gt;失败时：保留上次目录并标注「过期」，已安装技能不受影响，安装/更版暂不可用。" vertex="1">
+          <mxGeometry height="50" width="420" x="52" y="338" as="geometry" />
+        </mxCell>
+        <mxCell id="scr" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="立即刷新" vertex="1">
+          <mxGeometry height="26" width="80" x="500" y="344" as="geometry" />
+        </mxCell>
+        <mxCell id="warn" parent="1" style="fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;align=left;spacing=8;whiteSpace=wrap;html=1;" value="⚠ 无法连接技能源：检查网络或凭据 [重试] [去配置凭据]　——　已安装技能仍可离线使用，本地目录不受影响" vertex="1">
+          <mxGeometry height="30" width="760" x="20" y="416" as="geometry" />
+        </mxCell>
+        <mxCell id="nb" parent="1" style="fillColor=#fffbe6;strokeColor=#d6b656;dashed=1;align=left;verticalAlign=top;spacing=6;fontSize=10;whiteSpace=wrap;html=1;" value="交互规则&lt;br&gt;① 页面权限边界：地址 / Namespace / 目录模式为管理员配置项，页面只读展示；用户专属可写操作仅「凭据录入」与「立即刷新 / 暂停刷新」。&lt;br&gt;② 未配置凭据时页面顶部呈现明确的未配置状态与录入引导（fail loud），搜索/安装入口给出可行动错误，不静默空白。&lt;br&gt;③ 凭据只显示配置状态（来源 / 可写性），任何界面不回显值；修改走 DSH 原生凭据面（企业钥匙串）。&lt;br&gt;④ 退出或切换身份后目录缓存清空，页面回到未同步态；不跨身份复用目录。&lt;br&gt;⑤ agent（模型）没有任何工具能修改本页内容 —— 本页所有变更都是用户手工操作。" vertex="1">
+          <mxGeometry height="112" width="760" x="20" y="462" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p5" name="5-会话内审批与使用">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="w1" parent="1" style="fillColor=#ffffff;strokeColor=#666666;rounded=0;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="560" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="DeepSeek Harness · 会话：接入企业技能" vertex="1">
+          <mxGeometry height="28" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="u1" parent="1" style="fillColor=#e8f0fe;strokeColor=#b3c7f2;rounded=1;align=left;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" value="帮我装一下最新的 code-review-std，装完直接用它的标准评审我这次提交" vertex="1">
+          <mxGeometry height="36" width="320" x="40" y="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ul" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="用户" vertex="1">
+          <mxGeometry height="14" width="80" x="40" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="a1" parent="1" style="fillColor=#f5f5f5;strokeColor=#cccccc;rounded=1;align=left;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" value="我先从企业技能目录查询并请求安装（需要你确认）：" vertex="1">
+          <mxGeometry height="30" width="320" x="40" y="118" as="geometry" />
+        </mxCell>
+        <mxCell id="tc" parent="1" style="fillColor=#fff2cc;strokeColor=#d6b656;rounded=1;align=left;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" value="🛠 skill_nacos_install　target: code-review-std@1.5.0&lt;br&gt;状态：等待用户审批 —— 企业策略：写操作需确认" vertex="1">
+          <mxGeometry height="44" width="360" x="60" y="158" as="geometry" />
+        </mxCell>
+        <mxCell id="pop" parent="1" style="fillColor=#ffffff;strokeColor=#82b366;strokeWidth=2;rounded=0;align=left;verticalAlign=top;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="180" width="320" x="440" y="110" as="geometry" />
+        </mxCell>
+        <mxCell id="pt" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="&lt;b&gt;技能安装请求（agent 发起 · 用户审批）&lt;/b&gt;" vertex="1">
+          <mxGeometry height="18" width="290" x="456" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="pb" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="目标：code-review-std@v1.5.0（精确版本）&lt;br&gt;来源：nacos.corp.example / skill-prod&lt;br&gt;动作：下载 → 校验 → 安装并启用&lt;br&gt;审批绑定（动作， 目标）：目标变化需重新确认&lt;br&gt;拒绝后：受管目录零变化，可继续追问" vertex="1">
+          <mxGeometry height="86" width="290" x="456" y="142" as="geometry" />
+        </mxCell>
+        <mxCell id="pok" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="允许本次" vertex="1">
+          <mxGeometry height="26" width="86" x="456" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="pno" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="拒绝" vertex="1">
+          <mxGeometry height="26" width="60" x="550" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" parent="1" style="fillColor=#f5f5f5;strokeColor=#cccccc;rounded=1;align=left;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" value="已安装并启用 code-review-std@v1.5.0（SHA-256 ab12c3d4…）。&lt;br&gt;本会话技能目录已更新，下面按该标准执行评审。" vertex="1">
+          <mxGeometry height="40" width="380" x="40" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="sysc" parent="1" style="rounded=1;align=left;spacing=8;fontSize=11;fillColor=#eef7ea;strokeColor=#b7d7ae;whiteSpace=wrap;html=1;" value="📘 会话技能目录（系统注入 · 有界摘要）&lt;br&gt;- code-review-std：提交前代码评审标准流程（部门规范）&lt;br&gt;- db-migration-guard：数据库变更自查 …（仅列已启用技能）" vertex="1">
+          <mxGeometry height="64" width="420" x="40" y="284" as="geometry" />
+        </mxCell>
+        <mxCell id="tc2" parent="1" style="fillColor=#fff2cc;strokeColor=#d6b656;rounded=1;align=left;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" value="🛠 skill　name: code-review-std&lt;br&gt;→ 已加载完整指令与资源基址（受管目录）" vertex="1">
+          <mxGeometry height="40" width="360" x="60" y="360" as="geometry" />
+        </mxCell>
+        <mxCell id="u2" parent="1" style="fillColor=#e8f0fe;strokeColor=#b3c7f2;rounded=1;align=left;spacing=8;fontSize=11;whiteSpace=wrap;html=1;" value="/code-review-std" vertex="1">
+          <mxGeometry height="26" width="160" x="40" y="416" as="geometry" />
+        </mxCell>
+        <mxCell id="u2n" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="用户显式调用：同一份指令直接注入本步" vertex="1">
+          <mxGeometry height="16" width="240" x="210" y="422" as="geometry" />
+        </mxCell>
+        <mxCell id="nb" parent="1" style="fillColor=#fffbe6;strokeColor=#d6b656;dashed=1;align=left;verticalAlign=top;spacing=6;fontSize=10;whiteSpace=wrap;html=1;" value="交互规则&lt;br&gt;① agent 发起的安装 / 更版 / 卸载一律弹审批：绑定（动作, 目标）一次性确认；策略未开放（enabled=false / 无台账）时不弹窗、直接拒绝并说明原因。&lt;br&gt;② 用户拒绝 = 受管目录零变化；「允许」执行后回填结果（版本 + SHA-256），会话目录消息随即追加替换。&lt;br&gt;③ 技能目录只注入已启用技能的有界摘要；远程目录全量数据绝不进入会话。&lt;br&gt;④ 模型经 skill 工具加载完整指令（结果即会话记录）；用户敲 /技能名 直接注入同构内容 —— 两条路径等价。&lt;br&gt;⑤ 可信源 / 凭据 / 策略配置没有任何会话内入口：模型无法自授权（人机双面边界）。" vertex="1">
+          <mxGeometry height="100" width="760" x="20" y="470" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p6" name="6-全旅程交互流程">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;fontSize=13;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="全旅程交互流程：发现 → 安装（审批）→ 启用使用 → 更版 / 停用 / 卸载（按角色泳道）" vertex="1">
+          <mxGeometry height="20" width="700" x="20" y="4" as="geometry" />
+        </mxCell>
+        <mxCell id="laneU" parent="1" style="swimlane;fillColor=#fbfbfb;strokeColor=#999999;fontSize=11;fontStyle=1;whiteSpace=wrap;html=1;" value="用户（研发）" vertex="1">
+          <mxGeometry height="110" width="700" x="20" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="u1" parent="laneU" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;whiteSpace=wrap;html=1;" value="打开企业技能市场" vertex="1">
+          <mxGeometry height="34" width="118" x="15" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u2" parent="laneU" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;whiteSpace=wrap;html=1;" value="搜索 / 浏览目录" vertex="1">
+          <mxGeometry height="34" width="118" x="150" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u3" parent="laneU" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;whiteSpace=wrap;html=1;" value="确认安装 / 会话内审批" vertex="1">
+          <mxGeometry height="34" width="126" x="290" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u4" parent="laneU" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;whiteSpace=wrap;html=1;" value="会话中使用：/技能名 或模型加载" vertex="1">
+          <mxGeometry height="34" width="126" x="430" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="u5" parent="laneU" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;whiteSpace=wrap;html=1;" value="更版 / 停用 / 卸载" vertex="1">
+          <mxGeometry height="34" width="120" x="560" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="laneP" parent="1" style="swimlane;fillColor=#fbfbfb;strokeColor=#999999;fontSize=11;fontStyle=1;whiteSpace=wrap;html=1;" value="DSH 页面与会话" vertex="1">
+          <mxGeometry height="110" width="700" x="20" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="p1" parent="laneP" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="目录面板（分页有界）" vertex="1">
+          <mxGeometry height="34" width="118" x="15" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="p2" parent="laneP" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="详情 + 版本单选" vertex="1">
+          <mxGeometry height="34" width="118" x="150" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="p3" parent="laneP" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="安装确认 / 审批弹窗" vertex="1">
+          <mxGeometry height="34" width="126" x="290" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="p4" parent="laneP" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="会话技能目录更新" vertex="1">
+          <mxGeometry height="34" width="126" x="430" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="p5" parent="laneP" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="已安装列表 / 徽章刷新" vertex="1">
+          <mxGeometry height="34" width="120" x="560" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="laneH" parent="1" style="swimlane;fillColor=#fbfbfb;strokeColor=#999999;fontSize=11;fontStyle=1;whiteSpace=wrap;html=1;" value="Host 插件 forge-skill-nacos" vertex="1">
+          <mxGeometry height="128" width="700" x="20" y="266" as="geometry" />
+        </mxCell>
+        <mxCell id="h1" parent="laneH" style="rounded=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;whiteSpace=wrap;html=1;" value="目录轮询刷新（零安装副作用）" vertex="1">
+          <mxGeometry height="40" width="118" x="15" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="h0" parent="laneH" style="rounded=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;whiteSpace=wrap;html=1;" value="台账：已装状态唯一真源" vertex="1">
+          <mxGeometry height="40" width="118" x="150" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="h2" parent="laneH" style="rounded=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;whiteSpace=wrap;html=1;" value="下载 → 校验 → 原子提交" vertex="1">
+          <mxGeometry height="40" width="126" x="290" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="h3" parent="laneH" style="rounded=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;whiteSpace=wrap;html=1;" value="invalidate 目录失效" vertex="1">
+          <mxGeometry height="40" width="126" x="430" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="h5" parent="laneH" style="rounded=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;whiteSpace=wrap;html=1;" value="清理受管资源（仅插件所有）" vertex="1">
+          <mxGeometry height="40" width="120" x="560" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="laneN" parent="1" style="swimlane;fillColor=#fbfbfb;strokeColor=#999999;fontSize=11;fontStyle=1;whiteSpace=wrap;html=1;" value="企业 Nacos（Skill Registry）" vertex="1">
+          <mxGeometry height="104" width="700" x="20" y="406" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" parent="laneN" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;whiteSpace=wrap;html=1;" value="目录 list / search（只读）" vertex="1">
+          <mxGeometry height="36" width="118" x="15" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" parent="laneN" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;whiteSpace=wrap;html=1;" value="ZIP 下载（精确版本）" vertex="1">
+          <mxGeometry height="36" width="126" x="290" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="u1" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="p1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="p1" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="h1" value="读缓存">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="h1" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="n1" value="轮询">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="u2" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="p2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="p2" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="h0" value="本地状态">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="u3" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="p3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="p3" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="h2" value="批准">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="h2" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="n2" value="请求 ZIP">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="h2" style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=9;html=1;" target="h3" value="提交成功">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="h3" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=0;entryX=0.5;entryY=1;fontSize=9;html=1;" target="p4" value="skills/change">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="p4" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=0;entryX=0.5;entryY=1;fontSize=9;html=1;" target="u4" value="目录出现">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="u5" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="p5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="p5" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=9;html=1;" target="h5" value="显式操作">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lgd" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="关键不变量：目录刷新零副作用 ｜ 安装固定精确版本、不跟随标签 ｜ 停用 = 新会话目录退役旧名 ｜ 卸载仅清理插件受管资源，不回改会话历史" vertex="1">
+          <mxGeometry height="18" width="700" x="20" y="522" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p7" name="7-更版差异预览">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="w1" parent="1" style="fillColor=#ffffff;strokeColor=#666666;rounded=0;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="560" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="设置 ▸ 企业技能市场 ▸ 已安装 — code-review-std ▸ 查看更新" vertex="1">
+          <mxGeometry height="28" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="d1" parent="1" style="fillColor=#ffffff;strokeColor=#999999;align=left;verticalAlign=top;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="400" width="720" x="40" y="58" as="geometry" />
+        </mxCell>
+        <mxCell id="db" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="更版预览　code-review-std　v1.4.2 → v1.5.0　　　　　　　　　　　　　　　　　　 × 关闭" vertex="1">
+          <mxGeometry height="26" width="720" x="40" y="58" as="geometry" />
+        </mxCell>
+        <mxCell id="lh" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="当前　v1.4.2（已安装 · SHA ab12c3d4）" vertex="1">
+          <mxGeometry height="18" width="330" x="58" y="96" as="geometry" />
+        </mxCell>
+        <mxCell id="rh" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="目标　v1.5.0（online · 发布 10-25 · SHA 77aa55bb）" vertex="1">
+          <mxGeometry height="18" width="340" x="412" y="96" as="geometry" />
+        </mxCell>
+        <mxCell id="l1" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="## 评审清单" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="l2" parent="1" style="fillColor=#fde7e9;strokeColor=#f1948a;align=left;spacingLeft=8;fontSize=10;fontColor=#7b241c;whiteSpace=wrap;html=1;" value="- 阻断项：未通过静态扫描" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="144" as="geometry" />
+        </mxCell>
+        <mxCell id="l3" parent="1" style="fillColor=#fde7e9;strokeColor=#f1948a;align=left;spacingLeft=8;fontSize=10;fontColor=#7b241c;whiteSpace=wrap;html=1;" value="- 豁免：口头批准即可记录" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="168" as="geometry" />
+        </mxCell>
+        <mxCell id="l4" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="## 豁免口径" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="192" as="geometry" />
+        </mxCell>
+        <mxCell id="l5" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="豁免需在评审记录中登记" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="l6" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="## 记录要求" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="l7" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="评审结论写入提交说明" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="264" as="geometry" />
+        </mxCell>
+        <mxCell id="l8" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="资源：checklist.md（无变化）" vertex="1">
+          <mxGeometry height="20" width="330" x="58" y="288" as="geometry" />
+        </mxCell>
+        <mxCell id="r1" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="## 评审清单" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" parent="1" style="fillColor=#e9f7ef;strokeColor=#82c99a;align=left;spacingLeft=8;fontSize=10;fontColor=#145a32;whiteSpace=wrap;html=1;" value="+ 阻断项：未通过静态扫描与单测门禁" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="144" as="geometry" />
+        </mxCell>
+        <mxCell id="r3" parent="1" style="fillColor=#e9f7ef;strokeColor=#82c99a;align=left;spacingLeft=8;fontSize=10;fontColor=#145a32;whiteSpace=wrap;html=1;" value="+ 豁免：需书面豁免单并附编号" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="168" as="geometry" />
+        </mxCell>
+        <mxCell id="r4" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="## 豁免口径" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="192" as="geometry" />
+        </mxCell>
+        <mxCell id="r5" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="豁免需在评审记录中登记" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="216" as="geometry" />
+        </mxCell>
+        <mxCell id="r6" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="## 记录要求" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="r7" parent="1" style="fillColor=#e9f7ef;strokeColor=#82c99a;align=left;spacingLeft=8;fontSize=10;fontColor=#145a32;whiteSpace=wrap;html=1;" value="+ 评审结论同步至变更单" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="264" as="geometry" />
+        </mxCell>
+        <mxCell id="r8" parent="1" style="fillColor=#f9f9f9;strokeColor=#dddddd;align=left;spacingLeft=8;fontSize=10;fontColor=#444444;whiteSpace=wrap;html=1;" value="资源：checklist.md（无变化）" vertex="1">
+          <mxGeometry height="20" width="340" x="412" y="288" as="geometry" />
+        </mxCell>
+        <mxCell id="lgd" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="图例：红 = 当前版本将被移除的内容　绿 = 目标版本新增的内容　灰 = 未变化（两侧一致）" vertex="1">
+          <mxGeometry height="16" width="690" x="58" y="322" as="geometry" />
+        </mxCell>
+        <mxCell id="sum" parent="1" style="fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;spacing=8;whiteSpace=wrap;html=1;" value="变更摘要：新增 2 项阻断门槛；豁免从口头改为书面豁免单；评审结论需同步变更单；资源文件无变化（差异 14 行）" vertex="1">
+          <mxGeometry height="30" width="690" x="58" y="346" as="geometry" />
+        </mxCell>
+        <mxCell id="cc" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="取消" vertex="1">
+          <mxGeometry height="26" width="70" x="520" y="408" as="geometry" />
+        </mxCell>
+        <mxCell id="ok" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="确认更版到 v1.5.0" vertex="1">
+          <mxGeometry height="26" width="148" x="600" y="408" as="geometry" />
+        </mxCell>
+        <mxCell id="nb" parent="1" style="fillColor=#fffbe6;strokeColor=#d6b656;dashed=1;align=left;verticalAlign=top;spacing=6;fontSize=10;whiteSpace=wrap;html=1;" value="交互规则（参考 dsm-skills-manager v1.2.20「查看更新→Diff 预览→确认更新」模式，仅参考交互流程）&lt;br&gt;① 双栏对比为两个精确版本的 SKILL.md 差异，不是分支或文件快照 diff；资源/依赖声明有变化时单独列出。&lt;br&gt;② 确认后才进入安装事务（下载→校验→原子提交）；旧版本保留在受管目录，本页随时可「回退到 v1.4.2」（注册表精确版本，非文件备份恢复）。&lt;br&gt;③ 取消或关闭零副作用；已进入会话上下文的旧指令不受影响（弹窗内明示）。" vertex="1">
+          <mxGeometry height="96" width="720" x="40" y="474" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="p8" name="8-回收站与恢复">
+    <mxGraphModel dx="1138" dy="572" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="w1" parent="1" style="fillColor=#ffffff;strokeColor=#666666;rounded=0;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="560" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="t1" parent="1" style="fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;align=left;spacingLeft=8;whiteSpace=wrap;html=1;" value="设置 ▸ 企业技能市场 ▸ 回收站（2 个）" vertex="1">
+          <mxGeometry height="28" width="760" x="20" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="v1" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="浏览 12" vertex="1">
+          <mxGeometry height="22" width="70" x="20" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="v2" parent="1" style="rounded=1;fillColor=#e6e6e6;strokeColor=#999999;fontSize=10;fontColor=#666666;whiteSpace=wrap;html=1;" value="已安装 3" vertex="1">
+          <mxGeometry height="22" width="80" x="94" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="v3" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;whiteSpace=wrap;html=1;" value="回收站 2" vertex="1">
+          <mxGeometry height="22" width="84" x="178" y="56" as="geometry" />
+        </mxCell>
+        <mxCell id="hint" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="卸载的技能在此保留完整安装身份，可随时恢复（视图切换：浏览 / 已安装 / 回收站）" vertex="1">
+          <mxGeometry height="18" width="350" x="420" y="58" as="geometry" />
+        </mxCell>
+        <mxCell id="th" parent="1" style="fillColor=#f5f5f5;strokeColor=#cccccc;fontStyle=1;fontSize=10;align=left;spacing=6;whiteSpace=wrap;html=1;" value="技能　｜　精确版本　｜　来源　｜　卸载时间　｜　保留信息　｜　操作" vertex="1">
+          <mxGeometry height="24" width="760" x="20" y="92" as="geometry" />
+        </mxCell>
+        <mxCell id="r1" parent="1" style="fillColor=#ffffff;strokeColor=#cccccc;align=left;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="52" width="760" x="20" y="116" as="geometry" />
+        </mxCell>
+        <mxCell id="r1a" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="legacy-lint" vertex="1">
+          <mxGeometry height="18" width="140" x="30" y="122" as="geometry" />
+        </mxCell>
+        <mxCell id="r1b" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="前端组 · 远程已下线后卸载" vertex="1">
+          <mxGeometry height="16" width="170" x="30" y="142" as="geometry" />
+        </mxCell>
+        <mxCell id="r1c" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="v1.0.0" vertex="1">
+          <mxGeometry height="18" width="80" x="210" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="r1d" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="corp-nacos / skill-prod" vertex="1">
+          <mxGeometry height="18" width="130" x="300" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="r1e" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="10-27 09:12" vertex="1">
+          <mxGeometry height="18" width="80" x="440" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="r1f" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="SHA 31dd77b0 · 包体与台账身份完整保留" vertex="1">
+          <mxGeometry height="18" width="180" x="520" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="r1g" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="恢复" vertex="1">
+          <mxGeometry height="22" width="60" x="700" y="126" as="geometry" />
+        </mxCell>
+        <mxCell id="r1h" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="永久删除" vertex="1">
+          <mxGeometry height="18" width="60" x="700" y="152" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" parent="1" style="fillColor=#ffffff;strokeColor=#cccccc;align=left;spacing=6;fontSize=11;whiteSpace=wrap;html=1;" vertex="1">
+          <mxGeometry height="52" width="760" x="20" y="176" as="geometry" />
+        </mxCell>
+        <mxCell id="r2a" parent="1" style="text;fontSize=11;fontStyle=1;align=left;whiteSpace=wrap;html=1;" value="trial-skill" vertex="1">
+          <mxGeometry height="18" width="140" x="30" y="182" as="geometry" />
+        </mxCell>
+        <mxCell id="r2b" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="测试体验后卸载" vertex="1">
+          <mxGeometry height="16" width="170" x="30" y="202" as="geometry" />
+        </mxCell>
+        <mxCell id="r2c" parent="1" style="text;fontSize=11;align=left;whiteSpace=wrap;html=1;" value="v0.3.1" vertex="1">
+          <mxGeometry height="18" width="80" x="210" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="r2d" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="corp-nacos / skill-prod" vertex="1">
+          <mxGeometry height="18" width="130" x="300" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="r2e" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="10-25 16:40" vertex="1">
+          <mxGeometry height="18" width="80" x="440" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="r2f" parent="1" style="text;fontSize=10;fontColor=#666666;align=left;whiteSpace=wrap;html=1;" value="SHA 88cc21e0 · 包体与台账身份完整保留" vertex="1">
+          <mxGeometry height="18" width="180" x="520" y="190" as="geometry" />
+        </mxCell>
+        <mxCell id="r2g" parent="1" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;whiteSpace=wrap;html=1;" value="恢复" vertex="1">
+          <mxGeometry height="22" width="60" x="700" y="186" as="geometry" />
+        </mxCell>
+        <mxCell id="r2h" parent="1" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=11;whiteSpace=wrap;html=1;" value="永久删除" vertex="1">
+          <mxGeometry height="18" width="60" x="700" y="212" as="geometry" />
+        </mxCell>
+        <mxCell id="empty" parent="1" style="fillColor=none;strokeColor=#cccccc;dashed=1;align=center;fontSize=11;fontColor=#999999;whiteSpace=wrap;html=1;" value="回收站为空时：&quot;卸载的技能会在这里保留（默认 30 天，可配置）。到期前可完整恢复；到期后仅剩永久删除。&quot;" vertex="1">
+          <mxGeometry height="60" width="760" x="20" y="248" as="geometry" />
+        </mxCell>
+        <mxCell id="nb" parent="1" style="fillColor=#fffbe6;strokeColor=#d6b656;dashed=1;align=left;verticalAlign=top;spacing=6;fontSize=10;whiteSpace=wrap;html=1;" value="交互规则（参考 dsm-skills-manager v1.2.20 回收站/防误删模式，仅参考交互流程）&lt;br&gt;① 卸载默认进回收站：受管目录包体保留、台账移入回收状态；恢复 = 校验 SHA 后重新登记台账（回到卸载前启用状态），永久删除 = 清除受管资源（二次确认）。&lt;br&gt;② 回收站条目不出现在浏览/已安装视图，不参与会话技能目录与模型可见。&lt;br&gt;③ 保留期默认 30 天（配置项）；到期条目标注待清理，清理动作需用户确认，不自动静默删除。&lt;br&gt;④ 与 dsm 差异：按「技能@精确版本+SHA」保留安装身份（注册表语义），非文件级备份；远程下线不影响回收站恢复。" vertex="1">
+          <mxGeometry height="130" width="760" x="20" y="330" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

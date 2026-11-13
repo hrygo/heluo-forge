@@ -1,0 +1,49 @@
+{
+  "name": "@heluo/forge-skill-nacos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Enterprise Nacos skill discovery, precise-version install, and DSH native loading (#97)",
+  "engines": {
+    "dsh": ">=0.2.1-rc.3"
+  },
+  "scripts": {
+    "test": "node --test",
+    "build": "node scripts/build-client.mjs"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./client.cjs",
+    "./catalog": "./src/catalog.mjs",
+    "./errors": "./src/errors.mjs",
+    "./ledger": "./src/ledger.mjs",
+    "./provider": "./src/provider.mjs",
+    "./routes": "./src/routes.mjs",
+    "./service": "./src/service.mjs",
+    "./tools": "./src/tools.mjs",
+    "./validate": "./src/validate.mjs",
+    "./zip": "./src/zip.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "src",
+    "client.cjs",
+    "README.md",
+    "cordis.patch.yml"
+  ],
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
