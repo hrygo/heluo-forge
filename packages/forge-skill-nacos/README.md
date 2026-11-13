@@ -1,6 +1,6 @@
 # @heluo/forge-skill-nacos
 
-状态：可用（开发骨架；目录三模式客户端、ZIP 有界校验与原子安装事务、台账（作用域/回收站）、`ctx.skills` Provider、只读+写工具面、**设置面板「企业技能市场」页（Web）**已实现，离线测试与宿主探针通过；企业 Nacos 已本地联调（2026-10-29），安装类动作按范围差异保持关闭）
+状态：可用（开发骨架；目录三模式客户端、ZIP 有界校验与原子安装事务、台账（作用域/回收站）、`ctx.skills` Provider、只读+写工具面、**设置面板「企业技能市场」页（Web）**已实现，离线测试与宿主探针通过；本机 Nacos 3.2/3.2.1 已实测联调（2026-10-29/11-13，含三账号身份矩阵与 web profile 双环境部署）；企业 Nacos 未接，安装类动作按范围差异保持关闭）
 
 一句话：把企业 Nacos Skill Registry 接进 DSH 原生技能机制——发现只读、安装固定精确版本、启用后经原生目录/`skill` 工具/`/技能名` 使用；拒绝即零副作用，凭据与可信源配置不进模型上下文。
 
@@ -30,7 +30,7 @@
 ## 测试
 
 ```sh
-node --test packages/forge-skill-nacos/test/*.test.mjs   # 离线：41 例
+node --test packages/forge-skill-nacos/test/*.test.mjs   # 离线：52 例
 DSH_BIN=<dsh 可执行文件> node scripts/probe/run-skill-nacos-probe.mjs   # 宿主探针：10 项
 ```
 
@@ -42,4 +42,4 @@ DSH_BIN=<dsh 可执行文件> node scripts/probe/run-skill-nacos-probe.mjs   # �
 - S6/ADR-11/13 范围差异批准前，安装类动作保持关闭。
 - forge-policy 受控动作目录登记（`skill-nacos.*`）与审批台账。
 - 真实 DSH 宿主探针与三平台实机（AC10）。
-- Client 管理面板（PRD P0 面板范围另行准入）。
+- Client 面板目标宿主实机验收（当前仅本机 web profile 实测，desktop/Electron 渲染未验）。

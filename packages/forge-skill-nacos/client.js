@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     const PANEL_ORDER = 3;
     const STYLE_ID = 'fsn-panel-style-v2';
 
-    /* ── 国际化 ─────────────────────────────────────────── */
+    // §1 国际化
     const DICT = {
       zh: {
         'title': '企业技能市场', 'desc': '从企业 Nacos 发现并安装技能；启用后进入会话技能目录。',
@@ -83,7 +83,7 @@ window.__ModuleLoader__.load({
       },
     };
 
-    /* ── 工具 ────────────────────────────────────────────── */
+    // §2 IO 边界与工具（api 构造错误体，resultNotice 是唯一解包口）
     function api(path, body) {
       const url = resolveUrl(path);
       const init = body === undefined
@@ -101,8 +101,13 @@ window.__ModuleLoader__.load({
       catch { return path; }
     }
     function fmtDate(iso) { if (!iso) return '—'; try { return new Date(iso).toLocaleString(); } catch { return iso; } }
+    /** P5 单一读取口：错误体（Error + code）只在此解包渲染，调用方不得自行拼接。 */
+    function resultNotice(e) {
+      const code = e?.code ?? '';
+      return `${code}${code ? ' ' : ''}${e?.message ?? String(e)}`;
+    }
 
-    /* ── 样式（对齐 PRD 设计语言；宿主 CSS 变量保主题一致） ── */
+    // §3 样式（对齐 PRD 设计语言；宿主 CSS 变量保主题一致）
     const CSS = `
     #${STYLE_ID}{all:initial}
     .fsn-root{--fsn-gap:12px;--fsn-c1:#1a1a1a;--fsn-c2:#666;--fsn-c3:#999;--fsn-bd:#d0d0d0;--fsn-pri:#2563eb;--fsn-bg:#fff;display:flex;flex-direction:column;height:100%;min-height:0;font-size:13px;color:var(--dsw-alias-label-primary,var(--fsn-c1));font-family:inherit}
@@ -175,19 +180,19 @@ window.__ModuleLoader__.load({
       (document.head ?? document.documentElement).appendChild(style);
     }
 
-    /* ── 侧栏图标 ────────────────────────────────────────── */
+    // §4 侧栏图标
     function SidebarIcon({ size = 16 }) {
       return h('svg', { width: size, height: size, viewBox: '0 0 16 16', fill: 'currentColor', 'aria-hidden': true },
         h('path', { d: 'M2 3.5A1.5 1.5 0 0 1 3.5 2h4A1.5 1.5 0 0 1 9 3.5V5H7.5A2.5 2.5 0 0 0 5 7.5V9H3.5A1.5 1.5 0 0 1 2 7.5v-4Z' }),
         h('path', { d: 'M6.5 7A1.5 1.5 0 0 1 8 5.5h4A1.5 1.5 0 0 1 13.5 7v5a1.5 1.5 0 0 1-1.5 1.5H8A1.5 1.5 0 0 1 6.5 12V7Z' }));
     }
 
-    /* ── 徽章 ───────────────────────────────────────────── */
+    // §5 徽章
     function Badge({ tone = '', children }) {
       return h('span', { className: 'fsn-badge', ...(tone ? { 'data-tone': tone } : {}) }, children);
     }
 
-    /* ── 确认弹窗 ────────────────────────────────────────── */
+    // §6 确认弹窗
     function ConfirmDialog({ title, body, t, onConfirm, onCancel }) {
       if (!title) return null;
       return h('div', { className: 'fsn-confirm' },
@@ -198,7 +203,7 @@ window.__ModuleLoader__.load({
           h('button', { className: 'fsn-btn fsn-btn-primary', onClick: onConfirm }, title)));
     }
 
-    /* ── 详情抽屉 ────────────────────────────────────────── */
+    // §7 详情抽屉
     function DetailDrawer({ skill, local, t, onClose, onInstall }) {
       const [selectedVersion, setSelectedVersion] = React.useState(undefined);
       const [showConfirm, setShowConfirm] = React.useState(false);
@@ -267,7 +272,7 @@ window.__ModuleLoader__.load({
           : null);
     }
 
-    /* ── 浏览视图 ────────────────────────────────────────── */
+    // §8 浏览视图
     function BrowseView({ t, catalog, installed, loading, keyword, setKeyword, onRefresh, onDetail, onAction, busy }) {
       const [filter, setFilter] = React.useState('all');
       const allItems = catalog?.items ?? [];
@@ -351,7 +356,7 @@ window.__ModuleLoader__.load({
             : h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } }, ...cards));
     }
 
-    /* ── 已安装视图 ──────────────────────────────────────── */
+    // §9 已安装视图
     function InstalledView({ t, installed, catalog, onDetail, onAction, busy }) {
       const [confirm, setConfirm] = React.useState(undefined);
       if (installed.length === 0) return h('div', { className: 'fsn-empty' }, t('state.emptyInstalled'));
@@ -406,7 +411,7 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null, table, dialog);
     }
 
-    /* ── 回收站视图 ──────────────────────────────────────── */
+    // §10 回收站视图
     function TrashView({ t, trash, onAction, busy }) {
       const [confirmPurge, setConfirmPurge] = React.useState(undefined);
       if (trash.length === 0) return h('div', { className: 'fsn-empty' }, t('state.emptyTrash'));
@@ -442,7 +447,7 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null, table, dialog);
     }
 
-    /* ── 源设置视图（环境切换） ─────────────────────────── */
+    // §11 源设置视图（环境切换）
     function SettingsView({ t, onSaved, busy }) {
       const [settings, setSettings] = React.useState(undefined);
       const [activeEnv, setActiveEnv] = React.useState(undefined);
@@ -452,7 +457,7 @@ window.__ModuleLoader__.load({
         api(`${API}/settings`).then((r) => {
           setSettings(r);
           setActiveEnv(r.effective?.activeEnvironmentId ?? r.environments?.[0]?.id ?? '');
-        }).catch((e) => setMsg({ kind: 'err', text: e.message }));
+        }).catch((e) => setMsg({ kind: 'err', text: resultNotice(e) }));
       }, []);
       React.useEffect(() => { load(); }, [load]);
 
@@ -466,7 +471,7 @@ window.__ModuleLoader__.load({
           setMsg({ kind: 'ok', text: t('settings.saved') });
           onSaved();
         } catch (e) {
-          setMsg({ kind: 'err', text: `${e.code ?? ''} ${e.message}` });
+          setMsg({ kind: 'err', text: resultNotice(e) });
         }
       };
 
@@ -492,7 +497,7 @@ window.__ModuleLoader__.load({
         : h('div', { className: 'fsn-empty' }, t('settings.noEnvironments')));
     }
 
-    /* ── 主面板（四视图 + 抽屉 + 弹窗） ─────────────────── */
+    // §12 主面板（四视图 + 抽屉 + 弹窗）
     function MainPanel({ t }) {
       ensureStyle();
       const [tab, setTab] = React.useState('browse');
@@ -517,7 +522,7 @@ window.__ModuleLoader__.load({
           setStatus(s); setCatalog(c); setInstalled(i.items ?? []);
           api(`${API}/trash`).then((r) => setTrash(r.items ?? [])).catch(() => setTrash([]));
         } catch (error) {
-          setMessage({ kind: 'err', text: `${error.code ?? ''} ${error.message}` });
+          setMessage({ kind: 'err', text: resultNotice(error) });
         } finally { setBusy(false); }
       }, []);
       React.useEffect(() => { void loadAll(''); }, [loadAll]);
@@ -538,7 +543,7 @@ window.__ModuleLoader__.load({
           await loadAll(keyword);
           if (detailName) { try { setDetailSkill(await api(`${API}/skill?name=${encodeURIComponent(detailName)}`)); } catch {} }
         } catch (error) {
-          setMessage({ kind: 'err', text: `${error.code ?? ''} ${error.message}` });
+          setMessage({ kind: 'err', text: resultNotice(error) });
         } finally { setBusy(false); }
       };
 
@@ -573,13 +578,13 @@ window.__ModuleLoader__.load({
         }) : null);
     }
 
-    /* ── 设置页入口（弹窗内） ────────────────────────────── */
+    // §13 设置页入口（弹窗内）
     function SettingsSection({ t }) {
       ensureStyle();
       return h('div', { style: { padding: '8px 0' } }, h(MainPanel, { t }));
     }
 
-    /* ── 插件注册 ────────────────────────────────────────── */
+    // §14 插件注册（出口）
     const inject = ['slots', 'locale'];
 
     function apply(ctx) {

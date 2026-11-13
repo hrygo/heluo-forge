@@ -25,7 +25,9 @@ test('the manifest declares the repository package contract', async () => {
 test('the README claims only the skeleton and its boundaries', async () => {
   const text = await read('README.md');
   assert.match(text, /状态：可用/);
-  assert.match(text, /企业 Nacos 已本地联调/);
+  // 边界表述：本机联调须与「企业未接」并提，不得写成企业联调已通过。
+  assert.match(text, /本机 Nacos .* 已实测联调/);
+  assert.match(text, /企业 Nacos 未接/);
   assert.match(text, /安装类动作按范围差异保持关闭/);
   assert.doesNotMatch(text, /已实测通过企业 Nacos/);
 });

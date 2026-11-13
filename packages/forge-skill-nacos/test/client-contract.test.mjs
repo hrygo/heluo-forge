@@ -24,3 +24,17 @@ test('api() call sites pass data objects, never fetch-init shapes', () => {
     'api() 第二参不得是 fetch-init 形状对象',
   );
 });
+
+test('section anchors §1..§14 are present in order (ENG-003 P1)', () => {
+  const numbers = [...text.matchAll(/^ {4}\/\/ §(\d+) /gm)].map((m) => Number(m[1]));
+  assert.deepEqual(numbers, Array.from({ length: 14 }, (_, i) => i + 1), '锚点须从 §1 连续编号');
+});
+
+test('error body is unpacked only in resultNotice (ENG-003 P5)', () => {
+  // 符号归属：错误码解包只允许出现在 resultNotice；api() 构造错误体不算解包渲染。
+  // 模板插值 `${....code}` 形态即视为分散解包。
+  assert.doesNotMatch(text, /\$\{[^}]*\.code/, '不得在模板插值中直接解包错误码');
+  const callSites = text.match(/text: resultNotice\(/g) ?? [];
+  assert.equal(callSites.length, 4, '四个错误提示位须全部经 resultNotice 渲染');
+  assert.equal((text.match(/function resultNotice\(/g) ?? []).length, 1, 'resultNotice 唯一定义');
+});

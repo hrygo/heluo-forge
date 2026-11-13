@@ -20,6 +20,7 @@ import { createSkillProvider } from './provider.mjs';
 import { registerClientRoutes } from './routes.mjs';
 import { createSkillNacosService } from './service.mjs';
 import { createSettingsOverlay } from './settings.mjs';
+import { createCatalogPoller } from './poll.mjs';
 import { buildSkillNacosTools } from './tools.mjs';
 
 export const name = 'forge-skill-nacos';
@@ -132,23 +133,16 @@ export async function apply(ctx, rawConfig = {}) {
   }
 
   // 目录轮询：超时由请求层兜底，失败退避加抖动；刷新零安装副作用（设计 §7.1）。
-  let stopped = false;
-  let timer;
-  let backoffMs = 0;
-  const schedule = (delay) => {
-    if (stopped || config.catalogRefreshIntervalMs <= 0) return;
-    timer = setTimeout(async () => {
-      const result = await service.refreshCatalog();
-      backoffMs = result.ok ? 0 : Math.min(backoffMs === 0 ? 1000 : backoffMs * 2, config.pollMaxBackoffMs);
-      const jitter = Math.floor(Math.random() * config.pollJitterMs);
-      schedule(config.catalogRefreshIntervalMs + backoffMs + jitter);
-    }, delay);
-  };
-  schedule(config.catalogRefreshIntervalMs);
+  // 调度状态机归 poll.mjs 所有（ENG-003 P2：装配点只装配）。
+  const poller = createCatalogPoller({
+    refresh: () => service.refreshCatalog(),
+    intervalMs: config.catalogRefreshIntervalMs,
+    pollMaxBackoffMs: config.pollMaxBackoffMs,
+    pollJitterMs: config.pollJitterMs,
+  });
 
   const teardown = () => {
-    stopped = true;
-    if (timer !== undefined) clearTimeout(timer);
+    poller.stop();
     for (const dispose of disposers) dispose?.();
     disposeProvide?.();
     disposeProvider?.();
