@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-004 |
 | 文档名称 | SQLite 存储扩展与使用规范 |
-| 版本 | V0.1.0 |
+| 版本 | V0.1.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-13 |
 | 门禁 | 新增或修改 SQLite 存储时复核 |
 
 > 编制依据：仓库凭据存储与 IAM 源码、测试和[凭据包说明](../../packages/forge-credentials-keychain/README.md)，以及 [SQLite 官方文档](https://www.sqlite.org/docs.html)和 [Node.js 24 SQLite API](https://github.com/nodejs/node/blob/v24.21.0/doc/api/sqlite.md)；核验日期为 2026-11-12。本文的业务数据库示例使用内存数据库；现有离线测试与示例不代表目标宿主、企业环境或生产备份恢复已完成验证。
@@ -59,7 +59,7 @@ IAM access token、refresh token 和 IAM 会话记录由 IAM 管理；插件按�
 
 提供器对更新事件失败的日志处理见[凭据包说明](../../packages/forge-credentials-keychain/README.md#装配与读取)；监听器自身的日志和错误输出仍须遵循本节的敏感信息要求。
 
-Host 和 CLI 要读取同一存储时，目录与命名空间必须一致。该后端只支持同机、同 PID namespace 的本地文件系统，存储目录必须在 Git 工作区外。数据库与 keyring 的布局、平台默认目录、权限要求、旧格式拒绝行为和错误细节以[凭据包说明](../../packages/forge-credentials-keychain/README.md)为准。
+Host 和 CLI 要读取同一存储时，目录与命名空间必须一致。该后端只支持同机、同 PID namespace 的本地文件系统，存储目录必须在 Git 工作区外。数据库与 keyring 的布局、平台默认目录、权限要求、旧格式处理行为和错误细节以[凭据包说明](../../packages/forge-credentials-keychain/README.md)为准。
 
 写入通过凭据后端的逻辑锁串行化，实际数据库写事务保持短暂。默认 `lockTimeoutMs` 是每个等待阶段的上限，不是整次操作的总时限。`modifyRecord()` 的回调即使是异步的，也不能在回调内再次调用同一后端的写接口；远程请求和用户交互应移出锁与写事务。回调返回 `undefined` 表示不写入；删除使用 `deleteRecord()`。更新时返回新记录，不原地修改输入后返回 `undefined`。单记录更新不能代替网关凭据与元数据的联合条件提交；IAM 的受信组合能力不对外扩展成任意业务表事务。
 

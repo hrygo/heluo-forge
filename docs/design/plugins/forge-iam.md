@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.0.1 |
+| 版本 | V3.0.2 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -556,14 +556,14 @@ Linux 使用当前绝对路径形式的 `XDG_DATA_HOME`；未设置或无效时�
 | `CRED_KEY_UNAVAILABLE` | 已有库缺少所需 keyring 或 `kid`；保留原物，不生成替代密钥 |
 | `CRED_DECRYPT_FAILED` | 密文、绑定上下文或密钥认证失败；拒绝受影响的读取或写入 |
 | `CRED_KEY_PERMISSIONS` / `CRED_STORE_PERMISSIONS` | 支持 POSIX 权限的平台发现密钥文件或存储路径权限、属主不符；拒绝访问，不自动修复 |
-| `CRED_LEGACY_STORE` | 发现旧 `credentials.json`、`credentials.key` 或同目录 keyring；保留原物并拒绝访问 |
+| `CRED_LEGACY_STORE` | 发现同目录 keyring 或已有数据库缺少密钥绑定；保留原物并拒绝访问 |
 | `CRED_LOCK_TIMEOUT` / `CRED_LOCK_RECOVERY_FAILED` | 锁争用超时或无法安全记录锁回收条件；拒绝本次操作 |
 
 以上为存储层错误。Host、HTTP 和 CLI 可按入口契约映射错误：例如读取时保留 `CRED_KEY_UNAVAILABLE` / `CRED_DECRYPT_FAILED`，其他存储错误通常收敛为 `IAM_CREDENTIALS_UNAVAILABLE`。错误映射不改变存储的保留与拒绝行为。
 
 只支持单机本地文件系统、同一 PID namespace 的协作进程。所有修改和轮换使用同一逻辑锁；数据库事务仅覆盖短暂的锁定、条件检查与提交，不跨异步 I/O。数据写入与逻辑锁删除在同一 `EXCLUSIVE` 事务内完成，读写争用采用有界异步等待。未提交操作已结束而释放锁受阻时，发布绑定 PID 和随机 token 的私有完成标记，由后续写事务复核后回收；否则仅在确认持锁进程不存在时回收，活动或未知操作不得接管。退出先持久化随机 `signOutOperation` pending，再撤销旧快照；只有撤销确认后才条件写入墓碑，失败、未知或崩溃均保留 pending 并拒绝旧令牌。并发新登录不会被迟到的退出删除。单记录原子门禁与网关联合原子门禁分别核验，任一未就绪均拒绝对应写入。
 
-旧 `credentials.json`、`credentials.key`、同目录 keyring 与缺少密钥绑定的旧数据库不兼容、不迁移；发现这些文件或无法判定时保留原物并拒绝访问。三平台、Electron 宿主及企业 IAM/网关验证状态以[设计索引](../README.md#22-实现与验证入口)为准。
+旧 `credentials.json` 和 `credentials.key` 不读取、不迁移、不修改，也不阻止使用 SQLite 存储；旧版用户需在新存储中重新登录或录入凭据。已有且完整的新布局 SQLite 存储继续使用原数据库和密钥，不因应用更新重建或重新初始化。旧同目录 keyring 与缺少密钥绑定的旧数据库不兼容，保留原物并拒绝访问。三平台、Electron 宿主及企业 IAM/网关验证状态以[设计索引](../README.md#22-实现与验证入口)为准。
 
 ### 6.4 网关联合变更当前原型
 

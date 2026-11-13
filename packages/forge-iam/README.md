@@ -165,7 +165,7 @@
 ## 组合顺序
 
 - 先挂载 `@heluo/forge-credentials-keychain`，并禁用 `dsh-credentials-local`；再挂载 `@heluo/forge-iam`。IAM 通过 `getCredentials` 延迟读取 `ctx.credentials`，但生产不应依赖加载顺序来获得存储。
-- 凭据包默认使用值级加密 SQLite；不可用、密钥丢失或发现旧 `credentials.json` / `credentials.key` 格式时 fail closed，不回退明文或迁移。内存后端仅供测试且不获得可信声明。
+- 凭据包默认使用值级加密 SQLite；存储不可用或密钥丢失时 fail closed，不回退明文。旧 `credentials.json` / `credentials.key` 保留且不读取或迁移，旧版用户需重新登录或录入凭据；已有完整的 SQLite 凭据继续使用。内存后端仅供测试且不获得可信声明。
 - 官方登录、模型和明文凭据相关行由企业组合包禁用；IAM 会在启动、登录、回调、刷新前复查 `deepseekAccount`，发现残留即进入 `error`。该服务检查不证明其他官方行或执行旁路均已关闭。
 
 ## 本地 mock

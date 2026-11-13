@@ -11,26 +11,21 @@ import { outsideRepositoryTmpAsync } from './support/tmp.mjs';
 const ref = 'heluo-forge/iam/ref/ONE';
 const recordKey = 'heluo-forge/iam/record/session/ONE';
 
-test('legacy credential files and dangling links prevent initialization without being changed', async (t) => {
-  for (const name of ['credentials.json', 'credentials.key', 'dangling-link']) await t.test(name, async (t) => {
-    if (name === 'dangling-link' && process.platform === 'win32') return t.skip('symlinks require platform privileges');
-    const root = await outsideRepositoryTmpAsync('forge-reject-old-files-');
-    t.after(() => rm(root, { recursive: true, force: true }));
-    const directory = join(root, 'data');
-    mkdirSync(directory, { mode: 0o700 });
-    const path = join(directory, name === 'dangling-link' ? 'credentials.json' : name);
-    if (name === 'dangling-link') symlinkSync(join(root, 'missing'), path);
-    else writeFileSync(path, 'synthetic-old-data');
-    const store = createCredentialStore({ directory });
-    try {
-      await assert.rejects(store.get(ref), { code: 'CRED_LEGACY_STORE' });
-      await assert.rejects(store.set(ref, 'replacement'), { code: 'CRED_LEGACY_STORE' });
-    } finally { await store.close(); }
-    if (name === 'dangling-link') assert.equal(lstatSync(path).isSymbolicLink(), true);
-    else assert.equal(readFileSync(path, 'utf8'), 'synthetic-old-data');
-    assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
-    assert.equal(existsSync(`${directory}.keys`), false);
-  });
+test('a dangling legacy document link does not block or change the new store', async (t) => {
+  if (process.platform === 'win32') return t.skip('symlinks require platform privileges');
+  const root = await outsideRepositoryTmpAsync('forge-old-link-');
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = join(root, 'data');
+  mkdirSync(directory, { mode: 0o700 });
+  const path = join(directory, 'credentials.json');
+  symlinkSync(join(root, 'missing'), path);
+  const store = createCredentialStore({ directory });
+  try {
+    assert.equal(await store.get(ref), undefined);
+    await store.set(ref, 'synthetic');
+    assert.equal(await store.get(ref), 'synthetic');
+  } finally { await store.close(); }
+  assert.equal(lstatSync(path).isSymbolicLink(), true);
 });
 
 test('a same-directory keyring is rejected without changing existing storage', async (t) => {
