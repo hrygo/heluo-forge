@@ -106,6 +106,10 @@ export function apply(ctx, rawConfig = {}) {
     verifyAtomicStore,
     getGatewayAtomicStore,
     verifyGatewayAtomicStore,
+    logGatewayStage: (stage, elapsedMs) => {
+      // Only fixed stage names and monotonic elapsed time cross this boundary.
+      try { return ctx.logger?.debug?.(`forge-iam: gateway-save ${stage} ${elapsedMs}ms`); } catch { /* optional diagnostic */ }
+    },
     getManagedModelRuntime: () => managedRuntime,
     getModelSelectionServices: () => {
       try {

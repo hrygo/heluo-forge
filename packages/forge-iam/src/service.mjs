@@ -124,6 +124,7 @@ export function createIamService(rawConfig, options = {}) {
     resolveToken: () => token.resolveToken(),
     bumpGeneration: () => { selection.generation += 1; },
     getManagedModelRuntime: () => options.getManagedModelRuntime?.(),
+    logGatewayStage: options.logGatewayStage,
   });
 
   // Token refresh: the flight records its own provider, so it is created after

@@ -570,7 +570,8 @@ Linux 使用当前绝对路径形式的 `XDG_DATA_HOME`；未设置或无效时�
 网关个人访问凭证与元数据通过 `GatewayAtomicStore` 接口实施快照比对与条件写入（CAS）：
 - 提交前在不可让出的同步临界区内核验 Provider 实例、认证代际与排除卸载状态；
 - 元数据使用版本 2，引入强随机 `writeOperationId` 与摘要 `valueDigest` 实现写入防重与错配校验；旧网关 V1 读取结果为 `invalid-credential`，记录和 Key 保留且不覆盖，保存与清除返回 `IAM_GATEWAY_LEGACY_READ_ONLY`；
-- 执行清除时写入墓碑记录，保留操作审计痕迹；未具备核验原子能力时返回 `IAM_GATEWAY_ATOMIC_UNVERIFIED`（503）。
+- 执行清除时写入墓碑记录，保留操作审计痕迹；未具备核验原子能力时返回 `IAM_GATEWAY_ATOMIC_UNVERIFIED`（503）；
+- 提交后的状态确认不复用提交前的读取，旧读取的迟到结果不得覆盖新状态。确认读取有界等待；保存时须核对本次写入代际与当前会话，无法确认则返回 `IAM_GATEWAY_WRITE_UNKNOWN`，不补偿或自动重放。
 
 ---
 

@@ -19,7 +19,8 @@ test('the client entry is a ModuleLoader plugin with the package id', async () =
 test('the client only targets the IAM routes and sends the CSRF header', async () => {
   const client = await read('client.js');
   const fetches = [...client.matchAll(/fetch\('([^']+)'/g)].map((match) => match[1]);
-  assert.deepEqual([...new Set(fetches)].sort(), ['/api/forge-iam/view']);
+  assert.deepEqual([...new Set(fetches)].sort(), ['/api/forge-iam/credential', '/api/forge-iam/view']);
+  assert.match(client, /fetch\('\/api\/forge-iam\/credential',\s*\{\s*method: 'PUT', headers: REQUEST_HEADERS/);
   assert.match(client, /postJson\('\/api\/forge-iam\/sign-in'(?:, \{ timeoutMs: SIGN_IN_TIMEOUT_MS \})?\)/);
   assert.match(client, /postJson\('\/api\/forge-iam\/sign-out'\)/);
   assert.match(client, /x-forge-iam-request/);

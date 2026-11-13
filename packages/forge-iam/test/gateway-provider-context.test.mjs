@@ -180,7 +180,9 @@ test('saving a gateway credential does not reuse a stale subject on the same pro
   const { service } = fixture(t, credentials, [atomic]);
   await service.hydrate();
   await seedGrant(credentials, 'new-user');
-  await service.saveGatewayCredential({ key: value });
+  // The stored grant is authoritative for the write, but the cached session is
+  // still the old subject, so the response cannot claim confirmed success.
+  await assert.rejects(service.saveGatewayCredential({ key: value }), { code: 'IAM_GATEWAY_WRITE_UNKNOWN' });
   assert.equal((await createGatewayCredentialStore(credentials).read()).credential.ownerSubject, 'new-user');
 });
 
@@ -205,7 +207,9 @@ for (const change of ['provider', 'dispose']) {
     if (change === 'provider') { replace(next); await service.loadGatewayCredential({ force: true }); }
     else await service.dispose();
     gate.release();
-    assert.equal((await pending)?.code, change === 'dispose' ? 'IAM_DISPOSED' : 'IAM_CREDENTIALS_UNAVAILABLE');
+    // The old provider's clear has committed even though its result arrived
+    // after the provider was replaced or disposed.
+    assert.equal((await pending)?.code, 'IAM_GATEWAY_WRITE_UNKNOWN');
     assert.equal((await next.resolve(GATEWAY_REF)).value, value);
     assert.equal((await createGatewayCredentialStore(next).read()).credential.ownerSubject, 'new-user');
   });
