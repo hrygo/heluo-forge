@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mountPanel } from './support/client-panel.mjs';
 
 // DESIGN.md §4 (docs/teamflow/20261109-enterprise-settings-ux/DESIGN.md):
@@ -41,12 +42,12 @@ async function fixture(t, view, { navigator } = {}) {
   return { panel, requests, writes };
 }
 
-test('signed out expands only the login step and folds the rest behind 登录后可配置', async (t) => {
+test('signed out expands only the login step and folds gateway behind 登录后可配置 without rendering models', async (t) => {
   const { panel, requests } = await fixture(t, signedOut);
   let tree = panel.render();
   assert.ok(panel.findButton(tree, '登录企业账号'), 'the login step must stay expanded');
   assert.equal(panel.findButton(tree, '保存凭据'), undefined, 'the credential step must start folded');
-  assert.doesNotMatch(panel.text(tree), /企业模型设置/, 'the model step must start folded');
+  assert.doesNotMatch(panel.text(tree), /企业模型设置/, 'forge-iam panel must not embed models card');
 
   const current = walk(tree).filter((node) => node.props?.['aria-current'] === 'step');
   assert.equal(current.length, 1);
@@ -61,19 +62,30 @@ test('signed out expands only the login step and folds the rest behind 登录后
 
   tree = panel.render();
   assert.ok(panel.findButton(tree, '保存凭据'), 'expanding must reveal the credential step');
-  assert.match(panel.text(tree), /企业模型设置/, 'expanding must reveal the model step');
+  assert.doesNotMatch(panel.text(tree), /企业模型设置/, 'models remain in dedicated 企业模型 section');
 });
 
-test('signed in expands all three steps and highlights the current one', async (t) => {
+test('signed in with configured gateway auto-collapses into AI 服务 · 已就绪 and expands on 更换密钥', async (t) => {
+  const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(clientSource, /\.fiam-gateway-ready-bar\s*\{[^}]*flex-direction:\s*row/);
   const { panel } = await fixture(t, ready);
-  const tree = panel.render();
+  let tree = panel.render();
   assert.equal(panel.findButton(tree, '登录后可配置'), undefined);
-  assert.ok(panel.findButton(tree, '保存凭据'));
-  assert.match(panel.text(tree), /企业模型设置/);
+  assert.match(panel.text(tree), /AI 服务 · 已就绪/);
+  assert.equal(panel.findButton(tree, '保存凭据'), undefined, 'configured gateway must auto-collapse when ready');
+  assert.doesNotMatch(panel.text(tree), /企业模型设置/, 'models belong to forge-models section');
 
   const current = walk(tree).filter((node) => node.props?.['aria-current'] === 'step');
   assert.equal(current.length, 1);
   assert.match(flat(current[0]), /^模型/);
+
+  const replaceBtn = panel.findButton(tree, '更换密钥');
+  assert.ok(replaceBtn, 'must offer lightweight 更换密钥 toggle');
+  replaceBtn.props.onClick();
+  tree = panel.render();
+  assert.ok(panel.findButton(tree, '保存凭据'), 'expanding must reveal full credential controls');
+  panel.findButton(tree, '收起').props.onClick();
+  assert.match(panel.text(panel.render()), /AI 服务 · 已就绪/);
 });
 
 test('file-backed credentials do not expose storage implementation details', async (t) => {
@@ -134,9 +146,28 @@ test('an unknown credential state is stated once as 凭据状态尚未确认', a
   assert.equal(text.split('凭据状态尚未确认').length - 1, 1);
 });
 
-test('the model card no longer repeats the login button as a hint', async (t) => {
-  const { panel } = await fixture(t, { ...ready, gatewayCredential: { state: 'unconfigured' } });
-  const text = panel.text(panel.render());
+test('forge-models renders signed-out and unconfigured blockers pointing to 设置 → 企业账号', async (t) => {
+  const navigated = [];
+  const signedOutModels = await mountPanel(async () => Response.json(signedOut), {
+    componentId: 'forge-models',
+    componentProps: { navigate: (id) => navigated.push(id) },
+  });
+  t.after(() => signedOutModels.close());
+  const signedOutText = signedOutModels.text(signedOutModels.render());
+  assert.match(signedOutText, /请先登录企业账号/);
+  assert.match(signedOutText, /设置 → 企业账号/);
+  assert.doesNotMatch(signedOutText, /手动添加/);
+  signedOutModels.findButton(signedOutModels.render(), '前往「企业账号」').props.onClick();
+  assert.deepEqual(navigated, ['forge-iam']);
+
+  const unconfiguredModels = await mountPanel(async () => Response.json({ ...ready, gatewayCredential: { state: 'unconfigured' } }), {
+    componentId: 'forge-models',
+    componentProps: { navigate: (id) => navigated.push(id) },
+  });
+  t.after(() => unconfiguredModels.close());
+  const text = unconfiguredModels.text(unconfiguredModels.render());
+  assert.match(text, /尚未启用 AI 服务/);
+  assert.match(text, /设置 → 企业账号/);
   assert.doesNotMatch(text, /下一步：登录企业账号/);
   assert.match(text, /下一步：在上方保存当前账号的个人凭证。/);
 });
@@ -161,27 +192,44 @@ test('复制问题信息 lives in a collapsed 诊断 fold and still copies', asy
   assert.match(flat(detailsWithSummary(after, '诊断')), /问题信息已复制/);
 });
 
-test('the page keeps exactly one authorization disclaimer', async (t) => {
+test('the page omits verbose authorization boilerplate', async (t) => {
   const { panel } = await fixture(t, ready);
   const tree = panel.render();
-  assert.equal(panel.text(tree).split('登录只建立身份，不代表已获得业务写权限。').length - 1, 1);
-  assert.match(unfolded(tree), /登录只建立身份，不代表已获得业务写权限。/);
+  assert.doesNotMatch(panel.text(tree), /管理企业账号、AI 服务及个人访问凭证/);
+  assert.doesNotMatch(panel.text(tree), /登录只建立身份，不代表已获得业务写权限。/);
 });
 
-test('signed-out journey steps reveal their folded cards instead of silently doing nothing', async (t) => {
-  const { panel, requests } = await fixture(t, signedOut);
+test('model journey step stays non-interactive when section navigation is unavailable', async (t) => {
+  const panel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/view') return Response.json(ready);
+    throw new Error(`unexpected request: ${path}`);
+  });
+  t.after(() => panel.close());
+  const tree = panel.render();
+  const modelStep = walk(tree).find((node) =>
+    String(node.props?.className ?? '').includes('fiam-journey-step') && flat(node).includes('模型'));
+  assert.ok(modelStep, 'missing the 模型 journey step');
+  assert.match(String(modelStep.props?.className ?? ''), /fiam-journey-step-static/);
+  assert.equal(modelStep.props?.role, undefined);
+  assert.equal(modelStep.props?.onClick, undefined);
+});
+
+test('signed-out journey steps reveal AI 服务 fold or navigate to forge-models instead of silently doing nothing', async (t) => {
+  const navigated = [];
+  const panel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/view') return Response.json(signedOut);
+    throw new Error(`unexpected request: ${path}`);
+  }, { componentProps: { navigate: (id) => navigated.push(id) } });
+  t.after(() => panel.close());
   const step = (tree, label) => walk(tree).find((node) =>
     String(node.props?.className ?? '').includes('fiam-journey-step') && flat(node).includes(label));
   let tree = panel.render();
 
-  const credential = step(tree, '凭据');
-  assert.ok(credential, 'missing the 凭据 journey step');
-  const before = requests.length;
+  const credential = step(tree, 'AI 服务');
+  assert.ok(credential, 'missing the AI 服务 journey step');
   credential.props.onClick();
-  assert.equal(requests.length, before, 'revealing a step must not issue a request');
   tree = panel.render();
-  assert.ok(panel.findButton(tree, '保存凭据'), 'clicking 凭据 must reveal the credential card');
-  assert.match(panel.text(tree), /企业模型设置/, 'clicking 凭据 must mount the model card too');
+  assert.ok(panel.findButton(tree, '保存凭据'), 'clicking AI 服务 must reveal the credential card');
   assert.equal(panel.findButton(tree, '收起个人设置').props['aria-expanded'], true);
 
   // Once mounted, the identity step still points at its own card and must not
@@ -192,13 +240,8 @@ test('signed-out journey steps reveal their folded cards instead of silently doi
   tree = panel.render();
   assert.ok(panel.findButton(tree, '保存凭据'));
 
-  const second = await fixture(t, signedOut);
-  let secondTree = second.panel.render();
-  const model = step(secondTree, '模型');
+  const model = step(tree, '模型');
   assert.ok(model, 'missing the 模型 journey step');
   model.props.onClick();
-  secondTree = second.panel.render();
-  assert.match(second.panel.text(secondTree), /企业模型设置/,
-    'clicking 模型 must mount the model card instead of doing nothing');
-  assert.ok(second.panel.findButton(secondTree, '保存凭据'));
+  assert.deepEqual(navigated, ['forge-models']);
 });

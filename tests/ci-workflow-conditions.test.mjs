@@ -28,6 +28,7 @@ const windowsTestPaths = [
   'tests/sensitive-scan-post-rewrite.test.mjs',
   'tests/sensitive-scan-server-merge.test.mjs',
   'tests/sensitive-scan-pre-push.test.mjs',
+  'tests/plugin-patch-layers.test.mjs',
   'packages/forge-iam/test/callback-port.test.mjs',
 ];
 
@@ -381,6 +382,10 @@ export function workflowProblems(source) {
       const allowedPath = /^(?:tests\/[a-z0-9-]+\.test\.mjs|packages\/forge-iam\/test\/[a-z0-9-]+\.test\.mjs)$/u;
       const suite = blocks.filter((step) => directNodeTest(step, windowsTestPaths, allowedPath));
       if (suite.length !== 1 || !unconditionalStep(suite[0])) errors.push(`${id}: Windows scan and callback tests must run together unconditionally`);
+      // 该作业不装依赖；插件装配图现在会 import 同仓兄弟包，必须先建 workspace 链接。
+      const link = blocks.findIndex((step) => /^ {8}run:[ \t]*node[ \t]+scripts\/link-workspace\.mjs[ \t]*$/mu.test(step));
+      const suiteIndex = blocks.indexOf(suite[0]);
+      if (link < 0 || suiteIndex < 0 || link > suiteIndex) errors.push(`${id}: Windows suite needs workspace links before the tests`);
     }
   }
   if (jobs.has('forge-iam-callback')) errors.push('forge-iam-callback: callback tests must not run in a separate job');
@@ -499,7 +504,9 @@ test('Windows scan and callback run together in one unconditional Node test step
 });
 
 const windowsSuiteError = /sensitive-scan: Windows scan and callback tests must run together unconditionally/u;
+const windowsLinkError = /sensitive-scan: Windows suite needs workspace links before the tests/u;
 const windowsExecutionMutations = [
+  ['plugin patch layers removed', workflow.replace(' tests/plugin-patch-layers.test.mjs', '')],
   ['callback removed', workflow.replace(' packages/forge-iam/test/callback-port.test.mjs', '')],
   ['callback moved to a comment', workflow.replace(' packages/forge-iam/test/callback-port.test.mjs', '')
     .replace('        run: node --test tests/sensitive-scan.test.mjs', '        # packages/forge-iam/test/callback-port.test.mjs\n        run: node --test tests/sensitive-scan.test.mjs')],
@@ -514,5 +521,22 @@ for (const [label, mutated] of windowsExecutionMutations) {
   test(`workflow guards reject Windows ${label}`, () => {
     assert.notEqual(mutated, workflow, `${label} mutation must change the source`);
     assert.match(workflowProblems(mutated).join('\n'), windowsSuiteError);
+  });
+}
+
+// 只改 sensitive-scan 作业自己的链接步骤：`*native_steps` 模板里也有同名步骤，
+// 裸字符串替换会先命中模板，派生出的变异体依旧有链接步骤，守卫因此测试不到。
+const sensitiveLinkStep = '      - name: Link workspace packages\n        run: node scripts/link-workspace.mjs\n      - name: Test Windows sensitive scan and IAM callback';
+const windowsLinkMutations = [
+  ['workspace link removed', workflow.replace(sensitiveLinkStep, '      - name: Test Windows sensitive scan and IAM callback')],
+  ['workspace link moved after the suite', workflow
+    .replace(sensitiveLinkStep, '      - name: Test Windows sensitive scan and IAM callback')
+    .replace('packages/forge-iam/test/callback-port.test.mjs\n', 'packages/forge-iam/test/callback-port.test.mjs\n      - name: Link workspace packages\n        run: node scripts/link-workspace.mjs\n')],
+];
+
+for (const [label, mutated] of windowsLinkMutations) {
+  test(`workflow guards reject Windows ${label}`, () => {
+    assert.notEqual(mutated, workflow, `${label} mutation must change the source`);
+    assert.match(workflowProblems(mutated).join('\n'), windowsLinkError);
   });
 }

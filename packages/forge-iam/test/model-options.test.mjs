@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  MAX_MANUAL_MODELS,
+  mergeAvailableModels,
   NO_RETRY_POLICY,
   THINKING_LEVELS,
   REASONING_EFFORT_LEVELS,
@@ -216,10 +218,25 @@ test('buildReasoningEffortRange and getReasoningEffortBounds support lower and u
     levels: ['off', 'low', 'medium', 'high'],
   });
 
-  // Reversed bounds are automatically normalized
+  // Reversed bounds are automatically normalized and 'max' key does not collapse lower bounds
   const reversed = buildReasoningEffortRange('max', 'medium');
   assert.deepEqual(reversed, {
     off: null,
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+    max: 'max',
+  });
+  assert.deepEqual(getReasoningEffortBounds(reversed), {
+    enabled: true,
+    lower: 'medium',
+    upper: 'max',
+    levels: ['medium', 'high', 'xhigh', 'max'],
+  });
+  assert.deepEqual(buildThinkingLevelMap(reversed), {
+    off: null,
+    minimal: null,
+    low: null,
     medium: 'medium',
     high: 'high',
     xhigh: 'xhigh',
@@ -251,4 +268,42 @@ test('default thinking range is off through high and explicit options take prece
   assert.equal(disabledModel.reasoning, false);
   assert.equal(disabledModel.thinkingLevelMap, undefined);
   assert.deepEqual(suppliedModel.reasoningEfforts, { low: 'low', xhigh: 'xhigh' });
+});
+
+test('mergeAvailableModels merges catalog and manual lists without mutation and keeps gateway priority', () => {
+  assert.equal(MAX_MANUAL_MODELS, 100);
+  const catalog = Object.freeze([
+    Object.freeze({ id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxTokens: 16384 }),
+    Object.freeze({ id: 'deepseek-r1', name: 'DeepSeek R1' }),
+  ]);
+  const manual = Object.freeze([
+    Object.freeze({ id: 'gpt-4o', addedAt: '2026-11-13T00:00:00.000Z' }),
+    Object.freeze({ id: 'custom-model@v1', addedAt: '2026-11-13T00:01:00.000Z' }),
+    Object.freeze({ id: 'custom-model@v1', addedAt: '2026-11-13T00:02:00.000Z' }),
+  ]);
+
+  const merged = mergeAvailableModels(catalog, manual);
+  assert.deepEqual(merged, [
+    { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxTokens: 16384, source: 'gateway', hasManualEntry: true },
+    { id: 'deepseek-r1', name: 'DeepSeek R1', source: 'gateway' },
+    { id: 'custom-model@v1', name: 'custom-model@v1', source: 'manual', addedAt: '2026-11-13T00:01:00.000Z' },
+  ]);
+
+  // Empty and undefined inputs are handled safely.
+  assert.deepEqual(mergeAvailableModels(undefined, undefined), []);
+  assert.deepEqual(mergeAvailableModels([], [{ id: 'only-manual' }]), [
+    { id: 'only-manual', name: 'only-manual', source: 'manual' },
+  ]);
+  assert.deepEqual(mergeAvailableModels([{ id: 'gateway-only', hasManualEntry: true }], []), [
+    { id: 'gateway-only', source: 'gateway' },
+  ], '网关元数据不能伪造手动声明');
+
+  // Ids the model-id contract rejects are dropped on both sides, not carried
+  // into the enabled set or the adapter.
+  const oversized = 'x'.repeat(201);
+  const filtered = mergeAvailableModels(
+    [{ id: '' }, { id: 42 }, { id: oversized }, { id: 'kept-gateway' }],
+    [{ id: '' }, { id: null }, { id: oversized }, { id: 'kept-manual' }],
+  );
+  assert.deepEqual(filtered.map((item) => item.id), ['kept-gateway', 'kept-manual']);
 });

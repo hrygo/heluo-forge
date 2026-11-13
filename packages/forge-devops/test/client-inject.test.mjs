@@ -37,7 +37,9 @@ function strictContext(unknown) {
   const services = {
     locale: { bind: () => (key) => key, register: () => {} },
     slots: {
-      inject: (_name, register) => register(),
+      // 只声明 `settings.section`（无研发容器）：容器子槽位缺席时 inject 不回调，
+      // 与真实宿主"槽位尚未声明"一致。
+      inject: (name, register) => (name === 'settings.section' ? register() : () => {}),
       register: (definition) => {
         registrations.push(definition);
         return () => {};

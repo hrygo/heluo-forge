@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createCliRunner, DEFAULT_MAX_OUTPUT_BYTES } from '../src/cli-runner.mjs';
+import { createCliRunner, DEFAULT_MAX_OUTPUT_BYTES, ENV_ALLOWLIST } from '../src/cli-runner.mjs';
 
 const PKG_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DOP_BIN = '/secret/bin/dop';
@@ -242,4 +242,64 @@ test('本模块源码只用 execFile（无 shell 拼串、无同步 exec）', ()
   assert.ok(!/execSync\s*\(/.test(text));
   assert.ok(!/['"`]sh['"`]\s*,\s*['"`]-c['"`]/.test(text));
   assert.ok(/execFile/.test(text));
+});
+
+test('ENV_ALLOWLIST 剥离 DEEPSEEK_API_KEY 与 GITEE_TOKEN 等无关环境变量', async () => {
+  const { execFile, calls } = fakeExecFile((_call, callback) => callback(null, '', ''));
+  const runner = createCliRunner({
+    execFile,
+    processEnv: {
+      PATH: '/usr/bin',
+      DEVOPS_API_KEY: 'dop-env-token',
+      DEEPSEEK_API_KEY: 'ds-secret-must-not-leak',
+      GITEE_TOKEN: 'gitee-secret-must-not-leak',
+      RANDOM_SECRET: 'other-secret',
+    },
+  });
+  await runner.run({ bin: DOP_BIN, args: ['change', 'view', 'ARD1', '--json'] });
+
+  const passedEnv = calls[0].options.env;
+  assert.ok(ENV_ALLOWLIST.includes('DEVOPS_API_KEY'));
+  assert.equal(passedEnv.PATH, '/usr/bin');
+  assert.equal(passedEnv.DEVOPS_API_KEY, 'dop-env-token');
+  assert.equal(passedEnv.DEEPSEEK_API_KEY, undefined);
+  assert.equal(passedEnv.GITEE_TOKEN, undefined);
+  assert.equal(passedEnv.RANDOM_SECRET, undefined);
+});
+
+test('resolveChildEnv 返回 OWNER_MISMATCH 或抛错时 fail closed 且零子进程 spawn', async () => {
+  const { execFile: execA, calls: callsA } = fakeExecFile((_call, callback) => callback(null, 'should-not-run', ''));
+  const runnerA = createCliRunner({
+    execFile: execA,
+    resolveChildEnv: async () => ({ ok: false, code: 'OWNER_MISMATCH', message: 'owner mismatch' }),
+  });
+  const resA = await runnerA.run({ bin: DOP_BIN, args: ['change', 'view', 'ARD1'] });
+  assert.equal(callsA.length, 0, 'fail closed 时绝不触发 execFile');
+  assert.equal(resA.exitCode, null);
+  assert.equal(resA.stderr, 'owner mismatch');
+
+  const { execFile: execB, calls: callsB } = fakeExecFile((_call, callback) => callback(null, 'should-not-run', ''));
+  const runnerB = createCliRunner({
+    execFile: execB,
+    resolveChildEnv: async () => {
+      throw new Error('OWNER_MISMATCH');
+    },
+  });
+  const resB = await runnerB.run({ bin: DOP_BIN, args: ['change', 'view', 'ARD1'] });
+  assert.equal(callsB.length, 0, 'resolveChildEnv 抛错时绝不触发 execFile');
+  assert.equal(resB.exitCode, null);
+  assert.equal(resB.stderr, 'OWNER_MISMATCH');
+});
+
+test('子进程输出里的代理内嵌凭据被脱敏', async () => {
+  // 内嵌凭据的地址用拼接构造：扫描器会把 `scheme://user:pass@host` 字面量当凭据/邮箱。
+  const proxy = `http://${['svc-user', 'svc-pass'].join(':')}@proxy.corp.example:3128`;
+  const execFile = (_bin, _args, _options, callback) => {
+    callback(new Error('exit 1'), '', `proxy ${proxy} refused`);
+  };
+  const runner = createCliRunner({ execFile, processEnv: {} });
+  const result = await runner.run({ bin: 'dop', args: ['change', 'view', 'ARD1', '--json'] });
+  assert.match(result.stderr, /http:\/\/\*\*\*@proxy\.corp\.example/);
+  assert.equal(result.stderr.includes('svc-user'), false);
+  assert.equal(result.stderr.includes('svc-pass'), false);
 });

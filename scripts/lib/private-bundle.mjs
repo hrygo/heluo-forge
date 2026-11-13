@@ -8,9 +8,9 @@
  *      supplied through a trusted channel, not a digest read next to the file);
  *   2. read the enterprise `.env` as **data** -- no shell, no `eval`, no whole-file
  *      substitution into the artifact;
- *   3. change exactly two documented locations inside the package
- *      (`cordis.patch.yml` plugin config and `package.json` version) plus add a
- *      redacted `heluo-private-release.json`;
+ *   3. change the documented locations inside the package (the plugin config of
+ *      whichever patch layer declares each row, and `package.json` version) plus
+ *      add a redacted `heluo-private-release.json`;
  *   4. rebuild the archive from the original bytes and recompute the manifest.
  *
  * Confidential client secrets are deliberately NOT accepted yet: the IAM plugin
@@ -553,27 +553,88 @@ export function injectPatchConfig(text, id, config) {
   return lines.join('\n');
 }
 
-/** Public bundles must be configuration-neutral; the check is the acceptance gate. */
-export function assertNeutralPatch(text) {
+/**
+ * Bundle patch files in tarball order (a bundle may ship one patch or several
+ * layers: `cordis.patch.yml` plus `cordis.patch.<layer>.yml`); the acceptance gate
+ * judges the **set** — order is irrelevant, a layer only carries part of the rows.
+ */
+export const PATCH_FILE_PATTERN = /^cordis\.patch(?:\.[A-Za-z0-9-]+)?\.yml$/u;
+
+export function patchEntriesOf(entries) {
+  return entries.filter((entry) => PATCH_FILE_PATTERN.test(entry.path));
+}
+
+function insertedIds(text) {
+  const ids = new Set();
+  for (const line of text.split('\n')) {
+    const match = /^\s*- id: ([A-Za-z0-9][A-Za-z0-9._-]*)$/u.exec(line);
+    if (match !== null) ids.add(match[1]);
+  }
+  return ids;
+}
+
+/** `dsh.bundle.patch` 指向的那一层：bundle 必须随包发出，否则装上也加载不到。 */
+function declaredPatchPath(root) {
+  const declared = root?.dsh?.bundle?.patch;
+  return typeof declared === 'string' ? declared.replace(/^\.\//u, '') : undefined;
+}
+
+/** 公版 bundle 的补丁层完整性：必须声明默认层、且默认层真的在包里。 */
+export function patchLayerProblems(root, patchEntries) {
   const problems = [];
-  const required = new Set(['heluo-iam', 'forge-devops', 'heluo-gitee']);
-  for (const id of ['heluo-credentials-keychain', ...required]) {
-    const index = text.split('\n').findIndex((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line));
-    if (index === -1) {
-      if (required.has(id)) problems.push(`patch has no insert entry "${id}"`);
-      continue;
+  const declared = declaredPatchPath(root);
+  if (declared === undefined) {
+    problems.push('package.json does not declare dsh.bundle.patch');
+  } else if (!patchEntries.some((entry) => entry.path === declared)) {
+    problems.push(`bundle does not ship the declared patch ${declared}`);
+  }
+  if (patchEntries.length === 0) problems.push('bundle has no patch file');
+  return problems;
+}
+
+export function requiredRowsForEntry(name) {
+  return name === '@heluo/forge-engineering'
+    ? ['forge-devops', 'heluo-gitee']
+    : ['heluo-iam'];
+}
+
+/** Public bundles must be configuration-neutral; the check is the acceptance gate. */
+export function assertNeutralPatch(input, { required = ['heluo-iam'] } = {}) {
+  const texts = (Array.isArray(input) ? input : [input])
+    .filter((text) => typeof text === 'string' && text.length > 0);
+  const problems = [];
+  const requiredSet = new Set(required);
+  const neutralChecked = new Set(['heluo-credentials-keychain', 'heluo-iam', 'forge-devops', 'heluo-gitee', ...requiredSet]);
+  const seen = new Set();
+  const ownerOfId = new Map();
+  for (const [index, text] of texts.entries()) {
+    const ids = insertedIds(text);
+    for (const id of ids) {
+      // 同一行出现在两层时归属不明：注入只会落在第一处，另一处留空 config 反而可能覆盖回去。
+      if (seen.has(id) && ownerOfId.get(id) !== index) {
+        problems.push(`insert id "${id}" is declared by more than one patch layer`);
+      }
+      ownerOfId.set(id, index);
+      seen.add(id);
     }
-    const lines = text.split('\n');
-    const baseIndent = lines[index].length - lines[index].trimStart().length;
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const line = lines[cursor];
-      if (line.trim() === '') continue;
-      const indent = line.length - line.trimStart().length;
-      if (indent < baseIndent + 2) break;
-      if (indent === baseIndent + 2 && line.trim().startsWith('config:')) {
-        if (line.trim() !== 'config: {}') problems.push(`public bundle entry "${id}" carries a non-empty config`);
+    for (const id of neutralChecked) {
+      if (!ids.has(id)) continue;
+      const lines = text.split('\n');
+      const rowIndex = lines.findIndex((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line));
+      const baseIndent = lines[rowIndex].length - lines[rowIndex].trimStart().length;
+      for (let cursor = rowIndex + 1; cursor < lines.length; cursor += 1) {
+        const line = lines[cursor];
+        if (line.trim() === '') continue;
+        const indent = line.length - line.trimStart().length;
+        if (indent < baseIndent + 2) break;
+        if (indent === baseIndent + 2 && line.trim().startsWith('config:')) {
+          if (line.trim() !== 'config: {}') problems.push(`public bundle entry "${id}" carries a non-empty config`);
+        }
       }
     }
+  }
+  for (const id of requiredSet) {
+    if (!seen.has(id)) problems.push(`patch set has no insert entry "${id}"`);
   }
   return problems;
 }
@@ -663,17 +724,49 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   if (requireVersionChange && version === root.version) {
     fail('VERSION_UNCHANGED', `private version must differ from the public version ${root.version}: same name+version must mean the same bytes`);
   }
-  const patchEntry = entries.find((entry) => entry.path === 'cordis.patch.yml');
-  if (patchEntry === undefined) fail('PUBLIC_TARBALL_INVALID', 'public tarball has no cordis.patch.yml');
-  const neutral = assertNeutralPatch(patchEntry.content.toString('utf8'));
+  const patchEntries = patchEntriesOf(entries);
+  const layerProblems = patchLayerProblems(root, patchEntries);
+  if (layerProblems.length > 0) {
+    fail('PUBLIC_TARBALL_INVALID', `public tarball has an incomplete patch layer set: ${layerProblems.join('; ')}`);
+  }
+  const patchTexts = patchEntries.map((entry) => entry.content.toString('utf8'));
+  const neutral = assertNeutralPatch(patchTexts, { required: requiredRowsForEntry(root.name) });
   if (neutral.length > 0) fail('PUBLIC_TARBALL_INVALID', `public tarball is not configuration-neutral: ${neutral.join('; ')}`);
 
   const runtimeIam = { ...config.iam };
   // The opt-in controls packaging and Discovery validation only. The runtime
   // ignores this field, so emitting it would falsely imply a runtime guard.
   delete runtimeIam.allowInsecureHttp;
-  let patch = injectPatchConfig(patchEntry.content.toString('utf8'), 'heluo-iam', runtimeIam);
-  patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
+  // Which layer owns which row is a bundle decision, not this tool's: find the
+  // row in whichever patch carries it and rewrite there.
+  const ownerOf = (id) => patchEntries.find((entry) => insertedIds(entry.content.toString('utf8')).has(id));
+  const iamOwner = ownerOf('heluo-iam');
+  const giteeOwner = ownerOf('heluo-gitee');
+  const hasGiteeConfig = Object.keys(config.gitee ?? {}).length > 0;
+  if (iamOwner === undefined || (hasGiteeConfig && giteeOwner === undefined)) {
+    fail(
+      'PUBLIC_TARBALL_INVALID',
+      iamOwner === undefined
+        ? 'public tarball does not declare the IAM insert row'
+        : 'public tarball does not declare the Gitee insert row required by Gitee configuration',
+    );
+  }
+  const injectedPatches = new Map();
+  const rewrittenLayers = new Map();
+  for (const entry of patchEntries) {
+    const original = entry.content.toString('utf8');
+    let patch = original;
+    if (entry === iamOwner) patch = injectPatchConfig(patch, 'heluo-iam', runtimeIam);
+    if (giteeOwner !== undefined && entry === giteeOwner && hasGiteeConfig) {
+      patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
+    }
+    injectedPatches.set(entry.path, patch);
+    // 只有真的被改写的层才进产物与 change 元数据：没改的层重写一遍只会让审计噪声变大。
+    if (patch !== original) rewrittenLayers.set(entry.path, patch);
+  }
+  // `patch` keeps the historical meaning for callers that inspect one file: the
+  // layer that carries the IAM row.
+  const patch = injectedPatches.get(iamOwner.path);
   const manifest = { ...root, version };
   // The manifest is generated after the version bump, so its member map must
   // match the rewritten package.json rather than the public base version.
@@ -688,7 +781,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
 
   const replaced = new Map([
     ['package.json', Buffer.from(stableJson(manifest), 'utf8')],
-    ['cordis.patch.yml', Buffer.from(patch, 'utf8')],
+    ...[...rewrittenLayers].map(([path, text]) => [path, Buffer.from(text, 'utf8')]),
     [PRIVATE_METADATA_FILE, Buffer.from(stableJson(metadata), 'utf8')],
   ]);
   const changed = [...replaced.keys()].sort();
@@ -700,7 +793,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     if (!entries.some((entry) => entry.path === path)) files.push({ path, body, mode: 0o644 });
   }
   const tar = writeBundleTarball(files);
-  return { tar, patch, manifest, metadata, changed, members: releaseMembers, files };
+  return { tar, patch, patches: injectedPatches, manifest, metadata, changed, members: releaseMembers, files };
 }
 
 /**
@@ -731,6 +824,8 @@ function assertArtifactClosure(bytes, { code, label }) {
  *   output: string, repoRoot?: string, requireVersionChange?: boolean}} input
  */
 export function makePrivateBundle(input) {
+  // 校验器可注入：默认就是交付链信任的独立验证器，测试用它证明「成功必须经过校验」。
+  const verify = typeof input.verifyImpl === 'function' ? input.verifyImpl : verifyBundle;
   const publicPath = resolve(input.publicPath);
   if (!existsSync(publicPath)) fail('PUBLIC_MISSING', `public tarball not found: ${publicPath}`);
   const expected = parseDigest(input.expectedSha256, 'public tarball digest');
@@ -813,7 +908,7 @@ export function makePrivateBundle(input) {
     writeFileSync(join(staging, 'SHA256SUMS'), sumsText);
     // Success is reported only for bytes that were verified as written: the same
     // independent verifier, against the manifest generated next to them.
-    const verdict = verifyBundle(join(staging, tarName), { manifestPath: join(staging, 'bundle-manifest.json') });
+    const verdict = verify(join(staging, tarName), { manifestPath: join(staging, 'bundle-manifest.json') });
     if (!verdict.ok) fail('ARTIFACT_VERIFY_FAILED', `private artifact failed verification:\n- ${verdict.errors.join('\n- ')}`);
     if (existsSync(output)) rmSync(output, { recursive: true, force: true });
     renameSync(staging, output);
@@ -855,10 +950,13 @@ export function inspectPublicTarball(publicPath) {
   const bytes = readFileSync(publicPath);
   const entries = readBundleEntries(bytes, { withContent: true });
   const { root } = membersOf(entries);
-  assertIamValidatorMatches(entries);
-  const patch = entries.find((entry) => entry.path === 'cordis.patch.yml');
+  if (root.name !== '@heluo/forge-engineering') assertIamValidatorMatches(entries);
+  const patchEntries = patchEntriesOf(entries);
   const problems = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
-  if (patch !== undefined) problems.push(...assertNeutralPatch(patch.content.toString('utf8')));
+  problems.push(...patchLayerProblems(root, patchEntries));
+  if (patchEntries.length > 0) {
+    problems.push(...assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8')), { required: requiredRowsForEntry(root.name) }));
+  }
   return { sha256: sha256(bytes), version: root.version, name: root.name, files: entries.length, problems };
 }
 

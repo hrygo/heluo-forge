@@ -6,7 +6,7 @@
       "title": "单 Issue 可信待验收交付",
       "level": "hard",
       "status": "active",
-      "owner": "forge-enterprise",
+      "owner": "forge-engineering",
       "summary": "一个 Issue 对应一份可追溯到实际代码版本的待验收交付；Skill 只补企业语义与证据边界，原生 Teamflow 唯一执行。",
       "appliesTo": [
         { "system": "teamflow", "versions": [] },

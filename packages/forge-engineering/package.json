@@ -1,0 +1,69 @@
+{
+  "name": "@heluo/forge-engineering",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Enterprise engineering workbench bundle for DeepSeek Harness: workbench settings, DevOps (DOP), Gitee workflow, issue-delivery skill, and shared policy catalog",
+  "icon": "./icon.svg",
+  "engines": {
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@heluo/forge-devops": "workspace:*",
+    "@heluo/forge-gitee": "workspace:*",
+    "@heluo/forge-policy": "workspace:*"
+  },
+  "bundledDependencies": [
+    "@heluo/forge-devops",
+    "@heluo/forge-gitee",
+    "@heluo/forge-policy"
+  ],
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./skills": "./src/skills.mjs",
+    "./switches": "./src/switches.mjs",
+    "./issue-delivery-skill": "./src/issue-delivery-skill.mjs",
+    "./issue-delivery-skill/locale/*.json": "./locale/issue-delivery-skill/*.json",
+    "./issue-delivery-skill/icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "src",
+    "skills",
+    "locale",
+    "docs",
+    "icon.svg",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots",
+        "locale"
+      ]
+    }
+  }
+}
+

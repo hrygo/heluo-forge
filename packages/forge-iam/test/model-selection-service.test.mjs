@@ -25,7 +25,7 @@ async function setup(t, { subject = 'synthetic-subject', expiresAt = new Date(no
 
 test('a saved model selection is readable for the signed-in subject only', async (t) => {
   const f = await setup(t);
-  assert.deepEqual(await f.service.readModelSelection(), { subject: 'synthetic-subject', saved: false, models: {}, defaultModelId: null });
+  assert.deepEqual(await f.service.readModelSelection(), { subject: 'synthetic-subject', saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 });
   const saved = await f.service.saveModelSelection({ models: { 'corp-chat': {} }, defaultModelId: 'corp-chat' });
   assert.equal(saved.subject, 'synthetic-subject');
   const read = await f.service.readModelSelection();
@@ -61,6 +61,6 @@ test('a signed-out service reports no selection instead of an error', async (t) 
   const credentials = new MemoryCredentials();
   const service = createIamService(config, { credentials, now: () => now, fetch: async () => { throw new Error('no network permitted'); } });
   t.after(() => service.dispose());
-  assert.deepEqual(await service.readModelSelection(), { subject: null, saved: false, models: {}, defaultModelId: null });
+  assert.deepEqual(await service.readModelSelection(), { subject: null, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 });
   await assert.rejects(service.saveModelSelection({ models: {}, defaultModelId: null }), { code: 'IAM_NOT_SIGNED_IN' });
 });

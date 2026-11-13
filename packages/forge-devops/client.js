@@ -30,6 +30,11 @@ window.__ModuleLoader__.load({
     const NS = 'devops';
     /** 同源配置端点（前缀 CLI_API_PREFIX 下的 `/cli`）。 */
     const CLI_ENDPOINT = '/api/forge-devops/cli';
+    /** 企业账号统一托管的扩展凭据同源端点。 */
+    const IAM_EXT_CREDENTIALS_ENDPOINT = '/api/forge-iam/ext-credentials';
+    const IAM_EXT_CREDENTIAL_ENDPOINT = `${IAM_EXT_CREDENTIALS_ENDPOINT}/devops`;
+    const IAM_MUTATION_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json', accept: 'application/json' };
+    const IAM_READ_HEADERS = { accept: 'application/json' };
     /** 写操作的 CSRF 风格预检头，缺头服务端回 400。 */
     const REQUEST_HEADERS = { 'x-forge-devops-request': '1', 'content-type': 'application/json' };
     /** 读也带预检头：契约只对 POST 要求，带上对 GET 无害且免掉两次形态假设。 */
@@ -158,12 +163,22 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
 
     const METRICS = {
-      titleSize: 16,
-      titleLine: 24,
+      maxWidth: 720,
+      pageTitleSize: 18,
+      pageTitleLine: 26,
+      titleSize: 15,
+      titleLine: 22,
+      titleWeight: 600,
+      avatarSize: 34,
+      cardPadY: 14,
+      cardPadX: 16,
+      cardGap: 12,
+      subCardPadY: 10,
+      subCardPadX: 12,
       introSize: 12,
       introLine: 18,
-      introGap: 12,
-      statusHeight: 30,
+      introGap: 2,
+      statusHeight: 34,
       statusGap: 8,
       statusPadX: 12,
       dotSize: 6,
@@ -181,11 +196,13 @@ window.__ModuleLoader__.load({
       hintLine: 18,
       fieldPadY: 12,
       scalarInputWidth: 220,
-      footerGapTop: 16,
+      footerGapTop: 14,
       buttonHeight: 32,
+      compactButtonHeight: 26,
       separator: 0.5,
-      tagHeight: 18,
+      tagHeight: 20,
       tagSize: 11,
+      tagLine: 16,
       codeSize: 12,
       candidatePadY: 6,
       skeletonRow: 108,
@@ -193,40 +210,58 @@ window.__ModuleLoader__.load({
       fast: 100,
       swap: 160,
       breathe: 1200,
+      radiusXs: 'var(--dsw-radius-xs, 4px)',
       radiusSm: 'var(--dsw-radius-sm)',
       radiusMd: 'var(--dsw-radius-md)',
+      radiusLg: 'var(--dsw-radius-lg)',
+      radiusXl: 'var(--dsw-radius-xl)',
     };
 
     const CSS = `
-.fdv-root{display:flex;flex-direction:column;color:var(--dsw-alias-label-primary);font-family:inherit;container-type:inline-size}
-.fdv-title{margin:0;font-size:${METRICS.titleSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.titleLine}px}
-.fdv-intro{margin:${METRICS.introGap}px 0 0;font-size:${METRICS.introSize}px;line-height:${METRICS.introLine}px;color:var(--dsw-alias-label-secondary)}
-.fdv-status{box-sizing:border-box;display:flex;align-items:center;gap:${METRICS.statusGap}px;height:${METRICS.statusHeight}px;margin-top:${METRICS.statusGap}px;padding:0 ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-root{box-sizing:border-box;width:100%;max-width:${METRICS.maxWidth}px;display:flex;flex-direction:column;gap:${METRICS.cardGap}px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);container-type:inline-size}
+.fdv-page-title{margin:0;font:var(--dsw-font-m-18);font-weight:${METRICS.titleWeight};line-height:${METRICS.pageTitleLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-surface{display:flex;flex-direction:column;gap:${METRICS.cardGap}px;padding:${METRICS.cardPadY}px ${METRICS.cardPadX}px;border-radius:${METRICS.radiusXl};background:var(--dsw-alias-settings-card-fill);border:${METRICS.separator}px solid var(--dsw-alias-settings-card-stroke);transition:border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-surface:hover{border-color:var(--dsw-alias-border-l3)}
+.fdv-card-header{display:flex;align-items:center;gap:${METRICS.cardGap}px;min-width:0}
+.fdv-avatar{width:${METRICS.avatarSize}px;height:${METRICS.avatarSize}px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary)}
+.fdv-card-head-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:${METRICS.introGap}px}
+.fdv-title{margin:0;font-size:${METRICS.titleSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.titleLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-intro{margin:0;font-size:${METRICS.introSize}px;line-height:${METRICS.introLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-status{box-sizing:border-box;display:flex;align-items:center;gap:${METRICS.statusGap}px;min-height:${METRICS.statusHeight}px;padding:${METRICS.headGap}px ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-status-ready{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 22%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 7%,transparent)}
+.fdv-status-missing{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 24%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent)}
+.fdv-status-unavailable{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 24%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent)}
 .fdv-dot{flex:none;width:${METRICS.dotSize}px;height:${METRICS.dotSize}px;border-radius:50%;background:var(--dsw-alias-state-idle-primary);transition:background-color ${METRICS.swap}ms ${METRICS.ease}}
-.fdv-status-ready .fdv-dot{background:var(--dsw-static-green-500)}
-.fdv-status-missing .fdv-dot{background:var(--dsw-static-amber-500)}
-.fdv-status-unavailable .fdv-dot{background:var(--dsw-static-red-600)}
+.fdv-status-ready .fdv-dot{background:var(--dsw-alias-state-success-primary)}
+.fdv-status-missing .fdv-dot{background:var(--dsw-alias-state-warn-primary)}
+.fdv-status-unavailable .fdv-dot{background:var(--dsw-alias-state-error-primary)}
 .fdv-status-text{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary)}
+.fdv-status-ready .fdv-status-text{color:var(--dsw-alias-label-primary)}
 .fdv-status-missing .fdv-status-text{color:var(--dsw-alias-state-warn-primary)}
 .fdv-status-unavailable .fdv-status-text{color:var(--dsw-alias-state-error-primary)}
 .fdv-status-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px}
-.fdv-group{margin:${METRICS.groupGapTop}px 0 ${METRICS.groupGapBottom}px;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.groupLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-group{display:flex;flex-direction:column;gap:${METRICS.statusGap}px;margin:0;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.groupLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-cards{display:flex;flex-direction:column}
-.fdv-card{padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
-.fdv-card-first{border-top:0 none}
+.fdv-card{padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fdv-card-first{padding-top:0;border-top:0 none}
 .fdv-head{display:flex;align-items:center;flex-wrap:wrap;row-gap:4px;gap:${METRICS.statusGap}px;min-width:0;line-height:${METRICS.labelLine}px}
 .fdv-label{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fdv-head-actions{margin-left:auto;display:flex;align-items:center;gap:${METRICS.statusGap}px;flex:none}
-.fdv-input{box-sizing:border-box;display:block;width:100%;height:${METRICS.inputHeight}px;margin-top:${METRICS.headGap}px;padding:0 10px;border:1px solid var(--dsw-alias-border-l4);border-radius:${METRICS.radiusSm};background:transparent;color:inherit;font-family:inherit;font-size:${METRICS.labelSize}px;line-height:${METRICS.labelLine}px;transition:border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-input{box-sizing:border-box;display:block;width:100%;height:${METRICS.inputHeight}px;margin-top:${METRICS.headGap}px;padding:0 10px;border:${METRICS.separator}px solid var(--dsw-alias-border-l4);border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:inherit;font-size:${METRICS.labelSize}px;line-height:${METRICS.labelLine}px;transition:border-color ${METRICS.fast}ms ${METRICS.ease},box-shadow ${METRICS.fast}ms ${METRICS.ease}}
 .fdv-input::placeholder{color:var(--dsw-alias-label-tertiary)}
-.fdv-input:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}
-.fdv-input:read-only{cursor:text;color:var(--dsw-alias-label-secondary)}
+.fdv-input:focus{outline:none;border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 15%,transparent)}
+.fdv-input:read-only{cursor:text;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
 .fdv-input[aria-invalid="true"]{border-color:var(--dsw-alias-state-error-primary)}
-.fdv-input:disabled{cursor:default;color:var(--dsw-alias-label-tertiary)}
+.fdv-input:disabled{cursor:default;color:var(--dsw-alias-label-tertiary);opacity:.55}
 .fdv-foot{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.inputGap}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary)}
-.fdv-hint{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fdv-hint{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin:0}
 .fdv-foot-error .fdv-hint{color:var(--dsw-alias-state-error-primary)}
 .fdv-foot-actions{margin-left:auto;display:flex;align-items:center;gap:${METRICS.statusGap}px;flex:none}
+.fdv-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:${METRICS.compactButtonHeight}px;padding:0 10px;border:${METRICS.separator}px solid var(--dsw-alias-border-l3);border-radius:${METRICS.radiusMd};background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:1;white-space:nowrap;transition:background-color ${METRICS.fast}ms ${METRICS.ease},border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-btn:hover:not(:disabled){background:var(--dsw-alias-button-floating-hover);border-color:var(--dsw-alias-border-l2)}
+.fdv-btn:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+.fdv-btn:disabled{cursor:default;opacity:.45}
+.fdv-btn-md{height:${METRICS.buttonHeight}px;padding:0 12px;font-size:${METRICS.labelSize}px}
 .fdv-link{appearance:none;margin:0;padding:0;border:0;background:none;cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);transition:color ${METRICS.fast}ms ${METRICS.ease}}
 .fdv-link:hover{color:var(--dsw-alias-label-primary)}
 .fdv-link:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:1px;border-radius:2px}
@@ -234,77 +269,88 @@ window.__ModuleLoader__.load({
 .fdv-hint-toggle{display:inline-flex;align-items:center;gap:4px;max-width:100%;overflow:hidden}
 .fdv-caret{display:inline-block;transition:transform ${METRICS.fast}ms ${METRICS.ease};font-size:10px;line-height:1}
 .fdv-caret-open{transform:rotate(180deg)}
-.fdv-candidates{display:flex;flex-direction:column;margin-top:${METRICS.inputGap}px;animation:fdv-reveal ${METRICS.swap}ms ${METRICS.ease} both}
-.fdv-candidate{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.candidatePadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-candidates{display:flex;flex-direction:column;margin-top:${METRICS.inputGap}px;padding:4px 10px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4);animation:fdv-reveal ${METRICS.swap}ms ${METRICS.ease} both}
+.fdv-candidate{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.candidatePadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 .fdv-candidate:first-child{border-top:0 none}
-.fdv-candidate-path{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:${METRICS.codeSize}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
+.fdv-candidate-path{flex:1;min-width:0;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:${METRICS.codeSize}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
 .fdv-candidate-tier{flex:none;color:var(--dsw-alias-label-tertiary)}
-.fdv-tag{display:inline-flex;align-items:center;flex:none;height:${METRICS.tagHeight}px;padding:0 6px;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:${METRICS.tagSize}px;font-weight:400;line-height:${METRICS.tagHeight}px;white-space:nowrap}
-.fdv-tag-accent{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
-.fdv-tag-quiet{color:var(--dsw-alias-label-tertiary)}
-.fdv-tag-warn{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 14%,transparent)}
-.fdv-tag-ok{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent)}
-.fdv-scalar{box-sizing:border-box;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-tag{display:inline-flex;align-items:center;flex:none;height:${METRICS.tagHeight}px;padding:1px 8px;border-radius:${METRICS.radiusXs};border:${METRICS.separator}px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:${METRICS.tagSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.tagLine}px;white-space:nowrap}
+.fdv-tag-accent{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
+.fdv-tag-quiet{color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 8%,transparent);border-color:transparent}
+.fdv-tag-warn{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent)}
+.fdv-tag-ok{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 22%,transparent)}
+.fdv-scalar{box-sizing:border-box;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-scalar-input{width:${METRICS.scalarInputWidth}px;max-width:100%;font-variant-numeric:tabular-nums}
-.fdv-footer{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px}
+.fdv-footer{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px ${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-note{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-note-dirty{color:var(--dsw-alias-state-warn-primary);font-weight:${METRICS.labelWeight}}
 .fdv-note-error{color:var(--dsw-alias-state-error-primary)}
 .fdv-note-action{margin-left:${METRICS.statusGap}px}
-.fdv-primary{flex:none;box-sizing:border-box;height:${METRICS.buttonHeight}px;padding:0 16px;border:0 none;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-inverted);cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.hintLine}px;transition:opacity ${METRICS.fast}ms ${METRICS.ease},transform ${METRICS.fast}ms ${METRICS.ease}}
-.fdv-primary:hover{opacity:.92}
-.fdv-primary:active{opacity:.86;transform:scale(.98)}
-.fdv-primary:disabled{cursor:default;opacity:.4;transform:none}
+.fdv-primary{flex:none;box-sizing:border-box;height:${METRICS.buttonHeight}px;padding:0 16px;border:0 none;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);cursor:pointer;font-family:inherit;font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:1;transition:background-color ${METRICS.fast}ms ${METRICS.ease},transform ${METRICS.fast}ms ${METRICS.ease},opacity ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
+.fdv-primary:active:not(:disabled){opacity:.9;transform:scale(.98)}
+.fdv-primary:disabled{cursor:default;opacity:.45;transform:none}
 .fdv-primary:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px}
-.fdv-unavailable{padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
-.fdv-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fdv-unavailable{padding:${METRICS.noticePadY}px ${METRICS.noticePadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent)}
+.fdv-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fdv-unavailable-body{margin:${METRICS.headGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
-.fdv-unavailable-env{display:block;margin-top:4px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:${METRICS.codeSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
-.fdv-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.candidatePadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-unavailable-env{display:block;margin-top:4px;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:${METRICS.codeSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary);word-break:break-all}
+.fdv-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.subCardPadY}px ${METRICS.subCardPadX}px;border-radius:${METRICS.radiusLg};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-row-main{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:1;min-width:0}
 .fdv-row-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px}
-.fdv-summary-row{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin:${METRICS.statusGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
-.fdv-summary-text{flex:1;min-width:0;overflow-wrap:anywhere}
-.fdv-row-label{flex:none;width:112px;font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
-.fdv-row-state{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-summary-row{display:flex;align-items:center;gap:${METRICS.cardGap}px;margin:0;font-size:${METRICS.labelSize}px;line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-summary-text{flex:1;min-width:0;font-weight:${METRICS.titleWeight};overflow-wrap:anywhere}
+.fdv-row-label{flex:none;width:104px;font-size:${METRICS.labelSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-row-state{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0;font-size:${METRICS.hintSize}px;font-weight:400;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-row-detail{min-width:0;overflow-wrap:anywhere}
 .fdv-next{min-width:0;overflow-wrap:anywhere}
-.fdv-details{flex-basis:100%;margin:0 0 0 112px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-details{flex-basis:100%;margin:4px 0 0;padding-top:8px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4);font-size:${METRICS.hintSize}px;font-weight:400;line-height:${METRICS.hintLine}px}
 .fdv-detail-line{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;min-width:0}
 .fdv-detail-label{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
 .fdv-detail-text{min-width:0;overflow-wrap:anywhere}
-.fdv-details-body .fdv-details{margin:0}
-.fdv-details-body .fdv-check{margin:${METRICS.headGap}px 0 0;padding-top:0;border-top:0}
-.fdv-summary{cursor:pointer;color:var(--dsw-alias-label-secondary);list-style:none}
+.fdv-details-body .fdv-details{margin:4px 0 0;padding-top:6px}
+.fdv-details-body .fdv-check{margin:${METRICS.headGap}px 0 0;padding-top:8px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fdv-summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-weight:${METRICS.labelWeight};list-style:none;user-select:none}
+.fdv-summary:hover{color:var(--dsw-alias-label-primary)}
 .fdv-summary::-webkit-details-marker{display:none}
 .fdv-summary:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:${METRICS.radiusSm}}
-.fdv-details-body{display:flex;flex-direction:column;gap:2px;margin-top:${METRICS.headGap}px;padding-left:${METRICS.statusPadX}px;border-left:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-details-body{display:flex;flex-direction:column;gap:4px;margin-top:${METRICS.headGap}px;padding-left:${METRICS.statusPadX}px;border-left:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-layer-line{display:flex;gap:${METRICS.statusGap}px}
 .fdv-layer-label{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
 .fdv-layer-value{min-width:0;overflow-wrap:anywhere}
-.fdv-check{flex-basis:100%;margin:${METRICS.headGap}px 0 0 112px;padding:${METRICS.fieldPadY}px 0 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-check{flex-basis:100%;margin:${METRICS.headGap}px 0 0;padding:${METRICS.subCardPadY}px 0 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:${METRICS.headGap}px ${METRICS.statusPadX}px}
 .fdv-check-item{display:flex;gap:${METRICS.headGap}px;min-width:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 .fdv-check-label{flex:none;color:var(--dsw-alias-label-secondary)}
 .fdv-check-value{min-width:0;overflow-wrap:anywhere}
-.fdv-evidence{display:flex;flex-direction:column;gap:2px;margin:${METRICS.headGap}px 0 0;padding:0;list-style:none;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-evidence{display:flex;flex-direction:column;gap:4px;margin:${METRICS.headGap}px 0 0;padding:0;list-style:none;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 .fdv-evidence-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px}
 .fdv-evidence-layer{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
 .fdv-evidence-reason{min-width:0;overflow-wrap:anywhere}
 .fdv-evidence-basis{min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .fdv-check-footer{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
-.fdv-receipt{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.groupGapTop}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-.fdv-receipt{flex:1 1 100%}
+.fdv-receipt{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding-top:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere;flex:1 1 100%}
 .fdv-receipt-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-left:auto}
 .fdv-receipt-hint{flex:0 0 100%;margin:2px 0 0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));overflow-wrap:anywhere}
-.fdv-disclaimer{margin:${METRICS.footerGapTop}px 0 0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-.fdv-skeleton{display:flex;flex-direction:column;margin-top:${METRICS.groupGapTop}px}
-.fdv-skeleton-group{height:${METRICS.groupLine}px;margin:0 0 ${METRICS.groupGapBottom}px;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
-.fdv-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
-.fdv-skeleton-row + .fdv-skeleton-row{border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-disclaimer{margin:0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary);overflow-wrap:anywhere}
+.fdv-skeleton{display:flex;flex-direction:column;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
+.fdv-skeleton-group{height:${METRICS.groupLine}px;margin:0;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-bg-layer-2);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
+.fdv-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
+.fdv-skeleton-row + .fdv-skeleton-row{border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fdv-cred{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.subCardPadY}px ${METRICS.subCardPadX}px;border-radius:${METRICS.radiusLg};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fdv-cred-head{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px}
+.fdv-cred-main{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0}
+.fdv-cred-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-cred-status{font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fdv-cred-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:none}
+.fdv-cred-form{display:flex;flex-direction:column;gap:${METRICS.inputGap}px;margin-top:${METRICS.headGap}px}
+.fdv-cred-form-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
+.fdv-cred-alert{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.noticePadY}px ${METRICS.noticePadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-cred-details{margin:${METRICS.headGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 @keyframes fdv-breathe{0%,100%{opacity:1}50%{opacity:.55}}
 @keyframes fdv-reveal{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
-@container (max-width:519px){.fdv-candidates{max-height:176px;overflow-y:auto}}
-@media (prefers-reduced-motion:reduce){.fdv-skeleton-group,.fdv-skeleton-row{animation:none}.fdv-candidates{animation:none}.fdv-caret,.fdv-dot,.fdv-input,.fdv-primary,.fdv-link{transition:none}}
+@container (max-width:519px){.fdv-candidates{max-height:176px;overflow-y:auto}.fdv-row-label{flex-basis:100%}}
+@media (prefers-reduced-motion:reduce){.fdv-skeleton-group,.fdv-skeleton-row{animation:none}.fdv-candidates{animation:none}.fdv-caret,.fdv-dot,.fdv-input,.fdv-primary,.fdv-btn,.fdv-link{transition:none}}
 `;
 
     /* ------------------------------------------------------------------ *
@@ -419,7 +465,7 @@ window.__ModuleLoader__.load({
       'readiness.reason.noCli': '未配置命令行入口',
       'readiness.reason.notExecutable': '入口不可执行',
       'readiness.reason.unreachable': '目标不可达',
-      'readiness.reason.policyDenied': '只读被拒',
+      'readiness.reason.policyDenied': '策略拒绝',
       'readiness.key.reason.ownerMismatch': '凭据属于其他账号',
       'readiness.key.reason.notConfigured': '尚未写入网关凭据',
       'readiness.key.reason.invalid': '凭据记录不可读',
@@ -437,7 +483,7 @@ window.__ModuleLoader__.load({
       'readiness.next.keyVerify': '到企业账号页验证网关凭据',
       'readiness.next.check': '重新发现配置并重建读面',
       'readiness.next.refresh': '刷新后重试',
-      'readiness.next.giteeBlocked': '未获批准的只读探测，本页不发起请求',
+      'readiness.next.giteeBlocked': '本页不主动探测 Gitee 连通性',
       'readiness.action.openAccount': '前往企业账号',
       'readiness.nav.guide': '设置 → 企业账号',
       'readiness.check.item.revision': '基准',
@@ -451,11 +497,11 @@ window.__ModuleLoader__.load({
       'readiness.evidence.layer.file': '文件存在',
       'readiness.evidence.layer.executable': '可启动',
       'readiness.evidence.layer.target': '目标可识别',
-      'readiness.evidence.layer.readonly': '只读可访问',
+      'readiness.evidence.layer.readonly': '权限策略放行',
       'readiness.evidence.state.pass': '通过',
       'readiness.evidence.state.fail': '未通过',
       'readiness.evidence.state.notRun': '未执行',
-      'readiness.evidence.basis.filesystemStat': '文件系统只读探测',
+      'readiness.evidence.basis.filesystemStat': '本地文件系统检查',
       'readiness.evidence.basis.configShape': '配置形状',
       'readiness.evidence.basis.policyAdmission': '策略准入（未发起真实请求）',
       'readiness.evidence.reason.no-dop-bin': '未配置命令行入口',
@@ -465,7 +511,7 @@ window.__ModuleLoader__.load({
       'readiness.evidence.reason.not-executable': '入口不可执行',
       'readiness.evidence.reason.source-type-unknown': '来源类型无法判定',
       'readiness.evidence.reason.policy-unavailable': '策略不可用',
-      'readiness.evidence.reason.policy-denied': '策略拒绝只读',
+      'readiness.evidence.reason.policy-denied': '策略拒绝访问',
       'readiness.evidence.reason.confirmation-required': '需要确认',
       'readiness.evidence.reason.no-evidence': '无可复核证据',
       'readiness.layers.title': '三层来源',
@@ -487,13 +533,49 @@ window.__ModuleLoader__.load({
       'readiness.local.none': '无本机覆盖',
       'readiness.local.keys': '本机覆盖：{keys}',
       'readiness.local.unknown': '未提供',
-      'readiness.gitee.notExecuted': '未执行 · 未获批准的只读探测，本页不发起请求',
+      'readiness.gitee.notExecuted': '未执行 · 本页不主动发起请求',
       'readiness.loading': '正在读取…',
       'readiness.failed': '无法读取（{reason}）',
       'readiness.action.check': '检查 DevOps',
       'readiness.action.check.busy': '检查中…',
       'readiness.action.checkGitee': '检查 Gitee',
       'readiness.action.refresh': '刷新',
+      'credential.title': 'DevOps',
+      'credential.state.follow': '跟随本机登录（正常可用，无需配置）',
+      'credential.state.hosted': '已在此单独保存（优先于本机环境）',
+      'credential.state.signedOut': '前往「设置 → 企业账号」登录后可用（已托管的凭据暂不外发）',
+      'credential.state.unavailable': '跟随本机登录（独立安装模式：未接入企业账号托管，正常使用本机环境）',
+      'credential.state.mismatchTag': '已停用（账号不匹配）',
+      'credential.state.mismatch': '存在其他企业账号遗留的独立凭据，已安全停用（不会使用旧账号凭据，也不会回退本机环境）',
+      'credential.state.pending': '上一笔凭据保存尚未完成，请稍候等待完成',
+      'credential.state.keychainTag': '安全存储不可用',
+      'credential.state.keychainUnavailable': '本机安全存储暂不可用，无法读取或保存托管凭据（请重试或改用本机 CLI 登录）',
+      'credential.state.loading': '正在读取 DevOps 凭据状态…',
+      'credential.state.loadFailed': '暂时无法读取凭据状态，请稍后重试',
+      'credential.action.specify': '单独指定 Token',
+      'credential.action.replace': '更换 Token',
+      'credential.action.reset': '清除并恢复跟随本机',
+      'credential.action.clearOld': '清除旧配置',
+      'credential.action.resetAccount': '使用当前账号重设',
+      'credential.action.save': '保存 Token',
+      'credential.action.saving': '保存中…',
+      'credential.action.clearing': '清除中…',
+      'credential.action.cancel': '取消',
+      'credential.action.retry': '重试',
+      'credential.input.label': 'DevOps 访问凭据（只写不回显）',
+      'credential.input.placeholder': '输入新的 DevOps 访问凭据',
+      'credential.input.hint': '在此保存后，本应用将优先使用这里的 Token 覆盖本机环境；保存后页面不回显原值。',
+      'credential.details.title': '环境详情',
+      'credential.details.envVars': '检测到本机环境变量：{names}',
+      'credential.notice.saved': '已在此单独保存（优先于本机环境）',
+      'credential.notice.cleared': '已清除单独凭据，恢复跟随本机登录',
+      'credential.fail.invalid': '请输入有效的凭据内容后再保存',
+      'credential.fail.notSignedIn': '请先前往「设置 → 企业账号」登录企业账号，再保存或清除独立凭据',
+      'credential.fail.pending': '上一笔凭据操作尚未完成，请稍候重试（已保留当前输入）',
+      'credential.fail.keychainUnavailable': '本机安全存储暂不可用，未保存（详情可重试或改用本机 CLI 登录）',
+      'credential.fail.ownerMismatch': '存在其他企业账号遗留凭据，请先清除旧配置或使用当前账号重设',
+      'credential.fail.notFound': '尚未登记 DevOps 凭据扩展，请确认企业账号服务已就绪',
+      'credential.fail.generic': '凭据操作未能完成，请稍后重试',
     };
 
     const en = {
@@ -604,7 +686,7 @@ window.__ModuleLoader__.load({
       'readiness.reason.noCli': 'no command-line entry configured',
       'readiness.reason.notExecutable': 'entry is not executable',
       'readiness.reason.unreachable': 'target unreachable',
-      'readiness.reason.policyDenied': 'read denied by policy',
+      'readiness.reason.policyDenied': 'denied by policy',
       'readiness.key.reason.ownerMismatch': 'credential belongs to another account',
       'readiness.key.reason.notConfigured': 'no gateway credential written yet',
       'readiness.key.reason.invalid': 'credential record unreadable',
@@ -622,7 +704,7 @@ window.__ModuleLoader__.load({
       'readiness.next.keyVerify': 'Verify the gateway credential on the account page',
       'readiness.next.check': 'Re-discover configuration and rebuild the read path',
       'readiness.next.refresh': 'Refresh and retry',
-      'readiness.next.giteeBlocked': 'No approved read-only probe; this page sends no request',
+      'readiness.next.giteeBlocked': 'This page does not actively probe Gitee',
       'readiness.action.openAccount': 'Open enterprise account',
       'readiness.nav.guide': 'Settings → Enterprise account',
       'readiness.check.item.revision': 'Baseline',
@@ -636,11 +718,11 @@ window.__ModuleLoader__.load({
       'readiness.evidence.layer.file': 'file exists',
       'readiness.evidence.layer.executable': 'launchable',
       'readiness.evidence.layer.target': 'target recognizable',
-      'readiness.evidence.layer.readonly': 'read-only reachable',
+      'readiness.evidence.layer.readonly': 'policy permitted',
       'readiness.evidence.state.pass': 'passed',
       'readiness.evidence.state.fail': 'failed',
       'readiness.evidence.state.notRun': 'not run',
-      'readiness.evidence.basis.filesystemStat': 'filesystem read-only probe',
+      'readiness.evidence.basis.filesystemStat': 'local filesystem check',
       'readiness.evidence.basis.configShape': 'config shape',
       'readiness.evidence.basis.policyAdmission': 'policy admission (no real request sent)',
       'readiness.evidence.reason.no-dop-bin': 'no command-line entry configured',
@@ -650,7 +732,7 @@ window.__ModuleLoader__.load({
       'readiness.evidence.reason.not-executable': 'entry is not executable',
       'readiness.evidence.reason.source-type-unknown': 'source type cannot be determined',
       'readiness.evidence.reason.policy-unavailable': 'policy unavailable',
-      'readiness.evidence.reason.policy-denied': 'read-only denied by policy',
+      'readiness.evidence.reason.policy-denied': 'access denied by policy',
       'readiness.evidence.reason.confirmation-required': 'confirmation required',
       'readiness.evidence.reason.no-evidence': 'no verifiable evidence',
       'readiness.layers.title': 'Layer sources',
@@ -672,13 +754,49 @@ window.__ModuleLoader__.load({
       'readiness.local.none': 'no local override',
       'readiness.local.keys': 'local overrides: {keys}',
       'readiness.local.unknown': 'not provided',
-      'readiness.gitee.notExecuted': 'Not run · no approved read-only probe; this page sends no request',
+      'readiness.gitee.notExecuted': 'Not run · this page does not send requests',
       'readiness.loading': 'Reading…',
       'readiness.failed': 'Cannot read ({reason})',
       'readiness.action.check': 'Check DevOps',
       'readiness.action.check.busy': 'Checking…',
       'readiness.action.checkGitee': 'Check Gitee',
       'readiness.action.refresh': 'Refresh',
+      'credential.title': 'DevOps',
+      'credential.state.follow': 'Uses local CLI sign-in (works automatically, no setup needed)',
+      'credential.state.hosted': 'Saved separately here (takes priority over local environment)',
+      'credential.state.signedOut': 'Sign in under Settings → Enterprise account to use saved credentials',
+      'credential.state.unavailable': 'Uses local CLI sign-in (standalone mode: works with local environment)',
+      'credential.state.mismatchTag': 'Disabled (account mismatch)',
+      'credential.state.mismatch': 'A saved credential from another enterprise account was disabled for safety',
+      'credential.state.pending': 'A previous credential save is still in progress; wait a moment',
+      'credential.state.keychainTag': 'Secure storage unavailable',
+      'credential.state.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
+      'credential.state.loading': 'Reading DevOps credential status…',
+      'credential.state.loadFailed': 'Unable to read credential status right now; retry later',
+      'credential.action.specify': 'Set custom token',
+      'credential.action.replace': 'Replace token',
+      'credential.action.reset': 'Clear and use local sign-in',
+      'credential.action.clearOld': 'Clear old credential',
+      'credential.action.resetAccount': 'Set with current account',
+      'credential.action.save': 'Save token',
+      'credential.action.saving': 'Saving…',
+      'credential.action.clearing': 'Clearing…',
+      'credential.action.cancel': 'Cancel',
+      'credential.action.retry': 'Retry',
+      'credential.input.label': 'DevOps access token (write-only)',
+      'credential.input.placeholder': 'Enter a new DevOps access credential',
+      'credential.input.hint': 'Once saved here, this app uses it in place of local environment settings; the saved value is never shown again.',
+      'credential.details.title': 'Environment details',
+      'credential.details.envVars': 'Detected local environment variables: {names}',
+      'credential.notice.saved': 'Saved separately here (takes priority over local environment)',
+      'credential.notice.cleared': 'Cleared custom credential; restored local sign-in behavior',
+      'credential.fail.invalid': 'Enter a valid credential value before saving',
+      'credential.fail.notSignedIn': 'Sign in under Settings → Enterprise account before saving or clearing',
+      'credential.fail.pending': 'Previous credential update is still in progress; retry shortly (draft kept)',
+      'credential.fail.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
+      'credential.fail.ownerMismatch': 'An older credential belongs to another enterprise account; clear or replace it below',
+      'credential.fail.notFound': 'DevOps credential extension is not registered yet; verify account services',
+      'credential.fail.generic': 'Credential update failed; retry in a moment',
     };
 
     /* ------------------------------------------------------------------ *
@@ -785,6 +903,44 @@ window.__ModuleLoader__.load({
      * 展示组件                                                            *
      * ------------------------------------------------------------------ */
 
+    function ShieldIcon() {
+      return h(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.9,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        h('path', { d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' }),
+        h('path', { d: 'm9 12 2 2 4-4' }),
+      );
+    }
+
+    function TerminalIcon() {
+      return h(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.9,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        h('polyline', { points: '4 17 10 11 4 5' }),
+        h('line', { x1: 12, y1: 19, x2: 20, y2: 19 }),
+      );
+    }
+
     /** 小标签：来源、覆盖关系、当前生效项。 */
     function Tag(props) {
       // `text` 与 children 两种写法都要认：readiness 面板用 children 传状态词，
@@ -875,9 +1031,9 @@ window.__ModuleLoader__.load({
 
       let action = null;
       if (locked === true) action = null;
-      else if (reset) action = h('button', { type: 'button', className: 'fdv-link', onClick: onTakeOver }, t('action.takeOver'));
-      else if (editable && (owned || editing)) action = h('button', { type: 'button', className: 'fdv-link', onClick: onReset }, t('action.reset'));
-      else if (!editable) action = h('button', { type: 'button', className: 'fdv-link', onClick: onTakeOver }, t('action.takeOver'));
+      else if (reset) action = h('button', { type: 'button', className: 'fdv-btn', onClick: onTakeOver }, t('action.takeOver'));
+      else if (editable && (owned || editing)) action = h('button', { type: 'button', className: 'fdv-btn', onClick: onReset }, t('action.reset'));
+      else if (!editable) action = h('button', { type: 'button', className: 'fdv-btn', onClick: onTakeOver }, t('action.takeOver'));
 
       const footId = `fdv-${field}-foot`;
       return h(
@@ -1177,6 +1333,9 @@ window.__ModuleLoader__.load({
      */
     function ReadinessSection(props) {
       const t = props.t;
+      // 嵌在容器条目里时不再画自己的标题与页脚：容器已经给了「企业研发工具」标题，
+      // 再出现一个「企业研发」h2 就是三层同名标题（§6.3 的信息层级）。
+      const embedded = props.embedded === true;
       const navigate = typeof props.navigate === 'function' ? props.navigate : null;
       const [reading, setReading] = React.useState({ mode: 'loading', sources: null, reason: null });
       const [check, setCheck] = React.useState({
@@ -1642,14 +1801,14 @@ window.__ModuleLoader__.load({
         if (next.kind === 'navigate' && navigate) {
           return h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'account', onClick: () => navigate(SECTION_FORGE_IAM) },
+            { type: 'button', className: 'fdv-btn', key: 'account', onClick: () => navigate(SECTION_FORGE_IAM) },
             t('readiness.action.openAccount'),
           );
         }
         if (next.kind === 'button') {
           return h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'retry', disabled: busy, onClick: next.onClick },
+            { type: 'button', className: 'fdv-btn', key: 'retry', disabled: busy, onClick: next.onClick },
             t(next.label),
           );
         }
@@ -1660,12 +1819,12 @@ window.__ModuleLoader__.load({
         return [
           h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'check', disabled: busy, onClick: () => void runCheck() },
+            { type: 'button', className: 'fdv-btn', key: 'check', disabled: busy, onClick: () => void runCheck() },
             busy ? t('readiness.action.check.busy') : t('readiness.action.check'),
           ),
           h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'gitee', disabled: true, title: t('readiness.gitee.notExecuted') },
+            { type: 'button', className: 'fdv-btn', key: 'gitee', disabled: true, title: t('readiness.gitee.notExecuted') },
             t('readiness.action.checkGitee'),
           ),
         ];
@@ -1675,9 +1834,13 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           { className: 'fdv-root' },
-          h('div', { className: 'fdv-title' }, t('readiness.title')),
-          h(Skeleton, { key: 'skeleton' }),
-          h('p', { className: 'fdv-note', role: 'status', 'aria-live': 'polite' }, t('readiness.loading')),
+          embedded ? null : h('h2', { className: 'fdv-page-title' }, t('readiness.title')),
+          h(
+            'div',
+            { className: 'fdv-surface' },
+            h(Skeleton, { key: 'skeleton' }),
+            h('p', { className: 'fdv-note', role: 'status', 'aria-live': 'polite' }, t('readiness.loading')),
+          ),
         );
       }
 
@@ -1708,22 +1871,27 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'fdv-root', 'aria-busy': reading.mode === 'refreshing' ? 'true' : undefined },
-        h('div', { className: 'fdv-title' }, t('readiness.title')),
+        embedded ? null : h('h2', { className: 'fdv-page-title' }, t('readiness.title')),
         h(
           'div',
-          { className: 'fdv-summary-row' },
-          h('span', { className: 'fdv-summary-text', role: 'status', 'aria-live': 'polite' }, summaryOf(members)),
+          { className: 'fdv-surface' },
           h(
-            'button',
-            { type: 'button', className: 'fdv-link', disabled: busy, onClick: () => void load() },
-            t('readiness.action.refresh'),
+            'div',
+            { className: 'fdv-summary-row' },
+            h('span', { className: 'fdv-avatar', 'aria-hidden': 'true' }, h(ShieldIcon)),
+            h('span', { className: 'fdv-summary-text', role: 'status', 'aria-live': 'polite' }, summaryOf(members)),
+            h(
+              'button',
+              { type: 'button', className: 'fdv-btn', disabled: busy, onClick: () => void load() },
+              t('readiness.action.refresh'),
+            ),
           ),
+          h('div', { className: 'fdv-group' }, READINESS_GROUPS.map(rowNode)),
+          reading.reason
+            ? h('p', { className: 'fdv-note fdv-note-error', role: 'status' }, t('readiness.failed', { reason: t(`readiness.state.${reading.reason}`) }))
+            : null,
         ),
-        h('div', { className: 'fdv-group' }, READINESS_GROUPS.map(rowNode)),
-        reading.reason
-          ? h('p', { className: 'fdv-note fdv-note-error', role: 'status' }, t('readiness.failed', { reason: t(`readiness.state.${reading.reason}`) }))
-          : null,
-        h('p', { className: 'fdv-footer fdv-disclaimer', key: 'footer' }, t('readiness.footer')),
+        embedded ? null : h('p', { className: 'fdv-footer fdv-disclaimer', key: 'footer' }, t('readiness.footer')),
       );
     }
 
@@ -2038,15 +2206,26 @@ window.__ModuleLoader__.load({
         });
       }
 
+      const cardHeader = h(
+        'div',
+        { className: 'fdv-card-header', key: 'header' },
+        h('span', { className: 'fdv-avatar', 'aria-hidden': 'true' }, h(TerminalIcon)),
+        h(
+          'div',
+          { className: 'fdv-card-head-text' },
+          h('h2', { className: 'fdv-title', key: 'title' }, t('title')),
+          h('p', { className: 'fdv-intro', key: 'intro' }, t('intro')),
+        ),
+      );
+
       const children = [
-        h('h2', { className: 'fdv-title', key: 'title' }, t('title')),
-        h('p', { className: 'fdv-intro', key: 'intro' }, t('intro')),
+        cardHeader,
         h(StatusLine, { key: 'status', t, tone: status.tone, text: status.text }),
       ];
 
       if (view.mode === 'loading') {
         children.push(h(Skeleton, { key: 'skeleton' }));
-        return h('div', { className: 'fdv-root' }, children);
+        return h('div', { className: 'fdv-root' }, h('div', { className: 'fdv-surface' }, children));
       }
 
       // 写面缺失（configEditor 未挂载 / profile 无可写条目）：读面照常，字段降级只读（不关页面）。
@@ -2054,7 +2233,7 @@ window.__ModuleLoader__.load({
 
       if (view.mode === 'error') {
         children.push(h(UnavailableNote, { key: 'unavailable', t }));
-        return h('div', { className: 'fdv-root' }, children);
+        return h('div', { className: 'fdv-root' }, h('div', { className: 'fdv-surface' }, children));
       }
 
       children.push(
@@ -2089,7 +2268,9 @@ window.__ModuleLoader__.load({
       // 第二行：超时（单行 .fdv-scalar）。页面只有两行一列，行间只有一条 .5px 分隔线。
       children.push(timeoutField());
 
-      const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict') ? ' fdv-note-error' : '';
+      const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict')
+        ? ' fdv-note-error'
+        : (!notice && phase !== 'saving' && dirty ? ' fdv-note-dirty' : '');
       /** 回执一句：保存态优先，其次才是失败原因；不再为「应用」单开一行假状态。 */
       const receiptSentence = (() => {
         if (notice) return notice.text;
@@ -2129,7 +2310,7 @@ window.__ModuleLoader__.load({
                   notice && notice.refresh
                     ? h(
                         'button',
-                        { type: 'button', className: 'fdv-link fdv-note-action', onClick: () => void load(true) },
+                        { type: 'button', className: 'fdv-btn fdv-note-action', onClick: () => void load(true) },
                         t('action.refresh'),
                       )
                     : null,
@@ -2141,7 +2322,7 @@ window.__ModuleLoader__.load({
                     'button',
                     {
                       type: 'button',
-                      className: 'fdv-link',
+                      className: 'fdv-btn fdv-btn-md',
                       disabled: phase === 'checking',
                       onClick: () => {
                         if (phase !== 'checking') void load(true);
@@ -2173,9 +2354,10 @@ window.__ModuleLoader__.load({
                   )
                 : null,
             ),
+        h(DevopsCredentialItem, { key: 'credential', t }),
       );
 
-      return h('div', { className: 'fdv-root' }, children);
+      return h('div', { className: 'fdv-root' }, h('div', { className: 'fdv-surface' }, children));
     }
 
     /* ------------------------------------------------------------------ *
@@ -2237,57 +2419,424 @@ window.__ModuleLoader__.load({
       return null;
     }
 
+    /**
+     * `ctx.slots.register` 返回函数型 disposer（宿主内部是 `ctx.effect` 的返回值）。
+     * 只认函数：拿到别的形态多半是宿主契约变了，凭猜测调 `.dispose()` 可能整个插件 fiber 被卸掉。
+     */
+    function releaseDisposable(handle) {
+      if (typeof handle === 'function') handle();
+    }
+
+    /** 扩展凭据 HTTP 失败码 → 纯自然语言提示键（不在主界面透出内部枚举码）。 */
+    const EXT_CREDENTIAL_FAIL_KEYS = Object.freeze({
+      IAM_EXT_CREDENTIAL_INVALID: 'credential.fail.invalid',
+      IAM_EXT_TOKEN_INVALID: 'credential.fail.invalid',
+      ENTERPRISE_CREDENTIAL_INVALID: 'credential.fail.invalid',
+      IAM_NOT_SIGNED_IN: 'credential.fail.notSignedIn',
+      PENDING_WRITE: 'credential.fail.pending',
+      ENTERPRISE_CREDENTIAL_PENDING: 'credential.fail.pending',
+      KEYCHAIN_UNAVAILABLE: 'credential.fail.keychainUnavailable',
+      ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: 'credential.fail.keychainUnavailable',
+      OWNER_MISMATCH: 'credential.fail.ownerMismatch',
+      ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: 'credential.fail.ownerMismatch',
+      IAM_EXT_CREDENTIAL_NOT_FOUND: 'credential.fail.notFound',
+    });
+
+    async function requestCredentialJson(url, options) {
+      const response = await fetch(url, options);
+      const body = await readJsonBody(response);
+      return { response, body };
+    }
+
+    function devopsCredentialFailKey(code) {
+      if (typeof code === 'string' && Object.prototype.hasOwnProperty.call(EXT_CREDENTIAL_FAIL_KEYS, code)) {
+        return EXT_CREDENTIAL_FAIL_KEYS[code];
+      }
+      return 'credential.fail.generic';
+    }
+
+    /**
+     * 内置在 DevopsSection 诊断面板中的 DevOps 独立凭据托管卡片。
+     * 常态不主动读取或要求录入 Token；仅在用户主动覆盖或存在跨账号冲突/安全存储异常时展开。
+     */
+    function DevopsCredentialItem(props) {
+      const t = typeof props?.t === 'function' ? props.t : (key) => zh[key] ?? key;
+      const sessionReady = props?.sessionReady;
+      const [statusView, setStatusView] = React.useState({ mode: 'loading', entry: null });
+      const [openForm, setOpenForm] = React.useState(false);
+      const [draft, setDraft] = React.useState('');
+      const [busyAction, setBusyAction] = React.useState(null);
+      const [feedback, setFeedback] = React.useState(null);
+      const mounted = React.useRef(true);
+      const reqSeq = React.useRef(0);
+
+      React.useEffect(() => {
+        mounted.current = true;
+        return () => {
+          mounted.current = false;
+        };
+      }, []);
+
+      async function reload() {
+        const seq = ++reqSeq.current;
+        try {
+          const { response, body } = await requestCredentialJson(IAM_EXT_CREDENTIALS_ENDPOINT, {
+            headers: IAM_READ_HEADERS,
+            cache: 'no-store',
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          if (!response.ok) {
+            const code = errorCode(body);
+            if ((response.status === 404 || response.status === 501) && !code) {
+              setStatusView({ mode: 'ready', entry: { extensionId: 'devops', state: 'IAM_UNAVAILABLE', envHitNames: [] } });
+              return;
+            }
+            if (code === 'IAM_NOT_SIGNED_IN') {
+              setStatusView({ mode: 'ready', entry: { extensionId: 'devops', state: 'IAM_NOT_SIGNED_IN', envHitNames: [] } });
+              return;
+            }
+            setStatusView({ mode: 'failed', entry: null });
+            setFeedback({ tone: 'warn', text: t(devopsCredentialFailKey(code)) });
+            return;
+          }
+          const list = Array.isArray(body?.credentials) ? body.credentials : [];
+          const found = list.find((item) => item && item.extensionId === 'devops') ?? null;
+          setStatusView({ mode: 'ready', entry: found });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setStatusView({ mode: 'failed', entry: null });
+        }
+      }
+
+      React.useEffect(() => {
+        void reload();
+      }, [sessionReady]);
+
+      async function saveToken() {
+        const trimmed = normalize(draft);
+        if (!trimmed) {
+          setFeedback({ tone: 'warn', text: t('credential.fail.invalid') });
+          return;
+        }
+        const seq = ++reqSeq.current;
+        setBusyAction('saving');
+        setFeedback(null);
+        try {
+          const { response, body } = await requestCredentialJson(IAM_EXT_CREDENTIAL_ENDPOINT, {
+            method: 'PUT',
+            headers: IAM_MUTATION_HEADERS,
+            body: JSON.stringify({ token: trimmed }),
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          if (!response.ok) {
+            setFeedback({ tone: 'warn', text: t(devopsCredentialFailKey(errorCode(body))) });
+            return;
+          }
+          const nextEntry = body?.credential
+            ?? (Array.isArray(body?.credentials) ? body.credentials.find((item) => item && item.extensionId === 'devops') : null)
+            ?? { extensionId: 'devops', state: 'HOSTED_ACTIVE', hosted: true, envHitNames: [] };
+          setStatusView({ mode: 'ready', entry: nextEntry });
+          setDraft('');
+          setOpenForm(false);
+          setFeedback({ tone: 'ok', text: t('credential.notice.saved') });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          setFeedback({ tone: 'warn', text: t('credential.fail.generic') });
+        }
+      }
+
+      async function clearToken() {
+        const seq = ++reqSeq.current;
+        setBusyAction('clearing');
+        setFeedback(null);
+        try {
+          const { response, body } = await requestCredentialJson(IAM_EXT_CREDENTIAL_ENDPOINT, {
+            method: 'DELETE',
+            headers: IAM_MUTATION_HEADERS,
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          if (!response.ok) {
+            setFeedback({ tone: 'warn', text: t(devopsCredentialFailKey(errorCode(body))) });
+            return;
+          }
+          const nextEntry = body?.credential
+            ?? (Array.isArray(body?.credentials) ? body.credentials.find((item) => item && item.extensionId === 'devops') : null)
+            ?? { extensionId: 'devops', state: 'UNSET_NO_HOSTED', hosted: false, envHitNames: [] };
+          setStatusView({ mode: 'ready', entry: nextEntry });
+          setDraft('');
+          setOpenForm(false);
+          setFeedback({ tone: 'ok', text: t('credential.notice.cleared') });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          setFeedback({ tone: 'warn', text: t('credential.fail.generic') });
+        }
+      }
+
+      const entry = statusView.entry;
+      const state = entry?.state ?? (statusView.mode === 'loading' ? 'LOADING' : statusView.mode === 'failed' ? 'LOAD_FAILED' : 'UNSET_NO_HOSTED');
+      const isPending = busyAction !== null || state === 'PENDING_WRITE';
+      const isHosted = state === 'HOSTED_ACTIVE';
+      const isMismatch = state === 'OWNER_MISMATCH';
+      const isSignedOut = state === 'IAM_NOT_SIGNED_IN';
+      const isUnavailable = state === 'IAM_UNAVAILABLE';
+      const isKeychainUnavailable = state === 'KEYCHAIN_UNAVAILABLE';
+      const envHitNames = Array.isArray(entry?.envHitNames) ? entry.envHitNames : [];
+
+      const statusInfo = (() => {
+        if (statusView.mode === 'loading') return { tone: 'quiet', badge: null, text: t('credential.state.loading') };
+        if (statusView.mode === 'failed') return { tone: 'warn', badge: null, text: t('credential.state.loadFailed') };
+        if (isHosted) return { tone: 'ok', badge: t('credential.state.hosted'), text: t('credential.state.hosted') };
+        if (isMismatch) return { tone: 'warn', badge: t('credential.state.mismatchTag'), text: t('credential.state.mismatch') };
+        if (isSignedOut) return { tone: 'quiet', badge: null, text: t('credential.state.signedOut') };
+        if (isUnavailable) return { tone: 'quiet', badge: null, text: t('credential.state.unavailable') };
+        if (isKeychainUnavailable) return { tone: 'warn', badge: t('credential.state.keychainTag'), text: t('credential.state.keychainUnavailable') };
+        if (state === 'PENDING_WRITE') return { tone: 'quiet', badge: null, text: t('credential.state.pending') };
+        return { tone: 'quiet', badge: null, text: t('credential.state.follow') };
+      })();
+
+      const actions = [];
+      if (!isSignedOut && !isUnavailable && !openForm && statusView.mode === 'ready') {
+        if (state === 'PENDING_WRITE') {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-link', key: 'retry', disabled: busyAction !== null, onClick: () => void reload() }, t('credential.action.retry')),
+          );
+        } else if (isHosted) {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-btn', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),
+          );
+        } else if (isMismatch) {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-btn', key: 'clearOld', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.clearOld')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'resetAccount', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.resetAccount')),
+          );
+        } else if (isKeychainUnavailable) {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-btn', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+          );
+        } else if (state !== 'PENDING_WRITE') {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-btn', key: 'specify', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.specify')),
+          );
+        }
+      } else if (statusView.mode === 'failed' && !openForm) {
+        actions.push(
+          h('button', { type: 'button', className: 'fdv-btn', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+        );
+      }
+
+      return h(
+        'div',
+        { className: 'fdv-cred', 'data-extension-id': 'devops', 'data-credential-state': state },
+        h(
+          'div',
+          { className: 'fdv-cred-head' },
+          h(
+            'div',
+            { className: 'fdv-cred-main' },
+            h('span', { className: 'fdv-cred-title' }, t('credential.title')),
+            statusInfo.badge ? h(Tag, { tone: statusInfo.tone }, statusInfo.badge) : null,
+            !statusInfo.badge ? h('span', { className: 'fdv-cred-status' }, statusInfo.text) : null,
+          ),
+          actions.length > 0 ? h('div', { className: 'fdv-cred-actions' }, actions) : null,
+        ),
+        (isMismatch || isKeychainUnavailable)
+          ? h(
+              'div',
+              { className: 'fdv-cred-alert', role: 'alert' },
+              h('span', null, statusInfo.text),
+            )
+          : null,
+        openForm
+          ? h(
+              'div',
+              { className: 'fdv-cred-form' },
+              h('label', { className: 'fdv-hint', htmlFor: 'fdv-cred-input' }, t('credential.input.label')),
+              h('input', {
+                id: 'fdv-cred-input',
+                className: 'fdv-input',
+                type: 'password',
+                autoComplete: 'off',
+                spellCheck: false,
+                disabled: isPending,
+                value: draft,
+                placeholder: t('credential.input.placeholder'),
+                'aria-label': t('credential.input.label'),
+                onChange: (event) => {
+                  setDraft(event.target.value);
+                  setFeedback(null);
+                },
+              }),
+              h('p', { className: 'fdv-hint' }, t('credential.input.hint')),
+              h(
+                'div',
+                { className: 'fdv-cred-form-actions' },
+                h(
+                  'button',
+                  { type: 'button', className: 'fdv-primary', disabled: isPending, onClick: () => void saveToken() },
+                  busyAction === 'saving' ? t('credential.action.saving') : t('credential.action.save'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'fdv-btn fdv-btn-md',
+                    disabled: isPending,
+                    onClick: () => {
+                      setOpenForm(false);
+                      setDraft('');
+                      setFeedback(null);
+                    },
+                  },
+                  t('credential.action.cancel'),
+                ),
+              ),
+            )
+          : null,
+        envHitNames.length > 0
+          ? h(
+              'details',
+              { className: 'fdv-cred-details' },
+              h('summary', { className: 'fdv-summary' }, t('credential.details.title')),
+              h('p', { className: 'fdv-hint' }, t('credential.details.envVars', { names: envHitNames.join(', ') })),
+            )
+          : null,
+        feedback
+          ? h(
+              'p',
+              {
+                className: feedback.tone === 'warn' ? 'fdv-note fdv-note-error' : 'fdv-note',
+                role: feedback.tone === 'warn' ? 'alert' : 'status',
+                'aria-live': 'polite',
+              },
+              feedback.text,
+            )
+          : null,
+      );
+    }
+
+    /** 容器子槽位只放一个 DevOps 条目：就绪检查在上，配置面板在下（设计 §6.3）。 */
+    function DevopsEngineeringTab(props) {
+      // 顺序：先跨工具就绪总览，再 DevOps 配置；就绪面板在容器里以 embedded 形态渲染，
+      // 不重复画容器已给出的标题与页脚（§6.3）。
+      return React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(ReadinessSection, { ...props, embedded: true }),
+        React.createElement(DevopsSection, props),
+      );
+    }
+
+    const ENGINEERING_TAB_SLOT = 'heluo.engineering.tab';
+
     function apply(ctx) {
       const t = ctx.locale.bind(NS);
       const navigate = sectionNavigatorOf(ctx);
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'forge-devops: copy');
       ctx.effect(() => ensureStyle(), 'forge-devops: styles');
-      // `settings.section` 由父条目（settings 壳 → settings-general 的 `slots.inject` 回调）声明，
-      // 冷启动最坏时序下会**晚于**本插件 apply。直接 `register` 会抛
-      // `slot "settings.section" is not declared (a parent entry's children table must declare it)`
-      // 并让整个分区消失（QA D-2）；宿主内五个设置类插件与 `forge-iam/client.js`
-      // 一律用 `slots.inject(<槽位>, () => register(...))` 等声明，这里同法——声明后才注册，
-      // 声明已存在时立即注册，卸载时两者都随 effect 释放。
+      // `settings.section` 由父条目声明，冷启动最坏时序下会**晚于**本插件 apply；
+      // 直接 `register` 会抛 `slot "settings.section" is not declared ...` 并让分区消失（QA D-2）。
+      // 研发组合装了容器时，DevOps 与就绪检查合并成一个容器条目（order 10，设计 §6.3），
+      // 不再各占侧栏分区；单独安装单包（ADR-0012）时容器缺席，两个独立分区保持原样。
+      //
+      // 两个槽位的声明先后不定（容器可能晚于 apply 声明，也可能运行期被禁用而塌陷），
+      // 所以用声明标志 + `reconcile()` 收敛：任一标志变化都按当前状态重建挂载，
+      // 新挂载成功后才释放旧的，容器塌陷时把独立分区补回来。
+      let container = false;
+      let section = false;
+      /** 当前生效的挂载：`{ kind: 'tab' | 'section', releases: Array<() => void> }`。 */
+      let mounted;
+
+      const mountSection = () => {
+        const releases = [];
+        try {
+          releases.push(ctx.slots.register({
+            name: 'settings.section',
+            id: 'devops',
+            order: 60,
+            label: () => t('nav'),
+            locale: NS,
+            inject: () => ({ t, navigate }),
+          }, DevopsSection));
+          releases.push(ctx.slots.register({
+            name: 'settings.section',
+            id: 'devops-readiness',
+            order: 29,
+            label: () => t('readiness.nav'),
+            locale: NS,
+            inject: () => ({ t, navigate }),
+          }, ReadinessSection));
+        } catch (error) {
+          // 两笔注册不是事务：第二笔失败时把第一笔撤掉，别留下孤立分区。
+          for (const release of releases) releaseDisposable(release);
+          throw error;
+        }
+        return releases;
+      };
+
+      const mountTab = () => [
+        ctx.slots.register({
+          name: ENGINEERING_TAB_SLOT,
+          id: 'devops',
+          order: 10,
+          label: () => t('nav'),
+          locale: NS,
+          inject: () => ({ t, navigate }),
+        }, DevopsEngineeringTab),
+      ];
+
+      const reconcile = () => {
+        const wanted = container ? 'tab' : (section ? 'section' : undefined);
+        if (wanted === undefined) {
+          const previous = mounted;
+          mounted = undefined;
+          if (previous !== undefined) for (const release of previous.releases) releaseDisposable(release);
+          return;
+        }
+        if (mounted !== undefined && mounted.kind === wanted) return;
+        let releases;
+        try {
+          releases = wanted === 'tab' ? mountTab() : mountSection();
+        } catch (error) {
+          // 卸载期 `ctx.effect` 已冻结（宿主抛 INACTIVE_EFFECT）：cleanup 里不该再冒泡。
+          if (error?.code !== 'INACTIVE_EFFECT') throw error;
+          return;
+        }
+        const previous = mounted;
+        mounted = { kind: wanted, releases };
+        if (previous !== undefined) for (const release of previous.releases) releaseDisposable(release);
+      };
+
       ctx.effect(
-        () =>
-          ctx.slots.inject('settings.section', () =>
-            ctx.slots.register(
-              {
-                name: 'settings.section',
-                id: 'devops',
-                order: 60,
-                label: () => t('nav'),
-                locale: NS,
-                inject: () => ({ t, navigate }),
-              },
-              DevopsSection,
-            ),
-          ),
-        'forge-devops: settings section',
+        () => ctx.slots.inject(ENGINEERING_TAB_SLOT, () => {
+          container = true;
+          reconcile();
+          return () => {
+            container = false;
+            reconcile();
+          };
+        }),
+        'forge-devops: engineering tab',
       );
-      // r15「企业研发」分区（order 29，排在 `forge-iam` 的 30 之前）：同一个 client 承载两个分区，
-      // 各自独立注册——任一注册失败不牵连另一个（两个 effect 标签分开，测试按标签断言）。
       ctx.effect(
-        () =>
-          ctx.slots.inject('settings.section', () =>
-            ctx.slots.register(
-              {
-                name: 'settings.section',
-                id: 'devops-readiness',
-                order: 29,
-                label: () => t('readiness.nav'),
-                locale: NS,
-                inject: () => ({ t, navigate }),
-              },
-              ReadinessSection,
-            ),
-          ),
-        'forge-devops: readiness section',
+        () => ctx.slots.inject('settings.section', () => {
+          section = true;
+          reconcile();
+          return () => {
+            section = false;
+            reconcile();
+          };
+        }),
+        'forge-devops: settings section',
       );
     }
 
     const inject = ['slots', 'locale'];
 
-    return { apply, inject, DevopsSection, ReadinessSection, CliEntryField, StatusLine, CandidateList };
+    return { apply, inject, DevopsSection, ReadinessSection, DevopsEngineeringTab, DevopsCredentialItem, CliEntryField, StatusLine, CandidateList };
   },
 });

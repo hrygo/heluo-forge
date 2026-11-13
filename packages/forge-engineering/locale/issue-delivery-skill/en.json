@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Enterprise issue delivery",
+    "description": "User-invoked enterprise workflow skill for turning one selected Gitee issue into a version-bound delivery candidate through native Teamflow."
+  }
+}
+

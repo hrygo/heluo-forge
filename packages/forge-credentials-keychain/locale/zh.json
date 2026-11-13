@@ -1,0 +1,8 @@
+{
+  "meta": {
+    "title": "企业加密凭据存储",
+    "description": "安全加密托管企业凭据与访问令牌，避免明文落盘。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
+

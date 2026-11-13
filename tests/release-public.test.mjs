@@ -41,7 +41,7 @@ function commitAll(root, message) {
   git(root, ['-c', 'user.name=Forge Test', '-c', 'user.email=forge-test', 'commit', '-q', '-m', message]);
 }
 
-function licensedTree(t, { license = 'Apache-2.0' } = {}) {
+function licensedTree(t, { license = 'Apache-2.0', splitLayers = false, dropRow } = {}) {
   const tree = createReleaseTree(t);
   put(tree.root, 'package.json', { name: 'heluo-forge-fixture', version: VERSION, private: true, license });
   for (const path of [`packages/forge-enterprise/package.json`, `packages/forge-credentials-keychain/package.json`]) {
@@ -51,18 +51,21 @@ function licensedTree(t, { license = 'Apache-2.0' } = {}) {
   }
   // The umbrella package declares the composition patch it installs; the public
   // artifact must ship it and the patch must stay configuration-neutral.
-  put(tree.root, 'packages/forge-enterprise/cordis.patch.yml', [
-    '- insert:',
-    '    - id: heluo-iam',
-    "      name: '@heluo/forge-iam'",
-    '    - id: heluo-gitee',
-    "      name: '@heluo/forge-gitee'",
-    '      config: {}',
-    '    - id: forge-devops',
-    "      name: '@heluo/forge-devops'",
-    '      config: {}',
-    '',
-  ].join('\n'));
+  const rows = (ids) => ids.flatMap(([id, name]) => [
+    `    - id: ${id}`,
+    `      name: '${name}'`,
+    ...(id === 'heluo-iam' ? [] : ['      config: {}']),
+  ]);
+  const wants = (id) => dropRow !== id;
+  const baseRows = [['heluo-iam', '@heluo/forge-iam']].filter(([id]) => wants(id));
+  const overlayRows = [['heluo-gitee', '@heluo/forge-gitee'], ['forge-devops', '@heluo/forge-devops']].filter(([id]) => wants(id));
+  if (splitLayers) {
+    // 两层形态：默认层只放 IAM，研发叠加层放 Gitee 与 DevOps（与真实组合方式一致）。
+    put(tree.root, 'packages/forge-enterprise/cordis.patch.yml', ['- insert:', ...rows(baseRows), ''].join('\n'));
+    put(tree.root, 'packages/forge-enterprise/cordis.patch.engineering.yml', ['- insert:', ...rows(overlayRows), ''].join('\n'));
+  } else {
+    put(tree.root, 'packages/forge-enterprise/cordis.patch.yml', ['- insert:', ...rows([...baseRows, ...overlayRows]), ''].join('\n'));
+  }
   for (const name of ['forge-iam', 'forge-gitee', 'forge-devops']) {
     put(tree.root, `packages/${name}/package.json`, { name: `@heluo/${name}`, version: '0.1.0', type: 'module', main: './src/index.mjs', files: ['src', 'README.md'], license });
     put(tree.root, `packages/${name}/README.md`, `# ${name} fixture\n`);
@@ -73,7 +76,7 @@ function licensedTree(t, { license = 'Apache-2.0' } = {}) {
   }
   const enterprisePath = join(tree.root, 'packages/forge-enterprise/package.json');
   const enterprise = JSON.parse(readFileSync(enterprisePath, 'utf8'));
-  enterprise.files = [...enterprise.files, 'cordis.patch.yml'];
+  enterprise.files = [...enterprise.files, 'cordis.patch.yml', ...(splitLayers ? ['cordis.patch.engineering.yml'] : [])];
   enterprise.dsh = { bundle: { patch: './cordis.patch.yml' } };
   enterprise.dependencies = {
     ...enterprise.dependencies,
@@ -272,6 +275,81 @@ test('refuses an artifact that carries enterprise configuration', (t) => {
   expectCode(
     () => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' }),
     'ARTIFACT_NOT_NEUTRAL',
+  );
+});
+
+test('a split-layer public release ships both layers and is still judged as one set', (t) => {
+  const tree = taggedTree(t, { splitLayers: true });
+  const release = buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' });
+  assert.equal(release.neutral, true);
+  const entries = readBundleEntries(readFileSync(release.tarball), { withContent: true });
+  const layers = entries.map((entry) => entry.path).filter((path) => /^cordis\.patch(?:\.[A-Za-z0-9-]+)?\.yml$/u.test(path)).sort();
+  assert.deepEqual(layers, ['cordis.patch.engineering.yml', 'cordis.patch.yml'], '两层都必须进产物');
+  const base = String(entries.find((entry) => entry.path === 'cordis.patch.yml').content);
+  const overlay = String(entries.find((entry) => entry.path === 'cordis.patch.engineering.yml').content);
+  assert.match(base, /heluo-iam/u);
+  assert.match(overlay, /heluo-gitee/u);
+  assert.match(overlay, /forge-devops/u);
+});
+
+test('refuses a split bundle whose required row lives in no layer at all', (t) => {
+  const tree = taggedTree(t, { splitLayers: true, dropRow: 'heluo-iam' });
+  expectCode(
+    () => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' }),
+    'ARTIFACT_NOT_NEUTRAL',
+  );
+});
+
+test('universal @heluo/forge-enterprise without R&D rows passes public release neutrality check', (t) => {
+  const tree = taggedTree(t, { dropRow: 'heluo-gitee' });
+  // Also drop forge-devops so cordis.patch.yml mirrors the universal 3-row base bundle (heluo-iam only).
+  const patchPath = join(tree.root, 'packages/forge-enterprise/cordis.patch.yml');
+  const universalPatch = readFileSync(patchPath, 'utf8').replace(/ {4}- id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}\n/u, '');
+  put(tree.root, 'packages/forge-enterprise/cordis.patch.yml', universalPatch);
+  commitAll(tree.root, 'universal base bundle without R&D rows');
+  git(tree.root, ['tag', '-f', `v${VERSION}`]);
+  const release = buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' });
+  assert.equal(release.neutral, true);
+  const entries = readBundleEntries(readFileSync(release.tarball), { withContent: true });
+  const base = String(entries.find((entry) => entry.path === 'cordis.patch.yml').content);
+  assert.match(base, /heluo-iam/u);
+  assert.doesNotMatch(base, /forge-devops|heluo-gitee/u);
+});
+
+test('refuses a split bundle whose non-default layer carries enterprise configuration', (t) => {
+  const tree = taggedTree(t, { splitLayers: true });
+  // 默认层干净、叠加层带企业配置：只判第一层就会放过。
+  put(tree.root, 'packages/forge-enterprise/cordis.patch.engineering.yml', [
+    '- insert:',
+    '    - id: heluo-gitee',
+    "      name: '@heluo/forge-gitee'",
+    '      config:',
+    '        host: gitee.corp.example',
+    '    - id: forge-devops',
+    "      name: '@heluo/forge-devops'",
+    '      config: {}',
+    '',
+  ].join('\n'));
+  commitAll(tree.root, 'dirty overlay layer');
+  git(tree.root, ['tag', '-f', `v${VERSION}`]);
+  expectCode(
+    () => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' }),
+    'ARTIFACT_NOT_NEUTRAL',
+  );
+});
+
+test('refuses a bundle that does not ship its declared patch layer', (t) => {
+  const tree = taggedTree(t);
+  const manifestPath = join(tree.root, 'packages/forge-enterprise/package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  // 声明指向不存在的层：装上也加载不到企业能力。
+  manifest.dsh = { bundle: { patch: './cordis.patch.missing.yml' } };
+  put(tree.root, 'packages/forge-enterprise/package.json', manifest);
+  commitAll(tree.root, 'declare a layer that is not shipped');
+  git(tree.root, ['tag', '-f', `v${VERSION}`]);
+  expectCode(
+    () => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' }),
+    'ARTIFACT_INVALID',
   );
 });
 

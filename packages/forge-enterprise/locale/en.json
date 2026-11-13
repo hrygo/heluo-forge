@@ -1,6 +1,7 @@
 {
   "meta": {
-    "title": "Enterprise Issue Delivery",
-    "description": "User-invoked enterprise workflow for turning one Gitee issue into a version-bound delivery candidate: verifies the unique change and repository, hands execution to native Teamflow, and binds local validation plus an independent read-only review to the actual code version. Requires the DevOps/Gitee plugins, the native Teamflow toolset and an authorized worktree."
+    "title": "Enterprise account & models",
+    "description": "Universal enterprise identity, AI gateway connectivity, authorized model catalog, and encrypted credential foundation for DeepSeek Harness. Sign in and configure your gateway key in Settings -> Enterprise Account, enable or tune models in Settings -> Enterprise Models, and disable unmanaged public account, model, and plaintext credential paths.",
+    "detail": "docs/DETAIL.md"
   }
 }

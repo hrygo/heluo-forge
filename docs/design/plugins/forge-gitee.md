@@ -161,7 +161,7 @@
 
 **读面重建**：`src/index.mjs` 用 `buildFaces()` 一次算出 `{resolved,runner,adapter,guard,git}` 并冻结，service 的每个方法都从 `faces.*` 取依赖（不在 `apply` 顶部解构）；`rebuildFaces()` 是唯一换页点，失败即 `degradeFaces()` 并把原因码报给页面。装配期的初始读面取自**配置面快照**（`mergedRuntimeOf(access.snapshot())`）而不是 loader 给的 `config`——否则页面上配的 `cliPath` 在运行期仍会走默认 `gh`。
 
-**分区**：`client.js` 导出 `{apply, inject, GiteeSection, StatusLine, Tag, LayerCell}`，`inject=['slots','locale']`；两段式挂载 `ctx.slots.inject('settings.section', () => ctx.slots.register({name:'settings.section', id:'gitee', order:50, label:()=>t('nav'), locale:'gitee', inject:()=>({t})}, GiteeSection))`。`ensureStyle()` 必须返回 disposer（无 `document` 时返回 `null`）：返回元素会让整条 entry 抛 `Invalid effect`。三层表只有 `cliPath`/`timeoutMs` 可编辑，`host`/`authEnv`/`persistentToken` 是只读行（`readOnly` 而非 `disabled`，值不出现在页面文本里）；「检查」只给一个披露块，写明"未执行：未获批准的只读探测，本页不发起请求"。
+**分区**：`client.js` 导出 `{apply, inject, GiteeSection, StatusLine, Tag, LayerCell}`，`inject=['slots','locale']`；两段式挂载 `heluo.engineering.tab`（`order: 20`，容器缺席时回退 `settings.section` `id:'gitee', order:50`），并在 `GiteeSection` 底部直接内置 `GiteeCredentialItem`（当 `@heluo/forge-iam` 在场时经 `/api/forge-iam/ext-credentials` 管理独立 Token 与明文风险告警，套件单独安装且无 IAM 时安静降级为本机环境提示，不向 `设置 → 企业账号` 注槽）。`ensureStyle()` 必须返回 disposer（无 `document` 时返回 `null`）：返回元素会让整条 entry 抛 `Invalid effect`。主界面移除旧「高级」配置区块（`authEnv`/`persistentToken`），仅留 `cliPath`/`timeoutMs` 可编辑行与只读 `host` 行（相关策略与变量名收拢到诊断摘要，后端 `runtime-config.mjs` 契约与 `detectPersistentToken` 保持不变）；「检查」只给一个披露块，写明"未执行：本页不主动发起远端连通性请求"。
 
 ## 6. 权限、凭据与数据
 

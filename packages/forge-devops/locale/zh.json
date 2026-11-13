@@ -1,0 +1,8 @@
+{
+  "meta": {
+    "title": "企业 DevOps 协同",
+    "description": "接入企业 DevOps（dop）变更协同流程，支持变更查询、受控更新与环境配置。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
+

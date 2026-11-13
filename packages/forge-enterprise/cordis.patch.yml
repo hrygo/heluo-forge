@@ -1,16 +1,14 @@
-# @heluo/forge-enterprise 的企业组合补丁层。
+# @heluo/forge-enterprise 的基础补丁层（CORP-DSH-DESIGN-004）。
 #
-# 本文件承载两件事：
-#   1. O3 要求的"官方行默认禁用"（实测：`dsh --patch` 的覆写层会给命中行加上
-#      `disabled: true`；命中不到的 id 会警告 `patch: entry "<id>" not found` 后跳过）。
-#   2. 企业组合的最小挂载：`insert:` 段把五个有真实 Host 职责的企业插件挂进 profile；SDD 仅作为库/CLI 随制品交付。
-#      历史市场包 `@heluo/forge-market` 按设计不挂（它不属于轻量原生索引模式的目标）。
+# 本包是面向全体企业成员的「企业账号与模型」通用底座：只负责官方账号/模型/明文凭据七行停用（O3）、
+# 系统钥匙串加密凭据存储、共享策略目录与企业 IAM（含 AI 网关与模型目录管理）。
+# 研发工作台、DevOps（DOP）、Gitee 与交付规范等研发扩展能力已拆分为独立预装包
+# `@heluo/forge-engineering`（CORP-DSH-DESIGN-019），互不强耦合。
 #
-# 插入行的范围以"包已有清单、源码与测试"为准；网关与品牌仍只有 README，
-# 不预建指向未实现包的入口。DevOps 与 Gitee 自 r13 起随组合一起装上（企业 CLI 仍未联调）。
+# 命中不到的 id 会警告 `patch: entry "<id>" not found` 后跳过；`disabled: true` 由覆写层
+# 给命中行加上，行本身仍出现在 dump 里（核验见 docs/design/plugins/forge-enterprise.md §5.1）。
 #
-# 用法：dsh --profile web --patch <该文件>
-# 复核：dsh --profile web --patch <该文件> --dump-config | grep -A2 "id: heluo-"
+# 复核：dsh --profile web --dump-config | grep -A2 "id: heluo-"
 
 # 官方登录与账户 UI：企业 IAM 是唯一登录（O3），不保留公网回落。
 - id: deepseek-account
@@ -38,12 +36,10 @@
 - id: credentials
   disabled: true
 
-# 企业组合的最小挂载。Cordis Loader 并发创建条目，行序不构成加载顺序语义；
-# 凭据、策略与 IAM 的先后由各自的依赖注入决定，不靠本文件的排列保证。
-# 策略行携带与 devops / gitee 两个补丁层**逐字相同**的 6 条并集目录与内存审计：三层同
-# id 时 loader 按 id 覆盖 config，只留一个策略实例，装配顺序不影响幸存配置（D-5）。
+# 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 6 条动作目录与
+# 内存审计配置（无 isolate）；与 `@heluo/forge-engineering` 并存安装时由 Cordis Loader 按 id 合并为
+# 单一策略实例，不依赖挂载顺序。
 # 内存审计舱属联调/试点级证据；生产或合规场景必须注入持久 sink 并去掉 allowNonDurable。
-# 其余行只给最小配置；缺配置时按包自己的 fail-closed 语义拒绝，不在补丁里塞默认凭据。
 - insert:
     - id: heluo-credentials-keychain
       name: '@heluo/forge-credentials-keychain'
@@ -62,18 +58,3 @@
           allowNonDurable: true
     - id: heluo-iam
       name: '@heluo/forge-iam'
-    # 正式企业研发 Skill（r12）：只注册随包分发的 Skill 资源，不注册业务工具、不启动 run。
-    # 与 heluo-iam 同属"能装上就有入口"的一部分：id 固定，靠 id 折叠而不是行序。
-    # 没有 Skill 服务时 Loader 按 inject 不激活该行；缺资源时装配期报错，不静默半装。
-    - id: heluo-issue-delivery-skill
-      name: '@heluo/forge-enterprise/issue-delivery-skill'
-    # 研发读面与交付判定（r13）：企业组合缺了这两行，安装后只有 Skill、没有可读的 Issue/
-    # 变更与快照，"可信待验收交付"根本跑不起来（r12 的 D-3 就是这个缺口）。
-    # 两行都写 `config: {}` 而不是省略：行配置缺席时 `ConfigStandard` 会拒，loader 只把该行
-    # 静默跳过——装上了却没有读面，比报错更难查。
-    - id: forge-devops
-      name: '@heluo/forge-devops'
-      config: {}
-    - id: heluo-gitee
-      name: '@heluo/forge-gitee'
-      config: {}

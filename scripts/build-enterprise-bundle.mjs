@@ -243,6 +243,7 @@ export function writeBundleArtifacts({ destination, tarballPath, entry, members,
  */
 function parseArguments(argv) {
   let root;
+  let entry;
   let destination;
   let help = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -253,6 +254,12 @@ function parseArguments(argv) {
       if (root === undefined) throw new Error('--root needs a directory');
       continue;
     }
+    if (argument === '--entry') {
+      entry = argv[index + 1];
+      index += 1;
+      if (entry === undefined) throw new Error('--entry needs a package name');
+      continue;
+    }
     if (argument === '--help' || argument === '-h') {
       help = true;
       continue;
@@ -260,25 +267,26 @@ function parseArguments(argv) {
     if (destination !== undefined) throw new Error(`unexpected argument ${argument}`);
     destination = argument;
   }
-  return { root, destination, help };
+  return { root, entry, destination, help };
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let tarball;
   try {
-    const { root, destination, help } = parseArguments(process.argv.slice(2));
+    const { root, entry, destination, help } = parseArguments(process.argv.slice(2));
     if (help) {
       console.log([
-        'Usage: node scripts/build-enterprise-bundle.mjs [--root <dir>] [destination]',
+        'Usage: node scripts/build-enterprise-bundle.mjs [--root <dir>] [--entry <pkg>] [destination]',
         '',
-        'Build the enterprise bundle with its manifest and SHA256SUMS.',
+        'Build an enterprise bundle with its manifest and SHA256SUMS.',
         '',
-        '  --root <dir>  Workspace root (default: repository root)',
-        '  destination   Output directory (default: a new temporary directory)',
-        '  -h, --help    Show this help without building',
+        '  --root <dir>   Workspace root (default: repository root)',
+        `  --entry <pkg>  Bundle workspace entry package (default: ${DEFAULT_ENTRY})`,
+        '  destination    Output directory (default: a new temporary directory)',
+        '  -h, --help     Show this help without building',
       ].join('\n'));
     } else {
-      const result = buildEnterpriseBundle({ root, destination });
+      const result = buildBundle({ root, entry: entry ?? DEFAULT_ENTRY, destination });
       tarball = result.tarball;
       const bytes = readFileSync(tarball);
       const entries = readBundleEntries(tarball);

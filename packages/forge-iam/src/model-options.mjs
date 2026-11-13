@@ -15,6 +15,7 @@ export const REASONING_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', '
 export const DEFAULT_CONTEXT_WINDOW = 200000;
 export const DEFAULT_MAX_TOKENS = 64000;
 export const MAX_MODEL_ID_LENGTH = 200;
+export const MAX_MANUAL_MODELS = 100;
 
 /** A catalogue identifier is opaque apart from its length; do not narrow the charset. */
 export const isModelId = value => typeof value === 'string'
@@ -118,17 +119,32 @@ export function buildReasoningEffortRange(lowerBound, upperBound = lowerBound) {
 }
 
 /**
+ * Resolve either a { lower, upper } / { min, max } shorthand or an explicit level map
+ * without mistaking the 'max' thinking-level key in a level map for an upper bound.
+ */
+function resolveReasoningEffortSource(reasoningEfforts) {
+  const hasLowerUpper = typeof reasoningEfforts.lower === 'string' || typeof reasoningEfforts.upper === 'string';
+  const hasMin = typeof reasoningEfforts.min === 'string';
+  const hasOtherLevelKey = THINKING_LEVELS.some(level => level !== 'max' && Object.hasOwn(reasoningEfforts, level));
+  const isBareMaxBound = !hasOtherLevelKey
+    && typeof reasoningEfforts.max === 'string'
+    && reasoningEfforts.max.trim().toLowerCase() !== 'max';
+  if (hasLowerUpper || hasMin || isBareMaxBound) {
+    const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
+    const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
+    return buildReasoningEffortRange(boundLower, boundUpper) ?? {};
+  }
+  return reasoningEfforts;
+}
+
+/**
  * Inspect a reasoningEfforts configuration and return its active lower/upper bounds.
  */
 export function getReasoningEffortBounds(reasoningEfforts) {
   if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) {
     return { enabled: false, lower: 'off', upper: 'off', levels: [] };
   }
-  const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
-  const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
-  const source = (typeof boundLower === 'string' || typeof boundUpper === 'string')
-    ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
-    : reasoningEfforts;
+  const source = resolveReasoningEffortSource(reasoningEfforts);
   const activeLevels = REASONING_EFFORT_LEVELS.filter(level => {
     const val = source[level];
     return typeof val === 'string' && val.trim().length > 0;
@@ -149,11 +165,7 @@ export function getReasoningEffortBounds(reasoningEfforts) {
 /** Build pi-ai thinkingLevelMap where disabled levels are explicitly null. */
 export function buildThinkingLevelMap(reasoningEfforts) {
   if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) return undefined;
-  const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
-  const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
-  const normalizedEfforts = (typeof boundLower === 'string' || typeof boundUpper === 'string')
-    ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
-    : reasoningEfforts;
+  const normalizedEfforts = resolveReasoningEffortSource(reasoningEfforts);
   const map = { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null };
   let hasEnabled = false;
   for (const level of THINKING_LEVELS) {
@@ -211,4 +223,47 @@ export function applyModelOptions(rawModels, options = {}) {
       ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     };
   });
+}
+
+/**
+ * Merge gateway-discovered models with user-declared manual models without
+ * mutating inputs. Gateway entries always win on id and carry `source: 'gateway'`;
+ * A matching manual declaration is retained as `hasManualEntry` so it can be
+ * removed without changing the gateway source; manual-only entries follow in
+ * declaration order with `source: 'manual'`.
+ */
+export function mergeAvailableModels(catalog, manual) {
+  const catalogList = Array.isArray(catalog) ? catalog : [];
+  const manualList = Array.isArray(manual) ? manual : [];
+  const manualIds = new Set(manualList.map(entry => typeof entry === 'string' ? entry : entry?.id).filter(isModelId));
+  const merged = [];
+  const seen = new Set();
+
+  for (const item of catalogList) {
+    const id = item?.id;
+    // Same boundary as the selection store and the manual-add path: an id that
+    // `isModelId` rejects must never reach the enabled set or the adapter.
+    if (!isModelId(id) || seen.has(id)) continue;
+    seen.add(id);
+    const gatewayItem = { ...item, source: 'gateway' };
+    // The presence marker comes only from the saved manual list, never the
+    // gateway's metadata.
+    delete gatewayItem.hasManualEntry;
+    if (manualIds.has(id)) gatewayItem.hasManualEntry = true;
+    merged.push(gatewayItem);
+  }
+
+  for (const entry of manualList) {
+    const id = typeof entry === 'string' ? entry : entry?.id;
+    if (!isModelId(id) || seen.has(id)) continue;
+    seen.add(id);
+    merged.push({
+      id,
+      name: id,
+      source: 'manual',
+      ...(typeof entry?.addedAt === 'string' ? { addedAt: entry.addedAt } : {}),
+    });
+  }
+
+  return merged;
 }

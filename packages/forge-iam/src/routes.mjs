@@ -126,8 +126,10 @@ function errorBody(error) {
   // repeats their text verbatim. Flattening them into IAM_INTERNAL made a
   // gateway rejection, a cancelled sync and a real outage indistinguishable
   // in the response the browser already has to act on.
-  const code = typeof error?.code === 'string' && (error.code.startsWith('IAM_') || error.code.startsWith('ENTERPRISE_')
-    || ((error.code === 'CRED_KEY_UNAVAILABLE' || error.code === 'CRED_DECRYPT_FAILED') && Object.hasOwn(ERROR_STATUS, error.code)))
+  // 契约表是唯一真源：登记在 `ERROR_STATUS` 里的码原样透出，未登记的才归到
+  // `IAM_INTERNAL`。按前缀白名单判断会把 `KEYCHAIN_UNAVAILABLE`、`PENDING_WRITE`
+  // 这类已登记码压成"内部错误"，客户端既看不到真实原因也没法据此提示。
+  const code = typeof error?.code === 'string' && Object.hasOwn(ERROR_STATUS, error.code)
     ? error.code : 'IAM_INTERNAL';
   return {
     error: {
@@ -444,6 +446,62 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
           }
         }
         return methodNotAllowed(res, 'GET, PUT, POST');
+      }
+
+      if (url.pathname === '/api/forge-iam/models/manual') {
+        if (req.method === 'POST') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const body = await readJsonBody(req);
+            const result = await service.updateManualModel({ action: body?.action, id: body?.id });
+            return sendJson(res, 200, { ...result, view: service.getView() });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'POST');
+      }
+
+      if (url.pathname === '/api/forge-iam/ext-credentials') {
+        if (req.method === 'GET') {
+          try {
+            const credentials = await service.listExtCredentials();
+            return sendJson(res, 200, { credentials });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'GET');
+      }
+
+      if (url.pathname.startsWith('/api/forge-iam/ext-credentials/')) {
+        const extensionId = decodeURIComponent(url.pathname.slice('/api/forge-iam/ext-credentials/'.length));
+        if (!extensionId || extensionId.includes('/')) {
+          return sendJson(res, 400, { error: { code: 'IAM_EXT_CREDENTIAL_INVALID' } });
+        }
+        if (req.method === 'PUT') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const body = await readJsonBody(req);
+            const token = typeof body?.token === 'string' ? body.token : '';
+            const credential = await service.saveExtCredential({ extensionId, token });
+            const credentials = await service.listExtCredentials();
+            return sendJson(res, 200, { credential, credentials });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        if (req.method === 'DELETE') {
+          if (!hasMutationHeader(req)) return sendJson(res, 403, { error: { code: 'IAM_REQUEST_HEADER_REQUIRED' } });
+          try {
+            const credential = await service.clearExtCredential({ extensionId });
+            const credentials = await service.listExtCredentials();
+            return sendJson(res, 200, { credential, credentials });
+          } catch (error) {
+            return sendJson(res, ERROR_STATUS[error?.code] ?? 500, errorBody(error));
+          }
+        }
+        return methodNotAllowed(res, 'PUT, DELETE');
       }
 
       if (url.pathname === '/api/forge-iam/credential') {

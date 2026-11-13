@@ -31,7 +31,7 @@ config="<仓库根目录>/.env"
 git -C "<仓库根目录>" check-ignore -q -- .env && chmod 600 "$config"
 ```
 
-忽略检查失败时停止。独立工具链没有 Git 仓库时，将 `config` 指向不受版本管理的专用文件并设置权限为 `600`。脚本只将文件按 `KEY=VALUE` 数据解析，不执行 `source` 或变量展开。允许的企业配置会写入私版的 `cordis.patch.yml`；完整 `.env`、个人 Key、令牌和 `client_secret` 不进入交付包。配置值不要放入命令行参数、提交到仓库或写入报告。
+忽略检查失败时停止。独立工具链没有 Git 仓库时，将 `config` 指向不受版本管理的专用文件并设置权限为 `600`。脚本只将文件按 `KEY=VALUE` 数据解析，不执行 `source` 或变量展开。允许的企业配置会写入私版中声明行所在的那一层补丁（默认 `cordis.patch.yml`，研发叠加层为 `cordis.patch.engineering.yml`）；公版包必须随包发出 `package.json` 的 `dsh.bundle.patch` 所指默认层，缺层或缺行都会在打包前置检查里被拒绝；完整 `.env`、个人 Key、令牌和 `client_secret` 不进入交付包。配置值不要放入命令行参数、提交到仓库或写入报告。
 
 插件的 `refreshSkewSeconds`、`httpTimeoutMs` 和 `logoutMode` 不在当前制作器 `.env` 白名单中，分别使用运行时默认值 `60`、`10000` 和 `local`；不得添加未经支持的环境键来假定这些值已生效。
 

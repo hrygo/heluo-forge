@@ -260,7 +260,7 @@ test('检查：只多一次请求且只有它带 ?refresh=1，verdict 四态各�
       verdict: 'fail',
       blockedBy: 'readonly',
       reason: 'policy-denied',
-    }), '检查：失败 · 策略拒绝只读 · '],
+    }), '检查：失败 · 策略拒绝访问 · '],
     ['incomplete', readinessView({
       evidence: [
         { id: 'file', state: 'pass', reason: null, basis: 'filesystem-stat' },
@@ -317,12 +317,12 @@ test('四层证据：固定四行、顺序固定，fail/not-run 带原因，pass
   });
   await page.click('检查 DevOps');
   const text = page.text();
-  const order = ['文件存在', '可启动', '目标可识别', '只读可访问'].map((label) => text.lastIndexOf(label));
+  const order = ['文件存在', '可启动', '目标可识别', '权限策略放行'].map((label) => text.lastIndexOf(label));
   assert.deepEqual(order, order.slice().sort((a, b) => a - b), '四层顺序固定');
-  assert.ok(text.includes('文件存在通过文件系统只读探测'));
+  assert.ok(text.includes('文件存在通过本地文件系统检查'));
   assert.ok(text.includes('可启动未通过入口不可执行'));
   assert.ok(text.includes('目标可识别未执行需要可解析的完整路径'));
-  assert.ok(text.includes('只读可访问未执行无可复核证据'));
+  assert.ok(text.includes('权限策略放行未执行无可复核证据'));
 
   const short = await mount(t, {
     responses: [...three(), ok(devopsSnapshot({ readiness: readinessView({ evidence: [{ id: 'file', state: 'pass', reason: null, basis: 'filesystem-stat' }] }) }))],
@@ -371,8 +371,8 @@ test('Gitee 禁用按钮在工具行，原因在详情，且不发起第二次 G
   const page = await mount(t, { responses: three() });
   const button = page.button('检查 Gitee');
   assert.equal(button.props.disabled, true, 'Gitee 检查按钮必须禁用');
-  assert.equal(button.props.title, '未执行 · 未获批准的只读探测，本页不发起请求');
-  assert.ok(page.text().includes('未执行 · 未获批准的只读探测，本页不发起请求'));
+  assert.equal(button.props.title, '未执行 · 本页不主动发起请求');
+  assert.ok(page.text().includes('未执行 · 本页不主动发起请求'));
   assert.equal(page.calls.length, 3);
   assert.equal(page.calls.filter((call) => call.url.includes('/api/forge-gitee/config')).length, 1);
 });

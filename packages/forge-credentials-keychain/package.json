@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Encrypted SQLite credentials provider for Heluo Forge",
+  "description": "Encrypted SQLite enterprise credentials provider for Heluo Forge",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
@@ -13,10 +13,13 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
-    "./backend": "./src/backend.mjs"
+    "./backend": "./src/backend.mjs",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "src",
-    "README.md"
+    "locale",
+    "README.md",
+    "docs"
   ]
 }

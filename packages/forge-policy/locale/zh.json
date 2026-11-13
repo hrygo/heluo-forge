@@ -1,0 +1,8 @@
+{
+  "meta": {
+    "title": "企业门禁策略引擎",
+    "description": "为企业工具与命令提供统一的安全准入校验、敏感操作确认与操作审计保护。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}
+

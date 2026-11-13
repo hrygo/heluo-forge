@@ -19,17 +19,26 @@ importers:
         specifier: '>=18'
         version: 19.3.1
 
-  packages/forge-enterprise:
+  packages/forge-engineering:
     dependencies:
-      '@heluo/forge-credentials-keychain':
-        specifier: workspace:*
-        version: link:../forge-credentials-keychain
       '@heluo/forge-devops':
         specifier: workspace:*
         version: link:../forge-devops
       '@heluo/forge-gitee':
         specifier: workspace:*
         version: link:../forge-gitee
+      '@heluo/forge-policy':
+        specifier: workspace:*
+        version: link:../forge-policy
+      react:
+        specifier: '>=18'
+        version: 19.3.1
+
+  packages/forge-enterprise:
+    dependencies:
+      '@heluo/forge-credentials-keychain':
+        specifier: workspace:*
+        version: link:../forge-credentials-keychain
       '@heluo/forge-iam':
         specifier: workspace:*
         version: link:../forge-iam

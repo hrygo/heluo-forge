@@ -97,7 +97,10 @@ function patchText() {
 
 function publicTarball({ extraFiles = [] } = {}) {
   const files = [
-    { path: 'package.json', body: `${JSON.stringify({ name: ENTRY, version: PUBLIC_VERSION, license: 'Apache-2.0' }, null, 2)}\n` },
+    {
+      path: 'package.json',
+      body: `${JSON.stringify({ name: ENTRY, version: PUBLIC_VERSION, license: 'Apache-2.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }, null, 2)}\n`,
+    },
     { path: 'cordis.patch.yml', body: patchText() },
     { path: 'README.md', body: '# fixture enterprise bundle\n' },
     { path: 'src/index.mjs', body: 'export const fixture = true;\n' },

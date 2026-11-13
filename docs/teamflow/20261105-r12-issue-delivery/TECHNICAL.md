@@ -29,7 +29,7 @@
 ## 2. 已核对的工程事实
 
 - 当前 worktree 就是项目根，不建 `products/<product>/` 镜像；遵循[团队约定](<../../../AGENTS.md>)。[企业组合清单](<../../../packages/forge-enterprise/package.json>)只依赖凭据、策略、IAM 三包，[组合补丁](<../../../packages/forge-enterprise/cordis.patch.yml>)未挂研发 Skill、DevOps 或 Gitee。
-- [Skill 装配](<../../../packages/forge-enterprise/src/skills.mjs>)已有加载、选择、预算、注册和 dispose；[组合入口](<../../../packages/forge-enterprise/src/index.mjs>)是库导出，不是业务 Skill 自动注册 `apply`。现有 provider 的 `get(name)` 是历史形状，不能拿旧夹具证明目标宿主参数兼容。
+- [Skill 装配](<../../../packages/forge-engineering/src/skills.mjs>)已有加载、选择、预算、注册和 dispose；[组合入口](<../../../packages/forge-enterprise/src/index.mjs>)是库导出，不是业务 Skill 自动注册 `apply`。现有 provider 的 `get(name)` 是历史形状，不能拿旧夹具证明目标宿主参数兼容。
 - [构建器](<../../../scripts/build-enterprise-bundle.mjs>)已经递归闭合 workspace 依赖、实体资源与 bundled dependencies，禁止未闭合依赖、软链和安装钩子；保留 `buildBundle({root,entry,destination,version})`／`buildEnterpriseBundle(options)`，不重写打包器。
 - [Gitee 入口](<../../../packages/forge-gitee/src/index.mjs>)已有服务与 10 工具；[Git 适配器](<../../../packages/forge-gitee/src/gitee-git.mjs>)提供 `head(into)`、`branch(into)`、`commit({changeId,message,cwd})`、`push({remote,branch,cwd})`。只有 HEAD／branch 无法描述脏代码，关闭四项判定也不是候选资格证明。
 - [Gitee 适配器](<../../../packages/forge-gitee/src/gitee-adapter.mjs>)及 [CLI 规格](<../../contracts/gh-cli-spec.md>)的 Issue 详情投影有 8 字段、无 `updated_at`；不能把 `created_at` 冒作要求最新版本。[DevOps 归一](<../../../packages/forge-devops/src/change-context.mjs>)不判仓库归属，业务字段继续单源映射。
@@ -63,7 +63,7 @@
 | 路径 | 职责／公开签名 | 依赖与装配次序 |
 |---|---|---|
 | `packages/forge-enterprise/src/issue-delivery-skill.mjs`（新） | Host 插件导出 name、`inject=['skills']`、`apply(ctx) -> void`；注册 enterprise-issue-delivery，dispose 撤注册，不注册业务工具／启动 run | 既有 assembleEnterpriseSkills，次序 2 |
-| [skills.mjs](<../../../packages/forge-enterprise/src/skills.mjs>)（改） | 保留 `assembleEnterpriseSkills(ctx,input)`、`registerEnterpriseSkillsViaProvider(ctx,input)`、`registerEnterpriseSkills(ctx,input)`；input 增加可选 resourceBase，贯穿摘要／正文，并按实际核验契约兼容 lookup | 宿主 skills，次序 1；不复制加载器 |
+| [skills.mjs](<../../../packages/forge-engineering/src/skills.mjs>)（改） | 保留 `assembleEnterpriseSkills(ctx,input)`、`registerEnterpriseSkillsViaProvider(ctx,input)`、`registerEnterpriseSkills(ctx,input)`；input 增加可选 resourceBase，贯穿摘要／正文，并按实际核验契约兼容 lookup | 宿主 skills，次序 1；不复制加载器 |
 | `packages/forge-enterprise/skills/clauses.json`（新） | 单项 id=issue-delivery、level=hard、body=issue-delivery/SKILL.md，使用现有索引字段形状 | load/select，次序 1；不是第二业务要求 |
 | `packages/forge-enterprise/skills/issue-delivery/SKILL.md`（新） | 目的、显式触发、缺依赖短路、只读关联、原生交接、证据边界；references/handoff.md 与 references/evidence.md 按需加载 | 包内实体资源，次序 1 |
 | `packages/forge-gitee/src/gitee-snapshot.mjs`（新） | `createGiteeSnapshotReader({runner,now?}) -> {read(cwd): Promise<SnapshotResult>}`；`snapshotToolDefinitions(service,resolveCwd) -> ToolDefinition[]` | 同包 runner、Node fs/path/crypto、既有脱敏约定，次序 1 |

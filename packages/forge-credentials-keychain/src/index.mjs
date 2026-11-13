@@ -11,7 +11,13 @@ export const inject = [];
 
 export { createMemoryBackend } from './backend.mjs';
 export { createCredentialStore } from './credential-store.mjs';
-export { createKeychainProvider, KeychainProviderError, namespacePrefixes } from './provider.mjs';
+export {
+  createKeychainProvider,
+  KeychainProviderError,
+  namespacePrefixes,
+  STORAGE_REF_PATTERN,
+  validateStorageRef,
+} from './provider.mjs';
 export { createJointStore, JOINT_STORE_SERVICE } from './joint-store.mjs';
 
 const BACKEND_METHODS = ['get', 'set', 'delete', 'list'];

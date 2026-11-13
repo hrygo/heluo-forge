@@ -135,6 +135,39 @@ test('patch layers must ship, declare and resolve', () => {
   });
 });
 
+test('extra patch layers (engineering overlay) are validated like the primary one', () => {
+  withFixture((root) => {
+    addPackage(root, 'forge-member');
+    const fields = {
+      files: ['src', 'cordis.patch.yml', 'README.md'],
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+      dependencies: { '@heluo/forge-member': 'workspace:*' },
+    };
+    addPackage(root, 'forge-combo', fields);
+    write(root, 'packages/forge-combo/cordis.patch.yml', '- insert:\n    - id: member\n      name: "@heluo/forge-member"\n');
+    write(root, 'packages/forge-combo/cordis.patch.engineering.yml', '- insert:\n    - id: ghost\n      name: "@heluo/forge-absent"\n');
+
+    const unlisted = run(root);
+    assert.ok(
+      unlisted.some((error) => error.includes('files must list the extra patch layer cordis.patch.engineering.yml')),
+      unlisted.join('\n'),
+    );
+    assert.ok(
+      unlisted.some((error) => error.includes('cordis.patch.engineering.yml inserts @heluo/forge-absent, which is not a workspace package')),
+      unlisted.join('\n'),
+    );
+
+    addPackage(root, 'forge-combo', { ...fields, files: [...fields.files, 'cordis.patch.engineering.yml'] });
+    const listed = run(root);
+    assert.equal(listed.some((error) => error.includes('files must list the extra patch layer')), false, listed.join('\n'));
+    assert.ok(listed.some((error) => error.includes('not a workspace package')), listed.join('\n'));
+
+    write(root, 'packages/forge-combo/cordis.patch.engineering.yml', '- insert:\n    - id: member\n      name: "@heluo/forge-member"\n');
+    const duplicated = run(root);
+    assert.ok(duplicated.some((error) => error.includes('already declared by cordis.patch.yml')), duplicated.join('\n'));
+  });
+});
+
 test('a known workspace name is not a declared umbrella dependency', () => {
   withFixture((root) => {
     addPackage(root, 'forge-member');

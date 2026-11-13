@@ -158,14 +158,20 @@ flowchart TB
     S["skills"]
     H["hooks / credentials"]
   end
-  subgraph P["企业插件层：@heluo/forge-enterprise"]
+  subgraph P["企业插件层（双独立预装包）"]
     direction LR
-    IAM["iam"]
-    GW["gateway"]
-    POL["policy"]
-    DEV["devops"]
-    GIT["gitee"]
-    FLOW["企业语义 Skill / Teamflow 接入"]
+    subgraph PE["@heluo/forge-enterprise（企业账号与模型）"]
+      KEY["credentials-keychain"]
+      IAM["iam + models"]
+      POL1["policy"]
+    end
+    subgraph PENG["@heluo/forge-engineering（企业研发工具套件）"]
+      ENGUI["engineering-ui"]
+      DEV["devops"]
+      GIT["gitee"]
+      FLOW["issue-delivery skill / Teamflow 接入"]
+      POL2["policy（同 id 目录）"]
+    end
     MKT["market"]
   end
   subgraph PL["企业平台"]
@@ -182,7 +188,7 @@ flowchart TB
   P -->|"令牌、工具与审计"| PL
 ```
 
-> 图：客户端 / DSH 运行时 / 企业能力 / 企业平台四层；能力格是职责视图，不等于现有 Host 挂载行。企业语义由 Skill 提供，研发执行归 Teamflow。当前企业组合补丁实际只插入 credentials-keychain、policy、IAM 三个 Host；SDD 已于 2026-11-03 退役并从组合包删除，不是 Host。运行时中未逐一展开的 `authorization`、`settings`、`webServer` 见 §5。
+> 图：客户端 / DSH 运行时 / 企业能力 / 企业平台四层；能力格是职责视图，不等于现有 Host 挂载行。企业语义由 Skill 提供，研发执行归 Teamflow。通用底座 `@heluo/forge-enterprise` 插入 credentials-keychain、policy、IAM 三个 Host；研发套件 `@heluo/forge-engineering` 作为独立预装包插入 `heluo-engineering-ui`、`heluo-issue-delivery-skill`、`forge-devops`、`forge-gitee` 与同目录 `heluo-policy`；SDD 已于 2026-11-03 退役，不是 Host。运行时中未逐一展开的 `authorization`、`settings`、`webServer` 见 §5。
 
 四条请求路径：
 
@@ -240,7 +246,8 @@ flowchart TB
 
 | 包 | 形态 | 职责 | 依赖的 seam |
 |---|---|---|---|
-| `@heluo/forge-enterprise` | umbrella bundle | 组合下列行，给两端共用 | `cordis.patch.yml` |
+| `@heluo/forge-enterprise` | umbrella bundle | 组合通用底座（`forge-credentials-keychain`、`forge-policy`、`forge-iam`）并禁用官方账号/模型行 | `cordis.patch.yml` |
+| `@heluo/forge-engineering` | umbrella bundle | 独立组合研发能力（`heluo-policy` 共享目录、`heluo-engineering-ui`、`heluo-issue-delivery-skill`、`forge-devops`、`forge-gitee`） | `cordis.patch.yml` |
 | `@heluo/forge-iam` | Host + Client 插件 | 企业 IAM 独占登录、刷新、登录态与网关凭据录入、账户 UI；官方行由组合包禁用；MCP token broker 仅按后续获批集成需要评估 | `credentials`、`webServer`、`settings`、`llm-pi-ai`（消费方）、`agentDefaultModel`；`authorization` 仅作后续通用凭据 UI 适配 |
 | `@heluo/forge-gateway` | 配置 bundle | 企业模型路由、白名单、重试策略 | `llm-pi-ai` |
 | `@heluo/forge-policy` | Host 插件 | 工具门禁、路径规则、`$DSH_HOME` 硬拒绝、客户数据外发确认、决策审计 | `tools/pre-execute`、`tools.guard`、`otel` |
@@ -534,8 +541,9 @@ ADR-11 的来源方向及 ADR-12 的自包含三目标首版策略已由用户�
 ```text
 heluo-forge/
 ├─ packages/
-│  ├─ forge-enterprise/   # umbrella patch
-│  ├─ forge-iam/           # host + client (企业登录、网关凭据录入；MCP broker 按需评估)
+│  ├─ forge-enterprise/   # 通用底座组合包：企业账号、AI 网关、模型管理、钥匙串与共享策略
+│  ├─ forge-engineering/  # 研发套件组合包：研发工具工作台容器、DevOps、Gitee、交付规范与共享策略
+│  ├─ forge-iam/           # host + client (企业登录、AI 网关凭据与模型管理)
 │  ├─ forge-gateway/      # bundle only
 │  ├─ forge-policy/        # host plugin (含门禁、$DSH_HOME 保护、SDD 路径规则与审计)
 │  ├─ forge-devops/        # existing CLI + read-only command allowlist

@@ -83,7 +83,7 @@ test('分发内容就是产物内容：源码、补丁层与 README，无测试�
   assert.match(source.engines.dsh, /^>=\d+\.\d+\.\d+-rc\.\d+$/u);
   assert.equal(source.dsh.bundle.patch, './cordis.patch.yml');
   assert.ok(existsSync(join(packageDir, 'cordis.patch.yml')));
-  assert.deepEqual(source.files, ['src', 'client.js', 'cordis.patch.yml', 'README.md']);
+  assert.deepEqual(source.files, ['src', 'client.js', 'cordis.patch.yml', 'locale', 'icon.svg', 'README.md', 'docs']);
   assert.equal(source.dsh.client.platform, 'web', '浏览器半要声明 dsh.client');
   assert.ok(existsSync(join(packageDir, 'client.js')));
 
@@ -91,6 +91,15 @@ test('分发内容就是产物内容：源码、补丁层与 README，无测试�
   const declared = [source.main, ...Object.values(source.exports ?? {})];
   for (const target of declared) {
     const relative = target.replace(/^\.\//u, '');
+    if (relative.includes('*')) {
+      const prefix = relative.slice(0, relative.indexOf('*')).replace(/\/$/u, '');
+      assert.ok(existsSync(join(packageDir, prefix)), `通配入口目录 ${target} 不存在`);
+      assert.ok(
+        source.files.some((entry) => prefix === entry || prefix.startsWith(`${entry.replace(/\/$/u, '')}/`)),
+        `通配入口 ${target} 不在 files 白名单内`,
+      );
+      continue;
+    }
     assert.ok(existsSync(join(packageDir, relative)), `入口 ${target} 不存在`);
     assert.ok(
       source.files.some((entry) => relative === entry || relative.startsWith(`${entry.replace(/\/$/u, '')}/`)),

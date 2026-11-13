@@ -40,10 +40,16 @@ window.__ModuleLoader__.load({
         --fiam-warn: var(--dsw-alias-state-warn-primary, #f59e0b);
         --fiam-error: var(--dsw-alias-state-error-primary, #ef4444);
       }
-      .forge-iam-ui button:not(:disabled), .forge-iam-ui a { cursor: pointer; }
-      .forge-iam-ui button:not(:disabled):hover { background-color: var(--dsw-alias-button-floating-hover); }
+      .forge-iam-ui button:not(:disabled), .forge-iam-ui a {
+        cursor: pointer;
+        transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.08s ease, box-shadow 0.14s ease, opacity 0.14s ease;
+      }
+      .forge-iam-ui button:not(:disabled):hover {
+        background-color: var(--dsw-alias-button-floating-hover, rgba(255, 255, 255, 0.08));
+        border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.24));
+      }
       .forge-iam-ui button.forge-iam-primary:not(:disabled):hover { background-color: var(--dsw-alias-button-primary-hover); opacity: 0.94; }
-      .forge-iam-ui button:not(:disabled):active { filter: brightness(.92); transform: translateY(1px); }
+      .forge-iam-ui button:not(:disabled):active { filter: brightness(.9); transform: translateY(1px) scale(0.985); }
       .forge-iam-ui a { color: var(--dsw-alias-state-business-primary); text-decoration: none; }
       .forge-iam-ui a:hover { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
       .forge-iam-ui input:not(:disabled):hover { border-color: var(--dsw-alias-border-l3); }
@@ -59,8 +65,9 @@ window.__ModuleLoader__.load({
         border: 0.5px dashed var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);
       }
       .fiam-details { margin-top: 8px; font: var(--dsw-font-xxs-12); color: var(--dsw-alias-label-secondary); }
-      .fiam-details > summary { cursor: pointer; padding: 2px 0; }
+      .fiam-details > summary { cursor: pointer; padding: 2px 0; transition: color 0.14s ease, opacity 0.1s ease; }
       .fiam-details > summary:hover { color: var(--dsw-alias-label-primary); }
+      .fiam-details > summary:active { opacity: 0.78; }
       .fiam-issues { display: flex; flex-direction: column; gap: 6px; }
       @media (prefers-reduced-motion: reduce) { .forge-iam-ui button:active { transform: none; } }
 
@@ -294,6 +301,9 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-label-primary);
         background: var(--dsw-alias-interactive-bg-hover);
       }
+      .fiam-model-filters .fiam-chip:active {
+        transform: scale(0.97);
+      }
       .fiam-model-filters .fiam-chip-active {
         background: var(--dsw-alias-bg-layer-1);
         color: var(--dsw-alias-label-primary);
@@ -324,10 +334,9 @@ window.__ModuleLoader__.load({
         display: flex;
         flex-direction: column;
         gap: 8px;
-        margin-top: 6px;
+        margin-top: 8px;
         margin-bottom: 6px;
-        min-height: 480px;
-        padding-right: 2px;
+        min-height: 0;
       }
       .fiam-model-item {
         border: 0.5px solid var(--dsw-alias-border-l4);
@@ -340,12 +349,21 @@ window.__ModuleLoader__.load({
       .fiam-model-item:hover {
         border-color: var(--dsw-alias-border-l3);
       }
+      .fiam-model-item.fiam-model-item-manual {
+        border-left: 2.5px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, transparent);
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 3%, var(--dsw-alias-bg-layer-1));
+      }
+      .fiam-badge-manual {
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+        color: var(--dsw-alias-state-business-primary);
+        border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 28%, transparent);
+      }
       .fiam-model-item.fiam-model-item-expanded {
         margin-top: 6px;
         margin-bottom: 14px;
-        border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 45%, var(--dsw-alias-border-l2));
-        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28), 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent);
-        border-radius: var(--dsw-radius-xl, 10px);
+        border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 24%, var(--dsw-alias-border-l3));
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+        border-radius: var(--dsw-radius-lg, 8px);
       }
       .fiam-model-item.fiam-model-item-expanded > .fiam-model-row {
         background: var(--dsw-alias-bg-layer-1);
@@ -641,7 +659,28 @@ window.__ModuleLoader__.load({
         border-radius: var(--dsw-radius-md, 8px);
         border: 1px solid transparent;
         background: transparent;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.08s ease, box-shadow 0.16s ease;
+      }
+      .fiam-journey-step-clickable {
+        cursor: pointer;
+      }
+      .fiam-journey-step-clickable:hover {
+        border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.2));
+        background: color-mix(in srgb, var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.06)) 85%, transparent);
+      }
+      .fiam-journey-step-clickable:active {
+        transform: translateY(1px) scale(0.985);
+        filter: brightness(0.93);
+      }
+      .fiam-journey-step-clickable:focus-visible {
+        outline: 2px solid var(--dsw-alias-state-business-primary);
+        outline-offset: 2px;
+      }
+      .fiam-journey-step-static {
+        cursor: default;
+        border-color: transparent !important;
+        background: transparent !important;
+        box-shadow: none !important;
       }
       .fiam-journey-step + .fiam-journey-step {
         margin-left: 4px;
@@ -1290,6 +1329,31 @@ window.__ModuleLoader__.load({
       .fiam-launcher-menu-item.danger .fiam-launcher-item-icon {
         color: var(--dsw-alias-state-error-primary);
       }
+      .fiam-gateway-ready-bar {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 12px 16px;
+      }
+      .fiam-gateway-ready-main {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      .fiam-models-blocker {
+        margin-bottom: 12px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
     `;
     // §3 图标与纯工具
     const interactionStyle = () => h('style', null, interactionStyles);
@@ -1343,6 +1407,69 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function IamAccountIcon({ size = 16 }) {
+      return h('svg', {
+        viewBox: '0 0 20 20',
+        width: size,
+        height: size,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.6,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+      },
+        h('circle', { cx: 10, cy: 6.5, r: 3 }),
+        h('path', { d: 'M4 17v-1.2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4V17' })
+      );
+    }
+
+    function IamModelsIcon({ size = 16 }) {
+      return h('svg', {
+        viewBox: '0 0 20 20',
+        width: size,
+        height: size,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.6,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+      },
+        h('path', { d: 'M10 2.8 16.5 6.4 10 10 3.5 6.4 10 2.8Z' }),
+        h('path', { d: 'M3.5 10.2 10 13.8l6.5-3.6' }),
+        h('path', { d: 'M3.5 13.8 10 17.4l6.5-3.6' })
+      );
+    }
+
+    const NAV_METHODS = Object.freeze(['openSection', 'selectSection']);
+
+    function sectionNavigatorOf(ctx) {
+      const candidates = [];
+      try {
+        // Cordis strictContext throws on un-injected service property reads; keep probes in try.
+        const service = typeof ctx?.get === 'function' ? ctx.get('settings') : null;
+        if (service && typeof service === 'object') candidates.push(service);
+        if (ctx?.settings && typeof ctx.settings === 'object') candidates.push(ctx.settings);
+      } catch {
+        // Navigator is optional capability enhancement; fall back to text instructions.
+      }
+      for (const service of candidates) {
+        for (const method of NAV_METHODS) {
+          if (typeof service[method] === 'function') {
+            return (id) => {
+              try {
+                service[method](id);
+              } catch {
+                // Keep UI resilient if host navigation rejects an unknown section id.
+              }
+            };
+          }
+        }
+      }
+      return null;
+    }
+
     function getLauncherStatus(view) {
       const ui = deriveSessionUi(view);
       if (!view || ui.signedOut || ui.unconfigured) {
@@ -1382,6 +1509,7 @@ window.__ModuleLoader__.load({
 
     const DEFAULT_CONTEXT_WINDOW = 200000;
     const DEFAULT_MAX_TOKENS = 64000;
+    const MODEL_STORAGE_WARNING = '模型配置已在本机生效，但未能写入持久存储，刷新模型目录或重启后可能恢复旧配置，请检查并重新操作。';
     const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'];
     const REASONING_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
     const REASONING_LEVEL_LABELS = {
@@ -1422,15 +1550,26 @@ window.__ModuleLoader__.load({
       return result;
     }
 
+    function resolveReasoningEffortSource(reasoningEfforts) {
+      const hasLowerUpper = typeof reasoningEfforts.lower === 'string' || typeof reasoningEfforts.upper === 'string';
+      const hasMin = typeof reasoningEfforts.min === 'string';
+      const hasOtherLevelKey = THINKING_LEVELS.some(level => level !== 'max' && Object.hasOwn(reasoningEfforts, level));
+      const isBareMaxBound = !hasOtherLevelKey
+        && typeof reasoningEfforts.max === 'string'
+        && reasoningEfforts.max.trim().toLowerCase() !== 'max';
+      if (hasLowerUpper || hasMin || isBareMaxBound) {
+        const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
+        const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
+        return buildReasoningEffortRange(boundLower, boundUpper) ?? {};
+      }
+      return reasoningEfforts;
+    }
+
     function getReasoningEffortBounds(reasoningEfforts) {
       if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) {
         return { enabled: false, lower: 'off', upper: 'off', levels: [] };
       }
-      const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
-      const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
-      const source = (typeof boundLower === 'string' || typeof boundUpper === 'string')
-        ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
-        : reasoningEfforts;
+      const source = resolveReasoningEffortSource(reasoningEfforts);
       const activeLevels = REASONING_EFFORT_LEVELS.filter(level => {
         const val = source[level];
         return typeof val === 'string' && val.trim().length > 0;
@@ -1519,6 +1658,7 @@ window.__ModuleLoader__.load({
         failed: state === 'error',
         stale: access?.stale === true,
         models: Array.isArray(access?.models) ? access.models : [],
+        manualTruncated: Number.isInteger(access?.manualTruncated) && access.manualTruncated > 0 ? access.manualTruncated : 0,
         error: access?.error ?? null,
       };
     }
@@ -1545,11 +1685,12 @@ window.__ModuleLoader__.load({
     }
 
     // 请求超时是登录弹窗的护栏：没有它，等待中的请求会让空白窗口永远停住。
-    async function postJson(path, { timeoutMs = 0 } = {}) {
+    async function postJson(path, { timeoutMs = 0, payload } = {}) {
       const controller = timeoutMs > 0 && typeof AbortController === 'function' ? new AbortController() : null;
       const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      const body = payload === undefined ? '{}' : JSON.stringify(payload);
       try {
-        const response = await fetch(path, { method: 'POST', headers: REQUEST_HEADERS, body: '{}', ...(controller ? { signal: controller.signal } : {}) });
+        const response = await fetch(path, { method: 'POST', headers: REQUEST_HEADERS, body, ...(controller ? { signal: controller.signal } : {}) });
         return { ok: response.ok, status: response.status, body: await readJson(response) };
       } catch (error) {
         if (error?.name === 'AbortError') return { ok: false, status: 0, body: { error: { code: 'IAM_REQUEST_TIMEOUT' } } };
@@ -1798,6 +1939,10 @@ window.__ModuleLoader__.load({
       ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
       ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。',
       ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
+      IAM_MANUAL_MODEL_INVALID: '模型 ID 不能为空且长度不得超过 200 个字符。',
+      IAM_MANUAL_MODEL_LIMIT: '手动添加的模型数量已达上限（最多 100 个）。',
+      IAM_MANUAL_MODEL_NOT_FOUND: '未找到指定的手动模型。',
+      IAM_MANUAL_MODEL_CONFLICT: '该模型已在当前目录中，请直接启用，无需重复添加。',
       ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
       ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
       ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
@@ -1807,6 +1952,9 @@ window.__ModuleLoader__.load({
       // 认证服务与凭据存储在请求发出前失败：说清楚能做什么，不暴露内部模块名。
       ENTERPRISE_IAM_UNAVAILABLE: '企业认证服务暂不可达，请稍后重试。',
       ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: '凭据安全存储暂不可用，请检查系统密钥环或联系管理员。',
+      ENTERPRISE_CREDENTIAL_INVALID: '提交的扩展令牌或扩展声明不合规，请检查后重试。',
+      ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: '该令牌属于另一个企业账号，请重新登录后再操作。',
+      ENTERPRISE_CREDENTIAL_PENDING: '上一次保存尚未完成，请稍后重试。',
       IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
       IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
       IAM_GATEWAY_OWNER_MISSING: '请先登录企业账号，再添加个人访问凭证。',
@@ -1932,7 +2080,7 @@ window.__ModuleLoader__.load({
             ),
             h('div', null,
               h('div', { className: 'fiam-card-title' }, ui.ready && view.principal ? view.principal : '企业账号认证'),
-              h('div', { className: 'fiam-card-subtitle' }, ui.ready ? '已绑定企业 OIDC 身份' : '单点登录至企业账号'),
+              h('div', { className: 'fiam-card-subtitle' }, ui.ready ? '已登录企业账号' : '单点登录至企业账号'),
             ),
           ),
           h('span', { className: `fiam-badge fiam-badge-${statusBadge(ui.state)}` },
@@ -1974,10 +2122,33 @@ window.__ModuleLoader__.load({
     // §12.1 网关卡
     function renderGatewayCard(ctx) {
       const { h, ui: input, actions } = ctx;
-      const { view, gateway, gatewayStatus, gatewayDetails, storageWarning, credential } = input;
-      const { setCredential, saveCredential, clearCredential, viewBarrier } = actions;
+      const { view, gateway, gatewayStatus, gatewayDetails, storageWarning, credential, collapsed, canCollapse } = input;
+      const { setCredential, saveCredential, clearCredential, viewBarrier, onToggleExpand } = actions;
       const gatewayUi = deriveGatewayUi(gateway);
       const hasDraftChanges = Boolean(credential.value || (credential.baseURL !== undefined && credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? '')));
+      if (collapsed) {
+        return h('div', { id: 'fiam-section-gateway', className: 'fiam-card fiam-gateway-ready-bar' },
+          h('div', { className: 'fiam-gateway-ready-main' },
+            h('span', { className: 'fiam-badge fiam-badge-success' },
+              h('span', { className: 'fiam-badge-dot' }),
+              'AI 服务 · 已就绪',
+            ),
+            gatewayDetails.length
+              ? h('span', { style: muted }, gatewayDetails.join(' · '))
+              : h('span', { style: muted }, '个人访问凭证已加密保存'),
+          ),
+          typeof onToggleExpand === 'function'
+            ? h('button', {
+              type: 'button',
+              style: { ...secondaryButton, height: 28, minHeight: 28, padding: '0 10px', fontSize: 12 },
+              'aria-expanded': false,
+              disabled: viewBarrier.current.pending,
+              onClick: () => onToggleExpand(true),
+            }, '更换密钥')
+            : null,
+          storageWarning ? h('div', { style: { flexBasis: '100%' } }, storageWarning) : null,
+        );
+      }
       return h('div', { id: 'fiam-section-gateway', className: 'fiam-card' },
         h('div', { className: 'fiam-card-header' },
           h('div', { className: 'fiam-card-title-group' },
@@ -1988,13 +2159,24 @@ window.__ModuleLoader__.load({
               )
             ),
             h('div', null,
-              h('div', { className: 'fiam-card-title' }, '个人访问凭证'),
-              h('div', { className: 'fiam-card-subtitle' }, '填写企业 AI 网关签发的个人访问凭证。'),
+              h('div', { className: 'fiam-card-title' }, 'AI 服务'),
+              h('div', { className: 'fiam-card-subtitle' }, '填写企业 AI 服务提供的个人访问凭证。'),
             ),
           ),
-          h('span', { className: `fiam-badge fiam-badge-${gatewayBadge(gatewayUi.state)}` },
-            h('span', { className: 'fiam-badge-dot' }),
-            `个人访问凭证：${gatewayStatus}`,
+          h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+            h('span', { className: `fiam-badge fiam-badge-${gatewayBadge(gatewayUi.state)}` },
+              h('span', { className: 'fiam-badge-dot' }),
+              `个人访问凭证：${gatewayStatus}`,
+            ),
+            canCollapse && typeof onToggleExpand === 'function'
+              ? h('button', {
+                type: 'button',
+                style: { ...secondaryButton, height: 26, minHeight: 26, padding: '0 8px', fontSize: 12 },
+                'aria-expanded': true,
+                disabled: credential.saving || viewBarrier.current.pending,
+                onClick: () => onToggleExpand(false),
+              }, '收起')
+              : null,
           ),
         ),
         gatewayDetails.length ? h('div', { className: 'fiam-meta-grid' },
@@ -2092,11 +2274,13 @@ window.__ModuleLoader__.load({
     // §12.2 模型条目
     function renderModelItem(ctx) {
       const { h, item, actions } = ctx;
-      const { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view } = item;
+      const { model, idx, isExpanded, opt, modelOptions, modelSaving, manualBusy, removingManualId, viewBarrier, view } = item;
       const {
         toggleModelExpand, updateOptionField, commitOptionField, commitOptionFieldOnBlur, resetModelOption, disableModelOption,
-        enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions,
+        enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions, removeManualModel,
       } = actions;
+      const isManual = model.source === 'manual';
+      const hasManualEntry = isManual || model.hasManualEntry === true;
 
 
 
@@ -2126,7 +2310,7 @@ window.__ModuleLoader__.load({
       const isEnabled = Object.hasOwn(modelOptions, model.id);
       const actionBusy = Boolean(modelSaving || viewBarrier?.current?.pending);
 
-      return h('div', { key: model.id, className: `fiam-model-item${isExpanded ? ' fiam-model-item-expanded' : ''}` },
+      return h('div', { key: model.id, className: `fiam-model-item${isManual ? ' fiam-model-item-manual' : ''}${isExpanded ? ' fiam-model-item-expanded' : ''}` },
         h('div', { className: 'fiam-model-row' },
           h('div', { className: 'fiam-model-info' },
             h('div', { className: 'fiam-model-header-line' },
@@ -2134,6 +2318,9 @@ window.__ModuleLoader__.load({
               h('span', { className: 'fiam-model-name', title: `${displayName} (${model.id})` }, displayName),
               isEnabled
                 ? h('span', { className: 'fiam-badge fiam-badge-success' }, '已启用')
+                : null,
+              hasManualEntry
+                ? h('span', { className: 'fiam-badge fiam-badge-manual', title: isManual ? '手动添加的模型，不随目录刷新移除' : '该网关模型也有手动声明' }, isManual ? '手动' : '有手动声明')
                 : null,
             ),
             h('div', { className: 'fiam-model-meta-line' },
@@ -2179,6 +2366,16 @@ window.__ModuleLoader__.load({
               'aria-label': `配置 ${model.id}`,
               onClick: () => toggleModelExpand(model.id),
             }, isExpanded ? '收起配置 ▲' : '精细配置 ▼'),
+            hasManualEntry && typeof removeManualModel === 'function'
+              ? h('button', {
+                type: 'button',
+                style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 8px', fontSize: 12, flexShrink: 0, color: 'var(--dsw-alias-state-error-primary, #b91c1c)' },
+                disabled: modelSaving || Boolean(manualBusy) || viewBarrier.current.pending,
+                title: isManual ? '删除手动模型会停用模型并移除其配置。' : '删除手动声明会停用此模型并移除其配置；网关模型仍保留。',
+                'aria-label': `删除手动模型 ${model.id}`,
+                onClick: () => removeManualModel(model.id),
+              }, removingManualId === model.id ? '正在删除…' : '删除')
+              : null,
           )
         ),
         isExpanded
@@ -2407,7 +2604,7 @@ window.__ModuleLoader__.load({
     // §12.3 旅程条
     function renderJourneyBar(ctx) {
       const { h, ui: input, model } = ctx;
-      const { view, gateway, onNavigateStep } = input;
+      const { view, gateway, onNavigateStep, canNavigateModels } = input;
       const ui = deriveSessionUi(view);
       const gatewayUi = deriveGatewayUi(gateway);
       const catalogue = deriveModelUi(view);
@@ -2430,7 +2627,7 @@ window.__ModuleLoader__.load({
         },
         {
           num: '2',
-          title: '凭据',
+          title: 'AI 服务',
           targetId: 'fiam-section-gateway',
           status: step2Done ? '已就绪' : (step2Warn ? '需核对' : '待配置'),
           done: step2Done,
@@ -2462,23 +2659,30 @@ window.__ModuleLoader__.load({
           children.push(h('div', { key: `sep-${idx}`, className: 'fiam-journey-arrow', 'aria-hidden': 'true' }, chevronIcon));
         }
         const stateClass = s.done ? 'done' : (s.warn ? 'warn' : (s.active ? 'active' : 'idle'));
-        children.push(h('div', {
+        const clickable = s.targetId !== 'fiam-section-models' || Boolean(canNavigateModels);
+        const stepProps = {
           key: s.title,
-          // 步骤是入口，不是装饰：纯键盘用户也要能打开对应的卡片，所以给它按钮语义、
-          // 停在 Tab 顺序里，并接受 Enter/空格（PR #215 复审 P2）。
-          role: 'button',
-          tabIndex: 0,
-          className: `fiam-journey-step fiam-journey-step-${stateClass}`,
-          style: { cursor: 'pointer' },
-          onClick: () => {
+          className: clickable
+            ? `fiam-journey-step fiam-journey-step-${stateClass} fiam-journey-step-clickable`
+            : 'fiam-journey-step fiam-journey-step-static',
+          style: { cursor: clickable ? 'pointer' : 'default' },
+        };
+        if (clickable) {
+          // 仅对确实可跳转/定位的步骤赋予按钮语义与键盘入口，不可达步骤不误导用户可点击。
+          stepProps.role = 'button';
+          stepProps.tabIndex = 0;
+          stepProps.onClick = () => {
             if (typeof onNavigateStep === 'function') onNavigateStep(s.targetId);
-          },
-          onKeyDown: (event) => {
+          };
+          stepProps.onKeyDown = (event) => {
             if (event?.key !== 'Enter' && event?.key !== ' ' && event?.key !== 'Spacebar') return;
             event.preventDefault?.();
             if (typeof onNavigateStep === 'function') onNavigateStep(s.targetId);
-          },
-        },
+          };
+        } else {
+          stepProps.title = '请在左侧栏切换至「企业模型」';
+        }
+        children.push(h('div', stepProps,
           h('div', {
             className: `fiam-journey-icon fiam-journey-icon-${stateClass}`,
             'aria-hidden': 'true',
@@ -2538,15 +2742,20 @@ window.__ModuleLoader__.load({
         list: modelList, visible: visibleModels, enabledCount, options: modelOptions, expanded: expandedModels,
         query: modelQuery, setQuery: setModelQuery, filter: modelFilter, setFilter: setModelFilter,
         toolbarRef, saving: modelSaving, notice: modelNotice, unsaved: hasUnsavedModelChanges,
+        manual: manualForm,
       } = model;
       const {
         changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
         commitField: commitOptionField, commitFieldOnBlur: commitOptionFieldOnBlur,
-        resetOption: resetModelOption, enableOption: enableModelOption, disableOption: disableModelOption,
+        resetOption: resetModelOption, disableOption: disableModelOption, enableOption: enableModelOption,
         enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
         disableWithSave: disableModelWithSave,
         discard: discardModelChanges, save: saveModelOptions, refresh: refreshModels,
+        openManual: openManualForm, closeManual: closeManualForm, changeManualId: changeManualFormId,
+        submitManual: submitManualForm, removeManual: removeManualModel,
       } = actions;
+      const manual = manualForm || { open: false, id: '', error: null, pending: false, removingId: null };
+      const manualBusy = Boolean(manual.pending || manual.removingId);
       const ui = deriveSessionUi(view);
       const catalogueUi = deriveModelUi(view);
       const gatewayUi = deriveGatewayUi(gateway);
@@ -2685,8 +2894,8 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'fiam-quick-btn fiam-batch-btn',
                   style: { ...secondaryButton, minHeight: 28, height: 28, padding: '0 10px', fontSize: 12 },
-                  disabled: modelSaving || viewBarrier.current.pending,
-                  title: '以推荐默认参数一次性启用全部未开启的模型',
+                  disabled: modelSaving || manualBusy || viewBarrier.current.pending,
+                  title: '以推荐默认参数一次性启用全部未开启的模型（含手动条目）',
                   'aria-label': '全部默认启用',
                   onClick: enableAllModelsWithDefaults,
                 }, `全部默认启用 (${unenabledCount})`)
@@ -2728,6 +2937,94 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
+        h('div', { className: 'fiam-actions', style: { marginTop: 8, marginBottom: 8 } },
+          h('button', {
+            type: 'button',
+            style: secondaryButton,
+            disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+            onClick: refreshModels,
+          }, credential.saving ? '正在处理…' : '刷新模型列表'),
+          typeof openManualForm === 'function'
+            ? h('button', {
+              type: 'button',
+              style: secondaryButton,
+              disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+              'aria-expanded': Boolean(manual.open),
+              onClick: () => (manual.open ? closeManualForm?.() : openManualForm()),
+            }, '手动添加')
+            : null,
+          h('button', {
+            type: 'button',
+            className: 'forge-iam-primary',
+            style: primaryButton,
+            disabled: modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+            onClick: saveModelOptions,
+          }, modelSaving ? '正在保存…' : '保存模型配置'),
+          hasUnsavedModelChanges
+            ? h('button', {
+              type: 'button',
+              style: secondaryButton,
+              disabled: modelSaving || viewBarrier.current.pending,
+              onClick: discardModelChanges,
+            }, '放弃修改')
+            : null,
+          hasUnsavedModelChanges
+            ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存模型配置变更')
+            : null,
+        ),
+        modelNotice
+          ? h('div', {
+            role: 'status',
+            'aria-live': 'polite',
+            className: `fiam-notice fiam-notice-${(modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') || modelNotice.includes('已添加') || modelNotice.includes('已删除') || modelNotice.includes('已更新')) && !modelNotice.includes('暂不可用') && !modelNotice.includes('未能') ? 'success' : 'warn'}`,
+          }, modelNotice)
+          : null,
+        manual.open
+          ? h('div', {
+            className: 'fiam-panel-subbox',
+            style: { marginTop: 8, marginBottom: 8, padding: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-subtle, rgba(148,163,184,0.3))' },
+          },
+            h('label', { style: { display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6 } }, '手动添加模型'),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+              h('input', {
+                type: 'text',
+                value: manual.id,
+                placeholder: '输入模型 ID，例如 deepseek-chat',
+                'aria-label': '模型 ID',
+                disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending,
+                style: { ...inputStyle, flex: '1 1 220px', minWidth: 180 },
+                onInput: (e) => changeManualFormId?.(e.target.value),
+                onChange: (e) => changeManualFormId?.(e.target.value),
+                onKeyDown: (e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault?.();
+                    submitManualForm?.();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault?.();
+                    closeManualForm?.();
+                  }
+                },
+              }),
+              h('button', {
+                type: 'button',
+                className: 'forge-iam-primary',
+                style: primaryButton,
+                disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+                onClick: () => submitManualForm?.(),
+              }, manual.pending ? '正在添加…' : '确认添加'),
+              h('button', {
+                type: 'button',
+                style: secondaryButton,
+                disabled: manual.pending,
+                onClick: () => closeManualForm?.(),
+              }, '取消'),
+            ),
+            h('p', { style: { ...muted, marginTop: 6, marginBottom: 0 } }, '模型 ID 长度不超过 200，不限字符集；能否调用以企业网关权限为准'),
+            manual.error
+              ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-error', style: { marginTop: 8 } }, manual.error)
+              : null,
+          )
+          : null,
         catalogueUi.configured && modelList.length > 0 && hasUnsavedModelChanges
           ? h('div', { className: 'fiam-unsaved-banner' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -2752,7 +3049,10 @@ window.__ModuleLoader__.load({
           )
           : null,
         catalogueUi.configured && modelList.length > 0
-          ? h('div', { className: 'fiam-model-list', 'aria-label': '企业预置模型' },
+          ? h('div', {
+            className: 'fiam-model-list',
+            'aria-label': '企业预置模型',
+          },
             ...(visibleModels.length === 0
               ? [h('div', { key: 'empty-filter', style: { ...muted, padding: '16px 12px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 } },
                 h('span', null, '没有匹配的模型，请调整搜索词或筛选条件。'),
@@ -2769,10 +3069,13 @@ window.__ModuleLoader__.load({
                 const isExpanded = Boolean(expandedModels[model.id]);
                 return renderModelItem({
                   h,
-                  item: { model, idx, isExpanded, opt, modelOptions, modelSaving, viewBarrier, view },
+                  item: {
+                    model, idx, isExpanded, opt, modelOptions, modelSaving,
+                    manualBusy, removingManualId: manual.removingId, viewBarrier, view,
+                  },
                   actions: {
                     toggleModelExpand, updateOptionField, commitOptionField, commitOptionFieldOnBlur, resetModelOption, disableModelOption,
-                    enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions,
+                    enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions, removeManualModel,
                   },
                 });
               }))
@@ -2789,41 +3092,12 @@ window.__ModuleLoader__.load({
         catalogueUi.ready && !modelList.length
           ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人访问凭证的模型权限。') : null,
         catalogueUi.error && !catalogueUi.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(catalogueUi.error)) : null,
-        h('div', { className: 'fiam-actions' },
-          h('button', {
-            type: 'button',
-            style: secondaryButton,
-            disabled: credential.saving || modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
-            onClick: refreshModels,
-          }, credential.saving ? '正在处理…' : '刷新模型列表'),
-          h('button', {
-            type: 'button',
-            className: 'forge-iam-primary',
-            style: primaryButton,
-            disabled: modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
-            onClick: saveModelOptions,
-          }, modelSaving ? '正在保存…' : '保存模型配置'),
-          hasUnsavedModelChanges
-            ? h('button', {
-              type: 'button',
-              style: secondaryButton,
-              disabled: modelSaving || viewBarrier.current.pending,
-              onClick: discardModelChanges,
-            }, '放弃修改')
-            : null,
-          hasUnsavedModelChanges
-            ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存模型配置变更')
-            : null,
-        ),
-        modelNotice
-          ? h('div', {
-            role: 'status',
-            'aria-live': 'polite',
-            className: `fiam-notice fiam-notice-${modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') ? 'success' : 'warn'}`,
-          }, modelNotice)
+        catalogueUi.manualTruncated > 0
+          ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' },
+            `已保存的手动模型超过展示上限，另有 ${catalogueUi.manualTruncated} 个未加载（最多支持 100 个）；请先删除部分手动条目。`)
           : null,
         h('p', { style: { ...muted, marginTop: 12 } }, !gatewayUi.configured || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人凭证。'
-          : '点击“一键启用”可直接以默认参数启用并生效；展开精细配置修改参数后，点击“保存模型配置”即可在对话窗口选用。'),
+          : '已启用模型与保存后的配置将直接用于对话；缺失模型可手动添加。'),
       );
     }
 
@@ -2860,6 +3134,8 @@ window.__ModuleLoader__.load({
       // steps stay unmounted until the reader asks for them, so a signed-out
       // panel cannot offer actions that need a session.
       const [revealPersonal, setRevealPersonal] = React.useState(false);
+      const [manualForm, setManualForm] = React.useState({ open: false, id: '', error: null, pending: false, removingId: null });
+      const manualInFlightRef = React.useRef(false);
       const lastSyncedOptions = React.useRef(initialModelOptions);
       // 草稿的最新值：事件回调里读它，避免闭包里拿到上一帧的状态。
       const optionsRef = React.useRef(initialModelOptions);
@@ -3020,7 +3296,7 @@ window.__ModuleLoader__.load({
           }
           lastSyncedOptions.current = nextOptions;
           setModelNotice(result.body?.persisted === false
-            ? '模型配置已在本机生效，但未能写入持久存储，重启后需重新保存。'
+            ? MODEL_STORAGE_WARNING
             : successMessage);
           if (isCurrentEpoch(viewBarrier.current.epoch)) {
             setView(result.body?.view);
@@ -3087,6 +3363,10 @@ window.__ModuleLoader__.load({
           optionsSync.current.signature = null;
           lastSyncedOptions.current = {};
           applyModelOptions({});
+          setExpandedModels((prev) => (Object.keys(prev).length ? {} : prev));
+          setManualForm((prev) => (prev.open || prev.id || prev.error || prev.pending || prev.removingId
+            ? { open: false, id: '', error: null, pending: false, removingId: null }
+            : prev));
           return;
         }
         if (!catalogue.ready || !access.modelOptions || typeof access.modelOptions !== 'object' || Array.isArray(access.modelOptions)) return;
@@ -3119,7 +3399,112 @@ window.__ModuleLoader__.load({
       });
 
       const hasUnsavedModelChanges = JSON.stringify(modelOptions) !== JSON.stringify(lastSyncedOptions.current);
+      const openManualForm = () => {
+        setModelNotice(null);
+        setManualForm((prev) => ({ ...prev, open: true, error: null }));
+      };
+      const closeManualForm = () => {
+        if (manualInFlightRef.current) return;
+        setManualForm((prev) => ({ ...prev, open: false, id: '', error: null }));
+      };
+      const changeManualFormId = (nextId) => {
+        setManualForm((prev) => ({ ...prev, id: typeof nextId === 'string' ? nextId : '', error: null }));
+      };
+      const submitManualForm = async () => {
+        if (manualInFlightRef.current || modelSaving || viewBarrier.current.pending) return;
+        const trimmed = String(manualForm.id ?? '').trim();
+        if (!trimmed || trimmed.length > 200) {
+          setManualForm((prev) => ({ ...prev, error: ERROR_NOTICE.IAM_MANUAL_MODEL_INVALID }));
+          return;
+        }
+        if (modelList.some((item) => item.id === trimmed)) {
+          setManualForm((prev) => ({ ...prev, error: ERROR_NOTICE.IAM_MANUAL_MODEL_CONFLICT }));
+          return;
+        }
+        manualInFlightRef.current = true;
+        const epoch = viewBarrier.current.epoch;
+        setModelNotice(null);
+        setManualForm((prev) => ({ ...prev, pending: true, error: null }));
+        try {
+          const result = await postJson('/api/forge-iam/models/manual', {
+            payload: { action: 'add', id: trimmed },
+          });
+          if (!isCurrentEpoch(epoch)) return;
+          if (!result.ok) {
+            setManualForm((prev) => ({ ...prev, pending: false, error: resultNotice(result) }));
+            return;
+          }
+          setManualForm({ open: false, id: '', error: null, pending: false, removingId: null });
+          if (result.body?.view) setView(result.body.view);
+          const addNotice = result.body?.persisted === false
+            ? MODEL_STORAGE_WARNING
+            : result.body?.rebuildError
+              ? `手动模型 ${trimmed} 已保存`
+              : `已添加 ${trimmed}，可在列表中配置并启用。`;
+          setModelNotice(result.body?.rebuildError
+            ? `${addNotice}${result.body?.persisted === false ? ' ' : '，但'}模型路由暂不可用：${errorNotice(result.body.rebuildError)}`
+            : addNotice);
+        } catch {
+          if (!isCurrentEpoch(epoch)) return;
+          setManualForm((prev) => ({ ...prev, pending: false, error: errorNotice('IAM_REQUEST_FAILED') }));
+        } finally {
+          manualInFlightRef.current = false;
+          setManualForm((prev) => (prev.pending ? { ...prev, pending: false } : prev));
+        }
+      };
+      const removeManualModel = async (id) => {
+        if (manualInFlightRef.current || modelSaving || viewBarrier.current.pending) return;
+        manualInFlightRef.current = true;
+        const epoch = viewBarrier.current.epoch;
+        setModelNotice(null);
+        setManualForm((prev) => ({ ...prev, removingId: id }));
+        try {
+          const result = await postJson('/api/forge-iam/models/manual', {
+            payload: { action: 'remove', id },
+          });
+          if (!isCurrentEpoch(epoch)) return;
+          if (!result.ok) {
+            setModelNotice(resultNotice(result));
+            return;
+          }
+          if (result.body?.removed === false) {
+            if (result.body?.view) setView(result.body.view);
+            setModelNotice(`手动模型 ${id} 已不在列表中。`);
+            return;
+          }
+          if (Object.prototype.hasOwnProperty.call(lastSyncedOptions.current, id)) {
+            const nextSynced = { ...lastSyncedOptions.current };
+            delete nextSynced[id];
+            lastSyncedOptions.current = nextSynced;
+          }
+          if (Object.prototype.hasOwnProperty.call(optionsRef.current, id)) {
+            const nextOptions = { ...optionsRef.current };
+            delete nextOptions[id];
+            applyModelOptions(nextOptions);
+          }
+          setExpandedModels((prev) => {
+            if (!prev[id]) return prev;
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          if (result.body?.view) setView(result.body.view);
+          const removeNotice = result.body?.persisted === false
+            ? MODEL_STORAGE_WARNING
+            : `已删除手动模型 ${id}${result.body?.rebuildError ? '' : '。'}`;
+          setModelNotice(result.body?.rebuildError
+            ? `${removeNotice}${result.body?.persisted === false ? ' ' : '，但'}模型路由暂不可用：${errorNotice(result.body.rebuildError)}`
+            : removeNotice);
+        } catch {
+          if (!isCurrentEpoch(epoch)) return;
+          setModelNotice(errorNotice('IAM_REQUEST_FAILED'));
+        } finally {
+          manualInFlightRef.current = false;
+          setManualForm((prev) => (prev.removingId === id ? { ...prev, removingId: null } : prev));
+        }
+      };
       function resetForSignOut() {
+        manualInFlightRef.current = false;
         setCachedModels([]);
         cacheKeyRef.current = null;
         purgeModelCache();
@@ -3127,6 +3512,7 @@ window.__ModuleLoader__.load({
         lastSyncedOptions.current = {};
         optionsSync.current.signature = null;
         setExpandedModels({});
+        setManualForm({ open: false, id: '', error: null, pending: false, removingId: null });
         setModelNotice(null);
       }
 
@@ -3135,7 +3521,7 @@ window.__ModuleLoader__.load({
           list: modelList, visible: visibleModels, enabledCount, options: modelOptions, expanded: expandedModels,
           query: modelQuery, setQuery: setModelQuery, filter: modelFilter, setFilter: setModelFilter,
           toolbarRef, saving: modelSaving, notice: modelNotice, unsaved: hasUnsavedModelChanges,
-          revealPersonal, setRevealPersonal,
+          revealPersonal, setRevealPersonal, manual: manualForm,
         },
         actions: {
           changeFilter: handleFilterChange, toggleExpand: toggleModelExpand, updateField: updateOptionField,
@@ -3144,7 +3530,9 @@ window.__ModuleLoader__.load({
           enableWithDefaults: enableModelWithDefaults, enableAllWithDefaults: enableAllModelsWithDefaults,
           disableWithSave: disableModelWithSave,
           discard: discardModelChanges, save: saveModelOptions, syncFromView: syncModelOptions,
-          reset: resetForSignOut, clearNotice: () => setModelNotice(null), collapseAll: () => setExpandedModels({}),
+          openManual: openManualForm, closeManual: closeManualForm, changeManualId: changeManualFormId,
+          submitManual: submitManualForm, removeManual: removeManualModel,
+          reset: resetForSignOut, setNotice: setModelNotice, clearNotice: () => setModelNotice(null), collapseAll: () => setExpandedModels({}),
         },
       };
     }
@@ -3208,16 +3596,23 @@ window.__ModuleLoader__.load({
         if (viewBarrier.current.pending || credential.saving) return;
         const epoch = viewBarrier.current.epoch;
         setCredential((current) => ({ ...current, saving: true, notice: null }));
+        catalogue?.actions?.clearNotice?.();
         try {
           const result = await getJson('/api/forge-iam/models');
           if (!isCurrentEpoch(epoch)) return;
-          setCredential((current) => ({
-            ...current, saving: false, notice: result.ok
-              ? `模型列表已更新，共 ${result.body?.models?.length ?? 0} 个模型。`
-              : resultNotice(result)
-          }));
+          const notice = result.ok
+            ? `模型列表已更新，共 ${result.body?.models?.length ?? 0} 个模型。`
+            : resultNotice(result);
+          setCredential((current) => ({ ...current, saving: false, notice }));
+          catalogue?.actions?.setNotice?.(notice);
           if (result.ok) setView(result.body?.view);
-        } catch { if (isCurrentEpoch(epoch)) setCredential((current) => ({ ...current, notice: '暂时无法获取模型列表，请稍后重试。' })); }
+        } catch {
+          if (isCurrentEpoch(epoch)) {
+            const notice = '暂时无法获取模型列表，请稍后重试。';
+            setCredential((current) => ({ ...current, notice }));
+            catalogue?.actions?.setNotice?.(notice);
+          }
+        }
         finally { if (live.current) setCredential((current) => ({ ...current, saving: false })); }
       };
 
@@ -3292,6 +3687,7 @@ window.__ModuleLoader__.load({
       const linkIdentity = React.useRef(null);
       const copyRequest = React.useRef(null);
       const copyLive = React.useRef(true);
+      const wasReadyRef = React.useRef(false);
       const [copy, setCopy] = React.useState({ pending: false, notice: null, epoch: null, url: null });
       React.useEffect(() => {
         copyLive.current = true;
@@ -3304,12 +3700,16 @@ window.__ModuleLoader__.load({
         try {
           const view = await fetchView();
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
+          const readyNow = deriveSessionUi(view).ready;
+          if (wasReadyRef.current && !readyNow) viewBarrier.current.epoch += 1;
+          wasReadyRef.current = readyNow;
           if (!deriveSessionUi(view).authenticating) linkIdentity.current = null;
           setState((current) => ({ ...current, phase: 'ready', view, error: null, ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }) }));
           form.noteModelsSynced(view);
           void catalogue.actions.syncFromView(view);
         } catch (error) {
           if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
+          wasReadyRef.current = false;
           linkIdentity.current = null;
           setState({ phase: 'error', view: null, error: error.message, notice: null, authorizationUrl: null });
         }
@@ -3318,6 +3718,9 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { load(); }, [load]);
       useSessionPoll(true, (view) => {
         // Invalidate before enqueueing React state, not only on the next render.
+        const readyNow = deriveSessionUi(view).ready;
+        if (wasReadyRef.current && !readyNow) viewBarrier.current.epoch += 1;
+        wasReadyRef.current = readyNow;
         if (!deriveSessionUi(view).authenticating) linkIdentity.current = null;
         setState((current) => ({
           ...current, phase: 'ready', view, error: null,
@@ -3457,8 +3860,9 @@ window.__ModuleLoader__.load({
     }
 
     // §14 面板
-    function Panel() {
+    function Panel(props) {
       const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
+      const [expandGateway, setExpandGateway] = React.useState(false);
 
       // Waking a laptop or returning to the tab is when a signed-in session is
       // most likely to have drifted (network moved, gateway restarted). Re-read
@@ -3474,8 +3878,6 @@ window.__ModuleLoader__.load({
       const box = { padding: '0 0 24px', maxWidth: 720, width: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
       const header = h('div', { style: { marginBottom: 16 } },
         h('div', { style: { font: 'var(--dsw-font-m-18)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '企业账号'),
-        h('div', { style: { ...muted, marginTop: 4 } }, '管理企业账号和个人访问凭证'),
-        h('p', { style: { ...muted, marginTop: 4 } }, '登录只建立身份，不代表已获得业务写权限。'),
       );
       const copyTools = h('div', { className: 'fiam-actions' },
         deriveSessionUi(state.view).authenticating && session.linkIdentity.current && state.authorizationUrl === session.linkIdentity.current
@@ -3581,16 +3983,28 @@ window.__ModuleLoader__.load({
       // 失败提示就落在看不见的地方（PR #215 复审 P2）。回执真实可见优先于折叠。
       const credentialFeedback = Boolean(form.credential.saving || form.credential.notice);
       const personalShown = personalVisible || credentialFeedback;
-      // The journey bar points at the cards below. While signed out the personal
-      // steps are folded (DESIGN §4), so their cards are not mounted: a click
-      // must open the fold first and scroll only once the card exists, instead
-      // of silently scrolling to nothing.
+      const hasGatewayDraft = Boolean(form.credential.value
+        || (form.credential.baseURL !== undefined && form.credential.baseURL !== (gateway.baseURL ?? view.modelAccess?.baseURL ?? '')));
+      const gatewayCollapsed = sessionUi.ready && gatewayUi.configured && !expandGateway
+        && !form.credential.saving && !form.credential.notice && !hasGatewayDraft;
+      const canCollapseGateway = sessionUi.ready && gatewayUi.configured && !form.credential.saving && !hasGatewayDraft;
+      // The journey bar points at the cards in 企业账号, or jumps to 企业模型 for models.
       const navigateStep = (targetId) => {
+        if (targetId === 'fiam-section-models') {
+          if (typeof props?.navigate === 'function') props.navigate('forge-models');
+          return;
+        }
         let target = null;
         try { target = document?.getElementById?.(targetId) ?? null; } catch { }
         const scroll = () => {
           try { document?.getElementById?.(targetId)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); } catch { }
         };
+        if (targetId === 'fiam-section-gateway' && sessionUi.ready && gatewayUi.configured && !expandGateway) {
+          setExpandGateway(true);
+          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(scroll);
+          else if (typeof setTimeout === 'function') setTimeout(scroll, 0);
+          return;
+        }
         if (target) { scroll(); return; }
         if (targetId !== 'fiam-section-account' && !personalVisible) {
           setRevealPersonal(true);
@@ -3602,7 +4016,7 @@ window.__ModuleLoader__.load({
       };
       const journeyBar = renderJourneyBar({
         h,
-        ui: { view, gateway, onNavigateStep: navigateStep },
+        ui: { view, gateway, onNavigateStep: navigateStep, canNavigateModels: typeof props?.navigate === 'function' },
         model: { enabledCount: catalogue.data.enabledCount, totalModels: catalogue.data.list.length },
       });
 
@@ -3618,20 +4032,13 @@ window.__ModuleLoader__.load({
 
       const gatewayCard = renderGatewayCard({
         h,
-        ui: { view, gateway, gatewayStatus, gatewayDetails, storageWarning, credential: form.credential },
-        actions: { setCredential: form.setCredential, saveCredential: form.save, clearCredential: form.clear, viewBarrier },
-      });
-
-      const modelsCard = renderModelsCard({
-        h,
-        ui: { view, credential: form.credential, viewBarrier, gateway },
-        model: catalogue.data,
-        actions: { ...catalogue.actions, refresh: form.refresh },
+        ui: { view, gateway, gatewayStatus, gatewayDetails, storageWarning, credential: form.credential, collapsed: gatewayCollapsed, canCollapse: canCollapseGateway },
+        actions: { setCredential: form.setCredential, saveCredential: form.save, clearCredential: form.clear, viewBarrier, onToggleExpand: setExpandGateway },
       });
 
       // 收起/展开入口在未登录时必须一直在：回执可见时卡片会临时展开，但入口不能跟着消失，
-      // 否则纯键盘用户就没有可操作的对象去拿回模型卡（PR #215 复审 P2）。
-      const foldLabel = revealPersonal ? '收起个人设置' : (personalShown ? '查看模型设置' : '登录后可配置');
+      // 否则纯键盘用户就没有可操作的对象去展开 AI 服务配置（PR #215 复审 P2）。
+      const foldLabel = revealPersonal ? '收起个人设置' : (personalShown ? '查看凭证设置' : '登录后可配置');
       const personalFold = sessionUi.ready
         ? null
         : h('button', {
@@ -3661,8 +4068,102 @@ window.__ModuleLoader__.load({
         accountCard,
         personalFold,
         personalShown ? gatewayCard : null,
-        personalVisible ? modelsCard : null,
         diagnosticFold,
+      );
+    }
+
+    // §14.4 模型面板
+    function ModelsPanel(props) {
+      const [state, setState] = React.useState({ phase: 'loading', view: null, error: null, notice: null, authorizationUrl: null });
+      const viewBarrier = React.useRef({ epoch: 0, pending: false });
+      const setView = (next) => setState((current) => ({ ...current, view: next ?? current.view }));
+      const catalogue = useModelCatalogue({ view: state.view, viewBarrier, setView });
+      const form = useCredentialForm({ view: state.view, viewBarrier, setView, catalogue });
+      const session = useSessionView({ state, setState, viewBarrier, catalogue, form });
+
+      const box = { padding: '0 0 24px', maxWidth: 720, width: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
+      const header = h('div', { style: { marginBottom: 16 } },
+        h('div', { style: { font: 'var(--dsw-font-m-18)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '企业模型'),
+        h('div', { style: { ...muted, marginTop: 4 } }, '选择并配置可用于对话的企业模型'),
+      );
+
+      if (state.phase === 'loading') {
+        return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
+          header,
+          h('div', { className: 'fiam-card', style: { padding: '28px 20px', textAlign: 'center' } },
+            h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 } },
+              h('div', { className: 'fiam-spinner' }),
+              h('div', { style: muted }, '正在读取模型状态…'),
+            )
+          ),
+        );
+      }
+
+      if (state.phase === 'error') {
+        return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
+          header,
+          h('div', { className: 'fiam-card', style: { padding: '24px 20px' } },
+            h('div', { style: { fontWeight: 600, fontSize: 15, marginBottom: 4 } }, '无法读取企业模型状态。'),
+            h('div', { style: muted }, errorNotice(state.error)),
+            h('div', { className: 'fiam-actions', style: { marginTop: 14 } },
+              h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, onClick: session.load }, '重试'),
+            ),
+          ),
+        );
+      }
+
+      const view = state.view ?? {};
+      const sessionUi = deriveSessionUi(state.view);
+      const gateway = view.gatewayCredential ?? { state: 'unknown' };
+      const gatewayUi = deriveGatewayUi(gateway);
+      const blocked = !sessionUi.ready || !gatewayUi.configured;
+      const blockerTitle = !sessionUi.ready ? '请先登录企业账号' : '尚未启用 AI 服务';
+      const blockerBody = !sessionUi.ready
+        ? '请前往「设置 → 企业账号」登录企业账号并启用 AI 服务后，即可使用企业模型。'
+        : (gatewayUi.ownerMismatch
+          ? '当前凭证属于其他账号，请前往「设置 → 企业账号」核对。'
+          : (gatewayUi.invalid || gatewayUi.unknown
+            ? '当前 AI 服务凭证状态需核对，请前往「设置 → 企业账号」检查。'
+            : '请前往「设置 → 企业账号」填写 AI 服务访问凭证，保存后将自动同步可用模型。'));
+
+      const blockerCard = blocked
+        ? h('div', { id: 'fiam-models-blocker', className: 'fiam-card fiam-models-blocker', role: 'status', 'aria-live': 'polite' },
+          h('div', { style: { flex: '1 1 260px', minWidth: 0 } },
+            h('div', { className: 'fiam-card-title' }, blockerTitle),
+            h('div', { className: 'fiam-card-subtitle', style: { marginTop: 4 } }, blockerBody),
+          ),
+          h('div', { className: 'fiam-actions', style: { marginTop: 0 } },
+            typeof props?.navigate === 'function'
+              ? h('button', {
+                type: 'button',
+                className: 'forge-iam-primary',
+                style: primaryButton,
+                onClick: () => props.navigate('forge-iam'),
+              }, '前往「企业账号」')
+              : null,
+            h('button', {
+              type: 'button',
+              style: button,
+              disabled: viewBarrier.current.pending,
+              onClick: session.load,
+            }, '刷新'),
+          ),
+        )
+        : null;
+
+      const modelsCard = sessionUi.ready
+        ? renderModelsCard({
+          h,
+          ui: { view, credential: form.credential, viewBarrier, gateway },
+          model: catalogue.data,
+          actions: { ...catalogue.actions, refresh: form.refresh },
+        })
+        : null;
+
+      return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
+        header,
+        blockerCard,
+        modelsCard,
       );
     }
 
@@ -4140,23 +4641,21 @@ window.__ModuleLoader__.load({
     function renderOnboardingStepDetail(ctx) {
       const { h, state, setState } = ctx;
       if (state.step === 0) {
-        return h('div', { className: 'fiam-onboarding-preview' },
-          h('div', { className: 'fiam-onboarding-preview-row' },
-            h('span', { className: 'fiam-onboarding-preview-num' }, '1'),
-            h('span', null, '在浏览器中登录企业账号'),
-          ),
-          h('div', { className: 'fiam-onboarding-preview-row' },
-            h('span', { className: 'fiam-onboarding-preview-num' }, '2'),
-            h('span', null, '添加个人访问凭证'),
-          ),
-          h('div', { className: 'fiam-onboarding-preview-row' },
-            h('span', { className: 'fiam-onboarding-preview-num' }, '3'),
-            h('span', null, '同步可用模型并开始对话'),
-          ),
-        );
-      }
-      if (state.step === 1) {
         return h('div', { style: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 } },
+          h('div', { className: 'fiam-onboarding-preview' },
+            h('div', { className: 'fiam-onboarding-preview-row' },
+              h('span', { className: 'fiam-onboarding-preview-num' }, '1'),
+              h('span', null, '登录企业账号'),
+            ),
+            h('div', { className: 'fiam-onboarding-preview-row' },
+              h('span', { className: 'fiam-onboarding-preview-num' }, '2'),
+              h('span', null, '启用 AI 服务'),
+            ),
+            h('div', { className: 'fiam-onboarding-preview-row' },
+              h('span', { className: 'fiam-onboarding-preview-num' }, '3'),
+              h('span', null, '完成设置并选择默认企业模型'),
+            ),
+          ),
           h('div', { className: 'fiam-callout', style: { marginTop: 0 } },
             h('svg', { className: 'fiam-callout-icon', viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
               h('path', { d: 'M8 1.5s5 2 5 5.8c0 3.8-2.9 6.3-5 7.7-2.1-1.4-5-3.9-5-7.7 0-3.8 5-5.8 5-5.8Z' }),
@@ -4174,9 +4673,9 @@ window.__ModuleLoader__.load({
             : null,
         );
       }
-      if (state.step === 3) {
+      if (state.step === 2) {
         const gatewayUi = deriveGatewayUi(state.view?.gatewayCredential);
-      const gwState = gatewayUi.state;
+        const gwState = gatewayUi.state;
         const models = state.view?.modelAccess?.models ?? [];
         return h('div', { style: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 } },
           h('div', { className: 'fiam-onboarding-summary' },
@@ -4187,7 +4686,7 @@ window.__ModuleLoader__.load({
               ),
             ),
             h('div', { className: 'fiam-onboarding-summary-row' },
-              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '个人访问凭证'),
+              h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, 'AI 服务'),
               h('span', { className: `fiam-badge fiam-badge-${gatewayUi.configured ? 'success' : 'warn'}` },
                 gatewayLabel(gwState, '待核实')
               ),
@@ -4197,7 +4696,7 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'fiam-auth-progress', role: 'status', 'aria-live': 'polite' },
               h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8 } },
                 h('div', { className: 'fiam-spinner', style: { width: 16, height: 16 } }),
-                h('span', null, '正在同步企业网关可用模型…'),
+                h('span', null, '正在同步默认企业模型列表…'),
               )
             )
             : null,
@@ -4207,7 +4706,7 @@ window.__ModuleLoader__.load({
           models.length > 0
             ? h('div', null,
               h('div', { style: { fontSize: 13, fontWeight: 500, marginBottom: 8, color: 'var(--dsw-alias-label-primary)' } },
-                `已连接企业网关可用模型（共 ${models.length} 个）：`),
+                `可用企业模型（共 ${models.length} 个，可在“设置 → 企业模型”启用并设为默认）：`),
               h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 160, overflowY: 'auto' } },
                 ...[...models]
                   .sort((a, b) => String(a?.id ?? '').localeCompare(String(b?.id ?? ''), 'en', { numeric: true, sensitivity: 'base' }))
@@ -4217,7 +4716,7 @@ window.__ModuleLoader__.load({
             : null,
         );
       }
-      if (state.step === 2) {
+      if (state.step === 1) {
         return h('div', { style: { marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 } },
           h('label', { style: fieldLabel },
             h('span', { style: { fontWeight: 500 } }, '网关地址'),
@@ -4232,7 +4731,7 @@ window.__ModuleLoader__.load({
           h('label', { style: fieldLabel }, '个人访问凭证', h('input', {
             type: 'password',
             value: state.keyValue,
-            placeholder: '输入网关提供的个人访问凭证',
+            placeholder: '输入用于启用 AI 服务的个人访问凭证',
             'aria-label': '个人访问凭证',
             autoComplete: 'off',
             spellCheck: false,
@@ -4331,16 +4830,14 @@ window.__ModuleLoader__.load({
         ...current,
         view,
         ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }),
-        // Advance to the success step once, then keep the user's final screen:
-        // a later identical `ready` poll must not pull them back from "完成".
-        // Advance into the credential step once. When this account already has a
+        // Advance into AI service step once. When this account already has a
         // matching key, skip straight to "完成"; a later identical poll must not
         // pull the user back out of the final screen.
-        ...(deriveSessionUi(view).ready && current.step < 2
-          ? { step: deriveGatewayUi(view.gatewayCredential).configured ? 3 : 2, authorizationUrl: null, notice: null }
+        ...(deriveSessionUi(view).ready && current.step < 1
+          ? { step: deriveGatewayUi(view.gatewayCredential).configured ? 2 : 1, authorizationUrl: null, notice: null }
           : {}),
-        ...(current.step === 2 && !deriveSessionUi(view).ready
-          ? { step: 1, authorizationUrl: null, notice: deriveSessionUi(view).failed ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : '登录状态已变化，请重新登录企业账号。' }
+        ...(current.step === 1 && !deriveSessionUi(view).ready
+          ? { step: 0, authorizationUrl: null, notice: deriveSessionUi(view).failed ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : '登录状态已变化，请重新登录企业账号。' }
           : {}),
         ...(deriveSessionUi(view).failed ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
       })));
@@ -4364,7 +4861,7 @@ window.__ModuleLoader__.load({
             ...current,
             view,
             step: deriveSessionUi(view).ready
-              ? (deriveGatewayUi(view.gatewayCredential).configured ? 3 : 2)
+              ? (deriveGatewayUi(view.gatewayCredential).configured ? 2 : 1)
               : current.step,
             authorizationUrl: result.body?.authorizationUrl,
             notice: deriveSessionUi(view).ready ? null : '浏览器已打开；若被拦截，请使用下方链接。',
@@ -4406,7 +4903,7 @@ window.__ModuleLoader__.load({
             saving: false,
             keyValue: '',
             view: result.body?.view ?? current.view,
-            step: 3,
+            step: 2,
             notice: null,
           }));
           void getJson('/api/forge-iam/models').then((m) => {
@@ -4430,10 +4927,10 @@ window.__ModuleLoader__.load({
           : '请检查凭证状态';
       const completionBody = gatewayUi.configured
         ? (deriveSessionUi(state.view).ready
-          ? '个人访问凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除。模型能否使用仍取决于你的权限。'
+          ? '个人访问凭证已保存。可在“设置 → 企业账号”中查看状态、更换或清除，并在“设置 → 企业模型”设置默认企业模型。'
           : '个人访问凭证已保存。请前往“设置 → 企业账号”登录后继续。')
         : gatewayUi.unconfigured
-          ? '个人访问凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并配置凭证。'
+          ? '个人访问凭证尚未保存，模型暂不可用。可稍后前往“设置 → 企业账号”登录并启用 AI 服务。'
           : gatewayUi.ownerMismatch
             ? '现有凭证属于其他账号，已为你保留。请前往“设置 → 企业账号”核对。'
             : gatewayUi.invalid
@@ -4441,20 +4938,14 @@ window.__ModuleLoader__.load({
               : '无法确认凭证是否已保存。请前往“设置 → 企业账号”刷新后查看。';
       const steps = [
         {
-          title: '欢迎使用企业版',
-          body: '登录企业账号并完成配置后，即可使用已授权的模型和工具。也可以先跳过，稍后在“设置 → 企业账号”中登录。',
-          primary: '开始',
-          onPrimary: () => setState((current) => ({ ...current, step: 1 })),
-        },
-        {
           title: '登录企业账号',
-          body: '使用系统浏览器完成企业登录，不在应用内输入密码。',
-          primary: '登录',
+          body: '登录企业账号后，即可启用 AI 服务并选择默认企业模型。也可以先跳过，稍后在“设置 → 企业账号”中登录。',
+          primary: '登录企业账号',
           onPrimary: startLogin,
         },
         {
-          title: '添加个人访问凭证',
-          body: '在企业 AI 网关创建个人访问凭证，然后粘贴到下方。',
+          title: '启用 AI 服务',
+          body: '填写企业 AI 服务签发的个人访问凭证，仅在本机安全存储，不会回显。',
           primary: '保存并继续',
           onPrimary: saveCredential,
         },
@@ -4487,12 +4978,12 @@ window.__ModuleLoader__.load({
           h('div', { className: 'fiam-onboarding-header' },
             h('div', { className: 'fiam-onboarding-brand' },
               h(IamShieldIcon, { size: 18 }),
-              h('span', null, '企业统一身份与网关向导'),
+              h('span', null, '企业服务初始化向导'),
             ),
-            h('span', { className: 'fiam-badge fiam-badge-authenticating' }, `步骤 ${state.step + 1} / 4`),
+            h('span', { className: 'fiam-badge fiam-badge-authenticating' }, `步骤 ${state.step + 1} / 3`),
           ),
           h('div', { className: 'fiam-onboarding-stepper', 'aria-hidden': 'true' },
-            ...['欢迎', '登录', '凭据', '完成'].map((label, index) => {
+            ...['登录企业账号', '启用 AI 服务', '完成设置'].map((label, index) => {
               const stateCls = index < state.step ? 'done' : (index === state.step ? 'active' : '');
               return h('div', { key: label, className: 'fiam-onboarding-step-item' },
                 h('div', { className: `fiam-onboarding-step-bar ${stateCls}` }),
@@ -4507,15 +4998,15 @@ window.__ModuleLoader__.load({
           state.authorizationUrl ? h('p', { style: { marginTop: 10 } }, h('a', { href: state.authorizationUrl, target: '_blank', rel: 'noreferrer' }, '浏览器未打开？点此继续登录')) : null,
           h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 } },
             h('button', { type: 'button', className: 'forge-iam-primary', style: primaryButton, disabled: state.saving, onClick: step.onPrimary }, state.saving ? '正在保存…' : step.primary),
-            state.step < 3
+            state.step < 2
               ? h('button', {
                 type: 'button', style: secondaryButton, disabled: state.saving, onClick: () => {
                   if (savingRef.current) return;
-                  return state.step === 2
-                    ? setState((current) => ({ ...current, step: 3, notice: null }))
+                  return state.step === 1
+                    ? setState((current) => ({ ...current, step: 2, notice: null }))
                     : close('skipped');
                 }
-              }, state.step === 2 ? '稍后配置' : '跳过')
+              }, state.step === 1 ? '稍后配置' : '跳过')
               : null,
           ),
         ),
@@ -4526,16 +5017,35 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
+        const navigate = sectionNavigatorOf(ctx);
         ctx.slots.inject('settings.launcher', () => ctx.slots.register({
           name: 'settings.launcher',
           id: 'forge-iam-launcher',
         }, IamLauncher));
+        ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+          name: 'settings.section.icon',
+          id: 'forge-iam',
+        }, IamAccountIcon));
+        ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+          name: 'settings.section.icon',
+          id: 'forge-models',
+        }, IamModelsIcon));
+        // 设计矩阵（enterprise-menu-and-token-unification §3）：
+        // 企业账号 -10，企业模型 10。
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'forge-iam',
-          order: 30,
+          order: -10,
           label: () => '企业账号',
+          inject: navigate ? () => ({ navigate }) : undefined,
         }, Panel));
+        ctx.slots.inject('settings.section', () => ctx.slots.register({
+          name: 'settings.section',
+          id: 'forge-models',
+          order: 10,
+          label: () => '企业模型',
+          inject: navigate ? () => ({ navigate }) : undefined,
+        }, ModelsPanel));
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
           name: 'shell.overlay',
           id: 'forge-iam-browser-compatibility',

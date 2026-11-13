@@ -35,7 +35,89 @@ export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 /** 允许的入参字段。白名单而非"忽略额外字段"：未知字段意味着有人在试通用命令通道。 */
 export const INVOCATION_KEYS = Object.freeze(['bin', 'args', 'purpose']);
 
-function assertOptions({ execFile, timeoutMs, maxOutputBytes }) {
+/**
+ * 子进程环境变量白名单（CORP-DSH-DESIGN-018 §5 / ADR-0011）。
+ * 默认剥离宿主环境中的 `DEEPSEEK_API_KEY`、`GITEE_TOKEN` 等无关敏感变量，
+ * 只透传子进程运行所需的系统基本变量与 DevOps 自身凭证键 `DEVOPS_API_KEY`。
+ *
+ * 代理与 CA 变量在内：`dop` 是 Go CLI，企业内网出口通常只经代理、私有网关只认企业根证书；
+ * 剥掉它们会让原本可用的网络在企业里变成“连不上”，而这既不是凭据泄露也不是业务数据外带。
+ *
+ * 代理 URL 不要内嵌凭据（`//user:pass@host` 形态）：子进程输出里出现时会被
+ * `redactProxyCredentials` 抹成 `//***@`，但转发给子进程的那份仍是明文。
+ */
+export const ENV_ALLOWLIST = Object.freeze([
+  'PATH',
+  'PATHEXT',
+  'HOME',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'PROGRAMDATA',
+  'SYSTEMROOT',
+  'SYSTEMDRIVE',
+  'WINDIR',
+  'COMSPEC',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'LANG',
+  'LANGUAGE',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LC_MESSAGES',
+  'TZ',
+  'SHELL',
+  'TERM',
+  'USER',
+  'LOGNAME',
+  'PWD',
+  'SSH_AUTH_SOCK',
+  'XDG_CONFIG_HOME',
+  'NO_COLOR',
+  'CLICOLOR',
+  'CI',
+  // 企业出口代理（大小写两种写法在真实环境里都会出现）。
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy',
+  // 企业私有 CA / 证书目录（Go 与 TLS 栈都读这两个）。
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'DEVOPS_API_KEY',
+]);
+
+/**
+ * 代理 URL 里内嵌的凭据（`//user:pass@proxy:3128` 形态）不是令牌形状，但同样是凭据：
+ * 子进程把代理串打进错误输出时，它会原样进工具结果。宁可脱敏，不指望子进程不打。
+ */
+const PROXY_CREDENTIALS = /(\/\/)[^/@\s]+@/g;
+
+const redactProxyCredentials = (text) =>
+  (typeof text === 'string' && text.length > 0 ? text.replace(PROXY_CREDENTIALS, '$1***@') : text);
+
+export function pickAllowlistedEnv(sourceEnv = process.env, allowlist = ENV_ALLOWLIST) {
+  if (sourceEnv === null || sourceEnv === undefined || typeof sourceEnv !== 'object') {
+    return {};
+  }
+  const picked = {};
+  for (const key of allowlist) {
+    const value = sourceEnv[key];
+    if (typeof value === 'string') {
+      picked[key] = value;
+    }
+  }
+  return picked;
+}
+
+function assertOptions({ execFile, timeoutMs, maxOutputBytes, resolveChildEnv }) {
   if (typeof execFile !== 'function') {
     throw new TypeError('createCliRunner 需要可注入的 execFile（唯一子进程出口）');
   }
@@ -44,6 +126,9 @@ function assertOptions({ execFile, timeoutMs, maxOutputBytes }) {
   }
   if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
     throw new TypeError(`maxOutputBytes 必须是正整数，收到 ${String(maxOutputBytes)}`);
+  }
+  if (resolveChildEnv !== undefined && resolveChildEnv !== null && typeof resolveChildEnv !== 'function') {
+    throw new TypeError('resolveChildEnv 必须是函数或未提供');
   }
 }
 
@@ -184,23 +269,65 @@ function fromPromiseResult(result, limit) {
  * @param {object} [options]
  * @param {Function} [options.execFile] 注入点；默认 `node:child_process.execFile`
  * @param {Record<string, string | undefined>} [options.env] 子进程环境覆盖项
+ * @param {Record<string, string | undefined>} [options.processEnv] 宿主进程环境（默认 `process.env`），按 `ENV_ALLOWLIST` 过滤
+ * @param {Function} [options.resolveChildEnv] 可选的按次环境解析钩子（如宿主托管凭证注入；返回 `{ ok: false }` 时 fail closed 且零 spawn）
  * @param {number} [options.timeoutMs] 单次调用上限
  * @param {number} [options.maxOutputBytes] 单流输出上限
  */
 export function createCliRunner({
   execFile = nodeExecFile,
   env,
+  processEnv = process.env,
+  resolveChildEnv = null,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
 } = {}) {
-  assertOptions({ execFile, timeoutMs, maxOutputBytes });
-  const childEnv = { ...process.env, ...normalizeEnv(env) };
+  assertOptions({ execFile, timeoutMs, maxOutputBytes, resolveChildEnv });
+  // 显式 `env` 是调用方（装配层/测试夹具）的刻意覆盖，不再过白名单；它不由模型输入构造，
+  // 也不参与凭据解析。托管凭据只在 `resolveChildEnv` 阶段合并，且合并后覆盖静态覆盖项。
+  const staticOverrides = normalizeEnv(env);
 
   /**
    * @param {{bin: string, args?: string[], purpose?: string}} invocation
    */
   async function run(invocation) {
     const { bin, args } = normalizeInvocation(invocation);
+    const childEnv = { ...pickAllowlistedEnv(processEnv), ...staticOverrides };
+
+    if (typeof resolveChildEnv === 'function') {
+      let resolved;
+      try {
+        resolved = await resolveChildEnv();
+      } catch (err) {
+        return {
+          exitCode: null,
+          stdout: '',
+          stderr: typeof err?.message === 'string' && err.message.length > 0 ? err.message : 'CREDENTIAL_UNAVAILABLE',
+          durationMs: 0,
+          timedOut: false,
+          truncated: false,
+        };
+      }
+      if (resolved !== null && typeof resolved === 'object' && resolved.ok === false) {
+        const reason = typeof resolved.message === 'string' && resolved.message.length > 0
+          ? resolved.message
+          : typeof resolved.code === 'string' && resolved.code.length > 0
+            ? resolved.code
+            : 'CREDENTIAL_UNAVAILABLE';
+        return {
+          exitCode: null,
+          stdout: '',
+          stderr: reason,
+          durationMs: 0,
+          timedOut: false,
+          truncated: false,
+        };
+      }
+      if (resolved !== null && typeof resolved === 'object') {
+        Object.assign(childEnv, pickAllowlistedEnv(resolved));
+      }
+    }
+
     const options = {
       env: childEnv,
       encoding: 'utf8',
@@ -225,8 +352,8 @@ export function createCliRunner({
       const err = capText(stderr, maxOutputBytes);
       return {
         exitCode: 0,
-        stdout: out.text,
-        stderr: err.text,
+        stdout: redactProxyCredentials(out.text),
+        stderr: redactProxyCredentials(err.text),
         durationMs,
         timedOut: false,
         truncated: out.truncated || err.truncated,
@@ -238,8 +365,8 @@ export function createCliRunner({
     const message = typeof error.message === 'string' ? error.message : '';
     return {
       exitCode: exitCodeOf(error),
-      stdout: out.text,
-      stderr: err.text.length > 0 ? err.text : message,
+      stdout: redactProxyCredentials(out.text),
+      stderr: redactProxyCredentials(err.text.length > 0 ? err.text : message),
       durationMs,
       timedOut: isTimedOut(error),
       truncated: out.truncated || err.truncated,

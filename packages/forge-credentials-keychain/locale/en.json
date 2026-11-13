@@ -1,0 +1,8 @@
+{
+  "meta": {
+    "title": "Enterprise Encrypted Credential Store",
+    "description": "Secures enterprise credentials and tokens with local encryption instead of plaintext files.",
+    "detail": "docs/DETAIL.md"
+  }
+}
+

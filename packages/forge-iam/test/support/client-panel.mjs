@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
-export async function mountPanel(fetch, { open = () => null, navigator, componentId = 'forge-iam', componentProps = {}, storage, abortSignal = globalThis.AbortSignal } = {}) {
+export async function mountPanel(fetch, { open = () => null, navigator, componentId = 'forge-iam', componentSlot, componentProps = {}, storage, abortSignal = globalThis.AbortSignal, ctxExtras = {} } = {}) {
   const source = await readFile(new URL('../../client.js', import.meta.url), 'utf8');
   const cells = [];
   const effects = [];
@@ -30,6 +30,7 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
   let currentSequence = null;
   const recordHook = (name) => { if (currentSequence) currentSequence.push(name); };
   let Panel;
+  let PanelOptions = null;
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
     useState(initial) {
@@ -57,9 +58,15 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
         assert.equal(name, 'react');
         return React;
       });
-      plugin.apply({ slots: {
+      plugin.apply({ ...ctxExtras, slots: {
         inject(_name, register) { register(); },
-        register(options, component) { if (options.id === componentId) Panel = component; },
+        register(options, component) {
+          const slotMatch = componentSlot ? options.name === componentSlot : options.name !== 'settings.section.icon';
+          if (options.id === componentId && slotMatch) {
+            Panel = component;
+            PanelOptions = options;
+          }
+        },
       } });
     } },
     location: { assign: (url) => locations.push(url) },
@@ -74,7 +81,8 @@ export async function mountPanel(fetch, { open = () => null, navigator, componen
   const render = () => {
     cursor = 0;
     currentSequence = [];
-    const tree = Panel(componentProps);
+    const injectedProps = typeof PanelOptions?.inject === 'function' ? (PanelOptions.inject() ?? {}) : {};
+    const tree = Panel({ ...injectedProps, ...componentProps });
     if (hookSequence === null) hookSequence = currentSequence;
     else assert.deepEqual(currentSequence, hookSequence, 'Panel changed its hook order between renders: a hook now runs conditionally');
     currentSequence = null;

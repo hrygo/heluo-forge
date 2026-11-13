@@ -13,6 +13,7 @@ const view = {
   modelAccess: { configured: true, state: 'ready', models: [{ id: 'corp-chat', name: 'corp-chat' }] }
 };
 const nodes = node => node && typeof node === 'object' ? [node, ...(node.children ?? []).flatMap(nodes)] : [];
+const mountModels = (fetch, opts = {}) => mountPanel(fetch, { ...opts, componentId: 'forge-models' });
 
 test('account form saves gateway URL and a masked Key together and clears the draft after success', async t => {
   const writes = [];
@@ -24,6 +25,7 @@ test('account form saves gateway URL and a masked Key together and clears the dr
     }
     throw new Error('unexpected synthetic request');
   }); t.after(() => panel.close());
+  panel.findButton(panel.render(), '更换密钥').props.onClick();
   const input = label => nodes(panel.render()).find(node => node.props['aria-label'] === label);
   assert.equal(input('网关地址').props.value, view.gatewayCredential.baseURL);
   input('网关地址').props.onChange({ target: { value: 'http://next-gateway.corp.example/v1' } });
@@ -42,7 +44,7 @@ test('account form saves gateway URL and a masked Key together and clears the dr
 
 test('refresh action uses only the Host model route and shows the returned catalogue', async t => {
   const requests = [];
-  const panel = await mountPanel(async path => {
+  const panel = await mountModels(async path => {
     requests.push(path);
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models') return Response.json({
@@ -60,7 +62,7 @@ test('refresh action uses only the Host model route and shows the returned catal
 
 test('fine-grained model options can be edited, expanded, and saved to the models endpoint', async t => {
   const modelWrites = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       modelWrites.push(JSON.parse(init.body));
@@ -111,19 +113,23 @@ test('panel orders account, credential, and model cards and supports sorting and
       ],
     },
   };
-  const panel = await mountPanel(async path => {
+  const iamPanel = await mountPanel(async path => {
     if (path === '/api/forge-iam/view') return Response.json(multiModelView);
     throw new Error(`unexpected synthetic request: ${path}`);
   });
-  t.after(() => panel.close());
+  const panel = await mountModels(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(multiModelView);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(async () => { await iamPanel.close(); await panel.close(); });
+
+  const iamText = iamPanel.text(iamPanel.render());
+  const accountIdx = iamText.indexOf('已登录企业账号');
+  const gatewayIdx = iamText.indexOf('AI 服务 · 已就绪');
+  assert.ok(accountIdx >= 0 && accountIdx < gatewayIdx);
 
   const fullText = panel.text(panel.render());
-  // User journey section order: Account -> Gateway Credential -> Model Settings
-  const accountIdx = fullText.indexOf('已绑定企业 OIDC 身份');
-  const gatewayIdx = fullText.indexOf('填写企业 AI 网关签发的个人访问凭证。');
-  const modelsIdx = fullText.indexOf('企业模型设置');
-  assert.ok(accountIdx >= 0 && accountIdx < gatewayIdx);
-  assert.ok(gatewayIdx < modelsIdx);
+  assert.match(fullText, /企业模型设置/);
 
   // Models are sorted alphabetically by ID
   const geminiIdx = fullText.indexOf('gemini-3.5-flash');
@@ -144,7 +150,7 @@ for (const options of [{}, { 'corp-chat': {} }]) {
   test(`saved Host enabled set overrides stale browser choices: ${JSON.stringify(options)}`, async t => {
     const writes = [];
     const hostView = { ...view, modelAccess: { ...view.modelAccess, modelOptions: options } };
-    const panel = await mountPanel(async (path, init) => {
+    const panel = await mountModels(async (path, init) => {
       if (path === '/api/forge-iam/view') return Response.json(hostView);
       if (init?.method === 'PUT') { writes.push(JSON.parse(init.body)); return Response.json({ ok: true, view: hostView }); }
       throw new Error('unexpected synthetic request');
@@ -167,7 +173,7 @@ test('Host runtime options win over a stale local cache and no write is issued',
       modelOptions: { 'corp-chat': { contextWindow: '256K' } },
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(hostView);
     if (init?.method === 'PUT') { writes.push(JSON.parse(init.body)); return Response.json({ ok: true, view: hostView }); }
     throw new Error(`unexpected synthetic request: ${path}`);
@@ -183,7 +189,7 @@ test('Host runtime options win over a stale local cache and no write is issued',
 
 test('one model can be pinned to a single reasoning level beyond the default ladder', async t => {
   const writes = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -207,7 +213,7 @@ test('one model can be pinned to a single reasoning level beyond the default lad
 test('a model that was never enabled is offered for enabling and saved as an empty override', async t => {
   const writes = [];
   const twoModels = { ...view, modelAccess: { ...view.modelAccess, models: [{ id: 'corp-chat' }, { id: 'corp-vision' }] } };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -230,7 +236,7 @@ test('a model that was never enabled is offered for enabling and saved as an emp
 
 test('restoring defaults keeps a model enabled instead of silently disabling it', async t => {
   const writes = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -253,7 +259,7 @@ test('restoring defaults keeps a model enabled instead of silently disabling it'
 
 test('clearing a customised input field leaves the model enabled with an empty override', async t => {
   const writes = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -280,7 +286,7 @@ test('default context window displays 200K and one-click enable immediately acti
       modelOptions: { 'corp-chat': {} },
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -298,12 +304,17 @@ test('default context window displays 200K and one-click enable immediately acti
 
   // Default context window badge is 200K and maxTokens is 64K
   assert.match(panel.text(panel.render()), /200K · 输出 64K/);
-  // User journey bar shows 3 steps with concise titles: 身份, 凭据, 模型
-  assert.match(panel.text(panel.render()), /身份/);
-  assert.match(panel.text(panel.render()), /凭据/);
-  assert.match(panel.text(panel.render()), /模型/);
-  assert.match(panel.text(panel.render()), /已认证/);
-  assert.match(panel.text(panel.render()), /已就绪/);
+  // Account panel journey bar shows 3 steps: 身份, AI 服务, 模型
+  const accountPanel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/view') return Response.json(twoModels);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => accountPanel.close());
+  assert.match(accountPanel.text(accountPanel.render()), /身份/);
+  assert.match(accountPanel.text(accountPanel.render()), /AI 服务/);
+  assert.match(accountPanel.text(accountPanel.render()), /模型/);
+  assert.match(accountPanel.text(accountPanel.render()), /已认证/);
+  assert.match(accountPanel.text(accountPanel.render()), /已就绪/);
 
   // One-click enable button on the row enables corp-coder with default parameters and persists immediately
   const byLabel = name => nodes(panel.render()).find(node => node.props['aria-label'] === name);
@@ -318,7 +329,7 @@ test('default context window displays 200K and one-click enable immediately acti
 
 test('reasoning effort supports lower and upper bound selection and auto-aligns when lower > upper', async t => {
   const writes = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -360,11 +371,25 @@ test('reasoning effort supports lower and upper bound selection and auto-aligns 
   lowerSelect().props.onChange({ target: { value: 'max' } });
   assert.equal(upperSelect().props.value, 'max');
   assert.match(panel.text(panel.render()), /固定单档：Max/);
+
+  // Selecting a lower bound when upper is 'max' must keep 'max' as upper and preserve the full range
+  await lowerSelect().props.onChange({ target: { value: 'low' } });
+  assert.equal(lowerSelect().props.value, 'low');
+  assert.equal(upperSelect().props.value, 'max');
+  assert.match(panel.text(panel.render()), /开放区间：Low → Medium → High → XHigh → Max（共 5 档/);
+  assert.deepEqual(writes.at(-1).options['corp-chat'].reasoningEfforts, {
+    off: null,
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+    max: 'max',
+  });
 });
 
 test('model advanced section includes in-place save button and shows top unsaved changes banner', async t => {
   const writes = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -403,7 +428,7 @@ test('model advanced section includes in-place save button and shows top unsaved
 });
 
 test('model advanced section uses concise interactive help buttons and eliminates redundant static hint texts', async t => {
-  const panel = await mountPanel(async path => {
+  const panel = await mountModels(async path => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     throw new Error(`unexpected synthetic request: ${path}`);
   });
@@ -435,7 +460,7 @@ test('model advanced section uses concise interactive help buttons and eliminate
 
 test('model list row visually weakens secondary metadata and avoids heavy idle badges', async t => {
   const twoModels = { ...view, modelAccess: { ...view.modelAccess, models: [{ id: 'corp-chat' }, { id: 'corp-vision' }] } };
-  const panel = await mountPanel(async path => {
+  const panel = await mountModels(async path => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     throw new Error(`unexpected synthetic request: ${path}`);
   });
@@ -471,13 +496,18 @@ test('journey bar reflects warning state on credential mismatch and search clear
       models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-vision', name: 'corp-vision' }],
     },
   };
-  const panel = await mountPanel(async path => {
+  const iamPanel = await mountPanel(async path => {
     if (path === '/api/forge-iam/view') return Response.json(mismatchView);
     throw new Error(`unexpected synthetic request: ${path}`);
   });
-  t.after(() => panel.close());
+  const panel = await mountModels(async path => {
+    if (path === '/api/forge-iam/view') return Response.json(mismatchView);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(async () => { await iamPanel.close(); await panel.close(); });
 
-  assert.match(panel.text(panel.render()), /需核对/);
+  assert.match(iamPanel.text(iamPanel.render()), /需核对/);
+  assert.match(panel.text(panel.render()), /尚未启用 AI 服务/);
   const searchInput = nodes(panel.render()).find(node => node.props['aria-label'] === '搜索模型');
   searchInput.props.onChange({ target: { value: 'vision' } });
   assert.doesNotMatch(panel.text(panel.render()), /corp-chat/);
@@ -553,11 +583,12 @@ test('model list toolbar is sticky, eliminates redundant custom tab, and aligns 
       },
     },
   };
-  const panel = await mountPanel(async () => Response.json(customView));
+  const panel = await mountModels(async () => Response.json(customView));
   t.after(() => panel.close());
 
   assert.match(clientSource, /\.fiam-model-toolbar\s*\{[^}]*position:\s*sticky/);
-  assert.match(clientSource, /\.fiam-model-list\s*\{[^}]*min-height:\s*480px/);
+  assert.doesNotMatch(clientSource, /\.fiam-model-list\s*\{[^}]*max-height:/);
+  assert.doesNotMatch(clientSource, /\.fiam-model-list\s*\{[^}]*overflow-y:\s*auto/);
   assert.match(clientSource, /\.fiam-model-item\.fiam-model-item-expanded\s*\{[^}]*margin-bottom:\s*14px/);
   assert.match(clientSource, /\.fiam-model-item\.fiam-model-item-expanded\s*\{[^}]*box-shadow:/);
 
@@ -589,7 +620,7 @@ test('model list leverages cached models during background loading and eliminate
     gatewayCredential: { state: 'configured', matchesAccount: true, baseURL: 'https://gateway.corp.example/v1' },
     modelAccess: { configured: true, state: 'loading', models: [] },
   };
-  const panel = await mountPanel(async () => Response.json(loadingView), { storage });
+  const panel = await mountModels(async () => Response.json(loadingView), { storage });
   t.after(() => panel.close());
 
   const renderedText = panel.text(panel.render());
@@ -602,7 +633,7 @@ test('model list leverages cached models during background loading and eliminate
 
 test('default reasoning range can be disabled and saved explicitly', async t => {
   const writes = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -624,7 +655,7 @@ test('default reasoning range can be disabled and saved explicitly', async t => 
 test('a cached catalogue is scoped to one person and gateway', async t => {
   const key = person => `forge-iam.cached-models.v2:${person}:https://gateway.corp.example/v1`;
   const first = { ...view, principal: 'person-a', modelAccess: { configured: true, state: 'loading', models: [] } };
-  const panel = await mountPanel(async () => Response.json(first), {
+  const panel = await mountModels(async () => Response.json(first), {
     storage: { [key('person-a')]: JSON.stringify([{ id: 'model-of-a' }]) },
   });
   t.after(() => panel.close());
@@ -632,7 +663,7 @@ test('a cached catalogue is scoped to one person and gateway', async t => {
 
   // The same browser signs in as another person: the old list must not survive.
   const second = { ...view, principal: 'person-b', modelAccess: { configured: true, state: 'loading', models: [] } };
-  const panel2 = await mountPanel(async () => Response.json(second), {
+  const panel2 = await mountModels(async () => Response.json(second), {
     storage: {
       [key('person-a')]: JSON.stringify([{ id: 'model-of-a' }]),
       [key('person-b')]: JSON.stringify([{ id: 'model-of-b' }]),
@@ -649,7 +680,7 @@ test('model-access errors say the same thing here as on the host turn surface', 
   // same sentence in the panel, so the two surfaces cannot drift apart code by code.
   for (const code of Object.keys(MESSAGES)) {
     const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
-    const panel = await mountPanel(async path => {
+    const panel = await mountModels(async path => {
       if (path === '/api/forge-iam/view') return Response.json(failed);
       if (path === '/api/forge-iam/models') return Response.json({ models: [], view: failed });
       throw new Error(`unexpected synthetic request: ${path}`);
@@ -666,7 +697,7 @@ test('a rejected request and an unsupported level are explained where they surfa
     ['ENTERPRISE_MODEL_REASONING_UNSUPPORTED', /推理档位不受支持/],
   ]) {
     const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
-    const panel = await mountPanel(async path => {
+    const panel = await mountModels(async path => {
       if (path === '/api/forge-iam/view') return Response.json(failed);
       if (path === '/api/forge-iam/models') return Response.json({ models: [], view: failed });
       throw new Error(`unexpected synthetic request: ${path}`);
@@ -686,7 +717,7 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
       models: [{ id: 'corp-chat', name: 'corp-chat' }, { id: 'corp-coder', name: 'corp-coder' }],
     },
   };
-  const panel = await mountPanel(async (path) => {
+  const panel = await mountModels(async (path) => {
     requests.push(path);
     if (path === '/api/forge-iam/view') return Response.json(stale);
     if (path === '/api/forge-iam/models') return Response.json({ models: [{ id: 'corp-chat' }], view });
@@ -698,8 +729,13 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
   assert.match(text, /目录未更新/);
   assert.match(text, /秒后自动重试/);
   assert.match(text, /corp-chat/);
-  // The journey step and the card call it the same thing.
-  assert.match(text, /目录待刷新/);
+  // Account panel journey bar summarizes stale catalogue consistently.
+  const accountPanel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/view') return Response.json(stale);
+    throw new Error(`unexpected synthetic request: ${path}`);
+  });
+  t.after(() => accountPanel.close());
+  assert.match(accountPanel.text(accountPanel.render()), /目录待刷新/);
   // The reason is explained once, not twice.
   assert.equal(text.split('暂时无法连接企业模型').length - 1, 1);
 
@@ -726,7 +762,7 @@ test('the row-level disable button stops an enabled model without expanding its 
       defaultModelId: 'corp-coder',
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -766,7 +802,7 @@ test('disabling a model tells the user to choose another without claiming an aut
       defaultModelId: 'corp-chat',
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -805,7 +841,7 @@ test('disabling the last enabled model submits an empty set and states the conse
       defaultModelId: 'corp-chat',
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(oneModel);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -839,7 +875,7 @@ test('the row-level disable saves unrelated unsaved edits in the same submission
       defaultModelId: 'corp-coder',
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -881,7 +917,7 @@ test('the row flips to the disabled state while the disable is still saving', as
       defaultModelId: 'corp-coder',
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -920,7 +956,7 @@ test('enabling and disabling in the panel saves at once, without a save click', 
       modelOptions: { 'corp-chat': {} },
     },
   };
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(twoModels);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -946,7 +982,7 @@ test('enabling and disabling in the panel saves at once, without a save click', 
 
 test('a text field writes once on blur and stays quiet when the value did not change', async t => {
   const writes = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));
@@ -973,7 +1009,7 @@ test('a text field writes once on blur and stays quiet when the value did not ch
 test('a change made while a save is in flight is queued and wins', async t => {
   const writes = [];
   const releases = [];
-  const panel = await mountPanel(async (path, init) => {
+  const panel = await mountModels(async (path, init) => {
     if (path === '/api/forge-iam/view') return Response.json(view);
     if (path === '/api/forge-iam/models' && init?.method === 'PUT') {
       writes.push(JSON.parse(init.body));

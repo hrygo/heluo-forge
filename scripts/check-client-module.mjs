@@ -16,7 +16,8 @@ import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
 const ID_PATTERN = /^@heluo\/forge-[a-z0-9-]+$/u;
-const REQUIRED_INJECT = ['slots', 'locale'];
+const REQUIRED_INJECT = ['slots'];
+const NON_IAM_REQUIRED_INJECT = ['slots', 'locale'];
 
 /** 最小 React：只提供浏览器半用到的导出；渲染由各包自己的用例覆盖。 */
 function fakeReact() {
@@ -38,8 +39,19 @@ function fakeReact() {
   return new Proxy(base, { get: (target, key) => (key in target ? target[key] : () => {}) });
 }
 
-/** 假 `ctx`：记录 effect / slot / locale，并让 `slots.inject` 立刻回调（模拟槽位已在场）。 */
+/**
+ * 假 `ctx`：记录 effect / slot / locale，并**真的模拟槽位声明生命周期**。
+ *
+ * 宿主语义（`dsh-client-ui-renderer/src/client/registry.ts` 的 `inject`）：
+ * 槽位未声明时回调排队；声明后执行；声明塌陷时执行该生命周期的 cleanup；
+ * **再次声明时重新执行回调**（每个声明生命周期一份 effect）。因此这里按槽位保存
+ * 回调记录并在 `declare` / `undeclare` 之间重跑，`register` 也只在声明存在时接受——
+ * 只模拟「一开始就在 / 一开始就没有」会让释放、回退与重挂三条路径永远不被执行。
+ */
 function fakeContext() {
+  const declared = new Set(['settings.section', 'settings.section.icon', 'settings.launcher', 'shell.overlay']);
+  /** name -> [{ fn, cleanup }]，按注册顺序执行；塌陷时执行 cleanup，再声明时重跑 fn。 */
+  const entries = new Map();
   const effects = [];
   const registrations = [];
   const locales = [];
@@ -63,14 +75,38 @@ function fakeContext() {
     },
     slots: {
       inject: (name, fn) => {
-        const dispose = fn();
+        if (!entries.has(name)) entries.set(name, []);
+        const record = { fn, cleanup: undefined };
+        entries.get(name).push(record);
+        if (declared.has(name)) record.cleanup = fn();
         return () => {
-          if (typeof dispose === 'function') dispose();
+          const list = entries.get(name) ?? [];
+          const index = list.indexOf(record);
+          if (index >= 0) list.splice(index, 1);
+          if (typeof record.cleanup === 'function') record.cleanup();
+          record.cleanup = undefined;
         };
       },
       register: (options, component) => {
-        registrations.push({ name: options?.name, id: options?.id, order: options?.order, label: options?.label, component });
-        return () => {};
+        const name = options?.name;
+        // 宿主对未声明槽位直接抛 `slot "<key>" is not declared`（这正是 D-2 回归的形态）。
+        if (typeof name !== 'string' || !declared.has(name)) {
+          throw new Error(`slot '${String(name)}' is not declared by this entry's children`);
+        }
+        const entry = {
+          name,
+          id: options?.id,
+          order: options?.order,
+          label: options?.label,
+          children: options?.children,
+          component,
+          released: false,
+        };
+        registrations.push(entry);
+        // 宿主返回的是 `ctx.effect` 的 disposer（函数）；这里同样只返回函数。
+        return () => {
+          entry.released = true;
+        };
       },
     },
     locale: {
@@ -91,7 +127,26 @@ function fakeContext() {
     },
     logger: { warn: () => {}, info: () => {}, debug: () => {}, error: () => {} },
   };
-  return { ctx, effects, registrations, locales, warnings };
+  const runRecord = (record) => {
+    if (typeof record.cleanup === 'function') record.cleanup();
+    record.cleanup = record.fn();
+  };
+  /** 声明一个槽位：该槽位的所有回调都进入一个新的声明生命周期（宿主按 epoch 重跑）。 */
+  const declare = (name) => {
+    if (declared.has(name)) return;
+    declared.add(name);
+    for (const record of entries.get(name) ?? []) runRecord(record);
+  };
+  /** 塌陷一个槽位：执行该声明生命周期里所有回调的 cleanup（宿主同步做这件事）。 */
+  const undeclare = (name) => {
+    if (!declared.has(name)) return;
+    declared.delete(name);
+    for (const record of entries.get(name) ?? []) {
+      if (typeof record.cleanup === 'function') record.cleanup();
+      record.cleanup = undefined;
+    }
+  };
+  return { ctx, effects, registrations, locales, warnings, declare, undeclare };
 }
 
 function checkOne(file) {
@@ -138,40 +193,173 @@ function checkOne(file) {
     errors.push('factory must return the module object');
     return { file, id, errors };
   }
+  const isIamModule = id === '@heluo/forge-iam';
+  const expectedInject = isIamModule ? REQUIRED_INJECT : NON_IAM_REQUIRED_INJECT;
   if (typeof exported.apply !== 'function') errors.push('module must export apply(ctx)');
   if (!Array.isArray(exported.inject)) errors.push('module must export inject as an array');
   else {
-    for (const name of REQUIRED_INJECT) {
+    for (const name of expectedInject) {
       if (!exported.inject.includes(name)) errors.push(`inject must declare ${name}`);
     }
   }
-  const runtime = fakeContext();
-  if (typeof exported.apply === 'function') {
+  const describe = (runtime) => runtime.registrations
+    .filter((entry) => !entry.released)
+    .map((entry) => ({
+      name: entry.name,
+      id: entry.id,
+      order: entry.order,
+      label: typeof entry.label === 'function' ? entry.label() : undefined,
+      children: Object.keys(entry.children ?? {}),
+      component: typeof entry.component === 'function' || (entry.component !== null && typeof entry.component === 'object'),
+    }));
+
+  /** 跑一个场景，返回该场景的挂载快照。 */
+  const run = (scenario) => {
+    const runtime = fakeContext();
+    const apply = () => {
+      try {
+        exported.apply(runtime.ctx, {});
+      } catch (error) {
+        errors.push(`apply threw (${scenario}): ${error.message}`);
+      }
+    };
     try {
-      exported.apply(runtime.ctx, {});
+      if (scenario === 'container' || scenario === 'overlay') runtime.declare('heluo.engineering.tab');
+      apply();
+      if (scenario === 'late') runtime.declare('heluo.engineering.tab');
+      if (scenario === 'collapse') {
+        runtime.declare('heluo.engineering.tab');
+        // 容器先到场：先走一次 tab 挂载；再让它塌陷，验证独立分区被补回来。
+        runtime.undeclare('heluo.engineering.tab');
+      }
+      if (scenario === 'redeclare') {
+        // 容器先到、塌陷、再回来：宿主按声明 epoch 重跑回调，必须回到「只有一个 tab」。
+        runtime.declare('heluo.engineering.tab');
+        runtime.undeclare('heluo.engineering.tab');
+        runtime.declare('heluo.engineering.tab');
+      }
     } catch (error) {
-      errors.push(`apply threw: ${error.message}`);
+      errors.push(`scenario ${scenario} threw: ${error.message}`);
+    }
+    for (const warning of runtime.warnings) errors.push(`${scenario}: ${warning}`);
+    if (!isIamModule && runtime.locales.length === 0) errors.push(`${scenario}: apply did not register a locale namespace`);
+    return describe(runtime);
+  };
+
+  const sectionsOf = (entries) => entries.filter((entry) => entry.name === 'settings.section');
+  const tabsOf = (entries) => entries.filter((entry) => entry.name === 'heluo.engineering.tab');
+  const isContainerOf = (entries) => entries.some((entry) => entry.children.includes('heluo.engineering.tab'));
+  const hasIamCredSlotOf = (entries) => entries.some((entry) => entry.children.includes('heluo.iam.credential-item'));
+
+  const validateSections = (label, sections) => {
+    for (const section of sections) {
+      if (typeof section.id !== 'string' || section.id.length === 0) errors.push(`${label}: settings section needs a stable id`);
+      if (typeof section.order !== 'number') errors.push(`${label}: settings section ${section.id} needs a numeric order`);
+      if (!section.component) errors.push(`${label}: settings section ${section.id} has no component`);
+    }
+    const ids = sections.map((section) => section.id);
+    if (new Set(ids).size !== ids.length) errors.push(`${label}: settings sections must not share an id`);
+    const orders = sections.map((section) => section.order);
+    if (new Set(orders).size !== orders.length) errors.push(`${label}: settings sections must not share an order`);
+  };
+  const validateTabs = (label, tabs) => {
+    for (const tab of tabs) {
+      if (typeof tab.id !== 'string' || tab.id.length === 0) errors.push(`${label}: container tab needs a stable id`);
+      if (typeof tab.order !== 'number') errors.push(`${label}: container tab ${tab.id} needs a numeric order`);
+      if (!tab.component) errors.push(`${label}: container tab ${tab.id} has no component`);
+    }
+    if (tabs.length > 1) errors.push(`${label}: must contribute exactly one container tab (got ${tabs.length})`);
+  };
+  const checkSlots = (label, entries) => {
+    const allowed = new Set([
+      'settings.section',
+      'settings.section.icon',
+      'heluo.engineering.tab',
+      ...(isIamModule ? ['settings.launcher', 'shell.overlay'] : []),
+    ]);
+    for (const entry of entries) {
+      if (!allowed.has(entry.name)) errors.push(`${label}: unexpected slot registration ${JSON.stringify(entry.name)}`);
+    }
+  };
+
+  const standalone = run('standalone');
+  const standaloneSections = sectionsOf(standalone);
+  if (standaloneSections.length === 0) errors.push('apply did not register a settings section when no container is present');
+  validateSections('standalone', standaloneSections);
+  if (hasIamCredSlotOf(standalone)) errors.push('standalone: retired slot heluo.iam.credential-item must not be declared');
+  checkSlots('standalone', standalone);
+
+  // 容器先到：同一面板必须改成容器子槽位条目，且不再单独占侧栏分区（IAM 自身与容器本身除外）。
+  const containerFirst = run('container');
+  const containerTabs = tabsOf(containerFirst);
+  const isContainer = isContainerOf(containerFirst);
+  const isHostSlotOwner = isContainer || isIamModule;
+  if (!isHostSlotOwner && standaloneSections.length > 0 && containerTabs.length === 0) {
+    errors.push('container is present but no entry was registered into heluo.engineering.tab');
+  }
+  if (isContainer && containerTabs.length > 0) errors.push('container must not register into its own child slot');
+  validateTabs('container', containerTabs);
+  if (sectionsOf(containerFirst).length > 0 && !isHostSlotOwner) {
+    errors.push('container is present but the standalone settings section is still registered');
+  }
+  checkSlots('container', containerFirst);
+
+  // 容器后到（真实冷启动最坏时序：本插件先 apply，容器后声明）。
+  const late = run('late');
+  validateTabs('late', tabsOf(late));
+  if (!isHostSlotOwner && tabsOf(late).length === 0) {
+    errors.push('container declared after apply but no entry was registered into heluo.engineering.tab');
+  }
+  if (sectionsOf(late).length > 0 && !isHostSlotOwner) {
+    errors.push('container declared after apply but the standalone settings section was not released (duplicate entry)');
+  }
+  checkSlots('late', late);
+
+  // 容器运行期塌陷：独立分区必须补回来，否则设置里整块入口消失。
+  const collapse = run('collapse');
+  validateSections('collapse', sectionsOf(collapse));
+  if (!isHostSlotOwner) {
+    if (tabsOf(collapse).length > 0) errors.push('container collapsed but the container tab is still registered');
+    if (sectionsOf(collapse).length === 0) {
+      errors.push('container collapsed at runtime and no settings section came back (entry disappears until reload)');
     }
   }
-  for (const warning of runtime.warnings) errors.push(warning);
-  if (runtime.locales.length === 0) errors.push('apply did not register a locale namespace');
-  if (runtime.registrations.length === 0) errors.push('apply did not register a settings section');
-  const sections = runtime.registrations.map((entry) => ({
-    name: entry.name,
-    id: entry.id,
-    order: entry.order,
-    label: typeof entry.label === 'function' ? entry.label() : undefined,
-    component: typeof entry.component === 'function' || (entry.component !== null && typeof entry.component === 'object'),
-  }));
-  for (const section of sections) {
-    if (section.name !== 'settings.section') errors.push(`slot registration must be two-stage on settings.section (got ${JSON.stringify(section.name)})`);
-    if (typeof section.id !== 'string' || section.id.length === 0) errors.push('settings section needs a stable id');
-    if (typeof section.order !== 'number') errors.push(`settings section ${section.id} needs a numeric order`);
-    if (!section.component) errors.push(`settings section ${section.id} has no component`);
+  checkSlots('collapse', collapse);
+
+  // 容器塌陷后又回来（声明 epoch 重跑回调）：必须回到「只有一个 tab」。
+  const redeclare = run('redeclare');
+  if (!isHostSlotOwner) {
+    if (tabsOf(redeclare).length !== 1) {
+      errors.push(`container came back after collapse but ${tabsOf(redeclare).length} container tab(s) are registered (want exactly 1)`);
+    }
+    if (sectionsOf(redeclare).length > 0) {
+      errors.push('container came back after collapse but the standalone settings section is still registered');
+    }
   }
-  const orders = sections.map((section) => section.order);
-  if (new Set(orders).size !== orders.length) errors.push('settings sections must not share an order');
-  return { file, id, sections, errors };
+  checkSlots('redeclare', redeclare);
+
+  const overlay = run('overlay');
+  validateSections('overlay', sectionsOf(overlay));
+  checkSlots('overlay', overlay);
+
+  const icons = [...new Set([
+    ...standalone.filter((entry) => entry.name === 'settings.section.icon').map((entry) => entry.id),
+    ...containerFirst.filter((entry) => entry.name === 'settings.section.icon').map((entry) => entry.id),
+  ])];
+  return {
+    file,
+    id,
+    sections: standaloneSections,
+    tabs: containerTabs,
+    containerSections: sectionsOf(containerFirst),
+    container: isContainer,
+    late,
+    collapse,
+    redeclare,
+    overlay,
+    icons,
+    errors,
+  };
 }
 
 const files = process.argv.slice(2);
@@ -187,7 +375,12 @@ if (files.length === 0) {
     }
   });
   const failed = results.filter((result) => result.errors.length > 0);
-  console.log(JSON.stringify({ checked: results.map(({ file, id, sections }) => ({ file, id, sections })), failed: failed.length }, null, 2));
+  console.log(JSON.stringify({
+    checked: results.map(({ file, id, sections, tabs, containerSections, container, icons, late, collapse, redeclare, overlay }) => ({
+      file, id, sections, tabs, containerSections, container, icons, late, collapse, redeclare, overlay,
+    })),
+    failed: failed.length,
+  }, null, 2));
   if (failed.length > 0) {
     for (const result of failed) for (const message of result.errors) console.error(`${result.file}: ${message}`);
     process.exitCode = 1;

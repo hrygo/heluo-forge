@@ -14,7 +14,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildEnterpriseBundle } from '../build-enterprise-bundle.mjs';
+import { buildBundle, buildEnterpriseBundle } from '../build-enterprise-bundle.mjs';
 import { auditReleaseClosure, execNpm, parsePatchLayer } from '../lib/bundle-rules.mjs';
 import { resolveDshProbeHost } from '../lib/dsh-probe-runtime.mjs';
 
@@ -45,7 +45,8 @@ const isolatedEnv = { ...process.env, DSH_HOME: join(dir, 'dsh-home'), npm_confi
 delete isolatedEnv.DSH_PROFILE;
 delete isolatedEnv.DSH_PROFILE_DIR;
 const npm = (args) => execNpm(['--offline', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error', ...args], { cwd: project, env: isolatedEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-const bundleDir = join(project, 'node_modules', '@heluo', 'forge-enterprise');
+const enterpriseDir = join(project, 'node_modules', '@heluo', 'forge-enterprise');
+const engineeringDir = join(project, 'node_modules', '@heluo', 'forge-engineering');
 const intact = () => readFileSync(join(project, 'user-file.txt'), 'utf8') === 'user-workspace-marker\n' && readFileSync(join(project, 'user-notes', 'notes.md'), 'utf8') === '# 用户笔记\n';
 const statusAtStart = execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' });
 const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -55,9 +56,19 @@ async function activateInstalled(label, host) {
   const [{ Context }, { default: Loader }, { default: SystemPrompt }, { default: Tools }, { PluginPackages, createRuntimeResolution }] = await Promise.all([
     load('@deepseek-ai/cordis'), load('@deepseek-ai/cordis-plugin-loader'), load('@deepseek-ai/dsh-system-prompt'), load('@deepseek-ai/dsh-tools'), load('@deepseek-ai/dsh-app-boot'),
   ]);
-  const installedPath = realpathSync(bundleDir);
-  const installedRequire = createRequire(pathToFileURL(join(installedPath, 'package.json')));
-  const patch = parsePatchLayer(readFileSync(join(bundleDir, 'cordis.patch.yml'), 'utf8'));
+  const enterpriseInstalledPath = realpathSync(enterpriseDir);
+  const engineeringInstalledPath = realpathSync(engineeringDir);
+  const enterpriseRequire = createRequire(pathToFileURL(join(enterpriseInstalledPath, 'package.json')));
+  const engineeringRequire = createRequire(pathToFileURL(join(engineeringInstalledPath, 'package.json')));
+  // 通用底座与企业研发套件为两个独立预装包，各自携带 cordis.patch.yml；
+  // 并存安装时仅共享 `heluo-policy` 策略行，其余能力按包隔离且互不强耦合。
+  const enterprisePatch = parsePatchLayer(readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8'));
+  const engineeringPatch = parsePatchLayer(readFileSync(join(engineeringDir, 'cordis.patch.yml'), 'utf8'));
+  const mergedRows = new Map();
+  for (const row of [...enterprisePatch.inserted, ...engineeringPatch.inserted]) {
+    if (!mergedRows.has(row.id)) mergedRows.set(row.id, row);
+  }
+  const patch = { inserted: [...mergedRows.values()] };
   const ctx = new Context();
   let unloaded = false;
   const ids = [];
@@ -65,14 +76,30 @@ async function activateInstalled(label, host) {
     const resolution = await createRuntimeResolution({
       installAnchor: host.resolve('@deepseek-ai/dsh/package.json'),
       home: isolatedEnv.DSH_HOME,
-      profile: { dir: project, layers: [{ packageName: '@heluo/forge-enterprise', packageDir: installedPath }], skippedBundles: [] },
+      profile: {
+        dir: project,
+        layers: [
+          { packageName: '@heluo/forge-enterprise', packageDir: enterpriseInstalledPath },
+          { packageName: '@heluo/forge-engineering', packageDir: engineeringInstalledPath },
+        ],
+        skippedBundles: [],
+      },
     });
     await ctx.plugin(PluginPackages, { resolution }).await();
-    const expectedMembers = Object.keys(JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).dependencies);
-    record(`${label}-native-runtime-resolves-bundled-members`, expectedMembers.every((name) => resolution.entries.some((entry) => entry.name === name && entry.scope === 'profile' && realpathSync(entry.packageDir).startsWith(`${installedPath}/`))));
+    const enterpriseDeps = Object.keys(JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).dependencies);
+    const engineeringDeps = Object.keys(JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).dependencies);
+    const sharedDeps = new Set(enterpriseDeps.filter((name) => engineeringDeps.includes(name)));
+    const resolvedFrom = (name, prefixes) => resolution.entries.some(
+      (entry) => entry.name === name
+        && entry.scope === 'profile'
+        && prefixes.some((prefix) => realpathSync(entry.packageDir).startsWith(`${prefix}/`)),
+    );
+    const enterpriseResolves = enterpriseDeps.every((name) => resolvedFrom(name, sharedDeps.has(name) ? [enterpriseInstalledPath, engineeringInstalledPath] : [enterpriseInstalledPath]));
+    const engineeringResolves = engineeringDeps.every((name) => resolvedFrom(name, sharedDeps.has(name) ? [enterpriseInstalledPath, engineeringInstalledPath] : [engineeringInstalledPath]));
+    record(`${label}-native-runtime-resolves-bundled-members`, enterpriseResolves && engineeringResolves);
     await ctx.plugin(SystemPrompt, {}).await();
     await ctx.plugin(Tools, {}).await();
-    await ctx.plugin(Loader, { baseUrl: pathToFileURL(join(installedPath, 'cordis.patch.yml')).href }).await();
+    await ctx.plugin(Loader, { baseUrl: pathToFileURL(join(enterpriseInstalledPath, 'cordis.patch.yml')).href }).await();
     // 正式企业研发 Skill 入口声明 `inject: ['skills']`：真实宿主里该服务由 Skill 能力提供，
     // 这个最小夹具没有它。给一份"只记录注册"的最小服务，入口才能真正进入 ACTIVE，并顺带
     // 证明"装上就有入口可枚举"（AC-1）——而不是被 inject 挡在 PENDING 冒充通过或冒充失败。
@@ -89,28 +116,51 @@ async function activateInstalled(label, host) {
         return () => skillProviders.delete(`direct-${at}-${entry?.name ?? 'unknown'}`);
       },
     });
+    const enterpriseIdSet = new Set(enterprisePatch.inserted.map((row) => row.id));
+    const engineeringIdSet = new Set(engineeringPatch.inserted.map((row) => row.id));
+    const enterpriseCatalogText = readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8');
     const resolved = [];
     for (const row of patch.inserted) {
-      const entry = installedRequire.resolve(row.name);
-      const memberPath = relative(installedPath, entry);
+      const fromEngineering = engineeringIdSet.has(row.id) && !enterpriseIdSet.has(row.id);
+      const ownerRequire = fromEngineering ? engineeringRequire : enterpriseRequire;
+      const ownerPath = fromEngineering ? engineeringInstalledPath : enterpriseInstalledPath;
+      const entry = ownerRequire.resolve(row.name);
+      const memberPath = relative(ownerPath, entry);
       if (memberPath.startsWith('..') || isAbsolute(memberPath)) throw new Error(`member escaped installed tarball: ${row.name}`);
       resolved.push({ name: row.name, entry: memberPath });
       // 行配置必须**照抄补丁里的 config**：策略目录就在 heluo-policy 行里，
-      // 用 {} 顶替会让 Gitee/DevOps 的只读面在装配期被策略门禁拒掉——那不是包坏了，
-      // 是夹具没把组合装对。只有凭据后端与策略审计是显式本地夹具（内存实现，非企业 IAM 证据）。
+      // 两个预装包携带逐字一致的 6 条动作目录，合并后按 id 去重只实例化一份。
+      // 只有凭据后端与策略审计是显式本地夹具（内存实现，非企业 IAM 证据）。
       const config = row.name === '@heluo/forge-credentials-keychain'
         ? { ...(row.config ?? {}), backend: (await import(pathToFileURL(entry).href)).createMemoryBackend(), allowEphemeral: true }
         : row.name === '@heluo/forge-policy'
-          ? { catalog: catalogFromPatch(readFileSync(join(bundleDir, 'cordis.patch.yml'), 'utf8')), audit: { sink: 'memory', allowNonDurable: true } }
+          ? { catalog: catalogFromPatch(enterpriseCatalogText), audit: { sink: 'memory', allowNonDurable: true } }
           : (row.config ?? {});
       ids.push(await ctx.loader.create({ id: row.id, name: row.name, config }));
     }
     await ctx.loader.await();
-    // D-3：装上的是**六行**组合（凭据/策略/IAM/Skill/DevOps/Gitee），不是四行加两个包名。
+    // 底座三行（凭据/策略/IAM）＋研发套件五行（共享策略/容器/Skill/DevOps/Gitee），
+    // 按 id 去重合并为 7 行，仅共享策略行 `heluo-policy` 重合。
     record(
-      `${label}-patch-mounts-six-members`,
-      patch.inserted.length === 6 && new Set(patch.inserted.map((row) => row.id)).size === 6 && resolved.length === 6,
+      `${label}-patch-mounts-base-and-overlay`,
+      patch.inserted.length === 7 && new Set(patch.inserted.map((row) => row.id)).size === 7 && resolved.length === 7,
       { ids: patch.inserted.map((row) => row.id) },
+    );
+    // 分包隔离要被证明：底座不得偷带研发成员，研发套件不得携带 IAM/凭据行，仅共享 heluo-policy。
+    const baseIds = enterprisePatch.inserted.map((row) => row.id);
+    const engineeringIdsAll = engineeringPatch.inserted.map((row) => row.id);
+    const sharedIds = baseIds.filter((id) => engineeringIdsAll.includes(id));
+    const engineeringOnlyIds = ['heluo-engineering-ui', 'heluo-issue-delivery-skill', 'forge-devops', 'heluo-gitee'];
+    const baseOnlyIds = ['heluo-credentials-keychain', 'heluo-iam'];
+    record(
+      `${label}-layers-are-disjoint`,
+      baseIds.length === 3
+        && engineeringIdsAll.length === 5
+        && sharedIds.length === 1
+        && sharedIds[0] === 'heluo-policy'
+        && engineeringOnlyIds.every((id) => engineeringIdsAll.includes(id) && !baseIds.includes(id))
+        && baseOnlyIds.every((id) => baseIds.includes(id) && !engineeringIdsAll.includes(id)),
+      { baseIds, engineeringIds: engineeringIdsAll, sharedIds },
     );
     // 失败行要给出**原因**：只报 phase=3 的探针会把"配置被拒"和"依赖缺失"混成一句话。
     const phases = [];
@@ -152,7 +202,7 @@ async function activateInstalled(label, host) {
           && listed.every((entry) => typeof entry.source === 'string' && entry.source.length > 0
             && entry.resourceBase?.kind === 'directory'
             && typeof entry.resourceBase.path === 'string'
-            && entry.resourceBase.path === join(installedPath, 'skills', 'issue-delivery')
+            && entry.resourceBase.path === join(engineeringInstalledPath, 'skills', 'issue-delivery')
             && !('content' in entry)
             && typeof entry.invocation?.modelInvocable === 'boolean'
             && typeof entry.invocation?.userInvocable === 'boolean')
@@ -178,8 +228,14 @@ async function activateInstalled(label, host) {
       );
     }
     if (label === 'install') {
-      const installed = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8'));
-      const members = [...Object.keys(installed.dependencies ?? {}), ...(installed.bundledDependencies ?? [])];
+      const enterpriseManifest = JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8'));
+      const engineeringManifest = JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8'));
+      const members = [
+        ...Object.keys(enterpriseManifest.dependencies ?? {}),
+        ...(enterpriseManifest.bundledDependencies ?? []),
+        ...Object.keys(engineeringManifest.dependencies ?? {}),
+        ...(engineeringManifest.bundledDependencies ?? []),
+      ];
       record('legacy-sdd-member-retired', !members.includes('@heluo/forge-sdd'), { members });
     }
     const policy = ctx.get('policy');
@@ -217,8 +273,12 @@ function catalogFromPatch(text) {
   return catalog;
 }
 
-function dump(patch) {
-  return spawnSync(dsh, ['--profile', profile, ...(patch ? ['--patch', patch] : []), '--dump-config'], { env: isolatedEnv, encoding: 'utf8' });
+function dump(patches) {
+  const layers = patches === undefined || patches === null ? [] : (Array.isArray(patches) ? patches : [patches]);
+  const args = ['--profile', profile];
+  for (const layer of layers) args.push('--patch', layer);
+  args.push('--dump-config');
+  return spawnSync(dsh, args, { env: isolatedEnv, encoding: 'utf8' });
 }
 function rows(text) {
   const found = new Map();
@@ -253,57 +313,90 @@ try {
   record('dsh-available', true, evidence.env);
   // This rehearsal checks composition with synthetic credentials, not production storage.
   const first = buildEnterpriseBundle({ destination: join(dir, 'pack-v1') });
+  const engineeringFirst = buildBundle({ entry: '@heluo/forge-engineering', destination: join(dir, 'pack-v1-engineering') });
   evidence.artifact = {
     sha256: sha256(first.tarball),
     members: first.members,
     files: first.packed.length,
     version: first.manifest.version,
+    engineering: {
+      sha256: sha256(engineeringFirst.tarball),
+      members: engineeringFirst.members,
+      files: engineeringFirst.packed.length,
+      version: engineeringFirst.manifest.version,
+    },
     storage: 'synthetic fixture; production storage not verified',
   };
-  npm(['install', first.tarball]);
-  const installed = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8'));
-  record('install-v1-with-patch-and-workspace-intact', installed.version === first.manifest.version && intact());
-  const closure = auditReleaseClosure(bundleDir, { allowInstalledBinLinks: true });
+  npm(['install', first.tarball, engineeringFirst.tarball]);
+  const installed = JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8'));
+  const installedEngineering = JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8'));
+  record('install-v1-with-patch-and-workspace-intact', installed.version === first.manifest.version && installedEngineering.version === engineeringFirst.manifest.version && intact());
+  const closure = [
+    ...auditReleaseClosure(enterpriseDir, { allowInstalledBinLinks: true }),
+    ...auditReleaseClosure(engineeringDir, { allowInstalledBinLinks: true }),
+  ];
   record('installed-final-tarball-closure', closure.length === 0, { errors: closure, isolatedEmptyCache: true, registryUnreachable: true });
   const base = dump();
-  const patched = dump(join(bundleDir, 'cordis.patch.yml'));
+  const patched = dump([
+    join(enterpriseDir, 'cordis.patch.yml'),
+    join(engineeringDir, 'cordis.patch.yml'),
+  ]);
   const baselineRows = rows(base.stdout ?? '');
   const patchedRows = rows(patched.stdout ?? '');
   const present = officialRows.filter((id) => baselineRows.has(id));
   record('installed-patch-disables-official-rows', base.status === 0 && patched.status === 0 && present.length > 0 && present.every((id) => patchedRows.get(id) === true && baselineRows.get(id) === false), { present, absent: officialRows.filter((id) => !baselineRows.has(id)), note: 'dump proves composition only; absent rows are NOT disabled' });
-  // §6.3：三层同装只留**一份**策略行，目录等于六条并集——对着 dump 的合成结果判，
-  // 不是读补丁文本猜。`isolate` 一旦出现，同 id 就会被拆成两个实例，必须在门禁里失败。
-  // 补丁层自己的分段头是 `# == <cordis.patch.yml>`；带 `, patched by <path>` 的是被本补丁
-  // 改写的官方 bundle 头，两者都以补丁文件名结尾，必须区分。
+  // §6.3：两个独立预装包各自携带同 id（`heluo-policy`）且目录逐字一致（六条并集，无 `isolate`），
+  // 运行期由 Cordis Loader 按 id 去重保留单一策略实例；`--dump-config` 中每层补丁各占一节 `# == <path>`。
+  // 带 `, patched by <path>` 的是被本补丁改写的官方 bundle 头，必须与独立插入段区分。
   const patchedLines = (patched.stdout ?? '').split('\n');
-  const sectionAt = patchedLines.reduce((found, line, index) => (line.startsWith('# == ') && line.includes('cordis.patch.yml') && !line.includes('patched by') ? index : found), -1);
-  const sectionEnd = sectionAt < 0 ? -1 : patchedLines.findIndex((line, index) => index > sectionAt && line.startsWith('# == '));
-  const section = sectionAt < 0 ? '' : patchedLines.slice(sectionAt, sectionEnd < 0 ? patchedLines.length : sectionEnd).join('\n');
-  const rowCount = (id) => (section.match(new RegExp(`^-\\s*id:\\s*${id}\\s*$`, 'gmu')) ?? []).length;
-  const actions = [...section.matchAll(/^\s*-\s*action:\s*([\w.]+)\s*$/gmu)].map((match) => match[1]);
+  const sectionStarts = [];
+  for (let i = 0; i < patchedLines.length; i += 1) {
+    const line = patchedLines[i];
+    if (line.startsWith('# == ') && line.includes('cordis.patch.yml') && !line.includes('patched by')) {
+      sectionStarts.push(i);
+    }
+  }
+  const sections = sectionStarts.map((start, idx) => patchedLines.slice(start, sectionStarts[idx + 1] ?? patchedLines.length).join('\n'));
+  const section = sections.join('\n');
+  const rowCount = (text, id) => (text.match(new RegExp(`^-\\s*id:\\s*${id}\\s*$`, 'gmu')) ?? []).length;
+  const actionsOf = (text) => [...text.matchAll(/^\s*-\s*action:\s*([\w.]+)\s*$/gmu)].map((match) => match[1]);
   const expectedActions = ['change.read', 'change.list', 'gitee.repository.read', 'gitee.issue.read', 'gitee.pr.read', 'gitee.delivery.judge'];
+  const enterprisePolicyCatalog = catalogFromPatch(readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8'));
+  const engineeringPolicyCatalog = catalogFromPatch(readFileSync(join(engineeringDir, 'cordis.patch.yml'), 'utf8'));
+  const catalogsIdentical = JSON.stringify(enterprisePolicyCatalog) === JSON.stringify(engineeringPolicyCatalog);
   record(
     'installed-patch-policy-union',
     patched.status === 0
-      && rowCount('heluo-policy') === 1
-      && actions.join() === expectedActions.join()
-      && rowCount('forge-devops') === 1
-      && rowCount('heluo-gitee') === 1
+      && sections.length === 2
+      && sections.every((chunk) => rowCount(chunk, 'heluo-policy') === 1 && actionsOf(chunk).join() === expectedActions.join())
+      && catalogsIdentical
+      && rowCount(section, 'forge-devops') === 1
+      && rowCount(section, 'heluo-gitee') === 1
+      && rowCount(section, 'heluo-engineering-ui') === 1
       && !/isolate/u.test(section),
-    { policyRows: rowCount('heluo-policy'), actions, devopsRows: rowCount('forge-devops'), giteeRows: rowCount('heluo-gitee') },
+    {
+      sections: sections.length,
+      perSectionPolicyRows: sections.map((chunk) => rowCount(chunk, 'heluo-policy')),
+      perSectionActions: sections.map(actionsOf),
+      catalogsIdentical,
+      devopsRows: rowCount(section, 'forge-devops'),
+      giteeRows: rowCount(section, 'heluo-gitee'),
+      containerRows: rowCount(section, 'heluo-engineering-ui'),
+    },
   );
   await activateInstalled('install', host);
   const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });
-  npm(['install', upgraded.tarball]);
+  const engineeringUpgraded = buildBundle({ entry: '@heluo/forge-engineering', destination: join(dir, 'pack-v2-engineering'), version: '0.1.1' });
+  npm(['install', upgraded.tarball, engineeringUpgraded.tarball]);
   await activateInstalled('upgrade', host);
-  record('upgrade-to-0.1.1-keeps-composition-and-workspace', JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).version === '0.1.1' && intact());
-  npm(['install', first.tarball]);
+  record('upgrade-to-0.1.1-keeps-composition-and-workspace', JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).version === '0.1.1' && JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).version === '0.1.1' && intact());
+  npm(['install', first.tarball, engineeringFirst.tarball]);
   await activateInstalled('rollback', host);
-  record('rollback-to-0.1.0-keeps-composition-and-workspace', JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')).version === first.manifest.version && intact());
-  npm(['uninstall', '@heluo/forge-enterprise']);
+  record('rollback-to-0.1.0-keeps-composition-and-workspace', JSON.parse(readFileSync(join(enterpriseDir, 'package.json'), 'utf8')).version === first.manifest.version && JSON.parse(readFileSync(join(engineeringDir, 'package.json'), 'utf8')).version === engineeringFirst.manifest.version && intact());
+  npm(['uninstall', '@heluo/forge-enterprise', '@heluo/forge-engineering']);
   // SDD 退役后 bin 链接也应消失；路径按安装位置就地计算，不依赖已删除的变量。
   const retiredBin = join(project, 'node_modules', '.bin', process.platform === 'win32' ? 'forge-sdd.cmd' : 'forge-sdd');
-  record('uninstall-removes-packages-and-keeps-workspace', !existsSync(bundleDir) && !existsSync(retiredBin) && intact());
+  record('uninstall-removes-packages-and-keeps-workspace', !existsSync(enterpriseDir) && !existsSync(engineeringDir) && !existsSync(retiredBin) && intact());
   record('repository-working-tree-untouched', execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }) === statusAtStart, { note: 'concurrent edits in shared worktree may invalidate this snapshot' });
 } catch (error) {
   record('rehearsal-exception', false, { error: error.message });

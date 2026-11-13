@@ -101,7 +101,59 @@ export function createServiceStore({ options }) {
     throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
   }
 
+  /**
+   * 凭据端口：把「provider 何时就绪」留在本模块，装配点只拿端口。
+   *
+   * 一次保存/清除由多次 awaited 调用组成（`set` + `modifyRecord`，`deleteRecord` +
+   * `unset`）。若每次调用都现取 provider，换绑恰好发生在两次调用之间就会把密文写到
+   * 旧 provider、把记录写到新 provider，令牌从此不可读。因此每个完整操作先用
+   * `pin()` 固定一个 provider，操作结束再核对 `isCurrent()`：绑定变了就如实报错，
+   * 不让「保存成功」变成一条读不回来的记录。
+   */
+  function credentialsPort() {
+    const unavailable = () => {
+      const error = new Error('credentials storage is unavailable');
+      error.code = 'KEYCHAIN_UNAVAILABLE';
+      return error;
+    };
+
+    function boundTo(port) {
+      const require = (method) => (...args) => {
+        if (!port || typeof port[method] !== 'function') return Promise.reject(unavailable());
+        return port[method](...args);
+      };
+      return Object.freeze({
+        // A missing record is a normal state, not a storage failure.
+        readRecord: (key) => (port && typeof port.readRecord === 'function'
+          ? port.readRecord(key)
+          : Promise.resolve(null)),
+        modifyRecord: require('modifyRecord'),
+        deleteRecord: require('deleteRecord'),
+        set: require('set'),
+        unset: require('unset'),
+        resolve: require('resolve'),
+        isCurrent: () => Boolean(port) && Boolean(ensure()) && storeCredentials === port,
+      });
+    }
+
+    function pin() {
+      return boundTo(ensure() ? storeCredentials : null);
+    }
+
+    return Object.freeze({
+      readRecord: (key) => pin().readRecord(key),
+      modifyRecord: (key, mutate) => pin().modifyRecord(key, mutate),
+      deleteRecord: (key) => pin().deleteRecord(key),
+      set: (ref, value) => pin().set(ref, value),
+      unset: (ref) => pin().unset(ref),
+      resolve: (ref) => pin().resolve(ref),
+      pin,
+      isCurrent: () => Boolean(ensure()) && Boolean(storeCredentials),
+    });
+  }
+
   return {
+    credentialsPort,
     get store() { return store; },
     set store(next) { store = next; },
     get storeCredentials() { return storeCredentials; },

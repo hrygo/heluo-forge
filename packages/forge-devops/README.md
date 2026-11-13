@@ -1,18 +1,18 @@
 # @heluo/forge-devops
 
-状态：可用（只读 runner + 上下文卡 + 产物落盘 + 门禁骨架 + Web 配置页与 CLI 自动发现；#15 / D4，责任方 2026-10-24 决定；2026-11-03 用户确认 D 方案：只读面改为枚举式 runner；2026-11-04 起新增受控写回 `change update`，写动作默认不登记即拒绝）。"可用"指本包有清单、源码与离线可执行的用例；**企业 CLI 未联调**，`merge`/`close`/`change done` 不在命令白名单内，澄清回写没有 dop 命令面（不再保留恒失败工具，澄清单落本地产物）。
+状态：可用（变更查询 runner + 上下文卡 + 产物落盘 + 门禁骨架 + Web 配置页与 CLI 自动发现；#15 / D4，责任方 2026-10-24 决定；2026-11-03 用户确认 D 方案：变更查询改为枚举式 runner；2026-11-04 起新增受控写回 `change update`，写动作默认不登记即拒绝）。"可用"指本包有清单、源码与离线可执行的用例；**企业 CLI 未联调**，`merge`/`close`/`change done` 不在命令白名单内，澄清回写没有 dop 命令面（不再保留恒失败工具，澄清单落本地产物）。
 
 | 项 | 内容 |
 |---|---|
 | 形态 | 现有 CLI 接入：查询基线（单条 / 清单）+ 上下文卡与产物落盘；受控回写目标见详细设计（写面归 `@heluo/forge-gitee`，澄清回写无 dop 命令面） |
 | 前置条件 | 装好即可用，不需要预先设置环境变量：装配期自动发现 dop；只有机器上确实找不到时才需要到配置页指定位置（见「配置」） |
-| 配置入口 | `设置 → 企业 DevOps`（Web 配置页，页面上只设 2 项：dop 入口 / 超时）；三层来源「配置页 > 环境变量 > 自动发现」，环境变量只作 CI 与无界面 profile 的兜底 |
-| 职责 | 复用 DevOps CLI，以固定 argv、凭据注入与策略门禁读取系统变更（单条 / 清单）及独立验收、所属故事背景；产出上下文卡；分析后回写标题/描述/验收标准（`change update`，默认关闭）；产物落盘（clarify / plan 由纯函数机检后生成正文） |
+| 配置入口 | `设置 → 企业 DevOps`（单独安装）或 `设置 → 企业研发工具`（随研发套件安装时收拢进容器；页面上只设 2 项：dop 入口 / 超时）；三层来源「配置页 > 环境变量 > 自动发现」，环境变量只作 CI 与无界面 profile 的兜底 |
+| 职责 | 复用 DevOps CLI，以固定 argv、凭据注入与策略门禁查询系统变更（单条 / 清单）及独立验收、所属故事背景；产出上下文卡；分析后回写标题/描述/验收标准（`change update`，默认关闭）；产物落盘（clarify / plan 由纯函数机检后生成正文） |
 | 不负责 | 不碰仓库 / Issue / PR 的读写（这些事实由 `@heluo/forge-gitee` 唯一负责）、不内置平台凭据、不接入生产写工具、不替代平台权限 |
 | 衔接点 | bash 工具、企业策略门禁、凭据注入与审计（均待接口核验） |
 | 条件服务 | [services/devops-mcp](../../services/devops-mcp/README.md)；当前不建设 |
 | 详细设计 | [DESIGN-009](../../docs/design/plugins/forge-devops.md)（草案，已建立） |
-| 实现状态 | 已建立 `package.json`、只读端口（`src/read.mjs`，两条读动作）、门禁骨架、流程组合根（`src/flow.mjs`）、四个工具（只读 runner / 上下文卡 / 受控写回 / 产物落盘）与 `devops-change` 入口、Web 配置页（`client.js`）与四键 CLI 配置模块（自动发现 / 三层合并 / 宿主适配 / 同源路由）、离线测试（`node --test`）；**企业 CLI 联调未做** |
+| 实现状态 | 已建立 `package.json`、变更查询端口（`src/read.mjs`，两条查询动作）、门禁骨架、流程组合根（`src/flow.mjs`）、四个工具（枚举查询 runner / 上下文卡 / 受控写回 / 产物落盘）与 `devops-change` 入口、Web 配置页（`client.js`）与四键 CLI 配置模块（自动发现 / 三层合并 / 宿主适配 / 同源路由）、离线测试（`node --test`）；**企业 CLI 联调未做** |
 
 ## 安装
 
@@ -23,7 +23,7 @@ dsh plugin --profile web add <tarball>
 dsh --profile web --dump-config | grep -A2 "id: forge-devops"
 ```
 
-装好后重载 profile（或重启宿主）即可用：Windows 上只要 `dop` 的可执行入口在 PATH 或候选目录里，插件在装配期就能找到，**不需要任何环境变量**。入口按「存在且是普通文件」判定，不限扩展名——原生 `.exe`、npm 生成的无后缀 shim、`.cmd` / `.ps1` 同等对待，**能不能保存**与**能不能运行**是两件事（见「能保存 ≠ 一定能跑起来」）。安装单元、补丁层顺序与策略门禁要求见「安装单元与策略门禁」；`forge-devops` 层与 `@heluo/forge-enterprise` 的组合层可以同装：两层都插同一行策略（同 `id: heluo-policy`、目录逐字相同），loader 按 id 折叠为一个条目，不是重复挂载。
+装好后重载 profile（或重启宿主）即可用：Windows 上只要 `dop` 的可执行入口在 PATH 或候选目录里，插件在装配期就能找到，**不需要任何环境变量**。入口按「存在且是普通文件」判定，不限扩展名——原生 `.exe`、npm 生成的无后缀 shim、`.cmd` / `.ps1` 同等对待，**能不能保存**与**能不能运行**是两件事（见「能保存 ≠ 一定能跑起来」）。安装单元、补丁层顺序与策略门禁要求见「安装单元与策略门禁」；`forge-devops` 层与 `@heluo/forge-engineering` 研发套件的组合层可独立或共用策略，loader 按同一 `id: heluo-policy` 折叠为一个条目，不是重复挂载。
 
 ## 配置（配置页优先，环境变量兜底）
 
@@ -48,6 +48,8 @@ dsh --profile web --dump-config | grep -A2 "id: forge-devops"
 保存成功后读面立即按新配置重建（无需重启）；写进 profile 补丁的值重启后仍然有效。**发现结果不回写配置**：换机器或改 PATH 后点「重新自动发现」即可跟随，页面不会把自动发现的等值写盘。当前 profile 没有挂载配置面（`settings` / `config-editor`）时，页面降级为只读并给出环境变量出口，而不是渲染一个存不进去的表单。
 
 ### 企业研发（`设置 → 企业研发`，r15 新增）
+
+同一 profile 装了研发容器（`@heluo/forge-enterprise` 的 `forge-engineering` 分区）时，上面两个分区收进容器的子槽位 `heluo.engineering.tab`（order 10，上就绪检查、下配置表单；四层明细收拢到诊断详情），不再各占侧栏分区；容器缺席（单包安装）时保持 `devops` 与 `devops-readiness` 两个独立分区。同时当 `@heluo/forge-iam` 在场时，本包向 `heluo.iam.credential-item`（order 10）注入紧凑凭据条目（默认显示跟随本机登录，按需展开单独指定 Token 覆盖或处理归属冲突/认证失效）。
 
 本包在设置页还有第二个分区：id `devops-readiness`、order 29。它**只汇总本机可见性**，页面顶部固定声明「本页只汇总本机可见性，不代表业务授权」。六行各读各的源，一行失败只影响自己：
 

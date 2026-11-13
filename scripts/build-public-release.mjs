@@ -22,7 +22,7 @@ import { buildBundle, writeBundleArtifacts } from './build-enterprise-bundle.mjs
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { writeBundleTarball } from './lib/bundle-write.mjs';
-import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch } from './lib/private-bundle.mjs';
+import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch, patchEntriesOf, patchLayerProblems, requiredRowsForEntry } from './lib/private-bundle.mjs';
 import { scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
 
 export const PUBLIC_RELEASE_SCHEMA = 'heluo-public-release/1';
@@ -212,16 +212,23 @@ export function buildPublicRelease(input) {
   mkdirSync(staging, { recursive: true, mode: 0o700 });
   try {
     const bundleDirectory = join(staging, 'artifact');
-    const built = buildBundle({ root, destination: bundleDirectory });
+    const built = buildBundle({ root, entry: input.entry, destination: bundleDirectory });
     const tarballName = built.tarball.slice(built.tarball.lastIndexOf('/') + 1);
     const tarballPath = join(staging, tarballName);
     renameSync(built.tarball, tarballPath);
     const entries = readBundleEntries(tarballPath, { withContent: true });
-    const patch = entries.find((entry) => entry.path === 'cordis.patch.yml');
-    if (patch === undefined) fail('ARTIFACT_INVALID', 'public tarball has no cordis.patch.yml');
-    const neutral = assertNeutralPatch(patch.content.toString('utf8'));
+    const patchEntries = patchEntriesOf(entries);
+    const shippedManifest = JSON.parse(String(entries.find((entry) => entry.path === 'package.json')?.content ?? '{}'));
+    // 声明的默认层必须随包发出：缺了它装上也加载不到企业能力。
+    const layerProblems = patchLayerProblems(shippedManifest, patchEntries);
+    if (layerProblems.length > 0) {
+      fail('ARTIFACT_INVALID', `public tarball has an incomplete patch layer set: ${layerProblems.join('; ')}`);
+    }
+    // A bundle may ship a base layer plus optional layers; neutrality is judged
+    // on the set so a row that lives in an optional layer still counts.
+    const neutral = assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8')), { required: requiredRowsForEntry(built.manifest.name) });
     if (neutral.length > 0) fail('ARTIFACT_NOT_NEUTRAL', `public tarball carries enterprise configuration:\n- ${neutral.join('\n- ')}`);
-    assertIamValidatorMatches(entries, { toolRoot });
+    if (built.manifest.name !== '@heluo/forge-engineering') assertIamValidatorMatches(entries, { toolRoot });
     const scan = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
     if (scan.length > 0) fail('ARTIFACT_SENSITIVE', `public tarball failed the sensitive scan:\n- ${scan.join('\n- ')}`);
 
@@ -365,9 +372,10 @@ export function buildPublicRelease(input) {
 }
 
 function parseArguments(argv) {
-  const options = { root: repo, tag: undefined, license: undefined, allowDirty: false, includeSource: true };
+  const options = { root: repo, entry: undefined, tag: undefined, license: undefined, allowDirty: false, includeSource: true };
   const valued = new Map([
     ['--output', 'output'],
+    ['--entry', 'entry'],
     ['--tag', 'tag'],
     ['--license', 'license'],
     ['--repo-root', 'root'],

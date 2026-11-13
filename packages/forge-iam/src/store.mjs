@@ -1,4 +1,4 @@
-import { isModelId, normalizeGatewayBaseURL } from './model-options.mjs';
+import { isModelId, MAX_MANUAL_MODELS, normalizeGatewayBaseURL } from './model-options.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
@@ -527,6 +527,26 @@ function sanitizeModelOption(input) {
 }
 
 /** A selection is valid only as a whole; a malformed one is ignored, never migrated. */
+function parseManualEntries(rawManual) {
+  if (!Array.isArray(rawManual)) return { manual: [], manualTruncated: 0 };
+  const deduped = [];
+  const seen = new Set();
+  for (const entry of rawManual) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    if (!isModelId(entry.id) || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    const addedAt = typeof entry.addedAt === 'string' && Number.isFinite(Date.parse(entry.addedAt))
+      ? entry.addedAt
+      : null;
+    deduped.push({ id: entry.id, ...(addedAt ? { addedAt } : {}) });
+  }
+  const manualTruncated = Math.max(0, deduped.length - MAX_MANUAL_MODELS);
+  return {
+    manual: deduped.slice(0, MAX_MANUAL_MODELS),
+    manualTruncated,
+  };
+}
+
 function parseModelSelection(payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
   if (payload.version !== MODEL_SELECTION_VERSION || payload.type !== MODEL_SELECTION_TYPE) return null;
@@ -543,7 +563,8 @@ function parseModelSelection(payload) {
   }
   const defaultModelId = typeof payload.defaultModelId === 'string' && Object.hasOwn(models, payload.defaultModelId)
     ? payload.defaultModelId : null;
-  return { subject: payload.subject, models, defaultModelId };
+  const { manual, manualTruncated } = parseManualEntries(payload.manual);
+  return { subject: payload.subject, models, defaultModelId, manual, manualTruncated };
 }
 
 /**
@@ -572,10 +593,14 @@ export function createModelSelectionStore(credentials, options = {}) {
     return { ok: true, selection };
   }
 
-  async function save({ subject, models, defaultModelId } = {}) {
+  async function save({ subject, models, defaultModelId, manual } = {}) {
+    if (Array.isArray(manual) && manual.length > MAX_MANUAL_MODELS) {
+      throw new StoreError('IAM_MODEL_SELECTION_INVALID', 'manual models exceed limit');
+    }
     const selection = parseModelSelection({
       version: MODEL_SELECTION_VERSION, type: MODEL_SELECTION_TYPE, subject,
       models, defaultModelId: defaultModelId ?? null,
+      ...(manual !== undefined ? { manual } : {}),
     });
     if (!selection) throw new StoreError('IAM_MODEL_SELECTION_INVALID', 'refusing to store an invalid model selection');
     let written;
@@ -588,7 +613,9 @@ export function createModelSelectionStore(credentials, options = {}) {
           kind: 'grant', payload: {
             version: MODEL_SELECTION_VERSION, type: MODEL_SELECTION_TYPE,
             subject: selection.subject, models: selection.models,
-            defaultModelId: selection.defaultModelId, updatedAt: new Date().toISOString(),
+            defaultModelId: selection.defaultModelId,
+            ...(selection.manual.length > 0 ? { manual: selection.manual } : {}),
+            updatedAt: new Date().toISOString(),
           }
         };
       });

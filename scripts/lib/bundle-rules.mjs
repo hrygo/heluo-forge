@@ -14,6 +14,8 @@ const DEP_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'];
 const KERNEL_PACKAGE = '@deepseek-ai/dsh';
 const MARKET_PACKAGE = '@heluo/forge-market';
 const PATCH_FILE = 'cordis.patch.yml';
+/** 研发叠加层等附加补丁层：同一 bundle 可以带多层，逐层校验。 */
+const EXTRA_PATCH_FILE = /^cordis\.patch\.[A-Za-z0-9-]+\.yml$/u;
 
 /**
  * 允许出现在发布物里的 peer：由宿主（DSH Web 外壳）提供的运行时。
@@ -210,8 +212,8 @@ function checkDeepImports(label, base, errors) {
 function checkPatchLayer(label, base, pkg, known, errors) {
   const patchPath = join(base, PATCH_FILE);
   const declared = pkg.dsh?.bundle?.patch;
+  const files = Array.isArray(pkg.files) ? pkg.files : [];
   if (existsSync(patchPath)) {
-    const files = Array.isArray(pkg.files) ? pkg.files : [];
     if (!files.includes(PATCH_FILE)) {
       errors.push(`bundle: ${label}/package.json must list ${PATCH_FILE} in files`);
     }
@@ -221,26 +223,44 @@ function checkPatchLayer(label, base, pkg, known, errors) {
   } else if (declared !== undefined) {
     errors.push(`bundle: ${label}/package.json declares dsh.bundle.patch but ${PATCH_FILE} is missing`);
   }
-  if (!existsSync(patchPath)) return;
-  const { inserted } = parsePatchLayer(readFileSync(patchPath, 'utf8'));
-  for (const entry of inserted) {
-    if (entry.name === undefined) {
-      errors.push(`bundle: ${label}/${PATCH_FILE} insert row ${entry.id} must declare a package name`);
-      continue;
+  if (!existsSync(patchPath) && !readdirSync(base).some((name) => EXTRA_PATCH_FILE.test(name))) return;
+  // `dsh.bundle.patch` 只声明一层（宿主按 package.json 的应用路径），但同一 bundle
+  // 允许携带叠加上层（研发能力层）。附带层不校验就等于"发布时没人管"：行必须能解析、
+  // 挂的包必须存在且是构建期依赖，也要列进 files——否则打包后并不随包发布。
+  const layers = [PATCH_FILE, ...readdirSync(base).filter((name) => EXTRA_PATCH_FILE.test(name))].filter(
+    (name) => existsSync(join(base, name)),
+  );
+  const seenIds = new Map();
+  for (const layer of layers) {
+    const isPrimary = layer === PATCH_FILE;
+    if (!isPrimary && !files.includes(layer)) {
+      errors.push(`bundle: ${label}/package.json files must list the extra patch layer ${layer}`);
     }
-    // 自身子路径入口（如 `@heluo/forge-enterprise/issue-delivery-skill`）指向本包，不是新包：
-    // 只要它在 exports 里、且它指向的目录就是本包，就按"本包成员"处理。
-    const selfSubpath = typeof pkg.name === 'string'
-      && entry.name.startsWith(`${pkg.name}/`)
-      && Object.prototype.hasOwnProperty.call(pkg.exports ?? {}, `./${entry.name.slice(pkg.name.length + 1)}`);
-    if (!known.has(entry.name) && !selfSubpath) {
-      errors.push(`bundle: ${label}/${PATCH_FILE} inserts ${entry.name}, which is not a workspace package`);
-    }
-    if (entry.name !== pkg.name && !selfSubpath && known.has(entry.name) && pkg.dependencies?.[entry.name] === undefined) {
-      errors.push(`bundle: ${label}/${PATCH_FILE} inserts ${entry.name} without a declared build-time dependency`);
-    }
-    if (entry.name === MARKET_PACKAGE && pkg.name !== MARKET_PACKAGE) {
-      errors.push(`bundle: ${label}/${PATCH_FILE} must not mount the legacy market package ${MARKET_PACKAGE}`);
+    const { inserted } = parsePatchLayer(readFileSync(join(base, layer), 'utf8'));
+    for (const entry of inserted) {
+      if (entry.name === undefined) {
+        errors.push(`bundle: ${label}/${layer} insert row ${entry.id} must declare a package name`);
+        continue;
+      }
+      if (seenIds.has(entry.id)) {
+        errors.push(`bundle: ${label}/${layer} insert row ${entry.id} is already declared by ${seenIds.get(entry.id)}`);
+      } else {
+        seenIds.set(entry.id, layer);
+      }
+      // 自身子路径入口（如 `@heluo/forge-enterprise/issue-delivery-skill`）指向本包，不是新包：
+      // 只要它在 exports 里、且它指向的目录就是本包，就按"本包成员"处理。
+      const selfSubpath = typeof pkg.name === 'string'
+        && entry.name.startsWith(`${pkg.name}/`)
+        && Object.prototype.hasOwnProperty.call(pkg.exports ?? {}, `./${entry.name.slice(pkg.name.length + 1)}`);
+      if (!known.has(entry.name) && !selfSubpath) {
+        errors.push(`bundle: ${label}/${layer} inserts ${entry.name}, which is not a workspace package`);
+      }
+      if (entry.name !== pkg.name && !selfSubpath && known.has(entry.name) && pkg.dependencies?.[entry.name] === undefined) {
+        errors.push(`bundle: ${label}/${layer} inserts ${entry.name} without a declared build-time dependency`);
+      }
+      if (entry.name === MARKET_PACKAGE && pkg.name !== MARKET_PACKAGE) {
+        errors.push(`bundle: ${label}/${layer} must not mount the legacy market package ${MARKET_PACKAGE}`);
+      }
     }
   }
 }

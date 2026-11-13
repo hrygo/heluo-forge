@@ -15,7 +15,7 @@ import {
 } from '../src/skills.mjs';
 
 function pack(extra = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'forge-enterprise-'));
+  const root = mkdtempSync(join(tmpdir(), 'forge-engineering-'));
   mkdirSync(join(root, 'clauses'), { recursive: true });
   writeFileSync(join(root, 'clauses/a.md'), '# 规范 A\n硬要求：提交前必须冻结交付清单。\n');
   writeFileSync(join(root, 'clauses/b.md'), '# 规范 B\n建议：PR 描述引用变更号。\n');

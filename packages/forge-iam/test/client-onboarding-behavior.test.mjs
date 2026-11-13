@@ -24,9 +24,10 @@ async function onboarding(t, { save, loginView = ready } = {}) {
     assert.ok(result, `missing ${name}`);
     return result;
   };
-  button('开始').props.onClick();
-  await button('登录').props.onClick();
-  assert.match(panel.text(panel.render()), /添加个人访问凭证/);
+  assert.match(panel.text(panel.render()), /步骤 1 \/ 3/);
+  await button('登录企业账号').props.onClick();
+  assert.match(panel.text(panel.render()), /启用 AI 服务/);
+  assert.match(panel.text(panel.render()), /步骤 2 \/ 3/);
   return { panel, button, writes };
 }
 
@@ -91,10 +92,11 @@ test('a pending credential save cannot be repeated or skipped', async (t) => {
   assert.equal(writes.length, 1);
   assert.equal(button('正在保存…').props.disabled, true);
   assert.equal(button('稍后配置').props.disabled, true);
-  assert.match(panel.text(panel.render()), /添加个人访问凭证/);
+  assert.match(panel.text(panel.render()), /启用 AI 服务/);
   pending.resolve(Response.json({ view: { ...ready, gatewayCredential: { state: 'configured' } } }));
   await Promise.all([saving, duplicate]);
   assert.match(panel.text(panel.render()), /准备就绪/);
+  assert.match(panel.text(panel.render()), /步骤 3 \/ 3/);
 });
 
 test('onboarding clears stale authorization link on timeout and returns from step 2 to step 1 on session loss', async (t) => {
@@ -111,8 +113,7 @@ test('onboarding clears stale authorization link on timeout and returns from ste
   }, { componentId: 'forge-iam-onboarding' });
   t.after(() => panel.close());
   const button = (name) => panel.findButton(panel.render(), name);
-  button('开始').props.onClick();
-  await button('登录').props.onClick();
+  await button('登录企业账号').props.onClick();
   assert.match(panel.text(panel.render()), /点此继续登录/);
 
   polledView = { state: 'error', error: 'IAM_ATTEMPT_EXPIRED', canSignIn: true };
@@ -121,10 +122,11 @@ test('onboarding clears stale authorization link on timeout and returns from ste
 
   polledView = ready;
   await panel.tick();
-  assert.match(panel.text(panel.render()), /添加个人访问凭证/);
+  assert.match(panel.text(panel.render()), /启用 AI 服务/);
 
   polledView = { state: 'signed-out', canSignIn: true };
   await panel.tick();
   assert.match(panel.text(panel.render()), /登录企业账号/);
+  assert.match(panel.text(panel.render()), /步骤 1 \/ 3/);
   assert.match(panel.text(panel.render()), /登录状态已变化，请重新登录企业账号/);
 });

@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Enterprise bundle composition helpers for Heluo Forge",
+  "description": "Universal enterprise identity, AI gateway, model catalog, and encrypted keychain base bundle for DeepSeek Harness",
+  "icon": "./icon.svg",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
@@ -12,15 +13,11 @@
   },
   "dependencies": {
     "@heluo/forge-credentials-keychain": "workspace:*",
-    "@heluo/forge-devops": "workspace:*",
-    "@heluo/forge-gitee": "workspace:*",
     "@heluo/forge-iam": "workspace:*",
     "@heluo/forge-policy": "workspace:*"
   },
   "bundledDependencies": [
     "@heluo/forge-credentials-keychain",
-    "@heluo/forge-devops",
-    "@heluo/forge-gitee",
     "@heluo/forge-iam",
     "@heluo/forge-policy"
   ],
@@ -28,19 +25,14 @@
   "exports": {
     ".": "./src/index.mjs",
     "./package.json": "./package.json",
-    "./skills": "./src/skills.mjs",
-    "./switches": "./src/switches.mjs",
     "./reflow": "./src/reflow.mjs",
-    "./issue-delivery-skill": "./src/issue-delivery-skill.mjs",
-    "./issue-delivery-skill/locale/*.json": "./locale/*.json",
-    "./issue-delivery-skill/icon": "./icon.svg",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
     "src",
-    "skills",
     "locale",
+    "docs",
     "icon.svg",
     "cordis.patch.yml",
     "README.md"

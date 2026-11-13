@@ -10,7 +10,7 @@
  * 写子路径（`@heluo/forge-gitee/src/index.mjs`）是最常见的静默跳过，只能在文本层证明。
  */
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -82,13 +82,23 @@ test('AC-1: exports 与 files 白名单互相自洽（没有声明了却打不�
   const targets = [];
   for (const [key, target] of Object.entries(exportsMap)) {
     assert.equal(typeof target, 'string', `exports["${key}"] 必须是字符串入口`);
-    // `./client` 是浏览器半（TECHNICAL §9 指定 `./client.js`），其余入口一律落在本包 src。
+    // `./client` 是浏览器半（TECHNICAL §9 指定 `./client.js`），`./icon` 与 `./locale/*.json` 是插件展示资源，其余入口一律落在本包 src。
     if (key === './client') {
       assert.equal(target, './client.js');
+    } else if (key === './icon') {
+      assert.equal(target, './icon.svg');
+    } else if (key === './locale/*.json') {
+      assert.equal(target, './locale/*.json');
     } else {
       assert.ok(target.startsWith('./src/'), `exports["${key}"] 必须指向本包 src`);
     }
-    await readFile(new URL(`../${target.slice(2)}`, import.meta.url), 'utf8');
+    if (target.includes('*')) {
+      const prefix = target.slice(2, target.indexOf('*')).replace(/\/$/, '');
+      const entries = await readdir(new URL(`../${prefix}`, import.meta.url));
+      assert.ok(entries.some((entry) => entry.endsWith('.json')), `${target} 至少要匹配一个语言文件`);
+    } else {
+      await readFile(new URL(`../${target.slice(2)}`, import.meta.url), 'utf8');
+    }
     targets.push(target);
   }
 
@@ -97,11 +107,12 @@ test('AC-1: exports 与 files 白名单互相自洽（没有声明了却打不�
     assert.ok(!entry.startsWith('./'), `files 里用相对路径而不是 ${entry}`);
     assert.ok(!entry.includes('..'), `files 不得越出包根：${entry}`);
     // 每个 files 条目在源码树里都要存在（auditReleaseClosure 的同一口径）。
-    const stat = await readFile(new URL(`../${entry === 'src' ? 'src/index.mjs' : entry}`, import.meta.url), 'utf8');
-    assert.ok(typeof stat === 'string');
+    await access(new URL(`../${entry === 'src' ? 'src/index.mjs' : entry}`, import.meta.url));
   }
   for (const target of targets) {
-    const covered = pkg.files.some((entry) => target === `./${entry}` || target.startsWith(`./${entry}/`));
+    const covered = target.includes('*')
+      ? pkg.files.some((entry) => target.startsWith(`./${entry}/`))
+      : pkg.files.some((entry) => target === `./${entry}` || target.startsWith(`./${entry}/`));
     assert.ok(covered, `${target} 不在 files 白名单内，装包后会缺文件`);
   }
 });

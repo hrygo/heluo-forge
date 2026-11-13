@@ -341,15 +341,26 @@ test('AC-7 反向: 目录为空/缺一条时拒绝挂载，且不留下半个工
 test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（全仓扫描）', async () => {
   const packagesUrl = new URL('../../', import.meta.url);
   const entries = await readdir(packagesUrl, { withFileTypes: true });
+  // 一个包可以有多层（底座 `cordis.patch.yml` + 叠加层 `cordis.patch.*.yml`），
+  // 判据按**包的补丁集合**求并集：单文件自带目录不再成立，但装完这份包必须自带。
   const layers = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    let files;
     try {
-      const text = await readFile(new URL(`${entry.name}/cordis.patch.yml`, packagesUrl), 'utf8');
-      layers.push({ package: entry.name, rows: parsePatch(text) });
+      files = (await readdir(new URL(`${entry.name}/`, packagesUrl)))
+        .filter((name) => /^cordis\.patch(\.[A-Za-z0-9-]+)?\.yml$/u.test(name))
+        .sort();
     } catch {
       continue;
     }
+    if (files.length === 0) continue;
+    const rows = [];
+    for (const file of files) {
+      const text = await readFile(new URL(`${entry.name}/${file}`, packagesUrl), 'utf8');
+      rows.push(...parsePatch(text));
+    }
+    layers.push({ package: entry.name, files, rows });
   }
   assert.ok(layers.length >= 2, '至少本包与 forge-devops 各有补丁层');
 
@@ -373,8 +384,9 @@ test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（
     assert.equal(typeof giteeRow.config, 'object', `${packageName} 的 gitee 行缺显式 config`);
     assert.equal(giteeRow.config === null, false);
   }
-  // r13 起企业组合自带 gitee 行与目录（见 forge-enterprise 的 cordis.patch.yml），
-  // 所以允许且只允许「本包 + forge-enterprise」两层插入；devops 仍不得偷偷插入。
-  assert.deepEqual(inserting.sort(), ['forge-enterprise', 'forge-gitee'], '只有本包与企业组合插入 gitee');
+  // 分包后由独立研发工具包 @heluo/forge-engineering 挂载 gitee 与政策行，
+  // 通用底座 @heluo/forge-enterprise 不得包含 gitee，devops 仍不得偷偷插入。
+  assert.deepEqual(inserting.sort(), ['forge-engineering', 'forge-gitee'], '只有本包与企业研发套件插入 gitee');
+  assert.ok(!inserting.includes('forge-enterprise'), '通用企业底座不得引入 gitee');
   assert.ok(!inserting.includes('forge-devops'), 'devops 的补丁层不得偷偷插入本包');
 });

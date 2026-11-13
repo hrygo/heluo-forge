@@ -120,17 +120,16 @@
 
 ### 5.2 设置页（r15）
 
-本包在设置页承载**两个**分区，都由包内 `client.js` 提供（`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`）：
+本包在设置页按场景承载以下入口，都由包内 `client.js` 提供（`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`）；当研发套件 `@heluo/forge-engineering` 在场时，`devops` 与 `devops-readiness` 合并挂载到容器子槽位 `heluo.engineering.tab`（`order: 10`，上就绪摘要下配置表单与内置访问凭证卡片），套件缺席（ADR-0012 单包安装）时保留独立分区；当 `@heluo/forge-iam` 在场时内置的 `DevopsCredentialItem` 通过 `/api/forge-iam/ext-credentials` 提供加密托管，缺席时静默提示仅使用本机环境或需安装「企业账号与模型」：
 
-| 分区 | id | order | 职责 |
+| 分区 / 槽位 | id | order | 职责 |
 |---|---|---|---|
-| 企业研发 | `devops-readiness` | 29 | 汇总六行本机可见性：企业身份（`/api/forge-iam/view` 的 state 映射为已登录/未登录/登录中/过期/不可达/未知）、公共参数（恒「未知」，无可核验的公共维护权限与接口）、本机配置（devops 与 gitee 快照里 `origin==='config'` 的**键名**）、DevOps（快照 `ready` + `dopBin` 来源）、Gitee（快照 `ready`）、业务写权限（恒「未知」） |
-| 企业 DevOps | `devops` | 60 | 既有字段面（`dopBin`/`timeoutMs`）不变，只加页脚来源行与三行回执 |
+| `settings.section` / `heluo.engineering.tab` | `devops-readiness`（容器缺席 29）/ `devops`（容器缺席 60，容器内合并 10） | 29 / 60 / tab 10 | 汇总六行本机可见性（四层明细收拢于诊断详情）、DevOps CLI 配置字段（`dopBin`/`timeoutMs`）、页脚来源行、三行互不覆盖的回执以及内置扩展访问凭证（`DEVOPS_API_KEY`）卡片；`?refresh=1` 只由显式检查触发 |
 
 三条边界：
 
 - **只汇总、不授权**：分区顶部固定声明「本页只汇总本机可见性，不代表业务授权」；六行里没有一行能推出另一行（四组反例由 `tests/ui-contract.test.mjs` 与包内用例逐组断言另一行不变）。本机配置行只列键名，不列值。
-- **只有 DevOps 行能检查**：`GET /api/forge-devops/cli?refresh=1` 是唯一会重新扫描的动作，且只由「检查 DevOps」触发（`refreshUrl()` 一处拼出，`?refresh=1` 在客户端只出现一次）。检查态六种：未检查/检查中/通过/失败/未知/已过期，子原因 `NO_CLI`→未配置、`ENTRY_NOT_EXECUTABLE`→不可执行、`ENDPOINT_UNREACHABLE`→目标不可达、`POLICY_DENIED`→只读被拒。Gitee 行恒「未执行」并写明"未获批准的只读探测，本页不发起请求"。
+- **只有 DevOps 行能检查**：`GET /api/forge-devops/cli?refresh=1` 是唯一会重新扫描的动作，且只由「检查 DevOps」触发（`refreshUrl()` 一处拼出，`?refresh=1` 在客户端只出现一次）。检查态六种：未检查/检查中/通过/失败/未知/已过期，子原因 `NO_CLI`→未配置、`ENTRY_NOT_EXECUTABLE`→不可执行、`ENDPOINT_UNREACHABLE`→目标不可达、`POLICY_DENIED`→策略拒绝。Gitee 行恒「未执行」并写明"本页不主动发起网络请求探测"。
 - **三态互不覆盖**：保存回执三行（保存 / 应用 / 检查）各自独立；`applied` 来自 POST 成功体的 `applied` 字段，缺失即「未知」，不由前端推断。r16 起 `applied` 表达四种可判定的结论，不再拿「合并态相等」冒充应用：`{ok:true}`＝本层正在使用且新值确实进了运行时；`{ok:true, active:false}`＝最后一个 CLI 入口被正常清除（无 CLI 是合法状态，不报失败）；`{ok:false, reason:'CLI_APPLY_UNVERIFIED'}`＝运行面归属宿主注入的 flow/reader，写成功但本层无法证明新值被采用；`{ok:false, reason:'CLI_REBUILD_FAILED'}`＝重建抛错或读面立不起来（`degradeFaces()`）。页脚来源行读快照里的 `plugin`（服务端从 `package.json` 投影）与 `readAt`，浏览器半不读 `package.json`；本机覆盖只看快照投影的 `layers.override`，不拿合并后的 `config` 反推（`layers` 不可用时显示「未提供」）。
 
 服务端契约：`GET /api/forge-devops/cli` 的快照增 `plugin:{name,version}` 与 `editable:['dopBin','timeoutMs']`；`POST /api/forge-devops/cli` 成功体为 `{ok:true, snapshot, applied?}`——`applied` 有才带、原样透传。`saveCliConfig` 写成功后重算读面，只有运行时合并态里真的出现新值才回 `applied:{ok:true}`；清除最后一个入口回 `applied:{ok:true, active:false}`；运行面被宿主注入时回 `applied:{ok:false, reason:'CLI_APPLY_UNVERIFIED'}`；重建抛错或读面立不起来则 `degradeFaces()` 并回 `applied:{ok:false, reason:'CLI_REBUILD_FAILED'}`（"已保存"这个结论不变）。「检查」只走 `?refresh=1` 重新发现配置并重建读面，不执行 CLI、不请求企业端点；检查与刷新共用单调请求代次，更早发起的回包不能覆盖更晚建立的读面。
@@ -190,7 +189,7 @@ flowchart TD
 | 单元 | 白名单、参数脱敏、输出解析 | `node --test` |
 | 契约 | 枚举动作、每动作参数 schema、写回 confirm/绑定/回读三态、`body`/`data` 互斥、clarify/plan 机检 | `node --test` |
 | 集成 | 未授权、超时、非 JSON 三类 | 本地仿 CLI |
-| 设置页（r15） | 两个分区的 id/order 与两段式挂载、九种状态词、六行互不推导、`?refresh=1` 只由检查触发、保存/应用/检查三行互不覆盖、`applied` 透传与 `CLI_REBUILD_FAILED` 降级 | `node --test "packages/forge-devops/test/*.test.mjs"`（`client-shape.test.mjs`、`save-applied.test.mjs`）、`node scripts/check-client-module.mjs packages/forge-devops/client.js`、`node --test tests/ui-contract.test.mjs` |
+| 设置页（r15） | 两个分区的 id/order（容器在场时合并为 `heluo.engineering.tab` 一个条目，`order` 10，容器塌陷时回退到两个独立分区）与两段式挂载、九种状态词、六行互不推导、`?refresh=1` 只由检查触发、保存/应用/检查三行互不覆盖、`applied` 透传与 `CLI_REBUILD_FAILED` 降级 | `node --test "packages/forge-devops/test/*.test.mjs"`（`client-shape.test.mjs`、`save-applied.test.mjs`）、`node scripts/check-client-module.mjs packages/forge-devops/client.js`、`node --test tests/ui-contract.test.mjs` |
 | 端到端 | 双端各完成一次只读查询 | 手工 |
 
 离线用例还覆盖：两条读动作各自路由、清单 `@me` 之外拒绝且零下游调用、`facts` 透传、归一失败只记 `normalize_error`、clarify 零选项与 plan 缺验证方式被拒且不落盘。

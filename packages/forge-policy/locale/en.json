@@ -1,0 +1,8 @@
+{
+  "meta": {
+    "title": "Enterprise Policy Gate",
+    "description": "Provides unified access control, sensitive action confirmation, and audit logging for enterprise tools and commands.",
+    "detail": "docs/DETAIL.md"
+  }
+}
+

@@ -150,6 +150,7 @@ test('装载形态：id 固定 @heluo/forge-gitee，只依赖 react，导出面�
   assert.deepEqual(CLIENT.module.inject, ['slots', 'locale']);
   assert.equal(typeof CLIENT.module.apply, 'function');
   assert.equal(typeof CLIENT.module.GiteeSection, 'function');
+  assert.equal(typeof CLIENT.module.GiteeCredentialItem, 'function');
   for (const dep of ['node:fs', 'node:path', 'node:os', 'node:child_process', 'node:http']) {
     assert.ok(!SOURCE.includes(dep), `client.js 不得依赖 ${dep}`);
   }
@@ -186,9 +187,13 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
       },
     },
     slots: {
+      // 无容器场景：只有 `settings.section` 被声明，研发容器子槽位缺席。
       inject: (name, callback) => {
-        assert.equal(name, 'settings.section');
-        return callback();
+        assert.ok(
+          name === 'settings.section' || name === 'heluo.engineering.tab',
+          `未知槽位 ${name}`,
+        );
+        return name === 'settings.section' ? callback() : () => {};
       },
       register: (options, component) => {
         registrations.push({ options, component });
@@ -199,7 +204,12 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
 
   CLIENT.module.apply(ctx);
 
-  assert.deepEqual(effects, ['forge-gitee: copy', 'forge-gitee: styles', 'forge-gitee: settings section']);
+  assert.deepEqual(effects, [
+    'forge-gitee: copy',
+    'forge-gitee: styles',
+    'forge-gitee: engineering tab',
+    'forge-gitee: settings section',
+  ]);
   assert.deepEqual(locales.map((item) => item.namespace), ['gitee']);
   assert.equal(registrations.length, 1);
   const { options, component } = registrations[0];
@@ -234,6 +244,61 @@ function copyTables() {
   return { zh: parse(SOURCE.slice(zhStart, enStart)), en: parse(SOURCE.slice(enStart)) };
 }
 
+test('AC-13: 容器后到与运行期塌陷都不丢入口（声明生命周期重跑）', () => {
+  // 与集成检查器的 fake 同构：声明存在才执行回调，塌陷执行 cleanup，再声明重跑回调。
+  const declared = new Set(['settings.section']);
+  const records = new Map();
+  const registrations = [];
+  const ctx = {
+    effect: (callback) => {
+      callback();
+      return () => {};
+    },
+    locale: { bind: () => (key) => key, register: () => () => {} },
+    slots: {
+      inject: (name, callback) => {
+        if (!records.has(name)) records.set(name, []);
+        const record = { callback, cleanup: undefined };
+        records.get(name).push(record);
+        if (declared.has(name)) record.cleanup = callback();
+        return () => {};
+      },
+      register: (options) => {
+        if (!declared.has(options.name)) throw new Error(`slot '${options.name}' is not declared`);
+        const entry = { id: options.id, order: options.order, released: false };
+        registrations.push(entry);
+        return () => {
+          entry.released = true;
+        };
+      },
+    },
+  };
+  const live = () => registrations.filter((entry) => !entry.released).map(({ id, order }) => `${id}:${order}`);
+  const declare = (name) => {
+    declared.add(name);
+    for (const record of records.get(name) ?? []) {
+      record.cleanup?.();
+      record.cleanup = record.callback();
+    }
+  };
+  const undeclare = (name) => {
+    declared.delete(name);
+    for (const record of records.get(name) ?? []) {
+      record.cleanup?.();
+      record.cleanup = undefined;
+    }
+  };
+
+  CLIENT.module.apply(ctx);
+  assert.deepEqual(live(), ['gitee:50'], '无容器时保留独立分区');
+  declare('heluo.engineering.tab');
+  assert.deepEqual(live(), ['gitee:20'], '容器后到时独立分区必须先撤（否则侧栏两份入口）');
+  undeclare('heluo.engineering.tab');
+  assert.deepEqual(live(), ['gitee:50'], '容器塌陷后独立分区必须补回来');
+  declare('heluo.engineering.tab');
+  assert.deepEqual(live(), ['gitee:20'], '容器回来后只能有一个容器条目');
+});
+
 test('AC-4/AC-5: zh/en 键集等值、占位符一致、en 不含中文；行卡文案齐全', () => {
   const { zh, en } = copyTables();
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort(), '两种语言的键集必须完全一致');
@@ -261,14 +326,19 @@ test('AC-4/AC-5: zh/en 键集等值、占位符一致、en 不含中文；行卡
     'card.action.auto',
     'card.action.edit',
     'card.action.done',
-    'advanced.title',
-    'advanced.hint',
+    'credential.title',
+    'credential.state.follow',
+    'credential.state.hosted',
     'footer.declaration',
   ]) {
     assert.ok(typeof zh[key] === 'string' && zh[key].length > 0, `缺文案 ${key}`);
   }
-  for (const field of ['cliPath', 'timeoutMs', 'host', 'authEnv', 'persistentToken']) {
+  for (const field of ['cliPath', 'timeoutMs', 'host']) {
     assert.ok(typeof zh[`field.${field}`] === 'string', `缺字段文案 field.${field}`);
+  }
+  for (const removed of ['advanced.title', 'advanced.hint', 'field.authEnv', 'field.persistentToken']) {
+    assert.equal(zh[removed], undefined, `V2 收敛后 Gitee 工具设置表单不得残留 ${removed}`);
+    assert.equal(en[removed], undefined, `V2 收敛后 Gitee 工具设置表单不得残留 ${removed}`);
   }
   // 「沿用公共值」是本页唯一的"没有本机差异"说法——不许再出现一排「未配置」。
   assert.equal(zh['value.inherited'], '沿用公共值');
@@ -306,7 +376,8 @@ test('AC-4/§4.5: 样式只用 --dsw-* token 与 color-mix，前缀 fge-', () =>
   assert.ok(!css.includes('.fdv-'), '不得复用 devops 的类名前缀');
   assert.ok(css.includes('.fge-root'));
   assert.ok(css.includes('.fge-card'), '行卡结构必须有对应样式');
-  assert.ok(css.includes('.fge-advanced'), '高级折叠必须有对应样式');
+  assert.ok(css.includes('.fge-cred'), '扩展凭据项必须有对应样式');
+  assert.ok(!css.includes('.fge-advanced'), 'V2 收敛后不得残留 .fge-advanced 折叠样式');
   assert.ok(css.includes('@container (max-width:519px)'), '窄屏断点必须按容器查询写在 519px');
   assert.ok(css.includes('prefers-reduced-motion'), 'reduced-motion 必须关动效');
   // 颜色只允许 token / color-mix / transparent，不允许字面 hex 或 rgb()。
@@ -368,16 +439,25 @@ async function renderSection(snapshot) {
   }
 }
 
-test('DESIGN §5-3: 行卡取代四列表格——五个字段各一行，没有表头', async () => {
+test('DESIGN §5-3 / V2 收敛: 行卡只含 cliPath/timeoutMs/host 三项，彻底移除高级折叠与凭据策略表单', async () => {
   const { text, nodes } = await renderSection(SNAPSHOT);
 
-  for (const field of ['cliPath', 'timeoutMs', 'host', 'authEnv', 'persistentToken']) {
+  for (const field of ['cliPath', 'timeoutMs', 'host']) {
     assert.ok(text.includes(`field.${field}`), `行卡缺 ${field}`);
   }
+  assert.ok(!text.includes('field.authEnv'), 'authEnv 不得再出现在 Gitee 工具设置页面');
+  assert.ok(!text.includes('field.persistentToken'), 'persistentToken 不得再出现在 Gitee 工具设置页面');
+  assert.ok(!text.includes('advanced.title'), '高级折叠标题不得再出现');
+  assert.ok(!text.includes('GITEE_TOKEN'), 'Gitee 工具设置页面主视图不得渲染凭据变量名');
   assert.deepEqual(
     nodes.filter((node) => node.type === 'table'),
     [],
     '不得再渲染表格',
+  );
+  assert.deepEqual(
+    nodes.filter((node) => node.type === 'details'),
+    [],
+    'V2 收敛后 Gitee 工具设置页面不得再渲染高级 details 折叠区块',
   );
   for (const key of ['col.field', 'col.public', LEGACY_LOCAL_COLUMN, 'col.effective']) {
     assert.ok(!text.includes(key), `表头 ${key} 应已删除`);
@@ -397,18 +477,11 @@ test('DESIGN §5-4: 只显示本机差异——相同给「沿用公共值」，
   assert.ok(!text.includes('未配置'), '不得出现一排「未配置」');
 });
 
-test('AC-5/AC-12: 服务地址行结构上不含值，凭据变量名收进高级折叠', async () => {
+test('AC-5/AC-12: 服务地址行结构上不含值，且引导独立凭据去企业账号', async () => {
   const { text } = await renderSection(SNAPSHOT);
 
   assert.ok(!text.includes('https://gitee.secret.example'), '服务地址的值不得出现在页面上');
-  assert.ok(text.includes('value.host'), '服务地址行只说"由企业分发，本页只读"');
-  assert.ok(text.includes('field.authEnv'), '凭据变量名行要在场');
-  assert.ok(text.includes('GITEE_TOKEN'), '凭据只显示变量名');
-  assert.ok(text.includes('advanced.title') && text.includes('advanced.hint'), '高级折叠要带"由运行期决定"的说明');
-  // 高级折叠默认收起：details 不带 open。
-  const details = collectNodes(await renderSection(SNAPSHOT).then((result) => result.tree)).filter((node) => node.type === 'details');
-  assert.equal(details.length, 1, '高级折叠恰好一个');
-  assert.ok(!('open' in details[0].props), '高级折叠默认收起');
+  assert.ok(text.includes('value.host'), '服务地址行只说"由企业分发，本页只读"（独立凭据去设置→企业账号）');
 });
 
 test('DESIGN §5-5: 无检查详情、无"分区由 … 提供 · 读取于 …"页脚', async () => {
@@ -575,3 +648,46 @@ test('AC-13: 回包只清本次提交的草稿——保存期间新写的草稿�
     mount.teardown();
   }
 });
+
+for (const scenario of [
+  {
+    name: '保存成功',
+    response: { ok: true, status: 200, json: async () => ({ ok: true, applied: { ok: true }, snapshot: SNAPSHOT }) },
+    expected: ['save.saved', 'save.applied'],
+  },
+  {
+    name: '保存冲突',
+    response: { ok: false, status: 409, json: async () => ({}) },
+    expected: ['save.conflict'],
+  },
+]) {
+  test(`无改动提示后改为自动：${scenario.name}回执仍可见`, async () => {
+    let submitted;
+    const mount = await mountGitee({
+      post: async (_url, init) => {
+        submitted = JSON.parse(init.body);
+        return scenario.response;
+      },
+    });
+    try {
+      let tree = mount.render();
+      findButton(tree, 'action.save').props.onClick();
+      tree = mount.render();
+      assert.ok(flatten(tree).includes('save.nochange'), '无改动保存应显示提示');
+
+      findButton(tree, 'card.action.auto').props.onClick();
+      tree = mount.render();
+      findButton(tree, 'action.save').props.onClick();
+      await tick();
+      tree = mount.render();
+
+      assert.equal(mount.calls.filter((call) => call.method === 'POST').length, 1);
+      assert.deepEqual(submitted.fields, { cliPath: null }, '只移除本机 cliPath 覆盖');
+      const text = flatten(tree);
+      for (const key of scenario.expected) assert.ok(text.includes(key), `保存回执应显示 ${key}`);
+      assert.ok(!text.includes('save.nochange'), '旧的无改动提示不能覆盖新的保存结果');
+    } finally {
+      mount.teardown();
+    }
+  });
+}
