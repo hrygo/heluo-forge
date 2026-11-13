@@ -85,7 +85,7 @@ export function createServiceState(env) {
         configured: Boolean(gateway?.baseURL || config.managedModels?.baseURL),
         baseURL: gateway?.baseURL ?? config.managedModels?.baseURL ?? '',
         ...(!recoverable || gateway?.state !== 'configured' || gateway?.matchesAccount !== true
-          ? { state: 'unconfigured', error: null, defaultModelId: null, enabled: [], models: [], modelOptions: {} }
+          ? { state: 'unconfigured', error: null, defaultModelId: null, enabled: [], models: [], modelOptions: {}, manualTruncated: 0 }
           : {}),
       },
     });

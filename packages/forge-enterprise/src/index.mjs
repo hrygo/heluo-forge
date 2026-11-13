@@ -30,3 +30,11 @@ export {
   registerEnterpriseSkillsViaProvider,
   selectClauses,
 } from './skills.mjs';
+
+export const name = 'forge-enterprise';
+
+/**
+ * 纯容器插件的最小宿主入口（CORP-DSH-DESIGN-018 §3）：
+ * 服务端无状态、不持有凭据；设置分区完全由 `./client.js` 承载。
+ */
+export function apply() {}

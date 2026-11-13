@@ -27,6 +27,7 @@
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./skills": "./src/skills.mjs",
     "./switches": "./src/switches.mjs",
@@ -42,12 +43,22 @@
     "skills",
     "locale",
     "icon.svg",
+    "client.js",
     "cordis.patch.yml",
+    "cordis.patch.engineering.yml",
     "README.md"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "slots",
+        "locale"
+      ]
     }
   }
 }

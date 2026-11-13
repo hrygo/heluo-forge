@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.44.0 |
+| 版本 | V1.47.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-13 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -103,6 +103,8 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
 | 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | SQLite 值级加密、旧存储保留与不可用时的 fail-closed 口径 |
 | 客户端标识 | [DSH 客户端标识（UA）方案设计](<design/client-identification.md>) | 使用 DSH 默认 UA，网关按关键字匹配；不改写宿主 UA，匹配能力及企业链路待确认 |
+| 设置菜单与 Token 收敛 | [企业设置菜单统一与 Token 收敛详细设计](<design/enterprise-menu-and-token-unification.md>) | 一体双定位解耦、渐进披露去技术噪声、IAM 通用凭据槽位与收敛 Gitee 高级（不改 DSH；V2.0.0 已生效，源码待实施） |
+| 设置与手动模型统筹计划 | [企业设置统一、Token 收敛与手动模型统筹实施方案](<plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md>) | 合流 CORP-DSH-DESIGN-018（V2.0.0 已生效）与 issue #273（CORP-DSH-PLAN-022，待批 §13 边界）；Wave 0–5 消除 `forge-iam/client.js` 返工与双定位耦合（V0.2.0 草案） |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
 辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案（历史提议）](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；网关静态 Key 页描述的是 2026-10-20 原提议，先被 2026-10-22 ADR-14 取代；当前身份/用途目标见 ADR-16 与专用访问评审，历史图解不代表已选定路线，涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V2.0.0 评审稿示意，不替代正文契约或实现清单）。开放 Issue 的排期分析另见[实施路径总览](<assets/issue-implementation-path.html>)（2026-10-23 辅助分析，人日为粗估，不构成排期承诺或门禁证据）。

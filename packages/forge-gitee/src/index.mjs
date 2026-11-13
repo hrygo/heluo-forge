@@ -56,6 +56,12 @@ import {
 import { GITEE_API_PREFIX, GITEE_CONFIG_ROUTE, createGiteeApi, toNodeRoute } from './http.mjs';
 import { createGiteeAdapter } from './gitee-adapter.mjs';
 import { createGiteeRunner, detectPersistentToken } from './gitee-cli.mjs';
+import {
+  GITEE_CREDENTIAL_DESCRIPTOR,
+  createGiteeResolveChildEnv,
+  getOptionalBroker,
+  registerGiteeCredential,
+} from './credential-descriptor.mjs';
 import { createGiteeGitAdapter } from './gitee-git.mjs';
 import { GITEE_PLATFORM, createGiteeGuard } from './gitee-guard.mjs';
 import { GITEE_READ_ACTIONS, normalizeGiteeReadResult } from './gitee-read.mjs';
@@ -262,7 +268,16 @@ function runtimeConfigOf(snapshot) {
  * 稳定对象、不能换，所以 service 一律经 `current()` 取值——**不许**在 `apply` 顶部解构这五个
  * 变量：解构出来的引用会永远指向装配那一刻的旧配置，AC-9 的"保存后立刻生效"就是这样失效的。
  */
-function buildFaces({ policy, resolved }) {
+function buildFaces({ policy, resolved, ctx = null }) {
+  const resolveChildEnv = ctx === null
+    ? null
+    : async () => {
+        const resolver = createGiteeResolveChildEnv({
+          broker: getOptionalBroker(ctx),
+          processEnv: process.env,
+        });
+        return resolver ? resolver() : {};
+      };
   const runner = createGiteeRunner({
     env: process.env,
     timeoutMs: resolved.timeoutMs,
@@ -270,6 +285,7 @@ function buildFaces({ policy, resolved }) {
     authEnv: resolved.authEnv,
     // 落盘凭据的处置策略归配置层（缺省 'warn'）：'block' 只留给合规场景。
     persistentTokenPolicy: resolved.persistentToken,
+    resolveChildEnv,
   });
   let git;
   try {
@@ -480,6 +496,7 @@ export function apply(ctx, rawConfig = {}) {
   let faces = buildFaces({
     policy,
     resolved: initialConfig === config ? resolved : resolveGiteeConfig({ config: initialConfig, env: process.env }),
+    ctx,
   });
 
   /** 重建读面：`refresh` 让 access 重读磁盘并重新合并，再重建 runner / 两个适配器 / 门禁。 */
@@ -487,7 +504,7 @@ export function apply(ctx, rawConfig = {}) {
     const merged = runtimeConfigOf(access.snapshot({ refresh: true }));
     const next = resolveGiteeConfig({ config: merged ?? {}, env: process.env });
     const previous = faces;
-    faces = buildFaces({ policy, resolved: next });
+    faces = buildFaces({ policy, resolved: next, ctx });
     return previous;
   }
 
@@ -640,10 +657,12 @@ export function apply(ctx, rawConfig = {}) {
     ctx.inject(['webServer'], (host) => mountConfigRoute(host));
   }
 
+  const disposeCredential = registerGiteeCredential(ctx);
   let disposed = false;
   const teardown = () => {
     if (disposed) return;
     disposed = true;
+    disposeCredential?.();
     for (const dispose of disposers.splice(0).reverse()) dispose?.();
     disposeRoute?.();
     disposeAdapter?.();
@@ -674,3 +693,4 @@ export * from './gitee-session.mjs';
 export * from './gitee-actions.mjs';
 export * from './gitee-snapshot.mjs';
 export * from './gitee-tools.mjs';
+export { GITEE_CREDENTIAL_DESCRIPTOR };

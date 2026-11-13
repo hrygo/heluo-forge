@@ -41,6 +41,7 @@ import { createCliAccess } from './cli-access.mjs';
 import { buildReadiness } from './readiness.mjs';
 import { CLI_API_PREFIX, createCliApi, toNodeRoute } from './http.mjs';
 import { ConfigStandard } from './runtime-config.mjs';
+import { DEVOPS_CREDENTIAL_DESCRIPTOR, registerDevopsCredential } from './credential-descriptor.mjs';
 
 /**
  * 本包自己的版本投影（TECHNICAL §3.5）：读自己的 `package.json`，**只**用来给页面页脚显示
@@ -129,6 +130,7 @@ export { ARTIFACT_KINDS, artifactPath, renderFrontMatter, writeArtifact } from '
 export { ENTRY_HELP, ENTRY_NAME, parseChangeId, registerEntry } from './entry.mjs';
 export { createDevopsFlow } from './flow.mjs';
 export { createDevopsReader } from './read.mjs';
+export { DEVOPS_CREDENTIAL_DESCRIPTOR } from './credential-descriptor.mjs';
 
 /** 流程协作者与只读适配器的形状判据：形状不对就不当注入，宁可退回自建或显式拒绝。 */
 const isFlowLike = (value) =>
@@ -740,7 +742,9 @@ export function apply(ctx, rawConfig = {}) {
       : [];
   // 命令面：`commands` 服务缺失时 registerEntry 返回空函数，entryStatus 已报 no-command-face。
   const disposeCommand = registerEntry(ctx, service);
+  const disposeCredential = registerDevopsCredential(ctx);
   const teardown = () => {
+    disposeCredential?.();
     disposers.forEach((dispose) => dispose?.());
     disposeCommand?.();
     disposeRoute?.();

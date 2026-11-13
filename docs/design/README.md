@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.42.0 |
+| 版本 | V0.44.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-13 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -42,6 +42,8 @@
 网关凭据设计横跨身份插件与网关配置，不属于单个包，单独成文：[网关凭据双模式支持设计](credential-modes.md)（CORP-DSH-DESIGN-001，V2.0.0 评审稿；采用路线 B 双因子协同，与应用凭据构成两类运行态，非运行时二选一回落；适配层 V1 由 `forge-iam` 受控模型运行时承载，`forge-gateway` 保留配置与抽离目标；上游规范未冻结）。
 
 DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识（UA）方案设计](client-identification.md)（CORP-DSH-DESIGN-015，V0.2.0 草案；需求方决定使用 DSH 默认 UA，由网关按关键字匹配，不改写 UA；候选关键字、网关能力和代理链路待确认）。
+
+企业设置菜单收敛与凭据统一跨多个插件与配置层，单独成文：[企业设置菜单统一与 Token 收敛详细设计](enterprise-menu-and-token-unification.md)（CORP-DSH-DESIGN-018，V2.0.0 **生效**；面向「智能个人助理 × 智能研发平台」一体双定位解耦架构，通用底座零研发耦合、3 步纯净引导、Token 技术细节渐进式披露、IAM 领域无关凭据槽位、`authEnv`/`persistentToken` 用户界面收敛，严格不修改 DSH 宿主；当前仅设计规范生效，包级源码与组合分层迁改尚待按 §8 实施，企业 OS 凭据库联调未开展）。
 
 市场的社区/官方源码调研与选型依据见[企业插件市场调研与落地建议](<../architecture/plugin-market-research.md>)；Gitee 侧能力澄清见[专题问询函](<../collaboration/gitee-market-clarification.md>)。原研究为历史证据，来源方向由 [ADR-11](<../architecture/plugin-registry-source-decision.md>)，轻量索引模式由 ADR-13 替代；契约与真实接入仍需分别验证；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。
 

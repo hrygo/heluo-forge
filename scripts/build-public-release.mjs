@@ -22,7 +22,7 @@ import { buildBundle, writeBundleArtifacts } from './build-enterprise-bundle.mjs
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { writeBundleTarball } from './lib/bundle-write.mjs';
-import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch } from './lib/private-bundle.mjs';
+import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch, patchEntriesOf } from './lib/private-bundle.mjs';
 import { scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
 
 export const PUBLIC_RELEASE_SCHEMA = 'heluo-public-release/1';
@@ -217,9 +217,11 @@ export function buildPublicRelease(input) {
     const tarballPath = join(staging, tarballName);
     renameSync(built.tarball, tarballPath);
     const entries = readBundleEntries(tarballPath, { withContent: true });
-    const patch = entries.find((entry) => entry.path === 'cordis.patch.yml');
-    if (patch === undefined) fail('ARTIFACT_INVALID', 'public tarball has no cordis.patch.yml');
-    const neutral = assertNeutralPatch(patch.content.toString('utf8'));
+    const patchEntries = patchEntriesOf(entries);
+    if (patchEntries.length === 0) fail('ARTIFACT_INVALID', 'public tarball has no bundle patch file');
+    // A bundle may ship a base layer plus optional layers; neutrality is judged
+    // on the set so a row that lives in an optional layer still counts.
+    const neutral = assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8')));
     if (neutral.length > 0) fail('ARTIFACT_NOT_NEUTRAL', `public tarball carries enterprise configuration:\n- ${neutral.join('\n- ')}`);
     assertIamValidatorMatches(entries, { toolRoot });
     const scan = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });

@@ -17,6 +17,7 @@
  * 一起交给了 forge-gitee，装配层保留同一个门禁适配（`createPolicyGuard`）不在这里复制第二份。
  */
 import { createCliRunner } from './cli-runner.mjs';
+import { createDevopsResolveChildEnv, getOptionalBroker } from './credential-descriptor.mjs';
 import { createDopAdapter } from './dop-adapter.mjs';
 import { describeRuntimeConfig, ENV_KEYS, resolveRuntimeConfig } from './runtime-config.mjs';
 import {
@@ -69,8 +70,15 @@ function normalizeResolution(config, env) {
  *
  * 不再有 `gh` 端口——仓库 / Issue / PR 的读写在 `@heluo/forge-gitee`，这里连 import 都不该出现。
  */
-export function createPorts({ runtime, execFile, now }) {
-  const runner = createCliRunner({ execFile, timeoutMs: runtime.timeoutMs });
+export function createPorts({ runtime, execFile, now, resolveChildEnv = null, processEnv = undefined }) {
+  // 注入环境必须同时是子进程基线环境：只把它喂给托管解析会让 standalone 的
+  // `DEVOPS_API_KEY`（以及 `env` 里的代理/CA）到不了子进程。
+  const runner = createCliRunner({
+    execFile,
+    timeoutMs: runtime.timeoutMs,
+    resolveChildEnv,
+    ...(processEnv === undefined ? {} : { processEnv }),
+  });
   return {
     runner,
     dop: createDopAdapter({ runner, dopBin: runtime.dopBin, dopEndpoint: runtime.dopEndpoint, now }),
@@ -107,13 +115,24 @@ export function createDevopsFlow({
   void policy;
   void guard;
 
-  const resolution = normalizeResolution(config, env);
+  // 注入的 `env` 是覆盖项而不是宿主环境的替代：只拿它当基线会让子进程丢掉
+  // PATH/HOME 等宿主变量（`dopBin` 可写裸名、Go CLI 要读 HOME），与 gitee 的
+  // `{ ...process.env, ...overrides }` 语义对齐。
+  const baseEnv = env === null || env === undefined ? process.env : { ...process.env, ...env };
+  const resolution = normalizeResolution(config, baseEnv);
   const runtime = resolution.ok === true ? resolution.value : null;
   const sourceType = text(runtime?.sourceType) === '' ? 'mock' : runtime.sourceType;
   // 可用性优先：调用方直接给的原因字符串/信封压过解析结果（装配层已做过三层合并，解析结论只是兜底）。
   const reasonOverride = typeof unavailable === 'string' && unavailable !== '' ? unavailable : null;
   const unavailableReason = resolution.ok === true ? null : (reasonOverride ?? resolution.reason);
-  const ports = runtime === null ? null : createPorts({ runtime, execFile, now });
+  const resolveChildEnv = createDevopsResolveChildEnv({
+    // 惰性取 broker：装配完成时 IAM 可能尚未 provide，不能把 null 固化进整条流程。
+    getBroker: () => getOptionalBroker(ctx),
+    processEnv: baseEnv,
+  });
+  const ports = runtime === null
+    ? null
+    : createPorts({ runtime, execFile, now, resolveChildEnv, processEnv: baseEnv });
   const reader = createDevopsReader({
     ports,
     reason: unavailableReason ?? FLOW_REASONS.CONFIG_MISSING,

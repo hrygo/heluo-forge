@@ -330,16 +330,19 @@ test('可选服务：webServer 缺失/晚到/前缀冲突都不塌装配，注�
       const first = mount();
       assert.equal(first.service.cliStatus().route, 'no-webserver');
       assert.equal(first.toolNames.length, 4);
-      assert.equal(first.injections.length, 1);
-      assert.deepEqual(first.injections[0].deps, ['webServer']);
+      // 两个可选服务各走一条 inject：webServer 与本插件的凭据 broker。
+      const webInjection = first.injections.find((entry) => entry.deps.includes('webServer'));
+      const brokerInjection = first.injections.find((entry) => entry.deps.includes('forgeIamCredentialBroker'));
+      assert.ok(webInjection, 'webServer 缺失时仍要登记注入点');
+      assert.ok(brokerInjection, 'IAM 行可能晚到：broker 必须经 inject 而不是一次性 get');
 
       // 2) 晚到：注入回调点火一次即注册；再点火不重复注册。
       const routes = [];
       const webServer = { register: (route) => (routes.push(route), () => {}) };
       const late = { get: (key) => (key === 'webServer' ? webServer : undefined) };
-      first.injections[0].callback(late);
+      webInjection.callback(late);
       assert.equal(routes.length, 1);
-      first.injections[0].callback(late);
+      webInjection.callback(late);
       assert.equal(routes.length, 1, '注册必须幂等');
       assert.equal(first.service.cliStatus().route, 'registered');
 

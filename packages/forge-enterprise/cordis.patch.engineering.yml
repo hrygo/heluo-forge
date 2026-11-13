@@ -1,0 +1,19 @@
+# @heluo/forge-enterprise 研发域叠加补丁层（CORP-DSH-DESIGN-018 §3.2）。
+#
+# 只在需要企业研发工具（DOP / Gitee / 交付 Skill 与「企业研发工具」设置分区）时叠加：
+#   dsh --profile <name> --patch <该文件>
+# 本层不重复声明 policy / IAM——它们属于基础层 `cordis.patch.yml`，两层同时生效。
+#
+# `heluo-engineering-ui` 是激活本包 `client.js` 的那一行：bundle 的 client 只随条目装载，
+# 因此通用底座（不叠加本层）没有该行，侧栏不会出现「企业研发工具」分区。
+- insert:
+    - id: heluo-engineering-ui
+      name: '@heluo/forge-enterprise'
+    - id: heluo-issue-delivery-skill
+      name: '@heluo/forge-enterprise/issue-delivery-skill'
+    - id: forge-devops
+      name: '@heluo/forge-devops'
+      config: {}
+    - id: heluo-gitee
+      name: '@heluo/forge-gitee'
+      config: {}

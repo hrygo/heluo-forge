@@ -8,7 +8,9 @@ import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
   isModelId,
+  MAX_MANUAL_MODELS,
   MAX_MODEL_ID_LENGTH,
+  mergeAvailableModels,
   normalizeGatewayBaseURL,
   validateManagedModels,
   parseCapacity,
@@ -27,7 +29,9 @@ export {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
   isModelId,
+  MAX_MANUAL_MODELS,
   MAX_MODEL_ID_LENGTH,
+  mergeAvailableModels,
   normalizeGatewayBaseURL,
   validateManagedModels,
   parseCapacity,
@@ -70,6 +74,10 @@ export const MESSAGES = Object.freeze({
   // Neither rejected nor provably unreachable: say so instead of guessing.
   ENTERPRISE_GATEWAY_CALL_FAILED: '本次请求未完成，请重试；持续失败请联系管理员。',
   ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
+  IAM_MANUAL_MODEL_INVALID: '模型 ID 不能为空且长度不得超过 200 个字符。',
+  IAM_MANUAL_MODEL_LIMIT: '手动添加的模型数量已达上限（最多 100 个）。',
+  IAM_MANUAL_MODEL_NOT_FOUND: '未找到指定的手动模型。',
+  IAM_MANUAL_MODEL_CONFLICT: '该模型已在当前目录中，请直接启用，无需重复添加。',
 });
 const error = code => new IamError(code, MESSAGES[code]);
 const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { code, message: MESSAGES[code] } } });
@@ -176,7 +184,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // `modelOptions` doubles as the enabled set: a key means "this person turned
   // this model on", and its value carries the overrides (possibly none). A
   // discovered model without a key is listed but refused for calls.
-  let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null; let catalogTruncated = 0;
+  let catalogModels = []; let manualModels = []; let manualTruncated = 0; let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null; let catalogTruncated = 0;
+  const syncRawModels = () => { rawModels = mergeAvailableModels(catalogModels, manualModels); };
   // A gateway-scoped revocation sticks until the identity, address or stored key
   // changes. Erasing the stored key needs the joint atomic adapter and stays
   // fail-closed (ADR-19); this mark only stops replay.
@@ -224,6 +233,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // Every path that drops the backend also drops the catalogue state with it,
   // so the account page can never say "ready" while nothing is callable.
   function clearCatalog(state = 'unconfigured', code = null) {
+    catalogModels = []; manualModels = []; manualTruncated = 0;
     rawModels = []; models = []; backend = undefined; catalogState = state; catalogError = code;
     retryAt = null; syncedAt = null;
   }
@@ -389,14 +399,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     try {
       const saved = await iam.readModelSelection();
       selectionError = null;
-      if (!saved || saved.saved !== true) { selectionSaved = false; modelOptions = {}; defaultModelId = null; return; }
+      if (!saved || saved.saved !== true) {
+        selectionSaved = false; modelOptions = {}; defaultModelId = null;
+        manualModels = []; manualTruncated = 0;
+        return;
+      }
       modelOptions = normalizeSelection(saved.models);
       defaultModelId = typeof saved.defaultModelId === 'string' ? saved.defaultModelId : null;
+      manualModels = Array.isArray(saved.manual) ? saved.manual.map((entry) => ({ ...entry })) : [];
+      manualTruncated = Number.isInteger(saved.manualTruncated) ? saved.manualTruncated : 0;
       selectionSaved = true;
     } catch (cause) {
       // A storage read failure must not look like "nothing saved": that would
       // silently re-enable a default the user may have turned off.
       selectionError = cause?.code ?? 'IAM_CREDENTIALS_UNAVAILABLE';
+      manualModels = []; manualTruncated = 0;
       selectionSaved = true;
     }
   }
@@ -405,7 +422,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   async function persistSelection() {
     if (typeof iam.saveModelSelection !== 'function') return true;
     try {
-      await iam.saveModelSelection({ models: modelOptions, defaultModelId });
+      await iam.saveModelSelection({ models: modelOptions, defaultModelId, manual: manualModels });
       selectionWriteError = null;
       selectionSaved = true;
       return true;
@@ -459,13 +476,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const { models: found, truncated } = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
       catalogTruncated = truncated;
       await loadSelection(); current();
-      rawModels = found;
+      catalogModels = found;
+      syncRawModels();
       // First run for this person: enable one model so the panel is usable
       // without any configuration. The admin's defaultModel wins when the
       // gateway still offers it, otherwise the first catalogue entry (the
       // catalogue is sorted, so "first" is stable across refreshes).
-      if (!selectionSaved && found.length > 0) {
-        const chosen = pickDefaultModel(found, config.defaultModel);
+      if (!selectionSaved && rawModels.length > 0) {
+        const chosen = pickDefaultModel(rawModels, config.defaultModel);
         if (chosen) {
           modelOptions = { [chosen]: {} }; defaultModelId = chosen;
           await persistSelection();
@@ -477,9 +495,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           if (flight?.promise === task) flight = { version: mine, promise: task };
           current();
         }
-      } else if (!defaultModelId || !enabled(defaultModelId) || !found.some(m => m.id === defaultModelId)) {
-        defaultModelId = found.find(m => enabled(m.id))?.id ?? Object.keys(modelOptions)[0] ?? null;
+      } else if (!defaultModelId || !enabled(defaultModelId) || !rawModels.some(m => m.id === defaultModelId)) {
+        defaultModelId = rawModels.find(m => enabled(m.id))?.id ?? Object.keys(modelOptions)[0] ?? null;
       }
+      syncRawModels();
       models = applyModelOptions(rawModels, modelOptions);
       const resolved = await createAdapter({
         host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveIamToken, resolveKey: createKeyResolver(connection),
@@ -487,7 +506,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
       syncedAt = Date.now(); publish();
       await syncHostDefault(); current();
-      return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
+      return { models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
     }).catch(cause => {
       // Our own cancellation is not a gateway outage. Telling the person to
       // check the gateway address after we stopped the request ourselves sends
@@ -630,6 +649,24 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     }
     catch { if (!disposed) { lease.abort(); cancelRetry(); markFailed('ENTERPRISE_MODELS_UNAVAILABLE'); publish(); } }
   })();
+  async function rebuildAdapter(stale) {
+    if (rawModels.length === 0) {
+      backend = undefined;
+      return null;
+    }
+    const connection = await iam.resolveGatewayConnection();
+    if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    const resolved = await createAdapter({
+      host,
+      config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
+      resolveIamToken,
+      resolveKey: createKeyResolver(connection),
+    });
+    if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    backend = resolved;
+    return resolved;
+  }
+
   /** Apply one enabled-set submission for the person who is signed in right now. */
   async function applyOptions(nextOptions) {
     if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
@@ -652,18 +689,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     // never let this person's options land in the next person's state.
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
     models = applyModelOptions(rawModels, modelOptions);
-    if (backend && rawModels.length > 0) {
+    if (rawModels.length > 0) {
       try {
-        const connection = await iam.resolveGatewayConnection();
-        if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
-        const resolved = await createAdapter({
-          host,
-          config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
-          resolveIamToken,
-          resolveKey: createKeyResolver(connection),
-        });
-        if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
-        backend = resolved;
+        await rebuildAdapter(stale);
       } catch (cause) {
         if (cause?.code === 'IAM_MODEL_CONTEXT_CHANGED') throw cause;
         /* keep existing backend if rebuild fails */
@@ -676,7 +704,83 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       ok: true, persisted,
       defaultModelId,
       enabled: Object.keys(modelOptions),
-      models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities }))
+      models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities }))
+    };
+  }
+
+  async function applyManualModel({ action, id } = {}) {
+    if (flight) {
+      try { await flight.promise; } catch {}
+    }
+    if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+    const denied = permit(sample());
+    if (denied) throw error(denied);
+    if (action !== 'add' && action !== 'remove') throw error('IAM_MANUAL_MODEL_INVALID');
+    const cleanId = typeof id === 'string' ? id.trim() : '';
+    if (!isModelId(cleanId)) throw error('IAM_MANUAL_MODEL_INVALID');
+
+    const activeId = identity(iam.getView());
+    const stale = () => { sample(); return disposed || identity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
+
+    if (action === 'add') {
+      if (catalogModels.some(item => item.id === cleanId) || manualModels.some(item => item.id === cleanId)) {
+        throw error('IAM_MANUAL_MODEL_CONFLICT');
+      }
+      if (manualModels.length >= MAX_MANUAL_MODELS) {
+        throw error('IAM_MANUAL_MODEL_LIMIT');
+      }
+      // Adding a record is not enabling it: the person still has to turn the
+      // model on explicitly, and the Host default must not move on its own.
+      manualModels = [...manualModels, { id: cleanId, addedAt: new Date().toISOString() }];
+    } else {
+      // A manual record must stay removable even after the catalogue starts
+      // returning the same id: otherwise it would shadow the gateway entry for
+      // good and the person could never clean it up.
+      const nextManual = manualModels.filter(item => item.id !== cleanId);
+      if (nextManual.length === manualModels.length) {
+        throw error('IAM_MANUAL_MODEL_NOT_FOUND');
+      }
+      manualModels = nextManual;
+      const nextOptions = { ...modelOptions };
+      delete nextOptions[cleanId];
+      modelOptions = nextOptions;
+    }
+
+    syncRawModels();
+    if (!defaultModelId || !enabled(defaultModelId) || !rawModels.some(item => item.id === defaultModelId)) {
+      defaultModelId = rawModels.find(item => enabled(item.id))?.id ?? Object.keys(modelOptions)[0] ?? null;
+    }
+
+    const persisted = await persistSelection();
+    if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    models = applyModelOptions(rawModels, modelOptions);
+
+    let rebuildError = null;
+    try {
+      await rebuildAdapter(stale);
+    } catch (cause) {
+      if (cause?.code === 'IAM_MODEL_CONTEXT_CHANGED') throw cause;
+      rebuildError = cause?.code ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
+    }
+
+    publish();
+    await syncHostDefault();
+    return {
+      ok: true,
+      persisted,
+      defaultModelId,
+      enabled: Object.keys(modelOptions),
+      models: models.map(({ id: modelId, name, source, contextWindow, maxTokens, inputModalities }) => ({
+        id: modelId,
+        name,
+        source: source ?? 'gateway',
+        contextWindow,
+        maxTokens,
+        inputModalities,
+      })),
+      manual: manualModels.map(entry => ({ ...entry })),
+      manualTruncated,
+      ...(rebuildError ? { rebuildError } : {}),
     };
   }
 
@@ -689,6 +793,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       optionsChain = run.catch(() => { });
       return run;
     },
+    updateManualModel(payload = {}) {
+      const run = optionsChain.then(() => applyManualModel(payload));
+      optionsChain = run.catch(() => { });
+      return run;
+    },
     getModelOptions: () => ({ ...modelOptions }),
     getView: () => {
       if (!inSample && !disposed) sample();
@@ -696,19 +805,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         managed: true, configured: true,
         state: catalogState, error: catalogError,
         ...(catalogTruncated > 0 ? { catalogTruncated } : {}),
+        ...(manualTruncated > 0 ? { manualTruncated } : {}),
         // Freshness: `stale` means the list is the last known catalogue and the
         // gateway could not be reached since; `retryAt` is the next automatic
         // attempt (absent when the failure is not retryable).
-        stale: catalogState === 'error' && models.length > 0,
+        stale: catalogState === 'error' && catalogModels.length > 0,
         retryAt, syncedAt,
         defaultModelId,
         // Fixed code describing the last read-only observation of the Host default.
         hostDefaultModel: hostDefault,
         enabled: Object.keys(modelOptions),
         selectionError: selectionError ?? selectionWriteError,
-        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
+        models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
           id,
           name,
+          source: source ?? 'gateway',
           contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
           maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
           inputModalities: inputModalities ?? ['text'],
@@ -724,7 +835,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     async dispose() {
       if (disposed) return;
       disposed = true; clearTimeout(timer); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
-      await observation; rawModels = []; models = []; backend = undefined;
+      await observation; catalogModels = []; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined;
     }
   };
 }

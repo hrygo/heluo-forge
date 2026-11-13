@@ -60,10 +60,37 @@ function patchText({ iamConfig = '', giteeConfig = '' } = {}) {
   ].join('\n');
 }
 
-function publicTarball({ patch, validatorOverride, omitValidator } = {}) {
+function layeredPatchText() {
+  return {
+    base: [
+      '# fixture base layer',
+      '- insert:',
+      '    - id: heluo-credentials-keychain',
+      "      name: '@heluo/forge-credentials-keychain'",
+      '    - id: heluo-iam',
+      "      name: '@heluo/forge-iam'",
+      '',
+    ].join('\n'),
+    overlay: [
+      '# fixture engineering layer',
+      '- insert:',
+      '    - id: heluo-gitee',
+      "      name: '@heluo/forge-gitee'",
+      '      config: {}',
+      '    - id: forge-devops',
+      "      name: '@heluo/forge-devops'",
+      '      config: {}',
+      '',
+    ].join('\n'),
+  };
+}
+
+function publicTarball({ patch, patches, validatorOverride, omitValidator } = {}) {
   const files = [
     { path: 'package.json', body: `${JSON.stringify({ name: ENTRY, version: PUBLIC_VERSION, license: 'Apache-2.0' }, null, 2)}\n` },
-    { path: 'cordis.patch.yml', body: patch ?? patchText() },
+    ...(patches === undefined
+      ? [{ path: 'cordis.patch.yml', body: patch ?? patchText() }]
+      : Object.entries(patches).map(([name, body]) => ({ path: name, body }))),
     { path: 'README.md', body: '# fixture enterprise bundle\n' },
     { path: 'src/index.mjs', body: 'export const fixture = true;\n' },
     ...['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs'].filter((name) => name !== omitValidator).map((name) => ({
@@ -454,4 +481,34 @@ test('patch injection keeps every other composition line intact', () => {
   assert.match(patch, /id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}/u);
   assert.match(patch, /id: heluo-gitee\n {6}name: '@heluo\/forge-gitee'\n {6}config:\n {8}host: "gitee\.corp\.example"/u);
   assert.equal((patch.match(/- id: /gu) ?? []).length, 4);
+});
+
+test('layer-aware gate: a two-layer bundle is neutral and gets its config injected where the row lives', (t) => {
+  const root = temp(t);
+  const patches = layeredPatchText();
+  const publicBytes = publicTarball({ patches: { 'cordis.patch.yml': patches.base, 'cordis.patch.engineering.yml': patches.overlay } });
+  const publicPath = join(root, 'layered-public.tgz');
+  writeFileSync(publicPath, publicBytes);
+
+  // The gate judges the set: neither layer alone carries all three rows.
+  const inspected = inspectPublicTarball(publicPath);
+  assert.deepEqual(inspected.problems, []);
+
+  const config = buildConfig(parseEnvConfig(ENV.join('\n')));
+  const built = buildPrivateTarball({
+    entries: readBundleEntries(publicBytes, { withContent: true }),
+    version: '0.1.1',
+    config,
+    baseSha256: createHash('sha256').update(publicBytes).digest('hex'),
+    requireVersionChange: true,
+  });
+  // The rows moved; the injected config must move with them.
+  const base = built.patches.get('cordis.patch.yml');
+  const overlay = built.patches.get('cordis.patch.engineering.yml');
+  assert.match(base, /id: heluo-iam/u);
+  assert.doesNotMatch(base, /heluo-gitee/u);
+  assert.match(overlay, /id: heluo-gitee/u);
+  assert.match(overlay, /gitee\.corp\.example/u, 'Gitee endpoint must land in the layer that declares the row');
+  assert.match(base, /iam\.corp\.example/u);
+  assert.doesNotMatch(overlay, /iam\.corp\.example/u);
 });

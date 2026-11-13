@@ -341,15 +341,26 @@ test('AC-7 反向: 目录为空/缺一条时拒绝挂载，且不留下半个工
 test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（全仓扫描）', async () => {
   const packagesUrl = new URL('../../', import.meta.url);
   const entries = await readdir(packagesUrl, { withFileTypes: true });
+  // 一个包可以有多层（底座 `cordis.patch.yml` + 叠加层 `cordis.patch.*.yml`），
+  // 判据按**包的补丁集合**求并集：单文件自带目录不再成立，但装完这份包必须自带。
   const layers = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    let files;
     try {
-      const text = await readFile(new URL(`${entry.name}/cordis.patch.yml`, packagesUrl), 'utf8');
-      layers.push({ package: entry.name, rows: parsePatch(text) });
+      files = (await readdir(new URL(`${entry.name}/`, packagesUrl)))
+        .filter((name) => /^cordis\.patch(\.[A-Za-z0-9-]+)?\.yml$/u.test(name))
+        .sort();
     } catch {
       continue;
     }
+    if (files.length === 0) continue;
+    const rows = [];
+    for (const file of files) {
+      const text = await readFile(new URL(`${entry.name}/${file}`, packagesUrl), 'utf8');
+      rows.push(...parsePatch(text));
+    }
+    layers.push({ package: entry.name, files, rows });
   }
   assert.ok(layers.length >= 2, '至少本包与 forge-devops 各有补丁层');
 

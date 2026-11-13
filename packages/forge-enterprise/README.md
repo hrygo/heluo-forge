@@ -1,6 +1,6 @@
 # @heluo/forge-enterprise
 
-状态：可用（组合骨架：按需企业 Skill 与规范条款装配、五类开关声明与判定、官方行回灌检测已实现；官方行默认禁用、五个 Host 插件最小挂载；SDD 已于 2026-11-03 退役（库/CLI 与 bin 已删除，不作为插件挂载）；最终制品验收见下文；企业环境接入、运行时模型面与业务行待实施）
+状态：可用（组合骨架：按需企业 Skill 与规范条款装配、五类开关声明与判定、官方行回灌检测已实现；官方行默认禁用、通用底座与研发叠加层两层挂载；SDD 已于 2026-11-03 退役（库/CLI 与 bin 已删除，不作为插件挂载）；最终制品验收见下文；企业环境接入、运行时模型面与业务行待实施）
 
 | 项 | 内容 |
 |---|---|
@@ -8,7 +8,7 @@
 | 职责 | 按行组装企业能力、角色 preset 与默认依赖检查；按需挑选并注册企业 Skill 与规范条款；声明五类开关（只读/普通研发写/AI 发布/人工 review/观察）并做 fail-closed 判定 |
 | 不负责 | 不重复实现成员包逻辑，不承载业务接口，不做路径门禁（由 [@heluo/forge-policy](../forge-policy/README.md) 执行） |
 | 详细设计 | [详细设计](../../docs/design/plugins/forge-enterprise.md)（草案；§5.2 按需企业 Skill 与规范条款加载） |
-| 实现状态 | 条款包加载、适用性选择、预算与加载记录、按需注册已实现并有离线用例；[cordis.patch.yml](cordis.patch.yml) 的官方行禁用层已实现并在本机核验，且已把官方明文凭据提供方 `credentials` 一并禁用（组合层对照见[详细设计 §5.1.1](../../docs/design/plugins/forge-enterprise.md)）；`insert:` 段挂五个 Host 插件（凭据/策略/IAM/DevOps/Gitee）＋本包的正式研发 Skill 子路径入口 `@heluo/forge-enterprise/issue-delivery-skill`（r12，随包资源见 [skills/](skills/)）；DevOps 与 Gitee 行自 r13 起进闭包并显式写 `config: {}`（缺席 config 会被 `ConfigStandard` 拒、整行静默不激活）；SDD 已于 2026-11-03 从依赖与 bin 移除并删除包，历史市场包按设计不挂，运行时模型面与企业环境接入未实现 |
+| 实现状态 | 条款包加载、适用性选择、预算与加载记录、按需注册已实现并有离线用例；[cordis.patch.yml](cordis.patch.yml) 的官方行禁用层已实现并在本机核验，且已把官方明文凭据提供方 `credentials` 一并禁用（组合层对照见[详细设计 §5.1.1](../../docs/design/plugins/forge-enterprise.md)）；补丁分两层：[cordis.patch.yml](cordis.patch.yml) 是 `dsh.bundle.patch` 指向的通用底座，只挂凭据、策略与 IAM；[cordis.patch.engineering.yml](cordis.patch.engineering.yml) 是研发叠加层，挂「企业研发工具」容器行、正式研发 Skill 子路径入口 `@heluo/forge-enterprise/issue-delivery-skill`（随包资源见 [skills/](skills/)）与 DevOps、Gitee 两行（显式写 `config: {}`：缺席 config 会被 `ConfigStandard` 拒、整行静默不激活）；SDD 已于 2026-11-03 从依赖与 bin 移除并删除包，历史市场包按设计不挂，运行时模型面与企业环境接入未实现 |
 
 ## 当前实现
 
@@ -45,7 +45,9 @@
 - IAM、policy 与必要审计缺失时，拒绝相应企业调用；可关闭不等于关闭后仍保留权限。
 - 角色 preset 只调整工具可见性与提示，不替代服务端授权。
 - 条款责任人与维护者由企业侧指定；本包只按索引标注呈现，不代替责任人裁定。
-- `cordis.patch.yml` 的 `insert:` 段只挂五个有真实 Host 职责的插件（凭据/策略/IAM/DevOps/Gitee），外加本包自己的 Skill 子路径入口 `@heluo/forge-enterprise/issue-delivery-skill`（同一 tarball 内的 `exports`，缺 `skills` 服务时按 `inject` 不激活）；SDD 已退役并从包中删除，不补空 `apply` 伪装成插件；网关与品牌仍只有 README，不预建指向未实现包的入口。
+- 通用底座（`cordis.patch.yml`）只挂有真实 Host 职责的通用插件——凭据、策略、IAM；研发域成员（DevOps、Gitee、研发 Skill 与「企业研发工具」容器）一律进叠加层 `cordis.patch.engineering.yml`，通用用户因此看不到研发设置入口。
+- 研发组合的安装方式：先装 bundle（自动应用底座），再以 `dsh --profile <name> --patch <包目录>/cordis.patch.engineering.yml` 叠加。`heluo-engineering-ui` 是激活本包 [client.js](client.js) 的那一行——bundle 的 client 只随条目装载，底座没有该行，所以通用用户不会出现空的「企业研发工具」分区。
+- 叠加层里的 Skill 子路径入口指向同一 tarball 内的 `exports`（缺 `skills` 服务时按 `inject` 不激活）；SDD 已退役并从包中删除，不补空 `apply` 伪装成插件；网关与品牌仍只有 README，不预建指向未实现包的入口。
 - 禁用实验失败即暂停 O3，不 patch 内核；`desktop` profile 行 id 与运行时模型面待核验。
 
 

@@ -57,7 +57,11 @@ async function activateInstalled(label, host) {
   ]);
   const installedPath = realpathSync(bundleDir);
   const installedRequire = createRequire(pathToFileURL(join(installedPath, 'package.json')));
-  const patch = parsePatchLayer(readFileSync(join(bundleDir, 'cordis.patch.yml'), 'utf8'));
+  // 通用底座与研发叠加层分两个文件：夹具必须按真实安装方式把两层都装进来，
+  // 否则会用一个"缺 DevOps/Gitee"的组合冒充企业研发组合。
+  const basePatch = parsePatchLayer(readFileSync(join(bundleDir, 'cordis.patch.yml'), 'utf8'));
+  const overlayPatch = parsePatchLayer(readFileSync(join(bundleDir, 'cordis.patch.engineering.yml'), 'utf8'));
+  const patch = { inserted: [...basePatch.inserted, ...overlayPatch.inserted] };
   const ctx = new Context();
   let unloaded = false;
   const ids = [];
@@ -106,11 +110,23 @@ async function activateInstalled(label, host) {
       ids.push(await ctx.loader.create({ id: row.id, name: row.name, config }));
     }
     await ctx.loader.await();
-    // D-3：装上的是**六行**组合（凭据/策略/IAM/Skill/DevOps/Gitee），不是四行加两个包名。
+    // 底座三行（凭据/策略/IAM）＋叠加层四行（容器/Skill/DevOps/Gitee），行 id 不相交。
     record(
-      `${label}-patch-mounts-six-members`,
-      patch.inserted.length === 6 && new Set(patch.inserted.map((row) => row.id)).size === 6 && resolved.length === 6,
+      `${label}-patch-mounts-base-and-overlay`,
+      patch.inserted.length === 7 && new Set(patch.inserted.map((row) => row.id)).size === 7 && resolved.length === 7,
       { ids: patch.inserted.map((row) => row.id) },
+    );
+    // 分层本身要被证明：底座不得偷带研发成员，叠加层不得重复底座行。
+    const baseIds = basePatch.inserted.map((row) => row.id);
+    const overlayIds = overlayPatch.inserted.map((row) => row.id);
+    const engineeringIds = ['heluo-engineering-ui', 'heluo-issue-delivery-skill', 'forge-devops', 'heluo-gitee'];
+    record(
+      `${label}-layers-are-disjoint`,
+      baseIds.length === 3
+        && overlayIds.length === 4
+        && engineeringIds.every((id) => overlayIds.includes(id) && !baseIds.includes(id))
+        && overlayIds.every((id) => !baseIds.includes(id)),
+      { baseIds, overlayIds },
     );
     // 失败行要给出**原因**：只报 phase=3 的探针会把"配置被拒"和"依赖缺失"混成一句话。
     const phases = [];
@@ -217,8 +233,12 @@ function catalogFromPatch(text) {
   return catalog;
 }
 
-function dump(patch) {
-  return spawnSync(dsh, ['--profile', profile, ...(patch ? ['--patch', patch] : []), '--dump-config'], { env: isolatedEnv, encoding: 'utf8' });
+function dump(patches) {
+  const layers = patches === undefined || patches === null ? [] : (Array.isArray(patches) ? patches : [patches]);
+  const args = ['--profile', profile];
+  for (const layer of layers) args.push('--patch', layer);
+  args.push('--dump-config');
+  return spawnSync(dsh, args, { env: isolatedEnv, encoding: 'utf8' });
 }
 function rows(text) {
   const found = new Map();
@@ -266,7 +286,10 @@ try {
   const closure = auditReleaseClosure(bundleDir, { allowInstalledBinLinks: true });
   record('installed-final-tarball-closure', closure.length === 0, { errors: closure, isolatedEmptyCache: true, registryUnreachable: true });
   const base = dump();
-  const patched = dump(join(bundleDir, 'cordis.patch.yml'));
+  const patched = dump([
+    join(bundleDir, 'cordis.patch.yml'),
+    join(bundleDir, 'cordis.patch.engineering.yml'),
+  ]);
   const baselineRows = rows(base.stdout ?? '');
   const patchedRows = rows(patched.stdout ?? '');
   const present = officialRows.filter((id) => baselineRows.has(id));
@@ -277,8 +300,8 @@ try {
   // 改写的官方 bundle 头，两者都以补丁文件名结尾，必须区分。
   const patchedLines = (patched.stdout ?? '').split('\n');
   const sectionAt = patchedLines.reduce((found, line, index) => (line.startsWith('# == ') && line.includes('cordis.patch.yml') && !line.includes('patched by') ? index : found), -1);
-  const sectionEnd = sectionAt < 0 ? -1 : patchedLines.findIndex((line, index) => index > sectionAt && line.startsWith('# == '));
-  const section = sectionAt < 0 ? '' : patchedLines.slice(sectionAt, sectionEnd < 0 ? patchedLines.length : sectionEnd).join('\n');
+  // 两层补丁各有一个分段；策略与研发成员分别在两段里，按整段合并统计。
+  const section = sectionAt < 0 ? '' : patchedLines.slice(sectionAt).join('\n');
   const rowCount = (id) => (section.match(new RegExp(`^-\\s*id:\\s*${id}\\s*$`, 'gmu')) ?? []).length;
   const actions = [...section.matchAll(/^\s*-\s*action:\s*([\w.]+)\s*$/gmu)].map((match) => match[1]);
   const expectedActions = ['change.read', 'change.list', 'gitee.repository.read', 'gitee.issue.read', 'gitee.pr.read', 'gitee.delivery.judge'];
@@ -289,8 +312,9 @@ try {
       && actions.join() === expectedActions.join()
       && rowCount('forge-devops') === 1
       && rowCount('heluo-gitee') === 1
+      && rowCount('heluo-engineering-ui') === 1
       && !/isolate/u.test(section),
-    { policyRows: rowCount('heluo-policy'), actions, devopsRows: rowCount('forge-devops'), giteeRows: rowCount('heluo-gitee') },
+    { policyRows: rowCount('heluo-policy'), actions, devopsRows: rowCount('forge-devops'), giteeRows: rowCount('heluo-gitee'), containerRows: rowCount('heluo-engineering-ui') },
   );
   await activateInstalled('install', host);
   const upgraded = buildEnterpriseBundle({ destination: join(dir, 'pack-v2'), version: '0.1.1' });

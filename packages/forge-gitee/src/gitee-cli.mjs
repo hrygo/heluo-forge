@@ -100,6 +100,19 @@ export const ENV_ALLOWLIST = Object.freeze([
   'NO_COLOR',
   'CLICOLOR',
   'CI',
+  // 企业出口代理（大小写两种写法在真实环境里都会出现）：git 的 HTTPS 走 libcurl，
+  // 剥掉代理会让内网仓库从“能用”变成“连不上”。
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy',
+  // 企业私有 CA / 证书目录。
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
   // 唯一凭据例外：本 CLI 的认证模型（规格 §1.3），见上方白名单注释。
   'GITEE_TOKEN',
 ]);
@@ -234,6 +247,9 @@ function normalizeTokens(tokens) {
 /** 凭据的"形状"兜底：即使没点名变量（默认 authEnv 为空），输出里形似令牌的串也要抹掉。 */
 const SECRET_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|gitee_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,})\b/g;
 
+/** 代理 URL 内嵌凭据（`//user:pass@proxy:3128` 形态）不是令牌形状，但同样是凭据。 */
+const PROXY_CREDENTIALS = /(\/\/)[^/@\s]+@/g;
+
 /**
  * 输出脱敏：把令牌值逐字替换成 `***`，再按形状兜底。
  *
@@ -247,7 +263,7 @@ export function scrubSecrets(text, tokens) {
   const list = normalizeTokens(tokens);
   let scrubbed = source;
   for (const token of list) scrubbed = scrubbed.split(token).join(REDACTED);
-  return scrubbed.replace(SECRET_SHAPE, REDACTED);
+  return scrubbed.replace(SECRET_SHAPE, REDACTED).replace(PROXY_CREDENTIALS, '$1***@');
 }
 
 /** 默认读文件：任何错误都当"没有这个文件"，检测不该因为权限/缺失而中断。 */
@@ -575,8 +591,12 @@ export function createGiteeRunner({
   gitBin = DEFAULT_GIT_BIN,
   gitCwd,
   persistentTokenPolicy = DEFAULT_PERSISTENT_TOKEN_POLICY,
+  resolveChildEnv = null,
 } = {}) {
   assertOptions({ execFile, timeoutMs, maxOutputBytes, now });
+  if (resolveChildEnv !== undefined && resolveChildEnv !== null && typeof resolveChildEnv !== 'function') {
+    throw new GiteeCliError('resolveChildEnv 必须是函数或未提供');
+  }
   const authNames = normalizeAuthEnv(authEnv);
   if (typeof readFile !== 'function') throw new GiteeCliError('readFile 必须是函数（凭据自检注入点）');
   if (typeof gitBin !== 'string' || gitBin.trim().length === 0) {
@@ -622,8 +642,47 @@ export function createGiteeRunner({
 
   /** 两个命令面共用的执行体：唯一调子进程的地方、有界、出口统一脱敏。 */
   async function execute(bin, args, { cwd, extraEnv } = {}) {
+    let resolvedEnv = {};
+    const extraTokens = [];
+    if (typeof resolveChildEnv === 'function') {
+      let resolved;
+      try {
+        resolved = await resolveChildEnv();
+      } catch (error) {
+        const code = typeof error?.code === 'string' && error.code.length > 0 ? error.code : 'CREDENTIAL_UNAVAILABLE';
+        const message = typeof error?.message === 'string' && error.message.length > 0 ? error.message : code;
+        throw new GiteeCliError(message, { code, reason: code, status: 'denied' });
+      }
+      if (resolved !== null && typeof resolved === 'object' && resolved.ok === false) {
+        const code = typeof resolved.code === 'string' && resolved.code.length > 0 ? resolved.code : 'CREDENTIAL_UNAVAILABLE';
+        const message = typeof resolved.message === 'string' && resolved.message.length > 0 ? resolved.message : code;
+        throw new GiteeCliError(message, { code, reason: code, status: 'denied' });
+      }
+      if (resolved !== null && typeof resolved === 'object') {
+        const allowedKeys = new Set([...ENV_ALLOWLIST, ...authNames]);
+        for (const [key, rawVal] of Object.entries(resolved)) {
+          if (!allowedKeys.has(key)) continue;
+          const val = asText(rawVal);
+          if (val !== null) {
+            resolvedEnv[key] = val;
+            if (key === 'GITEE_TOKEN' || authNames.includes(key)) {
+              extraTokens.push(val);
+            }
+          }
+        }
+      }
+    }
+
+    const effectiveEnv = {
+      ...childEnv,
+      ...(extraEnv ?? {}),
+      // 托管令牌最后合并：调用点给的覆盖不得静默顶掉与 owner 绑定的 hosted 值。
+      // 纯防御性排序 —— 当前 `extraEnv` 只有 `GIT_TERMINAL_PROMPT`，与 resolvedEnv 不相交；
+      // 将来把调用点覆盖接进来时，这个次序保证它不会静默盖掉 hosted 值。
+      ...resolvedEnv,
+    };
     const options = {
-      env: extraEnv === undefined ? childEnv : { ...childEnv, ...extraEnv },
+      env: effectiveEnv,
       encoding: 'utf8',
       timeout: timeoutMs,
       killSignal: 'SIGTERM',
@@ -641,11 +700,12 @@ export function createGiteeRunner({
       ? { ...fromPromiseResult(outcome.promiseResult, maxOutputBytes), durationMs }
       : buildResult(outcome, maxOutputBytes, durationMs);
 
+    const allTokens = extraTokens.length > 0 ? [...tokens, ...extraTokens] : tokens;
     // 出口统一脱敏：适配器与工具面拿到的 stdout/stderr 里不该出现令牌（AC-22）。
     return {
       ...result,
-      stdout: scrubSecrets(result.stdout, tokens),
-      stderr: scrubSecrets(result.stderr, tokens),
+      stdout: scrubSecrets(result.stdout, allTokens),
+      stderr: scrubSecrets(result.stderr, allTokens),
     };
   }
 
