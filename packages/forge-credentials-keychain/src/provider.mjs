@@ -1,6 +1,7 @@
 import { NAMESPACE_PATTERN } from './text.mjs';
 
-const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const STORAGE_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const REF_PATTERN = STORAGE_REF_PATTERN;
 const KEY_PATTERN = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
 
 export class KeychainProviderError extends Error {
@@ -23,11 +24,15 @@ function assertBackend(backend) {
   }
 }
 
-function validateRef(ref) {
-  if (typeof ref !== 'string' || !REF_PATTERN.test(ref)) {
+export function validateStorageRef(ref) {
+  if (typeof ref !== 'string' || !STORAGE_REF_PATTERN.test(ref)) {
     throw new KeychainProviderError('KEYCHAIN_REF_INVALID', 'credential ref must match the environment-variable grammar');
   }
   return ref;
+}
+
+function validateRef(ref) {
+  return validateStorageRef(ref);
 }
 
 function validateRecordKey(key) {
