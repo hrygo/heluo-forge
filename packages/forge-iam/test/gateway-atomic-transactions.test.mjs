@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 import { createGatewayCredentialStore, GATEWAY_RECORD_KEY, GATEWAY_REF } from '../src/store.mjs';
 import { createAtomicGatewayFixture, seedLegacyGateway } from './support/atomic-gateway.mjs';
 
-const input = { value: `uag-${'a'.repeat(32)}`, ownerSubject: 'synthetic-user', enteredAt: '2026-11-02T00:00:00.000Z' };
+const input = { value: `uag-${'a'.repeat(32)}`, ownerSubject: 'synthetic-user', issuer: 'https://iam.corp.example', baseURL: 'https://gateway.corp.example/v1', enteredAt: '2026-11-02T00:00:00.000Z' };
 const replacement = { ...input, value: `uag-${'b'.repeat(32)}` };
 const deferred = () => Promise.withResolvers();
 function fixture() {
@@ -30,7 +31,9 @@ test('explicit joint capability commits metadata/value together without legacy w
   assert.equal(f.adapter.attempts, 1);
   assert.equal(f.adapter.commits, 1);
   assert.equal(f.pair().value === input.value, true);
-  assert.equal(f.pair().record.payload.version, 2);
+  assert.equal(f.pair().record.payload.version, 3);
+  assert.equal(f.pair().record.payload.issuer, input.issuer);
+  assert.equal(f.pair().record.payload.baseURL, input.baseURL);
   assert.match(f.pair().record.payload.writeOperationId, /^[0-9a-f-]{36}$/);
   assert.match(f.pair().record.payload.valueDigest, /^[0-9a-f]{64}$/);
   assert.doesNotMatch(JSON.stringify(f.pair().record), /uag-/);
@@ -45,16 +48,29 @@ test('identical value/owner/timestamp saves still acquire distinct generations',
   assert.equal(f.adapter.commits, 2);
 });
 
-for (const operation of ['save', 'clear']) {
-  test(`a verified capability cannot ${operation} or migrate legacy V1`, async () => {
-    const f = fixture(); seedLegacyGateway(f.credentials, input);
-    const before = f.pair();
-    await assert.rejects(() => operation === 'save' ? f.store.save(replacement) : f.store.clear(), { code: 'IAM_GATEWAY_LEGACY_READ_ONLY' });
-    unchanged(f, before);
-    assert.equal(f.adapter.commits, 0);
-    assert.deepEqual(f.legacyWrites, []);
-  });
-}
+test('a v1 pair is never migrated implicitly and stays read-only', async () => {
+  const f = fixture(); seedLegacyGateway(f.credentials, input);
+  const before = f.pair();
+  await assert.rejects(f.store.save(replacement), { code: 'IAM_GATEWAY_LEGACY_READ_ONLY' });
+  await assert.rejects(f.store.clear(), { code: 'IAM_GATEWAY_LEGACY_READ_ONLY' });
+  unchanged(f, before);
+  assert.equal(f.adapter.commits, 0);
+  assert.deepEqual(f.legacyWrites, []);
+});
+
+test('a v2 pair is replaceable once by an explicit re-entry (issue #226)', async () => {
+  const f = fixture();
+  // A record written before the binding existed: digest valid, no issuer.
+  f.credentials.records.set(GATEWAY_RECORD_KEY, { kind: 'grant', payload: {
+    version: 2, ownerSubject: input.ownerSubject, enteredAt: input.enteredAt,
+    writeOperationId: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
+    valueDigest: createHash('sha256').update(input.value).digest('hex'),
+  } });
+  f.credentials.refs.set(GATEWAY_REF, input.value);
+  await f.store.save(replacement);
+  assert.equal(f.pair().record.payload.version, 3);
+  assert.equal(f.adapter.commits, 1);
+});
 
 for (const state of ['orphan', 'unknown-version', 'wrong-kind', 'corrupt']) {
   test(`inconsistent ${state} pair cannot be repaired or silently claimed`, async () => {

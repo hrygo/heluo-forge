@@ -15,6 +15,8 @@ const config = {
   authorizationEndpoint: 'https://iam.corp.example/authorize',
   tokenEndpoint: 'https://iam.corp.example/token', jwksUri: 'https://iam.corp.example/jwks',
   redirectUri: 'http://127.0.0.1:9/iam/callback', defaultProvider: 'enterprise', defaultModel: 'corp-model',
+  // The enterprise preset owns the gateway target (issue #226).
+  managedModels: { baseURL: 'https://gateway.corp.example/v1' },
 };
 const settle = () => new Promise(setImmediate);
 

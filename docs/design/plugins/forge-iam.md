@@ -506,7 +506,20 @@ DSH 凭据存储 (ctx.credentials)
 | **授权码与 Verifier** | 仅 Host 内存活跃 Attempt | 单次尝试有效（≤ 300 秒） | 兑换一次即作废；超时立即从内存销毁 |
 | **ID Token** | 仅 `logoutMode=rp` 落盘，其余仅内存验签 | 仅维持至会话退出 | 验签失败直接阻断登录；不向第三方泄露 |
 | **最小主体 Principal** | 内存结构体 `{ issuer, subject }` | 会话运行期 | 严禁向模型上下文注入真实姓名/工号等 PII 数据 |
-| **网关元数据** | `GrantRecord` (`heluo-iam/gateway-credential`)| 随个人访问凭证同步存在 | 换人登录检测属主不匹配时立即阻断网关调用 |
+| **网关元数据** | `GrantRecord` (`heluo-iam/gateway-credential`) | 随个人访问凭证同步存在 | 换人登录检测属主不匹配时立即阻断网关调用 |
+| **凭据绑定** | 网关元数据内的 `issuer`、`baseURL` 与 `ownerSubject`（记录版本 3） | 与企业配置的权威地址、可信 IAM issuer 及当前主体同生命周期 | 任一项变化或无法证明时进入 `rebind-required`，阻止发送并要求一次性重录；旧 Key 不发往新目标 |
+
+### 6.2.1 个人访问凭证与目标绑定
+
+网关个人访问凭证只有在能证明"它属于哪个目标"时才可使用。绑定的三个锚点全部由 Host 读取，不来自界面输入：
+
+| 锚点 | 来源 | 说明 |
+|---|---|---|
+| 可信 issuer | 归一化配置的 `issuer` 或经校验的发现元数据 | 授权文档与发现地址都不作为 issuer 锚点 |
+| 目标地址 | 企业配置的权威网关地址；未配置时取保存时归一化的地址 | 权威地址存在时，保存请求携带的地址不一致则整单拒绝，不写入该请求里的 Key |
+| 主体 | 当前授权记录的主体 | 换人登录即不匹配，保持既有阻断 |
+
+判定规则：记录版本 3 且三个锚点全部一致才视为已绑定；版本 1/2 的记录无法证明绑定，一律进入 `rebind-required`。绑定不成立时发送路径直接以 `IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED` 拒绝，**不发送、不猜测、不自动迁移**；旧 Key 保留在存储中，只由用户显式重录替换。企业配置从 A 切到 B 再切回 A 时，当前记录绑定的是 B，因此 A 同样需要一次重录，而不是沿用"存储中的某个 Key"。地址复用（同一 URL 背后换了网关实例）无法由本地证明，降级为按运维窗口轮换凭证。
 
 ### 6.3 值级加密与存储后端
 
@@ -866,6 +879,9 @@ flowchart TD
 | `ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED` | `credential_revoked` | 401 | 个人访问凭证已被回收，请联系管理员重新申领。 |
 | `ENTERPRISE_GATEWAY_FORBIDDEN` | 403、`permission_error`、`PERMISSION` | 403 | 当前账号没有此模型的使用权限，请联系管理员。 |
 | `ENTERPRISE_GATEWAY_CREDENTIAL_SUSPENDED` | `credential_suspended` | 403 | 个人访问凭证已被暂停，请联系管理员。 |
+| `IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED` | 记录缺 issuer 或地址、issuer 或权威地址已变化（版本 1/2 记录一律如此） | 409 | 网关地址或企业身份已变更，请重新录入个人访问凭证。 |
+| `IAM_GATEWAY_URL_MISMATCH` | 保存请求携带的地址与企业配置的权威地址不一致 | 400 | 保存的网关地址与企业配置不一致，本次未保存凭证。 |
+| `IAM_GATEWAY_BINDING_INCOMPLETE` | 缺少可信 issuer 或目标地址，无法建立绑定 | 400 | 缺少可信的企业身份或网关地址，凭证未保存。 |
 | `ENTERPRISE_GATEWAY_IDENTITY_MISMATCH` | `iam_token_mismatch` | 403 | 登录身份与凭证绑定账号不一致，请重新登录后重试。 |
 | `ENTERPRISE_GATEWAY_CLIENT_NOT_RECOGNIZED` | `client_not_recognized` | 403 | 当前客户端的标识未被企业网关识别，请升级客户端或联系管理员核准。 |
 | `ENTERPRISE_MODEL_NOT_ALLOWED` | `model_not_allowed`、本地门禁拒绝 | 403 | 此模型未由企业开放，请选择企业提供的模型。 |

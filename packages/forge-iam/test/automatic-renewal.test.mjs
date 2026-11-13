@@ -21,7 +21,8 @@ test('a running model call survives the original expiry when the same session ca
     refreshExpiresAt: new Date(deadline + 60_000).toISOString(),
   });
   seedGateway(credentials, {
-    value: `uag-${'a'.repeat(32)}`, ownerSubject: 'E1001', enteredAt: new Date().toISOString(),
+    value: `uag-${'a'.repeat(32)}`, ownerSubject: 'E1001', issuer: oidc.issuer,
+    baseURL: 'https://gateway.corp.example/v1', enteredAt: new Date().toISOString(),
   });
   const config = {
     ...oidc.endpoints, clientId: oidc.clientId, redirectUri: 'http://127.0.0.1:4567/iam/callback',

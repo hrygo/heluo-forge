@@ -14,7 +14,12 @@ const GATEWAY_RECORD_KIND = 'grant';
 /** V0.3.x releases mirrored the IAM access token here; V1 no longer writes it. */
 export const LEGACY_TOKEN_REF = 'ENTERPRISE_ACCESS_TOKEN';
 
-const GATEWAY_VERSION = 2;
+// v3 carries the target binding (issuer + normalized address); v2 records stay
+// readable and replaceable so the one-time re-entry works, v1 stays read-only
+// because it has no value digest to verify.
+const GATEWAY_VERSION = 3;
+const GATEWAY_UNBOUND_VERSION = 2;
+const GATEWAY_LEGACY_VERSION = 1;
 const WRITE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const valueDigest = (value) => createHash('sha256').update(value).digest('hex');
 const gatewayTombstone = () => ({
@@ -297,7 +302,7 @@ function parseGatewayCredential(payload) {
     return { ok: false, errors: ['gateway credential must be an object'] };
   }
   const errors = [];
-  if (payload.version !== GATEWAY_VERSION) errors.push('unsupported gateway credential version');
+  if (![GATEWAY_LEGACY_VERSION, GATEWAY_UNBOUND_VERSION, GATEWAY_VERSION].includes(payload.version)) errors.push('unsupported gateway credential version');
   for (const field of ['ownerSubject', 'enteredAt']) {
     if (!isNonEmptyString(payload[field])) errors.push(`gateway credential ${field} must be a non-empty string`);
   }
@@ -310,9 +315,14 @@ function parseGatewayCredential(payload) {
     try { if (normalizeGatewayBaseURL(payload.baseURL) !== payload.baseURL) errors.push('invalid gateway address'); }
     catch { errors.push('invalid gateway address'); }
   }
-  if (payload.version === GATEWAY_VERSION) {
+  if (payload.version !== GATEWAY_LEGACY_VERSION) {
     if (typeof payload.writeOperationId !== 'string' || !WRITE_ID_PATTERN.test(payload.writeOperationId)) errors.push('invalid gateway write generation');
     if (typeof payload.valueDigest !== 'string' || !/^[0-9a-f]{64}$/.test(payload.valueDigest)) errors.push('invalid gateway value binding');
+  }
+  // A bound record must state which issuer and which exact target it belongs to.
+  if (payload.version === GATEWAY_VERSION) {
+    if (!isNonEmptyString(payload.issuer)) errors.push('gateway credential issuer is required');
+    if (!isNonEmptyString(payload.baseURL)) errors.push('gateway credential address is required');
   }
   if (errors.length) return { ok: false, errors };
   return { ok: true, value: payload };
@@ -374,8 +384,13 @@ export function createGatewayCredentialStore(credentials, options = {}) {
     if (isGatewayTombstone(pair.record) && pair.value === undefined) return;
     if (pair.record?.kind !== GATEWAY_RECORD_KIND) throw readOnly();
     const parsed = parseGatewayCredential(pair.record.payload);
-    if (!parsed.ok || parsed.value.version !== GATEWAY_VERSION
-      || !isNonEmptyString(pair.value)
+    // v1 has no value digest: it is reported invalid and stays read-only. A v2
+    // record cannot prove its target either, but it must be replaceable once —
+    // otherwise an unbound credential could never be repaired in place (issue
+    // #226). Nothing is migrated automatically: only an explicit save/clear
+    // writes a bound v3 record.
+    if (!parsed.ok || parsed.value.version === GATEWAY_LEGACY_VERSION) throw readOnly();
+    if (!isNonEmptyString(pair.value)
       || parsed.value.valueDigest !== valueDigest(pair.value)) throw readOnly();
   }
 
@@ -436,6 +451,12 @@ export function createGatewayCredentialStore(credentials, options = {}) {
     if (record.kind !== GATEWAY_RECORD_KIND) return { ok: false, reason: 'wrong-kind', kind: record.kind };
     const parsed = parseGatewayCredential(record.payload);
     if (!parsed.ok) return { ok: false, reason: 'invalid-credential', errors: parsed.errors };
+    // A v1 record has no value digest, so it can be neither verified nor used:
+    // it is reported invalid and left untouched. v2 records are readable but
+    // unbound (see gateway-binding.mjs), which is what makes one re-entry possible.
+    if (parsed.value.version === GATEWAY_LEGACY_VERSION) {
+      return { ok: false, reason: 'invalid-credential', errors: ['unsupported gateway credential version'] };
+    }
     return { ok: true, credential: parsed.value };
   }
 
@@ -459,16 +480,19 @@ export function createGatewayCredentialStore(credentials, options = {}) {
       } catch { return { invalid: true }; }
       return { value, source };
     },
-    async save({ value, ownerSubject, deviceLabel, enteredAt, suggestedExpiry, baseURL }, { guard } = {}) {
+    async save({ value, ownerSubject, issuer, baseURL, deviceLabel, enteredAt, suggestedExpiry }, { guard } = {}) {
       if (!isNonEmptyString(value)) {
         throw new StoreError('IAM_GATEWAY_KEY_INVALID', 'gateway credential must be a non-empty string');
       }
       if (!isNonEmptyString(ownerSubject)) throw new StoreError('IAM_GATEWAY_OWNER_MISSING', 'a gateway credential needs the signed-in subject');
+      // Binding is mandatory: without a trusted issuer and a target address the
+      // record could not prove where its Key belongs (issue #226).
+      if (!isNonEmptyString(issuer)) throw new StoreError('IAM_GATEWAY_BINDING_INCOMPLETE', 'a gateway credential needs the trusted issuer');
+      if (!isNonEmptyString(baseURL)) throw new StoreError('IAM_GATEWAY_BINDING_INCOMPLETE', 'a gateway credential needs the target address');
       const payload = {
-        version: GATEWAY_VERSION, ownerSubject, enteredAt,
+        version: GATEWAY_VERSION, ownerSubject, issuer, baseURL, enteredAt,
         writeOperationId: randomUUID(), valueDigest: valueDigest(value),
         ...(deviceLabel ? { deviceLabel } : {}), ...(suggestedExpiry ? { suggestedExpiry } : {}),
-        ...(baseURL ? { baseURL } : {}),
       };
       if (!parseGatewayCredential(payload).ok) throw new StoreError('IAM_REQUEST_INVALID', 'gateway metadata is invalid');
       const adapter = requireAtomic();
