@@ -159,45 +159,51 @@ export function createExtTokensService({ registry, store, getCurrentSubject, get
 
   async function resolveChildEnv({ extensionId, baseEnv = undefined, processEnv = getProcessEnv() ?? {} }) {
     const descriptor = requireDescriptor(extensionId);
-    const session = requireSession();
+    const session = readSessionRef();
     const stored = await store.read({
       extensionId: descriptor.extensionId,
       storageRef: descriptor.storageRef,
-      currentSubject: session.subject,
+      currentSubject: session?.subject ?? null,
     });
 
-    // 读存储期间登出/换账号：这次解析的结论不能当真，按未登录拒绝。
-    assertSessionUnchanged(session);
-
-    if (stored.state === 'OWNER_MISMATCH') {
+    if (stored?.state === 'OWNER_MISMATCH') {
       throw new ExtTokenStoreError(
         'OWNER_MISMATCH',
         'hosted extension token belongs to a different enterprise account',
         { extensionId },
       );
     }
-    if (stored.state === 'IAM_NOT_SIGNED_IN') {
+    if (stored?.state === 'IAM_NOT_SIGNED_IN') {
       throw new ExtTokenStoreError(
         'IAM_NOT_SIGNED_IN',
         'sign in to enterprise IAM before resolving a hosted extension token',
         { extensionId },
       );
     }
-    if (stored.state === 'KEYCHAIN_UNAVAILABLE') {
+    if (stored?.state === 'KEYCHAIN_UNAVAILABLE') {
       throw new ExtTokenStoreError('KEYCHAIN_UNAVAILABLE', 'hosted extension token could not be decrypted', {
         extensionId,
       });
     }
-    if (stored.state === 'PENDING_WRITE') {
-      throw new ExtTokenStoreError('PENDING_WRITE', 'hosted extension token write is still in progress', {
+    if (stored?.state === 'PENDING_WRITE') {
+      throw new ExtTokenStoreError('PENDING_WRITE', 'hosted extension token changed during the read or a write is in progress', {
         extensionId,
       });
     }
 
-    if (stored.state === 'HOSTED_ACTIVE') {
+    if (stored?.state === 'HOSTED_ACTIVE') {
+      // 托管令牌只可交给读取前后均相同的会话，包括同一用户重新登录的情况。
+      assertSessionUnchanged(session);
+      if (typeof stored.token !== 'string' || stored.token.trim().length === 0) {
+        throw new ExtTokenStoreError('IAM_INTERNAL', 'extension credential storage returned an invalid hosted token');
+      }
       const env = filterAllowlistedEnv(descriptor.allowlistedEnvNames, baseEnv, processEnv, descriptor.envKey);
       env[descriptor.envKey] = stored.token;
       return { state: 'HOSTED_ACTIVE', env };
+    }
+
+    if (stored?.state !== 'UNSET_NO_HOSTED') {
+      throw new ExtTokenStoreError('IAM_INTERNAL', 'extension credential storage returned an unknown state');
     }
 
     const env = filterAllowlistedEnv(descriptor.allowlistedEnvNames, baseEnv, processEnv);
@@ -231,6 +237,7 @@ export function createCredentialBroker({ extTokens, registry }) {
     throw new ExtTokenStoreError('IAM_INTERNAL', 'credential registry is required');
   }
   const FAIL_CLOSED_CODES = new Set([
+    'IAM_INTERNAL',
     'OWNER_MISMATCH',
     'IAM_NOT_SIGNED_IN',
     'KEYCHAIN_UNAVAILABLE',

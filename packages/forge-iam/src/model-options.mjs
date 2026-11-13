@@ -228,11 +228,14 @@ export function applyModelOptions(rawModels, options = {}) {
 /**
  * Merge gateway-discovered models with user-declared manual models without
  * mutating inputs. Gateway entries always win on id and carry `source: 'gateway'`;
- * manual-only entries appear afterwards in declaration order with `source: 'manual'`.
+ * A matching manual declaration is retained as `hasManualEntry` so it can be
+ * removed without changing the gateway source; manual-only entries follow in
+ * declaration order with `source: 'manual'`.
  */
 export function mergeAvailableModels(catalog, manual) {
   const catalogList = Array.isArray(catalog) ? catalog : [];
   const manualList = Array.isArray(manual) ? manual : [];
+  const manualIds = new Set(manualList.map(entry => typeof entry === 'string' ? entry : entry?.id).filter(isModelId));
   const merged = [];
   const seen = new Set();
 
@@ -242,7 +245,12 @@ export function mergeAvailableModels(catalog, manual) {
     // `isModelId` rejects must never reach the enabled set or the adapter.
     if (!isModelId(id) || seen.has(id)) continue;
     seen.add(id);
-    merged.push({ ...item, source: 'gateway' });
+    const gatewayItem = { ...item, source: 'gateway' };
+    // The presence marker comes only from the saved manual list, never the
+    // gateway's metadata.
+    delete gatewayItem.hasManualEntry;
+    if (manualIds.has(id)) gatewayItem.hasManualEntry = true;
+    merged.push(gatewayItem);
   }
 
   for (const entry of manualList) {

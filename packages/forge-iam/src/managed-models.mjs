@@ -839,10 +839,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         hostDefaultModel: hostDefault,
         enabled: Object.keys(modelOptions),
         selectionError: selectionError ?? selectionWriteError,
-        models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
+        models: models.map(({ id, name, source, hasManualEntry, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
           id,
           name,
           source: source ?? 'gateway',
+          ...(hasManualEntry === true ? { hasManualEntry: true } : {}),
           contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
           maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
           inputModalities: inputModalities ?? ['text'],

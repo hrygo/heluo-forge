@@ -2503,7 +2503,11 @@ window.__ModuleLoader__.load({
 
       const actions = [];
       if (!isSignedOut && !isUnavailable && !openForm && statusView.mode === 'ready') {
-        if (isHosted) {
+        if (state === 'PENDING_WRITE') {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-link', key: 'retry', disabled: busyAction !== null, onClick: () => void reload() }, t('credential.action.retry')),
+          );
+        } else if (isHosted) {
           actions.push(
             h('button', { type: 'button', className: 'fdv-link', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
             h('button', { type: 'button', className: 'fdv-link', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),

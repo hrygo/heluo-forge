@@ -1509,6 +1509,7 @@ window.__ModuleLoader__.load({
 
     const DEFAULT_CONTEXT_WINDOW = 200000;
     const DEFAULT_MAX_TOKENS = 64000;
+    const MODEL_STORAGE_WARNING = '模型配置已在本机生效，但未能写入持久存储，刷新模型目录或重启后可能恢复旧配置，请检查并重新操作。';
     const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'];
     const REASONING_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
     const REASONING_LEVEL_LABELS = {
@@ -2279,6 +2280,7 @@ window.__ModuleLoader__.load({
         enableModelOption, enableModelWithDefaults, disableModelWithSave, saveModelOptions, removeManualModel,
       } = actions;
       const isManual = model.source === 'manual';
+      const hasManualEntry = isManual || model.hasManualEntry === true;
 
 
 
@@ -2317,8 +2319,8 @@ window.__ModuleLoader__.load({
               isEnabled
                 ? h('span', { className: 'fiam-badge fiam-badge-success' }, '已启用')
                 : null,
-              isManual
-                ? h('span', { className: 'fiam-badge fiam-badge-manual', title: '手动添加的模型，不随目录刷新移除' }, '手动')
+              hasManualEntry
+                ? h('span', { className: 'fiam-badge fiam-badge-manual', title: isManual ? '手动添加的模型，不随目录刷新移除' : '该网关模型也有手动声明' }, isManual ? '手动' : '有手动声明')
                 : null,
             ),
             h('div', { className: 'fiam-model-meta-line' },
@@ -2364,11 +2366,12 @@ window.__ModuleLoader__.load({
               'aria-label': `配置 ${model.id}`,
               onClick: () => toggleModelExpand(model.id),
             }, isExpanded ? '收起配置 ▲' : '精细配置 ▼'),
-            isManual && typeof removeManualModel === 'function'
+            hasManualEntry && typeof removeManualModel === 'function'
               ? h('button', {
                 type: 'button',
                 style: { ...secondaryButton, minHeight: 26, height: 26, padding: '0 8px', fontSize: 12, flexShrink: 0, color: 'var(--dsw-alias-state-error-primary, #b91c1c)' },
                 disabled: modelSaving || Boolean(manualBusy) || viewBarrier.current.pending,
+                title: isManual ? '删除手动模型会停用模型并移除其配置。' : '删除手动声明会停用此模型并移除其配置；网关模型仍保留。',
                 'aria-label': `删除手动模型 ${model.id}`,
                 onClick: () => removeManualModel(model.id),
               }, removingManualId === model.id ? '正在删除…' : '删除')
@@ -3293,7 +3296,7 @@ window.__ModuleLoader__.load({
           }
           lastSyncedOptions.current = nextOptions;
           setModelNotice(result.body?.persisted === false
-            ? '模型配置已在本机生效，但未能写入持久存储，重启后需重新保存。'
+            ? MODEL_STORAGE_WARNING
             : successMessage);
           if (isCurrentEpoch(viewBarrier.current.epoch)) {
             setView(result.body?.view);
@@ -3433,9 +3436,14 @@ window.__ModuleLoader__.load({
           }
           setManualForm({ open: false, id: '', error: null, pending: false, removingId: null });
           if (result.body?.view) setView(result.body.view);
+          const addNotice = result.body?.persisted === false
+            ? MODEL_STORAGE_WARNING
+            : result.body?.rebuildError
+              ? `手动模型 ${trimmed} 已保存`
+              : `已添加 ${trimmed}，可在列表中配置并启用。`;
           setModelNotice(result.body?.rebuildError
-            ? `手动模型 ${trimmed} 已保存，但模型路由暂不可用：${errorNotice(result.body.rebuildError)}`
-            : `已添加 ${trimmed}，可在列表中配置并启用。`);
+            ? `${addNotice}${result.body?.persisted === false ? ' ' : '，但'}模型路由暂不可用：${errorNotice(result.body.rebuildError)}`
+            : addNotice);
         } catch {
           if (!isCurrentEpoch(epoch)) return;
           setManualForm((prev) => ({ ...prev, pending: false, error: errorNotice('IAM_REQUEST_FAILED') }));
@@ -3459,6 +3467,11 @@ window.__ModuleLoader__.load({
             setModelNotice(resultNotice(result));
             return;
           }
+          if (result.body?.removed === false) {
+            if (result.body?.view) setView(result.body.view);
+            setModelNotice(`手动模型 ${id} 已不在列表中。`);
+            return;
+          }
           if (Object.prototype.hasOwnProperty.call(lastSyncedOptions.current, id)) {
             const nextSynced = { ...lastSyncedOptions.current };
             delete nextSynced[id];
@@ -3476,13 +3489,12 @@ window.__ModuleLoader__.load({
             return next;
           });
           if (result.body?.view) setView(result.body.view);
-          if (result.body?.rebuildError) {
-            setModelNotice(`已删除手动模型 ${id}，但模型路由暂不可用：${errorNotice(result.body.rebuildError)}`);
-          } else if (result.body?.removed === false) {
-            setModelNotice(`手动模型 ${id} 已不在列表中。`);
-          } else {
-            setModelNotice(`已删除手动模型 ${id}。`);
-          }
+          const removeNotice = result.body?.persisted === false
+            ? MODEL_STORAGE_WARNING
+            : `已删除手动模型 ${id}${result.body?.rebuildError ? '' : '。'}`;
+          setModelNotice(result.body?.rebuildError
+            ? `${removeNotice}${result.body?.persisted === false ? ' ' : '，但'}模型路由暂不可用：${errorNotice(result.body.rebuildError)}`
+            : removeNotice);
         } catch {
           if (!isCurrentEpoch(epoch)) return;
           setModelNotice(errorNotice('IAM_REQUEST_FAILED'));

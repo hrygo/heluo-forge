@@ -284,7 +284,7 @@ test('mergeAvailableModels merges catalog and manual lists without mutation and 
 
   const merged = mergeAvailableModels(catalog, manual);
   assert.deepEqual(merged, [
-    { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxTokens: 16384, source: 'gateway' },
+    { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxTokens: 16384, source: 'gateway', hasManualEntry: true },
     { id: 'deepseek-r1', name: 'DeepSeek R1', source: 'gateway' },
     { id: 'custom-model@v1', name: 'custom-model@v1', source: 'manual', addedAt: '2026-11-13T00:01:00.000Z' },
   ]);
@@ -294,6 +294,9 @@ test('mergeAvailableModels merges catalog and manual lists without mutation and 
   assert.deepEqual(mergeAvailableModels([], [{ id: 'only-manual' }]), [
     { id: 'only-manual', name: 'only-manual', source: 'manual' },
   ]);
+  assert.deepEqual(mergeAvailableModels([{ id: 'gateway-only', hasManualEntry: true }], []), [
+    { id: 'gateway-only', source: 'gateway' },
+  ], '网关元数据不能伪造手动声明');
 
   // Ids the model-id contract rejects are dropped on both sides, not carried
   // into the enabled set or the adapter.

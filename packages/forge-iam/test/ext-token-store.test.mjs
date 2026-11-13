@@ -296,27 +296,18 @@ test('ext-token-store reports an unavailable storage when the provider changes d
   const first = createKeychainProvider(createMemoryBackend());
   const second = createKeychainProvider(createMemoryBackend());
   const state = { current: first };
-  await first.set('HEL_EXT_ALPHA_TOKEN', 'sealed-placeholder');
-  await first.modifyRecord(extTokenRecordKey('alpha-tool'), () => ({
-    kind: 'grant',
-    payload: {
-      version: 1,
-      type: 'heluo-iam-ext-token',
-      extensionId: 'alpha-tool',
-      storageRef: 'HEL_EXT_ALPHA_TOKEN',
-      ownerSubject: 'emp-001',
-      valueDigest: 'not-matching-any-digest',
-      updatedAt: '2026-11-13T00:00:00.000Z',
-    },
-  }));
+  await createExtTokenStore(first).save({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    ownerSubject: 'emp-001', token: 'hosted-alpha',
+  });
   const swapping = pinnableProvider(first, state);
   const originalPin = swapping.pin;
   swapping.pin = () => {
     const port = originalPin();
     return {
       ...port,
-      async readRecord(key) {
-        const value = await port.readRecord(key);
+      async resolve(ref) {
+        const value = await port.resolve(ref);
         state.current = second;
         return value;
       },
@@ -326,4 +317,168 @@ test('ext-token-store reports an unavailable storage when the provider changes d
   const read = await store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
   assert.equal(read.state, 'KEYCHAIN_UNAVAILABLE');
   assert.equal(read.token, undefined);
+});
+
+test('ext-token-store rejects an empty read when the provider changes to one with a hosted token', async () => {
+  const first = createKeychainProvider(createMemoryBackend());
+  const second = createKeychainProvider(createMemoryBackend());
+  await createExtTokenStore(second).save({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    ownerSubject: 'emp-001', token: 'hosted-alpha',
+  });
+  const state = { current: first };
+  const swapping = pinnableProvider(first, state);
+  const originalPin = swapping.pin;
+  swapping.pin = () => {
+    const port = originalPin();
+    return {
+      ...port,
+      async readRecord(key) {
+        const record = await port.readRecord(key);
+        state.current = second;
+        return record;
+      },
+    };
+  };
+  const store = createExtTokenStore(swapping);
+  const read = await store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  assert.equal(read.state, 'KEYCHAIN_UNAVAILABLE');
+  assert.equal(read.token, undefined);
+});
+
+test('an empty snapshot is not returned when a token save starts during the read', async () => {
+  const credentials = createKeychainProvider(createMemoryBackend());
+  let signalRead;
+  let finishRead;
+  let signalWrite;
+  let finishWrite;
+  const readStarted = new Promise((resolve) => { signalRead = resolve; });
+  const readGate = new Promise((resolve) => { finishRead = resolve; });
+  const writeStarted = new Promise((resolve) => { signalWrite = resolve; });
+  const writeGate = new Promise((resolve) => { finishWrite = resolve; });
+  const delayed = {
+    ...credentials,
+    async readRecord(key) {
+      const record = await credentials.readRecord(key);
+      signalRead();
+      await readGate;
+      return record;
+    },
+    async modifyRecord(key, mutate) {
+      signalWrite();
+      await writeGate;
+      return credentials.modifyRecord(key, mutate);
+    },
+  };
+  const store = createExtTokenStore(delayed);
+  const read = store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  await readStarted;
+  const save = store.save({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    ownerSubject: 'emp-001', token: 'hosted-alpha',
+  });
+  await writeStarted;
+  finishRead();
+  const result = await read;
+  finishWrite();
+  await save;
+  assert.equal(result.state, 'PENDING_WRITE');
+  assert.equal(result.token, undefined);
+  const after = await store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  assert.equal(after.state, 'HOSTED_ACTIVE');
+  assert.equal(after.token, 'hosted-alpha');
+});
+
+test('an empty snapshot is not returned after a concurrent token save completes', async () => {
+  const credentials = createKeychainProvider(createMemoryBackend());
+  let signalRead;
+  let finishRead;
+  const readStarted = new Promise((resolve) => { signalRead = resolve; });
+  const gate = new Promise((resolve) => { finishRead = resolve; });
+  const delayed = {
+    ...credentials,
+    async readRecord(key) {
+      const record = await credentials.readRecord(key);
+      signalRead();
+      await gate;
+      return record;
+    },
+  };
+  const store = createExtTokenStore(delayed);
+  const read = store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  await readStarted;
+  await store.save({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    ownerSubject: 'emp-001', token: 'hosted-alpha',
+  });
+  finishRead();
+  const result = await read;
+  assert.equal(result.state, 'PENDING_WRITE');
+  assert.equal(result.token, undefined);
+  const after = await store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  assert.equal(after.state, 'HOSTED_ACTIVE');
+  assert.equal(after.token, 'hosted-alpha');
+});
+
+test('a hosted snapshot is not returned after a concurrent clear completes', async () => {
+  const credentials = createKeychainProvider(createMemoryBackend());
+  let signalRead;
+  let finishRead;
+  let delayRead = false;
+  const readStarted = new Promise((resolve) => { signalRead = resolve; });
+  const gate = new Promise((resolve) => { finishRead = resolve; });
+  const delayed = {
+    ...credentials,
+    async resolve(ref) {
+      const value = await credentials.resolve(ref);
+      if (delayRead) {
+        signalRead();
+        await gate;
+      }
+      return value;
+    },
+  };
+  const store = createExtTokenStore(delayed);
+  await store.save({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    ownerSubject: 'emp-001', token: 'hosted-alpha',
+  });
+  delayRead = true;
+  const read = store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  await readStarted;
+  await store.clear({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN' });
+  finishRead();
+  const result = await read;
+  assert.equal(result.state, 'PENDING_WRITE');
+  assert.equal(result.token, undefined);
+  const after = await store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  assert.equal(after.state, 'UNSET_NO_HOSTED');
+  assert.equal(after.token, undefined);
+});
+
+test('a write to another extension does not invalidate an unrelated read', async () => {
+  const credentials = createKeychainProvider(createMemoryBackend());
+  let signalRead;
+  let finishRead;
+  const readStarted = new Promise((resolve) => { signalRead = resolve; });
+  const gate = new Promise((resolve) => { finishRead = resolve; });
+  const delayed = {
+    ...credentials,
+    async readRecord(key) {
+      const record = await credentials.readRecord(key);
+      signalRead();
+      await gate;
+      return record;
+    },
+  };
+  const store = createExtTokenStore(delayed);
+  const read = store.read({ extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN', currentSubject: 'emp-001' });
+  await readStarted;
+  await store.save({
+    extensionId: 'beta-tool', storageRef: 'HEL_EXT_BETA_TOKEN',
+    ownerSubject: 'emp-001', token: 'hosted-beta',
+  });
+  finishRead();
+  const result = await read;
+  assert.equal(result.state, 'UNSET_NO_HOSTED');
 });

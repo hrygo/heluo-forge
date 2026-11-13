@@ -107,8 +107,10 @@ export function createExtTokenStore(credentials, options = {}) {
   const now = typeof options.now === 'function' ? options.now : () => new Date().toISOString();
   const queues = new Map();
   const pendingCounts = new Map();
+  const writeVersions = new Map();
 
   function enqueue(extensionId, task) {
+    writeVersions.set(extensionId, (writeVersions.get(extensionId) ?? 0) + 1);
     pendingCounts.set(extensionId, (pendingCounts.get(extensionId) ?? 0) + 1);
     const prev = queues.get(extensionId) ?? Promise.resolve();
     const run = prev.catch(() => {}).then(async () => {
@@ -152,6 +154,8 @@ export function createExtTokenStore(credentials, options = {}) {
       return { state: 'PENDING_WRITE', ownerMismatch: false, updatedAt: null };
     }
 
+    // 写操作可能在异步读取期间开始并完成，仅检查当前 pending 无法识别旧快照。
+    const readVersion = writeVersions.get(extensionId);
     const port = pinCredentials();
     let record;
     try {
@@ -163,6 +167,13 @@ export function createExtTokenStore(credentials, options = {}) {
       throw cause;
     }
 
+    if (writeVersions.get(extensionId) !== readVersion) {
+      return { state: 'PENDING_WRITE', ownerMismatch: false, updatedAt: null };
+    }
+    // 旧 provider 的空记录不能证明新 provider 也没有托管令牌。
+    if (providerChanged(port)) {
+      return { state: 'KEYCHAIN_UNAVAILABLE', ownerMismatch: false, updatedAt: null };
+    }
     if (record === undefined) {
       return { state: 'UNSET_NO_HOSTED', ownerMismatch: false, updatedAt: null };
     }
@@ -197,6 +208,9 @@ export function createExtTokenStore(credentials, options = {}) {
       throw cause;
     }
 
+    if (writeVersions.get(extensionId) !== readVersion) {
+      return { state: 'PENDING_WRITE', ownerMismatch: false, updatedAt: null };
+    }
     const sealed = resolved?.value;
     if (typeof sealed !== 'string' || sealed.length === 0) {
       return { state: 'KEYCHAIN_UNAVAILABLE', ownerMismatch: false, updatedAt: payload.updatedAt ?? null };

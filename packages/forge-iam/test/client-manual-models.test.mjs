@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { mountPanel } from './support/client-panel.mjs';
 
 const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+const storageWarning = '模型配置已在本机生效，但未能写入持久存储，刷新模型目录或重启后可能恢复旧配置，请检查并重新操作。';
 
 function find(node, predicate) {
   if (!node || typeof node !== 'object') return undefined;
@@ -243,7 +244,111 @@ test('rebuildError on manual add renders warn notice and unpersisted options not
   assert.ok(find(tree, (node) =>
     node.props?.role === 'status'
     && node.props?.className?.includes('fiam-notice-warn')
-    && panel.text(node).includes('未能写入持久存储')));
+    && panel.text(node).includes(storageWarning)));
+});
+
+for (const rebuildError of [null, 'ENTERPRISE_MODELS_UNAVAILABLE']) {
+  test(`manual add with an unwritten selection warns${rebuildError ? ' alongside a rebuild error' : ''}`, async (t) => {
+    const addedView = baseView({ models: [{ id: 'custom-unwritten', source: 'manual' }] });
+    const panel = await mountPanel(async (path) => path === '/api/forge-iam/models/manual'
+      ? Response.json({ ok: true, persisted: false, ...(rebuildError ? { rebuildError } : {}), view: addedView })
+      : Response.json(baseView()), { componentId: 'forge-models' });
+    t.after(() => panel.close());
+
+    panel.findButton(panel.render(), '手动添加').props.onClick();
+    findByAriaLabel(panel.render(), '模型 ID').props.onChange({ target: { value: 'custom-unwritten' } });
+    await panel.findButton(panel.render(), '确认添加').props.onClick();
+
+    const tree = panel.render();
+    const text = panel.text(tree);
+    assert.ok(text.includes(storageWarning));
+    assert.equal(findByAriaLabel(tree, '模型 ID'), undefined, '关闭添加表单后警告仍须可见');
+    assert.doesNotMatch(text, /手动模型 custom-unwritten 已保存/);
+    if (rebuildError) assert.match(text, /模型路由暂不可用：企业模型暂不可用/);
+    assert.ok(find(tree, node => node.props?.role === 'status'
+      && node.props?.className?.includes('fiam-notice-warn')
+      && panel.text(node).includes(storageWarning)));
+  });
+
+  test(`manual removal with an unwritten selection warns${rebuildError ? ' alongside a rebuild error' : ''}`, async (t) => {
+    const initialView = baseView({ models: [{ id: 'custom-unwritten', source: 'manual' }] });
+    const panel = await mountPanel(async (path) => path === '/api/forge-iam/models/manual'
+      ? Response.json({ ok: true, removed: true, persisted: false, ...(rebuildError ? { rebuildError } : {}), view: baseView() })
+      : Response.json(initialView), { componentId: 'forge-models' });
+    t.after(() => panel.close());
+
+    await findByAriaLabel(panel.render(), '删除手动模型 custom-unwritten').props.onClick();
+    const tree = panel.render();
+    const text = panel.text(tree);
+    assert.ok(text.includes(storageWarning));
+    if (rebuildError) assert.match(text, /模型路由暂不可用：企业模型暂不可用/);
+    assert.ok(find(tree, node => node.props?.role === 'status'
+      && node.props?.className?.includes('fiam-notice-warn')
+      && panel.text(node).includes(storageWarning)));
+  });
+}
+
+test('an already absent manual entry leaves the enabled model and unsaved draft unchanged', async (t) => {
+  const oldView = baseView({
+    models: [{ id: 'shared-model', source: 'manual' }],
+    enabled: ['shared-model'],
+  });
+  oldView.modelAccess.modelOptions = { 'shared-model': { name: '已保存名称' } };
+  const currentView = baseView({
+    models: [{ id: 'shared-model', source: 'gateway', name: '网关名称' }],
+    enabled: ['shared-model'],
+  });
+  currentView.modelAccess.modelOptions = { 'shared-model': { name: '已保存名称' } };
+  const panel = await mountPanel(async (path) => path === '/api/forge-iam/models/manual'
+    ? Response.json({ ok: true, removed: false, persisted: false, view: currentView })
+    : Response.json(oldView), { componentId: 'forge-models' });
+  t.after(() => panel.close());
+
+  findByAriaLabel(panel.render(), '配置 shared-model').props.onClick();
+  findByAriaLabel(panel.render(), '显示名称 1').props.onChange({ target: { value: '未保存草稿' } });
+  assert.match(panel.text(panel.render()), /待保存模型配置变更/);
+  await findByAriaLabel(panel.render(), '删除手动模型 shared-model').props.onClick();
+
+  let tree = panel.render();
+  assert.match(panel.text(tree), /手动模型 shared-model 已不在列表中/);
+  assert.ok(!panel.text(tree).includes(storageWarning));
+  assert.equal(findByAriaLabel(tree, '显示名称 1')?.props.value, '未保存草稿');
+  assert.ok(findByAriaLabel(tree, '一键停用 shared-model'), '无操作不能停用模型');
+  assert.match(panel.text(tree), /待保存模型配置变更/);
+  panel.findButton(tree, '放弃修改').props.onClick();
+  tree = panel.render();
+  assert.equal(findByAriaLabel(tree, '显示名称 1')?.props.value, '已保存名称', '无操作不能删除已同步配置');
+});
+
+test('gateway model with a saved manual declaration offers removal and keeps gateway metadata', async (t) => {
+  const initialView = baseView({
+    models: [{ id: 'shared-model', source: 'gateway', name: '网关名称', hasManualEntry: true }],
+    enabled: ['shared-model'],
+  });
+  initialView.modelAccess.modelOptions = { 'shared-model': {} };
+  const currentView = baseView({ models: [{ id: 'shared-model', source: 'gateway', name: '网关名称' }] });
+  currentView.modelAccess.modelOptions = {};
+  const calls = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/models/manual') {
+      calls.push(JSON.parse(init.body));
+      return Response.json({ ok: true, removed: true, persisted: true, view: currentView });
+    }
+    return Response.json(initialView);
+  }, { componentId: 'forge-models' });
+  t.after(() => panel.close());
+
+  const tree = panel.render();
+  assert.match(panel.text(tree), /网关名称/);
+  const remove = findByAriaLabel(tree, '删除手动模型 shared-model');
+  assert.ok(remove, '同名网关条目仍应能清理手动声明');
+  assert.match(remove.props.title, /停用.*配置.*网关模型仍保留/);
+  await remove.props.onClick();
+  const after = panel.render();
+  assert.deepEqual(calls, [{ action: 'remove', id: 'shared-model' }]);
+  assert.match(panel.text(after), /网关名称/);
+  assert.equal(findByAriaLabel(after, '删除手动模型 shared-model'), undefined);
+  assert.ok(findByAriaLabel(after, '一键启用 shared-model'));
 });
 
 test('delete button only appears on manual models, deletes cleanly without leaving stale unsaved flag, and reports idempotent no-op', async (t) => {

@@ -152,6 +152,43 @@ function findNodes(node, predicate, out = []) {
 
 const findButton = (tree, label) => findNodes(tree, (n) => n.type === 'button' && collectText(n).join('').includes(label))[0];
 
+test('跨窗口凭据写入完成后可重试状态并恢复操作', async () => {
+  const prevFetch = globalThis.fetch;
+  const methods = [];
+  globalThis.fetch = async (_url, init = {}) => {
+    methods.push(init.method ?? 'GET');
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ credentials: [{
+        extensionId: 'gitee',
+        state: methods.length < 3 ? 'PENDING_WRITE' : 'HOSTED_ACTIVE',
+        envHitNames: [],
+      }] }),
+    };
+  };
+  const h = createHarness();
+  try {
+    h.render();
+    let tree = await h.flush();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      assert.equal(tree.props['data-credential-state'], 'PENDING_WRITE');
+      assert.equal(findButton(tree, '保存 Token'), undefined);
+      const retry = findButton(tree, '重试');
+      assert.ok(retry, '等待外部写入时应可重新读取凭据状态');
+      assert.equal(retry.props.disabled, false);
+      retry.props.onClick();
+      tree = await h.flush();
+    }
+    assert.equal(tree.props['data-credential-state'], 'HOSTED_ACTIVE');
+    assert.ok(findButton(tree, '更换 Token'));
+    assert.deepEqual(methods, ['GET', 'GET', 'GET']);
+  } finally {
+    h.unmount();
+    globalThis.fetch = prevFetch;
+  }
+});
+
 test('apply 不再注入 heluo.iam.credential-item，GiteeSection 内置渲染且独立模式 404 安静提示', async () => {
   let captured;
   new Function('window', 'require', SOURCE)(

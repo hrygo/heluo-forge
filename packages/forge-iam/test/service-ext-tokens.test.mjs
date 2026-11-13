@@ -3,22 +3,157 @@ import assert from 'node:assert/strict';
 import { createKeychainProvider, createMemoryBackend } from '@heluo/forge-credentials-keychain';
 import { createCredentialRegistry } from '../src/credential-registry.mjs';
 import { ExtTokenStoreError, createExtTokenStore } from '../src/ext-token-store.mjs';
-import { createExtTokensService } from '../src/service-ext-tokens.mjs';
+import { createCredentialBroker, createExtTokensService } from '../src/service-ext-tokens.mjs';
 
-test('signed-out resolution rejects before reading credential storage', async () => {
+test('signed-out resolution without a hosted token follows the allowlisted local environment', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN', 'ALPHA_HOST'],
+  });
+  const store = createExtTokenStore(createKeychainProvider(createMemoryBackend()));
+  const svc = createExtTokensService({
+    registry, store, getCurrentSubject: () => null,
+    getProcessEnv: () => ({ ALPHA_API_TOKEN: 'local-token', ALPHA_HOST: 'process-host', OTHER_SECRET: 'hidden' }),
+  });
+  assert.deepEqual(
+    await svc.resolveChildEnv({ extensionId: 'alpha-tool', baseEnv: { ALPHA_HOST: 'base-host', OTHER_SECRET: 'hidden' } }),
+    { state: 'ENV_INHERITED', env: { ALPHA_API_TOKEN: 'local-token', ALPHA_HOST: 'base-host' } },
+  );
+  assert.deepEqual(
+    await svc.resolveChildEnv({ extensionId: 'alpha-tool', processEnv: {} }),
+    { state: 'UNSET_NO_HOSTED', env: {} },
+  );
+});
+
+test('signed-out resolution does not fall back when hosted storage is unavailable or pending', async () => {
   const registry = createCredentialRegistry();
   registry.registerExtensionCredential({
     extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
     envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
   });
-  let reads = 0;
+  for (const state of ['IAM_NOT_SIGNED_IN', 'KEYCHAIN_UNAVAILABLE', 'PENDING_WRITE']) {
+    const svc = createExtTokensService({
+      registry, getCurrentSubject: () => null,
+      store: { async read() { return { state }; } },
+    });
+    const broker = createCredentialBroker({ extTokens: svc, registry });
+    assert.deepEqual(
+      await broker.resolveChildEnv({ extensionId: 'alpha-tool', processEnv: { ALPHA_API_TOKEN: 'local-token' } }),
+      { ok: false, code: state, env: {} },
+    );
+  }
+});
+
+test('unrecognized hosted storage states fail closed without exposing local credentials', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+  for (const result of [{ state: 'UNKNOWN' }, {}, null, undefined]) {
+    const svc = createExtTokensService({
+      registry, getCurrentSubject: () => 'emp-001',
+      store: { async read() { return result; } },
+    });
+    const broker = createCredentialBroker({ extTokens: svc, registry });
+    assert.deepEqual(
+      await broker.resolveChildEnv({ extensionId: 'alpha-tool', processEnv: { ALPHA_API_TOKEN: 'local-token' } }),
+      { ok: false, code: 'IAM_INTERNAL', env: {} },
+    );
+  }
+});
+
+test('an invalid hosted token result fails closed instead of inheriting a local credential', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+  for (const token of [undefined, null, '', '   ', 42]) {
+    const svc = createExtTokensService({
+      registry, getCurrentSubject: () => 'emp-001',
+      store: { async read() { return { state: 'HOSTED_ACTIVE', token }; } },
+    });
+    const broker = createCredentialBroker({ extTokens: svc, registry });
+    assert.deepEqual(
+      await broker.resolveChildEnv({ extensionId: 'alpha-tool', processEnv: { ALPHA_API_TOKEN: 'local-token' } }),
+      { ok: false, code: 'IAM_INTERNAL', env: {} },
+    );
+  }
+});
+
+test('unexpected storage exceptions remain visible and never yield a fallback environment', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+  const failure = new Error('unexpected storage failure');
+  const svc = createExtTokensService({
+    registry, getCurrentSubject: () => 'emp-001',
+    store: { async read() { throw failure; } },
+  });
+  const broker = createCredentialBroker({ extTokens: svc, registry });
+  await assert.rejects(
+    () => broker.resolveChildEnv({ extensionId: 'alpha-tool', processEnv: { ALPHA_API_TOKEN: 'local-token' } }),
+    (error) => error === failure,
+  );
+});
+
+test('a hosted token cannot be released when the read started without a session', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
   const svc = createExtTokensService({
     registry, getCurrentSubject: () => null,
-    store: { async read() { reads += 1; return { state: 'IAM_NOT_SIGNED_IN' }; } },
+    store: { async read() { return { state: 'HOSTED_ACTIVE', token: 'hosted-token' }; } },
   });
-  await assert.rejects(() => svc.resolveChildEnv({ extensionId: 'alpha-tool' }),
-    (error) => error.code === 'IAM_NOT_SIGNED_IN');
-  assert.equal(reads, 0);
+  const broker = createCredentialBroker({ extTokens: svc, registry });
+  assert.deepEqual(
+    await broker.resolveChildEnv({ extensionId: 'alpha-tool' }),
+    { ok: false, code: 'IAM_NOT_SIGNED_IN', env: {} },
+  );
+});
+
+test('a provider replacement during an empty read cannot fall back to the local environment', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+  const first = createKeychainProvider(createMemoryBackend());
+  const second = createKeychainProvider(createMemoryBackend());
+  await createExtTokenStore(second).save({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    ownerSubject: 'emp-001', token: 'hosted-token',
+  });
+  let current = first;
+  const swapping = {
+    ...first,
+    pin() {
+      const pinned = current;
+      return {
+        ...pinned,
+        async readRecord(key) {
+          const record = await pinned.readRecord(key);
+          current = second;
+          return record;
+        },
+        isCurrent: () => current === pinned,
+      };
+    },
+  };
+  const svc = createExtTokensService({
+    registry, store: createExtTokenStore(swapping), getCurrentSubject: () => 'emp-001',
+  });
+  const broker = createCredentialBroker({ extTokens: svc, registry });
+  assert.deepEqual(
+    await broker.resolveChildEnv({ extensionId: 'alpha-tool', processEnv: { ALPHA_API_TOKEN: 'local-token' } }),
+    { ok: false, code: 'KEYCHAIN_UNAVAILABLE', env: {} },
+  );
 });
 
 test('service-ext-tokens projects sanitized states, enforces allowlist, and blocks OWNER_MISMATCH', async () => {
@@ -195,4 +330,35 @@ test('a switched account mid-read is treated as signed out instead of returning 
   session.epoch = 'session-9';
   releaseRead();
   await assert.rejects(pending, (error) => error instanceof ExtTokenStoreError && error.code === 'IAM_NOT_SIGNED_IN');
+});
+
+test('a new session for the same account while a hosted token is read cannot receive the old result', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+  const session = { subject: 'emp-001', epoch: 'session-1' };
+  let startRead;
+  let finishRead;
+  const started = new Promise((resolve) => { startRead = resolve; });
+  const gate = new Promise((resolve) => { finishRead = resolve; });
+  const svc = createExtTokensService({
+    registry,
+    getCurrentSubject: () => session.subject,
+    getSessionRef: () => session,
+    store: {
+      async read() {
+        startRead();
+        await gate;
+        return { state: 'HOSTED_ACTIVE', token: 'hosted-token' };
+      },
+    },
+  });
+  const broker = createCredentialBroker({ extTokens: svc, registry });
+  const pending = broker.resolveChildEnv({ extensionId: 'alpha-tool' });
+  await started;
+  session.epoch = 'session-2';
+  finishRead();
+  assert.deepEqual(await pending, { ok: false, code: 'IAM_NOT_SIGNED_IN', env: {} });
 });

@@ -155,6 +155,7 @@ function makeRuntime({ gatewayModels = [], savedRecord: initialRecord } = {}) {
     adapterBuilds: 0,
     savedRecord: initialRecord ?? { subject: 'u-1', saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 },
     gatewayModels: [...gatewayModels],
+    failWrites: false,
   };
   const currentView = {
     state: 'ready',
@@ -198,6 +199,7 @@ function makeRuntime({ gatewayModels = [], savedRecord: initialRecord } = {}) {
       },
       async readModelSelection() { return state.savedRecord; },
       async saveModelSelection(next) {
+        if (state.failWrites) throw new Error('synthetic write failure');
         state.savedRecord = {
           subject: 'u-1',
           saved: true,
@@ -273,16 +275,75 @@ test('managed-models: a manual record shadowed by the catalogue stays removable'
   });
   await runtime.ready;
   // 网关优先：同 id 的目录条目赢过手动记录，但手动记录仍要在选择集里可清理。
-  assert.equal(runtime.getView().models.find(model => model.id === 'custom-deepseek-r1').source, 'gateway');
+  const before = runtime.getView().models.find(model => model.id === 'custom-deepseek-r1');
+  assert.equal(before.source, 'gateway');
+  assert.equal(before.hasManualEntry, true, '视图应暴露可删除的手动声明');
 
   const removed = await runtime.updateManualModel({ action: 'remove', id: 'custom-deepseek-r1' });
   assert.equal(removed.ok, true);
   assert.deepEqual(removed.manual, []);
   assert.equal(removed.models.filter(model => model.id === 'custom-deepseek-r1').length, 1, '网关条目仍在');
+  assert.equal(runtime.getView().models.find(model => model.id === 'custom-deepseek-r1').hasManualEntry, undefined);
   assert.equal(removed.defaultModelId, null, '移除最后一个启用项后不应留下悬空默认');
   assert.ok(state.adapterBuilds >= 1);
 
   await runtime.dispose();
+});
+
+test('managed-models: a later catalogue refresh keeps a saved manual declaration removable', async (t) => {
+  const { runtime, state } = makeRuntime();
+  t.after(() => runtime.dispose());
+  await runtime.ready;
+  await runtime.updateManualModel({ action: 'add', id: 'custom-deepseek-r1' });
+  await runtime.updateModelOptions({ 'custom-deepseek-r1': { maxTokens: 4096 } });
+  assert.equal(runtime.getView().models[0].source, 'manual');
+
+  state.gatewayModels.push('custom-deepseek-r1');
+  await runtime.refresh();
+  const matches = runtime.getView().models.filter(model => model.id === 'custom-deepseek-r1');
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].source, 'gateway');
+  assert.equal(matches[0].hasManualEntry, true);
+  assert.equal(matches[0].maxTokens, 4096, '用户覆盖在目录更新后仍生效');
+
+  const removed = await runtime.updateManualModel({ action: 'remove', id: 'custom-deepseek-r1' });
+  assert.equal(removed.removed, true);
+  assert.deepEqual(state.savedRecord.manual, []);
+  assert.deepEqual(state.savedRecord.models, {});
+  await runtime.refresh();
+  const remaining = runtime.getView().models;
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0].source, 'gateway');
+  assert.equal(remaining[0].hasManualEntry, undefined);
+  assert.equal(remaining[0].enabled, false);
+});
+
+test('managed-models: catalogue refresh can restore saved state after manual write failure', async (t) => {
+  const { runtime, state } = makeRuntime({
+    savedRecord: {
+      subject: 'u-1', saved: true,
+      models: { 'saved-manual': {} }, defaultModelId: 'saved-manual',
+      manual: [{ id: 'saved-manual' }], manualTruncated: 0,
+    },
+  });
+  t.after(() => runtime.dispose());
+  await runtime.ready;
+  state.failWrites = true;
+
+  const added = await runtime.updateManualModel({ action: 'add', id: 'new-manual' });
+  assert.equal(added.persisted, false);
+  assert.ok(runtime.getView().models.some(model => model.id === 'new-manual'));
+  await runtime.refresh();
+  assert.ok(!runtime.getView().models.some(model => model.id === 'new-manual'));
+
+  const removed = await runtime.updateManualModel({ action: 'remove', id: 'saved-manual' });
+  assert.equal(removed.persisted, false);
+  assert.equal(removed.removed, true);
+  assert.ok(!runtime.getView().models.some(model => model.id === 'saved-manual'));
+  await runtime.refresh();
+  const restored = runtime.getView().models.find(model => model.id === 'saved-manual');
+  assert.equal(restored?.source, 'manual');
+  assert.equal(restored?.enabled, true);
 });
 
 test('managed-models: removing an absent manual model is an idempotent success', async () => {
