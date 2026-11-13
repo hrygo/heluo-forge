@@ -118,22 +118,29 @@ export function createModelSelection(env) {
    */
   async function readSelection() {
     const current = await owner();
-    if (!current) return { subject: null, saved: false, models: {}, defaultModelId: null };
+    if (!current) return { subject: null, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
     const target = provider.ensure() ? provider.modelSelectionStore : null;
     if (!target || provider.storeCredentials !== current.credentials) {
-      return { subject: current.subject, saved: false, models: {}, defaultModelId: null };
+      return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
     }
     const record = await target.read();
     if (!record.ok || !record.selection || record.selection.subject !== current.subject) {
       // Nothing stored for this subject (or the record belongs to someone else
       // or is unreadable): the caller decides the first-run default.
-      return { subject: current.subject, saved: false, models: {}, defaultModelId: null };
+      return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
     }
-    return { subject: current.subject, saved: true, models: record.selection.models, defaultModelId: record.selection.defaultModelId };
+    return {
+      subject: current.subject,
+      saved: true,
+      models: record.selection.models,
+      defaultModelId: record.selection.defaultModelId,
+      manual: record.selection.manual ?? [],
+      manualTruncated: record.selection.manualTruncated ?? 0,
+    };
   }
 
   /** Persist the enabled set. Never a token channel: only model ids and overrides. */
-  async function saveSelection({ models, defaultModelId } = {}) {
+  async function saveSelection({ models, defaultModelId, manual } = {}) {
     ctx.assertExclusive();
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     let current = await owner();
@@ -150,7 +157,7 @@ export function createModelSelection(env) {
     if (!target || provider.storeCredentials !== current.credentials) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', '暂时无法写入模型设置。');
     }
-    const saved = await target.save({ subject: current.subject, models, defaultModelId });
+    const saved = await target.save({ subject: current.subject, models, defaultModelId, manual });
     return saved.selection;
   }
 
