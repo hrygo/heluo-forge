@@ -19,6 +19,7 @@ async function mountPanel(fetch) {
   const effects = [];
   const cleanups = [];
   const timers = new Map();
+  const deadlines = new Map();
   const locations = [];
   let cursor = 0;
   let nextTimer = 0;
@@ -55,9 +56,11 @@ async function mountPanel(fetch) {
     location: { assign: (url) => locations.push(url) },
   };
   runInNewContext(source, {
-    window, fetch,
+    window, fetch, AbortController,
     setInterval: (fn) => { const id = ++nextTimer; timers.set(id, fn); return id; },
     clearInterval: (id) => timers.delete(id),
+    setTimeout: (fn) => { const id = ++nextTimer; deadlines.set(id, fn); return id; },
+    clearTimeout: (id) => deadlines.delete(id),
   });
   assert.ok(Panel);
   const render = () => { cursor = 0; return Panel(); };

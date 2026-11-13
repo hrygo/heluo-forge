@@ -1672,8 +1672,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    async function fetchView() {
-      const response = await fetch('/api/forge-iam/view');
+    async function fetchView({ signal } = {}) {
+      const response = signal ? await fetch('/api/forge-iam/view', { signal }) : await fetch('/api/forge-iam/view');
       const view = await readJson(response);
       if (!response.ok) throw new Error(view?.error?.code ?? 'IAM_VIEW_FAILED');
       return view;
@@ -2076,75 +2076,158 @@ window.__ModuleLoader__.load({
       barrierRef.current.restartStream?.();
     }
 
-    function useSessionPoll(enabled, update, barrierRef) {
+    // One physical stream per loaded page; each consumer retains its own epoch.
+    // A barrier transition replaces the source for every subscriber so queued
+    // events from the old physical connection cannot cross that transition.
+    const sessionStream = (() => {
+      const subscribers = new Set();
+      const unsettledReads = new Set();
+      let stream = null;
+      let streamReady = false;
+      let timer = null;
+      let inFlight = null;
+      let generation = 0;
+
+      function deliver(subscriber, view) {
+        if (subscriber.revisionRef) subscriber.revisionRef.current += 1;
+        subscriber.updateRef.current(view);
+      }
+
+      function closeStream() {
+        if (!stream) return;
+        const closing = stream;
+        stream = null;
+        streamReady = false;
+        generation += 1;
+        try { closing.close(); } catch { /* already closed */ }
+      }
+      function stopPolling() {
+        if (timer === null) return;
+        clearInterval(timer);
+        timer = null;
+      }
+      function openStream() {
+        if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return false;
+        try {
+          const opened = new window.EventSource('/api/forge-iam/events');
+          stream = opened;
+          streamReady = false;
+          const sourceGeneration = ++generation;
+          const isCurrent = () => stream === opened && generation === sourceGeneration;
+          opened.onmessage = (event) => {
+            if (!isCurrent()) return;
+            let view;
+            try { view = JSON.parse(event.data); } catch { return; }
+            if (!view || typeof view !== 'object' || Array.isArray(view) || deriveSessionUi(view).state === null) return;
+            streamReady = true;
+            stopPolling();
+            // A read started before this frame cannot replace it when late.
+            inFlight?.cancel();
+            // Once admitted, this frame belongs to every current subscriber,
+            // even if one callback synchronously replaces the physical stream.
+            const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
+            for (const { subscriber, epoch } of pending) {
+              if (!subscribers.has(subscriber)) continue;
+              const barrier = subscriber.barrierRef?.current;
+              if (!barrier || (!barrier.pending && barrier.epoch === epoch)) deliver(subscriber, view);
+            }
+          };
+          opened.onerror = () => {
+            if (!isCurrent()) return;
+            closeStream();
+            startPolling();
+          };
+          // Construction does not mean the connection has delivered a frame.
+          startPolling();
+          return true;
+        } catch {
+          stream = null;
+          return false;
+        }
+      }
+      async function poll() {
+        if (subscribers.size === 0) return;
+        // A stalled view request must not prevent a later stream reconnect.
+        // Two unresolved reads are the upper bound even if a nonconforming
+        // transport ignores abort; a normal browser fetch releases on abort.
+        if (inFlight || unsettledReads.size >= 2) {
+          if (!stream) openStream();
+          return;
+        }
+        const readGeneration = generation;
+        const pending = [...subscribers].map((subscriber) => ({ subscriber, epoch: subscriber.barrierRef?.current.epoch }));
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let release;
+        const cancelled = new Promise((resolve) => { release = resolve; });
+        const request = fetchView(controller ? { signal: controller.signal } : {}).then((view) => ({ view }), () => null);
+        unsettledReads.add(request);
+        void request.then(() => unsettledReads.delete(request));
+        const current = {
+          cancel() {
+            if (inFlight === current) inFlight = null;
+            controller?.abort();
+            release(null);
+          },
+        };
+        inFlight = current;
+        const deadline = setTimeout(() => current.cancel(), 10000);
+        try {
+          const result = await Promise.race([request, cancelled]);
+          if (result && !streamReady && generation === readGeneration) {
+            let delivered = false;
+            for (const { subscriber, epoch } of pending) {
+              if (!subscribers.has(subscriber)) continue;
+              const barrier = subscriber.barrierRef?.current;
+              if (!barrier || (!barrier.pending && barrier.epoch === epoch)) {
+                deliver(subscriber, result.view);
+                delivered = true;
+              }
+            }
+            // The pending source may contain a snapshot older than this read.
+            // Do not close a replacement created during subscriber callbacks.
+            if (delivered && stream && !streamReady && generation === readGeneration) restart();
+          }
+        } finally {
+          clearTimeout(deadline);
+          if (inFlight !== current) return;
+          inFlight = null;
+          // Try the stream again after each fallback read, including a failed one.
+          if (subscribers.size > 0 && !stream) openStream();
+        }
+      }
+      function startPolling() { if (timer === null) timer = setInterval(poll, 2000); }
+      function restart() {
+        if (!stream) { generation += 1; return; }
+        closeStream();
+        if (!openStream()) startPolling();
+      }
+      function subscribe(subscriber) {
+        subscribers.add(subscriber);
+        if (stream) restart();
+        else if (subscribers.size === 1 && timer === null && !openStream()) startPolling();
+        return () => {
+          subscribers.delete(subscriber);
+          if (subscribers.size === 0) {
+            if (stream) closeStream(); else generation += 1;
+            stopPolling();
+            inFlight?.cancel();
+          }
+        };
+      }
+      return { restart, subscribe };
+    })();
+
+    function useSessionPoll(enabled, update, barrierRef, revisionRef) {
       const updateRef = React.useRef(update);
       updateRef.current = update;
       React.useEffect(() => {
         if (!enabled) return undefined;
-        let live = true;
-        let inFlight = false;
-        const apply = (view) => {
-          if (!live || barrierRef?.current.pending) return;
-          updateRef.current(view);
-        };
-        // Prefer the Host's read-only stream; polling stays as the fallback so
-        // a proxy that buffers event-stream responses cannot freeze the panel.
-        let stream = null;
-        let timer = null;
-        const closeStream = () => {
-          if (!stream) return;
-          const closing = stream;
-          stream = null;
-          try { closing.close(); } catch { /* already closed */ }
-        };
-        const openStream = () => {
-          if (typeof window === 'undefined' || typeof window.EventSource !== 'function') return false;
-          try {
-            const opened = new window.EventSource('/api/forge-iam/events');
-            stream = opened;
-            opened.onmessage = (event) => {
-              // A queued event can run after close(); never apply it to a newer epoch.
-              if (stream !== opened || !live) return;
-              try { apply(JSON.parse(event.data)); } catch { /* ignore malformed frame */ }
-            };
-            opened.onerror = () => {
-              if (stream !== opened || !live) return;
-              closeStream();
-              startPolling();
-            };
-            return true;
-          } catch {
-            stream = null;
-            return false;
-          }
-        };
-        const poll = async () => {
-          if (inFlight) return;
-          inFlight = true;
-          const epoch = barrierRef?.current.epoch;
-          try {
-            const view = await fetchView();
-            if (live && (!barrierRef || (!barrierRef.current.pending && barrierRef.current.epoch === epoch))) updateRef.current(view);
-          } catch {
-            // The next tick retries; a transient Host failure must not erase
-            // the last known state.
-          } finally {
-            inFlight = false;
-          }
-        };
-        const startPolling = () => { if (!timer) timer = setInterval(poll, 2000); };
-        const restartStream = () => {
-          if (!live || !stream) return;
-          closeStream();
-          if (!openStream()) startPolling();
-        };
+        const restartStream = () => sessionStream.restart();
         if (barrierRef) barrierRef.current.restartStream = restartStream;
-        if (!openStream()) startPolling();
+        const unsubscribe = sessionStream.subscribe({ updateRef, barrierRef, revisionRef });
         return () => {
-          live = false;
           if (barrierRef?.current.restartStream === restartStream) delete barrierRef.current.restartStream;
-          closeStream();
-          if (timer) clearInterval(timer);
+          unsubscribe();
         };
       }, [enabled]);
     }
@@ -3798,6 +3881,7 @@ window.__ModuleLoader__.load({
     // 登录/取消、退出，以及「复制登录链接 / 复制问题信息」。
     function useSessionView({ state, setState, viewBarrier, catalogue, form }) {
       const isCurrentEpoch = (epoch) => !viewBarrier.current.pending && viewBarrier.current.epoch === epoch;
+      const viewRevision = React.useRef(0);
 
       const wakeRef = React.useRef({ at: 0, inFlight: false });
       const viewRef = React.useRef(state.view);
@@ -3844,9 +3928,10 @@ window.__ModuleLoader__.load({
       const load = React.useCallback(async () => {
         if (viewBarrier.current.pending) return;
         const epoch = viewBarrier.current.epoch;
+        const revision = viewRevision.current;
         try {
           const view = await fetchView();
-          if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
+          if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch || viewRevision.current !== revision) return;
           const readyNow = deriveSessionUi(view).ready;
           if (wasReadyRef.current && !readyNow) viewBarrier.current.epoch += 1;
           wasReadyRef.current = readyNow;
@@ -3856,7 +3941,7 @@ window.__ModuleLoader__.load({
           form.noteModelsSynced(view);
           void catalogue.actions.syncFromView(view);
         } catch (error) {
-          if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch) return;
+          if (viewBarrier.current.pending || viewBarrier.current.epoch !== epoch || viewRevision.current !== revision) return;
           wasReadyRef.current = false;
           linkIdentity.current = null;
           setState({ phase: 'error', view: null, error: error.message, notice: null, authorizationUrl: null });
@@ -3877,7 +3962,7 @@ window.__ModuleLoader__.load({
         }));
         form.noteModelsSynced(view);
         void catalogue.actions.syncFromView(view);
-      }, viewBarrier);
+      }, viewBarrier, viewRevision);
 
       const login = async () => {
         if (viewBarrier.current.pending) return;
@@ -4449,11 +4534,13 @@ window.__ModuleLoader__.load({
       const [signingOut, setSigningOut] = React.useState(false);
       const rootRef = React.useRef(null);
       const signingInRef = React.useRef(false);
+      const viewRevision = React.useRef(0);
 
       React.useEffect(() => {
         let live = true;
+        const revision = viewRevision.current;
         fetchView()
-          .then((v) => { if (live) setView(v); })
+          .then((v) => { if (live && viewRevision.current === revision) setView(v); })
           .catch(() => { });
         return () => { live = false; };
       }, []);
@@ -4464,7 +4551,7 @@ window.__ModuleLoader__.load({
           setMenuOpen(false);
           setConfirmSignOut(false);
         }
-      });
+      }, undefined, viewRevision);
 
       React.useEffect(() => {
         if (!menuOpen) return undefined;
@@ -4652,6 +4739,7 @@ window.__ModuleLoader__.load({
     function SignedOutBanner() {
       const [state, setState] = React.useState({ visible: false, notice: null, view: null, authorizationUrl: null });
       const signingInRef = React.useRef(false);
+      const viewRevision = React.useRef(0);
 
       const bannerFor = (view) => {
         if (!view) return { visible: true, reason: 'signed-out', sessionState: null };
@@ -4673,10 +4761,11 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         let live = true;
+        const revision = viewRevision.current;
         fetchView()
-          .then((view) => { if (live) setState((current) => ({ ...current, ...bannerFor(view), view })); })
+          .then((view) => { if (live && viewRevision.current === revision) setState((current) => ({ ...current, ...bannerFor(view), view })); })
           .catch(() => {
-            if (live) setState((current) => ({ ...current, visible: true, notice: '无法读取登录状态，正在重试。' }));
+            if (live && viewRevision.current === revision) setState((current) => ({ ...current, visible: true, notice: '无法读取登录状态，正在重试。' }));
           });
         return () => { live = false; };
       }, []);
@@ -4694,7 +4783,7 @@ window.__ModuleLoader__.load({
             ? { notice: deriveSessionUi(view).failed ? errorNotice(view.error ?? 'IAM_REQUEST_FAILED') : null }
             : {}),
         }),
-      })));
+      })), undefined, viewRevision);
 
       const login = async () => {
         if (signingInRef.current) return;
@@ -4919,6 +5008,8 @@ window.__ModuleLoader__.load({
       const writeState = useCredentialWriteState();
       const sessionRef = React.useRef({ view: null, epoch: 0 });
       const viewBarrier = React.useRef({ epoch: 0, pending: false });
+      const viewRevision = React.useRef(0);
+      const initialized = React.useRef(false);
       const live = React.useRef(true);
       React.useEffect(() => {
         live.current = true;
@@ -4976,16 +5067,19 @@ window.__ModuleLoader__.load({
         let live = true;
         let timer = null;
         const marker = readMarker();
-        if (marker === 'done' || marker === 'skipped') return () => { live = false; };
+        if (marker === 'done' || marker === 'skipped') { initialized.current = true; return () => { live = false; }; }
         const attempt = () => {
+          if (initialized.current) return;
+          const revision = viewRevision.current;
           fetchView()
             .then((view) => {
-              if (!live) return;
+              if (!live || viewRevision.current !== revision) return;
+              initialized.current = true;
               observeOnboardingView(view);
               setState((current) => ({ ...current, phase: 'ready', view, step: 0, notice: null, open: deriveSessionUi(view).signedOut, authorizationUrl: null }));
             })
             .catch(() => {
-              if (!live) return;
+              if (!live || viewRevision.current !== revision) return;
               // A transient failure at first paint must not silently disable
               // onboarding (and its completion marker) for the whole page load.
               setState((current) => ({ ...current, phase: 'ready' }));
@@ -4998,7 +5092,12 @@ window.__ModuleLoader__.load({
 
       useSessionPoll(true, (view) => {
         observeOnboardingView(view);
-        setState((current) => (!current.open ? current : {
+        const initializing = !initialized.current;
+        initialized.current = true;
+        setState((current) => initializing ? {
+          ...current, phase: 'ready', view, step: 0, notice: null,
+          open: deriveSessionUi(view).signedOut, authorizationUrl: null,
+        } : (!current.open ? current : {
         ...current,
         view,
         ...(deriveSessionUi(view).authenticating ? {} : { authorizationUrl: null }),
@@ -5013,7 +5112,7 @@ window.__ModuleLoader__.load({
           : {}),
         ...(deriveSessionUi(view).failed ? { notice: errorNotice(view.error ?? 'IAM_REQUEST_FAILED') } : {}),
         }));
-      }, viewBarrier);
+      }, viewBarrier, viewRevision);
 
       if (!state.open) return null;
 
