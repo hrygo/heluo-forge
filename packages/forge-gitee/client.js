@@ -23,6 +23,12 @@ window.__ModuleLoader__.load({
 
     const NS = 'gitee';
     const CLI_ENDPOINT = '/api/forge-gitee/config';
+    /** 企业账号统一托管的扩展凭据同源端点与子槽位。 */
+    const IAM_CREDENTIAL_SLOT = 'heluo.iam.credential-item';
+    const IAM_EXT_CREDENTIALS_ENDPOINT = '/api/forge-iam/ext-credentials';
+    const IAM_EXT_CREDENTIAL_ENDPOINT = `${IAM_EXT_CREDENTIALS_ENDPOINT}/gitee`;
+    const IAM_MUTATION_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json', accept: 'application/json' };
+    const IAM_READ_HEADERS = { accept: 'application/json' };
     /** 与 `src/http.mjs` 的 `GITEE_REQUEST_HEADER` 逐字一致（`tests/ui-contract.test.mjs` 守这条）。 */
     const REQUEST_HEADER = 'x-forge-gitee-request';
     const REQUEST_HEADERS = { [REQUEST_HEADER]: '1', 'content-type': 'application/json' };
@@ -31,7 +37,7 @@ window.__ModuleLoader__.load({
 
     /** 页面字段（与 `src/config-access.mjs` 的 `GITEE_PAGE_FIELDS` 同序）。 */
     const PAGE_FIELDS = ['cliPath', 'timeoutMs'];
-    /** 只读字段（host / authEnv / persistentToken）：结构上不含值，页面只显示来源，不参与"本机改动"计数。 */
+    /** 只读字段（host）：结构上不含值，页面只显示企业分发提示；authEnv/persistentToken 由后端诊断与扩展凭据预警承载，不再进工具设置表单。 */
 
     /**
      * 几何与节奏：参考内容宽 564px，520px 以下换行。
@@ -104,12 +110,20 @@ window.__ModuleLoader__.load({
 .fge-link:hover{text-decoration:underline}
 .fge-link:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;border-radius:${METRICS.radiusSm}}
 .fge-link:disabled{color:var(--dsw-alias-label-tertiary);cursor:default;text-decoration:none}
-.fge-advanced{margin:${METRICS.listGapTop}px 0 0;padding-top:${METRICS.rowPadY}px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-secondary)}
-.fge-advanced-head{font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);cursor:pointer}
-.fge-advanced-body{display:flex;flex-direction:column;gap:6px;margin:${METRICS.inputGap}px 0 0}
-.fge-advanced-row{display:flex;align-items:baseline;gap:12px;font-size:${METRICS.cellSize}px;line-height:${METRICS.cellLine}px}
-.fge-advanced-key{flex:none;min-width:96px;color:var(--dsw-alias-label-tertiary)}
-.fge-advanced-value{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fge-cred{display:flex;flex-direction:column;gap:6px;padding:${METRICS.rowPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-secondary)}
+.fge-cred-head{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px}
+.fge-cred-main{display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex:1;min-width:0}
+.fge-cred-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fge-cred-status{font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fge-cred-status-ok{color:var(--dsw-static-green-500);font-weight:${METRICS.labelWeight}}
+.fge-cred-status-warn{color:var(--dsw-static-amber-500);font-weight:${METRICS.labelWeight}}
+.fge-cred-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:none}
+.fge-cred-form{display:flex;flex-direction:column;gap:${METRICS.inputGap}px;margin-top:6px}
+.fge-cred-form-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;margin-top:6px}
+.fge-cred-alert{display:flex;flex-direction:column;gap:6px;padding:${METRICS.statusGap}px ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-static-amber-500) 12%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary)}
+.fge-cred-files{margin:0;padding-left:16px;font-family:var(--dsw-font-mono,ui-monospace,monospace);font-size:${METRICS.codeSize}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fge-cred-details{margin:4px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fge-cred-details summary{cursor:pointer}
 .fge-footer{margin-top:${METRICS.footerGapTop}px;padding-top:${METRICS.rowPadY}px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-secondary);font-size:${METRICS.tagSize}px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
 .fge-receipt{display:flex;flex-direction:column;gap:2px;margin-top:${METRICS.footerGapTop}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fge-receipt-line{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}
@@ -131,7 +145,7 @@ window.__ModuleLoader__.load({
   .fge-status-actions{width:100%;justify-content:flex-start}
   .fge-card{flex-direction:column;gap:6px}
   .fge-card-actions{width:100%}
-  .fge-advanced-row{flex-direction:column;gap:0}
+  .fge-cred-head{flex-direction:column;align-items:flex-start}
 }
 @media (prefers-reduced-motion:reduce){
   .fge-dot,.fge-primary{transition:none}
@@ -150,14 +164,11 @@ window.__ModuleLoader__.load({
       'field.cliPath': '命令行入口',
       'field.timeoutMs': '命令超时',
       'field.host': '服务地址与凭据',
-      'field.authEnv': '凭据变量名',
-      'field.persistentToken': '持久化令牌策略',
       'value.inherited': '沿用公共值',
       'value.detected': '已自动找到 {tool}',
       'value.timeoutDefault': '{seconds} 秒（默认）',
       'value.timeout': '{seconds} 秒',
-      'value.host': '由企业分发，本页只读',
-      'value.empty': '—',
+      'value.host': '由企业分发，本页只读（独立凭据请前往 设置 → 企业账号）',
       'card.action.manual': '手动指定',
       'card.action.auto': '改为自动',
       'card.action.edit': '修改',
@@ -167,8 +178,6 @@ window.__ModuleLoader__.load({
       'field.timeoutMs.hint': '单位毫秒，1000–600000；清空即回落公共参数或默认值。',
       'placeholder.cliPath': '粘贴 gitee CLI 的完整路径',
       'placeholder.timeoutMs': '20000',
-      'advanced.title': '高级 · 通常不用改',
-      'advanced.hint': '由运行期决定，不在本页修改',
       'action.save': '保存',
       'action.saving': '保存中…',
       'action.refresh': '刷新',
@@ -186,6 +195,44 @@ window.__ModuleLoader__.load({
       'unavailable.readonly': '当前 profile 不允许写本机配置，页面只读。',
       'error.load': '读取配置失败 · {reason}',
       'error.retry': '重试',
+      'credential.title': 'Gitee',
+      'credential.state.follow': '跟随本机登录（正常可用，无需配置）',
+      'credential.state.hosted': '已在此单独保存（优先于本机环境）',
+      'credential.state.signedOut': '登录企业账号后可用（已托管的凭据暂不外发）',
+      'credential.state.mismatchTag': '已停用（账号不匹配）',
+      'credential.state.mismatch': '存在其他企业账号遗留的独立凭据，已安全停用（不会使用旧账号凭据，也不会回退本机环境）',
+      'credential.state.pending': '上一笔凭据保存尚未完成，请稍候等待完成',
+      'credential.state.keychainTag': '安全存储不可用',
+      'credential.state.keychainUnavailable': '本机安全存储暂不可用，无法读取或保存托管凭据（请重试或改用本机 CLI 登录）',
+      'credential.state.loading': '正在读取 Gitee 凭据状态…',
+      'credential.state.loadFailed': '暂时无法读取凭据状态，请稍后重试',
+      'credential.risk.title': '安全提醒：检测到本机存有明文持久化凭据文件',
+      'credential.risk.body': '检测到明文 Gitee 配置文件存在泄露风险。建议改用系统钥匙串安全登录，或在此加密保存独立凭据覆盖；本应用不会直接修改或删除你的本地文件。',
+      'credential.action.specify': '单独指定 Token',
+      'credential.action.overrideRisk': '在此加密保存覆盖',
+      'credential.action.replace': '更换 Token',
+      'credential.action.reset': '清除并恢复跟随本机',
+      'credential.action.clearOld': '清除旧配置',
+      'credential.action.resetAccount': '使用当前账号重设',
+      'credential.action.save': '保存 Token',
+      'credential.action.saving': '保存中…',
+      'credential.action.clearing': '清除中…',
+      'credential.action.cancel': '取消',
+      'credential.action.retry': '重试',
+      'credential.input.label': 'Gitee 访问凭据（只写不回显）',
+      'credential.input.placeholder': '输入新的 Gitee 访问凭据',
+      'credential.input.hint': '在此保存后，本应用将优先使用这里的 Token 覆盖本机环境；保存后页面不回显原值。',
+      'credential.details.title': '技术排障 · 环境变量',
+      'credential.details.envVars': '检测到本机环境变量：{names}',
+      'credential.notice.saved': '已在此单独保存（优先于本机环境）',
+      'credential.notice.cleared': '已清除单独凭据，恢复跟随本机登录',
+      'credential.fail.invalid': '请输入有效的凭据内容后再保存',
+      'credential.fail.notSignedIn': '请先在上方登录企业账号，再保存或清除独立凭据',
+      'credential.fail.pending': '上一笔凭据操作尚未完成，请稍候重试（已保留当前输入）',
+      'credential.fail.keychainUnavailable': '本机安全存储暂不可用，未保存（可重试或改用本机 CLI 登录）',
+      'credential.fail.ownerMismatch': '存在其他企业账号遗留凭据，请先清除旧配置或使用当前账号重设',
+      'credential.fail.notFound': '尚未登记 Gitee 凭据扩展，请确认企业账号服务已就绪',
+      'credential.fail.generic': '凭据操作未能完成，请稍后重试',
     };
 
     const en = {
@@ -199,14 +246,11 @@ window.__ModuleLoader__.load({
       'field.cliPath': 'Command entry',
       'field.timeoutMs': 'Command timeout',
       'field.host': 'Service endpoint and credentials',
-      'field.authEnv': 'Credential variable',
-      'field.persistentToken': 'Persistent token policy',
       'value.inherited': 'Uses the shared value',
       'value.detected': 'Auto-detected {tool}',
       'value.timeoutDefault': '{seconds} s (default)',
       'value.timeout': '{seconds} s',
-      'value.host': 'Distributed by the enterprise; read-only here',
-      'value.empty': '—',
+      'value.host': 'Distributed by the enterprise; read-only here (manage tokens in Settings → Enterprise account)',
       'card.action.manual': 'Specify manually',
       'card.action.auto': 'Use automatic',
       'card.action.edit': 'Change',
@@ -216,8 +260,6 @@ window.__ModuleLoader__.load({
       'field.timeoutMs.hint': 'In milliseconds, 1000–600000; clear it to fall back to the shared value or the default.',
       'placeholder.cliPath': 'Paste the full path of the gitee CLI',
       'placeholder.timeoutMs': '20000',
-      'advanced.title': 'Advanced · rarely changed',
-      'advanced.hint': 'Decided at runtime; not edited here',
       'action.save': 'Save',
       'action.saving': 'Saving…',
       'action.refresh': 'Refresh',
@@ -235,6 +277,44 @@ window.__ModuleLoader__.load({
       'unavailable.readonly': 'The current profile does not allow writing local configuration; this page is read-only.',
       'error.load': 'Failed to read configuration · {reason}',
       'error.retry': 'Retry',
+      'credential.title': 'Gitee',
+      'credential.state.follow': 'Uses local CLI sign-in (works automatically, no setup needed)',
+      'credential.state.hosted': 'Saved separately here (takes priority over local environment)',
+      'credential.state.signedOut': 'Sign in to your enterprise account to use saved credentials',
+      'credential.state.mismatchTag': 'Disabled (account mismatch)',
+      'credential.state.mismatch': 'A saved credential from another enterprise account was disabled for safety',
+      'credential.state.pending': 'A previous credential save is still in progress; wait a moment',
+      'credential.state.keychainTag': 'Secure storage unavailable',
+      'credential.state.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
+      'credential.state.loading': 'Reading Gitee credential status…',
+      'credential.state.loadFailed': 'Unable to read credential status right now; retry later',
+      'credential.risk.title': 'Security notice: plaintext persistent credential file detected on this machine',
+      'credential.risk.body': 'A plaintext Gitee configuration file may expose credentials. Switch to keychain-backed CLI sign-in or save an encrypted credential here instead; this app never alters your local files.',
+      'credential.action.specify': 'Set custom token',
+      'credential.action.overrideRisk': 'Save encrypted token here',
+      'credential.action.replace': 'Replace token',
+      'credential.action.reset': 'Clear and use local sign-in',
+      'credential.action.clearOld': 'Clear old credential',
+      'credential.action.resetAccount': 'Set with current account',
+      'credential.action.save': 'Save token',
+      'credential.action.saving': 'Saving…',
+      'credential.action.clearing': 'Clearing…',
+      'credential.action.cancel': 'Cancel',
+      'credential.action.retry': 'Retry',
+      'credential.input.label': 'Gitee access token (write-only)',
+      'credential.input.placeholder': 'Enter a new Gitee access credential',
+      'credential.input.hint': 'Once saved here, this app uses it in place of local environment settings; the saved value is never shown again.',
+      'credential.details.title': 'Troubleshooting · environment variables',
+      'credential.details.envVars': 'Detected local environment variables: {names}',
+      'credential.notice.saved': 'Saved separately here (takes priority over local environment)',
+      'credential.notice.cleared': 'Cleared custom credential; restored local sign-in behavior',
+      'credential.fail.invalid': 'Enter a valid credential value before saving',
+      'credential.fail.notSignedIn': 'Sign in to your enterprise account above before saving or clearing',
+      'credential.fail.pending': 'Previous credential update is still in progress; retry shortly (draft kept)',
+      'credential.fail.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
+      'credential.fail.ownerMismatch': 'An older credential belongs to another enterprise account; clear or replace it below',
+      'credential.fail.notFound': 'Gitee credential extension is not registered yet; verify account services',
+      'credential.fail.generic': 'Credential update failed; retry in a moment',
     };
 
     function normalize(value) {
@@ -683,9 +763,6 @@ window.__ModuleLoader__.load({
         );
       }
 
-      const advancedNames = Array.isArray(entryOf('authEnv').value) ? entryOf('authEnv').value : [];
-      const persistentTokenValue = entryOf('persistentToken').value;
-
       return h(
         'div',
         { className: 'fge-root' },
@@ -726,38 +803,320 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h(
-          'details',
-          { className: 'fge-advanced' },
-          h('summary', { className: 'fge-advanced-head' }, t('advanced.title')),
-          h(
-            'div',
-            { className: 'fge-advanced-body' },
-            h(
-              'div',
-              { className: 'fge-advanced-row' },
-              h('span', { className: 'fge-advanced-key' }, t('field.authEnv')),
-              h('span', { className: 'fge-advanced-value fge-code' }, advancedNames.length > 0 ? advancedNames.join(', ') : t('value.empty')),
-            ),
-            h(
-              'div',
-              { className: 'fge-advanced-row' },
-              h('span', { className: 'fge-advanced-key' }, t('field.persistentToken')),
-              h(
-                'span',
-                { className: 'fge-advanced-value fge-code' },
-                persistentTokenValue === null || persistentTokenValue === undefined || persistentTokenValue === ''
-                  ? t('value.empty')
-                  : String(persistentTokenValue),
-              ),
-            ),
-            h('p', { className: 'fge-hint' }, t('advanced.hint')),
-          ),
-        ),
         notice === null ? null : h('p', { className: 'fge-hint', role: 'status' }, t(notice.key)),
         writable ? null : h(UnavailableNote, { t, reason: snapshot?.reason ?? 'GITEE_CONFIG_UNAVAILABLE', entryId: snapshot?.entryId ?? 'heluo-gitee' }),
         h(SaveReceipt, { t, receipt }),
         h('p', { className: 'fge-footer' }, t('footer.declaration')),
+      );
+    }
+
+    const EXT_CREDENTIAL_FAIL_KEYS = Object.freeze({
+      IAM_EXT_CREDENTIAL_INVALID: 'credential.fail.invalid',
+      IAM_EXT_TOKEN_INVALID: 'credential.fail.invalid',
+      ENTERPRISE_CREDENTIAL_INVALID: 'credential.fail.invalid',
+      IAM_NOT_SIGNED_IN: 'credential.fail.notSignedIn',
+      PENDING_WRITE: 'credential.fail.pending',
+      ENTERPRISE_CREDENTIAL_PENDING: 'credential.fail.pending',
+      KEYCHAIN_UNAVAILABLE: 'credential.fail.keychainUnavailable',
+      ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: 'credential.fail.keychainUnavailable',
+      OWNER_MISMATCH: 'credential.fail.ownerMismatch',
+      ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: 'credential.fail.ownerMismatch',
+      IAM_EXT_CREDENTIAL_NOT_FOUND: 'credential.fail.notFound',
+    });
+
+    function readErrorCode(body) {
+      if (!body || typeof body !== 'object') return null;
+      if (typeof body.code === 'string') return body.code;
+      if (body.error && typeof body.error.code === 'string') return body.error.code;
+      return null;
+    }
+
+    function giteeCredentialFailKey(code) {
+      if (typeof code === 'string' && Object.prototype.hasOwnProperty.call(EXT_CREDENTIAL_FAIL_KEYS, code)) {
+        return EXT_CREDENTIAL_FAIL_KEYS[code];
+      }
+      return 'credential.fail.generic';
+    }
+
+    async function requestExtCredentialJson(url, options) {
+      const response = await fetch(url, options);
+      let body = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      return { response, body };
+    }
+
+    /**
+     * `heluo.iam.credential-item` 子槽位条目：Gitee 独立凭据托管卡片（order 20）。
+     * 常态呈现静默「跟随本机登录」，仅在主动覆盖、存在账号冲突、安全存储异常或命中使用明文文件时展开提醒。
+     */
+    function GiteeCredentialItem(props) {
+      const t = typeof props?.t === 'function' ? props.t : (key) => zh[key] ?? key;
+      const sessionReady = props?.sessionReady;
+      const [statusView, setStatusView] = React.useState({ mode: 'loading', entry: null });
+      const [openForm, setOpenForm] = React.useState(false);
+      const [draft, setDraft] = React.useState('');
+      const [busyAction, setBusyAction] = React.useState(null);
+      const [feedback, setFeedback] = React.useState(null);
+      const mounted = React.useRef(true);
+      const reqSeq = React.useRef(0);
+
+      React.useEffect(() => {
+        mounted.current = true;
+        return () => {
+          mounted.current = false;
+        };
+      }, []);
+
+      async function reload() {
+        const seq = ++reqSeq.current;
+        try {
+          const { response, body } = await requestExtCredentialJson(IAM_EXT_CREDENTIALS_ENDPOINT, {
+            headers: IAM_READ_HEADERS,
+            cache: 'no-store',
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          if (!response.ok) {
+            const code = readErrorCode(body);
+            if (code === 'IAM_NOT_SIGNED_IN') {
+              setStatusView({ mode: 'ready', entry: { extensionId: 'gitee', state: 'IAM_NOT_SIGNED_IN', envHitNames: [], plaintextRisk: false } });
+              return;
+            }
+            setStatusView({ mode: 'failed', entry: null });
+            setFeedback({ tone: 'warn', text: t(giteeCredentialFailKey(code)) });
+            return;
+          }
+          const list = Array.isArray(body?.credentials) ? body.credentials : [];
+          const found = list.find((item) => item && item.extensionId === 'gitee') ?? null;
+          setStatusView({ mode: 'ready', entry: found });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setStatusView({ mode: 'failed', entry: null });
+        }
+      }
+
+      React.useEffect(() => {
+        void reload();
+      }, [sessionReady]);
+
+      async function saveToken() {
+        const trimmed = normalize(draft);
+        if (!trimmed) {
+          setFeedback({ tone: 'warn', text: t('credential.fail.invalid') });
+          return;
+        }
+        const seq = ++reqSeq.current;
+        setBusyAction('saving');
+        setFeedback(null);
+        try {
+          const { response, body } = await requestExtCredentialJson(IAM_EXT_CREDENTIAL_ENDPOINT, {
+            method: 'PUT',
+            headers: IAM_MUTATION_HEADERS,
+            body: JSON.stringify({ token: trimmed }),
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          if (!response.ok) {
+            setFeedback({ tone: 'warn', text: t(giteeCredentialFailKey(readErrorCode(body))) });
+            return;
+          }
+          const nextEntry = body?.credential
+            ?? (Array.isArray(body?.credentials) ? body.credentials.find((item) => item && item.extensionId === 'gitee') : null)
+            ?? { extensionId: 'gitee', state: 'HOSTED_ACTIVE', hosted: true, envHitNames: [], plaintextRisk: false };
+          setStatusView({ mode: 'ready', entry: nextEntry });
+          setDraft('');
+          setOpenForm(false);
+          setFeedback({ tone: 'ok', text: t('credential.notice.saved') });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          setFeedback({ tone: 'warn', text: t('credential.fail.generic') });
+        }
+      }
+
+      async function clearToken() {
+        const seq = ++reqSeq.current;
+        setBusyAction('clearing');
+        setFeedback(null);
+        try {
+          const { response, body } = await requestExtCredentialJson(IAM_EXT_CREDENTIAL_ENDPOINT, {
+            method: 'DELETE',
+            headers: IAM_MUTATION_HEADERS,
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          if (!response.ok) {
+            setFeedback({ tone: 'warn', text: t(giteeCredentialFailKey(readErrorCode(body))) });
+            return;
+          }
+          const nextEntry = body?.credential
+            ?? (Array.isArray(body?.credentials) ? body.credentials.find((item) => item && item.extensionId === 'gitee') : null)
+            ?? { extensionId: 'gitee', state: 'UNSET_NO_HOSTED', hosted: false, envHitNames: [], plaintextRisk: false };
+          setStatusView({ mode: 'ready', entry: nextEntry });
+          setDraft('');
+          setOpenForm(false);
+          setFeedback({ tone: 'ok', text: t('credential.notice.cleared') });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          setFeedback({ tone: 'warn', text: t('credential.fail.generic') });
+        }
+      }
+
+      const entry = statusView.entry;
+      const state = entry?.state ?? (statusView.mode === 'loading' ? 'LOADING' : statusView.mode === 'failed' ? 'LOAD_FAILED' : 'UNSET_NO_HOSTED');
+      const isPending = busyAction !== null || state === 'PENDING_WRITE';
+      const isHosted = state === 'HOSTED_ACTIVE';
+      const isMismatch = state === 'OWNER_MISMATCH';
+      const isSignedOut = state === 'IAM_NOT_SIGNED_IN';
+      const isKeychainUnavailable = state === 'KEYCHAIN_UNAVAILABLE';
+      const hasPlaintextRisk = entry?.plaintextRisk === true;
+      const riskFiles = Array.isArray(entry?.riskDetails?.files) ? entry.riskDetails.files.filter((file) => typeof file === 'string' && file.length > 0) : [];
+      const envHitNames = Array.isArray(entry?.envHitNames) ? entry.envHitNames : [];
+
+      const statusText = (() => {
+        if (statusView.mode === 'loading') return t('credential.state.loading');
+        if (statusView.mode === 'failed') return t('credential.state.loadFailed');
+        if (isHosted) return t('credential.state.hosted');
+        if (isMismatch) return t('credential.state.mismatchTag');
+        if (isSignedOut) return t('credential.state.signedOut');
+        if (isKeychainUnavailable) return t('credential.state.keychainTag');
+        if (state === 'PENDING_WRITE') return t('credential.state.pending');
+        return t('credential.state.follow');
+      })();
+
+      const statusClass = isHosted
+        ? 'fge-cred-status fge-cred-status-ok'
+        : isMismatch || isKeychainUnavailable
+          ? 'fge-cred-status fge-cred-status-warn'
+          : 'fge-cred-status';
+
+      const actions = [];
+      if (!isSignedOut && !openForm && statusView.mode === 'ready') {
+        if (isHosted) {
+          actions.push(
+            h('button', { type: 'button', className: 'fge-link', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
+            h('button', { type: 'button', className: 'fge-link', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),
+          );
+        } else if (isMismatch) {
+          actions.push(
+            h('button', { type: 'button', className: 'fge-link', key: 'clearOld', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.clearOld')),
+            h('button', { type: 'button', className: 'fge-link', key: 'resetAccount', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.resetAccount')),
+          );
+        } else if (isKeychainUnavailable) {
+          actions.push(
+            h('button', { type: 'button', className: 'fge-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+          );
+        } else if (state !== 'PENDING_WRITE') {
+          actions.push(
+            h('button', { type: 'button', className: 'fge-link', key: 'specify', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, hasPlaintextRisk ? t('credential.action.overrideRisk') : t('credential.action.specify')),
+          );
+        }
+      } else if (statusView.mode === 'failed' && !openForm) {
+        actions.push(
+          h('button', { type: 'button', className: 'fge-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+        );
+      }
+
+      return h(
+        'div',
+        { className: 'fge-cred', 'data-extension-id': 'gitee', 'data-credential-state': state },
+        h(
+          'div',
+          { className: 'fge-cred-head' },
+          h(
+            'div',
+            { className: 'fge-cred-main' },
+            h('span', { className: 'fge-cred-title' }, t('credential.title')),
+            h('span', { className: statusClass }, statusText),
+          ),
+          actions.length > 0 ? h('div', { className: 'fge-cred-actions' }, actions) : null,
+        ),
+        isMismatch
+          ? h('div', { className: 'fge-cred-alert', role: 'alert' }, h('span', null, t('credential.state.mismatch')))
+          : null,
+        isKeychainUnavailable
+          ? h('div', { className: 'fge-cred-alert', role: 'alert' }, h('span', null, t('credential.state.keychainUnavailable')))
+          : null,
+        hasPlaintextRisk
+          ? h(
+              'div',
+              { className: 'fge-cred-alert fge-cred-alert-risk', role: 'alert' },
+              h('strong', null, t('credential.risk.title')),
+              h('span', null, t('credential.risk.body')),
+              riskFiles.length > 0
+                ? h('ul', { className: 'fge-cred-files' }, riskFiles.map((file) => h('li', { key: file }, file)))
+                : null,
+            )
+          : null,
+        openForm
+          ? h(
+              'div',
+              { className: 'fge-cred-form' },
+              h('label', { className: 'fge-hint', htmlFor: 'fge-cred-input' }, t('credential.input.label')),
+              h('input', {
+                id: 'fge-cred-input',
+                className: 'fge-input',
+                type: 'password',
+                autoComplete: 'off',
+                spellCheck: false,
+                disabled: isPending,
+                value: draft,
+                placeholder: t('credential.input.placeholder'),
+                'aria-label': t('credential.input.label'),
+                onChange: (event) => {
+                  setDraft(event.target.value);
+                  setFeedback(null);
+                },
+              }),
+              h('p', { className: 'fge-hint' }, t('credential.input.hint')),
+              h(
+                'div',
+                { className: 'fge-cred-form-actions' },
+                h(
+                  'button',
+                  { type: 'button', className: 'fge-primary', disabled: isPending, onClick: () => void saveToken() },
+                  busyAction === 'saving' ? t('credential.action.saving') : t('credential.action.save'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'fge-link',
+                    disabled: isPending,
+                    onClick: () => {
+                      setOpenForm(false);
+                      setDraft('');
+                      setFeedback(null);
+                    },
+                  },
+                  t('credential.action.cancel'),
+                ),
+              ),
+            )
+          : null,
+        envHitNames.length > 0
+          ? h(
+              'details',
+              { className: 'fge-cred-details' },
+              h('summary', null, t('credential.details.title')),
+              h('p', { className: 'fge-hint' }, t('credential.details.envVars', { names: envHitNames.join(', ') })),
+            )
+          : null,
+        feedback
+          ? h(
+              'p',
+              {
+                className: feedback.tone === 'warn' ? 'fge-hint fge-hint-error' : 'fge-hint',
+                role: feedback.tone === 'warn' ? 'alert' : 'status',
+                'aria-live': 'polite',
+              },
+              feedback.text,
+            )
+          : null,
       );
     }
 
@@ -884,10 +1243,21 @@ window.__ModuleLoader__.load({
         }),
         'forge-gitee: settings section',
       );
+      ctx.effect(
+        () => ctx.slots.inject(IAM_CREDENTIAL_SLOT, () => ctx.slots.register({
+          name: IAM_CREDENTIAL_SLOT,
+          id: 'gitee',
+          order: 20,
+          label: () => t('credential.title'),
+          locale: NS,
+          inject: () => ({ t }),
+        }, GiteeCredentialItem)),
+        'forge-gitee: iam credential item',
+      );
     }
 
     const inject = ['slots', 'locale'];
 
-    return { apply, inject, GiteeSection, StatusLine };
+    return { apply, inject, GiteeSection, GiteeCredentialItem, StatusLine };
   },
 });

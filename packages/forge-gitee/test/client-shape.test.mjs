@@ -150,6 +150,7 @@ test('装载形态：id 固定 @heluo/forge-gitee，只依赖 react，导出面�
   assert.deepEqual(CLIENT.module.inject, ['slots', 'locale']);
   assert.equal(typeof CLIENT.module.apply, 'function');
   assert.equal(typeof CLIENT.module.GiteeSection, 'function');
+  assert.equal(typeof CLIENT.module.GiteeCredentialItem, 'function');
   for (const dep of ['node:fs', 'node:path', 'node:os', 'node:child_process', 'node:http']) {
     assert.ok(!SOURCE.includes(dep), `client.js 不得依赖 ${dep}`);
   }
@@ -186,10 +187,10 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
       },
     },
     slots: {
-      // 无容器场景：只有 `settings.section` 被声明，研发容器子槽位缺席。
+      // 无容器场景：只有 `settings.section` 被声明，研发容器子槽位与 IAM 凭据子槽位缺席。
       inject: (name, callback) => {
         assert.ok(
-          name === 'settings.section' || name === 'heluo.engineering.tab',
+          name === 'settings.section' || name === 'heluo.engineering.tab' || name === 'heluo.iam.credential-item',
           `未知槽位 ${name}`,
         );
         return name === 'settings.section' ? callback() : () => {};
@@ -208,6 +209,7 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
     'forge-gitee: styles',
     'forge-gitee: engineering tab',
     'forge-gitee: settings section',
+    'forge-gitee: iam credential item',
   ]);
   assert.deepEqual(locales.map((item) => item.namespace), ['gitee']);
   assert.equal(registrations.length, 1);
@@ -325,14 +327,19 @@ test('AC-4/AC-5: zh/en 键集等值、占位符一致、en 不含中文；行卡
     'card.action.auto',
     'card.action.edit',
     'card.action.done',
-    'advanced.title',
-    'advanced.hint',
+    'credential.title',
+    'credential.state.follow',
+    'credential.state.hosted',
     'footer.declaration',
   ]) {
     assert.ok(typeof zh[key] === 'string' && zh[key].length > 0, `缺文案 ${key}`);
   }
-  for (const field of ['cliPath', 'timeoutMs', 'host', 'authEnv', 'persistentToken']) {
+  for (const field of ['cliPath', 'timeoutMs', 'host']) {
     assert.ok(typeof zh[`field.${field}`] === 'string', `缺字段文案 field.${field}`);
+  }
+  for (const removed of ['advanced.title', 'advanced.hint', 'field.authEnv', 'field.persistentToken']) {
+    assert.equal(zh[removed], undefined, `V2 收敛后 Gitee 工具设置表单不得残留 ${removed}`);
+    assert.equal(en[removed], undefined, `V2 收敛后 Gitee 工具设置表单不得残留 ${removed}`);
   }
   // 「沿用公共值」是本页唯一的"没有本机差异"说法——不许再出现一排「未配置」。
   assert.equal(zh['value.inherited'], '沿用公共值');
@@ -370,7 +377,8 @@ test('AC-4/§4.5: 样式只用 --dsw-* token 与 color-mix，前缀 fge-', () =>
   assert.ok(!css.includes('.fdv-'), '不得复用 devops 的类名前缀');
   assert.ok(css.includes('.fge-root'));
   assert.ok(css.includes('.fge-card'), '行卡结构必须有对应样式');
-  assert.ok(css.includes('.fge-advanced'), '高级折叠必须有对应样式');
+  assert.ok(css.includes('.fge-cred'), '扩展凭据项必须有对应样式');
+  assert.ok(!css.includes('.fge-advanced'), 'V2 收敛后不得残留 .fge-advanced 折叠样式');
   assert.ok(css.includes('@container (max-width:519px)'), '窄屏断点必须按容器查询写在 519px');
   assert.ok(css.includes('prefers-reduced-motion'), 'reduced-motion 必须关动效');
   // 颜色只允许 token / color-mix / transparent，不允许字面 hex 或 rgb()。
@@ -432,16 +440,25 @@ async function renderSection(snapshot) {
   }
 }
 
-test('DESIGN §5-3: 行卡取代四列表格——五个字段各一行，没有表头', async () => {
+test('DESIGN §5-3 / V2 收敛: 行卡只含 cliPath/timeoutMs/host 三项，彻底移除高级折叠与凭据策略表单', async () => {
   const { text, nodes } = await renderSection(SNAPSHOT);
 
-  for (const field of ['cliPath', 'timeoutMs', 'host', 'authEnv', 'persistentToken']) {
+  for (const field of ['cliPath', 'timeoutMs', 'host']) {
     assert.ok(text.includes(`field.${field}`), `行卡缺 ${field}`);
   }
+  assert.ok(!text.includes('field.authEnv'), 'authEnv 不得再出现在 Gitee 工具设置页面');
+  assert.ok(!text.includes('field.persistentToken'), 'persistentToken 不得再出现在 Gitee 工具设置页面');
+  assert.ok(!text.includes('advanced.title'), '高级折叠标题不得再出现');
+  assert.ok(!text.includes('GITEE_TOKEN'), 'Gitee 工具设置页面主视图不得渲染凭据变量名');
   assert.deepEqual(
     nodes.filter((node) => node.type === 'table'),
     [],
     '不得再渲染表格',
+  );
+  assert.deepEqual(
+    nodes.filter((node) => node.type === 'details'),
+    [],
+    'V2 收敛后 Gitee 工具设置页面不得再渲染高级 details 折叠区块',
   );
   for (const key of ['col.field', 'col.public', LEGACY_LOCAL_COLUMN, 'col.effective']) {
     assert.ok(!text.includes(key), `表头 ${key} 应已删除`);
@@ -461,18 +478,11 @@ test('DESIGN §5-4: 只显示本机差异——相同给「沿用公共值」，
   assert.ok(!text.includes('未配置'), '不得出现一排「未配置」');
 });
 
-test('AC-5/AC-12: 服务地址行结构上不含值，凭据变量名收进高级折叠', async () => {
+test('AC-5/AC-12: 服务地址行结构上不含值，且引导独立凭据去企业账号', async () => {
   const { text } = await renderSection(SNAPSHOT);
 
   assert.ok(!text.includes('https://gitee.secret.example'), '服务地址的值不得出现在页面上');
-  assert.ok(text.includes('value.host'), '服务地址行只说"由企业分发，本页只读"');
-  assert.ok(text.includes('field.authEnv'), '凭据变量名行要在场');
-  assert.ok(text.includes('GITEE_TOKEN'), '凭据只显示变量名');
-  assert.ok(text.includes('advanced.title') && text.includes('advanced.hint'), '高级折叠要带"由运行期决定"的说明');
-  // 高级折叠默认收起：details 不带 open。
-  const details = collectNodes(await renderSection(SNAPSHOT).then((result) => result.tree)).filter((node) => node.type === 'details');
-  assert.equal(details.length, 1, '高级折叠恰好一个');
-  assert.ok(!('open' in details[0].props), '高级折叠默认收起');
+  assert.ok(text.includes('value.host'), '服务地址行只说"由企业分发，本页只读"（独立凭据去设置→企业账号）');
 });
 
 test('DESIGN §5-5: 无检查详情、无"分区由 … 提供 · 读取于 …"页脚', async () => {
