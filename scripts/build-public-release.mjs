@@ -22,7 +22,7 @@ import { buildBundle, writeBundleArtifacts } from './build-enterprise-bundle.mjs
 import { verifyBundle } from './verify-enterprise-bundle.mjs';
 import { readBundleEntries } from './lib/bundle-archive.mjs';
 import { writeBundleTarball } from './lib/bundle-write.mjs';
-import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch, patchEntriesOf } from './lib/private-bundle.mjs';
+import { IAM_VALIDATOR_MODULES, TOOL_NAME, TOOL_VERSION, assertIamValidatorMatches, assertNeutralPatch, patchEntriesOf, patchLayerProblems } from './lib/private-bundle.mjs';
 import { scanReleaseFiles, sha256, stableJson } from './lib/release-support.mjs';
 
 export const PUBLIC_RELEASE_SCHEMA = 'heluo-public-release/1';
@@ -218,7 +218,12 @@ export function buildPublicRelease(input) {
     renameSync(built.tarball, tarballPath);
     const entries = readBundleEntries(tarballPath, { withContent: true });
     const patchEntries = patchEntriesOf(entries);
-    if (patchEntries.length === 0) fail('ARTIFACT_INVALID', 'public tarball has no bundle patch file');
+    const shippedManifest = JSON.parse(String(entries.find((entry) => entry.path === 'package.json')?.content ?? '{}'));
+    // 声明的默认层必须随包发出：缺了它装上也加载不到企业能力。
+    const layerProblems = patchLayerProblems(shippedManifest, patchEntries);
+    if (layerProblems.length > 0) {
+      fail('ARTIFACT_INVALID', `public tarball has an incomplete patch layer set: ${layerProblems.join('; ')}`);
+    }
     // A bundle may ship a base layer plus optional layers; neutrality is judged
     // on the set so a row that lives in an optional layer still counts.
     const neutral = assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8')));

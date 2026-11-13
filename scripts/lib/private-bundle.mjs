@@ -573,6 +573,25 @@ function insertedIds(text) {
   return ids;
 }
 
+/** `dsh.bundle.patch` 指向的那一层：bundle 必须随包发出，否则装上也加载不到。 */
+function declaredPatchPath(root) {
+  const declared = root?.dsh?.bundle?.patch;
+  return typeof declared === 'string' ? declared.replace(/^\.\//u, '') : undefined;
+}
+
+/** 公版 bundle 的补丁层完整性：必须声明默认层、且默认层真的在包里。 */
+export function patchLayerProblems(root, patchEntries) {
+  const problems = [];
+  const declared = declaredPatchPath(root);
+  if (declared === undefined) {
+    problems.push('package.json does not declare dsh.bundle.patch');
+  } else if (!patchEntries.some((entry) => entry.path === declared)) {
+    problems.push(`bundle does not ship the declared patch ${declared}`);
+  }
+  if (patchEntries.length === 0) problems.push('bundle has no patch file');
+  return problems;
+}
+
 /** Public bundles must be configuration-neutral; the check is the acceptance gate. */
 export function assertNeutralPatch(input) {
   const texts = (Array.isArray(input) ? input : [input])
@@ -580,9 +599,17 @@ export function assertNeutralPatch(input) {
   const problems = [];
   const required = new Set(['heluo-iam', 'forge-devops', 'heluo-gitee']);
   const seen = new Set();
-  for (const text of texts) {
+  const ownerOfId = new Map();
+  for (const [index, text] of texts.entries()) {
     const ids = insertedIds(text);
-    for (const id of ids) seen.add(id);
+    for (const id of ids) {
+      // 同一行出现在两层时归属不明：注入只会落在第一处，另一处留空 config 反而可能覆盖回去。
+      if (seen.has(id) && ownerOfId.get(id) !== index) {
+        problems.push(`insert id "${id}" is declared by more than one patch layer`);
+      }
+      ownerOfId.set(id, index);
+      seen.add(id);
+    }
     for (const id of ['heluo-credentials-keychain', ...required]) {
       if (!ids.has(id)) continue;
       const lines = text.split('\n');
@@ -691,7 +718,10 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     fail('VERSION_UNCHANGED', `private version must differ from the public version ${root.version}: same name+version must mean the same bytes`);
   }
   const patchEntries = patchEntriesOf(entries);
-  if (patchEntries.length === 0) fail('PUBLIC_TARBALL_INVALID', 'public tarball has no bundle patch file');
+  const layerProblems = patchLayerProblems(root, patchEntries);
+  if (layerProblems.length > 0) {
+    fail('PUBLIC_TARBALL_INVALID', `public tarball has an incomplete patch layer set: ${layerProblems.join('; ')}`);
+  }
   const patchTexts = patchEntries.map((entry) => entry.content.toString('utf8'));
   const neutral = assertNeutralPatch(patchTexts);
   if (neutral.length > 0) fail('PUBLIC_TARBALL_INVALID', `public tarball is not configuration-neutral: ${neutral.join('; ')}`);
@@ -709,11 +739,15 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     fail('PUBLIC_TARBALL_INVALID', 'public tarball does not declare the IAM or Gitee insert row');
   }
   const injectedPatches = new Map();
+  const rewrittenLayers = new Map();
   for (const entry of patchEntries) {
-    let patch = entry.content.toString('utf8');
+    const original = entry.content.toString('utf8');
+    let patch = original;
     if (entry === iamOwner) patch = injectPatchConfig(patch, 'heluo-iam', runtimeIam);
     if (entry === giteeOwner) patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
     injectedPatches.set(entry.path, patch);
+    // 只有真的被改写的层才进产物与 change 元数据：没改的层重写一遍只会让审计噪声变大。
+    if (patch !== original) rewrittenLayers.set(entry.path, patch);
   }
   // `patch` keeps the historical meaning for callers that inspect one file: the
   // layer that carries the IAM row.
@@ -732,7 +766,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
 
   const replaced = new Map([
     ['package.json', Buffer.from(stableJson(manifest), 'utf8')],
-    ...[...injectedPatches].map(([path, text]) => [path, Buffer.from(text, 'utf8')]),
+    ...[...rewrittenLayers].map(([path, text]) => [path, Buffer.from(text, 'utf8')]),
     [PRIVATE_METADATA_FILE, Buffer.from(stableJson(metadata), 'utf8')],
   ]);
   const changed = [...replaced.keys()].sort();
@@ -775,6 +809,8 @@ function assertArtifactClosure(bytes, { code, label }) {
  *   output: string, repoRoot?: string, requireVersionChange?: boolean}} input
  */
 export function makePrivateBundle(input) {
+  // 校验器可注入：默认就是交付链信任的独立验证器，测试用它证明「成功必须经过校验」。
+  const verify = typeof input.verifyImpl === 'function' ? input.verifyImpl : verifyBundle;
   const publicPath = resolve(input.publicPath);
   if (!existsSync(publicPath)) fail('PUBLIC_MISSING', `public tarball not found: ${publicPath}`);
   const expected = parseDigest(input.expectedSha256, 'public tarball digest');
@@ -857,7 +893,7 @@ export function makePrivateBundle(input) {
     writeFileSync(join(staging, 'SHA256SUMS'), sumsText);
     // Success is reported only for bytes that were verified as written: the same
     // independent verifier, against the manifest generated next to them.
-    const verdict = verifyBundle(join(staging, tarName), { manifestPath: join(staging, 'bundle-manifest.json') });
+    const verdict = verify(join(staging, tarName), { manifestPath: join(staging, 'bundle-manifest.json') });
     if (!verdict.ok) fail('ARTIFACT_VERIFY_FAILED', `private artifact failed verification:\n- ${verdict.errors.join('\n- ')}`);
     if (existsSync(output)) rmSync(output, { recursive: true, force: true });
     renameSync(staging, output);
@@ -902,6 +938,7 @@ export function inspectPublicTarball(publicPath) {
   assertIamValidatorMatches(entries);
   const patchEntries = patchEntriesOf(entries);
   const problems = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
+  problems.push(...patchLayerProblems(root, patchEntries));
   if (patchEntries.length > 0) {
     problems.push(...assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8'))));
   }

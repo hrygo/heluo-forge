@@ -19,6 +19,7 @@ import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
 import { validateConfig } from '../packages/forge-iam/src/config.mjs';
 import {
   assertIamValidatorMatches,
+  patchEntriesOf,
   buildConfig,
   buildPrivateTarball,
   inspectPublicTarball,
@@ -85,9 +86,18 @@ function layeredPatchText() {
   };
 }
 
-function publicTarball({ patch, patches, validatorOverride, omitValidator } = {}) {
+function publicTarball({ patch, patches, validatorOverride, omitValidator, omitPatchDeclaration } = {}) {
   const files = [
-    { path: 'package.json', body: `${JSON.stringify({ name: ENTRY, version: PUBLIC_VERSION, license: 'Apache-2.0' }, null, 2)}\n` },
+    // 真实公版包必须声明默认层（`dsh.bundle.patch`）：夹具照抄这条，否则测的不是可安装形态。
+    {
+      path: 'package.json',
+      body: `${JSON.stringify({
+        name: ENTRY,
+        version: PUBLIC_VERSION,
+        license: 'Apache-2.0',
+        ...(omitPatchDeclaration === true ? {} : { dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+      }, null, 2)}\n`,
+    },
     ...(patches === undefined
       ? [{ path: 'cordis.patch.yml', body: patch ?? patchText() }]
       : Object.entries(patches).map(([name, body]) => ({ path: name, body }))),
@@ -468,6 +478,124 @@ test('public input must be configuration-neutral before the maker touches it', (
     'PUBLIC_TARBALL_INVALID',
   );
   assert.equal(existsSync(join(root, 'out')), false);
+});
+
+test('patch layer set: the declared default layer must ship, duplicates and dirty overlay rows are refused', (t) => {
+  const root = temp(t);
+  const patches = layeredPatchText();
+
+  // 1) 少了 `dsh.bundle.patch` 指向的默认层：装上也加载不到，必须 fail closed。
+  const overlayOnly = join(root, 'overlay-only.tgz');
+  writeFileSync(overlayOnly, publicTarball({ patches: { 'cordis.patch.engineering.yml': patches.overlay } }));
+  assert.ok(inspectPublicTarball(overlayOnly).problems.some((problem) => problem.includes('does not ship the declared patch cordis.patch.yml')));
+  expectCode(() => buildPrivateTarball({
+    entries: readBundleEntries(readFileSync(overlayOnly), { withContent: true }),
+    version: '0.1.1',
+    config: buildConfig(parseEnvConfig(ENV.join('\n'))),
+    baseSha256: createHash('sha256').update(readFileSync(overlayOnly)).digest('hex'),
+  }), 'PUBLIC_TARBALL_INVALID');
+
+  // 1b) 连声明都没有：`package.json` 没写 `dsh.bundle.patch`，同样不可安装。
+  const undeclared = join(root, 'undeclared.tgz');
+  writeFileSync(undeclared, publicTarball({ omitPatchDeclaration: true }));
+  assert.ok(inspectPublicTarball(undeclared).problems.some((problem) => problem.includes('does not declare dsh.bundle.patch')));
+
+  // 2) 一层都没有：同样拒绝（旧门禁在这里报 no bundle patch file）。
+  const noPatch = join(root, 'no-patch.tgz');
+  writeFileSync(noPatch, publicTarball({ patches: {} }));
+  assert.ok(inspectPublicTarball(noPatch).problems.some((problem) => problem.includes('bundle has no patch file')));
+
+  // 3) 必需行在两层都不存在：集合判定的否定方向。
+  const missingRow = join(root, 'missing-row.tgz');
+  writeFileSync(missingRow, publicTarball({
+    patches: {
+      'cordis.patch.yml': patches.base,
+      'cordis.patch.engineering.yml': patches.overlay.replace(/- id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}/u, ''),
+    },
+  }));
+  assert.ok(inspectPublicTarball(missingRow).problems.some((problem) => problem.includes('patch set has no insert entry "forge-devops"')));
+
+  // 4) 同一行出现在两层：归属不明，注入只落第一处，另一处留空 config 反而可能覆盖回去。
+  const duplicate = join(root, 'duplicate.tgz');
+  writeFileSync(duplicate, publicTarball({
+    patches: {
+      'cordis.patch.yml': patches.base,
+      'cordis.patch.engineering.yml': `${patches.overlay}    - id: heluo-iam\n      name: '@heluo/forge-iam'\n      config: {}\n`,
+    },
+  }));
+  assert.ok(inspectPublicTarball(duplicate).problems.some((problem) => problem.includes('declared by more than one patch layer')));
+
+  // 5) 非首层的行带非空 config：中立性扫描必须逐层看，不能只看第一层。
+  const dirtyOverlay = join(root, 'dirty-overlay.tgz');
+  writeFileSync(dirtyOverlay, publicTarball({
+    patches: {
+      'cordis.patch.yml': patches.base,
+      'cordis.patch.engineering.yml': patches.overlay.replace('config: {}', 'config:\n        host: "gitee.corp.example"'),
+    },
+  }));
+  assert.ok(inspectPublicTarball(dirtyOverlay).problems.some((problem) => problem.includes('carries a non-empty config')));
+});
+
+test('member package patches are not bundle layers: only top-level cordis.patch*.yml participates', () => {
+  const patches = layeredPatchText();
+  const withMemberPatch = publicTarball({
+    patches: {
+      'cordis.patch.yml': patches.base,
+      'cordis.patch.engineering.yml': patches.overlay,
+      'node_modules/@heluo/forge-gitee/cordis.patch.yml': '- insert:\n    - id: heluo-gitee\n      name: \'@heluo/forge-gitee\'\n      config: {}\n',
+    },
+  });
+  const entries = readBundleEntries(withMemberPatch, { withContent: true });
+  const layers = patchEntriesOf(entries).map((entry) => entry.path);
+  assert.deepEqual(layers.sort(), ['cordis.patch.engineering.yml', 'cordis.patch.yml'], '成员包自带的补丁不得算作 bundle 层');
+  const built = buildPrivateTarball({
+    entries,
+    version: '0.1.1',
+    config: buildConfig(parseEnvConfig(ENV.join('\n'))),
+    baseSha256: createHash('sha256').update(withMemberPatch).digest('hex'),
+  });
+  assert.match(built.patches.get('cordis.patch.engineering.yml'), /gitee\.corp\.example/u, '注入仍落在根叠加层');
+  assert.doesNotMatch(built.patches.get('cordis.patch.yml'), /gitee\.corp\.example/u);
+});
+
+test('change metadata lists only the layers that were actually rewritten', () => {
+  const patches = layeredPatchText();
+  const bytes = publicTarball({
+    patches: {
+      'cordis.patch.yml': patches.base,
+      'cordis.patch.engineering.yml': patches.overlay,
+      'cordis.patch.extra.yml': '- insert:\n    - id: forge-policy-extra\n      name: \'@heluo/forge-policy\'\n      config: {}\n',
+    },
+  });
+  const built = buildPrivateTarball({
+    entries: readBundleEntries(bytes, { withContent: true }),
+    version: '0.1.1',
+    config: buildConfig(parseEnvConfig(ENV.join('\n'))),
+    baseSha256: createHash('sha256').update(bytes).digest('hex'),
+  });
+  assert.ok(built.changed.includes('cordis.patch.engineering.yml'));
+  assert.equal(built.changed.includes('cordis.patch.extra.yml'), false, '没被改写的层不该出现在 change 元数据里');
+});
+
+test('a run that writes an artifact the verifier rejects fails and leaves no output', (t) => {
+  const root = temp(t);
+  const publicBytes = publicTarball();
+  const publicPath = join(root, 'public.tgz');
+  writeFileSync(publicPath, publicBytes);
+  const output = join(root, 'out');
+  assert.throws(() => makePrivateBundle({
+    publicPath,
+    expectedSha256: createHash('sha256').update(publicBytes).digest('hex'),
+    configPath: writeConfig(root, ENV),
+    version: '0.2.0',
+    output,
+    verifyImpl: () => ({ ok: false, errors: ['forced failure'] }),
+  }), (error) => {
+    assert.equal(error.code, 'ARTIFACT_VERIFY_FAILED');
+    assert.equal(error.message.includes(root), false);
+    return true;
+  });
+  assert.equal(existsSync(output), false, '校验不过时不得留下输出目录');
 });
 
 test('patch injection keeps every other composition line intact', () => {

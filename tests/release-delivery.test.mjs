@@ -50,7 +50,10 @@ function neutralPatch() {
 
 function publicTarball() {
   return writeBundleTarball([
-    { path: 'package.json', body: `${JSON.stringify({ name: '@heluo/forge-enterprise', version: '0.1.0', license: 'Apache-2.0' }, null, 2)}\n` },
+    {
+      path: 'package.json',
+      body: `${JSON.stringify({ name: '@heluo/forge-enterprise', version: '0.1.0', license: 'Apache-2.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }, null, 2)}\n`,
+    },
     { path: 'cordis.patch.yml', body: neutralPatch() },
     { path: 'README.md', body: '# fixture\n' },
     ...['config.mjs', 'model-options.mjs', 'http-url.mjs', 'errors.mjs'].map((name) => ({
