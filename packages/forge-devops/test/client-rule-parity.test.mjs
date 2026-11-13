@@ -139,6 +139,10 @@ const MATRIX = [
   ['timeoutMs', '999', '低于下界'],
   ['timeoutMs', '600001', '高于上界'],
   ['timeoutMs', '12.5', '非整数'],
+  ['dopBin', '"C:\\tools\\dop.exe"', '资源管理器「复制文件地址」的双引号全路径'],
+  ['timeoutMs', "'30000'", '启动脚本风格的单引号（两侧同判可存）'],
+  ['timeoutMs', "30000'", '单边引号（两侧同判非法）'],
+  ['timeoutMs', "''30000''", '两层引号（两侧同判非法）'],
 ];
 
 test('矩阵覆盖全部四个字段，且两键在页面直面、另两键在服务端直面', () => {
@@ -173,6 +177,19 @@ test('隐藏两键：页面恒 null（无规则、不渲染），服务端仍逐
     const verdict = serverVerdict(field, value);
     assert.equal(verdict.ok, expected, `服务端 ${field}=${label} 应${expected ? '接受' : '拒收'}：${verdict.message}`);
   }
+});
+
+test('带引号的值在页面同样可存：归一化只剥一层，单边仍失焦即拒', () => {
+  // 页面与服务端各自实现归一化（client.js 不进 node 模块图），口径一漂就回到
+  // 「粘贴后失焦报错、点保存才通过」或反过来。这里锁住三条：剥一层后可存、
+  // 单边引号拒、提交值不带引号。
+  assert.equal(pageValidateField('timeoutMs', "'30000'"), null, '带单引号的超时必须可存');
+  assert.equal(pageValidateField('dopBin', '"C:\\Program Files\\Heluo\\dop.exe"'), null, '带双引号的路径必须可存');
+  assert.equal(pageValidateField('timeoutMs', "30000'"), 'error.timeout', '单边引号不是可存的值');
+  const strip = new Function(`${sliceClientConst('normalize')}\nreturn normalize;`)();
+  assert.equal(strip("'30000'"), '30000', '提交给服务端的值不带引号');
+  assert.equal(strip('"C:\\Program Files\\Heluo\\dop.exe"'), 'C:\\Program Files\\Heluo\\dop.exe');
+  assert.equal(strip("''"), '', '只剩一对引号 = 清除该层');
 });
 
 test('同类边界：路径长度 4096 放行、4097 失焦即拒（与服务端同判）', () => {

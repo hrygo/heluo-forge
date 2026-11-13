@@ -19,6 +19,8 @@
  *          sourceType: string | null, timeoutMs: number | null }
  *   validateConfigField(field, value)
  *     -> { ok: true, value } | { ok: false, message }   // T2 增量：字段级校验唯一实现处
+ *   DEFAULT_FIELD_VALUES
+ *     -> { sourceType, timeoutMs }   // 非必填项的基线缺省，三层合并与本模块共用同一份
  *   ConfigStandard
  *     -> { '~standard': { version: 1, vendor: 'heluo', validate } }   // T2 增量，见文末
  *
@@ -29,6 +31,12 @@
  *
  * 单值口径：只认字符串，且去掉首尾空白后为空即视为「未配置」（`''`、`'   '`）。
  * 不把 `undefined` 与空串区别对待，也不为任何字段提供主机相关默认值。
+ *
+ * **一层包裹引号不算值**：Windows 启动脚本里 `set VAR='值'` 会把引号写进值本身，
+ * 资源管理器「复制文件地址」给出的也是带双引号的全路径——都是搬运时混进的引号，
+ * 在交给字段规则之前剥掉**一对**（见 `scalarText`）。剥完仍带引号的值判非法：
+ * 环境变量层不读盘，一个带引号的 `dopBin` 会一路活到 `execFile` 才报 `ENOENT`，
+ * 那正是本模块 fail closed 要挡在门外的失败面。
  */
 
 /** 环境变量名 → 逻辑字段名。文档表格与代码同源于此表，别处不再复制一份。 */
@@ -61,6 +69,51 @@ export const DEFAULT_TIMEOUT_MS = 20_000;
 export const MIN_TIMEOUT_MS = 1_000;
 export const MAX_TIMEOUT_MS = 600_000;
 
+/**
+ * 非必填项的基线缺省（非机密）。`cli-config` 的三层合并且同一份：两处各写一遍，
+ * 页面显示的缺省与 runner 实际用的超时迟早分叉（`config.test.mjs` 锁了这条）。
+ */
+export const DEFAULT_FIELD_VALUES = Object.freeze({
+  sourceType: DEFAULT_SOURCE_TYPE,
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+});
+
+/** 必填项（没有默认值）：缺失即 `CONFIG_MISSING`，其余字段可缺省或可选。 */
+const REQUIRED_FIELDS = Object.freeze(['dopBin']);
+
+/** 一层成对的包裹引号：`'值'` / `"值"`（`VAR='值'` 与「复制文件地址」的现场形态）。 */
+const WRAPPED_IN_QUOTES = /^(['"])([\s\S]*)\1$/u;
+
+/** 值两侧残留的引号：成对剥完还剩一层、或只有一侧（`'值`、`值'`）。 */
+const EDGE_QUOTE = /^['"]|['"]$/u;
+
+/**
+ * 单值归一化：去首尾空白 → 剥掉一层成对包裹引号 → 再判空。
+ *
+ * 只剥**一层**、且要求两侧引号一致：`''值''` 剥完是 `'值'`，仍然带引号，
+ * 由调用方（`validateConfigField`）拒掉，而不是继续猜到用户想写什么。
+ * **只在这里剥**：`readText` 只判有没有值，两处都剥会把两层引号一起吃光。
+ * 非字符串与空串一律返回 `null`（= 未配置）。
+ */
+function scalarText(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  const unwrapped = trimmed.replace(WRAPPED_IN_QUOTES, '$2').trim();
+  return unwrapped === '' ? null : unwrapped;
+}
+
+/**
+ * 该值是否构成「配了值」：去空白、剥一层成对包裹引号后仍非空。
+ *
+ * 与 `scalarText` 同一实现，供三层合并判断「这一层到没到」用：`VAR=''` 归一化后是空，
+ * 就不算配了值——否则它会被算成「压过了下一层」，页面上凭空多一条覆盖提示。
+ */
+export function hasConfigValue(value) {
+  return scalarText(value) !== null;
+}
+
+/** 只做「有没有值」的判定（去空白后为空 = 未配置）；引号归一化归 `validateConfigField`。 */
 function readText(env, key) {
   const raw = env === null || env === undefined ? undefined : env[key];
   if (typeof raw !== 'string') return undefined;
@@ -122,8 +175,8 @@ function validateText(value, max = MAX_PATH_LENGTH) {
  * @param {string} field 四个逻辑字段之一（与 `ENV_KEYS` 同键）
  * @param {unknown} value 字符串/数字/null（null 与空串等价于「未配置」）
  * @returns {{ok: true, value: unknown} | {ok: false, message: string}}
- *   成功时 `value` 是归一化后的值（首尾去空白、`sourceType` 小写、`timeoutMs` 为数字）；
- *   `value: null` 表示该字段未配置，调用方据此回落下一层。
+ *   成功时 `value` 是归一化后的值（首尾去空白、剥掉一层包裹引号、`sourceType` 小写、
+ *   `timeoutMs` 为数字）；`value: null` 表示该字段未配置，调用方据此回落下一层。
  */
 export function validateConfigField(field, value) {
   if (typeof field !== 'string' || !Object.prototype.hasOwnProperty.call(ENV_KEYS, field)) {
@@ -131,6 +184,17 @@ export function validateConfigField(field, value) {
   }
   if (value === null || value === undefined) return { ok: true, value: null };
   if (typeof value === 'string' && value.trim() === '') return { ok: true, value: null };
+
+  // 归一化只对文本做：`timeoutMs` 还接受页面上传的数字，非字符串在下面按各字段自己的规则判。
+  if (typeof value === 'string') {
+    const text = scalarText(value);
+    if (text === null) return { ok: true, value: null }; // 只剩引号 = 空值，等于未配置
+    // 成对引号已剥掉；这里剩下的引号是单边或第二层，判非法而不是继续猜。
+    if (EDGE_QUOTE.test(text)) {
+      return fail('值的两侧不要带引号（从命令行或资源管理器复制整段时，引号会被一起带进来）');
+    }
+    value = text;
+  }
 
   switch (field) {
     case 'dopBin':
@@ -168,6 +232,11 @@ export function validateConfigField(field, value) {
 /**
  * 把 `env` 解析为运行配置。
  *
+ * 逐字段调用 `validateConfigField`——**不在本函数另写一套字段规则**：环境变量层少判一条，
+ * 就会让「环境变量能过、页面存不了」或者反过来（带引号的 `dopBin` 正是这么活到 `execFile` 的）。
+ * 这里只负责三件事：点名必须是哪一个变量（`ENV_KEYS`）、补非必填项的缺省、按
+ * 「缺失优先于非法」的顺序收口。
+ *
  * 缺失优先于非法：先点名「必须配置却没配置」的字段，再报格式问题——一次只让用户
  * 修一类错误，避免来回试。
  *
@@ -178,25 +247,24 @@ export function validateConfigField(field, value) {
 export function resolveRuntimeConfig(env = {}) {
   const missing = [];
   const invalid = [];
+  const value = {};
 
-  const dopBin = readText(env, ENV_KEYS.dopBin);
-  if (dopBin === undefined) missing.push(ENV_KEYS.dopBin);
-
-  const dopEndpoint = readText(env, ENV_KEYS.dopEndpoint);
-  if (dopEndpoint !== undefined && !isEndpointLike(dopEndpoint)) invalid.push(ENV_KEYS.dopEndpoint);
-
-  const sourceType = (readText(env, ENV_KEYS.sourceType) ?? DEFAULT_SOURCE_TYPE).toLowerCase();
-  if (!SOURCE_TYPES.includes(sourceType)) invalid.push(ENV_KEYS.sourceType);
-
-  const rawTimeout = readText(env, ENV_KEYS.timeoutMs);
-  let timeoutMs = DEFAULT_TIMEOUT_MS;
-  if (rawTimeout !== undefined) {
-    const parsed = /^\d+$/.test(rawTimeout) ? Number(rawTimeout) : Number.NaN;
-    if (isPositiveInt(parsed, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)) {
-      timeoutMs = parsed;
-    } else {
-      invalid.push(ENV_KEYS.timeoutMs);
+  for (const [field, key] of Object.entries(ENV_KEYS)) {
+    const verdict = validateConfigField(field, readText(env, key) ?? null);
+    if (verdict.ok !== true) {
+      invalid.push(key);
+      continue;
     }
+    if (verdict.value !== null) {
+      value[field] = verdict.value;
+      continue;
+    }
+    // 未配置：`dopBin` 是无默认的必填项，缺失单独点名；其余取基线缺省，`dopEndpoint`
+    // 既无缺省也不报缺失（显式给 undefined 占位，让返回值的键集合与字段表一致）。
+    if (REQUIRED_FIELDS.includes(field)) missing.push(key);
+    value[field] = Object.prototype.hasOwnProperty.call(DEFAULT_FIELD_VALUES, field)
+      ? DEFAULT_FIELD_VALUES[field]
+      : undefined;
   }
 
   if (missing.length > 0) {
@@ -206,10 +274,7 @@ export function resolveRuntimeConfig(env = {}) {
     return { ok: false, reason: CONFIG_REASONS.INVALID, invalid };
   }
 
-  return {
-    ok: true,
-    value: Object.freeze({ dopBin, dopEndpoint, sourceType, timeoutMs }),
-  };
+  return { ok: true, value: Object.freeze(value) };
 }
 
 /**
