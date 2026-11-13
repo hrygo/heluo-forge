@@ -159,11 +159,11 @@ export function createExtTokensService({ registry, store, getCurrentSubject, get
 
   async function resolveChildEnv({ extensionId, baseEnv = undefined, processEnv = getProcessEnv() ?? {} }) {
     const descriptor = requireDescriptor(extensionId);
-    const session = readSessionRef();
+    const session = requireSession();
     const stored = await store.read({
       extensionId: descriptor.extensionId,
       storageRef: descriptor.storageRef,
-      currentSubject: session?.subject ?? null,
+      currentSubject: session.subject,
     });
 
     // 读存储期间登出/换账号：这次解析的结论不能当真，按未登录拒绝。

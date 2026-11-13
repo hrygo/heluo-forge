@@ -5,6 +5,22 @@ import { createCredentialRegistry } from '../src/credential-registry.mjs';
 import { ExtTokenStoreError, createExtTokenStore } from '../src/ext-token-store.mjs';
 import { createExtTokensService } from '../src/service-ext-tokens.mjs';
 
+test('signed-out resolution rejects before reading credential storage', async () => {
+  const registry = createCredentialRegistry();
+  registry.registerExtensionCredential({
+    extensionId: 'alpha-tool', storageRef: 'HEL_EXT_ALPHA_TOKEN',
+    envKey: 'ALPHA_API_TOKEN', allowlistedEnvNames: ['ALPHA_API_TOKEN'],
+  });
+  let reads = 0;
+  const svc = createExtTokensService({
+    registry, getCurrentSubject: () => null,
+    store: { async read() { reads += 1; return { state: 'IAM_NOT_SIGNED_IN' }; } },
+  });
+  await assert.rejects(() => svc.resolveChildEnv({ extensionId: 'alpha-tool' }),
+    (error) => error.code === 'IAM_NOT_SIGNED_IN');
+  assert.equal(reads, 0);
+});
+
 test('service-ext-tokens projects sanitized states, enforces allowlist, and blocks OWNER_MISMATCH', async () => {
   const registry = createCredentialRegistry();
   registry.registerExtensionCredential({
