@@ -54,4 +54,4 @@
 
 ## 企业模型入口
 
-企业补丁另行禁用通用 `llm-pi-ai` 与原生 `ui-settings-models`，防止独立提供方和 Key 绕开账号流程。用户在“企业账号”页配置网关地址和个人 Key，模型目录由 `/v1/models` 获取；执行门禁与本地验证边界见 IAM [开发指南](<../forge-iam/docs/developer-guide.md#可配置网关与动态模型目录>)。回灌检测包含这两个入口。
+企业补丁另行禁用通用 `llm-pi-ai` 与原生 `ui-settings-models`，防止独立提供方和 Key 绕开账号流程。用户在「设置 → 企业账号」（`forge-iam`，order -10）配置网关地址和个人 Key，在独立「设置 → 企业模型」（`forge-models`，order 10，V1 由 `@heluo/forge-iam` 托管）管理 `/v1/models` 目录与手动声明模型条目；执行门禁与本地验证边界见 IAM [开发指南](<../forge-iam/docs/developer-guide.md#可配置网关与动态模型目录>)。回灌检测包含这两个入口。

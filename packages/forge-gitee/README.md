@@ -47,17 +47,15 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 进入路径两次点击：首页 → 左下「设置」→ 侧栏「Gitee」。分区 id `gitee`、order 50，由本包 `client.js` 提供（`settings.section` 槽，`ctx.slots.inject` 两段式挂载；`ensureStyle` 返回 disposer）。
 
-同一 profile 装了研发容器（`@heluo/forge-enterprise` 的 `forge-engineering` 分区）时，本面板改为挂进容器的子槽位 `heluo.engineering.tab`（order 20）并撤掉独立分区：`client.js` 先等子槽位声明，出现后释放已注册的独立分区再注册容器条目；容器缺席（单包安装）时保持上面的独立分区。
+同一 profile 装了研发容器（`@heluo/forge-enterprise` 的 `forge-engineering` 分区）时，本面板改为挂进容器的子槽位 `heluo.engineering.tab`（order 20）并撤掉独立分区：`client.js` 先等子槽位声明，出现后释放已注册的独立分区再注册容器条目；容器缺席（单包安装）时保持上面的独立分区。同时当 `@heluo/forge-iam` 在场时，本包向 `heluo.iam.credential-item`（order 20）注入紧凑凭据条目（默认静默跟随本机登录，按需展开指定 Token，检测到明文风险或归属冲突时就地给出处理建议）。
 
-页面是**一张五行三列的表**：每行一个配置键，三列分别是「公共参数」（补丁层/企业下发的值）、「本机覆盖」（这台机器在页面上改过的值）、「最终生效」。只有两项可编辑：
+页面主表聚焦运行入口与只读域名，已移除旧「高级」配置区块（`authEnv`/`persistentToken` 的配置契约与 `detectPersistentToken` 检出保留在服务端，相关明细只进诊断摘要）。只有两项可编辑：
 
 | 行 | 可编辑 | 说明 |
 |---|---|---|
 | 命令行入口（`cliPath`） | 是 | 输入框里是**当前生效值**；「改为手动指定」把草稿变成覆盖，「恢复继承」在保存时删除本键的本机覆盖（先说明这一后果）。本页不判后缀，运行期失败会说明原因 |
 | 超时（`timeoutMs`） | 是 | 毫秒，`1000`–`600000`；留空提交 `null` 即删键回落到默认 |
 | 主机（`host`） | 否 | 只显示来源；值不在本页显示（它会进企业域校验，但不是凭据） |
-| 凭据变量名（`authEnv`） | 否 | 只显示**允许的变量名**，不显示值 |
-| 持久化策略（`persistentToken`） | 否 | 显示 `warn`/`block`，本页不修改 |
 
 交互要点：保存只提交**改过的**已知键 + 服务端快照里的 `revision`；`revision` 过期回 409 并**保留草稿**（不静默丢弃）；字段非法回 422 时逐字段聚焦、写盘 0 次；保存成功但运行时没应用上，回执写「已保存；未应用」并给出原因，不假装生效。页面**没有**「检查」按钮——本包没有获批的只读探测，披露块里恒显示「未执行」，也不发 `?refresh=1`（该参数只属于 devops 分区的 DevOps 行）。写入面不可用（profile 没挂配置面）时整页降级为只读并给环境变量出口，而不是渲染一个存不进去的表单。
 

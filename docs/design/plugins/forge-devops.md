@@ -118,12 +118,12 @@
 
 ### 5.2 设置页（r15）
 
-本包在设置页承载**两个**分区，都由包内 `client.js` 提供（`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`）：
+本包在设置页按场景承载以下入口，都由包内 `client.js` 提供（`dsh.client = {platform:'web', immediately:true, inject:['slots','locale']}`）；当研发容器 `@heluo/forge-enterprise` 在场时，`devops` 与 `devops-readiness` 合并挂载到容器子槽位 `heluo.engineering.tab`（`order: 10`，上就绪摘要下配置表单），容器缺席（ADR-0012 单包安装）时保留独立分区；当 `@heluo/forge-iam` 在场时另向 `heluo.iam.credential-item`（`order: 10`）注入紧凑凭据配置与故障恢复条目：
 
-| 分区 | id | order | 职责 |
+| 分区 / 槽位 | id | order | 职责 |
 |---|---|---|---|
-| 企业研发 | `devops-readiness` | 29 | 汇总六行本机可见性：企业身份（`/api/forge-iam/view` 的 state 映射为已登录/未登录/登录中/过期/不可达/未知）、公共参数（恒「未知」，无可核验的公共维护权限与接口）、本机配置（devops 与 gitee 快照里 `origin==='config'` 的**键名**）、DevOps（快照 `ready` + `dopBin` 来源）、Gitee（快照 `ready`）、业务写权限（恒「未知」） |
-| 企业 DevOps | `devops` | 60 | 既有字段面（`dopBin`/`timeoutMs`）不变，只加页脚来源行与三行回执 |
+| `settings.section` / `heluo.engineering.tab` | `devops-readiness`（容器缺席 29）/ `devops`（容器缺席 60，容器内合并 10） | 29 / 60 / tab 10 | 汇总六行本机可见性（四层明细收拢于诊断详情）、DevOps CLI 配置字段（`dopBin`/`timeoutMs`）、页脚来源行与三行互不覆盖的回执；`?refresh=1` 只由显式检查触发 |
+| `heluo.iam.credential-item` | `devops` | 10 | 在「设置 → 企业账号」下方紧凑呈现扩展访问凭证（Token）状态：默认静默显示跟随本机登录，按需展开单独指定覆盖，并在账号归属冲突或认证失效时提示自然语言恢复建议 |
 
 三条边界：
 

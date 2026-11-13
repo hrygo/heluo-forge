@@ -168,6 +168,7 @@ test('r16：Gitee 分区不发就绪探测，也不重复实现四项/四层（A
 // ---------------------------------------------------------------------------
 
 const CONTAINER_CLIENTS = ['packages/forge-gitee/client.js', 'packages/forge-devops/client.js', 'packages/forge-enterprise/client.js'];
+const ALL_CLIENTS = ['packages/forge-iam/client.js', ...CONTAINER_CLIENTS];
 
 let cachedContainerReport;
 /** 检查器要真跑 `apply`（每个 client 四种声明时序），只跑一次并复用结果。 */
@@ -179,6 +180,18 @@ function loadContainerReport() {
   });
   cachedContainerReport = JSON.parse(stdout);
   return cachedContainerReport;
+}
+
+let cachedFullReport;
+/** 运行全四端双定位检查（通用底座 + 研发叠加层），复用结果。 */
+function loadFullReport() {
+  if (cachedFullReport !== undefined) return cachedFullReport;
+  const stdout = execFileSync(process.execPath, [join(root, 'scripts/check-client-module.mjs'), ...ALL_CLIENTS], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  cachedFullReport = JSON.parse(stdout);
+  return cachedFullReport;
 }
 
 test('容器在场时：devops 与 gitee 只注册容器条目，不再各占侧栏分区', () => {
@@ -249,40 +262,126 @@ test('容器塌陷后再回来：声明 epoch 重跑回调，仍只有一个容�
   }
 });
 
-test('跨客户端分区序唯一：企业账号 -10 / 容器 30 / Gitee 50 / DevOps 60 与子条目 10/20', () => {
-  // 用检查器真跑出来的注册项，不解析源码文本：`order` 在容器里是常量（`SECTION_ORDER`），
-  // 文本正则会被常量与排序比较器误导。企业账号不走检查器（它不注入 locale），单点读一次。
-  const report = loadContainerReport();
+test('跨客户端分区序唯一：企业账号 -10 / 企业模型 10 / 容器 30 / Gitee 50 / DevOps 60 与子条目 10/20', () => {
+  const report = loadFullReport();
+  assert.equal(report.failed, 0, '全四端运行 scripts/check-client-module.mjs 必须全部通过');
   const collected = [];
   for (const entry of report.checked) {
     for (const item of entry.sections) collected.push({ slot: 'settings.section', id: item.id, order: item.order, file: entry.file });
     for (const item of entry.tabs) collected.push({ slot: 'heluo.engineering.tab', id: item.id, order: item.order, file: entry.file });
+    for (const item of entry.credItems) collected.push({ slot: 'heluo.iam.credential-item', id: item.id, order: item.order, file: entry.file });
   }
-  const iamOrder = /id: 'forge-iam',\s*\n\s*order: (-?\d+)/u.exec(read('packages/forge-iam/client.js'));
-  assert.ok(iamOrder !== null, '企业账号分区必须显式声明 order');
-  collected.push({ slot: 'settings.section', id: 'forge-iam', order: Number(iamOrder[1]), file: 'packages/forge-iam/client.js' });
 
   const bySlot = new Map();
   for (const row of collected) {
     if (!bySlot.has(row.slot)) bySlot.set(row.slot, []);
     bySlot.get(row.slot).push(row);
   }
-  assert.deepEqual([...bySlot.keys()].sort(), ['heluo.engineering.tab', 'settings.section']);
+  assert.deepEqual([...bySlot.keys()].sort(), ['heluo.engineering.tab', 'heluo.iam.credential-item', 'settings.section']);
   for (const [slot, rows] of bySlot) {
     const values = rows.map(({ order }) => order);
     assert.equal(new Set(values).size, values.length, `${slot} 的分区 order 撞号：${JSON.stringify(rows)}`);
   }
   const sectionOrders = bySlot.get('settings.section').map(({ order }) => order);
   assert.ok(sectionOrders.includes(-10), `企业账号必须排最前（-10），实际 ${JSON.stringify(sectionOrders)}`);
+  assert.ok(sectionOrders.includes(10), `企业模型必须是 settings.section 的 10，实际 ${JSON.stringify(sectionOrders)}`);
   assert.ok(sectionOrders.includes(30), `研发容器必须是 settings.section 的 30，实际 ${JSON.stringify(sectionOrders)}`);
 });
 
 test('容器自身：forge-engineering（order 30）声明子槽位并注册同名图标', () => {
-  const report = loadContainerReport();
+  const report = loadFullReport();
   const enterprise = report.checked.find((entry) => entry.id === '@heluo/forge-enterprise');
   assert.ok(enterprise, '客户浏览器半必须能被装载');
   assert.equal(enterprise.container, true, '容器必须在 children 里声明 heluo.engineering.tab');
   assert.deepEqual(enterprise.sections.map(({ id, order }) => ({ id, order })), [{ id: 'forge-engineering', order: 30 }]);
   assert.deepEqual(enterprise.tabs, [], '容器不得往自己的子槽位注册条目');
   assert.deepEqual(enterprise.icons, ['forge-engineering'], '图标条目 id 必须与分区 id 一致');
+});
+
+test('双定位契约 1（通用助理基础配置）：仅企业账号(-10)与企业模型(10)两菜单，零研发渗漏', () => {
+  const report = loadFullReport();
+  const iam = report.checked.find((entry) => entry.id === '@heluo/forge-iam');
+  assert.ok(iam, '@heluo/forge-iam 必须可被装载');
+  assert.equal(iam.iamHost, true, 'IAM 必须声明 heluo.iam.credential-item 子槽位');
+  assert.deepEqual(
+    iam.sections.map(({ id, order, label, children }) => ({ id, order, label, children })),
+    [
+      { id: 'forge-iam', order: -10, label: '企业账号', children: ['heluo.iam.credential-item'] },
+      { id: 'forge-models', order: 10, label: '企业模型', children: [] },
+    ],
+  );
+  assert.deepEqual([...iam.icons].sort(), ['forge-iam', 'forge-models'], '企业账号与企业模型都必须注册同名图标');
+  assert.deepEqual(iam.credItems, [], '通用底座不得伪造或自注扩展凭据子项');
+  assert.deepEqual(iam.tabs, [], '通用底座不得接入研发容器 Tab');
+
+  const iamSource = read('packages/forge-iam/client.js');
+  for (const forbidden of [
+    /\bdevops\b/iu,
+    /\bgitee\b/iu,
+    /\bdop\b/u,
+    /DEVOPS_API_KEY/u,
+    /GITEE_TOKEN/u,
+    /forge-engineering/u,
+    /heluo\.engineering\.tab/u,
+    /企业研发工具/u,
+  ]) {
+    assert.equal(forbidden.test(iamSource), false, `IAM 通用底座不得包含研发符号/文案：${forbidden}`);
+  }
+  assert.match(iamSource, /步骤 \$\{state\.step \+ 1\} \/ 3/u, 'Onboarding 必须为 3 步通用流程');
+  assert.equal(/\/ 4[`'"]/u.test(iamSource), false, 'Onboarding 不得残留旧 4 步进度文本');
+});
+
+test('双定位契约 2（研发增强配置）：三顶级菜单(-10/10/30)、双槽位(10/20)、无29/50/60碎片与Gitee高级区消除', () => {
+  const report = loadFullReport();
+  const overlayEntries = report.checked.flatMap((entry) => entry.overlay);
+  const overlaySections = overlayEntries
+    .filter((entry) => entry.name === 'settings.section')
+    .map(({ id, order }) => ({ id, order }))
+    .sort((a, b) => a.order - b.order);
+  assert.deepEqual(overlaySections, [
+    { id: 'forge-iam', order: -10 },
+    { id: 'forge-models', order: 10 },
+    { id: 'forge-engineering', order: 30 },
+  ]);
+
+  const overlayIcons = [...new Set(overlayEntries.filter((e) => e.name === 'settings.section.icon').map((e) => e.id))].sort();
+  assert.deepEqual(overlayIcons, ['forge-engineering', 'forge-iam', 'forge-models']);
+
+  const overlayTabs = overlayEntries
+    .filter((entry) => entry.name === 'heluo.engineering.tab')
+    .map(({ id, order }) => ({ id, order }))
+    .sort((a, b) => a.order - b.order);
+  assert.deepEqual(overlayTabs, [
+    { id: 'devops', order: 10 },
+    { id: 'gitee', order: 20 },
+  ]);
+
+  const overlayCredItems = overlayEntries
+    .filter((entry) => entry.name === 'heluo.iam.credential-item')
+    .map(({ id, order }) => ({ id, order }))
+    .sort((a, b) => a.order - b.order);
+  assert.deepEqual(overlayCredItems, [
+    { id: 'devops', order: 10 },
+    { id: 'gitee', order: 20 },
+  ]);
+
+  // 扩展凭据子槽位动态生命周期：后到、塌陷回收、恢复重挂不重复。
+  for (const id of ['@heluo/forge-devops', '@heluo/forge-gitee']) {
+    const entry = report.checked.find((item) => item.id === id);
+    const lateCred = entry.iamLate.filter((item) => item.name === 'heluo.iam.credential-item');
+    const collapseCred = entry.iamCollapse.filter((item) => item.name === 'heluo.iam.credential-item');
+    const redeclareCred = entry.iamRedeclare.filter((item) => item.name === 'heluo.iam.credential-item');
+    assert.equal(lateCred.length, 1, `${id} IAM 后到时应正好注册一个凭据项`);
+    assert.deepEqual(collapseCred, [], `${id} IAM 塌陷后不得残留凭据项`);
+    assert.equal(redeclareCred.length, 1, `${id} IAM 回归后不得重复注册凭据项`);
+  }
+
+  // Gitee 高级配置收敛：无 fge-advanced / authEnv / persistentToken / GITEE_TOKEN 控件，主态使用平静文案。
+  const giteeSource = read('packages/forge-gitee/client.js');
+  for (const removed of ['fge-advanced', 'field.authEnv', 'field.persistentToken', 'GITEE_TOKEN']) {
+    assert.equal(giteeSource.includes(removed), false, `Gitee 前端不得保留退役控件/敏感变量名：${removed}`);
+  }
+  const iamSource = read('packages/forge-iam/client.js');
+  assert.ok(iamSource.includes('AI 服务 · 已就绪'), 'IAM 就绪态必须提供平静单行折叠状态');
+  assert.equal(/OIDC\s*身份|Refresh\s*Token|CAS/u.test(iamSource.replace(/\/\/[^\n]*/gu, '')), false, 'IAM 可见界面不得堆砌内部实现术语');
 });

@@ -83,6 +83,23 @@ try {
   await runtime.refresh();
   assert.equal(mock.counts.refresh, 1);
   assert.equal((await collect(ctx.llm.stream(request))).at(-1).reason.kind, 'stop'); assert.equal(chats, 3);
+  await assert.rejects(iam.updateManualModel({ action: 'add', id: '   ' }), { code: 'IAM_MANUAL_MODEL_INVALID' });
+  await iam.updateManualModel({ action: 'add', id: 'synthetic-manual-chat' });
+  assert.equal((await collect(ctx.llm.stream({ ...request, model: 'synthetic-manual-chat' }))).at(-1).reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  await iam.updateModelOptions({ ...iam.getModelOptions(), 'synthetic-manual-chat': {} });
+  const withManual = (await ctx.llm.listModels('enterprise')).map(item => item.id);
+  assert.ok(withManual.includes('synthetic-chat') && withManual.includes('synthetic-manual-chat'));
+  assert.equal((await collect(ctx.llm.stream({ ...request, model: 'synthetic-manual-chat' }))).at(-1).reason.kind, 'stop');
+  assert.equal(chats, 4);
+  await runtime.refresh();
+  assert.ok((await ctx.llm.listModels('enterprise')).some(item => item.id === 'synthetic-manual-chat'));
+  const removedFirst = await iam.updateManualModel({ action: 'remove', id: 'synthetic-manual-chat' });
+  assert.equal(removedFirst.removed, true);
+  const removedAgain = await iam.updateManualModel({ action: 'remove', id: 'synthetic-manual-chat' });
+  assert.equal(removedAgain.removed, false);
+  assert.equal((await ctx.llm.listModels('enterprise')).some(item => item.id === 'synthetic-manual-chat'), false);
+  assert.equal((await collect(ctx.llm.stream({ ...request, model: 'synthetic-manual-chat' }))).at(-1).reason.failure.code, 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(chats, 4);
   const before = lists;
   await iam.signOut();
   assert.deepEqual(await ctx.llm.listModels('enterprise'), []);
@@ -90,10 +107,10 @@ try {
   const denial = await collect(ctx.llm.stream(request));
   assert.equal(denial.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
   assert.match(denial.at(-1).reason.failure.message, /重新登录/);
-  assert.equal(chats, 3); assert.equal(lists, before);
+  assert.equal(chats, 4); assert.equal(lists, before);
   console.log(JSON.stringify({ ok: true, host: 'installed Cordis + LLM + PiAiAdapter',
     scope: 'mock IAM and gateway; synthetic in-memory storage; no enterprise authorization claim',
-    login: 'passed', standardModels: 'passed', conversation: 'passed', refresh: 'passed', logout: 'passed', callsAfterLogout: 0 }));
+    login: 'passed', standardModels: 'passed', manualModels: 'passed', conversation: 'passed', refresh: 'passed', logout: 'passed', callsAfterLogout: 0 }));
 } finally {
   await managedFiber?.dispose(); await runtime?.dispose(); offStandalone(); await iam.dispose(); await llmFiber.dispose();
   await mock.close(); gateway.closeAllConnections(); await new Promise(resolve => gateway.close(resolve));

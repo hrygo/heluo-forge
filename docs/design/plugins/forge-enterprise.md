@@ -184,7 +184,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 默认禁用范围在四个登录/模型/账户行之外，加入通用模型配置 `llm-pi-ai` 与自由模型设置 `ui-settings-models`，共六个官方行，另加 `credentials` 一行。`packages/forge-enterprise/src/reflow.mjs` 的 `OFFICIAL_ROWS` 与 `packages/forge-enterprise/test/bundle-patch.test.mjs` 同步断言这七行；缺席与禁用保持区分，不以隐藏导航代替执行门禁。
 
-企业账号页承担网关地址与个人 Key 配置，模型经 `${baseURL}/models` 动态获取，不设独立的自由模型设置入口。例如，`baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。模型调用由 IAM 内受控适配器与全局模型流事件检查，细节见 [IAM 设计 §13](<forge-iam.md#13-企业模型设置与执行闭环代拟>)。
+用户在「设置 → 企业账号」（`forge-iam`，`order: -10`）配置网关地址与个人 Key，在独立「设置 → 企业模型」（`forge-models`，`order: 10`，由 `@heluo/forge-iam` 托管）经 `${baseURL}/models` 动态获取模型并管理手动声明条目，不开放原生自由模型设置入口。例如，`baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。模型调用由 IAM 内受控适配器与全局模型流事件检查，细节见 [IAM 设计 §13](<forge-iam.md#13-企业模型设置与执行闭环代拟>)与 [菜单统一设计](../enterprise-menu-and-token-unification.md)。
 
 本轮证据限于补丁内容与离线用例：扩至七行后的组合层完整性、升级回灌与双端 GUI 未复测，不能写成生产或企业联调结论。
 

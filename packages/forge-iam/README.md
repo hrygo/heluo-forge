@@ -34,7 +34,7 @@
 | Host 服务 | `src/service.mjs`：OIDC 登录、state/nonce、PKCE S256、token 交换、ID Token/JWKS 校验、刷新、撤销 |
 | 登录/刷新/撤销 | 协议和存储门禁有离线 mock 测试；真实 IAM 与目标机联调未完成 |
 | 凭据 provider | 独立包 `@heluo/forge-credentials-keychain` 使用 SQLite 值级加密；组合根绑定受信的单记录及联合存储，目标平台尚未取证 |
-| Client UI | `settings.section` 企业账号页、四步引导和未登录横幅；登录使用浏览器回调 |
+| Client UI | `settings.section` 双分区（`-10` 企业账号含 `heluo.iam.credential-item` 子槽位、`10` 企业模型，各自注册同名 `settings.section.icon`）、纯 3 步通用引导与未登录横幅；登录使用浏览器回调 |
 
 账户页退出时清除旧视图并丢弃该操作前及操作中的迟到轮询；非 2xx 的返回视图与网络结果未知分别展示，不将未知结果显示为退出成功。横幅独立轮询，跨组件即时同步和真实 GUI 挂载仍待验证。登录请求若在退出完成后才由 Host 处理，旧响应会被丢弃，界面可能停留在无链接的登录中状态，需取消后重试。引导完成页不会因轮询回退；overlay 显式开启 pointer events。
 
@@ -81,7 +81,7 @@
 | 模型条目、模型卡、模型缓存 | `client.js` §12.2、§13、§13.1 |
 | 面板装配、轮询 | `client.js` §14，轮询 §11 |
 | 设置页启动器 | `client.js` §15 |
-| 未登录横幅、四步引导 | `client.js` §16、§16.2、§16.3 |
+| 未登录横幅、3 步引导 | `client.js` §16、§16.2、§16.3 |
 | 宿主：配置、状态机、凭据记录 | `src/config.mjs`、`src/state.mjs`、`src/record.mjs`、`src/store.mjs` |
 | 宿主：登录、令牌、网关与模型业务 | [Host 分轴模块](#host-分轴模块) |
 
@@ -156,7 +156,7 @@
 
 ## 企业模型设置闭环
 
-企业账号页管理网关地址与个人访问凭证，通过 `${baseURL}/models` 获取目录；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。登录和凭证就绪后才能列出或调用模型。
+企业账号页管理网关地址与个人访问凭证，通过 `${baseURL}/models` 获取目录；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。目录之外可在设置页手动增删模型条目（默认不自动启用、不随目录刷新移除，实际可否调用仍由企业网关鉴权决定）。登录和凭证就绪后才能列出或调用模型。
 
 身份或网关变化、显式退出会清理旧目录并撤销旧调用代际；令牌到期会阻止新调用并撤销旧调用，同一主体与网关下的目录可保留并标记为 `stale`。目录和启用集中的首选项不等于宿主默认模型；用户在对话中自行选择模型。
 
