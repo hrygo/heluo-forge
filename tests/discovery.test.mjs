@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { verifyDiscovery } from '../scripts/lib/private-bundle.mjs';
+import {
+  buildConfig,
+  isLoginConfigured,
+  parseEnvConfig,
+  verifyDiscovery,
+} from '../scripts/lib/private-bundle.mjs';
 
 const BASE = {
   discoveryUrl: 'https://iam.example.test/.well-known/openid-configuration',
@@ -44,21 +49,104 @@ test('no discovery URL means nothing to check', async () => {
   assert.deepEqual(result, { checked: false, reason: 'no-discovery-url' });
 });
 
-test('a matching document is accepted without returning configuration values', async () => {
+test('a matching document is accepted and reports which fields matched, without values', async () => {
   const { fetchImpl, calls } = stub(DOCUMENT);
   const result = await verifyDiscovery(BASE, { fetchImpl });
-  assert.equal(result.checked, true);
-  assert.equal(result.revocationEndpoint, 'missing');
+  // The verdict is redacted by construction: field names and a source label,
+  // never an issuer or endpoint value (issue #254 item 10).
+  assert.deepEqual(result, { checked: true, matched: ['issuer'], revocationEndpoint: 'missing' });
   assert.equal(JSON.stringify(result).includes('iam.example.test'), false);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.redirect, 'error');
 });
 
-test('issuer trailing slash must match the runtime exactly', async () => {
+test('configured endpoints that match are reported by name only', async () => {
+  const { fetchImpl } = stub(DOCUMENT);
+  const result = await verifyDiscovery(
+    {
+      ...BASE,
+      authorizationEndpoint: DOCUMENT.authorization_endpoint,
+      tokenEndpoint: DOCUMENT.token_endpoint,
+      jwksUri: DOCUMENT.jwks_uri,
+    },
+    { fetchImpl },
+  );
+  assert.deepEqual(result, { checked: true, matched: ['issuer', 'authorizationEndpoint', 'tokenEndpoint', 'jwksUri'], revocationEndpoint: 'missing' });
+  assert.equal(JSON.stringify(result).includes('iam.example.test'), false);
+});
+
+test('the maker refuses to package a discovery URL without an explicit issuer', () => {
+  const entries = parseEnvConfig([
+    'HELUO_IAM_DISCOVERY_URL=https://iam.example.test/.well-known/openid-configuration',
+    'HELUO_IAM_CLIENT_ID=DSH',
+    'HELUO_IAM_SCOPES=openid profile',
+  ].join('\n'));
+  assert.throws(
+    () => buildConfig(entries),
+    (error) => error.code === 'CONFIG_INVALID' && /HELUO_IAM_ISSUER is required/u.test(error.message),
+  );
+  // `isLoginConfigured` is what the previews report as `loginReady`; it must not
+  // call a bundle ready when the only trust anchor would be the document itself.
+  assert.equal(
+    isLoginConfigured({ clientId: 'DSH', discoveryUrl: 'https://iam.example.test/.well-known/openid-configuration' }),
+    false,
+  );
+  assert.equal(
+    isLoginConfigured({
+      clientId: 'DSH',
+      issuer: 'https://iam.example.test',
+      discoveryUrl: 'https://iam.example.test/.well-known/openid-configuration',
+    }),
+    true,
+  );
+});
+
+test('a discovery URL alone is not a trust anchor: the issuer is required', async () => {
+  for (const issuer of [undefined, '', '   ']) {
+    const error = await rejected(verifyDiscovery({ ...BASE, issuer }, { fetchImpl: () => assert.fail('must not fetch') }));
+    assert.equal(error.code, 'DISCOVERY_ISSUER_REQUIRED');
+    assert.equal(error.message.includes('iam.example.test'), false);
+  }
+});
+
+// packages/forge-iam/src/oidc.mjs compares `config.issuer !== document.issuer`
+// exactly, so a tolerated trailing slash here produced a bundle that installed
+// and then failed login with IAM_DISCOVERY_ISSUER_MISMATCH (issue #254 item 9).
+test('a trailing slash on either issuer is a mismatch, exactly like the runtime', async () => {
   const { fetchImpl } = stub({ ...DOCUMENT, issuer: 'https://iam.example.test/' });
   const error = await rejected(verifyDiscovery(BASE, { fetchImpl }));
   assert.equal(error.code, 'DISCOVERY_ISSUER_MISMATCH');
   assert.equal(error.message.includes('iam.example.test'), false);
+
+  const reverse = await rejected(
+    verifyDiscovery({ ...BASE, issuer: 'https://iam.example.test/' }, { fetchImpl: stub(DOCUMENT).fetchImpl }),
+  );
+  assert.equal(reverse.code, 'DISCOVERY_ISSUER_MISMATCH');
+  assert.equal(reverse.message.includes('iam.example.test'), false);
+});
+
+test('failure messages never echo a configured or discovered URL', async () => {
+  const mismatch = await rejected(
+    verifyDiscovery(BASE, { fetchImpl: stub({ ...DOCUMENT, issuer: 'https://other.example.test' }).fetchImpl }),
+  );
+  assert.equal(mismatch.code, 'DISCOVERY_ISSUER_MISMATCH');
+  assert.equal(mismatch.message.includes('other.example.test'), false);
+  assert.equal(mismatch.message.includes('iam.example.test'), false);
+
+  const invalid = await rejected(
+    verifyDiscovery(BASE, { fetchImpl: stub({ ...DOCUMENT, jwks_uri: 'http://iam.example.test/jwks' }).fetchImpl }),
+  );
+  assert.equal(invalid.code, 'DISCOVERY_INVALID');
+  assert.equal(invalid.message.includes('iam.example.test'), false);
+
+  const unreachable = await rejected(verifyDiscovery(BASE, { fetchImpl: async () => {
+    const error = new Error('fetch failed');
+    error.cause = { code: 'ECONNREFUSED' };
+    throw error;
+  } }));
+  assert.equal(unreachable.code, 'DISCOVERY_UNREACHABLE');
+  assert.equal(unreachable.message.includes('iam.example.test'), false);
+  assert.match(unreachable.message, /ECONNREFUSED/u);
 });
 
 test('an issuer mismatch is rejected', async () => {

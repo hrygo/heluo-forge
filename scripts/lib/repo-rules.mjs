@@ -34,7 +34,10 @@ const REQUIRED = [
 
 export { SECRETS, HOST_PATH } from './sensitive-patterns.mjs';
 const ALLOW_MARKER = 'security-scan: allow';
-const TEXT_EXTENSIONS = /\.(?:md|mjs|cjs|js|json|yaml|yml|txt|html|css|ts|tsx|sh|toml|ini|cfg)$/u;
+// Case-insensitive on purpose: `.MD`/`.JSON` are the same text carriers as their
+// lowercase forms, so skipping them would silently exempt their content from the
+// secret/host-path scan. The `u` flag alone made the extension list case-sensitive.
+const TEXT_EXTENSIONS = /\.(?:md|mjs|cjs|js|json|yaml|yml|txt|html|css|ts|tsx|sh|toml|ini|cfg)$/iu;
 
 function posix(path) {
   return path.split(sep).join('/');

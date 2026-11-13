@@ -8,15 +8,56 @@
  * the repository checker applies, not by a second, weaker regex list.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { HOST_PATH, SECRETS } from './sensitive-patterns.mjs';
 
 export const SHA256 = /^[0-9a-f]{64}$/u;
 
 const TEXT_FILE = /\.(md|mjs|cjs|js|json|ya?ml|txt|html|css|ts|tsx|sh|toml|ini|cfg)$/iu;
+
+/**
+ * Files whose *name* alone disqualifies them from a release.
+ *
+ * `id_*` is the OpenSSH key naming convention; `.env`/`.npmrc`/`.git-credentials`
+ * carry live credentials by definition.
+ */
 const FORBIDDEN_NAMES = /(^|\/)(?:\.env(?:\..*)?|\.npmrc|\.git-credentials|id_(?:rsa|dsa|ecdsa|ed25519))$/u;
+
+/**
+ * Extensions that only ever hold private key material or a keystore.
+ *
+ * `.pem` is rejected on the name alone even when it currently carries only a
+ * certificate: the extension cannot tell the two apart, and an artifact gate
+ * that has to read the content to decide is one refactor away from shipping the
+ * key. A certificate that genuinely has to travel ships as `.crt`/`.cer`, which
+ * are public by construction and stay allowed (their content is still scanned
+ * for a private key block, so a misnamed key is caught anyway).
+ *
+ * `.crt`, `.cer` and `.der` are therefore deliberately absent, as is `.pub`:
+ * those formats carry no secret, and rejecting them would block legitimate
+ * enterprise trust bundles without removing a single real risk.
+ */
+const FORBIDDEN_EXTENSIONS = /\.(?:pem|key|p12|pfx|jks|keystore|ppk)$/iu;
+
+/**
+ * Private-key armor, matched on every entry regardless of its extension.
+ *
+ * A private key pasted into `deploy/notes.txt`, into a `.json` fixture or into a
+ * `.bin` blob has no telling name. PEM armor is ASCII even inside a binary
+ * container, so one byte-level search covers every file type. The prefix group
+ * covers `RSA`/`EC`/`DSA`/`OPENSSH`/`ENCRYPTED`/`PKCS8`-style armor, a superset of
+ * the armor entry in `SECRETS`; this check never widens what is allowed.
+ *
+ * A *complete* block is required — header, payload, footer. A lone header is not
+ * key material: the repository's own scan tests embed one as a probe string, and
+ * a gate that fired on it would fail the public build over a test fixture while
+ * catching no secret. Every real leak is a complete block, so requiring the
+ * footer costs no coverage and removes the only false positive found in-tree.
+ */
+const PRIVATE_KEY_BLOCK = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]{0,65536}?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/u;
+
 const ALLOW_MARKER = 'security-scan: allow';
 
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -41,15 +82,46 @@ export function safeRelativePath(value, field = 'path') {
   return value;
 }
 
-/** Output must never land inside the source checkout (它会被误提交/误打包). */
-export function assertOutsideDirectory(target, forbidden, label = 'output') {
-  const from = resolve(forbidden);
-  const to = resolve(target);
-  const rel = relative(from, to);
-  if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
-    throw new Error(`release: ${label} "${target}" must be outside ${from}`);
+/**
+ * Resolve symlinks on the longest existing prefix of `path`.
+ *
+ * A directory that does not exist yet still has one real location: its nearest
+ * existing ancestor does. Resolving that ancestor is what turns "outside the
+ * checkout" into a statement about the file system instead of about a string,
+ * and it also collapses platform-level links (`/var` → `/private/var`) so the
+ * two sides of a comparison share one canonical form.
+ */
+function realpathOfNearestExisting(path) {
+  let current = resolve(path);
+  const missing = [];
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...missing);
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      const parent = dirname(current);
+      if (parent === current) return join(current, ...missing);
+      missing.unshift(basename(current));
+      current = parent;
+    }
   }
-  return to;
+}
+
+/**
+ * Output must never land inside the source checkout (它会被误提交/误打包).
+ *
+ * Containment is decided per path component on the canonical paths, never by a
+ * string prefix: a `..secret` entry *inside* the checkout is inside, a sibling
+ * named `..secret` is not, and an out-of-checkout symlink that points back into
+ * the checkout is rejected because the nearest existing ancestor is resolved.
+ */
+export function assertOutsideDirectory(target, forbidden, label = 'output') {
+  const from = realpathOfNearestExisting(forbidden);
+  const to = realpathOfNearestExisting(target);
+  const rel = relative(from, to);
+  const inside = rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
+  if (inside) throw new Error(`release: ${label} "${target}" must be outside ${forbidden}`);
+  return resolve(target);
 }
 
 export function mkdirp(path) {
@@ -116,12 +188,20 @@ export function scanReleaseFiles(files, { publicOnly = false } = {}) {
   const problems = [];
   for (const file of files) {
     const path = file.path;
-    if (FORBIDDEN_NAMES.test(path)) {
+    if (FORBIDDEN_NAMES.test(path) || FORBIDDEN_EXTENSIONS.test(path)) {
       problems.push(`package/${path}: credential-like file name is not allowed in a release`);
       continue;
     }
-    if (!TEXT_FILE.test(path)) continue;
     const text = Buffer.isBuffer(file.body) ? file.body.toString('utf8') : String(file.body ?? '');
+    // Content decides for every file type, not only for the text extensions
+    // below: a private key in `deploy/notes.txt` or in a `.bin` blob used to be
+    // invisible because the scan stopped at the extension check (issue #254
+    // review F1: the artifact gate was weaker than the source gate).
+    if (PRIVATE_KEY_BLOCK.test(text)) {
+      problems.push(`package/${path}: private key block is not allowed in a release (value not printed)`);
+      continue;
+    }
+    if (!TEXT_FILE.test(path)) continue;
     for (const finding of scanText(text, { hostPaths: publicOnly })) {
       problems.push(`package/${path}: ${finding} (value not printed)`);
     }

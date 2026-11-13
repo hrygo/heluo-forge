@@ -17,6 +17,8 @@ function provider(options = {}) {
 test('refs round-trip through the keychain namespace', async () => {
   const { value, backend } = provider();
   await value.set('ENTERPRISE_ACCESS_TOKEN', 'placeholder-token');
+  // The memory backend is not the OS credential store; the account page warns
+  // for any other source, so the provider must not claim the native name.
   assert.deepEqual(await value.resolve('ENTERPRISE_ACCESS_TOKEN'), {
     value: 'placeholder-token',
     source: 'memory',

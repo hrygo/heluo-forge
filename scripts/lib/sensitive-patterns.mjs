@@ -16,5 +16,12 @@ export const SECRETS = Object.freeze([
   [/https?:\/\/[^\s/@:]+:[^\s/@]+@/, 'URL with embedded password'],
 ]);
 
-/** Host-specific absolute prefixes: never allowed in a public or employee artifact. */
-export const HOST_PATH = /(^|[^A-Za-z0-9])(?:\/Users\/|\/home\/|[A-Za-z]:\\\\Users\\\\)/;
+/**
+ * Host-specific absolute prefixes: never allowed in a public or employee artifact.
+ *
+ * The Windows branch accepts one or two separators on each side. A JSON or log
+ * excerpt may escape a separator as `\\`, while a plain path has a single `\`;
+ * matching only the escaped form let a single-separator Windows user path through
+ * both the source checker and the artifact scan.
+ */
+export const HOST_PATH = /(^|[^A-Za-z0-9])(?:\/Users\/|\/home\/|[A-Za-z]:(?:\\{1,2}|\/)Users(?:\\{1,2}|\/))/; // security-scan: allow（检测用正则，不是真实主机路径）

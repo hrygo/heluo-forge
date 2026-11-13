@@ -105,26 +105,42 @@ function listFiles(root, relativeDirectory, filter = () => true) {
   return files;
 }
 
-function releaseToolFiles(root) {
-  const roots = [
-    'scripts/build-enterprise-bundle.mjs',
-    'scripts/verify-enterprise-bundle.mjs',
-    'scripts/build-public-release.mjs',
-    'scripts/make-private-bundle.mjs',
-    'scripts/init-enterprise-plugin.mjs',
-    'scripts/release-delivery.mjs',
-  ];
-  const files = roots.filter((path) => existsSync(join(root, path)));
-  files.push(...listFiles(root, 'scripts/lib', (path) => path.endsWith('.mjs')));
-  files.push(...listFiles(root, '.agents/skills/heluo-forge-release-bundle'));
-  // The maker invokes the same config validator as the IAM runtime. Include
-  // its complete local import closure so the released toolchain stays standalone.
-  files.push(...IAM_VALIDATOR_MODULES
-    .map((name) => `packages/forge-iam/src/${name}`));
-  for (const path of files) {
-    if (!existsSync(join(root, path))) fail('TOOLS_INCOMPLETE', `release toolchain is missing ${path}`);
+// Required release tool sources. #253 dropped the native keyring helper
+// (scripts/fetch-native-keyring.mjs) and its data file (scripts/native-keyring.json)
+// from the public toolchain, so the manifest follows the real tree: a pinned list
+// naming a removed file makes every release die with TOOLS_INCOMPLETE.
+const RELEASE_TOOL_FILES = Object.freeze([
+  'scripts/build-enterprise-bundle.mjs',
+  'scripts/verify-enterprise-bundle.mjs',
+  'scripts/build-public-release.mjs',
+  'scripts/make-private-bundle.mjs',
+  'scripts/init-enterprise-plugin.mjs',
+  'scripts/release-delivery.mjs',
+]);
+const TOOL_SKILL_DIRECTORY = '.agents/skills/heluo-forge-release-bundle';
+const TOOL_SKILL_ENTRY = `${TOOL_SKILL_DIRECTORY}/SKILL.md`;
+// The maker runs the same IAM config validator as the IAM runtime, so the released
+// toolchain must carry its complete local import closure (issue #253).
+const RELEASE_IAM_FILES = Object.freeze(IAM_VALIDATOR_MODULES.map((name) => `packages/forge-iam/src/${name}`));
+
+/**
+ * Resolve the toolchain file list, failing closed on an incomplete tool tree.
+ *
+ * Every required script, the IAM validator closure and the skill entry must be
+ * verified *before* any walk filters absent paths: the old
+ * `roots.filter(existsSync)` turned `--tool-root` pointing at an empty directory
+ * into a successful build whose tool archive held only the generated README
+ * (`tools.files: 0`), and a missing skill directory produced an empty
+ * `listFiles()` for the same reason.
+ */
+export function releaseToolFiles(root) {
+  const missing = [...RELEASE_TOOL_FILES, ...RELEASE_IAM_FILES, TOOL_SKILL_ENTRY].filter((path) => !existsSync(join(root, path)));
+  if (missing.length > 0) {
+    fail('TOOLS_INCOMPLETE', `release toolchain is missing:\n- ${missing.join('\n- ')}`);
   }
-  return files.sort();
+  const libraries = listFiles(root, 'scripts/lib', (path) => path.endsWith('.mjs'));
+  if (libraries.length === 0) fail('TOOLS_INCOMPLETE', 'release toolchain has no scripts/lib modules');
+  return [...RELEASE_TOOL_FILES, ...RELEASE_IAM_FILES, ...libraries, ...listFiles(root, TOOL_SKILL_DIRECTORY)].sort();
 }
 
 function sourceGate(root, tracked) {
@@ -133,6 +149,26 @@ function sourceGate(root, tracked) {
     if (FORBIDDEN_SOURCE.test(path)) problems.push(`${path}: credential-like path may not be published in the source archive`);
   }
   return problems;
+}
+
+/**
+ * Materialize the source archive a release publishes and read its entries back.
+ *
+ * The `git archive HEAD` invocation *is* the source manifest, so exporting this
+ * one step lets `tests/release-scan-clean.test.mjs` scan exactly the bytes and
+ * the same prefix the build scans instead of maintaining a second file list
+ * (Greptile review 5872697951: a tracked fixture with a literal password URL
+ * only surfaced as SOURCE_UNSAFE at publish time).
+ *
+ * @returns {{name: string, path: string, prefix: string,
+ *   entries: Array<{path: string, content: Buffer}>}}
+ */
+export function createReleaseSource({ root, version, destination }) {
+  const name = `heluo-forge-${version}-source.tar.gz`;
+  const path = join(destination, name);
+  const prefix = `heluo-forge-${version}/`;
+  execFileSync('git', ['archive', '--format=tar.gz', `--prefix=${prefix}`, '-o', path, 'HEAD'], { cwd: root });
+  return { name, path, prefix, entries: readBundleEntries(path, { withContent: true, prefix }) };
 }
 
 /**
@@ -157,6 +193,11 @@ export function buildPublicRelease(input) {
     fail('LICENSE_MISSING', 'a public release needs an explicit license: pass --license <SPDX> or set a non-UNLICENSED "license" in package.json');
   }
   if (!/^[A-Za-z0-9.+-]+$/u.test(declaredLicense)) fail('LICENSE_INVALID', `license "${declaredLicense}" is not an SPDX-like identifier`);
+
+  // Validate the tool tree before any packing work: an incomplete toolchain is a
+  // configuration error, not something to discover after the plugin artifact and
+  // source archive have already been assembled.
+  const toolFiles = releaseToolFiles(toolRoot);
 
   const gitState = assertCleanTag(root, { tag: input.tag, allowDirty: input.allowDirty === true });
   const tracked = gitState.git ? git(root, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n').filter(Boolean) : [];
@@ -204,12 +245,21 @@ export function buildPublicRelease(input) {
 
     let source = null;
     if (gitState.git && input.includeSource !== false) {
-      const sourceName = `heluo-forge-${rootManifest.version}-source.tar.gz`;
-      execFileSync('git', ['archive', '--format=tar.gz', `--prefix=heluo-forge-${rootManifest.version}/`, '-o', join(staging, sourceName), 'HEAD'], { cwd: root });
-      source = { name: sourceName, sha256: sha256(readFileSync(join(staging, sourceName))), bytes: statSync(join(staging, sourceName)).size, commit: gitState.commit };
+      const archive = createReleaseSource({ root, version: rootManifest.version, destination: staging });
+      // Read the bytes the archive actually holds rather than re-deriving the file
+      // list: the gate below must judge what would be published.
+      const sourceProblems = scanReleaseFiles(
+        archive.entries.map((entry) => ({ path: entry.path, body: entry.content })),
+        // Secrets only: `publicOnly` would also report host-path literals that the
+        // source checker intentionally exempts on reviewed lines, which lives in
+        // the scanner's own rules. `check:repo` stays the host-path gate.
+        { publicOnly: false },
+      );
+      if (sourceProblems.length > 0) {
+        fail('SOURCE_UNSAFE', `source archive failed the sensitive scan:\n- ${sourceProblems.join('\n- ')}`);
+      }
+      source = { name: archive.name, sha256: sha256(readFileSync(archive.path)), bytes: statSync(archive.path).size, commit: gitState.commit };
     }
-
-    const toolFiles = releaseToolFiles(toolRoot);
     const toolPrefix = `${TOOL_NAME}-${TOOL_VERSION}/`;
     const toolBytes = writeBundleTarball(
       [
@@ -235,6 +285,15 @@ export function buildPublicRelease(input) {
       { prefix: toolPrefix },
     );
     const toolsName = `${TOOL_NAME}-${TOOL_VERSION}.tgz`;
+    // The tool archive ships scripts and the skill to buyers, so it gets the same
+    // content gate as the plugin artifact -- judged on the parsed entries, not on
+    // the file list handed to the writer.
+    const toolEntries = readBundleEntries(toolBytes, { withContent: true, prefix: toolPrefix });
+    const toolProblems = scanReleaseFiles(
+      toolEntries.map((entry) => ({ path: entry.path, body: entry.content })),
+      { publicOnly: false },
+    );
+    if (toolProblems.length > 0) fail('TOOLS_SENSITIVE', `release toolchain failed the sensitive scan:\n- ${toolProblems.join('\n- ')}`);
     writeFileSync(join(staging, toolsName), toolBytes);
     const tools = { name: toolsName, sha256: sha256(toolBytes), bytes: toolBytes.length, files: toolFiles.length };
 

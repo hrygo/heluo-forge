@@ -244,6 +244,8 @@ function corpusFiles(options) {
     join(root, 'docs/architecture/platform-architecture.md'),
     architecture ?? `- **锁版本**：一期兼容目标固定 DSH \`${baseline}\`（升级循环见设计索引）。\n`,
   );
+  // 交付包默认宿主版本：check 会断言它等于基线，语料默认给一份一致的文件。
+  writeFileSync(join(root, 'scripts/init-enterprise-plugin.mjs'), `export const DEFAULT_HOST_VERSION = '${baseline}';\n`);
   for (const [rel, content] of Object.entries(files)) {
     mkdirSync(dirname(join(root, rel)), { recursive: true });
     writeFileSync(join(root, rel), content);
@@ -266,6 +268,34 @@ function runCli(root, args) {
     encoding: 'utf8',
   });
 }
+
+test('CLI check：发行默认宿主版本必须等于基线，漂移或声明缺失都失败', () => {
+  withCorpus({}, (root) => {
+    const result = runCli(root, ['check']);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /发行默认宿主 1 处已对齐/);
+  });
+  withCorpus(
+    {
+      files: {
+        'scripts/init-enterprise-plugin.mjs': `export const DEFAULT_HOST_VERSION = '${sibling(BASELINE)}';\n`,
+      },
+    },
+    (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1, '默认宿主版本与基线漂移必须被拦');
+      assert.match(result.stderr, /交付包默认宿主必须等于确认基线/);
+    },
+  );
+  withCorpus(
+    { files: { 'scripts/init-enterprise-plugin.mjs': 'export const DEFAULT_HOST_VERSION = resolveHostVersion();\n' } },
+    (root) => {
+      const result = runCli(root, ['check']);
+      assert.equal(result.status, 1, '声明缺失必须失败');
+      assert.match(result.stderr, /找不到「交付包默认宿主版本」/);
+    },
+  );
+});
 
 test('CLI check：基线一致通过；声明位置过期、只剩历史记录都失败', () => {
   withCorpus({}, (root) => assert.equal(runCli(root, ['check']).status, 0));
@@ -410,6 +440,11 @@ test('CLI apply：任意预发布后缀都能改完再通过 check，非法形�
     assert.equal(applied.status, 0, applied.stderr);
     assert.equal(readFileSync(join(root, DSH_VERSION_FILE), 'utf8').trim(), target);
     assert.equal(runCli(root, ['check']).status, 0, '改完必须仍能通过 check（旧实现会把自己写红）');
+    assert.match(
+      readFileSync(join(root, 'scripts/init-enterprise-plugin.mjs'), 'utf8'),
+      new RegExp(`DEFAULT_HOST_VERSION = '${target.replace(/\./g, '\\.')}'`),
+      'apply 必须把发行默认宿主一并改到新基线',
+    );
   });
   withCorpus({}, (root) => {
     const rejected = runCli(root, ['apply', 'not-a-version', '--write']);

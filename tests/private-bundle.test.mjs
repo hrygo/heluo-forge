@@ -134,7 +134,7 @@ const ENV = [
   'HELUO_IAM_SCOPES=openid profile',
   'HELUO_IAM_CALLBACK_PORT=53682',
   'HELUO_IAM_CALLBACK_ADDRESS=127.0.0.1',
-  'HELUO_GITEE_HOST=https://gitee.corp.example',
+  'HELUO_GITEE_HOST=gitee.corp.example',
   'HELUO_GITEE_TIMEOUT_MS=15000',
 ];
 
@@ -452,6 +452,6 @@ test('patch injection keeps every other composition line intact', () => {
   });
   const patch = built.patch;
   assert.match(patch, /id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}/u);
-  assert.match(patch, /id: heluo-gitee\n {6}name: '@heluo\/forge-gitee'\n {6}config:\n {8}host: "https:\/\/gitee\.corp\.example"/u);
+  assert.match(patch, /id: heluo-gitee\n {6}name: '@heluo\/forge-gitee'\n {6}config:\n {8}host: "gitee\.corp\.example"/u);
   assert.equal((patch.match(/- id: /gu) ?? []).length, 4);
 });

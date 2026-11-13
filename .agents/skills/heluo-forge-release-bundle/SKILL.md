@@ -38,17 +38,18 @@ description: 供打包人员收集企业 IAM/网关配置，在 macOS 上生成�
 |---|---|---|---|
 | 公版 `.tgz` 路径 | 是 | — | 存在、文件名含版本 |
 | 公版 SHA-256 | 是 | — | 64 位 hex，与本地文件一致；来源可信 |
-| IAM issuer | 是 | — | `https://` 绝对地址；无 query/fragment；内网 http 需显式安全确认 |
+| IAM issuer | 是 | — | `https://` 绝对地址；无 query/fragment；内网 http 需显式安全确认。它是本包的信任锚：Discovery 文档里的 `issuer` 必须与之逐字符相同（大小写与结尾斜杠都算不同），maker 不采用文档自称的 issuer |
 | IAM client_id | 是 | — | 非空，不含空白 |
+| IAM scopes | 否 | `openid profile offline_access` | 空格或逗号分隔；必须包含 `openid`，插件缺它会拒绝加载 |
 | 网关 baseURL | 是 | — | `https://` 绝对地址，通常以 `/v1` 结尾；内网 http 需显式安全确认 |
-| IAM Discovery URL | 条件必填 | issuer + `/.well-known/openid-configuration` | 优先提供。maker 请求并检查 issuer、授权、token 与 JWKS 端点；不用 Discovery 时须显式提供 issuer 和三个端点，并记录未执行 Discovery 核验 |
+| IAM Discovery URL | 条件必填 | issuer + `/.well-known/openid-configuration` | 优先提供。maker 请求并检查 `issuer`、授权、token 与 JWKS 端点；`issuer` 必须与配置**逐字符相同**（结尾斜杠或大小写不同都按不一致拒绝），工具不会采用 Discovery 文档自称的 issuer 作为信任锚。不用 Discovery 时须显式提供 issuer 和三个端点，并记录未执行 Discovery 核验 |
 | IAM 访问令牌撤销端点 | 默认退出需要 | 空 | 显式提供 D1 的完整端点地址，不带查询参数；核验其 GET 回执。Discovery 检查不会保证此端点存在或兼容 D1 |
 | 网关 provider | 配置网关时必填 | — | 企业网关的准确模型路由标识；不确定时确认，不编造 |
 | 内网 HTTP opt-in | 否 | 空 | 仅当打包人员确认接受明文传输风险时写 `true` |
 | 凭据存储 | 否 | 空 | 内置 SQLite 值级加密存储与文件 keyring；不需在 `.env` 中配置。目标平台权限、宿主兼容性与企业环境仍待实测 |
 | 回调端口 | 否 | `0` | `0`（系统分配）或 1024–65535 整数；固定端口只在 IAM 要求精确登记时使用 |
 | 回调地址 | 否 | `127.0.0.1` | `127.0.0.1` 或 `::1`，不接受 `localhost` 或 `[::1]`；须与 IAM 登记的回调前缀一致 |
-| Gitee host | 否 | 空 | 企业 Gitee 的 `https://` 地址；没有就跳过 |
+| Gitee host | 否 | 空 | 企业 Gitee 的**主机名**，可带端口，例如 `gitee.corp.example`；不接受 `https://` 前缀、路径或用户名密码（插件只认主机名，带协议会导致该能力无法加载）。没有就跳过 |
 | 版本号 | 是 | 公版版本 + `-corp.1` | 与公版不同，符合 semver |
 | 输出目录 | 是 | — | 仓库外、不存在或为空 |
 
@@ -113,7 +114,7 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 - `INSTALL.md` — 安装前、安装、安装后、回滚；
 - `SHA256SUMS` — 整包校验和。
 
-员工只需安装 Node.js LTS 并运行对应启动器：缺官方 DSH 时启动器用 npm 自动安装并创建 web profile，再安装插件。官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法安装（0.2.1-rc.5 实测）；Desktop 用户需在应用内插件设置中安装，启动器在只有 Desktop profile 时明确拒绝。登录后首次录入个人网关 Key。
+员工只需安装 Node.js LTS 并运行对应启动器：缺官方 DSH 时启动器用 npm 自动安装并创建 web profile，再安装插件。装好后在终端运行 `dsh web` 打开本机地址确认（默认安装写入 web profile）；Desktop 是独立 profile，不能代替这一步。官方 Desktop 应用的 desktop profile 由 Electron 独占，命令行无法管理：Desktop 用户需在应用完全退出后于应用内插件设置中安装同一份 tgz，`--profile desktop --dump-config` 可能被拒绝；启动器在只有 Desktop profile 时明确拒绝，显式指定 desktop 时也会先探测核验能力、不支持就在写入前停止。登录后首次录入个人网关 Key。
 
 ## 失败处理
 
@@ -122,13 +123,14 @@ node scripts/release-delivery.mjs --public <tgz> --public-sha256 <hex> \
 | `CONFIRM_REQUIRED` / `CONFIRM_MISMATCH` | 重新预览并让打包人员确认；不要复用旧摘要 |
 | `PUBLIC_DIGEST_MISMATCH` | 停止。重新取得公版与可信摘要，不猜测文件 |
 | `PUBLIC_UNSAFE` | 公版含敏感样本或非中性补丁，拒绝继续，报告命中的类别 |
+| `PUBLIC_INCOMPLETE` | 公版自身没通过制品闭包校验（例如缺平台原生 addon、夹带测试文件、`workspace:` 依赖未闭合）。重新取得正确的公版制品；不要重算摘要把缺件包当成新公版 |
 | `CONFIG_*` | 按字段回显修正；未知键不写入。出现 `IAM login is incomplete` 时补 Discovery URL（或 issuer + 三个端点），不要删掉 issuer 绕过 |
 | `IAM_VALIDATOR_MISMATCH` | 公版与制作工具链中的 IAM 校验模块不一致或缺失；使用配套版本并重新核对来源与摘要 |
-| `DISCOVERY_*` | 打包机到 IAM 的网络不可达，或 Discovery 文档与配置不一致（issuer/端点）。先修网络或配置；确实只能离线制作时才用 `--skip-discovery-check`，并在报告里列为未验证项 |
-| 安装后向导显示“凭据存储不可用” | 检查目标平台的 SQLite、目录权限、磁盘空间与配套 keyring；目标平台行为须实测，不以平台名称推定后端不可用 |
+| `DISCOVERY_*` | 打包机到 IAM 的网络不可达，或 Discovery 文档与配置不一致（`issuer`/端点必须逐字符相同，尾斜杠也算不同）。配置了 Discovery URL 时仍须提供 `issuer`，缺失即 `DISCOVERY_ISSUER_REQUIRED`，不能只靠 Discovery 文档自称的值。先修网络或配置；确实只能离线制作时才用 `--skip-discovery-check`，并在报告里列为未验证项 |
+| 安装后向导显示"凭据存储不可用" | 检查目标平台的 SQLite、目录权限、磁盘空间与配套 keyring；目标平台行为须实测，不以平台名称推定后端不可用 |
 | `BUNDLE_SECRET_EMBED_UNSUPPORTED` | public + PKCE 不使用 `client_secret`；不要把密钥写入配置或交付物，修正专用配置后重新预览 |
 | `OUTPUT_*` | 换仓库外的新目录；不要删除已有文件 |
-| `VERIFY_FAILED` | 制作或清单不一致，保留现场并报告错误行，不手工改清单 |
+| `VERIFY_FAILED` / `ARTIFACT_VERIFY_FAILED` | 制作或清单不一致（`ARTIFACT_VERIFY_FAILED` 是直接调用 maker 时对**已写出**制品的独立核验失败），保留现场并报告错误行，不手工改清单 |
 
 ## 按需材料
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
+  DEFAULT_HOST_VERSION,
   ENTRY_PACKAGE,
   InitError,
   METADATA_FILE,
@@ -24,8 +25,10 @@ import {
   sha256File,
   shimEntryOf,
 } from '../scripts/init-enterprise-plugin.mjs';
+import { readDshVersion } from '../scripts/lib/dsh-version.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/init-enterprise-plugin.mjs', import.meta.url));
+const TOOL_ROOT = dirname(dirname(SCRIPT));
 const HEX = (digit) => digit.repeat(64);
 
 function tempRoot(t) {
@@ -97,7 +100,14 @@ function writePnpm(root) {
 }
 
 /** 注入的 exec：install 时真实改写 profile（模拟宿主 reconcile），dump-config 返回合成树。 */
-function fakeExec({ profileDir, version = '0.1.0', installCode = 0, dumpConfig = { includeEntry: true } } = {}) {
+function fakeExec({
+  profileDir,
+  version = '0.1.0',
+  installCode = 0,
+  dumpConfig = { includeEntry: true },
+  dumpConfigCode = 0,
+  dumpConfigStderr = 'profile "desktop" is managed exclusively by the Electron application',
+} = {}) {
   const calls = [];
   const exec = async (bin, args, options) => {
     calls.push({ bin, args, options });
@@ -115,6 +125,7 @@ function fakeExec({ profileDir, version = '0.1.0', installCode = 0, dumpConfig =
       writeFileSync(join(installed, 'package.json'), JSON.stringify({ name: ENTRY_PACKAGE, version }));
       return { code: 0, stdout: 'added', stderr: '' };
     }
+    if (dumpConfigCode !== 0) return { code: dumpConfigCode, stdout: '', stderr: dumpConfigStderr };
     const plugins = dumpConfig.includeEntry ? [{ name: ENTRY_PACKAGE }] : [];
     return { code: 0, stdout: JSON.stringify({ plugins }), stderr: '' };
   };
@@ -201,7 +212,11 @@ test('runInit --profile auto --install-host：装宿主、建 web profile、装�
   assert.equal(outcome.result.status, 'installed');
   assert.equal(outcome.result.profile, 'web');
   assert.equal(outcome.result.verified.dumpConfig, true);
-  assert.ok(calls.some((call) => call.command === npm && call.args.includes('@deepseek-ai/dsh@0.2.1-rc.5')));
+  assert.ok(
+    calls.some((call) => call.command === npm && call.args.includes(`@deepseek-ai/dsh@${DEFAULT_HOST_VERSION}`)),
+    '安装命令必须钉住脚本声明的默认宿主版本',
+  );
+  assert.equal(DEFAULT_HOST_VERSION, readDshVersion(TOOL_ROOT), '默认宿主版本必须等于仓库基线（发行默认宿主检查）');
   assert.ok(calls.some((call) => call.command === dshPath && call.args.join(' ') === '--profile web --dump-config'));
   assert.ok(calls.some((call) => call.command === dshPath && call.args[0] === 'plugin'));
 });
@@ -429,14 +444,23 @@ test('runInit 安装成功：argv 逐字、shell:false、L2 核验、mounted=unk
   assert.equal(outcome.result.status, 'installed');
   assert.equal(outcome.result.mounted, 'unknown');
   assert.deepEqual(outcome.result.verified, { exitCode: 0, dumpConfig: true, profileAligned: true });
-  assert.equal(calls.length, 2);
+  assert.equal(outcome.result.artifact.identity, 'confirmed');
+  assert.equal(calls.length, 3, 'desktop 必须先探测 --dump-config 能否命令行核验，再 add，最后核验');
   assert.equal(calls[0].bin, dshPath);
-  assert.deepEqual(calls[0].args, ['plugin', '--profile', 'desktop', 'add', release.tarballPath]);
+  assert.deepEqual(calls[0].args, ['--profile', 'desktop', '--dump-config'], '写入前的可核验性探测');
   assert.equal(calls[0].options.shell, false);
-  assert.deepEqual(calls[1].args, ['--profile', 'desktop', '--dump-config']);
+  assert.deepEqual(calls[1].args, ['plugin', '--profile', 'desktop', 'add', release.tarballPath]);
   assert.equal(calls[1].options.shell, false);
+  assert.deepEqual(calls[2].args, ['--profile', 'desktop', '--dump-config']);
+  assert.equal(calls[2].options.shell, false);
   assert.ok(outcome.lines.some((line) => line.includes('mounted=unknown')));
   assert.ok(outcome.lines.every((line) => !line.includes('secret')));
+  // 第 19 条：启动器传入的 --sha256 是同一 tgz 的自算值，必须标成自证，不能冒充独立口径。
+  assert.ok(
+    outcome.lines.some((line) => line.includes('摘要') && line.includes('自证')),
+    '摘要来源必须如实标注自证',
+  );
+  assert.ok(outcome.lines.every((line) => !line.includes('独立口径')), '自算摘要不得标成独立口径');
 });
 
 test('缺 pnpm 时用 npm 补装，并把 pnpm 目录注入安装子进程 PATH', { skip: process.platform === 'win32' }, async (t) => {
@@ -470,7 +494,8 @@ test('缺 pnpm 时用 npm 补装，并把 pnpm 目录注入安装子进程 PATH'
   });
 
   assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
-  assert.deepEqual(calls[0].args, ['install', '-g', 'pnpm']);
+  assert.deepEqual(calls[0].args, ['--profile', 'desktop', '--dump-config'], '先探测 desktop 可核验性');
+  assert.deepEqual(calls[1].args, ['install', '-g', 'pnpm']);
   const add = calls.find((call) => call.args[0] === 'plugin');
   assert.ok(add !== undefined, '应执行 dsh plugin add');
   assert.ok(add.options.env.PATH.startsWith(`${bin}${process.platform === 'win32' ? ';' : ':'}`));
@@ -497,7 +522,219 @@ test('runInit 同版本幂等：只跑 dump-config，不调用 add', async (t) =
 
   assert.equal(outcome.code, 0);
   assert.equal(outcome.result.status, 'already-installed');
+  // 第 24 条 / R5：仅版本相同不能证明是同一制品；没有安装时刻证据时必须如实报"无法确认"。
+  assert.equal(outcome.result.artifact.identity, 'unconfirmed');
+  assert.ok(outcome.lines.some((line) => line.includes('无法确认') && line.includes('仅版本相同不能证明')));
+  assert.ok(outcome.lines.every((line) => !line.includes('逐字节')), '没有安装时刻证据时不得声称逐字节一致');
+  assert.ok(outcome.warnings.some((line) => line.includes('无法确认两者是同一制品')));
   assert.deepEqual(calls.map((call) => call.args[0]), ['--profile']);
+});
+
+test('runInit 装完但留不下制品证据：结论降级为无法确认，不报假 confirmed（PR #256 复查）', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) };
+  // 证据文件的位置被一个目录占住：writeInstallRecord() 必然写得失败并返回 null。
+  mkdirSync(join(profileDir, '.heluo-enterprise-install.json'), { recursive: true });
+
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec: fakeExec({ profileDir }).exec,
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'installed');
+  assert.equal(outcome.result.artifact.identity, 'unconfirmed', '没留下证据就不能声称已核对');
+  assert.match(outcome.result.artifact.detail, /未能留存安装时刻的制品证据/u);
+  assert.ok(outcome.warnings.some((line) => line.includes('未能留存制品证据')));
+  assert.ok(outcome.lines.every((line) => !line.includes('制品证据：已记录')), '写不成证据时不得回显已记录');
+});
+
+test('runInit 同版本且已安装内容与交付一致：安装时刻证据对齐才报 confirmed', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) };
+
+  const installed = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec: fakeExec({ profileDir }).exec,
+  });
+  assert.equal(installed.code, 0, JSON.stringify(installed.result));
+  assert.equal(installed.result.status, 'installed');
+  assert.ok(existsSync(join(profileDir, '.heluo-enterprise-install.json')), '安装成功必须留存安装时刻证据');
+
+  const { exec, calls } = fakeExec({ profileDir });
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'already-installed');
+  assert.equal(outcome.result.artifact.identity, 'confirmed');
+  assert.ok(outcome.lines.some((line) => line.includes('已确认') && line.includes('安装时刻记录')));
+  assert.ok(outcome.lines.every((line) => !line.includes('无法确认')));
+  assert.deepEqual(calls.map((call) => call.args[0]), ['--profile'], '一致时只读回配置，不重装');
+});
+
+test('runInit 同路径被换成新内容、版本不变、已安装仍是旧包：不得报 confirmed', async (t) => {
+  const root = tempRoot(t);
+  const original = writeRelease(root, { bytes: Buffer.from('old-private-bundle') });
+  const { home, profileDir, manifestPath } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) };
+
+  const installed = await runInit({
+    argv: ['--release', original.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec: fakeExec({ profileDir }).exec,
+  });
+  assert.equal(installed.code, 0, JSON.stringify(installed.result));
+
+  // 管理员把新交付物覆盖到同一路径、版本号不变；node_modules 里仍是旧包。
+  const replaced = writeRelease(root, { bytes: Buffer.from('new-private-bundle') });
+  assert.equal(replaced.tarballPath, original.tarballPath, '夹具：同一路径');
+  assert.notEqual(replaced.metadata.tarball.sha256, original.metadata.tarball.sha256);
+  const before = readFileSync(manifestPath, 'utf8');
+  const { exec, calls } = fakeExec({ profileDir });
+
+  const outcome = await runInit({
+    argv: ['--release', replaced.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'ARTIFACT_CONFLICT');
+  assert.match(outcome.result.error.message, /同一路径上的文件可能已被替换/u);
+  assert.equal(calls.length, 0, '冲突时不得调用宿主');
+  assert.equal(readFileSync(manifestPath, 'utf8'), before);
+});
+
+test('runInit 没有安装时刻证据：file: 路径内容与交付一致也只能报无法确认', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root, {
+    installedVersion: '0.1.0',
+    dependencies: { [ENTRY_PACKAGE]: `file:${release.tarballPath}` },
+    bundles: [ENTRY_PACKAGE],
+  });
+  const dshPath = writeDsh(root);
+  const { exec, calls } = fakeExec({ profileDir });
+
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env: { DSH_HOME: join(home, '.dsh') },
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'already-installed');
+  assert.equal(outcome.result.artifact.identity, 'unconfirmed');
+  assert.ok(outcome.lines.some((line) => line.includes('无法确认') && line.includes('安装时刻的制品证据')));
+  assert.ok(outcome.lines.every((line) => !line.includes('逐字节')), '没有安装时刻证据时不得声称逐字节一致');
+  assert.ok(outcome.warnings.some((line) => line.includes('无法确认两者是同一制品')));
+  assert.deepEqual(calls.map((call) => call.args[0]), ['--profile']);
+});
+
+test('runInit 安装后已安装文件被改动：报无法确认而不是 confirmed', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) };
+
+  const installed = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec: fakeExec({ profileDir }).exec,
+  });
+  assert.equal(installed.code, 0, JSON.stringify(installed.result));
+
+  const installedManifest = join(profileDir, 'node_modules', ...ENTRY_PACKAGE.split('/'), 'package.json');
+  writeFileSync(installedManifest, JSON.stringify({ name: ENTRY_PACKAGE, version: '0.1.0', tampered: true }));
+  const { exec } = fakeExec({ profileDir });
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.artifact.identity, 'unconfirmed');
+  assert.ok(outcome.lines.some((line) => line.includes('已安装包内容与安装时刻记录不一致')));
+  assert.ok(outcome.lines.every((line) => !line.includes('逐字节')));
+});
+
+test('runInit 同版本但安装时刻记录的是另一份制品：拒绝并提示先 remove，零写入', async (t) => {
+  const root = tempRoot(t);
+  const other = writeRelease(join(root, 'other'), { bytes: Buffer.from('another-private-bundle') });
+  const { home, profileDir, manifestPath } = writeProfile(root);
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) };
+
+  const installed = await runInit({
+    argv: ['--release', other.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec: fakeExec({ profileDir }).exec,
+  });
+  assert.equal(installed.code, 0, JSON.stringify(installed.result));
+
+  const release = writeRelease(root);
+  const before = readFileSync(manifestPath, 'utf8');
+  const { exec, calls } = fakeExec({ profileDir });
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'ARTIFACT_CONFLICT');
+  assert.match(outcome.result.error.next, /remove/u);
+  assert.match(outcome.result.error.message, /安装时刻记录的制品摘要/u);
+  assert.equal(calls.length, 0, '冲突时不得调用宿主');
+  assert.equal(readFileSync(manifestPath, 'utf8'), before);
+});
+
+test('runInit 显式 desktop：宿主拒绝命令行核验时在写入前拒绝', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, manifestPath } = writeProfile(root);
+  const before = readFileSync(manifestPath, 'utf8');
+  const dshPath = writeDsh(root);
+  const { exec, calls } = fakeExec({ profileDir, dumpConfigCode: 1 });
+
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env: { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) },
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'DESKTOP_PROFILE_UNSUPPORTED');
+  assert.equal(calls.length, 1, '只做一次探测，不得执行 plugin add');
+  assert.deepEqual(calls[0].args, ['--profile', 'desktop', '--dump-config']);
+  assert.ok(calls.every((call) => call.args[0] !== 'plugin'), '不可核验时不能留下"已安装却报失败"');
+  assert.equal(readFileSync(manifestPath, 'utf8'), before);
 });
 
 test('runInit 异版本停止且零写入；dependencies 有包但读不出版本同样停止', async (t) => {
@@ -562,16 +799,19 @@ test('runInit 摘要口径、缺 dsh、安装失败、核验失败各自分类�
     exec: installFail.exec,
   });
   assert.equal(c1.result.error.code, 'INSTALL_FAILED');
+  assert.match(c1.result.error.message, /pnpm failed/u, '必须带出宿主自己的失败原因');
   assert.equal(readFileSync(manifestPath, 'utf8'), before);
 
+  const probeOnly = fakeExec({ profileDir });
   const noPnpm = await runInit({
     argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
     env,
     home,
-    exec: async () => assert.fail('缺 pnpm 时不应调用 dsh'),
+    exec: probeOnly.exec,
   });
   assert.equal(noPnpm.result.error.code, 'PNPM_REQUIRED');
   assert.match(noPnpm.result.error.next, /npm install -g pnpm/u);
+  assert.ok(probeOnly.calls.every((call) => call.args[0] !== 'plugin'), '缺 pnpm 时不得尝试 plugin add');
   assert.equal(readFileSync(manifestPath, 'utf8'), before);
 
   const root2 = tempRoot(t);

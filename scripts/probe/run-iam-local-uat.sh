@@ -20,6 +20,16 @@ if [ -n "$want_node" ] && [ "$want_node" != "$have_node" ]; then
 fi
 printf '环境：Node %s，DSH %s\n' "$have_node" "$("$DSH_CMD" --version 2>/dev/null | head -1)"
 export IAM_UAT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/heluo-iam-uat.XXXXXXXX")"
+# 凭据插件的 SQLite 值级加密存储把 storeDirectory 指向 $IAM_UAT_ROOT/dsh/credentials：
+# 登录后的测试凭据（credentials.sqlite；密钥在兄弟目录 credentials.keys/keyring.json）
+# 会跨宿主停止保留，默认不自动删除。退出时打印目录与只清理本次目录的命令，
+# 避免误删其它临时目录。
+cleanup_hint() {
+  printf '\n隔离目录（保留）：%s\n' "$IAM_UAT_ROOT"
+  printf '测试凭据（SQLite 值级加密）：%s 与 %s\n' "$IAM_UAT_ROOT/dsh/credentials" "$IAM_UAT_ROOT/dsh/credentials.keys"
+  printf '确认不再需要后，只清理本次目录：rm -rf -- %q\n' "$IAM_UAT_ROOT"
+}
+trap cleanup_hint EXIT
 mkdir -p "$IAM_UAT_ROOT/source" "$IAM_UAT_ROOT/artifacts" "$IAM_UAT_ROOT/workspace" "$IAM_UAT_ROOT/dsh/profiles/uat"
 git archive HEAD | tar -x -C "$IAM_UAT_ROOT/source"
 cat > "$IAM_UAT_ROOT/build.mjs" <<'JS'
