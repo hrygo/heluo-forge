@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-020 |
 | 文档名称 | Issue #254 审查意见处置与覆盖台账 |
-| 版本 | V0.4.0 |
+| 版本 | V0.4.1 |
 | 文档状态 | 草案（代拟，待负责人确认） |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -203,7 +203,7 @@ PR #256 的 `check` 工作流在 `main` 之外的三个 Windows 运行器（`win
 16. `credentials.sqlite.init` 标记：初始化在建库之后、写密钥之前中断会留下标记，之后所有写操作在 `lockTimeoutMs` 后返回 `CRED_LOCK_TIMEOUT`，需人工删除标记；这是 #253 明确的 fail closed 取舍，不按 age 自动回收，已写入 `packages/forge-credentials-keychain/README.md`。
 17. 仓库边界检查的失败语义：`assertDirectoryOutsideRepository` 在 `realpathSync` 不可用（如父目录权限受限）时抛错而非放行，属 fail closed，但错误码仍是 `KEYCHAIN_FILE_INSIDE_REPOSITORY`，与「确实位于仓库内」共用同一码，语义略偏。
 18. Windows ACL 与目录持久性：主线 README 仍标注待实证，本轮未在 Windows 实机验证。
-19. 合并树的托管 CI 未跑：§6 的数字全部来自本机 Node 24.21.0；跨平台结论仍针对主线提交 `f8f7a29`。
+19. 本机与托管 CI 的版本差异：§6 的数字来自本机 Node 24.21.0；托管 CI 亦为 24.21.0，但本机默认 24.13.0 下 `node:sqlite` 的实验性警告会污染 CLI 子进程 stderr（详见 §6 版本注记），不能用作判据。
 
 
 **follow-up 待裁决项**
@@ -256,4 +256,6 @@ R1 的根因不只是夹具写法：发布扫描此前**认可代码行上的豁
 
 **编号与文档口径**：本台账由 CORP-DSH-PLAN-018 改号 **CORP-DSH-PLAN-020**（主线已占用 018），文档清单版本升至 V1.82.0；`docs/design/plugins/forge-iam.md` 版本取主线 V3.0.0 后升 **V3.0.1**，正文保留本分支 §5.7 的「跨进程失效与撤销边界」五条；`packages/forge-iam/docs/credential-access.md` 与 `local-mock-testing.md` 取主线（SQLite 存储、`HELUO_FORGE_STORE_DIRECTORY`、loopback 桥描述更新）。
 
-**合并后的验证**：见 §6（`node --test` 3790 / 3787 / 0 / 3，检查器全 ok）。本节只给本地离线证据；合并树尚未推送，跨平台托管 CI 的结论仍针对主线提交 `f8f7a29`，不构成对合并树的验收。
+**合并后的验证**：见 §6（`node --test` 3790 / 3787 / 0 / 3，检查器全 ok）。合并树已推送到 PR #256（head `73071ba`，两提交：`204dfe0` 合并基线并处置审查意见、`73071ba` 订正本地 UAT 的凭据保留说明）。
+
+**托管 CI（`73071ba`）**：`repository checks` 全绿，逐作业通过 `SQLite and IAM`（darwin-arm64/macos-15、darwin-x64/macos-15-intel、linux-arm64/ubuntu-24.04-arm、linux-x64/ubuntu-24.04、linux-x64/ubuntu-26.04、win32-arm64/windows-11-arm、win32-x64/windows-2022、win32-x64/windows-2025）、`sensitive scan and IAM callback (win32-x64)`、`verify (ubuntu-x64)`、`classify changes`；`sensitive-attestation` 与 `洛神 (PR-Agent)` 同样通过。该结论只覆盖构建、打包与自动化用例，不覆盖 §7 列出的企业环境与真机项。
