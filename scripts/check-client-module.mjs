@@ -42,24 +42,19 @@ function fakeReact() {
  * 假 `ctx`：记录 effect / slot / locale，并**真的模拟槽位声明生命周期**。
  *
  * 宿主语义（`dsh-client-ui-renderer/src/client/registry.ts` 的 `inject`）：
- * 槽位未声明时回调排队，声明后执行；声明塌陷时执行回调的 cleanup，
- * 再次声明时重新执行。因此这里提供 `declare(name)` / `undeclare(name)`，
- * 用来复现「容器晚于 apply 出现」与「容器运行期被禁用」两条真实时序——
- * 只模拟「一开始就在 / 一开始就没有」会让释放与回退路径永远不被执行。
+ * 槽位未声明时回调排队；声明后执行；声明塌陷时执行该生命周期的 cleanup；
+ * **再次声明时重新执行回调**（每个声明生命周期一份 effect）。因此这里按槽位保存
+ * 回调记录并在 `declare` / `undeclare` 之间重跑，`register` 也只在声明存在时接受——
+ * 只模拟「一开始就在 / 一开始就没有」会让释放、回退与重挂三条路径永远不被执行。
  */
 function fakeContext() {
   const declared = new Set(['settings.section', 'settings.section.icon']);
-  const waiters = new Map();
-  const cleanups = new Map();
+  /** name -> [{ fn, cleanup }]，按注册顺序执行；塌陷时执行 cleanup，再声明时重跑 fn。 */
+  const entries = new Map();
   const effects = [];
   const registrations = [];
   const locales = [];
   const warnings = [];
-  const collect = (map, name, disposer) => {
-    if (typeof disposer !== 'function') return;
-    if (!map.has(name)) map.set(name, new Set());
-    map.get(name).add(disposer);
-  };
   const ctx = {
     effect: (fn) => {
       const disposer = fn();
@@ -79,19 +74,26 @@ function fakeContext() {
     },
     slots: {
       inject: (name, fn) => {
-        if (declared.has(name)) {
-          collect(cleanups, name, fn());
-          return () => {};
-        }
-        if (!waiters.has(name)) waiters.set(name, new Set());
-        waiters.get(name).add(fn);
+        if (!entries.has(name)) entries.set(name, []);
+        const record = { fn, cleanup: undefined };
+        entries.get(name).push(record);
+        if (declared.has(name)) record.cleanup = fn();
         return () => {
-          waiters.get(name)?.delete(fn);
+          const list = entries.get(name) ?? [];
+          const index = list.indexOf(record);
+          if (index >= 0) list.splice(index, 1);
+          if (typeof record.cleanup === 'function') record.cleanup();
+          record.cleanup = undefined;
         };
       },
       register: (options, component) => {
+        const name = options?.name;
+        // 宿主对未声明槽位直接抛 `slot "<key>" is not declared`（这正是 D-2 回归的形态）。
+        if (typeof name !== 'string' || !declared.has(name)) {
+          throw new Error(`slot '${String(name)}' is not declared by this entry's children`);
+        }
         const entry = {
-          name: options?.name,
+          name,
           id: options?.id,
           order: options?.order,
           label: options?.label,
@@ -101,11 +103,9 @@ function fakeContext() {
         };
         registrations.push(entry);
         // 宿主返回的是 `ctx.effect` 的 disposer（函数）；这里同样只返回函数。
-        const release = () => {
+        return () => {
           entry.released = true;
         };
-        collect(cleanups, entry.name, release);
-        return release;
       },
     },
     locale: {
@@ -126,20 +126,24 @@ function fakeContext() {
     },
     logger: { warn: () => {}, info: () => {}, debug: () => {}, error: () => {} },
   };
-  /** 声明一个槽位：执行排队的回调，并登记它们的 cleanup。 */
+  const runRecord = (record) => {
+    if (typeof record.cleanup === 'function') record.cleanup();
+    record.cleanup = record.fn();
+  };
+  /** 声明一个槽位：该槽位的所有回调都进入一个新的声明生命周期（宿主按 epoch 重跑）。 */
   const declare = (name) => {
     if (declared.has(name)) return;
     declared.add(name);
-    const pending = [...(waiters.get(name) ?? [])];
-    waiters.get(name)?.clear();
-    for (const fn of pending) collect(cleanups, name, fn());
+    for (const record of entries.get(name) ?? []) runRecord(record);
   };
-  /** 塌陷一个槽位：执行该槽位所有回调的 cleanup（宿主在声明消失时同步做这件事）。 */
+  /** 塌陷一个槽位：执行该声明生命周期里所有回调的 cleanup（宿主同步做这件事）。 */
   const undeclare = (name) => {
     if (!declared.has(name)) return;
     declared.delete(name);
-    for (const cleanup of cleanups.get(name) ?? []) cleanup();
-    cleanups.delete(name);
+    for (const record of entries.get(name) ?? []) {
+      if (typeof record.cleanup === 'function') record.cleanup();
+      record.cleanup = undefined;
+    }
   };
   return { ctx, effects, registrations, locales, warnings, declare, undeclare };
 }
@@ -225,6 +229,12 @@ function checkOne(file) {
         // 容器先到场：先走一次 tab 挂载；再让它塌陷，验证独立分区被补回来。
         runtime.undeclare('heluo.engineering.tab');
       }
+      if (scenario === 'redeclare') {
+        // 容器先到、塌陷、再回来：宿主按声明 epoch 重跑回调，必须回到「只有一个 tab」。
+        runtime.declare('heluo.engineering.tab');
+        runtime.undeclare('heluo.engineering.tab');
+        runtime.declare('heluo.engineering.tab');
+      }
     } catch (error) {
       errors.push(`scenario ${scenario} threw: ${error.message}`);
     }
@@ -303,6 +313,18 @@ function checkOne(file) {
   }
   checkSlots('collapse', collapse);
 
+  // 容器塌陷后又回来（声明 epoch 重跑回调）：必须回到「只有一个 tab」。
+  const redeclare = run('redeclare');
+  if (!isContainer) {
+    if (tabsOf(redeclare).length !== 1) {
+      errors.push(`container came back after collapse but ${tabsOf(redeclare).length} container tab(s) are registered (want exactly 1)`);
+    }
+    if (sectionsOf(redeclare).length > 0) {
+      errors.push('container came back after collapse but the standalone settings section is still registered');
+    }
+  }
+  checkSlots('redeclare', redeclare);
+
   const icons = [...new Set([
     ...standalone.filter((entry) => entry.name === 'settings.section.icon').map((entry) => entry.id),
     ...containerFirst.filter((entry) => entry.name === 'settings.section.icon').map((entry) => entry.id),
@@ -316,6 +338,7 @@ function checkOne(file) {
     container: isContainer,
     late,
     collapse,
+    redeclare,
     icons,
     errors,
   };
@@ -335,8 +358,8 @@ if (files.length === 0) {
   });
   const failed = results.filter((result) => result.errors.length > 0);
   console.log(JSON.stringify({
-    checked: results.map(({ file, id, sections, tabs, containerSections, container, icons, late, collapse }) => ({
-      file, id, sections, tabs, containerSections, container, icons, late, collapse,
+    checked: results.map(({ file, id, sections, tabs, containerSections, container, icons, late, collapse, redeclare }) => ({
+      file, id, sections, tabs, containerSections, container, icons, late, collapse, redeclare,
     })),
     failed: failed.length,
   }, null, 2));

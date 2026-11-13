@@ -2274,24 +2274,32 @@ window.__ModuleLoader__.load({
       /** 当前生效的挂载：`{ kind: 'tab' | 'section', releases: Array<() => void> }`。 */
       let mounted;
 
-      const mountSection = () => [
-        ctx.slots.register({
-          name: 'settings.section',
-          id: 'devops',
-          order: 60,
-          label: () => t('nav'),
-          locale: NS,
-          inject: () => ({ t, navigate }),
-        }, DevopsSection),
-        ctx.slots.register({
-          name: 'settings.section',
-          id: 'devops-readiness',
-          order: 29,
-          label: () => t('readiness.nav'),
-          locale: NS,
-          inject: () => ({ t, navigate }),
-        }, ReadinessSection),
-      ];
+      const mountSection = () => {
+        const releases = [];
+        try {
+          releases.push(ctx.slots.register({
+            name: 'settings.section',
+            id: 'devops',
+            order: 60,
+            label: () => t('nav'),
+            locale: NS,
+            inject: () => ({ t, navigate }),
+          }, DevopsSection));
+          releases.push(ctx.slots.register({
+            name: 'settings.section',
+            id: 'devops-readiness',
+            order: 29,
+            label: () => t('readiness.nav'),
+            locale: NS,
+            inject: () => ({ t, navigate }),
+          }, ReadinessSection));
+        } catch (error) {
+          // 两笔注册不是事务：第二笔失败时把第一笔撤掉，别留下孤立分区。
+          for (const release of releases) releaseDisposable(release);
+          throw error;
+        }
+        return releases;
+      };
 
       const mountTab = () => [
         ctx.slots.register({
@@ -2313,7 +2321,14 @@ window.__ModuleLoader__.load({
           return;
         }
         if (mounted !== undefined && mounted.kind === wanted) return;
-        const releases = wanted === 'tab' ? mountTab() : mountSection();
+        let releases;
+        try {
+          releases = wanted === 'tab' ? mountTab() : mountSection();
+        } catch (error) {
+          // 卸载期 `ctx.effect` 已冻结（宿主抛 INACTIVE_EFFECT）：cleanup 里不该再冒泡。
+          if (error?.code !== 'INACTIVE_EFFECT') throw error;
+          return;
+        }
         const previous = mounted;
         mounted = { kind: wanted, releases };
         if (previous !== undefined) for (const release of previous.releases) releaseDisposable(release);

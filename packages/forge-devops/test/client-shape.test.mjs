@@ -353,6 +353,11 @@ test('分区注册一律经 slots.inject 等声明，禁止裸 register（D-2 �
     !/ctx\.effect\(\s*\(\)\s*=>\s*ctx\.slots\.register/u.test(SOURCE),
     'effect 里直接 register 会让挂载依赖模块加载顺序（宿主冷启动会抛 not declared）',
   );
+  // 块体写法同样禁止：`ctx.effect(() => { ... ctx.slots.register(...) })` 一样绕开声明等待。
+  assert.ok(
+    !/ctx\.effect\(\s*\(\)\s*=>\s*\{[\s\S]{0,400}?ctx\.slots\.register\(/u.test(SOURCE),
+    'effect 的块体里同样不得直接 register（必须经 reconcile 由声明变化驱动）',
+  );
   // 声明生命周期双向：出现时挂容器条目，塌陷时把独立分区补回来——两条都要 reconcile。
   for (const [flag, value] of [['container', 'true'], ['container', 'false'], ['section', 'true'], ['section', 'false']]) {
     assert.match(

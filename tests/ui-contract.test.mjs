@@ -201,6 +201,7 @@ test('容器在场时：devops 与 gitee 只注册容器条目，不再各占侧
 test('容器后到：独立分区先撤再挂容器条目，侧栏只留一个入口', () => {
   const report = loadContainerReport();
   assert.equal(report.failed, 0, 'scripts/check-client-module.mjs 必须全部通过');
+  assert.equal(report.failed, 0, 'scripts/check-client-module.mjs 必须全部通过');
   const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
   for (const id of ['@heluo/forge-gitee', '@heluo/forge-devops']) {
     const entry = byId.get(id);
@@ -213,6 +214,7 @@ test('容器后到：独立分区先撤再挂容器条目，侧栏只留一个�
 
 test('容器运行期塌陷：独立分区补回来，入口不会整块消失', () => {
   const report = loadContainerReport();
+  assert.equal(report.failed, 0, 'scripts/check-client-module.mjs 必须全部通过');
   const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
   for (const id of ['@heluo/forge-gitee', '@heluo/forge-devops']) {
     const entry = byId.get(id);
@@ -234,25 +236,45 @@ test('容器缺席时：devops/gitee 保留独立分区与 order（ADR-0012 单�
   ]);
 });
 
-test('跨客户端分区序唯一：企业账号 -10 / 容器 30 / Gitee 50 / DevOps 60 与子条目 10/20', () => {
-  const clients = [
-    'packages/forge-iam/client.js',
-    'packages/forge-enterprise/client.js',
-    'packages/forge-gitee/client.js',
-    'packages/forge-devops/client.js',
-  ];
-  const orders = [];
-  for (const file of clients) {
-    const source = read(file);
-    // 只取注册项里的 `id:` + 紧随其后的 `order:`，避免把排序比较器里的数字算进来。
-    for (const match of source.matchAll(/id: '([a-z0-9-]+)',\s*\n\s*order: (-?\d+)/gu)) {
-      orders.push({ file, id: match[1], order: Number(match[2]) });
-    }
+test('容器塌陷后再回来：声明 epoch 重跑回调，仍只有一个容器条目', () => {
+  const report = loadContainerReport();
+  assert.equal(report.failed, 0, 'scripts/check-client-module.mjs 必须全部通过');
+  const byId = new Map(report.checked.map((entry) => [entry.id, entry]));
+  for (const id of ['@heluo/forge-gitee', '@heluo/forge-devops']) {
+    const entry = byId.get(id);
+    const tabs = entry.redeclare.filter((item) => item.name === 'heluo.engineering.tab');
+    const sections = entry.redeclare.filter((item) => item.name === 'settings.section');
+    assert.equal(tabs.length, 1, `${id} 容器回归后必须正好一个容器条目`);
+    assert.deepEqual(sections, [], `${id} 容器回归后不得残留独立分区`);
   }
-  assert.ok(orders.length >= 6, `至少应解析出六个分区注册项，实际 ${orders.length}`);
-  const values = orders.map(({ order }) => order);
-  assert.equal(new Set(values).size, values.length, `分区 order 撞号：${JSON.stringify(values)}`);
-  assert.ok(values.includes(-10), '企业账号必须排最前（-10），否则与研发容器 30 同序');
+});
+
+test('跨客户端分区序唯一：企业账号 -10 / 容器 30 / Gitee 50 / DevOps 60 与子条目 10/20', () => {
+  // 用检查器真跑出来的注册项，不解析源码文本：`order` 在容器里是常量（`SECTION_ORDER`），
+  // 文本正则会被常量与排序比较器误导。企业账号不走检查器（它不注入 locale），单点读一次。
+  const report = loadContainerReport();
+  const collected = [];
+  for (const entry of report.checked) {
+    for (const item of entry.sections) collected.push({ slot: 'settings.section', id: item.id, order: item.order, file: entry.file });
+    for (const item of entry.tabs) collected.push({ slot: 'heluo.engineering.tab', id: item.id, order: item.order, file: entry.file });
+  }
+  const iamOrder = /id: 'forge-iam',\s*\n\s*order: (-?\d+)/u.exec(read('packages/forge-iam/client.js'));
+  assert.ok(iamOrder !== null, '企业账号分区必须显式声明 order');
+  collected.push({ slot: 'settings.section', id: 'forge-iam', order: Number(iamOrder[1]), file: 'packages/forge-iam/client.js' });
+
+  const bySlot = new Map();
+  for (const row of collected) {
+    if (!bySlot.has(row.slot)) bySlot.set(row.slot, []);
+    bySlot.get(row.slot).push(row);
+  }
+  assert.deepEqual([...bySlot.keys()].sort(), ['heluo.engineering.tab', 'settings.section']);
+  for (const [slot, rows] of bySlot) {
+    const values = rows.map(({ order }) => order);
+    assert.equal(new Set(values).size, values.length, `${slot} 的分区 order 撞号：${JSON.stringify(rows)}`);
+  }
+  const sectionOrders = bySlot.get('settings.section').map(({ order }) => order);
+  assert.ok(sectionOrders.includes(-10), `企业账号必须排最前（-10），实际 ${JSON.stringify(sectionOrders)}`);
+  assert.ok(sectionOrders.includes(30), `研发容器必须是 settings.section 的 30，实际 ${JSON.stringify(sectionOrders)}`);
 });
 
 test('容器自身：forge-engineering（order 30）声明子槽位并注册同名图标', () => {

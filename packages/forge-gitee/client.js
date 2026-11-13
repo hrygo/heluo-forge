@@ -854,8 +854,12 @@ window.__ModuleLoader__.load({
           return;
         }
         if (mounted !== undefined && mounted.kind === wanted) return;
-        // 目标槽位没声明时 `register` 会抛：保留旧挂载并在下一次声明变化时重试。
-        mount(wanted);
+        try {
+          mount(wanted);
+        } catch (error) {
+          // 卸载期 `ctx.effect` 已冻结（宿主抛 INACTIVE_EFFECT）：cleanup 里不该再冒泡。
+          if (error?.code !== 'INACTIVE_EFFECT') throw error;
+        }
       };
 
       ctx.effect(

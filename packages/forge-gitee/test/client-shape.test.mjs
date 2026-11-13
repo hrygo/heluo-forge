@@ -243,6 +243,61 @@ function copyTables() {
   return { zh: parse(SOURCE.slice(zhStart, enStart)), en: parse(SOURCE.slice(enStart)) };
 }
 
+test('AC-13: 容器后到与运行期塌陷都不丢入口（声明生命周期重跑）', () => {
+  // 与集成检查器的 fake 同构：声明存在才执行回调，塌陷执行 cleanup，再声明重跑回调。
+  const declared = new Set(['settings.section']);
+  const records = new Map();
+  const registrations = [];
+  const ctx = {
+    effect: (callback) => {
+      callback();
+      return () => {};
+    },
+    locale: { bind: () => (key) => key, register: () => () => {} },
+    slots: {
+      inject: (name, callback) => {
+        if (!records.has(name)) records.set(name, []);
+        const record = { callback, cleanup: undefined };
+        records.get(name).push(record);
+        if (declared.has(name)) record.cleanup = callback();
+        return () => {};
+      },
+      register: (options) => {
+        if (!declared.has(options.name)) throw new Error(`slot '${options.name}' is not declared`);
+        const entry = { id: options.id, order: options.order, released: false };
+        registrations.push(entry);
+        return () => {
+          entry.released = true;
+        };
+      },
+    },
+  };
+  const live = () => registrations.filter((entry) => !entry.released).map(({ id, order }) => `${id}:${order}`);
+  const declare = (name) => {
+    declared.add(name);
+    for (const record of records.get(name) ?? []) {
+      record.cleanup?.();
+      record.cleanup = record.callback();
+    }
+  };
+  const undeclare = (name) => {
+    declared.delete(name);
+    for (const record of records.get(name) ?? []) {
+      record.cleanup?.();
+      record.cleanup = undefined;
+    }
+  };
+
+  CLIENT.module.apply(ctx);
+  assert.deepEqual(live(), ['gitee:50'], '无容器时保留独立分区');
+  declare('heluo.engineering.tab');
+  assert.deepEqual(live(), ['gitee:20'], '容器后到时独立分区必须先撤（否则侧栏两份入口）');
+  undeclare('heluo.engineering.tab');
+  assert.deepEqual(live(), ['gitee:50'], '容器塌陷后独立分区必须补回来');
+  declare('heluo.engineering.tab');
+  assert.deepEqual(live(), ['gitee:20'], '容器回来后只能有一个容器条目');
+});
+
 test('AC-4/AC-5: zh/en 键集等值、占位符一致、en 不含中文；行卡文案齐全', () => {
   const { zh, en } = copyTables();
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort(), '两种语言的键集必须完全一致');
