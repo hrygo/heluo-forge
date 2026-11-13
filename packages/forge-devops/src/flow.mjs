@@ -17,6 +17,7 @@
  * 一起交给了 forge-gitee，装配层保留同一个门禁适配（`createPolicyGuard`）不在这里复制第二份。
  */
 import { createCliRunner } from './cli-runner.mjs';
+import { createDevopsResolveChildEnv, getOptionalBroker } from './credential-descriptor.mjs';
 import { createDopAdapter } from './dop-adapter.mjs';
 import { describeRuntimeConfig, ENV_KEYS, resolveRuntimeConfig } from './runtime-config.mjs';
 import {
@@ -69,8 +70,8 @@ function normalizeResolution(config, env) {
  *
  * 不再有 `gh` 端口——仓库 / Issue / PR 的读写在 `@heluo/forge-gitee`，这里连 import 都不该出现。
  */
-export function createPorts({ runtime, execFile, now }) {
-  const runner = createCliRunner({ execFile, timeoutMs: runtime.timeoutMs });
+export function createPorts({ runtime, execFile, now, resolveChildEnv = null }) {
+  const runner = createCliRunner({ execFile, timeoutMs: runtime.timeoutMs, resolveChildEnv });
   return {
     runner,
     dop: createDopAdapter({ runner, dopBin: runtime.dopBin, dopEndpoint: runtime.dopEndpoint, now }),
@@ -113,7 +114,12 @@ export function createDevopsFlow({
   // 可用性优先：调用方直接给的原因字符串/信封压过解析结果（装配层已做过三层合并，解析结论只是兜底）。
   const reasonOverride = typeof unavailable === 'string' && unavailable !== '' ? unavailable : null;
   const unavailableReason = resolution.ok === true ? null : (reasonOverride ?? resolution.reason);
-  const ports = runtime === null ? null : createPorts({ runtime, execFile, now });
+  const broker = getOptionalBroker(ctx);
+  const resolveChildEnv = createDevopsResolveChildEnv({
+    broker,
+    processEnv: env ?? (typeof process === 'object' ? process.env : undefined),
+  });
+  const ports = runtime === null ? null : createPorts({ runtime, execFile, now, resolveChildEnv });
   const reader = createDevopsReader({
     ports,
     reason: unavailableReason ?? FLOW_REASONS.CONFIG_MISSING,
