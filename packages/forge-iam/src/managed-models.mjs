@@ -44,6 +44,7 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_MODEL_CATALOG_INVALID: '网关返回的模型列表无法识别，请联系管理员检查网关。',
   IAM_LOGIN_REQUIRED: '企业账号已退出或登录已过期，请重新登录后再使用模型。',
   IAM_GATEWAY_CREDENTIAL_REQUIRED: '请在“设置 → 企业账号”保存当前账号的个人访问凭证。',
+  IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED: '网关地址或企业身份已变更，请重新录入个人访问凭证。',
   ENTERPRISE_MODEL_NOT_ALLOWED: '此模型未由企业开放，请选择企业提供的模型。',
   ENTERPRISE_MODELS_UNAVAILABLE: '企业模型暂不可用，请联系管理员检查配置。',
   ENTERPRISE_MODEL_SYNC_CANCELLED: '模型目录同步被中断，请重试。',
@@ -77,6 +78,10 @@ const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { co
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
   if (view?.state !== 'ready' || !view.principal || !Number.isFinite(expires(view)) || expires(view) <= Date.now()) return 'IAM_LOGIN_REQUIRED';
+  // A Key bound to another target is not "missing": the person must re-enter it
+  // once, and the prompt says so instead of asking them to configure a Key they
+  // believe they already saved (issue #226).
+  if (view.gatewayCredential?.state === 'rebind-required') return 'IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED';
   if (view.gatewayCredential?.state !== 'configured' || view.gatewayCredential.matchesAccount !== true) return 'IAM_GATEWAY_CREDENTIAL_REQUIRED';
   return null;
 }

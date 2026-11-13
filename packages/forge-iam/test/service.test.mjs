@@ -14,6 +14,9 @@ const configured = {
   clientId: 'dsh-desktop',
   gatewayResource: 'https://gateway.corp.example',
   redirectUri: 'http://127.0.0.1:9/iam/callback',
+  // The enterprise preset owns the target; the credential binding compares the
+  // saved address against this one (issue #226).
+  managedModels: { baseURL: 'https://gateway.corp.example/v1' },
 };
 
 function fakeContext(credentials = new MemoryCredentials()) {

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertClientAuthCurrent } from './client-auth.mjs';
 import { isConfigured } from './config.mjs';
 import { IamError } from './errors.mjs';
+import { evaluateGatewayBinding, resolveTargetBaseURL } from './gateway-binding.mjs';
 import { normalizeGatewayBaseURL } from './model-options.mjs';
 import { isAccessExpired, isRefreshUsable } from './record.mjs';
 import { StoreError } from './store.mjs';
@@ -23,6 +24,13 @@ export function createServiceGateway(env) {
     configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime,
   } = env;
 
+  /** Normalized enterprise address, or undefined when this deployment has no preset. */
+  function authoritativeBaseURL() {
+    const configuredAddress = config.managedModels?.baseURL;
+    if (typeof configuredAddress !== 'string' || configuredAddress.length === 0) return undefined;
+    try { return normalizeGatewayBaseURL(configuredAddress); } catch { return undefined; }
+  }
+
   async function read(targetGatewayStore, targetStore, isCurrent) {
     if (!isCurrent()) return null;
     const record = await targetGatewayStore.read().catch(() => ({ ok: false, reason: 'unreadable' }));
@@ -42,12 +50,30 @@ export function createServiceGateway(env) {
     if (!isCurrent()) return null;
     const signedInSubject = ctx.lastGrant && grants.ownerOf(ctx.lastGrant) === targetStore ? ctx.lastGrant.subject : null;
     const matchesAccount = Boolean(credential.ownerSubject && signedInSubject && credential.ownerSubject === signedInSubject);
+    // Which target does this Key belong to, and can the Host still prove it?
+    const authoritative = authoritativeBaseURL();
+    const binding = evaluateGatewayBinding({
+      credential: record.credential,
+      expectedIssuer: ctx.knownIssuer(),
+      authoritativeBaseURL: authoritative,
+    });
+    const targetBaseURL = resolveTargetBaseURL({ credentialBaseURL: credential.baseURL, authoritativeBaseURL: authoritative });
     return {
       // Without a session the stored key is still "configured"; it only becomes
       // a mismatch once a different subject is known.
-      state: !signedInSubject || matchesAccount ? 'configured' : 'owner-mismatch',
+      state: !signedInSubject || matchesAccount
+        ? (binding.bound ? 'configured' : 'rebind-required')
+        : 'owner-mismatch',
+      // Why the Key must be entered again; the client maps it to one prompt and
+      // the Host never sends the Key while this is present.
+      ...(binding.bound ? {} : { rebindReason: binding.reason }),
+      // The address that calls will actually use, and whether a person could
+      // change it here at all. The UI must not offer an address editor when the
+      // enterprise configuration owns the target.
+      baseURL: targetBaseURL ?? null,
+      addressAuthoritative: authoritative !== undefined && authoritative === targetBaseURL,
+      issuer: credential.issuer ?? null,
       ownerSubject: credential.ownerSubject ?? null,
-      baseURL: credential.baseURL ?? config.managedModels?.baseURL ?? null,
       generation: credential.writeOperationId ?? null,
       deviceLabel: credential.deviceLabel ?? null,
       enteredAt: credential.enteredAt ?? null,
@@ -140,14 +166,39 @@ export function createServiceGateway(env) {
     if (resolved?.invalid || !resolved?.value) {
       throw new IamError('IAM_GATEWAY_CREDENTIAL_REQUIRED', '请保存当前账号的个人访问凭证。');
     }
-    const address = record.credential.baseURL ?? config.managedModels?.baseURL;
+    // A Key is only ever sent to the target it was bound to (issue #226). An
+    // unprovable binding — address changed, issuer changed, or a record written
+    // before the binding existed — stops the call instead of guessing, and the
+    // person is asked to re-enter the Key once.
+    const authoritative = authoritativeBaseURL();
+    const binding = evaluateGatewayBinding({
+      credential: record.credential,
+      expectedIssuer: ctx.knownIssuer(),
+      authoritativeBaseURL: authoritative,
+    });
+    if (!binding.bound) {
+      throw new IamError('IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED', safeMessage('IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED'), { reason: binding.reason });
+    }
+    const address = resolveTargetBaseURL({ credentialBaseURL: record.credential.baseURL, authoritativeBaseURL: authoritative });
     if (!address) throw new IamError('IAM_GATEWAY_URL_INVALID', '请先设置网关地址。');
     const baseURL = normalizeGatewayBaseURL(address);
     return { key: resolved.value, baseURL, generation: record.credential.writeOperationId ?? null, subject };
   }
 
   async function saveCredential({ key: value, deviceLabel, baseURL: address } = {}) {
-    const baseURL = address === undefined ? undefined : normalizeGatewayBaseURL(address);
+    // The enterprise configuration owns the target whenever it exists: a request
+    // that carries a different address is rejected as a whole, and the Key in
+    // that request is not saved (issue #226).
+    const authoritative = authoritativeBaseURL();
+    const requested = address === undefined ? undefined : normalizeGatewayBaseURL(address);
+    if (authoritative !== undefined && requested !== undefined && requested !== authoritative) {
+      throw new IamError(
+        'IAM_GATEWAY_URL_MISMATCH',
+        '保存的网关地址与企业配置不一致，本次未保存凭证。',
+        { authoritative: true },
+      );
+    }
+    const baseURL = authoritative ?? requested;
     ctx.assertExclusive();
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     bumpGeneration();
@@ -197,12 +248,20 @@ export function createServiceGateway(env) {
       : '';
     const enteredAt = nowIso(now());
     const suggestedExpiry = addSeconds(now(), 90 * 24 * 60 * 60).slice(0, 10);
+    const issuer = ctx.knownIssuer();
+    const targetAddress = baseURL ?? (await targetGatewayStore.read().catch(() => null))?.credential?.baseURL;
+    // Without a trusted issuer and a concrete target there is nothing to bind,
+    // so the Key is not stored rather than stored unbound.
+    if (typeof issuer !== 'string' || issuer.length === 0 || typeof targetAddress !== 'string' || targetAddress.length === 0) {
+      throw new IamError('IAM_GATEWAY_BINDING_INCOMPLETE', '缺少可信的企业身份或网关地址，凭证未保存。');
+    }
     assertCurrent();
     try {
       await targetGatewayStore.save({
         value,
-        baseURL,
+        baseURL: targetAddress,
         ownerSubject: subject,
+        issuer,
         deviceLabel: label,
         enteredAt,
         suggestedExpiry,

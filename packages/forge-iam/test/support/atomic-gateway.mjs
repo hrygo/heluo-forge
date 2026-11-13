@@ -14,14 +14,15 @@ export function seedLegacyGateway(credentials, { value, ownerSubject, enteredAt,
   } });
 }
 
+/** A credential in the shape the current release writes: bound v3 (issue #226). */
 export function seedGateway(credentials, { value, ownerSubject, enteredAt,
-  deviceLabel, suggestedExpiry, baseURL } = {}) {
+  deviceLabel, suggestedExpiry,
+  issuer = 'https://iam.corp.example', baseURL = 'https://gateway.corp.example/v1' } = {}) {
   credentials.refs.set(GATEWAY_REF, value);
   credentials.records.set(GATEWAY_RECORD_KEY, { kind: 'grant', payload: {
-    version: 2, ownerSubject, enteredAt, writeOperationId: randomUUID(),
+    version: 3, ownerSubject, issuer, baseURL, enteredAt, writeOperationId: randomUUID(),
     valueDigest: createHash('sha256').update(value).digest('hex'),
     ...(deviceLabel ? { deviceLabel } : {}), ...(suggestedExpiry ? { suggestedExpiry } : {}),
-    ...(baseURL ? { baseURL } : {}),
   } });
 }
 
@@ -74,3 +75,4 @@ export function createAtomicGatewayFixture(credentials = new MemoryCredentials()
   const fixture = { credentials, adapter, pair };
   return { ...fixture, options: gatewayAtomicOptions(fixture) };
 }
+

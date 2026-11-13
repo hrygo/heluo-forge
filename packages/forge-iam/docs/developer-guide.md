@@ -133,10 +133,11 @@ view 包含 `state`、`configured`、`signedIn`、`canSignIn`、`canSignOut`、`
 |---|---|
 | IAM grant | `heluo-iam/session` 的 `GrantRecord.payload`；含 access/refresh token、身份与到期信息。仅 RP 登出模式保存 ID Token。 |
 | 网关 Key | 凭据引用 `ENTERPRISE_STATIC_KEY`。 |
-| 网关元数据 | 独立记录 `heluo-iam/gateway-credential`，记录录入人、设备标签、录入和建议到期时间。 |
+| 网关元数据 | 独立记录 `heluo-iam/gateway-credential`，记录录入人、可信 issuer、归一化目标地址、设备标签、录入和建议到期时间。 |
 | 旧 IAM 镜像 | 新令牌不再写 `ENTERPRISE_ACCESS_TOKEN`；启动不自动删除现存旧引用。保留不等于隔离，其他消费者仍可能解析它。 |
 
-网关状态只有 `unconfigured`、`configured`、`owner-mismatch`、`invalid`；读取失败还可让摘要未知。`ownerSubject` 只是录入人，不证明真实 Key 归属。换账号、共享记录同步、回调和取消保留现存 Key/元数据。旧网关 V1 读取结果为 `invalid-credential`，记录和 Key 保留且不覆盖；未知格式和不一致 pair 保留，显式操作也不自动迁移或修复。
+网关状态只有 `unconfigured`、`configured`、`rebind-required`、`owner-mismatch`、`invalid`；读取失败还可让摘要未知。`ownerSubject` 只是录入人；Key 属于哪个目标，由记录版本 3 的 `issuer`、`baseURL` 与当前可信 issuer、企业配置的权威地址共同证明（判定集中在 `src/gateway-binding.mjs`）。权威地址由 Host 从 `managedModels.baseURL` 读取并归一化，界面输入不能把它改掉：保存请求携带的地址不一致时整单拒绝，且不保存该请求里的 Key。绑定不成立时进入 `rebind-required`，发送路径以 `IAM_GATEWAY_CREDENTIAL_REBIND_REQUIRED` 拒绝，旧 Key 不发往新目标、也不自动迁移，只由用户一次性重录替换。企业配置 A→B→A 时当前记录绑定的是 B，A 同样需要重录；同一地址背后更换网关实例无法本地证明，按运维窗口轮换。版本 2 记录视为未绑定，可由一次显式重录替换为版本 3；版本 1 没有值摘要，读取结果为 `invalid`，记录与 Key 保留且不覆盖，也不自动迁移。
+
 
 网关读取在检查缓存或复用在途请求前重取当前 provider。一次加载固定同一 store/provider 读取元数据、值与存储描述，每次异步完成后复查；旧 provider 的结果、错误和收尾不会覆盖另一 provider 的摘要或释放其单飞 guard。账户匹配只使用同一 store 已采纳的 IAM 主体，不借用其他 provider 的缓存身份。
 

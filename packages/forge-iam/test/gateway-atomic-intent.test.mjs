@@ -6,6 +6,7 @@ import { createGatewayCredentialStore } from '../src/store.mjs';
 import { createAtomicGatewayFixture } from './support/atomic-gateway.mjs';
 
 const input = Object.freeze({ value: `uag-${'a'.repeat(32)}`, ownerSubject: 'synthetic-user',
+  issuer: 'https://iam.corp.example', baseURL: 'https://gateway.corp.example/v1',
   deviceLabel: 'synthetic-label', enteredAt: '2026-11-02T00:00:00.000Z' });
 const otherValue = `uag-${'b'.repeat(32)}`;
 const mutate = (pair, field) => {

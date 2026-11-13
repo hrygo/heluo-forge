@@ -11,6 +11,7 @@ const config = {
   authorizationEndpoint: 'https://iam.corp.example/authorize',
   tokenEndpoint: 'https://iam.corp.example/token', jwksUri: 'https://iam.corp.example/jwks',
   redirectUri: 'http://127.0.0.1:4567/iam/callback',
+  managedModels: { baseURL: 'https://gateway.corp.example/v1' },
 };
 const value = `uag-${'a'.repeat(32)}`;
 
@@ -192,6 +193,7 @@ for (const change of ['provider', 'dispose']) {
     const next = nextAtomic.credentials;
     for (const [atomic, subject] of [[oldAtomic, 'old-user'], [nextAtomic, 'new-user']]) {
       await createGatewayCredentialStore(atomic.credentials, atomic.options).save({ value, ownerSubject: subject,
+        issuer: 'https://iam.corp.example', baseURL: 'https://gateway.corp.example/v1',
         enteredAt: new Date(now).toISOString(), deviceLabel: subject });
     }
     const { service, replace } = fixture(t, old, [oldAtomic, nextAtomic]);

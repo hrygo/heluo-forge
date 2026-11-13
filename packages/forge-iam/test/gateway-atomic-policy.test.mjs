@@ -6,7 +6,7 @@ import { createGatewayCredentialStore, GATEWAY_RECORD_KEY, GATEWAY_REF } from '.
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 
 const originalValue = `uag-${'a'.repeat(32)}`;
-const input = { value: `uag-${'b'.repeat(32)}`, ownerSubject: 'synthetic-user', enteredAt: '2026-11-02T00:00:00.000Z' };
+const input = { value: `uag-${'b'.repeat(32)}`, ownerSubject: 'synthetic-user', issuer: 'https://iam.corp.example', baseURL: 'https://gateway.corp.example/v1', enteredAt: '2026-11-02T00:00:00.000Z' };
 
 function fixture({ seeded = true } = {}) {
   const credentials = new MemoryCredentials();
