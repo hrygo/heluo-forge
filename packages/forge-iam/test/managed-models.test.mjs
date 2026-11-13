@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { applyModelOptions, buildThinkingLevelMap, createManagedModelRuntime, createNativeGatewayAdapter, validateManagedModels } from '../src/managed-models.mjs';
 
 const configuration = { baseURL: 'https://gateway.corp.example/v1' };
-function fixture({ gatewayBaseURL = configuration.baseURL, ...overrides } = {}) {
+function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...overrides } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true }
@@ -24,7 +24,7 @@ function fixture({ gatewayBaseURL = configuration.baseURL, ...overrides } = {}) 
       return { subject: 'person-a', ...structuredClone(selection) };
     },
     getModelAccessEpoch: () => String(selectionGeneration),
-    async resolveGatewayConnection() { return { baseURL: gatewayBaseURL, key: 'synthetic-only', generation: 'one' }; },
+    async resolveGatewayConnection() { return { baseURL: gatewayBaseURL, key: connectionKey ?? 'synthetic-only', generation: 'one' }; },
     async *watch(signal) {
       yield structuredClone(view);
       while (!signal.aborted) {
@@ -874,4 +874,85 @@ test('a cancelled discovery is reported as a cancelled sync, not an unreachable 
   // A real timeout is still a retryable gateway failure and says so.
   assert.equal(timedOut.error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
   assert.ok(Number.isFinite(timedOut.retryAt));
+});
+
+test('a stored credential that cannot be an HTTP header fails deterministically without echo (issue #199)', async t => {
+  const unsafe = `uag-sk-u-${'A'.repeat(43)}\r\nSet-Cookie: 1`;
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // The catalogue was fine; the user then saves a value that cannot travel.
+  f.iam.resolveGatewayConnection = async () => ({ baseURL: configuration.baseURL, key: unsafe, generation: 'one' });
+  const prepared = await f.adapter.prepareCall(options.provider, options.model);
+  const result = await chunks(prepared.stream(options));
+  // The guard fires before any content chunk is produced.
+  assert.deepEqual(result.map(chunk => chunk.type), ['finish']);
+  const failure = result.at(-1).reason.failure;
+  assert.equal(failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
+  assert.equal(failure.message, '保存的网关凭证无法用于发送请求，请重新粘贴网关提供的凭证。');
+  // Leak scan must compare with JSON-escaped needles: JSON.stringify escapes
+  // CR/LF in the OUTPUT, so searching for the raw value would never match even
+  // when the value is present verbatim.
+  const needle = JSON.stringify(unsafe).slice(1, -1);
+  assert.equal(JSON.stringify(result).includes(needle), false);
+  assert.equal(JSON.stringify(f.runtime.getView()).includes(needle), false);
+  // A later catalogue sync fails at the same guard instead of sending the value.
+  await f.runtime.refresh().catch(() => { });
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
+});
+
+test('the leak scan itself is not vacuous: a planted credential is detected (issue #199)', async t => {
+  // Mutation check for the assertions above: if a view or error body ever
+  // carried the stored value, the same comparison MUST fire.
+  const unsafe = `uag-sk-u-${'A'.repeat(43)}\r\nSet-Cookie: 1`;
+  const needle = JSON.stringify(unsafe).slice(1, -1);
+  const poisoned = JSON.stringify({ failure: { message: `internal detail ${unsafe}` } });
+  assert.equal(poisoned.includes(needle), true);
+});
+
+test('header-unsafety follows the transport, not a stricter local rule (issue #199 review)', async t => {
+  // Values the transport accepts must travel: embedded TAB, Latin-1, any length.
+  for (const connectionKey of [`uag-sk-u-${'B'.repeat(40)} clé`, `key\tpart`, `${'x'.repeat(5000)} !?@#`]) {
+    const f = fixture({
+      connectionKey,
+      fetch: async () => new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] })),
+    });
+    t.after(() => f.runtime.dispose());
+    await f.runtime.ready;
+    const result = await chunks((await f.adapter.prepareCall(options.provider, options.model)).stream(options));
+    assert.equal(result[0].text, 'ok');
+    assert.equal(f.credential, connectionKey);
+  }
+  // Values the transport rejects are still refused deterministically before it.
+  for (const blocked of ['凭据-示例', 'bad\x7Fvalue']) {
+    const f = fixture();
+    t.after(() => f.runtime.dispose());
+    await f.runtime.ready;
+    f.iam.resolveGatewayConnection = async () => ({ baseURL: configuration.baseURL, key: blocked, generation: 'one' });
+    const result = await chunks((await f.adapter.prepareCall(options.provider, options.model)).stream(options));
+    assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
+    assert.equal(JSON.stringify(result).includes(JSON.stringify(blocked).slice(1, -1)), false);
+  }
+});
+
+test('catalogue requests keep the host attribution headers untouched (issue #198)', async t => {
+  let capturedInit;
+  const f = fixture({
+    requestHeaders: async () => ({ 'user-agent': 'deepseek-harness/1.2.3', 'x-trace': 'one' }),
+    fetch: async (url, init) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }] }));
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  // The client never rewrites User-Agent and adds no identity header to the
+  // catalogue: dual-factor is scoped to inference calls pending gateway
+  // written confirmation (issue #198).
+  assert.equal(capturedInit.headers['user-agent'], 'deepseek-harness/1.2.3');
+  assert.equal(capturedInit.headers['x-trace'], 'one');
+  assert.equal(capturedInit.headers['X-IAM-Token'], undefined);
+  assert.equal(capturedInit.headers['X-Consumer-Type'], undefined);
+  // The stored key and any IAM token never reach a view surface.
+  assert.equal(JSON.stringify(f.runtime.getView()).includes('synthetic-only'), false);
 });
