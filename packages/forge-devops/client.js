@@ -30,6 +30,12 @@ window.__ModuleLoader__.load({
     const NS = 'devops';
     /** 同源配置端点（前缀 CLI_API_PREFIX 下的 `/cli`）。 */
     const CLI_ENDPOINT = '/api/forge-devops/cli';
+    /** 企业账号统一托管的扩展凭据同源端点与子槽位。 */
+    const IAM_CREDENTIAL_SLOT = 'heluo.iam.credential-item';
+    const IAM_EXT_CREDENTIALS_ENDPOINT = '/api/forge-iam/ext-credentials';
+    const IAM_EXT_CREDENTIAL_ENDPOINT = `${IAM_EXT_CREDENTIALS_ENDPOINT}/devops`;
+    const IAM_MUTATION_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json', accept: 'application/json' };
+    const IAM_READ_HEADERS = { accept: 'application/json' };
     /** 写操作的 CSRF 风格预检头，缺头服务端回 400。 */
     const REQUEST_HEADERS = { 'x-forge-devops-request': '1', 'content-type': 'application/json' };
     /** 读也带预检头：契约只对 POST 要求，带上对 GET 无害且免掉两次形态假设。 */
@@ -301,6 +307,16 @@ window.__ModuleLoader__.load({
 .fdv-skeleton-group{height:${METRICS.groupLine}px;margin:0 0 ${METRICS.groupGapBottom}px;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
 .fdv-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
 .fdv-skeleton-row + .fdv-skeleton-row{border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-cred{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-cred-head{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px}
+.fdv-cred-main{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0}
+.fdv-cred-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fdv-cred-status{font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fdv-cred-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:none}
+.fdv-cred-form{display:flex;flex-direction:column;gap:${METRICS.inputGap}px;margin-top:${METRICS.headGap}px}
+.fdv-cred-form-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
+.fdv-cred-alert{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.statusGap}px ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 10%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-cred-details{margin:${METRICS.headGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 @keyframes fdv-breathe{0%,100%{opacity:1}50%{opacity:.55}}
 @keyframes fdv-reveal{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
 @container (max-width:519px){.fdv-candidates{max-height:176px;overflow-y:auto}}
@@ -494,6 +510,41 @@ window.__ModuleLoader__.load({
       'readiness.action.check.busy': '检查中…',
       'readiness.action.checkGitee': '检查 Gitee',
       'readiness.action.refresh': '刷新',
+      'credential.title': 'DevOps',
+      'credential.state.follow': '跟随本机登录（正常可用，无需配置）',
+      'credential.state.hosted': '已在此单独保存（优先于本机环境）',
+      'credential.state.signedOut': '登录企业账号后可用（已托管的凭据暂不外发）',
+      'credential.state.mismatchTag': '已停用（账号不匹配）',
+      'credential.state.mismatch': '存在其他企业账号遗留的独立凭据，已安全停用（不会使用旧账号凭据，也不会回退本机环境）',
+      'credential.state.pending': '上一笔凭据保存尚未完成，请稍候等待完成',
+      'credential.state.keychainTag': '安全存储不可用',
+      'credential.state.keychainUnavailable': '本机安全存储暂不可用，无法读取或保存托管凭据（请重试或改用本机 CLI 登录）',
+      'credential.state.loading': '正在读取 DevOps 凭据状态…',
+      'credential.state.loadFailed': '暂时无法读取凭据状态，请稍后重试',
+      'credential.action.specify': '单独指定 Token',
+      'credential.action.replace': '更换 Token',
+      'credential.action.reset': '清除并恢复跟随本机',
+      'credential.action.clearOld': '清除旧配置',
+      'credential.action.resetAccount': '使用当前账号重设',
+      'credential.action.save': '保存 Token',
+      'credential.action.saving': '保存中…',
+      'credential.action.clearing': '清除中…',
+      'credential.action.cancel': '取消',
+      'credential.action.retry': '重试',
+      'credential.input.label': 'DevOps 访问凭据（只写不回显）',
+      'credential.input.placeholder': '输入新的 DevOps 访问凭据',
+      'credential.input.hint': '在此保存后，本应用将优先使用这里的 Token 覆盖本机环境；保存后页面不回显原值。',
+      'credential.details.title': '环境详情',
+      'credential.details.envVars': '检测到本机环境变量：{names}',
+      'credential.notice.saved': '已在此单独保存（优先于本机环境）',
+      'credential.notice.cleared': '已清除单独凭据，恢复跟随本机登录',
+      'credential.fail.invalid': '请输入有效的凭据内容后再保存',
+      'credential.fail.notSignedIn': '请先在上方登录企业账号，再保存或清除独立凭据',
+      'credential.fail.pending': '上一笔凭据操作尚未完成，请稍候重试（已保留当前输入）',
+      'credential.fail.keychainUnavailable': '本机安全存储暂不可用，未保存（详情可重试或改用本机 CLI 登录）',
+      'credential.fail.ownerMismatch': '存在其他企业账号遗留凭据，请先清除旧配置或使用当前账号重设',
+      'credential.fail.notFound': '尚未登记 DevOps 凭据扩展，请确认企业账号服务已就绪',
+      'credential.fail.generic': '凭据操作未能完成，请稍后重试',
     };
 
     const en = {
@@ -679,6 +730,41 @@ window.__ModuleLoader__.load({
       'readiness.action.check.busy': 'Checking…',
       'readiness.action.checkGitee': 'Check Gitee',
       'readiness.action.refresh': 'Refresh',
+      'credential.title': 'DevOps',
+      'credential.state.follow': 'Uses local CLI sign-in (works automatically, no setup needed)',
+      'credential.state.hosted': 'Saved separately here (takes priority over local environment)',
+      'credential.state.signedOut': 'Sign in to your enterprise account to use saved credentials',
+      'credential.state.mismatchTag': 'Disabled (account mismatch)',
+      'credential.state.mismatch': 'A saved credential from another enterprise account was disabled for safety',
+      'credential.state.pending': 'A previous credential save is still in progress; wait a moment',
+      'credential.state.keychainTag': 'Secure storage unavailable',
+      'credential.state.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
+      'credential.state.loading': 'Reading DevOps credential status…',
+      'credential.state.loadFailed': 'Unable to read credential status right now; retry later',
+      'credential.action.specify': 'Set custom token',
+      'credential.action.replace': 'Replace token',
+      'credential.action.reset': 'Clear and use local sign-in',
+      'credential.action.clearOld': 'Clear old credential',
+      'credential.action.resetAccount': 'Set with current account',
+      'credential.action.save': 'Save token',
+      'credential.action.saving': 'Saving…',
+      'credential.action.clearing': 'Clearing…',
+      'credential.action.cancel': 'Cancel',
+      'credential.action.retry': 'Retry',
+      'credential.input.label': 'DevOps access token (write-only)',
+      'credential.input.placeholder': 'Enter a new DevOps access credential',
+      'credential.input.hint': 'Once saved here, this app uses it in place of local environment settings; the saved value is never shown again.',
+      'credential.details.title': 'Environment details',
+      'credential.details.envVars': 'Detected local environment variables: {names}',
+      'credential.notice.saved': 'Saved separately here (takes priority over local environment)',
+      'credential.notice.cleared': 'Cleared custom credential; restored local sign-in behavior',
+      'credential.fail.invalid': 'Enter a valid credential value before saving',
+      'credential.fail.notSignedIn': 'Sign in to your enterprise account above before saving or clearing',
+      'credential.fail.pending': 'Previous credential update is still in progress; retry shortly (draft kept)',
+      'credential.fail.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
+      'credential.fail.ownerMismatch': 'An older credential belongs to another enterprise account; clear or replace it below',
+      'credential.fail.notFound': 'DevOps credential extension is not registered yet; verify account services',
+      'credential.fail.generic': 'Credential update failed; retry in a moment',
     };
 
     /* ------------------------------------------------------------------ *
@@ -2242,6 +2328,288 @@ window.__ModuleLoader__.load({
       if (typeof handle === 'function') handle();
     }
 
+    /** 扩展凭据 HTTP 失败码 → 纯自然语言提示键（不在主界面透出内部枚举码）。 */
+    const EXT_CREDENTIAL_FAIL_KEYS = Object.freeze({
+      IAM_EXT_CREDENTIAL_INVALID: 'credential.fail.invalid',
+      IAM_EXT_TOKEN_INVALID: 'credential.fail.invalid',
+      ENTERPRISE_CREDENTIAL_INVALID: 'credential.fail.invalid',
+      IAM_NOT_SIGNED_IN: 'credential.fail.notSignedIn',
+      PENDING_WRITE: 'credential.fail.pending',
+      ENTERPRISE_CREDENTIAL_PENDING: 'credential.fail.pending',
+      KEYCHAIN_UNAVAILABLE: 'credential.fail.keychainUnavailable',
+      ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: 'credential.fail.keychainUnavailable',
+      OWNER_MISMATCH: 'credential.fail.ownerMismatch',
+      ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: 'credential.fail.ownerMismatch',
+      IAM_EXT_CREDENTIAL_NOT_FOUND: 'credential.fail.notFound',
+    });
+
+    async function requestCredentialJson(url, options) {
+      const response = await fetch(url, options);
+      const body = await readJsonBody(response);
+      return { response, body };
+    }
+
+    function devopsCredentialFailKey(code) {
+      if (typeof code === 'string' && Object.prototype.hasOwnProperty.call(EXT_CREDENTIAL_FAIL_KEYS, code)) {
+        return EXT_CREDENTIAL_FAIL_KEYS[code];
+      }
+      return 'credential.fail.generic';
+    }
+
+    /**
+     * `heluo.iam.credential-item` 子槽位条目：DevOps 独立凭据托管卡片（order 10）。
+     * 常态不主动读取或要求录入 Token；仅在用户主动覆盖或存在跨账号冲突/安全存储异常时展开。
+     */
+    function DevopsCredentialItem(props) {
+      const t = typeof props?.t === 'function' ? props.t : (key) => zh[key] ?? key;
+      const sessionReady = props?.sessionReady;
+      const [statusView, setStatusView] = React.useState({ mode: 'loading', entry: null });
+      const [openForm, setOpenForm] = React.useState(false);
+      const [draft, setDraft] = React.useState('');
+      const [busyAction, setBusyAction] = React.useState(null);
+      const [feedback, setFeedback] = React.useState(null);
+      const mounted = React.useRef(true);
+      const reqSeq = React.useRef(0);
+
+      React.useEffect(() => {
+        mounted.current = true;
+        return () => {
+          mounted.current = false;
+        };
+      }, []);
+
+      async function reload() {
+        const seq = ++reqSeq.current;
+        try {
+          const { response, body } = await requestCredentialJson(IAM_EXT_CREDENTIALS_ENDPOINT, {
+            headers: IAM_READ_HEADERS,
+            cache: 'no-store',
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          if (!response.ok) {
+            const code = errorCode(body);
+            if (code === 'IAM_NOT_SIGNED_IN') {
+              setStatusView({ mode: 'ready', entry: { extensionId: 'devops', state: 'IAM_NOT_SIGNED_IN', envHitNames: [] } });
+              return;
+            }
+            setStatusView({ mode: 'failed', entry: null });
+            setFeedback({ tone: 'warn', text: t(devopsCredentialFailKey(code)) });
+            return;
+          }
+          const list = Array.isArray(body?.credentials) ? body.credentials : [];
+          const found = list.find((item) => item && item.extensionId === 'devops') ?? null;
+          setStatusView({ mode: 'ready', entry: found });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setStatusView({ mode: 'failed', entry: null });
+        }
+      }
+
+      React.useEffect(() => {
+        void reload();
+      }, [sessionReady]);
+
+      async function saveToken() {
+        const trimmed = normalize(draft);
+        if (!trimmed) {
+          setFeedback({ tone: 'warn', text: t('credential.fail.invalid') });
+          return;
+        }
+        const seq = ++reqSeq.current;
+        setBusyAction('saving');
+        setFeedback(null);
+        try {
+          const { response, body } = await requestCredentialJson(IAM_EXT_CREDENTIAL_ENDPOINT, {
+            method: 'PUT',
+            headers: IAM_MUTATION_HEADERS,
+            body: JSON.stringify({ token: trimmed }),
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          if (!response.ok) {
+            setFeedback({ tone: 'warn', text: t(devopsCredentialFailKey(errorCode(body))) });
+            return;
+          }
+          const nextEntry = body?.credential
+            ?? (Array.isArray(body?.credentials) ? body.credentials.find((item) => item && item.extensionId === 'devops') : null)
+            ?? { extensionId: 'devops', state: 'HOSTED_ACTIVE', hosted: true, envHitNames: [] };
+          setStatusView({ mode: 'ready', entry: nextEntry });
+          setDraft('');
+          setOpenForm(false);
+          setFeedback({ tone: 'ok', text: t('credential.notice.saved') });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          setFeedback({ tone: 'warn', text: t('credential.fail.generic') });
+        }
+      }
+
+      async function clearToken() {
+        const seq = ++reqSeq.current;
+        setBusyAction('clearing');
+        setFeedback(null);
+        try {
+          const { response, body } = await requestCredentialJson(IAM_EXT_CREDENTIAL_ENDPOINT, {
+            method: 'DELETE',
+            headers: IAM_MUTATION_HEADERS,
+          });
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          if (!response.ok) {
+            setFeedback({ tone: 'warn', text: t(devopsCredentialFailKey(errorCode(body))) });
+            return;
+          }
+          const nextEntry = body?.credential
+            ?? (Array.isArray(body?.credentials) ? body.credentials.find((item) => item && item.extensionId === 'devops') : null)
+            ?? { extensionId: 'devops', state: 'UNSET_NO_HOSTED', hosted: false, envHitNames: [] };
+          setStatusView({ mode: 'ready', entry: nextEntry });
+          setDraft('');
+          setOpenForm(false);
+          setFeedback({ tone: 'ok', text: t('credential.notice.cleared') });
+        } catch {
+          if (!mounted.current || reqSeq.current !== seq) return;
+          setBusyAction(null);
+          setFeedback({ tone: 'warn', text: t('credential.fail.generic') });
+        }
+      }
+
+      const entry = statusView.entry;
+      const state = entry?.state ?? (statusView.mode === 'loading' ? 'LOADING' : statusView.mode === 'failed' ? 'LOAD_FAILED' : 'UNSET_NO_HOSTED');
+      const isPending = busyAction !== null || state === 'PENDING_WRITE';
+      const isHosted = state === 'HOSTED_ACTIVE';
+      const isMismatch = state === 'OWNER_MISMATCH';
+      const isSignedOut = state === 'IAM_NOT_SIGNED_IN';
+      const isKeychainUnavailable = state === 'KEYCHAIN_UNAVAILABLE';
+      const envHitNames = Array.isArray(entry?.envHitNames) ? entry.envHitNames : [];
+
+      const statusInfo = (() => {
+        if (statusView.mode === 'loading') return { tone: 'quiet', badge: null, text: t('credential.state.loading') };
+        if (statusView.mode === 'failed') return { tone: 'warn', badge: null, text: t('credential.state.loadFailed') };
+        if (isHosted) return { tone: 'ok', badge: t('credential.state.hosted'), text: t('credential.state.hosted') };
+        if (isMismatch) return { tone: 'warn', badge: t('credential.state.mismatchTag'), text: t('credential.state.mismatch') };
+        if (isSignedOut) return { tone: 'quiet', badge: null, text: t('credential.state.signedOut') };
+        if (isKeychainUnavailable) return { tone: 'warn', badge: t('credential.state.keychainTag'), text: t('credential.state.keychainUnavailable') };
+        if (state === 'PENDING_WRITE') return { tone: 'quiet', badge: null, text: t('credential.state.pending') };
+        return { tone: 'quiet', badge: null, text: t('credential.state.follow') };
+      })();
+
+      const actions = [];
+      if (!isSignedOut && !openForm && statusView.mode === 'ready') {
+        if (isHosted) {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-link', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
+            h('button', { type: 'button', className: 'fdv-link', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),
+          );
+        } else if (isMismatch) {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-link', key: 'clearOld', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.clearOld')),
+            h('button', { type: 'button', className: 'fdv-link', key: 'resetAccount', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.resetAccount')),
+          );
+        } else if (isKeychainUnavailable) {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+          );
+        } else if (state !== 'PENDING_WRITE') {
+          actions.push(
+            h('button', { type: 'button', className: 'fdv-link', key: 'specify', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.specify')),
+          );
+        }
+      } else if (statusView.mode === 'failed' && !openForm) {
+        actions.push(
+          h('button', { type: 'button', className: 'fdv-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+        );
+      }
+
+      return h(
+        'div',
+        { className: 'fdv-cred', 'data-extension-id': 'devops', 'data-credential-state': state },
+        h(
+          'div',
+          { className: 'fdv-cred-head' },
+          h(
+            'div',
+            { className: 'fdv-cred-main' },
+            h('span', { className: 'fdv-cred-title' }, t('credential.title')),
+            statusInfo.badge ? h(Tag, { tone: statusInfo.tone }, statusInfo.badge) : null,
+            !statusInfo.badge ? h('span', { className: 'fdv-cred-status' }, statusInfo.text) : null,
+          ),
+          actions.length > 0 ? h('div', { className: 'fdv-cred-actions' }, actions) : null,
+        ),
+        (isMismatch || isKeychainUnavailable)
+          ? h(
+              'div',
+              { className: 'fdv-cred-alert', role: 'alert' },
+              h('span', null, statusInfo.text),
+            )
+          : null,
+        openForm
+          ? h(
+              'div',
+              { className: 'fdv-cred-form' },
+              h('label', { className: 'fdv-hint', htmlFor: 'fdv-cred-input' }, t('credential.input.label')),
+              h('input', {
+                id: 'fdv-cred-input',
+                className: 'fdv-input',
+                type: 'password',
+                autoComplete: 'off',
+                spellCheck: false,
+                disabled: isPending,
+                value: draft,
+                placeholder: t('credential.input.placeholder'),
+                'aria-label': t('credential.input.label'),
+                onChange: (event) => {
+                  setDraft(event.target.value);
+                  setFeedback(null);
+                },
+              }),
+              h('p', { className: 'fdv-hint' }, t('credential.input.hint')),
+              h(
+                'div',
+                { className: 'fdv-cred-form-actions' },
+                h(
+                  'button',
+                  { type: 'button', className: 'fdv-primary', disabled: isPending, onClick: () => void saveToken() },
+                  busyAction === 'saving' ? t('credential.action.saving') : t('credential.action.save'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'fdv-link',
+                    disabled: isPending,
+                    onClick: () => {
+                      setOpenForm(false);
+                      setDraft('');
+                      setFeedback(null);
+                    },
+                  },
+                  t('credential.action.cancel'),
+                ),
+              ),
+            )
+          : null,
+        envHitNames.length > 0
+          ? h(
+              'details',
+              { className: 'fdv-cred-details' },
+              h('summary', { className: 'fdv-summary' }, t('credential.details.title')),
+              h('p', { className: 'fdv-hint' }, t('credential.details.envVars', { names: envHitNames.join(', ') })),
+            )
+          : null,
+        feedback
+          ? h(
+              'p',
+              {
+                className: feedback.tone === 'warn' ? 'fdv-note fdv-note-error' : 'fdv-note',
+                role: feedback.tone === 'warn' ? 'alert' : 'status',
+                'aria-live': 'polite',
+              },
+              feedback.text,
+            )
+          : null,
+      );
+    }
+
     /** 容器子槽位只放一个 DevOps 条目：就绪检查在上，配置面板在下（设计 §6.3）。 */
     function DevopsEngineeringTab(props) {
       // 顺序：先跨工具就绪总览，再 DevOps 配置；就绪面板在容器里以 embedded 形态渲染，
@@ -2356,10 +2724,21 @@ window.__ModuleLoader__.load({
         }),
         'forge-devops: settings section',
       );
+      ctx.effect(
+        () => ctx.slots.inject(IAM_CREDENTIAL_SLOT, () => ctx.slots.register({
+          name: IAM_CREDENTIAL_SLOT,
+          id: 'devops',
+          order: 10,
+          label: () => t('credential.title'),
+          locale: NS,
+          inject: () => ({ t, navigate }),
+        }, DevopsCredentialItem)),
+        'forge-devops: iam credential item',
+      );
     }
 
     const inject = ['slots', 'locale'];
 
-    return { apply, inject, DevopsSection, ReadinessSection, DevopsEngineeringTab, CliEntryField, StatusLine, CandidateList };
+    return { apply, inject, DevopsSection, ReadinessSection, DevopsEngineeringTab, DevopsCredentialItem, CliEntryField, StatusLine, CandidateList };
   },
 });

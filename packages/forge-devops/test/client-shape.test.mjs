@@ -83,6 +83,7 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
   assert.deepEqual(Object.keys(CLIENT.module).sort(), [
     'CandidateList',
     'CliEntryField',
+    'DevopsCredentialItem',
     'DevopsEngineeringTab',
     'DevopsSection',
     'ReadinessSection',
@@ -92,7 +93,7 @@ test('装载形态：id 固定 @heluo/forge-devops，factory(require) 只依赖 
   ].sort());
   assert.deepEqual(CLIENT.module.inject, ['slots', 'locale'], 'inject 缺一项宿主就不装配客户端半');
   assert.equal(typeof CLIENT.module.apply, 'function');
-  for (const name of ['DevopsSection', 'ReadinessSection', 'DevopsEngineeringTab', 'CliEntryField', 'StatusLine', 'CandidateList']) {
+  for (const name of ['DevopsSection', 'ReadinessSection', 'DevopsEngineeringTab', 'DevopsCredentialItem', 'CliEntryField', 'StatusLine', 'CandidateList']) {
     assert.equal(typeof CLIENT.module[name], 'function', `${name} 必须是可渲染的组件函数`);
   }
   // 段控件随「事实来源」一起下线：导出面不允许留一个没人能填的控件（页面收窄到三键）。
@@ -253,7 +254,7 @@ test('装配注册双语字典与样式，且 effect 可整体回收', () => {
   const [{ namespace, dictionaries }] = APPLIED.locales;
   assert.equal(namespace, 'devops');
   assert.deepEqual(Object.keys(dictionaries).sort(), ['en', 'zh']);
-  assert.equal(APPLIED.effects.length, 4, '四条 effect：字典、样式、容器子槽位、settings.section（两种挂载由 reconcile 收敛）');
+  assert.equal(APPLIED.effects.length, 5, '五条 effect：字典、样式、容器子槽位、settings.section、IAM 凭据槽位');
   for (const effect of APPLIED.effects) {
     assert.equal(typeof effect.label, 'string', '每条 effect 都要有可读标签（宿主 hook 列表里能定位）');
   }
@@ -367,7 +368,7 @@ test('分区注册一律经 slots.inject 等声明，禁止裸 register（D-2 �
     );
   }
   const registers = SOURCE.match(/ctx\.slots\.register\(/gu) ?? [];
-  assert.equal(registers.length, 3, '三次注册：容器条目 + 两个独立分区');
+  assert.equal(registers.length, 4, '四次注册：容器条目 + 两个独立分区 + IAM 扩展凭据条目');
 });
 
 /* ------------------------------------------------------------------------- *
@@ -493,7 +494,7 @@ test('页面文案零命中旧显示名与隐藏字段词（收窄后不得残�
     const hits = Object.keys(dict).filter((key) => forbidden.test(dict[key]));
     assert.deepEqual(hits, [], `${locale} 里仍有旧字段/旧显示名文案：${hits.join(', ')}`);
     const enterpriseHits = Object.keys(dict).filter(
-      (key) => /enterprise/iu.test(dict[key]) && !key.startsWith('readiness.') && key !== 'nav' && key !== 'title',
+      (key) => /enterprise/iu.test(dict[key]) && !key.startsWith('readiness.') && !key.startsWith('credential.') && key !== 'nav' && key !== 'title',
     );
     assert.deepEqual(enterpriseHits, [], `${locale} 把「企业」用在了 readiness 之外的文案：${enterpriseHits.join(', ')}`);
   }
