@@ -575,8 +575,12 @@ export function createGiteeRunner({
   gitBin = DEFAULT_GIT_BIN,
   gitCwd,
   persistentTokenPolicy = DEFAULT_PERSISTENT_TOKEN_POLICY,
+  resolveChildEnv = null,
 } = {}) {
   assertOptions({ execFile, timeoutMs, maxOutputBytes, now });
+  if (resolveChildEnv !== undefined && resolveChildEnv !== null && typeof resolveChildEnv !== 'function') {
+    throw new GiteeCliError('resolveChildEnv 必须是函数或未提供');
+  }
   const authNames = normalizeAuthEnv(authEnv);
   if (typeof readFile !== 'function') throw new GiteeCliError('readFile 必须是函数（凭据自检注入点）');
   if (typeof gitBin !== 'string' || gitBin.trim().length === 0) {
@@ -622,8 +626,44 @@ export function createGiteeRunner({
 
   /** 两个命令面共用的执行体：唯一调子进程的地方、有界、出口统一脱敏。 */
   async function execute(bin, args, { cwd, extraEnv } = {}) {
+    let resolvedEnv = {};
+    const extraTokens = [];
+    if (typeof resolveChildEnv === 'function') {
+      let resolved;
+      try {
+        resolved = await resolveChildEnv();
+      } catch (error) {
+        const code = typeof error?.code === 'string' && error.code.length > 0 ? error.code : 'CREDENTIAL_UNAVAILABLE';
+        const message = typeof error?.message === 'string' && error.message.length > 0 ? error.message : code;
+        throw new GiteeCliError(message, { code, reason: code, status: 'denied' });
+      }
+      if (resolved !== null && typeof resolved === 'object' && resolved.ok === false) {
+        const code = typeof resolved.code === 'string' && resolved.code.length > 0 ? resolved.code : 'CREDENTIAL_UNAVAILABLE';
+        const message = typeof resolved.message === 'string' && resolved.message.length > 0 ? resolved.message : code;
+        throw new GiteeCliError(message, { code, reason: code, status: 'denied' });
+      }
+      if (resolved !== null && typeof resolved === 'object') {
+        const allowedKeys = new Set([...ENV_ALLOWLIST, ...authNames]);
+        for (const [key, rawVal] of Object.entries(resolved)) {
+          if (!allowedKeys.has(key)) continue;
+          const val = asText(rawVal);
+          if (val !== null) {
+            resolvedEnv[key] = val;
+            if (key === 'GITEE_TOKEN' || authNames.includes(key)) {
+              extraTokens.push(val);
+            }
+          }
+        }
+      }
+    }
+
+    const effectiveEnv = {
+      ...childEnv,
+      ...resolvedEnv,
+      ...(extraEnv ?? {}),
+    };
     const options = {
-      env: extraEnv === undefined ? childEnv : { ...childEnv, ...extraEnv },
+      env: effectiveEnv,
       encoding: 'utf8',
       timeout: timeoutMs,
       killSignal: 'SIGTERM',
@@ -641,11 +681,12 @@ export function createGiteeRunner({
       ? { ...fromPromiseResult(outcome.promiseResult, maxOutputBytes), durationMs }
       : buildResult(outcome, maxOutputBytes, durationMs);
 
+    const allTokens = extraTokens.length > 0 ? [...tokens, ...extraTokens] : tokens;
     // 出口统一脱敏：适配器与工具面拿到的 stdout/stderr 里不该出现令牌（AC-22）。
     return {
       ...result,
-      stdout: scrubSecrets(result.stdout, tokens),
-      stderr: scrubSecrets(result.stderr, tokens),
+      stdout: scrubSecrets(result.stdout, allTokens),
+      stderr: scrubSecrets(result.stderr, allTokens),
     };
   }
 
