@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Gitee change-flow host plugin for Heluo Forge: gitee.* read queries, policy-gated controlled writes, review/delivery judgement, local git commit/push behind the same policy gate, and the enterprise Gitee settings section",
+  "icon": "./icon.svg",
+  "description": "Enterprise Gitee integration for Heluo Forge: repository/Issue/PR queries, controlled writes, delivery judgement, gated local git commit/push, and settings panel",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
@@ -28,13 +29,18 @@
     "./read": "./src/gitee-read.mjs",
     "./actions": "./src/gitee-actions.mjs",
     "./adapter": "./src/gitee-adapter.mjs",
-    "./client": "./client.js"
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "src",
     "client.js",
     "cordis.patch.yml",
-    "README.md"
+    "locale",
+    "icon.svg",
+    "README.md",
+    "docs"
   ],
   "dsh": {
     "bundle": {

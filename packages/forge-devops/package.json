@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Enterprise DevOps host plugin for Heluo Forge: policy-gated reads, fixed argv adapters and offline-testable delivery flow",
+  "icon": "./icon.svg",
+  "description": "Enterprise DevOps host plugin for Heluo Forge: change flow queries, controlled updates, fixed argv adapters, and CLI configuration settings",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
@@ -27,13 +28,18 @@
     "./client": "./client.js",
     "./read": "./src/read.mjs",
     "./runtime-config": "./src/runtime-config.mjs",
-    "./cli-runner": "./src/cli-runner.mjs"
+    "./cli-runner": "./src/cli-runner.mjs",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "src",
     "client.js",
     "cordis.patch.yml",
-    "README.md"
+    "locale",
+    "icon.svg",
+    "README.md",
+    "docs"
   ],
   "dsh": {
     "bundle": {

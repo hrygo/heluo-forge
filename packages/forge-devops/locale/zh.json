@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "企业 DevOps 协同",
+    "description": "接入企业 dop CLI 与变更协同流程，提供变更查询、受控变更更新、上下文卡组装及环境配置面板。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

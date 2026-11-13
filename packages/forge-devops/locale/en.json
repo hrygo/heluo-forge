@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Enterprise DevOps",
+    "description": "Connects DeepSeek Harness with the enterprise dop CLI for change queries, controlled updates, context cards, and local CLI settings.",
+    "detail": "docs/DETAIL.md"
+  }
+}

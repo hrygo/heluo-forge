@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Enterprise Gitee Integration",
+    "description": "Connects DeepSeek Harness with enterprise Gitee CLI and local Git workflows for queries, controlled writes, delivery checks, and settings.",
+    "detail": "docs/DETAIL.md"
+  }
+}

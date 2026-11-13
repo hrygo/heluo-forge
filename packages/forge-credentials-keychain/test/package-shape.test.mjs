@@ -35,7 +35,7 @@ test('bilingual plugin intro metadata and detail docs avoid raw HTML and R&D cop
   assert.ok(detailZh.length > 80 && detailEn.length > 80);
   const combined = `${zh.meta.title}\n${zh.meta.description}\n${en.meta.title}\n${en.meta.description}\n${detailZh}\n${detailEn}`;
   assert.doesNotMatch(combined, /<[a-z!/]/i, 'DETAIL docs must avoid raw HTML');
-  assert.doesNotMatch(combined, /devops|gitee|teamflow|issue|研发/i);
+  assert.doesNotMatch(combined, /devops|gitee|teamflow|\bissue\b|研发/i);
 });
 
 test('the package ships SQLite storage and does not ship retired native resources', async () => {

@@ -47,7 +47,7 @@ dsh --profile web --dump-config | grep -E "id: (heluo-policy|heluo-gitee)"
 
 进入路径两次点击：首页 → 左下「设置」→ 侧栏「Gitee」。分区 id `gitee`、order 50，由本包 `client.js` 提供（`settings.section` 槽，`ctx.slots.inject` 两段式挂载；`ensureStyle` 返回 disposer）。
 
-同一 profile 装了研发容器（`@heluo/forge-enterprise` 的 `forge-engineering` 分区）时，本面板改为挂进容器的子槽位 `heluo.engineering.tab`（order 20）并撤掉独立分区：`client.js` 先等子槽位声明，出现后释放已注册的独立分区再注册容器条目；容器缺席（单包安装）时保持上面的独立分区。同时当 `@heluo/forge-iam` 在场时，本包向 `heluo.iam.credential-item`（order 20）注入紧凑凭据条目（默认静默跟随本机登录，按需展开指定 Token，检测到明文风险或归属冲突时就地给出处理建议）。
+同一 profile 装了研发套件（`@heluo/forge-engineering` 提供的 `forge-engineering` 分区）时，本面板改为挂进容器的子槽位 `heluo.engineering.tab`（order 20）并撤掉独立分区：`client.js` 先等子槽位声明，出现后释放已注册的独立分区再注册容器条目；容器缺席（单包安装）时保持上面的独立分区。同时本面板在 `GiteeSection` 底部内置紧凑凭据区（默认静默跟随本机登录，检测到明文风险或归属冲突时就地给出处理建议，并在接入 `@heluo/forge-iam` 时支持单独指定或清空加密托管的 Token）。
 
 页面主表聚焦运行入口与只读域名，已移除旧「高级」配置区块（`authEnv`/`persistentToken` 的配置契约与 `detectPersistentToken` 检出保留在服务端，相关明细只进诊断摘要）。只有两项可编辑：
 

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Enterprise Policy Gate",
+    "description": "Provides controlled action catalogs, protected-path guards, data egress confirmations, and mandatory audit logging.",
+    "detail": "docs/DETAIL.md"
+  }
+}

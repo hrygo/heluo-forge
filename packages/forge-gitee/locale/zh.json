@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "企业 Gitee 代码托管",
+    "description": "接入企业 Gitee CLI 与本机 Git 工具，支持仓库/Issue/PR 查询、受控评论提交、交付检查与 Gitee 环境设置。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

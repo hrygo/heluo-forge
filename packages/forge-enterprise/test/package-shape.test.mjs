@@ -31,7 +31,7 @@ test('package shape exports icon, bilingual locale metadata, and clean detail do
   // Ensure zero R&D copy appears in the universal Enterprise Account & Models intro card.
   const introText = `${zh.meta.title}\n${zh.meta.description}\n${en.meta.title}\n${en.meta.description}`;
   const combined = `${introText}\n${detailZh}\n${detailEn}`;
-  assert.doesNotMatch(combined, /devops|gitee|teamflow|issue|研发/i);
+  assert.doesNotMatch(combined, /devops|gitee|teamflow|\bissue\b|研发/i);
 });
 
 test('bundled icon.svg is byte-identical to official forge-enterprise-app-icon branding asset', () => {

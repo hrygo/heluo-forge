@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Controlled action catalog and unified command/tool gate for Heluo Forge",
+  "icon": "./icon.svg",
+  "description": "Enterprise policy gate, action catalog, protected-path protection, egress confirmation, and audit trail for Heluo Forge",
   "engines": {
     "dsh": ">=0.2.1-rc.2"
   },
@@ -19,10 +20,15 @@
     "./egress": "./src/egress.mjs",
     "./gate": "./src/gate.mjs",
     "./paths": "./src/paths.mjs",
-    "./isolated-testing": "./src/isolated-testing.mjs"
+    "./isolated-testing": "./src/isolated-testing.mjs",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
     "src",
-    "README.md"
+    "locale",
+    "icon.svg",
+    "README.md",
+    "docs"
   ]
 }
