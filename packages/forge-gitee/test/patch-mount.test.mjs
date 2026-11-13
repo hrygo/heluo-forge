@@ -384,8 +384,9 @@ test('AC-7/AC-1: 任何插入本包的补丁层都必须自带目录与审计（
     assert.equal(typeof giteeRow.config, 'object', `${packageName} 的 gitee 行缺显式 config`);
     assert.equal(giteeRow.config === null, false);
   }
-  // r13 起企业组合自带 gitee 行与目录（见 forge-enterprise 的 cordis.patch.yml），
-  // 所以允许且只允许「本包 + forge-enterprise」两层插入；devops 仍不得偷偷插入。
-  assert.deepEqual(inserting.sort(), ['forge-enterprise', 'forge-gitee'], '只有本包与企业组合插入 gitee');
+  // 分包后由独立研发工具包 @heluo/forge-engineering 挂载 gitee 与政策行，
+  // 通用底座 @heluo/forge-enterprise 不得包含 gitee，devops 仍不得偷偷插入。
+  assert.deepEqual(inserting.sort(), ['forge-engineering', 'forge-gitee'], '只有本包与企业研发套件插入 gitee');
+  assert.ok(!inserting.includes('forge-enterprise'), '通用企业底座不得引入 gitee');
   assert.ok(!inserting.includes('forge-devops'), 'devops 的补丁层不得偷偷插入本包');
 });

@@ -25,7 +25,7 @@ export const inject = Object.freeze(['skills']);
 /** Skill 名 = `enterprise-issue-delivery`（与条款 id `issue-delivery` 组合）。 */
 export const SKILL_PREFIX = 'enterprise';
 
-/** 包内实体资源根：`packages/forge-enterprise/skills/`（打包后仍在同一相对位置）。 */
+/** 包内实体资源根：`packages/forge-engineering/skills/`（打包后仍在同一相对位置）。 */
 export const RESOURCE_BASE = fileURLToPath(new URL('../skills/', import.meta.url));
 
 /** 入口的可见策略：模型不得自行进入企业交付流程，只能由用户显式触发。 */

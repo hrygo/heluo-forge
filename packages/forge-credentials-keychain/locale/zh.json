@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "企业加密凭据存储",
+    "description": "通过 SQLite AES-256-GCM 值级加密安全托管企业凭据与访问令牌，避免明文落盘。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

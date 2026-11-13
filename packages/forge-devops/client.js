@@ -30,8 +30,7 @@ window.__ModuleLoader__.load({
     const NS = 'devops';
     /** 同源配置端点（前缀 CLI_API_PREFIX 下的 `/cli`）。 */
     const CLI_ENDPOINT = '/api/forge-devops/cli';
-    /** 企业账号统一托管的扩展凭据同源端点与子槽位。 */
-    const IAM_CREDENTIAL_SLOT = 'heluo.iam.credential-item';
+    /** 企业账号统一托管的扩展凭据同源端点。 */
     const IAM_EXT_CREDENTIALS_ENDPOINT = '/api/forge-iam/ext-credentials';
     const IAM_EXT_CREDENTIAL_ENDPOINT = `${IAM_EXT_CREDENTIALS_ENDPOINT}/devops`;
     const IAM_MUTATION_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json', accept: 'application/json' };
@@ -435,7 +434,7 @@ window.__ModuleLoader__.load({
       'readiness.reason.noCli': '未配置命令行入口',
       'readiness.reason.notExecutable': '入口不可执行',
       'readiness.reason.unreachable': '目标不可达',
-      'readiness.reason.policyDenied': '只读被拒',
+      'readiness.reason.policyDenied': '策略拒绝',
       'readiness.key.reason.ownerMismatch': '凭据属于其他账号',
       'readiness.key.reason.notConfigured': '尚未写入网关凭据',
       'readiness.key.reason.invalid': '凭据记录不可读',
@@ -453,7 +452,7 @@ window.__ModuleLoader__.load({
       'readiness.next.keyVerify': '到企业账号页验证网关凭据',
       'readiness.next.check': '重新发现配置并重建读面',
       'readiness.next.refresh': '刷新后重试',
-      'readiness.next.giteeBlocked': '未获批准的只读探测，本页不发起请求',
+      'readiness.next.giteeBlocked': '本页不主动探测 Gitee 连通性',
       'readiness.action.openAccount': '前往企业账号',
       'readiness.nav.guide': '设置 → 企业账号',
       'readiness.check.item.revision': '基准',
@@ -467,11 +466,11 @@ window.__ModuleLoader__.load({
       'readiness.evidence.layer.file': '文件存在',
       'readiness.evidence.layer.executable': '可启动',
       'readiness.evidence.layer.target': '目标可识别',
-      'readiness.evidence.layer.readonly': '只读可访问',
+      'readiness.evidence.layer.readonly': '权限策略放行',
       'readiness.evidence.state.pass': '通过',
       'readiness.evidence.state.fail': '未通过',
       'readiness.evidence.state.notRun': '未执行',
-      'readiness.evidence.basis.filesystemStat': '文件系统只读探测',
+      'readiness.evidence.basis.filesystemStat': '本地文件系统检查',
       'readiness.evidence.basis.configShape': '配置形状',
       'readiness.evidence.basis.policyAdmission': '策略准入（未发起真实请求）',
       'readiness.evidence.reason.no-dop-bin': '未配置命令行入口',
@@ -481,7 +480,7 @@ window.__ModuleLoader__.load({
       'readiness.evidence.reason.not-executable': '入口不可执行',
       'readiness.evidence.reason.source-type-unknown': '来源类型无法判定',
       'readiness.evidence.reason.policy-unavailable': '策略不可用',
-      'readiness.evidence.reason.policy-denied': '策略拒绝只读',
+      'readiness.evidence.reason.policy-denied': '策略拒绝访问',
       'readiness.evidence.reason.confirmation-required': '需要确认',
       'readiness.evidence.reason.no-evidence': '无可复核证据',
       'readiness.layers.title': '三层来源',
@@ -503,7 +502,7 @@ window.__ModuleLoader__.load({
       'readiness.local.none': '无本机覆盖',
       'readiness.local.keys': '本机覆盖：{keys}',
       'readiness.local.unknown': '未提供',
-      'readiness.gitee.notExecuted': '未执行 · 未获批准的只读探测，本页不发起请求',
+      'readiness.gitee.notExecuted': '未执行 · 本页不主动发起请求',
       'readiness.loading': '正在读取…',
       'readiness.failed': '无法读取（{reason}）',
       'readiness.action.check': '检查 DevOps',
@@ -513,7 +512,8 @@ window.__ModuleLoader__.load({
       'credential.title': 'DevOps',
       'credential.state.follow': '跟随本机登录（正常可用，无需配置）',
       'credential.state.hosted': '已在此单独保存（优先于本机环境）',
-      'credential.state.signedOut': '登录企业账号后可用（已托管的凭据暂不外发）',
+      'credential.state.signedOut': '前往「设置 → 企业账号」登录后可用（已托管的凭据暂不外发）',
+      'credential.state.unavailable': '跟随本机登录（独立安装模式：未接入企业账号托管，正常使用本机环境）',
       'credential.state.mismatchTag': '已停用（账号不匹配）',
       'credential.state.mismatch': '存在其他企业账号遗留的独立凭据，已安全停用（不会使用旧账号凭据，也不会回退本机环境）',
       'credential.state.pending': '上一笔凭据保存尚未完成，请稍候等待完成',
@@ -539,7 +539,7 @@ window.__ModuleLoader__.load({
       'credential.notice.saved': '已在此单独保存（优先于本机环境）',
       'credential.notice.cleared': '已清除单独凭据，恢复跟随本机登录',
       'credential.fail.invalid': '请输入有效的凭据内容后再保存',
-      'credential.fail.notSignedIn': '请先在上方登录企业账号，再保存或清除独立凭据',
+      'credential.fail.notSignedIn': '请先前往「设置 → 企业账号」登录企业账号，再保存或清除独立凭据',
       'credential.fail.pending': '上一笔凭据操作尚未完成，请稍候重试（已保留当前输入）',
       'credential.fail.keychainUnavailable': '本机安全存储暂不可用，未保存（详情可重试或改用本机 CLI 登录）',
       'credential.fail.ownerMismatch': '存在其他企业账号遗留凭据，请先清除旧配置或使用当前账号重设',
@@ -655,7 +655,7 @@ window.__ModuleLoader__.load({
       'readiness.reason.noCli': 'no command-line entry configured',
       'readiness.reason.notExecutable': 'entry is not executable',
       'readiness.reason.unreachable': 'target unreachable',
-      'readiness.reason.policyDenied': 'read denied by policy',
+      'readiness.reason.policyDenied': 'denied by policy',
       'readiness.key.reason.ownerMismatch': 'credential belongs to another account',
       'readiness.key.reason.notConfigured': 'no gateway credential written yet',
       'readiness.key.reason.invalid': 'credential record unreadable',
@@ -673,7 +673,7 @@ window.__ModuleLoader__.load({
       'readiness.next.keyVerify': 'Verify the gateway credential on the account page',
       'readiness.next.check': 'Re-discover configuration and rebuild the read path',
       'readiness.next.refresh': 'Refresh and retry',
-      'readiness.next.giteeBlocked': 'No approved read-only probe; this page sends no request',
+      'readiness.next.giteeBlocked': 'This page does not actively probe Gitee',
       'readiness.action.openAccount': 'Open enterprise account',
       'readiness.nav.guide': 'Settings → Enterprise account',
       'readiness.check.item.revision': 'Baseline',
@@ -687,11 +687,11 @@ window.__ModuleLoader__.load({
       'readiness.evidence.layer.file': 'file exists',
       'readiness.evidence.layer.executable': 'launchable',
       'readiness.evidence.layer.target': 'target recognizable',
-      'readiness.evidence.layer.readonly': 'read-only reachable',
+      'readiness.evidence.layer.readonly': 'policy permitted',
       'readiness.evidence.state.pass': 'passed',
       'readiness.evidence.state.fail': 'failed',
       'readiness.evidence.state.notRun': 'not run',
-      'readiness.evidence.basis.filesystemStat': 'filesystem read-only probe',
+      'readiness.evidence.basis.filesystemStat': 'local filesystem check',
       'readiness.evidence.basis.configShape': 'config shape',
       'readiness.evidence.basis.policyAdmission': 'policy admission (no real request sent)',
       'readiness.evidence.reason.no-dop-bin': 'no command-line entry configured',
@@ -701,7 +701,7 @@ window.__ModuleLoader__.load({
       'readiness.evidence.reason.not-executable': 'entry is not executable',
       'readiness.evidence.reason.source-type-unknown': 'source type cannot be determined',
       'readiness.evidence.reason.policy-unavailable': 'policy unavailable',
-      'readiness.evidence.reason.policy-denied': 'read-only denied by policy',
+      'readiness.evidence.reason.policy-denied': 'access denied by policy',
       'readiness.evidence.reason.confirmation-required': 'confirmation required',
       'readiness.evidence.reason.no-evidence': 'no verifiable evidence',
       'readiness.layers.title': 'Layer sources',
@@ -723,7 +723,7 @@ window.__ModuleLoader__.load({
       'readiness.local.none': 'no local override',
       'readiness.local.keys': 'local overrides: {keys}',
       'readiness.local.unknown': 'not provided',
-      'readiness.gitee.notExecuted': 'Not run · no approved read-only probe; this page sends no request',
+      'readiness.gitee.notExecuted': 'Not run · this page does not send requests',
       'readiness.loading': 'Reading…',
       'readiness.failed': 'Cannot read ({reason})',
       'readiness.action.check': 'Check DevOps',
@@ -733,7 +733,8 @@ window.__ModuleLoader__.load({
       'credential.title': 'DevOps',
       'credential.state.follow': 'Uses local CLI sign-in (works automatically, no setup needed)',
       'credential.state.hosted': 'Saved separately here (takes priority over local environment)',
-      'credential.state.signedOut': 'Sign in to your enterprise account to use saved credentials',
+      'credential.state.signedOut': 'Sign in under Settings → Enterprise account to use saved credentials',
+      'credential.state.unavailable': 'Uses local CLI sign-in (standalone mode: works with local environment)',
       'credential.state.mismatchTag': 'Disabled (account mismatch)',
       'credential.state.mismatch': 'A saved credential from another enterprise account was disabled for safety',
       'credential.state.pending': 'A previous credential save is still in progress; wait a moment',
@@ -759,7 +760,7 @@ window.__ModuleLoader__.load({
       'credential.notice.saved': 'Saved separately here (takes priority over local environment)',
       'credential.notice.cleared': 'Cleared custom credential; restored local sign-in behavior',
       'credential.fail.invalid': 'Enter a valid credential value before saving',
-      'credential.fail.notSignedIn': 'Sign in to your enterprise account above before saving or clearing',
+      'credential.fail.notSignedIn': 'Sign in under Settings → Enterprise account before saving or clearing',
       'credential.fail.pending': 'Previous credential update is still in progress; retry shortly (draft kept)',
       'credential.fail.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
       'credential.fail.ownerMismatch': 'An older credential belongs to another enterprise account; clear or replace it below',
@@ -2256,6 +2257,7 @@ window.__ModuleLoader__.load({
                   )
                 : null,
             ),
+        h(DevopsCredentialItem, { key: 'credential', t }),
       );
 
       return h('div', { className: 'fdv-root' }, children);
@@ -2388,6 +2390,10 @@ window.__ModuleLoader__.load({
           if (!mounted.current || reqSeq.current !== seq) return;
           if (!response.ok) {
             const code = errorCode(body);
+            if ((response.status === 404 || response.status === 501) && !code) {
+              setStatusView({ mode: 'ready', entry: { extensionId: 'devops', state: 'IAM_UNAVAILABLE', envHitNames: [] } });
+              return;
+            }
             if (code === 'IAM_NOT_SIGNED_IN') {
               setStatusView({ mode: 'ready', entry: { extensionId: 'devops', state: 'IAM_NOT_SIGNED_IN', envHitNames: [] } });
               return;
@@ -2479,6 +2485,7 @@ window.__ModuleLoader__.load({
       const isHosted = state === 'HOSTED_ACTIVE';
       const isMismatch = state === 'OWNER_MISMATCH';
       const isSignedOut = state === 'IAM_NOT_SIGNED_IN';
+      const isUnavailable = state === 'IAM_UNAVAILABLE';
       const isKeychainUnavailable = state === 'KEYCHAIN_UNAVAILABLE';
       const envHitNames = Array.isArray(entry?.envHitNames) ? entry.envHitNames : [];
 
@@ -2488,13 +2495,14 @@ window.__ModuleLoader__.load({
         if (isHosted) return { tone: 'ok', badge: t('credential.state.hosted'), text: t('credential.state.hosted') };
         if (isMismatch) return { tone: 'warn', badge: t('credential.state.mismatchTag'), text: t('credential.state.mismatch') };
         if (isSignedOut) return { tone: 'quiet', badge: null, text: t('credential.state.signedOut') };
+        if (isUnavailable) return { tone: 'quiet', badge: null, text: t('credential.state.unavailable') };
         if (isKeychainUnavailable) return { tone: 'warn', badge: t('credential.state.keychainTag'), text: t('credential.state.keychainUnavailable') };
         if (state === 'PENDING_WRITE') return { tone: 'quiet', badge: null, text: t('credential.state.pending') };
         return { tone: 'quiet', badge: null, text: t('credential.state.follow') };
       })();
 
       const actions = [];
-      if (!isSignedOut && !openForm && statusView.mode === 'ready') {
+      if (!isSignedOut && !isUnavailable && !openForm && statusView.mode === 'ready') {
         if (isHosted) {
           actions.push(
             h('button', { type: 'button', className: 'fdv-link', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
@@ -2723,17 +2731,6 @@ window.__ModuleLoader__.load({
           };
         }),
         'forge-devops: settings section',
-      );
-      ctx.effect(
-        () => ctx.slots.inject(IAM_CREDENTIAL_SLOT, () => ctx.slots.register({
-          name: IAM_CREDENTIAL_SLOT,
-          id: 'devops',
-          order: 10,
-          label: () => t('credential.title'),
-          locale: NS,
-          inject: () => ({ t, navigate }),
-        }, DevopsCredentialItem)),
-        'forge-devops: iam credential item',
       );
     }
 

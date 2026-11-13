@@ -187,10 +187,10 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
       },
     },
     slots: {
-      // 无容器场景：只有 `settings.section` 被声明，研发容器子槽位与 IAM 凭据子槽位缺席。
+      // 无容器场景：只有 `settings.section` 被声明，研发容器子槽位缺席。
       inject: (name, callback) => {
         assert.ok(
-          name === 'settings.section' || name === 'heluo.engineering.tab' || name === 'heluo.iam.credential-item',
+          name === 'settings.section' || name === 'heluo.engineering.tab',
           `未知槽位 ${name}`,
         );
         return name === 'settings.section' ? callback() : () => {};
@@ -209,7 +209,6 @@ test('AC-13/AC-16: apply 用两段式 inject 注册 settings.section（id gitee 
     'forge-gitee: styles',
     'forge-gitee: engineering tab',
     'forge-gitee: settings section',
-    'forge-gitee: iam credential item',
   ]);
   assert.deepEqual(locales.map((item) => item.namespace), ['gitee']);
   assert.equal(registrations.length, 1);

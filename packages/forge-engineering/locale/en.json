@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Enterprise engineering suite",
+    "description": "Engineering workbench bundle for DeepSeek Harness integrating DevOps (DOP), Gitee repository and review workflows, the Settings -> Enterprise Engineering panel, and the enterprise issue-delivery skill. Works standalone or alongside Enterprise account & models; tool credentials follow your local CLI session by default or can be set per tool.",
+    "detail": "docs/DETAIL.md"
+  }
+}

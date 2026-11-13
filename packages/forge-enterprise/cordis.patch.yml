@@ -1,15 +1,13 @@
-# @heluo/forge-enterprise 的基础补丁层（CORP-DSH-DESIGN-018 §3.2）。
+# @heluo/forge-enterprise 的基础补丁层（CORP-DSH-DESIGN-004）。
 #
-# 本文件是包清单 `dsh.bundle.patch` 指向的默认层：只装**通用企业底座**——
-# 官方行禁用（O3）、凭据加密存储、策略审计与 IAM。研发域成员（DevOps / Gitee /
-# 交付 Skill 与「企业研发工具」UI 容器）一律不进本层，见同目录
-# `cordis.patch.engineering.yml`；这样非研发用户的侧栏只有「企业账号」与「企业模型」。
+# 本包是面向全体企业成员的「企业账号与模型」通用底座：只负责官方账号/模型/明文凭据七行停用（O3）、
+# 系统钥匙串加密凭据存储、共享策略目录与企业 IAM（含 AI 网关与模型目录管理）。
+# 研发工作台、DevOps（DOP）、Gitee 与交付规范等研发扩展能力已拆分为独立预装包
+# `@heluo/forge-engineering`（CORP-DSH-DESIGN-019），互不强耦合。
 #
 # 命中不到的 id 会警告 `patch: entry "<id>" not found` 后跳过；`disabled: true` 由覆写层
 # 给命中行加上，行本身仍出现在 dump 里（核验见 docs/design/plugins/forge-enterprise.md §5.1）。
 #
-# 用法：本层由 bundle 自动加载；研发组合再叠加 engineering 层：
-#   dsh --profile web --patch <engineering.yml>
 # 复核：dsh --profile web --dump-config | grep -A2 "id: heluo-"
 
 # 官方登录与账户 UI：企业 IAM 是唯一登录（O3），不保留公网回落。
@@ -38,12 +36,10 @@
 - id: credentials
   disabled: true
 
-# 通用企业底座的最小挂载。Cordis Loader 并发创建条目，行序不构成加载顺序语义；
-# 凭据、策略与 IAM 的先后由各自的依赖注入决定，不靠本文件的排列保证。
-# 策略行携带与 devops / gitee 两个补丁层**逐字相同**的 6 条并集目录与内存审计：同
-# id 时 loader 按 id 覆盖 config，只留一个策略实例，装配顺序不影响幸存配置（D-5）。
+# 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 6 条动作目录与
+# 内存审计配置（无 isolate）；与 `@heluo/forge-engineering` 并存安装时由 Cordis Loader 按 id 合并为
+# 单一策略实例，不依赖挂载顺序。
 # 内存审计舱属联调/试点级证据；生产或合规场景必须注入持久 sink 并去掉 allowNonDurable。
-# 其余行只给最小配置；缺配置时按包自己的 fail-closed 语义拒绝，不在补丁里塞默认凭据。
 - insert:
     - id: heluo-credentials-keychain
       name: '@heluo/forge-credentials-keychain'

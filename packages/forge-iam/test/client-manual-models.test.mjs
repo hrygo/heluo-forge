@@ -121,7 +121,9 @@ test('manual model UI supports adding into an empty catalog with trim, Enter sub
   assert.match(renderedText, /已添加 deepseek-chat，可在列表中配置并启用。/);
   assert.match(renderedText, /deepseek-chat/);
   assert.match(renderedText, /手动/);
-  assert.match(renderedText, /不随目录刷新移除/);
+  assert.doesNotMatch(renderedText, /不随目录刷新移除/);
+  assert.ok(find(afterTree, (node) => typeof node.props?.className === 'string' && node.props.className.includes('fiam-model-item-manual')), '手动模型条目应有专属视觉标识类');
+  assert.ok(find(afterTree, (node) => typeof node.props?.className === 'string' && node.props.className.includes('fiam-badge-manual')), '手动徽标应使用专属样式');
   assert.ok(findByAriaLabel(afterTree, '删除手动模型 deepseek-chat'));
 
   const successNotice = find(afterTree, (node) =>
@@ -397,8 +399,8 @@ test('in-flight manual add deduplicates double clicks, preserves save button tex
   assert.doesNotMatch(finalText, /in-flight-model/);
 });
 
-test('forge-iam settings.section declares heluo.iam.credential-item child slot and Panel renders it silently when empty vs visibly when populated', async (t) => {
-  // 1. Verify ctx.slots.register metadata matches design
+test('forge-iam settings.section declares no heluo.iam.credential-item child slot and Panel does not invoke it', async (t) => {
+  // 1. Verify ctx.slots.register metadata omits R&D credential child slot
   const registered = [];
   const noop = () => () => {};
   const ctx = {
@@ -445,46 +447,24 @@ test('forge-iam settings.section declares heluo.iam.credential-item child slot a
   assert.ok(sectionMeta);
   assert.equal(sectionMeta.id, 'forge-iam');
   assert.equal(sectionMeta.order, -10);
-  assert.deepEqual(sectionMeta.children, {
-    'heluo.iam.credential-item': { kind: 'list', scope: 'root' },
-  });
+  assert.equal(sectionMeta.children, undefined);
 
-  // 2. Empty child slot stays completely silent (uses opts.fallback = null, no empty section title)
-  let capturedOwnerProps = null;
-  let capturedSlotName = null;
-  const emptyPanel = await mountPanel(async () => Response.json(baseView()), {
+  // 2. Panel stays purely universal even if renderSlot prop is passed
+  let slotCalled = false;
+  const panel = await mountPanel(async () => Response.json(baseView()), {
     componentProps: {
-      renderSlot: (slot, ownerProps, opts = {}) => {
-        capturedSlotName = slot;
-        capturedOwnerProps = ownerProps;
-        assert.equal(opts.fallback, null);
-        return opts.fallback;
-      },
-    },
-  });
-  t.after(() => emptyPanel.close());
-  const emptyTree = emptyPanel.render();
-  assert.equal(capturedSlotName, 'heluo.iam.credential-item');
-  assert.deepEqual(Object.keys(capturedOwnerProps), ['sessionReady']);
-  assert.equal(capturedOwnerProps.sessionReady, true);
-  assert.doesNotMatch(emptyPanel.text(emptyTree), /外部系统凭据|credential-item/);
-
-  // 3. Populated child slot renders injected entries without disturbing hook order across renders
-  const populatedPanel = await mountPanel(async () => Response.json(baseView()), {
-    componentProps: {
-      renderSlot: (slot, ownerProps) => {
-        assert.equal(slot, 'heluo.iam.credential-item');
-        assert.deepEqual(Object.keys(ownerProps), ['sessionReady']);
-        assert.equal(ownerProps.sessionReady, true);
+      renderSlot: () => {
+        slotCalled = true;
         return {
           type: 'div',
-          props: { 'data-testid': 'injected-ext-credential' },
-          children: ['扩展凭据测试项：已连接'],
+          props: { 'data-testid': 'unexpected-ext-credential' },
+          children: ['扩展凭据测试项：不应出现'],
         };
       },
     },
   });
-  t.after(() => populatedPanel.close());
-  const populatedTree = populatedPanel.render();
-  assert.match(populatedPanel.text(populatedTree), /扩展凭据测试项：已连接/);
+  t.after(() => panel.close());
+  const tree = panel.render();
+  assert.equal(slotCalled, false);
+  assert.doesNotMatch(panel.text(tree), /DevOps|Gitee|扩展凭据|credential-item/);
 });

@@ -1,30 +1,30 @@
-# 企业组合包详细设计
+# 企业账号与模型组合包详细设计
 
 ## 文档信息
 
 | 项 | 内容 |
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
-| 文档名称 | 企业组合包详细设计 |
-| 版本 | V1.7.1 |
+| 文档名称 | 企业账号与模型组合包详细设计 |
+| 版本 | V1.8.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-10 |
+| 最后更新 | 2026-11-13 |
 | 门禁 | G2 |
-| 模块状态 | 可用（组合骨架：官方行默认禁用 + 按需技能/条款装配；企业接入待开通） |
+| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）与 `forge-iam`；研发工具拆至独立包 `@heluo/forge-engineering`） |
 
 > 编制依据：2026-10-20 依据 DSH 组合层公开语义核验——补丁层叠加在包入口列表之上；`insert` 追加行，带 `id` 的补丁覆盖既有行且 `config` 整体替换、不深合并；`group: true` 配 `name: cordis:group` 使 `config` 成为可再插入的嵌套列表；`cordis:include` 载入外部 YAML 或 JSON 入口列表；`disabled` 接受布尔、null 或按挂载时机求值的 `!!js` 表达式；`!!js` 仅在 `config` 内按插件上下文求值；`isolate` 按服务名划分实例域。2026-10-21 用户确认采用 O3「企业 IAM 独占登录」，官方登录在企业内网不可用；本包据此默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 行。**未核验**：`engines` 版本断言在挂载期的具体报错形态、`fiberPhase` 的取值集合、禁用官方行后 shell/onboarding 是否完整。
 >
-> 关联文档：[总体架构](../../architecture/platform-architecture.md)、[设计索引](../README.md)、[IAM 接入](forge-iam.md)、[策略与审计](forge-policy.md)、[双模式凭据](../credential-modes.md)。
+> 关联文档：[总体架构](../../architecture/platform-architecture.md)、[设计索引](../README.md)、[企业研发工具套件](forge-engineering.md)、[IAM 接入](forge-iam.md)、[策略与审计](forge-policy.md)、[双模式凭据](../credential-modes.md)、[设置菜单统一与 Token 收敛](../enterprise-menu-and-token-unification.md)。
 
 ## 1. 结论
 
-本包不写业务逻辑，只回答一个问题：企业版由哪些能力、以什么顺序、在什么前提下一起出现。
+`@heluo/forge-enterprise`（**企业账号与模型**）作为面向全体企业员工的通用底座组合包，只回答一个问题：企业登录、凭证安全存储与模型访问由哪些基础能力、在什么前提下一起出现。
 
-边界：它组合 `@heluo/forge-*` 与上游插件，不实现其中任何一个；它决定默认值与禁用项，不决定策略内容与契约字段。
+边界：它组合 `@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（共享 6 动作默认目录，不使用 `isolate`）与 `@heluo/forge-iam`，不实现其中任何一个；包体内不包含研发 UI 容器、Issue 交付 Skill、DevOps 或 Gitee 依赖——全部研发工具能力独立打包于 [企业研发工具套件 `@heluo/forge-engineering`](forge-engineering.md)（`CORP-DSH-DESIGN-019`），按需独立安装或与之共存。它决定官方禁用项与通用底座默认组合，不决定具体策略内容与契约字段。
 
 O3 的组成之一是**默认禁用官方账号、官方模型、官方 API Key、官方账户 UI、通用模型配置与自由模型设置六行**，以及官方明文凭据提供方一行，使企业 IAM 成为唯一登录，并让 `DEEPSEEK_API_KEY` 与自填网关都不构成旁路。官方登录在企业内网不可用，保留它只会制造一个坏掉的入口，并留下公网模型旁路。
 
@@ -150,7 +150,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-补丁分两层：[cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml) 是 `dsh.bundle.patch` 指向的**通用底座**——禁用六个官方行与官方 `credentials` 行，`insert:` 段只挂凭据、策略与 IAM；[cordis.patch.engineering.yml](../../../packages/forge-enterprise/cordis.patch.engineering.yml) 是**研发叠加层**——挂「企业研发工具」容器行 `heluo-engineering-ui`、Skill 子路径入口与 DevOps、Gitee 两行（`insert:` 段见 §5.1.2）。SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
+[cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml) 是 `dsh.bundle.patch` 指向的**通用企业底座补丁**——禁用七个官方账号、模型与明文凭据行，`insert:` 段仅插入凭据加密存储、策略门禁与企业 IAM 三插件，与研发插件零耦合。研发相关条目（研发设置容器、Issue 交付 Skill、DevOps、Gitee）全部独立收口到 `@heluo/forge-engineering` 组合包（见[企业研发工具套件详细设计](forge-engineering.md)）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -163,11 +163,11 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-通用底座的 `insert:` 段挂三个有真实 Host 职责的插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`、`@heluo/forge-iam`；研发叠加层另挂四项：`heluo-engineering-ui`（`@heluo/forge-enterprise` 自身，激活 `client.js` 的那一行）、`@heluo/forge-enterprise/issue-delivery-skill`、`@heluo/forge-devops` 与 `@heluo/forge-gitee`。两层行 id 不相交，叠加生效时不会重复插入同一行。
+通用底座的 `insert:` 段仅挂三个面向全体员工的基础 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 6 动作目录、无 `isolate`）与 `@heluo/forge-iam`。
 
-**安装语义**：`dsh.bundle.patch` 只声明通用底座，`dsh plugin add <tarball>` 因此只装底座，研发叠加层需要部署侧显式叠加——`dsh --profile <name> --patch <包目录>/cordis.patch.engineering.yml`，或把该层内容写进目标 profile 的补丁文件（`profile.patchPath`）后再启动。Web/Desktop 外壳不接受 `--patch` 参数，终端用户无法在设置页启用研发组合。把叠加层写进 profile 补丁文件这条路径**未实机验证**：安装演练只覆盖 `--patch` 形态（§11）。要让研发组合随 `dsh plugin add` 自动生效，需要新增一个独立的研发 bundle 包（本仓当前门禁要求 `dsh.bundle.patch` 指向单一文件），属范围变更，未在本版实施。
+**双独立预装包安装语义**：`@heluo/forge-enterprise`（「企业账号与模型」）通过 `dsh plugin add <tarball>` 安装后即生效通用企业登录与模型管理，不包含任何研发插件或设置菜单；研发能力（`heluo-engineering-ui` 容器、`enterprise-issue-delivery` Skill、`@heluo/forge-devops`、`@heluo/forge-gitee` 及共享 `heluo-policy`）由独立预装组合包 `@heluo/forge-engineering`（「企业研发工具套件」）提供，两包可通过 `dsh plugin add` 各自独立安装或并行共存于同一 Profile，`heluo-policy` 自动折叠为唯一实例，无需再通过命令行 `--patch` 手动叠加 `cordis.patch.engineering.yml`（详见[企业研发工具套件详细设计](forge-engineering.md)）。
 
-容器行 `heluo-engineering-ui` 激活后，`@heluo/forge-devops` 与 `@heluo/forge-gitee` 的浏览器半把各自面板挂进容器的 `heluo.engineering.tab`（`order` 10 / 20）并撤掉独立分区；只有底座（没有该行）时两个包各自保留独立分区（`gitee` 50、`devops` 60、`devops-readiness` 29），单包安装不丢配置入口。DevOps 与 Gitee 两行在 r13 进闭包，条目内显式写 `config: {}`：行配置缺席时 `ConfigStandard` 会拒、loader 只把该行静默跳过（装上却没有读面，比报错更难查）。SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关、Gitee、品牌三包仍只有 README，不预建入口。
+SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关与品牌包不预建入口。
 
 本机实测（DSH `0.2.1-rc.2`，临时 `DSH_HOME`，profile 由 `--from-default-profile web` 建出；2026-10-24 实测时四个包以本地目录放进该 profile 的 `node_modules/@heluo/`，含当时的 SDD 插件行——2026-10-26 起 SDD 已移出 `insert:`，下述四行记录为历史形态，现行分层口径以两个补丁文件、`bundle-patch.test.mjs` 与安装演练 `run-bundle-install-rehearsal.mjs` 为准）：
 
@@ -188,9 +188,11 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 本轮证据限于补丁内容与离线用例：扩至七行后的组合层完整性、升级回灌与双端 GUI 未复测，不能写成生产或企业联调结论。
 
-### 5.2 按需企业 Skill 与规范条款加载
+### 5.2 按需企业 Skill 与规范条款加载（已独立至 `@heluo/forge-engineering`）
 
-企业入口负责**装配**按需技能与规范条款，不重复实现成员包逻辑，也不把全部条款一次性注入上下文。宿主技能服务（`ctx.skills`）探针结论（`skills-registry-discovery-and-load`，rc.2 实测通过）：直接 `register` 路径可用；`registerProvider` 懒加载路径已验证 list→get 真实往返——`list()` 只给无正文摘要（`summaryCarriesBody === false`）、`get(name)` 按需返回正文、加载零写入、`modelInvocable: false` 保持。
+> 归属说明：研发交付 Skill（`issue-delivery-skill.mjs`、`skills.mjs`、`skills/issue-delivery/`）及五类研发开关（`switches.mjs`）由独立研发预装包 [`@heluo/forge-engineering`（CORP-DSH-DESIGN-019）](forge-engineering.md) 承载；`@heluo/forge-enterprise` 底座包本身不包含任何研发代码、Skill 或开关导出。以下保留通用底座与研发包共用的宿主 Skill 契约及既有实测基线。
+
+宿主技能服务（`ctx.skills`）探针结论（`skills-registry-discovery-and-load`，rc.2 实测通过）：直接 `register` 路径可用；`registerProvider` 懒加载路径已验证 list→get 真实往返——`list()` 只给无正文摘要（`summaryCarriesBody === false`）、`get(name)` 按需返回正文、加载零写入、`modelInvocable: false` 保持。
 
 **FIX-09 交付状态（2026-10-26）**：`assembleEnterpriseSkills(ctx, …)` 是交付 Skill 的单一受管入口——有 provider 入口时走 `registerEnterpriseSkillsViaProvider`（与探针验证同形的 list/get 懒加载），无 provider 入口时回落到直接 `register`（正文如实嵌入，不虚构宿主能力）；一次 `dispose()` 注销全部；无宿主 skills 服务即拒绝。`skills.test.mjs` 11 例覆盖 provider 往返（发现无正文/按需取正文/未知名返回空/注销）、回落路径、发现面无正文、动作前约束可见、零写入、无合规结论、预算拒绝。`constraintsFor(action)` 给出动作前可见性的调用点，由能力入口在真实动作前调用展示。**待验（不宣称已交付）**：provider 形状在 rc.3 的重验（本轮仅 rc.2 探针 + 离线单测）；真实企业条款来源（企业提供）；安装路径的实际调用（宿主装配完成后记账）。
 
@@ -248,13 +250,13 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 主/子 Agent 与 scoped 工具的角色差异由补丁层的 `disabled` 与配置表达，不用多个包复制"企业版包含什么"；可见性不等于服务端授权。
 
-**五类开关的声明与判定（`packages/forge-enterprise/src/switches.mjs`，2026-10-24）**：本模块只做声明与判定，不写业务逻辑、不注册任何东西。判定顺序固定：① `policy` 未就绪 → 五类全 `blocked`；② 企业身份（`iam`）未就绪 → 五类全 `blocked`；③ 必要审计未就绪 → 四类动作 `blocked`（**不降级为无审计只读**），`observe` 因无出口为 `off`；④ `human-review` 在 C3 分类未批准前一律 `blocked`；⑤ 能力行不存在 → `blocked`（不预建虚构入口）；⑥ 未被组织批准 → `off`；⑦ 角色 preset 只收窄（`observer`/`reviewer`/`developer`/`publisher`/`approver`），角色**不能**把未批准的能力打开。返回项带 `serverAuthorization: 'required'`，明确"入口可见 ≠ 服务端授权"。
+**五类开关的声明与判定（现归属 `packages/forge-engineering/src/switches.mjs`）**：本模块只做声明与判定，不写业务逻辑、不注册任何东西。判定顺序固定：① `policy` 未就绪 → 五类全 `blocked`；② 企业身份（`iam`）未就绪 → 五类全 `blocked`；③ 必要审计未就绪 → 四类动作 `blocked`（**不降级为无审计**），`observe` 因无出口为 `off`；④ `human-review` 在 C3 分类未批准前一律 `blocked`；⑤ 能力行不存在 → `blocked`（不预建虚构入口）；⑥ 未被组织批准 → `off`；⑦ 角色 preset 只收窄（`observer`/`reviewer`/`developer`/`publisher`/`approver`），角色**不能**把未批准的能力打开。返回项带 `serverAuthorization: 'required'`，明确"入口可见 ≠ 服务端授权"。
 
 **实测（两次独立来源）**：
 
 | 证据 | 结果 |
 |---|---|
-| 离线用例 `packages/forge-enterprise/test/switches.test.mjs`（8 项） | 空输入全 `blocked`；policy/iam/audit 缺失各自的全关与"无审计只读"否定；能力缺失 `blocked`；C3 未批准 review 关闭；**逐类开关关闭时其余四类状态不变**；角色只收窄且不能放大 |
+| 离线用例 `packages/forge-engineering/test/switches.test.mjs`（8 项） | 空输入全 `blocked`；policy/iam/audit 缺失各自的全关与"无审计"否定；能力缺失 `blocked`；C3 未批准 review 关闭；**逐类开关关闭时其余四类状态不变**；角色只收窄且不能放大 |
 | 宿主探针 `combination-switches-fail-closed-on-measured-host`（`dsh 0.2.1-rc.2`，profile `sdk`） | 把实测事实（policy 由同一次探针的 guard/pre 行为断言证明就绪；`ctx.get('iam')` 不存在；审计落点为 `memory` + `allowNonDurable` 的开发落点，按未就绪计）喂入判定 → **`on` 为空**，全部 `blocked`/`off`；另附合成输入验证"全就绪即全开"与"关一类不影响其他类"（合成部分不代表企业能力就绪） |
 | 宿主探针 `行级独立性`（`--dump-config` 对照） | 补丁命中 3 行、自行新增 2 行；**被意外改动的既有行为 0**——行级禁用是独立机制，不牵连其他行 |
 
@@ -379,15 +381,15 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
-| 装配 | 装好的底座三行 + 叠加层四行（含容器行）、三层策略行合成**一份**且目录等于六条并集、无 `isolate`、官方行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
-| Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-enterprise/test/issue-delivery-skill.test.mjs` |
+| 装配 | 底座包 `forge-enterprise`（3 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于六条并集、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
+| Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-engineering/test/issue-delivery-skill.test.mjs` |
 | 制品清单 | 最终 tarball 含 `skills/issue-delivery/**`、`locale/*.json`、`icon.svg`，闭包无 `workspace:/file:/link:` | `node scripts/check-bundle-tarballs.mjs` |
 | 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |
 | 端到端 | 双端各完成一次挂载、官方入口不可见与整体禁用 | 手工 + 脚本 |
 
 ## 11. 打包、升级与回退
 
-包名 `@heluo/forge-enterprise`，`private: true`，声明 `engines.dsh` 与成员包的同批次版本。产物只有补丁文件与 preset，不含运行时代码。
+包名 `@heluo/forge-enterprise`（通用底座「企业账号与模型」）与 `@heluo/forge-engineering`（研发套件「企业研发工具套件」），均为 `private: true`，各自声明 `engines.dsh` 与成员包同批次版本。两者分别打成独立可预装包（`artifacts/forge-enterprise-<ver>.tgz`、`artifacts/forge-engineering-<ver>.tgz`），按组织/用户角色按需安装，彼此无强耦合。
 
 升级：整包升级，成员版本必须同批次；不允许单包漂移。
 

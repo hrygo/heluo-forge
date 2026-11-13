@@ -1,0 +1,33 @@
+# @heluo/forge-engineering 的独立预装补丁层（CORP-DSH-DESIGN-019）。
+#
+# 本包作为独立的研发工具套件预装/分发，可单独安装，也可与通用底座 `@heluo/forge-enterprise`
+# 并行安装；本补丁层不禁用任何官方账号、模型或凭据行。
+#
+# `heluo-policy` 携带与 `@heluo/forge-enterprise`、`@heluo/forge-devops`、`@heluo/forge-gitee`
+# 逐字一致的 6 条动作目录与内存审计配置（无 isolate）；与 `@heluo/forge-enterprise` 并存时，
+# Cordis Loader 按 id 合并为同一实例，不依赖挂载顺序，也不强耦合两个 bundle。
+# `heluo-engineering-ui` 激活本包 `client.js`，提供「设置 → 企业研发工具」工作台分区。
+- insert:
+    - id: heluo-policy
+      name: '@heluo/forge-policy'
+      config:
+        catalog:
+          - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
+          - { action: 'change.list', kind: 'read', target: 'changes', enabled: true }
+          - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
+          - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' }
+        audit:
+          sink: memory
+          allowNonDurable: true
+    - id: heluo-engineering-ui
+      name: '@heluo/forge-engineering'
+    - id: heluo-issue-delivery-skill
+      name: '@heluo/forge-engineering/issue-delivery-skill'
+    - id: forge-devops
+      name: '@heluo/forge-devops'
+      config: {}
+    - id: heluo-gitee
+      name: '@heluo/forge-gitee'
+      config: {}

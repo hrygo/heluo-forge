@@ -254,7 +254,7 @@ test('装配注册双语字典与样式，且 effect 可整体回收', () => {
   const [{ namespace, dictionaries }] = APPLIED.locales;
   assert.equal(namespace, 'devops');
   assert.deepEqual(Object.keys(dictionaries).sort(), ['en', 'zh']);
-  assert.equal(APPLIED.effects.length, 5, '五条 effect：字典、样式、容器子槽位、settings.section、IAM 凭据槽位');
+  assert.equal(APPLIED.effects.length, 4, '四条 effect：字典、样式、容器子槽位、settings.section');
   for (const effect of APPLIED.effects) {
     assert.equal(typeof effect.label, 'string', '每条 effect 都要有可读标签（宿主 hook 列表里能定位）');
   }
@@ -368,7 +368,7 @@ test('分区注册一律经 slots.inject 等声明，禁止裸 register（D-2 �
     );
   }
   const registers = SOURCE.match(/ctx\.slots\.register\(/gu) ?? [];
-  assert.equal(registers.length, 4, '四次注册：容器条目 + 两个独立分区 + IAM 扩展凭据条目');
+  assert.equal(registers.length, 3, '三次注册：容器条目 + 两个独立分区');
 });
 
 /* ------------------------------------------------------------------------- *
@@ -671,19 +671,31 @@ test('静态形态用例与实现同源：端点/头/词表任一处改动都会
  * 假 fetch 返回契约响应，一路驱动到终态（已保存 / 冲突 / 降级）。              *
  * ========================================================================= */
 
-/** 可驱动 hooks 的极简 React：createElement + useState/useRef/useEffect（按调用序定位）。 */
+/** 可驱动 hooks 的极简 React：按组件实例路径隔离 slots（useState/useRef/useEffect）。 */
 function createHookReact() {
-  const slots = [];
-  let cursor = 0;
+  const frames = new Map();
+  let currentFrame = null;
   let dirty = false;
+
+  const ensureFrame = (key) => {
+    let frame = frames.get(key);
+    if (!frame) {
+      frame = { slots: [], cursor: 0 };
+      frames.set(key, frame);
+    }
+    return frame;
+  };
+  currentFrame = ensureFrame('root');
+
   return {
     react: {
       createElement: (type, props, ...children) => ({ kind: 'element', type, props: props ?? {}, children: children.flat(Infinity) }),
       Fragment: 'Fragment',
       useState(initial) {
-        const index = cursor++;
-        if (!slots[index]) slots[index] = { value: typeof initial === 'function' ? initial() : initial };
-        const slot = slots[index];
+        const frame = currentFrame;
+        const index = frame.cursor++;
+        if (!frame.slots[index]) frame.slots[index] = { value: typeof initial === 'function' ? initial() : initial };
+        const slot = frame.slots[index];
         return [
           slot.value,
           (next) => {
@@ -695,13 +707,15 @@ function createHookReact() {
         ];
       },
       useRef(initial) {
-        const index = cursor++;
-        if (!slots[index]) slots[index] = { ref: { current: initial } };
-        return slots[index].ref;
+        const frame = currentFrame;
+        const index = frame.cursor++;
+        if (!frame.slots[index]) frame.slots[index] = { ref: { current: initial } };
+        return frame.slots[index].ref;
       },
       useEffect(fn, deps) {
-        const index = cursor++;
-        const slot = slots[index] ?? (slots[index] = {});
+        const frame = currentFrame;
+        const index = frame.cursor++;
+        const slot = frame.slots[index] ?? (frame.slots[index] = {});
         slot.fn = fn;
         const same =
           Array.isArray(deps) && Array.isArray(slot.deps) && deps.length === slot.deps.length && deps.every((dep, i) => Object.is(dep, slot.deps[i]));
@@ -709,23 +723,37 @@ function createHookReact() {
         slot.deps = deps;
         slot.ran = true;
       },
-      __cursor: () => cursor,
+      __cursor: () => currentFrame.cursor,
+    },
+    renderWith: (key, fn) => {
+      const prevFrame = currentFrame;
+      const frame = ensureFrame(key);
+      frame.cursor = 0;
+      currentFrame = frame;
+      try {
+        return fn();
+      } finally {
+        currentFrame = prevFrame;
+      }
     },
     beginRender: () => {
-      cursor = 0;
+      currentFrame = ensureFrame('root');
+      currentFrame.cursor = 0;
     },
     runEffects: () => {
-      for (const slot of slots) {
-        if (!slot || !slot.pending) continue;
-        slot.pending = false;
-        slot.fn();
+      for (const frame of frames.values()) {
+        for (const slot of frame.slots) {
+          if (!slot || !slot.pending) continue;
+          slot.pending = false;
+          slot.fn();
+        }
       }
     },
     isDirty: () => dirty,
     clearDirty: () => {
       dirty = false;
     },
-    slotCount: () => slots.length,
+    slotCount: () => ensureFrame('root').slots.length,
   };
 }
 
@@ -760,22 +788,25 @@ function createPage() {
   const focusLog = [];
   let tree = null;
 
-  const expand = (node) => {
+  const expand = (node, path = 'root', index = 0) => {
     if (node === null || node === undefined || node === false) return null;
     if (typeof node === 'string' || typeof node === 'number') return String(node);
-    if (Array.isArray(node)) return node.map(expand).filter((child) => child !== null);
+    if (Array.isArray(node)) return node.map((child, idx) => expand(child, path, idx)).filter((child) => child !== null);
     const { type } = node;
     if (typeof type === 'function') {
-      const before = harness.react.__cursor();
-      const out = type(node.props);
-      // 只有根组件允许持有状态：嵌套组件一旦调 hook，按调用序定位的槽位会错位。
-      assert.equal(harness.react.__cursor(), before, `${type.name || '嵌套组件'} 使用了 hook（只允许根组件有状态）`);
-      return expand(out);
+      const childKey = `${path}/${type.name || 'fn'}#${String(node.props?.key ?? index)}`;
+      const out = harness.renderWith(childKey, () => type(node.props));
+      return expand(out, childKey, 0);
     }
     if (typeof node.props.ref === 'function') {
       node.props.ref({ focus: () => focusLog.push(String(node.props['data-field'] ?? 'ref')) });
     }
-    return { kind: 'element', type, props: node.props, children: node.children.map(expand).filter((child) => child !== null) };
+    return {
+      kind: 'element',
+      type,
+      props: node.props,
+      children: node.children.map((child, idx) => expand(child, path, idx)).filter((child) => child !== null),
+    };
   };
 
   const drain = async () => {
@@ -883,11 +914,14 @@ function createPage() {
   };
 }
 
-/** 假 fetch：按顺序发响应，记录每次调用（url + init）。 */
+/** 假 fetch：按顺序发响应，记录 /api/forge-devops/cli 调用（独立扩展凭据端点静默回 404）。 */
 function stubFetch(...responses) {
   const calls = [];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
+    if (String(url).startsWith('/api/forge-iam/ext-credentials')) {
+      return { ok: false, status: 404, json: async () => null };
+    }
     calls.push({ url: String(url), init });
     const next = responses.shift();
     if (!next) throw new Error(`未预期的请求：${url}`);

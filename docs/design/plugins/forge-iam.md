@@ -234,9 +234,9 @@ flowchart TB
 ### 4.4 客户端 UI 交互设计
 
 - **首启 3 步通用向导**：依次呈现“1. 登录企业账号 → 2. 启用 AI 服务 → 3. 完成设置”（`步骤 X / 3`），支持跳过或稍后配置，已登录且已就绪时标记 `done`，零研发工具硬编码；
-- **账号与模型双分区**：`企业账号`（`forge-iam`，`order: -10`）展示当前主体、令牌到期时间、AI 服务状态（已就绪且闲置时自动折叠为平静单行 `AI 服务 · 已就绪`）、一键脱敏诊断及 `heluo.iam.credential-item` 扩展凭据区（空集静默隐藏）；`企业模型`（`forge-models`，`order: 10`）承载模型目录同步、手动模型增删与单模型参数微调（未登录或 AI 服务未就绪时引导前往「设置 → 企业账号」）；
+- **账号与模型双分区**：`企业账号`（`forge-iam`，`order: -10`）展示当前主体、令牌到期时间、AI 服务状态（已就绪且闲置时自动折叠为平静单行 `AI 服务 · 已就绪`）与一键脱敏诊断，保持通用账号视角纯净，不包含任何研发扩展凭据条；`企业模型`（`forge-models`，`order: 10`）承载模型目录同步、手动模型增删与单模型参数微调（未登录或 AI 服务未就绪时引导前往「设置 → 企业账号」）；
 - **全局状态横幅**：未登录或缺网关凭据时展示明确警示并引导前往设置，不静默挂起会话；
-- **插槽挂载体系**：在 `settings.section` 注册 `forge-iam`（`order: -10`，声明 `children: { 'heluo.iam.credential-item': { kind: 'list', scope: 'root' } }`）与 `forge-models`（`order: 10`），并为两者注册同名 `settings.section.icon` 矢量图标；同时挂载 `shell.overlay` 并认领 `settings.launcher` 单占位插槽。
+- **插槽挂载体系**：在 `settings.section` 注册 `forge-iam`（`order: -10`，不声明研发子槽位）与 `forge-models`（`order: 10`），并为两者注册同名 `settings.section.icon` 矢量图标；同时挂载 `shell.overlay` 并认领 `settings.launcher` 单占位插槽。
 - **浏览器兼容提示**：客户端在 `shell.overlay` 检测 `AbortSignal.any`；缺少时提示工作区等功能可能不可用，并建议使用新版 Chrome 或 Chromium。提示可在当前页面关闭，不阻断其他操作；接口存在不代表浏览器全部功能已验收。插件未能加载时无法展示此提示。
 
 #### 4.4.1 左下角企业账号启动器（settings.launcher）规格
@@ -1084,5 +1084,5 @@ flowchart TD
 
 - **两级权威与协同规则**：目录唯一提供模型元数据与可用性证据；`manual` 条目仅记录本机声明，不随目录刷新移除；若目录后来返回同 ID，以目录元数据为准并标为 `source: 'gateway'`；删除手动条目按当前生效选择重指 `defaultModelId`。
 - **应用入口（已实施，未实机验证）**：`updateManualModel` 已由 `createIamService` 暴露，并经 `POST /api/forge-iam/models/manual`（同源 + `x-forge-iam-request` 预检头）开放；浏览器侧（`packages/forge-iam/client.js`）已在独立「企业模型」页（`forge-models`，`order: 10`）提供手动添加内联表单（支持 Enter 提交、Esc 取消与前端校验）、`manual` 条目徽标/副标与列表项删除按钮、`manualTruncated` 警告以及 `rebuildError` 降级提示，已由离线单测与合成宿主探针覆盖（未实机验证）。
-- **扩展凭据入口（已实施，外部凭据库未联调）**：宿主侧经 `forgeIamCredentialBroker` 提供者接线（`registerDescriptor` / `resolveChildEnv` / `saveToken` / `clearToken` / 状态投影），并有 `GET`、`PUT`、`DELETE /api/forge-iam/ext-credentials[/<extensionId>]` 三个同源端点；浏览器侧 `forge-iam` 的 `settings.section` 声明 `heluo.iam.credential-item` 子槽位并由 `Panel` 通过 `renderSlot(..., { fallback: null })` 在空集时静默隐藏、`forge-devops`（`order: 10`）与 `forge-gitee`（`order: 20`）已向该槽位注入紧凑凭据条目（离线单测与双定位 UI 契约覆盖）；真实系统凭据库（OS Keychain）与宿主 GUI 实机联调尚未开展。
+- **扩展凭据托管服务（已实施，外部凭据库未联调）**：宿主侧经 `forgeIamCredentialBroker` 提供者接线（`registerDescriptor` / `resolveChildEnv` / `saveToken` / `clearToken` / 状态投影），并有 `GET`、`PUT`、`DELETE /api/forge-iam/ext-credentials[/<extensionId>]` 三个同源端点；研发扩展 Token 的前端交互内聚在 `@heluo/forge-devops` 与 `@heluo/forge-gitee` 各自面板底部（`设置 → 企业研发工具` 内），`设置 → 企业账号` 不承载研发扩展项（离线单测与双定位 UI 契约覆盖）；真实系统凭据库（OS Keychain）与宿主 GUI 实机联调尚未开展。
 - **存储与安全边界**：手动条目存入 `heluo-iam/model-selection.manual`，不存放密钥或网关地址；不改变登录、凭据与启用校验，无法绕过企业网关授权（同权进程内 JS 可绕过进程内门禁；最终裁决仍在企业网关）。当前行为尚待在真实企业网关与目标客户端实机验证（未实机验证）。

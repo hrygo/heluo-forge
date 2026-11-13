@@ -47,7 +47,7 @@
 ## 4. M3 架构一致性与质量底线
 
 - **符合部分**：新增独立快照模块，Gitee 入口装配、工具枚举单源；快照使用现有 runner.runGit，未发现第二份子进程执行器或安全包装。Skill 新入口复用既有装配器，而不是另造加载器。
-- **显著契约漂移**：蓝图要求 [skills.mjs](../../../packages/forge-enterprise/src/skills.mjs) 第 `239-269` 行 贯通 resourceBase 并兼容真实 lookup；实际摘要缺 source/resourceBase，仍只实现 get(name)。[新入口](../../../packages/forge-enterprise/src/issue-delivery-skill.mjs) 第 `49-65` 行 传 root 不等于宿主 candidate 带资源根。D-1/D-2 已破坏发现与读取主路径。
+- **显著契约漂移**：蓝图要求 [skills.mjs](../../../packages/forge-engineering/src/skills.mjs) 第 `239-269` 行 贯通 resourceBase 并兼容真实 lookup；实际摘要缺 source/resourceBase，仍只实现 get(name)。[新入口](../../../packages/forge-engineering/src/issue-delivery-skill.mjs) 第 `49-65` 行 传 root 不等于宿主 candidate 带资源根。D-1/D-2 已破坏发现与读取主路径。
 - **发行结构未闭合**：技术方案 §4.2 要求企业依赖三扩五；[清单](../../../packages/forge-enterprise/package.json) 第 `13-22` 行 与 [补丁](../../../packages/forge-enterprise/cordis.patch.yml) 第 `48-70` 行 未落实。安装企业组合不能提供所需研发读面，D-3 不是可延期的文字优化。
 - **准入顺序偏离**：机器蓝图与技术方案只释放 T0，M1 未通过；实际已产生 T1/T2/T3 部分实现，未见解除记录。代码可保留供返工，但不能借局部测试倒推完整实施准入成立。
 - QA 提及两处 NO_WORKSPACE 原因码字面量重复，为低优先级收敛项，不是主阻断。整体属于显著结构偏离及主路径破坏，M3 不通过。

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Enterprise Encrypted Credential Store",
+    "description": "Secures enterprise credentials and tokens using SQLite AES-256-GCM value encryption instead of plaintext files.",
+    "detail": "docs/DETAIL.md"
+  }
+}

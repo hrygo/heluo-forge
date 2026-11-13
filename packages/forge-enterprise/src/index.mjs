@@ -1,9 +1,8 @@
 /**
- * `@heluo/forge-enterprise`：企业组合入口的装配能力。
+ * `@heluo/forge-enterprise`：企业账号与模型通用底座组合入口。
  *
- * 本包只做装配：官方行默认禁用见 `cordis.patch.yml`，按需企业 Skill 与规范条款的
- * 选择/注册见 `skills.mjs`，五类开关的声明与判定见 `switches.mjs`，官方行回灌检测见 `reflow.mjs`；
- * 不重复实现成员包逻辑，不承载业务接口。
+ * 本包只包含通用底座装配与官方行回灌检测（`reflow.mjs`）；不承载研发域能力、
+ * 研发 UI 或研发 Skill。
  */
 export {
   detectOfficialRowReflow,
@@ -12,29 +11,6 @@ export {
   rowsFromDump,
 } from './reflow.mjs';
 
-export {
-  EnterpriseSwitchError,
-  ROLE_PRESETS,
-  SWITCH_IDS,
-  SWITCH_REASONS,
-  describeSwitchInput,
-  resolveSwitches,
-} from './switches.mjs';
-
-export {
-  assembleEnterpriseSkills,
-  EnterpriseSkillError,
-  loadClausePack,
-  preActionConstraints,
-  registerEnterpriseSkills,
-  registerEnterpriseSkillsViaProvider,
-  selectClauses,
-} from './skills.mjs';
-
 export const name = 'forge-enterprise';
 
-/**
- * 纯容器插件的最小宿主入口（CORP-DSH-DESIGN-018 §3）：
- * 服务端无状态、不持有凭据；设置分区完全由 `./client.js` 承载。
- */
 export function apply() {}

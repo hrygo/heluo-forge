@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "企业研发工具套件",
+    "description": "面向企业研发工程师的工作台套件，集成 DevOps 研发协同（DOP）、Gitee 代码托管与评审工作流、「设置 → 企业研发工具」工作台界面，以及 Issue 交付规范 Skill。可独立预装或与「企业账号与模型」并行安装；凭据默认跟随本机 CLI 登录态，也可在各工具面板中按需单独指定 Token。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

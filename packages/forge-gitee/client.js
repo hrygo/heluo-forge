@@ -23,8 +23,7 @@ window.__ModuleLoader__.load({
 
     const NS = 'gitee';
     const CLI_ENDPOINT = '/api/forge-gitee/config';
-    /** 企业账号统一托管的扩展凭据同源端点与子槽位。 */
-    const IAM_CREDENTIAL_SLOT = 'heluo.iam.credential-item';
+    /** 企业账号统一托管的扩展凭据同源端点。 */
     const IAM_EXT_CREDENTIALS_ENDPOINT = '/api/forge-iam/ext-credentials';
     const IAM_EXT_CREDENTIAL_ENDPOINT = `${IAM_EXT_CREDENTIALS_ENDPOINT}/gitee`;
     const IAM_MUTATION_HEADERS = { 'x-forge-iam-request': '1', 'content-type': 'application/json', accept: 'application/json' };
@@ -168,7 +167,7 @@ window.__ModuleLoader__.load({
       'value.detected': '已自动找到 {tool}',
       'value.timeoutDefault': '{seconds} 秒（默认）',
       'value.timeout': '{seconds} 秒',
-      'value.host': '由企业分发，本页只读（独立凭据请前往 设置 → 企业账号）',
+      'value.host': '由企业统一分发，无需在此修改（可在下方按需指定独立凭据）',
       'card.action.manual': '手动指定',
       'card.action.auto': '改为自动',
       'card.action.edit': '修改',
@@ -198,7 +197,8 @@ window.__ModuleLoader__.load({
       'credential.title': 'Gitee',
       'credential.state.follow': '跟随本机登录（正常可用，无需配置）',
       'credential.state.hosted': '已在此单独保存（优先于本机环境）',
-      'credential.state.signedOut': '登录企业账号后可用（已托管的凭据暂不外发）',
+      'credential.state.signedOut': '前往「设置 → 企业账号」登录后可用（已托管的凭据暂不外发）',
+      'credential.state.unavailable': '跟随本机登录（独立安装模式：未接入企业账号托管，正常使用本机环境）',
       'credential.state.mismatchTag': '已停用（账号不匹配）',
       'credential.state.mismatch': '存在其他企业账号遗留的独立凭据，已安全停用（不会使用旧账号凭据，也不会回退本机环境）',
       'credential.state.pending': '上一笔凭据保存尚未完成，请稍候等待完成',
@@ -227,7 +227,7 @@ window.__ModuleLoader__.load({
       'credential.notice.saved': '已在此单独保存（优先于本机环境）',
       'credential.notice.cleared': '已清除单独凭据，恢复跟随本机登录',
       'credential.fail.invalid': '请输入有效的凭据内容后再保存',
-      'credential.fail.notSignedIn': '请先在上方登录企业账号，再保存或清除独立凭据',
+      'credential.fail.notSignedIn': '请先前往「设置 → 企业账号」登录企业账号，再保存或清除独立凭据',
       'credential.fail.pending': '上一笔凭据操作尚未完成，请稍候重试（已保留当前输入）',
       'credential.fail.keychainUnavailable': '本机安全存储暂不可用，未保存（可重试或改用本机 CLI 登录）',
       'credential.fail.ownerMismatch': '存在其他企业账号遗留凭据，请先清除旧配置或使用当前账号重设',
@@ -250,7 +250,7 @@ window.__ModuleLoader__.load({
       'value.detected': 'Auto-detected {tool}',
       'value.timeoutDefault': '{seconds} s (default)',
       'value.timeout': '{seconds} s',
-      'value.host': 'Distributed by the enterprise; read-only here (manage tokens in Settings → Enterprise account)',
+      'value.host': 'Distributed by the enterprise (configure a custom override token below if needed)',
       'card.action.manual': 'Specify manually',
       'card.action.auto': 'Use automatic',
       'card.action.edit': 'Change',
@@ -280,7 +280,8 @@ window.__ModuleLoader__.load({
       'credential.title': 'Gitee',
       'credential.state.follow': 'Uses local CLI sign-in (works automatically, no setup needed)',
       'credential.state.hosted': 'Saved separately here (takes priority over local environment)',
-      'credential.state.signedOut': 'Sign in to your enterprise account to use saved credentials',
+      'credential.state.signedOut': 'Sign in under Settings → Enterprise account to use saved credentials',
+      'credential.state.unavailable': 'Uses local CLI sign-in (standalone mode: works with local environment)',
       'credential.state.mismatchTag': 'Disabled (account mismatch)',
       'credential.state.mismatch': 'A saved credential from another enterprise account was disabled for safety',
       'credential.state.pending': 'A previous credential save is still in progress; wait a moment',
@@ -309,7 +310,7 @@ window.__ModuleLoader__.load({
       'credential.notice.saved': 'Saved separately here (takes priority over local environment)',
       'credential.notice.cleared': 'Cleared custom credential; restored local sign-in behavior',
       'credential.fail.invalid': 'Enter a valid credential value before saving',
-      'credential.fail.notSignedIn': 'Sign in to your enterprise account above before saving or clearing',
+      'credential.fail.notSignedIn': 'Sign in under Settings → Enterprise account before saving or clearing',
       'credential.fail.pending': 'Previous credential update is still in progress; retry shortly (draft kept)',
       'credential.fail.keychainUnavailable': 'Local secure storage is temporarily unavailable; retry or sign in with local CLI',
       'credential.fail.ownerMismatch': 'An older credential belongs to another enterprise account; clear or replace it below',
@@ -806,6 +807,7 @@ window.__ModuleLoader__.load({
         notice === null ? null : h('p', { className: 'fge-hint', role: 'status' }, t(notice.key)),
         writable ? null : h(UnavailableNote, { t, reason: snapshot?.reason ?? 'GITEE_CONFIG_UNAVAILABLE', entryId: snapshot?.entryId ?? 'heluo-gitee' }),
         h(SaveReceipt, { t, receipt }),
+        h(GiteeCredentialItem, { t }),
         h('p', { className: 'fge-footer' }, t('footer.declaration')),
       );
     }
@@ -881,6 +883,10 @@ window.__ModuleLoader__.load({
           if (!mounted.current || reqSeq.current !== seq) return;
           if (!response.ok) {
             const code = readErrorCode(body);
+            if ((response.status === 404 || response.status === 501) && !code) {
+              setStatusView({ mode: 'ready', entry: { extensionId: 'gitee', state: 'IAM_UNAVAILABLE', envHitNames: [], plaintextRisk: false } });
+              return;
+            }
             if (code === 'IAM_NOT_SIGNED_IN') {
               setStatusView({ mode: 'ready', entry: { extensionId: 'gitee', state: 'IAM_NOT_SIGNED_IN', envHitNames: [], plaintextRisk: false } });
               return;
@@ -972,6 +978,7 @@ window.__ModuleLoader__.load({
       const isHosted = state === 'HOSTED_ACTIVE';
       const isMismatch = state === 'OWNER_MISMATCH';
       const isSignedOut = state === 'IAM_NOT_SIGNED_IN';
+      const isUnavailable = state === 'IAM_UNAVAILABLE';
       const isKeychainUnavailable = state === 'KEYCHAIN_UNAVAILABLE';
       const hasPlaintextRisk = entry?.plaintextRisk === true;
       const riskFiles = Array.isArray(entry?.riskDetails?.files) ? entry.riskDetails.files.filter((file) => typeof file === 'string' && file.length > 0) : [];
@@ -983,6 +990,7 @@ window.__ModuleLoader__.load({
         if (isHosted) return t('credential.state.hosted');
         if (isMismatch) return t('credential.state.mismatchTag');
         if (isSignedOut) return t('credential.state.signedOut');
+        if (isUnavailable) return t('credential.state.unavailable');
         if (isKeychainUnavailable) return t('credential.state.keychainTag');
         if (state === 'PENDING_WRITE') return t('credential.state.pending');
         return t('credential.state.follow');
@@ -995,7 +1003,7 @@ window.__ModuleLoader__.load({
           : 'fge-cred-status';
 
       const actions = [];
-      if (!isSignedOut && !openForm && statusView.mode === 'ready') {
+      if (!isSignedOut && !isUnavailable && !openForm && statusView.mode === 'ready') {
         if (isHosted) {
           actions.push(
             h('button', { type: 'button', className: 'fge-link', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
@@ -1242,17 +1250,6 @@ window.__ModuleLoader__.load({
           };
         }),
         'forge-gitee: settings section',
-      );
-      ctx.effect(
-        () => ctx.slots.inject(IAM_CREDENTIAL_SLOT, () => ctx.slots.register({
-          name: IAM_CREDENTIAL_SLOT,
-          id: 'gitee',
-          order: 20,
-          label: () => t('credential.title'),
-          locale: NS,
-          inject: () => ({ t }),
-        }, GiteeCredentialItem)),
-        'forge-gitee: iam credential item',
       );
     }
 

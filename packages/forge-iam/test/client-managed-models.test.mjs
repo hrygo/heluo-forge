@@ -371,6 +371,20 @@ test('reasoning effort supports lower and upper bound selection and auto-aligns 
   lowerSelect().props.onChange({ target: { value: 'max' } });
   assert.equal(upperSelect().props.value, 'max');
   assert.match(panel.text(panel.render()), /固定单档：Max/);
+
+  // Selecting a lower bound when upper is 'max' must keep 'max' as upper and preserve the full range
+  await lowerSelect().props.onChange({ target: { value: 'low' } });
+  assert.equal(lowerSelect().props.value, 'low');
+  assert.equal(upperSelect().props.value, 'max');
+  assert.match(panel.text(panel.render()), /开放区间：Low → Medium → High → XHigh → Max（共 5 档/);
+  assert.deepEqual(writes.at(-1).options['corp-chat'].reasoningEfforts, {
+    off: null,
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+    max: 'max',
+  });
 });
 
 test('model advanced section includes in-place save button and shows top unsaved changes banner', async t => {
@@ -573,7 +587,8 @@ test('model list toolbar is sticky, eliminates redundant custom tab, and aligns 
   t.after(() => panel.close());
 
   assert.match(clientSource, /\.fiam-model-toolbar\s*\{[^}]*position:\s*sticky/);
-  assert.match(clientSource, /\.fiam-model-list\s*\{[^}]*min-height:\s*480px/);
+  assert.doesNotMatch(clientSource, /\.fiam-model-list\s*\{[^}]*max-height:/);
+  assert.doesNotMatch(clientSource, /\.fiam-model-list\s*\{[^}]*overflow-y:\s*auto/);
   assert.match(clientSource, /\.fiam-model-item\.fiam-model-item-expanded\s*\{[^}]*margin-bottom:\s*14px/);
   assert.match(clientSource, /\.fiam-model-item\.fiam-model-item-expanded\s*\{[^}]*box-shadow:/);
 

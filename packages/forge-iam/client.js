@@ -40,10 +40,16 @@ window.__ModuleLoader__.load({
         --fiam-warn: var(--dsw-alias-state-warn-primary, #f59e0b);
         --fiam-error: var(--dsw-alias-state-error-primary, #ef4444);
       }
-      .forge-iam-ui button:not(:disabled), .forge-iam-ui a { cursor: pointer; }
-      .forge-iam-ui button:not(:disabled):hover { background-color: var(--dsw-alias-button-floating-hover); }
+      .forge-iam-ui button:not(:disabled), .forge-iam-ui a {
+        cursor: pointer;
+        transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.08s ease, box-shadow 0.14s ease, opacity 0.14s ease;
+      }
+      .forge-iam-ui button:not(:disabled):hover {
+        background-color: var(--dsw-alias-button-floating-hover, rgba(255, 255, 255, 0.08));
+        border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.24));
+      }
       .forge-iam-ui button.forge-iam-primary:not(:disabled):hover { background-color: var(--dsw-alias-button-primary-hover); opacity: 0.94; }
-      .forge-iam-ui button:not(:disabled):active { filter: brightness(.92); transform: translateY(1px); }
+      .forge-iam-ui button:not(:disabled):active { filter: brightness(.9); transform: translateY(1px) scale(0.985); }
       .forge-iam-ui a { color: var(--dsw-alias-state-business-primary); text-decoration: none; }
       .forge-iam-ui a:hover { text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
       .forge-iam-ui input:not(:disabled):hover { border-color: var(--dsw-alias-border-l3); }
@@ -59,8 +65,9 @@ window.__ModuleLoader__.load({
         border: 0.5px dashed var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);
       }
       .fiam-details { margin-top: 8px; font: var(--dsw-font-xxs-12); color: var(--dsw-alias-label-secondary); }
-      .fiam-details > summary { cursor: pointer; padding: 2px 0; }
+      .fiam-details > summary { cursor: pointer; padding: 2px 0; transition: color 0.14s ease, opacity 0.1s ease; }
       .fiam-details > summary:hover { color: var(--dsw-alias-label-primary); }
+      .fiam-details > summary:active { opacity: 0.78; }
       .fiam-issues { display: flex; flex-direction: column; gap: 6px; }
       @media (prefers-reduced-motion: reduce) { .forge-iam-ui button:active { transform: none; } }
 
@@ -294,6 +301,9 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-label-primary);
         background: var(--dsw-alias-interactive-bg-hover);
       }
+      .fiam-model-filters .fiam-chip:active {
+        transform: scale(0.97);
+      }
       .fiam-model-filters .fiam-chip-active {
         background: var(--dsw-alias-bg-layer-1);
         color: var(--dsw-alias-label-primary);
@@ -324,10 +334,9 @@ window.__ModuleLoader__.load({
         display: flex;
         flex-direction: column;
         gap: 8px;
-        margin-top: 6px;
+        margin-top: 8px;
         margin-bottom: 6px;
-        min-height: 480px;
-        padding-right: 2px;
+        min-height: 0;
       }
       .fiam-model-item {
         border: 0.5px solid var(--dsw-alias-border-l4);
@@ -340,12 +349,21 @@ window.__ModuleLoader__.load({
       .fiam-model-item:hover {
         border-color: var(--dsw-alias-border-l3);
       }
+      .fiam-model-item.fiam-model-item-manual {
+        border-left: 2.5px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, transparent);
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 3%, var(--dsw-alias-bg-layer-1));
+      }
+      .fiam-badge-manual {
+        background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+        color: var(--dsw-alias-state-business-primary);
+        border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 28%, transparent);
+      }
       .fiam-model-item.fiam-model-item-expanded {
         margin-top: 6px;
         margin-bottom: 14px;
-        border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 45%, var(--dsw-alias-border-l2));
-        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28), 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent);
-        border-radius: var(--dsw-radius-xl, 10px);
+        border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 24%, var(--dsw-alias-border-l3));
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+        border-radius: var(--dsw-radius-lg, 8px);
       }
       .fiam-model-item.fiam-model-item-expanded > .fiam-model-row {
         background: var(--dsw-alias-bg-layer-1);
@@ -641,7 +659,28 @@ window.__ModuleLoader__.load({
         border-radius: var(--dsw-radius-md, 8px);
         border: 1px solid transparent;
         background: transparent;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.08s ease, box-shadow 0.16s ease;
+      }
+      .fiam-journey-step-clickable {
+        cursor: pointer;
+      }
+      .fiam-journey-step-clickable:hover {
+        border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.2));
+        background: color-mix(in srgb, var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.06)) 85%, transparent);
+      }
+      .fiam-journey-step-clickable:active {
+        transform: translateY(1px) scale(0.985);
+        filter: brightness(0.93);
+      }
+      .fiam-journey-step-clickable:focus-visible {
+        outline: 2px solid var(--dsw-alias-state-business-primary);
+        outline-offset: 2px;
+      }
+      .fiam-journey-step-static {
+        cursor: default;
+        border-color: transparent !important;
+        background: transparent !important;
+        box-shadow: none !important;
       }
       .fiam-journey-step + .fiam-journey-step {
         margin-left: 4px;
@@ -1292,18 +1331,20 @@ window.__ModuleLoader__.load({
       }
       .fiam-gateway-ready-bar {
         display: flex;
+        flex-direction: row;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
         flex-wrap: wrap;
-        padding: 14px 16px;
+        padding: 12px 16px;
       }
       .fiam-gateway-ready-main {
         display: flex;
         align-items: center;
         gap: 10px;
+        flex-wrap: wrap;
         min-width: 0;
-        flex: 1 1 200px;
+        flex: 1 1 auto;
       }
       .fiam-models-blocker {
         margin-bottom: 12px;
@@ -1508,15 +1549,26 @@ window.__ModuleLoader__.load({
       return result;
     }
 
+    function resolveReasoningEffortSource(reasoningEfforts) {
+      const hasLowerUpper = typeof reasoningEfforts.lower === 'string' || typeof reasoningEfforts.upper === 'string';
+      const hasMin = typeof reasoningEfforts.min === 'string';
+      const hasOtherLevelKey = THINKING_LEVELS.some(level => level !== 'max' && Object.hasOwn(reasoningEfforts, level));
+      const isBareMaxBound = !hasOtherLevelKey
+        && typeof reasoningEfforts.max === 'string'
+        && reasoningEfforts.max.trim().toLowerCase() !== 'max';
+      if (hasLowerUpper || hasMin || isBareMaxBound) {
+        const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
+        const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
+        return buildReasoningEffortRange(boundLower, boundUpper) ?? {};
+      }
+      return reasoningEfforts;
+    }
+
     function getReasoningEffortBounds(reasoningEfforts) {
       if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) {
         return { enabled: false, lower: 'off', upper: 'off', levels: [] };
       }
-      const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
-      const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
-      const source = (typeof boundLower === 'string' || typeof boundUpper === 'string')
-        ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
-        : reasoningEfforts;
+      const source = resolveReasoningEffortSource(reasoningEfforts);
       const activeLevels = REASONING_EFFORT_LEVELS.filter(level => {
         const val = source[level];
         return typeof val === 'string' && val.trim().length > 0;
@@ -2256,7 +2308,7 @@ window.__ModuleLoader__.load({
       const isEnabled = Object.hasOwn(modelOptions, model.id);
       const actionBusy = Boolean(modelSaving || viewBarrier?.current?.pending);
 
-      return h('div', { key: model.id, className: `fiam-model-item${isExpanded ? ' fiam-model-item-expanded' : ''}` },
+      return h('div', { key: model.id, className: `fiam-model-item${isManual ? ' fiam-model-item-manual' : ''}${isExpanded ? ' fiam-model-item-expanded' : ''}` },
         h('div', { className: 'fiam-model-row' },
           h('div', { className: 'fiam-model-info' },
             h('div', { className: 'fiam-model-header-line' },
@@ -2266,13 +2318,10 @@ window.__ModuleLoader__.load({
                 ? h('span', { className: 'fiam-badge fiam-badge-success' }, '已启用')
                 : null,
               isManual
-                ? h('span', { className: 'fiam-badge fiam-badge-idle', title: '不随目录刷新移除' }, '手动')
+                ? h('span', { className: 'fiam-badge fiam-badge-manual', title: '手动添加的模型，不随目录刷新移除' }, '手动')
                 : null,
             ),
             h('div', { className: 'fiam-model-meta-line' },
-              isManual
-                ? h('span', { style: { color: 'var(--dsw-alias-label-secondary, #475569)' } }, '不随目录刷新移除')
-                : null,
               !isEnabled ? h('span', { className: 'fiam-model-meta-status' }, '未启用') : null,
               !isEnabled ? h('span', { className: 'fiam-model-meta-sep' }, '·') : null,
               h('span', { className: 'fiam-model-meta-spec' }, `${contextVal} · 输出 ${maxTokensVal}`),
@@ -2552,7 +2601,7 @@ window.__ModuleLoader__.load({
     // §12.3 旅程条
     function renderJourneyBar(ctx) {
       const { h, ui: input, model } = ctx;
-      const { view, gateway, onNavigateStep } = input;
+      const { view, gateway, onNavigateStep, canNavigateModels } = input;
       const ui = deriveSessionUi(view);
       const gatewayUi = deriveGatewayUi(gateway);
       const catalogue = deriveModelUi(view);
@@ -2607,23 +2656,30 @@ window.__ModuleLoader__.load({
           children.push(h('div', { key: `sep-${idx}`, className: 'fiam-journey-arrow', 'aria-hidden': 'true' }, chevronIcon));
         }
         const stateClass = s.done ? 'done' : (s.warn ? 'warn' : (s.active ? 'active' : 'idle'));
-        children.push(h('div', {
+        const clickable = s.targetId !== 'fiam-section-models' || Boolean(canNavigateModels);
+        const stepProps = {
           key: s.title,
-          // 步骤是入口，不是装饰：纯键盘用户也要能打开对应的卡片，所以给它按钮语义、
-          // 停在 Tab 顺序里，并接受 Enter/空格（PR #215 复审 P2）。
-          role: 'button',
-          tabIndex: 0,
-          className: `fiam-journey-step fiam-journey-step-${stateClass}`,
-          style: { cursor: 'pointer' },
-          onClick: () => {
+          className: clickable
+            ? `fiam-journey-step fiam-journey-step-${stateClass} fiam-journey-step-clickable`
+            : 'fiam-journey-step fiam-journey-step-static',
+          style: { cursor: clickable ? 'pointer' : 'default' },
+        };
+        if (clickable) {
+          // 仅对确实可跳转/定位的步骤赋予按钮语义与键盘入口，不可达步骤不误导用户可点击。
+          stepProps.role = 'button';
+          stepProps.tabIndex = 0;
+          stepProps.onClick = () => {
             if (typeof onNavigateStep === 'function') onNavigateStep(s.targetId);
-          },
-          onKeyDown: (event) => {
+          };
+          stepProps.onKeyDown = (event) => {
             if (event?.key !== 'Enter' && event?.key !== ' ' && event?.key !== 'Spacebar') return;
             event.preventDefault?.();
             if (typeof onNavigateStep === 'function') onNavigateStep(s.targetId);
-          },
-        },
+          };
+        } else {
+          stepProps.title = '请在左侧栏切换至「企业模型」';
+        }
+        children.push(h('div', stepProps,
           h('div', {
             className: `fiam-journey-icon fiam-journey-icon-${stateClass}`,
             'aria-hidden': 'true',
@@ -2878,6 +2934,94 @@ window.__ModuleLoader__.load({
             )
           )
           : null,
+        h('div', { className: 'fiam-actions', style: { marginTop: 8, marginBottom: 8 } },
+          h('button', {
+            type: 'button',
+            style: secondaryButton,
+            disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+            onClick: refreshModels,
+          }, credential.saving ? '正在处理…' : '刷新模型列表'),
+          typeof openManualForm === 'function'
+            ? h('button', {
+              type: 'button',
+              style: secondaryButton,
+              disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+              'aria-expanded': Boolean(manual.open),
+              onClick: () => (manual.open ? closeManualForm?.() : openManualForm()),
+            }, '手动添加')
+            : null,
+          h('button', {
+            type: 'button',
+            className: 'forge-iam-primary',
+            style: primaryButton,
+            disabled: modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+            onClick: saveModelOptions,
+          }, modelSaving ? '正在保存…' : '保存模型配置'),
+          hasUnsavedModelChanges
+            ? h('button', {
+              type: 'button',
+              style: secondaryButton,
+              disabled: modelSaving || viewBarrier.current.pending,
+              onClick: discardModelChanges,
+            }, '放弃修改')
+            : null,
+          hasUnsavedModelChanges
+            ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存模型配置变更')
+            : null,
+        ),
+        modelNotice
+          ? h('div', {
+            role: 'status',
+            'aria-live': 'polite',
+            className: `fiam-notice fiam-notice-${(modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') || modelNotice.includes('已添加') || modelNotice.includes('已删除') || modelNotice.includes('已更新')) && !modelNotice.includes('暂不可用') && !modelNotice.includes('未能') ? 'success' : 'warn'}`,
+          }, modelNotice)
+          : null,
+        manual.open
+          ? h('div', {
+            className: 'fiam-panel-subbox',
+            style: { marginTop: 8, marginBottom: 8, padding: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-subtle, rgba(148,163,184,0.3))' },
+          },
+            h('label', { style: { display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6 } }, '手动添加模型'),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+              h('input', {
+                type: 'text',
+                value: manual.id,
+                placeholder: '输入模型 ID，例如 deepseek-chat',
+                'aria-label': '模型 ID',
+                disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending,
+                style: { ...inputStyle, flex: '1 1 220px', minWidth: 180 },
+                onInput: (e) => changeManualFormId?.(e.target.value),
+                onChange: (e) => changeManualFormId?.(e.target.value),
+                onKeyDown: (e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault?.();
+                    submitManualForm?.();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault?.();
+                    closeManualForm?.();
+                  }
+                },
+              }),
+              h('button', {
+                type: 'button',
+                className: 'forge-iam-primary',
+                style: primaryButton,
+                disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
+                onClick: () => submitManualForm?.(),
+              }, manual.pending ? '正在添加…' : '确认添加'),
+              h('button', {
+                type: 'button',
+                style: secondaryButton,
+                disabled: manual.pending,
+                onClick: () => closeManualForm?.(),
+              }, '取消'),
+            ),
+            h('p', { style: { ...muted, marginTop: 6, marginBottom: 0 } }, '模型 ID 长度不超过 200，不限字符集；能否调用以企业网关权限为准'),
+            manual.error
+              ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-error', style: { marginTop: 8 } }, manual.error)
+              : null,
+          )
+          : null,
         catalogueUi.configured && modelList.length > 0 && hasUnsavedModelChanges
           ? h('div', { className: 'fiam-unsaved-banner' },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -2902,7 +3046,10 @@ window.__ModuleLoader__.load({
           )
           : null,
         catalogueUi.configured && modelList.length > 0
-          ? h('div', { className: 'fiam-model-list', 'aria-label': '企业预置模型' },
+          ? h('div', {
+            className: 'fiam-model-list',
+            'aria-label': '企业预置模型',
+          },
             ...(visibleModels.length === 0
               ? [h('div', { key: 'empty-filter', style: { ...muted, padding: '16px 12px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 } },
                 h('span', null, '没有匹配的模型，请调整搜索词或筛选条件。'),
@@ -2946,96 +3093,8 @@ window.__ModuleLoader__.load({
           ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' },
             `已保存的手动模型超过展示上限，另有 ${catalogueUi.manualTruncated} 个未加载（最多支持 100 个）；请先删除部分手动条目。`)
           : null,
-        manual.open
-          ? h('div', {
-            className: 'fiam-panel-subbox',
-            style: { marginTop: 10, padding: 12, borderRadius: 8, border: '1px solid var(--dsw-alias-border-subtle, rgba(148,163,184,0.3))' },
-          },
-            h('label', { style: { display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6 } }, '手动添加模型'),
-            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-              h('input', {
-                type: 'text',
-                value: manual.id,
-                placeholder: '输入模型 ID，例如 deepseek-chat',
-                'aria-label': '模型 ID',
-                disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending,
-                style: { ...inputStyle, flex: '1 1 220px', minWidth: 180 },
-                onInput: (e) => changeManualFormId?.(e.target.value),
-                onChange: (e) => changeManualFormId?.(e.target.value),
-                onKeyDown: (e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault?.();
-                    submitManualForm?.();
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault?.();
-                    closeManualForm?.();
-                  }
-                },
-              }),
-              h('button', {
-                type: 'button',
-                className: 'forge-iam-primary',
-                style: primaryButton,
-                disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
-                onClick: () => submitManualForm?.(),
-              }, manual.pending ? '正在添加…' : '确认添加'),
-              h('button', {
-                type: 'button',
-                style: secondaryButton,
-                disabled: manual.pending,
-                onClick: () => closeManualForm?.(),
-              }, '取消'),
-            ),
-            h('p', { style: { ...muted, marginTop: 6, marginBottom: 0 } }, '模型 ID 长度不超过 200，不限字符集；能否调用以企业网关权限为准'),
-            manual.error
-              ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-error', style: { marginTop: 8 } }, manual.error)
-              : null,
-          )
-          : null,
-        h('div', { className: 'fiam-actions' },
-          h('button', {
-            type: 'button',
-            style: secondaryButton,
-            disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
-            onClick: refreshModels,
-          }, credential.saving ? '正在处理…' : '刷新模型列表'),
-          typeof openManualForm === 'function'
-            ? h('button', {
-              type: 'button',
-              style: secondaryButton,
-              disabled: credential.saving || modelSaving || manualBusy || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
-              'aria-expanded': Boolean(manual.open),
-              onClick: () => (manual.open ? closeManualForm?.() : openManualForm()),
-            }, '手动添加')
-            : null,
-          h('button', {
-            type: 'button',
-            className: 'forge-iam-primary',
-            style: primaryButton,
-            disabled: modelSaving || viewBarrier.current.pending || !ui.ready || !gatewayUi.configured,
-            onClick: saveModelOptions,
-          }, modelSaving ? '正在保存…' : '保存模型配置'),
-          hasUnsavedModelChanges
-            ? h('button', {
-              type: 'button',
-              style: secondaryButton,
-              disabled: modelSaving || viewBarrier.current.pending,
-              onClick: discardModelChanges,
-            }, '放弃修改')
-            : null,
-          hasUnsavedModelChanges
-            ? h('span', { className: 'fiam-badge fiam-badge-warn' }, '待保存模型配置变更')
-            : null,
-        ),
-        modelNotice
-          ? h('div', {
-            role: 'status',
-            'aria-live': 'polite',
-            className: `fiam-notice fiam-notice-${(modelNotice.includes('保存') || modelNotice.includes('生效') || modelNotice.includes('恢复') || modelNotice.includes('已添加') || modelNotice.includes('已删除') || modelNotice.includes('已更新')) && !modelNotice.includes('暂不可用') && !modelNotice.includes('未能') ? 'success' : 'warn'}`,
-          }, modelNotice)
-          : null,
         h('p', { style: { ...muted, marginTop: 12 } }, !gatewayUi.configured || gateway.matchesAccount === false ? '下一步：在上方保存当前账号的个人凭证。'
-          : '点击“一键启用”可直接以默认参数启用并生效；未出现在目录中的模型可“手动添加”（不随目录刷新移除）；展开精细配置修改参数后，点击“保存模型配置”即可在对话窗口选用。'),
+          : '已启用模型与保存后的配置将直接用于对话；缺失模型可手动添加。'),
       );
     }
 
@@ -3807,8 +3866,6 @@ window.__ModuleLoader__.load({
       const box = { padding: '0 0 24px', maxWidth: 720, width: '100%', boxSizing: 'border-box', color: 'var(--dsw-alias-label-primary)', font: 'var(--dsw-font-s-14)' };
       const header = h('div', { style: { marginBottom: 16 } },
         h('div', { style: { font: 'var(--dsw-font-m-18)', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '企业账号'),
-        h('div', { style: { ...muted, marginTop: 4 } }, '管理企业账号、AI 服务及个人访问凭证'),
-        h('p', { style: { ...muted, marginTop: 4 } }, '登录只建立身份，不代表已获得业务写权限。'),
       );
       const copyTools = h('div', { className: 'fiam-actions' },
         deriveSessionUi(state.view).authenticating && session.linkIdentity.current && state.authorizationUrl === session.linkIdentity.current
@@ -3947,7 +4004,7 @@ window.__ModuleLoader__.load({
       };
       const journeyBar = renderJourneyBar({
         h,
-        ui: { view, gateway, onNavigateStep: navigateStep },
+        ui: { view, gateway, onNavigateStep: navigateStep, canNavigateModels: typeof props?.navigate === 'function' },
         model: { enabledCount: catalogue.data.enabledCount, totalModels: catalogue.data.list.length },
       });
 
@@ -3993,19 +4050,12 @@ window.__ModuleLoader__.load({
           ? h('div', { role: 'status', 'aria-live': 'polite', className: 'fiam-notice fiam-notice-success' }, session.copy.notice) : null,
       );
 
-      const credentialItemsSlot = typeof props?.renderSlot === 'function'
-        ? props.renderSlot('heluo.iam.credential-item', {
-          sessionReady: deriveSessionUi(state.view).ready,
-        }, { fallback: null })
-        : null;
-
       return h('div', { className: 'forge-iam-ui', style: box }, interactionStyle(),
         header,
         journeyBar,
         accountCard,
         personalFold,
         personalShown ? gatewayCard : null,
-        credentialItemsSlot,
         diagnosticFold,
       );
     }
@@ -4969,15 +5019,12 @@ window.__ModuleLoader__.load({
           id: 'forge-models',
         }, IamModelsIcon));
         // 设计矩阵（enterprise-menu-and-token-unification §3）：
-        // 企业账号 -10（含 heluo.iam.credential-item），企业模型 10，研发容器 30。
+        // 企业账号 -10，企业模型 10。
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'forge-iam',
           order: -10,
           label: () => '企业账号',
-          children: {
-            'heluo.iam.credential-item': { kind: 'list', scope: 'root' },
-          },
           inject: navigate ? () => ({ navigate }) : undefined,
         }, Panel));
         ctx.slots.inject('settings.section', () => ctx.slots.register({

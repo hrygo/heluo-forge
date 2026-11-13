@@ -119,17 +119,32 @@ export function buildReasoningEffortRange(lowerBound, upperBound = lowerBound) {
 }
 
 /**
+ * Resolve either a { lower, upper } / { min, max } shorthand or an explicit level map
+ * without mistaking the 'max' thinking-level key in a level map for an upper bound.
+ */
+function resolveReasoningEffortSource(reasoningEfforts) {
+  const hasLowerUpper = typeof reasoningEfforts.lower === 'string' || typeof reasoningEfforts.upper === 'string';
+  const hasMin = typeof reasoningEfforts.min === 'string';
+  const hasOtherLevelKey = THINKING_LEVELS.some(level => level !== 'max' && Object.hasOwn(reasoningEfforts, level));
+  const isBareMaxBound = !hasOtherLevelKey
+    && typeof reasoningEfforts.max === 'string'
+    && reasoningEfforts.max.trim().toLowerCase() !== 'max';
+  if (hasLowerUpper || hasMin || isBareMaxBound) {
+    const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
+    const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
+    return buildReasoningEffortRange(boundLower, boundUpper) ?? {};
+  }
+  return reasoningEfforts;
+}
+
+/**
  * Inspect a reasoningEfforts configuration and return its active lower/upper bounds.
  */
 export function getReasoningEffortBounds(reasoningEfforts) {
   if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) {
     return { enabled: false, lower: 'off', upper: 'off', levels: [] };
   }
-  const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
-  const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
-  const source = (typeof boundLower === 'string' || typeof boundUpper === 'string')
-    ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
-    : reasoningEfforts;
+  const source = resolveReasoningEffortSource(reasoningEfforts);
   const activeLevels = REASONING_EFFORT_LEVELS.filter(level => {
     const val = source[level];
     return typeof val === 'string' && val.trim().length > 0;
@@ -150,11 +165,7 @@ export function getReasoningEffortBounds(reasoningEfforts) {
 /** Build pi-ai thinkingLevelMap where disabled levels are explicitly null. */
 export function buildThinkingLevelMap(reasoningEfforts) {
   if (!reasoningEfforts || typeof reasoningEfforts !== 'object' || Array.isArray(reasoningEfforts)) return undefined;
-  const boundLower = reasoningEfforts.lower ?? reasoningEfforts.min;
-  const boundUpper = reasoningEfforts.upper ?? reasoningEfforts.max;
-  const normalizedEfforts = (typeof boundLower === 'string' || typeof boundUpper === 'string')
-    ? (buildReasoningEffortRange(boundLower, boundUpper) ?? {})
-    : reasoningEfforts;
+  const normalizedEfforts = resolveReasoningEffortSource(reasoningEfforts);
   const map = { off: null, minimal: null, low: null, medium: null, high: null, xhigh: null, max: null };
   let hasEnabled = false;
   for (const level of THINKING_LEVELS) {

@@ -14,7 +14,7 @@
 ### 1.1 已知事实与证据边界
 
 - 2026-11-05 在当前隔离工作树实跑 `pwd`、`git rev-parse --show-toplevel`、`git branch --show-current`、`git status --short`：执行目录与授权 worktree 一致，分支为 `feat/plugin-workflow-new`，起始工作树干净，HEAD 为 `55e964c`。任务旧快照的主目录分支及两处未提交项不作为本工作树事实。
-- 已读[企业组合清单](<../../../packages/forge-enterprise/package.json>)、[组合入口](<../../../packages/forge-enterprise/src/index.mjs>)及 [Skill 装配源码](<../../../packages/forge-enterprise/src/skills.mjs>)：存在装配辅助能力；当前组合依赖仅凭据、策略、IAM 三包。辅助函数存在不等于正式企业研发 Skill 已进入发行制品或被宿主自动发现。
+- 已读[企业组合清单](<../../../packages/forge-enterprise/package.json>)、[组合入口](<../../../packages/forge-enterprise/src/index.mjs>)及 [Skill 装配源码](<../../../packages/forge-engineering/src/skills.mjs>)：存在装配辅助能力；当前组合依赖仅凭据、策略、IAM 三包。辅助函数存在不等于正式企业研发 Skill 已进入发行制品或被宿主自动发现。
 - [设计索引](<../../design/README.md#22-实现与验证入口>)与[阶段交接](<../../plans/2026-11-04-devops-plugin-stage-handoff.md>)提供历史实现和实测索引。后者记载 dop 企业只读及一次同值写回，不证明本轮关联、续跑、提交或交付链路；企业 Gitee CLI 仍缺真实联调证据。
 - r10 是最近相关的平台分工基线，r9 是安全及安装生命周期基线。状态索引所列 r11 为失败轮，本工作树未发现其任务产物，不将其建议当成已完成行为；不修改任何历史任务夹。
 

@@ -218,10 +218,25 @@ test('buildReasoningEffortRange and getReasoningEffortBounds support lower and u
     levels: ['off', 'low', 'medium', 'high'],
   });
 
-  // Reversed bounds are automatically normalized
+  // Reversed bounds are automatically normalized and 'max' key does not collapse lower bounds
   const reversed = buildReasoningEffortRange('max', 'medium');
   assert.deepEqual(reversed, {
     off: null,
+    medium: 'medium',
+    high: 'high',
+    xhigh: 'xhigh',
+    max: 'max',
+  });
+  assert.deepEqual(getReasoningEffortBounds(reversed), {
+    enabled: true,
+    lower: 'medium',
+    upper: 'max',
+    levels: ['medium', 'high', 'xhigh', 'max'],
+  });
+  assert.deepEqual(buildThinkingLevelMap(reversed), {
+    off: null,
+    minimal: null,
+    low: null,
     medium: 'medium',
     high: 'high',
     xhigh: 'xhigh',

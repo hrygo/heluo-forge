@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mountPanel } from './support/client-panel.mjs';
 
 // DESIGN.md §4 (docs/teamflow/20261109-enterprise-settings-ux/DESIGN.md):
@@ -65,6 +66,8 @@ test('signed out expands only the login step and folds gateway behind 登录后�
 });
 
 test('signed in with configured gateway auto-collapses into AI 服务 · 已就绪 and expands on 更换密钥', async (t) => {
+  const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.match(clientSource, /\.fiam-gateway-ready-bar\s*\{[^}]*flex-direction:\s*row/);
   const { panel } = await fixture(t, ready);
   let tree = panel.render();
   assert.equal(panel.findButton(tree, '登录后可配置'), undefined);
@@ -189,11 +192,26 @@ test('复制问题信息 lives in a collapsed 诊断 fold and still copies', asy
   assert.match(flat(detailsWithSummary(after, '诊断')), /问题信息已复制/);
 });
 
-test('the page keeps exactly one authorization disclaimer', async (t) => {
+test('the page omits verbose authorization boilerplate', async (t) => {
   const { panel } = await fixture(t, ready);
   const tree = panel.render();
-  assert.equal(panel.text(tree).split('登录只建立身份，不代表已获得业务写权限。').length - 1, 1);
-  assert.match(unfolded(tree), /登录只建立身份，不代表已获得业务写权限。/);
+  assert.doesNotMatch(panel.text(tree), /管理企业账号、AI 服务及个人访问凭证/);
+  assert.doesNotMatch(panel.text(tree), /登录只建立身份，不代表已获得业务写权限。/);
+});
+
+test('model journey step stays non-interactive when section navigation is unavailable', async (t) => {
+  const panel = await mountPanel(async (path) => {
+    if (path === '/api/forge-iam/view') return Response.json(ready);
+    throw new Error(`unexpected request: ${path}`);
+  });
+  t.after(() => panel.close());
+  const tree = panel.render();
+  const modelStep = walk(tree).find((node) =>
+    String(node.props?.className ?? '').includes('fiam-journey-step') && flat(node).includes('模型'));
+  assert.ok(modelStep, 'missing the 模型 journey step');
+  assert.match(String(modelStep.props?.className ?? ''), /fiam-journey-step-static/);
+  assert.equal(modelStep.props?.role, undefined);
+  assert.equal(modelStep.props?.onClick, undefined);
 });
 
 test('signed-out journey steps reveal AI 服务 fold or navigate to forge-models instead of silently doing nothing', async (t) => {

@@ -64,50 +64,69 @@ function applyToFakeClient(exports, overrides = {}) {
 
 const read = (relative) => readFileSync(join(PKG_ROOT, relative), 'utf8');
 
-test('bundle manifest points its patch at the universal base layer', () => {
+test('bundle manifest points to its standalone patch layer and declares all R&D members', () => {
   const manifest = JSON.parse(read('package.json'));
+  assert.equal(manifest.name, '@heluo/forge-engineering');
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml');
   assert.ok(manifest.files.includes('cordis.patch.yml'));
-  assert.ok(manifest.files.includes('cordis.patch.engineering.yml'));
-  assert.equal(manifest.files.includes('cordis.patch.base.yml'), false);
+  assert.ok(manifest.files.includes('client.js'));
+  assert.ok(manifest.files.includes('skills'));
+  assert.ok(manifest.files.includes('docs'));
+  assert.ok(manifest.files.includes('locale'));
+  assert.ok(manifest.files.includes('icon.svg'));
+  assert.deepEqual(
+    Object.keys(manifest.dependencies ?? {}).sort(),
+    ['@heluo/forge-devops', '@heluo/forge-gitee', '@heluo/forge-policy'],
+  );
+  assert.equal(manifest.dependencies['@heluo/forge-iam'], undefined);
+  assert.equal(manifest.dependencies['@heluo/forge-credentials-keychain'], undefined);
 });
 
-test('cordis.patch.yml is the universal base: official rows disabled, no R&D member, no container row', () => {
-  const base = read('cordis.patch.yml');
-  assert.match(base, /id: heluo-credentials-keychain/);
-  assert.match(base, /id: heluo-policy/);
-  assert.match(base, /id: heluo-iam/);
-  assert.match(base, /id: deepseek-account[\s\S]*disabled: true/);
-  assert.doesNotMatch(base, /forge-devops/);
-  assert.doesNotMatch(base, /heluo-gitee/);
-  assert.doesNotMatch(base, /heluo-issue-delivery-skill/);
-  // The container activates only through the engineering row; a base row would
-  // register the section for every general-purpose user.
-  assert.doesNotMatch(base, /heluo-engineering-ui/);
+test('cordis.patch.yml mounts policy + workbench UI + skill + DevOps + Gitee with zero official row disables and zero isolate', () => {
+  const patch = read('cordis.patch.yml');
+  assert.match(patch, /id: heluo-policy[\s\S]*name: '@heluo\/forge-policy'/);
+  assert.match(patch, /id: heluo-engineering-ui[\s\S]*name: '@heluo\/forge-engineering'/);
+  assert.match(patch, /id: heluo-issue-delivery-skill[\s\S]*name: '@heluo\/forge-engineering\/issue-delivery-skill'/);
+  assert.match(patch, /id: forge-devops[\s\S]*name: '@heluo\/forge-devops'/);
+  assert.match(patch, /id: heluo-gitee[\s\S]*name: '@heluo\/forge-gitee'/);
+  assert.doesNotMatch(patch, /heluo-iam/);
+  assert.doesNotMatch(patch, /heluo-credentials-keychain/);
+  assert.doesNotMatch(patch, /disabled:\s*true/);
+  assert.doesNotMatch(patch, /^\s*isolate:/mu);
 });
 
-test('cordis.patch.engineering.yml adds the R&D members and the container row only', () => {
-  const engineering = read('cordis.patch.engineering.yml');
-  assert.match(engineering, /id: heluo-engineering-ui[\s\S]*name: '@heluo\/forge-enterprise'/);
-  assert.match(engineering, /id: heluo-issue-delivery-skill/);
-  assert.match(engineering, /id: forge-devops/);
-  assert.match(engineering, /id: heluo-gitee/);
-  assert.doesNotMatch(engineering, /heluo-policy/);
-  assert.doesNotMatch(engineering, /heluo-iam/);
-  assert.doesNotMatch(engineering, /disabled: true/);
+test('every inserted package exists, is private, and resolves within the repo', () => {
+  const patch = read('cordis.patch.yml');
+  const names = [...patch.matchAll(/^ {6}name: '([^']+)'$/gmu)].map((m) => m[1]);
+  assert.equal(names.length, 5);
+  for (const name of names) {
+    const segments = name.split('/');
+    const packageName = segments.slice(0, 2).join('/');
+    const dir = join(REPO_ROOT, 'packages', segments[1]);
+    const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    assert.equal(manifest.name, packageName);
+    assert.equal(manifest.private, true);
+    assert.ok(manifest.engines?.dsh);
+    if (segments.length > 2) {
+      const subpath = `./${segments.slice(2).join('/')}`;
+      assert.equal(typeof manifest.exports?.[subpath], 'string');
+    }
+  }
 });
 
-test('the base policy catalog stays byte-identical to the coexist bundles', () => {
+test('the engineering policy catalog stays byte-identical to forge-enterprise, devops, and gitee', () => {
   const catalogOf = (text) => {
     const match = text.match(/catalog:\n([\s\S]*?)\n\s+audit:/);
     assert.ok(match, 'missing policy catalog');
     return match[1].trim();
   };
-  const base = catalogOf(read('cordis.patch.yml'));
+  const engineering = catalogOf(read('cordis.patch.yml'));
+  const enterprise = catalogOf(readFileSync(join(REPO_ROOT, 'packages', 'forge-enterprise', 'cordis.patch.yml'), 'utf8'));
   const devops = catalogOf(readFileSync(join(REPO_ROOT, 'packages', 'forge-devops', 'cordis.patch.yml'), 'utf8'));
   const gitee = catalogOf(readFileSync(join(REPO_ROOT, 'packages', 'forge-gitee', 'cordis.patch.yml'), 'utf8'));
-  assert.equal(base, devops);
-  assert.equal(base, gitee);
+  assert.equal(engineering, enterprise);
+  assert.equal(engineering, devops);
+  assert.equal(engineering, gitee);
 });
 
 test('client.js registers the section with a declared child slot, an icon, and no host-side leakage', () => {
@@ -116,7 +135,7 @@ test('client.js registers the section with a declared child slot, an icon, and n
   assert.doesNotMatch(raw, /DEEPSEEK_API_KEY|DEVOPS_API_KEY|GITEE_TOKEN|dangerouslySetInnerHTML|innerHTML/);
 
   const { id, exports } = loadClientModule();
-  assert.equal(id, '@heluo/forge-enterprise');
+  assert.equal(id, '@heluo/forge-engineering');
   assert.deepEqual(exports.inject, ['slots', 'locale']);
   assert.equal(exports.SECTION_ID, 'forge-engineering');
   assert.equal(exports.SECTION_ORDER, 30);
@@ -129,24 +148,21 @@ test('client.js registers the section with a declared child slot, an icon, and n
   const [section, icon] = registered;
   assert.equal(section.meta.id, 'forge-engineering');
   assert.equal(section.meta.order, 30);
-  // Child slots are declared in `children`; a `slots` array is factory-only and
-  // would leave the slot undeclared, so devops/gitee tabs could never mount.
   assert.deepEqual(section.meta.children, { 'heluo.engineering.tab': { kind: 'list', scope: 'root' } });
   assert.equal('slots' in section.meta, false);
   assert.equal('icon' in section.meta, false);
   assert.equal(icon.meta.id, 'forge-engineering');
 
   assert.deepEqual(effects, [
-    'forge-enterprise: copy',
-    'forge-enterprise: engineering section',
-    'forge-enterprise: engineering icon',
+    'forge-engineering: copy',
+    'forge-engineering: section',
+    'forge-engineering: icon',
   ]);
 });
 
 test('the section renders the child slot through the props face and keeps diagnostics collapsed', () => {
   const { exports } = loadClientModule();
 
-  // 宿主 renderSlot 返回 `<SlotOutlet>` 元素（不是条目数组），空集走 opts.fallback。
   const outlet = (entries) => ({ needsRender: true, props: { entries } });
   const tree = exports.EngineeringSection({
     t: (key) => key,
@@ -158,7 +174,7 @@ test('the section renders the child slot through the props face and keeps diagno
     },
   });
   const serialized = JSON.stringify(tree);
-  assert.match(serialized, /"needsRender":true/, '子槽位元素必须原样渲染，不再自绘容器');
+  assert.match(serialized, /"needsRender":true/);
   assert.match(serialized, /"id":"devops"/);
   assert.match(serialized, /diagSummary/);
   assert.match(serialized, /"type":"details"/);
@@ -170,7 +186,6 @@ test('the section renders the child slot through the props face and keeps diagno
   assert.match(JSON.stringify(empty), /heluo-engineering-empty/);
   assert.doesNotMatch(JSON.stringify(empty), /heluo-engineering-tabs/);
 
-  // No props face at all must not throw: the section still renders its chrome.
   const bare = exports.EngineeringSection({ t: (key) => key });
   assert.match(JSON.stringify(bare), /heluo-engineering-empty/);
 });

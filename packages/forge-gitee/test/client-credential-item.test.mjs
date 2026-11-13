@@ -1,8 +1,8 @@
 /**
- * @heluo/forge-gitee 扩展凭据卡片（`heluo.iam.credential-item`, order 20）行为测试。
+ * @heluo/forge-gitee 扩展凭据卡片（内置于 GiteeSection 底部）行为测试。
  *
  * 覆盖：
- *   1. `heluo.iam.credential-item` 槽位延迟声明与未声明时不抛错（order 20 / id gitee）；
+ *   1. apply 不向 `heluo.iam.credential-item` 注槽，GiteeSection 直接内置渲染 GiteeCredentialItem（无 IAM 时 404/501 安静降级为独立模式）；
  *   2. UNSET_NO_HOSTED / ENV_INHERITED 平静态，环境变量名仅进默认收起的技术详情；
  *   3. plaintextRisk 条件明文告警 + riskDetails.files 列表展示 + 「在此加密保存覆盖」入口；
  *   4. PUT（单独指定） / DELETE（清除）带 x-forge-iam-request，只写不回显；
@@ -152,7 +152,7 @@ function findNodes(node, predicate, out = []) {
 
 const findButton = (tree, label) => findNodes(tree, (n) => n.type === 'button' && collectText(n).join('').includes(label))[0];
 
-test('heluo.iam.credential-item: 晚声明补挂，无 IAM 声明时不抛错（order 20 / id gitee）', () => {
+test('apply 不再注入 heluo.iam.credential-item，GiteeSection 内置渲染且独立模式 404 安静提示', async () => {
   let captured;
   new Function('window', 'require', SOURCE)(
     { __ModuleLoader__: { load: (def) => { captured = def; } } },
@@ -160,40 +160,45 @@ test('heluo.iam.credential-item: 晚声明补挂，无 IAM 声明时不抛错（
   );
   const mod = captured.factory(() => ({ createElement: () => null, Fragment: 'Fragment' }));
 
-  const declared = new Set(['settings.section']);
-  const waiters = new Map();
+  const declared = new Set(['settings.section', 'heluo.iam.credential-item']);
   const regs = [];
   const ctx = {
     effect: (fn) => fn(),
     locale: { register: () => () => {}, bind: () => (k) => k },
     slots: {
-      inject: (name, cb) => {
-        if (!declared.has(name)) {
-          if (!waiters.has(name)) waiters.set(name, []);
-          waiters.get(name).push(cb);
-          return () => {};
-        }
-        return cb();
-      },
+      inject: (name, cb) => (declared.has(name) ? cb() : () => {}),
       register: (meta, component) => {
         if (!declared.has(meta.name)) throw new Error(`slot ${meta.name} not declared`);
-        const entry = { meta, component, released: false };
+        const entry = { meta, component };
         regs.push(entry);
-        return () => { entry.released = true; };
+        return () => {};
       },
     },
   };
 
-  assert.doesNotThrow(() => mod.apply(ctx), 'standalone 无 heluo.iam.credential-item 声明时不得抛错');
-  assert.equal(regs.filter((r) => !r.released && r.meta.name === 'heluo.iam.credential-item').length, 0);
+  mod.apply(ctx);
+  assert.equal(regs.filter((r) => r.meta.name === 'heluo.iam.credential-item').length, 0, '不得向企业账号注入 Gitee 凭据');
 
-  declared.add('heluo.iam.credential-item');
-  for (const cb of waiters.get('heluo.iam.credential-item') ?? []) cb();
-  const active = regs.filter((r) => !r.released && r.meta.name === 'heluo.iam.credential-item');
-  assert.equal(active.length, 1);
-  assert.equal(active[0].meta.id, 'gitee');
-  assert.equal(active[0].meta.order, 20);
-  assert.equal(active[0].component, mod.GiteeCredentialItem);
+  // 无 @heluo/forge-iam 时（404 无 code），GiteeCredentialItem 安静显示独立安装模式提示
+  const prevFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 404,
+    json: async () => null,
+  });
+  const h = createHarness();
+  try {
+    h.render({ sessionReady: false });
+    const tree = await h.flush();
+    const text = collectText(tree).join(' ');
+    assert.match(text, /独立安装模式：未接入企业账号托管/u);
+    assert.equal(findNodes(tree, (n) => n.props?.role === 'alert').length, 0);
+    assert.equal(findButton(tree, '单独指定 Token'), undefined);
+    assert.equal(findButton(tree, '重试'), undefined);
+  } finally {
+    h.unmount();
+    globalThis.fetch = prevFetch;
+  }
 });
 
 test('平静态 + plaintextRisk 条件明文告警：无风险时不显示告警；命中时列文件与加密覆盖按钮', async () => {
