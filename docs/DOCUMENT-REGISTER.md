@@ -40,7 +40,7 @@
 | CORP-DSH-DESIGN-015 | DSH 客户端标识（UA）方案设计 | [design/client-identification.md](<design/client-identification.md>) | V0.2.0 | 草案 | 平台组（代拟） | G1 接入契约 |
 | CORP-DSH-DESIGN-016 | IAM 机密客户端隔离开发设计 | [design/iam-confidential-isolated.md](<design/iam-confidential-isolated.md>) | V0.4.1 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；不开放真实来源与生产 |
 | CORP-DSH-DESIGN-017 | IAM 模型与工具隔离消费设计 | [design/iam-consumer-isolated.md](<design/iam-consumer-isolated.md>) | V0.7.0 | 草案 | 平台组（代拟） | 用户已批准完整 source/mock 设计；真实环境关闭，A/B/C/D分段已验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
-| CORP-DSH-DESIGN-018 | 企业设置菜单统一与 Token 收敛详细设计 | [design/enterprise-menu-and-token-unification.md](<design/enterprise-menu-and-token-unification.md>) | V2.0.0 | 生效 | 平台组（代拟） | 不改 DSH；双定位解耦+去技术噪声规范已生效，源码改造待实施，企业 OS 凭据库与联邦换票未联调 |
+| CORP-DSH-DESIGN-018 | 企业设置菜单统一与 Token 收敛详细设计 | [design/enterprise-menu-and-token-unification.md](<design/enterprise-menu-and-token-unification.md>) | V2.0.0 | 生效 | 平台组（代拟） | 不改 DSH；四包源码、双定位 UI 契约与合成探针离线闭环；容器级汇总属后续项，企业网关/OS 凭据库/双端 GUI 与联邦换票未联调 |
 | CORP-DSH-IAM-002 | IAM 机密客户端隔离开发契约 | [contracts/iam-client-auth-isolated.md](<contracts/iam-client-auth-isolated.md>) | V0.6.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；生产 G1 未关闭 |
 | CORP-DSH-IAM-003 | IAM 模型与工具隔离消费契约草案 | [contracts/iam-consumer-isolated.md](<contracts/iam-consumer-isolated.md>) | V0.7.0 | 草案 | 平台组（代拟） | 用户已批准 source/mock 设计；见证/许可/合成工具与模型已分段验收，E根联合已实现，本批本地验收已完成；真实准入未开放 |
 | CORP-DSH-IAM-004 | IAM 只读状态订阅隔离契约 | [contracts/iam-view-observer-isolated.md](<contracts/iam-view-observer-isolated.md>) | V0.3.0 | 草案 | 平台组（代拟） | 私有接缝已实现并定向验收；真实注册关闭 |
@@ -75,8 +75,8 @@
 | CORP-DSH-PLAN-018 | IAM 调用失败自愈与错误码恢复方案 | [plans/2026-11-12-iam-call-failure-recovery.md](<plans/2026-11-12-iam-call-failure-recovery.md>) | V0.2.0 | 草案 | 平台组（代拟） | 方案待评审；以 PR #253 为基线，不改写现有实现状态 |
 | CORP-DSH-PLAN-019 | CI 平台验证优化实施计划 | [plans/2026-11-12-ci-platform-verification.md](<plans/2026-11-12-ci-platform-verification.md>) | V0.2.1 | 草案 | 平台组（代拟） | 仓库离线检查与托管平台回归；目标宿主和企业环境另行取证 |
 | CORP-DSH-PLAN-020 | Issue #254 审查意见处置与覆盖台账 | [plans/2026-11-12-issue-254-review-ledger.md](<plans/2026-11-12-issue-254-review-ledger.md>) | V0.4.1 | 草案（代拟，待负责人确认） | 平台组（代拟） | G0 认领；G1 审查处置与合并边界 |
-| CORP-DSH-PLAN-021 | 企业模型设置手动添加模型实施方案 | [plans/2026-11-13-enterprise-manual-model-add-luna-guide.md](<plans/2026-11-13-enterprise-manual-model-add-luna-guide.md>) | V0.3.0 | 草案 | 平台组（代拟） | 设计评审：§13/§13.1 边界修订待批准；本地模拟验证，企业网关与目标客户端另行取证 |
-| CORP-DSH-PLAN-022 | 企业设置统一、Token 收敛与手动模型统筹实施方案 | [plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md](<plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md>) | V0.2.0 | 草案 | 平台组（代拟） | 统筹 Wave 0—Wave 5：CORP-DSH-DESIGN-018 V2.0.0（双定位零耦合+渐进披露，已生效，不改 DSH）合流 issue #273（CORP-DSH-PLAN-021 §9.1/U1 待批准）；仅本地模拟验证，企业实机未联调 |
+| CORP-DSH-PLAN-021 | 企业模型设置手动添加模型实施方案 | [plans/2026-11-13-enterprise-manual-model-add-luna-guide.md](<plans/2026-11-13-enterprise-manual-model-add-luna-guide.md>) | V0.3.0 | 草案 | 平台组（代拟） | 离线代码、UI 与合成探针已在分支合流闭环（正式签批仍待定）；真实企业网关与双端实机未联调 |
+| CORP-DSH-PLAN-022 | 企业设置统一、Token 收敛与手动模型统筹实施方案 | [plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md](<plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md>) | V0.2.0 | 草案 | 平台组（代拟） | Wave 0–4 代码、UI 契约、文档与 Wave 5 合成探针已在分支离线闭环（正式签批仍待定）；真实企业网关、OS 凭据库与双端实机未联调 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.1.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.1 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |
 | CORP-DSH-REQ-003 | Agent 增强的企业聊天产品方案 | [requirements/enterprise-collaboration-chat-proposal.md](<requirements/enterprise-collaboration-chat-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 需求基线同步、接入可行性与详细设计；企业实机验证后试点 |
