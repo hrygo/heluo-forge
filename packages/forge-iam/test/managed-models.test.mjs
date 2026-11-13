@@ -875,3 +875,108 @@ test('a cancelled discovery is reported as a cancelled sync, not an unreachable 
   assert.equal(timedOut.error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
   assert.ok(Number.isFinite(timedOut.retryAt));
 });
+
+test('declared capabilities win over the 200K/64K baselines and missing ones fall back (issue #202)', async t => {
+  const catalogue = {
+    data: [
+      {
+        id: 'alpha',
+        capabilities: { context_length: 128000, max_output_tokens: 8192, input_modalities: ['text', 'image'], streaming: true },
+        compliance: { level: 'L2', region: 'cn-north-1' },
+      },
+      { id: 'beta' },
+    ],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const [alpha, beta] = f.runtime.getView().models;
+  // Declaration first.
+  assert.equal(alpha.contextWindow, 128000);
+  assert.equal(alpha.maxTokens, 8192);
+  assert.deepEqual(alpha.inputModalities, ['text', 'image']);
+  assert.equal(alpha.streaming, true);
+  assert.deepEqual(alpha.compliance, { level: 'L2', region: 'cn-north-1' });
+  // Baseline only where the gateway said nothing.
+  assert.equal(beta.contextWindow, 200000);
+  assert.equal(beta.maxTokens, 64000);
+  assert.deepEqual(beta.inputModalities, ['text']);
+  assert.equal('streaming' in beta, false);
+  assert.equal('compliance' in beta, false);
+});
+
+test('camelCase capability aliases are read the same way (issue #202)', async t => {
+  const catalogue = {
+    data: [{
+      id: 'alpha',
+      capabilities: { contextWindow: 64000, maxOutputTokens: 4096, modalities: ['text'], supportsStreaming: true },
+      compliance: { complianceLevel: 'L1', deploymentRegion: 'cn-east-2' },
+    }],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const [alpha] = f.runtime.getView().models;
+  assert.equal(alpha.contextWindow, 64000);
+  assert.equal(alpha.maxTokens, 4096);
+  assert.equal(alpha.streaming, true);
+  assert.deepEqual(alpha.compliance, { level: 'L1', region: 'cn-east-2' });
+});
+
+test('an unusable declaration falls back to the baseline instead of failing the catalogue (issue #202)', async t => {
+  const catalogue = {
+    data: [{
+      id: 'alpha',
+      capabilities: { context_length: -1, max_output_tokens: 1e12, input_modalities: ['audio', 'video'], streaming: 'yes' },
+      compliance: { level: 42, region: 'x'.repeat(200) },
+    }],
+  };
+  const f = fixture({ fetch: async () => new Response(JSON.stringify(catalogue)) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().error, null);
+  const [alpha] = f.runtime.getView().models;
+  assert.equal(alpha.contextWindow, 200000);
+  assert.equal(alpha.maxTokens, 64000);
+  assert.deepEqual(alpha.inputModalities, ['text']);
+  assert.equal('streaming' in alpha, false);
+  assert.equal('compliance' in alpha, false);
+});
+
+test('a user override still wins over the declared capacity (issue #202)', async t => {
+  const catalogue = { data: [{ id: 'alpha', capabilities: { context_length: 100000, max_output_tokens: 8000 } }] };
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify(catalogue)),
+    selection: { models: { alpha: { contextWindow: '128k', maxTokens: 4000 } }, defaultModelId: 'alpha' },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const [alpha] = f.runtime.getView().models;
+  assert.equal(alpha.contextWindow, 128000);
+  assert.equal(alpha.maxTokens, 4000);
+});
+
+test('compliance metadata is displayed but never changes authorization (issue #202)', async t => {
+  const catalogue = {
+    data: [
+      { id: 'alpha', compliance: { level: 'restricted', region: 'cn-north-1' } },
+      { id: 'beta', compliance: { level: 'open' } },
+    ],
+  };
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify(catalogue)),
+    selection: { models: { beta: {} }, defaultModelId: 'beta' },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const view = f.runtime.getView();
+  // Both are listed with their own compliance, and enabling is still decided by
+  // the user's selection alone — not by the level string.
+  assert.deepEqual(view.models.map(model => [model.id, model.enabled]), [['alpha', false], ['beta', true]]);
+  assert.equal(view.models.find(model => model.id === 'alpha').compliance.level, 'restricted');
+  // A "restricted"-labelled but enabled model still runs; an "open"-labelled but
+  // disabled one is still refused.
+  const ok = await chunks((await f.adapter.prepareCall('enterprise', 'beta')).stream({ ...options, model: 'beta' }));
+  assert.equal(ok[0].text, 'ok');
+  await assert.rejects(() => f.adapter.prepareCall('enterprise', 'alpha'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
+});

@@ -109,6 +109,91 @@ function normalizeSelection(value) {
 
 const CATALOG_ENTRY_LIMIT = 500;
 
+/**
+ * Declared catalogue metadata (issue #202 item 3). The contract fixes the
+ * semantics — modality, streaming, context length, max output, compliance
+ * level, deployment region — but not the exact JSON field names, so this reads
+ * a documented alias set and treats anything else as "not declared". An
+ * unusable declaration falls back to the baseline default instead of failing
+ * the whole catalogue: metadata is optional, while a missing or duplicate id
+ * still fails it (fail closed stays where it belongs).
+ */
+const CONTEXT_KEYS = Object.freeze(['context_length', 'contextLength', 'context_window', 'contextWindow', 'max_context_tokens', 'maxContextTokens']);
+const MAX_OUTPUT_KEYS = Object.freeze(['max_output_tokens', 'maxOutputTokens', 'max_completion_tokens', 'maxCompletionTokens', 'max_tokens', 'maxTokens']);
+const MODALITY_KEYS = Object.freeze(['input_modalities', 'inputModalities', 'modalities', 'input']);
+const STREAMING_KEYS = Object.freeze(['streaming', 'stream', 'supports_streaming', 'supportsStreaming']);
+const COMPLIANCE_LEVEL_KEYS = Object.freeze(['level', 'compliance_level', 'complianceLevel', 'tier']);
+const COMPLIANCE_REGION_KEYS = Object.freeze(['region', 'deployment_region', 'deploymentRegion', 'deploy_region', 'deployRegion']);
+/** A capacity beyond this is a parse accident, not a real window; treat as undeclared. */
+const CAPACITY_CEILING = 100_000_000;
+const MODALITIES = Object.freeze(['text', 'image']);
+const COMPLIANCE_TEXT_LIMIT = 64;
+
+const pick = (source, keys) => {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  for (const key of keys) {
+    if (Object.hasOwn(source, key)) return source[key];
+  }
+  return undefined;
+};
+
+/** Positive integer capacity, or undefined when the declaration is unusable. */
+const declaredCapacity = (source, keys) => {
+  const raw = pick(source, keys);
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0 || raw > CAPACITY_CEILING) return undefined;
+  return raw;
+};
+
+/** Declared input modalities, filtered to the two the runtime understands. */
+const declaredModalities = capabilities => {
+  const raw = pick(capabilities, MODALITY_KEYS);
+  if (!Array.isArray(raw)) return undefined;
+  const kept = raw.filter(value => MODALITIES.includes(value));
+  return kept.length > 0 ? [...new Set(kept)] : undefined;
+};
+
+const declaredStreaming = capabilities => {
+  const raw = pick(capabilities, STREAMING_KEYS);
+  return typeof raw === 'boolean' ? raw : undefined;
+};
+
+/** Display-only compliance metadata; never an authorization input. */
+function declaredCompliance(compliance) {
+  if (!compliance || typeof compliance !== 'object' || Array.isArray(compliance)) return undefined;
+  const read = keys => {
+    const raw = pick(compliance, keys);
+    if (typeof raw !== 'string') return undefined;
+    const value = raw.trim();
+    return value.length > 0 && value.length <= COMPLIANCE_TEXT_LIMIT && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined;
+  };
+  const level = read(COMPLIANCE_LEVEL_KEYS);
+  const region = read(COMPLIANCE_REGION_KEYS);
+  return level === undefined && region === undefined ? undefined : { ...(level === undefined ? {} : { level }), ...(region === undefined ? {} : { region }) };
+}
+
+/**
+ * Turn one gateway catalogue entry into the runtime model shape. Declared
+ * values win; the 200K/64K/text baselines only fill what the gateway left out.
+ */
+function catalogEntry(item) {
+  const capabilities = item?.capabilities;
+  const contextWindow = declaredCapacity(capabilities, CONTEXT_KEYS);
+  const maxTokens = declaredCapacity(capabilities, MAX_OUTPUT_KEYS);
+  const modalities = declaredModalities(capabilities);
+  const streaming = declaredStreaming(capabilities);
+  const compliance = declaredCompliance(item?.compliance);
+  return {
+    id: item.id,
+    name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : item.id,
+    contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+    input: modalities ?? ['text'],
+    inputModalities: modalities ?? ['text'],
+    ...(streaming === undefined ? {} : { streaming }),
+    ...(compliance === undefined ? {} : { compliance }),
+  };
+}
+
 /** Bound discovery: no redirects, ambient credentials, arbitrary error body or stale results. */
 async function discover(connection, signal, fetcher, headers) {
   const response = await fetcher(`${connection.baseURL}/models`, {
@@ -136,8 +221,9 @@ async function discover(connection, signal, fetcher, headers) {
   const discovered = body.data.map(item => {
     if (!isModelId(item?.id) || seen.has(item.id)) throw error('ENTERPRISE_MODEL_CATALOG_INVALID');
     seen.add(item.id);
-    // Standard /models does not promise capacity or modality metadata; use default capacity baselines.
-    return { id: item.id, name: item.id, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS, input: ['text'], inputModalities: ['text'] };
+    // Declared capabilities win (issue #202); the 200K/64K/text baselines only
+    // fill what the gateway did not declare.
+    return catalogEntry(item);
   });
   // Sort before trimming: the retained subset must not depend on the order the
   // gateway happened to answer in, or an already enabled model could vanish
@@ -487,7 +573,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
       syncedAt = Date.now(); publish();
       await syncHostDefault(); current();
-      return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
+      return { models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, streaming, compliance }) => ({ id, name, contextWindow, maxTokens, inputModalities, ...(streaming === undefined ? {} : { streaming }), ...(compliance === undefined ? {} : { compliance }) })), truncated: catalogTruncated };
     }).catch(cause => {
       // Our own cancellation is not a gateway outage. Telling the person to
       // check the gateway address after we stopped the request ourselves sends
@@ -676,7 +762,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       ok: true, persisted,
       defaultModelId,
       enabled: Object.keys(modelOptions),
-      models: models.map(({ id, name, contextWindow, maxTokens, inputModalities }) => ({ id, name, contextWindow, maxTokens, inputModalities }))
+      models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, streaming, compliance }) => ({ id, name, contextWindow, maxTokens, inputModalities, ...(streaming === undefined ? {} : { streaming }), ...(compliance === undefined ? {} : { compliance }) }))
     };
   }
 
@@ -706,7 +792,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         hostDefaultModel: hostDefault,
         enabled: Object.keys(modelOptions),
         selectionError: selectionError ?? selectionWriteError,
-        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning }) => ({
+        models: models.map(({ id, name, contextWindow, maxTokens, inputModalities, reasoningEfforts, reasoning, streaming, compliance }) => ({
           id,
           name,
           contextWindow: contextWindow ?? DEFAULT_CONTEXT_WINDOW,
@@ -714,6 +800,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           inputModalities: inputModalities ?? ['text'],
           reasoningEfforts: reasoningEfforts ?? null,
           reasoning: Boolean(reasoning),
+          // Declared metadata for display only (issue #202 item 4): showing a
+          // compliance level or region never grants or denies access here.
+          ...(streaming === undefined ? {} : { streaming }),
+          ...(compliance === undefined ? {} : { compliance }),
           // A listed model is not necessarily callable; only enabled ones are.
           enabled: enabled(id),
           isDefault: defaultModelId === id,
