@@ -163,12 +163,22 @@ window.__ModuleLoader__.load({
      * ------------------------------------------------------------------ */
 
     const METRICS = {
-      titleSize: 16,
-      titleLine: 24,
+      maxWidth: 720,
+      pageTitleSize: 18,
+      pageTitleLine: 26,
+      titleSize: 15,
+      titleLine: 22,
+      titleWeight: 600,
+      avatarSize: 34,
+      cardPadY: 14,
+      cardPadX: 16,
+      cardGap: 12,
+      subCardPadY: 10,
+      subCardPadX: 12,
       introSize: 12,
       introLine: 18,
-      introGap: 12,
-      statusHeight: 30,
+      introGap: 2,
+      statusHeight: 34,
       statusGap: 8,
       statusPadX: 12,
       dotSize: 6,
@@ -186,11 +196,13 @@ window.__ModuleLoader__.load({
       hintLine: 18,
       fieldPadY: 12,
       scalarInputWidth: 220,
-      footerGapTop: 16,
+      footerGapTop: 14,
       buttonHeight: 32,
+      compactButtonHeight: 26,
       separator: 0.5,
-      tagHeight: 18,
+      tagHeight: 20,
       tagSize: 11,
+      tagLine: 16,
       codeSize: 12,
       candidatePadY: 6,
       skeletonRow: 108,
@@ -198,40 +210,58 @@ window.__ModuleLoader__.load({
       fast: 100,
       swap: 160,
       breathe: 1200,
+      radiusXs: 'var(--dsw-radius-xs, 4px)',
       radiusSm: 'var(--dsw-radius-sm)',
       radiusMd: 'var(--dsw-radius-md)',
+      radiusLg: 'var(--dsw-radius-lg)',
+      radiusXl: 'var(--dsw-radius-xl)',
     };
 
     const CSS = `
-.fdv-root{display:flex;flex-direction:column;color:var(--dsw-alias-label-primary);font-family:inherit;container-type:inline-size}
-.fdv-title{margin:0;font-size:${METRICS.titleSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.titleLine}px}
-.fdv-intro{margin:${METRICS.introGap}px 0 0;font-size:${METRICS.introSize}px;line-height:${METRICS.introLine}px;color:var(--dsw-alias-label-secondary)}
-.fdv-status{box-sizing:border-box;display:flex;align-items:center;gap:${METRICS.statusGap}px;height:${METRICS.statusHeight}px;margin-top:${METRICS.statusGap}px;padding:0 ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-root{box-sizing:border-box;width:100%;max-width:${METRICS.maxWidth}px;display:flex;flex-direction:column;gap:${METRICS.cardGap}px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);container-type:inline-size}
+.fdv-page-title{margin:0;font:var(--dsw-font-m-18);font-weight:${METRICS.titleWeight};line-height:${METRICS.pageTitleLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-surface{display:flex;flex-direction:column;gap:${METRICS.cardGap}px;padding:${METRICS.cardPadY}px ${METRICS.cardPadX}px;border-radius:${METRICS.radiusXl};background:var(--dsw-alias-settings-card-fill);border:${METRICS.separator}px solid var(--dsw-alias-settings-card-stroke);transition:border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-surface:hover{border-color:var(--dsw-alias-border-l3)}
+.fdv-card-header{display:flex;align-items:center;gap:${METRICS.cardGap}px;min-width:0}
+.fdv-avatar{width:${METRICS.avatarSize}px;height:${METRICS.avatarSize}px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary)}
+.fdv-card-head-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:${METRICS.introGap}px}
+.fdv-title{margin:0;font-size:${METRICS.titleSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.titleLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-intro{margin:0;font-size:${METRICS.introSize}px;line-height:${METRICS.introLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-status{box-sizing:border-box;display:flex;align-items:center;gap:${METRICS.statusGap}px;min-height:${METRICS.statusHeight}px;padding:${METRICS.headGap}px ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-status-ready{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 22%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 7%,transparent)}
+.fdv-status-missing{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 24%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent)}
+.fdv-status-unavailable{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 24%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,transparent)}
 .fdv-dot{flex:none;width:${METRICS.dotSize}px;height:${METRICS.dotSize}px;border-radius:50%;background:var(--dsw-alias-state-idle-primary);transition:background-color ${METRICS.swap}ms ${METRICS.ease}}
-.fdv-status-ready .fdv-dot{background:var(--dsw-static-green-500)}
-.fdv-status-missing .fdv-dot{background:var(--dsw-static-amber-500)}
-.fdv-status-unavailable .fdv-dot{background:var(--dsw-static-red-600)}
+.fdv-status-ready .fdv-dot{background:var(--dsw-alias-state-success-primary)}
+.fdv-status-missing .fdv-dot{background:var(--dsw-alias-state-warn-primary)}
+.fdv-status-unavailable .fdv-dot{background:var(--dsw-alias-state-error-primary)}
 .fdv-status-text{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary)}
+.fdv-status-ready .fdv-status-text{color:var(--dsw-alias-label-primary)}
 .fdv-status-missing .fdv-status-text{color:var(--dsw-alias-state-warn-primary)}
 .fdv-status-unavailable .fdv-status-text{color:var(--dsw-alias-state-error-primary)}
 .fdv-status-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px}
-.fdv-group{margin:${METRICS.groupGapTop}px 0 ${METRICS.groupGapBottom}px;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.groupLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-group{display:flex;flex-direction:column;gap:${METRICS.statusGap}px;margin:0;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.groupLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-cards{display:flex;flex-direction:column}
-.fdv-card{padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
-.fdv-card-first{border-top:0 none}
+.fdv-card{padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fdv-card-first{padding-top:0;border-top:0 none}
 .fdv-head{display:flex;align-items:center;flex-wrap:wrap;row-gap:4px;gap:${METRICS.statusGap}px;min-width:0;line-height:${METRICS.labelLine}px}
 .fdv-label{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fdv-head-actions{margin-left:auto;display:flex;align-items:center;gap:${METRICS.statusGap}px;flex:none}
-.fdv-input{box-sizing:border-box;display:block;width:100%;height:${METRICS.inputHeight}px;margin-top:${METRICS.headGap}px;padding:0 10px;border:1px solid var(--dsw-alias-border-l4);border-radius:${METRICS.radiusSm};background:transparent;color:inherit;font-family:inherit;font-size:${METRICS.labelSize}px;line-height:${METRICS.labelLine}px;transition:border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-input{box-sizing:border-box;display:block;width:100%;height:${METRICS.inputHeight}px;margin-top:${METRICS.headGap}px;padding:0 10px;border:${METRICS.separator}px solid var(--dsw-alias-border-l4);border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:inherit;font-size:${METRICS.labelSize}px;line-height:${METRICS.labelLine}px;transition:border-color ${METRICS.fast}ms ${METRICS.ease},box-shadow ${METRICS.fast}ms ${METRICS.ease}}
 .fdv-input::placeholder{color:var(--dsw-alias-label-tertiary)}
-.fdv-input:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}
-.fdv-input:read-only{cursor:text;color:var(--dsw-alias-label-secondary)}
+.fdv-input:focus{outline:none;border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 15%,transparent)}
+.fdv-input:read-only{cursor:text;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
 .fdv-input[aria-invalid="true"]{border-color:var(--dsw-alias-state-error-primary)}
-.fdv-input:disabled{cursor:default;color:var(--dsw-alias-label-tertiary)}
+.fdv-input:disabled{cursor:default;color:var(--dsw-alias-label-tertiary);opacity:.55}
 .fdv-foot{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.inputGap}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary)}
-.fdv-hint{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fdv-hint{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin:0}
 .fdv-foot-error .fdv-hint{color:var(--dsw-alias-state-error-primary)}
 .fdv-foot-actions{margin-left:auto;display:flex;align-items:center;gap:${METRICS.statusGap}px;flex:none}
+.fdv-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:${METRICS.compactButtonHeight}px;padding:0 10px;border:${METRICS.separator}px solid var(--dsw-alias-border-l3);border-radius:${METRICS.radiusMd};background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:1;white-space:nowrap;transition:background-color ${METRICS.fast}ms ${METRICS.ease},border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-btn:hover:not(:disabled){background:var(--dsw-alias-button-floating-hover);border-color:var(--dsw-alias-border-l2)}
+.fdv-btn:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+.fdv-btn:disabled{cursor:default;opacity:.45}
+.fdv-btn-md{height:${METRICS.buttonHeight}px;padding:0 12px;font-size:${METRICS.labelSize}px}
 .fdv-link{appearance:none;margin:0;padding:0;border:0;background:none;cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);transition:color ${METRICS.fast}ms ${METRICS.ease}}
 .fdv-link:hover{color:var(--dsw-alias-label-primary)}
 .fdv-link:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:1px;border-radius:2px}
@@ -239,87 +269,88 @@ window.__ModuleLoader__.load({
 .fdv-hint-toggle{display:inline-flex;align-items:center;gap:4px;max-width:100%;overflow:hidden}
 .fdv-caret{display:inline-block;transition:transform ${METRICS.fast}ms ${METRICS.ease};font-size:10px;line-height:1}
 .fdv-caret-open{transform:rotate(180deg)}
-.fdv-candidates{display:flex;flex-direction:column;margin-top:${METRICS.inputGap}px;animation:fdv-reveal ${METRICS.swap}ms ${METRICS.ease} both}
-.fdv-candidate{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.candidatePadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-candidates{display:flex;flex-direction:column;margin-top:${METRICS.inputGap}px;padding:4px 10px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4);animation:fdv-reveal ${METRICS.swap}ms ${METRICS.ease} both}
+.fdv-candidate{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.candidatePadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 .fdv-candidate:first-child{border-top:0 none}
-.fdv-candidate-path{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:${METRICS.codeSize}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
+.fdv-candidate-path{flex:1;min-width:0;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:${METRICS.codeSize}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
 .fdv-candidate-tier{flex:none;color:var(--dsw-alias-label-tertiary)}
-.fdv-tag{display:inline-flex;align-items:center;flex:none;height:${METRICS.tagHeight}px;padding:0 6px;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:${METRICS.tagSize}px;font-weight:400;line-height:${METRICS.tagHeight}px;white-space:nowrap}
-.fdv-tag-accent{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
-.fdv-tag-quiet{color:var(--dsw-alias-label-tertiary)}
-.fdv-tag-warn{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 14%,transparent)}
-.fdv-tag-ok{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 12%,transparent)}
-.fdv-scalar{box-sizing:border-box;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-tag{display:inline-flex;align-items:center;flex:none;height:${METRICS.tagHeight}px;padding:1px 8px;border-radius:${METRICS.radiusXs};border:${METRICS.separator}px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:${METRICS.tagSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.tagLine}px;white-space:nowrap}
+.fdv-tag-accent{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
+.fdv-tag-quiet{color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 8%,transparent);border-color:transparent}
+.fdv-tag-warn{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent)}
+.fdv-tag-ok{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 22%,transparent)}
+.fdv-scalar{box-sizing:border-box;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-scalar-input{width:${METRICS.scalarInputWidth}px;max-width:100%;font-variant-numeric:tabular-nums}
-.fdv-footer{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px}
+.fdv-footer{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px ${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-note{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-note-dirty{color:var(--dsw-alias-state-warn-primary);font-weight:${METRICS.labelWeight}}
 .fdv-note-error{color:var(--dsw-alias-state-error-primary)}
 .fdv-note-action{margin-left:${METRICS.statusGap}px}
-.fdv-primary{flex:none;box-sizing:border-box;height:${METRICS.buttonHeight}px;padding:0 16px;border:0 none;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-inverted);cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.hintLine}px;transition:opacity ${METRICS.fast}ms ${METRICS.ease},transform ${METRICS.fast}ms ${METRICS.ease}}
-.fdv-primary:hover{opacity:.92}
-.fdv-primary:active{opacity:.86;transform:scale(.98)}
-.fdv-primary:disabled{cursor:default;opacity:.4;transform:none}
+.fdv-primary{flex:none;box-sizing:border-box;height:${METRICS.buttonHeight}px;padding:0 16px;border:0 none;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);cursor:pointer;font-family:inherit;font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:1;transition:background-color ${METRICS.fast}ms ${METRICS.ease},transform ${METRICS.fast}ms ${METRICS.ease},opacity ${METRICS.fast}ms ${METRICS.ease}}
+.fdv-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
+.fdv-primary:active:not(:disabled){opacity:.9;transform:scale(.98)}
+.fdv-primary:disabled{cursor:default;opacity:.45;transform:none}
 .fdv-primary:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px}
-.fdv-unavailable{padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
-.fdv-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fdv-unavailable{padding:${METRICS.noticePadY}px ${METRICS.noticePadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent)}
+.fdv-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fdv-unavailable-body{margin:${METRICS.headGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
-.fdv-unavailable-env{display:block;margin-top:4px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:${METRICS.codeSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
-.fdv-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.candidatePadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-unavailable-env{display:block;margin-top:4px;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:${METRICS.codeSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary);word-break:break-all}
+.fdv-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;padding:${METRICS.subCardPadY}px ${METRICS.subCardPadX}px;border-radius:${METRICS.radiusLg};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-row-main{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:1;min-width:0}
 .fdv-row-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px}
-.fdv-summary-row{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin:${METRICS.statusGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
-.fdv-summary-text{flex:1;min-width:0;overflow-wrap:anywhere}
-.fdv-row-label{flex:none;width:112px;font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
-.fdv-row-state{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fdv-summary-row{display:flex;align-items:center;gap:${METRICS.cardGap}px;margin:0;font-size:${METRICS.labelSize}px;line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-summary-text{flex:1;min-width:0;font-weight:${METRICS.titleWeight};overflow-wrap:anywhere}
+.fdv-row-label{flex:none;width:104px;font-size:${METRICS.labelSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-row-state{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0;font-size:${METRICS.hintSize}px;font-weight:400;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fdv-row-detail{min-width:0;overflow-wrap:anywhere}
 .fdv-next{min-width:0;overflow-wrap:anywhere}
-.fdv-details{flex-basis:100%;margin:0 0 0 112px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-details{flex-basis:100%;margin:4px 0 0;padding-top:8px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4);font-size:${METRICS.hintSize}px;font-weight:400;line-height:${METRICS.hintLine}px}
 .fdv-detail-line{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;min-width:0}
 .fdv-detail-label{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
 .fdv-detail-text{min-width:0;overflow-wrap:anywhere}
-.fdv-details-body .fdv-details{margin:0}
-.fdv-details-body .fdv-check{margin:${METRICS.headGap}px 0 0;padding-top:0;border-top:0}
-.fdv-summary{cursor:pointer;color:var(--dsw-alias-label-secondary);list-style:none}
+.fdv-details-body .fdv-details{margin:4px 0 0;padding-top:6px}
+.fdv-details-body .fdv-check{margin:${METRICS.headGap}px 0 0;padding-top:8px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fdv-summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-weight:${METRICS.labelWeight};list-style:none;user-select:none}
+.fdv-summary:hover{color:var(--dsw-alias-label-primary)}
 .fdv-summary::-webkit-details-marker{display:none}
 .fdv-summary:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:${METRICS.radiusSm}}
-.fdv-details-body{display:flex;flex-direction:column;gap:2px;margin-top:${METRICS.headGap}px;padding-left:${METRICS.statusPadX}px;border-left:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-details-body{display:flex;flex-direction:column;gap:4px;margin-top:${METRICS.headGap}px;padding-left:${METRICS.statusPadX}px;border-left:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-layer-line{display:flex;gap:${METRICS.statusGap}px}
 .fdv-layer-label{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
 .fdv-layer-value{min-width:0;overflow-wrap:anywhere}
-.fdv-check{flex-basis:100%;margin:${METRICS.headGap}px 0 0 112px;padding:${METRICS.fieldPadY}px 0 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-check{flex-basis:100%;margin:${METRICS.headGap}px 0 0;padding:${METRICS.subCardPadY}px 0 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:${METRICS.headGap}px ${METRICS.statusPadX}px}
 .fdv-check-item{display:flex;gap:${METRICS.headGap}px;min-width:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 .fdv-check-label{flex:none;color:var(--dsw-alias-label-secondary)}
 .fdv-check-value{min-width:0;overflow-wrap:anywhere}
-.fdv-evidence{display:flex;flex-direction:column;gap:2px;margin:${METRICS.headGap}px 0 0;padding:0;list-style:none;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fdv-evidence{display:flex;flex-direction:column;gap:4px;margin:${METRICS.headGap}px 0 0;padding:0;list-style:none;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 .fdv-evidence-row{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px}
 .fdv-evidence-layer{flex:none;width:${METRICS.layerLabelWidth}px;color:var(--dsw-alias-label-secondary)}
 .fdv-evidence-reason{min-width:0;overflow-wrap:anywhere}
 .fdv-evidence-basis{min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .fdv-check-footer{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
-.fdv-receipt{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding-top:${METRICS.groupGapTop}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-.fdv-receipt{flex:1 1 100%}
+.fdv-receipt{display:flex;align-items:center;gap:${METRICS.statusGap}px;padding-top:0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere;flex:1 1 100%}
 .fdv-receipt-actions{flex:none;display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-left:auto}
 .fdv-receipt-hint{flex:0 0 100%;margin:2px 0 0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));overflow-wrap:anywhere}
-.fdv-disclaimer{margin:${METRICS.footerGapTop}px 0 0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-.fdv-skeleton{display:flex;flex-direction:column;margin-top:${METRICS.groupGapTop}px}
-.fdv-skeleton-group{height:${METRICS.groupLine}px;margin:0 0 ${METRICS.groupGapBottom}px;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
-.fdv-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
-.fdv-skeleton-row + .fdv-skeleton-row{border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
-.fdv-cred{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.fieldPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l2)}
+.fdv-disclaimer{margin:0;font-size:${METRICS.tagSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary);overflow-wrap:anywhere}
+.fdv-skeleton{display:flex;flex-direction:column;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
+.fdv-skeleton-group{height:${METRICS.groupLine}px;margin:0;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-bg-layer-2);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
+.fdv-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);animation:fdv-breathe ${METRICS.breathe}ms ease-in-out infinite}
+.fdv-skeleton-row + .fdv-skeleton-row{border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fdv-cred{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.subCardPadY}px ${METRICS.subCardPadX}px;border-radius:${METRICS.radiusLg};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fdv-cred-head{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px}
 .fdv-cred-main{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.headGap}px;flex:1;min-width:0}
-.fdv-cred-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fdv-cred-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fdv-cred-status{font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .fdv-cred-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:none}
 .fdv-cred-form{display:flex;flex-direction:column;gap:${METRICS.inputGap}px;margin-top:${METRICS.headGap}px}
 .fdv-cred-form-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.headGap}px}
-.fdv-cred-alert{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.statusGap}px ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 10%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary)}
+.fdv-cred-alert{display:flex;flex-direction:column;gap:${METRICS.headGap}px;padding:${METRICS.noticePadY}px ${METRICS.noticePadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary)}
 .fdv-cred-details{margin:${METRICS.headGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
 @keyframes fdv-breathe{0%,100%{opacity:1}50%{opacity:.55}}
 @keyframes fdv-reveal{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
-@container (max-width:519px){.fdv-candidates{max-height:176px;overflow-y:auto}}
-@media (prefers-reduced-motion:reduce){.fdv-skeleton-group,.fdv-skeleton-row{animation:none}.fdv-candidates{animation:none}.fdv-caret,.fdv-dot,.fdv-input,.fdv-primary,.fdv-link{transition:none}}
+@container (max-width:519px){.fdv-candidates{max-height:176px;overflow-y:auto}.fdv-row-label{flex-basis:100%}}
+@media (prefers-reduced-motion:reduce){.fdv-skeleton-group,.fdv-skeleton-row{animation:none}.fdv-candidates{animation:none}.fdv-caret,.fdv-dot,.fdv-input,.fdv-primary,.fdv-btn,.fdv-link{transition:none}}
 `;
 
     /* ------------------------------------------------------------------ *
@@ -866,6 +897,44 @@ window.__ModuleLoader__.load({
      * 展示组件                                                            *
      * ------------------------------------------------------------------ */
 
+    function ShieldIcon() {
+      return h(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.9,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        h('path', { d: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' }),
+        h('path', { d: 'm9 12 2 2 4-4' }),
+      );
+    }
+
+    function TerminalIcon() {
+      return h(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.9,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        h('polyline', { points: '4 17 10 11 4 5' }),
+        h('line', { x1: 12, y1: 19, x2: 20, y2: 19 }),
+      );
+    }
+
     /** 小标签：来源、覆盖关系、当前生效项。 */
     function Tag(props) {
       // `text` 与 children 两种写法都要认：readiness 面板用 children 传状态词，
@@ -956,9 +1025,9 @@ window.__ModuleLoader__.load({
 
       let action = null;
       if (locked === true) action = null;
-      else if (reset) action = h('button', { type: 'button', className: 'fdv-link', onClick: onTakeOver }, t('action.takeOver'));
-      else if (editable && (owned || editing)) action = h('button', { type: 'button', className: 'fdv-link', onClick: onReset }, t('action.reset'));
-      else if (!editable) action = h('button', { type: 'button', className: 'fdv-link', onClick: onTakeOver }, t('action.takeOver'));
+      else if (reset) action = h('button', { type: 'button', className: 'fdv-btn', onClick: onTakeOver }, t('action.takeOver'));
+      else if (editable && (owned || editing)) action = h('button', { type: 'button', className: 'fdv-btn', onClick: onReset }, t('action.reset'));
+      else if (!editable) action = h('button', { type: 'button', className: 'fdv-btn', onClick: onTakeOver }, t('action.takeOver'));
 
       const footId = `fdv-${field}-foot`;
       return h(
@@ -1726,14 +1795,14 @@ window.__ModuleLoader__.load({
         if (next.kind === 'navigate' && navigate) {
           return h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'account', onClick: () => navigate(SECTION_FORGE_IAM) },
+            { type: 'button', className: 'fdv-btn', key: 'account', onClick: () => navigate(SECTION_FORGE_IAM) },
             t('readiness.action.openAccount'),
           );
         }
         if (next.kind === 'button') {
           return h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'retry', disabled: busy, onClick: next.onClick },
+            { type: 'button', className: 'fdv-btn', key: 'retry', disabled: busy, onClick: next.onClick },
             t(next.label),
           );
         }
@@ -1744,12 +1813,12 @@ window.__ModuleLoader__.load({
         return [
           h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'check', disabled: busy, onClick: () => void runCheck() },
+            { type: 'button', className: 'fdv-btn', key: 'check', disabled: busy, onClick: () => void runCheck() },
             busy ? t('readiness.action.check.busy') : t('readiness.action.check'),
           ),
           h(
             'button',
-            { type: 'button', className: 'fdv-link', key: 'gitee', disabled: true, title: t('readiness.gitee.notExecuted') },
+            { type: 'button', className: 'fdv-btn', key: 'gitee', disabled: true, title: t('readiness.gitee.notExecuted') },
             t('readiness.action.checkGitee'),
           ),
         ];
@@ -1759,9 +1828,13 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           { className: 'fdv-root' },
-          embedded ? null : h('div', { className: 'fdv-title' }, t('readiness.title')),
-          h(Skeleton, { key: 'skeleton' }),
-          h('p', { className: 'fdv-note', role: 'status', 'aria-live': 'polite' }, t('readiness.loading')),
+          embedded ? null : h('h2', { className: 'fdv-page-title' }, t('readiness.title')),
+          h(
+            'div',
+            { className: 'fdv-surface' },
+            h(Skeleton, { key: 'skeleton' }),
+            h('p', { className: 'fdv-note', role: 'status', 'aria-live': 'polite' }, t('readiness.loading')),
+          ),
         );
       }
 
@@ -1792,21 +1865,26 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'fdv-root', 'aria-busy': reading.mode === 'refreshing' ? 'true' : undefined },
-        embedded ? null : h('div', { className: 'fdv-title' }, t('readiness.title')),
+        embedded ? null : h('h2', { className: 'fdv-page-title' }, t('readiness.title')),
         h(
           'div',
-          { className: 'fdv-summary-row' },
-          h('span', { className: 'fdv-summary-text', role: 'status', 'aria-live': 'polite' }, summaryOf(members)),
+          { className: 'fdv-surface' },
           h(
-            'button',
-            { type: 'button', className: 'fdv-link', disabled: busy, onClick: () => void load() },
-            t('readiness.action.refresh'),
+            'div',
+            { className: 'fdv-summary-row' },
+            h('span', { className: 'fdv-avatar', 'aria-hidden': 'true' }, h(ShieldIcon)),
+            h('span', { className: 'fdv-summary-text', role: 'status', 'aria-live': 'polite' }, summaryOf(members)),
+            h(
+              'button',
+              { type: 'button', className: 'fdv-btn', disabled: busy, onClick: () => void load() },
+              t('readiness.action.refresh'),
+            ),
           ),
+          h('div', { className: 'fdv-group' }, READINESS_GROUPS.map(rowNode)),
+          reading.reason
+            ? h('p', { className: 'fdv-note fdv-note-error', role: 'status' }, t('readiness.failed', { reason: t(`readiness.state.${reading.reason}`) }))
+            : null,
         ),
-        h('div', { className: 'fdv-group' }, READINESS_GROUPS.map(rowNode)),
-        reading.reason
-          ? h('p', { className: 'fdv-note fdv-note-error', role: 'status' }, t('readiness.failed', { reason: t(`readiness.state.${reading.reason}`) }))
-          : null,
         embedded ? null : h('p', { className: 'fdv-footer fdv-disclaimer', key: 'footer' }, t('readiness.footer')),
       );
     }
@@ -2122,15 +2200,26 @@ window.__ModuleLoader__.load({
         });
       }
 
+      const cardHeader = h(
+        'div',
+        { className: 'fdv-card-header', key: 'header' },
+        h('span', { className: 'fdv-avatar', 'aria-hidden': 'true' }, h(TerminalIcon)),
+        h(
+          'div',
+          { className: 'fdv-card-head-text' },
+          h('h2', { className: 'fdv-title', key: 'title' }, t('title')),
+          h('p', { className: 'fdv-intro', key: 'intro' }, t('intro')),
+        ),
+      );
+
       const children = [
-        h('h2', { className: 'fdv-title', key: 'title' }, t('title')),
-        h('p', { className: 'fdv-intro', key: 'intro' }, t('intro')),
+        cardHeader,
         h(StatusLine, { key: 'status', t, tone: status.tone, text: status.text }),
       ];
 
       if (view.mode === 'loading') {
         children.push(h(Skeleton, { key: 'skeleton' }));
-        return h('div', { className: 'fdv-root' }, children);
+        return h('div', { className: 'fdv-root' }, h('div', { className: 'fdv-surface' }, children));
       }
 
       // 写面缺失（configEditor 未挂载 / profile 无可写条目）：读面照常，字段降级只读（不关页面）。
@@ -2138,7 +2227,7 @@ window.__ModuleLoader__.load({
 
       if (view.mode === 'error') {
         children.push(h(UnavailableNote, { key: 'unavailable', t }));
-        return h('div', { className: 'fdv-root' }, children);
+        return h('div', { className: 'fdv-root' }, h('div', { className: 'fdv-surface' }, children));
       }
 
       children.push(
@@ -2173,7 +2262,9 @@ window.__ModuleLoader__.load({
       // 第二行：超时（单行 .fdv-scalar）。页面只有两行一列，行间只有一条 .5px 分隔线。
       children.push(timeoutField());
 
-      const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict') ? ' fdv-note-error' : '';
+      const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict')
+        ? ' fdv-note-error'
+        : (!notice && phase !== 'saving' && dirty ? ' fdv-note-dirty' : '');
       /** 回执一句：保存态优先，其次才是失败原因；不再为「应用」单开一行假状态。 */
       const receiptSentence = (() => {
         if (notice) return notice.text;
@@ -2213,7 +2304,7 @@ window.__ModuleLoader__.load({
                   notice && notice.refresh
                     ? h(
                         'button',
-                        { type: 'button', className: 'fdv-link fdv-note-action', onClick: () => void load(true) },
+                        { type: 'button', className: 'fdv-btn fdv-note-action', onClick: () => void load(true) },
                         t('action.refresh'),
                       )
                     : null,
@@ -2225,7 +2316,7 @@ window.__ModuleLoader__.load({
                     'button',
                     {
                       type: 'button',
-                      className: 'fdv-link',
+                      className: 'fdv-btn fdv-btn-md',
                       disabled: phase === 'checking',
                       onClick: () => {
                         if (phase !== 'checking') void load(true);
@@ -2260,7 +2351,7 @@ window.__ModuleLoader__.load({
         h(DevopsCredentialItem, { key: 'credential', t }),
       );
 
-      return h('div', { className: 'fdv-root' }, children);
+      return h('div', { className: 'fdv-root' }, h('div', { className: 'fdv-surface' }, children));
     }
 
     /* ------------------------------------------------------------------ *
@@ -2509,26 +2600,26 @@ window.__ModuleLoader__.load({
           );
         } else if (isHosted) {
           actions.push(
-            h('button', { type: 'button', className: 'fdv-link', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
-            h('button', { type: 'button', className: 'fdv-link', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),
           );
         } else if (isMismatch) {
           actions.push(
-            h('button', { type: 'button', className: 'fdv-link', key: 'clearOld', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.clearOld')),
-            h('button', { type: 'button', className: 'fdv-link', key: 'resetAccount', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.resetAccount')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'clearOld', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.clearOld')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'resetAccount', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.resetAccount')),
           );
         } else if (isKeychainUnavailable) {
           actions.push(
-            h('button', { type: 'button', className: 'fdv-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
           );
         } else if (state !== 'PENDING_WRITE') {
           actions.push(
-            h('button', { type: 'button', className: 'fdv-link', key: 'specify', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.specify')),
+            h('button', { type: 'button', className: 'fdv-btn', key: 'specify', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.specify')),
           );
         }
       } else if (statusView.mode === 'failed' && !openForm) {
         actions.push(
-          h('button', { type: 'button', className: 'fdv-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+          h('button', { type: 'button', className: 'fdv-btn', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
         );
       }
 
@@ -2587,7 +2678,7 @@ window.__ModuleLoader__.load({
                   'button',
                   {
                     type: 'button',
-                    className: 'fdv-link',
+                    className: 'fdv-btn fdv-btn-md',
                     disabled: isPending,
                     onClick: () => {
                       setOpenForm(false);

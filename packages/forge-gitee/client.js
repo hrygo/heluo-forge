@@ -43,21 +43,29 @@ window.__ModuleLoader__.load({
      * 数字集中在这里，是为了让"宽屏约 78px / 窄屏约 106px"这类验收说法有一个可改的落点。
      */
     const METRICS = Object.freeze({
-      titleSize: 16,
-      titleLine: 24,
+      maxWidth: 720,
+      titleSize: 15,
+      titleLine: 22,
+      titleWeight: 600,
+      avatarSize: 34,
+      cardPadY: 14,
+      cardPadX: 16,
+      cardGap: 12,
+      subCardPadY: 10,
+      subCardPadX: 12,
       introSize: 12,
       introLine: 18,
-      introGap: 12,
-      statusHeight: 30,
+      introGap: 2,
+      statusHeight: 34,
       statusGap: 8,
       statusPadX: 12,
       dotSize: 6,
-      listGapTop: 14,
-      rowPadY: 10,
+      listGapTop: 0,
+      rowPadY: 12,
       labelSize: 13,
       labelWeight: 500,
       labelLine: 20,
-      cellSize: 12,
+      cellSize: 13,
       cellLine: 18,
       inputHeight: 34,
       inputGap: 6,
@@ -65,6 +73,9 @@ window.__ModuleLoader__.load({
       hintLine: 18,
       footerGapTop: 14,
       buttonHeight: 32,
+      compactButtonHeight: 26,
+      noticePadY: 10,
+      noticePadX: 12,
       separator: 0.5,
       tagSize: 11,
       codeSize: 12,
@@ -72,82 +83,102 @@ window.__ModuleLoader__.load({
       ease: 'var(--ds-ease-in-out)',
       fast: 100,
       swap: 160,
+      radiusXs: 'var(--dsw-radius-xs, 4px)',
       radiusSm: 'var(--dsw-radius-sm)',
       radiusMd: 'var(--dsw-radius-md)',
+      radiusLg: 'var(--dsw-radius-lg)',
+      radiusXl: 'var(--dsw-radius-xl)',
     });
 
     const CSS = `
-.fge-root{display:flex;flex-direction:column;color:var(--dsw-alias-label-primary);font-family:inherit;container-type:inline-size}
-.fge-title{margin:0;font-size:${METRICS.titleSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.titleLine}px}
-.fge-intro{margin:${METRICS.introGap}px 0 0;font-size:${METRICS.introSize}px;line-height:${METRICS.introLine}px;color:var(--dsw-alias-label-secondary)}
-.fge-status{box-sizing:border-box;display:flex;align-items:center;gap:${METRICS.statusGap}px;height:${METRICS.statusHeight}px;margin-top:${METRICS.statusGap}px;padding:0 ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fge-root{box-sizing:border-box;width:100%;max-width:${METRICS.maxWidth}px;display:flex;flex-direction:column;gap:${METRICS.cardGap}px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);container-type:inline-size}
+.fge-surface{display:flex;flex-direction:column;gap:${METRICS.cardGap}px;padding:${METRICS.cardPadY}px ${METRICS.cardPadX}px;border-radius:${METRICS.radiusXl};background:var(--dsw-alias-settings-card-fill);border:${METRICS.separator}px solid var(--dsw-alias-settings-card-stroke);transition:border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fge-surface:hover{border-color:var(--dsw-alias-border-l3)}
+.fge-card-header{display:flex;align-items:center;gap:${METRICS.cardGap}px;min-width:0}
+.fge-avatar{width:${METRICS.avatarSize}px;height:${METRICS.avatarSize}px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;flex:none;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent);color:var(--dsw-alias-state-business-primary)}
+.fge-card-head-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:${METRICS.introGap}px}
+.fge-title{margin:0;font-size:${METRICS.titleSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.titleLine}px;color:var(--dsw-alias-label-primary)}
+.fge-intro{margin:0;font-size:${METRICS.introSize}px;line-height:${METRICS.introLine}px;color:var(--dsw-alias-label-secondary)}
+.fge-status{box-sizing:border-box;display:flex;align-items:center;gap:${METRICS.statusGap}px;min-height:${METRICS.statusHeight}px;margin-top:0;padding:6px ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fge-status-ready{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 22%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 7%,transparent)}
+.fge-status-unavailable{border-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 24%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent)}
 .fge-dot{flex:none;width:${METRICS.dotSize}px;height:${METRICS.dotSize}px;border-radius:50%;background:var(--dsw-alias-state-idle-primary);transition:background-color ${METRICS.swap}ms ${METRICS.ease}}
-.fge-status-ready .fge-dot{background:var(--dsw-static-green-500)}
+.fge-status-ready .fge-dot{background:var(--dsw-alias-state-success-primary)}
 .fge-status-unset .fge-dot{background:var(--dsw-alias-state-idle-primary)}
-.fge-status-unavailable .fge-dot{background:var(--dsw-static-amber-500)}
+.fge-status-unavailable .fge-dot{background:var(--dsw-alias-state-warn-primary)}
 .fge-status-text{flex:1;min-width:0;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)}
+.fge-status-ready .fge-status-text{color:var(--dsw-alias-label-primary)}
+.fge-status-unavailable .fge-status-text{color:var(--dsw-alias-state-warn-primary)}
 .fge-status-actions{display:flex;flex:none;align-items:center;gap:${METRICS.statusGap}px}
 .fge-cards{display:flex;flex-direction:column;width:100%;margin:${METRICS.listGapTop}px 0 0}
-.fge-card{display:flex;align-items:flex-start;gap:12px;padding:${METRICS.rowPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-secondary)}
-.fge-card:first-child{border-top:none}
-.fge-card-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.fge-card-label{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
-.fge-card-value{font-size:${METRICS.cellSize}px;line-height:${METRICS.cellLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+.fge-card{display:flex;align-items:flex-start;gap:12px;padding:${METRICS.rowPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fge-card:first-child{padding-top:0;border-top:none}
+.fge-card-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.fge-card-label{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
+.fge-card-value{font-size:${METRICS.hintSize}px;line-height:${METRICS.cellLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .fge-card-value-local{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
 .fge-card-actions{display:flex;flex:none;flex-wrap:wrap;align-items:center;gap:8px}
 .fge-code{font-family:var(--dsw-font-mono,ui-monospace,monospace);font-size:${METRICS.codeSize}px;overflow-wrap:anywhere}
-.fge-input{box-sizing:border-box;width:100%;height:${METRICS.inputHeight}px;margin-top:${METRICS.inputGap}px;padding:0 10px;border:${METRICS.separator * 2}px solid var(--dsw-alias-border-secondary);border-radius:${METRICS.radiusSm};background:var(--dsw-alias-bg-primary);color:var(--dsw-alias-label-primary);font-family:inherit;font-size:${METRICS.cellSize}px;line-height:${METRICS.inputHeight - 4}px}
+.fge-input{box-sizing:border-box;width:100%;height:${METRICS.inputHeight}px;margin-top:${METRICS.inputGap}px;padding:0 10px;border:${METRICS.separator}px solid var(--dsw-alias-border-l4);border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:inherit;font-size:${METRICS.cellSize}px;line-height:${METRICS.inputHeight - 4}px;transition:border-color ${METRICS.fast}ms ${METRICS.ease},box-shadow ${METRICS.fast}ms ${METRICS.ease}}
 .fge-input::placeholder{color:var(--dsw-alias-label-tertiary)}
-.fge-input:focus{border-color:var(--dsw-alias-brand-primary);outline:none}
-.fge-input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.fge-input[aria-invalid=true]{border-color:var(--dsw-static-red-500)}
-.fge-input:disabled{opacity:.6}
+.fge-input:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 15%,transparent);outline:none}
+.fge-input:focus-visible{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 15%,transparent)}
+.fge-input[aria-invalid=true]{border-color:var(--dsw-alias-state-error-primary)}
+.fge-input:disabled{opacity:.55;cursor:default}
 .fge-scalar{max-width:220px}
 .fge-hint{margin:${METRICS.inputGap}px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary)}
-.fge-hint-error{color:var(--dsw-static-red-500)}
-.fge-link{display:inline-flex;align-items:center;height:${METRICS.tagSize + 7}px;padding:0;border:none;background:none;color:var(--dsw-alias-brand-primary);font-family:inherit;font-size:${METRICS.hintSize}px;line-height:1;cursor:pointer;text-decoration:none}
+.fge-hint-error{color:var(--dsw-alias-state-error-primary)}
+.fge-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:${METRICS.compactButtonHeight}px;padding:0 10px;border:${METRICS.separator}px solid var(--dsw-alias-border-l3);border-radius:${METRICS.radiusMd};background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;font-family:inherit;font-size:${METRICS.hintSize}px;font-weight:${METRICS.labelWeight};line-height:1;white-space:nowrap;transition:background-color ${METRICS.fast}ms ${METRICS.ease},border-color ${METRICS.fast}ms ${METRICS.ease}}
+.fge-btn:hover:not(:disabled){background:var(--dsw-alias-button-floating-hover);border-color:var(--dsw-alias-border-l2)}
+.fge-btn:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+.fge-btn:disabled{color:var(--dsw-alias-label-tertiary);cursor:default;opacity:.45}
+.fge-btn-md{height:${METRICS.buttonHeight}px;padding:0 12px;font-size:${METRICS.labelSize}px}
+.fge-link{display:inline-flex;align-items:center;height:${METRICS.tagSize + 7}px;padding:0;border:none;background:none;color:var(--dsw-alias-state-business-primary);font-family:inherit;font-size:${METRICS.hintSize}px;line-height:1;cursor:pointer;text-decoration:none}
 .fge-link:hover{text-decoration:underline}
-.fge-link:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;border-radius:${METRICS.radiusSm}}
+.fge-link:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px;border-radius:${METRICS.radiusSm}}
 .fge-link:disabled{color:var(--dsw-alias-label-tertiary);cursor:default;text-decoration:none}
-.fge-cred{display:flex;flex-direction:column;gap:6px;padding:${METRICS.rowPadY}px 0;border-top:${METRICS.separator}px solid var(--dsw-alias-border-secondary)}
+.fge-cred{display:flex;flex-direction:column;gap:6px;padding:${METRICS.subCardPadY}px ${METRICS.subCardPadX}px;border-radius:${METRICS.radiusLg};background:var(--dsw-alias-bg-layer-2);border:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
 .fge-cred-head{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px}
 .fge-cred-main{display:flex;flex-wrap:wrap;align-items:center;gap:6px;flex:1;min-width:0}
-.fge-cred-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fge-cred-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.titleWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fge-cred-status{font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-.fge-cred-status-ok{color:var(--dsw-static-green-500);font-weight:${METRICS.labelWeight}}
-.fge-cred-status-warn{color:var(--dsw-static-amber-500);font-weight:${METRICS.labelWeight}}
+.fge-cred-status-ok{display:inline-flex;align-items:center;padding:1px 8px;border-radius:${METRICS.radiusXs};font-size:${METRICS.tagSize}px;line-height:16px;color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 10%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-success-primary) 22%,transparent);font-weight:${METRICS.labelWeight}}
+.fge-cred-status-warn{display:inline-flex;align-items:center;padding:1px 8px;border-radius:${METRICS.radiusXs};font-size:${METRICS.tagSize}px;line-height:16px;color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 10%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent);font-weight:${METRICS.labelWeight}}
 .fge-cred-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;flex:none}
 .fge-cred-form{display:flex;flex-direction:column;gap:${METRICS.inputGap}px;margin-top:6px}
 .fge-cred-form-actions{display:flex;flex-wrap:wrap;align-items:center;gap:${METRICS.statusGap}px;margin-top:6px}
-.fge-cred-alert{display:flex;flex-direction:column;gap:6px;padding:${METRICS.statusGap}px ${METRICS.statusPadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-static-amber-500) 12%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary)}
+.fge-cred-alert{display:flex;flex-direction:column;gap:6px;padding:${METRICS.noticePadY}px ${METRICS.noticePadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-primary)}
 .fge-cred-files{margin:0;padding-left:16px;font-family:var(--dsw-font-mono,ui-monospace,monospace);font-size:${METRICS.codeSize}px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .fge-cred-details{margin:4px 0 0;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fge-cred-details summary{cursor:pointer}
-.fge-footer{margin-top:${METRICS.footerGapTop}px;padding-top:${METRICS.rowPadY}px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-secondary);font-size:${METRICS.tagSize}px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
-.fge-receipt{display:flex;flex-direction:column;gap:2px;margin-top:${METRICS.footerGapTop}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
+.fge-footer-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:${METRICS.statusGap}px;padding-top:${METRICS.footerGapTop}px;border-top:${METRICS.separator}px solid var(--dsw-alias-border-l4)}
+.fge-footer-actions{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-left:auto;flex:none}
+.fge-footer{margin:0;font-size:${METRICS.tagSize}px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.fge-receipt{display:flex;flex-direction:column;gap:2px;margin:0;flex:1;min-width:180px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-secondary)}
 .fge-receipt-line{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}
 .fge-receipt-key{flex:none;min-width:56px;color:var(--dsw-alias-label-tertiary)}
-.fge-receipt-error{color:var(--dsw-static-red-500)}
-.fge-unavailable{display:flex;flex-direction:column;gap:4px;margin-top:${METRICS.listGapTop}px;padding:12px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
-.fge-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px}
+.fge-receipt-error{color:var(--dsw-alias-state-error-primary)}
+.fge-unavailable{display:flex;flex-direction:column;gap:4px;margin-top:0;padding:${METRICS.noticePadY}px ${METRICS.noticePadX}px;border-radius:${METRICS.radiusMd};background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);border:${METRICS.separator}px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 22%,transparent);font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px}
+.fge-unavailable-title{font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.labelLine}px;color:var(--dsw-alias-label-primary)}
 .fge-unavailable-body{color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-.fge-skeleton{display:flex;flex-direction:column;gap:8px;margin-top:${METRICS.listGapTop}px}
-.fge-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-interactive-bg-hover);animation:fge-breathe 1200ms ${METRICS.ease} infinite alternate}
+.fge-skeleton{display:flex;flex-direction:column;gap:8px;margin-top:0}
+.fge-skeleton-row{height:${METRICS.skeletonRow}px;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-bg-layer-2);animation:fge-breathe 1200ms ${METRICS.ease} infinite alternate}
 @keyframes fge-breathe{from{opacity:.55}to{opacity:.9}}
-.fge-primary{box-sizing:border-box;height:${METRICS.buttonHeight}px;padding:0 14px;border:${METRICS.separator * 2}px solid transparent;border-radius:${METRICS.radiusSm};background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font-family:inherit;font-size:${METRICS.cellSize}px;line-height:1;cursor:pointer;transition:opacity ${METRICS.fast}ms ${METRICS.ease}}
-.fge-primary:hover:not(:disabled){opacity:.9}
-.fge-primary:active:not(:disabled){opacity:.8}
-.fge-primary:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
-.fge-primary:disabled{opacity:.5;cursor:default}
+.fge-primary{box-sizing:border-box;height:${METRICS.buttonHeight}px;padding:0 16px;border:${METRICS.separator}px solid transparent;border-radius:${METRICS.radiusMd};background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font-family:inherit;font-size:${METRICS.labelSize}px;font-weight:${METRICS.labelWeight};line-height:1;cursor:pointer;transition:background-color ${METRICS.fast}ms ${METRICS.ease},opacity ${METRICS.fast}ms ${METRICS.ease}}
+.fge-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
+.fge-primary:active:not(:disabled){opacity:.9}
+.fge-primary:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+.fge-primary:disabled{opacity:.45;cursor:default}
 @container (max-width:519px){
-  .fge-status{height:auto;min-height:${METRICS.statusHeight}px;padding:4px ${METRICS.statusPadX}px;flex-wrap:wrap}
+  .fge-status{height:auto;min-height:${METRICS.statusHeight}px;padding:6px ${METRICS.statusPadX}px;flex-wrap:wrap}
   .fge-status-actions{width:100%;justify-content:flex-start}
   .fge-card{flex-direction:column;gap:6px}
   .fge-card-actions{width:100%}
   .fge-cred-head{flex-direction:column;align-items:flex-start}
+  .fge-footer-actions{width:100%;justify-content:flex-end}
 }
 @media (prefers-reduced-motion:reduce){
-  .fge-dot,.fge-primary{transition:none}
+  .fge-dot,.fge-primary,.fge-btn,.fge-input{transition:none}
   .fge-skeleton-row{animation:none}
 }
 `;
@@ -338,6 +369,41 @@ window.__ModuleLoader__.load({
       const ms = Number(value);
       if (!Number.isFinite(ms) || ms <= 0) return '';
       return Number.isInteger(ms / 1000) ? String(ms / 1000) : (ms / 1000).toFixed(1);
+    }
+
+    function GitBranchIcon() {
+      return h(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.9,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+        },
+        h('line', { x1: 6, y1: 3, x2: 6, y2: 15 }),
+        h('circle', { cx: 18, cy: 6, r: 3 }),
+        h('circle', { cx: 6, cy: 18, r: 3 }),
+        h('path', { d: 'M18 9a9 9 0 0 1-9 9' }),
+      );
+    }
+
+    function GiteeCardHeader({ t }) {
+      return h(
+        'div',
+        { className: 'fge-card-header' },
+        h('span', { className: 'fge-avatar', 'aria-hidden': 'true' }, h(GitBranchIcon)),
+        h(
+          'div',
+          { className: 'fge-card-head-text' },
+          h('h3', { className: 'fge-title' }, t('title')),
+          h('p', { className: 'fge-intro' }, t('intro')),
+        ),
+      );
     }
 
     function StatusLine({ tone, text, actions }) {
@@ -574,6 +640,7 @@ window.__ModuleLoader__.load({
           setNotice({ key: 'save.nochange', error: false });
           return;
         }
+        setNotice(null);
         const epoch = sessionEpoch.current;
         setSaving({ state: 'saving', at: null, applied: null });
         setErrors({});
@@ -627,10 +694,13 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           { className: 'fge-root' },
-          h('h3', { className: 'fge-title' }, t('title')),
-          h('p', { className: 'fge-intro' }, t('intro')),
-          h(StatusLine, { tone: 'unset', text: t('status.loading'), actions: null }),
-          h(Skeleton),
+          h(
+            'div',
+            { className: 'fge-surface' },
+            h(GiteeCardHeader, { t }),
+            h(StatusLine, { tone: 'unset', text: t('status.loading'), actions: null }),
+            h(Skeleton),
+          ),
         );
       }
 
@@ -638,17 +708,20 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           { className: 'fge-root' },
-          h('h3', { className: 'fge-title' }, t('title')),
-          h('p', { className: 'fge-intro' }, t('intro')),
-          h(StatusLine, {
-            tone: 'unavailable',
-            text: t('status.unavailable', { reason: reading.reason ?? '' }),
-            actions: h(
-              'button',
-              { type: 'button', className: 'fge-link', onClick: () => load() },
-              t('error.retry'),
-            ),
-          }),
+          h(
+            'div',
+            { className: 'fge-surface' },
+            h(GiteeCardHeader, { t }),
+            h(StatusLine, {
+              tone: 'unavailable',
+              text: t('status.unavailable', { reason: reading.reason ?? '' }),
+              actions: h(
+                'button',
+                { type: 'button', className: 'fge-btn', onClick: () => load() },
+                t('error.retry'),
+              ),
+            }),
+          ),
         );
       }
 
@@ -687,7 +760,7 @@ window.__ModuleLoader__.load({
               {
                 key: 'done',
                 type: 'button',
-                className: 'fge-link',
+                className: 'fge-btn',
                 disabled: locked,
                 onClick: () => setEditing((previous) => ({ ...previous, [field]: false })),
               },
@@ -701,7 +774,7 @@ window.__ModuleLoader__.load({
               {
                 key: 'edit',
                 type: 'button',
-                className: 'fge-link',
+                className: 'fge-btn',
                 disabled: locked,
                 onClick: () => {
                   if (local || field !== 'cliPath') {
@@ -719,7 +792,7 @@ window.__ModuleLoader__.load({
           actions.push(
             h(
               'button',
-              { key: 'auto', type: 'button', className: 'fge-link', disabled: locked, onClick: () => restore(field) },
+              { key: 'auto', type: 'button', className: 'fge-btn', disabled: locked, onClick: () => restore(field) },
               t('card.action.auto'),
             ),
           );
@@ -767,47 +840,54 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'fge-root' },
-        h('h3', { className: 'fge-title' }, t('title')),
-        h('p', { className: 'fge-intro' }, t('intro')),
-        h(StatusLine, {
-          tone: statusTone,
-          text: statusText,
-          actions: h(
-            React.Fragment,
-            null,
-            h('button', { type: 'button', className: 'fge-link', onClick: () => load() }, t('action.refresh')),
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'fge-primary',
-                disabled: !writable || saving.state === 'saving',
-                onClick: save,
-              },
-              saving.state === 'saving' ? t('action.saving') : t('action.save'),
-            ),
-          ),
-        }),
         h(
           'div',
-          { className: 'fge-cards' },
-          renderFieldCard('cliPath'),
-          renderFieldCard('timeoutMs'),
+          { className: 'fge-surface' },
+          h(GiteeCardHeader, { t }),
+          h(StatusLine, { tone: statusTone, text: statusText, actions: null }),
           h(
             'div',
-            { className: 'fge-card', key: 'host' },
+            { className: 'fge-cards' },
+            renderFieldCard('cliPath'),
+            renderFieldCard('timeoutMs'),
             h(
               'div',
-              { className: 'fge-card-main' },
-              h('span', { className: 'fge-card-label' }, t('field.host')),
-              h('span', { className: 'fge-card-value' }, t('value.host')),
+              { className: 'fge-card', key: 'host' },
+              h(
+                'div',
+                { className: 'fge-card-main' },
+                h('span', { className: 'fge-card-label' }, t('field.host')),
+                h('span', { className: 'fge-card-value' }, t('value.host')),
+              ),
             ),
           ),
+          writable ? null : h(UnavailableNote, { t, reason: snapshot?.reason ?? 'GITEE_CONFIG_UNAVAILABLE', entryId: snapshot?.entryId ?? 'heluo-gitee' }),
+          h(
+            'div',
+            { className: 'fge-footer-bar' },
+            h(
+              React.Fragment,
+              null,
+              notice === null ? h(SaveReceipt, { t, receipt }) : h('p', { className: 'fge-hint', role: 'status' }, t(notice.key)),
+            ),
+            h(
+              'div',
+              { className: 'fge-footer-actions' },
+              h('button', { type: 'button', className: 'fge-btn fge-btn-md', onClick: () => load() }, t('action.refresh')),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'fge-primary',
+                  disabled: !writable || saving.state === 'saving',
+                  onClick: save,
+                },
+                saving.state === 'saving' ? t('action.saving') : t('action.save'),
+              ),
+            ),
+          ),
+          h(GiteeCredentialItem, { t }),
         ),
-        notice === null ? null : h('p', { className: 'fge-hint', role: 'status' }, t(notice.key)),
-        writable ? null : h(UnavailableNote, { t, reason: snapshot?.reason ?? 'GITEE_CONFIG_UNAVAILABLE', entryId: snapshot?.entryId ?? 'heluo-gitee' }),
-        h(SaveReceipt, { t, receipt }),
-        h(GiteeCredentialItem, { t }),
         h('p', { className: 'fge-footer' }, t('footer.declaration')),
       );
     }
@@ -1010,26 +1090,26 @@ window.__ModuleLoader__.load({
           );
         } else if (isHosted) {
           actions.push(
-            h('button', { type: 'button', className: 'fge-link', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
-            h('button', { type: 'button', className: 'fge-link', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),
+            h('button', { type: 'button', className: 'fge-btn', key: 'replace', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.replace')),
+            h('button', { type: 'button', className: 'fge-btn', key: 'reset', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.reset')),
           );
         } else if (isMismatch) {
           actions.push(
-            h('button', { type: 'button', className: 'fge-link', key: 'clearOld', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.clearOld')),
-            h('button', { type: 'button', className: 'fge-link', key: 'resetAccount', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.resetAccount')),
+            h('button', { type: 'button', className: 'fge-btn', key: 'clearOld', disabled: isPending, onClick: () => void clearToken() }, busyAction === 'clearing' ? t('credential.action.clearing') : t('credential.action.clearOld')),
+            h('button', { type: 'button', className: 'fge-btn', key: 'resetAccount', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, t('credential.action.resetAccount')),
           );
         } else if (isKeychainUnavailable) {
           actions.push(
-            h('button', { type: 'button', className: 'fge-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+            h('button', { type: 'button', className: 'fge-btn', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
           );
         } else if (state !== 'PENDING_WRITE') {
           actions.push(
-            h('button', { type: 'button', className: 'fge-link', key: 'specify', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, hasPlaintextRisk ? t('credential.action.overrideRisk') : t('credential.action.specify')),
+            h('button', { type: 'button', className: 'fge-btn', key: 'specify', disabled: isPending, onClick: () => { setOpenForm(true); setFeedback(null); } }, hasPlaintextRisk ? t('credential.action.overrideRisk') : t('credential.action.specify')),
           );
         }
       } else if (statusView.mode === 'failed' && !openForm) {
         actions.push(
-          h('button', { type: 'button', className: 'fge-link', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
+          h('button', { type: 'button', className: 'fge-btn', key: 'retry', disabled: isPending, onClick: () => void reload() }, t('credential.action.retry')),
         );
       }
 
@@ -1097,7 +1177,7 @@ window.__ModuleLoader__.load({
                   'button',
                   {
                     type: 'button',
-                    className: 'fge-link',
+                    className: 'fge-btn fge-btn-md',
                     disabled: isPending,
                     onClick: () => {
                       setOpenForm(false);

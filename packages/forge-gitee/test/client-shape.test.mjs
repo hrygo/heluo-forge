@@ -648,3 +648,46 @@ test('AC-13: 回包只清本次提交的草稿——保存期间新写的草稿�
     mount.teardown();
   }
 });
+
+for (const scenario of [
+  {
+    name: '保存成功',
+    response: { ok: true, status: 200, json: async () => ({ ok: true, applied: { ok: true }, snapshot: SNAPSHOT }) },
+    expected: ['save.saved', 'save.applied'],
+  },
+  {
+    name: '保存冲突',
+    response: { ok: false, status: 409, json: async () => ({}) },
+    expected: ['save.conflict'],
+  },
+]) {
+  test(`无改动提示后改为自动：${scenario.name}回执仍可见`, async () => {
+    let submitted;
+    const mount = await mountGitee({
+      post: async (_url, init) => {
+        submitted = JSON.parse(init.body);
+        return scenario.response;
+      },
+    });
+    try {
+      let tree = mount.render();
+      findButton(tree, 'action.save').props.onClick();
+      tree = mount.render();
+      assert.ok(flatten(tree).includes('save.nochange'), '无改动保存应显示提示');
+
+      findButton(tree, 'card.action.auto').props.onClick();
+      tree = mount.render();
+      findButton(tree, 'action.save').props.onClick();
+      await tick();
+      tree = mount.render();
+
+      assert.equal(mount.calls.filter((call) => call.method === 'POST').length, 1);
+      assert.deepEqual(submitted.fields, { cliPath: null }, '只移除本机 cliPath 覆盖');
+      const text = flatten(tree);
+      for (const key of scenario.expected) assert.ok(text.includes(key), `保存回执应显示 ${key}`);
+      assert.ok(!text.includes('save.nochange'), '旧的无改动提示不能覆盖新的保存结果');
+    } finally {
+      mount.teardown();
+    }
+  });
+}
