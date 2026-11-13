@@ -460,7 +460,9 @@ window.__ModuleLoader__.load({
         setActiveEnv(envId);
         setMsg(undefined);
         try {
-          await api(`${API}/settings`, { method: 'POST', body: JSON.stringify({ activeEnvironmentId: envId }) });
+          // api(path, body) 的第二参是数据对象（内部自行 POST + stringify），
+          // 不能传 fetch-init 形状——method/body 会进入请求体并触发服务端白名单拒绝。
+          await api(`${API}/settings`, { activeEnvironmentId: envId });
           setMsg({ kind: 'ok', text: t('settings.saved') });
           onSaved();
         } catch (e) {
