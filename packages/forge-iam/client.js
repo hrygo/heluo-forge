@@ -3736,7 +3736,10 @@ window.__ModuleLoader__.load({
         const session = deriveSessionUi(next);
         // A late success cannot revive ready after any loss of readiness. A
         // definite failure still belongs to this attempt and remains visible.
-        if (request.startedReady && !session.ready) request.lostReady = true;
+        if (request.startedReady && !session.ready && !request.lostReady) {
+          request.lostReady = true;
+          request.lossEpoch = viewBarrier.current.epoch;
+        }
         const changedAccount = session.ready && request.principal && next?.principal !== request.principal;
         if (!session.signedOut && !session.authenticating && !changedAccount) return;
         request.stale = true;
@@ -3780,7 +3783,7 @@ window.__ModuleLoader__.load({
           let outcome = credentialSaveOutcome(result);
           if (outcome === 'saved' && request.principal && result.body.view.principal !== request.principal) outcome = 'unknown';
           setCredentialWriteState(outcome === 'unknown' ? 'unknown' : 'idle');
-          if (!live.current || request.stale || !isCurrentEpoch(epoch)) return;
+          if (!live.current || request.stale || (!isCurrentEpoch(epoch) && !(request.lostReady && isCurrentEpoch(request.lossEpoch)))) return;
           if (outcome === 'unknown') {
             setCredential((current) => ({ ...current, value: '', saving: false, notice: CREDENTIAL_SAVE_UNKNOWN_NOTICE }));
             return;

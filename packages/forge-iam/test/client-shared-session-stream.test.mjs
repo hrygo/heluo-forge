@@ -82,6 +82,7 @@ test('凭据写入跨越 epoch 时所有组件保留订阅，旧流事件不得�
   t.after(() => page.close());
   await mountAll(page);
   assert.equal(stream.active, 1);
+  button(page, 'forge-iam', '更换密钥').props.onClick();
   const field = nodes(page.render('forge-iam')).find((node) => node.props['aria-label'] === '个人访问凭证');
   field.props.onChange({ target: { value: 'synthetic-credential' } });
   const saving = button(page, 'forge-iam', '保存凭据').props.onClick();
@@ -390,6 +391,7 @@ test('等待首帧期间保存跨 epoch 丢弃旧轮询，新轮询可同步换�
   await page.settled();
   defer = true;
   const oldPoll = page.tick();
+  button(page, 'forge-iam', '更换密钥').props.onClick();
   nodes(page.render('forge-iam')).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
   const saving = button(page, 'forge-iam', '保存凭据').props.onClick();
   delayedView.resolve(Response.json(signedOut));
@@ -469,6 +471,7 @@ test('保存期间 SSE 账号切换重建共享流，旧回执不覆盖新账号
   }, { eventSource: stream.EventSource });
   t.after(() => page.close());
   await mountAll(page);
+  button(page, 'forge-iam', '更换密钥').props.onClick();
   nodes(page.render('forge-iam')).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
   const saving = button(page, 'forge-iam', '保存凭据').props.onClick();
   const beforeSwitch = stream.streams.at(-1);
@@ -496,6 +499,7 @@ test('有效换号帧触发同步重建时，所有仍挂载的组件收到同�
   await mountAll(page);
   stream.streams.at(-1).emit(ready);
   for (const id of ids) page.render(id);
+  button(page, 'forge-iam', '更换密钥').props.onClick();
   nodes(page.render('forge-iam')).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
   const saving = button(page, 'forge-iam', '保存凭据').props.onClick();
   const beforeSwitch = stream.streams.at(-1);
@@ -532,6 +536,7 @@ test('无流时保存推进 epoch，所有组件都丢弃操作前发出的迟�
   stream.streams.at(-1).fail();
   defer = true;
   const oldPoll = page.tick();
+  button(page, 'forge-iam', '更换密钥').props.onClick();
   nodes(page.render('forge-iam')).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
   const saving = button(page, 'forge-iam', '保存凭据').props.onClick();
   delayedView.resolve(Response.json(signedOut));
@@ -556,6 +561,7 @@ test('保存后开始的有效轮询触发同步换号时，所有仍挂载的�
   await mountAll(page);
   stream.streams.at(-1).emit(ready);
   for (const id of ids) page.render(id);
+  button(page, 'forge-iam', '更换密钥').props.onClick();
   nodes(page.render('forge-iam')).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
   const saving = button(page, 'forge-iam', '保存凭据').props.onClick();
   stream.streams.at(-1).fail();
@@ -587,6 +593,7 @@ test('共享轮询使用每个订阅者的 epoch，旧读取不能覆盖保存�
   stream.streams.at(-1).fail();
   defer = true;
   const oldPoll = page.tick();
+  button(page, 'forge-iam', '更换密钥').props.onClick();
   nodes(page.render('forge-iam')).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
   await button(page, 'forge-iam', '保存凭据').props.onClick();
   delayedView.resolve(Response.json(ready));
@@ -792,7 +799,7 @@ for (const lateResult of ['success', 'failure']) {
       if (id === 'forge-iam-launcher') assert.match(text(page.render(id)), /synthetic-other/);
       else if (id === 'forge-iam-banner') assert.equal(page.render(id), null);
       else {
-        assert.match(text(page.render(id)), /欢迎使用企业版/);
+        assert.match(text(page.render(id)), /企业服务初始化向导/);
         newStream.emit(other);
         assert.match(text(page.render(id)), /synthetic-other/);
       }

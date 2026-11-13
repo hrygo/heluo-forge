@@ -30,8 +30,9 @@ async function fixture(t, kind, save, { cancel } = {}) {
   t.after(() => panel.close());
   const button = (label) => panel.findButton(panel.render(), label);
   if (kind === 'onboarding') {
-    button('开始').props.onClick();
-    await button('登录').props.onClick();
+    await button('登录企业账号').props.onClick();
+  } else {
+    button('更换密钥').props.onClick();
   }
   const input = () => nodes(panel.render()).find((node) => node.props['aria-label'] === '个人访问凭证');
   input().props.onChange({ target: { value: 'synthetic-credential' } });
@@ -235,14 +236,14 @@ test('向导关闭为单飞，关闭期间不能登录，结束后设置页可�
     panel.close();
   });
   const button = (label) => panel.findButton(panel.render(), label);
-  button('开始').props.onClick();
+  /* The current onboarding starts at sign-in. */
   const oldSkip = button('跳过').props.onClick;
-  const oldLogin = button('登录').props.onClick;
+  const oldLogin = button('登录企业账号').props.onClick;
   const closing = oldSkip();
   const duplicate = oldSkip();
   assert.equal(cancellations.length, 1, 'two close events must send only one cancel');
   assert.equal(button('跳过').props.disabled, true);
-  assert.equal(button('登录').props.disabled, true);
+  assert.equal(button('登录企业账号').props.disabled, true);
   await oldLogin();
   assert.equal(signIns, 0, 'a stale login callback must not start login during close');
 
@@ -269,12 +270,12 @@ test('向导关闭期间迟到的登录响应不能重新推进向导', async (t
   }, { componentId: 'forge-iam-onboarding' });
   t.after(() => panel.close());
   const button = (label) => panel.findButton(panel.render(), label);
-  button('开始').props.onClick();
-  const signing = button('登录').props.onClick();
+  /* The current onboarding starts at sign-in. */
+  const signing = button('登录企业账号').props.onClick();
   const closing = button('跳过').props.onClick();
   login.resolve(Response.json({ view: onboardingReady }));
   await signing;
-  assert.equal(button('登录').props.disabled, true);
+  assert.equal(button('登录企业账号').props.disabled, true);
   assert.doesNotMatch(visibleText(panel.render()), /添加个人访问凭证/);
   cancel.resolve(Response.json({ view: signedOut }));
   await closing;
@@ -307,8 +308,8 @@ test('向导保存后获取模型期间换号，旧账号模型响应不能覆�
   }, { componentId: 'forge-iam-onboarding' });
   t.after(() => panel.close());
   const button = (name) => panel.findButton(panel.render(), name);
-  button('开始').props.onClick();
-  await button('登录').props.onClick();
+  /* The current onboarding starts at sign-in. */
+  await button('登录企业账号').props.onClick();
   nodes(panel.render()).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
   await button('保存并继续').props.onClick();
   view = { ...saved, principal: 'synthetic-other' };
@@ -332,7 +333,7 @@ for (const kind of ['settings', 'onboarding']) {
     }, { componentId: kind === 'onboarding' ? 'forge-iam-onboarding' : 'forge-iam' });
     t.after(() => panel.close());
     const button = (name) => panel.findButton(panel.render(), name);
-    if (kind === 'onboarding') { button('开始').props.onClick(); await button('登录').props.onClick(); }
+    if (kind === 'onboarding') { await button('登录企业账号').props.onClick(); } else { button('更换密钥').props.onClick(); }
     nodes(panel.render()).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
     const polling = panel.tick();
     await button(kind === 'onboarding' ? '保存并继续' : '保存凭据').props.onClick();
@@ -362,7 +363,7 @@ for (const kind of ['settings', 'onboarding']) {
     }, { componentId: kind === 'onboarding' ? 'forge-iam-onboarding' : 'forge-iam', eventSource: FakeEventSource });
     t.after(() => panel.close());
     const button = (name) => panel.findButton(panel.render(), name);
-    if (kind === 'onboarding') { button('开始').props.onClick(); await button('登录').props.onClick(); }
+    if (kind === 'onboarding') { await button('登录企业账号').props.onClick(); } else { button('更换密钥').props.onClick(); }
     nodes(panel.render()).find((node) => node.props['aria-label'] === '个人访问凭证').props.onChange({ target: { value: 'synthetic-credential' } });
     const original = streams[0];
     const saving = button(kind === 'onboarding' ? '保存并继续' : '保存凭据').props.onClick();
