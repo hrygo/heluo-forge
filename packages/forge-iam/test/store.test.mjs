@@ -350,7 +350,9 @@ test('a V2.1-format credential clears without tripping the legacy guard', async 
 test('credential values are opaque: punctuation, spaces and non-ASCII are stored verbatim', async () => {
   const atomic = createAtomicGatewayFixture();
   const store = createGatewayCredentialStore(atomic.credentials, atomic.options);
-  for (const value of ['gpt-4o@2024 key', '凭据-示例', `uag-sk-u-${'Z'.repeat(43)}`]) {
+  // issue #199 AC1: anything is storable, including CR/LF; the transport-side
+  // header guard rejects such values at call time, never at save time.
+  for (const value of ['gpt-4o@2024 key', '凭据-示例', `uag-sk-u-${'Z'.repeat(43)}`, 'line one\r\nline two']) {
     const saved = await store.save({ value, ownerSubject: 'E1001', enteredAt: '2030-01-01T00:00:00.000Z' });
     assert.deepEqual(await store.resolve(saved.credential), { value, source: 'keychain' });
   }

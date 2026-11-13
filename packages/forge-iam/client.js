@@ -1785,6 +1785,7 @@ window.__ModuleLoader__.load({
       IAM_GATEWAY_URL_INVALID: '请输入有效的 HTTP 或 HTTPS 网关地址。',
       // 模型门禁与网关：与宿主 MESSAGES 同码同句
       ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '网关未接受个人访问凭证，请在“设置 → 企业账号”检查或更换凭证。',
+      ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE: '保存的网关凭证无法用于发送请求，请重新粘贴网关提供的凭证。',
       ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有此模型的使用权限，请联系管理员。',
       ENTERPRISE_GATEWAY_RATE_LIMIT: '请求过于频繁，请稍后重试。',
       ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED: '所选模型的额度已用尽，请更换模型或联系管理员。',

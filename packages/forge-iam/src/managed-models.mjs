@@ -62,6 +62,11 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_GATEWAY_IAM_TOKEN_REJECTED: '企业身份令牌已失效，请重新登录后再试。',
   ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED: '个人访问凭证已被回收，请联系管理员重新申领。',
   ENTERPRISE_GATEWAY_CREDENTIAL_SUSPENDED: '个人访问凭证已被暂停，请联系管理员。',
+  // issue #199 item 5: a stored value that cannot travel as an HTTP header gets
+  // one deterministic local code instead of an undici transport error whose
+  // message could carry the raw value. Never a format or prefix check: the
+  // credential stays opaque and the gateway owns validity.
+  ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE: '保存的网关凭证无法用于发送请求，请重新粘贴网关提供的凭证。',
   ENTERPRISE_GATEWAY_IDENTITY_MISMATCH: '登录身份与凭证绑定账号不一致，请重新登录后重试。',
   ENTERPRISE_GATEWAY_CLIENT_NOT_RECOGNIZED: '当前客户端的标识未被企业网关识别，请升级客户端或联系管理员核准。',
   ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED: '所选模型的预算已用尽，请联系管理员或更换模型。',
@@ -92,6 +97,21 @@ const sameBinding = (bound, next) => bound?.baseURL === next?.baseURL
   && (bound?.subject ?? null) === (next?.subject ?? null);
 const BINDING_RECOVERY_MS = 5000;
 const REBUILD_ATTEMPT_LIMIT = 3;
+
+/**
+ * A stored credential stays opaque (issue #199): no format, charset or length
+ * rule at save time, and the gateway owns validity. The one local property the
+ * transport does impose is header safety: a value outside printable ASCII
+ * cannot travel as `Authorization: Bearer <key>`, and letting it reach the
+ * transport would surface undici's message, which can carry the raw value.
+ * Intercept it once here with a deterministic, echo-free code.
+ */
+export const assertSendableCredential = key => {
+  if (typeof key === 'string' && !/^[\x20-\x7e]*$/.test(key)) {
+    throw error('ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
+  }
+  return key;
+};
 
 /**
  * A stored selection maps model id → overrides. An empty object is a real
@@ -435,7 +455,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // replaying the call under another principal would cross a subject line.
       if ((bound.subject ?? null) !== (next.subject ?? null)) throw error('IAM_LOGIN_REQUIRED');
       if (!sameBinding(bound, next)) throw new IamError('IAM_GATEWAY_BINDING_CHANGED', MESSAGES.IAM_GATEWAY_BINDING_CHANGED, { retryable: true });
-      return next.key;
+      // The transport rejects header-unsafe values with its own message, which can
+      // carry the raw value; intercept once here with a deterministic code.
+      return assertSendableCredential(next.key);
     };
   }
 
@@ -449,6 +471,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const task = Promise.resolve().then(async () => {
       catalogState = 'loading'; catalogError = null;
       const connection = await iam.resolveGatewayConnection(); current();
+      assertSendableCredential(connection.key); current();
       // A revoked credential must not reach the gateway again; the mark clears
       // only when the identity, address or stored key changes.
       if (revokedCredential) throw error('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');

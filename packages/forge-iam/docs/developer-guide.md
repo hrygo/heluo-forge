@@ -346,7 +346,7 @@ SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 e
 
 ## 可配置网关与动态模型目录
 
-`managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人访问凭证一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧记录。显式地址的兼容 Key 为 1—4096 个可见 ASCII 字符；旧的无地址路径继续使用 UAG 格式校验。Key 原文不进入视图、日志或错误响应。
+`managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人访问凭证一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧记录。Key 是不透明字符串：保存时不做格式、字符集或长度校验，原样存储、原样上送，有效性由网关的 `invalid_api_key` / `credential_revoked` 判定。唯一本地约束在发送前：超出 HTTP 头值合法字符集的值按 `ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE` 确定性拒绝，不进入传输层，错误体与日志不回显原文。Key 原文不进入视图、日志或错误响应。
 
 新增同源 `GET /api/forge-iam/models`，在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。该入口是用户主动刷新，直接发起一次目录同步。`modelAccess` 提供目录 `state`、`error`、`stale`、`retryAt`、`syncedAt`、`models` 及已保存地址；`stale` 表示列表仍是上次成功目录、网关此后未连上，`retryAt` 是下一次自动重试时间（不可重试的失败为空），`syncedAt` 是最近一次成功时间。它不是网关授权证明：调用仍按 `permit()` 与启用集合裁决。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际，每次通过 `resolveToken()` 复查会话及 Key owner，异步读取后复查生命周期；该接口不返回访问令牌。模型运行时按路线 B 将当前访问令牌放入请求头 `X-IAM-Token`。
 
