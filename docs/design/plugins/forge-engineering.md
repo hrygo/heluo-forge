@@ -133,3 +133,4 @@ DevOps（`DEVOPS_API_KEY`）与 Gitee（`GITEE_TOKEN`）不再向「企业账号
 - **包结构与闭环门禁**：由 `pnpm check:repo`、`pnpm check:tarballs`、`pnpm check:skills`、`tests/plugin-patch-layers.test.mjs`、`tests/ui-contract.test.mjs` 及 `packages/forge-engineering/test/*.test.mjs` 执行离线覆盖；
 - **真实装包与共存验证**：使用真实 `dsh` 构建 `@heluo/forge-engineering` tarball 并独立/联合安装至测试 Profile，核查 `--dump-config` 中 `heluo-policy` 单实例折叠、双包依赖闭环与元数据可读性；
 - **未联调外部项**：真实企业 DevOps CLI、Gitee 内网 `gh` CLI、企业 OS 凭据库联动及双端桌面 GUI 交互流程仍待外部环境实机联调。
+

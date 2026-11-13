@@ -6,7 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { checkSkills } from '../scripts/check-skills.mjs';
-import { assembleEnterpriseSkills, loadClausePack } from '../packages/forge-enterprise/src/skills.mjs';
+import { assembleEnterpriseSkills, loadClausePack } from '../packages/forge-engineering/src/skills.mjs';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -154,7 +154,7 @@ test('the enterprise issue-delivery pack still loads and registers under its ski
   const assembled = assembleEnterpriseSkills(
     { skills: { register: (skill) => (registrations.push(skill), () => {}) } },
     {
-      root: join(repoRoot, 'packages/forge-enterprise/skills'),
+      root: join(repoRoot, 'packages/forge-engineering/skills'),
       systems: [{ name: 'teamflow' }, { name: 'gitee' }, { name: 'devops' }],
     },
   );

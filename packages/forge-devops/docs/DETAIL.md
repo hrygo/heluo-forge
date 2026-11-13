@@ -18,3 +18,4 @@ Enterprise DevOps integration for DeepSeek Harness, connecting the `dop` CLI and
 
 - Scoped to enterprise DevOps change workflows; code repositories, Issues, and Pull Requests are handled by the Gitee plugin.
 - Execution remains gated by `@heluo/forge-policy` admission rules and server-side enterprise DevOps permissions.
+

@@ -224,32 +224,19 @@ function checkOne(file) {
       }
     };
     try {
-      if (scenario === 'container') runtime.declare('heluo.engineering.tab');
-      if (scenario === 'iam') runtime.declare('heluo.iam.credential-item');
-      if (scenario === 'iamCollapse') runtime.declare('heluo.iam.credential-item');
-      if (scenario === 'iamRedeclare') runtime.declare('heluo.iam.credential-item');
-      if (scenario === 'overlay') {
-        runtime.declare('heluo.engineering.tab');
-        runtime.declare('heluo.iam.credential-item');
-      }
+      if (scenario === 'container' || scenario === 'overlay') runtime.declare('heluo.engineering.tab');
       apply();
       if (scenario === 'late') runtime.declare('heluo.engineering.tab');
-      if (scenario === 'iamLate') runtime.declare('heluo.iam.credential-item');
       if (scenario === 'collapse') {
         runtime.declare('heluo.engineering.tab');
         // 容器先到场：先走一次 tab 挂载；再让它塌陷，验证独立分区被补回来。
         runtime.undeclare('heluo.engineering.tab');
       }
-      if (scenario === 'iamCollapse') runtime.undeclare('heluo.iam.credential-item');
       if (scenario === 'redeclare') {
         // 容器先到、塌陷、再回来：宿主按声明 epoch 重跑回调，必须回到「只有一个 tab」。
         runtime.declare('heluo.engineering.tab');
         runtime.undeclare('heluo.engineering.tab');
         runtime.declare('heluo.engineering.tab');
-      }
-      if (scenario === 'iamRedeclare') {
-        runtime.undeclare('heluo.iam.credential-item');
-        runtime.declare('heluo.iam.credential-item');
       }
     } catch (error) {
       errors.push(`scenario ${scenario} threw: ${error.message}`);
@@ -261,9 +248,8 @@ function checkOne(file) {
 
   const sectionsOf = (entries) => entries.filter((entry) => entry.name === 'settings.section');
   const tabsOf = (entries) => entries.filter((entry) => entry.name === 'heluo.engineering.tab');
-  const credItemsOf = (entries) => entries.filter((entry) => entry.name === 'heluo.iam.credential-item');
   const isContainerOf = (entries) => entries.some((entry) => entry.children.includes('heluo.engineering.tab'));
-  const isIamHostOf = (entries) => entries.some((entry) => entry.children.includes('heluo.iam.credential-item'));
+  const hasIamCredSlotOf = (entries) => entries.some((entry) => entry.children.includes('heluo.iam.credential-item'));
 
   const validateSections = (label, sections) => {
     for (const section of sections) {
@@ -284,23 +270,11 @@ function checkOne(file) {
     }
     if (tabs.length > 1) errors.push(`${label}: must contribute exactly one container tab (got ${tabs.length})`);
   };
-  const validateCredItems = (label, items) => {
-    for (const item of items) {
-      if (typeof item.id !== 'string' || item.id.length === 0) errors.push(`${label}: iam credential item needs a stable id`);
-      if (typeof item.order !== 'number') errors.push(`${label}: iam credential item ${item.id} needs a numeric order`);
-      if (!item.component) errors.push(`${label}: iam credential item ${item.id} has no component`);
-    }
-    const ids = items.map((item) => item.id);
-    if (new Set(ids).size !== ids.length) errors.push(`${label}: iam credential items must not share an id`);
-    const orders = items.map((item) => item.order);
-    if (new Set(orders).size !== orders.length) errors.push(`${label}: iam credential items must not share an order`);
-  };
   const checkSlots = (label, entries) => {
     const allowed = new Set([
       'settings.section',
       'settings.section.icon',
       'heluo.engineering.tab',
-      'heluo.iam.credential-item',
       ...(isIamModule ? ['settings.launcher', 'shell.overlay'] : []),
     ]);
     for (const entry of entries) {
@@ -312,15 +286,14 @@ function checkOne(file) {
   const standaloneSections = sectionsOf(standalone);
   if (standaloneSections.length === 0) errors.push('apply did not register a settings section when no container is present');
   validateSections('standalone', standaloneSections);
-  if (credItemsOf(standalone).length > 0) errors.push('standalone: heluo.iam.credential-item registered without slot declaration');
+  if (hasIamCredSlotOf(standalone)) errors.push('standalone: retired slot heluo.iam.credential-item must not be declared');
   checkSlots('standalone', standalone);
 
   // 容器先到：同一面板必须改成容器子槽位条目，且不再单独占侧栏分区（IAM 自身与容器本身除外）。
   const containerFirst = run('container');
   const containerTabs = tabsOf(containerFirst);
   const isContainer = isContainerOf(containerFirst);
-  const isIamHost = isIamModule || isIamHostOf(standalone);
-  const isHostSlotOwner = isContainer || isIamHost;
+  const isHostSlotOwner = isContainer || isIamModule;
   if (!isHostSlotOwner && standaloneSections.length > 0 && containerTabs.length === 0) {
     errors.push('container is present but no entry was registered into heluo.engineering.tab');
   }
@@ -365,36 +338,8 @@ function checkOne(file) {
   }
   checkSlots('redeclare', redeclare);
 
-  // IAM 扩展凭据槽位（heluo.iam.credential-item）：先到、迟到、塌陷、回归。
-  const iamFirst = run('iam');
-  const iamCredItems = credItemsOf(iamFirst);
-  if (isIamHost && iamCredItems.length > 0) errors.push('IAM host must not register into its own credential-item slot');
-  validateCredItems('iam', iamCredItems);
-  checkSlots('iam', iamFirst);
-
-  const iamLate = run('iamLate');
-  validateCredItems('iamLate', credItemsOf(iamLate));
-  if (iamCredItems.length > 0 && credItemsOf(iamLate).length !== iamCredItems.length) {
-    errors.push(`IAM credential slot declared late produced ${credItemsOf(iamLate).length} item(s) (expected ${iamCredItems.length})`);
-  }
-  checkSlots('iamLate', iamLate);
-
-  const iamCollapse = run('iamCollapse');
-  if (credItemsOf(iamCollapse).length > 0) {
-    errors.push('IAM credential slot collapsed but credential item registrations were not released');
-  }
-  checkSlots('iamCollapse', iamCollapse);
-
-  const iamRedeclare = run('iamRedeclare');
-  validateCredItems('iamRedeclare', credItemsOf(iamRedeclare));
-  if (iamCredItems.length > 0 && credItemsOf(iamRedeclare).length !== iamCredItems.length) {
-    errors.push(`IAM credential slot redeclared produced ${credItemsOf(iamRedeclare).length} item(s) (expected ${iamCredItems.length})`);
-  }
-  checkSlots('iamRedeclare', iamRedeclare);
-
   const overlay = run('overlay');
   validateSections('overlay', sectionsOf(overlay));
-  validateCredItems('overlay', credItemsOf(overlay));
   checkSlots('overlay', overlay);
 
   const icons = [...new Set([
@@ -406,18 +351,12 @@ function checkOne(file) {
     id,
     sections: standaloneSections,
     tabs: containerTabs,
-    credItems: iamCredItems,
     containerSections: sectionsOf(containerFirst),
     container: isContainer,
-    iamHost: isIamHost,
     late,
     collapse,
     redeclare,
-    iamLate,
-    iamCollapse,
-    iamRedeclare,
     overlay,
-    redeclare,
     icons,
     errors,
   };
@@ -437,8 +376,8 @@ if (files.length === 0) {
   });
   const failed = results.filter((result) => result.errors.length > 0);
   console.log(JSON.stringify({
-    checked: results.map(({ file, id, sections, tabs, credItems, containerSections, container, iamHost, icons, late, collapse, redeclare, iamLate, iamCollapse, iamRedeclare, overlay }) => ({
-      file, id, sections, tabs, credItems, containerSections, container, iamHost, icons, late, collapse, redeclare, iamLate, iamCollapse, iamRedeclare, overlay,
+    checked: results.map(({ file, id, sections, tabs, containerSections, container, icons, late, collapse, redeclare, overlay }) => ({
+      file, id, sections, tabs, containerSections, container, icons, late, collapse, redeclare, overlay,
     })),
     failed: failed.length,
   }, null, 2));

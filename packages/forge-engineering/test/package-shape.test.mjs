@@ -47,3 +47,4 @@ test('bundled icon.svg is byte-identical to official forge-cli-app-icon branding
   );
   assert.equal(Buffer.compare(actual, canonical), 0);
 });
+

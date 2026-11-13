@@ -15,7 +15,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const skillRoot = join(repo, 'packages/forge-enterprise/skills');
+const skillRoot = join(repo, 'packages/forge-engineering/skills');
 const SKILL = 'issue-delivery/SKILL.md';
 const HANDOFF = 'issue-delivery/references/handoff.md';
 const EVIDENCE = 'issue-delivery/references/evidence.md';
@@ -39,7 +39,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '恰一个变更、恰一个代码仓库' },
       { file: SKILL, text: '版本以 `forge_gitee_delivery_snapshot` 的 `contentId` 为准' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'same-task-reentry',
@@ -49,7 +49,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '相同 Issue、仓库与要求版本再次进入时先查已有 run' },
       { file: HANDOFF, text: '相同 Issue / 仓库 / 要求版本再次进入' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'running-task',
@@ -59,7 +59,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '运行中只跟踪' },
       { file: HANDOFF, text: '运行中' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'resume-interrupted',
@@ -69,7 +69,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '可续跑的原生续跑一次' },
       { file: SKILL, text: '本 Skill 不提供替代执行器' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'completed-reentry',
@@ -79,7 +79,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '已完成先核对版本' },
       { file: SKILL, text: '原生 `completed` 只证明执行状态' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'conflicting-links',
@@ -89,7 +89,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '不自行挑第一个' },
       { file: SKILL, text: '重新读取' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'version-changed',
@@ -99,7 +99,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '旧验证与旧审查**不得自动沿用**' },
       { file: EVIDENCE, text: '失效' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'missing-dependency',
@@ -109,7 +109,7 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '停止并说明缺哪一项、影响哪些步骤、下一步做什么' },
       { file: SKILL, text: '不猜目录、不切主目录' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
   {
     id: 'forged-pass-claim',
@@ -119,13 +119,13 @@ export const SCENARIOS = Object.freeze([
       { file: SKILL, text: '本 Skill 的输出是证据摘要，不是硬门禁，也不能替代用户验收结论' },
       { file: EVIDENCE, text: '来源分层' },
     ],
-    tests: ['packages/forge-enterprise/test/issue-delivery-contract.test.mjs'],
+    tests: ['packages/forge-engineering/test/issue-delivery-contract.test.mjs'],
   },
 ]);
 
 /** 逐条跑静态断言；缺正文、缺片段、缺用例都算「不满足」，并给出可定位原因。 */
 export function runFixtures({ root = repo } = {}) {
-  const roots = { skill: join(root, 'packages/forge-enterprise/skills'), repo: root };
+  const roots = { skill: join(root, 'packages/forge-engineering/skills'), repo: root };
   return SCENARIOS.map((scenario) => {
     const reasons = [];
     let loaded = 0;

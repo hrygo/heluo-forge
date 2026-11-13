@@ -852,7 +852,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * `heluo.iam.credential-item` 子槽位条目：Gitee 独立凭据托管卡片（order 20）。
+     * 内置在 GiteeSection 诊断面板中的 Gitee 独立凭据托管卡片。
      * 常态呈现静默「跟随本机登录」，仅在主动覆盖、存在账号冲突、安全存储异常或命中使用明文文件时展开提醒。
      */
     function GiteeCredentialItem(props) {

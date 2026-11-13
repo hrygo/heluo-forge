@@ -39,3 +39,4 @@ test('bundled icon.svg is byte-identical to official forge-gitee-symbol branding
   );
   assert.equal(Buffer.compare(actual, canonical), 0);
 });
+

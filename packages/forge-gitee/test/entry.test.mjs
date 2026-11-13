@@ -92,7 +92,13 @@ test('AC-1: exports 与 files 白名单互相自洽（没有声明了却打不�
     } else {
       assert.ok(target.startsWith('./src/'), `exports["${key}"] 必须指向本包 src`);
     }
-    await readFile(new URL(`../${target.slice(2)}`, import.meta.url), 'utf8');
+    if (target.includes('*')) {
+      const prefix = target.slice(2, target.indexOf('*')).replace(/\/$/, '');
+      const entries = await readdir(new URL(`../${prefix}`, import.meta.url));
+      assert.ok(entries.some((entry) => entry.endsWith('.json')), `${target} 至少要匹配一个语言文件`);
+    } else {
+      await readFile(new URL(`../${target.slice(2)}`, import.meta.url), 'utf8');
+    }
     targets.push(target);
   }
 

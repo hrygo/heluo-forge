@@ -534,7 +534,7 @@ export function apply(ctx) {
 
     // 五类开关：把宿主实测的依赖事实喂给组合声明（纯判定，不注册任何东西），
     // 再附一组合成输入验证"全就绪即全开"与"关一类不影响其他类"。
-    const { resolveSwitches } = await import('../../packages/forge-enterprise/src/switches.mjs');
+    const { resolveSwitches } = await import('../../packages/forge-engineering/src/switches.mjs');
     const policyProvenReady = ['guard-deny-zero-side-effect', 'guard-monotonic-no-force-allow', 'pre-execute-async-deny']
       .every((id) => checks.find((entry) => entry.id === id)?.ok === true);
     const measuredIdentity = ctx.get('iam') === undefined ? 'missing' : 'ready';

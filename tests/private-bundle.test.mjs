@@ -19,12 +19,14 @@ import { verifyBundle } from '../scripts/verify-enterprise-bundle.mjs';
 import { validateConfig } from '../packages/forge-iam/src/config.mjs';
 import {
   assertIamValidatorMatches,
+  assertNeutralPatch,
   patchEntriesOf,
   buildConfig,
   buildPrivateTarball,
   inspectPublicTarball,
   makePrivateBundle,
   parseEnvConfig,
+  requiredRowsForEntry,
   PrivateBundleError,
 } from '../scripts/lib/private-bundle.mjs';
 
@@ -509,11 +511,21 @@ test('patch layer set: the declared default layer must ship, duplicates and dirt
   const missingRow = join(root, 'missing-row.tgz');
   writeFileSync(missingRow, publicTarball({
     patches: {
-      'cordis.patch.yml': patches.base,
-      'cordis.patch.engineering.yml': patches.overlay.replace(/- id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}/u, ''),
+      'cordis.patch.yml': patches.base.replace(/ {4}- id: heluo-iam\n {6}name: '@heluo\/forge-iam'\n/u, ''),
+      'cordis.patch.engineering.yml': patches.overlay,
     },
   }));
-  assert.ok(inspectPublicTarball(missingRow).problems.some((problem) => problem.includes('patch set has no insert entry "forge-devops"')));
+  assert.ok(inspectPublicTarball(missingRow).problems.some((problem) => problem.includes('patch set has no insert entry "heluo-iam"')));
+
+  // 3b) 通用底座无研发行（仅 keychain + policy + iam）属于合规形态；而工程套件包则仍要求 devops 与 gitee 行。
+  const universalOnly = join(root, 'universal-only.tgz');
+  writeFileSync(universalOnly, publicTarball({ patches: { 'cordis.patch.yml': patches.base } }));
+  assert.deepEqual(inspectPublicTarball(universalOnly).problems, []);
+  const engineeringProblems = assertNeutralPatch(
+    patches.overlay.replace(/ {4}- id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}\n?/u, ''),
+    { required: requiredRowsForEntry('@heluo/forge-engineering') },
+  );
+  assert.ok(engineeringProblems.some((problem) => problem.includes('patch set has no insert entry "forge-devops"')));
 
   // 4) 同一行出现在两层：归属不明，注入只落第一处，另一处留空 config 反而可能覆盖回去。
   const duplicate = join(root, 'duplicate.tgz');
@@ -656,4 +668,27 @@ test('layer-aware gate: a two-layer bundle is neutral and gets its config inject
   assert.doesNotMatch(packedOverlay, /iam\.corp\.example/u, 'overlay layer must not carry the gateway endpoint');
   assert.ok(built.changed.includes('cordis.patch.yml'), 'change metadata must list the base layer');
   assert.ok(built.changed.includes('cordis.patch.engineering.yml'), 'change metadata must list the overlay layer');
+});
+
+test('universal base tarball succeeds with IAM-only config and refuses Gitee config mismatch', () => {
+  const baseOnlyPatch = layeredPatchText().base;
+  const universalBytes = publicTarball({ patches: { 'cordis.patch.yml': baseOnlyPatch } });
+  const iamOnlyEnv = ENV.filter((line) => !line.startsWith('HELUO_GITEE_'));
+  const iamOnly = buildConfig(parseEnvConfig(iamOnlyEnv.join('\n')));
+  const built = buildPrivateTarball({
+    entries: readBundleEntries(universalBytes, { withContent: true }),
+    version: '0.1.1',
+    config: iamOnly,
+    baseSha256: createHash('sha256').update(universalBytes).digest('hex'),
+  });
+  assert.match(built.patch, /iam\.corp\.example/u);
+  assert.doesNotMatch(built.patch, /heluo-gitee/u);
+
+  const withGitee = buildConfig(parseEnvConfig(ENV.join('\n')));
+  expectCode(() => buildPrivateTarball({
+    entries: readBundleEntries(universalBytes, { withContent: true }),
+    version: '0.1.1',
+    config: withGitee,
+    baseSha256: createHash('sha256').update(universalBytes).digest('hex'),
+  }), 'PUBLIC_TARBALL_INVALID');
 });

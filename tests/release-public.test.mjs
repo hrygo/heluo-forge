@@ -293,11 +293,27 @@ test('a split-layer public release ships both layers and is still judged as one 
 });
 
 test('refuses a split bundle whose required row lives in no layer at all', (t) => {
-  const tree = taggedTree(t, { splitLayers: true, dropRow: 'forge-devops' });
+  const tree = taggedTree(t, { splitLayers: true, dropRow: 'heluo-iam' });
   expectCode(
     () => buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' }),
     'ARTIFACT_NOT_NEUTRAL',
   );
+});
+
+test('universal @heluo/forge-enterprise without R&D rows passes public release neutrality check', (t) => {
+  const tree = taggedTree(t, { dropRow: 'heluo-gitee' });
+  // Also drop forge-devops so cordis.patch.yml mirrors the universal 3-row base bundle (heluo-iam only).
+  const patchPath = join(tree.root, 'packages/forge-enterprise/cordis.patch.yml');
+  const universalPatch = readFileSync(patchPath, 'utf8').replace(/ {4}- id: forge-devops\n {6}name: '@heluo\/forge-devops'\n {6}config: \{\}\n/u, '');
+  put(tree.root, 'packages/forge-enterprise/cordis.patch.yml', universalPatch);
+  commitAll(tree.root, 'universal base bundle without R&D rows');
+  git(tree.root, ['tag', '-f', `v${VERSION}`]);
+  const release = buildPublicRelease({ root: tree.root, toolRoot: TOOL_ROOT, output: output(t), tag: `v${VERSION}`, license: 'Apache-2.0' });
+  assert.equal(release.neutral, true);
+  const entries = readBundleEntries(readFileSync(release.tarball), { withContent: true });
+  const base = String(entries.find((entry) => entry.path === 'cordis.patch.yml').content);
+  assert.match(base, /heluo-iam/u);
+  assert.doesNotMatch(base, /forge-devops|heluo-gitee/u);
 });
 
 test('refuses a split bundle whose non-default layer carries enterprise configuration', (t) => {

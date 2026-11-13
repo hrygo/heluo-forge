@@ -42,3 +42,4 @@ test('bundled icon.svg is byte-identical to official forge-devops-symbol brandin
   );
   assert.equal(Buffer.compare(actual, canonical), 0);
 });
+

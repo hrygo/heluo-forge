@@ -20,3 +20,4 @@ An integrated engineering workbench bundle for developers in DeepSeek Harness. I
 
 - UI visibility and local policy catalogs do not grant remote authorization; server-side permissions are still enforced by DevOps and Gitee.
 - When a plaintext CLI token file is detected on disk for Gitee, the panel displays an explicit security notice without altering your existing CLI config.
+

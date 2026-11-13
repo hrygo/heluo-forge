@@ -13,3 +13,4 @@ Low-level local encrypted credential provider for Heluo Forge plugins, replacing
 - Designed to be mounted alongside enterprise bundles with plaintext local credential providers disabled.
 - Logs and event hooks never record raw secret payloads or token values.
 - Filesystem permissions and OS user-boundary protection depend on target platform configuration and host verification.
+

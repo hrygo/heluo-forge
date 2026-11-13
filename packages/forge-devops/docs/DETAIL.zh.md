@@ -18,3 +18,4 @@
 
 - 本插件聚焦 DevOps 变更协同能力，不包含代码仓库、Issue 与 Pull Request 操作（相关能力由 Gitee 插件提供）。
 - 工具启用与参数放行受 `@heluo/forge-policy` 门禁策略约束；服务端业务权限由企业 DevOps 平台独立判定。
+

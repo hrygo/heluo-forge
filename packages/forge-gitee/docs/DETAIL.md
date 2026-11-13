@@ -13,3 +13,4 @@ Enterprise code-hosting and delivery plugin connecting the `gh`-compatible Gitee
 
 - Inherits local CLI authentication automatically; custom override tokens can be configured at the bottom of the Gitee panel without altering local CLI config files.
 - Does not perform merge, close, tag, or revert operations; remote authorization remains governed by enterprise Gitee permissions.
+

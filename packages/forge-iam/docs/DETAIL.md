@@ -19,3 +19,4 @@ Universal enterprise authentication and model gateway plugin providing single si
 - Enterprise session grants and personal gateway keys are encrypted through the credential provider; signing out stops enterprise model traffic cleanly.
 - This plugin focuses strictly on enterprise authentication and model gateway access and includes no unrelated domain tools.
 - Live connectivity depends on your administrator's deployed IAM issuer and AI gateway endpoints.
+

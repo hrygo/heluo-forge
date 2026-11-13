@@ -592,12 +592,19 @@ export function patchLayerProblems(root, patchEntries) {
   return problems;
 }
 
+export function requiredRowsForEntry(name) {
+  return name === '@heluo/forge-engineering'
+    ? ['forge-devops', 'heluo-gitee']
+    : ['heluo-iam'];
+}
+
 /** Public bundles must be configuration-neutral; the check is the acceptance gate. */
-export function assertNeutralPatch(input) {
+export function assertNeutralPatch(input, { required = ['heluo-iam'] } = {}) {
   const texts = (Array.isArray(input) ? input : [input])
     .filter((text) => typeof text === 'string' && text.length > 0);
   const problems = [];
-  const required = new Set(['heluo-iam', 'forge-devops', 'heluo-gitee']);
+  const requiredSet = new Set(required);
+  const neutralChecked = new Set(['heluo-credentials-keychain', 'heluo-iam', 'forge-devops', 'heluo-gitee', ...requiredSet]);
   const seen = new Set();
   const ownerOfId = new Map();
   for (const [index, text] of texts.entries()) {
@@ -610,12 +617,12 @@ export function assertNeutralPatch(input) {
       ownerOfId.set(id, index);
       seen.add(id);
     }
-    for (const id of ['heluo-credentials-keychain', ...required]) {
+    for (const id of neutralChecked) {
       if (!ids.has(id)) continue;
       const lines = text.split('\n');
-      const index = lines.findIndex((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line));
-      const baseIndent = lines[index].length - lines[index].trimStart().length;
-      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const rowIndex = lines.findIndex((line) => new RegExp(`^\\s*- id: ${id}$`, 'u').test(line));
+      const baseIndent = lines[rowIndex].length - lines[rowIndex].trimStart().length;
+      for (let cursor = rowIndex + 1; cursor < lines.length; cursor += 1) {
         const line = lines[cursor];
         if (line.trim() === '') continue;
         const indent = line.length - line.trimStart().length;
@@ -626,7 +633,7 @@ export function assertNeutralPatch(input) {
       }
     }
   }
-  for (const id of required) {
+  for (const id of requiredSet) {
     if (!seen.has(id)) problems.push(`patch set has no insert entry "${id}"`);
   }
   return problems;
@@ -723,7 +730,7 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     fail('PUBLIC_TARBALL_INVALID', `public tarball has an incomplete patch layer set: ${layerProblems.join('; ')}`);
   }
   const patchTexts = patchEntries.map((entry) => entry.content.toString('utf8'));
-  const neutral = assertNeutralPatch(patchTexts);
+  const neutral = assertNeutralPatch(patchTexts, { required: requiredRowsForEntry(root.name) });
   if (neutral.length > 0) fail('PUBLIC_TARBALL_INVALID', `public tarball is not configuration-neutral: ${neutral.join('; ')}`);
 
   const runtimeIam = { ...config.iam };
@@ -735,8 +742,14 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
   const ownerOf = (id) => patchEntries.find((entry) => insertedIds(entry.content.toString('utf8')).has(id));
   const iamOwner = ownerOf('heluo-iam');
   const giteeOwner = ownerOf('heluo-gitee');
-  if (iamOwner === undefined || giteeOwner === undefined) {
-    fail('PUBLIC_TARBALL_INVALID', 'public tarball does not declare the IAM or Gitee insert row');
+  const hasGiteeConfig = Object.keys(config.gitee ?? {}).length > 0;
+  if (iamOwner === undefined || (hasGiteeConfig && giteeOwner === undefined)) {
+    fail(
+      'PUBLIC_TARBALL_INVALID',
+      iamOwner === undefined
+        ? 'public tarball does not declare the IAM insert row'
+        : 'public tarball does not declare the Gitee insert row required by Gitee configuration',
+    );
   }
   const injectedPatches = new Map();
   const rewrittenLayers = new Map();
@@ -744,7 +757,9 @@ export function buildPrivateTarball({ entries, version, config, baseSha256, requ
     const original = entry.content.toString('utf8');
     let patch = original;
     if (entry === iamOwner) patch = injectPatchConfig(patch, 'heluo-iam', runtimeIam);
-    if (entry === giteeOwner) patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
+    if (giteeOwner !== undefined && entry === giteeOwner && hasGiteeConfig) {
+      patch = injectPatchConfig(patch, 'heluo-gitee', config.gitee);
+    }
     injectedPatches.set(entry.path, patch);
     // 只有真的被改写的层才进产物与 change 元数据：没改的层重写一遍只会让审计噪声变大。
     if (patch !== original) rewrittenLayers.set(entry.path, patch);
@@ -935,12 +950,12 @@ export function inspectPublicTarball(publicPath) {
   const bytes = readFileSync(publicPath);
   const entries = readBundleEntries(bytes, { withContent: true });
   const { root } = membersOf(entries);
-  assertIamValidatorMatches(entries);
+  if (root.name !== '@heluo/forge-engineering') assertIamValidatorMatches(entries);
   const patchEntries = patchEntriesOf(entries);
   const problems = scanReleaseFiles(entries.map((entry) => ({ path: entry.path, body: entry.content })), { publicOnly: true });
   problems.push(...patchLayerProblems(root, patchEntries));
   if (patchEntries.length > 0) {
-    problems.push(...assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8'))));
+    problems.push(...assertNeutralPatch(patchEntries.map((entry) => entry.content.toString('utf8')), { required: requiredRowsForEntry(root.name) }));
   }
   return { sha256: sha256(bytes), version: root.version, name: root.name, files: entries.length, problems };
 }

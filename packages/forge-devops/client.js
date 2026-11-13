@@ -2359,7 +2359,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * `heluo.iam.credential-item` 子槽位条目：DevOps 独立凭据托管卡片（order 10）。
+     * 内置在 DevopsSection 诊断面板中的 DevOps 独立凭据托管卡片。
      * 常态不主动读取或要求录入 Token；仅在用户主动覆盖或存在跨账号冲突/安全存储异常时展开。
      */
     function DevopsCredentialItem(props) {

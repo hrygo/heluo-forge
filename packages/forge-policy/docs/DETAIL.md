@@ -13,3 +13,4 @@ Unified policy core for Heluo Forge plugins, enforcing action-catalog admission,
 
 - Governs explicitly registered business actions and declared command categories; unregistered tools fall outside policy scope.
 - Offers no `fail-open` bypass switches or regex-blocklist security claims; server-side authorization remains enforced upstream.
+

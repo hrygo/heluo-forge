@@ -151,6 +151,12 @@ test('build CLI emits the final artifact and refuses replacing it', (t) => {
   assert.ok(existsSync(result.tarball));
   assert.ok(!Object.hasOwn(result.members, '@heluo/forge-sdd'));
   assert.throws(() => execFileSync(process.execPath, [builder, '--root', root, join(root, 'cli-release')], { stdio: 'pipe' }), (error) => error.status === 1 && /refusing to replace/u.test(error.stderr));
+
+  const memberOut = execFileSync(process.execPath, [builder, '--root', root, '--entry', '@heluo/forge-member', join(root, 'member-release')], { encoding: 'utf8' });
+  const memberResult = JSON.parse(memberOut);
+  assert.ok(existsSync(memberResult.tarball));
+  assert.match(memberResult.tarball, /heluo-forge-member-0\.1\.0\.tgz$/u);
+  assert.deepEqual(memberResult.members, {});
 });
 
 for (const flag of ['--help', '-h']) test(`build CLI ${flag} prints help without creating artifacts`, (t) => {
