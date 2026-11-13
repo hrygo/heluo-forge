@@ -242,7 +242,7 @@ test('close drains a transaction that initializes the store', async (t) => {
   assert.equal(await reopened.get(ref), 'first');
 });
 
-test('missing keyring or legacy document is rejected without replacing existing data', async (t) => {
+test('a legacy document is untouched and a read does not create a new store', async (t) => {
   const root = await outsideRepositoryTmpAsync('heluo-sqlite-legacy-');
   const directory = join(root, 'data');
   const own = ownDirectory(t, root);
@@ -251,7 +251,7 @@ test('missing keyring or legacy document is rejected without replacing existing 
   writeFileSync(legacy, 'legacy-test-data');
   const store = createCredentialStore({ directory });
   own(() => store.close());
-  await assert.rejects(store.get(ref), (error) => error.code === 'CRED_LEGACY_STORE');
+  assert.equal(await store.get(ref), undefined);
   assert.equal(readFileSync(legacy, 'utf8'), 'legacy-test-data');
   assert.equal(existsSync(join(directory, 'credentials.sqlite')), false);
   await store.close();

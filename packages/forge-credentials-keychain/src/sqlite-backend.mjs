@@ -84,14 +84,8 @@ export function createSqliteBackend({ directory, readOnly, keyProvider, lockTime
       validateBinding();
       return true;
     }
-    for (const legacy of ['credentials.json', 'credentials.key']) {
-      try { lstatSync(join(directory, legacy)); }
-      catch (cause) {
-        if (cause.code === 'ENOENT') continue;
-        throw error(cause.code, 'legacy credential store could not be inspected');
-      }
-      throw error('CRED_LEGACY_STORE', 'legacy credential store exists');
-    }
+    // Legacy encrypted documents have separate filenames. Leave them untouched;
+    // only the authenticated SQLite database and keyring determine this store.
     if (!existsSync(directory)) {
       if (keyPresent) throw error('CRED_STORE_UNAVAILABLE', 'orphaned keyring exists');
       if (readOnly) throw error('CRED_STORE_UNAVAILABLE', 'credential store is unavailable');

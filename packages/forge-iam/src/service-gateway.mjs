@@ -8,6 +8,7 @@ import { StoreError } from './store.mjs';
 import { addSeconds, nowIso, safeMessage } from './service-helpers.mjs';
 
 const GATEWAY_RELOAD_MS = 5000;
+const GATEWAY_CONFIRM_TIMEOUT_MS = 10000;
 
 /**
  * The gateway credential as the panel sees it: one cached summary, one read at
@@ -20,8 +21,9 @@ const GATEWAY_RELOAD_MS = 5000;
 export function createServiceGateway(env) {
   const {
     config, ctx, provider, grants, now, selection,
-    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime,
+    configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage,
   } = env;
+  let cancelConfirmation = null;
 
   async function read(targetGatewayStore, targetStore, isCurrent) {
     if (!isCurrent()) return null;
@@ -93,6 +95,164 @@ export function createServiceGateway(env) {
     provider.gatewayLoading = request;
     return request;
   }
+
+  function invalidateGatewayReads({ clearSummary = false } = {}) {
+    // A read begun before a commit must neither satisfy its confirmation nor
+    // publish over a later read, even when the provider itself has not changed.
+    const cancel = cancelConfirmation;
+    cancelConfirmation = null;
+    cancel?.();
+    provider.gatewayEpoch += 1;
+    // Keep the last verified display snapshot while confirmation is pending.
+    // Existing model streams must not observe a synthetic credential removal.
+    if (clearSummary) provider.gatewaySummary = null;
+    provider.gatewayLoadedAt = 0;
+    provider.gatewayLoading = null;
+    return provider.gatewayEpoch;
+  }
+
+  function publishUnknown(targetStore, targetGatewayStore, targetCredentials, epoch) {
+    if (provider.gatewayEpoch !== epoch || !boundTo(targetStore, targetGatewayStore, targetCredentials)
+      || provider.gatewayEpoch !== epoch) return;
+    invalidateGatewayReads({ clearSummary: true });
+    if (!ctx.disposed) ctx.notify();
+  }
+
+  function boundTo(targetStore, targetGatewayStore, targetCredentials) {
+    return provider.ensure() === targetStore && provider.gatewayStore === targetGatewayStore
+      && provider.storeCredentials === targetCredentials;
+  }
+
+  function fenceUnknown(targetStore, targetGatewayStore, targetCredentials, mutationEpoch) {
+    // A later local mutation or provider change already fenced the old flight.
+    // Do not erase a newer operation's confirmed cache or interrupt its flight.
+    if (boundTo(targetStore, targetGatewayStore, targetCredentials) && provider.gatewayEpoch === mutationEpoch) {
+      publishUnknown(targetStore, targetGatewayStore, targetCredentials, mutationEpoch);
+    }
+  }
+
+  function writeUnknown() {
+    return new IamError('IAM_GATEWAY_WRITE_UNKNOWN', safeMessage('IAM_GATEWAY_WRITE_UNKNOWN'));
+  }
+
+  function sessionIdentity(grant) {
+    return grant && ({
+      version: grant.version, issuer: grant.issuer, clientId: grant.clientId,
+      resource: grant.resource, subject: grant.subject, sessionInstanceId: grant.sessionInstanceId,
+      authContext: grant.authContext,
+    });
+  }
+
+  function postCommitCurrent(assertCurrent, authentication) {
+    try {
+      assertCurrent();
+      assertClientAuthCurrent(authentication);
+    } catch (error) {
+      // The transaction is already confirmed; lifecycle errors no longer mean
+      // that the attempted mutation did not happen.
+      if (error instanceof IamError) throw writeUnknown();
+      throw error;
+    }
+  }
+
+  async function confirmMutation({ assertCurrent, authentication, targetStore, targetGatewayStore, targetCredentials, mutationEpoch, expectedIdentity, accepts }) {
+    const bound = boundTo(targetStore, targetGatewayStore, targetCredentials);
+    // Never invalidate the replacement provider, but do fence this provider's
+    // old reads even when the authentication changed just after the commit.
+    // A receipt from an older operation may arrive after a newer one has
+    // published. Verify it independently before touching that newer cache.
+    const ownsFlight = bound && provider.gatewayEpoch === mutationEpoch;
+    let epoch = ownsFlight ? invalidateGatewayReads() : provider.gatewayEpoch;
+    try { postCommitCurrent(assertCurrent, authentication); }
+    catch (error) {
+      if (ownsFlight) publishUnknown(targetStore, targetGatewayStore, targetCredentials, epoch);
+      throw error;
+    }
+    if (!bound) throw writeUnknown();
+    let timer;
+    let expired = false;
+    let published = false;
+    const timedOut = Symbol('gateway confirmation timed out');
+    const invalidated = Symbol('gateway confirmation invalidated');
+    const isCurrent = () => {
+      if (expired || ctx.disposed || provider.gatewayEpoch !== epoch) return false;
+      return boundTo(targetStore, targetGatewayStore, targetCredentials) && provider.gatewayEpoch === epoch;
+    };
+    const confirmation = (async () => {
+      if (expectedIdentity) {
+        // A different process can replace the stored session without advancing
+        // this instance's auth epoch. Verify the same non-secret session before
+        // reporting a successful write; token renewal may change token fields.
+        const current = await targetStore.read().catch(() => null);
+        if (!current?.ok || !isDeepStrictEqual(sessionIdentity(current.grant), expectedIdentity)) throw writeUnknown();
+      }
+      postCommitCurrent(assertCurrent, authentication);
+      if (!isCurrent()) throw writeUnknown();
+      const summary = await read(targetGatewayStore, targetStore, isCurrent);
+      if (!isCurrent() || !accepts(summary)) throw writeUnknown();
+      // `read` includes an async storage description after resolving the pair.
+      // Recheck the record after it: a newer joint write during that await must
+      // not turn an old configured/empty summary into a successful response.
+      const record = await targetGatewayStore.read().catch(() => null);
+      const matches = summary.state === 'unconfigured'
+        ? record?.ok && record.credential === null
+        : record?.ok && record.credential?.writeOperationId === summary.generation;
+      postCommitCurrent(assertCurrent, authentication);
+      if (!isCurrent() || !matches) throw writeUnknown();
+      if (!ownsFlight) epoch = invalidateGatewayReads();
+      const changed = !isDeepStrictEqual(provider.gatewaySummary, summary);
+      provider.gatewaySummary = summary;
+      published = true;
+      provider.gatewayLoadedAt = now();
+      if (changed && !selection.inFlight) selection.schedule();
+      return summary;
+    })();
+    let cancel;
+    const cancellation = new Promise((resolve) => { cancel = () => { expired = true; resolve(invalidated); }; });
+    const bounded = Promise.race([
+      confirmation,
+      cancellation,
+      new Promise((resolve) => { timer = setTimeout(() => { expired = true; resolve(timedOut); }, GATEWAY_CONFIRM_TIMEOUT_MS); }),
+    ]).then((value) => {
+      if ((ownsFlight || published) && (value === timedOut || value === invalidated)) {
+        publishUnknown(targetStore, targetGatewayStore, targetCredentials, epoch);
+      }
+      return value;
+    }, (error) => {
+      if (ownsFlight || published) publishUnknown(targetStore, targetGatewayStore, targetCredentials, epoch);
+      throw error;
+    });
+    // Readers that join this flight retain load()'s null-on-failure contract;
+    // only the mutation caller receives the specific write outcome.
+    const flight = bounded.then((value) => value === timedOut || value === invalidated ? null : value, () => null)
+      .finally(() => {
+        if (provider.gatewayLoading === flight) provider.gatewayLoading = null;
+        if (cancelConfirmation === cancel) cancelConfirmation = null;
+      });
+    if (ownsFlight) {
+      cancelConfirmation = cancel;
+      provider.gatewayLoading = flight;
+    }
+    let summary;
+    try { summary = await bounded; }
+    finally { clearTimeout(timer); }
+    if (summary === timedOut || summary === invalidated) {
+      // A late read is still running and cannot be cancelled through the
+      // credentials interface. Fence it only if no newer mutation replaced it.
+      throw writeUnknown();
+    }
+    try {
+      if (provider.gatewayEpoch !== epoch || !accepts(summary)) throw writeUnknown();
+      postCommitCurrent(assertCurrent, authentication);
+      ctx.notify();
+      const view = ctx.view();
+      if (provider.gatewayEpoch !== epoch || !accepts(view.gatewayCredential)) throw writeUnknown();
+      return view;
+    } catch (error) {
+      if (ownsFlight || published) publishUnknown(targetStore, targetGatewayStore, targetCredentials, epoch);
+      throw error;
+    }
+  }
   async function refreshModels() {
     const runtime = getManagedModelRuntime?.();
     if (!runtime) throw new IamError('ENTERPRISE_MODELS_UNAVAILABLE', '企业模型暂不可用，请联系管理员。');
@@ -147,6 +307,14 @@ export function createServiceGateway(env) {
   }
 
   async function saveCredential({ key: value, deviceLabel, baseURL: address } = {}) {
+    const started = performance.now();
+    const trace = (stage) => {
+      try {
+        const result = logGatewayStage?.(stage, Math.max(0, Math.round(performance.now() - started)));
+        if (result && typeof result.then === 'function') Promise.resolve(result).catch(() => {});
+      } catch { /* Diagnostics must not affect a credential mutation. */ }
+    };
+    trace('start');
     const baseURL = address === undefined ? undefined : normalizeGatewayBaseURL(address);
     ctx.assertExclusive();
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
@@ -161,6 +329,7 @@ export function createServiceGateway(env) {
     const targetStore = provider.require();
     const targetGatewayStore = provider.gatewayStore;
     const targetCredentials = provider.storeCredentials;
+    const mutationEpoch = provider.gatewayEpoch;
     if (!targetGatewayStore) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
@@ -181,10 +350,12 @@ export function createServiceGateway(env) {
     assertCurrent();
     // A cached subject may belong to an earlier provider or shared session.
     const record = await targetStore.read().catch(() => null);
+    trace('grant-read');
     assertCurrent();
     if (!record?.ok) throw new IamError('IAM_GRANT_INVALID', safeMessage('IAM_GRANT_INVALID'));
     grants.assertGrantContext(record.grant, expectedIssuer);
     const authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: record.grant, guard: assertCurrent });
+    trace('authentication-ready');
     assertCurrent();
     const subject = record.grant?.subject;
     if (!subject) {
@@ -198,8 +369,10 @@ export function createServiceGateway(env) {
     const enteredAt = nowIso(now());
     const suggestedExpiry = addSeconds(now(), 90 * 24 * 60 * 60).slice(0, 10);
     assertCurrent();
+    let saved;
     try {
-      await targetGatewayStore.save({
+      trace('write-start');
+      saved = await targetGatewayStore.save({
         value,
         baseURL,
         ownerSubject: subject,
@@ -207,18 +380,29 @@ export function createServiceGateway(env) {
         enteredAt,
         suggestedExpiry,
       }, { guard: () => { assertCurrent(); assertClientAuthCurrent(authentication); return true; } });
+      trace('write-confirmed');
     } catch (cause) {
+      trace('write-unconfirmed');
+      if (cause instanceof StoreError && cause.code === 'IAM_GATEWAY_WRITE_UNKNOWN') {
+        fenceUnknown(targetStore, targetGatewayStore, targetCredentials, mutationEpoch);
+      }
       if (cause instanceof StoreError) throw new IamError(cause.code, safeMessage(cause.code));
       throw cause;
     }
-    // A post-commit lifecycle change does not roll back a confirmed transaction.
-    assertCurrent();
-    assertClientAuthCurrent(authentication);
-    await load({ force: true });
-    assertCurrent();
-    assertClientAuthCurrent(authentication);
-    ctx.notify();
-    return ctx.view();
+    trace('confirmation-start');
+    try {
+      const view = await confirmMutation({
+        assertCurrent, authentication, targetStore, targetGatewayStore, targetCredentials, mutationEpoch,
+        expectedIdentity: sessionIdentity(record.grant),
+        accepts: (summary) => summary?.state === 'configured'
+          && summary.generation === saved.credential.writeOperationId,
+      });
+      trace('confirmation-confirmed');
+      return view;
+    } catch (error) {
+      trace('confirmation-unconfirmed');
+      throw error;
+    }
   }
 
   async function clearCredential() {
@@ -228,6 +412,7 @@ export function createServiceGateway(env) {
     const targetStore = provider.require();
     const targetGatewayStore = provider.gatewayStore;
     const targetCredentials = provider.storeCredentials;
+    const mutationEpoch = provider.gatewayEpoch;
     if (!targetGatewayStore) {
       throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
     }
@@ -244,17 +429,19 @@ export function createServiceGateway(env) {
     try {
       cleared = await targetGatewayStore.clear({ guard: () => { assertCurrent(); return true; } });
     } catch (cause) {
+      if (cause instanceof StoreError && cause.code === 'IAM_GATEWAY_WRITE_UNKNOWN') {
+        fenceUnknown(targetStore, targetGatewayStore, targetCredentials, mutationEpoch);
+      }
       if (cause instanceof StoreError) throw new IamError(cause.code, safeMessage(cause.code));
       throw cause;
     }
-    assertCurrent();
     if (!cleared.ok) {
       throw new IamError('IAM_CREDENTIALS_CLEAR_FAILED', safeMessage('IAM_CREDENTIALS_CLEAR_FAILED'));
     }
-    await load({ force: true });
-    assertCurrent();
-    ctx.notify();
-    return ctx.view();
+    return confirmMutation({
+      assertCurrent, targetStore, targetGatewayStore, targetCredentials, mutationEpoch,
+      accepts: (summary) => summary?.state === 'unconfigured',
+    });
   }
 
   return {

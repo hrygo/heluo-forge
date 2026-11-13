@@ -216,7 +216,7 @@ export async function clearPluginCredential(ctx) {
 
 业务代码通过上述接口访问身份和凭据，不直接操作存储文件。使用内置凭据组合且目录、命名空间一致时，CLI 与插件读取同一 SQLite 值级加密存储；隔离测试可将 CLI 的 `HELUO_FORGE_STORE_DIRECTORY` 与插件的 `storeDirectory` 指向同一仓库外目录。
 
-以该目录为 `D`，新存储的数据库在 `D/credentials.sqlite`，密钥在同级 `D.keys/keyring.json`，不需要单独配置密钥目录。发现旧位置 `D/keyring.json`、已有数据库缺失密钥或密钥绑定时拒绝使用，保留原物且不自动迁移、绑定或重建。旧 `credentials.json` 和 `credentials.key` 不读取、不迁移。密钥文件本身未加密，同账户进程可以读取；分目录不提供按应用隔离。停用相关进程后的配对备份、恢复和权限边界见[凭据包说明](../../forge-credentials-keychain/README.md)。
+以该目录为 `D`，新存储的数据库在 `D/credentials.sqlite`，密钥在同级 `D.keys/keyring.json`，不需要单独配置密钥目录。发现旧位置 `D/keyring.json`、已有数据库缺失密钥或密钥绑定时拒绝使用，保留原物且不自动迁移、绑定或重建。旧 `credentials.json` 和 `credentials.key` 保留且不读取、不迁移，不阻止 SQLite 存储使用；旧版用户需重新登录或录入凭据，已有完整的 SQLite 凭据继续使用。密钥文件本身未加密，同账户进程可以读取；分目录不提供按应用隔离。停用相关进程后的配对备份、恢复和权限边界见[凭据包说明](../../forge-credentials-keychain/README.md)。
 
 ---
 

@@ -160,6 +160,36 @@ test('fresh Host initializes the shared capability before a real CLI bridge requ
   assert.equal(cli.stderr(), '');
 });
 
+test('Host and CLI retain an existing SQLite session after upgrade with legacy documents present', async (t) => {
+  const { directory, provider: original, own } = await fixture(t);
+  await original.close();
+  const keyPath = join(`${directory}.keys`, 'keyring.json');
+  const keyBefore = await readFile(keyPath);
+  for (const name of ['credentials.json', 'credentials.key']) {
+    await writeFile(join(directory, name), `synthetic-${name}`);
+  }
+
+  const backend = createCredentialStore({ directory });
+  const provider = createKeychainProvider(backend);
+  const adapter = createJointStore(backend, namespacePrefixes());
+  own(() => provider.close());
+  const app = host(provider, adapter);
+  own(() => app.dispose());
+  const server = createRouteServer(own, app.handler);
+  const url = await listen(server);
+  await waitForCapability(provider);
+  const cli = startCli(own, directory, url);
+  const result = await cli.closed;
+  if (result.error) throw result.error;
+  assert.equal(result.code, 0, cli.stderr());
+  assert.equal(cli.stdout(), 'synthetic-access\n');
+  assert.deepEqual(await provider.readRecord('heluo-iam/session'), grant);
+  assert.deepEqual(await readFile(keyPath), keyBefore);
+  for (const name of ['credentials.json', 'credentials.key']) {
+    assert.equal(await readFile(join(directory, name), 'utf8'), `synthetic-${name}`);
+  }
+});
+
 test('Host and CLI share a custom store with a separate sibling key directory', async (t) => {
   const { root, directory, provider, adapter, own } = await fixture(t);
   const app = host(provider, adapter);

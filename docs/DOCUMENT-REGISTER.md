@@ -24,7 +24,7 @@
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.44.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.4.2 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V2.0.0 | 评审稿 | 平台组（代拟） | G1 |
-| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V3.0.1 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
+| CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V3.0.2 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
 | CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.14.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-004 | 企业账号与模型组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.8.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V1.0.3 | 评审稿 | 平台组（代拟） | G2 |
@@ -87,7 +87,7 @@
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.2 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
 | CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.9.2 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-ENG-003 | DSH 插件高阶规范 | [engineering/dsh-plugin-conventions.md](<engineering/dsh-plugin-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 每个新插件准入时对照复核 |
-| CORP-DSH-ENG-004 | SQLite 存储扩展与使用规范 | [engineering/sqlite-storage-conventions.md](<engineering/sqlite-storage-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 新增或修改 SQLite 存储时复核 |
+| CORP-DSH-ENG-004 | SQLite 存储扩展与使用规范 | [engineering/sqlite-storage-conventions.md](<engineering/sqlite-storage-conventions.md>) | V0.1.1 | 草案 | 平台组（代拟） | 新增或修改 SQLite 存储时复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.13.5 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
 | CORP-DSH-CONF-002 | 私有化 Gitee 内部插件源码接入问询函 | [collaboration/gitee-market-clarification.md](<collaboration/gitee-market-clarification.md>) | V0.3.0 | 草案 | 平台组（代拟）；Gitee 团队回函 | G1 源码接口联调前；G2 开放前确认运行事项 |
 | CORP-DSH-CONF-003 | 插件市场企业接入问询函（P0） | 已废止 | — | 废止 | 平台组 | 内容已吸收至 DESIGN-007/012 及 P0 取证单，问询草案已废止删除 |
@@ -100,7 +100,7 @@
 | CORP-DSH-PILOT-001 | 试点推广 | 待创建 | — | 待启动 | PMO | G2 |
 | CORP-DSH-UAT-001 | 企业插件内网验收交接说明 | [operations/enterprise-uat-2026-11/README.md](<operations/enterprise-uat-2026-11/README.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
 | CORP-DSH-UAT-002 | 企业插件安装与启动 | [operations/enterprise-uat-2026-11/安装与启动.md](<operations/enterprise-uat-2026-11/安装与启动.md>) | V0.1 | 草案 | 平台组（代拟） | 实机验收 |
-| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.5 | 草案 | 平台组（代拟） | 实机验收 |
+| CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.6 | 草案 | 平台组（代拟） | 实机验收 |
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | — | 待启动 | IAM 团队 | G0 方向及 P0 联调；G1 接入契约；G2 生产运行流程 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | — | 待启动 | 安全 + 平台组 | G2 |
 | CORP-DSH-DEVOPS-001 | DevOps 接入 | 待创建 | — | 待启动 | DevOps 团队 | G1 查询契约；G2 受控写批准/验证与运行参数，未准入不开放 |
