@@ -281,5 +281,10 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
+      # 该作业刻意不安装依赖，但 callback 用例会随插件装配图 import 同仓兄弟包
+      # （`@heluo/forge-credentials-keychain`）。这里只建 workspace 目录链接：
+      # 不联网、不下载、不执行脚本。
+      - name: Link workspace packages
+        run: node scripts/link-workspace.mjs
       - name: Test Windows sensitive scan and IAM callback
         run: node --test tests/sensitive-scan.test.mjs tests/sensitive-scan-team.test.mjs tests/sensitive-scan-full-distribution.test.mjs tests/sensitive-scan-parent-tree.test.mjs tests/sensitive-scan-legacy-install.test.mjs tests/sensitive-scan-managed-upgrade.test.mjs tests/sensitive-scan-windows-paths.test.mjs tests/sensitive-scan-post-rewrite.test.mjs tests/sensitive-scan-server-merge.test.mjs tests/sensitive-scan-pre-push.test.mjs packages/forge-iam/test/callback-port.test.mjs
