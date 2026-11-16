@@ -6,38 +6,40 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-018 |
 | 文档名称 | IAM 调用失败自愈与错误码恢复方案 |
-| 版本 | V0.2.0 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | 设计评审；以 PR #253 为基线，不改写现有实现状态，不授予生产能力 |
 | 文档层级 | L2 实施计划；错误码与字段以设计文档和契约为准 |
 
-> 编制依据：PR #253 head `11b3237`（分支 `codex/credential-storage-clean-arch`）的 `managed-models.mjs`、`service-token.mjs`、`service-gateway.mjs` 与 `gateway-failure.mjs`；2026-11-12 在本机以只读脚本复现的四条失败路径；issue #226 关于跨进程写入的待核实边界。Windows 实机日志未取得，A 类与 B 类的现场归因仍需该证据关闭。
+> 编制依据：PR #253 head `11b3237`（分支 `codex/credential-storage-clean-arch`）的 `managed-models.mjs`、`service-token.mjs`、`service-gateway.mjs` 与 `gateway-failure.mjs`；2026-11-12 在本机以只读脚本复现的四条失败路径；issue #226 关于跨进程写入的待核实边界。当时未取得 Windows 实机日志，A 类与 B 类的现场归因仍需对应版本和环境的证据关闭。
 
 > 关联文档：[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[凭据存储模式](<../design/credential-modes.md>)、[凭据存储整洁架构实施方案](<2026-11-12-credential-storage-clean-arch.md>)、[PR #253](https://github.com/hrygo/heluo-forge/pull/253)、[issue #226](https://github.com/hrygo/heluo-forge/issues/226)、[issue #259](https://github.com/hrygo/heluo-forge/issues/259)（落地跟踪）。
 
 ## 1. 结论与范围
+
+§1–§11 保留 2026-11-12 基线的问题分析与方案目标，§12 为当时的实施和验证记录。现行 `protect()` 在尚未向下游产出分片、捕获特定错误且捕获时未取消的条件下至多重试一次；重建等待期间取消不会在再次派发前复查。未产出分片不证明请求尚未到达网关。真实宿主和网关的派发顺序、请求次数与计费结果尚待专项取证，离线替身不能证明这些结论。
 
 目标不是让分类表多认几个码，而是两件事同时成立：
 
 1. **良性变化不报错**。令牌轮换、同地址换 Key、跨进程写入、模型选择变化，都不应产生用户可见的失败。
 2. **真失败可识别**。确实无法继续时，界面给出的码必须指向具体动作，不能落到 `ENTERPRISE_GATEWAY_CALL_FAILED`。
 
-当前实现两层都未达到：派发前的良性变化被当成致命错误，错误又因分类表不认插件码而失去身份。方案按“先不报错、再可识别”排序，先修恢复路径，再修错误映射。
+当时基线的实现两层都未达到：良性变化被当成致命错误，错误又因分类表不认插件码而失去身份。方案按“先不报错、再可识别”排序，先修恢复路径，再修错误映射。
 
-- **做**：会话预检在 AT 仍有效时返回当前令牌；网关绑定只比较地址与主体，不把同地址换 Key 当作上下文变化；绑定变化时在派发前重建并重试一次；流中只检查身份、退出与吊销；把插件 `IamError` 映射为已登记的用户码。
-- **不做**：不改 DSH 核心与 pi-ai SDK；不做跨进程原子存储；不修改凭据格式与存储后端；不把重试放到请求已发出之后；不在本方案内完成 Windows 实机取证。
+- **做**：会话预检在 AT 仍有效时返回当前令牌；网关绑定只比较地址与主体，不把同地址换 Key 当作上下文变化；绑定变化时在首个输出分片前尝试重建并重试一次；流中只检查身份、退出与吊销；把插件 `IamError` 映射为已登记的用户码。
+- **不做**：不改 DSH 核心与 pi-ai SDK；不做跨进程原子存储；不修改凭据格式与存储后端；目标是不在请求已发出之后重试，但尚未证明宿主派发时序满足该目标；不在本方案内完成 Windows 应用级实机取证。
 - **安全边界不变**：不向新地址发送旧 Key；不跨主体复用 Key 与令牌；吊销后不再发起新请求。
 
 ## 2. 现状与证据
 
 ### 2.1 失败漏斗
 
-`resolveApiKey` 在模型请求发出前解析 Key 与 IAM 令牌，两个解析器都可能抛出 `IamError`。`protect()` 捕获后先调用 `refusal()`：只要账号状态仍为 ready、`version` 未变，`refusal()` 返回 `null`，异常随后进入 `classifyFailure()`。分类表只认 `ENTERPRISE_*` 前缀，所有 `IAM_*` 与 `CRED_*` 码都落到兜底：
+当时的替身假设 `resolveApiKey` 在模型请求发出前解析 Key 与 IAM 令牌；真实宿主顺序尚未实证。两个解析器都可能抛出 `IamError`。基线的 `protect()` 捕获后先调用 `refusal()`：只要账号状态仍为 ready、`version` 未变，`refusal()` 返回 `null`，异常随后进入 `classifyFailure()`。分类表只认 `ENTERPRISE_*` 前缀，所有 `IAM_*` 与 `CRED_*` 码都落到兜底：
 
 ```text
 resolveKey / resolveIamToken 抛出 IamError
@@ -81,7 +83,7 @@ resolveKey / resolveIamToken 抛出 IamError
 | 预检失败，AT 仍有效 | 会话仍可用 | 返回当前 AT，后台按退避重试 | 无错误 |
 | 预检失败，AT 已过期 | 无法继续 | 等待一次刷新；失败则报认证服务不可达 | `ENTERPRISE_IAM_UNAVAILABLE` |
 | 同地址换 Key | 绑定未变 | 直接使用新 Key，更新本地快照 | 无错误 |
-| 网关地址或主体变化 | 绑定已变 | 单飞重建，派发前重试一次 | 无错误；重建失败才报错 |
+| 网关地址变化（主体不变） | 绑定已变 | 单飞重建，首个输出分片前至多重试一次；真实派发时序待验证 | 无错误；重建失败才报错 |
 | 主体变化或退出 | 身份已变 | 不发送，不重试 | `IAM_LOGIN_REQUIRED` |
 | 流中模型选择变化 | 授权未变 | 让当前回答完成 | 无错误 |
 | 流中凭据吊销 | 授权已变 | 中止 | `ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED` |
@@ -91,12 +93,12 @@ resolveKey / resolveIamToken 抛出 IamError
 
 ### 4.1 派发前重试边界
 
-`resolveApiKey` 在请求构造与发送之前执行。此时抛出只说明“还没发出去”，重试不会重复计费，也不会产生两条模型请求。方案把重试限定在这一阶段，并用两个条件守住边界：
+原方案目标是 `resolveApiKey` 在请求发送前完成，以避免重复请求和计费。当前 `protect()` 只能观察下游分片与异常；它无法单凭未输出分片证明请求未发送，也不能据此保证无重复请求或重复计费。离线测试注入的 `PiAiAdapter` 替身先解析 Key 再调用协议桩，该顺序须在真实宿主与网关另行验证。运行时的重试条件为：
 
 - `emitted === false`：`protect()` 尚未产出任何分片；一旦产出，禁止重试。
-- 错误码必须是插件自己抛出的 `IAM_GATEWAY_BINDING_CHANGED`；其他异常不重试。
+- 捕获的异常码为 `IAM_GATEWAY_BINDING_CHANGED`；运行时按码判断异常，不单独验证异常来源。其他异常不重试。
 
-重试预算为一次。重建走模型目录 `refresh()` 单飞；等待上限 5 秒，超时按 `ENTERPRISE_GATEWAY_UNAVAILABLE` 处理。请求已取消时不再重试。
+重试预算为一次。重建走模型目录 `refresh()` 单飞；等待上限 5 秒，超时按 `ENTERPRISE_GATEWAY_UNAVAILABLE` 处理。当前仅在捕获异常时检查取消；等待重建期间取消后，可能以已取消的 signal 再次调用下游派发函数，须由后续修复和验证关闭该窗口。
 
 ### 4.2 绑定快照
 
@@ -164,9 +166,9 @@ resolveKey / resolveIamToken 抛出 IamError
 - catch 中仅当 `!emitted`、错误码为 `IAM_GATEWAY_BINDING_CHANGED`、尝试次数为 0 时，`await refresh()` 并调用 `redispatch?.()`，然后重新进入循环。
 - `prepareCall` 的 `stream` 传入 `redispatch`，重新构建 `prepared`；`llm/stream` 路径不传，`dispatch` 自己读取 `backend`。
 - `refresh()` 失败时直接映射其错误码，不再尝试第二次。
-- 请求 signal 已取消时不重试。
+- 捕获异常时请求 signal 已取消则不重试；重建等待期间取消尚未在再次派发前复查。
 
-验收：绑定变化只产生一次模型请求；重试后成功时没有失败分片；重建失败时返回具体码；取消后不出现第二次派发。
+验收目标：绑定变化只产生一次模型请求，需真实宿主与网关的请求级证据；合成测试可验证替身时序、失败分片、重建失败码及取消后的重试行为，不能证明真实请求次数或计费。
 
 ### P0-4 流中只查授权
 
@@ -235,8 +237,8 @@ resolveKey / resolveIamToken 抛出 IamError
 | 流中切换模型 | 回答完整结束 |
 | 流中退出登录 | 中止并返回 `IAM_LOGIN_REQUIRED` |
 | 首个分片后绑定变化 | 不重试，按当前回答结束或既有错误处理 |
-| `prepareCall` 路径绑定变化 | 重新准备并成功；只产生一次模型请求 |
-| 取消信号在重试前触发 | 不出现第二次派发 |
+| `prepareCall` 路径绑定变化 | 合成替身重新准备并成功，其请求计数为一次；真实请求次数待验证 |
+| 捕获异常前取消 | 不出现第二次派发；重建等待期间取消另列待修与验证 |
 | 映射表完备性 | `ERROR_STATUS` 中每个 IAM 与 CRED 码都有用户码 |
 
 ### 7.2 变异证明
@@ -273,7 +275,7 @@ git diff --check
 
 ## 9. 风险与未验证
 
-- 重试仅限派发前。若未来适配器把 Key 解析移到发送之后，`emitted` 守卫必须同步调整，否则可能重复请求。
+- 重试只受输出分片与错误码等条件约束；真实适配器是否在发送前解析 Key 尚未验证。若请求已发送而尚无分片，重试可能产生重复请求或计费；派发顺序和网关结果须另行取证。
 - `refresh()` 最长等待 5 秒，慢网下会增加首字延迟；选择这一上限是为了避免请求悬挂。
 - 同地址换 Key 的前提是 `baseURL` 规范化可靠。若同一 URL 背后换了网关，旧 Key 会得到 401，按 `ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED` 处理。
 - 预检失败时返回仍有效的 AT 是安全的，但服务端可能已撤销该 AT；网关的 401 仍是最终判据。
@@ -303,7 +305,7 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 |---|---|---|
 | P0-1 | `packages/forge-iam/src/service-token.mjs` | `retryablePreflight` 分支在 AT 未过期时先按退避安排续期再返回当前 AT；AT 过期或状态非 ready 时保留原错误 |
 | P0-2 | `packages/forge-iam/src/service-gateway.mjs`、`src/managed-models.mjs` | `resolveConnection()` 返回 `subject`；新增 `sameBinding()` 只比较规范化地址与主体；同地址换 Key 直接采用新 Key，地址变化抛内部码 `IAM_GATEWAY_BINDING_CHANGED`（`ERROR_STATUS` 409），主体变化按登录失效处理 |
-| P0-3 | `packages/forge-iam/src/managed-models.mjs` | `protect()` 增加 `emitted` 守卫、一次重试预算与 `redispatch`；仅派发前、未产出分片、原因为 `IAM_GATEWAY_BINDING_CHANGED`、请求未取消时重建并重试；重建等待上限 5 秒 |
+| P0-3 | `packages/forge-iam/src/managed-models.mjs` | `protect()` 增加 `emitted` 守卫、一次重试预算与 `redispatch`；未产出分片、捕获码为 `IAM_GATEWAY_BINDING_CHANGED`、捕获时请求未取消且授权未拒绝时重建并重试；重建等待上限 5 秒。等待期间取消的复查及真实派发时序待验证 |
 | P0-4 | `packages/forge-iam/src/managed-models.mjs` | 新增 `authorizationRefusal()` 供流中使用，只查销毁、账号与凭据、吊销与主体；`prepareCall` 与 `stream` 间的代际变化改为重新准备一次 |
 | P0-5 | `src/gateway-failure.mjs`、`src/managed-models.mjs`、`src/error-contract.mjs`、`client.js` | 新增 `failureCode()` 与 `USER_CODE_BY_INTERNAL`（覆盖 `ERROR_STATUS` 全部 `IAM_*`／`CRED_*` 码）；登记 `ENTERPRISE_IAM_UNAVAILABLE`、`ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE`、`IAM_GATEWAY_BINDING_CHANGED`；客户端文案与宿主同步 |
 | P1-1 | `packages/forge-iam/src/service-gateway.mjs` | `resolveConnection()` 只在冷启动（内存无 grant）时读取会话，不再以 `resolveToken()` 为前置；续期可用即视为会话可继续 |
@@ -334,10 +336,11 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 
 ### 12.4 未验证项
 
-- Windows 目标机 §7.3 手工矩阵未执行：当前无 Windows 目标机，A/B 类现场归因仍待该证据关闭。
+- 该历史记录未执行 Windows 目标机 §7.3 应用级手工矩阵，A/B 类现场归因仍须核对具体版本与环境的专项证据；后续多机真测汇总见 [issue #303](https://github.com/hrygo/heluo-forge/issues/303)，不能直接代替此矩阵。
 - 企业真实 IAM 与网关未联调：结论来自离线用例与本地 mock。
 - 宿主是否实际输出 `iam` 调试日志未在真机确认。
-- 跨进程写入仍为最终一致，仅保证首个请求自愈。
+- 跨进程写入仍为最终一致；首个请求自愈仅有合成测试证据，不作为真实宿主保证。
+- 合成适配器的 Key 解析与发送顺序不代表真实宿主；尚无真实网关请求次数或计费证据，不能据未产出分片断言尚未派发。
 
 ### 12.5 审查修正
 
@@ -354,7 +357,7 @@ P0-1～P0-5、P1-1、P1-2 已落地；P1-3 采用“failure 形状不变、内�
 
 | 缺陷 | 影响 | 修正 | 用例 |
 |---|---|---|---|
-| 恢复用例绕过宿主实际装配的适配器 | 只证明替身适配器可重试，未证明重试穿过原生适配器的按调用解析 Key 边界 | 以 `host.loader.import` 注入 PiAiAdapter 与协议桩，让恢复路径经 `createNativeGatewayAdapter` 装配后运行 | `the native adapter retries exactly once after the binding moves before dispatch`（断言一次重建、一次请求、使用新 Key；移除派发前重试即转红） |
+| 恢复用例绕过宿主实际装配的适配器 | 只证明替身适配器可重试，未证明重试穿过原生适配器的按调用解析 Key 边界 | 以 `host.loader.import` 注入 PiAiAdapter 替身与协议桩，让恢复路径经 `createNativeGatewayAdapter` 装配后运行；不证明真实宿主解析顺序 | `the native adapter retries exactly once after the binding moves before dispatch`（替身断言一次重建、一次请求、使用新 Key；移除重试即转红） |
 
 ### 12.6 虚拟机验证记录
 

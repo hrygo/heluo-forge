@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.44.0 |
+| 版本 | V0.45.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-13 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -25,14 +25,14 @@
 
 | 包 | 形态 | 设计文档 | 设计状态 | 主要待确认 |
 |---|---|---|---|---|
-| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型隔离写入适配、调用失败自愈与内部码到用户码映射（离线测试覆盖，未实机）；禁用插件/独占冲突 fail closed 本地验证；新对话默认模型由用户选择，插件只读观察，不自动写入；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录与手动模型边界、七行禁用与回灌检查）本地实现，见 §2.2.1；Remote/watch 未实现） | IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测 |
+| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型隔离写入适配、调用失败自愈与内部码到用户码映射（离线测试覆盖，未实机）；禁用插件/独占冲突 fail closed 本地验证；新对话默认模型由用户选择，插件只读观察，不自动写入；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录与手动模型边界、七行禁用与回灌检查）本地实现，见 §2.2.1；Host watch 与 HTTP SSE 已接线，Client Remote 未接线） | IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（guard、异步确认、必要审计与命令共用屏障已实测；既有 32 项宿主探针中的辅助函数调用不等于真实恢复、分叉、子 Agent 的授权承接；确认/委托纯 API 与可信运行时接线分开验收） | 审批注册与超时、`$DSH_HOME` 范围（子 Agent 模型自决调用与策略×沙箱叠加顺序已实测，见下方证据） |
 | `@heluo/forge-enterprise` | umbrella bundle（通用底座：企业账号与模型） | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测） | 版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile |
 | `@heluo/forge-engineering` | umbrella bundle（企业研发工具套件） | [plugins/forge-engineering.md](plugins/forge-engineering.md) | 草案（独立可预装研发组合包：`cordis.patch.yml` 插入 `heluo-policy`（共享 6 动作目录，无 `isolate`，单装独立就绪且与 `forge-enterprise` 同装自动单实例折叠）、`heluo-engineering-ui` 容器、`heluo-issue-delivery-skill` 按需交付 Skill、`@heluo/forge-devops` 与 `@heluo/forge-gitee`；不禁用官方行） | 双端、真实 DevOps/Gitee CLI 与企业 OSS 凭据库、`ai-publish`/`human-review` 业务行、角色 preset 粒度 |
 | `@heluo/forge-gateway` | 配置 bundle | [plugins/forge-gateway.md](plugins/forge-gateway.md) | 草案（路线 B 已选定） | 当前身份/用途、B 双因子承载、应用/IP、五分钟及单授权退出、C4 策略与容量联调；模块仍为规划入口，无清单、源码或测试 |
 | `@heluo/forge-brand` | 配置 bundle | [plugins/forge-brand.md](plugins/forge-brand.md) | 草案 | token 清单实测、双端资源路径、子品牌与合规页脚 |
-| `@heluo/forge-devops` | CLI 接入（工具面 + 设置页） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案（双槽位设置页已落地：容器在场时合并挂入 `heluo.engineering.tab`/order 10，独立回退保留 `devops-readiness`/29 与 `devops`/60，并向 `heluo.iam.credential-item`/order 10 注入紧凑凭据项；`cli-runner.mjs` 收敛至 `ENV_ALLOWLIST` + 托管优先链；真实 `dop` 系统凭据库未联调） | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验；真实 `dop` 凭据库未联调 |
-| `@heluo/forge-gitee` | CLI 接入（工具面 + 设置页） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案（双槽位设置页已落地：容器在场时挂入 `heluo.engineering.tab`/order 20，独立回退保留 `gitee`/50，已移除前端「高级」表单并向 `heluo.iam.credential-item`/order 20 注入凭据与明文风控项；后端保留 `runtime-config.mjs` 契约，接通托管优先链） | aarch64 产物、鉴权注入与 `--json` 字段稳定性（企业 CLI 未联调）；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验；设置页实机与真实 `gh` 凭据库未验证 |
+| `@heluo/forge-devops` | CLI 接入（工具面 + 设置页） | [plugins/forge-devops.md](plugins/forge-devops.md) | 草案（容器在场时挂入 `heluo.engineering.tab`/order 10，独立回退保留 `devops-readiness`/29 与 `devops`/60；凭据卡片内置于 DevOps 面板，`cli-runner.mjs` 使用 `ENV_ALLOWLIST` 与托管优先链；真实 `dop` 系统凭据库未联调） | 系统变更/独立验收映射、aarch64 产物、凭据/输出；受控写范围、C3 分类与回查待批待验；真实 `dop` 凭据库未联调 |
+| `@heluo/forge-gitee` | CLI 接入（工具面 + 设置页） | [plugins/forge-gitee.md](plugins/forge-gitee.md) | 草案（容器在场时挂入 `heluo.engineering.tab`/order 20，独立回退保留 `gitee`/50；前端「高级」表单已移除，凭据与明文风险提示内置于 Gitee 面板；后端保留 `runtime-config.mjs` 契约和托管优先链） | aarch64 产物、鉴权注入与 `--json` 字段稳定性（企业 CLI 未联调）；常规研发/评审写范围、C3 分类、可信来源与版本绑定待批待验；设置页实机与真实 `gh` 凭据库未验证 |
 | `@heluo/forge-sdd` | 已退役（包与 CLI 已删除；非 Host） | [plugins/forge-sdd.md](plugins/forge-sdd.md) | 已废止（2026-11-03 按用户决定全量退役；历史兼容语义与实施记录见正文） | 无在库交付；企业组合包依赖与 bin 已移除，已安装 profile／发布制品不动，外部 caller 未验 |
 | 原生插件市场 | DSH 内置 + AIHUB 索引 | [plugins/forge-market.md](plugins/forge-market.md) | 评审稿；`dsh plugin` 转发 pnpm 的安装/卸载参数已真机实测 | AIHUB 托管 format-1 索引、原生添加 URL、官方 manager 安装；模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>) |
 
@@ -44,7 +44,9 @@
 
 DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识（UA）方案设计](client-identification.md)（CORP-DSH-DESIGN-015，V0.2.0 草案；需求方决定使用 DSH 默认 UA，由网关按关键字匹配，不改写 UA；候选关键字、网关能力和代理链路待确认）。
 
-企业设置菜单收敛与凭据统一跨多个插件与配置层，单独成文：[企业设置菜单统一与 Token 收敛详细设计](enterprise-menu-and-token-unification.md)（CORP-DSH-DESIGN-018，V2.1.0 **生效**；面向「智能个人助理 × 智能研发平台」一体双定位解耦架构，拆分为 `@heluo/forge-enterprise`（**企业账号与模型**）与 `@heluo/forge-engineering`（**企业研发工具套件**）两个独立可预装包：`设置 → 企业账号` 保持零研发耦合（无 `heluo.iam.credential-item` 研发条），DevOps 与 Gitee 的 Token 设置条目内置于各自研发面板中并在无 IAM 时静默降级；严格不修改 DSH 宿主；四包代码、UI 契约与合成宿主探针离线闭环；容器级状态/诊断聚合属后续项，真实企业网关、OS 凭据库、宿主 GUI 与联邦换票未实机联调）。
+企业设置菜单收敛与凭据统一跨多个插件与配置层，单独成文：[企业设置菜单统一与 Token 收敛详细设计](enterprise-menu-and-token-unification.md)（CORP-DSH-DESIGN-018，V2.2.0 **生效**；面向「智能个人助理 × 智能研发平台」一体双定位解耦架构，拆分为 `@heluo/forge-enterprise`（**企业账号与模型**）与 `@heluo/forge-engineering`（**企业研发工具套件**）两个独立可预装包：`设置 → 企业账号` 保持零研发耦合（无 `heluo.iam.credential-item` 研发条），DevOps 与 Gitee 的 Token 设置条目内置于各自研发面板中并在无 IAM 时静默降级；严格不修改 DSH 宿主；四包代码、UI 契约与合成宿主探针离线闭环；容器级状态/诊断聚合属后续项，企业网关、工具侧凭据库、GUI 和联邦换票专项证据待补充）。
+
+[issue #303](https://github.com/hrygo/heluo-forge/issues/303) 汇总插件已在 Windows、麒麟、UOS 与 macOS 多机真测；权限、重启、用户隔离和恢复等专项及其版本与证据仍待逐项整理，不能由多机汇总推定专项通过。网关地址、SSE 与错误处理的后续验证由 [issue #304](https://github.com/hrygo/heluo-forge/issues/304) 跟踪。
 
 市场的社区/官方源码调研与选型依据见[企业插件市场调研与落地建议](<../architecture/plugin-market-research.md>)；Gitee 侧能力澄清见[专题问询函](<../collaboration/gitee-market-clarification.md>)。原研究为历史证据，来源方向由 [ADR-11](<../architecture/plugin-registry-source-decision.md>)，轻量索引模式由 ADR-13 替代；契约与真实接入仍需分别验证；市场模式与当前状态见[索引契约 §1](<services/market-index.md#1-一页速览>)。
 
@@ -88,7 +90,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | discovery-only 的旧会话绑定 | [issuer-context-policy](<../../packages/forge-iam/test/issuer-context-policy.test.mjs>)、[discovery-issuer-outbound](<../../packages/forge-iam/test/discovery-issuer-outbound.test.mjs>) | 不为恢复补齐未知 issuer 而启动探测；无明确 pin 或本实例已验证上下文时拒绝采用旧身份、AT 及主体，保留记录。带 `sessionInstanceId` 且与显式 pin 匹配的公共 V1 可读；缺少该标识的会话拒绝采用；异步操作与共享刷新固定 issuer，错误出口不发送旧 RT |
 | 用户自助信息 | [client-clipboard-behavior](<../../packages/forge-iam/test/client-clipboard-behavior.test.mjs>)、Client 与随包指南测试 | 账户页可主动复制已取得的登录链接和最小白名单诊断；不额外联网、不导出身份或凭据。异步结果受页面代际/链接身份/生命周期保护；不代替真实浏览器权限或原生剪贴板验收 |
 | 模型只读编排与隔离适配 | [实际 Host 编排](<../../packages/forge-iam/test/model-selection-host.test.mjs>)、[企业模型默认选择](<../../packages/forge-iam/test/host-default-model.test.mjs>)、`model-gate`、`model-selection` 及 [outcome 回归](<../../packages/forge-iam/test/model-selection-outcome.test.mjs>) | 实际 apply/服务和企业模型运行时使用模拟 SDK 验证严格只读、保存 getter 零访问、目录刷新及启用集变更后原选择不变、单飞与解绑、异步旧结果失效及模型错误不清 OIDC grant。只复用纯判定，不应用切换；记录式 sink 写入保持独立，异常用 written:null 标示未知。SDK无明确空态/条件保存；另有隔离执行组合证据见下表，真实人员/用途授权仍未接线 |
-| 企业模型运行时与动态目录 | [managed-models](<../../packages/forge-iam/test/managed-models.test.mjs>)、[manual-models](<../../packages/forge-iam/test/manual-models-backend.test.mjs>)、[扩展凭据](<../../packages/forge-iam/test/service-ext-tokens.test.mjs>)、[组合探针](<../../scripts/probe/run-iam-managed-models-probe.mjs>) | 设置页拆分为「企业账号」（`forge-iam` `-10`，含网关配置折叠与 `heluo.iam.credential-item` 子槽位）、「企业模型」（`forge-models` `10`，含 `${baseURL}/models` 动态目录与手动模型增删两级权威）及 3 步通用引导；扩展凭据Broker支持领域无关隔离存储与子进程注入；双定位静态/动态 UI 契约由 [tests/ui-contract.test.mjs](<../../tests/ui-contract.test.mjs>) 守卫。调用失败自愈把内部 `IAM_*`／`CRED_*` 码映射为已登记用户码，派发前按绑定重建并重试一次；[调用自愈用例](<../../packages/forge-iam/test/iam-call-recovery.test.mjs>)覆盖同地址换 Key、地址变化、主体变化、流中授权边界与取消不重试。探针只用模拟 IAM／UAG 与合成内存存储（覆盖标准目录、手动模型增删、刷新与退出后零请求）：生产认证、企业 OS 凭据库、真实企业网关、工具入口与双端 GUI 均**未实机验证** |
+| 企业模型运行时与动态目录 | [managed-models](<../../packages/forge-iam/test/managed-models.test.mjs>)、[manual-models](<../../packages/forge-iam/test/manual-models-backend.test.mjs>)、[扩展凭据](<../../packages/forge-iam/test/service-ext-tokens.test.mjs>)、[组合探针](<../../scripts/probe/run-iam-managed-models-probe.mjs>) | 设置页拆分为「企业账号」（`forge-iam` `-10`，含网关配置，无研发凭据槽位）、「企业模型」（`forge-models` `10`，含 `${baseURL}/models` 动态目录与手动模型增删）及 3 步通用引导；扩展凭据 Broker 支持领域无关存储与子进程注入，研发凭据卡片位于各工具面板；双定位 UI 契约由 [tests/ui-contract.test.mjs](<../../tests/ui-contract.test.mjs>) 守卫。调用失败自愈把内部 `IAM_*`／`CRED_*` 码映射为已登记用户码，绑定变化时在首个输出分片前可重建并重试一次；真实请求是否已发送尚待核验；[调用自愈用例](<../../packages/forge-iam/test/iam-call-recovery.test.mjs>)覆盖同地址换 Key、地址变化、主体变化、流中授权边界与捕获异常前取消不重试；重建等待期间取消仍待修复和验证。上述探针只用模拟 IAM／UAG 与合成内存存储，不证明生产认证、企业网关、工具侧系统凭据库或双端 GUI 专项通过；多机真测与待补证据见上文 #303／#304 |
 | 包说明与制品 | `package-shape`、仓库包体检查 | 用户/开发指南随包，检查本地链接、锚点与表格；不代替 GUI 或生产操作验收 |
 
 #### 按策略关闭项与剩余可模拟项
@@ -107,7 +109,7 @@ Remote/watch 和 tokenFor 的目标接口、凭据探测及企业授权路线仍
 
 | 事项 | 当前证据与下一最小动作 |
 |---|---|
-| Client Remote/watch | Host watch已实现，Client仍HTTP两秒轮询。[私有只读订阅接缝](<../contracts/iam-view-observer-isolated.md>)已按source/mock实现：共享单飞读、独立管理面校验、代际取消，18项定向用例通过；真实Client未接线，真实上下文/资源策略与生产准入未开放 |
+| Client Remote/watch | Host watch 与 HTTP SSE 已接线；同一页面共享连接，SSE 不可用时回落共享轮询。[私有只读订阅接缝](<../contracts/iam-view-observer-isolated.md>)已按 source/mock 实现：共享单飞读、独立管理面校验、代际取消；Client Remote 未接线，真实上下文/资源策略与生产准入未开放 |
 | tokenFor(resource) | 当前只有resolveToken；资源/audience信任与实际消费者未定。不把旧AT加标签当资源换票，也不以fixture新增提供方能力 |
 | 网关凭据probe | 当前只保存/读取，无探测。无副作用端点、owner/用途依据与错误分类须由网关协议确认，不把configured或假成功当有效授权 |
 

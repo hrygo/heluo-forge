@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-012 |
 | 文档名称 | 插件索引契约（format-1 / AIHUB 交付） |
-| 版本 | V2.0.1 |
+| 版本 | V2.1.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-25 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | G1 索引契约；G2 三目标安装 |
 
 > 编制依据：2026-10-21 用户决定采用 DSH 原生索引源轻量模式，由 AI 开发者平台（AIHUB）维护并托管 format-1 JSON；不再生成 `policy/evidence/current`，不设写前授权与租约。AIHUB 交付项见 [issue #12](https://github.com/hrygo/heluo-forge/issues/12)。
@@ -29,7 +29,7 @@
 | 谁生成 | AI 开发者平台（AIHUB） |
 | 谁托管 | AIHUB，提供稳定只读 URL |
 | 谁消费 | DSH 原生「插件市场 → 索引源」 |
-| 包体从哪来 | 企业 Artifactory；由 `versions[].source.registry` 指定 |
+| 包体从哪来 | 企业 Artifactory；索引和终端配置如何共同指定该入口见 §5–§6 |
 | 本项目做什么 | 定义字段、校验工具、验收清单；不生成、不托管、不代理 |
 | 不包含什么 | integrity、OS/CPU、policyRevision、installEnabled、expiresAt、证据 |
 | 当前状态 | 目标链路为 DSH 原生「索引源」+ AIHUB 托管 format-1 JSON，不要求企业发行预置自定义市场插件；`packages/forge-market` 与旧 HTTP 服务为历史参考；企业审核批准、AIHUB 索引交付、三目标安装与发行分发尚未完成 |
@@ -100,7 +100,7 @@
 | `version` | string | 是 | 精确 SemVer；首版只放稳定版（无 prerelease）；同包内唯一 |
 | `publishTimestamp` | number | 是 | Unix 秒整数，`0 ≤ x < 10^11` |
 | `source.type` | string | 是 | 固定 `npm` |
-| `source.registry` | string | 否 | 企业 npm 入口；可为内网 HTTP；不得含凭据/query/fragment |
+| `source.registry` | string | 否（format-1 字段） | 提供时须为企业 npm 入口；可为内网 HTTP；不得含凭据/query/fragment。缺省如何满足企业交付要求待确认 |
 | `engines.dsh` | string | 否 | 合法 SemVer range；需与企业 DSH 版本兼容 |
 
 排序与去重：
@@ -111,8 +111,8 @@
 
 ## 6. `source` 与 Artifactory
 
-- 只允许 `{ "type": "npm", "registry": "..." }`；不支持 Git、tarball、file、alias。
-- `registry` 必须是终端可访问的企业 npm 入口（虚拟仓），聚合内部包与公网缓存。
+- `source.type` 只允许 `npm`；不支持 Git、tarball、file、alias。format-1 解析允许省略 `source.registry`，企业交付是否要求显式填写仍待确认。
+- 使用的 registry 必须是终端可访问的企业 npm 入口（虚拟仓），聚合内部包与公网缓存；提供 `source.registry` 时也必须指向该入口。缺省时终端如何确保使用同一企业入口须验收，不能仅凭校验器通过判定来源合规。
 - 终端读权限由统一分发的 `.npmrc` 或受管配置提供；**索引不得包含 token/用户名/密码**。
 - 内部 scope 禁止回源公网；公网镜像包只允许单向缓存。
 - 同名同版本不可变；索引不得指向已覆盖或删除的版本。
@@ -164,12 +164,12 @@ node services/market-index/validate-index.mjs ./index.json --base https://aihub.
 
 校验内容：
 
-1. JSON 可解析，`format === 1`，`title` 含 `en`。
+1. JSON 可解析，`format === 1`，`title` 为非空字符串或包含 `en` 的语言对象。
 2. 包名、版本、时间戳、source、engines、icon、metadata 引用合法。
-3. 版本去重、降序；`source.type` 只允许 npm。
+3. 版本去重；`source.type` 只允许 npm。
 4. 未知成员按原生行为忽略，但不得用未知字段承载授权/策略。
 
-AIHUB 交付前须用该脚本自检，并在三目标各做一次真实安装（见 DESIGN-007 §9）。
+校验器接受合法 SemVer 预发布版本，并尝试对解析结果排序；它不拒绝预发布，也不检查输入原始顺序。当前比较器对预发布标识中含连字符的版本不能保证 SemVer 顺序，不能把输出顺序当作通用 SemVer 排序证据。因此通过脚本不证明满足 §5 的**仅稳定版、原始列表降序**策展目标；AIHUB 交付前须另行核验这两项，并在三目标各做一次真实安装（见 DESIGN-007 §9）。
 
 ## 11. 已知限制
 
@@ -184,7 +184,7 @@ AIHUB 交付前须用该脚本自检，并在三目标各做一次真实安装�
 
 ## 附录 A 历史参考实现（HTTP 服务契约，不属目标）
 
-以下保留旧 HTTP 参考服务的端点/错误码表，仅供 `packages/forge-market` 的历史契约测试与追溯；当前轻量模式不使用该服务，也不代表目标链路。
+以下保留旧 HTTP 参考服务的端点/错误码表，仅供 `packages/forge-market` 的历史契约测试与追溯；该服务已从本仓库移除，当前轻量模式不使用该服务，也不代表目标链路。本附录对端点和行为的描述均指旧参考实现，不表示当前有可运行服务。
 
 ### 旧服务说明（自有 JSON 服务）
 
@@ -196,8 +196,8 @@ AIHUB 交付前须用该脚本自检，并在三目标各做一次真实安装�
 
 | 配置项 | 类型 | 默认值 | 必填 | 旧草案含义（未实现，非目标必填） |
 |---|---|---|---|---|
-| `service.listen` | string | `:8080` | 是 | 旧监听地址草案；当前 CLI 默认 loopback |
-| `service.db` | string | 空 | 是 | 历史数据库连接草案；当前服务及目标最小路径都不要求它 |
+| `service.listen` | string | `:8080` | 是 | 旧监听地址草案；旧 CLI 默认 loopback |
+| `service.db` | string | 空 | 是 | 历史数据库连接草案；目标最小路径不要求它 |
 | `gitee.host` | string | 空 | 是 | 旧 Gitee 主机字段；目标仅内部定制证据相关 |
 | `gitee.group` | string | 空 | 是 | 旧 group 字段；不适用于公网镜像 |
 | `review.required` | boolean | `true` | 否 | 历史人工评审开关，目标不采用逐版本审批 |
@@ -205,7 +205,7 @@ AIHUB 交付前须用该脚本自检，并在三目标各做一次真实安装�
 
 ### A.2 端点
 
-以下端点状态只描述当前参考实现，不表示 npm 或上游 format-1 兼容；规划端点返回 404。
+以下是旧参考实现曾有的端点与当时状态，不表示现有服务、npm 或上游 format-1 兼容；当时规划端点返回 404。
 
 ```text title="端点"
 GET  /api/plugins                  已实现；条目列表与筛选；`mine=1&submitter=` 只返回该提交方的条目与待审记录，缺 submitter 返回 400 `missing-submitter`
@@ -227,12 +227,12 @@ GET  /api/admin/unindexed          已实现（返回空列表）；未收录条
 
 | 实体 | 关键字段 |
 |---|---|
-| plugin | `name`、`title`、`summary`、`scenarios`、`maintainer`、`repo`、`status`；旧草案拟按 group 成员解析维护人，当前并未连接该接口；新发布条目填空字符串，已载入目录可带值，空值表示「未知」而非「无维护人」 |
+| plugin | `name`、`title`、`summary`、`scenarios`、`maintainer`、`repo`、`status`；旧草案拟按 group 成员解析维护人，旧实现未连接该接口；新发布条目填空字符串，已载入目录可带值，空值表示「未知」而非「无维护人」 |
 | version | `version`、`tag`、`archiveUrl`、`engines`、`submittedAt` |
 | review_task | 条目、状态、评审人、理由、时间 |
 | metric | 条目、`downloads`、`stars`、`syncedAt`；参考实现返回 `countsPersisted`、`starsSource`、`starsSyncedAt` 作为口径说明 |
 
-当前参考协议字段级约定（现有客户端与 JSON 目录按此命名；不覆盖目标 npm/upstream 字段）：
+旧参考协议字段级约定（历史客户端与 JSON 目录按此命名；不覆盖目标 npm/upstream 字段）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -271,7 +271,7 @@ GET  /api/admin/unindexed          已实现（返回空列表）；未收录条
 
 `revoke` 不带 `version` 时整条下架；带 `version` 时只标记该版本（下载端点返回 409），其余版本仍可安装。响应返回 `{ name, version?, state }`。
 
-旧 Gitee 方案原设想按仓库成员判定维护人、读取归档与 `engines.dsh`；不是 npm 目标要求。当前参考实现未连接 Gitee，新建条目维护人为空，提交只检查必填字段与 tag；`approve` 不代表包格式、摘要、来源或兼容性已核验。
+旧 Gitee 方案原设想按仓库成员判定维护人、读取归档与 `engines.dsh`；不是 npm 目标要求。旧参考实现未连接 Gitee，新建条目维护人为空，提交只检查必填字段与 tag；`approve` 不代表包格式、摘要、来源或兼容性已核验。
 
 **并发**：旧草案的条目发布锁尚未实现；计数按（条目, 机器哈希, 日）在内存去重，缺机器哈希时按（条目, 日），重启不保留。不能据此声称发布事务或 npm 全局计数已完成。
 
@@ -279,7 +279,7 @@ GET  /api/admin/unindexed          已实现（返回空列表）；未收录条
 
 ### A.5 格式校验码
 
-下表保留现有 `validate.mjs` 校验码及旧内部包规范；插件自检已调用它，但当前 HTTP 服务提交/审批**并未执行完整校验**，不能把“不进索引”误认成已强制。
+下表保留 `packages/forge-market/src/validate.mjs` 校验码及旧内部包规范；旧插件自检调用该校验器，已移除的旧 HTTP 服务提交/审批当时**并未执行完整校验**，不能把“不进索引”误认成目标链路已强制。
 
 | 错误码 | 触发条件 | 处理 |
 |---|---|---|
@@ -314,7 +314,7 @@ GET  /api/admin/unindexed          已实现（返回空列表）；未收录条
 
 ### A.7 参考测试
 
-`node --test services/market-index/test/*.test.mjs tests/integration/*.test.mjs` 覆盖旧列表/详情、鉴权、提交/评审/撤回、计数恢复与本地归档安装；不覆盖 npm、生成器、双端或授权。
+`node --test services/market-index/test/*.test.mjs packages/forge-market/test/contract.test.mjs packages/forge-market/test/error-codes.test.mjs` 检查现有 format-1 解析器及旧插件的文档契约；旧 HTTP 服务已移除，这些测试不证明旧服务仍可运行，也不证明企业 npm、双端安装或授权已验证。
 
 ## 附录 B 原生解析行为（2026-10-21 只读核验）
 

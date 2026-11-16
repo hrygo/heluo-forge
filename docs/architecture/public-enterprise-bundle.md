@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ARCH-006 |
 | 文档名称 | 公版插件、企业私有包与官方 DSH 集成方案 |
-| 版本 | V0.6.4 |
+| 版本 | V0.7.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-13 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | 轻量集成方案待用户确认；问答式交付打包与员工启动器已本地验证；企业接口与目标平台待实测 |
 
 > 编制依据：项目负责人确认企业采用 public 客户端、以官方宿主集成企业插件、不重新签名或公证，轻量安装方式由 miniceM 调研选择；具体范围见 §1。文档为技术方案草案，不表示企业接口、安装流程或目标平台已实测。现有实现与验证见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)。
@@ -152,11 +152,11 @@ Skill 不依赖 Codex 专有接口、工具名或路径；由具备读取技能�
 | Skill | 实施范围 | 兼容性要求 |
 |---|---|---|
 | `.agents/skills/heluo-forge-release-bundle/` | 以问答方式向打包人员收集企业字段，调用 `release-delivery` 生成含私版插件、启动器、安装说明与校验和的员工 zip；提供制作脚本、初始化脚本及按需手册；不装配宿主安装包，不面向安装用户询问企业配置 | 不依赖 Codex 专有工具；制作脚本在 macOS 验证，并随公开 Release 取得；普通 SOP 支持不通过 Agent 手工运行 |
-| `packages/forge-engineering/skills/issue-delivery/` | 为已有研发 Skill 添加标准 frontmatter 并核验全部引用资源 | `name` 与 `issue-delivery` 目录一致；DSH 仍以 `enterprise-issue-delivery` 入口注册，保持仅用户显式触发、按需加载、卸载清理和原有 Teamflow 职责 |
+| `packages/forge-engineering/skills/issue-delivery/` | 维护已有研发 Skill 的标准 frontmatter 与引用资源 | `name` 与 `issue-delivery` 目录一致；DSH 以 `enterprise-issue-delivery` 入口注册，保持仅用户显式触发、按需加载、卸载清理和原有 Teamflow 职责 |
 
 现有 DSH provider 从 `clauses.json` 提供发现摘要并读取包内 Skill 正文。标准元数据与宿主摘要须有一致性约束，避免形成互相矛盾的维护入口；实际注册名称是宿主的命名空间映射，不要求改名或迁移已有 DSH 入口。元数据变更后须验证候选、正文及相对 `references/` 在真实目标宿主仍可读取，不能只凭标准文件校验宣称 DSH 已兼容。
 
-项目级制作 Skill 已纳入仓库；员工侧研发 Skill 由 DSH provider 注册，其 `SKILL.md` 包含标准 frontmatter。本机 `skill-creator` 快速校验器未覆盖目录名一致等全部规范规则，也与规范可选字段的支持范围不同，不能单独作为标准合规判据。项目级制作 Skill 不因存在于源码树而自动出现在 Release 下载或 DSH 员工环境。
+仓库已有项目级制作 Skill 与员工侧研发 Skill，二者的 `SKILL.md` 均含 frontmatter。本机 `skill-creator` 快速校验器未覆盖目录名一致等全部规范规则，也与规范可选字段的支持范围不同，不能单独作为标准合规判据；标准格式、宿主实际发现和引用资源可读性仍须分别验证。项目级制作 Skill 不因存在于源码树而自动出现在 Release 下载或 DSH 员工环境。
 
 ## 6. IAM、个人 Key 与升级
 
@@ -170,7 +170,7 @@ public 模式不免除 IAM grant、个人 Key 存储和模型 / 工具消费的�
 
 [需求基线](<../requirements/requirements-baseline.md>)定义范围；[总体架构](<platform-architecture.md>)记录 public 登录和官方宿主集成决策；[IAM 主设计](<../design/plugins/forge-iam.md>)定义身份与凭据准入。历史企业回函保留原文，真实支持情况以实际联调为准。企业组合、制品源和推广实施文档明确内部文件交付与官方宿主的许可边界；根 README 保持产品宣介职责。
 
-[机密认证隔离契约](<../contracts/iam-client-auth-isolated.md>)不因 public 基线放宽：机密模式的真实来源依旧关闭，用户后续另行选择时须单独设计和核验。制作脚本、发布工作流和员工初始化脚本的实现及本地验证边界见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)；远端发布与目标环境验收须分别核验。
+[机密认证隔离契约](<../contracts/iam-client-auth-isolated.md>)不因 public 基线放宽：机密模式的真实来源依旧关闭，用户后续另行选择时须单独设计和核验。仓库已有制作与公版构建脚本及离线测试，制作脚本、发布工作流和员工初始化脚本的实现及本地验证边界见[设计索引 §2.2](<../design/README.md#22-实现与验证入口>)；实际公开 Release、员工终端安装与企业环境须分别验收。
 
 ## 8. 验证与验收
 

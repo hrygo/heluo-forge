@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-IAM-004 |
 | 文档名称 | IAM 只读状态订阅隔离契约 |
-| 版本 | V0.3.0 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-03 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | 用户已批准最小 source/mock 范围；私有接缝已实现并完成定向验收；真实注册关闭 |
 
 > 编制依据：用户选择“继续最小订阅隔离实现”。先核接口与访问准入，再实现并验收私有接缝；真实 Remote 注册不在本批。正式团队审核、生产资源声明与真实 Host 准入仍未完成。
@@ -88,7 +88,7 @@ createIamViewConsumer({
 
 ## 5. 视图与 Client 生命周期
 
-**白名单。** 复用当前 [createView](<../../packages/forge-iam/src/state.mjs>) 的 12 个非秘密字段：`state`、`configured`、`signedIn`、`canSignOut`、`canSignIn`、`missing`、`error`、`exclusive`、`principal`、`accessExpiresAt`、`gatewayCredential`、`gatewayConsoleUrl`。
+**白名单。** 从当前 [createView](<../../packages/forge-iam/src/state.mjs>) 只投影 12 个非秘密字段：`state`、`configured`、`signedIn`、`canSignOut`、`canSignIn`、`missing`、`error`、`exclusive`、`principal`、`accessExpiresAt`、`gatewayCredential`、`gatewayConsoleUrl`。`createView` 的 `modelAccess` 不在此私有契约的投影中。
 
 **复制规则。** 只复制自有 data 属性中的字符串、布尔、`null` 与字符串数组；结果冻结。未知字段不读，不调用 getter 或 `toJSON`。已知字段出现访问器、错误类型或额外对象结构时拒绝，不做隐式字符串化。
 

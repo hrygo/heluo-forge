@@ -112,13 +112,13 @@ Windows 主机在 DSH 沙箱内执行 `forge_gitee_git_push` 时，git 的 crede
 
 - 归类：仅当 push 的非零退出命中 MSYS/sh/命名管道崩溃特征（`cannot fork`、`CreateFileMapping*`、`\.\pipe\`、管道创建失败、行首 `sh:`/`bash:` 诊断，或 `msys`/`cygwin`/`mingw` 运行时名与凭据症状同现）时，信封返回 `status: failed`、`reason: AUTH_TRANSPORT_UNAVAILABLE`、`rule: auth-transport-unavailable`、`next_action: use-native-http-credential`；本地 `commit`/`head`/`branch` 从不归入此类。
 - 不归类：普通 401/403、`Authentication failed`、`permission denied`、孤立的 `could not read Username`、HTTP 断链仍按 `COMMAND_FAILED` 处理（可重试），不会被误报成传输故障。
-- 绕行：用系统钥匙串保存的令牌与内嵌凭据的远端 URL（形如 `https://<access-token>@corp.example/<owner>/<repo>.git`）走 HTTP 原生传输，credential helper 与 `sh -c` 不在链路上；令牌只保留在本机会话配置与钥匙串，不写入仓库、不进入日志或错误体。
+- 处理：该故障表示当前认证传输不可用；可用且安全的凭据传输方式须在目标环境核验。不要把 Token 嵌入远端 URL：远端配置可能写入仓库配置，现有 `push` 入口仅接收远端名，不提供安全注入该 URL 的能力。
 
 ## 策略门禁与凭据
 
 - 策略是硬依赖：`policy` 服务缺失、或三个 `gitee.*` 只读动作未登记/未启用，`apply()` 直接抛可读错误（`GITEE_POLICY_UNAVAILABLE` / `GITEE_ACTION_UNREGISTERED`，`missing` 列全），**不降级成"无策略只读"**。判定与 git push 不在这一断言内：缺 `gitee.delivery.judge`/`gitee.git.push` 时挂载照常成功，只有对应工具降级为 `denied`（读动作的 fail-closed 不因它们放宽）。
 - 补丁层预置 **6 条 `kind: read` 目录（本包 3 读 + 1 只读判定 + 2 条 devops 的变更读 `change.read`/`change.list`，与 devops 补丁层逐字相同）、0 条 write**：`gitee.delivery.judge` 随包登记，`target` 逐字 `change`，`egress: 'allow'` 是**必需项**而非风格——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 会被编译成默认 `confirm`，无审批台账时判定永远拿不到 `done`。五个受控写（`gitee.issue.write`/`gitee.pr.write`/`gitee.review.publish`/`gitee.review.record`/`gitee.git.push`）靠"不登记"实现默认禁用，而不是运行期开关；要开写须由所属 profile 显式追加动作（写/确认类还需审批台账条目）。`gitee.git.push` 进 `CONFIRM_REQUIRED_ACTIONS`：登记后还要 `confirm{repo,object}` 逐字匹配。第 5、6 条 `change.read`/`change.list` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**——目录是并集，装谁都不缺自己那条。
-- 审计舱用内存 sink（`allowNonDurable: true`），属**联调/试点级**证据，记录随进程退出丢失；生产须注入持久 sink 并去掉该开关。
+- 审计舱用内存 sink（`allowNonDurable: true`），属**联调/试点级**证据，记录随进程退出丢失；生产需要持久 sink 并关闭该开关。现有配置仅支持 `none` 和 `memory`，持久适配器及其程序接入仍待完成和验证。
 - 凭据主路径是 `gh` 的系统凭据库（keyring service `gitee-cli-go`，规格 §1.3）：用户在终端运行一次 `gh auth login`，插件不代跑、不代填 `-t`（会进 `ps` 与命令审计）。`GITEE_TOKEN` 是子进程环境白名单里的**唯一**凭据例外、不点名 `authEnv` 也会继承；其它凭据变量仍只经 `authEnv` 显式注入，配置里没有存令牌的字段。`authEnv` 只用于无桌面凭据库或 CI。CLI 配置目录存在持久令牌时默认**告警**（`persistentToken: 'block'` 才以 `GITEE_PERSISTENT_TOKEN` 拒绝、零子进程），自检覆盖 `~/.gitee-cli/config.json` 与 `gh` 兼容的 `hosts.yml` 等布局，结果只回文件名与下一步、不回显令牌值；子进程输出按令牌值脱敏后再返回。
 - 唯一的子进程出口是 `src/gitee-cli.mjs`：`execFile` + `shell: false` + 超时 + 单流 1 MiB 上限；`run()` 发 gitee CLI，`runGit()` 发本机 git（只叠加 `GIT_TERMINAL_PROMPT=0` 与 `cwd`），共用同一套白名单/超时/截断/脱敏，入参只接受 `{bin|args, purpose, cwd}` 这几键，没有"把整条命令当字符串"的通道。
 

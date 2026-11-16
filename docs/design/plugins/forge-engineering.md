@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-019 |
 | 文档名称 | 企业研发工具套件详细设计 |
-| 版本 | V1.0.0 |
+| 版本 | V1.1.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-13 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | G2 |
 | 模块状态 | 可用（独立可预装企业研发组合包：`heluo-engineering-ui`、`enterprise-issue-delivery`、`@heluo/forge-devops`、`@heluo/forge-gitee` 与共享 `@heluo/forge-policy` 六动作目录；实现与验证见[设计索引 §2.2](../README.md#22-实现与验证入口)） |
 
@@ -48,9 +48,10 @@
 
 - `id: heluo-policy`
 - `name: '@heluo/forge-policy'`
-- `config.failClosed: true`
-- `config.audit.retentionDays: 90`
+- `config.audit.sink: memory` 和 `config.audit.allowNonDurable: true`：仅供本地与试点验证，进程退出后记录不保留；当前装配配置没有 90 天留存字段或持久审计 sink。
 - `config.catalog`: 固定 6 条 `kind: 'read'` 默认开放动作（`change.read`、`change.list`、`gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read`、`gitee.delivery.judge`），两份补丁文件与 DevOps/Gitee 子包中的目录逐字节一致；写动作不预置登记，保持默认拒绝。
+
+已纳入策略的动作在目录或必要审计不可用时拒绝；这是策略行为，不是补丁中的 `config.failClosed` 配置项。生产审计需要另行完成持久落点设计和验证。
 
 在 DSH 宿主补丁合并语义下：
 
@@ -82,7 +83,7 @@
 - insert:
     - id: heluo-policy
       name: '@heluo/forge-policy'
-      config: # 固定 failClosed / 90 天审计 / 6 条 read catalog
+      config: # 6 条 read catalog；memory 审计仅用于本地与试点
     - id: heluo-engineering-ui
       name: '@heluo/forge-engineering'
     - id: heluo-issue-delivery-skill
@@ -130,7 +131,7 @@ DevOps（`DEVOPS_API_KEY`）与 Gitee（`GITEE_TOKEN`）不再向「企业账号
 
 ## 7. 验证基线与未覆盖事项
 
-- **包结构与闭环门禁**：由 `pnpm check:repo`、`pnpm check:tarballs`、`pnpm check:skills`、`tests/plugin-patch-layers.test.mjs`、`tests/ui-contract.test.mjs` 及 `packages/forge-engineering/test/*.test.mjs` 执行离线覆盖；
+- **包结构与闭环门禁**：由 `pnpm check:repo`、`pnpm check:tarballs`、`node scripts/check-skills.mjs`、`tests/plugin-patch-layers.test.mjs`、`tests/ui-contract.test.mjs` 及 `packages/forge-engineering/test/*.test.mjs` 执行离线覆盖；
 - **真实装包与共存验证**：使用真实 `dsh` 构建 `@heluo/forge-engineering` tarball 并独立/联合安装至测试 Profile，核查 `--dump-config` 中 `heluo-policy` 单实例折叠、双包依赖闭环与元数据可读性；
 - **未联调外部项**：真实企业 DevOps CLI、Gitee 内网 `gh` CLI、企业 OS 凭据库联动及双端桌面 GUI 交互流程仍待外部环境实机联调。
 

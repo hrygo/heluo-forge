@@ -25,7 +25,7 @@
 
 | 项 | 状态 |
 |---|---|
-| 形态 | Host + Client 插件；Client 使用 interim same-origin route 与 2 秒轮询，Remote/watch 未接 |
+| 形态 | Host + Client 插件；Client 使用同源 SSE 共享状态，连接不可用时回退 2 秒轮询；Client Remote/watch 未接 |
 | 配置 | `src/config.mjs`：显式端点/discovery、issuer、clientId、可选 `gatewayResource`/`gatewayConsoleUrl`、redirectUri/callbackPort、超时与安全开关；`scopes` 必须含 `openid`，回调路径不得占用 `/api/forge-iam` |
 | 状态机 | `src/state.mjs`：`unconfigured` / `signed-out` / `authenticating` / `ready` / `expired` / `unreachable` / `error` |
 | 凭据记录 | `src/record.mjs`：`IamGrantV1` 校验、到期/刷新判定；写入 `credentials` 的 GrantRecord |
@@ -33,10 +33,10 @@
 | 网关凭据 | 录入/替换/清除与状态（未配置/已配置/属于其他账号/记录损坏）；显示存储来源，非 keychain 时提示未受系统保护；不签发、不刷新、不探测；退出与卸载保留 |
 | Host 服务 | `src/service.mjs`：OIDC 登录、state/nonce、PKCE S256、token 交换、ID Token/JWKS 校验、刷新、撤销 |
 | 登录/刷新/撤销 | 协议和存储门禁有离线 mock 测试；真实 IAM 与目标机联调未完成 |
-| 凭据 provider | 独立包 `@heluo/forge-credentials-keychain` 使用 SQLite 值级加密；组合根绑定受信的单记录及联合存储，目标平台尚未取证 |
+| 凭据 provider | 独立包 `@heluo/forge-credentials-keychain` 使用 SQLite 值级加密；组合根绑定受信的单记录及联合存储。插件已有 Windows、麒麟、UOS、macOS 多机实测，具体版本及存储重启、权限、隔离与恢复专项仍待归档核验 |
 | Client UI | `settings.section` 双分区（`-10` 企业账号、`10` 企业模型，各自注册同名 `settings.section.icon`）、纯 3 步通用引导与未登录横幅；登录使用浏览器回调 |
 
-账户页退出时清除旧视图并丢弃该操作前及操作中的迟到轮询；非 2xx 的返回视图与网络结果未知分别展示，不将未知结果显示为退出成功。横幅独立轮询，跨组件即时同步和真实 GUI 挂载仍待验证。登录请求若在退出完成后才由 Host 处理，旧响应会被丢弃，界面可能停留在无链接的登录中状态，需取消后重试。引导完成页不会因轮询回退；overlay 显式开启 pointer events。
+账户页退出时清除旧视图并丢弃该操作前及操作中的迟到结果；非 2xx 的返回视图与网络结果未知分别展示，不将未知结果显示为退出成功。账户页、横幅和引导在同一页面共享事件流及回退轮询，各自维护视图代际；不同标签页各有连接，不同目标版本的 GUI 调度仍需专项核验。登录请求若在退出完成后才由 Host 处理，旧响应会被丢弃，界面可能停留在无链接的登录中状态，需取消后重试。引导完成页不会因轮询回退；overlay 显式开启 pointer events。
 
 ## Host 分轴模块
 

@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-CLI-002 |
 | 文档名称 | Gitee CLI（gh）接口规格（1.0.6） |
-| 版本 | V0.1.0 |
+| 版本 | V0.1.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-04 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | G1 接口事实 |
 
 > 编制依据：2026-11-03 对 Gitee CLI（`gh`）1.0.6（Windows）的实测输出、`--help` 与二进制字符串提取整理；**本文件为脱敏版**——内网地址、账号、真实业务编号与仓库路径已替换为占位，原始捕获不入库；本轮未重新实机复核，标“推断”的条目仍为推断。
@@ -1322,7 +1322,7 @@ ID  TITLE  STATE  BRANCH
 - 实测样例：
   ```
   0918 解决压测发现的问题，解决s3的tcp连接不释放的问题 (#1)
-  \x1b[35mmerged\x1b[0m • 001839-杨晓兵 wants to merge release_20260918 into master
+  \x1b[35mmerged\x1b[0m • Example User wants to merge release_20260918 into master
 
     (no description)
   ```

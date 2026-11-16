@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-005 |
 | 文档名称 | 模型网关接入详细设计 |
-| 版本 | V1.0.3 |
+| 版本 | V1.1.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | G2 |
 | 模块状态 | 规划 |
 | 适用范围 | 网关目标接入的协议对齐与适配设计；不含模块实现、代码与企业联调结论 |
@@ -20,13 +20,13 @@
 
 > 编制依据：2026-10-22 对已安装 DSH 包核验；企业级 AI 网关技术规范 V2.1（正式评审稿，文件状态「正在修改」，审核与批准待定）作为建设标准输入，受管个人助手采用**路线 B（长效凭据 + 实时 IAM 身份令牌双因子凭据协同）**，该路线已由[需求基线](../../requirements/requirements-baseline.md)选定，并确立客户端 `baseUrl` 解耦架构、17 个标准服务路由、SSE 保活心跳过滤与统一错误码处理。本设计为设计层面定稿，不表示已实现、已联调或已批准；上游规范仍在修改，接入契约未冻结，模块实现状态见[设计索引 §2.2](../README.md#22-实现与验证入口)。
 >
-> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md)（CORP-DSH-GW-001 V2.1.2）、[总体架构 ADR-16](../../architecture/platform-architecture.md)、[网关凭据双模式设计](../credential-modes.md)（CORP-DSH-DESIGN-001 V2.0.0）、[客户端标识设计](../client-identification.md)。
+> 关联文档：[AI 网关契约](../../contracts/gateway-contract.md)（CORP-DSH-GW-001 V2.2.0）、[总体架构 ADR-16](../../architecture/platform-architecture.md)、[网关凭据双模式设计](../credential-modes.md)（CORP-DSH-DESIGN-001 V2.1.0）、[客户端标识设计](../client-identification.md)。
 
 ## 1. 结论
 
 本接入模块负责河洛客户端与企业级 AI 网关目标契约的端到端协议对齐与适配，属规划中的能力，当前无清单、源码或测试。核心确立两大设计基准：
 1. **客户端 `baseUrl` 彻底解耦**：设置面板暴露可配置的网关根路径（由部署配置注入，示例占位符 `https://ai-gateway.corp.example/aig/v1`），业务代码严禁硬编码 `/aig/v1`，全量 API 基于 `${baseUrl}/chat/completions`、`${baseUrl}/models` 等相对路径拼接，确保开发者本地代理（cliproxyapi / mock 等）与生产网关能够无缝切换。MCP 与 Agent 端点使用独立协议族前缀，不由该 `baseUrl` 拼接。
-2. **双因子凭据协同注入与错误分流**：请求拦截器自动装配长效个人凭据（`Authorization: Bearer uag-sk-u-...`）与 IAM 身份令牌（`X-IAM-Token: <JWT>`），正确过滤网关 15 秒 SSE 心跳注释行，并实现网关标准化错误码（如 `401 invalid_iam_token` 停止请求并引导重新登录、`403 iam_token_mismatch` 阻断告警）的精细化处置。
+2. **双因子凭据协同注入与错误分流**：请求拦截器协同装配长效个人凭据（`Authorization: Bearer uag-sk-u-...`）与 IAM 身份令牌（`X-IAM-Token`），正确过滤网关 15 秒 SSE 心跳注释行，并按网关标准化错误码（如 `401 invalid_iam_token` 停止请求并引导重新登录、`403 iam_token_mismatch` 阻断告警）处置。令牌形态与阶段判据以[网关契约 §4.1.2](../../contracts/gateway-contract.md#412-阶段能力矩阵)为准，不预设当前令牌为 JWT。
 
 V1 的双因子注入、错误分流与 SSE 容错由 `forge-iam` 的受控模型运行时承载；本包保持配置与文档入口，并作为后续抽离目标，不重复注册模型适配器。
 
@@ -66,13 +66,13 @@ V1 的双因子注入、错误分流与 SSE 容错由 `forge-iam` 的受控模�
 
 ### 3.2 双凭据请求拦截器装配
 
-在发起 HTTP 请求时，拦截器自动注入标准头集合：
+目标请求在发起 HTTP 请求时由拦截器组装以下头集合；实际注入和企业网关支持须分别核验：
 
 ```http
 POST ${baseUrl}/chat/completions HTTP/1.1
 Host: ai-gateway.corp.example
 Authorization: Bearer uag-sk-u-<user_credential_token>
-X-IAM-Token: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImlhbXNzbyJ9...
+X-IAM-Token: <iam-access-token>
 X-Consumer-Type: personal
 User-Agent: deepseek-harness/<version>（宿主默认，客户端不改写）
 X-Request-Id: 9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
@@ -99,18 +99,20 @@ Content-Type: application/json
 
 ## 5. 错误分类与状态机
 
-适配器层对网关标准响应进行解析分流：
+目标行为是由适配器按网关标准错误码解析分流：
 
 ```mermaid
 flowchart TD
     Req[发起到网关的模型请求] --> Resp{响应状态码}
     Resp -->|200 OK| Stream[正常流式/全量接收]
     Resp -->|401 invalid_iam_token| Login[停止请求并引导重新登录 IAM]
-    Resp -->|401 credential_revoked| Wipe[抹除本地密钥并终止]
+    Resp -->|401 credential_revoked| Wipe[阻断并按原子清除能力处理本地凭据]
     Resp -->|403 iam_token_mismatch| AlertMismatch[提示工号与凭据不匹配并阻断]
     Resp -->|429 budget_exhausted| ShowBudget[提取 reset_at 提示额度用尽]
-    Resp -->|429/503 带 Retry-After| Backoff[按 Retry-After 指数退避重试]
+    Resp -->|429 rpm_limit_exceeded / tpm_limit_exceeded 或 503 gateway_overloaded| Backoff[无副作用时按 Retry-After 退避，最多重试 3 次]
 ```
+
+目标契约仅允许 `rpm_limit_exceeded`、`tpm_limit_exceeded` 与 `gateway_overloaded` 在未产生副作用时退避重试，`budget_exhausted` 终止调用；已执行、已输出或结果未知的请求不应自动重放。当前 `forge-iam` 的适配器使用 `NO_RETRY_POLICY`，未实现限流后的有限退避；外层 `protect()` 对绑定变化另有一次条件式重试，不能将 SDK 零重试配置等同于整个调用链零重试。该重试的取消窗口与真实请求派发时序待修复和验证，见 [IAM 设计 §8.1.5](forge-iam.md#815-重试边界)。模型目录同步退避是另一独立机制。当前吊销处理保留本地记录、阻断后续调用，不宣称已抹除。
 
 ## 6. 验收与联调要求
 

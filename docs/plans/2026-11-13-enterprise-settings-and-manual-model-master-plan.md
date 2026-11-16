@@ -6,21 +6,31 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-022 |
 | 文档名称 | 企业设置统一、Token 收敛与手动模型统筹实施方案 |
-| 版本 | V0.2.0 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-13 |
-| 门禁 | 统筹执行总纲：设计基准 `CORP-DSH-DESIGN-018`（V2.0.0 已生效，严格零 DSH 改动、双定位零耦合、渐进披露去技术噪声）；手动模型行为分支（Wave 1-B / Wave 3 相关项）受 `CORP-DSH-PLAN-021` §9.1 与 U1 边界修订批准门禁约束；本地只做离线单测与合成探针，企业网关与系统凭据库未联调 |
+| 最后更新 | 2026-11-16 |
+| 门禁 | Wave 0–5 为历史统筹路线；当前包职责、手动模型及后续取证边界见 §0 |
 | 文档层级 | L2 统筹实施计划；字段、接口与安全边界以设计文档、契约和已批准方案为准 |
 
-> 编制依据：2026-11-13 已生效的[企业设置菜单统一与 Token 收敛详细设计](../design/enterprise-menu-and-token-unification.md)（CORP-DSH-DESIGN-018 V2.0.0）、[根 README](../../README.md)「企业级智能研发平台 × 智能个人助理」双定位、同日工作区方案[企业模型设置手动添加模型实施方案](2026-11-13-enterprise-manual-model-add-luna-guide.md)（CORP-DSH-PLAN-021 V0.3.0，针对 GitHub issue #273）、`main` 基线 `f8f7a29` 源码与 `packages/forge-iam/test/client-structure.test.mjs`、`packages/forge-enterprise` / `forge-devops` / `forge-gitee` 实核。全方案未经真实企业网关、OS 凭据库或双端实机验证。
+> 编制依据：2026-11-13 已生效的[企业设置菜单统一与 Token 收敛详细设计](../design/enterprise-menu-and-token-unification.md)（CORP-DSH-DESIGN-018 V2.0.0）、[根 README](../../README.md)「企业级智能研发平台 × 智能个人助理」双定位、同日工作区方案[企业模型设置手动添加模型实施方案](2026-11-13-enterprise-manual-model-add-luna-guide.md)（CORP-DSH-PLAN-021 V0.3.0，针对 GitHub issue #273）、`main` 基线 `f8f7a29` 源码与 `packages/forge-iam/test/client-structure.test.mjs`、`packages/forge-enterprise` / `forge-devops` / `forge-gitee` 实核。当时方案未提供真实企业网关、OS 凭据库或双端实机专项证据；后续取证边界见 §0。
 >
 > 修订说明：V0.2.0 对齐 `CORP-DSH-DESIGN-018` V2.0.0，全面引入「一体双定位物理/UI 解耦」与「去技术细节渐进披露」重构：`@heluo/forge-iam` 从直接写死 DevOps/Gitee 改为领域无关凭据注册表与 `heluo.iam.credential-item` 空时隐藏扩展槽位、`@heluo/forge-enterprise` 拆分通用基础组合与研发叠加层、Onboarding 收回 3 步通用流程、Wave 4 增补零研发渗漏双定位测试门禁。
 >
 > 关联文档：[企业设置菜单统一与 Token 收敛详细设计](../design/enterprise-menu-and-token-unification.md)、[企业模型设置手动添加模型实施方案](2026-11-13-enterprise-manual-model-add-luna-guide.md)、[IAM 接入详细设计](../design/plugins/forge-iam.md)、[企业组合包详细设计](../design/plugins/forge-enterprise.md)、[DevOps 接入](../design/plugins/forge-devops.md)、[Gitee 接入](../design/plugins/forge-gitee.md)、[逐模块设计索引](../design/README.md)、[总体架构](../architecture/platform-architecture.md)、[DSH 插件高阶规范](../engineering/dsh-plugin-conventions.md)、[SQLite 存储扩展与使用规范](../engineering/sqlite-storage-conventions.md)、[AI 网关契约](../contracts/gateway-contract.md)、[DOP CLI 规范](../contracts/dop-cli-spec.md)、[GH CLI 规范](../contracts/gh-cli-spec.md)、[forge-iam 开发指南](../../packages/forge-iam/docs/developer-guide.md)、[forge-iam 使用手册](../../packages/forge-iam/docs/user-guide.md)。
+
+## 0. 当前边界与历史路线
+
+§1–§5 保留基于 `f8f7a29` 与 DESIGN-018 V2.0.0 的历史统筹提案，Wave 0–5、文件所有权和门禁次序不作为当前执行指令；§6 是当时分支的离线验收记录，不代表当前版本已复验。
+
+后续 [issue #303](https://github.com/hrygo/heluo-forge/issues/303) 汇总插件在 Windows、麒麟、UOS、macOS 多机真测，但具体 SHA、环境及文件权限、重启、用户隔离和恢复等专项证据仍待逐项梳理；该汇总不代表本计划各专项均通过。[issue #304](https://github.com/hrygo/heluo-forge/issues/304) 的网关契约验证尚未关闭。
+
+现行 [DESIGN-018](../design/enterprise-menu-and-token-unification.md) V2.2.0 将 `@heluo/forge-enterprise` 与 `@heluo/forge-engineering` 拆为两个独立预装包。IAM 不声明 `heluo.iam.credential-item`；DevOps 与 Gitee 的凭据条目内置各自研发面板，领域无关 Broker 保留在 IAM 后端。[UI 契约测试](../../tests/ui-contract.test.mjs)覆盖该装配边界。
+
+手动模型现由 `POST /api/forge-iam/models/manual` 提供增删，错误码、`hasManualEntry` 与写入失败待决语义见 [PLAN-021 §0](2026-11-13-enterprise-manual-model-add-luna-guide.md#0-当前实现与历史方案的阅读边界)。移除界面或路由不能停用已加载的手动模型；旧端写入可能覆盖手动声明，回退与恢复须另行设计和验证。
 
 ## 1. 统筹目标与合流结论
 
@@ -144,7 +154,7 @@ flowchart TB
 ### Wave 5 — 本地沙箱巡检与外部实机取证（不阻塞开发交付）
 
 - 本机沙箱（可选）：分别以「基础通用组合」与「研发叠加组合」加载 `web` profile 巡检左侧菜单、默认折叠态、Gitee 无高级区、扩展凭据按需展开及手动添加模型流程，及运行扩展版 `run-iam-managed-models-probe.mjs`。
-- 企业外部环境（单列 `未核验 / 未联调` 台账）：真实企业网关对手动模型 ID 的裁决、真实终端 `dop`/`gh` OS 凭据库联动及 Windows/麒麟双端实机验证。
+- 当时拟在企业外部环境单列 `未核验 / 未联调` 台账：真实企业网关对手动模型 ID 的裁决、真实终端 `dop`/`gh` OS 凭据库联动及 Windows/麒麟双端实机验证；后续取证边界见 §0。
 
 ## 5. 并行排期、文件所有权与回退控制
 
@@ -155,15 +165,15 @@ flowchart TB
 | **Wave 2 & 3** | W2-A // W2-B // W2-C // W3 | 四包各自 `client.js` 与包级测试（W2-A 含组合分层补丁/`package.json`） | 四包各自单测与零渗漏测试通过后进 **Wave 4** |
 | **Wave 4** | 全仓单线程收口 | `tests/ui-contract.test.mjs` + 同步 README/设计文档 | 全仓 `pnpm check` 与签名验签通过 |
 
-**回退边界**：手动模型回退只需撤下 `POST /api/forge-iam/models/manual` 与界面入口，库内 `manual` 字段对旧端无害；研发容器与 IAM 扩展槽位均可独立按开关撤下，工具自动退回单包分区或系统本机认证，绝不改写用户 `~/.gitee-cli/config.json` 与 `~/.config/dop`。
+**回退边界**：§0 所列现行实现不能通过仅撤下手动模型路由与界面停用已保存模型；旧端写入可能覆盖手动声明和启用项。手动模型与组合包的回退步骤均须按当前版本另行设计和隔离验证，不把历史叠加层或槽位作为现存开关。
 
 ## 6. 统一验收清单（合流双定位与 Issue #273 判据）
 
-在仓库根目录执行，分支 `feat/epic-273-integration` 上离线闭环与 Wave 5 外部未联调项明确分列：
+以下为分支 `feat/epic-273-integration` 上的历史离线验收记录；当前版本须另行验证，Wave 5 当时未完成的专项单列，后续见 §0：
 
 - [x] **离线结构与构建门禁**：`pnpm check:docs`、`pnpm check:repo`、`pnpm check:version`、`pnpm check`、`git diff --check` 与 `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD` 全绿；DSH 宿主仓库零改动（注：跨平台与宿主版本相关 3 项用例按环境条件跳过，已在汇总记录）。
 - [x] **双定位零耦合证明**：仅挂企业通用底座时，侧栏严格只有 `forge-iam`（`-10`）与 `forge-models`（`10`），3 步引导与账户页面 DOM 中零 `DevOps`/`Gitee`/`dop`/`gh`/外部 Token 区块；加载研发叠加层后三菜单（`-10/10/30`）、图标、双槽位按序生效且无 `29/50/60` 碎片（`tests/ui-contract.test.mjs` 与 `client-zero-engineering-leak.test.mjs` 离线覆盖；容器级跨工具状态条/诊断聚合保留为后续项）。
-- [x] **去技术细节渐进披露**：正常可用状态下 `企业账号` 首屏折叠已就绪 AI 服务、外部扩展呈「跟随本机登录」平静单行，不暴露 `OIDC` / `Refresh Token` / `OWNER_MISMATCH` / `persistentToken` / `ENV_INHERITED` 等实现名词；按需展开或注入故障态时才出现具体操作与告警。
-- [x] **Token 安全与 Gitee 收敛**：`HOSTED_ACTIVE` 覆盖生效、`OWNER_MISMATCH` 0 次启动拦截、`forge-devops` / `forge-gitee` 子进程剥离无关密钥、GET 零明文（实机采用 `/api/forge-iam/ext-credentials[/<id>]` 路由）；Gitee 主视图无「高级」表单且保留 `ConfigStandard` 与 `detectPersistentToken` 约束。
-- [x] **手动添加模型闭环（issue #273）**：独立「企业模型」页支持合法 ID 添加、来源标识、配置、启用/停用与删除（经 `POST /api/forge-iam/models/manual` 与 `IAM_MANUAL_MODEL_*` 错误契约）；空/错目录可用性与 `stale` 修正、并发 `refresh()` 窗口保护、账号隔离、门禁拦截、变异测试与合成探针 `run-iam-managed-models-probe.mjs` 全数通过；明确区分本地离线验证与企业真机未联调事实。
-- [ ] **Wave 5 本地真实 GUI 与外部实机专项（#285）**：本地 `web` profile 真实浏览器双场景 GUI 巡检、真实终端 `dop`/`gh` OS 凭据库联动、内网 `gh` 明文扫描实样、真实企业网关 403/404/400 裁决与 Windows/银河麒麟双端实机验收尚未执行（外部环境未开放）。
+- [x] **去技术细节渐进披露**：当时记录的方案为正常可用状态下 `企业账号` 首屏折叠已就绪 AI 服务、外部扩展呈「跟随本机登录」平静单行，不暴露 `OIDC` / `Refresh Token` / `OWNER_MISMATCH` / `persistentToken` / `ENV_INHERITED` 等实现名词；当前研发凭据的面板位置以 §0 为准。
+- [x] **Token 安全与 Gitee 收敛**：`HOSTED_ACTIVE` 覆盖生效、`OWNER_MISMATCH` 0 次启动拦截、`forge-devops` / `forge-gitee` 子进程剥离无关密钥、GET 零明文（实现采用 `/api/forge-iam/ext-credentials[/<id>]` 路由）；Gitee 主视图无「高级」表单且保留 `ConfigStandard` 与 `detectPersistentToken` 约束。
+- [x] **手动添加模型闭环（issue #273）**：独立「企业模型」页支持合法 ID 添加、来源标识、配置、启用/停用与删除（经 `POST /api/forge-iam/models/manual` 与 `IAM_MANUAL_MODEL_*` 错误契约）；空/错目录可用性与 `stale` 修正、并发 `refresh()` 窗口保护、账号隔离、门禁拦截、变异测试与合成探针 `run-iam-managed-models-probe.mjs` 全数通过；当时外部专项未列证据，后续取证边界见 §0。
+- [ ] **Wave 5 本地真实 GUI 与外部实机专项（#285）**：当时记录未完成本地 `web` profile 真实浏览器双场景 GUI 巡检、真实终端 `dop`/`gh` OS 凭据库联动、内网 `gh` 明文扫描实样、真实企业网关 403/404/400 裁决与 Windows/银河麒麟双端实机验收；后续证据不得未经对应 SHA、环境和专项核对直接映射为本项通过，见 §0。
