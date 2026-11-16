@@ -87,12 +87,25 @@ function stageIndexFile(repo, path, oid) {
   // Git's index lets these fixtures represent Windows-incompatible names on
   // every host, without creating those names in the working tree.
   repo.git('-c', 'core.protectNTFS=false', '-c', 'core.protectHFS=false',
+    '-c', 'core.precomposeUnicode=false',
     'update-index', '--add', '--cacheinfo', `100644,${oid},${path}`);
 }
 
-test('new documentation paths always run platforms', async (t) => {
+test('new portable documentation paths skip platforms', async (t) => {
+  for (const path of ['docs/new.md', 'docs/新设计/说明.md']) {
+    await t.test(JSON.stringify(path), (child) => {
+      const repo = fixture(child);
+      const oid = repo.git('rev-parse', `${repo.base}:docs/guide.md`);
+      stageIndexFile(repo, path, oid);
+      const result = classify(repo, repo.base, repo.commitStaged());
+      assert.equal(result.run_platforms, false);
+      assert.match(result.reason, /documentation-only/u);
+    });
+  }
+});
+
+test('new documentation paths that collide or are not portable run platforms', async (t) => {
   const paths = [
-    'docs/new.md',
     'docs/CON.md',
     'docs/COM¹.md',
     'docs/colon:name.md',
@@ -113,6 +126,40 @@ test('new documentation paths always run platforms', async (t) => {
       assert.equal(classify(repo, repo.base, repo.commitStaged()).run_platforms, true);
     });
   }
+});
+
+test('a new path that folds onto an existing name runs platforms', async (t) => {
+  for (const [existing, added] of [
+    ['docs/name.md', 'docs/NAME.md'],
+    ['docs/é.md', 'docs/e\u0301.md'],
+    // Windows compares through an uppercase table, so both sigma forms collide
+    // even though toLowerCase() keeps them apart.
+    ['docs/σ.md', 'docs/ς.md'],
+  ]) {
+    await t.test(JSON.stringify(added), (child) => {
+      const repo = fixture(child);
+      stageIndexFile(repo, existing, repo.git('rev-parse', `${repo.base}:docs/guide.md`));
+      const base = repo.commitStaged();
+      stageIndexFile(repo, added, repo.git('rev-parse', `${base}:docs/guide.md`));
+      assert.equal(classify(repo, base, repo.commitStaged()).run_platforms, true);
+    });
+  }
+  await t.test('directory where the tree has a file', (child) => {
+    const repo = fixture(child);
+    const base = repo.base;
+    stageIndexFile(repo, 'docs/Design', repo.git('rev-parse', `${base}:docs/guide.md`));
+    const advanced = repo.commitStaged();
+    stageIndexFile(repo, 'docs/design/guide.md', repo.git('rev-parse', `${advanced}:docs/guide.md`));
+    assert.equal(classify(repo, advanced, repo.commitStaged()).run_platforms, true);
+  });
+  await t.test('file where the tree has a directory', (child) => {
+    const repo = fixture(child);
+    const base = repo.base;
+    stageIndexFile(repo, 'docs/design/other.md', repo.git('rev-parse', `${base}:docs/guide.md`));
+    const advanced = repo.commitStaged();
+    stageIndexFile(repo, 'docs/Design', repo.git('rev-parse', `${advanced}:docs/guide.md`));
+    assert.equal(classify(repo, advanced, repo.commitStaged()).run_platforms, true);
+  });
 });
 
 test('existing nonportable paths run platforms for both content edits and deletions', async (t) => {
@@ -188,7 +235,7 @@ test('checks both sides of renames, including disallowed deleted source paths', 
   for (const [from, to, expected] of [
     ['packages/example/README.md', 'docs/moved.md', true],
     ['docs/guide.md', 'packages/example/moved.md', true],
-    ['docs/guide.md', 'docs/renamed.md', true],
+    ['docs/guide.md', 'docs/renamed.md', false],
   ]) {
     await t.test(`${from} -> ${to}`, (child) => {
       const repo = fixture(child);
@@ -273,7 +320,7 @@ test('PR compares the complete branch diff, not only its last commit', (t) => {
   assert.equal(classify(repo, repo.base, head).run_platforms, true);
 });
 
-test('PR runs platforms when the base branch has advanced beyond the merge base', (t) => {
+test('a head checkout with an advanced base runs platforms', (t) => {
   const repo = fixture(t);
   repo.git('switch', '--quiet', '-c', 'feature');
   repo.write('docs/guide.md', '# feature docs\n');
@@ -282,7 +329,9 @@ test('PR runs platforms when the base branch has advanced beyond the merge base'
   repo.write('src/app.js', 'new main change not present on feature\n');
   const base = repo.commit();
   repo.git('switch', '--quiet', 'feature');
-  assert.equal(classify(repo, base, head).run_platforms, true);
+  const result = classify(repo, base, head);
+  assert.equal(result.run_platforms, true);
+  assert.match(result.reason, /PR base has advanced/u);
 });
 
 test('a stale documentation event cannot skip platform checks for a newer code checkout', (t) => {
@@ -294,7 +343,7 @@ test('a stale documentation event cannot skip platform checks for a newer code c
   assert.equal(classify(repo, repo.base, eventHead, { githubSha: checkout }).run_platforms, true);
 });
 
-test('PR requires the full GitHub SHA to identify the actual checkout commit', (t) => {
+test('PR requires the checkout to be the PR head or its merge', (t) => {
   const repo = fixture(t);
   repo.write('docs/guide.md', '# documentation change\n');
   const eventHead = repo.commit();
@@ -303,10 +352,11 @@ test('PR requires the full GitHub SHA to identify the actual checkout commit', (
   for (const githubSha of [undefined, null, '', '0'.repeat(40), checkout.slice(0, 12), `${checkout}^`, repo.base, eventHead, 'f'.repeat(40)]) {
     assert.equal(classify(repo, repo.base, eventHead, { githubSha }).run_platforms, true, String(githubSha));
   }
-  assert.equal(classify(repo, repo.base, eventHead, { githubSha: checkout }).run_platforms, false);
+  // An unrelated commit with the same tree is not this PR's head.
+  assert.equal(classify(repo, repo.base, eventHead, { githubSha: checkout }).run_platforms, true);
 });
 
-test('accepts a GitHub merge commit when its checkout tree matches the PR head tree', (t) => {
+test('accepts a GitHub merge commit whose parents are the base tip and the PR head', (t) => {
   const repo = fixture(t);
   repo.write('docs/guide.md', '# documentation change\n');
   const head = repo.commit();
@@ -322,17 +372,64 @@ test('accepts a GitHub merge commit when its checkout tree matches the PR head t
   assert.equal(classify(repo, repo.base, head, { githubSha: merge }).run_platforms, false);
 });
 
-test('Git failures while checking checkout identity or tree force a full run', (t) => {
+test('a merge checkout keeps the documentation decision after the base branch advanced', (t) => {
+  const repo = fixture(t);
+  repo.git('switch', '--quiet', '-c', 'feature');
+  stageIndexFile(repo, 'docs/hindsight.md', repo.git('rev-parse', `${repo.base}:docs/guide.md`));
+  const head = repo.commitStaged();
+  repo.git('switch', '--quiet', 'main');
+  repo.write('src/app.js', 'new main change not present on feature\n');
+  const base = repo.commit();
+  repo.git('merge', '--quiet', '--no-ff', '--no-edit', 'feature');
+  const merge = repo.git('rev-parse', 'HEAD');
+  const result = classify(repo, base, head, { githubSha: merge });
+  assert.equal(result.run_platforms, false);
+  assert.match(result.reason, /documentation-only/u);
+});
+
+test('a merge checkout with unexpected parents runs platforms', (t) => {
   const repo = fixture(t);
   repo.write('docs/guide.md', '# documentation change\n');
   const head = repo.commit();
-  for (const failedRevision of ['HEAD^{commit}', 'HEAD^{tree}', `${head}^{tree}`]) {
+  const tree = repo.git('rev-parse', `${head}^{tree}`);
+  const merge = execFileSync('git', ['commit-tree', tree, '-p', repo.base, '-p', repo.base], {
+    cwd: repo.root,
+    env: repo.env,
+    encoding: 'utf8',
+    input: 'synthetic merge\n',
+  }).trim();
+  repo.git('switch', '--quiet', '--detach', merge);
+  assert.equal(classify(repo, repo.base, head, { githubSha: merge }).run_platforms, true);
+});
+
+test('Git failures while proving the checkout identity force a full run', (t) => {
+  const repo = fixture(t);
+  repo.write('docs/guide.md', '# documentation change\n');
+  const head = repo.commit();
+  for (const failed of [
+    (args) => args.includes('HEAD^{commit}'),
+    (args) => args.includes('--is-shallow-repository'),
+    (args) => args.includes('merge-base'),
+  ]) {
     const gitRunner = (args, cwd) => {
-      if (args.includes(failedRevision)) throw new Error('Git verification failed');
+      if (failed(args)) throw new Error('Git verification failed');
       return execFileSync('git', args, { cwd, encoding: 'buffer' });
     };
-    assert.equal(classify(repo, repo.base, head, { gitRunner }).run_platforms, true, failedRevision);
+    assert.equal(classify(repo, repo.base, head, { gitRunner }).run_platforms, true);
   }
+  const tree = repo.git('rev-parse', `${head}^{tree}`);
+  const merge = execFileSync('git', ['commit-tree', tree, '-p', repo.base, '-p', head], {
+    cwd: repo.root,
+    env: repo.env,
+    encoding: 'utf8',
+    input: 'synthetic merge\n',
+  }).trim();
+  repo.git('switch', '--quiet', '--detach', merge);
+  const brokenGraph = (args, cwd) => {
+    if (args.includes('rev-list')) throw new Error('Git verification failed');
+    return execFileSync('git', args, { cwd, encoding: 'buffer' });
+  };
+  assert.equal(classify(repo, repo.base, head, { githubSha: merge, gitRunner: brokenGraph }).run_platforms, true);
 });
 
 test('empty, invalid or unavailable revisions always run platforms', (t) => {

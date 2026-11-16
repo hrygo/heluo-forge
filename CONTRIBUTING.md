@@ -83,7 +83,7 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 
 ### 7.1 GitHub Actions
 
-[检查工作流 `repository checks`](.github/workflows/check.yml)在 `main` 推送、PR、合并队列的 `checks_requested` 和手动运行时触发，不在工作流入口使用路径过滤。PR 的事件基线为 head 祖先，且仅修改或删除 `docs/` 下普通 Markdown 文件或根目录的 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时跳过跨平台作业；文档链接、登记、仓库规则和全部离线测试仍由 `verify` 执行。新增或重命名文件、混合或未知路径、非便携路径、文件类型和模式异常、事件基线前移或无法完整比较时全跑；`main` 推送、合并队列和手动运行也全跑。
+[检查工作流 `repository checks`](.github/workflows/check.yml)在 `main` 推送、PR、合并队列的 `checks_requested` 和手动运行时触发，不在工作流入口使用路径过滤。分类按检出的 PR 合并提交相对 base 顶点的差异判定：仅修改、删除或新增 `docs/` 下普通 Markdown 文件或根目录的 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时跳过跨平台作业；文档链接、登记、仓库规则和全部离线测试仍由 `verify` 执行。新增路径须为普通文件且不与其他路径在大小写或 Unicode 归一化下折叠重名。混合或未知路径、非便携路径、折叠重名、文件类型和模式异常，或检出身份与差异无法确证时全跑；`main` 推送、合并队列和手动运行也全跑。
 
 - `verify (ubuntu-x64)` 在 `ubuntu-24.04` 上运行完整离线检查，超时 5 分钟；分类作业失败或结果无效时，该必需检查失败。同一 PR 的新运行取消过期运行。平台作业在 GitHub 托管的 Linux、Windows 和 macOS runner 上执行 SQLite 凭据、IAM 合成测试与离线安装冒烟；`sensitive scan and IAM callback (win32-x64)` 是合并运行 Windows 敏感扫描和回调端口测试的非必需作业。
 - Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test` 自动发现工程、包与集成测试。
