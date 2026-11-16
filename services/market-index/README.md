@@ -1,6 +1,6 @@
 # 插件索引校验（轻量模式）
 
-状态：规划（只读校验器已实现，供开发/验收使用；不构成服务上线）。核对日期：2026-10-21。
+状态：规划（只读校验器已实现，供开发/验收使用；不构成服务上线）。核对日期：2026-11-16。
 
 本目录只保留 **format-1 索引的只读校验工具**，不再包含市场服务、索引生成器、发布控制或 `current/policy/evidence`。
 
@@ -35,7 +35,7 @@ node services/market-index/validate-index.mjs ./index.json --base https://aihub.
 - 本地文件含相对 `icon` 时必须给 `--base`，否则按文件 URL 解析会因非 HTTPS 被拒。
 - 退出码：`0` 合法，`1` 不合法，`2` 参数错误。
 
-校验内容：`format: 1`、`title.en`、包名、精确稳定版本、时间戳、npm source、registry、engines、icon、metadata 引用、版本去重与降序。未知成员按原生行为忽略。
+校验内容：`format: 1`、`title.en`、包名、精确 SemVer、时间戳、npm source、registry、engines、icon、metadata 引用和版本去重；输出时尝试排序，不检查输入是否已排序。校验器接受合法的预发布版本，但对预发布标识中含连字符的版本不能保证 SemVer 顺序，也不替代首版仅发布稳定版的人工验收。未知成员按原生行为忽略。
 
 ## 允许的例外
 

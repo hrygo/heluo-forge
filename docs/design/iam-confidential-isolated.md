@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-016 |
 | 文档名称 | IAM 机密客户端隔离开发设计 |
-| 版本 | V0.4.1 |
+| 版本 | V0.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-10 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | 用户已批准完整 source/mock 设计；不开放真实来源与生产 |
 
 > 适用范围：企业交付采用公开客户端 + PKCE S256，本机密客户端路径不启用、不进入本期验收；本文只保留可选隔离路径的设计与证据。
@@ -23,11 +23,11 @@
 
 ## 1. 结论与范围
 
-本阶段把 code、refresh、revoke 的机密认证接入真实服务代码，并以管理员/测试控制器预置的 synthetic source 验证闭环。没有登记服务、enrollment UI、真实 secret 获取器、生产存储格式、管理员写工具、核心补丁或新服务包。真实 apply 不注入来源、不发现隐藏来源，配置本身不能解除门禁；当前机器及当前 profile 的 secret 不读不写。
+本阶段把 code、refresh 与回调清理用的 revoke 机密认证接入实际服务代码，并以管理员/测试控制器预置的 synthetic source 验证。普通退出使用访问令牌自证的 GET 撤销路径，不使用客户端 secret。没有登记服务、enrollment UI、真实 secret 获取器、生产存储格式、管理员写工具、核心补丁或新服务包。真实 apply 不注入来源、不发现隐藏来源，配置本身不能解除门禁。
 
 保持公共原型的兼容默认和 mandatory PKCE S256。secret 来源、grant 单记录提交、网关联合变更是三个不同信任边界，不互相证明。标准请求编码可离线验证，真实 IAM 是否接受某方法、客户端注册和远端轮换仍由 G1 证据决定。
 
-**当前状态**：实际服务已接入 Basic/Post 的 code/refresh/revoke、V2 生产与恢复、有效 AT、共享刷新完整认证 pin 和 cleanup。54 项新服务用例及合并回归851项通过；完整检查与独立审查以[实施计划](<../plans/2026-11-02-iam-confidential-isolated.md>)最终证据为准。public 不采用、返回或盲删 V2。真实 apply 仍不注入来源，配置本身不能启用，供应商与生产能力没有因此获准。
+**当前状态**：实际服务已接入 Basic/Post 的 code/refresh 与回调清理用 revoke、V2 生成与恢复、有效 AT、共享刷新完整认证 pin 和 cleanup。普通 signOut 使用当前 AT 自证的 GET，不要求 secret；刷新令牌不由该路径撤销。54 项新服务用例及合并回归 851 项通过；完整检查与独立审查以[实施计划](<../plans/2026-11-02-iam-confidential-isolated.md>)最终证据为准。public 不采用、返回或盲删 V2。真实 apply 仍不注入来源，配置本身不能启用，供应商与生产能力没有因此获准。
 
 ## 2. 证据与选择
 
@@ -64,16 +64,16 @@ SDK Inspect 只提供接口证据，不是 backend 或真实 secret 已运行的
 
 ### 3.3 退出、轮换与缓存
 
-- signOut 在锁外准备所需的原上下文，锁内/网络前 guard 只同步检查；本地清理仍由精确 grant snapshot 与受信存储决定，不扩大删除范围。
-- secret 缺失/失效不能阻止已授权的本地清理，但远端撤销不裸发、不换新 secret，采用既有未确认语义。不同 issuer/client/mode 的记录保留，不盲删。
+- signOut 校验受信存储、issuer 和客户端绑定并读取 grant 快照，锁内写入匹配该快照的 pending；网络请求在锁外以 AT 自证 GET 撤销，成功后才在同记录锁内核验并写墓碑。未配置撤销端点时可直接本地完成，不宣称远端撤销。
+- secret 缺失不阻止满足上述条件的冷启动 V2 退出；普通 signOut 不读取 secret。远端撤销拒绝或结果不明时保留 pending，不报告清理完成、不重发旧令牌。不同 issuer/client/mode 或不匹配快照的记录保留，不盲删。回调失败后的机密认证 POST cleanup 仍要求原来源及认证上下文有效，不借新 secret 补发。
 - fixture 控制器轮换仅替换不可变 current 快照并换 revision；它的写方法不交给服务。不承诺远端 IdP 已吊销旧 secret，或已签发 AT/RT 后代自动失效。
 - getView/getPrincipal 保持缓存只读，不做 secret I/O，不扩充 view、诊断、Remote 或路由。缓存展示不是实时授权；模型严格只读编排不连接认证写入或 cleanup。
 
 ## 4. 网络与失败边界
 
-三条后端 POST 及 cleanup 共用一种编码路径，保持 HTTP(S) 端点校验、redirect:error、超时、取消、资源与精确回调限制。HTTP 不提供传输加密或端点身份认证，机密客户端 secret 和令牌可能被窃取或篡改。构造的 Basic header、Post body 和 snapshot 只在操作局部保留；不进入错误或制品。
+授权码与刷新 POST、回调清理的撤销 POST 使用机密认证编码；普通 signOut 使用不带客户端认证的 AT 自证 GET。各路径保持各自的 HTTP(S) 端点校验、redirect:error、超时与取消边界。HTTP 不提供传输加密或端点身份认证，机密客户端 secret 和令牌可能被窃取或篡改。构造的 Basic header、Post body 和 snapshot 只在操作局部保留；不进入错误或制品。
 
-所有可观察边界同时核对：当前 getter 的 source 身份、独立 verifier 字面 true、原 snapshot 仍为 current、私有副本与原数据一致、mode/method/issuer/client/ref/revision、credentials/store、现有认证/操作代际。local 失效错误不得被网络 catch 误包装为 IAM_UNREACHABLE。来源异常与任意 HTTP error 原文不输出；合法 invalid_grant 的既有分类保留。
+机密认证的 code、refresh 与清理操作在相关边界核对当前 getter 的 source 身份、独立 verifier 字面 true、原 snapshot 仍为 current、私有副本与原数据一致、mode/method/issuer/client/ref/revision、credentials/store、现有认证/操作代际；普通 signOut 按 §3.3 的独立路径校验，不读取 secret。local 失效错误不得被网络 catch 误包装为 IAM_UNREACHABLE。来源异常与任意 HTTP error 原文不输出；合法 invalid_grant 的既有分类保留。
 
 **限度**：单记录 guard 不冻结独立 source；check→send 和远端处理之间存在不可封死的窗口。post guard 只能拒绝采用结果，不能撤回请求。没有跨进程来源通知、远端实时轮换、五分钟撤权、后代撤销、OS 耐久提交或安全隔离同权 JS 的保证。format 2 是 reader 隔离，不阻止已获权旧 writer 改写同一 key；fixture 独享存储，不增加锁、lease、第三键或新事务。
 

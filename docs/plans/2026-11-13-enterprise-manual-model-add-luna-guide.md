@@ -6,23 +6,38 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-021 |
 | 文档名称 | 企业模型设置手动添加模型实施方案 |
-| 版本 | V0.3.0 |
+| 版本 | V0.4.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-13 |
-| 门禁 | 设计评审：`docs/design/plugins/forge-iam.md` §13/§13.1 的「目录唯一来源」边界须由负责人批准后实施；本方案以 `main` `f8f7a29` 为基线，仓库内只做本地模拟验证，不授予生产能力 |
+| 最后更新 | 2026-11-16 |
+| 门禁 | 历史实施方案以 `main` `f8f7a29` 为基线；现有代码与后续取证边界见 §0，写入失败语义待裁决 |
 | 文档层级 | L2 实施计划；字段、错误码与安全边界以设计文档和契约为准 |
 
-> 编制依据：2026-11-13 读取的 `main` `f8f7a29` 工作区源码与测试；GitHub issue [#273](https://github.com/hrygo/heluo-forge/issues/273)（本方案目标）、[#202](https://github.com/hrygo/heluo-forge/issues/202)（模型目录解析，PR #252 未合并）、[#174](https://github.com/hrygo/heluo-forge/issues/174)（模型执行入口门禁）；`gh` 只读查询 PR #252 状态为 `MERGEABLE`（2026-11-13）。全部结论来自静态阅读与既有离线用例，**未经真实企业网关、目标宿主或双端实机验证**。
+> 编制依据：2026-11-13 读取的 `main` `f8f7a29` 工作区源码与测试；GitHub issue [#273](https://github.com/hrygo/heluo-forge/issues/273)（本方案目标）、[#202](https://github.com/hrygo/heluo-forge/issues/202)（模型目录解析，PR #252 未合并）、[#174](https://github.com/hrygo/heluo-forge/issues/174)（模型执行入口门禁）；`gh` 只读查询 PR #252 状态为 `MERGEABLE`（2026-11-13）。当时基线分析来自静态阅读与既有离线用例；分支验收见 §8，后续取证边界见 §0。
 >
 > 修订记录：V0.2.0 修掉服务层透传缺失、写后重拉目录、`remove` 被 backend 锁死、上限矛盾；V0.3.0 依据第二轮独立复核修掉适配器重建仍被 `backend` 前置、`stale` 被手动条目污染、`manualTruncated` 链路断点、`manualModels` 重置点缺失、删除时默认值顺序、add 与在途 refresh 的竞态窗口、`source`/错误码口径不一致。
 
 > 关联文档：[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[逐模块设计索引](<../design/README.md>)、[网关接入契约](<../contracts/gateway-contract.md>)、[IAM 调用失败自愈方案](<2026-11-12-iam-call-failure-recovery.md>)、[forge-iam 开发指南](<../../packages/forge-iam/docs/developer-guide.md>)、[forge-iam 使用手册](<../../packages/forge-iam/docs/user-guide.md>)。
 
 ---
+
+## 0. 当前实现与历史方案的阅读边界
+
+§1–§7 与 §10 保留 2026-11-13 基于 `f8f7a29` 的问题分析和实施提案，不作为当前接口、执行顺序或验收结果；§8 记录当时分支的离线验收，不能代替对当前版本的复验。字段和安全边界以现行设计与契约为准。
+
+后续 [issue #303](https://github.com/hrygo/heluo-forge/issues/303) 汇总插件在 Windows、麒麟、UOS、macOS 多机真测，文件权限、重启、用户隔离和恢复等专项的具体 SHA、环境及逐项证据仍待梳理；该汇总不等于本方案手动模型或各专项均通过。[issue #304](https://github.com/hrygo/heluo-forge/issues/304) 的网关契约验证尚未关闭。
+
+2026-11-16 对当前源码和测试的静态核对如下：
+
+- [路由](<../../packages/forge-iam/src/routes.mjs>)只接受 `POST /api/forge-iam/models/manual`，请求体为 `{ action: 'add' | 'remove', id }`，要求 DSH Connection 认证、同源策略、`Content-Type: application/json` 与 `x-forge-iam-request: 1`；成功响应包含操作结果和最新 `view`。
+- [错误映射](<../../packages/forge-iam/src/error-contract.mjs>)登记 `IAM_MANUAL_MODEL_INVALID`（400）、`IAM_MANUAL_MODEL_LIMIT`（409）、`IAM_MANUAL_MODEL_CONFLICT`（409）与 `IAM_MANUAL_MODEL_NOT_FOUND`（404）。当前运行时对非法 action 或 ID 返回 `INVALID`，重复添加返回 `CONFLICT`，超限返回 `LIMIT`；删除不存在的有效手动 ID 为幂等成功，不触发 `NOT_FOUND`。
+- 对不存在的有效手动 ID 执行 `remove` 返回 `ok: true, removed: false, persisted: false`，此时没有内存变更，也没有尝试写库；不能仅凭 `persisted: false` 判定写入失败。真实变更后写入失败的情况与此区分，见[回归用例](<../../packages/forge-iam/test/manual-models-backend.test.mjs>)。
+- 网关条目同 ID 同时存在手动声明时，`view.modelAccess.models[]` 保留 `source: 'gateway'` 和 `hasManualEntry: true`，允许删除该手动声明；网关条目本身仍保留。增删响应顶层的 `models[]` 不带 `hasManualEntry`，调用方应读取返回的 `view`。证据见[合并函数](<../../packages/forge-iam/src/model-options.mjs>)与[客户端用例](<../../packages/forge-iam/test/client-manual-models.test.mjs>)。
+- §5 U3 曾提出写入失败时回滚内存并抛错；当前[运行时](<../../packages/forge-iam/src/managed-models.mjs>)采用 best-effort，返回 `persisted: false`、保留当次内存变更并由界面告警；后续刷新可能恢复此前持久状态。预期应采用哪种语义仍待用户裁决，现有代码和测试不替代该决定。
+- 只移除路由或界面不会停用已加载的手动模型；旧版本写入选择记录可能覆盖 `manual` 和目录外手动模型的启用项。回退与恢复方案须单独设计并验证，不能承诺无损。
 
 ## 1. 问题结论
 
@@ -129,12 +144,14 @@
 
 ## 5. 详细实施步骤
 
+本节为基于历史基线的提案，当前 API、行为和待决事项以 §0 为准。
+
 > 每个单元可独立提交；U1 必须先获批准。提交信息遵守仓库约定，不以 `#` 起头，引用 issue 时用内联 `issue #273`。
 
 ### U1 设计修订（评审闸口）
 
 - 文件与位置：`docs/design/plugins/forge-iam.md`（`:1051`、`:1055`、`:1059`、`:1061`、`:1062`，以及 §5.3 的 `IamView` 接口片段 `:405-416`）、`docs/design/README.md:28` 与 `:87`。
-- 内容：§13.2「手动模型条目」——两级权威口径（§4.3 原文）、协同规则（§6.1）、存储字段（§6.2）、安全声明（§6.3）、`IamView` 增量字段（`modelAccess.models[].source` 与 `modelAccess.manualTruncated`，并写明二者位于 `modelAccess` 内）；明确「未实机验证」。
+- 内容：§13.2「手动模型条目」——两级权威口径（§4.3 原文）、协同规则（§6.1）、存储字段（§6.2）、安全声明（§6.3）、`IamView` 增量字段（`modelAccess.models[].source` 与 `modelAccess.manualTruncated`，并写明二者位于 `modelAccess` 内）；明确当时实机证据的范围。
 - 完成判据：`pnpm check:docs` 通过；§9.1 第 1 项取得负责人批准结论并记入本文件。
 - 不做：不改 `ERROR_STATUS`、不改 §871 的错误码表。
 
@@ -169,7 +186,7 @@
   - 公共前置：`permit(sample())` 不通过直接抛对应码。
   - `add`：`isModelId` 失败 → `IAM_MODEL_ID_INVALID`；已存在 → `IAM_MODEL_DUPLICATE`（`details.source` 取 `'gateway'` / `'manual'`，与视图同一套词汇）；超 `MAX_MANUAL_MODELS` → `IAM_MODEL_LIMIT_REACHED`（`details.limit`）。
   - `remove`：不在 `manualModels` 中即幂等返回成功（不写库、不重建）。
-  - **内存先改、再写库**：先在内存更新 `manualModels`（`add` 追加 / `remove` 删除）、从 `modelOptions` 删除对应键、并按 `:649` 口径重指 `defaultModelId`（指向下一个已启用项或 `null`）；随后**单次** `persistSelection()`（同一条记录写入，天然原子）。写入失败则回滚上述内存改动并抛 `IAM_MODEL_SELECTION_UNWRITTEN`，不虚报成功。
+  - **原方案：内存先改、再写库**：先在内存更新 `manualModels`（`add` 追加 / `remove` 删除）、从 `modelOptions` 删除对应键、并按 `:649` 口径重指 `defaultModelId`（指向下一个已启用项或 `null`）；随后单次 `persistSelection()`。原方案要求写入失败回滚并抛 `IAM_MODEL_SELECTION_UNWRITTEN`，当前实现与待决事项见 §0 和 §9.1 第 7 项。
   - 写库成功后：`await (flight?.promise ?? Promise.resolve()).catch(() => {})`（闭合与在途刷新的窗口）→ `rawModels = mergeAvailableModels(...)` → `models = applyModelOptions(...)` → `rebuildAdapter()` → `publish()` → `syncHostDefault()`（`:554`）。
   - **不调用 `refresh()`**；`rebuildAdapter()` 失败不撤销已保存的声明，返回 `{ ok: true, persisted: true, rebuildError: <code> }`，由界面提示「已保存，暂不可用」并保留条目。
   - 返回 `{ ok: true, persisted, defaultModelId, enabled, models, manual: manualModels, manualTruncated, rebuildError? }`。
@@ -207,6 +224,8 @@
 
 ## 6. 关键实现说明
 
+本节为历史提案，当前实现及待决事项见 §0。
+
 ### 6.1 合并与协同规则
 
 | 场景 | 行为 |
@@ -234,7 +253,7 @@
 ```
 
 - `manual` 只记来源，不记密钥、不记网关地址；`addedAt` 仅用于排障与展示。
-- 降级读取：旧读端忽略 `manual`；`models` 中残留的手动 id 会在旧代码 `applyOptions` 中被丢弃（不报错），升级后由 `manual` 恢复来源。
+- 降级读取：旧读端读取时忽略 `manual`。若降级期间未发生旧端写入，原记录可能保留；旧端一旦保存，可覆盖 `manual` 并过滤目录外的手动启用项，升级后不能保证恢复。回退前须另行验证数据保全方案。
 - 被读侧截断的手动 id 从可用集合消失后，其覆盖会在下一次 `applyOptions` 持久化时按 `:647` 删除——与网关撤下模型时的既有行为一致；`manualTruncated` 必须让界面可见，避免静默。
 
 ### 6.3 安全声明（写入设计文档）
@@ -268,7 +287,7 @@
 
 ## 8. 验收标准
 
-在仓库根目录执行；以下离线与合成检查已在 `feat/epic-273-integration` 上验证通过，外部企业网关与双端实机仍未联调：
+以下离线与合成检查记录了 `feat/epic-273-integration` 分支当时的结果；该记录未提供外部企业网关与双端实机联调证据，后续取证边界见 §0：
 
 | 检查 | 命令 | 预期 |
 |---|---|---|
@@ -278,13 +297,13 @@
 | 差异卫生 | `git diff --check` | 无输出 |
 | 推送前签名 | `node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD` | 全部 verified |
 
-行为判据（对应 issue #273 验收项；分支 `feat/epic-273-integration` 已完成离线代码/单测/合成探针，真实企业网关与双端实机仍未验证）：
+行为判据（对应 issue #273 验收项；分支 `feat/epic-273-integration` 当时完成离线代码/单测/合成探针，不代表真实企业网关或双端专项通过）：
 
 - [x] 合法 ID 添加后出现在列表并可配置、启用；非法/重复/超限有明确文案。（离线单测 + 合成探针已验证）
-- [x] 已启用的手动模型在登录且凭据可用时可被选择，并经既有网关调用；网关拒绝时展示真实失败码。（合成探针 `run-iam-managed-models-probe.mjs` 已覆盖；真实企业网关 403/404/400 待 #285 实机）
+- [x] 已启用的手动模型在登录且凭据可用时可被选择，并经既有网关调用；网关拒绝时展示真实失败码。（当时合成探针 `run-iam-managed-models-probe.mjs` 已覆盖；真实企业网关 403/404/400 需结合 #285 与 #304 的专项证据）
 - [x] 刷新成功/失败、同 ID 合并、删除、重启恢复均不丢失其他模型配置；账号切换与退出符合隔离规则。（离线并发与变异测试已验证）
 - [x] 未登录、缺凭据、未启用仍被拒绝；无法借此添加其他提供方或绕过企业授权。（离线与探针验证 `callsAfterLogout: 0`）
-- [x] 本地模拟验证与真实企业网关/目标客户端验收分开记录，后者仍为未验证。
+- [x] 本地模拟验证与真实企业网关/目标客户端验收分开记录；当时未提供后者的专项证据，后续见 §0。
 
 > 实施补充记账（2026-11-13，分支 `feat/epic-273-integration`）：按用户全量推进 Epic #273 指令，服务端手动模型路由最终收敛为 `POST /api/forge-iam/models/manual`（原草案曾写 `PUT`），错误码命名为 `IAM_MANUAL_MODEL_{INVALID,LIMIT,CONFLICT,NOT_FOUND}`；相关离线单测、UI 契约与合成探针均已闭环，文档元数据仍保持 `批准: 待定` 与外部真机未联调口径。
 
@@ -300,18 +319,30 @@
 4. **添加后是否自动启用**：不自动启用；批量按钮是显式动作。
 5. **§871 错误码表**：`ENTERPRISE_MODEL_NOT_ALLOWED` 标 403 而 `ERROR_STATUS` 缺键，是否单独立项修正。
 6. **管理员预置能力**（§4.2 方案 D）是否作为后续议题。
+7. **手动模型写入失败语义**：原方案要求回滚内存并抛错；当前实现保留会话内变更、返回 `persisted: false` 并告警。是否维持现状或实施原方案，待用户裁决；本记录不改变两者之一的状态。
 
 ### 9.2 风险与回滚
 
 1. **与 PR #252 的顺序**：`discover()` 条目构造会被 #252 重写。本方案把合流写成独立纯函数并单测，**顺序无关**；判据是「合流函数只依赖 discover 输出形状（`{id, name, contextWindow, maxTokens, input, inputModalities}`），不读内部字段」。#252 未合并也可开工；若并行，先跑 `test/managed-models.test.mjs:179-219` 的 ID/截断断言。
 2. **与 issue #174 的关系**：真实执行入口门禁的实机取证不因本方案完成；本方案只保证不新增绕过路径。
-3. **降级读取**：旧版本读新记录会忽略 `manual`，手动条目降级为不可用（不报错、不丢启用集）；升回新版后恢复。
+3. **降级读取**：旧版本读新记录会忽略 `manual`；降级期间若旧端保存选择，可能覆盖手动声明并丢失目录外启用项，升回新版不保证恢复。未写入时也须先核对记录，不承诺无损。
 4. **目录失败时的手动能力**：仅在 `resolveGatewayConnection()` 可用且重建成功时真正可调用；重建失败时条目可见但不可调用，界面与视图必须如实说明（这是本方案与「目录即可用性证据」的张力点，须写进 §13.2）。
-5. **回滚**：单次 revert 功能单元即可；已落库的 `manual` 字段被旧代码忽略，不影响启用集。紧急关闭入口只需恢复 U5 的界面提交路径（服务端方法保留不调用），已添加条目退化为不可用，不需要数据迁移。
-6. **未验证项**：真实网关对手动 ID 的裁决（403/404/400 实际归因）、双端 GUI、目标平台存储、Windows/麒麟实机，全部未验证，不得写成已具备生产能力。
+5. **回滚**：仅撤下界面或路由不会使已保存并启用的手动条目失效；旧端写入也可能覆盖手动声明和启用项。关闭能力、版本回退和记录恢复的方案须另行设计与隔离验证，不以单次 revert 或无迁移作为完成判据。
+6. **专项取证**：本方案的历史记录未提供真实网关对手动 ID 的裁决（403/404/400 实际归因）、双端 GUI 与目标平台存储的专项证据。后续多机汇总与网关契约跟踪见 §0；具体版本、环境和逐项结果须核对，不据汇总宣称生产就绪。
 7. **非目标**：不处理客户端两个「刷新」入口的冗余；不改网关契约；不新增提供方/地址/Key 输入；不做跨进程原子存储；不改 §871 错误码表。
 
+### 9.2.1 回退方案与验收前提
+
+以下是待实施和隔离验证的操作方案，当前没有现成的全局停用开关；不得据此对实际用户数据或生产制品直接操作。
+
+1. 在合成数据环境先停止所有使用存储的进程，按[凭据包的配对备份要求](../../packages/forge-credentials-keychain/README.md#密钥生命周期与备份)保护数据库目录与同级密钥目录，并验证恢复到空的隔离位置。密钥备份须按敏感材料保护；目标机恢复能力尚需实测。
+2. **只关闭管理入口**：另行实现并验证界面与手动模型管理路由的关闭；确认新增和删除入口不可用，同时确认此前已启用的手动模型仍可进入原有运行路径。这不构成撤回运行支持。
+3. **撤回运行支持**：另行实现并验证运行时拒绝使用手动声明作为目录来源；用已启用的目录外手动 ID 验证不能选用或派发，使用同时有网关来源的同 ID 验证不会误禁合法网关条目。模拟凭据和网络桩须证明被拒项的下游调用次数为零。实际策略与发布须单独决定，不能把撤 UI 当作完成。
+4. **降级及恢复**：隔离验证旧版读取与写入，旧版可能覆盖手动声明和启用项。未能证明旧版不会写入对应记录时，不对已有数据执行该降级；如需恢复，在已验证且受保护的备份上恢复到空的隔离位置，再逐项比对声明与启用状态，不能承诺直接覆盖现有数据或无损升级。
+
 ## 10. Luna 执行清单
+
+以下为历史执行清单，不作为当前版本的执行指令。
 
 1. 核对基线：`git status --short` 只含本计划文档与 `docs/DOCUMENT-REGISTER.md` 的改动（不含他人未提交改动）；确认 `main` 记录为 `f8f7a29`；用 `gh pr view 252` 确认 #252 是否已合并并记下基线。
 2. 取得 §9.1 第 1 项批准结论并记入本文件。**批准前唯一允许先行的是 U2 中的 `mergeAvailableModels` 纯函数与单测**（无运行时行为变更）；其余改动停止。

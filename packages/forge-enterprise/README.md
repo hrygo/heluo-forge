@@ -26,4 +26,4 @@ pnpm --filter @heluo/forge-enterprise test
 
 - 本包面向全体企业员工，只包含账号登录、AI 网关、模型目录管理、加密凭据存储与通用策略底座；不含任何研发域成员或界面容器，可单独预装，也可与独立的 `@heluo/forge-engineering` 并存安装（共存时同名 `heluo-policy` 由 Cordis Loader 合并为单实例）。
 - 每个插入行可按环境配置单独覆盖；策略、认证或加密存储不可用时按 fail-closed 语义拒绝，不以「可禁用」为由回退明文凭据或放行未授权访问。
-- 生产与合规审计场景须在运行配置注入持久审计 sink 并移除 `allowNonDurable: true`；真实企业网关、IAM 与 OS 凭据联动以企业环境实测为准。
+- 生产与合规审计场景需要持久审计 sink 并关闭 `allowNonDurable`。当前配置仅支持 `none` 和 `memory`，服务提供 `setAuditSink` 程序注入入口，持久适配器及其接入和验证尚待完成；真实企业网关、IAM 与 OS 凭据联动以企业环境实测为准。

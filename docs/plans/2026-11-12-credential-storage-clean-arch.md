@@ -6,17 +6,17 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-017 |
 | 文档名称 | 凭据存储整洁架构实施方案 |
-| 版本 | V0.3.0 |
+| 版本 | V0.3.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-12 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | 设计评审；不改写现有实现状态，不授予生产能力 |
 | 文档层级 | L2 实施计划；存储契约与字段以设计文档为准 |
 
-> 编制依据：issue #147 与 PR #237 描述的实现，以及字段值统一加解密的决定。PR #237 已合并，以 `origin/main` 为基线。本计划后续增加 SQLite 数据与密钥分目录的要求，并保留已创建的 SQLite 数据兼容；此前的整文档加密后端不重新引入。
+> 编制依据：issue #147 与 PR #237 描述的实现，以及字段值统一加解密的决定。PR #237 已合并，以 `origin/main` 为基线。本计划增加 SQLite 数据与密钥分目录的要求；具备当前密钥绑定与分目录布局的数据可继续使用，旧同目录 keyring 或无绑定的数据库不兼容且保留原物。此前的整文档加密后端不重新引入。
 
 > 关联文档：[IAM 接入详细设计](<../design/plugins/forge-iam.md>)、[网关凭据双模式设计](<../design/credential-modes.md>)、[凭据包说明](<../../packages/forge-credentials-keychain/README.md>)、[总体架构 ADR-19](../architecture/platform-architecture.md)、[issue #147](https://github.com/hrygo/heluo-forge/issues/147)、[PR #237](https://github.com/hrygo/heluo-forge/pull/237)。
 

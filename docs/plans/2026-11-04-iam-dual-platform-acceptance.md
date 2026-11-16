@@ -6,19 +6,21 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-012 |
 | 文档名称 | IAM 双端验收矩阵（Windows / 麒麟） |
-| 版本 | V0.2.1 |
+| 版本 | V0.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-04 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | 2026-11-04 已在远程 macbook 与 megacube 做过一次部署复验；完整验收仍待目标环境与 IAM 账号 |
 | 文档层级 | L2 验收矩阵；能力证据引用 #120—#122 的记录，本文只做平台复验 |
 
-> 编制依据：2026-11-04 对 #123 正文、PLAN-011 M5 与既有 `pnpm check`、组合探针结果的核对。矩阵中没有任何一项在 Windows 或麒麟上执行过，全部保持 NOT RUN / BLOCKED；文档存在不构成验收证据。
+> 编制依据：2026-11-04 对 #123 正文、PLAN-011 M5 与既有 `pnpm check`、组合探针结果的核对。§3 保留当时的 NOT RUN / BLOCKED 状态；文档存在不构成验收证据。
 >
-> 关联文档：[IAM 接入设计](<../design/plugins/forge-iam.md>)、[多端凭据存储方案](<2026-11-03-credential-multiplatform.md>)、[实施计划](<2026-11-04-iam-issues-implementation.md>)、[开发与验收约定](<../engineering/development-conventions.md>)。
+> 关联文档：[IAM 接入设计](<../design/plugins/forge-iam.md>)、[凭据包说明](../../packages/forge-credentials-keychain/README.md)、[机密客户端隔离契约](../contracts/iam-client-auth-isolated.md)、[多端凭据存储方案](<2026-11-03-credential-multiplatform.md>)、[实施计划](<2026-11-04-iam-issues-implementation.md>)、[开发与验收约定](<../engineering/development-conventions.md>)。
+
+本矩阵沿用 2026-11-04 的结果，以下判据已按现行设计修订，不能把旧结果直接当作新判据的执行证据。后续 [issue #303](https://github.com/hrygo/heluo-forge/issues/303) 汇总插件在 Windows、麒麟、UOS、macOS 多机真测，但文件权限、重启、用户隔离及恢复等专项的具体 SHA、环境与逐项证据仍待梳理，不能自动映射为本表 PASS；[issue #304](https://github.com/hrygo/heluo-forge/issues/304) 的网关契约验证尚未关闭。
 
 ## 1. 使用方式
 
@@ -32,11 +34,11 @@
 | 项 | Windows | 麒麟 |
 |---|---|---|
 | 平台与版本 | 待填（如 Windows 11 23H2 x64） | 待填（发行版与内核版本） |
-| DSH 版本 | 待填（目标 `0.2.1-rc.5`） | 待填 |
+| DSH 版本 | 待填（按被测制品锁定版本） | 待填 |
 | Node / pnpm | 待填（按 `.node-version`） | 待填 |
-| IAM 端点与 client_id | 待填（脱敏） | 待填 |
+| IAM 端点、client_id 与认证模式 | 待填（脱敏；交付基线为 public + PKCE S256） | 待填（脱敏） |
 | 网关与模型 | 待填 | 待填 |
-| 凭据后端 | 待填（DPAPI / libsecret） | 待填 |
+| 凭据后端 | 待填（当前默认 SQLite 值级加密及同级目录文件 keyring；记录实际配置） | 待填（同左） |
 | 测试账号与权限 | 待填 | 待填 |
 | 执行人与日期 | 待填 | 待填 |
 
@@ -55,12 +57,12 @@
 
 | ID | 用例 | 判定依据 | 结果 | 证据 |
 |---|---|---|---|---|
-| F-01 | 错误的 client secret | 拒绝进入就绪，错误可读，不落明文 | NOT RUN | |
+| F-01 | public 模式误配置客户端机密（仅用合成值） | 原始 secret 或 `clientSecretRef` 被配置校验拒绝，不落明文；可选 confidential 路径单独按隔离契约取证 | NOT RUN | confidential 真实来源与生产准入未开放 |
 | F-02 | 回调地址不精确匹配 | 拒绝，不换票 | NOT RUN | |
 | F-03 | 授权码重放 | 第二次换票失败 | NOT RUN | |
-| F-04 | 系统凭据库不可用或锁定 | 拒绝进入就绪，不自动降级到文件 | NOT RUN | |
-| F-05 | 轮换窗口：保存后两分钟内暂停新登录、只保留刷新 | 旧值仍可用；用新值刷新失败时等满两分钟重试后成功；不反复试探 | NOT RUN | D2 语义已确认 |
-| F-06 | 多进程竞争刷新 | 只有一方成功，另一方不重放旧刷新令牌 | NOT RUN | |
+| F-04 | 已有 SQLite 存储缺失 keyring、损坏，或 POSIX 权限不符 | 按实际错误拒绝，不自动重建密钥、迁移或回退其他后端；Windows NTFS ACL 与目标平台隔离须另行实证 | NOT RUN | |
+| F-05 | 历史机密客户端 secret 轮换路径 | public 模式不使用 secret；可选 confidential 路径按隔离契约分别验证上下文变化后的新登录，不能假定两分钟后自动刷新成功 | NOT RUN | D2 为当时机密客户端书面答复，尚未联调；真实来源未开放 |
+| F-06 | 多进程竞争刷新 | 同一刷新周期仅一方发起换票；其他进程等待并可采用完成结果，不重放旧刷新令牌，超时不抢占 | NOT RUN | |
 | F-07 | 断网后恢复 | 分类为网络故障，不误判为授权失效 | NOT RUN | |
 | F-08 | 登录过程中取消 | 尝试结束，无残留 pending | NOT RUN | |
 
@@ -73,7 +75,7 @@
 | O-03 | 账户页显示企业身份 | 不显示官方账户 | NOT RUN | |
 | O-04 | 缺凭据时 shell 仍可用 | 与 AC6 一致 | NOT RUN | |
 | O-05 | 升级回灌后禁用仍生效 | 覆写层未被覆盖 | NOT RUN | |
-| O-06 | 卸载与旧凭据迁移 | 按授权演练，失败保留原数据 | NOT RUN | |
+| O-06 | 旧凭据保留与新存储兼容 | 旧 `credentials.json` / `credentials.key` 保留，不读取或自动迁移，也不单独阻止新存储；旧同目录 keyring 或未绑定旧库拒绝使用并保留原物。若涉及卸载，另行确认授权与隔离 | NOT RUN | |
 
 ### 3.4 服务端语义（引用 #120 记录，本项复验）
 
@@ -143,6 +145,6 @@ Linux 以 `umask 002` 克隆时文件为 664，安装器曾只回一句 `unsafe 
 
 ## 5. 当前状态
 
-- 全部用例 `NOT RUN`；服务端语义三项 `BLOCKED`。
-- 阻塞原因：没有 Windows 与麒麟实机，也没有对应的测试账号权限。
-- 机器与权限到位后按 §1 执行；执行结果回写本表与 #123，不新建平行记录。
+- §3 保留原记录：多数用例 `NOT RUN`，服务端语义三项 `BLOCKED`。
+- 2026-11-04 的阻塞原因为当时没有 Windows 与麒麟实机及对应测试账号权限；后续多平台测试汇总见 [issue #303](https://github.com/hrygo/heluo-forge/issues/303)，不等于本矩阵逐项通过。
+- 当前逐项验收仍须对应制品 SHA、目标环境、授权及可追溯证据；网关契约验证见 [issue #304](https://github.com/hrygo/heluo-forge/issues/304)。执行结果回写本表与 #123，不新建平行记录。

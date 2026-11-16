@@ -6,7 +6,7 @@
 
 Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../client.js>)优先通过 `/api/forge-iam/events` 接收 Host 的 `watch(signal)` 视图，同一页面的账户、横幅和引导共享一条事件流，各标签页分别维护连接。事件流不可用时使用 2 秒轮询并尝试恢复连接，不使用 Client Remote/watch。回退读取等待 10 秒后尝试取消；异常读取若忽略取消，最多保留两个未完成请求，达到上限后暂停新的轮询读取并继续尝试重连事件流。
 
-内置 SQLite 凭据组合提供与当前 provider 精确绑定的 `iam-atomic-store`；[插件 apply](<../src/index.mjs>)使用它验证 IAM 单记录能力并取得网关联合 adapter。缺少受信绑定时，登录、刷新和网关写入按各自门禁拒绝。未过期且无需刷新的旧 grant 仍可能被恢复、读取，此门禁不是全面的会话或执行隔离。目标平台与企业环境尚未完成验证。
+内置 SQLite 凭据组合提供与当前 provider 精确绑定的 `iam-atomic-store`；[插件 apply](<../src/index.mjs>)使用它验证 IAM 单记录能力并取得网关联合 adapter。缺少受信绑定时，登录、刷新和网关写入按各自门禁拒绝。未过期且无需刷新的旧 grant 仍可能被恢复、读取，此门禁不是全面的会话或执行隔离。插件已有 Windows、麒麟、UOS、macOS 多机实测；对应版本及存储重启、权限、隔离、恢复专项仍待归档核验，企业 IAM 与网关联调仍待完成。
 
 组合方先准备 `@heluo/forge-credentials-keychain`，禁用 `dsh-credentials-local`，再挂载 IAM。服务通过 `getCredentials` 延迟读取当前 `ctx.credentials`，不能以加载顺序代替存储能力验证。凭据包使用值级加密 SQLite；内存后端仅供隔离测试且不授予 IAM 信任，目标平台实测仍待完成。
 
@@ -48,7 +48,7 @@ Host 提供 `ctx.iam`、OIDC 回调与同源管理 HTTP API；[Client](<../clien
 
 显式 issuer、授权、token、JWKS 全部齐全时，不强制请求 discovery。协议端点和网关地址接受 HTTP 或 HTTPS；HTTP 不提供传输加密或端点身份认证，令牌、客户端 secret、网关 Key 与业务内容可能被窃取或篡改，OIDC 公钥经 HTTP 获取时签名校验也不能防止网络替换公钥。回调须符合 IAM 登记规则；这里没有已验证的生产配置模板。
 
-所有模式强制 PKCE S256，不能关闭。实际服务已接入隔离 confidential 的授权码、刷新、有效 AT、V2 恢复、认证撤销与回调清理；仅具体受信 source/credentials/精确 binding 的独立认可才允许。真实 apply 不传 getClientSecretSource/verifyClientSecretSource；缺失、伪造或异步认可在构造或使用前拒绝，不发送带凭据 POST。配置通过不等于真实来源可用。
+所有模式强制 PKCE S256，不能关闭。实际服务已接入隔离 confidential 的授权码、刷新、有效 AT、V2 恢复及回调清理的认证撤销；这些机密认证操作要求具体受信 source/credentials/精确 binding 的独立认可。普通退出则使用 AT 自证 GET，不读取 secret。真实 apply 不传 getClientSecretSource/verifyClientSecretSource；缺失、伪造或异步认可在机密认证操作构造或使用前拒绝，不发送带凭据 POST。配置通过不等于真实来源可用。
 
 [认证 helper](<../src/client-auth.mjs>)与实际服务共同完成隔离来源固定、操作检查和 HTTP 认证，不是原生秘密来源。它不发现 ctx 隐藏来源、不使用环境/文件后备，不从通用 credentials.resolve 推导信任。公共配置带 selector、部分机密配置、原文 secret、自定义认证 header/body 或关闭 S256 均拒绝；其余未知普通字段仍会被忽略。正式 secret 下发、平台存储、远端轮换与生产接入仍未完成。
 
@@ -60,7 +60,7 @@ public 使用 V1，不采用或盲删 V2；confidential 使用 V2 和完整 auth
 
 来源准备在 grant 锁外。刷新先确认持久 pending，再最多发送一次原请求；来源变化、回执异常或结果未知不能接管、清除 pending 或重发。每个 await、提交和结果采用边界复验原操作；取消、退出或卸载后的旧成功和旧错误不覆盖新会话。检查不能撤回已经发出的 HTTP。
 
-来源消失后，只有本实例先前已独立认可、且当前完整快照仍精确匹配的会话可本地清理；远端撤销报告未确认。不认识的冷启动 V2、不同主体、会话标识或认证上下文均保留，不盲删、不裸发撤销。
+普通 signOut 校验受信存储、issuer 和客户端绑定及完整 grant 快照，但不读取 secret；来源消失后，满足这些条件的冷启动 V2 仍可用 AT 自证撤销并完成本地清理。撤销失败或结果未确认时保留 pending，不报告清理完成、不重发旧令牌；不同 issuer、客户端或不匹配的会话快照不盲删。回调失败后的认证 POST 清理仍要求原来源及认证上下文有效。
 
 这些正向仅由私有测试工厂注入。手工启动 mock IdP 或修改部署配置不会自动获得来源；没有可供生产直接复制的机密配置模板。正式管理员预置、系统钥匙串与轮换管理仍待设计和验证。
 
@@ -177,7 +177,7 @@ getter 与 verifier 绑定具体 credentials、adapter 和作用域。只比方�
 | `IAM_GATEWAY_CHANGED` | 409 | 快照冲突或提交前 guard 拒绝；不自动重试。 |
 | `IAM_GATEWAY_WRITE_UNKNOWN` | 503 | 提交、回执或提交后的状态无法确认；可能已生效，不补偿或重放。 |
 
-内置 SQLite adapter 实现该契约，并有本地合成测试；目标平台与企业环境尚未验证。双键事务不包含其他进程的 IAM grant 授权事实；同步本地 guard 也不证明整个异步耐久写入期间授权不变。后置检查拒绝仅阻止发布旧上下文结果，不代表可撤回提交。清除保持原有允许未登录调用的策略，但仍受联合能力和记录状态限制。旧客户端及同权代码混用不享有本协议保证。
+内置 SQLite adapter 实现该契约，并有本地合成测试；目标平台对应版本的原子提交、权限与恢复专项和企业环境联调仍待验证。双键事务不包含其他进程的 IAM grant 授权事实；同步本地 guard 也不证明整个异步耐久写入期间授权不变。后置检查拒绝仅阻止发布旧上下文结果，不代表可撤回提交。清除保持原有允许未登录调用的策略，但仍受联合能力和记录状态限制。旧客户端及同权代码混用不享有本协议保证。
 
 已确认的网关提交使该 provider 提交前的状态读取失效。提交后使用新的读取核对当前状态；保存还核对写入代际和会话身份，迟到的旧读取不得覆盖新结果。确认读取的等待上限为 10 秒，超时或无法确认返回 `IAM_GATEWAY_WRITE_UNKNOWN`，不撤销已提交数据。当前操作返回未知结果后，不再展示此前的网关摘要，模型调用可能因此中断，直至状态重新读取成功。核对结果是读取时的快照，不能阻止另一进程随后修改；网关事务与 IAM grant 也不是同一跨进程原子事务。此上限不包括提交前的各个存储阶段，也不保证同步系统调用可以中断。
 
@@ -350,19 +350,19 @@ SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 e
 
 ## 可配置网关与动态模型目录
 
-`managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人访问凭证一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧记录。Key 是不透明字符串：保存时不做格式、字符集或长度校验，原样存储、原样上送，有效性由网关返回的 `invalid_api_key` / `credential_revoked` 判定。唯一本地约束在发送前，按传输层的实际规则（fetch/Headers 要求 ByteString，实测拒 CR/LF、NUL、DEL、其余控制字符及高于 Latin-1 的字符，放行 TAB 与 Latin-1）：超出的值按 `ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE` 确定性拒绝，不进入传输层，错误体与日志不回显原文。企业网关对这些字符值的接受度未验证，此项是传输层本地约束，不构成网关兼容性结论。Key 原文不进入视图、日志或错误响应。
+`managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人访问凭证一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧记录。Key 按不透明字符串处理：页面和 HTTP 路由去除首尾空白并要求非空，不按固定前缀校验；持久化受凭据 provider 的约束，有效性由网关判断。发送前还按传输层的实际规则校验（fetch/Headers 要求 ByteString，实测拒 CR/LF、NUL、DEL、其余控制字符及高于 Latin-1 的字符，放行 TAB 与 Latin-1）：超出的值按 `ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE` 确定性拒绝，不进入传输层，错误体与日志不回显原文。企业网关对这些字符值的接受度未验证，此项是传输层本地约束，不构成网关兼容性结论。Key 原文不进入视图、日志或错误响应。
 
-新增同源 `GET /api/forge-iam/models`，在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。该入口是用户主动刷新，直接发起一次目录同步。`modelAccess` 提供目录 `state`、`error`、`stale`、`retryAt`、`syncedAt`、`models` 及已保存地址；`stale` 表示列表仍是上次成功目录、网关此后未连上，`retryAt` 是下一次自动重试时间（不可重试的失败为空），`syncedAt` 是最近一次成功时间。它不是网关授权证明：调用仍按 `permit()` 与启用集合裁决。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际，每次通过 `resolveToken()` 复查会话及 Key owner，异步读取后复查生命周期；该接口不返回访问令牌。模型运行时按路线 B 将当前访问令牌放入请求头 `X-IAM-Token`。
+同源 `GET /api/forge-iam/models` 在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。该入口是用户主动刷新，直接发起一次目录同步。`modelAccess` 提供目录 `state`、`error`、`stale`、`retryAt`、`syncedAt`、`models` 及已保存地址；`stale` 表示列表仍是上次成功目录、网关此后未连上，`retryAt` 是下一次自动重试时间（不可重试的失败为空），`syncedAt` 是最近一次成功时间。它不是网关授权证明：调用仍按 `permit()` 与启用集合裁决。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际：内存无 grant 时先调用 `resolveToken()`，之后核对会话可继续、Key owner 与生命周期，异步读取后再次复查；该接口不返回访问令牌。模型运行时另按请求解析当前访问令牌，并按路线 B 放入 `X-IAM-Token`。
 
-[模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方与目录外模型。目录请求带宿主 `attributionHeaders()`，只请求 `${baseURL}/models`，禁用重定向、限制响应大小与数量、去重校验 ID；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。同步失败保留上次目录并标记 `stale`：可重试的失败（连接、超时、限流）同时保留适配器，按 2/5/15/30/60 秒退避；不可重试的失败（凭证被拒、目录非法）保留目录但关闭模型调用表面，避免每次调用都打到网关再失败；身份或网关变化、显式退出才清空。地址/Key/身份变化、显式退出与令牌到期撤销旧代际；本地在途流收到 abort，迟到目录和内容不交付。展示用目录不随访问令牌过期清空：同一主体与网关下保留列表并以 `stale` 标注，调用仍被 `IAM_LOGIN_REQUIRED` 拒绝直到会话恢复。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 `200000`（`200K`）上下文窗口与 `64000`（`64K`）最大输出本地容量默认值，不宣称为网关实际上限。
+[模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方与目录外模型。目录请求带宿主 `attributionHeaders()`，只请求 `${baseURL}/models`，禁用重定向、限制响应大小与数量、去重校验 ID；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。同步失败保留上次目录并标记 `stale`：可重试的失败（连接、超时、限流）同时保留适配器，按 2/5/15/30/60 秒退避；不可重试的失败（凭证被拒、目录非法）保留目录但关闭模型调用表面，避免每次调用都打到网关再失败；身份或网关变化、显式退出会清空目录。准备阶段的调用复查配置代际；已启动的流在同主体且授权仍有效时，不因保存 Key、停用或切换模型而中止。主体、会话或凭据授权丢失以及显式退出会中止本地流；迟到目录和内容不交付。展示用目录不随访问令牌过期清空：同一主体与网关下保留列表并以 `stale` 标注，调用仍被 `IAM_LOGIN_REQUIRED` 拒绝直到会话恢复。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 `200000`（`200K`）上下文窗口与 `64000`（`64K`）最大输出本地容量默认值，不宣称为网关实际上限。
 
-宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务；新对话模型由用户在宿主中选择。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出，不自动重放失败请求。
+宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务；新对话模型由用户在宿主中选择。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出。模型推理对 429/503 不做自动退避；绑定变化时在尚未产出分片等条件下最多重建并重试一次，未产出分片不证明请求尚未发送，真实派发顺序和计费仍待验证。
 
-模型启用与参数覆盖分两层。**启用集合**决定可用性：`modelOptions` 的键即"已启用"，值为覆盖参数（可为空对象）。未启用的目录模型照旧出现在账号页，但 `listModels` 不返回它，`prepareCall`/`resolveModel`/`llm/stream` 都以 `ENTERPRISE_MODEL_NOT_ALLOWED` 拒绝，避免"能选不能用"。首跑（该 subject 从未保存过）自动启用目录第一个模型并落盘；管理员配置了 `defaultModel` 且网关仍提供时优先用它。显式保存空集合是合法状态，不会被打回默认值——区分"从未保存"与"保存为空"的是 `readModelSelection()` 返回的 `saved` 标志。
+模型启用与参数覆盖分两层。**启用集合**决定可用性：`modelOptions` 的键即"已启用"，值为覆盖参数（可为空对象）。未启用的目录模型照旧出现在企业模型页，但 `listModels` 不返回它，`prepareCall`/`resolveModel`/`llm/stream` 都以 `ENTERPRISE_MODEL_NOT_ALLOWED` 拒绝，避免"能选不能用"。首跑（该 subject 从未保存过）自动启用目录第一个模型并尝试保存；管理员配置了 `defaultModel` 且网关仍提供时优先用它。显式保存空集合是合法状态，不会被打回默认值——区分"从未保存"与"保存为空"的是 `readModelSelection()` 返回的 `saved` 标志。
 
-**持久化**在宿主侧凭证记录的独立键 `heluo-iam/model-selection`（`createModelSelectionStore`，`grant` 类载荷，仅存 subject、模型 ID 与覆盖参数，不含凭据）。读写都以回读的 grant subject 为准，换人不继承旧记录，过期写入拒绝 `IAM_NOT_SIGNED_IN`；该记录不参与网关凭证的联合原子事务，最后确认写入者胜，失败不阻断调用（`updateModelOptions` 返回 `persisted: false`，面板据此提示）。`PUT /api/forge-iam/models` 仍只改本地 `PiAiAdapter` 目录，不写 profile 配置、不改网关目录。面板以当前账号的宿主选择为准（包括显式空集合），浏览器缓存仅作副本，不向宿主自动回推；账号或宿主选择变化时更新显示，避免旧缓存覆盖已保存选择。
+**持久化**在宿主侧凭证记录的独立键 `heluo-iam/model-selection`（`createModelSelectionStore`，`grant` 类载荷，保存 subject、模型 ID、覆盖参数与手动声明，不含凭据）。读写都以回读的 grant subject 为准，换人不继承旧记录，过期写入拒绝 `IAM_NOT_SIGNED_IN`；该记录不参与网关凭证的联合原子事务，最后确认写入者胜。模型配置或手动声明写入失败时，本次变更可在当前运行时生效并返回 `persisted: false`，面板提示持久化失败；刷新目录或重启可能恢复旧配置。删除不存在的有效手动 ID 则是幂等成功，返回 `removed: false, persisted: false`，不发生变更或写入；调用方须区分这两种情况。`PUT /api/forge-iam/models` 只改本地 `PiAiAdapter` 目录，不写 profile 配置、不改网关目录。面板以当前账号的宿主选择为准（包括显式空集合），浏览器缓存仅作副本，不向宿主自动回推；账号或宿主选择变化时更新显示，避免旧缓存覆盖已保存选择。
 
-模型行提供“一键启用”“一键停用”与“全部默认启用”快捷操作，支持一键采用默认参数（`200K` 上下文、`64K` 最大输出）启用并立即持久化生效；已启用模型的行可直接停用，不必展开精细配置。行上停用与一键启用对称：改完启用集立即提交整份集合，因此会连同其他未保存的面板修改一并生效；停用不会改写宿主新对话默认模型；用户需要时自行选择其他已启用模型。停用最后一个模型提交显式空集合，重新启用前新对话无企业模型可选。
+模型行提供“一键启用”“一键停用”与“全部默认启用”快捷操作，支持一键采用默认参数（`200K` 上下文、`64K` 最大输出）启用并提交保存；持久化失败按上述回执提示。已启用模型的行可直接停用，不必展开精细配置。行上停用与一键启用对称：改完启用集立即提交整份集合，因此会连同其他未保存的面板修改一并生效；停用不会改写宿主新对话默认模型；用户需要时自行选择其他已启用模型。停用最后一个模型提交显式空集合，重新启用前新对话无企业模型可选。
 
 推理等级仅开放 `'off'`、`'low'`、`'medium'`、`'high'`、`'xhigh'`、`'max'`，按宿主 `thinkingLevelMap` 语义生成，支持快捷档位及自由选择推理强度下界（最低档）与上界（最高档，`buildReasoningEffortRange` / `getReasoningEffortBounds`），所选区间外档位显式置 `null`；线名由档位名推导，暂不支持逐档自定义字符串；`off` 不下发线值，`thinkingLevelMap.off` 恒为 `null`，请求以省略 `reasoning_effort` 表示不抑制推理；宿主传来不支持的档位时返回 `ENTERPRISE_MODEL_REASONING_UNSUPPORTED`，网关返回 4xx 时返回 `ENTERPRISE_GATEWAY_REQUEST_REJECTED`，两者都不再伪装成不可达。手动模型经同源 `POST /api/forge-iam/models/manual`（`{ action: 'add' | 'remove', id }`）与独立“设置 → 企业模型”（`forge-models`，`order: 10`）中的“手动添加”内联表单 / “手动”条目删除按钮维护；“设置 → 企业账号”（`forge-iam`，`order: -10`）仅保留通用企业认证、AI 服务凭证与诊断折叠区，不注册研发凭据子槽位；扩展令牌同源 API `/api/forge-iam/ext-credentials*` 由独立研发扩展面板按需调用（当前仅由本地离线单测、UI 契约及合成宿主探针覆盖，外部网关与双端 GUI 未实机验证）。`contextWindow`/`maxTokens` 接受正整数或 `K`/`M` 后缀；`maxTokens` 仅在显式覆盖时计入 `configuredMaxTokens`。回归：`node --test packages/forge-iam/test/managed-models.test.mjs packages/forge-iam/test/manual-models-backend.test.mjs packages/forge-iam/test/model-selection-store.test.mjs packages/forge-iam/test/model-selection-service.test.mjs packages/forge-iam/test/client-managed-models.test.mjs packages/forge-iam/test/client-manual-models.test.mjs packages/forge-iam/test/model-options.test.mjs`。
 

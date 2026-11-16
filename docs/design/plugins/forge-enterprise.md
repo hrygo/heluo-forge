@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业账号与模型组合包详细设计 |
-| 版本 | V1.8.0 |
+| 版本 | V1.9.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-13 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | G2 |
 | 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）与 `forge-iam`；研发工具拆至独立包 `@heluo/forge-engineering`） |
 
@@ -28,13 +28,13 @@
 
 O3 的组成之一是**默认禁用官方账号、官方模型、官方 API Key、官方账户 UI、通用模型配置与自由模型设置六行**，以及官方明文凭据提供方一行，使企业 IAM 成为唯一登录，并让 `DEEPSEEK_API_KEY` 与自填网关都不构成旁路。官方登录在企业内网不可用，保留它只会制造一个坏掉的入口，并留下公网模型旁路。
 
-还缺四件事才能进实现：版本断言的报错形态实测、角色 preset 的粒度确认、禁用官方行后 shell/onboarding 的实测、默认禁用清单的业务确认。
+组合补丁与官方行回灌检测器已实现。版本断言的报错形态、角色 preset 粒度、禁用官方行后 shell/onboarding 的完整性及目标 profile 的禁用结果仍须分别核验。
 
 ### 1.1 专用访问目标的组合约束
 
 2026-10-23 需求方已确认[需求基线 §4.6](../../requirements/requirements-baseline.md#46-模型访问身份与专用凭证要求)。组合包只挂载经过核验的个人认证路线（路线 B 已选定），不能因模型插件能解析 Key 就跳过人员、用途或生命周期要求。关键依赖不满足则停止相应企业调用，不自动切换到裸 Key 或应用 Agent 凭证。
 
-IAM 接入与模型接入分别核验网关目标授权、双凭据承载（若 B）、轻量 DSH 标识及当前授权退出。本包不管理应用凭证、IP 或审批，相关操作在网关控制台。配置示意不代表本轮能力已实现；选路及契约冻结后再调整真实配置。本轮不改 bundle 或源码。
+IAM 接入与模型接入分别核验网关目标授权、路线 B 双凭据承载、轻量 DSH 标识及当前授权退出。本包不管理应用凭证、IP 或审批，相关操作在网关控制台。路线 B 已选定，模型接入由 IAM 受控运行时承载；上游契约仍未冻结，企业联调不由本地实现代替。
 
 ### 1.2 Issue 默认交付与兼容边界
 
@@ -72,7 +72,7 @@ Teamflow 唯一执行，Skill 只提供企业语义。充分 Issue 不另写规�
 |---|---|---|---|
 | `@heluo/forge-iam` | 包 | 同批次版本 | 拒绝挂载，报明确错误 |
 | `@heluo/forge-policy` | 包 | 同批次版本 | 拒绝挂载；**不提供只读降级**，策略缺失即企业入口关闭 |
-| `@heluo/forge-gateway` | 包 | 同批次版本 | 允许挂载，模型能力不可用并提示 |
+| 网关接入设计 | 方案协同 | 同批次方案 | `forge-gateway` 当前为设计与配置入口，不作为运行时依赖或组合成员；模型适配由 IAM 受控运行时承载 |
 | `dsh-credentials` | 上游包 | 随目标 DSH | 拒绝挂载 |
 | `dsh-deepseek-account-platform`、`dsh-llm-deepseek-account`、`dsh-llm-deepseek-api-key`、`dsh-client-ui-settings-account` | 上游包 | 随目标 DSH | 作为默认禁用目标；目标缺失时警告并跳过，不能当作已禁用 |
 
@@ -98,7 +98,7 @@ Teamflow 唯一执行，Skill 只提供企业语义。充分 Issue 不另写规�
 
 策略是硬依赖：没有 `policyRequired` 一类开关，也不存在"关闭策略后仅允许只读"的档位。策略未挂载或不可用时，依赖它的动作入口保持关闭且无可调用残留。
 
-```yaml title="组合顺序（示意；§5.1.2 为当前实际挂载）"
+```yaml title="通用底座组合成员（结构示意；实际补丁见 §5.1.2）"
 insert:
   - id: enterprise-credentials
     name: '@heluo/forge-credentials-keychain'   # 已实现，§5.1.2 已挂
@@ -106,21 +106,9 @@ insert:
     name: '@heluo/forge-policy'                  # 已实现，§5.1.2 已挂
   - id: enterprise-iam
     name: '@heluo/forge-iam'                     # 已实现，§5.1.2 已挂
-# SDD 已退役（2026-11-03）：非 Host 行，依赖、bundledDependencies 与 bin 均已移除。
-  - id: enterprise-gateway
-    name: '@heluo/forge-gateway'                 # 仅 README，不预建入口
-  - id: enterprise-tools
-    name: cordis:group
-    group: true
-    config:
-      - id: enterprise-devops
-        name: '@heluo/forge-devops'              # 仅 README，不预建入口
-      - id: enterprise-gitee
-        name: '@heluo/forge-gitee'               # 仅 README，不预建入口
-# 市场不插入插件行：目标形态是 DSH 原生索引源 + AIHUB 托管 format-1 索引，
-# `@heluo/forge-market` 为历史参考（ADR-11／13）。企业索引源按原生索引源配置，
-# 键名以目标版本核验为准；试点档关闭市场走原生配置，不靠禁用本包某一行。
 ```
+
+研发扩展由独立的 `@heluo/forge-engineering` 安装；`forge-gateway` 不作为独立运行时行挂载。市场采用 DSH 原生索引源与 AIHUB 索引，不插入历史市场插件行。
 
 ### 5.1 官方行默认禁用
 
@@ -142,8 +130,8 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 ```
 
 - `id` 以目标 profile 实际行为准；desktop 与 web 可能不同，G0 各核验一次。
-- 目标不存在时 Loader 会警告并跳过；跳过不等于已禁用，必须由 `@heluo/forge-iam` 的独占断言兜底。
-- 禁用官方 UI 后，onboarding、侧栏入口、默认模型由 IAM 包接管；本包不复制这些 UI。
+- 目标不存在时 Loader 会警告并跳过；跳过不等于已禁用。IAM 独占断言只检查 `deepseekAccount` 服务，其他官方行与执行旁路须由组合检查和目标环境验收分别核实。
+- 禁用官方 UI 后，onboarding 与账号、模型设置入口由 IAM 包提供；宿主默认模型由用户选择，IAM 只读观察，不自动接管或保存默认选择。
 - 升级 DSH 后重新应用补丁，并跑“官方行是否回灌”用例：检测器见 `packages/forge-enterprise/src/reflow.mjs`（判定依据是**实际生效配置**，不是“补丁文件还在不在”）。
 
 配置字段以本设计为准；网关字段仍见[网关契约](../../contracts/gateway-contract.md)。
@@ -165,7 +153,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 通用底座的 `insert:` 段仅挂三个面向全体员工的基础 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 6 动作目录、无 `isolate`）与 `@heluo/forge-iam`。
 
-**双独立预装包安装语义**：`@heluo/forge-enterprise`（「企业账号与模型」）通过 `dsh plugin add <tarball>` 安装后即生效通用企业登录与模型管理，不包含任何研发插件或设置菜单；研发能力（`heluo-engineering-ui` 容器、`enterprise-issue-delivery` Skill、`@heluo/forge-devops`、`@heluo/forge-gitee` 及共享 `heluo-policy`）由独立预装组合包 `@heluo/forge-engineering`（「企业研发工具套件」）提供，两包可通过 `dsh plugin add` 各自独立安装或并行共存于同一 Profile，`heluo-policy` 自动折叠为唯一实例，无需再通过命令行 `--patch` 手动叠加 `cordis.patch.engineering.yml`（详见[企业研发工具套件详细设计](forge-engineering.md)）。
+**双独立预装包安装语义**：`@heluo/forge-enterprise`（「企业账号与模型」）通过 `dsh plugin add <tarball>` 安装并由宿主装配通用企业登录与模型管理；实际使用仍受配置、存储和宿主能力门禁约束。本包不包含任何研发插件或设置菜单；研发能力（`heluo-engineering-ui` 容器、`enterprise-issue-delivery` Skill、`@heluo/forge-devops`、`@heluo/forge-gitee` 及共享 `heluo-policy`）由独立预装组合包 `@heluo/forge-engineering`（「企业研发工具套件」）提供，两包可通过 `dsh plugin add` 各自独立安装或并行共存于同一 Profile，`heluo-policy` 自动折叠为唯一实例，无需再通过命令行 `--patch` 手动叠加 `cordis.patch.engineering.yml`（详见[企业研发工具套件详细设计](forge-engineering.md)）。
 
 SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役（依赖、bundledDependencies 与 bin 移除，包删除）；历史市场包 `@heluo/forge-market` 按 AC5 不挂；网关与品牌包不预建入口。
 
@@ -178,7 +166,7 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 | 确定性 | 同上跑两次 `cmp` | 两次输出逐字节相同 |
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
-**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证：本机没有企业 IAM 端点，`forge-policy` 需要动作目录、keychain 在无 OS 后端时按设计 fail closed。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**现行口径（分层后）**：底座 `insert:` 三行（凭据、策略、IAM），叠加层四行（容器、Skill、DevOps、Gitee）；dump 级断言以 `packages/forge-enterprise/test/bundle-patch.test.mjs` 与安装演练的 `install-patch-mounts-base-and-overlay` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
+**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证，本机也没有企业 IAM 端点。当前凭据包使用值级加密 SQLite 与文件 keyring，存储不可用时拒绝访问，不依赖 OS Keychain 后端。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**现行口径（分层后）**：底座 `insert:` 三行（凭据、策略、IAM），独立研发补丁插入五行（共享策略、容器、Skill、DevOps、Gitee）；dump 级断言以 `packages/forge-enterprise/test/bundle-patch.test.mjs` 与安装演练的 `install-patch-mounts-base-and-overlay` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
 
 #### 5.1.3 企业模型配置入口收敛（2026-11-04）
 
@@ -343,7 +331,7 @@ flowchart TD
   I --> J[挂载完成]
 ```
 
-**独占断言**：官方行被跳过或禁用失败时，`@heluo/forge-iam` 启动检查 `ctx.get('deepseekAccount')`，不进入 `ready`、不写企业令牌，并记录 `exclusive-violation`。组合层与 IAM 包各自兜底，避免“补丁没生效但看起来登录了”。
+**独占断言**：`@heluo/forge-iam` 启动及关键操作时检查 `ctx.get('deepseekAccount')`，发现该服务残留则拒绝受保护操作。它不证明其他官方行已禁用；组合层须核对实际生效配置，并在目标环境验证旁路是否关闭。
 
 **并发**：挂载只发生一次，无共享状态；重复挂载请求按幂等处理。
 

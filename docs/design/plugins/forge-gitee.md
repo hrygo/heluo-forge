@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-010 |
 | 文档名称 | Gitee 接入详细设计 |
-| 版本 | V0.5.0 |
+| 版本 | V0.6.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-06 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | G1 |
 | 模块状态 | 可用（离线用例全绿；设置页与配置端点为 r15 新增，企业 CLI 未联调，见 §12） |
 
@@ -26,14 +26,14 @@
 
 用已有的 `gh` 兼容 CLI 查询 Gitee 的仓库、Issue 与合并请求，并在策略门禁之后提供默认禁用的受控写与交付判定；不自建 MCP，也不交叉编译。落地形态是**独立单安装单元** `@heluo/forge-gitee`：自带 `cordis.patch.yml` + 构建期闭包，装一个包即可挂载。
 
-与 GitHub 面（`@heluo/forge-devops`）**按 provider 分流**，不是"同一个适配器换个字段名"：动作命名空间 `gitee.*`、字段表 `GITEE_*`（snake_case）、GitHub 语义字段进黑名单；两边不共享源码，只共享不变量与契约测试（§13）。
+与 DevOps 面（`@heluo/forge-devops`）**按平台分流**，不是"同一个适配器换个字段名"：动作命名空间 `gitee.*`、字段表 `GITEE_*`（snake_case）、GitHub 语义字段进黑名单；两边不共享源码，只共享不变量与契约测试（§13）。
 
 四条决定性判断：
 
 1. **平台靠常量声明，不靠调用点推断**。`GITEE_PLATFORM='gitee'` 落在每个信封与返回体上；`gitee-guard` 在入口断言动作前缀，非 `gitee.*` 动作直接拒绝且**零子进程**。本包只服务 Gitee 一个平台，「结果来自别的 provider」不是可发生的事实，因此没有对应原因码，字段表也只有白名单一份。
-2. **共存 = 同一策略行单实例，不是服务域隔离**。r4 曾用 `isolate: { policy: gitee }` 把两个 bundle 隔到不同服务域，代价是同装后有两份策略实例、两套读面事实。r10 改为：两份补丁层写**同一个** `id: heluo-policy` 与**逐字相同**的 6 条并集目录、两处都**不写** `isolate`——loader 按 id 覆盖 `config`（r4 QA 的 D-2 实测），两处内容相同，幸存者就不取决于装配顺序；同装后只有一个策略实例、14 个工具全枚举。单边编辑目录会让幸存配置取决于装配顺序，因此逐字一致由 `tests/plugin-patch-layers.test.mjs` 静态守死，装配后果由 `test/coexistence.test.mjs` 用真实策略服务复现（一实例 / 14 工具 / 卸载归零）。
+2. **共存 = 同一策略行单实例，不是服务域隔离**。两份补丁层写**同一个** `id: heluo-policy` 与**逐字相同**的 6 条并集目录、两处都**不写** `isolate`——loader 按 id 覆盖 `config`，两处内容相同，幸存者就不取决于装配顺序；同装时工具面为 Gitee 11 个、DevOps 4 个，共 15 个。目录逐字一致由 `tests/plugin-patch-layers.test.mjs` 静态检查，`test/coexistence.test.mjs` 用真实策略服务及四个 DevOps 等价测试工具复现单实例、15 工具和卸载归零；这不是企业宿主联调证据。
 3. **受控重复 + 静态门禁替代抽公共包**。唯一子进程出口、幂等键公式、审查渲染各自实现，用禁项扫描、枚举一致性、出口唯一性测试防漂移（§13）。
-4. **配置只 5 个扁平键**。本轮无前端、无 HTTP 面、无配置页；CLI 名已由企业确认，r3 的"发现编排"收益在本包不成立。r10 再放宽两处：`host` 与 `authEnv` 都不再是必填前提——未配 `authEnv` 时 `preflight()` 返回 `ok: true, tokenSource: 'none'`（公开仓库可匿名读，企业实例的鉴权失败由服务端裁决，不在客户端假装"没令牌也能读"）。
+4. **配置为 5 个扁平键**。设置页与配置端点见 §5.4；`host` 与 `authEnv` 可省略，未配 `authEnv` 时 `preflight()` 的 `tokenSource: 'none'` 只表明未从命名变量观察到令牌，不代表 CLI 无凭据或服务端允许访问。
 
 边界：查询为已实现基线；四个受控写与 `git push` 共**五个**受控写默认不登记、不执行（`denied`），开闸属单独范围批准。`git commit` 是**本地动作**、不进策略目录：任何 enabled 的非读动作恒需审批（`packages/forge-policy/src/approvals.mjs:102`），而提交必须发生，两者冲突；首行 `[变更号]` 由 `git-message.mjs` 强校验（不合规即 `COMMIT_MESSAGE_INVALID`）。`gitee.delivery.judge` 是**只读判定**：随包登记、开箱可用，但只判定不执行（`executed: false`、`remote_calls: 0`），不构成写能力开闸。不代理用户权限，授权由 Gitee 服务端校验；包内没有合并、关闭、发版、触发流水线的入口。
 
@@ -44,7 +44,7 @@
 - 只读查询仓库、Issue、PR，命令面固定到 argv 动词，参数与 `--json` 子集白名单。
 - 复用 `gh` 的命令与参数习惯，降低学习与维护成本。
 - 本地 git 只做两件事：按 `[变更号]` 规则提交、推送既有提交（另有 `head`/`branch` 两条只读）；不提供任意命令入口。
-- 凭据优先由 `gh` 从系统凭据库（服务名 `gitee-cli-go`）读取；`authEnv` 只是无桌面凭据库或 CI 的兜底注入通道。本包不写 CLI 配置文件，输出按令牌值脱敏。
+- 宿主可选 IAM broker 有有效托管令牌时按次注入 `GITEE_TOKEN`；否则保留白名单环境和 CLI 原有凭据机制。本包不写 CLI 配置文件，输出按令牌值脱敏；企业双端的凭据继承仍须核验。
 - 与 DevOps 接入共用同一套策略门禁与审计字段，但**语义分表**，不互相回退。
 - 结果为可判定状态：`succeeded`/`failed`/`partial`/`unknown`（读）与 `done`/`failed`/`denied`/`unknown`（写）。
 - 装得上、退得掉：单安装单元 + 精确回滚步骤写在装之前。
@@ -53,7 +53,7 @@
 
 - 不自动合并、不关闭 Issue/PR、不发版、不触发流水线；git 动词白名单只有 `commit`/`head`/`branch`/`push`，没有 `checkout`/`merge`/`rebase`/`tag`。
 - 不实现 Gitee API 客户端，不提供泛化 `run`/`exec`/`shell`/`api` 入口。
-- 不提供跨仓库批量抓取与镜像；不做前端或配置页。
+- 不提供跨仓库批量抓取与镜像；设置页仅管理本机配置和扩展凭据，不替代平台授权。
 - 不把 §13 的受控写草案当作已启用能力。
 
 ## 3. 需求与依赖
@@ -76,7 +76,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 形态 | 工具面接入：11 个具名工具 + 固定命令面 + 策略门禁（无独立服务端、无常驻进程、无前端） |
+| 形态 | 工具面接入：11 个具名工具 + 固定命令面 + 策略门禁；含本机设置页与配置端点，无独立 MCP 服务端或常驻服务 |
 | 运行位置 | 本机 Host；唯一子进程出口 `src/gitee-cli.mjs`（gitee CLI 与 git **共用**：`run()` / `runGit()`，`shell: false`、固定 argv、超时、1 MiB 截断、凭据脱敏都在这一处） |
 | 分层 | 出口（`gitee-cli`）→ 适配器（`gitee-adapter`/`gitee-git`）→ 语义（`gitee-read`/`gitee-actions`/`gitee-review`/`gitee-delivery`/`git-message`）→ 门禁（`gitee-guard`）→ 注册（`gitee-tools`）→ 装配（`index`），另有 `runtime-config`/`gitee-session` |
 | 使用的 seam 或服务 | `tools`（注册）、`policy`（目录 + 审计 + `executeAction`）；不写 `tools` 映射到策略（重复准入与重复审计） |
@@ -92,8 +92,8 @@
 | `cliPath` | string | `gh` | 否 | 可执行文件名/路径；拒绝 `scheme://`、控制字符与 `.cmd`/`.bat`/`.ps1`/`.com`/`.vbs` 包装脚本 |
 | `host` | string | 空（无默认） | 否 | 企业 Gitee 主机名（可带端口）；拒绝协议前缀、路径与 userinfo。r10 起**不再必填**；2026-11-04 起**仅用于诊断与企业域校验**——本 CLI 没有 `--host` 参数，主机实际取自它自己的 `~/.gitee-cli/config.json` 的 `base_url`，本包不拼进 argv 也不注入环境 |
 | `timeoutMs` | number | `20000` | 否 | 1000–600000 的整数；超时按"可能已执行"降级 `unknown` |
-| `authEnv` | string[] | `[]` | 否 | 最多 8 个变量名；按序取第一个有值项。为空只表示本插件不注入变量：`GITEE_TOKEN` 仍在子进程环境白名单内，`gh` 还会查系统凭据库；`tokenSource: 'none'` 是客户端观测值，不等于未认证（**不阻断**） |
-| `persistentToken` | `'warn' \| 'block'` | `'warn'` | 否 | CLI 配置目录含持久令牌时的策略：`warn` 只提示并从执行环境剥离，`block` 才拒绝执行（合规场景保留） |
+| `authEnv` | string[] | `[]` | 否 | 最多 8 个变量名；诊断按序记录首个有值名称，子进程可继承名单中有值的变量。为空不妨碍白名单内的 `GITEE_TOKEN` 和 CLI 自身凭据库；`tokenSource: 'none'` 不等于未认证（**不阻断**） |
+| `persistentToken` | `'warn' \| 'block'` | `'warn'` | 否 | CLI 配置目录含持久令牌时的策略：`warn` 告警但不阻断，`block` 拒绝执行；本包不修改该文件 |
 
 `validateGiteeConfig()` 是补丁层、宿主 `ConfigStandard` 与 `resolveGiteeConfig()` 的唯一口径：未知键拒绝、非法值按未配置处理并进 `missing`（不静默放行）。`missing` 只收"提供了但非法"的键——r10 之后**空配置是合法状态**：`preflight()` 返回 `{ok: true, provider: 'gitee', tokenSource: 'none', mayHaveSideEffect: false}`，读若因未鉴权被服务端拒绝，如实降级为 `AUTH_MISSING`/`failed`，而不是在客户端假装"没令牌也能读"。`describeGiteeConfig()` 只输出枚举、数字与变量名，路径只留文件名。
 
@@ -120,7 +120,7 @@
 
 **编号与状态语义**：PR 用 `iid`（`id` 是全局号，`iid` 才对得上 URL 里的编号），Issue 用 `id`（实测载荷**没有** `number`）；分支是 `source_branch`/`target_branch`，可合并性是 `merge_status`，评论数是 `user_notes_count`。状态值实测是 `opened`，归一到既有词表 `open`/`closed`；未实测的状态值（如 `merged`）原样保留，不新增词、不猜同义词。
 
-**事实版本**：Issue/PR 取 `updated_at`；仓库实测**没有** `updated_at`，取 `last_activity_at`（CLI 给出的唯一时间事实，见 §12）。取不到才降级 `MISSING_SOURCE_REVISION`。`issue view`/`pr view`/`repo list` 的输出形状**未实测**：投影里取不到的键一律进 `missing_fields`，不按别的平台的习惯补齐，也不回落成 `number` 之类的猜法。
+**事实版本**：Issue/PR 取 `updated_at`；仓库实测**没有** `updated_at`，取 `last_activity_at`（CLI 给出的唯一时间事实，见 §12）。取不到才降级 `MISSING_SOURCE_REVISION`。[gh 1.0.6 Windows 规格](../../contracts/gh-cli-spec.md)记录了 `issue view`、`pr view` 与 `repo list` 的输出样本；企业目标版本仍须核验。投影里取不到的键一律进 `missing_fields`，不按别的平台的习惯补齐，也不回落成 `number` 之类的猜法。
 
 #### 5.2.1 本地 git 命令面（r10 新增）
 
@@ -167,15 +167,17 @@
 
 | 项 | 处理方式 | 生命周期 | 失败时 |
 |---|---|---|---|
-| 访问令牌 | 优先由 `gh` 从系统凭据库读取；`authEnv` 名单按序取首个有值项，只作兜底注入；本包不写 CLI 配置文件 | 随调用 | 名单为空只表示不注入；`gh` 仍查系统凭据库。服务端拒绝时如实降级 `AUTH_MISSING`（有子进程，可能已产生副作用） |
-| 命令与参数 | 审计记录动作、目标与结论；令牌与绝对路径不留 | 90 天（策略侧口径） | 不影响执行（审计舱缺失时策略按 `POLICY_*` 拒绝，见补丁层注释） |
+| 访问令牌 | IAM broker 有效托管令牌优先注入 `GITEE_TOKEN`；无托管值或 broker 时可继承白名单环境与 `authEnv`，`gh` 也可读取自身系统凭据库。本包不写 CLI 配置文件 | 托管记录由凭据后端管理；子进程环境随调用 | 托管令牌归属不匹配、未登录或不可读时拒绝；无托管令牌时由 CLI 与服务端判定认证 |
+| 必要审计 | 策略记录允许字段内的动作、目标与结论，不记录令牌、业务正文、参数值或 stdout/stderr | 发行补丁配置内存 sink，进程结束后丢失；正式留存须接入持久 sink | 前置审计失败或超时则依赖该审计的策略动作不执行；事后补记失败保留执行结果并记录缺口，后续动作受限 |
 | 查询结果 | 会话内使用；输出按令牌值脱敏后再返回 | 单次 | 失败即降级为信封，丢弃部分结果 |
-| CLI 配置目录 | 装配期探测持久令牌；默认**告警**并从执行环境剥离，`persistentToken: 'block'` 才阻断（`GITEE_PERSISTENT_TOKEN`，`denied`） | 每次装配 | 告警后照常执行；`block` 模式拒绝并提示删除明文令牌后改用 `gh auth login` |
+| CLI 配置目录 | 装配期探测持久令牌；默认**告警**，`persistentToken: 'block'` 才阻断（`GITEE_PERSISTENT_TOKEN`，`denied`） | 每次装配 | 告警后可执行；`block` 模式拒绝并提示用户处理明文令牌 |
 | 幂等台账 | 进程内 `Map`（TTL 6 小时），**不落盘** | 进程生命周期 | 跨进程不复用，避免误判"已建单" |
 
-`gh` 习惯把令牌写进自己的配置目录。r10 起默认不再因此拒绝执行（企业里该文件常常只读且没有可用环境变量，阻断会把"本来能用的环境"变成不可用）：默认 `warn` 只提示并从执行环境剥离令牌，合规场景把 `persistentToken` 设为 `block` 恢复硬拒绝。
+`gh` 配置目录可能存在明文令牌。默认 `warn` 仅提示，不删除或隔离文件，也不能保证 CLI 不会自行读取；要求硬拒绝时将 `persistentToken` 设为 `block`。Windows `gh` 1.0.6 的已记录顺序是环境变量 `GITEE_TOKEN` 优先于系统凭据库，其他目标环境仍须核验。
 
-策略目录：补丁层预置 **5 条 `kind: read`（本包 3 读 + 1 只读判定 + 1 条 devops 的 `change.read`，与 devops 补丁层逐字相同）、0 条 write**，对应工具面 **11 个 = 3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git**。版本快照 `forge_gitee_delivery_snapshot` 是本地只读动作、不进策略目录（它只读工作区版本，不碰远端也不写文件），因此不改变上面的读目录条数。本包四条是读动作 `gitee.repository.read`/`gitee.issue.read`/`gitee.pr.read`（`target` 分别为 `repository`/`issue`/`pull-request`）与 `gitee.delivery.judge`：后者只判定不执行，`target` 逐字 `change`，`egress: 'allow'` 为必需项——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 时编译成默认 `confirm`，无审批台账即永远拿不到 `done`；`kind: read` 让它不进审批台账，判定返回体 `executed` 恒 `false`、`remote_calls` 恒 `0`。第 5 条 `change.read` 写进本包目录不是越界，而是为了让两份补丁层**逐字相同**：目录是并集，装谁都不缺自己那条。
+IAM 与插件可能并发装载，broker 尚未就绪的窗口按 standalone 环境处理；补丁行顺序本身不证明就绪。不能仅凭已安装 IAM 宣称全程不会使用环境凭据，依赖该保证的部署须另行验证就绪与配置。
+
+策略目录：补丁层预置 **6 条 `kind: read`（本包 3 读 + 1 只读判定 + DevOps 的 `change.read` / `change.list`，与 devops 补丁层逐字相同）、0 条 write**，对应工具面 **11 个 = 3 读 + 1 只读判定 + 1 版本快照 + 4 受控写 + 2 git**。版本快照 `forge_gitee_delivery_snapshot` 是本地只读动作、不进策略目录（它只读工作区版本，不碰远端也不写文件）。本包四条是读动作 `gitee.repository.read`/`gitee.issue.read`/`gitee.pr.read`（`target` 分别为 `repository`/`issue`/`pull-request`）与 `gitee.delivery.judge`：后者只判定不执行，`target` 逐字 `change`，`egress: 'allow'` 为必需项——门禁统一以 `platform-write` 发起裁决，条目缺席 `egress` 时编译成默认 `confirm`，无审批台账即永远拿不到 `done`；`kind: read` 让它不进审批台账，判定返回体 `executed` 恒 `false`、`remote_calls` 恒 `0`。两条 DevOps 读动作属于共享并集，不赋予写权限。
 
 **五个**受控写（`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record`、`gitee.git.push`）靠"不登记"实现默认禁用：未登记即 `denied`（`unregistered-action`）且适配器 0 次调用。开写须由所属 profile 显式追加动作，写/确认类还需审批台账条目；默认分发层不替任何人预置授权。`gitee.git.push` 是唯一新增动作，进 `CONFIRM_REQUIRED_ACTIONS`——远端写一律要 `confirm{repo,object}` 逐字匹配。
 
@@ -238,10 +240,8 @@ flowchart LR
 
 | 事件 | 字段 | 去向 | 保留 |
 |---|---|---|---|
-| 查询执行 | 动作、目标、退出码、耗时、`reason` | 策略审计 | 90 天（策略侧口径） |
-| 写动作 | 动作、目标、`rule`、确认与幂等结论、回读结果 | 策略审计（`subject='gitee'`） | 90 天 |
-| 拒绝 | 原因码、动作 | 策略审计 | 90 天 |
-| 配置告警 | 检测到持久令牌的位置（不含值）、`describeGiteeConfig()` 摘要 | 返回值/本机日志 | 30 天 |
+| 查询、写动作与拒绝 | 动作、目标、结论等允许字段 | 策略必要审计 | 发行补丁配置内存落点，进程结束后丢失；持久留存依 sink 及批准策略 |
+| 配置告警 | 检测到持久令牌的位置（不含值）、`describeGiteeConfig()` 摘要 | 返回值/本机日志 | 依实际日志配置，不承诺固定期限 |
 | 动作证据 | `buildEvidence()`：`provider`、`command`、`at`、`hostVersion`、`target`、`sourceType`（`gitee-cli`/`policy-only`/`none`） | 写动作返回体 | 随动作 |
 
 ## 10. 测试矩阵
@@ -249,7 +249,7 @@ flowchart LR
 | 层级 | 覆盖 | 命令 |
 |---|---|---|
 | 单元/契约 | 入口与清单、配置、出口（gitee CLI 与 git 共用）、适配器、只读信封、写动作、幂等、审查、交付、提交信息单源、git 动词表、共存形态、宿主 `register()` 判据 | `node --test "packages/forge-gitee/test/*.test.mjs"` |
-| 装配 | 解析分发补丁层 → 真实装配策略 + 插件：3 读 + 1 只读判定可用、5 个写动作 denied（含 `gitee.git.push`）、同装单实例 / 14 工具；空目录反向用例 | 同上（`patch-mount.test.mjs`、`coexistence.test.mjs`） |
+| 装配 | 解析分发补丁层 → 本地装配策略 + 插件：3 读 + 1 只读判定可用、5 个写动作 denied（含 `gitee.git.push`）；共存夹具为单实例 / 15 工具，其中 DevOps 为四个等价测试工具；空目录反向用例 | 同上（`patch-mount.test.mjs`、`coexistence.test.mjs`） |
 | 安装单元 | `buildBundle` 闭包、清单白名单、入口 sha256 与工作区逐字节一致、宿主 peer 不进包 | `node --test "tests/bundle-gitee.test.mjs"` |
 | 设置页（r15） | 三层读面与 `origin` 口径、409 栅栏（editor 0 次）、422 写盘 0 次、等值跳过、`null` 删键、写后回读不一致降级；端点常量/预检头/413/`applied` 透传/409·422·503 映射；保存后读面立即生效、`?refresh=1` 是唯一重建入口；浏览器半真执行（Loader 装载、分区 id/order、三列同屏、只读值不出现在文本里） | `node --test "packages/forge-gitee/test/*.test.mjs"`、`node scripts/check-client-module.mjs packages/forge-gitee/client.js`、`node --test tests/ui-contract.test.mjs` |
 | 端到端 | 企业实机双端各完成一次仓库与 Issue 查询、一次受控写 | **NOT RUN**（见 §12） |
@@ -263,14 +263,14 @@ flowchart LR
 
 补丁层两行、顺序即加载顺序：策略行（`id: heluo-policy`，**6 条并集目录** = 本包 3 读 + 1 只读判定 + devops 的 `change.read` / `change.list`，加内存审计舱 `allowNonDurable`）在前，插件行（`id: heluo-gitee`、`name: '@heluo/forge-gitee'`，`config: {}` 显式空配置，避免宿主把"缺席"当 `undefined` 交给校验器）在后。两行的 `name` 都用**包根名**：写成子路径宿主会静默跳过该包。**两行都不写 `isolate`**：两个 bundle 同处 root 域、共用唯一一个策略实例（派生的策略行 id 与 `isolate` 一律不出现，验收用 grep 兜底）。同一行 `id` 与逐字相同的目录是与 devops 补丁层的硬约定——`tests/plugin-patch-layers.test.mjs` 静态比较两处原文。
 
-目录**随包分发**：5 条条目写在包内 `cordis.patch.yml`，由 `buildBundle` 原样打进 tgz（`tests/bundle-gitee.test.mjs` 解包断言含 `gitee.delivery.judge` / `target: change` / `egress: 'allow'`），装包即登记，不靠 profile 手改。
+目录**随包分发**：6 条条目写在包内 `cordis.patch.yml`，由 `buildBundle` 原样打进 tgz（`tests/bundle-gitee.test.mjs` 解包断言含 `gitee.delivery.judge` / `target: change` / `egress: 'allow'`），装包即登记，不靠 profile 手改。
 
 共存形态：
 
 | 形态 | 结果 | 建议 |
 |---|---|---|
 | 只装一个 | 6 条并集目录 + 自己的插件行；本包工具 11 个，目录里除自己四条外还有两条 devops 的变更读（多几条读不会放行任何写） | **推荐** |
-| 同 profile 叠加两层（默认） | 两行同 `id`，loader 留下**唯一**一个策略实例；两处目录逐字相同，幸存者不取决于装配顺序；14 个工具全枚举、0 行激活失败 | **默认可行**（不改配置） |
+| 同 profile 叠加两层（默认） | 两行同 `id`，loader 留下**唯一**一个策略实例；两处目录逐字相同，幸存者不取决于装配顺序；本地共存夹具枚举 15 个工具、0 行激活失败 | **默认可行**（不改配置） |
 | 单边改过目录再叠加（反证） | 幸存配置取决于装配顺序：后装的那份若缺条目，本包插件按未登记 `GITEE_ACTION_UNREGISTERED` fail closed，先挂载方工具仍在 | 不采用（门禁会红） |
 | 想回到 r4 的隔离形态 | 需要 `isolate` + 另一个策略行 id，等于重新引入两份策略实例与两套读面事实 | 不采用（r10 已收敛） |
 
@@ -281,21 +281,21 @@ flowchart LR
 | 问题 | 需要谁回答 | 影响 |
 |---|---|---|
 | 麒麟 aarch64 是否有可用产物 | Gitee 团队 | 方案可行性前提 |
-| 是否支持环境变量注入、可否禁用自身配置存储 | Gitee 团队 | §6 凭据方式（当前按"阻断持久令牌"实现） |
-| `issue view`/`pr view`/`repo list` 的实际输出形状（`repo view`/`issue list`/`pr list` 已于 2026-11-03 实测） | Gitee 团队、平台组 | §5.2 投影清单与剥壳（F1 余项） |
-| 仓库目标只接受 `owner/repo` 两段，而实测仓库位于三级命名空间（`osc/ard/ard-sdk`）：`-R`/位置参数能否寻址 | Gitee 团队 | §5.2 目标形状（未实测，当前按形状拒绝） |
+| 目标平台如何继承环境凭据、可否禁用自身配置存储 | Gitee 团队 | §6 凭据方式；默认 `warn`，显式 `block` 时阻断持久令牌 |
+| `issue view`/`pr view`/`repo list` 等输出在企业目标版本和平台上的形状 | Gitee 团队、平台组 | §5.2 投影清单与剥壳；Windows 1.0.6 样本见 CLI 规格 |
+| 嵌套命名空间在目标企业版本及各子命令中的寻址 | Gitee 团队 | §5.2 目标形状；本地接受嵌套路径，目标版本仍需核验 |
 | 只读子命令清单与权限映射 | Gitee 团队 | §5.2 命令面 |
 | 五个受控写（含 `gitee.git.push`）的范围与 C3 分类 | 平台组、Gitee、PMO | 默认 `denied` 能否开闸 |
 | CLI 双端实测与风险关闭证据 | 平台组、Gitee、PMO | G1 前仍须确认命令、凭据和双端运行证据 |
 
 **NOT RUN（本轮未取得证据，不得据本文推断已验证）**
 
-1. 企业实机联调：三段只读载荷（`repo view`/`issue list`/`pr list`）已于 2026-11-03 实测并按实测反写；**仍未实机**的是 `issue view`/`pr view`/`repo list` 的 argv 与输出形状、写命令的 argv、鉴权与权限模型。
-2. Windows 实机与银河麒麟 aarch64 上的 CLI 产物与包装脚本的表现（离线用例注入平台与假环境，**不是实机证据**）。
+1. 企业实机联调：Windows `gh` 1.0.6 的只读命令与输出样本见 [CLI 规格](../../contracts/gh-cli-spec.md)，不代表目标版本、双端与写命令已完成联调；写命令 argv、鉴权与权限模型仍须核验。
+2. 目标版本在 Windows 与银河麒麟 aarch64 上的完整 CLI 产物、包装脚本与权限验收；已有 Windows 1.0.6 样本不代替双端验证，离线用例注入平台与假环境也**不是实机证据**。
 3. 真实 profile 的装入/重启/回滚（`dsh plugin add` 需要工作区外写权限，归主流程；本包只提供补丁层解析与装配证据）。
 4. 持久审计 sink、审批台账与写动作开闸（范围批准后才验）。
 5. 宿主 rc.3（本机 rc.2）。
-6. CLI 版本号与升级回归：三段载荷取自 2026-11-03 的一次实测，未记录 CLI 版本；升级后需按 §11 的口径回归输出形状。
+6. CLI 升级回归：已记录的 Windows 样本见 [gh 1.0.6 规格](../../contracts/gh-cli-spec.md)；目标版本升级后仍需按 §11 回归输出形状。
 
 **需用户确认的设计选项（增益不明确，暂不采用，保留待定）**
 
@@ -306,7 +306,7 @@ flowchart LR
 | 缓存仓库元数据 | 减少调用 | 权限变更后数据不新鲜 | 不采用 |
 | 跨仓库批量抓取 | 效率 | 触发频控与权限问题 | 不采用 |
 | 抽出 `@heluo/forge-actioncore` 消除与 devops 的受控重复 | 单一出口/渲染只有一份 | 本轮需改 devops（PRD 非目标禁止），且两份尚在同步演进；gitee 幂等键已按动作+目标扩展，与 devops 的公式不再要求逐字相同 | 下一轮若两边同步演进再评估（§13） |
-| 配置页 | 免手改补丁层 | 本轮无前端面，5 个键的价值不足以开页面 | 不采用（PRD T5） |
+| 配置页 | 免手改补丁层 | 需要维护保存栅栏与运行面同步 | 已提供 §5.4 所述本机设置页，真实 profile 验证仍待完成 |
 
 若 CLI 在麒麟不可用或不满足只读查询、凭据注入等已确认前提，关闭 Gitee 命令并提交替代形态评审；不自动回到 MCP 方案，也不恢复交叉编译工作项。
 

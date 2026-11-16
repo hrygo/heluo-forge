@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-001 |
 | 文档名称 | 文档总览 |
-| 版本 | V1.47.0 |
+| 版本 | V1.48.0 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-13 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | — |
 
 ## 1. 结论
@@ -63,7 +63,7 @@
 | 编号 | 交付物 | 文件 | 必须先回答 |
 |---|---|---|---|
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | `resource` 支持、claims、client 注册、TTL、撤销 |
-| CORP-DSH-GW-001 | AI 网关契约（V2.1.2，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 个人访问采用路线 B 双因子凭据协同（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；含阶段能力矩阵，上游规范仍在修改，能力待联调 |
+| CORP-DSH-GW-001 | AI 网关契约（V2.2.0，未冻结） | [gateway-contract.md](<contracts/gateway-contract.md>) | 个人访问采用路线 B 双因子凭据协同（长效凭据 + IAM 身份令牌）、客户端 baseUrl 解耦、17 个标准服务端点、SSE 心跳保活与标准错误码；含阶段能力矩阵，上游规范仍在修改，能力待联调 |
 | CORP-DSH-KYLIN-001 | 银河麒麟验证 | 待创建 | 内核、沙箱、原生模块、浏览器 |
 | CORP-DSH-DEVOPS-001 | DevOps CLI 接入 | 待创建 | 系统变更查询契约；澄清/进展受控写的范围、C3分类及版本/回查待批待验；CLI 不足时另评替代形态 |
 | CORP-DSH-GITEE-001 | Gitee CLI 接入 | 待创建 | CLI/双端产物、查询清单、JSON/凭据；常规研发/评审写范围、C3分类、可信来源及回查待批待验 |
@@ -103,8 +103,8 @@ IAM 隔离开发草案：[机密认证设计](<design/iam-confidential-isolated.
 | 跨模块冲突收口 | [跨模块冲突收口](<design/conflict-resolution.md>) | 五条跨模块冲突的定位与结论（责任方 2026-10-24 已确认）；确认不等于企业能力已联调 |
 | 凭据模式 | [凭据存储模式](<design/credential-modes.md>) | SQLite 值级加密、旧存储保留与不可用时的 fail-closed 口径 |
 | 客户端标识 | [DSH 客户端标识（UA）方案设计](<design/client-identification.md>) | 使用 DSH 默认 UA，网关按关键字匹配；不改写宿主 UA，匹配能力及企业链路待确认 |
-| 设置菜单与 Token 收敛 | [企业设置菜单统一与 Token 收敛详细设计](<design/enterprise-menu-and-token-unification.md>) | 一体双定位解耦、渐进披露去技术噪声、IAM 通用凭据槽位与收敛 Gitee 高级（不改 DSH；V2.0.0 已生效，源码待实施） |
-| 设置与手动模型统筹计划 | [企业设置统一、Token 收敛与手动模型统筹实施方案](<plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md>) | 合流 CORP-DSH-DESIGN-018（V2.0.0 已生效）与 issue #273（CORP-DSH-PLAN-022，待批 §13 边界）；Wave 0–5 消除 `forge-iam/client.js` 返工与双定位耦合（V0.2.0 草案） |
+| 设置菜单与 Token 收敛 | [企业设置菜单统一与 Token 收敛详细设计](<design/enterprise-menu-and-token-unification.md>) | 双独立组合包、研发工具面板内置凭据与通用 IAM 边界；设计已生效，本地实现与外部验证分别见设计索引 |
+| 设置与手动模型统筹计划 | [企业设置统一、Token 收敛与手动模型统筹实施方案](<plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md>) | CORP-DSH-PLAN-022 的历史波次与当前边界；手动模型计划为 PLAN-021，写入失败与回退事项见两份计划和 issue #305 |
 | 运维入口 | [运维索引](<operations/README.md>) | 分发、发布、回滚、支持的待建交付物 |
 
 辅助图解：[统一认证与模型访问](<assets/enterprise-authentication-flow.html>)、[工程结构提案](<assets/repository-structure-proposal.html>)、[网关静态 Key 方案（历史提议）](<assets/gateway-credential-options.html>)。三者可离线打开并保留页面源稿，不替代受控文档或当前实现清单；网关静态 Key 页描述的是 2026-10-20 原提议，先被 2026-10-22 ADR-14 取代；当前身份/用途目标见 ADR-16 与专用访问评审，历史图解不代表已选定路线，涉及旧 MCP 形态与工程整理时点的图文须结合现行需求和模块说明阅读。市场整体功能架构另见[插件市场功能架构图](<assets/plugin-market-architecture.html>)（V2.0.0 评审稿示意，不替代正文契约或实现清单）。开放 Issue 的排期分析另见[实施路径总览](<assets/issue-implementation-path.html>)（2026-10-23 辅助分析，人日为粗估，不构成排期承诺或门禁证据）。

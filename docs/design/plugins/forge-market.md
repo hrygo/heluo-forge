@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-007 |
 | 文档名称 | 企业插件市场（轻量原生索引模式） |
-| 版本 | V2.2.3 |
+| 版本 | V2.3.0 |
 | 文档状态 | 评审稿 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-10-25 |
+| 最后更新 | 2026-11-16 |
 | 门禁 | G1 索引接入；G2 三目标安装 |
 
 > 编制依据：2026-10-21 用户决定改用 DSH 原生「插件市场 → 索引源」，由 AI 开发者平台（AIHUB）维护并托管 format-1 索引 JSON；不再建设生成器、`current/policy/evidence`、CI 单写发布与租约。AIHUB 交付项以 [issue #12](https://github.com/hrygo/heluo-forge/issues/12) 跟踪。
@@ -86,7 +86,7 @@ flowchart LR
 ### 4.2 浏览与安装
 
 - 市场按索引展示插件、版本与说明；默认选择最新稳定版。
-- 安装使用索引中的精确 `name@version` 与 `source.registry`。
+- 安装使用索引中的精确 `name@version`；配置了 `source.registry` 时须指向企业 npm 入口。format-1 允许省略该字段，省略时如何确保企业来源须另行确认。
 - 安装结果、启用与 Client 可用性由官方 manager 与 DSH 本体决定；本项目不另造状态机。
 
 ### 4.3 更新
@@ -120,7 +120,7 @@ flowchart LR
 ```
 
 - `title` 必须含 `en`；版本必须精确、稳定、去重、降序。
-- `source` 只允许 npm；registry 指向企业 Artifactory。
+- `source` 只允许 npm；使用的 registry 指向企业 Artifactory。format-1 允许省略 `source.registry`，企业交付是否要求显式填写仍待确认，见 [DESIGN-012](<../services/market-index.md#5-版本字段>)。
 - 索引不得包含 token；图标不得用公网 CDN。
 
 ## 6. 安装行为与限制
@@ -128,7 +128,7 @@ flowchart LR
 | 能力 | 行为 |
 |---|---|
 | 精确版本 | 只安装索引中列出的 `name@version`，不接受 tag/range |
-| 来源 | 只用 `source.registry`；不回落公网或其它源 |
+| 来源 | 目标为仅使用企业 registry、不回落公网或其它源；`source.registry` 缺省时的原生行为与企业来源约束待实测确认 |
 | 依赖 | 首版建议只放自包含包；原生不会替企业做依赖/peer 检查 |
 | 三目标 | 由 AIHUB/平台在发布前自行验证；原生索引没有 OS/CPU 字段 |
 | 更版 | 优先原生能力；没有通用 upgrade 时先卸载再安装 |
