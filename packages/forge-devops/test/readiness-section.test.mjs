@@ -127,11 +127,11 @@ test('两条固定行：身份与 Key、本机工具；摘要行与一句页脚�
   );
   assert.equal(page.text().split('不代表业务授权').length - 1, 1, '免责声明每页只能出现一次');
 
-  // 公共参数 / 写权限不占行，只出现在各自组的详情里。
+  // 公共参数不占行，只出现在身份组的详情开头；写权限只在页脚声明一次。
   const identityDetail = page.rowDetail('identity');
   assert.ok(identityDetail.startsWith('详情公共参数：企业分发，本机不可改'), identityDetail);
   const toolsDetail = page.rowDetail('tools');
-  assert.ok(toolsDetail.endsWith('写权限：由企业侧判定，本页不判断'), toolsDetail);
+  assert.equal(toolsDetail.includes('写权限'), false, `写权限不再挂在工具组详情尾部：${toolsDetail}`);
   assert.equal(page.findAll('详情').length, 2, '每条固定行各有一个详情入口');
 });
 
@@ -367,12 +367,16 @@ test('迟到的检查回包被丢弃：界面等于最后一次检查', async (t
   assert.ok(!page.text().includes('检查：失败'), '旧检查回包不得复活');
 });
 
-test('Gitee 禁用按钮在工具行，原因在详情，且不发起第二次 Gitee 请求', async (t) => {
+test('Gitee 禁用按钮在工具行，原因只在按钮 title，详情不重复一遍', async (t) => {
   const page = await mount(t, { responses: three() });
   const button = page.button('检查 Gitee');
   assert.equal(button.props.disabled, true, 'Gitee 检查按钮必须禁用');
   assert.equal(button.props.title, '未执行 · 本页不主动发起请求');
-  assert.ok(page.text().includes('未执行 · 本页不主动发起请求'));
+  assert.equal(
+    page.text().includes('未执行 · 本页不主动发起请求'),
+    false,
+    '原因只在 hover 的 title 上；行上已经写了「本页不主动探测 Gitee 连通性」',
+  );
   assert.equal(page.calls.length, 3);
   assert.equal(page.calls.filter((call) => call.url.includes('/api/forge-gitee/config')).length, 1);
 });
@@ -386,16 +390,17 @@ test('检查与刷新都不写配置：全程只有 GET，没有 POST', async (t
   }
 });
 
-test('三层来源：收进工具组详情，devops 三段齐全，缺 layers 显示未知与原因，Gitee 由 entries 投影', async (t) => {
+test('三层来源：只收 devops 一套进工具组详情，缺 layers 显示未知与原因；Gitee 一行不再摊分层', async (t) => {
   const page = await mount(t, { responses: three() });
   const text = page.text();
   assert.ok(text.includes('生效来源dopBin: 配置、dopEndpoint: 默认、sourceType: 默认、timeoutMs: 默认'));
   assert.ok(text.includes('公共参数dopBin、timeoutMs'));
   assert.ok(text.includes('本机覆盖dopBin'));
   assert.ok(text.includes('最终生效dopBin、timeoutMs · rev-abcd'));
-  assert.ok(text.includes('公共参数owner'), 'Gitee inherited 投影');
-  assert.ok(text.includes('本机覆盖repo'), 'Gitee override 投影');
+  assert.equal(text.includes('本机覆盖repo'), false, 'Gitee 不再在研发页投影 override 层');
   assert.ok(text.includes('@heluo/forge-devops · 0.1.0'));
+  assert.equal(page.findAll('三层来源').length, 1, '研发页只剩 devops 一个三层来源折叠');
+  assert.equal(text.includes('@heluo/forge-gitee'), false, 'Gitee 的插件名与分层留在它自己的分区');
   assert.ok(page.rowDetail('tools').includes('生效来源'), '来源只在详情里，不在主列表');
 
   const bare = await mount(t, {
@@ -404,10 +409,10 @@ test('三层来源：收进工具组详情，devops 三段齐全，缺 layers �
   assert.ok(bare.text().includes('无法读取条目，三层来源未知'));
 });
 
-test('详情承接原先的固定声明与死键：detail.public / detail.write / loading / failed，draftWarning 已删除', async (t) => {
+test('详情承接原先的固定声明与死键：detail.public / loading / failed；detail.write 已删除', async (t) => {
   const ready = await mount(t, { responses: three() });
   assert.ok(ready.text().includes('公共参数：企业分发，本机不可改'));
-  assert.ok(ready.text().includes('写权限：由企业侧判定，本页不判断'));
+  assert.equal(ready.text().includes('写权限：由企业侧判定，本页不判断'), false, '写权限只在页脚声明一次');
 
   const loading = await mount(t, { responses: [deferred().promise, deferred().promise, deferred().promise] });
   assert.ok(loading.text().includes('正在读取…'));
@@ -424,6 +429,7 @@ test('详情承接原先的固定声明与死键：detail.public / detail.write 
   assert.ok(failed.text().includes('无法读取（不可达）'), failed.text());
 
   const source = readFileSync(CLIENT_FILE, 'utf8');
+  assert.equal(source.includes('readiness.detail.write'), false, 'detail.write 已随尾部声明一起删除');
   assert.ok(!source.includes('draftWarning'), 'draftWarning 必须已删除');
 });
 
