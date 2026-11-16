@@ -72,21 +72,31 @@ function isPortablePath(path) {
     && !/^(?:con|prn|aux|nul|conin\$|conout\$|clock\$|com[0-9¹²³]|lpt[0-9¹²³])(?:[ .]|$)/iu.test(part));
 }
 
-// Windows and default macOS volumes are case-insensitive, and HFS+ also folds
-// Unicode normalization, so two distinct Git paths can name one file there.
-const foldPath = (path) => path.normalize('NFC').toLowerCase();
+// Windows compares names through a case table and default macOS volumes fold
+// Unicode normalization too, so two distinct Git paths can name one file
+// there. Folding to both letter cases keeps pairs such as U+03C3/U+03C2
+// (sigma) that only one direction maps together; over-matching can only force
+// a full run, never a wrong skip.
+const foldKeys = (path) => {
+  const normalized = path.normalize('NFC');
+  return [...new Set([normalized.toLowerCase(), normalized.toUpperCase()])];
+};
 
 function createTreeIndex(paths) {
   const byFoldedName = new Map();
   const directories = new Set();
+  const indexName = (keys, path) => {
+    for (const key of keys) {
+      const names = byFoldedName.get(key);
+      if (names) names.push(path);
+      else byFoldedName.set(key, [path]);
+    }
+  };
   for (const path of paths) {
-    const folded = foldPath(path);
-    const names = byFoldedName.get(folded);
-    if (names) names.push(path);
-    else byFoldedName.set(folded, [path]);
+    indexName(foldKeys(path), path);
     let separator = path.indexOf('/');
     while (separator !== -1) {
-      directories.add(foldPath(path.slice(0, separator)));
+      for (const key of foldKeys(path.slice(0, separator))) directories.add(key);
       separator = path.indexOf('/', separator + 1);
     }
   }
@@ -97,15 +107,18 @@ function createTreeIndex(paths) {
 // whose parent would have to replace an existing file makes the checked-out
 // tree differ from the committed tree on a case-insensitive volume.
 function collidesWithTree(index, path) {
-  const folded = foldPath(path);
-  const names = index.byFoldedName.get(folded);
-  if (names && names.some((name) => name !== path)) return true;
-  if (index.directories.has(folded)) return true;
+  for (const key of foldKeys(path)) {
+    const names = index.byFoldedName.get(key);
+    if (names && names.some((name) => name !== path)) return true;
+    if (index.directories.has(key)) return true;
+  }
   let separator = path.indexOf('/');
   while (separator !== -1) {
     // Git cannot hold a file and a directory at one literal path, so a file at
     // one of these prefixes can only be a folding collision.
-    if (index.byFoldedName.has(foldPath(path.slice(0, separator)))) return true;
+    for (const key of foldKeys(path.slice(0, separator))) {
+      if (index.byFoldedName.has(key)) return true;
+    }
     separator = path.indexOf('/', separator + 1);
   }
   return false;

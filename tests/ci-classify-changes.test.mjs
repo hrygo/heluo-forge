@@ -129,7 +129,13 @@ test('new documentation paths that collide or are not portable run platforms', a
 });
 
 test('a new path that folds onto an existing name runs platforms', async (t) => {
-  for (const [existing, added] of [['docs/name.md', 'docs/NAME.md'], ['docs/é.md', 'docs/e\u0301.md']]) {
+  for (const [existing, added] of [
+    ['docs/name.md', 'docs/NAME.md'],
+    ['docs/é.md', 'docs/e\u0301.md'],
+    // Windows compares through an uppercase table, so both sigma forms collide
+    // even though toLowerCase() keeps them apart.
+    ['docs/σ.md', 'docs/ς.md'],
+  ]) {
     await t.test(JSON.stringify(added), (child) => {
       const repo = fixture(child);
       stageIndexFile(repo, existing, repo.git('rev-parse', `${repo.base}:docs/guide.md`));
