@@ -443,7 +443,6 @@ window.__ModuleLoader__.load({
       'readiness.tools.gitee.ready': 'Gitee 已配置',
       'readiness.detail.title': '详情',
       'readiness.detail.public': '公共参数：企业分发，本机不可改',
-      'readiness.detail.write': '写权限：由企业侧判定，本页不判断',
       'readiness.footer': '本页只显示本机可见性，不代表业务授权。公共参数由企业分发；写权限由企业侧判定，本页不判断。',
       'readiness.state.signedIn': '已登录',
       'readiness.state.signedOut': '未登录',
@@ -664,7 +663,6 @@ window.__ModuleLoader__.load({
       'readiness.tools.gitee.ready': 'Gitee configured',
       'readiness.detail.title': 'Details',
       'readiness.detail.public': 'Shared settings: distributed by the enterprise; cannot be changed here',
-      'readiness.detail.write': 'Write access: decided by the enterprise; this page does not judge it',
       'readiness.footer': 'This page shows local visibility only; it does not represent business authorization. Shared settings are distributed by the enterprise; write access is decided by the enterprise and not judged here.',
       'readiness.state.signedIn': 'signed in',
       'readiness.state.signedOut': 'not signed in',
@@ -1532,10 +1530,9 @@ window.__ModuleLoader__.load({
             state: giteeState,
             detail: gitee.ok ? null : t(`readiness.state.${sourceState(gitee)}`),
             phrase: giteePhrase(giteeState),
+            // Gitee 一行只答"本页不探测连通性"：分层与来源在 `forge-gitee` 自己的分区里看，
+            // 这里再摊一份只会在未配置时印出一排「未知」。
             next: { kind: 'text', key: 'readiness.next.giteeBlocked' },
-            layers: giteeLayersOf(gitee.body),
-            plugin: isObject(gitee.body?.plugin) ? gitee.body.plugin : null,
-            origins: originsOf(gitee.body),
           },
         };
       }
@@ -1769,7 +1766,6 @@ window.__ModuleLoader__.load({
           nextText && member.id !== 'identity' ? h('span', { className: 'fdv-next' }, nextText) : null,
           member.layers ? layersNode(member) : null,
           member.id === 'devops' ? checkPanel() : null,
-          member.id === 'gitee' ? h('span', { className: 'fdv-next' }, t('readiness.gitee.notExecuted')) : null,
         );
       }
 
@@ -1785,7 +1781,6 @@ window.__ModuleLoader__.load({
             'identity-next',
           ));
         }
-        if (groupId === 'tools') body.push(detailLine(t('readiness.detail.write'), 'write'));
         return h(
           'details',
           { className: 'fdv-details', key: 'details' },
