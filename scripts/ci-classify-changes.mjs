@@ -19,13 +19,12 @@ function runGit(args, cwd) {
   });
 }
 
-// --raw -z emits alternating NUL-terminated metadata and path records.
-// Refuse partial or malformed data instead of treating it as a smaller diff.
-export function parseRawDiff(output) {
+// NUL-separated Git output is either refused as malformed or fully parsed;
+// a partial record must never be read as a smaller change set.
+function nulFields(output) {
   if (!Buffer.isBuffer(output)) throw new Error('invalid Git output');
   if (output.length === 0) return [];
   if (output[output.length - 1] !== 0) throw new Error('truncated Git output');
-
   const fields = [];
   let start = 0;
   for (let index = 0; index < output.length; index += 1) {
@@ -34,6 +33,12 @@ export function parseRawDiff(output) {
       start = index + 1;
     }
   }
+  return fields;
+}
+
+// --raw -z emits alternating NUL-terminated metadata and path records.
+export function parseRawDiff(output) {
+  const fields = nulFields(output);
   if (fields.length % 2 !== 0) throw new Error('incomplete Git record');
 
   const entries = [];
@@ -67,18 +72,56 @@ function isPortablePath(path) {
     && !/^(?:con|prn|aux|nul|conin\$|conout\$|clock\$|com[0-9¹²³]|lpt[0-9¹²³])(?:[ .]|$)/iu.test(part));
 }
 
-function isApprovedDocumentation({ path, status, oldMode, newMode }) {
+// Windows and default macOS volumes are case-insensitive, and HFS+ also folds
+// Unicode normalization, so two distinct Git paths can name one file there.
+const foldPath = (path) => path.normalize('NFC').toLowerCase();
+
+function createTreeIndex(paths) {
+  const byFoldedName = new Map();
+  const directories = new Set();
+  for (const path of paths) {
+    const folded = foldPath(path);
+    const names = byFoldedName.get(folded);
+    if (names) names.push(path);
+    else byFoldedName.set(folded, [path]);
+    let separator = path.indexOf('/');
+    while (separator !== -1) {
+      directories.add(foldPath(path.slice(0, separator)));
+      separator = path.indexOf('/', separator + 1);
+    }
+  }
+  return { byFoldedName, directories };
+}
+
+// A new path that folds onto an existing file, onto an existing directory, or
+// whose parent would have to replace an existing file makes the checked-out
+// tree differ from the committed tree on a case-insensitive volume.
+function collidesWithTree(index, path) {
+  const folded = foldPath(path);
+  const names = index.byFoldedName.get(folded);
+  if (names && names.some((name) => name !== path)) return true;
+  if (index.directories.has(folded)) return true;
+  let separator = path.indexOf('/');
+  while (separator !== -1) {
+    // Git cannot hold a file and a directory at one literal path, so a file at
+    // one of these prefixes can only be a folding collision.
+    if (index.byFoldedName.has(foldPath(path.slice(0, separator)))) return true;
+    separator = path.indexOf('/', separator + 1);
+  }
+  return false;
+}
+
+function isApprovedDocumentation({ path, status, oldMode, newMode }, tree) {
   const approvedPath = ['README.md', 'CONTRIBUTING.md', 'SECURITY.md'].includes(path)
     || (path.startsWith('docs/') && path.endsWith('.md'));
   if (!approvedPath || !isPortablePath(path)) return false;
-  // New paths (and thus renames) can introduce Windows checkout collisions.
-  if (status === 'A') return false;
+  if (status === 'A') return newMode === '100644' && tree !== null && !collidesWithTree(tree, path);
   if (status === 'D') return oldMode === '100644';
   return oldMode === '100644' && newMode === '100644';
 }
 
 export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd(), gitRunner = runGit } = {}) {
-  // The first rollout limits optimization to PRs; every other event runs fully.
+  // The optimization is limited to PRs; every other event runs fully.
   if (eventName !== 'pull_request') return full('event requires full platform checks');
   const base = event?.pull_request?.base?.sha;
   const head = event?.pull_request?.head?.sha;
@@ -93,8 +136,21 @@ export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd
       if (!isObjectId(id)) throw new Error('invalid Git object ID');
       return id;
     };
-    if (verifyRevision('HEAD^{commit}') !== githubSha.toLowerCase()) return full('checkout commit mismatch');
-    if (verifyRevision('HEAD^{tree}') !== verifyRevision(`${head}^{tree}`)) return full('checkout tree mismatch');
+    const checkout = verifyRevision('HEAD^{commit}');
+    if (checkout !== githubSha.toLowerCase()) return full('checkout commit mismatch');
+
+    // A pull_request checkout is either the PR head itself or GitHub's
+    // synthetic merge of the base tip and that head. Its identity is proven by
+    // the commit graph, not by comparing trees: the merge tree legitimately
+    // differs from the head tree whenever the base branch has advanced.
+    if (checkout !== head.toLowerCase()) {
+      const parents = decoder.decode(gitRunner(['rev-list', '--parents', '-n', '1', checkout], cwd))
+        .trim().split(/ +/u);
+      if (parents.length !== 3 || parents[0] !== checkout
+        || parents[1] !== base.toLowerCase() || parents[2] !== head.toLowerCase()) {
+        return full('checkout is not the PR head or its merge');
+      }
+    }
 
     const shallow = decoder.decode(gitRunner(['rev-parse', '--is-shallow-repository'], cwd));
     if (shallow !== 'false\n') return full('incomplete Git history');
@@ -103,18 +159,29 @@ export function classifyChanges({ eventName, event, githubSha, cwd = process.cwd
     if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})\n$/u.test(mergeBases)) {
       return full('no unique merge base');
     }
-    const mergeBase = mergeBases.slice(0, -1);
-    if (!isObjectId(mergeBase)) return full('invalid merge base');
-    if (mergeBase !== base.toLowerCase()) return full('PR base has advanced');
+    // GitHub checks out a merge commit for pull requests, and the diff below
+    // against its first parent is then exactly the PR diff. A plain head
+    // checkout is only classifiable while the base tip is an ancestor of that
+    // head; otherwise the diff would also revert the base branch's own work.
+    if (checkout === head.toLowerCase() && mergeBases.slice(0, -1) !== base.toLowerCase()) {
+      return full('PR base has advanced');
+    }
 
+    // The base tip is the baseline the platform jobs already covered on its
+    // own push run; the diff against it is what this PR adds to that baseline.
     const output = gitRunner([
       'diff', '--raw', '-z', '--no-abbrev', '--no-renames', '--no-ext-diff',
       '--no-textconv', '--ignore-submodules=none', '--no-relative', '--no-color',
-      mergeBase, head, '--',
+      base, checkout, '--',
     ], cwd);
     const changes = parseRawDiff(output);
     if (changes.length === 0) return full('empty diff');
-    if (!changes.every(isApprovedDocumentation)) return full('non-documentation or unsafe change');
+    const tree = changes.some(({ status }) => status === 'A')
+      ? createTreeIndex(nulFields(gitRunner(['ls-tree', '-r', '-z', '--name-only', '--full-tree', checkout], cwd)))
+      : null;
+    if (!changes.every((entry) => isApprovedDocumentation(entry, tree))) {
+      return full('non-documentation or unsafe change');
+    }
     return { run_platforms: false, reason: 'documentation-only changes' };
   } catch {
     return full('Git comparison unavailable or invalid');
