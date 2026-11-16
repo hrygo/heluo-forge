@@ -292,10 +292,19 @@ test('callback success and failure are HTML and do not expose details', async ()
   assert.match(success.text(), /返回 DeepSeek Harness/);
   assert.match(success.text(), /@media \(prefers-color-scheme: dark\)/);
   assert.match(success.text(), /--dsw-alias-bg-layer-1/);
-  assert.equal(success.headers['content-security-policy'], "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+  // The success page ships exactly one nonce-guarded script: it can close a
+  // dedicated login window and nothing else.
+  const csp = success.headers['content-security-policy'];
+  const nonce = /script-src 'nonce-([^']+)'/u.exec(csp)?.[1];
+  assert.ok(nonce, 'the closeable page must declare a script nonce');
+  assert.match(success.text(), new RegExp(`<script nonce="${nonce.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}">`, 'u'));
+  assert.equal((success.text().match(/<script\b/gu) ?? []).length, 1);
+  assert.doesNotMatch(success.text(), /<script[^>]+src=|unsafe-inline[^;]*script/u);
   assert.equal(success.headers['referrer-policy'], 'no-referrer');
-  assert.doesNotMatch(success.text(), /<script\b|<link\b|<img\b/i);
+  assert.doesNotMatch(success.text(), /<link\b|<img\b/i);
   assert.doesNotMatch(success.text(), /code=c|state=s/);
+  // The dedicated window is named by the client; the working tab is not.
+  assert.match(success.text(), /window\.name === 'dsh-iam-login'/);
 
   const failure = routes(service({
     handleCallback: async () => { throw Object.assign(new Error('bad'), { code: 'IAM_STATE_MISMATCH' }); },
@@ -306,6 +315,38 @@ test('callback success and failure are HTML and do not expose details', async ()
   assert.match(failed.text(), /返回 DeepSeek Harness/);
   assert.doesNotMatch(failed.text(), /登录成功|登录已完成/);
   assert.doesNotMatch(failed.text(), /state mismatch|IAM_STATE_MISMATCH/i);
+  // A failed attempt never auto-closes or pretends to be done: no script, and
+  // the CSP stays as narrow as before.
+  assert.doesNotMatch(failed.text(), /<script\b/u);
+  assert.equal(failed.headers['content-security-policy'], "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+  assert.doesNotMatch(failed.text(), /关闭此页/u);
+});
+
+test('every closeable page mints its own nonce and keeps the button honest', async () => {
+  const first = await call(routes(service()), 'GET', '/iam/callback?code=c&state=s');
+  const second = await call(routes(service()), 'GET', '/iam/callback?code=c&state=s');
+  const nonceOf = (response) => /script-src 'nonce-([^']+)'/u.exec(response.headers['content-security-policy'])?.[1];
+  assert.ok(nonceOf(first) && nonceOf(second));
+  assert.notEqual(nonceOf(first), nonceOf(second), 'each response must mint a fresh nonce');
+  // The close button is wired, and a refused close falls back to the manual
+  // instruction instead of leaving an action with no feedback.
+  for (const response of [first, second]) {
+    const text = response.text();
+    assert.match(text, /id="fiam-close"/u);
+    assert.match(text, /addEventListener\('click', attempt\)/u);
+    assert.match(text, /浏览器不允许本页自行关闭，请手动关闭此标签页。/u);
+    assert.match(text, /if \(!window\.closed\) advise\(\)/u);
+    // Only a window this client opened is allowed to close itself; a working
+    // tab that reached this page by navigation is left open.
+    assert.match(text, /dedicated = window\.name === 'dsh-iam-login'/u);
+    assert.match(text, /if \(dedicated\) attempt\(\)/u);
+    // The button must obey the same ownership rule as the automatic close:
+    // a working tab that another page opened by script is never closed here.
+    assert.match(text, /if \(!dedicated\) \{ advise\(\); return; \}/u);
+    assert.match(text, /function attempt\(\) \{[^}]*if \(!dedicated\)/u);
+    assert.doesNotMatch(text, /window\.opener/u);
+    assert.doesNotMatch(text, /location\.href|location\.replace|window\.open/u);
+  }
 });
 
 test('methods and unknown paths are rejected without leaking internals', async () => {

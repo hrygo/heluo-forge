@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { IamError } from './errors.mjs';
 import { ERROR_STATUS } from './error-contract.mjs';
 import { bridgeRejection } from './bridge.mjs';
@@ -18,11 +19,24 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
-function sendHtml(res, status, title, body) {
+/**
+ * The login window is named by the client that opened it, so the callback page
+ * can tell a dedicated login window from a tab the person is also working in.
+ * A name is not a credential: it only decides whether this page may close
+ * itself, and it is cleared before any action runs.
+ */
+const LOGIN_WINDOW_NAME = 'dsh-iam-login';
+
+function sendHtml(res, status, title, body, { closeable = false } = {}) {
   res.statusCode = status;
   res.setHeader('content-type', 'text/html; charset=utf-8');
   res.setHeader('cache-control', 'no-store');
-  res.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
+  // A single nonce-guarded script is the minimum needed to close the dedicated
+  // login window; nothing else runs, and the failure page ships no script at all.
+  const nonce = closeable ? randomBytes(16).toString('base64') : '';
+  res.setHeader('content-security-policy', closeable
+    ? `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; frame-ancestors 'none'`
+    : "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'");
   res.setHeader('referrer-policy', 'no-referrer');
   // The callback runs in a separate browser page and cannot inherit Host CSS.
   // These are the corresponding light/dark DSH theme values, checked against
@@ -32,7 +46,37 @@ function sendHtml(res, status, title, body) {
     ? '<path d="m5 12 4.5 4.5L19 7"/>'
     : '<path d="M12 7v6m0 4h.01"/>';
   const badgeText = success ? '企业统一认证 · 已完成' : '企业统一认证 · 未完成';
-  const instruction = success ? '回到应用继续操作。' : '回到应用后重新尝试登录。';
+  const instruction = success ? '登录完成，请关闭此页面，返回 DeepSeek Harness 继续操作。' : '回到应用后重新尝试登录。';
+  // Only a dedicated login window may close itself. The same page can also be
+  // the tab the person is working in (the popup fallback navigates this tab),
+  // so closing is opt-in by name, and a blocked close always leaves the manual
+  // instruction visible instead of a button that does nothing.
+  const closeMarkup = closeable
+    ? `<button id="fiam-close" type="button" class="close">关闭此页</button>
+      <p id="fiam-close-hint" class="hint" hidden>浏览器不允许本页自行关闭，请手动关闭此标签页。</p>`
+    : '';
+  const closeScript = closeable
+    ? `
+  <script nonce="${nonce}">
+    (function () {
+      var dedicated = false;
+      try { dedicated = window.name === '${LOGIN_WINDOW_NAME}'; window.name = ''; } catch (error) { /* opaque name */ }
+      var hint = document.getElementById('fiam-close-hint');
+      var button = document.getElementById('fiam-close');
+      function advise() { if (hint) hint.hidden = false; }
+      function attempt() {
+        // The button runs in the same page as the automatic close, so it must
+        // obey the same rule: a tab this client did not open for login stays
+        // open even when another page opened it by script.
+        if (!dedicated) { advise(); return; }
+        try { window.close(); } catch (error) { /* not closable */ }
+        setTimeout(function () { if (!window.closed) advise(); }, 250);
+      }
+      if (button) button.addEventListener('click', attempt);
+      if (dedicated) attempt();
+    }());
+  </script>`
+    : '';
   res.end(`<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -104,6 +148,14 @@ function sendHtml(res, status, title, body) {
     }
     .next strong { display: block; margin-bottom: 4px; color: var(--dsw-alias-label-primary); font-size: 13px; }
     .next p { font-size: 13px; line-height: 20px; }
+    .next .close {
+      margin-top: 12px; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+      font: inherit; font-size: 13px; font-weight: 500;
+      color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1);
+      border: 1px solid var(--dsw-alias-border-l2);
+    }
+    .next .close:hover { border-color: var(--dsw-alias-label-secondary); }
+    .next .hint { margin-top: 8px; }
     @media (max-width: 480px) { body { padding: 16px; } main { padding: 28px 24px; } }
   </style>
 </head>
@@ -115,8 +167,8 @@ function sendHtml(res, status, title, body) {
     </div>
     <h1>${title}</h1>
     <p>${body}</p>
-    <div class="next"><strong>返回 DeepSeek Harness</strong><p>${instruction}此页面可以关闭。</p></div>
-  </main>
+    <div class="next"><strong>返回 DeepSeek Harness</strong><p>${instruction}</p>${closeMarkup}</div>
+  </main>${closeScript}
 </body>
 </html>`);
 }
@@ -301,7 +353,7 @@ export function createIamRoutes(service, { callbackPath = '/iam/callback', getOr
             return;
           }
           await service.handleCallback(callbackUrl.href);
-          sendHtml(res, 200, '登录完成', '企业账号已完成登录。');
+          sendHtml(res, 200, '登录完成', '企业账号已完成登录；登录成功不代表模型访问已开通，回到应用后按界面提示继续。', { closeable: true });
         } catch (error) {
           const status = ERROR_STATUS[error?.code] ?? 500;
           // Codes and OAuth error names are not secrets and are what make a
