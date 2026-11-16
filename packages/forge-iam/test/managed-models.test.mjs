@@ -541,7 +541,13 @@ test('discovery sorts models stably by id and createNativeGatewayAdapter configu
   assert.equal(customEntry.compat.maxTokensField, 'max_tokens');
   // Heartbeats never become events, so the profile cannot rely on them to keep
   // a slow first token alive; the bound matches the host default.
-  assert.equal(capturedOptions.profiles().get('enterprise').streamIdleTimeoutMs, 300000);
+  const profileOptions = capturedOptions.profiles().get('enterprise');
+  assert.equal(profileOptions.streamIdleTimeoutMs, 300000);
+  // Image budgets stay at the host defaults: an enlarged body is only ever
+  // rejected later, by a gateway whose own limit nobody stated.
+  assert.equal(profileOptions.maxRequestImageBytes, 20 * 1024 * 1024);
+  assert.equal(profileOptions.requestImagePixelBudget, 2048 * 2048);
+  assert.equal(profileOptions.requestImageMaxBytes, 1024 * 1024);
 });
 
 test('the native adapter injects the current IAM token at call time and keeps it out of the catalogue', async () => {
@@ -1024,4 +1030,77 @@ test('the runtime forwards the attachment service and header hook to the adapter
   await plain.runtime.ready;
   assert.equal('resolveAttachments' in received.at(-1), false);
   assert.equal('prepareHeaders' in received.at(-1), false);
+});
+
+test('a gateway that refuses images downgrades that conversation instead of poisoning every later turn (issue #321)', async t => {
+  const attempts = [];
+  const f = fixture({
+    createAdapter: async () => ({
+      providerInfo: id => ({ id, name: '企业模型' }),
+      providerRetryPolicy: () => undefined,
+      resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
+      async *stream(options) {
+        attempts.push(options.messages);
+        const carrying = options.messages.some(message => Array.isArray(message?.content)
+          && message.content.some(block => block?.type === 'image' && block.offloaded !== true));
+        if (carrying) throw Object.assign(new Error('images are not supported by this model'), { status: 400 });
+        yield { type: 'text', text: 'text only' };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      },
+    }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const conversation = {
+    provider: 'enterprise', model: 'enterprise-chat', sessionId: 'session-with-images',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'look at this' }, { type: 'image', attachment: { attachmentId: 'image-1' } }] }],
+  };
+  const send = request => (async () => chunks(await (await f.adapter.prepareCall(request.provider, request.model)).stream(request)))();
+  // The refused turn is retried once with the image projected as a placeholder,
+  // so the person still gets an answer instead of losing the conversation.
+  const first = await send(conversation);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[1][0].content[1].offloaded, true);
+  assert.equal(first.at(-1).reason.kind, 'stop');
+  // The downgrade is remembered per conversation: later turns never send the
+  // image at all, so they stop paying for a refusal first.
+  const second = await send(conversation);
+  assert.equal(attempts.length, 3);
+  assert.equal(attempts[2][0].content[1].offloaded, true);
+  assert.equal(second.at(-1).reason.kind, 'stop');
+  // Another conversation is untouched: it still tries its image first.
+  const other = { ...conversation, sessionId: 'session-other' };
+  await send(other);
+  assert.equal(attempts.length, 5);
+  assert.equal(attempts[3][0].content[1].offloaded, undefined);
+  assert.equal(attempts[4][0].content[1].offloaded, true);
+});
+
+test('only an image refusal downgrades a conversation: a plain outage keeps the images (issue #321)', async t => {
+  const attempts = [];
+  const f = fixture({
+    createAdapter: async () => ({
+      providerInfo: id => ({ id, name: '企业模型' }),
+      providerRetryPolicy: () => undefined,
+      resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
+      async *stream(options) {
+        attempts.push(options.messages);
+        throw Object.assign(new Error('gateway is down'), { status: 503 });
+      },
+    }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const conversation = {
+    provider: 'enterprise', model: 'enterprise-chat', sessionId: 'session-outage',
+    messages: [{ role: 'user', content: [{ type: 'image', attachment: { attachmentId: 'image-2' } }] }],
+  };
+  const first = await chunks(await (await f.adapter.prepareCall(conversation.provider, conversation.model)).stream(conversation));
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0][0].content[0].offloaded, undefined);
+  assert.equal(first.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  // Nothing was downgraded, so the next turn still carries the image.
+  await chunks(await (await f.adapter.prepareCall(conversation.provider, conversation.model)).stream(conversation));
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[1][0].content[0].offloaded, undefined);
 });

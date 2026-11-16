@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.2.0 |
+| 版本 | V3.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -867,6 +867,8 @@ flowchart TD
 | 5 | socket 错误码 | `ECONNREFUSED`、`ENOTFOUND`、`ETIMEDOUT` 等 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
 | 6 | 兜底 | 以上均无 | `ENTERPRISE_GATEWAY_CALL_FAILED` |
 
+模型层与附件层的本地码先于状态码判定：`UNSUPPORTED_CONTENT`、`IMAGE_OFFLOAD_REQUIRED` 与全部 `ATTACHMENT_*` 归入 `ENTERPRISE_REQUEST_UNSUPPORTED`。它们表示请求未能在发出前组装完成，而不是网关给出了答复，因此不得借状态码或响应体改判为网关问题。
+
 插件内部码在进入上述层级之前先做一次映射：`USER_CODE_BY_INTERNAL` 覆盖 `ERROR_STATUS` 中全部 `IAM_*` 与 `CRED_*` 码，把“哪个模块失败”换成“用户该做什么”。未映射的内部码不允许落到第 6 层——`gateway-failure.test.mjs` 逐码断言这一点。`IAM_GATEWAY_BINDING_CHANGED` 是内部码（`ERROR_STATUS` 409），只映射为 `IAM_MODEL_CONTEXT_CHANGED`，不直接呈现给用户。
 
 响应体来源按 `responseBody`、`data`、`body`、`cause.responseBody` 依次尝试，并兼容模型层把响应体前缀进错误消息的形态（`429: {"code":…}`）。解析失败或超过 8 KiB 时放弃解析，不影响后续层级。
@@ -887,6 +889,7 @@ flowchart TD
 | `ENTERPRISE_GATEWAY_RATE_LIMIT` | 429 且无额度类证据、`rate_limit_exceeded`、`rpm_limit_exceeded`、`tpm_limit_exceeded`、`RATE_LIMIT` | 429 | 请求过于频繁，请稍后重试。 |
 | `ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED` | `insufficient_quota`、`model_cooldown`、`FreeUsageLimitError`、`QUOTA` | 429 | 所选模型的额度已用尽，请更换模型或联系管理员。 |
 | `ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED` | `budget_exhausted` | 429 | 所选模型的预算已用尽，请联系管理员或更换模型。 |
+| `ENTERPRISE_REQUEST_UNSUPPORTED` | 发出前无法按模型声明组装请求：`UNSUPPORTED_CONTENT`、`IMAGE_OFFLOAD_REQUIRED`、任一 `ATTACHMENT_*` | 400 | 这次请求的内容无法发送：所选模型可能不支持图片，或图片附件已不可用。之后的请求会自动省略图片，也可以更换支持图片的模型。 |
 | `ENTERPRISE_GATEWAY_REQUEST_REJECTED` | 其余 4xx、`context_length_exceeded`、`INVALID_REQUEST` | 502 | 网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。 |
 | `ENTERPRISE_GATEWAY_UNAVAILABLE` | 5xx、`NETWORK`、`TIMEOUT`、`OVERLOADED`、socket 错误 | 502 | 暂时无法连接企业模型，请稍后重试。 |
 | `ENTERPRISE_IAM_UNAVAILABLE` | `IAM_UNREACHABLE`、`IAM_HTTP_ERROR`（认证服务未接受请求即失败） | 503 | 企业认证服务暂不可达，请稍后重试。 |
@@ -1105,4 +1108,8 @@ flowchart TD
 - **请求头接缝 `prepareHeaders`**：转发 `llm-pi-ai/request-headers` waterfall，供其他插件在调用前追加请求头（客户端标识、追踪）。缺失时企业模型调用绕过该 waterfall，依赖它注入请求头的插件对企业流量静默失效。
 - **原图路径提示 `resolveImageAccess` 未装配**：仅少一条写入请求的只读原图路径提示，模型仍能收到图片本身，不影响调用成立。
 
-三条接缝由 `packages/forge-iam/test/managed-models.test.mjs` 断言：适配器与受管运行时都原样传递传入的接缝，未提供时不伪造替代函数。缺失任一已装配接缝按装配缺陷处理，不以“企业网关不支持”归因。
+接缝由 `managed-models.test.mjs` 与 `model-selection-host.test.mjs` 断言：适配器与受管运行时原样传递传入的接缝，未提供时不伪造替代函数，插件入口在服务绑定、替换、解绑时逐次跟随。缺失任一已装配接缝按装配缺陷处理，不以“企业网关不支持”归因。
+
+图片预算取宿主的 `llm-pi-ai` 默认值（单图重编码上限 1 MiB、请求内 base64 合计 20 MiB、像素预算 2048²）：企业网关的请求体上限没有公开依据，把预算放大到 10 倍只会把本地可拦截的问题变成网关侧的请求拒绝。
+
+网关确实拒绝含图片请求时的降级只发生在一次会话内：首个能把失败归为 `ENTERPRISE_REQUEST_UNSUPPORTED` 或 `ENTERPRISE_GATEWAY_REQUEST_REJECTED`、且尚未向用户输出任何内容的请求，会以图片占位文本重试一次；该会话随后固定按占位文本组装请求，后续每一轮不再先失败一次。5xx、网络错误与其他码不触发降级；降级通过 `IMAGE_REQUEST_REFUSED` 写入宿主日志，便于区分网关不接受图片与真的不可达。未知失败（`ENTERPRISE_GATEWAY_CALL_FAILED`）记 `warn`，已归类的失败记 `debug`。

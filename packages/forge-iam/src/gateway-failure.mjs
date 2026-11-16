@@ -28,6 +28,7 @@ export const SELF_CODES = new Set([
   'ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED',
   'ENTERPRISE_GATEWAY_UNAVAILABLE',
   'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  'ENTERPRISE_REQUEST_UNSUPPORTED',
   'ENTERPRISE_GATEWAY_CALL_FAILED',
   'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
 ]);
@@ -63,6 +64,14 @@ export const LAYER_CODES = Object.freeze({
   ratelimit: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
   ratelimiterror: 'ENTERPRISE_GATEWAY_RATE_LIMIT',
   invalidrequest: 'ENTERPRISE_GATEWAY_REQUEST_REJECTED',
+  // The harness answered before any request was sent: the call could not be
+  // composed from the history (unsupported content, or images beyond the
+  // route's request budget). Naming the gateway here sends the person to the
+  // wrong place, so these get their own actionable code.
+  unsupportedcontent: 'ENTERPRISE_REQUEST_UNSUPPORTED',
+  imageoffloadrequired: 'ENTERPRISE_REQUEST_UNSUPPORTED',
+  incompleteimage: 'ENTERPRISE_REQUEST_UNSUPPORTED',
+  unsupportedimage: 'ENTERPRISE_REQUEST_UNSUPPORTED',
   unsupportedreasoningeffort: 'ENTERPRISE_MODEL_REASONING_UNSUPPORTED',
   network: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
   networkerror: 'ENTERPRISE_GATEWAY_UNAVAILABLE',
@@ -247,6 +256,10 @@ export const failureCode = (failure) => {
 export const classifyFailure = (failure) => {
   const raw = typeof failure?.code === 'string' ? failure.code : undefined;
   if (raw && SELF_CODES.has(raw)) return raw;
+  // Every durable-attachment code says the same thing: this route could not
+  // produce what the request needs, so nothing was sent. The prefix keeps
+  // future attachment codes out of the unknown-failure bucket.
+  if (raw && raw.startsWith('ATTACHMENT_')) return 'ENTERPRISE_REQUEST_UNSUPPORTED';
   const layer = LAYER_CODES[squash(raw)];
   if (layer) return layer;
   for (const token of bodyTokens(failure)) {

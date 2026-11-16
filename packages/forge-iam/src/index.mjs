@@ -262,8 +262,15 @@ export function apply(ctx, rawConfig = {}) {
             }
           },
           // P1-3: keep the failure object fixed at { code, message }; the
-          // internal code is diagnosis and goes to the host log only.
-          logFailure: (detailCode, code) => ctx.logger?.debug?.(`forge-iam: model call failure ${detailCode} -> ${code}`),
+          // internal code is diagnosis and goes to the host log only. The
+          // unknown-failure bucket is the one an administrator has to act on, so
+          // it is the one that must be visible without raising the log level
+          // first; every mapped failure stays at debug.
+          logFailure: (detailCode, code) => {
+            const line = `forge-iam: model call failure ${String(detailCode)} -> ${String(code)}`;
+            if (code === 'ENTERPRISE_GATEWAY_CALL_FAILED') ctx.logger?.warn?.(line);
+            else ctx.logger?.debug?.(line);
+          },
           // The catalogue flips loading → ready/error without any IAM
           // transition. Push a view frame so subscribers do not keep a stale
           // "syncing" snapshot until some unrelated event arrives.

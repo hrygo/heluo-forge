@@ -66,6 +66,21 @@ test('a body that cannot be parsed changes nothing', () => {
   }
 });
 
+test('a request the harness refuses before dispatch is not reported as a gateway failure', () => {
+  // The enterprise route composes image-bearing requests itself; when that
+  // composition cannot produce what the model declared (or the attachment bytes
+  // are gone) nothing is sent. The gateway must not be blamed for it.
+  for (const code of ['UNSUPPORTED_CONTENT', 'IMAGE_OFFLOAD_REQUIRED', 'ATTACHMENT_CORRUPT', 'ATTACHMENT_NOT_FOUND', 'ATTACHMENT_READ_FAILED']) {
+    assert.equal(failureCode({ code }), 'ENTERPRISE_REQUEST_UNSUPPORTED', code);
+  }
+  // The prefix rule covers attachment codes this build does not know yet.
+  assert.equal(failureCode({ code: 'ATTACHMENT_SOMETHING_NEW' }), 'ENTERPRISE_REQUEST_UNSUPPORTED');
+  // A gateway body that says invalid_request stays a gateway rejection.
+  assert.equal(failureCode({ responseBody: '{"error":{"code":"invalid_request"}}' }), 'ENTERPRISE_GATEWAY_REQUEST_REJECTED');
+  // Unrelated unknown evidence still lands in the honest bucket.
+  assert.equal(failureCode(new Error('no evidence at all')), 'ENTERPRISE_GATEWAY_CALL_FAILED');
+});
+
 test('only socket evidence is called unreachable', () => {
   for (const syscall of UNREACHABLE_SYSCALLS) {
     assert.equal(classifyFailure({ cause: { code: syscall } }), 'ENTERPRISE_GATEWAY_UNAVAILABLE', syscall);

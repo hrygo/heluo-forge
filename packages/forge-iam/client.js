@@ -2012,6 +2012,7 @@ window.__ModuleLoader__.load({
       ENTERPRISE_GATEWAY_CALL_FAILED: '本次请求未完成，请重试；持续失败请联系管理员。',
       ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
       ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。',
+      ENTERPRISE_REQUEST_UNSUPPORTED: '这次请求的内容无法发送：所选模型可能不支持图片，或图片附件已不可用。之后的请求会自动省略图片，也可以更换支持图片的模型。',
       ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
       IAM_MANUAL_MODEL_INVALID: '模型 ID 不能为空且长度不得超过 200 个字符。',
       IAM_MANUAL_MODEL_LIMIT: '手动添加的模型数量已达上限（最多 100 个）。',
