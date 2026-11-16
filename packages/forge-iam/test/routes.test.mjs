@@ -340,6 +340,10 @@ test('every closeable page mints its own nonce and keeps the button honest', asy
     // tab that reached this page by navigation is left open.
     assert.match(text, /dedicated = window\.name === 'dsh-iam-login'/u);
     assert.match(text, /if \(dedicated\) attempt\(\)/u);
+    // The button must obey the same ownership rule as the automatic close:
+    // a working tab that another page opened by script is never closed here.
+    assert.match(text, /if \(!dedicated\) \{ advise\(\); return; \}/u);
+    assert.match(text, /function attempt\(\) \{[^}]*if \(!dedicated\)/u);
     assert.doesNotMatch(text, /window\.opener/u);
     assert.doesNotMatch(text, /location\.href|location\.replace|window\.open/u);
   }

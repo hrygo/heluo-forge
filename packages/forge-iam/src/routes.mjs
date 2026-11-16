@@ -65,6 +65,10 @@ function sendHtml(res, status, title, body, { closeable = false } = {}) {
       var button = document.getElementById('fiam-close');
       function advise() { if (hint) hint.hidden = false; }
       function attempt() {
+        // The button runs in the same page as the automatic close, so it must
+        // obey the same rule: a tab this client did not open for login stays
+        // open even when another page opened it by script.
+        if (!dedicated) { advise(); return; }
         try { window.close(); } catch (error) { /* not closable */ }
         setTimeout(function () { if (!window.closed) advise(); }, 250);
       }
