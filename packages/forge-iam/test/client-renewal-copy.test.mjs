@@ -30,3 +30,15 @@ test('the account badge and banner do not report a plain expiry when renewal is 
   assert.match(clientSource, /会话已过期，需重新登录/);
   assert.match(clientSource, /expiredUnrenewable:\s*['"]长时间未使用，会话已过期，请重新登录['"]/);
 });
+
+test('the account card renders the renewal notice it receives', () => {
+  // A notice that is computed and passed but never placed in the tree is dead
+  // code; count both the destructuring and the rendered child here, and rely on
+  // client-renewal-render.test.mjs for the rendered result.
+  const start = clientSource.indexOf('function renderAccountCard(');
+  const end = clientSource.indexOf('function renderGatewayCard(');
+  assert.ok(start > 0 && end > start, 'renderAccountCard must exist');
+  const body = clientSource.slice(start, end);
+  assert.ok((body.match(/renewalNotice/g) ?? []).length >= 2,
+    'renewalNotice is received but never rendered');
+});

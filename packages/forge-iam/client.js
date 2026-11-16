@@ -2280,6 +2280,7 @@ window.__ModuleLoader__.load({
           expiry ? h('div', { className: 'fiam-meta-item' }, expiry) : null,
         ) : null,
         issues,
+        renewalNotice,
         hostError,
         notice,
         ui.authenticating
