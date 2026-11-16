@@ -1481,6 +1481,9 @@ window.__ModuleLoader__.load({
       if (ui.unreachable) {
         return { kind: 'unreachable', dotClass: 'warn', label: '连接登录受阻', tooltip: '暂时无法连接登录服务，现有授权保留至到期' };
       }
+      if (ui.expiredUnrenewable) {
+        return { kind: 'error', dotClass: 'error', label: '会话已过期', tooltip: '长时间未使用，会话已过期，请重新登录' };
+      }
       if (ui.expired || ui.failed) {
         return { kind: 'error', dotClass: 'error', label: '授权已失效', tooltip: '登录已失效，请重新登录' };
       }
@@ -1639,6 +1642,10 @@ window.__ModuleLoader__.load({
         authenticating: state === 'authenticating',
         signedOut: state === 'signed-out',
         expired: state === 'expired',
+        // `renewal` is the Host's own answer to "can this session renew itself".
+        // Unknown (older Host, or no grant) stays optimistic so nothing regresses.
+        renewable: view?.renewal !== 'unavailable',
+        expiredUnrenewable: state === 'expired' && view?.renewal === 'unavailable',
         unreachable: state === 'unreachable',
         failed: state === 'error',
         unconfigured: state === 'unconfigured',
@@ -1812,6 +1819,9 @@ window.__ModuleLoader__.load({
 
     // §7 登录窗口
     const SIGN_IN_TIMEOUT_MS = 15000;
+    // Warn before the sliding refresh window ends; the Host renews well ahead of
+    // it, so reaching this window means renewal is not happening.
+    const RENEWAL_WARNING_MS = 300000;
     // A blank window reads as a broken popup. The window itself cannot be
     // created after the awaited sign-in request (browsers treat that as a
     // blocker), so it is rendered as a quiet spinner page instead of an empty
@@ -2242,6 +2252,7 @@ window.__ModuleLoader__.load({
       const { h, ui: input, actions } = ctx;
       const {
         view, label, principal, expiry, missing, issues, exclusive, hostError, notice, loginLink, state, copy, copyTools,
+        renewalNotice,
       } = input;
       const { login, cancelLogin, load, signOut, copyLink, copyDiagnostic, isViewCurrent, viewBarrier, linkIdentity } = actions;
       const ui = deriveSessionUi(view);
@@ -2269,6 +2280,7 @@ window.__ModuleLoader__.load({
           expiry ? h('div', { className: 'fiam-meta-item' }, expiry) : null,
         ) : null,
         issues,
+        renewalNotice,
         hostError,
         notice,
         ui.authenticating
@@ -4172,7 +4184,9 @@ window.__ModuleLoader__.load({
 
       const view = state.view ?? {};
       const sessionUi = deriveSessionUi(state.view);
-      const label = sessionUi.known ? statusLabel(sessionUi.state) : '未知状态';
+      const label = sessionUi.known
+        ? (sessionUi.expiredUnrenewable ? '会话已过期，需重新登录' : statusLabel(sessionUi.state))
+        : '未知状态';
       const missing = Array.isArray(view.missing) && view.missing.length
         ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '企业登录设置不完整，请联系管理员。')
         : null;
@@ -4193,6 +4207,15 @@ window.__ModuleLoader__.load({
       );
       const principal = view.principal ? h('div', { style: muted }, `账号标识：${view.principal}`) : null;
       const expiry = view.accessExpiresAt ? h('div', { style: muted }, `当前访问授权到期：${formatTime(view.accessExpiresAt)}`) : null;
+      // A lapsed refresh window is terminal: say so instead of letting the next
+      // token request be the first place the user learns it.
+      const renewalNotice = sessionUi.expiredUnrenewable
+        ? h('div', { className: 'fiam-notice fiam-notice-warn' }, '长时间未使用，会话已过期且无法自动续期，请重新登录。')
+        : (sessionUi.renewable && view.refreshExpiresAt
+          && Number.isFinite(Date.parse(view.refreshExpiresAt))
+          && Date.parse(view.refreshExpiresAt) - Date.now() < RENEWAL_WARNING_MS
+          ? h('div', { className: 'fiam-notice fiam-notice-warn' }, `会话续期窗口即将结束（${formatTime(view.refreshExpiresAt)}），请及时保存工作并准备重新登录。`)
+          : null);
       // The server reports the exclusive-config conflict twice: as the issue
       // reason and as view.error. Render the issue line only, so the page does
       // not also show a generic 操作未完成 for a condition already explained.
@@ -4267,7 +4290,7 @@ window.__ModuleLoader__.load({
 
       const accountCard = renderAccountCard({
         h,
-        ui: { view, label, principal, expiry, missing, issues, hostError, notice, loginLink, state, copy: session.copy, copyTools },
+        ui: { view, label, principal, expiry, missing, issues, hostError, notice, loginLink, state, copy: session.copy, copyTools, renewalNotice },
         actions: {
           login: session.login, cancelLogin: session.cancelLogin, load: session.load, signOut: session.signOut,
           copyLink: session.copyLink, copyDiagnostic: session.copyDiagnostic, isViewCurrent: session.isViewCurrent,
@@ -4765,6 +4788,7 @@ window.__ModuleLoader__.load({
       const SESSION_LABEL = {
         unconfigured: '企业登录尚未设置',
         expired: '登录已过期，请重新登录',
+        expiredUnrenewable: '长时间未使用，会话已过期，请重新登录',
         unreachable: '暂时无法连接登录服务，现有授权保留至到期',
         error: '登录需要处理',
         authenticating: '等待浏览器登录完成',
@@ -4866,7 +4890,9 @@ window.__ModuleLoader__.load({
               : state.gateway.invalid ? '个人访问凭证信息需要检查，已保留'
                 : state.gateway.unknown ? '无法确认个人访问凭证状态'
                   : '尚未保存个人访问凭证，请前往“设置 → 企业账号”添加。')
-            : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号'),
+            : (deriveSessionUi(state.view).expiredUnrenewable
+              ? SESSION_LABEL.expiredUnrenewable
+              : (SESSION_LABEL[state.sessionState] ?? '尚未登录企业账号')),
         ),
         state.reason === 'gateway'
           ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, state.gateway.ownerMismatch || state.gateway.invalid || state.gateway.unknown

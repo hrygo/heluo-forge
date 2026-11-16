@@ -33,6 +33,7 @@ import { createExtTokensService, createCredentialBroker } from './service-ext-to
  *   getOrigin?: () => string | undefined,
  *   fetch?: typeof fetch,
  *   now?: () => number,
+ *   monotonic?: () => number,
  * }} [options]
  */
 export function createIamService(rawConfig, options = {}) {
@@ -45,6 +46,8 @@ export function createIamService(rawConfig, options = {}) {
   assertClientAuthConfigured(config, options);
   const configured = isConfigured(config).ok;
   const now = options.now ?? (() => Date.now());
+  // Wall-clock jumps (sleep/wake) are diagnosed against this clock.
+  const monotonic = options.monotonic ?? (() => performance.now());
   const fetchImpl = options.fetch ?? globalThis.fetch;
   // Empty by default: IAM has not confirmed field names, so no name is shown.
   const profileFields = normalizeProfileFields(options.profileFields ?? Object.freeze({}));
@@ -135,6 +138,7 @@ export function createIamService(rawConfig, options = {}) {
     provider,
     grants,
     now,
+    monotonic,
     fetchImpl,
     isSigningOut: () => signout.signingOut,
     getSessionEpoch: () => sessionEpoch,
