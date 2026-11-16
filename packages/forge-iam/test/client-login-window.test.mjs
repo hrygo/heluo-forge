@@ -34,3 +34,18 @@ test('a popup that never leaves about:blank falls back to this tab', () => {
   assert.match(source, /window\.location\.assign\(url\)/);
   assert.match(source, /}, 1500\);/);
 });
+
+test('only the dedicated login window is named, so the working tab is never closed', () => {
+  // The callback page closes itself only when this name survived the round
+  // trip. The popup fallback navigates the working tab instead, and that tab
+  // must stay open, so the name is set on the popup path alone.
+  assert.match(source, /popup\.name = 'dsh-iam-login'/);
+  const open = source.indexOf('function openLoginWindow()');
+  const navigate = source.indexOf('function navigateLoginWindow(');
+  const nameAt = source.indexOf("popup.name = 'dsh-iam-login'");
+  assert.ok(open > 0 && navigate > open && nameAt > open && nameAt < navigate,
+    'the marker belongs to the popup-opening path, not to the fallback navigation');
+  // The fallback keeps its own contract: it assigns the current tab and never
+  // tries to close or rename it.
+  assert.doesNotMatch(source, /window\.name\s*=/);
+});

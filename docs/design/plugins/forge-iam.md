@@ -274,7 +274,8 @@ flowchart TB
 
 - **回调只读与校验**：回调接口仅支持 `GET` 方法，严格校验 `state` 匹配当前活跃 Attempt；换票 POST 请求携带 `code_verifier` 由服务端直接验票，Verifier 绝不暴露于 URL；
 - **同源管理守卫**：所有 `/api/forge-iam/*` 管理端点受宿主 `ctx.connection.requestRejection` 守卫保护，严格校验 `x-forge-iam-request: 1` 标头，写入请求体限制最大 8 KiB；
-- **回调完成响应**：回调成功后仅返回纯文本/极简 HTML 页面（“登录成功，请返回客户端”），不向页面写入任何 Token 凭据。
+- **回调完成响应**：回调返回终态结果页，呈现状态、只读结果与下一步指引；页面不写入任何 Token、授权码、state 或 Verifier。成功页在客户端专用登录窗口发起时才包含一段带 nonce 的最小脚本：先清除窗口名标记再尝试关闭该窗口，被浏览器拒绝时保留手动关闭指引，不提供无反馈的按钮。脚本不依赖 `window.opener`、不读取也不跳转任何 URL；同标签页退路到达的回调页从未设置该标记，因此承载工作界面的标签页不会被关闭。窗口名只是「可否自行关闭」的提示，不承担任何身份或授权语义。
+- **结果页 CSP**：失败页保持 `default-src 'none'; style-src 'unsafe-inline'` 且不含脚本；成功页仅额外放行该次响应的 `script-src 'nonce-…'`，nonce 每次响应重新生成，不引入外部脚本、不放开 `unsafe-inline` 脚本。失败、取消与未确认一律不自动关闭、不显示成功。
 
 ### 4.6 架构选型论证：为什么不用 `authorization` flow
 

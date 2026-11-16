@@ -1854,6 +1854,11 @@ window.__ModuleLoader__.load({
             popup.document.write(LOGIN_PLACEHOLDER);
             popup.document.close();
           } catch { /* about:blank stays usable for navigation */ }
+          // Tell the callback page this is a dedicated login window. A name
+          // survives the cross-origin round trip and is the only signal that
+          // closing is safe: the same callback also runs in the working tab
+          // when the popup fallback takes over, and that tab must stay open.
+          try { popup.name = 'dsh-iam-login'; } catch { /* name is advisory */ }
           try { popup.opener = null; } catch { /* cross-origin about:blank is still usable */ }
         }
         return popup;
