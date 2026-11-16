@@ -79,6 +79,7 @@ export const MESSAGES = Object.freeze({
   ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED: '所选模型的预算已用尽，请联系管理员或更换模型。',
   ENTERPRISE_GATEWAY_UNAVAILABLE: '暂时无法连接企业模型，请稍后重试。',
   ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。',
+  ENTERPRISE_REQUEST_UNSUPPORTED: '这次请求的内容无法发送：所选模型可能不支持图片，或图片附件已不可用。之后的请求会自动省略图片，也可以更换支持图片的模型。',
   // Neither rejected nor provably unreachable: say so instead of guessing.
   ENTERPRISE_GATEWAY_CALL_FAILED: '本次请求未完成，请重试；持续失败请联系管理员。',
   ENTERPRISE_MODEL_REASONING_UNSUPPORTED: '所选模型的推理档位不受支持，请重新选择思考级别。',
@@ -192,7 +193,7 @@ const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name)
  * replaced; the new-conversation default is observed without writing any Host
  * setting (see host-default-model.mjs).
  */
-export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch, logFailure,
+export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, resolveAttachments, prepareHeaders, fetch: fetcher = globalThis.fetch, logFailure,
   requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders(),
   getHostDefaultModel = () => safeGet(host, 'agentDefaultModel'), retryDelays = RETRY_DELAYS, onChange }) {
   if (typeof host.on !== 'function' || typeof host.llm?.registerAdapter !== 'function') {
@@ -346,6 +347,31 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (subject !== undefined && view?.principal !== subject) return 'IAM_LOGIN_REQUIRED';
     return null;
   }
+  // A gateway that refuses an image would otherwise poison the whole session:
+  // the image rides in every later request, so every later turn fails the same
+  // way and no message can be deleted to fix it. The first refusal downgrades
+  // that conversation to placeholders, and later requests are composed without
+  // image bytes from the start.
+  const IMAGE_REFUSALS = new Set(['ENTERPRISE_REQUEST_UNSUPPORTED', 'ENTERPRISE_GATEWAY_REQUEST_REJECTED']);
+  const DOWNGRADED_SESSION_LIMIT = 200;
+  const imagesRefused = new Set();
+  const hasImages = request => Array.isArray(request?.messages) && request.messages.some(message => Array.isArray(message?.content)
+    && message.content.some(block => block?.type === 'image' && block.offloaded !== true));
+  const withoutImages = request => ({
+    ...request,
+    messages: request.messages.map(message => (Array.isArray(message?.content)
+      ? { ...message, content: message.content.map(block => (block?.type === 'image' && block.offloaded !== true ? { ...block, offloaded: true } : block)) }
+      : message)),
+  });
+  // The memory is per conversation AND per target: switching the same
+  // conversation to another model must try its images again, or the recovery
+  // path the failure message points at would be dead.
+  const refusalKey = request => [request.sessionId, request.provider, request.model].map(value => String(value)).join('\u0000');
+  const rememberRefusal = key => {
+    imagesRefused.delete(key);
+    imagesRefused.add(key);
+    while (imagesRefused.size > DOWNGRADED_SESSION_LIMIT) imagesRefused.delete(imagesRefused.values().next().value);
+  };
   // Remember a revocation so no later call spends another round trip on it.
   const record = code => {
     if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED') revokedCredential = true;
@@ -391,10 +417,24 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (code) { yield finish(code); return; }
     const subject = iam.getView()?.principal;
     const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
-    let emitted = false; let retried = false;
-    for (;;) {
+    let emitted = false; let retried = false; let downgraded = false; let downgradePending = false;
+    const key = refusalKey(request);
+    let current = request.sessionId !== undefined && imagesRefused.has(key) && hasImages(request)
+      ? withoutImages(request) : request;
+    // Only a refusal that could be about the images, before anything reached the
+    // person, is worth one placeholder attempt: after a chunk the answer already
+    // exists, and a network failure is not the images' fault.
+    const downgradeImages = code => {
+      if (downgraded || emitted || !IMAGE_REFUSALS.has(code) || !hasImages(current)) return false;
+      downgraded = true;
+      downgradePending = true;
+      current = withoutImages(current);
+      try { logFailure?.('IMAGE_REQUEST_REFUSED', code); } catch { /* diagnostics never change the answer */ }
+      return true;
+    };
+    engine: for (;;) {
       try {
-        for await (const chunk of dispatch({ ...request, signal })) {
+        for await (const chunk of dispatch({ ...current, signal })) {
           code = authorizationRefusal(subject);
           if (code) { yield finish(code); return; }
           if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
@@ -402,18 +442,26 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
             // arrives here without ever passing through the thrown-error branch.
             const mapped = record(failureCode(chunk.reason.failure));
             noteMapped(chunk.reason.failure, mapped);
+            if (downgradeImages(mapped)) continue engine;
             yield finish(mapped); return;
           }
           emitted = true;
           yield chunk;
         }
         code = authorizationRefusal(subject);
-        if (code) yield finish(code);
+        if (code) { yield finish(code); return; }
+        // The placeholder attempt finished, so removing the images is what made
+        // this request work. Only now is the conversation remembered: a refusal
+        // that survives the retry says nothing about images (a context-length or
+        // parameter error), and remembering it would silently drop every later
+        // image long after the real problem was fixed.
+        if (downgradePending) rememberRefusal(key);
         return;
       } catch (cause) {
         if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
         const authorization = authorizationRefusal(subject);
         code = authorization ?? failureCode(cause);
+        if (!authorization && downgradeImages(code)) continue engine;
         // Retry only before the first chunk leaves: after emission a second
         // dispatch would deliver the same answer twice. The failure must be the
         // plugin's own binding change (not a mapped user code), and the budget
@@ -576,6 +624,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       models = applyModelOptions(rawModels, modelOptions);
       const resolved = await createAdapter({
         host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveIamToken, resolveKey: createKeyResolver(connection),
+        ...resolveAttachments === undefined ? {} : { resolveAttachments },
+        ...prepareHeaders === undefined ? {} : { prepareHeaders },
       }); current();
       backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
       syncedAt = Date.now(); publish();
@@ -735,6 +785,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
       resolveIamToken,
       resolveKey: createKeyResolver(connection),
+      ...resolveAttachments === undefined ? {} : { resolveAttachments },
+      ...prepareHeaders === undefined ? {} : { prepareHeaders },
     });
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
     backend = resolved;
@@ -972,7 +1024,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
 }
 
 /** Host-supplied SDK only: an unavailable public import closes this capability. */
-export async function createNativeGatewayAdapter({ host, config, resolveKey, resolveIamToken }) {
+export async function createNativeGatewayAdapter({ host, config, resolveKey, resolveIamToken, resolveAttachments, prepareHeaders }) {
   const load = specifier => host.loader.import(specifier);
   const [{ PiAiAdapter }, { openAICompletionsApi }] = await Promise.all([
     load('@deepseek-ai/dsh-llm-pi-ai'), load('@earendil-works/pi-ai/api/openai-completions.lazy'),
@@ -1034,15 +1086,26 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
   // host watchdog counts parsed events and a comment never becomes one: only the
   // first body byte produces `start`. A 60s bound therefore aborted a slow first
   // token while the link was healthy. Match the host default instead.
+  // Image budgets stay at the host defaults the bundled `llm-pi-ai` route is
+  // tested against: a 10x larger body only ever travels to a gateway whose own
+  // limit nobody stated, so an oversized request reads as a rejected call.
   const profiles = new Map([[provider, {
     provider, displayName: '企业模型', piProvider,
-    streamIdleTimeoutMs: 300000, maxRequestImageBytes: 10 * 1024 * 1024, requestImagePixelBudget: 4096 * 4096, requestImageMaxBytes: 10 * 1024 * 1024,
+    streamIdleTimeoutMs: 300000, maxRequestImageBytes: 20 * 1024 * 1024, requestImagePixelBudget: 2048 * 2048, requestImageMaxBytes: 1024 * 1024,
     modelErrors: new Map(), configuredMaxTokens,
     retryPolicy: NO_RETRY_POLICY
   }]]);
   // This provider accepts only the per-request IAM-resolved key, never ambient OAuth or env credentials.
+  // The enterprise route builds a second PiAiAdapter of its own, so every seam the
+  // bundled llm-pi-ai plugin wires for images and headers has to be wired here as
+  // well. Without `resolveAttachments` the adapter refuses every request whose
+  // history carries an image — before it is sent — with `UNSUPPORTED_CONTENT`,
+  // which leaves the session unable to complete any later request because the
+  // image rides in every one of them.
   return new PiAiAdapter({
     profiles: () => profiles, resolveApiKey,
+    ...typeof resolveAttachments === 'function' ? { resolveAttachments } : {},
+    ...typeof prepareHeaders === 'function' ? { prepareHeaders } : {},
     auth: {
       credentials: {
         read: async () => undefined,

@@ -171,6 +171,8 @@ export function apply(ctx, rawConfig = {}) {
     else await offWebServer?.dispose?.();
     if (typeof offAtomicStore === 'function') offAtomicStore();
     else await offAtomicStore?.dispose?.();
+    if (typeof offAttachments === 'function') offAttachments();
+    else await offAttachments?.dispose?.();
     if (typeof offCredentials === 'function') offCredentials();
     else await offCredentials?.dispose?.();
     disposeProvide?.();
@@ -183,12 +185,15 @@ export function apply(ctx, rawConfig = {}) {
   let offConnection;
   let offCredentials;
   let offAtomicStore;
+  let offAttachments;
   let offModelServices;
   let offManagedModels;
   let offAgentDefaultModel;
   let agentDefaultModelService;
   let credentialsOwner;
   let atomicStoreOwner;
+  let attachmentsOwner;
+  let attachmentsService;
   let hydratedBinding;
   const prepareBridge = () => {
     if (!tornDown) void service.bridgeCapability().catch(() => {});
@@ -244,9 +249,28 @@ export function apply(ctx, rawConfig = {}) {
           iam: service,
           config: result.value,
           getHostDefaultModel,
+          // The enterprise route builds its own PiAiAdapter, so the seams the
+          // bundled llm-pi-ai plugin wires must be supplied here too. Both read
+          // through the live bindings per call, so a service that appears (or is
+          // replaced) after model selection still satisfies the current route.
+          resolveAttachments: () => attachmentsService ?? getContextService('attachments'),
+          prepareHeaders: (request, headers) => {
+            try {
+              return host.waterfall?.('llm-pi-ai/request-headers', request, headers, () => headers) ?? headers;
+            } catch {
+              return headers;
+            }
+          },
           // P1-3: keep the failure object fixed at { code, message }; the
-          // internal code is diagnosis and goes to the host log only.
-          logFailure: (detailCode, code) => ctx.logger?.debug?.(`forge-iam: model call failure ${detailCode} -> ${code}`),
+          // internal code is diagnosis and goes to the host log only. The
+          // unknown-failure bucket is the one an administrator has to act on, so
+          // it is the one that must be visible without raising the log level
+          // first; every mapped failure stays at debug.
+          logFailure: (detailCode, code) => {
+            const line = `forge-iam: model call failure ${String(detailCode)} -> ${String(code)}`;
+            if (code === 'ENTERPRISE_GATEWAY_CALL_FAILED') ctx.logger?.warn?.(line);
+            else ctx.logger?.debug?.(line);
+          },
           // The catalogue flips loading → ready/error without any IAM
           // transition. Push a view frame so subscribers do not keep a stale
           // "syncing" snapshot until some unrelated event arrives.
@@ -316,6 +340,21 @@ export function apply(ctx, rawConfig = {}) {
         const binding = host.connection;
         currentConnection = binding;
         return () => { if (currentConnection === binding) currentConnection = undefined; };
+      });
+      // Images are model input, not a tool: the enterprise route needs the
+      // durable attachment service to project every stored image into a request.
+      // Bind it through injection like the other lazy dependencies and clear the
+      // binding on unload, so a replacement provider can never be read stale.
+      offAttachments = ctx.inject(['attachments'], (host) => {
+        const binding = host.attachments;
+        const owner = {};
+        attachmentsOwner = owner;
+        attachmentsService = binding;
+        return () => {
+          if (attachmentsOwner !== owner) return;
+          attachmentsOwner = undefined;
+          attachmentsService = undefined;
+        };
       });
       offWebServer = ctx.inject(['webServer'], (host) => {
         const binding = host.webServer;

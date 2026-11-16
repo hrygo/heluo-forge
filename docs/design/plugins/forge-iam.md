@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.2.0 |
+| 版本 | V3.3.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -101,6 +101,7 @@
 | `dsh-web-server`（`ctx.webServer`） | 基础服务 | 随目标 DSH 挂载 | 无法注册 `/iam/callback` 回调；登录流程阻断 |
 | `dsh-settings` | 基础服务 | 随目标 DSH 挂载 | 设置项无法持久化；回退为内存只读模式 |
 | `dsh-llm-pi-ai` | 协议适配 | 随目标 DSH 挂载 | 缺乏模型执行适配器；模型调用无法生效，不影响身份登录 |
+| `dsh-attachment`（`ctx.attachments`） | 基础服务 | 随目标 DSH 挂载 | 无法投影图片输入：历史含图片的请求在发送前被上游以 `UNSUPPORTED_CONTENT` 拒绝，该会话此后无法完成任何请求 |
 | `dsh-agent-default-model` | 只读观察依赖 | 随目标 DSH 挂载 | 缺失时不观察宿主默认模型；用户仍在宿主中选择可用模型 |
 | 企业 IAM OIDC 认证中心 | 外部服务 | 标准 OIDC / RFC 6749 | 未配置或不可达时显示 `unconfigured` / `unreachable` |
 | `@heluo/forge-enterprise` | 方案协同 | 同批次方案包 | 组合层打入禁用补丁；本包排他性断言检查 `deepseekAccount`，其他官方行与旁路须另行核验 |
@@ -869,6 +870,8 @@ flowchart TD
 | 5 | socket 错误码 | `ECONNREFUSED`、`ENOTFOUND`、`ETIMEDOUT` 等 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
 | 6 | 兜底 | 以上均无 | `ENTERPRISE_GATEWAY_CALL_FAILED` |
 
+模型层与附件层的本地码先于状态码判定：`UNSUPPORTED_CONTENT`、`IMAGE_OFFLOAD_REQUIRED` 与全部 `ATTACHMENT_*` 归入 `ENTERPRISE_REQUEST_UNSUPPORTED`。它们表示请求未能在发出前组装完成，而不是网关给出了答复，因此不得借状态码或响应体改判为网关问题。
+
 插件内部码在进入上述层级之前先做一次映射：`USER_CODE_BY_INTERNAL` 覆盖 `ERROR_STATUS` 中全部 `IAM_*` 与 `CRED_*` 码，把“哪个模块失败”换成“用户该做什么”。未映射的内部码不允许落到第 6 层——`gateway-failure.test.mjs` 逐码断言这一点。`IAM_GATEWAY_BINDING_CHANGED` 是内部码（`ERROR_STATUS` 409），只映射为 `IAM_MODEL_CONTEXT_CHANGED`，不直接呈现给用户。
 
 响应体来源按 `responseBody`、`data`、`body`、`cause.responseBody` 依次尝试，并兼容模型层把响应体前缀进错误消息的形态（`429: {"code":…}`）。解析失败或超过 8 KiB 时放弃解析，不影响后续层级。
@@ -889,6 +892,7 @@ flowchart TD
 | `ENTERPRISE_GATEWAY_RATE_LIMIT` | 429 且无额度类证据、`rate_limit_exceeded`、`rpm_limit_exceeded`、`tpm_limit_exceeded`、`RATE_LIMIT` | 429 | 请求过于频繁，请稍后重试。 |
 | `ENTERPRISE_GATEWAY_QUOTA_EXHAUSTED` | `insufficient_quota`、`model_cooldown`、`FreeUsageLimitError`、`QUOTA` | 429 | 所选模型的额度已用尽，请更换模型或联系管理员。 |
 | `ENTERPRISE_GATEWAY_BUDGET_EXHAUSTED` | `budget_exhausted` | 429 | 所选模型的预算已用尽，请联系管理员或更换模型。 |
+| `ENTERPRISE_REQUEST_UNSUPPORTED` | 发出前无法按模型声明组装请求：`UNSUPPORTED_CONTENT`、`IMAGE_OFFLOAD_REQUIRED`、任一 `ATTACHMENT_*` | 400 | 这次请求的内容无法发送：所选模型可能不支持图片，或图片附件已不可用。之后的请求会自动省略图片，也可以更换支持图片的模型。 |
 | `ENTERPRISE_GATEWAY_REQUEST_REJECTED` | 其余 4xx、`context_length_exceeded`、`INVALID_REQUEST` | 502 | 网关拒绝了本次请求，请检查网关地址或所选模型是否支持当前参数。 |
 | `ENTERPRISE_GATEWAY_UNAVAILABLE` | 5xx、`NETWORK`、`TIMEOUT`、`OVERLOADED`、socket 错误 | 502 | 暂时无法连接企业模型，请稍后重试。 |
 | `ENTERPRISE_IAM_UNAVAILABLE` | `IAM_UNREACHABLE`、`IAM_HTTP_ERROR`（认证服务未接受请求即失败） | 503 | 企业认证服务暂不可达，请稍后重试。 |
@@ -1098,3 +1102,17 @@ flowchart TD
 - **应用入口（已实施，未实机验证）**：`updateManualModel` 已由 `createIamService` 暴露，并经 `POST /api/forge-iam/models/manual`（同源 + `x-forge-iam-request` 预检头）开放；浏览器侧（`packages/forge-iam/client.js`）已在独立「企业模型」页（`forge-models`，`order: 10`）提供手动添加表单、手动条目或声明的徽标与删除按钮、`manualTruncated` 警告以及 `rebuildError` 降级提示。实际增删后写入失败返回 `persisted: false` 并提示用户；对不存在的手动 ID 执行 `remove` 则返回 `removed: false, persisted: false`，不发生变更或写入，也不按写入失败提示。离线单测与合成宿主探针不代表目标 GUI 已验证。
 - **扩展凭据托管服务（已实施，目标环境待验）**：宿主侧经 `forgeIamCredentialBroker` 提供者接线（`registerDescriptor` / `resolveChildEnv` / `saveToken` / `clearToken` / 状态投影），并有 `GET`、`PUT`、`DELETE /api/forge-iam/ext-credentials[/<extensionId>]` 三个同源端点；研发扩展 Token 的前端交互内聚在 `@heluo/forge-devops` 与 `@heluo/forge-gitee` 各自面板底部（`设置 → 企业研发工具` 内），`设置 → 企业账号` 不承载研发扩展项。扩展令牌与元数据使用共享凭据 provider，不构成物理隔离；按扩展在进程内排队，引用与元数据分两次写入，失败时尽力回滚并校验摘要，不是跨记录联合原子事务。目标平台的权限、隔离和恢复边界与 GUI 联动须另行验证。
 - **存储与安全边界**：手动条目存入 `heluo-iam/model-selection.manual`，不存放密钥或网关地址；不改变登录、凭据与启用校验，无法绕过企业网关授权（同权进程内 JS 可绕过进程内门禁；最终裁决仍在企业网关）。当前行为尚待在真实企业网关与目标客户端实机验证。
+
+### 13.3 企业路由的宿主接缝装配（代拟）
+
+企业模型调用由本包自建的 `PiAiAdapter`（`createNativeGatewayAdapter`）承载，不是宿主内置 `llm-pi-ai` 插件的实例，因此官方插件为该适配器装配的接缝必须由本包自行装配。缺一条不会报错，只会让能力静默消失：
+
+- **附件服务 `resolveAttachments`**：经 `ctx.inject(['attachments'])` 动态绑定宿主附件服务，与 `credentials` 同样在服务出现时绑定、卸载时清除。适配器在请求历史含图片且该接缝缺失时，于发送前抛出 `UNSUPPORTED_CONTENT`（“pi-ai image input requires the durable attachment service”），请求不会到达网关；由于历史图片在每条请求中重放，该会话此后任何消息都无法完成。装配正确后同一会话即可继续，无须新建会话。
+- **请求头接缝 `prepareHeaders`**：转发 `llm-pi-ai/request-headers` waterfall，供其他插件在调用前追加请求头（客户端标识、追踪）。缺失时企业模型调用绕过该 waterfall，依赖它注入请求头的插件对企业流量静默失效。
+- **原图路径提示 `resolveImageAccess` 未装配**：仅少一条写入请求的只读原图路径提示，模型仍能收到图片本身，不影响调用成立。
+
+接缝由 `managed-models.test.mjs` 与 `model-selection-host.test.mjs` 断言：适配器与受管运行时原样传递传入的接缝，未提供时不伪造替代函数，插件入口在服务绑定、替换、解绑时逐次跟随。缺失任一已装配接缝按装配缺陷处理，不以“企业网关不支持”归因。
+
+图片预算取宿主的 `llm-pi-ai` 默认值（单图重编码上限 1 MiB、请求内 base64 合计 20 MiB、像素预算 2048²）：企业网关的请求体上限没有公开依据，把预算放大到 10 倍只会把本地可拦截的问题变成网关侧的请求拒绝。
+
+网关确实拒绝含图片请求时的降级：首个能把失败归为 `ENTERPRISE_REQUEST_UNSUPPORTED` 或 `ENTERPRISE_GATEWAY_REQUEST_REJECTED`、且尚未向用户输出任何内容的请求，会以图片占位文本重试一次。只有该次重试成功才记住降级——顺带失败的参数或长度错误不构成“图片有问题”的证据，否则真正的错误修好后图片仍会被静默省略。记住之后，同一会话的同一目标（`provider` + 模型）后续请求直接按占位文本组装，不再先失败一次；换成其他模型则重新尝试图片，降级按会话与目标分键。5xx、网络错误与其他码不触发降级；降级通过 `IMAGE_REQUEST_REFUSED` 写入宿主日志，便于区分网关不接受图片与真的不可达。未知失败（`ENTERPRISE_GATEWAY_CALL_FAILED`）记 `warn`，已归类的失败记 `debug`。

@@ -45,9 +45,10 @@ async function seeded({ gateway = 'matching', signedIn = true } = {}) {
 }
 
 // In-memory Cordis lifecycle only: no profile, server, model calls or SDK writes.
-function fakeContext(credentials, sdk) {
+function fakeContext(credentials, sdk, extra = new Map()) {
   const services = new Map([['credentials', credentials]]);
   if (sdk) { services.set('llm', sdk.llm); services.set('agentDefaultModel', sdk.agentDefaultModel); }
+  for (const [name, value] of extra) services.set(name, value);
   const provided = new Map();
   const effects = [];
   const injections = new Set();
@@ -348,3 +349,64 @@ for (const failure of ['list', 'current', 'list-getter', 'current-getter']) {
     assert.equal(sdk.counts.saveAccess, 0);
   });
 }
+
+test('apply hands the enterprise adapter a live attachments binding and the request-header waterfall (issue #321)', async (t) => {
+  const credentials = await seeded();
+  // The catalogue needs a stored gateway address: without one the runtime stops
+  // at IAM_GATEWAY_URL_INVALID and never builds the adapter.
+  seedGateway(credentials, {
+    value: `uag-${'a'.repeat(32)}`, ownerSubject: 'synthetic-subject',
+    enteredAt: new Date(clock).toISOString(), baseURL: 'https://gateway.corp.example/v1',
+  });
+  const options = []; const headerEvents = [];
+  const sdk = recordingSdk();
+  sdk.llm.registerAdapter = () => () => { };
+  const store = { readImageRequest: async () => undefined };
+  // A gateway credential is only readable while its joint store verifies, so the
+  // fixture binds the same trust pair the sign-in gate requires.
+  const atomicStore = Object.freeze({
+    verify: candidate => candidate === credentials,
+    adapter: () => Object.freeze({ snapshot: async () => ({ record: undefined, value: undefined }), compareAndSwap: async () => ({ ok: false }) }),
+  });
+  const ctx = fakeContext(credentials, sdk, new Map([['attachments', store], ['iam-atomic-store', atomicStore]]));
+  // Injected hosts see these: the adapter factory loads the SDK through the
+  // loader and the header hook must travel the host waterfall.
+  ctx.loader = {
+    async import(specifier) {
+      if (specifier === '@deepseek-ai/dsh-llm-pi-ai') {
+        return { PiAiAdapter: class { constructor(value) { options.push(value); } } };
+      }
+      if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
+        return { openAICompletionsApi: () => ({ stream() { }, streamSimple() { } }) };
+      }
+      if (specifier === '@deepseek-ai/dsh-llm') return { attributionHeaders: async () => ({}) };
+      throw new Error(`unexpected import: ${specifier}`);
+    },
+  };
+  ctx.waterfall = (event, request, headers, fallback) => {
+    headerEvents.push({ event, request, headers });
+    return { ...fallback(), 'x-hooked': 'one' };
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ data: [{ id: 'corp-model' }] });
+  t.after(() => { globalThis.fetch = originalFetch; });
+  apply(ctx, { ...config, defaultModel: 'corp-model' });
+  t.after(() => ctx.unload());
+  await ctx.get('iam').hydrate();
+  for (let i = 0; i < 500 && options.length === 0; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(options.length, 1, 'the enterprise route must build its adapter');
+  // The resolver reads the live binding: present, replaced, then removed. A
+  // hard-coded service captured once would keep answering after removal.
+  assert.equal(options[0].resolveAttachments(), store);
+  const replacement = { readImageRequest: async () => 'replacement' };
+  ctx.replace('attachments', replacement);
+  assert.equal(options[0].resolveAttachments(), replacement);
+  ctx.replace('attachments', undefined);
+  assert.equal(options[0].resolveAttachments(), undefined);
+  // The header hook reaches the host waterfall with this call's metadata and
+  // returns what the waterfall produced.
+  const returned = options[0].prepareHeaders({ provider: 'enterprise', model: 'corp-model' }, { 'x-base': 'one' });
+  assert.equal(headerEvents.at(-1).event, 'llm-pi-ai/request-headers');
+  assert.equal(headerEvents.at(-1).headers['x-base'], 'one');
+  assert.equal(returned['x-hooked'], 'one');
+});
