@@ -116,8 +116,8 @@ Windows `dop` 1.0.4 实测接受 `--api-endpoint` 但仍向默认端点发送请
 
 - **枚举而非自由命令**：`action` 只允许契约里登记的两个读动作；清单的 `target` 只接受 `@me`（CLI 的 list 天然是当前登录人范围），其他取值在工具层拒绝、零下游调用。以后新增只读子命令时，先取证真实 flag，再把动作与 schema 加进枚举——不引入「把 argv 交给模型」的通用入口。
 - **原始与归一分层**：`facts.raw` 是平台原始事实（仅当前受权会话，不落指标/审计/产物）；`facts.normalized` 是契约形状（与上下文卡同一映射），归一失败不抛错，`normalize_error` 可见。
-- **写回默认关闭**：`change update` 是平台写，按契约登记为 `change.clarification.write`；分发补丁层不登记该动作，登记 `enabled` 还须 profile 里有效的审批台账条目（动作 + 资源 + 有效期），否则挂载即拒绝。工具面始终暴露入口，拒绝必须可见；写前要求先读该变更（`target` 必须等于会话绑定的变更号），写后回读核对，**不做通用 argv 透传**。
-- **产物不绕过机检**：`clarify` / `plan` 两类只接受结构化 `data`，正文由 `renderClarifySheet` / `renderPlan` 生成；`body` 与 `data` 互斥，手写正文无法混过检查。澄清单作为本地产物待人工确认；另有默认关闭的 `change update` 受控回写入口，企业命令与结果仍待核验。
+- **写回受内容与流程规则约束**：`change update` 是平台写，按契约登记为 `change.clarification.write`；动作分类默认开放，但每次执行仍须 IAM 身份、范围票据与有效内容闸（[判定模型 §5、§6](../../design/policy-model.md)），策略目录未登记即拒绝、确认超时即拒绝。工具面始终暴露入口，拒绝必须可见；写前要求先读该变更（`target` 必须等于会话绑定的变更号），写后回读核对，**不做通用 argv 透传**。
+- **产物不绕过机检**：`clarify` / `plan` 两类只接受结构化 `data`，正文由 `renderClarifySheet` / `renderPlan` 生成；`body` 与 `data` 互斥，手写正文无法混过检查。澄清单作为本地产物待人工确认；另有受控回写的 `change update` 入口，企业命令与结果仍待核验。
 
 **target 不是可选项**：策略条目对任何动作都要求非空 target；清单的 `target` 固定为 `@me`，不是省略。产物落盘用的变更号来自入口绑定或一次成功读取（`change.read` 成功、`change.context` 返回 `ready`），不再要求必须先跑命令入口。
 

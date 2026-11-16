@@ -280,7 +280,7 @@ P2-7 先核对 Teamflow 实际阶段、提交模板与企业 Skill 的重复确�
 
 | 决定 | 已交付证据 | 仍缺（外部/责任方） |
 |---|---|---|
-| **D1** 受控写白名单 | 登记表 [策略设计 §5.1.1](../design/plugins/forge-policy.md)；12 条动作默认关闭的逐条负测 `packages/forge-policy/test/write-register.test.mjs`；批准台账与"无台账不许 `enabled`"的挂载硬约束 [策略设计 §5.1.2](../design/plugins/forge-policy.md) + `packages/forge-policy/test/approvals.test.mjs` | 真实开关/权限/Policy 与适用企业强制控制证据；核验历史台账是否制造多余项目审批；企业平台 CLI 与权限证据 |
+| **D1** 受控写白名单（2026-11-16 起由 [判定模型 DESIGN-020](../design/policy-model.md) 取代，下列为历史证据） | 登记表 [策略设计 §5.1.1](../design/plugins/forge-policy.md)；12 条动作默认关闭的逐条负测 `packages/forge-policy/test/write-register.test.mjs`；批准台账与"无台账不许 `enabled`"的挂载硬约束 [策略设计 §5.1.2](../design/plugins/forge-policy.md) + `packages/forge-policy/test/approvals.test.mjs` | 真实开关/权限/Policy 与适用企业强制控制证据；核验历史台账是否制造多余项目审批；企业平台 CLI 与权限证据 |
 | **D2** #36 限额 | 契约[观察事件契约](../contracts/metrics-events.md)写入确认值（1000 条 / 4 MiB / 24 h / 退避封顶 5 分钟）；防漂移断言 `tests/observe-contract-limits.test.mjs` | 企业既有摄取端（AC5）与指标口径批准 |
 | **D4** #15 只读 + 门禁骨架 | 设计准入[能力面设计 §6.1](../design/plugins/forge-devops-lifecycle.md)；包与服务、四个只读工具、19 例离线测试；**宿主级证据** `scripts/probe/devops-read-probe.mjs`（`with-reader` 经门禁到达适配器恰好一次、`no-reader` 可见地报 `NO_READER`） | 企业 CLI 实证、双端产物与权限证据（#26/#38）；真实模型面（企业环境） |
 
