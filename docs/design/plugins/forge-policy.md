@@ -162,7 +162,7 @@ export interface PolicyEngine {
 - **未登记即拒绝**：目录中没有的动作在 guard 处硬拒绝、零副作用（`unregistered-action`）；`deny` 类动作（`gitee.review.record`）即使登记也拒绝，理由是动作语义不允许 Agent 发起。
 - **默认决策不是批准**：`allow` 只表示"不因动作名本身拒绝"，内容与流程规则仍逐次判定；HARD 命中不可被确认提升。
 - **内容与流程规则不在本文复制**：内置规则集、阈值与降级语义见[判定模型 §6、§7](../policy-model.md)；分级阈值与误报只能在真实仓库上评估后冻结。
-- **旧断言待改写**：`packages/forge-policy/test/write-register.test.mjs` 当前把 2026-10-24 的旧登记表钉成断言，代表旧模型；P0 实现时改写为默认决策与内容闸断言，改写前该测试不构成本设计的证据。
+- **断言现状**：`packages/forge-policy/test/write-register.test.mjs` 的漂移断言已改为对照随包补丁层目录（只读分类一一对应）；同文件的逐动作台账用例仍代表旧模型，P1 实现时按策略级批准重写，重写前不构成本设计的证据。
 
 #### 5.1.2 策略级批准
 
