@@ -3536,7 +3536,6 @@ window.__ModuleLoader__.load({
       const optionsSync = React.useRef({ signature: null });
       const syncModelOptions = React.useCallback(async (nextView) => {
         const access = nextView?.modelAccess;
-        const catalogue = deriveModelUi(nextView);
         if (!deriveSessionUi(nextView).ready) {
           optionsSync.current.signature = null;
           lastSyncedOptions.current = {};
@@ -3547,7 +3546,11 @@ window.__ModuleLoader__.load({
             : prev));
           return;
         }
-        if (!catalogue.ready || !access.modelOptions || typeof access.modelOptions !== 'object' || Array.isArray(access.modelOptions)) return;
+        // The host's enabled set is the authority even while the directory is
+        // unavailable. The rows may be restored manual declarations, and a draft
+        // that never adopted the saved set would replace choices this panel has
+        // not seen with the one row the person just toggled.
+        if (!access || !access.modelOptions || typeof access.modelOptions !== 'object' || Array.isArray(access.modelOptions)) return;
         const hostOptions = access.modelOptions;
         const signature = JSON.stringify([nextView.subject ?? nextView.principal, hostOptions]);
         if (optionsSync.current.signature === signature) return;

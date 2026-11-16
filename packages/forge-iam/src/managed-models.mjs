@@ -210,7 +210,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // `modelOptions` doubles as the enabled set: a key means "this person turned
   // this model on", and its value carries the overrides (possibly none). A
   // discovered model without a key is listed but refused for calls.
-  let catalogModels = []; let manualModels = []; let manualTruncated = 0; let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null; let catalogTruncated = 0;
+  let catalogModels = [];
+  // Whether the catalogue has ever been read successfully for this identity and
+  // gateway. A successful empty response is knowledge ("the gateway offers no
+  // catalogue models"), while a failed request is not; `catalogModels.length`
+  // cannot tell the two apart.
+  let catalogueRead = false;
+  let manualModels = []; let manualTruncated = 0; let rawModels = []; let modelOptions = {}; let models = []; let catalogState = 'unconfigured'; let catalogError = null; let catalogTruncated = 0;
   const syncRawModels = () => { rawModels = mergeAvailableModels(catalogModels, manualModels); };
   // A gateway-scoped revocation sticks until the identity, address or stored key
   // changes. Erasing the stored key needs the joint atomic adapter and stays
@@ -219,7 +225,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   let defaultModelId = null;
   // `selectionSaved` separates "nothing stored yet" (auto-enable the default)
   // from "stored as empty" (this person deliberately enabled no model).
+  // `selectionOwner` is the identity whose record the in-memory selection came
+  // from: a write must never be composed for one person out of another's state.
   let selectionSaved = false; let selectionError = null; let selectionWriteError = null;
+  let selectionLoaded = false; let selectionOwner = null;
   const enabled = id => Object.hasOwn(modelOptions, id);
   const enabledInCatalog = id => models.some(item => item.id === id);
   const allowed = (route, model) => route === provider && enabled(model) && enabledInCatalog(model);
@@ -259,7 +268,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // Every path that drops the backend also drops the catalogue state with it,
   // so the account page can never say "ready" while nothing is callable.
   function clearCatalog(state = 'unconfigured', code = null) {
-    catalogModels = []; manualModels = []; manualTruncated = 0;
+    catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0;
     rawModels = []; models = []; backend = undefined; catalogState = state; catalogError = code;
     retryAt = null; syncedAt = null;
   }
@@ -291,6 +300,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           cancelRetry(); retryAttempt = 0; hostDefault = null;
           clearCatalog();
           modelOptions = {}; defaultModelId = null; selectionSaved = false; selectionError = null; selectionWriteError = null;
+          selectionLoaded = false; selectionOwner = null;
           publish();
         }
       }
@@ -419,12 +429,24 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       }
     }
   }
-  /** Adopt the stored selection, or remember that nothing was stored yet. */
+  /**
+   * Adopt the stored selection, or remember that nothing was stored yet.
+   *
+   * `selectionLoaded` records that the read *succeeded*, which is what makes a
+   * later write safe: the enabled set and the manual list replace the whole
+   * stored record, so writing without a successful read would delete whatever
+   * this session could not see.
+   */
   async function loadSelection() {
-    if (typeof iam.readModelSelection !== 'function') { selectionSaved = true; return; }
+    const owner = identity(iam.getView());
+    if (typeof iam.readModelSelection !== 'function') {
+      selectionSaved = true; selectionLoaded = true; selectionOwner = owner;
+      return;
+    }
     try {
       const saved = await iam.readModelSelection();
       selectionError = null;
+      selectionLoaded = true; selectionOwner = owner;
       if (!saved || saved.saved !== true) {
         selectionSaved = false; modelOptions = {}; defaultModelId = null;
         manualModels = []; manualTruncated = 0;
@@ -441,7 +463,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       selectionError = cause?.code ?? 'IAM_CREDENTIALS_UNAVAILABLE';
       manualModels = []; manualTruncated = 0;
       selectionSaved = true;
+      selectionLoaded = false; selectionOwner = null;
     }
+  }
+
+  /**
+   * Read the stored selection before composing a write. Refusing here is the
+   * safe answer: an unreadable record is not an empty one, and the write would
+   * otherwise persist this session's partial view over the person's models.
+   */
+  async function ensureSelectionLoaded() {
+    const activeId = identity(iam.getView());
+    if (selectionLoaded && selectionOwner === activeId) return;
+    await loadSelection();
+    if (selectionLoaded && selectionOwner === activeId) return;
+    throw error(Object.hasOwn(MESSAGES, selectionError ?? '') ? selectionError : 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE');
   }
 
   /** Best effort: an unwritten selection still applies to this session. */
@@ -502,10 +538,19 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // header to inference calls. If the gateway ever guards /models with
       // X-IAM-Token too, this is the call site that must grow the same merge.
       const headers = await requestHeaders(); current();
+      // Adopt what this person already saved before asking the gateway for the
+      // catalogue. The manual declarations and the enabled set live on this
+      // machine, so a catalogue that cannot be read must not hide them: when
+      // discovery ran first, every start-up with a refused or unreachable
+      // gateway began from an empty selection, the panel showed no manual
+      // model, and the next add persisted that emptiness over the saved record.
+      await loadSelection(); current();
+      syncRawModels();
+      models = applyModelOptions(rawModels, modelOptions);
       const { models: found, truncated } = await discover(connection, AbortSignal.any([lifetime.signal, renewLease().signal]), fetcher, headers); current();
       catalogTruncated = truncated;
-      await loadSelection(); current();
       catalogModels = found;
+      catalogueRead = true;
       syncRawModels();
       // First run for this person: enable one model so the panel is usable
       // without any configuration. The admin's defaultModel wins when the
@@ -701,16 +746,44 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
     const denied = permit(sample());
     if (denied) throw error(denied);
-    // Before the catalogue exists every id would look "not in the catalogue",
-    // so a write here would persist an empty selection over a real one.
-    if (models.length === 0 || !backend) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
     const activeId = identity(iam.getView());
+    // Let an in-flight discovery finish first: the same person's stored
+    // selection is adopted there, and composing this write from a half-loaded
+    // state is how a save replaced models it had not seen yet.
+    if (flight) {
+      try { await flight.promise; } catch { /* the catalogue failure is reported by the refresh itself */ }
+    }
+    if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+    // The submitted map is the whole stored record, so it may only be composed
+    // after a successful read of what is already there.
+    await ensureSelectionLoaded();
+    if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+    // A sign-out or account switch while either wait above ran must not land
+    // this submission in the next person's record.
+    if (identity(iam.getView()) !== activeId || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED');
+    // A successfully read empty catalogue still means "the gateway no longer
+    // offers these", so pruning keys off the successful read itself.
+    const catalogueKnown = catalogueRead;
+    // Nothing is known about this person's models — no catalogue entry and no
+    // manual declaration — so every id would look disabled and the write would
+    // persist an empty selection over a real one. Refuse that, but never make
+    // the gateway catalogue a precondition for saving a manual model: the
+    // catalogue is the fallback's reason to exist, not its gate.
+    if (rawModels.length === 0 && Object.keys(modelOptions).length === 0) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
     const stale = () => { sample(); return disposed || identity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
     // The submitted map is the enabled set, not just an override list: an
     // empty object enables a model with the catalogue defaults, and dropping
-    // a key disables it. Only catalogue models can be enabled.
+    // a key disables it. Only known models can be enabled.
     const nextMap = normalizeSelection(nextOptions);
-    for (const id of Object.keys(nextMap)) if (!rawModels.some(item => item.id === id)) delete nextMap[id];
+    for (const id of Object.keys(nextMap)) {
+      if (rawModels.some(item => item.id === id)) continue;
+      // With no catalogue in hand every stored catalogue id looks unknown, and
+      // deleting it would throw away a model that this session simply cannot
+      // see. Keep what this person had enabled; a catalogue that is in hand
+      // still prunes the ids the gateway no longer offers.
+      if (!catalogueKnown && enabled(id)) continue;
+      delete nextMap[id];
+    }
     modelOptions = nextMap;
     if (!defaultModelId || !enabled(defaultModelId)) defaultModelId = Object.keys(modelOptions)[0] ?? null;
     const persisted = await persistSelection();
@@ -744,11 +817,19 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
     const denied = permit(sample());
     if (denied) throw error(denied);
+    const activeId = identity(iam.getView());
     if (action !== 'add' && action !== 'remove') throw error('IAM_MANUAL_MODEL_INVALID');
     const cleanId = typeof id === 'string' ? id.trim() : '';
     if (!isModelId(cleanId)) throw error('IAM_MANUAL_MODEL_INVALID');
+    // Adopt the stored manual list before computing the next one: adding to an
+    // unread record persisted a list holding only the new id, which is how one
+    // add could erase every manual model saved before it.
+    await ensureSelectionLoaded();
+    if (disposed) throw error('ENTERPRISE_MODELS_UNAVAILABLE');
+    // The read is asynchronous: a sign-out or account switch inside it must not
+    // add this person's model to the next person's list.
+    if (identity(iam.getView()) !== activeId || permit(iam.getView())) throw error('IAM_MODEL_CONTEXT_CHANGED');
 
-    const activeId = identity(iam.getView());
     const stale = () => { sample(); return disposed || identity(iam.getView()) !== activeId || Boolean(permit(iam.getView())); };
 
     let removed = false;
@@ -885,7 +966,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     async dispose() {
       if (disposed) return;
       disposed = true; clearTimeout(timer); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
-      await observation; catalogModels = []; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined;
+      await observation; catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined;
     }
   };
 }
