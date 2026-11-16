@@ -69,8 +69,9 @@ export function createServiceState(env) {
     // list while the session is still recoverable (a signed-in subject whose
     // access token lapsed or whose revocation check is offline) so the panel
     // can mark it stale instead of erasing the model list.
+    const renewable = Boolean(lastGrant) && isRefreshUsable(lastGrant, now());
     const recoverable = state === 'ready' || state === 'unreachable'
-      || (state === 'expired' && lastGrant && isRefreshUsable(lastGrant, now()));
+      || (state === 'expired' && renewable);
     return createView(state, {
       configured,
       missing: isConfigured(config).missing,
@@ -78,6 +79,8 @@ export function createServiceState(env) {
       exclusive: exclusive.ok ? 'ok' : (exclusive.reason ?? 'exclusive-violation'),
       principal: summary.principal ?? null,
       accessExpiresAt: summary.accessExpiresAt ?? null,
+      renewal: lastGrant ? (renewable ? 'available' : 'unavailable') : 'none',
+      refreshExpiresAt: summary.refreshExpiresAt ?? null,
       gatewayCredential: gateway,
       gatewayConsoleUrl: config.gatewayConsoleUrl || null,
       modelAccess: {

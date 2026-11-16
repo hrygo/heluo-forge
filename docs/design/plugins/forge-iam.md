@@ -41,7 +41,7 @@
 
 1. **预注册 public 客户端**：企业采用 `authMode=public`、`clientAuthMethod=none` 和预注册 `client_id`，通过 PKCE S256 保护授权码；不要求共享 `client_secret`。用户确认支持 public，企业服务端对 public / S256 的真实行为仍须联调；
 2. **令牌生命周期与轮换**：
-   - 访问令牌（Access Token）由企业 IAM 统一签发（有效周期 7200 秒），提前 60 秒触发锁外静默刷新；刷新成功后旧访问令牌即时作废；
+   - 访问令牌（Access Token）由企业 IAM 统一签发（设计基线有效周期 7200 秒），在可用寿命的中点触发锁外静默刷新（寿命短于 4 分钟时按 60 秒提前量），使滑动刷新窗口保留约一小时余量；刷新成功后旧访问令牌即时作废；
    - 刷新令牌（Refresh Token）遵循滑动续期机制（有效期 7300 秒，无绝对上限），旧刷新令牌在轮换后即时作废；
 3. **撤销与退出语义闭环**：
    - 访问令牌通过专用端点 `GET /idp/oauth2/revokeToken?access_token=...` 实现单令牌实时幂等撤销；
@@ -318,7 +318,7 @@ DSH 内置的 `ctx.authorization` flow 面向“单次凭据唤起与 commit 录
 | `gatewayConsoleUrl` | string | 空 | 否 | UAG 网关个人访问凭证控制台链接，仅用于界面指引 |
 | `defaultProvider` | string | `enterprise` | 否 | 企业模型提供方标识 |
 | `defaultModel` | string | 空 | 否 | 企业模型目录的首选项与只读观察目标；不写宿主默认模型 |
-| `refreshSkewSeconds` | number | 60 | 否 | 访问令牌过期前预刷新提前量（秒） |
+| `refreshSkewSeconds` | number | 60 | 否 | 前台预刷新窗口（秒）。后台续期按可用寿命半程触发；可用寿命短于 4 分钟时沿用该提前量 |
 | `attemptTimeoutSeconds` | number | 300 | 否 | 单次登录 Attempt 超时时间（秒） |
 | `httpTimeoutMs` | number | 10000 | 否 | HTTP 请求默认超时上限（毫秒）；刷新与撤销请求设 5000ms 硬上限 |
 | `logoutMode` | string | `local` | 否 | 登出模式：`local`（撤销本机访问令牌 + 本地清理）或 `rp`（跳转全局登出） |
@@ -412,6 +412,9 @@ export interface IamView {
   readonly state: IamState;
   readonly principal?: IamPrincipal;
   readonly accessExpiresAt?: string;
+  /** 会话是否仍能自行续期；`unavailable` 表示滑动刷新窗口已过，必须重新登录 */
+  readonly renewal?: 'available' | 'unavailable' | 'none';
+  readonly refreshExpiresAt?: string;
   readonly gatewayCredential: GatewayCredentialView;
   readonly authorizationUrl?: string;
   readonly attemptId?: string;
@@ -1043,7 +1046,7 @@ flowchart TD
 | 10 | 撤销实现改造联调：`GET ?access_token=` 撤销端点企业环境验证 | 平台组 + IAM | 验证服务端撤销回执、错误码及脱敏一致性 |
 | 11 | 刷新令牌不可撤销的用户端文案与审计字段呈现规范 | 平台组 | 保证界面与审计如实呈现“访问令牌已撤销 / 刷新令牌自然过期” |
 | 12 | 机密模式 secret 轮换（仅未来另行选用时） | 平台组 + IAM | 当前 public 基线不依赖；如恢复机密模式，另行设计并核验 |
-| 13 | 刷新令牌滑动续期临界点（休眠/断网超过余量）的实机确认 | 平台组 | 明确自然过期后的用户端重新认证提示体验 |
+| 13 | 刷新令牌滑动窗口时长（当前 7300 秒）与服务端延期窗口的企业确认 | 平台组 + IAM | 客户端已按半程续期保留余量，并如实呈现不可续期状态；超过该窗口的休眠或断网只有在服务端延长滑动窗口或改用长效刷新策略后才能自动恢复 |
 | 14 | UserInfo 工号与姓名标准声明字段最终口径对齐 | IAM 团队 | 统一账户页展示名与审计主体显示名 |
 | 15 | 回调前缀匹配的边界：合法前缀限定为 `http://127.0.0.1:` 与 `http://127.0.0.1/`，`https` 同样可用；`127.0.0.1.evil.com`、`127.0.0.10`、`localhost` 均被拒。大小写、尾斜杠与非数字端口未验 | IAM 团队 | 用真实 IAM 补负面用例，确认非法写法的拒绝形态 |
 

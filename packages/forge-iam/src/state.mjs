@@ -106,7 +106,7 @@ export function canSignIn(state) {
  * Build the non-secret snapshot consumed by the Host service and Client UI.
  *
  * @param {string} state
- * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, accessExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
+ * @param {{ configured?: boolean, missing?: string[], error?: string | null, exclusive?: string, principal?: string | null, accessExpiresAt?: string | null, renewal?: string, refreshExpiresAt?: string | null, gatewayCredential?: object | null, gatewayConsoleUrl?: string | null }} [details]
  */
 export function createView(state, details = {}) {
   return {
@@ -120,6 +120,10 @@ export function createView(state, details = {}) {
     exclusive: details.exclusive ?? 'ok',
     principal: details.principal ?? null,
     accessExpiresAt: details.accessExpiresAt ?? null,
+    // Whether this session can still renew itself without a fresh sign-in.
+    // `none` means there is no stored grant to renew.
+    renewal: details.renewal ?? 'none',
+    refreshExpiresAt: details.refreshExpiresAt ?? null,
     gatewayCredential: details.gatewayCredential ?? null,
     gatewayConsoleUrl: details.gatewayConsoleUrl ?? null,
     modelAccess: details.modelAccess ?? null,

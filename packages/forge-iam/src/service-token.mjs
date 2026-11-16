@@ -3,8 +3,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { credentialReadError } from './error-contract.mjs';
 import { randomToken, refreshTokens, verifyIdToken } from './oidc.mjs';
-import { isAccessExpired, isRefreshUsable, renewalDeadline, renewalSkewMillis, shouldRefresh } from './record.mjs';
-import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
+import { isAccessExpired, isRefreshUsable, renewalDeadline, renewalLeadMillis, shouldRefresh } from './record.mjs';
+import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, REFRESH_TIMEOUT_MS, RESUME_JUMP_MS, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
 
 /**
  * The single-flight refresh: one promise per provider, and every caller that
@@ -16,8 +16,8 @@ import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, no
  */
 export function createTokenResolver(env) {
   const {
-    config, ctx, provider, grants, now, fetchImpl, isSigningOut, getSessionEpoch, getAuthEpoch, clearObservation,
-    beginConsumption, adoptConsumption,
+    config, ctx, provider, grants, now, monotonic = () => performance.now(), fetchImpl, isSigningOut,
+    getSessionEpoch, getAuthEpoch, clearObservation, beginConsumption, adoptConsumption,
   } = env;
 
   let refreshPromise = null;
@@ -62,16 +62,77 @@ export function createTokenResolver(env) {
       && isDeepStrictEqual(refreshPromisePending.grant, grant) ? refreshPromise : null;
   }
 
+  // A suspended host resumes with a wall clock that has moved while the
+  // monotonic clock has not. A jump this large means the deadline we scheduled
+  // is no longer "in the future", so the next pass must renew immediately.
+  let clockBaseline = null;
+  function resumeJumpMillis() {
+    const wall = now();
+    const monotonicNow = monotonic();
+    const previous = clockBaseline;
+    clockBaseline = { wall, monotonic: monotonicNow };
+    if (!previous) return 0;
+    const jump = (wall - previous.wall) - (monotonicNow - previous.monotonic);
+    return Number.isFinite(jump) && jump > RESUME_JUMP_MS ? jump : 0;
+  }
+
+  function trustedProvider(targetStore, targetCredentials) {
+    return Boolean(targetStore && targetCredentials)
+      && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials
+      && provider.atomicVerified(targetCredentials)
+      && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials;
+  }
+
+  // The deadline a scheduled timer compares against: the refresh token's own
+  // expiry while recovering from an expired access token, otherwise the earlier
+  // of the two known deadlines.
+  function deadlineOf(grant, at, recovering) {
+    const refreshExpiry = Date.parse(grant?.refreshExpiresAt);
+    return recovering
+      ? (Number.isFinite(refreshExpiry) ? refreshExpiry : Infinity)
+      : renewalDeadline(grant, at);
+  }
+
+  function armTimer(scheduled, delay) {
+    renewal = scheduled;
+    scheduled.timer = setTimeout(() => {
+      if (renewal !== scheduled) return;
+      renewal = null;
+      onRenewalDue(scheduled);
+    }, Math.min(delay, 2_147_483_647));
+    scheduled.timer.unref?.();
+  }
+
+  function onRenewalDue(scheduled) {
+    const { recovering, targetStore, targetCredentials, auth, session, identity, expiry } = scheduled;
+    const stillCurrent = () => {
+      const current = ctx.lastGrant;
+      return !ctx.disposed && ctx.state === (recovering ? 'expired' : 'ready') && !isSigningOut() && current
+        && getAuthEpoch() === auth && getSessionEpoch() === session
+        && deadlineOf(current, now(), recovering) === expiry
+        && current.refreshToken === scheduled.refreshToken
+        && isDeepStrictEqual(grantIdentity(current), identity);
+    };
+    // A withdrawn trust binding must stop this timer: renewal resumes only when
+    // the host re-publishes a verified pair (see index.mjs hydrateBinding()).
+    if (!stillCurrent() || !trustedProvider(targetStore, targetCredentials)) return;
+    if (now() < scheduled.runAt) { scheduleRenewal({ retry: scheduled.backoff === true }); return; }
+    void resolveToken(scheduled).catch((cause) => {
+      if (cause?.code === 'IAM_UNREACHABLE') scheduleRenewal({ retry: true });
+    });
+  }
+
   // The Host owns the timer; the callback enters the existing single-flight
   // resolver and therefore uses the same provider and rotation checks.
   function scheduleRenewal({ retry = false } = {}) {
     const grant = ctx.lastGrant;
     const currentTime = now();
+    // Observe the clock on every pass: the first activity after a suspension is
+    // where a deadline that passed while asleep has to become a renewal.
+    const resumed = resumeJumpMillis() > 0;
     const recovering = ctx.state === 'expired';
     const refreshExpiry = Date.parse(grant?.refreshExpiresAt);
-    const expiry = recovering
-      ? (Number.isFinite(refreshExpiry) ? refreshExpiry : Infinity)
-      : renewalDeadline(grant, currentTime);
+    const expiry = deadlineOf(grant, currentTime, recovering);
     if (ctx.disposed || !['ready', 'expired'].includes(ctx.state) || isSigningOut() || !grant
       || grant.refreshOperation?.state === 'pending' || !isRefreshUsable(grant, currentTime)
       || (expiry !== Infinity && !Number.isFinite(expiry)) || expiry <= currentTime) {
@@ -83,20 +144,24 @@ export function createTokenResolver(env) {
     const identity = grantIdentity(grant);
     const targetStore = grants.ownerOf(grant);
     const targetCredentials = provider.storeCredentials;
-    const trustedProvider = () => targetStore && targetCredentials
-      && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials
-      && provider.atomicVerified(targetCredentials)
-      && provider.ensure() === targetStore && provider.storeCredentials === targetCredentials;
-    if (!trustedProvider() || ctx.lastGrant !== grant || ctx.disposed || isSigningOut()
+    // Revoking trust stops renewal here; a later verified binding re-arms it.
+    if (!trustedProvider(targetStore, targetCredentials)
+      || ctx.lastGrant !== grant || ctx.disposed || isSigningOut()
       || ctx.state !== (recovering ? 'expired' : 'ready')
       || getAuthEpoch() !== auth || getSessionEpoch() !== session) {
       cancelRenewal();
       return;
     }
+    // A suspended host is the one case where the normal schedule cannot help:
+    // the access token already lapsed, so renew now and keep the timer below as
+    // the fallback. Single-flight and the shared backoff bound the extra work.
+    if (resumed && !retry && recovering && isAccessExpired(grant, currentTime)) {
+      void resolveToken().catch(() => {});
+    }
     const remaining = expiry - currentTime;
-    const lead = Math.min(renewalSkewMillis(grant, config.refreshSkewSeconds, currentTime), Math.floor(remaining / 2));
+    const lead = renewalLeadMillis(grant, expiry, currentTime, config.refreshSkewSeconds);
     let delay = retry || recovering
-      ? Math.min(AUTO_REFRESH_BACKOFF_MS, Math.max(1000, Math.floor(remaining / 2))) : remaining - lead;
+      ? Math.min(AUTO_REFRESH_BACKOFF_MS, Math.max(1000, Math.floor(remaining / 2))) : Math.max(0, remaining - lead);
     const sameBackoff = renewal?.backoff && renewal.auth === auth && renewal.session === session
       && renewal.targetStore === targetStore && renewal.targetCredentials === targetCredentials
       && renewal.refreshToken === grant.refreshToken
@@ -104,7 +169,8 @@ export function createTokenResolver(env) {
     // A view notification must not turn a scheduled backoff into an earlier
     // normal renewal. Preserve its deadline even if the view became expired.
     if (!retry && sameBackoff) delay = Math.max(0, renewal.runAt - currentTime);
-    // Never schedule a retry after the only known refresh token has expired.
+    // Never schedule a retry after the only known refresh token has expired:
+    // the access token may legitimately lapse while its retry is pending.
     if ((retry || recovering) && Number.isFinite(refreshExpiry) && currentTime + delay >= refreshExpiry) {
       cancelRenewal();
       return;
@@ -116,31 +182,9 @@ export function createTokenResolver(env) {
       && renewal.runAt <= currentTime + delay) return;
     cancelRenewal();
     const scheduled = { expiry, auth, session, identity, recovering, targetStore, targetCredentials,
-      refreshToken: grant.refreshToken, grant: structuredClone(grant),
+      refreshToken: grant.refreshToken, grant: structuredClone(grant), renewalDue: true,
       backoff: Boolean(retry || recovering || sameBackoff), runAt: currentTime + delay, timer: null };
-    renewal = scheduled;
-    scheduled.timer = setTimeout(() => {
-      if (renewal !== scheduled) return;
-      renewal = null;
-      const stillCurrent = () => {
-        const current = ctx.lastGrant;
-        const currentRefreshExpiry = Date.parse(current?.refreshExpiresAt);
-        const currentExpiry = recovering
-          ? (Number.isFinite(currentRefreshExpiry) ? currentRefreshExpiry : Infinity)
-          : renewalDeadline(current, now());
-        return !ctx.disposed && ctx.state === (recovering ? 'expired' : 'ready') && !isSigningOut() && current
-          && getAuthEpoch() === auth && getSessionEpoch() === session && currentExpiry === expiry
-          && current.refreshToken === scheduled.refreshToken
-          && isDeepStrictEqual(grantIdentity(current), identity);
-      };
-      if (!stillCurrent()) return;
-      if (!trustedProvider() || !stillCurrent()) return;
-      if (now() < scheduled.runAt) { scheduleRenewal({ retry }); return; }
-      void resolveToken(scheduled).catch((cause) => {
-        if (cause?.code === 'IAM_UNREACHABLE') scheduleRenewal({ retry: true });
-      });
-    }, Math.min(delay, 2_147_483_647));
-    scheduled.timer.unref?.();
+    armTimer(scheduled, delay);
   }
 
   async function resolveToken(expected) {
@@ -336,10 +380,17 @@ export function createTokenResolver(env) {
         operationGrant = record.grant;
         grants.assertGrantContext(record.grant, expectedIssuer);
         const initial = record.grant;
+        // The host's own timer renews at half of the lifetime, earlier than the
+        // foreground early-refresh window, so that pass may refresh ahead of the
+        // window. A rotation adopted from another Host is already fresh and must
+        // be taken as-is; every other check still runs.
+        const forcedRenewal = expected?.renewalDue === true
+          && initial.refreshToken === expected.refreshToken;
         authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
         checkAlive();
         flightAuthentication.value = clientAuthDescriptor(authentication);
-        if (initial.refreshOperation?.state !== 'pending' && !shouldRefresh(initial, now(), config.refreshSkewSeconds)) {
+        if (initial.refreshOperation?.state !== 'pending' && !forcedRenewal
+          && !shouldRefresh(initial, now(), config.refreshSkewSeconds)) {
           return useGrant(initial);
         }
         if (!isRefreshUsable(initial, now())) return rejectSession();
@@ -428,7 +479,8 @@ export function createTokenResolver(env) {
             if (!current) return undefined;
             grants.assertGrantContext(current, meta.issuer);
             if (current.refreshOperation?.state === 'pending' || !isDeepStrictEqual(current, initial)) return undefined;
-            if (!shouldRefresh(current, now(), config.refreshSkewSeconds) || !isRefreshUsable(current, now())) return undefined;
+            if ((!forcedRenewal && !shouldRefresh(current, now(), config.refreshSkewSeconds))
+              || !isRefreshUsable(current, now())) return undefined;
             claimed = true;
             claimedGrant = current;
             return { ...current, refreshOperation: operation };
