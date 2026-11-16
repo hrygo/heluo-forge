@@ -192,7 +192,7 @@ const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name)
  * replaced; the new-conversation default is observed without writing any Host
  * setting (see host-default-model.mjs).
  */
-export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, fetch: fetcher = globalThis.fetch, logFailure,
+export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, resolveAttachments, prepareHeaders, fetch: fetcher = globalThis.fetch, logFailure,
   requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders(),
   getHostDefaultModel = () => safeGet(host, 'agentDefaultModel'), retryDelays = RETRY_DELAYS, onChange }) {
   if (typeof host.on !== 'function' || typeof host.llm?.registerAdapter !== 'function') {
@@ -576,6 +576,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       models = applyModelOptions(rawModels, modelOptions);
       const resolved = await createAdapter({
         host, config: { ...config, managedModels: { baseURL: connection.baseURL, models } }, resolveIamToken, resolveKey: createKeyResolver(connection),
+        ...resolveAttachments === undefined ? {} : { resolveAttachments },
+        ...prepareHeaders === undefined ? {} : { prepareHeaders },
       }); current();
       backend = resolved; catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
       syncedAt = Date.now(); publish();
@@ -735,6 +737,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       config: { ...config, managedModels: { baseURL: connection.baseURL, models } },
       resolveIamToken,
       resolveKey: createKeyResolver(connection),
+      ...resolveAttachments === undefined ? {} : { resolveAttachments },
+      ...prepareHeaders === undefined ? {} : { prepareHeaders },
     });
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
     backend = resolved;
@@ -972,7 +976,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
 }
 
 /** Host-supplied SDK only: an unavailable public import closes this capability. */
-export async function createNativeGatewayAdapter({ host, config, resolveKey, resolveIamToken }) {
+export async function createNativeGatewayAdapter({ host, config, resolveKey, resolveIamToken, resolveAttachments, prepareHeaders }) {
   const load = specifier => host.loader.import(specifier);
   const [{ PiAiAdapter }, { openAICompletionsApi }] = await Promise.all([
     load('@deepseek-ai/dsh-llm-pi-ai'), load('@earendil-works/pi-ai/api/openai-completions.lazy'),
@@ -1041,8 +1045,16 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
     retryPolicy: NO_RETRY_POLICY
   }]]);
   // This provider accepts only the per-request IAM-resolved key, never ambient OAuth or env credentials.
+  // The enterprise route builds a second PiAiAdapter of its own, so every seam the
+  // bundled llm-pi-ai plugin wires for images and headers has to be wired here as
+  // well. Without `resolveAttachments` the adapter refuses every request whose
+  // history carries an image — before it is sent — with `UNSUPPORTED_CONTENT`,
+  // which leaves the session unable to complete any later request because the
+  // image rides in every one of them.
   return new PiAiAdapter({
     profiles: () => profiles, resolveApiKey,
+    ...typeof resolveAttachments === 'function' ? { resolveAttachments } : {},
+    ...typeof prepareHeaders === 'function' ? { prepareHeaders } : {},
     auth: {
       credentials: {
         read: async () => undefined,

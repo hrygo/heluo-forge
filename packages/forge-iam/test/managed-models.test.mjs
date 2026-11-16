@@ -956,3 +956,72 @@ test('catalogue requests keep the host attribution headers untouched (issue #198
   // The stored key and any IAM token never reach a view surface.
   assert.equal(JSON.stringify(f.runtime.getView()).includes('synthetic-only'), false);
 });
+
+test('the native adapter receives the attachment service and header hook the bundled pi-ai plugin receives', async () => {
+  const seen = [];
+  const store = { readImageRequest: async () => undefined };
+  const prepareHeaders = (request, headers) => ({ ...headers, 'x-hooked': 'one' });
+  const loader = {
+    async import(specifier) {
+      if (specifier === '@deepseek-ai/dsh-llm-pi-ai') {
+        return { PiAiAdapter: class { constructor(options) { seen.push(options); } } };
+      }
+      if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
+        return { openAICompletionsApi: () => ({ stream() { }, streamSimple() { } }) };
+      }
+      throw new Error(`unexpected import: ${specifier}`);
+    },
+  };
+  const config = {
+    defaultProvider: 'enterprise',
+    managedModels: {
+      baseURL: configuration.baseURL,
+      models: applyModelOptions([{ id: 'm1', contextWindow: 200000, maxTokens: 64000, input: ['text'] }], {}),
+    },
+  };
+  // The enterprise route constructs its own PiAiAdapter, so a request carrying an
+  // image can only be projected when the attachment service reaches this config;
+  // without it the adapter refuses the request before it is sent.
+  await createNativeGatewayAdapter({
+    host: { loader }, config, resolveKey: async () => 'synthetic-only',
+    resolveAttachments: () => store, prepareHeaders,
+  });
+  assert.equal(seen[0].resolveAttachments(), store);
+  assert.equal(seen[0].prepareHeaders({}, { a: '1' })['x-hooked'], 'one');
+  // A reduced embedding that supplies neither seam must not fabricate one.
+  await createNativeGatewayAdapter({ host: { loader }, config, resolveKey: async () => 'synthetic-only' });
+  assert.equal('resolveAttachments' in seen[1], false);
+  assert.equal('prepareHeaders' in seen[1], false);
+});
+
+test('the runtime forwards the attachment service and header hook to the adapter factory it resolves', async t => {
+  const store = { readImageRequest: async () => undefined };
+  const prepareHeaders = (request, headers) => headers;
+  const received = [];
+  const adapter = options => new Proxy({}, {
+    get: (_target, key) => {
+      if (key === 'providerInfo') return id => ({ id, name: '企业模型' });
+      if (key === 'listModels') return async () => [];
+      if (key === 'resolveModel') return async (provider, model) => ({ provider, id: model, name: model });
+      if (key === 'prepareCall') return async (provider, model) => ({ model: { provider, id: model }, stream: () => (async function* () { })() });
+      if (key === 'stream') return () => (async function* () { })();
+      return undefined;
+    },
+  });
+  const f = fixture({
+    resolveAttachments: () => store,
+    prepareHeaders,
+    createAdapter: async options => { received.push(options); return adapter(options); },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(received.length, 1);
+  assert.equal(received[0].resolveAttachments(), store);
+  assert.equal(received[0].prepareHeaders({}, { a: '1' }).a, '1');
+  // Absent seams stay absent: the factory decides, not a placeholder function.
+  const plain = fixture({ createAdapter: async options => { received.push(options); return adapter(options); } });
+  t.after(() => plain.runtime.dispose());
+  await plain.runtime.ready;
+  assert.equal('resolveAttachments' in received.at(-1), false);
+  assert.equal('prepareHeaders' in received.at(-1), false);
+});

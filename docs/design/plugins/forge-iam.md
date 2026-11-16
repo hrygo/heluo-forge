@@ -101,6 +101,7 @@
 | `dsh-web-server`（`ctx.webServer`） | 基础服务 | 随目标 DSH 挂载 | 无法注册 `/iam/callback` 回调；登录流程阻断 |
 | `dsh-settings` | 基础服务 | 随目标 DSH 挂载 | 设置项无法持久化；回退为内存只读模式 |
 | `dsh-llm-pi-ai` | 协议适配 | 随目标 DSH 挂载 | 缺乏模型执行适配器；模型调用无法生效，不影响身份登录 |
+| `dsh-attachment`（`ctx.attachments`） | 基础服务 | 随目标 DSH 挂载 | 无法投影图片输入：历史含图片的请求在发送前被上游以 `UNSUPPORTED_CONTENT` 拒绝，该会话此后无法完成任何请求 |
 | `dsh-agent-default-model` | 只读观察依赖 | 随目标 DSH 挂载 | 缺失时不观察宿主默认模型；用户仍在宿主中选择可用模型 |
 | 企业 IAM OIDC 认证中心 | 外部服务 | 标准 OIDC / RFC 6749 | 未配置或不可达时显示 `unconfigured` / `unreachable` |
 | `@heluo/forge-enterprise` | 方案协同 | 同批次方案包 | 组合层打入禁用补丁；本包排他性断言检查 `deepseekAccount`，其他官方行与旁路须另行核验 |
@@ -1095,3 +1096,13 @@ flowchart TD
 - **应用入口（已实施，未实机验证）**：`updateManualModel` 已由 `createIamService` 暴露，并经 `POST /api/forge-iam/models/manual`（同源 + `x-forge-iam-request` 预检头）开放；浏览器侧（`packages/forge-iam/client.js`）已在独立「企业模型」页（`forge-models`，`order: 10`）提供手动添加表单、手动条目或声明的徽标与删除按钮、`manualTruncated` 警告以及 `rebuildError` 降级提示。实际增删后写入失败返回 `persisted: false` 并提示用户；对不存在的手动 ID 执行 `remove` 则返回 `removed: false, persisted: false`，不发生变更或写入，也不按写入失败提示。离线单测与合成宿主探针不代表目标 GUI 已验证。
 - **扩展凭据托管服务（已实施，目标环境待验）**：宿主侧经 `forgeIamCredentialBroker` 提供者接线（`registerDescriptor` / `resolveChildEnv` / `saveToken` / `clearToken` / 状态投影），并有 `GET`、`PUT`、`DELETE /api/forge-iam/ext-credentials[/<extensionId>]` 三个同源端点；研发扩展 Token 的前端交互内聚在 `@heluo/forge-devops` 与 `@heluo/forge-gitee` 各自面板底部（`设置 → 企业研发工具` 内），`设置 → 企业账号` 不承载研发扩展项。扩展令牌与元数据使用共享凭据 provider，不构成物理隔离；按扩展在进程内排队，引用与元数据分两次写入，失败时尽力回滚并校验摘要，不是跨记录联合原子事务。目标平台的权限、隔离和恢复边界与 GUI 联动须另行验证。
 - **存储与安全边界**：手动条目存入 `heluo-iam/model-selection.manual`，不存放密钥或网关地址；不改变登录、凭据与启用校验，无法绕过企业网关授权（同权进程内 JS 可绕过进程内门禁；最终裁决仍在企业网关）。当前行为尚待在真实企业网关与目标客户端实机验证。
+
+### 13.3 企业路由的宿主接缝装配（代拟）
+
+企业模型调用由本包自建的 `PiAiAdapter`（`createNativeGatewayAdapter`）承载，不是宿主内置 `llm-pi-ai` 插件的实例，因此官方插件为该适配器装配的接缝必须由本包自行装配。缺一条不会报错，只会让能力静默消失：
+
+- **附件服务 `resolveAttachments`**：经 `ctx.inject(['attachments'])` 动态绑定宿主附件服务，与 `credentials` 同样在服务出现时绑定、卸载时清除。适配器在请求历史含图片且该接缝缺失时，于发送前抛出 `UNSUPPORTED_CONTENT`（“pi-ai image input requires the durable attachment service”），请求不会到达网关；由于历史图片在每条请求中重放，该会话此后任何消息都无法完成。装配正确后同一会话即可继续，无须新建会话。
+- **请求头接缝 `prepareHeaders`**：转发 `llm-pi-ai/request-headers` waterfall，供其他插件在调用前追加请求头（客户端标识、追踪）。缺失时企业模型调用绕过该 waterfall，依赖它注入请求头的插件对企业流量静默失效。
+- **原图路径提示 `resolveImageAccess` 未装配**：仅少一条写入请求的只读原图路径提示，模型仍能收到图片本身，不影响调用成立。
+
+三条接缝由 `packages/forge-iam/test/managed-models.test.mjs` 断言：适配器与受管运行时都原样传递传入的接缝，未提供时不伪造替代函数。缺失任一已装配接缝按装配缺陷处理，不以“企业网关不支持”归因。
