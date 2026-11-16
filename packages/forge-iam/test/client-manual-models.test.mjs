@@ -573,3 +573,30 @@ test('forge-iam settings.section declares no heluo.iam.credential-item child slo
   assert.equal(slotCalled, false);
   assert.doesNotMatch(panel.text(tree), /DevOps|Gitee|扩展凭据|credential-item/);
 });
+
+test('目录失败时仍采用宿主启用集：停用一行不会丢掉面板看不见的已启用条目', async (t) => {
+  // 现场：目录被网关拒绝，列表只剩已还原的手动条目，但宿主的启用集仍是真相。
+  // 面板若只在目录 ready 时采用它，停用一行就会把其余已启用模型整条覆盖掉。
+  const outage = baseView({
+    models: [{ id: 'saved-manual', source: 'manual' }],
+    enabled: ['saved-manual', 'hidden-catalog-model'],
+  });
+  outage.modelAccess.state = 'error';
+  outage.modelAccess.error = 'ENTERPRISE_GATEWAY_REQUEST_REJECTED';
+  outage.modelAccess.modelOptions = { 'saved-manual': {}, 'hidden-catalog-model': { maxTokens: 4096 } };
+  const puts = [];
+  const panel = await mountPanel(async (path, init) => {
+    if (path === '/api/forge-iam/models') {
+      puts.push(JSON.parse(init.body));
+      return Response.json({ ok: true, persisted: true, view: outage });
+    }
+    return Response.json(outage);
+  }, { componentId: 'forge-models' });
+  t.after(() => panel.close());
+
+  const tree = panel.render();
+  assert.ok(findByAriaLabel(tree, '一键停用 saved-manual'), '目录失败时也要按宿主选择显示已启用');
+  await findByAriaLabel(tree, '一键停用 saved-manual').props.onClick();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(puts, [{ options: { 'hidden-catalog-model': { maxTokens: 4096 } } }]);
+});

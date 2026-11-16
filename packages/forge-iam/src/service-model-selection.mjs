@@ -124,9 +124,21 @@ export function createModelSelection(env) {
       return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
     }
     const record = await target.read();
-    if (!record.ok || !record.selection || record.selection.subject !== current.subject) {
-      // Nothing stored for this subject (or the record belongs to someone else
-      // or is unreadable): the caller decides the first-run default.
+    if (!record.ok) {
+      const code = record.error?.code;
+      // A record owned by someone else, or one whose payload cannot be parsed,
+      // reads as "nothing stored for this subject": the caller may then start a
+      // fresh record. A storage failure is different — the record may well exist
+      // and be fine, so answering "nothing stored" would let the next save
+      // replace choices this session never saw.
+      if (code === 'IAM_MODEL_SELECTION_FOREIGN' || code === 'IAM_MODEL_SELECTION_INVALID') {
+        return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
+      }
+      throw new IamError('IAM_MODEL_SELECTION_UNREADABLE', '模型设置暂时无法读取，请稍后重试。');
+    }
+    if (!record.selection || record.selection.subject !== current.subject) {
+      // Nothing stored for this subject (or the record belongs to someone else):
+      // the caller decides the first-run default.
       return { subject: current.subject, saved: false, models: {}, defaultModelId: null, manual: [], manualTruncated: 0 };
     }
     return {
