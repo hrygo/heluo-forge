@@ -1112,4 +1112,4 @@ flowchart TD
 
 图片预算取宿主的 `llm-pi-ai` 默认值（单图重编码上限 1 MiB、请求内 base64 合计 20 MiB、像素预算 2048²）：企业网关的请求体上限没有公开依据，把预算放大到 10 倍只会把本地可拦截的问题变成网关侧的请求拒绝。
 
-网关确实拒绝含图片请求时的降级只发生在一次会话内：首个能把失败归为 `ENTERPRISE_REQUEST_UNSUPPORTED` 或 `ENTERPRISE_GATEWAY_REQUEST_REJECTED`、且尚未向用户输出任何内容的请求，会以图片占位文本重试一次；该会话随后固定按占位文本组装请求，后续每一轮不再先失败一次。5xx、网络错误与其他码不触发降级；降级通过 `IMAGE_REQUEST_REFUSED` 写入宿主日志，便于区分网关不接受图片与真的不可达。未知失败（`ENTERPRISE_GATEWAY_CALL_FAILED`）记 `warn`，已归类的失败记 `debug`。
+网关确实拒绝含图片请求时的降级：首个能把失败归为 `ENTERPRISE_REQUEST_UNSUPPORTED` 或 `ENTERPRISE_GATEWAY_REQUEST_REJECTED`、且尚未向用户输出任何内容的请求，会以图片占位文本重试一次。只有该次重试成功才记住降级——顺带失败的参数或长度错误不构成“图片有问题”的证据，否则真正的错误修好后图片仍会被静默省略。记住之后，同一会话的同一目标（`provider` + 模型）后续请求直接按占位文本组装，不再先失败一次；换成其他模型则重新尝试图片，降级按会话与目标分键。5xx、网络错误与其他码不触发降级；降级通过 `IMAGE_REQUEST_REFUSED` 写入宿主日志，便于区分网关不接受图片与真的不可达。未知失败（`ENTERPRISE_GATEWAY_CALL_FAILED`）记 `warn`，已归类的失败记 `debug`。

@@ -363,10 +363,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       ? { ...message, content: message.content.map(block => (block?.type === 'image' && block.offloaded !== true ? { ...block, offloaded: true } : block)) }
       : message)),
   });
-  const rememberRefusal = sessionId => {
-    if (sessionId === undefined) return;
-    imagesRefused.delete(sessionId);
-    imagesRefused.add(sessionId);
+  // The memory is per conversation AND per target: switching the same
+  // conversation to another model must try its images again, or the recovery
+  // path the failure message points at would be dead.
+  const refusalKey = request => [request.sessionId, request.provider, request.model].map(value => String(value)).join('\u0000');
+  const rememberRefusal = key => {
+    imagesRefused.delete(key);
+    imagesRefused.add(key);
     while (imagesRefused.size > DOWNGRADED_SESSION_LIMIT) imagesRefused.delete(imagesRefused.values().next().value);
   };
   // Remember a revocation so no later call spends another round trip on it.
@@ -414,8 +417,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (code) { yield finish(code); return; }
     const subject = iam.getView()?.principal;
     const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
-    let emitted = false; let retried = false; let downgraded = false;
-    let current = request.sessionId !== undefined && imagesRefused.has(request.sessionId) && hasImages(request)
+    let emitted = false; let retried = false; let downgraded = false; let downgradePending = false;
+    const key = refusalKey(request);
+    let current = request.sessionId !== undefined && imagesRefused.has(key) && hasImages(request)
       ? withoutImages(request) : request;
     // Only a refusal that could be about the images, before anything reached the
     // person, is worth one placeholder attempt: after a chunk the answer already
@@ -423,7 +427,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const downgradeImages = code => {
       if (downgraded || emitted || !IMAGE_REFUSALS.has(code) || !hasImages(current)) return false;
       downgraded = true;
-      rememberRefusal(current.sessionId);
+      downgradePending = true;
       current = withoutImages(current);
       try { logFailure?.('IMAGE_REQUEST_REFUSED', code); } catch { /* diagnostics never change the answer */ }
       return true;
@@ -445,7 +449,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           yield chunk;
         }
         code = authorizationRefusal(subject);
-        if (code) yield finish(code);
+        if (code) { yield finish(code); return; }
+        // The placeholder attempt finished, so removing the images is what made
+        // this request work. Only now is the conversation remembered: a refusal
+        // that survives the retry says nothing about images (a context-length or
+        // parameter error), and remembering it would silently drop every later
+        // image long after the real problem was fixed.
+        if (downgradePending) rememberRefusal(key);
         return;
       } catch (cause) {
         if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }

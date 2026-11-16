@@ -1104,3 +1104,72 @@ test('only an image refusal downgrades a conversation: a plain outage keeps the 
   assert.equal(attempts.length, 2);
   assert.equal(attempts[1][0].content[0].offloaded, undefined);
 });
+
+test('a refusal that survives the placeholder retry is not remembered (issue #321)', async t => {
+  const attempts = [];
+  const f = fixture({
+    createAdapter: async () => ({
+      providerInfo: id => ({ id, name: '企业模型' }),
+      providerRetryPolicy: () => undefined,
+      resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
+      async *stream(options) {
+        attempts.push(options.messages);
+        // A parameter error, not an image problem: dropping images cannot fix it.
+        throw Object.assign(new Error('max_tokens is out of range'), { status: 400 });
+      },
+    }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const conversation = {
+    provider: 'enterprise', model: 'enterprise-chat', sessionId: 'session-parameter-error',
+    messages: [{ role: 'user', content: [{ type: 'image', attachment: { attachmentId: 'image-3' } }] }],
+  };
+  const send = async () => chunks(await (await f.adapter.prepareCall(conversation.provider, conversation.model)).stream(conversation));
+  const first = await send();
+  // One placeholder attempt is spent, and it failed for the same reason.
+  assert.equal(attempts.length, 2);
+  assert.equal(first.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED');
+  // Nothing was remembered, so the next turn still sends the image: dropping it
+  // never solved anything, and the person may have fixed the real parameter.
+  await send();
+  assert.equal(attempts[2][0].content[0].offloaded, undefined);
+});
+
+test('the downgrade follows the target model, so switching models tries images again (issue #321)', async t => {
+  const attempts = [];
+  const f = fixture({
+    fetch: async () => new Response(JSON.stringify({ data: [{ id: 'enterprise-chat' }, { id: 'enterprise-vision' }] })),
+    selection: { models: { 'enterprise-chat': {}, 'enterprise-vision': {} }, defaultModelId: 'enterprise-chat' },
+    createAdapter: async () => ({
+      providerInfo: id => ({ id, name: '企业模型' }),
+      providerRetryPolicy: () => undefined,
+      resolveModel: async (provider, model) => ({ provider, id: model, name: model }),
+      async *stream(options) {
+        attempts.push(options.messages);
+        const carrying = options.messages.some(message => Array.isArray(message?.content)
+          && message.content.some(block => block?.type === 'image' && block.offloaded !== true));
+        if (carrying && options.model === 'enterprise-chat') throw Object.assign(new Error('no vision here'), { status: 400 });
+        yield { type: 'text', text: 'ok' };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      },
+    }),
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const conversation = {
+    provider: 'enterprise', sessionId: 'session-model-switch',
+    messages: [{ role: 'user', content: [{ type: 'image', attachment: { attachmentId: 'image-4' } }] }],
+  };
+  const send = async model => chunks(await (await f.adapter.prepareCall('enterprise', model)).stream({ ...conversation, model }));
+  await send('enterprise-chat');
+  assert.equal(attempts.length, 2);
+  // The same conversation, same model: the image is skipped from the start.
+  await send('enterprise-chat');
+  assert.equal(attempts.length, 3);
+  assert.equal(attempts[2][0].content[0].offloaded, true);
+  // Switching to another model must try its images again.
+  await send('enterprise-vision');
+  assert.equal(attempts.length, 4);
+  assert.equal(attempts[3][0].content[0].offloaded, undefined);
+});
