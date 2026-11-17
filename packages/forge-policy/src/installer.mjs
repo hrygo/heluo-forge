@@ -160,12 +160,10 @@ function readFactSources(ctx, request = {}) {
   const service = typeof ctx?.get === 'function' ? ctx.get(PROCESS_FACTS_KEY) : undefined;
   if (service === undefined || service === null) return {};
   if (typeof service.read !== 'function') return {};
-  try {
-    const value = service.read(request);
-    return isPlainObject(value) ? value : {};
-  } catch {
-    return {};
-  }
+  // The provider reports expected unavailability in its returned facts.
+  // Unexpected exceptions remain visible instead of disabling process rules.
+  const value = service.read(request);
+  return isPlainObject(value) ? value : {};
 }
 
 /**

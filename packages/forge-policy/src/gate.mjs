@@ -161,12 +161,8 @@ export function createGate({
     if (entry === undefined || entry.processRules.length === 0) {
       return { decision: 'allow', deny: [], confirm: [], unevaluated: [], ruleIds: [] };
     }
-    let sources = {};
-    try {
-      sources = typeof getFactSources === 'function' ? getFactSources({ action, changeId: changeOf(args) }) ?? {} : {};
-    } catch {
-      sources = {};
-    }
+    const sources = typeof getFactSources === 'function'
+      ? getFactSources({ action, changeId: changeOf(args) }) ?? {} : {};
     const facts = withSources(factsFromArguments(withContent(args, content)), sources);
     const outcome = evaluateProcessRules({
       rules: entry.processRules,
@@ -451,7 +447,14 @@ export function createGate({
   async function executeAction(ctx, action, exec, operation) {
     const prepared = await prepare(ctx, exec, action);
     if (prepared.kind === 'deny') return { kind: 'error', text: prepared.reason };
-    const reason = guardAction(exec, action);
+    let reason;
+    try {
+      reason = guardAction(exec, action);
+    } catch (error) {
+      // A failed final check did not run the operation; close its audit receipt.
+      await postExecute(exec, { kind: 'error' });
+      throw error;
+    }
     if (reason !== undefined) {
       await postExecute(exec, { kind: 'error' });
       return { kind: 'error', text: reason };

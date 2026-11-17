@@ -168,3 +168,25 @@ test('a push command without an approval channel fails closed', async () => {
   assert.match(result.text, /no approval channel/);
   assert.equal(runs, 0);
 });
+
+test('a final process provider exception settles the command audit and does not run the handler', async () => {
+  const host = fakeHost();
+  apply(host.ctx, CONFIG);
+  const failure = new TypeError('provider defect');
+  let reads = 0;
+  host.ctx.provide('processFacts', { read() {
+    if (++reads === 2) throw failure;
+    return { change: { available: true, status: 'active' }, plan: { available: true, confirmed: true } };
+  } });
+  let runs = 0;
+  const policy = host.ctx.get('policy');
+  policy.registerCommand(host.ctx, {
+    name: 'forge-push', description: 'push', action: 'gitee.git.push',
+    resolveArguments: () => ({ target: 'acme/demo', branch: 'feature/x', changeId: 'CHG-1' }),
+    handler: async () => { runs++; },
+  });
+  await assert.rejects(host.registered.get('forge-push').handler(invocationOf()), (error) => error === failure);
+  assert.equal(runs, 0);
+  assert.deepEqual(policy.auditRecords().map((record) => record.phase), ['begin', 'settle']);
+  assert.equal(policy.auditRecords().at(-1).decision, 'error');
+});

@@ -500,3 +500,33 @@ test('push rechecks change and plan after approval and after audit', async () =>
     }
   }
 });
+
+test('explicitly unavailable process facts remain unevaluated', async () => {
+  const facts = { read: () => ({ change: { available: false }, plan: { available: false } }) };
+  const host = mount(baseConfig, { facts });
+  const result = await host.stage('forge_push', { target: 'acme/demo', branch: 'feature/x', changeId: 'CHG-1' }, { agent: { id: 'agent-1' } });
+  assert.equal(result.reason, undefined);
+  assert.deepEqual([...host.policy.auditRecords().find((item) => item.phase === 'begin').unevaluated], ['change-in-progress', 'plan-confirmed']);
+});
+
+test('unexpected process provider errors propagate before and after approval', async () => {
+  for (const ErrorType of [TypeError, ReferenceError]) {
+    for (const phase of ['prepare', 'guard']) {
+      const failure = new ErrorType('provider defect');
+      let fail = phase === 'prepare';
+      const host = mount(baseConfig, { facts: { read() {
+        if (fail) throw failure;
+        return { change: { available: true, status: 'active' }, plan: { available: true, confirmed: true } };
+      } } });
+      const exec = { name: 'forge_push', arguments: { target: 'acme/demo', branch: 'feature/x', changeId: 'CHG-1' },
+        callId: `${ErrorType.name}-${phase}`, agent: { id: 'agent-1' }, signal: new AbortController().signal };
+      if (phase === 'prepare') {
+        await assert.rejects(host.preExecute(exec, () => Promise.resolve({ kind: 'allow' })), (error) => error === failure);
+      } else {
+        assert.equal((await host.preExecute(exec, () => Promise.resolve({ kind: 'allow' }))).kind, 'allow');
+        fail = true;
+        assert.throws(() => host.guard(exec), (error) => error === failure);
+      }
+    }
+  }
+});
