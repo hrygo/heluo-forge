@@ -640,7 +640,9 @@ export function createGitPush() {
             detail: { mayHaveSideEffect: false },
           });
         }
-        return port.readRange({ remote, branch }, cwd);
+        // cwd 必须放在同一个选项对象里：readRange 只从第一参数取目录，
+        // 传成第二个实参会静默丢失，让内容检查跑在适配器默认目录而不是会话仓库。
+        return port.readRange({ remote, branch, cwd });
       };
 
       let verdict;

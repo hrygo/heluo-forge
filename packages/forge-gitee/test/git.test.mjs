@@ -800,6 +800,35 @@ test('工具：push 把将要推送的提交内容以惰性通道交给策略，
   assert.match(content.diff, /tok/u);
 });
 
+test('工具：推送正文在会话目录读取，不在适配器默认目录', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/adapter-default' });
+  let captured;
+  const policy = {
+    decide: () => ({ action: 'allow' }),
+    executeAction: async (_ctx, _action, exec) => {
+      captured = exec;
+      await exec.content();
+      return { status: 'done' };
+    },
+  };
+  const { service } = serviceWith({ adapter, policy });
+  const definitions = gitToolDefinitions(service, async () => '/tmp/session-repo');
+  const push = definitions.find((definition) => definition.name === GITEE_GIT_TOOLS.PUSH);
+  await push.execute(
+    { target: 'group/repo', branch: 'feat/r12', confirm: { repo: 'group/repo', object: 'group/repo' } },
+    { agent: { workingDirectory: '/tmp/ignored' } },
+  );
+  assert.equal(typeof captured.content, 'function');
+  const dirs = runner.calls.filter((call) => ['rev-parse', 'log', 'diff'].includes(call.args[0])).map((call) => call.cwd);
+  assert.deepEqual([...new Set(dirs)], ['/tmp/session-repo'], '正文读取必须落在会话仓库目录');
+});
+
 test('工具：推送正文读的是命名分支，不是当前检出的 HEAD', async () => {
   const runner = fakeRunner(({ args }) => {
     if (args[0] === 'rev-parse') {
