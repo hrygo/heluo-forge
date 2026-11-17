@@ -1,0 +1,252 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createServer } from "node:http";
+import { createTestFetchBridge } from "./fixtures/test-fetch-server.mjs";
+
+const temporary = await mkdtemp(join(tmpdir(), "dssm-sidebar-test-"));
+process.env.DSH_HOME = join(temporary, "home");
+process.env.DSH_AGENTS_HOME = join(temporary, "agents");
+process.env.HOME = process.env.USERPROFILE = join(temporary, "user");
+
+try {
+  const core = await import("../lib/core.js");
+  const { apply } = await import("../lib/index.js");
+
+  // 1. 默认值与入口位置持久化
+  assert.equal(await core.getEntryLocation(), "settings", "entryLocation 默认仅设置");
+
+  // 测试 setEntryLocation 的落盘持久化与重启重读
+  await core.setEntryLocation("sidebar");
+  assert.equal(await core.getEntryLocation(), "sidebar", "setEntryLocation('sidebar') 返回并生效");
+  let reloadedState = (await core.readManagerState()).state;
+  assert.equal(reloadedState.entryLocation, "sidebar", "磁盘持久化必须保存 entryLocation: sidebar");
+  assert.equal(await core.getEntryLocation(), "sidebar", "从磁盘重新加载后必须保持 sidebar 不被重置");
+
+  await core.setEntryLocation("both");
+  assert.equal(await core.getEntryLocation(), "both", "setEntryLocation('both') 生效");
+  reloadedState = (await core.readManagerState()).state;
+  assert.equal(reloadedState.entryLocation, "both", "磁盘持久化必须保存 entryLocation: both");
+
+  await core.setEntryLocation("settings");
+  assert.equal(await core.getEntryLocation(), "settings", "setEntryLocation('settings') 生效");
+  reloadedState = (await core.readManagerState()).state;
+  assert.equal(reloadedState.entryLocation, "settings", "磁盘持久化必须保存 entryLocation: settings");
+
+  // 非法参数校验
+  await assert.rejects(
+    async () => core.setEntryLocation("invalid"),
+    (err) => err.code === "error.proto.invalidParams",
+    "非法 location 拒绝写入"
+  );
+
+  // 旧配置只有布尔值时，由当前读取入口兼容；最后恢复默认位置供 HTTP 测试使用。
+  for (const enabled of [true, false]) {
+    const legacyState = (await core.readManagerState()).state;
+    delete legacyState.entryLocation;
+    legacyState.sidebarEntry = enabled;
+    await writeFile(core.managerStatePath(), JSON.stringify(legacyState));
+    const location = enabled ? "both" : "settings";
+    assert.equal(await core.getEntryLocation(), location, "旧布尔入口配置正确映射为当前位置");
+    assert.equal((await core.readManagerState()).state.entryLocation, location, "状态读取保持旧配置兼容");
+  }
+
+  // 2. HTTP 路由测试
+  const { connection, handler } = createTestFetchBridge();
+  apply({
+    connection,
+    effect(fn) { return fn(); },
+    skills: { registerProvider() { return () => {}; } },
+  });
+
+  const server = createServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/api/forge-skills-manager/sidebar-entry`;
+  const headers = { "content-type": "application/json", "x-dsh-skills-manager": "1" };
+
+  try {
+    // GET 初始状态
+    const getRes = await fetch(baseUrl);
+    assert.equal(getRes.status, 200);
+    const getData = await getRes.json();
+    assert.equal(getData.ok, true);
+    assert.equal(getData.data.enabled, false);
+
+    // POST 更新开启
+    const postRes = await fetch(baseUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(postRes.status, 200);
+    const postData = await postRes.json();
+    assert.equal(postData.ok, true);
+    assert.equal(postData.data.enabled, true);
+
+    // GET 验证已更新
+    const getRes2 = await fetch(baseUrl);
+    const getData2 = await getRes2.json();
+    assert.equal(getData2.data.enabled, true);
+
+    // POST 非法参数校验
+    const postInvalid = await fetch(baseUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ enabled: "yes" }),
+    });
+    assert.equal(postInvalid.status, 400);
+
+    // 缺少 client marker
+    const postForbidden = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    assert.equal(postForbidden.status, 403);
+
+    // HEAD 请求
+    const headRes = await fetch(baseUrl, { method: "HEAD" });
+    assert.equal(headRes.status, 200);
+
+    // 不支持的方法 (PUT)
+    const putRes = await fetch(baseUrl, { method: "PUT" });
+    assert.equal(putRes.status, 404);
+  } finally {
+    server.close();
+  }
+
+  // 3. 客户端槽位与门控测试
+  const { readFile } = await import("node:fs/promises");
+  const react = await import("react");
+
+  let definition;
+  new Function("window", await readFile(new URL("../lib/client.js", import.meta.url), "utf8"))({
+    __ModuleLoader__: { load(value) { definition = value; } },
+  });
+  const client = definition.factory((id) => {
+    if (id === "react") return react;
+    if (id === "react/jsx-runtime") return { jsx: react.createElement, jsxs: react.createElement, Fragment: react.Fragment };
+    if (id.startsWith("react-dom")) return { createPortal: (node) => node };
+    if (id === "@deepseek-ai/dsh-client-ui-primitives") {
+      return {
+        Button: (props) => react.createElement("button", props, props.children),
+        Input: (props) => react.createElement("input", props),
+        Modal: (props) => null,
+        SegmentedTabs: (props) => null,
+        SegmentedControl: (props) => react.createElement("div", props),
+        Switch: (props) => react.createElement("input", { type: "checkbox", checked: props.checked, onChange: (e) => props.onChange(e.target.checked) }),
+      };
+    }
+    throw new Error("unexpected require: " + id);
+  });
+
+  const { setupSidebarEntry } = client;
+  assert.equal(typeof setupSidebarEntry, "function", "client 导出 setupSidebarEntry");
+
+  const slotRegistrations = new Map();
+  const slotInjections = new Map();
+  let selectedPanel = "skills-manager";
+
+  const mockCtx = {
+    locale: {
+      bind: () => (key) => key,
+    },
+    slots: {
+      inject(name, fn) {
+        slotInjections.set(name, fn);
+      },
+      register(meta, component) {
+        slotRegistrations.set(meta.name, { meta, component });
+        return () => {
+          slotRegistrations.delete(meta.name);
+        };
+      },
+    },
+    inject(deps, fn) {
+      if (deps.includes("layout")) {
+        fn({
+          layout: {
+            panelInfo: { getSnapshot: () => ({ activePanelId: selectedPanel }) },
+            selectPanel: (id) => { selectedPanel = id; },
+          },
+        });
+      }
+    },
+  };
+
+  let clientEnabled = false;
+  const controller = setupSidebarEntry(mockCtx, {
+    callApi: async (path, options) => {
+      if (options?.method === "POST") {
+        const body = JSON.parse(options.body);
+        clientEnabled = body.enabled;
+        return { enabled: clientEnabled };
+      }
+      return { enabled: clientEnabled };
+    },
+    headers: {},
+    renderPanel: () => "panel-element",
+    ns: "skills-manager",
+  });
+
+  // 默认关闭且尚未 inject 槽位时
+  assert.equal(controller.isEnabled(), false);
+  assert.equal(controller.isSupported(), false);
+  assert.equal(slotRegistrations.has("main"), false);
+  assert.equal(slotRegistrations.has("sidebar.panellist"), false);
+
+  // plugins.bundle.config 应该已经触发 inject
+  assert.ok(slotInjections.has("plugins.bundle.config"));
+  // 执行 bundle config 注入
+  slotInjections.get("plugins.bundle.config")();
+  assert.ok(slotRegistrations.has("plugins.bundle.config"));
+  assert.equal(slotRegistrations.get("plugins.bundle.config").meta.key, "@heluo/forge-skills-manager");
+
+  // 触发 sidebar.panellist 槽位注入（代表宿主支持侧边栏）
+  assert.ok(slotInjections.has("sidebar.panellist"));
+  slotInjections.get("sidebar.panellist")();
+  assert.equal(controller.isSupported(), true);
+  // 开关仍为关闭，所以侧栏和 main 仍未注册
+  assert.equal(slotRegistrations.has("main"), false);
+  assert.equal(slotRegistrations.has("sidebar.panellist"), false);
+
+  // 打开开关
+  await controller.setEnabled(true);
+  assert.equal(controller.isEnabled(), true);
+  assert.equal(controller.getLocation(), "both");
+  assert.equal(controller.isSettingsSectionEnabled(), true);
+  assert.ok(slotRegistrations.has("main"), "开启后注册 main 槽位");
+  assert.equal(slotRegistrations.get("main").meta.key, "skills-manager");
+  assert.ok(slotRegistrations.has("sidebar.panellist"), "开启后注册 sidebar.panellist 槽位");
+  assert.equal(slotRegistrations.get("sidebar.panellist").meta.id, "skills-manager");
+  assert.equal(slotRegistrations.get("sidebar.panellist").meta.order, 2);
+
+  // 切换到仅侧边栏 (sidebar)
+  await controller.setLocation("sidebar");
+  assert.equal(controller.getLocation(), "sidebar");
+  assert.equal(controller.isEnabled(), true);
+  assert.equal(controller.isSettingsSectionEnabled(), false, "仅侧边栏模式下设置菜单项不显示");
+  assert.ok(slotRegistrations.has("sidebar.panellist"), "仅侧边栏模式下保留侧边栏图标");
+
+  // 切换到仅设置 (settings)
+  await controller.setLocation("settings");
+  assert.equal(controller.getLocation(), "settings");
+  assert.equal(controller.isEnabled(), false);
+  assert.equal(controller.isSettingsSectionEnabled(), true, "仅设置模式下显示设置菜单项");
+  assert.equal(slotRegistrations.has("sidebar.panellist"), false, "仅设置模式下注销侧边栏图标");
+
+  // 关闭开关：验证安全切走当前激活面板并注销槽位
+  selectedPanel = "skills-manager";
+  await controller.setEnabled(false);
+  assert.equal(controller.isEnabled(), false);
+  assert.equal(selectedPanel, null, "关闭开关时如果当前在该面板，安全重置选中的面板");
+  assert.equal(slotRegistrations.has("main"), false, "关闭后注销 main");
+  assert.equal(slotRegistrations.has("sidebar.panellist"), false, "关闭后注销 sidebar.panellist");
+
+  controller.destroy();
+
+  console.log("sidebar-entry.test.mjs passed");
+} finally {
+  await rm(temporary, { recursive: true, force: true }).catch(() => {});
+}

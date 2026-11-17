@@ -29,7 +29,7 @@ for (const profile of profiles) {
     assert.match(output, /installed-patch-disables-official-rows/);
     assert.match(output, /installed-final-tarball-closure/);
     assert.match(output, /installed-iam-client-secret-provision/);
-    // 底座三行 + 研发叠加层四行，且 Skill 候选本身满足宿主校验、能按候选取正文、卸载后 provider 清空。
+    // 底座四行 + 研发叠加层四行，且 Skill 候选本身满足宿主校验、能按候选取正文、卸载后 provider 清空。
     assert.match(output, /install-patch-mounts-base-and-overlay/);
     assert.match(output, /install-real-loader-instantiates-members/);
     assert.match(output, /installed-skill-candidate-shape/);

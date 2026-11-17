@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { discoverPackages, linkWorkspace, readWorkspacePatterns } from '../scripts/link-workspace.mjs';
 
@@ -63,7 +63,7 @@ test('linkWorkspace：给 @heluo/* 建目录链接，非本 scope 的包不建',
     for (const name of ['alpha', 'beta']) {
       const link = join(root, 'node_modules/@heluo', name);
       assert.ok(lstatSync(link).isSymbolicLink(), `${name} 应是符号链接`);
-      assert.equal(readlinkSync(link), `../../packages/${name}`, '相对路径要能从 node_modules/@heluo 走回包目录');
+      assert.equal(resolve(join(root, 'node_modules/@heluo'), readlinkSync(link)), join(root, 'packages', name), '目录链接必须指向本仓库包目录');
     }
     assert.match(said[0], /2 created/, '要报告新建数量');
   } finally {
