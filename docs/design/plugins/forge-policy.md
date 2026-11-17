@@ -27,7 +27,7 @@
 > **2026-10-24 候选平台只读事实（Ubuntu 24.04.5 / Linux aarch64，未做沙箱实验）**：`bwrap` 0.9.0 可用；Landlock 在活跃 LSM 列表中，`landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` 返回 ABI **8**；glibc 2.39；`node-pty` 未安装（`MODULE_NOT_FOUND`，不能据此判断 ABI 或不兼容）。这只说明 Linux aarch64 上存在可用的沙箱原语，未验证具体规则能否满足产品需求，也不改变"策略与沙箱叠加顺序仍未实验"的结论。
 > **仍未实验**：审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。有模型提供方的环境里“模型自决调用”与策略×沙箱叠加顺序已于 2026-10-24 实测（见 §9.2.2/§9.2.3）。
 > **仍未核验**：审批 UI 的注册方式与超时语义、`$DSH_HOME` 的确切范围。
-> **2026-11-16 判定模型调整（项目负责人确认）**：内网 UAT 观测到活动 profile 未覆盖本插件、生效目录来自三份 bundle 补丁层折叠、只有六条只读动作、六个写动作全部 `deny / unregistered-action`；同日源码核验 `packages/forge-policy/src/catalog.mjs:66,68`、`installer.mjs:223-226`、`approvals.mjs:142`、`gate.mjs:65-88`。项目负责人逐项确认：写动作按类别给默认决策；`gitee.git.push` 逐次确认，其余写叠加内容与流程规则；组织策略以包内 `policy/` 数据目录的签名信封随包下发、不设有效期（2026-11-16 后复核：签发权与发版权同在平台组，节奏季度级，不单独成包）；写动作要求 IAM 身份；内容规则不超过 30 条正则且不做语义分析；流程事实源不可用时不阻断动作；企业分发随包内置首版签名信封。
+> **2026-11-16 内网 UAT 观测**：活动 profile 未覆盖本插件，生效目录来自三份 bundle 补丁层折叠，只有六条只读动作，六个写动作全部 `deny / unregistered-action`；同日源码核验 `packages/forge-policy/src/catalog.mjs:66,68`、`installer.mjs:223-226`、`approvals.mjs:142`、`gate.mjs:65-88`。目标判定规则见[策略判定模型设计](../policy-model.md)，实现状态以设计索引为准。
 >
 > 关联文档：[总体架构 §7.2](../../architecture/platform-architecture.md)、[需求基线](../../requirements/requirements-baseline.md)、[策略判定模型设计](../policy-model.md)、[设计索引](../README.md)。
 
@@ -39,7 +39,7 @@
 
 门禁骨架已实现；审批 UI 的注册与超时语义仍待核验。宿主钩子、子 Agent 继承语义以及策略×沙箱叠加顺序的历史探针见 §9.2.2/§9.2.3 与编制依据。
 
-**判定模型（2026-11-16）**：动作开关只有一个比特，无法区分"写进去的是什么"与"在流程的哪一步写"。按[策略判定模型设计](../policy-model.md)，判定改为动作分类、内容规则、流程规则、身份与证据五轴：写动作按类别给默认决策，`gitee.git.push` 逐次确认。本文 §5.1 只承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则清单不在本文复制。
+**判定模型**：目标模型按动作分类、内容规则、流程规则、身份与证据五轴判定；写动作按类别给默认决策，`gitee.git.push` 逐次确认。本文 §5.1 承载引擎侧的接口、目录与策略级批准；规则语义、默认值与内容/流程规则见[策略判定模型设计](../policy-model.md)。
 
 **IAM隔离消费进展**：独立许可/私有operation算法B已通过62新例及210项policy全包回归，独立peer与arguments身份变异已关闭。普通apply未注入该算法；C合成工具/命令的共享installer、发送体与owned finalizer已通过31新例/241项policy回归及独立审阅/变异。D合成模型入口已通过29新例/270项policy回归，包含最终错误桥修复及独立审阅/桥接增量复核；E根16项已验证实际IAM工厂与mock IdP的联合执行，独立审阅与本批完整检查已通过。B/C/D局部fixture本身不是联合证据，E仍不证明生产授权；普通apply不启用合成模型。会话见证、许可字段与整体边界见[IAM-003](<../../contracts/iam-consumer-isolated.md>)和[PLAN-007](<../../plans/2026-11-02-iam-consumer-isolated.md>)。
 
@@ -145,7 +145,7 @@ export interface PolicyEngine {
 
 #### 5.1.1 动作分类与默认决策（2026-11-16 调整）
 
-写动作不再逐条登记为"待批准白名单"。判定按动作类别给出默认决策，再叠加内容与流程规则；规则语义见[判定模型 §5](../policy-model.md)。动作标识与[工程工具契约 §3.1](../../contracts/engineering-tools.md) 的实现映射同源，不另立命名；旧文档中的 `issue.create_or_update`、`pr.create_or_update`、`review.ai.publish`、`review.human.record`、`branch.create`、`commit.record`、`issue.close` 不是运行期标识，按旧名登记不会生效。
+判定按动作类别给出默认决策，再叠加内容与流程规则；规则语义见[判定模型 §5](../policy-model.md)。动作标识与[工程工具契约 §3.1](../../contracts/engineering-tools.md) 的实现映射同源，不另立命名；`issue.create_or_update`、`pr.create_or_update`、`review.ai.publish`、`review.human.record`、`branch.create`、`commit.record`、`issue.close` 不是运行期标识，按这些名称登记不会生效。
 
 | 动作 | 类别 | 默认决策 | 确认方式 |
 |---|---|---|---|
@@ -168,7 +168,7 @@ export interface PolicyEngine {
 
 #### 5.1.2 策略级批准
 
-批准对象是**这版策略**，不是单个动作。逐动作批准没有信息量：批准 `gitee.issue.write` 等于允许写任何正文，真正决定风险的是内容规则集与流程规则集。
+批准对象是**策略版本与规则摘要**；内容规则集与流程规则集约束每次写动作。
 
 | 字段 | 含义 | 约束 |
 |---|---|---|
@@ -199,7 +199,7 @@ export interface PolicyEngine {
 | 更新 | 替换 `policy/` 与 `keys/` 内文件，随补丁版本发版；`policy_version` 单调递增，回滚需显式确认 |
 | 登记 | 信封的 `policy_version` 与摘要进入每条判定审计 |
 
-逐动作送审表作为历史记录保留在 Git 中，不再是登记载体；动作分类的变化通过策略版本表达。文档里残留的旧业务名从未成为运行期标识，照它们登记不会放行任何调用。
+动作分类通过策略版本表达；运行期动作标识以工程工具契约为准。
 
 #### 5.1.4 组织策略数据目录（2026-11-16）
 
@@ -233,7 +233,7 @@ export interface PolicyEngine {
 
 装载由 `src/org-policy.mjs` 在 `apply` 阶段完成一次读取与验签，三态在 `installPolicy` 内一次确定，不暴露跨包服务、不做后台轮询与热更新。引擎按状态决定模式（身份矩阵见[判定模型 §8](../policy-model.md)）：`verified` 进入托管模式；`absent` 是"没有签名信封"的个人模式，不是失败；`invalid` 只降级写动作并记 `org_policy_invalid`，只读与本地研发照常。
 
-**内置而非独立数据包**：签发由平台组自己完成、节奏为季度级或更慢（项目负责人 2026-11-16 决定），独立包"规则更新不触碰引擎"的收益小于它新增的生命周期成本——多一份清单与设计文档、多一处装配顺序、多一条分发说明；而 `@heluo/forge-policy` 被四个业务包以 `workspace:` 依赖，补丁层还要为数据包多编排一行。拆包条件因此不是"职责不同"，而是"规则签发权与平台发版权分离"：若将来由组织安全口独立签发，把 `policy/` 与 `keys/` 移出成数据包即可，成本是移动三个文件加一次 loader 编排。
+**随包分发**：平台组负责签发，组织策略与公钥内置在 `@heluo/forge-policy`，随该包版本更新；签发私钥不进入交付物。分发决策见 ADR-28。
 
 **不设有效期**：策略随包更新，旧信封不因时间到期而失效；`policy_version` 单调递增，回滚是合法运维动作但需显式确认。私钥不进仓库、不进 CI、不进交付物；公钥缺失按 `missing-key` 验签失败处理。轮换时新公钥随新版本分发，旧版本继续用旧公钥验签，不建在线吊销。
 
@@ -455,7 +455,7 @@ flowchart TD
 
 **未验**：企业环境的沙箱实现差异（本机 darwin 为 seatbelt；其他平台按其运行时能力核验）。
 
-**责任方决定（2026-10-24，2026-11-16 调整）**：写分类由"逐动作受控写白名单"改为动作分类 + 内容/流程规则 + 策略级批准（ADR-27）。旧白名单只能表达"能不能写"，而实际风险在写进去的内容与写发生的时机；逐动作台账在真实使用中还退化为全量放行。
+**写动作规则**：写动作按类别判定，并应用内容规则、流程规则与策略级批准；决策依据见 ADR-27。
 
 有限委托内普通研发写的目标见[需求 §2.3](../../requirements/requirements-baseline.md)。内容闸不判定"谁可以写"，最终授权仍来自 IAM 与平台服务端权限，"缺原生可靠控制时禁用、不自建第二授权系统"继续成立。入口确认不自动豁免内容与流程规则，业务决定与正式人工评审仍需真实确认。
 
