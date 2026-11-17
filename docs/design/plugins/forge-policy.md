@@ -172,8 +172,8 @@ export interface PolicyEngine {
 |---|---|---|
 | `policy_version` | 被批准的策略版本 | 单调递增；与信封的 `policy_version` 一致 |
 | `rules_digest` | 规范化信封的 SHA-256 | 执行期复算，不一致即拒绝 |
-| `approved_by` | 签发人 | 取签发流程中的 IAM subject；本机不可手填 |
-| `approved_at` | 签发时刻 | ISO 时间 |
+| `approved_by` | 签发人 | 取验签通过的信封 `issued_by`；签发时由 IAM 身份确定，本机不可手填 |
+| `approved_at` | 签发时刻 | 取验签通过的信封 `issued_at`；ISO 时间 |
 | `scope` | 适用范围 | 托管 / 个人；由签名信封（`policy/`）验签状态决定 |
 
 不设 `expires_at`：组织策略随包更新而更新，过期机制只会让"忘记续期"变成全量停摆（项目负责人 2026-11-16 决定）。策略失效通过替换包完成，而不是等台账过期。
@@ -188,7 +188,7 @@ export interface PolicyEngine {
 
 #### 5.1.3 策略签发与登记（2026-11-16）
 
-组织策略的签发在仓库之外完成：受控签发机用 ed25519 私钥对规范化信封签名，产出本包 `policy/` 目录下的三个文件（§5.1.4）。**平台不代填 `approved_by`，也不把"评审会开过了"当作签发。**
+组织策略的签发在仓库之外完成：受控签发机在签发时从已认证的 IAM 身份取得 subject，写入信封 `issued_by`，并用 ed25519 私钥对规范化信封签名，产出信封、签名和公钥三个文件（§5.1.4）。**平台不代填 `approved_by`，也不把"评审会开过了"当作签发。**
 
 | 项 | 内容 |
 |---|---|
@@ -205,7 +205,7 @@ export interface PolicyEngine {
 
 | 路径 | 内容 |
 |---|---|
-| `policy/org-policy.json` | 签名信封（上限、内容规则、流程规则） |
+| `policy/org-policy.json` | 签名信封（签发人、签发时间、上限、内容规则、流程规则） |
 | `policy/org-policy.sig` | 对规范化信封的 ed25519 签名（base64） |
 | `keys/org-policy.pub` | 组织公钥（PEM，编进包） |
 
@@ -213,6 +213,7 @@ export interface PolicyEngine {
 {
   "schema": "heluo.policy.org.v1",
   "policy_version": "2026.11.1",
+  "issued_by": "iam-subject-example",
   "issued_at": "2026-11-16T00:00:00Z",
   "caps": { "gitee.git.push": "confirm", "gitee.review.publish": "allow" },
   "content_rules": [
@@ -221,6 +222,8 @@ export interface PolicyEngine {
   "process_rules": { "pr_requires_acceptance_section": "hard", "require_durable_audit": false }
 }
 ```
+
+`issued_by` 是必填的非空字符串，值为签发时已认证的 IAM subject；`issued_at` 是必填的 ISO 时间。两者均由签发流程写入并受签名覆盖。验签及字段校验通过后，执行端分别以这两个字段生成批准记录的 `approved_by` 和 `approved_at`；缺失或格式无效按 `invalid` 处理，不得从本机输入、公钥或当前执行者推断。共享组织公钥只证明信封由持钥签发流程签名且内容未被篡改，签发人身份的真实性依赖该流程正确认证 IAM 身份并绑定 subject，不能由公钥独立证明。
 
 签名对象是信封的规范化序列化：对象键按字典序、UTF-8、无多余空白、数组顺序保持。验签方重新序列化后比对，不做字段级挑选——信封里任何字段被改动都会导致验签失败；`schema` 不在已知集合内按验签失败处理，不做向上兼容猜测。
 
@@ -237,6 +240,7 @@ export interface PolicyEngine {
 | 字段 | 首版内容 | 说明 |
 |---|---|---|
 | `policy_version` | `2026.11.1` | 审计里可回溯的规则版本锚点 |
+| `issued_by` / `issued_at` | 签发时填写 | 已认证的 IAM subject 与签发时间，随信封签名 |
 | `caps` | 空 | 上限沿用内置默认（六个只读 `allow`、四个写 `allow`、`gitee.git.push` 为 `confirm`、`gitee.review.record` 为 `deny`），首版不额外加严 |
 | `content_rules` | 空 | 使用内置 HARD/SOFT 集；组织规则待内网实测后再追加，避免把未验证的正则当作组织要求 |
 | `process_rules` | `pr_requires_acceptance_section: soft` | 变更号、保护分支与 force push 由内置集恒为 HARD |
