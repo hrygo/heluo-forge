@@ -233,7 +233,7 @@ test('D-2 门禁有牙: 单边改一条目录或加回 isolate，判据必须失
   const giteeText = texts.get('forge-gitee');
 
   const driftedCatalog = giteeText.replace(
-    "          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }\n",
+    "          - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }\n",
     '',
   );
   assert.notEqual(driftedCatalog, giteeText, '自证前提：样例改写必须真的删掉一行目录');

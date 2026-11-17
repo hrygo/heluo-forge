@@ -270,9 +270,15 @@ export function createGiteeGuard({ policy = null, now = Date.now } = {}) {
     }
 
     // 放行：operation 只在策略的 operation 回调里执行。
+    // 正文经 `content` 私有通道交给策略做内容闸，不混进 arguments；身份与取消信号
+    // 也必须原样透传，否则确认通道与中断复验在生产链路上永远拿不到它们。
+    const content = isPlainObject(source.content) || typeof source.content === 'function' ? source.content : undefined;
     const exec = {
       name: tool,
       arguments: args,
+      ...(content === undefined ? {} : { content }),
+      ...(source.agent === undefined ? {} : { agent: source.agent }),
+      ...(source.signal === undefined ? {} : { signal: source.signal }),
       callId: nextCallId(action.split('.')[1] || 'action'),
     };
     // 宿主 approval 通道：`index.mjs` 的 execute 直通，不额外注入 ctx；调用方要确认通道时

@@ -12,7 +12,7 @@ function host() {
     tools: { guard: (callback) => (guards.push(callback), () => guards.splice(guards.indexOf(callback), 1)) },
   };
   const dispose = apply(ctx, { audit: { sink: 'memory', allowNonDurable: true },
-    catalog: [{ action: 'synthetic.read', kind: 'read', target: 'repository', enabled: true }], tools: { synthetic: 'synthetic.read' } });
+    catalog: [{ action: 'gitee.repository.read', target: 'repository', enabled: true }], tools: { synthetic: 'gitee.repository.read' } });
   return { policy: services.get('policy'), listeners, guards, dispose };
 }
 const execution = (id) => ({ name: 'synthetic', arguments: { target: 'repo-A' }, callId: id, signal: new AbortController().signal });

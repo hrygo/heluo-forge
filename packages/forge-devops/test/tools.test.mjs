@@ -343,7 +343,7 @@ test('service 缺方法时工具报 INTERNAL，而不是静默成功', async () 
 /* ─────────────────────────── 装配层（index.mjs）─────────────────────────── */
 
 /** 假宿主：策略目录齐全、可按需注入只读端口/流程端口/命令面。 */
-function mountIndex({ flow, reader, commands, write = false, onAction = null } = {}) {
+function mountIndex({ flow, reader, commands, write = false, onAction = null, onExec = null } = {}) {
   const catalog = new Map(READ_ACTIONS.map((action) => [action, { action, kind: 'read', enabled: true }]));
   if (write === true) {
     catalog.set(FLOW_ACTIONS.CHANGE_UPDATE, { action: FLOW_ACTIONS.CHANGE_UPDATE, kind: 'write', enabled: true });
@@ -352,6 +352,7 @@ function mountIndex({ flow, reader, commands, write = false, onAction = null } =
     catalog,
     executeAction: async (_ctx, action, exec, operation) => {
       onAction?.({ action, target: exec?.arguments?.target });
+      onExec?.({ action, exec });
       return operation();
     },
   };
@@ -776,4 +777,45 @@ test('装配：change.read 归一失败不抛错，raw 照常返回并写 normal
   assert.equal(result.facts.normalize_error, 'CONTEXT_RECORD_INVALID');
   assert.deepEqual(result.facts.raw, { id: 'ARD123456' }, 'raw 仍然返回');
   assert.equal(service.changeId(), 'ARD123456', '归一失败不影响绑定（读成功即绑定）');
+});
+
+
+test('写回经装配层：变更号与正文进到门禁，身份与取消信号按调用方透传', async () => {
+  const seenExec = [];
+  const reader = {
+    read: async ({ target }) => ({
+      status: 'succeeded',
+      target_ref: target,
+      source_revision: 'dop:sha',
+      observed_at: '2026-11-04T00:00:00.000Z',
+      raw: { id: target, title: 't', status: 'open' },
+    }),
+  };
+  const flow = {
+    startFromChange: async () => ({ ok: true, text: '卡' }),
+    context: async () => ({ card: {}, text: '卡' }),
+    changeUpdate: async ({ changeId }) => ({ status: 'done', target_ref: changeId, readback: { ok: true } }),
+  };
+  const { registered, service } = mountIndex({
+    flow,
+    reader,
+    write: true,
+    onExec: (entry) => seenExec.push(entry),
+  });
+  await service.read({ action: 'change.read', target: 'ARD123456' });
+  const agent = { id: 'agent-9' };
+  const controller = new AbortController();
+  const tool = registered.get(UPDATE_TOOL);
+  const result = await tool.execute(
+    { target: 'ARD123456', summary: '新标题', description: '新描述', confirm: { object: 'ARD123456' } },
+    { agent, signal: controller.signal },
+  );
+  const write = seenExec.filter((entry) => entry.action === FLOW_ACTIONS.CHANGE_UPDATE).at(-1);
+  assert.ok(write !== undefined, `写回没有进到门禁：${JSON.stringify(result)}`);
+  assert.equal(write.exec.arguments.changeId, 'ARD123456', '范围票据要按变更号绑定');
+  assert.equal(write.exec.arguments.target, 'ARD123456');
+  assert.equal(write.exec.content.title, '新标题');
+  assert.equal(write.exec.content.body, '新描述');
+  assert.equal(write.exec.agent, agent);
+  assert.equal(write.exec.signal, controller.signal);
 });
