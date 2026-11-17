@@ -428,6 +428,21 @@ test('范围票据在执行前被撤销 → 执行期复验拒绝', async () => 
   assert.match(String(denied), /the task scope for this execution is no longer valid/u);
 });
 
+test('正文无法读取 → 拒绝，而不是带着未知内容执行', async () => {
+  const host = mount(baseConfig);
+  const denied = await host.stage(
+    'forge_issue_write',
+    { target: 'acme/demo!1', changeId: 'CHG-1' },
+    {
+      agent: { id: 'agent-1' },
+      content: async () => {
+        throw new Error('readback unavailable');
+      },
+    },
+  );
+  assert.match(String(denied.reason), /content for .* cannot be read/u);
+});
+
 test('写正文经私有通道进入内容闸：HARD 命中即拒绝', async () => {
   const host = mount(baseConfig);
   const denied = await host.stage(

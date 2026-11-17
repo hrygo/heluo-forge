@@ -381,29 +381,42 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
   /**
    * 读取"将要推送的提交"内容（只读）：提交信息与补丁文本。
    *
-   * 用途只有一个：让策略的内容闸在 push 之前看到真实正文（message + diff）。远端跟踪
-   * 分支不存在时退回最近 20 条提交；两次都读不到就明确报不可读，由调用方拒绝，而不是
-   * 让一次远端写在没有正文证据的情况下通过。
+   * 用途只有一个：让策略的内容闸在 push 之前看到真实正文（message + diff）。范围必须
+   * 落在**调用方要推送的那个本地分支**（`refs/heads/<branch>`）上，而不是 `HEAD`：
+   * `git push <remote> <branch>` 推送的是命名分支，它未必是当前检出分支，用 `HEAD`
+   * 读到的正文可能来自另一个分支，从而漏检真正要发出去的那批提交。
+   *
+   * 命名分支不存在时明确报不可读；远端跟踪分支不存在时退回该分支最近 20 条提交。
    */
   async function readRange({ remote = 'origin', branch: branchName, cwd } = {}) {
     const remoteName = assertRemote(remote);
     const targetBranch = assertBranch(branchName);
     const dir = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
     const upstream = `${remoteName}/${targetBranch}`;
+    // 显式引用而非短名：短名会按 refs/heads → refs/tags → … 的顺序解析，
+    // 与 `git push <remote> <branch>` 实际推送的 refs/heads/<branch> 不一定一致。
+    const localRef = `refs/heads/${targetBranch}`;
     const collect = async (args) => {
       const outcome = await runner.runGit({ args, purpose: 'git.push-content', cwd: dir });
       if (outcome === null || typeof outcome !== 'object' || outcome.exitCode !== 0) return undefined;
       return typeof outcome.stdout === 'string' ? outcome.stdout : '';
     };
-    const log = await collect(['log', '--format=%B%x00', `${upstream}..HEAD`])
-      ?? await collect(['log', '--format=%B%x00', '-n', '20', 'HEAD']);
-    if (log === undefined) {
-      throw new GiteeGitError(`无法读取将要推送的提交内容（${upstream}..HEAD 与 HEAD 都不可读）`, {
+    const resolved = await collect(['rev-parse', '--verify', '--quiet', localRef]);
+    if (resolved === undefined || resolved.trim() === '') {
+      throw new GiteeGitError(`本地不存在要推送的分支 ${targetBranch}，无法在写前读取其正文`, {
         reason: GIT_REASONS.READBACK_UNAVAILABLE,
         detail: { mayHaveSideEffect: false },
       });
     }
-    const patch = await collect(['diff', '--no-color', '--unified=0', `${upstream}...HEAD`]) ?? '';
+    const log = await collect(['log', '--format=%B%x00', `${upstream}..${localRef}`])
+      ?? await collect(['log', '--format=%B%x00', '-n', '20', localRef]);
+    if (log === undefined) {
+      throw new GiteeGitError(`无法读取将要推送的提交内容（${upstream}..${localRef} 与 ${localRef} 都不可读）`, {
+        reason: GIT_REASONS.READBACK_UNAVAILABLE,
+        detail: { mayHaveSideEffect: false },
+      });
+    }
+    const patch = await collect(['diff', '--no-color', '--unified=0', `${upstream}...${localRef}`]) ?? '';
     const commits = log
       .split('\u0000')
       .map((message) => message.trim())

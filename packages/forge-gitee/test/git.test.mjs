@@ -768,6 +768,9 @@ test('工具定义：resolveGitCwd 每次现算目录并交给 git；解析失�
 
 test('工具：push 把将要推送的提交内容以惰性通道交给策略，被拒时不读', async () => {
   const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
     if (args[0] === 'log') {
       return { exitCode: 0, stdout: 'fix: 第一条\u0000fix: 第二条\u0000', stderr: '', durationMs: 1, timedOut: false, truncated: false };
     }
@@ -795,7 +798,36 @@ test('工具：push 把将要推送的提交内容以惰性通道交给策略，
   const content = await captured.content();
   assert.deepEqual(content.commits, [{ message: 'fix: 第一条' }, { message: 'fix: 第二条' }]);
   assert.match(content.diff, /tok/u);
+});
 
-  const denied = serviceWith({ adapter, policy: unregisteredPolicy() });
-  assert.equal(typeof denied, 'object');
+test('工具：推送正文读的是命名分支，不是当前检出的 HEAD', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await adapter.readRange({ remote: 'origin', branch: 'feat/other' });
+  const logArgs = runner.calls.find((call) => call.args[0] === 'log').args;
+  const diffArgs = runner.calls.find((call) => call.args[0] === 'diff').args;
+  assert.ok(logArgs.includes('origin/feat/other..refs/heads/feat/other'), '提交范围必须落在要推送的分支上');
+  assert.ok(diffArgs.includes('origin/feat/other...refs/heads/feat/other'), '补丁范围必须落在要推送的分支上');
+  assert.equal(logArgs.some((argument) => argument.includes('HEAD')), false, '不能再用 HEAD 冒充目标分支');
+  assert.equal(diffArgs.some((argument) => argument.includes('HEAD')), false);
+});
+
+test('适配器：本地没有该分支时读不到正文，报 READBACK_UNAVAILABLE 而不是读 HEAD', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse') {
+      return { exitCode: 1, stdout: '', stderr: 'unknown revision', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await assert.rejects(
+    () => adapter.readRange({ remote: 'origin', branch: 'feat/other' }),
+    (error) => error.code === GIT_REASONS.READBACK_UNAVAILABLE && /feat\/other/u.test(error.message),
+  );
+  assert.equal(runner.calls.some((call) => call.args[0] === 'log'), false, '分支不存在时不猜 HEAD 的内容');
 });
