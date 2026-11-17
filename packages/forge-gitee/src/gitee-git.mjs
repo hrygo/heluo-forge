@@ -331,7 +331,14 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
         { reason: GIT_REASONS.COMMAND_FAILED, detail: { exitCode, cwd: dir, mayHaveSideEffect: false } },
       );
     }
-    return Object.freeze({ exitCode, stdout, stderr, timedOut: false, truncated: outcome.truncated === true });
+    return Object.freeze({
+      exitCode,
+      stdout,
+      stderr,
+      timedOut: false,
+      truncated: outcome.truncated === true,
+      redacted: outcome.redacted === true,
+    });
   }
 
   async function head(into) {
@@ -463,6 +470,11 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
       }
       if (outcome.truncated === true) {
         throw unreadable(`待推送提交 ${sha.slice(0, 12)} 的正文超过读取上限，无法完整扫描`);
+      }
+      // 出口脱敏把命中的令牌换成占位符后，扫描到的就不再是真实正文：漏掉的正是最该拦下的
+      // 内容，因此和截断同等处理——拒绝推送，而不是拿脱敏后的半截正文当完整证据。
+      if (outcome.redacted === true) {
+        throw unreadable(`待推送提交 ${sha.slice(0, 12)} 的正文被脱敏，无法完整扫描`);
       }
       const separator = outcome.stdout.indexOf('\u0000');
       const message = separator === -1 ? outcome.stdout : outcome.stdout.slice(0, separator);

@@ -35,6 +35,7 @@ const ALLOWED_FIELDS = new Set([
   'actor',
   'approver',
   'unevaluated',
+  'contentSkipped',
   'mode',
   'contentDigest',
 ]);

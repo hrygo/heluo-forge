@@ -23,7 +23,7 @@ export const ORG_POLICY_FILES = Object.freeze({
 const DECISIONS = new Set(['allow', 'confirm', 'deny']);
 const SEVERITIES = new Set(['hard', 'soft']);
 const ENVELOPE_KEYS = new Set(['schema', 'policy_version', 'issued_by', 'issued_at', 'caps', 'content_rules', 'process_rules']);
-const PROCESS_KEYS = new Set(['require_durable_audit', ...Object.keys(PROCESS_RULES)]);
+const PROCESS_KEYS = new Set(['require_durable_audit', 'pr_requires_acceptance_section', ...Object.keys(PROCESS_RULES)]);
 
 export class PolicyOrgError extends Error {
   constructor(message, code, details = undefined) {
@@ -92,6 +92,9 @@ function validateCaps(caps = {}) {
 }
 
 function validateProcessRules(rules = {}) {
+  if (Object.hasOwn(rules, 'pr_requires_acceptance_section') && Object.hasOwn(rules, 'pr-acceptance-section')) {
+    return 'process_rules specifies the PR acceptance rule twice';
+  }
   for (const [key, value] of Object.entries(rules)) {
     if (!PROCESS_KEYS.has(key)) return `unknown process rule "${key}"`;
     if (key === 'require_durable_audit') {
@@ -151,7 +154,11 @@ export function verifyEnvelope({ envelope, signature, publicKeyPem } = {}) {
     keyId: createHash('sha256').update(publicKeyDer).digest('hex'),
     caps: Object.freeze({ ...(envelope.caps ?? {}) }),
     contentRules: Object.freeze([...(envelope.content_rules ?? [])]),
-    processRules: Object.freeze({ ...(envelope.process_rules ?? {}) }),
+    processRules: Object.freeze({ ...(envelope.process_rules ?? {}),
+      ...(envelope.process_rules?.pr_requires_acceptance_section === undefined ? {} : {
+        'pr-acceptance-section': envelope.process_rules.pr_requires_acceptance_section,
+      }),
+    }),
   });
 }
 

@@ -34,6 +34,9 @@ import { CONFIRM_REQUIRED_ACTIONS, GUARD_REASONS, createGiteeGuard } from '../sr
 import { createGiteeSession } from '../src/gitee-session.mjs';
 import { GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
 import { evaluateProcessRules } from '@heluo/forge-policy/process-rules';
+import { createGate } from '@heluo/forge-policy/gate';
+import { compileCatalog } from '@heluo/forge-policy/catalog';
+import { compileContentRules } from '@heluo/forge-policy/content-rules';
 
 const SRC_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'src');
 const HEX16 = /^[0-9a-f]{16}$/u;
@@ -88,6 +91,21 @@ const DELIVERY_GATE_READY = {
     humanConfirmed: { decision: 'confirmed' },
   },
 };
+
+test('publishing a review rejects a private key before prComment', async () => {
+  const harness = createHarness();
+  const gate = createGate({
+    catalog: compileCatalog([{ action: 'gitee.review.publish', target: 'pull-request', enabled: true }]),
+    contentRules: compileContentRules().rules,
+    getActor: () => 'user-a',
+  });
+  harness.policy.executeAction = gate.executeAction;
+  const body = ['-----BEGIN', 'PRIVATE KEY-----'].join(' ');
+  const result = await runTool(harness.service, 'forge_gitee_review_publish', { ...REVIEW_PUBLISH, body });
+  assert.notEqual(result.status, 'done');
+  assert.match(JSON.stringify(result), /BUILTIN-PRIVATE-KEY/);
+  assert.equal(harness.counters.invoke, 0);
+});
 
 function reviewRecordArgs(repoRoot) {
   return {

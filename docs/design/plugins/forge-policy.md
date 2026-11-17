@@ -48,7 +48,7 @@
 **目标**
 
 - 对文件访问、命令执行、网络外发三类动作做统一判断，结论只有允许、需确认、拒绝；写类动作再叠加内容与流程规则。
-- 受保护路径（凭据、配置、会话记录）默认拒绝，且不因用户确认而放行。
+- 受保护路径检查是目标能力；当前内置动作没有路径参数，门禁不自动拦截文件路径。
 - 外发前给出可读的"将要发出什么"，用户明确同意后才执行。
 - 所有判断写审计，含结论与依据，不含正文。
 
@@ -90,7 +90,7 @@
 |---|---|---|---|---|
 | `policy.audit.sink` | `none` \| `memory` | `none` | 是 | 必要审计落点；`memory` 为非持久开发落点，需 `allowNonDurable`；未配置即关闭受门禁动作 |
 | `policy.audit.timeoutMs` | number | 2000 | 是 | 前置/补记写入超时；超时按不可写处理 |
-| `policy.protectedPaths` | string[] | `$DSH_HOME/**`（`$DSH_HOME` 缺席时回落 `~/.dsh`） | 是 | 硬拒绝，不可通过确认放行；模板未解析即拒绝挂载 |
+| `policy.protectedPaths` | string[] | `$DSH_HOME/**`（`$DSH_HOME` 缺席时回落 `~/.dsh`） | 是 | 供显式 `checkPath` 查询；模板未解析即拒绝挂载，当前不自动拦截动作 |
 | `policy.observation.export.enabled` | boolean | `false` | 否 | 过程观察导出开关；**默认关闭**，启用但缺少宿主发送方（`observationSink`）或未登记枚举时停在 `no-provider` / `unregistered-enums`，一次也不发 |
 | `policy.observation.export.idempotentProvider` | boolean | `false` | 否 | 摄取方是否保证按 `event_id` 幂等；**true 才允许**响应未知时有限重送 |
 | `policy.observation.enums` | object | 空 | 启用导出时必填 | 已登记枚举（`status`/`action` 至少各一项）；本仓库不发明枚举取值 |
@@ -252,6 +252,8 @@ export interface PolicyEngine {
 首版信封的作用是**把机器纳入托管模式并给审计一个版本锚点**，不是追加限制；后续版本按实测逐步收紧。装机包内只有信封、签名与公钥，私钥留在签发机。
 
 ### 5.2 受保护路径、别名归一与沙箱取严
+
+本节自动硬拒绝为目标行为；当前内置动作未绑定路径参数，仅提供显式 `checkPath` 查询。
 
 受保护根按模板解析，默认 `$DSH_HOME/**`。实测（DSH 0.2.1-rc.2 / darwin-arm64）：宿主进程环境里有 `DSH_HOME` 与 `DSH_PROFILE_DIR`，没有 `DSH_AGENTS_HOME`；宿主自有的 `@deepseek-ai/dsh-home-paths` 在插件内**不可导入**，因此本插件只用环境变量契约，并在 `$DSH_HOME` 缺席时回落到宿主默认的 `~/.dsh`（该默认值来自宿主包内说明，不作为独立真源）。凭据按宿主契约位于 `$DSH_HOME/.env`，用户级指令链位于 `$DSH_HOME/AGENTS.md`。
 
