@@ -30,6 +30,11 @@ window.__ModuleLoader__.load({
     const NS = 'devops';
     /** 同源配置端点（前缀 CLI_API_PREFIX 下的 `/cli`）。 */
     const CLI_ENDPOINT = '/api/forge-devops/cli';
+    /**
+     * 启动自检端点（r18）：与 `/cli` 分开——保存只改配置，自检会**启动一个子进程**，
+     * 两条 POST 必须能用不同的门禁约束（GET 永不触发执行，见宿主 `toNodeRoute`）。
+     */
+    const SELFCHECK_ENDPOINT = `${CLI_ENDPOINT}/selfcheck`;
     /** 企业账号统一托管的扩展凭据同源端点。 */
     const IAM_EXT_CREDENTIALS_ENDPOINT = '/api/forge-iam/ext-credentials';
     const IAM_EXT_CREDENTIAL_ENDPOINT = `${IAM_EXT_CREDENTIALS_ENDPOINT}/devops`;
@@ -274,6 +279,8 @@ window.__ModuleLoader__.load({
 .fdv-candidate:first-child{border-top:0 none}
 .fdv-candidate-path{flex:1;min-width:0;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:${METRICS.codeSize}px;color:var(--dsw-alias-label-secondary);word-break:break-all}
 .fdv-candidate-tier{flex:none;color:var(--dsw-alias-label-tertiary)}
+.fdv-candidate-refused{flex-direction:column;align-items:flex-start;gap:2px;color:var(--dsw-alias-label-tertiary)}
+.fdv-selfcheck{display:flex;align-items:center;gap:${METRICS.statusGap}px;margin-top:${METRICS.inputGap}px;font-size:${METRICS.hintSize}px;line-height:${METRICS.hintLine}px;color:var(--dsw-alias-label-tertiary);flex-wrap:wrap}
 .fdv-tag{display:inline-flex;align-items:center;flex:none;height:${METRICS.tagHeight}px;padding:1px 8px;border-radius:${METRICS.radiusXs};border:${METRICS.separator}px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:${METRICS.tagSize}px;font-weight:${METRICS.labelWeight};line-height:${METRICS.tagLine}px;white-space:nowrap}
 .fdv-tag-accent{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
 .fdv-tag-quiet{color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 8%,transparent);border-color:transparent}
@@ -390,6 +397,22 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': '覆盖环境变量',
       'candidates.summary': '另有 {n} 个候选',
       'candidates.current': '当前生效',
+      'candidates.fromShim': '由包装脚本解析',
+      'candidates.rejected': '以下包装脚本无法直接启动（本插件不经 shell）：',
+      'entry.form.wrapper': '包装脚本',
+      'entry.form.extensionless': '无后缀脚本',
+      'selfcheck.action': '启动自检',
+      'selfcheck.busy': '自检中…',
+      'selfcheck.hint': '点一下确认它真的能启动：只跑 --version，不读项目、不改远端',
+      'selfcheck.pass': '能启动 · {output}',
+      'selfcheck.pass.bare': '能启动',
+      'selfcheck.fail.noEntry': '没有可启动的入口 · 先指定路径或重新发现',
+      'selfcheck.fail.notSpawnable': '这是包装脚本，无法直接启动 · 请指向包内的原生程序',
+      'selfcheck.fail.spawnFailed': '启动失败 · 入口不是能直接执行的程序',
+      'selfcheck.fail.timedOut': '启动超时 · 程序没有在预算内结束',
+      'selfcheck.fail.nonzero': '能启动，但 --version 返回退出码 {code}',
+      'selfcheck.stale': '入口已改变，请重新自检',
+      'selfcheck.needSave': '入口有未保存的改动：先保存，再自检',
       'field.timeoutMs': '命令超时（毫秒）',
       'field.timeoutMs.hint': '命令超过这个时间就判失败；按毫秒填，20 秒就是 20000',
       'field.timeoutMs.default': '20000（20 秒，默认）',
@@ -610,6 +633,22 @@ window.__ModuleLoader__.load({
       'origin.overridesEnv': 'overrides environment',
       'candidates.summary': '{n} more candidate',
       'candidates.current': 'active',
+      'candidates.fromShim': 'resolved from a wrapper script',
+      'candidates.rejected': 'These wrapper scripts cannot be launched (no shell):',
+      'entry.form.wrapper': 'wrapper script',
+      'entry.form.extensionless': 'extensionless script',
+      'selfcheck.action': 'Run self-check',
+      'selfcheck.busy': 'Checking…',
+      'selfcheck.hint': 'Confirm it really starts: runs --version only, reads no project, changes nothing',
+      'selfcheck.pass': 'Starts · {output}',
+      'selfcheck.pass.bare': 'Starts',
+      'selfcheck.fail.noEntry': 'No launchable entry · point at a path or rediscover first',
+      'selfcheck.fail.notSpawnable': 'Wrapper script, cannot be launched directly · point at the native program in the package',
+      'selfcheck.fail.spawnFailed': 'Failed to start · the entry is not directly executable',
+      'selfcheck.fail.timedOut': 'Timed out · the program did not finish in budget',
+      'selfcheck.fail.nonzero': 'Starts, but --version exited with code {code}',
+      'selfcheck.stale': 'Entry changed, run the self-check again',
+      'selfcheck.needSave': 'Entry has unsaved changes: save first, then run the check',
       'field.timeoutMs': 'Command timeout (ms)',
       'field.timeoutMs.hint': 'A command fails after this long. Milliseconds: 20 s = 20000',
       'field.timeoutMs.default': '20000 (20 s, default)',
@@ -960,22 +999,46 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 候选展开区：默认收起，展开后逐行列出发现结果，当前项带 Tag。 */
+    /**
+     * 候选展开区：默认收起，展开后逐行列出发现结果，当前项带 Tag。
+     *
+     * r18 起多说两件事：①这条候选是**由包内包装脚本解析出来的**（`resolvedFrom`），
+     * 用户才知道"我 PATH 里那条 shim 为什么没被选中"；②哪些候选**被拒**（`rejected`）——
+     * 以前它们静默消失，现场只能靠失败信封猜。
+     */
     function CandidateList(props) {
-      const { t, candidates, active } = props;
-      if (!Array.isArray(candidates) || candidates.length === 0) return null;
+      const { t, candidates, rejected, active } = props;
+      const found = Array.isArray(candidates) ? candidates : [];
+      const refused = Array.isArray(rejected) ? rejected : [];
+      if (found.length === 0 && refused.length === 0) return null;
       return h(
         'div',
         { className: 'fdv-candidates' },
-        candidates.map((candidate) =>
+        found.map((candidate) =>
           h(
             'div',
             { className: 'fdv-candidate', key: candidate.path },
             h('code', { className: 'fdv-candidate-path', title: candidate.path }, candidate.path),
             candidate.path === active ? h(Tag, { tone: 'accent', text: t('candidates.current') }) : null,
             candidate.tier ? h('span', { className: 'fdv-candidate-tier' }, candidate.tier) : null,
+            candidate.resolvedFrom ? h('span', { className: 'fdv-candidate-tier' }, t('candidates.fromShim')) : null,
           ),
         ),
+        refused.length > 0
+          ? h(
+              'div',
+              { className: 'fdv-candidate fdv-candidate-refused', key: 'rejected' },
+              h('span', { className: 'fdv-candidate-tier' }, t('candidates.rejected')),
+              refused.map((item) =>
+                h(
+                  'div',
+                  { className: 'fdv-candidate', key: item.path },
+                  h('code', { className: 'fdv-candidate-path', title: item.path }, item.path),
+                  item.form ? h(Tag, { tone: 'quiet', text: t(`entry.form.${item.form}`) }) : null,
+                ),
+              ),
+            )
+          : null,
       );
     }
 
@@ -1002,7 +1065,12 @@ window.__ModuleLoader__.load({
       const editable = locked !== true && !reset && (owned || editing || origin === 'missing');
       const value = reset ? '' : staged !== undefined ? staged : normalize(entry.path);
       const candidates = Array.isArray(entry.candidates) ? entry.candidates : [];
+      const rejected = Array.isArray(entry.rejected) ? entry.rejected : [];
       const others = candidates.length - 1;
+      // r18：包装脚本"存得下但起不来"——用形态 Tag 明说，别只让用户看失败信封。
+      const formTag = entry.form === 'wrapper' || entry.form === 'extensionless'
+        ? h(Tag, { tone: 'quiet', text: t(`entry.form.${entry.form}`) })
+        : null;
 
       let hint;
       if (reset) hint = t('entry.hint.reset');
@@ -1012,7 +1080,9 @@ window.__ModuleLoader__.load({
       else if (owned) hint = t('entry.hint.config');
       else hint = t('entry.hint.override');
 
-      const expandable = others > 0 && !editable;
+      // 被拒的包装脚本必须**看得见**，包括页面可编辑时：否则用户只知道"没找到"，
+      // 不知道系统把候选丢在哪一层（r18 的现场正是这样被藏起来的）。
+      const expandable = others > 0 || rejected.length > 0;
       const hintAction = expandable
         ? h(
             'button',
@@ -1042,6 +1112,7 @@ window.__ModuleLoader__.load({
           { className: 'fdv-head' },
           h('label', { className: 'fdv-label', htmlFor: `fdv-${field}` }, t('entry.dop')),
           h(Tag, { tone: ORIGIN_TONE[origin] ?? 'quiet', text: t(`origin.${origin}`) }),
+          formTag,
           origin === 'config' && overridesEnv(entry) ? h(Tag, { tone: 'quiet', text: t('origin.overridesEnv') }) : null,
           action ? h('span', { className: 'fdv-head-actions' }, action) : null,
         ),
@@ -1061,7 +1132,9 @@ window.__ModuleLoader__.load({
           onBlur: editable ? onBlur : undefined,
         }),
         h(FieldFoot, { id: footId, error, hint, action: hintAction }),
-        expanded === true && expandable ? h(CandidateList, { t, candidates, active: normalize(entry.path) }) : null,
+        expanded === true && expandable
+          ? h(CandidateList, { t, candidates, rejected, active: normalize(entry.path) })
+          : null,
       );
     }
 
@@ -1911,6 +1984,9 @@ window.__ModuleLoader__.load({
       // 回执只讲一句：保存成功与否，以及服务端是否声明生效（缺 `applied` 就是「未知」）。
       const [receipt, setReceipt] = React.useState(null);
       const [checkedAt, setCheckedAt] = React.useState(null);
+      // 启动自检（r18）：结论只描述"这一次点击"，入口一变就作废（`applySnapshot` 里清空）。
+      const [selfCheck, setSelfCheck] = React.useState(null);
+      const [selfCheckPhase, setSelfCheckPhase] = React.useState('idle');
 
       const mounted = React.useRef(true);
       const snapshotRef = React.useRef(null);
@@ -1961,8 +2037,22 @@ window.__ModuleLoader__.load({
 
       function applySnapshot(snapshot) {
         snapshotRef.current = snapshot;
+        // 入口换了（保存/刷新/重扫）→ 上一次自检结论不再描述当前入口，直接作废而不是留在屏上骗人。
+        // 迟到的响应也走同一口径：回包时用 `entryPathOf('dopBin')` 与发起时的值比对（见 runSelfCheck）。
+        setSelfCheck(null);
         const writable = !(snapshot.writable && snapshot.writable.ok === false);
         setView({ mode: writable ? 'form' : 'degraded', snapshot, reason: snapshot.reason ?? null });
+      }
+
+      /** 当前**生效**的入口路径（保存进来的那条，不是输入框里的草稿）。 */
+      function entryPathOf(field) {
+        const path = snapshotRef.current?.entries?.[field]?.path;
+        return typeof path === 'string' ? path : null;
+      }
+
+      /** 草稿里改了入口但还没保存：此时自检测的仍是旧的已保存值，先说清楚，别给假结论。 */
+      function entryDraftDirty() {
+        return editing.dopBin === true && isChanged('dopBin', staged.dopBin);
       }
 
       function originOf(field) {
@@ -2028,6 +2118,59 @@ window.__ModuleLoader__.load({
         setNotice(null);
       }
 
+      /**
+       * 启动自检（r18，用户点击）：POST 一次固定 `--version`，把"这个入口能不能启动"当场问出来。
+       *
+       * 为什么不让页面自己去判：页面只拿得到路径字符串，"能不能 exec"取决于形态（`.exe` vs
+       * `.cmd`/`.ps1`/无后缀 shim）与包内原生程序是否存在——这两件事都在宿主侧判定，页面复算
+       * 就会再长出第二份规则（r8 的教训）。因此这里只发一次请求、显示一次结论。
+       *
+       * 200 只表示"自检跑完了"，入口能不能用看报告里的 `ok`/`reason`；失败也走同一条通道，
+       * 不再有"HTTP 失败 = 入口坏"的混淆。
+       */
+      async function runSelfCheck() {
+        if (selfCheckPhase === 'running' || entryDraftDirty()) return;
+        // 记下这次检查的是哪条入口：等待期间用户可能保存/重扫到别的入口，
+        // 迟到的回包若与新入口不符就必须丢掉——宁可没结论，也不能拿旧结论冒充当前状态。
+        const testedPath = entryPathOf('dopBin');
+        setSelfCheckPhase('running');
+        setSelfCheck(null);
+        try {
+          const response = await fetch(SELFCHECK_ENDPOINT, {
+            method: 'POST',
+            headers: REQUEST_HEADERS,
+            body: '{}',
+          });
+          const body = await readJson(response);
+          if (!mounted.current) return;
+          setSelfCheckPhase('idle');
+          if (entryPathOf('dopBin') !== testedPath) return;
+          const report = body && typeof body === 'object' && body.selfcheck && typeof body.selfcheck === 'object'
+            ? body.selfcheck
+            : null;
+          setSelfCheck(report === null ? { kind: 'failed', text: t('selfcheck.fail.spawnFailed') } : selfCheckSentence(report));
+        } catch {
+          if (!mounted.current) return;
+          setSelfCheckPhase('idle');
+          setSelfCheck({ kind: 'failed', text: t('selfcheck.fail.spawnFailed') });
+        }
+      }
+
+      /** 自检报告 → 一句话：只显示人能看懂的部分，原因码不上屏（与保存回执同一口径）。 */
+      function selfCheckSentence(report) {
+        if (report.ok === true) {
+          const output = normalize(report.output);
+          return { kind: 'passed', text: output === '' ? t('selfcheck.pass.bare') : t('selfcheck.pass', { output }) };
+        }
+        if (report.reason === 'no-entry') return { kind: 'failed', text: t('selfcheck.fail.noEntry') };
+        if (report.reason === 'not-spawnable') return { kind: 'failed', text: t('selfcheck.fail.notSpawnable') };
+        if (report.reason === 'timed-out') return { kind: 'failed', text: t('selfcheck.fail.timedOut') };
+        if (report.reason === 'nonzero-exit') {
+          return { kind: 'failed', text: t('selfcheck.fail.nonzero', { code: String(report.exitCode) }) };
+        }
+        return { kind: 'failed', text: t('selfcheck.fail.spawnFailed') };
+      }
+
       function takeOver(field) {
         // 预填当前生效值（可能是环境变量或发现命中），让用户从真实值改，而不是从空白猜。
         const current = effectiveValue(field, snapshotRef.current?.entries?.[field]);
@@ -2035,6 +2178,7 @@ window.__ModuleLoader__.load({
         setEditing((prev) => ({ ...prev, [field]: true }));
         setErrors((prev) => omit(prev, field));
         setReceipt(null);
+        if (field === 'dopBin') setSelfCheck(null);
         setNotice(null);
       }
 
@@ -2056,6 +2200,8 @@ window.__ModuleLoader__.load({
         });
         setReceipt(null);
         setNotice(null);
+        // 改了入口草稿 → 屏上那条自检结论已不对应当前输入，先撤掉（保存后再测）。
+        if (field === 'dopBin') setSelfCheck(null);
       }
 
       function onBlur(field) {
@@ -2262,6 +2408,35 @@ window.__ModuleLoader__.load({
 
       // 第二行：超时（单行 .fdv-scalar）。页面只有两行一列，行间只有一条 .5px 分隔线。
       children.push(timeoutField());
+
+      const draftDirty = entryDraftDirty();
+
+      // 入口自检（r18）：就放在入口卡下面——"我配的这条路径到底能不能启动"是和路径同一件事。
+      // 只读页面（locked）不提供按钮：自检会启动子进程，而改不了配置的页面上它只会制造困惑。
+      children.push(
+        h(
+          'div',
+          { className: 'fdv-selfcheck', key: 'selfcheck' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'fdv-btn fdv-btn-md',
+              disabled: locked || selfCheckPhase === 'running' || !snapshot || draftDirty,
+              title: draftDirty ? t('selfcheck.needSave') : undefined,
+              onClick: () => {
+                if (!locked && selfCheckPhase !== 'running' && !draftDirty) void runSelfCheck();
+              },
+            },
+            selfCheckPhase === 'running' ? t('selfcheck.busy') : t('selfcheck.action'),
+          ),
+          h(
+            'span',
+            { className: 'fdv-hint', role: 'status', 'aria-live': 'polite' },
+            draftDirty ? t('selfcheck.needSave') : selfCheck ? selfCheck.text : t('selfcheck.hint'),
+          ),
+        ),
+      );
 
       const noteTone = notice && (notice.kind === 'failed' || notice.kind === 'conflict')
         ? ' fdv-note-error'

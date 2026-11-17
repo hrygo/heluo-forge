@@ -49,6 +49,9 @@ const POSIX_NOEXEC = '/opt/corp/notes';
 /* npm 全局 bin 目录的两种写法：无后缀 shim 与同名 .cmd（r8 报障的现场形态，路径用占位目录）。 */
 const WIN_SHIM_NOEXT = 'C:\\npm-global\\dop';
 const WIN_NPM_CMD = 'C:\\npm-global\\dop.cmd';
+/* r18：npm 包内真正能启动的原生程序——shim 解析的落点（"配置页就该指向它"）。 */
+const WIN_NPM_PACKAGE = 'C:\\npm-global\\node_modules\\@cli-tools\\dop';
+const WIN_NPM_EXE = `${WIN_NPM_PACKAGE}\\bin\\dop.exe`;
 const WIN_PS1 = 'C:\\tools\\dop.ps1';
 const WIN_EXE_UPPER = 'C:\\tools\\DOP.EXE';
 /* 存在但不是普通文件（管道/设备）：形态放开了也不该让它过。 */
@@ -545,6 +548,16 @@ test('剖白描述（describeCliAccess）：origin/布尔/枚举，零路径零 
       timeoutMs: 'config',
     },
   );
+  // r18：入口条目多了 `form`（枚举）这类"求解事实"，它同样不许带路径；白名单之外一律不认。
+  for (const entry of Object.values(described.entries)) {
+    assert.deepEqual(
+      Object.keys(entry).filter((key) => !['origin', 'configured', 'overrides', 'form'].includes(key)),
+      [],
+      `脱敏条目只允许 origin/configured/overrides/form，实际多出：${Object.keys(entry).join(',')}`,
+    );
+    if ('form' in entry) assert.ok(['native', 'wrapper', 'extensionless', 'other'].includes(entry.form), 'form 只能是四种形态枚举');
+  }
+  assert.equal(typeof described.rejectedShimCount, 'number', '被拒包装脚本只给计数（数字），不给路径');
   assert.equal(described.entries.dopBin.configured, true);
   assert.equal(described.entries.dopEndpoint.configured, true, '只给"配没配"，不给配了什么');
   assert.equal(described.sourceType, 'enterprise');
@@ -719,6 +732,139 @@ test('ready 态指引用 origin 标签说话（不写死中文层名）', () => 
   assert.equal(cliGuidance(null), cliGuidance({ ready: false, reason: null }));
 });
 
+test('r18 装配期落定：显式 dop.cmd 经 resolveEntry 解析成包内原生 exe，ready 且带 solved facts（AC-9）', () => {
+  const calls = [];
+  const access = resolve({
+    config: { dopBin: WIN_NPM_CMD },
+    env: {},
+    discovery: discoveryOf({}),
+    resolveEntry: (request) => {
+      calls.push(request);
+      return { ok: true, path: WIN_NPM_EXE, form: 'native' };
+    },
+  });
+
+  assert.deepEqual(calls, [{ tool: 'dop', value: WIN_NPM_CMD, platform: WIN, env: {} }], '解析器拿到的是工具名 + 原值，不是已经猜好的路径');
+  assert.equal(access.ready, true, 'r18：解析到能启动的程序才算就绪（r8 只看"有个文件"）');
+  assert.equal(access.reason, null);
+  assert.equal(access.entries.dopBin.origin, CLI_ORIGINS.CONFIG, '解析不改变来源归属：依然是用户配置层');
+  assert.equal(access.entries.dopBin.value, WIN_NPM_EXE, '用解析后的原生路径，而不是那条起不来的壳');
+  assert.equal(access.entries.dopBin.form, 'native');
+  assert.equal(access.entries.dopBin.resolvedFrom, WIN_NPM_CMD, '保留"从哪条壳解析来的"，页面才能解释为什么值变了');
+  assert.equal(access.entries.dopBin.spawnable, true);
+  assert.equal(cliGuidance(access), '命令行工具已就绪（dop 来自配置）');
+  // 脱敏面只出形态：路径与 shim 原始值都不许出现。
+  const described = describeCliAccess(access);
+  assert.equal(described.entries.dopBin.form, 'native');
+  assert.equal(JSON.stringify(described).includes(WIN_NPM_EXE), false, '脱敏描述不得回显解析后的路径');
+  assert.equal(JSON.stringify(described).includes(WIN_NPM_CMD), false, '也不得回显被解析掉的 shim 值');
+});
+
+test('r18 装配期 fail closed：resolveEntry 说"起不来"时 ready=false、CLI_CONFIG_INVALID、指引直说包装脚本（AC-9）', () => {
+  const access = resolve({
+    config: { dopBin: WIN_NPM_CMD },
+    env: {},
+    discovery: discoveryOf({}),
+    resolveEntry: () => ({ ok: false, reason: 'shim-unresolved' }),
+  });
+
+  assert.equal(access.ready, false, 'r18：解析失败就是不可用，不允许"先绿了再说"');
+  assert.equal(access.reason, CLI_REASONS.INVALID);
+  assert.equal(access.entries.dopBin.value, null, '不可用的入口不保留值：页面不能拿它去拼命令');
+  assert.equal(access.invalid.length, 1);
+  assert.equal(access.invalid[0].field, 'dopBin');
+  assert.match(access.invalid[0].message, /这是包装脚本/);
+  assert.match(
+    access.invalid[0].message,
+    /未经 shell 无法执行；请指向该 CLI 包内的原生可执行文件$/,
+    'message 必须给出"下一步指向哪里"，而不是只报错',
+  );
+  assert.match(cliGuidance(access), /^命令行配置不可用（dopBin：这是包装脚本/);
+  assert.equal(cliGuidance(access).includes(WIN_NPM_CMD), false, '指引不得回显用户输入值（AC-10）');
+  const described = describeCliAccess(access);
+  assert.equal(described.reason, CLI_REASONS.INVALID);
+  // 值被清空后 `configured` 只能是 false（r18 既定语义：不可用的入口不留值），"配了但不可用"
+  // 由 `invalid` 表达——与"压根没配"（invalid 为空、reason=CLI_NOT_FOUND）可区分。
+  assert.equal(described.entries.dopBin.configured, false);
+  assert.deepEqual(described.invalid.map((item) => item.field), ['dopBin'], '"配了但不可用"必须能从脱敏面读出');
+  const notConfigured = describeCliAccess(resolve({ config: {}, env: {}, discovery: discoveryOf({}) }));
+  assert.deepEqual(notConfigured.invalid, [], '没配与配错在 invalid 上必须不同');
+  assert.equal(notConfigured.reason, CLI_REASONS.NOT_FOUND);
+});
+
+test('r18 装配期 fail closed：非包装脚本的解析失败给"找不到这个文件"，不套用包装脚本话术', () => {
+  const access = resolve({
+    config: { dopBin: WIN_MISSING },
+    env: {},
+    discovery: discoveryOf({}),
+    resolveEntry: () => ({ ok: false, reason: 'not-found' }),
+  });
+  assert.equal(access.ready, false);
+  assert.equal(access.invalid[0].message, '找不到这个文件');
+  assert.equal(/包装脚本/.test(cliGuidance(access)), false, '原因不同则文案不同：别把"文件不在"说成"壳起不来"');
+});
+
+test('r18 未注入 resolveEntry：行为与 r8 一致，解析是附加判断不是新门槛（AC-1 不回归）', () => {
+  // 不注入：装配层不落定，配置层存什么就是什么（内网旧配置不会因为升级而突然全红）。
+  const untouched = resolve({ config: { dopBin: WIN_NPM_CMD }, env: {}, discovery: discoveryOf({}) });
+  assert.equal(untouched.ready, true, '没有解析通道时不新增失败面');
+  assert.equal(untouched.entries.dopBin.value, WIN_NPM_CMD);
+  assert.equal(untouched.entries.dopBin.form, undefined, '没求解就不编造形态');
+  assert.equal(untouched.entries.dopBin.resolvedFrom, undefined);
+  assert.equal(untouched.entries.dopBin.spawnable, undefined);
+
+  // 解析器自己抛错：同样回落原值（适配器抖动不得把配置面整体判死，运行期仍由 failure-face 归因）。
+  const broken = resolve({
+    config: { dopBin: WIN_NPM_CMD },
+    env: {},
+    discovery: discoveryOf({}),
+    resolveEntry: () => {
+      throw new Error('resolver exploded');
+    },
+  });
+  assert.equal(broken.ready, true);
+  assert.equal(broken.entries.dopBin.value, WIN_NPM_CMD);
+});
+
+test('r18 rejectedShimCount：只发现包装脚本时给计数 + 专门指引，路径绝不出网（AC-5/AC-10）', () => {
+  const shimsRejected = {
+    dop: {
+      tool: 'dop',
+      found: [],
+      rejected: [
+        { path: WIN_NPM_CMD, tier: 'PATH', form: 'wrapper', why: 'no-native' },
+        { path: WIN_SHIM_NOEXT, tier: 'PATH', form: 'extensionless', why: 'no-native' },
+        { path: '', tier: 'PATH', form: 'wrapper', why: 'no-native' },
+      ],
+      searched: ['PATH', 'candidate-dir'],
+      scannedDirs: 2,
+      truncated: false,
+      elapsedMs: 1,
+    },
+  };
+  const access = resolve({ config: {}, env: {}, discovery: shimsRejected });
+
+  assert.equal(access.ready, false);
+  assert.equal(access.reason, CLI_REASONS.NOT_FOUND, '本质上仍是"没找到可用入口"，不是配置写错');
+  assert.equal(access.rejectedShimCount, 2, '空路径项不计数（它不是一条候选）');
+  assert.match(
+    access.guidance,
+    /^未找到可直接启动的 dop · 已查 配置、环境变量、PATH、候选目录 · 发现 2 个包装脚本（本插件不经 shell 启动，无法使用）· 请到「设置 → 企业 DevOps」指向该 CLI 包内的原生可执行文件$/,
+  );
+  assert.equal(access.guidance.includes(WIN_NPM_CMD), false, '指引只说数量与原因，不给路径');
+
+  const described = describeCliAccess(access);
+  assert.equal(described.rejectedShimCount, 2);
+  const json = JSON.stringify(described);
+  for (const secret of [WIN_NPM_CMD, WIN_SHIM_NOEXT, '.cmd', 'npm-global']) {
+    assert.equal(json.includes(secret), false, `脱敏描述不得出现 ${secret}`);
+  }
+  assert.equal(described.guidance.includes('包装脚本'), true, '但要说清"为什么没找到"：只发现包装脚本');
+
+  // 同一条指引也能从 describeCliAccess 的输出重新生成（工具描述只拿到脱敏面）。
+  assert.equal(cliGuidance(described), access.guidance);
+});
+
 test('源码静态纪律：无 node:fs 导入、无子进程、无 URL 字面量、不读 process.env', () => {
   const source = readFileSync(new URL('../src/cli-config.mjs', import.meta.url), 'utf8');
   assert.equal(/from\s+'node:fs'/.test(source), false, 'fs 只能注入，不能自取（发现是唯一读盘环节）');
@@ -726,9 +872,27 @@ test('源码静态纪律：无 node:fs 导入、无子进程、无 URL 字面量
   assert.equal(/https?:\/\//.test(source), false, 'endpoint 只能来自配置/环境，不写死');
   assert.equal(/process\.env/.test(source), false, '环境变量表由调用方显式传入');
   assert.equal(/logs\/teamflow/.test(source), false, '运行日志目录不进交付源码');
-  // AC-4（保存侧的一半）：入口形态判定只消费 entry-form，本文件不得再自带后缀规则。
-  assert.match(source, /import \{ isDirectlyExecutable \} from '\.\/entry-form\.mjs'/u, '判定必须来自单点模块');
+  // AC-4（保存侧）：入口形态判定只消费 entry-form 的**保存侧谓词**；本文件不得再自带后缀规则。
+  // r18 取代 r8 的 `isDirectlyExecutable`：保存口问的是"存不存得下"（`isStorableEntry`），
+  // 能不能启动是发现口与装配口的事（`isSpawnableEntry`）。若这里换回"能启动"谓词，
+  // 内网现场的 `dop.cmd` 会在配置页就被拒收，r8 AC-1 的老回归立刻重演。
+  assert.match(
+    source,
+    /import \{[^}]*\bisStorableEntry\b[^}]*\} from '\.\/entry-form\.mjs'/u,
+    '判定必须来自单点模块，且用的是保存侧谓词',
+  );
+  assert.match(source, /isStorableEntry\(\{ path: value/u, '读盘末审只调一次：存在 + 是普通文件（win32 即"存得下"）');
+  // 只匹配"调用形态"：注释里提到某个符号名不算使用（`src/cli-config.mjs:10` 还留着旧名注释，
+  // 属源码文档残留，已记在交付报告里，不在测试里替它背书）。
+  assert.equal(/isSpawnableEntry\s*\(|isDirectlyExecutable\s*\(/.test(source), false, '保存侧不得改用"能启动"谓词（r8 AC-1 会回归）');
   assert.equal(/WRAPPER_SUFFIXES|wrapperSuffixOf|WRAPPER_MESSAGE/.test(source), false, '不得自带后缀表/后缀拒收文案');
   assert.equal(/endsWith\(\s*'\.exe'\s*\)/i.test(source), false, '不得再按 .exe 结尾判可执行');
   assert.equal(/\.cmd\s*\/\s*\.bat/.test(source), false, '不得再按包装脚本后缀拒收（AC-1）');
+  for (const specifier of ['node:fs', 'node:os', 'node:path', 'node:net', 'node:http', 'node:child_process']) {
+    assert.equal(
+      new RegExp(`from\\s+'${specifier.replace('/', ':')}'`).test(source),
+      false,
+      `cli-config 不得直接 import ${specifier}：平台、环境变量与文件系统都必须注入`,
+    );
+  }
 });

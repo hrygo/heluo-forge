@@ -21,7 +21,9 @@
  * 两个方法故意不合并成一个带开关的函数。
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+
+import { entryFactsOf, resolveCliEntry } from './cli-entry.mjs';
 
 import {
   CONFIG_REASONS,
@@ -35,6 +37,12 @@ import {
 
 /** 默认条目 id：与 `cordis.patch.yml` 的 insert `id` / 清单 `name` 同源。 */
 export const GITEE_ENTRY_ID = 'heluo-gitee';
+
+/**
+ * 默认注入的只读 fs 面：入口解析只读、同步、无子进程（r18：沿 npm shim 找包内原生程序，
+ * 除 `statSync` 还要读几百字节的壳文件，所以 `readFileSync` 也在面内）。
+ */
+export const ENTRY_FS = Object.freeze({ statSync, readdirSync, readFileSync });
 
 /** 补丁层里本插件的五键配置面（白名单：多一个键直接 422，不猜"也许他想写点别的"）。 */
 export const GITEE_CONFIG_KEYS = Object.freeze(['cliPath', 'host', 'timeoutMs', 'authEnv', 'persistentToken']);
@@ -242,10 +250,18 @@ export function createGiteeAccess(options = {}) {
     configEditor = null,
     entryId = GITEE_ENTRY_ID,
     plugin = GITEE_PLUGIN,
+    fs = null,
     now = null,
+    resolveEntry = null,
   } = options ?? {};
 
+  // 解析通道可注入：测试给假 fs，宿主给真实只读面；缺省就是本模块导出的 `ENTRY_FS`。
+  const entryFs = isPlainObject(fs) ? fs : ENTRY_FS;
+
   const clock = typeof now === 'function' ? now : () => Date.now();
+  const entryResolver = typeof resolveEntry === 'function'
+    ? resolveEntry
+    : (request) => resolveCliEntry(request);
 
   const resolvedPlatform = typeof platform === 'string' && platform !== '' ? platform : process.platform;
   const resolvedEnv = isPlainObject(env) ? env : process.env;
@@ -258,6 +274,16 @@ export function createGiteeAccess(options = {}) {
 
   /** 配置层：装配期来自 loader，保存/刷新后来自 `configEditor` 的 `inherited + override`。 */
   let configLayer = canonicalLayer(config);
+
+  /**
+   * 入口解析结果缓存（r18 评审 R4）：**页面看到的事实必须和适配器启动的程序是同一份**。
+   *
+   * 装配期由 `apply()` 用 `adoptEntryFacts()` 把"真正交给启动器的那条"塞进来；此后
+   * `snapshot()` / `describe()` 复用同一份，不再各自重扫 PATH、重读 shim——否则安装面在两次
+   * 重建之间变化时，页面会显示一个新程序、而调用还在跑旧的。`remerge()`（保存/刷新）清空缓存，
+   * 下一次快照重新解析，正对应"直到显式刷新或重建"。
+   */
+  let entryCache = { cliPath: null, entry: null, has: false };
 
   /**
    * 读本条目在 profile 补丁里的三层视图（`config-editor` 的 `{ entry, inherited, override }`）。
@@ -301,6 +327,32 @@ export function createGiteeAccess(options = {}) {
   /** 重新合并（不重扫任何东西）——保存成功与刷新读面共用。 */
   function remerge(row) {
     configLayer = row !== null ? mergedLayer(row) : canonicalLayer(config);
+    entryCache = { cliPath: null, entry: null, has: false };
+  }
+
+  /** 解析（或取缓存的）入口事实；同一条 `cliPath` 只解析一次。 */
+  function entryFactsFor(cliPath) {
+    const key = typeof cliPath === 'string' ? cliPath : null;
+    if (entryCache.has && entryCache.cliPath === key) return entryCache.entry;
+    const entry = entryResolver({
+      cliPath: key,
+      platform: resolvedPlatform,
+      env: resolvedEnv,
+      fs: entryFs,
+      tool: 'gh',
+    });
+    entryCache = { cliPath: key, entry, has: true };
+    return entry;
+  }
+
+  /**
+   * 装配期把"适配器实际会启动的那条入口"登记进来：页面与调用从此共用同一份事实。
+   * 返回布尔只用于调用方判断是否接纳（不改行为、不抛错）。
+   */
+  function adoptEntryFacts(cliPath, entry) {
+    if (!isPlainObject(entry)) return false;
+    entryCache = { cliPath: typeof cliPath === 'string' ? cliPath : null, entry, has: true };
+    return true;
   }
 
   function buildSnapshot(row) {
@@ -335,8 +387,13 @@ export function createGiteeAccess(options = {}) {
             path: typeof value === 'string' ? value : null,
             value: typeof value === 'string' ? value : null,
             tool: TOOL_BY_FIELD[field] ?? field,
-            candidates: Object.freeze([]),
-            rejected: Object.freeze([]),
+            // 解析事实（r18）：候选 = 解析命中的**可启动入口**，rejected = 被拒的配置值，
+            // `bin` 是运行时真正交给启动器的程序。`path` / `value` 仍是"用户配了什么"，
+            // 两者故意不合并——页面显示配置值，运行期用 bin（见 index.mjs 的装配点）。
+            ...entryFactsOf(
+              entryFactsFor(typeof value === 'string' ? value : null),
+              { cliPath: typeof value === 'string' ? value : null, platform: resolvedPlatform },
+            ),
           })
         : Object.freeze({
             ...base,
@@ -526,5 +583,5 @@ export function createGiteeAccess(options = {}) {
     return { ok: true, snapshot: buildSnapshot(after) };
   }
 
-  return Object.freeze({ entryId, revision, snapshot, describe, save });
+  return Object.freeze({ entryId, revision, snapshot, describe, save, adoptEntryFacts });
 }

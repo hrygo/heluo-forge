@@ -25,6 +25,13 @@ const DOP = `${TOOLS}\\dop.exe`;
 const DOP_CMD = `${TOOLS}\\dop.cmd`;
 const DOP_CONF = `${CORP}\\dop.exe`;
 const LATE_DOP = `${LATE}\\dop.exe`;
+/* r18：npm 全局安装布局——壳在 <prefix> 根，本体在 node_modules 里（内网现场的真实形态）。 */
+const NPM_PREFIX = 'C:\\npm-global';
+const NPM_SHIM = `${NPM_PREFIX}\\dop`;
+const NPM_CMD = `${NPM_PREFIX}\\dop.cmd`;
+const NPM_PACKAGE = `${NPM_PREFIX}\\node_modules\\@cli-tools\\dop`;
+const NPM_EXE = `${NPM_PACKAGE}\\bin\\dop.exe`;
+const SHIM_TEXT = 'exec node "$basedir/node_modules/@cli-tools/dop/bin/run.js" "$@"';
 const ENDPOINT = 'https://dop.example/api';
 const REVISION_PATTERN = new RegExp(`^[0-9a-f]{${REVISION_LENGTH}}$`, 'u');
 
@@ -38,11 +45,12 @@ const enoent = (target) => {
  * 注入式假 fs：`dirs` = 目录 → 条目名，`files` = 完整路径 → `{ mode }`。
  * `calls.readdir` 就是"发现扫了几个目录"的计数器——AC-4 的断言靠它。
  */
-function makeFs({ dirs = {}, files = {} } = {}) {
+function makeFs({ dirs = {}, files = {}, texts } = {}) {
   const world = {
     dirs: { ...dirs },
     files: { ...files },
-    calls: { readdir: 0, stat: 0 },
+    texts: texts === undefined ? undefined : { ...texts },
+    calls: { readdir: 0, stat: 0, read: 0 },
     addDir(dir, names) {
       world.dirs[dir] = names;
     },
@@ -65,6 +73,16 @@ function makeFs({ dirs = {}, files = {} } = {}) {
       return [...names];
     },
   };
+  // 只有显式给了 `texts` 才提供读取面：`readFileSync` 在发现/解析契约里是可选的，
+  // 默认不给，才能覆盖「fs 只有 stat 面」时 shim 落成 `no-reader` 的那条路。
+  if (world.texts !== undefined) {
+    world.readFileSync = (target) => {
+      world.calls.read += 1;
+      const body = world.texts[target];
+      if (body === undefined) throw enoent(target);
+      return body;
+    };
+  }
   return world;
 }
 
@@ -129,8 +147,21 @@ test('装配期快照：零配置即 ready，路径来自自动发现，revision
   assert.equal(snapshot.reason, null);
   assert.equal(snapshot.entries.dopBin.origin, 'discovered', 'origin 必须是发现层（AC-3）');
   assert.equal(snapshot.entries.dopBin.path, DOP);
-  assert.deepEqual(snapshot.entries.dopBin.candidates, [{ path: DOP, tier: 'PATH' }, { path: DOP_CMD, tier: 'PATH' }], '候选按结构给页面，原生 .exe 在首位');
-  assert.deepEqual(snapshot.entries.dopBin.rejected, [], 'r8 起发现不再拒收任何形态：键保留、恒为空（AC-3）');
+  // r18 取代 r8「candidates 收全部普通文件」：候选只给**能按本插件方式启动**的入口。
+  // `dop.cmd` 仍在同一目录里，但它只是壳；夹具没提供 `readFileSync`，所以它进 rejected。
+  assert.deepEqual(
+    snapshot.entries.dopBin.candidates,
+    [{ path: DOP, tier: 'PATH' }],
+    '候选只含能启动的入口（AC-3 / r18）',
+  );
+  assert.deepEqual(
+    snapshot.entries.dopBin.rejected,
+    [{ path: DOP_CMD, why: 'no-reader', form: 'wrapper' }],
+    '被拒的包装脚本要如实记录原因与形态（发现层注入的 fs 没有读取面 → no-reader）',
+  );
+  assert.equal(snapshot.entries.dopBin.form, 'native', 'r18：直命中的 .exe 也要报形态，页面才能显示"原生入口"');
+  assert.equal(snapshot.entries.dopBin.resolvedFrom, undefined, '直命中没有壳，不得编一个 resolvedFrom');
+  assert.equal(snapshot.entries.dopBin.spawnable, true, 'r18：快照明确"这个入口能启动"');
   assert.equal(snapshot.entries.dopEndpoint.origin, 'missing', 'endpoint 不做发现（PRD 非目标）');
   assert.equal(snapshot.entries.dopEndpoint.value, null);
   // 推导（AC-7）：dop 由自动发现解析到可执行文件 → 企业实测；推导结果仍占 default 槽位。
@@ -142,6 +173,41 @@ test('装配期快照：零配置即 ready，路径来自自动发现，revision
   assert.deepEqual(snapshot.writable, { ok: true, documentPath: true });
   assert.equal(snapshot.host.platform, WIN);
   assert.ok(snapshot.guidance.includes('自动发现'), '指引用类别词，不用环境变量名（AC-5）');
+});
+
+test('r18 装配期 shim 落定：PATH 只有 npm 壳时快照指向包内原生 exe，并带上"从哪条壳来的"（AC-4/AC-9）', () => {
+  const fs = makeFs({
+    dirs: { [NPM_PREFIX]: ['dop', 'dop.cmd'], [`${NPM_PACKAGE}\\bin`]: ['dop.exe'] },
+    files: {
+      [NPM_SHIM]: { mode: 0o644 },
+      [NPM_CMD]: { mode: 0o644 },
+      [NPM_EXE]: { mode: 0o755 },
+    },
+    texts: { [NPM_SHIM]: SHIM_TEXT, [NPM_CMD]: SHIM_TEXT },
+  });
+  const snapshot = makeAccess({ fs, env: { Path: NPM_PREFIX } }).snapshot();
+
+  assert.equal(snapshot.ready, true, 'r18：解析到包内原生程序才算就绪（壳本身永远不算）');
+  assert.equal(snapshot.entries.dopBin.origin, 'discovered');
+  assert.equal(snapshot.entries.dopBin.path, NPM_EXE, '快照里的 path 必须是能启动的本体');
+  assert.equal(snapshot.entries.dopBin.form, 'native');
+  assert.equal(snapshot.entries.dopBin.resolvedFrom, NPM_SHIM, '页面要能解释"为什么找到了 node_modules 里的东西"');
+  assert.equal(snapshot.entries.dopBin.spawnable, true);
+  assert.deepEqual(
+    snapshot.entries.dopBin.candidates,
+    [{ path: NPM_EXE, tier: 'PATH', resolvedFrom: NPM_SHIM }],
+    '候选带解析来源；两条壳解析到同一个本体，去重后只剩一条',
+  );
+  assert.deepEqual(snapshot.entries.dopBin.rejected, [], '能解析就不算被拒');
+  assert.ok(fs.calls.read >= 2, '确实读了 shim 文本（不是靠文件名猜的）');
+
+  // 显式配置写成 .cmd 也走同一条解析通道：装配期就落到本体，配置层 origin 不变。
+  const explicit = makeAccess({ fs, env: {}, config: { dopBin: NPM_CMD } }).snapshot();
+  assert.equal(explicit.ready, true);
+  assert.equal(explicit.entries.dopBin.origin, 'config');
+  assert.equal(explicit.entries.dopBin.path, NPM_EXE);
+  assert.equal(explicit.entries.dopBin.resolvedFrom, NPM_CMD);
+  assert.equal(explicit.entries.dopBin.form, 'native');
 });
 
 test('事实来源推导经快照到装配层：dop 就绪即 enterprise、无入口回落 mock（AC-7/AC-8）', () => {

@@ -31,6 +31,8 @@
  * 变成"静默放行"，只会回落到默认值。
  */
 
+import { wrapperSuffixOf } from './entry-form.mjs';
+
 /** 五个配置键。顺序即文档表格与 issue 输出顺序，别处不再复制一份。 */
 export const CONFIG_KEYS = Object.freeze(['cliPath', 'host', 'timeoutMs', 'authEnv', 'persistentToken']);
 
@@ -74,9 +76,6 @@ const HOST_NAME = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-
 /** 带协议的写法（`scheme://…`）：`cliPath` 是可执行文件标识，不是 URL。 */
 const SCHEME_LIKE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 
-/** 与 r3 `cli-discovery.WRAPPER_SUFFIXES` 同口径：包装脚本一律不接受（execFile 起不来）。 */
-const WRAPPER_SUFFIXES = Object.freeze(['.cmd', '.bat', '.ps1', '.com', '.vbs']);
-
 const MAX_PATH_LENGTH = 4096;
 const MAX_HOST_LENGTH = 253;
 const MAX_AUTH_ENV = 8;
@@ -107,10 +106,10 @@ function validateCliPath(value) {
   if (CONTROL_CHARS.test(text)) return fail('不能包含换行或控制字符');
   if (text.startsWith('-')) return fail('不能以连字符开头（会被当成命令行开关）');
   if (SCHEME_LIKE.test(text)) return fail('需要一个可执行文件标识，不是 URL');
-  const lower = text.toLowerCase();
-  const suffix = WRAPPER_SUFFIXES.find((item) => lower.endsWith(item));
-  if (suffix !== undefined) {
-    return fail(`不接受 ${suffix} 包装脚本：execFile 只启动真正的可执行文件（与 r3 同口径）`);
+  // 后缀词表来自共享支撑包（r18 起两包同源），别处不再复制一份。
+  const suffix = wrapperSuffixOf(text);
+  if (suffix !== null) {
+    return fail(`不接受 ${suffix} 包装脚本：execFile 不经 shell 启动，只接受真正的可执行文件`);
   }
   return { ok: true, value: text };
 }

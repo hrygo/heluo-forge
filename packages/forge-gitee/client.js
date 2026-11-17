@@ -205,6 +205,12 @@ window.__ModuleLoader__.load({
       'card.action.done': '完成',
       'field.cliPath.hint': '保存后生效；本页不判后缀，运行期失败会说明原因。',
       'field.cliPath.restoreHint': '保存后只删除本键的本机覆盖，其它键不动。',
+      'field.cliPath.resolved': '运行时会启动 {bin}',
+      'field.cliPath.reason.notFound': '入口不存在：请填写完整路径，或把程序所在目录加入 PATH',
+      'field.cliPath.reason.wrapper': '这个文件是包装脚本，未经 shell 无法启动 · 请指向程序包内的原生可执行文件',
+      'field.cliPath.reason.shimUnresolved': '只找到包装脚本，没能在包内定位原生程序 · 请指定原生程序的完整路径',
+      'field.cliPath.reason.shimUnreadable': '包装脚本内容读不出来 · 请直接指定原生程序路径',
+      'field.cliPath.reason.unknown': '入口无法按本插件方式直接启动 · 请指定原生程序的完整路径',
       'field.timeoutMs.hint': '单位毫秒，1000–600000；清空即回落公共参数或默认值。',
       'placeholder.cliPath': '粘贴 gitee CLI 的完整路径',
       'placeholder.timeoutMs': '20000',
@@ -288,6 +294,12 @@ window.__ModuleLoader__.load({
       'card.action.done': 'Done',
       'field.cliPath.hint': 'Takes effect after saving; this page does not judge the file suffix — runtime failures explain themselves.',
       'field.cliPath.restoreHint': 'Saving only removes the local override of this key.',
+      'field.cliPath.resolved': 'Runs {bin} at call time',
+      'field.cliPath.reason.notFound': 'No such entry: give the full path, or add its folder to PATH',
+      'field.cliPath.reason.wrapper': 'This file is a wrapper script and cannot start without a shell · point at the native program inside the package',
+      'field.cliPath.reason.shimUnresolved': 'Only a wrapper script was found and no native program could be located · give the full native path',
+      'field.cliPath.reason.shimUnreadable': 'The wrapper script could not be read · give the native program path directly',
+      'field.cliPath.reason.unknown': 'The entry cannot start the way this plugin launches it · give the full native path',
       'field.timeoutMs.hint': 'In milliseconds, 1000–600000; clear it to fall back to the shared value or the default.',
       'placeholder.cliPath': 'Paste the full path of the gitee CLI',
       'placeholder.timeoutMs': '20000',
@@ -577,6 +589,32 @@ window.__ModuleLoader__.load({
         return { text: t('value.inherited'), own: false };
       }
 
+      /**
+       * `cliPath` 的解析事实行（r18）：运行时到底会启动哪个程序，或为什么起不来。
+       *
+       * 保存侧仍宽松（不判后缀），但"存得下"不等于"起得来"：win32 上 npm 全局安装只留 shim，
+       * 真正能 exec 的程序在包内。宿主已在装配期解析，这里只把结论说出来——不在页面上重算，
+       * 也不把配进包装脚本的人留到第一次调用才看到 `SPAWN_FAILED`。
+       */
+      function cliPathFacts() {
+        const entry = entryOf('cliPath');
+        if (entry === null || typeof entry !== 'object') return null;
+        const bin = normalize(entry.bin);
+        if (bin !== '' && bin !== normalize(entry.value)) {
+          return h('span', { className: 'fge-hint' }, t('field.cliPath.resolved', { bin }));
+        }
+        const reason = entry.reason;
+        if (reason === null || reason === undefined || reason === '') return null;
+        const keyOf = {
+          'not-found': 'field.cliPath.reason.notFound',
+          'wrapper-entry': 'field.cliPath.reason.wrapper',
+          'shim-unresolved': 'field.cliPath.reason.shimUnresolved',
+          'no-native': 'field.cliPath.reason.shimUnresolved',
+          'shim-unreadable': 'field.cliPath.reason.shimUnreadable',
+        };
+        return h('span', { className: 'fge-hint' }, t(keyOf[reason] ?? 'field.cliPath.reason.unknown'));
+      }
+
       function isChanged(field) {
         if (!Object.prototype.hasOwnProperty.call(staged, field)) return false;
         const entry = entryOf(field);
@@ -832,6 +870,7 @@ window.__ModuleLoader__.load({
             field === 'cliPath' && pendingRestore && !isEditing
               ? h('span', { className: 'fge-hint' }, t('field.cliPath.restoreHint'))
               : null,
+            field === 'cliPath' ? cliPathFacts() : null,
           ),
           h('div', { className: 'fge-card-actions' }, actions),
         );

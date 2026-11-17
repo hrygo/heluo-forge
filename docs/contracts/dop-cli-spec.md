@@ -610,6 +610,8 @@ CLI 侧投影（list 表格/JSON 只用这些字段）：
 
 > 对"mock 全部能力的 CLI"而言，第 2 步（exec + 退出码透传）是核心；版本横幅与下载脚本属于安装期行为，mock 可省略或按上文原样实现。
 
+> **`@heluo/forge-devops` 的接入约束（r18）**：本包以 `execFile(bin, args, {shell:false})` 直接启动入口，因此它指向的必须是第 2 步里那个**原生核心程序**（`bin/dop.exe` / `bin/dop-<os>-<arch>`），而不是 `bin/run.js` 外壳，也不是 npm 在全局前缀目录生成的 `dop`/`dop.cmd`/`dop.ps1` 包装脚本。两条原因都属于契约而非偏好：①外壳与包装脚本需要 shell 或 Node 解释器，本包不引入 shell；②`bin/run.js` 会在 stdout 先打版本横幅，而结果解析对 stdout 做裸 `JSON.parse`，横幅会让成功结果变成 `MALFORMED_RESULT`。自动发现据此沿包装脚本内容解析到包内原生程序（`<prefix>\node_modules\@cli-tools\dop\bin\dop.exe`），解析不到则不把该包装脚本选为入口。
+
 ---
 
 ## 8. 已验证的边界行为速查（mock 自检用例）

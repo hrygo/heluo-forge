@@ -12,7 +12,7 @@
  *   | 层         | pass 的依据                                   | 失败原因码                     |
  *   |------------|-----------------------------------------------|--------------------------------|
  *   | file       | 可解析路径 + 普通文件（文件系统只读探测）     | FILE_NOT_FOUND / IS_DIRECTORY  |
- *   | executable | `entry-form.isDirectlyExecutable` 为真         | NOT_EXECUTABLE                 |
+ *   | executable | `entry-form.isSpawnableEntry` 为真（能启动）   | NOT_EXECUTABLE                 |
  *   | target     | 来源类型可判定 + endpoint 形状合法             | SOURCE_TYPE_UNKNOWN            |
  *   | readonly   | 策略准入返回 allowed（**不发起真实请求**）     | POLICY_DENIED                  |
  *
@@ -28,7 +28,9 @@
  * `now` 同样注入，`at` 每次调用只取一次时间。
  */
 import { CLI_FIELDS, deriveSourceType } from './cli-config.mjs';
-import { isDirectlyExecutable } from './entry-form.mjs';
+// r18：本层判的是"本插件能不能启动它"，不是"这串字符存不存得下"（后者是保存侧的
+// `isStorableEntry`）。两者共用一个谓词的后果，就是内网现场"装配期 PASS、业务命令失败"。
+import { isSpawnableEntry } from './entry-form.mjs';
 import { validateConfigField } from './runtime-config.mjs';
 
 /** 契约版本：页面按它判断"这份 readiness 是不是我认识的形状"。 */
@@ -218,7 +220,7 @@ function executableEvidence(file, binPath, stat, platform) {
     // 文件层已经不成立：可执行性无从判定，如实记 not-run，不猜。
     return evidence('executable', EVIDENCE_STATES.NOT_RUN, EVIDENCE_REASONS.NO_EVIDENCE, null);
   }
-  if (isDirectlyExecutable({ path: binPath, platform, stat }) === true) {
+  if (isSpawnableEntry({ path: binPath, platform, stat }) === true) {
     return evidence('executable', EVIDENCE_STATES.PASS, null, EVIDENCE_BASIS.FILESYSTEM_STAT);
   }
   return evidence('executable', EVIDENCE_STATES.FAIL, EVIDENCE_REASONS.NOT_EXECUTABLE, EVIDENCE_BASIS.FILESYSTEM_STAT);

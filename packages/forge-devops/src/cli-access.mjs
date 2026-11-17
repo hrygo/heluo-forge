@@ -23,7 +23,9 @@
  * 发现结果只驻内存，运行插件不会让 `git status` 多出新文件（PRD §10）。
  */
 import { createHash } from 'node:crypto';
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+
+import { resolveCommandEntry } from './entry-resolve.mjs';
 
 import {
   CLI_FIELDS,
@@ -47,8 +49,11 @@ const PATH_FIELDS = Object.freeze(['dopBin']);
 /** 路径字段 ←→ 发现工具名：与 `cli-config` 的 `TOOL_BY_FIELD` 同源，快照要用它挑候选。 */
 const TOOL_BY_FIELD = Object.freeze({ dopBin: 'dop' });
 
-/** 默认注入的同步 fs 面：只读、同步、无子进程（发现与保存校验共用）。 */
-const NODE_FS = Object.freeze({ statSync, readdirSync });
+/**
+ * 默认注入的同步 fs 面：只读、同步、无子进程（发现、显式入口解析与保存校验共用）。
+ * `readFileSync` 是 r18 新增的能力面——沿 npm shim 找包内原生程序要读那几百字节的壳文件。
+ */
+const NODE_FS = Object.freeze({ statSync, readdirSync, readFileSync });
 
 /** `config-editor` 在条目被并发替换时抛出的两类文案（其余一律按"写不进去"处理）。 */
 const REPLACED_PATTERN = /no longer available|changed during reload/iu;
@@ -150,12 +155,32 @@ export function createCliAccess(options = {}) {
     }
   }
 
+  /**
+   * 显式入口的解析器（r18）：`dopBin` 被用户/环境变量写成一个 shim 或无后缀名时，
+   * 在装配期就换成"能按本插件方式启动"的路径；解析不出来则 `ready=false` 并给出原因。
+   * 只读、有界（PATH 目录数上限由支撑包控制）、绝不在发现之外的时刻跑子进程。
+   */
+  function resolveEntry(request) {
+    const { tool, value } = isPlainObject(request) ? request : {};
+    if (typeof value !== 'string' || value.trim() === '') {
+      return { ok: false, reason: 'not-found' };
+    }
+    return resolveCommandEntry({
+      tool: typeof tool === 'string' ? tool : 'dop',
+      value,
+      platform: resolvedPlatform,
+      env: resolvedEnv,
+      fs: resolvedFs,
+    });
+  }
+
   function merge() {
     return resolveCliAccess({
       config: configLayer,
       env: resolvedEnv,
       discovery,
       platform: resolvedPlatform,
+      resolveEntry,
     });
   }
 
@@ -209,18 +234,35 @@ export function createCliAccess(options = {}) {
     const candidates = Array.isArray(toolDiscovery?.found)
       ? toolDiscovery.found
           .filter((item) => isPlainObject(item) && typeof item.path === 'string')
-          .map((item) => Object.freeze({ path: item.path, tier: item.tier }))
+          .map((item) =>
+            Object.freeze({
+              path: item.path,
+              tier: item.tier,
+              // 由 shim 解析而来时给出原始壳：页面据此显示"从 npm 包装脚本里找到的真身"。
+              ...(typeof item.resolvedFrom === 'string' ? { resolvedFrom: item.resolvedFrom } : {}),
+            }),
+          )
       : [];
     const rejected = Array.isArray(toolDiscovery?.rejected)
       ? toolDiscovery.rejected
           .filter((item) => isPlainObject(item) && typeof item.path === 'string')
-          .map((item) => Object.freeze({ path: item.path, why: item.why }))
+          .map((item) =>
+            Object.freeze({
+              path: item.path,
+              why: item.why,
+              ...(typeof item.form === 'string' ? { form: item.form } : {}),
+            }),
+          )
       : [];
     return Object.freeze({
       origin: entry.origin,
       path: typeof entry.value === 'string' ? entry.value : null,
       tool,
       overrides: entry.overrides,
+      // r18：入口形态与"从哪条 shim 解析来的"是同一份解析事实，页面要能显示它（同源 GET 才出路径）。
+      ...(typeof entry.form === 'string' ? { form: entry.form } : {}),
+      ...(typeof entry.resolvedFrom === 'string' ? { resolvedFrom: entry.resolvedFrom } : {}),
+      ...(entry.spawnable === true ? { spawnable: true } : {}),
       candidates: Object.freeze(candidates),
       rejected: Object.freeze(rejected),
     });

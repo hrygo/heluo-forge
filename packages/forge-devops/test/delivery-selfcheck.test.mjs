@@ -64,17 +64,21 @@ const MODULE_CONTRACTS = [
   { file: 'entry.mjs', task: 'T7', exports: ['ENTRY_NAME', 'ENTRY_HELP', 'parseChangeId', 'registerEntry'] },
   // r8 增量：入口形态单点模块。它被保存侧、发现侧与两个适配器共读，成员名一旦漂移，
   // 最先崩的是运行期（适配器起不来），所以这里按蓝图 §3.1 逐字核对。
-  // r9：`describeSpawnFailure` / `redactPathLike` 迁到 `failure-face.mjs`（失败面单点，
-  // AC-5），本模块收窄为纯形态/可执行判定。
+  // r9：`describeSpawnFailure` / `redactPathLike` 迁到 `failure-face.mjs`（失败面单点，AC-5）。
+  // r18：本包自带实现（裁决 C：两包各自实现，等价性由根目录 `tests/cli-entry-parity.test.mjs` 守）；
+  // `isDirectlyExecutable` 被两个谓词取代——保存侧问"存得下"（`isStorableEntry`），
+  // 启动侧问"起得来"（`isSpawnableEntry`）。只有一个布尔时，"能存"会被误当"能跑"，
+  // 这就是内网现场页面变绿、调用失败的直接原因。
   {
     file: 'entry-form.mjs',
-    task: 'T1(r8)',
+    task: 'T1(r18)',
     exports: [
       'WRAPPER_SUFFIXES',
       'ENTRY_FORMS',
       'wrapperSuffixOf',
       'entryFormOf',
-      'isDirectlyExecutable',
+      'isSpawnableEntry',
+      'isStorableEntry',
     ],
   },
   // r9 增量：失败面唯一渲染点。三出口（读信封 / 写动作 / 变更卡片）共用，成员名漂移
@@ -98,7 +102,9 @@ const MODULE_CONTRACTS = [
   {
     file: 'cli-discovery.mjs',
     task: 'T1(r3)',
-    exports: ['WRAPPER_SUFFIXES', 'DISCOVERY_TIERS', 'candidateExecutableNames', 'parsePathVar', 'candidateDirs', 'isDirectlyExecutable', 'discoverTool', 'discoverCli'],
+    // r18：`isDirectlyExecutable` 拆成保存侧/启动侧两个谓词；发现侧只消费"起得来"那个
+    // （发现的目的就是交出一个能跑的入口），并把它再导出给测试与装配层。
+    exports: ['WRAPPER_SUFFIXES', 'DISCOVERY_TIERS', 'candidateExecutableNames', 'parsePathVar', 'candidateDirs', 'isStorableEntry', 'isSpawnableEntry', 'discoverTool', 'discoverCli'],
   },
   {
     file: 'cli-config.mjs',
@@ -543,12 +549,15 @@ test('r3 cli-discovery 零子进程：发现只走注入的 fs，不执行任何
   const file = 'cli-discovery.mjs';
   if (!existsSync(pkgPath('src', file))) return deferred(t, file, 'T1(r3)', '发现模块尚未产出');
   const text = srcText(file);
+  // r18：不能用 `\bspawn(?:Sync)?\b` 这种宽匹配——`isSpawnableEntry`（判断"能不能启动"）
+  // 是纯函数，不是启动子进程；宽正则会把它误判成执行通道，逼着实现改名迁就测试。
+  // 这里只匹配真实的调用/依赖形态。
   const spawners = [
-    [/child_process/, 'child_process'],
-    [/\bexecSync\b/, 'execSync'],
-    [/\bexecFile\b/, 'execFile'],
-    [/\bspawn(?:Sync)?\b/, 'spawn'],
-    [/shell\s*:\s*true/, 'shell:true'],
+    [/from\s*'node:child_process'/, 'node:child_process'],
+    [/\bexecSync\s*\(/, 'execSync'],
+    [/\bexecFile\s*\(/, 'execFile'],
+    [/\bspawn(?:Sync)?\s*\(/, 'spawn'],
+    [/\bshell\s*:\s*true/, 'shell:true'],
   ];
   const hits = spawners.filter(([pattern]) => pattern.test(text)).map(([, label]) => label);
   assert.deepEqual(hits, [], `${file} 不得执行子进程（发现必须在装配期完成且零命令）：${hits.join('; ')}`);
@@ -568,50 +577,63 @@ test('r3 字段规则唯一出口：cli-config 复用 runtime-config 的校验�
   }
 });
 
-test('r8 入口形态单点定义：全仓只有 entry-form 声明 WRAPPER_SUFFIXES，其余模块全是消费者（AC-4）', (t) => {
+test('r18 入口形态每个包各自实现：devops 内只有一份，且不引任何共享包（AC-4）', (t) => {
   const gate = 'entry-form.mjs';
-  if (!existsSync(pkgPath('src', gate))) return deferred(t, gate, 'T1(r8)', '入口形态单点模块尚未产出');
+  if (!existsSync(pkgPath('src', gate))) return deferred(t, gate, 'T1(r18)', '入口形态模块尚未产出');
+
+  // r18 的裁决是"两包各自实现 + 根目录交叉对齐"（`tests/cli-entry-parity.test.mjs`）。
+  // 本条只守本包的一半：实现留在 devops 内、只有一份、不再指向任何共享包。
   const declaredIn = srcFiles().filter((name) => /export\s+const\s+WRAPPER_SUFFIXES\b/.test(srcText(name)));
-  assert.deepEqual(
-    declaredIn,
-    [gate],
-    `WRAPPER_SUFFIXES 只能有一处定义（否则保存侧与发现侧会各自演进）：${declaredIn.join(', ')}`,
+  assert.deepEqual(declaredIn, [gate], `WRAPPER_SUFFIXES 在 devops 内必须恰好声明一次：${declaredIn.join(', ')}`);
+
+  const predicates = ['isStorableEntry', 'isSpawnableEntry'];
+  for (const name of predicates) {
+    const declared = srcFiles().filter((file) =>
+      new RegExp(`export\\s+(?:function|const)\\s+${name}\\b`).test(srcText(file)),
+    );
+    assert.deepEqual(declared, [gate], `${name} 在 devops 内必须恰好声明一次：${declared.join(', ')}`);
+    assert.ok(srcText(gate).includes(`function ${name}`), `${gate} 必须真的实现 ${name}，不是转发`);
+  }
+  const legacyIn = srcFiles().filter((file) =>
+    /export\s+(?:function|const)\s+isDirectlyExecutable\b/.test(srcText(file)),
   );
-  // 「可直接启动」的判定同样只能有一份实现：保存侧 import 复用，发现侧再导出。
-  const execDeclaredIn = srcFiles().filter((name) => /export\s+function\s+isDirectlyExecutable\b/.test(srcText(name)));
-  assert.deepEqual(
-    execDeclaredIn,
-    [gate],
-    `isDirectlyExecutable 只能有一处实现（AC-4 的硬要求）：${execDeclaredIn.join(', ')}`,
-  );
-  assert.ok(
-    !/export\s+function\s+isDirectlyExecutable\b/.test(srcText('cli-config.mjs')),
-    'cli-config 不得自带可执行判定，只能消费 entry-form',
-  );
-  // 校验侧必须 import 复用判定，不得再抄一张后缀表或自己写后缀规则。
+  assert.deepEqual(legacyIn, [], '只保留"存得下/起得来"两个谓词，单布尔判定不得回流');
+
+  // C 方案：devops 的 src 不许再出现指向共享包的裸模块名（出现即回到被否决的 A 方案）。
+  const sharedRefs = srcFiles().filter((file) => /from\s+'@heluo\/forge-cli-entry/u.test(srcText(file)));
+  assert.deepEqual(sharedRefs, [], `devops src 不得依赖共享入口包：${sharedRefs.join(', ')}`);
+
+  const gateText = srcText(gate);
+  const gateImports = [...gateText.matchAll(/from\s+'([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(gateImports, ['node:path'], `形态模块只能依赖 node:path：${gateImports.join(', ')}`);
+
+  // 保存侧只消费"存得下"：改用"起得来"会把 npm shim 在配置页就拒收（r8 AC-1 立刻回归）。
+  const configText = srcText('cli-config.mjs');
   assert.match(
-    srcText('cli-config.mjs'),
-    /import\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}\s*from\s*'\.\/entry-form\.mjs'/,
-    'cli-config 必须 import entry-form 的入口形态判定，不得自带一份副本',
+    configText,
+    /import\s*\{[^}]*\bisStorableEntry\b[^}]*\}\s*from\s*'\.\/entry-form\.mjs'/,
+    'cli-config 必须 import 保存侧谓词，不得自带一份副本',
   );
+  assert.ok(!/isSpawnableEntry\s*\(/.test(configText), 'cli-config 不得用启动侧谓词判"存得下"');
   assert.ok(
-    !/\.cmd['"]?\s*,\s*['"]\.bat/u.test(srcText('cli-config.mjs')),
+    !/\.cmd['"]?\s*,\s*['"]\.bat/u.test(configText),
     'cli-config 不得再内联一张 .cmd/.bat 后缀表',
   );
-  // 发现侧必须是「再导出」而不是重新声明：既有调用方与测试的 import 面保持不动。
-  // 两种等价写法都接受——`export { … } from './entry-form.mjs'`，或 import 后再 export。
+
+  // 发现侧必须再导出形态符号（契约面仍在 cli-discovery），实现仍只有一份。
   const discoveryText = srcText('cli-discovery.mjs');
-  const reExportsDirectly = /export\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}\s*from\s*'\.\/entry-form\.mjs'/.test(discoveryText);
-  const importsThenExports =
-    /import\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}\s*from\s*'\.\/entry-form\.mjs'/.test(discoveryText) &&
-    /export\s*\{[^}]*\bisDirectlyExecutable\b[^}]*\}/.test(discoveryText);
-  assert.ok(
-    reExportsDirectly || importsThenExports,
-    'cli-discovery 必须从 entry-form 再导出形态判定（契约面不变，定义只有一份）',
-  );
+  for (const name of predicates) {
+    assert.match(
+      discoveryText,
+      new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'\\.\\/entry-form\\.mjs'`),
+      `cli-discovery 必须从本包 entry-form 取 ${name}（契约面不变，实现只有一份）`,
+    );
+    assert.match(discoveryText, new RegExp(`export\\s*\\{[^}]*\\b${name}\\b[^}]*\\}`), `cli-discovery 必须再导出 ${name}`);
+    assert.ok(!new RegExp(`export\\s+function\\s+${name}\\b`).test(discoveryText), `${name} 不得在发现模块重新实现`);
+  }
   assert.ok(
     !/export\s+function\s+wrapperSuffixOf\b/.test(discoveryText),
-    'wrapperSuffixOf 也不得在发现模块重新实现（唯一定义在 entry-form.mjs）',
+    'wrapperSuffixOf 也不得在发现模块重新实现（实现只在 entry-form.mjs）',
   );
 });
 

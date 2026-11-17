@@ -382,9 +382,16 @@ test('端点：GET+POST /api/forge-devops/cli，刷新参只在 GET 上', () => 
   for (const url of fetches) {
     // r15：读三源的 `readSource(url)` 把 url 作为形参传进来（不是字面量），
     // 因此这里只要求"要么基于 CLI_ENDPOINT，要么是 readSource 的 url 形参"。
-    assert.ok(/CLI_ENDPOINT/u.test(url) || url === 'url', `所有请求都必须基于端点常量，实际：${url}`);
+    // r18：启动自检是 `/cli/selfcheck`（`SELFCHECK_ENDPOINT = `${CLI_ENDPOINT}/selfcheck``），
+    // 它同样派生自同一个端点常量；页面不得为它另写一份路径字面量。
+    assert.ok(
+      /CLI_ENDPOINT/u.test(url) || url === 'SELFCHECK_ENDPOINT' || url === 'url',
+      `所有请求都必须基于端点常量，实际：${url}`,
+    );
     assert.ok(!url.includes('http://') && !url.includes('https://'), '只允许同源相对路径，不得外连');
   }
+  // 自检端点必须由 CLI 端点拼接（r18）：两处路径各写一份 = 又一次 r8 式的双真源。
+  assert.match(SOURCE, /const SELFCHECK_ENDPOINT = `\$\{CLI_ENDPOINT\}\/selfcheck`;/u, '自检端点必须派生，不得写死路径');
   // 只有「刷新」才带 refresh=1，且必须是 GET（AC-4：工具调用不触发扫描，只有页面刷新会重扫）。
   const refreshUses = [...SOURCE.matchAll(/`\$\{CLI_ENDPOINT\}\?refresh=1`/gu)];
   assert.equal(refreshUses.length, 1, 'refresh=1 只应出现在一处（读路径）');
@@ -394,6 +401,31 @@ test('端点：GET+POST /api/forge-devops/cli，刷新参只在 GET 上', () => 
   assert.match(SOURCE, /JSON\.stringify\(\{\s*revision:[^}]*fields\s*\}\)/su, '保存体必须是 { revision, fields }');
   assert.match(SOURCE, /return field === 'timeoutMs' \? Number\(value\) : value;/u, 'timeoutMs 必须按数字提交');
   assert.match(SOURCE, /if \(value === ''\) return null;/u, '空串必须转 null（= 清除该层，回落下一层）');
+  // r18 自检：GET 会被服务端 405（防预取/防 <img> 触发执行），缺同源预检头会被 400；
+  // 页面对应的那次请求必须 POST + REQUEST_HEADERS，否则用户点一下只会看到 405/400。
+  assert.match(
+    SOURCE,
+    /fetch\(SELFCHECK_ENDPOINT, \{\s*method: 'POST',\s*headers: REQUEST_HEADERS/u,
+    '自检请求必须 POST 且带同源预检头（/cli/selfcheck 只收 POST + x-forge-devops-request）',
+  );
+  // r18 评审：结论必须绑定"被检查的那条入口"。等待期间保存/重扫换了入口，迟到的回包要丢弃，
+  // 否则会把旧入口的 PASS 贴到新入口上（AGENTS.md：不确定的状态不得返回旧值或显示成功）。
+  assert.match(SOURCE, /const testedPath = entryPathOf\('dopBin'\);/u, '自检发起时必须记下被测入口');
+  assert.match(
+    SOURCE,
+    /if \(entryPathOf\('dopBin'\) !== testedPath\) return;/u,
+    '回包时入口已变必须丢弃结论，而不是写回屏上',
+  );
+  // 草稿改了但没保存：自检测的是已保存值，不能让用户以为测的是输入框里的新路径。
+  assert.match(SOURCE, /const draftDirty = entryDraftDirty\(\);/u, '渲染时必须算出口草稿是否脏');
+  assert.match(SOURCE, /disabled: locked \|\| selfCheckPhase === 'running' \|\| !snapshot \|\| draftDirty/u, '草稿脏时自检按钮必须禁用');
+  assert.ok(SOURCE.includes("t('selfcheck.needSave')"), '草稿脏时必须提示"先保存再自检"');
+  // 被拒的包装脚本在可编辑页面上同样要能展开看：否则用户只知道"没找到"。
+  assert.doesNotMatch(
+    SOURCE,
+    /const expandable = \(others > 0 \|\| rejected\.length > 0\) && !editable;/u,
+    '被拒列表不得因"可编辑"而隐藏',
+  );
 });
 
 test('写操作带 CSRF 预检头，读带 accept；缺头服务端回 400', () => {

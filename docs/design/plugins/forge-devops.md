@@ -80,7 +80,7 @@
 
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
 |---|---|---|---|---|
-| `dopBin` | string | 自动发现 | 是 | dop 可执行文件路径；页面可编辑 |
+| `dopBin` | string | 自动发现 | 是 | dop 可执行文件路径；页面可编辑。保存只要求「存在且是普通文件」，自动选中、装配准入与就绪证据还要求该入口能按本插件方式直接启动 |
 | `dopEndpoint` | string | 空 | 否 | dop 服务端点；仅环境变量注入，适配器以 `--api-endpoint` 传递，实际是否生效须核验 CLI 版本 |
 | `sourceType` | `dop` | `dop` | 否 | 事实来源类型；由 dop 单独推导，不认 `gh` |
 | `timeoutMs` | number | `60000` | 否 | 单次命令上限；页面可编辑 |
@@ -88,6 +88,10 @@
 配置页只有两项可编辑（`dopBin`、`timeoutMs`）；其余键由环境变量或推导获得。配置面只有四个键：历史上的 `ghBin` / `ghOwner` 及其环境变量形式不在契约内，加载时被静默忽略——不报错、不产生条目、也不影响就绪判定（老 profile 升级后插件照常激活）。
 
 Windows `dop` 1.0.4 实测接受 `--api-endpoint` 但仍向默认端点发送请求，见 [CLI 规格](../../contracts/dop-cli-spec.md)。传入配置并不证明路由已切换；使用目标 CLI 前须核验实际请求目的地，不能把该版本结果推广到其他平台或版本。
+
+**入口可启动性（r18）**：形态与「能不能启动」的判定由本包 `src/entry-form.mjs`（词表与两谓词）与 `src/entry-resolve.mjs`（沿 npm 包装脚本解析包内原生程序）承担；gitee 的 `gh` 入口各有一份，两者的等价性由根目录 `tests/cli-entry-parity.test.mjs` 逐条比对（同一输入两边同结论，任一侧单独漂移即变红）。保存侧 `isStorableEntry` 宽松（Windows 不限扩展名，`.cmd`/`.ps1`/无后缀 shim 都存得下，不回归 r8 AC-1）；启动侧 `isSpawnableEntry` 严格（Windows 只认原生可执行体，POSIX 要求普通文件 + 执行位）。自动发现只把能启动的入口放进候选：npm 全局安装留下的包装脚本会先沿 shim 文本解析出 `<prefix>\node_modules\<包>\bin\<tool>.exe` 再入候选（并标 `resolvedFrom`），解析不到的进 `rejected` 并在页面上列出；只剩包装脚本时 `ready=false` + `CLI_NOT_FOUND`，指引写明"发现 N 个包装脚本（本插件不经 shell 启动，无法使用）"，绝不静默选中。`readiness` 的 `executable` 证据同样以 `isSpawnableEntry` 判定，包装脚本直接 FAIL，装配期 fail closed。`GET /api/forge-devops/cli` 的候选与拒绝项因此携带 `form`/`resolvedFrom`/`spawnable`，`describeCliAccess()` 仍不输出路径。
+
+**启动自检（r18）**：`POST /api/forge-devops/cli/selfcheck`（同源头校验，GET/HEAD 一律 405，避免预取触发子进程）以固定 argv 跑一次 `dop --version`（`shell:false`、超时 8 秒、输出截断 200 字符），报告 `{contract,at,state,ok,started,reason,exitCode,durationMs,argv,output,form}`。原因码 `no-entry`/`not-spawnable`/`spawn-failed`/`timed-out`/`nonzero-exit`；`exitCode===null` 表示进程根本没起来，与业务失败分开。自检是用户点击动作，**不进装配期发现**，也不写配置。
 
 四键的值共用同一条校验规则 `validateConfigField`（页面保存、环境变量层与宿主 loader 都走它）：先去掉首尾空白，再剥掉**一层**成对包裹引号——`FORGE_DEVOPS_TIMEOUT_MS='30000'` 这类启动脚本写法与带双引号的全路径属搬运噪声，不构成配置错误；剥完仍带引号的（单边或两层）判 `CLI_CONFIG_INVALID`，整层不回落下一层。后一项是必要的：环境变量层不读盘，带引号的 `dopBin` 能通过装配期，直到 `execFile` 才以 `ENOENT` 失败。
 

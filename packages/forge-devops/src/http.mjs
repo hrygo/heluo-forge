@@ -29,6 +29,15 @@ export const CLI_ROUTE_PATH = `${CLI_API_PREFIX}/cli`;
 /** 写操作的预检头（值只有"在不在"的意义，见文件头第 3 条）。 */
 export const CLI_REQUEST_HEADER = 'x-forge-devops-request';
 
+/**
+ * 自检端点（r18）：`POST` 一次 = 用已解析的入口跑一次固定 `--version`。
+ *
+ * 它与 `/cli` 分开是**故意的**：`/cli` 的 POST 只改变配置，而这条会启动一个子进程。
+ * 分开之后"同源头 + POST"这一道门禁可以直接卡在启动之前，且 GET 永远不会触发执行
+ * （`toNodeRoute` 对这条路径只接受 POST，其余方法 405）。
+ */
+export const CLI_SELFCHECK_PATH = `${CLI_ROUTE_PATH}/selfcheck`;
+
 /** 请求体形状：只认这两个顶层键，多一个就 400（不猜"也许他想写 revision"）。 */
 const BODY_KEYS = Object.freeze(['revision', 'fields']);
 
@@ -191,13 +200,14 @@ function parseBody(rawBody) {
  * @returns {{handleGet: (request?: object) => object, handlePost: (request?: object) => Promise<object>}}
  */
 export function createCliApi(options = {}) {
-  const { access = null, snapshot = null, save = null, now = Date.now } = options ?? {};
+  const { access = null, snapshot = null, save = null, selfCheck = null, now = Date.now } = options ?? {};
   const clock = typeof now === 'function' ? now : Date.now;
   const source = typeof snapshot === 'function' ? snapshot : null;
   const canRead = source !== null || (isPlainObject(access) && typeof access.snapshot === 'function');
   const saver = typeof save === 'function' ? save : isPlainObject(access) && typeof access.save === 'function' ? access.save.bind(access) : null;
   const canSave = saver !== null;
   const readSnapshot = source !== null ? source : (request) => access.snapshot(request);
+  const checker = typeof selfCheck === 'function' ? selfCheck : null;
 
   function stamp() {
     const value = clock();
@@ -290,7 +300,32 @@ export function createCliApi(options = {}) {
     return fail(status, code, message, errors);
   }
 
-  return Object.freeze({ handleGet, handlePost });
+  /**
+   * POST 自检（r18）：同源头 → 执行注入的自检器 → 200 + 报告。
+   *
+   * 状态码语义与 `/cli` 不同：**200 只表示"自检跑完了"**，入口能不能用看报告里的
+   * `state`/`reason`。把"入口起不来"映射成 5xx 会让页面把一次正常诊断显示成"服务器错误"。
+   * 无自检器（装配缺件）→ 503，与读面/写面同一口径。
+   */
+  async function handleSelfCheck(request = {}) {
+    if (checker === null) {
+      return fail(503, CLI_REASONS.UNAVAILABLE, '自检尚未装配');
+    }
+    const token = headerValue(request?.headers, CLI_REQUEST_HEADER);
+    if (token !== '1' && token !== 'true') {
+      return fail(400, CODES.BAD_REQUEST, `缺少同源请求头 ${CLI_REQUEST_HEADER}: 1`);
+    }
+    let report;
+    try {
+      report = await checker();
+    } catch {
+      // 自检器自己抛错：不猜原因，也不把 message 出网（可能带路径）。
+      return fail(500, CODES.SNAPSHOT_FAILED, '自检执行失败');
+    }
+    return ok({ ok: true, selfcheck: report }, stamp());
+  }
+
+  return Object.freeze({ handleGet, handlePost, handleSelfCheck });
 }
 
 /** 收集 Node 请求体（有上限）。返回 `{ text, tooLarge }`；非流对象退化为空体。 */
@@ -355,13 +390,26 @@ function writeResponse(res, result) {
 export function toNodeRoute(api, options = {}) {
   const routePath = typeof options?.path === 'string' && options.path !== '' ? options.path : CLI_ROUTE_PATH;
   const trimmed = normalizeRoutePath(routePath);
+  // 前缀注册时两条路径都会进来：`/cli`（读/保存）与 `/cli/selfcheck`（启动自检）。
+  const selfCheckPath = normalizeRoutePath(`${trimmed}/selfcheck`);
 
   return async function handleForgeDevopsCliRequest(req, res) {
     let result;
     try {
       const { pathname, params } = splitRequestUrl(req?.url);
 
-      if (pathname !== trimmed) {
+      if (pathname === selfCheckPath) {
+        const method = String(req?.method ?? 'GET').toUpperCase();
+        if (method === 'POST') {
+          const body = await readRequestBody(req);
+          result = body.tooLarge
+            ? fail(400, CODES.BAD_REQUEST, '请求体过大')
+            : await api.handleSelfCheck({ headers: isPlainObject(req?.headers) ? req.headers : {}, rawBody: body.text });
+        } else {
+          // GET 只看不跑：自检会启动子进程，不能让一个可被预取的 GET 触发执行。
+          result = fail(405, CODES.METHOD_NOT_ALLOWED, '自检只支持 POST', null, { allow: 'POST' });
+        }
+      } else if (pathname !== trimmed) {
         result = fail(404, CODES.NOT_FOUND, '未知的配置端点');
       } else {
         const method = String(req?.method ?? 'GET').toUpperCase();

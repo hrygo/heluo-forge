@@ -40,6 +40,7 @@ import { CLI_FIELDS, CLI_ORIGINS, CLI_PAGE_HINT, CLI_REASONS, deriveSourceType }
 import { createCliAccess } from './cli-access.mjs';
 import { buildReadiness } from './readiness.mjs';
 import { CLI_API_PREFIX, createCliApi, toNodeRoute } from './http.mjs';
+import { createSelfCheckRunner, describeSelfCheck } from './selfcheck.mjs';
 import { ConfigStandard } from './runtime-config.mjs';
 import { DEVOPS_CREDENTIAL_DESCRIPTOR, registerDevopsCredential } from './credential-descriptor.mjs';
 
@@ -452,8 +453,13 @@ export function apply(ctx, rawConfig = {}) {
   // 同源配置页端点（GET 快照 / POST 保存）。`webServer` 是可选服务：缺失、晚到、
   // 或同前缀已被别的实例占用时都只降级——绝不因为"页面挂不上"塌掉工具面与流程面。
   // 注册一步幂等：宿主已就绪时立即挂；未就绪时经 `ctx.inject` 等它就绪再挂（直接读 ctx.get 会拿到 undefined）。
+  // 启动自检（r18）：用户点击才跑，固定 `--version`、短超时、不经 shell。
+  // 装配期、发现、`describe()` 都不会碰它——打开设置页不该产生外部执行。
+  const selfCheckRunner = createSelfCheckRunner();
   const cliApi = createCliApi({
     access,
+    // 自检器的输入是**已解析**的入口与解析结论：解析阶段已判定起不来的入口不必真跑一次。
+    selfCheck: () => service.selfCheck(),
     // 刷新与工具侧共用同一个单点（AC-6）：路由不再自己调 `access.snapshot({refresh})`。
     snapshot: ({ refresh } = {}) => withReadiness(refresh === true ? refreshSnapshot() : access.snapshot()),
     // 保存走 service 端口：只有它知道"写成功后要重建读面"，也才有 `applied` 可透传（§3.4）。
@@ -590,6 +596,25 @@ export function apply(ctx, rawConfig = {}) {
       // 只有"确实重建失败"才降级；合法清除与宿主注入都不是本层能修的重建故障。
       if (applied.ok === false && applied.reason === CLI_REASONS.REBUILD_FAILED) degradeFaces();
       return savedReply(result, applied);
+    },
+    /**
+     * 页面「启动自检」（r18）：用已解析的入口跑一次固定 `--version`。
+     *
+     * 结论只在这里产生一次，页面与（未来的）诊断面共用：`state/ok/started/reason/exitCode/output`。
+     * 三个入参都来自解析阶段——`bin` 为空说明根本没解析出入口，`spawnable:false` 说明解析明确
+     * 判过"这是起不来的包装脚本"，两种都不必先起个子进程再失败。
+     */
+    selfCheck: async () => {
+      const snapshot = access.snapshot();
+      const entry = snapshot?.entries?.dopBin ?? {};
+      const binPath = typeof entry.path === 'string' && entry.path !== '' ? entry.path : null;
+      const knownUnspawnable = binPath !== null && access.ready !== true && access.reason === CLI_REASONS.INVALID;
+      const report = await selfCheckRunner.check({
+        bin: binPath,
+        ...(typeof entry.form === 'string' ? { form: entry.form } : {}),
+        ...(knownUnspawnable ? { spawnable: false } : {}),
+      });
+      return describeSelfCheck(report);
     },
     /** 页面「重新发现」：走刷新单点（发现 → 重建读面 → 同源出响应；工具调用仍不触发扫描，AC-4）。 */
     rediscover: () => refreshSnapshot(),
