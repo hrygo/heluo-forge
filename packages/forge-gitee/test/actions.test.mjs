@@ -120,6 +120,7 @@ function createHarness(options = {}) {
   const counters = { decide: 0, operations: 0, invoke: 0, read: 0, execFile: 0 };
   const decided = [];
   const invoked = [];
+  const seen = [];
 
   const policy = {
     decide(input) {
@@ -130,6 +131,7 @@ function createHarness(options = {}) {
     },
     async executeAction(ctx, action, exec, operation) {
       counters.operations += 1;
+      seen.push({ action, exec, ctx });
       return operation();
     },
     auditRecords: () => audit(),
@@ -197,14 +199,14 @@ function createHarness(options = {}) {
     session: () => session,
   };
 
-  return { service, counters, decided, invoked, session, guard, policy };
+  return { service, counters, decided, invoked, seen, session, guard, policy };
 }
 
 /** 走模型可见的工具定义（而不是直接调工厂），顺带验证注册表接得上。 */
-async function runTool(service, name, args) {
+async function runTool(service, name, args, exec = undefined) {
   const definition = writeToolDefinitions(service).find((item) => item.name === name);
   assert.ok(definition !== undefined, `工具 ${name} 未在注册表里`);
-  const output = await definition.execute(args);
+  const output = await definition.execute(args, exec);
   assert.equal(Array.isArray(output?.content), true, `${name} 的返回值不是工具输出形状`);
   return JSON.parse(output.content[0].text);
 }
@@ -948,3 +950,35 @@ test('AC-16 端到端主路径: 工具 → 状态机 → 门禁 → 真适配器
   assert.equal(timeout.calls.length, 1, 'unknown 之后的第二次调用必须一次子进程都不起');
 });
 
+
+
+test('写正文与身份透传到门禁：正文走私有通道，arguments 不掺正文', async () => {
+  const harness = createHarness({
+    invoke: createdStdout('issueCreate', ({ target }) => `https://gitee.com/${target}/issues/12`),
+    read: doneReadback,
+  });
+  const agent = { id: 'agent-1' };
+  const controller = new AbortController();
+  const body = await runTool(harness.service, 'forge_gitee_issue_write', ISSUE_CREATE, {
+    agent,
+    signal: controller.signal,
+  });
+  assert.equal(body.status, 'done');
+  const seen = harness.seen.at(-1);
+  assert.equal(seen.action, GITEE_ACTIONS.ISSUE_WRITE);
+  assert.equal(seen.exec.arguments.target, 'acme/repo');
+  assert.equal('body' in seen.exec.arguments, false, '正文不能混进 arguments');
+  assert.equal(seen.exec.content.title, ISSUE_CREATE.title);
+  assert.match(seen.exec.content.body, /变更正文/u);
+  assert.equal(seen.exec.agent, agent, '会话身份必须原样透传，否则确认通道拿不到它');
+  assert.equal(seen.exec.signal, controller.signal, '取消信号必须原样透传');
+});
+
+test('审查正文按 review 字段交给内容闸与流程规则', async () => {
+  const harness = createHarness();
+  const body = await runTool(harness.service, 'forge_gitee_review_publish', REVIEW_PUBLISH);
+  assert.notEqual(body.status, 'denied', '正文透传不应让审查发布本身被拒');
+  const seen = harness.seen.at(-1);
+  assert.equal(typeof seen.exec.content.review, 'string');
+  assert.match(seen.exec.content.review, /通过/u);
+});

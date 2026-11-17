@@ -402,7 +402,11 @@ function createService({ ctx, policy, current, session, access, routeOf, refresh
       throw deniedForDisposed();
     }
     // 门禁唯一准入点：参数原样交给 guard，入口不重解释、不补默认、不重试。
-    return live().guard.execute(request);
+    // 审批通道来自本插件上下文（`approval` 服务）：调用方没有显式给 `ctx` 时补上，
+    // 否则策略侧的确认/范围确认只会因为"没有审批通道"被拒。
+    const source = request !== null && typeof request === 'object' ? request : {};
+    const approvalCtx = source.ctx !== null && typeof source.ctx === 'object' ? source.ctx : ctx;
+    return live().guard.execute({ ...source, ctx: approvalCtx });
   }
 
   function deniedForDisposed() {

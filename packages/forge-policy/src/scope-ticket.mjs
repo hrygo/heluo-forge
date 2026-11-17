@@ -19,6 +19,12 @@ const isText = (value) => typeof value === 'string' && value.trim().length > 0;
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isRevisionMap = (value) => isRecord(value) && Object.entries(value).every(([name, revision]) => isText(name) && isText(revision));
 
+function sameRevisions(left, right) {
+  const entries = Object.entries(left);
+  if (entries.length !== Object.keys(right).length) return false;
+  return entries.every(([name, revision]) => Object.hasOwn(right, name) && right[name] === revision);
+}
+
 function requireText(value, label) {
   if (!isText(value)) {
     throw new PolicyScopeError(`scope ticket ${label} is required`, 'POLICY_SCOPE_INVALID', { label });
@@ -47,7 +53,10 @@ export function createScopeLedger(options = {}) {
       if (ticket.revokedAt !== undefined) continue;
       if (ticket.principal === principal && ticket.changeId === changeId
         && ticket.action === action && ticket.repository === repository) {
-        return ticket;
+        if (sameRevisions(ticket.revisions, revisions)) return ticket;
+        // 同一范围换了绑定版本：旧票据立刻失效，否则 verify 会一直拿旧版本比对，
+        // 让新版本每次都要重新询问。
+        revoke(ticket.id, 'superseded-by-newer-revision');
       }
     }
     counter += 1;

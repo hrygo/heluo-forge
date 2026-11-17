@@ -168,6 +168,9 @@ export function scanPayloads(rules, payloads) {
     }
     for (const rule of rules) {
       if (!rule.pathRegexes.some((pathRegex) => pathRegex.test(field))) continue;
+      // 组织规则可以带 `g`/`y` 这类有状态标志：复用一个表达式前必须归零位置，
+      // 否则同一段内容第二次出现时会从上次的 lastIndex 继续匹配而漏检。
+      rule.regex.lastIndex = 0;
       const match = rule.regex.exec(text);
       if (match === null) continue;
       const key = `${rule.id}:${field}`;

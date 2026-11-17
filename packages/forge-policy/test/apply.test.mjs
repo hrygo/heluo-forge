@@ -382,3 +382,58 @@ test('an optional telemetry failure only leaves a gap', () => {
   assert.equal(typeof host.policy.setAuditSink, 'function');
   assert.equal(host.policy.auditRecords().length, 0);
 });
+
+test('确认等待期间正文被改写 → 拒绝，不带着未检查的正文执行', async () => {
+  const args = { target: 'acme/demo!1', changeId: 'CHG-1', body: 'plain text' };
+  const approval = {
+    async request() {
+      // 模拟"人已批准、但调用方在等待期间换了正文"：必须由摘要复验拦住。
+      args.body = 'plain text plus something else';
+      return 'allowed-once';
+    },
+  };
+  const host = mount(baseConfig, { approval });
+  const denied = await host.stage('forge_issue_write', args, { agent: { id: 'agent-1' } });
+  assert.match(String(denied.reason), /changed during confirmation/u);
+});
+
+test('目录要求 revision 时，缺 revision 的写被拒绝，补齐后放行', async () => {
+  const config = { ...baseConfig, catalog: [READ, { ...WRITE, revision: true }] };
+  const host = mount(config);
+  const missing = await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'ok' }, {
+    agent: { id: 'agent-1' },
+  });
+  assert.match(String(missing.reason), /requires a revision/u);
+  const supplied = await host.stage(
+    'forge_issue_write',
+    { target: 'acme/demo!1', changeId: 'CHG-1', body: 'ok', revision: 'rev-2' },
+    { agent: { id: 'agent-1' }, callId: 'c2' },
+  );
+  assert.equal(supplied.reason, undefined);
+});
+
+test('范围票据在执行前被撤销 → 执行期复验拒绝', async () => {
+  const host = mount(baseConfig);
+  const exec = {
+    name: 'forge_issue_write',
+    arguments: { target: 'acme/demo!1', changeId: 'CHG-1', body: 'ok' },
+    callId: 'c1',
+    agent: { id: 'agent-1' },
+  };
+  const admitted = await host.preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.equal(admitted.kind, 'allow');
+  const [ticket] = host.policy.scopeTickets();
+  host.policy.revokeScopeTicket(ticket.id);
+  const denied = host.guard(exec);
+  assert.match(String(denied), /the task scope for this execution is no longer valid/u);
+});
+
+test('写正文经私有通道进入内容闸：HARD 命中即拒绝', async () => {
+  const host = mount(baseConfig);
+  const denied = await host.stage(
+    'forge_issue_write',
+    { target: 'acme/demo!1', changeId: 'CHG-1', body: 'note' },
+    { agent: { id: 'agent-1' }, content: { body: `${['pass', 'word'].join('')} = "hunter2hunter2"` } },
+  );
+  assert.match(String(denied.reason), /content rule/u);
+});

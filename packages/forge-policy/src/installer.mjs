@@ -280,8 +280,8 @@ export function installPolicy(ctx, rawConfig, native, owned, overrides = {}) {
     config.audit.sink === 'memory'
       ? { durable: false, append: (record) => void auditRecords.push(record) }
       : undefined;
-  // 组织信封可强制持久审计：要求 durable 时非持久 sink 不再被接受。
-  const requireDurable = org.state === 'verified' && org.processRules?.require_durable_audit === 'hard';
+  // 组织信封可强制持久审计：`require_durable_audit` 是布尔字段，为真时不再接受非持久 sink。
+  const requireDurable = org.state === 'verified' && org.processRules?.require_durable_audit === true;
   const audit = createAuditBarrier({
     sink: auditSink,
     timeoutMs: config.audit.timeoutMs,

@@ -378,9 +378,45 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
     return Object.freeze({ ok: true, remote: remoteName, branch: targetBranch });
   }
 
+  /**
+   * 读取"将要推送的提交"内容（只读）：提交信息与补丁文本。
+   *
+   * 用途只有一个：让策略的内容闸在 push 之前看到真实正文（message + diff）。远端跟踪
+   * 分支不存在时退回最近 20 条提交；两次都读不到就明确报不可读，由调用方拒绝，而不是
+   * 让一次远端写在没有正文证据的情况下通过。
+   */
+  async function readRange({ remote = 'origin', branch: branchName, cwd } = {}) {
+    const remoteName = assertRemote(remote);
+    const targetBranch = assertBranch(branchName);
+    const dir = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
+    const upstream = `${remoteName}/${targetBranch}`;
+    const collect = async (args) => {
+      const outcome = await runner.runGit({ args, purpose: 'git.push-content', cwd: dir });
+      if (outcome === null || typeof outcome !== 'object' || outcome.exitCode !== 0) return undefined;
+      return typeof outcome.stdout === 'string' ? outcome.stdout : '';
+    };
+    const log = await collect(['log', '--format=%B%x00', `${upstream}..HEAD`])
+      ?? await collect(['log', '--format=%B%x00', '-n', '20', 'HEAD']);
+    if (log === undefined) {
+      throw new GiteeGitError(`无法读取将要推送的提交内容（${upstream}..HEAD 与 HEAD 都不可读）`, {
+        reason: GIT_REASONS.READBACK_UNAVAILABLE,
+        detail: { mayHaveSideEffect: false },
+      });
+    }
+    const patch = await collect(['diff', '--no-color', '--unified=0', `${upstream}...HEAD`]) ?? '';
+    const commits = log
+      .split('\u0000')
+      .map((message) => message.trim())
+      .filter((message) => message !== '')
+      .map((message) => ({ message }));
+    const diff = patch.length > 262144 ? patch.slice(0, 262144) : patch;
+    return Object.freeze({ commits: Object.freeze(commits), diff });
+  }
+
   return Object.freeze({
     commit,
     push,
+    readRange,
     head,
     branch,
     describe: () =>
@@ -557,7 +593,7 @@ export function createGitPush() {
   const spec = Object.freeze({ tool: GITEE_GIT_TOOLS.PUSH, action: GITEE_ACTIONS.GIT_PUSH });
   return Object.freeze({
     ...spec,
-    async run(args = {}, service, cwd) {
+    async run(args = {}, service, cwd, exec) {
       const input = isPlainObject(args) ? args : {};
       const unknown = assertKnownArguments(input, ['target', 'branch', 'remote', 'changeId', 'confirm']);
       if (unknown !== '') return denyGit(spec, ACTION_REASONS.INVALID_ARGUMENT, unknown);
@@ -581,6 +617,19 @@ export function createGitPush() {
       if (typeof service?.execute !== 'function') {
         throw new TypeError('gitee git 工具需要 service.execute()：写动作不允许绕过门禁');
       }
+      // 正文按需读取：只有越过能力域与确认门之后，策略里真正要过内容闸时才会调用它。
+      // 读不到就由策略按"内容无法判定"拒绝，而不是让一次远端写在没有正文证据时通过。
+      const content = async () => {
+        const port = gitPort(service);
+        if (typeof port.readRange !== 'function') {
+          throw new GiteeGitError('git 端口不支持读取推送内容，无法在写前过内容闸', {
+            reason: GIT_REASONS.READBACK_UNAVAILABLE,
+            detail: { mayHaveSideEffect: false },
+          });
+        }
+        return port.readRange({ remote, branch }, cwd);
+      };
+
       let verdict;
       try {
         verdict = await service.execute({
@@ -588,6 +637,9 @@ export function createGitPush() {
           target,
           tool: spec.tool,
           confirm: isPlainObject(input.confirm) ? input.confirm : undefined,
+          ...(exec?.agent === undefined ? {} : { agent: exec.agent }),
+          ...(exec?.signal === undefined ? {} : { signal: exec.signal }),
+          content,
           payload: {
             arguments: { target, remote, branch, change: text(input.changeId) || null, op: 'push' },
             run: async () => {
@@ -696,7 +748,7 @@ export function gitToolDefinitions(service, resolveCwd = async () => undefined) 
         additionalProperties: false,
       },
       output: TOOL_OUTPUT,
-      execute: async (args, exec) => json(await push.run(args ?? {}, service, await cwdFor(exec))),
+      execute: async (args, exec) => json(await push.run(args ?? {}, service, await cwdFor(exec), exec)),
     },
   ];
 }

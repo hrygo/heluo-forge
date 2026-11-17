@@ -328,6 +328,15 @@ function requireService(service) {
   return service;
 }
 
+/** 工具执行上下文 → 门禁需要的身份与取消信号（缺省就不传，不伪造）。 */
+function execFields(exec) {
+  const fields = {};
+  if (exec === null || typeof exec !== 'object') return fields;
+  if (exec.agent !== undefined) fields.agent = exec.agent;
+  if (exec.signal !== undefined) fields.signal = exec.signal;
+  return fields;
+}
+
 /**
  * 一次写动作的完整流程（唯一实现，三个平台动作共用）。
  *
@@ -382,8 +391,12 @@ async function executeWrite(service, spec) {
       target,
       tool,
       confirm,
+      // 正文走 `content` 私有通道：策略据此做内容闸与摘要，不混进 arguments，
+      // 也不进审计记录（审计只留摘要）。身份与取消信号原样透传。
+      ...(spec.agent === undefined ? {} : { agent: spec.agent }),
+      ...(spec.signal === undefined ? {} : { signal: spec.signal }),
+      ...(spec.content === undefined ? {} : { content: spec.content }),
       payload: {
-        // 策略只看业务坐标（目标 + 动作），正文不进审计摘要。
         arguments: { target, change: spec.change, op: spec.op },
         run: async () => runWrite(service, spec),
       },
@@ -652,7 +665,7 @@ export function createIssueWrite() {
   const spec = { tool: TOOL_NAMES.ISSUE_WRITE, action: GITEE_ACTIONS.ISSUE_WRITE };
   return Object.freeze({
     ...spec,
-    async run(args = {}, service) {
+    async run(args = {}, service, exec) {
       requireService(service);
       const input = isPlainObject(args) ? args : {};
       const op = text(input.op) || 'create';
@@ -673,6 +686,8 @@ export function createIssueWrite() {
         if (body.error !== undefined) return body.error;
         return executeWrite(service, {
           ...spec,
+          ...execFields(exec),
+          content: { title, body: body.body },
           op,
           change: change.changeId,
           target: shape.target,
@@ -701,6 +716,8 @@ export function createIssueWrite() {
         if (body.error !== undefined) return body.error;
         return executeWrite(service, {
           ...spec,
+          ...execFields(exec),
+          content: { body: body.body },
           op,
           change: change.changeId,
           target: shape.target,
@@ -734,7 +751,7 @@ export function createPrWrite() {
   const spec = { tool: TOOL_NAMES.PR_WRITE, action: GITEE_ACTIONS.PR_WRITE };
   return Object.freeze({
     ...spec,
-    async run(args = {}, service) {
+    async run(args = {}, service, exec) {
       requireService(service);
       const input = isPlainObject(args) ? args : {};
       const op = text(input.op) || 'create';
@@ -761,6 +778,8 @@ export function createPrWrite() {
         if (input.draft === true) params.draft = true;
         return executeWrite(service, {
           ...spec,
+          ...execFields(exec),
+          content: { title, body: body.body },
           op,
           change: change.changeId,
           target: shape.target,
@@ -805,6 +824,8 @@ export function createPrWrite() {
         if (body.error !== undefined) return body.error;
         return executeWrite(service, {
           ...spec,
+          ...execFields(exec),
+          content: { body: body.body },
           op,
           change: change.changeId,
           target: shape.target,
@@ -839,7 +860,7 @@ export function publishReview() {
   const spec = { tool: TOOL_NAMES.REVIEW_PUBLISH, action: GITEE_ACTIONS.REVIEW_PUBLISH };
   return Object.freeze({
     ...spec,
-    async run(args = {}, service) {
+    async run(args = {}, service, exec) {
       requireService(service);
       const input = isPlainObject(args) ? args : {};
       const shape = assertTargetShape(input.target, spec);
@@ -868,6 +889,8 @@ export function publishReview() {
       const footer = `\n\n---\n> [AI] provider=gitee · 变更 ${change.changeId} · commit ${commit.slice(0, 7)} · 人工结论不在此处代写`;
       return executeWrite(service, {
         ...spec,
+        ...execFields(exec),
+        content: { review: `${body.body}${footer}` },
         op: 'publish',
         change: change.changeId,
         target: shape.target,
@@ -1290,7 +1313,7 @@ export function writeToolDefinitions(service) {
         additionalProperties: false,
       },
       output: WRITE_TOOL_OUTPUT,
-      execute: async (args) => json(await issueWrite.run(args ?? {}, service)),
+      execute: async (args, exec) => json(await issueWrite.run(args ?? {}, service, exec)),
     },
     {
       name: prWrite.tool,
@@ -1313,7 +1336,7 @@ export function writeToolDefinitions(service) {
         additionalProperties: false,
       },
       output: WRITE_TOOL_OUTPUT,
-      execute: async (args) => json(await prWrite.run(args ?? {}, service)),
+      execute: async (args, exec) => json(await prWrite.run(args ?? {}, service, exec)),
     },
     {
       name: reviewPublish.tool,
@@ -1332,7 +1355,7 @@ export function writeToolDefinitions(service) {
         additionalProperties: false,
       },
       output: WRITE_TOOL_OUTPUT,
-      execute: async (args) => json(await reviewPublish.run(args ?? {}, service)),
+      execute: async (args, exec) => json(await reviewPublish.run(args ?? {}, service, exec)),
     },
     {
       name: reviewRecord.tool,
@@ -1354,7 +1377,7 @@ export function writeToolDefinitions(service) {
         additionalProperties: false,
       },
       output: WRITE_TOOL_OUTPUT,
-      execute: async (args) => json(await reviewRecord.run(args ?? {}, service)),
+      execute: async (args, exec) => json(await reviewRecord.run(args ?? {}, service, exec)),
     },
     {
       name: deliveryGate.tool,
@@ -1377,7 +1400,7 @@ export function writeToolDefinitions(service) {
         additionalProperties: false,
       },
       output: WRITE_TOOL_OUTPUT,
-      execute: async (args) => json(await deliveryGate.run(args ?? {}, service)),
+      execute: async (args, exec) => json(await deliveryGate.run(args ?? {}, service, exec)),
     },
   ];
 }

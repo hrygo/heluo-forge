@@ -662,7 +662,7 @@ export function apply(ctx, rawConfig = {}) {
      * （`change.clarification.write`，默认未登记即拒绝、零子进程）→ 适配器固定 argv + 回读。
      * 返回值是适配器的结果三态（done / failed / unknown），退出码 0 不当成功。
      */
-    changeUpdate: async ({ target, summary, description, aiAc } = {}) => {
+    changeUpdate: async ({ target, summary, description, aiAc, agent, signal } = {}) => {
       const id = typeof target === 'string' ? target.trim() : '';
       if (currentChangeId === null) {
         throw new DevopsReadError(
@@ -683,10 +683,14 @@ export function apply(ctx, rawConfig = {}) {
         FLOW_ACTIONS.CHANGE_UPDATE,
         {
           name: 'devops.change.update',
-          arguments: { target: id },
-          agent: undefined,
+          // 变更号同时进 arguments：范围票据按"身份 + 变更号 + 仓库 + 动作"绑定，
+          // 只给 target 会让每一次写都因为"没有变更号"被拒。
+          arguments: { target: id, changeId: id },
+          // 正文走私有通道过内容闸；审计只记摘要。
+          content: { title: summary, body: description, ...(aiAc === undefined || aiAc === '' ? {} : { text: aiAc }) },
+          ...(agent === undefined ? {} : { agent }),
+          ...(signal === undefined ? {} : { signal }),
           callId: `devops-write-${(callSeq += 1)}`,
-          signal: undefined,
         },
         async () => callFlow('change.update', 'changeUpdate', { changeId: id, summary, description, aiAc }),
       );

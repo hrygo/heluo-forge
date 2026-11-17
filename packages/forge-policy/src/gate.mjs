@@ -93,7 +93,13 @@ export function createGate({
   // Digests stay in private memory: arguments and business content are never
   // added to the minimized audit record. The execution object is the capability,
   // not its caller-supplied/correlating callId.
-  const snapshot = (exec, action) => digestContent({ action, name: exec.name, arguments: exec.arguments, callId: exec.callId });
+  const snapshot = (exec, action) => digestContent({
+    action,
+    name: exec.name,
+    arguments: exec.arguments,
+    content: exec.content,
+    callId: exec.callId,
+  });
   const deny = (reason, extra = undefined) => ({ kind: 'deny', reason, ...(extra === undefined ? {} : extra) });
   function changed(exec, action, digest, agent) {
     try { return agent !== exec.agent || digest !== snapshot(exec, action); } catch { return true; }
@@ -128,7 +134,13 @@ export function createGate({
     return undefined;
   }
 
-  function processOutcome(action, args) {
+  /**
+   * 工具写入的正文通过 `exec.content` 这一私有通道进来：它参与内容/流程判定与摘要，
+   * 但不进入参数对象，也不写进审计记录。
+   */
+  const withContent = (args, content) => (content === undefined || content === null ? args : { ...args, ...content });
+
+  function processOutcome(action, args, content) {
     const entry = catalog.get(action);
     if (entry === undefined || entry.processRules.length === 0) {
       return { decision: 'allow', deny: [], confirm: [], unevaluated: [], ruleIds: [] };
@@ -139,7 +151,7 @@ export function createGate({
     } catch {
       sources = {};
     }
-    const facts = withSources(factsFromArguments(args), sources);
+    const facts = withSources(factsFromArguments(withContent(args, content)), sources);
     const outcome = evaluateProcessRules({
       rules: entry.processRules,
       facts,
@@ -157,14 +169,14 @@ export function createGate({
     };
   }
 
-  function contentOutcome(action, args) {
+  function contentOutcome(action, args, content) {
     const entry = catalog.get(action);
     if (entry === undefined || entry.contentGate !== true || contentRules.length === 0) {
       return { decision: 'allow', hard: [], soft: [], skipped: [], ruleIds: [] };
     }
     let result;
     try {
-      result = scanPayloads(contentRules, payloadsFromArguments(args));
+      result = scanPayloads(contentRules, payloadsFromArguments(withContent(args, content)));
     } catch (error) {
       return { decision: 'deny', denied: `content rules cannot be evaluated (${error?.code ?? error?.message})`, hard: [], soft: [], skipped: [], ruleIds: [] };
     }
@@ -252,6 +264,9 @@ export function createGate({
     if (pathReason !== undefined) return deny(pathReason);
     const actionDecision = decisionFor(exec.name, action, exec.arguments);
     if (actionDecision.action === 'deny') return deny(actionDecision.reason);
+    if (entry?.revision === true && (typeof exec.arguments?.revision !== 'string' || exec.arguments.revision.trim() === '')) {
+      return deny(`action "${action}" requires a revision, and none was supplied`);
+    }
     const write = isWriteAction(action);
     const actor = actorOf();
     if (write && actor === undefined) {
@@ -260,11 +275,23 @@ export function createGate({
     if (write && org.state === 'invalid') {
       return deny(`the organization policy envelope is invalid (${org.reason ?? 'unknown reason'}); write actions are refused`);
     }
-    const content = contentOutcome(action, exec.arguments);
+    // 写正文可以由调用方按需提供（例如推送前读取提交集合）：只有走到内容域才解析，
+    // 被能力域拒绝的调用不产生任何额外读取。解析失败按"内容无法判定"拒绝。
+    if (typeof exec.content === 'function') {
+      try { exec.content = await exec.content(); } catch (error) {
+        return deny(`content for ${action} cannot be read (${error?.code ?? error?.message})`);
+      }
+    }
+    const content = contentOutcome(action, exec.arguments, exec.content);
     if (content.decision === 'deny') return deny(content.denied ?? 'content rules rejected this call');
-    const process = processOutcome(action, exec.arguments);
+    const process = processOutcome(action, exec.arguments, exec.content);
     if (process.decision === 'deny') return deny(process.reason ?? 'process rules rejected this call');
     let decision = strictestDecision(actionDecision.action, content.decision, process.decision);
+    // 摘要与身份必须在任何等待（范围确认、逐次确认、审计）之前采集：等待期间参数或
+    // 正文被改写时，后续复验会发现并拒绝，而不是只把新值写进收据。
+    const agent = exec.agent;
+    let digest;
+    try { digest = snapshot(exec, action); } catch { return deny('execution arguments cannot be verified for audit'); }
     const scopeResult = write && decision !== 'deny'
       ? await scopeAdmission(ctx, exec, action, exec.arguments)
       : { ok: true };
@@ -274,9 +301,6 @@ export function createGate({
       const asked = await requestApproval(ctx, exec, reason);
       if (asked.ok !== true) return deny(asked.reason);
     }
-    let digest;
-    const agent = exec.agent;
-    try { digest = snapshot(exec, action); } catch { return deny('execution arguments cannot be verified for audit'); }
     if (interruption(exec) || changed(exec, action, digest, agent)) return deny(interruption(exec) ?? 'execution arguments or identity changed during confirmation');
     const ruleIds = [...new Set([...content.ruleIds, ...process.ruleIds])];
     const extra = {
@@ -352,6 +376,17 @@ export function createGate({
     if (admission.used) return 'the audit admission for this execution was already consumed';
     if (admission.action !== action || changed(exec, action, admission.digest, admission.agent)) {
       return 'execution arguments or identity changed after the mandatory audit';
+    }
+    // 范围票据可能在确认、审计或下游 await 期间被撤销或换绑：执行前按票据号复验，
+    // 撤销后的收据不能再放行一次写。
+    if (admission.ticketId !== undefined) {
+      const request = scopeOf(action, exec.arguments);
+      const verified = request === undefined || scope === undefined || typeof scope.verify !== 'function'
+        ? { ok: false }
+        : scope.verify(request);
+      if (verified.ok !== true || verified.ticketId !== admission.ticketId) {
+        return 'the task scope for this execution is no longer valid';
+      }
     }
     // 执行期复验身份与策略摘要：在确认或下游 await 期间变化一律拒绝。
     const reActor = actorOf();

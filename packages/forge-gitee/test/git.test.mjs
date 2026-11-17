@@ -765,3 +765,37 @@ test('工具定义：resolveGitCwd 每次现算目录并交给 git；解析失�
   await broken[0].execute({ changeId: CHANGE, message: `[${CHANGE}] 说明` }, {});
   assert.equal(seen.at(-1), undefined);
 });
+
+test('工具：push 把将要推送的提交内容以惰性通道交给策略，被拒时不读', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'log') {
+      return { exitCode: 0, stdout: 'fix: 第一条\u0000fix: 第二条\u0000', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'diff') {
+      return { exitCode: 0, stdout: 'diff --git a/x b/x\n+tok', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  let captured;
+  const policy = {
+    decide: () => ({ action: 'allow' }),
+    executeAction: async (_ctx, _action, exec, operation) => {
+      captured = exec;
+      return operation();
+    },
+  };
+  const { service } = serviceWith({ adapter, policy });
+  const envelope = await createGitPush().run(
+    { target: 'group/repo', branch: 'feat/r10', confirm: { repo: 'group/repo', object: 'group/repo' } },
+    service,
+  );
+  assert.equal(envelope.status, 'done');
+  assert.equal(typeof captured.content, 'function', '正文按需读取，不在准入前先跑子进程');
+  const content = await captured.content();
+  assert.deepEqual(content.commits, [{ message: 'fix: 第一条' }, { message: 'fix: 第二条' }]);
+  assert.match(content.diff, /tok/u);
+
+  const denied = serviceWith({ adapter, policy: unregisteredPolicy() });
+  assert.equal(typeof denied, 'object');
+});
