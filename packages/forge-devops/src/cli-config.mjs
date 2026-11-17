@@ -6,8 +6,8 @@
  *      另有基线缺省（`default`）。`dopBin` 永不给默认值——fail closed 不能被一个猜测的路径掩盖。
  *   2. **值能不能存**：字段规则只有一份（`runtime-config.validateConfigField`），本模块只在其上
  *      追加需要平台与文件系统的**路径类**判定（存在性、目录、普通文件/执行位）。**后缀形态不是门槛**：
- *      win32 下 `.exe`/无后缀/`.cmd`/`.ps1`/`.bat` 一律可存（AC-1/r8）；"能不能直接启动"由
- *      `entry-form.isDirectlyExecutable` 单点判定（AC-4），本模块不自带任何后缀表。
+ *      win32 下 `.exe`/无后缀/`.cmd`/`.ps1`/`.bat` 一律可存（AC-1/r8）；"能不能直接启动"不在这里
+ *      重算——启动侧谓词 `isSpawnableEntry` 属于自动选中与装配期（r18），本模块不自带任何后缀表。
  *   3. **能不能说出去**：带路径的 `Access` 只留在主机内；对外的 `describeCliAccess()` 结构上
  *      不读 `value`，只给 origin/布尔/枚举。两者是两个函数，故意不合并成一个带 `reveal` 开关的
  *      函数——开关迟早会被顺手传 true（TECHNICAL §0 判断 3 / §5 回显边界）。
@@ -17,7 +17,7 @@
  *
  * 产物契约（蓝图 §3.2）：
  *   CLI_FIELDS / CLI_PAGE_FIELDS / CLI_ORIGINS / CLI_REASONS / CLI_ORIGIN_LABELS / CLI_SEARCH_CATEGORIES
- *   resolveCliAccess({ config, env, discovery, platform }) -> Access
+ *   resolveCliAccess({ config, env, discovery, platform, resolveEntry? }) -> Access
  *   deriveSourceType(entries) -> 'mock' | 'enterprise'（唯一推导处；只在 resolveCliAccess 里调用一次）
  *   describeCliAccess(access) -> 脱敏描述（无 path、无 endpoint 值）
  *   validateCliField({ field, value, platform, fs }) -> { ok:true, value } | { ok:false, message }
@@ -25,8 +25,9 @@
  *   cliGuidance(access) -> 类别名 + 配置页指引（页面 / 工具 / 状态面共用同一句）
  *
  * `Access`（主机内，含路径与 endpoint 值）：
- *   { ready, reason, entries: { <field>: { origin, value, overrides, tool? } },
- *     value: { 四字段 } | null, invalid: [{ field, origin, message }], searched: string[], guidance }
+ *   { ready, reason, entries: { <field>: { origin, value, overrides, tool?, form?, resolvedFrom?, spawnable? } },
+ *     value: { 四字段 } | null, invalid: [{ field, origin, message }], searched: string[], guidance,
+ *     rejectedShimCount: number }
  *   `overrides` 是"被本层压过的下层"（如 `['env']` = 配置覆盖了环境变量），页面据此显示
  *   「覆盖环境变量」Tag；环境变量/自动发现/缺省被压过时同样记录，绝不静默。
  */
@@ -36,8 +37,10 @@ import {
   hasConfigValue,
   validateConfigField,
 } from './runtime-config.mjs';
-// 入口形态（后缀词表 + 可直接执行判定）的唯一真源：保存侧只消费，不再自带后缀规则（AC-4/r8）。
-import { isDirectlyExecutable } from './entry-form.mjs';
+// 入口形态的唯一真源（AC-4 / r18）：保存侧只问"存不存得下"（`isStorableEntry`），
+// "能不能按本插件方式启动"（`isSpawnableEntry` / 沿 shim 解析）不在这里重算：
+// 自动发现由 `cli-discovery` 收口，显式入口由注入的 `resolveEntry` 收口。
+import { ENTRY_FORMS, entryFormOf, isStorableEntry } from './entry-form.mjs';
 
 /** 四个逻辑字段，顺序即配置面字段顺序（与 `ENV_KEYS` 同键，不另立词表）。 */
 export const CLI_FIELDS = Object.freeze(['dopBin', 'dopEndpoint', 'sourceType', 'timeoutMs']);
@@ -115,6 +118,16 @@ export const CLI_PAGE_HINT = '设置 → 企业 DevOps';
  */
 const NOT_EXECUTABLE_MESSAGE = '不是可直接执行的文件';
 
+/**
+ * 「存得下、起不来」的入口在装配期的处置（r18）。
+ *
+ * 保存侧仍允许存包装脚本（r8 AC-1：存不存得下与能不能启动是两件事），但**自动选中/装配期**
+ * 只认能按本插件方式启动的入口。显式填了 `.cmd`/`.ps1`/无后缀 shim 而沿 shim 解析不出包内
+ * 原生程序时，就停在这里：`ready=false` + 本文案，绝不把它交给 `execFile(shell:false)` 再让用户
+ * 到业务命令面才发现（内网现场）。
+ */
+const WRAPPER_UNRESOLVED_MESSAGE = `这是包装脚本，本插件以固定 argv 直接启动它，未经 shell 无法执行；请指向该 CLI 包内的原生可执行文件`;
+
 /** 路径类字段 ←→ 发现工具名（其余字段没有发现层）。 */
 const TOOL_BY_FIELD = Object.freeze({ dopBin: 'dop' });
 
@@ -164,14 +177,29 @@ function layerValue(layer, field, sources) {
     const raw = isPlainObject(env) ? env[ENV_KEYS[field]] : undefined;
     return typeof raw === 'string' && hasConfigValue(raw) ? raw : undefined;
   }
-  // discovered：发现结果只贡献路径类字段；`found` 按 tier、path 升序，取首个即"静默取首个"策略。
+  // discovered：发现结果只贡献路径类字段；`found` 按 tier、path 升序，取首个。
+  // r18 起 `found` 只含"能按本插件方式启动"的入口（`cli-discovery` 已把 shim 解析成包内原生
+  // 程序，解析不出来的进 `rejected`），所以这里取首个不再有"静默选中包装脚本"的风险。
+  const hit = discoveredHitOf(field, sources);
+  return hit === null ? undefined : text(hit.path);
+}
+
+/** 发现层的首个命中项（保留 `tier` / `resolvedFrom`，装配层要据此告诉页面"从哪条 shim 解析来的"）。 */
+function discoveredHitOf(field, sources) {
   const tool = TOOL_BY_FIELD[field];
-  if (tool === undefined) return undefined;
+  if (tool === undefined) return null;
   const discovery = isPlainObject(sources.discovery) ? sources.discovery[tool] : undefined;
   const found = isPlainObject(discovery) ? discovery.found : undefined;
-  if (!Array.isArray(found)) return undefined;
+  if (!Array.isArray(found)) return null;
   const hit = found.find((item) => text(item?.path) !== '');
-  return hit === undefined ? undefined : text(hit.path);
+  return isPlainObject(hit) ? hit : null;
+}
+
+/** 发现层被拒的候选数（r18）：只出计数，不出路径——它要进错误文案与脱敏快照。 */
+function rejectedShimCountOf(discovery) {
+  const dop = isPlainObject(discovery) ? discovery.dop : undefined;
+  const rejected = isPlainObject(dop) ? dop.rejected : undefined;
+  return Array.isArray(rejected) ? rejected.filter((item) => isPlainObject(item) && text(item?.path) !== '').length : 0;
 }
 
 function looksLikePath(value, platform) {
@@ -184,11 +212,15 @@ function binaryLabel(field) {
 }
 
 /**
- * 读盘判定：存在性 → 目录 → **可直接执行**（末审只有一处：`entry-form.isDirectlyExecutable`）。
+ * 读盘判定：存在性 → 目录 → **存得下**（末审只有一处：`entry-form.isStorableEntry`）。
  *
  * 判定本身不在这里复制（AC-4）：win32 只看「是普通文件」——r8 去后缀门槛（AC-1）；POSIX 仍是
  * 包装脚本 / 执行位口径（PRD 明确 POSIX 不动）。这里只负责把 `false` 翻译成一句能据以修的原因，
  * 所以目录先判：「这是目录」比「不是可直接执行的文件」有用得多。
+ *
+ * **保存侧与装配侧是两个谓词**（r18）：这里问的是"用户能不能把这串字符存下来"，不是"本插件
+ * 能不能启动它"。后者由 `resolveCliAccess` 的解析结果与 `readiness` 判定，两者共用谓词会重演
+ * 内网现场（页面变绿、调用失败）。
  *
  * `fs` 缺失时跳过（解析环节只做形状判定，读盘只在「发现」与「保存校验」两处）。
  */
@@ -204,7 +236,7 @@ function probeFile(field, value, platform, fs) {
   if (typeof stat.isDirectory === 'function' && stat.isDirectory() === true) {
     return { ok: false, message: `这是目录，需要指向 ${binaryLabel(field)} 的可执行文件本体` };
   }
-  if (isDirectlyExecutable({ path: value, platform, stat }) === true) return { ok: true, value };
+  if (isStorableEntry({ path: value, platform, stat }) === true) return { ok: true, value };
   // 形态判定已归 entry-form，这里只剩两种否决理由：不是普通文件 / POSIX 缺执行位。
   if (typeof stat.isFile === 'function' && stat.isFile() !== true) {
     return { ok: false, message: NOT_EXECUTABLE_MESSAGE };
@@ -234,11 +266,62 @@ function checkFieldValue({ field, value, platform, fs }) {
   return probeFile(field, path, platform, fs);
 }
 
-function entryOf(field, origin, value, overrides) {
+function entryOf(field, origin, value, overrides, extras = null) {
   const entry = { origin, value, overrides: Object.freeze(overrides) };
   const tool = TOOL_BY_FIELD[field];
   if (tool !== undefined) entry.tool = tool;
+  // 追加事实只记"求解过程"（r18）：形态、被解析掉的原始 shim、以及"已确认能按本插件方式启动"。
+  // 三者都可缺省——没经解析的入口照旧只有 origin/value/overrides，既有快照形状不变。
+  if (isPlainObject(extras)) {
+    if (typeof extras.form === 'string') entry.form = extras.form;
+    if (typeof extras.resolvedFrom === 'string' && extras.resolvedFrom !== '') entry.resolvedFrom = extras.resolvedFrom;
+    if (extras.spawnable === true) entry.spawnable = true;
+  }
   return Object.freeze(entry);
+}
+
+/** 需要解释器才能启动的形态：`execFile(shell:false)` 拿它们没办法（POSIX 的包装脚本同理）。 */
+function needsInterpreter(form) {
+  return form === ENTRY_FORMS.WRAPPER || form === ENTRY_FORMS.EXTENSIONLESS;
+}
+
+/**
+ * 显式入口（配置/环境变量）的装配期落定（r18，AC-9）。
+ *
+ * 三件事，缺一不可：
+ *   1. 能按本插件方式启动 → 用**解析后的路径**（shim → 包内原生程序），并记下 `resolvedFrom`；
+ *   2. 起不来但形如包装脚本 → `ready=false`，理由是"包装脚本无法直接启动"，而不是让用户在业务
+ *      命令面才收到同一句话；
+ *   3. 解析通道缺失或抛错 → 维持原值放行（解析是附加判断，不能因为适配器抖动把配置面整体判死；
+ *      运行期 `failure-face` 仍会归因）。
+ */
+function settleEntry({ field, origin, value, overrides, sources, invalid }) {
+  if (TOOL_BY_FIELD[field] === undefined || typeof sources.resolveEntry !== 'function') {
+    return entryOf(field, origin, value, overrides);
+  }
+  let outcome;
+  try {
+    outcome = sources.resolveEntry({ tool: TOOL_BY_FIELD[field], value, platform: sources.platform, env: sources.env });
+  } catch {
+    return entryOf(field, origin, value, overrides);
+  }
+  if (isPlainObject(outcome) && outcome.ok === true) {
+    const resolved = text(outcome.path) === '' ? value : text(outcome.path);
+    return entryOf(field, origin, resolved, overrides, {
+      form: typeof outcome.form === 'string' ? outcome.form : entryFormOf(resolved, sources.platform),
+      resolvedFrom: resolved === value ? undefined : value,
+      spawnable: true,
+    });
+  }
+  const form = entryFormOf(value, sources.platform);
+  invalid.push(
+    Object.freeze({
+      field,
+      origin,
+      message: needsInterpreter(form) ? WRAPPER_UNRESOLVED_MESSAGE : '找不到这个文件',
+    }),
+  );
+  return null;
 }
 
 /** 被本层压过的下层（只记"本来有值"的层），页面/状态面据此说明覆盖关系。 */
@@ -265,7 +348,19 @@ function resolveField(field, sources, invalid) {
     // 归一化后为空（例如只剩一对引号 `VAR=''`）：该层没给值，继续看下一层，
     // 而不是拿一个空值占位把自动发现挡掉。
     if (verdict.value === null) continue;
-    return entryOf(field, ORIGIN_BY_LAYER[layer], verdict.value, overriddenLayers(field, layer, sources));
+    const origin = ORIGIN_BY_LAYER[layer];
+    const overrides = overriddenLayers(field, layer, sources);
+    // 自动发现的结果已是"能启动的那一个"（解析由发现层完成）；显式入口在这里落定（r18）。
+    if (origin === CLI_ORIGINS.DISCOVERED) {
+      const hit = discoveredHitOf(field, sources);
+      return entryOf(field, origin, verdict.value, overrides, {
+        form: entryFormOf(verdict.value, sources.platform),
+        resolvedFrom: isPlainObject(hit) && typeof hit.resolvedFrom === 'string' ? hit.resolvedFrom : undefined,
+        spawnable: true,
+      });
+    }
+    const settled = settleEntry({ field, origin, value: verdict.value, overrides, sources, invalid });
+    return settled === null ? entryOf(field, origin, null, []) : settled;
   }
   if (Object.prototype.hasOwnProperty.call(DEFAULTS, field)) {
     return entryOf(field, CLI_ORIGINS.DEFAULT, DEFAULTS[field], []);
@@ -361,6 +456,11 @@ function guidanceOf(access) {
   const categories = (Array.isArray(access.searched) ? access.searched : [])
     .map((category) => CATEGORY_LABELS[category] ?? category)
     .join('、');
+  // r18：只发现包装脚本时，别让用户以为"没装"。计数足够说明问题，路径留给同源 GET 快照。
+  const shims = typeof access.rejectedShimCount === 'number' && access.rejectedShimCount > 0 ? access.rejectedShimCount : 0;
+  if (shims > 0) {
+    return `未找到可直接启动的 dop · 已查 ${categories} · 发现 ${shims} 个包装脚本（本插件不经 shell 启动，无法使用）· ${hint}指向该 CLI 包内的原生可执行文件`;
+  }
   return `未找到 dop · 已查 ${categories} · ${hint}指定位置`;
 }
 
@@ -369,6 +469,12 @@ function guidanceOf(access) {
  *
  * 任一层出现非法值即 `ready:false` + `CLI_CONFIG_INVALID`，并**不**回落到下一层；
  * `dopBin` 三层都没有则 `ready:false` + `CLI_NOT_FOUND`。两种失败都带 `guidance`。
+ *
+ * **`ready` 的语义（r18 修订，取代 r8 AC-9）**：`ready=true` 表示"dop 入口已解析到**能按本插件
+ * 方式启动**的程序"——自动发现只交能启动的候选，显式入口经 `resolveEntry` 落定（shim 解析成
+ * 包内原生程序）。`ready` 不再只表示"有个路径"，因为页面据此显示就绪、装配层据此把 bin 交给
+ * `execFile(shell:false)`；两者共用一个过宽的判定，就是内网现场"页面变绿、调用失败"。
+ * "能不能真跑通（认证/网络/权限）"仍**不在**这里编码——那是自检与运行期归因的事。
  *
  * `sourceType` 的优先级：配置 > 环境变量 > 推导（`deriveSourceType`）。推导只填既有 `default`
  * 槽位，因此 `entries.sourceType.origin` 只有 `config`/`env`/`default` 三种取值，调用方不必分辨
@@ -379,14 +485,18 @@ function guidanceOf(access) {
  * @param {object|null} [options.env] 环境变量表（显式传入，不读进程环境）
  * @param {{dop?: object}|null} [options.discovery] `discoverCli()` 的输出
  * @param {string} [options.platform] `process.platform` 口径；显式传入以便离线复现 Windows
+ * @param {function|null} [options.resolveEntry] 显式入口解析器 `({tool,value,platform,env}) =>
+ *   {ok:true,path,form}|{ok:false,reason}`（生产由 `cli-access` 用支撑包 `resolveCommandEntry`
+ *   注入；缺省则不做落定，只做形状判定）
  * @returns {Readonly<object>} Access
  */
-export function resolveCliAccess({ config = null, env = null, discovery = null, platform } = {}) {
+export function resolveCliAccess({ config = null, env = null, discovery = null, platform, resolveEntry = null } = {}) {
   const sources = {
     config: configLayerOf(config),
     env,
     discovery,
     platform: typeof platform === 'string' && platform !== '' ? platform : process.platform,
+    resolveEntry: typeof resolveEntry === 'function' ? resolveEntry : null,
   };
 
   const invalid = [];
@@ -422,6 +532,8 @@ export function resolveCliAccess({ config = null, env = null, discovery = null, 
     value,
     invalid: Object.freeze(invalid),
     searched: Object.freeze(searchedCategories(discovery)),
+    // 被拒候选的**计数**（无路径）：页面与失败文案据此说明"只发现包装脚本"，不进日志细节。
+    rejectedShimCount: rejectedShimCountOf(discovery),
     guidance: '',
   };
   access.guidance = guidanceOf(access);
@@ -442,6 +554,7 @@ export function describeCliAccess(access) {
   for (const field of CLI_FIELDS) {
     const entry = isPlainObject(entries[field]) ? entries[field] : {};
     const value = entry.value;
+    const form = typeof entry.form === 'string' ? entry.form : null;
     described[field] = Object.freeze({
       origin: typeof entry.origin === 'string' ? entry.origin : CLI_ORIGINS.MISSING,
       configured:
@@ -449,6 +562,9 @@ export function describeCliAccess(access) {
       overrides: Object.freeze(
         Array.isArray(entry.overrides) ? entry.overrides.filter((item) => typeof item === 'string') : [],
       ),
+      // 形态是枚举不是路径（r18）：`cliStatus()` 与工具描述可以说"这是 .exe 还是 shim"，
+      // 但不能说"它在哪个目录"。`resolvedFrom` 因此只出同源 GET 快照。
+      ...(form !== null && Object.values(ENTRY_FORMS).includes(form) ? { form } : {}),
     });
   }
 
@@ -476,6 +592,10 @@ export function describeCliAccess(access) {
     timeoutMs: typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) ? timeoutMs : null,
     invalid: Object.freeze(invalid),
     searched: Object.freeze(Array.isArray(source.searched) ? source.searched.filter((item) => typeof item === 'string') : []),
+    rejectedShimCount:
+      typeof source.rejectedShimCount === 'number' && Number.isFinite(source.rejectedShimCount)
+        ? Math.max(0, Math.floor(source.rejectedShimCount))
+        : 0,
     guidance: cliGuidance(source),
   });
 }
@@ -560,6 +680,10 @@ export function cliGuidance(access) {
     reason: typeof source.reason === 'string' ? source.reason : null,
     entries,
     invalid: Array.isArray(source.invalid) ? source.invalid : [],
+    rejectedShimCount:
+      typeof source.rejectedShimCount === 'number' && Number.isFinite(source.rejectedShimCount)
+        ? source.rejectedShimCount
+        : 0,
     searched:
       Array.isArray(source.searched) && source.searched.length > 0
         ? source.searched

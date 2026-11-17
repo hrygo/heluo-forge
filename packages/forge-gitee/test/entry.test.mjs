@@ -117,10 +117,16 @@ test('AC-1: exports 与 files 白名单互相自洽（没有声明了却打不�
   }
 });
 
-test('AC-4: 依赖面只有策略包，且不引入宿主私有包（src 计数为 0）', async () => {
+test('AC-4: 依赖面只有策略包（入口判定在本包实现），且不引入宿主私有包（src 计数为 0）', async () => {
   const pkg = await manifest();
+  // r18 裁决（C）：两个包各自实现入口判定，不新增共享包，安装面因此保持 r17 的形状。
   assert.deepEqual(Object.keys(pkg.dependencies ?? {}), ['@heluo/forge-policy']);
   assert.equal(pkg.dependencies['@heluo/forge-policy'], 'workspace:*', '包间用 workspace:，由构建期闭包成真版本');
+  assert.equal(
+    await readFile(new URL('../../forge-cli-entry/package.json', import.meta.url), 'utf8').then(() => true, () => false),
+    false,
+    '不得再出现共享入口包：C 方案要求两份实现 + 交叉对齐测试',
+  );
   assert.deepEqual(pkg.peerDependencies, { react: '>=18' }, 'UI 半只需要宿主提供的 react，且必须是语义版本范围');
   assert.deepEqual(pkg.peerDependenciesMeta, { react: { optional: true } }, 'peer 必须 optional：宿主不装 react 时服务端半仍要能加载');
   assert.equal(pkg.optionalDependencies, undefined);

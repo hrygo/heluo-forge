@@ -1,31 +1,29 @@
 /**
- * `@heluo/forge-devops` 入口形态单点模块（T1(r8) 建立，r9 收窄为**纯判定**）。
+ * CLI 入口形态单点模块（r18：本包自带一份实现；`gh` 用的那份在 `@heluo/forge-gitee`，
+ * 两者的等价性由根目录 `tests/cli-entry-parity.test.mjs` 逐条比对——裁决是不新增共享包）。
  *
- * 这个模块只回答一个问题：**一个入口到底长什么形态，它能不能被「固定 argv + 不带 shell」
- * 的调用方式直接启动。** 失败时给用户看哪句话**不归这里管**——那是 `failure-face.mjs`
- * 的职责（r9 / AC-5：渲染只一处）。r8 曾把运行期归因与脱敏放在本模块，那等于给文案留了
- * 第二个出处：只要有人再拼一句提示就会变成两套口径；r9 把它们整体迁到 `failure-face.mjs`
- * 并删除，本模块只剩形态与可执行性，**一个提示字符串都不产出**。
+ * 这个模块只回答一个问题：**一个入口长什么形态，它能被「固定 argv + 不带 shell」的调用
+ * 方式直接用掉吗。** 它不产出任何提示文案、不读盘、不启动进程——文案归各包的失败面，
+ * 读盘归 `entry-resolve.mjs`。
  *
- * 为什么单独成模块：r3 把同一条规则写在了三处（保存侧 `cli-config` 的后缀门槛、发现侧
- * `cli-discovery` 的 `isDirectlyExecutable`、页面 `client.js` 的 `WRAPPER_PATTERN`），只能
- * 靠交付自检的文本扫描防漂移。r8 把「保存放行」一放开，三份副本就会各说各话——于是规则
- * 收敛到这里，**本模块是仓库里唯一持有后缀词表与形态判定的地方**，其余模块全部是消费者：
- *   - 保存侧（`cli-config.mjs`）：末审调 `isDirectlyExecutable`，不再自带后缀表；
- *   - 发现侧（`cli-discovery.mjs`）：再导出同一批符号，候选名表用它排序；
- *   - 失败面（`failure-face.mjs`）：按 `entryFormOf` 的形态选类别文案，不自己判后缀。
+ * 为什么要分成两个谓词（r18 的核心修正）：
  *
- * 纪律（静态用例守这三条，见 `test/entry-form.test.mjs`）：
- *   1. **纯函数、零 IO**：不读盘、不读环境、不看时钟；`stat` 由调用方注入。
- *   2. **零子进程**：不引入任何进程通道，连"试跑一下看看"的能力都不提供。
- *   3. **唯一依赖 `node:path`**（只用 `basename`，且按目标平台选 `win32`/`posix` 实现，
- *      否则 POSIX 主机上测不了 Windows 路径）。
+ *   - `isStorableEntry`（**保存侧**：用户能不能把这串字符存进配置）沿用 r8 口径——win32 上
+ *     是普通文件即可，不按后缀拒收。用户手工填了 `dop.cmd` 是"我知道我在填什么"，保存层
+ *     不该替他否决。
+ *   - `isSpawnableEntry`（**系统自动选中 / 装配期就绪**）只认本插件真能启动的形态：win32 上
+ *     仅 `.exe`（原生 PE），POSIX 上是普通文件且执行位打开。系统替用户挑入口时**必须**用这条，
+ *     否则就会出现 r8 的现场：自动选中 npm 的无后缀 shim、页面显示就绪、`execFile` 起不来，
+ *     直到用户点开某个业务命令才看到失败信封。
  *
- * 产物契约（蓝图 §T1，逐字）：
- *   WRAPPER_SUFFIXES / ENTRY_FORMS
- *   wrapperSuffixOf(name) -> string | null
- *   entryFormOf(file, platform) -> 'native' | 'wrapper' | 'extensionless' | 'other'
- *   isDirectlyExecutable({ path, platform, stat }) -> boolean
+ * 两条谓词曾经是同一条（`isDirectlyExecutable`），这条历史正是 r18 故障的设计源头：**"能不能
+ * 存"与"能不能按这份调用方式启动"被当成同一个问题**。现在它们分开，且系统自动选中只用后者。
+ *
+ * 纪律（静态用例守）：
+ *   1. 纯函数、零 IO：不读盘、不读环境、不看时钟；`stat` 由调用方注入。
+ *   2. 零子进程：连"试跑一下看看"的能力都不提供。
+ *   3. 唯一依赖 `node:path`，并按目标平台选 `win32`/`posix` 实现——否则 POSIX 主机上测不了
+ *      Windows 路径。
  */
 
 import path from 'node:path';
@@ -33,15 +31,16 @@ import path from 'node:path';
 /**
  * 包装脚本后缀：长得像命令，但在固定 argv、未经 shell 的调用方式下起不来。
  *
- * **唯一定义点**（AC-4）：保存侧、发现侧、页面、运行期提示都读这一份。新增/删除后缀只改
- * 这里；任何模块再内联一张 `.cmd`/`.bat` 表都属缺陷（交付自检有断言）。
- * `.vbs` 留在表里是为了运行期提示覆盖全集——它不进候选名表，发现阶段也不会选它。
+ * **全仓唯一定义点**：devops 的保存侧/失败面与 gitee 的配置校验都读这一份。新增/删除后缀
+ * 只改这里；任何模块再内联一张 `.cmd`/`.bat` 表都属缺陷。
+ * `.com` 留在包装表里：它在 win32 上确实可能被 CreateProcess 直接起，但它同时是 npm 时代的
+ * 脚本形态，本插件按"非原生 PE"处理更安全——真要选它，用户显式配置并自检。
+ * `.vbs` 同理：只为运行期提示覆盖全集。
  */
 export const WRAPPER_SUFFIXES = Object.freeze(['.cmd', '.bat', '.ps1', '.com', '.vbs']);
 
 /**
- * 四种入口形态。用常量对象而不是裸字符串，是为了让消费者（尤其是失败面归因）不能靠
- * 手写拼写命中，改词表时编译器/用例会替我们发现漏改点。
+ * 四种入口形态。用常量对象而不是裸字符串，是为了让消费者不能靠手写拼写命中。
  */
 export const ENTRY_FORMS = Object.freeze({
   NATIVE: 'native',
@@ -67,8 +66,8 @@ function basenameOf(file, platform) {
 /**
  * 命中的包装脚本后缀（小写）或 `null`；大小写不敏感。
  *
- * 非字符串、空串一律 `null`——"判定不出来"不能被当成"是包装脚本"或"不是包装脚本"的
- * 任一侧答案，调用方按自己的语义处理 `null`。
+ * 非字符串、空串一律 `null`——"判定不出来"不能被当成"是包装脚本"或"不是包装脚本"的任一侧
+ * 答案，调用方按自己的语义处理 `null`。
  */
 export function wrapperSuffixOf(name) {
   if (typeof name !== 'string' || name === '') return null;
@@ -77,14 +76,12 @@ export function wrapperSuffixOf(name) {
 }
 
 /**
- * 入口形态分类（AC-2）：
+ * 入口形态分类：
  *   - 后缀 ∈ `WRAPPER_SUFFIXES` → `wrapper`；
  *   - basename 以 `.exe` 结尾（不区分大小写）→ `native`；
- *   - basename 不含 `.`：win32 上是 npm 生成的无后缀 shim（`extensionless`），POSIX 上
- *     就是普通可执行文件（`native`）；
+ *   - basename 不含 `.`：win32 上是 npm 生成的无后缀 shim（`extensionless`），POSIX 上就是
+ *     普通可执行文件（`native`，脚本有 shebang + 执行位即可 spawn）；
  *   - 其余 → `other`（`.sh`、`.mjs`、带点的普通文件名……）。
- *
- * `platform` 缺省取宿主，调用方测试时显式注入。
  */
 export function entryFormOf(file, platform = process.platform) {
   const resolvedPlatform = platform ?? process.platform;
@@ -99,30 +96,57 @@ export function entryFormOf(file, platform = process.platform) {
   return ENTRY_FORMS.OTHER;
 }
 
-/**
- * 是否「可直接启动」——**全仓唯一判定**（AC-4），保存侧与发现侧共用。
- *
- * `stat` 是 `statSync` 的结果（注入，便于离线覆盖）；缺失或不是普通文件一律 `false`。
- *
- *   - **win32：只看「是普通文件」，没有后缀门槛**（AC-1）。`.exe` / 无后缀 shim / `.cmd` /
- *     `.ps1` / `.bat` / `.com` 同等对待。"能不能被这份调用方式启动"由运行期提示回答
- *     （`failure-face.mjs` 的未启动类别），不由发现阶段替用户拒收。
- *   - **POSIX：r3 口径零变化**——包装脚本仍 `false`，任一执行位（`mode & 0o111`）打开才算
- *     可执行，`mode` 缺失视为不可判定。
- *
- * 判定不出来就返回 `false`：把"没把握"当"可以执行"，正是误执行包装脚本的入口。
- */
-export function isDirectlyExecutable(options = {}) {
-  const { path: file, platform = process.platform, stat } = options;
+/** 普通文件的唯一判定处：`stat` 缺失或不是普通文件一律 `false`。 */
+function isRegularFile(file, stat) {
   if (typeof file !== 'string' || file.trim() === '') return false;
   if (stat === null || stat === undefined) return false;
   if (typeof stat.isFile !== 'function' || stat.isFile() !== true) return false;
+  return true;
+}
+
+/** POSIX 执行位：mode 缺失视为不可判定（不可判定即不放行）。 */
+function hasExecBit(stat) {
+  return Number.isInteger(stat?.mode) && (stat.mode & 0o111) !== 0;
+}
+
+/**
+ * **可保存**：用户把这串字符存进配置时，末审是否放行。
+ *
+ *   - win32：是普通文件即可，**没有后缀门槛**（r8 AC-1 口径不变）。
+ *   - POSIX：包装脚本不放行，任一执行位（`mode & 0o111`）打开才算。
+ *
+ * 这条只回答"存不存得下"，**不能**用来判定"能不能启动"——那是 `isSpawnableEntry`。
+ */
+export function isStorableEntry(options = {}) {
+  const { path: file, platform = process.platform, stat } = options;
+  if (!isRegularFile(file, stat)) return false;
   const resolvedPlatform = platform ?? process.platform;
-  const name = basenameOf(file, resolvedPlatform);
-  if (name === '') return false;
-  // win32：普通文件即可（不看 mode，也不看后缀）。
   if (isWin32(resolvedPlatform)) return true;
-  // POSIX：包装脚本仍不选；执行位必须打开。
-  if (wrapperSuffixOf(name) !== null) return false;
-  return Number.isInteger(stat.mode) && (stat.mode & 0o111) !== 0;
+  if (wrapperSuffixOf(basenameOf(file, resolvedPlatform)) !== null) return false;
+  return hasExecBit(stat);
+}
+
+/**
+ * **可启动**：本插件（`execFile` + 固定 argv + `shell:false`）真能起得来的形态。
+ *
+ * 系统自动选中与装配期就绪**只能**用这条：
+ *   - win32：仅 `native`（`.exe`）。无后缀 / `.cmd` / `.ps1` / `.bat` / `.com` 一律不可启动
+ *     ——它们要么是 npm shim，要么需要 shell 解释；想用它们必须先经 `entry-resolve.mjs`
+ *     解析到包内原生可执行文件，或者由用户手工指定 `.exe`。
+ *   - POSIX：非包装脚本 + 执行位。无后缀带 shebang + 执行位的脚本由内核直接启动，照旧放行。
+ *
+ * 判定不出来就返回 `false`：把"没把握"当"可以启动"，正是误把 shim 当入口的那个坑。
+ */
+export function isSpawnableEntry(options = {}) {
+  const { path: file, platform = process.platform, stat } = options;
+  if (!isRegularFile(file, stat)) return false;
+  const resolvedPlatform = platform ?? process.platform;
+  if (isWin32(resolvedPlatform)) return entryFormOf(file, resolvedPlatform) === ENTRY_FORMS.NATIVE;
+  return isSpawnablePosix(file, resolvedPlatform, stat);
+}
+
+/** POSIX 侧的可启动判定：包装脚本不放行，执行位必须打开。 */
+function isSpawnablePosix(file, platform, stat) {
+  if (wrapperSuffixOf(basenameOf(file, platform)) !== null) return false;
+  return hasExecBit(stat);
 }

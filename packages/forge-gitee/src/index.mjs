@@ -45,14 +45,8 @@
  * | `adapter()` / `guard()` / `session()` / `git()` | 只给同包内工具定义用的装配件（幂等台账是进程内 Map，不落盘） |
  * | `git()` | 本地 git 命令面（`commit` 是本地动作、`push` 走受控动作 `gitee.git.push`）；工具层只拿端口，不持 runner |
  */
-import {
-  GITEE_CONFIG_KEYS,
-  GITEE_ENTRY_ID,
-  GITEE_ORIGINS,
-  GITEE_PAGE_HINT,
-  GITEE_REBUILD_REASON,
-  createGiteeAccess,
-} from './config-access.mjs';
+import { ENTRY_FS, GITEE_CONFIG_KEYS, GITEE_ENTRY_ID, GITEE_ORIGINS, GITEE_PAGE_HINT, GITEE_REBUILD_REASON, createGiteeAccess } from './config-access.mjs';
+import { runtimeBinOf } from './cli-entry.mjs';
 import { GITEE_API_PREFIX, GITEE_CONFIG_ROUTE, createGiteeApi, toNodeRoute } from './http.mjs';
 import { createGiteeAdapter } from './gitee-adapter.mjs';
 import { createGiteeRunner, detectPersistentToken } from './gitee-cli.mjs';
@@ -300,9 +294,20 @@ function buildFaces({ policy, resolved, ctx = null }) {
       { error },
     );
   }
+  // 入口解析（r18）：配置里的 `cliPath` 可能只是 npm shim（win32 上 `gh.cmd` 的原生程序在
+  // 包内 `bin\gh.exe`）。`execFile` 不经 shell，shim 起不来；这里换成**真正可启动的 bin**。
+  // 解析失败**不阻断**装配：保留原值（维持既有行为，运行期归因仍由 `SPAWN_FAILED` 兜底），
+  // 结论已由配置快照的 `entries.cliPath.reason` / `guidance` 带给用户。
+  const { bin: cliBin } = runtimeBinOf({
+    cliPath: resolved.cliPath,
+    platform: process.platform,
+    env: process.env,
+    fs: ENTRY_FS,
+    tool: 'gh',
+  });
   const adapter = createGiteeAdapter({
     runner,
-    cliPath: resolved.cliPath,
+    cliPath: cliBin,
     host: resolved.host,
     authEnv: resolved.authEnv,
     env: process.env,

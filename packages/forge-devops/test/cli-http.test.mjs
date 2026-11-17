@@ -12,7 +12,14 @@ import assert from 'node:assert/strict';
 
 import { CLI_PAGE_HINT, CLI_REASONS } from '../src/cli-config.mjs';
 import { createCliAccess } from '../src/cli-access.mjs';
-import { CLI_API_PREFIX, CLI_REQUEST_HEADER, CLI_ROUTE_PATH, createCliApi, toNodeRoute } from '../src/http.mjs';
+import {
+  CLI_API_PREFIX,
+  CLI_REQUEST_HEADER,
+  CLI_ROUTE_PATH,
+  CLI_SELFCHECK_PATH,
+  createCliApi,
+  toNodeRoute,
+} from '../src/http.mjs';
 
 const AT = Date.parse('2026-10-29T07:00:00.000Z');
 const SECRET = 'C:\\Users\\someone\\profile\\dsh.patch.yml'; // security-scan: allow（夹具：合成路径，非真实主机）
@@ -466,4 +473,134 @@ test('端到端主路径：GET 就绪 → POST 保存落盘 → GET 变 config �
   assert.equal(stale.status, 409, '拿旧 revision 回写必须被挡住');
   assert.equal(stale.body.code, CLI_REASONS.CONFLICT);
   assert.deepEqual(patch.override, { dopBin: CHOSEN }, '被挡住的写一个字节都不落盘');
+});
+
+/* ── 启动自检端点（r18）──────────────────────────────────────────────────────────
+ * 这条路径会**启动一个真实进程**，所以它的四点边界比读/写面更硬：
+ *   1. 只有 POST + 同源请求头才执行（GET 可被链接预取、可被 <img> 触发，不能变成执行触发器）；
+ *   2. 未装配 → 503（与读面/写面同一口径，不是 500）；
+ *   3. 自检器抛错 → 500 固定文案（异常 message 可能带路径，绝不出网）；
+ *   4. 结论走响应体（`state`/`reason`），不把"起不来"映射成 5xx。
+ */
+
+/** 一条典型自检报告：页面只认 `state`/`reason`/`exitCode`/`output` 与固定 argv。 */
+const SELFCHECK_REPORT = Object.freeze({
+  contract: 1,
+  at: AT,
+  state: 'pass',
+  ok: true,
+  started: true,
+  reason: 'ok',
+  exitCode: 0,
+  durationMs: 12,
+  argv: '--version',
+  output: 'dop version 1.2.3',
+  form: 'native',
+});
+
+const selfCheckApi = (options = {}) => {
+  const calls = [];
+  const selfCheck = typeof options.selfCheck === 'function'
+    ? options.selfCheck
+    : async () => {
+        calls.push(options.now ?? AT);
+        return SELFCHECK_REPORT;
+      };
+  const api = createCliApi({ access: makeAccess(), now: () => AT, ...(options.omit ? {} : { selfCheck }) });
+  return { api, calls };
+};
+
+const postSelfCheck = (api, headers = { [CLI_REQUEST_HEADER]: '1', 'content-type': 'application/json' }) =>
+  callRoute(toNodeRoute(api), { method: 'POST', url: CLI_SELFCHECK_PATH, headers, body: {} });
+
+test('selfcheck 端点常量由 CLI_ROUTE_PATH 派生，不与读/写面抢同一路径', () => {
+  assert.equal(CLI_SELFCHECK_PATH, `${CLI_ROUTE_PATH}/selfcheck`);
+  assert.equal(CLI_SELFCHECK_PATH.startsWith(CLI_API_PREFIX), true);
+  assert.notEqual(CLI_SELFCHECK_PATH, CLI_ROUTE_PATH);
+});
+
+test('selfcheck 路由：POST + 同源头 → 200，报告原样交给页面且自检器只跑一次（AC-9）', async () => {
+  const { api, calls } = selfCheckApi();
+  const response = await postSelfCheck(api);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.deepEqual(response.body.selfcheck, SELFCHECK_REPORT, '报告字段即契约，路由不重排也不裁剪');
+  assert.equal(calls.length, 1, '一次点击只跑一次');
+  assert.equal(response.headers['cache-control'], 'no-store', '结论不缓存：它只对这一次点击有效');
+  assert.equal(response.headers['x-content-type-options'], 'nosniff');
+});
+
+test('selfcheck 路由：缺同源请求头 → 400，且自检器一次都没被调用（AC-10）', async () => {
+  const { api, calls } = selfCheckApi();
+
+  for (const headers of [{}, { [CLI_REQUEST_HEADER]: '0' }, { 'content-type': 'application/json' }]) {
+    const response = await postSelfCheck(api, headers);
+    assert.equal(response.status, 400, JSON.stringify(headers));
+    assert.equal(response.body.code, 'BAD_REQUEST');
+    assert.equal(response.body.message, `缺少同源请求头 ${CLI_REQUEST_HEADER}: 1`);
+    assert.equal(response.headers['cache-control'], 'no-store');
+  }
+  assert.equal(calls.length, 0, '请求不合格就不该启动任何子进程（这是同源头存在的全部理由）');
+});
+
+test('selfcheck 路由：GET/HEAD 一律 405 + allow: POST，绝不因一次读取就启动进程（AC-9）', async () => {
+  const { api, calls } = selfCheckApi();
+  const route = toNodeRoute(api);
+
+  for (const method of ['GET', 'HEAD']) {
+    const response = await callRoute(route, { method, url: CLI_SELFCHECK_PATH, headers: { [CLI_REQUEST_HEADER]: '1' } });
+    assert.equal(response.status, 405, method);
+    assert.equal(response.headers.allow, 'POST');
+    assert.equal(response.body.code, 'METHOD_NOT_ALLOWED');
+    assert.equal(response.body.message, '自检只支持 POST');
+  }
+  // 读/写面各自的方法语义不变：`/cli` 仍只认 GET 与 POST。
+  const cliWrong = await callRoute(route, { method: 'DELETE', url: ENDPOINT, headers: {} });
+  assert.equal(cliWrong.headers.allow, 'GET, POST');
+  assert.equal(calls.length, 0);
+});
+
+test('selfcheck 路由：未注入自检器 → 503 CLI_CONFIG_UNAVAILABLE（装配缺件不是 500）', async () => {
+  const { api } = selfCheckApi({ omit: true });
+  const response = await postSelfCheck(api);
+
+  assert.equal(response.status, 503);
+  assert.equal(response.body.code, CLI_REASONS.UNAVAILABLE);
+  assert.equal(response.body.message, '自检尚未装配');
+  assert.equal(JSON.stringify(response.body).includes('C:'), false, '降级文案不带路径');
+});
+
+test('selfcheck 路由：自检器抛错 → 500 固定文案，响应体不含异常 message（AC-10）', async () => {
+  const { api } = selfCheckApi({
+    selfCheck: async () => {
+      throw new Error(`EACCES: open '${SECRET}'`);
+    },
+  });
+  const response = await postSelfCheck(api);
+
+  assert.equal(response.status, 500);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.code, 'CLI_SNAPSHOT_FAILED');
+  assert.equal(response.body.message, '自检执行失败', '固定文案：不猜原因，也不回显异常');
+  const wire = JSON.stringify(response.body);
+  assert.equal(wire.includes('EACCES'), false);
+  assert.equal(wire.includes(SECRET), false, '异常 message 里的路径绝不出网');
+});
+
+test('selfcheck 路由：请求体超限直接 400，不进自检器（与保存面同一上限）', async () => {
+  const { api, calls } = selfCheckApi();
+  const oversized = {
+    method: 'POST',
+    url: CLI_SELFCHECK_PATH,
+    headers: { [CLI_REQUEST_HEADER]: '1', 'content-type': 'application/json' },
+    async *[Symbol.asyncIterator]() {
+      yield Buffer.from('x'.repeat(70_000), 'utf8');
+    },
+  };
+  const response = await callRoute(toNodeRoute(api), oversized);
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.message, '请求体过大');
+  assert.equal(calls.length, 0);
 });

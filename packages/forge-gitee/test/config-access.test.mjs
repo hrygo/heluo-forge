@@ -13,6 +13,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { ENTRY_FORMS } from '../src/entry-form.mjs';
+import { RESOLVE_REASONS } from '../src/entry-resolve.mjs';
+
 import {
   GITEE_ACCESS_REASONS,
   GITEE_CONFIG_KEYS,
@@ -23,6 +26,7 @@ import {
   REVISION_LENGTH,
   createGiteeAccess,
 } from '../src/config-access.mjs';
+import { NPM_PREFIX, npmLayout } from './helpers/fake-cli-fs.mjs';
 
 const ENV = Object.freeze({});
 const LINUX = 'linux';
@@ -84,6 +88,53 @@ test('AC-7/AC-12: 无 configEditor 时是只读面（不 500、不假装可写�
   assert.equal(snapshot.entries.timeoutMs.value, 20000);
   assert.deepEqual(Array.from(snapshot.entries.authEnv.value), []);
   assert.equal(snapshot.entries.persistentToken.value, 'warn');
+});
+
+test('r18: cliPath 快照带真实解析事实（bin / form / spawnable / candidates），describe 仍脱敏', () => {
+  // win32 + npm 全局 PATH：裸名 `gh` 在 PATH 上只有 shim，原生程序在包内 `bin\\gh.exe`。
+  const { fs, exe } = npmLayout();
+  const access = createGiteeAccess({ config: {}, env: { PATH: NPM_PREFIX }, platform: 'win32', fs });
+  const snapshot = access.snapshot();
+  const cliPath = snapshot.entries.cliPath;
+
+  // `value` / `path` 仍是"用户配了什么"，`bin` 才是"运行时会启动什么"：两者不合并。
+  assert.equal(cliPath.value, 'gh');
+  assert.equal(cliPath.path, 'gh');
+  assert.equal(cliPath.bin, exe, '快照要说清真正交给启动器的是哪个程序');
+  assert.equal(cliPath.form, ENTRY_FORMS.NATIVE);
+  assert.equal(cliPath.spawnable, true);
+  assert.equal(cliPath.resolvedFrom, `${NPM_PREFIX}\\gh`, '来源是 PATH 上命中的 shim');
+  assert.deepEqual(Array.from(cliPath.candidates).map((item) => item.path), [exe], '候选 = 解析命中的可启动入口');
+  assert.deepEqual(Array.from(cliPath.rejected), []);
+  assert.equal(cliPath.reason, null);
+  assert.equal(cliPath.guidance, null);
+
+  // 脱敏面不变：`describe()` 每个 entry 仍只有三个键，且解析出的路径一个字都不出现。
+  const described = access.describe();
+  assert.deepEqual(Object.keys(described.entries.cliPath).sort(), ['configured', 'origin', 'overrides']);
+  const leaked = JSON.stringify(described);
+  assert.ok(!leaked.includes(exe), 'describe() 不得回显解析出的 bin');
+  assert.ok(!leaked.includes('node_modules'), 'describe() 不得回显包内路径');
+  assert.ok(!leaked.includes('gh.exe'), 'describe() 不得回显原生程序名');
+});
+
+test('r18: 解析失败时保留配置值，reason / guidance / rejected 说明"存得下、起不来"', () => {
+  // 显式路径但文件不存在：保存侧校验放行（不是包装脚本后缀），运行期解析失败。
+  const access = createGiteeAccess({ config: { cliPath: '/opt/gitee/gh-absent-for-entry-test' }, env: {}, platform: LINUX });
+  const cliPath = access.snapshot().entries.cliPath;
+
+  assert.equal(cliPath.value, '/opt/gitee/gh-absent-for-entry-test', '失败不改写用户配的值');
+  assert.equal(cliPath.bin, null, '没有可启动的入口就说 null，不猜');
+  assert.equal(cliPath.spawnable, false);
+  assert.equal(cliPath.reason, RESOLVE_REASONS.NOT_FOUND);
+  assert.match(cliPath.guidance, /PATH/u, '指引要告诉用户下一步怎么做');
+  assert.deepEqual(
+    Array.from(cliPath.rejected),
+    [{ path: '/opt/gitee/gh-absent-for-entry-test', why: RESOLVE_REASONS.NOT_FOUND, form: ENTRY_FORMS.NATIVE }],
+    '像路径的值被拒收时要能指回"我填的这条"',
+  );
+  // 装配不因此失败：快照本身照常可读（ready 只看"配了没有 + 合不合法"）。
+  assert.equal(access.snapshot().ready, true);
 });
 
 test('AC-4: 快照给三层（公共参数 / 本机覆盖 / 最终生效），origin 说生效值来自哪层', () => {

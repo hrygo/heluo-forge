@@ -26,6 +26,7 @@
   "exports": {
     ".": "./src/index.mjs",
     "./runtime-config": "./src/runtime-config.mjs",
+    "./cli-entry": "./src/cli-entry.mjs",
     "./read": "./src/gitee-read.mjs",
     "./actions": "./src/gitee-actions.mjs",
     "./adapter": "./src/gitee-adapter.mjs",

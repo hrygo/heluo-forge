@@ -89,11 +89,21 @@
 
 | 配置项 | 类型 | 默认值 | 必填 | 说明 |
 |---|---|---|---|---|
-| `cliPath` | string | `gh` | 否 | 可执行文件名/路径；拒绝 `scheme://`、控制字符与 `.cmd`/`.bat`/`.ps1`/`.com`/`.vbs` 包装脚本 |
+| `cliPath` | string | `gh` | 否 | 可执行文件名/路径；保存拒绝 `scheme://`、控制字符与 `.cmd`/`.bat`/`.ps1`/`.com`/`.vbs` 包装脚本。装配期另做入口解析（见 §5.1.1），实际交给 `execFile` 的是解析后的原生程序 |
 | `host` | string | 空（无默认） | 否 | 企业 Gitee 主机名（可带端口）；拒绝协议前缀、路径与 userinfo。r10 起**不再必填**；2026-11-04 起**仅用于诊断与企业域校验**——本 CLI 没有 `--host` 参数，主机实际取自它自己的 `~/.gitee-cli/config.json` 的 `base_url`，本包不拼进 argv 也不注入环境 |
 | `timeoutMs` | number | `20000` | 否 | 1000–600000 的整数；超时按"可能已执行"降级 `unknown` |
 | `authEnv` | string[] | `[]` | 否 | 最多 8 个变量名；诊断按序记录首个有值名称，子进程可继承名单中有值的变量。为空不妨碍白名单内的 `GITEE_TOKEN` 和 CLI 自身凭据库；`tokenSource: 'none'` 不等于未认证（**不阻断**） |
 | `persistentToken` | `'warn' \| 'block'` | `'warn'` | 否 | CLI 配置目录含持久令牌时的策略：`warn` 告警但不阻断，`block` 拒绝执行；本包不修改该文件 |
+
+#### 5.1.1 入口解析（r18）
+
+`cliPath` 只说明"用户指定了哪个程序名/路径"，不等于"运行时真的能启动它"。Windows 上 npm 全局安装通常只留 `gh`/`gh.cmd`/`gh.ps1` 包装脚本，原生程序在 `<prefix>\node_modules\<包>\bin\gh.exe`；`execFile(..., {shell:false})` 起不来包装脚本，运行期只会落 `SPAWN_FAILED`。因此 `src/cli-entry.mjs` 把三件事收成一处（零 IO、零子进程、全注入）：
+
+- `resolveCliEntry({cliPath, platform, env, fs, tool})`：显式路径直接判定，裸名按候选名表扫 `PATH`；遇到包装脚本时用本包 `src/entry-resolve.mjs` 沿 shim 文本解析包内原生程序（读 shim 有 16 KiB 上限、拒绝路径穿越），失败返回原因码而不抛错。本包与 `@heluo/forge-devops` 各存一份实现（r18 裁决：不新增共享包），等价性由根目录 `tests/cli-entry-parity.test.mjs` 守住。
+- `runtimeBinOf(...)`：装配期把**解析后的原生路径**注入适配器；解析器整体不可用或解析失败时保留原值、不阻断装配，归因仍由运行期 `SPAWN_FAILED` 兜底。
+- `entryFactsOf(...)`：把解析事实投影进同源快照的 `entries.cliPath`（`form`、`spawnable`、`bin`、`resolvedFrom`、`candidates`、`rejected`、`reason`、`guidance`），配置页据此显示"运行时启动哪个程序"或"为什么起不来"。`describeGiteeConfig()` 的脱敏口径不变：路径一个字都不出该结构。
+
+保存侧不放行包装脚本后缀：`.cmd` 之类既有可靠的启动限制（本插件不经 shell），放进配置只会制造"存下即失败"的假象。
 
 `validateGiteeConfig()` 是补丁层、宿主 `ConfigStandard` 与 `resolveGiteeConfig()` 的唯一口径：未知键拒绝、非法值按未配置处理并进 `missing`（不静默放行）。`missing` 只收"提供了但非法"的键——r10 之后**空配置是合法状态**：`preflight()` 返回 `{ok: true, provider: 'gitee', tokenSource: 'none', mayHaveSideEffect: false}`，读若因未鉴权被服务端拒绝，如实降级为 `AUTH_MISSING`/`failed`，而不是在客户端假装"没令牌也能读"。`describeGiteeConfig()` 只输出枚举、数字与变量名，路径只留文件名。
 
