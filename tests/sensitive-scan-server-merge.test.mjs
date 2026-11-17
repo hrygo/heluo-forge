@@ -84,6 +84,24 @@ test('a server merge commit is accepted through the same tree binding', t => {
   assert.equal(allowed.status, 0, allowed.stderr);
 });
 
+test('a web update-branch merge is rejected even when its tree equals the attested head', t => {
+  const f = fixture(t);
+  const prTree = f.tree('change.txt', 'change\n');
+  const head = f.commit(prTree, [f.base], f.v2(prTree, f.baseTree));
+  pullRequest(f, 12, head);
+  // GitHub's "Update branch" merges the base into the branch and can leave the
+  // same tree as the attested head. Two parents still mean the merge itself was
+  // never scanned, so the required check must refuse it; the base audit flag only
+  // rescues server commits whose subject names the pull request.
+  const merge = f.commit(prTree, [head, f.base], "Merge branch 'main' into topic\n");
+  const required = f.verify(merge);
+  assert.equal(required.status, 1);
+  assert.match(required.stderr, /merge commit on this branch cannot be attested/u);
+  const audit = f.verify(merge, '--allow-server-merge');
+  assert.equal(audit.status, 1);
+  assert.match(audit.stderr, /not a pull-request merge/u);
+});
+
 test('a differing tree is still rejected with the exception enabled', t => {
   const f = fixture(t);
   const prTree = f.tree('change.txt', 'change\n');
