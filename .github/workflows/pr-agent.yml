@@ -10,9 +10,22 @@ name: 洛神 (PR-Agent)
 #      `OPENCODE_GO_API_KEY` = the OpenCode Go subscription key (opencode.ai).
 #   2. Merge this workflow and `.pr_agent.toml` to the PR's base branch. The
 #      Action loads repository settings from that branch on subsequent runs.
-# Manual commands in a PR comment: `/describe`, `/review`, `/improve`,
-# `/ask "<question>"`. Comments are only obeyed from owner, member or
-# collaborator accounts.
+#
+# Enable/disable switch: the `review` job runs only while the repository
+# variable `PR_AGENT_ENABLED` is `true`. GitHub compares strings ignoring case,
+# so `TRUE` and `True` also enable the job; an absent variable or any other
+# value skips it. The variable is absent by default, so this workflow ships
+# disabled: no model request or comment is made. Re-enable it in Settings >
+# Secrets and variables > Actions > Variables, or with
+# `gh variable set PR_AGENT_ENABLED --body true`; disable it again with
+# `gh variable delete PR_AGENT_ENABLED`. A skipped job still appears as a
+# `洛神 (ubuntu-x64)` check with status `skipped`, but runs no steps. That
+# check is not required by branch protection, so merges are unaffected while
+# the switch is off.
+#
+# Manual commands in a PR comment (only while the switch is on): `/describe`,
+# `/review`, `/improve`, `/ask "<question>"`. Comments are only obeyed from
+# owner, member or collaborator accounts.
 #
 # Fork PRs are skipped on purpose: `pull_request` from a fork receives neither
 # repository secrets nor a writable token, and the repository's workflow rules
@@ -34,10 +47,13 @@ permissions:
 jobs:
   review:
     name: 洛神 (ubuntu-x64)
-    # Skip bot comments (which could loop), draft and fork PRs, plain issue
-    # comments, and comment commands from accounts without write access.
-    # A bot push to a same-repository PR is still eligible for a full review.
+    # The master switch comes first so an absent variable skips the job before
+    # any event condition or secret is evaluated. Then skip bot comments (which
+    # could loop), draft and fork PRs, plain issue comments, and comment
+    # commands from accounts without write access. A bot push to a
+    # same-repository PR is still eligible for a full review.
     if: >-
+      vars.PR_AGENT_ENABLED == 'true' &&
       (
         (github.event_name == 'issue_comment' &&
          github.event.sender.type != 'Bot' &&
