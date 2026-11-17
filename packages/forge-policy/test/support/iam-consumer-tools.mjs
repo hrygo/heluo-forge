@@ -21,7 +21,7 @@ export function toolFixture(t, { beforeSend, send, resolveArguments } = {}) {
         && Object.keys(authority.scope).every((key) => scope[key] === authority.scope[key]);
     },
   };
-  const owned = { action: 'synthetic.read', description: 'Read the synthetic repository', scope: authority.scope,
+  const owned = { action: 'gitee.repository.read', description: 'Read the synthetic repository', scope: authority.scope,
     async beforeSend(exec) { counts.handler++; bodyExecutions.push(exec); if (beforeSend) await beforeSend(exec); },
     async send(input) {
       counts.send++; requests.push(input);
@@ -31,7 +31,7 @@ export function toolFixture(t, { beforeSend, send, resolveArguments } = {}) {
   options.commands = [{ ...owned, name: 'synthetic-read',
     resolveArguments: resolveArguments ?? ((invocation) => ({ target: invocation.rawInput, payload: 'synthetic command' })) }];
   const config = { audit: { sink: 'memory', allowNonDurable: true },
-    catalog: [{ action: owned.action, kind: 'read', target: 'repository', enabled: true }],
+    catalog: [{ action: owned.action, target: 'repository', enabled: true }],
     tools: { 'synthetic.read': owned.action } };
   const installed = installIamConsumerTools(host.ctx, config, options);
   const bind = (consumer) => { registrations.set(consumer, Object.freeze({ iam: authority.iam,

@@ -15,6 +15,8 @@ export class PolicyAuditError extends Error {
   }
 }
 
+// 证据字段：策略版本、命中的规则、身份与批准人分列、未判定的事实源。
+// 仍不含参数值、正文、凭据或输出；数组只保存短标识。
 const ALLOWED_FIELDS = new Set([
   'subject',
   'action',
@@ -27,6 +29,14 @@ const ALLOWED_FIELDS = new Set([
   'observedAt',
   'durationMs',
   'phase',
+  'policyVersion',
+  'orgDigest',
+  'ruleIds',
+  'actor',
+  'approver',
+  'unevaluated',
+  'mode',
+  'contentDigest',
 ]);
 
 const FORBIDDEN_FIELDS = new Set(['arguments', 'args', 'stdout', 'stderr', 'content', 'body', 'output', 'token', 'secret', 'credential']);
@@ -43,6 +53,11 @@ export function buildAuditRecord(input = {}) {
     }
     if (!ALLOWED_FIELDS.has(key)) continue;
     if (value === undefined) continue;
+    // 数组只保留短标识：命中规则、未判定事实、脱敏片段都不携带正文。
+    if (Array.isArray(value)) {
+      record[key] = Object.freeze(value.slice(0, 32).map((item) => String(item).slice(0, 128)));
+      continue;
+    }
     record[key] = typeof value === 'string' ? value.slice(0, 512) : value;
   }
   if (typeof record.action !== 'string' || record.action.length === 0) {

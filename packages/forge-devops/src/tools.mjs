@@ -302,7 +302,7 @@ function changeUpdateTool(service) {
       additionalProperties: false,
     },
     output: { schema: { type: 'object' }, render: (_args, value) => json(value).content },
-    async execute(args) {
+    async execute(args, exec) {
       const action = FLOW_ACTIONS.CHANGE_UPDATE;
       const target = typeof args?.target === 'string' ? args.target.trim() : '';
       const denied = checkConfirm(args?.confirm, target);
@@ -314,7 +314,10 @@ function changeUpdateTool(service) {
         return failure(action, TOOL_REASONS.MISSING_ARGUMENT, '至少提供 summary / description / aiAc 之一');
       }
       try {
-        const result = await service.changeUpdate({ target, summary, description, aiAc });
+        const forwarded = { target, summary, description, aiAc };
+        if (exec?.agent !== undefined) forwarded.agent = exec.agent;
+        if (exec?.signal !== undefined) forwarded.signal = exec.signal;
+        const result = await service.changeUpdate(forwarded);
         return json({ ok: result?.status === 'done', result });
       } catch (error) {
         return failureOf(action, error);

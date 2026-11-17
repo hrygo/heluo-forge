@@ -206,7 +206,7 @@ const ARGUMENT_KEYS = Object.freeze({
   commit: Object.freeze(['message']),
   head: Object.freeze([]),
   branch: Object.freeze([]),
-  push: Object.freeze(['remote', 'branch']),
+  push: Object.freeze(['remote', 'branch', 'commit']),
 });
 
 export function gitArgvFor(verb, params = {}) {
@@ -232,8 +232,21 @@ export function gitArgvFor(verb, params = {}) {
       return ['rev-parse', 'HEAD'];
     case 'branch':
       return ['branch', '--show-current'];
-    case 'push':
-      return ['push', assertRemote(input.remote ?? 'origin'), assertBranch(input.branch)];
+    case 'push': {
+      const remote = assertRemote(input.remote ?? 'origin');
+      const branch = assertBranch(input.branch);
+      // 给了 commit 就推这个确切提交，而不是"当前那个同名分支"：策略检查的是某个提交，
+      // 审批等待期间分支还能前进，按名字推会把没检查过的提交送出去。
+      if (input.commit === undefined) return ['push', remote, branch];
+      const commit = text(input.commit);
+      if (!/^[0-9a-f]{40,64}$/u.test(commit)) {
+        throw new GiteeGitError(`commit「${commit}」不是完整的提交 SHA，拒绝用短名或分支名冒充`, {
+          reason: GIT_REASONS.INVALID_ARGUMENT,
+          detail: { argument: 'commit' },
+        });
+      }
+      return ['push', remote, `${commit}:refs/heads/${branch}`];
+    }
     default:
       throw new GiteeGitError(`git 动词「${name}」没有 argv 定义（实现缺陷）`, {
         reason: GIT_REASONS.INVALID_VERB,
@@ -371,16 +384,103 @@ export function createGiteeGitAdapter({ runner, cwd = process.cwd(), now = Date.
     });
   }
 
-  async function push({ remote = 'origin', branch: branchName, cwd } = {}) {
+  async function push({ remote = 'origin', branch: branchName, cwd, commit } = {}) {
     const remoteName = assertRemote(remote);
     const targetBranch = assertBranch(branchName);
-    await run('push', { remote: remoteName, branch: targetBranch }, cwd);
-    return Object.freeze({ ok: true, remote: remoteName, branch: targetBranch });
+    await run('push', { remote: remoteName, branch: targetBranch, ...(commit === undefined ? {} : { commit }) }, cwd);
+    return Object.freeze({ ok: true, remote: remoteName, branch: targetBranch, ...(commit === undefined ? {} : { commit }) });
+  }
+
+  /**
+   * 读取"将要推送的提交"内容（只读）：逐条提交的信息与各自的补丁。
+   *
+   * 用途只有一个：让策略的内容闸在 push 之前看到真实正文。范围必须落在**调用方要推送的
+   * 那个本地分支**（`refs/heads/<branch>`）上，而不是 `HEAD`：`git push <remote> <branch>`
+   * 推送的是命名分支，它未必是当前检出分支，用 `HEAD` 读到的正文可能来自另一个分支，
+   * 从而漏检真正要发出去的那批提交。
+   *
+   * 补丁必须**逐条提交**读取，不能只读基线到末端的净补丁：一个提交加进去的凭据，被下一
+   * 个提交删掉后，净补丁是干净的，但两个提交都会随 push 发出去，密钥仍留在历史里。
+   *
+   * 范围必须有确定的上界，读不全就拒绝：
+   * - 远端已有同名分支时以它为基线（`<remote>/<branch>`）；
+   * - 首次推送、远端还没有该分支时，用与远端默认分支的公共祖先作基线；
+   * - 远端一个可比基线都没有（全新仓库/空远端）时，推送内容就是该分支的全部历史；
+   * - 提交列表、任一提交的正文读不到或输出被截断，一律报不可读，由调用方拒绝：
+   *   既不用"最近 N 条"代替完整集合，也不把读不全的正文当作完整证据。
+   */
+  async function readRange({ remote = 'origin', branch: branchName, cwd } = {}) {
+    const remoteName = assertRemote(remote);
+    const targetBranch = assertBranch(branchName);
+    const dir = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
+    const upstream = `${remoteName}/${targetBranch}`;
+    // 显式引用而非短名：短名会按 refs/heads → refs/tags → … 的顺序解析，
+    // 与 `git push <remote> <branch>` 实际推送的 refs/heads/<branch> 不一定一致。
+    const localRef = `refs/heads/${targetBranch}`;
+    const collect = async (args) => {
+      const outcome = await runner.runGit({ args, purpose: 'git.push-content', cwd: dir });
+      if (outcome === null || typeof outcome !== 'object' || outcome.exitCode !== 0) return undefined;
+      // 截断的输出会让"读到的内容"少于"要推出去的内容"：提交列表被截断就会漏掉部分提交，
+      // 这里一律按读不到处理，由调用方拒绝，绝不把残缺结果当作完整证据。
+      if (outcome.truncated === true) return undefined;
+      return typeof outcome.stdout === 'string' ? outcome.stdout : '';
+    };
+    const unreadable = (message) => new GiteeGitError(message, {
+      reason: GIT_REASONS.READBACK_UNAVAILABLE,
+      detail: { mayHaveSideEffect: false },
+    });
+    const resolved = await collect(['rev-parse', '--verify', '--quiet', localRef]);
+    if (resolved === undefined || resolved.trim() === '') {
+      throw unreadable(`本地不存在要推送的分支 ${targetBranch}，无法在写前读取其正文`);
+    }
+    // 基线必须覆盖"这次会推上去的全部提交"：优先远端同名分支，首次推送时退回远端默认分支。
+    let base;
+    for (const candidate of [upstream, `${remoteName}/HEAD`, `${remoteName}/main`, `${remoteName}/master`]) {
+      const mergeBase = await collect(['merge-base', candidate, localRef]);
+      if (mergeBase !== undefined && mergeBase.trim() !== '') {
+        base = mergeBase.trim();
+        break;
+      }
+    }
+    // 远端一个可比基线都没有（全新仓库/空远端）时，这次推送的内容就是该分支的全部历史。
+    // 它可能很长，但仍然是**完整**集合：不做"最近 N 条"的截断，读不全照样拒绝。
+    const range = base === undefined ? localRef : `${base}..${localRef}`;
+    const listed = await collect(['rev-list', '--reverse', range]);
+    if (listed === undefined) {
+      throw unreadable(`无法列出 ${targetBranch} 将要推送的提交（范围 ${range} 不可用）`);
+    }
+    const shas = listed.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+    const commits = [];
+    for (const sha of shas) {
+      const outcome = await runner.runGit({
+        args: ['show', '--no-color', '--unified=0', '--format=%B%x00', sha],
+        purpose: 'git.push-content',
+        cwd: dir,
+      });
+      if (outcome === null || typeof outcome !== 'object' || outcome.exitCode !== 0
+        || typeof outcome.stdout !== 'string') {
+        throw unreadable(`无法读取待推送提交 ${sha.slice(0, 12)} 的正文`);
+      }
+      if (outcome.truncated === true) {
+        throw unreadable(`待推送提交 ${sha.slice(0, 12)} 的正文超过读取上限，无法完整扫描`);
+      }
+      const separator = outcome.stdout.indexOf('\u0000');
+      const message = separator === -1 ? outcome.stdout : outcome.stdout.slice(0, separator);
+      const patch = separator === -1 ? '' : outcome.stdout.slice(separator + 1);
+      commits.push(Object.freeze({
+        sha,
+        message: message.trim(),
+        diff: patch.replace(/^\n+/u, ''),
+      }));
+    }
+    // 返回被检查的那个提交：调用方必须把它带到 push 上，检查过的与发出去的才是同一个。
+    return Object.freeze({ sha: resolved.trim(), commits: Object.freeze(commits) });
   }
 
   return Object.freeze({
     commit,
     push,
+    readRange,
     head,
     branch,
     describe: () =>
@@ -557,7 +657,7 @@ export function createGitPush() {
   const spec = Object.freeze({ tool: GITEE_GIT_TOOLS.PUSH, action: GITEE_ACTIONS.GIT_PUSH });
   return Object.freeze({
     ...spec,
-    async run(args = {}, service, cwd) {
+    async run(args = {}, service, cwd, exec) {
       const input = isPlainObject(args) ? args : {};
       const unknown = assertKnownArguments(input, ['target', 'branch', 'remote', 'changeId', 'confirm']);
       if (unknown !== '') return denyGit(spec, ACTION_REASONS.INVALID_ARGUMENT, unknown);
@@ -581,6 +681,25 @@ export function createGitPush() {
       if (typeof service?.execute !== 'function') {
         throw new TypeError('gitee git 工具需要 service.execute()：写动作不允许绕过门禁');
       }
+      // 正文按需读取：只有越过能力域与确认门之后，策略里真正要过内容闸时才会调用它。
+      // 读不到就由策略按"内容无法判定"拒绝，而不是让一次远端写在没有正文证据时通过。
+      // 记住通过内容检查的那一次读取：push 只推这个提交，不再按可变的同名分支推。
+      let checked = undefined;
+      const content = async () => {
+        const port = gitPort(service);
+        if (typeof port.readRange !== 'function') {
+          throw new GiteeGitError('git 端口不支持读取推送内容，无法在写前过内容闸', {
+            reason: GIT_REASONS.READBACK_UNAVAILABLE,
+            detail: { mayHaveSideEffect: false },
+          });
+        }
+        // cwd 必须放在同一个选项对象里：readRange 只从第一参数取目录，
+        // 传成第二个实参会静默丢失，让内容检查跑在适配器默认目录而不是会话仓库。
+        const range = await port.readRange({ remote, branch, cwd });
+        checked = typeof range?.sha === 'string' ? range.sha : undefined;
+        return range;
+      };
+
       let verdict;
       try {
         verdict = await service.execute({
@@ -588,11 +707,17 @@ export function createGitPush() {
           target,
           tool: spec.tool,
           confirm: isPlainObject(input.confirm) ? input.confirm : undefined,
+          ...(exec?.agent === undefined ? {} : { agent: exec.agent }),
+          ...(exec?.signal === undefined ? {} : { signal: exec.signal }),
+          content,
           payload: {
             arguments: { target, remote, branch, change: text(input.changeId) || null, op: 'push' },
             run: async () => {
               try {
-                const result = await gitPort(service).push({ remote, branch, cwd });
+                // 正常情况下门禁已经在准入阶段解析过这一通道；宿主若没解析，这里补读一次，
+                // 目的仍是让"读过的那个提交"和"推出去的那个提交"是同一个，而不是按分支名推。
+                if (checked === undefined) await content();
+                const result = await gitPort(service).push({ remote, branch, cwd, commit: checked });
                 return {
                   status: 'done',
                   target,
@@ -696,7 +821,7 @@ export function gitToolDefinitions(service, resolveCwd = async () => undefined) 
         additionalProperties: false,
       },
       output: TOOL_OUTPUT,
-      execute: async (args, exec) => json(await push.run(args ?? {}, service, await cwdFor(exec))),
+      execute: async (args, exec) => json(await push.run(args ?? {}, service, await cwdFor(exec), exec)),
     },
   ];
 }

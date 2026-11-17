@@ -248,23 +248,23 @@ test('AC-3: 默认目录下 4 个写工具逐个 denied、规则固定、门禁 
 test('AC-4: 默认登记判定、不默认登记写', async () => {
   const { real } = await mountWithRealPolicy();
   assert.equal(real.catalog.size, 6, `默认目录应恰好 6 条（3 读 + 1 判定 + change.read + change.list），实际 ${real.catalog.size}`);
-  assert.equal(real.catalog.get('change.read')?.kind, 'read', 'devops 的变更读也在这份并集目录里（同装时唯一来源）');
-  assert.equal(real.catalog.get('change.list')?.kind, 'read', 'devops 的变更清单读同样在这份并集目录里（同装时唯一来源）');
+  assert.equal(real.catalog.get('change.read')?.category, 'read', 'devops 的变更读也在这份并集目录里（同装时唯一来源）');
+  assert.equal(real.catalog.get('change.list')?.category, 'read', 'devops 的变更清单读同样在这份并集目录里（同装时唯一来源）');
 
   const judge = real.catalog.get('gitee.delivery.judge');
   assert.ok(judge !== undefined, '判定必须随包登记（开箱可用），否则等于没有这个能力');
-  assert.equal(judge.kind, 'read', '判定是只读能力：kind 错成 write 就会被"写动作要确认"的口径误伤');
+  assert.equal(judge.category, 'read', '判定是只读能力：类别错成写就会被内容与流程规则误伤');
+  assert.equal(judge.decision, 'allow', '判定的默认决策是 allow，执行期不再需要确认');
   assert.equal(judge.target, 'change', 'target 必须逐字 change（补丁层/README/设计文档同字面）');
-  assert.equal(judge.egress, 'allow', "egress 缺省会取 'confirm'，判定在无审批台账时永远拿不到 allow");
   assert.equal(judge.enabled, true);
 
   for (const action of ['gitee.issue.write', 'gitee.pr.write', 'gitee.review.publish', 'gitee.review.record']) {
     assert.equal(real.catalog.has(action), false, `${action} 不该被默认登记`);
   }
   assert.equal(
-    [...real.catalog.values()].filter((entry) => entry.kind === 'write').length,
+    [...real.catalog.values()].filter((entry) => entry.category !== 'read').length,
     0,
-    '默认目录里不得出现任何 write 条目',
+    '默认目录里不得出现任何非只读条目',
   );
 
   for (const action of [...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {

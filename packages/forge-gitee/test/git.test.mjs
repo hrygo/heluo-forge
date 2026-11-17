@@ -65,6 +65,25 @@ const GIT_AVAILABLE = (() => {
 const execFileAsync = promisify(execFile);
 
 /** 假执行器：记录每次调用，可按需返回指定结果（不启动任何进程）。 */
+const RANGE_SHA = 'a'.repeat(40);
+const RANGE_BASE = 'b'.repeat(40);
+
+/** 让 readRange 的只读命令都有确定答案；handler 返回非 undefined 时优先。 */
+function fakeRangeRunner(handler = null) {
+  const ok = (stdout) => ({ exitCode: 0, stdout, stderr: '', durationMs: 1, timedOut: false, truncated: false });
+  return fakeRunner(({ args, purpose, cwd }) => {
+    if (typeof handler === 'function') {
+      const custom = handler({ args, purpose, cwd });
+      if (custom !== undefined) return custom;
+    }
+    if (args[0] === 'rev-parse') return ok(`${RANGE_SHA}\n`);
+    if (args[0] === 'merge-base') return ok(`${RANGE_BASE}\n`);
+    if (args[0] === 'rev-list') return ok(`${RANGE_SHA}\n`);
+    if (args[0] === 'show') return ok(`[${CHANGE}] 待推送正文\n\u0000+diff tok\n`);
+    return ok('');
+  });
+}
+
 function fakeRunner(handler = null) {
   const calls = [];
   return {
@@ -86,8 +105,10 @@ function allowPolicy() {
       state.decide += 1;
       return { action: 'allow' };
     },
-    executeAction: async (_ctx, _action, _exec, operation) => {
+    executeAction: async (_ctx, _action, exec, operation) => {
       state.operations += 1;
+      // 生产过程里内容闸会先解析这一通道；桩也要照着做，否则测出来的不是真实顺序。
+      if (exec !== undefined && typeof exec.content === 'function') await exec.content();
       return operation();
     },
   };
@@ -491,7 +512,7 @@ test('工具：push 已登记但缺 confirm → CONFIRMATION_REQUIRED，零子�
 });
 
 test('工具：push 放行 + 正确 confirm → done，argv 固定、证据与回读齐全', async () => {
-  const runner = fakeRunner();
+  const runner = fakeRangeRunner();
   const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
   const policy = allowPolicy();
   const { service } = serviceWith({ adapter, policy });
@@ -513,11 +534,12 @@ test('工具：push 放行 + 正确 confirm → done，argv 固定、证据与�
   assert.equal(envelope.evidence.sourceType, 'gitee-cli');
   assert.equal(envelope.remote_calls, 1);
   assert.equal(policy.state.operations, 1);
-  assert.deepEqual(runner.calls[0].args, ['push', 'origin', 'feat/r10']);
+  // 推的是"读过正文的那个提交"，不是可变的同名分支。
+  assert.deepEqual(runner.calls.at(-1).args, ['push', 'origin', `${RANGE_SHA}:refs/heads/feat/r10`]);
 });
 
 test('工具：push 已登记+确认后命中传输崩溃 → failed + use-native-http-credential（可安全重试）', async () => {
-  const runner = fakeRunner(() => ({
+  const runner = fakeRangeRunner(({ args }) => (args[0] === 'push' ? {
     exitCode: 128,
     stdout: '',
     stderr: [
@@ -527,7 +549,7 @@ test('工具：push 已登记+确认后命中传输崩溃 → failed + use-nativ
     durationMs: 5,
     timedOut: false,
     truncated: false,
-  }));
+  } : undefined));
   const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
   const policy = allowPolicy();
   const { service } = serviceWith({ adapter, policy });
@@ -544,18 +566,18 @@ test('工具：push 已登记+确认后命中传输崩溃 → failed + use-nativ
   assert.match(envelope.detail, /不是用户名缺失/u);
   assert.equal(envelope.remote_calls, 1);
   assert.equal(policy.state.operations, 1);
-  assert.deepEqual(runner.calls[0].args, ['push', 'origin', 'feat/r10']);
+  assert.deepEqual(runner.calls.at(-1).args, ['push', 'origin', `${RANGE_SHA}:refs/heads/feat/r10`]);
 });
 
 test('工具：push 被远端 403 拒绝 → failed + COMMAND_FAILED（维持原原因码与 retry）', async () => {
-  const runner = fakeRunner(() => ({
+  const runner = fakeRangeRunner(({ args }) => (args[0] === 'push' ? {
     exitCode: 128,
     stdout: '',
     stderr: "fatal: unable to access 'https://corp.example/group/repo': The requested URL returned error: 403",
     durationMs: 5,
     timedOut: false,
     truncated: false,
-  }));
+  } : undefined));
   const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
   const { service } = serviceWith({ adapter, policy: allowPolicy() });
   const envelope = await createGitPush().run(
@@ -764,4 +786,209 @@ test('工具定义：resolveGitCwd 每次现算目录并交给 git；解析失�
   });
   await broken[0].execute({ changeId: CHANGE, message: `[${CHANGE}] 说明` }, {});
   assert.equal(seen.at(-1), undefined);
+});
+
+test('工具：push 把将要推送的提交内容以惰性通道交给策略，被拒时不读', async () => {
+  const ONE = 'a'.repeat(40);
+  const TWO = 'b'.repeat(40);
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse' || args[0] === 'merge-base') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${ONE}\n${TWO}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'show' && args.includes(ONE)) {
+      return { exitCode: 0, stdout: 'fix: 第一条\u0000diff --git a/x b/x\n+tok1', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'show' && args.includes(TWO)) {
+      return { exitCode: 0, stdout: 'fix: 第二条\u0000diff --git a/y b/y\n+tok2', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  let captured;
+  const policy = {
+    decide: () => ({ action: 'allow' }),
+    executeAction: async (_ctx, _action, exec, operation) => {
+      captured = exec;
+      return operation();
+    },
+  };
+  const { service } = serviceWith({ adapter, policy });
+  const envelope = await createGitPush().run(
+    { target: 'group/repo', branch: 'feat/r10', confirm: { repo: 'group/repo', object: 'group/repo' } },
+    service,
+  );
+  assert.equal(envelope.status, 'done');
+  assert.equal(typeof captured.content, 'function', '正文按需读取，不在准入前先跑子进程');
+  const content = await captured.content();
+  assert.deepEqual(content.commits.map((commit) => commit.message), ['fix: 第一条', 'fix: 第二条']);
+  assert.match(content.commits[0].diff, /tok1/u);
+  assert.match(content.commits[1].diff, /tok2/u);
+});
+
+test('工具：推送正文在会话目录读取，不在适配器默认目录', async () => {
+  const ONE = 'c'.repeat(40);
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse' || args[0] === 'merge-base') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${ONE}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'show') {
+      return { exitCode: 0, stdout: 'fix: 一条\u0000+tok', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/adapter-default' });
+  let captured;
+  const policy = {
+    decide: () => ({ action: 'allow' }),
+    executeAction: async (_ctx, _action, exec) => {
+      captured = exec;
+      await exec.content();
+      return { status: 'done' };
+    },
+  };
+  const { service } = serviceWith({ adapter, policy });
+  const definitions = gitToolDefinitions(service, async () => '/tmp/session-repo');
+  const push = definitions.find((definition) => definition.name === GITEE_GIT_TOOLS.PUSH);
+  await push.execute(
+    { target: 'group/repo', branch: 'feat/r12', confirm: { repo: 'group/repo', object: 'group/repo' } },
+    { agent: { workingDirectory: '/tmp/ignored' } },
+  );
+  assert.equal(typeof captured.content, 'function');
+  const dirs = runner.calls
+    .filter((call) => ['rev-parse', 'merge-base', 'rev-list', 'show'].includes(call.args[0]))
+    .map((call) => call.cwd);
+  assert.deepEqual([...new Set(dirs)], ['/tmp/session-repo'], '正文读取必须落在会话仓库目录');
+});
+
+test('工具：推送正文读的是命名分支，不是当前检出的 HEAD', async () => {
+  const ONE = 'd'.repeat(40);
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse' || args[0] === 'merge-base') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${ONE}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: 'fix: 一条\u0000+tok', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await adapter.readRange({ remote: 'origin', branch: 'feat/other' });
+  const mergeArgs = runner.calls.find((call) => call.args[0] === 'merge-base').args;
+  const listArgs = runner.calls.find((call) => call.args[0] === 'rev-list').args;
+  assert.ok(mergeArgs.includes('origin/feat/other'), '基线优先取远端同名分支');
+  assert.ok(listArgs.includes(`${SHA}..refs/heads/feat/other`), '提交范围必须落在要推送的分支上');
+  assert.equal(listArgs.some((argument) => argument.includes('HEAD')), false, '不能再用 HEAD 冒充目标分支');
+});
+
+test('适配器：某条提交的正文读不到时拒绝，不把失败的补丁当成空补丁', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'merge-base' || args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${'e'.repeat(40)}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 1, stdout: '', stderr: 'show failed', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await assert.rejects(
+    () => adapter.readRange({ remote: 'origin', branch: 'feat/other' }),
+    (error) => error.code === GIT_REASONS.READBACK_UNAVAILABLE && /正文/u.test(error.message),
+  );
+});
+
+test('适配器：逐条提交读补丁，中间提交引入又删除的凭据也要看得到', async () => {
+  const ADDS = 'f'.repeat(40);
+  const REMOVES = '0'.repeat(40);
+  const secret = `${['AK', 'IA'].join('')}${'Q'.repeat(16)}`;
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'merge-base' || args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${ADDS}\n${REMOVES}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'show' && args.includes(ADDS)) {
+      return { exitCode: 0, stdout: `feat: 加配置\u0000+key=${secret}`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: 'chore: 删掉\u0000-key=old', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  const content = await adapter.readRange({ remote: 'origin', branch: 'feat/other' });
+  assert.equal(content.commits.length, 2);
+  assert.match(content.commits[0].diff, new RegExp(secret, 'u'), '引入凭据的提交必须出现在待扫描正文里');
+  assert.equal(content.commits[1].message, 'chore: 删掉');
+});
+
+test('适配器：单条提交正文被截断时拒绝，不拿半截正文当完整证据', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'merge-base' || args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${'1'.repeat(40)}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: 'fix: 一条\u0000+tok', stderr: '', durationMs: 1, timedOut: false, truncated: true };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await assert.rejects(
+    () => adapter.readRange({ remote: 'origin', branch: 'feat/other' }),
+    (error) => error.code === GIT_REASONS.READBACK_UNAVAILABLE && /上限/u.test(error.message),
+  );
+});
+
+test('适配器：远端一个基线都没有时读该分支全部历史，而不是最近 N 条', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 1, stdout: '', stderr: 'no such ref', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  const range = await adapter.readRange({ remote: 'origin', branch: 'feat/other' });
+  assert.deepEqual(range.commits, []);
+  const listed = runner.calls.filter((call) => call.args[0] === 'rev-list').map((call) => call.args);
+  assert.deepEqual(listed, [['rev-list', '--reverse', 'refs/heads/feat/other']], '没有可比基线时读全部历史，不带 -n 上限');
+});
+
+test('适配器：提交列表被截断即拒绝，不把残缺列表当完整证据', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse' || args[0] === 'merge-base') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${SHA}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: true };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await assert.rejects(
+    () => adapter.readRange({ remote: 'origin', branch: 'feat/r10' }),
+    (error) => error.code === GIT_REASONS.READBACK_UNAVAILABLE && /无法列出/u.test(error.message),
+  );
+  assert.equal(runner.calls.some((call) => call.args[0] === 'show'), false, '列表都不完整，就不再假装逐条读过');
+});
+
+test('适配器：本地没有该分支时读不到正文，报 READBACK_UNAVAILABLE 而不是读 HEAD', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'rev-parse') {
+      return { exitCode: 1, stdout: '', stderr: 'unknown revision', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: '', stderr: '', durationMs: 1, timedOut: false, truncated: false };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await assert.rejects(
+    () => adapter.readRange({ remote: 'origin', branch: 'feat/other' }),
+    (error) => error.code === GIT_REASONS.READBACK_UNAVAILABLE && /feat\/other/u.test(error.message),
+  );
+  assert.equal(runner.calls.some((call) => call.args[0] === 'rev-list'), false, '分支不存在时不猜 HEAD 的内容');
 });

@@ -180,14 +180,9 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
     );
     const judgeRow = catalogRows.find((row) => row.includes("'gitee.delivery.judge'"));
     assert.ok(judgeRow, '产物补丁层必须含 gitee.delivery.judge 目录（判定随包默认登记）');
-    assert.match(judgeRow, /kind:\s*'read'/u, '判定必须是只读能力（不建审批台账）');
+    assert.doesNotMatch(judgeRow, /kind:|egress:/u, '登记行不再声明 kind/egress：类别与出网语义由内置词表决定');
     assert.match(judgeRow, /target:\s*'change'/u, '判定 target 必须逐字为 change');
     assert.match(judgeRow, /enabled:\s*true/u, '判定必须随包默认启用');
-    assert.match(
-      judgeRow,
-      /egress:\s*'allow'/u,
-      "判定必须显式 egress: 'allow'；缺席时编译成默认 confirm，判定永远拿不到放行",
-    );
     for (const action of ['gitee.issue.write', 'gitee.pr.write', 'gitee.review.publish', 'gitee.review.record']) {
       assert.equal(
         catalogRows.some((row) => row.includes(`'${action}'`)),

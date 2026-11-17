@@ -188,7 +188,7 @@ test('a foreign error from an awaited owned handler is CHANGED after the origina
 
 test('an unowned command cannot alias the private action through public service registration', async (t) => {
   const h = toolFixture(t); let sends = 0;
-  h.policy.registerCommand(h.ctx, { name: 'foreign', description: 'Unowned alias', action: 'synthetic.read',
+  h.policy.registerCommand(h.ctx, { name: 'foreign', description: 'Unowned alias', action: 'gitee.repository.read',
     resolveArguments: () => ({ target: 'repo-A', payload: 'body' }),
     handler: async () => { sends++; return { kind: 'success', text: 'unexpected' }; } });
   fixed(await h.command('foreign')); assert.equal(sends, 0); assert.equal(h.counts.source, 0);

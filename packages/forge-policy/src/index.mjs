@@ -13,15 +13,13 @@ export const inject = ['tools'];
 
 export { compileCatalog, decideAction, PolicyCatalogError } from './catalog.mjs';
 export {
-  APPROVAL_FIELDS,
-  APPROVAL_REASONS,
-  assertEnabledEntriesApproved,
-  compileApprovals,
-  decideApproval,
-  needsApproval,
-  PolicyApprovalError,
-} from './approvals.mjs';
+  BUILTIN_ACTIONS, CATEGORY, actionsIn, classifyAction, defaultDecision, isWriteAction, relaxes, strictestDecision,
+} from './classify.mjs';
+export { MAX_RULES, compileContentRules, redactExcerpt, scanPayloads } from './content-rules.mjs';
 export { createGate } from './gate.mjs';
+export { ORG_ENVELOPE_SCHEMA, effectiveDecision, loadOrgPolicy, verifyEnvelope } from './org-policy.mjs';
+export { createScopeLedger } from './scope-ticket.mjs';
+export { evaluateProcessRules } from './process-rules.mjs';
 export { buildAuditRecord, createAuditBarrier } from './audit.mjs';
 export { createConfirmationLedger } from './confirmations.mjs';
 export { authorizeDelegation, createDelegation, resumeDelegation, revokeDelegation } from './delegation.mjs';

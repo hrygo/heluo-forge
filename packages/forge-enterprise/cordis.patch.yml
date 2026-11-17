@@ -47,12 +47,12 @@
       name: '@heluo/forge-policy'
       config:
         catalog:
-          - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
-          - { action: 'change.list', kind: 'read', target: 'changes', enabled: true }
-          - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
-          - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
-          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
-          - { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' }
+          - { action: 'change.read', target: 'change', enabled: true }
+          - { action: 'change.list', target: 'changes', enabled: true }
+          - { action: 'gitee.repository.read', target: 'repository', enabled: true }
+          - { action: 'gitee.issue.read', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.delivery.judge', target: 'change', enabled: true }
         audit:
           sink: memory
           allowNonDurable: true
