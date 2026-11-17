@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-002 |
 | 文档名称 | 逐模块设计索引 |
-| 版本 | V0.46.0 |
+| 版本 | V0.46.1 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -25,7 +25,7 @@
 
 | 包 | 形态 | 设计文档 | 设计状态 | 主要待确认 |
 |---|---|---|---|---|
-| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型隔离写入适配、调用失败自愈与内部码到用户码映射（离线测试覆盖，未实机）；禁用插件/独占冲突 fail closed 本地验证；新对话默认模型由用户选择，插件只读观察，不自动写入；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录与手动模型边界、七行禁用与回灌检查）本地实现，见 §2.2.1；Host watch 与 HTTP SSE 已接线，Client Remote 未接线） | IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测 |
+| `@heluo/forge-iam` | Host + Client 插件 | [plugins/forge-iam.md](plugins/forge-iam.md) | 草案（O3 独占；Host+Client 骨架、OIDC mock 流程、网关凭据录入/清除/状态、模型门禁与默认模型判定、默认模型隔离写入适配、调用失败自愈、内部码到用户码映射及安全本地诊断（离线测试覆盖，未实机）；禁用插件/独占冲突 fail closed 本地验证；新对话默认模型由用户选择，插件只读观察，不自动写入；[受控模型运行时](../../packages/forge-iam/src/managed-models.mjs)（企业账号页地址与 Key、`${baseURL}/models` 动态目录与手动模型边界、七行禁用与回灌检查）本地实现，见 §2.2.1；Host watch 与 HTTP SSE 已接线，Client Remote 未接线） | IAM 回函、可选机密客户端隔离路径、目标平台存储验证、官方行运行时模型面、真实联调、UAG 凭据探测 |
 | `@heluo/forge-policy` | Host 插件 | [plugins/forge-policy.md](plugins/forge-policy.md) | 草案（guard、异步确认、必要审计与命令共用屏障已实测；既有 32 项宿主探针中的辅助函数调用不等于真实恢复、分叉、子 Agent 的授权承接；确认/委托纯 API 与可信运行时接线分开验收；2026-11-16 判定模型改为动作分类 + 内容/流程规则 + 策略级批准（DESIGN-020），组织策略改为包内 `policy/` 数据目录的签名信封，企业分发内置首版信封（版本锚点，上限沿用内置默认），不单独成包，均未实现） | 审批注册与超时、`$DSH_HOME` 范围、内容规则阈值与流程事实源（子 Agent 模型自决调用与策略×沙箱叠加顺序已实测，见下方证据） |
 | `@heluo/forge-enterprise` | umbrella bundle（通用底座：企业账号与模型） | [plugins/forge-enterprise.md](plugins/forge-enterprise.md) | 草案（通用底座独立打包发布：`cordis.patch.yml` 禁用七个官方行并插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录，无 `isolate`）与 `forge-iam`；零研发文件/导出/补丁行；官方行禁用（2026-10-24 五行实测；2026-11-04 扩至七行后仅单测未复测 dump）与装/升/退/卸演练已实测） | 版本断言报错形态、`fiberPhase`、七行禁用组合层复测、`desktop` profile |
 | `@heluo/forge-engineering` | umbrella bundle（企业研发工具套件） | [plugins/forge-engineering.md](plugins/forge-engineering.md) | 草案（独立可预装研发组合包：`cordis.patch.yml` 插入 `heluo-policy`（共享 6 动作目录，无 `isolate`，单装独立就绪且与 `forge-enterprise` 同装自动单实例折叠）、`heluo-engineering-ui` 容器、`heluo-issue-delivery-skill` 按需交付 Skill、`@heluo/forge-devops` 与 `@heluo/forge-gitee`；不禁用官方行） | 双端、真实 DevOps/Gitee CLI 与企业 OSS 凭据库、`ai-publish`/`human-review` 业务行、角色 preset 粒度 |

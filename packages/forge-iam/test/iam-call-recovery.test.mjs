@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createModelFailureLogger } from '../src/model-failure-log.mjs';
 import { createManagedModelRuntime, createNativeGatewayAdapter } from '../src/managed-models.mjs';
 import { IamError } from '../src/errors.mjs';
 import { createGrantStore } from '../src/store.mjs';
@@ -20,7 +24,7 @@ const options = { provider: 'enterprise', model: 'enterprise-chat', messages: []
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
-function fixture({ tokenFailure = null, logFailure, finishFailureCode = null, native = false } = {}) {
+function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -153,7 +157,7 @@ function fixture({ tokenFailure = null, logFailure, finishFailureCode = null, na
   };
   const runtime = createManagedModelRuntime({
     host, iam, config: { defaultProvider: 'enterprise', managedModels: { baseURL: GATEWAY } },
-    createAdapter, logFailure,
+    createAdapter, logFailure, diagnoseFailure,
     requestHeaders: async () => ({}),
     fetch: async url => {
       if (holdDiscovery) await holdDiscovery.promise;
@@ -482,4 +486,158 @@ test('a still-valid access token keeps the key resolvable after its refresh toke
 test('a session with both factors expired is not a usable session', async t => {
   const f = await sessionFixture(t, { accessOffsetMs: -1_000, refreshOffsetMs: -1_000 });
   await assert.rejects(f.service.resolveGatewayConnection(), { code: 'IAM_NOT_SIGNED_IN' });
+});
+
+
+test('nested stream wrappers record a failure once without exposing its upstream message', async t => {
+  const events = [];
+  const f = fixture({ tokenFailure: 'IAM_UNREACHABLE', diagnoseFailure: value => events.push(value) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const result = await chunks(f.guard(options, () => f.adapter.stream(options)));
+  assert.equal(failureOf(result), 'ENTERPRISE_IAM_UNAVAILABLE');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].detailCode, 'IAM_UNREACHABLE');
+  assert.equal(events[0].stage, 'unknown');
+  assert.doesNotMatch(JSON.stringify(events), /synthetic token failure/);
+});
+
+test('local refusal is recorded before dispatch and a diagnostic exception is harmless', async t => {
+  const events = [];
+  const f = fixture({ diagnoseFailure: value => { events.push(value); throw Error('disk unavailable'); } });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const result = await chunks(f.adapter.stream({ ...options, model: 'disabled-model' }));
+  assert.equal(failureOf(result), 'ENTERPRISE_MODEL_NOT_ALLOWED');
+  assert.equal(f.requests, 0);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].stage, 'local');
+});
+
+
+test('preparation rejection records one local diagnostic', async t => {
+  const events = [];
+  const f = fixture({ diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await assert.rejects(f.adapter.prepareCall('enterprise', 'disabled-model'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].stage, 'local');
+  assert.equal(f.requests, 0);
+});
+
+test('downstream finish failures remain mapped and have unknown dispatch state', async t => {
+  const events = [];
+  const f = fixture({ finishFailureCode: 'AUTH', diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const result = await chunks(f.adapter.stream(options));
+  assert.equal(failureOf(result), 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].stage, 'unknown');
+});
+
+
+test('model resolution rejection is recorded locally', async t => {
+  const events = [];
+  const f = fixture({ diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  await assert.rejects(f.adapter.resolveModel('enterprise', 'disabled-model'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].stage, 'local');
+});
+
+
+test('a real failure from the runtime reaches the on-disk diagnostic', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'forge-runtime-log-'));
+  const f = fixture({ tokenFailure: 'IAM_UNREACHABLE', diagnoseFailure: createModelFailureLogger({ home }) });
+  t.after(async () => { await f.runtime.dispose(); rmSync(home, { recursive: true, force: true }); });
+  await f.runtime.ready;
+  await chunks(f.guard(options, () => f.adapter.stream(options)));
+  const rows = readFileSync(join(home, 'logs', 'forge-iam-model-failures.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(rows.length, 1);
+  const event = JSON.parse(rows[0]);
+  assert.equal(event.detailCode, 'IAM_UNREACHABLE');
+  assert.equal(event.code, 'ENTERPRISE_IAM_UNAVAILABLE');
+  assert.equal(event.stage, 'unknown');
+  assert.doesNotMatch(rows[0], /synthetic token failure|person-a|key-1/);
+});
+
+
+test('an unknown upstream code keeps the host warning without exposing its value', async t => {
+  const logged = [];
+  const f = fixture({ finishFailureCode: 'private-upstream-value', logFailure: (...args) => logged.push(args) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  assert.equal(failureOf(await chunks(f.adapter.stream(options))), 'ENTERPRISE_GATEWAY_CALL_FAILED');
+  assert.deepEqual(logged, [['UNRECOGNIZED', 'ENTERPRISE_GATEWAY_CALL_FAILED']]);
+});
+
+for (const scenario of [
+  { name: 'sign-out', next: { state: 'signed_out', principal: null }, code: 'IAM_LOGIN_REQUIRED' },
+  { name: 'credential removal', next: { gatewayCredential: { state: 'unconfigured', matchesAccount: false } }, code: 'IAM_GATEWAY_CREDENTIAL_REQUIRED' },
+]) {
+  test(`nested stream logs one failure after ${scenario.name}`, async t => {
+    const events = [];
+    const f = fixture({ diagnoseFailure: event => events.push(event) });
+    t.after(() => f.runtime.dispose());
+    await f.runtime.ready;
+    const hold = f.holdChunks();
+    const stream = f.guard(options, () => f.adapter.stream(options))[Symbol.asyncIterator]();
+    const first = await stream.next();
+    assert.equal(first.value.type, 'text-delta');
+    f.change(scenario.next);
+    hold.resolve();
+    const last = await stream.next();
+    assert.equal(last.value.reason.failure.code, scenario.code);
+    assert.equal((await stream.next()).done, true);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].code, scenario.code);
+  });
+}
+
+test('a regular downstream chunk is not emitted after sign-out', async t => {
+  const events = [];
+  const f = fixture({ diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const stream = f.guard(options, () => (async function* () {
+    yield { type: 'text-delta', text: 'before' };
+    f.change({ state: 'signed_out', principal: null });
+    yield { type: 'text-delta', text: 'must-not-escape' };
+  })());
+  const result = await chunks(stream);
+  assert.equal(result[0].text, 'before');
+  assert.equal(failureOf(result), 'IAM_LOGIN_REQUIRED');
+  assert.equal(result.some(chunk => chunk.text === 'must-not-escape'), false);
+  assert.equal(events.length, 1);
+});
+
+test('authorization change after an inner failure still controls the visible error', async t => {
+  const events = [];
+  const f = fixture({ tokenFailure: 'IAM_UNREACHABLE', diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const stream = f.guard(options, () => (async function* () {
+    for await (const chunk of f.adapter.stream(options)) {
+      f.change({ state: 'signed_out', principal: null });
+      yield chunk;
+    }
+  })());
+  const result = await chunks(stream);
+  assert.equal(failureOf(result), 'IAM_LOGIN_REQUIRED');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].code, 'ENTERPRISE_IAM_UNAVAILABLE');
+});
+
+test('nested streams record a gateway credential revocation once', async t => {
+  const events = [];
+  const f = fixture({ finishFailureCode: 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const result = await chunks(f.guard(options, () => f.adapter.stream(options)));
+  assert.equal(failureOf(result), 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].code, 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
 });
