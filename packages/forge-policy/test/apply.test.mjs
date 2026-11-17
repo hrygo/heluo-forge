@@ -479,3 +479,24 @@ test('写正文经私有通道进入内容闸：HARD 命中即拒绝', async () 
   );
   assert.match(String(denied.reason), /content rule/u);
 });
+
+test('push rechecks change and plan after approval and after audit', async () => {
+  for (const phase of ['approval', 'after-audit']) {
+    for (const failed of ['change', 'plan']) {
+      let current = { change: { available: true, status: 'active' }, plan: { available: true, confirmed: true } };
+      const invalidate = () => {
+        current = { ...current, [failed]: failed === 'change'
+          ? { available: true, status: 'closed' } : { available: true, confirmed: false } };
+      };
+      const host = mount(baseConfig, {
+        facts: { read: () => current },
+        approval: { async request() { if (phase === 'approval') invalidate(); return 'allowed-once'; } },
+      });
+      const exec = { name: 'forge_push', arguments: { target: 'acme/demo', branch: 'feature/x', changeId: 'CHG-1' },
+        callId: `${phase}-${failed}`, agent: { id: 'agent-1' }, signal: new AbortController().signal };
+      assert.equal((await host.preExecute(exec, () => Promise.resolve({ kind: 'allow' }))).kind, 'allow');
+      if (phase === 'after-audit') invalidate();
+      assert.match(String(host.guard(exec)), failed === 'change' ? /not in progress/ : /not confirmed/);
+    }
+  }
+});

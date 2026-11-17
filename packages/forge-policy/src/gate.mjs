@@ -353,7 +353,8 @@ export function createGate({
         await audit.settle(receipt, { decision: 'cancelled' });
         return deny(interruption(exec) ?? 'execution arguments or identity changed during audit');
       }
-      receipts.set(exec, { receipt, digest, action, agent, used: false, actor, decision, ruleIds, ticketId: scopeResult.ticketId });
+      receipts.set(exec, { receipt, digest, action, agent, used: false, actor, decision, ruleIds,
+        processConfirm: process.confirm.map((item) => item.rule), ticketId: scopeResult.ticketId });
       if (decision === 'confirm') approved.add(exec);
       return { kind: 'allow' };
     } catch (error) {
@@ -396,6 +397,12 @@ export function createGate({
     if (admission.action !== action || changed(exec, action, admission.digest, admission.agent)) {
       return 'execution arguments or identity changed after the mandatory audit';
     }
+    // Facts can change while approval, audit, or downstream listeners await.
+    // A new soft finding was not covered by the earlier confirmation either.
+    const process = processOutcome(action, exec.arguments, exec.content);
+    if (process.decision === 'deny') return process.reason ?? 'process rules rejected this call';
+    const newConfirmation = process.confirm.find((item) => !admission.processConfirm.includes(item.rule));
+    if (newConfirmation !== undefined) return newConfirmation.reason;
     // 范围票据可能在确认、审计或下游 await 期间被撤销或换绑：执行前按票据号复验，
     // 撤销后的收据不能再放行一次写。
     if (admission.ticketId !== undefined) {

@@ -102,6 +102,8 @@ export function evaluateProcessRules({ rules = [], facts = {}, severities = {} }
         break;
       }
       case 'pr-acceptance-section': {
+        // Comments contain comment text, not the pull request description.
+        if (state.op === 'comment') break;
         const body = typeof state.prBody === 'string' ? state.prBody : '';
         if (body.length === 0) {
           if (severity === 'hard') deny.push(reason(rule, 'the pull request body is missing'));
@@ -149,6 +151,7 @@ export function factsFromArguments(args = {}) {
   if (args === null || typeof args !== 'object') return facts;
   if (typeof args.changeId === 'string') facts.changeId = args.changeId;
   else if (typeof args.change === 'string') facts.changeId = args.change;
+  if (typeof args.op === 'string') facts.op = args.op;
   if (typeof args.branch === 'string') facts.branch = args.branch;
   else if (typeof args.ref === 'string' && !args.ref.includes(':')) facts.branch = args.ref;
   if (args.force === true) facts.force = true;
