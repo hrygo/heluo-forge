@@ -60,6 +60,40 @@ jobs:
             echo 'PR head changed during verification; retry the check.' >&2
             exit 1
           fi
-          node scripts/sensitive-scan/verify.mjs --base "${BASE_SHA}" --head "${EXPECTED_HEAD_SHA}"
+          if node scripts/sensitive-scan/verify.mjs --base "${BASE_SHA}" --head "${EXPECTED_HEAD_SHA}"; then
+            exit 0
+          fi
+          # The verifier names each rejected commit and its reason. Print the local
+          # steps that repair the branch: a merge commit, a replayed commit and an
+          # unsigned commit all recover through the same forced replay. A plain
+          # rebase is a no-op when the branch already sits on the base, so it would
+          # leave a missing or stale signature unrepaired.
+          recovery="$(cat <<'EOF'
+          sensitive-attestation failed. If a commit was rejected, repair the branch locally:
+
+            git fetch origin
+            git rebase --force-rebase origin/main
+            git log --merges --oneline origin/main..HEAD    # must print nothing
+            node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD
+            git push --force-with-lease
+
+          --force-rebase replays the commits even when the branch already sits on
+          origin/main; a plain git rebase origin/main is a no-op there and does not
+          fire post-rewrite, so an unsigned or stale commit stays unrepaired. A
+          single rejected commit can be fixed with git commit --amend --no-edit.
+          Do not use the GitHub web "Update branch" or "Update with rebase": both
+          rewrite commits on the server, where the local hooks cannot re-sign them.
+          Confirm the worktree is clean and that no other session rewrites this
+          branch before force-pushing; --force-with-lease refuses a remote tip that
+          moved after the fetch. Re-run pnpm check after resolving conflicts:
+          re-signing does not resolve content conflicts.
+          Details: scripts/sensitive-scan/README.md#updating-a-pull-request-branch
+          EOF
+          )"
+          printf '%s\n' "$recovery" >&2
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            printf '```\n%s\n```\n' "$recovery" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 1
         # Install the team public key in the base branch before requiring this check.
         # Missing or invalid public keys fail closed; no PR code is executed.

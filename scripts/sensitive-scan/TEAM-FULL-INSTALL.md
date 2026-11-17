@@ -91,13 +91,13 @@ b8d63d50c82fee19b3b39f0acd2723494ede9b3309e502a1f262b084628b299b
 
 团队 hook 的 v2 签名绑定实际扫描基线 HEAD tree；远端要求提交恰有一个父提交，且父提交 tree 与签名基线一致，并拒绝 v1。root 和 merge 提交不签名。`post-rewrite` hook 在 `git commit --amend` 和 `git rebase` 后按提交的真实父树重新扫描并重签每个被重放的提交，整条链签名完成后才移动分支，开发者无需手工重签。重放后内容不再通过扫描的提交保持未签名，hook 只报告数量，远端验签仍失败关闭。`pre-push` hook 在推送前用同一验签器检查本次推送新增的提交，任何一条会被远端拒绝就中止推送，因此 `--no-verify` 造出的提交或分支上的合并提交在离开本机前就会被拦下；标签推送和分支删除不检查，仓库首次推送没有可比基线。`git cherry-pick` 不触发前两个 hook：改用 `git cherry-pick -n <提交>` 暂存改动，再用 `git commit -C <提交>` 提交，让 `commit-msg` 按真实父提交扫描并签名；直接 cherry-pick 会保留原 trailer，tree 不一致会被远端拒绝。这不能防止扫描过程中的竞态。
 
-网页 squash 或 merge 由服务端生成提交，本地 hook 无法介入；该提交消息不经扫描也不被签名。此类提交仅在 tree 与已验证 PR head 的 tree 完全一致时，才被带 `--allow-server-merge` 的审计命令接受；required 检查只验证 PR 自身提交，不受合并策略影响。两种服务端合并都只在 PR 分支已跟上 base 时保住签名：重放到更新的 base 会重算 tree，因此分支保护必须开启 Require branches to be up to date。
+网页 squash 或 merge 由服务端生成提交，本地 hook 无法介入；该提交消息不经扫描也不被签名。此类提交仅在 tree 与已验证 PR head 的 tree 完全一致时，才被带 `--allow-server-merge` 的审计命令接受；required 检查只验证 PR 自身提交，不受合并策略影响。网页的 Update branch 与 Update with rebase 同样由服务端改写提交：前者产生无法签名的合并提交，后者重放提交后父树与签名基线不一致，两者都会让 required 检查变红。更新 PR 分支应本地执行 `git fetch origin` 与 `git rebase --force-rebase origin/main`（分支已基于基线时普通 rebase 不重放、不重签），由 `post-rewrite` 重签后再用 `git push --force-with-lease` 推送；强推前确认工作区干净且没有其他会话在改写同一分支。两种服务端合并都只在 PR 分支已跟上 base 时保住签名：重放到更新的 base 会重算 tree，因此分支保护必须开启 Require branches to be up to date。
 
 这是 Git hook，不是对 DSH 插件安装的直接证明。后续 Git 配置覆盖或 `git commit --no-verify` 可绕过本地 hook；团队共享私钥的持有人也能自行签名。只有 GitHub 验签工作流和公钥合入基线、测试通过并设为 required 后，才有远端验签合并门禁作为兜底；当前包本身不会更改 GitHub 设置，也不能防止共享私钥持有人自行签名。
 
 ## 管理员上线和轮换
 
-先在受控渠道分发完整包，确认团队配置；将单公钥验签代码及公钥经 review 合入 PR 基线，实测有效签名通过、缺失/错误签名失败，再将 `sensitive-attestation-verify` 设为 required，并开启 Require branches to be up to date before merging；网页 squash 与 rebase 合并均可使用，服务端提交按 tree 绑定核对。仓库的 squash 默认提交标题取 Pull request title、正文取空：标题末尾的 `(#N)` 是审计定位 PR head 的唯一线索，正文为空则不会把已签名提交的 trailer 原文拼进未签名的消息里。安装包不自动启用这些设置。团队私钥泄露或需撤销持有人时，由保管人安排全员密钥轮换并重签在途 PR；共享密钥无法单独撤销一个成员。
+先在受控渠道分发完整包，确认团队配置；将单公钥验签代码及公钥经 review 合入 PR 基线，实测有效签名通过、缺失/错误签名失败，再将 `sensitive-attestation-verify` 设为 required，并开启 Require branches to be up to date before merging（未开启时，过期分支经网页合并产生的 tree 与已验证 head 不一致，带 `--allow-server-merge` 的审计会拒绝该服务端提交；required 检查本身不受影响）；网页 squash 与 rebase 合并均可使用，服务端提交按 tree 绑定核对。仓库的 squash 默认提交标题取 Pull request title、正文取空：标题末尾的 `(#N)` 是审计定位 PR head 的唯一线索，正文为空则不会把已签名提交的 trailer 原文拼进未签名的消息里。安装包不自动启用这些设置。团队私钥泄露或需撤销持有人时，由保管人安排全员密钥轮换并重签在途 PR；共享密钥无法单独撤销一个成员。
 
 此前完整包在本机 macOS / Node 24 上验证；新版 v2 包及升级路径须另行验收，Windows、Linux、银河麒麟和图形 Git 客户端也须各自实机验收。仓库实现和 GitHub 门禁的部署状态以实际 PR 与分支保护为准。
 

@@ -52,8 +52,10 @@ checks or branch rules.
    Require up-to-date branches. The required check inspects only the PR's own
    commits, so squash and rebase merges are both supported; a server-created
    commit on the base branch is accepted by the audit path only through the tree
-   binding below. These are administrator actions, not effects of installing the
-   package.
+   binding below. Without this protection, a squash or merge of an out-of-date
+   branch carries a different tree and the audit path rejects the server commit;
+   the required check itself is unaffected. These are administrator actions, not
+   effects of installing the package.
 3. The `pull_request_target` workflow checks out trusted base code, fetches PR
    Git objects and verifies the event head; it does not check out or execute PR
    code, reads no secrets and uses read-only contents permission. Protect workflow
@@ -94,16 +96,48 @@ or merge. A commit without a trailer is accepted only when its subject ends in
 `(#N)` or starts with `Merge pull request #N` and its tree is identical to the
 attested tree of `refs/pull/N/head`; the rewritten message of such a commit is not
 covered by any signature. The required check verifies `base..head`, which never
-contains a server-created commit, so it does not need this flag. Both server
-merge strategies preserve the attestation only while the PR branch is up to date:
-replaying the branch onto a newer base recomputes its tree, so branch protection
-must require branches to be up to date before merging. Set the default squash
-commit title to the pull request title and its message to blank: the `(#N)`
-suffix is how the audit path finds the attested head, and an empty body keeps
-signed trailers out of a message no signature covers. Tree binding does
-not prevent races during scanning or forgery by a key holder. Unscannable content
-is blocked by the local hook unless explicitly excluded in local rules; see the
-installation guide for supported file types and limitations.
+contains a server-created commit, so it does not need this flag. Never pass it
+for a pull request branch: a merge commit's tree can equal an attested head while
+its parents and conflict resolution are exactly what that attestation does not
+cover. Both server merge strategies preserve the attestation only while the PR
+branch is up to date: replaying the branch onto a newer base recomputes its tree,
+so branch protection must require branches to be up to date before merging. Set
+the default squash commit title to the pull request title and its message to
+blank: the `(#N)` suffix is how the audit path finds the attested head, and an
+empty body keeps signed trailers out of a message no signature covers. Tree
+binding does not prevent races during scanning or forgery by a key holder.
+Unscannable content is blocked by the local hook unless explicitly excluded in
+local rules; see the installation guide for supported file types and limitations.
+
+### Updating a pull request branch
+
+Update the branch locally. Both GitHub web actions rewrite commits where no local
+hook can run: "Update branch" creates a merge commit that cannot carry a v2
+attestation, and "Update with rebase" replays the commits onto a new parent tree
+without the private key, so the signed parent tree no longer matches. Either
+action turns the required check red although the diff is unchanged.
+
+```sh
+git fetch origin
+git rebase --force-rebase origin/main
+git log --merges --oneline origin/main..HEAD   # must print nothing
+node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD
+git push --force-with-lease
+```
+
+`--force-rebase` replays every commit even when the branch already sits on
+`origin/main`. A plain `git rebase origin/main` is a no-op in that case, does not
+fire `post-rewrite`, and leaves a missing or stale trailer unrepaired. The replay
+drops merge commits and lets `post-rewrite` scan and re-sign each commit against
+its real parent, so one rejected commit and a whole stale chain recover the same
+way. A single rejected commit can also be repaired with
+`git commit --amend --no-edit`, which fires the same hook. Content resolved while
+rebasing is scanned before it is signed, so a finding leaves the commit unsigned;
+re-signing does not resolve a content conflict. Before pushing, confirm the
+worktree is clean and that no other session rewrites this branch:
+`--force-with-lease` refuses a remote tip that moved after the fetch, but it
+cannot detect a concurrent rewrite that already landed. Re-run the repository
+checks after the rebase, because the attestation covers the scan, not the build.
 
 The older `sensitive:scan` and `sensitive:install` CLI entries use the legacy v1
 scanner and different rule format and paths; they cannot satisfy the v2 remote
