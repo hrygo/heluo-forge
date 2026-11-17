@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { access, readFile, readdir } from 'node:fs/promises';
 import { test } from 'node:test';
+import { sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -390,7 +391,7 @@ test('static: 源码里没有任何以 forge_gitee_ 为名的泛化执行入口'
   for (const forbidden of ['forge_gitee_run', 'forge_gitee_exec', 'forge_gitee_shell']) {
     assert.doesNotMatch(text, new RegExp(`name: '${forbidden}'`, 'u'), `不得注册泛化入口 ${forbidden}`);
   }
-  assert.ok(PACKAGE_ROOT.endsWith('/'));
+  assert.ok(PACKAGE_ROOT.endsWith(sep));
 });
 
 test('D-4: 蓝图 API 点名的 gitee 侧成员可从模块 import（文档与实现对齐）', async () => {

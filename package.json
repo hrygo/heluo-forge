@@ -10,7 +10,7 @@
     "pnpm": ">=11.0.0 <12"
   },
   "scripts": {
-    "check": "node scripts/link-workspace.mjs && node scripts/check-docs.mjs && node scripts/check-repo.mjs && node scripts/check-skills.mjs && node scripts/check-bundle-tarballs.mjs && node scripts/dsh-version.mjs check && node --test --test-timeout=120000",
+    "check": "node scripts/link-workspace.mjs && node --run check:skills-manager && node scripts/check-docs.mjs && node scripts/check-repo.mjs && node scripts/check-skills.mjs && node scripts/check-bundle-tarballs.mjs && node scripts/dsh-version.mjs check && node --test --test-timeout=120000",
     "check:docs": "node scripts/check-docs.mjs",
     "link:workspace": "node scripts/link-workspace.mjs",
     "check:repo": "node scripts/check-repo.mjs",
@@ -24,6 +24,7 @@
     "build:enterprise": "node scripts/build-enterprise-bundle.mjs",
     "build:engineering": "node scripts/build-enterprise-bundle.mjs --entry @heluo/forge-engineering",
     "verify:bundle": "node scripts/verify-enterprise-bundle.mjs",
-    "uninstall:devops": "node scripts/uninstall-devops.mjs"
+    "uninstall:devops": "node scripts/uninstall-devops.mjs",
+    "check:skills-manager": "node packages/forge-skills-manager/scripts/check-generated.mjs && node packages/forge-skills-manager/node_modules/typescript/bin/tsc --noEmit -p packages/forge-skills-manager/tsconfig.json"
   }
 }

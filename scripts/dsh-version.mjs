@@ -18,6 +18,7 @@ import {
   RELEASE_DEFAULT_HOSTS,
   DSH_VERSION_SHAPE,
   checkEngineFloors,
+  checkSkillsDevelopmentHosts,
   checkReleaseDefaults,
   checkTargetDeclarations,
   listCodeOccurrences,
@@ -87,6 +88,7 @@ function report() {
 function check() {
   const current = readDshVersion(root);
   const problems = [];
+  problems.push(...checkSkillsDevelopmentHosts(root, current));
   for (const spot of CANONICAL_SPOTS) {
     const text = readFileSync(join(root, spot.file), 'utf8');
     const matches = spotMatches(text, spot);

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { checkRepo } from '../scripts/lib/repo-rules.mjs';
-import { auditTarball, npmExecutable, parsePackOutput, parsePatchLayer } from '../scripts/lib/bundle-rules.mjs';
+import { auditTarball, npmExecutable, parsePackOutput, parsePatchLayer, sourceBinExecutable } from '../scripts/lib/bundle-rules.mjs';
 import { buildValidRepo } from './check-repo.test.mjs';
 
 function write(root, path, content) {
@@ -316,11 +316,27 @@ test('tarball audit keeps locale pairs together', () => {
 test('bin targets must be executable in the working tree', () => {
   withFixture((root) => {
     addPackage(root, 'forge-sample', { bin: { 'forge-sample': './src/cli.mjs' } });
-    write(root, 'packages/forge-sample/src/cli.mjs', '#!/usr/bin/env node\n');
+    write(root, 'packages/forge-sample/src/cli.mjs', process.platform === 'win32' ? 'console.log("missing interpreter");\n' : '#!/usr/bin/env node\n');
     const before = run(root);
     assert.ok(before.some((error) => error.includes('must be executable')), before.join('\n'));
     chmodSync(join(root, 'packages/forge-sample/src/cli.mjs'), 0o755);
+    if (process.platform === 'win32') write(root, 'packages/forge-sample/src/cli.mjs', '#!/usr/bin/env node\n');
     assert.equal(run(root).some((error) => error.includes('must be executable')), false);
+  });
+});
+
+test('Windows source bin uses interpreter directive; POSIX source modes and tarball modes remain enforced', () => {
+  withFixture(root => {
+    const file = join(root, 'cli.mjs');
+    writeFileSync(file, 'console.log("fixture");\n');
+    assert.equal(sourceBinExecutable(file, 'win32'), false);
+    writeFileSync(file, '#!/usr/bin/env node\nconsole.log("fixture");\n');
+    assert.equal(sourceBinExecutable(file, 'win32'), true);
+    assert.equal(sourceBinExecutable(file, 'linux'), false);
+    if (process.platform !== 'win32') {
+      chmodSync(file, 0o755);
+      assert.equal(sourceBinExecutable(file, 'linux'), true);
+    }
   });
 });
 
@@ -371,7 +387,8 @@ test('parsePackOutput accepts both the object (npm 12) and array (npm 11) shapes
 });
 
 test('npmExecutable prefers the npm that ships with the running node', () => {
-  const execPath = '/opt/node24/bin/node';
-  assert.equal(npmExecutable(execPath, (path) => path === '/opt/node24/bin/npm'), '/opt/node24/bin/npm');
+  const execPath = join(tmpdir(), 'node24', process.platform === 'win32' ? 'node.exe' : 'node');
+  const expected = join(dirname(execPath), process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  assert.equal(npmExecutable(execPath, (path) => path === expected), expected);
   assert.equal(npmExecutable(execPath, () => false), 'npm');
 });

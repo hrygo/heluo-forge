@@ -202,6 +202,18 @@ export const CODE_ALLOWED = [
 /** 包、服务与独立演示清单：只放行 engines.dsh 的值，不放行固定依赖。 */
 const MANIFEST_RE = /^(?:packages|services|demos)\/[^/]+\/package\.json$/;
 
+// Development-only SDK pins for the migrated plugin follow the root baseline.
+// Runtime packages remain self-contained; resolved transitive versions belong to the lockfile.
+export const SKILLS_DEV_MANIFEST = 'packages/forge-skills-manager/package.json';
+export function checkSkillsDevelopmentHosts(root = process.cwd(), baseline = readDshVersion(root)) {
+  const file = join(root, SKILLS_DEV_MANIFEST);
+  if (!existsSync(file)) return [];
+  const manifest = JSON.parse(readFileSync(file, 'utf8'));
+  return Object.entries(manifest.devDependencies ?? {})
+    .filter(([name, version]) => name.startsWith('@deepseek-ai/dsh-') && version !== baseline)
+    .map(([name, version]) => `${SKILLS_DEV_MANIFEST}: ${name} ${version} differs from ${DSH_VERSION_FILE} ${baseline}`);
+}
+
 /**
  * 测试夹具里有意写死的版本字面量（模拟旧宿主或第三方包形状），登记原因后可放行，
  * 但在 report/check 里单独列出：它们是"不会随基线更新"的显式例外，不是静默放行。
@@ -382,7 +394,10 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
     const fixtureNote = TEST_FIXTURE_EXCEPTIONS[rel] ?? null;
     const lines = readLines(abs);
     if (!lines) continue;
+    let insideDevelopment = false;
     lines.forEach((line, index) => {
+      if (/^\s*"devDependencies"\s*:\s*\{/.test(line)) insideDevelopment = true;
+      else if (/^\s*\}/.test(line)) insideDevelopment = false;
       for (const match of line.matchAll(SEMVER_IN_TEXT)) {
         if (!dshVersionInLine(match[0], line, baseline, { allowReleaseLine: true })) continue;
         let kind;
@@ -392,7 +407,9 @@ export function listCodeOccurrences(root = process.cwd(), baseline = readDshVers
         const releaseDefault =
           match[0] === baseline && RELEASE_DEFAULT_HOSTS.some((spot) => spot.file === rel);
         const exceptionReason = literalAllowed ? literalNote.reason : releaseDefault ? RELEASE_DEFAULT_REASON : null;
-        if (manifestTokens) kind = manifestTokens.has(match[0]) ? 'code-allowed' : 'code-forbidden';
+        const developmentPin = insideDevelopment && rel === SKILLS_DEV_MANIFEST && /"@deepseek-ai\/dsh-[^"\s]+"\s*:/.test(line) && match[0] === baseline;
+        if (rel === 'pnpm-lock.yaml') kind = 'code-allowed'; // Generated lock graph; validated by frozen installation.
+        else if (manifestTokens) kind = manifestTokens.has(match[0]) || developmentPin ? 'code-allowed' : 'code-forbidden';
         else if (exceptionReason !== null) kind = 'code-exception';
         else if (allowed) kind = fixtureNote ? 'fixture-exception' : 'code-allowed';
         else kind = 'code-forbidden';

@@ -22,10 +22,32 @@ import {
   readDshVersion,
   rewriteCanonical,
   rewriteEngineFloors,
+  checkSkillsDevelopmentHosts,
 } from '../scripts/lib/dsh-version.mjs';
 
 const ROOT = process.cwd();
 const BASELINE = readDshVersion(ROOT);
+
+test('skills-manager development SDK pins follow the root baseline; stale pins are rejected', () => {
+  const root = fixtureRoot();
+  const file = join(root, 'packages/forge-skills-manager/package.json');
+  mkdirSync(dirname(file), { recursive: true });
+  try {
+    writeFileSync(file, JSON.stringify({ devDependencies: { '@deepseek-ai/dsh-skill': BASELINE } }, null, 2));
+    assert.deepEqual(checkSkillsDevelopmentHosts(root), []);
+    assert.ok(listCodeOccurrences(root).every(item => item.kind === 'code-allowed'));
+    writeFileSync(file, JSON.stringify({ dependencies: { '@deepseek-ai/dsh-skill': BASELINE } }, null, 2));
+    assert.ok(listCodeOccurrences(root).some(item => item.kind === 'code-forbidden'), 'runtime dependencies cannot use the development exemption');
+    writeFileSync(file, JSON.stringify({ devDependencies: { '@deepseek-ai/dsh-skill': sibling(BASELINE) } }, null, 2));
+    assert.equal(checkSkillsDevelopmentHosts(root).length, 1);
+    assert.ok(listCodeOccurrences(root).some(item => item.kind === 'code-forbidden'));
+    writeFileSync(join(root, 'pnpm-lock.yaml'), `version: ${BASELINE}\n`);
+    writeFileSync(join(root, 'scripts/bad.mjs'), `const dshVersion = '${BASELINE}';\n`);
+    const occurrences = listCodeOccurrences(root);
+    assert.equal(occurrences.find(item => item.file === 'pnpm-lock.yaml').kind, 'code-allowed');
+    assert.equal(occurrences.find(item => item.file === 'scripts/bad.mjs').kind, 'code-forbidden');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 /** 与基线同发布线的另一个版本，用于验证替换。 */
 function sibling(version) {
   const match = version.match(/^(.*?)(\d+)(-[0-9A-Za-z.]+)?$/);

@@ -91,7 +91,9 @@ jobs:
         with:
           node-version-file: .node-version
           package-manager-cache: false
-      # All checks currently use Node built-ins; avoid dependency installation and cache overhead.
+      # Build verification for the migrated TypeScript plugin uses locked development dependencies.
+      - name: Install locked workspace development dependencies
+        run: npm exec --yes --package=pnpm@11.28.5 -- pnpm install --frozen-lockfile --ignore-scripts
       - name: Check PR issue reference
         if: github.event_name == 'pull_request'
         env:

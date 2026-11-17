@@ -152,6 +152,14 @@ function checkFileList(label, base, pkg, errors) {
   }
 }
 
+export function sourceBinExecutable(path, platform = process.platform) {
+  // Windows has no POSIX execute bit. npm creates command shims from the
+  // interpreter directive; the actual tarball mode is checked separately.
+  return platform === 'win32'
+    ? /^#!\S[^\r\n]*\S\r?\n/.test(readFileSync(path, 'utf8'))
+    : (statSync(path).mode & 0o100) !== 0;
+}
+
 function checkEntryPoints(label, base, pkg, errors) {
   const requireTarget = (value, where) => {
     if (typeof value !== 'string') return;
@@ -168,7 +176,7 @@ function checkEntryPoints(label, base, pkg, errors) {
     requireTarget(target, `bin.${name}`);
     if (typeof target === 'string' && !target.includes('*')) {
       const full = join(base, target);
-      if (existsSync(full) && (statSync(full).mode & 0o100) === 0) {
+      if (existsSync(full) && !sourceBinExecutable(full)) {
         errors.push(`bundle: ${label}/package.json bin.${name} ${target} must be executable`);
       }
     }

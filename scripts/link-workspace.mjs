@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // 离线 workspace 链接：给仓库根的 node_modules 建 `@heluo/<包名>` 符号链接。
 //
-// 为什么需要：CI 的 `node --run check` 刻意不安装依赖（见 .github/workflows/check.yml
-// 的 "avoid dependency installation" 注释）。而包内测试按裸包名 import 同仓的兄弟包
+// 包内测试按裸包名 import 同仓的兄弟包；根工程没有声明这些运行时依赖，
 // （例如 `@heluo/forge-policy`），没有 node_modules 就 ERR_MODULE_NOT_FOUND。
 // 这里只做 `pnpm install` 本来就会建的那一层目录链接：不联网、不下载、不执行脚本。
 //
@@ -91,11 +90,11 @@ export function linkWorkspace({ root = REPO_ROOT, write = console.log } = {}) {
     const linkPath = join(targetDir, name);
     const expected = relative(targetDir, join(root, pkg.dir));
     if (existsSync(linkPath) || isSymlink(linkPath)) {
-      if (isSymlink(linkPath) && readlinkSync(linkPath) === expected) kept.push(pkg.name);
+      if (isSymlink(linkPath) && resolve(targetDir, readlinkSync(linkPath)) === resolve(root, pkg.dir)) kept.push(pkg.name);
       else skipped.push(pkg.name);
       continue;
     }
-    symlinkSync(expected, linkPath, 'dir');
+    symlinkSync(process.platform === 'win32' ? resolve(root, pkg.dir) : expected, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
     linked.push(pkg.name);
   }
   write(

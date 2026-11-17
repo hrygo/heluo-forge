@@ -10,9 +10,9 @@
 |---|---|---|
 | Node.js | 见 [.node-version](.node-version) | 用现有版本管理工具切换，并核对 `node --version` |
 | pnpm | 见 [package.json](package.json) 的 `packageManager` | 核对 `pnpm --version`，同时满足 `engines` |
-| 依赖 | 离线检查与宿主/服务代码使用 Node 标准库 | 市场客户端的 React 由 DSH 提供，不作为独立 Web 应用运行 |
+| 依赖 | 使用固定锁文件管理工作区依赖 | 技能管理器的构建与类型检查使用开发依赖，运行制品自包含；市场客户端的 React 由 DSH 提供 |
 
-当前可直接执行 `pnpm check`，无需安装依赖；需要安装工作区依赖时使用 `pnpm install --frozen-lockfile`。先核对版本，环境不符时记录验证限制，不修改项目约束来消除告警。
+先按固定工具链执行 `pnpm install --frozen-lockfile --ignore-scripts`，再运行 `pnpm check`。先核对版本，环境不符时记录验证限制，不修改项目约束来消除告警。
 
 新克隆的仓库默认没有敏感扫描钩子，而 PR 会校验提交签名，所以准备环境时要先安装。完整包从授权保管人处按受控渠道取得，再按[团队完整分发包安装说明](<scripts/sensitive-scan/TEAM-FULL-INSTALL.md>)安装团队完整分发：安装器先校验包内 Ed25519 私钥与团队公钥匹配、正式规则有效，再把脚本、私钥与规则放进 Git common dir，并在 Git 选定的路径安装 `commit-msg` 钩子。解压目录按密钥材料级别保管，不要自行生成个人密钥，也不要改用 legacy 的 `sensitive:scan` / `sensitive:install`（规则格式与路径不同，不能满足远端 v2 验签）。独立 clone 各需安装，默认共享 hook 配置下 linked worktree 共用同一套安装。安装后的自检、权限要求与生效限制见[敏感扫描说明](<scripts/sensitive-scan/README.md>)。
 
@@ -68,6 +68,7 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 |---|---|
 | `pnpm check` | 依次执行文档检查、仓库检查与 Node 自动发现的全部测试 |
 | `pnpm check:docs` | 文档元数据、登记一致性、本地链接与锚点、表格及询问问题序列 |
+| `pnpm check:skills-manager` | 比对技能管理器生成物与源码并执行类型检查；首次运行前按固定工具链安装开发依赖 |
 | `pnpm check:repo` | 工程结构、根目录入口面、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
 | `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
 | `pnpm check:version` | 正文基线版本与 [.dsh-version](.dsh-version) 一致，代码中无硬编码 DSH 版本 |
@@ -87,7 +88,7 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 
 - `verify (ubuntu-x64)` 在 `ubuntu-24.04` 上运行完整离线检查，超时 5 分钟；分类作业失败或结果无效时，该必需检查失败。同一 PR 的新运行取消过期运行。平台作业在 GitHub 托管的 Linux、Windows 和 macOS runner 上执行 SQLite 凭据、IAM 合成测试与离线安装冒烟；`sensitive scan and IAM callback (win32-x64)` 是合并运行 Windows 敏感扫描和回调端口测试的非必需作业。
 - Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test --test-timeout=120000` 自动发现工程、包与集成测试，单个用例超时以用例名报告失败，不拖满作业超时。
-- `verify` 不安装 pnpm 或项目依赖，也不读取包缓存；平台作业不配置 npm 包或 `node_modules` 缓存。Linux 和 macOS 作业构建并离线安装企业组合包，Windows 作业打包并离线安装凭据独立包；安装使用 runner 工作区内的独立前缀，冒烟测试在系统临时目录使用合成数据。六个平台检查使用 `SQLite and IAM` 名称，具体名称见[开发约定](docs/engineering/development-conventions.md#6-检查与-ci)；分支保护中的必需检查名称须与工作流显示名称一致，远端配置状态以实测为准。
+- `verify` 使用根 `packageManager` 固定的 pnpm 执行 `install --frozen-lockfile --ignore-scripts`，取得技能管理器的构建与测试依赖；平台作业不配置 npm 包或 `node_modules` 缓存。Linux 和 macOS 作业构建并离线安装企业组合包，Windows 作业打包并离线安装凭据独立包；安装使用 runner 工作区内的独立前缀，冒烟测试在系统临时目录使用合成数据。六个平台检查使用 `SQLite and IAM` 名称，具体名称见[开发约定](docs/engineering/development-conventions.md#6-检查与-ci)；分支保护中的必需检查名称须与工作流显示名称一致，远端配置状态以实测为准。
 - 托管 runner 的结果不代替 Windows 10、UOS、银河麒麟、目标 DSH/Electron 宿主、Windows ACL 或企业 IAM 的目标环境取证。8.3 真实短名用例在卷不提供不同的短别名时跳过；需以实际运行记录区分通过与跳过。
 - `repository checks` 只授予 `contents: read`、用于核验 Issue 的 `issues: read` 和用于读取 PR 正文的 `pull-requests: read`，检出不保留凭据；分类作业检出完整历史以比较 PR 的基线与 head，其余作业检出深度为 1。Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。
 - 合并队列的 `verify` 在 `merge_group` 上执行代码检查，不重新读取各 PR 正文；关联检查依赖入队前的 PR 必需检查。入队后修改正文可能导致检查结果与队列快照不同，合并前须确认最新正文及检查结果。独立的 `sensitive-attestation-verify` 尚未支持 `merge_group`：若分支保护仍要求该检查，队列会等待缺失的检查。启用队列前须补齐并验证可信验签路径，不能仅依靠 `verify` 的队列触发器。

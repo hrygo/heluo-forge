@@ -64,3 +64,6 @@
           allowNonDurable: true
     - id: heluo-iam
       name: '@heluo/forge-iam'
+    - id: skills-manager
+      name: '@heluo/forge-skills-manager'
+      config: {}
