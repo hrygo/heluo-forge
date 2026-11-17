@@ -154,8 +154,15 @@ test('continuous keyring replacement is rejected after bounded retries', (t) => 
       return stat;
     };
     syncBuiltinESMExports();
-    assert.throws(() => provider.active(), { code: 'CRED_KEY_INVALID' });
-    assert.ok(attempts >= 2 && attempts <= 3);
+    let rejection;
+    try { provider.active(); } catch (error) { rejection = error; }
+    // Report a substitution that never fired separately from an identity check
+    // that failed to notice one: a platform may hand out a non-unique file
+    // identifier, and both causes otherwise surface as the same missing
+    // exception with no way to tell them apart from the log.
+    assert.ok(attempts >= 1, `the keyring replacement must fire during the read (attempts=${attempts})`);
+    assert.equal(rejection?.code, 'CRED_KEY_INVALID', 'a keyring replaced under the read must be rejected');
+    assert.ok(attempts >= 2 && attempts <= 3, `the read must retry twice before rejecting (attempts=${attempts})`);
   } finally {
     fs.lstatSync = original;
     syncBuiltinESMExports();
