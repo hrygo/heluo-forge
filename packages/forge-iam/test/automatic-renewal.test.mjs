@@ -229,34 +229,73 @@ test('disposing the Host cancels scheduled renewal without changing the stored s
   assert.deepEqual((await store.read()).grant, grant);
 });
 
-test('a temporary preflight outage does not discard a valid session and is retried before expiry', async (t) => {
+test('a temporary preflight outage does not discard a valid session and is retried before expiry', { timeout: 15_000 }, async (t) => {
   const oidc = await startMockOidc({ accessTtl: 30 });
   const credentials = new MemoryCredentials();
+  const firstPreflight = Promise.withResolvers();
+  const retryPreflight = Promise.withResolvers();
+  const refreshCompleted = Promise.withResolvers();
+  let clock = Date.now();
+  const accessExpiresAt = clock + 5000;
   oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
-  await createGrantStore(credentials).write({
+  const grant = {
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId,
     refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', scope: 'openid',
-    obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 5000).toISOString(),
-  });
+    obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(accessExpiresAt).toISOString(),
+  };
+  const store = createGrantStore(credentials);
+  await store.write(grant);
+  // The Host renews on its own clock. Driving that clock explicitly keeps the
+  // retry deadline an asserted invariant instead of a wall-clock race that a
+  // loaded CI runner can lose.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const settle = async () => { for (let i = 0; i < 25; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+  const advance = async (ms) => { clock += ms; t.mock.timers.tick(ms); await settle(); };
   let keyRequests = 0;
+  let retriedAt = null;
+  let refreshSentAt = null;
   const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
     redirectUri: 'http://127.0.0.1:4567/iam/callback', refreshSkewSeconds: 3 }, {
     credentials,
+    now: () => clock,
     fetch: async (url, init) => {
-      if (String(url).endsWith('/jwks') && ++keyRequests === 1) throw new Error('synthetic outage');
+      if (String(url).endsWith('/jwks')) {
+        keyRequests += 1;
+        if (keyRequests === 1) {
+          firstPreflight.resolve();
+          throw new Error('synthetic outage');
+        }
+        retriedAt = clock;
+        retryPreflight.resolve();
+      }
+      if (String(url).endsWith('/token') && init?.method === 'POST') {
+        refreshSentAt = clock;
+        const response = await fetch(url, init);
+        refreshCompleted.resolve();
+        return response;
+      }
       return fetch(url, init);
     },
   });
-  t.after(async () => { await service.dispose(); await oidc.close(); });
+  t.after(async () => { await service.dispose(); t.mock.timers.reset(); await oidc.close(); });
   await service.hydrate();
-  const timeout = Date.now() + 5500;
-  while (keyRequests === 0 && Date.now() < timeout) await delay(20);
-  await delay(30);
-  assert.equal(keyRequests, 1);
+  while (keyRequests === 0 && clock < accessExpiresAt) await advance(250);
+  assert.equal(keyRequests, 1, 'the scheduled renewal reaches the preflight');
+  await firstPreflight.promise;
+  await settle();
   assert.equal(oidc.counts.refresh, 0, 'no refresh request was sent during preflight');
   assert.equal(service.getView().state, 'ready');
-  while (oidc.counts.refresh === 0 && Date.now() < timeout) await delay(20);
+  assert.deepEqual((await store.read()).grant, grant, 'the unconsumed refresh grant remains intact');
+  // Walk to the retry without ever crossing the access deadline: a retry armed
+  // after expiry could never run here, so the assertion is about the deadline
+  // the Host scheduled, not about how fast the runner is.
+  while (keyRequests < 2 && clock < accessExpiresAt) await advance(250);
+  assert.equal(keyRequests, 2, 'the preflight retry runs before the access deadline');
+  await retryPreflight.promise;
+  assert.ok(retriedAt < accessExpiresAt, 'the retry preflight was sent before the access deadline');
+  await refreshCompleted.promise;
   assert.equal(oidc.counts.refresh, 1);
+  assert.ok(refreshSentAt < accessExpiresAt, 'the renewal request was sent before the access deadline');
   assert.equal(service.getView().state, 'ready');
 });
 
@@ -337,11 +376,14 @@ for (const accessDeadline of ['later', 'same']) test(`a refresh token expiring $
   });
   t.after(async () => { await service.dispose(); await oidc.close(); });
   await service.hydrate();
-  const timeout = Date.now() + 2700;
-  while (oidc.counts.refresh === 0 && Date.now() < timeout) await delay(20);
+  // Each wait owns its budget: one absolute deadline shared by both loops left
+  // the second one only whatever the first did not spend.
+  const refreshDeadline = Date.now() + 2700;
+  while (oidc.counts.refresh === 0 && Date.now() < refreshDeadline) await delay(20);
   assert.equal(oidc.counts.refresh, 1, 'refresh begins before the refresh token expires');
   assert.ok(refreshSentAt < now + 2400, 'the request was sent before the refresh token expired');
-  while (service.getView().state !== 'ready' && Date.now() < timeout) await delay(20);
+  const readyDeadline = Date.now() + 1000;
+  while (service.getView().state !== 'ready' && Date.now() < readyDeadline) await delay(20);
   assert.equal(service.getView().state, 'ready');
 });
 

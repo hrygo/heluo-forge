@@ -71,7 +71,7 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 | `pnpm check:repo` | 工程结构、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
 | `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
 | `pnpm check:version` | 正文基线版本与 [.dsh-version](.dsh-version) 一致，代码中无硬编码 DSH 版本 |
-| `pnpm test:unit` | 实际执行 `node --test` 自动发现的全部用例：检查器、各扩展包、凭据支撑包、索引校验与归档安装 |
+| `pnpm test:unit` | 实际执行 `node --test --test-timeout=120000` 自动发现的全部用例：检查器、各扩展包、凭据支撑包、索引校验与归档安装；单个用例超过 120 秒即具名失败 |
 | `node --test packages/forge-iam/test/*.test.mjs packages/forge-credentials-keychain/test/*.test.mjs` | 单独验证 IAM 与凭据存储包 |
 | `node --test packages/forge-market/test/*.test.mjs` | 单独验证市场插件的逻辑、契约及本地安装链路 |
 | `node --test services/market-index/test/*.test.mjs` | 单独验证索引校验器 |
@@ -86,7 +86,7 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 [检查工作流 `repository checks`](.github/workflows/check.yml)在 `main` 推送、PR、合并队列的 `checks_requested` 和手动运行时触发，不在工作流入口使用路径过滤。分类按检出的 PR 合并提交相对 base 顶点的差异判定：仅修改、删除或新增 `docs/` 下普通 Markdown 文件或根目录的 `README.md`、`CONTRIBUTING.md`、`SECURITY.md` 时跳过跨平台作业；文档链接、登记、仓库规则和全部离线测试仍由 `verify` 执行。新增路径须为普通文件且不与其他路径在大小写或 Unicode 归一化下折叠重名。混合或未知路径、非便携路径、折叠重名、文件类型和模式异常，或检出身份与差异无法确证时全跑；`main` 推送、合并队列和手动运行也全跑。
 
 - `verify (ubuntu-x64)` 在 `ubuntu-24.04` 上运行完整离线检查，超时 5 分钟；分类作业失败或结果无效时，该必需检查失败。同一 PR 的新运行取消过期运行。平台作业在 GitHub 托管的 Linux、Windows 和 macOS runner 上执行 SQLite 凭据、IAM 合成测试与离线安装冒烟；`sensitive scan and IAM callback (win32-x64)` 是合并运行 Windows 敏感扫描和回调端口测试的非必需作业。
-- Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test` 自动发现工程、包与集成测试。
+- Node 版本来自 `.node-version`；`node --run check` 直接执行根 `package.json` 的 `check`，与 `pnpm check` 共用定义，`node --test --test-timeout=120000` 自动发现工程、包与集成测试，单个用例超时以用例名报告失败，不拖满作业超时。
 - `verify` 不安装 pnpm 或项目依赖，也不读取包缓存；平台作业不配置 npm 包或 `node_modules` 缓存。Linux 和 macOS 作业构建并离线安装企业组合包，Windows 作业打包并离线安装凭据独立包；安装使用 runner 工作区内的独立前缀，冒烟测试在系统临时目录使用合成数据。六个平台检查使用 `SQLite and IAM` 名称，具体名称见[开发约定](docs/engineering/development-conventions.md#6-检查与-ci)；分支保护中的必需检查名称须与工作流显示名称一致，远端配置状态以实测为准。
 - 托管 runner 的结果不代替 Windows 10、UOS、银河麒麟、目标 DSH/Electron 宿主、Windows ACL 或企业 IAM 的目标环境取证。8.3 真实短名用例在卷不提供不同的短别名时跳过；需以实际运行记录区分通过与跳过。
 - `repository checks` 只授予 `contents: read`、用于核验 Issue 的 `issues: read` 和用于读取 PR 正文的 `pull-requests: read`，检出不保留凭据；分类作业检出完整历史以比较 PR 的基线与 head，其余作业检出深度为 1。Actions 固定完整 SHA 并附版本注释。[Dependabot](.github/dependabot.yml)每周一北京时间 09:00 检查 Actions 更新，合并次版本与补丁更新为一组，主版本单独评审；不自动合并或发布。

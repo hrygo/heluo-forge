@@ -109,10 +109,13 @@ test('a view notification after access expires preserves the scheduled preflight
   clock += 850;
   assert.equal(service.notifyView().state, 'expired');
   clock += 250;
-  const timeout = Date.now() + 1800;
-  while (oidc.counts.refresh === 0 && Date.now() < timeout) await delay(20);
+  // Each wait owns its budget: a single absolute deadline shared by both loops
+  // left the second one only whatever the first did not spend.
+  const refreshDeadline = Date.now() + 1800;
+  while (oidc.counts.refresh === 0 && Date.now() < refreshDeadline) await delay(20);
   assert.equal(oidc.counts.refresh, 1, 'the retry still runs after the original access expiry');
-  while (service.getView().state !== 'ready' && Date.now() < timeout) await delay(20);
+  const readyDeadline = Date.now() + 1800;
+  while (service.getView().state !== 'ready' && Date.now() < readyDeadline) await delay(20);
   assert.equal(service.getView().state, 'ready');
   assert.notEqual(await service.getAccessToken(), 'synthetic-access');
 });
@@ -147,10 +150,12 @@ test('a replacement session does not inherit the previous session preflight back
   assert.equal(service.getView().state, 'expired');
   await store.write(grant('E2002', 'refresh-b'));
   await service.syncFromStore();
+  // Separate budgets keep the second wait from inheriting what the first spent.
   const recoveryDeadline = Date.now() + 1000;
   while (oidc.counts.refresh === 0 && Date.now() < recoveryDeadline) await delay(20);
   assert.equal(oidc.counts.refresh, 1, 'the newly adopted session starts its own recovery');
-  while (service.getView().state !== 'ready' && Date.now() < recoveryDeadline) await delay(20);
+  const adoptedDeadline = Date.now() + 1000;
+  while (service.getView().state !== 'ready' && Date.now() < adoptedDeadline) await delay(20);
   assert.equal(service.getView().principal, 'E2002');
   assert.equal(service.getView().state, 'ready');
 });
