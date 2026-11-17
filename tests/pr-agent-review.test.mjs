@@ -188,6 +188,67 @@ test('the workflow and check display the 洛神 name', () => {
   assert.match(workflow, /^    name: 洛神 \(ubuntu-x64\)$/mu);
 });
 
+test('the review job stays off until the repository variable enables it', () => {
+  const folded = /\n    if: >-\n([\s\S]*?)\n    concurrency:/u.exec(workflow)?.[1] ?? '';
+  const condition = folded.replace(/\s+/gu, ' ').trim();
+  const decide = (vars, event) => {
+    const github = { event_name: event.name, repository: 'corp/example', event: event.payload };
+    const contains = (haystack, needle) => Array.isArray(haystack)
+      ? haystack.includes(needle)
+      : String(haystack).toLowerCase().includes(String(needle).toLowerCase());
+    return new Function('vars', 'github', 'fromJSON', 'contains', `return (${condition});`)(
+      vars, github, JSON.parse, contains,
+    );
+  };
+  const openedPullRequest = {
+    name: 'pull_request',
+    payload: {
+      sender: { type: 'User' },
+      action: 'opened',
+      pull_request: { draft: false, head: { repo: { full_name: 'corp/example' } } },
+    },
+  };
+  const reviewComment = {
+    name: 'issue_comment',
+    payload: {
+      sender: { type: 'User' },
+      issue: { pull_request: {} },
+      comment: { author_association: 'OWNER' },
+    },
+  };
+  // An absent or falsy variable must skip both event types at the top level;
+  // a switch moved inside only one event branch would still run the other.
+  for (const vars of [{}, { PR_AGENT_ENABLED: '' }, { PR_AGENT_ENABLED: 'false' }, { PR_AGENT_ENABLED: 'no' }]) {
+    assert.equal(decide(vars, openedPullRequest), false);
+    assert.equal(decide(vars, reviewComment), false);
+  }
+  const enabled = { PR_AGENT_ENABLED: 'true' };
+  assert.equal(decide(enabled, openedPullRequest), true);
+  assert.equal(decide(enabled, reviewComment), true);
+  // The existing event filters still apply once the switch is on.
+  assert.equal(decide(enabled, {
+    ...openedPullRequest,
+    payload: { ...openedPullRequest.payload, sender: { type: 'Bot' } },
+  }), false);
+  assert.equal(decide(enabled, {
+    ...openedPullRequest,
+    payload: { ...openedPullRequest.payload, pull_request: { draft: true, head: { repo: { full_name: 'corp/example' } } } },
+  }), false);
+  assert.equal(decide(enabled, {
+    ...reviewComment,
+    payload: { ...reviewComment.payload, comment: { author_association: 'CONTRIBUTOR' } },
+  }), false);
+});
+
+test('the header documents how to turn the review back on and off', () => {
+  assert.match(workflow, /gh variable set PR_AGENT_ENABLED --body true/u);
+  assert.match(workflow, /gh variable delete PR_AGENT_ENABLED/u);
+  // GitHub compares strings ignoring case, and a skipped job still shows a check.
+  assert.match(workflow, /compares strings ignoring case/u);
+  assert.match(workflow, /A skipped job still appears as a/u);
+  assert.match(workflow, /status `skipped`/u);
+});
+
 test('pushes refresh the summary and review, including bot and merge commits', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
   assert.match(workflow, /types: \[opened, reopened, ready_for_review, review_requested, synchronize\]/u);
