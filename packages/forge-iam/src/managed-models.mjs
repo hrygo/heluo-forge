@@ -448,7 +448,16 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       try {
         for await (const chunk of dispatch({ ...current, signal })) {
           code = authorizationRefusal(subject);
-          if (code) { yield failed(request, null, code, 'unknown'); return; }
+          if (code) {
+            // An inner wrapper may already have recorded this failure. Still
+            // report the current authorization refusal, without logging twice.
+            if (diagnosed.has(chunk)) {
+              const result = finish(code);
+              diagnosed.add(result);
+              yield result;
+            } else yield failed(request, null, code, 'unknown');
+            return;
+          }
           if (diagnosed.has(chunk)) { yield chunk; return; }
           if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
             // The model layer turns an HTTP error into a finish chunk, so the code

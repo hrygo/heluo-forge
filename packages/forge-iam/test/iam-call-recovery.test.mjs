@@ -573,3 +573,71 @@ test('an unknown upstream code keeps the host warning without exposing its value
   assert.equal(failureOf(await chunks(f.adapter.stream(options))), 'ENTERPRISE_GATEWAY_CALL_FAILED');
   assert.deepEqual(logged, [['UNRECOGNIZED', 'ENTERPRISE_GATEWAY_CALL_FAILED']]);
 });
+
+for (const scenario of [
+  { name: 'sign-out', next: { state: 'signed_out', principal: null }, code: 'IAM_LOGIN_REQUIRED' },
+  { name: 'credential removal', next: { gatewayCredential: { state: 'unconfigured', matchesAccount: false } }, code: 'IAM_GATEWAY_CREDENTIAL_REQUIRED' },
+]) {
+  test(`nested stream logs one failure after ${scenario.name}`, async t => {
+    const events = [];
+    const f = fixture({ diagnoseFailure: event => events.push(event) });
+    t.after(() => f.runtime.dispose());
+    await f.runtime.ready;
+    const hold = f.holdChunks();
+    const stream = f.guard(options, () => f.adapter.stream(options))[Symbol.asyncIterator]();
+    const first = await stream.next();
+    assert.equal(first.value.type, 'text-delta');
+    f.change(scenario.next);
+    hold.resolve();
+    const last = await stream.next();
+    assert.equal(last.value.reason.failure.code, scenario.code);
+    assert.equal((await stream.next()).done, true);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].code, scenario.code);
+  });
+}
+
+test('a regular downstream chunk is not emitted after sign-out', async t => {
+  const events = [];
+  const f = fixture({ diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const stream = f.guard(options, () => (async function* () {
+    yield { type: 'text-delta', text: 'before' };
+    f.change({ state: 'signed_out', principal: null });
+    yield { type: 'text-delta', text: 'must-not-escape' };
+  })());
+  const result = await chunks(stream);
+  assert.equal(result[0].text, 'before');
+  assert.equal(failureOf(result), 'IAM_LOGIN_REQUIRED');
+  assert.equal(result.some(chunk => chunk.text === 'must-not-escape'), false);
+  assert.equal(events.length, 1);
+});
+
+test('authorization change after an inner failure still controls the visible error', async t => {
+  const events = [];
+  const f = fixture({ tokenFailure: 'IAM_UNREACHABLE', diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const stream = f.guard(options, () => (async function* () {
+    for await (const chunk of f.adapter.stream(options)) {
+      f.change({ state: 'signed_out', principal: null });
+      yield chunk;
+    }
+  })());
+  const result = await chunks(stream);
+  assert.equal(failureOf(result), 'IAM_LOGIN_REQUIRED');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].code, 'ENTERPRISE_IAM_UNAVAILABLE');
+});
+
+test('nested streams record a gateway credential revocation once', async t => {
+  const events = [];
+  const f = fixture({ finishFailureCode: 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', diagnoseFailure: event => events.push(event) });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const result = await chunks(f.guard(options, () => f.adapter.stream(options)));
+  assert.equal(failureOf(result), 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].code, 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+});
