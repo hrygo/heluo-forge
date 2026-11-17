@@ -1,5 +1,5 @@
 import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
-import { failureCode, gatewayCode } from './gateway-failure.mjs';
+import { failureCode, gatewayCode, USER_CODE_BY_INTERNAL } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import {
   NO_RETRY_POLICY,
@@ -193,11 +193,15 @@ const safeGet = (host, name) => { try { return host?.[name] ?? host?.get?.(name)
  * replaced; the new-conversation default is observed without writing any Host
  * setting (see host-default-model.mjs).
  */
-export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, resolveAttachments, prepareHeaders, fetch: fetcher = globalThis.fetch, logFailure,
+export function createManagedModelRuntime({ host, iam, config, createAdapter = createNativeGatewayAdapter, resolveAttachments, prepareHeaders, fetch: fetcher = globalThis.fetch, logFailure, diagnoseFailure,
   requestHeaders = async () => (await host.loader.import('@deepseek-ai/dsh-llm')).attributionHeaders(),
   getHostDefaultModel = () => safeGet(host, 'agentDefaultModel'), retryDelays = RETRY_DELAYS, onChange }) {
   if (typeof host.on !== 'function' || typeof host.llm?.registerAdapter !== 'function') {
-    const off = host.on?.('llm/stream', () => (async function* () { yield finish('ENTERPRISE_MODELS_UNAVAILABLE'); })(), { global: true });
+    const off = host.on?.('llm/stream', request => (async function* () {
+      const code = 'ENTERPRISE_MODELS_UNAVAILABLE';
+      try { diagnoseFailure?.({ detailCode: code, code, message: MESSAGES[code], stage: 'local', request }); } catch { /* optional diagnostic */ }
+      yield finish(code);
+    })(), { global: true });
     return {
       ready: Promise.resolve(), refresh: async () => { throw error('ENTERPRISE_MODELS_UNAVAILABLE'); },
       getView: () => ({ managed: true, state: 'error', error: 'ENTERPRISE_MODELS_UNAVAILABLE', models: [] }),
@@ -383,7 +387,15 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const noteMapped = (cause, code) => {
     const detailCode = cause?.code;
     if (typeof detailCode !== 'string' || detailCode === code) return;
-    try { logFailure?.(detailCode, code); } catch { /* diagnostics never change the answer */ }
+    const safeDetail = Object.hasOwn(USER_CODE_BY_INTERNAL, detailCode) ? detailCode : 'UNRECOGNIZED';
+    try { logFailure?.(safeDetail, code); } catch { /* diagnostics never change the answer */ }
+  };
+  const diagnosed = new WeakSet();
+  const failed = (request, cause, code, stage) => {
+    try { diagnoseFailure?.({ detailCode: cause?.code ?? code, code, message: MESSAGES[code] ?? MESSAGES.ENTERPRISE_GATEWAY_CALL_FAILED, stage, request }); } catch { /* diagnostics never change the answer */ }
+    const chunk = finish(code);
+    diagnosed.add(chunk);
+    return chunk;
   };
   /**
    * Rebuild the catalogue behind a binding change, waiting no longer than a
@@ -411,10 +423,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (moved) code = 'IAM_LOGIN_REQUIRED';
       else if (redispatch) {
         try { await redispatch(); captured = version; code = refusal(request, captured); }
-        catch (cause) { yield finish(record(failureCode(cause))); return; }
+        catch (cause) { const mapped = record(failureCode(cause)); yield failed(request, cause, mapped, 'local'); return; }
       }
     }
-    if (code) { yield finish(code); return; }
+    if (code) { yield failed(request, null, code, 'local'); return; }
     const subject = iam.getView()?.principal;
     const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
     let emitted = false; let retried = false; let downgraded = false; let downgradePending = false;
@@ -436,25 +448,22 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       try {
         for await (const chunk of dispatch({ ...current, signal })) {
           code = authorizationRefusal(subject);
-          if (code) { yield finish(code); return; }
+          if (code) { yield failed(request, null, code, 'unknown'); return; }
+          if (diagnosed.has(chunk)) { yield chunk; return; }
           if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
             // The model layer turns an HTTP error into a finish chunk, so the code
             // arrives here without ever passing through the thrown-error branch.
             const mapped = record(failureCode(chunk.reason.failure));
             noteMapped(chunk.reason.failure, mapped);
             if (downgradeImages(mapped)) continue engine;
-            yield finish(mapped); return;
+            yield failed(request, chunk.reason.failure, mapped, 'unknown'); return;
           }
           emitted = true;
           yield chunk;
         }
         code = authorizationRefusal(subject);
-        if (code) { yield finish(code); return; }
-        // The placeholder attempt finished, so removing the images is what made
-        // this request work. Only now is the conversation remembered: a refusal
-        // that survives the retry says nothing about images (a context-length or
-        // parameter error), and remembering it would silently drop every later
-        // image long after the real problem was fixed.
+        if (code) { yield failed(request, null, code, 'unknown'); return; }
+        // Remember the downgrade only after the replacement request succeeds.
         if (downgradePending) rememberRefusal(key);
         return;
       } catch (cause) {
@@ -469,10 +478,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         if (!authorization && !emitted && !retried && cause?.code === 'IAM_GATEWAY_BINDING_CHANGED') {
           retried = true;
           try { await rebuildBinding(); if (redispatch) await redispatch(); continue; }
-          catch (next) { yield finish(record(failureCode(next))); return; }
+          catch (next) { const mapped = record(failureCode(next)); yield failed(request, next, mapped, 'unknown'); return; }
         }
         noteMapped(cause, code);
-        yield finish(record(code));
+        yield failed(request, cause, record(code), 'unknown');
         return;
       }
     }
@@ -735,13 +744,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         sample(); const mine = version;
         const subject = iam.getView()?.principal;
         // Even a saved selection after logout reaches an actionable sign-in error.
-        if (!permit(iam.getView()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
+        if (!permit(iam.getView()) && !allowed(route, model)) {
+          const cause = error('ENTERPRISE_MODEL_NOT_ALLOWED');
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
         const prepare = async () => backend
           ? (typeof backend.prepareCall === 'function'
             ? await backend.prepareCall(route, model, signal)
             : { model: await backend.resolveModel(route, model, signal), stream: options => backend.stream(options) })
           : null;
-        let prepared = await prepare();
+        let prepared;
+        try { prepared = await prepare(); } catch (cause) {
+          failed({ provider: route, model }, cause, failureCode(cause), 'unknown');
+          throw cause;
+        }
         return {
           model: prepared?.model ?? { provider: route, id: model, name: model },
           // A binding change inside the answer rebuilds the catalogue; the
@@ -752,8 +769,17 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         };
       };
       if (key === 'resolveModel') return async (route, model, signal) => {
-        if (!permit(sample()) && !allowed(route, model)) throw error('ENTERPRISE_MODEL_NOT_ALLOWED');
-        return backend ? backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
+        if (!permit(sample()) && !allowed(route, model)) {
+          const cause = error('ENTERPRISE_MODEL_NOT_ALLOWED');
+          failed({ provider: route, model }, cause, cause.code, 'local');
+          throw cause;
+        }
+        try {
+          return backend ? await backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
+        } catch (cause) {
+          failed({ provider: route, model }, cause, failureCode(cause), 'unknown');
+          throw cause;
+        }
       };
       return typeof backend?.[key] === 'function' ? backend[key].bind(backend) : backend?.[key];
     }

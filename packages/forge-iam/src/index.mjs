@@ -1,4 +1,5 @@
 import { createManagedModelRuntime } from './managed-models.mjs';
+import { createModelFailureLogger } from './model-failure-log.mjs';
 import { createCallbackManager } from './callback-listener.mjs';
 import { Config, validateConfig } from './config.mjs';
 import { IamError } from './errors.mjs';
@@ -261,6 +262,7 @@ export function apply(ctx, rawConfig = {}) {
               return headers;
             }
           },
+          diagnoseFailure: createModelFailureLogger({ warn: () => ctx.logger?.warn?.('forge-iam: model failure diagnostic could not be written') }),
           // P1-3: keep the failure object fixed at { code, message }; the
           // internal code is diagnosis and goes to the host log only. The
           // unknown-failure bucket is the one an administrator has to act on, so
