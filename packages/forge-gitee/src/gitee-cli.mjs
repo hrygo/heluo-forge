@@ -702,10 +702,12 @@ export function createGiteeRunner({
 
     const allTokens = extraTokens.length > 0 ? [...tokens, ...extraTokens] : tokens;
     // 出口统一脱敏：适配器与工具面拿到的 stdout/stderr 里不该出现令牌（AC-22）。
+    const stdout = scrubSecrets(result.stdout, allTokens);
     return {
       ...result,
-      stdout: scrubSecrets(result.stdout, allTokens),
+      stdout,
       stderr: scrubSecrets(result.stderr, allTokens),
+      ...(stdout === result.stdout ? {} : { redacted: true }),
     };
   }
 

@@ -205,7 +205,7 @@ export function createGate({
     }
     return {
       // SOFT 命中不阻断，但要求人工停下来确认一次。
-      decision: result.soft.length > 0 ? 'confirm' : 'allow',
+      decision: result.soft.length > 0 || result.skipped.length > 0 ? 'confirm' : 'allow',
       reason: result.soft.length > 0 ? `content rules flagged ${result.soft.map((finding) => finding.rule).join(', ')}` : undefined,
       hard: [],
       soft: result.soft,
@@ -312,7 +312,9 @@ export function createGate({
       : { ok: true };
     if (scopeResult.ok !== true) return deny(scopeResult.reason);
     if (decision === 'confirm') {
-      const reason = content.reason ?? process.reason ?? actionDecision.reason ?? 'this action requires confirmation';
+      const reason = [content.reason ?? process.reason ?? actionDecision.reason ?? 'this action requires confirmation',
+        ...(content.skipped.length ? [`content scan incomplete: ${content.skipped.map(({ field, reason: why }) => `${field} (${why})`).join(', ')}`] : []),
+      ].join('; ');
       const asked = await requestApproval(ctx, exec, reason);
       if (asked.ok !== true) return deny(asked.reason);
     }
@@ -325,6 +327,7 @@ export function createGate({
       actor,
       approver: decision === 'confirm' || scopeResult.ticketId !== undefined ? 'host-approval' : '',
       unevaluated: process.unevaluated.map((item) => item.rule),
+      contentSkipped: content.skipped.map(({ field, reason }) => `${field}:${reason}`),
       mode: org.state === 'verified' ? 'managed' : 'personal',
     };
     try {
@@ -341,6 +344,7 @@ export function createGate({
         actor: extra.actor,
         approver: extra.approver,
         unevaluated: extra.unevaluated,
+        contentSkipped: extra.contentSkipped,
         mode: extra.mode,
         ...(extra.orgDigest === undefined ? {} : { orgDigest: extra.orgDigest }),
         contentDigest: digest,

@@ -216,6 +216,26 @@ test('同一身份换会话要重新确认：范围票据不跨会话复用', as
   assert.equal(requests.length, 2, '另一个会话必须自己确认，不能白拿旧票据');
 });
 
+test('内容扫描不完整时在确认与最小化审计中标明', async () => {
+  const requests = [];
+  const host = mount(baseConfig, { approval: { async request(r) { requests.push(r); return 'allowed-once'; } } });
+  const result = await host.stage('forge_push', { target: 'acme/demo', branch: 'feature/x', body: 'x\u0000binary' }, { agent: { id: 'agent-1' } });
+  assert.equal(result.reason, undefined);
+  assert.match(requests.at(-1).reason, /body \(binary-skipped\)/);
+  const record = host.policy.auditRecords().find((item) => item.phase === 'begin');
+  assert.deepEqual(record.contentSkipped, ['body:binary-skipped']);
+  assert.ok(!JSON.stringify(record).includes('binary\\u0000'));
+});
+
+test('正文超出上限要求逐次确认并记录截断', async () => {
+  const requests = [];
+  const host = mount(baseConfig, { approval: { async request(r) { requests.push(r); return 'allowed-once'; } } });
+  const result = await host.stage('forge_issue_write', { target: 'acme/demo#12', changeId: 'CHG-1', body: 'x'.repeat(262145) }, { agent: { id: 'agent-1' } });
+  assert.equal(result.reason, undefined);
+  assert.match(requests.at(-1).reason, /body \(truncated\)/);
+  assert.deepEqual(host.policy.auditRecords().find((item) => item.phase === 'begin').contentSkipped, ['body:truncated']);
+});
+
 test('a write without a change id cannot establish a task scope', async () => {
   const approval = { async request() { return 'allowed-once'; } };
   const host = mount(baseConfig, { approval });

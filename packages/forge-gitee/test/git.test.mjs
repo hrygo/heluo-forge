@@ -943,6 +943,23 @@ test('适配器：单条提交正文被截断时拒绝，不拿半截正文当�
   );
 });
 
+test('适配器：单条提交正文被脱敏时拒绝，不拿脱敏后的正文当完整证据', async () => {
+  const runner = fakeRunner(({ args }) => {
+    if (args[0] === 'merge-base' || args[0] === 'rev-parse') {
+      return { exitCode: 0, stdout: SHA, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    if (args[0] === 'rev-list') {
+      return { exitCode: 0, stdout: `${'2'.repeat(40)}\n`, stderr: '', durationMs: 1, timedOut: false, truncated: false };
+    }
+    return { exitCode: 0, stdout: 'fix: 一条\u0000+key=***', stderr: '', durationMs: 1, timedOut: false, truncated: false, redacted: true };
+  });
+  const adapter = createGiteeGitAdapter({ runner, cwd: '/tmp/offline-repo' });
+  await assert.rejects(
+    () => adapter.readRange({ remote: 'origin', branch: 'feat/other' }),
+    (error) => error.code === GIT_REASONS.READBACK_UNAVAILABLE && /脱敏/u.test(error.message),
+  );
+});
+
 test('适配器：远端一个基线都没有时读该分支全部历史，而不是最近 N 条', async () => {
   const runner = fakeRunner(({ args }) => {
     if (args[0] === 'rev-parse') {
