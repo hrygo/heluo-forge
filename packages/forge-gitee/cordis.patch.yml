@@ -15,17 +15,15 @@
 #     装配顺序（`tests/plugin-patch-layers.test.mjs` 静态守这份一致，`coexistence.test.mjs`
 #     再验装配后果）。
 #   - 第 5 条 `gitee.delivery.judge` 是"只判定、不执行"的只读能力，随包默认登记：
-#     `kind: 'read'`（不建审批台账，见 @heluo/forge-policy 的 `needsApproval`）、
-#     `target: 'change'`（逐字，非 `delivery` 等替代串）、`egress: 'allow'`（**必需**：门禁统一
-#     以 `platform-write` 发起裁决，条目缺席 `egress` 时编译成默认 `confirm`，判定会永远拿不到
-#     `done`）。判定回的 `executed` 恒为 `false`、`remote_calls` 恒为 `0`。
+#     `target: 'change'`（逐字，非 `delivery` 等替代串）；动作类别由策略引擎的内置词表决定，
+#     登记行不再重复声明 `kind`/`egress`。判定回的 `executed` 恒为 `false`、`remote_calls` 恒为 `0`。
 #   - 四个受控写（`gitee.issue.write` / `gitee.pr.write` / `gitee.review.publish` /
 #     `gitee.review.record`）与远端写 `gitee.git.push` **不登记**，默认即 `denied`
 #     （`rule: 'unregistered-action'`），且适配器与 `execFile` 出口都是 0 次调用——"没批准的
 #     能力不出现"靠不登记实现，而不是靠运行时开关。本地动作 `git commit` 不进目录：它必须能做，
 #     发起前由 `git-message.mjs` 强校验首行 `[变更号]`。
-#   - 需要写能力时，由所属 profile 显式追加对应动作（写/确认类动作还需 `approvals` 台账条目，
-#     见 @heluo/forge-policy 的 `assertEnabledEntriesApproved`）。默认分发层不替任何人预置授权。
+#   - 需要写能力时，由所属 profile 显式追加对应动作；写类动作按内置分类默认放行，风险由内容
+#     规则、流程规则与（推送的）逐次确认承担，组织策略信封只能收紧。默认分发层不替任何人预置授权。
 #   - 审计舱用内存 sink：属**联调/试点级**证据，记录随进程退出丢失。生产或合规场景必须在
 #     profile 注入持久 sink 后删掉 `allowNonDurable`（否则每个动作都会被 `POLICY_AUDIT_*` 拒绝）。
 #   - 不写 `tools` 映射：插件的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射一次
@@ -41,12 +39,12 @@
       name: '@heluo/forge-policy'
       config:
         catalog:
-          - { action: 'change.read', kind: 'read', target: 'change', enabled: true }
-          - { action: 'change.list', kind: 'read', target: 'changes', enabled: true }
-          - { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true }
-          - { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true }
-          - { action: 'gitee.pr.read', kind: 'read', target: 'pull-request', enabled: true }
-          - { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' }
+          - { action: 'change.read', target: 'change', enabled: true }
+          - { action: 'change.list', target: 'changes', enabled: true }
+          - { action: 'gitee.repository.read', target: 'repository', enabled: true }
+          - { action: 'gitee.issue.read', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }
+          - { action: 'gitee.delivery.judge', target: 'change', enabled: true }
         audit:
           sink: memory
           allowNonDurable: true

@@ -220,6 +220,6 @@ test('形态 C: 并层单一策略行——6 条目录 / 14 个工具；卸载�
     '除判定外都必须是 enabled 的读动作',
   );
   const judge = policy.catalog.get('gitee.delivery.judge');
-  assert.equal(judge?.kind, 'read', '判定仍是只读（只判定，不关闭不合并）');
-  assert.equal(judge?.egress, 'allow', '判定需要出网读回证据，egress 必须显式 allow');
+  assert.equal(judge?.category, 'read', '判定仍是只读（只判定，不关闭不合并）');
+  assert.equal(judge?.decision, 'allow', '判定按只读默认放行');
 });

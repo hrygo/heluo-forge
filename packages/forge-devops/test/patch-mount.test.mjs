@@ -122,7 +122,7 @@ function assertPolicyConfigComplete(patch, label) {
     const entry = registered.get(action);
     assert.ok(entry, `${label}：策略目录缺只读动作 ${action}`);
     assert.equal(entry.enabled, true, `${label}：${action} 必须 enabled:true，否则 devops 拒绝挂载`);
-    assert.equal(entry.kind, 'read', `${label}：${action} 必须是 read 动作用来收紧写面`);
+    assert.equal(entry.kind, undefined, `${label}：${action} 的登记行不再声明 kind，类别由内置词表决定为只读`);
     assert.ok(
       typeof entry.target === 'string' && entry.target.trim().length > 0,
       `${label}：${action} 必须声明 target（策略按它给出"目标缺失"的可见原因）`,
@@ -258,7 +258,7 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、
   assert.ok(policy.auditRecords().length >= recordsBefore + 2, '前置审计必须真的写入记录，而不是跳过审计');
 
   // 4) 写动作仍未登记：目录里一条 write 都没有，读面也不收写动作。
-  const writeEntries = [...policy.catalog.values()].filter((entry) => entry.kind !== 'read');
+  const writeEntries = [...policy.catalog.values()].filter((entry) => entry.category !== 'read');
   assert.deepEqual(writeEntries, [], '策略目录不得出现写动作（写面归 forge-gitee）');
   await assert.rejects(service.read({ action: 'change.clarification.write', target: 'CHG-2026-0042' }), {
     code: READ_REASONS.UNKNOWN_ACTION,

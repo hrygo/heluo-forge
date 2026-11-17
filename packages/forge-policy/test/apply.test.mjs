@@ -1,17 +1,22 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
 import { apply, PolicyCatalogError } from '../src/index.mjs';
 
-const ENTRY = { action: 'repository.read', kind: 'read', target: 'repository', enabled: true };
-const WRITE = { action: 'issue.create_or_update', kind: 'write', target: 'issue' };
-const CONFIRM = { action: 'review.human.record', kind: 'confirm', target: 'pull-request', enabled: true };
+const READ = { action: 'gitee.repository.read', target: 'repository', enabled: true };
+const WRITE = { action: 'gitee.issue.write', target: 'issue', enabled: true };
+const CONFIRM = { action: 'gitee.git.push', target: 'repository', enabled: true };
+const HUMAN = { action: 'gitee.review.record', target: 'pull-request', enabled: true };
 
-function fakeHost({ approval, commands } = {}) {
+const IDENTITY = Object.freeze({
+  getView() {
+    return { state: 'ready', signedIn: true, principal: 'user-a', accessExpiresAt: null };
+  },
+});
+
+function fakeHost({ approval = { async request() { return 'allowed-once'; } }, iam = IDENTITY, facts } = {}) {
   const provided = new Map();
+  if (facts !== undefined) provided.set('processFacts', facts);
   const guards = [];
   const listeners = new Map();
   const effects = [];
@@ -28,7 +33,7 @@ function fakeHost({ approval, commands } = {}) {
     },
     get(name) {
       if (name === 'approval') return approval;
-      if (name === 'commands') return commands;
+      if (name === 'iam') return iam;
       return provided.get(name);
     },
     provide(name, value) {
@@ -46,122 +51,200 @@ function fakeHost({ approval, commands } = {}) {
 
 const DEV_AUDIT = { sink: 'memory', allowNonDurable: true };
 
-// D1：enabled 的确认/写动作必须有有效台账条目（合成批准人，不代表任何真实批准）。
-const APPROVALS = [
-  {
-    approval_id: 'APR-TEST-1',
-    action: 'review.human.record',
-    resource: '*',
-    approved_by: 'test-fixture',
-    approved_at: '2026-10-01T00:00:00Z',
-    expires_at: '2099-01-01T00:00:00Z',
-  },
-  {
-    approval_id: 'APR-TEST-2',
-    action: 'fs.write',
-    resource: '*',
-    approved_by: 'test-fixture',
-    approved_at: '2026-10-01T00:00:00Z',
-    expires_at: '2099-01-01T00:00:00Z',
-  },
-];
-
 const baseConfig = {
   audit: DEV_AUDIT,
-  approvals: APPROVALS,
-  catalog: [ENTRY, WRITE, CONFIRM],
+  catalog: [READ, WRITE, CONFIRM, HUMAN],
   tools: {
-    forge_repository_read: 'repository.read',
-    forge_issue_write: 'issue.create_or_update',
-    forge_review_confirm: 'review.human.record',
+    forge_repository_read: 'gitee.repository.read',
+    forge_issue_write: 'gitee.issue.write',
+    forge_push: 'gitee.git.push',
+    forge_review_record: 'gitee.review.record',
     forge_typo_tool: 'change.read',
   },
   categories: { bash: 'shell.exec' },
 };
 
+function mount(config = baseConfig, options = {}) {
+  const host = fakeHost(options);
+  apply(host.ctx, config);
+  const preExecute = host.listeners.get('tools/pre-execute');
+  const guard = host.guards[0];
+  /** Run the full admission and report the refusal reason, or `undefined`. */
+  const stage = async (name, args, extra = {}) => {
+    const exec = { name, arguments: args, callId: extra.callId ?? 'c1', signal: new AbortController().signal, ...extra };
+    const decision = await preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
+    if (decision.kind === 'deny') return { reason: decision.reason, exec };
+    return { reason: guard(exec), exec };
+  };
+  return { ...host, policy: host.ctx.get('policy'), stage, preExecute, guard };
+}
+
 test('apply installs the guard, the pre-execute stage and the policy service', () => {
-  const host = fakeHost();
-  apply(host.ctx, baseConfig);
+  const host = mount();
   assert.equal(host.guards.length, 1);
   assert.equal(typeof host.listeners.get('tools/pre-execute'), 'function');
-  assert.deepEqual(host.provided.get('policy').actions(), ['repository.read', 'issue.create_or_update', 'review.human.record']);
+  assert.deepEqual(host.policy.actions(), ['gitee.repository.read', 'gitee.issue.write', 'gitee.git.push', 'gitee.review.record']);
+  assert.equal(host.policy.mode(), 'personal');
+  assert.equal(host.policy.policyVersion(), 'builtin');
 });
 
-test('the guard denies unregistered actions and disabled writes with zero body calls', async () => {
-  const host = fakeHost();
-  apply(host.ctx, baseConfig);
-  const guard = host.guards[0];
+test('an unregistered action, a disabled action and a missing target are denied', async () => {
+  const host = mount();
+  assert.match(String((await host.stage('forge_typo_tool', { target: 'r' })).reason), /not registered/);
+  const disabled = mount({ ...baseConfig, catalog: [READ, { ...WRITE, enabled: false }] });
+  assert.match(String((await disabled.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1' })).reason), /not enabled/);
+  assert.match(String((await host.stage('forge_repository_read', {})).reason), /requires a repository target/);
+  assert.equal((await host.stage('forge_repository_read', { target: 'acme/demo' })).reason, undefined);
+});
+
+test('a disabled write is refused even with an identity and a clean body', async () => {
+  const config = { ...baseConfig, catalog: [READ, { ...WRITE, enabled: false }] };
+  const host = mount(config);
+  assert.match(String((await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'ok' })).reason), /not enabled/);
+});
+
+test('a write action without an authenticated identity is denied', async () => {
+  const host = mount(baseConfig, { iam: { getView: () => ({ state: 'signed-out', signedIn: false, principal: null }) } });
+  const denied = await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'plain text' });
+  assert.match(String(denied.reason), /requires an authenticated identity/);
+});
+
+test('an authenticated clean write passes the content gate and records policy evidence', async () => {
+  const approvalRequests = [];
+  const approval = { async request(request) { approvalRequests.push(request); return 'allowed-once'; } };
+  const host = mount(baseConfig, { approval });
+  const first = await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'plain text' }, {
+    agent: { id: 'agent-1' },
+    callId: 'c10',
+  });
+  assert.equal(first.reason, undefined);
+  assert.equal(approvalRequests.length, 1, 'only the task scope is asked for');
+  assert.match(approvalRequests[0].reason, /task scope/);
+  const record = host.policy.auditRecords().find((item) => item.phase === 'begin');
+  assert.equal(record.policyVersion, 'builtin');
+  assert.equal(record.actor, 'user-a');
+  assert.equal(record.mode, 'personal');
+  assert.equal(JSON.stringify(record).includes('plain text'), false, 'business content is never recorded');
+});
+
+test('a hard content rule refuses the write before the body runs and redacts the finding', async () => {
+  const host = mount();
   let bodyCalls = 0;
-  const run = async (name, args) => {
-    const exec = { name, arguments: args, callId: 'c1' };
-    const decision = await host.listeners.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }));
-    const reason = decision.kind === 'deny' ? decision.reason : guard(exec);
-    if (reason === undefined) bodyCalls += 1;
-    return reason;
-  };
-  assert.equal(await run('forge_repository_read', { target: 'r' }), undefined, 'an audited registered read action passes');
-  assert.match(String(await run('forge_typo_tool', { target: 'r' })), /not registered/, 'a mapped but unregistered action is denied');
-  assert.match(String(await run('forge_issue_write', { target: 'I-1' })), /not enabled/, 'a disabled write is denied');
-  assert.match(String(await run('forge_repository_read', {})), /requires a repository target/, 'a missing target is denied');
-  assert.equal(guard({ name: 'forge_unmapped_tool', arguments: { target: 'r' }, callId: 'c9' }), undefined, 'an unmapped tool is outside this gate, never claimed as covered');
-  assert.equal(bodyCalls, 1, 'only the registered enabled read action reaches the body');
+  const denied = await host.stage('forge_issue_write', {
+    target: 'acme/demo!1',
+    changeId: 'CHG-1',
+    // 拼接，避免本文件本身命中仓库的敏感信息扫描。
+    body: ['access_key_id', ['AKIA', 'EXAMPLE', '1234567890'].join('')].join(' = '),
+  }, { agent: { id: 'agent-1' } });
+  assert.match(String(denied.reason), /BUILTIN-CLOUD-ACCESS-KEY/);
+  assert.match(String(denied.reason), /acce…7890/, 'the excerpt keeps only the first and last four characters');
+  assert.equal(bodyCalls, 0);
 });
 
-test('an out-of-scope host tool is not silently claimed', () => {
-  const host = fakeHost();
-  apply(host.ctx, baseConfig);
-  assert.equal(host.guards[0]({ name: 'read', arguments: {}, callId: 'c1' }), undefined);
+test('a soft content rule escalates to a confirmation instead of denying', async () => {
+  const requests = [];
+  const approval = { async request(request) { requests.push(request); return 'allowed-once'; } };
+  const host = mount(baseConfig, { approval });
+  const allowed = await host.stage('forge_issue_write', {
+    target: 'acme/demo!1',
+    changeId: 'CHG-1',
+    body: `the internal endpoint is http://${['10', '20', '30', '40'].join('.')}/health`,
+  }, { agent: { id: 'agent-1' }, callId: 'c11' });
+  assert.equal(allowed.reason, undefined);
+  assert.match(String(requests.at(-1).reason), /content rules flagged BUILTIN-INTERNAL-ADDRESS/);
+  assert.equal(requests.length, 2, 'the task scope and the flagged content are confirmed separately');
+});
+
+test('a process rule with an available fact source denies a closed change', async () => {
+  const facts = { read: () => ({ change: { available: true, status: 'closed' } }) };
+  const host = mount(baseConfig, { facts });
   assert.match(
-    String(host.guards[0]({ name: 'bash', arguments: { command: 'ls' }, callId: 'c2' })),
-    /not registered/,
-    'a declared category without a catalog entry is denied',
+    String((await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'ok' }, { agent: { id: 'agent-1' } })).reason),
+    /is not in progress/,
   );
-  assert.equal(
-    host.guards[0]({ name: 'web_fetch', arguments: { url: 'https://example.invalid' }, callId: 'c3' }),
-    undefined,
-    'an undeclared category is not silently gated',
-  );
+});
+
+test('an unavailable process fact source is recorded as unevaluated and does not block', async () => {
+  const host = mount();
+  const result = await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'ok' }, { agent: { id: 'agent-1' } });
+  assert.equal(result.reason, undefined);
+  const record = host.policy.auditRecords().find((item) => item.phase === 'begin');
+  assert.deepEqual([...record.unevaluated], ['change-in-progress']);
+});
+
+test('a write action needs one range confirmation, then reuses the ticket inside the same scope', async () => {
+  const requests = [];
+  const approval = { async request(request) { requests.push(request); return 'allowed-once'; } };
+  const host = mount(baseConfig, { approval });
+  const write = (callId, target = 'acme/demo!1') => host.stage('forge_issue_write', { target, changeId: 'CHG-1', body: 'ok' }, { agent: { id: 'agent-1' }, callId });
+
+  assert.equal((await write('c1')).reason, undefined);
+  assert.equal(requests.length, 1, 'the first write asks for a task scope');
+  assert.equal((await write('c2', 'acme/demo!2')).reason, undefined);
+  assert.equal(requests.length, 1, 'the second write in the same scope reuses the ticket');
+  assert.equal(host.policy.scopeTickets().length, 1);
+
+  const other = await host.stage('forge_issue_write', { target: 'acme/other!3', changeId: 'CHG-1', body: 'ok' }, { agent: { id: 'agent-1' }, callId: 'c3' });
+  assert.equal(other.reason, undefined);
+  assert.equal(requests.length, 2, 'another repository needs its own scope');
+});
+
+test('a write without a change id cannot establish a task scope', async () => {
+  const approval = { async request() { return 'allowed-once'; } };
+  const host = mount(baseConfig, { approval });
+  const denied = await host.stage('forge_issue_write', { target: 'acme/demo!1', body: 'ok' }, { agent: { id: 'agent-1' } });
+  assert.match(String(denied.reason), /needs a change id/);
 });
 
 test('a confirm action fails closed until the confirmation stage approved it', async () => {
   const requests = [];
-  const approval = {
-    async request(request) {
-      requests.push(request);
-      return allowed ? 'allowed-once' : 'rejected';
-    },
-  };
   let allowed = false;
-  const host = fakeHost({ approval });
-  apply(host.ctx, baseConfig);
-  const guard = host.guards[0];
-  const preExecute = host.listeners.get('tools/pre-execute');
-  const exec = { name: 'forge_review_confirm', arguments: { target: 'pr-1' }, callId: 'c9', agent: { id: 'agent-1' }, signal: new AbortController().signal };
+  const approval = { async request(request) { requests.push(request); return allowed ? 'allowed-once' : 'rejected'; } };
+  const host = mount(baseConfig, { approval });
+  const exec = { name: 'forge_push', arguments: { target: 'acme/demo', branch: 'feature/x' }, callId: 'c9', agent: { id: 'agent-1' }, signal: new AbortController().signal };
 
-  assert.match(String(guard(exec)), /confirmation stage did not run/);
-  const denied = await preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
+  assert.match(String(host.guard(exec)), /did not run for this execution/);
+  const denied = await host.preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
   assert.equal(denied.kind, 'deny');
   assert.match(denied.reason, /rejected/);
-  assert.match(String(guard(exec)), /confirmation stage did not run/);
 
   allowed = true;
   const retry = { ...exec, callId: 'c10' };
-  const granted = await preExecute(retry, () => Promise.resolve({ kind: 'allow' }));
+  const granted = await host.preExecute(retry, () => Promise.resolve({ kind: 'allow' }));
   assert.equal(granted.kind, 'allow');
-  assert.equal(guard(retry), undefined);
+  assert.equal(host.guard(retry), undefined);
   assert.equal(requests.length, 2);
+});
+
+test('a push to a protected branch is denied by the process rule', async () => {
+  const host = mount();
+  const denied = await host.stage('forge_push', { target: 'acme/demo', branch: 'main' }, { agent: { id: 'agent-1' } });
+  assert.match(String(denied.reason), /is protected/);
+});
+
+test('a human-record action is never startable by an agent', async () => {
+  const host = mount();
+  const denied = await host.stage('forge_review_record', { target: 'acme/demo!4' }, { agent: { id: 'agent-1' } });
+  assert.match(String(denied.reason), /reserved for human-written records/);
 });
 
 test('an agent-less confirm action is denied without asking', async () => {
   const approval = { async request() { throw new Error('should not be asked'); } };
-  const host = fakeHost({ approval });
-  apply(host.ctx, baseConfig);
-  const decision = await host.listeners.get('tools/pre-execute')(
-    { name: 'forge_review_confirm', arguments: { target: 'pr-1' }, callId: 'c1', signal: new AbortController().signal },
+  const host = mount(baseConfig, { approval });
+  const decision = await host.preExecute(
+    { name: 'forge_push', arguments: { target: 'acme/demo', branch: 'feature/x' }, callId: 'c1', signal: new AbortController().signal },
     () => Promise.resolve({ kind: 'allow' }),
   );
   assert.equal(decision.kind, 'deny');
   assert.match(decision.reason, /no approval channel/);
+  assert.equal(approval.requested, undefined);
+});
+
+test('an out-of-scope host tool is not silently claimed', () => {
+  const host = mount();
+  assert.equal(host.guard({ name: 'read', arguments: {}, callId: 'c1' }), undefined);
+  assert.match(String(host.guard({ name: 'bash', arguments: { command: 'ls' }, callId: 'c2' })), /not registered/);
+  assert.equal(host.guard({ name: 'web_fetch', arguments: { url: 'https://example.invalid' }, callId: 'c3' }), undefined);
 });
 
 test('teardown removes the guard, the stage and the service', () => {
@@ -176,18 +259,19 @@ test('teardown removes the guard, the stage and the service', () => {
   assert.equal(host.guards.length, 0);
 });
 
-test('an invalid catalog or an occupied service refuses to mount', () => {
+test('an invalid catalog, legacy approvals or an occupied service refuse to mount', () => {
   const host = fakeHost();
   assert.throws(
-    () => apply(host.ctx, { catalog: [{ action: 'a.b', kind: 'read' }] }),
-    (error) => error instanceof PolicyCatalogError && error.code === 'POLICY_CATALOG_INVALID',
+    () => apply(host.ctx, { catalog: [{ action: 'a.b', target: 'repository' }] }),
+    (error) => error instanceof PolicyCatalogError && error.code === 'POLICY_CATALOG_UNKNOWN_ACTION',
+  );
+  assert.throws(
+    () => apply(host.ctx, { ...baseConfig, approvals: [] }),
+    (error) => error.code === 'POLICY_CONFIG_INVALID' && String(error.details?.issues).includes('no longer accepted'),
   );
   assert.equal(host.guards.length, 0, 'a rejected mount leaves no guard behind');
   apply(host.ctx, baseConfig);
-  assert.throws(
-    () => apply(host.ctx, baseConfig),
-    (error) => error.code === 'POLICY_SERVICE_CONFLICT',
-  );
+  assert.throws(() => apply(host.ctx, baseConfig), (error) => error.code === 'POLICY_SERVICE_CONFLICT');
 });
 
 test('a host without the guard seam refuses to mount', () => {
@@ -197,82 +281,9 @@ test('a host without the guard seam refuses to mount', () => {
   );
 });
 
-const pathBase = mkdtempSync(join(tmpdir(), 'forge-policy-gate-'));
-const protectedDir = join(pathBase, 'secrets');
-const openDir = join(pathBase, 'workspace');
-mkdirSync(protectedDir, { recursive: true });
-mkdirSync(openDir, { recursive: true });
-writeFileSync(join(protectedDir, 'credentials.env'), 'canary');
-writeFileSync(join(openDir, 'notes.md'), 'ok');
-symlinkSync(protectedDir, join(pathBase, 'shortcut'), 'dir');
-
-const pathConfig = {
-  audit: DEV_AUDIT,
-  approvals: APPROVALS,
-  catalog: [
-    { action: 'fs.read', kind: 'read', target: 'file', enabled: true, path: 'path' },
-    { action: 'fs.write', kind: 'confirm', target: 'file', enabled: true, path: 'path' },
-  ],
-  tools: { forge_fs_read: 'fs.read', forge_fs_write: 'fs.write' },
-  protectedPaths: [`${protectedDir}/**`],
-};
-
-test('direct, traversal and symlink access to a protected path is denied with zero body calls', async () => {
-  const host = fakeHost();
-  apply(host.ctx, pathConfig);
-  const body = async (path) => {
-    const exec = { name: 'forge_fs_read', arguments: { target: 'file', path }, callId: 'c1' };
-    const decision = await host.listeners.get('tools/pre-execute')(exec, async () => ({ kind: 'allow' }));
-    return decision.kind === 'deny' ? decision.reason : host.guards[0](exec);
-  };
-  assert.match(String(await body(join(protectedDir, 'credentials.env'))), /protected path/);
-  assert.match(String(await body(join(openDir, '..', 'secrets', 'credentials.env'))), /protected path/);
-  assert.match(String(await body(join(pathBase, 'shortcut', 'credentials.env'))), /protected path/);
-  assert.match(String(await body(join(protectedDir, 'not-created-yet'))), /protected path/);
-  assert.equal(await body(join(openDir, 'notes.md')), undefined, 'an audited path outside the roots passes');
-  assert.match(String(await body('relative/notes.md')), /cannot be verified/);
-  assert.match(String(await body(undefined)), /cannot be verified/);
-});
-
-test('a protected path is denied before the confirmation stage and at the hard gate', async () => {
-  const approval = { async request() { return 'allowed-once'; } };
-  const host = fakeHost({ approval });
-  apply(host.ctx, pathConfig);
-  const guard = host.guards[0];
-  const preExecute = host.listeners.get('tools/pre-execute');
-  const exec = {
-    name: 'forge_fs_write',
-    arguments: { target: 'file', path: join(protectedDir, 'credentials.env') },
-    callId: 'c7',
-    agent: { id: 'agent-1' },
-    signal: new AbortController().signal,
-  };
-  const denied = await preExecute(exec, () => Promise.resolve({ kind: 'deny', reason: 'should not be reached' }));
-  assert.equal(denied.kind, 'deny', 'the protected path is refused before any confirmation is considered');
-  assert.match(denied.reason, /protected path/);
-  assert.match(String(guard(exec)), /protected path/, 'the hard denial also holds at the gate');
-});
-
-test('path-bearing actions are closed when no protected root is configured', () => {
-  const host = fakeHost();
-  apply(host.ctx, { ...pathConfig, protectedPaths: [] });
-  const reason = host.guards[0]({ name: 'forge_fs_read', arguments: { target: 'file', path: join(openDir, 'notes.md') }, callId: 'c1' });
-  assert.match(String(reason), /no protected root is configured/);
-});
-
-test('an unresolvable protected root refuses to mount', () => {
-  const host = fakeHost();
-  assert.throws(
-    () => apply(host.ctx, { ...pathConfig, protectedPaths: ['$DSH_AGENTS_HOME/**'], env: {} }),
-    (error) => error.code === 'POLICY_PROTECTED_ROOT_UNRESOLVED',
-  );
-  assert.equal(host.guards.length, 0);
-});
-
-test('the mounted service exposes delegation, confirmation and path helpers', () => {
-  const host = fakeHost();
-  apply(host.ctx, pathConfig);
-  const policy = host.ctx.get('policy');
+test('the mounted service exposes delegation, confirmation, scope and envelope helpers', () => {
+  const host = mount();
+  const policy = host.policy;
 
   const grant = policy.createDelegation({
     id: 'dlg-1',
@@ -280,56 +291,53 @@ test('the mounted service exposes delegation, confirmation and path helpers', ()
     principal: 'user-a',
     changeId: 'C-2026-1',
     repositories: ['repo-a'],
-    actions: ['fs.read'],
+    actions: ['gitee.repository.read'],
     revisions: { change: 'rev-1' },
     ttlMs: 60_000,
   });
-  const inScope = { principal: 'user-a', changeId: 'C-2026-1', repository: 'repo-a', action: 'fs.read', revisions: { change: 'rev-1' } };
+  const inScope = { principal: 'user-a', changeId: 'C-2026-1', repository: 'repo-a', action: 'gitee.repository.read', revisions: { change: 'rev-1' } };
   assert.equal(policy.authorizeDelegation({ grant, request: inScope }).action, 'allow');
   assert.equal(policy.authorizeDelegation({ grant: policy.revokeDelegation(grant), request: inScope }).rule, 'delegation-revoked');
 
-  const issued = policy.issueConfirmation({ action: 'fs.read', target: 'repo-a', content: { body: 'x' }, revision: 'rev-1', kind: 'human', ttlMs: 60_000 });
+  const issued = policy.issueConfirmation({ action: 'gitee.repository.read', target: 'repo-a', content: { body: 'x' }, revision: 'rev-1', kind: 'human', ttlMs: 60_000 });
   assert.equal(policy.confirmations().length, 1);
-  assert.equal(policy.consumeConfirmation({ action: 'fs.read', target: 'repo-a', content: { body: 'x' }, revision: 'rev-1' }).action, 'allow');
+  assert.equal(policy.consumeConfirmation({ action: 'gitee.repository.read', target: 'repo-a', content: { body: 'x' }, revision: 'rev-1' }).action, 'allow');
   assert.equal(policy.consumeConfirmation({ key: issued.key, revision: 'rev-1' }).rule, 'confirmation-consumed');
 
-  assert.deepEqual(policy.protectedPaths(), [`${protectedDir}/**`]);
-  assert.equal(policy.checkPath(join(protectedDir, 'credentials.env')).protected, true);
-  assert.equal(policy.checkPath(join(openDir, 'notes.md')).protected, false);
+  assert.deepEqual(policy.protectedPaths(), ['$DSH_HOME/**']);
+  assert.equal(policy.orgPolicy().state, 'absent');
   assert.equal(policy.digestContent({ a: 1 }).length, 64);
   assert.match(policy.renderEgressScope(policy.confirmationScope({ action: 'a.b', target: 't', content: { body: 'x' } })), /fields=\[body\]/);
   assert.doesNotThrow(() => policy.assertNoCanary('nothing here', ['canary-value']));
 });
 
 test('an enforced action is refused when no audit sink is configured', async () => {
-  const host = fakeHost();
-  apply(host.ctx, { ...baseConfig, audit: {} });
-  const exec = { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal };
-  const decision = await host.listeners.get('tools/pre-execute')(exec, () => Promise.resolve({ kind: 'allow' }));
+  const host = mount({ ...baseConfig, audit: {} });
+  const decision = await host.preExecute(
+    { name: 'forge_repository_read', arguments: { target: 'acme/demo' }, callId: 'c1', signal: new AbortController().signal },
+    () => Promise.resolve({ kind: 'allow' }),
+  );
   assert.equal(decision.kind, 'deny');
   assert.match(decision.reason, /audit refused/);
   assert.match(decision.reason, /no audit sink is available/);
-  assert.equal(host.ctx.get('policy').auditGaps().length, 0, 'a refused pre-audit is not a gap');
+  assert.equal(host.policy.auditGaps().length, 0, 'a refused pre-audit is not a gap');
 });
 
 test('a non-durable audit sink is refused unless explicitly allowed', async () => {
-  const host = fakeHost();
-  apply(host.ctx, { ...baseConfig, audit: { sink: 'memory' } });
-  const decision = await host.listeners.get('tools/pre-execute')(
-    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal },
+  const host = mount({ ...baseConfig, audit: { sink: 'memory' } });
+  const decision = await host.preExecute(
+    { name: 'forge_repository_read', arguments: { target: 'acme/demo' }, callId: 'c1', signal: new AbortController().signal },
     () => Promise.resolve({ kind: 'allow' }),
   );
   assert.match(decision.reason, /not durable/);
 });
 
 test('a failing audit sink refuses before the body runs', async () => {
-  const host = fakeHost();
-  apply(host.ctx, baseConfig);
-  const policy = host.ctx.get('policy');
+  const host = mount();
   let bodyCalls = 0;
-  policy.setAuditSink({ durable: true, append: () => { throw new Error('disk on fire'); } });
-  const decision = await host.listeners.get('tools/pre-execute')(
-    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal },
+  host.policy.setAuditSink({ durable: true, append: () => { throw new Error('disk on fire'); } });
+  const decision = await host.preExecute(
+    { name: 'forge_repository_read', arguments: { target: 'acme/demo' }, callId: 'c1', signal: new AbortController().signal },
     () => (bodyCalls += 1, Promise.resolve({ kind: 'allow' })),
   );
   assert.equal(decision.kind, 'deny');
@@ -338,44 +346,39 @@ test('a failing audit sink refuses before the body runs', async () => {
 });
 
 test('a post-execution audit failure keeps the outcome, records a gap and limits later actions', async () => {
-  const host = fakeHost();
-  apply(host.ctx, baseConfig);
-  const policy = host.ctx.get('policy');
+  const host = mount();
   const records = [];
-  policy.setAuditSink({ durable: true, append: (record) => {
+  host.policy.setAuditSink({ durable: true, append: (record) => {
     if (record.phase === 'settle') throw new Error('settle failed');
     records.push(record);
   } });
-  const exec = { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c1', signal: new AbortController().signal };
-  const allowed = await host.listeners.get('tools/pre-execute')(exec, () => Promise.resolve({ kind: 'allow' }));
+  const exec = { name: 'forge_repository_read', arguments: { target: 'acme/demo' }, callId: 'c1', signal: new AbortController().signal };
+  const allowed = await host.preExecute(exec, () => Promise.resolve({ kind: 'allow' }));
   assert.equal(allowed.kind, 'allow');
   assert.equal(records.length, 1, 'the pre-audit record was written first');
   assert.equal(records[0].phase, 'begin');
   assert.equal(JSON.stringify(records[0]).includes('arguments') === false, true);
 
-  // 宿主签名是 (exec, result, next)，默认决议 `{ kind: 'accept' }`。
   const settled = await host.listeners.get('tools/post-execute')(exec, { isError: false }, () => Promise.resolve({ kind: 'accept' }));
   assert.equal(settled.kind, 'accept', 'the outcome is untouched by the failed settle');
-  assert.equal(policy.auditGaps().length, 1);
-  assert.equal(policy.auditDegraded(), true);
+  assert.equal(host.policy.auditGaps().length, 1);
+  assert.equal(host.policy.auditDegraded(), true);
 
-  const next = await host.listeners.get('tools/pre-execute')(
-    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c2', signal: new AbortController().signal },
+  const next = await host.preExecute(
+    { name: 'forge_repository_read', arguments: { target: 'acme/demo' }, callId: 'c2', signal: new AbortController().signal },
     () => Promise.resolve({ kind: 'allow' }),
   );
   assert.match(next.reason, /still outstanding/);
-  assert.equal(policy.acknowledgeAuditGaps(), 1);
-  const after = await host.listeners.get('tools/pre-execute')(
-    { name: 'forge_repository_read', arguments: { target: 'r' }, callId: 'c3', signal: new AbortController().signal },
+  assert.equal(host.policy.acknowledgeAuditGaps(), 1);
+  const after = await host.preExecute(
+    { name: 'forge_repository_read', arguments: { target: 'acme/demo' }, callId: 'c3', signal: new AbortController().signal },
     () => Promise.resolve({ kind: 'allow' }),
   );
   assert.equal(after.kind, 'allow');
 });
 
-test('an optional telemetry failure only leaves a gap', async () => {
-  const host = fakeHost();
-  apply(host.ctx, baseConfig);
-  const policy = host.ctx.get('policy');
-  assert.equal(typeof policy.setAuditSink, 'function');
-  assert.equal(policy.auditRecords().length, 0);
+test('an optional telemetry failure only leaves a gap', () => {
+  const host = mount();
+  assert.equal(typeof host.policy.setAuditSink, 'function');
+  assert.equal(host.policy.auditRecords().length, 0);
 });

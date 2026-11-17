@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { apply } from '../src/index.mjs';
 
-const read = { action: 'synthetic.read', kind: 'read', target: 'repository', enabled: true };
+const read = { action: 'gitee.repository.read', target: 'repository', enabled: true };
 
 function host(config = {}) {
   const services = new Map(), listeners = new Map(), commands = new Map(), guards = [];

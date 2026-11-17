@@ -205,8 +205,8 @@ test('AC-7: 目录未登记 3 条只读动作时拒绝挂载，并列出全部�
   const partial = createFakeHost();
   partial.mountPolicy({
     catalog: [
-      { action: 'gitee.repository.read', kind: 'read', target: 'repository', enabled: true },
-      { action: 'gitee.issue.read', kind: 'read', target: 'issue', enabled: true },
+      { action: 'gitee.repository.read', target: 'repository', enabled: true },
+      { action: 'gitee.issue.read', target: 'issue', enabled: true },
     ],
   });
   assert.throws(
@@ -279,17 +279,18 @@ test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用
   assert.equal(catalog.length, 6, '目录恰好 6 条并集：change.read / change.list + 3 条 gitee 只读 + 1 条只读判定');
   assert.deepEqual(
     catalog[0],
-    { action: 'change.read', kind: 'read', target: 'change', enabled: true },
+    { action: 'change.read', target: 'change', enabled: true },
     '第 1 条是 devops 的 dop 变更读：并集目录必须与 @heluo/forge-devops 补丁层逐字相同',
   );
   assert.deepEqual(
     catalog[1],
-    { action: 'change.list', kind: 'read', target: 'changes', enabled: true },
+    { action: 'change.list', target: 'changes', enabled: true },
     '第 2 条是 devops 的 dop 变更清单读：并集目录必须与 @heluo/forge-devops 补丁层逐字相同',
   );
   for (const entry of catalog) {
-    assert.equal(entry.kind, 'read');
-    assert.equal(entry.enabled, true);
+    assert.equal(entry.enabled, true, `${entry.action} 必须显式 enabled: true`);
+    assert.equal(entry.kind, undefined, '登记行不再声明 kind：类别由内置词表决定');
+    assert.equal(entry.egress, undefined, '登记行不再声明 egress：出网语义由类别与规则决定');
   }
   assert.deepEqual(catalog.slice(2, 5).map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
   for (const entry of catalog.slice(2)) {
@@ -298,10 +299,14 @@ test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用
   // 最后一条：判定的取值本身就是策略事实，逐项写死而不是"包含 judge 即可"。
   assert.deepEqual(
     catalog[5],
-    { action: 'gitee.delivery.judge', kind: 'read', target: 'change', enabled: true, egress: 'allow' },
-    "判定目录必须逐字：kind=read、target=change、egress=allow（缺省 egress 会取 'confirm'，判定就拿不到 allow）",
+    { action: 'gitee.delivery.judge', target: 'change', enabled: true },
+    '判定目录必须逐字：target=change、enabled=true；类别由内置词表决定为只读 allow',
   );
-  assert.equal(catalog.filter((entry) => entry.kind === 'write').length, 0, '默认禁用写动作 = 不登记');
+  assert.deepEqual(
+    catalog.map((entry) => entry.action),
+    ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge'],
+    '默认目录只登记只读动作：写类动作由内置分类决定，不需要登记',
+  );
 
   assert.equal(policyRow.audit.sink, 'memory');
   assert.equal(policyRow.audit.allowNonDurable, true, '联调舱必须显式声明允许非持久');
@@ -313,11 +318,9 @@ test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用
   for (const action of ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
     assert.equal(mountedPolicy.policy.catalog.get(action)?.enabled, true);
   }
-  assert.equal(
-    mountedPolicy.policy.catalog.get('gitee.delivery.judge')?.egress,
-    'allow',
-    '编译后的判定条目必须保留 egress=allow（否则运行期会退化成 egress-confirm）',
-  );
+  const compiledJudge = mountedPolicy.policy.catalog.get('gitee.delivery.judge');
+  assert.equal(compiledJudge?.category, 'read', '编译后的判定条目类别必须是只读');
+  assert.equal(compiledJudge?.decision, 'allow', '编译后的判定条目默认决策必须是 allow（否则执行期会被确认拦下）');
 
   // 补丁层自己不得重复插入策略行（叠加安装才会出现两个 heluo-policy）。
   const ids = rows.map((row) => row.id);

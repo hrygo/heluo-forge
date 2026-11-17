@@ -5,10 +5,10 @@ import { authorizeDelegation, createDelegation, PolicyDelegationError, resumeDel
 import { compileCatalog } from '../src/catalog.mjs';
 
 const catalog = compileCatalog([
-  { action: 'change.read', kind: 'read', target: 'change', enabled: true },
-  { action: 'repository.read', kind: 'read', target: 'repository', enabled: true },
-  { action: 'issue.create_or_update', kind: 'write', target: 'issue', enabled: true },
-  { action: 'issue.close', kind: 'write', target: 'issue' },
+  { action: 'change.read', target: 'change', enabled: true },
+  { action: 'gitee.repository.read', target: 'repository', enabled: true },
+  { action: 'gitee.issue.write', target: 'issue', enabled: true },
+  { action: 'gitee.pr.read', target: 'pull-request', enabled: false },
 ]);
 
 const facts = {
@@ -17,7 +17,7 @@ const facts = {
   principal: 'user-a',
   changeId: 'C-2026-1',
   repositories: ['repo-a'],
-  actions: ['change.read', 'issue.create_or_update'],
+  actions: ['change.read', 'gitee.issue.write'],
   revisions: { change: 'rev-1' },
   ttlMs: 3_600_000,
   now: 1_000,
@@ -29,8 +29,8 @@ test('a host delegation allows in-scope actions and denies everything else', () 
   const grant = createDelegation(facts);
   assert.equal(authorizeDelegation({ grant, request, catalog, now: 2_000 }).action, 'allow');
   const cases = [
-    [{ ...request, action: 'repository.read' }, 'delegation-action-out-of-scope'],
-    [{ ...request, action: 'issue.close' }, 'delegation-action-disabled'],
+    [{ ...request, action: 'gitee.repository.read' }, 'delegation-action-out-of-scope'],
+    [{ ...request, action: 'gitee.pr.read' }, 'delegation-action-disabled'],
     [{ ...request, action: 'story.read' }, 'delegation-action-unregistered'],
     [{ ...request, principal: 'user-b' }, 'delegation-principal-mismatch'],
     [{ ...request, changeId: 'C-2026-2' }, 'delegation-change-mismatch'],
@@ -97,10 +97,10 @@ test('resume re-verifies identity and can only keep or narrow the scope', () => 
   assert.equal(narrowed.scopeReduced, true);
   assert.deepEqual([...narrowed.grant.actions], ['change.read']);
 
-  const widened = resumeDelegation({ grant, resume: { ...hostResume, actions: ['change.read', 'issue.close'] }, now: 2_000 });
+  const widened = resumeDelegation({ grant, resume: { ...hostResume, actions: ['change.read', 'gitee.pr.read'] }, now: 2_000 });
   assert.equal(widened.action, 'deny');
   assert.equal(widened.rule, 'delegation-resume-scope-widened');
-  assert.deepEqual(widened.details.widened, ['issue.close']);
+  assert.deepEqual(widened.details.widened, ['gitee.pr.read']);
 });
 
 test('a resumed grant is enforced downstream with exactly its narrowed scope', () => {
@@ -108,7 +108,7 @@ test('a resumed grant is enforced downstream with exactly its narrowed scope', (
   const narrowed = resumeDelegation({ grant, resume: { ...hostResume, actions: ['change.read'] }, now: 2_000 });
   const allowed = authorizeDelegation({ grant: narrowed.grant, request, catalog, now: 2_500 });
   assert.equal(allowed.action, 'allow');
-  const dropped = authorizeDelegation({ grant: narrowed.grant, request: { ...request, action: 'issue.create_or_update' }, catalog, now: 2_500 });
+  const dropped = authorizeDelegation({ grant: narrowed.grant, request: { ...request, action: 'gitee.issue.write' }, catalog, now: 2_500 });
   assert.equal(dropped.action, 'deny');
   assert.equal(dropped.rule, 'delegation-action-out-of-scope');
 });
