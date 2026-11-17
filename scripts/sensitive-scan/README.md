@@ -119,21 +119,24 @@ action turns the required check red although the diff is unchanged.
 
 ```sh
 git fetch origin
-git rebase origin/main
+git rebase --force-rebase origin/main
 git log --merges --oneline origin/main..HEAD   # must print nothing
 node scripts/sensitive-scan/verify.mjs --base origin/main --head HEAD
 git push --force-with-lease
 ```
 
-The rebase drops merge commits and lets `post-rewrite` re-sign every replayed
-commit against its real parent. Content resolved while rebasing is scanned before
-it is signed, so a finding leaves the commit unsigned; re-signing does not resolve
-a content conflict. A single commit rejected for a missing or stale trailer, as
-after a cherry-pick, a `reset` or a commit made with `--no-verify`, is re-attested
-by `git commit --amend --no-edit`, which also fires `post-rewrite`. Before
-pushing, confirm the worktree is clean and that no other session rewrites this
-branch: `--force-with-lease` refuses a remote tip that moved after the fetch, but
-it cannot detect a concurrent rewrite that already landed. Re-run the repository
+`--force-rebase` replays every commit even when the branch already sits on
+`origin/main`. A plain `git rebase origin/main` is a no-op in that case, does not
+fire `post-rewrite`, and leaves a missing or stale trailer unrepaired. The replay
+drops merge commits and lets `post-rewrite` scan and re-sign each commit against
+its real parent, so one rejected commit and a whole stale chain recover the same
+way. A single rejected commit can also be repaired with
+`git commit --amend --no-edit`, which fires the same hook. Content resolved while
+rebasing is scanned before it is signed, so a finding leaves the commit unsigned;
+re-signing does not resolve a content conflict. Before pushing, confirm the
+worktree is clean and that no other session rewrites this branch:
+`--force-with-lease` refuses a remote tip that moved after the fetch, but it
+cannot detect a concurrent rewrite that already landed. Re-run the repository
 checks after the rebase, because the attestation covers the scan, not the build.
 
 The older `sensitive:scan` and `sensitive:install` CLI entries use the legacy v1

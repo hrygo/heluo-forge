@@ -45,7 +45,7 @@
 | 提交 | 一次提交只做一件事；类型使用 `feat:`、`fix:`、`docs:`、`refactor:`、`test:`、`chore:` |
 | 说明 | 写“改了什么、为什么”，不写“按用户要求”；不把格式化与行为变更混在一起 |
 | 迁移 | 文件移动使用 `git mv`，同一提交内更新全部引用 |
-| 分支更新 | 本地 `git fetch` 与 `git rebase`；网页的 Update branch 与 Update with rebase 由服务端重写提交，本地钩子无法重签，会直接让验签检查失败 |
+| 分支更新 | 本地 `git fetch` 与 `git rebase --force-rebase`；网页的 Update branch 与 Update with rebase 由服务端重写提交，本地钩子无法重签，会直接让验签检查失败 |
 
 推送与发布是独立动作：提交不自动触发推送，推送不自动触发发布。
 
