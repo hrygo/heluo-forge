@@ -68,7 +68,9 @@ test('执行选项固定：shell:false、超时、输出上限、utf8、无窗�
   assert.equal(options.encoding, 'utf8');
   assert.equal(options.windowsHide, true);
   assert.equal(options.env.GH_HOST, 'corp.example', 'env 覆盖项进入子进程环境');
-  assert.equal(typeof options.env.PATH, 'string', '覆盖项叠加在进程环境之上，不整体替换');
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH');
+  assert.equal(typeof options.env[pathKey], 'string', '覆盖项叠加在进程环境之上，不整体替换');
+  assert.equal(options.env[pathKey], process.env[pathKey], '保留当前平台的 PATH 键名和内容');
 });
 
 test('非零退出：exitCode 取数值并保留 stderr（失败是数据不是异常）', async () => {

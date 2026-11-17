@@ -166,7 +166,7 @@ test('反向：内置运行时两行的任何一处改动都被识别，并说�
   assert.equal(alwaysBundled.get('skill-office').at(-1), "pythonEnvironment: 'workspace-dependencies'", 'the Office skills would send the model to a tool that is not there');
 });
 
-test('the base bundle mounts only universal account, keychain, policy and brand rows with zero R&D surface', async () => {
+test('the base bundle mounts universal account, keychain, policy, brand, and skills rows with zero R&D surface', async () => {
   const text = await read(BASE_PATCH);
   assert.deepEqual(
     insertedRows(text),
@@ -175,8 +175,9 @@ test('the base bundle mounts only universal account, keychain, policy and brand 
       ['heluo-policy', '@heluo/forge-policy'],
       ['heluo-iam', '@heluo/forge-iam'],
       ['heluo-brand', '@heluo/forge-brand'],
+      ['skills-manager', '@heluo/forge-skills-manager'],
     ],
-    '通用底座只装凭据、策略、IAM 与品牌令牌，不含任何研发行',
+    '通用底座只装凭据、策略、IAM、品牌令牌与技能管理，不含任何研发行',
   );
   assert.doesNotMatch(text, /forge-devops|heluo-gitee|issue-delivery-skill|heluo-engineering-ui/u);
   assert.doesNotMatch(text, /^\s*name: '@heluo\/forge-(devops|gitee|engineering)'$/mu);
@@ -192,7 +193,7 @@ test('the base manifest declares only universal dependencies and no R&D exports 
   assert.equal(manifest.dsh.client, undefined);
   assert.deepEqual(
     Object.keys(manifest.dependencies ?? {}).sort(),
-    ['@heluo/forge-brand', '@heluo/forge-credentials-keychain', '@heluo/forge-iam', '@heluo/forge-policy'],
+    ['@heluo/forge-brand', '@heluo/forge-credentials-keychain', '@heluo/forge-iam', '@heluo/forge-policy', '@heluo/forge-skills-manager'],
   );
   assert.equal(manifest.exports['./client'], undefined);
   assert.equal(manifest.exports['./skills'], undefined);
@@ -206,7 +207,7 @@ test('the base manifest declares only universal dependencies and no R&D exports 
 test('every inserted package exists, is private, and has a manifest', async () => {
   const text = await read(BASE_PATCH);
   const names = [...text.matchAll(/^ {6}name: '([^']+)'$/gmu)].map((m) => m[1]);
-  assert.equal(names.length, 4);
+  assert.equal(names.length, 5);
   for (const name of names) {
     const segments = name.split('/');
     const packageName = segments.slice(0, 2).join('/');

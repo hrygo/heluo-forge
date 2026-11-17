@@ -106,7 +106,7 @@ async function activateInstalled(label, host) {
     const skillProviders = new Map();
     ctx.provide('skills', {
       registerProvider: (create) => {
-        const provider = create();
+        const provider = create({ invalidate() {}, signal: AbortSignal.timeout(300000) });
         skillProviders.set(provider.name, provider);
         return () => skillProviders.delete(provider.name);
       },
@@ -116,6 +116,13 @@ async function activateInstalled(label, host) {
         return () => skillProviders.delete(`direct-${at}-${entry?.name ?? 'unknown'}`);
       },
     });
+    const managerRoutes = new Map();
+    ctx.provide('sessions', { list: () => [] });
+    ctx.provide('connection', { fetch: { register(route) {
+      if (managerRoutes.has(route.path)) throw new Error('duplicate manager route');
+      managerRoutes.set(route.path, route);
+      return () => managerRoutes.delete(route.path);
+    } } });
     const enterpriseIdSet = new Set(enterprisePatch.inserted.map((row) => row.id));
     const engineeringIdSet = new Set(engineeringPatch.inserted.map((row) => row.id));
     const enterpriseCatalogText = readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8');
@@ -151,7 +158,7 @@ async function activateInstalled(label, host) {
     const engineeringIdsAll = engineeringPatch.inserted.map((row) => row.id);
     const sharedIds = baseIds.filter((id) => engineeringIdsAll.includes(id));
     const engineeringOnlyIds = ['heluo-engineering-ui', 'heluo-issue-delivery-skill', 'forge-devops', 'heluo-gitee'];
-    const baseOnlyIds = ['heluo-credentials-keychain', 'heluo-iam', 'heluo-brand'];
+    const baseOnlyIds = ['heluo-credentials-keychain', 'heluo-iam', 'heluo-brand', 'skills-manager'];
     record(
       `${label}-layers-are-disjoint`,
       baseIds.length === 4
@@ -178,6 +185,7 @@ async function activateInstalled(label, host) {
     }
     const mounted = ['credentials', 'policy', 'iam', 'devops', 'gitee'].every((key) => ctx.get(key) !== undefined);
     record(`${label}-real-loader-instantiates-members`, mounted && phases.every((entry) => entry.phase === 2 /* FiberState.ACTIVE (const enum in the installed SDK) */), { resolved, phases, fixture: 'memory credentials; no real identity, keychain or network' });
+    record(`${label}-skills-manager-mounted`, managerRoutes.has('/api/forge-skills-manager/nacos/list') && skillProviders.has('dsh-skills-manager-external'));
     // AC-1：装上之后 Skill 入口必须**可枚举**（摘要 + 按需正文），而不是"装上了却静默无入口"。
     const skillProvider = skillProviders.get('enterprise-clauses');
     const listed = skillProvider === undefined ? [] : await skillProvider.list();
@@ -207,7 +215,7 @@ async function activateInstalled(label, host) {
             && typeof entry.invocation?.modelInvocable === 'boolean'
             && typeof entry.invocation?.userInvocable === 'boolean')
           && candidate.source === 'bundled'
-          && candidate.rank === 600
+          && candidate.rank === -100
           && candidate.provider === 'enterprise-clauses'
           && candidate.locator?.clause === 'issue-delivery'
           && typeof candidate.path === 'string'
@@ -247,6 +255,7 @@ async function activateInstalled(label, host) {
     unloaded = ['credentials', 'policy', 'iam', 'devops', 'gitee'].every((key) => ctx.get(key) === undefined);
     record(`${label}-loader-unload-clears-registrations`, unloaded);
     record(`${label}-loader-unload-clears-skill-providers`, skillProviders.size === 0, { providers: [...skillProviders.keys()] });
+    record(`${label}-loader-unload-clears-manager-routes`, managerRoutes.size === 0);
   } finally {
     await ctx.fiber.dispose();
   }

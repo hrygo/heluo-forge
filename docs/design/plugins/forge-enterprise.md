@@ -15,7 +15,7 @@
 | 批准 | 待定 |
 | 最后更新 | 2026-11-26 |
 | 门禁 | G2 |
-| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）与 `forge-iam`；研发工具拆至独立包 `@heluo/forge-engineering`；内置运行时的两行按 `DSH_PRIMARY_RUNTIME` 条件启用） |
+| 模块状态 | 可用（通用企业底座组合包：禁用官方账号/模型/明文凭据七行，插入 `forge-credentials-keychain`、`forge-policy`（共享 6 动作目录）、`forge-iam` 与 `forge-skills-manager`；研发工具拆至独立包 `@heluo/forge-engineering`；内置运行时的两行按 `DSH_PRIMARY_RUNTIME` 条件启用） |
 
 > 编制依据：2026-10-20 依据 DSH 组合层公开语义核验——补丁层叠加在包入口列表之上；`insert` 追加行，带 `id` 的补丁覆盖既有行且 `config` 整体替换、不深合并；`group: true` 配 `name: cordis:group` 使 `config` 成为可再插入的嵌套列表；`cordis:include` 载入外部 YAML 或 JSON 入口列表；`disabled` 接受布尔、null 或按挂载时机求值的 `!!js` 表达式；`!!js` 仅在 `config` 内按插件上下文求值；`isolate` 按服务名划分实例域。2026-10-21 用户确认采用 O3「企业 IAM 独占登录」，官方登录在企业内网不可用；本包据此默认禁用官方账号、官方模型、官方 API Key 与官方账户 UI 行。**未核验**：`engines` 版本断言在挂载期的具体报错形态、`fiberPhase` 的取值集合、禁用官方行后 shell/onboarding 是否完整。
 >
@@ -25,7 +25,7 @@
 
 `@heluo/forge-enterprise`（**企业账号与模型**）作为面向全体企业员工的通用底座组合包，只回答一个问题：企业登录、凭证安全存储与模型访问由哪些基础能力、在什么前提下一起出现。
 
-边界：它组合 `@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（共享 6 动作默认目录，不使用 `isolate`）与 `@heluo/forge-iam`，不实现其中任何一个；包体内不包含研发 UI 容器、Issue 交付 Skill、DevOps 或 Gitee 依赖——全部研发工具能力独立打包于 [企业研发工具套件 `@heluo/forge-engineering`](forge-engineering.md)（`CORP-DSH-DESIGN-019`），按需独立安装或与之共存。它决定官方禁用项与通用底座默认组合，不决定具体策略内容与契约字段。
+边界：它组合 `@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（共享 12 动作默认目录，不使用 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-skills-manager`，不实现其中任何一个；包体内不包含研发 UI 容器、Issue 交付 Skill、DevOps 或 Gitee 依赖——全部研发工具能力独立打包于 [企业研发工具套件 `@heluo/forge-engineering`](forge-engineering.md)（`CORP-DSH-DESIGN-019`），按需独立安装或与之共存。它决定官方禁用项与通用底座默认组合，不决定具体策略内容与契约字段。
 
 O3 的组成之一是**默认禁用官方账号、官方模型、官方 API Key、官方账户 UI、通用模型配置与自由模型设置六行**，以及官方明文凭据提供方一行，使企业 IAM 成为唯一登录，并让 `DEEPSEEK_API_KEY` 与自填网关都不构成旁路。官方登录在企业内网不可用，保留它只会制造一个坏掉的入口，并留下公网模型旁路。
 
@@ -141,7 +141,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.1 禁用实验（本机实测 2026-10-24）
 
-[cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml) 是 `dsh.bundle.patch` 指向的**通用企业底座补丁**——禁用七个官方账号、模型与明文凭据行，`insert:` 段仅插入凭据加密存储、策略门禁与企业 IAM 三插件，与研发插件零耦合。研发相关条目（研发设置容器、Issue 交付 Skill、DevOps、Gitee）全部独立收口到 `@heluo/forge-engineering` 组合包（见[企业研发工具套件详细设计](forge-engineering.md)）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
+[cordis.patch.yml](../../../packages/forge-enterprise/cordis.patch.yml) 是 `dsh.bundle.patch` 指向的**通用企业底座补丁**——禁用七个官方账号、模型与明文凭据行，`insert:` 段插入凭据加密存储、策略门禁、企业 IAM 与技能管理四插件，与研发插件零耦合。研发相关条目（研发设置容器、Issue 交付 Skill、DevOps、Gitee）全部独立收口到 `@heluo/forge-engineering` 组合包（见[企业研发工具套件详细设计](forge-engineering.md)）；SDD 已于 2026-11-03 退役并从包中删除；指向未实现包的入口仍不预建。
 
 | 步骤 | 命令 | 结果 |
 |---|---|---|
@@ -154,7 +154,7 @@ O3 要求企业 IAM 是唯一登录，因此本包在补丁层默认关闭以下
 
 #### 5.1.2 `insert:` 最小挂载（本机实测 2026-10-24）
 
-通用底座的 `insert:` 段仅挂三个面向全体员工的基础 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 6 动作目录、无 `isolate`）与 `@heluo/forge-iam`。
+通用底座的 `insert:` 段挂四个面向全体员工的 Host 插件：`@heluo/forge-credentials-keychain`、`@heluo/forge-policy`（固定 12 动作目录、无 `isolate`）、`@heluo/forge-iam` 与 `@heluo/forge-skills-manager`。技能管理器以固定行 `skills-manager` 独立配置和停用；默认未配置 Nacos 时仍提供本地管理，配置与凭据边界见[技能管理器设计](forge-skills-manager.md)。
 
 **双独立预装包安装语义**：`@heluo/forge-enterprise`（「企业账号与模型」）通过 `dsh plugin add <tarball>` 安装并由宿主装配通用企业登录与模型管理；实际使用仍受配置、存储和宿主能力门禁约束。本包不包含任何研发插件或设置菜单；研发能力（`heluo-engineering-ui` 容器、`enterprise-issue-delivery` Skill、`@heluo/forge-devops`、`@heluo/forge-gitee` 及共享 `heluo-policy`）由独立预装组合包 `@heluo/forge-engineering`（「企业研发工具套件」）提供，两包可通过 `dsh plugin add` 各自独立安装或并行共存于同一 Profile，`heluo-policy` 自动折叠为唯一实例，无需再通过命令行 `--patch` 手动叠加 `cordis.patch.engineering.yml`（详见[企业研发工具套件详细设计](forge-engineering.md)）。
 
@@ -169,7 +169,7 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 | 确定性 | 同上跑两次 `cmp` | 两次输出逐字节相同 |
 | 警告 | 同上 stderr | web 模板下**无** `patch: entry ... not found`；headless 模板下会出现 `entry "ui-settings-account" not found`（该行只存在于 web/desktop 组合） |
 
-**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证，本机也没有企业 IAM 端点。当前凭据包使用值级加密 SQLite 与文件 keyring，存储不可用时拒绝访问，不依赖 OS Keychain 后端。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**现行口径（分层后）**：底座 `insert:` 三行（凭据、策略、IAM），独立研发补丁插入五行（共享策略、容器、Skill、DevOps、Gitee）；dump 级断言以 `packages/forge-enterprise/test/bundle-patch.test.mjs` 与安装演练的 `install-patch-mounts-base-and-overlay` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
+**边界**：这是**配置组合（dump）级**证据——当时四行确实进了组合树，但"插件实例化成功、服务可用"没有验证，本机也没有企业 IAM 端点。当前凭据包使用值级加密 SQLite 与文件 keyring，存储不可用时拒绝访问，不依赖 OS Keychain 后端。`insert` 本身的行为（行进入组合树）已由远端任务 `20261024T131000Z-linux-offline-bundle` 在 Linux aarch64 / Node 24 上以独立探针单独验证。**现行口径（分层后）**：底座 `insert:` 四行（凭据、策略、IAM、技能管理），独立研发补丁插入五行（共享策略、容器、Skill、DevOps、Gitee）；dump 级断言以 `packages/forge-enterprise/test/bundle-patch.test.mjs` 与安装演练的 `install-patch-mounts-base-and-overlay` / `installed-patch-policy-union` 为准，上表四行仅为历史记录。
 
 #### 5.1.3 企业模型配置入口收敛（2026-11-04）
 
@@ -230,7 +230,7 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 
 | 项 | 值 / 行为 |
 |---|---|
-| 候选字段 | `name: enterprise-issue-delivery`、`description`、`whenToUse`、`invocation { modelInvocable:false, userInvocable:true }`、`source: 'bundled'`、`rank: 600`（与宿主 `BUNDLED_SKILL_RANK` 同值；本仓库不 import 宿主包）、`provider: 'enterprise-clauses'`、`locator: { clause: 'issue-delivery' }` |
+| 候选字段 | `name: enterprise-issue-delivery`、`description`、`whenToUse`、`invocation { modelInvocable:false, userInvocable:true }`、`source: 'bundled'`、`rank: -100`（正式流程优先于原生个人/项目候选；本仓库不 import 宿主包）、`provider: 'enterprise-clauses'`、`locator: { clause: 'issue-delivery' }` |
 | 资源定位 | `resourceBase: { kind: 'directory', path: <包内>/skills/issue-delivery }`（精确到正文所在目录，`references/*.md` 才解析得对）与 `path: <包内>/skills/issue-delivery/SKILL.md`；`list()` 结果**不含** `content`，正文只在 `get()` 时读一次文件 |
 | 取正文 | `get()` 同时接受 skill 名（`enterprise-issue-delivery`）、条款 id（`issue-delivery`）与宿主候选对象（`locator.clause` 优先、其次 `name`）；未命中返回 `undefined`，由宿主报「skill not found」，不伪造正文 |
 | 幂等装配 | 模块级 `WeakMap<ctx, Map<prefix, teardown>>`：同一 `ctx` + 同一 `prefix` 重复 `apply` 直接返回已有 teardown、**不再** `registerProvider`（宿主对重名 provider 抛 `a skill provider named "…" is already registered`）；不同 prefix 允许并存；teardown 先删表再 dispose，重复 dispose 不抛 |
@@ -385,7 +385,7 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
-| 装配 | 底座包 `forge-enterprise`（3 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于 12 条并集（6 读 + 6 写）、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
+| 装配 | 底座包 `forge-enterprise`（4 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于 12 条并集（6 读 + 6 写）、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
 | Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-engineering/test/issue-delivery-skill.test.mjs` |
 | 制品清单 | 最终 tarball 含 `skills/issue-delivery/**`、`locale/*.json`、`icon.svg`，闭包无 `workspace:/file:/link:` | `node scripts/check-bundle-tarballs.mjs` |
 | 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |

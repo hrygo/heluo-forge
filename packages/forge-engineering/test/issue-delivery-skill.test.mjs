@@ -14,6 +14,7 @@ import {
   INVOCATION,
   RESOURCE_BASE,
   SKILL_PREFIX,
+  TRUSTED_SKILL_RANK,
   apply,
   inject,
   name,
@@ -90,7 +91,7 @@ test('AC-1 候选契约：source/rank/resourceBase 齐备，get(候选) 与 get(
 
   // 宿主 `validateCandidate` 的硬要求：少了 source/rank 连 `list()` 都会抛。
   assert.equal(summary.source, 'bundled', '随包分发的 Skill 来源是 bundled');
-  assert.equal(summary.rank, 600, '与宿主 BUNDLED_SKILL_RANK 同值');
+  assert.equal(summary.rank, TRUSTED_SKILL_RANK, '正式企业流程优先于原生个人与项目副本');
   assert.equal(summary.provider, `${SKILL_PREFIX}-clauses`);
   assert.deepEqual(summary.locator, { clause: 'issue-delivery' });
   assert.equal(summary.resourceBase.kind, 'directory');
