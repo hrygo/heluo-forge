@@ -338,7 +338,9 @@ export function resolveCommandEntry(options = {}) {
   // 搜索的是**用户配的那个名字**，不是工具名：`tool` 只用来在解析出的包里找原生程序。
   // 认错名字的代价是"配了 dop-alt 却在跑 dop"——静默跑错程序比拒绝配置更糟。
   const name = raw !== '' ? raw : toolName;
-  const nativeName = toolName !== '' ? toolName : wrapperFreeNameOf(name);
+  // 没有 `tool` 时原生名只能从**命令名**推：显式路径要去掉目录部分再剥包装后缀，
+  // 否则 `C:\\npm\\dop.cmd` 会变成 `C:\\npm\\dop`，拿整条路径去比 `dop.exe` 永远不中。
+  const nativeName = toolName !== '' ? toolName : wrapperFreeNameOf(pm.basename(name));
 
   /** 显式路径分支：直接用，或解析 shim。 */
   const fromPath = (file) => {

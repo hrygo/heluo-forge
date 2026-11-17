@@ -286,6 +286,22 @@ test('别名的 npm shim：包内原生程序叫别名时照样解析得到', ()
   assert.equal(devopsAlt.resolvedFrom, giteeAlt.resolvedFrom);
 });
 
+test('显式 shim 路径且不给 tool：原生名按 basename 推，包内多个可执行文件也能命中', () => {
+  // 现场：用户直接把 `...\\npm\\dop.cmd` 粘进配置页，调用方没给 tool 提示。
+  // 若原生名取"整条路径去后缀"，它会被拿去比 `dop.exe`——永远不中，包内还有第二个 exe 时兜底也失效。
+  const OTHER_EXE = `${PACKAGE_DIR}\\bin\\dop-helper.exe`;
+  const fs = fakeFs({
+    files: { [SHIM_CMD]: CMD_TEXT, [NATIVE]: 'MZ...', [OTHER_EXE]: 'MZ...' },
+    dirs: [PREFIX, `${PREFIX}\\node_modules`, `${PREFIX}\\node_modules\\@cli-tools`, PACKAGE_DIR, `${PACKAGE_DIR}\\bin`],
+  });
+  const devopsOut = devopsResolve.resolveCommandEntry({ value: SHIM_CMD, platform: WIN, env: winEnv(), fs });
+  const giteeOut = giteeResolve.resolveCommandEntry({ value: SHIM_CMD, platform: WIN, env: winEnv(), fs });
+  assert.equal(devopsOut.ok, true, '显式 shim 路径必须能解析：原生名取的是 basename，不是整条路径');
+  assert.equal(giteeOut.ok, true);
+  assert.equal(devopsOut.path, NATIVE);
+  assert.equal(giteeOut.path, NATIVE);
+});
+
 test('两份实现都还在，而且都是本包内的实现（不是转发）', () => {
   const devopsText = readFileSync(new URL('../packages/forge-devops/src/entry-form.mjs', import.meta.url), 'utf8');
   const giteeText = readFileSync(new URL('../packages/forge-gitee/src/entry-form.mjs', import.meta.url), 'utf8');
