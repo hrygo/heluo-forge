@@ -234,6 +234,9 @@ jobs:
     steps: *native_steps
 
   # The same synthetic SQLite and IAM tests run on each supported OS.
+  # A macOS arm64 leg that never receives a runner stays at zero steps and is
+  # reported as `cancelled` after the queue gives up, which fails the run
+  # although no test ran. Rerun the failed job before looking for a regression.
   document-macos-15:
     name: SQLite and IAM (darwin-arm64, macos-15)
     needs: changes
