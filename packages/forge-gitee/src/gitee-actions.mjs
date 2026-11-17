@@ -886,7 +886,9 @@ export function publishReview() {
         });
       }
 
-      const footer = `\n\n---\n> [AI] provider=gitee · 变更 ${change.changeId} · commit ${commit.slice(0, 7)} · 人工结论不在此处代写`;
+      // 页脚必须让 `review-ai-source` 这类硬规则"看得见"两件事：这条评审是 AI 产出的，
+      // 以及它针对哪个版本。写成 `[AI] provider=…` 时规则判不出来，真实评审会一律被拒。
+      const footer = `\n\n---\n> AI 生成：provider=gitee · PR 版本：${commit.slice(0, 7)} · 变更 ${change.changeId} · 人工结论不在此处代写`;
       return executeWrite(service, {
         ...spec,
         ...execFields(exec),

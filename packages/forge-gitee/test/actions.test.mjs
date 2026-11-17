@@ -33,6 +33,7 @@ import {
 import { CONFIRM_REQUIRED_ACTIONS, GUARD_REASONS, createGiteeGuard } from '../src/gitee-guard.mjs';
 import { createGiteeSession } from '../src/gitee-session.mjs';
 import { GITEE_JUDGE_TOOLS, GITEE_WRITE_TOOLS } from '../src/gitee-tools.mjs';
+import { evaluateProcessRules } from '@heluo/forge-policy/process-rules';
 
 const SRC_DIR = join(dirname(dirname(fileURLToPath(import.meta.url))), 'src');
 const HEX16 = /^[0-9a-f]{16}$/u;
@@ -320,6 +321,24 @@ test('AC-16 回归：review.publish 与 review.record 同变更同提交，目�
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('评审正文进内容闸，且页脚满足 review-ai-source 硬规则', async () => {
+  const harness = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12#note_1'),
+    read: () => ({ ok: true, object: { number: 12, user_notes_count: 1 } }),
+  });
+  await runTool(harness.service, 'forge_gitee_review_publish', REVIEW_PUBLISH);
+  const seen = harness.seen.find((entry) => entry.action === GITEE_ACTIONS.REVIEW_PUBLISH);
+  assert.ok(seen !== undefined, '评审发布必须经过门禁');
+  const text = seen.exec?.content?.review;
+  assert.equal(typeof text, 'string', '评审正文必须经私有通道交给内容闸');
+  assert.ok(text.includes('## 结论'), '正文内容不能被丢掉');
+  const verdict = evaluateProcessRules({
+    rules: ['review-ai-source'],
+    facts: { reviewBody: text, sources: {}, changeId: 'CHG-2026-001' },
+  });
+  assert.deepEqual(verdict.deny, [], `真实评审不能因为页脚缺来源/版本而被拒：${JSON.stringify(verdict.deny)}`);
 });
 
 test('AC-11 非 gitee.* 动作在门禁入口就地拒绝：零策略调用、零子进程', async () => {
