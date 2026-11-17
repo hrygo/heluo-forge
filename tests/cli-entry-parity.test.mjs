@@ -246,6 +246,46 @@ test('显式路径：指向 shim 与指向原生程序，两边结论一致', ()
   }
 });
 
+test('配置的是哪个名字就搜哪个：tool 只用来在解析出的包里找原生程序', () => {
+  // PATH 上同时有标准名与别名程序：配的是别名就必须启动别名，绝不能静默换成标准名。
+  const ALIAS = `${PREFIX}\\dop-alt.exe`;
+  const fs = fakeFs({
+    files: { [`${PREFIX}\\dop.exe`]: 'MZ...', [ALIAS]: 'MZ...' },
+    dirs: [PREFIX],
+  });
+  const devopsAlt = devopsResolve.resolveCommandEntry({ tool: 'dop', value: 'dop-alt', platform: WIN, env: winEnv(), fs });
+  const giteeAlt = resolveCliEntry({ cliPath: 'dop-alt', tool: 'dop', platform: WIN, env: winEnv(), fs });
+  assert.equal(devopsAlt.ok, true, '配了别名却解析失败：说明搜的还是工具名');
+  assert.equal(giteeAlt.ok, true);
+  assert.equal(devopsAlt.path, ALIAS, 'devops 必须启动用户配的那个程序');
+  assert.equal(giteeAlt.bin, ALIAS, 'gitee 必须启动用户配的那个程序');
+  const devopsStd = devopsResolve.resolveCommandEntry({ tool: 'dop', value: 'dop', platform: WIN, env: winEnv(), fs });
+  const giteeStd = resolveCliEntry({ cliPath: 'dop', tool: 'dop', platform: WIN, env: winEnv(), fs });
+  assert.equal(devopsStd.path, `${PREFIX}\\dop.exe`, '配标准名时不能被别名抢走');
+  assert.equal(giteeStd.bin, `${PREFIX}\\dop.exe`);
+});
+
+test('别名的 npm shim：包内原生程序叫别名时照样解析得到', () => {
+  // 一个非标准命令名，包内 `bin\dop-alt.exe`（原生名与 tool 提示不同）——靠 bin 目录兜底命中。
+  const ALT_PKG = `${PREFIX}\\node_modules\\@cli-tools\\dop-alt`;
+  const ALT_NATIVE = `${ALT_PKG}\\bin\\dop-alt.exe`;
+  const ALT_SHIM = `${PREFIX}\\dop-alt`;
+  const fs = fakeFs({
+    files: {
+      [ALT_SHIM]: 'exec node "$basedir/node_modules/@cli-tools/dop-alt/bin/run.js" "$@"\n',
+      [ALT_NATIVE]: 'MZ...',
+    },
+    dirs: [PREFIX, `${PREFIX}\\node_modules`, `${PREFIX}\\node_modules\\@cli-tools`, ALT_PKG, `${ALT_PKG}\\bin`],
+  });
+  const devopsAlt = devopsResolve.resolveCommandEntry({ tool: 'dop', value: 'dop-alt', platform: WIN, env: winEnv(), fs });
+  const giteeAlt = resolveCliEntry({ cliPath: 'dop-alt', tool: 'dop', platform: WIN, env: winEnv(), fs });
+  assert.equal(devopsAlt.ok, true);
+  assert.equal(giteeAlt.ok, true);
+  assert.equal(devopsAlt.path, ALT_NATIVE);
+  assert.equal(giteeAlt.bin, ALT_NATIVE);
+  assert.equal(devopsAlt.resolvedFrom, giteeAlt.resolvedFrom);
+});
+
 test('两份实现都还在，而且都是本包内的实现（不是转发）', () => {
   const devopsText = readFileSync(new URL('../packages/forge-devops/src/entry-form.mjs', import.meta.url), 'utf8');
   const giteeText = readFileSync(new URL('../packages/forge-gitee/src/entry-form.mjs', import.meta.url), 'utf8');

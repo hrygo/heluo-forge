@@ -262,7 +262,7 @@ function runtimeConfigOf(snapshot) {
  * 稳定对象、不能换，所以 service 一律经 `current()` 取值——**不许**在 `apply` 顶部解构这五个
  * 变量：解构出来的引用会永远指向装配那一刻的旧配置，AC-9 的"保存后立刻生效"就是这样失效的。
  */
-function buildFaces({ policy, resolved, ctx = null }) {
+function buildFaces({ policy, resolved, ctx = null, access = null }) {
   const resolveChildEnv = ctx === null
     ? null
     : async () => {
@@ -298,13 +298,19 @@ function buildFaces({ policy, resolved, ctx = null }) {
   // 包内 `bin\gh.exe`）。`execFile` 不经 shell，shim 起不来；这里换成**真正可启动的 bin**。
   // 解析失败**不阻断**装配：保留原值（维持既有行为，运行期归因仍由 `SPAWN_FAILED` 兜底），
   // 结论已由配置快照的 `entries.cliPath.reason` / `guidance` 带给用户。
-  const { bin: cliBin } = runtimeBinOf({
+  const entryFacts = runtimeBinOf({
     cliPath: resolved.cliPath,
     platform: process.platform,
     env: process.env,
     fs: ENTRY_FS,
     tool: 'gh',
   });
+  const cliBin = entryFacts.bin;
+  // 页面与调用共用同一份入口事实（r18 评审 R4）：装配期解析出来的这条就是快照里显示的那条，
+  // 直到显式刷新/重建再重新解析。否则两次重建之间安装面变化时，页面会指着另一个程序。
+  if (access !== null && typeof access.adoptEntryFacts === 'function') {
+    access.adoptEntryFacts(resolved.cliPath, entryFacts.entry);
+  }
   const adapter = createGiteeAdapter({
     runner,
     cliPath: cliBin,
@@ -502,6 +508,7 @@ export function apply(ctx, rawConfig = {}) {
     policy,
     resolved: initialConfig === config ? resolved : resolveGiteeConfig({ config: initialConfig, env: process.env }),
     ctx,
+    access,
   });
 
   /** 重建读面：`refresh` 让 access 重读磁盘并重新合并，再重建 runner / 两个适配器 / 门禁。 */
@@ -509,7 +516,7 @@ export function apply(ctx, rawConfig = {}) {
     const merged = runtimeConfigOf(access.snapshot({ refresh: true }));
     const next = resolveGiteeConfig({ config: merged ?? {}, env: process.env });
     const previous = faces;
-    faces = buildFaces({ policy, resolved: next, ctx });
+    faces = buildFaces({ policy, resolved: next, ctx, access });
     return previous;
   }
 

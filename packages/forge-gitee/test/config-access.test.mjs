@@ -307,3 +307,51 @@ test('AC-6: revision 栅栏与增量写在同一临界区——过预检后别�
     '别处先写的 timeoutMs 必须原样保留，不能被旧快照覆盖',
   );
 });
+
+test('R4: 入口事实只解析一次——snapshot() 与 describe() 共用同一份缓存', () => {
+  let calls = 0;
+  const resolveEntry = (request) => {
+    calls += 1;
+    return { ok: true, bin: `/opt/gitee/${request.cliPath}`, form: ENTRY_FORMS.NATIVE, resolvedFrom: null };
+  };
+  const access = createGiteeAccess({
+    config: { cliPath: 'gh' },
+    env: ENV,
+    platform: LINUX,
+    resolveEntry,
+  });
+  const first = access.snapshot();
+  const second = access.snapshot();
+  access.describe();
+  assert.equal(calls, 1, '同一份配置的快照与描述不得重复扫 PATH / 读 shim');
+  assert.equal(first.entries.cliPath.bin, '/opt/gitee/gh');
+  assert.equal(second.entries.cliPath.bin, first.entries.cliPath.bin, '两次快照必须给出同一个程序');
+  // 显式刷新 = 重新合并 → 下一次快照重新解析一次（"直到显式刷新或重建"）。
+  access.snapshot({ refresh: true });
+  assert.equal(calls, 2, '刷新之后必须重新解析，而不是永远沿用旧结论');
+});
+
+test('R4: 装配期登记的入口事实优先于快照自行解析——页面与适配器不得各自为政', () => {
+  const fs = npmLayout({ withExe: false });
+  const access = createGiteeAccess({
+    config: { cliPath: 'gh' },
+    env: { Path: NPM_PREFIX },
+    platform: 'win32',
+    fs,
+  });
+  // 装配期（apply）手里握着"真正交给 execFile 的那条"：把它登记进来。
+  const adopted = access.adoptEntryFacts('gh', {
+    ok: true,
+    bin: `${NPM_PREFIX}\\gh.exe`,
+    form: ENTRY_FORMS.NATIVE,
+    resolvedFrom: `${NPM_PREFIX}\\gh.cmd`,
+  });
+  assert.equal(adopted, true);
+  const entry = access.snapshot().entries.cliPath;
+  assert.equal(entry.bin, `${NPM_PREFIX}\\gh.exe`, '快照必须显示适配器实际会启动的程序');
+  assert.equal(entry.form, ENTRY_FORMS.NATIVE);
+  assert.equal(entry.resolvedFrom, `${NPM_PREFIX}\\gh.cmd`);
+  // 拒绝非法事实：不登记、不抛错（装配路径不能因为一次投影失败而中断）。
+  assert.equal(access.adoptEntryFacts('gh', null), false);
+  assert.equal(access.snapshot().entries.cliPath.bin, `${NPM_PREFIX}\\gh.exe`);
+});

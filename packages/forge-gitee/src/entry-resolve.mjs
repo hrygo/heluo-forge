@@ -275,6 +275,17 @@ export function resolveNpmShim(options = {}) {
 }
 
 /** 包装/无后缀形态 → "解析不到包内原生入口"时的原因码。 */
+/**
+ * 命令名去掉包装后缀（`dop.cmd` → `dop`）：`nativeEntryOf` 要找的是包内的 `bin/<name>.exe`，
+ * 拿带后缀的名字去比对永远命中不了。只在没有 `tool` 提示时用作原生名。
+ */
+function wrapperFreeNameOf(name) {
+  const value = text(name);
+  if (value === '') return '';
+  const suffix = wrapperSuffixOf(value);
+  return suffix === null ? value : value.slice(0, -suffix.length);
+}
+
 function unresolvedReasonOf(form) {
   if (form === ENTRY_FORMS.WRAPPER) return RESOLVE_REASONS.WRAPPER_ENTRY;
   if (form === ENTRY_FORMS.EXTENSIONLESS) return RESOLVE_REASONS.SHIM_UNRESOLVED;
@@ -324,6 +335,10 @@ export function resolveCommandEntry(options = {}) {
   const raw = text(value);
   const toolName = text(tool).toLowerCase();
   const startedAt = typeof now === 'function' ? now() : 0;
+  // 搜索的是**用户配的那个名字**，不是工具名：`tool` 只用来在解析出的包里找原生程序。
+  // 认错名字的代价是"配了 dop-alt 却在跑 dop"——静默跑错程序比拒绝配置更糟。
+  const name = raw !== '' ? raw : toolName;
+  const nativeName = toolName !== '' ? toolName : wrapperFreeNameOf(name);
 
   /** 显式路径分支：直接用，或解析 shim。 */
   const fromPath = (file) => {
@@ -332,7 +347,7 @@ export function resolveCommandEntry(options = {}) {
     if (isSpawnableEntry({ path: file, platform: resolvedPlatform, stat })) {
       return { ok: true, path: file, form: entryFormOf(file, resolvedPlatform), resolvedFrom: null };
     }
-    const resolved = resolveNpmShim({ path: file, tool: toolName === '' ? null : toolName, platform: resolvedPlatform, fs });
+    const resolved = resolveNpmShim({ path: file, tool: nativeName, platform: resolvedPlatform, fs });
     if (resolved.ok === true) {
       return { ok: true, path: resolved.path, form: ENTRY_FORMS.NATIVE, resolvedFrom: file };
     }
@@ -345,7 +360,6 @@ export function resolveCommandEntry(options = {}) {
 
   if (looksLikePathValue(raw, resolvedPlatform)) return fromPath(raw);
 
-  const name = toolName !== '' ? toolName : raw.toLowerCase();
   if (name === '') return { ok: false, reason: RESOLVE_REASONS.NOT_FOUND };
 
   const dirs = Array.isArray(searchDirs) ? searchDirs : parsePathVar({ env, platform: resolvedPlatform, pathModule: pm });
@@ -381,7 +395,7 @@ export function resolveCommandEntry(options = {}) {
   // 只有"壳存在但指向不明"才退回形态级的 `shim-unresolved`——调用方据此给不同的指引。
   let shimFailure = null;
   for (const shim of shims) {
-    const resolved = resolveNpmShim({ path: shim.path, tool: name, platform: resolvedPlatform, fs });
+    const resolved = resolveNpmShim({ path: shim.path, tool: nativeName, platform: resolvedPlatform, fs });
     if (resolved.ok === true) {
       return { ok: true, path: resolved.path, form: ENTRY_FORMS.NATIVE, resolvedFrom: shim.path };
     }

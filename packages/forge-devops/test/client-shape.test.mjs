@@ -408,6 +408,24 @@ test('端点：GET+POST /api/forge-devops/cli，刷新参只在 GET 上', () => 
     /fetch\(SELFCHECK_ENDPOINT, \{\s*method: 'POST',\s*headers: REQUEST_HEADERS/u,
     '自检请求必须 POST 且带同源预检头（/cli/selfcheck 只收 POST + x-forge-devops-request）',
   );
+  // r18 评审：结论必须绑定"被检查的那条入口"。等待期间保存/重扫换了入口，迟到的回包要丢弃，
+  // 否则会把旧入口的 PASS 贴到新入口上（AGENTS.md：不确定的状态不得返回旧值或显示成功）。
+  assert.match(SOURCE, /const testedPath = entryPathOf\('dopBin'\);/u, '自检发起时必须记下被测入口');
+  assert.match(
+    SOURCE,
+    /if \(entryPathOf\('dopBin'\) !== testedPath\) return;/u,
+    '回包时入口已变必须丢弃结论，而不是写回屏上',
+  );
+  // 草稿改了但没保存：自检测的是已保存值，不能让用户以为测的是输入框里的新路径。
+  assert.match(SOURCE, /const draftDirty = entryDraftDirty\(\);/u, '渲染时必须算出口草稿是否脏');
+  assert.match(SOURCE, /disabled: locked \|\| selfCheckPhase === 'running' \|\| !snapshot \|\| draftDirty/u, '草稿脏时自检按钮必须禁用');
+  assert.ok(SOURCE.includes("t('selfcheck.needSave')"), '草稿脏时必须提示"先保存再自检"');
+  // 被拒的包装脚本在可编辑页面上同样要能展开看：否则用户只知道"没找到"。
+  assert.doesNotMatch(
+    SOURCE,
+    /const expandable = \(others > 0 \|\| rejected\.length > 0\) && !editable;/u,
+    '被拒列表不得因"可编辑"而隐藏',
+  );
 });
 
 test('写操作带 CSRF 预检头，读带 accept；缺头服务端回 400', () => {

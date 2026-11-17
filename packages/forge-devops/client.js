@@ -412,6 +412,7 @@ window.__ModuleLoader__.load({
       'selfcheck.fail.timedOut': '启动超时 · 程序没有在预算内结束',
       'selfcheck.fail.nonzero': '能启动，但 --version 返回退出码 {code}',
       'selfcheck.stale': '入口已改变，请重新自检',
+      'selfcheck.needSave': '入口有未保存的改动：先保存，再自检',
       'field.timeoutMs': '命令超时（毫秒）',
       'field.timeoutMs.hint': '命令超过这个时间就判失败；按毫秒填，20 秒就是 20000',
       'field.timeoutMs.default': '20000（20 秒，默认）',
@@ -647,6 +648,7 @@ window.__ModuleLoader__.load({
       'selfcheck.fail.timedOut': 'Timed out · the program did not finish in budget',
       'selfcheck.fail.nonzero': 'Starts, but --version exited with code {code}',
       'selfcheck.stale': 'Entry changed, run the self-check again',
+      'selfcheck.needSave': 'Entry has unsaved changes: save first, then run the check',
       'field.timeoutMs': 'Command timeout (ms)',
       'field.timeoutMs.hint': 'A command fails after this long. Milliseconds: 20 s = 20000',
       'field.timeoutMs.default': '20000 (20 s, default)',
@@ -1078,7 +1080,9 @@ window.__ModuleLoader__.load({
       else if (owned) hint = t('entry.hint.config');
       else hint = t('entry.hint.override');
 
-      const expandable = (others > 0 || rejected.length > 0) && !editable;
+      // 被拒的包装脚本必须**看得见**，包括页面可编辑时：否则用户只知道"没找到"，
+      // 不知道系统把候选丢在哪一层（r18 的现场正是这样被藏起来的）。
+      const expandable = others > 0 || rejected.length > 0;
       const hintAction = expandable
         ? h(
             'button',
@@ -2034,9 +2038,21 @@ window.__ModuleLoader__.load({
       function applySnapshot(snapshot) {
         snapshotRef.current = snapshot;
         // 入口换了（保存/刷新/重扫）→ 上一次自检结论不再描述当前入口，直接作废而不是留在屏上骗人。
+        // 迟到的响应也走同一口径：回包时用 `entryPathOf('dopBin')` 与发起时的值比对（见 runSelfCheck）。
         setSelfCheck(null);
         const writable = !(snapshot.writable && snapshot.writable.ok === false);
         setView({ mode: writable ? 'form' : 'degraded', snapshot, reason: snapshot.reason ?? null });
+      }
+
+      /** 当前**生效**的入口路径（保存进来的那条，不是输入框里的草稿）。 */
+      function entryPathOf(field) {
+        const path = snapshotRef.current?.entries?.[field]?.path;
+        return typeof path === 'string' ? path : null;
+      }
+
+      /** 草稿里改了入口但还没保存：此时自检测的仍是旧的已保存值，先说清楚，别给假结论。 */
+      function entryDraftDirty() {
+        return editing.dopBin === true && isChanged('dopBin', staged.dopBin);
       }
 
       function originOf(field) {
@@ -2113,7 +2129,10 @@ window.__ModuleLoader__.load({
        * 不再有"HTTP 失败 = 入口坏"的混淆。
        */
       async function runSelfCheck() {
-        if (selfCheckPhase === 'running') return;
+        if (selfCheckPhase === 'running' || entryDraftDirty()) return;
+        // 记下这次检查的是哪条入口：等待期间用户可能保存/重扫到别的入口，
+        // 迟到的回包若与新入口不符就必须丢掉——宁可没结论，也不能拿旧结论冒充当前状态。
+        const testedPath = entryPathOf('dopBin');
         setSelfCheckPhase('running');
         setSelfCheck(null);
         try {
@@ -2125,6 +2144,7 @@ window.__ModuleLoader__.load({
           const body = await readJson(response);
           if (!mounted.current) return;
           setSelfCheckPhase('idle');
+          if (entryPathOf('dopBin') !== testedPath) return;
           const report = body && typeof body === 'object' && body.selfcheck && typeof body.selfcheck === 'object'
             ? body.selfcheck
             : null;
@@ -2158,6 +2178,7 @@ window.__ModuleLoader__.load({
         setEditing((prev) => ({ ...prev, [field]: true }));
         setErrors((prev) => omit(prev, field));
         setReceipt(null);
+        if (field === 'dopBin') setSelfCheck(null);
         setNotice(null);
       }
 
@@ -2179,6 +2200,8 @@ window.__ModuleLoader__.load({
         });
         setReceipt(null);
         setNotice(null);
+        // 改了入口草稿 → 屏上那条自检结论已不对应当前输入，先撤掉（保存后再测）。
+        if (field === 'dopBin') setSelfCheck(null);
       }
 
       function onBlur(field) {
@@ -2386,6 +2409,8 @@ window.__ModuleLoader__.load({
       // 第二行：超时（单行 .fdv-scalar）。页面只有两行一列，行间只有一条 .5px 分隔线。
       children.push(timeoutField());
 
+      const draftDirty = entryDraftDirty();
+
       // 入口自检（r18）：就放在入口卡下面——"我配的这条路径到底能不能启动"是和路径同一件事。
       // 只读页面（locked）不提供按钮：自检会启动子进程，而改不了配置的页面上它只会制造困惑。
       children.push(
@@ -2397,9 +2422,10 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'fdv-btn fdv-btn-md',
-              disabled: locked || selfCheckPhase === 'running' || !snapshot,
+              disabled: locked || selfCheckPhase === 'running' || !snapshot || draftDirty,
+              title: draftDirty ? t('selfcheck.needSave') : undefined,
               onClick: () => {
-                if (!locked && selfCheckPhase !== 'running') void runSelfCheck();
+                if (!locked && selfCheckPhase !== 'running' && !draftDirty) void runSelfCheck();
               },
             },
             selfCheckPhase === 'running' ? t('selfcheck.busy') : t('selfcheck.action'),
@@ -2407,7 +2433,7 @@ window.__ModuleLoader__.load({
           h(
             'span',
             { className: 'fdv-hint', role: 'status', 'aria-live': 'polite' },
-            selfCheck ? selfCheck.text : t('selfcheck.hint'),
+            draftDirty ? t('selfcheck.needSave') : selfCheck ? selfCheck.text : t('selfcheck.hint'),
           ),
         ),
       );
