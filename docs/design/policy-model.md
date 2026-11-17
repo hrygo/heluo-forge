@@ -34,7 +34,7 @@
 - **身份（who）**：以哪个 IAM subject 行动；写动作要求可信身份。
 - **证据（evidence）**：谁、依据哪版策略、命中哪些规则。
 
-默认分层随之调整：六条只读动作放行；`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`change.clarification.write` 放行但过内容闸；`gitee.git.push` 逐次确认并叠加内容、分支与变更号检查；`gitee.review.record` 不由 Agent 发起；`git commit` 不进闸，只做 SOFT 扫描。组织策略以独立签名包下发（DESIGN-021），不设有效期、随包更新；本地只能收紧，不能放宽。
+默认分层随之调整：六条只读动作放行；`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`change.clarification.write` 放行但过内容闸；`gitee.git.push` 逐次确认并叠加内容、分支与变更号检查；`gitee.review.record` 不由 Agent 发起；`git commit` 不进闸，只做 SOFT 扫描。组织策略以包内 `policy/` 数据目录的签名信封随包下发（见[策略与审计详细设计 §5.1.4](plugins/forge-policy.md#514-组织策略数据目录2026-11-16)），不设有效期、不单独成包；本地只能收紧，不能放宽。
 
 尚未闭合：内容规则清单与阈值需在企业真实仓库上评估误报，dop 事实源字段与 IAM principal 取值待核验，抑制确认疲劳的范围票据依赖宿主审批通道。
 
@@ -132,7 +132,7 @@ flowchart TD
 | 项 | 规则 |
 |---|---|
 | 规则来源 | 内置集随包编译，不可删除；组织层只能追加规则或提高级别；本机层同样只能追加 |
-| 规则格式 | 复用 `scripts/sensitive-scan/rules.example.json` 的 `id` / `pattern` / `severity` / `paths` 结构，避免两套规则漂移 |
+| 规则格式 | 复用 `scripts/sensitive-scan/rules.example.json` 的 `id` / `pattern` / `severity` / `paths` 结构；`paths` 各项为正则表达式，匹配所有路径使用 `.*`，不是 glob |
 | 规模上限 | 编译后不超过 30 条正则；单次检查载荷截断 256 KiB；二进制内容跳过并记录 `binary-skipped` |
 | 检查对象 | 调用参数中的正文、路径、命令文本；`gitee.git.push` 另取 `rev-list base..head` 的提交信息与差异 |
 | 命中级别 | HARD → `deny`，返回规则标识与脱敏片段；SOFT → 记录 findings 后继续 |
