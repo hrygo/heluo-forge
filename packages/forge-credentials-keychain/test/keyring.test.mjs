@@ -169,6 +169,39 @@ test('continuous keyring replacement is rejected after bounded retries', (t) => 
   }
 });
 
+test('keyring replacement is detected when file identifiers exceed safe integer precision', (t) => {
+  const { path, provider } = fixture(t);
+  provider.initialize('k1');
+  const originalLstat = fs.lstatSync;
+  const originalFstat = fs.fstatSync;
+  const before = 9007199254740992n;
+  const after = before + 1n;
+  let attempts = 0;
+  assert.equal(Number(before), Number(after));
+  try {
+    fs.lstatSync = (target, options) => {
+      const stat = originalLstat(target, options);
+      if (target === path) {
+        attempts += 1;
+        stat.ino = options?.bigint ? before : Number(before);
+      }
+      return stat;
+    };
+    fs.fstatSync = (fd, options) => {
+      const stat = originalFstat(fd, options);
+      stat.ino = options?.bigint ? after : Number(after);
+      return stat;
+    };
+    syncBuiltinESMExports();
+    assert.throws(() => provider.active(), { code: 'CRED_KEY_INVALID' });
+    assert.equal(attempts, 3);
+  } finally {
+    fs.lstatSync = originalLstat;
+    fs.fstatSync = originalFstat;
+    syncBuiltinESMExports();
+  }
+});
+
 test('an insecure replacement is rejected after an open race', { skip: process.platform === 'win32' }, (t) => {
   const { path, provider } = fixture(t);
   provider.initialize('k1');
@@ -229,7 +262,7 @@ test('a keyring owned by a different user is rejected', { skip: process.platform
   try {
     fs.fstatSync = (fd, ...args) => {
       const stat = original(fd, ...args);
-      stat.uid = process.getuid() + 1;
+      stat.uid = typeof stat.uid === 'bigint' ? BigInt(process.getuid() + 1) : process.getuid() + 1;
       return stat;
     };
     syncBuiltinESMExports();

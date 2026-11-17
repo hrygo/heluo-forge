@@ -39,10 +39,11 @@ function readDocument(path) {
   for (let attempt = 0; ; attempt += 1) {
     let fd;
     try {
-      const stat = lstatSync(path);
+      // Preserve 64-bit file identifiers when comparing before and after open.
+      const stat = lstatSync(path, { bigint: true });
       if (!stat.isFile() || stat.isSymbolicLink()) throw failure('CRED_KEY_INVALID', 'keyring is not a regular file');
       fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      const opened = fstatSync(fd);
+      const opened = fstatSync(fd, { bigint: true });
       if (!opened.isFile()) throw failure('CRED_KEY_INVALID', 'keyring is not a regular file');
       if (opened.dev !== stat.dev || opened.ino !== stat.ino) {
         // An atomic rotation may replace the file between lstat and open.
@@ -50,8 +51,8 @@ function readDocument(path) {
         throw failure('CRED_KEY_INVALID', 'keyring changed during open');
       }
       // Windows mode bits do not validate NTFS ACLs; that boundary requires platform verification.
-      if (process.platform !== 'win32' && ((opened.mode & 0o7777) !== 0o600
-          || (typeof process.getuid === 'function' && opened.uid !== process.getuid()))) {
+      if (process.platform !== 'win32' && ((opened.mode & 0o7777n) !== 0o600n
+          || (typeof process.getuid === 'function' && opened.uid !== BigInt(process.getuid())))) {
         throw failure('CRED_KEY_PERMISSIONS', 'keyring permissions or owner are invalid');
       }
       return parseDocument(readFileSync(fd, 'utf8'));
