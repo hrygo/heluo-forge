@@ -376,11 +376,14 @@ for (const accessDeadline of ['later', 'same']) test(`a refresh token expiring $
   });
   t.after(async () => { await service.dispose(); await oidc.close(); });
   await service.hydrate();
-  const timeout = Date.now() + 2700;
-  while (oidc.counts.refresh === 0 && Date.now() < timeout) await delay(20);
+  // Each wait owns its budget: one absolute deadline shared by both loops left
+  // the second one only whatever the first did not spend.
+  const refreshDeadline = Date.now() + 2700;
+  while (oidc.counts.refresh === 0 && Date.now() < refreshDeadline) await delay(20);
   assert.equal(oidc.counts.refresh, 1, 'refresh begins before the refresh token expires');
   assert.ok(refreshSentAt < now + 2400, 'the request was sent before the refresh token expired');
-  while (service.getView().state !== 'ready' && Date.now() < timeout) await delay(20);
+  const readyDeadline = Date.now() + 1000;
+  while (service.getView().state !== 'ready' && Date.now() < readyDeadline) await delay(20);
   assert.equal(service.getView().state, 'ready');
 });
 
