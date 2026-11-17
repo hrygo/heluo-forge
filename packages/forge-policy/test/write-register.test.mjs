@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -105,17 +105,34 @@ test('D1: 策略服务把登记表里的动作全部列为已知动作', () => {
   assert.deepEqual([...actions].sort(), REGISTER.map((entry) => entry.action).sort());
 });
 
-test('D1: 设计正文 §5.1.1 的登记表与这里的目录逐条一致（防漂移）', () => {
+test('D1: 设计正文 §5.1.1 的只读分类与随包目录逐条一致（防漂移）', () => {
+  // 本节在 2026-11-16 改为动作分类模型：只读与研发写按类别放行，写动作尚未实现，
+  // 因此断言锚定在"随包分发的补丁层目录"上——那是装机后真实生效的动作集合。
+  // 研发写类只出现在设计里而不在补丁层，属实现待跟进，不在这里断言相等。
   const design = readFileSync(join(root, 'docs/design/plugins/forge-policy.md'), 'utf8');
   const section = design.split('#### 5.1.1')[1]?.split('### 5.2')[0] ?? '';
-  assert.ok(section.length > 0, '未能定位 §5.1.1 登记表');
-  const listed = new Set();
+  assert.ok(section.length > 0, '未能定位 §5.1.1 动作分类表');
+  const listed = new Map();
   for (const line of section.split('\n')) {
     if (!line.startsWith('| `')) continue;
-    const firstCell = line.split('|')[1] ?? '';
-    for (const match of firstCell.matchAll(/`([a-z][a-z_]*(?:\.[a-z_]+)+)`/gu)) listed.add(match[1]);
+    const [names = '', kind = '', decision = ''] = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    for (const match of names.matchAll(/`([a-z][a-z_]*(?:\.[a-z_]+)+)`/gu)) listed.set(match[1], { kind, decision });
   }
-  assert.deepEqual([...listed].sort(), REGISTER.map((entry) => entry.action).sort(), '设计登记表与目录必须一一对应');
+  assert.ok(listed.size >= 12, `设计分类表只解析到 ${listed.size} 个动作，表结构或标记已变化`);
+  const shipped = new Set();
+  for (const pkg of readdirSync(join(root, 'packages'))) {
+    const file = join(root, 'packages', pkg, 'cordis.patch.yml');
+    if (!existsSync(file)) continue;
+    for (const match of readFileSync(file, 'utf8').matchAll(/action: '([a-z][a-z_.]+)'/gu)) shipped.add(match[1]);
+  }
+  assert.ok(shipped.size > 0, '未能从补丁层收集随包动作');
+  for (const action of shipped) {
+    assert.ok(listed.has(action), `随包动作 ${action} 未进入设计分类表`);
+    assert.equal(listed.get(action).decision, 'allow', `随包动作 ${action} 的默认决策应为 allow`);
+    assert.equal(listed.get(action).kind, '只读', `随包动作 ${action} 应登记为只读`);
+  }
+  const readClass = [...listed].filter(([, row]) => row.kind === '只读').map(([action]) => action).sort();
+  assert.deepEqual(readClass, [...shipped].sort(), '只读分类与随包目录必须一一对应');
 });
 
 test('D1: 真实受控能力的实参名不是 target——按设计登记为关闭，且不声称已被门禁覆盖', () => {
