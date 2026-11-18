@@ -85,3 +85,126 @@ test('sign-out observing an in-flight refresh preserves pending and reports unkn
   assert.equal(await refresh, 'synthetic-new-access');
   assert.equal((await credentials.readRecord(GRANT_KEY)).payload.refreshOperation.state, 'complete');
 });
+
+async function startLocalRefresh(t, tokenResponse) {
+  const credentials = new MemoryCredentials();
+  const grant = {
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: config.issuer, subject: 'synthetic-user', clientId: config.clientId,
+    refreshToken: 'synthetic-old-refresh', accessToken: 'synthetic-old-access', scope: 'openid',
+    obtainedAt: new Date().toISOString(), accessExpiresAt: new Date(Date.now() + 3600000).toISOString(),
+  };
+  await createGrantStore(credentials).write(grant);
+  const entered = deferred();
+  const release = deferred();
+  const requests = [];
+  const fetch = async (url, init) => {
+    const target = new URL(url);
+    if (target.pathname === '/jwks') return Response.json({ keys: [] });
+    if (target.pathname === '/token') {
+      requests.push({ method: init.method, path: target.pathname });
+      entered.resolve();
+      await release.promise;
+      return tokenResponse();
+    }
+    if (target.pathname === '/revoke') {
+      requests.push({ method: init.method, path: target.pathname, accessToken: target.searchParams.get('access_token') });
+      return Response.json({ result: true });
+    }
+    throw new Error('unexpected mock request');
+  };
+  const service = createIamService(config, { credentials, fetch });
+  t.after(() => { release.resolve(); return service.dispose(); });
+  const refresh = service.getAccessToken();
+  await Promise.race([
+    entered.promise,
+    refresh.then(() => { throw new Error('refresh completed before reaching the mock endpoint'); }),
+  ]);
+  const pending = await credentials.readRecord(GRANT_KEY);
+  assert.equal(pending.payload.refreshOperation.state, 'pending');
+  return { credentials, grant, pending, release, requests, service, refresh };
+}
+
+test('same-Host sign-out revokes the confirmed refresh without publishing its token', { timeout: 5000 }, async (t) => {
+  const { credentials, grant, release, requests, service, refresh } = await startLocalRefresh(t, () =>
+    Response.json({ access_token: 'synthetic-new-access', refresh_token: 'synthetic-new-refresh', token_type: 'Bearer', expires_in: 1800 }));
+  const controller = new AbortController();
+  t.after(() => controller.abort());
+  const views = service.watch(controller.signal);
+  await views.next();
+  const signingOut = service.signOut();
+  const blockedGetter = assert.rejects(refresh);
+  release.resolve();
+  const [result] = await Promise.all([signingOut, blockedGetter]);
+
+  assert.deepEqual(requests, [
+    { method: 'POST', path: '/token' },
+    { method: 'GET', path: '/revoke', accessToken: 'synthetic-new-access' },
+  ]);
+  assert.equal(result.revocation, 'ok');
+  assert.equal(result.view.state, 'signed-out');
+  assert.equal(service.getView().state, 'signed-out');
+  const observed = [];
+  for await (const view of views) {
+    observed.push(view);
+    if (view.state === 'signed-out') break;
+  }
+  assert.equal(observed.at(-1)?.state, 'signed-out');
+  assert.ok(observed.every((view) => view.accessExpiresAt == null || view.accessExpiresAt === grant.accessExpiresAt));
+  await assert.rejects(service.getAccessToken(), { code: 'IAM_NOT_SIGNED_IN' });
+  assert.deepEqual(await credentials.readRecord(GRANT_KEY), {
+    kind: 'grant', payload: { version: 1, type: 'heluo-iam-session-tombstone' },
+  });
+  assert.equal(requests.length, 2);
+});
+
+test('same-Host sign-out cannot consume the result or revoke a replacement login during refresh', { timeout: 5000 }, async (t) => {
+  const { credentials, grant, release, requests, service, refresh } = await startLocalRefresh(t, () =>
+    Response.json({ access_token: 'synthetic-new-access', refresh_token: 'synthetic-new-refresh', token_type: 'Bearer', expires_in: 1800 }));
+  const signingOut = service.signOut();
+  const blockedGetter = assert.rejects(refresh);
+  const replacement = { ...grant, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') };
+  const store = createGrantStore(credentials);
+  await store.write(replacement);
+  release.resolve();
+  const [result] = await Promise.all([signingOut, blockedGetter]);
+  assert.equal(result.revocation, 'unknown');
+  assert.deepEqual(requests, [{ method: 'POST', path: '/token' }]);
+  assert.deepEqual((await store.read()).grant, replacement);
+});
+
+test('same-Host sign-out stops waiting for an in-flight refresh and ignores a later response', { timeout: 5000 }, async (t) => {
+  const { credentials, pending, release, requests, service, refresh } = await startLocalRefresh(t, () =>
+    Response.json({ access_token: 'synthetic-new-access', refresh_token: 'synthetic-new-refresh', token_type: 'Bearer', expires_in: 1800 }));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const signingOut = service.signOut();
+  const blockedGetter = assert.rejects(refresh);
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(5_000);
+  const result = await signingOut;
+  assert.equal(result.revocation, 'unknown');
+  assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+
+  release.resolve();
+  await blockedGetter;
+  assert.deepEqual(requests, [{ method: 'POST', path: '/token' }]);
+  assert.deepEqual(await credentials.readRecord(GRANT_KEY), pending);
+});
+
+for (const [failure, tokenResponse] of [
+  ['lost response', () => { throw new Error('synthetic transport failure'); }],
+  ['invalid response', () => Response.json({ refresh_token: 'synthetic-new-refresh', token_type: 'Bearer', expires_in: 1800 })],
+]) {
+  test(`same-Host sign-out preserves pending after a refresh with ${failure}`, { timeout: 5000 }, async (t) => {
+    const { credentials, pending, release, requests, service, refresh } = await startLocalRefresh(t, tokenResponse);
+    const signingOut = service.signOut();
+    const blockedGetter = assert.rejects(refresh);
+    release.resolve();
+    const [result] = await Promise.all([signingOut, blockedGetter]);
+
+    assert.equal(result.revocation, 'unknown');
+    assert.equal(result.view.error, 'IAM_CREDENTIALS_CLEAR_FAILED');
+    assert.equal((await service.signOut()).revocation, 'unknown');
+    assert.deepEqual(requests, [{ method: 'POST', path: '/token' }]);
+    assert.deepEqual(await credentials.readRecord(GRANT_KEY), pending);
+  });
+}

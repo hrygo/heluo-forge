@@ -13,14 +13,20 @@ const request = { ...route, messages: [{ role: 'user', content: 'sensitive-test-
 
 async function fixture(t, mode) {
   let posts = 0;
+  const received = [];
   const server = createServer((req, res) => {
     posts++;
+    received.push({ method: req.method, url: req.url, iamToken: req.headers['x-iam-token'] });
     req.resume();
     req.on('end', () => {
       if (mode === 'reset') return res.destroy();
       if (mode === 'http-error') {
         res.writeHead(503, { 'Retry-After': '2', 'X-Test-Private': 'sensitive-test-header' });
         return res.end('sensitive-test-response');
+      }
+      if (mode === 'unauthorized') {
+        res.writeHead(401);
+        return res.end();
       }
       if (mode === 'redirect' && req.url !== '/other') {
         res.writeHead(307, { Location: '/other' });
@@ -42,6 +48,7 @@ async function fixture(t, mode) {
   const diagnoseFailure = createModelFailureLogger({ home });
   const cancel = new AbortController();
   let adapter, guard, attempts = 0, reads = 0;
+  let accessToken = 'sensitive-test-token', login = 1, sdkToken;
   const view = { state: 'ready', principal: 'person-a', accessExpiresAt: Date.now() + 60_000,
     gatewayCredential: { state: 'configured', matchesAccount: true } };
 
@@ -53,9 +60,11 @@ async function fixture(t, mode) {
       const failure = code => ({ type: 'finish', reason: { kind: 'error', failure: { code, message: 'sensitive-test-sdk-error' } } });
       if (mode === 'unverified') { yield failure('TRANSPORT'); return; }
       try {
-        const response = await (options.fetch ?? fetch)(`${model.baseUrl}/chat/completions`, {
-          method: 'POST', signal: options.signal, body: '{}',
-        });
+        const init = { method: 'POST', signal: options.signal, body: '{}', headers: new Headers(options.headers) };
+        sdkToken = init.headers.get('X-IAM-Token');
+        if (mode === 'rotate-before-fetch') accessToken = 'sensitive-test-rotated-token';
+        if (mode === 'replace-before-fetch') login++;
+        const response = await (options.fetch ?? fetch)(`${model.baseUrl}/chat/completions`, init);
         if (!response.ok) { yield { type: 'usage' }; yield failure('SERVER'); return; }
         yield { type: 'text-delta', text: await response.text() };
         if (mode === 'after-output') { yield failure('TRANSPORT'); return; }
@@ -87,7 +96,14 @@ async function fixture(t, mode) {
       getView: () => view, async *watch() {},
       async readModelSelection() { return { saved: true, subject: view.principal, models: { [route.model]: {} } }; },
       async resolveGatewayConnection() { reads++; return { baseURL, key: 'sensitive-test-key', subject: view.principal }; },
-      async getAccessToken() { return 'sensitive-test-token'; },
+      async getAccessToken() { return accessToken; },
+      captureModelSession() {
+        const captured = login;
+        const assertCurrent = () => {
+          if (login !== captured) throw Object.assign(new Error('Session changed'), { code: 'IAM_NOT_SIGNED_IN' });
+        };
+        return { assertCurrent, withDispatchAccessToken(dispatch) { assertCurrent(); return dispatch(accessToken); } };
+      },
     },
     config: { defaultProvider: route.provider, managedModels: { baseURL } },
     fetch: async () => Response.json({ data: [{ id: route.model }] }), requestHeaders: async () => ({}),
@@ -102,8 +118,24 @@ async function fixture(t, mode) {
   const call = { ...request, signal: cancel.signal, sessionId: 'sensitive-test-session' };
   const prepared = await adapter.prepareCall(route.provider, route.model, call.signal);
   const chunks = await Array.fromAsync(guard(call, next => prepared.stream(next)));
-  return { chunks, attempts, posts, credentialReads: reads - readsBeforeCall, log, runtime };
+  return { chunks, attempts, posts, received, sdkToken, credentialReads: reads - readsBeforeCall, log, runtime };
 }
+
+test('uses the rotated IAM token when it changes after the SDK creates the request headers', async t => {
+  const result = await fixture(t, 'rotate-before-fetch');
+  assert.equal(result.sdkToken, 'sensitive-test-token');
+  assert.deepEqual(result.received, [
+    { method: 'POST', url: '/v1/chat/completions', iamToken: 'sensitive-test-rotated-token' },
+  ]);
+  assert.equal(result.chunks.at(-1).reason.kind, 'stop');
+});
+
+test('sends no POST when the same principal replaces the login after the SDK creates the request headers', async t => {
+  const result = await fixture(t, 'replace-before-fetch');
+  assert.equal(result.sdkToken, 'sensitive-test-token');
+  assert.equal(result.posts, 0);
+  assert.equal(result.chunks.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
+});
 
 test('retries once only after a verified refusal to connect, with fresh credential checks', async t => {
   const result = await fixture(t, 'recovered');
@@ -124,6 +156,7 @@ test('does not replay ambiguous delivery, HTTP failure, output or cancellation',
   for (const [mode, phase, extras] of [
     ['reset', 'unknown', { fault: 'UND_ERR_SOCKET' }],
     ['http-error', 'response', { status: 503, retryAfterMs: 2000 }],
+    ['unauthorized', 'response', { status: 401 }],
     ['redirect', 'response', { status: 307 }],
     ['after-output', 'response', { status: 200, output: true }],
   ]) {

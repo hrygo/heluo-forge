@@ -32,30 +32,24 @@ export function createSignOut(env) {
     invalidateConsumption();
     if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     if (signOutPromise) return signOutPromise;
+    const ownedRefresh = token.takeRefreshForSignOut();
     signingOut = true;
     bumpAuthEpoch();
     clearObservation();
     clearAttempt();
     // Register before running any work: provider checks and notifications can
     // synchronously reenter signOut. All callers observe the final outcome.
-    signOutPromise = Promise.resolve().then(() => signOutOnce()).finally(() => {
+    signOutPromise = Promise.resolve().then(() => signOutOnce(ownedRefresh)).finally(() => {
       signingOut = false;
       signOutPromise = null;
     });
     return signOutPromise;
   }
 
-  async function signOutOnce() {
+  async function signOutOnce(ownedRefresh) {
     const checkDisposed = () => {
       if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
     };
-    checkDisposed();
-    let expectedIssuer = ctx.knownIssuer();
-    if (token.inFlight) await token.inFlight.catch(() => {});
-    checkDisposed();
-    let grant = null;
-    const targetStore = provider.ensure();
-    const targetCredentials = provider.storeCredentials;
     checkDisposed();
     const unknownSignOut = (remote) => {
       checkDisposed();
@@ -67,6 +61,21 @@ export function createSignOut(env) {
       return { view: ctx.view(), logoutUrl: null, revocation: remote?.state === 'failed' ? 'failed' : 'unknown',
         ...(remote?.code ? { revocationError: remote.code } : {}) };
     };
+    let expectedIssuer = ctx.knownIssuer();
+    const refresh = token.inFlight;
+    if (refresh) {
+      let timer;
+      const settled = await Promise.race([
+        refresh.then(() => true, () => true),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false), REFRESH_TIMEOUT_MS); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!settled) return unknownSignOut();
+    }
+    checkDisposed();
+    let grant = null;
+    const targetStore = provider.ensure();
+    const targetCredentials = provider.storeCredentials;
+    checkDisposed();
     try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
     if (targetStore) {
       const record = await targetStore.read().catch(() => ({ ok: false, grant: null }));
@@ -83,6 +92,11 @@ export function createSignOut(env) {
     checkDisposed();
     try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }
     checkDisposed();
+    const handoff = ownedRefresh?.(targetStore, targetCredentials);
+    // Waiting for our flight must not retarget logout to a concurrently
+    // installed login, even when the subject is identical.
+    if (ownedRefresh && (!handoff || !(isDeepStrictEqual(grant, handoff.pending)
+      || isDeepStrictEqual(grant, handoff.complete)))) return unknownSignOut();
     ctx.lastGrant = null;
     let revocation = 'skipped';
     let revocationError = null;
@@ -139,7 +153,7 @@ export function createSignOut(env) {
         checkDisposed();
         provider.assertAtomic(targetStore, targetCredentials);
         checkDisposed();
-      })
+      }, handoff?.complete ? handoff : undefined)
       : { ok: false };
     checkDisposed();
     try { provider.assertAtomic(targetStore, targetCredentials); } catch { return unknownSignOut(); }

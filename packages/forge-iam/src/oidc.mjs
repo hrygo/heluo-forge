@@ -255,8 +255,12 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
       redirect: 'error',
       signal: AbortSignal.any(signals),
     });
-  } catch {
-    throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable');
+  } catch (cause) {
+    // Native fetch failed while opening the connection. An injected fetcher
+    // can catch and rethrow a later failure, so its cause cannot prove delivery.
+    const refused = method === 'POST' && fetchImpl === globalThis.fetch
+      && cause?.cause?.code === 'ECONNREFUSED' && cause.cause.syscall === 'connect';
+    throw new OidcError('IAM_UNREACHABLE', 'IAM endpoint is unreachable', refused ? { requestUnsent: true } : {});
   }
   if (!response.ok) {
     let oauthError;

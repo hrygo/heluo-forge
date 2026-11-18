@@ -532,17 +532,21 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       return true;
     };
     engine: for (;;) {
-      const attempt = observeTransport ? { calls: 0, version, check() {
-        try {
-          checkSession();
-          signal.throwIfAborted();
-          const denied = refusal(request, this.version);
-          if (denied) { this.denied = denied; throw error(denied); }
-        } catch (cause) {
-          this.denied ??= streamRefusal() ?? failureCode(cause);
-          throw cause;
-        }
-      } } : undefined;
+      const attempt = observeTransport ? {
+        calls: 0, version, withDispatchAccessToken: session?.withDispatchAccessToken,
+        refuse(cause) { this.denied ??= failureCode(cause); },
+        check() {
+          try {
+            checkSession();
+            signal.throwIfAborted();
+            const denied = refusal(request, this.version);
+            if (denied) { this.denied = denied; throw error(denied); }
+          } catch (cause) {
+            this.denied ??= streamRefusal() ?? failureCode(cause);
+            throw cause;
+          }
+        },
+      } : undefined;
       try {
         checkSession();
         signal.throwIfAborted();
@@ -1291,13 +1295,9 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
       configuredMaxTokens.set(m.id, m.maxTokens);
     }
   }
-  // pi-ai reads `options.headers` synchronously while building a request, so an
-  // async token lookup inside `stream` would arrive after the headers are
-  // consumed. The host asks for the key on every call, which gives exactly one
-  // resolution per request; the token resolved there is reused by the headers
-  // below. A parallel call may see a newer token. The provider can invalidate
-  // the previous token immediately on rotation, so already-dispatched requests
-  // still depend on the gateway's handling of in-flight authorization.
+  // The key resolver can renew IAM before pi-ai constructs the request. For
+  // protected native calls, the transport replaces this header using the
+  // same login's durable token just before send.
   let iamToken = null;
   const resolveApiKey = async (...args) => {
     const key = await resolveKey(...args);

@@ -2,7 +2,7 @@ import { assertClientAuthCurrent, clientAuthDescriptor } from './client-auth.mjs
 import { isDeepStrictEqual } from 'node:util';
 import { IamError } from './errors.mjs';
 import { credentialReadError } from './error-contract.mjs';
-import { randomToken, refreshTokens, verifyIdToken } from './oidc.mjs';
+import { OidcError, randomToken, refreshTokens, verifyIdToken } from './oidc.mjs';
 import { isAccessExpired, isRefreshUsable, renewalDeadline, renewalLeadMillis, shouldRefresh } from './record.mjs';
 import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, nowIso, refreshBaseId, REFRESH_TIMEOUT_MS, RESUME_JUMP_MS, safeMessage, sameGrantIgnoringRefreshMarker } from './service-helpers.mjs';
 
@@ -26,6 +26,7 @@ export function createTokenResolver(env) {
   let refreshPromiseIssuer = null;
   let refreshPromiseAuthentication = null;
   let refreshPromisePending = null;
+  let refreshExchange = null;
   let lastBackgroundRefreshAt = 0;
   let backgroundRefreshBinding = null;
   let renewal = null;
@@ -60,6 +61,14 @@ export function createTokenResolver(env) {
     return refreshPromise && refreshPromisePending?.store === store
       && refreshPromisePending.credentials === credentials
       && isDeepStrictEqual(refreshPromisePending.grant, grant) ? refreshPromise : null;
+  }
+
+  function takeRefreshForSignOut() {
+    const exchange = refreshExchange;
+    if (!exchange) return undefined;
+    exchange.signOut = true;
+    return (store, credentials) => exchange.store === store && exchange.credentials === credentials
+      ? { pending: exchange.pending, complete: exchange.complete } : undefined;
   }
 
   // A suspended host resumes with a wall clock that has moved while the
@@ -308,7 +317,8 @@ export function createTokenResolver(env) {
       }
       throw new IamError(code, safeMessage(code));
     };
-    const useGrant = (grant) => {
+    const unsent = new IamError('IAM_UNREACHABLE', safeMessage('IAM_UNREACHABLE'));
+    const useGrant = (grant, restored = false) => {
       checkAlive();
       // Authentication and store reads can yield while a newer session is
       // adopted. A background flight must never publish over that session.
@@ -324,16 +334,19 @@ export function createTokenResolver(env) {
       }
       checkAlive();
       grants.assertGrantContext(grant, expectedIssuer);
-      if (!grant?.accessToken || grant.refreshOperation?.state === 'pending' || isAccessExpired(grant, now())) return rejectSession();
+      const expired = isAccessExpired(grant, now());
+      if (grant.refreshOperation?.state === 'pending' || (expired && !(restored && isRefreshUsable(grant, now())))) return rejectSession();
       clearObservation();
       grants.rememberAuthentication(authentication, grant);
       ctx.lastGrant = grant;
       grants.own(grant, targetStore);
-      rememberBackgroundRefresh(0);
-      ctx.state = 'ready';
+      rememberBackgroundRefresh(restored ? now() : 0);
+      ctx.state = expired ? 'expired' : 'ready';
       ctx.error = null;
       adoptConsumption(consumption, grant);
       ctx.notify();
+      if (restored) scheduleRenewal({ retry: true });
+      if (expired) throw unsent;
       return grant.accessToken;
     };
     // Do not make signOut wait for an unrelated, possibly stalled initial read.
@@ -393,8 +406,10 @@ export function createTokenResolver(env) {
         authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });
         checkAlive();
         flightAuthentication.value = clientAuthDescriptor(authentication);
-        if (initial.refreshOperation?.state !== 'pending' && !forcedRenewal
-          && !shouldRefresh(initial, now(), config.refreshSkewSeconds)) {
+        const decisionTime = now();
+        if (initial.refreshOperation?.state !== 'pending'
+          && ((!forcedRenewal && !shouldRefresh(initial, decisionTime, config.refreshSkewSeconds))
+            || (!isRefreshUsable(initial, decisionTime) && !isAccessExpired(initial, decisionTime)))) {
           return useGrant(initial);
         }
         if (!isRefreshUsable(initial, now())) return rejectSession();
@@ -444,6 +459,10 @@ export function createTokenResolver(env) {
             grants.assertGrantContext(latest.grant, expectedIssuer);
             const marker = latest.grant.refreshOperation;
             const latestIdentity = grantIdentity(latest.grant);
+            // The observed base binds the entire pre-claim record. A
+            // participating owner restores it only after proving no send.
+            if (marker?.state !== 'pending' && isDeepStrictEqual(identity, latestIdentity)
+              && refreshBaseId(latest.grant, operation.id) === operation.base) return useGrant(latest.grant, true);
             if (!marker || marker.version !== operation.version || marker.id !== operation.id || marker.base !== operation.base
               || !isDeepStrictEqual(identity, latestIdentity)) return rejectSession();
             if (marker.state === 'pending' && latest.grant.refreshToken === originalRefresh) continue;
@@ -503,6 +522,9 @@ export function createTokenResolver(env) {
           const latest = await targetStore.read();
           checkAlive();
           if (!latest.ok || !latest.grant) return rejectSession();
+          const decisionTime = now();
+          if (isDeepStrictEqual(latest.grant, initial) && !isRefreshUsable(initial, decisionTime)
+            && !isAccessExpired(initial, decisionTime)) return useGrant(initial);
           const latestMarker = latest.grant.refreshOperation;
           const completedFromInitial = latestMarker?.state === 'complete'
             && latestMarker.base === refreshBaseId(initial, latestMarker.id)
@@ -532,16 +554,47 @@ export function createTokenResolver(env) {
         // Re-read the original pin for this POST, outside the provider lock.
         authentication = await grants.prepareAuthentication(meta.issuer, targetStore, targetCredentials, { grant: initial, expected: flightAuthentication.value, guard: checkLifecycle });
         checkAlive();
-        const token = await refreshTokens({
-          tokenEndpoint: meta.tokenEndpoint,
-          refreshToken: claimedGrant.refreshToken,
-          clientAuthentication: authentication,
-          clientId: config.clientId,
-          resource: config.gatewayResource,
-          fetchImpl,
-          timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
-        });
-        checkAlive();
+        const pending = { ...claimedGrant, refreshOperation: operation };
+        const exchange = { store: targetStore, credentials: targetCredentials, pending, signOut: false, complete: undefined };
+        refreshExchange = exchange;
+        const ownsSignOut = () => !ctx.disposed && isSigningOut() && auth + 1 === getAuthEpoch()
+          && epoch === getSessionEpoch() && ctx.state !== 'authenticating';
+        const checkResult = () => {
+          if (!exchange.signOut) return checkAlive();
+          // The same Host can verify its dispatched result exclusively for
+          // sign-out. It must never use normal token publication in that epoch.
+          if (!ownsSignOut()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
+          ctx.assertExclusive();
+          provider.assertAtomic(targetStore, targetCredentials);
+          assertClientAuthCurrent(authentication);
+          if (!ownsSignOut()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
+        };
+        let token;
+        try {
+          token = await refreshTokens({
+            tokenEndpoint: meta.tokenEndpoint,
+            refreshToken: claimedGrant.refreshToken,
+            clientAuthentication: authentication,
+            clientId: config.clientId,
+            resource: config.gatewayResource,
+            fetchImpl,
+            timeoutMs: Math.min(config.httpTimeoutMs, REFRESH_TIMEOUT_MS),
+          });
+        } catch (cause) {
+          if (!(cause instanceof OidcError) || cause.code !== 'IAM_UNREACHABLE' || cause.details.requestUnsent !== true) throw cause;
+          checkAlive();
+          let restored = false;
+          const result = await targetStore.mutate((current) => {
+            checkAlive();
+            if (!isDeepStrictEqual(current, pending)) return undefined;
+            restored = true;
+            return claimedGrant;
+          }, { guard: () => { checkAlive(); return true; } });
+          checkAlive();
+          if (!restored || result.record?.kind !== 'grant' || !isDeepStrictEqual(result.record.payload, claimedGrant)) return rejectSession();
+          return useGrant(claimedGrant, true);
+        }
+        checkResult();
         // C9（2026-11-03 书面答复）已确认轮换：旧刷新令牌即时作废、重用只拒本次请求。
         // 因此响应里缺少新令牌、或原样返回旧令牌，都说明这条授权链不能再续用；
         // 不得把已经发出的刷新令牌当成可以再次使用。
@@ -554,21 +607,22 @@ export function createTokenResolver(env) {
             claims = verifyIdToken(token.idToken, { ...verifyOptions, jwks: keys });
           } catch (cause) {
             if (cause?.code !== 'IAM_JWKS_KEY_NOT_FOUND') throw cause;
-            claims = await grants.verifyWithJwks(token.idToken, { uri: meta.jwksUri, ...verifyOptions, guard: checkAlive });
+            claims = await grants.verifyWithJwks(token.idToken, { uri: meta.jwksUri, ...verifyOptions, guard: checkResult });
           }
         }
-        checkAlive();
+        checkResult();
         if (claims && claims.sub !== claimedGrant.subject) {
           throw new IamError('IAM_REFRESH_SUBJECT_MISMATCH', safeMessage('IAM_REFRESH_SUBJECT_MISMATCH'));
         }
         const next = grants.grantFromToken(claimedGrant, token, meta.issuer, nowIso(now()));
         if (claims) next.subject = claims.sub;
         next.refreshOperation = { ...operation, state: 'complete' };
+        exchange.complete = next;
         checkAlive();
         let committed = false;
         const result = await targetStore.mutate((current) => {
           checkAlive();
-          if (!isDeepStrictEqual(current, { ...claimedGrant, refreshOperation: operation })) return undefined;
+          if (!isDeepStrictEqual(current, pending)) return undefined;
           committed = true;
           return next;
         }, { guard: () => { checkAlive(); return true; } });
@@ -577,7 +631,7 @@ export function createTokenResolver(env) {
           || !isDeepStrictEqual(result.record.payload, next)) return rejectSession();
         return useGrant(next);
       } catch (cause) {
-        if (staleBackground && cause === staleBackground) throw cause;
+        if (cause === unsent || (staleBackground && cause === staleBackground)) throw cause;
         if (!alive()) throw new IamError('IAM_DISPOSED', 'IAM session changed');
         try { checkAlive(); } catch (currentCause) { cause = currentCause; }
         // Revoked trust before a claim cannot have consumed the refresh token.
@@ -643,6 +697,7 @@ export function createTokenResolver(env) {
       refreshPromiseCredentials = null;
       refreshPromiseIssuer = null;
       refreshPromisePending = null;
+      refreshExchange = null;
     });
     refreshPromise = flight;
     return useSharedRefresh(false);
@@ -683,6 +738,40 @@ export function createTokenResolver(env) {
     };
     return Object.freeze({
       assertCurrent,
+      async withDispatchAccessToken(dispatch) {
+        // The SDK may have built its headers before another caller rotated the
+        // grant. Use the durable version at the last local point before send.
+        for (let read = 0; read < 2; read += 1) {
+          assertCurrent();
+          const local = ctx.lastGrant;
+          const claim = refreshPromisePending;
+          let record;
+          try { record = await targetStore.read(); }
+          catch (cause) {
+            assertCurrent();
+            const code = credentialReadError(cause);
+            throw new IamError(code, safeMessage(code));
+          }
+          assertCurrent();
+          const latest = record.grant;
+          const issuer = ctx.knownIssuer();
+          if (!record.ok || !latest || !isDeepStrictEqual(grantIdentity(latest), identity)) {
+            throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
+          }
+          grants.assertGrantContext(latest, issuer);
+          const authentication = config.authMode === 'confidential'
+            ? await grants.prepareAuthentication(issuer, targetStore, targetCredentials, { grant: latest, guard: assertCurrent })
+            : undefined;
+          assertCurrent();
+          assertClientAuthCurrent(authentication);
+          if (local.accessToken !== ctx.lastGrant.accessToken || local.refreshToken !== ctx.lastGrant.refreshToken
+            || claim !== refreshPromisePending) continue;
+          if (latest.refreshOperation?.state === 'pending' || isAccessExpired(latest, now())
+            || (claim?.store === targetStore && claim.grant.refreshToken === latest.refreshToken)) break;
+          return dispatch(latest.accessToken);
+        }
+        throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+      },
       async renew() {
         assertCurrent();
         const current = ctx.lastGrant;
@@ -705,6 +794,7 @@ export function createTokenResolver(env) {
     scheduleRenewal,
     cancelRenewal,
     ownedPendingFlight,
+    takeRefreshForSignOut,
     get inFlight() { return refreshPromise; },
     get lastBackgroundRefreshAt() { return currentBackgroundRefreshAt(); },
     set lastBackgroundRefreshAt(next) { rememberBackgroundRefresh(next); },

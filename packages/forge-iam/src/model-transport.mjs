@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { IamError } from './errors.mjs';
 
 const scope = new AsyncLocalStorage();
 const transportFaults = new Set([
@@ -37,22 +38,42 @@ export function modelFetchOptions(options, baseURL) {
     maxRetries: 0,
     async fetch(input, init) {
       attempt.check();
-      attempt.calls++;
-      attempt.refusedConnection = false;
       const url = input instanceof Request ? input.url : String(input);
       const method = init?.method ?? (input instanceof Request ? input.method : null);
+      const bound = url === endpoint && method === 'POST';
       // Observe one direct bound POST. A followed redirect can have accepted
       // the first request before a later connection is refused.
+      const send = async (token) => {
+        attempt.check();
+        const request = { ...init, redirect: 'manual' };
+        if (token !== undefined) {
+          request.headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+          request.headers.set('X-IAM-Token', token);
+          request.headers.set('X-Consumer-Type', 'personal');
+        }
+        attempt.calls++;
+        attempt.refusedConnection = false;
+        try {
+          const response = await fetcher(input, request);
+          attempt.status = response.status;
+          attempt.retryAfterMs = retryAfterMillis(response.headers.get('retry-after'));
+          return response;
+        } catch (cause) {
+          const socket = cause?.cause ?? cause;
+          attempt.fault = transportFaults.has(socket?.code) ? socket.code : undefined;
+          attempt.refusedConnection = directFetch && bound
+            && socket?.code === 'ECONNREFUSED' && socket.syscall === 'connect';
+          throw cause;
+        }
+      };
+      if (!attempt.withDispatchAccessToken) return send();
+      if (!bound) throw new IamError('IAM_MODEL_CONTEXT_CHANGED', 'Model transport binding changed');
       try {
-        const response = await fetcher(input, { ...init, redirect: 'manual' });
-        attempt.status = response.status;
-        attempt.retryAfterMs = retryAfterMillis(response.headers.get('retry-after'));
-        return response;
+        return await attempt.withDispatchAccessToken(send);
       } catch (cause) {
-        const socket = cause?.cause ?? cause;
-        attempt.fault = transportFaults.has(socket?.code) ? socket.code : undefined;
-        attempt.refusedConnection = directFetch && url === endpoint && method === 'POST'
-          && socket?.code === 'ECONNREFUSED' && socket.syscall === 'connect';
+        // SDKs may wrap this failure. Preserve a verified local refusal before
+        // the first network call, without reclassifying a transport error.
+        if (!attempt.calls) attempt.refuse(cause);
         throw cause;
       }
     },

@@ -685,6 +685,30 @@ test('concurrent model preflights share the same token rotation', async t => {
   assert.doesNotThrow(() => second.assertCurrent());
 });
 
+test('dispatch uses a newer durable token for the same login without adopting a different session', async t => {
+  const f = await sessionFixture(t);
+  const handle = f.service.captureModelSession();
+  const complete = {
+    ...f.grant, accessToken: 'rotated-access', refreshToken: 'rotated-refresh',
+    refreshOperation: { version: 1, state: 'complete', id: f.grant.sessionInstanceId, base: f.grant.sessionInstanceId },
+  };
+  await f.store.write(complete);
+  assert.equal(await handle.withDispatchAccessToken(token => token), 'rotated-access');
+  await f.store.write({ ...complete, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') });
+  await assert.rejects(handle.withDispatchAccessToken(() => assert.fail('replacement login cannot dispatch')), { code: 'IAM_NOT_SIGNED_IN' });
+  assert.equal(f.oidc.counts.refresh, 0);
+});
+
+test('dispatch cannot use a token while a persisted refresh is pending', async t => {
+  const f = await sessionFixture(t);
+  const handle = f.service.captureModelSession();
+  await f.store.write({ ...f.grant, refreshOperation: {
+    version: 1, state: 'pending', id: f.grant.sessionInstanceId, base: f.grant.sessionInstanceId,
+  } });
+  await assert.rejects(handle.withDispatchAccessToken(() => assert.fail('pending refresh cannot dispatch')), { code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal(f.oidc.counts.refresh, 0);
+});
+
 test('a model preflight cannot renew a different login for the same subject', async t => {
   const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
   const handle = f.service.captureModelSession();
