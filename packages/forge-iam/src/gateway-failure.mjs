@@ -13,6 +13,7 @@
 // Codes the plugin itself emits; they are already the contract.
 export const SELF_CODES = new Set([
   'ENTERPRISE_IAM_UNAVAILABLE',
+  'ENTERPRISE_IAM_RENEWAL_UNCONFIRMED',
   'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
   'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',
   'ENTERPRISE_GATEWAY_FORBIDDEN',
@@ -123,8 +124,9 @@ export const BODY_CODES = Object.freeze({
 export const squash = (value) => typeof value === 'string' ? value.toLowerCase().replace(/[^a-z0-9]+/g, '') : '';
 // 3. only a socket-level failure justifies claiming the gateway cannot be reached.
 export const UNREACHABLE_SYSCALLS = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
+const MAX_ERROR_BODY_BYTES = 8192;
 const parseBody = (text) => {
-  if (typeof text !== 'string' || text.length === 0 || text.length > 8192) return undefined;
+  if (typeof text !== 'string' || text.length === 0 || text.length > MAX_ERROR_BODY_BYTES) return undefined;
   const start = text.indexOf('{');
   if (start < 0) return undefined;
   const attempt = (slice) => { try { return JSON.parse(slice); } catch { return undefined; } };
@@ -144,6 +146,35 @@ const bodyTokens = (failure) => {
   return [inner.code, inner.type, body.code, body.type, body.status, body.error]
     .filter(value => typeof value === 'string');
 };
+
+// The SDK can flatten wire 401 reasons to AUTH. Examine a bounded copy and
+// retain only the explicit revocation decision, leaving the SDK's body intact.
+export async function gatewayResponseRevoked(response) {
+  if (response.status !== 401 || !response.body || Number(response.headers.get('content-length')) > MAX_ERROR_BODY_BYTES) return false;
+  const reader = response.clone().body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let size = 0;
+  let done = false;
+  try {
+    while (!done) {
+      const part = await reader.read();
+      done = part.done;
+      if (done) break;
+      size += part.value.byteLength;
+      if (size > MAX_ERROR_BODY_BYTES) return false;
+      text += decoder.decode(part.value, { stream: true });
+    }
+  } catch {
+    // Cancellation or a truncated 401 provides no explicit revocation proof.
+    return false;
+  } finally {
+    if (!done) void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+  return bodyTokens({ responseBody: text + decoder.decode() }).some(token =>
+    BODY_CODES[squash(token.split('/').at(-1))] === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+}
 /**
  * Internal IAM and credential-storage codes answer "what should the person do?".
  * They are emitted while resolving the key, before any request leaves, so each
@@ -156,6 +187,7 @@ export const USER_CODE_BY_INTERNAL = Object.freeze({
   // The authentication service itself is out of reach: retry later.
   IAM_UNREACHABLE: 'ENTERPRISE_IAM_UNAVAILABLE',
   IAM_HTTP_ERROR: 'ENTERPRISE_IAM_UNAVAILABLE',
+  IAM_RENEWAL_UNCONFIRMED: 'ENTERPRISE_IAM_RENEWAL_UNCONFIRMED',
   // Keyring, encrypted record or client-secret storage cannot be used.
   CRED_KEY_UNAVAILABLE: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',
   CRED_DECRYPT_FAILED: 'ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE',

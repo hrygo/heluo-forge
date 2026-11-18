@@ -86,6 +86,7 @@ DSH 客户端标识（UA）同属跨模块，单独成文：[DSH 客户端标识
 | 管理 API 认证 | `routes` 测试 | 仅 Connection 同步返回 undefined 时放行；异常结果拒绝且 service 零调用 |
 | 会话同步与 provider 归属 | `provider-replacement-read`、`sync-provider-replacement` 测试 | 同步前后复查 provider，以本地采纳版本和身份快照保护结果；旧读取/错误不覆盖新会话或新确认的空状态，替换仅清本次仍持有的旧身份。`getView/getPrincipal` 只读缓存，不提供即时撤权检查 |
 | 刷新与重启恢复 | `dual-process-refresh`、`refresh-complete-validation`、`service-singleflight-regression` 测试 | pending/complete 协议依赖受信原子后端；内置 SQLite 组合已接入，本机离线验证不代表目标平台与企业联调通过 |
+| 半程续期与模型授权 | [model-transport-sqlite](<../../packages/forge-iam/test/model-transport-sqlite.test.mjs>) | 真实 SQLite 与环回 HTTP 验证单、双 Host 的同一流续接、新请求单次发送、五秒截止、退出及网关撤权。IAM 与网关响应使用合成数据 |
 | 条件退出及远端撤销结果 | `signout-pending`、`signout-replacement`、`routes` 及 [RP 行为保护](<../../packages/forge-iam/test/rp-logout-issuer-context.test.mjs>) | 清理未知不等于退出成功；墓碑不是物理删除，成功撤销响应不证明后代授权已终结。合法 RP 配置要求显式退出地址且优先于 discovery；迟到 metadata 不替换该地址，六项内存回归保护现有行为，不是漏洞修复 |
 | 账户恢复、取消及退出交错 | `client-signout-behavior` 测试 | 真实 Client 源码的模拟渲染与受控交付；不证明跨入口/跨进程排序 |
 | 网关凭据读写与归属 | [未受信拒绝](<../../packages/forge-iam/test/gateway-atomic-policy.test.mjs>)、[联合条件提交](<../../packages/forge-iam/test/gateway-atomic-transactions.test.mjs>)、[服务集成](<../../packages/forge-iam/test/gateway-atomic-service.test.mjs>)、[SQLite 存储](<../../packages/forge-credentials-keychain/test/sqlite-store.test.mjs>)及 `gateway-provider-context`、`store`、`service` | 内置 SQLite adapter 提供双键条件提交；门禁不满足时保存/清除拒绝，旧网关 V1 不被采用，凭据保留且不覆盖；orphan 和不一致 pair 保留且不自动迁移。离线测试覆盖快照 CAS、guard、墓碑和失败回滚；不证明跨进程 grant 授权、目标机耐久提交或真实调用 |

@@ -381,7 +381,8 @@ test('identified V1 pending refresh returns the rotated token through real Host 
     cli.closed.then((result) => { throw new Error(`CLI exited before Host observed pending: ${result.code ?? result.signal}`); }),
   ]);
   assert.equal(cli.stdout(), '');
-  assert.equal(app.service.getView().error, 'IAM_REAUTH_REQUIRED');
+  assert.equal(app.service.getView().state, 'ready', 'the verified pending operation keeps the same adopted login');
+  assert.equal(app.service.getView().error, null);
 
   await writer.modifyRecord('heluo-iam/session', (current) => {
     assert.deepEqual(current, pending);

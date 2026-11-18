@@ -25,6 +25,7 @@ export const SAFE_MESSAGES = Object.freeze({
   IAM_UNREACHABLE: 'IAM endpoint is unreachable',
   IAM_INVALID_GRANT: 'IAM authorization is no longer valid',
   IAM_REAUTH_REQUIRED: 'IAM sign-in is required again',
+  IAM_RENEWAL_UNCONFIRMED: 'IAM token renewal outcome is unconfirmed',
   IAM_STATE_MISMATCH: 'IAM callback state does not match this attempt',
   IAM_ATTEMPT_EXPIRED: 'IAM sign-in attempt expired',
   IAM_ID_TOKEN_INVALID: 'IAM ID token is invalid',

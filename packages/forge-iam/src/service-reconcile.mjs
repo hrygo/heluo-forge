@@ -113,6 +113,10 @@ export function createReconciler(env) {
       assertClientAuthCurrent(authentication);
       const marker = record.grant.refreshOperation;
       const identity = grantIdentity(record.grant);
+      // The token resolver owns confirmation for this already-adopted login.
+      // Other logins and missing records still take the normal invalidation path.
+      if (!observation && marker?.state !== 'pending' && expectedGrant && token.hasObservedRotation()
+        && isDeepStrictEqual(identity, grantIdentity(expectedGrant))) return ctx.view();
       const refreshDigest = (grant, id) => createHmac('sha256', id).update(grant.refreshToken).digest('base64url');
       const restored = observation && marker?.state !== 'pending' && isDeepStrictEqual(identity, observation.identity)
         && refreshBaseId(record.grant, observation.id) === observation.base
@@ -142,6 +146,7 @@ export function createReconciler(env) {
           ]).finally(() => clearTimeout(timer));
           if (!isCurrent() || finished) return ctx.view();
         }
+        if (!ownFlight && token.observePendingRotation(targetStore, targetCredentials, record.grant)) return ctx.view();
         setObservation({ version: marker.version, id: marker.id, base: marker.base,
           identity, refreshDigest: refreshDigest(record.grant, marker.id), authEpoch: getAuthEpoch(), store: targetStore,
           deadline: now() + REFRESH_TIMEOUT_MS });

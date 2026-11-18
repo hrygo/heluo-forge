@@ -60,6 +60,7 @@ export const MESSAGES = Object.freeze({
   // The IAM service and the credential store fail before a request is sent;
   // they answer with what the person can do, not with an internal module name.
   ENTERPRISE_IAM_UNAVAILABLE: '企业认证服务暂不可达，请稍后重试。',
+  ENTERPRISE_IAM_RENEWAL_UNCONFIRMED: '企业账号续期未确认，请检查登录状态后重试。',
   ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: '凭据安全存储暂不可用，请检查系统密钥环或联系管理员。',
   ENTERPRISE_CREDENTIAL_INVALID: '提交的扩展令牌或扩展声明不合规，请检查后重试。',
   ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: '该令牌属于另一个企业账号，请重新登录后再操作。',
@@ -97,6 +98,7 @@ const finish = code => ({ type: 'finish', reason: { kind: 'error', failure: { co
 
 const expires = view => typeof view?.accessExpiresAt === 'number' ? view.accessExpiresAt : Date.parse(view?.accessExpiresAt);
 function permit(view) {
+  if (view?.state === 'error' && view.error === 'IAM_RENEWAL_UNCONFIRMED') return 'ENTERPRISE_IAM_RENEWAL_UNCONFIRMED';
   if (view?.state !== 'ready' || !view.principal || !Number.isFinite(expires(view)) || expires(view) <= Date.now()) return 'IAM_LOGIN_REQUIRED';
   if (view.gatewayCredential?.state !== 'configured' || view.gatewayCredential.matchesAccount !== true) return 'IAM_GATEWAY_CREDENTIAL_REQUIRED';
   return null;
@@ -105,7 +107,7 @@ const identity = view => JSON.stringify([view?.principal, view?.gatewayCredentia
 // Who may still stream. A re-saved Key at the same address moves `identity`
 // (the catalogue must be rebuilt) but not this: an answer already in progress
 // survives it. Losing the account or the credential does abort the answer.
-const authorizationId = view => JSON.stringify([view?.principal, view?.gatewayCredential?.state ?? null]);
+const authorizationId = (view, epoch) => JSON.stringify([view?.principal, view?.gatewayCredential?.state ?? null, epoch]);
 // The binding the adapter was built for. The key generation is only the write
 // version of the stored credential: re-saving the same key at the same address
 // must not count as a context change, while an address or owner change must.
@@ -372,7 +374,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const view = iam.getView();
       const currentId = identity(view);
       const current = `${currentId}:${iam.getModelAccessEpoch?.() ?? ''}`;
-      const currentAuthorization = authorizationId(view);
+      const currentAuthorization = authorizationId(view, iam.getModelAuthorizationEpoch?.());
       if (lastAuthorization !== currentAuthorization) {
         lastAuthorization = currentAuthorization;
         lease.abort(); lease = new AbortController();
@@ -394,12 +396,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       // gateway configuration. Keep valid prepared calls and update cancellation.
       const nextDeadline = view?.state === 'ready' ? expires(view) : null;
       if (deadline !== nextDeadline) {
-        const expired = view?.state === 'expired' && Number.isFinite(deadline) && !lease.signal.aborted;
+        const expired = Number.isFinite(deadline) && !lease.signal.aborted
+          && (view?.state === 'expired' || (activeStreams.size > 0 && deadline <= Date.now()));
         deadline = nextDeadline; clearTimeout(timer);
+        if (expired) expireAuthorization();
         const remaining = deadline - Date.now();
         if (deadline !== null && remaining > 0) {
           timer = setTimeout(expireAuthorization, Math.min(remaining, 2147483647)); timer.unref?.();
-        } else if (deadline !== null || expired) expireAuthorization();
+        } else if (deadline !== null && !expired) expireAuthorization();
       }
       scheduleRotationCheck();
       return view;
@@ -461,8 +465,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     while (imagesRefused.size > DOWNGRADED_SESSION_LIMIT) imagesRefused.delete(imagesRefused.values().next().value);
   };
   // Remember a revocation so no later call spends another round trip on it.
-  const record = code => {
-    if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED') revokedBinding = lastId;
+  const record = (code, binding = lastId) => {
+    if (code === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED' && binding === lastId) {
+      revokedBinding = binding;
+      lease.abort(error(code));
+    }
     return code;
   };
   // The failure object's shape stays { code, message }: the client renders that
@@ -613,10 +620,19 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     };
     engine: for (;;) {
       let stopWatching;
+      const expectedBinding = { baseURL: connectionBaseURL, subject, generation: iam.getView()?.gatewayCredential?.generation };
+      const confirmBinding = async () => {
+        const current = await iam.resolveGatewayConnection();
+        if (!sameBinding(expectedBinding, current) || (expectedBinding.generation ?? null) !== (current.generation ?? null)) {
+          throw error('IAM_MODEL_CONTEXT_CHANGED');
+        }
+      };
       const attempt = observeTransport ? {
-        calls: 0, version, withDispatchAccessToken: session?.withDispatchAccessToken,
+        calls: 0, version, binding: lastId,
+        withDispatchAccessToken: session?.withDispatchAccessToken && (send => session.withDispatchAccessToken(send, signal, confirmBinding)),
         currentAccessToken: session?.currentAccessToken,
-        accept() { stopWatching ??= watchAcceptedStream(session, streamLease, signal); },
+        accept() { this.accepted = true; stopWatching ??= watchAcceptedStream(session, streamLease, signal); },
+        revoke() { this.revocation = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', this.binding); },
         refuse(cause) { this.denied ??= failureCode(cause); },
         check() {
           try {
@@ -650,17 +666,35 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           }
           if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
           if (diagnosed.has(chunk)) { yield chunk; return; }
+          const failure = chunk.type === 'finish' && chunk.reason?.kind !== 'aborted' ? chunk.reason?.failure : undefined;
+          if (attempt?.revocation || (failure && failureCode(failure) === 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED')) {
+            // A confirmed refusal must reach other consumers immediately, even
+            // while this accepted response is otherwise pausing its output.
+            const revoked = record('ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED', attempt?.binding);
+            noteMapped(failure, revoked);
+            yield failed(request, failure, revoked, 'unknown', modelTransportDiagnostic(attempt, output, false));
+            return;
+          }
+          if (attempt?.accepted) {
+            const renewal = session?.waitForModelOutput?.(signal);
+            if (renewal) {
+              await renewal;
+              if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
+              code = streamRefusal();
+              if (code) throw error(code);
+            }
+          }
           // The SDK emits an empty usage chunk before its error even when the
           // socket was never connected. No usage was incurred for this attempt.
           if (chunk.type === 'usage' && beforeModelSend(attempt)) continue;
-          if (chunk.type === 'finish' && chunk.reason?.failure && chunk.reason.kind !== 'aborted') {
+          if (failure) {
             // The model layer turns an HTTP error into a finish chunk, so the code
             // arrives here without ever passing through the thrown-error branch.
-            const mapped = attempt?.denied ?? record(failureCode(chunk.reason.failure));
-            noteMapped(chunk.reason.failure, mapped);
-            if (await retryTransport(attempt, chunk.reason.failure, mapped)) continue engine;
+            const mapped = attempt?.denied ?? record(failureCode(failure), attempt?.binding);
+            noteMapped(failure, mapped);
+            if (await retryTransport(attempt, failure, mapped)) continue engine;
             if (downgradeImages(mapped)) continue engine;
-            yield failed(request, chunk.reason.failure, mapped, attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false)); return;
+            yield failed(request, failure, mapped, attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false)); return;
           }
           emitted = true;
           if (chunk.type !== 'usage' && chunk.type !== 'finish') output = true;
@@ -674,7 +708,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       } catch (cause) {
         if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
         const authorization = streamRefusal();
-        code = authorization ?? attempt?.denied ?? failureCode(cause);
+        code = authorization ?? attempt?.denied ?? attempt?.revocation ?? failureCode(cause);
         if (!authorization && await retryTransport(attempt, cause, code)) continue engine;
         if (!authorization && downgradeImages(code)) continue engine;
         // Retry only before the first chunk leaves: after emission a second
@@ -698,7 +732,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           }
         }
         noteMapped(cause, code);
-        yield failed(request, cause, record(code), attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false));
+        yield failed(request, cause, record(code, attempt?.binding), attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false));
         return;
       } finally {
         stopWatching?.();

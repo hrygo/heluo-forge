@@ -1996,6 +1996,7 @@ window.__ModuleLoader__.load({
       IAM_ATTEMPT_EXPIRED: '登录尝试已过期，请重新登录。',
       IAM_INVALID_GRANT: '登录已失效，请重新登录。',
       IAM_REAUTH_REQUIRED: '登录已失效，请重新登录。',
+      IAM_RENEWAL_UNCONFIRMED: '企业账号续期未确认，请重新登录。',
       IAM_NOT_SIGNED_IN: '请先登录企业账号。',
       IAM_ATTEMPT_CANCELLED: '登录已取消，请重新登录。',
       IAM_CALLBACK_UNAVAILABLE: '登录服务暂不可用，请刷新页面后重试。',
@@ -2036,6 +2037,7 @@ window.__ModuleLoader__.load({
       IAM_GATEWAY_BINDING_CHANGED: '网关地址或账号已变化，请重新选择模型后再试。',
       // 认证服务与凭据存储在请求发出前失败：说清楚能做什么，不暴露内部模块名。
       ENTERPRISE_IAM_UNAVAILABLE: '企业认证服务暂不可达，请稍后重试。',
+      ENTERPRISE_IAM_RENEWAL_UNCONFIRMED: '企业账号续期未确认，请检查登录状态后重试。',
       ENTERPRISE_CREDENTIAL_STORAGE_UNAVAILABLE: '凭据安全存储暂不可用，请检查系统密钥环或联系管理员。',
       ENTERPRISE_CREDENTIAL_INVALID: '提交的扩展令牌或扩展声明不合规，请检查后重试。',
       ENTERPRISE_CREDENTIAL_OWNER_MISMATCH: '该令牌属于另一个企业账号，请重新登录后再操作。',

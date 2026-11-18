@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { IamError } from './errors.mjs';
+import { gatewayResponseRevoked } from './gateway-failure.mjs';
 
 const scope = new AsyncLocalStorage();
 const transportFaults = new Set([
@@ -63,6 +64,7 @@ export function modelFetchOptions(options, baseURL) {
           attempt.status = response.status;
           attempt.retryAfterMs = retryAfterMillis(response.headers.get('retry-after'));
           if (bound && response.ok) attempt.accept?.();
+          if (bound && response.status === 401 && attempt.revoke && await gatewayResponseRevoked(response)) attempt.revoke();
           return response;
         } catch (cause) {
           const socket = cause?.cause ?? cause;
