@@ -51,6 +51,18 @@ test('a sibling with the same textual prefix is not protected', () => {
   assert.equal(matchProtected(join(sibling, 'secret.txt'), roots).protected, false);
 });
 
+test('POSIX preserves literal backslashes in existing and missing path components', { skip: process.platform === 'win32' }, (context) => {
+  const fixture = mkdtempSync(join(tmpdir(), 'forge-policy-literal-'));
+  context.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const directory = join(fixture, 'literal\\directory');
+  mkdirSync(directory);
+  const file = join(directory, 'literal\\file');
+  writeFileSync(file, 'fixture');
+  assert.equal(canonicalize(file, { platform: 'linux' }), realpathSync(file));
+  assert.equal(canonicalize(join(directory, 'new\\file'), { platform: 'linux' }), join(realpathSync(directory), 'new\\file'));
+  assert.equal(matchProtected(file, resolveProtectedRoots([directory])).protected, true);
+});
+
 test('the root itself is protected but its parent is not', () => {
   assert.equal(matchProtected(protectedRoot, roots).protected, true);
   assert.equal(matchProtected(base, roots).protected, false);
@@ -95,6 +107,13 @@ test('dot-dot after a symlink follows the link target, not the link name', () =>
     assert.equal(throughLink.protected, true);
     const physical = matchProtected(join(realpathSync(base), 'data', 'secret.txt'), []).canonical;
     assert.equal(throughLink.canonical, physical, 'the canonical form must be the physical target');
+    for (const configuredRoots of [
+      resolveProtectedRoots([`${base}/link/../**`]),
+      resolveProtectedRoots(['$DSH_HOME/link/../**'], { DSH_HOME: base }),
+    ]) {
+      assert.equal(matchProtected(join(base, 'data', 'secret.txt'), configuredRoots).protected, true);
+      assert.equal(matchProtected(join(base, 'outside.txt'), configuredRoots).protected, false);
+    }
     // The same-shaped path without a symlink stays outside the root.
     const plain = matchProtected(`${base}/other/../secret.txt`, roots);
     assert.equal(plain.protected, false);
