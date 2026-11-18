@@ -12,8 +12,8 @@
  *    同名，不另造词表；`change.read` 只接受单个变更号，`change.list` 只接受 `@me`（工具层
  *    直接拒绝，零下游调用），两条动作的原始事实与归一投影都在结果里可见。
  * 3. **受控写只有一个入口**（`forge_devops_change_update`）：把分析后的标题/描述/验收标准
- *    用 `change update` 回写到变更，动作是 `change.clarification.write`。默认不登记即拒绝；
- *    写前要求 `confirm{object}` 与本次会话已读到的变更号，写后由适配器用 `change view` 回读，
+ *    用 `change update` 回写到变更，动作是 `change.clarification.write`。随包目录已登记，但登记
+ *    只决定可见，放行仍由分类与门禁决定；写前要求 `confirm{object}` 与本次会话已读到的变更号，写后由适配器用 `change view` 回读，
  *    结果只有 done / failed / unknown 三态，退出码 0 不当成功、未知不重放。
  * 4. **产物落盘没有平台动作**（`action: null`）：它只写本地 `.dsh-devops/`，但 kind 与证据
  *    必须齐全；clarify / plan 的正文由纯函数机检后渲染，缺 findings / 缺验证方式不落盘。
@@ -89,7 +89,7 @@ const NEXT_ACTION = Object.freeze({
   MISSING_ARGUMENT: 'complete-arguments',
   CONFIG_MISSING: 'configure-runtime',
   COMMAND_NOT_WHITELISTED: 'use-supported-channel',
-  // 写回：至少一个字段、先读再写、审批台账缺失时给可执行下一步。
+  // 写回：至少一个字段、先读再写、门禁拒绝时给可执行下一步。
   MISSING_FIELDS: 'complete-arguments',
   TARGET_NOT_BOUND: 'read-the-change',
   // 产物落盘的三种新失败：参数给错（body/data 互斥）与内容不合格（clarify/plan 机检）。

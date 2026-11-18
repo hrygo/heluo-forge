@@ -18,7 +18,7 @@
 
 > 编制依据：2026-10-20 依据两点事实——DevOps 平台已提供 CLI 工具；架构 P7 要求复用企业既有资产。据此本设计以 CLI 为接入形态，不新建 MCP 服务端。**未核验**：CLI 在银河麒麟 aarch64 上的可用性、是否支持环境变量注入凭据、是否提供结构化输出。三项均由 DevOps 团队补充确认，写入 §12，不阻塞设计其余部分。
 >
-> 2026-11-04 用户提供 dop 1.x 的写回参数：`change update <code> --summary/--description/--ai-ac`，用于 Agent 完成变更内容分析后回写标题、描述与验收标准。据此新增受控写工具 `forge_devops_change_update`（默认关闭，登记 enabled 需审批台账；写后回读）；命令 `--help` 与输出样例尚未取证，`--ai-ac` 的落点按回读假设处理。
+> 2026-11-04 用户提供 dop 1.x 的写回参数：`change update <code> --summary/--description/--ai-ac`，用于 Agent 完成变更内容分析后回写标题、描述与验收标准。据此新增受控写工具 `forge_devops_change_update`（默认关闭，写后回读；发放由策略门禁与组织信封决定）；命令 `--help` 与输出样例尚未取证，`--ai-ac` 的落点按回读假设处理。
 >
 > 2026-11-03 用户确认 D 方案（typed read runner）：只读面从「按能力切 4 个工具」改为「1 个枚举动作的 runner + 上下文卡 + 产物落盘」，删除恒 `denied` 的澄清写工具；`clarify` / `plan` 产物改由纯函数机检后生成正文。[dop 1.0.4 Windows 规格](../../contracts/dop-cli-spec.md)记录清单状态参数为 `--state`；其他版本与双平台产物仍须核验。
 >
@@ -113,7 +113,7 @@ Windows `dop` 1.0.4 实测接受 `--api-endpoint` 但仍向默认端点发送请
 |---|---|---|---|
 | `forge_devops_query` | `change.read` / `change.list`（读） | `action`（枚举）、`target`（`change.read` 为变更号；`change.list` 只接受 `@me`）、`status`（仅清单，映射到 `--state`） | 读信封（`status` / `source_revision` / `observed_at` / `command` / `truncated`）+ `facts`（单条：平台记录与归一结果；清单：`user` / `total` / `count` / `items` / `filter`）；不写平台 |
 | `forge_devops_change_context` | `change.read`（读） | `target` 变更号 | 上下文卡（`text` 可直接作为 `context.md`）；承建仓库段是外部指引（`REPO_FACTS_EXTERNAL`） |
-| `forge_devops_change_update` | `change.clarification.write`（写） | `target` 变更号、`summary` / `description` / `aiAc` 至少一个、`confirm{object}` | 默认不登记即拒绝；目标必须是本次会话已读到的变更；固定 argv `change update`，写后用 `change view` 回读；结果 done/failed/unknown，未知不重放 |
+| `forge_devops_change_update` | `change.clarification.write`（写） | `target` 变更号、`summary` / `description` / `aiAc` 至少一个、`confirm{object}` | 随包登记但登记不等于放行（须身份、范围票据与内容/流程规则）；目标必须是本次会话已读到的变更；固定 argv `change update`，写后用 `change view` 回读；结果 done/failed/unknown，未知不重放 |
 | `forge_devops_artifact_write` | 无平台动作（本地落盘） | `repoRoot`、`kind`、`body` 或 `data`、`meta` | 五类产物；`clarify` 需 `data.findings` 且过机检，`plan` 需 `data.items` 且逐条映射过机检；六字段 front matter 与路径约束不变。机检不通过**零落盘**，信封在平级字段带回逐条证据（`clarify` 为 `problems`、`plan` 为 `gaps`），`detail` 仍是字符串——只回一句"未通过机检"会让调用方无法修正。`data.findings` 的结构（`kind` / `basis` / 每个选项的 `pros` 与 `cons` / `recommendation.optionId`）写在工具参数说明里，不要求调用方读源码 |
 
 四条边界：
@@ -240,7 +240,7 @@ flowchart TD
 
 [需求基线 §2.3](../../requirements/requirements-baseline.md)是范围唯一真源，[全流程设计](forge-devops-lifecycle.md)定义产品行为，[工具契约](../../contracts/engineering-tools.md)定义待核验动作/结果；本模块不复制字段。
 
-2026-11-04 起澄清回写以 `change update`（`--summary/--description/--ai-ac`）实现：工具面提供 `forge_devops_change_update`，默认不登记即拒绝，登记 enabled 还须审批台账；写前必须先读该变更，写后回读。澄清单与交付计划仍经机检后落本地产物。
+2026-11-04 起澄清回写以 `change update`（`--summary/--description/--ai-ac`）实现：工具面提供 `forge_devops_change_update`，随包登记但登记不等于放行（仍须身份、范围票据与内容/流程规则）；写前必须先读该变更，写后回读。澄清单与交付计划仍经机检后落本地产物。
 
 显式入口加系统变更号后读取独立描述、验收、系统/仓库和所属故事。经人确认的业务澄清回写正确对象；开始时间及研发进展仅在字段语义明确后自动维护。不调用故事或系统变更最终完成，不用工程结束代填结束时间；最终状态随既有故事上线流程联动。
 

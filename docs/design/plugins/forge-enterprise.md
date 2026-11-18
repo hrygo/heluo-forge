@@ -369,7 +369,7 @@ flowchart TD
 | 单元 | 禁用集映射、顺序、版本断言 | `node --test` |
 | 契约 | 补丁字段符合组合语义 | 契约用例 |
 | 集成 | 缺身份/缺策略/版本不符三种拒绝 | 本地夹具 |
-| 装配 | 底座包 `forge-enterprise`（3 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于六条并集、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
+| 装配 | 底座包 `forge-enterprise`（3 行）与研发包 `forge-engineering`（5 行，含容器行与共享策略）可独立或共存安装；共存时 `heluo-policy` 合并为**一份**且目录等于 12 条并集（6 读 + 6 写）、无 `isolate`、官方 7 行仍禁用 | `node --test tests/bundle-install-rehearsal.test.mjs tests/plugin-patch-layers.test.mjs` |
 | Skill 宿主契约（r12/r13） | 候选带齐 `source/rank/provider/resourceBase/locator` 且摘要无正文、`get(candidate)` 与 `get(name)` 同正文、重复 apply 返回同一 teardown、卸载后 provider 清空 | 真实宿主检查器 + `node --test packages/forge-engineering/test/issue-delivery-skill.test.mjs` |
 | 制品清单 | 最终 tarball 含 `skills/issue-delivery/**`、`locale/*.json`、`icon.svg`，闭包无 `workspace:/file:/link:` | `node scripts/check-bundle-tarballs.mjs` |
 | 组合 | 禁用官方行后 shell/settings/onboarding/模型选择可用；官方入口不可见；`DEEPSEEK_API_KEY` 不构成旁路；升级回灌 | 组合夹具 |

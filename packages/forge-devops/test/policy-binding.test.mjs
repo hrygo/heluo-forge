@@ -135,8 +135,10 @@ test('工具→动作绑定可验证：只读 runner 的每个动作与流程工
     if (flowTool.action === null) continue; // 落盘没有平台动作
     const entry = catalog.get(flowTool.action);
     if (flowTool.kind === 'write') {
-      // 写动作默认不登记（登记 ≠ 批准）：目录里没有它才是默认关闭。
-      assert.equal(entry, undefined, `${toolName} 的写动作不得默认登记`);
+      // 登记只决定可见（登记 ≠ 批准）：分发层已登记；fixture 目录只放读动作，这里校验映射与
+      // "若有条目必须 enabled"，绝不代表写动作被默认批准。
+      assert.equal(flowTool.action, 'change.clarification.write', `${toolName} 的写动作必须是澄清回写`);
+      if (entry !== undefined) assert.equal(entry.enabled, true, `${toolName} 的登记条目必须 enabled`);
       continue;
     }
     assert.ok(entry !== undefined && entry.enabled === true, `${toolName} 的动作缺少已开放目录条目`);

@@ -130,7 +130,7 @@ export interface PolicyEngine {
 
 **目标判定顺序**：按[判定模型 §3](../policy-model.md#3-判定对象与阶段)检查动作、受保护路径、内容与流程，合成决策后复验写动作的任务范围并完成必要的逐次确认和前置审计；执行前复验身份、策略摘要、范围及受保护路径，随后执行并结清。`tools/result` 只作同步兜底观察，不代替 awaited 决策；pending 结清前后续动作不得继续。未知或未开放动作、缺失目标、范围不符以及工具自报 `readOnly` 的越权企图必须零执行。
 
-**现有实现与迁移边界**：当前目录和逐动作批准台账仍使用 `kind`、`egress`、`retry` 与动作、资源、版本、时间的批准复验；这是现行实现的记录，不是目标配置。目标目录不接受这些旧键，策略级批准与新判定流程尚待实现；在迁移完成前不能把目标 schema 视为当前可用接口。
+**现有实现与迁移边界**：逐动作批准台账已在 2026-11 的门禁重构中移除，目录 schema 只接受 `action` / `target` / `revision` / `enabled`，`kind`、`egress`、`retry` 一类旧键在装载时被拒绝；写动作的授权改由分类默认决策、内容/流程规则与范围票据共同承担。策略级批准（组织签名信封）与新判定流程的其余部分尚待实现；在迁移完成前不能把目标 schema 的未实现部分视为当前可用接口。
 
 | 执行路径 | 覆盖方式 |
 |---|---|
@@ -164,7 +164,7 @@ export interface PolicyEngine {
 - **未登记即拒绝**：目录中没有的动作在 guard 处硬拒绝、零副作用（`unregistered-action`）；`deny` 类动作（`gitee.review.record`）即使登记也拒绝，理由是动作语义不允许 Agent 发起。
 - **默认决策不是批准**：`allow` 只表示"不因动作名本身拒绝"，内容与流程规则仍逐次判定；HARD 命中不可被确认提升。
 - **内容与流程规则不在本文复制**：内置规则集、阈值与降级语义见[判定模型 §6、§7](../policy-model.md)；分级阈值与误报只能在真实仓库上评估后冻结。
-- **断言现状**：`packages/forge-policy/test/write-register.test.mjs` 断言本表的动作、类别与默认决策同代码词表逐条一致，并断言随包补丁层只登记只读动作；判定链路的其余断言在 `packages/forge-policy/test/apply.test.mjs`。
+- **断言现状**：`packages/forge-policy/test/write-register.test.mjs` 断言本表的动作、类别与默认决策同代码词表逐条一致，并断言四个分发补丁层登记本表全部动作、四层逐字同序、默认决策与设计一致（登记只决定可见，放行仍由分类承担）；判定链路的其余断言在 `packages/forge-policy/test/apply.test.mjs`。
 
 #### 5.1.2 策略级批准
 

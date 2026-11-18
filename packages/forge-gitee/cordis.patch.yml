@@ -7,23 +7,23 @@
 #      `GITEE_ACTION_UNREGISTERED`，`missing` 列全），不降级成"无策略只读"。
 #   2. `heluo-gitee`：`name` 必须是**包根名**（与清单 `name` 一致），写成子路径宿主解析不到该包。
 #
-# 目录（catalog）是 **6 条并集、0 条 write**：`change.read` / `change.list`（devops 的两条 dop 变更读）+
-# 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定。
-#   - 这一份并集**逐字**写在本包与 `@heluo/forge-devops` 的补丁层里，两行都叫
-#     `id: heluo-policy`，都不另立服务域：loader 按 id 覆盖 config，同装后只剩一个 `policy`
-#     实例、一份目录；任一插件单独装也能自洽。两处文本必须完全一致，否则幸存目录取决于
-#     装配顺序（`tests/plugin-patch-layers.test.mjs` 静态守这份一致，`coexistence.test.mjs`
-#     再验装配后果）。
+# 目录（catalog）是 **12 条并集、6 条 write**：`change.read` / `change.list`（devops 的两条 dop 变更读）+
+# 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定 + 六条写动作。
+#   - 这一份并集**逐字**写在本包与 `@heluo/forge-devops`、`@heluo/forge-enterprise`、
+#     `@heluo/forge-engineering` 的补丁层里，行都叫 `id: heluo-policy`，都不另立服务域：loader 按 id
+#     覆盖 config，同装后只剩一个 `policy` 实例、一份目录；任一插件单独装也能自洽。几处文本必须完全
+#     一致，否则幸存目录取决于装配顺序（`tests/plugin-patch-layers.test.mjs` 静态守这份一致，
+#     `coexistence.test.mjs` 再验装配后果）。
 #   - 第 5 条 `gitee.delivery.judge` 是"只判定、不执行"的只读能力，随包默认登记：
 #     `target: 'change'`（逐字，非 `delivery` 等替代串）；动作类别由策略引擎的内置词表决定，
 #     登记行不再重复声明 `kind`/`egress`。判定回的 `executed` 恒为 `false`、`remote_calls` 恒为 `0`。
-#   - 四个受控写（`gitee.issue.write` / `gitee.pr.write` / `gitee.review.publish` /
-#     `gitee.review.record`）与远端写 `gitee.git.push` **不登记**，默认即 `denied`
-#     （`rule: 'unregistered-action'`），且适配器与 `execFile` 出口都是 0 次调用——"没批准的
-#     能力不出现"靠不登记实现，而不是靠运行时开关。本地动作 `git commit` 不进目录：它必须能做，
-#     发起前由 `git-message.mjs` 强校验首行 `[变更号]`。
-#   - 需要写能力时，由所属 profile 显式追加对应动作；写类动作按内置分类默认放行，风险由内容
-#     规则、流程规则与（推送的）逐次确认承担，组织策略信封只能收紧。默认分发层不替任何人预置授权。
+#   - 六条写动作随包登记，但登记不等于放行：默认决策仍由内置分类给出——四个研发/评审写
+#     （`gitee.issue.write` / `gitee.pr.write` / `change.clarification.write` / `gitee.review.publish`）
+#     默认 `allow` 并叠加内容闸与流程规则；`gitee.git.push` 默认 `confirm`，每次推送单独确认；
+#     `gitee.review.record` 默认 `deny`（人工留痕不由 Agent 发起）。未登记的动作一律
+#     `unregistered-action` 拒绝，登记行只写 `action` / `target` / `enabled`。
+#   - 本地动作 `git commit` 不进目录：它必须能做，发起前由 `git-message.mjs` 强校验首行 `[变更号]`。
+#   - 组织策略信封只能收紧内置默认，本机配置不能放宽。
 #   - 审计舱用内存 sink：属**联调/试点级**证据，记录随进程退出丢失。生产或合规场景必须在
 #     profile 注入持久 sink 后删掉 `allowNonDurable`（否则每个动作都会被 `POLICY_AUDIT_*` 拒绝）。
 #   - 不写 `tools` 映射：插件的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射一次
@@ -45,6 +45,12 @@
           - { action: 'gitee.issue.read', target: 'issue', enabled: true }
           - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }
           - { action: 'gitee.delivery.judge', target: 'change', enabled: true }
+          - { action: 'gitee.issue.write', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.write', target: 'pull-request', enabled: true }
+          - { action: 'change.clarification.write', target: 'change', enabled: true }
+          - { action: 'gitee.review.publish', target: 'pull-request', enabled: true }
+          - { action: 'gitee.git.push', target: 'repository', enabled: true }
+          - { action: 'gitee.review.record', target: 'pull-request', enabled: true }
         audit:
           sink: memory
           allowNonDurable: true

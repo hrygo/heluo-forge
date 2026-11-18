@@ -36,9 +36,9 @@
 - id: credentials
   disabled: true
 
-# 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 6 条动作目录与
-# 内存审计配置（无 isolate）；与 `@heluo/forge-engineering` 并存安装时由 Cordis Loader 按 id 合并为
-# 单一策略实例，不依赖挂载顺序。
+# 通用企业底座挂载。策略行携带与 `@heluo/forge-engineering` 及其成员包逐字一致的 12 条动作目录
+# （6 读 + 6 写）与内存审计配置（无 isolate）；与 `@heluo/forge-engineering` 并存安装时由 Cordis
+# Loader 按 id 合并为单一策略实例，不依赖挂载顺序。
 # 内存审计舱属联调/试点级证据；生产或合规场景必须注入持久 sink 并去掉 allowNonDurable。
 - insert:
     - id: heluo-credentials-keychain
@@ -53,6 +53,12 @@
           - { action: 'gitee.issue.read', target: 'issue', enabled: true }
           - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }
           - { action: 'gitee.delivery.judge', target: 'change', enabled: true }
+          - { action: 'gitee.issue.write', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.write', target: 'pull-request', enabled: true }
+          - { action: 'change.clarification.write', target: 'change', enabled: true }
+          - { action: 'gitee.review.publish', target: 'pull-request', enabled: true }
+          - { action: 'gitee.git.push', target: 'repository', enabled: true }
+          - { action: 'gitee.review.record', target: 'pull-request', enabled: true }
         audit:
           sink: memory
           allowNonDurable: true

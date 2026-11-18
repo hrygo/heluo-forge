@@ -13,7 +13,7 @@
 ## 组合与能力
 
 - [cordis.patch.yml](cordis.patch.yml) 插入 5 个运行时条目，**不含**官方行禁用且**不设** `isolate`：
-  - `heluo-policy`（`@heluo/forge-policy`）：携带与 `@heluo/forge-enterprise`、`@heluo/forge-devops`、`@heluo/forge-gitee` 逐字一致的 6 条动作目录与内存审计配置，与底座并存时由 Cordis Loader 合并为单一 `policy` 实例。
+  - `heluo-policy`（`@heluo/forge-policy`）：携带与 `@heluo/forge-enterprise`、`@heluo/forge-devops`、`@heluo/forge-gitee` 逐字一致的 12 条动作目录（6 读 + 6 写）与内存审计配置，与底座并存时由 Cordis Loader 合并为单一 `policy` 实例。
   - `heluo-engineering-ui`（`@heluo/forge-engineering`）：由 [client.js](client.js) 提供 `设置 → 企业研发工具` 分区（`order: 30`）、导航图标及 `heluo.engineering.tab` 子槽位。
   - `heluo-issue-delivery-skill`（`@heluo/forge-engineering/issue-delivery-skill`）：注册用户显式触发的 [skills/issue-delivery/SKILL.md](skills/issue-delivery/SKILL.md)（资源与索引见 [skills/clauses.json](skills/clauses.json)）。
   - `forge-devops`（`@heluo/forge-devops`，`config: {}`）：提供 DevOps（DOP）工作流能力及内嵌在工具面板中的 `DEVOPS_API_KEY` 凭据条目。

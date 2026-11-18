@@ -2,7 +2,7 @@
  * 入口与装载面门禁：AC-1 / AC-4 / AC-6 / AC-7（静态半）。
  *
  * 这一组用例回答的是"分发出去的那份东西能不能被宿主认出来"：清单（入口名、分发白名单、
- * engines、补丁指针）、补丁层（6 条并集目录：5 读 + 1 只读判定 + 0 条写 + 显式审计 + 显式
+ * engines、补丁指针）、补丁层（12 条并集目录：6 读 + 6 写 + 显式审计 + 显式
  * config，且与 forge-devops 的补丁层共用同一行 `heluo-policy`）、以及
  * **装载安全**（模块顶层不碰宿主、不碰子进程；缺能力时 `apply` 抛可读错误而不是未捕获异常）。
  *
@@ -248,7 +248,7 @@ test('AC-1/AC-7: 真实补丁层可装配——11 个工具按固定顺序注册
 
   const host = createFakeHost();
   // 按**分发补丁层原样**挂载：两行都在根服务域（r10 取消独立服务域），同装 devops 时
-  // 另一份同 id 的策略行按 id 覆盖 config，最终只有一个 `policy` 实例、一份 6 条并集目录。
+  // 另一份同 id 的策略行按 id 覆盖 config，最终只有一个 `policy` 实例、一份 12 条并集目录。
   const mountedPolicy = host.mountPolicy({ catalog: policyRow.catalog, audit: policyRow.audit });
   assert.equal(mountedPolicy.ok, true, `策略层挂载失败：${mountedPolicy.error?.message ?? ''}`);
 
@@ -274,15 +274,16 @@ test('AC-1/AC-7: 真实补丁层可装配——11 个工具按固定顺序注册
   assert.equal(typeof mounted.teardown, 'function');
 });
 
-// 并集目录现在是 6 条：devops 的两条 dop 变更读（`change.read` / `change.list`）+ 3 条 gitee 只读
-// + 1 条只读判定，与 forge-devops 补丁层逐字共用同一份并集；"写动作 = 不登记"不变，
-// 所以 `kind === 'write'` 的断言原样保留。
-test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用同一行 heluo-policy', async () => {
+// 并集目录现在是 12 条：devops 的两条 dop 变更读（`change.read` / `change.list`）+ 3 条 gitee 只读
+// + 1 条只读判定 + 6 条写动作，与 forge-devops / forge-enterprise / forge-engineering 补丁层逐字
+// 共用同一份并集。登记只决定"动作是否可见"，放行仍由内置分类承担
+// （研发/评审写 allow、`gitee.git.push` confirm、`gitee.review.record` deny）。
+test('AC-7: 补丁层自带 12 条并集目录与审计，6 条写随包登记；四层共用同一行 heluo-policy', async () => {
   const rows = await readPatch(PATCH_FILE);
   const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
   assert.ok(policyRow !== undefined);
   const catalog = policyRow.catalog;
-  assert.equal(catalog.length, 6, '目录恰好 6 条并集：change.read / change.list + 3 条 gitee 只读 + 1 条只读判定');
+  assert.equal(catalog.length, 12, '目录恰好 12 条并集：change.read / change.list + 3 条 gitee 只读 + 1 条只读判定 + 6 条写动作');
   assert.deepEqual(
     catalog[0],
     { action: 'change.read', target: 'change', enabled: true },
@@ -300,6 +301,7 @@ test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用
   }
   assert.deepEqual(catalog.slice(2, 5).map((entry) => entry.action), [...GITEE_READ_ACTIONS]);
   for (const entry of catalog.slice(2)) {
+    if (entry.action.startsWith('change.')) continue; // devops 侧的变更写仍留在自己的命名空间
     assert.ok(entry.action.startsWith('gitee.'), `gitee 侧目录动作必须落在 gitee.* 命名空间：${entry.action}`);
   }
   // 最后一条：判定的取值本身就是策略事实，逐项写死而不是"包含 judge 即可"。
@@ -310,9 +312,34 @@ test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用
   );
   assert.deepEqual(
     catalog.map((entry) => entry.action),
-    ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge'],
-    '默认目录只登记只读动作：写类动作由内置分类决定，不需要登记',
+    [
+      'change.read',
+      'change.list',
+      ...GITEE_READ_ACTIONS,
+      'gitee.delivery.judge',
+      'gitee.issue.write',
+      'gitee.pr.write',
+      'change.clarification.write',
+      'gitee.review.publish',
+      'gitee.git.push',
+      'gitee.review.record',
+    ],
+    '默认目录登记全部 12 条动作：六条读开箱可用，六条写按内置分类受控（push 逐次确认、review.record 恒拒）',
   );
+
+  // 写条目同样只写 action / target / enabled：登记不等于放行，默认决策由内置分类给出。
+  for (const action of [
+    'gitee.issue.write',
+    'gitee.pr.write',
+    'change.clarification.write',
+    'gitee.review.publish',
+    'gitee.git.push',
+    'gitee.review.record',
+  ]) {
+    const entry = catalog.find((item) => item.action === action);
+    assert.ok(entry !== undefined, `${action} 必须随包登记:未登记只会得到误导性的 unregistered-action`);
+    assert.equal(entry.enabled, true, `${action} 的登记行必须显式 enabled: true`);
+  }
 
   assert.equal(policyRow.audit.sink, 'memory');
   assert.equal(policyRow.audit.allowNonDurable, true, '联调舱必须显式声明允许非持久');
@@ -327,6 +354,21 @@ test('AC-7: 补丁层自带 6 条并集目录与审计，0 条写；两包共用
   const compiledJudge = mountedPolicy.policy.catalog.get('gitee.delivery.judge');
   assert.equal(compiledJudge?.category, 'read', '编译后的判定条目类别必须是只读');
   assert.equal(compiledJudge?.decision, 'allow', '编译后的判定条目默认决策必须是 allow（否则执行期会被确认拦下）');
+  // 六条写的默认决策逐条写死：这是"登记不等于放行"的可验证事实。
+  for (const [action, decision] of [
+    ['gitee.issue.write', 'allow'],
+    ['gitee.pr.write', 'allow'],
+    ['change.clarification.write', 'allow'],
+    ['gitee.review.publish', 'allow'],
+    ['gitee.git.push', 'confirm'],
+    ['gitee.review.record', 'deny'],
+  ]) {
+    assert.equal(
+      mountedPolicy.policy.catalog.get(action)?.decision,
+      decision,
+      `${action} 的默认决策应为 ${decision}：登记只决定动作可见，放行由分类承担`,
+    );
+  }
 
   // 补丁层自己不得重复插入策略行（叠加安装才会出现两个 heluo-policy）。
   const ids = rows.map((row) => row.id);

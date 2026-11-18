@@ -49,7 +49,7 @@
 - `id: heluo-policy`
 - `name: '@heluo/forge-policy'`
 - `config.audit.sink: memory` 和 `config.audit.allowNonDurable: true`：仅供本地与试点验证，进程退出后记录不保留；当前装配配置没有 90 天留存字段或持久审计 sink。
-- `config.catalog`: 固定 6 条 `kind: 'read'` 默认开放动作（`change.read`、`change.list`、`gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read`、`gitee.delivery.judge`），两份补丁文件与 DevOps/Gitee 子包中的目录逐字节一致；写动作不预置登记，保持默认拒绝。
+- `config.catalog`: 固定 12 条动作目录（6 读 + 6 写：`change.read`、`change.list`、`gitee.repository.read`、`gitee.issue.read`、`gitee.pr.read`、`gitee.delivery.judge`，以及 `gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`gitee.review.record`、`gitee.git.push`、`change.clarification.write`），两份补丁文件与 DevOps/Gitee 子包中的目录逐字节一致；登记只决定可见，默认决策与放行仍由内置分类给出（研发/评审写受控、push `confirm`、review.record `deny`）。
 
 已纳入策略的动作在目录或必要审计不可用时拒绝；这是策略行为，不是补丁中的 `config.failClosed` 配置项。生产审计需要另行完成持久落点设计和验证。
 
@@ -83,7 +83,7 @@
 - insert:
     - id: heluo-policy
       name: '@heluo/forge-policy'
-      config: # 6 条 read catalog；memory 审计仅用于本地与试点
+      config: # 12 条动作目录（6 读 + 6 写）；memory 审计仅用于本地与试点
     - id: heluo-engineering-ui
       name: '@heluo/forge-engineering'
     - id: heluo-issue-delivery-skill
