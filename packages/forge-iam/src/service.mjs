@@ -302,6 +302,8 @@ export function createIamService(rawConfig, options = {}) {
     /** Token resolution lives in service-token.mjs; these are the public edges. */
     resolveToken: token.resolveToken,
     getAccessToken: token.getAccessToken,
+    // Host-only model preflight. The handle exposes no token or identity fields.
+    captureModelSession: token.captureModelSession,
     notifyView() { return ctx.notify(); },
     // Host-only observation; intentionally absent from routes and IamView.
     reconcileDefaultModel: selection.reconcile,

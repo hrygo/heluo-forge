@@ -195,7 +195,11 @@ export function createTokenResolver(env) {
     }
     const checkExpected = () => {
       if (!expected) return;
-      if (ctx.disposed || isSigningOut() || ctx.state !== (expected.recovering ? 'expired' : 'ready')
+      // Publishing the old AT's expiry while the store read is pending does
+      // not replace the session or invalidate its refresh claim.
+      const expectedState = ctx.state === (expected.recovering ? 'expired' : 'ready')
+        || (!expected.recovering && ctx.state === 'expired' && isAccessExpired(ctx.lastGrant, now()));
+      if (ctx.disposed || isSigningOut() || !expectedState
         || getAuthEpoch() !== expected.auth || getSessionEpoch() !== expected.session || !ctx.lastGrant
         || ctx.lastGrant.refreshToken !== expected.refreshToken
         || !isDeepStrictEqual(grantIdentity(ctx.lastGrant), expected.identity)) {
@@ -649,9 +653,55 @@ export function createTokenResolver(env) {
     return resolveToken();
   }
 
+  // Model preflight is bound to the adopted login and its credential provider.
+  // A successful rotation preserves that login; selecting another model does too.
+  function captureModelSession() {
+    const grant = ctx.lastGrant;
+    if (!grant) return null;
+    const auth = getAuthEpoch();
+    const session = getSessionEpoch();
+    const identity = grantIdentity(grant);
+    const targetStore = grants.ownerOf(grant);
+    const targetCredentials = provider.storeCredentials;
+    const assertSession = () => {
+      if (ctx.disposed) throw new IamError('IAM_DISPOSED', 'IAM service is disposed');
+      if (isSigningOut() || getAuthEpoch() !== auth || getSessionEpoch() !== session
+        || !['ready', 'expired'].includes(ctx.state) || !ctx.lastGrant
+        || !isDeepStrictEqual(grantIdentity(ctx.lastGrant), identity)) {
+        throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
+      }
+    };
+    const assertCurrent = () => {
+      ctx.assertExclusive();
+      assertSession();
+      const store = provider.ensure();
+      assertSession();
+      if (!targetStore || store !== targetStore || provider.storeCredentials !== targetCredentials
+        || grants.ownerOf(ctx.lastGrant) !== targetStore) {
+        throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
+      }
+    };
+    return Object.freeze({
+      assertCurrent,
+      async renew() {
+        assertCurrent();
+        const current = ctx.lastGrant;
+        if (ctx.state === 'ready' && !isAccessExpired(current, now())) return;
+        if (!isRefreshUsable(current, now())) throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+        await resolveToken({ auth, session, identity, targetStore, targetCredentials,
+          recovering: ctx.state === 'expired', refreshToken: current.refreshToken, grant: current });
+        assertCurrent();
+        if (ctx.state !== 'ready' || isAccessExpired(ctx.lastGrant, now())) {
+          throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+        }
+      },
+    });
+  }
+
   return {
     resolveToken,
     getAccessToken,
+    captureModelSession,
     scheduleRenewal,
     cancelRenewal,
     ownedPendingFlight,

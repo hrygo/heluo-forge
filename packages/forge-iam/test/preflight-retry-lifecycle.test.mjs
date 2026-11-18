@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createGrantStore } from '../src/store.mjs';
+import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 import { refreshBaseId } from '../src/session-identity.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
@@ -118,6 +118,56 @@ test('a view notification after access expires preserves the scheduled preflight
   while (service.getView().state !== 'ready' && Date.now() < readyDeadline) await delay(20);
   assert.equal(service.getView().state, 'ready');
   assert.notEqual(await service.getAccessToken(), 'synthetic-access');
+});
+
+test('a scheduled renewal that crosses access expiry during its first read keeps its flight', { timeout: 5000 }, async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 120 });
+  const credentials = new MemoryCredentials();
+  const read = credentials.readRecord.bind(credentials);
+  const readStarted = Promise.withResolvers();
+  const releaseRead = Promise.withResolvers();
+  let holdNextRead = false;
+  credentials.readRecord = async (key) => {
+    if (key === GRANT_KEY && holdNextRead) {
+      holdNextRead = false;
+      readStarted.resolve();
+      await releaseRead.promise;
+    }
+    return read(key);
+  };
+  const start = Date.now();
+  let clock = start;
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  await createGrantStore(credentials).write({
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
+    issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId, scope: 'openid',
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', obtainedAt: new Date(start).toISOString(),
+    accessExpiresAt: new Date(start + 1000).toISOString(), refreshExpiresAt: new Date(start + 120_000).toISOString(),
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials, now: () => clock, monotonic: () => clock - start,
+  });
+  t.after(async () => { releaseRead.resolve(); await service.dispose(); t.mock.timers.reset(); await oidc.close(); });
+  assert.equal((await service.hydrate()).state, 'ready');
+  const tick = (ms) => { clock += ms; t.mock.timers.tick(ms); };
+  holdNextRead = true;
+  tick(500);
+  await readStarted.promise;
+  tick(501);
+  const view = service.notifyView();
+  assert.equal(view.state, 'expired');
+  assert.equal(view.renewal, 'available');
+  releaseRead.resolve();
+
+  const deadline = Date.now() + 1000;
+  while (service.getView().state !== 'ready' && Date.now() < deadline) await delay(10);
+  assert.equal(oidc.counts.refresh, 1, 'the original read must refresh without waiting for another timer');
+  assert.equal(service.getView().state, 'ready');
+  tick(30_000);
+  await delay(25);
+  assert.equal(oidc.counts.refresh, 1, 'the superseded fallback must not refresh again');
 });
 
 test('a replacement session does not inherit the previous session preflight backoff', async (t) => {

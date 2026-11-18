@@ -188,6 +188,7 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
 const chunks = async stream => { const result = []; for await (const chunk of stream) result.push(chunk); return result; };
 const finishOf = result => result.at(-1)?.reason ?? {};
 const failureOf = result => finishOf(result).failure?.code;
+const expiredAccess = () => ({ state: 'expired', renewal: 'available', accessExpiresAt: new Date(Date.now() - 10).toISOString() });
 const until = async (condition, label, timeout = 2000) => {
   const deadline = Date.now() + timeout;
   while (!condition()) {
@@ -195,6 +196,143 @@ const until = async (condition, label, timeout = 2000) => {
     await tick();
   }
 };
+
+for (const entry of ['prepareCall', 'stream']) test(`${entry} renews an expired session before using the same route`, async t => {
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const refresh = Promise.withResolvers();
+  let renewals = 0;
+  const session = {
+    assertCurrent() {},
+    async renew() {
+      renewals += 1;
+      await refresh.promise;
+      f.change({ state: 'ready', accessExpiresAt: new Date(Date.now() + 60_000).toISOString() });
+    },
+  };
+  f.iam.captureModelSession = () => session;
+  f.change(expiredAccess());
+  const work = (async () => {
+    const stream = entry === 'prepareCall' ? (await f.adapter.prepareCall(options.provider, options.model)).stream : f.adapter.stream;
+    return chunks(stream(options));
+  })();
+  await tick();
+  assert.equal(f.requests, 0, 'no model request may leave while IAM is renewing');
+  refresh.resolve();
+  const result = await work;
+  assert.equal(renewals, 1);
+  assert.equal(finishOf(result).kind, 'stop');
+  assert.equal(f.requests, 1);
+});
+
+test('a call is not dispatched when its session changes during preflight', async t => {
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const release = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  let changed = false;
+  f.iam.captureModelSession = () => ({
+    assertCurrent() { if (changed) throw new IamError('IAM_NOT_SIGNED_IN', 'synthetic session replacement'); },
+    async renew() { started.resolve(); await release.promise; },
+  });
+  f.change(expiredAccess());
+  const result = chunks(f.adapter.stream(options));
+  await started.promise;
+  changed = true;
+  f.change({ state: 'ready', accessExpiresAt: new Date(Date.now() + 60_000).toISOString() });
+  release.resolve();
+  assert.equal(failureOf(await result), 'IAM_LOGIN_REQUIRED');
+  assert.equal(f.requests, 0);
+});
+
+test('an expired session without a refresh window cannot use an installed route', async t => {
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  let renewals = 0;
+  f.iam.captureModelSession = () => ({ assertCurrent() {}, renew() { renewals += 1; } });
+  f.change({ ...expiredAccess(), renewal: 'unavailable' });
+  assert.equal(failureOf(await chunks(f.adapter.stream(options))), 'IAM_LOGIN_REQUIRED');
+  assert.equal(renewals, 0);
+  assert.equal(f.requests, 0);
+});
+
+for (const outcome of ['cancelled', 'timed out', 'unreachable']) test(`preflight ${outcome} never dispatches a model request`, async t => {
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const refresh = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  f.iam.captureModelSession = () => ({
+    assertCurrent() {},
+    async renew() { started.resolve(); await refresh.promise; },
+  });
+  f.change(expiredAccess());
+  const controller = new AbortController();
+  const pending = chunks(f.guard({ ...options, signal: controller.signal }, () => f.adapter.stream(options)));
+  await started.promise;
+  if (outcome === 'cancelled') controller.abort();
+  else if (outcome === 'timed out') t.mock.timers.tick(5000);
+  else refresh.reject(new IamError('IAM_UNREACHABLE', 'synthetic outage'));
+  const result = await pending;
+  if (outcome === 'cancelled') assert.equal(finishOf(result).kind, 'aborted');
+  else assert.equal(failureOf(result), 'ENTERPRISE_IAM_UNAVAILABLE');
+
+  // A shared rotation can succeed after this waiter has left. It cannot send
+  // the old call or block someone from starting a later one.
+  refresh.resolve();
+  f.change({ state: 'ready', accessExpiresAt: new Date(Date.now() + 60_000).toISOString() });
+  await tick();
+  assert.equal(f.requests, 0);
+  assert.equal(finishOf(await chunks(f.adapter.stream(options))).kind, 'stop');
+  assert.equal(f.requests, 1);
+});
+
+for (const source of ['deadline timer', 'expired view']) test(`an already dispatched stream still stops at the ${source} without renewal or replay`, async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  let renewals = 0;
+  f.iam.captureModelSession = () => ({ assertCurrent() {}, renew() { renewals += 1; } });
+  f.change({ renewal: 'available' });
+  const release = f.holdChunks();
+  t.after(() => release.resolve());
+  const stream = f.adapter.stream(options)[Symbol.asyncIterator]();
+  assert.equal((await stream.next()).value.type, 'text-delta');
+  const pending = stream.next();
+  if (source === 'deadline timer') t.mock.timers.tick(60_001);
+  else {
+    f.change(expiredAccess());
+    assert.deepEqual(await f.adapter.listModels(options.provider), []);
+  }
+  assert.equal(f.lastSignal.aborted, true);
+  assert.equal((await pending).value.reason.failure.code, 'IAM_LOGIN_REQUIRED');
+  assert.equal((await stream.next()).done, true);
+  assert.equal(renewals, 0);
+  assert.equal(f.requests, 1);
+});
+
+test('a stale prepared call cannot use a replacement login for the same subject', async t => {
+  const f = fixture();
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  let login = 1;
+  f.iam.captureModelSession = () => {
+    const captured = login;
+    return {
+      assertCurrent() { if (login !== captured) throw new IamError('IAM_NOT_SIGNED_IN', 'synthetic replacement login'); },
+      renew() { assert.fail('a stale prepared call cannot renew on behalf of the next login'); },
+    };
+  };
+  const prepared = await f.adapter.prepareCall(options.provider, options.model);
+  login += 1;
+  assert.equal(failureOf(await chunks(prepared.stream(options))), 'IAM_LOGIN_REQUIRED');
+  assert.equal(f.requests, 0);
+});
 
 test('a re-saved key at the same address is adopted without rebuilding the adapter', async t => {
   const f = fixture();
@@ -465,14 +603,18 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
   const oidc = await startMockOidc({ accessTtl: 600 });
   t.after(() => oidc.close());
   const atomic = createAtomicGatewayFixture();
-  const clock = Date.now();
+  let credentials = atomic.credentials;
+  const start = Date.now();
+  let clock = start;
   oidc.refreshTokens.set('refresh-a', { subject: 'E1001' });
-  await createGrantStore(atomic.credentials).write({
+  const store = createGrantStore(credentials);
+  const grant = {
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer,
     subject: 'E1001', clientId: oidc.clientId, refreshToken: 'refresh-a', accessToken: 'access-a', scope: 'openid',
     obtainedAt: new Date(clock).toISOString(), accessExpiresAt: new Date(clock + accessOffsetMs).toISOString(),
     refreshExpiresAt: new Date(clock + refreshOffsetMs).toISOString(),
-  });
+  };
+  await store.write(grant);
   seedGateway(atomic.credentials, {
     value: 'uag-synthetic-key', baseURL: GATEWAY, ownerSubject: 'E1001',
     deviceLabel: 'synthetic', enteredAt: new Date(clock).toISOString(),
@@ -481,9 +623,11 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
     ...oidc.endpoints, clientId: oidc.clientId, redirectUri: 'http://127.0.0.1:4567/iam/callback',
   }, {
     credentials: atomic.credentials,
+    getCredentials: () => credentials,
     ...atomic.options,
     verifyAtomicStore: candidate => candidate === atomic.credentials,
     now: () => clock,
+    monotonic: () => clock - start,
     fetch: async (url, init) => {
       // A preflight failure is the token layer's own unreachable case: it
       // happens before any refresh claim, so nothing is consumed.
@@ -493,7 +637,10 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
   });
   t.after(() => service.dispose());
   await service.hydrate();
-  return { service, oidc, key: 'uag-synthetic-key' };
+  return { service, oidc, store, grant, key: 'uag-synthetic-key',
+    advance(ms) { clock += ms; return service.notifyView(); },
+    replaceProvider(next) { credentials = next; },
+  };
 }
 
 test('the gateway key resolves from a session whose access token already expired', async t => {
@@ -524,6 +671,36 @@ test('a still-valid access token keeps the key resolvable after its refresh toke
 test('a session with both factors expired is not a usable session', async t => {
   const f = await sessionFixture(t, { accessOffsetMs: -1_000, refreshOffsetMs: -1_000 });
   await assert.rejects(f.service.resolveGatewayConnection(), { code: 'IAM_NOT_SIGNED_IN' });
+});
+
+test('concurrent model preflights share the same token rotation', async t => {
+  const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+  const first = f.service.captureModelSession();
+  const second = f.service.captureModelSession();
+  assert.equal(f.advance(240_001).state, 'expired');
+  await Promise.all([first.renew(), second.renew(), f.service.getAccessToken()]);
+  assert.equal(f.oidc.counts.refresh, 1);
+  assert.equal(f.service.getView().state, 'ready');
+  assert.doesNotThrow(() => first.assertCurrent());
+  assert.doesNotThrow(() => second.assertCurrent());
+});
+
+test('a model preflight cannot renew a different login for the same subject', async t => {
+  const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+  const handle = f.service.captureModelSession();
+  assert.equal(f.advance(240_001).state, 'expired');
+  await f.store.write({ ...f.grant, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') });
+  await assert.rejects(handle.renew(), { code: 'IAM_NOT_SIGNED_IN' });
+  assert.equal(f.oidc.counts.refresh, 0);
+});
+
+test('a model preflight bound to a withdrawn provider fails closed', async t => {
+  const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+  const handle = f.service.captureModelSession();
+  assert.equal(f.advance(240_001).state, 'expired');
+  f.replaceProvider(new MemoryCredentials());
+  await assert.rejects(handle.renew(), { code: 'IAM_CREDENTIALS_UNAVAILABLE' });
+  assert.equal(f.oidc.counts.refresh, 0);
 });
 
 
