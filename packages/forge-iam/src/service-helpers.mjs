@@ -3,7 +3,7 @@ import { IamError } from './errors.mjs';
 import { OidcError } from './oidc.mjs';
 import { StoreError } from './store.mjs';
 
-export { canonicalRecord, grantIdentity, refreshBaseId } from './session-identity.mjs';
+export { canonicalRecord, grantIdentity, refreshBaseId, sameSessionIdentity } from './session-identity.mjs';
 
 export const SAFE_MESSAGES = Object.freeze({
   CRED_KEY_UNAVAILABLE: 'credential key is unavailable',
