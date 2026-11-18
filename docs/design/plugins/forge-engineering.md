@@ -29,7 +29,7 @@
 
 1. **统一研发设置入口（`heluo-engineering-ui`）**：在 DSH「设置」导航注册独立分区 `forge-engineering`（`order: 30`，中文「企业研发工具」），声明子槽位 `heluo.engineering.tab`，收纳 `DevOps`（`order: 10`）与 `Gitee`（`order: 20`）两个工具面板，并注册矢量分区图标。
 2. **企业平台工具能力闭合**：Bundled 并插入 `@heluo/forge-devops`、`@heluo/forge-gitee` 与共享策略门禁 `@heluo/forge-policy`（固定六动作默认目录），支持开箱完成单包就绪检查、本地命令行配置、Token 独立指定与受控研发操作。
-3. **按需 Issue 交付技能（`heluo-issue-delivery-skill`）**：导出 `./issue-delivery-skill`、`./skills`、`./switches` 与标准 Agent Skill 资源 `skills/issue-delivery/`，以 `enterprise-issue-delivery` 向 DSH 注册显式触发的 Issue 交付工作流与条款装配能力。
+3. **按需 Issue 交付技能（`heluo-issue-delivery-skill`）**：导出 `./issue-delivery-skill`、`./skills`、`./switches` 与标准 Agent Skill 资源 `skills/issue-delivery/`，以 `enterprise-issue-delivery` 向 DSH 注册显式触发的 Issue 交付工作流与条款装配能力。 正式流程候选使用 `rank: -100`，优先于原生个人与项目副本；技能管理器拒绝创建、导入及提供 `enterprise-*` 个人候选，既有文件保留。该选择规则不构成同权插件隔离。
 
 **不越界边界**：`@heluo/forge-engineering` 不禁用任何 DSH 官方账号、模型或凭据行，可单独安装运行，也可与 `@heluo/forge-enterprise` 并发安装在同一 DSH Profile 中；不侵入「设置 → 企业账号」页面，DevOps 与 Gitee 的 Token 配置及状态提示全部内置于各自设置面板中。
 
@@ -38,7 +38,7 @@
 | 维度 | `@heluo/forge-enterprise`（企业账号与模型） | `@heluo/forge-engineering`（企业研发工具套件） |
 |---|---|---|
 | 适用对象 | 所有企业终端用户（个人助理底座） | 需要 DevOps / Gitee / Issue 交付的研发人员 |
-| 包含组件 | `forge-credentials-keychain`、`forge-policy`、`forge-iam` | `forge-engineering`（容器 + 交付 Skill）、`forge-policy`、`forge-devops`、`forge-gitee` |
+| 包含组件 | `forge-credentials-keychain`、`forge-policy`、`forge-iam`、`forge-skills-manager` | `forge-engineering`（容器 + 交付 Skill）、`forge-policy`、`forge-devops`、`forge-gitee` |
 | 官方行处理 | 禁用 7 个官方账号、模型与明文凭据行 | 不修改官方行（保持中性） |
 | 设置侧栏条目 | `企业账号`（`order: -10`）、`企业模型`（`order: 10`） | `企业研发工具`（`order: 30`，内含 `DevOps` 与 `Gitee` 标签页） |
 | 安装方式 | 可单独预装或通过插件市场安装 | 可单独预装、通过插件市场安装，或与 `forge-enterprise` 并行安装 |
