@@ -829,14 +829,14 @@ test('命令结果翻译：超时/非零退出/字段不支持/起不来/畸形 
   await assertRejectedAsync(() => noOutcome.invoke('issueView', { target: ISSUE_TARGET }), ADAPTER_REASONS.MALFORMED_RESULT);
 });
 
-test('对象不存在 → ITEM_NOT_FOUND：保留服务端原文、无副作用；与真实故障分开（UAT-5）', async () => {
+test('对象不存在 → ITEM_NOT_FOUND：保留错误分类和退出码、无副作用；与真实故障分开（UAT-5）', async () => {
   const notFound404 = createGiteeAdapter({
     runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'HTTP 404: Not Found' })),
     env: EMPTY_ENV,
   });
   const error404 = await assertRejectedAsync(() => notFound404.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.ITEM_NOT_FOUND);
   assert.equal(error404.detail.mayHaveSideEffect, false, '目标不存在是确定失败：改正目标可安全重试');
-  assert.match(error404.message, /HTTP 404: Not Found/u, '保留服务端原文（脱敏+截断），不换成笼统失败文案');
+  assert.doesNotMatch(error404.message, /HTTP 404: Not Found/u);
   assert.equal(error404.detail.exitCode, 1);
 
   // 内网 Gitee 对不存在对象可能回 500，正文才是判据："未找到"不是真实服务故障。
@@ -845,7 +845,7 @@ test('对象不存在 → ITEM_NOT_FOUND：保留服务端原文、无副作用�
     env: EMPTY_ENV,
   });
   const error500 = await assertRejectedAsync(() => notFound500.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.ITEM_NOT_FOUND);
-  assert.match(error500.message, /未找到项目 corp\/missing/u);
+  assert.doesNotMatch(error500.message, /未找到项目 corp\/missing/u);
   assert.equal(error500.detail.mayHaveSideEffect, false);
 
   const notFoundEnglish = createGiteeAdapter({
@@ -861,7 +861,7 @@ test('对象不存在 → ITEM_NOT_FOUND：保留服务端原文、无副作用�
   });
   await assertRejectedAsync(() => missingBinary.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.NONZERO_EXIT);
 
-  // 脱敏规则照样作用于 ITEM_NOT_FOUND 的原文。
+  // ITEM_NOT_FOUND 也只暴露固定诊断。
   const leaked = createGiteeAdapter({
     runner: fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: `404 未找到 target ${TOKEN_VALUE}` })),
     env: SECRET_ENV,
@@ -869,7 +869,7 @@ test('对象不存在 → ITEM_NOT_FOUND：保留服务端原文、无副作用�
   });
   const leakedError = await assertRejectedAsync(() => leaked.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.ITEM_NOT_FOUND);
   assert.ok(!leakedError.message.includes(TOKEN_VALUE), '消息不得含令牌');
-  assert.ok(leakedError.message.includes('[REDACTED]'));
+  assert.match(leakedError.message, /失败（退出码 1）$/u);
 });
 
 test('失败信息脱敏：stderr 里的令牌不回到消息与 detail（AC-22）', async () => {
@@ -878,7 +878,7 @@ test('失败信息脱敏：stderr 里的令牌不回到消息与 detail（AC-22�
   const error = await assertRejectedAsync(() => adapter.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.NONZERO_EXIT);
   assert.ok(!error.message.includes(TOKEN_VALUE), '消息不得含令牌');
   assert.ok(!error.message.includes(SECRET_SHAPE), '消息不得含令牌');
-  assert.ok(error.message.includes('[REDACTED]'), '应显式标注脱敏位置');
+  assert.match(error.message, /失败（退出码 1）$/u);
   assert.ok(!JSON.stringify(error.detail).includes(TOKEN_VALUE));
 });
 
@@ -886,7 +886,7 @@ test('服务端拒绝凭据 → AUTH_MISSING（不再笼统报命令失败），
   const runner = fakeRunner(() => ({ exitCode: 1, stdout: '', stderr: 'HTTP 401 Unauthorized' }));
   const adapter = createGiteeAdapter({ runner, env: EMPTY_ENV });
   const error = await assertRejectedAsync(() => adapter.read('gitee.issue.read', ISSUE_TARGET, {}), ADAPTER_REASONS.AUTH_MISSING);
-  assert.match(error.message, /401/);
+  assert.match(error.message, /服务端拒绝了当前凭据/u);
   assert.match(error.message, /gh auth login/);
   assert.match(error.message, /authEnv/);
   assert.doesNotMatch(error.message, /必须在 authEnv 点名变量/);

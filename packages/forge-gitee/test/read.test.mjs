@@ -337,14 +337,14 @@ test('AC-15: CLI 未找到 / 退出码非 0 / 超时三类失败原因固定', a
       result: outcome({ exitCode: 1, stderr: 'HTTP 404: Not Found' }),
       code: READ_REASONS.ITEM_NOT_FOUND,
       status: 'failed',
-      message: /HTTP 404: Not Found/u,
+      message: /gitee issue view 失败（退出码 1）$/u,
     },
     {
       label: '对象不存在（内网 500 + 未找到）：按正文归类',
       result: outcome({ exitCode: 1, stderr: '{"message":"未找到项目 group/missing"}' }),
       code: READ_REASONS.ITEM_NOT_FOUND,
       status: 'failed',
-      message: /未找到项目 group\/missing/u,
+      message: /gitee issue view 失败（退出码 1）$/u,
     },
   ];
   for (const entry of cases) {
@@ -357,7 +357,7 @@ test('AC-15: CLI 未找到 / 退出码非 0 / 超时三类失败原因固定', a
     assert.equal(envelope.error_code, entry.code, entry.label);
     assert.equal(envelope.retry_policy, 'read_recheck', entry.label);
     if (entry.message !== undefined) {
-      assert.match(envelope.message, entry.message, `${entry.label}：message 保留服务端原文（脱敏+截断）`);
+      assert.match(envelope.message, entry.message, `${entry.label}：message 保留固定命令标签和退出状态`);
     }
     assert.equal(runner.calls.length, 1, `${entry.label}：读失败不许自动重试`);
     assertReadOnlyCalls(runner.calls);
