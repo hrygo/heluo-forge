@@ -7,6 +7,7 @@ const READ = { action: 'gitee.repository.read', target: 'repository', enabled: t
 const WRITE = { action: 'gitee.issue.write', target: 'issue', enabled: true };
 const CONFIRM = { action: 'gitee.git.push', target: 'repository', enabled: true };
 const HUMAN = { action: 'gitee.review.record', target: 'pull-request', enabled: true };
+const PR_WRITE = { action: 'gitee.pr.write', target: 'pull-request', enabled: true };
 
 const IDENTITY = Object.freeze({
   getView() {
@@ -127,6 +128,38 @@ test('an authenticated clean write passes the content gate and records policy ev
   assert.equal(JSON.stringify(record).includes('plain text'), false, 'business content is never recorded');
 });
 
+test('the task scope prompt is localized and explains what one approval covers', async () => {
+  const requests = [];
+  const config = {
+    ...baseConfig,
+    catalog: [...baseConfig.catalog, PR_WRITE],
+    tools: { ...baseConfig.tools, forge_pr_write: 'gitee.pr.write' },
+  };
+  const host = mount(config, { approval: { async request(request) { requests.push(request); return 'allowed-once'; } } });
+  const staged = await host.stage('forge_pr_write', {
+    target: 'osc/ard/ard-cli',
+    changeId: 'CHG-1',
+    op: 'create',
+    title: '测试 PR',
+    head: 'test/pr-issue1',
+    base: 'master',
+  }, { agent: { id: 'agent-1' } });
+  assert.equal(staged.reason, undefined);
+  const request = requests.find((item) => /task scope/u.test(item.reason));
+  assert.ok(request !== undefined, 'the task scope is asked for');
+  assert.match(request.reason, /confirm a task scope for gitee\.pr\.write on osc\/ard\/ard-cli/u);
+  assert.equal(request.displayReason.zh, '允许在 osc/ard/ard-cli 上创建 Pull Request (test/pr-issue1 → master)（变更 CHG-1）？允许一次＝本会话内对该仓库的同类写操作不再逐次询问；换仓库、换变更号或重启后需要重新确认。');
+  assert.match(request.displayReason.en, /creating a pull request on osc\/ard\/ard-cli/u);
+  assert.doesNotMatch(request.displayReason.zh, /task scope|gitee\.pr\.write/u, 'the prompt states the action, not the internals');
+});
+
+test('a rejected task scope reports the rejection instead of only the ticket wording', async () => {
+  const host = mount(baseConfig, { approval: { async request() { return 'rejected'; } } });
+  const denied = await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'plain text' }, { agent: { id: 'agent-1' } });
+  assert.match(String(denied.reason), /: rejected/u, 'the human decision survives into the refusal');
+  assert.doesNotMatch(String(denied.reason), /no confirmed task scope/u, 'the rejection is not masked by the ticket wording');
+});
+
 test('a hard content rule refuses the write before the body runs and redacts the finding', async () => {
   const host = mount();
   let bodyCalls = 0;
@@ -153,6 +186,31 @@ test('a soft content rule escalates to a confirmation instead of denying', async
   assert.equal(allowed.reason, undefined);
   assert.match(String(requests.at(-1).reason), /content rules flagged BUILTIN-INTERNAL-ADDRESS/);
   assert.equal(requests.length, 2, 'the task scope and the flagged content are confirmed separately');
+  const second = requests.at(-1);
+  assert.equal(second.displayReason.zh, '允许在 acme/demo 上创建 Issue（变更 CHG-1）？本次调用需要人工确认：正文里有需要人工复核的内容。这条确认只放行本次调用。');
+  assert.match(second.displayReason.en, /This call needs a human decision: a content check needs review/u);
+});
+
+test('a process confirmation names the missing section in the prompt', async () => {
+  const requests = [];
+  const config = {
+    ...baseConfig,
+    catalog: [...baseConfig.catalog, PR_WRITE],
+    tools: { ...baseConfig.tools, forge_pr_write: 'gitee.pr.write' },
+  };
+  const host = mount(config, { approval: { async request(request) { requests.push(request); return 'allowed-once'; } } });
+  const staged = await host.stage('forge_pr_write', {
+    target: 'osc/ard/ard-cli',
+    changeId: 'CHG-1',
+    op: 'create',
+    head: 'test/pr-issue1',
+    base: 'master',
+    body: 'no acceptance here',
+  }, { agent: { id: 'agent-1' } });
+  assert.equal(staged.reason, undefined);
+  const second = requests.at(-1);
+  assert.match(second.reason, /no acceptance section/u);
+  assert.equal(second.displayReason.zh, '允许在 osc/ard/ard-cli 上创建 Pull Request (test/pr-issue1 → master)（变更 CHG-1）？本次调用需要人工确认：PR 描述缺少「验收」小节。这条确认只放行本次调用。');
 });
 
 test('a process rule with an available fact source denies a closed change', async () => {

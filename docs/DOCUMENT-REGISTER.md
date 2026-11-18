@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.87.3 |
+| 版本 | V1.87.5 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
@@ -19,13 +19,13 @@
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.87.3 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.87.5 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.48.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.46.1 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.5.0 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.6.0 | 生效 | 平台组 | — |
 | CORP-DSH-DESIGN-001 | 网关凭据双模式支持设计 | [design/credential-modes.md](<design/credential-modes.md>) | V2.1.0 | 评审稿 | 平台组（代拟） | G1 |
 | CORP-DSH-DESIGN-002 | IAM 接入详细设计 | [design/plugins/forge-iam.md](<design/plugins/forge-iam.md>) | V3.3.2 | 草案 | 平台组（代拟） | G0 认领；G1 接入与生命周期契约；G2 双端联调准入 |
-| CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.16.0 | 草案 | 平台组（代拟） | G2 |
+| CORP-DSH-DESIGN-003 | 策略与审计详细设计 | [design/plugins/forge-policy.md](<design/plugins/forge-policy.md>) | V0.17.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-004 | 企业账号与模型组合包详细设计 | [design/plugins/forge-enterprise.md](<design/plugins/forge-enterprise.md>) | V1.9.0 | 草案 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-005 | 模型网关接入详细设计 | [design/plugins/forge-gateway.md](<design/plugins/forge-gateway.md>) | V1.1.0 | 评审稿 | 平台组（代拟） | G2 |
 | CORP-DSH-DESIGN-006 | 品牌与外观详细设计 | [design/plugins/forge-brand.md](<design/plugins/forge-brand.md>) | V0.1.1 | 草案 | 平台组（代拟） | G2 |
@@ -102,6 +102,7 @@
 | CORP-DSH-UAT-001 | 企业插件内网验收交接说明 | [operations/enterprise-uat-2026-11/README.md](<operations/enterprise-uat-2026-11/README.md>) | V0.4 | 草案 | 平台组（代拟） | PR #215 历史验收基线；当前双包须另行验收 |
 | CORP-DSH-UAT-002 | 企业插件安装与启动 | [operations/enterprise-uat-2026-11/安装与启动.md](<operations/enterprise-uat-2026-11/安装与启动.md>) | V0.4 | 草案 | 平台组（代拟） | PR #215 历史验收基线；当前双包须另行验收 |
 | CORP-DSH-UAT-003 | 企业插件验收测试清单 | [operations/enterprise-uat-2026-11/验收测试清单.md](<operations/enterprise-uat-2026-11/验收测试清单.md>) | V0.8 | 草案 | 平台组（代拟） | 第 1—6 节为 PR #215 历史验收；第 7 节为后续登录取证指引，当前双包须另行验收 |
+| CORP-DSH-UAT-004 | 内网审批通道排查单（gitee.pr.write 范围确认） | [operations/approval-channel-checklist.md](<operations/approval-channel-checklist.md>) | V0.2 | 草案 | 平台组（代拟） | 内网实机验证（待回填）；回填前不作为运行手册 |
 | CORP-DSH-IAM-001 | IAM 接入 | 待创建 | — | 待启动 | IAM 团队 | G0 方向及 P0 联调；G1 接入契约；G2 生产运行流程 |
 | CORP-DSH-POLICY-001 | 策略与审计 | 待创建 | — | 待启动 | 安全 + 平台组 | G2 |
 | CORP-DSH-DEVOPS-001 | DevOps 接入 | 待创建 | — | 待启动 | DevOps 团队 | G1 查询契约；G2 受控写批准/验证与运行参数，未准入不开放 |
