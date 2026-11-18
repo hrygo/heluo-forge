@@ -1,5 +1,6 @@
 import { open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isExpectedOperationError } from "./operation-errors.js";
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_CACHE_ENTRIES = 2048;
 const MAX_CACHE_BYTES = 8 * 1024 * 1024;
@@ -49,11 +50,15 @@ async function readJson(file) {
     let value;
     try {
       value = JSON.parse(buffer.subarray(0, length).toString("utf8"));
-    } catch {
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
       value = null;
     }
     const after = await handle.stat();
-    const current = await stat(file).catch(() => null);
+    const current = await stat(file).catch((error) => {
+      if (!isExpectedOperationError(error)) throw error;
+      return null;
+    });
     if (current && sameFile(opened, after) && sameFile(after, current)) {
       evict(file);
       while (jsonCache.size >= MAX_CACHE_ENTRIES || cacheBytes + length > MAX_CACHE_BYTES) {
@@ -77,7 +82,8 @@ async function readLockIndex(rootPath) {
     const parsed = object(await readJson(join(rootPath, ".skills-lock.json")));
     const entries = object(parsed?.skills ?? parsed);
     return entries ? { entries } : null;
-  } catch {
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
     return null;
   }
 }
@@ -109,7 +115,8 @@ function sourceInfo(raw, githubShorthand) {
     const normalized = parsed.href.replace(/\/$/, "").replace(/\.git$/i, "");
     const identity = parsed.hostname === "github.com" ? normalized.toLowerCase() : normalized;
     return { repo: `${parsed.hostname}${parsed.pathname.replace(/\/$/, "").replace(/\.git$/i, "")}`, identity, url: parsed.protocol === "https:" ? normalized : null };
-  } catch {
+  } catch (error) {
+    if (!(error instanceof TypeError) || !("code" in error) || error.code !== "ERR_INVALID_URL") throw error;
     return null;
   }
 }
@@ -139,7 +146,8 @@ async function fromMarketMeta(skillDir) {
       const metadata = object(await readJson(join(skillDir, name)));
       const info = sourceInfo(metadata?.source, metadata?.sourceType === "github");
       if (info) return { kind: "meta", ...info, category: null, path: null };
-    } catch {
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
     }
   }
   return null;
@@ -174,7 +182,8 @@ async function attachProvenance(snapshot) {
         const skill = skills[next++];
         try {
           skill.provenance = await resolveProvenance({ rootPath: root.path, skillPath: skill.path, name: skill.name, declaredName: skill.declaredName, installSource: skill.installSource }, lock);
-        } catch {
+        } catch (error) {
+          if (!isExpectedOperationError(error)) throw error;
           skill.provenance = unknown();
         }
       }

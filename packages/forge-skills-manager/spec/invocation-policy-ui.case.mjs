@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
+import { sourceFunctions } from './fixtures/source-functions.mjs';
 
 // 从 src/client.ts 源码中提取目标函数，保持测试直接针对真实源码
 const source = await readFile(new URL('../src/client.ts', import.meta.url), 'utf8');
@@ -59,14 +60,11 @@ for (const key of requiredKeys) {
 }
 
 // 2. 验证调用方式判定函数导出与行为
-const fnStart = source.indexOf('    function skillDeclaredInvocationKind(');
-const fnEnd = source.indexOf('    function countKey(', fnStart);
-assert.ok(fnStart >= 0 && fnEnd > fnStart, '必须存在 skillDeclaredInvocationKind 辅助函数');
 
 // P3-1 验证死代码已清理：源码中不应再包含 skillEffectiveInvocationKind
 assert.equal(source.includes('function skillEffectiveInvocationKind'), false, '必须清除生产死代码 skillEffectiveInvocationKind');
 
-const fnBlock = stripTypeScriptTypes(source.slice(fnStart, fnEnd));
+const fnBlock = stripTypeScriptTypes(sourceFunctions(source, 'skillDeclaredInvocationKind', 'isSkillEnabled'));
 const { skillDeclaredInvocationKind, isSkillEnabled } = new Function(
   fnBlock + '\nreturn { skillDeclaredInvocationKind, isSkillEnabled };'
 )();
@@ -107,12 +105,9 @@ assert.equal(skillDeclaredInvocationKind(invalidPolicySkill), 'none', '策略非
 // 3. 验证徽标渲染与防视觉冗余：
 // P2-1 核心修复：只有 manual 才渲染徽标；all、none 绝不渲染徽标！
 // P2-2 核心修复：必须使用宿主原语 Tag（tone="neutral"）而非手绘 span
-const badgeFnStart = source.indexOf('      function renderInvocationBadge(');
-const badgeFnEnd = source.indexOf('      function renderDetailPolicy(', badgeFnStart);
-assert.ok(badgeFnStart >= 0 && badgeFnEnd > badgeFnStart, '必须包含 renderInvocationBadge 函数');
 
 const HostTagMock = function HostTag(props) { return h('HostTag', props, props.children); };
-const badgeFnBlock = stripTypeScriptTypes(source.slice(badgeFnStart, badgeFnEnd));
+const badgeFnBlock = stripTypeScriptTypes(sourceFunctions(source, 'renderInvocationBadge'));
 const { renderInvocationBadge } = new Function(
   'h', 't', 'skillDeclaredInvocationKind', 'HostTag',
   badgeFnBlock + '\nreturn { renderInvocationBadge };'
@@ -137,11 +132,8 @@ const manualBadgeEn = renderInvocationBadgeEn(manualOnlySkill);
 assert.equal(manualBadgeEn.children[0].children[0], 'Manual only');
 
 // 4. 验证搜索匹配支持
-const matchFnStart = source.indexOf('    function matchSkillQuery(');
-const matchFnEnd = source.indexOf('    function filterSkills<', matchFnStart);
-assert.ok(matchFnStart >= 0 && matchFnEnd > matchFnStart, 'matchSkillQuery 必须存在');
 
-const matchFnBlock = stripTypeScriptTypes(source.slice(matchFnStart, matchFnEnd));
+const matchFnBlock = stripTypeScriptTypes(sourceFunctions(source, 'matchSkillQuery'));
 const { matchSkillQuery } = new Function(
   'DICT', 'skillDeclaredInvocationKind',
   'function normalizeSkillQuery(query) { return String(query == null ? "" : query).trim().toLowerCase(); }\n' +
@@ -155,11 +147,8 @@ assert.equal(matchSkillQuery(manualOnlySkill, '仅手动'), true, '仅手动技�
 assert.equal(matchSkillQuery(manualOnlySkill, 'manual'), true, '仅手动技能搜 manual 必须命中');
 
 // 5. 验证详情弹窗调用策略单字段组件 renderDetailPolicy
-const detailPolicyStart = source.indexOf('      function renderDetailPolicy(');
-const detailPolicyEnd = source.indexOf('      function renderSkillStatusIcon(', detailPolicyStart);
-assert.ok(detailPolicyStart >= 0 && detailPolicyEnd > detailPolicyStart, '必须包含 renderDetailPolicy 函数');
 
-const detailPolicyBlock = stripTypeScriptTypes(source.slice(detailPolicyStart, detailPolicyEnd));
+const detailPolicyBlock = stripTypeScriptTypes(sourceFunctions(source, 'renderDetailPolicy'));
 const { renderDetailPolicy } = new Function(
   'h', 't', 'skillDeclaredInvocationKind',
   detailPolicyBlock + '\nreturn { renderDetailPolicy };'
@@ -189,21 +178,15 @@ const textsEn = extractText(renderDetailPolicyEn(manualOnlySkill)).join(' ');
 assert.ok(textsEn.includes('Invocation: Manual only (disable-model-invocation: true)'), '英文环境单字段调用方式正常本地化');
 
 // 6. P3-3 装配层真实渲染覆盖（防变异穿透：防止行渲染漏挂徽标与 token 徽标）
-const tokenBadgeStart = source.indexOf('      function renderTokenBadge(');
-const tokenBadgeEnd = source.indexOf('      function renderDetailPolicy(', tokenBadgeStart);
-assert.ok(tokenBadgeStart >= 0 && tokenBadgeEnd > tokenBadgeStart, 'renderTokenBadge 与 renderDetailTokens 必须存在');
-const tokenBadgeBlock = stripTypeScriptTypes(source.slice(tokenBadgeStart, tokenBadgeEnd));
+const tokenBadgeBlock = stripTypeScriptTypes(sourceFunctions(source, 'renderTokenBadge', 'renderDetailTokens'));
 const makeTokenHelpers = new Function(
   'h', 't', 'skillDeclaredInvocationKind', 'isSkillEnabled',
   tokenBadgeBlock + '\nreturn { renderTokenBadge, renderDetailTokens };'
 );
 const { renderTokenBadge: realRenderTokenBadge, renderDetailTokens: realRenderDetailTokens } = makeTokenHelpers(h, tZh, skillDeclaredInvocationKind, isSkillEnabled);
 
-const skillStart = source.indexOf('      function renderSkill(root:');
-const skillEnd = source.indexOf('      var rows =', skillStart);
-assert.ok(skillStart >= 0 && skillEnd > skillStart, 'renderSkill 必须存在');
 
-const skillBlock = stripTypeScriptTypes(source.slice(skillStart, skillEnd));
+const skillBlock = stripTypeScriptTypes(sourceFunctions(source, 'renderSkill'));
 const makeRenderSkill = new Function(
   'h', 't', 'isSkillEnabled', 'renderInvocationBadge', 'renderTokenBadge', 'renderSkillStatusIcon', 'enableSwitch', 'renderLinkedNote', 'renderFallback', 'SourceSelect', 'moreIcon', 'busy', 'filters', 'allRoots', 'draggingRef', 'post', 'openDetail', 'setSkillNoteText', 'setModal', 'rootDisplayName',
   skillBlock + '\nreturn renderSkill;'

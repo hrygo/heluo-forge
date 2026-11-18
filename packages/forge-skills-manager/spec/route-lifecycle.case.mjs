@@ -3,7 +3,12 @@
 import assert from "node:assert/strict";
 import { Context } from "@deepseek-ai/cordis";
 import { WebServer } from "@deepseek-ai/dsh-host-webserver";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as plugin from "../lib/index.js";
+import { installHttp } from "../lib/http.js";
+import { createInstallOperations } from "../lib/install-operations.js";
 
 const prefix = "/api/forge-skills-manager";
 const ctx = new Context();
@@ -31,6 +36,7 @@ try {
   await fiber.await();
   assert.ok(fetchRoutes.size > 0, "启动后成功注册所有 Fetch 路由");
   const initialSize = fetchRoutes.size;
+  assert.deepEqual(fetchRoutes.get(`${prefix}/operation-status`).methods, ["GET", "HEAD"]);
   let previous = fetchRoutes.get(`${prefix}/state`);
   assert.ok(previous);
   for (let cycle = 0; cycle < 3; cycle++) {
@@ -64,12 +70,68 @@ try {
   await conflict.dispose();
   releaseForeign();
 
+  for (const path of [`${prefix}/nacos/list`, `${prefix}/upload`]) {
+    const foreignRoute = { path, methods: ["GET"], fetch: async () => new Response("foreign") };
+    const release = connection.fetch.register(foreignRoute);
+    const partiallyRegistered = ctx.plugin(plugin);
+    await assert.rejects(partiallyRegistered.await(), /duplicate fetch route/);
+    await partiallyRegistered.dispose();
+    assert.deepEqual([...fetchRoutes.values()], [foreignRoute]);
+    release();
+  }
+
   const reactivated = ctx.plugin(plugin);
   await reactivated.await();
   assert.equal(fetchRoutes.size, initialSize);
   await reactivated.dispose();
   await reactivated.await();
   assert.equal(fetchRoutes.size, 0);
+
+  const managerPath = join(tmpdir(), `forge-cordis-lifetime-${randomUUID()}`);
+  const writes = [];
+  let entered, release;
+  const started = new Promise(resolve => { entered = resolve; });
+  const paused = new Promise(resolve => { release = resolve; });
+  const fixture = setter => ({
+    inject: plugin.inject,
+    apply(scope) {
+      installHttp(scope, {
+        local: { setEntryLocation: setter, userRoots: () => [] },
+        installations: { managerPath }, nacos: {}, operations: createInstallOperations(),
+        providers: { afterWrite() {} }, log() {},
+      });
+    },
+  });
+  const request = (location, operationId = randomUUID()) => new Request(`http://localhost${prefix}/sidebar-entry`, {
+    method: "POST", headers: { "content-type": "application/json", "x-dsh-skills-manager": "1", "x-dsh-skills-operation": operationId }, body: JSON.stringify({ location }),
+  });
+  const slow = ctx.plugin(fixture(async location => { writes.push("old started"); entered(); await paused; writes.push("old committed"); return location; }));
+  await slow.await();
+  const staleRoute = fetchRoutes.get(`${prefix}/sidebar-entry`);
+  const runningId = randomUUID();
+  const running = staleRoute.fetch(request("both", runningId));
+  await started;
+  const queued = staleRoute.fetch(request("sidebar"));
+  await new Promise(setImmediate);
+  const draining = slow.dispose();
+  try {
+    assert.equal((await (await queued).json()).outcome, "rejected");
+    assert.equal(fetchRoutes.size, 0);
+    const replacement = ctx.plugin(fixture(async location => { writes.push("new committed"); return location; }));
+    await replacement.await();
+    const next = fetchRoutes.get(`${prefix}/sidebar-entry`).fetch(request("settings"));
+    await new Promise(setImmediate);
+    assert.deepEqual(writes, ["old started"]);
+    release();
+    assert.equal((await running).status, 200);
+    await draining;
+    assert.equal((await next).status, 200);
+    assert.deepEqual(writes, ["old started", "old committed", "new committed"]);
+    const status = await fetchRoutes.get(`${prefix}/operation-status`).fetch(new Request(`http://localhost${prefix}/operation-status?operationId=${runningId}`));
+    assert.equal((await status.json()).data.state, "succeeded");
+    assert.equal((await staleRoute.fetch(request("both"))).status, 499);
+    await replacement.dispose();
+  } finally { release(); await draining; }
 } finally {
   await ctx.fiber.dispose();
 }

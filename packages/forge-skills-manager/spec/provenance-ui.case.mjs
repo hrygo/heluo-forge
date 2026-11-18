@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
+import { sourceFunctions } from './fixtures/source-functions.mjs';
 
 // Execute the actual grouping functions directly from source, without a bundle.
 const source = await readFile(new URL('../src/client.ts', import.meta.url), 'utf8');
@@ -10,10 +11,7 @@ const t = (key, params) => {
   if (params) tCalls.push({ key, params });
   return key;
 };
-const brandStart = source.indexOf('    function resolveRepoBrand(');
-const brandEnd = source.indexOf('    function recoverModalFocus(', brandStart);
-assert.ok(brandStart >= 0 && brandEnd > brandStart, 'brand resolution functions are present');
-const brandFns = stripTypeScriptTypes(source.slice(brandStart, brandEnd));
+const brandFns = stripTypeScriptTypes(sourceFunctions(source, 'resolveRepoBrand', 'renderRepoBrandIconByUrl'));
 const { resolveRepoBrand, renderRepoBrandIconByUrl } = new Function('h', brandFns + '\nreturn { resolveRepoBrand, renderRepoBrandIconByUrl };')(h);
 
 // 验证 resolveRepoBrand 矩阵与防误判
@@ -97,11 +95,7 @@ for (const url of ['javascript:alert(1)', '//evil.test/x', 'https://', null]) {
   const rendered = ui.renderProvenanceRepo(group, group.repos.find(repo => repo.rows.some(row => row.skill.name === 'one')));
   assert.equal(flatten(rendered).some(node => node.type === 'a'), false, `invalid URL must not link: ${url}`);
 }
-const skillStart = source.indexOf('      function renderSkill(root:');
-const skillEnd = source.indexOf('      var rows =', skillStart);
-const extraStart = source.indexOf('      function sourceExtra(');
-const extraEnd = source.indexOf('      function AntdFolderClosed()', extraStart);
-const skillFns = stripTypeScriptTypes(source.slice(skillStart, skillEnd) + source.slice(extraStart, extraEnd));
+const skillFns = stripTypeScriptTypes(sourceFunctions(source, 'renderSkill', 'sourceExtra'));
 const makeSkill = new Function('env', `
   const { h, t, filters } = env;
   const isSkillEnabled = () => true, busy = false, allRoots = [], draggingRef = { current: null };
@@ -148,13 +142,9 @@ assert.equal(identityOnly.fallback, false, 'identity alone is known provenance')
 const dictMatch = source.match(/var DICT\s*=\s*(\{[\s\S]*?\n    \});/);
 assert.ok(dictMatch, 'DICT 定义必须存在');
 const DICT = new Function(`return ${dictMatch[1]};`)();
-const fnStart = source.indexOf('    function skillDeclaredInvocationKind(');
-const fnEnd = source.indexOf('    function isSkillEnabled(', fnStart);
-const skillDeclaredInvocationKind = new Function(stripTypeScriptTypes(source.slice(fnStart, fnEnd)) + '\nreturn skillDeclaredInvocationKind;')();
+const skillDeclaredInvocationKind = new Function(stripTypeScriptTypes(sourceFunctions(source, 'skillDeclaredInvocationKind')) + '\nreturn skillDeclaredInvocationKind;')();
 
-const searchMatchStart = source.indexOf('    function normalizeSkillQuery(');
-const searchMatchEnd = source.indexOf('    function visibleSkillRoots<', searchMatchStart);
-const searchFns = stripTypeScriptTypes(source.slice(searchMatchStart, searchMatchEnd));
+const searchFns = stripTypeScriptTypes(sourceFunctions(source, 'normalizeSkillQuery', 'matchSkillQuery', 'filterSkills'));
 const { matchSkillQuery, filterSkills } = new Function('DICT', 'skillDeclaredInvocationKind', searchFns + '\nreturn { matchSkillQuery, filterSkills };')(DICT, skillDeclaredInvocationKind);
 const testRow = { name: 'my-tool', provenance: { repo: 'acme/super-repo', category: 'devops', path: 'skills/devops/my-tool' } };
 assert.ok(matchSkillQuery(testRow, 'super-repo'), '可根据来源仓库名搜索到技能');

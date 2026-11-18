@@ -10,7 +10,9 @@ import { Input,foldChevron } from "./plugin-ui.js";
 import { SkillsNavIcon,installSettingsNavIcon } from "./settings-nav-icon.js";
 import { setupSidebarEntry,sidebarEntryCss,sidebarLocales } from "./sidebar-entry.js";
 import { createSourceSelect } from "./source-select.js";
-import type { CodedError,Diagnostic,ImportResult,RootView,SkillProvenance,SkillRoot,SkillView } from './types.js';
+import { API_ERROR_CODES, ApiFailure, failureDetails, normalizeApiFailure } from "./api-errors.js";
+import { createClientOperations } from "./client-operations.js";
+import type { Diagnostic,ImportResult,RootView,SkillProvenance,SkillRoot,SkillView } from './types.js';
 type SearchSkill = Partial<SkillView> & {kindLabel?: string; statusLabel?: string; rootKey?: string; rootLabel?: string};
 type UploadFile = File & {_dssmPath?: string};
 type UploadSelection = {kind: string; name: string; files: UploadFile[]; count: number; size: number; error?: never};
@@ -20,22 +22,28 @@ type CustomSourceScanResult = {ok: true; root: string; candidates: ScannedCustom
 type ResultMessage = {ok: boolean; text: string; warning?: boolean; scope?: string};
 type ConfirmModal = {type: 'trash-confirm'; root: string; name: string; workspace?: string} | {type: 'delete-confirm'; id: string; name: string} | {type: 'category-create'; root: string; workspace?: string} | {type: 'category-rename'; root: string; id: string; name: string; workspace?: string} | {type: 'category-delete'; root: string; id: string; name: string; workspace?: string} | {type: 'category-add'; root: string; id: string; name: string; workspace?: string; skills: {name: string; declaredName?: string; description?: string; currentCatName: string}[]} | {type: 'root-path'; root: string; label: string; path: string; defaultPath?: string} | {type: 'skill-note'; root: string; name: string; note: string; workspace?: string};
 type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
+// 宿主复选框；旧宿主缺少该原语时退回同构 DOM，标签与尺寸规则保持一致。
+    type CheckboxProps = { checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean; className?: string };
 
 // dsh-skills-manager client half：按全局与项目作用域切换的多 Agent Skills 管理面板。
-    /*! §1 UI primitives and constants */
-    var react = React;
-    var h = react.createElement;
-    // 宿主复选框；旧宿主缺少该原语时退回同构 DOM，标签与尺寸规则保持一致。
-    type CheckboxProps = { checked: boolean; onChange: (next: boolean) => void; label: string; disabled?: boolean; className?: string };
-    const FallbackCheckbox = function FallbackCheckbox(props: CheckboxProps) {
+/*! §1 Pure projections, constants and stateless primitives */
+var react = React;
+
+var h = react.createElement;
+
+const FallbackCheckbox = function FallbackCheckbox(props: CheckboxProps) {
       return h("label", { className: props.className }, h("input", { type: "checkbox", checked: props.checked, disabled: props.disabled, onChange: function (event: React.ChangeEvent<HTMLInputElement>) { props.onChange(event.target.checked); } }), h("span", null, props.label));
     };
-    const DisplayCheckbox: React.ComponentType<CheckboxProps> = (primitives as any).Checkbox || FallbackCheckbox;
-    const HostTag: React.ComponentType<{ tone?: string; className?: string; title?: string; children?: React.ReactNode }> = (primitives as any).Tag || function HostTag(props: any) { return h("span", { className: props.className, title: props.title }, props.children); };
-    var MUTATION_HEADERS = { "content-type": "application/json", "x-dsh-skills-manager": "1" };
-    var NS = "skills-manager";
 
-    var DICT = {
+const DisplayCheckbox: React.ComponentType<CheckboxProps> = (primitives as any).Checkbox || FallbackCheckbox;
+
+const HostTag: React.ComponentType<{ tone?: string; className?: string; title?: string; children?: React.ReactNode }> = (primitives as any).Tag || function HostTag(props: any) { return h("span", { className: props.className, title: props.title }, props.children); };
+
+var MUTATION_HEADERS = { "content-type": "application/json", "x-dsh-skills-manager": "1" };
+
+var NS = "skills-manager";
+
+var DICT = {
       zh: {
         "summary.group.one": "{count} 个技能", "summary.group.other": "{count} 个技能", "format.locale": "zh-CN", "format.warningSeparator": "；",
         "title": "技能管理", "desc": "统一加载和管理本机 Agent Skills。",
@@ -112,7 +120,7 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       }
     };
 
-    // 外部来源目录改写的文案单独成块，和仓库/目标选择器一样与主词典合并，减少巨型字典的冲突。
+// 外部来源目录改写的文案单独成块，和仓库/目标选择器一样与主词典合并，减少巨型字典的冲突。
     var ROOT_PATH_LOCALES = {
       zh: {
         "rootPath.edit": "修改技能目录", "rootPath.title": "修改「{name}」的技能目录",
@@ -172,14 +180,11 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       }
     };
 
+Object.assign(DICT.zh, ROOT_PATH_LOCALES.zh, managementLocales.zh, nacosLocales.zh, destinationLocales.zh, sidebarLocales.zh);
 
-    Object.assign(DICT.zh, ROOT_PATH_LOCALES.zh, managementLocales.zh, nacosLocales.zh, destinationLocales.zh, sidebarLocales.zh);
-    Object.assign(DICT.en, ROOT_PATH_LOCALES.en, managementLocales.en, nacosLocales.en, destinationLocales.en, sidebarLocales.en);
-    var SourceSelect = createSourceSelect(react);
-    var destinationKit = createDestinationKit({ react, SourceSelect, translateError });
-    var DestinationPicker = destinationKit.DestinationPicker;
-    var useRepositoryUI = createNacosUI({ react: react, Modal: Modal, Input: Input, Button: PrimitiveButton, SourceSelect: SourceSelect, destination: destinationKit, api: callApi, headers: MUTATION_HEADERS, translateError: translateError });
-    var CSS = destinationCss + sidebarEntryCss + `.dssm-section-card{box-sizing:border-box;display:flex;flex-direction:column;gap:12px;padding:18px 20px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,16px);margin-bottom:16px}.dssm-sources{display:flex;flex-direction:column;gap:9px}.dssm-scope-tabs{display:grid!important;box-sizing:border-box!important;width:100%;height:32px!important;min-height:32px!important;max-height:32px!important;padding:2px!important;border-radius:var(--dsw-radius-sm,8px)!important;border:0.5px solid var(--dsw-alias-border-l2)!important;background:var(--dsw-alias-bg-layer-1)!important}.dssm-scope-tabs>span[aria-hidden="true"],.dssm-scope-tabs>[class*="indicator"]{width:calc((100% - 4px)/4)!important;inset:2px auto 2px 2px!important;border-radius:6px!important;border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))!important;background:var(--dsw-alias-bg-layer-3,rgba(255,255,255,.08))!important;box-shadow:none!important}.dssm-scope-tabs [role=tab]{display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:4px!important;height:28px!important;padding:0 6px!important;border-radius:6px!important;font-size:13px!important;line-height:20px!important;white-space:nowrap!important;color:var(--dsw-alias-label-secondary)!important;text-align:center!important;box-sizing:border-box!important;transition:color 150ms ease!important}.dssm-scope-tabs [role=tab]:hover{color:var(--dsw-alias-label-primary)!important}.dssm-scope-tabs [role=tab][aria-selected="true"]{color:var(--dsw-alias-label-primary)!important;font-weight:600!important}.dssm-scope-tabs [role=tab] svg{flex:none;display:block}.dssm-source-head{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px}.dssm-source-toggle{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow:hidden;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dssm-source-toggle:focus-visible{outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:2px}.dssm-fold-chevron{flex:none;color:var(--dsw-alias-label-tertiary);transform:rotate(-90deg);transition:transform 160ms ease}.dssm-fold-chevron.is-open{transform:rotate(0deg)}@media (prefers-reduced-motion:reduce){.dssm-fold-chevron{transition:none}}.dssm-source-label{display:flex;align-items:center;gap:10px;min-width:0;flex:1}.dssm-drag-handle{cursor:grab;color:var(--dsw-alias-label-tertiary,#888);font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:16px;height:22px;border-radius:var(--dsw-radius-sm,8px);flex-shrink:0;user-select:none;transition:color 0.15s}.dssm-skill-row:hover .dssm-drag-handle{color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-drag-handle:active{cursor:grabbing}.dssm-cat.drag-over{border-color:var(--dsw-alias-brand-primary,#3b82f6);box-shadow:0 0 0 1px var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row.dragging{opacity:0.4;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-interactive-bg-hover,transparent))}.dssm-skill-row.drop-before{box-shadow:inset 0 2px 0 var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row.drop-after{box-shadow:inset 0 -2px 0 var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row{display:flex;align-items:center;gap:8px;margin:0;padding:11px 13px;border:0;border-top:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:0;background:transparent}.dssm-skill-copy{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}.dssm-skill-actions{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:nowrap}.dssm-skill-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;line-height:18px}.dssm-icon-danger{color:var(--dsw-alias-state-error-primary,#ef7272)}.dssm-skill-row .dssm-name{font-size:14px;font-weight:650;color:var(--dsw-alias-label-primary,#eeeeee)}.dssm-skill-actions{display:flex;align-items:center;gap:8px;flex:none}.dssm-source{overflow:hidden;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-xl,20px);background:transparent}.dssm-textarea{box-sizing:border-box;display:block;width:100%;min-height:160px;margin:0;padding:8px 12px;border:0.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;resize:vertical}.dssm-textarea:focus,.dssm-textarea:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}.dssm-textarea[readonly]{resize:none}.dssm-source-title{font-size:14px;font-weight:650;white-space:nowrap;flex:none}.dssm-source-path{min-width:0;max-width:50%;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px}.dssm-source-actions{display:flex;flex:none;align-items:center;gap:8px;margin-left:12px}.dssm-cat{margin:0 10px 8px;border:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:var(--dsw-radius-lg,16px)}.dssm-cat-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 8px 0 6px}.dssm-cat-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:36px;padding:4px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dssm-cat-title{font-size:14px;font-weight:700;display:inline-flex;align-items:center}.dssm-cat-note{margin:2px 16px 8px}.dssm-fallback{margin-top:4px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-section{box-sizing:border-box;display:flex;width:100%;min-width:0;padding:2px 0 36px;container-type:inline-size;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary,#eeeeee);font-family:inherit}.dssm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dssm-title-block{min-width:0}.dssm-title-row{display:flex;align-items:center;gap:8px 12px;min-width:0;flex-wrap:wrap}.dssm-title{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}.dssm-desc{margin:12px 0 0;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:14px;line-height:22px}.dssm-upload-link:focus-visible,.dssm-file-remove:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary,#f2f2f2));outline-offset:2px}.dssm-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));overflow:hidden;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1)}.dssm-stat{padding:4px 10px;border-right:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-stat:last-child{border-right:0}.dssm-stat strong{margin-right:4px;color:var(--dsw-alias-label-primary,#eeeeee);font-size:14px;font-weight:650}.dssm-filters{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;width:100%!important;min-width:0;box-sizing:border-box}.dssm-filter-actions{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}.dssm-filters .dssm-search{flex:1 1 0;min-width:160px;max-width:none}.dssm-filters .dssm-source-filter,.dssm-filters .dssm-status-filter,.dssm-filters .dssm-project-filter,.dssm-filters .dssm-menu-select-wrap,.dssm-filters span[class*="_root_"],.dssm-filters .dssm-source-select-menu,.dssm-filters .dssm-menu-select-trigger{width:auto!important;min-width:0!important;display:inline-flex!important;flex:none}.dssm-field .dssm-menu-select-wrap,.dssm-destination-pair .dssm-menu-select-wrap,.dssm-destination-pair span[class*="_root_"]{display:flex!important;width:100%!important;min-width:0!important;height:auto!important;padding:0!important;margin:0!important;border:0!important;background:transparent!important}.dssm-destination-pair .dssm-menu-select-trigger,.dssm-form .dssm-menu-select-trigger{display:flex!important;width:100%!important;height:36px!important;border-radius:var(--dsw-radius-md,10px)!important;padding:0 12px!important;box-sizing:border-box!important}.dssm-source-select-menu{min-width:130px;max-width:280px}.dssm-menu-select-trigger{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:32px;padding:0 10px;border:0.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;user-select:none;width:max-content;min-width:8em;transition:border-color 120ms ease,background 120ms ease}.dssm-menu-select-trigger:hover:not(:disabled){border-color:var(--dsw-alias-border-l3,#555)}.dssm-menu-select-trigger.is-open,.dssm-menu-select-trigger:focus-visible{border-color:var(--dsw-alias-brand-primary)!important;outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary))!important;outline-offset:0!important}.dssm-menu-select-trigger:disabled{opacity:.5;cursor:default}.dssm-menu-select-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;text-align:left}.dssm-menu-select-arrow{color:var(--dsw-alias-label-secondary);flex-shrink:0}.dssm-count{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;white-space:nowrap;flex:none}.dssm-name{overflow-wrap:anywhere;font-size:13px;font-weight:570}.dssm-note{overflow-wrap:anywhere;margin-top:2px;color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:11px;line-height:17px}.dssm-enabled{color:var(--dsw-alias-state-success-primary,#51b976);font-size:12px;white-space:nowrap}.dssm-disabled{color:var(--dsw-alias-state-warn-primary,#d49245);font-size:12px;white-space:nowrap}.dssm-shadowed{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;white-space:nowrap}.dssm-trash-count{padding:2px 7px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12));color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:11px}.dssm-empty{padding:25px 14px;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;text-align:center}.dssm-feedback{padding:9px 11px;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:12px}.dssm-warning{border-color:var(--dsw-alias-state-warn-primary,#d49245);color:var(--dsw-alias-state-warn-primary,#d49245)}.dssm-error{border-color:var(--dsw-alias-state-error-primary,#ef7272);color:var(--dsw-alias-state-error-primary,#ef7272)}.dssm-form,.dssm-field{display:flex;flex-direction:column}.dssm-form{gap:12px}.dssm-detail{display:flex;flex-direction:column;gap:12px;min-width:0}.dssm-detail .dssm-desc{margin:0}.dssm-field{gap:6px}.dssm-label{font-size:12px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-help{margin:0;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;line-height:18px}.dssm-batch-list{display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto;margin:12px 0;padding:2px}.dssm-batch-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));cursor:pointer;user-select:none;transition:background 0.15s,border-color 0.15s}.dssm-batch-item:hover{background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-interactive-bg-hover,transparent));border-color:var(--dsw-alias-border-l2,#494949)}.dssm-batch-item.selected{border-color:var(--dsw-alias-brand-primary,#3b82f6);background:var(--dsw-alias-state-business-tertiary)}.dssm-batch-check{flex:none;gap:0!important;font-size:0;line-height:0}.dssm-batch-check>span,.dssm-batch-check>span *{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.dssm-batch-info{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.dssm-batch-name-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.dssm-batch-name{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,#eee);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dssm-batch-cat-tag{font-size:10px;padding:1px 6px;border-radius:var(--dsw-radius-xs,4px);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary,#b9b9b9);white-space:nowrap;flex-shrink:0}.dssm-batch-desc{font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary,#a0a0a0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}.dssm-modal-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}.dssm-form+.dssm-modal-actions{margin-top:18px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}.dssm-hidden-input{display:none}.dssm-dropzone{box-sizing:border-box;display:flex;width:100%;min-height:170px;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:22px;border:1px dashed var(--dsw-alias-border-l3,#555555);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9);transition:border-color 180ms ease,background 180ms ease}.dssm-dropzone:hover,.dssm-dropzone-active{border-color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary,#f2f2f2));background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12))}.dssm-dropzone-title{color:var(--dsw-alias-label-primary,#eeeeee);font-size:14px;font-weight:620}.dssm-dropzone-copy{font-size:12px;line-height:18px;text-align:center}.dssm-upload-choices{display:flex;align-items:center;gap:7px}.dssm-upload-link,.dssm-file-remove{padding:0;border:0;background:transparent;font:inherit;font-size:12px;cursor:pointer}.dssm-upload-link{color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-upload-link:hover{color:var(--dsw-alias-label-primary,#eeeeee);text-decoration:underline}.dssm-upload-link:disabled{opacity:.45;cursor:default}.dssm-upload-divider{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px}.dssm-file{display:flex;align-items:center;gap:9px;padding:10px 11px;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-primary,#eeeeee);font-size:12px}.dssm-file-kind{display:inline-flex;min-width:30px;height:24px;align-items:center;justify-content:center;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12));color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:9px;font-weight:700}.dssm-file-name{min-width:0;overflow:hidden;flex:1;text-overflow:ellipsis;white-space:nowrap}.dssm-file-meta{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;white-space:nowrap}.dssm-file-remove{width:24px;height:24px;color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:18px}.dssm-upload-requirements{padding:1px 1px 0}.dssm-upload-requirements ul{display:flex;margin:7px 0 0;padding-left:18px;flex-direction:column;gap:5px;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;line-height:17px}.dssm-detail-path{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:14px;line-height:22px}.dssm-diag{font-size:14px;line-height:22px}.dssm-detail-path{padding:8px 10px;border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9);word-break:break-all}.dssm-diag{padding:8px 10px;border-left:2px solid var(--dsw-alias-state-warn-primary,#d49245);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-trash-panel{display:flex;flex-direction:column;gap:10px}.dssm-trash-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:11px 13px;border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));border-radius:var(--dsw-radius-xl,20px);background:transparent}.dssm-trash-main{min-width:0;display:flex;flex-direction:column;gap:6px}.dssm-trash-item .dssm-name{font-size:14px;line-height:20px;color:var(--dsw-alias-label-primary,inherit)}.dssm-trash-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary,#909090);overflow-wrap:anywhere}.dssm-trash-source{min-width:0;background:transparent;color:var(--dsw-alias-label-tertiary,#a0a0a0)}.dssm-trash-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+Object.assign(DICT.en, ROOT_PATH_LOCALES.en, managementLocales.en, nacosLocales.en, destinationLocales.en, sidebarLocales.en);
+
+var CSS = destinationCss + sidebarEntryCss + `.dssm-section-card{box-sizing:border-box;display:flex;flex-direction:column;gap:12px;padding:18px 20px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,16px);margin-bottom:16px}.dssm-sources{display:flex;flex-direction:column;gap:9px}.dssm-scope-tabs{display:grid!important;box-sizing:border-box!important;width:100%;height:32px!important;min-height:32px!important;max-height:32px!important;padding:2px!important;border-radius:var(--dsw-radius-sm,8px)!important;border:0.5px solid var(--dsw-alias-border-l2)!important;background:var(--dsw-alias-bg-layer-1)!important}.dssm-scope-tabs>span[aria-hidden="true"],.dssm-scope-tabs>[class*="indicator"]{width:calc((100% - 4px)/4)!important;inset:2px auto 2px 2px!important;border-radius:6px!important;border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))!important;background:var(--dsw-alias-bg-layer-3,rgba(255,255,255,.08))!important;box-shadow:none!important}.dssm-scope-tabs [role=tab]{display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:4px!important;height:28px!important;padding:0 6px!important;border-radius:6px!important;font-size:13px!important;line-height:20px!important;white-space:nowrap!important;color:var(--dsw-alias-label-secondary)!important;text-align:center!important;box-sizing:border-box!important;transition:color 150ms ease!important}.dssm-scope-tabs [role=tab]:hover{color:var(--dsw-alias-label-primary)!important}.dssm-scope-tabs [role=tab][aria-selected="true"]{color:var(--dsw-alias-label-primary)!important;font-weight:600!important}.dssm-scope-tabs [role=tab] svg{flex:none;display:block}.dssm-source-head{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px}.dssm-source-toggle{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow:hidden;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dssm-source-toggle:focus-visible{outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:2px}.dssm-fold-chevron{flex:none;color:var(--dsw-alias-label-tertiary);transform:rotate(-90deg);transition:transform 160ms ease}.dssm-fold-chevron.is-open{transform:rotate(0deg)}@media (prefers-reduced-motion:reduce){.dssm-fold-chevron{transition:none}}.dssm-source-label{display:flex;align-items:center;gap:10px;min-width:0;flex:1}.dssm-drag-handle{cursor:grab;color:var(--dsw-alias-label-tertiary,#888);font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:16px;height:22px;border-radius:var(--dsw-radius-sm,8px);flex-shrink:0;user-select:none;transition:color 0.15s}.dssm-skill-row:hover .dssm-drag-handle{color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-drag-handle:active{cursor:grabbing}.dssm-cat.drag-over{border-color:var(--dsw-alias-brand-primary,#3b82f6);box-shadow:0 0 0 1px var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row.dragging{opacity:0.4;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-interactive-bg-hover,transparent))}.dssm-skill-row.drop-before{box-shadow:inset 0 2px 0 var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row.drop-after{box-shadow:inset 0 -2px 0 var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row{display:flex;align-items:center;gap:8px;margin:0;padding:11px 13px;border:0;border-top:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:0;background:transparent}.dssm-skill-copy{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}.dssm-skill-actions{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:nowrap}.dssm-skill-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;line-height:18px}.dssm-icon-danger{color:var(--dsw-alias-state-error-primary,#ef7272)}.dssm-skill-row .dssm-name{font-size:14px;font-weight:650;color:var(--dsw-alias-label-primary,#eeeeee)}.dssm-skill-actions{display:flex;align-items:center;gap:8px;flex:none}.dssm-source{overflow:hidden;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-xl,20px);background:transparent}.dssm-textarea{box-sizing:border-box;display:block;width:100%;min-height:160px;margin:0;padding:8px 12px;border:0.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;resize:vertical}.dssm-textarea:focus,.dssm-textarea:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}.dssm-textarea[readonly]{resize:none}.dssm-source-title{font-size:14px;font-weight:650;white-space:nowrap;flex:none}.dssm-source-path{min-width:0;max-width:50%;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px}.dssm-source-actions{display:flex;flex:none;align-items:center;gap:8px;margin-left:12px}.dssm-cat{margin:0 10px 8px;border:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:var(--dsw-radius-lg,16px)}.dssm-cat-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 8px 0 6px}.dssm-cat-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:36px;padding:4px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dssm-cat-title{font-size:14px;font-weight:700;display:inline-flex;align-items:center}.dssm-cat-note{margin:2px 16px 8px}.dssm-fallback{margin-top:4px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-section{box-sizing:border-box;display:flex;width:100%;min-width:0;padding:2px 0 36px;container-type:inline-size;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary,#eeeeee);font-family:inherit}.dssm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dssm-title-block{min-width:0}.dssm-title-row{display:flex;align-items:center;gap:8px 12px;min-width:0;flex-wrap:wrap}.dssm-title{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}.dssm-desc{margin:12px 0 0;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:14px;line-height:22px}.dssm-upload-link:focus-visible,.dssm-file-remove:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary,#f2f2f2));outline-offset:2px}.dssm-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));overflow:hidden;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1)}.dssm-stat{padding:4px 10px;border-right:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-stat:last-child{border-right:0}.dssm-stat strong{margin-right:4px;color:var(--dsw-alias-label-primary,#eeeeee);font-size:14px;font-weight:650}.dssm-filters{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;width:100%!important;min-width:0;box-sizing:border-box}.dssm-filter-actions{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}.dssm-filters .dssm-search{flex:1 1 0;min-width:160px;max-width:none}.dssm-filters .dssm-source-filter,.dssm-filters .dssm-status-filter,.dssm-filters .dssm-project-filter,.dssm-filters .dssm-menu-select-wrap,.dssm-filters span[class*="_root_"],.dssm-filters .dssm-source-select-menu,.dssm-filters .dssm-menu-select-trigger{width:auto!important;min-width:0!important;display:inline-flex!important;flex:none}.dssm-field .dssm-menu-select-wrap,.dssm-destination-pair .dssm-menu-select-wrap,.dssm-destination-pair span[class*="_root_"]{display:flex!important;width:100%!important;min-width:0!important;height:auto!important;padding:0!important;margin:0!important;border:0!important;background:transparent!important}.dssm-destination-pair .dssm-menu-select-trigger,.dssm-form .dssm-menu-select-trigger{display:flex!important;width:100%!important;height:36px!important;border-radius:var(--dsw-radius-md,10px)!important;padding:0 12px!important;box-sizing:border-box!important}.dssm-source-select-menu{min-width:130px;max-width:280px}.dssm-menu-select-trigger{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:32px;padding:0 10px;border:0.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;user-select:none;width:max-content;min-width:8em;transition:border-color 120ms ease,background 120ms ease}.dssm-menu-select-trigger:hover:not(:disabled){border-color:var(--dsw-alias-border-l3,#555)}.dssm-menu-select-trigger.is-open,.dssm-menu-select-trigger:focus-visible{border-color:var(--dsw-alias-brand-primary)!important;outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary))!important;outline-offset:0!important}.dssm-menu-select-trigger:disabled{opacity:.5;cursor:default}.dssm-menu-select-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;text-align:left}.dssm-menu-select-arrow{color:var(--dsw-alias-label-secondary);flex-shrink:0}.dssm-count{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;white-space:nowrap;flex:none}.dssm-name{overflow-wrap:anywhere;font-size:13px;font-weight:570}.dssm-note{overflow-wrap:anywhere;margin-top:2px;color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:11px;line-height:17px}.dssm-enabled{color:var(--dsw-alias-state-success-primary,#51b976);font-size:12px;white-space:nowrap}.dssm-disabled{color:var(--dsw-alias-state-warn-primary,#d49245);font-size:12px;white-space:nowrap}.dssm-shadowed{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;white-space:nowrap}.dssm-trash-count{padding:2px 7px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12));color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:11px}.dssm-empty{padding:25px 14px;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;text-align:center}.dssm-feedback{padding:9px 11px;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:12px}.dssm-warning{border-color:var(--dsw-alias-state-warn-primary,#d49245);color:var(--dsw-alias-state-warn-primary,#d49245)}.dssm-error{border-color:var(--dsw-alias-state-error-primary,#ef7272);color:var(--dsw-alias-state-error-primary,#ef7272)}.dssm-form,.dssm-field{display:flex;flex-direction:column}.dssm-form{gap:12px}.dssm-detail{display:flex;flex-direction:column;gap:12px;min-width:0}.dssm-detail .dssm-desc{margin:0}.dssm-field{gap:6px}.dssm-label{font-size:12px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-help{margin:0;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;line-height:18px}.dssm-batch-list{display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto;margin:12px 0;padding:2px}.dssm-batch-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));cursor:pointer;user-select:none;transition:background 0.15s,border-color 0.15s}.dssm-batch-item:hover{background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-interactive-bg-hover,transparent));border-color:var(--dsw-alias-border-l2,#494949)}.dssm-batch-item.selected{border-color:var(--dsw-alias-brand-primary,#3b82f6);background:var(--dsw-alias-state-business-tertiary)}.dssm-batch-check{flex:none;gap:0!important;font-size:0;line-height:0}.dssm-batch-check>span,.dssm-batch-check>span *{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.dssm-batch-info{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.dssm-batch-name-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.dssm-batch-name{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,#eee);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dssm-batch-cat-tag{font-size:10px;padding:1px 6px;border-radius:var(--dsw-radius-xs,4px);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary,#b9b9b9);white-space:nowrap;flex-shrink:0}.dssm-batch-desc{font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary,#a0a0a0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}.dssm-modal-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}.dssm-form+.dssm-modal-actions{margin-top:18px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}.dssm-hidden-input{display:none}.dssm-dropzone{box-sizing:border-box;display:flex;width:100%;min-height:170px;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:22px;border:1px dashed var(--dsw-alias-border-l3,#555555);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9);transition:border-color 180ms ease,background 180ms ease}.dssm-dropzone:hover,.dssm-dropzone-active{border-color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary,#f2f2f2));background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12))}.dssm-dropzone-title{color:var(--dsw-alias-label-primary,#eeeeee);font-size:14px;font-weight:620}.dssm-dropzone-copy{font-size:12px;line-height:18px;text-align:center}.dssm-upload-choices{display:flex;align-items:center;gap:7px}.dssm-upload-link,.dssm-file-remove{padding:0;border:0;background:transparent;font:inherit;font-size:12px;cursor:pointer}.dssm-upload-link{color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-upload-link:hover{color:var(--dsw-alias-label-primary,#eeeeee);text-decoration:underline}.dssm-upload-link:disabled{opacity:.45;cursor:default}.dssm-upload-divider{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px}.dssm-file{display:flex;align-items:center;gap:9px;padding:10px 11px;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-primary,#eeeeee);font-size:12px}.dssm-file-kind{display:inline-flex;min-width:30px;height:24px;align-items:center;justify-content:center;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12));color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:9px;font-weight:700}.dssm-file-name{min-width:0;overflow:hidden;flex:1;text-overflow:ellipsis;white-space:nowrap}.dssm-file-meta{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;white-space:nowrap}.dssm-file-remove{width:24px;height:24px;color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:18px}.dssm-upload-requirements{padding:1px 1px 0}.dssm-upload-requirements ul{display:flex;margin:7px 0 0;padding-left:18px;flex-direction:column;gap:5px;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;line-height:17px}.dssm-detail-path{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:14px;line-height:22px}.dssm-diag{font-size:14px;line-height:22px}.dssm-detail-path{padding:8px 10px;border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9);word-break:break-all}.dssm-diag{padding:8px 10px;border-left:2px solid var(--dsw-alias-state-warn-primary,#d49245);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-trash-panel{display:flex;flex-direction:column;gap:10px}.dssm-trash-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:11px 13px;border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));border-radius:var(--dsw-radius-xl,20px);background:transparent}.dssm-trash-main{min-width:0;display:flex;flex-direction:column;gap:6px}.dssm-trash-item .dssm-name{font-size:14px;line-height:20px;color:var(--dsw-alias-label-primary,inherit)}.dssm-trash-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary,#909090);overflow-wrap:anywhere}.dssm-trash-source{min-width:0;background:transparent;color:var(--dsw-alias-label-tertiary,#a0a0a0)}.dssm-trash-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 @container(max-width:400px){.dssm-source-path{display:none}}@media(max-width:760px){.dssm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.dssm-title-row{flex-wrap:wrap}}@container(max-width:520px){.dssm-trash-item{grid-template-columns:minmax(0,1fr)}.dssm-skill-row{flex-wrap:wrap}.dssm-skill-actions{width:100%;margin-inline-start:0;justify-content:flex-end}.dssm-trash-actions{justify-content:flex-end}.dssm-head{flex-direction:column}.dssm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.dssm-stat:nth-child(2){border-right:0}.dssm-stat:nth-child(n+3){border-top:0.5px solid var(--dsw-alias-border-l1,#3a3a3a)}.dssm-filters{flex-wrap:wrap}.dssm-filters .dssm-search{flex:1 1 100%;min-width:0;order:2}.dssm-filters .dssm-filter-actions{order:3;margin-left:auto}.dssm-filters .dssm-source-filter,.dssm-filters .dssm-status-filter,.dssm-filters .dssm-project-filter{flex:1 1 calc(50% - 4px);min-width:0;order:1}.dssm-filters .dssm-source-filter .dssm-menu-select-wrap,.dssm-filters .dssm-status-filter .dssm-menu-select-wrap,.dssm-filters .dssm-project-filter .dssm-menu-select-wrap{width:100%!important;display:flex!important}.dssm-filters .dssm-source-filter .dssm-menu-select-trigger,.dssm-filters .dssm-status-filter .dssm-menu-select-trigger,.dssm-filters .dssm-project-filter .dssm-menu-select-trigger{width:100%!important;min-width:0!important}}.dssm-row-state{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .dssm-enable-switch{box-sizing:border-box;position:relative;flex:0 0 auto;width:36px;height:20px;padding:2px;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3,#555);cursor:pointer}.dssm-enable-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary)}.dssm-enable-switch:disabled{cursor:default;opacity:.5}.dssm-enable-switch:focus-visible{outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}.dssm-enable-switch-thumb{display:block;width:16px;height:16px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-primary-foreground,#fff);transition:transform 120ms ease;pointer-events:none}.dssm-enable-switch[aria-checked=false] .dssm-enable-switch-thumb{background:var(--dsw-alias-switch-thumb,#fff)}.dssm-enable-switch[aria-checked=true] .dssm-enable-switch-thumb{transform:translateX(16px)}
 .dssm-icon-action{box-sizing:border-box;width:22px;min-width:22px;height:22px;padding:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;color:var(--dsw-alias-label-secondary,#b9b9b9);border-color:var(--dsw-alias-border-l2,#494949);border-style:solid;border-width:0.5px}.dssm-icon-action:not(:disabled):not(.dssm-icon-danger):hover{color:var(--dsw-alias-link,#4176e6)!important;border-color:var(--dsw-alias-link,#4176e6)!important}.dssm-icon-action.dssm-icon-danger{color:var(--dsw-alias-state-error-primary,#ef7272);border-color:var(--dsw-alias-state-error-primary,#ef7272)}.dssm-btn-danger:not(:disabled){color:var(--dsw-alias-state-error-primary,#ef7272)}
@@ -222,36 +227,23 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
 
 `;
 
-    CSS += `.dssm-section-card:has(>.dssm-head){padding:0;margin-bottom:0;border:0;border-radius:0;background:transparent}.dssm-head{gap:6px}.dssm-title{font-size:18px;line-height:26px;letter-spacing:0}.dssm-desc{margin:4px 0 0;font-size:12px;line-height:18px}.dssm-title-row{gap:8px}.dssm-scope-tabs{flex:none}`;
+CSS += `.dssm-section-card:has(>.dssm-head){padding:0;margin-bottom:0;border:0;border-radius:0;background:transparent}.dssm-head{gap:6px}.dssm-title{font-size:18px;line-height:26px;letter-spacing:0}.dssm-desc{margin:4px 0 0;font-size:12px;line-height:18px}.dssm-title-row{gap:8px}.dssm-scope-tabs{flex:none}`;
 
-    /*! §2 Pure projections and IO adapters */
-    function translateOrFallback(t: Translate, key: string, fallback: string, params?: object) { var value = t(key, params); return typeof value === "string" && value !== key ? value : fallback; }
-    function translateError(t: Translate, payload: unknown): string {
-      if (payload instanceof Error && !(payload as CodedError).code) return payload.message;
-      if (payload && typeof payload === "object") {
-        const item = payload as Diagnostic & {message?: unknown};
-        if (item.code) { var params = Object.assign({}, item.params || {}); if (params.action) params.action = translateOrFallback(t, "action." + params.action, String(params.action)); var translated = t(item.code, params); if (typeof translated === "string" && translated !== item.code) { if (params.code && item.code === "error.workspace.unavailable") { var isZh = hostLocale() === "zh" || (!hostLocale() && translated.includes("：")); return translated + (isZh ? "（" + params.code + "）" : " (" + params.code + ")"); } return translated; } if (translated === item.code) return item.error !== undefined ? translateError(t, item.error) : item.code; }
-        if (item.error !== undefined) return translateError(t, item.error); if (item.message !== undefined) return String(item.message);
-      }
-      return String(payload == null ? "" : payload);
-    }
-    function parseApiResponse<T = unknown>(response: Response): Promise<T> { return response.json().catch(function () { var error: CodedError = new Error("non-json response"); error.code = "error.proto.nonJson"; error.params = { status: response.status }; throw error; }).then(function (value: unknown) { const payload = value as {ok?: boolean; data: T}; if (!response.ok || payload.ok === false) throw payload; return payload.data; }); }
-    function callApi<K extends keyof ApiRoutes>(path: K, options?: RequestInit): Promise<ApiRoutes[K]> { return fetch(resolveApiUrl("/api/forge-skills-manager" + path), options).then(parseApiResponse<ApiRoutes[K]>); }
-    function skillDeclaredInvocationKind(skill: Partial<SkillView>): 'all' | 'manual' | 'none' {
+function translateOrFallback(t: Translate, key: string, fallback: string, params?: object) { var value = t(key, params); return typeof value === "string" && value !== key ? value : fallback; }
+
+function skillDeclaredInvocationKind(skill: Partial<SkillView>): 'all' | 'manual' | 'none' {
       if (!skill) return 'all';
       if (skill.invocationPolicyValid === false) return 'none';
       if (skill.modelInvocable === false && skill.userInvocable !== false) return 'manual';
       if (skill.modelInvocable === false && skill.userInvocable === false) return 'none';
       return 'all';
     }
-    function isSkillEnabled(skill: Partial<SkillView>): boolean { if (skill.enabled !== undefined) return skill.enabled === true; return !!(skill.invocationPolicyValid && skill.modelInvocable && skill.userInvocable && skill.managerEnabled !== false); }
-    function countKey(key: string, count: number) { return key + (Number(count) === 1 ? ".one" : ".other"); }
-    /*! §3 Host locale ownership */
-    var localeService: ClientContext["locale"] | undefined;
-    // getLocale().active 是宿主对 locale.preference 的最终有效解析，不读取网页/浏览器语言。
-    function hostLocale() { return localeService?.getLocale?.().active; }
-    function formatTrashTime(t: Translate, value: string) { return new Date(value).toLocaleString(hostLocale() || t("format.locale")); }
-    function rootDisplayName(t: Translate, root: SkillRoot) {
+
+function isSkillEnabled(skill: Partial<SkillView>): boolean { if (skill.enabled !== undefined) return skill.enabled === true; return !!(skill.invocationPolicyValid && skill.modelInvocable && skill.userInvocable && skill.managerEnabled !== false); }
+
+function countKey(key: string, count: number) { return key + (Number(count) === 1 ? ".one" : ".other"); }
+
+function rootDisplayName(t: Translate, root: SkillRoot) {
       if (root.kind === "preset" || root.scope === "preset") {
         var rawName = root.group || (root.label || "").replace(/^预设:\s*/, "");
         var suffixMatch = rawName.match(/(\s+\(\d+\))$/);
@@ -265,27 +257,10 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       var base = translateOrFallback(t, "root." + (root.localeKey || root.kind || root.key), root.label);
       return root.projectName ? base + " · " + root.projectName : base;
     }
-    function summarizeImportResult(t: Translate, data: ImportResult) {
-      var importedItems = data && data.imported || [];
-      var imported = importedItems.map(function (item) { return item.name; });
-      var skipped = (data && data.skipped || []).map(function (item) { return item.name; });
-      var warnings: string[] = [];
-      importedItems.forEach(function (item) {
-        (item.warnings || []).forEach(function (warning) { warnings.push(translateError(t, warning)); });
-      });
-      var summary;
-      if (imported.length && skipped.length) summary = { ok: true, warning: true, imported: true, text: t("result.importPartial", { imported: imported.join(", "), skipped: skipped.join(", ") }) };
-      else if (imported.length) summary = { ok: true, warning: false, imported: true, text: t("result.imported", { names: imported.join(", ") }) };
-      else if (skipped.length) summary = { ok: false, warning: true, imported: false, text: t("result.importSkipped", { names: skipped.join(", ") }) };
-      else summary = { ok: false, warning: false, imported: false, text: t("result.importEmpty") };
-      if (warnings.length) {
-        summary.warning = true;
-        summary.text = t("result.importWarnings", { result: summary.text, warnings: warnings.join(t("format.warningSeparator")) });
-      }
-      return summary;
-    }
-    function normalizeSkillQuery(query: unknown) { return String(query == null ? "" : query).trim().toLowerCase(); }
-    function matchSkillQuery(skill: SearchSkill, query: unknown) {
+
+function normalizeSkillQuery(query: unknown) { return String(query == null ? "" : query).trim().toLowerCase(); }
+
+function matchSkillQuery(skill: SearchSkill, query: unknown) {
       var q = normalizeSkillQuery(query);
       if (!q) return true;
       var prov = skill.provenance;
@@ -306,20 +281,25 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
         prov ? prov.path : null
       ].concat(invocationLabels).some(function (value) { return String(value == null ? "" : value).toLowerCase().includes(q); });
     }
-    function filterSkills<T extends SearchSkill>(list: T[], options?: {rootKey?: string; query?: unknown}) { var rootKey = options && options.rootKey != null ? options.rootKey : ""; return list.filter(function (skill) { return (!rootKey || skill.rootKey === rootKey) && matchSkillQuery(skill, options && options.query); }); }
-    function visibleSkillRoots<T extends {mutable?: boolean; exists?: boolean; overridden?: boolean}>(roots: T[]) {
+
+function filterSkills<T extends SearchSkill>(list: T[], options?: {rootKey?: string; query?: unknown}) { var rootKey = options && options.rootKey != null ? options.rootKey : ""; return list.filter(function (skill) { return (!rootKey || skill.rootKey === rootKey) && matchSkillQuery(skill, options && options.query); }); }
+
+function visibleSkillRoots<T extends {mutable?: boolean; exists?: boolean; overridden?: boolean}>(roots: T[]) {
       return (roots || []).filter(function (root) {
         // 自定义目录即使已失效也要保留，否则用户没有入口把目录改回去。
         return root.mutable || root.overridden === true || root.exists !== false;
       });
     }
-    function skillStatus(skill: Partial<SkillView>) { return skill.shadowedBy ? "shadowed" : skill.loadable === false ? "invalid" : isSkillEnabled(skill) ? "enabled" : "disabled"; }
-    function countSkillStatuses(list: {skill: Partial<SkillView>}[]) {
+
+function skillStatus(skill: Partial<SkillView>) { return skill.shadowedBy ? "shadowed" : skill.loadable === false ? "invalid" : isSkillEnabled(skill) ? "enabled" : "disabled"; }
+
+function countSkillStatuses(list: {skill: Partial<SkillView>}[]) {
       var summary: Record<string, number> = { total: list.length, enabled: 0, disabled: 0, shadowed: 0, invalid: 0 };
       list.forEach(function (row) { summary[skillStatus(row.skill)]++; });
       return summary;
     }
-    // 已启用且模型可见（未被更高优先级副本覆盖、模型可自动调用）技能的简介 token 合计：
+
+// 已启用且模型可见（未被更高优先级副本覆盖、模型可自动调用）技能的简介 token 合计：
     // 与宿主生成模型侧技能目录（snapshot.skills.filter(isModelInvocable)）同一口径。
     // effectiveModelInvocable 对应生效态策略判定（含来源启停与单项覆盖）；
     // invocationPolicyValid !== false 确保策略语法非法的无效技能（宿主在 filesystem 加载时直接丢弃）不被计入；
@@ -335,17 +315,22 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
           : total;
       }, 0);
     }
-    function canToggleSource(root: Partial<SkillRoot> | null | undefined) { return !!(root && root.toggleable !== false && root.kind !== "project-dsh"); }
-    // 先限制作用域和项目，再筛选条目：用户可写根始终展示，外部只读来源仅在有技能时展示
+
+function canToggleSource(root: Partial<SkillRoot> | null | undefined) { return !!(root && root.toggleable !== false && root.kind !== "project-dsh"); }
+
+// 先限制作用域和项目，再筛选条目：用户可写根始终展示，外部只读来源仅在有技能时展示
     function scopeSkillRoots(roots: RootView[]) {
       return visibleSkillRoots(roots).filter(function (root) {
         if (root.scope === "project") return false;
         return root.mutable || root.overridden === true || (root.skills || []).length > 0;
       });
     }
-    var MAX_UPLOAD_ARCHIVE_BYTES = 32 << 20, MAX_UPLOAD_ENTRY_BYTES = 32 << 20, MAX_UPLOAD_TOTAL_BYTES = 64 << 20, MAX_UPLOAD_ENTRIES = 1000;
-    function uploadFilePath(file: UploadFile) { return String(file && (file._dssmPath || file.webkitRelativePath || file.name) || "").replace(/\\/g, "/"); }
-    function inspectUploadSelection(files: ArrayLike<UploadFile> | null): SelectionResult | null {
+
+var MAX_UPLOAD_ARCHIVE_BYTES = 32 << 20, MAX_UPLOAD_ENTRY_BYTES = 32 << 20, MAX_UPLOAD_TOTAL_BYTES = 64 << 20, MAX_UPLOAD_ENTRIES = 1000;
+
+function uploadFilePath(file: UploadFile) { return String(file && (file._dssmPath || file.webkitRelativePath || file.name) || "").replace(/\\/g, "/"); }
+
+function inspectUploadSelection(files: ArrayLike<UploadFile> | null): SelectionResult | null {
       var list = Array.from(files || []); if (!list.length) return null;
       if (list.length > MAX_UPLOAD_ENTRIES) return { error: { code: "error.upload.tooMany", params: { limit: MAX_UPLOAD_ENTRIES } } };
       var relative = list.some(function (file) { return uploadFilePath(file).includes("/"); });
@@ -364,31 +349,32 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       if (lower.endsWith(".zip")) return size > MAX_UPLOAD_ARCHIVE_BYTES ? { error: { code: "error.upload.archiveTooLarge", params: { limit: MAX_UPLOAD_ARCHIVE_BYTES } } } : { kind: "zip", name: name, files: list, count: 1, size: size };
       return { error: { code: "select.file.invalid" } };
     }
-    function bytesToBase64(buffer: ArrayBuffer) { var bytes = new Uint8Array(buffer), binary = "", chunk = 0x8000; for (var i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length))); return btoa(binary); }
-    function buildUploadPayload(selection: UploadSelection) { return Promise.all(selection.files.map(function (file) { return file.arrayBuffer().then(function (buffer) { return { path: uploadFilePath(file), data: bytesToBase64(buffer) }; }); })).then(function (entries) { return selection.kind === "zip" ? { name: selection.name, zip: entries[0].data } : { name: selection.name, entries: entries }; }); }
-    function readDroppedEntry(entry: FileSystemEntry, prefix: string, output: UploadFile[]): Promise<void> { if (entry.isFile) return new Promise<void>(function (resolve, reject) { (entry as FileSystemFileEntry).file(function (file: UploadFile) { file._dssmPath = prefix + file.name; output.push(file); resolve(); }, reject); }); if (!entry.isDirectory) return Promise.resolve(); return new Promise<void>(function (resolve, reject) { var reader = (entry as FileSystemDirectoryEntry).createReader(), children: FileSystemEntry[] = []; function next() { reader.readEntries(function (batch) { if (!batch.length) { Promise.all(children.map(function (child) { return readDroppedEntry(child, prefix + entry.name + "/", output); })).then(function () { resolve(); }, reject); return; } children = children.concat(batch); next(); }, reject); } next(); }); }
-    function droppedFiles(dataTransfer: DataTransfer) { var items = Array.from(dataTransfer && dataTransfer.items || []), entries = items.map(function (item) { return item.webkitGetAsEntry && item.webkitGetAsEntry(); }).filter((entry): entry is FileSystemEntry => !!entry); if (!entries.length) return Promise.resolve(Array.from(dataTransfer && dataTransfer.files || [])); var files: UploadFile[] = []; return Promise.all(entries.map(function (entry) { return readDroppedEntry(entry, "", files); })).then(function () { return files; }); }
-    function modalFocusable(modal: HTMLElement): HTMLElement[] { return Array.prototype.slice.call(modal.querySelectorAll("button:not(:disabled), [href], input:not([type=hidden]):not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex=\"-1\"])") || []); }
-    function trapModalFocus(modal: HTMLElement, event: Pick<KeyboardEvent, "key" | "shiftKey" | "preventDefault">) { if (event.key !== "Tab") return; var focusable = modalFocusable(modal); if (!focusable.length) return; var active = document.activeElement; if (active === modal || !modal.contains(active) || (event.shiftKey ? active === focusable[0] : active === focusable[focusable.length - 1])) { event.preventDefault(); (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus(); } }
-    function SkillSwitch(props: {on: boolean; label: string; disabled?: boolean; onClick: () => void}) {
+
+function bytesToBase64(buffer: ArrayBuffer) { var bytes = new Uint8Array(buffer), binary = "", chunk = 0x8000; for (var i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length))); return btoa(binary); }
+
+function SkillSwitch(props: {on: boolean; label: string; disabled?: boolean; onClick: () => void}) {
       return enableSwitch(props.on, props.label, props.disabled, props.onClick);
     }
 
-    function hostButton(label: React.ReactNode, onClick: () => void, kind: "primary" | "outline" | "danger" = "primary", disabled?: boolean) {
+function hostButton(label: React.ReactNode, onClick: () => void, kind: "primary" | "outline" | "danger" = "primary", disabled?: boolean) {
           const variant = kind === "primary" ? "primary" : "outline";
           const className = kind === "danger" ? "dssm-btn-danger" : undefined;
           return h(PrimitiveButton, { variant: variant, className: className, disabled: disabled, onClick: onClick }, label);
         }
-    function strokeIcon(d: string) {
+
+function strokeIcon(d: string) {
       return h("svg", { viewBox: "0 0 16 16", width: 16, height: 16, "aria-hidden": true, focusable: "false" }, h("path", { d: d, fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round" }));
     }
-    function moreIcon() {
+
+function moreIcon() {
       return h("svg", { viewBox: "0 0 16 16", width: 16, height: 16, "aria-hidden": true, focusable: "false" }, [3.5, 8, 12.5].map(function (cx) { return h("circle", { key: cx, cx: cx, cy: 8, r: 1.15, fill: "none", stroke: "currentColor", strokeWidth: 1.5 }); }));
     }
-    function iconButton(label: string, icon: React.ReactNode, onClick: () => void, danger?: boolean, disabled?: boolean) {
+
+function iconButton(label: string, icon: React.ReactNode, onClick: () => void, danger?: boolean, disabled?: boolean) {
       return h(PrimitiveButton, { variant: "outline", size: "sm", className: "dssm-icon-action" + (danger ? " dssm-icon-danger" : ""), disabled: disabled, "aria-label": label, title: label, icon: icon, style: { width: 22, minWidth: 22, height: 22, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--dsw-radius-sm, 8px)" }, onClick: onClick } as any);
     }
-    function filterActionButton(label: string, icon: React.ReactNode, onClick: () => void, disabled?: boolean) {
+
+function filterActionButton(label: string, icon: React.ReactNode, onClick: () => void, disabled?: boolean) {
       return h(PrimitiveButton, {
         className: "dssm-icon-action",
         variant: "outline",
@@ -410,7 +396,8 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
         onClick: onClick
       });
     }
-    function enableSwitch(on: boolean, label: string, disabled: boolean | undefined, onToggle: () => void) {
+
+function enableSwitch(on: boolean, label: string, disabled: boolean | undefined, onToggle: () => void) {
       return h("button", {
         type: "button",
         role: "switch",
@@ -425,25 +412,37 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       }, h("span", { className: "dssm-enable-switch-thumb", "aria-hidden": "true" }));
     }
 
+var DSH_ICON_B64 = "data:image/png;base64,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";
 
+var WB_ICON_B64 = "data:image/png;base64,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";
 
-    var DSH_ICON_B64 = "data:image/png;base64,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";
-    var WB_ICON_B64 = "data:image/png;base64,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";
-    var CCSWITCH_ICON_B64 = "data:image/png;base64,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";
-    var QODER_P0 = "M23.376 14.458v-4.056c0-2.304-1.003-4.154-2.748-5.075L11.612.574l-.046.086-.045.086c1.68.886 2.644 2.673 2.644 4.902v4.056a7.928 7.928 0 01-.014.454l-.005.061c-.005.081-.01.164-.018.245a4.897 4.897 0 01-.011.1l-.01.076c-.008.068-.015.135-.025.203l-.018.113-.01.058a9.99 9.99 0 01-.098.513l-.007.03a7.209 7.209 0 01-.074.294l-.024.086c-.027.099-.056.197-.087.296l-.027.085a9.592 9.592 0 01-.111.323l-.033.085-.018.046c-.032.082-.064.166-.098.248-.019.048-.04.096-.061.145l-.007.017a6 6 0 01-.084.187c-.024.056-.05.11-.077.165-.03.061-.058.122-.089.182a9.423 9.423 0 01-.176.332c-.03.056-.062.111-.094.167-.031.053-.062.108-.095.16-.033.055-.066.11-.101.164-.033.053-.065.104-.1.155-.034.055-.07.107-.111.169l-.099.144a15.193 15.193 0 01-.34.457c-.04.05-.08.102-.121.151l-.107.128-.007.008a6.987 6.987 0 01-.262.298l-.149.16-.116.12a9.562 9.562 0 01-.204.198l-.03.03-.072.069a9.05 9.05 0 01-.263.235l-.025.022-.029.026-.042.035a11.7 11.7 0 01-.22.18l-.07.055-.018.013a8.904 8.904 0 01-.194.146c-.029.02-.057.042-.086.063a7.7 7.7 0 01-.22.152l-.057.04a8.865 8.865 0 01-.293.185l-.062.037a10.424 10.424 0 01-.307.173l-.037.02-.196.103-.108.052-.012.006a6.196 6.196 0 01-.315.143c-.065.028-.13.054-.196.08l-.035.014-.086.034c-.07.026-.143.05-.215.075l-.039.014-.064.023a8.056 8.056 0 01-.323.097l-.63.173a7.285 7.285 0 01-.33.08l-.07.015c-.053.012-.104.023-.157.032l-.065.011-.085.015a2.332 2.332 0 01-.194.027l-.085.01a4.715 4.715 0 01-.16.018l-.034.003a4.861 4.861 0 01-.246.016h-.033a2.714 2.714 0 01-.155.005h-.106a3.384 3.384 0 01-.225-.007H4.86l-.15-.012-.066-.006a5.586 5.586 0 01-.187-.02l-.04-.005a5.14 5.14 0 01-.219-.035l-.054-.01a6.943 6.943 0 01-.347-.082l-.03-.008-.038-.01a5.034 5.034 0 01-.269-.086l-.063-.023a4.216 4.216 0 01-.188-.073l-.071-.031-.016-.007a4.959 4.959 0 01-.16-.074l-.026-.013a.164.164 0 00-.014-.007l-.671-.351.486.486h.016l8.995 4.742.093.048.03.014.02.01c.056.026.111.052.169.076l.016.008.073.032.195.076.022.008a.718.718 0 01.03.012l.014.004a4.693 4.693 0 00.323.1l.027.007c.073.02.147.038.22.055l.018.004.027.006.066.013.088.016c.075.014.15.026.226.038l.042.004c.064.009.128.016.193.022l.126.012.06.003.05.002.098.005c.046.002.094.002.14.003h.12c.05 0 .1-.002.161-.005h.033l.07-.004a6.17 6.17 0 00.184-.014l.033-.003a.753.753 0 00.058-.005l.108-.012.081-.01.08-.01.129-.021.082-.014.071-.012c.054-.01.107-.021.16-.033l.066-.013.059-.013c.096-.022.192-.046.287-.073l.63-.172a7.354 7.354 0 00.397-.122l.04-.015c.075-.025.149-.051.222-.078.032-.011.062-.024.093-.037l.03-.012c.067-.027.135-.054.2-.082l.128-.056.195-.09.021-.01.102-.05c.068-.034.135-.069.202-.105l.037-.02.073-.038c.08-.044.16-.092.24-.139l.026-.015a8.086 8.086 0 00.322-.2l.065-.045 1.98.902a1.748 1.748 0 002.472-1.59v-7.33l.004.004z";
-    var QODER_P1 = "M11.617.576a3.904 3.904 0 00-.093-.047c-.016-.009-.033-.016-.05-.024a5.854 5.854 0 00-.166-.077l-.09-.04a4.094 4.094 0 00-.194-.074c-.017-.006-.035-.015-.053-.02l-.013-.005a5.18 5.18 0 00-.277-.088l-.07-.019a4.034 4.034 0 00-.219-.053c-.015-.003-.03-.008-.044-.012L10.253.1l-.057-.011a5.177 5.177 0 00-.225-.036L9.928.047a5.972 5.972 0 00-.191-.022L9.669.02a1.33 1.33 0 00-.058-.005L9.515.009a4.058 4.058 0 00-.111-.005C9.354 0 9.304 0 9.254 0h-.109c-.052 0-.106.004-.16.004L8.884.01A5.32 5.32 0 008.7.022l-.083.006h-.008c-.05.005-.1.013-.15.019l-.12.014c-.056.008-.112.018-.169.028-.037.006-.074.011-.11.018a7.054 7.054 0 00-.572.133l-.63.172c-.111.031-.22.064-.33.1-.037.011-.072.025-.108.037a12.91 12.91 0 00-.345.126c-.067.027-.133.054-.2.083l-.128.055a11.916 11.916 0 00-.318.15 7.376 7.376 0 00-.311.163c-.082.045-.16.092-.24.14a9.424 9.424 0 00-.35.218l-.016.01-.06.04a9.242 9.242 0 00-.51.37 12.54 12.54 0 00-.315.254l-.043.034-.01.007-.045.041c-.09.078-.18.158-.268.24l-.106.101c-.07.067-.139.135-.207.204l-.056.054-.063.067-.153.164-.12.133-.148.17c-.024.03-.049.057-.073.086l-.043.053a5.96 5.96 0 00-.123.155l-.118.151c-.04.053-.08.106-.118.16l-.075.101-.038.056-.107.155-.11.164a9.91 9.91 0 00-.168.265c-.012.02-.023.043-.037.063a12.43 12.43 0 00-.192.335l-.09.168c-.019.034-.04.07-.057.105-.011.022-.02.043-.032.065l-.092.188-.08.167a19.15 19.15 0 00-.083.192c-.017.038-.035.076-.05.115-.008.016-.014.034-.021.051-.035.083-.067.167-.1.253l-.051.134c-.04.11-.077.22-.113.33l-.02.057c0 .002 0 .005-.002.007l-.008.026c-.032.1-.06.2-.09.301l-.023.089c-.027.1-.052.2-.075.301l-.007.03a7.63 7.63 0 00-.057.267l-.008.048c-.015.074-.026.148-.038.223L.082 8.4c-.011.078-.02.156-.029.234-.006.051-.013.103-.017.154a6.57 6.57 0 00-.02.26c-.003.044-.007.086-.009.13-.004.128-.007.257-.007.386v4.056c0 1.478.42 2.741 1.138 3.692A4.75 4.75 0 002.73 18.67l9.015 4.753c-1.656-.874-2.728-2.685-2.73-5.051v-4.056c0-.13.004-.26.01-.39.002-.043.006-.085.01-.128.005-.088.01-.174.019-.261l.017-.155c.01-.077.018-.155.029-.234l.026-.164c.013-.074.025-.15.039-.223.02-.105.04-.21.064-.313l.008-.031c.023-.1.048-.201.075-.301l.023-.088c.028-.1.058-.202.09-.302l.008-.025.021-.063c.036-.11.073-.22.113-.33l.052-.134c.031-.085.065-.169.1-.253.022-.056.047-.111.07-.166a13.856 13.856 0 01.164-.358c.03-.063.06-.126.092-.188l.088-.172a9.22 9.22 0 01.187-.338l.096-.164c.034-.057.069-.112.104-.168l.1-.159a10.49 10.49 0 01.567-.786l.123-.155.116-.139c.05-.057.098-.115.148-.171a14.092 14.092 0 01.272-.297 9.706 9.706 0 01.432-.425c.088-.083.177-.163.268-.241l.054-.048a10.08 10.08 0 01.553-.435l.092-.068c.075-.053.15-.105.226-.156.019-.013.038-.028.06-.04a9.18 9.18 0 01.362-.227c.08-.047.16-.094.241-.139l.11-.058a7.643 7.643 0 01.521-.256l.126-.056a7.509 7.509 0 01.546-.208l.107-.037c.11-.036.22-.069.33-.1l.63-.172c.095-.026.191-.05.287-.072l.097-.02c.062-.014.125-.029.187-.04l.114-.018c.055-.01.11-.02.166-.028.04-.006.08-.01.12-.014.053-.007.105-.014.157-.019l.083-.006c.061-.005.123-.01.184-.013.034-.003.067-.003.101-.004l.16-.006h.11a3.187 3.187 0 01.261.008l.153.01.067.007c.064.006.128.013.192.022l.043.005a5.232 5.232 0 01.281.047l.141.03c.073.016.146.035.218.053l.07.019c.094.026.187.055.278.087l.067.025a4.326 4.326 0 01.449.19l.143.072L11.617.576z";
-    var CODEX_D = "M6.13671 5.82399V4.30398C6.13671 4.17596 6.18431 4.07991 6.29527 4.01598L9.32406 2.256C9.73637 2.01602 10.228 1.90406 10.7353 1.90406C12.6382 1.90406 13.8434 3.3921 13.8434 4.97604C13.8434 5.088 13.8434 5.21602 13.8274 5.34404L10.6877 3.488C10.4975 3.37605 10.3071 3.37605 10.1168 3.488L6.13671 5.82399ZM13.209 11.7441V8.11195C13.209 7.88789 13.1138 7.72791 12.9236 7.61594L8.94344 5.27995L10.2437 4.5279C10.3547 4.46397 10.4499 4.46397 10.5609 4.5279L13.5896 6.28789C14.4619 6.79996 15.0484 7.88789 15.0484 8.94385C15.0484 10.1598 14.335 11.28 13.209 11.7441ZM5.20114 8.54404L3.90086 7.77608C3.78989 7.71215 3.7423 7.6161 3.7423 7.48808V3.96811C3.7423 2.25615 5.04259 0.960061 6.80278 0.960061C7.46883 0.960061 8.08714 1.18413 8.61056 1.58409L5.48672 3.40816C5.29649 3.52012 5.20129 3.68011 5.20129 3.90418L5.20114 8.54404ZM7.99999 10.176L6.13671 9.12005V6.8801L7.99999 5.82414L9.8631 6.8801V9.12005L7.99999 10.176ZM9.19719 15.0401C8.53113 15.0401 7.91282 14.816 7.3894 14.4161L10.5132 12.5919C10.7034 12.48 10.7987 12.3201 10.7987 12.096V7.45596L12.1149 8.22392C12.2258 8.28785 12.2734 8.3839 12.2734 8.51192V12.0319C12.2734 13.7438 10.9572 15.0401 9.19719 15.0401ZM5.43898 11.4721L2.41018 9.71211C1.53796 9.20003 0.95134 8.11211 0.95134 7.05615C0.95134 5.82414 1.68077 4.72016 2.80657 4.25611V7.9041C2.80657 8.12817 2.90177 8.28815 3.092 8.40012L7.05637 10.72L5.75609 11.4721C5.64513 11.5361 5.54993 11.5361 5.43898 11.4721ZM5.26465 14.0961C3.47278 14.0961 2.15658 12.736 2.15658 11.056C2.15658 10.928 2.17249 10.8 2.18826 10.672L5.3121 12.4961C5.50234 12.608 5.69273 12.608 5.88297 12.4961L9.8631 10.1762V11.6962C9.8631 11.8242 9.8155 11.9202 9.70454 11.9841L6.67574 13.7441C6.26344 13.9841 5.77199 14.0961 5.26465 14.0961ZM9.19719 16C11.1159 16 12.7174 14.624 13.0823 12.8C14.8582 12.3359 16 10.6559 16 8.944C16 7.82396 15.5243 6.73603 14.668 5.95201C14.7473 5.61598 14.7949 5.27995 14.7949 4.94407C14.7949 2.65612 12.9554 0.944002 10.8305 0.944002C10.4025 0.944002 9.99013 1.00794 9.57782 1.15201C8.86416 0.447988 7.88099 0 6.80278 0C4.88403 0 3.28254 1.37593 2.91768 3.19999C1.14173 3.66404 0 5.34404 0 7.056C0 8.17604 0.475669 9.26397 1.33197 10.048C1.25269 10.384 1.20509 10.72 1.20509 11.0559C1.20509 13.3438 3.04456 15.0559 5.16946 15.0559C5.59753 15.0559 6.00984 14.9921 6.42215 14.848C7.13565 15.552 8.11882 16 9.19719 16Z";
-    var CURSOR_D = "M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z";
-    var WINDSURF_D = "M23.78 5.004h-.228a2.187 2.187 0 00-2.18 2.196v4.912c0 .98-.804 1.775-1.76 1.775a1.818 1.818 0 01-1.472-.773L13.168 5.95a2.197 2.197 0 00-1.81-.95c-1.134 0-2.154.972-2.154 2.173v4.94c0 .98-.797 1.775-1.76 1.775-.57 0-1.136-.289-1.472-.773L.408 5.098C.282 4.918 0 5.007 0 5.228v4.284c0 .216.066.426.188.604l5.475 7.889c.324.466.8.812 1.351.938 1.377.316 2.645-.754 2.645-2.117V11.89c0-.98.787-1.775 1.76-1.775h.002c.586 0 1.135.288 1.472.773l4.972 7.163a2.15 2.15 0 001.81.95c1.158 0 2.151-.973 2.151-2.173v-4.939c0-.98.787-1.775 1.76-1.775h.194c.122 0 .22-.1.22-.222V5.225a.221.221 0 00-.22-.222z";
-    var TRAE_D = "M24 20.541H3.428v-3.426H0V3.4h24V20.54zM3.428 17.115h17.144V6.827H3.428v10.288zm8.573-5.196l-2.425 2.424-2.424-2.424 2.424-2.424 2.425 2.424zm6.857-.001l-2.424 2.423-2.425-2.423 2.425-2.425 2.424 2.425z";
-    var ROO_D = "M20.113 5.5l-.442 1.557a.157.157 0 01-.196.106l-7.414-2.157a.16.16 0 00-.143.028l-7.342 5.74a.159.159 0 01-.074.032l-4.37.656a.154.154 0 00-.132.162l.02.245c.005.078.071.14.152.141l5.074.128.058.002 3.75-1.953a.16.16 0 01.164.01l2.657 1.847a.152.152 0 01.066.125l-.023 2.45c0 .032.01.063.028.089l3.737 5.227c.03.04.077.065.129.065h1.182a.153.153 0 00.14-.224l-2.664-4.919a.15.15 0 01.005-.152l1.389-2.169a.156.156 0 01.062-.055l4.965-2.456a.16.16 0 01.158.01l1.418.921a.16.16 0 00.087.026h1.289c.125 0 .2-.136.13-.237l-3.578-5.29c-.074-.109-.246-.082-.282.044z";
-    var CB_P0 = "M18.777 1.647c.28-.02.536.114.972.51 1.018.926 2.437 2.828 3.318 4.452l.34.631.482.24.11.06v3.638a5.206 5.206 0 00-5.32-1.23c-.491.166-1.021.471-2.08 1.082l-6.09 3.516c-1.057.61-1.586.916-1.975 1.259a5.208 5.208 0 00-1.493 5.572c.165.49.471 1.02 1.082 2.08l.315.543h-3.26c-.685 0-1.34-.135-1.939-.377-.169-.956-.009-1.789.469-2.335.158-.18.164-.189.13-.493a11.846 11.846 0 01-.057-1.711l.02-.444-.667-1.18C2.1 15.622 1.445 14.078 1.192 12.9c-.133-.647-.125-.934.04-1.146.1-.128.427-.261.822-.334.994-.175 3.162-.017 5.575.41l.25.043.551-.487c.915-.81 1.522-1.264 2.641-1.962 1.167-.73 2.484-1.331 3.967-1.807l.476-.152.261-.688c.937-2.471 1.896-4.293 2.58-4.9.235-.21.25-.22.422-.23z";
-    var CB_P1 = "M12.139 18.2a1.203 1.203 0 011.642.44l1.296 2.243a1.204 1.204 0 01-2.083 1.203l-1.296-2.243a1.203 1.203 0 01.44-1.644zM18.629 14.452a1.203 1.203 0 011.642.44l1.295 2.244a1.203 1.203 0 11-2.083 1.203l-1.295-2.243a1.203 1.203 0 01.44-1.644z";
-    var OC_P0 = "M16.877 1.912c.58-.27 1.14-.323 1.616-.037a.317.317 0 01-.326.542c-.227-.136-.547-.153-1.022.068-.352.165-.765.45-1.234.866 2.683 1.17 4.4 3.5 5.148 5.921a6.421 6.421 0 00-.704.184c-.578.016-1.174.204-1.502.735-.338.55-.268 1.276.072 2.069l.005.012.007.014c.523 1.045 1.318 1.91 2.2 2.284-.912 3.274-3.44 6.144-5.972 6.988v2.109h-2.11v-2.11c-1.043.417-2.086.01-2.11 0v2.11h-2.11v-2.11c-2.531-.843-5.061-3.713-5.973-6.987.882-.373 1.678-1.238 2.2-2.284l.007-.014.006-.012c.34-.793.41-1.518.071-2.069-.327-.531-.923-.719-1.503-.735a6.409 6.409 0 00-.704-.183c.749-2.421 2.466-4.751 5.149-5.922-.47-.416-.88-.701-1.234-.866-.474-.221-.794-.204-1.021-.068a.318.318 0 01-.435-.109.317.317 0 01.109-.433c.476-.286 1.036-.233 1.615.037.49.229 1.031.628 1.621 1.182A9.924 9.924 0 0112 2.568c1.199 0 2.284.19 3.256.526.59-.554 1.13-.953 1.62-1.182zM8.835 6.577a1.266 1.266 0 100 2.532 1.266 1.266 0 000-2.532zm6.33 0a1.267 1.267 0 100 2.533 1.267 1.267 0 000-2.533z";
-    var OC_P1 = "M.395 13.118c-.966-1.932-.163-3.863 2.41-3.365v-.001l.05.01c.084.018.17.038.26.06.033.009.067.017.1.027.084.022.168.048.255.076l.09.027c.528 0 .95.158 1.16.501.212.343.212.87-.105 1.61-.085.17-.178.333-.276.489l-.01.017a4.967 4.967 0 01-.62.791l-.019.02c-1.092 1.117-2.496 1.336-3.295-.262z";
-    var OC_P2 = "M21.193 9.753c2.574-.5 3.378 1.433 2.411 3.365-.58 1.159-1.476 1.361-2.342.96l-.011-.005a2.419 2.419 0 01-.114-.056l-.019-.01a2.751 2.751 0 01-.115-.067l-.023-.014c-.035-.022-.071-.044-.106-.068l-.05-.035c-.55-.388-1.062-1.007-1.44-1.76-.276-.647-.311-1.132-.174-1.472.176-.439.636-.639 1.23-.639.032-.011.066-.02.099-.03.08-.026.16-.05.238-.072l.117-.03a5.502 5.502 0 01.3-.067z";
+var CCSWITCH_ICON_B64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAflSURBVFhH7Vd7UFNXGicPwiMSWsiCiCwiLM+UQkEeIYhS5JkQEoJJQCCIdKW7uLCjYot1akFueAZ5BJUBpLxBQKpjrUWrLq517bYznXG1aylV3gjyUJRX8u2cG0IRYXHc7R87s7/JnXPPd07O7zu/833nnKuh8X/8L4FAIBBVBV4usaOfBgG9Epe1/WpAXuClinhZ28u2/wrc4iR5ESfk3Ua2Nh6oTiQSSaikkInkpvdY5259EHjHzcLQDW8jEIhEogaRTCKQl4/zSsB1JpHIhAUSPWNj87jWZth76SIEHD3SgWxkEomCSh9rI58ZeRRAeSwUCF3kyKalSdR+YbgVlFoVL60xkYjPIjjzWOfuthaIrq+d1d9oaq1uPxhgnzZVLIYnRSIQuv5WrLY7bta12xNkFLs4zqssjZpcW1+fbhMYEK+po0NVt9mFBL8f/9lZQI+zcOfHantL4taLz0oioT+HP21nomeDbO62696ePOs+Cbd94FTKZlwVIkFjjQBdCCwShaLFyZbeTuy4BLzCgnuGlpZOyK5Lp2+IrKl6EtfWAvxC2T+RqvraZL27n4QOIgX+9qH/PdTPyZLKmGr3nJq74AnwlRd8Xci4oRp+DQXUs6fS6aaSM00Q29wIqJQ0N4E9OyQJtbH2JVXjKrQ2g749g+myXpcxdlwIs3IxHOM65pkbUTY8afKanj/HBLjkBV1Vzl10GvkN9F8S8RVSVO3Eegd7prC8bGj32TbYVVszl3DhPDAT95Zt8maFRzc1wJ72Vngr4ffFiZ5mcdPySBjJCwcp3yHrnoz58/yZ7aD4zBsG61yHzI0pG9F4miSCJirXXAakEYlExDvr0PTe9P8o7WLC+XbYVfPpXHx7G0ScOtEjOl0xGdNYB+zSE32tB9m3JvP48BDjzg7L2IqxUwEwU+cHj6u9nlqZaFssHVubokrJVZditVRh8PmpkpYmiGmsh9iGWoipq4ao6ipFdHUl3JFFwzAWquzLCoM+aahypDAE7udv7bcw0sJn7s2geX4gMj14Jdu+Y7jZdTDY7Y0AZCcRCXh6L0JNrkMhUdw3G7jYmdBszQyoZgZULQPUc6MjgxUmL/5J0NAI/No6RVB9MySVFykHsVBFnxSRc5W9GFc5ks+BUglDXiCxLuouc++FCyyAqyyADibANz7wl3yHays6oN7DT+5yr5qRo5QKn3mA8Z78kB766PuPOb1Xk1idVw5z/9FR8kdoL/qT8lN5qvK6bI9yGOMAcqBfysWfvizO/OTJYICWQJht2Qaz7SyAyyyAL5kw0rxlJIVvsg/nI74cC7gC3x4Ovg+nYmCyUIRvLKicOC6EySIxTMgEMJ7FgXEpGyawEBhZTi7lKvH3HLaivyBgZrzcD7pLPR5kRJsdcbLStl8kWikG1ArssFvvXxfvdbb9fZ+Oa/v9vvvucFD3/fTQ0YFs/twDLOx5TxZvri87HHqz+dCXxYN+3IFfnj5pmLJfyoOezLD5Hixs/sdPOGMXk3xvlojdKlP8bFOZloaeuBMrxdtKnlEpJB06lWJI0yZT4zzNYx5mcib7ETlOpJq9KgZwB5T9WVzoxbiKcZkApkuEMF6wE1dyqkQMU8WR8LRYBCwrujca+6U4UBvRgxQhL6QjQtJ2q5TuDM5TRP4IYyuHFuRHsqP3ASxU2YuFKQZyONAv8392fKdjcV64c+k3H/rf78vmTU8UCuFpcSSg+HLbZICfmCs6gLBUHocNNLvLKb5fPy8SwlCuACalbLieF6esKDqgHMQ4OHn18WTFD3liGJaG4tI/LgmCewWeP7/rqI/P1IKuuynkLRPOETbjWBzTYs9yjhewtCH5XZv9w7nhisf5EfC4QAi9RwPHTmKJPezaBigqSVOMZwbBQCZHkVhZDAcyku+OZgRO9+eEI2Xmp2t3AHy5DbLizbEXGdaAWpb8iHeKlCd3wUB2uPK5PBK+SPS6uo3lFMmtqBzn1dTCBdlexURmENzFBHNJ9WWwNTX5/H5fqwMzJSLowXizg3mhiqlW5jzc8IZOGeO6qSHFGI1LIRPxO8SqIBFV22VFrEctVEpgMFcwf9DfLg0lrl8mdnt3cwNEVlfB3/NiYCIzSHkzXwL7agogvSJtSmudNvV0jFvDtFwMDzPDZ0dLQ+DZebdZuOoFg02uA5tNtMzR2P/2PFBngpGe1m8OBdp/9I65gSuqeyTEyxPaW0BUXweSrCPfd6Wzx8ayuHA5N2okp/rQzFfn/gBMV9Mg1Pfbw0FdKOh6McHcWOWOebjmCdDJAnfbdS6ofc1TcXk6WrGYEeg6hs6BoMKinwJdLQWjOTwYzxfAMZFTblN5xIORKwLA3rOWof4MU5rDYC5/7lF+BIzmR8CZQ/YNHE993LmVdsAVgachQYNE1iRr7iw7MSRpaYb4tjNAtbHfEuNsIn5eGgXjBQLY+js6qzHD+XPo3A43ZOjiofKd52zKmy4Rwc3UHXdIC5yrpt2qWLghOYuF6eg0dBFFZKB6cZR75bQ8CoZy+XM0CoWaEWd6FP7qBVPntjyzWK9lpv67gwnNXl9Hk4be1feB14auwZvGau2SfK2ToTwGLv/Z9xaqsxz0POC6J3SdfvtHw19uP4uz/Y8/VtS3JPXHCIK7hcEWY5qWkbruZKnLoNPIBqp+qnVAxMvj6bWxlHwplnyWLdZf7PErAUm8lAyl1uuQ/wtXmaOWiiPiDAAAAABJRU5ErkJggg==";
 
-    function getRootBrandIcon(key: string) {
+var QODER_P0 = "M23.376 14.458v-4.056c0-2.304-1.003-4.154-2.748-5.075L11.612.574l-.046.086-.045.086c1.68.886 2.644 2.673 2.644 4.902v4.056a7.928 7.928 0 01-.014.454l-.005.061c-.005.081-.01.164-.018.245a4.897 4.897 0 01-.011.1l-.01.076c-.008.068-.015.135-.025.203l-.018.113-.01.058a9.99 9.99 0 01-.098.513l-.007.03a7.209 7.209 0 01-.074.294l-.024.086c-.027.099-.056.197-.087.296l-.027.085a9.592 9.592 0 01-.111.323l-.033.085-.018.046c-.032.082-.064.166-.098.248-.019.048-.04.096-.061.145l-.007.017a6 6 0 01-.084.187c-.024.056-.05.11-.077.165-.03.061-.058.122-.089.182a9.423 9.423 0 01-.176.332c-.03.056-.062.111-.094.167-.031.053-.062.108-.095.16-.033.055-.066.11-.101.164-.033.053-.065.104-.1.155-.034.055-.07.107-.111.169l-.099.144a15.193 15.193 0 01-.34.457c-.04.05-.08.102-.121.151l-.107.128-.007.008a6.987 6.987 0 01-.262.298l-.149.16-.116.12a9.562 9.562 0 01-.204.198l-.03.03-.072.069a9.05 9.05 0 01-.263.235l-.025.022-.029.026-.042.035a11.7 11.7 0 01-.22.18l-.07.055-.018.013a8.904 8.904 0 01-.194.146c-.029.02-.057.042-.086.063a7.7 7.7 0 01-.22.152l-.057.04a8.865 8.865 0 01-.293.185l-.062.037a10.424 10.424 0 01-.307.173l-.037.02-.196.103-.108.052-.012.006a6.196 6.196 0 01-.315.143c-.065.028-.13.054-.196.08l-.035.014-.086.034c-.07.026-.143.05-.215.075l-.039.014-.064.023a8.056 8.056 0 01-.323.097l-.63.173a7.285 7.285 0 01-.33.08l-.07.015c-.053.012-.104.023-.157.032l-.065.011-.085.015a2.332 2.332 0 01-.194.027l-.085.01a4.715 4.715 0 01-.16.018l-.034.003a4.861 4.861 0 01-.246.016h-.033a2.714 2.714 0 01-.155.005h-.106a3.384 3.384 0 01-.225-.007H4.86l-.15-.012-.066-.006a5.586 5.586 0 01-.187-.02l-.04-.005a5.14 5.14 0 01-.219-.035l-.054-.01a6.943 6.943 0 01-.347-.082l-.03-.008-.038-.01a5.034 5.034 0 01-.269-.086l-.063-.023a4.216 4.216 0 01-.188-.073l-.071-.031-.016-.007a4.959 4.959 0 01-.16-.074l-.026-.013a.164.164 0 00-.014-.007l-.671-.351.486.486h.016l8.995 4.742.093.048.03.014.02.01c.056.026.111.052.169.076l.016.008.073.032.195.076.022.008a.718.718 0 01.03.012l.014.004a4.693 4.693 0 00.323.1l.027.007c.073.02.147.038.22.055l.018.004.027.006.066.013.088.016c.075.014.15.026.226.038l.042.004c.064.009.128.016.193.022l.126.012.06.003.05.002.098.005c.046.002.094.002.14.003h.12c.05 0 .1-.002.161-.005h.033l.07-.004a6.17 6.17 0 00.184-.014l.033-.003a.753.753 0 00.058-.005l.108-.012.081-.01.08-.01.129-.021.082-.014.071-.012c.054-.01.107-.021.16-.033l.066-.013.059-.013c.096-.022.192-.046.287-.073l.63-.172a7.354 7.354 0 00.397-.122l.04-.015c.075-.025.149-.051.222-.078.032-.011.062-.024.093-.037l.03-.012c.067-.027.135-.054.2-.082l.128-.056.195-.09.021-.01.102-.05c.068-.034.135-.069.202-.105l.037-.02.073-.038c.08-.044.16-.092.24-.139l.026-.015a8.086 8.086 0 00.322-.2l.065-.045 1.98.902a1.748 1.748 0 002.472-1.59v-7.33l.004.004z";
+
+var QODER_P1 = "M11.617.576a3.904 3.904 0 00-.093-.047c-.016-.009-.033-.016-.05-.024a5.854 5.854 0 00-.166-.077l-.09-.04a4.094 4.094 0 00-.194-.074c-.017-.006-.035-.015-.053-.02l-.013-.005a5.18 5.18 0 00-.277-.088l-.07-.019a4.034 4.034 0 00-.219-.053c-.015-.003-.03-.008-.044-.012L10.253.1l-.057-.011a5.177 5.177 0 00-.225-.036L9.928.047a5.972 5.972 0 00-.191-.022L9.669.02a1.33 1.33 0 00-.058-.005L9.515.009a4.058 4.058 0 00-.111-.005C9.354 0 9.304 0 9.254 0h-.109c-.052 0-.106.004-.16.004L8.884.01A5.32 5.32 0 008.7.022l-.083.006h-.008c-.05.005-.1.013-.15.019l-.12.014c-.056.008-.112.018-.169.028-.037.006-.074.011-.11.018a7.054 7.054 0 00-.572.133l-.63.172c-.111.031-.22.064-.33.1-.037.011-.072.025-.108.037a12.91 12.91 0 00-.345.126c-.067.027-.133.054-.2.083l-.128.055a11.916 11.916 0 00-.318.15 7.376 7.376 0 00-.311.163c-.082.045-.16.092-.24.14a9.424 9.424 0 00-.35.218l-.016.01-.06.04a9.242 9.242 0 00-.51.37 12.54 12.54 0 00-.315.254l-.043.034-.01.007-.045.041c-.09.078-.18.158-.268.24l-.106.101c-.07.067-.139.135-.207.204l-.056.054-.063.067-.153.164-.12.133-.148.17c-.024.03-.049.057-.073.086l-.043.053a5.96 5.96 0 00-.123.155l-.118.151c-.04.053-.08.106-.118.16l-.075.101-.038.056-.107.155-.11.164a9.91 9.91 0 00-.168.265c-.012.02-.023.043-.037.063a12.43 12.43 0 00-.192.335l-.09.168c-.019.034-.04.07-.057.105-.011.022-.02.043-.032.065l-.092.188-.08.167a19.15 19.15 0 00-.083.192c-.017.038-.035.076-.05.115-.008.016-.014.034-.021.051-.035.083-.067.167-.1.253l-.051.134c-.04.11-.077.22-.113.33l-.02.057c0 .002 0 .005-.002.007l-.008.026c-.032.1-.06.2-.09.301l-.023.089c-.027.1-.052.2-.075.301l-.007.03a7.63 7.63 0 00-.057.267l-.008.048c-.015.074-.026.148-.038.223L.082 8.4c-.011.078-.02.156-.029.234-.006.051-.013.103-.017.154a6.57 6.57 0 00-.02.26c-.003.044-.007.086-.009.13-.004.128-.007.257-.007.386v4.056c0 1.478.42 2.741 1.138 3.692A4.75 4.75 0 002.73 18.67l9.015 4.753c-1.656-.874-2.728-2.685-2.73-5.051v-4.056c0-.13.004-.26.01-.39.002-.043.006-.085.01-.128.005-.088.01-.174.019-.261l.017-.155c.01-.077.018-.155.029-.234l.026-.164c.013-.074.025-.15.039-.223.02-.105.04-.21.064-.313l.008-.031c.023-.1.048-.201.075-.301l.023-.088c.028-.1.058-.202.09-.302l.008-.025.021-.063c.036-.11.073-.22.113-.33l.052-.134c.031-.085.065-.169.1-.253.022-.056.047-.111.07-.166a13.856 13.856 0 01.164-.358c.03-.063.06-.126.092-.188l.088-.172a9.22 9.22 0 01.187-.338l.096-.164c.034-.057.069-.112.104-.168l.1-.159a10.49 10.49 0 01.567-.786l.123-.155.116-.139c.05-.057.098-.115.148-.171a14.092 14.092 0 01.272-.297 9.706 9.706 0 01.432-.425c.088-.083.177-.163.268-.241l.054-.048a10.08 10.08 0 01.553-.435l.092-.068c.075-.053.15-.105.226-.156.019-.013.038-.028.06-.04a9.18 9.18 0 01.362-.227c.08-.047.16-.094.241-.139l.11-.058a7.643 7.643 0 01.521-.256l.126-.056a7.509 7.509 0 01.546-.208l.107-.037c.11-.036.22-.069.33-.1l.63-.172c.095-.026.191-.05.287-.072l.097-.02c.062-.014.125-.029.187-.04l.114-.018c.055-.01.11-.02.166-.028.04-.006.08-.01.12-.014.053-.007.105-.014.157-.019l.083-.006c.061-.005.123-.01.184-.013.034-.003.067-.003.101-.004l.16-.006h.11a3.187 3.187 0 01.261.008l.153.01.067.007c.064.006.128.013.192.022l.043.005a5.232 5.232 0 01.281.047l.141.03c.073.016.146.035.218.053l.07.019c.094.026.187.055.278.087l.067.025a4.326 4.326 0 01.449.19l.143.072L11.617.576z";
+
+var CODEX_D = "M6.13671 5.82399V4.30398C6.13671 4.17596 6.18431 4.07991 6.29527 4.01598L9.32406 2.256C9.73637 2.01602 10.228 1.90406 10.7353 1.90406C12.6382 1.90406 13.8434 3.3921 13.8434 4.97604C13.8434 5.088 13.8434 5.21602 13.8274 5.34404L10.6877 3.488C10.4975 3.37605 10.3071 3.37605 10.1168 3.488L6.13671 5.82399ZM13.209 11.7441V8.11195C13.209 7.88789 13.1138 7.72791 12.9236 7.61594L8.94344 5.27995L10.2437 4.5279C10.3547 4.46397 10.4499 4.46397 10.5609 4.5279L13.5896 6.28789C14.4619 6.79996 15.0484 7.88789 15.0484 8.94385C15.0484 10.1598 14.335 11.28 13.209 11.7441ZM5.20114 8.54404L3.90086 7.77608C3.78989 7.71215 3.7423 7.6161 3.7423 7.48808V3.96811C3.7423 2.25615 5.04259 0.960061 6.80278 0.960061C7.46883 0.960061 8.08714 1.18413 8.61056 1.58409L5.48672 3.40816C5.29649 3.52012 5.20129 3.68011 5.20129 3.90418L5.20114 8.54404ZM7.99999 10.176L6.13671 9.12005V6.8801L7.99999 5.82414L9.8631 6.8801V9.12005L7.99999 10.176ZM9.19719 15.0401C8.53113 15.0401 7.91282 14.816 7.3894 14.4161L10.5132 12.5919C10.7034 12.48 10.7987 12.3201 10.7987 12.096V7.45596L12.1149 8.22392C12.2258 8.28785 12.2734 8.3839 12.2734 8.51192V12.0319C12.2734 13.7438 10.9572 15.0401 9.19719 15.0401ZM5.43898 11.4721L2.41018 9.71211C1.53796 9.20003 0.95134 8.11211 0.95134 7.05615C0.95134 5.82414 1.68077 4.72016 2.80657 4.25611V7.9041C2.80657 8.12817 2.90177 8.28815 3.092 8.40012L7.05637 10.72L5.75609 11.4721C5.64513 11.5361 5.54993 11.5361 5.43898 11.4721ZM5.26465 14.0961C3.47278 14.0961 2.15658 12.736 2.15658 11.056C2.15658 10.928 2.17249 10.8 2.18826 10.672L5.3121 12.4961C5.50234 12.608 5.69273 12.608 5.88297 12.4961L9.8631 10.1762V11.6962C9.8631 11.8242 9.8155 11.9202 9.70454 11.9841L6.67574 13.7441C6.26344 13.9841 5.77199 14.0961 5.26465 14.0961ZM9.19719 16C11.1159 16 12.7174 14.624 13.0823 12.8C14.8582 12.3359 16 10.6559 16 8.944C16 7.82396 15.5243 6.73603 14.668 5.95201C14.7473 5.61598 14.7949 5.27995 14.7949 4.94407C14.7949 2.65612 12.9554 0.944002 10.8305 0.944002C10.4025 0.944002 9.99013 1.00794 9.57782 1.15201C8.86416 0.447988 7.88099 0 6.80278 0C4.88403 0 3.28254 1.37593 2.91768 3.19999C1.14173 3.66404 0 5.34404 0 7.056C0 8.17604 0.475669 9.26397 1.33197 10.048C1.25269 10.384 1.20509 10.72 1.20509 11.0559C1.20509 13.3438 3.04456 15.0559 5.16946 15.0559C5.59753 15.0559 6.00984 14.9921 6.42215 14.848C7.13565 15.552 8.11882 16 9.19719 16Z";
+
+var CURSOR_D = "M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z";
+
+var WINDSURF_D = "M23.78 5.004h-.228a2.187 2.187 0 00-2.18 2.196v4.912c0 .98-.804 1.775-1.76 1.775a1.818 1.818 0 01-1.472-.773L13.168 5.95a2.197 2.197 0 00-1.81-.95c-1.134 0-2.154.972-2.154 2.173v4.94c0 .98-.797 1.775-1.76 1.775-.57 0-1.136-.289-1.472-.773L.408 5.098C.282 4.918 0 5.007 0 5.228v4.284c0 .216.066.426.188.604l5.475 7.889c.324.466.8.812 1.351.938 1.377.316 2.645-.754 2.645-2.117V11.89c0-.98.787-1.775 1.76-1.775h.002c.586 0 1.135.288 1.472.773l4.972 7.163a2.15 2.15 0 001.81.95c1.158 0 2.151-.973 2.151-2.173v-4.939c0-.98.787-1.775 1.76-1.775h.194c.122 0 .22-.1.22-.222V5.225a.221.221 0 00-.22-.222z";
+
+var TRAE_D = "M24 20.541H3.428v-3.426H0V3.4h24V20.54zM3.428 17.115h17.144V6.827H3.428v10.288zm8.573-5.196l-2.425 2.424-2.424-2.424 2.424-2.424 2.425 2.424zm6.857-.001l-2.424 2.423-2.425-2.423 2.425-2.425 2.424 2.425z";
+
+var ROO_D = "M20.113 5.5l-.442 1.557a.157.157 0 01-.196.106l-7.414-2.157a.16.16 0 00-.143.028l-7.342 5.74a.159.159 0 01-.074.032l-4.37.656a.154.154 0 00-.132.162l.02.245c.005.078.071.14.152.141l5.074.128.058.002 3.75-1.953a.16.16 0 01.164.01l2.657 1.847a.152.152 0 01.066.125l-.023 2.45c0 .032.01.063.028.089l3.737 5.227c.03.04.077.065.129.065h1.182a.153.153 0 00.14-.224l-2.664-4.919a.15.15 0 01.005-.152l1.389-2.169a.156.156 0 01.062-.055l4.965-2.456a.16.16 0 01.158.01l1.418.921a.16.16 0 00.087.026h1.289c.125 0 .2-.136.13-.237l-3.578-5.29c-.074-.109-.246-.082-.282.044z";
+
+var CB_P0 = "M18.777 1.647c.28-.02.536.114.972.51 1.018.926 2.437 2.828 3.318 4.452l.34.631.482.24.11.06v3.638a5.206 5.206 0 00-5.32-1.23c-.491.166-1.021.471-2.08 1.082l-6.09 3.516c-1.057.61-1.586.916-1.975 1.259a5.208 5.208 0 00-1.493 5.572c.165.49.471 1.02 1.082 2.08l.315.543h-3.26c-.685 0-1.34-.135-1.939-.377-.169-.956-.009-1.789.469-2.335.158-.18.164-.189.13-.493a11.846 11.846 0 01-.057-1.711l.02-.444-.667-1.18C2.1 15.622 1.445 14.078 1.192 12.9c-.133-.647-.125-.934.04-1.146.1-.128.427-.261.822-.334.994-.175 3.162-.017 5.575.41l.25.043.551-.487c.915-.81 1.522-1.264 2.641-1.962 1.167-.73 2.484-1.331 3.967-1.807l.476-.152.261-.688c.937-2.471 1.896-4.293 2.58-4.9.235-.21.25-.22.422-.23z";
+
+var CB_P1 = "M12.139 18.2a1.203 1.203 0 011.642.44l1.296 2.243a1.204 1.204 0 01-2.083 1.203l-1.296-2.243a1.203 1.203 0 01.44-1.644zM18.629 14.452a1.203 1.203 0 011.642.44l1.295 2.244a1.203 1.203 0 11-2.083 1.203l-1.295-2.243a1.203 1.203 0 01.44-1.644z";
+
+var OC_P0 = "M16.877 1.912c.58-.27 1.14-.323 1.616-.037a.317.317 0 01-.326.542c-.227-.136-.547-.153-1.022.068-.352.165-.765.45-1.234.866 2.683 1.17 4.4 3.5 5.148 5.921a6.421 6.421 0 00-.704.184c-.578.016-1.174.204-1.502.735-.338.55-.268 1.276.072 2.069l.005.012.007.014c.523 1.045 1.318 1.91 2.2 2.284-.912 3.274-3.44 6.144-5.972 6.988v2.109h-2.11v-2.11c-1.043.417-2.086.01-2.11 0v2.11h-2.11v-2.11c-2.531-.843-5.061-3.713-5.973-6.987.882-.373 1.678-1.238 2.2-2.284l.007-.014.006-.012c.34-.793.41-1.518.071-2.069-.327-.531-.923-.719-1.503-.735a6.409 6.409 0 00-.704-.183c.749-2.421 2.466-4.751 5.149-5.922-.47-.416-.88-.701-1.234-.866-.474-.221-.794-.204-1.021-.068a.318.318 0 01-.435-.109.317.317 0 01.109-.433c.476-.286 1.036-.233 1.615.037.49.229 1.031.628 1.621 1.182A9.924 9.924 0 0112 2.568c1.199 0 2.284.19 3.256.526.59-.554 1.13-.953 1.62-1.182zM8.835 6.577a1.266 1.266 0 100 2.532 1.266 1.266 0 000-2.532zm6.33 0a1.267 1.267 0 100 2.533 1.267 1.267 0 000-2.533z";
+
+var OC_P1 = "M.395 13.118c-.966-1.932-.163-3.863 2.41-3.365v-.001l.05.01c.084.018.17.038.26.06.033.009.067.017.1.027.084.022.168.048.255.076l.09.027c.528 0 .95.158 1.16.501.212.343.212.87-.105 1.61-.085.17-.178.333-.276.489l-.01.017a4.967 4.967 0 01-.62.791l-.019.02c-1.092 1.117-2.496 1.336-3.295-.262z";
+
+var OC_P2 = "M21.193 9.753c2.574-.5 3.378 1.433 2.411 3.365-.58 1.159-1.476 1.361-2.342.96l-.011-.005a2.419 2.419 0 01-.114-.056l-.019-.01a2.751 2.751 0 01-.115-.067l-.023-.014c-.035-.022-.071-.044-.106-.068l-.05-.035c-.55-.388-1.062-1.007-1.44-1.76-.276-.647-.311-1.132-.174-1.472.176-.439.636-.639 1.23-.639.032-.011.066-.02.099-.03.08-.026.16-.05.238-.072l.117-.03a5.502 5.502 0 01.3-.067z";
+
+function getRootBrandIcon(key: string) {
       var k = String(key || "").toLowerCase();
       if (k === "preset" || k.startsWith("preset-")) {
         return h("svg", { viewBox: "0 0 24 24", width: 16, height: 16, style: { display: "block" } },
@@ -530,7 +529,7 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       );
     }
 
-    function resolveRepoBrand(url?: string | null, repo?: string | null): "GitHub" | "GitLab" | "Gitee" | "Git" {
+function resolveRepoBrand(url?: string | null, repo?: string | null): "GitHub" | "GitLab" | "Gitee" | "Git" {
       var raw = (url || repo || "").trim();
       if (!raw) return "GitHub";
       var host = "";
@@ -557,7 +556,7 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       return "Git";
     }
 
-    function renderRepoBrandIconByUrl(url?: string | null, repo?: string | null) {
+function renderRepoBrandIconByUrl(url?: string | null, repo?: string | null) {
       var brand = resolveRepoBrand(url, repo);
       var viewBox = "0 0 16 16";
       var path = "M8 0a8 8 0 0 0-2.53 15.59c.4.074.547-.173.547-.385 0-.19-.007-.693-.01-1.36-2.226.484-2.695-1.073-2.695-1.073-.364-.924-.89-1.17-.89-1.17-.726-.496.055-.486.055-.486.803.056 1.225.824 1.225.824.714 1.223 1.872.87 2.328.665.072-.517.28-.87.508-1.07-1.777-.202-3.645-.888-3.645-3.956 0-.874.31-1.588.823-2.148-.083-.202-.357-1.017.078-2.12 0 0 .672-.215 2.2.82A7.65 7.65 0 0 1 8 4.8c.68.003 1.365.092 2.004.27 1.527-1.035 2.197-.82 2.197-.82.437 1.103.162 1.918.08 2.12.513.56.822 1.274.822 2.148 0 3.076-1.872 3.752-3.654 3.95.288.248.544.735.544 1.482 0 1.07-.01 1.932-.01 2.195 0 .214.144.463.55.384A8.001 8.001 0 0 0 8 0Z";
@@ -579,9 +578,122 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
         )
       );
     }
-    // 禁用提交按钮会让浏览器把焦点丢到 body；下一次渲染恢复焦点，避免 Escape 传到宿主设置。
+
+function currentSessionId(snapshot?: SessionSnapshot) {
+      if (!snapshot) return undefined;
+      var byId = snapshot.byId || {};
+      var ids = Array.isArray(snapshot.ids) && snapshot.ids.length ? snapshot.ids : Object.keys(byId);
+      for (var i = 0; i < ids.length; i++) {
+        var row = byId[ids[i]];
+        if (row && row.retainedBy && row.retainedBy.mainView) return ids[i];
+      }
+      for (var id in byId) {
+        if (ids.indexOf(id) !== -1) continue;
+        if (byId[id] && byId[id].retainedBy && byId[id].retainedBy!.mainView) return id;
+      }
+    }
+
+/*! §2 IO adapters */
+function parseApiResponse<T = unknown>(response: Response): Promise<T> {
+      return response.json().catch(function (error: unknown) {
+        if (!(error instanceof SyntaxError)) throw error;
+        throw new ApiFailure({ code: API_ERROR_CODES.nonJson, params: { status: response.status }, message: "non-json response", outcome: "unknown" });
+      }).then(function (value: unknown) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiFailure({ code: API_ERROR_CODES.response, message: "Invalid response", outcome: "unknown" });
+        const payload = value as { ok?: boolean; data: T };
+        if (!response.ok || payload.ok === false) throw normalizeApiFailure(payload);
+        if (!Object.hasOwn(payload, "data")) throw new ApiFailure({ code: API_ERROR_CODES.response, message: "Missing response data", outcome: "unknown" });
+        return payload.data;
+      });
+    }
+
+function callApi<K extends keyof ApiRoutes>(path: K, options?: RequestInit): Promise<ApiRoutes[K]> { return fetch(resolveApiUrl("/api/forge-skills-manager" + path), options).then(parseApiResponse<ApiRoutes[K]>); }
+
+function buildUploadPayload(selection: UploadSelection) { return Promise.all(selection.files.map(function (file) { return file.arrayBuffer().then(function (buffer) { return { path: uploadFilePath(file), data: bytesToBase64(buffer) }; }); })).then(function (entries) { return selection.kind === "zip" ? { name: selection.name, zip: entries[0].data } : { name: selection.name, entries: entries }; }); }
+
+function readDroppedEntry(entry: FileSystemEntry, prefix: string, output: UploadFile[]): Promise<void> { if (entry.isFile) return new Promise<void>(function (resolve, reject) { (entry as FileSystemFileEntry).file(function (file: UploadFile) { file._dssmPath = prefix + file.name; output.push(file); resolve(); }, reject); }); if (!entry.isDirectory) return Promise.resolve(); return new Promise<void>(function (resolve, reject) { var reader = (entry as FileSystemDirectoryEntry).createReader(), children: FileSystemEntry[] = []; function next() { reader.readEntries(function (batch) { if (!batch.length) { Promise.all(children.map(function (child) { return readDroppedEntry(child, prefix + entry.name + "/", output); })).then(function () { resolve(); }, reject); return; } children = children.concat(batch); next(); }, reject); } next(); }); }
+
+function droppedFiles(dataTransfer: DataTransfer) { var items = Array.from(dataTransfer && dataTransfer.items || []), entries = items.map(function (item) { return item.webkitGetAsEntry && item.webkitGetAsEntry(); }).filter((entry): entry is FileSystemEntry => !!entry); if (!entries.length) return Promise.resolve(Array.from(dataTransfer && dataTransfer.files || [])); var files: UploadFile[] = []; return Promise.all(entries.map(function (entry) { return readDroppedEntry(entry, "", files); })).then(function () { return files; }); }
+
+function modalFocusable(modal: HTMLElement): HTMLElement[] { return Array.prototype.slice.call(modal.querySelectorAll("button:not(:disabled), [href], input:not([type=hidden]):not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex=\"-1\"])") || []); }
+
+function trapModalFocus(modal: HTMLElement, event: Pick<KeyboardEvent, "key" | "shiftKey" | "preventDefault">) { if (event.key !== "Tab") return; var focusable = modalFocusable(modal); if (!focusable.length) return; var active = document.activeElement; if (active === modal || !modal.contains(active) || (event.shiftKey ? active === focusable[0] : active === focusable[focusable.length - 1])) { event.preventDefault(); (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus(); } }
+
+// 禁用提交按钮会让浏览器把焦点丢到 body；下一次渲染恢复焦点，避免 Escape 传到宿主设置。
     function recoverModalFocus(modal: HTMLElement | null, active: Element | null, body: HTMLElement) { if (modal && active === body) modal.focus(); }
-    function Modal(props: ModalProps) {
+
+/*! §3 Client runtime ownership */
+function translateError(t: Translate, payload: unknown): string {
+      const details = failureDetails(payload);
+      if (!details.code) return details.message;
+      const params = { ...details.params };
+      if (params.action) params.action = translateOrFallback(t, "action." + params.action, String(params.action));
+      const translated = t(details.code, params);
+      if (translated === details.code) return details.message === "Unexpected response" ? details.code : details.message;
+      if (params.code && details.code === "error.workspace.unavailable") return translated + ((hostLocale() === "zh" || (!hostLocale() && translated.includes("："))) ? "（" + params.code + "）" : " (" + params.code + ")");
+      return translated;
+    }
+
+var localeService: ClientContext["locale"] | undefined;
+
+const clientMutations = createClientOperations(callApi);
+
+var SourceSelect = createSourceSelect(react);
+
+var destinationKit = createDestinationKit({ react, SourceSelect, translateError });
+
+var DestinationPicker = destinationKit.DestinationPicker;
+
+var useRepositoryUI = createNacosUI({ react: react, Modal: Modal, Input: Input, Button: PrimitiveButton, SourceSelect: SourceSelect, destination: destinationKit, api: callApi, headers: MUTATION_HEADERS, translateError: translateError });
+
+// getLocale().active 是宿主对 locale.preference 的最终有效解析，不读取网页/浏览器语言。
+    function hostLocale() { return localeService?.getLocale?.().active; }
+
+function formatTrashTime(t: Translate, value: string) { return new Date(value).toLocaleString(hostLocale() || t("format.locale")); }
+
+function summarizeImportResult(t: Translate, data: ImportResult) {
+      var importedItems = data && data.imported || [];
+      var imported = importedItems.map(function (item) { return item.name; });
+      var skipped = (data && data.skipped || []).map(function (item) { return item.name; });
+      var warnings: string[] = [];
+      importedItems.forEach(function (item) {
+        (item.warnings || []).forEach(function (warning) { warnings.push(translateError(t, warning)); });
+      });
+      var summary;
+      if (imported.length && skipped.length) summary = { ok: true, warning: true, imported: true, text: t("result.importPartial", { imported: imported.join(", "), skipped: skipped.join(", ") }) };
+      else if (imported.length) summary = { ok: true, warning: false, imported: true, text: t("result.imported", { names: imported.join(", ") }) };
+      else if (skipped.length) summary = { ok: false, warning: true, imported: false, text: t("result.importSkipped", { names: skipped.join(", ") }) };
+      else summary = { ok: false, warning: false, imported: false, text: t("result.importEmpty") };
+      if (warnings.length) {
+        summary.warning = true;
+        summary.text = t("result.importWarnings", { result: summary.text, warnings: warnings.join(t("format.warningSeparator")) });
+      }
+      return summary;
+    }
+
+function resolveT(rawT?: Translate): Translate {
+      if (typeof rawT === "function") return rawT;
+      if (localeService && typeof localeService.bind === "function") return localeService.bind(NS);
+      return function (key: string, params?: object) {
+        var dict = (DICT.zh || {}) as Record<string, string>;
+        var template = dict[key] || key;
+        if (!params) return template;
+        var p = params as Record<string, unknown>;
+        return template.replace(/\{(\w+)\}/g, function (_, name) { return String(p[name] ?? "{" + name + "}"); });
+      };
+    }
+
+// 目录选择：桌面端由 preload 暴露系统文件夹对话框；Web/远程端退到工作区 UI 的选择器。
+    var workspacePickDirectory: (() => Promise<string | null>) | null = null;
+
+function availableDirectoryPicker(): (() => Promise<string | null>) | null {
+      var bridge = (globalThis as unknown as {__DSH_DIRECTORY_PICKER__?: {pick?: () => Promise<string | null>}}).__DSH_DIRECTORY_PICKER__;
+      if (bridge && typeof bridge.pick === "function") { var bridgePick = bridge.pick.bind(bridge); return function () { return bridgePick(); }; }
+      return workspacePickDirectory;
+    }
+
+/*! §4 Views and component state */
+function Modal(props: ModalProps) {
       var bodyRef = react.useRef<HTMLDivElement>(null);
       var closeRef = react.useRef(props.onClose);
       closeRef.current = props.onClose;
@@ -613,47 +725,25 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
             }, props.children ? h("div", { ref: bodyRef }, props.children) : undefined);
     }
 
-    function currentSessionId(snapshot?: SessionSnapshot) {
-      if (!snapshot) return undefined;
-      var byId = snapshot.byId || {};
-      var ids = Array.isArray(snapshot.ids) && snapshot.ids.length ? snapshot.ids : Object.keys(byId);
-      for (var i = 0; i < ids.length; i++) {
-        var row = byId[ids[i]];
-        if (row && row.retainedBy && row.retainedBy.mainView) return ids[i];
-      }
-      for (var id in byId) {
-        if (ids.indexOf(id) !== -1) continue;
-        if (byId[id] && byId[id].retainedBy && byId[id].retainedBy!.mainView) return id;
-      }
-    }
-    function resolveT(rawT?: Translate): Translate {
-      if (typeof rawT === "function") return rawT;
-      if (localeService && typeof localeService.bind === "function") return localeService.bind(NS);
-      return function (key: string, params?: object) {
-        var dict = (DICT.zh || {}) as Record<string, string>;
-        var template = dict[key] || key;
-        if (!params) return template;
-        var p = params as Record<string, unknown>;
-        return template.replace(/\{(\w+)\}/g, function (_, name) { return String(p[name] ?? "{" + name + "}"); });
-      };
-    }
-    /*! §4 Views and component state */
-    function SkillManagerSection(props: Partial<SectionProps>) {
+function SkillManagerSection(props: Partial<SectionProps>) {
       var t = resolveT(props && props.t);
       var sessionId = props && props.useSessions ? props.useSessions(currentSessionId) : undefined;
       var scopes = react.useState("user"), filtersState = react.useState<Record<string, Filters>>({}), expandedState = react.useState<Record<string, boolean>>({});
       // 按会话重挂载请求和表单状态，旧会话的异步响应不能覆盖新会话页面。
       return h(SkillManagerView, Object.assign({}, props, { t: t, key: sessionId || "no-session", sessionId: sessionId, scope: scopes[0], setScope: scopes[1], savedFilters: filtersState[0], setSavedFilters: filtersState[1], expanded: expandedState[0], setExpanded: expandedState[1] }));
     }
-    function SkillManagerView(props: ViewProps) {
+
+function SkillManagerView(props: ViewProps) {
       var t = resolveT(props && props.t);
       function sessionApi<K extends keyof ApiRoutes>(path: K, options?: RequestInit): Promise<ApiRoutes[K]> {
         var headers: Record<string, string> = Object.fromEntries(new Headers(options?.headers).entries());
         if (props.sessionId) headers["x-dsh-skills-session"] = props.sessionId;
-        return callApi(path, Object.assign({}, options, { headers: headers }));
+        return clientMutations.request(path, Object.assign({}, options, { headers: headers }));
       }
       var ss = react.useState<{loading: boolean; error: string | null; data: ManagerSnapshot | null}>({ loading: true, error: null, data: null }), snapshot = ss[0], setSnapshot = ss[1];
-      var bs = react.useState(false), busy = bs[0], setBusy = bs[1];
+      var mutationState = react.useState(clientMutations.getSnapshot()), pendingMutation = mutationState[0];
+      react.useEffect(function () { return clientMutations.subscribe(function () { mutationState[1](clientMutations.getSnapshot()); }); }, []);
+      var bs = react.useState(false), busy = bs[0] || !!pendingMutation, setBusy = bs[1];
       var scope = props.scope, setScope = props.setScope;
       var expanded = props.expanded, setExpanded = props.setExpanded, savedFilters = props.savedFilters, setSavedFilters = props.setSavedFilters;
       var ms = react.useState<ModalState>(null), modal = ms[0], setModal = ms[1];
@@ -662,6 +752,7 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       var rs = react.useState<ResultMessage | null>(null), result = rs[0] && rs[0].scope === scope ? rs[0] : null;
       // 异步操作保留发起时的页签，完成提示不能泄漏到后来切换的页面。
       function setResult(value: ResultMessage | null) { rs[1](value ? Object.assign({}, value, { scope: scope }) : null); }
+      react.useEffect(function () { if (pendingMutation?.phase === "pending") setModal(null); }, [pendingMutation]);
       var fms = react.useState<Record<string, string>>({ root: "dsh", name: "", description: "", body: "" }), form = fms[0], setForm = fms[1];
       var cns = react.useState(""), categoryName = cns[0], setCategoryName = cns[1];
       var snt = react.useState(""), skillNoteText = snt[0], setSkillNoteText = snt[1];
@@ -702,9 +793,36 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       var workspaceRequests = react.useRef<Record<string, number>>({});
       var workspaceEpoch = react.useRef(0);
       react.useEffect(function () { return function () { workspaceEpoch.current++; }; }, []);
-      function refresh(silent: boolean) { if (!silent) setSnapshot({ loading: true, error: null, data: snapshot.data }); return sessionApi("/state").then(function (data) { setSnapshot({ loading: false, error: null, data: data }); return data; }).catch(function (error) { setSnapshot({ loading: false, error: translateError(t, error), data: snapshot.data }); }); }
+      function refresh(silent: boolean) { if (!silent) setSnapshot({ loading: true, error: null, data: snapshot.data }); return sessionApi("/state").then(function (data) { setSnapshot({ loading: false, error: null, data: data }); return data; }).catch(function (error) { setSnapshot({ loading: false, error: translateError(t, error), data: null }); }); }
       react.useEffect(function () { refresh(false); }, []);
-      function post<K extends keyof ApiRoutes>(path: K, body: unknown, successKey?: string | null, successParams?: object): Promise<ApiRoutes[K]> { if (inflightRef.current) return Promise.reject({ error: "operation already in progress" }); inflightRef.current = true; setBusy(true); setResult(null); return sessionApi(path, { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify(body || {}) }).then(function (data) { setResult({ ok: true, text: successKey ? t(successKey, successParams || data || {}) : t("result.updated") }); var scopedWorkspace = body && typeof (body as { workspace?: unknown }).workspace === "string" ? (body as { workspace: string }).workspace : ""; return Promise.all([refresh(true), scopedWorkspace ? loadWorkspaceDetail(scopedWorkspace) : null]).then(function () { return data; }); }).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); throw error; }).finally(function () { inflightRef.current = false; setBusy(false); }); }
+      async function refreshConfirmed(workspace?: string) {
+        const results = await Promise.all([refresh(true), workspace ? loadWorkspaceDetail(workspace) : Promise.resolve(true)]);
+        return !!results[0] && !!results[1];
+      }
+      function post<K extends keyof ApiRoutes>(path: K, body: unknown, successKey?: string | null, successParams?: object, successMessage?: (data: ApiRoutes[K]) => ResultMessage): Promise<ApiRoutes[K]> {
+        if (inflightRef.current || clientMutations.getSnapshot()) return Promise.reject(new ApiFailure({ code: API_ERROR_CODES.busy, message: t("mutation.pending"), outcome: "pending" }));
+        inflightRef.current = true; setBusy(true); setResult(null);
+        return sessionApi(path, { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify(body || {}) }).then(async function (data) {
+          const workspace = body && typeof (body as { workspace?: unknown }).workspace === "string" ? (body as { workspace: string }).workspace : undefined;
+          const fresh = await refreshConfirmed(workspace);
+          setResult(fresh ? successMessage ? successMessage(data) : { ok: true, text: successKey ? t(successKey, successParams || data || {}) : t("result.updated") } : { ok: false, warning: true, text: t("mutation.refreshWarning") });
+          return data;
+        }).catch(function (error) {
+          setResult({ ok: false, warning: !!clientMutations.getSnapshot(), text: clientMutations.getSnapshot() ? t("mutation.pending") : t("error.action", { error: translateError(t, error) }) });
+          throw error;
+        }).finally(function () { inflightRef.current = false; setBusy(false); });
+      }
+      async function confirmMutation() {
+        setBusy(true);
+        try {
+          const outcome = await clientMutations.confirm();
+          if (outcome.state === "pending") return;
+          if (outcome.state === "rejected") { setResult({ ok: false, text: translateError(t, outcome.failure) }); return; }
+          const fresh = await refreshConfirmed(selectedWorkspace);
+          setResult(fresh ? { ok: true, text: t("mutation.confirmed") } : { ok: false, warning: true, text: t("mutation.refreshWarning") });
+        } catch (error) { setResult({ ok: false, warning: true, text: t("mutation.pending") + " " + translateError(t, error) }); }
+        finally { setBusy(false); }
+      }
       function openDetail(root: RootView, skill: SkillView, workspacePath?: string) { setBusy(true); setDetail(null); setDetailSkill(skill); setCopyState("idle"); setModal("detail"); sessionApi("/detail", { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify(workspacePath ? { root: root.key, name: skill.name, workspace: workspacePath } : { root: root.key, name: skill.name }) }).then(setDetail).catch(function (error) { setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) }); setDetailSkill(null); setModal(null); }).finally(function () { setBusy(false); }); }
       function openRootPath(root: RootView) {
         setRootPathValue(root.path || "");
@@ -761,11 +879,11 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
         setCustomSourceBusy(true);
         setCustomSourceError(null);
         setResult(null);
-        sessionApi("/custom-source-add", { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify({ sources: sources }) })
+        post("/custom-source-add", { sources: sources }, "customSource.added", { count: sources.length })
           .then(function (data) {
             var count = data && Array.isArray(data.added) ? data.added.length : sources.length;
-            return refresh(true).then(function () {
-              setResult({ ok: true, text: t("customSource.added", { count: count }) });
+            return Promise.resolve().then(function () {
+              if (!count) setResult({ ok: false, text: t("error.customSource.empty") });
               setCustomSourceScan(null);
               setCustomSourcePath("");
               setCustomSourceLabel("");
@@ -819,7 +937,7 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
       function submitCreate() { if (!destinationReady(createDestination, workspaceRows, userDestinations, presetDestinations)) return; post("/create", Object.assign({}, form, { root: undefined }, destinationPayload(createDestination)), null).then(function (data) { setModal(null); setForm({ root: "dsh", name: "", description: "", body: "" }); setResult({ ok: true, text: t("result.created", { name: data.name }) + (createDestination.scope === "workspace" ? " · " + t("dest.createdInWorkspace") : createDestination.scope === "preset" ? " · " + t("dest.presetNote") : "") }); }).catch(function () {}); }
       function selectUploadFiles(files: ArrayLike<UploadFile> | null) { pickerOpenRef.current = false; var selected = inspectUploadSelection(files); if (!selected) return; if (selected.error) { setUpload(null); setResult({ ok: false, text: translateError(t, selected.error) }); return; } setUpload(selected); setResult(null); }
       function openNativePicker(ref: React.RefObject<HTMLInputElement>) { if (busy || pickerOpenRef.current || !ref.current) return; pickerOpenRef.current = true; ref.current.value = ""; function release() { setTimeout(function () { pickerOpenRef.current = false; }, 0); } window.addEventListener("focus", release, { once: true }); ref.current.click(); setTimeout(function () { pickerOpenRef.current = false; }, 30000); }
-      function submitImport() { if (!upload || !destinationReady(importDestination, workspaceRows, userDestinations, presetDestinations)) return; buildUploadPayload(upload).then(function (payload) { return post("/upload", Object.assign({}, payload, destinationPayload(importDestination)), null); }).then(function (data) { var summary = summarizeImportResult(t, data); setResult({ ok: summary.ok, warning: summary.warning, text: summary.text }); if (summary.imported) { setModal(null); setUpload(null); } }).catch(function () {}); }
+      function submitImport() { if (!upload || !destinationReady(importDestination, workspaceRows, userDestinations, presetDestinations)) return; buildUploadPayload(upload).then(function (payload) { return post("/upload", Object.assign({}, payload, destinationPayload(importDestination)), null, undefined, function (data) { return summarizeImportResult(t, data); }); }).then(function (data) { if (summarizeImportResult(t, data).imported) { setModal(null); setUpload(null); } }).catch(function () {}); }
       var overridableRoots = allRoots.filter(function (r) { return !r.mutable && r.scope !== "project" && r.kind !== "preset" && r.scope !== "preset"; });
       function openRootPathPicker() {
         if (!overridableRoots.length) return;
@@ -1687,15 +1805,15 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
               setBusy(true); setAddSelection({}); setAddSearch(""); setModal(null);
               names.reduce<Promise<unknown>>(function (p, name) {
                 return p.then(function () { return sessionApi("/category-assign", { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify(scoped({ root: addModal.root, name: name, category: addModal.id })) }); });
-              }, Promise.resolve()).then(function () {
-                setResult({ ok: true, text: t("category.batchAssigned", { count: names.length, category: addModal.name }) });
-              }).catch(function (err: unknown) {
+              }, Promise.resolve()).then(async function () {
+                const fresh = await refreshConfirmed(addModal.workspace);
+                setResult(fresh ? { ok: true, text: t("category.batchAssigned", { count: names.length, category: addModal.name }) } : { ok: false, warning: true, text: t("mutation.refreshWarning") });
+              }).catch(async function (err: unknown) {
+                if (!clientMutations.getSnapshot()) await refreshConfirmed(addModal.workspace);
                 setResult({ ok: false, text: translateError(t, err) });
               }).finally(function () {
                 inflightRef.current = false;
                 setBusy(false);
-                var ws = addModal.workspace;
-                Promise.all([refresh(true), ws ? loadWorkspaceDetail(ws) : null]).catch(function () {});
               });
             }, "primary", busy || !chosenCount)
           )
@@ -1736,20 +1854,14 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
           )));
       }
       if (modal && typeof modal === "object" && modal.type === "category-delete") content.push(h(Modal, { key: "category-delete", title: t("confirm.category.title"), description: t("confirm.category.desc", { name: modal.name }), closeLabel: t("btn.close"), onClose: function () { setModal(null); }, footer: h(React.Fragment, null, hostButton(t("btn.cancel"), function () { setModal(null); }, "outline"), hostButton(t("category.delete"), function () { post("/category-delete", { root: (modal as Extract<ConfirmModal, {type: "category-delete"}>).root, id: (modal as Extract<ConfirmModal, {type: "category-delete"}>).id, workspace: (modal as Extract<ConfirmModal, {type: "category-delete"}>).workspace }, "category.deleted", { name: (modal as Extract<ConfirmModal, {type: "category-delete"}>).name }).then(function () { setModal(null); }).catch(function () {}); }, "danger", busy)) }));
+      if (pendingMutation) content.unshift(h("div", { key: "pending-operation", className: "dssm-feedback dssm-warning", role: "alert" }, t("mutation.pending"), pendingMutation.phase === "pending" ? hostButton(t("mutation.check"), function () { void confirmMutation(); }, "outline", bs[0]) : null));
       return h("section", { className: "dssm-section" }, content);
     }
 
-    // 目录选择：桌面端由 preload 暴露系统文件夹对话框；Web/远程端退到工作区 UI 的选择器。
-    var workspacePickDirectory: (() => Promise<string | null>) | null = null;
-    function availableDirectoryPicker(): (() => Promise<string | null>) | null {
-      var bridge = (globalThis as unknown as {__DSH_DIRECTORY_PICKER__?: {pick?: () => Promise<string | null>}}).__DSH_DIRECTORY_PICKER__;
-      if (bridge && typeof bridge.pick === "function") { var bridgePick = bridge.pick.bind(bridge); return function () { return bridgePick(); }; }
-      return workspacePickDirectory;
-    }
+/*! §5 Host registration and exports */
+var inject = ["slots", "locale"];
 
-    /*! §5 Host registration and exports */
-    var inject = ["slots", "locale"];
-    function apply(ctx: ClientContext) {
+function apply(ctx: ClientContext) {
       localeService = ctx.locale;
       if (typeof ctx.inject === "function") {
         try {
@@ -1872,7 +1984,8 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
         }
       });
       sidebarController = setupSidebarEntry(ctx, {
-        callApi: callApi,
+        callApi: clientMutations.request,
+        operations: clientMutations,
         headers: MUTATION_HEADERS,
         renderPanel: function (ownerProps?: any) { return h(SkillManagerSection, Object.assign({ t: ctx.locale.bind(NS) }, ownerProps)); },
         ns: NS,
@@ -1891,4 +2004,57 @@ type ModalState = 'detail' | 'create' | 'import' | ConfirmModal | null;
         };
       }, "skills-manager: sidebar entry cleanup");
     }
-    module.exports.formatTrashTime = formatTrashTime; module.exports.DICT = DICT; module.exports.translateError = translateError; module.exports.parseApiResponse = parseApiResponse; module.exports.resolveApiUrl = resolveApiUrl; module.exports.resolveRepoBrand = resolveRepoBrand; module.exports.skillDeclaredInvocationKind = skillDeclaredInvocationKind; module.exports.isSkillEnabled = isSkillEnabled; module.exports.countKey = countKey; module.exports.rootDisplayName = rootDisplayName; module.exports.summarizeImportResult = summarizeImportResult; module.exports.normalizeSkillQuery = normalizeSkillQuery; module.exports.matchSkillQuery = matchSkillQuery; module.exports.filterSkills = filterSkills; module.exports.visibleSkillRoots = visibleSkillRoots; module.exports.scopeSkillRoots = scopeSkillRoots; module.exports.skillStatus = skillStatus; module.exports.countSkillStatuses = countSkillStatuses; module.exports.sumEnabledDescriptionTokens = sumEnabledDescriptionTokens; module.exports.currentSessionId = currentSessionId; module.exports.canToggleSource = canToggleSource; module.exports.recoverModalFocus = recoverModalFocus; module.exports.trapModalFocus = trapModalFocus; module.exports.inspectUploadSelection = inspectUploadSelection; module.exports.setupSidebarEntry = setupSidebarEntry; module.exports.apply = apply; module.exports.inject = inject;
+
+module.exports.formatTrashTime = formatTrashTime;
+
+module.exports.DICT = DICT;
+
+module.exports.translateError = translateError;
+
+module.exports.parseApiResponse = parseApiResponse;
+
+module.exports.resolveApiUrl = resolveApiUrl;
+
+module.exports.resolveRepoBrand = resolveRepoBrand;
+
+module.exports.skillDeclaredInvocationKind = skillDeclaredInvocationKind;
+
+module.exports.isSkillEnabled = isSkillEnabled;
+
+module.exports.countKey = countKey;
+
+module.exports.rootDisplayName = rootDisplayName;
+
+module.exports.summarizeImportResult = summarizeImportResult;
+
+module.exports.normalizeSkillQuery = normalizeSkillQuery;
+
+module.exports.matchSkillQuery = matchSkillQuery;
+
+module.exports.filterSkills = filterSkills;
+
+module.exports.visibleSkillRoots = visibleSkillRoots;
+
+module.exports.scopeSkillRoots = scopeSkillRoots;
+
+module.exports.skillStatus = skillStatus;
+
+module.exports.countSkillStatuses = countSkillStatuses;
+
+module.exports.sumEnabledDescriptionTokens = sumEnabledDescriptionTokens;
+
+module.exports.currentSessionId = currentSessionId;
+
+module.exports.canToggleSource = canToggleSource;
+
+module.exports.recoverModalFocus = recoverModalFocus;
+
+module.exports.trapModalFocus = trapModalFocus;
+
+module.exports.inspectUploadSelection = inspectUploadSelection;
+
+module.exports.setupSidebarEntry = setupSidebarEntry;
+
+module.exports.apply = apply;
+
+module.exports.inject = inject;

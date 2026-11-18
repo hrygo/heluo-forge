@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { installationSourceKey } from "./installation-records.js";
+import { isExpectedOperationError, operationRejection } from "./operation-errors.js";
 import { attachProvenance } from "./provenance.js";
 import { activeSessionCwds, registeredWorkspacePaths } from "./workspace-scope.js";
 const CLIENT_MARKER_HEADER = "x-dsh-skills-manager";
+const OPERATION_HEADER = "x-dsh-skills-operation";
 const MAX_UPLOAD_BODY_BYTES = 88 << 20;
 async function readJsonBody(request, limit = 1 << 20) {
   const text = await request.text();
@@ -16,12 +19,18 @@ async function readJsonBody(request, limit = 1 << 20) {
   try {
     return JSON.parse(text);
   } catch (caught) {
+    if (!(caught instanceof SyntaxError)) throw caught;
     const e = caught;
     const error = new Error(`invalid JSON body: ${e.message}`);
     error.statusCode = 400;
     error.code = "error.proto.invalidJson";
     throw error;
   }
+}
+function canonicalBody(value) {
+  if (Array.isArray(value)) return value.map(canonicalBody);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right, "en")).map(([key, item]) => [key, canonicalBody(item)]));
+  return value;
 }
 function validateMutationRequest(req) {
   const marker = req.headers.get(CLIENT_MARKER_HEADER) || req.headers.get("x-michengai-client");
@@ -34,7 +43,8 @@ function validateMutationRequest(req) {
       if (originHost !== reqHost) {
         return { statusCode: 403, code: "error.proto.forbidden", error: "forbidden cross-origin mutation request" };
       }
-    } catch {
+    } catch (error) {
+      if (!(error instanceof TypeError && "code" in error && error.code === "ERR_INVALID_URL")) throw error;
       return { statusCode: 403, code: "error.proto.forbidden", error: "forbidden origin" };
     }
   }
@@ -57,22 +67,21 @@ async function runFetch(task, afterSuccess, headOnly = false) {
   try {
     const r = await task();
     if (r && typeof r === "object" && "ok" in r && r.ok === false) {
-      return jsonResponse(400, r, headOnly);
+      const rejection = operationRejection(r);
+      return jsonResponse(400, { ...r, ...rejection, outcome: rejection.code === "error.repo.installState" ? "pending" : "rejected" }, headOnly);
     }
     if (afterSuccess) {
-      try {
-        afterSuccess();
-      } catch {
-      }
+      afterSuccess();
     }
     return jsonResponse(200, { ok: true, data: r }, headOnly);
   } catch (caught) {
     const e = caught;
     const status = Number.isInteger(e && e.statusCode) ? e.statusCode : 500;
-    const known = typeof e?.code === "string" && e.code.startsWith("error.");
+    const known = isExpectedOperationError(caught) && e.code?.startsWith("error.");
     if (!known) throw caught;
     return jsonResponse(status, {
       ok: false,
+      outcome: e.code === "error.repo.installState" ? "pending" : "rejected",
       ...e && typeof e.code === "string" ? { code: e.code } : {},
       ...e && e.params && typeof e.params === "object" && !Array.isArray(e.params) ? { params: e.params } : {},
       error: String(e && e.message ? e.message : e)
@@ -80,16 +89,13 @@ async function runFetch(task, afterSuccess, headOnly = false) {
   }
 }
 function installHttp(ctx, dependencies) {
-  const { local, nacos, log, installations: repositories, providers } = dependencies;
+  const { local, nacos, log, installations: repositories, providers, operations } = dependencies;
   const { getEntryLocation, setEntryLocation, state, setSkillEnabled, setSourceEnabled, createCategory, renameCategory, deleteCategory, assignSkillCategory, moveSkillInCategory, setCategoryEnabled, setSkillNote, importSkill, importUploadedSkill, browseDirectories, createSkill, skillDetail, userRoots, setRootPath, addCustomSources, updateCustomSource, removeCustomSource, scanCustomSourceCandidates, projectRoots, resolveWorkspaceTarget, listWorkspaces, workspaceSkills } = local;
   const { afterWrite } = providers;
   const findUserRoot = (key) => userRoots().find((root) => root.key === key);
-  let mutationQueue = Promise.resolve();
-  const enqueueMutation = (task) => {
-    const next = mutationQueue.then(task, task);
-    mutationQueue = next.catch(() => void 0);
-    return next;
-  };
+  operations.bindManager(repositories.managerPath);
+  const enqueueMutation = operations.enqueue;
+  const requestSignal = (req) => AbortSignal.any([req.signal, operations.signal]);
   const API_PREFIX = "/api/forge-skills-manager";
   const projectOptions = (sessionId) => ({ projectCwds: activeSessionCwds(ctx, sessionId ?? void 0) });
   const workspaceTarget = async (body) => {
@@ -122,61 +128,92 @@ function installHttp(ctx, dependencies) {
   };
   const attachSources = async (snapshot) => {
     try {
-      const recovery = await repositories.recoverLocal();
-      snapshot.warnings.push(...recovery.warnings);
       const sources = await repositories.sources();
       for (const root of snapshot.roots) {
-        const realRoot = await realpath(root.path).catch(() => root.path);
+        const realRoot = await realpath(root.path).catch((error) => {
+          if (!isExpectedOperationError(error)) throw error;
+          return root.path;
+        });
         for (const skill of root.skills || []) skill.installSource = sources[installationSourceKey(realRoot, skill.name)] ?? null;
       }
     } catch (caught) {
       const error = caught;
+      if (!isExpectedOperationError(caught)) throw caught;
       snapshot.warnings.push({ code: "error.repo.state", error: error.message });
     }
     try {
       await attachProvenance(snapshot);
     } catch (caught) {
       const error = caught;
+      if (!isExpectedOperationError(caught)) throw caught;
       snapshot.warnings.push({ code: "error.repo.state", error: error.message });
     }
     return snapshot;
   };
   const stateWithSources = async (req) => {
+    const recovery = await recoverSources();
     const presetRoots = await providers.getPresetRootsCached(true);
-    return attachSources(await state({ ...projectOptions(req.headers.get("x-dsh-skills-session")), presetRoots }));
+    const snapshot = await state({ ...projectOptions(req.headers.get("x-dsh-skills-session")), presetRoots });
+    snapshot.warnings.push(...recovery.warnings);
+    return attachSources(snapshot);
+  };
+  const recoverSources = async () => {
+    try {
+      return await enqueueMutation(() => repositories.recoverLocal());
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
+      return { warnings: [{ code: "error.repo.state", error: error.message }] };
+    }
   };
   const handlePost = async (req, action, options) => {
     const mutationError = validateMutationRequest(req);
     if (mutationError) {
-      return jsonResponse(mutationError.statusCode, { ok: false, code: mutationError.code, error: mutationError.error });
+      return jsonResponse(mutationError.statusCode, { ok: false, outcome: "rejected", code: mutationError.code, error: mutationError.error });
     }
     let body;
     try {
       body = await readJsonBody(req, options?.maxBytes);
     } catch (caught) {
+      if (!isExpectedOperationError(caught)) throw caught;
       const e = caught;
       return jsonResponse(Number.isInteger(e && e.statusCode) ? e.statusCode : 400, {
         ok: false,
+        outcome: "rejected",
         code: e && typeof e.code === "string" ? e.code : "error.proto.invalidJson",
         error: String(e && e.message ? e.message : e)
       });
     }
     if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return jsonResponse(400, { ok: false, code: "error.proto.invalidParams", error: "\u8BF7\u6C42\u53C2\u6570\u5FC5\u987B\u662F\u5BF9\u8C61" });
+      return jsonResponse(400, { ok: false, outcome: "rejected", code: "error.proto.invalidParams", error: "\u8BF7\u6C42\u53C2\u6570\u5FC5\u987B\u662F\u5BF9\u8C61" });
     }
     const execute = async () => {
+      if (options?.queued === false && operations.signal.aborted) throw Object.assign(new Error("\u6280\u80FD\u7BA1\u7406\u5668\u5DF2\u5173\u95ED"), { code: "error.nacos.cancelled", statusCode: 499 });
       const scope = await workspaceScope(body);
       if (scope && "ok" in scope && scope.ok === false) return scope;
-      return action(body, scope, req);
+      const result = await action(body, scope, req);
+      if (!(result && typeof result === "object" && "ok" in result && result.ok === false)) {
+        options?.afterSuccess?.(body);
+      }
+      return result;
     };
-    const afterSuccess = options?.afterSuccess ? () => options.afterSuccess(body) : void 0;
-    return runFetch(() => options?.queued !== false ? enqueueMutation(execute) : execute(), afterSuccess);
+    const task = () => options?.queued !== false ? enqueueMutation(execute, req.signal) : execute();
+    const operationId = req.headers.get(OPERATION_HEADER);
+    return runFetch(() => {
+      if (operationId === null || options?.mutation === false) return task();
+      const target = createHash("sha256").update(JSON.stringify([new URL(req.url).pathname, req.headers.get("x-dsh-skills-session"), canonicalBody(body)])).digest("hex");
+      return operations.runMutation(operationId, target, task);
+    });
   };
   const routes = [
     {
       path: `${API_PREFIX}/state`,
       methods: ["GET", "HEAD"],
       fetch: (req) => runFetch(() => stateWithSources(req), void 0, req.method === "HEAD")
+    },
+    {
+      path: `${API_PREFIX}/operation-status`,
+      methods: ["GET", "HEAD"],
+      fetch: (req) => runFetch(() => operations.mutationStatus(new URL(req.url).searchParams.get("operationId")), void 0, req.method === "HEAD")
     },
     {
       path: `${API_PREFIX}/sidebar-entry`,
@@ -220,13 +257,18 @@ function installHttp(ctx, dependencies) {
         if ([...query.keys()].some((k) => !["q", "page"].includes(k) || query.getAll(k).length !== 1)) {
           throw Object.assign(new Error("\u641C\u7D22\u6761\u4EF6\u65E0\u6548"), { code: "error.nacos.query", statusCode: 400 });
         }
-        return nacos.list(query.get("q") ?? "", query.has("page") ? Number(query.get("page")) : 1, req.signal);
+        return nacos.list(query.get("q") ?? "", query.has("page") ? Number(query.get("page")) : 1, requestSignal(req));
       })
     },
     {
       path: `${API_PREFIX}/nacos/detail`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, (b) => nacos.detail(b, req.signal), { queued: false })
+      fetch: (req) => handlePost(req, (b) => nacos.detail(b, requestSignal(req)), { queued: false, mutation: false })
+    },
+    {
+      path: `${API_PREFIX}/nacos/install-status`,
+      methods: ["GET", "HEAD"],
+      fetch: (req) => runFetch(() => operations.status(new URL(req.url).searchParams.get("operationId")), void 0, req.method === "HEAD")
     },
     {
       path: `${API_PREFIX}/nacos/install`,
@@ -235,32 +277,39 @@ function installHttp(ctx, dependencies) {
         if (b.root !== void 0 && b.root !== "dsh") throw Object.assign(new Error("\u4F01\u4E1A\u6280\u80FD\u53EA\u80FD\u4E0B\u8F7D\u5230 DSH \u5168\u5C40\u6216\u5DF2\u767B\u8BB0\u9879\u76EE"), { code: "error.nacos.query", statusCode: 400 });
         const target = await workspaceTarget(b);
         if (target && "ok" in target && target.ok === false) return target;
-        const pack = await nacos.load(b, req.signal);
-        return enqueueMutation(async () => {
-          if (req.signal.aborted) throw Object.assign(new Error("\u4E0B\u8F7D\u5DF2\u53D6\u6D88"), { code: "error.nacos.cancelled", statusCode: 499 });
-          if (target) {
-            const current = await workspaceTarget(b);
-            if (current && "ok" in current && current.ok === false) return current;
-            if (!current || current.root.projectRoot !== target.root.projectRoot) {
-              throw Object.assign(new Error("\u9879\u76EE\u6839\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u65B0\u9009\u62E9\u4E0B\u8F7D\u4F4D\u7F6E"), { code: "error.workspace.unregistered", statusCode: 400 });
+        let catalogId;
+        const signal = requestSignal(req);
+        return operations.run(b.operationId, JSON.stringify([b.skillName, b.version, target?.root?.projectRoot ?? "user"]), async () => {
+          const pack = await nacos.load(b, signal);
+          catalogId = pack.id;
+          return enqueueMutation(async () => {
+            if (signal.aborted) throw Object.assign(new Error("\u4E0B\u8F7D\u5DF2\u53D6\u6D88"), { code: "error.nacos.cancelled", statusCode: 499 });
+            if (target) {
+              const current = await workspaceTarget(b);
+              if (current && "ok" in current && current.ok === false) throw Object.assign(new Error(current.error), { code: current.code, statusCode: 400 });
+              if (!current || current.root.projectRoot !== target.root.projectRoot) {
+                throw Object.assign(new Error("\u9879\u76EE\u6839\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u65B0\u9009\u62E9\u4E0B\u8F7D\u4F4D\u7F6E"), { code: "error.workspace.unregistered", statusCode: 400 });
+              }
             }
-          }
-          return repositories.installCatalog(pack.id, pack.pack, { root: "dsh", ...b.workspace === void 0 ? {} : { workspace: b.workspace }, disabledOnInstall: true, signal: req.signal });
-        });
-      }, { queued: false, afterSuccess: afterWrite })
+            return repositories.installCatalog(pack.id, pack.pack, { root: "dsh", ...b.workspace === void 0 ? {} : { workspace: b.workspace }, disabledOnInstall: true, signal });
+          }, signal);
+        }, async () => catalogId ? repositories.catalogReceipt(catalogId, { root: "dsh", workspace: b.workspace }) : void 0);
+      }, { queued: false, mutation: false, afterSuccess: afterWrite })
     },
     {
       path: `${API_PREFIX}/browse`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, (b) => browseDirectories(b.path), { queued: false })
+      fetch: (req) => handlePost(req, (b) => browseDirectories(b.path), { queued: false, mutation: false })
     },
     {
       path: `${API_PREFIX}/workspace-skills`,
       methods: ["POST"],
       fetch: (req) => handlePost(req, async (b) => {
+        const recovery = await recoverSources();
         const snapshot = await workspaceSkills(b.workspace, registeredWorkspacePaths(ctx));
+        if ("roots" in snapshot) snapshot.warnings.push(...recovery.warnings);
         return "roots" in snapshot ? attachSources(snapshot) : snapshot;
-      })
+      }, { queued: false, mutation: false })
     },
     {
       path: `${API_PREFIX}/enable`,
@@ -311,7 +360,7 @@ function installHttp(ctx, dependencies) {
     {
       path: `${API_PREFIX}/custom-source-scan`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, (b) => scanCustomSourceCandidates(b.path))
+      fetch: (req) => handlePost(req, (b) => scanCustomSourceCandidates(b.path), { queued: false, mutation: false })
     },
     {
       path: `${API_PREFIX}/category-create`,
@@ -382,7 +431,7 @@ function installHttp(ctx, dependencies) {
           ...scope ? { ...scope, workspaceBound: true } : projectOptions(req.headers.get("x-dsh-skills-session")),
           presetRoots
         });
-      })
+      }, { queued: false, mutation: false })
     },
     {
       path: `${API_PREFIX}/create`,
@@ -429,26 +478,33 @@ function installHttp(ctx, dependencies) {
   ];
   ctx.effect(() => {
     if (ctx.connection?.fetch?.register) {
-      const disposers = routes.map(
-        (route) => ctx.connection.fetch.register({
+      const disposers = [];
+      const release = () => {
+        const drained = operations.dispose();
+        for (const dispose of disposers.splice(0).reverse()) {
+          try {
+            dispose();
+          } catch (error) {
+            ctx.logger.warn(`skills-manager route disposal failed: ${error instanceof Error ? error.name : "unknown"}`);
+          }
+        }
+        return drained;
+      };
+      try {
+        for (const route of routes) disposers.push(ctx.connection.fetch.register({
           path: route.path,
           methods: route.methods,
           requestBody: route.requestBody ?? "buffered",
           fetch: route.fetch
-        })
-      );
-      return () => {
-        for (const disposer of disposers) {
-          try {
-            disposer();
-          } catch {
-          }
-        }
-      };
+        }));
+      } catch (error) {
+        release();
+        throw error;
+      }
+      return release;
     }
     ctx.logger?.warn?.("Skills Manager routes require authenticated connection.fetch");
-    return () => {
-    };
+    return () => operations.dispose();
   }, "skills-manager: API routes");
 }
 export {

@@ -3,6 +3,7 @@ import * as React from "react";
 import type { ClientContext,Translate } from "./client-types.js";
 import { SKILL_PATHS } from "./settings-nav-icon.js";
 import type { EntryLocation } from "./types.js";
+import type { createClientOperations } from "./client-operations.js";
 
 const h = React.createElement;
 
@@ -127,9 +128,14 @@ function SkillBundleConfigCardWrapper(props: {
   getEnabled?: () => boolean;
   setSidebar?: (next: boolean) => Promise<unknown>;
   subscribe: (fn: () => void) => () => void;
+  operations?: ReturnType<typeof createClientOperations>;
+  confirm: () => Promise<void>;
 }) {
   const [location, setLocation] = React.useState<EntryLocation>(props.getLocation);
   const [savingLocation, setSavingLocation] = React.useState(false);
+  const [pending, setPending] = React.useState(props.operations?.getSnapshot());
+  const [error, setError] = React.useState("");
+  React.useEffect(() => props.operations?.subscribe(() => setPending(props.operations?.getSnapshot())), [props.operations]);
 
   React.useEffect(() => {
     const syncState = () => {
@@ -141,20 +147,25 @@ function SkillBundleConfigCardWrapper(props: {
 
   const onLocationChange = (next: EntryLocation) => {
     setSavingLocation(true);
-    setLocation(next);
-    props.setLocation(next).catch(() => {
-      setLocation(props.getLocation());
+    setError("");
+    props.setLocation(next).catch((reason: unknown) => {
+      setError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
       setSavingLocation(false);
     });
   };
 
-  return h(SkillBundleConfigCard, {
+  const card = h(SkillBundleConfigCard, {
     t: props.t,
     location,
-    disabled: savingLocation,
+    disabled: savingLocation || !!pending,
     onLocationChange,
   });
+  if (!pending && !error) return card;
+  return h(React.Fragment, null, card, h("div", { role: "alert" }, pending ? props.t("mutation.pending") : error), pending?.phase === "pending" ? h("button", { type: "button", disabled: savingLocation, onClick: () => {
+    setSavingLocation(true); setError("");
+    props.confirm().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setSavingLocation(false));
+  } }, props.t("mutation.check")) : null);
 }
 
 export interface SetupSidebarEntryOptions {
@@ -163,6 +174,7 @@ export interface SetupSidebarEntryOptions {
   renderPanel: (ownerProps?: any) => React.ReactNode;
   ns: string;
   onLocationChange?: (location: EntryLocation) => void;
+  operations?: ReturnType<typeof createClientOperations>;
 }
 
 export interface SidebarEntryController {
@@ -258,31 +270,30 @@ export function setupSidebarEntry(
   const setLocation = async (next: EntryLocation): Promise<EntryLocation> => {
     if (destroyed) return entryLocation;
     const currentEpoch = ++epoch;
-    const previous = entryLocation;
-    entryLocation = next;
-    sync();
-    notify();
-    if (typeof options.onLocationChange === "function") {
-      try { options.onLocationChange(next); } catch {}
-    }
-    try {
-      await callApi("/sidebar-entry", {
+    const saved = await callApi("/sidebar-entry", {
         method: "POST",
         headers,
         body: JSON.stringify({ location: next }),
-      });
-      return next;
-    } catch (err) {
-      if (currentEpoch === epoch) {
-        entryLocation = previous;
-        sync();
-        notify();
-        if (typeof options.onLocationChange === "function") {
-          try { options.onLocationChange(previous); } catch {}
-        }
-      }
-      throw err;
+    });
+    const confirmed = saved.location;
+    if (confirmed !== "both" && confirmed !== "sidebar" && confirmed !== "settings") throw new Error("Invalid saved entry location");
+    if (!destroyed && currentEpoch === epoch) {
+      entryLocation = confirmed;
+      sync(); notify();
+      options.onLocationChange?.(entryLocation);
     }
+    return confirmed;
+  };
+
+  const confirmLocation = async () => {
+    const outcome = await options.operations?.confirm();
+    if (outcome?.state === "rejected") throw outcome.failure;
+    if (outcome?.state !== "succeeded") return;
+    const saved = await callApi("/sidebar-entry");
+    if (destroyed) return;
+    if (saved.location !== "both" && saved.location !== "sidebar" && saved.location !== "settings") throw new Error("Invalid saved entry location");
+    entryLocation = saved.location;
+    sync(); notify(); options.onLocationChange?.(entryLocation);
   };
 
   const setEnabled = async (next: boolean): Promise<boolean> => {
@@ -336,6 +347,8 @@ export function setupSidebarEntry(
         t: ctx.locale.bind(ns),
         getLocation: () => entryLocation,
         setLocation,
+        operations: options.operations,
+        confirm: confirmLocation,
         getEnabled: () => isSidebarEnabled(),
         setSidebar: setEnabled,
         subscribe: (fn) => {

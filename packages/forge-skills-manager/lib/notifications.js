@@ -1,11 +1,14 @@
+import { isExpectedOperationError } from "./operation-errors.js";
 function notifyChatCatalog(ctx, invalidateSkills) {
   try {
     if (typeof invalidateSkills === "function") invalidateSkills();
-  } catch {
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
   }
   try {
     if (typeof ctx.emit === "function") ctx.emit("commands/change");
-  } catch {
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
   }
   try {
     const sessions = typeof ctx.get === "function" ? ctx.get("sessions") : void 0;
@@ -16,7 +19,8 @@ function notifyChatCatalog(ctx, invalidateSkills) {
       if (id == null || !preset || typeof ctx.emit !== "function") continue;
       ctx.emit("agent-preset/selected", id, preset);
     }
-  } catch {
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
   }
 }
 export {

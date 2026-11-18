@@ -10,9 +10,11 @@ export type Detail = Success<Awaited<ReturnType<typeof skillDetail>>>;
 export type TrashItem = Awaited<ReturnType<typeof listTrash>>[number];
 export type ApiRoutes = {
     '/state': ManagerSnapshot;
+    [path: `/operation-status?${string}`]: unknown;
     [path: `/nacos/list?${string}`]: import('./nacos.js').NacosPage;
     '/nacos/detail': import('./nacos.js').NacosDetail;
     '/nacos/install': { name: string; root: string };
+    [path: `/nacos/install-status?${string}`]: import('./install-operations.js').InstallOutcome;
     '/workspaces': { items: Awaited<ReturnType<typeof listWorkspaces>> };
     '/workspace-skills': Success<Awaited<ReturnType<typeof workspaceSkills>>>;
     '/import': ImportResult;

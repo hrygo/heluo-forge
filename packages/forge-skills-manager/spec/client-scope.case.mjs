@@ -406,6 +406,37 @@ try {
   assert.ok(find((node) => typeof node.props.title === "string" && node.props.title.includes("技能目录")), "移除后弹窗切换到剩余有效来源");
 
   console.log("自定义技能目录弹窗通过");
+
+  let uncertainWrites = 0, receipt = { state: "pending" }, failStateRead = false;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).includes("/operation-status?")) return { ok: true, json: async () => ({ ok: true, data: receipt }) };
+    if (options?.method === "POST" && String(url).endsWith("/root-path")) {
+      uncertainWrites++;
+      assert.match(options.headers["x-dsh-skills-operation"], /^[a-f0-9-]{36}$/);
+      throw new TypeError("synthetic response lost after commit");
+    }
+    if (failStateRead && String(url).endsWith("/state")) throw new TypeError("synthetic state refresh failed");
+    return { ok: true, json: async () => ({ ok: true, data: sessionData(options) }) };
+  };
+  nodes().filter((node) => node.children.includes(t("rootPath.save"))).at(-1).props.onClick();
+  await new Promise((resolve) => setImmediate(resolve)); render();
+  effects.splice(0).forEach((effect) => effect()); render();
+  assert.equal(uncertainWrites, 1);
+  assert.ok(find((node) => node.children.includes(t("mutation.pending"))), "响应丢失显示待确认");
+  assert.ok(find((node) => node.children.includes(t("mutation.check"))), "结果核对入口可用");
+  find((node) => node.children.includes(t("mutation.check"))).props.onClick();
+  await new Promise((resolve) => setImmediate(resolve)); render();
+  assert.equal(uncertainWrites, 1, "核对只读回执，不重发本地写入");
+  await selectSession("session-b");
+  assert.ok(find((node) => node.children.includes(t("mutation.pending"))), "会话重挂载保留待确认锁");
+  receipt = { state: "succeeded", result: { ok: true } };
+  failStateRead = true;
+  find((node) => node.children.includes(t("mutation.check"))).props.onClick();
+  await new Promise((resolve) => setImmediate(resolve)); render();
+  assert.ok(find((node) => node.children.includes(t("mutation.refreshWarning"))), "回执成功但状态刷新失败明确提示视图未更新");
+  assert.equal(groups().length, 0, "不展示旧快照为已确认的新状态");
+  assert.equal(uncertainWrites, 1);
+  console.log("本地写入响应丢失、跨重挂载核对与状态刷新失败回归通过");
 } finally {
   delete globalThis.__DSH_DIRECTORY_PICKER__;
   globalThis.fetch = originalFetch;

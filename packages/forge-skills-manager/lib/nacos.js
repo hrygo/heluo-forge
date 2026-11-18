@@ -14,6 +14,9 @@ const error = (code, message, status = 502) => new NacosError(`error.nacos.${cod
 const validName = (v) => typeof v === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(v) && v.length <= 64;
 const validVersion = (v) => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(v);
 const object = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function validateNamespace(item, namespace) {
+  if (item.namespaceId != null && item.namespaceId !== namespace) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u6761\u76EE\u547D\u540D\u7A7A\u95F4\u4E0D\u5339\u914D");
+}
 function validateNacosSelection(input) {
   if (!validName(input?.skillName) || !validVersion(input?.version)) throw error("query", "\u6280\u80FD\u540D\u79F0\u6216\u7248\u672C\u65E0\u6548", 400);
   return { name: input.skillName, version: input.version };
@@ -28,15 +31,26 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
       if (url.protocol === "http:" && !config.allowInsecureHttp) throw 0;
       const namespace = config.namespaceId ?? "public";
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(namespace)) throw 0;
-      const username = process.env[config.usernameEnv ?? "FORGE_NACOS_USERNAME"];
-      const password = process.env[config.passwordEnv ?? "FORGE_NACOS_PASSWORD"];
-      if (!username || !password) throw 0;
+      const usernameEnv = config.usernameEnv ?? "FORGE_NACOS_USERNAME";
+      const passwordEnv = config.passwordEnv ?? "FORGE_NACOS_PASSWORD";
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(usernameEnv) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(passwordEnv)) throw 0;
       const timeout = config.timeoutMs ?? 15e3;
       if (!Number.isInteger(timeout) || timeout < 100 || timeout > 12e4) throw 0;
-      return { base: url.href.replace(/\/$/, ""), namespace, username, password, timeout };
-    } catch {
+      return { base: url.href.replace(/\/$/, ""), namespace, usernameEnv, passwordEnv, timeout };
+    } catch (caught) {
+      if (caught !== 0 && !(caught instanceof TypeError && "code" in caught && caught.code === "ERR_INVALID_URL")) throw caught;
       throw error("config", "\u4F01\u4E1A\u6280\u80FD\u5E93\u914D\u7F6E\u4E0D\u5B8C\u6574\u6216\u4E0D\u5B89\u5168\uFF0C\u8BF7\u8054\u7CFB\u7EF4\u62A4\u4EBA\u5458", 503);
     }
+  }
+  function credentials() {
+    const cfg = settings();
+    const username = process.env[cfg.usernameEnv];
+    const password = process.env[cfg.passwordEnv];
+    if (!username?.trim() || !password?.trim()) {
+      token = void 0;
+      throw error("config", "\u4F01\u4E1A\u6280\u80FD\u5E93\u51ED\u636E\u672A\u914D\u7F6E\uFF0C\u8BF7\u8054\u7CFB\u7EF4\u62A4\u4EBA\u5458", 503);
+    }
+    return { username, password };
   }
   async function bounded(response, limit, signal) {
     const reader = response.body?.getReader();
@@ -89,19 +103,31 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
   }
   function json(bytes) {
     try {
-      const v = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      const v = JSON.parse(decodeUtf8(bytes, "response"));
       if (object(v)) return v;
-    } catch {
+    } catch (caught) {
+      if (!(caught instanceof SyntaxError)) throw caught;
     }
     throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u8FD4\u56DE\u65E0\u6548\u6570\u636E");
   }
+  function decodeUtf8(bytes, code) {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (caught) {
+      if (!(caught instanceof TypeError) || !("code" in caught) || caught.code !== "ERR_ENCODING_INVALID_ENCODED_DATA") throw caught;
+      throw error(code, "\u4F01\u4E1A\u6280\u80FD\u5E93\u5185\u5BB9\u4E0D\u662F\u6709\u6548 UTF-8");
+    }
+  }
   async function access(signal) {
-    if (token && token.until > Date.now()) return token.value;
-    const cfg = settings();
+    const resolved = credentials();
+    signal.throwIfAborted();
+    const credentialKey = createHash("sha256").update(JSON.stringify([resolved.username, resolved.password])).digest("hex");
+    if (token && token.until > Date.now() && token.credentialKey === credentialKey) return token.value;
+    token = void 0;
     const pending = (async () => {
-      const v = json(await request("/v3/auth/user/login", {}, signal, void 0, new URLSearchParams({ username: cfg.username, password: cfg.password }), 64 << 10));
+      const v = json(await request("/v3/auth/user/login", {}, signal, void 0, new URLSearchParams(resolved), 64 << 10));
       if (typeof v.accessToken !== "string" || !v.accessToken || /[\r\n]/.test(v.accessToken) || v.accessToken.length > 16384 || typeof v.tokenTtl !== "number" || !Number.isFinite(v.tokenTtl) || v.tokenTtl <= 0) throw error("auth", "\u4F01\u4E1A\u6280\u80FD\u5E93\u8BA4\u8BC1\u54CD\u5E94\u65E0\u6548", 403);
-      token = { value: v.accessToken, until: Date.now() + Math.max(0, Math.min(v.tokenTtl, 86400) * 1e3 - 3e4) };
+      token = { value: v.accessToken, until: Date.now() + Math.max(0, Math.min(v.tokenTtl, 86400) * 1e3 - 3e4), credentialKey };
       return v.accessToken;
     })();
     return pending;
@@ -129,7 +155,11 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
         throw error("auth", "\u4F01\u4E1A\u6280\u80FD\u5E93\u53EA\u8BFB\u8D26\u53F7\u6743\u9650\u4E0D\u8DB3", 403);
       }
       if (metadata.code !== 0 || !object(metadata.data) || !Array.isArray(metadata.data.pageItems)) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u5217\u8868\u683C\u5F0F\u4E0D\u517C\u5BB9");
-      const published = metadata.data.pageItems.some((item) => object(item) && item.name === selected.name && item.enable === true && object(item.labels) && item.labels.latest === selected.version);
+      const published = metadata.data.pageItems.some((item) => {
+        if (!object(item) || item.name !== selected.name) return false;
+        validateNamespace(item, cfg.namespace);
+        return item.enable === true && object(item.labels) && item.labels.latest === selected.version;
+      });
       if (!published) throw error("notFound", "\u6280\u80FD\u7248\u672C\u5DF2\u53D8\u66F4\u3001\u4E0B\u7EBF\u6216\u672A\u53D1\u5E03\uFF0C\u8BF7\u5237\u65B0\u516C\u5171\u5E93", 404);
       const bytes = await request("/v3/admin/ai/skills/version/download", { namespaceId: cfg.namespace, skillName: selected.name, version: selected.version }, combined, auth, void 0, 10 << 20);
       const entries = [];
@@ -145,18 +175,14 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
           seen.add(path.toLowerCase());
           return !info.name.endsWith("/");
         } });
-      } catch {
+      } catch (caught) {
+        if (caught !== 0 && (!object(caught) || !Number.isInteger(caught.code) || Number(caught.code) < 0 || Number(caught.code) > 14)) throw caught;
         throw error("package", "\u6280\u80FD ZIP \u5305\u65E0\u6548\u3001\u8DEF\u5F84\u4E0D\u5B89\u5168\u6216\u5927\u5C0F\u8D85\u9650");
       }
       const names = Object.keys(files);
       const prefix = names.includes("SKILL.md") ? "" : selected.name + "/";
       if (!names.length || names.some((p) => !p.startsWith(prefix)) || !files[prefix + "SKILL.md"] || files[prefix + "SKILL.md"].length > 256 << 10) throw error("package", "\u6280\u80FD\u5305\u5FC5\u987B\u53EA\u5305\u542B\u6240\u9009\u6280\u80FD\u53CA\u5176\u5B8C\u6574\u8D44\u6E90");
-      let document;
-      try {
-        document = parseSkillDoc(new TextDecoder("utf-8", { fatal: true }).decode(files[prefix + "SKILL.md"]));
-      } catch {
-        throw error("package", "\u6280\u80FD\u8BF4\u660E\u4E0D\u662F\u6709\u6548 UTF-8");
-      }
+      const document = parseSkillDoc(decodeUtf8(files[prefix + "SKILL.md"], "package"));
       if (document.map.name !== selected.name || typeof document.map.description !== "string" || !document.map.description.trim() || !document.body.trim()) throw error("package", "\u6280\u80FD\u5305\u540D\u79F0\u4E0E\u8BF7\u6C42\u4E0D\u4E00\u81F4\uFF0C\u6216\u7F3A\u5C11\u6709\u6548\u8BF4\u660E");
       const digest = createHash("sha256");
       for (const name of names.sort()) {
@@ -188,7 +214,7 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
           if (item.enable !== true || item.labels == null) continue;
           if (!object(item.labels)) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u6761\u76EE\u683C\u5F0F\u4E0D\u517C\u5BB9");
           if (!validVersion(item.labels.latest)) continue;
-          if (item.namespaceId != null && item.namespaceId !== namespace) throw error("response", "\u4F01\u4E1A\u6280\u80FD\u5E93\u6761\u76EE\u547D\u540D\u7A7A\u95F4\u4E0D\u5339\u914D");
+          validateNamespace(item, namespace);
           items.push({
             name: item.name,
             description: item.description,

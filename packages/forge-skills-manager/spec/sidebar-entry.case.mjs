@@ -175,15 +175,15 @@ try {
     },
   };
 
-  let clientEnabled = false;
+  let clientLocation = "settings";
   const controller = setupSidebarEntry(mockCtx, {
     callApi: async (path, options) => {
       if (options?.method === "POST") {
         const body = JSON.parse(options.body);
-        clientEnabled = body.enabled;
-        return { enabled: clientEnabled };
+        clientLocation = body.location;
+        return { location: clientLocation, enabled: clientLocation !== "settings" };
       }
-      return { enabled: clientEnabled };
+      return { location: clientLocation, enabled: clientLocation !== "settings" };
     },
     headers: {},
     renderPanel: () => "panel-element",
