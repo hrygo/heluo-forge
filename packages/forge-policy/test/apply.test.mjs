@@ -153,6 +153,27 @@ test('the task scope prompt is localized and explains what one approval covers',
   assert.doesNotMatch(request.displayReason.zh, /task scope|gitee\.pr\.write/u, 'the prompt states the action, not the internals');
 });
 
+test('the scope prompt names a comment as a comment, not as a creation', async () => {
+  const requests = [];
+  const config = {
+    ...baseConfig,
+    catalog: [...baseConfig.catalog, PR_WRITE],
+    tools: { ...baseConfig.tools, forge_pr_write: 'gitee.pr.write' },
+  };
+  const host = mount(config, { approval: { async request(request) { requests.push(request); return 'allowed-once'; } } });
+  const staged = await host.stage('forge_pr_write', {
+    target: 'osc/ard/ard-cli#12',
+    changeId: 'CHG-1',
+    op: 'comment',
+    body: '补充说明。',
+  }, { agent: { id: 'agent-1' } });
+  assert.equal(staged.reason, undefined);
+  const request = requests.find((item) => /task scope/u.test(item.reason));
+  assert.equal(request.displayReason.zh, '允许在 osc/ard/ard-cli 上追加 PR 评论（变更 CHG-1）？允许一次＝本会话内对该仓库的同类写操作不再逐次询问；换仓库、换变更号或重启后需要重新确认。');
+  assert.match(request.displayReason.en, /commenting on a Pull Request/u);
+  assert.doesNotMatch(request.displayReason.en, /creating/u, 'the wrong operation must not reach the card');
+});
+
 test('a rejected task scope reports the rejection instead of only the ticket wording', async () => {
   const host = mount(baseConfig, { approval: { async request() { return 'rejected'; } } });
   const denied = await host.stage('forge_issue_write', { target: 'acme/demo!1', changeId: 'CHG-1', body: 'plain text' }, { agent: { id: 'agent-1' } });
@@ -280,6 +301,7 @@ test('内容扫描不完整时在确认与最小化审计中标明', async () =>
   const result = await host.stage('forge_push', { target: 'acme/demo', branch: 'feature/x', body: 'x\u0000binary' }, { agent: { id: 'agent-1' } });
   assert.equal(result.reason, undefined);
   assert.match(requests.at(-1).reason, /body \(binary-skipped\)/);
+  assert.match(requests.at(-1).displayReason.zh, /有内容未完整扫描（正文：二进制内容未扫描）/u);
   const record = host.policy.auditRecords().find((item) => item.phase === 'begin');
   assert.deepEqual(record.contentSkipped, ['body:binary-skipped']);
   assert.ok(!JSON.stringify(record).includes('binary\\u0000'));
@@ -291,6 +313,7 @@ test('正文超出上限要求逐次确认并记录截断', async () => {
   const result = await host.stage('forge_issue_write', { target: 'acme/demo#12', changeId: 'CHG-1', body: 'x'.repeat(262145) }, { agent: { id: 'agent-1' } });
   assert.equal(result.reason, undefined);
   assert.match(requests.at(-1).reason, /body \(truncated\)/);
+  assert.match(requests.at(-1).displayReason.zh, /有内容未完整扫描（正文：内容过长，只扫描了开头）/u);
   assert.deepEqual(host.policy.auditRecords().find((item) => item.phase === 'begin').contentSkipped, ['body:truncated']);
 });
 

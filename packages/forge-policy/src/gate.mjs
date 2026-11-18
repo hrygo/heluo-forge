@@ -336,6 +336,7 @@ export function createGate({
         changeId: changeOf(exec.arguments),
         args: exec.arguments,
         rules: [...content.soft.map((finding) => finding.rule), ...process.confirm.map((item) => item.rule)],
+        skipped: content.skipped,
       }));
       if (asked.ok !== true) return deny(asked.reason);
     }
