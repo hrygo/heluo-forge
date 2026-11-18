@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-REQ-004 |
 | 文档名称 | Forge 专家智能体产品需求文档 |
-| 版本 | V0.8.1 |
+| 版本 | V0.9.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
@@ -16,12 +16,12 @@
 | 确认日期 | 2026-11-11 |
 | 确认事项 | 专家面向企业跨领域工作，由职责定位与获授工具权限集合界定；目录展示易理解的能力与权限摘要；用户 `@` 后由 DSH 主助手调用专家并综合回复；显示专家状态与来源，原始结果默认折叠；不同 DSH 会话的专家上下文默认隔离，用户明确选择后可复用；记录默认仅发起员工及按企业规则获权的管理、审计人员可见；Paperclip 部署在云端，与 DSH 终端分离 |
 | 适用范围 | 本文产品定位、专家信息展示、主助手协作与结果呈现方式、跨会话上下文与记录可见规则及部署拓扑，不代表整篇 PRD 或实施范围已批准 |
-| 最后更新 | 2026-11-11 |
+| 最后更新 | 2026-11-18 |
 | 门禁 | 产品取舍与范围确认；宿主和 Delegra 接口取证；企业身份、权限与目标终端验收 |
 
 > 编制依据：项目负责人提出以 Delegra 提供云端专家，在 DeepSeek Harness（DSH）中展示用户有权看到的专家，并通过聊天框 `@` 委派工作。本文于 2026-11-11 只读核对 Delegra 工作区源码和产品文档、DSH 官方 `0.2.1-rc.3` 与 `0.2.2-rc.1` 部分源码，以及 §11 所列公开产品资料。Delegra 工作区包含既有未提交改动，不能仅凭 HEAD 重现全部所读内容；没有启动服务或执行真实企业联调。
 >
-> 关联文档：[需求与场景基线](requirements-baseline.md)、[总体架构](../architecture/platform-architecture.md)、[实现与验证入口](../design/README.md#22-实现与验证入口)、[DSH 插件高阶规范](../engineering/dsh-plugin-conventions.md)、[企业协作聊天产品方案](enterprise-collaboration-chat-proposal.md)。
+> 关联文档：[需求与场景基线](requirements-baseline.md)、[总体架构](../architecture/platform-architecture.md)、[实现与验证入口](../design/README.md#22-实现与验证入口)、[DSH 插件高阶规范](../engineering/dsh-plugin-conventions.md)、[企业协作聊天产品方案](enterprise-collaboration-chat-proposal.md)、[Forge 专家智能体接入方案](../plans/2026-11-18-forge-experts-integration-proposal.md)。
 
 ## 1. 产品结论与文档效力
 
@@ -91,6 +91,31 @@ Paperclip 部署在云端，与员工运行 DSH 的终端分离；插件通过�
 员工显式选择一位专家；DSH 主助手是当次交互的协调者和综合回复者，Delegra 专家承担获授范围内的实际工作。主助手取得专家本次结果后进行综合，默认显示专家身份、可证实的任务状态与结果来源；专家原始结果默认折叠，员工可在有权访问且结果可得时展开核对。原始结果不可得、不完整或无权查看时如实提示，不将主助手的综合内容冒充专家原文。不能把专家建议、主助手判断或任务已受理说成目标系统操作已完成。
 
 用户的每次新委派必须能明确辨认目标；对同一任务的追问保留专家与会话关联。默认不因文本中出现专家名称就推断授权，也不把上一次选择的专家默认为所有未来消息的接收方。主助手未能调用指定专家或未取得有效结果时，必须如实说明，不冒称专家已参与、不自动替换专家。
+
+**图 1　专家委派与结果回传时序（拟议）**
+
+```mermaid
+sequenceDiagram
+    actor U as 你
+    box 员工电脑
+        participant D as DSH 主助手与插件
+    end
+    box Delegra 云端
+        participant G as 员工专用接口
+        participant E as 报表专家
+    end
+
+    U->>D: 点选 @报表专家，提交问题
+    Note over D: 插件绑定本次会话、所选专家和任务
+    D->>G: 以你的身份提交任务，附请求编号
+    G->>G: 核验调用权限，创建私有任务
+    G-->>D: 已受理，可以查进度
+    G->>E: 在本次会话的独立上下文执行
+    E-->>G: 保存本次任务的结果
+    D->>G: 查原任务，核验当前读取权限
+    G-->>D: 返回获准使用的结果与来源
+    D-->>U: 主助手在原对话综合回复
+```
 
 ## 4. 功能需求与优先级
 
@@ -170,7 +195,7 @@ Delegra 当前工作区的 Agent Chat 以人员、专家和企业为粒度组织
 
 ## 7. 现状取证与接入约束
 
-下表记录 2026-11-11 的源码和文档核对，不代表部署状态或端到端运行结果。HeLuoForge 当前目标为 `0.2.1-rc.3`；本机 DSH 源码已更新至[官方候选版本 `0.2.2-rc.1`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.2-rc.1)对应的提交 `66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db`。研究较新源码不自动修改本项目的宿主版本或兼容承诺。
+HeLuoForge 的宿主验收目标为 `0.2.1-rc.3`。下表保留 2026-11-11 源码取证。2026-11-18 对照 DSH `0.2.2-rc.3` 及固定版本的 Delegra 源码，核对了宿主提交时序、任务可见性和上下文隔离缺口。[接入方案 §2](../plans/2026-11-18-forge-experts-integration-proposal.md#2-源码证据与路线取舍)记录适用版本与证据，企业部署和端到端链路待验证。
 
 | 主题 | 当前证据 | 产品含义和缺口 |
 |---|---|---|
@@ -179,7 +204,7 @@ Delegra 当前工作区的 Agent Chat 以人员、专家和企业为粒度组织
 | DSH 主助手工具 | rc.3 的[工具开发说明](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/docs/cookbook/adding-a-tool.md)描述面向模型注册工具、执行并返回结果 | 可研究以插件工具承接专家调用并向主助手提供结果；身份、目标匹配、授权、异步运行和恢复仍须端到端验证 |
 | DSH MCP 与异步委派 | rc.3 的[MCP 客户端](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/mcp/mcp-client/README.md)可将外部工具注册给模型；[子智能体服务](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/subagent/subagent/README.md)提供外部 provider 和完成通知 | 可比较 MCP 任务和自定义外部 provider；两者均未证明已接通 Delegra。外部子任务默认一次执行，父会话不在线时没有持久消息邮箱，不能承诺自动跨重启回传 |
 | DSH 提交位置 | [提交状态机](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/client/ui-conversation/src/client/input/machine.ts)对未被 claim 的普通消息仅将 `/` 开头内容送入命令裁决 | 仅输入 `@名字` 不能证明会派发；现有 claim 候选对位置和草稿恢复有约束，需验证首部选择、失效和恢复行为 |
-| DSH 最新候选复核 | `0.2.2-rc.1` 的[输入状态机](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.1/packages/client/ui-conversation/src/client/input/machine.ts)仍对未 claim 的 `/` 首部进行命令裁决；[输入契约](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.1/packages/client/ui-conversation/src/client/contract/input.ts)提供将所选聊天文本插入为引用的接口 | 较新宿主中的引用接口值得研究，但不能据此断言专家命令视图支持选择、来源保留或主助手交接；`0.2.1-rc.3` 仍需单独核验 |
+| DSH 候选版历史对照 | `0.2.2-rc.1` 的[输入状态机](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.1/packages/client/ui-conversation/src/client/input/machine.ts)仍对未 claim 的 `/` 首部进行命令裁决。[输入契约](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.1/packages/client/ui-conversation/src/client/contract/input.ts)提供将所选聊天文本插入为引用的接口 | 专家选择、来源保留及主助手交接须在目标版本 `0.2.1-rc.3` 单独验收 |
 | DSH 命令记录 | [命令注册与执行](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/interaction/commands/src/index.ts)及[命令视图](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/client/ui-chat/src/client/chat/CommandNodeView.tsx)提供命令记录和定制展示路径 | 命令记录不自动成为原生 user/assistant 轮次或主助手的模型上下文；仅有命令卡片不能满足主助手综合专家结果的需求 |
 | Delegra 目录和权限 | `server/src/routes/agents.ts` 逐项判断 `agent:read`；`server/src/services/authorization.ts` 区分读取和唤醒动作；`server/src/routes/issues.ts` 的聊天入口还需逐路径核验 | 当前公司角色授权不能直接等同企业逐专家授权；不能仅以目录接口的判定推定聊天、取消或其他直接 API 同样完成专家级和会话授权 |
 | Delegra 会话 | `doc/PRODUCT.md` 和 `server/src/routes/issues.ts` 将 Agent Chat 定义为默认关闭的实验能力，聊天由任务承载 | 现有会话粒度、任务可见性和调用入口不能直接满足隔离或隐私假设；开关与实际部署未验证 |
@@ -238,7 +263,7 @@ Delegra 工作区还提供另一条聊天接口。以下调用链来自当前源
 
 rc.3 的模型接口没有 `tool_choice`；工具注册或提示词不能保证模型一定调用指定专家。选定专家、当前员工、用户提交的任务内容和允许发送的资料需由可信的宿主侧上下文绑定并在远端执行前核验；若专家、任务目标或动作范围、资料不匹配则拒绝。应以真实调用回执和结果作为专家已参与的证据，模型直接作答不算完成委派。
 
-建议优先验证人员 OAuth 公共 MCP 的任务式路径：现有只读探针证明一个人员连接可以读取其授权范围内的专家目录，任务工具有明确的提交、追问和结果查询入口。该建议不意味着已完成 DSH 身份打通、专家执行或结果回流；若产品需要复用 Paperclip 持久聊天语义，应另行验证 §7.3 的接口及其可见性，而不是把创建任务当成已建立专家聊天。无论采用哪条路径，DSH 专家目录、`@` 选择、可靠绑定和主助手综合回复仍需插件侧能力及目标宿主验证。
+建议使用公开 DSH 插件接缝与 Delegra 受限员工 API，复用 Delegra 私有任务及运行服务。§7.2 的人员 OAuth 公共 MCP 和 §7.3 的 Agent Chat 提供现有任务及聊天契约对照。接入须核验员工到专家的授权、私有任务、按 DSH 会话隔离的执行上下文、可信提交绑定和可追溯结果。**推进状态为暂缓实施。** 恢复排期的前置条件与验收路径见[接入方案 §6](../plans/2026-11-18-forge-experts-integration-proposal.md#6-恢复后的阶段与验收)。
 
 终端到云端的连接须核验实际网络可达性、传输保护、身份凭据生命周期和企业允许的数据路径。连接不可用、认证失败或撤权时应明确呈现状态并停止未授权调用；恢复后依实际回执查询，不能静默切换到本机服务、共享身份或其他专家，也不能假定提交中的任务未被云端接收。
 
