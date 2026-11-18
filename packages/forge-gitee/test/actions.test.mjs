@@ -945,8 +945,9 @@ test('AC-16 端到端主路径: 工具 → 状态机 → 门禁 → 真适配器
   assert.equal(first.readback.ok, true);
   assert.equal(first.readback.title, '同步变更');
   assert.equal(first.evidence.provider, 'gitee');
-  assert.equal(typeof first.evidence.command, 'string');
-  assert.ok(first.evidence.command.length > 0);
+  assert.equal(first.evidence.command, 'gitee issue create');
+  assert.ok(!JSON.stringify(first).includes(ISSUE_CREATE.body));
+  assert.deepEqual(happy.harness.session.lookup(first.idempotency_key).evidence, first.evidence);
   assert.equal(first.evidence.sourceType, 'gitee-cli');
 
   // 两条子进程，各是它该是的样子：先建单（无 --json），再只读回读（有 --json）。
@@ -962,6 +963,7 @@ test('AC-16 端到端主路径: 工具 → 状态机 → 门禁 → 真适配器
   const replay = await runTool(happy.service, 'forge_gitee_issue_write', ISSUE_CREATE);
   assert.equal(replay.status, 'done');
   assert.equal(replay.reused, true);
+  assert.deepEqual(replay.evidence, first.evidence);
   assert.equal(replay.remote_calls, 0);
   assert.equal(happy.calls.length, 2, '幂等命中不该再起子进程');
 
@@ -978,6 +980,8 @@ test('AC-16 端到端主路径: 工具 → 状态机 → 门禁 → 真适配器
   const timedOut = await runTool(timeout.service, 'forge_gitee_issue_write', ISSUE_CREATE);
   assert.equal(timedOut.status, 'unknown');
   assert.equal(timedOut.reason, ACTION_REASONS.COMMAND_TIMEOUT);
+  assert.ok(!JSON.stringify(timedOut).includes(ISSUE_CREATE.title));
+  assert.ok(!JSON.stringify(timedOut).includes(ISSUE_CREATE.body));
   assert.equal(timeout.calls.length, 1, '超时后不得自动重试，也不得回读（可能还在跑）');
 
   const blocked = await runTool(timeout.service, 'forge_gitee_issue_write', ISSUE_CREATE);
@@ -985,6 +989,38 @@ test('AC-16 端到端主路径: 工具 → 状态机 → 门禁 → 真适配器
   assert.equal(blocked.replay_blocked, true);
   assert.equal(blocked.remote_calls, 0);
   assert.equal(timeout.calls.length, 1, 'unknown 之后的第二次调用必须一次子进程都不起');
+
+  const sensitiveValues = [ISSUE_CREATE.title, ISSUE_CREATE.body, ADAPTER_ENV.GITEE_TOKEN];
+  const echoed = sensitiveValues.join(' ');
+  for (const { firstExitCode, status, reason, calls } of [
+    { firstExitCode: null, status: 'failed', reason: ACTION_REASONS.SPAWN_FAILED, calls: 1 },
+    { firstExitCode: 1, status: 'unknown', reason: 'NONZERO_EXIT', calls: 1 },
+    { firstExitCode: 0, status: 'unknown', reason: ACTION_REASONS.READBACK_UNAVAILABLE, calls: 2 },
+  ]) {
+    const scenario = wire(({ args }) => {
+      if (firstExitCode === 0 && args[1] === 'create') {
+        return { exitCode: 0, stdout: ISSUE_JSON.web_url };
+      }
+      return { exitCode: args[1] === 'view' ? 1 : firstExitCode, stderr: echoed, stdout: echoed };
+    });
+    const result = await runTool(scenario.service, 'forge_gitee_issue_write', ISSUE_CREATE);
+    assert.equal(result.status, status);
+    assert.equal(result.reason, reason);
+    assert.equal(scenario.calls.length, calls);
+    for (const value of sensitiveValues) assert.ok(!JSON.stringify(result).includes(value));
+    assert.equal(scenario.harness.session.size(), status === 'unknown' ? 1 : 0);
+    if (calls === 2) assert.equal(result.evidence.command, 'gitee issue create');
+    if (status === 'unknown') {
+      const entry = scenario.harness.session.lookup(result.idempotency_key);
+      assert.equal(entry.status, 'unknown');
+      if (calls === 2) assert.deepEqual(entry.evidence, result.evidence);
+      for (const value of sensitiveValues) assert.ok(!JSON.stringify(entry).includes(value));
+      const retry = await runTool(scenario.service, 'forge_gitee_issue_write', ISSUE_CREATE);
+      assert.equal(retry.replay_blocked, true);
+      assert.equal(scenario.calls.length, calls);
+      for (const value of sensitiveValues) assert.ok(!JSON.stringify(retry).includes(value));
+    }
+  }
 });
 
 

@@ -401,16 +401,10 @@ const BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/;
 const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const TITLE_LIMIT = 512;
 const BODY_LIMIT = 65536;
-const DIAGNOSTIC_LIMIT = 160;
 
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-
-const clip = (value, limit = DIAGNOSTIC_LIMIT) => {
-  const flat = text(value).replace(/\s+/g, ' ');
-  return flat.length <= limit ? flat : `${flat.slice(0, limit)}…`;
-};
 
 /**
  * 适配器错误：带固定 `code`（可被 `gitee-read`/`gitee-actions` 直接映射成状态与 reason），
@@ -849,7 +843,6 @@ export function createGiteeAdapter({
 
   const bin = text(cliPath) || 'gh';
   const at = () => now();
-  const labelOf = (args) => [GITEE_LOGICAL_NAME, ...args].join(' ');
   const authNames = Object.freeze(
     (Array.isArray(authEnv) ? authEnv : [authEnv]).map((entry) => text(entry)).filter((entry) => entry !== ''),
   );
@@ -857,18 +850,6 @@ export function createGiteeAdapter({
   const tokenValues = () => authNames
     .map((name) => (typeof source[name] === 'string' ? source[name].trim() : ''))
     .filter((value) => value !== '');
-
-  /** 令牌不进消息、不进 detail、不进 describe：出现在 stderr 里的也一并抹掉。 */
-  const redact = (value, tokens = tokenValues()) => {
-    let out = typeof value === 'string' ? value : '';
-    for (const token of tokens) {
-      if (token.length >= 8) out = out.split(token).join('[REDACTED]');
-    }
-    // 形如凭据的串一律抹掉（与 CLI 层的脱敏口径一致：令牌可能出现在 stderr 的任意位置）。
-    return out.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|gitee_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,})\b/g, '[REDACTED]');
-  };
-
-  const failureLine = (outcome) => redact(clip(outcome?.stderr) || clip(outcome?.stdout));
 
   /**
    * preflight：凭据面诊断（AC-22）。**零子进程、不抛错、不返回令牌值**。
@@ -940,7 +921,7 @@ export function createGiteeAdapter({
    */
   async function invoke(command, params = {}, purpose = '') {
     const plan = assertArgv(command, params);
-    const label = labelOf(plan.args);
+    const label = [GITEE_LOGICAL_NAME, ...GITEE_COMMANDS[command]].join(' ');
     const observedAt = at();
     const reason = text(purpose) || PURPOSES[command] || `${GITEE_PLATFORM}.${command}`;
     const outcome = await runner.run({ bin, args: [...plan.args], purpose: reason });
@@ -958,7 +939,7 @@ export function createGiteeAdapter({
     }
     if (!Number.isInteger(outcome.exitCode) || outcome.exitCode !== 0) {
       const spawned = outcome.exitCode !== null && outcome.exitCode !== undefined;
-      const line = failureLine(outcome);
+      // CLI 输出可能回显请求内容，只在适配器内用于错误分类。
       const stderr = `${outcome?.stderr ?? ''}`;
       const unsupported = /unknown field|unsupported field|invalid field|no such field|invalid json/i.test(stderr);
       // 凭据问题单独归一：缺令牌不再是客户端拒绝，服务端拒了就要说清是"凭据"而不是
@@ -984,7 +965,7 @@ export function createGiteeAdapter({
       const mayHaveSideEffect = code !== ADAPTER_REASONS.ITEM_NOT_FOUND;
       fail(
         code,
-        `${label} 失败（${spawned ? `退出码 ${outcome.exitCode}` : '未启动'}）${line === '' ? '' : `：${line}`}${hint}`,
+        `${label} 失败（${spawned ? `退出码 ${outcome.exitCode}` : '未启动'}）${hint}`,
         {
           command,
           purpose: reason,
