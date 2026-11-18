@@ -414,10 +414,10 @@ test("老宿主切换入口位置后设置分区不丢失（回归：图标槽�
   const previousFetch = globalThis.fetch;
   console.warn = (...args) => { warnings.push(args.map((item) => String(item)).join(" ")); };
   // 控制器保存入口位置会 POST /sidebar-entry，这里让保存成功，避免走回滚分支
-  globalThis.fetch = async () => ({
+  globalThis.fetch = async (_url, options) => ({
     ok: true,
     status: 200,
-    json: async () => ({ ok: true, data: { location: "sidebar" } }),
+    json: async () => ({ ok: true, data: { location: options?.body ? JSON.parse(options.body).location : "settings" } }),
   });
   try {
     client.apply(createLegacyCtx(registered));

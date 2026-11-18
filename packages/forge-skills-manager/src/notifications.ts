@@ -1,14 +1,15 @@
 import type { HostContext } from "./host-types.js";
+import { isExpectedOperationError } from "./operation-errors.js";
 export function notifyChatCatalog(ctx: HostContext, invalidateSkills?: () => void) {
   try {
     if (typeof invalidateSkills === "function") invalidateSkills();
-  } catch {
-    /* 目录缓存失效失败不影响已完成的文件操作 */
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
   }
   try {
     if (typeof ctx.emit === "function") ctx.emit("commands/change");
-  } catch {
-    /* 命令目录刷新失败不影响已完成的文件操作 */
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
   }
   try {
     const sessions = typeof ctx.get === "function" ? ctx.get("sessions") : undefined;
@@ -23,7 +24,7 @@ export function notifyChatCatalog(ctx: HostContext, invalidateSkills?: () => voi
       // skills/change 未进入官方转发白名单，只能借用这条已转发事件。
       ctx.emit("agent-preset/selected", id, preset);
     }
-  } catch {
-    /* 斜杠菜单刷新失败不影响已完成的文件操作 */
+  } catch (error) {
+    if (!isExpectedOperationError(error)) throw error;
   }
 }

@@ -50,7 +50,7 @@ test('卡片显示真实命名空间及下载次数，缺失不补零，保留�
 
 async function harness(t, initial = {}) {
   const calls = [], lists = [], details = [], installs = [], navigated = [];
-  const options = { holdList: false, holdDetail: false, holdInstall: false, failRefresh: false, failDetail: false, failList: false, ignoreAbort: false, ...initial };
+  const options = { holdList: false, holdDetail: false, holdInstall: false, failRefresh: false, failDetail: false, failList: false, ignoreAbort: false, failTransport: false, rejectInstall: false, outcome: { state: 'pending' }, ...initial };
   const data = { configured: true, items: [{ name: 'example-skill', description: 'Example', version: '1.0.0', namespaceId: 'public', downloadCount: 22 }], page: 1, total: 1, pageSize: 20 };
   let active = true, refreshed = 0, renderer;
   const api = async (path, init = {}) => {
@@ -67,7 +67,10 @@ async function harness(t, initial = {}) {
     }
     if (path === '/workspaces') return { items: [{ name: 'Project', path: '/project', available: true, registeredPaths: ['/project'], skillCount: 0 }] };
     if (path === '/state') return { roots: [{ key: 'dsh', path: '/workspace/skills', mutable: true }] };
+    if (path.startsWith('/nacos/install-status?')) return options.outcome;
     if (path === '/nacos/install') {
+      if (options.rejectInstall) throw clientModule.normalizeApiFailure({ code: 'error.nacos.notFound', outcome: 'rejected' });
+      if (options.failTransport) throw new TypeError('fetch failed after commit');
       if (options.holdInstall) {
         const pending = deferred(); installs.push(pending);
         if (!options.ignoreAbort) init.signal.addEventListener('abort', () => pending.reject({ code: 'error.nacos.cancelled' }), { once: true });
@@ -81,7 +84,7 @@ async function harness(t, initial = {}) {
   function Modal({ title, children, footer, onClose }) { return h('section', { role: 'dialog' }, h('h2', null, title), h('button', { 'aria-label': '关闭详情', onClick: onClose }), children, footer); }
   function SourceSelect({ value, options, onChange, label, disabled }) { return h('select', { 'aria-label': label, value, disabled, onChange: event => onChange(event.target.value) }, options.map(option => h('option', { key: option.value, value: option.value, disabled: option.disabled }, option.label))); }
   const useUI = createNacosUI({ react: React, Modal, Input: 'input', Button, SourceSelect,
-    destination: { defaultDestination, destinationPayload, destinationReady }, api, headers: { 'x-dsh-skills-manager': '1' }, translateError: (_t, error) => translate(error.code) });
+    destination: { defaultDestination, destinationPayload, destinationReady }, api, headers: { 'x-dsh-skills-manager': '1' }, translateError: (_t, error) => { const details = clientModule.failureDetails(error); return details.code ? translate(details.code) : details.message; } });
   function App() { return useUI({ active, t: translate, onInstalled: async () => { refreshed++; if (options.failRefresh) throw new Error('Synthetic refresh failure'); }, onNavigate: value => navigated.push(value) }).content; }
   const flush = async () => { await act(async () => { await tick(); }); };
   async function event(fn) { act(fn); await flush(); }
@@ -93,6 +96,7 @@ async function harness(t, initial = {}) {
     click: label => event(() => { const node = button(label); assert.ok(node, `Button missing: ${label}`); assert.ok(!node.props.disabled, `Button disabled: ${label}`); node.props.onClick?.(); }),
     async search(value) { await event(() => renderer.root.findByType('input').props.onChange({ target: { value } })); await event(() => renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })); },
     async stop() { active = false; await event(() => renderer.update(h(App))); },
+    async remount() { await event(() => renderer.update(h(App, { key: 'remounted' }))); },
     get refreshed() { return refreshed; },
   };
 }
@@ -106,7 +110,9 @@ test('发现仅请求 Nacos，详情渲染说明和资源且下载后可前往�
   assert.ok(ui.body().includes('完整资源（2 个文件）'));
   assert.equal(ui.renderer.root.findAllByType('select').length, 0);
   await ui.click('下载到本地');
-  assert.deepEqual(JSON.parse(ui.calls.find(call => call.path === '/nacos/install').init.body), { skillName: 'example-skill', version: skillVersion, root: 'dsh' });
+  const { operationId, ...selection } = JSON.parse(ui.calls.find(call => call.path === '/nacos/install').init.body);
+  assert.match(operationId, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(selection, { skillName: 'example-skill', version: skillVersion, root: 'dsh' });
   assert.equal(ui.refreshed, 1); assert.ok(ui.body().includes('当前为禁用状态'));
   await ui.click('前往全局技能');
   assert.deepEqual(ui.navigated, [{ name: 'example-skill', scope: 'user', workspace: '' }]);
@@ -118,7 +124,9 @@ test('项目下载只传登记路径，成功定位不丢失所选项目', async
   assert.equal(ui.button('下载到本地').props.disabled, true);
   await ui.event(() => ui.renderer.root.findByType('select').props.onChange({ target: { value: '/project' } }));
   await ui.click('下载到本地'); await ui.click('前往项目技能');
-  assert.deepEqual(JSON.parse(ui.calls.find(call => call.path === '/nacos/install').init.body), { skillName: 'example-skill', version: '1.0.0', workspace: '/project' });
+  const { operationId, ...selection } = JSON.parse(ui.calls.find(call => call.path === '/nacos/install').init.body);
+  assert.match(operationId, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(selection, { skillName: 'example-skill', version: '1.0.0', workspace: '/project' });
   assert.deepEqual(ui.navigated, [{ name: 'example-skill', scope: 'workspace', workspace: '/project' }]);
 });
 
@@ -194,6 +202,63 @@ test('未配置、连接失败、无匹配与被过滤的空页分别呈现，�
   ui.options.failList = false; ui.data.total = 0; await ui.search('missing'); assert.ok(ui.body().includes('没有找到匹配'));
   ui.data.total = 60; await ui.click('清空搜索'); assert.ok(ui.body().includes('本页暂无可下载')); assert.ok(ui.body().includes('本页 0 项'));
   assert.ok(!ui.body().includes('60')); assert.equal(ui.button('下一页').props.disabled, false);
+});
+
+test('响应丢失后重开详情和组件重挂载仍禁止重发，Host 成功回执才能完成', async t => {
+  const ui = await harness(t, { failTransport: true });
+  await ui.click('查看详情'); await ui.click('下载到本地');
+  assert.equal(ui.button('下载到本地').props.disabled, true);
+  await ui.click('关闭详情'); await ui.click('查看详情');
+  assert.equal(ui.button('下载到本地').props.disabled, true);
+  await ui.remount(); await ui.click('查看详情');
+  assert.equal(ui.button('下载到本地').props.disabled, true);
+  await ui.click('核对下载结果');
+  assert.equal(ui.refreshed, 0);
+  assert.equal(ui.button('下载到本地').props.disabled, true);
+  ui.options.outcome = { state: 'succeeded', result: { name: 'example-skill', root: '/workspace/skills' } };
+  await ui.click('核对下载结果');
+  assert.equal(ui.refreshed, 1);
+  assert.ok(ui.body().includes('已确认 example-skill 已下载'));
+  assert.equal(ui.calls.filter(call => call.path === '/nacos/install').length, 1);
+});
+
+test('只有 Host 确认拒绝后才恢复下载按钮', async t => {
+  const ui = await harness(t, { failTransport: true });
+  await ui.click('查看详情'); await ui.click('下载到本地');
+  ui.options.outcome = { state: 'rejected', code: 'error.nacos.notFound', error: 'not found' };
+  await ui.click('核对下载结果');
+  assert.equal(ui.button('下载到本地').props.disabled, false);
+  assert.ok(ui.body().includes('版本已不可用'));
+});
+
+test('无效回执保持待确认，不能解锁下载或报告成功', async t => {
+  const ui = await harness(t, { failTransport: true });
+  await ui.click('查看详情'); await ui.click('下载到本地');
+  for (const outcome of [null, {}, { state: 'unknown' }, { state: 'succeeded' }, { state: 'rejected' }]) {
+    ui.options.outcome = outcome;
+    await ui.click('核对下载结果');
+    assert.equal(ui.button('下载到本地').props.disabled, true);
+    assert.equal(ui.refreshed, 0);
+  }
+  assert.equal(ui.calls.filter(call => call.path === '/nacos/install').length, 1);
+});
+
+test('核对成功后刷新失败不把历史禁用状态当作当前状态', async t => {
+  const ui = await harness(t, { failTransport: true, failRefresh: true });
+  await ui.click('查看详情'); await ui.click('下载到本地');
+  ui.options.outcome = { state: 'succeeded', result: { name: 'example-skill', root: '/workspace/skills' } };
+  await ui.click('核对下载结果');
+  assert.ok(ui.body().includes('查看当前启用状态'));
+  assert.ok(!ui.body().includes('保持禁用'));
+  assert.ok(ui.button('前往全局技能'));
+});
+
+test('Host 明确拒绝的响应无需等待不存在的安装回执', async t => {
+  const ui = await harness(t, { rejectInstall: true });
+  await ui.click('查看详情'); await ui.click('下载到本地');
+  assert.equal(ui.button('下载到本地').props.disabled, false);
+  assert.ok(ui.body().includes('版本已不可用'));
+  assert.equal(ui.calls.filter(call => call.path === '/nacos/install').length, 1);
 });
 
 test('首次加载显示骨架，首个连接失败有明确重试入口', async t => {

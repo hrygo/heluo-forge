@@ -358,6 +358,9 @@ console.log("── 4. 端到端 HTTP 路由测试 ──");
 
 const { connection, handler } = createTestFetchBridge();
 const emitted = [];
+let currentAgentPreset = "code-review";
+let agentProviderRegistered = null;
+const agentListeners = [];
 applyHost({
   connection,
   skills: {
@@ -376,8 +379,12 @@ applyHost({
   emit(...args) {
     emitted.push(args);
   },
+  on(event, listener) {
+    if (event === "agent/created") agentListeners.push(listener);
+    return () => {};
+  },
   get(name) {
-    if (name === "agentPresets") return mockAgentPresets;
+    if (name === "agentPresets") return { ...mockAgentPresets, composedPreset: () => currentAgentPreset };
     return undefined;
   },
 });
@@ -570,41 +577,6 @@ ok((await noteRes.json()).ok === true, "自定义预设下成功保存技能备�
 
 
 // 7. 模拟真实宿主 agent/created 与 composedPreset 动态切模式端到端校验
-let currentAgentPreset = "code-review";
-let agentProviderRegistered = null;
-const agentListeners = [];
-const mockAgentBridge = createTestFetchBridge();
-applyHost({
-  connection: mockAgentBridge.connection,
-  skills: {
-    registerProvider() {
-      return () => {};
-    },
-  },
-  tools: {
-    register() {
-      return () => {};
-    },
-  },
-  effect(fn) {
-    return fn();
-  },
-  on(event, listener) {
-    if (event === "agent/created") agentListeners.push(listener);
-    return () => {};
-  },
-  get(name) {
-    if (name === "agentPresets") {
-      return {
-        ...mockAgentPresets,
-        composedPreset() {
-          return currentAgentPreset;
-        },
-      };
-    }
-    return undefined;
-  },
-});
 const fakeAgentCtx = {
   skills: {
     registerProvider(create) {

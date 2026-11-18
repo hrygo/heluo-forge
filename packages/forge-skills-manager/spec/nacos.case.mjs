@@ -1,13 +1,31 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { zipSync, strToU8 } from "fflate";
 import { createNacosClient } from "../lib/nacos.js";
-import { fakeNacos, nacosConfig, skillDocument } from "./fixtures/nacos.mjs";
-process.env.TEST_NACOS_USER = "svc-ci";
-process.env.TEST_NACOS_PASSWORD = "synthetic-password";
+import { fakeNacos, nacosConfig, skillDocument, useNacosEnvironment } from "./fixtures/nacos.mjs";
+beforeEach(context => useNacosEnvironment(context));
 const fixture = () => { const f = fakeNacos(); return { ...f, client: createNacosClient(nacosConfig, f.fetcher) }; };
 const selected = { skillName: "example-skill", version: "1.0.0" };
 const rejects = (promise, code) => assert.rejects(promise, e => e.code === `error.nacos.${code}` && !e.message.includes("synthetic"));
+
+test("配置、解码和解压中的程序缺陷保留原异常", async () => {
+  const defect = new ReferenceError("synthetic programming defect");
+  const brokenConfig = { ...nacosConfig, get serverUrl() { throw defect; } };
+  await assert.rejects(createNacosClient(brokenConfig, fakeNacos().fetcher).list(), caught => caught === defect);
+  const originalDecoder = globalThis.TextDecoder;
+  try {
+    globalThis.TextDecoder = class extends originalDecoder { decode() { throw defect; } };
+    await assert.rejects(fixture().client.list(), caught => caught === defect);
+  } finally { globalThis.TextDecoder = originalDecoder; }
+  const originalSplit = String.prototype.split;
+  try {
+    String.prototype.split = function (separator, limit) {
+      if (separator === "/" && this.startsWith("example-skill/")) throw defect;
+      return originalSplit.call(this, separator, limit);
+    };
+    await assert.rejects(fixture().client.load(selected), caught => caught === defect);
+  } finally { String.prototype.split = originalSplit; }
+});
 
 test("未配置时返回配置提示且零网络", async () => {
   const client = createNacosClient(undefined, () => { throw new Error("network forbidden"); });
@@ -15,23 +33,14 @@ test("未配置时返回配置提示且零网络", async () => {
   await rejects(client.detail(selected), "unconfigured");
 });
 
-test("默认账号配置使用通用环境变量，显式变量名仍可覆盖", async () => {
-  const keys = ["FORGE_NACOS_USERNAME", "FORGE_NACOS_PASSWORD"];
-  const before = keys.map(key => process.env[key]);
-  process.env.FORGE_NACOS_USERNAME = "svc-ci";
-  process.env.FORGE_NACOS_PASSWORD = "synthetic-password";
-  try {
-    const { usernameEnv, passwordEnv, ...config } = nacosConfig;
-    const first = fakeNacos();
-    await createNacosClient(config, first.fetcher).list();
-    assert.equal(new URLSearchParams(first.calls[0].options.body).get("username"), "svc-ci");
-    delete process.env.FORGE_NACOS_PASSWORD;
-    await rejects(createNacosClient(config, () => { throw new Error("network forbidden"); }).list(), "config");
-    const explicit = fakeNacos();
-    assert.equal((await createNacosClient(nacosConfig, explicit.fetcher).list()).configured, true);
-  } finally {
-    keys.forEach((key, index) => { if (before[index] === undefined) delete process.env[key]; else process.env[key] = before[index]; });
-  }
+test("默认和显式环境变量名均从 Host 进程读取账号密码", async () => {
+  const { usernameEnv, passwordEnv, ...config } = nacosConfig;
+  const first = fakeNacos();
+  await createNacosClient(config, first.fetcher).list();
+  assert.equal(new URLSearchParams(first.calls[0].options.body).get("username"), "svc-ci");
+  const explicit = fakeNacos();
+  assert.equal((await createNacosClient({ ...config, usernameEnv, passwordEnv }, explicit.fetcher).list()).configured, true);
+  assert.equal(explicit.calls.length, 2);
 });
 test("仅使用登录和只读白名单，凭据不进 URL，令牌缓存", async () => {
   const { client, calls } = fixture();
@@ -74,7 +83,8 @@ test("拒绝不安全的服务端配置，未读密码不发送请求", async ()
   for (const serverUrl of ["http://nacos.corp.example/nacos", withCredentials.href, "https://nacos.corp.example/?accessToken=x"]) {
     await rejects(createNacosClient({ ...nacosConfig, serverUrl }, () => { throw 0; }).list(), "config");
   }
-  await rejects(createNacosClient({ ...nacosConfig, passwordEnv: "MISSING_NACOS_TEST_SECRET" }).list(), "config");
+  delete process.env.TEST_NACOS_PASSWORD;
+  await rejects(createNacosClient(nacosConfig, () => { throw 0; }).list(), "config");
 });
 test("查询、路径和版本输入在联网前验证", async () => {
   const { client, calls } = fixture();
@@ -141,6 +151,7 @@ test("下载次数与命名空间透传，零值保留，缺失或异常统计�
   assert.equal((await client.list()).items[0].namespaceId, "public", "older responses use the queried namespace");
   item.namespaceId = "other-namespace";
   await rejects(client.list(), "response");
+  await rejects(client.load({ skillName: "example-skill", version: "1.0.0" }), "response");
 });
 
 test("搜索、刷新和跨页均请求服务端下载降序，不重排或抓取其他页面", async () => {

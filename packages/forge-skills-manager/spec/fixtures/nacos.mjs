@@ -1,5 +1,15 @@
 import { zipSync, strToU8 } from "fflate";
 export const nacosConfig = { serverUrl: "https://nacos.corp.example/nacos", namespaceId: "public", usernameEnv: "TEST_NACOS_USER", passwordEnv: "TEST_NACOS_PASSWORD" };
+export function useNacosEnvironment(context, overrides = {}) {
+  const values = { TEST_NACOS_USER: "svc-ci", TEST_NACOS_PASSWORD: "synthetic-password", FORGE_NACOS_USERNAME: "svc-ci", FORGE_NACOS_PASSWORD: "synthetic-password" };
+  Object.assign(values, overrides);
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  const assign = entries => Object.entries(entries).forEach(([key, value]) => {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  });
+  context.after(() => assign(previous));
+  assign(values);
+}
 export const skillDocument = name => `---\nname: ${name}\ndescription: 合成测试技能\n---\nTest instructions.\n`;
 export function fakeNacos() {
   const calls = [];

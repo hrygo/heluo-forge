@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveProvenance, attachProvenance } from '../src/provenance.ts';
+import { resolveProvenance, attachProvenance } from '../lib/provenance.js';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,17 @@ import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 
 const input = (source) => ({ rootPath: '/skills', skillPath: '/skills/example/SKILL.md', name: 'example', installSource: { owner: 'org', name: 'repo', ref: 'main', subdirectory: '', path: 'skills/example', id: 'x', commit: null, ...source } });
+
+test('unknown lock and metadata reader defects remain visible', async () => {
+  const original = fs.stat;
+  const defect = new ReferenceError('synthetic provenance defect');
+  try {
+    fs.stat = async () => { throw defect; };
+    syncBuiltinESMExports();
+    await assert.rejects(attachProvenance({ roots: [{ path: '/synthetic', skills: [] }] }), caught => caught === defect);
+    await assert.rejects(resolveProvenance({ rootPath: '/synthetic', skillPath: '/synthetic/example/SKILL.md', name: 'example' }, null), caught => caught === defect);
+  } finally { fs.stat = original; syncBuiltinESMExports(); }
+});
 
 test('install identity keeps actual host and never invents a GitHub link', async () => {
   const a = await resolveProvenance(input({ url: 'https://gitlab.com/org/repo.git' }), null);

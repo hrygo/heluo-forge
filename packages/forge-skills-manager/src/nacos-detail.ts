@@ -36,6 +36,7 @@ interface Props {
   error: string | null;
   installing: boolean;
   uncertain: boolean;
+  checking: boolean;
   target: DestinationValue;
   workspaces: WorkspaceRow[];
   roots: UserDestination[];
@@ -45,6 +46,7 @@ interface Props {
   onInstall: () => void;
   onClose: () => void;
   onCancel: () => void;
+  onCheck: () => void;
 }
 
 export function NacosDetailDialog(props: Props) {
@@ -61,10 +63,12 @@ export function NacosDetailDialog(props: Props) {
     footer: h("div", { className: "dssm-nacos-footer" },
       h("span", { className: "dssm-nacos-note" }, t("nacos.enableHint")),
       h("div", { className: "dssm-nacos-actions" },
+        uncertain ? h(Button, { variant: "outline", size: "sm", disabled: props.checking, onClick: props.onCheck }, t("nacos.checkResult")) : null,
         h(Button, { variant: "outline", size: "sm", onClick: installing ? props.onCancel : props.onClose }, t(installing ? "btn.cancel" : "btn.close")),
         h(Button, { variant: "primary", size: "sm", disabled: !detail || loading || installing || uncertain || !props.ready, onClick: props.onInstall }, t(installing ? "nacos.downloading" : "nacos.download")))),
   },
   h("div", { className: "dssm-nacos-detail" },
+    uncertain ? h("p", { className: "dssm-nacos-note", role: "status" }, t("nacos.pending")) : null,
     h("div", { className: "dssm-nacos-overview" },
       h("span", { className: "dssm-nacos-version" }, t("nacos.version", { version: selected.version })),
       h("p", null, selected.description || t("nacos.noDescription"))),

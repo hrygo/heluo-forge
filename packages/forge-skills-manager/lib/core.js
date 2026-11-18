@@ -1,6 +1,9 @@
 import { parseSkillDoc } from "./skill-document.js";
 import { parseSkillDoc as parseSkillDoc2 } from "./skill-document.js";
 import { isEnterpriseSkillName, reservedSkillError } from "./skill-policy.js";
+import { writeFileAtomically } from "./file-writes.js";
+import { createManagerStateStore } from "./manager-state.js";
+import { isExpectedOperationError } from "./operation-errors.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -896,24 +899,11 @@ async function removeCustomSource(key) {
   await writeRootPathConfig(config, {
     customSources: config.customSources.filter((item) => item.id !== id)
   });
-  try {
-    const raw = await fs.readFile(managerStatePath(), "utf8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      let dirty = false;
-      for (const field of ["customNotes", "categories", "categoryMembers", "categoryOrder"]) {
-        if (parsed[field] && typeof parsed[field] === "object" && parsed[field][id]) {
-          delete parsed[field][id];
-          dirty = true;
-        }
-      }
-      if (dirty) {
-        await writeFileAtomically(managerStatePath(), `${JSON.stringify(parsed, null, 2)}
-`);
-      }
+  await managerState.update((state2) => {
+    for (const field of ["sources", "disabledSkills", "enabledSkills", "customNotes", "categories", "categoryMembers", "categoryOrder"]) {
+      if (state2[field]) delete state2[field][id];
     }
-  } catch {
-  }
+  }, { force: true });
   return { ok: true, removed: id };
 }
 async function collectSkillDirectories(root) {
@@ -1337,20 +1327,6 @@ async function movePathWithFallback(source, destination, options = {}) {
     cleanupError = error;
   }
   return { copied: true, cleanupError, quarantine };
-}
-async function writeFileAtomically(path, content) {
-  const temp = join(
-    dirname(path),
-    `.${basename(path)}.dssm-${randomUUID()}.tmp`
-  );
-  try {
-    await fs.writeFile(temp, content, "utf8");
-    await fs.rename(temp, path);
-  } catch (caught) {
-    const error = caught;
-    await fs.rm(temp, { force: true }).catch(() => void 0);
-    throw error;
-  }
 }
 function parseBoolValue(raw) {
   const v = unquote(raw).trim().toLowerCase();
@@ -1868,39 +1844,17 @@ function normalizeCategoryOrder(value, categories) {
   }
   return order;
 }
-async function readManagerState() {
-  try {
-    const raw = await fs.readFile(managerStatePath(), "utf8");
-    const parsed = migrateManagerStateDocument(JSON.parse(raw));
-    if (!validManagerStateDocument(parsed))
-      throw codedError("invalid manager state schema", "error.state.invalid");
-    return {
-      state: normalizeManagerState(parsed),
-      warning: null,
-      writable: true
-    };
-  } catch (caught) {
-    const error = caught;
-    if (error && error.code === "ENOENT")
-      return { state: defaultManagerState(), warning: null, writable: true };
-    return {
-      state: failClosedManagerState(),
-      writable: false,
-      warning: {
-        code: "warning.state.invalid",
-        params: { path: managerStatePath() },
-        error: `\u6280\u80FD\u7BA1\u7406\u5668\u72B6\u6001\u6587\u4EF6\u4E0D\u53EF\u8BFB\uFF0C\u6240\u6709\u6280\u80FD\u5DF2\u5B89\u5168\u505C\u7528\u4E14\u72B6\u6001\u5199\u5165\u5DF2\u9501\u5B9A: ${managerStatePath()}`
-      }
-    };
-  }
-}
-async function writeManagerState(value) {
-  await fs.mkdir(managerHomePath(), { recursive: true });
-  await writeFileAtomically(
-    managerStatePath(),
-    `${JSON.stringify(normalizeManagerState(value), null, 2)}
-`
-  );
+const managerState = createManagerStateStore({
+  path: managerStatePath,
+  empty: defaultManagerState,
+  fallback: failClosedManagerState,
+  migrate: migrateManagerStateDocument,
+  validate: validManagerStateDocument,
+  normalize: normalizeManagerState,
+  writeRejected: invalidManagerStateWrite
+});
+function readManagerState() {
+  return managerState.read();
 }
 function managerSkillOverride(policy, rootKey, name, policyAliases = []) {
   if ((policy.enabledSkills[rootKey] || []).includes(name)) return true;
@@ -1963,14 +1917,15 @@ async function setEntryLocation(location) {
   if (location !== "both" && location !== "sidebar" && location !== "settings") {
     throw codedError("entryLocation must be one of 'both', 'sidebar', or 'settings'", "error.proto.invalidParams");
   }
-  const current = await readManagerState();
-  if (current.writable === false) {
+  const result = await managerState.update((state2) => {
+    state2.entryLocation = location;
+    state2.sidebarEntry = location !== "settings";
+    return location;
+  });
+  if (typeof result !== "string") {
     throw codedError("manager state file is read-only", "error.state.invalid");
   }
-  current.state.entryLocation = location;
-  current.state.sidebarEntry = location !== "settings";
-  await writeManagerState(current.state);
-  return location;
+  return result;
 }
 async function setSourceEnabled(key, enabled, log, options = {}) {
   let root = rootByKey(key);
@@ -1980,10 +1935,11 @@ async function setSourceEnabled(key, enabled, log, options = {}) {
     root = options.presetRoots.find((item) => item.key === key);
   if (!root || root.kind === "project-dsh" || !root.toggleable)
     return readonlyError("toggle");
-  const current = await readManagerState();
-  if (current.writable === false) return invalidManagerStateWrite();
-  current.state.sources[root.key] = enabled === true;
-  await writeManagerState(current.state);
+  const rootKey = root.key;
+  const updated = await managerState.update((state2) => {
+    state2.sources[rootKey] = enabled === true;
+  });
+  if (updated) return updated;
   if (log)
     log(
       enabled ? "source-enable" : "source-disable",
@@ -2099,11 +2055,8 @@ async function setPolicySkillEnabled(root, name, enabled, log) {
   const definition = await checkedPolicyRootDefinition(root);
   if (definition && definition.ok === false) return definition;
   if (!definition) return readonlyError("toggle");
-  const current = await readManagerState();
-  if (current.writable === false) return invalidManagerStateWrite();
-  const result = await applyPolicySkillEnabled(definition, name, enabled, current.state);
+  const result = await managerState.update((state2) => applyPolicySkillEnabled(definition, name, enabled, state2));
   if (result && result.ok === false) return result;
-  await writeManagerState(current.state);
   if (log)
     log(
       enabled ? "policy-enable" : "policy-disable",
@@ -2130,16 +2083,13 @@ async function setSkillNote(key, skillName, noteText, log, options = {}) {
   const text = String(noteText || "").trim();
   if (text.length > SKILL_NOTE_MAX)
     return categoryError("error.note.tooLarge", `\u81EA\u5B9A\u4E49\u7B80\u4ECB\u8FC7\u957F\uFF08\u6700\u591A ${SKILL_NOTE_MAX} \u4E2A\u5B57\u7B26\uFF09`, { max: SKILL_NOTE_MAX });
-  const current = await readManagerState();
-  if (current.writable === false) return invalidManagerStateWrite();
-  const customNotes = current.state.customNotes || (current.state.customNotes = /* @__PURE__ */ Object.create(null));
-  if (!customNotes[root.key]) customNotes[root.key] = /* @__PURE__ */ Object.create(null);
-  if (text) {
-    customNotes[root.key][skillName] = text;
-  } else {
-    delete customNotes[root.key][skillName];
-  }
-  await writeManagerState(current.state);
+  const updated = await managerState.update((state2) => {
+    const customNotes = state2.customNotes || (state2.customNotes = /* @__PURE__ */ Object.create(null));
+    if (!customNotes[root.key]) customNotes[root.key] = /* @__PURE__ */ Object.create(null);
+    if (text) customNotes[root.key][skillName] = text;
+    else delete customNotes[root.key][skillName];
+  });
+  if (updated) return updated;
   if (log) log("skill-note", `${root.key}/${skillName} \u66F4\u65B0\u81EA\u5B9A\u4E49\u7B80\u4ECB: ${text ? `"${text}"` : "\u5DF2\u6E05\u7A7A"}`);
   return { root: root.key, name: skillName, note: text || null };
 }
@@ -2153,158 +2103,168 @@ async function resolvedCategoryRoot(key, options = {}) {
   if (!PROJECT_ROOT_KEY_RE.test(rootKey)) return null;
   return (await projectRoots(options.projectCwds)).find((item) => item.key === rootKey) || null;
 }
-async function writableCategoryState(key, options = {}) {
+async function writableCategoryState(key, state2, options = {}) {
   const root = await resolvedCategoryRoot(key, options);
   if (!root) return categoryError("error.category.root", `\u6280\u80FD\u6765\u6E90\u4E0D\u5B58\u5728: ${key}`, { root: key });
-  const current = await readManagerState();
-  if (current.writable === false) return invalidManagerStateWrite();
-  if (!current.state.categories[root.key]) current.state.categories[root.key] = [];
-  if (!current.state.categoryMembers[root.key]) current.state.categoryMembers[root.key] = /* @__PURE__ */ Object.create(null);
-  if (!current.state.categoryOrder[root.key]) current.state.categoryOrder[root.key] = /* @__PURE__ */ Object.create(null);
-  return { rootKey: root.key, root, state: current.state };
+  if (!state2.categories[root.key]) state2.categories[root.key] = [];
+  if (!state2.categoryMembers[root.key]) state2.categoryMembers[root.key] = /* @__PURE__ */ Object.create(null);
+  if (!state2.categoryOrder[root.key]) state2.categoryOrder[root.key] = /* @__PURE__ */ Object.create(null);
+  return { rootKey: root.key, root, state: state2 };
 }
 async function createCategory(key, name, log, options = {}) {
-  const ready = await writableCategoryState(key, options);
-  if ("ok" in ready) return ready;
-  const label = String(name || "").trim();
-  if (!label || label.length > CATEGORY_NAME_MAX)
-    return categoryError("error.category.name", "\u5206\u7C7B\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A\uFF0C\u4E14\u4E0D\u80FD\u8D85\u8FC7 24 \u4E2A\u5B57\u7B26");
-  if (ready.state.categories[ready.rootKey].some((item) => item.name === label))
-    return categoryError("error.category.duplicate", `\u5DF2\u6709\u540C\u540D\u5206\u7C7B: ${label}`, { name: label });
-  const category = { id: randomBytes(8).toString("hex"), name: label };
-  ready.state.categories[ready.rootKey].push(category);
-  ready.state.categoryOrder[ready.rootKey][category.id] = [];
-  await writeManagerState(ready.state);
-  if (log) log("category-create", `\u5728 ${ready.rootKey} \u6DFB\u52A0\u5206\u7C7B ${label}`);
-  return { root: ready.rootKey, category };
+  const result = await managerState.update(async (state2) => {
+    const ready = await writableCategoryState(key, state2, options);
+    if ("ok" in ready) return ready;
+    const label = String(name || "").trim();
+    if (!label || label.length > CATEGORY_NAME_MAX)
+      return categoryError("error.category.name", "\u5206\u7C7B\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A\uFF0C\u4E14\u4E0D\u80FD\u8D85\u8FC7 24 \u4E2A\u5B57\u7B26");
+    if (ready.state.categories[ready.rootKey].some((item) => item.name === label))
+      return categoryError("error.category.duplicate", `\u5DF2\u6709\u540C\u540D\u5206\u7C7B: ${label}`, { name: label });
+    const category = { id: randomBytes(8).toString("hex"), name: label };
+    ready.state.categories[ready.rootKey].push(category);
+    ready.state.categoryOrder[ready.rootKey][category.id] = [];
+    return { root: ready.rootKey, category };
+  });
+  if (!("ok" in result) && log) log("category-create", `\u5728 ${result.root} \u6DFB\u52A0\u5206\u7C7B ${result.category.name}`);
+  return result;
 }
 async function renameCategory(key, id, name, log, options = {}) {
-  const ready = await writableCategoryState(key, options);
-  if ("ok" in ready) return ready;
-  const label = String(name || "").trim();
-  const list = ready.state.categories[ready.rootKey];
-  const category = list.find((item) => item.id === id);
-  if (!category) return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id });
-  if (!label || label.length > CATEGORY_NAME_MAX)
-    return categoryError("error.category.name", "\u5206\u7C7B\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A\uFF0C\u4E14\u4E0D\u80FD\u8D85\u8FC7 24 \u4E2A\u5B57\u7B26");
-  if (list.some((item) => item !== category && item.name === label))
-    return categoryError("error.category.duplicate", `\u5DF2\u6709\u540C\u540D\u5206\u7C7B: ${label}`, { name: label });
-  category.name = label;
-  await writeManagerState(ready.state);
-  if (log) log("category-rename", `\u91CD\u547D\u540D ${ready.rootKey} \u5206\u7C7B\u4E3A ${label}`);
-  return { root: ready.rootKey, category };
+  const result = await managerState.update(async (state2) => {
+    const ready = await writableCategoryState(key, state2, options);
+    if ("ok" in ready) return ready;
+    const label = String(name || "").trim();
+    const list = ready.state.categories[ready.rootKey];
+    const category = list.find((item) => item.id === id);
+    if (!category) return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id });
+    if (!label || label.length > CATEGORY_NAME_MAX)
+      return categoryError("error.category.name", "\u5206\u7C7B\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A\uFF0C\u4E14\u4E0D\u80FD\u8D85\u8FC7 24 \u4E2A\u5B57\u7B26");
+    if (list.some((item) => item !== category && item.name === label))
+      return categoryError("error.category.duplicate", `\u5DF2\u6709\u540C\u540D\u5206\u7C7B: ${label}`, { name: label });
+    category.name = label;
+    return { root: ready.rootKey, category };
+  });
+  if (!("ok" in result) && log) log("category-rename", `\u91CD\u547D\u540D ${result.root} \u5206\u7C7B\u4E3A ${result.category.name}`);
+  return result;
 }
 async function deleteCategory(key, id, log, options = {}) {
-  const ready = await writableCategoryState(key, options);
-  if ("ok" in ready) return ready;
-  const list = ready.state.categories[ready.rootKey];
-  if (!list.some((item) => item.id === id)) return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id });
-  ready.state.categories[ready.rootKey] = list.filter((item) => item.id !== id);
-  delete ready.state.categoryOrder[ready.rootKey][id];
-  for (const [skillName, categoryId] of Object.entries(ready.state.categoryMembers[ready.rootKey])) {
-    if (categoryId === id) delete ready.state.categoryMembers[ready.rootKey][skillName];
-  }
-  await writeManagerState(ready.state);
-  if (log) log("category-delete", `\u5220\u9664 ${ready.rootKey} \u5206\u7C7B ${id}\uFF0C\u6280\u80FD\u7559\u5728\u672A\u5206\u7C7B`);
-  return { root: ready.rootKey, id };
+  const result = await managerState.update(async (state2) => {
+    const ready = await writableCategoryState(key, state2, options);
+    if ("ok" in ready) return ready;
+    const list = ready.state.categories[ready.rootKey];
+    if (!list.some((item) => item.id === id)) return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id });
+    ready.state.categories[ready.rootKey] = list.filter((item) => item.id !== id);
+    delete ready.state.categoryOrder[ready.rootKey][id];
+    for (const [skillName, categoryId] of Object.entries(ready.state.categoryMembers[ready.rootKey])) {
+      if (categoryId === id) delete ready.state.categoryMembers[ready.rootKey][skillName];
+    }
+    return { root: ready.rootKey, id };
+  });
+  if (!("ok" in result) && log) log("category-delete", `\u5220\u9664 ${result.root} \u5206\u7C7B ${id}\uFF0C\u6280\u80FD\u7559\u5728\u672A\u5206\u7C7B`);
+  return result;
 }
 async function assignSkillCategory(key, skillName, categoryId, log, options = {}) {
-  const ready = await writableCategoryState(key, options);
-  if ("ok" in ready) return ready;
-  if (!validStateSkillName(skillName))
-    return categoryError("error.skill.notFound", `\u6280\u80FD\u4E0D\u5B58\u5728: ${skillName}`, { name: skillName });
-  if (categoryId) {
-    const entry = await resolveEntry(ready.root, skillName);
-    if (!entry)
+  const result = await managerState.update(async (state2) => {
+    const ready = await writableCategoryState(key, state2, options);
+    if ("ok" in ready) return ready;
+    if (!validStateSkillName(skillName))
       return categoryError("error.skill.notFound", `\u6280\u80FD\u4E0D\u5B58\u5728: ${skillName}`, { name: skillName });
-    if (!ready.state.categories[ready.rootKey].some((item) => item.id === categoryId))
-      return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id: categoryId });
-    const previousId = ready.state.categoryMembers[ready.rootKey][skillName] || "";
-    if (previousId !== categoryId) {
-      ready.state.categoryOrder[ready.rootKey][previousId] = (ready.state.categoryOrder[ready.rootKey][previousId] || []).filter((name) => name !== skillName);
-      const targetOrder = ready.state.categoryOrder[ready.rootKey][categoryId] || [];
-      if (!targetOrder.includes(skillName)) targetOrder.push(skillName);
-      ready.state.categoryOrder[ready.rootKey][categoryId] = targetOrder;
+    if (categoryId) {
+      const entry = await resolveEntry(ready.root, skillName);
+      if (!entry)
+        return categoryError("error.skill.notFound", `\u6280\u80FD\u4E0D\u5B58\u5728: ${skillName}`, { name: skillName });
+      if (!ready.state.categories[ready.rootKey].some((item) => item.id === categoryId))
+        return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id: categoryId });
+      const previousId = ready.state.categoryMembers[ready.rootKey][skillName] || "";
+      if (previousId !== categoryId) {
+        ready.state.categoryOrder[ready.rootKey][previousId] = (ready.state.categoryOrder[ready.rootKey][previousId] || []).filter((name) => name !== skillName);
+        const targetOrder = ready.state.categoryOrder[ready.rootKey][categoryId] || [];
+        if (!targetOrder.includes(skillName)) targetOrder.push(skillName);
+        ready.state.categoryOrder[ready.rootKey][categoryId] = targetOrder;
+      }
+      ready.state.categoryMembers[ready.rootKey][skillName] = categoryId;
+    } else {
+      const previousId = ready.state.categoryMembers[ready.rootKey][skillName] || "";
+      if (previousId) {
+        ready.state.categoryOrder[ready.rootKey][previousId] = (ready.state.categoryOrder[ready.rootKey][previousId] || []).filter((name) => name !== skillName);
+        const looseOrder = ready.state.categoryOrder[ready.rootKey][""] || [];
+        if (!looseOrder.includes(skillName)) looseOrder.push(skillName);
+        ready.state.categoryOrder[ready.rootKey][""] = looseOrder;
+      }
+      delete ready.state.categoryMembers[ready.rootKey][skillName];
     }
-    ready.state.categoryMembers[ready.rootKey][skillName] = categoryId;
-  } else {
-    const previousId = ready.state.categoryMembers[ready.rootKey][skillName] || "";
-    if (previousId) {
-      ready.state.categoryOrder[ready.rootKey][previousId] = (ready.state.categoryOrder[ready.rootKey][previousId] || []).filter((name) => name !== skillName);
-      const looseOrder = ready.state.categoryOrder[ready.rootKey][""] || [];
-      if (!looseOrder.includes(skillName)) looseOrder.push(skillName);
-      ready.state.categoryOrder[ready.rootKey][""] = looseOrder;
-    }
-    delete ready.state.categoryMembers[ready.rootKey][skillName];
-  }
-  await writeManagerState(ready.state);
-  if (log) log("category-assign", `${ready.rootKey}/${skillName} \u5F52\u5165 ${categoryId || "\u672A\u5206\u7C7B"}`);
-  return { root: ready.rootKey, name: skillName, categoryId: categoryId || null };
+    return { root: ready.rootKey, name: skillName, categoryId: categoryId || null };
+  });
+  if (!("ok" in result) && log) log("category-assign", `${result.root}/${skillName} \u5F52\u5165 ${categoryId || "\u672A\u5206\u7C7B"}`);
+  return result;
 }
 async function moveSkillInCategory(key, skillName, categoryId, targetName, position = "before", log, options = {}) {
-  const ready = await writableCategoryState(key, options);
-  if ("ok" in ready) return ready;
-  if (!validStateSkillName(skillName))
-    return categoryError("error.skill.notFound", `\u6280\u80FD\u4E0D\u5B58\u5728: ${skillName}`, { name: skillName });
-  if (categoryId && !ready.state.categories[ready.rootKey].some((item) => item.id === categoryId))
-    return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id: categoryId });
-  if (position !== "before" && position !== "after")
-    return categoryError("error.category.position", "\u6280\u80FD\u6392\u5E8F\u4F4D\u7F6E\u65E0\u6548");
-  const entries = (await scanEntries(ready.root)).entries.map((entry) => entry.name);
-  if (!entries.includes(skillName))
-    return categoryError("error.skill.notFound", `\u6280\u80FD\u4E0D\u5B58\u5728: ${skillName}`, { name: skillName });
-  if (targetName && (!validStateSkillName(targetName) || !entries.includes(targetName)))
-    return categoryError("error.skill.notFound", `\u6392\u5E8F\u76EE\u6807\u4E0D\u5B58\u5728: ${targetName}`, { name: targetName });
-  const members = ready.state.categoryMembers[ready.rootKey];
-  const orders = ready.state.categoryOrder[ready.rootKey];
-  const previousId = members[skillName] || "";
-  const orderedNames = (id) => {
-    const available = entries.filter((name) => (members[name] || "") === id).sort((a, b) => a.localeCompare(b));
-    const availableSet = new Set(available);
-    const saved = (orders[id] || []).filter((name) => availableSet.has(name));
-    return [...saved, ...available.filter((name) => !saved.includes(name))];
-  };
-  if (targetName && (members[targetName] || "") !== categoryId)
-    return categoryError("error.category.target", "\u6392\u5E8F\u76EE\u6807\u4E0D\u5C5E\u4E8E\u76EE\u6807\u5206\u7C7B", { name: targetName, category: categoryId });
-  const sourceOrder = orderedNames(previousId).filter((name) => name !== skillName);
-  const targetOrder = previousId === categoryId ? sourceOrder : orderedNames(categoryId).filter((name) => name !== skillName);
-  let index = targetName ? targetOrder.indexOf(targetName) : -1;
-  if (index < 0) index = targetOrder.length;
-  else if (position === "after") index += 1;
-  targetOrder.splice(index, 0, skillName);
-  if (previousId !== categoryId) orders[previousId] = sourceOrder;
-  orders[categoryId] = targetOrder;
-  if (categoryId) members[skillName] = categoryId;
-  else delete members[skillName];
-  await writeManagerState(ready.state);
-  if (log) log("category-order", `${ready.rootKey}/${skillName} \u79FB\u81F3 ${categoryId || "\u672A\u5206\u7C7B"} ${position} ${targetName || "\u672B\u5C3E"}`);
-  return { root: ready.rootKey, name: skillName, categoryId: categoryId || null, order: targetOrder };
+  const result = await managerState.update(async (state2) => {
+    const ready = await writableCategoryState(key, state2, options);
+    if ("ok" in ready) return ready;
+    if (!validStateSkillName(skillName))
+      return categoryError("error.skill.notFound", `\u6280\u80FD\u4E0D\u5B58\u5728: ${skillName}`, { name: skillName });
+    if (categoryId && !ready.state.categories[ready.rootKey].some((item) => item.id === categoryId))
+      return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id: categoryId });
+    if (position !== "before" && position !== "after")
+      return categoryError("error.category.position", "\u6280\u80FD\u6392\u5E8F\u4F4D\u7F6E\u65E0\u6548");
+    const entries = (await scanEntries(ready.root)).entries.map((entry) => entry.name);
+    if (!entries.includes(skillName))
+      return categoryError("error.skill.notFound", `\u6280\u80FD\u4E0D\u5B58\u5728: ${skillName}`, { name: skillName });
+    if (targetName && (!validStateSkillName(targetName) || !entries.includes(targetName)))
+      return categoryError("error.skill.notFound", `\u6392\u5E8F\u76EE\u6807\u4E0D\u5B58\u5728: ${targetName}`, { name: targetName });
+    const members = ready.state.categoryMembers[ready.rootKey];
+    const orders = ready.state.categoryOrder[ready.rootKey];
+    const previousId = members[skillName] || "";
+    const orderedNames = (id) => {
+      const available = entries.filter((name) => (members[name] || "") === id).sort((a, b) => a.localeCompare(b));
+      const availableSet = new Set(available);
+      const saved = (orders[id] || []).filter((name) => availableSet.has(name));
+      return [...saved, ...available.filter((name) => !saved.includes(name))];
+    };
+    if (targetName && (members[targetName] || "") !== categoryId)
+      return categoryError("error.category.target", "\u6392\u5E8F\u76EE\u6807\u4E0D\u5C5E\u4E8E\u76EE\u6807\u5206\u7C7B", { name: targetName, category: categoryId });
+    const sourceOrder = orderedNames(previousId).filter((name) => name !== skillName);
+    const targetOrder = previousId === categoryId ? sourceOrder : orderedNames(categoryId).filter((name) => name !== skillName);
+    let index = targetName ? targetOrder.indexOf(targetName) : -1;
+    if (index < 0) index = targetOrder.length;
+    else if (position === "after") index += 1;
+    targetOrder.splice(index, 0, skillName);
+    if (previousId !== categoryId) orders[previousId] = sourceOrder;
+    orders[categoryId] = targetOrder;
+    if (categoryId) members[skillName] = categoryId;
+    else delete members[skillName];
+    return { root: ready.rootKey, name: skillName, categoryId: categoryId || null, order: targetOrder };
+  });
+  if (!("ok" in result) && log) log("category-order", `${result.root}/${skillName} \u79FB\u81F3 ${categoryId || "\u672A\u5206\u7C7B"} ${position} ${targetName || "\u672B\u5C3E"}`);
+  return result;
 }
 async function setCategoryEnabled(key, categoryId, enabled, log, options = {}) {
-  const ready = await writableCategoryState(key, options);
-  if ("ok" in ready) return ready;
-  const root = ready.root;
-  if (categoryId && categoryId !== "*" && !ready.state.categories[ready.rootKey].some((item) => item.id === categoryId))
-    return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id: categoryId });
-  const scanned = (await scanEntries(root)).entries.map((entry) => entry.name);
-  const members = ready.state.categoryMembers[ready.rootKey];
-  const names = categoryId === "*" ? scanned : categoryId ? Object.entries(members).filter(([, id]) => id === categoryId).map(([name]) => name) : scanned.filter((name) => !members[name]);
-  const skipped = [];
-  const changedNames = [];
-  for (const name of names) {
-    const result = await applyPolicySkillEnabled(root, name, enabled, ready.state);
-    if (result && result.ok === false) {
-      if (result.code === "error.skill.notLoadable" || result.code === "error.skill.noFrontmatter") skipped.push(name);
-      else if (result.code !== "error.skill.notFound") return result;
-      continue;
+  const result = await managerState.update(async (state2) => {
+    const ready = await writableCategoryState(key, state2, options);
+    if ("ok" in ready) return ready;
+    const root = ready.root;
+    if (categoryId && categoryId !== "*" && !ready.state.categories[ready.rootKey].some((item) => item.id === categoryId))
+      return categoryError("error.category.notFound", "\u5206\u7C7B\u4E0D\u5B58\u5728", { id: categoryId });
+    const scanned = (await scanEntries(root)).entries.map((entry) => entry.name);
+    const members = ready.state.categoryMembers[ready.rootKey];
+    const names = categoryId === "*" ? scanned : categoryId ? Object.entries(members).filter(([, id]) => id === categoryId).map(([name]) => name) : scanned.filter((name) => !members[name]);
+    const skipped = [];
+    const changedNames = [];
+    for (const name of names) {
+      const result2 = await applyPolicySkillEnabled(root, name, enabled, ready.state);
+      if (result2 && result2.ok === false) {
+        if (result2.code === "error.skill.notLoadable" || result2.code === "error.skill.noFrontmatter") skipped.push(name);
+        else if (result2.code !== "error.skill.notFound") return result2;
+        continue;
+      }
+      changedNames.push(name);
     }
-    changedNames.push(name);
-  }
-  if (changedNames.length) await writeManagerState(ready.state);
-  if (log)
-    for (const name of changedNames)
-      log(enabled ? "policy-enable" : "policy-disable", `${enabled ? "\u542F\u7528" : "\u505C\u7528"} ${ready.rootKey}/${name}\uFF08\u672C\u5730\u7B56\u7565\uFF0C\u6E90\u6587\u4EF6\u4E0D\u53D8\uFF09`);
-  return { root: ready.rootKey, categoryId: categoryId || null, enabled: enabled === true, changed: changedNames.length, skipped };
+    return { root: ready.rootKey, categoryId: categoryId || null, enabled: enabled === true, changed: changedNames.length, skipped, changedNames };
+  });
+  if ("ok" in result) return result;
+  if (log) for (const name of result.changedNames) log(enabled ? "policy-enable" : "policy-disable", `${enabled ? "\u542F\u7528" : "\u505C\u7528"} ${result.root}/${name}\uFF08\u672C\u5730\u7B56\u7565\uFF0C\u6E90\u6587\u4EF6\u4E0D\u53D8\uFF09`);
+  const { changedNames: _changedNames, ...response } = result;
+  return response;
 }
 async function safeExistingEntryPaths(root, name) {
   const paths = [];
@@ -2638,23 +2598,22 @@ async function forgetCategoryMember(metadata) {
     } catch {
     }
   }
-  const current = await readManagerState();
-  if (current.writable === false) return;
-  const members = current.state.categoryMembers[key];
-  const orders = current.state.categoryOrder[key];
-  const hasMember = !!(members && members[metadata.name]);
-  const hasOrder = !!(orders && Object.values(orders).some((names) => names.includes(metadata.name)));
-  const hasNote = !!current.state.customNotes?.[key]?.[metadata.name];
-  if (!hasMember && !hasOrder && !hasNote) return;
-  if (members) delete members[metadata.name];
-  if (orders) {
-    for (const id of Object.keys(orders))
-      orders[id] = orders[id].filter((name) => name !== metadata.name);
-  }
-  if (current.state.customNotes?.[key]?.[metadata.name]) {
-    delete current.state.customNotes[key][metadata.name];
-  }
-  await writeManagerState(current.state);
+  await managerState.update((state2) => {
+    const members = state2.categoryMembers[key];
+    const orders = state2.categoryOrder[key];
+    const hasMember = !!(members && members[metadata.name]);
+    const hasOrder = !!(orders && Object.values(orders).some((names) => names.includes(metadata.name)));
+    const hasNote = !!state2.customNotes?.[key]?.[metadata.name];
+    if (!hasMember && !hasOrder && !hasNote) return;
+    if (members) delete members[metadata.name];
+    if (orders) {
+      for (const id of Object.keys(orders))
+        orders[id] = orders[id].filter((name) => name !== metadata.name);
+    }
+    if (state2.customNotes?.[key]?.[metadata.name]) {
+      delete state2.customNotes[key][metadata.name];
+    }
+  });
 }
 async function permanentlyDeleteTrash(id, log) {
   const metadata = await readTrashMetadata(id);
@@ -2823,6 +2782,7 @@ async function preflightCandidates(pending, conflicts, failed) {
         await assertNoSymbolicLinks(candidate.source);
       } catch (caught) {
         const error = caught;
+        if (!isExpectedOperationError(caught)) throw caught;
         failed.push(
           attachCode(
             {
@@ -2942,6 +2902,7 @@ async function importSkill(source, log, options = {}) {
       candidates = await collectCandidates(source);
     } catch (caught) {
       const error = caught;
+      if (!isExpectedOperationError(caught)) throw caught;
       return attachCode(
         {
           ok: false,
@@ -3042,17 +3003,17 @@ async function importSkill(source, log, options = {}) {
   if (pending.some((item) => isEnterpriseSkillName(item.name)) || conflicts.some((item) => isEnterpriseSkillName(item.name))) return reservedSkillError("enterprise-*");
   if (!dryRun && options.beforeImport) await options.beforeImport(pending, conflicts, failed);
   if (options.disabledOnImport && pending.length) {
-    const policy = await readManagerState();
-    if (!policy.writable) return invalidManagerStateWrite();
-    const disabled = new Set(policy.state.disabledSkills[definition.key] || []);
-    const enabled = new Set(policy.state.enabledSkills[definition.key] || []);
-    for (const item of pending) {
-      disabled.add(item.name);
-      enabled.delete(item.name);
-    }
-    policy.state.disabledSkills[definition.key] = [...disabled].sort();
-    policy.state.enabledSkills[definition.key] = [...enabled].sort();
-    await writeManagerState(policy.state);
+    const updated = await managerState.update((state2) => {
+      const disabled = new Set(state2.disabledSkills[definition.key] || []);
+      const enabled = new Set(state2.enabledSkills[definition.key] || []);
+      for (const item of pending) {
+        disabled.add(item.name);
+        enabled.delete(item.name);
+      }
+      state2.disabledSkills[definition.key] = [...disabled].sort();
+      state2.enabledSkills[definition.key] = [...enabled].sort();
+    });
+    if (updated) return updated;
   }
   if (pending.length > 0 || conflict === "overwrite" && conflicts.length > 0) {
     await fs.mkdir(targetRoot, { recursive: true });
@@ -3064,6 +3025,7 @@ async function importSkill(source, log, options = {}) {
       if (log) log("import", `\u5BFC\u5165 ${p.source} -> ${p.dest}`);
     } catch (caught) {
       const e = caught;
+      if (!isExpectedOperationError(caught)) throw caught;
       failed.push(
         attachCode(
           { source: p.source, error: String(e && e.message ? e.message : e) },
@@ -3086,6 +3048,7 @@ async function importSkill(source, log, options = {}) {
         if (log) log("import-overwrite", `\u8986\u76D6\u5BFC\u5165 ${c.source} -> ${dest}`);
       } catch (caught) {
         const e = caught;
+        if (!isExpectedOperationError(caught)) throw caught;
         failed.push(
           attachCode(
             { source: c.source, error: String(e && e.message ? e.message : e) },
@@ -3279,6 +3242,7 @@ async function importUploadedSkill(input, log, options = {}) {
     return await importSkill(source, log, options);
   } catch (caught) {
     const error = caught;
+    if (!isExpectedOperationError(caught)) throw caught;
     return uploadError(error);
   } finally {
     await fs.rm(sessionRoot, { recursive: true, force: true }).catch(() => void 0);

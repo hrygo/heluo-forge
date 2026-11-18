@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname,join,resolve } from "node:path";
 import type { indexRegisteredWorkspaces } from "./core.js";
+import type { InstallationRecordPort } from "./local-ports.js";
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const repositoryInstallKeys = new Set(["dsh", "agents"]);
@@ -15,7 +16,7 @@ export function isRepositoryRootKey(key: unknown): boolean {
   if (normalized.startsWith("preset-") || normalized === "preset") return true;
   return repositoryInstallKeys.has(normalized);
 }
-export function createInstallationRecords(local: typeof import('./core.js')) {
+export function createInstallationRecords(local: InstallationRecordPort) {
 const { checkedRepositoryRootDefinition,projectRootForRecord,userRoots } = local;
 /** 解析 DSH、公共 Agent 以及用户自建的自定义预设模式。缺省和旧记录都属于 DSH。 */
 function repositoryInstallRoot(key: unknown = "dsh", presetRoots?: SkillRoot[]) {
