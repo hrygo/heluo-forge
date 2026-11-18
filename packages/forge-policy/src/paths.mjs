@@ -5,7 +5,7 @@
  * 任一步无法判定（非绝对路径、ELOOP、权限不足）都抛错，由门禁按拒绝处理。
  */
 import { realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, parse as parsePath, resolve as resolvePath, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse as parsePath, sep } from 'node:path';
 
 export class PolicyPathError extends Error {
   constructor(message, code, details = undefined) {
@@ -47,7 +47,7 @@ export function resolveProtectedRoots(templates = [], env = process.env) {
           { template: raw, variable },
         );
       }
-      value = rest === undefined || rest === '' ? fromEnv : join(fromEnv, rest);
+      value = rest === undefined || rest === '' ? fromEnv : `${fromEnv}${fromEnv.endsWith(sep) ? '' : sep}${rest}`;
     }
     if (!isAbsolute(value)) {
       throw new PolicyPathError(
@@ -56,38 +56,15 @@ export function resolveProtectedRoots(templates = [], env = process.env) {
         { template: raw },
       );
     }
-    return { raw, root: resolvePath(value) };
+    return { raw, root: value };
   });
-}
-
-function realpathDeepest(target, resolve) {
-  let current = target;
-  const trailing = [];
-  for (;;) {
-    try {
-      const real = resolve(current);
-      return trailing.length === 0 ? real : join(real, ...trailing.reverse());
-    } catch (error) {
-      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') {
-        throw new PolicyPathError(`cannot resolve "${target}": ${error?.code ?? error?.message}`, 'POLICY_PATH_UNRESOLVABLE', {
-          path: target,
-        });
-      }
-      const parent = dirname(current);
-      if (parent === current) {
-        throw new PolicyPathError(`cannot resolve "${target}"`, 'POLICY_PATH_UNRESOLVABLE', { path: target });
-      }
-      trailing.push(basename(current));
-      current = parent;
-    }
-  }
 }
 
 const CASE_INSENSITIVE = new Set(['darwin', 'win32']);
 
 /**
- * Canonicalize one candidate path for comparison: absolute, lexically folded,
- * symlink-resolved through the deepest existing ancestor, case-folded where the
+ * Canonicalize an absolute path for comparison: resolve symlinks before applying
+ * parent components, preserve missing components, and case-fold where the
  * platform is case-insensitive.
  *
  * @param {string} input candidate path
@@ -123,7 +100,7 @@ function resolvePhysically(input, resolve) {
   const { root } = parsePath(input);
   let current = root === '' ? sep : root;
   const relative = input.slice(root.length);
-  for (const part of relative.split(/[\\/]+/u)) {
+  for (const part of relative.split(sep === '\\' ? /[\\/]+/u : '/')) {
     if (part.length === 0 || part === '.') continue;
     if (part === '..') {
       current = dirname(current);
@@ -151,12 +128,10 @@ function resolvePhysically(input, resolve) {
  * @returns {{protected: boolean, root?: string, canonical: string}}
  */
 export function matchProtected(candidate, roots = [], options = {}) {
-  const platform = options.platform ?? process.platform;
   const canonical = canonicalize(candidate, options);
   for (const entry of roots) {
     const root = canonicalize(entry.root, options);
-    const separator = platform === 'win32' ? '\\' : sep;
-    if (canonical === root || canonical.startsWith(root.endsWith(separator) ? root : `${root}${separator}`)) {
+    if (canonical === root || canonical.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)) {
       return { protected: true, root: entry.raw, canonical };
     }
   }
