@@ -252,6 +252,10 @@ export interface InstallRecord {
         record: InstallRecord;
     };
 }
+export interface CatalogInstallation {
+    workspace?: string;
+    state: "downloaded" | "modified" | "pending" | "unavailable";
+}
 export interface CatalogInstallRecord {
     id: string;
     /** Nacos installs never auto-enable, including recovery. */

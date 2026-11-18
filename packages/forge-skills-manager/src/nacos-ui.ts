@@ -23,6 +23,7 @@ export const nacosLocales = {
     "nacos.downloadCountHint": "Nacos 资源下载统计，包含详情读取，不代表安装人数。",
     "nacos.loading": "正在读取企业技能库…", "nacos.refreshing": "正在刷新，暂时显示上次结果…", "nacos.detailLoading": "正在读取技能说明与完整资源…",
     "nacos.download": "下载到本地", "nacos.downloading": "正在下载…",
+    "nacos.downloaded": "已下载", "nacos.modified": "已下载 · 本地已修改", "nacos.installPending": "下载待确认", "nacos.installUnavailable": "下载状态暂不可核验，请检查本地技能后刷新。", "nacos.projectCopies": "项目技能（{count}）",
     "nacos.checkResult": "核对下载结果", "nacos.pending": "下载结果尚待确认，请核对结果或到本地技能页查看，勿重复下载。",
     "nacos.confirmed": "已确认 {name} 已下载，请在本地技能页查看当前启用状态。",
     "nacos.confirmedRefreshWarning": "已确认技能已下载，但本地列表刷新失败。请刷新技能页查看当前启用状态，勿重复下载。",
@@ -55,6 +56,7 @@ export const nacosLocales = {
     "nacos.downloadCountHint": "Nacos resource downloads, including detail views; not the number of people who installed this skill.",
     "nacos.loading": "Loading enterprise skills…", "nacos.refreshing": "Refreshing; showing previous results…", "nacos.detailLoading": "Loading skill instructions and complete resources…",
     "nacos.download": "Download locally", "nacos.downloading": "Downloading…",
+    "nacos.downloaded": "Downloaded", "nacos.modified": "Downloaded · Modified locally", "nacos.installPending": "Download awaiting confirmation", "nacos.installUnavailable": "Download status unavailable. Check local skills and refresh.", "nacos.projectCopies": "Projects ({count})",
     "nacos.checkResult": "Check download result", "nacos.pending": "The download result is unconfirmed. Check its status or local skills; do not download again.",
     "nacos.confirmed": "Confirmed that {name} was downloaded. Check its current enabled state in local skills.",
     "nacos.confirmedRefreshWarning": "The download is confirmed, but local skills could not refresh. Refresh to check the current enabled state; do not download again.",
@@ -119,11 +121,34 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
     const downloadKey = JSON.stringify([selected?.name, selected?.version, target.scope, target.workspace]);
     const pendingDownload = pendingDownloads.get(downloadKey);
     const uncertain = !!pendingDownload && !installing;
+    const chosenWorkspace = workspaces.find(row => row.registeredPaths[0] === target.workspace);
+    const workspacePath = chosenWorkspace?.projectRoot || chosenWorkspace?.path;
+    const samePath = (left: string, right: string) => /^[A-Za-z]:|^\\\\/.test(left)
+      ? left.replace(/\\/g, "/").toLowerCase() === right.replace(/\\/g, "/").toLowerCase() : left === right;
+    const installation = detail?.installations?.find(item => target.scope === "workspace"
+      ? !!item.workspace && !!workspacePath && samePath(item.workspace, workspacePath) : item.workspace === undefined);
+    const installed = installation?.state === "downloaded" || installation?.state === "modified";
+    const statusKey = (value: NonNullable<NacosSkill["installations"]>[number]["state"]) =>
+      value === "downloaded" ? "nacos.downloaded" : value === "modified" ? "nacos.modified" : value === "pending" ? "nacos.installPending" : "nacos.installUnavailable";
+
+    function downloadBadges(item: NacosSkill) {
+      const groups = new Map<string, { state: NonNullable<NacosSkill["installations"]>[number]["state"]; project: boolean; count: number }>();
+      for (const entry of item.installations || []) {
+        const project = entry.workspace !== undefined;
+        const key = JSON.stringify([entry.state, project]);
+        const group = groups.get(key);
+        if (group) group.count++;
+        else groups.set(key, { state: entry.state, project, count: 1 });
+      }
+      return groups.size ? h("div", { className: "dssm-nacos-installations", role: "status" }, [...groups].map(([key, group]) =>
+        h("span", { key, className: "dssm-nacos-installation" }, t(statusKey(group.state)) + " · " + t(group.project ? "nacos.projectCopies" : "nacos.global", { count: group.count })))) : null;
+    }
 
     async function complete(result: { name: string }, installedTarget: NacosInstalled, reconciled = false) {
       setSelected(null); setDetail(null);
       const completed = { ...installedTarget, name: result.name };
       setNotice({ text: t(reconciled ? "nacos.confirmed" : "nacos.done", { name: result.name }), target: completed });
+      setRequested(previous => ({ ...previous, revision: previous.revision + 1 }));
       try { await onInstalled?.(completed); }
       catch { if (mounted.current) setNotice({ text: t(reconciled ? "nacos.confirmedRefreshWarning" : "nacos.refreshWarning"), target: completed, warning: true }); }
     }
@@ -181,7 +206,7 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
 
     async function install() {
       // A ref closes the same-event-turn gap before React publishes installing=true.
-      if (!selected || !detail || operation.current || uncertain || !destinationReady(target, workspaces, roots)) return;
+      if (!selected || !detail || operation.current || uncertain || installation || !destinationReady(target, workspaces, roots)) return;
       const controller = new AbortController();
       const installedTarget: NacosInstalled = { name: selected.name, scope: target.scope === "workspace" ? "workspace" : "user", workspace: target.workspace };
       const operationId = crypto.randomUUID();
@@ -246,6 +271,7 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
             h("span", { className: "dssm-nacos-icon" }, icon("M14 3H6v18h12V7zM14 3v5h5M9 12h6M9 16h4")),
             h("h4", null, item.name), h("span", { className: "dssm-nacos-version" }, t("nacos.version", { version: item.version }))),
           h("p", { className: "dssm-nacos-description" }, item.description || t("nacos.noDescription")),
+          downloadBadges(item),
           h("div", { className: "dssm-nacos-card-actions" },
             h("div", { className: "dssm-nacos-meta" },
               item.namespaceId ? h("span", { className: "dssm-nacos-namespace", title: t("nacos.namespace", { namespace: item.namespaceId }), "aria-label": t("nacos.namespace", { namespace: item.namespaceId }) },
@@ -259,7 +285,9 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
           button("nacos.next", () => setRequested(previous => ({ ...previous, query: listing!.query, page: page.page + 1 })), listLoading || installing || page.page * page.pageSize >= page.total)) : null) : null,
       selected && active ? h(NacosDetailDialog, {
         Modal, Button, SourceSelect, t, selected, detail, loading: detailLoading, error: detailError, installing, uncertain, checking,
-        target, workspaces, roots, ready: destinationReady(target, workspaces, roots), onTarget: setTarget,
+        target, workspaces, roots, ready: destinationReady(target, workspaces, roots) && !installation, onTarget: setTarget,
+        installed, installationStatus: installation ? t(statusKey(installation.state)) : null,
+        onNavigate: installed && onNavigate ? () => onNavigate({ name: selected.name, scope: target.scope === "workspace" ? "workspace" : "user", workspace: target.workspace }) : undefined,
         onInstall: install, onClose: close, onCancel: () => operation.current?.abort(), onRetry: () => setDetailRevision(previous => previous + 1), onCheck: checkResult,
       }) : null);
     return { content, actions: null };
