@@ -238,7 +238,7 @@ test('expiry keeps the catalogue for display while closing the model surface', a
   assert.deepEqual(await f.listModels('enterprise'), []);
 });
 
-test('a transient gateway outage at start-up heals with bounded retries; a rejected credential does not retry', async t => {
+test('a transient directory outage at start-up heals with bounded retries; a directory 401 does not retry', async t => {
   let calls = 0;
   const f = runtimeFixture({
     hostSelection: { provider: 'enterprise', model: 'alpha' }, retryDelays: [0, 0],
@@ -260,7 +260,7 @@ test('a transient gateway outage at start-up heals with bounded retries; a rejec
   assert.equal(g.runtime.getView().error, 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
 });
 
-test('a rejected credential keeps the catalogue but closes the model surface', async t => {
+test('a directory 401 keeps cached models available without changing the host default', async t => {
   let calls = 0;
   const f = runtimeFixture({
     hostSelection: { provider: 'enterprise', model: 'alpha' },
@@ -270,14 +270,14 @@ test('a rejected credential keeps the catalogue but closes the model surface', a
   });
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
-  await f.runtime.refresh().catch(() => { });
+  await assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED' });
   const view = f.runtime.getView();
   assert.equal(view.error, 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
-  // The list is display state: it survives the rejection …
   assert.deepEqual(view.models.map(model => model.id), ['alpha']);
   assert.equal(view.stale, true);
-  // … but the surface is closed, so a call cannot reach the gateway again.
-  assert.deepEqual(await f.listModels('enterprise'), []);
+  assert.deepEqual((await f.listModels('enterprise')).map(model => model.id), ['alpha']);
+  assert.deepEqual(f.hostSelection, { provider: 'enterprise', model: 'alpha' });
+  assert.deepEqual(f.saves, []);
 });
 
 test('a transient failure keeps the model surface open', async t => {

@@ -11,6 +11,7 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
   const listeners = new Set();
   let selection = overrides.selection ?? null;
   let selectionGeneration = 0;
+  let sessionGeneration = 0;
   const iam = {
     getView: () => structuredClone(view),
     async readModelSelection() {
@@ -23,8 +24,10 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
       selection = { models: structuredClone(next.models ?? {}), defaultModelId: next.defaultModelId ?? null };
       return { subject: 'person-a', ...structuredClone(selection) };
     },
-    getModelAccessEpoch: () => String(selectionGeneration),
-    async resolveGatewayConnection() { return { baseURL: gatewayBaseURL, key: connectionKey ?? 'synthetic-only', generation: 'one' }; },
+    getModelAccessEpoch: () => `${sessionGeneration}:${selectionGeneration}`,
+    async resolveGatewayConnection() {
+      return { baseURL: gatewayBaseURL, key: connectionKey ?? 'synthetic-only', generation: 'one', subject: view.principal };
+    },
     async *watch(signal) {
       yield structuredClone(view);
       while (!signal.aborted) {
@@ -71,8 +74,12 @@ function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...ove
   });
   return {
     iam, runtime, events, get adapter() { return adapter; }, get guard() { return guard; }, get calls() { return calls; }, get credential() { return credential; },
-    get selection() { return selection; },
-    change(next) { view = { ...view, ...next }; for (const listener of [...listeners]) listener(); }
+    get selection() { return selection; }, get selectionWrites() { return selectionGeneration; },
+    change(next, { newSession = false } = {}) {
+      if (newSession) sessionGeneration++;
+      view = { ...view, ...next };
+      for (const listener of [...listeners]) listener();
+    }
   };
 }
 const chunks = async stream => { const result = []; for await (const chunk of stream) result.push(chunk); return result; };
@@ -284,6 +291,15 @@ test('a revoked credential is remembered and never replayed', async t => {
   const fetched = fetches;
   await f.runtime.refresh().catch(() => { }); await tick();
   assert.equal(fetches, fetched);
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
+  f.change({ state: 'expired', accessExpiresAt: Date.now() - 1 });
+  await tick();
+  f.change({ state: 'error', principal: null });
+  await tick();
+  f.change({ state: 'ready', principal: 'person-a', accessExpiresAt: Date.now() + 60000 }, { newSession: true });
+  await tick();
+  assert.equal(fetches, fetched);
+  assert.deepEqual(await f.adapter.listModels('enterprise'), []);
   assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED');
 });
 
@@ -832,6 +848,142 @@ test('a catalogue refresh recovers after the token lapses on the same person', a
   assert.ok(discovery > before);
 });
 
+test('same-account relogin keeps available models usable regardless of the directory response', async t => {
+  const selection = {
+    models: { 'enterprise-chat': {}, 'manual-enabled': { maxTokens: 16384 } },
+    defaultModelId: 'manual-enabled',
+    manual: [{ id: 'manual-enabled' }, { id: 'manual-disabled' }],
+  };
+  for (const [status, expectedError, resetCache] of [
+    [404, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'],
+    [503, 'ENTERPRISE_GATEWAY_UNAVAILABLE', true],
+    [400, 'ENTERPRISE_GATEWAY_REQUEST_REJECTED'],
+    [401, 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED'],
+    [403, 'ENTERPRISE_GATEWAY_FORBIDDEN'],
+    [403, 'ENTERPRISE_GATEWAY_FORBIDDEN', true],
+    [429, 'ENTERPRISE_GATEWAY_RATE_LIMIT'],
+    [200, 'ENTERPRISE_MODEL_CATALOG_INVALID'],
+    [200, null],
+  ]) {
+    await t.test(`directory HTTP ${status}, ${expectedError ?? 'valid catalogue'}, ${resetCache ? 'cold' : 'cached'}`, async t => {
+      const valid = () => new Response('{"data":[{"id":"enterprise-chat"}]}');
+      let directoryReply = valid;
+      const f = fixture({
+        selection: structuredClone(selection),
+        fetch: async () => directoryReply(),
+      });
+      t.after(() => f.runtime.dispose());
+      const list = async () => (await f.adapter.listModels('enterprise')).map(model => model.id);
+      await f.runtime.ready;
+      assert.deepEqual(await list(), ['enterprise-chat', 'manual-enabled']);
+
+      f.change({ state: 'expired', accessExpiresAt: Date.now() - 1 });
+      await tick();
+      assert.deepEqual(await list(), []);
+      if (resetCache) {
+        f.change({ state: 'error', principal: null });
+        await tick();
+      }
+      if (expectedError) directoryReply = () => new Response('{}', { status });
+      f.change({ state: 'ready', principal: 'person-a', accessExpiresAt: Date.now() + 60000 }, { newSession: true });
+      await tick();
+
+      const view = f.runtime.getView();
+      assert.equal(view.error, expectedError);
+      assert.equal(view.state, expectedError ? 'error' : 'ready');
+      assert.equal(f.selectionWrites, 0);
+      assert.deepEqual(f.selection, selection);
+      const available = resetCache ? ['manual-enabled'] : ['enterprise-chat', 'manual-enabled'];
+      assert.deepEqual(await list(), available);
+      for (const model of available) {
+        const request = { ...options, model };
+        const prepared = await f.adapter.prepareCall(request.provider, request.model);
+        assert.equal((await chunks(prepared.stream(request)))[0].text, 'ok');
+      }
+      if (resetCache) {
+        await assert.rejects(f.adapter.prepareCall('enterprise', 'enterprise-chat'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
+      }
+      await assert.rejects(f.adapter.prepareCall('enterprise', 'manual-disabled'), { code: 'ENTERPRISE_MODEL_NOT_ALLOWED' });
+      if (expectedError) {
+        directoryReply = valid;
+        await f.runtime.refresh();
+        assert.deepEqual(await list(), ['enterprise-chat', 'manual-enabled']);
+        assert.equal(f.runtime.getView().error, null);
+        assert.equal(f.selectionWrites, 0);
+      }
+    });
+  }
+});
+
+test('saved manual models work while directory discovery is pending and inference can still refuse a call', async t => {
+  const entered = Promise.withResolvers();
+  const directory = Promise.withResolvers();
+  const f = fixture({
+    selection: { models: { 'manual-enabled': {} }, manual: [{ id: 'manual-enabled' }] },
+    fetch: async () => { entered.resolve(); return directory.promise; },
+    createAdapter: async () => ({
+      async *stream(request) {
+        if (request.messages.length > 0) {
+          yield { type: 'finish', reason: { kind: 'error', failure: { status: 403 } } };
+        } else yield { type: 'text', text: 'ok' };
+      },
+    }),
+  });
+  t.after(async () => {
+    directory.resolve(new Response('{}', { status: 403 }));
+    await f.runtime.dispose();
+  });
+  await entered.promise;
+  assert.equal(f.runtime.getView().state, 'loading');
+  assert.deepEqual((await f.adapter.listModels('enterprise')).map(model => model.id), ['manual-enabled']);
+  assert.equal((await chunks(f.adapter.stream({ ...options, model: 'manual-enabled' })))[0].text, 'ok');
+
+  directory.resolve(new Response('{}', { status: 403 }));
+  await f.runtime.ready;
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_FORBIDDEN');
+  const denied = await chunks(f.adapter.stream({ ...options, model: 'manual-enabled', messages: [{ role: 'user', content: 'test' }] }));
+  assert.equal(denied.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_FORBIDDEN');
+  assert.equal(f.selectionWrites, 0);
+});
+
+test('an account change discards a manual adapter whose build is in flight', async t => {
+  let status = 200;
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const f = fixture({
+    selection: { models: { 'manual-enabled': {} }, manual: [{ id: 'manual-enabled' }] },
+    fetch: async () => new Response('{"data":[{"id":"enterprise-chat"}]}', { status }),
+    async createAdapter() {
+      if (status === 404) {
+        entered.resolve();
+        await release.promise;
+      }
+      return {};
+    },
+  });
+  t.after(async () => {
+    release.resolve();
+    await f.runtime.dispose();
+  });
+  await f.runtime.ready;
+  status = 404;
+  f.change({ state: 'error', principal: null });
+  await tick();
+  f.change({ state: 'ready', principal: 'person-a', accessExpiresAt: Date.now() + 60000 }, { newSession: true });
+  await tick();
+  assert.equal(await Promise.race([entered.promise.then(() => true), tick().then(() => false)]), true);
+
+  const interrupted = assert.rejects(f.runtime.refresh(), { code: 'IAM_MODEL_CONTEXT_CHANGED' });
+  f.change({ principal: 'person-b', gatewayCredential: { state: 'owner-mismatch', matchesAccount: false } }, { newSession: true });
+  release.resolve();
+  await interrupted;
+  assert.deepEqual(await f.adapter.listModels('enterprise'), []);
+  assert.deepEqual(f.runtime.getView().models, []);
+  const result = await chunks(f.adapter.stream({ ...options, model: 'manual-enabled' }));
+  assert.equal(result.at(-1).reason.failure.code, 'IAM_GATEWAY_CREDENTIAL_REQUIRED');
+  assert.equal(f.selectionWrites, 0);
+});
+
 test('a stale catalogue still retries and its countdown clears', async t => {
   let offline = false;
   const f = fixture({
@@ -888,7 +1040,8 @@ test('a stored credential that cannot be an HTTP header fails deterministically 
   t.after(() => f.runtime.dispose());
   await f.runtime.ready;
   // The catalogue was fine; the user then saves a value that cannot travel.
-  f.iam.resolveGatewayConnection = async () => ({ baseURL: configuration.baseURL, key: unsafe, generation: 'one' });
+  const resolveConnection = f.iam.resolveGatewayConnection;
+  f.iam.resolveGatewayConnection = async () => ({ ...(await resolveConnection()), key: unsafe });
   const prepared = await f.adapter.prepareCall(options.provider, options.model);
   const result = await chunks(prepared.stream(options));
   // The guard fires before any content chunk is produced.
@@ -934,7 +1087,8 @@ test('header-unsafety follows the transport, not a stricter local rule (issue #1
     const f = fixture();
     t.after(() => f.runtime.dispose());
     await f.runtime.ready;
-    f.iam.resolveGatewayConnection = async () => ({ baseURL: configuration.baseURL, key: blocked, generation: 'one' });
+    const resolveConnection = f.iam.resolveGatewayConnection;
+    f.iam.resolveGatewayConnection = async () => ({ ...(await resolveConnection()), key: blocked });
     const result = await chunks((await f.adapter.prepareCall(options.provider, options.model)).stream(options));
     assert.equal(result.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE');
     assert.equal(JSON.stringify(result).includes(JSON.stringify(blocked).slice(1, -1)), false);

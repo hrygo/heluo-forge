@@ -24,7 +24,7 @@ const options = { provider: 'enterprise', model: 'enterprise-chat', messages: []
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
-function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false } = {}) {
+function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false, manual = [] } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -41,7 +41,7 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
   const iam = {
     getView: () => structuredClone(view),
     readModelSelection: async () => ({
-      subject: 'person-a', saved: true, models: { 'enterprise-chat': {} }, defaultModelId: 'enterprise-chat',
+      subject: 'person-a', saved: true, models: { 'enterprise-chat': {} }, defaultModelId: 'enterprise-chat', manual,
     }),
     saveModelSelection: async next => ({ subject: 'person-a', saved: true, ...structuredClone(next) }),
     getModelAccessEpoch: () => epoch,
@@ -275,6 +275,30 @@ test('a rebuild that fails keeps a specific code instead of the unknown-failure 
   assert.equal(failureOf(result), 'ENTERPRISE_GATEWAY_UNAVAILABLE');
   assert.notEqual(failureOf(result), 'ENTERPRISE_GATEWAY_CALL_FAILED');
   assert.equal(f.requests, 0);
+});
+
+test('a saved manual model can be retried on the new gateway while its directory is pending', async t => {
+  const f = fixture({ native: true, manual: [{ id: options.model }] });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  const buildsAtStart = f.builds;
+  const hold = f.holdNextDiscovery();
+  t.after(() => hold.resolve());
+  f.setConnection({ baseURL: MOVED_GATEWAY, key: 'key-2', generation: 'gen-2' });
+  f.failMovedGateway();
+
+  const pending = chunks(f.adapter.stream(options));
+  await until(() => f.builds > buildsAtStart, 'manual adapter for the new gateway');
+  await tick();
+  assert.equal(f.requests, 1, 'dispatch does not wait for the new directory');
+  assert.equal(finishOf(await pending).kind, 'stop');
+  assert.equal(f.credential, 'key-2');
+
+  const sync = assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_UNAVAILABLE' });
+  hold.resolve();
+  await sync;
+  assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  assert.equal(finishOf(await chunks(f.adapter.stream(options))).kind, 'stop');
 });
 
 test('a changed owner asks for a sign-in instead of retrying under another person', async t => {

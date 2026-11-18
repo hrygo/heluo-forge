@@ -1493,7 +1493,7 @@ window.__ModuleLoader__.load({
         if (gw.configured) {
           const catalogue = deriveModelUi(view);
           if (catalogue.failed && catalogue.models.length === 0) {
-            return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${errorNotice(catalogue.error)}` };
+            return { kind: 'model-error', dotClass: 'warn', label: '模型同步异常', tooltip: `${name} · ${catalogueErrorNotice(catalogue.error)}` };
           }
           const modelCount = catalogue.models.length;
           const modelSuffix = modelCount > 0 ? ` · ${modelCount} 个模型${catalogue.stale ? '待刷新' : '可用'}` : '';
@@ -2060,6 +2060,17 @@ window.__ModuleLoader__.load({
     // 未列举的码用同一句兜底，不把原始错误码抛给用户。
     function errorNotice(code) {
       return ERROR_NOTICE[code] ?? '操作未完成，请重试；如仍有问题，请联系管理员。';
+    }
+
+    const CATALOGUE_ERROR_NOTICE = Object.freeze(Object.assign(Object.create(null), {
+      ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '当前凭证未通过模型目录接口的鉴权。',
+      ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有读取模型目录的权限。',
+      ENTERPRISE_GATEWAY_RATE_LIMIT: '读取模型目录过于频繁，请稍后刷新。',
+      ENTERPRISE_GATEWAY_UNAVAILABLE: '模型目录暂不可达，请稍后刷新。',
+      ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了模型目录请求，请检查网关地址。',
+    }));
+    function catalogueErrorNotice(code) {
+      return CATALOGUE_ERROR_NOTICE[code] ?? errorNotice(code);
     }
 
     // §10 诊断快照
@@ -3008,7 +3019,7 @@ window.__ModuleLoader__.load({
             },
           },
             h('span', { style: { flex: '1 1 0', minWidth: 200 } },
-              `目录未更新：${errorNotice(catalogueUi.error)}`
+              `目录未更新：${catalogueErrorNotice(catalogueUi.error)}`
               // A passed or absent retry time means the automatic chain is done;
               // pointing at the retry button or cached availability stays clear.
               + (Math.round((Number(view.modelAccess.retryAt) - Date.now()) / 1000) >= 1
@@ -3282,7 +3293,7 @@ window.__ModuleLoader__.load({
           : null,
         catalogueUi.ready && !modelList.length
           ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, '网关没有返回可用模型，请检查个人访问凭证的模型权限。') : null,
-        catalogueUi.error && !catalogueUi.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, errorNotice(catalogueUi.error)) : null,
+        catalogueUi.error && !catalogueUi.stale ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-error' }, catalogueErrorNotice(catalogueUi.error)) : null,
         catalogueUi.manualTruncated > 0
           ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' },
             `已保存的手动模型超过展示上限，另有 ${catalogueUi.manualTruncated} 个未加载（最多支持 100 个）；请先删除部分手动条目。`)
@@ -3774,7 +3785,7 @@ window.__ModuleLoader__.load({
           if (current.notice !== pendingNotice) return current;
           const models = deriveModelUi(nextView);
           if (models.ready) return { ...current, notice: '网关地址和个人访问凭证已保存，模型目录已同步。' };
-          if (models.failed) return { ...current, notice: errorNotice(models.error) };
+          if (models.failed) return { ...current, notice: catalogueErrorNotice(models.error) };
           return current;
         });
       }
@@ -3847,7 +3858,7 @@ window.__ModuleLoader__.load({
           if (!isCurrentEpoch(epoch)) return;
           const notice = result.ok
             ? `模型列表已更新，共 ${result.body?.models?.length ?? 0} 个模型。`
-            : resultNotice(result);
+            : catalogueErrorNotice(resultCode(result));
           setCredential((current) => ({ ...current, saving: false, notice }));
           catalogue?.actions?.setNotice?.(notice);
           if (result.ok) setView(result.body?.view);
@@ -4977,7 +4988,7 @@ window.__ModuleLoader__.load({
             )
             : null,
           gatewayUi.configured && deriveModelUi(state.view).error
-            ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, errorNotice(deriveModelUi(state.view).error))
+            ? h('div', { role: 'status', className: 'fiam-notice fiam-notice-warn' }, catalogueErrorNotice(deriveModelUi(state.view).error))
             : null,
           models.length > 0
             ? h('div', null,
