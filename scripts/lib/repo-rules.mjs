@@ -39,6 +39,49 @@ const ALLOW_MARKER = 'security-scan: allow';
 // secret/host-path scan. The `u` flag alone made the extension list case-sensitive.
 const TEXT_EXTENSIONS = /\.(?:md|mjs|cjs|js|json|yaml|yml|txt|html|css|ts|tsx|sh|toml|ini|cfg)$/iu;
 
+// The root is a closed entry surface: the audience-split entry documents, the
+// workspace configuration and the top-level areas below. Reports, audits,
+// check records and scratch notes belong under docs/ where the document
+// register and the link checker govern them. A new root entry is added here
+// only after its audience, owner and lifecycle are decided, so an ad-hoc file
+// cannot land at the root without leaving a deliberate trace in this list.
+export const ROOT_FILES = new Set([
+  'README.md',
+  'AGENTS.md',
+  'CONTRIBUTING.md',
+  'SECURITY.md',
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  '.node-version',
+  '.editorconfig',
+  '.gitattributes',
+  '.gitignore',
+  '.gitmodules',
+  '.env.example',
+  '.pr_agent.toml',
+  '.dsh-version',
+]);
+
+export const ROOT_DIRS = new Set([
+  '.agents',
+  '.github',
+  '.vscode',
+  '.worktrees',
+  'demos',
+  'deploy',
+  'docs',
+  'packages',
+  'scripts',
+  'services',
+  'tests',
+  'node_modules',
+  'output',
+  'artifacts',
+  'coverage',
+  'logs',
+]);
+
 function posix(path) {
   return path.split(sep).join('/');
 }
@@ -66,6 +109,42 @@ export function listTracked(root) {
     return output.split('\0').filter(Boolean).sort();
   } catch {
     return walk(root).map((file) => posix(relative(root, file)));
+  }
+}
+
+export function checkRootSurface(root, tracked, errors) {
+  const entries = new Set(tracked);
+  // Untracked-but-unignored files are what a careless write leaves behind
+  // before anyone stages it; include them so a local `pnpm check:repo` reports
+  // the stray file instead of waiting for CI to see the commit.
+  try {
+    const output = execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard', '-z'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const path of output.split('\0').filter(Boolean)) entries.add(path);
+  } catch {
+    // No Git (source archive or fixture): tracked already came from a directory walk.
+  }
+
+  const reportedDirs = new Set();
+  for (const path of [...entries].sort()) {
+    // An index-only deletion is pending commit; the file is already gone.
+    if (!existsSync(join(root, path))) continue;
+    const [head, ...rest] = path.split('/');
+    if (rest.length === 0) {
+      if (!ROOT_FILES.has(head)) {
+        errors.push(
+          `repo: ${path} is an unapproved root file; keep the root to the entry documents in ROOT_FILES and file reports or notes under docs/`,
+        );
+      }
+      continue;
+    }
+    if (ROOT_DIRS.has(head) || reportedDirs.has(head)) continue;
+    reportedDirs.add(head);
+    errors.push(
+      `repo: ${head}/ is an unapproved top-level directory; nest new material under docs/ or an existing area, then allowlist it deliberately`,
+    );
   }
 }
 
@@ -197,6 +276,7 @@ export function checkRepo(root) {
 
   const tracked = listTracked(root);
   counts.tracked = tracked.length;
+  checkRootSurface(root, tracked, errors);
   for (const path of tracked) {
     if (path.startsWith('node_modules/') || path.includes('/node_modules/')) {
       errors.push(`repo: tracked dependency directory ${path}`);

@@ -6,13 +6,13 @@
 |---|---|
 | 文档编号 | CORP-DSH-ENG-002 |
 | 文档名称 | 工程开发与发布约定 |
-| 版本 | V0.9.3 |
+| 版本 | V0.9.4 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
-| 最后更新 | 2026-11-17 |
+| 最后更新 | 2026-11-18 |
 | 门禁 | 随首个可发布包复核 |
 
 > 编制依据：仓库结构、`package.json`、`pnpm-workspace.yaml`、检查脚本、测试与 `.github/workflows/check.yml`；工具链版本以 `.node-version` 和 `package.json` 为准。托管平台的实际执行结果以对应工作流记录为准。
@@ -92,7 +92,7 @@
 - 需要链接的原因：CI 的 `node --run check` 不安装依赖，而包内测试按裸包名 import 同仓兄弟包（如 `@heluo/forge-policy`），没有链接即 `ERR_MODULE_NOT_FOUND`。该步只补解析路径，不替代 `pnpm install`：本地装过依赖时已有同指向链接，脚本计为 kept 且不重写；被占位时只报告、不覆盖。
 - 需要缩小范围定位时使用根 README 的市场包/参考服务命令；全量检查已覆盖的有效结果无需重复执行。真实仓库归档检查与 DSH/企业实机操作不进入离线 CI。
 - `check:docs` 校验元数据、登记一致性、链接与锚点、表格列数、禁写修订记录与询问函问题序列。
-- `check:repo` 校验必需文件、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径，以及包体闭包（清单/入口/workspace 依赖/补丁层/locale）。
+- `check:repo` 校验必需文件、根目录入口面（未登记的一级文件与目录，含未提交的未忽略文件）、工作区配置、模块状态声明、工作流权限与动作固定、凭据与本机绝对路径，以及包体闭包（清单/入口/workspace 依赖/补丁层/locale）。
 - `check:tarballs` 校验真实 tarball 内容与模式位。
 - `check:version` 校验 DSH 版本单一真源：声明位置的非历史命中必须等于 `.dsh-version`（同一文件里出现第二处过期表述也会失败）、目标声明行不得写死目标版本、代码与脚本（全仓，排除 `docs/` 与依赖/产物目录）不得硬编码版本、`engines.dsh` 下限必须与基线同发布线且不得高于基线。
 - CI 的 `repository checks` 工作流使用 `.github/workflows/check.yml` 的 `verify (ubuntu-x64)` 作业执行 `node --run check`，是全量离线检查与全部用例的唯一执行点；默认 `contents: read`、`issues: read` 与 `pull-requests: read`，PR 正文须引用本仓库已有 Issue（`Closes #编号` 或 `Part of #编号`），正文编辑时重新检查；外部动作固定到完整提交 SHA，常规检查不使用 `pull_request_target`。触发与依赖策略见[贡献指南](../../CONTRIBUTING.md#71-github-actions)。
