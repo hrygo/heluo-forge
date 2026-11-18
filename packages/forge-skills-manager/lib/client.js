@@ -15989,8 +15989,9 @@ function NacosDetailDialog(props) {
           "div",
           { className: "dssm-nacos-actions" },
           uncertain ? h(Button2, { variant: "outline", size: "sm", disabled: props.checking, onClick: props.onCheck }, t("nacos.checkResult")) : null,
+          props.onNavigate ? h(Button2, { variant: "outline", size: "sm", onClick: props.onNavigate }, t(project ? "nacos.openProject" : "nacos.openGlobal")) : null,
           h(Button2, { variant: "outline", size: "sm", onClick: installing ? props.onCancel : props.onClose }, t(installing ? "btn.cancel" : "btn.close")),
-          h(Button2, { variant: "primary", size: "sm", disabled: !detail || loading || installing || uncertain || !props.ready, onClick: props.onInstall }, t(installing ? "nacos.downloading" : "nacos.download"))
+          h(Button2, { variant: "primary", size: "sm", disabled: !detail || loading || installing || uncertain || !props.ready, onClick: props.onInstall }, t(installing ? "nacos.downloading" : props.installed ? "nacos.downloaded" : "nacos.download"))
         )
       )
     },
@@ -16025,6 +16026,7 @@ function NacosDetailDialog(props) {
           "section",
           { className: "dssm-nacos-destination", "aria-label": t("nacos.choose") },
           h("h3", null, t("nacos.choose")),
+          props.installationStatus ? h("p", { className: "dssm-nacos-installation", role: "status" }, props.installationStatus) : null,
           h(
             "div",
             { className: "dssm-nacos-scope", role: "group", "aria-label": t("nacos.choose") },
@@ -16085,6 +16087,8 @@ var nacosCss = `
 .dssm-nacos-version{display:inline-flex;align-items:center;flex:none;max-width:100%;padding:1px 6px;border:0.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xs,4px);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;overflow-wrap:anywhere}
 .dssm-nacos-card-head .dssm-nacos-version{max-width:35%;margin-top:4px}
 .dssm-nacos-description{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.dssm-nacos-installations{display:flex;flex-wrap:wrap;gap:4px 8px;min-width:0}
+.dssm-nacos-installation{margin:0;padding:2px 7px;border:0.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xs,4px);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);overflow-wrap:anywhere}
 .dssm-nacos-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px 12px;flex-wrap:wrap;margin-top:auto}
 .dssm-nacos-card-actions>button{flex:none;margin-left:auto}
 .dssm-nacos-meta{display:flex;align-items:center;gap:12px;flex:1 1 180px;min-width:0;min-height:18px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
@@ -16227,6 +16231,11 @@ var nacosLocales = {
     "nacos.detailLoading": "\u6B63\u5728\u8BFB\u53D6\u6280\u80FD\u8BF4\u660E\u4E0E\u5B8C\u6574\u8D44\u6E90\u2026",
     "nacos.download": "\u4E0B\u8F7D\u5230\u672C\u5730",
     "nacos.downloading": "\u6B63\u5728\u4E0B\u8F7D\u2026",
+    "nacos.downloaded": "\u5DF2\u4E0B\u8F7D",
+    "nacos.modified": "\u5DF2\u4E0B\u8F7D \xB7 \u672C\u5730\u5DF2\u4FEE\u6539",
+    "nacos.installPending": "\u4E0B\u8F7D\u5F85\u786E\u8BA4",
+    "nacos.installUnavailable": "\u4E0B\u8F7D\u72B6\u6001\u6682\u4E0D\u53EF\u6838\u9A8C\uFF0C\u8BF7\u68C0\u67E5\u672C\u5730\u6280\u80FD\u540E\u5237\u65B0\u3002",
+    "nacos.projectCopies": "\u9879\u76EE\u6280\u80FD\uFF08{count}\uFF09",
     "nacos.checkResult": "\u6838\u5BF9\u4E0B\u8F7D\u7ED3\u679C",
     "nacos.pending": "\u4E0B\u8F7D\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u8BF7\u6838\u5BF9\u7ED3\u679C\u6216\u5230\u672C\u5730\u6280\u80FD\u9875\u67E5\u770B\uFF0C\u52FF\u91CD\u590D\u4E0B\u8F7D\u3002",
     "nacos.confirmed": "\u5DF2\u786E\u8BA4 {name} \u5DF2\u4E0B\u8F7D\uFF0C\u8BF7\u5728\u672C\u5730\u6280\u80FD\u9875\u67E5\u770B\u5F53\u524D\u542F\u7528\u72B6\u6001\u3002",
@@ -16292,6 +16301,11 @@ var nacosLocales = {
     "nacos.detailLoading": "Loading skill instructions and complete resources\u2026",
     "nacos.download": "Download locally",
     "nacos.downloading": "Downloading\u2026",
+    "nacos.downloaded": "Downloaded",
+    "nacos.modified": "Downloaded \xB7 Modified locally",
+    "nacos.installPending": "Download awaiting confirmation",
+    "nacos.installUnavailable": "Download status unavailable. Check local skills and refresh.",
+    "nacos.projectCopies": "Projects ({count})",
     "nacos.checkResult": "Check download result",
     "nacos.pending": "The download result is unconfirmed. Check its status or local skills; do not download again.",
     "nacos.confirmed": "Confirmed that {name} was downloaded. Check its current enabled state in local skills.",
@@ -16360,11 +16374,29 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
     const downloadKey = JSON.stringify([selected?.name, selected?.version, target.scope, target.workspace]);
     const pendingDownload = pendingDownloads.get(downloadKey);
     const uncertain = !!pendingDownload && !installing;
+    const chosenWorkspace = workspaces.find((row) => row.registeredPaths[0] === target.workspace);
+    const workspacePath = chosenWorkspace?.projectRoot || chosenWorkspace?.path;
+    const samePath = (left, right) => /^[A-Za-z]:|^\\\\/.test(left) ? left.replace(/\\/g, "/").toLowerCase() === right.replace(/\\/g, "/").toLowerCase() : left === right;
+    const installation = detail?.installations?.find((item) => target.scope === "workspace" ? !!item.workspace && !!workspacePath && samePath(item.workspace, workspacePath) : item.workspace === void 0);
+    const installed = installation?.state === "downloaded" || installation?.state === "modified";
+    const statusKey = (value) => value === "downloaded" ? "nacos.downloaded" : value === "modified" ? "nacos.modified" : value === "pending" ? "nacos.installPending" : "nacos.installUnavailable";
+    function downloadBadges(item) {
+      const groups = /* @__PURE__ */ new Map();
+      for (const entry of item.installations || []) {
+        const project = entry.workspace !== void 0;
+        const key = JSON.stringify([entry.state, project]);
+        const group = groups.get(key);
+        if (group) group.count++;
+        else groups.set(key, { state: entry.state, project, count: 1 });
+      }
+      return groups.size ? h4("div", { className: "dssm-nacos-installations", role: "status" }, [...groups].map(([key, group]) => h4("span", { key, className: "dssm-nacos-installation" }, t(statusKey(group.state)) + " \xB7 " + t(group.project ? "nacos.projectCopies" : "nacos.global", { count: group.count })))) : null;
+    }
     async function complete(result, installedTarget, reconciled = false) {
       setSelected(null);
       setDetail(null);
       const completed = { ...installedTarget, name: result.name };
       setNotice({ text: t(reconciled ? "nacos.confirmed" : "nacos.done", { name: result.name }), target: completed });
+      setRequested((previous3) => ({ ...previous3, revision: previous3.revision + 1 }));
       try {
         await onInstalled?.(completed);
       } catch {
@@ -16449,7 +16481,7 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
       };
     }, []);
     async function install() {
-      if (!selected || !detail || operation.current || uncertain || !destinationReady2(target, workspaces, roots)) return;
+      if (!selected || !detail || operation.current || uncertain || installation || !destinationReady2(target, workspaces, roots)) return;
       const controller = new AbortController();
       const installedTarget = { name: selected.name, scope: target.scope === "workspace" ? "workspace" : "user", workspace: target.workspace };
       const operationId = crypto.randomUUID();
@@ -16570,6 +16602,7 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
             h4("span", { className: "dssm-nacos-version" }, t("nacos.version", { version: item.version }))
           ),
           h4("p", { className: "dssm-nacos-description" }, item.description || t("nacos.noDescription")),
+          downloadBadges(item),
           h4(
             "div",
             { className: "dssm-nacos-card-actions" },
@@ -16615,8 +16648,11 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
         target,
         workspaces,
         roots,
-        ready: destinationReady2(target, workspaces, roots),
+        ready: destinationReady2(target, workspaces, roots) && !installation,
         onTarget: setTarget,
+        installed,
+        installationStatus: installation ? t(statusKey(installation.state)) : null,
+        onNavigate: installed && onNavigate ? () => onNavigate({ name: selected.name, scope: target.scope === "workspace" ? "workspace" : "user", workspace: target.workspace }) : void 0,
         onInstall: install,
         onClose: close,
         onCancel: () => operation.current?.abort(),

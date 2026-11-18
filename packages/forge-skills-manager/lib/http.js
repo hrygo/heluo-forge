@@ -252,18 +252,27 @@ function installHttp(ctx, dependencies) {
     {
       path: `${API_PREFIX}/nacos/list`,
       methods: ["GET"],
-      fetch: (req) => runFetch(() => {
+      fetch: (req) => runFetch(async () => {
         const query = new URL(req.url).searchParams;
         if ([...query.keys()].some((k) => !["q", "page"].includes(k) || query.getAll(k).length !== 1)) {
           throw Object.assign(new Error("\u641C\u7D22\u6761\u4EF6\u65E0\u6548"), { code: "error.nacos.query", statusCode: 400 });
         }
-        return nacos.list(query.get("q") ?? "", query.has("page") ? Number(query.get("page")) : 1, requestSignal(req));
+        const page = await nacos.list(query.get("q") ?? "", query.has("page") ? Number(query.get("page")) : 1, requestSignal(req));
+        if (!page.items.length) return page;
+        const ids = page.items.map((item) => nacos.identity({ skillName: item.name, version: item.version }));
+        const installed = await repositories.catalogInstallations(ids);
+        return { ...page, items: page.items.map((item, index) => ({ ...item, installations: installed[ids[index]] || [] })) };
       })
     },
     {
       path: `${API_PREFIX}/nacos/detail`,
       methods: ["POST"],
-      fetch: (req) => handlePost(req, (b) => nacos.detail(b, requestSignal(req)), { queued: false, mutation: false })
+      fetch: (req) => handlePost(req, async (b) => {
+        const detail = await nacos.detail(b, requestSignal(req));
+        const id = nacos.identity(b);
+        const installed = await repositories.catalogInstallations([id]);
+        return { ...detail, installations: installed[id] || [] };
+      }, { queued: false, mutation: false })
     },
     {
       path: `${API_PREFIX}/nacos/install-status`,
