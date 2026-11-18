@@ -16,7 +16,7 @@ import { createServiceStore } from './service-store.mjs';
 import { transition } from './state.mjs';
 import { createConsumptionWitness } from './consumption-witness.mjs';
 import { normalizeProfileFields } from './userinfo.mjs';
-import { grantIdentity, safeMessage } from './service-helpers.mjs';
+import { grantIdentity, safeMessage, sameSessionIdentity } from './service-helpers.mjs';
 import { createCredentialRegistry } from './credential-registry.mjs';
 import { createExtTokenStore } from './ext-token-store.mjs';
 import { createExtTokensService, createCredentialBroker } from './service-ext-tokens.mjs';
@@ -408,12 +408,14 @@ clearGatewayCredential: gateway.clearCredential,
 
     /** Projected UserInfo for display; hidden whenever the owning session is gone. */
     getIdentityProfile() {
-      // The profile is bound to the session that produced it: the identity
-      // comparison hides it on sign-out, session loss, and re-login, while a
-      // token refresh preserves grantIdentity and keeps it visible — without
-      // touching each call site.
+      // The profile is bound to the session that produced it: the session
+      // identity hides it on sign-out, session loss, and re-login, while a
+      // token refresh preserves the session identity and keeps it visible —
+      // without touching each call site. The comparison is deliberately on the
+      // session quartet alone, so a grant that changes shape cannot silently
+      // drop a projection the user is still entitled to see.
       if (!ctx.lastGrant || !grants.identityProfile) return undefined;
-      if (!isDeepStrictEqual(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
+      if (!sameSessionIdentity(grants.identityProfile.identity, grantIdentity(ctx.lastGrant))) return undefined;
       return { ...grants.identityProfile.profile };
     },
 
