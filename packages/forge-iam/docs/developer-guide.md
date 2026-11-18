@@ -212,6 +212,8 @@ Host 为登录尝试生成 state、nonce 和 PKCE S256；授权码只兑换一�
 
 同进程且 provider、issuer 上下文匹配的调用共用刷新 promise；其他参与者只等待自己观察到的操作，匹配操作标记、会话身份和令牌变化，不隐式采用另一授权。等待超时不是租约，不接管、不重发旧 refresh token。`invalid_grant`、网络不确定、校验或提交失败不返回旧 access token，不读后删除记录；已写入的 pending 保留并要求重新登录。若 complete 已提交但回复丢失，其他实例仍可能取得匹配结果，不能声称所有实例必然重登。若轮换响应没有新 refresh token 的期限，不沿用旧 token 的期限，由 IAM 在下次刷新时判断其有效性。
 
+原生直连传输确认连接在 `connect` 阶段被拒绝时，刷新拥有者可在短事务内比较完整 pending 记录，恢复原 grant 并核对提交结果。等待者只接受与已观察到的操作基线完整匹配的原记录。Host 保留退避，仍在有效期的访问令牌可继续通过鉴权。访问令牌已过期时暂停调用，刷新令牌已过期时停止续期。其他传输故障和注入 fetch 的异常不作为未发送证明。
+
 旧 grant 含 `resource` 而刷新结果删除该字段时，完整会话身份不一致，等待者和桥接拒绝本次结果；不复制旧 `resource`，也不自动迁移。
 
 配置 Host 桥接时，Host 先核验 issuer 信任上下文并解析令牌，CLI 回读合法、未过期且无退出 pending 的当前会话，只输出与 Host 响应一致的 access token。缺少 `sessionInstanceId` 的会话不被采用。结果未确认、操作或会话不匹配时拒绝；不为桥接补齐标识或迁移存储。同权进程仍可直接写入底层存储。
@@ -227,6 +229,8 @@ Host 在运行期间按较早的已知令牌期限调度续期，并在退出或
 显式退出先使本实例登录尝试失效。对受信存储，退出读取完整 grant 快照并核验可用 metadata 的 issuer，在同记录锁内比较快照、拒绝 pending 或替换记录，再持久化唯一的 `signOutOperation` pending。释放锁后按 D1 以 `GET <revocationEndpoint>?access_token=…` 撤销访问令牌（不带客户端认证）；撤销确认后重新取得记录锁，只有 pending 仍与本次操作完全一致时才写固定逻辑墓碑并核对回执。未配置撤销端点时可直接完成本地逻辑清理，不宣称服务端撤销。回执三态：`result=true` 或 `result=false`+`errcode=2002` 记 ok，明确拒绝记 failed，超时/5xx/无法解析记 unknown。刷新令牌不随之撤销，只能自然过期；登录换票失败后的 RFC 7009 POST 清理是另一条路径，不用于退出。配置未显式 issuer 时，单独配置撤销地址不能代替发行者绑定；须先解析当前 discovery，issuer 不匹配或无法取得该上下文时保留持久 grant、报告 unknown。撤销 HTTP 请求最多 5 秒，不表示整个退出 I/O 有界。
 
 未验证 provider 的退出不修改持久记录、不发撤销请求，只清运行时会话并报告 `IAM_CREDENTIALS_CLEAR_FAILED`、`revocation: 'unknown'`；重启仍可能恢复。存储异常、mutator 未执行、提交/回执不确定均不报告成功。已写入 pending 后，撤销失败、结果未知或进程中断会保留该状态；不重发旧令牌、不返回旧令牌，也不报告本地清理完成。撤销成功响应不证明当前授权及所有刷新后代被撤销。用户侧结果与边界见[退出说明](<user-guide.md#退出的结果与边界>)。
+
+退出与同一 Host 已发出的轮换重叠时，立即关闭本地令牌发布和使用，至多等待其结果 5 秒。轮换结果通过原授权校验后，仅向该次退出提供。退出在受信存储中匹配原刷新操作并将它转换为退出 pending，再撤销新的访问令牌。其他 Host 所有的 pending、超时、响应未知以及替换会话均不能授权该转换。
 
 `dispose()` 停止订阅、attempt 和内存状态，保留持久 grant 与网关 Key，不执行撤销。Cordis 对普通函数插件的返回值不提供这里需要的生命周期托管；插件通过 `ctx.effect` 显式拥有 service、`ctx.iam` 注册与 webServer fiber 的释放。
 
@@ -352,13 +356,17 @@ SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 e
 
 `managedModels` 仅接受可选的 `{baseURL}` 作为预填地址，不接受 Key、静态模型清单、协议或任意头。企业账号页将 `baseURL` 与个人访问凭证一并送至原凭证 PUT 路由；V2 元数据新增可选 `baseURL`，与 Key 在现有联合 CAS 中提交，不迁移旧记录。Key 按不透明字符串处理：页面和 HTTP 路由去除首尾空白并要求非空，不按固定前缀校验；持久化受凭据 provider 的约束，有效性由网关判断。发送前还按传输层的实际规则校验（fetch/Headers 要求 ByteString，实测拒 CR/LF、NUL、DEL、其余控制字符及高于 Latin-1 的字符，放行 TAB 与 Latin-1）：超出的值按 `ENTERPRISE_GATEWAY_CREDENTIAL_UNSENDABLE` 确定性拒绝，不进入传输层，错误体与日志不回显原文。企业网关对这些字符值的接受度未验证，此项是传输层本地约束，不构成网关兼容性结论。Key 原文不进入视图、日志或错误响应。
 
-同源 `GET /api/forge-iam/models` 在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。该入口是用户主动刷新，直接发起一次目录同步。`modelAccess` 提供目录 `state`、`error`、`stale`、`retryAt`、`syncedAt`、`models` 及已保存地址；`stale` 表示列表仍是上次成功目录、网关此后未连上，`retryAt` 是下一次自动重试时间（不可重试的失败为空），`syncedAt` 是最近一次成功时间。它不是网关授权证明：调用仍按 `permit()` 与启用集合裁决。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际：内存无 grant 时先调用 `resolveToken()`，之后核对会话可继续、Key owner 与生命周期，异步读取后再次复查；该接口不返回访问令牌。模型运行时另按请求解析当前访问令牌，并按路线 B 放入 `X-IAM-Token`。
+同源 `GET /api/forge-iam/models` 在既有 Connection 认证后调用 Host 的 `refreshGatewayModels()`；返回 `{models,view}` 或精确错误码。该入口是用户主动刷新，直接发起一次目录同步。`modelAccess` 提供目录 `state`、`error`、`stale`、`retryAt`、`syncedAt`、`models` 及已保存地址；`stale` 表示列表仍是上次成功目录、此后的目录刷新未成功，`retryAt` 是下一次自动重试时间（不可重试的失败为空），`syncedAt` 是最近一次成功时间。它不是网关授权证明：调用仍按 `permit()` 与启用集合裁决。`resolveGatewayConnection()` 仅供 Host 返回绑定的地址、Key 与代际：内存无 grant 时先调用 `resolveToken()`，之后核对会话可继续、Key owner 与生命周期，异步读取后再次复查；该接口不返回访问令牌。模型运行时另按请求解析当前访问令牌，并按路线 B 放入 `X-IAM-Token`。
 
-[模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方与目录外模型。目录请求带宿主 `attributionHeaders()`，只请求 `${baseURL}/models`，禁用重定向、限制响应大小与数量、去重校验 ID；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。同步失败保留上次目录并标记 `stale`：可重试的失败（连接、超时、限流）同时保留适配器，按 2/5/15/30/60 秒退避；不可重试的失败（凭证被拒、目录非法）保留目录但关闭模型调用表面，避免每次调用都打到网关再失败；身份或网关变化、显式退出会清空目录。准备阶段的调用复查配置代际；已启动的流在同主体且授权仍有效时，不因保存 Key、停用或切换模型而中止。主体、会话或凭据授权丢失以及显式退出会中止本地流；迟到目录和内容不交付。展示用目录不随访问令牌过期清空：同一主体与网关下保留列表并以 `stale` 标注，调用仍被 `IAM_LOGIN_REQUIRED` 拒绝直到会话恢复。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 `200000`（`200K`）上下文窗口与 `64000`（`64K`）最大输出本地容量默认值，不宣称为网关实际上限。
+[模型运行时](<../src/managed-models.mjs>)通过公开 `llm.registerAdapter` 注册单一企业路由，通过 `llm/stream` 阻断其他提供方和本机未启用的模型。目录请求带宿主 `attributionHeaders()`，只请求 `${baseURL}/models`，禁用重定向、限制响应大小与数量、去重校验 ID；例如 `baseURL` 为 `https://gateway.corp.example/v1` 时，请求路径为 `/v1/models`。Host 先从当前账号本机记录和同一网关上次成功目录还原已启用模型，再请求目录。目录在途或失败时保留已装配的适配器，目录错误在设置页单独提示，最近一次成功目录标记 `stale`。连接、超时、限流等可重试错误按 2/5/15/30/60 秒退避。目录返回 `401` 或 `403` 时仍独立执行推理鉴权，调用使用当前网关连接、IAM 令牌、凭据归属及启用校验。身份或网关变化、显式退出会清空目录。准备阶段的调用复查配置代际；已启动的流在同主体且授权仍有效时，不因保存 Key、停用或切换模型而中止。主体、会话或凭据授权丢失以及显式退出会中止本地流；迟到目录和内容不交付。展示用目录不随访问令牌过期清空：同一主体与网关下保留列表并以 `stale` 标注，新请求在原会话仍可续期时最多等待现有 IAM 单飞 5 秒，之后重新检查会话实例、当前访问令牌、Key 归属及启用校验。显式退出或授权会话切换使等待中的旧请求失效。传输复用宿主公开 `PiAiAdapter` 与 SDK OpenAI-compatible 协议，不自写流协议。模型仅声明文本输入；标准列表没有容量信息，当前适配采用 `200000`（`200K`）上下文窗口与 `64000`（`64K`）最大输出本地容量默认值，不宣称为网关实际上限。
 
-宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务；新对话模型由用户在宿主中选择。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出。模型推理对 429/503 不做自动退避；绑定变化时在尚未产出分片等条件下最多重建并重试一次，未产出分片不证明请求尚未发送，真实派发顺序和计费仍待验证。
+宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务；新对话模型由用户在宿主中选择。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出。绑定恢复与建连恢复共用一次重试预算。只有直接发往已绑定推理端点的首次 POST 在 `connect` 阶段明确被 `ECONNREFUSED` 拒绝时，才允许按建连失败重试。等待 200 毫秒后重新检查取消和准入，再由 SDK 解析凭据。推理拒绝自动跟随重定向，HTTP 错误和派发状态不明的传输故障均禁止建连重试。
 
-企业模型调用失败时，插件尽力将安全诊断写入 `$DSH_HOME/logs/forge-iam-model-failures.jsonl`；未设置 `DSH_HOME` 时使用 `~/.dsh/logs/forge-iam-model-failures.jsonl`。记录包含固定文案、已登记错误码、时间、派发状态以及 provider、model 和可选 session ID 的 SHA-256 摘要，不含异常原文、请求内容或凭据。插件本地门禁拒绝标为 `local`，无法判断是否派发时标为 `unknown`。日志写入失败会发出固定警告，不影响模型调用；本地日志由使用者清理，不替代审计或宿主调试视图。摘要可能被用于猜测常见标识，分享日志前应评估其敏感性。
+插件将企业模型调用失败和目录同步期间的适配器初始化异常写入 `$DSH_HOME/logs/forge-iam-model-failures.jsonl`，未设置 `DSH_HOME` 时使用 `~/.dsh/logs/forge-iam-model-failures.jsonl`。记录包含固定文案、已登记错误码、时间、阶段以及调用所带 provider、model 和可选 session ID 的 SHA-256 摘要。日志排除异常原文、堆栈、请求内容和凭据。插件本地门禁拒绝标为 `local`，无法判断是否派发时标为 `unknown`。适配器初始化异常标为 `adapter-initialization`，用白名单区分模块缺失、常见程序异常和其他初始化失败。推理诊断还可记录 `transport`，提供派发阶段、白名单网络码、HTTP 状态、限长后的 `Retry-After` 毫秒值、是否已有输出和是否计划重试。目录同步独立报告网关结果，已装配且配置仍匹配的模型可以继续通过鉴权调用。日志写入失败时发出固定警告，调用与目录结果照常返回。本地日志由使用者清理，不替代审计或宿主调试视图。摘要可能被用于猜测常见标识，分享日志前应评估其敏感性。
+
+访问令牌已过期时，新调用的续期等待最多 5 秒。即使首次读库未返回，等待者也可接收本 Host 已完成的同一登录轮换通知，或在预算内独立读回另一 Host 的已提交结果。SDK 构造请求时只取本机令牌快照，仍有效的访问令牌无需等待尚未声明轮换的续期预检。发送前仍复核同一登录的持久 grant，重设 `X-IAM-Token`，同步本机授权截止时间，并检查网关绑定、启用模型、凭据归属及取消状态。未决轮换或会话替换阻止发送，HTTP 错误响应不会触发重放。持久记录复核后到服务器收包前仍可能轮换，最终准入由网关裁决。
+
+正在接收已被网关接受的推理响应时，Host 在旧截止时间前为活跃流共享最多两次只读授权复核。复核确认同一登录、同一受信存储且基线匹配的持久轮换后，原 HTTP 流可继续到新期限。缺少有效后继、未决轮换、授权丢失或回读迟到时不延长本机授权。该路径不写入持久授权或模型配置，也不重新派发推理。双 Host 使用独立 SQLite 句柄共享同一凭据库的用例覆盖截止时间和拒绝场景，真实企业网关的在途断流行为待联调。
 
 模型启用与参数覆盖分两层。**启用集合**决定可用性：`modelOptions` 的键即"已启用"，值为覆盖参数（可为空对象）。未启用的目录模型照旧出现在企业模型页，但 `listModels` 不返回它，`prepareCall`/`resolveModel`/`llm/stream` 都以 `ENTERPRISE_MODEL_NOT_ALLOWED` 拒绝，避免"能选不能用"。首跑（该 subject 从未保存过）自动启用目录第一个模型并尝试保存；管理员配置了 `defaultModel` 且网关仍提供时优先用它。显式保存空集合是合法状态，不会被打回默认值——区分"从未保存"与"保存为空"的是 `readModelSelection()` 返回的 `saved` 标志。
 

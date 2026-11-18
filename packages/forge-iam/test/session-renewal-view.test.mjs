@@ -56,7 +56,11 @@ test('a lapsed refresh window is reported as unrenewable before the access token
   assert.equal(ready.renewal, 'unavailable');
   assert.equal(oidc.counts.refresh, 0, 'nothing can be renewed, so nothing is attempted');
 
-  clock.wall += 61_000;
+  clock.wall += 20_000;
+  assert.equal(await service.getAccessToken(), 'synthetic-access', 'the early renewal window cannot cut short a valid AT');
+  assert.equal(service.getView().state, 'ready');
+  assert.equal(oidc.counts.refresh, 0);
+  clock.wall += 40_000;
   const expired = service.notifyView();
   assert.equal(expired.state, 'expired');
   assert.equal(expired.error, null, 'a lapsed renewal is a state, not a request failure');

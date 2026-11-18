@@ -1,11 +1,114 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createGrantStore } from '../src/store.mjs';
+import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 import { refreshBaseId } from '../src/session-identity.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
 import { createIamService } from './support/trusted-service.mjs';
+
+test('a real connect refusal restores the same grant and permits a later rotation', async (t) => {
+  let posts = 0;
+  const endpoint = createServer((request, response) => {
+    posts++;
+    request.resume();
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({
+      access_token: 'rotated-access', refresh_token: 'rotated-refresh', token_type: 'Bearer', expires_in: 120,
+    }));
+  });
+  endpoint.listen(0, '127.0.0.1');
+  await once(endpoint, 'listening');
+  const { port } = endpoint.address();
+  await new Promise((resolve) => endpoint.close(resolve));
+  t.after(() => { if (endpoint.listening) return new Promise((resolve) => endpoint.close(resolve)); });
+  const oidc = await startMockOidc();
+  t.after(() => oidc.close());
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  const now = Date.now();
+  const grant = {
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer,
+    subject: 'E1001', clientId: oidc.clientId, scope: 'openid',
+    accessToken: 'original-access', refreshToken: 'original-refresh',
+    obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + 40_000).toISOString(),
+    refreshExpiresAt: new Date(now + 100_000).toISOString(),
+  };
+  await store.write(grant);
+  const config = { ...oidc.endpoints, tokenEndpoint: `http://127.0.0.1:${port}/token`, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' };
+  const service = createIamService(config, { credentials, now: () => now });
+  const observer = createIamService(config, { credentials, now: () => now });
+  const waiter = createIamService(config, { credentials, now: () => now });
+  const restoreStarted = Promise.withResolvers();
+  const resumeRestore = Promise.withResolvers();
+  const modify = credentials.modifyRecord.bind(credentials);
+  let mutations = 0;
+  credentials.modifyRecord = async (...args) => {
+    if (++mutations === 2) {
+      restoreStarted.resolve();
+      await resumeRestore.promise;
+    }
+    return modify(...args);
+  };
+  t.after(() => service.dispose());
+  t.after(() => observer.dispose());
+  t.after(() => waiter.dispose());
+  t.after(() => resumeRestore.resolve());
+  await service.hydrate();
+  const refresh = service.getAccessToken();
+  await Promise.race([restoreStarted.promise, refresh.then(() => assert.fail('restoration was not attempted'))]);
+  assert.equal((await observer.hydrate()).error, 'IAM_REAUTH_REQUIRED');
+  const waiting = waiter.getAccessToken();
+  // The waiter reads the pending record before the owner restores it.
+  await new Promise(resolve => setImmediate(resolve));
+  resumeRestore.resolve();
+  assert.equal(await refresh, grant.accessToken);
+  assert.equal(await waiting, grant.accessToken);
+  assert.equal((await observer.syncFromStore()).state, 'ready');
+  assert.deepEqual((await store.read()).grant, grant);
+  assert.equal(service.getView().state, 'ready');
+  assert.equal(posts, 0);
+
+  endpoint.listen(port, '127.0.0.1');
+  await once(endpoint, 'listening');
+  assert.equal(await service.getAccessToken(), 'rotated-access');
+  assert.equal(posts, 1);
+  assert.equal((await store.read()).grant.refreshOperation.state, 'complete');
+});
+
+test('an injected transport reporting a connect refusal cannot authorize restoring pending', async (t) => {
+  const oidc = await startMockOidc();
+  const credentials = new MemoryCredentials();
+  const store = createGrantStore(credentials);
+  const now = Date.now();
+  await store.write({
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'), issuer: oidc.issuer,
+    subject: 'E1001', clientId: oidc.clientId, scope: 'openid',
+    accessToken: 'original-access', refreshToken: 'original-refresh',
+    obtainedAt: new Date(now).toISOString(), accessExpiresAt: new Date(now + 40_000).toISOString(),
+    refreshExpiresAt: new Date(now + 100_000).toISOString(),
+  });
+  let posts = 0;
+  const service = createIamService({
+    ...oidc.endpoints, clientId: oidc.clientId, redirectUri: 'http://127.0.0.1:4567/iam/callback',
+  }, {
+    credentials, now: () => now,
+    async fetch(url, init) {
+      if (url !== oidc.endpoints.tokenEndpoint) return fetch(url, init);
+      posts++;
+      const cause = Object.assign(new Error('synthetic socket failure'), { code: 'ECONNREFUSED', syscall: 'connect' });
+      throw new TypeError('synthetic unverified transport failure', { cause });
+    },
+  });
+  t.after(async () => { await service.dispose(); await oidc.close(); });
+  await service.hydrate();
+  await assert.rejects(service.getAccessToken(), { code: 'IAM_REAUTH_REQUIRED' });
+  assert.equal((await store.read()).grant.refreshOperation.state, 'pending');
+  assert.equal(posts, 1);
+});
 
 for (const expired of [false, true]) test(`an adopted rotation does not inherit the old token backoff (${expired ? 'expired' : 'valid'} access)`, async (t) => {
   const oidc = await startMockOidc({ accessTtl: 30 });
@@ -118,6 +221,56 @@ test('a view notification after access expires preserves the scheduled preflight
   while (service.getView().state !== 'ready' && Date.now() < readyDeadline) await delay(20);
   assert.equal(service.getView().state, 'ready');
   assert.notEqual(await service.getAccessToken(), 'synthetic-access');
+});
+
+test('a scheduled renewal that crosses access expiry during its first read keeps its flight', { timeout: 5000 }, async (t) => {
+  const oidc = await startMockOidc({ accessTtl: 120 });
+  const credentials = new MemoryCredentials();
+  const read = credentials.readRecord.bind(credentials);
+  const readStarted = Promise.withResolvers();
+  const releaseRead = Promise.withResolvers();
+  let holdNextRead = false;
+  credentials.readRecord = async (key) => {
+    if (key === GRANT_KEY && holdNextRead) {
+      holdNextRead = false;
+      readStarted.resolve();
+      await releaseRead.promise;
+    }
+    return read(key);
+  };
+  const start = Date.now();
+  let clock = start;
+  oidc.refreshTokens.set('synthetic-refresh', { subject: 'E1001' });
+  await createGrantStore(credentials).write({
+    version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
+    issuer: oidc.issuer, subject: 'E1001', clientId: oidc.clientId, scope: 'openid',
+    refreshToken: 'synthetic-refresh', accessToken: 'synthetic-access', obtainedAt: new Date(start).toISOString(),
+    accessExpiresAt: new Date(start + 1000).toISOString(), refreshExpiresAt: new Date(start + 120_000).toISOString(),
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const service = createIamService({ ...oidc.endpoints, clientId: oidc.clientId,
+    redirectUri: 'http://127.0.0.1:4567/iam/callback' }, {
+    credentials, now: () => clock, monotonic: () => clock - start,
+  });
+  t.after(async () => { releaseRead.resolve(); await service.dispose(); t.mock.timers.reset(); await oidc.close(); });
+  assert.equal((await service.hydrate()).state, 'ready');
+  const tick = (ms) => { clock += ms; t.mock.timers.tick(ms); };
+  holdNextRead = true;
+  tick(500);
+  await readStarted.promise;
+  tick(501);
+  const view = service.notifyView();
+  assert.equal(view.state, 'expired');
+  assert.equal(view.renewal, 'available');
+  releaseRead.resolve();
+
+  const deadline = Date.now() + 1000;
+  while (service.getView().state !== 'ready' && Date.now() < deadline) await delay(10);
+  assert.equal(oidc.counts.refresh, 1, 'the original read must refresh without waiting for another timer');
+  assert.equal(service.getView().state, 'ready');
+  tick(30_000);
+  await delay(25);
+  assert.equal(oidc.counts.refresh, 1, 'the superseded fallback must not refresh again');
 });
 
 test('a replacement session does not inherit the previous session preflight backoff', async (t) => {

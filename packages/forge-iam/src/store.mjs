@@ -2,6 +2,7 @@ import { isModelId, MAX_MANUAL_MODELS, normalizeGatewayBaseURL } from './model-o
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { parseGrant, validateGrant } from './record.mjs';
+import { grantIdentity } from './session-identity.mjs';
 import { inspectSessionRecord, isSessionTombstone as isTombstone, SESSION_TOMBSTONE as TOMBSTONE } from './session-read.mjs';
 
 export const GRANT_KEY = 'heluo-iam/session';
@@ -154,7 +155,7 @@ export function createGrantStore(credentials, options = {}) {
      * Replace the exact sign-out snapshot under the same record lock that
      * selects and revokes it. An unknown result must never trigger a delete.
      */
-    async signOutSnapshot(expected, beforeClear) {
+    async signOutSnapshot(expected, beforeClear, confirmedRefresh) {
       if (!atomicVerified() || typeof beforeClear !== 'function'
         || (expected !== null && !validateGrant(expected).ok)) return { ok: false };
       let decision;
@@ -174,7 +175,15 @@ export function createGrantStore(credentials, options = {}) {
           if (current.kind !== 'grant') throw new Error('invalid record');
           const parsed = parseGrant(current.payload);
           if (!parsed.ok) throw new Error('invalid grant');
-          if (parsed.value.signOutOperation || parsed.value.refreshOperation?.state === 'pending') {
+          const completesRefresh = parsed.value.refreshOperation?.state === 'pending'
+            && isDeepStrictEqual(parsed.value, confirmedRefresh?.pending)
+            && validateGrant(confirmedRefresh.complete).ok
+            && Boolean(confirmedRefresh.complete.accessToken)
+            && !confirmedRefresh.complete.signOutOperation
+            && isDeepStrictEqual(grantIdentity(parsed.value), grantIdentity(confirmedRefresh.complete))
+            && isDeepStrictEqual(confirmedRefresh.complete.refreshOperation, { ...parsed.value.refreshOperation, state: 'complete' })
+            && confirmedRefresh.complete.refreshToken !== parsed.value.refreshToken;
+          if (parsed.value.signOutOperation || (parsed.value.refreshOperation?.state === 'pending' && !completesRefresh)) {
             decision = 'pending';
             unchanged = structuredClone(current);
             return undefined;
@@ -184,7 +193,7 @@ export function createGrantStore(credentials, options = {}) {
             unchanged = structuredClone(current);
             return undefined;
           }
-          original = structuredClone(parsed.value);
+          original = structuredClone(completesRefresh ? confirmedRefresh.complete : parsed.value);
           pending = { kind: 'grant', payload: { ...original, signOutOperation: {
             version: 1, state: 'pending', id: randomBytes(32).toString('base64url'),
           } } };

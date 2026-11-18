@@ -675,9 +675,14 @@ test('a cached catalogue is scoped to one person and gateway', async t => {
   assert.doesNotMatch(text, /model-of-a/);
 });
 
-test('model-access errors say the same thing here as on the host turn surface', async t => {
-  // Bilateral: every code the host can put on a model-access error must render the
-  // same sentence in the panel, so the two surfaces cannot drift apart code by code.
+test('model-access errors describe the directory where its codes overlap with inference', async t => {
+  const directoryMessages = {
+    ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED: '当前凭证未通过模型目录接口的鉴权。',
+    ENTERPRISE_GATEWAY_FORBIDDEN: '当前账号没有读取模型目录的权限。',
+    ENTERPRISE_GATEWAY_RATE_LIMIT: '读取模型目录过于频繁，请稍后刷新。',
+    ENTERPRISE_GATEWAY_UNAVAILABLE: '模型目录暂不可达，请稍后刷新。',
+    ENTERPRISE_GATEWAY_REQUEST_REJECTED: '网关拒绝了模型目录请求，请检查网关地址。',
+  };
   for (const code of Object.keys(MESSAGES)) {
     const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
     const panel = await mountModels(async path => {
@@ -687,13 +692,15 @@ test('model-access errors say the same thing here as on the host turn surface', 
     });
     t.after(() => panel.close());
     assert.ok(MESSAGES[code], `${code} must have a host message`);
-    assert.ok(panel.text(panel.render()).includes(MESSAGES[code]), `${code} must repeat the host message in the panel`);
+    const rendered = panel.text(panel.render());
+    assert.ok(rendered.includes(directoryMessages[code] ?? MESSAGES[code]), `${code} must be explained in the panel`);
+    if (Object.hasOwn(directoryMessages, code)) assert.ok(!rendered.includes(MESSAGES[code]), `${code} must describe discovery only`);
   }
 });
 
 test('a rejected request and an unsupported level are explained where they surface', async t => {
   for (const [code, text] of [
-    ['ENTERPRISE_GATEWAY_REQUEST_REJECTED', /网关拒绝了本次请求/],
+    ['ENTERPRISE_GATEWAY_REQUEST_REJECTED', /网关拒绝了模型目录请求/],
     ['ENTERPRISE_MODEL_REASONING_UNSUPPORTED', /推理档位不受支持/],
   ]) {
     const failed = { ...view, modelAccess: { configured: true, state: 'error', error: code, models: [] } };
@@ -737,7 +744,7 @@ test('a stale catalogue is shown with its retry time instead of a blank panel', 
   t.after(() => accountPanel.close());
   assert.match(accountPanel.text(accountPanel.render()), /目录待刷新/);
   // The reason is explained once, not twice.
-  assert.equal(text.split('暂时无法连接企业模型').length - 1, 1);
+  assert.equal(text.split('模型目录暂不可达').length - 1, 1);
 
   // In-notice retry button triggers models refresh immediately without scrolling to bottom
   const retryBtn = panel.findButton(panel.render(), '立即重试');

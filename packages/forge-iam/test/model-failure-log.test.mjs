@@ -9,7 +9,7 @@ test('writes structured diagnostics without unknown codes or request values', t 
   const home = mkdtempSync(join(tmpdir(), 'forge-diagnostics-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const log = createModelFailureLogger({ home });
-  log({ detailCode: 'secret-code-value', code: 'ENTERPRISE_GATEWAY_CALL_FAILED', message: 'fixed safe message', stage: 'unknown', request: { provider: 'secret-provider', model: 'secret-model', sessionId: 'secret-session', messages: ['secret-prompt'] } });
+  log({ detailCode: 'secret-code-value', code: 'ENTERPRISE_GATEWAY_CALL_FAILED', message: 'fixed safe message', stage: 'unknown', request: { provider: 'secret-provider', model: 'secret-model', sessionId: 'secret-session', messages: ['secret-prompt'] }, transport: { phase: 'response', fault: 'secret-fault', status: 503, headers: { authorization: 'secret-token' }, retryAfterMs: 'secret-retry', output: 'secret-output' } });
   const path = join(home, 'logs', 'forge-iam-model-failures.jsonl');
   const text = readFileSync(path, 'utf8');
   assert.doesNotMatch(text, /secret-/);
@@ -17,6 +17,7 @@ test('writes structured diagnostics without unknown codes or request values', t 
   assert.equal(event.detailCode, null);
   assert.equal(event.stage, 'unknown');
   assert.equal(event.modelHash.length, 64);
+  assert.deepEqual(event.transport, { phase: 'response', status: 503, output: false, retrying: false });
   if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o077, 0);
 });
 

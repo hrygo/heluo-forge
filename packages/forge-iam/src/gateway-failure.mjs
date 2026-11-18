@@ -272,5 +272,8 @@ export const classifyFailure = (failure) => {
   if (status !== undefined) return gatewayCode(status);
   const syscall = failure?.cause?.code ?? failure?.errno;
   if (typeof syscall === 'string' && UNREACHABLE_SYSCALLS.has(syscall)) return 'ENTERPRISE_GATEWAY_UNAVAILABLE';
+  // The DSH pi-ai adapter uses these coarse codes after flattening the wire
+  // error. They categorize failures, but do not prove delivery or retry safety.
+  if (raw === 'SERVER' || raw === 'TRANSPORT' || raw === 'STREAM_CLOSED') return 'ENTERPRISE_GATEWAY_UNAVAILABLE';
   return 'ENTERPRISE_GATEWAY_CALL_FAILED';
 };

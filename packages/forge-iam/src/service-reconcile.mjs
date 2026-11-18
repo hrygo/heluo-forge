@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { assertClientAuthCurrent } from './client-auth.mjs';
 import { IamError } from './errors.mjs';
 import { isAccessExpired, isRefreshUsable } from './record.mjs';
-import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
+import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, refreshBaseId, REFRESH_TIMEOUT_MS, safeMessage } from './service-helpers.mjs';
 
 /**
  * The reconciler between the stored record and the live view.
@@ -114,7 +114,10 @@ export function createReconciler(env) {
       const marker = record.grant.refreshOperation;
       const identity = grantIdentity(record.grant);
       const refreshDigest = (grant, id) => createHmac('sha256', id).update(grant.refreshToken).digest('base64url');
-      if (observation) {
+      const restored = observation && marker?.state !== 'pending' && isDeepStrictEqual(identity, observation.identity)
+        && refreshBaseId(record.grant, observation.id) === observation.base
+        && (!isAccessExpired(record.grant, now()) || isRefreshUsable(record.grant, now()));
+      if (observation && !restored) {
         if (!marker || marker.version !== observation.version || marker.id !== observation.id
           || marker.base !== observation.base || !isDeepStrictEqual(identity, observation.identity)) {
           setObservation(null);
@@ -174,6 +177,7 @@ export function createReconciler(env) {
       ctx.state = isAccessExpired(record.grant, now()) ? 'expired' : 'ready';
       ctx.error = null;
       adoptConsumption(consumption, record.grant);
+      if (restored) token.lastBackgroundRefreshAt = now();
       // With a usable refresh token an expired session is recoverable; without
       // this, the interim client would only ever offer a full re-login.
       if (ctx.state === 'expired' && isRefreshUsable(record.grant, now())
