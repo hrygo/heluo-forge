@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-PLAN-023 |
 | 文档名称 | Forge 专家智能体接入方案 |
-| 版本 | V0.2.0 |
+| 版本 | V0.2.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | Agent（代拟） |
@@ -40,7 +40,7 @@
 
 2026-11-18 在 Delegra 工作树 `a5f8f5a386` 运行现有测试，测试辅助文件含既有工作区改动。环境为 Node.js `24.21.0`、Vitest `5.0.3`、隔离的临时 PostgreSQL、合成账号和模拟执行，出站网络限于本机，私有访问控制为 `enforce`。第一轮选择 13 项，18.39 秒。第二轮选择 6 项，16.14 秒。**选中的 19 项全部通过**。证据适用于该工作树和测试夹具，目标部署版本、企业凭据、真实运行器及 DSH 端到端验收见 §6.1。
 
-复跑入口为 Delegra `server/` 下的 `node ../node_modules/vitest/vitest.mjs run --config vitest.config.ts`。在隔离环境按以下场景筛选 `src/__tests__/` 中的套件，使用套件自建测试数据库。
+复跑使用下文的[两轮筛选命令](#211-复跑命令)及套件自建数据库。各轮的命中文件、通过和跳过数见[筛选结果](#212-筛选结果)。
 
 | 验证面 | 本机结果 | Delegra 测试套件 |
 |---|---|---|
@@ -51,6 +51,47 @@
 | 回执与结果 | 现有公共 MCP 路径的同键同内容重试只创建一条任务，同键异内容被拒绝。模拟回执丢失时保持未知，重复请求未再次调用下游。新建执行器可读回测试保存的结果，模拟运行还验证了 `paperclip.run_result.v1` 结果形态 | `public-mcp.test.ts` |
 
 第二轮的断言通过。测试收尾时，后台队列和工具审核投递访问已关闭的临时数据库，日志记录 `CONNECTION_ENDED` 与 `CONNECTION_DESTROYED`。真实运行器收尾与跨进程恢复保留为待实测。
+
+#### 2.1.1 复跑命令
+
+在上述 Delegra 工作树的 `server/` 目录执行。先安装该工作树的依赖，并确保 `node --version` 为 `v24.21.0`。以下为原取证使用的 macOS 本机隔离方式。每轮使用独立临时目录，清空继承的进程环境，关闭遥测，并仅允许本机出站连接。
+
+```sh
+node_bin="$(command -v node)"
+
+run_probe() (
+  probe_dir="$(mktemp -d "${TMPDIR:-/tmp}/delegra-expert-local.XXXXXXXX")" || exit 1
+  mkdir -p "$probe_dir/home" "$probe_dir/tmp" || exit 1
+  trap 'rmdir "$probe_dir/home" "$probe_dir/tmp" "$probe_dir" 2>/dev/null || true' EXIT
+  time sandbox-exec -p '(version 1) (allow default) (deny network-outbound) (allow network-outbound (remote ip "localhost:*"))' \
+    env -i PATH="${node_bin%/*}:/usr/bin:/bin" TMPDIR="$probe_dir/tmp" \
+    PAPERCLIP_HOME="$probe_dir/home" PAPERCLIP_TEST_HOST_HOME="$probe_dir/home" \
+    PAPERCLIP_TELEMETRY_DISABLED=1 PAPERCLIP_ISSUE_PRIVACY_MODE=enforce \
+    "$node_bin" ../node_modules/vitest/vitest.mjs run --config vitest.config.ts "$@"
+)
+
+run_probe --reporter=verbose \
+  src/__tests__/authorization-service.test.ts \
+  src/__tests__/heartbeat-run-privacy-routes.test.ts \
+  src/__tests__/heartbeat-task-session-reset.test.ts \
+  src/__tests__/public-mcp.test.ts \
+  -t "explicit target-agent allowlist|limits viewer members to read-only|enforces private issue implicit principals|returns 404 for direct private-run content|returns full private-run content|rechecks a revoked grant on the next history request|clears only the selected task's UUID and identifier sessions|replays completed writes|uses real task/document routes|hides private tasks from assistant search|Dot prototype"
+
+run_probe --reporter=default --silent=true \
+  src/__tests__/agent-conversations.test.ts \
+  src/__tests__/heartbeat-task-context.test.ts \
+  src/__tests__/public-mcp.test.ts \
+  -t "atomically resolves one task per person and agent|resolves through authenticated company routes|rejects token expiry, revocation and membership loss on the next call|rejects cross-company calls, missing write scope|clears stale wake comments and continuation data|excludes a wake comment from another company"
+```
+
+#### 2.1.2 筛选结果
+
+原始 Vitest 输出摘要如下。第一轮会话重置用例分别命中 `uuid`、`identifier` 和 `lowercase_identifier` 三个参数。第二轮各文件各命中两个用例。
+
+| 轮次 | 命中文件与通过数 | Vitest 汇总 |
+|---|---|---|
+| 第一轮 | `authorization-service.test.ts` 3 项，`heartbeat-run-privacy-routes.test.ts` 3 项，`heartbeat-task-session-reset.test.ts` 3 项，`public-mcp.test.ts` 4 项 | `4 passed` 文件，`13 passed / 168 skipped` 用例 |
+| 第二轮 | `agent-conversations.test.ts` 2 项，`heartbeat-task-context.test.ts` 2 项，`public-mcp.test.ts` 2 项 | `3 passed` 文件，`6 passed / 122 skipped` 用例 |
 
 ### 2.2 路线取舍
 

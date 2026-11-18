@@ -79,7 +79,7 @@
 | CORP-DSH-PLAN-020 | Issue #254 审查意见处置与覆盖台账 | [plans/2026-11-12-issue-254-review-ledger.md](<plans/2026-11-12-issue-254-review-ledger.md>) | V0.4.1 | 草案（代拟，待负责人确认） | 平台组（代拟） | G0 认领；G1 审查处置与合并边界 |
 | CORP-DSH-PLAN-021 | 企业模型设置手动添加模型实施方案 | [plans/2026-11-13-enterprise-manual-model-add-luna-guide.md](<plans/2026-11-13-enterprise-manual-model-add-luna-guide.md>) | V0.4.0 | 草案 | 平台组（代拟） | 离线代码、UI 与合成探针已在分支合流闭环（正式签批仍待定）；真实企业网关与双端实机未联调 |
 | CORP-DSH-PLAN-022 | 企业设置统一、Token 收敛与手动模型统筹实施方案 | [plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md](<plans/2026-11-13-enterprise-settings-and-manual-model-master-plan.md>) | V0.3.0 | 草案 | 平台组（代拟） | Wave 0–4 代码、UI 契约、文档与 Wave 5 合成探针已在分支离线闭环（正式签批仍待定）；真实企业网关、OS 凭据库与双端实机未联调 |
-| CORP-DSH-PLAN-023 | Forge 专家智能体接入方案 | [plans/2026-11-18-forge-experts-integration-proposal.md](<plans/2026-11-18-forge-experts-integration-proposal.md>) | V0.2.0 | 草案 | Agent（代拟） | 暂缓实施。Delegra 本机取证见 §2.1，目标版本、企业契约与详细设计仍待准入 |
+| CORP-DSH-PLAN-023 | Forge 专家智能体接入方案 | [plans/2026-11-18-forge-experts-integration-proposal.md](<plans/2026-11-18-forge-experts-integration-proposal.md>) | V0.2.1 | 草案 | Agent（代拟） | 暂缓实施。Delegra 本机取证见 §2.1，目标版本、企业契约与详细设计仍待准入 |
 | CORP-DSH-REQ-001 | 需求与场景基线 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V3.2.0 | 评审稿 | 平台组 | G0 |
 | CORP-DSH-REQ-002 | Issue 交付单元与研发职责调整方案 | [requirements/issue-delivery-adjustment-proposal.md](<requirements/issue-delivery-adjustment-proposal.md>) | V1.0.1 | 生效 | 项目负责人（当前用户） | 需求决定已确认；技术缺口按 G1/G2 验证，实际退役实施另列任务 |
 | CORP-DSH-REQ-003 | Agent 增强的企业聊天产品方案 | [requirements/enterprise-collaboration-chat-proposal.md](<requirements/enterprise-collaboration-chat-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 需求基线同步、接入可行性与详细设计；企业实机验证后试点 |
