@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -142,6 +143,29 @@ test('allowlisted root entries are accepted', () => {
     // Present in ROOT_FILES: adding it must not trip the surface check.
     write(root, '.env.example', 'PLACEHOLDER=\n');
     assert.deepEqual(checkRepo(root).errors, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Git root checks include tracked and untracked entries and exclude ignored files', () => {
+  const root = fixture();
+  try {
+    execFileSync('git', ['init', '--quiet', '--template=', root]);
+    execFileSync('git', ['-C', root, '-c', 'core.autocrlf=false', 'add', '--all']);
+    write(root, '.DS_Store', 'ignored by the fixture');
+    assert.deepEqual(checkRepo(root).errors, []);
+
+    write(root, 'tracked-report.md', '# Tracked report\n');
+    execFileSync('git', ['-C', root, '-c', 'core.autocrlf=false', 'add', '--', 'tracked-report.md']);
+    write(root, 'untracked-report.md', '# Untracked report\n');
+    write(root, 'scratch/notes.md', '# Scratch notes\n');
+
+    const { errors } = checkRepo(root);
+    assert.match(errors.join('\n'), /repo: tracked-report\.md is an unapproved root file/);
+    assert.match(errors.join('\n'), /repo: untracked-report\.md is an unapproved root file/);
+    assert.match(errors.join('\n'), /repo: scratch\/ is an unapproved top-level directory/);
+    assert.equal(errors.length, 3, errors.join('\n'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
