@@ -32,7 +32,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 var require_extend = __commonJS({
-  "../../node_modules/.pnpm/extend@3.0.2/node_modules/extend/index.js"(exports, module2) {
+  "node_modules/extend/index.js"(exports, module2) {
     "use strict";
     var hasOwn = Object.prototype.hasOwnProperty;
     var toStr = Object.prototype.toString;
@@ -341,6 +341,13 @@ function createDestinationKit(dependencies) {
 // src/management-locales.ts
 var managementLocales = {
   "zh": {
+    "mutation.pending": "\u64CD\u4F5C\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u8BF7\u5148\u6838\u5BF9\u7ED3\u679C\uFF0C\u4E0D\u8981\u91CD\u590D\u63D0\u4EA4\u3002",
+    "mutation.check": "\u6838\u5BF9\u64CD\u4F5C\u7ED3\u679C",
+    "mutation.confirmed": "\u64CD\u4F5C\u5DF2\u786E\u8BA4\uFF0C\u5DF2\u8BFB\u53D6\u5F53\u524D\u72B6\u6001\u3002",
+    "mutation.refreshWarning": "\u64CD\u4F5C\u5DF2\u786E\u8BA4\uFF0C\u4F46\u5F53\u524D\u72B6\u6001\u5237\u65B0\u5931\u8D25\u3002\u8BF7\u5237\u65B0\u9875\u9762\u6838\u5BF9\uFF0C\u4E0D\u8981\u91CD\u590D\u63D0\u4EA4\u3002",
+    "error.proto.pending": "\u64CD\u4F5C\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\u3002",
+    "error.proto.busy": "\u8BF7\u5148\u6838\u5BF9\u4E0A\u4E00\u64CD\u4F5C\u7684\u7ED3\u679C\u3002",
+    "error.proto.response": "\u670D\u52A1\u7AEF\u54CD\u5E94\u65E0\u6548\uFF0C\u64CD\u4F5C\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\u3002",
     "error.enterprise.reserved": "\u8BE5\u540D\u79F0\u7531\u4F01\u4E1A\u6D41\u7A0B\u6280\u80FD\u4FDD\u7559\uFF0C\u8BF7\u4F7F\u7528\u5176\u4ED6\u540D\u79F0\u3002",
     "error.repo.capacity": "\u5B89\u88C5\u6765\u6E90\u72B6\u6001\u8D85\u8FC7 16 MiB\u3002\u8BF7\u5148\u6E05\u7406\u4E0D\u9700\u8981\u7684\u56DE\u6536\u8BB0\u5F55\u6216\u65E7\u8EAB\u4EFD\uFF0C\u4ECD\u6709\u6548\u7684\u5B89\u88C5\u526F\u672C\u4F1A\u4FDD\u7559\u3002",
     "error.repo.conflict": "\u540C\u540D\u6280\u80FD\u5DF2\u5B58\u5728\u6216\u5B89\u88C5\u5931\u8D25\uFF0C\u672C\u5730\u6587\u4EF6\u672A\u88AB\u8986\u76D6\u3002",
@@ -350,6 +357,13 @@ var managementLocales = {
     "token.detailLine": "\u7B80\u4ECB \u2248{description} token \xB7 \u6B63\u6587 \u2248{body} token"
   },
   "en": {
+    "mutation.pending": "The operation is awaiting confirmation. Check its result before submitting again.",
+    "mutation.check": "Check operation result",
+    "mutation.confirmed": "The operation is confirmed and current state has been loaded.",
+    "mutation.refreshWarning": "The operation is confirmed, but current state could not refresh. Refresh to check it; do not submit again.",
+    "error.proto.pending": "The operation is awaiting confirmation.",
+    "error.proto.busy": "Confirm the previous operation first.",
+    "error.proto.response": "Invalid server response. The operation is awaiting confirmation.",
     "error.enterprise.reserved": "This name is reserved for an enterprise workflow. Choose another name.",
     "error.repo.capacity": "Source tracking exceeds 16 MiB. Remove unneeded Trash records or legacy identities first. Active installation copies are kept.",
     "error.repo.conflict": "A skill with this name exists or installation failed. Local files were not overwritten.",
@@ -15974,6 +15988,7 @@ function NacosDetailDialog(props) {
         h(
           "div",
           { className: "dssm-nacos-actions" },
+          uncertain ? h(Button2, { variant: "outline", size: "sm", disabled: props.checking, onClick: props.onCheck }, t("nacos.checkResult")) : null,
           h(Button2, { variant: "outline", size: "sm", onClick: installing ? props.onCancel : props.onClose }, t(installing ? "btn.cancel" : "btn.close")),
           h(Button2, { variant: "primary", size: "sm", disabled: !detail || loading || installing || uncertain || !props.ready, onClick: props.onInstall }, t(installing ? "nacos.downloading" : "nacos.download"))
         )
@@ -15982,6 +15997,7 @@ function NacosDetailDialog(props) {
     h(
       "div",
       { className: "dssm-nacos-detail" },
+      uncertain ? h("p", { className: "dssm-nacos-note", role: "status" }, t("nacos.pending")) : null,
       h(
         "div",
         { className: "dssm-nacos-overview" },
@@ -16131,6 +16147,55 @@ var nacosCss = `
 @media(prefers-reduced-motion:reduce){.dssm-nacos-card{transition:none}}
 `;
 
+// src/api-errors.ts
+var API_ERROR_CODES = {
+  nonJson: "error.proto.nonJson",
+  response: "error.proto.response",
+  pending: "error.proto.pending",
+  busy: "error.proto.busy"
+};
+function readApiFailure(payload) {
+  if (!payload || typeof payload !== "object") return { message: String(payload ?? ""), outcome: "unknown" };
+  const item = payload;
+  const nested = item.error !== void 0 ? readApiFailure(item.error) : void 0;
+  return {
+    ...typeof item.code === "string" ? { code: item.code } : nested?.code ? { code: nested.code } : {},
+    ...item.params && typeof item.params === "object" && !Array.isArray(item.params) ? { params: item.params } : nested?.params ? { params: nested.params } : {},
+    message: nested?.message ?? (typeof item.message === "string" ? item.message : "Unexpected response"),
+    outcome: item.outcome === "rejected" ? "rejected" : item.outcome === "pending" ? "pending" : "unknown"
+  };
+}
+var ApiFailure = class extends Error {
+  details;
+  constructor(details) {
+    super(details.message);
+    this.name = "ApiFailure";
+    this.details = details;
+  }
+};
+function normalizeApiFailure(payload) {
+  return payload instanceof ApiFailure ? payload : new ApiFailure(readApiFailure(payload));
+}
+function failureDetails(payload) {
+  return payload instanceof ApiFailure ? payload.details : readApiFailure(payload);
+}
+function isConfirmedRejection(payload) {
+  return payload instanceof ApiFailure && payload.details.outcome === "rejected";
+}
+function decodeOperationOutcome(payload, validResult) {
+  if (!payload || typeof payload !== "object") return { state: "pending" };
+  const value = payload;
+  if (value.state === "succeeded" && Object.hasOwn(value, "result") && validResult(value.result)) return { state: "succeeded", result: value.result };
+  if (value.state === "rejected") {
+    const details = readApiFailure(payload);
+    if (details.code?.startsWith("error.") && details.message && details.message !== "Unexpected response") return { state: "rejected", failure: new ApiFailure({ ...details, outcome: "rejected" }) };
+  }
+  return { state: "pending" };
+}
+function isInstallReceipt(value) {
+  return !!value && typeof value === "object" && "name" in value && typeof value.name === "string" && "root" in value && typeof value.root === "string";
+}
+
 // src/nacos-ui.ts
 var nacosLocales = {
   zh: {
@@ -16162,6 +16227,10 @@ var nacosLocales = {
     "nacos.detailLoading": "\u6B63\u5728\u8BFB\u53D6\u6280\u80FD\u8BF4\u660E\u4E0E\u5B8C\u6574\u8D44\u6E90\u2026",
     "nacos.download": "\u4E0B\u8F7D\u5230\u672C\u5730",
     "nacos.downloading": "\u6B63\u5728\u4E0B\u8F7D\u2026",
+    "nacos.checkResult": "\u6838\u5BF9\u4E0B\u8F7D\u7ED3\u679C",
+    "nacos.pending": "\u4E0B\u8F7D\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4\uFF0C\u8BF7\u6838\u5BF9\u7ED3\u679C\u6216\u5230\u672C\u5730\u6280\u80FD\u9875\u67E5\u770B\uFF0C\u52FF\u91CD\u590D\u4E0B\u8F7D\u3002",
+    "nacos.confirmed": "\u5DF2\u786E\u8BA4 {name} \u5DF2\u4E0B\u8F7D\uFF0C\u8BF7\u5728\u672C\u5730\u6280\u80FD\u9875\u67E5\u770B\u5F53\u524D\u542F\u7528\u72B6\u6001\u3002",
+    "nacos.confirmedRefreshWarning": "\u5DF2\u786E\u8BA4\u6280\u80FD\u5DF2\u4E0B\u8F7D\uFF0C\u4F46\u672C\u5730\u5217\u8868\u5237\u65B0\u5931\u8D25\u3002\u8BF7\u5237\u65B0\u6280\u80FD\u9875\u67E5\u770B\u5F53\u524D\u542F\u7528\u72B6\u6001\uFF0C\u52FF\u91CD\u590D\u4E0B\u8F7D\u3002",
     "nacos.done": "\u5DF2\u4E0B\u8F7D {name}\uFF0C\u5F53\u524D\u4E3A\u7981\u7528\u72B6\u6001\u3002",
     "nacos.refreshWarning": "\u6280\u80FD\u5DF2\u4E0B\u8F7D\u4E14\u4FDD\u6301\u7981\u7528\uFF0C\u4F46\u672C\u5730\u5217\u8868\u5237\u65B0\u5931\u8D25\u3002\u8BF7\u5237\u65B0\u6280\u80FD\u9875\uFF0C\u52FF\u91CD\u590D\u4E0B\u8F7D\u3002",
     "nacos.openGlobal": "\u524D\u5F80\u5168\u5C40\u6280\u80FD",
@@ -16223,6 +16292,10 @@ var nacosLocales = {
     "nacos.detailLoading": "Loading skill instructions and complete resources\u2026",
     "nacos.download": "Download locally",
     "nacos.downloading": "Downloading\u2026",
+    "nacos.checkResult": "Check download result",
+    "nacos.pending": "The download result is unconfirmed. Check its status or local skills; do not download again.",
+    "nacos.confirmed": "Confirmed that {name} was downloaded. Check its current enabled state in local skills.",
+    "nacos.confirmedRefreshWarning": "The download is confirmed, but local skills could not refresh. Refresh to check the current enabled state; do not download again.",
     "nacos.done": "Downloaded {name}, disabled.",
     "nacos.refreshWarning": "Downloaded and disabled, but the local list could not refresh. Refresh the skills page; do not download again.",
     "nacos.openGlobal": "Go to global skills",
@@ -16258,6 +16331,7 @@ var nacosLocales = {
 };
 function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Button2, SourceSelect: SourceSelect2, destination, api, headers, translateError: translateError2 }) {
   const h4 = react2.createElement;
+  const pendingDownloads = /* @__PURE__ */ new Map();
   const { defaultDestination: defaultDestination2, destinationPayload: destinationPayload2, destinationReady: destinationReady2 } = destination;
   const icon = (path2, size = 16) => h4("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, h4("path", { d: path2 }));
   return function useNacosUI({ active, t, onInstalled, onNavigate }) {
@@ -16276,12 +16350,48 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
     const [workspaces, setWorkspaces] = react2.useState([]);
     const [roots, setRoots] = react2.useState([]);
     const [installing, setInstalling] = react2.useState(false);
-    const [uncertain, setUncertain] = react2.useState(false);
+    const [, setOperationRevision] = react2.useState(0);
+    const [checking, setChecking] = react2.useState(false);
     const listEpoch = react2.useRef(0);
     const detailEpoch = react2.useRef(0);
     const operation = react2.useRef(null);
     const mounted = react2.useRef(true);
     const page = listing?.data;
+    const downloadKey = JSON.stringify([selected?.name, selected?.version, target.scope, target.workspace]);
+    const pendingDownload = pendingDownloads.get(downloadKey);
+    const uncertain = !!pendingDownload && !installing;
+    async function complete(result, installedTarget, reconciled = false) {
+      setSelected(null);
+      setDetail(null);
+      const completed = { ...installedTarget, name: result.name };
+      setNotice({ text: t(reconciled ? "nacos.confirmed" : "nacos.done", { name: result.name }), target: completed });
+      try {
+        await onInstalled?.(completed);
+      } catch {
+        if (mounted.current) setNotice({ text: t(reconciled ? "nacos.confirmedRefreshWarning" : "nacos.refreshWarning"), target: completed, warning: true });
+      }
+    }
+    async function checkResult() {
+      if (!pendingDownload || checking) return;
+      const epoch = detailEpoch.current;
+      setChecking(true);
+      try {
+        const outcome = decodeOperationOutcome(await api(`/nacos/install-status?operationId=${encodeURIComponent(pendingDownload.id)}`), isInstallReceipt);
+        if (outcome.state === "pending") {
+          if (mounted.current && detailEpoch.current === epoch) setDetailError(t("nacos.pending"));
+          return;
+        }
+        pendingDownloads.delete(downloadKey);
+        if (!mounted.current || detailEpoch.current !== epoch) return;
+        setOperationRevision((previous3) => previous3 + 1);
+        if (outcome.state === "succeeded") await complete(outcome.result, pendingDownload.target, true);
+        else setDetailError(translateError2(t, outcome.failure));
+      } catch {
+        if (mounted.current && detailEpoch.current === epoch) setDetailError(t("nacos.pending"));
+      } finally {
+        if (mounted.current) setChecking(false);
+      }
+    }
     react2.useEffect(() => {
       if (!active) return;
       const controller = new AbortController();
@@ -16342,29 +16452,23 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
       if (!selected || !detail || operation.current || uncertain || !destinationReady2(target, workspaces, roots)) return;
       const controller = new AbortController();
       const installedTarget = { name: selected.name, scope: target.scope === "workspace" ? "workspace" : "user", workspace: target.workspace };
+      const operationId = crypto.randomUUID();
+      pendingDownloads.set(downloadKey, { id: operationId, target: installedTarget });
       operation.current = controller;
       setInstalling(true);
       setDetailError(null);
       try {
-        const result = await api("/nacos/install", { method: "POST", headers, body: JSON.stringify({ skillName: selected.name, version: selected.version, ...destinationPayload2(target) }), signal: controller.signal });
+        const result = await api("/nacos/install", { method: "POST", headers, body: JSON.stringify({ skillName: selected.name, version: selected.version, ...destinationPayload2(target), operationId }), signal: controller.signal });
+        if (!controller.signal.aborted) pendingDownloads.delete(downloadKey);
         if (!mounted.current) return;
         if (controller.signal.aborted) {
-          setUncertain(true);
           setDetailError(t("error.nacos.cancelled"));
           return;
         }
-        setSelected(null);
-        setDetail(null);
-        const completed = { ...installedTarget, name: result.name };
-        setNotice({ text: t("nacos.done", { name: result.name }), target: completed });
-        try {
-          await onInstalled?.(completed);
-        } catch {
-          if (mounted.current) setNotice({ text: t("nacos.refreshWarning"), target: completed, warning: true });
-        }
+        await complete(result, installedTarget);
       } catch (error) {
+        if (isConfirmedRejection(error)) pendingDownloads.delete(downloadKey);
         if (mounted.current) {
-          setUncertain(controller.signal.aborted);
           setDetailError(controller.signal.aborted ? t("error.nacos.cancelled") : translateError2(t, error));
         }
       } finally {
@@ -16384,7 +16488,6 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
       setDetail(null);
       setDetailError(null);
       setDetailLoading(true);
-      setUncertain(false);
       setTarget(defaultDestination2());
       setSelected(item);
     }
@@ -16508,6 +16611,7 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
         error: detailError,
         installing,
         uncertain,
+        checking,
         target,
         workspaces,
         roots,
@@ -16516,7 +16620,8 @@ function createNacosUI({ react: react2, Modal: Modal2, Input: Input2, Button: Bu
         onInstall: install,
         onClose: close,
         onCancel: () => operation.current?.abort(),
-        onRetry: () => setDetailRevision((previous3) => previous3 + 1)
+        onRetry: () => setDetailRevision((previous3) => previous3 + 1),
+        onCheck: checkResult
       }) : null
     );
     return { content: content3, actions: null };
@@ -16799,6 +16904,9 @@ function SkillBundleConfigCard(props) {
 function SkillBundleConfigCardWrapper(props) {
   const [location, setLocation] = React4.useState(props.getLocation);
   const [savingLocation, setSavingLocation] = React4.useState(false);
+  const [pending, setPending] = React4.useState(props.operations?.getSnapshot());
+  const [error, setError] = React4.useState("");
+  React4.useEffect(() => props.operations?.subscribe(() => setPending(props.operations?.getSnapshot())), [props.operations]);
   React4.useEffect(() => {
     const syncState = () => {
       setLocation(props.getLocation());
@@ -16808,19 +16916,25 @@ function SkillBundleConfigCardWrapper(props) {
   }, [props]);
   const onLocationChange = (next) => {
     setSavingLocation(true);
-    setLocation(next);
-    props.setLocation(next).catch(() => {
-      setLocation(props.getLocation());
+    setError("");
+    props.setLocation(next).catch((reason) => {
+      setError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => {
       setSavingLocation(false);
     });
   };
-  return h2(SkillBundleConfigCard, {
+  const card = h2(SkillBundleConfigCard, {
     t: props.t,
     location,
-    disabled: savingLocation,
+    disabled: savingLocation || !!pending,
     onLocationChange
   });
+  if (!pending && !error) return card;
+  return h2(React4.Fragment, null, card, h2("div", { role: "alert" }, pending ? props.t("mutation.pending") : error), pending?.phase === "pending" ? h2("button", { type: "button", disabled: savingLocation, onClick: () => {
+    setSavingLocation(true);
+    setError("");
+    props.confirm().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setSavingLocation(false));
+  } }, props.t("mutation.check")) : null);
 }
 function setupSidebarEntry(ctx, options) {
   ensureSidebarEntryStyle();
@@ -16908,37 +17022,32 @@ function setupSidebarEntry(ctx, options) {
   const setLocation = async (next) => {
     if (destroyed) return entryLocation;
     const currentEpoch = ++epoch;
-    const previous3 = entryLocation;
-    entryLocation = next;
+    const saved = await callApi2("/sidebar-entry", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ location: next })
+    });
+    const confirmed = saved.location;
+    if (confirmed !== "both" && confirmed !== "sidebar" && confirmed !== "settings") throw new Error("Invalid saved entry location");
+    if (!destroyed && currentEpoch === epoch) {
+      entryLocation = confirmed;
+      sync();
+      notify();
+      options.onLocationChange?.(entryLocation);
+    }
+    return confirmed;
+  };
+  const confirmLocation = async () => {
+    const outcome = await options.operations?.confirm();
+    if (outcome?.state === "rejected") throw outcome.failure;
+    if (outcome?.state !== "succeeded") return;
+    const saved = await callApi2("/sidebar-entry");
+    if (destroyed) return;
+    if (saved.location !== "both" && saved.location !== "sidebar" && saved.location !== "settings") throw new Error("Invalid saved entry location");
+    entryLocation = saved.location;
     sync();
     notify();
-    if (typeof options.onLocationChange === "function") {
-      try {
-        options.onLocationChange(next);
-      } catch {
-      }
-    }
-    try {
-      await callApi2("/sidebar-entry", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ location: next })
-      });
-      return next;
-    } catch (err) {
-      if (currentEpoch === epoch) {
-        entryLocation = previous3;
-        sync();
-        notify();
-        if (typeof options.onLocationChange === "function") {
-          try {
-            options.onLocationChange(previous3);
-          } catch {
-          }
-        }
-      }
-      throw err;
-    }
+    options.onLocationChange?.(entryLocation);
   };
   const setEnabled = async (next) => {
     await setLocation(next ? "both" : "settings");
@@ -16985,6 +17094,8 @@ function setupSidebarEntry(ctx, options) {
         t: ctx.locale.bind(ns),
         getLocation: () => entryLocation,
         setLocation,
+        operations: options.operations,
+        confirm: confirmLocation,
         getEnabled: () => isSidebarEnabled(),
         setSidebar: setEnabled,
         subscribe: (fn) => {
@@ -17176,8 +17287,54 @@ function createSourceSelect(react2) {
   };
 }
 
+// src/client-operations.ts
+var readOnlyPosts = /* @__PURE__ */ new Set(["/detail", "/browse", "/workspace-skills", "/custom-source-scan", "/nacos/detail", "/nacos/install"]);
+function createClientOperations(send) {
+  let current = null;
+  let checking = false;
+  const listeners = /* @__PURE__ */ new Set();
+  function update(next) {
+    current = next;
+    for (const listener of listeners) listener();
+  }
+  async function request(path2, options) {
+    if (options?.method?.toUpperCase() !== "POST" || readOnlyPosts.has(path2)) return send(path2, options);
+    if (current) throw new ApiFailure({ code: API_ERROR_CODES.busy, message: "A previous operation must be confirmed first", outcome: "pending" });
+    const operation = { id: crypto.randomUUID(), path: path2, phase: "submitting" };
+    update(operation);
+    const headers = Object.fromEntries(new Headers(options.headers).entries());
+    headers["x-dsh-skills-operation"] = operation.id;
+    try {
+      const result = await send(path2, { ...options, headers });
+      update(null);
+      return result;
+    } catch (error) {
+      update(isConfirmedRejection(error) ? null : { ...operation, phase: "pending" });
+      throw error;
+    }
+  }
+  async function confirm() {
+    if (!current || current.phase !== "pending" || checking) return { state: "pending" };
+    const operation = current;
+    checking = true;
+    try {
+      const outcome = decodeOperationOutcome(await send(`/operation-status?operationId=${encodeURIComponent(operation.id)}`), (result) => result !== void 0);
+      if (outcome.state !== "pending" && current === operation) update(null);
+      return outcome;
+    } finally {
+      checking = false;
+    }
+  }
+  return { request, confirm, getSnapshot: () => current, subscribe(listener) {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  } };
+}
+
 // src/client.ts
-/*! §1 UI primitives and constants */
+/*! §1 Pure projections, constants and stateless primitives */
 var react = React5;
 var h3 = react.createElement;
 var FallbackCheckbox = function FallbackCheckbox2(props) {
@@ -17861,10 +18018,6 @@ var ROOT_PATH_LOCALES = {
 };
 Object.assign(DICT.zh, ROOT_PATH_LOCALES.zh, managementLocales.zh, nacosLocales.zh, destinationLocales.zh, sidebarLocales.zh);
 Object.assign(DICT.en, ROOT_PATH_LOCALES.en, managementLocales.en, nacosLocales.en, destinationLocales.en, sidebarLocales.en);
-var SourceSelect = createSourceSelect(react);
-var destinationKit = createDestinationKit({ react, SourceSelect, translateError });
-var DestinationPicker = destinationKit.DestinationPicker;
-var useRepositoryUI = createNacosUI({ react, Modal, Input, Button: import_dsh_client_ui_primitives4.Button, SourceSelect, destination: destinationKit, api: callApi, headers: MUTATION_HEADERS, translateError });
 var CSS = destinationCss + sidebarEntryCss + `.dssm-section-card{box-sizing:border-box;display:flex;flex-direction:column;gap:12px;padding:18px 20px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,16px);margin-bottom:16px}.dssm-sources{display:flex;flex-direction:column;gap:9px}.dssm-scope-tabs{display:grid!important;box-sizing:border-box!important;width:100%;height:32px!important;min-height:32px!important;max-height:32px!important;padding:2px!important;border-radius:var(--dsw-radius-sm,8px)!important;border:0.5px solid var(--dsw-alias-border-l2)!important;background:var(--dsw-alias-bg-layer-1)!important}.dssm-scope-tabs>span[aria-hidden="true"],.dssm-scope-tabs>[class*="indicator"]{width:calc((100% - 4px)/4)!important;inset:2px auto 2px 2px!important;border-radius:6px!important;border:0.5px solid var(--dsw-alias-border-l3,rgba(255,255,255,.12))!important;background:var(--dsw-alias-bg-layer-3,rgba(255,255,255,.08))!important;box-shadow:none!important}.dssm-scope-tabs [role=tab]{display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:4px!important;height:28px!important;padding:0 6px!important;border-radius:6px!important;font-size:13px!important;line-height:20px!important;white-space:nowrap!important;color:var(--dsw-alias-label-secondary)!important;text-align:center!important;box-sizing:border-box!important;transition:color 150ms ease!important}.dssm-scope-tabs [role=tab]:hover{color:var(--dsw-alias-label-primary)!important}.dssm-scope-tabs [role=tab][aria-selected="true"]{color:var(--dsw-alias-label-primary)!important;font-weight:600!important}.dssm-scope-tabs [role=tab] svg{flex:none;display:block}.dssm-source-head{display:flex;align-items:center;gap:8px;min-width:0;padding:8px 12px}.dssm-source-toggle{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow:hidden;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dssm-source-toggle:focus-visible{outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:2px}.dssm-fold-chevron{flex:none;color:var(--dsw-alias-label-tertiary);transform:rotate(-90deg);transition:transform 160ms ease}.dssm-fold-chevron.is-open{transform:rotate(0deg)}@media (prefers-reduced-motion:reduce){.dssm-fold-chevron{transition:none}}.dssm-source-label{display:flex;align-items:center;gap:10px;min-width:0;flex:1}.dssm-drag-handle{cursor:grab;color:var(--dsw-alias-label-tertiary,#888);font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;width:16px;height:22px;border-radius:var(--dsw-radius-sm,8px);flex-shrink:0;user-select:none;transition:color 0.15s}.dssm-skill-row:hover .dssm-drag-handle{color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-drag-handle:active{cursor:grabbing}.dssm-cat.drag-over{border-color:var(--dsw-alias-brand-primary,#3b82f6);box-shadow:0 0 0 1px var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row.dragging{opacity:0.4;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-interactive-bg-hover,transparent))}.dssm-skill-row.drop-before{box-shadow:inset 0 2px 0 var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row.drop-after{box-shadow:inset 0 -2px 0 var(--dsw-alias-brand-primary,#3b82f6)}.dssm-skill-row{display:flex;align-items:center;gap:8px;margin:0;padding:11px 13px;border:0;border-top:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:0;background:transparent}.dssm-skill-copy{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}.dssm-skill-actions{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:nowrap}.dssm-skill-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;line-height:18px}.dssm-icon-danger{color:var(--dsw-alias-state-error-primary,#ef7272)}.dssm-skill-row .dssm-name{font-size:14px;font-weight:650;color:var(--dsw-alias-label-primary,#eeeeee)}.dssm-skill-actions{display:flex;align-items:center;gap:8px;flex:none}.dssm-source{overflow:hidden;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-xl,20px);background:transparent}.dssm-textarea{box-sizing:border-box;display:block;width:100%;min-height:160px;margin:0;padding:8px 12px;border:0.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;resize:vertical}.dssm-textarea:focus,.dssm-textarea:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}.dssm-textarea[readonly]{resize:none}.dssm-source-title{font-size:14px;font-weight:650;white-space:nowrap;flex:none}.dssm-source-path{min-width:0;max-width:50%;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px}.dssm-source-actions{display:flex;flex:none;align-items:center;gap:8px;margin-left:12px}.dssm-cat{margin:0 10px 8px;border:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:var(--dsw-radius-lg,16px)}.dssm-cat-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 8px 0 6px}.dssm-cat-main{display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:36px;padding:4px;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}.dssm-cat-title{font-size:14px;font-weight:700;display:inline-flex;align-items:center}.dssm-cat-note{margin:2px 16px 8px}.dssm-fallback{margin-top:4px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-section{box-sizing:border-box;display:flex;width:100%;min-width:0;padding:2px 0 36px;container-type:inline-size;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary,#eeeeee);font-family:inherit}.dssm-head{display:flex;flex-direction:column;align-items:stretch;gap:16px}.dssm-title-block{min-width:0}.dssm-title-row{display:flex;align-items:center;gap:8px 12px;min-width:0;flex-wrap:wrap}.dssm-title{margin:0;font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.4px;white-space:nowrap}.dssm-desc{margin:12px 0 0;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:14px;line-height:22px}.dssm-upload-link:focus-visible,.dssm-file-remove:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary,#f2f2f2));outline-offset:2px}.dssm-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));overflow:hidden;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1)}.dssm-stat{padding:4px 10px;border-right:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-stat:last-child{border-right:0}.dssm-stat strong{margin-right:4px;color:var(--dsw-alias-label-primary,#eeeeee);font-size:14px;font-weight:650}.dssm-filters{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;width:100%!important;min-width:0;box-sizing:border-box}.dssm-filter-actions{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}.dssm-filters .dssm-search{flex:1 1 0;min-width:160px;max-width:none}.dssm-filters .dssm-source-filter,.dssm-filters .dssm-status-filter,.dssm-filters .dssm-project-filter,.dssm-filters .dssm-menu-select-wrap,.dssm-filters span[class*="_root_"],.dssm-filters .dssm-source-select-menu,.dssm-filters .dssm-menu-select-trigger{width:auto!important;min-width:0!important;display:inline-flex!important;flex:none}.dssm-field .dssm-menu-select-wrap,.dssm-destination-pair .dssm-menu-select-wrap,.dssm-destination-pair span[class*="_root_"]{display:flex!important;width:100%!important;min-width:0!important;height:auto!important;padding:0!important;margin:0!important;border:0!important;background:transparent!important}.dssm-destination-pair .dssm-menu-select-trigger,.dssm-form .dssm-menu-select-trigger{display:flex!important;width:100%!important;height:36px!important;border-radius:var(--dsw-radius-md,10px)!important;padding:0 12px!important;box-sizing:border-box!important}.dssm-source-select-menu{min-width:130px;max-width:280px}.dssm-menu-select-trigger{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;height:32px;padding:0 10px;border:0.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;user-select:none;width:max-content;min-width:8em;transition:border-color 120ms ease,background 120ms ease}.dssm-menu-select-trigger:hover:not(:disabled){border-color:var(--dsw-alias-border-l3,#555)}.dssm-menu-select-trigger.is-open,.dssm-menu-select-trigger:focus-visible{border-color:var(--dsw-alias-brand-primary)!important;outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary))!important;outline-offset:0!important}.dssm-menu-select-trigger:disabled{opacity:.5;cursor:default}.dssm-menu-select-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;text-align:left}.dssm-menu-select-arrow{color:var(--dsw-alias-label-secondary);flex-shrink:0}.dssm-count{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;white-space:nowrap;flex:none}.dssm-name{overflow-wrap:anywhere;font-size:13px;font-weight:570}.dssm-note{overflow-wrap:anywhere;margin-top:2px;color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:11px;line-height:17px}.dssm-enabled{color:var(--dsw-alias-state-success-primary,#51b976);font-size:12px;white-space:nowrap}.dssm-disabled{color:var(--dsw-alias-state-warn-primary,#d49245);font-size:12px;white-space:nowrap}.dssm-shadowed{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;white-space:nowrap}.dssm-trash-count{padding:2px 7px;border-radius:999px;corner-shape:round;background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12));color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:11px}.dssm-empty{padding:25px 14px;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:12px;text-align:center}.dssm-feedback{padding:9px 11px;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:12px}.dssm-warning{border-color:var(--dsw-alias-state-warn-primary,#d49245);color:var(--dsw-alias-state-warn-primary,#d49245)}.dssm-error{border-color:var(--dsw-alias-state-error-primary,#ef7272);color:var(--dsw-alias-state-error-primary,#ef7272)}.dssm-form,.dssm-field{display:flex;flex-direction:column}.dssm-form{gap:12px}.dssm-detail{display:flex;flex-direction:column;gap:12px;min-width:0}.dssm-detail .dssm-desc{margin:0}.dssm-field{gap:6px}.dssm-label{font-size:12px;color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-help{margin:0;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;line-height:18px}.dssm-batch-list{display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto;margin:12px 0;padding:2px}.dssm-batch-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border:0.5px solid var(--dsw-alias-border-l1,#3a3a3a);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));cursor:pointer;user-select:none;transition:background 0.15s,border-color 0.15s}.dssm-batch-item:hover{background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-interactive-bg-hover,transparent));border-color:var(--dsw-alias-border-l2,#494949)}.dssm-batch-item.selected{border-color:var(--dsw-alias-brand-primary,#3b82f6);background:var(--dsw-alias-state-business-tertiary)}.dssm-batch-check{flex:none;gap:0!important;font-size:0;line-height:0}.dssm-batch-check>span,.dssm-batch-check>span *{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.dssm-batch-info{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}.dssm-batch-name-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.dssm-batch-name{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary,#eee);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dssm-batch-cat-tag{font-size:10px;padding:1px 6px;border-radius:var(--dsw-radius-xs,4px);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary,#b9b9b9);white-space:nowrap;flex-shrink:0}.dssm-batch-desc{font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary,#a0a0a0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}.dssm-modal-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}.dssm-form+.dssm-modal-actions{margin-top:18px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}.dssm-hidden-input{display:none}.dssm-dropzone{box-sizing:border-box;display:flex;width:100%;min-height:170px;flex-direction:column;align-items:center;justify-content:center;gap:7px;padding:22px;border:1px dashed var(--dsw-alias-border-l3,#555555);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9);transition:border-color 180ms ease,background 180ms ease}.dssm-dropzone:hover,.dssm-dropzone-active{border-color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary,#f2f2f2));background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12))}.dssm-dropzone-title{color:var(--dsw-alias-label-primary,#eeeeee);font-size:14px;font-weight:620}.dssm-dropzone-copy{font-size:12px;line-height:18px;text-align:center}.dssm-upload-choices{display:flex;align-items:center;gap:7px}.dssm-upload-link,.dssm-file-remove{padding:0;border:0;background:transparent;font:inherit;font-size:12px;cursor:pointer}.dssm-upload-link{color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-upload-link:hover{color:var(--dsw-alias-label-primary,#eeeeee);text-decoration:underline}.dssm-upload-link:disabled{opacity:.45;cursor:default}.dssm-upload-divider{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px}.dssm-file{display:flex;align-items:center;gap:9px;padding:10px 11px;border:0.5px solid var(--dsw-alias-border-l2,#494949);border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-primary,#eeeeee);font-size:12px}.dssm-file-kind{display:inline-flex;min-width:30px;height:24px;align-items:center;justify-content:center;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12));color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:9px;font-weight:700}.dssm-file-name{min-width:0;overflow:hidden;flex:1;text-overflow:ellipsis;white-space:nowrap}.dssm-file-meta{color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;white-space:nowrap}.dssm-file-remove{width:24px;height:24px;color:var(--dsw-alias-label-secondary,#b9b9b9);font-size:18px}.dssm-upload-requirements{padding:1px 1px 0}.dssm-upload-requirements ul{display:flex;margin:7px 0 0;padding-left:18px;flex-direction:column;gap:5px;color:var(--dsw-alias-label-tertiary,#a0a0a0);font-size:11px;line-height:17px}.dssm-detail-path{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:14px;line-height:22px}.dssm-diag{font-size:14px;line-height:22px}.dssm-detail-path{padding:8px 10px;border-radius:var(--dsw-radius-lg,16px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9);word-break:break-all}.dssm-diag{padding:8px 10px;border-left:2px solid var(--dsw-alias-state-warn-primary,#d49245);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-interactive-bg-hover,transparent));color:var(--dsw-alias-label-secondary,#b9b9b9)}.dssm-trash-panel{display:flex;flex-direction:column;gap:10px}.dssm-trash-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:11px 13px;border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));border-radius:var(--dsw-radius-xl,20px);background:transparent}.dssm-trash-main{min-width:0;display:flex;flex-direction:column;gap:6px}.dssm-trash-item .dssm-name{font-size:14px;line-height:20px;color:var(--dsw-alias-label-primary,inherit)}.dssm-trash-meta{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;font-size:11px;line-height:17px;color:var(--dsw-alias-label-tertiary,#909090);overflow-wrap:anywhere}.dssm-trash-source{min-width:0;background:transparent;color:var(--dsw-alias-label-tertiary,#a0a0a0)}.dssm-trash-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 @container(max-width:400px){.dssm-source-path{display:none}}@media(max-width:760px){.dssm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:720px){.dssm-title-row{flex-wrap:wrap}}@container(max-width:520px){.dssm-trash-item{grid-template-columns:minmax(0,1fr)}.dssm-skill-row{flex-wrap:wrap}.dssm-skill-actions{width:100%;margin-inline-start:0;justify-content:flex-end}.dssm-trash-actions{justify-content:flex-end}.dssm-head{flex-direction:column}.dssm-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.dssm-stat:nth-child(2){border-right:0}.dssm-stat:nth-child(n+3){border-top:0.5px solid var(--dsw-alias-border-l1,#3a3a3a)}.dssm-filters{flex-wrap:wrap}.dssm-filters .dssm-search{flex:1 1 100%;min-width:0;order:2}.dssm-filters .dssm-filter-actions{order:3;margin-left:auto}.dssm-filters .dssm-source-filter,.dssm-filters .dssm-status-filter,.dssm-filters .dssm-project-filter{flex:1 1 calc(50% - 4px);min-width:0;order:1}.dssm-filters .dssm-source-filter .dssm-menu-select-wrap,.dssm-filters .dssm-status-filter .dssm-menu-select-wrap,.dssm-filters .dssm-project-filter .dssm-menu-select-wrap{width:100%!important;display:flex!important}.dssm-filters .dssm-source-filter .dssm-menu-select-trigger,.dssm-filters .dssm-status-filter .dssm-menu-select-trigger,.dssm-filters .dssm-project-filter .dssm-menu-select-trigger{width:100%!important;min-width:0!important}}.dssm-row-state{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .dssm-enable-switch{box-sizing:border-box;position:relative;flex:0 0 auto;width:36px;height:20px;padding:2px;border:0;border-radius:999px;corner-shape:round;background:var(--dsw-alias-border-l3,#555);cursor:pointer}.dssm-enable-switch[aria-checked=true]{background:var(--dsw-alias-brand-primary)}.dssm-enable-switch:disabled{cursor:default;opacity:.5}.dssm-enable-switch:focus-visible{outline:var(--dsw-focus-ring-width,1px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}.dssm-enable-switch-thumb{display:block;width:16px;height:16px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-label-primary-foreground,#fff);transition:transform 120ms ease;pointer-events:none}.dssm-enable-switch[aria-checked=false] .dssm-enable-switch-thumb{background:var(--dsw-alias-switch-thumb,#fff)}.dssm-enable-switch[aria-checked=true] .dssm-enable-switch-thumb{transform:translateX(16px)}
@@ -17908,47 +18061,9 @@ var CSS = destinationCss + sidebarEntryCss + `.dssm-section-card{box-sizing:bord
 
 `;
 CSS += `.dssm-section-card:has(>.dssm-head){padding:0;margin-bottom:0;border:0;border-radius:0;background:transparent}.dssm-head{gap:6px}.dssm-title{font-size:18px;line-height:26px;letter-spacing:0}.dssm-desc{margin:4px 0 0;font-size:12px;line-height:18px}.dssm-title-row{gap:8px}.dssm-scope-tabs{flex:none}`;
-/*! §2 Pure projections and IO adapters */
 function translateOrFallback(t, key, fallback, params) {
   var value = t(key, params);
   return typeof value === "string" && value !== key ? value : fallback;
-}
-function translateError(t, payload) {
-  if (payload instanceof Error && !payload.code) return payload.message;
-  if (payload && typeof payload === "object") {
-    const item = payload;
-    if (item.code) {
-      var params = Object.assign({}, item.params || {});
-      if (params.action) params.action = translateOrFallback(t, "action." + params.action, String(params.action));
-      var translated = t(item.code, params);
-      if (typeof translated === "string" && translated !== item.code) {
-        if (params.code && item.code === "error.workspace.unavailable") {
-          var isZh = hostLocale() === "zh" || !hostLocale() && translated.includes("\uFF1A");
-          return translated + (isZh ? "\uFF08" + params.code + "\uFF09" : " (" + params.code + ")");
-        }
-        return translated;
-      }
-      if (translated === item.code) return item.error !== void 0 ? translateError(t, item.error) : item.code;
-    }
-    if (item.error !== void 0) return translateError(t, item.error);
-    if (item.message !== void 0) return String(item.message);
-  }
-  return String(payload == null ? "" : payload);
-}
-function parseApiResponse(response) {
-  return response.json().catch(function() {
-    var error = new Error("non-json response");
-    error.code = "error.proto.nonJson";
-    error.params = { status: response.status };
-    throw error;
-  }).then(function(value) {
-    const payload = value;
-    if (!response.ok || payload.ok === false) throw payload;
-    return payload.data;
-  });
-}
-function callApi(path2, options) {
-  return fetch(resolveApiUrl("/api/forge-skills-manager" + path2), options).then(parseApiResponse);
 }
 function skillDeclaredInvocationKind(skill) {
   if (!skill) return "all";
@@ -17964,14 +18079,6 @@ function isSkillEnabled(skill) {
 function countKey(key, count) {
   return key + (Number(count) === 1 ? ".one" : ".other");
 }
-/*! §3 Host locale ownership */
-var localeService;
-function hostLocale() {
-  return localeService?.getLocale?.().active;
-}
-function formatTrashTime(t, value) {
-  return new Date(value).toLocaleString(hostLocale() || t("format.locale"));
-}
 function rootDisplayName(t, root4) {
   if (root4.kind === "preset" || root4.scope === "preset") {
     var rawName = root4.group || (root4.label || "").replace(/^预设:\s*/, "");
@@ -17985,31 +18092,6 @@ function rootDisplayName(t, root4) {
   }
   var base = translateOrFallback(t, "root." + (root4.localeKey || root4.kind || root4.key), root4.label);
   return root4.projectName ? base + " \xB7 " + root4.projectName : base;
-}
-function summarizeImportResult(t, data) {
-  var importedItems = data && data.imported || [];
-  var imported = importedItems.map(function(item) {
-    return item.name;
-  });
-  var skipped = (data && data.skipped || []).map(function(item) {
-    return item.name;
-  });
-  var warnings = [];
-  importedItems.forEach(function(item) {
-    (item.warnings || []).forEach(function(warning) {
-      warnings.push(translateError(t, warning));
-    });
-  });
-  var summary;
-  if (imported.length && skipped.length) summary = { ok: true, warning: true, imported: true, text: t("result.importPartial", { imported: imported.join(", "), skipped: skipped.join(", ") }) };
-  else if (imported.length) summary = { ok: true, warning: false, imported: true, text: t("result.imported", { names: imported.join(", ") }) };
-  else if (skipped.length) summary = { ok: false, warning: true, imported: false, text: t("result.importSkipped", { names: skipped.join(", ") }) };
-  else summary = { ok: false, warning: false, imported: false, text: t("result.importEmpty") };
-  if (warnings.length) {
-    summary.warning = true;
-    summary.text = t("result.importWarnings", { result: summary.text, warnings: warnings.join(t("format.warningSeparator")) });
-  }
-  return summary;
 }
 function normalizeSkillQuery(query) {
   return String(query == null ? "" : query).trim().toLowerCase();
@@ -18111,68 +18193,6 @@ function bytesToBase64(buffer) {
   var bytes = new Uint8Array(buffer), binary = "", chunk = 32768;
   for (var i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)));
   return btoa(binary);
-}
-function buildUploadPayload(selection) {
-  return Promise.all(selection.files.map(function(file) {
-    return file.arrayBuffer().then(function(buffer) {
-      return { path: uploadFilePath(file), data: bytesToBase64(buffer) };
-    });
-  })).then(function(entries) {
-    return selection.kind === "zip" ? { name: selection.name, zip: entries[0].data } : { name: selection.name, entries };
-  });
-}
-function readDroppedEntry(entry, prefix, output) {
-  if (entry.isFile) return new Promise(function(resolve, reject) {
-    entry.file(function(file) {
-      file._dssmPath = prefix + file.name;
-      output.push(file);
-      resolve();
-    }, reject);
-  });
-  if (!entry.isDirectory) return Promise.resolve();
-  return new Promise(function(resolve, reject) {
-    var reader = entry.createReader(), children = [];
-    function next() {
-      reader.readEntries(function(batch) {
-        if (!batch.length) {
-          Promise.all(children.map(function(child) {
-            return readDroppedEntry(child, prefix + entry.name + "/", output);
-          })).then(function() {
-            resolve();
-          }, reject);
-          return;
-        }
-        children = children.concat(batch);
-        next();
-      }, reject);
-    }
-    next();
-  });
-}
-function droppedFiles(dataTransfer) {
-  var items = Array.from(dataTransfer && dataTransfer.items || []), entries = items.map(function(item) {
-    return item.webkitGetAsEntry && item.webkitGetAsEntry();
-  }).filter((entry) => !!entry);
-  if (!entries.length) return Promise.resolve(Array.from(dataTransfer && dataTransfer.files || []));
-  var files = [];
-  return Promise.all(entries.map(function(entry) {
-    return readDroppedEntry(entry, "", files);
-  })).then(function() {
-    return files;
-  });
-}
-function modalFocusable(modal) {
-  return Array.prototype.slice.call(modal.querySelectorAll('button:not(:disabled), [href], input:not([type=hidden]):not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') || []);
-}
-function trapModalFocus(modal, event) {
-  if (event.key !== "Tab") return;
-  var focusable = modalFocusable(modal);
-  if (!focusable.length) return;
-  var active = document.activeElement;
-  if (active === modal || !modal.contains(active) || (event.shiftKey ? active === focusable[0] : active === focusable[focusable.length - 1])) {
-    event.preventDefault();
-    (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus();
-  }
 }
 function SkillSwitch(props) {
   return enableSwitch(props.on, props.label, props.disabled, props.onClick);
@@ -18407,9 +18427,173 @@ function renderRepoBrandIconByUrl(url, repo) {
     )
   );
 }
+function currentSessionId(snapshot) {
+  if (!snapshot) return void 0;
+  var byId = snapshot.byId || {};
+  var ids = Array.isArray(snapshot.ids) && snapshot.ids.length ? snapshot.ids : Object.keys(byId);
+  for (var i = 0; i < ids.length; i++) {
+    var row = byId[ids[i]];
+    if (row && row.retainedBy && row.retainedBy.mainView) return ids[i];
+  }
+  for (var id in byId) {
+    if (ids.indexOf(id) !== -1) continue;
+    if (byId[id] && byId[id].retainedBy && byId[id].retainedBy.mainView) return id;
+  }
+}
+/*! §2 IO adapters */
+function parseApiResponse(response) {
+  return response.json().catch(function(error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    throw new ApiFailure({ code: API_ERROR_CODES.nonJson, params: { status: response.status }, message: "non-json response", outcome: "unknown" });
+  }).then(function(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiFailure({ code: API_ERROR_CODES.response, message: "Invalid response", outcome: "unknown" });
+    const payload = value;
+    if (!response.ok || payload.ok === false) throw normalizeApiFailure(payload);
+    if (!Object.hasOwn(payload, "data")) throw new ApiFailure({ code: API_ERROR_CODES.response, message: "Missing response data", outcome: "unknown" });
+    return payload.data;
+  });
+}
+function callApi(path2, options) {
+  return fetch(resolveApiUrl("/api/forge-skills-manager" + path2), options).then(parseApiResponse);
+}
+function buildUploadPayload(selection) {
+  return Promise.all(selection.files.map(function(file) {
+    return file.arrayBuffer().then(function(buffer) {
+      return { path: uploadFilePath(file), data: bytesToBase64(buffer) };
+    });
+  })).then(function(entries) {
+    return selection.kind === "zip" ? { name: selection.name, zip: entries[0].data } : { name: selection.name, entries };
+  });
+}
+function readDroppedEntry(entry, prefix, output) {
+  if (entry.isFile) return new Promise(function(resolve, reject) {
+    entry.file(function(file) {
+      file._dssmPath = prefix + file.name;
+      output.push(file);
+      resolve();
+    }, reject);
+  });
+  if (!entry.isDirectory) return Promise.resolve();
+  return new Promise(function(resolve, reject) {
+    var reader = entry.createReader(), children = [];
+    function next() {
+      reader.readEntries(function(batch) {
+        if (!batch.length) {
+          Promise.all(children.map(function(child) {
+            return readDroppedEntry(child, prefix + entry.name + "/", output);
+          })).then(function() {
+            resolve();
+          }, reject);
+          return;
+        }
+        children = children.concat(batch);
+        next();
+      }, reject);
+    }
+    next();
+  });
+}
+function droppedFiles(dataTransfer) {
+  var items = Array.from(dataTransfer && dataTransfer.items || []), entries = items.map(function(item) {
+    return item.webkitGetAsEntry && item.webkitGetAsEntry();
+  }).filter((entry) => !!entry);
+  if (!entries.length) return Promise.resolve(Array.from(dataTransfer && dataTransfer.files || []));
+  var files = [];
+  return Promise.all(entries.map(function(entry) {
+    return readDroppedEntry(entry, "", files);
+  })).then(function() {
+    return files;
+  });
+}
+function modalFocusable(modal) {
+  return Array.prototype.slice.call(modal.querySelectorAll('button:not(:disabled), [href], input:not([type=hidden]):not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])') || []);
+}
+function trapModalFocus(modal, event) {
+  if (event.key !== "Tab") return;
+  var focusable = modalFocusable(modal);
+  if (!focusable.length) return;
+  var active = document.activeElement;
+  if (active === modal || !modal.contains(active) || (event.shiftKey ? active === focusable[0] : active === focusable[focusable.length - 1])) {
+    event.preventDefault();
+    (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus();
+  }
+}
 function recoverModalFocus(modal, active, body) {
   if (modal && active === body) modal.focus();
 }
+/*! §3 Client runtime ownership */
+function translateError(t, payload) {
+  const details = failureDetails(payload);
+  if (!details.code) return details.message;
+  const params = { ...details.params };
+  if (params.action) params.action = translateOrFallback(t, "action." + params.action, String(params.action));
+  const translated = t(details.code, params);
+  if (translated === details.code) return details.message === "Unexpected response" ? details.code : details.message;
+  if (params.code && details.code === "error.workspace.unavailable") return translated + (hostLocale() === "zh" || !hostLocale() && translated.includes("\uFF1A") ? "\uFF08" + params.code + "\uFF09" : " (" + params.code + ")");
+  return translated;
+}
+var localeService;
+var clientMutations = createClientOperations(callApi);
+var SourceSelect = createSourceSelect(react);
+var destinationKit = createDestinationKit({ react, SourceSelect, translateError });
+var DestinationPicker = destinationKit.DestinationPicker;
+var useRepositoryUI = createNacosUI({ react, Modal, Input, Button: import_dsh_client_ui_primitives4.Button, SourceSelect, destination: destinationKit, api: callApi, headers: MUTATION_HEADERS, translateError });
+function hostLocale() {
+  return localeService?.getLocale?.().active;
+}
+function formatTrashTime(t, value) {
+  return new Date(value).toLocaleString(hostLocale() || t("format.locale"));
+}
+function summarizeImportResult(t, data) {
+  var importedItems = data && data.imported || [];
+  var imported = importedItems.map(function(item) {
+    return item.name;
+  });
+  var skipped = (data && data.skipped || []).map(function(item) {
+    return item.name;
+  });
+  var warnings = [];
+  importedItems.forEach(function(item) {
+    (item.warnings || []).forEach(function(warning) {
+      warnings.push(translateError(t, warning));
+    });
+  });
+  var summary;
+  if (imported.length && skipped.length) summary = { ok: true, warning: true, imported: true, text: t("result.importPartial", { imported: imported.join(", "), skipped: skipped.join(", ") }) };
+  else if (imported.length) summary = { ok: true, warning: false, imported: true, text: t("result.imported", { names: imported.join(", ") }) };
+  else if (skipped.length) summary = { ok: false, warning: true, imported: false, text: t("result.importSkipped", { names: skipped.join(", ") }) };
+  else summary = { ok: false, warning: false, imported: false, text: t("result.importEmpty") };
+  if (warnings.length) {
+    summary.warning = true;
+    summary.text = t("result.importWarnings", { result: summary.text, warnings: warnings.join(t("format.warningSeparator")) });
+  }
+  return summary;
+}
+function resolveT(rawT) {
+  if (typeof rawT === "function") return rawT;
+  if (localeService && typeof localeService.bind === "function") return localeService.bind(NS);
+  return function(key, params) {
+    var dict = DICT.zh || {};
+    var template = dict[key] || key;
+    if (!params) return template;
+    var p = params;
+    return template.replace(/\{(\w+)\}/g, function(_, name2) {
+      return String(p[name2] ?? "{" + name2 + "}");
+    });
+  };
+}
+var workspacePickDirectory = null;
+function availableDirectoryPicker() {
+  var bridge = globalThis.__DSH_DIRECTORY_PICKER__;
+  if (bridge && typeof bridge.pick === "function") {
+    var bridgePick = bridge.pick.bind(bridge);
+    return function() {
+      return bridgePick();
+    };
+  }
+  return workspacePickDirectory;
+}
+/*! §4 Views and component state */
 function Modal(props) {
   var bodyRef = react.useRef(null);
   var closeRef = react.useRef(props.onClose);
@@ -18443,33 +18627,6 @@ function Modal(props) {
     contentClassName: ["dssm-modal-content", props.contentClassName].filter(Boolean).join(" ")
   }, props.children ? h3("div", { ref: bodyRef }, props.children) : void 0);
 }
-function currentSessionId(snapshot) {
-  if (!snapshot) return void 0;
-  var byId = snapshot.byId || {};
-  var ids = Array.isArray(snapshot.ids) && snapshot.ids.length ? snapshot.ids : Object.keys(byId);
-  for (var i = 0; i < ids.length; i++) {
-    var row = byId[ids[i]];
-    if (row && row.retainedBy && row.retainedBy.mainView) return ids[i];
-  }
-  for (var id in byId) {
-    if (ids.indexOf(id) !== -1) continue;
-    if (byId[id] && byId[id].retainedBy && byId[id].retainedBy.mainView) return id;
-  }
-}
-function resolveT(rawT) {
-  if (typeof rawT === "function") return rawT;
-  if (localeService && typeof localeService.bind === "function") return localeService.bind(NS);
-  return function(key, params) {
-    var dict = DICT.zh || {};
-    var template = dict[key] || key;
-    if (!params) return template;
-    var p = params;
-    return template.replace(/\{(\w+)\}/g, function(_, name2) {
-      return String(p[name2] ?? "{" + name2 + "}");
-    });
-  };
-}
-/*! §4 Views and component state */
 function SkillManagerSection(props) {
   var t = resolveT(props && props.t);
   var sessionId = props && props.useSessions ? props.useSessions(currentSessionId) : void 0;
@@ -18481,10 +18638,16 @@ function SkillManagerView(props) {
   function sessionApi(path2, options2) {
     var headers = Object.fromEntries(new Headers(options2?.headers).entries());
     if (props.sessionId) headers["x-dsh-skills-session"] = props.sessionId;
-    return callApi(path2, Object.assign({}, options2, { headers }));
+    return clientMutations.request(path2, Object.assign({}, options2, { headers }));
   }
   var ss = react.useState({ loading: true, error: null, data: null }), snapshot = ss[0], setSnapshot = ss[1];
-  var bs = react.useState(false), busy = bs[0], setBusy = bs[1];
+  var mutationState = react.useState(clientMutations.getSnapshot()), pendingMutation = mutationState[0];
+  react.useEffect(function() {
+    return clientMutations.subscribe(function() {
+      mutationState[1](clientMutations.getSnapshot());
+    });
+  }, []);
+  var bs = react.useState(false), busy = bs[0] || !!pendingMutation, setBusy = bs[1];
   var scope = props.scope, setScope = props.setScope;
   var expanded = props.expanded, setExpanded = props.setExpanded, savedFilters = props.savedFilters, setSavedFilters = props.setSavedFilters;
   var ms = react.useState(null), modal = ms[0], setModal = ms[1];
@@ -18494,6 +18657,9 @@ function SkillManagerView(props) {
   function setResult(value) {
     rs[1](value ? Object.assign({}, value, { scope }) : null);
   }
+  react.useEffect(function() {
+    if (pendingMutation?.phase === "pending") setModal(null);
+  }, [pendingMutation]);
   var fms = react.useState({ root: "dsh", name: "", description: "", body: "" }), form = fms[0], setForm = fms[1];
   var cns = react.useState(""), categoryName = cns[0], setCategoryName = cns[1];
   var snt = react.useState(""), skillNoteText = snt[0], setSkillNoteText = snt[1];
@@ -18550,30 +18716,50 @@ function SkillManagerView(props) {
       setSnapshot({ loading: false, error: null, data: data2 });
       return data2;
     }).catch(function(error) {
-      setSnapshot({ loading: false, error: translateError(t, error), data: snapshot.data });
+      setSnapshot({ loading: false, error: translateError(t, error), data: null });
     });
   }
   react.useEffect(function() {
     refresh(false);
   }, []);
-  function post2(path2, body, successKey, successParams) {
-    if (inflightRef.current) return Promise.reject({ error: "operation already in progress" });
+  async function refreshConfirmed(workspace) {
+    const results = await Promise.all([refresh(true), workspace ? loadWorkspaceDetail(workspace) : Promise.resolve(true)]);
+    return !!results[0] && !!results[1];
+  }
+  function post2(path2, body, successKey, successParams, successMessage) {
+    if (inflightRef.current || clientMutations.getSnapshot()) return Promise.reject(new ApiFailure({ code: API_ERROR_CODES.busy, message: t("mutation.pending"), outcome: "pending" }));
     inflightRef.current = true;
     setBusy(true);
     setResult(null);
-    return sessionApi(path2, { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify(body || {}) }).then(function(data2) {
-      setResult({ ok: true, text: successKey ? t(successKey, successParams || data2 || {}) : t("result.updated") });
-      var scopedWorkspace = body && typeof body.workspace === "string" ? body.workspace : "";
-      return Promise.all([refresh(true), scopedWorkspace ? loadWorkspaceDetail(scopedWorkspace) : null]).then(function() {
-        return data2;
-      });
+    return sessionApi(path2, { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify(body || {}) }).then(async function(data2) {
+      const workspace = body && typeof body.workspace === "string" ? body.workspace : void 0;
+      const fresh = await refreshConfirmed(workspace);
+      setResult(fresh ? successMessage ? successMessage(data2) : { ok: true, text: successKey ? t(successKey, successParams || data2 || {}) : t("result.updated") } : { ok: false, warning: true, text: t("mutation.refreshWarning") });
+      return data2;
     }).catch(function(error) {
-      setResult({ ok: false, text: t("error.action", { error: translateError(t, error) }) });
+      setResult({ ok: false, warning: !!clientMutations.getSnapshot(), text: clientMutations.getSnapshot() ? t("mutation.pending") : t("error.action", { error: translateError(t, error) }) });
       throw error;
     }).finally(function() {
       inflightRef.current = false;
       setBusy(false);
     });
+  }
+  async function confirmMutation() {
+    setBusy(true);
+    try {
+      const outcome = await clientMutations.confirm();
+      if (outcome.state === "pending") return;
+      if (outcome.state === "rejected") {
+        setResult({ ok: false, text: translateError(t, outcome.failure) });
+        return;
+      }
+      const fresh = await refreshConfirmed(selectedWorkspace);
+      setResult(fresh ? { ok: true, text: t("mutation.confirmed") } : { ok: false, warning: true, text: t("mutation.refreshWarning") });
+    } catch (error) {
+      setResult({ ok: false, warning: true, text: t("mutation.pending") + " " + translateError(t, error) });
+    } finally {
+      setBusy(false);
+    }
   }
   function openDetail(root4, skill, workspacePath2) {
     setBusy(true);
@@ -18664,10 +18850,10 @@ function SkillManagerView(props) {
     setCustomSourceBusy(true);
     setCustomSourceError(null);
     setResult(null);
-    sessionApi("/custom-source-add", { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify({ sources }) }).then(function(data2) {
+    post2("/custom-source-add", { sources }, "customSource.added", { count: sources.length }).then(function(data2) {
       var count = data2 && Array.isArray(data2.added) ? data2.added.length : sources.length;
-      return refresh(true).then(function() {
-        setResult({ ok: true, text: t("customSource.added", { count }) });
+      return Promise.resolve().then(function() {
+        if (!count) setResult({ ok: false, text: t("error.customSource.empty") });
         setCustomSourceScan(null);
         setCustomSourcePath("");
         setCustomSourceLabel("");
@@ -18764,11 +18950,11 @@ function SkillManagerView(props) {
   function submitImport() {
     if (!upload || !destinationReady(importDestination, workspaceRows, userDestinations, presetDestinations)) return;
     buildUploadPayload(upload).then(function(payload) {
-      return post2("/upload", Object.assign({}, payload, destinationPayload(importDestination)), null);
+      return post2("/upload", Object.assign({}, payload, destinationPayload(importDestination)), null, void 0, function(data2) {
+        return summarizeImportResult(t, data2);
+      });
     }).then(function(data2) {
-      var summary2 = summarizeImportResult(t, data2);
-      setResult({ ok: summary2.ok, warning: summary2.warning, text: summary2.text });
-      if (summary2.imported) {
+      if (summarizeImportResult(t, data2).imported) {
         setModal(null);
         setUpload(null);
       }
@@ -20099,16 +20285,15 @@ function SkillManagerView(props) {
             return p.then(function() {
               return sessionApi("/category-assign", { method: "POST", headers: MUTATION_HEADERS, body: JSON.stringify(scoped({ root: addModal.root, name: name2, category: addModal.id })) });
             });
-          }, Promise.resolve()).then(function() {
-            setResult({ ok: true, text: t("category.batchAssigned", { count: names.length, category: addModal.name }) });
-          }).catch(function(err) {
+          }, Promise.resolve()).then(async function() {
+            const fresh = await refreshConfirmed(addModal.workspace);
+            setResult(fresh ? { ok: true, text: t("category.batchAssigned", { count: names.length, category: addModal.name }) } : { ok: false, warning: true, text: t("mutation.refreshWarning") });
+          }).catch(async function(err) {
+            if (!clientMutations.getSnapshot()) await refreshConfirmed(addModal.workspace);
             setResult({ ok: false, text: translateError(t, err) });
           }).finally(function() {
             inflightRef.current = false;
             setBusy(false);
-            var ws = addModal.workspace;
-            Promise.all([refresh(true), ws ? loadWorkspaceDetail(ws) : null]).catch(function() {
-            });
           });
         }, "primary", busy || !chosenCount)
       )
@@ -20174,18 +20359,10 @@ function SkillManagerView(props) {
     }).catch(function() {
     });
   }, "danger", busy)) }));
+  if (pendingMutation) content3.unshift(h3("div", { key: "pending-operation", className: "dssm-feedback dssm-warning", role: "alert" }, t("mutation.pending"), pendingMutation.phase === "pending" ? hostButton(t("mutation.check"), function() {
+    void confirmMutation();
+  }, "outline", bs[0]) : null));
   return h3("section", { className: "dssm-section" }, content3);
-}
-var workspacePickDirectory = null;
-function availableDirectoryPicker() {
-  var bridge = globalThis.__DSH_DIRECTORY_PICKER__;
-  if (bridge && typeof bridge.pick === "function") {
-    var bridgePick = bridge.pick.bind(bridge);
-    return function() {
-      return bridgePick();
-    };
-  }
-  return workspacePickDirectory;
 }
 /*! §5 Host registration and exports */
 var inject = ["slots", "locale"];
@@ -20318,7 +20495,8 @@ function apply(ctx) {
     }
   });
   sidebarController = setupSidebarEntry(ctx, {
-    callApi,
+    callApi: clientMutations.request,
+    operations: clientMutations,
     headers: MUTATION_HEADERS,
     renderPanel: function(ownerProps) {
       return h3(SkillManagerSection, Object.assign({ t: ctx.locale.bind(NS) }, ownerProps));

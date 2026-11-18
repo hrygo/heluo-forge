@@ -5,12 +5,16 @@ import { createHash,randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join,resolve } from "node:path";
 import type { indexRegisteredWorkspaces } from "./core.js";
+import type { InstallationPort } from "./local-ports.js";
+import { isExpectedOperationError } from "./operation-errors.js";
 import { createInstallationRecords,fileIndex,installationSourceKey,isRepositoryRootKey,readSkillTree,signature } from "./installation-records.js";
 import { parseGitUrl } from "./legacy-sources.js";
 
 
 const STATE_LIMIT = 16 << 20;
 const STATE_READ_LIMIT = 64 << 20;
+const queuesKey = Symbol.for("heluo.forge-skills-manager.installations");
+const queues = ((globalThis as typeof globalThis & { [queuesKey]?: Map<string, Promise<unknown>> })[queuesKey] ??= new Map());
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 function failure(message: string, code = "error.repo.invalid", params?: unknown) {
   return Object.assign(new Error(message), { code, statusCode: 400, ...(params && typeof params === "object" && !Array.isArray(params) ? { params } : {}) });
@@ -96,7 +100,7 @@ function validateStoredState(input: unknown): asserts input is RepositoryState {
 }
 
 export function createInstallationManager({ local, log, registeredWorkspaces, onWorkspaceIndexBuild, getPresetRoots }: {
-  local: typeof import('./core.js');
+  local: InstallationPort;
   log?: Log; registeredWorkspaces?: () => string[] | undefined;
   onWorkspaceIndexBuild?: () => void; getPresetRoots?: () => Promise<SkillRoot[] | undefined>;
 }) {
@@ -104,10 +108,28 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
   const { recordInstallRoot,repositoryInstallRoot } = createInstallationRecords(local);
   const fetchPresetRoots = async () => (getPresetRoots ? (await getPresetRoots()) || [] : []);
   const file = join(managerHomePath(), "repositories.json");
-  let queue: Promise<unknown> = Promise.resolve();
+  const managerPath = resolve(managerHomePath());
+  const queueKey = process.platform === "win32" ? managerPath.toLowerCase() : managerPath;
   let catalogWarnings: Array<{ id: string; code: string; error: string }> = [];
   let activeIndex: ReturnType<typeof createWorkspaceIndex> | undefined;
-  const serialize = <T>(task: () => T | Promise<T>, recover = true, recoverDeletes = true): Promise<T> => { const run = async () => { stateCache = undefined; const index = createWorkspaceIndex(registeredWorkspaces?.(), { onBuild: onWorkspaceIndexBuild }); const previous = activeIndex; activeIndex = index; try { if (recoverDeletes) await recoverTrashDeletes(await preloadedState()); if (recover) await recoverPending(await preloadedState()); return await task(); } finally { activeIndex = previous; } }; const next = queue.then(run, run); queue = next.catch(() => {}); return next; };
+  const serialize = <T>(task: () => T | Promise<T>, recover = true, recoverDeletes = true): Promise<T> => {
+    const run = async () => {
+      stateCache = undefined;
+      const index = createWorkspaceIndex(registeredWorkspaces?.(), { onBuild: onWorkspaceIndexBuild });
+      const previous = activeIndex;
+      activeIndex = index;
+      try {
+        if (recoverDeletes) await recoverTrashDeletes(await preloadedState());
+        if (recover) await recoverPending(await preloadedState());
+        return await task();
+      } finally { activeIndex = previous; }
+    };
+    const next = (queues.get(queueKey) ?? Promise.resolve()).then(run, run);
+    queues.set(queueKey, next);
+    const release = () => { if (queues.get(queueKey) === next) queues.delete(queueKey); };
+    void next.then(release, release);
+    return next;
+  };
   function requestIndex() { return activeIndex ?? createWorkspaceIndex(registeredWorkspaces?.(), { onBuild: onWorkspaceIndexBuild }); }
   async function indexedFor(record: { workspace?: string }) { return record.workspace === undefined ? undefined : requestIndex().load(); }
   const resolveInstallRoot = async (
@@ -133,11 +155,12 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
             const fresh = parseGitUrl({ url: repo.url, ref: repo.ref, subdirectory: repo.subdirectory });
             repo.owner = fresh.owner;
             repo.name = fresh.name;
-          } catch {}
+          } catch (error) { if (!isExpectedOperationError(error)) throw error; }
         }
       }
       return value;
     } catch (caught) { const error = caught as CodedError;
+      if (!(caught instanceof SyntaxError) && !isExpectedOperationError(caught)) throw caught;
       if (error.code === "ENOENT") return { version: 1, repositories: [], installs: [] };
       throw failure("仓库状态文件损坏或无法读取，请保留文件并修复后重试", "error.repo.state");
     }
@@ -167,7 +190,7 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
     } finally { await fs.rm(temporary, { force: true }); }
   }
   async function currentStateBytes() {
-    try { return (await fs.lstat(file)).size; } catch { return 0; }
+    try { return (await fs.lstat(file)).size; } catch (error) { if (isExpectedOperationError(error) && error.code === "ENOENT") return 0; throw error; }
   }
   // 同一次 serialize 内复用同一次解析：恢复流程与任务体都要读状态，重复解析在
   // 接近 16 MiB 时是每请求上百毫秒。
@@ -187,11 +210,11 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       const rootPath = (await resolveInstallRoot(record, registered, indexed)).path;
       // 一次完整遍历同时检查链接、额外文件和内容变化，不能只检查已知文件。
       return signature(fileIndex(await readSkillTree(join(rootPath, record.name)))) === fingerprint;
-    } catch { return false; }
+    } catch (error) { if (!isExpectedOperationError(error)) throw error; return false; }
   }
   async function absentTrashPath(path: string) {
     try { await fs.lstat(path); return false; }
-    catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
+    catch (error) { if (!isExpectedOperationError(error)) throw error; return error.code === "ENOENT"; }
   }
   async function recoverTrashDeletes(loaded?: RepositoryState) {
     const data = loaded ?? await read();
@@ -215,7 +238,7 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       if (!directory.isDirectory() || directory.isSymbolicLink() || !file.isFile() || file.isSymbolicLink() || file.size > 32 << 10) return false;
       const metadata = JSON.parse(await fs.readFile(join(receipt, "metadata.json"), "utf8"));
       return metadata.id === record.trashId && metadata.name === record.name && (record.workspace ? metadata.root?.scope === "project" && metadata.root.projectRoot === record.workspace : (metadata.root?.scope === "user" || metadata.root?.scope === "preset") && metadata.root.key === (record.root || "dsh")) && ("path" in record ? metadata.repository?.id === record.id && metadata.repository.path === record.path : Array.isArray(metadata.catalog) && metadata.catalog.includes(record.id)) && metadata.entries?.length === 1 && metadata.entries[0] === record.name;
-    } catch { return false; }
+    } catch (error) { if (!(error instanceof SyntaxError) && !isExpectedOperationError(error)) throw error; return false; }
   }
   async function recoverPending(loaded?: RepositoryState) {
     catalogWarnings = [];
@@ -251,7 +274,8 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
             const root = await resolveInstallRoot(record, registered, await indexedFor(record));
             if (!record.disabledOnInstall) await enableCatalog(root, record.name, true);
             record.complete = true; recovered = true; recoveredCatalogIds.push(record.id);
-          } catch {
+          } catch (error) {
+            if (!isExpectedOperationError(error)) throw error;
             // 单个副本恢复失败不能拦截列表或无关事务；持久意图仍保留未确认状态。
             catalogWarnings.push({ id: record.id, code: "error.repo.installState", error: "技能文件和安装意图已保留，启用策略暂时不可写；修复策略后重试" });
           }
@@ -267,7 +291,8 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
     // 仅恢复与安装/恢复意图完全相同的目录；保留任何本地修改，不删除或覆盖文件。
     if (recovered) {
       try { await write(data, true); }
-      catch {
+      catch (error) {
+        if (!isExpectedOperationError(error)) throw error;
         for (const id of [...new Set([...recoveredCatalogIds, ...restoredIds, ...recoveredInstallIds])]) catalogWarnings.push({ id, code: "error.repo.installState", error: "技能文件已保留，恢复确认暂时无法写入；恢复磁盘写入后重试" });
         return; // 不删除恢复凭据，让下一次读取仍可重试。
       }
@@ -294,15 +319,16 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
     try {
       if (respectDisabled) {
         const current = await readManagerState();
-        if (!current.writable) throw new Error("启用策略不可写");
+        if (!current.writable) throw failure("启用策略不可写", "error.repo.installState");
         // 来源确认失败后，用户的新停用选择优先于原安装的启用意图。
         if (current.state.disabledSkills[root.key]?.includes(name)) return;
       }
       if (root.toggleable !== false && root.kind !== "preset") {
         const result = await setSkillEnabled(root, name, true, log);
-        if (result && "ok" in result && result.ok === false) throw new Error(result.error);
+        if (result && "ok" in result && result.ok === false) throw failure(result.error, result.code || "error.repo.installState");
       }
-    } catch {
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
       throw Object.assign(failure("技能文件和安装意图已保留，启用状态无法写入；恢复磁盘写入后重新打开发现页", "error.repo.installState"), { statusCode: 500 });
     }
   }
@@ -311,7 +337,10 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       const presetRoots = await fetchPresetRoots();
       const root = await recordInstallRoot(record, requestIndex().registered, await indexedFor(record), presetRoots);
       return signature(fileIndex(await readSkillTree(join(root.path, record.name)))) === fingerprint;
-    } catch { return false; }
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
+      return false;
+    }
   }
   function catalogCopies(data: RepositoryState, root: SkillRoot, name: string) {
     const target = { root: root.scope === "project" ? "dsh" : root.key, workspace: root.projectRoot, name };
@@ -329,12 +358,13 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
       await write(data);
       const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
       if ("ok" in result && result.ok === false) {
+        if (result.code === "error.repo.installState") return result;
         for (const record of records) delete record.restoreFingerprint;
         await write(data); return result;
       }
       for (const record of records) { delete record.trashId; delete record.restoreFingerprint; }
       try { await write(data); }
-      catch { throw failure("技能已恢复，目录身份等待校验；恢复磁盘写入后重新打开发现页", "error.repo.installState"); }
+      catch (error) { if (!isExpectedOperationError(error)) throw error; throw failure("技能已恢复，目录身份等待校验；恢复磁盘写入后重新打开发现页", "error.repo.installState"); }
       await fs.rm(join(trashRootPath(), `.restored-${id}`), { recursive: true, force: true });
       return result;
   }
@@ -350,12 +380,21 @@ export function createInstallationManager({ local, log, registeredWorkspaces, on
         const root = await recordInstallRoot(record, index.registered, record.workspace === undefined ? undefined : await index.load(), presetRoots);
         const realRoot = await fs.realpath(root.path);
         result[installationSourceKey(realRoot, record.name)] = { ...parsed, id: record.id, path: record.path, commit: record.commit, root: record.root || "dsh", ...(record.workspace ? { workspace: record.workspace } : {}) };
-      } catch { /* 失效或未登记项目的记录不能挂到任何同名技能上。 */ }
+      } catch (error) { if (!isExpectedOperationError(error)) throw error; }
     }
     return result;
   }
 return {
+ managerPath,
  sources,
+catalogReceipt: (id: string, target: { root?: unknown; workspace?: string } = {}) => serialize(async () => {
+      const location = await catalogLocation(target);
+      const data = await read();
+      const record = catalogRecords(data).find(record => record.id === id && record.root === location.root && record.workspace === location.workspace && record.complete === true && !record.trashId);
+      if (!record?.files?.length || !await catalogMatches(record, signature(record.files))) return undefined;
+      const root = await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record));
+      return { name: record.name, root: root.path };
+    }, false, false),
 installCatalog: (id: string, pack: import("./types.js").UploadInput, target: { root?: unknown; workspace?: string; disabledOnInstall?: boolean; signal?: AbortSignal } = {}) => serialize(async () => {
       const presetRoots = await fetchPresetRoots();
       const location = await catalogLocation(target);
@@ -387,24 +426,26 @@ installCatalog: (id: string, pack: import("./types.js").UploadInput, target: { r
           data.catalogInstalls.push(intent);
           try { await write(data); }
           catch (caught) {
+            if (!isExpectedOperationError(caught)) throw caught;
             if ((caught as CodedError).code === "error.repo.capacity") throw caught;
             throw failure("安装意图无法写入，未复制技能文件", "error.repo.installState");
           }
         },
       });
       const completedName = reusedLegacy ? imported.skipped?.length === 1 ? imported.skipped[0].name : undefined : imported.imported?.length === 1 ? imported.imported[0].name : undefined;
+      if (imported.ok === false && imported.code === "error.repo.installState") throw failure(imported.error || "安装结果尚待确认", "error.repo.installState");
       if (imported.ok === false || !intent || completedName !== intent.name) {
         if (intent) {
           data.catalogInstalls = previousCatalog;
           try { await write(data); }
-          catch { throw failure("安装未完成且身份意图无法撤销，请恢复磁盘写入后重试", "error.repo.installState"); }
+          catch (error) { if (!isExpectedOperationError(error)) throw error; throw failure("安装未完成且身份意图无法撤销，请恢复磁盘写入后重试", "error.repo.installState"); }
         }
         throw Object.assign(failure(imported.error || "同名技能已存在，不会覆盖本地文件", imported.code || "error.repo.conflict", imported.params), { statusCode: imported.code === "error.repo.installState" ? 500 : imported.code === "error.repo.capacity" ? 413 : 409 });
       }
       if (!intent.disabledOnInstall) await enableCatalog(root, intent.name);
       intent.complete = true;
       try { await write(data); }
-      catch { throw Object.assign(failure("技能文件已安装但身份未确认；恢复磁盘写入后重新打开发现页", "error.repo.installState"), { statusCode: 500 }); }
+      catch (error) { if (!isExpectedOperationError(error)) throw error; throw Object.assign(failure("技能文件已安装但身份未确认；恢复磁盘写入后重新打开发现页", "error.repo.installState"), { statusCode: 500 }); }
       return { name: intent.name, root: root.path };
     }),
 recoverLocal: () => serialize(async () => ({ warnings: [...catalogWarnings] })),
@@ -418,11 +459,14 @@ trashSkill: (root: SkillRoot | undefined, name: string) => serialize(async () =>
       try {
         const result = await deleteSkill(root, name, log, { catalogTrash: { id, ids: records.map(record => record.id) } });
         if ("ok" in result && result.ok === false) {
+          if (result.code === "error.repo.installState") return result;
           for (const record of records) delete record.trashId;
           await write(data);
         }
         return result;
       } catch (error) {
+        if (!isExpectedOperationError(error)) throw error;
+        if (error.code === "error.repo.installState") throw error;
         if (!(await listTrash()).some(item => item.id === id)) {
           for (const record of records) delete record.trashId;
           await write(data);
@@ -456,10 +500,12 @@ permanentlyDeleteTrash: (id: string) => serialize(async () => {
       let result: Awaited<ReturnType<typeof permanentlyDeleteTrash>>;
       try { result = await permanentlyDeleteTrash(id, log); }
       catch (error) {
+        if (!isExpectedOperationError(error) || error.code === "error.repo.installState") throw error;
         await rollback(error);
         throw error;
       }
       if ("ok" in result && result.ok === false) {
+        if (result.code === "error.repo.installState") return result;
         await rollback(result.error);
         return result;
       }
@@ -489,6 +535,7 @@ restoreTrash: (id: string, options: MutationOptions = {}) => serialize(async () 
         await write(data);
         const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
         if ("ok" in result && result.ok === false) {
+          if (result.code === "error.repo.installState") return result;
           delete record.restoreFingerprint;
           for (const item of catalog) delete item.restoreFingerprint;
           await write(data); return result;
@@ -496,7 +543,7 @@ restoreTrash: (id: string, options: MutationOptions = {}) => serialize(async () 
         delete record.trashId; delete record.restoreFingerprint; delete record.uninstallFingerprint;
         for (const item of catalog) { delete item.trashId; delete item.restoreFingerprint; }
         try { await write(data); }
-        catch { throw failure("技能已恢复，来源状态等待校验；恢复磁盘写入后重新打开仓库页", "error.repo.installState"); }
+        catch (error) { if (!isExpectedOperationError(error)) throw error; throw failure("技能已恢复，来源状态等待校验；恢复磁盘写入后重新打开仓库页", "error.repo.installState"); }
         await fs.rm(join(trashRootPath(), `.restored-${id}`), { recursive: true, force: true }).catch(() => undefined);
         return result;
     }, false, false)

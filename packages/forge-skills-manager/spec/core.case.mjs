@@ -419,7 +419,7 @@ ok(
   "client guards mutations with a synchronous in-flight flag",
 );
 ok(
-  clientSource.includes("if (inflightRef.current) return Promise.reject"),
+  /if \(inflightRef\.current \|\| clientMutations\.getSnapshot\(\)\) return Promise\.reject/.test(clientSource),
   "post rejects a second in-flight mutation synchronously",
 );
 ok(

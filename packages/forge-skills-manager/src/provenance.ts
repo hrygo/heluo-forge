@@ -2,6 +2,7 @@
 import { open,stat } from "node:fs/promises";
 import { dirname,join } from "node:path";
 import type { InstallSource,RootView,SkillProvenance } from "./types.js";
+import { isExpectedOperationError } from "./operation-errors.js";
 interface LockIndex { entries: Record<string, unknown> }
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_CACHE_ENTRIES = 2048;
@@ -40,9 +41,9 @@ async function readJson(file: string): Promise<unknown> {
     }
     if (length > opened.size) return null;
     let value: unknown;
-    try { value = JSON.parse(buffer.subarray(0, length).toString("utf8")); } catch { value = null; }
+    try { value = JSON.parse(buffer.subarray(0, length).toString("utf8")); } catch (error) { if (!(error instanceof SyntaxError)) throw error; value = null; }
     const after = await handle.stat();
-    const current = await stat(file).catch(() => null);
+    const current = await stat(file).catch(error => { if (!isExpectedOperationError(error)) throw error; return null; });
     if (current && sameFile(opened, after) && sameFile(after, current)) {
       evict(file);
       while (jsonCache.size >= MAX_CACHE_ENTRIES || cacheBytes + length > MAX_CACHE_BYTES) {
@@ -64,7 +65,7 @@ async function readLockIndex(rootPath: string): Promise<LockIndex | null> {
     const parsed = object(await readJson(join(rootPath, ".skills-lock.json")));
     const entries = object(parsed?.skills ?? parsed);
     return entries ? { entries } : null;
-  } catch { return null; }
+  } catch (error) { if (!isExpectedOperationError(error)) throw error; return null; }
 }
 function segments(path: string): string[] { return path.split(/[\/]+/).filter(Boolean); }
 export function categoryOfRepoPath(skillPath: string | null | undefined, subdirectory?: string | null): string | null {
@@ -92,7 +93,10 @@ function sourceInfo(raw: unknown, githubShorthand: boolean): { repo: string; ide
     const normalized = parsed.href.replace(/\/$/, "").replace(/\.git$/i, "");
     const identity = parsed.hostname === "github.com" ? normalized.toLowerCase() : normalized;
     return { repo: `${parsed.hostname}${parsed.pathname.replace(/\/$/, "").replace(/\.git$/i, "")}`, identity, url: parsed.protocol === "https:" ? normalized : null };
-  } catch { return null; }
+  } catch (error) {
+    if (!(error instanceof TypeError) || !("code" in error) || error.code !== "ERR_INVALID_URL") throw error;
+    return null;
+  }
 }
 function fromInstallSource(source: InstallSource): SkillProvenance | null {
   const info = sourceInfo(source.url || (source.owner && source.name ? `${source.owner}/${source.name}` : null), !source.url)
@@ -117,7 +121,7 @@ async function fromMarketMeta(skillDir: string): Promise<SkillProvenance | null>
       const metadata = object(await readJson(join(skillDir, name)));
       const info = sourceInfo(metadata?.source, metadata?.sourceType === "github");
       if (info) return { kind: "meta", ...info, category: null, path: null };
-    } catch { /* 尝试下一证据 */ }
+    } catch (error) { if (!isExpectedOperationError(error)) throw error; }
   }
   return null;
 }
@@ -151,7 +155,7 @@ export async function attachProvenance<T extends { roots: RootView[] }>(snapshot
         const skill = skills[next++];
         try {
           skill.provenance = await resolveProvenance({ rootPath: root.path, skillPath: skill.path, name: skill.name, declaredName: skill.declaredName, installSource: skill.installSource }, lock);
-        } catch { skill.provenance = unknown(); }
+        } catch (error) { if (!isExpectedOperationError(error)) throw error; skill.provenance = unknown(); }
       }
     }));
   }

@@ -1,5 +1,12 @@
 export const managementLocales = {
   "zh": {
+    "mutation.pending": "操作结果尚待确认，请先核对结果，不要重复提交。",
+    "mutation.check": "核对操作结果",
+    "mutation.confirmed": "操作已确认，已读取当前状态。",
+    "mutation.refreshWarning": "操作已确认，但当前状态刷新失败。请刷新页面核对，不要重复提交。",
+    "error.proto.pending": "操作结果尚待确认。",
+    "error.proto.busy": "请先核对上一操作的结果。",
+    "error.proto.response": "服务端响应无效，操作结果尚待确认。",
     "error.enterprise.reserved": "该名称由企业流程技能保留，请使用其他名称。",
     "error.repo.capacity": "安装来源状态超过 16 MiB。请先清理不需要的回收记录或旧身份，仍有效的安装副本会保留。",
     "error.repo.conflict": "同名技能已存在或安装失败，本地文件未被覆盖。",
@@ -9,6 +16,13 @@ export const managementLocales = {
     "token.detailLine": "简介 ≈{description} token · 正文 ≈{body} token"
   },
   "en": {
+    "mutation.pending": "The operation is awaiting confirmation. Check its result before submitting again.",
+    "mutation.check": "Check operation result",
+    "mutation.confirmed": "The operation is confirmed and current state has been loaded.",
+    "mutation.refreshWarning": "The operation is confirmed, but current state could not refresh. Refresh to check it; do not submit again.",
+    "error.proto.pending": "The operation is awaiting confirmation.",
+    "error.proto.busy": "Confirm the previous operation first.",
+    "error.proto.response": "Invalid server response. The operation is awaiting confirmation.",
     "error.enterprise.reserved": "This name is reserved for an enterprise workflow. Choose another name.",
     "error.repo.capacity": "Source tracking exceeds 16 MiB. Remove unneeded Trash records or legacy identities first. Active installation copies are kept.",
     "error.repo.conflict": "A skill with this name exists or installation failed. Local files were not overwritten.",

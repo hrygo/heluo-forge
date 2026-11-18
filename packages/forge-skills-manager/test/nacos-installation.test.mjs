@@ -3,17 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { installHttp } from '../lib/http.js';
 import { createNacosClient } from '../lib/nacos.js';
 import { createInstallationManager } from '../lib/installations.js';
-import { fakeNacos, nacosConfig } from '../spec/fixtures/nacos.mjs';
+import { createInstallOperations } from '../lib/install-operations.js';
+import { fakeNacos, nacosConfig, useNacosEnvironment } from '../spec/fixtures/nacos.mjs';
 
-test('Nacos HTTP install keeps resources, starts disabled, preserves legacy records and survives trash/restore', async () => {
+test('Nacos HTTP install keeps resources, starts disabled, preserves legacy records and survives trash/restore', async context => {
+  useNacosEnvironment(context);
   const directory = await mkdtemp(join(tmpdir(), 'forge-nacos-install-'));
   process.env.DSH_HOME = join(directory, 'dsh');
   process.env.HOME = process.env.USERPROFILE = join(directory, 'user');
-  process.env.TEST_NACOS_USER = 'svc-ci';
-  process.env.TEST_NACOS_PASSWORD = 'synthetic-password';
   const local = await import('../lib/core.js');
   const fixture = fakeNacos();
   const nacos = createNacosClient(nacosConfig, fixture.fetcher);
@@ -35,14 +36,22 @@ test('Nacos HTTP install keeps resources, starts disabled, preserves legacy reco
     await mkdir(local.managerHomePath(), { recursive: true });
     const recordFile = join(local.managerHomePath(), 'repositories.json');
     await writeFile(recordFile, JSON.stringify({ version: 1, repositories: [], installs: [], catalogInstalls: ['skillsh:corp/example'] }));
-    installHttp(ctx, { local, nacos, installations, providers, log() {} });
+    installHttp(ctx, { local, nacos, installations, providers, operations: createInstallOperations(), log() {} });
     assert.ok(![...routes.keys()].some(path => /repositories|catalog|upload-to|nacos\/upload/.test(path)));
     const selection = { skillName: 'example-skill', version: '1.0.0' };
-    assert.equal((await post('/nacos/install', { ...selection, root: 'agents' })).status, 400);
+    const rejected = await post('/nacos/install', { ...selection, root: 'agents' });
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.outcome, 'rejected');
     assert.equal(fixture.calls.length, 0, 'rejected target makes no network request');
     assert.equal((await post('/nacos/install', { ...selection, workspace: join(directory, 'unregistered') })).ok, false);
     assert.equal(fixture.calls.length, 0);
-    assert.equal((await post('/nacos/install', selection)).status, 200);
+    const operationId = randomUUID();
+    assert.equal((await post('/nacos/install', { ...selection, operationId })).status, 200);
+    const receipt = await routes.get(prefix + '/nacos/install-status').fetch(new Request('http://localhost' + prefix + '/nacos/install-status?operationId=' + operationId));
+    assert.equal((await receipt.json()).data.state, 'succeeded');
+    const calls = fixture.calls.length;
+    assert.equal((await post('/nacos/install', { ...selection, operationId })).status, 200);
+    assert.equal(fixture.calls.length, calls, 'same receipt never downloads or commits twice');
     assert.equal((await find()).enabled, false, 'HTTP policy cannot be replaced by request-body enabled flags');
     const installed = join(process.env.DSH_HOME, 'skills', 'example-skill');
     assert.deepEqual([...await readFile(join(installed, 'assets', 'binary.dat'))], [0, 255, 17]);

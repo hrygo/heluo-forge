@@ -5,6 +5,7 @@ import type { DestinationKit, DestinationValue, UserDestination } from "./destin
 import type { NacosDetail, NacosPage, NacosSkill } from "./nacos.js";
 import { NacosDetailDialog } from "./nacos-detail.js";
 import { nacosCss } from "./nacos-styles.js";
+import { decodeOperationOutcome, isConfirmedRejection, isInstallReceipt } from "./api-errors.js";
 
 export const nacosLocales = {
   zh: {
@@ -22,6 +23,9 @@ export const nacosLocales = {
     "nacos.downloadCountHint": "Nacos 资源下载统计，包含详情读取，不代表安装人数。",
     "nacos.loading": "正在读取企业技能库…", "nacos.refreshing": "正在刷新，暂时显示上次结果…", "nacos.detailLoading": "正在读取技能说明与完整资源…",
     "nacos.download": "下载到本地", "nacos.downloading": "正在下载…",
+    "nacos.checkResult": "核对下载结果", "nacos.pending": "下载结果尚待确认，请核对结果或到本地技能页查看，勿重复下载。",
+    "nacos.confirmed": "已确认 {name} 已下载，请在本地技能页查看当前启用状态。",
+    "nacos.confirmedRefreshWarning": "已确认技能已下载，但本地列表刷新失败。请刷新技能页查看当前启用状态，勿重复下载。",
     "nacos.done": "已下载 {name}，当前为禁用状态。", "nacos.refreshWarning": "技能已下载且保持禁用，但本地列表刷新失败。请刷新技能页，勿重复下载。",
     "nacos.openGlobal": "前往全局技能", "nacos.openProject": "前往项目技能",
     "nacos.version": "版本 {version}", "nacos.previous": "上一页", "nacos.next": "下一页", "nacos.page": "第 {page} 页",
@@ -51,6 +55,9 @@ export const nacosLocales = {
     "nacos.downloadCountHint": "Nacos resource downloads, including detail views; not the number of people who installed this skill.",
     "nacos.loading": "Loading enterprise skills…", "nacos.refreshing": "Refreshing; showing previous results…", "nacos.detailLoading": "Loading skill instructions and complete resources…",
     "nacos.download": "Download locally", "nacos.downloading": "Downloading…",
+    "nacos.checkResult": "Check download result", "nacos.pending": "The download result is unconfirmed. Check its status or local skills; do not download again.",
+    "nacos.confirmed": "Confirmed that {name} was downloaded. Check its current enabled state in local skills.",
+    "nacos.confirmedRefreshWarning": "The download is confirmed, but local skills could not refresh. Refresh to check the current enabled state; do not download again.",
     "nacos.done": "Downloaded {name}, disabled.", "nacos.refreshWarning": "Downloaded and disabled, but the local list could not refresh. Refresh the skills page; do not download again.",
     "nacos.openGlobal": "Go to global skills", "nacos.openProject": "Go to project skills",
     "nacos.version": "Version {version}", "nacos.previous": "Previous", "nacos.next": "Next", "nacos.page": "Page {page}",
@@ -83,6 +90,7 @@ interface Options { active: boolean; t: Translate; onInstalled?: (target: NacosI
 
 export function createNacosUI({ react, Modal, Input, Button, SourceSelect, destination, api, headers, translateError }: Dependencies) {
   const h = react.createElement;
+  const pendingDownloads = new Map<string, { id: string; target: NacosInstalled }>();
   const { defaultDestination, destinationPayload, destinationReady } = destination;
   const icon = (path: string, size = 16) => h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, h("path", { d: path }));
   return function useNacosUI({ active, t, onInstalled, onNavigate }: Options) {
@@ -101,12 +109,42 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
     const [workspaces, setWorkspaces] = react.useState<WorkspaceRow[]>([]);
     const [roots, setRoots] = react.useState<UserDestination[]>([]);
     const [installing, setInstalling] = react.useState(false);
-    const [uncertain, setUncertain] = react.useState(false);
+    const [, setOperationRevision] = react.useState(0);
+    const [checking, setChecking] = react.useState(false);
     const listEpoch = react.useRef(0);
     const detailEpoch = react.useRef(0);
     const operation = react.useRef<AbortController | null>(null);
     const mounted = react.useRef(true);
     const page = listing?.data;
+    const downloadKey = JSON.stringify([selected?.name, selected?.version, target.scope, target.workspace]);
+    const pendingDownload = pendingDownloads.get(downloadKey);
+    const uncertain = !!pendingDownload && !installing;
+
+    async function complete(result: { name: string }, installedTarget: NacosInstalled, reconciled = false) {
+      setSelected(null); setDetail(null);
+      const completed = { ...installedTarget, name: result.name };
+      setNotice({ text: t(reconciled ? "nacos.confirmed" : "nacos.done", { name: result.name }), target: completed });
+      try { await onInstalled?.(completed); }
+      catch { if (mounted.current) setNotice({ text: t(reconciled ? "nacos.confirmedRefreshWarning" : "nacos.refreshWarning"), target: completed, warning: true }); }
+    }
+    async function checkResult() {
+      if (!pendingDownload || checking) return;
+      const epoch = detailEpoch.current;
+      setChecking(true);
+      try {
+        const outcome = decodeOperationOutcome(await api(`/nacos/install-status?operationId=${encodeURIComponent(pendingDownload.id)}`), isInstallReceipt);
+        if (outcome.state === "pending") {
+          if (mounted.current && detailEpoch.current === epoch) setDetailError(t("nacos.pending"));
+          return;
+        }
+        pendingDownloads.delete(downloadKey);
+        if (!mounted.current || detailEpoch.current !== epoch) return;
+        setOperationRevision(previous => previous + 1);
+        if (outcome.state === "succeeded") await complete(outcome.result, pendingDownload.target, true);
+        else setDetailError(translateError(t, outcome.failure));
+      } catch { if (mounted.current && detailEpoch.current === epoch) setDetailError(t("nacos.pending")); }
+      finally { if (mounted.current) setChecking(false); }
+    }
 
     react.useEffect(() => {
       if (!active) return;
@@ -146,20 +184,19 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
       if (!selected || !detail || operation.current || uncertain || !destinationReady(target, workspaces, roots)) return;
       const controller = new AbortController();
       const installedTarget: NacosInstalled = { name: selected.name, scope: target.scope === "workspace" ? "workspace" : "user", workspace: target.workspace };
+      const operationId = crypto.randomUUID();
+      pendingDownloads.set(downloadKey, { id: operationId, target: installedTarget });
       operation.current = controller; setInstalling(true); setDetailError(null);
       try {
-        const result = await api("/nacos/install", { method: "POST", headers, body: JSON.stringify({ skillName: selected.name, version: selected.version, ...destinationPayload(target) }), signal: controller.signal });
+        const result = await api("/nacos/install", { method: "POST", headers, body: JSON.stringify({ skillName: selected.name, version: selected.version, ...destinationPayload(target), operationId }), signal: controller.signal });
+        if (!controller.signal.aborted) pendingDownloads.delete(downloadKey);
         if (!mounted.current) return;
         // An aborted transport may resolve after the Host commits. Never infer success.
-        if (controller.signal.aborted) { setUncertain(true); setDetailError(t("error.nacos.cancelled")); return; }
-        setSelected(null); setDetail(null);
-        const completed = { ...installedTarget, name: result.name };
-        setNotice({ text: t("nacos.done", { name: result.name }), target: completed });
-        try { await onInstalled?.(completed); }
-        catch { if (mounted.current) setNotice({ text: t("nacos.refreshWarning"), target: completed, warning: true }); }
+        if (controller.signal.aborted) { setDetailError(t("error.nacos.cancelled")); return; }
+        await complete(result, installedTarget);
       } catch (error) {
+        if (isConfirmedRejection(error)) pendingDownloads.delete(downloadKey);
         if (mounted.current) {
-          setUncertain(controller.signal.aborted);
           setDetailError(controller.signal.aborted ? t("error.nacos.cancelled") : translateError(t, error));
         }
       } finally {
@@ -170,7 +207,7 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
     function close() { if (!operation.current) { detailEpoch.current++; setSelected(null); setDetail(null); } }
     function open(item: NacosSkill) {
       if (operation.current) return;
-      setDetail(null); setDetailError(null); setDetailLoading(true); setUncertain(false); setTarget(defaultDestination()); setSelected(item);
+      setDetail(null); setDetailError(null); setDetailLoading(true); setTarget(defaultDestination()); setSelected(item);
     }
     function search(value = query) {
       setQuery(value);
@@ -221,9 +258,9 @@ export function createNacosUI({ react, Modal, Input, Button, SourceSelect, desti
           h("span", null, t("nacos.page", { page: page.page })),
           button("nacos.next", () => setRequested(previous => ({ ...previous, query: listing!.query, page: page.page + 1 })), listLoading || installing || page.page * page.pageSize >= page.total)) : null) : null,
       selected && active ? h(NacosDetailDialog, {
-        Modal, Button, SourceSelect, t, selected, detail, loading: detailLoading, error: detailError, installing, uncertain,
+        Modal, Button, SourceSelect, t, selected, detail, loading: detailLoading, error: detailError, installing, uncertain, checking,
         target, workspaces, roots, ready: destinationReady(target, workspaces, roots), onTarget: setTarget,
-        onInstall: install, onClose: close, onCancel: () => operation.current?.abort(), onRetry: () => setDetailRevision(previous => previous + 1),
+        onInstall: install, onClose: close, onCancel: () => operation.current?.abort(), onRetry: () => setDetailRevision(previous => previous + 1), onCheck: checkResult,
       }) : null);
     return { content, actions: null };
   };

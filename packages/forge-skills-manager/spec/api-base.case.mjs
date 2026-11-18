@@ -8,6 +8,7 @@ import react from "react";
 import * as reactDom from "react-dom";
 import * as reactDomClient from "react-dom/client";
 import { readFile } from "node:fs/promises";
+import assert from "node:assert/strict";
 
 let passed = 0;
 let failed = 0;
@@ -149,6 +150,17 @@ ok(
   !/fetch\(\s*["'`]\/api\//.test(clientSource),
   "client.ts has no raw root-absolute fetch left",
 );
+
+const failureBody = { ok: false, outcome: "rejected", error: { code: "error.root.unsafe", params: { action: "create" }, message: "Unsafe target" } };
+await assert.rejects(bundle.parseApiResponse({ ok: false, status: 400, json: async () => failureBody }), error => {
+  assert.deepEqual(error.details, { code: "error.root.unsafe", params: { action: "create" }, message: "Unsafe target", outcome: "rejected" });
+  return true;
+});
+await assert.rejects(bundle.parseApiResponse({ ok: true, status: 200, json: async () => { throw new SyntaxError("HTML response"); } }), error => error.details.code === "error.proto.nonJson" && error.details.outcome === "unknown");
+const readerDefect = new ReferenceError("response reader defect");
+await assert.rejects(bundle.parseApiResponse({ json: async () => { throw readerDefect; } }), error => error === readerDefect);
+for (const payload of [null, [], {}, { ok: true }]) await assert.rejects(bundle.parseApiResponse({ ok: true, json: async () => payload }), error => error.details.code === "error.proto.response" && error.details.outcome === "unknown");
+assert.deepEqual(await bundle.parseApiResponse({ ok: true, json: async () => ({ ok: true, data: { location: "settings" } }) }), { location: "settings" });
 
 if (failed > 0) {
   console.error("\n" + failed + " 项失败，" + passed + " 项通过");

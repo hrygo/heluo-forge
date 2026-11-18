@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join, resolve } from "node:path";
+import { isExpectedOperationError } from "./operation-errors.js";
 import { createInstallationRecords, fileIndex, installationSourceKey, isRepositoryRootKey, readSkillTree, signature } from "./installation-records.js";
 import { parseGitUrl } from "./legacy-sources.js";
 const STATE_LIMIT = 16 << 20;
 const STATE_READ_LIMIT = 64 << 20;
+const queuesKey = Symbol.for("heluo.forge-skills-manager.installations");
+const queues = globalThis[queuesKey] ??= /* @__PURE__ */ new Map();
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function failure(message, code = "error.repo.invalid", params) {
   return Object.assign(new Error(message), { code, statusCode: 400, ...params && typeof params === "object" && !Array.isArray(params) ? { params } : {} });
@@ -89,7 +92,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
   const { recordInstallRoot, repositoryInstallRoot } = createInstallationRecords(local);
   const fetchPresetRoots = async () => getPresetRoots ? await getPresetRoots() || [] : [];
   const file = join(managerHomePath(), "repositories.json");
-  let queue = Promise.resolve();
+  const managerPath = resolve(managerHomePath());
+  const queueKey = process.platform === "win32" ? managerPath.toLowerCase() : managerPath;
   let catalogWarnings = [];
   let activeIndex;
   const serialize = (task, recover = true, recoverDeletes = true) => {
@@ -106,9 +110,12 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
         activeIndex = previous;
       }
     };
-    const next = queue.then(run, run);
-    queue = next.catch(() => {
-    });
+    const next = (queues.get(queueKey) ?? Promise.resolve()).then(run, run);
+    queues.set(queueKey, next);
+    const release = () => {
+      if (queues.get(queueKey) === next) queues.delete(queueKey);
+    };
+    void next.then(release, release);
     return next;
   };
   function requestIndex() {
@@ -135,13 +142,15 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
             const fresh = parseGitUrl({ url: repo.url, ref: repo.ref, subdirectory: repo.subdirectory });
             repo.owner = fresh.owner;
             repo.name = fresh.name;
-          } catch {
+          } catch (error) {
+            if (!isExpectedOperationError(error)) throw error;
           }
         }
       }
       return value;
     } catch (caught) {
       const error = caught;
+      if (!(caught instanceof SyntaxError) && !isExpectedOperationError(caught)) throw caught;
       if (error.code === "ENOENT") return { version: 1, repositories: [], installs: [] };
       throw failure("\u4ED3\u5E93\u72B6\u6001\u6587\u4EF6\u635F\u574F\u6216\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u4FDD\u7559\u6587\u4EF6\u5E76\u4FEE\u590D\u540E\u91CD\u8BD5", "error.repo.state");
     }
@@ -169,8 +178,9 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
   async function currentStateBytes() {
     try {
       return (await fs.lstat(file)).size;
-    } catch {
-      return 0;
+    } catch (error) {
+      if (isExpectedOperationError(error) && error.code === "ENOENT") return 0;
+      throw error;
     }
   }
   let stateGeneration = 0;
@@ -186,7 +196,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       safePath(record.name);
       const rootPath = (await resolveInstallRoot(record, registered, indexed)).path;
       return signature(fileIndex(await readSkillTree(join(rootPath, record.name)))) === fingerprint;
-    } catch {
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
       return false;
     }
   }
@@ -195,6 +206,7 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       await fs.lstat(path);
       return false;
     } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
       return error.code === "ENOENT";
     }
   }
@@ -225,7 +237,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       if (!directory.isDirectory() || directory.isSymbolicLink() || !file2.isFile() || file2.isSymbolicLink() || file2.size > 32 << 10) return false;
       const metadata = JSON.parse(await fs.readFile(join(receipt, "metadata.json"), "utf8"));
       return metadata.id === record.trashId && metadata.name === record.name && (record.workspace ? metadata.root?.scope === "project" && metadata.root.projectRoot === record.workspace : (metadata.root?.scope === "user" || metadata.root?.scope === "preset") && metadata.root.key === (record.root || "dsh")) && ("path" in record ? metadata.repository?.id === record.id && metadata.repository.path === record.path : Array.isArray(metadata.catalog) && metadata.catalog.includes(record.id)) && metadata.entries?.length === 1 && metadata.entries[0] === record.name;
-    } catch {
+    } catch (error) {
+      if (!(error instanceof SyntaxError) && !isExpectedOperationError(error)) throw error;
       return false;
     }
   }
@@ -273,7 +286,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
             record.complete = true;
             recovered = true;
             recoveredCatalogIds.push(record.id);
-          } catch {
+          } catch (error) {
+            if (!isExpectedOperationError(error)) throw error;
             catalogWarnings.push({ id: record.id, code: "error.repo.installState", error: "\u6280\u80FD\u6587\u4EF6\u548C\u5B89\u88C5\u610F\u56FE\u5DF2\u4FDD\u7559\uFF0C\u542F\u7528\u7B56\u7565\u6682\u65F6\u4E0D\u53EF\u5199\uFF1B\u4FEE\u590D\u7B56\u7565\u540E\u91CD\u8BD5" });
           }
         }
@@ -290,7 +304,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     if (recovered) {
       try {
         await write(data, true);
-      } catch {
+      } catch (error) {
+        if (!isExpectedOperationError(error)) throw error;
         for (const id of [.../* @__PURE__ */ new Set([...recoveredCatalogIds, ...restoredIds, ...recoveredInstallIds])]) catalogWarnings.push({ id, code: "error.repo.installState", error: "\u6280\u80FD\u6587\u4EF6\u5DF2\u4FDD\u7559\uFF0C\u6062\u590D\u786E\u8BA4\u6682\u65F6\u65E0\u6CD5\u5199\u5165\uFF1B\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u8BD5" });
         return;
       }
@@ -319,14 +334,15 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     try {
       if (respectDisabled) {
         const current = await readManagerState();
-        if (!current.writable) throw new Error("\u542F\u7528\u7B56\u7565\u4E0D\u53EF\u5199");
+        if (!current.writable) throw failure("\u542F\u7528\u7B56\u7565\u4E0D\u53EF\u5199", "error.repo.installState");
         if (current.state.disabledSkills[root.key]?.includes(name)) return;
       }
       if (root.toggleable !== false && root.kind !== "preset") {
         const result = await setSkillEnabled(root, name, true, log);
-        if (result && "ok" in result && result.ok === false) throw new Error(result.error);
+        if (result && "ok" in result && result.ok === false) throw failure(result.error, result.code || "error.repo.installState");
       }
-    } catch {
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
       throw Object.assign(failure("\u6280\u80FD\u6587\u4EF6\u548C\u5B89\u88C5\u610F\u56FE\u5DF2\u4FDD\u7559\uFF0C\u542F\u7528\u72B6\u6001\u65E0\u6CD5\u5199\u5165\uFF1B\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u65B0\u6253\u5F00\u53D1\u73B0\u9875", "error.repo.installState"), { statusCode: 500 });
     }
   }
@@ -335,7 +351,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       const presetRoots = await fetchPresetRoots();
       const root = await recordInstallRoot(record, requestIndex().registered, await indexedFor(record), presetRoots);
       return signature(fileIndex(await readSkillTree(join(root.path, record.name)))) === fingerprint;
-    } catch {
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
       return false;
     }
   }
@@ -355,6 +372,7 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     await write(data);
     const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
     if ("ok" in result && result.ok === false) {
+      if (result.code === "error.repo.installState") return result;
       for (const record of records) delete record.restoreFingerprint;
       await write(data);
       return result;
@@ -365,7 +383,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
     }
     try {
       await write(data);
-    } catch {
+    } catch (error) {
+      if (!isExpectedOperationError(error)) throw error;
       throw failure("\u6280\u80FD\u5DF2\u6062\u590D\uFF0C\u76EE\u5F55\u8EAB\u4EFD\u7B49\u5F85\u6821\u9A8C\uFF1B\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u65B0\u6253\u5F00\u53D1\u73B0\u9875", "error.repo.installState");
     }
     await fs.rm(join(trashRootPath(), `.restored-${id}`), { recursive: true, force: true });
@@ -383,13 +402,23 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
         const root = await recordInstallRoot(record, index.registered, record.workspace === void 0 ? void 0 : await index.load(), presetRoots);
         const realRoot = await fs.realpath(root.path);
         result[installationSourceKey(realRoot, record.name)] = { ...parsed, id: record.id, path: record.path, commit: record.commit, root: record.root || "dsh", ...record.workspace ? { workspace: record.workspace } : {} };
-      } catch {
+      } catch (error) {
+        if (!isExpectedOperationError(error)) throw error;
       }
     }
     return result;
   }
   return {
+    managerPath,
     sources,
+    catalogReceipt: (id, target = {}) => serialize(async () => {
+      const location = await catalogLocation(target);
+      const data = await read();
+      const record = catalogRecords(data).find((record2) => record2.id === id && record2.root === location.root && record2.workspace === location.workspace && record2.complete === true && !record2.trashId);
+      if (!record?.files?.length || !await catalogMatches(record, signature(record.files))) return void 0;
+      const root = await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record));
+      return { name: record.name, root: root.path };
+    }, false, false),
     installCatalog: (id, pack, target = {}) => serialize(async () => {
       const presetRoots = await fetchPresetRoots();
       const location = await catalogLocation(target);
@@ -421,18 +450,21 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
           try {
             await write(data);
           } catch (caught) {
+            if (!isExpectedOperationError(caught)) throw caught;
             if (caught.code === "error.repo.capacity") throw caught;
             throw failure("\u5B89\u88C5\u610F\u56FE\u65E0\u6CD5\u5199\u5165\uFF0C\u672A\u590D\u5236\u6280\u80FD\u6587\u4EF6", "error.repo.installState");
           }
         }
       });
       const completedName = reusedLegacy ? imported.skipped?.length === 1 ? imported.skipped[0].name : void 0 : imported.imported?.length === 1 ? imported.imported[0].name : void 0;
+      if (imported.ok === false && imported.code === "error.repo.installState") throw failure(imported.error || "\u5B89\u88C5\u7ED3\u679C\u5C1A\u5F85\u786E\u8BA4", "error.repo.installState");
       if (imported.ok === false || !intent || completedName !== intent.name) {
         if (intent) {
           data.catalogInstalls = previousCatalog;
           try {
             await write(data);
-          } catch {
+          } catch (error) {
+            if (!isExpectedOperationError(error)) throw error;
             throw failure("\u5B89\u88C5\u672A\u5B8C\u6210\u4E14\u8EAB\u4EFD\u610F\u56FE\u65E0\u6CD5\u64A4\u9500\uFF0C\u8BF7\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u8BD5", "error.repo.installState");
           }
         }
@@ -442,7 +474,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       intent.complete = true;
       try {
         await write(data);
-      } catch {
+      } catch (error) {
+        if (!isExpectedOperationError(error)) throw error;
         throw Object.assign(failure("\u6280\u80FD\u6587\u4EF6\u5DF2\u5B89\u88C5\u4F46\u8EAB\u4EFD\u672A\u786E\u8BA4\uFF1B\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u65B0\u6253\u5F00\u53D1\u73B0\u9875", "error.repo.installState"), { statusCode: 500 });
       }
       return { name: intent.name, root: root.path };
@@ -458,11 +491,14 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       try {
         const result = await deleteSkill(root, name, log, { catalogTrash: { id, ids: records.map((record) => record.id) } });
         if ("ok" in result && result.ok === false) {
+          if (result.code === "error.repo.installState") return result;
           for (const record of records) delete record.trashId;
           await write(data);
         }
         return result;
       } catch (error) {
+        if (!isExpectedOperationError(error)) throw error;
+        if (error.code === "error.repo.installState") throw error;
         if (!(await listTrash()).some((item) => item.id === id)) {
           for (const record of records) delete record.trashId;
           await write(data);
@@ -496,10 +532,12 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       try {
         result = await permanentlyDeleteTrash(id, log);
       } catch (error) {
+        if (!isExpectedOperationError(error) || error.code === "error.repo.installState") throw error;
         await rollback(error);
         throw error;
       }
       if ("ok" in result && result.ok === false) {
+        if (result.code === "error.repo.installState") return result;
         await rollback(result.error);
         return result;
       }
@@ -526,6 +564,7 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       await write(data);
       const result = await restoreSkillTrash(id, log, { ...options, repositoryRestore: true });
       if ("ok" in result && result.ok === false) {
+        if (result.code === "error.repo.installState") return result;
         delete record.restoreFingerprint;
         for (const item of catalog) delete item.restoreFingerprint;
         await write(data);
@@ -540,7 +579,8 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
       }
       try {
         await write(data);
-      } catch {
+      } catch (error) {
+        if (!isExpectedOperationError(error)) throw error;
         throw failure("\u6280\u80FD\u5DF2\u6062\u590D\uFF0C\u6765\u6E90\u72B6\u6001\u7B49\u5F85\u6821\u9A8C\uFF1B\u6062\u590D\u78C1\u76D8\u5199\u5165\u540E\u91CD\u65B0\u6253\u5F00\u4ED3\u5E93\u9875", "error.repo.installState");
       }
       await fs.rm(join(trashRootPath(), `.restored-${id}`), { recursive: true, force: true }).catch(() => void 0);
