@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
 import { failureCode, gatewayCode, USER_CODE_BY_INTERNAL } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
+import { adapterInitializationDetailCode } from './model-failure-log.mjs';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
@@ -237,9 +238,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   let selectionLoaded = false; let selectionOwner = null;
   const enabled = id => Object.hasOwn(modelOptions, id);
   const callable = model => enabled(model.id);
-  const allowed = (route, model) => route === provider && models.some(item => item.id === model && callable(item));
+  const enabledModel = (route, model) => route === provider && enabled(model) ? models.find(item => item.id === model) : undefined;
+  const allowed = (route, model) => Boolean(enabledModel(route, model));
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
+  // The catalogue can move ahead of a failed adapter rebuild. Only the
+  // unchanged subset installed for this binding is still safe to dispatch.
+  let installedModels = new Map();
+  const installed = model => Boolean(backend) && isDeepStrictEqual(installedModels.get(model.id), model);
   const credentialRevoked = () => revokedBinding === lastId;
   // Bounded compensation for a refresh that lost its race to a context change:
   // one rebuild per version, never more than REBUILD_ATTEMPT_LIMIT in a row.
@@ -272,11 +278,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   // lease left in place fails every later discovery at 0 ms, before any socket
   // opens, and reads as an unreachable gateway even though nothing was sent.
   const renewLease = () => { if (lease.signal.aborted) lease = new AbortController(); return lease; };
-  // Every path that drops the backend also drops the catalogue state with it,
-  // so the account page can never say "ready" while nothing is callable.
   function clearCatalog(state = 'unconfigured', code = null) {
     catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0;
-    rawModels = []; models = []; backend = undefined; connectionBaseURL = undefined; adapterError = null;
+    rawModels = []; models = []; backend = undefined; installedModels.clear(); connectionBaseURL = undefined; adapterError = null;
     catalogState = state; catalogError = code;
     retryAt = null; syncedAt = null;
   }
@@ -335,7 +339,9 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     if (captured !== undefined && captured !== version) return 'IAM_MODEL_CONTEXT_CHANGED';
     if (credentialRevoked()) return 'ENTERPRISE_GATEWAY_CREDENTIAL_REVOKED';
     if (!backend) return adapterError ?? 'ENTERPRISE_MODELS_UNAVAILABLE';
-    if (!allowed(request.provider, request.model)) return 'ENTERPRISE_MODEL_NOT_ALLOWED';
+    const model = enabledModel(request.provider, request.model);
+    if (!model) return 'ENTERPRISE_MODEL_NOT_ALLOWED';
+    if (!installed(model)) return 'ENTERPRISE_MODELS_UNAVAILABLE';
     return null;
   }
   /**
@@ -408,7 +414,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const sync = refresh();
     const localReady = flight?.localReady;
     try {
-      return await Promise.race([
+      await Promise.race([
         sync,
         localReady?.then(() => refusal(request) ? sync : undefined) ?? sync,
         new Promise((_, reject) => {
@@ -491,7 +497,14 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         // is one attempt.
         if (!authorization && !emitted && !retried && cause?.code === 'IAM_GATEWAY_BINDING_CHANGED') {
           retried = true;
-          try { await rebuildBinding(request); if (redispatch) await redispatch(); continue; }
+          try {
+            await rebuildBinding(request);
+            // A successful directory read can finish without a usable route.
+            code = refusal(request);
+            if (code) { yield failed(request, null, code, 'local'); return; }
+            if (redispatch) await redispatch();
+            continue;
+          }
           catch (next) { const mapped = record(failureCode(next)); yield failed(request, next, mapped, 'unknown'); return; }
         }
         noteMapped(cause, code);
@@ -617,13 +630,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       const available = applyModelOptions(rawModels, modelOptions);
       let builtLocally = false;
       if (selectionSubject === iam.getView().principal && selectionSubject === connection.subject
-        && available.some(callable) && (!backend || !isDeepStrictEqual(models, available))) {
-        // Adapter loading may fail independently; still fetch directory metadata.
-        const resolved = await buildAdapter(connection, available).catch(() => undefined);
-        current();
-        backend = resolved;
-        adapterError = resolved ? null : 'ENTERPRISE_MODELS_UNAVAILABLE';
-        builtLocally = Boolean(resolved);
+        && available.some(callable) && (!backend || installedModels.size !== available.length || !available.every(installed))) {
+        builtLocally = await refreshAdapter(connection, available, current);
       }
       models = available;
       if (builtLocally) publish();
@@ -667,11 +675,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       syncRawModels();
       const entries = applyModelOptions(rawModels, modelOptions);
       if (!builtLocally || !isDeepStrictEqual(available, entries)) {
-        const resolved = await buildAdapter(connection, entries); current();
-        backend = resolved;
+        await refreshAdapter(connection, entries, current);
       }
       models = entries;
-      adapterError = null; catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
+      catalogState = 'ready'; catalogError = null; retryAttempt = 0; rebuildAttempts = 0; rebuiltVersion = -1; cancelRetry();
       syncedAt = Date.now(); publish();
       await syncHostDefault(); current();
       return { models: models.map(({ id, name, source, contextWindow, maxTokens, inputModalities }) => ({ id, name, source: source ?? 'gateway', contextWindow, maxTokens, inputModalities })), truncated: catalogTruncated };
@@ -686,7 +693,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         markFailed(code);
         if (!directoryFailed) {
           adapterError = code;
-          if (!RETRYABLE.has(code)) backend = undefined;
+          if (!RETRYABLE.has(code)) { backend = undefined; installedModels.clear(); }
         }
         // Advertise the retry time before the frame that carries it.
         scheduleRetry(code);
@@ -746,7 +753,10 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const mine = version;
     const task = Promise.resolve().then(() => alignHostDefaultModel({
       service: getHostDefaultModel(), llm: host.llm, provider, target: defaultModelId,
-      enterpriseUsable: id => Boolean(backend) && allowed(provider, id),
+      enterpriseUsable: id => {
+        const model = enabledModel(provider, id);
+        return Boolean(model && installed(model));
+      },
       isCurrent: () => { sample(); return !disposed && mine === version && !permit(iam.getView()); },
     })).catch(() => HOST_DEFAULT_RESULTS.FAILED).then(result => {
       if (!disposed && mine === version) {
@@ -770,7 +780,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         // Only enabled models are offered. A model the person has not turned on
         // stays in the account page's catalogue, so the picker cannot offer a
         // model whose calls would be refused.
-        return models.filter(callable).map(({ id, name, inputModalities, input }) => ({
+        return models.filter(model => callable(model) && installed(model)).map(({ id, name, inputModalities, input }) => ({
           provider,
           id,
           name: name || id,
@@ -787,11 +797,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           failed({ provider: route, model }, cause, cause.code, 'local');
           throw cause;
         }
-        const prepare = async () => backend
-          ? (typeof backend.prepareCall === 'function'
+        const prepare = async () => {
+          const entry = enabledModel(route, model);
+          if (!entry || !installed(entry)) return null;
+          return typeof backend.prepareCall === 'function'
             ? await backend.prepareCall(route, model, signal)
-            : { model: await backend.resolveModel(route, model, signal), stream: options => backend.stream(options) })
-          : null;
+            : { model: await backend.resolveModel(route, model, signal), stream: options => backend.stream(options) };
+        };
         let prepared;
         try { prepared = await prepare(); } catch (cause) {
           failed({ provider: route, model }, cause, failureCode(cause), 'unknown');
@@ -813,7 +825,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           throw cause;
         }
         try {
-          return backend ? await backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
+          const entry = enabledModel(route, model);
+          return entry && installed(entry) ? await backend.resolveModel(route, model, signal) : { provider: route, id: model, name: model };
         } catch (cause) {
           failed({ provider: route, model }, cause, failureCode(cause), 'unknown');
           throw cause;
@@ -847,18 +860,43 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       ...prepareHeaders === undefined ? {} : { prepareHeaders },
     });
   }
+  function installAdapter(resolved, entries) {
+    backend = resolved;
+    installedModels = new Map(entries.map(model => [model.id, model]));
+    adapterError = null;
+  }
+
+  async function refreshAdapter(connection, entries, current) {
+    // Only initialization errors belong here. Context and directory failures
+    // keep their own paths. The logger receives fixed codes without the cause.
+    const resolved = await buildAdapter(connection, entries).catch(cause => {
+      const code = 'ENTERPRISE_MODELS_UNAVAILABLE';
+      try {
+        diagnoseFailure?.({ detailCode: adapterInitializationDetailCode(cause), code, message: MESSAGES[code], stage: 'adapter-initialization' });
+      } catch { /* optional diagnostics cannot change the directory result */ }
+      return undefined;
+    });
+    current();
+    if (!resolved) {
+      adapterError = 'ENTERPRISE_MODELS_UNAVAILABLE';
+      return false;
+    }
+    installAdapter(resolved, entries);
+    return true;
+  }
+
   async function rebuildAdapter(stale) {
     const entries = models;
     if (entries.length === 0) {
       backend = undefined;
+      installedModels.clear();
       return null;
     }
     const connection = await iam.resolveGatewayConnection();
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
     const resolved = await buildAdapter(connection, entries);
     if (stale()) throw error('IAM_MODEL_CONTEXT_CHANGED');
-    backend = resolved;
-    adapterError = null;
+    installAdapter(resolved, entries);
     return resolved;
   }
 
@@ -1087,7 +1125,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     async dispose() {
       if (disposed) return;
       disposed = true; clearTimeout(timer); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
-      await observation; catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined;
+      await observation; catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined; installedModels.clear();
     }
   };
 }

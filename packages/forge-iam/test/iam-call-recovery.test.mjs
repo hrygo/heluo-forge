@@ -24,7 +24,7 @@ const options = { provider: 'enterprise', model: 'enterprise-chat', messages: []
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
-function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false, manual = [] } = {}) {
+function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false, manual = [], failMovedAdapter = false } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -135,6 +135,7 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
   };
   const createAdapter = async adapterOptions => {
     builds += 1;
+    if (failMovedAdapter && adapterOptions.config.managedModels.baseURL === MOVED_GATEWAY) throw new TypeError();
     if (native) {
       return createNativeGatewayAdapter({ ...adapterOptions, host: { ...adapterOptions.host, loader: nativeLoader } });
     }
@@ -274,6 +275,19 @@ test('a rebuild that fails keeps a specific code instead of the unknown-failure 
   assert.equal(finishOf(result).kind, 'error');
   assert.equal(failureOf(result), 'ENTERPRISE_GATEWAY_UNAVAILABLE');
   assert.notEqual(failureOf(result), 'ENTERPRISE_GATEWAY_CALL_FAILED');
+  assert.equal(f.requests, 0);
+});
+
+test('a successful directory cannot replay a call on an adapter that failed to initialize', async t => {
+  const f = fixture({ failMovedAdapter: true });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.ready;
+  f.setConnection({ baseURL: MOVED_GATEWAY });
+  const result = await chunks(f.adapter.stream(options));
+  assert.equal(f.runtime.getView().state, 'ready');
+  assert.equal(f.runtime.getView().error, null);
+  assert.equal(failureOf(result), 'ENTERPRISE_MODELS_UNAVAILABLE');
+  assert.equal(f.attempts, 1);
   assert.equal(f.requests, 0);
 });
 

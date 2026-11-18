@@ -358,7 +358,7 @@ SDK 的 `currentSelection()` 声明始终返回 provider/model 对象，没有 e
 
 宿主公共模块经 `loader.import` 读取；能力缺失关闭模型入口。企业补丁同时关闭 `llm-pi-ai` 与 `ui-settings-models`，不创建其可写 namespace；IAM Standard Schema 不提供 volatile 配置字段，通用设置写接口不能添加自由提供方。用户对网关的修改统一走账号页及受信凭据事务；新对话模型由用户在宿主中选择。`IAM_LOGIN_REQUIRED` 与网关凭证拒绝、403、目录异常分别展示；不使用原生 `AUTH` 表示退出。模型推理对 429/503 不做自动退避；绑定变化时在尚未产出分片等条件下最多重建并重试一次，未产出分片不证明请求尚未发送，真实派发顺序和计费仍待验证。
 
-企业模型调用失败时，插件尽力将安全诊断写入 `$DSH_HOME/logs/forge-iam-model-failures.jsonl`；未设置 `DSH_HOME` 时使用 `~/.dsh/logs/forge-iam-model-failures.jsonl`。记录包含固定文案、已登记错误码、时间、派发状态以及 provider、model 和可选 session ID 的 SHA-256 摘要，不含异常原文、请求内容或凭据。插件本地门禁拒绝标为 `local`，无法判断是否派发时标为 `unknown`。日志写入失败会发出固定警告，不影响模型调用；本地日志由使用者清理，不替代审计或宿主调试视图。摘要可能被用于猜测常见标识，分享日志前应评估其敏感性。
+插件将企业模型调用失败和目录同步期间的适配器初始化异常写入 `$DSH_HOME/logs/forge-iam-model-failures.jsonl`，未设置 `DSH_HOME` 时使用 `~/.dsh/logs/forge-iam-model-failures.jsonl`。记录包含固定文案、已登记错误码、时间、阶段以及调用所带 provider、model 和可选 session ID 的 SHA-256 摘要。日志排除异常原文、堆栈、请求内容和凭据。插件本地门禁拒绝标为 `local`，无法判断是否派发时标为 `unknown`。适配器初始化异常标为 `adapter-initialization`，用白名单区分模块缺失、常见程序异常和其他初始化失败。目录同步独立报告网关结果，已装配且配置仍匹配的模型可以继续通过鉴权调用。日志写入失败时发出固定警告，调用与目录结果照常返回。本地日志由使用者清理，不替代审计或宿主调试视图。摘要可能被用于猜测常见标识，分享日志前应评估其敏感性。
 
 模型启用与参数覆盖分两层。**启用集合**决定可用性：`modelOptions` 的键即"已启用"，值为覆盖参数（可为空对象）。未启用的目录模型照旧出现在企业模型页，但 `listModels` 不返回它，`prepareCall`/`resolveModel`/`llm/stream` 都以 `ENTERPRISE_MODEL_NOT_ALLOWED` 拒绝，避免"能选不能用"。首跑（该 subject 从未保存过）自动启用目录第一个模型并尝试保存；管理员配置了 `defaultModel` 且网关仍提供时优先用它。显式保存空集合是合法状态，不会被打回默认值——区分"从未保存"与"保存为空"的是 `readModelSelection()` 返回的 `saved` 标志。
 

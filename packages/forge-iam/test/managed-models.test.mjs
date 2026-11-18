@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { applyModelOptions, buildThinkingLevelMap, createManagedModelRuntime, createNativeGatewayAdapter, validateManagedModels } from '../src/managed-models.mjs';
+import { createModelFailureLogger } from '../src/model-failure-log.mjs';
 
 const configuration = { baseURL: 'https://gateway.corp.example/v1' };
 function fixture({ gatewayBaseURL = configuration.baseURL, connectionKey, ...overrides } = {}) {
@@ -943,6 +947,87 @@ test('saved manual models work while directory discovery is pending and inferenc
   assert.equal(f.runtime.getView().error, 'ENTERPRISE_GATEWAY_FORBIDDEN');
   const denied = await chunks(f.adapter.stream({ ...options, model: 'manual-enabled', messages: [{ role: 'user', content: 'test' }] }));
   assert.equal(denied.at(-1).reason.failure.code, 'ENTERPRISE_GATEWAY_FORBIDDEN');
+  assert.equal(f.selectionWrites, 0);
+});
+
+test('adapter initialization diagnostics preserve directory results and saved manual models', async t => {
+  for (const status of [200, 403]) {
+    await t.test(`directory HTTP ${status}`, async t => {
+      const home = mkdtempSync(join(tmpdir(), 'forge-adapter-diagnostics-'));
+      t.after(() => rmSync(home, { recursive: true, force: true }));
+      const log = join(home, 'logs', 'forge-iam-model-failures.jsonl');
+      const diagnostic = new TypeError('sensitive-adapter-message');
+      diagnostic.code = 'sensitive-adapter-code';
+      const selection = { models: { 'manual-enabled': {} }, manual: [{ id: 'manual-enabled' }] };
+      let canBuild = false;
+      let calls = 0;
+      const f = fixture({
+        selection,
+        diagnoseFailure: createModelFailureLogger({ home }),
+        fetch: async () => new Response('{"data":[{"id":"enterprise-chat"}]}', { status }),
+        async createAdapter({ resolveKey }) {
+          if (!canBuild) throw diagnostic;
+          return {
+            async *stream() {
+              assert.equal(await resolveKey(), 'synthetic-only');
+              calls++;
+              yield { type: 'text', text: 'ok' };
+            },
+          };
+        },
+      });
+      t.after(() => f.runtime.dispose());
+      const sync = () => status === 200 ? f.runtime.refresh()
+        : assert.rejects(f.runtime.refresh(), { code: 'ENTERPRISE_GATEWAY_FORBIDDEN' });
+      const request = { ...options, model: 'manual-enabled' };
+      const list = async () => (await f.adapter.listModels('enterprise')).map(model => model.id);
+
+      await sync();
+      const records = readFileSync(log, 'utf8');
+      assert.doesNotMatch(records, /sensitive-adapter|synthetic-only|manual-enabled/);
+      for (const row of records.trim().split('\n').map(JSON.parse)) {
+        assert.equal(row.stage, 'adapter-initialization');
+        assert.equal(row.detailCode, 'ADAPTER_TYPE_ERROR');
+        assert.equal(row.code, 'ENTERPRISE_MODELS_UNAVAILABLE');
+      }
+      assert.equal(f.runtime.getView().state, status === 200 ? 'ready' : 'error');
+      assert.equal(f.runtime.getView().error, status === 200 ? null : 'ENTERPRISE_GATEWAY_FORBIDDEN');
+      assert.deepEqual(await list(), []);
+      const denied = await chunks(f.adapter.stream(request));
+      assert.equal(denied.at(-1).reason.failure.code, 'ENTERPRISE_MODELS_UNAVAILABLE');
+
+      canBuild = true;
+      await sync();
+      assert.deepEqual(await list(), ['manual-enabled']);
+      assert.equal((await chunks(f.adapter.stream(request)))[0].text, 'ok');
+      assert.equal(f.runtime.getView().error, status === 200 ? null : 'ENTERPRISE_GATEWAY_FORBIDDEN');
+      f.change({ state: 'signed-out', principal: null });
+      const signedOut = await chunks(f.adapter.stream(request));
+      assert.equal(signedOut.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
+      assert.equal(calls, 1);
+      assert.equal(f.selectionWrites, 0);
+      assert.deepEqual(f.selection, selection);
+    });
+  }
+});
+
+test('a failed adapter update keeps unchanged installed models callable after directory success', async t => {
+  const f = fixture({
+    selection: { models: { 'manual-enabled': {}, 'enterprise-chat': {} }, manual: [{ id: 'manual-enabled' }] },
+    fetch: async () => new Response('{"data":[{"id":"enterprise-chat"}]}'),
+    async createAdapter({ config, resolveKey }) {
+      if (config.managedModels.models.some(model => model.id === 'enterprise-chat')) throw new ReferenceError();
+      return { async *stream() { await resolveKey(); yield { type: 'text', text: 'ok' }; } };
+    },
+  });
+  t.after(() => f.runtime.dispose());
+  await f.runtime.refresh();
+  assert.equal(f.runtime.getView().state, 'ready');
+  assert.equal(f.runtime.getView().error, null);
+  assert.deepEqual((await f.adapter.listModels('enterprise')).map(model => model.id), ['manual-enabled']);
+  assert.equal((await chunks(f.adapter.stream({ ...options, model: 'manual-enabled' })))[0].text, 'ok');
+  const unavailable = await chunks(f.adapter.stream(options));
+  assert.equal(unavailable.at(-1).reason.failure.code, 'ENTERPRISE_MODELS_UNAVAILABLE');
   assert.equal(f.selectionWrites, 0);
 });
 
