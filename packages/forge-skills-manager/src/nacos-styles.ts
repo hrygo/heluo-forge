@@ -21,6 +21,8 @@ export const nacosCss = `
 .dssm-nacos-version{display:inline-flex;align-items:center;flex:none;max-width:100%;padding:1px 6px;border:0.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xs,4px);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:17px;overflow-wrap:anywhere}
 .dssm-nacos-card-head .dssm-nacos-version{max-width:35%;margin-top:4px}
 .dssm-nacos-description{margin:0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.dssm-nacos-installations{display:flex;flex-wrap:wrap;gap:4px 8px;min-width:0}
+.dssm-nacos-installation{margin:0;padding:2px 7px;border:0.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xs,4px);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);overflow-wrap:anywhere}
 .dssm-nacos-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px 12px;flex-wrap:wrap;margin-top:auto}
 .dssm-nacos-card-actions>button{flex:none;margin-left:auto}
 .dssm-nacos-meta{display:flex;align-items:center;gap:12px;flex:1 1 180px;min-width:0;min-height:18px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}

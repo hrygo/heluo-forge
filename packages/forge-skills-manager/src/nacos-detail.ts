@@ -41,6 +41,9 @@ interface Props {
   workspaces: WorkspaceRow[];
   roots: UserDestination[];
   ready: boolean;
+  installed: boolean;
+  installationStatus: string | null;
+  onNavigate?: () => void;
   onTarget: (value: DestinationValue) => void;
   onRetry: () => void;
   onInstall: () => void;
@@ -64,8 +67,9 @@ export function NacosDetailDialog(props: Props) {
       h("span", { className: "dssm-nacos-note" }, t("nacos.enableHint")),
       h("div", { className: "dssm-nacos-actions" },
         uncertain ? h(Button, { variant: "outline", size: "sm", disabled: props.checking, onClick: props.onCheck }, t("nacos.checkResult")) : null,
+        props.onNavigate ? h(Button, { variant: "outline", size: "sm", onClick: props.onNavigate }, t(project ? "nacos.openProject" : "nacos.openGlobal")) : null,
         h(Button, { variant: "outline", size: "sm", onClick: installing ? props.onCancel : props.onClose }, t(installing ? "btn.cancel" : "btn.close")),
-        h(Button, { variant: "primary", size: "sm", disabled: !detail || loading || installing || uncertain || !props.ready, onClick: props.onInstall }, t(installing ? "nacos.downloading" : "nacos.download")))),
+        h(Button, { variant: "primary", size: "sm", disabled: !detail || loading || installing || uncertain || !props.ready, onClick: props.onInstall }, t(installing ? "nacos.downloading" : props.installed ? "nacos.downloaded" : "nacos.download")))),
   },
   h("div", { className: "dssm-nacos-detail" },
     uncertain ? h("p", { className: "dssm-nacos-note", role: "status" }, t("nacos.pending")) : null,
@@ -82,6 +86,7 @@ export function NacosDetailDialog(props: Props) {
         h("ul", null, detail.files.map(file => h("li", { key: file }, h("code", null, file))))),
       h("section", { className: "dssm-nacos-destination", "aria-label": t("nacos.choose") },
         h("h3", null, t("nacos.choose")),
+        props.installationStatus ? h("p", { className: "dssm-nacos-installation", role: "status" }, props.installationStatus) : null,
         h("div", { className: "dssm-nacos-scope", role: "group", "aria-label": t("nacos.choose") },
           (["user", "workspace"] as const).map(scope => h(Button, {
             key: scope, size: "sm", variant: target.scope === scope ? "primary" : "outline",

@@ -63,9 +63,10 @@ async function harness(t, initial = {}) {
     if (path === '/nacos/detail') {
       if (options.holdDetail) { const pending = deferred(); details.push(pending); return pending.promise; }
       if (options.failDetail) throw { code: 'error.nacos.notFound' };
-      return { ...JSON.parse(init.body), name: JSON.parse(init.body).skillName, description: 'Example', body: '# Instructions\n\nUse carefully.', files: ['SKILL.md', 'assets/binary.dat'], digest: 'a'.repeat(64) };
+      return { ...JSON.parse(init.body), name: JSON.parse(init.body).skillName, description: 'Example', body: '# Instructions\n\nUse carefully.', files: ['SKILL.md', 'assets/binary.dat'], digest: 'a'.repeat(64),
+        installations: structuredClone(data.items.find(item => item.name === JSON.parse(init.body).skillName && item.version === JSON.parse(init.body).version)?.installations || []) };
     }
-    if (path === '/workspaces') return { items: [{ name: 'Project', path: '/project', available: true, registeredPaths: ['/project'], skillCount: 0 }] };
+    if (path === '/workspaces') return { items: options.workspaces || [{ name: 'Project', path: '/project', available: true, registeredPaths: ['/project'], skillCount: 0 }] };
     if (path === '/state') return { roots: [{ key: 'dsh', path: '/workspace/skills', mutable: true }] };
     if (path.startsWith('/nacos/install-status?')) return options.outcome;
     if (path === '/nacos/install') {
@@ -76,7 +77,10 @@ async function harness(t, initial = {}) {
         if (!options.ignoreAbort) init.signal.addEventListener('abort', () => pending.reject({ code: 'error.nacos.cancelled' }), { once: true });
         return pending.promise;
       }
-      return { name: JSON.parse(init.body).skillName, root: '/workspace/skills' };
+      const input = JSON.parse(init.body);
+      const item = data.items.find(item => item.name === input.skillName && item.version === input.version);
+      if (item) (item.installations ||= []).push({ ...(input.workspace ? { workspace: input.workspace } : {}), state: 'downloaded' });
+      return { name: input.skillName, root: '/workspace/skills' };
     }
     throw new Error('Unexpected API: ' + path);
   };
@@ -96,10 +100,74 @@ async function harness(t, initial = {}) {
     click: label => event(() => { const node = button(label); assert.ok(node, `Button missing: ${label}`); assert.ok(!node.props.disabled, `Button disabled: ${label}`); node.props.onClick?.(); }),
     async search(value) { await event(() => renderer.root.findByType('input').props.onChange({ target: { value } })); await event(() => renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })); },
     async stop() { active = false; await event(() => renderer.update(h(App))); },
+    async start() { active = true; await event(() => renderer.update(h(App))); },
     async remount() { await event(() => renderer.update(h(App, { key: 'remounted' }))); },
     get refreshed() { return refreshed; },
   };
 }
+
+test('下载后卡片即时显示 Host 状态，重入市场及重挂载后仍展示并阻止同位置重复下载', async context => {
+  const ui = await harness(context);
+  await ui.click('查看详情'); await ui.click('下载到本地');
+  assert.ok(ui.body().includes('已下载 · 全局技能'));
+  await ui.stop(); await ui.start(); await ui.remount();
+  assert.ok(ui.body().includes('已下载 · 全局技能'));
+  assert.ok(!ui.body().includes('当前为禁用状态'), 'transient success notice is gone');
+  await ui.click('查看详情');
+  assert.equal(ui.button('已下载').props.disabled, true);
+  await ui.click('前往全局技能');
+  assert.deepEqual(ui.navigated, [{ name: 'example-skill', scope: 'user', workspace: '' }]);
+  assert.equal(ui.calls.filter(call => call.path === '/nacos/install').length, 1);
+  await ui.click('项目技能');
+  await ui.event(() => ui.renderer.root.findByType('select').props.onChange({ target: { value: '/project' } }));
+  assert.equal(ui.button('下载到本地').props.disabled, false, 'another target remains available');
+});
+
+test('项目下载和本地修改独立展示，选择已下载项目只允许前往本地管理', async context => {
+  const ui = await harness(context);
+  ui.data.items[0].installations = [{ workspace: '/project', state: 'modified' }];
+  await ui.click('刷新');
+  assert.ok(ui.body().includes('已下载 · 本地已修改 · 项目技能（1）'));
+  await ui.click('查看详情');
+  assert.equal(ui.button('下载到本地').props.disabled, false, 'project copy does not block global');
+  await ui.click('项目技能');
+  await ui.event(() => ui.renderer.root.findByType('select').props.onChange({ target: { value: '/project' } }));
+  assert.equal(ui.button('已下载').props.disabled, true);
+  await ui.click('前往项目技能');
+  assert.deepEqual(ui.navigated, [{ name: 'example-skill', scope: 'workspace', workspace: '/project' }]);
+  await ui.click('关闭');
+  ui.data.items[0].installations = [];
+  await ui.click('刷新');
+  assert.ok(!ui.body().includes('本地已修改'), 'removed/trash copy clears after Host refresh');
+  await ui.click('查看详情');
+  assert.equal(ui.button('下载到本地').props.disabled, false);
+});
+
+for (const [state, label] of [['pending', '下载待确认'], ['unavailable', '下载状态暂不可核验']]) {
+  test(`Host ${state} 状态不显示下载成功且不能重复下载`, async context => {
+    const ui = await harness(context);
+    ui.data.items[0].installations = [{ state }];
+    await ui.click('刷新'); await ui.remount();
+    assert.ok(ui.body().includes(label));
+    assert.ok(!ui.body().includes('已下载'));
+    await ui.click('查看详情');
+    assert.equal(ui.button('下载到本地').props.disabled, true);
+    assert.equal(ui.button('前往全局技能'), undefined);
+    assert.equal(ui.calls.filter(call => call.path === '/nacos/install').length, 0);
+  });
+}
+
+test('项目状态按规范根匹配，支持登记子目录及 Windows 路径大小写', async context => {
+  for (const [path, registered, recorded] of [['/project', '/project/nested', '/project'], ['C:\\Project', 'C:\\Project\\nested', 'c:/project']]) {
+    const ui = await harness(context, { workspaces: [{ name: 'Project', path: registered, projectRoot: path, available: true, registeredPaths: [registered] }] });
+    ui.data.items[0].installations = [{ workspace: recorded, state: 'downloaded' }];
+    await ui.click('查看详情'); await ui.click('项目技能');
+    await ui.event(() => ui.renderer.root.findByType('select').props.onChange({ target: { value: registered } }));
+    assert.equal(ui.button('已下载').props.disabled, true);
+    await ui.click('前往项目技能');
+    assert.equal(ui.navigated[0].workspace, registered);
+  }
+});
 
 test('发现仅请求 Nacos，详情渲染说明和资源且下载后可前往全局技能', async t => {
   const ui = await harness(t);

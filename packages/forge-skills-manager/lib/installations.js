@@ -411,6 +411,34 @@ function createInstallationManager({ local, log, registeredWorkspaces, onWorkspa
   return {
     managerPath,
     sources,
+    catalogInstallations: (ids) => serialize(async () => {
+      const data = await read();
+      const selected = new Set(ids);
+      const result = /* @__PURE__ */ Object.create(null);
+      for (const record of catalogRecords(data)) {
+        if (!selected.has(record.id) || record.root !== "dsh" || record.trashId) continue;
+        let state = "pending";
+        if (record.complete === true && record.files?.length) {
+          try {
+            const root = await resolveInstallRoot(record, requestIndex().registered, await indexedFor(record));
+            const path = join(root.path, record.name);
+            try {
+              await fs.lstat(path);
+            } catch (error) {
+              if (isExpectedOperationError(error) && error.code === "ENOENT") continue;
+              throw error;
+            }
+            const files = fileIndex(await readSkillTree(path));
+            state = signature(files) === signature(record.files) ? "downloaded" : "modified";
+          } catch (error) {
+            if (!isExpectedOperationError(error)) throw error;
+            state = "unavailable";
+          }
+        }
+        (result[record.id] ||= []).push({ ...record.workspace === void 0 ? {} : { workspace: record.workspace }, state });
+      }
+      return result;
+    }),
     catalogReceipt: (id, target = {}) => serialize(async () => {
       const location = await catalogLocation(target);
       const data = await read();

@@ -23,6 +23,11 @@ function validateNacosSelection(input) {
 }
 function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
   let token;
+  function identity(input) {
+    const selected = validateNacosSelection(input);
+    const cfg = settings();
+    return "nacos:" + createHash("sha256").update(JSON.stringify([cfg.base, cfg.namespace, selected.name, selected.version])).digest("hex");
+  }
   function settings() {
     if (!config) throw error("unconfigured", "\u4F01\u4E1A\u6280\u80FD\u5E93\u5C1A\u672A\u914D\u7F6E\uFF0C\u8BF7\u8054\u7CFB\u7EF4\u62A4\u4EBA\u5458", 503);
     try {
@@ -190,7 +195,7 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
         digest.update(JSON.stringify([path, createHash("sha256").update(files[name]).digest("hex")]));
         entries.push({ path, data: Buffer.from(files[name]).toString("base64") });
       }
-      const id = "nacos:" + createHash("sha256").update(JSON.stringify([cfg.base, cfg.namespace, selected.name, selected.version])).digest("hex");
+      const id = identity(input);
       const detail = { ...selected, description: document.map.description, body: document.body, files: entries.map((e) => e.path), digest: digest.digest("hex") };
       return { id, pack: { name: selected.name, entries }, detail };
     });
@@ -229,6 +234,7 @@ function createNacosClient(config, fetcher = (...args) => fetch(...args)) {
     async detail(input, signal) {
       return (await load(input, signal)).detail;
     },
+    identity,
     load
   };
 }

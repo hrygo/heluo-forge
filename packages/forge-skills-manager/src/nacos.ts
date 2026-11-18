@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { parseSkillDoc } from "./skill-document.js";
-import type { UploadInput } from "./types.js";
+import type { CatalogInstallation, UploadInput } from "./types.js";
 import { unzipSync } from "./zip.js";
 
 export interface NacosConfig {
@@ -11,7 +11,7 @@ export interface NacosConfig {
   timeoutMs?: number;
   allowInsecureHttp?: boolean;
 }
-export interface NacosSkill { name: string; description: string; version: string; namespaceId?: string; downloadCount?: number }
+export interface NacosSkill { name: string; description: string; version: string; namespaceId?: string; downloadCount?: number; installations?: CatalogInstallation[] }
 export interface NacosPage { configured: boolean; items: NacosSkill[]; page: number; total: number; pageSize: number }
 export interface NacosDetail extends NacosSkill { body: string; files: string[]; digest: string }
 export type NacosSelection = { skillName?: unknown; version?: unknown };
@@ -35,6 +35,11 @@ export function validateNacosSelection(input: NacosSelection) {
 /** No configurable request paths or mutation methods. Only login and read APIs. */
 export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = (...args) => fetch(...args)) {
   let token: { value: string; until: number; credentialKey: string } | undefined;
+  function identity(input: NacosSelection) {
+    const selected = validateNacosSelection(input);
+    const cfg = settings();
+    return "nacos:" + createHash("sha256").update(JSON.stringify([cfg.base, cfg.namespace, selected.name, selected.version])).digest("hex");
+  }
   function settings() {
     if (!config) throw error("unconfigured", "企业技能库尚未配置，请联系维护人员", 503);
     try {
@@ -184,7 +189,7 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
         digest.update(JSON.stringify([path, createHash("sha256").update(files[name]).digest("hex")]));
         entries.push({ path, data: Buffer.from(files[name]).toString("base64") });
       }
-      const id = "nacos:" + createHash("sha256").update(JSON.stringify([cfg.base, cfg.namespace, selected.name, selected.version])).digest("hex");
+      const id = identity(input);
       const detail: NacosDetail = { ...selected, description: document.map.description, body: document.body, files: entries.map(e => e.path), digest: digest.digest("hex") };
       return { id, pack: { name: selected.name, entries } satisfies UploadInput, detail };
     });
@@ -214,6 +219,7 @@ export function createNacosClient(config?: NacosConfig, fetcher: typeof fetch = 
       });
     },
     async detail(input: NacosSelection, signal?: AbortSignal) { return (await load(input, signal)).detail; },
+    identity,
     load,
   };
 }
