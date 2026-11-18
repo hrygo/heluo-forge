@@ -25,7 +25,8 @@ const options = { provider: 'enterprise', model: 'enterprise-chat', messages: []
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 /** `projects` answers one model per gateway address; it can be told to fail the new one. */
-function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false, manual = [], failMovedAdapter = false } = {}) {
+function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailureCode = null, native = false,
+  manual = [], failMovedAdapter = false, iamOverride, sendModelRequest } = {}) {
   let view = {
     state: 'ready', principal: 'person-a', accessExpiresAt: new Date(Date.now() + 60000).toISOString(),
     gatewayCredential: { state: 'configured', matchesAccount: true },
@@ -39,7 +40,7 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
   let releaseChunk = null;
   let failAfterFirstChunk = false;
   let lastSignal = null;
-  const iam = {
+  const iam = iamOverride ?? {
     getView: () => structuredClone(view),
     readModelSelection: async () => ({
       subject: 'person-a', saved: true, models: { 'enterprise-chat': {} }, defaultModelId: 'enterprise-chat', manual,
@@ -117,7 +118,10 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
                 // The host asks for the key on every call: this is the call site
                 // that reports a binding change before anything is sent.
                 const key = await resolveApiKey();
-                yield* profile.piProvider.stream({ id: callOptions.model }, {}, { ...callOptions, apiKey: key });
+                const model = profile.piProvider.getModels().find(candidate => candidate.id === callOptions.model);
+                yield* profile.piProvider.stream(model, {}, {
+                  ...callOptions, apiKey: key, ...(sendModelRequest ? { fetch: sendModelRequest } : {}),
+                });
               })();
             }
           },
@@ -126,7 +130,14 @@ function fixture({ tokenFailure = null, logFailure, diagnoseFailure, finishFailu
       if (specifier === '@earendil-works/pi-ai/api/openai-completions.lazy') {
         return {
           openAICompletionsApi: () => ({
-            stream: (model, context, streamOptions) => transport(streamOptions.apiKey, streamOptions),
+            async *stream(model, context, streamOptions) {
+              if (sendModelRequest) {
+                await streamOptions.fetch(`${model.baseUrl}/chat/completions`, {
+                  method: 'POST', headers: streamOptions.headers, signal: streamOptions.signal,
+                });
+              }
+              yield* transport(streamOptions.apiKey, streamOptions);
+            },
             streamSimple: (model, context, streamOptions) => transport(streamOptions.apiKey, streamOptions),
           }),
         };
@@ -600,7 +611,7 @@ test('a transport that reports the binding change as a finish chunk is not retri
 
 // --- service layer: the key no longer waits on a token refresh -------------
 
-async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3_600_000, tokenOutage = false } = {}) {
+async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3_600_000, tokenOutage = false, beforeJwks } = {}) {
   const oidc = await startMockOidc({ accessTtl: 600 });
   t.after(() => oidc.close());
   const atomic = createAtomicGatewayFixture();
@@ -620,28 +631,191 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
     value: 'uag-synthetic-key', baseURL: GATEWAY, ownerSubject: 'E1001',
     deviceLabel: 'synthetic', enteredAt: new Date(clock).toISOString(),
   });
-  const service = createIamService({
-    ...oidc.endpoints, clientId: oidc.clientId, redirectUri: 'http://127.0.0.1:4567/iam/callback',
-  }, {
-    credentials: atomic.credentials,
-    getCredentials: () => credentials,
-    ...atomic.options,
-    verifyAtomicStore: candidate => candidate === atomic.credentials,
-    now: () => clock,
-    monotonic: () => clock - start,
-    fetch: async (url, init) => {
-      // A preflight failure is the token layer's own unreachable case: it
-      // happens before any refresh claim, so nothing is consumed.
-      if (tokenOutage && String(url).endsWith('/jwks')) throw new Error('synthetic preflight outage');
-      return fetch(url, init);
-    },
-  });
-  t.after(() => service.dispose());
-  await service.hydrate();
+  const openService = async () => {
+    const service = createIamService({
+      ...oidc.endpoints, clientId: oidc.clientId, redirectUri: 'http://127.0.0.1:4567/iam/callback',
+    }, {
+      credentials: atomic.credentials,
+      getCredentials: () => credentials,
+      ...atomic.options,
+      verifyAtomicStore: candidate => candidate === atomic.credentials,
+      now: () => clock,
+      monotonic: () => clock - start,
+      fetch: async (url, init) => {
+        // A preflight failure happens before any refresh claim.
+        if (String(url).endsWith('/jwks')) {
+          if (tokenOutage) throw new Error('synthetic preflight outage');
+          if (beforeJwks) await beforeJwks();
+        }
+        return fetch(url, init);
+      },
+    });
+    t.after(() => service.dispose());
+    await service.hydrate();
+    return service;
+  };
+  const service = await openService();
   return { service, oidc, store, grant, credentials: atomic.credentials, key: 'uag-synthetic-key',
+    openService,
     advance(ms) { clock += ms; return service.notifyView(); },
     replaceProvider(next) { credentials = next; },
   };
+}
+
+async function modelRuntimeFor(t, service) {
+  await service.saveModelSelection({ models: { [options.model]: {} }, defaultModelId: options.model });
+  const posts = [];
+  const { adapter, runtime } = fixture({
+    iamOverride: service, native: true,
+    async sendModelRequest(url, init) {
+      posts.push({ url, method: init.method, token: new Headers(init.headers).get('X-IAM-Token') });
+      return new Response('synthetic response');
+    },
+  });
+  t.after(() => runtime.dispose());
+  await runtime.ready;
+  assert.deepEqual((await adapter.listModels(options.provider)).map(model => model.id), [options.model]);
+  return { adapter, posts };
+}
+
+function holdNextGrantRead(t, credentials) {
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  t.after(() => release.resolve());
+  const read = credentials.readRecord.bind(credentials);
+  let hold = true;
+  credentials.readRecord = async key => {
+    const record = await read(key);
+    if (key === GRANT_KEY && hold) {
+      hold = false;
+      started.resolve();
+      await release.promise;
+    }
+    return record;
+  };
+  return { started: started.promise, release: release.resolve };
+}
+
+test('a model call adopts a local rotation while its first grant read is stalled', { timeout: 6000 }, async t => {
+  const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+  const { adapter, posts } = await modelRuntimeFor(t, f.service);
+  assert.equal(f.advance(240_001).state, 'expired');
+  const read = holdNextGrantRead(t, f.credentials);
+  const call = chunks(adapter.stream(options));
+  await read.started;
+  await f.service.captureModelSession().renew();
+  const { grant: complete } = await f.store.read();
+  assert.equal(complete.refreshOperation.state, 'complete');
+  assert.equal(complete.sessionInstanceId, f.grant.sessionInstanceId);
+  assert.notEqual(complete.accessToken, f.grant.accessToken);
+  await until(() => posts.length > 0, 'model POST using the completed rotation');
+  assert.equal(finishOf(await call).kind, 'stop');
+  assert.deepEqual(posts, [{ url: `${GATEWAY}/chat/completions`, method: 'POST', token: complete.accessToken }]);
+  read.release();
+  await tick();
+  assert.equal(posts.length, 1);
+  assert.equal(f.oidc.counts.refresh, 1);
+});
+
+test('a model call reads another Host’s completed rotation before its stalled read times out', { timeout: 6000 }, async t => {
+  const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+  const peer = await f.openService();
+  const { adapter, posts } = await modelRuntimeFor(t, f.service);
+  assert.equal(f.advance(240_001).state, 'expired');
+  assert.equal(peer.notifyView().state, 'expired');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const read = holdNextGrantRead(t, f.credentials);
+  const call = chunks(adapter.stream(options));
+  await read.started;
+  await peer.captureModelSession().renew();
+  const { grant: complete } = await f.store.read();
+  assert.equal(complete.refreshOperation.state, 'complete');
+  assert.equal(f.service.getView().state, 'expired');
+
+  t.mock.timers.tick(4000);
+  await until(() => posts.length === 1, 'model POST using the other Host’s completed rotation');
+  assert.equal(finishOf(await call).kind, 'stop');
+  assert.deepEqual(posts, [{ url: `${GATEWAY}/chat/completions`, method: 'POST', token: complete.accessToken }]);
+  read.release();
+  await tick();
+  assert.equal(f.oidc.counts.refresh, 1);
+  assert.equal(posts.length, 1);
+});
+
+test('a model call sends a valid access token while renewal is stalled before claim', { timeout: 6000 }, async t => {
+  const jwksStarted = Promise.withResolvers();
+  const releaseJwks = Promise.withResolvers();
+  const f = await sessionFixture(t, { accessOffsetMs: 240_000, async beforeJwks() {
+    jwksStarted.resolve();
+    await releaseJwks.promise;
+  } });
+  const { adapter, posts } = await modelRuntimeFor(t, f.service);
+  assert.equal(f.advance(195_000).state, 'ready');
+  const refresh = f.service.getAccessToken();
+  try {
+    await jwksStarted.promise;
+    assert.equal((await f.store.read()).grant.refreshOperation, undefined);
+    const call = chunks(adapter.stream(options));
+    await until(() => posts.length > 0, 'model POST during JWKS preflight');
+    assert.equal(finishOf(await call).kind, 'stop');
+    assert.deepEqual(posts, [{ url: `${GATEWAY}/chat/completions`, method: 'POST', token: f.grant.accessToken }]);
+    assert.equal(f.oidc.counts.refresh, 0);
+  } finally {
+    releaseJwks.resolve();
+    await refresh;
+  }
+  assert.equal(posts.length, 1);
+  assert.equal(f.oidc.counts.refresh, 1);
+});
+
+for (const outcome of ['after the cutoff', 'after cancellation']) {
+  test(`a local rotation ${outcome} cannot dispatch an old model call`, { timeout: 6000 }, async t => {
+    const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+    const { adapter, posts } = await modelRuntimeFor(t, f.service);
+    assert.equal(f.advance(240_001).state, 'expired');
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const read = holdNextGrantRead(t, f.credentials);
+    const controller = new AbortController();
+    const call = chunks(adapter.stream({ ...options, signal: controller.signal }));
+    await read.started;
+    if (outcome === 'after the cutoff') t.mock.timers.tick(5000);
+    else controller.abort();
+    // The independent rotation may still complete while the original read is held.
+    await f.service.captureModelSession().renew();
+    assert.equal((await f.store.read()).grant.refreshOperation.state, 'complete');
+    const result = await call;
+    if (outcome === 'after the cutoff') assert.equal(failureOf(result), 'ENTERPRISE_IAM_UNAVAILABLE');
+    else assert.equal(finishOf(result).kind, 'aborted');
+    read.release();
+    await tick();
+    assert.deepEqual(posts, []);
+    assert.equal(f.oidc.counts.refresh, 1);
+  });
+}
+
+for (const outcome of ['sign-out', 'a replacement login']) {
+  test(`a stalled model preflight cannot dispatch after ${outcome}`, { timeout: 6000 }, async t => {
+    const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+    const { adapter, posts } = await modelRuntimeFor(t, f.service);
+    assert.equal(f.advance(240_001).state, 'expired');
+    const read = holdNextGrantRead(t, f.credentials);
+    const call = chunks(adapter.stream(options));
+    await read.started;
+    if (outcome === 'sign-out') {
+      await f.service.signOut();
+      assert.equal(f.service.getView().state, 'signed-out');
+    } else {
+      await f.store.write({
+        ...f.grant, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url'), accessToken: 'replacement-access',
+        accessExpiresAt: new Date(Date.parse(f.grant.accessExpiresAt) + 60_000).toISOString(),
+      });
+      assert.equal((await f.service.syncFromStore()).state, 'ready');
+    }
+    read.release();
+    assert.equal(failureOf(await call), 'IAM_LOGIN_REQUIRED');
+    assert.deepEqual(posts, []);
+    assert.equal(f.oidc.counts.refresh, 0);
+  });
 }
 
 test('the gateway key resolves from a session whose access token already expired', async t => {

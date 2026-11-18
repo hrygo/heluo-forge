@@ -4,7 +4,7 @@ import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
 import { failureCode, gatewayCode, USER_CODE_BY_INTERNAL } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import { adapterInitializationDetailCode } from './model-failure-log.mjs';
-import { beforeModelSend, modelFetchOptions, modelTransportDiagnostic, trackModelAttempt } from './model-transport.mjs';
+import { beforeModelSend, modelFetchOptions, modelTransportDiagnostic, resolveModelAccessToken, trackModelAttempt } from './model-transport.mjs';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
@@ -113,6 +113,8 @@ const sameBinding = (bound, next) => bound?.baseURL === next?.baseURL
   && (bound?.subject ?? null) === (next?.subject ?? null);
 const BINDING_RECOVERY_MS = 5000;
 const MODEL_RENEWAL_WAIT_MS = 5000;
+const MODEL_RENEWAL_RECHECK_MS = 4000;
+const STREAM_ROTATION_CHECK_LEADS_MS = [1000, 100];
 const PRECONNECT_RETRY_DELAY_MS = 200;
 const REBUILD_ATTEMPT_LIMIT = 3;
 
@@ -246,6 +248,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   const allowed = (route, model) => Boolean(enabledModel(route, model));
   const lifetime = new AbortController();
   let lease = new AbortController(); let version = 0; let last; let lastId; let lastAuthorization; let deadline; let timer; let disposed = false; let backend; let flight;
+  const activeStreams = new Set();
+  let rotationCheck;
   // The catalogue can move ahead of a failed adapter rebuild. Only the
   // unchanged subset installed for this binding is still safe to dispatch.
   let installedModels = new Map();
@@ -294,6 +298,73 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
   function markFailed(code) {
     catalogState = 'error'; catalogError = code;
   }
+  function stopRotationCheck() {
+    if (!rotationCheck) return;
+    clearTimeout(rotationCheck.timer);
+    rotationCheck.controller.abort();
+    rotationCheck = undefined;
+  }
+  function expireAuthorization() {
+    version++;
+    lease.abort();
+    stopRotationCheck();
+    cancelRetry();
+    markFailed('IAM_LOGIN_REQUIRED');
+    publish();
+  }
+  function scheduleRotationCheck() {
+    const currentLease = lease;
+    if (disposed || currentLease.signal.aborted || !(deadline > Date.now()) || !activeStreams.size) {
+      stopRotationCheck();
+      return;
+    }
+    if (rotationCheck?.deadline === deadline && rotationCheck.lease === currentLease) return;
+    stopRotationCheck();
+    const latestStream = () => [...activeStreams].findLast(item => item.lease === currentLease);
+    if (!latestStream()) return;
+    const check = { deadline, lease: currentLease, controller: new AbortController(), timer: undefined };
+    rotationCheck = check;
+    const signal = AbortSignal.any([check.controller.signal, currentLease.signal, lifetime.signal]);
+    const current = () => rotationCheck === check && !signal.aborted && Date.now() < check.deadline;
+    const schedule = (index) => {
+      const remaining = check.deadline - STREAM_ROTATION_CHECK_LEADS_MS[index] - Date.now();
+      check.timer = setTimeout(async () => {
+        if (!current()) return;
+        const entry = latestStream();
+        if (!entry) return;
+        try {
+          if (await entry.session.adoptCommittedRotation(signal)) sample();
+        } catch (cause) {
+          if (!current()) return;
+          const code = failureCode(cause);
+          if (code === 'IAM_LOGIN_REQUIRED') {
+            // The read may instead belong to a local session already replaced.
+            // Only a still-current stream may close this lease.
+            try { entry.session.assertCurrent(); } catch { return; }
+            expireAuthorization();
+            return;
+          }
+          noteMapped(cause, code);
+        }
+        if (current() && index + 1 < STREAM_ROTATION_CHECK_LEADS_MS.length) schedule(index + 1);
+      }, Math.max(0, Math.min(remaining, 2147483647)));
+      check.timer.unref?.();
+    };
+    schedule(0);
+  }
+  function watchAcceptedStream(session, streamLease, signal) {
+    if (!session?.adoptCommittedRotation || signal.aborted) return;
+    const entry = { session, lease: streamLease };
+    const stop = () => {
+      if (!activeStreams.delete(entry)) return;
+      signal.removeEventListener('abort', stop);
+      scheduleRotationCheck();
+    };
+    activeStreams.add(entry);
+    signal.addEventListener('abort', stop, { once: true });
+    scheduleRotationCheck();
+    return stop;
+  }
   function sample() {
     if (inSample) return null;
     inSample = true;
@@ -325,12 +396,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       if (deadline !== nextDeadline) {
         const expired = view?.state === 'expired' && Number.isFinite(deadline) && !lease.signal.aborted;
         deadline = nextDeadline; clearTimeout(timer);
-        const expire = () => { version++; lease.abort(); cancelRetry(); markFailed('IAM_LOGIN_REQUIRED'); publish(); };
         const remaining = deadline - Date.now();
         if (deadline !== null && remaining > 0) {
-          timer = setTimeout(expire, Math.min(remaining, 2147483647)); timer.unref?.();
-        } else if (deadline !== null || expired) expire();
+          timer = setTimeout(expireAuthorization, Math.min(remaining, 2147483647)); timer.unref?.();
+        } else if (deadline !== null || expired) expireAuthorization();
       }
+      scheduleRotationCheck();
       return view;
     } finally {
       inSample = false;
@@ -442,21 +513,29 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     const deadline = new AbortController();
     const signal = AbortSignal.any([lifetime.signal, deadline.signal, ...(request.signal ? [request.signal] : [])]);
     signal.throwIfAborted();
-    const timeout = setTimeout(() => deadline.abort(error('ENTERPRISE_IAM_UNAVAILABLE')), MODEL_RENEWAL_WAIT_MS);
+    const expiresAt = performance.now() + MODEL_RENEWAL_WAIT_MS;
+    const timeLimit = error('ENTERPRISE_IAM_UNAVAILABLE');
+    const timeout = setTimeout(() => deadline.abort(timeLimit), MODEL_RENEWAL_WAIT_MS);
     timeout.unref?.();
     const stopped = Promise.withResolvers();
     const onAbort = () => stopped.reject(signal.reason);
     signal.addEventListener('abort', onAbort, { once: true });
     const renew = async () => {
-      await session.renew();
+      const completed = session.waitForCompletedRotation?.(signal, MODEL_RENEWAL_RECHECK_MS);
+      const renewal = session.renew();
+      await (completed ? Promise.race([renewal, completed]) : renewal);
       signal.throwIfAborted();
+      if (performance.now() >= expiresAt) throw timeLimit;
       session.assertCurrent();
       // A cold runtime may have been unable to install the user's saved route.
       if (!permit(sample()) && !backend && !credentialRevoked()) await rebuildBinding(request);
+      signal.throwIfAborted();
+      if (performance.now() >= expiresAt) throw timeLimit;
     };
     return Promise.race([renew(), stopped.promise]).finally(() => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
+      deadline.abort();
     });
   }
 
@@ -495,7 +574,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     }
     if (code) { yield failed(request, null, code, 'local'); return; }
     const subject = iam.getView()?.principal;
-    const signal = AbortSignal.any([lifetime.signal, renewLease().signal, ...(request.signal ? [request.signal] : [])]);
+    const streamLease = renewLease();
+    const signal = AbortSignal.any([lifetime.signal, streamLease.signal, ...(request.signal ? [request.signal] : [])]);
     let emitted = false; let retried = false; let downgraded = false; let downgradePending = false;
     let output = false;
     let retryVersion;
@@ -532,8 +612,11 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       return true;
     };
     engine: for (;;) {
+      let stopWatching;
       const attempt = observeTransport ? {
         calls: 0, version, withDispatchAccessToken: session?.withDispatchAccessToken,
+        currentAccessToken: session?.currentAccessToken,
+        accept() { stopWatching ??= watchAcceptedStream(session, streamLease, signal); },
         refuse(cause) { this.denied ??= failureCode(cause); },
         check() {
           try {
@@ -617,6 +700,8 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
         noteMapped(cause, code);
         yield failed(request, cause, record(code), attempt?.denied ? 'local' : 'unknown', modelTransportDiagnostic(attempt, output, false));
         return;
+      } finally {
+        stopWatching?.();
       }
     }
   }
@@ -1254,7 +1339,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
     },
     async dispose() {
       if (disposed) return;
-      disposed = true; clearTimeout(timer); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
+      disposed = true; clearTimeout(timer); stopRotationCheck(); cancelRetry(); lifetime.abort(); lease.abort(); offStream?.(); registration?.();
       await observation; catalogModels = []; catalogueRead = false; manualModels = []; manualTruncated = 0; rawModels = []; models = []; backend = undefined; installedModels.clear();
     }
   };
@@ -1295,13 +1380,12 @@ export async function createNativeGatewayAdapter({ host, config, resolveKey, res
       configuredMaxTokens.set(m.id, m.maxTokens);
     }
   }
-  // The key resolver can renew IAM before pi-ai constructs the request. For
-  // protected native calls, the transport replaces this header using the
-  // same login's durable token just before send.
+  // A protected call's SDK header is only a snapshot. The transport authorizes
+  // the same login's durable token just before send.
   let iamToken = null;
   const resolveApiKey = async (...args) => {
     const key = await resolveKey(...args);
-    if (typeof resolveIamToken === 'function') iamToken = await resolveIamToken();
+    if (typeof resolveIamToken === 'function') iamToken = await resolveModelAccessToken(resolveIamToken);
     return key;
   };
   const withIamHeaders = (options) => {

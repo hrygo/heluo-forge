@@ -8,7 +8,7 @@ import { AUTO_REFRESH_BACKOFF_MS, grantIdentity, ID_TOKEN_CLOCK_SKEW_SECONDS, no
 
 function completedRotationOf(previous, current) {
   const marker = current?.refreshOperation;
-  return marker?.state === 'complete'
+  return previous != null && marker?.state === 'complete'
     && current.refreshToken !== previous.refreshToken
     && isDeepStrictEqual(grantIdentity(previous), grantIdentity(current))
     && marker.base === refreshBaseId(previous, marker.id);
@@ -786,48 +786,110 @@ export function createTokenResolver(env) {
         throw new IamError('IAM_CREDENTIALS_UNAVAILABLE', safeMessage('IAM_CREDENTIALS_UNAVAILABLE'));
       }
     };
+
+    async function consumeModelGrant(consume, { signal, rotationOnly = false, beforeExpiry = false } = {}) {
+      const check = () => { signal?.throwIfAborted(); assertCurrent(); };
+      for (let read = 0; read < 2; read += 1) {
+        check();
+        const local = ctx.lastGrant;
+        const claim = refreshPromisePending;
+        let record;
+        try { record = await targetStore.read(); }
+        catch (cause) {
+          check();
+          const code = credentialReadError(cause);
+          throw new IamError(code, safeMessage(code));
+        }
+        check();
+        const latest = record.grant;
+        const issuer = ctx.knownIssuer();
+        if (!record.ok || !latest || !isDeepStrictEqual(grantIdentity(latest), identity)) {
+          throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
+        }
+        grants.assertGrantContext(latest, issuer);
+        const authentication = config.authMode === 'confidential'
+          ? await grants.prepareAuthentication(issuer, targetStore, targetCredentials, { grant: latest, guard: check })
+          : undefined;
+        check();
+        assertClientAuthCurrent(authentication);
+        if (!isDeepStrictEqual(local, ctx.lastGrant) || claim !== refreshPromisePending) continue;
+        if (beforeExpiry && isAccessExpired(local, now())) return false;
+        if (latest.refreshOperation?.state === 'pending') {
+          // A local owner may still publish success before the current lease
+          // expires. A foreign pending record has no confirmed outcome here.
+          if (rotationOnly && ownedPendingFlight(targetStore, targetCredentials, latest)) return false;
+          throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+        }
+        if (rotationOnly && !completedRotationOf(local, latest)) return false;
+        if (isAccessExpired(latest, now()) || (claim?.store === targetStore && claim.grant.refreshToken === latest.refreshToken)) break;
+        if (!isDeepStrictEqual(local, latest)) {
+          if (rotationOnly) provider.assertAtomic(targetStore, targetCredentials);
+          check();
+          if (beforeExpiry && (isAccessExpired(local, now()) || isAccessExpired(latest, now()))) return false;
+          const consumption = beginConsumption(issuer, targetStore, targetCredentials);
+          publishGrant(latest, targetStore, authentication, consumption);
+          check();
+          if (!isDeepStrictEqual(ctx.lastGrant, latest) || claim !== refreshPromisePending) continue;
+        }
+        return consume(latest);
+      }
+      if (rotationOnly) return false;
+      throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+    }
+
     return Object.freeze({
       assertCurrent,
-      async withDispatchAccessToken(dispatch) {
-        // The SDK may have built its headers before another caller rotated the
-        // grant. Use the durable version at the last local point before send.
-        for (let read = 0; read < 2; read += 1) {
-          assertCurrent();
-          const local = ctx.lastGrant;
-          const claim = refreshPromisePending;
-          let record;
-          try { record = await targetStore.read(); }
-          catch (cause) {
-            assertCurrent();
-            const code = credentialReadError(cause);
-            throw new IamError(code, safeMessage(code));
-          }
-          assertCurrent();
-          const latest = record.grant;
-          const issuer = ctx.knownIssuer();
-          if (!record.ok || !latest || !isDeepStrictEqual(grantIdentity(latest), identity)) {
-            throw new IamError('IAM_NOT_SIGNED_IN', 'IAM session changed');
-          }
-          grants.assertGrantContext(latest, issuer);
-          const authentication = config.authMode === 'confidential'
-            ? await grants.prepareAuthentication(issuer, targetStore, targetCredentials, { grant: latest, guard: assertCurrent })
-            : undefined;
-          assertCurrent();
-          assertClientAuthCurrent(authentication);
-          if (!isDeepStrictEqual(local, ctx.lastGrant) || claim !== refreshPromisePending) continue;
-          if (latest.refreshOperation?.state === 'pending' || isAccessExpired(latest, now())
-            || (claim?.store === targetStore && claim.grant.refreshToken === latest.refreshToken)) break;
-          if (!isDeepStrictEqual(local, latest)) {
-            // The HTTP header and the stream's authorization deadline must
-            // describe the same adopted grant. No persistent write is needed.
-            const consumption = beginConsumption(issuer, targetStore, targetCredentials);
-            publishGrant(latest, targetStore, authentication, consumption);
-            assertCurrent();
-            if (!isDeepStrictEqual(ctx.lastGrant, latest) || claim !== refreshPromisePending) continue;
-          }
-          return dispatch(latest.accessToken);
-        }
-        throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+      currentAccessToken() {
+        assertCurrent();
+        if (isAccessExpired(ctx.lastGrant, now())) throw new IamError('IAM_REAUTH_REQUIRED', safeMessage('IAM_REAUTH_REQUIRED'));
+        // This is only the SDK's header snapshot. The transport must read and
+        // authorize the durable grant again before it can use the network.
+        return ctx.lastGrant.accessToken;
+      },
+      waitForCompletedRotation(signal, recheckDelay) {
+        const previous = ctx.lastGrant;
+        return new Promise((resolve, reject) => {
+          let recheck;
+          const stop = () => {
+            clearTimeout(recheck);
+            ctx.removeListener(onView);
+            signal.removeEventListener('abort', onAbort);
+          };
+          const onAbort = () => { stop(); reject(signal.reason); };
+          const onView = () => {
+            const latest = ctx.lastGrant;
+            if (ctx.state !== 'ready' || !completedRotationOf(previous, latest)
+              || isAccessExpired(latest, now())) return;
+            try { assertCurrent(); } catch (cause) { stop(); reject(cause); return; }
+            // A same-login completed rotation is already published. The
+            // sending gate will still confirm its durable version.
+            stop();
+            resolve();
+          };
+          signal.throwIfAborted();
+          ctx.addListener(onView);
+          signal.addEventListener('abort', onAbort, { once: true });
+          recheck = setTimeout(async () => {
+            // If the first read is stalled before it can join a flight, one
+            // independent read can find another Host's confirmed completion.
+            if (signal.aborted || refreshPromise) return;
+            try { await consumeModelGrant(() => true, { signal, rotationOnly: true }); }
+            catch (cause) {
+              // This auxiliary read supplies only positive evidence. The
+              // normal waiter owns typed refusal and pending reconciliation.
+              if (!signal.aborted && !(cause instanceof IamError)) { stop(); reject(cause); }
+            }
+          }, recheckDelay);
+          recheck.unref?.();
+          onView();
+        });
+      },
+      withDispatchAccessToken(dispatch) {
+        // Use the durable version at the last local point before send.
+        return consumeModelGrant(latest => dispatch(latest.accessToken));
+      },
+      adoptCommittedRotation(signal) {
+        return consumeModelGrant(() => true, { signal, rotationOnly: true, beforeExpiry: true });
       },
       async renew() {
         assertCurrent();

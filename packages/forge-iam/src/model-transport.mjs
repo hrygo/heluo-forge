@@ -21,6 +21,11 @@ export function beforeModelSend(attempt) {
   return attempt?.calls === 1 && attempt.status === undefined && attempt.refusedConnection === true;
 }
 
+export function resolveModelAccessToken(fallback) {
+  const attempt = scope.getStore();
+  return attempt?.currentAccessToken ? attempt.currentAccessToken() : fallback();
+}
+
 function retryAfterMillis(value) {
   if (!value) return undefined;
   const millis = /^\d{1,6}$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
@@ -57,6 +62,7 @@ export function modelFetchOptions(options, baseURL) {
           const response = await fetcher(input, request);
           attempt.status = response.status;
           attempt.retryAfterMs = retryAfterMillis(response.headers.get('retry-after'));
+          if (bound && response.ok) attempt.accept?.();
           return response;
         } catch (cause) {
           const socket = cause?.cause ?? cause;
