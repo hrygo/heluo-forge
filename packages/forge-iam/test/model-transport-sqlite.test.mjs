@@ -22,6 +22,7 @@ const iso = (time) => new Date(time).toISOString();
 async function fixture(t, { renewalHost } = {}) {
   const start = Date.now();
   const originalDeadline = start + (renewalHost ? 7_200_000 : 90_000);
+  const renewalAt = originalDeadline - 600_000;
   const grant = {
     version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
     issuer, clientId, subject: 'synthetic-user', scope: 'openid',
@@ -123,14 +124,17 @@ async function fixture(t, { renewalHost } = {}) {
   const second = renewalHost === 'first' ? null : openHost(60, oidc(iamCalls.second));
   const firstStore = createGrantStore(first.credentials);
   const secondStore = second ? createGrantStore(second.credentials) : firstStore;
-  if (renewalHost) t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
   await firstStore.write(grant);
   if (renewalHost === 'second') {
-    await second.service.hydrate();
-    // The observer's own scheduled renewal is later than the renewing Host's.
-    t.mock.timers.tick(60_000);
+    // Keep the serving Host's background timer on the real clock so the
+    // second Host claims the renewal and the serving Host observes it.
+    await first.service.hydrate();
   }
-  await first.service.hydrate();
+  if (renewalHost) {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: start });
+    if (second) await second.service.hydrate();
+  }
+  if (renewalHost !== 'second') await first.service.hydrate();
   await first.service.saveGatewayCredential({ key: `uag-${'a'.repeat(32)}` });
   await first.service.saveModelSelection({ models: { [request.model]: {} }, defaultModelId: request.model });
   if (!renewalHost) {
@@ -183,7 +187,7 @@ async function fixture(t, { renewalHost } = {}) {
     fetch: async () => Response.json({ data: [{ id: request.model }] }),
   });
   await runtime.ready;
-  if (renewalHost) t.mock.timers.tick(start + 3_599_000 - Date.now());
+  if (renewalHost) t.mock.timers.tick(renewalAt - 1_000 - Date.now());
   const openStream = () => guard(request, (options) => adapter.stream(options))[Symbol.asyncIterator]();
   const stream = openStream();
   assert.deepEqual((await stream.next()).value, firstDelta);
@@ -219,7 +223,7 @@ async function fixture(t, { renewalHost } = {}) {
     await advance(deadline - 1);
   }
   return {
-    first, second, secondStore, grant, start, originalDeadline, iamCalls, writes, requests,
+    first, second, secondStore, grant, start, originalDeadline, renewalAt, iamCalls, writes, requests,
     stream, openStream, closed: closed.promise, advance, approach,
     refreshRequested: refreshRequested.promise, releaseRefresh: releaseRefresh.resolve,
     holdGatewayRevocation() { holdRevocation = true; return revocationRequested.promise; },
@@ -383,14 +387,15 @@ test('a SQLite continuity read still pending at cutoff cannot keep the POST open
   assert.deepEqual((await f.secondStore.read()).grant, successor);
 });
 
-async function startHalfLifeRefresh(f, { syncObserver = true } = {}) {
+async function startScheduledRenewal(f, { syncObserver = true } = {}) {
   assert.deepEqual(f.iamCalls, { first: [], second: [] });
-  await f.advance(f.start + 3_600_000);
+  await f.advance(f.renewalAt);
   await f.refreshRequested;
   const pending = (await f.secondStore.read()).grant;
   assert.equal(pending.refreshOperation.state, 'pending');
   assert.equal(pending.sessionInstanceId, f.grant.sessionInstanceId);
-  assert.ok(Date.parse(pending.accessExpiresAt) > Date.now());
+  assert.equal(Date.parse(pending.accessExpiresAt) - Date.now(), 600_000);
+  assert.equal(Date.parse(pending.refreshExpiresAt) - Date.now(), 700_000);
   if (f.second && syncObserver) await f.first.service.syncFromStore();
   return pending;
 }
@@ -422,9 +427,9 @@ async function expectFailure(next, code) {
 }
 
 for (const [renewalHost, scenario] of [['first', 'single Host'], ['second', 'dual Host']]) {
-  test(`a ${scenario} SQLite model POST survives pending half-life renewal on the same HTTP stream`, { timeout: 10_000 }, async (t) => {
+  test(`a ${scenario} SQLite model POST survives renewal ten minutes before expiry on the same HTTP stream`, { timeout: 10_000 }, async (t) => {
     const f = await fixture(t, { renewalHost });
-    const pending = await startHalfLifeRefresh(f);
+    const pending = await startScheduledRenewal(f);
     const nextDelta = observeNext(f.stream);
     f.push('queued during renewal');
     const newStream = f.openStream();
@@ -461,9 +466,40 @@ for (const [renewalHost, scenario] of [['first', 'single Host'], ['second', 'dua
   });
 }
 
+test('two Hosts reaching the same scheduled renewal time exchange their shared refresh token once', { timeout: 10_000 }, async (t) => {
+  const f = await fixture(t, { renewalHost: 'both' });
+  const secondRead = t.mock.method(f.second.credentials, 'readRecord');
+  assert.deepEqual(f.iamCalls, { first: [], second: [] });
+  await f.advance(f.renewalAt);
+  await f.refreshRequested;
+  assert.ok(f.reads > 0, 'the first Host reads the grant at the renewal point');
+  assert.ok(secondRead.mock.calls.some(({ arguments: [key] }) => key === GRANT_KEY),
+    'the second Host also reads the grant at the renewal point');
+
+  const pending = (await f.secondStore.read()).grant;
+  assert.equal(pending.refreshOperation.state, 'pending');
+  const adoption = { settled: false };
+  const tokens = Promise.allSettled([f.first.service.getAccessToken(), f.second.service.getAccessToken()]).then((results) => {
+    adoption.settled = true;
+    return results;
+  });
+  f.releaseRefresh();
+  await settleDuring(f, 5_000, adoption);
+  assert.deepEqual(await tokens, [
+    { status: 'fulfilled', value: successorAccessToken },
+    { status: 'fulfilled', value: successorAccessToken },
+  ]);
+
+  const successor = (await f.secondStore.read()).grant;
+  assert.deepEqual(successor.refreshOperation, { ...pending.refreshOperation, state: 'complete' });
+  assert.equal(successor.sessionInstanceId, f.grant.sessionInstanceId);
+  assert.equal(Object.values(f.iamCalls).flat().filter((path) => path === '/token').length, 1);
+  assert.equal(f.requests.length, 1, 'renewal never redispatches the original model POST');
+});
+
 test('dual Host model output detects a pending rotation without a separate view refresh or model call', { timeout: 10_000 }, async (t) => {
   const f = await fixture(t, { renewalHost: 'second' });
-  const pending = await startHalfLifeRefresh(f, { syncObserver: false });
+  const pending = await startScheduledRenewal(f, { syncObserver: false });
   assert.equal(f.reads, 0, 'the idle stream has not checked the shared grant');
   const observedPending = Promise.withResolvers();
   f.pauseRead((record) => {
@@ -488,9 +524,9 @@ test('dual Host model output detects a pending rotation without a separate view 
   assert.deepEqual(f.iamCalls.second, ['/jwks', '/token']);
 });
 
-test('pending half-life renewal bounds a new model call to five seconds without dispatching', { timeout: 10_000 }, async (t) => {
+test('pending scheduled renewal bounds a new model call to five seconds without dispatching', { timeout: 10_000 }, async (t) => {
   const f = await fixture(t, { renewalHost: 'second' });
-  await startHalfLifeRefresh(f);
+  await startScheduledRenewal(f);
   const newStream = f.openStream();
   const waiting = observeNext(newStream);
   await delay(30);
@@ -511,7 +547,7 @@ test('pending half-life renewal bounds a new model call to five seconds without 
 
 test('a final dispatch read past the pending renewal budget cannot send a model POST', { timeout: 10_000 }, async (t) => {
   const f = await fixture(t, { renewalHost: 'second' });
-  const pending = await startHalfLifeRefresh(f);
+  const pending = await startScheduledRenewal(f);
   const held = { settled: false };
   const releaseRead = Promise.withResolvers();
   const drained = Promise.withResolvers();
@@ -553,7 +589,7 @@ test('a final dispatch read past the pending renewal budget cannot send a model 
 
 test('local sign-out fences a pending renewal before the held IAM response arrives', { timeout: 10_000 }, async (t) => {
   const f = await fixture(t, { renewalHost: 'first' });
-  await startHalfLifeRefresh(f);
+  await startScheduledRenewal(f);
   const original = observeNext(f.stream);
   f.push('queued before sign-out');
   const newStream = f.openStream();
@@ -584,7 +620,7 @@ test('observed gateway revocation fences accepted and waiting model calls during
   const reportingStream = f.openStream();
   const reporting = observeNext(reportingStream);
   await Promise.race([revocationRequested, reporting.promise.then(() => { throw new Error('reporting request ended before the gateway could respond'); })]);
-  await startHalfLifeRefresh(f);
+  await startScheduledRenewal(f);
   const original = observeNext(f.stream);
   f.push('queued before revocation');
   const newStream = f.openStream();
@@ -606,7 +642,7 @@ test('observed gateway revocation fences accepted and waiting model calls during
 
 test('a model call waiting on renewal rechecks the shared gateway credential before dispatch', { timeout: 10_000 }, async (t) => {
   const f = await fixture(t, { renewalHost: 'second' });
-  await startHalfLifeRefresh(f);
+  await startScheduledRenewal(f);
   const newStream = f.openStream();
   const waiting = observeNext(newStream);
   await delay(30);

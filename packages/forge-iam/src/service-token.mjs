@@ -624,10 +624,8 @@ export function createTokenResolver(env) {
         operationGrant = record.grant;
         grants.assertGrantContext(record.grant, expectedIssuer);
         const initial = record.grant;
-        // The host's own timer renews at half of the lifetime, earlier than the
-        // foreground early-refresh window, so that pass may refresh ahead of the
-        // window. A rotation adopted from another Host is already fresh and must
-        // be taken as-is; every other check still runs.
+        // The background timer may renew before the on-demand window opens.
+        // Take a completed rotation from another Host through the usual checks.
         const forcedRenewal = expected?.renewalDue === true
           && initial.refreshToken === expected.refreshToken;
         authentication = await grants.prepareAuthentication(expectedIssuer, targetStore, targetCredentials, { grant: initial, guard: checkLifecycle });

@@ -83,11 +83,7 @@ const DEFAULTS = {
   defaultProvider: 'enterprise',
   defaultModel: '',
   managedModels: null,
-  // Foreground early-refresh window. The background renewer targets half of the
-  // remaining usable life instead (see renewalLeadMillis in record.mjs); this
-  // value only governs the on-demand window and short-lived grants. A 7200 s
-  // access token therefore renews at about +3600 s and keeps roughly an hour of
-  // cover before the sliding refresh window lapses.
+  // On-demand refresh lead and fallback for short background renewal windows.
   refreshSkewSeconds: 60,
   attemptTimeoutSeconds: 300,
   httpTimeoutMs: 10000,
