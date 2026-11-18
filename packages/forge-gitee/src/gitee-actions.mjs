@@ -397,7 +397,15 @@ async function executeWrite(service, spec) {
       ...(spec.signal === undefined ? {} : { signal: spec.signal }),
       ...(spec.content === undefined ? {} : { content: spec.content }),
       payload: {
-        arguments: { target, change: spec.change, op: spec.op },
+        // 分支走向属于"将要发生什么"的事实：审批卡片要按它说明动作，策略侧
+        // 也需要同一份参数判定，否则卡片只能给出仓库名。正文仍走 content 通道。
+        arguments: {
+          target,
+          change: spec.change,
+          op: spec.op,
+          ...(text(spec.params?.head) === '' ? {} : { head: spec.params.head }),
+          ...(text(spec.params?.base) === '' ? {} : { base: spec.params.base }),
+        },
         run: async () => runWrite(service, spec),
       },
     });

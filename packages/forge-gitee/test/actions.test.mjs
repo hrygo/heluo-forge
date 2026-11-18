@@ -486,6 +486,36 @@ test('AC-16 PR 建单回读核对源分支：字段是实测的 source_branch（
   assert.equal(mismatched.session.lookup(bad.idempotency_key)?.status, 'unknown', '不确定的写要落台账挡住重放');
 });
 
+test('审批卡片要看到分支走向：真实写路径把 head/base 交给策略，正文不混进参数', async () => {
+  const harness = createHarness({
+    invoke: createdStdout('prCreate', ({ target }) => `https://gitee.com/${target}/pulls/12`),
+    read: readbackObject({ iid: 12, title: '同步变更', state: 'open', source_branch: 'feat/sync' }),
+  });
+  const done = await runTool(harness.service, 'forge_gitee_pr_write', PR_CREATE);
+  assert.equal(done.status, 'done');
+  const { exec } = harness.seen.at(-1);
+  assert.equal(exec.arguments.head, PR_CREATE.head, '分支走向要随参数进策略，否则卡片只能报仓库名');
+  assert.equal(exec.arguments.base, PR_CREATE.base);
+  assert.equal(exec.arguments.op, 'create');
+  assert.equal('title' in exec.arguments, false, '标题与正文属业务内容，走 content 通道而非 arguments');
+
+  const commentary = createHarness({
+    invoke: createdStdout('prComment', () => 'https://gitee.com/acme/repo/pulls/12'),
+    read: readbackObject({ iid: 12, title: '同步变更', state: 'open', user_notes_count: 2 }),
+  });
+  const commented = await runTool(commentary.service, 'forge_gitee_pr_write', {
+    op: 'comment',
+    target: 'acme/repo!12',
+    changeId: 'CHG-2026-001',
+    body: '评论正文。',
+    confirm: { repo: 'acme/repo', object: 'acme/repo!12' },
+  });
+  assert.equal(commented.status, 'done');
+  const args = commentary.seen.at(-1).exec.arguments;
+  assert.equal('head' in args, false, '评论没有分支走向，不许凭空补');
+  assert.equal('base' in args, false);
+});
+
 test('AC-16 评论回读按对象类型取计数：PR 用 user_notes_count，Issue 没有已声明字段即 unknown', async () => {
   const prComment = {
     op: 'comment',

@@ -10,6 +10,7 @@ import { isWriteAction, strictestDecision } from './classify.mjs';
 import { payloadsFromArguments, scanPayloads } from './content-rules.mjs';
 import { effectiveDecision } from './org-policy.mjs';
 import { evaluateProcessRules, factsFromArguments, withSources } from './process-rules.mjs';
+import { approvalDisplayReason, confirmationDisplayReason } from './prompts.mjs';
 import { digestContent } from './egress.mjs';
 import { matchProtected } from './paths.mjs';
 
@@ -214,14 +215,21 @@ export function createGate({
     };
   }
 
-  async function requestApproval(ctx, exec, reason) {
+  async function requestApproval(ctx, exec, reason, display) {
     const approval = typeof ctx.get === 'function' ? ctx.get('approval') : undefined;
     if (approval === undefined || approval === null || exec.agent === undefined) {
       return { ok: false, reason: `${reason}: no approval channel is available for this call` };
     }
     let outcome;
     try {
-      outcome = await approval.request({ agent: exec.agent, toolName: exec.name, callId: exec.callId, reason, signal: exec.signal });
+      outcome = await approval.request({
+        agent: exec.agent,
+        toolName: exec.name,
+        callId: exec.callId,
+        reason,
+        ...(display === undefined ? {} : { displayReason: display }),
+        signal: exec.signal,
+      });
     } catch (error) {
       return { ok: false, reason: `${reason}: approval unavailable (${error?.message ?? error})` };
     }
@@ -260,8 +268,15 @@ export function createGate({
     if (request.principal === undefined) return { ok: false, reason: `action "${action}" needs an authenticated identity for its task scope` };
     if (request.changeId === undefined) return { ok: false, reason: `action "${action}" needs a change id to establish its task scope` };
     if (request.session === undefined) return { ok: false, reason: `action "${action}" needs a trusted session to establish its task scope` };
-    const granted = await requestApproval(ctx, exec, `confirm a task scope for ${action} on ${request.repository ?? request.changeId}`);
-    if (granted.ok !== true) return { ok: false, reason: verified.reason ?? `${action} is outside the current task scope` };
+    const granted = await requestApproval(
+      ctx,
+      exec,
+      `confirm a task scope for ${action} on ${request.repository ?? request.changeId}`,
+      approvalDisplayReason({ action, repository: request.repository, changeId: request.changeId, args }),
+    );
+    // 审批侧的真实原因（被拒、无应答者、通道异常）优先于票据文案：只报票据
+    // 文案时，用户点了"拒绝"和从未弹窗得到的是同一句话。
+    if (granted.ok !== true) return { ok: false, reason: granted.reason ?? verified.reason ?? `${action} is outside the current task scope` };
     const issued = scope.issue(request);
     return { ok: true, ticketId: issued.id };
   }
@@ -315,7 +330,14 @@ export function createGate({
       const reason = [content.reason ?? process.reason ?? actionDecision.reason ?? 'this action requires confirmation',
         ...(content.skipped.length ? [`content scan incomplete: ${content.skipped.map(({ field, reason: why }) => `${field} (${why})`).join(', ')}`] : []),
       ].join('; ');
-      const asked = await requestApproval(ctx, exec, reason);
+      const asked = await requestApproval(ctx, exec, reason, confirmationDisplayReason({
+        action,
+        repository: repositoryOf(action, exec.arguments),
+        changeId: changeOf(exec.arguments),
+        args: exec.arguments,
+        rules: [...content.soft.map((finding) => finding.rule), ...process.confirm.map((item) => item.rule)],
+        skipped: content.skipped,
+      }));
       if (asked.ok !== true) return deny(asked.reason);
     }
     if (interruption(exec) || changed(exec, action, digest, agent)) return deny(interruption(exec) ?? 'execution arguments or identity changed during confirmation');
