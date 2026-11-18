@@ -6,6 +6,7 @@ All-in-one enterprise sign-in and AI model suite with built-in credential encryp
 
 - **Enterprise Sign-in** (`Settings → Enterprise account`): Sign in with enterprise SSO and configure your gateway endpoint and key.
 - **Enterprise Models** (`Settings → Enterprise models`): Sync the enterprise model catalog, enable models in one click, or add custom models.
+- **Skills Management**: Manage local and project skills, and optionally download complete resources from a Nacos public library. Downloads remain disabled until you enable them.
 - **Built-in Security**: Disables personal public accounts and plaintext credential storage automatically.
 
 ## Usage

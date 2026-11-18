@@ -8,8 +8,8 @@ import { pathToFileURL } from 'node:url';
 const sdk = createRequire(new URL('../packages/forge-skills-manager/package.json', import.meta.url));
 const { Context } = await import(pathToFileURL(sdk.resolve('@deepseek-ai/cordis')).href);
 const { SkillRegistry } = await import(pathToFileURL(sdk.resolve('@deepseek-ai/dsh-skill')).href);
-import { apply as enterprise, TRUSTED_SKILL_RANK } from '../packages/forge-enterprise/src/issue-delivery-skill.mjs';
-import { registerEnterpriseSkillsViaProvider } from '../packages/forge-enterprise/src/skills.mjs';
+import { apply as enterprise, TRUSTED_SKILL_RANK } from '../packages/forge-engineering/src/issue-delivery-skill.mjs';
+import { registerEnterpriseSkillsViaProvider } from '../packages/forge-engineering/src/skills.mjs';
 
 test('reserved skills cannot be created, imported or provided; native same-name copies cannot replace formal workflow', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'forge-manager-policy-'));
