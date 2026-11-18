@@ -32,7 +32,7 @@
 - **身份（who）**：以哪个 IAM subject 行动；写动作要求可信身份。
 - **证据（evidence）**：谁、依据哪版策略、命中哪些规则。
 
-默认分层：六条只读动作放行；`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`change.clarification.write` 放行但过内容闸；`gitee.git.push` 逐次确认并叠加内容、分支与变更号检查；`gitee.review.record` 不由 Agent 发起；`git commit` 不进闸，只做 SOFT 扫描。组织策略以包内 `policy/` 数据目录的签名信封随包下发（见[策略与审计详细设计 §5.1.4](plugins/forge-policy.md#514-组织策略数据目录2026-11-16)），不设有效期、不单独成包；本地只能收紧，不能放宽。
+默认分层：六条只读动作放行；`gitee.issue.write`、`gitee.pr.write`、`gitee.review.publish`、`change.clarification.write` 放行但过内容闸；`gitee.git.push` 逐次确认并叠加内容、分支与变更号检查；`gitee.review.record` 不由 Agent 发起；`git commit` 不进闸，只做 SOFT 扫描。这 12 条动作由四个分发补丁层（gitee / devops / enterprise / engineering）随包登记且逐字同序，登记只决定动作可见，放行仍由分类默认决策、内容与流程规则承担；写动作的范围票据与 `gitee.git.push` 的逐次确认分别落在 `policy.scopeTickets` 与宿主审批通道上，逐动作审批台账已不在判定链上。组织策略以包内 `policy/` 数据目录的签名信封随包下发（见[策略与审计详细设计 §5.1.4](plugins/forge-policy.md#514-组织策略数据目录2026-11-16)），不设有效期、不单独成包；本地只能收紧，不能放宽。
 
 尚未闭合：内容规则清单与阈值需在企业真实仓库上评估误报，dop 事实源字段与 IAM principal 取值待核验，抑制确认疲劳的范围票据依赖宿主审批通道。
 

@@ -117,7 +117,7 @@ async function shippedRowsWithoutJudge() {
   const policyRow = rows.find((row) => row.name === '@heluo/forge-policy');
   const pluginRow = rows.find((row) => row.name === '@heluo/forge-gitee');
   assert.ok(policyRow !== undefined && pluginRow !== undefined, '补丁层结构被改动过：策略行/插件行缺失');
-  assert.equal(policyRow.catalog.length, 5, '删掉 judge 后应只剩 5 条：change.read / change.list + 3 条 gitee 只读');
+  assert.equal(policyRow.catalog.length, 11, '删掉 judge 后应剩 11 条：12 条并集去掉只读判定');
   return { policyRow, pluginRow };
 }
 
@@ -171,14 +171,14 @@ async function mountWithAdmittingPolicy({ pluginConfig } = {}) {
   return { host, calls, mounted, pluginRow, policyRow };
 }
 
-test('AC-1: 用分发补丁层挂载后，6 条并集可用（含 change.read / change.list）、4 个写动作未登记', async () => {
+test('AC-1: 用分发补丁层挂载后，12 条并集可用（含 change.read / change.list）、六条写随包登记且按分类受控', async () => {
   const { host, real, mounted } = await mountWithRealPolicy();
   assert.equal(mounted.ok, true, `插件挂载失败：${mounted.error?.message ?? ''}`);
   assert.deepEqual(host.toolNames(), [...GITEE_TOOLS]);
   assert.equal(
     real.catalog.size,
-    GITEE_READ_ACTIONS.length + GITEE_JUDGE_TOOLS.length + 2,
-    '默认目录 = 3 条 gitee 只读 + 1 条只读判定 + devops 的 change.read / change.list（两包共用同一份并集）',
+    12,
+    '默认目录 = 6 读 + 6 写（3 条 gitee 只读 + 1 条只读判定 + devops 的 change.read / change.list + 六条写）',
   );
 
   for (const action of ['change.read', 'change.list', ...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
@@ -188,12 +188,19 @@ test('AC-1: 用分发补丁层挂载后，6 条并集可用（含 change.read / 
     assert.equal(decision.rule, 'registered-action');
   }
 
-  const writeActions = ['gitee.issue.write', 'gitee.pr.write', 'gitee.review.publish', 'gitee.review.record'];
-  for (const action of writeActions) {
-    assert.equal(real.catalog.has(action), false, `${action} 不该出现在分发目录里（默认禁用写）`);
+  // 写动作随包登记（未登记只会得到误导性的 unregistered-action），但登记不等于放行：
+  // 默认决策由内置分类给出，执行期还要过身份、内容、流程与范围确认。
+  for (const [action, want] of [
+    ['gitee.issue.write', 'allow'],
+    ['gitee.pr.write', 'allow'],
+    ['gitee.review.publish', 'allow'],
+    ['change.clarification.write', 'allow'],
+    ['gitee.git.push', 'confirm'],
+    ['gitee.review.record', 'deny'],
+  ]) {
+    assert.equal(real.catalog.has(action), true, `${action} 必须随包登记：默认分发开箱即可走受控写`);
     const decision = real.decide({ action, target: 'acme/repo' });
-    assert.equal(decision.action, 'deny');
-    assert.equal(decision.rule, 'unregistered-action');
+    assert.equal(decision.action, want, `${action} 的默认决策应为 ${want}（实际：${decision.action}/${decision.reason}）`);
   }
 });
 
@@ -218,7 +225,7 @@ test('AC-2: 默认目录下判定默认可用：done + ready + executed false + 
   assert.deepEqual(counter.actions, ['gitee.delivery.judge']);
 });
 
-test('AC-3: 默认目录下 4 个写工具逐个 denied、规则固定、门禁 operation 0 次', async () => {
+test('AC-3: 默认目录下 4 个写工具逐个 denied（登记不等于放行）、规则固定、门禁 operation 0 次', async () => {
   const { host, counter, mounted } = await mountWithRealPolicy();
   assert.equal(mounted.ok, true);
   assert.deepEqual(
@@ -245,9 +252,9 @@ test('AC-3: 默认目录下 4 个写工具逐个 denied、规则固定、门禁 
   assert.deepEqual(counter.actions, []);
 });
 
-test('AC-4: 默认登记判定、不默认登记写', async () => {
+test('AC-4: 默认登记全部 12 条：读开箱 allow，写按内置分类受控', async () => {
   const { real } = await mountWithRealPolicy();
-  assert.equal(real.catalog.size, 6, `默认目录应恰好 6 条（3 读 + 1 判定 + change.read + change.list），实际 ${real.catalog.size}`);
+  assert.equal(real.catalog.size, 12, `默认目录应恰好 12 条（6 读 + 6 写），实际 ${real.catalog.size}`);
   assert.equal(real.catalog.get('change.read')?.category, 'read', 'devops 的变更读也在这份并集目录里（同装时唯一来源）');
   assert.equal(real.catalog.get('change.list')?.category, 'read', 'devops 的变更清单读同样在这份并集目录里（同装时唯一来源）');
 
@@ -258,14 +265,17 @@ test('AC-4: 默认登记判定、不默认登记写', async () => {
   assert.equal(judge.target, 'change', 'target 必须逐字 change（补丁层/README/设计文档同字面）');
   assert.equal(judge.enabled, true);
 
-  for (const action of ['gitee.issue.write', 'gitee.pr.write', 'gitee.review.publish', 'gitee.review.record']) {
-    assert.equal(real.catalog.has(action), false, `${action} 不该被默认登记`);
+  const writes = ['gitee.issue.write', 'gitee.pr.write', 'change.clarification.write', 'gitee.review.publish', 'gitee.git.push', 'gitee.review.record'];
+  for (const action of writes) {
+    assert.equal(real.catalog.get(action)?.enabled, true, `${action} 必须随包登记并显式启用（否则只会得到误导性的未登记拒绝）`);
   }
   assert.equal(
     [...real.catalog.values()].filter((entry) => entry.category !== 'read').length,
-    0,
-    '默认目录里不得出现任何非只读条目',
+    6,
+    '默认目录里六条写动作随包登记：登记只决定可见性，放行由分类决定',
   );
+  assert.equal(real.catalog.get('gitee.git.push')?.decision, 'confirm', 'push 是远端写：默认逐次确认');
+  assert.equal(real.catalog.get('gitee.review.record')?.decision, 'deny', '人工评审留痕不由 Agent 发起');
 
   for (const action of [...GITEE_READ_ACTIONS, 'gitee.delivery.judge']) {
     const decision = real.decide({ action, target: 'acme/repo' });

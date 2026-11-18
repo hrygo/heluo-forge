@@ -237,7 +237,7 @@ export function createGiteeGuard({ policy = null, now = Date.now } = {}) {
             ? GUARD_REASONS.ACTION_DISABLED
             : GUARD_REASONS.POLICY_DENIED,
         detail: unregistered
-          ? `${text(decision?.reason) || `策略拒绝了 ${action}`}；写动作默认不登记：在所属 profile 的 heluo-policy 目录登记动作 ${action}，写/确认类另补审批台账条目（见 packages/forge-gitee/README.md「策略门禁与凭据」）`
+          ? `${text(decision?.reason) || `策略拒绝了 ${action}`}；动作必须在所属 profile 的 heluo-policy 目录登记（分发补丁层已登记全部 12 条，未登记通常意味着 profile 删行或被组织信封收紧，见 packages/forge-gitee/README.md「策略门禁与凭据」）`
           : (text(decision?.reason) || `策略拒绝了 ${action}`),
       });
     }

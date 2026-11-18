@@ -117,7 +117,7 @@ test('D1: 设计分类表的每个动作都在策略词表里，且默认决策�
   assert.match(model, /deny\s*>\s*confirm\s*>\s*allow/u, '判定模型必须写明三态取最严');
 });
 
-test('D1: 随包补丁层只登记只读动作，且都是 allow', () => {
+test('D1: 随包补丁层登记设计表全部动作，四层逐字一致且默认决策与设计一致', () => {
   const layers = readdirSync(join(root, 'packages'), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => join(root, 'packages', entry.name, 'cordis.patch.yml'))
@@ -129,19 +129,56 @@ test('D1: 随包补丁层只登记只读动作，且都是 allow', () => {
       }
     });
   assert.ok(layers.length >= 2, '至少两个 bundle 带策略补丁层');
-  const registered = new Set();
-  for (const path of layers) {
+
+  const catalogs = layers.map((path) => {
     const text = readFileSync(path, 'utf8');
-    const section = text.split('id: heluo-policy')[1]?.split('audit:')[0] ?? '';
-    for (const match of section.matchAll(/- \{ action: '([^']+)'/gu)) registered.add(match[1]);
+    const start = text.search(/^ {4}- id: heluo-policy$/mu);
+    assert.ok(start >= 0, `${path} 缺 YAML 策略行（注释里的 \`id: heluo-policy\` 不算登记）`);
+    const section = text.slice(start).split('audit:')[0];
+    const lines = section
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('- { action: '));
+    for (const line of lines) {
+      assert.match(
+        line,
+        /^- \{ action: '[^']+', target: '[^']+', enabled: true \}$/u,
+        `${path} 的登记行必须只写 action / target / enabled=true（类别与决策由内置词表决定）：${line}`,
+      );
+    }
+    return { path, actions: lines.map((line) => /action: '([^']+)'/u.exec(line)[1]) };
+  });
+
+  const [baseline, ...rest] = catalogs;
+  for (const { path, actions } of rest) {
+    assert.deepEqual(
+      actions,
+      baseline.actions,
+      `${path} 的目录必须与 ${baseline.path} 逐字同序：loader 按 id 只保留最后一份 config，单边改动会让幸存目录取决于装配顺序`,
+    );
   }
-  assert.ok(registered.size > 0);
-  for (const action of registered) {
-    assert.equal(BUILTIN_ACTIONS.get(action)?.category, 'read', `补丁层登记了非只读动作 "${action}"`);
-    assert.equal(defaultDecision(action), 'allow');
+
+  const documented = new Map();
+  for (const row of designRows()) {
+    for (const action of row.actions) {
+      if (action === 'git commit') continue; // 本地动作出闸，不是策略动作
+      documented.set(action, /^allow/u.test(row.decision) ? 'allow' : /^confirm/u.test(row.decision) ? 'confirm' : 'deny');
+    }
   }
-  const reads = [...BUILTIN_ACTIONS].filter(([, spec]) => spec.category === 'read').map(([action]) => action);
-  assert.deepEqual([...registered].sort(), reads.sort(), '只读词表与随包目录必须一一对应');
+  assert.deepEqual(
+    [...baseline.actions].sort(),
+    [...documented.keys()].sort(),
+    '随包目录必须登记设计表的全部动作：未登记的动作一律 unregistered-action 拒绝',
+  );
+  for (const action of baseline.actions) {
+    assert.ok(BUILTIN_ACTIONS.has(action), `补丁层登记了未分类的动作 "${action}"`);
+    assert.equal(defaultDecision(action), documented.get(action), `随包目录的 "${action}" 默认决策必须与设计表一致`);
+  }
+  assert.equal(
+    baseline.actions.filter((action) => BUILTIN_ACTIONS.get(action)?.category !== 'read').length,
+    6,
+    '六条写动作必须随包登记：登记只决定"是否可见"，放行仍由内置分类（allow / confirm / deny）承担',
+  );
 });
 
 test('D1: 登记但未开放的动作零执行体调用', async () => {

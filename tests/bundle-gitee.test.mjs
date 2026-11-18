@@ -150,7 +150,7 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
     assert.equal(artifact.has('package/dist/index.mjs'), false, '不得有编译产物');
 
     // AC-11：权限事实（补丁层）是交付物的一部分——它必须真的进包、与工作区逐字节一致，
-    // 且目录按 kind 分类为「3 读 + 1 只读判定」、写动作一条都不登记。只在源码断言会漏掉
+    // 且目录是 12 条并集（6 读 + 6 写）：写动作随包登记、只决定可见，放行仍由分类承担。只在源码断言会漏掉
     // `files` 白名单或打包遗漏：那种情况下用户装到的包与通过用例的树是两个东西。
     const patchPath = 'package/cordis.patch.yml';
     assert.ok(artifact.has(patchPath), '产物里必须有补丁层（依赖它挂载策略与工具面）');
@@ -167,8 +167,8 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
       .filter((line) => /^\s*-\s*\{\s*action:/u.test(line));
     assert.equal(
       catalogRows.length,
-      6,
-      `补丁层目录应为 6 条并集（3 读 + 1 只读判定 + devops 的 change.read / change.list），实为 ${catalogRows.length} 条`,
+      12,
+      `补丁层目录应为 12 条并集（6 读 + 6 写），实为 ${catalogRows.length} 条`,
     );
     assert.ok(
       catalogRows.some((row) => row.includes("'change.read'")),
@@ -180,14 +180,22 @@ test('产物入口与工作区逐字节一致，缺失或被改动都能被测�
     );
     const judgeRow = catalogRows.find((row) => row.includes("'gitee.delivery.judge'"));
     assert.ok(judgeRow, '产物补丁层必须含 gitee.delivery.judge 目录（判定随包默认登记）');
-    assert.doesNotMatch(judgeRow, /kind:|egress:/u, '登记行不再声明 kind/egress：类别与出网语义由内置词表决定');
     assert.match(judgeRow, /target:\s*'change'/u, '判定 target 必须逐字为 change');
     assert.match(judgeRow, /enabled:\s*true/u, '判定必须随包默认启用');
-    for (const action of ['gitee.issue.write', 'gitee.pr.write', 'gitee.review.publish', 'gitee.review.record']) {
-      assert.equal(
+    for (const row of catalogRows) {
+      assert.doesNotMatch(row, /kind:|egress:/u, `登记行只写 action / target / enabled：${row.trim()}`);
+    }
+    for (const action of [
+      'gitee.issue.write',
+      'gitee.pr.write',
+      'gitee.review.publish',
+      'gitee.review.record',
+      'gitee.git.push',
+      'change.clarification.write',
+    ]) {
+      assert.ok(
         catalogRows.some((row) => row.includes(`'${action}'`)),
-        false,
-        `补丁层不得登记写动作 ${action}（默认 denied 靠不登记实现，而不是运行时开关）`,
+        `补丁层必须登记写动作 ${action}：登记只决定可见，放行由内置分类承担`,
       );
     }
 

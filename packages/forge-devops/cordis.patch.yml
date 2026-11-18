@@ -23,16 +23,18 @@
 # 代码托管（仓库 / Issue / PR / 评审 / 交付判定）由 `@heluo/forge-gitee` 提供，本包不再持有
 # 跨平台写入口，也不再猜承建仓库——变更卡片给出 `forge_gitee_repository_read` 的下一步指引。
 #
-# 策略目录（catalog）是 **6 条并集、0 条 write**：`change.read` / `change.list`（本包的两条 dop 变更读）+
-# 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定。
-#   - 这一份并集**逐字**写在本包与 `@heluo/forge-gitee` 的补丁层里，两行都叫 `id: heluo-policy`，
-#     都不另立服务域：loader 按 id 覆盖 config，同装后只剩一个 `policy` 实例、一份目录；任一插件
-#     单独装也能自洽。两处文本必须完全一致，否则幸存目录取决于装配顺序
-#     （`tests/plugin-patch-layers.test.mjs` 静态守这份一致，`coexistence.test.mjs` 再验装配后果）。
+# 策略目录（catalog）是 **12 条并集、6 条 write**：`change.read` / `change.list`（本包的两条 dop 变更读）+
+# 三条 `gitee.*` 只读 + 一条 `gitee.delivery.judge` 只读判定 + 六条由 `@heluo/forge-gitee` 使用的写动作。
+#   - 这一份并集**逐字**写在本包与 `@heluo/forge-gitee`、`@heluo/forge-enterprise`、
+#     `@heluo/forge-engineering` 的补丁层里，行都叫 `id: heluo-policy`，都不另立服务域：loader 按 id
+#     覆盖 config，同装后只剩一个 `policy` 实例、一份目录；任一插件单独装也能自洽。几处文本必须完全
+#     一致，否则幸存目录取决于装配顺序（`tests/plugin-patch-layers.test.mjs` 静态守这份一致，
+#     `coexistence.test.mjs` 再验装配后果）。
 #   - 空目录会编译成"什么都没有"的策略，devops 随即以 `POLICY_ACTION_UNREGISTERED` 拒绝挂载
 #     （QA N-1：安装成功但 `dump-config` 超时、宿主报 entry did not activate）。
-#   - 写动作（issue / pr / 变更写）与 `gitee.git.push` 不预置：策略对 enabled 的写/确认动作要求
-#     审批台账条目，属单独的范围批准；需要写能力时由 profile 显式追加，而不是在分发层默认开放。
+#   - 写动作随包登记，但登记不等于放行：默认决策仍由内置分类给出，研发/评审写 `allow` 叠加内容与
+#     流程规则，`gitee.git.push` 每次确认，`gitee.review.record` 恒拒；未登记的动作一律
+#     `unregistered-action` 拒绝。devops 的读面不使用这些写动作，目录只为同装时共用同一份策略实例。
 #   - 不写 `tools` 映射：devops 的每个读/写都自己调 `policy.executeAction`，宿主工具层再映射
 #     会重复准入、重复审计；未映射的宿主工具按策略自身的 out-of-scope 语义放行。
 #
@@ -64,6 +66,12 @@
           - { action: 'gitee.issue.read', target: 'issue', enabled: true }
           - { action: 'gitee.pr.read', target: 'pull-request', enabled: true }
           - { action: 'gitee.delivery.judge', target: 'change', enabled: true }
+          - { action: 'gitee.issue.write', target: 'issue', enabled: true }
+          - { action: 'gitee.pr.write', target: 'pull-request', enabled: true }
+          - { action: 'change.clarification.write', target: 'change', enabled: true }
+          - { action: 'gitee.review.publish', target: 'pull-request', enabled: true }
+          - { action: 'gitee.git.push', target: 'repository', enabled: true }
+          - { action: 'gitee.review.record', target: 'pull-request', enabled: true }
         audit:
           sink: memory
           allowNonDurable: true

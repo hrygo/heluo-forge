@@ -257,18 +257,18 @@ test('按补丁层配置真实装配策略 + devops：挂载不抛、4 工具、
   assert.equal(listed.status, 'succeeded', 'change.list 同样经门禁放行');
   assert.ok(policy.auditRecords().length >= recordsBefore + 2, '前置审计必须真的写入记录，而不是跳过审计');
 
-  // 4) 写动作仍未登记：目录里一条 write 都没有，读面也不收写动作。
+  // 4) 目录是跨包并集：六条写动作随包登记，但 devops 的读面仍只收只读动作。
   const writeEntries = [...policy.catalog.values()].filter((entry) => entry.category !== 'read');
-  assert.deepEqual(writeEntries, [], '策略目录不得出现写动作（写面归 forge-gitee）');
+  assert.equal(writeEntries.length, 6, '六条写动作随包登记：与 gitee / enterprise / engineering 逐字共用同一份并集');
   await assert.rejects(service.read({ action: 'change.clarification.write', target: 'CHG-2026-0042' }), {
     code: READ_REASONS.UNKNOWN_ACTION,
   });
 
-  // 5) 写回默认关闭：目录里没有 change.clarification.write，写调用必须可见拒绝且零下游。
+  // 5) 登记不等于放行：写动作仍要过身份、内容、流程与范围确认，无身份时必须可见拒绝。
   await assert.rejects(
     service.changeUpdate({ target: 'CHG-2026-0042', summary: '优化启动性能' }),
     (error) => error?.code === READ_REASONS.POLICY_DENIED,
-    '写动作未登记时必须可见拒绝（不是静默跳过）',
+    '写动作登记后仍须身份与范围确认：无身份时必须可见拒绝（不是静默跳过）',
   );
 });
 

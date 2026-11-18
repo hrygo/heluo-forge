@@ -345,7 +345,7 @@ try {
   const patchedRows = rows(patched.stdout ?? '');
   const present = officialRows.filter((id) => baselineRows.has(id));
   record('installed-patch-disables-official-rows', base.status === 0 && patched.status === 0 && present.length > 0 && present.every((id) => patchedRows.get(id) === true && baselineRows.get(id) === false), { present, absent: officialRows.filter((id) => !baselineRows.has(id)), note: 'dump proves composition only; absent rows are NOT disabled' });
-  // §6.3：两个独立预装包各自携带同 id（`heluo-policy`）且目录逐字一致（六条并集，无 `isolate`），
+  // §6.3：两个独立预装包各自携带同 id（`heluo-policy`）且目录逐字一致（12 条并集，无 `isolate`），
   // 运行期由 Cordis Loader 按 id 去重保留单一策略实例；`--dump-config` 中每层补丁各占一节 `# == <path>`。
   // 带 `, patched by <path>` 的是被本补丁改写的官方 bundle 头，必须与独立插入段区分。
   const patchedLines = (patched.stdout ?? '').split('\n');
@@ -360,7 +360,20 @@ try {
   const section = sections.join('\n');
   const rowCount = (text, id) => (text.match(new RegExp(`^-\\s*id:\\s*${id}\\s*$`, 'gmu')) ?? []).length;
   const actionsOf = (text) => [...text.matchAll(/^\s*-\s*action:\s*([\w.]+)\s*$/gmu)].map((match) => match[1]);
-  const expectedActions = ['change.read', 'change.list', 'gitee.repository.read', 'gitee.issue.read', 'gitee.pr.read', 'gitee.delivery.judge'];
+  const expectedActions = [
+    'change.read',
+    'change.list',
+    'gitee.repository.read',
+    'gitee.issue.read',
+    'gitee.pr.read',
+    'gitee.delivery.judge',
+    'gitee.issue.write',
+    'gitee.pr.write',
+    'change.clarification.write',
+    'gitee.review.publish',
+    'gitee.git.push',
+    'gitee.review.record',
+  ];
   const enterprisePolicyCatalog = catalogFromPatch(readFileSync(join(enterpriseDir, 'cordis.patch.yml'), 'utf8'));
   const engineeringPolicyCatalog = catalogFromPatch(readFileSync(join(engineeringDir, 'cordis.patch.yml'), 'utf8'));
   const catalogsIdentical = JSON.stringify(enterprisePolicyCatalog) === JSON.stringify(engineeringPolicyCatalog);

@@ -96,7 +96,7 @@ function fakeRunner(handler = null) {
   };
 }
 
-/** 允许策略：decide 放行，executeAction 直接跑 operation（模拟审批台账已通过）。 */
+/** 允许策略：decide 放行，executeAction 直接跑 operation（模拟门禁已放行）。 */
 function allowPolicy() {
   const state = { decide: 0, operations: 0 };
   return {
