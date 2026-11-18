@@ -68,7 +68,7 @@ Dependabot 默认生成的提交，以及未配置团队签名工具的外部贡
 |---|---|
 | `pnpm check` | 依次执行文档检查、仓库检查与 Node 自动发现的全部测试 |
 | `pnpm check:docs` | 文档元数据、登记一致性、本地链接与锚点、表格及询问问题序列 |
-| `pnpm check:repo` | 工程结构、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
+| `pnpm check:repo` | 工程结构、根目录入口面、工作区、模块状态、工作流权限、敏感信息与包体闭包（清单/入口/依赖/补丁层/locale） |
 | `pnpm check:tarballs` | 每个包的 `npm pack --dry-run` 实际内容与模式位对照声明（#37 AC4） |
 | `pnpm check:version` | 正文基线版本与 [.dsh-version](.dsh-version) 一致，代码中无硬编码 DSH 版本 |
 | `pnpm test:unit` | 实际执行 `node --test --test-timeout=120000` 自动发现的全部用例：检查器、各扩展包、凭据支撑包、索引校验与归档安装；单个用例超过 120 秒即具名失败 |

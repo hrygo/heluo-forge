@@ -107,6 +107,46 @@ test('missing required entry is reported', () => {
   }
 });
 
+test('stray root document is rejected', () => {
+  const root = fixture();
+  try {
+    write(root, '2026-11-16_DRIFT_REPORT.md', '# drift\n');
+    const { errors } = checkRepo(root);
+    assert.ok(
+      errors.some((error) => error.includes('2026-11-16_DRIFT_REPORT.md') && error.includes('unapproved root file')),
+      errors.join('\n'),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('unapproved top-level directory is rejected', () => {
+  const root = fixture();
+  try {
+    write(root, 'scratch/notes.md', '# notes\n');
+    const { errors } = checkRepo(root);
+    assert.ok(
+      errors.some((error) => error.includes('scratch/') && error.includes('unapproved top-level directory')),
+      errors.join('\n'),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('allowlisted root entries are accepted', () => {
+  const root = fixture();
+  try {
+    assert.deepEqual(checkRepo(root).errors, []);
+    // Present in ROOT_FILES: adding it must not trip the surface check.
+    write(root, '.env.example', 'PLACEHOLDER=\n');
+    assert.deepEqual(checkRepo(root).errors, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('non-private package is rejected', () => {
   const root = fixture();
   try {

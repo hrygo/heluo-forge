@@ -6,20 +6,20 @@
 |---|---|
 | 文档编号 | CORP-DSH-DOC-000 |
 | 文档名称 | 文档清单 |
-| 版本 | V1.87.2 |
+| 版本 | V1.87.3 |
 | 文档状态 | 生效 |
 | 密级 | — |
 | 编制 | DSH 平台组 |
 | 审核 | DSH 平台组 |
 | 批准 | DSH 平台组 |
-| 最后更新 | 2026-11-17 |
+| 最后更新 | 2026-11-18 |
 | 门禁 | — |
 
 ## 1. 清单
 
 | 编号 | 文档名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
 |---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.87.2 | 生效 | 平台组 | — |
+| CORP-DSH-DOC-000 | 文档清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.87.3 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-001 | 文档总览 | [README.md](<README.md>) | V1.48.0 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-002 | 逐模块设计索引 | [design/README.md](<design/README.md>) | V0.46.1 | 生效 | 平台组 | — |
 | CORP-DSH-DOC-003 | 运维索引 | [operations/README.md](<operations/README.md>) | V0.5.0 | 生效 | 平台组 | — |
@@ -86,7 +86,7 @@
 | CORP-DSH-REQ-005 | 员工智能助理个人记忆产品方案 | [requirements/employee-assistant-memory-proposal.md](<requirements/employee-assistant-memory-proposal.md>) | V0.1 | 草案 | Agent（代拟） | 产品方案评审、范围基线同步、接口与宿主准入；企业环境验证后试点 |
 | CORP-DSH-GW-001 | AI 网关契约 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V2.2.0 | 评审稿 | 网关团队 | G0 方向与 P0 联调；G1 接入契约；G2 运行参数、联调与安全准入 |
 | CORP-DSH-ENG-001 | 工程仓库结构与长期迭代设计 | [engineering/repository-structure-design.md](<engineering/repository-structure-design.md>) | V0.7.3 | 草案 | 平台组（代拟） | 工程整理已获准并完成；业务仍按 G0—G3 |
-| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.9.3 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
+| CORP-DSH-ENG-002 | 工程开发与发布约定 | [engineering/development-conventions.md](<engineering/development-conventions.md>) | V0.9.4 | 草案 | 平台组（代拟） | 随首个可发布包复核 |
 | CORP-DSH-ENG-003 | DSH 插件高阶规范 | [engineering/dsh-plugin-conventions.md](<engineering/dsh-plugin-conventions.md>) | V0.1.0 | 草案 | 平台组（代拟） | 每个新插件准入时对照复核 |
 | CORP-DSH-ENG-004 | SQLite 存储扩展与使用规范 | [engineering/sqlite-storage-conventions.md](<engineering/sqlite-storage-conventions.md>) | V0.1.1 | 草案 | 平台组（代拟） | 新增或修改 SQLite 存储时复核 |
 | CORP-DSH-CONF-001 | 跨团队确认询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.13.5 | 草案 | 平台组统筹，各团队回函 | G0分流；G1/G2关闭技术与运行事项；G3试点评估 |
@@ -118,6 +118,12 @@
 | 插件市场功能架构图 | [plugin-market-architecture.html](<assets/plugin-market-architecture.html>) | [轻量市场设计](<design/plugins/forge-market.md>)、[索引契约](<design/services/market-index.md>)、[ADR-11／13](<architecture/plugin-registry-source-decision.md>) | 轻量原生索引示意：AIHUB 索引、原生索引源、官方 manager、Artifactory、能/不能保证与验收；评审稿示意，不替代正文、企业接入或门禁证据 |
 | 品牌资产套件（河洛苍螭，方案 B） | [branding/cyber-long/index.html](<assets/branding/cyber-long/index.html>) | [品牌与外观详细设计](<design/plugins/forge-brand.md>) | 现存的唯一预置品牌资产：主标、11 个组件标识与多分辨率切图，配 `manifest.json` 校验清单与 `usage.txt` 使用规则；状态为建议稿（代拟），方案 B 由用户选定，正式审核与批准待定；组件标识只描述职责，不表示对应模块已实现、已部署或已批准；`packages/forge-iam/icon.svg` 逐字节取自其中 `forge-iam-symbol.svg`，由 `packages/forge-iam/test/package-shape.test.mjs` 校验 |
 | 开放 Issue 实施路径总览 | [issue-implementation-path.html](<assets/issue-implementation-path.html>) | [推广实施方案](<plans/rollout-plan.md>)、[设计索引](<design/README.md>) | 2026-10-23 对 GitHub Issue #12、#13、#15、#20—#40 的辅助分析：紧迫性、实施条件、ROI 与依赖，含阶段 0—3 与一条并行流；人日为工程粗估，不含跨团队等待与审批，不构成日历承诺；Issue 状态以 GitHub 为准，图解不替代受控正文、门禁证据或责任方裁定 |
+
+### 1.2 历史核查记录
+
+| 记录 | 路径 | 适用范围 |
+|---|---|---|
+| 2026-11-16 文档漂移检查记录 | [2026-11-16-drift-report.md](engineering/reviews/2026-11-16-drift-report.md) | 文档与实现对照的历史快照，当前能力与验收状态见[设计索引 §2.2](design/README.md#22-实现与验证入口) |
 
 ## 2. 维护规则
 
