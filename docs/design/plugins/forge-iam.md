@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-002 |
 | 文档名称 | IAM 接入详细设计 |
-| 版本 | V3.4.0 |
+| 版本 | V3.5.0 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -878,7 +878,7 @@ flowchart TD
 
 ### 8.1 网关失败分类与换网关适配
 
-企业模型调用的失败归类与具体网关实现解耦：分类只读取调用失败对象上的证据，不依赖某一厂商的错误词汇。实现位于 `packages/forge-iam/src/gateway-failure.mjs`，`managed-models.mjs` 在流内 `finish` 块与抛出异常两条路径上共用同一失败入口 `failureCode()`：先按 `USER_CODE_BY_INTERNAL` 把插件内部的 `IAM_*`／`CRED_*` 码换成已登记用户码，再交给 `classifyFailure()` 归类网关证据。
+企业模型调用根据失败对象与受控传输提供的证据归类。实现位于 `packages/forge-iam/src/gateway-failure.mjs`，`managed-models.mjs` 在流内 `finish` 块与抛出异常两条路径上共用 `failureCode()`。该入口先用 `USER_CODE_BY_INTERNAL` 将插件内部的 `IAM_*`／`CRED_*` 码映射为已登记用户码，再交给 `classifyFailure()` 归类网关证据。
 
 #### 本地调用诊断
 
@@ -888,7 +888,7 @@ flowchart TD
 
 目录同步期间的适配器初始化异常使用 `adapter-initialization` 阶段和固定分类码记录，排除异常原文、堆栈和模型标识。目录状态反映 `/models` 的同步结果。适配器更新失败时，当前绑定下已装配且配置仍匹配的模型继续通过鉴权提供推理。
 
-推理失败诊断可附带 `transport`，包括派发阶段、白名单网络错误、HTTP 状态、经范围校验的 `Retry-After` 毫秒值、是否已有输出和是否计划重试。`before-send` 只在已确认原始连接拒绝时记录，`response` 表示已收到 HTTP 响应，其余无确定派发证据的传输失败记录为 `unknown`。只保留这些派生字段，日志排除 URL、原始响应头和响应正文。
+推理失败诊断可附带 `transport`，包括派发阶段、白名单网络错误、HTTP 状态、经范围校验的 `Retry-After` 毫秒值、是否已有输出和是否计划重试。`before-send` 表示已确认原始 POST 未发送，`response` 表示已收到 HTTP 响应，证据不足时记为 `unknown`。多个候选地址全部在建连时失败时，诊断只保留首个可识别的错误码。日志排除 URL、原始响应头和响应正文。
 
 #### 8.1.1 分类顺序
 
@@ -898,7 +898,7 @@ flowchart TD
 | 2 | 模型层错误码 | `QUOTA`、`RATE_LIMIT`、`FreeUsageLimitError`、`RateLimitError` | 查 `LAYER_CODES` |
 | 3 | 响应体词表 | OpenAI `error.code`／`error.type`、RFC 9457 `type`（取末段）、路由冷却码（`model_cooldown`） | 查 `BODY_CODES` |
 | 4 | HTTP 状态码 | `status`、`statusCode`、`response.status`、`cause.*` | 401/403/429/4xx/5xx 分别归类 |
-| 5 | socket 错误码 | `ECONNREFUSED`、`ENOTFOUND`、`ETIMEDOUT` 等 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
+| 5 | socket 错误码 | 失败对象中的网络错误，或受控适配器确认的发送前连接错误 | `ENTERPRISE_GATEWAY_UNAVAILABLE` |
 | 6 | 兜底 | 以上均无 | `ENTERPRISE_GATEWAY_CALL_FAILED` |
 
 模型层与附件层的本地码先于状态码判定：`UNSUPPORTED_CONTENT`、`IMAGE_OFFLOAD_REQUIRED` 与全部 `ATTACHMENT_*` 归入 `ENTERPRISE_REQUEST_UNSUPPORTED`。它们表示请求未能在发出前组装完成，而不是网关给出了答复，因此不得借状态码或响应体改判为网关问题。
@@ -959,7 +959,11 @@ flowchart TD
 
 目录同步的后台退避只覆盖 `ENTERPRISE_GATEWAY_UNAVAILABLE` 与 `ENTERPRISE_GATEWAY_RATE_LIMIT`；`QUOTA_EXHAUSTED` 与 `CALL_FAILED` 不参与自动重试，避免在额度耗尽或原因未知时反复撞击网关。
 
-模型调用的绑定恢复与建连恢复共用一次重试预算。绑定变化由 `IAM_GATEWAY_BINDING_CHANGED` 触发，目录重建走现有单飞，等待上限 5 秒。受控适配器通过逐请求 SDK `fetch` 回调确认首个原始推理 POST 在 `connect` 阶段被 `ECONNREFUSED` 拒绝时，可等待 200 毫秒并重试一次。推理传输保留原始网关绑定，关闭自动跟随重定向和 SDK 自动重试。两类恢复都在重新派发前校验取消状态、授权会话和可用模型。已输出分片、派发状态不明、普通 `503`、限流、鉴权失败及用户取消禁止触发建连重试。网关已受理的请求由原流完成或报告失败，真实企业网关的计费与流恢复仍需专项验证。
+模型调用的绑定恢复与连接恢复共用一次自动重试预算。绑定变化由 `IAM_GATEWAY_BINDING_CHANGED` 触发，目录重建共享一次进行中的操作，等待上限 5 秒。两类恢复都在重新派发前复核取消状态、授权会话与模型准入。
+
+连接恢复仅接受受控适配器对绑定网关发起的一次原始推理 POST。受控适配器关闭 SDK 自动重试与自动跟随重定向，只有使用 Node 内置 `fetch`、直接提供地址、无逐请求自定义传输且未收到 HTTP 响应的调用可以确认未发送。允许的失败证据包括 `getaddrinfo` 阶段的 `EAI_AGAIN`、`connect` 阶段的 `ECONNREFUSED` 或 `ETIMEDOUT`，以及 Undici 的 `UND_ERR_CONNECT_TIMEOUT`。Node 的多地址连接失败只有在每项均通过上述判据时才可恢复。满足判据时随机等待 200–400 毫秒再尝试，等待期间可取消。[Node 网络连接文档](https://nodejs.org/docs/latest-v24.x/api/net.html)、[Undici 错误说明](https://undici.nodejs.org/api/Errors)、[AWS 退避与抖动实践](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)（核验于 2026-11-18）。
+
+收到 HTTP 响应、已有输出或派发状态不明时，原调用继续输出或报告失败。普通 `429` 和 `503` 回执的 `Retry-After` 用于诊断。网关拒绝后的自动重试以可核验的未受理且无副作用语义，或覆盖推理与计费的端到端幂等契约为前提，并遵守响应提供的退避提示和总等待预算。鉴权、撤权、额度耗尽和取消直接沿用各自的终止路径。真实网关的受理、计费及流恢复待联调。[网关目标契约](../../contracts/gateway-contract.md#412-阶段能力矩阵)、[RFC 9110 重试语义](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)、[RFC 9110 Retry-After](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3)（核验于 2026-11-18）。
 
 同地址换 Key 不是绑定变化：`baseURL` 与主体不变时直接采用新 Key 并更新本地快照，不重建适配器。绑定快照只由这两个字段构成，`generation` 仅是 Key 的写入版本。
 

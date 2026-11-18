@@ -279,13 +279,13 @@ export const USER_FACING_CODES = new Set([
  * registered user code, everything the gateway layer emits keeps the existing
  * evidence-first classification.
  */
-export const failureCode = (failure) => {
+export const failureCode = (failure, observedSocketCode) => {
   const raw = typeof failure?.code === 'string' ? failure.code : undefined;
   if (raw && Object.hasOwn(USER_CODE_BY_INTERNAL, raw)) return USER_CODE_BY_INTERNAL[raw];
-  return classifyFailure(failure);
+  return classifyFailure(failure, observedSocketCode);
 };
 
-export const classifyFailure = (failure) => {
+export const classifyFailure = (failure, observedSocketCode) => {
   const raw = typeof failure?.code === 'string' ? failure.code : undefined;
   if (raw && SELF_CODES.has(raw)) return raw;
   // Every durable-attachment code says the same thing: this route could not
@@ -302,8 +302,8 @@ export const classifyFailure = (failure) => {
   }
   const status = statusOf(failure);
   if (status !== undefined) return gatewayCode(status);
-  const syscall = failure?.cause?.code ?? failure?.errno;
-  if (typeof syscall === 'string' && UNREACHABLE_SYSCALLS.has(syscall)) return 'ENTERPRISE_GATEWAY_UNAVAILABLE';
+  const socketCode = failure?.cause?.code ?? failure?.errno;
+  if (UNREACHABLE_SYSCALLS.has(socketCode) || UNREACHABLE_SYSCALLS.has(observedSocketCode)) return 'ENTERPRISE_GATEWAY_UNAVAILABLE';
   // The DSH pi-ai adapter uses these coarse codes after flattening the wire
   // error. They categorize failures, but do not prove delivery or retry safety.
   if (raw === 'SERVER' || raw === 'TRANSPORT' || raw === 'STREAM_CLOSED') return 'ENTERPRISE_GATEWAY_UNAVAILABLE';

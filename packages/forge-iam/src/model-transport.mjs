@@ -18,8 +18,19 @@ export function trackModelAttempt(dispatch, attempt) {
   };
 }
 
-export function beforeModelSend(attempt) {
-  return attempt?.calls === 1 && attempt.status === undefined && attempt.refusedConnection === true;
+export function modelPreconnectFault(attempt) {
+  if (attempt?.calls === 1 && attempt.status === undefined && attempt.failedBeforeSend) return attempt.fault;
+  return undefined;
+}
+
+function isConnectFailure(error) {
+  switch (error?.code) {
+    case 'EAI_AGAIN': return error.syscall === 'getaddrinfo';
+    case 'ECONNREFUSED':
+    case 'ETIMEDOUT': return error.syscall === 'connect';
+    case 'UND_ERR_CONNECT_TIMEOUT': return true;
+    default: return false;
+  }
 }
 
 export function resolveModelAccessToken(fallback) {
@@ -58,7 +69,7 @@ export function modelFetchOptions(options, baseURL) {
           request.headers.set('X-Consumer-Type', 'personal');
         }
         attempt.calls++;
-        attempt.refusedConnection = false;
+        attempt.failedBeforeSend = false;
         try {
           const response = await fetcher(input, request);
           attempt.status = response.status;
@@ -68,9 +79,13 @@ export function modelFetchOptions(options, baseURL) {
           return response;
         } catch (cause) {
           const socket = cause?.cause ?? cause;
-          attempt.fault = transportFaults.has(socket?.code) ? socket.code : undefined;
-          attempt.refusedConnection = directFetch && bound
-            && socket?.code === 'ECONNREFUSED' && socket.syscall === 'connect';
+          const connectErrors = socket instanceof AggregateError ? socket.errors : [socket];
+          // A Request can carry a dispatcher even when init does not supply one.
+          attempt.failedBeforeSend = directFetch && bound && !(input instanceof Request)
+            && request.dispatcher === undefined && !request.signal?.aborted
+            && Array.isArray(connectErrors) && connectErrors.length > 0 && connectErrors.every(isConnectFailure);
+          const fault = (attempt.failedBeforeSend ? connectErrors[0] : socket)?.code;
+          attempt.fault = transportFaults.has(fault) ? fault : undefined;
           throw cause;
         }
       };
@@ -91,7 +106,7 @@ export function modelFetchOptions(options, baseURL) {
 export function modelTransportDiagnostic(attempt, output, retrying) {
   if (!attempt?.calls) return undefined;
   return {
-    phase: attempt.status === undefined ? (beforeModelSend(attempt) ? 'before-send' : 'unknown') : 'response',
+    phase: attempt.status === undefined ? (modelPreconnectFault(attempt) ? 'before-send' : 'unknown') : 'response',
     status: attempt.status, retryAfterMs: attempt.retryAfterMs, fault: attempt.fault, output, retrying,
   };
 }

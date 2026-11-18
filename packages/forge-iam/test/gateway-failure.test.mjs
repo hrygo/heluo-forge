@@ -88,6 +88,13 @@ test('only socket evidence is called unreachable', () => {
   assert.equal(classifyFailure({ code: 'SOMETHING_NEW' }), 'ENTERPRISE_GATEWAY_CALL_FAILED');
 });
 
+test('an observed socket failure fills in missing SDK evidence without masking a rejected call', () => {
+  const socket = 'UND_ERR_CONNECT_TIMEOUT';
+  assert.equal(failureCode(new Error('opaque SDK failure'), socket), 'ENTERPRISE_GATEWAY_UNAVAILABLE');
+  assert.equal(failureCode({ code: 'AUTH' }, socket), 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED');
+  assert.equal(failureCode({ status: 429 }, socket), 'ENTERPRISE_GATEWAY_RATE_LIMIT');
+});
+
 test('the V2.1 vocabulary maps to distinct local codes and outranks the status', () => {
   const cases = {
     invalid_api_key: 'ENTERPRISE_GATEWAY_CREDENTIAL_REJECTED',

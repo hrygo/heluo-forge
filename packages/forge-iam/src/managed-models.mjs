@@ -4,7 +4,7 @@ import { IamError, IAM_GATEWAY_URL_INVALID_MESSAGE } from './errors.mjs';
 import { failureCode, gatewayCode, USER_CODE_BY_INTERNAL } from './gateway-failure.mjs';
 import { alignHostDefaultModel, HOST_DEFAULT_RESULTS } from './host-default-model.mjs';
 import { adapterInitializationDetailCode } from './model-failure-log.mjs';
-import { beforeModelSend, modelFetchOptions, modelTransportDiagnostic, resolveModelAccessToken, trackModelAttempt } from './model-transport.mjs';
+import { modelFetchOptions, modelPreconnectFault, modelTransportDiagnostic, resolveModelAccessToken, trackModelAttempt } from './model-transport.mjs';
 import {
   NO_RETRY_POLICY,
   THINKING_LEVELS,
@@ -118,6 +118,7 @@ const MODEL_RENEWAL_WAIT_MS = 5000;
 const MODEL_RENEWAL_RECHECK_MS = 4000;
 const STREAM_ROTATION_CHECK_LEADS_MS = [1000, 100];
 const PRECONNECT_RETRY_DELAY_MS = 200;
+const PRECONNECT_RETRY_JITTER_MS = 200;
 const REBUILD_ATTEMPT_LIMIT = 3;
 
 /**
@@ -593,12 +594,13 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       return signal.aborted && !request.signal?.aborted ? 'IAM_LOGIN_REQUIRED' : null;
     };
     const retryTransport = async (attempt, cause, mapped) => {
-      if (emitted || retried || signal.aborted || mapped !== 'ENTERPRISE_GATEWAY_UNAVAILABLE' || !beforeModelSend(attempt)
+      if (emitted || retried || signal.aborted || mapped !== 'ENTERPRISE_GATEWAY_UNAVAILABLE' || !modelPreconnectFault(attempt)
         || refusal(request, attempt.version)) return false;
       retried = true;
       retryVersion = attempt.version;
       reportFailure(request, cause, mapped, 'unknown', modelTransportDiagnostic(attempt, output, true));
-      try { await delay(PRECONNECT_RETRY_DELAY_MS, undefined, { signal }); }
+      const delayMs = PRECONNECT_RETRY_DELAY_MS + Math.floor(Math.random() * (PRECONNECT_RETRY_JITTER_MS + 1));
+      try { await delay(delayMs, undefined, { signal }); }
       catch (cause) { if (cause?.name !== 'AbortError') throw cause; }
       // The next iteration rechecks cancellation, authorization and the route
       // before asking the SDK for fresh credentials.
@@ -686,11 +688,12 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
           }
           // The SDK emits an empty usage chunk before its error even when the
           // socket was never connected. No usage was incurred for this attempt.
-          if (chunk.type === 'usage' && beforeModelSend(attempt)) continue;
+          const preconnectFault = modelPreconnectFault(attempt);
+          if (chunk.type === 'usage' && preconnectFault) continue;
           if (failure) {
             // The model layer turns an HTTP error into a finish chunk, so the code
             // arrives here without ever passing through the thrown-error branch.
-            const mapped = attempt?.denied ?? record(failureCode(failure), attempt?.binding);
+            const mapped = attempt?.denied ?? record(failureCode(failure, preconnectFault), attempt?.binding);
             noteMapped(failure, mapped);
             if (await retryTransport(attempt, failure, mapped)) continue engine;
             if (downgradeImages(mapped)) continue engine;
@@ -708,7 +711,7 @@ export function createManagedModelRuntime({ host, iam, config, createAdapter = c
       } catch (cause) {
         if (request.signal?.aborted) { yield { type: 'finish', reason: { kind: 'aborted' } }; return; }
         const authorization = streamRefusal();
-        code = authorization ?? attempt?.denied ?? attempt?.revocation ?? failureCode(cause);
+        code = authorization ?? attempt?.denied ?? attempt?.revocation ?? failureCode(cause, modelPreconnectFault(attempt));
         if (!authorization && await retryTransport(attempt, cause, code)) continue engine;
         if (!authorization && downgradeImages(code)) continue engine;
         // Retry only before the first chunk leaves: after emission a second
