@@ -7,11 +7,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createManagedModelRuntime } from '../src/managed-models.mjs';
 import { createModelFailureLogger } from '../src/model-failure-log.mjs';
+import { createGrantStore } from '../src/store.mjs';
+import { seedGateway } from './support/atomic-gateway.mjs';
+import { MemoryCredentials } from './support/memory-credentials.mjs';
+import { startMockOidc } from './support/mock-oidc.mjs';
+import { createIamService } from './support/trusted-service.mjs';
 
 const route = { provider: 'enterprise', model: 'synthetic-model' };
 const request = { ...route, messages: [{ role: 'user', content: 'sensitive-test-prompt' }] };
 
-async function fixture(t, mode) {
+async function fixture(t, mode, { createIam, beforeFetch, afterFirstDelta } = {}) {
   let posts = 0;
   const received = [];
   const server = createServer((req, res) => {
@@ -48,9 +53,10 @@ async function fixture(t, mode) {
   const diagnoseFailure = createModelFailureLogger({ home });
   const cancel = new AbortController();
   let adapter, guard, attempts = 0, reads = 0;
-  let accessToken = 'sensitive-test-token', login = 1, sdkToken;
+  let accessToken = 'sensitive-test-token', login = 1, sdkToken, responseStatus;
   const view = { state: 'ready', principal: 'person-a', accessExpiresAt: Date.now() + 60_000,
     gatewayCredential: { state: 'configured', matchesAccount: true } };
+  const config = { defaultProvider: route.provider, managedModels: { baseURL } };
 
   // Match the target SDK boundary. Its provider calls fetch and emits usage
   // before a terminal error whose code no longer contains the socket cause.
@@ -64,9 +70,15 @@ async function fixture(t, mode) {
         sdkToken = init.headers.get('X-IAM-Token');
         if (mode === 'rotate-before-fetch') accessToken = 'sensitive-test-rotated-token';
         if (mode === 'replace-before-fetch') login++;
+        if (beforeFetch) await beforeFetch();
         const response = await (options.fetch ?? fetch)(`${model.baseUrl}/chat/completions`, init);
+        responseStatus = response.status;
         if (!response.ok) { yield { type: 'usage' }; yield failure('SERVER'); return; }
         yield { type: 'text-delta', text: await response.text() };
+        if (afterFirstDelta) {
+          afterFirstDelta();
+          yield { type: 'text-delta', text: 'continued' };
+        }
         if (mode === 'after-output') { yield failure('TRANSPORT'); return; }
         yield { type: 'finish', reason: { kind: 'stop' } };
       } catch (cause) {
@@ -92,7 +104,7 @@ async function fixture(t, mode) {
       llm: { registerAdapter(_routes, value) { adapter = value; } }, on(_name, callback) { guard = callback; }, emit() {},
       loader: { async import(name) { return name === '@deepseek-ai/dsh-llm-pi-ai' ? { PiAiAdapter } : { openAICompletionsApi: () => protocol }; } },
     },
-    iam: {
+    iam: createIam ? await createIam(config) : {
       getView: () => view, async *watch() {},
       async readModelSelection() { return { saved: true, subject: view.principal, models: { [route.model]: {} } }; },
       async resolveGatewayConnection() { reads++; return { baseURL, key: 'sensitive-test-key', subject: view.principal }; },
@@ -105,7 +117,7 @@ async function fixture(t, mode) {
         return { assertCurrent, withDispatchAccessToken(dispatch) { assertCurrent(); return dispatch(accessToken); } };
       },
     },
-    config: { defaultProvider: route.provider, managedModels: { baseURL } },
+    config,
     fetch: async () => Response.json({ data: [{ id: route.model }] }), requestHeaders: async () => ({}),
     diagnoseFailure(event) {
       if (mode === 'cancelled-during-backoff' && event.transport?.retrying) cancel.abort();
@@ -118,7 +130,7 @@ async function fixture(t, mode) {
   const call = { ...request, signal: cancel.signal, sessionId: 'sensitive-test-session' };
   const prepared = await adapter.prepareCall(route.provider, route.model, call.signal);
   const chunks = await Array.fromAsync(guard(call, next => prepared.stream(next)));
-  return { chunks, attempts, posts, received, sdkToken, credentialReads: reads - readsBeforeCall, log, runtime };
+  return { chunks, attempts, posts, received, sdkToken, responseStatus, credentialReads: reads - readsBeforeCall, log, runtime };
 }
 
 test('uses the rotated IAM token when it changes after the SDK creates the request headers', async t => {
@@ -128,6 +140,85 @@ test('uses the rotated IAM token when it changes after the SDK creates the reque
     { method: 'POST', url: '/v1/chat/completions', iamToken: 'sensitive-test-rotated-token' },
   ]);
   assert.equal(result.chunks.at(-1).reason.kind, 'stop');
+});
+
+test('an accepted stream uses the dispatch grant deadline after another Host rotates the token', async t => {
+  for (const [name, elapsedAfterDispatch, shouldContinue] of [
+    ['continues past the original expiry', 95_000, true],
+    ['stops at the rotated grant expiry', 300_000, false],
+  ]) {
+    await t.test(name, async t => {
+      const now = Date.now();
+      t.mock.timers.enable({ apis: ['Date'], now });
+      const oidc = await startMockOidc({ accessTtl: 300 });
+      t.after(() => oidc.close());
+      const credentials = new MemoryCredentials();
+      const store = createGrantStore(credentials);
+      const subject = 'E1001';
+      const originalToken = 'synthetic-access';
+      const originalDeadline = new Date(now + 90_000).toISOString();
+      oidc.refreshTokens.set('synthetic-refresh', { subject });
+      await store.write({
+        version: 1, sessionInstanceId: Buffer.alloc(32, 7).toString('base64url'),
+        issuer: oidc.issuer, clientId: oidc.clientId, subject, scope: 'openid',
+        accessToken: originalToken, refreshToken: 'synthetic-refresh',
+        obtainedAt: new Date(now).toISOString(), accessExpiresAt: originalDeadline,
+        refreshExpiresAt: new Date(now + 600_000).toISOString(),
+      });
+      seedGateway(credentials, {
+        value: `uag-${'a'.repeat(32)}`, ownerSubject: subject, enteredAt: new Date(now).toISOString(),
+      });
+
+      let first, second, rotated, observedDeadline;
+      const result = await fixture(t, 'rotated-session', {
+        async createIam(config) {
+          const serviceConfig = {
+            ...config, ...oidc.endpoints, clientId: oidc.clientId,
+            redirectUri: 'http://127.0.0.1:4567/iam/callback',
+          };
+          first = createIamService({ ...serviceConfig, refreshSkewSeconds: 1 }, { credentials });
+          second = createIamService({ ...serviceConfig, refreshSkewSeconds: 60 }, { credentials });
+          t.after(async () => { await first.dispose(); await second.dispose(); });
+          await first.hydrate();
+          await second.hydrate();
+          await first.saveModelSelection({ models: { [route.model]: {} }, defaultModelId: route.model });
+          return first;
+        },
+        async beforeFetch() {
+          t.mock.timers.tick(45_000);
+          await second.getAccessToken();
+          rotated = (await store.read()).grant;
+          observedDeadline = first.getView().accessExpiresAt;
+        },
+        afterFirstDelta() {
+          t.mock.timers.tick(elapsedAfterDispatch);
+        },
+      });
+
+      assert.equal(observedDeadline, originalDeadline);
+      assert.equal(rotated.accessExpiresAt, new Date(now + 345_000).toISOString());
+      assert.equal(oidc.counts.token, 1);
+      assert.equal(oidc.counts.refresh, 1);
+      assert.equal(result.sdkToken, originalToken);
+      assert.notEqual(rotated.accessToken, originalToken);
+      assert.deepEqual(result.received, [
+        { method: 'POST', url: '/v1/chat/completions', iamToken: rotated.accessToken },
+      ]);
+      assert.equal(result.responseStatus, 200);
+      assert.equal(result.attempts, 1);
+      assert.deepEqual(result.chunks[0], { type: 'text-delta', text: 'ok' });
+      if (shouldContinue) {
+        assert.deepEqual(result.chunks.slice(1), [
+          { type: 'text-delta', text: 'continued' },
+          { type: 'finish', reason: { kind: 'stop' } },
+        ]);
+        assert.equal(first.getView().accessExpiresAt, rotated.accessExpiresAt);
+      } else {
+        assert.equal(result.chunks.length, 2);
+        assert.equal(result.chunks.at(-1).reason.failure.code, 'IAM_LOGIN_REQUIRED');
+      }
+    });
+  }
 });
 
 test('sends no POST when the same principal replaces the login after the SDK creates the request headers', async t => {

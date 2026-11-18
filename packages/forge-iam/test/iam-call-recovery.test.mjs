@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { createModelFailureLogger } from '../src/model-failure-log.mjs';
 import { createManagedModelRuntime, createNativeGatewayAdapter } from '../src/managed-models.mjs';
 import { IamError } from '../src/errors.mjs';
-import { createGrantStore } from '../src/store.mjs';
+import { refreshBaseId } from '../src/session-identity.mjs';
+import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { createAtomicGatewayFixture, seedGateway } from './support/atomic-gateway.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
@@ -637,7 +638,7 @@ async function sessionFixture(t, { accessOffsetMs = 600_000, refreshOffsetMs = 3
   });
   t.after(() => service.dispose());
   await service.hydrate();
-  return { service, oidc, store, grant, key: 'uag-synthetic-key',
+  return { service, oidc, store, grant, credentials: atomic.credentials, key: 'uag-synthetic-key',
     advance(ms) { clock += ms; return service.notifyView(); },
     replaceProvider(next) { credentials = next; },
   };
@@ -685,17 +686,92 @@ test('concurrent model preflights share the same token rotation', async t => {
   assert.doesNotThrow(() => second.assertCurrent());
 });
 
+for (const outcome of ['new snapshot', 'old snapshot', 'replaced login', 'withdrawn provider', 'sign-out']) {
+  test(`delayed model preflight after a successful renewal: ${outcome}`, { timeout: 5000 }, async t => {
+    const f = await sessionFixture(t, { accessOffsetMs: 240_000 });
+    const slowSession = f.service.captureModelSession();
+    const fastSession = f.service.captureModelSession();
+    assert.equal(f.advance(240_001).state, 'expired');
+    const readStarted = Promise.withResolvers();
+    const releaseRead = Promise.withResolvers();
+    t.after(() => releaseRead.resolve());
+    const read = f.credentials.readRecord.bind(f.credentials);
+    let holdFirst = true;
+    f.credentials.readRecord = async key => {
+      if (key !== GRANT_KEY || !holdFirst) return read(key);
+      holdFirst = false;
+      const old = outcome === 'new snapshot' ? null : await read(key);
+      readStarted.resolve();
+      await releaseRead.promise;
+      return old ?? read(key);
+    };
+    const slow = slowSession.renew().then(() => 'ready', cause => cause.code);
+    await readStarted.promise;
+    await fastSession.renew();
+    const result = (await f.store.read()).grant;
+    assert.equal(result.refreshOperation.state, 'complete');
+    assert.equal(f.service.getView().state, 'ready');
+    let expected = 'ready';
+    if (outcome === 'replaced login') {
+      await f.store.write({ ...result, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') });
+      expected = 'IAM_NOT_SIGNED_IN';
+    } else if (outcome === 'withdrawn provider') {
+      f.replaceProvider(new MemoryCredentials());
+      expected = 'IAM_CREDENTIALS_UNAVAILABLE';
+    } else if (outcome === 'sign-out') {
+      await f.service.signOut();
+      expected = 'IAM_NOT_SIGNED_IN';
+    }
+    releaseRead.resolve();
+    assert.equal(await slow, expected);
+    assert.equal(f.oidc.counts.refresh, 1, 'the slow caller must never mint a second token');
+  });
+}
+
 test('dispatch uses a newer durable token for the same login without adopting a different session', async t => {
   const f = await sessionFixture(t);
   const handle = f.service.captureModelSession();
   const complete = {
     ...f.grant, accessToken: 'rotated-access', refreshToken: 'rotated-refresh',
-    refreshOperation: { version: 1, state: 'complete', id: f.grant.sessionInstanceId, base: f.grant.sessionInstanceId },
+    refreshOperation: { version: 1, state: 'complete', id: f.grant.sessionInstanceId, base: refreshBaseId(f.grant, f.grant.sessionInstanceId) },
   };
   await f.store.write(complete);
   assert.equal(await handle.withDispatchAccessToken(token => token), 'rotated-access');
   await f.store.write({ ...complete, sessionInstanceId: Buffer.alloc(32, 8).toString('base64url') });
   await assert.rejects(handle.withDispatchAccessToken(() => assert.fail('replacement login cannot dispatch')), { code: 'IAM_NOT_SIGNED_IN' });
+  assert.equal(f.oidc.counts.refresh, 0);
+});
+
+test('a slow ordinary token read cannot restore the previous deadline after dispatch adopts a rotation', { timeout: 5000 }, async t => {
+  const f = await sessionFixture(t);
+  const session = f.service.captureModelSession();
+  const readStarted = Promise.withResolvers();
+  const releaseRead = Promise.withResolvers();
+  t.after(() => releaseRead.resolve());
+  const read = f.credentials.readRecord.bind(f.credentials);
+  let holdFirst = true;
+  f.credentials.readRecord = async key => {
+    const record = await read(key);
+    if (key === GRANT_KEY && holdFirst) {
+      holdFirst = false;
+      readStarted.resolve();
+      await releaseRead.promise;
+    }
+    return record;
+  };
+  const tokenRead = f.service.getAccessToken();
+  await readStarted.promise;
+  const id = f.grant.sessionInstanceId;
+  const complete = {
+    ...f.grant, accessToken: 'rotated-access', refreshToken: 'rotated-refresh',
+    accessExpiresAt: new Date(Date.parse(f.grant.accessExpiresAt) + 100_000).toISOString(),
+    refreshOperation: { version: 1, state: 'complete', id, base: refreshBaseId(f.grant, id) },
+  };
+  await f.store.write(complete);
+  assert.equal(await session.withDispatchAccessToken(token => token), complete.accessToken);
+  releaseRead.resolve();
+  assert.equal(await tokenRead, complete.accessToken);
+  assert.equal(f.service.getView().accessExpiresAt, complete.accessExpiresAt);
   assert.equal(f.oidc.counts.refresh, 0);
 });
 

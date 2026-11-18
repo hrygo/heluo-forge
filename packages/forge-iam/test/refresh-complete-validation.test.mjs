@@ -120,6 +120,26 @@ test('claim loser accepts valid completion bound to the entire previous-marker r
   assert.equal(network.posts(), 0);
 });
 
+test('model preflight accepts a previously committed rotation inside the new token skew', async (t) => {
+  const credentials = new MemoryCredentials();
+  const start = now();
+  let clock = start;
+  const initial = { ...initialGrant(), accessExpiresAt: new Date(start + 100_000).toISOString() };
+  credentials.records.set(KEY, { kind: 'grant', payload: initial });
+  const network = fetchDouble();
+  const service = createIamService(config, { credentials, fetch: network.fetch, now: () => clock, monotonic: () => clock - start });
+  t.after(() => service.dispose());
+  assert.equal((await service.hydrate()).state, 'ready');
+  const handle = service.captureModelSession();
+  clock += 100_001;
+  assert.equal(service.notifyView().state, 'expired');
+  const committed = completeFrom(initial, { accessExpiresAt: new Date(clock + 30_000).toISOString() });
+  credentials.records.set(KEY, { kind: 'grant', payload: committed });
+  await handle.renew();
+  assert.equal(service.getView().accessExpiresAt, committed.accessExpiresAt);
+  assert.equal(network.posts(), 0, 'the completed renewal must not trigger a second token exchange');
+});
+
 test('claim loser rejects pending whose base omits the prior complete marker', async (t) => {
   const credentials = new MemoryCredentials();
   const initial = initialGrant();
