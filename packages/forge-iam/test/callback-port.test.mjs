@@ -12,6 +12,9 @@ import {
   createCallbackManager, createCallbackRequestHandler, isLoopbackAddress, loopbackOrigin,
   rejectNonLoopbackPeer, startCallbackListener,
 } from '../src/callback-listener.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

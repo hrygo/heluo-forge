@@ -331,9 +331,16 @@ export function createTokenResolver(env) {
     });
   }
 
+  function scheduledRenewalAt(grant, targetStore, targetCredentials) {
+    if (renewal && renewal.targetStore === targetStore && renewal.targetCredentials === targetCredentials
+      && renewal.auth === getAuthEpoch() && renewal.session === getSessionEpoch()
+      && isDeepStrictEqual(renewal.grant, grant)) return renewal.runAt;
+    return null;
+  }
+
   // The Host owns the timer; the callback enters the existing single-flight
   // resolver and therefore uses the same provider and rotation checks.
-  function scheduleRenewal({ retry = false, immediate = false } = {}) {
+  function scheduleRenewal({ retry = false, resumeAt = null } = {}) {
     const grant = ctx.lastGrant;
     const currentTime = now();
     // Observe the clock on every pass: the first activity after a suspension is
@@ -373,7 +380,7 @@ export function createTokenResolver(env) {
     const lead = renewalLeadMillis(grant, expiry, currentTime, config.refreshSkewSeconds);
     let delay = retry || recovering
       ? Math.min(AUTO_REFRESH_BACKOFF_MS, Math.max(1000, Math.floor(remaining / 2))) : Math.max(0, remaining - lead);
-    if (immediate) delay = 0;
+    if (resumeAt !== null) delay = Math.min(delay, Math.max(0, resumeAt - currentTime));
     const sameBackoff = renewal?.backoff && renewal.auth === auth && renewal.session === session
       && renewal.targetStore === targetStore && renewal.targetCredentials === targetCredentials
       && renewal.refreshToken === grant.refreshToken
@@ -605,7 +612,7 @@ export function createTokenResolver(env) {
       const unchanged = provider.ensure() === targetStore && provider.storeCredentials === targetCredentials;
       if (unchanged && cause?.code === 'CRED_LOCK_TIMEOUT') {
         const scheduled = deferRead({ targetStore, targetCredentials, authEpoch: auth, grant: grantAtStart,
-          renewGrant: expected?.renewalDue === true ? grantAtStart : null });
+          renewalDue: expected?.renewalDue === true });
         const code = 'IAM_CREDENTIALS_UNAVAILABLE';
         if (scheduled) trace('refresh-retry', { reason: 'read-lock-timeout', code, ...renewalErrorFields(cause) });
         else reportFailure(code, 'store-read-failed', cause);
@@ -1290,6 +1297,7 @@ export function createTokenResolver(env) {
     getAccessToken,
     captureModelSession,
     scheduleRenewal,
+    scheduledRenewalAt,
     cancelRenewal,
     ownedPendingFlight,
     observePendingRotation,

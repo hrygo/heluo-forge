@@ -182,6 +182,7 @@ export function createIamService(rawConfig, options = {}) {
     gateway,
     token,
     now,
+    monotonic,
     configured,
     logRenewal,
     hasSignInAttempt: () => Boolean(signInPromise),

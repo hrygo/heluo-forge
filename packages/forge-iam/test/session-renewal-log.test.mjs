@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { apply } from '../src/index.mjs';
+import { OidcError } from '../src/oidc.mjs';
+import { createSessionRenewalLogger, renewalErrorFields } from '../src/session-renewal-log.mjs';
 import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 
@@ -37,19 +39,104 @@ async function until(read, accept, message) {
   assert.fail(message);
 }
 
+const parseRows = (content) => content.split('\n').slice(0, -1).map(JSON.parse);
+async function readLog(path) {
+  return readFile(path, 'utf8').catch((cause) => {
+    if (cause.code === 'ENOENT') return '';
+    throw cause;
+  });
+}
+
+async function isolatedLog(t) {
+  const home = await mkdtemp(join(tmpdir(), 'forge-iam-log-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const directory = join(home, 'logs');
+  const name = 'forge-iam-session-renewal.jsonl';
+  const path = join(directory, name);
+  const waitFor = (renewalId) => until(() => readLog(path), (content) => (
+    parseRows(content).some((row) => row.renewalId === renewalId)
+  ), `expected log entry ${renewalId}`);
+  return { home, directory, name, path, waitFor };
+}
+
+test('the shared log rotates to one bounded archive and preserves complete recent lines', async (t) => {
+  const { home, directory, name, path, waitFor } = await isolatedLog(t);
+  const maxFileBytes = 600;
+  const first = createSessionRenewalLogger({ home, maxFileBytes });
+  const second = createSessionRenewalLogger({ home, maxFileBytes });
+  for (let renewalId = 1; renewalId <= 24; renewalId++) {
+    const log = renewalId % 2 ? first : second;
+    log('renewal-fired', { renewalId });
+  }
+  const current = await waitFor(24);
+  const previous = await readLog(`${path}.1`);
+  for (const content of [current, previous]) {
+    assert.ok(content.endsWith('\n'));
+    assert.ok(Buffer.byteLength(content) <= maxFileBytes);
+  }
+  const retained = [...parseRows(previous), ...parseRows(current)].map((row) => row.renewalId);
+  assert.deepEqual(retained, Array.from({ length: retained.length }, (_, i) => 25 - retained.length + i));
+  assert.deepEqual((await readdir(directory)).sort(), [name, `${name}.1`]);
+});
+
+test('an oversized legacy log cannot become an oversized archive', async (t) => {
+  const { home, directory, name, path, waitFor } = await isolatedLog(t);
+  await mkdir(directory);
+  await writeFile(path, '{"event":"legacy"}\n'.repeat(1000));
+  const log = createSessionRenewalLogger({ home, maxFileBytes: 512 });
+  log('renewal-fired', { renewalId: 1 });
+  const current = await waitFor(1);
+  assert.ok(Buffer.byteLength(current) <= 512);
+  assert.deepEqual(parseRows(current).map((row) => row.renewalId), [1]);
+  assert.deepEqual(await readdir(directory), [name]);
+});
+
+test('Hosts sharing a path drop new events while the bounded write queue is full and recover after draining', async (t) => {
+  const { home, path, waitFor } = await isolatedLog(t);
+  let writing = false;
+  const release = Promise.withResolvers();
+  const warnings = [];
+  const options = {
+    home, maxPending: 3,
+    append: async (...args) => {
+      writing = true;
+      await release.promise;
+      await appendFile(...args);
+    },
+    async warn() {
+      warnings.push('log warning');
+      throw new Error('synthetic warning sink failure');
+    },
+  };
+  const first = createSessionRenewalLogger(options);
+  const second = createSessionRenewalLogger(options);
+  try {
+    first('renewal-fired', { renewalId: 1 });
+    await until(async () => writing || await readLog(path), Boolean, 'expected first write to start');
+    assert.equal(writing, true);
+    for (let renewalId = 2; renewalId <= 20; renewalId++) {
+      second('renewal-fired', { renewalId });
+    }
+  } finally {
+    release.resolve();
+  }
+  const content = await waitFor(3);
+  assert.deepEqual(parseRows(content).map((row) => row.renewalId), [1, 2, 3]);
+  assert.deepEqual(warnings, ['log warning']);
+  // The empty slot is available once an earlier append settles.
+  second('renewal-fired', { renewalId: 21 });
+  const final = await waitFor(21);
+  assert.deepEqual(parseRows(final).map((row) => row.renewalId), [1, 2, 3, 21]);
+});
+
 async function startHost(t, { credentials = new MemoryCredentials(), fetchJwks, fetchToken, failLog = false } = {}) {
   const home = await mkdtemp(join(tmpdir(), 'forge-iam-renewal-'));
   if (failLog) await writeFile(join(home, 'logs'), 'not a directory');
   const previousHome = process.env.DSH_HOME;
   process.env.DSH_HOME = home;
   const path = join(home, 'logs', 'forge-iam-session-renewal.jsonl');
-  const events = (predicate) => until(async () => {
-    const content = await readFile(path, 'utf8').catch((cause) => {
-      if (cause.code === 'ENOENT') return '';
-      throw cause;
-    });
-    return content.split('\n').slice(0, -1).map(JSON.parse);
-  }, (rows) => rows.some(predicate), 'expected renewal diagnostic was not written');
+  const events = (predicate) => until(async () => parseRows(await readLog(path)),
+    (rows) => rows.some(predicate), 'expected renewal diagnostic was not written');
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: start });
   let posts = 0;
   t.mock.method(globalThis, 'fetch', async (url, init) => {
@@ -112,6 +199,59 @@ test('a token endpoint timeout is distinct from an IAM rejection and keeps pendi
   assert.equal((await host.credentials.readRecord(GRANT_KEY)).payload.refreshOperation.state, 'pending');
   assert.equal(host.posts(), 1);
   assert.doesNotMatch(JSON.stringify(rows), /synthetic-private-timeout/);
+});
+
+test('a non-2xx token response whose body times out retains the HTTP status and pending claim', async (t) => {
+  const controller = new AbortController();
+  const host = await startHost(t, { fetchToken: ({ signal }) => {
+    const body = new ReadableStream({
+      start(stream) {
+        signal.addEventListener('abort', () => stream.error(signal.reason), { once: true });
+      },
+    });
+    void setImmediate().then(() => controller.abort(new Error('synthetic-private-response-timeout')));
+    return new Response(body, { status: 429 });
+  } });
+  const realTimeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, 'timeout', (ms) => ms === 5000 ? controller.signal : realTimeout(ms));
+  t.mock.timers.tick(900);
+  const rows = await host.events((row) => row.event === 'refresh-failed');
+  const failure = rows.find((row) => row.event === 'refresh-failed');
+  assert.equal(failure.stage, 'token-endpoint');
+  assert.equal(failure.causeCode, 'IAM_HTTP_ERROR');
+  assert.equal(failure.httpStatus, 429);
+  assert.equal(failure.timedOut, true);
+  assert.equal(failure.oauthError, undefined);
+  assert.equal(failure.requestUnsent, undefined);
+  assert.equal((await host.credentials.readRecord(GRANT_KEY)).payload.refreshOperation.state, 'pending');
+  assert.equal(host.posts(), 1);
+  assert.doesNotMatch(JSON.stringify(rows), /synthetic-private-response-timeout/);
+});
+
+test('an invalid ID token yields its exact validation code without logging the token or permitting another POST', async (t) => {
+  const malformed = 'synthetic-private-id-token';
+  const host = await startHost(t, { fetchToken: () => Response.json({ ...rotated, id_token: malformed }) });
+  t.mock.timers.tick(900);
+  const rows = await host.events((row) => row.event === 'refresh-failed');
+  const failure = rows.find((row) => row.event === 'refresh-failed');
+  assert.equal(failure.stage, 'validate-response');
+  assert.equal(failure.causeCode, 'IAM_ID_TOKEN_INVALID');
+  assert.equal(failure.code, 'IAM_REAUTH_REQUIRED');
+  assert.equal((await host.credentials.readRecord(GRANT_KEY)).payload.refreshOperation.state, 'pending');
+  assert.equal(host.posts(), 1);
+  assert.doesNotMatch(JSON.stringify(rows), /synthetic-private-id-token/);
+});
+
+test('only exact known ID token validation codes pass the diagnostic allowlist', () => {
+  for (const code of [
+    'IAM_ID_TOKEN_INVALID', 'IAM_ID_TOKEN_SIGNATURE', 'IAM_ID_TOKEN_ISSUER', 'IAM_ID_TOKEN_AUDIENCE',
+    'IAM_ID_TOKEN_NONCE', 'IAM_ID_TOKEN_EXPIRED',
+  ]) {
+    const cause = new OidcError(code, 'synthetic-private-detail');
+    assert.deepEqual(renewalErrorFields(cause), { causeCode: code });
+  }
+  const unknown = new OidcError('IAM_ID_TOKEN_SYNTHETIC_UNKNOWN', 'synthetic-private-detail');
+  assert.deepEqual(renewalErrorFields(unknown), { causeCode: 'IAM_INTERNAL' });
 });
 
 test('a failed local log write preserves refresh and gives a fixed warning', async (t) => {

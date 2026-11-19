@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { checkExclusive } from '../src/exclusive.mjs';
 import { apply, createIamService } from '../src/index.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const configured = {
   discoveryUrl: 'https://iam.corp.example/.well-known/openid-configuration',

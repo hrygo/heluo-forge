@@ -24,6 +24,8 @@ export function createServiceGateway(env) {
     configured, getAuthEpoch, isSigningOut, resolveToken, bumpGeneration, getManagedModelRuntime, logGatewayStage,
   } = env;
   let cancelConfirmation = null;
+  let summaryRead = null;
+  let sessionSummaryRead = null;
 
   async function read(targetGatewayStore, targetStore, isCurrent) {
     if (!isCurrent()) return null;
@@ -61,7 +63,7 @@ export function createServiceGateway(env) {
     };
   }
 
-  async function load({ force = false } = {}) {
+  async function load({ force = false, sessionRefresh = false } = {}) {
     if (ctx.disposed) return null;
     // Cache hits and singleflight reuse must belong to the live provider too.
     const targetStore = provider.ensure();
@@ -69,34 +71,51 @@ export function createServiceGateway(env) {
     // Panel polling shares the session's storage backoff. Its recovery read
     // reloads this summary against the newly adopted grant.
     if (!force && ctx.state === 'unreachable' && ctx.error === 'IAM_CREDENTIALS_UNAVAILABLE') return provider.gatewaySummary;
+    if (!force && sessionSummaryRead && provider.gatewayLoading === sessionSummaryRead) return provider.gatewaySummary;
     if (!force && provider.gatewayLoadedAt > 0 && now() - provider.gatewayLoadedAt < GATEWAY_RELOAD_MS) return provider.gatewaySummary;
     if (provider.gatewayLoading) return provider.gatewayLoading;
     const targetGatewayStore = provider.gatewayStore;
     const targetCredentials = provider.storeCredentials;
     const epoch = provider.gatewayEpoch;
     const isCurrent = () => {
-      if (ctx.disposed || epoch !== provider.gatewayEpoch) return false;
+      if (ctx.disposed || epoch !== provider.gatewayEpoch || provider.gatewayLoading !== request) return false;
       const current = provider.ensure();
-      return !ctx.disposed && epoch === provider.gatewayEpoch && current === targetStore
+      return !ctx.disposed && epoch === provider.gatewayEpoch && provider.gatewayLoading === request && current === targetStore
         && provider.gatewayStore === targetGatewayStore && provider.storeCredentials === targetCredentials;
     };
-    const request = read(targetGatewayStore, targetStore, isCurrent)
+    const request = Promise.resolve().then(() => read(targetGatewayStore, targetStore, isCurrent))
       .then((summary) => {
         if (!isCurrent()) return null;
         const changed = !isDeepStrictEqual(provider.gatewaySummary, summary);
         provider.gatewaySummary = summary;
         provider.gatewayLoadedAt = now();
         // Own forced reads do not feed back into another observation.
-        if (changed && !selection.inFlight) selection.schedule();
+        if (changed && sessionRefresh) ctx.notify();
+        else if (changed && !selection.inFlight) selection.schedule();
         return summary;
       })
       .catch(() => {
         if (isCurrent()) { provider.gatewaySummary = null; provider.gatewayLoadedAt = 0; }
         return null;
       })
-      .finally(() => { if (provider.gatewayLoading === request) provider.gatewayLoading = null; });
+      .finally(() => {
+        if (provider.gatewayLoading === request) provider.gatewayLoading = null;
+        if (summaryRead === request) summaryRead = null;
+        if (sessionSummaryRead === request) sessionSummaryRead = null;
+      });
     provider.gatewayLoading = request;
+    summaryRead = request;
+    if (sessionRefresh) sessionSummaryRead = request;
     return request;
+  }
+
+  function refreshSessionSummary() {
+    // The restored session can renew while this independent display read runs.
+    // Retire older summary reads and let any credential mutation confirm itself.
+    provider.gatewaySummary = null;
+    provider.gatewayLoadedAt = 0;
+    if (provider.gatewayLoading === summaryRead) provider.gatewayLoading = null;
+    return Promise.resolve().then(() => load({ force: true, sessionRefresh: true })).catch(() => null);
   }
 
   function invalidateGatewayReads({ clearSummary = false } = {}) {
@@ -448,6 +467,6 @@ export function createServiceGateway(env) {
   }
 
   return {
-    read, load, refreshModels, resolveConnection, saveCredential, clearCredential,
+    read, load, refreshSessionSummary, refreshModels, resolveConnection, saveCredential, clearCredential,
   };
 }

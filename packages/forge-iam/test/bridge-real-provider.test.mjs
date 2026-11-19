@@ -12,6 +12,9 @@ import { BRIDGE_REF } from '../src/bridge.mjs';
 import { apply } from '../src/index.mjs';
 import { createIamService as createService } from '../src/service.mjs';
 import { refreshBaseId } from '../src/service-helpers.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const bin = fileURLToPath(new URL('../bin/heluo-forge.mjs', import.meta.url));
 const config = {

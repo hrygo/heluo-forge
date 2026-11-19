@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { apply } from '../src/index.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));

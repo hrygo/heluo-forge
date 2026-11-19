@@ -5,6 +5,9 @@ import { apply } from '../src/index.mjs';
 import { createGrantStore, GRANT_KEY } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { startMockOidc } from './support/mock-oidc.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const issuer = 'https://iam.corp.example';
 const config = {

@@ -7,6 +7,9 @@ import { createIamService } from '../src/service.mjs';
 import { createGrantStore, GRANT_KEY, GATEWAY_REF } from '../src/store.mjs';
 import { MemoryCredentials } from './support/memory-credentials.mjs';
 import { seedGateway } from './support/atomic-gateway.mjs';
+import { isolateHostDiagnostics } from './support/isolated-host-diagnostics.mjs';
+
+isolateHostDiagnostics();
 
 const clock = Date.parse('2030-01-01T00:00:00.000Z');
 const sentinel = 'SYNTHETIC_PRIVATE_MODEL_CONTEXT';

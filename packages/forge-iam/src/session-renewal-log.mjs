@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import manifest from '../package.json' with { type: 'json' };
 import { ERROR_STATUS } from './error-contract.mjs';
 import { OAUTH_ERROR_CODES, OidcError } from './oidc.mjs';
 import { STATES } from './state.mjs';
+
+const MAX_LOG_FILE_BYTES = 1024 * 1024;
+const MAX_PENDING_WRITES = 128;
+const pendingByPath = new Map();
 
 const events = new Set([
   'host-start', 'host-stop', 'binding-changed', 'session-state', 'store-sync',
@@ -20,6 +24,8 @@ const codes = [
   'IAM_DISCOVERY_INVALID', 'IAM_DISCOVERY_ISSUER_MISMATCH', 'IAM_INVALID_RESPONSE', 'IAM_JWKS_INVALID',
   'IAM_JWKS_KEY_NOT_FOUND', 'IAM_TOKEN_RESPONSE_INVALID', 'IAM_ID_TOKEN_ALGORITHM', 'IAM_ID_TOKEN_SUBJECT',
   'IAM_ID_TOKEN_AT_HASH', 'IAM_ID_TOKEN_ISSUED_AT', 'IAM_ID_TOKEN_NOT_BEFORE',
+  'IAM_ID_TOKEN_INVALID', 'IAM_ID_TOKEN_SIGNATURE', 'IAM_ID_TOKEN_ISSUER', 'IAM_ID_TOKEN_AUDIENCE',
+  'IAM_ID_TOKEN_NONCE', 'IAM_ID_TOKEN_EXPIRED',
   'exclusive-violation', 'exclusive-check-unavailable',
 ];
 const reasons = [
@@ -64,16 +70,37 @@ export function renewalErrorFields(cause) {
   }
 }
 
-export function createSessionRenewalLogger({ home = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), warn = () => {} } = {}) {
+async function drainWrites(path, pending) {
+  while (pending.length) {
+    await pending[0]();
+    pending.shift();
+  }
+  pendingByPath.delete(path);
+}
+
+async function rotateIfNeeded(path, bytes, maxFileBytes) {
+  const current = await lstat(path).catch((cause) => {
+    if (cause.code !== 'ENOENT') throw cause;
+  });
+  if (!current) return;
+  if (!current.isFile()) throw new Error('invalid renewal log file type');
+  // Logs created before retention was enabled may already exceed the limit.
+  if (current.size > maxFileBytes) await unlink(path);
+  else if (current.size + bytes > maxFileBytes) await rename(path, `${path}.1`);
+}
+
+export function createSessionRenewalLogger({
+  home = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), warn = () => {},
+  maxFileBytes = MAX_LOG_FILE_BYTES, maxPending = MAX_PENDING_WRITES, append = appendFile,
+} = {}) {
   const directory = join(resolve(home), 'logs');
   const path = join(directory, 'forge-iam-session-renewal.jsonl');
   const hostId = randomUUID();
-  let writes = Promise.resolve();
   let warned = false;
   function warnOnce() {
     if (warned) return;
     warned = true;
-    try { warn(); } catch { /* diagnostics cannot change the session */ }
+    try { void Promise.resolve(warn()).catch(() => {}); } catch { /* diagnostics cannot change the session */ }
   }
 
   return (event, fields = {}) => {
@@ -92,12 +119,27 @@ export function createSessionRenewalLogger({ home = process.env.DSH_HOME?.trim()
       const { httpStatus } = fields;
       if (Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599) row.httpStatus = httpStatus;
       const line = `${JSON.stringify(row)}\n`;
-      // Keep events ordered within this Host and keep log I/O out of renewal and storage locks.
-      writes = writes.then(async () => {
-        await mkdir(directory, { recursive: true, mode: 0o700 });
-        await appendFile(path, line, { encoding: 'utf8', mode: 0o600 });
-        warned = false;
-      }).catch(warnOnce);
+      const bytes = Buffer.byteLength(line);
+      const pending = pendingByPath.get(path) ?? [];
+      if (pending.length >= maxPending) return warnOnce();
+      if (bytes > maxFileBytes) return warnOnce();
+      pending.push(async () => {
+        try {
+          await mkdir(directory, { recursive: true, mode: 0o700 });
+          await rotateIfNeeded(path, bytes, maxFileBytes);
+          await append(path, line, { encoding: 'utf8', mode: 0o600 });
+          warned = false;
+        } catch {
+          // Filesystem and rotation failures only affect diagnostics.
+          warnOnce();
+        }
+      });
+      // The per-path queue includes the in-flight write. Renewal and Host
+      // shutdown do not await its drain.
+      if (pending.length === 1) {
+        pendingByPath.set(path, pending);
+        void drainWrites(path, pending);
+      }
     } catch {
       warnOnce();
     }

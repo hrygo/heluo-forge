@@ -274,17 +274,20 @@ export async function fetchJson(url, { fetchImpl = globalThis.fetch, timeoutMs =
   }
   if (!response.ok) {
     let oauthError;
+    let timedOut = false;
     try {
       const payload = await response.json();
       const candidate = payload?.error;
       // Copy only exact standard codes, never provider text that may echo credentials.
       if (OAUTH_ERROR_CODES.includes(candidate)) oauthError = candidate;
     } catch {
-      // Non-JSON error bodies are intentionally not surfaced.
+      // Record a body timeout without including the contents of the error body.
+      timedOut = timeout.aborted;
     }
     throw new OidcError('IAM_HTTP_ERROR', `IAM endpoint returned ${response.status}`, {
       status: response.status,
       ...(oauthError ? { oauthError } : {}),
+      ...(timedOut ? { timedOut: true } : {}),
     });
   }
   if (response.status === 204) return null;
