@@ -197,8 +197,7 @@ test('AC-11 未暂存修改与环境（含权限位）改变 contentId，而 com
   assert.notEqual(dirty.contentId, clean.contentId, '未暂存修改必须进版本');
 
   // 内容相同但权限位不同：git 记录的是 100644/100755，权限变化同样是版本变化。
-  if (process.platform === 'win32') await git(dir, 'update-index', '--chmod=+x', 'app.mjs');
-  else chmodSync(join(dir, 'app.mjs'), 0o755);
+  chmodSync(join(dir, 'app.mjs'), 0o755);
   const executable = await reader.read(dir);
   assert.equal(executable.status, 'succeeded', JSON.stringify(executable));
   assert.notEqual(executable.contentId, dirty.contentId, '模式变化必须进版本');
@@ -261,15 +260,9 @@ test('AC-11 分离 HEAD：branch 为 null 但仍是有效版本', { skip: GIT_AV
   assert.equal(result.commit, stdout.trim());
 });
 
-test('AC-11 仓库内软链进版本，越界软链整份 unknown/failed 而不是"少一项也算版本"', { skip: GIT_AVAILABLE ? false : 'git 不可用' }, async (t) => {
+test('AC-11 仓库内软链进版本，越界软链整份 unknown/failed 而不是"少一项也算版本"', { skip: GIT_AVAILABLE ? false : 'git 不可用' }, async () => {
   const dir = await initRepo();
-  try {
-    symlinkSync('README.md', join(dir, 'inside-link'));
-  } catch (error) {
-    if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
-    t.skip('Windows 当前账号没有创建文件符号链接的权限；该实机边界未验证');
-    return;
-  }
+  symlinkSync('README.md', join(dir, 'inside-link'));
   const reader = createGiteeSnapshotReader({ runner: realRunner() });
   const inside = await reader.read(dir);
   assert.equal(inside.status, 'succeeded', JSON.stringify(inside));

@@ -154,6 +154,8 @@ export function buildBundle({ root = repo, entry = DEFAULT_ENTRY, destination, v
       errors.push(...auditTarball({ label: name, manifest: { ...member, dependencies: {}, bundledDependencies: [] }, packed: packed.filter((entry) => entry.path.startsWith(prefix)).map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) })) }));
     }
     if (errors.length > 0) fail(errors.join('; '));
+    const tarballs = readdirSync(packedDir).filter((name) => name.endsWith('.tgz'));
+    if (tarballs.length !== 1) fail('npm did not create exactly one tarball');
     if (requireNativeResources && nativeRecords.length > 0) {
       // npm may exclude files after preflight. Judge the archive's actual bytes
       // against the staged record before creating anything in the destination.

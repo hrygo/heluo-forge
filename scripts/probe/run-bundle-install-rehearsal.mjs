@@ -215,7 +215,7 @@ async function activateInstalled(label, host) {
             && typeof entry.invocation?.modelInvocable === 'boolean'
             && typeof entry.invocation?.userInvocable === 'boolean')
           && candidate.source === 'bundled'
-          && candidate.rank === -100
+          && candidate.rank === 600
           && candidate.provider === 'enterprise-clauses'
           && candidate.locator?.clause === 'issue-delivery'
           && typeof candidate.path === 'string'

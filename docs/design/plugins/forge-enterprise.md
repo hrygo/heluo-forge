@@ -6,7 +6,7 @@
 |---|---|
 | 文档编号 | CORP-DSH-DESIGN-004 |
 | 文档名称 | 企业账号与模型组合包详细设计 |
-| 版本 | V1.10.0 |
+| 版本 | V1.10.1 |
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
@@ -230,7 +230,7 @@ SDD 从未占插件行、不补空 `apply`，并已于 2026-11-03 全量退役�
 
 | 项 | 值 / 行为 |
 |---|---|
-| 候选字段 | `name: enterprise-issue-delivery`、`description`、`whenToUse`、`invocation { modelInvocable:false, userInvocable:true }`、`source: 'bundled'`、`rank: -100`（正式流程优先于原生个人/项目候选；本仓库不 import 宿主包）、`provider: 'enterprise-clauses'`、`locator: { clause: 'issue-delivery' }` |
+| 候选字段 | `name: enterprise-issue-delivery`、`description`、`whenToUse`、`invocation { modelInvocable:false, userInvocable:true }`、`source: 'bundled'`、`rank: 600`（沿用宿主随包技能优先级；本仓库不 import 宿主包）、`provider: 'enterprise-clauses'`、`locator: { clause: 'issue-delivery' }` |
 | 资源定位 | `resourceBase: { kind: 'directory', path: <包内>/skills/issue-delivery }`（精确到正文所在目录，`references/*.md` 才解析得对）与 `path: <包内>/skills/issue-delivery/SKILL.md`；`list()` 结果**不含** `content`，正文只在 `get()` 时读一次文件 |
 | 取正文 | `get()` 同时接受 skill 名（`enterprise-issue-delivery`）、条款 id（`issue-delivery`）与宿主候选对象（`locator.clause` 优先、其次 `name`）；未命中返回 `undefined`，由宿主报「skill not found」，不伪造正文 |
 | 幂等装配 | 模块级 `WeakMap<ctx, Map<prefix, teardown>>`：同一 `ctx` + 同一 `prefix` 重复 `apply` 直接返回已有 teardown、**不再** `registerProvider`（宿主对重名 provider 抛 `a skill provider named "…" is already registered`）；不同 prefix 允许并存；teardown 先删表再 dispose，重复 dispose 不抛 |
