@@ -284,7 +284,9 @@ const EMPLOYEE_GUIDE = `# 企业 DSH 插件安装说明
 - 麒麟 / Linux：终端执行 sh installer/install-linux.sh。
 
 脚本会依次完成：检查 Node.js → 检查/安装官方 DSH → 创建或选择 profile →
-校验插件摘要 → 只执行一次 dsh plugin add → 读回配置确认插件已登记。
+校验插件摘要 → 检查 profile 内是否已有其它版本的企业插件（有旧版本时先执行
+dsh plugin remove 卸载旧版本）→ 执行 dsh plugin add → 读回配置确认插件已登记。
+已装版本与本次交付相同时，脚本不再写入，只读回配置核对。
 看到 mounted=unknown 是正常的：运行期挂载需要在下一步确认。
 
 启动器传入的摘要是**同一交付包内 tgz 的自算值**（自证）：它只能发现制品在拷贝中损坏，
@@ -310,17 +312,24 @@ Desktop 的 desktop profile 由应用独占，本启动器不会写入它（只�
 3. 重新打开 Desktop，在「设置 → 插件」确认已加载——desktop profile 的挂载只能在应用内
    确认；命令行 --profile desktop --dump-config 可能被拒绝，不能作为核验依据。
 
-## 回滚
+## 换版本与回滚
 
-dsh plugin --profile <desktop|web> remove @heluo/forge-enterprise
+升级到新交付：用新目录里的启动器重新运行；脚本检测到已装版本与本次交付不同，
+会先卸载旧版本再安装。
 
-卸载插件不会删除对话、工作区或个人凭据。
+回到旧版本：用旧交付包里的启动器重新运行，走同一条路。
+
+只卸载不重装：dsh plugin --profile <desktop|web> remove @heluo/forge-enterprise
+
+卸载插件不会删除对话、工作区或个人凭据。卸载失败时脚本不会继续安装，profile
+保持原样；按提示完全退出 DSH（Desktop 用户含托盘进程）后重跑即可。
 
 ## 常见问题
 
 - Windows 双击后窗口一闪而过：右键该文件 → 属性 → 勾选“解除锁定”，或在命令提示符里手动运行。日志位于 %TEMP%\\heluo-enterprise-install.log。
 - Windows 提示 Node.js was not found：先安装 Node.js LTS，再重跑本文件。
 - 提示 dsh 安装失败：确认 npm 可用且能访问企业允许的 registry；也可由管理员先手工安装官方 DSH，再重跑本文件。
+- 提示卸载旧版本失败：确认没有 dsh 进程占用该 profile（Desktop 用户需完全退出应用含托盘进程），再重跑本文件；本次不会执行安装。
 - Windows 上提示 dsh 安装失败但 npm 正常：npm 全局安装的 dsh.cmd/.bat 会被启动脚本解析成 node 入口直接运行，不需要手工改 PATH；仍失败时看日志里的 dsh 输出。
 - 提示 pnpm 安装失败：确认 npm 能访问企业允许的 registry；也可由管理员预先执行 npm install -g pnpm 后重跑。
 - 设置页没有「企业研发 / 企业账号 / Gitee / DevOps」：多半装到了别的 profile。确认安装脚本输出的 profile 与随后启动的 DSH profile 一致。

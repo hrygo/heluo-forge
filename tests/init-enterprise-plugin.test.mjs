@@ -99,11 +99,15 @@ function writePnpm(root) {
   return dir;
 }
 
-/** 注入的 exec：install 时真实改写 profile（模拟宿主 reconcile），dump-config 返回合成树。 */
+/**
+ * 注入的 exec：install/remove 时真实改写 profile（模拟宿主 reconcile），dump-config 返回合成树。
+ * `removeCode` 非 0 时 remove 失败且不改写 profile，用于验证卸载失败不会继续安装。
+ */
 function fakeExec({
   profileDir,
   version = '0.1.0',
   installCode = 0,
+  removeCode = 0,
   dumpConfig = { includeEntry: true },
   dumpConfigCode = 0,
   dumpConfigStderr = 'profile "desktop" is managed exclusively by the Electron application',
@@ -112,15 +116,27 @@ function fakeExec({
   const exec = async (bin, args, options) => {
     calls.push({ bin, args, options });
     if (args[0] === 'plugin') {
-      if (installCode !== 0) return { code: installCode, stdout: '', stderr: 'pnpm failed' };
+      const action = args[3];
+      const installed = join(profileDir, 'node_modules', ...ENTRY_PACKAGE.split('/'));
       const manifestPath = join(profileDir, 'package.json');
+      if (action === 'remove') {
+        if (removeCode !== 0) return { code: removeCode, stdout: '', stderr: 'remove failed' };
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+        delete (manifest.dependencies ?? {})[ENTRY_PACKAGE];
+        manifest.dsh = manifest.dsh ?? {};
+        manifest.dsh.profile = manifest.dsh.profile ?? {};
+        manifest.dsh.profile.bundles = (manifest.dsh.profile.bundles ?? []).filter((name) => name !== ENTRY_PACKAGE);
+        writeFileSync(manifestPath, JSON.stringify(manifest));
+        rmSync(installed, { recursive: true, force: true });
+        return { code: 0, stdout: 'removed', stderr: '' };
+      }
+      if (installCode !== 0) return { code: installCode, stdout: '', stderr: 'pnpm failed' };
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
       manifest.dependencies = { ...(manifest.dependencies ?? {}), [ENTRY_PACKAGE]: `file:${args[4]}` };
       manifest.dsh = manifest.dsh ?? {};
       manifest.dsh.profile = manifest.dsh.profile ?? {};
       manifest.dsh.profile.bundles = [...new Set([...(manifest.dsh.profile.bundles ?? []), ENTRY_PACKAGE])];
       writeFileSync(manifestPath, JSON.stringify(manifest));
-      const installed = join(profileDir, 'node_modules', ...ENTRY_PACKAGE.split('/'));
       mkdirSync(installed, { recursive: true });
       writeFileSync(join(installed, 'package.json'), JSON.stringify({ name: ENTRY_PACKAGE, version }));
       return { code: 0, stdout: 'added', stderr: '' };
@@ -717,7 +733,11 @@ test('runInit 同版本但安装时刻记录的是另一份制品：拒绝并提
 test('runInit 显式 desktop：宿主拒绝命令行核验时在写入前拒绝', async (t) => {
   const root = tempRoot(t);
   const release = writeRelease(root);
-  const { home, profileDir, manifestPath } = writeProfile(root);
+  const { home, profileDir, manifestPath } = writeProfile(root, {
+    installedVersion: '0.0.9',
+    dependencies: { [ENTRY_PACKAGE]: 'file:/old/forge-enterprise-0.0.9.tgz' },
+    bundles: [ENTRY_PACKAGE],
+  });
   const before = readFileSync(manifestPath, 'utf8');
   const dshPath = writeDsh(root);
   const { exec, calls } = fakeExec({ profileDir, dumpConfigCode: 1 });
@@ -731,44 +751,116 @@ test('runInit 显式 desktop：宿主拒绝命令行核验时在写入前拒绝'
 
   assert.equal(outcome.code, 1);
   assert.equal(outcome.result.error.code, 'DESKTOP_PROFILE_UNSUPPORTED');
-  assert.equal(calls.length, 1, '只做一次探测，不得执行 plugin add');
+  assert.equal(calls.length, 1, '只做一次探测，不得执行 plugin remove/add');
   assert.deepEqual(calls[0].args, ['--profile', 'desktop', '--dump-config']);
-  assert.ok(calls.every((call) => call.args[0] !== 'plugin'), '不可核验时不能留下"已安装却报失败"');
+  assert.ok(calls.every((call) => call.args[0] !== 'plugin'), '不可核验时既不能先装也不能先卸');
   assert.equal(readFileSync(manifestPath, 'utf8'), before);
 });
 
-test('runInit 异版本停止且零写入；dependencies 有包但读不出版本同样停止', async (t) => {
+test('runInit 异版本：先卸载旧版本再安装本次交付', async (t) => {
   const root = tempRoot(t);
   const release = writeRelease(root);
-  const conflict = writeProfile(root, {
+  const { home, profileDir, manifestPath } = writeProfile(root, {
     installedVersion: '0.0.9',
     dependencies: { [ENTRY_PACKAGE]: 'file:/old/forge-enterprise-0.0.9.tgz' },
     bundles: [ENTRY_PACKAGE],
   });
-  const dshPath1 = writeDsh(root);
-  const conflicting = fakeExec({ profileDir: conflict.profileDir });
-  const c1 = await runInit({
-    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath1],
-    env: { DSH_HOME: join(conflict.home, '.dsh') },
-    home: conflict.home,
-    exec: conflicting.exec,
-  });
-  assert.equal(c1.code, 1);
-  assert.equal(c1.result.error.code, 'VERSION_CONFLICT');
-  assert.equal(conflicting.calls.length, 0);
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) };
+  const { exec, calls } = fakeExec({ profileDir });
 
-  const root2 = tempRoot(t);
-  const release2 = writeRelease(root2);
-  const unknown = writeProfile(root2, { dependencies: { [ENTRY_PACKAGE]: 'file:/old/x.tgz' } });
-  const dshPath2 = writeDsh(root2);
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 0, JSON.stringify(outcome.result));
+  assert.equal(outcome.result.status, 'installed');
+  assert.equal(outcome.result.previousVersion, '0.0.9');
+  assert.ok(outcome.lines.some((line) => line.includes('与交付版本 0.1.0 不同，先卸载再安装')));
+  assert.ok(outcome.lines.some((line) => line.includes('旧版本 0.0.9 已移除')));
+  assert.deepEqual(calls.map((call) => call.args[0]), ['--profile', 'plugin', 'plugin', '--profile']);
+  assert.deepEqual(calls[1].args, ['plugin', '--profile', 'desktop', 'remove', ENTRY_PACKAGE], '先卸载旧版本');
+  assert.deepEqual(calls[2].args.slice(0, 4), ['plugin', '--profile', 'desktop', 'add'], '再安装本次交付');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  assert.equal(manifest.dependencies[ENTRY_PACKAGE], `file:${release.tarballPath}`);
+  assert.ok(manifest.dsh.profile.bundles.includes(ENTRY_PACKAGE));
+  assert.ok(existsSync(join(profileDir, '.heluo-enterprise-install.json')), '重装成功后同样留存制品证据');
+});
+
+test('runInit 卸载旧版本失败：停止且不执行安装，profile 原样', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, manifestPath } = writeProfile(root, {
+    installedVersion: '0.0.9',
+    dependencies: { [ENTRY_PACKAGE]: 'file:/old/forge-enterprise-0.0.9.tgz' },
+    bundles: [ENTRY_PACKAGE],
+  });
+  const dshPath = writeDsh(root);
+  const env = { DSH_HOME: join(home, '.dsh'), PATH: writePnpm(root) };
+  const before = readFileSync(manifestPath, 'utf8');
+  const { exec, calls } = fakeExec({ profileDir, removeCode: 7 });
+
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
+    env,
+    home,
+    exec,
+  });
+
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'UNINSTALL_FAILED');
+  assert.match(outcome.result.error.message, /退出码 7/u);
+  assert.match(outcome.result.error.next, /本次未执行安装/u);
+  assert.equal(calls.some((call) => call.args[3] === 'add'), false, '卸载失败后不得继续安装');
+  assert.deepEqual(calls.at(-1).args, ['plugin', '--profile', 'desktop', 'remove', ENTRY_PACKAGE]);
+  assert.equal(readFileSync(manifestPath, 'utf8'), before, '卸载失败不得留下半程改动');
+});
+
+test('runInit --dry-run 对异版本只打印卸载与安装计划，零 exec', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const { home, profileDir, manifestPath } = writeProfile(root, {
+    installedVersion: '0.0.9',
+    dependencies: { [ENTRY_PACKAGE]: 'file:/old/forge-enterprise-0.0.9.tgz' },
+    bundles: [ENTRY_PACKAGE],
+  });
+  const dshPath = writeDsh(root);
+  const before = readFileSync(manifestPath, 'utf8');
+
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath, '--dry-run'],
+    env: { DSH_HOME: join(home, '.dsh') },
+    home,
+    exec: async () => assert.fail('dry-run 不得调用 exec'),
+  });
+
+  assert.equal(outcome.code, 0);
+  assert.equal(outcome.result.status, 'dry-run');
+  assert.equal(outcome.result.previousVersion, '0.0.9');
+  assert.ok(outcome.lines.some((line) => line.includes(`remove ${ENTRY_PACKAGE}`)));
+  assert.ok(outcome.lines.some((line) => line.includes(`add ${release.tarballPath}`)));
+  assert.ok(outcome.lines.some((line) => line.includes('未执行卸载与安装')));
+  assert.equal(readFileSync(manifestPath, 'utf8'), before);
+});
+
+test('runInit dependencies 有包但读不出版本：停止且零写入', async (t) => {
+  const root = tempRoot(t);
+  const release = writeRelease(root);
+  const unknown = writeProfile(root, { dependencies: { [ENTRY_PACKAGE]: 'file:/old/x.tgz' } });
+  const dshPath = writeDsh(root);
   const unknownExec = fakeExec({ profileDir: unknown.profileDir });
-  const c2 = await runInit({
-    argv: ['--release', release2.dir, '--profile', 'desktop', '--dsh', dshPath2],
+  const outcome = await runInit({
+    argv: ['--release', release.dir, '--profile', 'desktop', '--dsh', dshPath],
     env: { DSH_HOME: join(unknown.home, '.dsh') },
     home: unknown.home,
     exec: unknownExec.exec,
   });
-  assert.equal(c2.result.error.code, 'VERSION_UNKNOWN');
+  assert.equal(outcome.code, 1);
+  assert.equal(outcome.result.error.code, 'VERSION_UNKNOWN');
+  assert.match(outcome.result.error.next, /不在安装状态不明时自动卸载/u);
   assert.equal(unknownExec.calls.length, 0);
 });
 

@@ -6,10 +6,12 @@
  * 只依赖 `node:` 内置模块，不 import 仓库内任何模块，也不依赖源码工作区结构。把本文件
  * 与私版交付目录一起拷到员工机即可运行。
  *
- * 写入面只有两处：`dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、shell:false、
- * 固定 argv），以及安装成功后在本 profile 目录下写一份制品证据
+ * 写入面只有三处：`dsh plugin --profile <p> remove <包名>`（仅当 profile 里已装的是另一个
+ * 版本时，先卸载再安装）、`dsh plugin --profile <p> add <tgz 绝对路径>`（execFile、
+ * shell:false、固定 argv），以及安装成功后在本 profile 目录下写一份制品证据
  * （`profiles/<p>/.heluo-enterprise-install.json`：本次 tgz 摘要 + 已安装目录摘要），
- * 供下次同版本重跑判断"已安装的是不是这份交付"。脚本不创建 profile、不启动或重启宿主、
+ * 供下次同版本重跑判断"已安装的是不是这份交付"。同版本重跑保持零写入；版本不同时按交付
+ * 包升级或回退，命令都经官方 CLI 转发 pnpm。脚本不创建 profile、不启动或重启宿主、
  * 不直接编辑 profile 清单、不改 plugin_manager 权限、不删除用户文件。
  *
  * 核验只到脚本能证明的层次：L1 安装命令退出码、L2 `--dump-config` 含本插件且 profile
@@ -74,6 +76,9 @@ export const USAGE = [
   '  --host-version <v> 安装宿主时锁定的版本；缺省 ' + DEFAULT_HOST_VERSION,
   '  --dry-run          只打印将执行的命令与核验点，不写入',
   '  --json             输出同一结论的结构化版本',
+  '',
+  '已装版本与交付版本不同时，脚本先执行 dsh plugin remove 卸载旧版本，再安装本次交付；',
+  '同版本重跑保持零写入。卸载失败则不执行安装。',
 ].join('\n');
 
 /** 可分类的失败：`code` 是稳定判据，`next` 是给员工的下一步。 */
@@ -956,21 +961,14 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
     if (plannedProfileCreate) {
       lines.push(`dry-run：profiles/${profile.name} 不存在，将执行 dsh --profile ${profile.name} --dump-config 创建模板`);
     }
-    if (declared || installed !== null) {
-      if (installed === null) {
-        throw new InitError(
-          'VERSION_UNKNOWN',
-          `init: profile「${profile.name}」记录了 ${ENTRY_PACKAGE}，但读不出已安装版本`,
-          `先运行 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE} 再重跑；脚本不解析 file: spec 猜版本。`,
-        );
-      }
-      if (installed !== release.version) {
-        throw new InitError(
-          'VERSION_CONFLICT',
-          `init: 已安装 ${installed}，交付版本为 ${release.version}`,
-          `不自动升级或降级。确认后执行 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}，再重跑本脚本。`,
-        );
-      }
+    if (declared && installed === null) {
+      throw new InitError(
+        'VERSION_UNKNOWN',
+        `init: profile「${profile.name}」记录了 ${ENTRY_PACKAGE}，但读不出已安装版本`,
+        `先运行 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE} 再重跑；脚本不解析 file: spec 猜版本，也不在安装状态不明时自动卸载。`,
+      );
+    }
+    if (installed !== null && installed === release.version) {
       const identity = artifactIdentityOf(profile, release);
       if (identity.identity === 'conflict') {
         throw new InitError(
@@ -1004,11 +1002,29 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       };
     }
 
+    // 已装版本与交付版本不同：先卸载再安装（升级和回退走同一条路，正文记录当前交付版本）。
+    const replacing = installed !== null && installed !== release.version ? installed : null;
+    const removeCommand = ['plugin', '--profile', profile.name, 'remove', ENTRY_PACKAGE];
+    if (replacing !== null) {
+      lines.push(`状态：已安装 ${replacing}，与交付版本 ${release.version} 不同，先卸载再安装`);
+      lines.push(`卸载：dsh ${removeCommand.join(' ')}`);
+    }
     lines.push(`命令：dsh ${command.join(' ')}`);
     if (options.dryRun) {
-      lines.push('dry-run：未执行安装，未写入 profile');
+      lines.push(replacing === null ? 'dry-run：未执行安装，未写入 profile' : 'dry-run：未执行卸载与安装，未写入 profile');
       lines.push(...verificationPoints(profile));
-      return { code: 0, lines, warnings, result: { ...base, status: 'dry-run', command, verified: null } };
+      return {
+        code: 0,
+        lines,
+        warnings,
+        result: {
+          ...base,
+          status: 'dry-run',
+          command,
+          ...(replacing === null ? {} : { previousVersion: replacing }),
+          verified: null,
+        },
+      };
     }
 
     const cli = resolveExec(exec);
@@ -1016,13 +1032,27 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       await assertDesktopVerifiable({ exec: cli, launch, profile, lines });
     }
     const pnpm = await ensurePnpm({ exec: cli, env, platform: process.platform, lines });
+    if (replacing !== null) {
+      const removal = await runStep(cli, launch, removeCommand, INSTALL_TIMEOUT_MS, 'UNINSTALL_FAILED', { env: pnpm.env });
+      if (removal.code !== 0) {
+        const reason = reasonTail(removal);
+        throw new InitError(
+          'UNINSTALL_FAILED',
+          `init: dsh plugin remove 失败（退出码 ${removal.code}）${reason === '' ? '' : `：${reason}`}`,
+          `旧版本 ${replacing} 仍在或状态未知，本次未执行安装。确认没有 DSH 进程占用 profile「${profile.name}」后重跑本脚本；需要人工处理时先执行 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}。`,
+        );
+      }
+      lines.push(`卸载：dsh 退出码 0（旧版本 ${replacing} 已移除）`);
+    }
     const install = await runStep(cli, launch, command, INSTALL_TIMEOUT_MS, 'INSTALL_FAILED', { env: pnpm.env });
     if (install.code !== 0) {
       const reason = reasonTail(install);
       throw new InitError(
         'INSTALL_FAILED',
         `init: dsh plugin add 失败（退出码 ${install.code}）${reason === '' ? '' : `：${reason}`}`,
-        `检查上面的命令输出与 profile 占用情况后重跑；回滚用 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}。`,
+        replacing === null
+          ? `检查上面的命令输出与 profile 占用情况后重跑；回滚用 dsh plugin --profile ${profile.name} remove ${ENTRY_PACKAGE}。`
+          : `旧版本 ${replacing} 已卸载，本次安装未完成，profile 当前不含 ${ENTRY_PACKAGE}。排除原因后重跑本脚本会重新安装；需要回到旧版本时用旧交付包重跑本脚本。`,
       );
     }
     lines.push('安装：dsh 退出码 0');
@@ -1047,7 +1077,14 @@ export async function runInit({ argv = [], env = process.env, home = homedir(), 
       code: 0,
       lines,
       warnings,
-      result: { ...base, status: 'installed', command, verified: verification.verified, artifact: { ...artifact, identity: identity.identity, detail: identity.detail } },
+      result: {
+        ...base,
+        status: 'installed',
+        command,
+        ...(replacing === null ? {} : { previousVersion: replacing }),
+        verified: verification.verified,
+        artifact: { ...artifact, identity: identity.identity, detail: identity.detail },
+      },
     };
   } catch (error) {
     const known = error instanceof InitError
