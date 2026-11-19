@@ -2,9 +2,13 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const CONTROLLED = /^docs\/(architecture|requirements|plans|contracts|collaboration|engineering)\/[^/]+\.md$/;
+const DESIGN_OR_OPERATIONS = /^docs\/(design|operations)\/.+\.md$/;
+const REGISTER_PATH = 'docs/DOCUMENT-REGISTER.md';
+const RESERVATION_HEADING = '### 1.3 无独立正文的保留编号';
+const DOC_ID = /^CORP-DSH-[A-Z]+-\d{3}[A-Z]?$/u;
 const INDEX_DOCS = new Set([
   'docs/README.md',
-  'docs/DOCUMENT-REGISTER.md',
+  REGISTER_PATH,
   'docs/design/README.md',
   'docs/operations/README.md',
 ]);
@@ -78,38 +82,19 @@ function collectSlugs(file) {
   return slugs;
 }
 
-function metadata(text, key) {
-  for (const line of unfenced(text)) {
+function metadataTable(lines, allowUnheaded) {
+  const firstSection = lines.findIndex((line) => /^#{2,6}\s/u.test(line));
+  const hasHeading = lines[firstSection] === '## 文档信息';
+  if (!hasHeading && !allowUnheaded) return [];
+  const start = hasHeading ? firstSection + 1 : 0;
+  const rows = [];
+  for (const line of lines.slice(start)) {
+    if (/^#{2,6}\s/u.test(line)) break;
     const cells = parseRow(line);
-    if (cells && cells[0] === key) return cells[1];
+    if (cells) rows.push(cells);
+    else if (rows.length) break;
   }
-  return null;
-}
-
-// 文档信息表是第一张含“文档编号”的表；确认字段只从这张表取值，避免正文数据表冒充。
-function metadataTable(text) {
-  let rows = [];
-  let hasId = false;
-  for (const line of unfenced(text)) {
-    const cells = parseRow(line);
-    if (cells) {
-      rows.push(cells);
-      if (cells[0] === '文档编号') hasId = true;
-      continue;
-    }
-    if (rows.length === 0) continue;
-    if (hasId) return rows;
-    rows = [];
-    hasId = false;
-  }
-  return hasId ? rows : null;
-}
-
-function tableValue(table, key) {
-  const row = table?.find((cells) => cells[0] === key);
-  if (!row) return null;
-  const value = (row[1] ?? '').trim();
-  return CONFIRMATION_BLANK.has(value) ? null : value;
+  return rows;
 }
 
 // 只认真实存在的日历日，避免 2026-13-45 这类正则通过但并非日期的值。
@@ -152,6 +137,7 @@ function checkFragment(file, fragment, errors, label, counts) {
 export function checkDocs(root, options = {}) {
   const errors = [];
   const counts = { files: 0, tables: 0, links: 0, fragments: 0, controlled: 0 };
+  const entries = new Map();
   const files = listFiles(root);
   if (files.length === 0) errors.push('docs: no Markdown files found');
 
@@ -226,84 +212,128 @@ export function checkDocs(root, options = {}) {
       errors.push(`${path}: host-specific absolute path`);
     }
 
+    if (!path.startsWith('docs/')) continue;
     const controlled = CONTROLLED.test(path);
-    const index = INDEX_DOCS.has(path);
-    if (!controlled && !index && !path.startsWith('docs/templates/')) continue;
+    const template = path.startsWith('docs/templates/');
+    const verification = path.startsWith('docs/design/verification/');
+    const required = controlled || INDEX_DOCS.has(path) || (DESIGN_OR_OPERATIONS.test(path) && !verification);
+    const fields = metadataTable(lines, required || template || verification);
+    const declaresId = fields.some(([key]) => key === '文档编号');
+    if (verification) {
+      if (declaresId) errors.push(`${path}: verification record must not declare a document ID`);
+      continue;
+    }
+    const catalogued = required || (!template && declaresId);
+    if (!catalogued && !template) continue;
 
+    const metadata = new Map();
+    for (const [key, value] of fields) {
+      if (metadata.has(key)) errors.push(`${path}: duplicate metadata ${key}`);
+      metadata.set(key, value);
+    }
     for (const key of META_KEYS) {
-      if (metadata(text, key) === null) errors.push(`${path}: missing metadata ${key}`);
+      if (!metadata.get(key)) errors.push(`${path}: missing metadata ${key}`);
+    }
+    if (catalogued && metadata.get('文档编号')) {
+      addCatalogEntry(entries, {
+        id: metadata.get('文档编号'),
+        name: metadata.get('文档名称'),
+        path,
+        version: metadata.get('版本'),
+        status: metadata.get('文档状态'),
+        owner: metadata.get('负责') ?? '—',
+        gate: metadata.get('交付门禁') ?? metadata.get('门禁'),
+      }, path, errors);
+    }
+    if (catalogued && !INDEX_DOCS.has(path)) {
+      counts.controlled += 1;
+      checkApprovals(path, metadata, errors);
     }
     if (controlled) {
-      counts.controlled += 1;
-      checkApprovals(path, text, errors);
       if (!text.includes('编制依据')) errors.push(`${path}: missing 编制依据`);
       if (!text.includes('关联文档')) errors.push(`${path}: missing 关联文档`);
     }
   }
 
-  errors.push(...checkRegister(root, texts));
+  collectReservations(texts.get(REGISTER_PATH), entries, errors);
   errors.push(...checkLetters(root, texts));
   errors.push(...checkSequences(root, texts, errors));
 
-  return { errors, counts };
+  const catalog = [...entries.keys()].sort().map((id) => entries.get(id).entry);
+  return { errors, counts, catalog };
 }
 
 // 受控正文默认由 agent 起草，审核／批准保持“待定”。用户已确认需求时允许记录真实确认，
 // 但必须同时留下有效的确认人、日期、事项与适用范围（不能是待定、破折号或空），且文档为生效状态（文档总览 §6.1）。
-function checkApprovals(path, text, errors) {
-  const approvals = ['审核', '批准'].map((key) => metadata(text, key));
-  if (approvals.every((value) => value !== null && PENDING.test(value))) return;
-  const status = metadata(text, '文档状态');
-  if (status === null || !EFFECTIVE.test(status)) {
+function checkApprovals(path, metadata, errors) {
+  const approvals = ['审核', '批准'].map((key) => metadata.get(key));
+  const pending = approvals.every((value) => PENDING.test(value ?? ''));
+  const effective = EFFECTIVE.test(metadata.get('文档状态') ?? '');
+  if (pending && !effective) return;
+  if (!effective) {
     errors.push(`${path}: non-待定 审核/批准 requires 文档状态 生效`);
   }
-  const table = metadataTable(text);
+  const reason = pending ? '文档状态 生效' : 'non-待定 审核/批准';
   for (const key of CONFIRMATION_KEYS) {
-    if (!tableValue(table, key)) errors.push(`${path}: non-待定 审核/批准 requires ${key}`);
+    if (CONFIRMATION_BLANK.has(metadata.get(key) ?? '')) {
+      errors.push(`${path}: ${reason} requires ${key}`);
+    }
   }
-  const confirmedAt = tableValue(table, '确认日期');
-  if (confirmedAt && !isRealIsoDate(confirmedAt)) {
+  const confirmedAt = metadata.get('确认日期') ?? '';
+  if (!CONFIRMATION_BLANK.has(confirmedAt) && !isRealIsoDate(confirmedAt)) {
     errors.push(`${path}: 确认日期 must be a real YYYY-MM-DD date`);
   }
 }
 
-function checkRegister(root, texts) {
-  const errors = [];
-  const registerPath = 'docs/DOCUMENT-REGISTER.md';
-  const register = texts.get(registerPath);
-  if (!register) return ['docs/DOCUMENT-REGISTER.md: missing'];
+function addCatalogEntry(entries, entry, location, errors) {
+  if (!DOC_ID.test(entry.id)) {
+    errors.push(`${location}: invalid document ID ${entry.id}`);
+    return;
+  }
+  const previous = entries.get(entry.id);
+  if (previous) {
+    errors.push(`catalog: duplicate ID ${entry.id}: ${previous.location} and ${location}`);
+    return;
+  }
+  entries.set(entry.id, { entry, location });
+}
 
-  const registered = new Map();
-  for (const line of unfenced(register)) {
-    const cells = parseRow(line);
-    if (!cells || cells.length !== 7 || !/^CORP-/.test(cells[0])) continue;
-    const [id, , link, version, status] = cells;
-    if (registered.has(id)) errors.push(`register: duplicate ID ${id}`);
-    registered.set(id, cells);
-    const target = /\]\(<?([^)>]+)>?\)/.exec(link);
-    if (!target) continue;
-    const path = toPosix(join('docs', target[1]));
-    if (!existsSync(join(root, path))) {
-      errors.push(`register: ${id} path does not exist: ${path}`);
-      continue;
+function collectReservations(register, entries, errors) {
+  if (!register) {
+    errors.push(`${REGISTER_PATH}: missing`);
+    return;
+  }
+  let inReservations = false;
+  let foundReservations = false;
+  unfenced(register).forEach((line, index) => {
+    if (/^#{1,6}\s/u.test(line)) {
+      inReservations = line.trimEnd() === RESERVATION_HEADING;
+      if (inReservations) foundReservations = true;
+      return;
     }
-    const text = texts.get(path) ?? readFileSync(join(root, path), 'utf8');
-    const actual = {
-      文档编号: metadata(text, '文档编号'),
-      版本: metadata(text, '版本'),
-      文档状态: metadata(text, '文档状态'),
-    };
-    if (actual.文档编号 !== id) errors.push(`register: ${path} declares ${actual.文档编号}, registered as ${id}`);
-    if (actual.版本 !== version) errors.push(`register: ${path} version ${actual.版本} != ${version}`);
-    if (actual.文档状态 !== status) errors.push(`register: ${path} status ${actual.文档状态} != ${status}`);
-  }
-
-  for (const [path, text] of texts) {
-    if (!CONTROLLED.test(path)) continue;
-    const id = metadata(text, '文档编号');
-    if (!id || !registered.has(id)) errors.push(`${path}: controlled document ${id ?? '(no ID)'} is not registered`);
-  }
-  return errors;
+    const location = `${REGISTER_PATH}:${index + 1}`;
+    const cells = parseRow(line);
+    if (!cells) {
+      const incomplete = /^\s*\|?\s*(CORP-[^|\s]+)\s*\|/u.exec(line);
+      if (incomplete) {
+        const kind = inReservations ? 'invalid reservation' : 'manual catalog row';
+        errors.push(`${location}: ${kind} ${incomplete[1]}`);
+      }
+      return;
+    }
+    const [id, name, status, owner, gate] = cells;
+    if (!inReservations) {
+      if (/^CORP-/u.test(id)) errors.push(`${location}: manual catalog row ${id}`);
+      return;
+    }
+    if (id === '编号' || /^:?-{3,}:?$/u.test(id)) return;
+    if (cells.length !== 5 || !cells.every(Boolean) || (status !== '待启动' && status !== '已废止')) {
+      errors.push(`${location}: invalid reservation ${id}`);
+      return;
+    }
+    addCatalogEntry(entries, { id, name, path: null, version: null, status, owner, gate }, location, errors);
+  });
+  if (!foundReservations) errors.push(`${REGISTER_PATH}: missing reservation section`);
 }
 
 function checkLetters(root, texts) {

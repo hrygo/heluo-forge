@@ -12,6 +12,7 @@
   "scripts": {
     "check": "node scripts/link-workspace.mjs && node scripts/check-docs.mjs && node scripts/check-repo.mjs && node scripts/check-skills.mjs && node scripts/check-bundle-tarballs.mjs && node scripts/dsh-version.mjs check && node --test --test-timeout=120000",
     "check:docs": "node scripts/check-docs.mjs",
+    "docs:catalog": "node scripts/check-docs.mjs --catalog",
     "link:workspace": "node scripts/link-workspace.mjs",
     "check:repo": "node scripts/check-repo.mjs",
     "test:unit": "node --test --test-timeout=120000",

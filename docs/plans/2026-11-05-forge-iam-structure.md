@@ -10,10 +10,12 @@
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-05 |
 | 门禁 | 待负责人评审；只拆改变耦合的边界，不拆文件的部分按 DRY/SOLID 整改，不引入新工具链 |
+| 交付门禁 | 待评审 |
 
 > 编制依据：2026-11-05 以 `origin/main` = `2684cb8` 为基准只读核对 [issue #161](https://github.com/hrygo/heluo-forge/issues/161) 正文、[client.js](<../../packages/forge-iam/client.js>) 与 [service.mjs](<../../packages/forge-iam/src/service.mjs>) 的行数、分节、组件内部状态与重复实现统计，`git log` 的变更热力，本机已安装的 `@deepseek-ai/dsh-client-modules`（0.2.1-rc.2，即各包 `engines.dsh` 下限所在发布线）的 `lib/client.js`、`lib/index.js`、`README.zh.md`，以及 [check.yml](<../../.github/workflows/check.yml>) 的「不安装依赖」约束。同日在干净 worktree（无 `node_modules`，仅 `scripts/link-workspace.mjs` 离线链接）实跑 `node --run check`：2724 个顶层用例、2723 通过、1 跳过、0 失败；`packages/forge-iam/test` 单独 1210 个用例全绿。换基后 §1.4 与 §2.1 的数字均按该提交重测。未安装测试插件，**装载器多文件能力为源码与文档依据，非运行时实测**。
 

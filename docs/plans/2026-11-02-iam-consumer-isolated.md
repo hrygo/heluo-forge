@@ -10,10 +10,12 @@
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-03 |
 | 门禁 | 用户已批准完整 source/mock 设计；A/B/C/D已分段验收，E根16项通过；源码、联合审阅与本批完整检查已完成，不动真实环境 |
+| 交付门禁 | 完整 source/mock 设计已获用户批准；不动真实环境 |
 
 > 编制依据：用户于 2026-11-02 完整批准 [DESIGN-017](<../design/iam-consumer-isolated.md>) 与 [IAM-003](<../contracts/iam-consumer-isolated.md>)，明确仅实施模拟代码；先完成 [PLAN-006](<2026-11-02-iam-confidential-isolated.md>)的机密 C 验收。
 >

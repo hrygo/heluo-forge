@@ -10,6 +10,7 @@
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | DSH 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-16 |
@@ -134,4 +135,16 @@ DevOps（`DEVOPS_API_KEY`）与 Gitee（`GITEE_TOKEN`）不再向「企业账号
 - **包结构与闭环门禁**：由 `pnpm check:repo`、`pnpm check:tarballs`、`node scripts/check-skills.mjs`、`tests/plugin-patch-layers.test.mjs`、`tests/ui-contract.test.mjs` 及 `packages/forge-engineering/test/*.test.mjs` 执行离线覆盖；
 - **真实装包与共存验证**：使用真实 `dsh` 构建 `@heluo/forge-engineering` tarball 并独立/联合安装至测试 Profile，核查 `--dump-config` 中 `heluo-policy` 单实例折叠、双包依赖闭环与元数据可读性；
 - **未联调外部项**：真实企业 DevOps CLI、Gitee 内网 `gh` CLI、企业 OS 凭据库联动及双端桌面 GUI 交互流程仍待外部环境实机联调。
+
+## 实现与验证记录
+
+**实现边界**：企业研发工具套件 bundle：研发设置容器（`forge-engineering` `order: 30`、`heluo.engineering.tab`）、按需 `issue-delivery` Skill、DevOps 与 Gitee、共享 `heluo-policy` 6 动作目录、五类开关与条款装配；4 个源文件。
+
+**验证结果与限制**：`node --test packages/forge-engineering/test/*.test.mjs`、`tests/plugin-patch-layers`、`tests/ui-contract` 离线闭环；真实 DSH 单包与双包同装验证见对应实测结论。
+
+## 准入核对要点
+
+**设计与接入边界**：独立可预装研发组合包：`cordis.patch.yml` 插入 `heluo-policy`（共享 6 动作目录，无 `isolate`，单装独立就绪且与 `forge-enterprise` 同装自动单实例折叠）、`heluo-engineering-ui` 容器、`heluo-issue-delivery-skill` 按需交付 Skill、`@heluo/forge-devops` 与 `@heluo/forge-gitee`；不禁用官方行。
+
+**准入关注点**：双端、真实 DevOps/Gitee CLI 与企业 OSS 凭据库、`ai-publish`/`human-review` 业务行、角色 preset 粒度。
 

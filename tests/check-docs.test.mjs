@@ -53,15 +53,12 @@ export function buildValidDocs(root) {
       `
 ## 1. 清单
 
-| 编号 | 名称 | 路径 | 版本 | 状态 | 负责 | 门禁 |
-|---|---|---|---|---|---|---|
-| CORP-DSH-DOC-000 | 清单 | [DOCUMENT-REGISTER.md](<DOCUMENT-REGISTER.md>) | V1.0 | 生效 | 平台组 | — |
-| CORP-DSH-DOC-001 | 索引 | [README.md](<README.md>) | V1.0 | 生效 | 平台组 | — |
-| CORP-DSH-ARCH-001 | 架构 | [architecture/platform-architecture.md](<architecture/platform-architecture.md>) | V0.1 | 草案 | 平台组 | G0 |
-| CORP-DSH-GW-001 | 网关 | [contracts/gateway-contract.md](<contracts/gateway-contract.md>) | V0.1 | 草案 | 网关团队 | G0 |
-| CORP-DSH-REQ-001 | 需求 | [requirements/requirements-baseline.md](<requirements/requirements-baseline.md>) | V0.1 | 草案 | 平台组 | G0 |
-| CORP-DSH-PLAN-001 | 计划 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V0.1 | 草案 | 平台组 | G0 |
-| CORP-DSH-LET-001 | 询问函 | [collaboration/team-confirmation-letters.md](<collaboration/team-confirmation-letters.md>) | V0.1 | 草案 | 平台组 | G0 |
+### 1.3 无独立正文的保留编号
+
+| 编号 | 名称 | 状态 | 负责 | 门禁或去向 |
+|---|---|---|---|---|
+| CORP-DSH-OLD-001 | 旧方案 | 已废止 | 平台组 | 已由架构正文取代 |
+| CORP-DSH-PLAN-002 | 待建计划 | 待启动 | 交付团队 | G1 |
 `,
   );
   write(
@@ -221,12 +218,6 @@ function confirmRollout(root, date = '2026-11-03') {
     '| 审核 | 待定 |\n| 批准 | 待定 |',
     `| 审核 | 项目负责人（当前用户，${date}） |\n| 批准 | 项目负责人（当前用户，${date}） |\n| 确认人 | 项目负责人（当前用户） |\n| 确认日期 | ${date} |\n| 确认事项 | 验收口径 |\n| 适用范围 | 本文正文 |`,
   );
-  mutate(
-    root,
-    'docs/DOCUMENT-REGISTER.md',
-    '| CORP-DSH-PLAN-001 | 计划 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V0.1 | 草案 |',
-    '| CORP-DSH-PLAN-001 | 计划 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V0.1 | 生效 |',
-  );
 }
 
 test('valid documentation tree passes', () => {
@@ -301,16 +292,169 @@ test('two H1 headings are reported', () => {
   }
 });
 
-test('controlled document without registration is reported', () => {
+test('new documents and version changes need no matching register edit', () => {
   const root = fixture();
   try {
+    const register = join(root, 'docs/DOCUMENT-REGISTER.md');
+    const before = readFileSync(register, 'utf8');
+    mutate(root, 'docs/plans/rollout-plan.md', '| 版本 | V0.1 |', '| 版本 | V0.2 |');
     write(
       root,
-      'docs/engineering/extra.md',
-      META('CORP-DSH-ENG-999') + '\n> 编制依据：x。\n>\n> 关联文档：[架构](<../architecture/platform-architecture.md>)。\n',
+      'docs/design/plugins/extra.md',
+      META('CORP-DSH-DESIGN-999').replace('| 门禁 | G0 |', '| 门禁 | G0 |\n| 负责 | 交付团队 |\n| 交付门禁 | G2 |'),
     );
+    write(root, 'docs/design/verification/extra.md', '# 验证记录\n\n> 合成验证。\n');
+    const { errors, catalog } = checkDocs(root);
+    assert.deepEqual(errors, []);
+    assert.equal(readFileSync(register, 'utf8'), before);
+    assert.equal(catalog.find((entry) => entry.id === 'CORP-DSH-PLAN-001').version, 'V0.2');
+    const added = catalog.find((entry) => entry.id === 'CORP-DSH-DESIGN-999');
+    assert.equal(added.path, 'docs/design/plugins/extra.md');
+    assert.equal(added.owner, '交付团队');
+    assert.equal(added.gate, 'G2');
+    assert.ok(!catalog.some((entry) => entry.path === 'docs/design/verification/extra.md'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('duplicate IDs across independent documents report both locations', () => {
+  const root = fixture();
+  try {
+    write(root, 'docs/operations/another.md', META('CORP-DSH-PLAN-001'));
     const { errors } = checkDocs(root);
-    assert.ok(errors.some((error) => error.includes('is not registered')), errors.join('\n'));
+    const duplicate = errors.find((error) => error.includes('duplicate ID CORP-DSH-PLAN-001'));
+    assert.ok(duplicate, errors.join('\n'));
+    assert.match(duplicate, /docs\/operations\/another\.md/);
+    assert.match(duplicate, /docs\/plans\/rollout-plan\.md/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('nested documents cannot omit identity or get it from a body example', () => {
+  const root = fixture();
+  try {
+    const path = 'docs/operations/uat/another.md';
+    write(root, path, META('CORP-DSH-UAT-999').replace('| 文档编号 | CORP-DSH-UAT-999 |\n', '') +
+      '## 示例\n\n| 字段 | 值 |\n|---|---|\n| 文档编号 | CORP-DSH-UAT-999 |\n');
+    const { errors } = checkDocs(root);
+    assert.ok(errors.includes(`${path}: missing metadata 文档编号`), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('canonical metadata enrolls documents from other nested documentation directories', () => {
+  const root = fixture();
+  try {
+    const path = 'docs/engineering/checks/reference.md';
+    write(root, path, META('CORP-DSH-ENG-999'));
+    write(root, 'docs/engineering/checks/example.md', '# 示例\n\n## 示例内容\n\n| 字段 | 值 |\n|---|---|\n| 文档编号 | CORP-DSH-ENG-999 |\n');
+    const { errors, catalog } = checkDocs(root);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(catalog.filter((entry) => entry.id === 'CORP-DSH-ENG-999').map((entry) => entry.path), [path]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('verification records cannot silently hide a document ID from the catalog', () => {
+  const root = fixture();
+  try {
+    const path = 'docs/design/verification/another.md';
+    write(root, path, META('CORP-DSH-DESIGN-999'));
+    const { errors } = checkDocs(root);
+    assert.ok(errors.includes(`${path}: verification record must not declare a document ID`), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('retired and pending IDs cannot be reused while reserved', () => {
+  const root = fixture();
+  try {
+    for (const id of ['CORP-DSH-OLD-001', 'CORP-DSH-PLAN-002']) {
+      write(root, `docs/design/${id}.md`, META(id));
+    }
+    const { errors } = checkDocs(root);
+    for (const id of ['CORP-DSH-OLD-001', 'CORP-DSH-PLAN-002']) {
+      const duplicate = errors.find((error) => error.includes(`duplicate ID ${id}`));
+      assert.ok(duplicate, errors.join('\n'));
+      assert.ok(duplicate.includes('docs/DOCUMENT-REGISTER.md:'), duplicate);
+      assert.ok(duplicate.includes(`docs/design/${id}.md`), duplicate);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a pending ID moves to its document with no copied row', () => {
+  const root = fixture();
+  try {
+    mutate(root, 'docs/DOCUMENT-REGISTER.md', '| CORP-DSH-PLAN-002 | 待建计划 | 待启动 | 交付团队 | G1 |\n', '');
+    write(root, 'docs/design/created.md', META('CORP-DSH-PLAN-002'));
+    const { errors, catalog } = checkDocs(root);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(catalog.filter((entry) => entry.id === 'CORP-DSH-PLAN-002').map((entry) => entry.path), ['docs/design/created.md']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy linked register rows and invalid reservation states are rejected', () => {
+  const root = fixture();
+  try {
+    mutate(root, 'docs/DOCUMENT-REGISTER.md', '### 1.3 无独立正文的保留编号',
+      '| CORP-DSH-PLAN-001 | 计划 | [plans/rollout-plan.md](<plans/rollout-plan.md>) | V0.1 | 草案 | 平台组 | G0 |\n\n### 1.3 无独立正文的保留编号');
+    mutate(root, 'docs/DOCUMENT-REGISTER.md', '| 待建计划 | 待启动 |', '| 待建计划 | 草案 |');
+    const { errors } = checkDocs(root);
+    assert.ok(errors.some((error) => error.includes('manual catalog row')), errors.join('\n'));
+    assert.ok(errors.some((error) => error.includes('invalid reservation CORP-DSH-PLAN-002')), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('retired IDs cannot disappear through a reservation row without outer pipes', () => {
+  const root = fixture();
+  try {
+    mutate(root, 'docs/DOCUMENT-REGISTER.md', '| CORP-DSH-OLD-001 | 旧方案 | 已废止 | 平台组 | 已由架构正文取代 |',
+      'CORP-DSH-OLD-001 | 旧方案 | 已废止 | 平台组 | 已由架构正文取代');
+    write(root, 'docs/design/reused.md', META('CORP-DSH-OLD-001'));
+    const { errors } = checkDocs(root);
+    assert.ok(errors.some((error) => error.includes('invalid reservation CORP-DSH-OLD-001')), errors.join('\n'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('designs and runbooks apply the same approval metadata checks as other bodies', () => {
+  const root = fixture();
+  try {
+    const paths = ['docs/design/plugins/example.md', 'docs/operations/example.md'];
+    paths.forEach((path, index) => {
+      write(root, path, META(`CORP-DSH-UAT-99${index}`).replace('| 审核 | 待定 |', '| 审核 | 项目负责人 |'));
+    });
+    const { errors } = checkDocs(root);
+    for (const path of paths) {
+      assert.ok(errors.includes(`${path}: non-待定 审核/批准 requires 文档状态 生效`), errors.join('\n'));
+      assert.ok(errors.includes(`${path}: non-待定 审核/批准 requires 确认人`), errors.join('\n'));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('effective status requires confirmation even when audit and approval fields are pending', () => {
+  const root = fixture();
+  try {
+    const path = 'docs/plans/rollout-plan.md';
+    mutate(root, path, '| 文档状态 | 草案 |', '| 文档状态 | 生效 |');
+    const unchecked = checkDocs(root).errors;
+    assert.ok(unchecked.includes(`${path}: 文档状态 生效 requires 确认人`), unchecked.join('\n'));
+    mutate(root, path, '| 门禁 | G0 |', '| 门禁 | G0 |\n| 确认人 | 项目负责人 |\n| 确认日期 | 2026-11-19 |\n| 确认事项 | 适用范围 |\n| 适用范围 | 正文的需求边界 |');
+    assert.deepEqual(checkDocs(root).errors, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

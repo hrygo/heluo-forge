@@ -10,10 +10,12 @@
 | 文档状态 | 草案 |
 | 密级 | — |
 | 编制 | 平台组（代拟） |
+| 负责 | 平台组（代拟） |
 | 审核 | 待定 |
 | 批准 | 待定 |
 | 最后更新 | 2026-11-18 |
 | 门禁 | 内网实机验证（待回填） |
+| 交付门禁 | 内网实机验证（待回填）；回填前不作为运行手册 |
 
 > 编制依据：2026-11-18 内网测试轨迹（第 2 轮创建 PR，写动作被 `GUARD_POLICY_DENIED` 拦截，`remote_calls: 0`，全程无确认弹窗）；本仓库 `c889610` 的判定链源码（[gate.mjs](../../packages/forge-policy/src/gate.mjs) 的 `requestApproval`/`scopeAdmission`、[scope-ticket.mjs](../../packages/forge-policy/src/scope-ticket.mjs) 的 `verify`、[gitee-guard.mjs](../../packages/forge-gitee/src/gitee-guard.mjs) 的策略错误映射）；本机装配探针逐字复现同一信封；已安装 DSH 的审批子系统文档 `docs/subsystems/approval.zh.md`（`ctx.approval` 分发服务与 `approval/request` waterfall）。
 
