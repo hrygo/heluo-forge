@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,9 +13,12 @@ const workflow = await readFile(new URL('../.github/workflows/pr-agent.yml', imp
 const head = 'a'.repeat(40);
 const base = 'b'.repeat(40);
 
+function stepDefinition(name) {
+  return workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0] ?? '';
+}
+
 function stepScript(name) {
-  const step = workflow.split(`      - name: ${name}\n`)[1]?.split('\n      - name: ')[0];
-  const script = /\n          node --input-type=module <<'NODE'\n([\s\S]*?)\n          NODE(?:\n|$)/u.exec(step ?? '')?.[1];
+  const script = /\n          node --input-type=module <<'NODE'\n([\s\S]*?)\n          NODE(?:\n|$)/u.exec(stepDefinition(name))?.[1];
   assert.ok(script, `missing executable Node script for ${name}`);
   return script.replace(/^ {10}/gmu, '');
 }
@@ -34,6 +37,7 @@ async function withGitHub(run) {
     reviews: [],
     comments: [],
     runs: {},
+    runListStatus: 200,
     jobs: {},
     logs: {},
     headAfterPost: undefined,
@@ -67,6 +71,11 @@ async function withGitHub(run) {
       response.end(JSON.stringify(state.comments.slice((page - 1) * 100, page * 100)));
       if (state.headAfterCommentList) state.pr.head.sha = state.headAfterCommentList;
       if (state.baseAfterCommentList) state.refs.main = state.baseAfterCommentList;
+    } else if (request.method === 'GET' && path === '/repos/corp/example/actions/workflows/pr-agent.yml/runs') {
+      response.statusCode = state.runListStatus;
+      const runs = Object.values(state.runs).filter((run) => run.event === url.searchParams.get('event') &&
+        run.conclusion === url.searchParams.get('status') && run.head_sha === url.searchParams.get('head_sha'));
+      response.end(JSON.stringify({ workflow_runs: runs.slice((page - 1) * 100, page * 100) }));
     } else if (request.method === 'GET' && /^\/repos\/corp\/example\/actions\/runs\/\d+\/jobs$/u.test(path)) {
       const runId = path.split('/').at(-2);
       const jobs = state.jobs[runId] ?? [];
@@ -123,8 +132,10 @@ async function execute(name, env) {
 }
 
 async function capture(env) {
+  await writeFile(env.GITHUB_OUTPUT, '');
   await execute('Capture PR revision', env);
   const output = await readFile(env.GITHUB_OUTPUT, 'utf8');
+  if (!output) return {};
   return Object.fromEntries(output.trim().split('\n').map((line) => {
     const separator = line.indexOf('=');
     return [line.slice(0, separator), line.slice(separator + 1)];
@@ -140,6 +151,20 @@ async function submit(env, revision, review) {
     REVIEWED_BASE_REF: revision.base_ref,
     REVIEW_STARTED_AT: revision.started,
   });
+}
+
+function recordAutomaticRun(state, { number = 42, sha = head, runId = 12, ranReview = true } = {}) {
+  state.runs[runId] = {
+    id: runId, event: 'pull_request', conclusion: 'success', head_sha: sha,
+    display_title: `洛神 · PR #${number}`, pull_requests: [],
+  };
+  state.jobs[runId] = [{
+    name: '洛神 (ubuntu-x64)',
+    conclusion: 'success',
+    steps: [
+      { name: 'Confirm completed automatic review', conclusion: ranReview ? 'success' : 'skipped' },
+    ],
+  }];
 }
 
 async function seedResolvedReview({ state, env }) {
@@ -189,7 +214,7 @@ test('the workflow and check display the 洛神 name', () => {
 });
 
 test('the review job stays off until the repository variable enables it', () => {
-  const folded = /\n    if: >-\n([\s\S]*?)\n    concurrency:/u.exec(workflow)?.[1] ?? '';
+  const folded = /\n    if: >-\n((?: {6}[^\n]*\n)+)/u.exec(workflow)?.[1] ?? '';
   const condition = folded.replace(/\s+/gu, ' ').trim();
   const decide = (vars, event) => {
     const github = { event_name: event.name, repository: 'corp/example', event: event.payload };
@@ -225,6 +250,10 @@ test('the review job stays off until the repository variable enables it', () => 
   const enabled = { PR_AGENT_ENABLED: 'true' };
   assert.equal(decide(enabled, openedPullRequest), true);
   assert.equal(decide(enabled, reviewComment), true);
+  const push = { ...openedPullRequest.payload, action: 'synchronize', sender: { type: 'Bot' }, before: base, after: head };
+  assert.equal(decide(enabled, { ...openedPullRequest, payload: push }), true);
+  assert.equal(decide(enabled, { ...openedPullRequest, payload: { ...push, before: head } }), false);
+  assert.equal(decide(enabled, { ...openedPullRequest, payload: { ...push, before: undefined } }), true);
   // The existing event filters still apply once the switch is on.
   assert.equal(decide(enabled, {
     ...openedPullRequest,
@@ -251,7 +280,6 @@ test('the header documents how to turn the review back on and off', () => {
 
 test('pushes refresh the summary and review, including bot and merge commits', async () => {
   const settings = await readFile(new URL('../.pr_agent.toml', import.meta.url), 'utf8');
-  assert.match(workflow, /types: \[opened, reopened, ready_for_review, review_requested, synchronize\]/u);
   assert.match(workflow, /github\.event\.sender\.type != 'Bot' \|\| github\.event\.action == 'synchronize'/u);
   assert.match(workflow, /GITHUB_ACTION_CONFIG__HANDLE_PUSH_TRIGGER: "true"/u);
   assert.match(workflow, /GITHUB_ACTION_CONFIG__PUSH_COMMANDS: '\["\/describe", "\/review"\]'/u);
@@ -261,6 +289,71 @@ test('pushes refresh the summary and review, including bot and merge commits', a
   assert.match(settings, /push_commands = \["\/describe", "\/review"\]/u);
   assert.match(settings, /push_trigger_ignore_bot_commits = false/u);
   assert.match(settings, /push_trigger_ignore_merge_commits = false/u);
+});
+
+test('only PR lifecycle and commit changes trigger automatic review', () => {
+  const types = /^  pull_request:\n    types: \[([^\n]+)\]/mu.exec(workflow)?.[1].split(', ');
+  assert.deepEqual(types, ['opened', 'reopened', 'ready_for_review', 'synchronize']);
+  assert.match(workflow, /^  issue_comment:\n    types: \[created\]$/mu);
+});
+
+test('runs record the PR number for exact review history lookup', () => {
+  assert.match(workflow, /^run-name: '洛神 · PR #\$\{\{ github\.event\.pull_request\.number \|\| github\.event\.issue\.number \}\}'$/mu);
+});
+
+test('subsequent automatic events skip a review already completed for the same PR and head', async () => {
+  await withGitHub(async ({ state, env }) => {
+    recordAutomaticRun(state);
+    for (const action of ['opened', 'reopened', 'ready_for_review', 'synchronize']) {
+      assert.deepEqual(await capture({ ...env, EVENT_ACTION: action, EVENT_HEAD: head }), {});
+    }
+  });
+});
+
+test('a new head is reviewed even when the previous commit was already reviewed', async () => {
+  await withGitHub(async ({ state, env }) => {
+    recordAutomaticRun(state);
+    const newHead = 'c'.repeat(40);
+    state.pr.head.sha = newHead;
+    const revision = await capture({ ...env, EVENT_ACTION: 'synchronize', EVENT_HEAD: newHead });
+    assert.equal(revision.head, newHead);
+  });
+});
+
+test('reviews for other PRs, manual runs and skipped automatic runs do not satisfy deduplication', async () => {
+  await withGitHub(async ({ state, env }) => {
+    recordAutomaticRun(state, { number: 43 });
+    recordAutomaticRun(state, { runId: 13 });
+    state.runs[13].event = 'issue_comment';
+    recordAutomaticRun(state, { runId: 14, ranReview: false });
+    const revision = await capture({ ...env, EVENT_ACTION: 'ready_for_review', EVENT_HEAD: head });
+    assert.equal(revision.head, head);
+  });
+});
+
+test('an outdated queued event cannot review the new head on behalf of an older commit', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.pr.head.sha = 'c'.repeat(40);
+    assert.deepEqual(await capture({ ...env, EVENT_ACTION: 'synchronize', EVENT_HEAD: head }), {});
+  });
+});
+
+test('an explicit manual /review still runs for a previously reviewed head', async () => {
+  await withGitHub(async ({ state, env }) => {
+    recordAutomaticRun(state);
+    const manual = { ...env, EVENT_NAME: 'issue_comment', EVENT_ACTION: 'created', COMMENT_BODY: '  /review' };
+    const revision = await capture(manual);
+    assert.equal(revision.head, head);
+    await submit(manual, revision, '{"merge_recommendation":"no_concerns_found"}');
+    assert.equal(state.requests.some(({ url }) => url.includes('/actions/workflows/')), false);
+  });
+});
+
+test('unreadable review history fails before starting another automatic review', async () => {
+  await withGitHub(async ({ state, env }) => {
+    state.runListStatus = 403;
+    await assert.rejects(capture({ ...env, EVENT_HEAD: head }), /Cannot read prior automatic reviews \(HTTP 403\)/u);
+  });
 });
 
 for (const recommendation of ['no_concerns_found', 'needs_review']) {
@@ -292,7 +385,6 @@ test('missing output fails only when a review was expected', async () => {
     assert.match(incremental.stdout, /warning.*Incremental review.*output/iu);
     await submit({ ...env, EVENT_NAME: 'issue_comment', COMMENT_BODY: '/ask a question' }, revision, '');
     await submit({ ...env, PR_TITLE: '[Auto] ignored' }, revision, '');
-    await submit({ ...env, EVENT_ACTION: 'review_requested', PR_CREATED_AT: 'same', PR_UPDATED_AT: 'same' }, revision, '');
     assert.equal(state.requests.filter((request) => request.method === 'POST').length, 0);
   });
 });
@@ -334,21 +426,56 @@ test('an empty PR file count must agree with an exact commit comparison', async 
   });
 });
 
-test('initial duplicate requests and unrelated comments cannot cancel an active review', () => {
-  assert.doesNotMatch(workflow, /^concurrency:/mu);
-  const concurrency = /\n    concurrency:\n([\s\S]*?)(?=\n    [a-z-]+:)/u.exec(workflow)?.[1] ?? '';
-  assert.match(concurrency, /created_at == github\.event\.pull_request\.updated_at && 'initial-request'/u);
-  assert.match(concurrency, /!contains\(fromJSON\('\["OWNER","MEMBER","COLLABORATOR"\]'\), github\.event\.comment\.author_association\)/u);
-  assert.match(concurrency, /github\.event\.sender\.type == 'Bot'/u);
-  assert.match(concurrency, /!contains\(github\.event\.comment\.body, '\/review'\)\) && 'other-comment'/u);
-  assert.match(concurrency, /cancel-in-progress: \$\{\{ github\.event_name != 'issue_comment' \}\}/u);
+test('automated and manual reviews for a PR share a queue without canceling pending runs', () => {
+  const concurrency = /^concurrency:\n((?: {2}[^\n]*\n)+)/mu.exec(workflow)?.[1] ?? '';
+  assert.match(concurrency, /^  queue: max$/mu);
+  assert.doesNotMatch(concurrency, /^  cancel-in-progress: (?!false$)/mu);
+  const group = /^  group: ([^\n]+)$/mu.exec(concurrency)?.[1];
+  assert.ok(group);
+  const groupFor = (github) => group.replace(/\$\{\{ (.*?) \}\}/gu, (_, expression) =>
+    new Function('github', 'fromJSON', 'contains', `return (${expression});`)(
+      github, JSON.parse, (text, term) => text.includes(term),
+    ));
+  const automatic = (number) => groupFor({ event_name: 'pull_request', event: { pull_request: { number } } });
+  const comment = (body, authorAssociation = 'MEMBER', senderType = 'User') => groupFor({
+    event_name: 'issue_comment',
+    event: {
+      pull_request: {},
+      issue: { number: 42 },
+      sender: { type: senderType },
+      comment: { body, author_association: authorAssociation },
+    },
+  });
+  assert.equal(comment('  /review'), automatic(42));
+  assert.notEqual(automatic(43), automatic(42));
+  assert.notEqual(comment('Thanks'), automatic(42));
+  assert.notEqual(comment('/review', 'CONTRIBUTOR'), automatic(42));
+  assert.notEqual(comment('/review', 'MEMBER', 'Bot'), automatic(42));
 });
 
 test('the workflow runs result handling even when the action produced no output', () => {
-  const step = workflow.split('      - name: Validate PR-Agent review\n')[1]?.split('\n      - name: ')[0] ?? '';
-  assert.doesNotMatch(step, /^        if:/mu);
-  assert.match(step, /REVIEW_RESULT: \$\{\{ steps\.pr_agent\.outputs\.review \}\}/u);
+  const gate = /^        if: \$\{\{ steps\.revision\.outputs\.head != '' \}\}$/mu;
+  assert.match(stepDefinition('Run PR-Agent'), gate);
+  assert.match(stepDefinition('Validate PR-Agent review'), gate);
+  assert.match(stepDefinition('Validate PR-Agent review'), /REVIEW_RESULT: \$\{\{ steps\.pr_agent\.outputs\.review \}\}/u);
   assert.match(workflow, /GITHUB_ACTION_CONFIG__ENABLE_OUTPUT: "true"/u);
+});
+
+test('only a completed automatic review is recorded in the job steps', () => {
+  const condition = /^        if: \$\{\{ (.*) \}\}$/mu.exec(stepDefinition('Confirm completed automatic review'))?.[1];
+  assert.ok(condition);
+  const records = (eventName, review, retry = '', refreshedReview = '') => new Function('github', 'steps', `return (${condition});`)(
+    { event_name: eventName }, {
+      pr_agent: { outputs: { review } },
+      validation: { outputs: { retry } },
+      pr_agent_retry: { outputs: { review: refreshedReview } },
+    },
+  );
+  assert.equal(records('pull_request', 'review output'), true);
+  assert.equal(records('pull_request', 'review output', 'true', 'refreshed output'), true);
+  assert.equal(records('pull_request', 'review output', 'true'), false);
+  assert.equal(records('pull_request', ''), false);
+  assert.equal(records('issue_comment', 'review output'), false);
 });
 
 test('the workflow preserves the PR description before base settings are available', () => {
